@@ -10,6 +10,22 @@ pub enum MeshError {
     Triangulation(usize),
     #[error("Fläche {0}: gekrümmte Fläche ohne Parameterbereich")]
     MissingPatch(usize),
+    #[error("Netz zu groß: mehr als 2³² Eckpunkte oder Indizes")]
+    TooLarge,
+}
+
+/// Wandelt eine Anzahl in einen `u32`-Index um, ohne still abzuschneiden.
+fn index_u32(n: usize) -> Result<u32, MeshError> {
+    u32::try_from(n).map_err(|_| MeshError::TooLarge)
+}
+
+/// Prüft vorab, ob nach dem Anhängen von `extra` Elementen alle Indizes noch in `u32` passen.
+fn ensure_room(current: usize, extra: usize) -> Result<(), MeshError> {
+    current
+        .checked_add(extra)
+        .filter(|&n| n <= u32::MAX as usize)
+        .map(|_| ())
+        .ok_or(MeshError::TooLarge)
 }
 
 /// Zerlegt einen Körper in Dreiecke. Alle Dreiecke sind so orientiert, dass sie nach außen zeigen.
@@ -21,21 +37,23 @@ pub fn tessellate(solid: &Solid, options: &TessellationOptions) -> Result<Mesh, 
 
     let mut mesh = Mesh::default();
     for (fid, face) in solid.faces.iter() {
-        let first_index = mesh.indices.len() as u32;
+        let first_index = index_u32(mesh.indices.len())?;
         match &face.surface {
             Surface::Plane { frame } => {
-                tessellate_planar(face, frame, &polylines, &mut mesh)
-                    .map_err(|_| MeshError::Triangulation(fid.index()))?;
+                tessellate_planar(face, frame, &polylines, &mut mesh).map_err(|e| match e {
+                    PlanarError::Triangulation => MeshError::Triangulation(fid.index()),
+                    PlanarError::Mesh(e) => e,
+                })?;
             }
             _ => {
                 let patch = face.patch.ok_or(MeshError::MissingPatch(fid.index()))?;
-                tessellate_patch(face, &patch, &disc, &mut mesh);
+                tessellate_patch(face, &patch, &disc, &mut mesh)?;
             }
         }
         mesh.face_ranges.push(FaceRange {
             face: fid,
             first_index,
-            index_count: mesh.indices.len() as u32 - first_index,
+            index_count: index_u32(mesh.indices.len())? - first_index,
         });
     }
     mesh.edge_lines = polylines
@@ -62,12 +80,23 @@ fn loop_points(lp: &Loop, polylines: &[Vec<DVec3>]) -> Vec<DVec3> {
     pts
 }
 
+enum PlanarError {
+    Triangulation,
+    Mesh(MeshError),
+}
+
+impl From<MeshError> for PlanarError {
+    fn from(e: MeshError) -> Self {
+        PlanarError::Mesh(e)
+    }
+}
+
 fn tessellate_planar(
     face: &Face,
     frame: &Frame,
     polylines: &[Vec<DVec3>],
     mesh: &mut Mesh,
-) -> Result<(), ()> {
+) -> Result<(), PlanarError> {
     let normal = if face.same_sense { frame.z } else { -frame.z };
     let rings: Vec<Vec<DVec3>> = std::iter::once(&face.outer)
         .chain(face.inner.iter())
@@ -78,7 +107,7 @@ fn tessellate_planar(
     let mut holes: Vec<usize> = Vec::new();
     for (i, ring) in rings.iter().enumerate() {
         if ring.len() < 3 {
-            return Err(());
+            return Err(PlanarError::Triangulation);
         }
         if i > 0 {
             holes.push(flat.len() / 2);
@@ -89,13 +118,16 @@ fn tessellate_planar(
             flat.push(local.y);
         }
     }
-    let triangles = earcutr::earcut(&flat, &holes, 2).map_err(|_| ())?;
+    let triangles = earcutr::earcut(&flat, &holes, 2).map_err(|_| PlanarError::Triangulation)?;
 
-    let base = mesh.positions.len() as u32;
+    ensure_room(mesh.positions.len(), flat.len() / 2)?;
+    ensure_room(mesh.indices.len(), triangles.len())?;
+    let base = index_u32(mesh.positions.len())?;
     for p in rings.iter().flatten() {
         mesh.positions.push(*p);
         mesh.normals.push(normal);
     }
+    // Durch `ensure_room` passen `base + a` usw. sicher in `u32`.
     for t in triangles.as_chunks::<3>().0 {
         let (a, mut b, mut c) = (t[0], t[1], t[2]);
         let area2 = (flat[2 * b] - flat[2 * a]) * (flat[2 * c + 1] - flat[2 * a + 1])
@@ -113,14 +145,26 @@ fn tessellate_planar(
     Ok(())
 }
 
-fn tessellate_patch(face: &Face, patch: &UvRect, disc: &Discretizer, mesh: &mut Mesh) {
+fn tessellate_patch(
+    face: &Face,
+    patch: &UvRect,
+    disc: &Discretizer,
+    mesh: &mut Mesh,
+) -> Result<(), MeshError> {
     let nu = disc.segments(patch.u1 - patch.u0);
     let nv = match face.surface {
         Surface::Sphere { .. } | Surface::Torus { .. } => disc.segments(patch.v1 - patch.v0),
         _ => 1,
     };
     let sign = if face.same_sense { 1.0 } else { -1.0 };
-    let base = mesh.positions.len() as u32;
+    let vertex_count = (nu + 1).checked_mul(nv + 1).ok_or(MeshError::TooLarge)?;
+    let index_count = nu
+        .checked_mul(nv)
+        .and_then(|n| n.checked_mul(6))
+        .ok_or(MeshError::TooLarge)?;
+    ensure_room(mesh.positions.len(), vertex_count)?;
+    ensure_room(mesh.indices.len(), index_count)?;
+    let base = index_u32(mesh.positions.len())?;
     for j in 0..=nv {
         let v = patch.v0 + (patch.v1 - patch.v0) * j as f64 / nv as f64;
         for i in 0..=nu {
@@ -129,6 +173,7 @@ fn tessellate_patch(face: &Face, patch: &UvRect, disc: &Discretizer, mesh: &mut 
             mesh.normals.push(face.surface.normal(u, v) * sign);
         }
     }
+    // Durch `ensure_room` passt jeder Index sicher in `u32`.
     let idx = |i: usize, j: usize| base + (j * (nu + 1) + i) as u32;
     for j in 0..nv {
         for i in 0..nu {
@@ -138,6 +183,7 @@ fn tessellate_patch(face: &Face, patch: &UvRect, disc: &Discretizer, mesh: &mut 
             }
         }
     }
+    Ok(())
 }
 
 /// Fügt ein Dreieck hinzu und lässt entartete Dreiecke (an den Polen) weg.
@@ -157,4 +203,20 @@ fn push_triangle(mesh: &mut Mesh, tri: [u32; 3], keep_order: bool) {
         [tri[0], tri[2], tri[1]]
     };
     mesh.indices.extend_from_slice(&t);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_counts_beyond_u32_are_rejected() {
+        assert_eq!(index_u32(7), Ok(7));
+        assert_eq!(index_u32(u32::MAX as usize), Ok(u32::MAX));
+        assert_eq!(index_u32(u32::MAX as usize + 1), Err(MeshError::TooLarge));
+        assert_eq!(ensure_room(10, 20), Ok(()));
+        assert_eq!(ensure_room(u32::MAX as usize, 0), Ok(()));
+        assert_eq!(ensure_room(u32::MAX as usize, 1), Err(MeshError::TooLarge));
+        assert_eq!(ensure_room(usize::MAX, 1), Err(MeshError::TooLarge));
+    }
 }

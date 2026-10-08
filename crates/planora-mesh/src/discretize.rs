@@ -1,10 +1,14 @@
 use planora_kernel::{Curve, Edge, Id, Solid, Surface};
 use planora_math::DVec3;
-use std::f64::consts::PI;
+use std::f64::consts::{PI, TAU};
 
 /// Legt fest, in wie viele Segmente Bögen unterteilt werden. Der Winkelschritt hängt nur vom
 /// größten Radius des Körpers ab; dadurch bekommen benachbarte Flächen und Kanten mit gleicher
 /// Winkelspanne immer dieselben Teilpunkte und das Netz bleibt geschlossen.
+///
+/// Ein Vollkreis hat mindestens 16 und höchstens 720 Segmente (Winkelschritt 0,5°). Die obere
+/// Grenze hält das Netz sehr großer Körper beherrschbar; dort wird die Sehnentoleranz dann
+/// nicht mehr garantiert eingehalten.
 #[derive(Clone, Copy, Debug)]
 pub struct Discretizer {
     dtheta: f64,
@@ -37,8 +41,8 @@ impl Discretizer {
         let tol = chord_tolerance.max(1e-9);
         let r = r_max.max(tol);
         let c = (1.0 - tol / r).clamp(-1.0, 1.0);
-        // mindestens 16 Segmente pro Vollkreis, höchstens etwa 6300
-        let dtheta = (2.0 * c.acos()).clamp(1e-3, PI / 8.0);
+        // mindestens 16, höchstens 720 Segmente pro Vollkreis
+        let dtheta = (2.0 * c.acos()).clamp(TAU / 720.0, PI / 8.0);
         Self { dtheta }
     }
 

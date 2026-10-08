@@ -111,7 +111,19 @@ pub fn build_scene(
     let mut scene = SceneData::default();
 
     for (body, mesh) in meshes.iter().enumerate() {
-        let vertex_base = scene.face_vertices.len() as u32;
+        // Alle Eckpunkte der Szene müssen mit `u32` adressierbar bleiben.
+        let fits = scene
+            .face_vertices
+            .len()
+            .checked_add(mesh.positions.len())
+            .is_some_and(|n| n <= u32::MAX as usize);
+        let (true, Ok(vertex_base)) = (fits, u32::try_from(scene.face_vertices.len())) else {
+            eprintln!(
+                "Warnung: Szene zu groß, Körper {} wird nicht gezeichnet",
+                body + 1
+            );
+            continue;
+        };
         scene.face_vertices.extend(
             mesh.positions
                 .iter()

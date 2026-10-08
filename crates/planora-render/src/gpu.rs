@@ -180,32 +180,73 @@ impl GpuScene {
     }
 
     fn upload(&mut self, device: &wgpu::Device, scene: &SceneData) {
-        let buffer = |label: &str, bytes: &[u8], usage| {
-            (!bytes.is_empty()).then(|| {
+        let max_buffer_size = device.limits().max_buffer_size;
+        let mut too_large: Vec<&str> = Vec::new();
+        let mut buffer = |label: &'static str, bytes: &[u8], usage| {
+            if bytes.is_empty() {
+                return None;
+            }
+            if !buffer_fits(bytes.len(), max_buffer_size) {
+                too_large.push(label);
+                return None;
+            }
+            Some(
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(label),
                     contents: bytes,
                     usage,
-                })
-            })
+                }),
+            )
         };
-        self.face_vertex_buffer = buffer(
+        let face_vertex_buffer = buffer(
             "planora-face-vertices",
             bytemuck::cast_slice(&scene.face_vertices),
             wgpu::BufferUsages::VERTEX,
         );
-        self.face_index_buffer = buffer(
+        let face_index_buffer = buffer(
             "planora-face-indices",
             bytemuck::cast_slice(&scene.face_indices),
             wgpu::BufferUsages::INDEX,
         );
-        self.face_index_count = scene.face_indices.len() as u32;
-        self.line_vertex_buffer = buffer(
+        let line_vertex_buffer = buffer(
             "planora-line-vertices",
             bytemuck::cast_slice(&scene.line_vertices),
             wgpu::BufferUsages::VERTEX,
         );
-        self.line_vertex_count = scene.line_vertices.len() as u32;
+
+        // Ohne passende Puffer bzw. bei nicht darstellbarer Anzahl wird der Teil nicht gezeichnet.
+        match (
+            face_vertex_buffer,
+            face_index_buffer,
+            u32::try_from(scene.face_indices.len()),
+        ) {
+            (Some(vb), Some(ib), Ok(count)) => {
+                self.face_vertex_buffer = Some(vb);
+                self.face_index_buffer = Some(ib);
+                self.face_index_count = count;
+            }
+            _ => {
+                self.face_vertex_buffer = None;
+                self.face_index_buffer = None;
+                self.face_index_count = 0;
+            }
+        }
+        match (line_vertex_buffer, u32::try_from(scene.line_vertices.len())) {
+            (Some(lvb), Ok(count)) => {
+                self.line_vertex_buffer = Some(lvb);
+                self.line_vertex_count = count;
+            }
+            _ => {
+                self.line_vertex_buffer = None;
+                self.line_vertex_count = 0;
+            }
+        }
+        if !too_large.is_empty() {
+            eprintln!(
+                "Warnung: Szene zu groß für die Grafikkarte (max. {max_buffer_size} Byte je Puffer), nicht gezeichnet: {}",
+                too_large.join(", ")
+            );
+        }
     }
 
     fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cb: &ViewportCallback) {
@@ -234,6 +275,11 @@ impl GpuScene {
             render_pass.draw(0..self.line_vertex_count, 0..1);
         }
     }
+}
+
+/// Passt ein Puffer mit `bytes` Byte unter die Obergrenze des Geräts?
+fn buffer_fits(bytes: usize, max_buffer_size: u64) -> bool {
+    u64::try_from(bytes).is_ok_and(|b| b <= max_buffer_size)
 }
 
 /// Wird pro Frame mit `egui_wgpu::Callback::new_paint_callback(rect, …)` in egui eingehängt.
@@ -275,6 +321,15 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
 #[cfg(test)]
 mod tests {
     use naga::valid::{Capabilities, ValidationFlags, Validator};
+
+    #[test]
+    fn buffers_above_the_device_limit_are_refused() {
+        let limit = 256 * 1024 * 1024;
+        assert!(super::buffer_fits(16, limit));
+        assert!(super::buffer_fits(limit as usize, limit));
+        assert!(!super::buffer_fits(limit as usize + 1, limit));
+        assert!(!super::buffer_fits(usize::MAX, 0));
+    }
 
     /// Prüft ohne GPU, dass der Shader syntaktisch und typseitig gültig ist.
     #[test]

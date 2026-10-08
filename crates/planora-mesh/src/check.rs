@@ -5,8 +5,8 @@ use std::collections::HashMap;
 /// geschlossen und durchgängig orientiert ist: Jede gerichtete Kante kommt genau einmal vor,
 /// ebenso ihre Gegenkante. Entartete Dreiecke werden ignoriert.
 pub fn is_watertight(mesh: &Mesh, eps: f64) -> bool {
-    let mut ids: HashMap<(i64, i64, i64), u32> = HashMap::new();
-    let remap: Vec<u32> = mesh
+    let mut ids: HashMap<(i64, i64, i64), usize> = HashMap::new();
+    let remap: Vec<usize> = mesh
         .positions
         .iter()
         .map(|p| {
@@ -15,12 +15,12 @@ pub fn is_watertight(mesh: &Mesh, eps: f64) -> bool {
                 (p.y / eps).round() as i64,
                 (p.z / eps).round() as i64,
             );
-            let next = ids.len() as u32;
+            let next = ids.len();
             *ids.entry(key).or_insert(next)
         })
         .collect();
 
-    let mut directed: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut directed: HashMap<(usize, usize), u32> = HashMap::new();
     for t in mesh.indices.as_chunks::<3>().0 {
         let (a, b, c) = (
             remap[t[0] as usize],

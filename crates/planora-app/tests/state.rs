@@ -117,3 +117,17 @@ fn hover_and_selection_changes_rebuild_the_scene_only_when_needed() {
     s.set_hover(Some(Pick::Face(FaceRef { body: 0, face })));
     assert_eq!(s.scene_version, v);
 }
+
+#[test]
+fn a_sphere_at_the_dialog_maximum_gives_a_bounded_scene() {
+    let mut s = AppState::new();
+    let sphere = AnalyticKernel::default().make_sphere(100_000.0).unwrap();
+    s.add_body(BodyKind::Sphere, "Kugel 1".into(), sphere)
+        .unwrap();
+    assert!(
+        s.scene.face_indices.len() < 3_000_000,
+        "{}",
+        s.scene.face_indices.len()
+    );
+    assert!(s.scene.face_vertices.len() < 1_000_000);
+}

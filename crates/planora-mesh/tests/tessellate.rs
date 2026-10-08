@@ -213,6 +213,50 @@ fn huge_and_tiny_bodies_keep_reasonable_triangle_counts() {
         },
     )
     .unwrap();
+    // Mantel: mindestens 16 Segmente × 2 Dreiecke × 3 Indizes
     let side = m.face_ranges.iter().map(|r| r.index_count).max().unwrap();
-    assert!(side >= 16 * 3, "{side}");
+    assert!(side >= 16 * 6, "{side}");
+}
+
+/// Die App tessiert mit 0,05 mm; der Dialog erlaubt Radien bis 100 000 mm. Ohne Obergrenze der
+/// Unterteilung entstünden zig Millionen Dreiecke (Einfrieren, GPU-Puffer zu groß).
+#[test]
+fn huge_sphere_keeps_a_bounded_mesh() {
+    let r = 1.0e5;
+    let s = k().make_sphere(r).unwrap();
+    let m = tessellate(
+        &s,
+        &TessellationOptions {
+            chord_tolerance: 0.05,
+        },
+    )
+    .unwrap();
+    assert!(m.indices.len() < 3_000_000, "{}", m.indices.len());
+    assert!(m.positions.len() < 1_000_000, "{}", m.positions.len());
+    assert!(is_watertight(&m, 1e-3));
+    let p = mass_properties(&m);
+    let expected = 4.0 / 3.0 * PI * r * r * r;
+    assert!(p.volume > 0.0);
+    assert!(rel(p.volume, expected) < 0.02, "{} vs {expected}", p.volume);
+}
+
+#[test]
+fn huge_rounded_puck_keeps_a_bounded_mesh() {
+    let scale = 1.0e4;
+    let s = k().revolve(&puck(), &Frame::WORLD).unwrap();
+    let s = k()
+        .transform(&s, &DMat4::from_scale(DVec3::splat(scale)))
+        .unwrap();
+    let m = tessellate(
+        &s,
+        &TessellationOptions {
+            chord_tolerance: 0.05,
+        },
+    )
+    .unwrap();
+    assert!(m.indices.len() < 3_000_000, "{}", m.indices.len());
+    assert!(is_watertight(&m, 1e-3));
+    let expected = 2.0 * PI * (4.5 + 3.0 * PI / 4.0 + 1.0 / 3.0) * scale.powi(3);
+    let p = mass_properties(&m);
+    assert!(rel(p.volume, expected) < 0.02, "{} vs {expected}", p.volume);
 }
