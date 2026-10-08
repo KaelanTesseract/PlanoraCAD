@@ -1,0 +1,51 @@
+use crate::state::BodyKind;
+use egui::{Color32, Painter, Pos2, Rect, Stroke, pos2, vec2};
+
+/// Zeichnet ein kleines Körpersymbol in `rect`.
+pub fn paint_body_icon(painter: &Painter, rect: Rect, kind: BodyKind, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.38;
+    match kind {
+        BodyKind::Box => {
+            let front =
+                Rect::from_center_size(c + vec2(-r * 0.15, r * 0.15), vec2(r * 1.4, r * 1.4));
+            let off = vec2(r * 0.4, -r * 0.4);
+            painter.rect_stroke(front, 1.0, stroke, egui::StrokeKind::Inside);
+            painter.line_segment([front.left_top(), front.left_top() + off], stroke);
+            painter.line_segment([front.right_top(), front.right_top() + off], stroke);
+            painter.line_segment([front.right_bottom(), front.right_bottom() + off], stroke);
+            painter.line_segment([front.left_top() + off, front.right_top() + off], stroke);
+            painter.line_segment(
+                [front.right_top() + off, front.right_bottom() + off],
+                stroke,
+            );
+        }
+        BodyKind::Cylinder | BodyKind::Extrusion => {
+            let top = c + vec2(0.0, -r * 0.7);
+            let bottom = c + vec2(0.0, r * 0.7);
+            let rx = r * 0.8;
+            let ry = r * 0.3;
+            painter.add(egui::Shape::ellipse_stroke(top, vec2(rx, ry), stroke));
+            painter.add(egui::Shape::ellipse_stroke(bottom, vec2(rx, ry), stroke));
+            painter.line_segment([pos2(c.x - rx, top.y), pos2(c.x - rx, bottom.y)], stroke);
+            painter.line_segment([pos2(c.x + rx, top.y), pos2(c.x + rx, bottom.y)], stroke);
+        }
+        BodyKind::Sphere | BodyKind::Revolution => {
+            painter.circle_stroke(c, r, stroke);
+            painter.add(egui::Shape::ellipse_stroke(c, vec2(r, r * 0.35), stroke));
+        }
+        BodyKind::Cone => {
+            let apex: Pos2 = c + vec2(0.0, -r);
+            let base_y = c.y + r * 0.7;
+            let rx = r * 0.85;
+            painter.line_segment([apex, pos2(c.x - rx, base_y)], stroke);
+            painter.line_segment([apex, pos2(c.x + rx, base_y)], stroke);
+            painter.add(egui::Shape::ellipse_stroke(
+                pos2(c.x, base_y),
+                vec2(rx, r * 0.28),
+                stroke,
+            ));
+        }
+    }
+}

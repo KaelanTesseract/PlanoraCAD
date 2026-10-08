@@ -1,0 +1,27 @@
+[package]
+name = "planora-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "planora_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "planora-app"
+path = "src/main.rs"
+
+[dependencies]
+planora-math.workspace = true
+planora-kernel.workspace = true
+planora-mesh.workspace = true
+planora-render.workspace = true
+glam.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui_dock.workspace = true
+
+[lints]
+workspace = true
