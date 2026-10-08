@@ -9,6 +9,7 @@ pub mod primitives;
 pub mod profile;
 pub mod revolve;
 pub mod topology;
+mod transform;
 pub mod validate;
 
 pub use error::KernelError;

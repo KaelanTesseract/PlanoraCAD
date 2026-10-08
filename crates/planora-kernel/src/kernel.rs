@@ -5,7 +5,7 @@ use crate::profile::{Profile, ProfileLoop};
 use crate::revolve::revolve;
 use crate::topology::Solid;
 use crate::validate::{ValidationError, ValidationReport, validate};
-use planora_math::{DVec3, Frame, Tolerance};
+use planora_math::{DMat4, DVec3, Frame, Tolerance};
 
 /// Die kleine Schnittstelle, über die Oberfläche und andere Crates mit dem Kernel sprechen.
 pub trait Kernel {
@@ -15,6 +15,7 @@ pub trait Kernel {
     fn make_sphere(&self, radius: f64) -> Result<Solid, KernelError>;
     fn make_cone(&self, radius: f64, height: f64) -> Result<Solid, KernelError>;
     fn revolve(&self, chain: &ProfileLoop, frame: &Frame) -> Result<Solid, KernelError>;
+    fn transform(&self, solid: &Solid, matrix: &DMat4) -> Result<Solid, KernelError>;
     fn validate(&self, solid: &Solid) -> Result<ValidationReport, ValidationError>;
 }
 
@@ -47,6 +48,10 @@ impl Kernel for AnalyticKernel {
 
     fn revolve(&self, chain: &ProfileLoop, frame: &Frame) -> Result<Solid, KernelError> {
         revolve(chain, frame, &self.tolerance)
+    }
+
+    fn transform(&self, solid: &Solid, matrix: &DMat4) -> Result<Solid, KernelError> {
+        solid.transformed(matrix)
     }
 
     fn validate(&self, solid: &Solid) -> Result<ValidationReport, ValidationError> {
