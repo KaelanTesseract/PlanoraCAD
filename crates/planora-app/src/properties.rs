@@ -39,10 +39,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         let size = max - min;
         egui::Grid::new("body_props").num_columns(2).show(ui, |ui| {
             ui.label("Volumen");
-            ui.label(format!("{:.2} mm³", body.mass.volume));
+            ui.label(format!("≈ {:.2} mm³", body.mass.volume));
             ui.end_row();
             ui.label("Oberfläche");
-            ui.label(format!("{:.2} mm²", body.mass.surface_area));
+            ui.label(format!("≈ {:.2} mm²", body.mass.surface_area));
             ui.end_row();
             ui.label("Schwerpunkt");
             ui.label(format!(

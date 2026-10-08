@@ -94,7 +94,8 @@ impl CreateDialog {
         open && !cancel
     }
 
-    fn create(&self, state: &mut AppState) {
+    /// Erzeugt den Körper mit den aktuellen Werten und nimmt ihn in `state` auf.
+    pub fn create(&self, state: &mut AppState) {
         let k = state.kernel;
         let (kind, name, solid) = match self {
             CreateDialog::Box { x, y, z } => (
@@ -131,9 +132,10 @@ impl CreateDialog {
         state.message = None;
         match solid {
             Ok(solid) => {
-                let number = state.bodies.len() + 1;
-                if let Err(e) = state.add_body(kind, format!("{name} {number}"), solid) {
-                    state.message = Some(e);
+                let number = state.next_body_number;
+                match state.add_body(kind, format!("{name} {number}"), solid) {
+                    Ok(_) => state.next_body_number += 1,
+                    Err(e) => state.message = Some(e),
                 }
             }
             Err(e) => state.message = Some(format!("Erzeugen fehlgeschlagen: {e}")),

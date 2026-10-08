@@ -14,6 +14,17 @@ fn cube_rect(viewport: Rect) -> Rect {
     )
 }
 
+fn keyboard_focus_id() -> egui::Id {
+    egui::Id::new("planora-keyboard-focus-last-frame")
+}
+
+/// Merkt sich am Ende eines Frames, ob ein Eingabefeld die Tastatur hatte. Wird von der App nach
+/// dem Aufbau aller Bereiche aufgerufen.
+pub fn remember_keyboard_focus(ctx: &egui::Context) {
+    let focused = ctx.egui_wants_keyboard_input();
+    ctx.data_mut(|d| d.insert_temp(keyboard_focus_id(), focused));
+}
+
 /// 3D-Ansicht: Navigation, Auswahl, Zeichnen und Navigationswürfel.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
@@ -73,7 +84,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     } else if pointer.is_none() || over_cube {
         state.set_hover(None);
     }
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // egui nimmt bei Escape den Fokus schon zu Beginn des Frames weg; deshalb zählt auch, ob im
+    // vorigen Frame ein Eingabefeld (z. B. der Name) die Tastatur hatte.
+    let typing = ui.ctx().egui_wants_keyboard_input()
+        || ui
+            .ctx()
+            .data(|d| d.get_temp::<bool>(keyboard_focus_id()))
+            .unwrap_or(false);
+    if !typing && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         state.set_selection(None);
     }
 

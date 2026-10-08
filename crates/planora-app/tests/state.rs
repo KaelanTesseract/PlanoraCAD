@@ -1,4 +1,5 @@
 use glam::Vec2;
+use planora_app::create_dialog::CreateDialog;
 use planora_app::state::*;
 use planora_kernel::*;
 use planora_math::DVec3;
@@ -75,13 +76,60 @@ fn removing_a_body_clears_references_to_it() {
     let mut s = AppState::new();
     s.add_body(BodyKind::Box, "A".into(), boxed(10.0)).unwrap();
     s.add_body(BodyKind::Box, "B".into(), boxed(10.0)).unwrap();
+    s.add_body(BodyKind::Box, "C".into(), boxed(10.0)).unwrap();
     let face = s.bodies[1].mesh.face_ranges[0].face;
     s.set_selection(Some(Pick::Face(FaceRef { body: 1, face })));
+    s.set_hover(Some(Pick::Face(FaceRef { body: 1, face })));
     s.remove_body(1);
-    assert_eq!(s.bodies.len(), 1);
+    assert_eq!(s.bodies.len(), 2);
     assert!(s.selection.is_none());
+    assert!(s.hover.is_none());
+    assert_eq!(s.selected_body, None);
+
+    // Wird ein Körper vor dem ausgewählten entfernt, rückt der Index nach.
+    s.set_selection(Some(Pick::Face(FaceRef { body: 1, face })));
+    s.set_hover(Some(Pick::Face(FaceRef { body: 1, face })));
+    assert_eq!(s.selected_body, Some(1));
+    assert_eq!(s.bodies[1].name, "C");
+    s.remove_body(0);
+    assert_eq!(s.selected_body, Some(0));
+    assert_eq!(s.bodies[0].name, "C");
+    assert!(s.hover.is_none());
+    assert!(s.selection.is_none());
+
     s.remove_body(5); // ungültiger Index → ignoriert
     assert_eq!(s.bodies.len(), 1);
+}
+
+#[test]
+fn picking_in_empty_or_tiny_viewports_finds_nothing() {
+    let mut s = AppState::new();
+    s.add_body(BodyKind::Box, "A".into(), boxed(10.0)).unwrap();
+    for viewport in [
+        Vec2::new(0.0, 0.0),
+        Vec2::new(0.5, 100.0),
+        Vec2::new(100.0, 0.5),
+    ] {
+        assert!(s.pick(Vec2::ZERO, viewport).is_none(), "{viewport:?}");
+        assert!(s.pick(viewport / 2.0, viewport).is_none(), "{viewport:?}");
+    }
+}
+
+#[test]
+fn body_names_stay_unique_after_deleting() {
+    let mut s = AppState::new();
+    let dialog = CreateDialog::Box {
+        x: 10.0,
+        y: 10.0,
+        z: 10.0,
+    };
+    dialog.create(&mut s);
+    dialog.create(&mut s);
+    s.remove_body(0);
+    dialog.create(&mut s);
+    let names: Vec<&str> = s.bodies.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names.len(), 2);
+    assert_ne!(names[0], names[1], "{names:?}");
 }
 
 #[test]

@@ -42,6 +42,9 @@ pub struct AppState {
     pub chord_tolerance: f64,
     /// Letzte Fehlermeldung für die Statuszeile.
     pub message: Option<String>,
+    /// Laufende Nummer für den nächsten erzeugten Körper; zählt nur hoch, damit Namen auch nach
+    /// dem Löschen eindeutig bleiben.
+    pub next_body_number: u64,
 }
 
 const GRID_HALF_EXTENT: f32 = 500.0;
@@ -68,6 +71,7 @@ impl AppState {
             kernel: AnalyticKernel::default(),
             chord_tolerance: 0.05,
             message: None,
+            next_body_number: 1,
         };
         state.rebuild_scene();
         state

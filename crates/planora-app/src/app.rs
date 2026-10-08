@@ -208,5 +208,6 @@ impl eframe::App for PlanoraApp {
         {
             self.dialog = Some(dialog);
         }
+        viewport::remember_keyboard_focus(ui.ctx());
     }
 }

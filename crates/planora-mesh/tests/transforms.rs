@@ -102,3 +102,40 @@ proptest! {
         prop_assert!(is_watertight(&mesh, 1e-6));
     }
 }
+
+/// Die Eckpunktnormalen müssen zur Dreiecksorientierung passen. Der Shader nutzt `abs(dot())`
+/// und würde verdrehte Normalen sonst verdecken.
+#[test]
+fn vertex_normals_agree_with_triangle_winding() {
+    let transforms = [
+        DMat4::IDENTITY,
+        DMat4::from_scale(DVec3::new(1.0, 1.0, -1.0)),
+        DMat4::from_scale(DVec3::new(-1.0, 1.0, 1.0)),
+        DMat4::from_translation(DVec3::new(1.0, 2.0, 3.0))
+            * DMat4::from_axis_angle(DVec3::Y, 1.1)
+            * DMat4::from_scale(DVec3::new(-2.0, 2.0, 2.0)),
+    ];
+    for (i, solid) in solids().into_iter().enumerate() {
+        for (j, m) in transforms.iter().enumerate() {
+            let t = k().transform(&solid, m).unwrap();
+            let mesh = tessellate(&t, &opts()).unwrap();
+            let mut checked = 0;
+            for tri in mesh.indices.as_chunks::<3>().0 {
+                let [a, b, c] = tri.map(|v| v as usize);
+                let (pa, pb, pc) = (mesh.positions[a], mesh.positions[b], mesh.positions[c]);
+                let geometric = (pb - pa).cross(pc - pa);
+                // entartete Dreiecke haben keine verlässliche Richtung
+                if geometric.length() < 1e-12 {
+                    continue;
+                }
+                let average = mesh.normals[a] + mesh.normals[b] + mesh.normals[c];
+                assert!(
+                    geometric.normalize().dot(average) > 0.0,
+                    "Körper {i}, Transformation {j}: Normale gegen die Dreiecksorientierung"
+                );
+                checked += 1;
+            }
+            assert!(checked > 0);
+        }
+    }
+}

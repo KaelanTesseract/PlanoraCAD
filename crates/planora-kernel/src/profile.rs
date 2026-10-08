@@ -166,7 +166,6 @@ impl Profile {
 
 /// Prüft eine Schleife, bevor sie abgetastet wird: nicht leer, alle Werte endlich,
 /// jeder Bogen mit Öffnungswinkel zwischen `tol.angular` und einer Vollkreisdrehung.
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub(crate) fn check_loop_input(lp: &ProfileLoop, tol: &Tolerance) -> Result<(), KernelError> {
     if lp.segments.is_empty() || !lp.start.is_finite() {
         return Err(KernelError::DegenerateSegment);
