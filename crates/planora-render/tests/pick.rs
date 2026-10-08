@@ -98,3 +98,75 @@ fn occluded_edges_are_ignored() {
     // Eine Fläche ganz nah an der Kamera verdeckt alles dahinter.
     assert!(pick_edge(&mesh, &cam, viewport, cursor, 6.0, Some(0.1)).is_none());
 }
+
+fn edge_midpoint(mesh: &Mesh, want: Vec3) -> (Vec3, Id<Edge>) {
+    mesh.edge_lines
+        .iter()
+        .map(|l| {
+            let a = l.points[0];
+            let b = *l.points.last().unwrap();
+            let m = Vec3::new(
+                ((a.x + b.x) / 2.0) as f32,
+                ((a.y + b.y) / 2.0) as f32,
+                ((a.z + b.z) / 2.0) as f32,
+            );
+            (m, l.edge)
+        })
+        .min_by(|x, y| (x.0 - want).length().total_cmp(&(y.0 - want).length()))
+        .unwrap()
+}
+
+/// Rückt die Kamera weit weg und verengt den Blickwinkel so, dass das Bild gleich groß bleibt
+/// (Teleobjektiv). So bleiben die Kanten im Bild auseinander, auch bei großem Abstand.
+fn far_away(cam: &mut OrbitCamera, distance: f32) {
+    let half_height = cam.distance * (cam.fov_y * 0.5).tan();
+    cam.distance = distance;
+    cam.fov_y = 2.0 * (half_height / distance).atan();
+}
+
+fn occluder_at(mesh: &Mesh, cam: &OrbitCamera, viewport: Vec2, cursor: Vec2) -> Option<f32> {
+    let ndc = Vec2::new(
+        2.0 * cursor.x / viewport.x - 1.0,
+        1.0 - 2.0 * cursor.y / viewport.y,
+    );
+    let (origin, dir) = cam.ray(ndc);
+    pick_face(mesh, origin, dir).map(|h| h.distance)
+}
+
+#[test]
+fn visible_edge_stays_pickable_at_large_camera_distances() {
+    let (_, mesh) = box_mesh();
+    let viewport = Vec2::new(800.0, 600.0);
+    // Standardansicht: Kamera bei +x, -y, +z; die Kante (2, 0, 1) liegt vorn.
+    let (mid, edge) = edge_midpoint(&mesh, Vec3::new(2.0, 0.0, 1.0));
+    for distance in [50.0, 5000.0, 20000.0] {
+        let mut cam = OrbitCamera::default();
+        cam.frame_bounds(Vec3::ZERO, Vec3::splat(2.0));
+        far_away(&mut cam, distance);
+        cam.set_viewport(viewport.x, viewport.y);
+        let cursor = cam.project(mid, viewport).unwrap();
+        let occluder = occluder_at(&mesh, &cam, viewport, cursor).expect("Fläche getroffen");
+        let hit = pick_edge(&mesh, &cam, viewport, cursor, 6.0, Some(occluder));
+        assert_eq!(hit.map(|h| h.edge), Some(edge), "Abstand {distance}");
+    }
+}
+
+#[test]
+fn hidden_edge_is_rejected_at_large_camera_distances() {
+    let (_, mesh) = box_mesh();
+    let viewport = Vec2::new(800.0, 600.0);
+    // Die Kante (0, 2, 1) liegt auf der abgewandten Seite.
+    let (mid, _) = edge_midpoint(&mesh, Vec3::new(0.0, 2.0, 1.0));
+    for distance in [50.0, 5000.0, 20000.0] {
+        let mut cam = OrbitCamera::default();
+        cam.frame_bounds(Vec3::ZERO, Vec3::splat(2.0));
+        far_away(&mut cam, distance);
+        cam.set_viewport(viewport.x, viewport.y);
+        let cursor = cam.project(mid, viewport).unwrap();
+        let occluder = occluder_at(&mesh, &cam, viewport, cursor).expect("Fläche getroffen");
+        assert!(
+            pick_edge(&mesh, &cam, viewport, cursor, 6.0, Some(occluder)).is_none(),
+            "Abstand {distance}"
+        );
+    }
+}

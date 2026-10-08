@@ -86,7 +86,9 @@ fn closest_on_segment(p: Vec2, a: Vec2, b: Vec2) -> (Vec2, f32) {
 }
 
 /// Kante, die der Mausposition (in Pixeln, Ursprung oben links) am nächsten liegt, höchstens `max_px` entfernt.
-/// `occluder` ist die Entfernung der vordersten getroffenen Fläche; weiter entfernte Kanten gelten als verdeckt.
+/// `occluder` ist die Entfernung der vordersten getroffenen Fläche entlang des Mausstrahls, gemessen vom
+/// Strahlursprung aus, also genau das, was `pick_face` für `camera.ray(..)` derselben Mausposition liefert.
+/// Weiter entfernte Kanten gelten als verdeckt.
 pub fn pick_edge(
     mesh: &Mesh,
     camera: &OrbitCamera,
@@ -95,7 +97,15 @@ pub fn pick_edge(
     max_px: f32,
     occluder: Option<f32>,
 ) -> Option<EdgeHit> {
-    let eye = camera.eye();
+    if !(viewport.x >= 1.0 && viewport.y >= 1.0 && viewport.is_finite() && cursor.is_finite()) {
+        return None;
+    }
+    // Gleicher Bezugspunkt wie bei `pick_face`: Ursprung und Richtung des Mausstrahls.
+    let ndc = Vec2::new(
+        2.0 * cursor.x / viewport.x - 1.0,
+        1.0 - 2.0 * cursor.y / viewport.y,
+    );
+    let (ray_origin, ray_dir) = camera.ray(ndc);
     let mut best: Option<EdgeHit> = None;
     for line in &mesh.edge_lines {
         for seg in line.points.windows(2) {
@@ -111,7 +121,8 @@ pub fn pick_edge(
             }
             if let Some(od) = occluder {
                 let world = wa + (wb - wa) * s;
-                if (world - eye).length() > od + 0.01 * od + 0.05 {
+                let along = (world - ray_origin).dot(ray_dir);
+                if along > od + 2.0e-5 * od + 0.01 {
                     continue;
                 }
             }
