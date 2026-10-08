@@ -57,9 +57,8 @@ Weitere Projektbestandteile: `deny.toml` (cargo-deny), `rustfmt.toml`, Clippy-Ko
 
 ### 4.1 Datenstruktur
 
-- Hierarchie: `Solid` → Schalen → Flächen (`Face`) → Schleifen (`Loop`) → Halbkanten (`HalfEdge`) → Kanten (`Edge`) → Ecken (`Vertex`).
-- Elemente liegen in Arenen (Vektoren) und verweisen per **typisierter Index-ID** aufeinander, ohne Zeiger oder `Rc`.
-- Halbkanten-Struktur für billige Nachbarschaftsabfragen (Voraussetzung für spätere Booleans).
+- Hierarchie: `Solid` → Schalen (`Shell`, Liste von Flächen-IDs) → Flächen (`Face`) → Schleifen (`Loop`) → Halbkanten (`HalfEdge`) → Kanten (`Edge`) → Ecken (`Vertex`).
+- Ecken, Kanten und Flächen liegen in Arenen (Vektoren) und verweisen per **typisierter Index-ID** aufeinander, ohne Zeiger oder `Rc`. Schleifen und Halbkanten liegen direkt in der Fläche (`Face.outer`, `Face.inner`); eine Halbkante ist ein Wert aus Kanten-ID und Richtung. Das hält die Struktur einfach und trotzdem halbkantenbasiert (jede Kante wird genau einmal vorwärts und einmal rückwärts durchlaufen).
 - **Topologie und Geometrie sind getrennt:** Eine `Face` verweist auf eine `Surface`, eine `Edge` auf eine `Curve`.
   - `Surface` (Enum): Ebene, Zylinder, Kegel, Kugel, Torus.
   - `Curve` (Enum): Gerade, Kreis, Ellipse.
@@ -75,9 +74,10 @@ Weitere Projektbestandteile: `deny.toml` (cargo-deny), `rustfmt.toml`, Clippy-Ko
 - Grundkörper: Quader, Zylinder, Kugel.
 - Extrusion eines ebenen Profils (Polygon mit Kreisbögen, auch mit Löchern).
 - Rotation (Revolve) eines Profils um eine Achse.
-- Transformationen: verschieben, drehen, spiegeln.
-- Validator: Euler-Charakteristik, jede Kante grenzt an genau zwei Flächen, Schleifen sind geschlossen, Flächennormalen zeigen nach außen.
-- Volumen und Schwerpunkt (für Tests und später für die Anzeige).
+- Transformationen: verschieben, drehen, spiegeln und gleichmäßig skalieren (Ähnlichkeitstransformationen; andere Matrizen werden mit Fehler abgelehnt).
+- Validator (`planora-kernel`): jede Kante wird genau einmal vorwärts und einmal rückwärts durchlaufen, Schleifen sind geschlossen, Euler-Poincaré-Formel liefert ein ganzzahliges, nicht negatives Geschlecht (Zahl der „Henkel“). Dass die Flächennormalen nach außen zeigen, wird in `planora-mesh` über ein **positives vorzeichenbehaftetes Volumen** geprüft.
+- Volumen, Oberfläche und Schwerpunkt werden in `planora-mesh` aus dem Dreiecksnetz berechnet (der Kernel bleibt frei von Tessellierung).
+- **Einschränkung dieser Stufe:** Nicht-ebene Flächen sind rechteckige Parameter-Ausschnitte (`UvRect`) einer Zylinder-, Kegel-, Kugel- oder Torusfläche. Das deckt alles ab, was durch Extrusion von Linien und Kreisbögen sowie durch Rotation entsteht. Beliebig berandete gekrümmte Flächen kommen mit den Booleschen Operationen (Teilprojekt 3). Ein vollständiger Torus (geschlossenes Profil) ist in dieser Stufe nicht erzeugbar; Torus-Ausschnitte entstehen durch Rotation eines Kreisbogens außerhalb der Achse.
 
 **Nicht im Umfang:** Boolesche Operationen, Fillets, Chamfer, NURBS, Skizzen-Solver, Speichern/Laden, Export.
 
@@ -97,11 +97,12 @@ Die Oberfläche spricht nur mit einer kleinen Schnittstelle (`Kernel`-Trait bzw.
 - `wgpu` rendert in eine Textur, die `egui` als Panel einbindet.
 - Navigation: Orbit, Pan, Zoom mit der Maus, Standardansichten per Navigationswürfel.
 - Darstellung: Raster, Ursprungsachsen, schattierte Flächen mit einfacher Beleuchtung, Kantenlinien darüber, 4× MSAA.
-- Auswahl per GPU-Picking (ID-Puffer): Flächen und Kanten sind anklickbar, Hervorhebung beim Überfahren und bei Auswahl.
+- Auswahl per **CPU-Strahlentest** gegen das Dreiecksnetz (Flächen) und per Bildschirmabstand zu den Kantenlinien (Kanten, verdeckte Kanten werden ignoriert): Flächen und Kanten sind anklickbar, Hervorhebung beim Überfahren und bei Auswahl. Das ist ohne GPU testbar und braucht keine Rücklesung vom Grafikspeicher. Ein GPU-ID-Puffer bleibt eine spätere Optimierung für sehr große Modelle.
+- `egui` gibt die Render-Einstellungen vor: 4× MSAA und ein 32-Bit-Tiefenpuffer werden in `eframe` eingestellt, der Viewport zeichnet über einen `egui_wgpu`-Paint-Callback direkt in dessen Render-Pass.
 
 ## 7. Oberfläche (`planora-app`)
 
-- Dunkles Theme als Standard, helles zuschaltbar; eigene Schrift und Icons (freie Lizenz, vorab geprüft; Kandidaten: Inter, Lucide, Phosphor).
+- Dunkles Theme als Standard, helles zuschaltbar, mit eigenen Farben, Abständen und Rundungen. Die Icons sind **selbst gezeichnete Vektorformen** im Code (keine Fremdlizenz). Als Schrift dienen vorerst die in `egui` mitgelieferten Schriften (deren Lizenzen `cargo-deny` und die manuelle Prüfung beim Einrichten erfassen); eine eigene Schrift (z. B. Inter) kommt erst nach Lizenzprüfung.
 - Docking-Layout: Browser links, Eigenschaften rechts, Viewport in der Mitte.
 - Menü „Erzeugen": Quader, Zylinder, Kugel sowie ein einfacher Extrusions-/Rotationsdialog mit festen Beispielprofilen (echte Skizzen folgen in Teilprojekt 4).
 - Der Browser zeigt die erzeugten Körper; die Eigenschaften zeigen Maße, Volumen und Schwerpunkt.
