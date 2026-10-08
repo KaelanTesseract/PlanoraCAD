@@ -1,6 +1,7 @@
-//! Darstellung und Auswahl: Kamera, Picking, Szenendaten. (Die GPU-Anbindung folgt in `gpu`.)
+//! Darstellung und Auswahl: Kamera, Picking, Szenendaten. GPU-Anbindung in `gpu`.
 
 mod camera;
+pub mod gpu;
 mod pick;
 mod scene;
 mod viewcube;

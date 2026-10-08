@@ -13,5 +13,8 @@ bytemuck.workspace = true
 egui.workspace = true
 egui-wgpu.workspace = true
 
+[dev-dependencies]
+naga = { version = "30", features = ["wgsl-in"] }
+
 [lints]
 workspace = true

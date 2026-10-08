@@ -1,0 +1,296 @@
+use crate::scene::{FaceVertex, LineVertex, SceneData};
+use bytemuck::{Pod, Zeroable};
+use egui_wgpu::wgpu::util::DeviceExt as _;
+use egui_wgpu::{self, wgpu};
+use std::sync::Arc;
+
+/// Muss zu `NativeOptions::multisampling` und `NativeOptions::depth_buffer` passen.
+pub const MSAA_SAMPLES: u32 = 4;
+pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Uniforms {
+    view_proj: [[f32; 4]; 4],
+    light_dir: [f32; 4],
+}
+
+/// GPU-Ressourcen des Viewports. Liegen in `egui_wgpu::CallbackResources`.
+pub struct GpuScene {
+    face_pipeline: wgpu::RenderPipeline,
+    line_pipeline: wgpu::RenderPipeline,
+    uniform_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    face_vertex_buffer: Option<wgpu::Buffer>,
+    face_index_buffer: Option<wgpu::Buffer>,
+    face_index_count: u32,
+    line_vertex_buffer: Option<wgpu::Buffer>,
+    line_vertex_count: u32,
+    uploaded_version: Option<u64>,
+}
+
+impl GpuScene {
+    /// Legt die Pipelines an und hinterlegt sie in den Callback-Ressourcen von egui.
+    pub fn install(render_state: &egui_wgpu::RenderState) {
+        let gpu = Self::new(&render_state.device, render_state.target_format);
+        render_state.renderer.write().callback_resources.insert(gpu);
+    }
+
+    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("planora-viewport"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("planora-viewport"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("planora-viewport"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("planora-uniforms"),
+            contents: bytemuck::bytes_of(&Uniforms {
+                view_proj: [[0.0; 4]; 4],
+                light_dir: [0.0, 0.0, 1.0, 0.0],
+            }),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("planora-viewport"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        let multisample = wgpu::MultisampleState {
+            count: MSAA_SAMPLES,
+            ..Default::default()
+        };
+
+        let face_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("planora-faces"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_face"),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<FaceVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3,
+                        1 => Float32x3,
+                        2 => Float32x4
+                    ],
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_face"),
+                targets: &[Some(target_format.into())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                // Flächen leicht nach hinten schieben, damit Kanten darüber sauber erscheinen.
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("planora-lines"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_line"),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<LineVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_line"),
+                targets: &[Some(target_format.into())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        });
+
+        Self {
+            face_pipeline,
+            line_pipeline,
+            uniform_buffer,
+            bind_group,
+            face_vertex_buffer: None,
+            face_index_buffer: None,
+            face_index_count: 0,
+            line_vertex_buffer: None,
+            line_vertex_count: 0,
+            uploaded_version: None,
+        }
+    }
+
+    fn upload(&mut self, device: &wgpu::Device, scene: &SceneData) {
+        let buffer = |label: &str, bytes: &[u8], usage| {
+            (!bytes.is_empty()).then(|| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytes,
+                    usage,
+                })
+            })
+        };
+        self.face_vertex_buffer = buffer(
+            "planora-face-vertices",
+            bytemuck::cast_slice(&scene.face_vertices),
+            wgpu::BufferUsages::VERTEX,
+        );
+        self.face_index_buffer = buffer(
+            "planora-face-indices",
+            bytemuck::cast_slice(&scene.face_indices),
+            wgpu::BufferUsages::INDEX,
+        );
+        self.face_index_count = scene.face_indices.len() as u32;
+        self.line_vertex_buffer = buffer(
+            "planora-line-vertices",
+            bytemuck::cast_slice(&scene.line_vertices),
+            wgpu::BufferUsages::VERTEX,
+        );
+        self.line_vertex_count = scene.line_vertices.len() as u32;
+    }
+
+    fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cb: &ViewportCallback) {
+        let uniforms = Uniforms {
+            view_proj: cb.view_proj,
+            light_dir: [cb.light_dir[0], cb.light_dir[1], cb.light_dir[2], 0.0],
+        };
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        if self.uploaded_version != Some(cb.scene_version) {
+            self.upload(device, &cb.scene);
+            self.uploaded_version = Some(cb.scene_version);
+        }
+    }
+
+    fn paint(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
+        if let (Some(vb), Some(ib)) = (&self.face_vertex_buffer, &self.face_index_buffer) {
+            render_pass.set_pipeline(&self.face_pipeline);
+            render_pass.set_vertex_buffer(0, vb.slice(..));
+            render_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..self.face_index_count, 0, 0..1);
+        }
+        if let Some(lvb) = &self.line_vertex_buffer {
+            render_pass.set_pipeline(&self.line_pipeline);
+            render_pass.set_vertex_buffer(0, lvb.slice(..));
+            render_pass.draw(0..self.line_vertex_count, 0..1);
+        }
+    }
+}
+
+/// Wird pro Frame mit `egui_wgpu::Callback::new_paint_callback(rect, …)` in egui eingehängt.
+pub struct ViewportCallback {
+    pub view_proj: [[f32; 4]; 4],
+    pub light_dir: [f32; 3],
+    pub scene: Arc<SceneData>,
+    /// Erhöht sich, wenn sich `scene` geändert hat; steuert das Neuladen der Puffer.
+    pub scene_version: u64,
+}
+
+impl egui_wgpu::CallbackTrait for ViewportCallback {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _screen_descriptor: &egui_wgpu::ScreenDescriptor,
+        _egui_encoder: &mut wgpu::CommandEncoder,
+        resources: &mut egui_wgpu::CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        if let Some(gpu) = resources.get_mut::<GpuScene>() {
+            gpu.update(device, queue, self);
+        }
+        Vec::new()
+    }
+
+    fn paint(
+        &self,
+        _info: egui::PaintCallbackInfo,
+        render_pass: &mut wgpu::RenderPass<'static>,
+        resources: &egui_wgpu::CallbackResources,
+    ) {
+        if let Some(gpu) = resources.get::<GpuScene>() {
+            gpu.paint(render_pass);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use naga::valid::{Capabilities, ValidationFlags, Validator};
+
+    /// Prüft ohne GPU, dass der Shader syntaktisch und typseitig gültig ist.
+    #[test]
+    fn shader_is_valid_wgsl() {
+        let module = naga::front::wgsl::parse_str(include_str!("shader.wgsl"))
+            .expect("WGSL muss sich parsen lassen");
+        Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .expect("WGSL muss die Validierung bestehen");
+        let entries: Vec<_> = module
+            .entry_points
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        for name in ["vs_face", "fs_face", "vs_line", "fs_line"] {
+            assert!(entries.contains(&name), "Einstiegspunkt {name} fehlt");
+        }
+    }
+}
