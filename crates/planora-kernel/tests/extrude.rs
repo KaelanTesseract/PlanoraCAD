@@ -203,3 +203,95 @@ fn validator_detects_a_flipped_half_edge() {
     he.forward = !he.forward;
     assert!(validate(&s).is_err());
 }
+
+fn arc_profile(sweep: f64) -> Profile {
+    Profile {
+        outer: ProfileLoop {
+            start: DVec2::new(1.0, 0.0),
+            segments: vec![Segment::Arc {
+                center: DVec2::ZERO,
+                sweep,
+            }],
+        },
+        holes: vec![],
+    }
+}
+
+#[test]
+fn non_finite_or_oversized_arc_sweeps_are_rejected() {
+    for sweep in [
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        1e10,
+        f64::NAN,
+        2.0 * TAU,
+        -2.0 * TAU,
+    ] {
+        assert!(
+            k().extrude(&arc_profile(sweep), &Frame::WORLD, 1.0)
+                .is_err(),
+            "sweep {sweep} muss abgelehnt werden"
+        );
+    }
+}
+
+#[test]
+fn empty_hole_is_rejected() {
+    let p = Profile {
+        outer: ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(10.0, 10.0)),
+        holes: vec![ProfileLoop {
+            start: DVec2::new(5.0, 5.0),
+            segments: vec![],
+        }],
+    };
+    assert!(k().extrude(&p, &Frame::WORLD, 1.0).is_err());
+}
+
+#[test]
+fn out_and_back_hole_is_rejected() {
+    let p = Profile {
+        outer: ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(10.0, 10.0)),
+        holes: vec![ProfileLoop {
+            start: DVec2::new(2.0, 2.0),
+            segments: vec![
+                Segment::Line {
+                    to: DVec2::new(5.0, 5.0),
+                },
+                Segment::Line {
+                    to: DVec2::new(2.0, 2.0),
+                },
+            ],
+        }],
+    };
+    assert!(k().extrude(&p, &Frame::WORLD, 1.0).is_err());
+}
+
+#[test]
+fn hole_with_infinite_coordinates_is_rejected() {
+    let p = Profile {
+        outer: ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(10.0, 10.0)),
+        holes: vec![ProfileLoop::circle(DVec2::new(5.0, f64::INFINITY), 1.0)],
+    };
+    assert!(k().extrude(&p, &Frame::WORLD, 1.0).is_err());
+}
+
+#[test]
+fn infinite_dimensions_are_rejected() {
+    let inf = f64::INFINITY;
+    assert!(matches!(
+        k().make_box(DVec3::new(inf, 1.0, 1.0)),
+        Err(KernelError::InvalidDimension(_))
+    ));
+    assert!(matches!(
+        k().make_cylinder(inf, 1.0),
+        Err(KernelError::InvalidDimension(_))
+    ));
+    assert!(matches!(
+        k().make_cylinder(1.0, inf),
+        Err(KernelError::InvalidDimension(_))
+    ));
+    assert!(matches!(
+        k().extrude(&rect_profile(1.0, 1.0), &Frame::WORLD, inf),
+        Err(KernelError::InvalidDimension(_))
+    ));
+}

@@ -5,7 +5,7 @@ use crate::topology::Solid;
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 
 fn check(dimension: f64, tol: &Tolerance) -> Result<(), KernelError> {
-    if dimension > tol.linear {
+    if dimension.is_finite() && dimension > tol.linear {
         Ok(())
     } else {
         Err(KernelError::InvalidDimension(dimension))
