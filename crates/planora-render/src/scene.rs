@@ -1,0 +1,194 @@
+use bytemuck::{Pod, Zeroable};
+use planora_kernel::{Edge, Face, Id};
+use planora_mesh::Mesh;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FaceRef {
+    pub body: usize,
+    pub face: Id<Face>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EdgeRef {
+    pub body: usize,
+    pub edge: Id<Edge>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Pick {
+    Face(FaceRef),
+    Edge(EdgeRef),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Highlight {
+    pub hover: Option<Pick>,
+    pub selected: Option<Pick>,
+}
+
+/// Farben in sRGB-Werten (0..1); egui zeichnet ohne zusätzliche Gamma-Umrechnung.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Palette {
+    pub face_base: [f32; 4],
+    pub face_hover: [f32; 4],
+    pub face_selected: [f32; 4],
+    pub edge_base: [f32; 4],
+    pub edge_hover: [f32; 4],
+    pub edge_selected: [f32; 4],
+    pub grid: [f32; 4],
+    pub axis_x: [f32; 4],
+    pub axis_y: [f32; 4],
+    pub axis_z: [f32; 4],
+}
+
+impl Palette {
+    pub fn dark() -> Self {
+        Self {
+            face_base: [0.62, 0.68, 0.78, 1.0],
+            face_hover: [0.45, 0.72, 1.0, 1.0],
+            face_selected: [1.0, 0.62, 0.20, 1.0],
+            edge_base: [0.06, 0.07, 0.09, 1.0],
+            edge_hover: [0.30, 0.80, 1.0, 1.0],
+            edge_selected: [1.0, 0.55, 0.10, 1.0],
+            grid: [0.24, 0.26, 0.30, 1.0],
+            axis_x: [0.85, 0.28, 0.28, 1.0],
+            axis_y: [0.35, 0.75, 0.35, 1.0],
+            axis_z: [0.30, 0.50, 0.95, 1.0],
+        }
+    }
+
+    pub fn light() -> Self {
+        Self {
+            face_base: [0.70, 0.76, 0.86, 1.0],
+            face_hover: [0.40, 0.65, 0.95, 1.0],
+            face_selected: [0.95, 0.55, 0.15, 1.0],
+            edge_base: [0.12, 0.13, 0.16, 1.0],
+            edge_hover: [0.10, 0.50, 0.85, 1.0],
+            edge_selected: [0.90, 0.45, 0.05, 1.0],
+            grid: [0.78, 0.80, 0.84, 1.0],
+            axis_x: [0.80, 0.20, 0.20, 1.0],
+            axis_y: [0.25, 0.65, 0.25, 1.0],
+            axis_z: [0.20, 0.40, 0.90, 1.0],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct FaceVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub color: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct LineVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+}
+
+/// Fertig aufbereitete Daten für die Grafikkarte.
+#[derive(Clone, Debug, Default)]
+pub struct SceneData {
+    pub face_vertices: Vec<FaceVertex>,
+    pub face_indices: Vec<u32>,
+    /// Linienliste: je zwei aufeinanderfolgende Einträge bilden eine Linie.
+    pub line_vertices: Vec<LineVertex>,
+}
+
+fn p3(p: planora_math::DVec3) -> [f32; 3] {
+    [p.x as f32, p.y as f32, p.z as f32]
+}
+
+/// Baut die Szene aus allen Körpern. `grid_half_extent == 0.0` lässt Raster und Achsen weg.
+pub fn build_scene(
+    meshes: &[&Mesh],
+    highlight: &Highlight,
+    palette: &Palette,
+    grid_half_extent: f32,
+) -> SceneData {
+    let mut scene = SceneData::default();
+
+    for (body, mesh) in meshes.iter().enumerate() {
+        let vertex_base = scene.face_vertices.len() as u32;
+        scene.face_vertices.extend(
+            mesh.positions
+                .iter()
+                .zip(mesh.normals.iter())
+                .map(|(p, n)| FaceVertex {
+                    position: p3(*p),
+                    normal: p3(*n),
+                    color: palette.face_base,
+                }),
+        );
+        for range in &mesh.face_ranges {
+            let this = Pick::Face(FaceRef {
+                body,
+                face: range.face,
+            });
+            let color = if highlight.selected == Some(this) {
+                palette.face_selected
+            } else if highlight.hover == Some(this) {
+                palette.face_hover
+            } else {
+                continue;
+            };
+            let start = range.first_index as usize;
+            let end = start + range.index_count as usize;
+            for &i in &mesh.indices[start..end] {
+                scene.face_vertices[(vertex_base + i) as usize].color = color;
+            }
+        }
+        scene
+            .face_indices
+            .extend(mesh.indices.iter().map(|i| i + vertex_base));
+
+        for line in &mesh.edge_lines {
+            let this = Pick::Edge(EdgeRef {
+                body,
+                edge: line.edge,
+            });
+            let color = if highlight.selected == Some(this) {
+                palette.edge_selected
+            } else if highlight.hover == Some(this) {
+                palette.edge_hover
+            } else {
+                palette.edge_base
+            };
+            for seg in line.points.windows(2) {
+                for p in seg {
+                    scene.line_vertices.push(LineVertex {
+                        position: p3(*p),
+                        color,
+                    });
+                }
+            }
+        }
+    }
+
+    if grid_half_extent > 0.0 {
+        add_grid(&mut scene, palette, grid_half_extent);
+    }
+    scene
+}
+
+fn add_grid(scene: &mut SceneData, palette: &Palette, half: f32) {
+    let step = 10.0_f32;
+    let n = (half / step).floor() as i32;
+    let line = |scene: &mut SceneData, a: [f32; 3], b: [f32; 3], color: [f32; 4]| {
+        scene.line_vertices.push(LineVertex { position: a, color });
+        scene.line_vertices.push(LineVertex { position: b, color });
+    };
+    for i in -n..=n {
+        if i == 0 {
+            continue;
+        }
+        let t = i as f32 * step;
+        line(scene, [-half, t, 0.0], [half, t, 0.0], palette.grid);
+        line(scene, [t, -half, 0.0], [t, half, 0.0], palette.grid);
+    }
+    line(scene, [-half, 0.0, 0.0], [half, 0.0, 0.0], palette.axis_x);
+    line(scene, [0.0, -half, 0.0], [0.0, half, 0.0], palette.axis_y);
+    line(scene, [0.0, 0.0, 0.0], [0.0, 0.0, half], palette.axis_z);
+}
