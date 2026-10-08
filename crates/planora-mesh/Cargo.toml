@@ -1,0 +1,17 @@
+[package]
+name = "planora-mesh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+planora-math.workspace = true
+planora-kernel.workspace = true
+earcutr.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
