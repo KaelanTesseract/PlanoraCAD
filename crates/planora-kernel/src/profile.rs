@@ -1,3 +1,4 @@
+use crate::error::KernelError;
 use planora_math::{DVec2, TAU, Tolerance};
 
 /// Profilsegment. Der Startpunkt ist immer das Ende des vorigen Segments.
@@ -161,4 +162,31 @@ impl Profile {
             .collect();
         Profile { outer, holes }
     }
+}
+
+/// Prüft eine Schleife, bevor sie abgetastet wird: nicht leer, alle Werte endlich,
+/// jeder Bogen mit Öffnungswinkel zwischen `tol.angular` und einer Vollkreisdrehung.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub(crate) fn check_loop_input(lp: &ProfileLoop, tol: &Tolerance) -> Result<(), KernelError> {
+    if lp.segments.is_empty() || !lp.start.is_finite() {
+        return Err(KernelError::DegenerateSegment);
+    }
+    for seg in &lp.segments {
+        let ok = match seg {
+            Segment::Line { to } => to.is_finite(),
+            Segment::Arc { center, sweep } => {
+                center.is_finite()
+                    && sweep.is_finite()
+                    && sweep.abs() > tol.angular
+                    && sweep.abs() <= TAU + 1e-9
+            }
+        };
+        if !ok {
+            return Err(KernelError::DegenerateSegment);
+        }
+    }
+    if lp.chain_points().iter().any(|p| !p.is_finite()) {
+        return Err(KernelError::DegenerateSegment);
+    }
+    Ok(())
 }

@@ -1,9 +1,9 @@
 use crate::error::KernelError;
 use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
-use crate::profile::{Profile, ProfileLoop, Segment};
+use crate::profile::{Profile, ProfileLoop, Segment, check_loop_input};
 use crate::topology::{Edge, Face, HalfEdge, Loop, Solid};
-use planora_math::{Frame, TAU, Tolerance};
+use planora_math::{Frame, Tolerance};
 
 /// Kanten einer Schleife auf der Unter- und Oberseite.
 struct LoopEdges {
@@ -115,33 +115,6 @@ fn side_loop(
             },
         ],
     }
-}
-
-/// Prüft eine Schleife, bevor sie abgetastet wird: nicht leer, alle Werte endlich,
-/// jeder Bogen mit Öffnungswinkel zwischen `tol.angular` und einer Vollkreisdrehung.
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn check_loop_input(lp: &ProfileLoop, tol: &Tolerance) -> Result<(), KernelError> {
-    if lp.segments.is_empty() || !lp.start.is_finite() {
-        return Err(KernelError::DegenerateSegment);
-    }
-    for seg in &lp.segments {
-        let ok = match seg {
-            Segment::Line { to } => to.is_finite(),
-            Segment::Arc { center, sweep } => {
-                center.is_finite()
-                    && sweep.is_finite()
-                    && sweep.abs() > tol.angular
-                    && sweep.abs() <= TAU + 1e-9
-            }
-        };
-        if !ok {
-            return Err(KernelError::DegenerateSegment);
-        }
-    }
-    if lp.chain_points().iter().any(|p| !p.is_finite()) {
-        return Err(KernelError::DegenerateSegment);
-    }
-    Ok(())
 }
 
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
