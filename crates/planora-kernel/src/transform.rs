@@ -15,7 +15,9 @@ impl Solid {
             m.z_axis.truncate(),
         ];
         let eps = 1e-9 * s.max(1.0);
-        let is_similarity = s.is_finite()
+        // Alle Einträge müssen endlich sein, auch die Verschiebung (nicht nur die Determinante).
+        let is_similarity = m.is_finite()
+            && s.is_finite()
             && s > 1e-12
             && cols.iter().all(|c| (c.length() - s).abs() <= eps)
             && cols[0].dot(cols[1]).abs() <= eps * s

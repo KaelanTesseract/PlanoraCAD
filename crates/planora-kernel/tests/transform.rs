@@ -93,3 +93,23 @@ fn non_similarity_matrices_are_rejected() {
         );
     }
 }
+
+#[test]
+fn non_finite_matrices_are_rejected() {
+    let solid = k().make_box(DVec3::ONE).unwrap();
+    let mut nan_rotation = DMat4::IDENTITY;
+    nan_rotation.x_axis.y = f64::NAN;
+    let bad = [
+        DMat4::from_translation(DVec3::new(f64::NAN, 0.0, 0.0)),
+        DMat4::from_translation(DVec3::new(0.0, f64::INFINITY, 0.0)),
+        DMat4::from_translation(DVec3::new(0.0, 0.0, f64::NEG_INFINITY)),
+        nan_rotation,
+    ];
+    for m in bad {
+        assert_eq!(
+            k().transform(&solid, &m).unwrap_err(),
+            KernelError::NonSimilarityTransform,
+            "{m:?}"
+        );
+    }
+}
