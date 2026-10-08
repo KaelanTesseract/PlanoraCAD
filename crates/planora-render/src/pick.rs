@@ -85,6 +85,21 @@ fn closest_on_segment(p: Vec2, a: Vec2, b: Vec2) -> (Vec2, f32) {
     (a + ab * s, s)
 }
 
+/// Punkt der Strecke `a..b`, der dem Strahl am nächsten liegt (Parameter auf 0..1 begrenzt).
+/// `None` bei entarteter oder fast paralleler Strecke.
+fn ray_segment_closest(origin: Vec3, dir: Vec3, a: Vec3, b: Vec3) -> Option<Vec3> {
+    let e = b - a;
+    let r = a - origin;
+    let ee = e.dot(e);
+    let de = e.dot(dir);
+    let denom = ee - de * de;
+    if ee.is_nan() || ee <= 1e-12 || denom <= 1e-6 * ee {
+        return None;
+    }
+    let s = ((de * dir.dot(r) - e.dot(r)) / denom).clamp(0.0, 1.0);
+    s.is_finite().then(|| a + e * s)
+}
+
 /// Kante, die der Mausposition (in Pixeln, Ursprung oben links) am nächsten liegt, höchstens `max_px` entfernt.
 /// `occluder` ist die Entfernung der vordersten getroffenen Fläche entlang des Mausstrahls, gemessen vom
 /// Strahlursprung aus, also genau das, was `pick_face` für `camera.ray(..)` derselben Mausposition liefert.
@@ -120,9 +135,17 @@ pub fn pick_edge(
                 continue;
             }
             if let Some(od) = occluder {
-                let world = wa + (wb - wa) * s;
+                // Tiefe aus der echten 3D-Geometrie: der Punkt der Kante, der dem Mausstrahl am
+                // nächsten liegt (`s` aus dem Bildschirm ist nicht perspektivisch korrekt).
+                let world = ray_segment_closest(ray_origin, ray_dir, wa, wb)
+                    .unwrap_or_else(|| wa + (wb - wa) * s);
                 let along = (world - ray_origin).dot(ray_dir);
-                if along > od + 2.0e-5 * od + 0.01 {
+                // Toleranz: relativ (Tessellierung, f32) plus die Verschiebung, die entsteht, weil der
+                // Cursor bis zu `max_px` Pixel neben der Kante liegen darf (Pixelgröße in der Tiefe `od`,
+                // doppelt gerechnet für schräg verlaufende Kanten) plus ein kleiner absoluter Anteil.
+                let pixel_world = 2.0 * od * (camera.fov_y * 0.5).tan() / viewport.y;
+                let tolerance = 1.0e-3 * od + 2.0 * max_px * pixel_world + 0.01;
+                if along > od + tolerance {
                     continue;
                 }
             }

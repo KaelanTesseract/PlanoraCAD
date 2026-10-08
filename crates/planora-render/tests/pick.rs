@@ -151,22 +151,131 @@ fn visible_edge_stays_pickable_at_large_camera_distances() {
     }
 }
 
+/// Realistische Kamera: Standard-Blickwinkel (45 Grad), 100-mm-Würfel, 1280x800.
+fn realistic_setup(distance_factor: f32) -> (Mesh, OrbitCamera, Vec2) {
+    let solid = AnalyticKernel::default()
+        .make_box(DVec3::new(100.0, 100.0, 100.0))
+        .unwrap();
+    let mesh = tessellate(&solid, &TessellationOptions::default()).unwrap();
+    let viewport = Vec2::new(1280.0, 800.0);
+    let mut cam = OrbitCamera::default();
+    cam.frame_bounds(Vec3::ZERO, Vec3::splat(100.0));
+    cam.distance *= distance_factor;
+    cam.set_viewport(viewport.x, viewport.y);
+    (mesh, cam, viewport)
+}
+
+fn dvec_to_vec3(p: DVec3) -> Vec3 {
+    Vec3::new(p.x as f32, p.y as f32, p.z as f32)
+}
+
+/// Strahl durch den Cursor und Abstand der vordersten getroffenen Fläche.
+fn cursor_hit(mesh: &Mesh, cam: &OrbitCamera, viewport: Vec2, cursor: Vec2) -> Option<(f32, Vec3)> {
+    let ndc = Vec2::new(
+        2.0 * cursor.x / viewport.x - 1.0,
+        1.0 - 2.0 * cursor.y / viewport.y,
+    );
+    let (origin, dir) = cam.ray(ndc);
+    pick_face(mesh, origin, dir).map(|h| (h.distance, origin + dir * h.distance))
+}
+
+/// Alle Probepunkte: (Kante, Weltpunkt, Cursor).
+fn edge_samples(
+    mesh: &Mesh,
+    cam: &OrbitCamera,
+    viewport: Vec2,
+    offset_px: f32,
+) -> Vec<(Id<Edge>, Vec3, Vec2)> {
+    let mut out = Vec::new();
+    for line in &mesh.edge_lines {
+        let a = dvec_to_vec3(line.points[0]);
+        let b = dvec_to_vec3(*line.points.last().unwrap());
+        for t in [0.1_f32, 0.25, 0.5, 0.75, 0.9] {
+            let p = a + (b - a) * t;
+            let pa = cam.project(a, viewport).unwrap();
+            let pb = cam.project(b, viewport).unwrap();
+            let dir2 = (pb - pa).normalize_or_zero();
+            let normal = Vec2::new(-dir2.y, dir2.x);
+            for sign in [1.0_f32, -1.0] {
+                let cursor = cam.project(p, viewport).unwrap() + normal * offset_px * sign;
+                out.push((line.edge, p, cursor));
+                if offset_px == 0.0 {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
 #[test]
-fn hidden_edge_is_rejected_at_large_camera_distances() {
-    let (_, mesh) = box_mesh();
-    let viewport = Vec2::new(800.0, 600.0);
-    // Die Kante (0, 2, 1) liegt auf der abgewandten Seite.
-    let (mid, _) = edge_midpoint(&mesh, Vec3::new(0.0, 2.0, 1.0));
-    for distance in [50.0, 5000.0, 20000.0] {
-        let mut cam = OrbitCamera::default();
-        cam.frame_bounds(Vec3::ZERO, Vec3::splat(2.0));
-        far_away(&mut cam, distance);
-        cam.set_viewport(viewport.x, viewport.y);
-        let cursor = cam.project(mid, viewport).unwrap();
-        let occluder = occluder_at(&mesh, &cam, viewport, cursor).expect("Fläche getroffen");
-        assert!(
-            pick_edge(&mesh, &cam, viewport, cursor, 6.0, Some(occluder)).is_none(),
-            "Abstand {distance}"
-        );
+fn visible_edges_are_pickable_with_a_realistic_camera() {
+    for factor in [1.0_f32, 2.0] {
+        let (mesh, cam, viewport) = realistic_setup(factor);
+        for offset in [0.0_f32, 3.0] {
+            let mut checked = 0;
+            for (edge, p, cursor) in edge_samples(&mesh, &cam, viewport, offset) {
+                let Some((od, hit)) = cursor_hit(&mesh, &cam, viewport, cursor) else {
+                    continue;
+                };
+                // Sichtbar: der Strahl trifft die Fläche praktisch an diesem Kantenpunkt.
+                let tolerance = 0.05 + offset * 2.0;
+                if (hit - p).length() > tolerance {
+                    continue;
+                }
+                checked += 1;
+                let result = pick_edge(&mesh, &cam, viewport, cursor, 6.0, Some(od));
+                let h = result.unwrap_or_else(|| {
+                    panic!("Kante {edge:?} bei {p:?} (Faktor {factor}, Versatz {offset}) verworfen")
+                });
+                assert!(h.pixel_distance <= 6.0);
+            }
+            assert!(checked >= 20, "zu wenige sichtbare Proben: {checked}");
+        }
+    }
+}
+
+#[test]
+fn hidden_edges_are_not_picked_with_a_realistic_camera() {
+    for factor in [1.0_f32, 2.0] {
+        let (mesh, cam, viewport) = realistic_setup(factor);
+        // Kanten, die an keinem Probepunkt sichtbar sind (die drei Kanten der abgewandten Ecke).
+        let samples = edge_samples(&mesh, &cam, viewport, 0.0);
+        // Verdeckt: an jedem Probepunkt liegt eine Fläche deutlich (> 5 mm) vor der Kante.
+        let is_visible = |edge: Id<Edge>| {
+            samples
+                .iter()
+                .filter(|s| s.0 == edge)
+                .any(|(_, p, cursor)| {
+                    let ndc = Vec2::new(
+                        2.0 * cursor.x / viewport.x - 1.0,
+                        1.0 - 2.0 * cursor.y / viewport.y,
+                    );
+                    let (origin, dir) = cam.ray(ndc);
+                    let along = (*p - origin).dot(dir);
+                    cursor_hit(&mesh, &cam, viewport, *cursor)
+                        .is_none_or(|(od, _)| od > along - 5.0)
+                })
+        };
+        let hidden: Vec<_> = mesh
+            .edge_lines
+            .iter()
+            .map(|l| l.edge)
+            .filter(|e| !is_visible(*e))
+            .collect();
+        assert_eq!(hidden.len(), 3, "Faktor {factor}: {hidden:?}");
+        let mut rejected = 0;
+        for (edge, _, cursor) in samples.iter().filter(|s| hidden.contains(&s.0)) {
+            let (od, _) = cursor_hit(&mesh, &cam, viewport, *cursor).expect("Würfel verdeckt");
+            match pick_edge(&mesh, &cam, viewport, *cursor, 6.0, Some(od)) {
+                None => rejected += 1,
+                // Liegt zufällig eine sichtbare Kante im Pixelradius, darf sie getroffen werden.
+                Some(h) => assert!(
+                    !hidden.contains(&h.edge),
+                    "verdeckte Kante {edge:?} getroffen"
+                ),
+            }
+        }
+        assert!(rejected > 0, "Faktor {factor}");
     }
 }
