@@ -274,3 +274,69 @@ fn two_holes_and_an_island_extrude() {
         AnalyticKernel::default().validate(&solid).unwrap();
     }
 }
+
+// Fix-Runde 1: Bogenenden, die nicht auf dem Bogenkreis liegen, und entartete Öffnungswinkel.
+
+/// Bogen um (0,0) von (1,0) nach (-2,0): Das Ende liegt nicht auf dem Kreis (Radius 1),
+/// solange die Skizze nicht gelöst ist. `line_first` legt fest, welche Kurve die kleinere Id hat.
+fn off_circle_arc_sketch(line_first: bool) -> Sketch {
+    let mut s = sketch();
+    let c = s.add_point(0.0, 0.0).unwrap();
+    let a = s.add_point(1.0, 0.0).unwrap();
+    let b = s.add_point(-2.0, 0.0).unwrap();
+    if line_first {
+        s.add_line(b, a).unwrap();
+        s.add_arc(c, a, b).unwrap();
+    } else {
+        s.add_arc(c, a, b).unwrap();
+        s.add_line(b, a).unwrap();
+    }
+    s
+}
+
+#[test]
+fn an_arc_end_off_its_circle_is_rejected_when_the_arc_comes_first() {
+    let e = off_circle_arc_sketch(false).profiles();
+    assert!(e.profiles.is_empty(), "{:?}", e.profiles);
+    assert_eq!(e.rejected.len(), 1);
+    assert!(
+        matches!(e.rejected[0].reason, SketchError::Degenerate(_)),
+        "{:?}",
+        e.rejected
+    );
+}
+
+#[test]
+fn an_arc_end_off_its_circle_is_rejected_when_the_line_comes_first() {
+    let e = off_circle_arc_sketch(true).profiles();
+    assert!(e.profiles.is_empty(), "{:?}", e.profiles);
+    assert_eq!(e.rejected.len(), 1);
+    assert!(
+        matches!(e.rejected[0].reason, SketchError::Degenerate(_)),
+        "{:?}",
+        e.rejected
+    );
+}
+
+#[test]
+fn an_arc_with_a_vanishing_sweep_is_rejected() {
+    // Riesiger Radius, Endpunkte 5e-6 auseinander (verschiedene Knoten): Öffnungswinkel
+    // 5e-10 rad liegt unter tol.angular. Die Schleife schließt über einen dritten Punkt,
+    // umschließt also echte Fläche.
+    let mut s = sketch();
+    let c = s.add_point(0.0, 0.0).unwrap();
+    let a = s.add_point(1.0e4, 0.0).unwrap();
+    let b = s.add_point(1.0e4, 5.0e-6).unwrap();
+    let t = s.add_point(0.0, 1.0).unwrap();
+    s.add_arc(c, a, b).unwrap();
+    s.add_line(b, t).unwrap();
+    s.add_line(t, a).unwrap();
+    let e = s.profiles();
+    assert!(e.profiles.is_empty(), "{:?}", e.profiles);
+    assert_eq!(e.rejected.len(), 1);
+    assert!(
+        matches!(e.rejected[0].reason, SketchError::Degenerate(_)),
+        "{:?}",
+        e.rejected
+    );
+}

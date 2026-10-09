@@ -9,8 +9,12 @@
 
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, Sketch};
-use planora_kernel::{Profile, ProfileLoop, Segment};
+use planora_kernel::{Profile, ProfileLoop, Segment, segment_end};
 use planora_math::{DVec2, TAU, orient2d};
+
+/// Meldung für Bögen, deren Endpunkte nicht auf demselben Kreis um die Mitte liegen.
+const ARC_OFF_CIRCLE: &str =
+    "Ein Bogenende liegt nicht auf dem Bogenkreis; die Skizze zuerst lösen";
 
 /// Abtastschritte je Vollkreis für Schnitt- und Enthaltensein-Prüfungen (wie im Kernel).
 const CHECK_STEPS: usize = 64;
@@ -309,30 +313,48 @@ impl Sketch {
 
         let start = reps[edges[first].a];
         let mut segments = Vec::with_capacity(order.len());
+        // Laufender Endpunkt, wie der Kernel ihn berechnet: Linien springen auf ihr absolutes
+        // Ziel, Bögen drehen den vorigen Endpunkt. Jedes Segmentende muss deshalb einzeln
+        // mit seinem Zielknoten übereinstimmen, sonst wiche das Profil still von der Skizze ab.
+        let mut at = start;
         for &(e, forward) in &order {
             let edge = &edges[e];
-            match self.curves[edge.curve].kind {
+            let target = reps[if forward { edge.b } else { edge.a }];
+            let seg = match self.curves[edge.curve].kind {
                 CurveKind::Arc { center, .. } => {
                     // Der Bogen läuft gegen den Uhrzeigersinn vom Knoten `a` (Start) zu `b` (Ende).
                     let c = self.pos(center);
+                    let (ra, rb) = ((reps[edge.a] - c).length(), (reps[edge.b] - c).length());
+                    if (ra - rb).abs() > tol.linear {
+                        return Err(SketchError::Degenerate(ARC_OFF_CIRCLE.into()));
+                    }
                     let angle = |p: DVec2| (p - c).y.atan2((p - c).x);
                     let phi = (angle(reps[edge.b]) - angle(reps[edge.a])).rem_euclid(TAU);
-                    segments.push(Segment::Arc {
+                    // Der Kernel verlangt tol.angular < |sweep| ≤ 2π; ein Bogen zwischen zwei
+                    // verschiedenen Knoten, der (fast) null oder eine volle Drehung überstreicht,
+                    // ist entartet.
+                    if phi <= tol.angular || phi >= TAU - tol.angular {
+                        return Err(SketchError::Degenerate(
+                            "Ein Bogen hat (fast) keinen Öffnungswinkel".into(),
+                        ));
+                    }
+                    Segment::Arc {
                         center: c,
                         sweep: if forward { phi } else { -phi },
-                    });
+                    }
                 }
-                _ => segments.push(Segment::Line {
-                    to: reps[if forward { edge.b } else { edge.a }],
-                }),
+                _ => Segment::Line { to: target },
+            };
+            at = segment_end(at, &seg);
+            if at.distance(target) > tol.linear {
+                return Err(SketchError::Degenerate(ARC_OFF_CIRCLE.into()));
             }
+            segments.push(seg);
         }
         let lp = ProfileLoop { start, segments };
         if !lp.is_closed(tol) {
-            // Bogenenden, die (noch) nicht auf dem Bogenkreis liegen, öffnen die Schleife.
-            return Err(SketchError::Degenerate(
-                "Ein Bogenende liegt nicht auf dem Bogenkreis; die Skizze zuerst lösen".into(),
-            ));
+            // Durch die Prüfung je Segment eigentlich ausgeschlossen; zur Sicherheit.
+            return Err(SketchError::Degenerate(ARC_OFF_CIRCLE.into()));
         }
         Ok((order.iter().map(|&(e, _)| edges[e].curve).collect(), lp))
     }
