@@ -227,6 +227,41 @@ fn grid_points(
     Ok(out)
 }
 
+/// Innen/außen je Dreieck (Index = Flächenindex von `spade`) per Breitensuche ab dem Außengebiet:
+/// Beim Überqueren einer Zwangskante wechselt die Zugehörigkeit. Deterministisch, O(Dreiecke).
+fn inner_faces_by_parity(cdt: &Cdt) -> Vec<bool> {
+    let n = cdt.num_all_faces();
+    let mut state: Vec<Option<bool>> = vec![None; n];
+    let mut queue = std::collections::VecDeque::new();
+    // Startdreiecke: Nachbarn des Außengebiets
+    for f in cdt.inner_faces() {
+        for e in f.adjacent_edges() {
+            if e.rev().face().is_outer() {
+                let i = f.fix().index();
+                if state[i].is_none() {
+                    state[i] = Some(e.is_constraint_edge());
+                    queue.push_back(f.fix());
+                }
+                break;
+            }
+        }
+    }
+    while let Some(h) = queue.pop_front() {
+        let inside = state[h.index()].unwrap_or(false);
+        for e in cdt.face(h).adjacent_edges() {
+            let Some(nb) = e.rev().face().as_inner() else {
+                continue;
+            };
+            let j = nb.fix().index();
+            if state[j].is_none() {
+                state[j] = Some(inside != e.is_constraint_edge());
+                queue.push_back(nb.fix());
+            }
+        }
+    }
+    state.into_iter().map(|s| s.unwrap_or(false)).collect()
+}
+
 /// Triangulierung einer beschnittenen gekrümmten Fläche im Parameterraum.
 /// `rings` sind die gemeinsamen 3D-Randpunkte je Schleife (aus den Kantenpolylinien, Reihenfolge wie
 /// `g.loops`), damit Nachbarflächen exakt dieselben Randpunkte haben.
@@ -251,11 +286,6 @@ pub fn tessellate_trimmed(
         .iter()
         .map(|r| r.iter().map(|(p, _)| *p).collect())
         .collect();
-    let inside = |q: DVec2| -> bool {
-        let w: i32 = polys.iter().map(|p| winding(p, q)).sum();
-        f64::from(w) * sign >= 1.0
-    };
-
     let scale = uv_scale(&g.surface, &polys);
     let mut b = Builder {
         cdt: Cdt::new(),
@@ -308,22 +338,29 @@ pub fn tessellate_trimmed(
         }
     }
 
-    // Dreiecke übernehmen, deren Schwerpunkt in der Fläche liegt
+    // Dreiecke der Fläche: Flutfüllung über die Triangulierung, beginnend außen (Außengebiet
+    // gehört nicht zur Fläche); jede überquerte Zwangskante (Rand) wechselt innen/außen. Das ist
+    // exakt bezüglich der Randkanten, auch für Splitter, deren Schwerpunkt auf dem Rand läge.
+    let inner = inner_faces_by_parity(&b.cdt);
     let mut tris: Vec<[usize; 3]> = Vec::new();
     for f in b.cdt.inner_faces() {
-        let v = f.vertices();
-        let idx = [v[0].fix().index(), v[1].fix().index(), v[2].fix().index()];
-        let centroid = (b.uv[idx[0]] + b.uv[idx[1]] + b.uv[idx[2]]) / 3.0;
-        if !inside(centroid) {
+        if !inner[f.fix().index()] {
             continue;
         }
+        // `spade` liefert die Ecken gegen den Uhrzeigersinn (im gestreckten und damit auch im
+        // ungestreckten Parameterraum) = natürliche Normale; bei !same_sense umdrehen.
+        let v = f.vertices();
+        let idx = [v[0].fix().index(), v[1].fix().index(), v[2].fix().index()];
+        // Nur Dreiecke mit zusammenfallenden Ecken entfallen (Polpunkte: zwei UV-Punkte, eine
+        // 3D-Lage), wie beim Raster in `tessellate_patch`. Flächenlose Dreiecke mit getrennten
+        // Ecken bleiben: Am Kegelspitzenpunkt liegen Rasterpunkte einer Mantellinie mit der
+        // Spitze auf einer Geraden; ohne diese Fächer entstünden T-Stöße (Netz nicht dicht).
         let (p0, p1, p2) = (b.pts3[idx[0]], b.pts3[idx[1]], b.pts3[idx[2]]);
-        if (p1 - p0).cross(p2 - p0).length() < 1e-14 {
-            continue; // entartet (an einem Pol)
+        const WELD: f64 = 1e-12;
+        if p0.distance(p1) < WELD || p1.distance(p2) < WELD || p0.distance(p2) < WELD {
+            continue;
         }
-        // gegen den Uhrzeigersinn im Parameterraum = natürliche Normale; bei !same_sense umdrehen
-        let area2 = (b.uv[idx[1]] - b.uv[idx[0]]).perp_dot(b.uv[idx[2]] - b.uv[idx[0]]);
-        tris.push(if (area2 > 0.0) == g.same_sense {
+        tris.push(if g.same_sense {
             idx
         } else {
             [idx[0], idx[2], idx[1]]
