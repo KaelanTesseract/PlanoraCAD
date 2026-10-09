@@ -1,8 +1,10 @@
+use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
 use crate::samples::{ExtrudeSample, RevolveSample};
 use crate::state::AppState;
 use crate::{browser, fonts, properties, theme, viewport};
 use egui_tiles::{Container, SimplificationOptions, TileId, Tiles, Tree, UiResponse};
+use planora_kernel::BoolOp;
 use planora_render::ViewFace;
 use planora_render::gpu::GpuScene;
 
@@ -91,6 +93,7 @@ pub struct PlanoraApp {
     state: AppState,
     dock: Tree<Pane>,
     dialog: Option<CreateDialog>,
+    boolean_dialog: Option<BooleanDialog>,
     applied_dark: Option<bool>,
 }
 
@@ -109,6 +112,7 @@ impl PlanoraApp {
             state,
             dock: build_docking(),
             dialog: None,
+            boolean_dialog: None,
             applied_dark: None,
         }
     }
@@ -176,6 +180,24 @@ impl PlanoraApp {
                     );
                 }
             });
+            ui.menu_button("Bearbeiten", |ui| {
+                // Boolesche Operationen brauchen mindestens zwei Körper.
+                let enabled = self.state.bodies.len() >= 2;
+                for (label, op) in [
+                    ("Vereinigen …", BoolOp::Union),
+                    ("Abziehen …", BoolOp::Difference),
+                    ("Schneiden …", BoolOp::Intersection),
+                ] {
+                    if ui
+                        .add_enabled(enabled, egui::Button::new(label))
+                        .on_disabled_hover_text("Dafür werden mindestens zwei Körper benötigt.")
+                        .clicked()
+                    {
+                        self.boolean_dialog = Some(BooleanDialog::with_op(&self.state, op));
+                        ui.close();
+                    }
+                }
+            });
             ui.menu_button("Ansicht", |ui| {
                 for face in ViewFace::ALL {
                     if ui.button(face.label()).clicked() {
@@ -235,6 +257,11 @@ impl eframe::App for PlanoraApp {
             && dialog.show(ui.ctx(), &mut self.state)
         {
             self.dialog = Some(dialog);
+        }
+        if let Some(mut dialog) = self.boolean_dialog.take()
+            && dialog.show(ui.ctx(), &mut self.state)
+        {
+            self.boolean_dialog = Some(dialog);
         }
         viewport::remember_keyboard_focus(ui.ctx());
     }

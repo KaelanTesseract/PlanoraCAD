@@ -1,5 +1,6 @@
 use crate::state::AppState;
 use planora_kernel::{Curve, Surface};
+use planora_math::DVec3;
 use planora_render::Pick;
 
 fn surface_name(s: &Surface) -> &'static str {
@@ -30,6 +31,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     };
 
     let mut delete = false;
+    let mut moved: Option<DVec3> = None;
     {
         let body = &mut state.bodies[index];
         ui.label("Name");
@@ -52,6 +54,18 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             ui.end_row();
             ui.label("Abmessungen");
             ui.label(format!("{:.2} × {:.2} × {:.2} mm", size.x, size.y, size.z));
+            ui.end_row();
+            ui.label("Position (x/y/z)");
+            // Lage der unteren Ecke der Hülle; Änderungen verschieben den Körper.
+            let mut position = min;
+            ui.horizontal(|ui| {
+                for value in [&mut position.x, &mut position.y, &mut position.z] {
+                    ui.add(egui::DragValue::new(value).speed(0.5).suffix(" mm"));
+                }
+            });
+            if position != min {
+                moved = Some(position - min);
+            }
             ui.end_row();
             ui.label("Flächen / Kanten");
             ui.label(format!(
@@ -95,6 +109,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         }
     }
 
+    // Erst nach dem Zeichnen anwenden, wenn der Körper nicht mehr geliehen ist.
+    if let Some(delta) = moved
+        && !delete
+        && let Err(e) = state.translate_body(index, delta)
+    {
+        state.message = Some(e);
+    }
     if delete {
         state.remove_body(index);
     }
