@@ -17,10 +17,11 @@ planora-kernel = { path = "crates/planora-kernel" }
 planora-mesh = { path = "crates/planora-mesh" }
 planora-render = { path = "crates/planora-render" }
 
-# externe Crates (Lizenzen am 2026-10-09 geprüft: alle MIT und/oder Apache-2.0, earcutr ISC, egui_tiles MIT OR Apache-2.0, Roboto-Schrift Apache-2.0)
+# externe Crates (Lizenzen am 2026-10-09 geprüft: alle MIT und/oder Apache-2.0, earcutr ISC, spade MIT OR Apache-2.0, egui_tiles MIT OR Apache-2.0, Roboto-Schrift Apache-2.0)
 glam = "0.34"
 robust = "1.2"
 earcutr = "0.5"
+spade = "2"
 thiserror = "2"
 bytemuck = { version = "1", features = ["derive"] }
 proptest = "1"

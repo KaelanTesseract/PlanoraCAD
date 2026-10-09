@@ -15,12 +15,12 @@ pub enum MeshError {
 }
 
 /// Wandelt eine Anzahl in einen `u32`-Index um, ohne still abzuschneiden.
-fn index_u32(n: usize) -> Result<u32, MeshError> {
+pub(crate) fn index_u32(n: usize) -> Result<u32, MeshError> {
     u32::try_from(n).map_err(|_| MeshError::TooLarge)
 }
 
 /// Prüft vorab, ob nach dem Anhängen von `extra` Elementen alle Indizes noch in `u32` passen.
-fn ensure_room(current: usize, extra: usize) -> Result<(), MeshError> {
+pub(crate) fn ensure_room(current: usize, extra: usize) -> Result<(), MeshError> {
     current
         .checked_add(extra)
         .filter(|&n| n <= u32::MAX as usize)
@@ -46,8 +46,17 @@ pub fn tessellate(solid: &Solid, options: &TessellationOptions) -> Result<Mesh, 
                 })?;
             }
             _ => {
-                let patch = face.patch.ok_or(MeshError::MissingPatch(fid.index()))?;
-                tessellate_patch(face, &patch, &disc, &mut mesh)?;
+                let g = planora_kernel::boolean::face_geom(solid, fid);
+                if crate::trimmed::is_trimmed(&g) {
+                    let rings: Vec<Vec<DVec3>> = std::iter::once(&face.outer)
+                        .chain(face.inner.iter())
+                        .map(|lp| loop_points(lp, &polylines))
+                        .collect();
+                    crate::trimmed::tessellate_trimmed(&g, &rings, &disc, &mut mesh, fid.index())?;
+                } else {
+                    let patch = face.patch.ok_or(MeshError::MissingPatch(fid.index()))?;
+                    tessellate_patch(face, &patch, &disc, &mut mesh)?;
+                }
             }
         }
         mesh.face_ranges.push(FaceRange {
