@@ -1,5 +1,6 @@
 //! Geometrie-Kernel von PlanoraCAD (B-Rep mit analytischen Flächen).
 
+pub mod boolean;
 pub mod error;
 pub mod extrude;
 pub mod geometry;
