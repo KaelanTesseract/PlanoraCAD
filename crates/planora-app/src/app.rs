@@ -1,63 +1,87 @@
 use crate::create_dialog::CreateDialog;
 use crate::samples::{ExtrudeSample, RevolveSample};
 use crate::state::AppState;
-use crate::{browser, properties, theme, viewport};
-use egui_dock::{DockArea, DockState, NodeIndex, TabViewer};
+use crate::{browser, fonts, properties, theme, viewport};
+use egui_tiles::{Container, SimplificationOptions, TileId, Tiles, Tree, UiResponse};
 use planora_render::ViewFace;
 use planora_render::gpu::GpuScene;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Tab {
+enum Pane {
     Browser,
     Viewport,
     Properties,
 }
 
-struct Viewer<'a> {
+struct Behavior<'a> {
     state: &'a mut AppState,
 }
 
-impl TabViewer for Viewer<'_> {
-    type Tab = Tab;
-
-    fn id(&mut self, tab: &mut Tab) -> egui::Id {
-        egui::Id::new(*tab)
-    }
-
-    fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
-        match tab {
-            Tab::Browser => "Browser",
-            Tab::Viewport => "3D-Ansicht",
-            Tab::Properties => "Eigenschaften",
+impl egui_tiles::Behavior<Pane> for Behavior<'_> {
+    fn tab_title_for_pane(&mut self, pane: &Pane) -> egui::WidgetText {
+        match pane {
+            Pane::Browser => "Browser",
+            Pane::Viewport => "3D-Ansicht",
+            Pane::Properties => "Eigenschaften",
         }
         .into()
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
-        match tab {
-            Tab::Browser => browser::show(ui, self.state),
-            Tab::Viewport => viewport::show(ui, self.state),
-            Tab::Properties => properties::show(ui, self.state),
+    fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut Pane) -> UiResponse {
+        match pane {
+            // Der Viewport füllt den Platz selbst aus und braucht keine Rollbalken.
+            Pane::Viewport => viewport::show(ui, self.state),
+            Pane::Browser => {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| browser::show(ui, self.state));
+            }
+            Pane::Properties => {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| properties::show(ui, self.state));
+            }
         }
+        UiResponse::None
     }
 
-    fn is_closeable(&self, _tab: &Tab) -> bool {
+    fn is_tab_closable(&self, _tiles: &Tiles<Pane>, _tile_id: TileId) -> bool {
         false
     }
 
-    fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
-        // Der Viewport füllt den Platz selbst aus und braucht keine Rollbalken.
-        if *tab == Tab::Viewport {
-            [false, false]
-        } else {
-            [false, true]
+    fn simplification_options(&self) -> SimplificationOptions {
+        // Jeder Bereich behält seine eigene Titelleiste, auch wenn er allein steht.
+        SimplificationOptions {
+            all_panes_must_have_tabs: true,
+            prune_single_child_tabs: false,
+            ..Default::default()
         }
     }
 }
 
+/// Anfangsanordnung: Browser links (20 %), 3D-Ansicht in der Mitte, Eigenschaften rechts (22 %).
+fn build_docking() -> Tree<Pane> {
+    let mut tiles = Tiles::default();
+    let mut tab_of = |pane: Pane| {
+        let id = tiles.insert_pane(pane);
+        tiles.insert_tab_tile(vec![id])
+    };
+    let browser = tab_of(Pane::Browser);
+    let viewport = tab_of(Pane::Viewport);
+    let properties = tab_of(Pane::Properties);
+    let root = tiles.insert_horizontal_tile(vec![browser, viewport, properties]);
+    if let Some(egui_tiles::Tile::Container(Container::Linear(linear))) = tiles.get_mut(root) {
+        // Anteile; Summe 3 (= Anzahl der Kinder): 20 %, 58 %, 22 %.
+        linear.shares.set_share(browser, 0.6);
+        linear.shares.set_share(viewport, 1.74);
+        linear.shares.set_share(properties, 0.66);
+    }
+    Tree::new("planora_docking", root, tiles)
+}
+
 pub struct PlanoraApp {
     state: AppState,
-    dock: DockState<Tab>,
+    dock: Tree<Pane>,
     dialog: Option<CreateDialog>,
     applied_dark: Option<bool>,
 }
@@ -68,18 +92,14 @@ impl PlanoraApp {
             .wgpu_render_state
             .as_ref()
             .expect("PlanoraCAD benötigt den wgpu-Renderer");
+        cc.egui_ctx.set_fonts(fonts::definitions());
         GpuScene::install(render_state);
-
-        let mut dock = DockState::new(vec![Tab::Viewport]);
-        let tree = dock.main_surface_mut();
-        let [center, _left] = tree.split_left(NodeIndex::root(), 0.2, vec![Tab::Browser]);
-        let [_center, _right] = tree.split_right(center, 0.75, vec![Tab::Properties]);
 
         let mut state = AppState::new();
         state.frame_all();
         Self {
             state,
-            dock,
+            dock: build_docking(),
             dialog: None,
             applied_dark: None,
         }
@@ -197,10 +217,10 @@ impl eframe::App for PlanoraApp {
             });
         });
         egui::CentralPanel::default().show(ui, |ui| {
-            let mut viewer = Viewer {
+            let mut behavior = Behavior {
                 state: &mut self.state,
             };
-            DockArea::new(&mut self.dock).show_inside(ui, &mut viewer);
+            self.dock.ui(&mut behavior, ui);
         });
 
         if let Some(mut dialog) = self.dialog.take()

@@ -22,7 +22,8 @@ planora-render.workspace = true
 glam.workspace = true
 eframe.workspace = true
 egui.workspace = true
-egui_dock.workspace = true
+egui_tiles.workspace = true
+winit.workspace = true
 
 [lints]
 workspace = true
