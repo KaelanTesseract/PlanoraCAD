@@ -91,42 +91,35 @@ fn identical_operands() {
 
 #[test]
 fn boxes_touching_only_at_an_edge_do_not_panic() {
+    // Heutiges, festgeschriebenes Verhalten bei reiner Kantenberührung (Spec-Nicht-Ziel):
+    // Vereinigen → Berührungsfehler, Abziehen → A unverändert, Schneiden → leer.
     let a = cube(10.0);
     let b = moved(&cube(10.0), DVec3::new(10.0, 10.0, 0.0));
-    for op in [BoolOp::Union, BoolOp::Difference, BoolOp::Intersection] {
-        let r = k().boolean(&a, &b, op);
-        // entweder ein gültiger Körper oder ein benannter Berührungsfehler – niemals eine Panik
-        assert!(
-            matches!(
-                r,
-                Ok(_)
-                    | Err(BooleanError::ResultInvalid(_))
-                    | Err(BooleanError::AmbiguousContact)
-                    | Err(BooleanError::EmptyResult)
-            ),
-            "{op:?}: {r:?}"
-        );
-        if let Ok(s) = r {
-            validate(&s).unwrap_or_else(|e| panic!("{op:?}: {e}"));
-        }
-    }
+    assert_eq!(
+        k().boolean(&a, &b, BoolOp::Union).unwrap_err(),
+        BooleanError::AmbiguousContact
+    );
+    let d = k().boolean(&a, &b, BoolOp::Difference).unwrap();
+    validate(&d).unwrap();
+    assert_eq!((d.shells.len(), d.faces.len()), (1, 6));
+    assert_eq!(
+        k().boolean(&a, &b, BoolOp::Intersection).unwrap_err(),
+        BooleanError::EmptyResult
+    );
 }
 
 #[test]
 fn edge_touch_union_is_reported_as_contact() {
-    // Kantenberührung ohne gemeinsame Fläche (Spec-Nicht-Ziel): klarer Berührungsfehler statt
-    // „Kante N wird 4-mal verwendet“
+    // Kantenberührung ohne gemeinsame Fläche: klarer Berührungsfehler statt
+    // „Kante N wird 4-mal verwendet“ (ResultInvalid)
     let a = cube(10.0);
     let b = moved(&cube(10.0), DVec3::new(10.0, 10.0, 0.0));
-    match k().boolean(&a, &b, BoolOp::Union) {
-        Ok(s) => {
-            validate(&s).unwrap();
-        }
-        Err(e) => {
-            assert_eq!(e, BooleanError::AmbiguousContact);
-            assert!(e.to_string().contains("Kante"), "{e}");
-        }
-    }
+    let e = k().boolean(&a, &b, BoolOp::Union).unwrap_err();
+    assert_eq!(e, BooleanError::AmbiguousContact);
+    let text = e.to_string();
+    assert!(text.contains("Kante"), "{text}");
+    // Eckberührung liefert einen (nicht mannigfaltigen) Körper, keinen Fehler: nicht nennen
+    assert!(!text.contains("Ecke"), "{text}");
 }
 
 #[test]
@@ -209,4 +202,15 @@ fn shells_must_cover_every_face_once() {
         validate(&s),
         Err(ValidationError::ShellMembership(_))
     ));
+}
+
+#[test]
+fn boxes_touching_only_at_a_corner_give_two_shells() {
+    // Eckberührung (Spec-Nicht-Ziel): kein Fehler, sondern ein Körper aus zwei Schalen mit
+    // gemeinsamer Ecke (nicht mannigfaltig, bewusst akzeptiert; siehe offene-punkte.md)
+    let a = cube(10.0);
+    let b = moved(&cube(10.0), DVec3::splat(10.0));
+    let u = k().boolean(&a, &b, BoolOp::Union).unwrap();
+    validate(&u).unwrap();
+    assert_eq!((u.shells.len(), u.faces.len()), (2, 12));
 }

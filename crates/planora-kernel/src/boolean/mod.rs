@@ -39,10 +39,13 @@ pub fn boolean(a: &Solid, b: &Solid, op: BoolOp, tol: &Tolerance) -> Result<Soli
     let faces_b = solid_faces(b);
 
     let mut pieces: Vec<Piece> = Vec::new();
+    // Liegt irgendein Flächenstück im Inneren des anderen Körpers, überlappen sich die Körper.
+    let mut interiors_overlap = false;
     for (side, works, other) in [(Side::A, &work_a, &faces_b), (Side::B, &work_b, &faces_a)] {
         for w in works {
             for region in split_face(&w.geom, &w.sections, tol)? {
                 let class = classify_region(&w.geom, &region, other, tol)?;
+                interiors_overlap |= class == Class::Inside;
                 if let Some(p) = select_piece(op, side, class, &w.geom, region) {
                     pieces.push(p);
                 }
@@ -53,11 +56,51 @@ pub fn boolean(a: &Solid, b: &Solid, op: BoolOp, tol: &Tolerance) -> Result<Soli
         return Err(BooleanError::EmptyResult);
     }
     let solid = sew(pieces, tol)?;
-    validate(&solid).map_err(|e| match e {
-        // Eine Kante, an der mehr als zwei Flächen hängen, entsteht, wenn sich die Körper nur
-        // an einer Kante berühren (Spec-Nicht-Ziel): als Berührungsfall melden.
-        ValidationError::EdgeUseCount(_, n) if n > 2 => BooleanError::AmbiguousContact,
-        e => BooleanError::ResultInvalid(e.to_string()),
-    })?;
+    validate(&solid).map_err(|e| result_error(e, interiors_overlap))?;
     Ok(solid)
+}
+
+/// Fehler für ein Ergebnis, das den Validator nicht besteht.
+///
+/// Kriterium für den Berührungsfall: Eine Kante, die mehr als zweimal benutzt wird, entsteht,
+/// wenn sich die Körper nur an einer Kante berühren (Spec-Nicht-Ziel). Das wird nur dann als
+/// `AmbiguousContact` gemeldet, wenn kein Flächenstück eines Körpers im Inneren des anderen
+/// liegt (`interiors_overlap == false`): Dann haben die Körper kein gemeinsames Volumen, und es
+/// gibt nichts zu verschneiden. Überlappen sie sich, bleibt es `ResultInvalid`, damit echte
+/// Fehler etwa beim Zusammennähen sichtbar bleiben.
+fn result_error(e: ValidationError, interiors_overlap: bool) -> BooleanError {
+    match e {
+        ValidationError::EdgeUseCount(_, n) if n > 2 && !interiors_overlap => {
+            BooleanError::AmbiguousContact
+        }
+        e => BooleanError::ResultInvalid(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edge_use_count_is_contact_only_without_interior_overlap() {
+        let multi = ValidationError::EdgeUseCount(5, 4);
+        assert_eq!(
+            result_error(multi.clone(), false),
+            BooleanError::AmbiguousContact
+        );
+        // Überlappen sich die Körper, ist eine mehrfach benutzte Kante ein echter Fehler
+        // (z. B. beim Zusammennähen) und darf nicht als Berührung verdeckt werden.
+        assert!(matches!(
+            result_error(multi, true),
+            BooleanError::ResultInvalid(m) if m.contains("4-mal")
+        ));
+        assert!(matches!(
+            result_error(ValidationError::EdgeUseCount(5, 1), false),
+            BooleanError::ResultInvalid(_)
+        ));
+        assert!(matches!(
+            result_error(ValidationError::OpenLoop(1), false),
+            BooleanError::ResultInvalid(_)
+        ));
+    }
 }
