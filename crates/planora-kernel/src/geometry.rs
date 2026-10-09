@@ -1,4 +1,4 @@
-use planora_math::{DVec3, Frame};
+use planora_math::{DVec3, Frame, PI};
 
 /// Parametrische Kurve. Die Parameterbereiche stehen an der [`Edge`](crate::Edge).
 #[derive(Clone, Debug)]
@@ -115,6 +115,102 @@ impl Surface {
             Surface::Sphere { frame, .. } | Surface::Torus { frame, .. } => {
                 radial(frame, u) * v.cos() + frame.z * v.sin()
             }
+        }
+    }
+}
+
+impl Curve {
+    /// Parameter `t` des Kurvenpunkts, der `p` am nächsten liegt (für Punkte auf der Kurve exakt).
+    pub fn project(&self, p: DVec3) -> f64 {
+        match self {
+            Curve::Line { origin, dir } => (p - *origin).dot(*dir),
+            Curve::Circle { frame, .. } => {
+                let l = frame.to_local(p);
+                l.y.atan2(l.x)
+            }
+            Curve::Ellipse {
+                frame,
+                major,
+                minor,
+            } => {
+                let l = frame.to_local(p);
+                (l.y / minor).atan2(l.x / major)
+            }
+        }
+    }
+
+    /// Ableitung nach `t` (nicht normiert).
+    pub fn tangent(&self, t: f64) -> DVec3 {
+        match self {
+            Curve::Line { dir, .. } => *dir,
+            Curve::Circle { frame, radius } => (frame.y * t.cos() - frame.x * t.sin()) * *radius,
+            Curve::Ellipse {
+                frame,
+                major,
+                minor,
+            } => frame.y * (minor * t.cos()) - frame.x * (major * t.sin()),
+        }
+    }
+}
+
+impl Surface {
+    /// Vorzeichenbehaftete Abstandsfunktion: > 0 auf der Seite der natürlichen Normale,
+    /// 0 auf der Fläche (Zylinder, Kegel, Kugel, Torus: außen positiv).
+    pub fn implicit(&self, p: DVec3) -> f64 {
+        match self {
+            Surface::Plane { frame } => (p - frame.origin).dot(frame.z),
+            Surface::Cylinder { frame, radius } => {
+                let d = p - frame.origin;
+                let h = d.dot(frame.z);
+                (d - frame.z * h).length() - radius
+            }
+            Surface::Cone {
+                frame,
+                radius,
+                slope,
+            } => {
+                let d = p - frame.origin;
+                let h = d.dot(frame.z);
+                let rho = (d - frame.z * h).length();
+                (rho - (radius + slope * h)) / (1.0 + slope * slope).sqrt()
+            }
+            Surface::Sphere { frame, radius } => (p - frame.origin).length() - radius,
+            Surface::Torus {
+                frame,
+                major,
+                minor,
+            } => {
+                let d = p - frame.origin;
+                let h = d.dot(frame.z);
+                let rho = (d - frame.z * h).length();
+                ((rho - major).powi(2) + h * h).sqrt() - minor
+            }
+        }
+    }
+
+    /// Umkehrabbildung Punkt → (u, v). Bei periodischen Flächen liegt `u` in (−π, π].
+    pub fn project(&self, p: DVec3) -> (f64, f64) {
+        let l = self.frame().to_local(p);
+        let u = l.y.atan2(l.x);
+        let rho = (l.x * l.x + l.y * l.y).sqrt();
+        match self {
+            Surface::Plane { .. } => (l.x, l.y),
+            Surface::Cylinder { .. } | Surface::Cone { .. } => (u, l.z),
+            Surface::Sphere { .. } => (u, l.z.atan2(rho)),
+            Surface::Torus { major, .. } => (u, l.z.atan2(rho - major)),
+        }
+    }
+
+    pub fn is_periodic(&self) -> bool {
+        !matches!(self, Surface::Plane { .. })
+    }
+
+    /// Werte von `v`, bei denen die u-Linie zu einem Punkt zusammenfällt (Kugelpole, Kegelspitze).
+    pub fn pole_vs(&self) -> Vec<f64> {
+        match self {
+            Surface::Sphere { .. } => vec![-PI / 2.0, PI / 2.0],
+            Surface::Cone { radius, slope, .. } if slope.abs() > 1e-12 => vec![-radius / slope],
+            _ => vec![],
         }
     }
 }
