@@ -1,0 +1,521 @@
+//! Constraint-Solver: Gruppen, Levenberg-Marquardt, Freiheitsgrade und Diagnose.
+//!
+//! Aktiv sind alle lebenden, eingeschalteten und nicht nur anzeigenden Abhängigkeiten
+//! (einschließlich der internen). Variablen, die über Abhängigkeiten verbunden sind, bilden eine
+//! Gruppe; jede Gruppe wird für sich gelöst. Nur gelöste Gruppen schreiben ihre Werte zurück.
+
+use crate::constraint::ConstraintId;
+use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
+use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use std::collections::{HashMap, HashSet};
+
+/// Höchstzahl der Levenberg-Marquardt-Schritte je Lauf.
+const MAX_ITERATIONS: usize = 100;
+/// Anteil von `tol.linear`, bis zu dem alle Residuen sinken müssen (1e-8 mm bei Standardtoleranz).
+const RESIDUAL_FRACTION: f64 = 1e-2;
+/// Relative Schwelle der Rangbestimmung (Länge des Restvektors / ursprüngliche Zeilenlänge).
+const RANK_REL_TOL: f64 = 1e-7;
+/// Anfangsdämpfung (Marquardt-Parameter).
+const INITIAL_LAMBDA: f64 = 1e-3;
+/// Untere Grenze der Dämpfung (fast reines Gauß-Newton).
+const MIN_LAMBDA: f64 = 1e-12;
+/// Obere Grenze der Dämpfung; darüber gilt der Schritt als gescheitert.
+const MAX_LAMBDA: f64 = 1e12;
+/// Faktor, um den die Dämpfung nach einem guten Schritt fällt bzw. nach einem schlechten steigt.
+const LAMBDA_FACTOR: f64 = 10.0;
+/// Untere Schranke für den Maßstab der Dämpfung (Jacobi-Matrix aus lauter Nullen).
+///
+/// Gedämpft wird mit `λ · s · I`, `s = max(max_k (JᵀJ)_kk, MIN_DIAG)`. Alle Skizzenvariablen
+/// haben dieselbe Einheit (mm), deshalb dämpft der Solver euklidisch und nicht spaltenweise
+/// (Marquardt): Spaltenweise Skalierung macht schwach gekoppelte Richtungen (etwa das Drehen
+/// eines Punktes um einen festen Punkt) „billig“ und erzeugt riesige Querschritte, mit denen
+/// der Solver schon bei einfachen Startlagen nicht konvergiert.
+const MIN_DIAG: f64 = 1e-9;
+/// Relative Schrittweite bzw. Kostensenkung, unter der ein Schritt als Stillstand gilt.
+const STALL_REL: f64 = 1e-14;
+/// Nullraumanteil, ab dem eine Variable als frei gilt.
+const FREE_COMPONENT: f64 = 1e-6;
+/// Versuche mit steigender Dämpfung innerhalb eines Schritts.
+const DAMPING_TRIES: usize = 30;
+
+/// Ergebnis eines Solver-Laufs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SolveStatus {
+    /// Alle Gruppen sind gelöst.
+    Solved,
+    /// Mindestens eine Gruppe ließ sich nicht lösen, ohne dass ein Widerspruch gefunden wurde.
+    NotConverged,
+    /// Mindestens eine Gruppe enthält sich widersprechende Abhängigkeiten.
+    Conflicting,
+}
+
+/// Bericht eines Solver-Laufs.
+#[derive(Clone, Debug)]
+pub struct SolveReport {
+    pub status: SolveStatus,
+    /// Verbleibende Freiheitsgrade (nur gelöste Gruppen und freie Variablen).
+    pub dof: usize,
+    /// Überzählige (aber erfüllte) nutzererzeugte Abhängigkeiten, jeweils die später angelegte.
+    pub redundant: Vec<ConstraintId>,
+    /// Abhängigkeiten, die einen Widerspruch verursachen.
+    pub conflicting: Vec<ConstraintId>,
+    pub free_points: Vec<PointId>,
+    pub free_curves: Vec<CurveId>,
+    /// Höchste Schrittzahl über alle Gruppen.
+    pub iterations: usize,
+}
+
+/// Weiche Zusatzbedingung `weight·(x[var] − target)` (zum Ziehen).
+#[derive(Clone, Copy, Debug)]
+pub struct Soft {
+    pub var: usize,
+    pub target: f64,
+    pub weight: f64,
+}
+
+/// Zusammenhangskomponente aus Variablen und Abhängigkeiten.
+struct Group {
+    vars: Vec<usize>,
+    constraints: Vec<ConstraintId>,
+}
+
+/// Residuen und Jacobi-Matrix einer Gruppe.
+struct Assembled {
+    r: Vec<f64>,
+    j: Matrix,
+    /// Die ersten `hard_rows` Zeilen stammen aus Abhängigkeiten, der Rest aus weichen Bedingungen.
+    hard_rows: usize,
+    /// Zu jeder harten Zeile: Index der Abhängigkeit in `Group::constraints`.
+    owner: Vec<usize>,
+}
+
+impl Assembled {
+    /// Größter Betrag der harten Residuen (NaN bleibt erhalten).
+    fn hard_inf(&self) -> f64 {
+        self.r[..self.hard_rows].iter().fold(0.0_f64, |m, v| {
+            if v.is_nan() || m.is_nan() {
+                f64::NAN
+            } else {
+                m.max(v.abs())
+            }
+        })
+    }
+}
+
+struct Lm {
+    converged: bool,
+    iterations: usize,
+}
+
+struct Analysis {
+    dof: usize,
+    redundant: Vec<ConstraintId>,
+    free_vars: Vec<usize>,
+}
+
+fn sumsq(v: &[f64]) -> f64 {
+    v.iter().map(|x| x * x).sum()
+}
+
+fn find(parent: &mut [usize], mut i: usize) -> usize {
+    while parent[i] != i {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+    }
+    i
+}
+
+impl Sketch {
+    /// Löst alle aktiven Abhängigkeiten. Nicht lösbare Gruppen bleiben unverändert.
+    pub fn solve(&mut self) -> SolveReport {
+        self.solve_with_soft(&[])
+    }
+
+    /// Baut Residuen und Jacobi-Matrix der Gruppe an der Stelle `x`, ohne die Abhängigkeit `skip`.
+    fn assemble(
+        &self,
+        g: &Group,
+        col: &HashMap<usize, usize>,
+        x: &[f64],
+        soft: &[Soft],
+        skip: Option<ConstraintId>,
+    ) -> Assembled {
+        let mut rows: Vec<(f64, Vec<(usize, f64)>)> = Vec::new();
+        let mut owner = Vec::new();
+        for (ci, &id) in g.constraints.iter().enumerate() {
+            if Some(id) == skip {
+                continue;
+            }
+            // Die Gruppe enthält nur lebende Abhängigkeiten; `None` kann nicht auftreten.
+            let Some(ev) = self.evaluate(id, x) else {
+                continue;
+            };
+            for res in &ev.residuals {
+                let entries = ev
+                    .locals
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(k, v)| col.get(v).map(|&c| (c, res.grad(k))))
+                    .collect();
+                rows.push((res.v, entries));
+                owner.push(ci);
+            }
+        }
+        let hard_rows = rows.len();
+        for s in soft {
+            if let Some(&c) = col.get(&s.var) {
+                rows.push((s.weight * (x[s.var] - s.target), vec![(c, s.weight)]));
+            }
+        }
+        let mut j = Matrix::zeros(rows.len(), g.vars.len());
+        let mut r = Vec::with_capacity(rows.len());
+        for (i, (value, entries)) in rows.iter().enumerate() {
+            r.push(*value);
+            for (c, d) in entries {
+                j.add_to(i, *c, *d);
+            }
+        }
+        Assembled {
+            r,
+            j,
+            hard_rows,
+            owner,
+        }
+    }
+
+    /// Levenberg-Marquardt mit Marquardt-Skalierung. Ändert `x` nur durch Schritte, die die
+    /// Kosten senken.
+    fn levenberg_marquardt(
+        &self,
+        g: &Group,
+        col: &HashMap<usize, usize>,
+        x: &mut [f64],
+        soft: &[Soft],
+        skip: Option<ConstraintId>,
+        tol_r: f64,
+    ) -> Lm {
+        let mut a = self.assemble(g, col, x, soft, skip);
+        let mut cost = sumsq(&a.r);
+        let mut lambda = INITIAL_LAMBDA;
+        let mut iterations = 0;
+        for _ in 0..MAX_ITERATIONS {
+            if soft.is_empty() && a.hard_inf() <= tol_r {
+                break;
+            }
+            if !cost.is_finite() {
+                break;
+            }
+            iterations += 1;
+            let gradient = a.j.transpose_mul_vec(&a.r);
+            let gram = a.j.gram();
+            let rhs: Vec<f64> = gradient.iter().map(|v| -v).collect();
+            // Maßstab der Dämpfung, siehe `MIN_DIAG`.
+            let scale = (0..gram.rows())
+                .map(|i| gram.get(i, i))
+                .fold(MIN_DIAG, f64::max);
+            let mut accepted = false;
+            let mut stalled = false;
+            for _ in 0..DAMPING_TRIES {
+                let mut m = gram.clone();
+                for i in 0..m.rows() {
+                    m.add_to(i, i, lambda * scale);
+                }
+                if let Some(step) = cholesky_solve(&m, &rhs) {
+                    let mut trial = x.to_vec();
+                    for (c, &v) in g.vars.iter().enumerate() {
+                        trial[v] += step[c];
+                    }
+                    let t = self.assemble(g, col, &trial, soft, skip);
+                    let trial_cost = sumsq(&t.r);
+                    if trial_cost.is_finite() && trial_cost < cost {
+                        let size = g.vars.iter().map(|&v| x[v].abs()).fold(1.0_f64, f64::max);
+                        let step_len = step.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+                        stalled =
+                            step_len <= STALL_REL * size || (cost - trial_cost) <= STALL_REL * cost;
+                        x.copy_from_slice(&trial);
+                        a = t;
+                        cost = trial_cost;
+                        lambda = (lambda / LAMBDA_FACTOR).max(MIN_LAMBDA);
+                        accepted = true;
+                        break;
+                    }
+                }
+                lambda *= LAMBDA_FACTOR;
+                if lambda > MAX_LAMBDA {
+                    break;
+                }
+            }
+            if !accepted || stalled {
+                break;
+            }
+        }
+        let h = a.hard_inf();
+        Lm {
+            converged: h.is_finite() && h <= tol_r,
+            iterations,
+        }
+    }
+
+    /// Rang, Redundanz und freie Variablen einer gelösten Gruppe an der Stelle `x`.
+    fn analyze(&self, g: &Group, col: &HashMap<usize, usize>, x: &[f64]) -> Analysis {
+        let a = self.assemble(g, col, x, &[], None);
+        let space = analyze_rows(&a.j, RANK_REL_TOL);
+        let mut redundant = Vec::new();
+        for (row, independent) in space.independent.iter().enumerate() {
+            let id = g.constraints[a.owner[row]];
+            if !independent && !self.constraints[id].internal && !redundant.contains(&id) {
+                redundant.push(id);
+            }
+        }
+        let free_vars = g
+            .vars
+            .iter()
+            .enumerate()
+            .filter(|(c, _)| {
+                space
+                    .null_space
+                    .iter()
+                    .any(|v| v[*c].abs() > FREE_COMPONENT)
+            })
+            .map(|(_, &v)| v)
+            .collect();
+        Analysis {
+            dof: g.vars.len().saturating_sub(space.rank),
+            redundant,
+            free_vars,
+        }
+    }
+
+    /// Bestimmt, welche einzelne Abhängigkeit einer nicht lösbaren Gruppe den Widerspruch
+    /// verursacht (Entscheidung D4). Leer, wenn auch der Rückfall nichts findet.
+    fn diagnose(
+        &self,
+        g: &Group,
+        col: &HashMap<usize, usize>,
+        start: &[f64],
+        failed: &[f64],
+        tol_r: f64,
+    ) -> (Vec<ConstraintId>, bool) {
+        let mut candidates = Vec::new();
+        for &id in &g.constraints {
+            if self.constraints[id].internal {
+                continue;
+            }
+            let mut x = start.to_vec();
+            if self
+                .levenberg_marquardt(g, col, &mut x, &[], Some(id), tol_r)
+                .converged
+            {
+                candidates.push(id);
+            }
+        }
+        if !candidates.is_empty() {
+            return (candidates, true);
+        }
+        let a = self.assemble(g, col, failed, &[], None);
+        let mut big = Vec::new();
+        for (row, v) in a.r[..a.hard_rows].iter().enumerate() {
+            let id = g.constraints[a.owner[row]];
+            // `!(|v| <= tol_r)` zählt auch NaN-Residuen als verletzt.
+            let violated = v.is_nan() || v.abs() > tol_r;
+            if violated && !self.constraints[id].internal && !big.contains(&id) {
+                big.push(id);
+            }
+        }
+        (big, false)
+    }
+
+    /// Bildet die Gruppen der aktiven Abhängigkeiten. Liefert auch, welche Variablen in einer
+    /// aktiven Abhängigkeit vorkommen.
+    fn build_groups(&self) -> (Vec<Group>, Vec<bool>) {
+        let n = self.vars.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        let mut in_constraint = vec![false; n];
+        // Abhängigkeiten in Anlagereihenfolge, jeweils mit ihren Variablen.
+        let mut active: Vec<(ConstraintId, Vec<usize>)> = Vec::new();
+        for (id, c) in self.constraints.iter() {
+            if !(c.alive && c.enabled && !c.driven) {
+                continue;
+            }
+            let Some(ev) = self.evaluate(id, &self.vars) else {
+                continue;
+            };
+            if ev.locals.is_empty() {
+                continue;
+            }
+            for w in ev.locals.windows(2) {
+                let (a, b) = (find(&mut parent, w[0]), find(&mut parent, w[1]));
+                parent[a] = b;
+            }
+            for &v in &ev.locals {
+                in_constraint[v] = true;
+            }
+            active.push((id, ev.locals));
+        }
+        let mut groups: Vec<Group> = Vec::new();
+        let mut index: HashMap<usize, usize> = HashMap::new();
+        for v in (0..n).filter(|v| in_constraint[*v]) {
+            let root = find(&mut parent, v);
+            let gi = *index.entry(root).or_insert_with(|| {
+                groups.push(Group {
+                    vars: Vec::new(),
+                    constraints: Vec::new(),
+                });
+                groups.len() - 1
+            });
+            groups[gi].vars.push(v);
+        }
+        for (id, locals) in active {
+            let gi = index[&find(&mut parent, locals[0])];
+            groups[gi].constraints.push(id);
+        }
+        (groups, in_constraint)
+    }
+
+    /// Löst mit weichen Zusatzbedingungen (zum Ziehen). Harte Abhängigkeiten werden danach
+    /// ohne die weichen exakt nachgelöst („Politur“).
+    pub(crate) fn solve_with_soft(&mut self, soft: &[Soft]) -> SolveReport {
+        let tol_r = RESIDUAL_FRACTION * self.tolerance().linear;
+        let (groups, in_constraint) = self.build_groups();
+
+        let mut status = SolveStatus::Solved;
+        let mut redundant = Vec::new();
+        let mut conflicting = Vec::new();
+        let mut free_vars: HashSet<usize> = HashSet::new();
+        let mut dof = 0;
+        let mut iterations = 0;
+        let start = self.vars.clone();
+        let mut committed = self.vars.clone();
+        for g in &groups {
+            let col: HashMap<usize, usize> =
+                g.vars.iter().enumerate().map(|(c, v)| (*v, c)).collect();
+            let mut x = start.clone();
+            let mut lm = self.levenberg_marquardt(g, &col, &mut x, soft, None, tol_r);
+            let mut used = lm.iterations;
+            if !soft.is_empty() {
+                // Politur: Die weichen Bedingungen liefern nur eine Näherung. Von dort aus wird
+                // ohne sie exakt nachgelöst; gelingt das nicht, wird ohne Zug vom Start gelöst.
+                lm = self.levenberg_marquardt(g, &col, &mut x, &[], None, tol_r);
+                used += lm.iterations;
+                if !lm.converged {
+                    x = start.clone();
+                    lm = self.levenberg_marquardt(g, &col, &mut x, &[], None, tol_r);
+                    used += lm.iterations;
+                }
+            }
+            iterations = iterations.max(used);
+            if lm.converged {
+                let analysis = self.analyze(g, &col, &x);
+                dof += analysis.dof;
+                free_vars.extend(analysis.free_vars);
+                for id in analysis.redundant {
+                    if !redundant.contains(&id) {
+                        redundant.push(id);
+                    }
+                }
+                for &v in &g.vars {
+                    committed[v] = x[v];
+                }
+            } else {
+                let (found, conflict) = self.diagnose(g, &col, &start, &x, tol_r);
+                // Widerspruch gewinnt gegen „nicht konvergiert“.
+                if conflict {
+                    status = SolveStatus::Conflicting;
+                } else if status == SolveStatus::Solved {
+                    status = SolveStatus::NotConverged;
+                }
+                for id in found {
+                    if !conflicting.contains(&id) {
+                        conflicting.push(id);
+                    }
+                }
+            }
+        }
+        self.vars = committed;
+
+        // Lebende Variablen, die in keiner aktiven Abhängigkeit vorkommen, sind frei.
+        for v in self.live_variables() {
+            if !in_constraint[v] && free_vars.insert(v) {
+                dof += 1;
+            }
+        }
+        let free_points: Vec<PointId> = self
+            .points()
+            .filter(|(_, p)| free_vars.contains(&p.x) || free_vars.contains(&p.y))
+            .map(|(i, _)| i)
+            .collect();
+        let free_curves: Vec<CurveId> = self
+            .curves()
+            .filter(|(_, c)| {
+                own_vars(&c.kind).iter().any(|v| free_vars.contains(v))
+                    || c.kind.points().iter().any(|p| free_points.contains(p))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        SolveReport {
+            status,
+            dof,
+            redundant,
+            conflicting,
+            free_points,
+            free_curves,
+            iterations,
+        }
+    }
+
+    /// Alle Variablen lebender Punkte und Kurven (ohne Doppelte).
+    fn live_variables(&self) -> Vec<usize> {
+        let mut v: Vec<usize> = self.points().flat_map(|(_, p)| [p.x, p.y]).collect();
+        for (_, c) in self.curves() {
+            v.extend(own_vars(&c.kind));
+        }
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+}
+
+/// Variablen, die zu einer Kurve gehören und nicht Teil eines Punktes sind.
+fn own_vars(kind: &CurveKind) -> Vec<usize> {
+    match kind {
+        CurveKind::Circle { radius, .. } => vec![*radius],
+        CurveKind::Ellipse { ax, ay, minor, .. } => vec![*ax, *ay, *minor],
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constraint::ConstraintKind as K;
+    use planora_math::{Frame, Tolerance};
+
+    #[test]
+    fn soft_pull_moves_free_points_and_keeps_hard_constraints_exact() {
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let a = s.add_point(0.0, 0.0).unwrap();
+        let b = s.add_point(10.0, 0.0).unwrap();
+        s.add_line(a, b).unwrap();
+        s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+        s.add_constraint(K::Distance(a, b, 10.0)).unwrap();
+        // b wird nach (0, 20) gezogen; erreichbar ist nur der Kreis mit Radius 10.
+        let (bx, by) = (s.points[b].x, s.points[b].y);
+        let soft = [
+            Soft {
+                var: bx,
+                target: 0.0,
+                weight: 1.0,
+            },
+            Soft {
+                var: by,
+                target: 20.0,
+                weight: 1.0,
+            },
+        ];
+        let r = s.solve_with_soft(&soft);
+        assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+        let p = s.point_xy(b).unwrap();
+        assert!((p.length() - 10.0).abs() < 1e-8, "{p:?}");
+        assert!(p.y > 9.0, "b folgt dem Zug: {p:?}");
+    }
+}
