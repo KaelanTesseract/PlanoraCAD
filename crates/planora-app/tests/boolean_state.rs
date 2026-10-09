@@ -208,3 +208,52 @@ fn boolean_dialog_defaults_to_selection_and_another_body() {
     let d = BooleanDialog::with_op(&s, BoolOp::Union);
     assert_eq!((d.a, d.b, d.op), (1, 0, BoolOp::Union));
 }
+
+#[test]
+fn boolean_dialog_stays_open_on_error_and_closes_on_success() {
+    use planora_app::boolean_dialog::BooleanDialog;
+    let mut s = state_with_box_and_cylinder();
+
+    // A == B: „Ausführen“ ist gesperrt; ein Ausführen würde den Dialog offen lassen
+    let mut d = BooleanDialog::with_op(&s, BoolOp::Union);
+    d.b = d.a;
+    assert!(!d.can_run());
+    assert!(d.execute(&mut s), "bei A = B bleibt der Dialog offen");
+    assert!(
+        d.error
+            .as_deref()
+            .is_some_and(|m| m.contains("verschiedene"))
+    );
+    assert_eq!(s.bodies.len(), 2);
+
+    // Getrennte Körper schneiden: leeres Ergebnis → Fehlermeldung im Dialog, Dialog bleibt offen
+    let mut d = BooleanDialog::with_op(&s, BoolOp::Intersection);
+    assert!(d.can_run());
+    assert!(
+        d.execute(&mut s),
+        "bei einem Fehler bleibt der Dialog offen"
+    );
+    assert!(
+        d.error.as_deref().is_some_and(|m| m.contains("leer")),
+        "{:?}",
+        d.error
+    );
+    assert_eq!(s.message, d.error);
+    assert_eq!(
+        s.bodies.len(),
+        2,
+        "bei einem Fehler bleibt alles unverändert"
+    );
+
+    // Zylinder durch den Quader legen und abziehen: Erfolg schließt den Dialog
+    let b = s.bodies[0].bounds;
+    let c = s.bodies[1].bounds;
+    let target = DVec3::new(5.0, 5.0, -2.0) + b.0;
+    s.translate_body(1, target - c.0 - DVec3::new(2.0, 2.0, 0.0))
+        .unwrap();
+    d.op = BoolOp::Difference;
+    assert!(!d.execute(&mut s), "nach Erfolg schließt der Dialog");
+    assert!(d.error.is_none());
+    assert!(s.message.is_none());
+    assert_eq!(s.bodies.len(), 1);
+}

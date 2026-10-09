@@ -66,3 +66,22 @@ fn the_properties_panel_draws_the_position_without_moving_the_body() {
     assert_eq!(s.scene_version, version);
     assert!(s.message.is_none());
 }
+
+#[test]
+fn the_boolean_dialog_draws_a_disabled_run_button_and_an_error() {
+    let ctx = context();
+    let mut s = state();
+    let mut dialog = BooleanDialog::new(&s);
+    dialog.b = dialog.a;
+    dialog.error = Some("Bitte zwei verschiedene Körper wählen".into());
+    for _ in 0..3 {
+        let mut open = false;
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            open = dialog.show(ui.ctx(), &mut s);
+        })
+        .drop_without_applying_deltas();
+        assert!(open);
+    }
+    assert!(!dialog.can_run());
+    assert_eq!(s.bodies.len(), 2);
+}

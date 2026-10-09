@@ -7,6 +7,8 @@ pub struct BooleanDialog {
     pub a: usize,
     pub b: usize,
     pub op: BoolOp,
+    /// Fehlermeldung des letzten Ausführens; der Dialog bleibt dann offen und zeigt sie an.
+    pub error: Option<String>,
 }
 
 impl BooleanDialog {
@@ -22,7 +24,34 @@ impl BooleanDialog {
             .filter(|&i| i < state.bodies.len())
             .unwrap_or(0);
         let b = (0..state.bodies.len()).find(|&i| i != a).unwrap_or(0);
-        Self { a, b, op }
+        Self {
+            a,
+            b,
+            op,
+            error: None,
+        }
+    }
+
+    /// „Ausführen“ ist nur mit zwei verschiedenen Körpern möglich.
+    pub fn can_run(&self) -> bool {
+        self.a != self.b
+    }
+
+    /// Führt die Operation aus. Liefert `true`, wenn der Dialog offen bleiben soll: bei einem
+    /// Fehler steht die Meldung dann in `error` (und in der Statuszeile); nach Erfolg schließt er.
+    pub fn execute(&mut self, state: &mut AppState) -> bool {
+        state.message = None;
+        match state.boolean(self.a, self.b, self.op) {
+            Ok(_) => {
+                self.error = None;
+                false
+            }
+            Err(e) => {
+                state.message = Some(e.clone());
+                self.error = Some(e);
+                true
+            }
+        }
     }
 
     /// Zeigt den Dialog; `true`, solange er offen bleiben soll.
@@ -49,8 +78,17 @@ impl BooleanDialog {
                 ui.radio_value(&mut self.op, BoolOp::Difference, "Abziehen (A − B)");
                 ui.radio_value(&mut self.op, BoolOp::Intersection, "Schneiden");
                 ui.add_space(4.0);
+                if let Some(e) = &self.error {
+                    ui.colored_label(egui::Color32::from_rgb(230, 90, 90), e);
+                    ui.add_space(4.0);
+                }
+                let can_run = self.can_run();
                 ui.horizontal(|ui| {
-                    if ui.button("Ausführen").clicked() {
+                    if ui
+                        .add_enabled(can_run, egui::Button::new("Ausführen"))
+                        .on_disabled_hover_text("Körper A und Körper B müssen verschieden sein.")
+                        .clicked()
+                    {
                         run = true;
                     }
                     if ui.button("Abbrechen").clicked() {
@@ -59,11 +97,7 @@ impl BooleanDialog {
                 });
             });
         if run {
-            state.message = None;
-            if let Err(e) = state.boolean(self.a, self.b, self.op) {
-                state.message = Some(e);
-            }
-            return false;
+            return self.execute(state);
         }
         open && !cancel
     }
