@@ -25,14 +25,43 @@ pub use uv::{
     points_to_uv_indexed, winding,
 };
 
+use crate::geometry::Curve;
 use crate::topology::Solid;
 use crate::validate::{ValidationError, validate};
-use planora_math::Tolerance;
+use planora_math::{DVec3, Frame, Tolerance};
+
+/// Eingangsprüfung: nicht leer, alle Zahlen endlich, danach der Validator.
+fn check_input(s: &Solid) -> Result<(), String> {
+    if s.faces.is_empty() {
+        return Err("leerer Körper (keine Flächen)".into());
+    }
+    let finite3 = |p: DVec3| p.is_finite();
+    let frame_ok = |f: &Frame| finite3(f.origin) && finite3(f.x) && finite3(f.y) && finite3(f.z);
+    if s.vertices.iter().any(|(_, v)| !finite3(v.point)) {
+        return Err("Eckpunkt mit ungültiger Koordinate (NaN oder unendlich)".into());
+    }
+    for (_, e) in s.edges.iter() {
+        let curve_ok = match &e.curve {
+            Curve::Line { origin, dir } => finite3(*origin) && finite3(*dir),
+            Curve::Circle { frame, radius } => frame_ok(frame) && radius.is_finite(),
+            Curve::Ellipse {
+                frame,
+                major,
+                minor,
+            } => frame_ok(frame) && major.is_finite() && minor.is_finite(),
+        };
+        if !(curve_ok && e.t0.is_finite() && e.t1.is_finite()) {
+            return Err("Kante mit ungültigem Wert (NaN oder unendlich)".into());
+        }
+    }
+    validate(s).map_err(|e| e.to_string())?;
+    Ok(())
+}
 
 /// Boolesche Operation `a op b`. Das Ergebnis besteht immer den Validator; sonst ein benannter Fehler.
 pub fn boolean(a: &Solid, b: &Solid, op: BoolOp, tol: &Tolerance) -> Result<Solid, BooleanError> {
-    validate(a).map_err(|e| BooleanError::InvalidInput(format!("Körper A: {e}")))?;
-    validate(b).map_err(|e| BooleanError::InvalidInput(format!("Körper B: {e}")))?;
+    check_input(a).map_err(|e| BooleanError::InvalidInput(format!("Körper A: {e}")))?;
+    check_input(b).map_err(|e| BooleanError::InvalidInput(format!("Körper B: {e}")))?;
 
     let (work_a, work_b) = imprint(a, b, tol)?;
     let faces_a = solid_faces(a);

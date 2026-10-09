@@ -214,3 +214,40 @@ fn boxes_touching_only_at_a_corner_give_two_shells() {
     validate(&u).unwrap();
     assert_eq!((u.shells.len(), u.faces.len()), (2, 12));
 }
+
+fn invalid_message(r: Result<Solid, BooleanError>) -> String {
+    match r {
+        Err(BooleanError::InvalidInput(m)) => m,
+        other => panic!("InvalidInput erwartet, war {:?}", other.map(|_| ())),
+    }
+}
+
+#[test]
+fn empty_solid_is_rejected() {
+    let a = cube(10.0);
+    let m = invalid_message(k().boolean(&a, &Solid::new(), BoolOp::Union));
+    assert!(m.contains("Körper B"), "{m}");
+    let m = invalid_message(k().boolean(&Solid::new(), &a, BoolOp::Difference));
+    assert!(m.contains("Körper A"), "{m}");
+}
+
+#[test]
+fn non_finite_vertex_is_rejected() {
+    let a = cube(10.0);
+    let mut bad = cube(10.0);
+    bad.vertices[Id::<Vertex>::from_index(0)].point.x = f64::NAN;
+    invalid_message(k().boolean(&a, &bad, BoolOp::Union));
+    bad.vertices[Id::<Vertex>::from_index(0)].point.x = f64::INFINITY;
+    invalid_message(k().boolean(&bad, &a, BoolOp::Intersection));
+}
+
+#[test]
+fn non_finite_curve_parameter_is_rejected() {
+    let a = cube(10.0);
+    let mut bad = k().make_cylinder(2.0, 5.0).unwrap();
+    let e = Id::<Edge>::from_index(0);
+    bad.edges[e].t1 = f64::INFINITY;
+    invalid_message(k().boolean(&a, &bad, BoolOp::Union));
+    bad.edges[e].t1 = f64::NAN;
+    invalid_message(k().boolean(&a, &bad, BoolOp::Difference));
+}
