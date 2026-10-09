@@ -73,7 +73,10 @@ fn the_boolean_dialog_draws_a_disabled_run_button_and_an_error() {
     let mut s = state();
     let mut dialog = BooleanDialog::new(&s);
     dialog.b = dialog.a;
-    dialog.error = Some("Bitte zwei verschiedene Körper wählen".into());
+    assert!(
+        dialog.execute(&mut s),
+        "Fehler bei A = B hält den Dialog offen"
+    );
     for _ in 0..3 {
         let mut open = false;
         ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -83,5 +86,9 @@ fn the_boolean_dialog_draws_a_disabled_run_button_and_an_error() {
         assert!(open);
     }
     assert!(!dialog.can_run());
+    assert!(
+        dialog.error().is_some(),
+        "die Meldung bleibt beim Zeichnen stehen"
+    );
     assert_eq!(s.bodies.len(), 2);
 }

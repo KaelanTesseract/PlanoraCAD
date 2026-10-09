@@ -7,8 +7,9 @@ pub struct BooleanDialog {
     pub a: usize,
     pub b: usize,
     pub op: BoolOp,
-    /// Fehlermeldung des letzten Ausführens; der Dialog bleibt dann offen und zeigt sie an.
-    pub error: Option<String>,
+    /// Fehlermeldung des letzten Ausführens samt der Auswahl (A, B, Operation), für die sie
+    /// galt; der Dialog bleibt dann offen und zeigt sie an, solange die Auswahl gleich bleibt.
+    error: Option<((usize, usize, BoolOp), String)>,
 }
 
 impl BooleanDialog {
@@ -32,6 +33,15 @@ impl BooleanDialog {
         }
     }
 
+    /// Meldung des letzten fehlgeschlagenen Ausführens, solange A, B und die Operation noch
+    /// dieselben sind; nach einer Änderung der Auswahl ist sie hinfällig.
+    pub fn error(&self) -> Option<&str> {
+        self.error
+            .as_ref()
+            .filter(|(key, _)| *key == (self.a, self.b, self.op))
+            .map(|(_, m)| m.as_str())
+    }
+
     /// „Ausführen“ ist nur mit zwei verschiedenen Körpern möglich.
     pub fn can_run(&self) -> bool {
         self.a != self.b
@@ -48,7 +58,7 @@ impl BooleanDialog {
             }
             Err(e) => {
                 state.message = Some(e.clone());
-                self.error = Some(e);
+                self.error = Some(((self.a, self.b, self.op), e));
                 true
             }
         }
@@ -78,7 +88,7 @@ impl BooleanDialog {
                 ui.radio_value(&mut self.op, BoolOp::Difference, "Abziehen (A − B)");
                 ui.radio_value(&mut self.op, BoolOp::Intersection, "Schneiden");
                 ui.add_space(4.0);
-                if let Some(e) = &self.error {
+                if let Some(e) = self.error() {
                     ui.colored_label(egui::Color32::from_rgb(230, 90, 90), e);
                     ui.add_space(4.0);
                 }

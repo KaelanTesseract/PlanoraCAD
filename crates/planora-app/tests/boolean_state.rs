@@ -219,11 +219,7 @@ fn boolean_dialog_stays_open_on_error_and_closes_on_success() {
     d.b = d.a;
     assert!(!d.can_run());
     assert!(d.execute(&mut s), "bei A = B bleibt der Dialog offen");
-    assert!(
-        d.error
-            .as_deref()
-            .is_some_and(|m| m.contains("verschiedene"))
-    );
+    assert!(d.error().is_some_and(|m| m.contains("verschiedene")));
     assert_eq!(s.bodies.len(), 2);
 
     // Getrennte Körper schneiden: leeres Ergebnis → Fehlermeldung im Dialog, Dialog bleibt offen
@@ -234,11 +230,11 @@ fn boolean_dialog_stays_open_on_error_and_closes_on_success() {
         "bei einem Fehler bleibt der Dialog offen"
     );
     assert!(
-        d.error.as_deref().is_some_and(|m| m.contains("leer")),
+        d.error().is_some_and(|m| m.contains("leer")),
         "{:?}",
-        d.error
+        d.error()
     );
-    assert_eq!(s.message, d.error);
+    assert_eq!(s.message.as_deref(), d.error());
     assert_eq!(
         s.bodies.len(),
         2,
@@ -251,9 +247,22 @@ fn boolean_dialog_stays_open_on_error_and_closes_on_success() {
     let target = DVec3::new(5.0, 5.0, -2.0) + b.0;
     s.translate_body(1, target - c.0 - DVec3::new(2.0, 2.0, 0.0))
         .unwrap();
+    // Eine andere Auswahl (Operation oder Körper) macht die alte Meldung hinfällig
     d.op = BoolOp::Difference;
+    assert!(
+        d.error().is_none(),
+        "Meldung gilt nur für die Auswahl, die sie erzeugt hat"
+    );
+    let mut e = BooleanDialog::with_op(&s, BoolOp::Union);
+    e.b = e.a;
+    e.execute(&mut s);
+    e.b = 1 - e.a;
+    assert!(
+        e.error().is_none(),
+        "nach Wechsel von Körper B keine alte Meldung"
+    );
     assert!(!d.execute(&mut s), "nach Erfolg schließt der Dialog");
-    assert!(d.error.is_none());
+    assert!(d.error().is_none());
     assert!(s.message.is_none());
     assert_eq!(s.bodies.len(), 1);
 }
