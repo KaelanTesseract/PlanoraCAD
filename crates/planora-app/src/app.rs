@@ -1,7 +1,7 @@
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
 use crate::samples::{ExtrudeSample, RevolveSample};
-use crate::state::{AppState, StandardPlane};
+use crate::state::{AppState, SketchRequest, StandardPlane};
 use crate::{browser, fonts, properties, sketch_panel, theme, viewport};
 use egui_tiles::{Container, SimplificationOptions, TileId, Tiles, Tree, UiResponse};
 use planora_kernel::BoolOp;
@@ -185,6 +185,31 @@ impl PlanoraApp {
                 }
                 ui.separator();
                 self.sketch_menu(ui);
+                ui.separator();
+                // Körper aus Skizzen: die gewählte (sonst die geöffnete, sonst die letzte) Skizze.
+                let target = self
+                    .state
+                    .selected_sketch
+                    .or(self.state.sketch_session.as_ref().map(|s| s.sketch))
+                    .filter(|&i| i < self.state.sketches.len())
+                    .or(self.state.sketches.len().checked_sub(1));
+                for (label, revolve) in [("Skizze extrudieren …", false), ("Skizze drehen …", true)]
+                {
+                    if ui
+                        .add_enabled(target.is_some(), egui::Button::new(label))
+                        .on_disabled_hover_text("Zuerst eine Skizze anlegen.")
+                        .clicked()
+                        && let Some(i) = target
+                    {
+                        self.state.close_sketch();
+                        self.dialog = Some(if revolve {
+                            CreateDialog::revolve_sketch(&self.state, i)
+                        } else {
+                            CreateDialog::extrude_sketch(i)
+                        });
+                        ui.close();
+                    }
+                }
             });
             ui.menu_button("Bearbeiten", |ui| {
                 // Boolesche Operationen brauchen mindestens zwei Körper.
@@ -292,6 +317,15 @@ pub fn drop_dialogs_in_sketch_mode(
     }
 }
 
+/// Setzt einen Dialogwunsch aus dem Browser (Kontextmenü einer Skizze) in den passenden Dialog um
+/// und löscht ihn. Der Browser hat die offene Skizze dann bereits beendet.
+pub fn dialog_for_request(state: &mut AppState) -> Option<CreateDialog> {
+    match state.sketch_request.take()? {
+        SketchRequest::Extrude(i) => Some(CreateDialog::extrude_sketch(i)),
+        SketchRequest::Revolve(i) => Some(CreateDialog::revolve_sketch(state, i)),
+    }
+}
+
 impl eframe::App for PlanoraApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.applied_dark != Some(self.state.dark) {
@@ -324,6 +358,9 @@ impl eframe::App for PlanoraApp {
             self.dock.ui(&mut behavior, ui);
         });
 
+        if let Some(dialog) = dialog_for_request(&mut self.state) {
+            self.dialog = Some(dialog);
+        }
         drop_dialogs_in_sketch_mode(&self.state, &mut self.dialog, &mut self.boolean_dialog);
         sketch_panel::show(ui.ctx(), &mut self.state);
         if let Some(mut dialog) = self.dialog.take()

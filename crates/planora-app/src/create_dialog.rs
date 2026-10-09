@@ -1,20 +1,105 @@
 use crate::samples::{ExtrudeSample, RevolveSample};
+use crate::sketch_view::{format_length, format_number};
 use crate::state::{AppState, BodyKind};
 use planora_kernel::Kernel;
 use planora_math::{DVec3, Frame};
+use planora_sketch::model::{CurveId, CurveKind, Sketch};
+
+/// Voreingestellte Höhe für „Skizze extrudieren“ in Millimetern.
+pub const DEFAULT_SKETCH_HEIGHT: f64 = 10.0;
 
 /// Offener Erzeugen-Dialog samt Eingabewerten.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CreateDialog {
-    Box { x: f64, y: f64, z: f64 },
-    Cylinder { radius: f64, height: f64 },
-    Sphere { radius: f64 },
-    Cone { radius: f64, height: f64 },
-    Extrude { sample: ExtrudeSample, height: f64 },
-    Revolve { sample: RevolveSample },
+    Box {
+        x: f64,
+        y: f64,
+        z: f64,
+    },
+    Cylinder {
+        radius: f64,
+        height: f64,
+    },
+    Sphere {
+        radius: f64,
+    },
+    Cone {
+        radius: f64,
+        height: f64,
+    },
+    Extrude {
+        sample: ExtrudeSample,
+        height: f64,
+    },
+    Revolve {
+        sample: RevolveSample,
+    },
+    /// Profil `profile` (Index in `Sketch::profiles()`) der Skizze `sketch` um `height` entlang
+    /// der Skizzennormalen extrudieren.
+    ExtrudeSketch {
+        sketch: usize,
+        profile: usize,
+        height: f64,
+    },
+    /// Profil `profile` der Skizze `sketch` um die Linie `axis` der Skizze drehen (360°).
+    RevolveSketch {
+        sketch: usize,
+        profile: usize,
+        axis: Option<CurveId>,
+    },
+}
+
+/// Linien der Skizze, die als Drehachse taugen: Konstruktionslinien zuerst, dann die übrigen,
+/// jeweils in der Reihenfolge der Kurven. Dazu der Name für die Auswahlliste.
+pub fn axis_candidates(sk: &Sketch) -> Vec<(CurveId, String)> {
+    let mut lines: Vec<(CurveId, bool)> = sk
+        .curves()
+        .filter(|(_, c)| matches!(c.kind, CurveKind::Line { .. }))
+        .map(|(id, c)| (id, c.construction))
+        .collect();
+    // stabil: innerhalb der Gruppen bleibt die Kurvenreihenfolge
+    lines.sort_by_key(|&(_, construction)| !construction);
+    let (mut n_construction, mut n_line) = (0, 0);
+    lines
+        .into_iter()
+        .map(|(id, construction)| {
+            let length = sk.line_length(id).map(format_length).unwrap_or_default();
+            let name = if construction {
+                n_construction += 1;
+                format!("Konstruktionslinie {n_construction} ({length})")
+            } else {
+                n_line += 1;
+                format!("Linie {n_line} ({length})")
+            };
+            (id, name)
+        })
+        .collect()
 }
 
 impl CreateDialog {
+    /// Dialog „Skizze extrudieren“ für die Skizze `sketch` mit voreingestellten Werten.
+    pub fn extrude_sketch(sketch: usize) -> Self {
+        CreateDialog::ExtrudeSketch {
+            sketch,
+            profile: 0,
+            height: DEFAULT_SKETCH_HEIGHT,
+        }
+    }
+
+    /// Dialog „Skizze drehen“ für die Skizze `sketch`; als Achse ist die erste Konstruktionslinie
+    /// (sonst die erste Linie) vorgewählt.
+    pub fn revolve_sketch(state: &AppState, sketch: usize) -> Self {
+        let axis = state
+            .sketches
+            .get(sketch)
+            .and_then(|sk| axis_candidates(sk).first().map(|(id, _)| *id));
+        CreateDialog::RevolveSketch {
+            sketch,
+            profile: 0,
+            axis,
+        }
+    }
+
     pub fn title(&self) -> &'static str {
         match self {
             CreateDialog::Box { .. } => "Quader erzeugen",
@@ -23,7 +108,89 @@ impl CreateDialog {
             CreateDialog::Cone { .. } => "Kegel erzeugen",
             CreateDialog::Extrude { .. } => "Extrusion erzeugen",
             CreateDialog::Revolve { .. } => "Rotation erzeugen",
+            CreateDialog::ExtrudeSketch { .. } => "Skizze extrudieren",
+            CreateDialog::RevolveSketch { .. } => "Skizze drehen",
         }
+    }
+
+    /// Körper aus einer Skizze: Bei einem Fehler bleibt der Dialog offen.
+    fn is_sketch_dialog(&self) -> bool {
+        matches!(
+            self,
+            CreateDialog::ExtrudeSketch { .. } | CreateDialog::RevolveSketch { .. }
+        )
+    }
+
+    /// Auswahl der Skizze; liefert `true`, wenn sie gewechselt wurde.
+    fn sketch_choice(ui: &mut egui::Ui, state: &AppState, sketch: &mut usize) -> bool {
+        let before = *sketch;
+        let current = state
+            .sketches
+            .get(*sketch)
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| "(keine)".into());
+        egui::ComboBox::from_label("Skizze")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                for (i, sk) in state.sketches.iter().enumerate() {
+                    ui.selectable_value(sketch, i, &sk.name);
+                }
+            });
+        *sketch != before
+    }
+
+    /// Liste der Profile der Skizze zum Auswählen, darunter die nicht verwendbaren Schleifen
+    /// mit Grund.
+    fn profile_list(ui: &mut egui::Ui, state: &AppState, sketch: usize, profile: &mut usize) {
+        let Some(sk) = state.sketches.get(sketch) else {
+            ui.weak("Skizze nicht gefunden.");
+            return;
+        };
+        // Pro Bild neu berechnet: bei Skizzengröße billig, und der Dialog bleibt aktuell.
+        let extracted = sk.profiles();
+        ui.label("Profil");
+        if extracted.profiles.is_empty() {
+            ui.weak("Die Skizze enthält kein geschlossenes Profil.");
+        }
+        for (i, p) in extracted.profiles.iter().enumerate() {
+            let area = p.outer.signed_area().abs()
+                - p.holes.iter().map(|h| h.signed_area().abs()).sum::<f64>();
+            let holes = match p.holes.len() {
+                0 => String::new(),
+                1 => ", 1 Loch".into(),
+                n => format!(", {n} Löcher"),
+            };
+            let label = format!("Profil {}: {} mm²{holes}", i + 1, format_number(area, 2));
+            ui.selectable_value(profile, i, label);
+        }
+        for r in &extracted.rejected {
+            ui.weak(format!("Nicht verwendbar: {}", r.reason));
+        }
+    }
+
+    /// Auswahl der Drehachse (Linien der Skizze, Konstruktionslinien zuerst).
+    fn axis_choice(ui: &mut egui::Ui, state: &AppState, sketch: usize, axis: &mut Option<CurveId>) {
+        let candidates = state
+            .sketches
+            .get(sketch)
+            .map(axis_candidates)
+            .unwrap_or_default();
+        if candidates.is_empty() {
+            ui.weak("Die Skizze enthält keine Linie, die als Drehachse dienen kann.");
+            return;
+        }
+        let current = candidates
+            .iter()
+            .find(|(id, _)| Some(*id) == *axis)
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| "(bitte wählen)".into());
+        egui::ComboBox::from_label("Drehachse")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                for (id, name) in &candidates {
+                    ui.selectable_value(axis, Some(*id), name);
+                }
+            });
     }
 
     fn drag(ui: &mut egui::Ui, label: &str, value: &mut f64) {
@@ -76,6 +243,41 @@ impl CreateDialog {
                             ui.selectable_value(sample, s, s.label());
                         }
                     }
+                    CreateDialog::ExtrudeSketch {
+                        sketch,
+                        profile,
+                        height,
+                    } => {
+                        if Self::sketch_choice(ui, state, sketch) {
+                            *profile = 0;
+                        }
+                        Self::profile_list(ui, state, *sketch, profile);
+                        ui.add_space(4.0);
+                        Self::drag(ui, "Höhe", height);
+                    }
+                    CreateDialog::RevolveSketch {
+                        sketch,
+                        profile,
+                        axis,
+                    } => {
+                        if Self::sketch_choice(ui, state, sketch) {
+                            *profile = 0;
+                            *axis = state
+                                .sketches
+                                .get(*sketch)
+                                .and_then(|sk| axis_candidates(sk).first().map(|(id, _)| *id));
+                        }
+                        Self::profile_list(ui, state, *sketch, profile);
+                        ui.add_space(4.0);
+                        Self::axis_choice(ui, state, *sketch, axis);
+                    }
+                }
+                if matches!(
+                    self,
+                    CreateDialog::Extrude { .. } | CreateDialog::Revolve { .. }
+                ) {
+                    ui.add_space(4.0);
+                    ui.weak(crate::samples::OWN_PROFILE_HINT);
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -88,14 +290,17 @@ impl CreateDialog {
                 });
             });
         if create {
-            self.create(state);
-            return false;
+            let ok = self.create(state);
+            // Körper aus Skizzen: bei einem Fehler (Meldung in der Statuszeile) offen bleiben.
+            return self.is_sketch_dialog() && !ok;
         }
         open && !cancel
     }
 
-    /// Erzeugt den Körper mit den aktuellen Werten und nimmt ihn in `state` auf.
-    pub fn create(&self, state: &mut AppState) {
+    /// Erzeugt den Körper mit den aktuellen Werten und nimmt ihn in `state` auf. Liefert `true`
+    /// bei Erfolg; sonst steht der Fehler in `state.message`.
+    pub fn create(&self, state: &mut AppState) -> bool {
+        state.message = None;
         let k = state.kernel;
         let (kind, name, solid) = match self {
             CreateDialog::Box { x, y, z } => (
@@ -128,17 +333,43 @@ impl CreateDialog {
                 format!("Rotation: {}", sample.label()),
                 k.revolve(&sample.chain(), &Frame::WORLD),
             ),
+            // Körper aus Skizzen entstehen an Ort und Stelle; Fehler legt `AppState` ab.
+            CreateDialog::ExtrudeSketch {
+                sketch,
+                profile,
+                height,
+            } => return state.extrude_sketch(*sketch, *profile, *height).is_ok(),
+            CreateDialog::RevolveSketch {
+                sketch,
+                profile,
+                axis,
+            } => {
+                let Some(axis) = axis else {
+                    state.message =
+                        Some("Bitte eine Drehachse wählen (eine Linie der Skizze).".into());
+                    return false;
+                };
+                return state.revolve_sketch(*sketch, *profile, *axis).is_ok();
+            }
         };
-        state.message = None;
         match solid {
             Ok(solid) => {
                 let number = state.next_body_number;
                 match state.add_body(kind, format!("{name} {number}"), solid) {
-                    Ok(_) => state.next_body_number += 1,
-                    Err(e) => state.message = Some(e),
+                    Ok(_) => {
+                        state.next_body_number += 1;
+                        true
+                    }
+                    Err(e) => {
+                        state.message = Some(e);
+                        false
+                    }
                 }
             }
-            Err(e) => state.message = Some(format!("Erzeugen fehlgeschlagen: {e}")),
+            Err(e) => {
+                state.message = Some(format!("Erzeugen fehlgeschlagen: {e}"));
+                false
+            }
         }
     }
 }

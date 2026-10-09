@@ -1,7 +1,11 @@
 use planora_kernel::{Profile, ProfileLoop, Segment};
 use planora_math::{DVec2, PI};
 
-/// Fest eingebaute Beispielprofile für die Extrusion (echte Skizzen folgen später).
+/// Hinweis in den Beispielprofil-Dialogen auf eigene Profile aus Skizzen.
+pub const OWN_PROFILE_HINT: &str = "Eigene Profile: eine Skizze zeichnen und dann „Skizze extrudieren …“ bzw. „Skizze drehen …“ wählen.";
+
+/// Fest eingebaute Beispielprofile für die Extrusion. Eigene Profile entstehen aus Skizzen
+/// (Dialoge „Skizze extrudieren“ / „Skizze drehen“).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExtrudeSample {
     PlateWithHole,

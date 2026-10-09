@@ -54,6 +54,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     // Platz für die 3D-Szene; sie wird am Ende mit der endgültigen Kamera eingesetzt, damit die
     // Skizze darüber liegt.
     let scene_slot = painter.add(Shape::Noop);
+    // Fertige Skizzen als dünne Linien über der Szene; ihr Platz wird ebenfalls erst am Ende mit
+    // der endgültigen Kamera gefüllt.
+    let sketches_slot = painter.add(Shape::Noop);
 
     let cube = cube_rect(rect);
     if sketching {
@@ -125,6 +128,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 scene_version: state.scene_version,
             },
         ),
+    );
+    painter.set(
+        sketches_slot,
+        Shape::Vec(sketch_view::finished_sketch_shapes(state, rect)),
     );
     let faces = cube_faces(&state.camera);
 

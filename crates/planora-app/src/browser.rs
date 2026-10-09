@@ -1,8 +1,15 @@
 use crate::icons::{paint_body_icon, paint_sketch_icon};
-use crate::state::AppState;
+use crate::state::{AppState, SketchRequest};
 use egui::{Sense, vec2};
 
 const ROW_HEIGHT: f32 = 28.0;
+
+/// Befehl aus dem Kontextmenü einer Skizzenzeile.
+enum SketchAction {
+    Extrude(usize),
+    Revolve(usize),
+    Delete(usize),
+}
 
 /// Eine Zeile mit Symbol und Name; liefert die Antwort für Klicks.
 fn row(
@@ -65,7 +72,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         return;
     }
     let open = state.sketch_session.as_ref().map(|s| s.sketch);
-    let (mut select, mut edit) = (None, None);
+    let (mut select, mut edit, mut action) = (None, None, None);
     for (i, sketch) in state.sketches.iter().enumerate() {
         let selected = state.selected_sketch == Some(i) || open == Some(i);
         let name = if open == Some(i) {
@@ -73,13 +80,51 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         } else {
             sketch.name.clone()
         };
-        let r = row(ui, selected, &name, paint_sketch_icon)
-            .on_hover_text("Doppelklick öffnet die Skizze zum Bearbeiten.");
+        let r = row(ui, selected, &name, paint_sketch_icon).on_hover_text(
+            "Doppelklick öffnet die Skizze zum Bearbeiten; Rechtsklick zeigt weitere Befehle.",
+        );
         if r.double_clicked() {
             edit = Some(i);
         } else if r.clicked() {
             select = Some(i);
         }
+        r.context_menu(|ui| {
+            if ui.button("Bearbeiten").clicked() {
+                edit = Some(i);
+                ui.close();
+            }
+            if ui.button("Extrudieren …").clicked() {
+                action = Some(SketchAction::Extrude(i));
+                ui.close();
+            }
+            if ui.button("Drehen …").clicked() {
+                action = Some(SketchAction::Revolve(i));
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Löschen").clicked() {
+                action = Some(SketchAction::Delete(i));
+                ui.close();
+            }
+        });
+    }
+    match action {
+        // Körper entstehen außerhalb des Skizzen-Modus: die offene Skizze wird vorher beendet.
+        Some(SketchAction::Extrude(i)) => {
+            state.close_sketch();
+            state.selected_sketch = Some(i);
+            state.sketch_request = Some(SketchRequest::Extrude(i));
+        }
+        Some(SketchAction::Revolve(i)) => {
+            state.close_sketch();
+            state.selected_sketch = Some(i);
+            state.sketch_request = Some(SketchRequest::Revolve(i));
+        }
+        Some(SketchAction::Delete(i)) => {
+            state.delete_sketch(i);
+            return;
+        }
+        None => {}
     }
     if let Some(i) = select.or(edit) {
         // Nur eines ist hervorgehoben: Skizze statt Körper bzw. 3D-Auswahl.

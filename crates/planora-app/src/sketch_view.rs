@@ -310,6 +310,8 @@ struct Colors {
     determined: Color32,
     selected: Color32,
     construction: Color32,
+    /// Kurven fertiger Skizzen in der 3D-Ansicht.
+    finished: Color32,
     error: Color32,
     text: Color32,
     label_bg: Color32,
@@ -325,6 +327,7 @@ fn colors(dark: bool) -> Colors {
             determined: Color32::from_rgb(0x4c, 0xc9, 0x6a),
             selected: Color32::from_rgb(0xff, 0x9a, 0x2e),
             construction: Color32::from_rgb(0x8a, 0x92, 0xa3),
+            finished: Color32::from_rgb(0x7f, 0xb4, 0xff),
             error: Color32::from_rgb(0xf0, 0x5a, 0x5a),
             text: Color32::from_rgb(0xe6, 0xe9, 0xf0),
             label_bg: Color32::from_rgba_unmultiplied(0x15, 0x17, 0x1b, 0xd8),
@@ -338,6 +341,7 @@ fn colors(dark: bool) -> Colors {
             determined: Color32::from_rgb(0x1a, 0x93, 0x3a),
             selected: Color32::from_rgb(0xe0, 0x72, 0x00),
             construction: Color32::from_rgb(0x80, 0x87, 0x96),
+            finished: Color32::from_rgb(0x2a, 0x5f, 0xb8),
             error: Color32::from_rgb(0xd0, 0x30, 0x30),
             text: Color32::from_rgb(0x1e, 0x22, 0x2c),
             label_bg: Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0xe0),
@@ -410,12 +414,59 @@ impl Mapper {
     }
 }
 
-fn draw_path(painter: &egui::Painter, path: Vec<Pos2>, stroke: Stroke, dashed: bool) {
+/// Linienzug als Formen: gestrichelt (Konstruktionsgeometrie) oder durchgezogen.
+fn path_shapes(path: Vec<Pos2>, stroke: Stroke, dashed: bool) -> Vec<Shape> {
     if dashed {
-        painter.extend(Shape::dashed_line(&path, stroke, 6.0, 4.0));
+        Shape::dashed_line(&path, stroke, 6.0, 4.0)
     } else {
-        painter.add(Shape::line(path, stroke));
+        vec![Shape::line(path, stroke)]
     }
+}
+
+fn draw_path(painter: &egui::Painter, path: Vec<Pos2>, stroke: Stroke, dashed: bool) {
+    painter.extend(path_shapes(path, stroke, dashed));
+}
+
+/// Strichstärke fertiger Skizzen in der 3D-Ansicht (dünner als im Skizzen-Modus).
+const FINISHED_WIDTH: f32 = 1.2;
+/// Strichstärke der Konstruktionsgeometrie fertiger Skizzen.
+const FINISHED_CONSTRUCTION_WIDTH: f32 = 1.0;
+
+/// Fertige (nicht geöffnete) Skizzen als dünne Linien über der 3D-Ansicht in `rect`;
+/// Konstruktionsgeometrie grau und gestrichelt. Die geöffnete Skizze zeichnet
+/// [`show_overlay`]. Nur Anzeige: Skizzenkurven lassen sich in 3D nicht anklicken, und die
+/// Linien liegen immer über den Körpern (keine Verdeckung).
+pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+    let mut out = Vec::new();
+    if rect.width() < 2.0 || rect.height() < 2.0 {
+        return out;
+    }
+    let open = state.sketch_session.as_ref().map(|s| s.sketch);
+    let col = colors(state.dark);
+    for (i, sk) in state.sketches.iter().enumerate() {
+        if open == Some(i) {
+            continue;
+        }
+        let map = Mapper {
+            camera: state.camera,
+            frame: *sk.frame(),
+            rect,
+        };
+        for (c, data) in sk.curves() {
+            let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
+                continue;
+            };
+            let stroke = if data.construction {
+                Stroke::new(FINISHED_CONSTRUCTION_WIDTH, col.construction)
+            } else {
+                Stroke::new(FINISHED_WIDTH, col.finished)
+            };
+            for path in map.paths(&pl) {
+                out.extend(path_shapes(path, stroke, data.construction));
+            }
+        }
+    }
+    out
 }
 
 /// Zeichnet die Skizze über die 3D-Ansicht in `rect` und verarbeitet die Eingaben des

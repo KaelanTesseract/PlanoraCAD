@@ -43,6 +43,16 @@ pub struct Body {
     pub bounds: (DVec3, DVec3),
 }
 
+/// Wunsch aus dem Browser (Kontextmenü einer Skizze), einen Dialog zu öffnen; die App setzt ihn
+/// im selben Bild in den passenden Dialog um.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SketchRequest {
+    /// „Skizze extrudieren“ für die Skizze mit diesem Index.
+    Extrude(usize),
+    /// „Skizze drehen“ für die Skizze mit diesem Index.
+    Revolve(usize),
+}
+
 /// Alles, was die Oberfläche anzeigt. Enthält keine egui-Typen und ist deshalb testbar.
 pub struct AppState {
     pub bodies: Vec<Body>,
@@ -71,6 +81,8 @@ pub struct AppState {
     /// Laufende Nummer für den Namen der nächsten Skizze; zählt nur hoch, damit Namen auch nach
     /// dem Löschen eindeutig bleiben.
     pub next_sketch_number: u64,
+    /// Offener Dialogwunsch aus dem Browser (siehe [`SketchRequest`]).
+    pub sketch_request: Option<SketchRequest>,
 }
 
 const GRID_HALF_EXTENT: f32 = 500.0;
@@ -105,6 +117,7 @@ impl AppState {
             sketch_session: None,
             saved_camera: None,
             next_sketch_number: 1,
+            sketch_request: None,
         };
         state.rebuild_scene();
         state
