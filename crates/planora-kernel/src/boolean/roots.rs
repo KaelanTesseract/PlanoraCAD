@@ -115,7 +115,11 @@ pub fn curve_surface_roots(
                 if ge * ga > 0.0 || ge * gb > 0.0 {
                     return false;
                 }
-                for t in [bisect(lo, te, &g), bisect(te, hi, &g)] {
+                // Liegt ein Fenster-Ende exakt auf der Fläche (g == 0), ist es selbst die
+                // Nullstelle; eine Halbierung bis zum Extremum fände dort keinen Vorzeichenwechsel.
+                let left = if ga == 0.0 { lo } else { bisect(lo, te, &g) };
+                let right = if gb == 0.0 { hi } else { bisect(te, hi, &g) };
+                for t in [left, right] {
                     let t = if seam && (t - t0) * dir < 0.0 {
                         t + dir * TAU
                     } else {

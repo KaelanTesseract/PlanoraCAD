@@ -454,3 +454,52 @@ fn grazing_inside_the_first_or_last_sampling_interval_is_found() {
         assert!(t.touching && (t.t - c).abs() < 1e-4, "{t:?}");
     }
 }
+
+#[test]
+fn zero_valued_window_end_gives_no_spurious_root() {
+    let r = 0.0078125; // 2^-7: alles exakt darstellbar, g == 0.0 genau
+    let sphere = Surface::Sphere {
+        frame: Frame::WORLD,
+        radius: r,
+    };
+    let two = |c: CurveSurface, a: f64, b: f64| {
+        let v = roots(c);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v.iter().all(|x| !x.touching), "{v:?}");
+        assert!(
+            (v[0].t - a).abs() < 1e-9 && (v[1].t - b).abs() < 1e-9,
+            "{v:?}"
+        );
+    };
+    // Start exakt auf der Fläche, Sehne im ersten Intervall
+    let l1 = Curve::Line {
+        origin: DVec3::new(-r, 0.0, 0.0),
+        dir: DVec3::X,
+    };
+    two(
+        curve_surface_roots(&l1, 0.0, 1000.0, &sphere, &tol()),
+        0.0,
+        2.0 * r,
+    );
+    // Ende exakt auf der Fläche, Sehne im letzten Intervall
+    let l2 = Curve::Line {
+        origin: DVec3::new(-(1000.0 - r), 0.0, 0.0),
+        dir: DVec3::X,
+    };
+    two(
+        curve_surface_roots(&l2, 0.0, 1000.0, &sphere, &tol()),
+        1000.0 - 2.0 * r,
+        1000.0,
+    );
+    // Stützstelle (k = 100) exakt auf der Fläche, zweiter Schnitt im selben Intervall
+    let ts = 100.0 * 1000.0 / 4096.0;
+    let l3 = Curve::Line {
+        origin: DVec3::new(-ts - r, 0.0, 0.0),
+        dir: DVec3::X,
+    };
+    two(
+        curve_surface_roots(&l3, 0.0, 1000.0, &sphere, &tol()),
+        ts,
+        ts + 2.0 * r,
+    );
+}
