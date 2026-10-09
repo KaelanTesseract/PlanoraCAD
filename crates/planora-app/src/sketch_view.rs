@@ -515,7 +515,11 @@ fn handle_input(
 
     // Klicks
     let mut project_at = None;
-    if response.double_clicked() {
+    // egui zählt Klicks nur als Doppel-/Dreifachklick, wenn sie höchstens `max_click_dist`
+    // (6 Pixel) vom vorigen Klick entfernt sind. Ein „Dreifachklick“ entsteht schon, wenn zwei
+    // schnelle Klicks an derselben Stelle einem Klick anderswo folgen (Zeit zum vorletzten Klick,
+    // Abstand nur zum letzten) – das ist für den Nutzer ein Doppelklick und beendet ebenso.
+    if response.double_clicked() || response.triple_clicked() {
         let _ = se.finish_tool(sk);
     } else if response.clicked_by(PointerButton::Primary)
         && let Some(at) = at

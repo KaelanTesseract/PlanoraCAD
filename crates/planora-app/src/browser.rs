@@ -81,13 +81,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             select = Some(i);
         }
     }
-    if let Some(i) = select {
+    if let Some(i) = select.or(edit) {
+        // Nur eines ist hervorgehoben: Skizze statt Körper bzw. 3D-Auswahl.
         state.selected_sketch = Some(i);
+        state.selected_body = None;
+        state.set_selection(None);
     }
-    if let Some(i) = edit {
-        state.selected_sketch = Some(i);
-        if open != Some(i) {
-            let _ = state.open_sketch(i);
-        }
+    if let Some(i) = edit
+        && open != Some(i)
+    {
+        let _ = state.open_sketch(i);
     }
 }

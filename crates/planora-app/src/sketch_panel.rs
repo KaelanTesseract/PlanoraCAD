@@ -99,6 +99,8 @@ struct Editor {
     /// Eingabe in Grad (intern Radiant).
     angle: bool,
     focus: bool,
+    /// Auswahl beim Öffnen; ändert sie sich, gehört das Feld nicht mehr dazu und schließt.
+    selection: Vec<Item>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,6 +142,49 @@ fn panel_id() -> egui::Id {
 
 const NOT_A_NUMBER: &str = "Bitte eine Zahl eingeben";
 
+/// Zahlenfeld für ein neues Maß `action` aus der aktuellen Auswahl (Vorgabe: aktueller Wert).
+fn new_editor(se: &SketchSession, sk: &Sketch, action: ConstraintAction) -> Editor {
+    let angle = action == ConstraintAction::Angle;
+    let value = se.measure_action(sk, action).unwrap_or(0.0);
+    Editor {
+        target: EditTarget::New(action),
+        text: editor_text(value, angle),
+        angle,
+        focus: true,
+        selection: se.selection.clone(),
+    }
+}
+
+fn load_panel(ctx: &egui::Context, index: usize) -> PanelState {
+    ctx.data(|d| d.get_temp::<PanelState>(panel_id()))
+        .filter(|p| p.sketch == index)
+        .unwrap_or_else(|| PanelState::new(index))
+}
+
+/// Öffnet das Zahlenfeld für das Maß `action` der aktuellen Auswahl, wie die Schaltfläche im
+/// Fenster (auch für Tests ohne Mausklick).
+pub fn open_dimension_editor(ctx: &egui::Context, state: &AppState, action: ConstraintAction) {
+    let Some(se) = state.sketch_session.as_ref() else {
+        return;
+    };
+    let Some(sk) = state.sketches.get(se.sketch) else {
+        return;
+    };
+    if !action.is_dimension() {
+        return;
+    }
+    let mut panel = load_panel(ctx, se.sketch);
+    panel.error = None;
+    panel.editor = Some(new_editor(se, sk, action));
+    ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
+}
+
+/// Ist das Zahlenfeld für ein Maß offen?
+pub fn dimension_editor_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<PanelState>(panel_id()))
+        .is_some_and(|p| p.editor.is_some())
+}
+
 /// Zeigt das Fenster „Skizze“, solange der Skizzen-Modus offen ist.
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let Some(index) = state.sketch_session.as_ref().map(|s| s.sketch) else {
@@ -148,10 +193,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     if index >= state.sketches.len() {
         return;
     }
-    let mut panel = ctx
-        .data(|d| d.get_temp::<PanelState>(panel_id()))
-        .filter(|p| p.sketch == index)
-        .unwrap_or_else(|| PanelState::new(index));
+    let mut panel = load_panel(ctx, index);
     let mut close = false;
     egui::Window::new("Skizze")
         .id(panel_id().with("window"))
@@ -184,6 +226,15 @@ fn contents(
     sk: &mut Sketch,
     panel: &mut PanelState,
 ) -> bool {
+    // Das Zahlenfeld gehört zur Auswahl, mit der es geöffnet wurde.
+    if panel
+        .editor
+        .as_ref()
+        .is_some_and(|e| e.selection != se.selection)
+    {
+        panel.editor = None;
+        panel.error = None;
+    }
     ui.strong(&sk.name);
     ui.add_space(2.0);
 
@@ -219,14 +270,7 @@ fn contents(
             {
                 panel.error = None;
                 if action.is_dimension() {
-                    let angle = action == ConstraintAction::Angle;
-                    let value = se.measure_action(sk, action).unwrap_or(0.0);
-                    panel.editor = Some(Editor {
-                        target: EditTarget::New(action),
-                        text: editor_text(value, angle),
-                        angle,
-                        focus: true,
-                    });
+                    panel.editor = Some(new_editor(se, sk, action));
                 } else {
                     let _ = se.apply(sk, action, None);
                 }
@@ -504,6 +548,7 @@ fn constraint_list(
                                 text: editor_text(value, angle),
                                 angle,
                                 focus: true,
+                                selection: se.selection.clone(),
                             });
                         }
                         let mut d = driven;

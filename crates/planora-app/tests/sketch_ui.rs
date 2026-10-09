@@ -322,3 +322,163 @@ fn shift_on_the_click_itself_extends_the_selection() {
     let sel = &s.sketch_session.as_ref().unwrap().selection;
     assert_eq!(sel, &vec![Item::Point(a), Item::Point(b)]);
 }
+
+// ---- Fix-Runde 1 ----------------------------------------------------------------------------
+
+fn key(k: egui::Key) -> egui::Event {
+    egui::Event::Key {
+        key: k,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::default(),
+    }
+}
+
+fn click_at(x: f32, y: f32) -> Vec<Vec<egui::Event>> {
+    vec![
+        vec![moved(x, y), button(x, y, true, false)],
+        vec![button(x, y, false, false)],
+    ]
+}
+
+#[test]
+fn two_fast_clicks_at_different_places_are_two_clicks() {
+    let ctx = context();
+    let mut s = empty_sketch();
+    s.sketch_session.as_mut().unwrap().set_tool(Tool::Point);
+    // Aufeinanderfolgende Frames liegen weit unter der Doppelklickzeit von egui.
+    let mut frames = click_at(300.0, 300.0);
+    frames.extend(click_at(500.0, 300.0));
+    frames.push(vec![]);
+    play_overlay(&ctx, &mut s, frames);
+    assert_eq!(
+        s.sketches[0].points().count(),
+        2,
+        "zweiter Punkt nicht verschluckt"
+    );
+}
+
+#[test]
+fn a_real_double_click_still_finishes_the_tool() {
+    let ctx = context();
+    let mut s = empty_sketch();
+    s.sketch_session.as_mut().unwrap().set_tool(Tool::Spline);
+    let mut frames = click_at(300.0, 300.0);
+    frames.push(vec![]);
+    frames.extend(click_at(500.0, 250.0));
+    frames.extend(click_at(500.0, 250.0)); // Doppelklick an derselben Stelle
+    frames.push(vec![]);
+    play_overlay(&ctx, &mut s, frames);
+    let se = s.sketch_session.as_ref().unwrap();
+    assert_eq!(s.sketches[0].curves().count(), 1, "Spline angelegt: {se:?}");
+    assert!(se.pending.is_empty());
+}
+
+/// Skizze mit einer Linie (ausgewählt) und einem laufenden Linienwerkzeug.
+fn with_line_and_pending() -> AppState {
+    let mut s = empty_sketch();
+    let sk = &mut s.sketches[0];
+    let a = sk.add_point(-10.0, -10.0).unwrap();
+    let b = sk.add_point(10.0, -10.0).unwrap();
+    let line = sk.add_line(a, b).unwrap();
+    let se = s.sketch_session.as_mut().unwrap();
+    se.set_tool(Tool::Line);
+    se.pending = vec![a];
+    se.selection = vec![Item::Curve(line)];
+    s
+}
+
+fn press_key_in_overlay(s: &mut AppState, k: egui::Key, with_editor: bool) {
+    let ctx = context();
+    if with_editor {
+        sketch_panel::open_dimension_editor(
+            &ctx,
+            s,
+            planora_app::sketch_state::ConstraintAction::Distance,
+        );
+    }
+    let frames = vec![vec![], vec![], vec![key(k)], vec![]];
+    for events in frames {
+        ctx.run_ui(input(events, false), |ui| {
+            if with_editor {
+                sketch_panel::show(ui.ctx(), s);
+            }
+            sketch_view::show_overlay(ui, SCREEN, s);
+            viewport::remember_keyboard_focus(ui.ctx());
+        })
+        .drop_without_applying_deltas();
+    }
+}
+
+#[test]
+fn escape_cancels_the_running_tool() {
+    let mut s = with_line_and_pending();
+    press_key_in_overlay(&mut s, egui::Key::Escape, false);
+    assert!(s.sketch_session.as_ref().unwrap().pending.is_empty());
+}
+
+#[test]
+fn enter_finishes_a_spline() {
+    let mut s = empty_sketch();
+    let sk = &mut s.sketches[0];
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(10.0, 5.0).unwrap();
+    let se = s.sketch_session.as_mut().unwrap();
+    se.set_tool(Tool::Spline);
+    se.pending = vec![a, b];
+    press_key_in_overlay(&mut s, egui::Key::Enter, false);
+    assert_eq!(s.sketches[0].curves().count(), 1);
+    assert!(s.sketch_session.as_ref().unwrap().pending.is_empty());
+}
+
+#[test]
+fn delete_removes_the_selection() {
+    let mut s = with_line_and_pending();
+    press_key_in_overlay(&mut s, egui::Key::Delete, false);
+    assert_eq!(s.sketches[0].curves().count(), 0);
+    assert!(s.sketch_session.as_ref().unwrap().selection.is_empty());
+}
+
+#[test]
+fn keys_do_not_reach_the_overlay_while_the_dimension_field_has_focus() {
+    for k in [egui::Key::Escape, egui::Key::Enter, egui::Key::Delete] {
+        let mut s = with_line_and_pending();
+        let before = s.sketch_session.as_ref().unwrap().clone();
+        press_key_in_overlay(&mut s, k, true);
+        let se = s.sketch_session.as_ref().unwrap();
+        assert_eq!(
+            se.pending, before.pending,
+            "{k:?}: laufendes Werkzeug unverändert"
+        );
+        assert_eq!(se.selection, before.selection, "{k:?}: Auswahl unverändert");
+        assert_eq!(s.sketches[0].curves().count(), 1, "{k:?}: nichts gelöscht");
+    }
+}
+
+#[test]
+fn the_dimension_editor_closes_when_the_selection_changes() {
+    let ctx = context();
+    let mut s = populated();
+    let curves: Vec<_> = s.sketches[0].curves().map(|(c, _)| c).collect();
+    s.sketch_session.as_mut().unwrap().selection = vec![Item::Curve(curves[1])];
+    sketch_panel::open_dimension_editor(
+        &ctx,
+        &s,
+        planora_app::sketch_state::ConstraintAction::Distance,
+    );
+    let frame = |s: &mut AppState| {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            sketch_panel::show(ui.ctx(), s)
+        })
+        .drop_without_applying_deltas();
+    };
+    frame(&mut s);
+    assert!(sketch_panel::dimension_editor_open(&ctx));
+    s.sketch_session.as_mut().unwrap().selection = vec![Item::Curve(curves[2])];
+    frame(&mut s);
+    assert!(
+        !sketch_panel::dimension_editor_open(&ctx),
+        "das Zahlenfeld gehört zur alten Auswahl"
+    );
+}

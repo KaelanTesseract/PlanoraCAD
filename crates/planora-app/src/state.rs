@@ -310,6 +310,9 @@ impl AppState {
     pub fn set_selection(&mut self, selection: Option<Pick>) {
         if self.selection != selection {
             self.selection = selection;
+            if selection.is_some() {
+                self.selected_sketch = None;
+            }
             self.selected_body = match selection {
                 Some(Pick::Face(FaceRef { body, .. })) | Some(Pick::Edge(EdgeRef { body, .. })) => {
                     Some(body)

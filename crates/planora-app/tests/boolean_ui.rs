@@ -92,3 +92,25 @@ fn the_boolean_dialog_draws_a_disabled_run_button_and_an_error() {
     );
     assert_eq!(s.bodies.len(), 2);
 }
+
+#[test]
+fn opening_a_sketch_drops_open_body_and_boolean_dialogs() {
+    use planora_app::app::drop_dialogs_in_sketch_mode;
+    use planora_app::create_dialog::CreateDialog;
+    let mut s = state();
+    let mut create = Some(CreateDialog::Box {
+        x: 1.0,
+        y: 1.0,
+        z: 1.0,
+    });
+    let mut boolean = Some(BooleanDialog::new(&s));
+    drop_dialogs_in_sketch_mode(&s, &mut create, &mut boolean);
+    assert!(
+        create.is_some() && boolean.is_some(),
+        "ohne Skizze bleiben sie offen"
+    );
+    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    s.open_sketch(i).unwrap();
+    drop_dialogs_in_sketch_mode(&s, &mut create, &mut boolean);
+    assert!(create.is_none() && boolean.is_none());
+}

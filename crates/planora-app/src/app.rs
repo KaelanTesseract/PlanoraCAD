@@ -279,6 +279,19 @@ impl PlanoraApp {
     }
 }
 
+/// Körper- und Boolesche Dialoge gibt es nur außerhalb des Skizzen-Modus: Wird eine Skizze
+/// geöffnet (Menü, Doppelklick im Browser), werden offene Dialoge verworfen.
+pub fn drop_dialogs_in_sketch_mode(
+    state: &AppState,
+    create: &mut Option<CreateDialog>,
+    boolean: &mut Option<BooleanDialog>,
+) {
+    if state.sketch_session.is_some() {
+        *create = None;
+        *boolean = None;
+    }
+}
+
 impl eframe::App for PlanoraApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.applied_dark != Some(self.state.dark) {
@@ -311,6 +324,7 @@ impl eframe::App for PlanoraApp {
             self.dock.ui(&mut behavior, ui);
         });
 
+        drop_dialogs_in_sketch_mode(&self.state, &mut self.dialog, &mut self.boolean_dialog);
         sketch_panel::show(ui.ctx(), &mut self.state);
         if let Some(mut dialog) = self.dialog.take()
             && dialog.show(ui.ctx(), &mut self.state)
