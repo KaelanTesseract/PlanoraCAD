@@ -210,30 +210,82 @@ pub(crate) fn check_loop_input(lp: &ProfileLoop, tol: &Tolerance) -> Result<(), 
     Ok(())
 }
 
-/// Prüft, dass jedes Loch vollständig in der äußeren Schleife liegt und keine zwei Schleifen
-/// sich schneiden oder berühren. Arbeitet auf den mit `LAYOUT_STEPS_PER_TURN` Schritten je
-/// Vollkreis abgetasteten Linienzügen; Berührung zählt als Schnitt.
+/// Prüft, dass jedes Loch vollständig in der äußeren Schleife liegt, keine zwei Schleifen
+/// sich schneiden oder berühren und kein Loch in einem anderen Loch liegt.
+///
+/// Arbeitet auf den mit `LAYOUT_STEPS_PER_TURN` Schritten je Vollkreis abgetasteten
+/// Linienzügen; Berührung zählt als Schnitt. Bögen werden dabei durch Sehnen ersetzt
+/// (Pfeilhöhe bei 64 Schritten ≈ 0,12 % des Radius), sehr knappe Abstände zwischen
+/// gekrümmten Schleifen werden also nur bis auf diese Abweichung erkannt.
+///
+/// Vorfilter: Schleifenpaare, deren Hüllrechtecke sich nicht überlappen, können sich weder
+/// berühren noch ineinander liegen und werden ohne Segmenttest entschieden.
 pub(crate) fn check_hole_layout(profile: &Profile) -> Result<(), KernelError> {
     let outer = profile.outer.sample(LAYOUT_STEPS_PER_TURN);
-    let holes: Vec<Vec<DVec2>> = profile
+    let outer_box = BoundingBox::of(&outer);
+    let holes: Vec<(Vec<DVec2>, BoundingBox)> = profile
         .holes
         .iter()
-        .map(|h| h.sample(LAYOUT_STEPS_PER_TURN))
+        .map(|h| {
+            let pts = h.sample(LAYOUT_STEPS_PER_TURN);
+            let bb = BoundingBox::of(&pts);
+            (pts, bb)
+        })
         .collect();
-    for (i, h) in holes.iter().enumerate() {
+    for (i, (h, h_box)) in holes.iter().enumerate() {
+        if !outer_box.overlaps(h_box) {
+            return Err(KernelError::HoleOutsideOuter);
+        }
         if polylines_touch(&outer, h) {
             return Err(KernelError::ProfileLoopsIntersect);
         }
         if !point_in_polygon(h[0], &outer) {
             return Err(KernelError::HoleOutsideOuter);
         }
-        for other in &holes[i + 1..] {
+        for (other, other_box) in &holes[i + 1..] {
+            if !h_box.overlaps(other_box) {
+                continue;
+            }
             if polylines_touch(h, other) {
                 return Err(KernelError::ProfileLoopsIntersect);
+            }
+            // Ohne Berührung liegt entweder eine Schleife ganz in der anderen oder keine.
+            if point_in_polygon(h[0], other) || point_in_polygon(other[0], h) {
+                return Err(KernelError::NestedHoles);
             }
         }
     }
     Ok(())
+}
+
+/// Achsparalleles Hüllrechteck eines Linienzugs.
+#[derive(Clone, Copy, Debug)]
+struct BoundingBox {
+    min: DVec2,
+    max: DVec2,
+}
+
+impl BoundingBox {
+    fn of(pts: &[DVec2]) -> BoundingBox {
+        pts.iter().fold(
+            BoundingBox {
+                min: DVec2::splat(f64::INFINITY),
+                max: DVec2::splat(f64::NEG_INFINITY),
+            },
+            |bb, p| BoundingBox {
+                min: bb.min.min(*p),
+                max: bb.max.max(*p),
+            },
+        )
+    }
+
+    /// Überlappen oder berühren sich die Rechtecke (Rand zählt mit)?
+    fn overlaps(&self, other: &BoundingBox) -> bool {
+        self.min.x <= other.max.x
+            && other.min.x <= self.max.x
+            && self.min.y <= other.max.y
+            && other.min.y <= self.max.y
+    }
 }
 
 /// Segmente eines geschlossen betrachteten Linienzugs (letzter Punkt zurück zum ersten).

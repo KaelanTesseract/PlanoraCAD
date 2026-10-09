@@ -26,4 +26,6 @@ pub enum KernelError {
     HoleOutsideOuter,
     #[error("Zwei Schleifen des Profils schneiden oder berühren sich")]
     ProfileLoopsIntersect,
+    #[error("Ein Loch liegt innerhalb eines anderen Lochs")]
+    NestedHoles,
 }

@@ -169,3 +169,39 @@ fn facade_reports_kinds_and_counts_without_indexing() {
     assert_eq!(CurveKind::Circle.label(), "Kreis");
     let _ = (TAU, Tolerance::default());
 }
+
+#[test]
+fn nested_holes_are_rejected_disjoint_holes_are_fine() {
+    let outer = rect_loop((0.0, 0.0), (20.0, 20.0));
+    let nested = Profile {
+        outer: outer.clone(),
+        holes: vec![
+            rect_loop((2.0, 2.0), (12.0, 12.0)),
+            rect_loop((4.0, 4.0), (6.0, 6.0)),
+        ],
+    };
+    assert_eq!(
+        k().extrude(&nested, &Frame::WORLD, 1.0).unwrap_err(),
+        KernelError::NestedHoles
+    );
+    let nested_reverse_order = Profile {
+        outer: outer.clone(),
+        holes: vec![
+            rect_loop((4.0, 4.0), (6.0, 6.0)),
+            rect_loop((2.0, 2.0), (12.0, 12.0)),
+        ],
+    };
+    assert_eq!(
+        k().extrude(&nested_reverse_order, &Frame::WORLD, 1.0)
+            .unwrap_err(),
+        KernelError::NestedHoles
+    );
+    let disjoint = Profile {
+        outer,
+        holes: vec![
+            rect_loop((2.0, 2.0), (6.0, 6.0)),
+            rect_loop((10.0, 10.0), (14.0, 14.0)),
+        ],
+    };
+    assert!(k().extrude(&disjoint, &Frame::WORLD, 1.0).is_ok());
+}
