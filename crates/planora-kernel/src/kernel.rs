@@ -1,3 +1,4 @@
+use crate::boolean::{BoolOp, BooleanError};
 use crate::error::KernelError;
 use crate::extrude::extrude;
 use crate::primitives;
@@ -17,6 +18,7 @@ pub trait Kernel {
     fn revolve(&self, chain: &ProfileLoop, frame: &Frame) -> Result<Solid, KernelError>;
     fn transform(&self, solid: &Solid, matrix: &DMat4) -> Result<Solid, KernelError>;
     fn validate(&self, solid: &Solid) -> Result<ValidationReport, ValidationError>;
+    fn boolean(&self, a: &Solid, b: &Solid, op: BoolOp) -> Result<Solid, BooleanError>;
 }
 
 /// Kernel mit analytischen Flächen (Ebene, Zylinder, Kegel, Kugel, Torus).
@@ -56,5 +58,9 @@ impl Kernel for AnalyticKernel {
 
     fn validate(&self, solid: &Solid) -> Result<ValidationReport, ValidationError> {
         validate(solid)
+    }
+
+    fn boolean(&self, a: &Solid, b: &Solid, op: BoolOp) -> Result<Solid, BooleanError> {
+        crate::boolean::boolean(a, b, op, &self.tolerance)
     }
 }

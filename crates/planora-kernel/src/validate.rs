@@ -1,5 +1,6 @@
 use crate::geometry::Surface;
-use crate::topology::Solid;
+use crate::ids::Id;
+use crate::topology::{Edge, Face, Solid, Vertex};
 use std::collections::HashSet;
 use thiserror::Error;
 
@@ -17,6 +18,8 @@ pub enum ValidationError {
     MissingPatch(usize),
     #[error("Die Euler-Poincaré-Formel liefert kein ganzzahliges Geschlecht (V-E+F-R = {0})")]
     InvalidEulerCharacteristic(i64),
+    #[error("Die Fläche {0} gehört nicht zu genau einer Schale")]
+    ShellMembership(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,23 +75,57 @@ pub fn validate(solid: &Solid) -> Result<ValidationReport, ValidationError> {
         }
     }
 
-    let used: HashSet<_> = solid
-        .edges
-        .iter()
-        .flat_map(|(_, e)| [e.start, e.end])
-        .collect();
-    let characteristic =
-        used.len() as i64 - n_edges as i64 + solid.faces.len() as i64 - inner_loops as i64;
-    let twice_genus = 2 - characteristic;
-    if twice_genus < 0 || twice_genus % 2 != 0 {
-        return Err(ValidationError::InvalidEulerCharacteristic(characteristic));
+    // Euler-Poincaré je Schale: V − E + F − R = 2 − 2g (Henkel g); ohne Schalen gilt das Solid
+    // als eine Schale.
+    let shell_faces: Vec<Vec<Id<Face>>> = if solid.shells.is_empty() {
+        vec![solid.faces.iter().map(|(id, _)| id).collect()]
+    } else {
+        solid.shells.iter().map(|s| s.faces.clone()).collect()
+    };
+    // Jede Fläche gehört zu genau einer Schale.
+    let mut membership = vec![0usize; solid.faces.len()];
+    for &fid in shell_faces.iter().flatten() {
+        match membership.get_mut(fid.index()) {
+            Some(m) => *m += 1,
+            None => return Err(ValidationError::ShellMembership(fid.index())),
+        }
+    }
+    if let Some(f) = membership.iter().position(|&m| m != 1) {
+        return Err(ValidationError::ShellMembership(f));
+    }
+    let mut total_genus = 0usize;
+    let mut used_all: HashSet<Id<Vertex>> = HashSet::new();
+    for faces in &shell_faces {
+        let mut edges: HashSet<Id<Edge>> = HashSet::new();
+        let mut rings = 0usize;
+        for &fid in faces {
+            let face = &solid.faces[fid];
+            rings += face.inner.len();
+            for lp in std::iter::once(&face.outer).chain(face.inner.iter()) {
+                for he in &lp.half_edges {
+                    edges.insert(he.edge);
+                }
+            }
+        }
+        let verts: HashSet<Id<Vertex>> = edges
+            .iter()
+            .flat_map(|&e| [solid.edges[e].start, solid.edges[e].end])
+            .collect();
+        used_all.extend(verts.iter().copied());
+        let characteristic =
+            verts.len() as i64 - edges.len() as i64 + faces.len() as i64 - rings as i64;
+        let twice_genus = 2 - characteristic;
+        if twice_genus < 0 || twice_genus % 2 != 0 {
+            return Err(ValidationError::InvalidEulerCharacteristic(characteristic));
+        }
+        total_genus += (twice_genus / 2) as usize;
     }
 
     Ok(ValidationReport {
-        vertices: used.len(),
+        vertices: used_all.len(),
         edges: n_edges,
         faces: solid.faces.len(),
         inner_loops,
-        genus: (twice_genus / 2) as usize,
+        genus: total_genus,
     })
 }
