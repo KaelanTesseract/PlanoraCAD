@@ -14,6 +14,7 @@
 //! Seiten eines Nahtstücks, bleibt die Naht als Kante erhalten.
 
 use super::error::BooleanError;
+use super::roots::seg_intersections;
 use super::seg::{Seg, sample_count};
 use super::uv::{FaceGeom, loop_points, oriented_area, points_to_uv, winding};
 use crate::geometry::Surface;
@@ -101,21 +102,30 @@ fn seam_crossings(surface: &Surface, s: &Seg, seam: &Seg, tol: &Tolerance) -> Ve
     let n = sample_count(s.t0, s.t1, 720, 64);
     let mut out = Vec::new();
     let mut push = |p: DVec3| {
-        if seam.closest(p).1 <= tol.linear * 4.0 {
+        if seam.closest(p).1 <= tol.linear {
             out.push(p);
         }
     };
-    let gs: Vec<f64> = (0..=n).map(|i| g(i as f64 / n as f64)).collect();
-    for (i, gi) in gs.iter().enumerate() {
-        if gi.abs() < 1e-12 {
-            push(s.at(i as f64 / n as f64));
+    let fs: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+    let gs: Vec<f64> = fs.iter().map(|f| g(*f)).collect();
+    // Stützstellen, die (räumlich) auf der Naht liegen: Abschnitte, in denen der Schnitt längs der
+    // Naht verläuft, sind keine Kreuzungen (ihre Enden sind Kurvenenden oder Pole und damit
+    // bereits Knoten).
+    let on: Vec<bool> = fs
+        .iter()
+        .map(|f| seam.closest(s.at(*f)).1 <= tol.linear * 4.0)
+        .collect();
+    for i in 0..=n {
+        let along = (i > 0 && on[i - 1]) || (i < n && on[i + 1]);
+        if gs[i].abs() < 1e-12 && !along {
+            push(s.at(fs[i]));
         }
     }
     for i in 0..n {
         let (g0, g1) = (gs[i], gs[i + 1]);
-        // echter Vorzeichenwechsel, nicht der Sprung bei ±π
-        if g0 * g1 < 0.0 && (g0 - g1).abs() < PI {
-            let (mut lo, mut hi) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+        // echter Vorzeichenwechsel, nicht der Sprung bei ±π und nicht Rauschen längs der Naht
+        if g0 * g1 < 0.0 && (g0 - g1).abs() < PI && !(on[i] && on[i + 1]) {
+            let (mut lo, mut hi) = (fs[i], fs[i + 1]);
             let mut glo = g0;
             for _ in 0..80 {
                 let mid = 0.5 * (lo + hi);
@@ -131,6 +141,15 @@ fn seam_crossings(surface: &Surface, s: &Seg, seam: &Seg, tol: &Tolerance) -> Ve
         }
     }
     out
+}
+
+/// Liegt das Stück ganz auf einer Naht?
+fn on_seam(seams: &[Seg], s: &Seg, tol: &Tolerance) -> bool {
+    seams.iter().any(|m| {
+        [s.start(), s.at(0.5), s.end()]
+            .iter()
+            .all(|p| m.closest(*p).1 <= tol.linear * 4.0)
+    })
 }
 
 fn node_of(nodes: &mut Vec<DVec3>, p: DVec3, tol: &Tolerance) -> usize {
@@ -218,9 +237,10 @@ pub fn split_face(
         .flat_map(|s| [s.start(), s.end()])
         .collect();
     // Schnitte, die die Naht kreuzen, bekommen dort einen Knoten (Naht und Schnitt werden geteilt).
-    for seam in seam_segments(face, &boundary, tol) {
+    let seams = seam_segments(face, &boundary, tol);
+    for seam in &seams {
         for s in sections {
-            all_pts.extend(seam_crossings(&face.surface, s, &seam, tol));
+            all_pts.extend(seam_crossings(&face.surface, s, seam, tol));
         }
     }
     let degenerate = |s: &Seg| {
@@ -236,13 +256,40 @@ pub fn split_face(
         .filter(|s| !degenerate(s))
         .collect();
 
-    // doppelte Schnittsegmente und solche, die mit einem Randstück zusammenfallen, entfallen
+    // Doppelte Schnittsegmente und solche, die mit einem Randstück zusammenfallen, entfallen.
+    // Fällt ein Schnitt mit einem Nahtstück zusammen, ist die Naht dort ein echter Schnitt: Das
+    // Nahtstück wird markiert und später nicht über die Naht hinweg zusammengeführt.
     let mut unique: Vec<Seg> = Vec::new();
+    let mut cut_seam: Vec<bool> = vec![false; boundary.len()];
     for s in secs {
-        if !unique.iter().any(|u| same_piece(u, &s, tol))
-            && !boundary.iter().any(|b| same_piece(b, &s, tol))
-        {
+        let mut on_boundary = false;
+        for (bi, b) in boundary.iter().enumerate() {
+            if same_piece(b, &s, tol) {
+                on_boundary = true;
+                cut_seam[bi] = true;
+            }
+        }
+        if !on_boundary && !unique.iter().any(|u| same_piece(u, &s, tol)) {
             unique.push(s);
+        }
+    }
+    // Zusammenführbar sind nur Nahtstücke ohne Schnitt (gewöhnliche Randstücke nie).
+    let mergeable: Vec<bool> = boundary
+        .iter()
+        .zip(&cut_seam)
+        .map(|(b, &cut)| !cut && on_seam(&seams, b, tol))
+        .collect();
+
+    // Schnitte, die sich im Inneren kreuzen, hätte der Aufrufer teilen müssen.
+    for (i, a) in unique.iter().enumerate() {
+        for b in &unique[i + 1..] {
+            let inner = |f: f64| f > 1e-6 && f < 1.0 - 1e-6;
+            if seg_intersections(a, b, tol)
+                .iter()
+                .any(|&(fa, fb)| inner(fa) && inner(fb))
+            {
+                return Err(BooleanError::AmbiguousContact);
+            }
         }
     }
 
@@ -353,7 +400,7 @@ pub fn split_face(
     let nb = boundary.len();
     for i in 0..nb {
         for j in (i + 1)..nb {
-            if removed[i] || removed[j] {
+            if removed[i] || removed[j] || !mergeable[i] || !mergeable[j] {
                 continue;
             }
             let (a, b) = (&hes[i], &hes[j]);

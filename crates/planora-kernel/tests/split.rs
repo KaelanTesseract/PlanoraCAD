@@ -292,3 +292,172 @@ fn a_plane_through_the_cone_axis_splits_the_cone_in_two() {
         close(a, PI * 6.0, 0.01);
     }
 }
+
+// --- Nachbesserung Runde 1: Schnitte auf der Naht, gegenläufige Flächen, Kreuzungen ---
+
+fn cylinder_wall() -> FaceGeom {
+    let s = k().make_cylinder(5.0, 10.0).unwrap();
+    find_face(&s, |f| matches!(f.surface, Surface::Cylinder { .. }))
+}
+
+/// Ebene durch die Achse, die die Naht enthält: Die Mantellinie bei u = 0 fällt mit der Naht
+/// zusammen und ist ein echter Schnitt. Zwei Hälften mit je π·10.
+#[test]
+fn a_cut_on_the_cylinder_seam_is_a_real_cut() {
+    let g = cylinder_wall();
+    let secs = [
+        line(DVec3::new(5.0, 0.0, 0.0), DVec3::Z, 10.0),
+        line(DVec3::new(-5.0, 0.0, 0.0), DVec3::Z, 10.0),
+    ];
+    let r = split_face(&g, &secs, &tol()).unwrap();
+    assert_eq!(r.len(), 2);
+    for a in sorted_areas(&g, &r) {
+        close(a, PI * 10.0, 0.01);
+    }
+}
+
+#[test]
+fn a_cut_on_the_cone_seam_is_a_real_cut() {
+    let s = k().make_cone(3.0, 6.0).unwrap();
+    let g = find_face(&s, |f| matches!(f.surface, Surface::Cone { .. }));
+    let apex = DVec3::new(0.0, 0.0, 6.0);
+    let generator = |p: DVec3| line(p, apex - p, (apex - p).length());
+    let secs = [
+        generator(DVec3::new(3.0, 0.0, 0.0)),
+        generator(DVec3::new(-3.0, 0.0, 0.0)),
+    ];
+    let r = split_face(&g, &secs, &tol()).unwrap();
+    assert_eq!(r.len(), 2);
+    for a in sorted_areas(&g, &r) {
+        close(a, PI * 6.0, 0.01);
+    }
+}
+
+/// Großkreis in der xz-Ebene: eine Hälfte liegt auf der Nahtmeridiane.
+#[test]
+fn a_great_circle_containing_the_sphere_seam_splits_the_sphere_in_two() {
+    let s = k().make_sphere(5.0).unwrap();
+    let g = face_geom(&s, Id::<Face>::from_index(0));
+    let f = Frame::from_origin_normal(DVec3::ZERO, DVec3::Y);
+    let circle = Seg::new(
+        Curve::Circle {
+            frame: f,
+            radius: 5.0,
+        },
+        0.0,
+        TAU,
+    );
+    let r = split_face(&g, &[circle], &tol()).unwrap();
+    assert_eq!(r.len(), 2);
+    for a in sorted_areas(&g, &r) {
+        close(a, PI * PI, 0.02);
+    }
+}
+
+/// Mantel einer Zylinderbohrung (`same_sense == false`), geteilt durch einen Kreis und eine am
+/// Kreis vorgeteilte Mantellinie: positive Flächen 2π·3·2 bzw. 2π·3·3 im Parameterraum (u-Breite 2π).
+#[test]
+fn a_hole_wall_with_opposite_sense_is_split_with_positive_areas() {
+    let profile = Profile {
+        outer: ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(20.0, 20.0)),
+        holes: vec![ProfileLoop::circle(DVec2::new(10.0, 10.0), 3.0)],
+    };
+    let s = k().extrude(&profile, &Frame::WORLD, 5.0).unwrap();
+    let g = find_face(&s, |f| matches!(f.surface, Surface::Cylinder { .. }));
+    assert!(!g.same_sense);
+    let f = Frame::from_origin_normal(DVec3::new(10.0, 10.0, 2.0), DVec3::Z);
+    let secs = [
+        Seg::new(
+            Curve::Circle {
+                frame: f,
+                radius: 3.0,
+            },
+            0.0,
+            TAU,
+        ),
+        line(DVec3::new(7.0, 10.0, 0.0), DVec3::Z, 2.0),
+        line(DVec3::new(7.0, 10.0, 2.0), DVec3::Z, 3.0),
+    ];
+    let r = split_face(&g, &secs, &tol()).unwrap();
+    assert_eq!(r.len(), 2);
+    let a = sorted_areas(&g, &r);
+    assert!(a.iter().all(|x| *x > 0.0));
+    close(a[0], TAU * 2.0, 0.01);
+    close(a[1], TAU * 3.0, 0.01);
+}
+
+/// Kreis bei z = 4 plus Mantellinie bei u = π (am Kreis vorgeteilt): Jedes Band wird über die Naht
+/// zu einem Stück zusammengeführt; die Schleife enthält die Mantellinie zweimal, kein Nahtstück.
+#[test]
+fn bands_cut_by_an_axial_line_are_merged_across_the_seam() {
+    let g = cylinder_wall();
+    let f = Frame::from_origin_normal(DVec3::new(0.0, 0.0, 4.0), DVec3::Z);
+    let secs = [
+        Seg::new(
+            Curve::Circle {
+                frame: f,
+                radius: 5.0,
+            },
+            0.0,
+            TAU,
+        ),
+        line(DVec3::new(-5.0, 0.0, 0.0), DVec3::Z, 4.0),
+        line(DVec3::new(-5.0, 0.0, 4.0), DVec3::Z, 6.0),
+    ];
+    let r = split_face(&g, &secs, &tol()).unwrap();
+    assert_eq!(r.len(), 2);
+    let a = sorted_areas(&g, &r);
+    close(a[0], TAU * 4.0, 0.01);
+    close(a[1], TAU * 6.0, 0.01);
+    for reg in &r {
+        assert!(reg.holes.is_empty());
+        let lines: Vec<DVec3> = reg
+            .outer
+            .iter()
+            .filter(|s| matches!(s.curve, Curve::Line { .. }))
+            .map(|s| s.at(0.5))
+            .collect();
+        assert_eq!(
+            lines.iter().filter(|p| p.x < -4.0).count(),
+            2,
+            "Mantellinie zweimal"
+        );
+        assert_eq!(
+            lines.iter().filter(|p| p.x > 4.0).count(),
+            0,
+            "kein Nahtstück"
+        );
+        let poly = points_to_uv(&g.surface, g.same_sense, &loop_points(&reg.outer));
+        let (first, last) = (poly[0], *poly.last().unwrap());
+        assert!((first.x - last.x).abs() < 0.2, "Polygon geschlossen");
+    }
+}
+
+/// Ein Schnitt auf einem gewöhnlichen Randstück einer ebenen Fläche entfällt wie bisher.
+#[test]
+fn a_section_on_an_ordinary_boundary_edge_is_dropped() {
+    let s = k().make_box(DVec3::new(10.0, 10.0, 10.0)).unwrap();
+    let g = top_face(&s, 10.0);
+    let on_edge = line(DVec3::new(0.0, 0.0, 10.0), DVec3::X, 10.0);
+    let r = split_face(&g, std::slice::from_ref(&on_edge), &tol()).unwrap();
+    assert_eq!(r.len(), 1);
+    close(region_area(&g, &r[0]), 100.0, 1e-9);
+    let cut = line(DVec3::new(4.0, 0.0, 10.0), DVec3::Y, 10.0);
+    let r = split_face(&g, &[on_edge, cut], &tol()).unwrap();
+    assert_eq!(r.len(), 2);
+    let a = sorted_areas(&g, &r);
+    close(a[0], 40.0, 1e-6);
+    close(a[1], 60.0, 1e-6);
+}
+
+/// Schnitte, die sich im Inneren kreuzen (nicht vorgeteilt), sind ein Fehler.
+#[test]
+fn sections_crossing_in_their_interiors_are_an_error() {
+    let s = k().make_box(DVec3::new(10.0, 10.0, 10.0)).unwrap();
+    let g = top_face(&s, 10.0);
+    let secs = [
+        line(DVec3::new(5.0, 0.0, 10.0), DVec3::Y, 10.0),
+        line(DVec3::new(0.0, 5.0, 10.0), DVec3::X, 10.0),
+    ];
+    assert!(split_face(&g, &secs, &tol()).is_err());
+}
