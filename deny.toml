@@ -3,6 +3,9 @@ all-features = true
 
 [advisories]
 version = 2
+ignore = [
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser: Hinweis auf fehlende Pflege, keine Sicherheitslücke. Wird nur auf dem Linux/Wayland-Pfad gezogen (winit 0.30 -> sctk-adwaita 0.10 -> ab_glyph -> ttf-parser) und unter Windows nicht gebaut. Erneut prüfen, sobald winit 0.31 stabil und übernommen ist (nutzt sctk-adwaita >= 0.12, das skrifa verwenden kann). / Unmaintained notice, not a vulnerability; only on the Linux/Wayland path, not built on Windows." },
+]
 
 [licenses]
 version = 2

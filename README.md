@@ -20,3 +20,6 @@ Unter Linux werden zusätzlich die System-Bibliotheken aus `.github/workflows/ci
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
     cargo deny check
+
+## Drittanbieter
+- Schrift: Roboto 2.138, Apache-2.0 (siehe `crates/planora-app/assets/fonts/`).

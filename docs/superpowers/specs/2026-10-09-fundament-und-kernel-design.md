@@ -29,7 +29,7 @@ Diese Spec deckt nur 1 und 2 ab. Jedes weitere Teilprojekt bekommt eigene Spec, 
 
 - **Sprache:** reines Rust, keine C/C++-Abhängigkeit (kein OpenCascade).
 - **Kernel:** eigener B-Rep-Kernel mit bewährten Bausteinen (`glam` oder `nalgebra`, `robust`, `earcutr`), nicht `truck`. Dahinter liegt eine eigene Fassade, damit Oberfläche und Kernel entkoppelt bleiben.
-- **GUI:** `egui` + `wgpu`, mit Docking (`egui_dock`), eigenem Theme, eigener Schrift und eigenen Icons.
+- **GUI:** `egui` + `wgpu`, mit Docking (`egui_tiles`), eigenem Theme, eigener Schrift und eigenen Icons.
 - **Lizenz des Projekts:** GPL-3.0. Abhängigkeiten müssen GPL-3-kompatibel sein (MIT, Apache-2.0, ISC, BSD). Nicht erlaubt: GPL-2-only, proprietär, source-available, Code ohne klare Lizenz.
 - **Lizenzprüfung ist Pflicht:** jede neue Abhängigkeit und jedes übernommene Asset wird vorab geprüft; `cargo-deny` erzwingt das in der CI.
 - **Autodesk-Abgrenzung:** kein Autodesk-Code, keine Autodesk-Icons oder -Texte, kein Autodesk-/Fusion-Branding, kein Reverse-Engineering von `.f3d`. Offene Formate (STEP, STL, 3MF) sind erlaubt. Die Oberfläche bekommt eigene Gestaltung.
@@ -102,7 +102,7 @@ Die Oberfläche spricht nur mit einer kleinen Schnittstelle (`Kernel`-Trait bzw.
 
 ## 7. Oberfläche (`planora-app`)
 
-- Dunkles Theme als Standard, helles zuschaltbar, mit eigenen Farben, Abständen und Rundungen. Die Icons sind **selbst gezeichnete Vektorformen** im Code (keine Fremdlizenz). Als Schrift dienen vorerst die in `egui` mitgelieferten Schriften (deren Lizenzen `cargo-deny` und die manuelle Prüfung beim Einrichten erfassen); eine eigene Schrift (z. B. Inter) kommt erst nach Lizenzprüfung.
+- Dunkles Theme als Standard, helles zuschaltbar, mit eigenen Farben, Abständen und Rundungen. Die Icons sind **selbst gezeichnete Vektorformen** im Code (keine Fremdlizenz). Als Schrift dient Roboto 2.138 (Apache-2.0, GPL-3-kompatibel), unverändert mitgeliefert unter `crates/planora-app/assets/fonts/`; die in `egui` eingebauten Standardschriften sind abgeschaltet.
 - Docking-Layout: Browser links, Eigenschaften rechts, Viewport in der Mitte.
 - Menü „Erzeugen": Quader, Zylinder, Kugel sowie ein einfacher Extrusions-/Rotationsdialog mit festen Beispielprofilen (echte Skizzen folgen in Teilprojekt 4).
 - Der Browser zeigt die erzeugten Körper; die Eigenschaften zeigen Maße, Volumen und Schwerpunkt.
