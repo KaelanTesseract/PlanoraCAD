@@ -86,9 +86,17 @@ pub fn curve_surface_roots(
     // dasselbe Vorzeichen haben: Berührung (|g| <= tol) oder zwei Schnitte (Vorzeichen gedreht).
     // Liefert true, wenn der Bereich als Berührung behandelt wurde.
     let handle_extremum =
-        |roots: &mut Vec<Root>, lo: f64, hi: f64, ga: f64, gb: f64, seam: bool| {
+        |roots: &mut Vec<Root>, lo: f64, hi: f64, ga: f64, gb: f64, seam: bool, edge: bool| {
             let sgn = if ga + gb >= 0.0 { 1.0 } else { -1.0 };
             let (te, ge) = extremum(lo, hi, sgn);
+            // Randintervall: liegt das Extremum am Rand (g monoton), gibt es hier nichts zu tun;
+            // Randstellen innerhalb der Toleranz behandelt die Randstellenregel unten.
+            if edge
+                && ((te - lo).abs() < 1e-9 * (hi - lo).abs()
+                    || (hi - te).abs() < 1e-9 * (hi - lo).abs())
+            {
+                return false;
+            }
             if ge.abs() <= lin {
                 let mut te = te;
                 if seam {
@@ -126,10 +134,22 @@ pub fn curve_surface_roots(
     for i in 1..n {
         let (p, c, q) = (gs[i - 1], gs[i], gs[i + 1]);
         let is_ext = (c <= p && c <= q) || (c >= p && c >= q);
-        if is_ext && p * q >= 0.0 && handle_extremum(&mut roots, ts[i - 1], ts[i + 1], p, q, false)
+        if is_ext
+            && p * q >= 0.0
+            && handle_extremum(&mut roots, ts[i - 1], ts[i + 1], p, q, false, false)
         {
             skip[i - 1] = true;
             skip[i] = true;
+        }
+    }
+    // Erstes und letztes Abtastintervall einer offenen Kurve: auch dort kann ein Extremum von g
+    // liegen (Berührung oder zwei Schnitte), ohne dass eine Stützstelle es verrät.
+    if !closed {
+        for (a, b) in [(0usize, 1usize), (n - 1, n)] {
+            let (p, q) = (gs[a], gs[b]);
+            if p * q >= 0.0 && handle_extremum(&mut roots, ts[a], ts[b], p, q, false, true) {
+                skip[a] = true;
+            }
         }
     }
     // Naht einer geschlossenen Kurve: g ist periodisch, die Naht ist keine Randstelle.
@@ -141,7 +161,7 @@ pub fn curve_surface_roots(
             let lo = t0 - dir * step;
             let hi = t0 + dir * step;
             let (lo, hi) = if lo < hi { (lo, hi) } else { (hi, lo) };
-            if handle_extremum(&mut roots, lo, hi, p, q, true) {
+            if handle_extremum(&mut roots, lo, hi, p, q, true, false) {
                 skip[0] = true;
                 skip[n - 1] = true;
             }

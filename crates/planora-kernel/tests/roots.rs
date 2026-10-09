@@ -423,3 +423,34 @@ fn long_ray_finds_grazing_roots_between_samples() {
     };
     assert!(roots(curve_surface_roots(&miss, 0.0, 1000.0, &sphere, &tol())).is_empty());
 }
+
+#[test]
+fn grazing_inside_the_first_or_last_sampling_interval_is_found() {
+    let sphere = Surface::Sphere {
+        frame: Frame::WORLD,
+        radius: 1.0,
+    };
+    let off = (1.0f64 - 0.025 * 0.025).sqrt();
+    // Mitte der Kugel bei t = 0,1 (erstes Intervall) und t = 999,9 (letztes Intervall)
+    for (cx, c) in [(0.1, 0.1), (999.9, 999.9)] {
+        let line = Curve::Line {
+            origin: DVec3::new(-cx, off, 0.0),
+            dir: DVec3::X,
+        };
+        let mut r = roots(curve_surface_roots(&line, 0.0, 1000.0, &sphere, &tol()));
+        r.sort_by(|a, b| a.t.total_cmp(&b.t));
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert!(
+            (r[0].t - (c - 0.025)).abs() < 1e-6 && (r[1].t - (c + 0.025)).abs() < 1e-6,
+            "{r:?}"
+        );
+        assert!(r.iter().all(|x| !x.touching));
+        // tangential: eine Berührung
+        let tang = Curve::Line {
+            origin: DVec3::new(-cx, 1.0, 0.0),
+            dir: DVec3::X,
+        };
+        let t = single(curve_surface_roots(&tang, 0.0, 1000.0, &sphere, &tol()));
+        assert!(t.touching && (t.t - c).abs() < 1e-4, "{t:?}");
+    }
+}
