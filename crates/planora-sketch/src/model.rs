@@ -1,4 +1,4 @@
-//! Skizze: Punkte, Kurven, Zahlenvektor. Abhängigkeiten kommen in `constraint.rs`.
+//! Skizze: Punkte, Kurven, Zahlenvektor. Abhängigkeiten stehen in `constraint.rs`.
 
 use crate::error::SketchError;
 use planora_kernel::{Arena, Id};
@@ -43,6 +43,18 @@ pub enum CurveKind {
     },
 }
 
+impl CurveKind {
+    /// Alle Punkte, die die Kurve benutzt.
+    pub fn points(&self) -> Vec<PointId> {
+        match self {
+            CurveKind::Line { a, b } => vec![*a, *b],
+            CurveKind::Circle { center, .. } | CurveKind::Ellipse { center, .. } => vec![*center],
+            CurveKind::Arc { center, start, end } => vec![*center, *start, *end],
+            CurveKind::Spline { points } => points.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CurveData {
     pub kind: CurveKind,
@@ -60,6 +72,7 @@ pub struct Sketch {
     pub(crate) vars: Vec<f64>,
     pub(crate) points: Arena<PointData>,
     pub(crate) curves: Arena<CurveData>,
+    pub(crate) constraints: Arena<crate::constraint::ConstraintData>,
 }
 
 fn finite(v: f64, what: &str) -> Result<(), SketchError> {
@@ -81,6 +94,7 @@ impl Sketch {
             vars: Vec::new(),
             points: Arena::new(),
             curves: Arena::new(),
+            constraints: Arena::new(),
         }
     }
 
@@ -200,7 +214,9 @@ impl Sketch {
                 "Start und Ende dürfen nicht in der Mitte liegen".into(),
             ));
         }
-        Ok(self.push_curve(CurveKind::Arc { center, start, end }))
+        let id = self.push_curve(CurveKind::Arc { center, start, end });
+        self.push_internal(crate::constraint::ConstraintKind::ArcRadius(id));
+        Ok(id)
     }
 
     pub fn curve(&self, c: CurveId) -> Option<&CurveData> {
