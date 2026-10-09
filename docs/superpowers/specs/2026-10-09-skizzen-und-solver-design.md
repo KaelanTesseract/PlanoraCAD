@@ -49,7 +49,7 @@ Der Nutzer zeichnet auf einer Ebene eine 2D-Skizze, hält sie mit Abhängigkeite
 | Linie | Anfangs- und Endpunkt (Verweise auf Punkte) |
 | Kreis | Mittelpunkt (Punkt), Radius |
 | Bogen | Mittelpunkt, Anfangs- und Endpunkt (Punkte), Radius; Drehsinn gegen den Uhrzeigersinn |
-| Ellipse | Mittelpunkt, Brennpunkt-Richtung als Vektor `(ax, ay)` (Länge = große Halbachse), kleine Halbachse |
+| Ellipse | Mittelpunkt, Vektor der großen Halbachse `(ax, ay)` (Länge = große Halbachse, Richtung = Lage), kleine Halbachse |
 | Spline | n ≥ 2 Stützpunkte (Punkte); kubisch, Endbedingung „natürlich“, optional Anfangs-/Endtangente als Variablen |
 
 Jedes Objekt trägt ein Flag `construction`. Konstruktionsgeometrie wird gelöst und angezeigt, aber nie zu Profilen zusammengesetzt. Punkte teilen sich Variablen: Zwei Linien mit gemeinsamem Endpunkt verweisen auf denselben `Id<Point>` (das ist die feste Form von „koinzident“; die Abhängigkeit „koinzident“ gleicht zusätzlich zwei verschiedene Punkte an).
