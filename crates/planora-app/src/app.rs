@@ -34,12 +34,20 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             Pane::Browser => {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .show(ui, |ui| browser::show(ui, self.state));
+                    .show(ui, |ui| {
+                        egui::Frame::NONE
+                            .inner_margin(egui::Margin::same(8))
+                            .show(ui, |ui| browser::show(ui, self.state));
+                    });
             }
             Pane::Properties => {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .show(ui, |ui| properties::show(ui, self.state));
+                    .show(ui, |ui| {
+                        egui::Frame::NONE
+                            .inner_margin(egui::Margin::same(8))
+                            .show(ui, |ui| properties::show(ui, self.state));
+                    });
             }
         }
         UiResponse::None

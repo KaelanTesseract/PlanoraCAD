@@ -9,6 +9,9 @@ Stand: 2026-10-09. Ergebnis der Abschlussprüfung; bewusst nicht in Teilprojekt 
 ## Beobachten
 - **`ttf-parser 0.25.1`** (RUSTSEC-2026-0192, „unmaintained“, keine Sicherheitslücke) wird nur auf dem Linux/Wayland-Pfad gezogen (winit 0.30 → sctk-adwaita 0.10 → ab_glyph) und ist in `deny.toml` begründet ignoriert. Erneut prüfen, sobald winit 0.31 stabil und übernommen ist (nutzt sctk-adwaita ≥ 0.12, das `skrifa` verwenden kann); dann den Eintrag entfernen.
 
+## Bekannte Grenzen
+- Roboto 2.138 enthält die Zeichen U+23F4 ⏴ / U+23F5 ⏵ (von `egui_tiles` für die Überlauf-Pfeile der Tab-Leiste und von `egui` für Untermenü-Pfeile genutzt) und U+2192 → nicht. Heute ohne Folgen (keine Untermenüs, ein Tab je Container), würde aber als leere Kästchen erscheinen. Lösung bei Bedarf: Pfeile als Formen zeichnen oder eine Ersatzschrift ergänzen.
+
 ## Vor Teilprojekt 3 (Boolesche Operationen)
 - Arena-getaggte IDs (IDs verschiedener Körper sind heute austauschbar).
 - Validator: Kantenendpunkte gegen Eckpositionen prüfen (`curve.point(t0/t1)`).
