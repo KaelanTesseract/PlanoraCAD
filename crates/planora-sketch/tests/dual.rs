@@ -45,3 +45,18 @@ fn sqrt_at_zero_has_a_finite_gradient() {
     let neg = Dual::variable(-1e-30, 0, 1).sqrt();
     assert!(neg.v.is_finite() && neg.grad(0).is_finite());
 }
+
+#[test]
+fn sin_and_cos_carry_the_chain_rule() {
+    let x = Dual::variable(0.8, 0, 2);
+    let y = Dual::variable(-1.1, 1, 2);
+    let u = &x * &y;
+    let s = u.sin();
+    let c = u.cos();
+    assert!((s.v - (0.8_f64 * -1.1).sin()).abs() < 1e-15);
+    assert!((c.v - (0.8_f64 * -1.1).cos()).abs() < 1e-15);
+    // d sin(xy)/dx = cos(xy)·y, d cos(xy)/dy = −sin(xy)·x
+    assert!((s.grad(0) - c.v * -1.1).abs() < 1e-15);
+    assert!((c.grad(1) + s.v * 0.8).abs() < 1e-15);
+    assert_eq!(Dual::constant(1.0).sin().grad(0), 0.0);
+}

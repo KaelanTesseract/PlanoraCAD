@@ -1,10 +1,12 @@
 //! Abhängigkeiten und Maße. Jede Abhängigkeit liefert Residuen als `Dual`, also mit exakten
 //! Ableitungen nach den beteiligten Variablen.
 
+use crate::curves::{Sampled, ellipse_eval, spline_eval, spline_second_derivatives};
 use crate::dual::Dual;
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_kernel::Id;
+use planora_math::DVec2;
 use std::cell::RefCell;
 
 /// Mindestlänge für Richtungsvektoren beim Normieren (verhindert Division durch null).
@@ -39,6 +41,12 @@ pub enum ConstraintKind {
     Angle(CurveId, CurveId, f64),
     /// Intern: das Ende eines Bogens liegt auf dem Kreis durch seinen Start.
     ArcRadius(CurveId),
+    /// Länge der großen Halbachse einer Ellipse.
+    EllipseMajor(CurveId, f64),
+    /// Länge der kleinen Halbachse einer Ellipse.
+    EllipseMinor(CurveId, f64),
+    /// Winkel der großen Halbachse einer Ellipse zur x-Achse der Skizze in Radiant.
+    EllipseAngle(CurveId, f64),
 }
 
 impl ConstraintKind {
@@ -51,6 +59,9 @@ impl ConstraintKind {
                 | ConstraintKind::Radius(..)
                 | ConstraintKind::Diameter(..)
                 | ConstraintKind::Angle(..)
+                | ConstraintKind::EllipseMajor(..)
+                | ConstraintKind::EllipseMinor(..)
+                | ConstraintKind::EllipseAngle(..)
         )
     }
 
@@ -79,6 +90,9 @@ impl ConstraintKind {
             | Radius(c, _)
             | Diameter(c, _)
             | ArcRadius(c)
+            | EllipseMajor(c, _)
+            | EllipseMinor(c, _)
+            | EllipseAngle(c, _)
             | Symmetric(_, _, c)
             | Horizontal(LineOrPoints::Line(c))
             | Vertical(LineOrPoints::Line(c)) => vec![*c],
@@ -99,7 +113,9 @@ pub struct ConstraintData {
     pub driven: bool,
     pub enabled: bool,
     pub internal: bool,
-    /// Zusätzliche Variable (Index im Variablenvektor) für spätere Abhängigkeiten; vorerst immer `None`.
+    /// Zusatzvariable (Index im Variablenvektor) parametrischer Abhängigkeiten: der
+    /// Kurvenparameter `t` bei Punkt auf Spline und Tangente Linie–Ellipse/Spline. Sie wird mit
+    /// der Abhängigkeit angelegt; entfällt die Abhängigkeit, bleibt sie unbenutzt im Vektor.
     pub extra: Option<usize>,
     pub(crate) alive: bool,
 }
@@ -203,8 +219,73 @@ fn circle_of(ctx: &Ctx, c: CurveId) -> (V2, Dual) {
     }
 }
 
+/// Mittelpunkt, große Halbachse, deren (nach unten begrenzte) Länge und kleine Halbachse einer
+/// (geprüften) Ellipse.
+fn ellipse_of(ctx: &Ctx, c: CurveId) -> (V2, V2, Dual, Dual) {
+    let CurveKind::Ellipse {
+        center,
+        ax,
+        ay,
+        minor,
+    } = ctx.sk.curves[c].kind
+    else {
+        unreachable!("Typ wurde geprüft")
+    };
+    let m = ctx.pt(center);
+    let a = (ctx.var(ax), ctx.var(ay));
+    let len = norm_len(&a);
+    (m, a, len, ctx.var(minor))
+}
+
+/// Punkt und Ableitung nach `t` einer (geprüften) Ellipse oder eines Splines.
+fn param_curve(ctx: &Ctx, c: CurveId, t: &Dual) -> (V2, V2) {
+    match &ctx.sk.curves[c].kind {
+        CurveKind::Ellipse { .. } => {
+            let (m, a, len, minor) = ellipse_of(ctx, c);
+            ellipse_eval(&m, &a, &len, &minor, t)
+        }
+        CurveKind::Spline { points } => {
+            let pts: Vec<V2> = points.iter().map(|&p| ctx.pt(p)).collect();
+            let xs: Vec<Dual> = pts.iter().map(|p| p.0.clone()).collect();
+            let ys: Vec<Dual> = pts.iter().map(|p| p.1.clone()).collect();
+            let (mx, my) = (
+                spline_second_derivatives(&xs),
+                spline_second_derivatives(&ys),
+            );
+            let (x, dx) = spline_eval(&xs, &mx, t);
+            let (y, dy) = spline_eval(&ys, &my, t);
+            ((x, y), (dx, dy))
+        }
+        _ => unreachable!("Typ wurde geprüft"),
+    }
+}
+
+/// Die Zusatzvariable einer parametrischen Abhängigkeit.
+fn extra_var(ctx: &Ctx, data: &ConstraintData) -> Dual {
+    let Some(t) = data.extra else {
+        unreachable!("parametrische Abhängigkeiten werden mit Zusatzvariable angelegt")
+    };
+    ctx.var(t)
+}
+
 fn is_line_kind(k: &CurveKind) -> bool {
     matches!(k, CurveKind::Line { .. })
+}
+
+fn is_param_kind(k: &CurveKind) -> bool {
+    matches!(k, CurveKind::Ellipse { .. } | CurveKind::Spline { .. })
+}
+
+/// Bei einer Linie und einer Ellipse/einem Spline (in beliebiger Reihenfolge): `(Linie, Kurve)`.
+fn line_and_param(sk: &Sketch, a: CurveId, b: CurveId) -> Option<(CurveId, CurveId)> {
+    let (ka, kb) = (&sk.curves[a].kind, &sk.curves[b].kind);
+    if is_line_kind(ka) && is_param_kind(kb) {
+        Some((a, b))
+    } else if is_param_kind(ka) && is_line_kind(kb) {
+        Some((b, a))
+    } else {
+        None
+    }
 }
 
 /// Vorzeichenbehafteter Abstand des Punktes p von der Linie (links der Richtung positiv).
@@ -223,11 +304,26 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
         }
         PointOnCurve(p, c) => {
             let pp = ctx.pt(*p);
-            if is_line_kind(&sk.curves[*c].kind) {
-                vec![signed_distance(ctx, &pp, *c)]
-            } else {
-                let (m, r) = circle_of(ctx, *c);
-                vec![length(&sub2(&pp, &m)) - r]
+            match &sk.curves[*c].kind {
+                CurveKind::Line { .. } => vec![signed_distance(ctx, &pp, *c)],
+                CurveKind::Ellipse { .. } => {
+                    // implizit: (√((x'/|a|)² + (y'/m)²) − 1)·(|a| + m)/2 in Achskoordinaten
+                    let (m, a, len, minor) = ellipse_of(ctx, *c);
+                    let v = sub2(&pp, &m);
+                    let x = dot(&v, &a) / &len / &len;
+                    let y = cross(&a, &v) / &len / &minor;
+                    let r = (&x * &x + &y * &y).sqrt();
+                    vec![(r - 1.0) * (&len + &minor) * 0.5]
+                }
+                CurveKind::Spline { .. } => {
+                    let t = extra_var(ctx, data);
+                    let (q, _) = param_curve(ctx, *c, &t);
+                    vec![&q.0 - &pp.0, &q.1 - &pp.1]
+                }
+                _ => {
+                    let (m, r) = circle_of(ctx, *c);
+                    vec![length(&sub2(&pp, &m)) - r]
+                }
             }
         }
         Horizontal(l) | Vertical(l) => {
@@ -254,6 +350,16 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
                 dot(&d1, &d2)
             };
             vec![num / den]
+        }
+        Tangent(c1, c2) if line_and_param(sk, *c1, *c2).is_some() => {
+            let Some((line, curve)) = line_and_param(sk, *c1, *c2) else {
+                unreachable!("im Wächter geprüft")
+            };
+            let t = extra_var(ctx, data);
+            let (q, dq) = param_curve(ctx, curve, &t);
+            let (_, d) = line_dir(ctx, line);
+            let den = norm_len(&dq) * norm_len(&d);
+            vec![signed_distance(ctx, &q, line), cross(&dq, &d) / den]
         }
         Tangent(c1, c2) => {
             let s = f64::from(data.branch);
@@ -326,6 +432,16 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             };
             let pc = ctx.pt(center);
             vec![length(&sub2(&ctx.pt(end), &pc)) - length(&sub2(&ctx.pt(start), &pc))]
+        }
+        EllipseMajor(c, v) => {
+            let (_, a, _, _) = ellipse_of(ctx, *c);
+            vec![length(&a) - *v]
+        }
+        EllipseMinor(c, v) => vec![ellipse_of(ctx, *c).3 - *v],
+        EllipseAngle(c, v) => {
+            let (_, a, len, _) = ellipse_of(ctx, *c);
+            let dir = (Dual::constant(v.cos()), Dual::constant(v.sin()));
+            vec![cross(&a, &dir) / len]
         }
     }
 }
@@ -437,7 +553,10 @@ impl Sketch {
             | ConstraintKind::DistancePointLine(_, _, x)
             | ConstraintKind::Angle(_, _, x)
             | ConstraintKind::Radius(_, x)
-            | ConstraintKind::Diameter(_, x) => *x = v,
+            | ConstraintKind::Diameter(_, x)
+            | ConstraintKind::EllipseMajor(_, x)
+            | ConstraintKind::EllipseMinor(_, x)
+            | ConstraintKind::EllipseAngle(_, x) => *x = v,
             _ => return Err(SketchError::WrongType("Das ist kein Maß".into())),
         }
         self.check_refs(&kind)?;
@@ -462,6 +581,12 @@ impl Sketch {
             Angle(c1, c2, _) => {
                 let ((_, d1), (_, d2)) = (line_dir(&ctx, *c1), line_dir(&ctx, *c2));
                 cross(&d1, &d2).v.atan2(dot(&d1, &d2).v)
+            }
+            EllipseMajor(c, _) => length(&ellipse_of(&ctx, *c).1).v,
+            EllipseMinor(c, _) => ellipse_of(&ctx, *c).3.v,
+            EllipseAngle(c, _) => {
+                let (_, a, _, _) = ellipse_of(&ctx, *c);
+                a.1.v.atan2(a.0.v)
             }
             _ => return None,
         };
@@ -500,9 +625,6 @@ impl Sketch {
             Coincident(a, b) if a == b => {
                 degenerate("Ein Punkt kann nicht mit sich selbst zusammenfallen")
             }
-            PointOnCurve(_, c) if !(is_line(*c) || is_round(*c)) => {
-                wrong("Ein Punkt kann nur auf einer Linie, einem Kreis oder einem Bogen liegen")
-            }
             Horizontal(LineOrPoints::Line(c)) | Vertical(LineOrPoints::Line(c)) if !is_line(*c) => {
                 wrong("Das gilt nur für Linien")
             }
@@ -524,9 +646,13 @@ impl Sketch {
             Tangent(a, b)
                 if !((is_line(*a) && is_round(*b))
                     || (is_round(*a) && is_line(*b))
-                    || (is_round(*a) && is_round(*b))) =>
+                    || (is_round(*a) && is_round(*b))
+                    || line_and_param(self, *a, *b).is_some()) =>
             {
-                wrong("Tangential geht nur zwischen Linie und Kreis/Bogen oder zwei Kreisen/Bögen")
+                wrong(
+                    "Tangential geht nur zwischen Linie und Kreis/Bogen/Ellipse/Spline oder zwei \
+                     Kreisen/Bögen",
+                )
             }
             Equal(a, b) if !((is_line(*a) && is_line(*b)) || (is_round(*a) && is_round(*b))) => {
                 wrong("Gleich geht nur für zwei Linien oder zwei Kreise/Bögen")
@@ -543,6 +669,11 @@ impl Sketch {
             }
             ArcRadius(c) if !matches!(self.curves[*c].kind, CurveKind::Arc { .. }) => {
                 wrong("Das gilt nur für Bögen")
+            }
+            EllipseMajor(c, _) | EllipseMinor(c, _) | EllipseAngle(c, _)
+                if !matches!(self.curves[*c].kind, CurveKind::Ellipse { .. }) =>
+            {
+                wrong("Das gilt nur für Ellipsen")
             }
             _ => Ok(()),
         }
@@ -562,7 +693,7 @@ impl Sketch {
                     Ok(())
                 }
             }
-            Radius(_, v) | Diameter(_, v) => {
+            Radius(_, v) | Diameter(_, v) | EllipseMajor(_, v) | EllipseMinor(_, v) => {
                 finite(*v)?;
                 if *v <= self.tolerance().linear {
                     Err(SketchError::Degenerate(
@@ -572,7 +703,7 @@ impl Sketch {
                     Ok(())
                 }
             }
-            Angle(_, _, v) => finite(*v),
+            Angle(_, _, v) | EllipseAngle(_, v) => finite(*v),
             Fixed(_, x, y) => {
                 finite(*x)?;
                 finite(*y)
@@ -587,6 +718,7 @@ impl Sketch {
         let ctx = Ctx::collecting(self, &self.vars);
         let sign = |v: f64| if v >= 0.0 { 1 } else { -1 };
         match kind {
+            Tangent(a, b) if line_and_param(self, *a, *b).is_some() => 0,
             Tangent(a, b) => match (&self.curves[*a].kind, &self.curves[*b].kind) {
                 (CurveKind::Line { .. }, _) => {
                     sign(signed_distance(&ctx, &circle_of(&ctx, *b).0, *a).v)
@@ -614,6 +746,48 @@ impl Sketch {
         }
     }
 
+    /// Abgetastete Form einer Ellipse oder eines Splines (sonst `None`).
+    fn sampled(&self, c: CurveId) -> Option<Sampled> {
+        match &self.curves[c].kind {
+            CurveKind::Ellipse {
+                center,
+                ax,
+                ay,
+                minor,
+            } => Some(Sampled::ellipse(
+                self.pos(*center),
+                DVec2::new(self.vars[*ax], self.vars[*ay]),
+                self.vars[*minor],
+            )),
+            CurveKind::Spline { points } => {
+                let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
+                Some(Sampled::spline(&xy))
+            }
+            _ => None,
+        }
+    }
+
+    /// Startwert der Zusatzvariablen einer (geprüften) parametrischen Abhängigkeit: der
+    /// nächstgelegene Kurvenparameter. `None`, wenn die Abhängigkeit keine braucht.
+    fn extra_start(&self, kind: &ConstraintKind) -> Option<f64> {
+        match kind {
+            ConstraintKind::PointOnCurve(p, c)
+                if matches!(self.curves[*c].kind, CurveKind::Spline { .. }) =>
+            {
+                Some(self.sampled(*c)?.nearest_to_point(self.pos(*p)))
+            }
+            ConstraintKind::Tangent(a, b) => {
+                let (line, curve) = line_and_param(self, *a, *b)?;
+                let CurveKind::Line { a: la, b: lb } = self.curves[line].kind else {
+                    return None;
+                };
+                let o = self.pos(la);
+                Some(self.sampled(curve)?.tangent_to_line(o, self.pos(lb) - o))
+            }
+            _ => None,
+        }
+    }
+
     /// Legt eine Abhängigkeit an. Bei einem Fehler bleibt die Skizze unverändert.
     pub fn add_constraint(&mut self, kind: ConstraintKind) -> Result<ConstraintId, SketchError> {
         if matches!(kind, ConstraintKind::ArcRadius(_)) {
@@ -623,13 +797,15 @@ impl Sketch {
         }
         self.check_refs(&kind)?;
         let branch = self.initial_branch(&kind);
+        // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
+        let extra = self.extra_start(&kind).map(|t| self.new_var(t));
         Ok(self.constraints.push(ConstraintData {
             kind,
             branch,
             driven: false,
             enabled: true,
             internal: false,
-            extra: None,
+            extra,
             alive: true,
         }))
     }

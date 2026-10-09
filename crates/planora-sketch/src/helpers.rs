@@ -296,14 +296,18 @@ impl Sketch {
                 frame: cf,
                 radius: r,
             } => {
+                let full = (e.t1 - e.t0).abs() >= TAU - tol.angular;
                 if cf.z.cross(frame.z).length() > tol.angular {
-                    return Err(unsupported(
-                        "Der Kreis liegt nicht parallel zur Skizzenebene",
-                    ));
+                    if !full {
+                        return Err(unsupported(
+                            "Kreisbögen, die nicht parallel zur Skizzenebene liegen, werden nicht unterstützt",
+                        ));
+                    }
+                    return self.add_projected_ellipse(cf, *r, *r);
                 }
                 let center = project(cf.origin);
                 let radius = *r;
-                if (e.t1 - e.t0).abs() >= TAU - tol.angular {
+                if full {
                     self.atomically(|s| {
                         let m = s.add_fixed_construction_point(center)?;
                         let c = s.add_circle(m, radius)?;
@@ -325,8 +329,62 @@ impl Sketch {
                     })
                 }
             }
-            Curve::Ellipse { .. } => Err(unsupported("Ellipsen werden noch nicht unterstützt")),
+            Curve::Ellipse {
+                frame: cf,
+                major,
+                minor,
+            } => {
+                if (e.t1 - e.t0).abs() < TAU - tol.angular {
+                    return Err(unsupported(
+                        "Ellipsenbögen werden nicht unterstützt, nur ganze Ellipsen",
+                    ));
+                }
+                self.add_projected_ellipse(cf, *major, *minor)
+            }
         }
+    }
+
+    /// Projiziert die ganze Ellipse `cf.origin + major·cos t·cf.x + minor·sin t·cf.y` (Kreise:
+    /// `major = minor = r`) als feste Konstruktions-Ellipse in die Skizze. Die Projektion ist
+    /// `c + A·cos t + B·sin t`; ihre Hauptachsen ergeben sich durch Verschieben des Parameters
+    /// um `φ = ½·atan2(2·A·B, |A|² − |B|²)`, die längere wird die große Halbachse.
+    fn add_projected_ellipse(
+        &mut self,
+        cf: &Frame,
+        major: f64,
+        minor: f64,
+    ) -> Result<CurveId, SketchError> {
+        let frame = *self.frame();
+        let tol = *self.tolerance();
+        let center = frame.to_local(cf.origin).truncate();
+        let in_plane = |v: DVec3| DVec2::new(v.dot(frame.x), v.dot(frame.y));
+        let big_a = in_plane(cf.x) * major;
+        let big_b = in_plane(cf.y) * minor;
+        let phi =
+            0.5 * (2.0 * big_a.dot(big_b)).atan2(big_a.length_squared() - big_b.length_squared());
+        let (s, c) = phi.sin_cos();
+        let a = big_a * c + big_b * s;
+        let b = -big_a * s + big_b * c;
+        let (axis, short) = if b.length() > a.length() {
+            (b, a.length())
+        } else {
+            (a, b.length())
+        };
+        if !(axis.is_finite() && short.is_finite()) || short <= tol.linear {
+            return Err(unsupported(
+                "Die Kurve steht senkrecht zur Skizzenebene und wäre nur eine Strecke",
+            ));
+        }
+        let (len, angle) = (axis.length(), axis.y.atan2(axis.x));
+        self.atomically(|s| {
+            let m = s.add_fixed_construction_point(center)?;
+            let e = s.add_ellipse(m, axis, short)?;
+            s.curves[e].construction = true;
+            s.add_constraint(ConstraintKind::EllipseMajor(e, len))?;
+            s.add_constraint(ConstraintKind::EllipseMinor(e, short))?;
+            s.add_constraint(ConstraintKind::EllipseAngle(e, angle))?;
+            Ok(e)
+        })
     }
 
     /// Neuer Konstruktionspunkt an `xy` mit `Fixed`-Abhängigkeit.

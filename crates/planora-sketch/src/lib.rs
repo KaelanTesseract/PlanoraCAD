@@ -1,6 +1,7 @@
 //! 2D-Skizzen mit Constraint-Solver für PlanoraCAD.
 
 pub mod constraint;
+pub mod curves;
 pub mod dual;
 pub mod error;
 pub mod helpers;

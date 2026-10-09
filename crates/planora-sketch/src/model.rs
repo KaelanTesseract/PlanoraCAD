@@ -75,6 +75,9 @@ pub struct Sketch {
     pub(crate) constraints: Arena<crate::constraint::ConstraintData>,
 }
 
+/// Höchstzahl der Stützpunkte eines Splines.
+pub const MAX_SPLINE_POINTS: usize = 64;
+
 fn finite(v: f64, what: &str) -> Result<(), SketchError> {
     if v.is_finite() {
         Ok(())
@@ -217,6 +220,109 @@ impl Sketch {
         let id = self.push_curve(CurveKind::Arc { center, start, end });
         self.push_internal(crate::constraint::ConstraintKind::ArcRadius(id));
         Ok(id)
+    }
+
+    /// Ellipse um `center` mit großer Halbachse `major` (Vektor) und kleiner Halbachse `minor`
+    /// (links der großen Halbachse, siehe [`Sketch::ellipse_point`]).
+    pub fn add_ellipse(
+        &mut self,
+        center: PointId,
+        major: DVec2,
+        minor: f64,
+    ) -> Result<CurveId, SketchError> {
+        self.check_point(center)?;
+        finite(major.x, "Die große Halbachse")?;
+        finite(major.y, "Die große Halbachse")?;
+        finite(minor, "Die kleine Halbachse")?;
+        let len = major.length();
+        if len <= self.tol.linear {
+            return Err(SketchError::Degenerate(
+                "Die große Halbachse muss länger als null sein".into(),
+            ));
+        }
+        if minor <= self.tol.linear || minor > len {
+            return Err(SketchError::Degenerate(
+                "Die kleine Halbachse muss größer als null und höchstens so lang wie die große sein"
+                    .into(),
+            ));
+        }
+        let (ax, ay, mi) = (
+            self.new_var(major.x),
+            self.new_var(major.y),
+            self.new_var(minor),
+        );
+        Ok(self.push_curve(CurveKind::Ellipse {
+            center,
+            ax,
+            ay,
+            minor: mi,
+        }))
+    }
+
+    /// Natürlicher kubischer Spline durch 2 bis [`MAX_SPLINE_POINTS`] verschiedene Punkte;
+    /// Stützpunkt `i` liegt beim Parameter `t = i`.
+    pub fn add_spline(&mut self, points: &[PointId]) -> Result<CurveId, SketchError> {
+        if !(2..=MAX_SPLINE_POINTS).contains(&points.len()) {
+            return Err(SketchError::InvalidInput(format!(
+                "Ein Spline braucht 2 bis {MAX_SPLINE_POINTS} Punkte"
+            )));
+        }
+        for (i, &p) in points.iter().enumerate() {
+            self.check_point(p)?;
+            if points[..i].contains(&p) {
+                return Err(SketchError::InvalidInput(
+                    "Ein Punkt ist mehrfach ausgewählt".into(),
+                ));
+            }
+        }
+        if points
+            .windows(2)
+            .any(|w| self.pos(w[0]).distance(self.pos(w[1])) <= self.tol.linear)
+        {
+            return Err(SketchError::Degenerate(
+                "Benachbarte Punkte des Splines liegen aufeinander".into(),
+            ));
+        }
+        Ok(self.push_curve(CurveKind::Spline {
+            points: points.to_vec(),
+        }))
+    }
+
+    /// Punkt der Ellipse beim Parameter `t`: `center + a·cos t + b̂·minor·sin t` mit der großen
+    /// Halbachse `a = (ax, ay)` und `b̂ = (−ay, ax)/|a|`. `None` für andere Kurven.
+    pub fn ellipse_point(&self, c: CurveId, t: f64) -> Option<DVec2> {
+        let CurveKind::Ellipse {
+            center,
+            ax,
+            ay,
+            minor,
+        } = self.curve(c)?.kind
+        else {
+            return None;
+        };
+        let a = DVec2::new(self.vars[ax], self.vars[ay]);
+        if !t.is_finite() || a.length() == 0.0 {
+            return None;
+        }
+        Some(
+            crate::curves::Sampled::ellipse(self.pos(center), a, self.vars[minor])
+                .eval(t)
+                .0,
+        )
+    }
+
+    /// Punkt des Splines beim Parameter `t` (auf `[0, n − 1]` geklemmt). `None` für andere
+    /// Kurven oder nicht endliches `t`.
+    pub fn spline_point(&self, c: CurveId, t: f64) -> Option<DVec2> {
+        let CurveKind::Spline { points } = &self.curve(c)?.kind else {
+            return None;
+        };
+        if !t.is_finite() {
+            return None;
+        }
+        let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
+        let t = t.clamp(0.0, (xy.len() - 1) as f64);
+        Some(crate::curves::Sampled::spline(&xy).eval(t).0)
     }
 
     pub fn curve(&self, c: CurveId) -> Option<&CurveData> {

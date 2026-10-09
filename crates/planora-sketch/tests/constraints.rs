@@ -1,4 +1,4 @@
-use planora_math::{Frame, Tolerance};
+use planora_math::{DVec2, Frame, Tolerance};
 use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind as K, LineOrPoints};
 use planora_sketch::model::{CurveId, PointId, Sketch};
@@ -68,32 +68,74 @@ fn all_kinds(f: &Fixture) -> Vec<K> {
     ]
 }
 
+/// Legt `kind` an und vergleicht die Ableitungen aller Residuen nach allen lokalen Variablen
+/// (einschließlich einer Zusatzvariablen) mit zentralen Differenzenquotienten.
+fn check_jacobian(s: &mut Sketch, kind: K) {
+    let id = s.add_constraint(kind.clone()).unwrap();
+    let x0 = s.variables().to_vec();
+    let ev = s.evaluate(id, &x0).unwrap();
+    assert!(!ev.residuals.is_empty(), "{kind:?}");
+    if let Some(extra) = s.constraint(id).unwrap().extra {
+        assert!(ev.locals.contains(&extra), "{kind:?}: Zusatzvariable fehlt");
+    }
+    for (ri, r) in ev.residuals.iter().enumerate() {
+        assert!(r.v.is_finite(), "{kind:?}");
+        for (k, &var) in ev.locals.iter().enumerate() {
+            let h = 1e-6;
+            let mut xp = x0.clone();
+            xp[var] += h;
+            let mut xm = x0.clone();
+            xm[var] -= h;
+            let fp = s.evaluate(id, &xp).unwrap().residuals[ri].v;
+            let fm = s.evaluate(id, &xm).unwrap().residuals[ri].v;
+            let fd = (fp - fm) / (2.0 * h);
+            let g = r.grad(k);
+            assert!(
+                (g - fd).abs() < 1e-5 * (1.0 + fd.abs()),
+                "{kind:?} Residuum {ri} Variable {var}: {g} vs {fd}"
+            );
+        }
+    }
+}
+
 #[test]
 fn jacobians_match_finite_differences_for_every_kind() {
     let mut f = fixture();
     for kind in all_kinds(&f) {
-        let id = f.s.add_constraint(kind.clone()).unwrap();
-        let x0 = f.s.variables().to_vec();
-        let ev = f.s.evaluate(id, &x0).unwrap();
-        assert!(!ev.residuals.is_empty(), "{kind:?}");
-        for (ri, r) in ev.residuals.iter().enumerate() {
-            assert!(r.v.is_finite(), "{kind:?}");
-            for (k, &var) in ev.locals.iter().enumerate() {
-                let h = 1e-6;
-                let mut xp = x0.clone();
-                xp[var] += h;
-                let mut xm = x0.clone();
-                xm[var] -= h;
-                let fp = f.s.evaluate(id, &xp).unwrap().residuals[ri].v;
-                let fm = f.s.evaluate(id, &xm).unwrap().residuals[ri].v;
-                let fd = (fp - fm) / (2.0 * h);
-                let g = r.grad(k);
-                assert!(
-                    (g - fd).abs() < 1e-5 * (1.0 + fd.abs()),
-                    "{kind:?} Residuum {ri} Variable {var}: {g} vs {fd}"
-                );
-            }
-        }
+        check_jacobian(&mut f.s, kind);
+    }
+}
+
+#[test]
+fn jacobians_match_finite_differences_for_ellipses_and_splines() {
+    let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+    let c = s.add_point(1.0, -0.5).unwrap();
+    let e = s.add_ellipse(c, DVec2::new(4.0, 1.5), 2.0).unwrap();
+    let sp_pts: Vec<PointId> = [(0.0, 0.0), (3.0, 4.0), (7.0, 3.0), (10.0, -1.0)]
+        .iter()
+        .map(|&(x, y)| s.add_point(x, y).unwrap())
+        .collect();
+    let sp = s.add_spline(&sp_pts).unwrap();
+    let q = s.add_point(3.3, 2.1).unwrap();
+    let r = s.add_point(5.2, 5.5).unwrap();
+    let l0 = s.add_point(-6.0, 4.0).unwrap();
+    let l1 = s.add_point(6.0, 5.0).unwrap();
+    let line = s.add_line(l0, l1).unwrap();
+    let m0 = s.add_point(-2.0, 7.0).unwrap();
+    let m1 = s.add_point(12.0, 6.0).unwrap();
+    let line2 = s.add_line(m0, m1).unwrap();
+    for kind in [
+        K::EllipseMajor(e, 5.0),
+        K::EllipseMinor(e, 1.5),
+        K::EllipseAngle(e, 0.3),
+        K::PointOnCurve(q, e),
+        K::PointOnCurve(r, sp),
+        K::Tangent(line, e),
+        K::Tangent(e, line),
+        K::Tangent(line2, sp),
+        K::Tangent(sp, line2),
+    ] {
+        check_jacobian(&mut s, kind);
     }
 }
 

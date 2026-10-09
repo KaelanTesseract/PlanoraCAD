@@ -37,6 +37,24 @@ impl Dual {
             d: self.d.iter().map(|x| x / den).collect(),
         }
     }
+
+    /// Sinus; Ableitung `cos · Gradient`.
+    pub fn sin(&self) -> Dual {
+        let c = self.v.cos();
+        Dual {
+            v: self.v.sin(),
+            d: self.d.iter().map(|x| x * c).collect(),
+        }
+    }
+
+    /// Kosinus; Ableitung `−sin · Gradient`.
+    pub fn cos(&self) -> Dual {
+        let s = self.v.sin();
+        Dual {
+            v: self.v.cos(),
+            d: self.d.iter().map(|x| -x * s).collect(),
+        }
+    }
 }
 
 /// `ca·a + cb·b` im Gradienten, Wert `v`.

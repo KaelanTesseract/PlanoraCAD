@@ -1,5 +1,5 @@
 use planora_kernel::{AnalyticKernel, Kernel};
-use planora_math::{DVec2, DVec3, Frame, TAU, Tolerance};
+use planora_math::{DVec2, DVec3, Frame, PI, Tolerance};
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::{CurveKind, Sketch};
 use planora_sketch::solver::SolveStatus;
@@ -292,6 +292,8 @@ fn projected_arcs_keep_their_sense_and_tilted_circles_are_rejected() {
         v1,
         v0,
     );
+    // Seit Task 9 werden ganze schräge Kreise und ganze Ellipsen zu Ellipsen; abgelehnt
+    // werden nur noch Teilstücke davon.
     let tilted = Frame::from_origin_normal(DVec3::ZERO, DVec3::new(1.0, 0.0, 1.0));
     let e_tilted = solid.add_edge(
         Curve::Circle {
@@ -299,9 +301,9 @@ fn projected_arcs_keep_their_sense_and_tilted_circles_are_rejected() {
             radius: 1.0,
         },
         0.0,
-        TAU,
+        PI,
         v0,
-        v0,
+        v1,
     );
     let ellipse = solid.add_edge(
         Curve::Ellipse {
@@ -310,9 +312,9 @@ fn projected_arcs_keep_their_sense_and_tilted_circles_are_rejected() {
             minor: 1.0,
         },
         0.0,
-        TAU,
+        PI,
         v0,
-        v0,
+        v1,
     );
     let mut s = sketch();
     for e in [e_down, e_up] {
@@ -337,5 +339,10 @@ fn projected_arcs_keep_their_sense_and_tilted_circles_are_rejected() {
         Err(SketchError::UnknownObject)
     ));
     assert_eq!(s.points().count(), before);
-    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let rep = s.solve();
+    assert_eq!(rep.status, SolveStatus::Solved);
+    assert!(
+        rep.redundant.is_empty(),
+        "projizierte Bögen sind nicht überbestimmt: {rep:?}"
+    );
 }
