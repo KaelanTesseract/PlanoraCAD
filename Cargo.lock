@@ -2471,6 +2471,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "planora-sketch"
+version = "0.1.0"
+dependencies = [
+ "planora-kernel",
+ "planora-math",
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
