@@ -389,24 +389,42 @@ fn fixed_arch(s: &mut Sketch) -> CurveId {
     s.add_spline(&[a, m, b]).unwrap()
 }
 
+/// Kleinster Abstand von `p` zum gezeichneten Spline (Parameter in `[0, end]`).
+fn distance_to_drawn_spline(s: &Sketch, sp: CurveId, end: f64, p: DVec2) -> f64 {
+    let n = 200_000;
+    (0..=n)
+        .map(|i| {
+            s.spline_point(sp, end * i as f64 / n as f64)
+                .unwrap()
+                .distance(p)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 #[test]
-fn dragging_a_point_beyond_the_spline_end_is_not_solved() {
+fn dragging_a_point_beyond_the_spline_end_keeps_it_on_the_drawn_spline() {
     use planora_sketch::solver::Drag;
     let mut s = sketch();
     let sp = fixed_arch(&mut s);
     let q = s.add_point(9.0, 1.0).unwrap();
-    let k = s.add_constraint(K::PointOnCurve(q, sp)).unwrap();
+    s.add_constraint(K::PointOnCurve(q, sp)).unwrap();
     assert_eq!(s.solve().status, SolveStatus::Solved);
-    let before = s.variables().to_vec();
-    let rep = s
-        .drag(&[Drag {
-            point: q,
-            target: DVec2::new(20.0, 3.0),
-        }])
-        .unwrap();
-    assert_ne!(rep.status, SolveStatus::Solved, "{rep:?}");
-    assert!(rep.conflicting.contains(&k), "{rep:?}");
-    assert_eq!(s.variables(), &before[..], "Gruppe bleibt unverändert");
+    for target in [
+        DVec2::new(20.0, 3.0),
+        DVec2::new(14.0, -6.0),
+        DVec2::new(-8.0, 1.0),
+    ] {
+        let rep = s.drag(&[Drag { point: q, target }]).unwrap();
+        // gewählte Semantik: Der Punkt bleibt auf dem gezeichneten Spline (am Ende oder an
+        // seiner letzten gültigen Lage); nichts wird als Widerspruch gemeldet.
+        assert_eq!(rep.status, SolveStatus::Solved, "{target:?}: {rep:?}");
+        assert!(rep.conflicting.is_empty(), "{rep:?}");
+        let pq = s.point_xy(q).unwrap();
+        assert!(
+            distance_to_drawn_spline(&s, sp, 2.0, pq) < 1e-4,
+            "{target:?}: {pq:?}"
+        );
+    }
 }
 
 #[test]
@@ -460,8 +478,64 @@ fn minor_axis_dimension_longer_than_major_is_rejected() {
         Err(SketchError::Degenerate(_))
     ));
     let minor = s.add_constraint(K::EllipseMinor(e, 3.0)).unwrap();
-    assert!(s.set_constraint_value(major, 2.5).is_err());
+    assert!(matches!(
+        s.set_constraint_value(major, 2.5),
+        Err(SketchError::Degenerate(m)) if m.contains("zuerst die kleine Halbachse verkleinern")
+    ));
     assert!(s.set_constraint_value(minor, 4.5).is_err());
     assert!(s.set_constraint_value(major, 6.0).is_ok());
     assert_eq!(s.solve().status, SolveStatus::Solved);
+}
+
+#[test]
+fn points_at_the_exact_spline_ends_and_in_range_tangents_are_solved() {
+    for (x, y) in [(0.0, 0.0), (10.0, 0.0)] {
+        let mut s = sketch();
+        let sp = fixed_arch(&mut s);
+        let q = s.add_point(x + 0.3, y - 0.2).unwrap();
+        s.add_constraint(K::Fixed(q, x, y)).unwrap();
+        s.add_constraint(K::PointOnCurve(q, sp)).unwrap();
+        let rep = s.solve();
+        assert_eq!(rep.status, SolveStatus::Solved, "Ende ({x}, {y}): {rep:?}");
+    }
+    // waagerechte Linie durch den höchsten Punkt (5, 4) des festen Bogens
+    let mut s = sketch();
+    let sp = fixed_arch(&mut s);
+    let l0 = s.add_point(-1.0, 4.3).unwrap();
+    let l1 = s.add_point(11.0, 4.6).unwrap();
+    let line = s.add_line(l0, l1).unwrap();
+    s.add_constraint(K::Horizontal(LineOrPoints::Line(line)))
+        .unwrap();
+    s.add_constraint(K::Tangent(line, sp)).unwrap();
+    let rep = s.solve();
+    assert_eq!(rep.status, SolveStatus::Solved, "{rep:?}");
+    assert!((s.point_xy(l0).unwrap().y - 4.0).abs() < 1e-7);
+}
+
+#[test]
+fn a_point_at_the_end_of_a_very_short_end_segment_is_solved() {
+    // End-Segmente kürzer als 0,01 an beiden Enden; je ein Punkt genau auf dem Endpunkt
+    let mut s = sketch();
+    let xy = [
+        (-0.004, 0.003),
+        (0.0, 0.0),
+        (5.0, 4.0),
+        (10.0, 0.0),
+        (10.004, 0.003),
+    ];
+    let pts: Vec<_> = xy
+        .iter()
+        .map(|&(x, y)| s.add_point(x, y).unwrap())
+        .collect();
+    for (p, &(x, y)) in pts.iter().zip(&xy) {
+        s.add_constraint(K::Fixed(*p, x, y)).unwrap();
+    }
+    let sp = s.add_spline(&pts).unwrap();
+    for (x, y) in [xy[0], xy[4]] {
+        let q = s.add_point(x + 0.01, y + 0.01).unwrap();
+        s.add_constraint(K::PointOnCurve(q, sp)).unwrap();
+        s.add_constraint(K::Fixed(q, x, y)).unwrap();
+    }
+    let rep = s.solve();
+    assert_eq!(rep.status, SolveStatus::Solved, "{rep:?}");
 }

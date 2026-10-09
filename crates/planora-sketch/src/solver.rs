@@ -39,11 +39,6 @@ const STALL_REL: f64 = 1e-14;
 const FREE_COMPONENT: f64 = 1e-6;
 /// Versuche mit steigender Dämpfung innerhalb eines Schritts.
 const DAMPING_TRIES: usize = 30;
-/// Spielraum (in Parametereinheiten) beim Prüfen, ob der Spline-Parameter einer Abhängigkeit
-/// in `[0, n − 1]` liegt. Außerhalb läge die Lösung auf der Fortsetzung des End-Segments, die
-/// nicht gezeichnet wird; 1e-6 entspricht bei üblichen Segmentlängen weit unter `tol.linear`
-/// Abweichung vom Endpunkt, schließt aber echtes Hinauslaufen sicher aus.
-const SPLINE_T_TOL: f64 = 1e-6;
 
 /// Ergebnis eines Solver-Laufs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -307,18 +302,34 @@ impl Sketch {
     }
 
     /// Abhängigkeiten der Gruppe, deren Spline-Parameter in `x` außerhalb von `[0, n − 1]`
-    /// (mit Spielraum `SPLINE_T_TOL`) liegt. Eine solche Lösung gilt nicht als Lösung.
+    /// liegt (Spielraum siehe `Sketch::spline_parameter`). Dort läge die Lösung auf der nicht
+    /// gezeichneten Fortsetzung des End-Segments; sie gilt nicht als Lösung.
     fn spline_parameters_outside(&self, g: &Group, x: &[f64]) -> Vec<ConstraintId> {
         g.constraints
             .iter()
             .copied()
             .filter(|&id| {
-                self.spline_parameter(id).is_some_and(|(var, end)| {
-                    let t = x[var];
-                    !(t >= -SPLINE_T_TOL && t <= end + SPLINE_T_TOL)
-                })
+                self.spline_parameter(id, x)
+                    .is_some_and(|sp| !sp.contains(x[sp.var]))
             })
             .collect()
+    }
+
+    /// Setzt Spline-Parameter der Gruppe, die außerhalb liegen, auf das nächste Ende.
+    fn clamp_spline_parameters(&self, g: &Group, x: &mut [f64]) {
+        for &id in &g.constraints {
+            if let Some(sp) = self.spline_parameter(id, x) {
+                let t = x[sp.var];
+                if t.is_finite() {
+                    x[sp.var] = t.clamp(0.0, sp.end);
+                }
+            }
+        }
+    }
+
+    /// Konvergiert und alle Spline-Parameter im Bereich.
+    fn acceptable(&self, g: &Group, lm: &Lm, x: &[f64]) -> bool {
+        lm.converged && self.spline_parameters_outside(g, x).is_empty()
     }
 
     /// Bestimmt, welche einzelne Abhängigkeit einer nicht lösbaren Gruppe den Widerspruch
@@ -331,6 +342,11 @@ impl Sketch {
         failed: &[f64],
         tol_r: f64,
     ) -> (Vec<ConstraintId>, bool) {
+        // Erfüllt schon der Start alles (etwa beim Ziehen), ist keine Abhängigkeit schuld.
+        let at_start = self.assemble(g, col, start, &[], None);
+        if at_start.hard_inf() <= tol_r && self.spline_parameters_outside(g, start).is_empty() {
+            return (Vec::new(), false);
+        }
         let mut candidates = Vec::new();
         for &id in &g.constraints {
             if self.constraints[id].internal {
@@ -440,10 +456,17 @@ impl Sketch {
             let mut used = lm.iterations;
             if !group_soft.is_empty() {
                 // Politur: Die weichen Bedingungen liefern nur eine Näherung. Von dort aus wird
-                // ohne sie exakt nachgelöst; gelingt das nicht, wird ohne Zug vom Start gelöst.
+                // ohne sie exakt nachgelöst. Landet ein Spline-Parameter dabei auf der
+                // Fortsetzung, wird er aufs Ende gesetzt und erneut poliert. Gelingt das nicht,
+                // wird ohne Zug vom Start gelöst.
                 lm = self.levenberg_marquardt(g, &col, &mut x, &[], None, tol_r);
                 used += lm.iterations;
-                if !lm.converged {
+                if lm.converged && !self.acceptable(g, &lm, &x) {
+                    self.clamp_spline_parameters(g, &mut x);
+                    lm = self.levenberg_marquardt(g, &col, &mut x, &[], None, tol_r);
+                    used += lm.iterations;
+                }
+                if !self.acceptable(g, &lm, &x) {
                     x = start.clone();
                     lm = self.levenberg_marquardt(g, &col, &mut x, &[], None, tol_r);
                     used += lm.iterations;

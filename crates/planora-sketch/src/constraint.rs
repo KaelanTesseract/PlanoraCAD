@@ -11,6 +11,28 @@ use std::cell::RefCell;
 
 /// Mindestlänge für Richtungsvektoren beim Normieren (verhindert Division durch null).
 const MIN_LEN: f64 = 1e-9;
+/// Untergrenze des Spielraums (in Parametereinheiten), mit dem ein Spline-Parameter über
+/// `[0, n − 1]` hinausragen darf (sehr lange End-Segmente).
+const MIN_SPLINE_T_TOL: f64 = 1e-12;
+/// Obergrenze dieses Spielraums (zu einem Punkt zusammengezogene End-Segmente).
+const MAX_SPLINE_T_TOL: f64 = 1e-3;
+
+/// Bereich des Spline-Parameters einer parametrischen Abhängigkeit: Variable, Ende `n − 1` und
+/// erlaubter Überstand an beiden Enden.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SplineParameter {
+    pub var: usize,
+    pub end: f64,
+    pub slack_start: f64,
+    pub slack_end: f64,
+}
+
+impl SplineParameter {
+    /// Liegt `t` im (um den Spielraum erweiterten) Bereich? NaN liegt nie darin.
+    pub fn contains(&self, t: f64) -> bool {
+        t >= -self.slack_start && t <= self.end + self.slack_end
+    }
+}
 
 /// Eine Linie oder zwei Punkte (für waagerecht/senkrecht).
 #[derive(Clone, Debug, PartialEq)]
@@ -752,26 +774,47 @@ impl Sketch {
                 }
         });
         if violated {
-            Err(SketchError::Degenerate(
-                "Die kleine Halbachse darf nicht länger als die große sein".into(),
-            ))
+            let hint = if matches!(kind, EllipseMajor(..)) {
+                "zuerst die kleine Halbachse verkleinern"
+            } else {
+                "zuerst die große Halbachse vergrößern"
+            };
+            Err(SketchError::Degenerate(format!(
+                "Die kleine Halbachse darf nicht länger als die große sein; {hint}"
+            )))
         } else {
             Ok(())
         }
     }
 
-    /// Ende `n − 1` des Parameterbereichs, wenn die Zusatzvariable der Abhängigkeit ein
-    /// Spline-Parameter ist (Punkt auf Spline, Tangente Linie–Spline), mit dem Index der Variablen.
-    pub(crate) fn spline_parameter(&self, id: ConstraintId) -> Option<(usize, f64)> {
+    /// Bereich der Zusatzvariablen, wenn sie ein Spline-Parameter ist (Punkt auf Spline,
+    /// Tangente Linie–Spline), ausgewertet an den Punktlagen in `x`.
+    pub(crate) fn spline_parameter(&self, id: ConstraintId, x: &[f64]) -> Option<SplineParameter> {
         let data = &self.constraints[id];
-        let extra = data.extra?;
-        data.kind
+        let var = data.extra?;
+        let points = data
+            .kind
             .curves()
             .iter()
             .find_map(|&c| match &self.curves[c].kind {
-                CurveKind::Spline { points } => Some((extra, (points.len() - 1) as f64)),
+                CurveKind::Spline { points } => Some(points.clone()),
                 _ => None,
-            })
+            })?;
+        let n = points.len();
+        let at = |p: PointId| DVec2::new(x[self.points[p].x], x[self.points[p].y]);
+        // Spielraum je Ende: `tol.linear` geteilt durch die Sehnenlänge des End-Segments, also
+        // etwa `tol.linear` Weglänge auf der Fortsetzung, begrenzt auf
+        // [MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL].
+        let slack = |a: PointId, b: PointId| {
+            (self.tolerance().linear / at(a).distance(at(b)))
+                .clamp(MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL)
+        };
+        Some(SplineParameter {
+            var,
+            end: (n - 1) as f64,
+            slack_start: slack(points[0], points[1]),
+            slack_end: slack(points[n - 2], points[n - 1]),
+        })
     }
 
     /// Lage bei mehrdeutigen Abhängigkeiten, bestimmt aus der aktuellen Geometrie.
