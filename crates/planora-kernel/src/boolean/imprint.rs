@@ -15,6 +15,14 @@ use crate::geometry::{Curve, Surface};
 use crate::topology::Solid;
 use planora_math::{DVec3, TAU, Tolerance};
 
+/// Zuschlag zum Hüllquader als Anteil seiner Diagonale (deckt die Sehnenabweichung der
+/// 5°-Abtastung von Bögen ab: höchstens etwa 0,1 % des Radius).
+const BBOX_MARGIN_FRACTION: f64 = 0.01;
+/// Kleinster Parameterabstand zweier Haltepunkte, der noch ein eigenes Kurvenstück ergibt.
+const MIN_PARAM_SPAN: f64 = 1e-9;
+/// Bruchteile auf einer Randkante, die näher beieinander liegen, gelten als derselbe Teilungspunkt.
+const SAME_FRACTION: f64 = 1e-7;
+
 /// Eine Fläche samt der Schnittsegmente, die in ihrem Inneren liegen.
 #[derive(Clone, Debug)]
 pub struct FaceWork {
@@ -54,7 +62,7 @@ fn bbox(g: &FaceGeom, tol: &Tolerance) -> (DVec3, DVec3) {
         (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN)),
         |(lo, hi), p| (lo.min(*p), hi.max(*p)),
     );
-    let margin = (hi - lo).length() * 0.01 + tol.linear * 10.0;
+    let margin = (hi - lo).length() * BBOX_MARGIN_FRACTION + tol.linear * 10.0;
     (lo - DVec3::splat(margin), hi + DVec3::splat(margin))
 }
 
@@ -113,6 +121,8 @@ fn breakpoints(c: &Curve, fa: &FaceGeom, fb: &FaceGeom, tol: &Tolerance) -> Vec<
                         }
                     }
                 }
+                // Der Anfangspunkt einer geschlossenen Kante ist kein Teilungspunkt.
+                CurveSurface::Lies if e.start().distance(e.end()) <= tol.linear => {}
                 CurveSurface::Lies => {
                     add(e.start());
                     add(e.end());
@@ -139,6 +149,8 @@ fn classify(face: &Prepared, seg: &Seg, tol: &Tolerance) -> Containment {
         }
     }
     let mid = seg.at(0.5);
+    // Nahterkennung mit 4·tol wie in `split_face` (Nahtstücke werden dort so gepaart); der Test
+    // gegen echte Randstücke nutzt tol wie `point_in_face`, damit beide Urteile zusammenpassen.
     let is_seam = |s: &Seg| {
         face.seams
             .iter()
@@ -189,7 +201,7 @@ fn pieces(
     }
     intervals
         .into_iter()
-        .filter(|(a, b)| (b - a).abs() > 1e-9)
+        .filter(|(a, b)| (b - a).abs() > MIN_PARAM_SPAN)
         .map(|(a, b)| Seg::new(c.clone(), a, b))
         .filter(|seg| seg.length() > tol.linear)
         .map(|seg| {
@@ -199,20 +211,50 @@ fn pieces(
         .collect()
 }
 
+/// Ist das Stück eine geschlossene Kurve (Vollkreis/Vollellipse, Anfang = Ende)?
+fn is_closed_seg(s: &Seg, tol: &Tolerance) -> bool {
+    is_closed_curve(&s.curve) && s.start().distance(s.end()) <= tol.linear
+}
+
 /// Randstücke von `own`, die im Inneren von `target` liegen (beide auf derselben Trägerfläche).
-fn coincident_sections(own: &FaceGeom, target: &Prepared, tol: &Tolerance) -> Vec<Seg> {
+///
+/// Nähte von `own` sind keine Beschnittkanten und liefern nichts. Geschlossene Randkanten
+/// (Vollkreise) werden nur an echten Schnittpunkten geteilt, nicht an ihrem willkürlichen
+/// Anfangspunkt: so entsteht dasselbe Stück wie über den Kurvenschnitt mit der Nachbarfläche.
+fn coincident_sections(own: &Prepared, target: &Prepared, tol: &Tolerance) -> Vec<Seg> {
+    let is_seam = |e: &Seg| {
+        own.seams
+            .iter()
+            .any(|m| m.closest(e.at(0.5)).1 <= tol.linear * 4.0)
+    };
     let mut out = Vec::new();
-    for e in own.loops.iter().flatten() {
-        let mut fs = vec![0.0, 1.0];
+    for e in own.geom.loops.iter().flatten().filter(|e| !is_seam(e)) {
+        let closed = is_closed_seg(e, tol);
+        let mut fs: Vec<f64> = Vec::new();
         for t in target.geom.loops.iter().flatten() {
             for (fe, _) in seg_intersections(e, t, tol) {
-                fs.push(fe);
+                // bei geschlossenen Kanten ist 1 dasselbe wie 0
+                fs.push(if closed && fe >= 1.0 - SAME_FRACTION {
+                    0.0
+                } else {
+                    fe
+                });
             }
         }
+        if !closed {
+            fs.extend([0.0, 1.0]);
+        }
         fs.sort_by(|x, y| x.total_cmp(y));
-        fs.dedup_by(|a, b| (*a - *b).abs() < 1e-7);
-        for w in fs.windows(2) {
-            let piece = e.sub(w[0], w[1]);
+        fs.dedup_by(|a, b| (*a - *b).abs() < SAME_FRACTION);
+        let mut spans: Vec<(f64, f64)> = fs.windows(2).map(|w| (w[0], w[1])).collect();
+        if closed {
+            match (fs.first(), fs.last()) {
+                (Some(&first), Some(&last)) => spans.push((last, first + 1.0)),
+                _ => spans.push((0.0, 1.0)),
+            }
+        }
+        for (f0, f1) in spans {
+            let piece = e.sub(f0, f1);
             if piece.length() <= tol.linear {
                 continue;
             }
@@ -283,10 +325,10 @@ pub fn imprint(
                     });
                 }
                 SurfaceIntersection::Coincident => {
-                    for s in coincident_sections(gb, fa, tol) {
+                    for s in coincident_sections(fb, fa, tol) {
                         push_unique(&mut sa[i], s, tol);
                     }
-                    for s in coincident_sections(ga, fb, tol) {
+                    for s in coincident_sections(fa, fb, tol) {
                         push_unique(&mut sb[j], s, tol);
                     }
                 }

@@ -182,3 +182,42 @@ fn a_plane_through_the_cone_axis_ends_at_the_apex() {
         2
     );
 }
+
+// --- Nachbesserung Runde 1: Nähte zusammenfallender Flächen sind keine Schnitte ---
+
+fn walls(w: &[FaceWork]) -> Vec<&FaceWork> {
+    w.iter()
+        .filter(|f| !matches!(f.geom.surface, Surface::Plane { .. }))
+        .collect()
+}
+
+#[test]
+fn identical_cylinders_get_no_sections() {
+    let a = k().make_cylinder(2.0, 10.0).unwrap();
+    let (fa, fb) = imprint(&a, &a.clone(), &tol()).unwrap();
+    assert_eq!(total(&fa) + total(&fb), 0);
+}
+
+#[test]
+fn identical_spheres_get_no_sections() {
+    let a = k().make_sphere(5.0).unwrap();
+    let (fa, fb) = imprint(&a, &a.clone(), &tol()).unwrap();
+    assert_eq!(total(&fa) + total(&fb), 0);
+}
+
+/// Koaxiale Zylinder gleichen Radius, B um 90° gedreht (seine Naht liegt in A): Jede Wand bekommt
+/// genau den Randkreis der anderen, keinen Schlitz entlang der fremden Naht.
+#[test]
+fn coaxial_equal_cylinders_imprint_only_the_rim_circles() {
+    let a = k().make_cylinder(2.0, 10.0).unwrap();
+    let m = DMat4::from_translation(DVec3::new(0.0, 0.0, 5.0)) * DMat4::from_rotation_z(PI / 2.0);
+    let b = k().transform(&a, &m).unwrap();
+    let (fa, fb) = imprint(&a, &b, &tol()).unwrap();
+    for (w, z) in [(walls(&fa), 5.0), (walls(&fb), 10.0)] {
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].sections.len(), 1, "{:?}", w[0].sections);
+        let s = &w[0].sections[0];
+        assert!(matches!(s.curve, Curve::Circle { .. }));
+        assert!((s.at(0.5).z - z).abs() < 1e-6);
+    }
+}
