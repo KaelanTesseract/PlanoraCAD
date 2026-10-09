@@ -26,7 +26,7 @@ pub use uv::{
 };
 
 use crate::topology::Solid;
-use crate::validate::validate;
+use crate::validate::{ValidationError, validate};
 use planora_math::Tolerance;
 
 /// Boolesche Operation `a op b`. Das Ergebnis besteht immer den Validator; sonst ein benannter Fehler.
@@ -53,6 +53,11 @@ pub fn boolean(a: &Solid, b: &Solid, op: BoolOp, tol: &Tolerance) -> Result<Soli
         return Err(BooleanError::EmptyResult);
     }
     let solid = sew(pieces, tol)?;
-    validate(&solid).map_err(|e| BooleanError::ResultInvalid(e.to_string()))?;
+    validate(&solid).map_err(|e| match e {
+        // Eine Kante, an der mehr als zwei Flächen hängen, entsteht, wenn sich die Körper nur
+        // an einer Kante berühren (Spec-Nicht-Ziel): als Berührungsfall melden.
+        ValidationError::EdgeUseCount(_, n) if n > 2 => BooleanError::AmbiguousContact,
+        e => BooleanError::ResultInvalid(e.to_string()),
+    })?;
     Ok(solid)
 }

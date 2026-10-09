@@ -93,10 +93,39 @@ fn identical_operands() {
 fn boxes_touching_only_at_an_edge_do_not_panic() {
     let a = cube(10.0);
     let b = moved(&cube(10.0), DVec3::new(10.0, 10.0, 0.0));
-    let r = k().boolean(&a, &b, BoolOp::Union);
-    // entweder ein gültiger Körper oder ein benannter Fehler – niemals eine Panik
-    if let Ok(s) = r {
-        let _ = validate(&s);
+    for op in [BoolOp::Union, BoolOp::Difference, BoolOp::Intersection] {
+        let r = k().boolean(&a, &b, op);
+        // entweder ein gültiger Körper oder ein benannter Berührungsfehler – niemals eine Panik
+        assert!(
+            matches!(
+                r,
+                Ok(_)
+                    | Err(BooleanError::ResultInvalid(_))
+                    | Err(BooleanError::AmbiguousContact)
+                    | Err(BooleanError::EmptyResult)
+            ),
+            "{op:?}: {r:?}"
+        );
+        if let Ok(s) = r {
+            validate(&s).unwrap_or_else(|e| panic!("{op:?}: {e}"));
+        }
+    }
+}
+
+#[test]
+fn edge_touch_union_is_reported_as_contact() {
+    // Kantenberührung ohne gemeinsame Fläche (Spec-Nicht-Ziel): klarer Berührungsfehler statt
+    // „Kante N wird 4-mal verwendet“
+    let a = cube(10.0);
+    let b = moved(&cube(10.0), DVec3::new(10.0, 10.0, 0.0));
+    match k().boolean(&a, &b, BoolOp::Union) {
+        Ok(s) => {
+            validate(&s).unwrap();
+        }
+        Err(e) => {
+            assert_eq!(e, BooleanError::AmbiguousContact);
+            assert!(e.to_string().contains("Kante"), "{e}");
+        }
     }
 }
 

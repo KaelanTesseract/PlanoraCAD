@@ -11,7 +11,9 @@ pub enum BoolOp {
 pub enum BooleanError {
     #[error("Der Schnitt von {a} mit {b} wird noch nicht unterstützt")]
     UnsupportedIntersection { a: &'static str, b: &'static str },
-    #[error("Die Körper berühren sich so, dass die Toleranz keine sichere Entscheidung zulässt")]
+    #[error(
+        "Die Körper berühren sich nur an einer Kante, einer Ecke oder tangential oder liegen zu knapp beieinander; diese Lage lässt sich nicht sicher auswerten"
+    )]
     AmbiguousContact,
     #[error("Die Lage eines Flächenstücks zum anderen Körper ließ sich nicht sicher bestimmen")]
     AmbiguousClassification,
