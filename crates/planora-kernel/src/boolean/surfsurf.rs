@@ -185,8 +185,11 @@ fn plane_cone(
     if (cos.abs() - 1.0).abs() < ANG {
         let h = -dist / cos;
         let rho = radius + slope * h;
-        if rho <= tol.linear {
+        if rho < -tol.linear {
             return SurfaceIntersection::None;
+        }
+        if rho <= tol.linear {
+            return SurfaceIntersection::Touch; // Ebene durch die Kegelspitze
         }
         return SurfaceIntersection::Curves(vec![circle(cf.origin + a * h, n, rho)]);
     }
@@ -208,7 +211,11 @@ fn plane_sphere(pf: &Frame, c: DVec3, r: f64, tol: &Tolerance) -> SurfaceInterse
     if (d.abs() - r).abs() <= tol.linear {
         return SurfaceIntersection::Touch;
     }
-    SurfaceIntersection::Curves(vec![circle(c - pf.z * d, pf.z, (r * r - d * d).sqrt())])
+    SurfaceIntersection::Curves(vec![circle(
+        c - pf.z * d,
+        pf.z,
+        (r * r - d * d).max(0.0).sqrt(),
+    )])
 }
 
 fn plane_torus(
@@ -264,7 +271,11 @@ fn sphere_sphere(c1: DVec3, r1: f64, c2: DVec3, r2: f64, tol: &Tolerance) -> Sur
     }
     let n = (c2 - c1) / d;
     let x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
-    SurfaceIntersection::Curves(vec![circle(c1 + n * x, n, (r1 * r1 - x * x).sqrt())])
+    SurfaceIntersection::Curves(vec![circle(
+        c1 + n * x,
+        n,
+        (r1 * r1 - x * x).max(0.0).sqrt(),
+    )])
 }
 
 fn cylinder_cylinder_parallel(
@@ -290,7 +301,7 @@ fn cylinder_cylinder_parallel(
     }
     let e = dv / d;
     let x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
-    let h = (r1 * r1 - x * x).sqrt();
+    let h = (r1 * r1 - x * x).max(0.0).sqrt();
     let w = a.cross(e);
     let q = c1 + e * x;
     SurfaceIntersection::Curves(vec![line(q + w * h, a), line(q - w * h, a)])
@@ -323,11 +334,13 @@ enum Mer {
     Circle { rc: f64, hc: f64, r: f64 },
 }
 
-fn meridian(s: &Surface, o: DVec3, z: DVec3) -> Mer {
+/// Meridiankurve in der (ρ, h)-Halbebene bezüglich der gemeinsamen Achse `(o, z)`;
+/// `None` für Ebenen (haben keine Meridiankurve).
+fn meridian(s: &Surface, o: DVec3, z: DVec3) -> Option<Mer> {
     let f = s.frame();
     let h0 = (f.origin - o).dot(z);
     let sigma = if f.z.dot(z) >= 0.0 { 1.0 } else { -1.0 };
-    match s {
+    Some(match s {
         Surface::Cylinder { radius, .. } => Mer::Line {
             rho0: *radius,
             slope: 0.0,
@@ -346,8 +359,8 @@ fn meridian(s: &Surface, o: DVec3, z: DVec3) -> Mer {
             hc: h0,
             r: *minor,
         },
-        Surface::Plane { .. } => unreachable!("Ebenen werden vorher behandelt"),
-    }
+        Surface::Plane { .. } => return None,
+    })
 }
 
 enum MerResult {
@@ -381,22 +394,26 @@ fn mer_intersect(a: &Mer, b: &Mer, tol: &Tolerance) -> MerResult {
         }
         (Mer::Line { rho0, slope }, Mer::Circle { rc, hc, r })
         | (Mer::Circle { rc, hc, r }, Mer::Line { rho0, slope }) => {
-            let (s, k) = (*slope, rho0 - rc);
-            let qa = s * s + 1.0;
-            let qb = 2.0 * (k * s - hc);
-            let qc = k * k + hc * hc - r * r;
-            let disc = qb * qb - 4.0 * qa * qc;
-            let scale = qb * qb + 1.0;
-            if disc < -1e-12 * scale {
+            let s = *slope;
+            let len = (1.0 + s * s).sqrt();
+            // Vorzeichenbehafteter Abstand des Kreismittelpunkts von der Geraden ρ = rho0 + s·h
+            let sd = (rc - s * hc - rho0) / len;
+            let dist = sd.abs();
+            if dist > r + tol.linear {
                 return MerResult::None;
             }
-            let pt = |h: f64| (rho0 + s * h, h);
-            if disc.abs() <= 1e-12 * scale {
-                return MerResult::Points(vec![pt(-qb / (2.0 * qa))], true);
+            // Lotfußpunkt (ρ, h) und Richtung der Geraden
+            let foot = (rc - sd / len, hc + sd * s / len);
+            if (dist - r).abs() <= tol.linear {
+                return MerResult::Points(vec![foot], true);
             }
-            let sq = disc.sqrt();
+            let w = (r * r - dist * dist).max(0.0).sqrt();
+            let dir = (s / len, 1.0 / len);
             MerResult::Points(
-                vec![pt((-qb + sq) / (2.0 * qa)), pt((-qb - sq) / (2.0 * qa))],
+                vec![
+                    (foot.0 + dir.0 * w, foot.1 + dir.1 * w),
+                    (foot.0 - dir.0 * w, foot.1 - dir.1 * w),
+                ],
                 false,
             )
         }
@@ -428,7 +445,7 @@ fn mer_intersect(a: &Mer, b: &Mer, tol: &Tolerance) -> MerResult {
             let hh = (r1 * r1 - x * x).max(0.0).sqrt();
             let (ex, ey) = (dx / d, dy / d);
             let base = (c1 + ex * x, h1 + ey * x);
-            if hh <= tol.linear {
+            if (d - (r1 + r2)).abs() <= tol.linear || (d - (r1 - r2).abs()).abs() <= tol.linear {
                 return MerResult::Points(vec![base], true);
             }
             MerResult::Points(
@@ -465,7 +482,10 @@ fn revolve_pair(a: &Surface, b: &Surface, tol: &Tolerance) -> SurfaceIntersectio
         }
         (None, None) => return SurfaceIntersection::Unsupported,
     };
-    match mer_intersect(&meridian(a, o, z), &meridian(b, o, z), tol) {
+    let (Some(ma), Some(mb)) = (meridian(a, o, z), meridian(b, o, z)) else {
+        return SurfaceIntersection::Unsupported;
+    };
+    match mer_intersect(&ma, &mb, tol) {
         MerResult::None => SurfaceIntersection::None,
         MerResult::Coincident => SurfaceIntersection::Coincident,
         MerResult::Points(points, all_tangent) => {
