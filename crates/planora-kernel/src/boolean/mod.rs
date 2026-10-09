@@ -1,6 +1,7 @@
 //! Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit analytischen Flächen.
 
 mod error;
+mod imprint;
 mod roots;
 mod seg;
 mod split;
@@ -8,6 +9,7 @@ mod surfsurf;
 mod uv;
 
 pub use error::{BoolOp, BooleanError};
+pub use imprint::{FaceWork, imprint};
 pub use roots::{CurveSurface, Root, curve_surface_roots, seg_intersections};
 pub use seg::{Seg, reverse_loop};
 pub use split::{Region, split_face};

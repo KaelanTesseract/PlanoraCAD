@@ -72,7 +72,7 @@ fn split_at_points(segs: &[Seg], pts: &[DVec3], tol: &Tolerance) -> Vec<Seg> {
 }
 
 /// Nahtstücke einer periodischen Fläche: Randstücke, die die Schleife auch gegenläufig enthält.
-fn seam_segments(face: &FaceGeom, boundary: &[Seg], tol: &Tolerance) -> Vec<Seg> {
+pub(super) fn seam_segments(face: &FaceGeom, boundary: &[Seg], tol: &Tolerance) -> Vec<Seg> {
     if !face.surface.is_periodic() {
         return Vec::new();
     }
