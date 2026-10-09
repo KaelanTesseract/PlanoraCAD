@@ -20,4 +20,6 @@ pub enum SketchError {
     AmbiguousNesting,
     #[error("Dieses Profil enthält {0} und kann noch nicht zu einem Körper werden")]
     UnsupportedForSolid(String),
+    #[error("Diese Kante kann noch nicht in die Skizze kopiert werden: {0}")]
+    UnsupportedProjection(String),
 }
