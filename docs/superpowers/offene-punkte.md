@@ -1,6 +1,6 @@
-# Offene Punkte nach Teilprojekt 1+2
+# Offene Punkte nach Teilprojekt 1–3
 
-Stand: 2026-10-09. Ergebnis der Abschlussprüfung; bewusst nicht in Teilprojekt 1+2 behoben.
+Stand: 2026-10-09. Ergebnis der Abschlussprüfungen; bewusst nicht in Teilprojekt 1–3 behoben.
 
 ## Entscheidung des Projekteigners nötig
 - **Markenrecherche** für „PlanoraCAD“ (DPMA, EUIPO, WIPO, Klasse 9) vor einer Veröffentlichung.
@@ -12,12 +12,37 @@ Stand: 2026-10-09. Ergebnis der Abschlussprüfung; bewusst nicht in Teilprojekt 
 ## Bekannte Grenzen
 - Roboto 2.138 enthält die Zeichen U+23F4 ⏴ / U+23F5 ⏵ (von `egui_tiles` für die Überlauf-Pfeile der Tab-Leiste und von `egui` für Untermenü-Pfeile genutzt) und U+2192 → nicht. Heute ohne Folgen (keine Untermenüs, ein Tab je Container), würde aber als leere Kästchen erscheinen. Lösung bei Bedarf: Pfeile als Formen zeichnen oder eine Ersatzschrift ergänzen.
 
-## Vor Teilprojekt 3 (Boolesche Operationen)
+## Aus der Liste „Vor Teilprojekt 3“ noch offen
+Erledigt mit Teilprojekt 3: exakte Prädikate (`orient2d`) für Lageentscheidungen im Parameterraum, beliebig berandete gekrümmte Flächen (beschnittene Flächen samt Vernetzung). Weiterhin offen:
 - Arena-getaggte IDs (IDs verschiedener Körper sind heute austauschbar).
 - Validator: Kantenendpunkte gegen Eckpositionen prüfen (`curve.point(t0/t1)`).
-- Schwellen aus `Tolerance` ableiten (z. B. feste 1e-12 bei Flächenprüfung).
-- Exakte Prädikate (`orient2d`) für Orientierungsentscheidungen nutzen.
-- Beliebig berandete gekrümmte Flächen (heute nur rechteckige UV-Ausschnitte).
+- Schwellen aus `Tolerance` ableiten (es gibt noch feste Werte wie 1e-12 und 1e-9 im Kernel).
+
+## Nach Teilprojekt 3 (Boolesche Operationen)
+Stand: 2026-10-09. Bewusst offen gelassen; Fehlerfälle liefern einen benannten Fehler, nie ein falsches Ergebnis.
+
+**Was nicht geht (benannter Fehler statt Ergebnis)**
+- Nur Stufe A: Schnitte von Ebene, Zylinder, Kegel, Kugel und Torus, soweit sie ebene Kurven oder Kreise ergeben. Andere Paare (Raumkurven, z. B. zwei Zylinder mit gekreuzten Achsen, schräge Kegel- oder Torus-Ebenenschnitte) liefern „Der Schnitt von … mit … wird noch nicht unterstützt“.
+- Berührung nur an einer Kante, ohne gemeinsame Fläche: Vereinigen zweier Quader, die sich nur an einer Kante berühren, liefert „Die Körper berühren sich nur an einer Kante …“ (früher „Kante N wird 4-mal verwendet“).
+- Tangentialkontakt und Pole auf Kanten: z. B. eine Kugel, die die Kanten einer Quaderfläche genau berührt, oder ein Kugelpol, der genau auf einer Kante liegt (Halbkugel durch einen gleich großen Quader), ergibt denselben Berührungsfehler. Bei CAD-typischen „genau passenden“ Maßen kommt das häufiger vor; ein etwas größerer Quader funktioniert.
+- Sehr dünne Bereiche: Findet die Einordnung auf ihrem 24×24-Raster keinen Innenpunkt eines Flächenstücks, endet die Operation mit „Die Lage eines Flächenstücks … ließ sich nicht sicher bestimmen“.
+- Gedrehte Nähte koaxialer Zylinder: Geschlossene Kanten werden beim Zusammennähen über Startpunkt und Mittelpunkt zugeordnet; liegen die Nähte zweier koaxialer Zylinder verdreht, kann „Das Ergebnis ist nicht geschlossen“ kommen (nicht gezielt getestet).
+
+**Was geht, aber unschön ist**
+- Berühren sich zwei Körper nur an einer Ecke, besteht die Vereinigung aus zwei Schalen mit einer gemeinsamen Ecke (nicht mannigfaltig; Volumen stimmt; bewusst akzeptiert).
+- Bündige Flächen werden nicht automatisch zusammengefasst (zusätzliche Kanten und Flächen nach dem Vereinigen).
+
+**Geschwindigkeit**
+- Zusammennähen und T-Knoten-Auftrennung arbeiten quadratisch in der Zahl der Kanten.
+- Punkt-in-Fläche baut die Randpolygone bei jedem Aufruf neu auf (kein Zwischenspeicher).
+- Die Vernetzung beschnittener Flächen prüft jeden Dreiecksschwerpunkt gegen den ganzen Rand.
+- Auswahl (Pick) läuft über alle Dreiecke; bei großen Netzen nach vielen Operationen spürbar langsamer.
+
+**Oberfläche**
+- Beim Ziehen am Feld „Position“ wird der Körper in jedem Bild neu vernetzt (später das Netz nur verschieben).
+- „Position“ zeigt die untere Ecke der Hülle des Netzes, nicht einen Bezugspunkt des Körpers.
+- Kein Rückgängig; ein Ergebnis ersetzt beide Ausgangskörper.
+- Der Dialog „Boolesche Operation“ merkt sich die Körper als Listenplatz; wird ein Körper gelöscht, während der Dialog offen ist, zeigt er auf einen anderen.
 
 ## Vor Teilprojekt 4 (Skizzen)
 - `ProfileLoop::polygon` panict bei < 3 Punkten (öffentliche API) → Result.
