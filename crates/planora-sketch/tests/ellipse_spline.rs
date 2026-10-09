@@ -375,3 +375,93 @@ fn whole_ellipse_edges_project_and_edge_on_circles_are_rejected() {
     assert!(rep.redundant.is_empty(), "{rep:?}");
     assert_eq!(rep.dof, 0);
 }
+
+// ---- Nachbesserung 1: Parameterbereich des Splines, kleine Halbachse -----------------------
+
+/// Spline durch (0, 0), (5, 4), (10, 0) mit festen Stützpunkten.
+fn fixed_arch(s: &mut Sketch) -> CurveId {
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let m = s.add_point(5.0, 4.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    for (p, x, y) in [(a, 0.0, 0.0), (m, 5.0, 4.0), (b, 10.0, 0.0)] {
+        s.add_constraint(K::Fixed(p, x, y)).unwrap();
+    }
+    s.add_spline(&[a, m, b]).unwrap()
+}
+
+#[test]
+fn dragging_a_point_beyond_the_spline_end_is_not_solved() {
+    use planora_sketch::solver::Drag;
+    let mut s = sketch();
+    let sp = fixed_arch(&mut s);
+    let q = s.add_point(9.0, 1.0).unwrap();
+    let k = s.add_constraint(K::PointOnCurve(q, sp)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let before = s.variables().to_vec();
+    let rep = s
+        .drag(&[Drag {
+            point: q,
+            target: DVec2::new(20.0, 3.0),
+        }])
+        .unwrap();
+    assert_ne!(rep.status, SolveStatus::Solved, "{rep:?}");
+    assert!(rep.conflicting.contains(&k), "{rep:?}");
+    assert_eq!(s.variables(), &before[..], "Gruppe bleibt unverändert");
+}
+
+#[test]
+fn a_line_touching_only_the_extrapolated_spline_is_not_solved() {
+    let mut s = sketch();
+    let sp = fixed_arch(&mut s);
+    // Punkt unter dem Bogen: keine Tangente an den gezeichneten Spline geht durch ihn.
+    let l0 = s.add_point(5.0, 1.0).unwrap();
+    let l1 = s.add_point(15.0, -3.5).unwrap();
+    let line = s.add_line(l0, l1).unwrap();
+    s.add_constraint(K::Fixed(l0, 5.0, 1.0)).unwrap();
+    s.add_constraint(K::Distance(l0, l1, 10.0)).unwrap();
+    let k = s.add_constraint(K::Tangent(line, sp)).unwrap();
+    let before = s.variables().to_vec();
+    let rep = s.solve();
+    assert_ne!(rep.status, SolveStatus::Solved, "{rep:?}");
+    assert!(rep.conflicting.contains(&k), "{rep:?}");
+    assert_eq!(s.variables(), &before[..]);
+}
+
+#[test]
+fn point_on_ellipse_stays_finite_for_a_vanishing_minor_axis() {
+    let mut s = sketch();
+    let c = s.add_point(0.0, 0.0).unwrap();
+    let e = s.add_ellipse(c, DVec2::new(4.0, 0.0), 2.0).unwrap();
+    let p = s.add_point(1.0, 1.0).unwrap();
+    let k = s.add_constraint(K::PointOnCurve(p, e)).unwrap();
+    let Some(planora_sketch::model::CurveKind::Ellipse { minor, .. }) =
+        s.curve(e).map(|d| d.kind.clone())
+    else {
+        panic!("Ellipse erwartet")
+    };
+    let mut x = s.variables().to_vec();
+    x[minor] = 0.0;
+    let ev = s.evaluate(k, &x).unwrap();
+    assert!(
+        ev.residuals
+            .iter()
+            .all(|r| r.v.is_finite() && r.d.iter().all(|g| g.is_finite()))
+    );
+}
+
+#[test]
+fn minor_axis_dimension_longer_than_major_is_rejected() {
+    let mut s = sketch();
+    let c = s.add_point(0.0, 0.0).unwrap();
+    let e = s.add_ellipse(c, DVec2::new(4.0, 0.0), 2.0).unwrap();
+    let major = s.add_constraint(K::EllipseMajor(e, 4.0)).unwrap();
+    assert!(matches!(
+        s.add_constraint(K::EllipseMinor(e, 5.0)),
+        Err(SketchError::Degenerate(_))
+    ));
+    let minor = s.add_constraint(K::EllipseMinor(e, 3.0)).unwrap();
+    assert!(s.set_constraint_value(major, 2.5).is_err());
+    assert!(s.set_constraint_value(minor, 4.5).is_err());
+    assert!(s.set_constraint_value(major, 6.0).is_ok());
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+}

@@ -41,11 +41,17 @@ pub enum ConstraintKind {
     Angle(CurveId, CurveId, f64),
     /// Intern: das Ende eines Bogens liegt auf dem Kreis durch seinen Start.
     ArcRadius(CurveId),
-    /// Länge der großen Halbachse einer Ellipse.
+    /// Länge der großen Halbachse einer Ellipse. Gibt es auf derselben Ellipse ein erzwungenes
+    /// `EllipseMinor`, darf der Wert nicht kleiner als dessen Wert sein.
     EllipseMajor(CurveId, f64),
-    /// Länge der kleinen Halbachse einer Ellipse.
+    /// Länge der kleinen Halbachse einer Ellipse. Gibt es auf derselben Ellipse ein erzwungenes
+    /// `EllipseMajor`, darf der Wert nicht größer als dessen Wert sein.
     EllipseMinor(CurveId, f64),
     /// Winkel der großen Halbachse einer Ellipse zur x-Achse der Skizze in Radiant.
+    ///
+    /// Grenze: Das Residuum `cross(a, (cos v, sin v))/|a|` ist auch null, wenn die große
+    /// Halbachse in die Gegenrichtung `v + π` zeigt. Das ist dieselbe Ellipse; `measure`
+    /// liefert dann aber `v ± π` (Wert von `atan2` in `(−π, π]`).
     EllipseAngle(CurveId, f64),
 }
 
@@ -311,6 +317,12 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
                     let (m, a, len, minor) = ellipse_of(ctx, *c);
                     let v = sub2(&pp, &m);
                     let x = dot(&v, &a) / &len / &len;
+                    // kleine Halbachse wie `norm_len` nach unten begrenzt (keine Division durch 0)
+                    let minor = if minor.v < MIN_LEN {
+                        Dual::constant(MIN_LEN)
+                    } else {
+                        minor
+                    };
                     let y = cross(&a, &v) / &len / &minor;
                     let r = (&x * &x + &y * &y).sqrt();
                     vec![(r - 1.0) * (&len + &minor) * 0.5]
@@ -693,15 +705,10 @@ impl Sketch {
                     Ok(())
                 }
             }
-            Radius(_, v) | Diameter(_, v) | EllipseMajor(_, v) | EllipseMinor(_, v) => {
-                finite(*v)?;
-                if *v <= self.tolerance().linear {
-                    Err(SketchError::Degenerate(
-                        "Das Maß muss größer als null sein".into(),
-                    ))
-                } else {
-                    Ok(())
-                }
+            Radius(_, v) | Diameter(_, v) => self.check_positive(*v),
+            EllipseMajor(e, v) | EllipseMinor(e, v) => {
+                self.check_positive(*v)?;
+                self.check_axis_pair(kind, *e, *v)
             }
             Angle(_, _, v) | EllipseAngle(_, v) => finite(*v),
             Fixed(_, x, y) => {
@@ -710,6 +717,61 @@ impl Sketch {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Endlich und größer als `tol.linear`.
+    fn check_positive(&self, v: f64) -> Result<(), SketchError> {
+        finite(v)?;
+        if v <= self.tolerance().linear {
+            Err(SketchError::Degenerate(
+                "Das Maß muss größer als null sein".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Die kleine Halbachse darf nicht länger als die große sein: Gibt es auf derselben Ellipse
+    /// schon ein erzwungenes (lebendes, nicht nur anzeigendes) Gegenstück, wird ein Wert
+    /// abgelehnt, der die Regel verletzt. Ohne Gegenstück bleibt die Regel ungeprüft (die
+    /// Geometrie allein ist auch mit vertauschten Rollen eine gültige Ellipse).
+    fn check_axis_pair(
+        &self,
+        kind: &ConstraintKind,
+        e: CurveId,
+        v: f64,
+    ) -> Result<(), SketchError> {
+        use ConstraintKind::*;
+        let violated = self.constraints.iter().any(|(_, c)| {
+            c.alive
+                && !c.driven
+                && match (kind, &c.kind) {
+                    (EllipseMajor(..), EllipseMinor(o, w)) => *o == e && *w > v,
+                    (EllipseMinor(..), EllipseMajor(o, w)) => *o == e && v > *w,
+                    _ => false,
+                }
+        });
+        if violated {
+            Err(SketchError::Degenerate(
+                "Die kleine Halbachse darf nicht länger als die große sein".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Ende `n − 1` des Parameterbereichs, wenn die Zusatzvariable der Abhängigkeit ein
+    /// Spline-Parameter ist (Punkt auf Spline, Tangente Linie–Spline), mit dem Index der Variablen.
+    pub(crate) fn spline_parameter(&self, id: ConstraintId) -> Option<(usize, f64)> {
+        let data = &self.constraints[id];
+        let extra = data.extra?;
+        data.kind
+            .curves()
+            .iter()
+            .find_map(|&c| match &self.curves[c].kind {
+                CurveKind::Spline { points } => Some((extra, (points.len() - 1) as f64)),
+                _ => None,
+            })
     }
 
     /// Lage bei mehrdeutigen Abhängigkeiten, bestimmt aus der aktuellen Geometrie.

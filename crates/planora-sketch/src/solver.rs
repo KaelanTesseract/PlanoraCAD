@@ -39,6 +39,11 @@ const STALL_REL: f64 = 1e-14;
 const FREE_COMPONENT: f64 = 1e-6;
 /// Versuche mit steigender Dämpfung innerhalb eines Schritts.
 const DAMPING_TRIES: usize = 30;
+/// Spielraum (in Parametereinheiten) beim Prüfen, ob der Spline-Parameter einer Abhängigkeit
+/// in `[0, n − 1]` liegt. Außerhalb läge die Lösung auf der Fortsetzung des End-Segments, die
+/// nicht gezeichnet wird; 1e-6 entspricht bei üblichen Segmentlängen weit unter `tol.linear`
+/// Abweichung vom Endpunkt, schließt aber echtes Hinauslaufen sicher aus.
+const SPLINE_T_TOL: f64 = 1e-6;
 
 /// Ergebnis eines Solver-Laufs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -301,6 +306,21 @@ impl Sketch {
         }
     }
 
+    /// Abhängigkeiten der Gruppe, deren Spline-Parameter in `x` außerhalb von `[0, n − 1]`
+    /// (mit Spielraum `SPLINE_T_TOL`) liegt. Eine solche Lösung gilt nicht als Lösung.
+    fn spline_parameters_outside(&self, g: &Group, x: &[f64]) -> Vec<ConstraintId> {
+        g.constraints
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.spline_parameter(id).is_some_and(|(var, end)| {
+                    let t = x[var];
+                    !(t >= -SPLINE_T_TOL && t <= end + SPLINE_T_TOL)
+                })
+            })
+            .collect()
+    }
+
     /// Bestimmt, welche einzelne Abhängigkeit einer nicht lösbaren Gruppe den Widerspruch
     /// verursacht (Entscheidung D4). Leer, wenn auch der Rückfall nichts findet.
     fn diagnose(
@@ -320,6 +340,10 @@ impl Sketch {
             if self
                 .levenberg_marquardt(g, col, &mut x, &[], Some(id), tol_r)
                 .converged
+                && self
+                    .spline_parameters_outside(g, &x)
+                    .iter()
+                    .all(|&o| o == id)
             {
                 candidates.push(id);
             }
@@ -426,7 +450,13 @@ impl Sketch {
                 }
             }
             iterations = iterations.max(used);
-            if lm.converged {
+            // Spline-Parameter außerhalb des gezeichneten Bereichs: nicht gelöst.
+            let outside = if lm.converged {
+                self.spline_parameters_outside(g, &x)
+            } else {
+                Vec::new()
+            };
+            if lm.converged && outside.is_empty() {
                 let analysis = self.analyze(g, &col, &x);
                 dof += analysis.dof;
                 free_vars.extend(analysis.free_vars);
@@ -446,7 +476,7 @@ impl Sketch {
                 } else if status == SolveStatus::Solved {
                     status = SolveStatus::NotConverged;
                 }
-                for id in found {
+                for id in found.into_iter().chain(outside) {
                     if !conflicting.contains(&id) {
                         conflicting.push(id);
                     }
