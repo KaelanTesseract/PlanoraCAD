@@ -74,6 +74,8 @@ pub struct AppState {
 const GRID_HALF_EXTENT: f32 = 500.0;
 const PICK_EDGE_PX: f32 = 6.0;
 const BODY_GAP_MM: f64 = 10.0;
+/// Mindestgröße des Bereichs, auf den die Ansicht beim Öffnen einer Skizze eingepasst wird.
+const MIN_SKETCH_VIEW_MM: f64 = 10.0;
 
 impl Default for AppState {
     fn default() -> Self {
@@ -424,15 +426,23 @@ impl AppState {
             return self.fail("Skizze nicht gefunden".into());
         };
         let frame = *sk.frame();
-        let bounds = sk.bounds();
+        let extent = sk.extent();
         let mut session = SketchSession::new(index);
         session.last_report = Some(sk.clone().solve());
         if self.sketch_session.is_none() {
             self.saved_camera = Some(self.camera);
         }
         self.sketch_session = Some(session);
-        match bounds {
+        match extent {
             Some((lo, hi)) => {
+                // Sehr kleine Skizzen (ein Punkt, eine winzige Kurve) mit Mindestgröße einpassen.
+                let (lo, hi) = if (hi - lo).max_element() < MIN_SKETCH_VIEW_MM {
+                    let c = (lo + hi) * 0.5;
+                    let half = DVec2::splat(MIN_SKETCH_VIEW_MM * 0.5);
+                    (c - half, c + half)
+                } else {
+                    (lo, hi)
+                };
                 let corners = [
                     frame.point_2d(lo),
                     frame.point_2d(hi),

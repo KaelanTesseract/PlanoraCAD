@@ -222,20 +222,38 @@ impl SketchSession {
         }
     }
 
-    /// Löst die Skizze und merkt sich den Bericht. Wird die Skizze dadurch widersprüchlich oder
-    /// unlösbar, obwohl sie es vorher (`prior`) nicht war, ist das ein Fehler.
+    /// Löst die Skizze und merkt sich den Bericht. Macht die Änderung die Skizze widersprüchlich
+    /// oder unlösbar, ist das ein Fehler (siehe [`SketchSession::check_change`]).
     fn solve_checked(&mut self, sk: &mut Sketch, prior: &Sketch) -> Result<SolveReport, String> {
         let report = sk.solve();
         self.last_report = Some(report.clone());
-        if status_ok(&report) || !status_ok(&prior.clone().solve()) {
-            return Ok(report);
+        if let Some(problem) = check_change(&report, prior, None) {
+            return Err(match problem {
+                SolveStatus::Conflicting => {
+                    "Widerspruch: Die Änderung widerspricht vorhandenen Abhängigkeiten".to_string()
+                }
+                _ => "Die Skizze ließ sich nach der Änderung nicht lösen".to_string(),
+            });
         }
-        Err(match report.status {
-            SolveStatus::Conflicting => {
-                "Widerspruch: Die Änderung widerspricht vorhandenen Abhängigkeiten".to_string()
+        self.warn_if_unsolved();
+        Ok(report)
+    }
+
+    /// Ist die Skizze nach einer erlaubten Änderung weiterhin nicht gelöst (der Fehler bestand
+    /// schon vorher), wird darauf hingewiesen, sofern keine andere Meldung ansteht.
+    fn warn_if_unsolved(&mut self) {
+        if self.message.is_some() {
+            return;
+        }
+        self.message = match self.last_report.as_ref().map(|r| r.status) {
+            Some(SolveStatus::Conflicting) => {
+                Some("Die Skizze enthält weiterhin Widersprüche".into())
             }
-            _ => "Die Skizze ließ sich nach der Änderung nicht lösen".to_string(),
-        })
+            Some(SolveStatus::NotConverged) => {
+                Some("Die Skizze lässt sich weiterhin nicht vollständig lösen".into())
+            }
+            _ => None,
+        };
     }
 
     // ---- Werkzeuge ----------------------------------------------------------------------
@@ -444,18 +462,27 @@ impl SketchSession {
             }
             [center, start, ..] => {
                 let m = sk.point_xy(center).map_err(err)?;
-                let r = sk.point_xy(start).map_err(err)?.distance(m);
+                let s = sk.point_xy(start).map_err(err)?;
+                let r = s.distance(m);
                 let dir = at - m;
                 if dir.length() <= tol {
                     return Err("Das Bogenende darf nicht in der Mitte liegen".into());
                 }
+                let on_start = "Das Ende fällt auf den Start; der Bogen hätte keine Länge";
                 let end = match self.snap(sk, at, radius) {
-                    Snap::Point(p) if p != center && p != start => p,
+                    Snap::Point(p) if p == start => return Err(on_start.into()),
+                    Snap::Point(p) if p != center => p,
                     _ => {
                         let q = m + dir.normalize() * r;
+                        if q.distance(s) <= tol {
+                            return Err(on_start.into());
+                        }
                         sk.add_point(q.x, q.y).map_err(err)?
                     }
                 };
+                if sk.point_xy(end).map_err(err)?.distance(s) <= tol {
+                    return Err(on_start.into());
+                }
                 sk.add_arc(center, start, end).map_err(err)?;
                 self.pending.clear();
             }
@@ -719,9 +746,8 @@ impl SketchSession {
             let id = sk.add_constraint(kind).map_err(err)?;
             let report = sk.solve();
             se.last_report = Some(report.clone());
-            let blamed = report.conflicting.contains(&id);
-            if !status_ok(&report) && (blamed || status_ok(&prior.clone().solve())) {
-                return Err(match report.status {
+            if let Some(problem) = check_change(&report, prior, Some(id)) {
+                return Err(match problem {
                     SolveStatus::Conflicting => format!(
                         "Widerspruch: „{}“ widerspricht vorhandenen Abhängigkeiten",
                         action.label()
@@ -745,14 +771,16 @@ impl SketchSession {
                     se.message = Some("Diese Abhängigkeit ist überzählig".into());
                 }
             }
+            se.warn_if_unsolved();
             Ok(id)
         })
     }
 
     // ---- Bearbeiten ---------------------------------------------------------------------
 
-    /// Löscht die Auswahl samt abhängiger Kurven und Abhängigkeiten. Punkte gelöschter Kurven,
-    /// die danach nichts mehr benutzt, werden mit entfernt.
+    /// Löscht die Auswahl samt abhängiger Kurven und Abhängigkeiten. Punkte gelöschter (auch
+    /// mitgelöschter) Kurven, die danach nichts mehr benutzt, werden mit entfernt; andere freie
+    /// Punkte bleiben.
     pub fn delete_selection(&mut self, sk: &mut Sketch) {
         self.message = None;
         let mut orphans: Vec<PointId> = Vec::new();
@@ -768,6 +796,13 @@ impl SketchSession {
                     let _ = sk.remove_curve(c);
                 }
                 Item::Point(p) => {
+                    // Andere Punkte der mitgelöschten Kurven werden ebenso geprüft.
+                    orphans.extend(
+                        sk.curves()
+                            .map(|(_, c)| c.kind.points())
+                            .filter(|pts| pts.contains(&p))
+                            .flatten(),
+                    );
                     let _ = sk.remove_point(p);
                 }
             }
@@ -880,6 +915,40 @@ impl SketchSession {
             Ok(c)
         })
     }
+}
+
+/// Prüft den Bericht nach einer Änderung gegen den Zustand davor (`prior`). Liefert den Grund
+/// (`Conflicting`/`NotConverged`), wenn die Änderung zurückgenommen werden muss:
+/// - die Skizze ist nicht gelöst, war es aber vorher;
+/// - die neue Abhängigkeit `new` gehört zu den widersprüchlichen;
+/// - die Skizze war schon vorher kaputt, jetzt widersprechen sich aber Abhängigkeiten, die es
+///   vorher nicht taten, oder sie wurde von widersprüchlich zu nicht lösbar.
+///
+/// Grenze: Der Bericht nennt bei nicht lösbaren Gruppen keine Abhängigkeiten; eine neue nicht
+/// lösbare Gruppe neben einem schon bestehenden Widerspruch wird deshalb nicht erkannt.
+fn check_change(
+    report: &SolveReport,
+    prior: &Sketch,
+    new: Option<ConstraintId>,
+) -> Option<SolveStatus> {
+    if status_ok(report) {
+        return None;
+    }
+    let bad = Some(report.status);
+    if new.is_some_and(|id| report.conflicting.contains(&id)) {
+        return bad;
+    }
+    let before = prior.clone().solve();
+    if status_ok(&before) {
+        return bad;
+    }
+    let grown = report
+        .conflicting
+        .iter()
+        .any(|c| !before.conflicting.contains(c));
+    let worse =
+        before.status == SolveStatus::Conflicting && report.status == SolveStatus::NotConverged;
+    (grown || worse).then_some(report.status)
 }
 
 /// Setzt den Zahlenwert eines Maßes.

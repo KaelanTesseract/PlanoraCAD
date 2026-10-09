@@ -12,6 +12,9 @@ const MAX_STEPS_PER_TURN: usize = 4096;
 const SPLINE_STEPS_PER_SEGMENT: usize = 16;
 /// Schritte je Vollkreis für Abstand und Fangen (fein genug für die Bildschirmauswahl).
 const PICK_STEPS_PER_TURN: usize = 96;
+/// Schritte je Vollkreis für [`Sketch::extent`] (Fehler unter 0,2 % des Radius, genügt zum
+/// Einpassen der Ansicht).
+const EXTENT_STEPS_PER_TURN: usize = 64;
 
 /// Abstand des Punktes `p` von der Strecke `a`–`b`.
 fn segment_distance(p: DVec2, a: DVec2, b: DVec2) -> f64 {
@@ -172,6 +175,23 @@ impl Sketch {
             .filter(|&(_, d)| d <= radius)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(id, _)| id)
+    }
+
+    /// Achsenparallele Hülle `(min, max)` aller lebenden Punkte und Kurven (Kurven über ihren
+    /// Linienzug); `None` für eine leere Skizze. Zum Einpassen der Ansicht.
+    pub fn extent(&self) -> Option<(DVec2, DVec2)> {
+        let curve_points = self
+            .curves()
+            .filter_map(|(id, _)| self.curve_polyline(id, EXTENT_STEPS_PER_TURN))
+            .flatten();
+        self.points()
+            .map(|(id, _)| self.pos(id))
+            .chain(curve_points)
+            .filter(|p| p.is_finite())
+            .fold(None, |acc, p| match acc {
+                None => Some((p, p)),
+                Some((lo, hi)) => Some((lo.min(p), hi.max(p))),
+            })
     }
 
     /// Achsenparallele Hülle `(min, max)` aller lebenden Punkte; `None` ohne Punkte.

@@ -46,3 +46,18 @@ fn picking_prefers_points_and_respects_the_radius() {
     assert_eq!((lo, hi), (DVec2::ZERO, DVec2::new(10.0, 0.0)));
     assert!(sketch().bounds().is_none());
 }
+
+#[test]
+fn extent_includes_curves() {
+    let mut s = sketch();
+    let c = s.add_point(1.0, 2.0).unwrap();
+    s.add_circle(c, 5.0).unwrap();
+    assert_eq!(
+        s.bounds().unwrap(),
+        (DVec2::new(1.0, 2.0), DVec2::new(1.0, 2.0))
+    );
+    let (lo, hi) = s.extent().unwrap();
+    assert!((lo - DVec2::new(-4.0, -3.0)).length() < 1e-9, "{lo:?}");
+    assert!((hi - DVec2::new(6.0, 7.0)).length() < 1e-9, "{hi:?}");
+    assert!(sketch().extent().is_none());
+}

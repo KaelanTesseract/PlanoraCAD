@@ -424,3 +424,110 @@ fn dimmed_scene_only_while_a_sketch_is_open() {
     s.delete_sketch(0);
     assert!(s.sketch_session.is_none());
 }
+
+// ---- Nachbesserung 1 -------------------------------------------------------------------------
+
+#[test]
+fn opening_frames_curves_and_tiny_sketches_sensibly() {
+    let mut s = AppState::new();
+    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    let c = s.sketches[i].add_point(0.0, 0.0).unwrap();
+    s.sketches[i].add_circle(c, 5.0).unwrap();
+    s.open_sketch(i).unwrap();
+    assert!(
+        s.camera.distance > 5.0 && s.camera.distance < 1000.0,
+        "Kreis: {}",
+        s.camera.distance
+    );
+    s.close_sketch();
+
+    let j = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    s.sketches[j].add_point(3.0, 4.0).unwrap();
+    s.open_sketch(j).unwrap();
+    assert!(
+        s.camera.distance > 5.0 && s.camera.distance < 1000.0,
+        "Punkt: {}",
+        s.camera.distance
+    );
+    assert!((s.camera.target - glam::Vec3::new(3.0, 4.0, 0.0)).length() < 1e-4);
+    s.close_sketch();
+
+    let k = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    let d = s.camera.distance;
+    s.open_sketch(k).unwrap();
+    assert_eq!(s.camera.distance, d, "leere Skizze: Abstand bleibt");
+}
+
+#[test]
+fn a_new_conflict_in_an_already_broken_sketch_is_rejected() {
+    let (mut sk, mut se) = setup();
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(5.0, 0.0).unwrap();
+    sk.add_constraint(K::Distance(a, b, 10.0)).unwrap();
+    sk.add_constraint(K::Distance(a, b, 20.0)).unwrap();
+    let c = sk.add_point(50.0, 0.0).unwrap();
+    let d = sk.add_point(55.0, 0.0).unwrap();
+    se.selection = vec![Item::Point(c), Item::Point(d)];
+    // unabhängige Gruppe: erlaubt, aber mit Warnung
+    se.apply(&mut sk, ConstraintAction::Distance, Some(8.0))
+        .unwrap();
+    assert!(
+        se.message.as_deref().unwrap_or("").contains("weiterhin"),
+        "{:?}",
+        se.message
+    );
+    let count = sk.constraints().count();
+    let before = sk.variables().to_vec();
+    // neuer Widerspruch in der bisher gesunden Gruppe: verworfen
+    let e = se
+        .apply(&mut sk, ConstraintAction::Distance, Some(3.0))
+        .unwrap_err();
+    assert!(e.contains("Widerspruch"), "{e}");
+    assert_eq!(sk.constraints().count(), count);
+    assert_eq!(sk.variables(), before.as_slice());
+}
+
+#[test]
+fn a_tool_change_in_an_already_broken_sketch_warns() {
+    let (mut sk, mut se) = setup();
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(5.0, 0.0).unwrap();
+    sk.add_constraint(K::Distance(a, b, 10.0)).unwrap();
+    sk.add_constraint(K::Distance(a, b, 20.0)).unwrap();
+    se.set_tool(Tool::Point);
+    click(&mut se, &mut sk, 30.0, 30.0);
+    assert!(
+        se.message.as_deref().unwrap_or("").contains("weiterhin"),
+        "{:?}",
+        se.message
+    );
+}
+
+#[test]
+fn an_arc_ending_on_its_start_is_rejected() {
+    let (mut sk, mut se) = setup();
+    se.set_tool(Tool::Arc);
+    click(&mut se, &mut sk, 0.0, 0.0);
+    click(&mut se, &mut sk, 5.0, 0.0);
+    let pending = se.pending.clone();
+    let e = se
+        .click(&mut sk, DVec2::new(5.1, 0.0), R, false)
+        .unwrap_err();
+    assert!(e.contains("Start"), "{e}");
+    assert_eq!(sk.curves().count(), 0);
+    assert_eq!(se.pending, pending);
+}
+
+#[test]
+fn deleting_a_point_removes_orphaned_end_points_but_keeps_free_points() {
+    let (mut sk, mut se) = setup();
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(10.0, 0.0).unwrap();
+    sk.add_line(a, b).unwrap();
+    let free = sk.add_point(20.0, 20.0).unwrap();
+    se.selection = vec![Item::Point(a)];
+    se.delete_selection(&mut sk);
+    assert_eq!(sk.curves().count(), 0);
+    assert!(sk.point_xy(b).is_err(), "verwaister Endpunkt entfernt");
+    assert!(sk.point_xy(free).is_ok(), "freier Punkt bleibt");
+}
