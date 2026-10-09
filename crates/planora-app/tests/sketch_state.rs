@@ -531,3 +531,61 @@ fn deleting_a_point_removes_orphaned_end_points_but_keeps_free_points() {
     assert!(sk.point_xy(b).is_err(), "verwaister Endpunkt entfernt");
     assert!(sk.point_xy(free).is_ok(), "freier Punkt bleibt");
 }
+
+// ---- Für die Oberfläche (Task 12) ---------------------------------------------------------
+
+#[test]
+fn the_current_value_of_a_dimension_action_can_be_measured() {
+    let (mut sk, mut se) = setup();
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(3.0, 4.0).unwrap();
+    se.selection = vec![Item::Point(a), Item::Point(b)];
+    let v = se.measure_action(&sk, ConstraintAction::Distance).unwrap();
+    assert!((v - 5.0).abs() < 1e-9);
+    assert!(se.measure_action(&sk, ConstraintAction::Radius).is_none());
+    assert!(
+        se.measure_action(&sk, ConstraintAction::Coincident)
+            .is_none()
+    );
+}
+
+#[test]
+fn a_dimension_value_can_be_changed_and_conflicts_are_rejected() {
+    let (mut sk, mut se) = setup();
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(10.0, 0.0).unwrap();
+    se.selection = vec![Item::Point(a), Item::Point(b)];
+    let d = se
+        .apply(&mut sk, ConstraintAction::Distance, Some(10.0))
+        .unwrap();
+    se.set_dimension_value(&mut sk, d, 20.0).unwrap();
+    let pa = sk.point_xy(a).unwrap();
+    let pb = sk.point_xy(b).unwrap();
+    assert!((pa.distance(pb) - 20.0).abs() < 1e-6);
+    assert!(se.set_dimension_value(&mut sk, d, f64::NAN).is_err());
+    assert!(se.set_dimension_value(&mut sk, d, -1.0).is_err());
+    assert!(se.message.is_some());
+    assert!((sk.point_xy(a).unwrap().distance(sk.point_xy(b).unwrap()) - 20.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_dimension_can_be_switched_to_driven_and_back() {
+    let (mut sk, mut se) = setup();
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(10.0, 0.0).unwrap();
+    se.selection = vec![Item::Point(a), Item::Point(b)];
+    let d = se
+        .apply(&mut sk, ConstraintAction::Distance, Some(10.0))
+        .unwrap();
+    se.set_driven(&mut sk, d, true).unwrap();
+    assert!(sk.constraint(d).unwrap().driven);
+    sk.set_point_xy(b, 15.0, 0.0).unwrap();
+    se.set_driven(&mut sk, d, false).unwrap();
+    assert!(!sk.constraint(d).unwrap().driven);
+    match sk.constraint(d).unwrap().kind {
+        K::Distance(_, _, v) => {
+            assert!((v - 15.0).abs() < 1e-6, "übernimmt den aktuellen Wert: {v}")
+        }
+        _ => panic!(),
+    }
+}

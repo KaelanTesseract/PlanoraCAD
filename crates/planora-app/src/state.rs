@@ -62,6 +62,8 @@ pub struct AppState {
     pub next_body_number: u64,
     /// Skizzen des Dokuments.
     pub sketches: Vec<Sketch>,
+    /// Im Browser gewählte Skizze.
+    pub selected_sketch: Option<usize>,
     /// Geöffneter Skizzen-Modus.
     pub sketch_session: Option<SketchSession>,
     /// Kamera vor dem Öffnen des Skizzen-Modus.
@@ -99,6 +101,7 @@ impl AppState {
             message: None,
             next_body_number: 1,
             sketches: Vec::new(),
+            selected_sketch: None,
             sketch_session: None,
             saved_camera: None,
             next_sketch_number: 1,
@@ -489,6 +492,11 @@ impl AppState {
             }
             _ => {}
         }
+        self.selected_sketch = match self.selected_sketch {
+            Some(i) if i == index => None,
+            Some(i) if i > index => Some(i - 1),
+            other => other,
+        };
         self.sketches.remove(index);
     }
 

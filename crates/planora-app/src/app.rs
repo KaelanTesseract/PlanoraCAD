@@ -1,12 +1,13 @@
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
 use crate::samples::{ExtrudeSample, RevolveSample};
-use crate::state::AppState;
-use crate::{browser, fonts, properties, theme, viewport};
+use crate::state::{AppState, StandardPlane};
+use crate::{browser, fonts, properties, sketch_panel, theme, viewport};
 use egui_tiles::{Container, SimplificationOptions, TileId, Tiles, Tree, UiResponse};
 use planora_kernel::BoolOp;
-use planora_render::ViewFace;
 use planora_render::gpu::GpuScene;
+use planora_render::{FaceRef, Pick, ViewFace};
+use planora_sketch::plane_of_face;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Pane {
@@ -125,7 +126,10 @@ impl PlanoraApp {
                 }
             });
             ui.menu_button("Erzeugen", |ui| {
+                // Körper entstehen außerhalb des Skizzen-Modus: eine offene Skizze wird vorher
+                // beendet.
                 let mut open = |dialog: CreateDialog, ui: &mut egui::Ui| {
+                    self.state.close_sketch();
                     self.dialog = Some(dialog);
                     ui.close();
                 };
@@ -179,6 +183,8 @@ impl PlanoraApp {
                         ui,
                     );
                 }
+                ui.separator();
+                self.sketch_menu(ui);
             });
             ui.menu_button("Bearbeiten", |ui| {
                 // Boolesche Operationen brauchen mindestens zwei Körper.
@@ -193,6 +199,7 @@ impl PlanoraApp {
                         .on_disabled_hover_text("Dafür werden mindestens zwei Körper benötigt.")
                         .clicked()
                     {
+                        self.state.close_sketch();
                         self.boolean_dialog = Some(BooleanDialog::with_op(&self.state, op));
                         ui.close();
                     }
@@ -230,6 +237,48 @@ impl PlanoraApp {
     }
 }
 
+impl PlanoraApp {
+    /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
+    fn sketch_menu(&mut self, ui: &mut egui::Ui) {
+        for (label, plane) in [
+            ("Skizze auf XY-Ebene", StandardPlane::XY),
+            ("Skizze auf XZ-Ebene", StandardPlane::XZ),
+            ("Skizze auf YZ-Ebene", StandardPlane::YZ),
+        ] {
+            if ui.button(label).clicked() {
+                let i = self.state.new_sketch(AppState::standard_frame(plane));
+                self.state.selected_sketch = Some(i);
+                let _ = self.state.open_sketch(i);
+                ui.close();
+            }
+        }
+        let face = match self.state.selection {
+            Some(Pick::Face(FaceRef { body, face })) => self
+                .state
+                .bodies
+                .get(body)
+                .and_then(|b| plane_of_face(&b.solid, face))
+                .map(|_| (body, face)),
+            _ => None,
+        };
+        if ui
+            .add_enabled(
+                face.is_some(),
+                egui::Button::new("Skizze auf gewählter Fläche"),
+            )
+            .on_disabled_hover_text("Dafür zuerst eine ebene Fläche eines Körpers anklicken.")
+            .clicked()
+            && let Some((body, face)) = face
+        {
+            if let Ok(i) = self.state.new_sketch_on_face(body, face) {
+                self.state.selected_sketch = Some(i);
+                let _ = self.state.open_sketch(i);
+            }
+            ui.close();
+        }
+    }
+}
+
 impl eframe::App for PlanoraApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.applied_dark != Some(self.state.dark) {
@@ -240,9 +289,18 @@ impl eframe::App for PlanoraApp {
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
-                match &self.state.message {
-                    Some(m) => ui.colored_label(egui::Color32::from_rgb(230, 90, 90), m),
-                    None => ui.weak(format!("{} Körper", self.state.bodies.len())),
+                let sketch = self
+                    .state
+                    .sketch_session
+                    .as_ref()
+                    .and_then(|s| self.state.sketches.get(s.sketch));
+                match (&self.state.message, sketch) {
+                    (Some(m), _) => ui.colored_label(egui::Color32::from_rgb(230, 90, 90), m),
+                    (None, Some(sk)) => ui.weak(format!(
+                        "Skizzen-Modus: {} – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt",
+                        sk.name
+                    )),
+                    (None, None) => ui.weak(format!("{} Körper", self.state.bodies.len())),
                 };
             });
         });
@@ -253,6 +311,7 @@ impl eframe::App for PlanoraApp {
             self.dock.ui(&mut behavior, ui);
         });
 
+        sketch_panel::show(ui.ctx(), &mut self.state);
         if let Some(mut dialog) = self.dialog.take()
             && dialog.show(ui.ctx(), &mut self.state)
         {

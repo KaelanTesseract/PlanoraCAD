@@ -49,3 +49,25 @@ pub fn paint_body_icon(painter: &Painter, rect: Rect, kind: BodyKind, color: Col
         }
     }
 }
+
+/// Zeichnet das Skizzensymbol in `rect`: ein Rechteck mit Eckpunkten und ein Kreis.
+pub fn paint_sketch_icon(painter: &Painter, rect: Rect, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.38;
+    let frame = Rect::from_center_size(c + vec2(-r * 0.2, r * 0.2), vec2(r * 1.4, r * 1.1));
+    painter.rect_stroke(frame, 0.0, stroke, egui::StrokeKind::Middle);
+    for corner in [
+        frame.left_top(),
+        frame.right_top(),
+        frame.left_bottom(),
+        frame.right_bottom(),
+    ] {
+        painter.circle_filled(corner, 1.8, color);
+    }
+    painter.circle_stroke(
+        frame.right_top() + vec2(-r * 0.1, r * 0.1),
+        r * 0.45,
+        stroke,
+    );
+}

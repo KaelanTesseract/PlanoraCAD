@@ -741,6 +741,9 @@ impl SketchSession {
                         .measure(&kind)
                         .ok_or_else(|| "Das Maß lässt sich nicht messen".to_string())?,
                 };
+                if value.is_some() {
+                    check_dimension_value(&kind, v, sk.tolerance().linear)?;
+                }
                 set_value(&mut kind, v);
             }
             let id = sk.add_constraint(kind).map_err(err)?;
@@ -773,6 +776,79 @@ impl SketchSession {
             }
             se.warn_if_unsolved();
             Ok(id)
+        })
+    }
+
+    /// Aktueller Wert des Maßes `action` für die Auswahl (Vorgabe des Zahlenfelds); `None`, wenn
+    /// das kein Maß ist oder es nicht zur Auswahl passt.
+    pub fn measure_action(&self, sk: &Sketch, action: ConstraintAction) -> Option<f64> {
+        if !action.is_dimension() {
+            return None;
+        }
+        let kind = self.build(sk, action).ok()?;
+        sk.measure(&kind)
+    }
+
+    /// Ändert den Wert des Maßes `id` und löst. Ungültige Werte und Werte, die die Skizze
+    /// widersprüchlich oder unlösbar machen, werden abgelehnt (Skizze unverändert).
+    pub fn set_dimension_value(
+        &mut self,
+        sk: &mut Sketch,
+        id: ConstraintId,
+        value: f64,
+    ) -> Result<(), String> {
+        self.atomic(sk, |se, sk, prior| {
+            let kind = sk
+                .constraint(id)
+                .map(|c| c.kind.clone())
+                .ok_or_else(|| "Abhängigkeit nicht gefunden".to_string())?;
+            check_dimension_value(&kind, value, sk.tolerance().linear)?;
+            sk.set_constraint_value(id, value).map_err(err)?;
+            se.solve_checked(sk, prior)?;
+            Ok(())
+        })
+    }
+
+    /// Schaltet das Maß `id` auf „nur anzeigend“ (`driven`) oder zurück auf bestimmend. Beim
+    /// Zurückschalten übernimmt es den aktuellen Wert; wird die Skizze dadurch widersprüchlich,
+    /// bleibt alles unverändert.
+    pub fn set_driven(
+        &mut self,
+        sk: &mut Sketch,
+        id: ConstraintId,
+        driven: bool,
+    ) -> Result<(), String> {
+        self.atomic(sk, |se, sk, prior| {
+            let kind = sk
+                .constraint(id)
+                .map(|c| c.kind.clone())
+                .ok_or_else(|| "Abhängigkeit nicht gefunden".to_string())?;
+            if !kind.is_dimension() {
+                return Err("Nur Maße können nur anzeigend sein".into());
+            }
+            if let Some(v) = sk.measure(&kind) {
+                sk.set_constraint_value(id, v).map_err(err)?;
+            }
+            sk.set_driven(id, driven).map_err(err)?;
+            let report = sk.solve();
+            se.last_report = Some(report.clone());
+            if let Some(problem) = check_change(&report, prior, (!driven).then_some(id)) {
+                return Err(match problem {
+                    SolveStatus::Conflicting => {
+                        "Widerspruch: Das Maß widerspricht vorhandenen Abhängigkeiten".to_string()
+                    }
+                    _ => "Die Skizze ließ sich nach der Änderung nicht lösen".to_string(),
+                });
+            }
+            if !driven && report.redundant.contains(&id) {
+                return Err(
+                    "Dieses Maß ist bereits durch andere Abhängigkeiten bestimmt und bleibt nur \
+                     anzeigend"
+                        .into(),
+                );
+            }
+            se.warn_if_unsolved();
+            Ok(())
         })
     }
 
@@ -949,6 +1025,32 @@ fn check_change(
     let worse =
         before.status == SolveStatus::Conflicting && report.status == SolveStatus::NotConverged;
     (grown || worse).then_some(report.status)
+}
+
+/// Prüft einen Maßwert: endlich; Längen größer als `min_length`, Abstände Punkt–Linie nicht
+/// negativ; Winkel beliebig.
+pub fn check_dimension_value(
+    kind: &ConstraintKind,
+    value: f64,
+    min_length: f64,
+) -> Result<(), String> {
+    use ConstraintKind as K;
+    if !value.is_finite() {
+        return Err("Bitte eine Zahl eingeben".into());
+    }
+    match kind {
+        K::Distance(..)
+        | K::Radius(..)
+        | K::Diameter(..)
+        | K::EllipseMajor(..)
+        | K::EllipseMinor(..)
+            if value <= min_length =>
+        {
+            Err("Der Wert muss größer als null sein".into())
+        }
+        K::DistancePointLine(..) if value < 0.0 => Err("Der Wert darf nicht negativ sein".into()),
+        _ => Ok(()),
+    }
 }
 
 /// Setzt den Zahlenwert eines Maßes.
