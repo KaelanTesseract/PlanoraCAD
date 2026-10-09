@@ -293,3 +293,133 @@ fn closed_circle_seam_is_reported_once() {
     let r = seg_intersections(&circle, &line, &tol());
     assert_eq!(r.len(), 1, "{r:?}");
 }
+
+fn xz_frame(cz: f64) -> Frame {
+    Frame {
+        origin: DVec3::new(0.0, 0.0, cz),
+        x: DVec3::X,
+        y: DVec3::Z,
+        z: -DVec3::Y,
+    }
+}
+
+fn single(c: CurveSurface) -> Root {
+    let r = roots(c);
+    assert_eq!(r.len(), 1, "{r:?}");
+    r[0]
+}
+
+#[test]
+fn endpoint_slightly_off_the_surface_is_one_crossing() {
+    let plane = Surface::Plane {
+        frame: Frame::WORLD,
+    };
+    // Anfang 5e-7 unter der Ebene, steigt sofort durch
+    let up = Curve::Line {
+        origin: DVec3::new(0.0, 0.0, -5e-7),
+        dir: DVec3::Z,
+    };
+    assert!(!single(curve_surface_roots(&up, 0.0, 3.0, &plane, &tol())).touching);
+    // Ende 5e-7 über der Ebene
+    let up2 = Curve::Line {
+        origin: DVec3::new(0.0, 0.0, -3.0 + 5e-7),
+        dir: DVec3::Z,
+    };
+    assert!(!single(curve_surface_roots(&up2, 0.0, 3.0, &plane, &tol())).touching);
+    // absteigender Bereich: Start oben, Ende 5e-7 unter der Ebene
+    let up3 = Curve::Line {
+        origin: DVec3::new(0.0, 0.0, -5e-7),
+        dir: DVec3::Z,
+    };
+    assert!(!single(curve_surface_roots(&up3, 3.0, 0.0, &plane, &tol())).touching);
+    // Bogen, der am leicht abseitigen Anfang durch die Ebene läuft
+    let arc = Curve::Circle {
+        frame: xz_frame(5e-7),
+        radius: 1.0,
+    };
+    assert!(!single(curve_surface_roots(&arc, 0.0, -1.0, &plane, &tol())).touching);
+    assert!(!single(curve_surface_roots(&arc, 1.0, -1.0, &plane, &tol())).touching);
+}
+
+#[test]
+fn full_circle_tangent_at_start_or_middle_is_one_touch() {
+    let plane = Surface::Plane {
+        frame: Frame::WORLD,
+    };
+    let c = Curve::Circle {
+        frame: xz_frame(1.0),
+        radius: 1.0,
+    };
+    let at_start = single(curve_surface_roots(
+        &c,
+        1.5 * PI,
+        1.5 * PI + TAU,
+        &plane,
+        &tol(),
+    ));
+    assert!(at_start.touching);
+    let in_middle = single(curve_surface_roots(
+        &c,
+        0.5 * PI,
+        0.5 * PI + TAU,
+        &plane,
+        &tol(),
+    ));
+    assert!(in_middle.touching);
+    // absteigend
+    let desc = single(curve_surface_roots(
+        &c,
+        1.5 * PI,
+        1.5 * PI - TAU,
+        &plane,
+        &tol(),
+    ));
+    assert!(desc.touching);
+}
+
+#[test]
+fn full_circle_crossing_exactly_at_the_seam_is_one_crossing() {
+    let plane = Surface::Plane {
+        frame: Frame::WORLD,
+    };
+    let c = Curve::Circle {
+        frame: xz_frame(0.0),
+        radius: 1.0,
+    };
+    let r = roots(curve_surface_roots(&c, 0.0, TAU, &plane, &tol()));
+    assert_eq!(r.len(), 2, "{r:?}");
+    assert!(r.iter().all(|x| !x.touching));
+}
+
+#[test]
+fn long_ray_finds_grazing_roots_between_samples() {
+    let sphere = Surface::Sphere {
+        frame: Frame::WORLD,
+        radius: 1.0,
+    };
+    let off = (1.0f64 - 0.025 * 0.025).sqrt();
+    let line = Curve::Line {
+        origin: DVec3::new(-500.1, off, 0.0),
+        dir: DVec3::X,
+    };
+    let mut r = roots(curve_surface_roots(&line, 0.0, 1000.0, &sphere, &tol()));
+    r.sort_by(|a, b| a.t.total_cmp(&b.t));
+    assert_eq!(r.len(), 2, "{r:?}");
+    assert!(
+        (r[0].t - 500.075).abs() < 1e-6 && (r[1].t - 500.125).abs() < 1e-6,
+        "{r:?}"
+    );
+    assert!(r.iter().all(|x| !x.touching));
+    // genau tangential
+    let tang = Curve::Line {
+        origin: DVec3::new(-500.1, 1.0, 0.0),
+        dir: DVec3::X,
+    };
+    assert!(single(curve_surface_roots(&tang, 0.0, 1000.0, &sphere, &tol())).touching);
+    // knapp daneben
+    let miss = Curve::Line {
+        origin: DVec3::new(-500.1, 1.001, 0.0),
+        dir: DVec3::X,
+    };
+    assert!(roots(curve_surface_roots(&miss, 0.0, 1000.0, &sphere, &tol())).is_empty());
+}

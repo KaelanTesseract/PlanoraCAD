@@ -69,6 +69,7 @@ impl Seg {
     }
 
     /// Nächster Punkt des Stücks zu `p`: `(Bruchteil f, Abstand)`.
+    /// Bei Geraden muss `dir` normiert sein (Länge 1).
     pub fn closest(&self, p: DVec3) -> (f64, f64) {
         if let Curve::Line { origin, dir } = &self.curve {
             let (lo, hi) = (self.t0.min(self.t1), self.t0.max(self.t1));

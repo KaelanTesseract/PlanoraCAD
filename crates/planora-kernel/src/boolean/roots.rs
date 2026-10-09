@@ -43,7 +43,10 @@ fn is_closed(curve: &Curve, t0: f64, t1: f64) -> bool {
 
 /// Schnittpunkte der Kurve auf `[t0, t1]` mit einer Fläche (Nullstellen von `F(c(t))`).
 ///
-/// Bei einer geschlossenen Kurve (Vollkreis) wird die Naht nur einmal gemeldet.
+/// Jede Nullstelle wird genau einmal gemeldet. `touching` heißt: `g` wechselt dort das
+/// Vorzeichen nicht (Berührung). Randstellen innerhalb der Toleranz zählen als ein Schnitt.
+/// Bei einer geschlossenen Kurve (Vollkreis) ist die Naht keine Randstelle: sie wird nur
+/// einmal gemeldet und nach dem Vorzeichen davor und dahinter eingestuft.
 pub fn curve_surface_roots(
     curve: &Curve,
     t0: f64,
@@ -63,74 +66,120 @@ pub fn curve_surface_roots(
     if gs.iter().all(|v| v.abs() <= tol.linear) {
         return CurveSurface::Lies;
     }
-    let step = (t1 - t0).abs() / n as f64;
+    let closed = is_closed(curve, t0, t1);
+    let dir = if t1 >= t0 { 1.0 } else { -1.0 };
+    let lin = tol.linear;
 
     let mut roots: Vec<Root> = Vec::new();
     let add = |roots: &mut Vec<Root>, t: f64, touching: bool| {
-        if !roots.iter().any(|r| (r.t - t).abs() < 1e-7) {
+        let eps = if touching { 1e-6 } else { 1e-7 };
+        if !roots.iter().any(|r| (r.t - t).abs() < eps) {
             roots.push(Root { t, touching });
         }
     };
+    // Extremum von g auf [lo, hi] mit Vorzeichen `sgn` (+1: Minimum, -1: Maximum) -> (t, g(t))
+    let extremum = |lo: f64, hi: f64, sgn: f64| {
+        let (t, v) = golden_min(lo, hi, |t| sgn * g(t));
+        (t, sgn * v)
+    };
+    // Behandelt einen lokalen Extremwert von g in [lo, hi], dessen Nachbarwerte `ga`, `gb`
+    // dasselbe Vorzeichen haben: Berührung (|g| <= tol) oder zwei Schnitte (Vorzeichen gedreht).
+    // Liefert true, wenn der Bereich als Berührung behandelt wurde.
+    let handle_extremum =
+        |roots: &mut Vec<Root>, lo: f64, hi: f64, ga: f64, gb: f64, seam: bool| {
+            let sgn = if ga + gb >= 0.0 { 1.0 } else { -1.0 };
+            let (te, ge) = extremum(lo, hi, sgn);
+            if ge.abs() <= lin {
+                let mut te = te;
+                if seam {
+                    // in den Parameterbereich zurückfalten
+                    if (te - t0) * dir < 0.0 {
+                        te += dir * TAU;
+                    }
+                    if (te - t1).abs() < 1e-6 {
+                        te = t0;
+                    }
+                }
+                add(roots, te, true);
+                true
+            } else {
+                // `ge` hat dasselbe Vorzeichen wie die Nachbarn: kein Schnitt
+                if ge * ga > 0.0 || ge * gb > 0.0 {
+                    return false;
+                }
+                for t in [bisect(lo, te, &g), bisect(te, hi, &g)] {
+                    let t = if seam && (t - t0) * dir < 0.0 {
+                        t + dir * TAU
+                    } else {
+                        t
+                    };
+                    add(roots, t, false);
+                }
+                false
+            }
+        };
 
-    // Vorzeichenwechsel
+    // Intervalle, die zu einer Berührung gehören, liefern keine eigenen Vorzeichenwechsel.
+    let mut skip = vec![false; n];
+    // Lokale Extremwerte von g ohne Vorzeichenwechsel an den Stützstellen (Berührung oder
+    // zwei dicht benachbarte Schnitte innerhalb eines Abtastintervalls)
+    for i in 1..n {
+        let (p, c, q) = (gs[i - 1], gs[i], gs[i + 1]);
+        let is_ext = (c <= p && c <= q) || (c >= p && c >= q);
+        if is_ext && p * q >= 0.0 && handle_extremum(&mut roots, ts[i - 1], ts[i + 1], p, q, false)
+        {
+            skip[i - 1] = true;
+            skip[i] = true;
+        }
+    }
+    // Naht einer geschlossenen Kurve: g ist periodisch, die Naht ist keine Randstelle.
+    let mut seam_crossing = false;
+    if closed && n >= 2 {
+        let (p, q) = (gs[n - 1], gs[1]);
+        if p * q >= 0.0 {
+            let step = (t1 - t0).abs() / n as f64;
+            let lo = t0 - dir * step;
+            let hi = t0 + dir * step;
+            let (lo, hi) = if lo < hi { (lo, hi) } else { (hi, lo) };
+            if handle_extremum(&mut roots, lo, hi, p, q, true) {
+                skip[0] = true;
+                skip[n - 1] = true;
+            }
+        } else if gs[0].abs() <= lin {
+            seam_crossing = true;
+        }
+    }
+
+    // Vorzeichenwechsel zwischen Stützstellen
     for i in 0..n {
+        if skip[i] {
+            continue;
+        }
+        // Randstelle innerhalb der Toleranz: gilt selbst als der Schnitt (siehe unten)
+        if (i == 0 && gs[0].abs() <= lin) || (i == n - 1 && gs[n].abs() <= lin) {
+            continue;
+        }
         if gs[i] * gs[i + 1] < 0.0 {
             add(&mut roots, bisect(ts[i], ts[i + 1], &g), false);
         } else if gs[i] == 0.0 && i > 0 && gs[i - 1] * gs[i + 1] < 0.0 {
             add(&mut roots, ts[i], false);
         }
     }
-    // Endpunkte, die innerhalb der Toleranz auf der Fläche liegen
-    for &i in &[0usize, n] {
-        if gs[i].abs() <= tol.linear {
-            add(&mut roots, ts[i], false);
+    // Randstellen, die innerhalb der Toleranz auf der Fläche liegen (ein einziger Schnitt, auch
+    // wenn die Kurve gleich dahinter das Vorzeichen wechselt). Bei geschlossenen Kurven nur,
+    // wenn die Naht wirklich durchquert wird; eine Berührung an der Naht steht schon oben.
+    if closed {
+        if seam_crossing {
+            add(&mut roots, ts[0], false);
         }
-    }
-    // Berührungen: lokale Minima von |g| ohne Vorzeichenwechsel
-    for i in 1..n {
-        let (p, c, q) = (gs[i - 1].abs(), gs[i].abs(), gs[i + 1].abs());
-        if c <= p && c <= q && gs[i - 1] * gs[i + 1] >= 0.0 {
-            let (t, m) = golden_min(ts[i - 1], ts[i + 1], |t| g(t).abs());
-            if m <= tol.linear && !roots.iter().any(|r| (r.t - t).abs() < 1e-6) {
-                add(&mut roots, t, true);
+    } else {
+        for &i in &[0usize, n] {
+            if gs[i].abs() <= lin {
+                add(&mut roots, ts[i], false);
             }
         }
     }
     roots.sort_by(|a, b| a.t.total_cmp(&b.t));
-
-    // Zwei dicht benachbarte Vorzeichenwechsel, zwischen denen |g| nie über die Toleranz
-    // hinausgeht, sind in Wahrheit eine Berührung (Rundungsrauschen am Scheitel).
-    let mut merged: Vec<Root> = Vec::with_capacity(roots.len());
-    let mut i = 0;
-    while i < roots.len() {
-        if i + 1 < roots.len() {
-            let (a, b) = (roots[i], roots[i + 1]);
-            if !a.touching && !b.touching && b.t - a.t <= 2.0 * step {
-                let (tm, neg) = golden_min(a.t, b.t, |t| -g(t).abs());
-                if -neg <= tol.linear {
-                    merged.push(Root {
-                        t: tm,
-                        touching: true,
-                    });
-                    i += 2;
-                    continue;
-                }
-            }
-        }
-        merged.push(roots[i]);
-        i += 1;
-    }
-    let mut roots = merged;
-
-    // Naht einer geschlossenen Kurve nicht doppelt melden.
-    if is_closed(curve, t0, t1) && roots.len() > 1 {
-        let (lo, hi) = (t0.min(t1), t0.max(t1));
-        let first = roots[0].t;
-        let last = roots[roots.len() - 1].t;
-        if (first - lo).abs() < 1e-9 && (last - hi).abs() < 1e-9 {
-            roots.pop();
-        }
-    }
     CurveSurface::Roots(roots)
 }
 
