@@ -12,6 +12,7 @@ planora-kernel.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+planora-mesh.workspace = true
 proptest.workspace = true
 
 [lints]

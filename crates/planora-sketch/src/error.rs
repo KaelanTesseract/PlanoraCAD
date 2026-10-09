@@ -22,4 +22,6 @@ pub enum SketchError {
     UnsupportedForSolid(String),
     #[error("Diese Kante kann noch nicht in die Skizze kopiert werden: {0}")]
     UnsupportedProjection(String),
+    #[error("Der Kernel hat das Profil abgelehnt: {0}")]
+    Kernel(String),
 }

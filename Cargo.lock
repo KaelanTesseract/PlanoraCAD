@@ -2476,6 +2476,7 @@ version = "0.1.0"
 dependencies = [
  "planora-kernel",
  "planora-math",
+ "planora-mesh",
  "proptest",
  "thiserror 2.0.21",
 ]
