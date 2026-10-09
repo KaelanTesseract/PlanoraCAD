@@ -223,7 +223,7 @@ impl SketchSession {
     }
 
     /// Löst die Skizze und merkt sich den Bericht. Macht die Änderung die Skizze widersprüchlich
-    /// oder unlösbar, ist das ein Fehler (siehe [`SketchSession::check_change`]).
+    /// oder unlösbar, ist das ein Fehler (siehe [`check_change`]).
     fn solve_checked(&mut self, sk: &mut Sketch, prior: &Sketch) -> Result<SolveReport, String> {
         let report = sk.solve();
         self.last_report = Some(report.clone());

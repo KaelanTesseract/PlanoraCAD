@@ -1,6 +1,6 @@
 # PlanoraCAD – Spec Teilprojekt 4: Skizzen + Constraint-Solver
 
-Datum: 2026-10-09 · Status: Entwurf zur Freigabe · Baut auf: `2026-10-09-fundament-und-kernel-design.md` (Teilprojekt 1+2) und `2026-10-09-boolesche-operationen-design.md` (Teilprojekt 3), beide umgesetzt und nach `master` gemergt.
+Datum: 2026-10-09 · Status: freigegeben und umgesetzt (Abweichungen in Abschnitt 10) · Baut auf: `2026-10-09-fundament-und-kernel-design.md` (Teilprojekt 1+2) und `2026-10-09-boolesche-operationen-design.md` (Teilprojekt 3), beide umgesetzt und nach `master` gemergt.
 
 ## 1. Ziel und Einordnung
 
@@ -172,3 +172,43 @@ Ein gezogener Punkt geht als **weiche Zusatzabhängigkeit** mit kleinem Gewicht 
 ## 9. Lizenzen und Abhängigkeiten
 
 Keine neue externe Abhängigkeit geplant (eigener Solver). Falls eine im Plan doch nötig wird: vorher Lizenz prüfen, `cargo deny check` bleibt grün, `deny.toml` nie ohne Rückfrage erweitern. Kein Autodesk-Material; die Werkzeug- und Abhängigkeitsnamen sind allgemeine CAD-Begriffe.
+
+## 10. Änderungen bei der Umsetzung
+
+Stand: 2026-10-09, nach Abschluss von Teilprojekt 4 (Branch `feature/skizzen-und-solver`). Die Punkte D1–D6 standen schon im Implementierungsplan; die übrigen sind während der Umsetzung entstanden. Wo die Spec oben etwas anderes sagt, gilt dieser Abschnitt.
+
+### 10.1 Entscheidungen aus dem Plan (D1–D6)
+
+- **D1 – Ableitungen per Vorwärts-Automatik (`Dual`)** statt von Hand hergeleiteter Formeln. Die Gradienten sind exakt (kein Differenzenquotient); Tests vergleichen sie trotzdem mit Differenzenquotienten. Das gilt als „exakte Ableitungen“ im Sinne von Abschnitt 2.
+- **D2 – Zeilenweises Gram-Schmidt statt QR mit Spaltenpivotierung** für Rang, Redundanz und Nullraum (zu 4.3). Die Reihenfolge der Abhängigkeiten bleibt erhalten; gemeldet wird immer die später angelegte Abhängigkeit als überzählig.
+- **D3 – Kein QR-Rückfall im Schritt** (zu 4.2). `JᵀJ + λ·D` ist für λ > 0 positiv definit; scheitert Cholesky trotzdem, wird λ verzehnfacht.
+- **D4 – Widerspruchsdiagnose** (zu 4.3): Für jede nutzererzeugte Abhängigkeit der Gruppe wird die Gruppe ohne sie neu gelöst; gemeldet werden die, deren Weglassen eine Lösung ermöglicht. Abweichend vom Plan gilt: Findet die Diagnose keine solche Abhängigkeit, lautet der Status „nicht konvergiert“ (`NotConverged`) statt „widersprüchlich“.
+- **D5 – Profile müssen einfache geschlossene Ketten sein** (jeder Knoten hat genau zwei Kurven). T-Verzweigungen und offene Enden ergeben benannte Fehler; Kurven werden an Kreuzungen nicht zerschnitten.
+- **D6 – `Sketch::profiles()` liefert `ExtractedProfiles`** statt `Result<Vec<Profile>, _>` (zu 3.4): `profiles` (verwendbare Profile), `rejected` (abgelehnte Schleifen mit Kurven und Grund) und zusätzlich `curve_loops` (Kurven der äußeren Schleife je Profil in Durchlaufreihenfolge; derzeit nur von Tests genutzt). Gültige Profile bleiben so nutzbar, auch wenn andere Teile der Skizze abgelehnt werden.
+
+### 10.2 Solver
+
+- **Gleichmäßige Dämpfung:** Levenberg-Marquardt dämpft mit `λ · max(diag(JᵀJ))` für alle Variablen statt mit Marquardts spaltenweiser Skalierung `λ · diag(JᵀJ)`. Die spaltenweise Form meldete bei einer Drehung um einen festen Punkt fälschlich einen Widerspruch. Alle Variablen sind Millimeter (Winkel stecken in den Residuen, nicht in den Variablen); schlecht skalierte Mischungen könnten langsamer konvergieren.
+- **Ziehen mit „Politur“** (zu 4.4): Der gezogene Punkt geht als weiche Bedingung ein; danach wird ohne die weichen Bedingungen exakt nachgelöst. Gelingt das nicht, wird ohne Zug vom letzten Zustand gelöst (der Punkt bleibt stehen). Weiche Bedingungen wirken nur in Gruppen, die eine gezogene Variable enthalten.
+- **Zustand je Gruppe:** Der Status gilt je zusammenhängender Gruppe. Beim Ziehen kann eine Gruppe sich bewegen, während eine andere, unabhängige Gruppe weiter als widersprüchlich gemeldet wird; die Oberfläche liest dafür den Status. Die Diagnose läuft auch beim Ziehen für fehlschlagende Gruppen ohne Zug, damit die gemeldeten Abhängigkeiten dieselben sind wie beim normalen Lösen.
+- **Neue Abhängigkeitsarten für Ellipsen:** `EllipseMajor`, `EllipseMinor` (Halbachsen) und `EllipseAngle` (Lage der großen Halbachse). Wie beim Winkel ist auch `EllipseAngle` bei Drehung um π erfüllt; der nächstgelegene Zustand entscheidet.
+- **Spline-Parameter:** „Punkt auf Spline“ und „tangential an Spline“ nutzen den Kurvenparameter als Zusatzvariable. Eine Lösung zählt nur, wenn er im Bereich `[0, n − 1]` liegt; der Spielraum an den Enden hängt von der Länge der Endsehne ab (längenbezogene Toleranz statt fester Zahl). Wird ein Punkt über das Ende hinausgezogen, bleibt er am Ende.
+- Zusatzvariablen entfernter Abhängigkeiten werden nicht aufgeräumt (siehe `offene-punkte.md`).
+
+### 10.3 Profile und Kernel
+
+- Schleifen ohne Fläche und nicht geschlossene Ketten werden als „entartet“ abgelehnt; zusätzlich zu 3.5 lehnt der Kernel **Löcher in Löchern** ab (`KernelError::NestedHoles`).
+- Die Oberfläche liest die Zahl der Flächen und Kanten über `Kernel::counts` (Punkt 5 aus 3.5).
+- Körperkanten kopieren (zu 5): Geraden, Kreise und Bögen in parallelen Ebenen; ganze schräge Kreise und Ellipsen werden als Ellipse übernommen (deshalb prüfen die Tests aus Aufgabe 8 nun Halbkreise). Schräge Bögen und Ellipsenbögen werden abgelehnt. Kopierte Bögen bekommen kein eigenes Radiusmaß.
+- Drehen verlangt ein Profil ohne Löcher, genau ein Linienstück auf der Drehachse und das Profil ganz auf einer Seite der Achse; Drehwinkel immer 360°.
+
+### 10.4 Oberfläche
+
+- **Werkzeuge in einem Fenster „Skizze“** statt einer Werkzeugleiste im Viewport; die Liste der Abhängigkeiten steht ebenfalls dort, nicht im Eigenschaftenfenster.
+- **Zusätzliche Kombinationen in der Auswahl-Leiste:** Punkt + Ellipse/Spline bietet „Punkt auf Kurve“, Linie + Ellipse/Spline bietet „tangential“ an.
+- **Darstellung über egui** (Zeichenfläche über der 3D-Szene) statt über den Linienrenderer in `planora-render`. Fertige Skizzen werden ebenfalls so als dünne Linien in der 3D-Ansicht gezeichnet (Konstruktionsgeometrie grau gestrichelt); sie liegen immer über den Körpern und lassen sich dort nicht anklicken.
+- **Körper nur außerhalb des Skizzen-Modus:** Wer einen Körper- oder Booleschen Dialog öffnet (Menü oder Kontextmenü), beendet damit die offene Skizze; wird eine Skizze geöffnet, werden offene Körperdialoge verworfen.
+- **Zum Körper** (zu 5): Statt der vorhandenen Beispielprofil-Dialoge gibt es eigene Dialoge „Skizze extrudieren“ und „Skizze drehen“ (Skizzenauswahl, Profilliste mit Fläche und Löchern, abgelehnte Schleifen mit Grund, Höhe bzw. Drehachse aus den Linien der Skizze, Konstruktionslinien zuerst). Aufruf über das Kontextmenü der Skizze im Browser („Bearbeiten“, „Extrudieren …“, „Drehen …“, „Löschen“) oder „Erzeugen → Skizze extrudieren … / Skizze drehen …“. Ein Profil wird im Dialog gewählt, nicht per Rechtsklick in der Ansicht. Bei einem Fehler bleibt der Dialog offen, die Meldung steht in der Statuszeile. Der Körper entsteht an Ort und Stelle (nicht neben die vorhandenen verschoben). Die Beispielprofil-Dialoge bleiben erhalten.
+- **Rücknahme neuer Abhängigkeiten:** Eine neue Abhängigkeit wird nur dann zurückgenommen, wenn die Skizze vorher gelöst war oder die neue Abhängigkeit selbst als Ursache gemeldet wird; in einer schon fehlerhaften Skizze wird sie mit Warnung behalten. Beim Fangen wird ein Punkt auf den nächstgelegenen Kurvenpunkt gesetzt.
+- Spiegeln und Muster melden Fehler als deutsche Meldung; ein abgebrochenes Werkzeug behält bereits gesetzte Punkte.
+- `AppState` hält `sketches: Vec<Sketch>` (kein eigener Typ `SketchObject`).

@@ -1,6 +1,6 @@
-# Offene Punkte nach Teilprojekt 1–3
+# Offene Punkte nach Teilprojekt 1–4
 
-Stand: 2026-10-09. Ergebnis der Abschlussprüfungen; bewusst nicht in Teilprojekt 1–3 behoben.
+Stand: 2026-10-09. Ergebnis der Abschlussprüfungen; bewusst nicht in Teilprojekt 1–4 behoben.
 
 ## Entscheidung des Projekteigners nötig
 - **Markenrecherche** für „PlanoraCAD“ (DPMA, EUIPO, WIPO, Klasse 9) vor einer Veröffentlichung.
@@ -48,12 +48,65 @@ Stand: 2026-10-09. Bewusst offen gelassen; Fehlerfälle liefern einen benannten 
 - Kein Rückgängig; ein Ergebnis ersetzt beide Ausgangskörper.
 - Der Dialog „Boolesche Operation“ merkt sich die Körper als Listenplatz; wird ein Körper gelöscht, während der Dialog offen ist, zeigt er auf einen anderen.
 
-## Vor Teilprojekt 4 (Skizzen)
-- `ProfileLoop::polygon` panict bei < 3 Punkten (öffentliche API) → Result.
-- `ProfileLoop::sample`/`signed_area` sind öffentlich und ungeschützt (riesige Winkel).
-- Sich überschneidende oder außerhalb liegende Löcher werden nicht erkannt.
-- `Frame`-Eingaben (NaN, nicht orthonormal) werden in `extrude`/`revolve` nicht geprüft.
-- UI soll Eigenschaften über eine Kernel-Fassade lesen statt über `solid.faces[..]`.
+## Erledigt in Teilprojekt 4
+Die Liste „Vor Teilprojekt 4“ ist abgearbeitet:
+- `ProfileLoop::polygon` gibt `Result` zurück statt bei < 3 Punkten zu paniken.
+- `ProfileLoop::sample`/`signed_area` sind abgesichert (endliche Werte, begrenzte Schrittzahl).
+- Sich schneidende, außerhalb liegende und (neu) in anderen Löchern liegende Löcher werden abgewiesen (`KernelError`, u. a. `NestedHoles`).
+- `extrude`/`revolve` prüfen `Frame`-Eingaben (endlich, orthonormal innerhalb der Toleranz).
+- Die Oberfläche liest Flächen- und Kantenzahl über die Kernel-Fassade (`Kernel::counts`) statt über `solid.faces[..]`.
+
+## Nach Teilprojekt 4 (Skizzen)
+Stand: 2026-10-09. Bewusst offen gelassen; Fehlerfälle liefern eine deutsche Meldung, die Skizze bleibt im letzten gültigen Zustand.
+
+**Funktionsumfang (Grenzen)**
+- Ellipsen und Splines werden nicht zu Körpern („Dieses Profil enthält … und kann noch nicht zu einem Körper werden“); der Kernel kennt elliptische Zylinder und NURBS-Flächen noch nicht.
+- Profile müssen einfache geschlossene Ketten aus Linien und Bögen oder Kreise sein: keine T-Verzweigungen, keine Kreuzungen, kein Zerschneiden von Kurven an Schnittpunkten. Schleifen ohne Fläche oder ohne Schluss gelten als entartet.
+- Drehen nur für Profile ohne Löcher, mit genau einer Linie auf der Drehachse und ganz auf einer Seite der Achse; immer 360°. Extrudieren nur in Richtung der Skizzennormalen (kein Gegen- oder Symmetrisch-Extrudieren).
+- Skizzen nur auf den Grundebenen und auf ebenen Körperflächen; die Ebene einer Skizze lässt sich nachträglich nicht verschieben.
+- Körperkanten werden nur einmalig kopiert (Geraden; Kreise und Bögen in parallelen Ebenen; ganze Kreise und Ellipsen auch schräg, dann als Ellipse). Schräge Bögen und Ellipsenbögen werden abgelehnt. Keine lebende Verknüpfung.
+- Körper aus Skizzen sind Momentaufnahmen (keine Neuberechnung bei späterer Änderung der Skizze); das bringt der Feature-Baum.
+- Kein Rückgängig, kein Speichern/Laden.
+- Mehrdeutige Lagen werden vom nächstgelegenen Zustand entschieden: Der Winkel-Rest ist auch bei θ + π null (gespiegelte Lösung), ebenso bei `EllipseAngle`; es gibt keine Auswahl der Lösung.
+- Maße nur als Zahl; keine Gleichungen, Parameter oder Ausdrücke.
+- Konstruktionsgeometrie nur über den Umschalter „Konstruktion umschalten“ (kein eigenes Werkzeug).
+- Punkte, die über das Ende eines Splines hinausgezogen werden, bleiben am Ende stehen (keine Ungleichungs-Abhängigkeiten).
+
+**Solver und Algebra**
+- Dichte Matrizen je zusammenhängender Gruppe: sehr große Gruppen (> ~500 Variablen) werden langsam. Die Widerspruchsdiagnose löst die Gruppe je Abhängigkeit einmal neu (O(Abhängigkeiten) Lösungen); beim Ziehen fällt das nur an, wenn eine andere Gruppe schon widersprüchlich ist.
+- Der Zustand gilt je Gruppe: Ziehen kann „widersprüchlich“ melden, während eine andere Gruppe sich bewegt hat; die Oberfläche muss den Status lesen.
+- Abhängigkeiten mit Jacobi-Zeile null werden als überzählig gemeldet; interne Abhängigkeiten (z. B. Bogenradius) nie.
+- Zusatzvariablen entfernter Abhängigkeiten (Spline- und Ellipsen-Parameter) werden nicht aufgeräumt.
+- Cholesky liest nur das untere Dreieck (setzt Symmetrie voraus); die Nullraum-Bestimmung orthogonalisiert nur einmal und kann bei frühem Abbruch weniger als n − Rang Vektoren liefern.
+- `Dual::variable` panict bei Index ≥ n (interne API); `sqrt` klemmt NaN auf 0 und liefert für negative Radikanden einen sehr großen Schein-Gradienten; `div` hat keinen Null-Schutz (die Abhängigkeiten teilen nur durch abgesicherte Längen).
+- Spline-Parameter: Der Spielraum hängt von der Länge der Endsehnen ab (sehr kurze Endsehnen < 1e-5 mm sind gedeckelt); `tol.linear == 0` ergäbe NaN; der Klemm-Zweig ist ungetestet; `spline_parameter` kopiert die Punktliste je Aufruf.
+- Kleinere Ungereimtheiten: `measure` kann genau −π liefern; `Symmetric(a, a)` meldet „Falscher Objekttyp“ statt „Entartet“; Entfernen interner Abhängigkeiten meldet „Das Objekt gibt es nicht“.
+- Ziehen: Ein Punkt, der in einem Bild zweimal gezogen wird, ist undokumentiert; schlägt der Feinschliff fehl und der Neustart konvergiert, wird das Ziehen still ignoriert; `point_unconstrained` und die Gruppenbildung behandeln Abhängigkeiten ohne lokale Variablen unterschiedlich.
+- Fehlende Tests: Umklappen über eine Zweiggrenze mit freiem Freiheitsgrad (tangential/Punkt-Linie), Ziehen eines freien Freiheitsgrads in einer bestimmten Gruppe, negativer Zweig von Punkt-Linien-Abstand und innerer Kreistangente.
+
+**Profile und Körper**
+- Endpunkte werden gierig (nicht transitiv) zu Knoten zusammengefasst; zwei Schleifen, die sich in einem zusammengefassten Knoten treffen, gelten als „nicht eindeutig“.
+- Die Schnittprüfung der Schleifen ist quadratisch (250 konzentrische Kreise brauchen Sekunden); Hilfsfunktionen (z. B. `segments_touch`) gibt es doppelt im Kernel und in der Skizze; die Berührprüfung arbeitet exakt auf den Sehnen (ohne Toleranz).
+- Die Reihenfolge der abgelehnten Schleifen ist nicht global sortiert; die Meldung zum Öffnungswinkel ist nahe 2π ungenau.
+- Drehen: Die Achsprüfung kommt vor der Seitenprüfung (eine Achse quer durchs Profil meldet „keine Kante auf der Achse“); ein zweites kollineares Achsstück lehnt erst der Kernel ab. Kein Test für einen gespiegelten Halbkreis (Drehsinn −1).
+- Kernel: Die Frame-Prüfung nutzt `tol.linear` als Orthonormalitäts-Schwelle (künftig benannte Konstante); in `check_loop_input` und `extrude` stehen noch feste Werte (1e-9, 1e-12).
+
+**Hilfen (Spiegeln, Muster, Kanten kopieren)**
+- Liegt ein Punkt auf der Spiegelachse, wird er nicht an die Achse gebunden; Ziehen kann die Symmetrie dann brechen. Eine Kurve auf sich selbst zu spiegeln erzeugt Doppelte.
+- Die Projektion eines Quaders erzeugt deckungsgleiche doppelte Linien; die Bereichsprüfung des Linienparameters mischt Einheiten.
+
+**Oberfläche**
+- Fertige Skizzen werden in der 3D-Ansicht als Linien über alles gezeichnet (keine Verdeckung durch Körper) und lassen sich dort nicht anklicken.
+- Die Dialoge „Skizze extrudieren/drehen“ und „Boolesche Operation“ merken sich Skizze bzw. Körper als Listenplatz; wird währenddessen gelöscht, zeigen sie auf einen anderen Eintrag.
+- Körper entstehen nur außerhalb des Skizzen-Modus (die offene Skizze wird vorher beendet).
+- Hinweise erscheinen in der Statuszeile und im Skizzenfenster ebenfalls rot (keine Unterscheidung Hinweis/Fehler).
+- Roboto enthält `∥` und `⟂` nicht; angezeigt werden `||` und „Lot“. Beschriftungen an derselben Stelle können sich bei dichten Skizzen überlappen.
+- Ein Klick auf den Navigationswürfel im Skizzen-Modus kippt die Kamera; danach ist die Sicht nicht mehr senkrecht, bis die Skizze neu geöffnet wird. Mit großer Skizze erscheint die z-Achse des Gitters in der Draufsicht als schräge Linie.
+- Die Kurvenfarben der Skizze sind fest im Code hinterlegt (nicht Teil des Designs/Themes).
+- Ein neuer, nicht konvergierender Teil neben einem schon fehlerhaften Teil wird beim Prüfen einer Änderung nicht erkannt (der Lösungsbericht kennt nur den Gesamtstatus); in einer fehlerhaften Skizze werden keine automatischen Waagerecht-/Senkrecht-Abhängigkeiten angelegt, und die Ziehen-Warnung erscheint immer.
+- `status()` löst eine Kopie der Skizze, wenn noch kein Lösungsbericht vorliegt.
+- Von Hand nicht geprüft: Eingabe/Esc/Entf-Tasten (die Automatisierung konnte sie nicht senden), Verschieben mit der mittleren Maustaste, Zoomen, Spiegeln/Muster, Kanten kopieren, helles Design.
+- Fehlende Tests: Ausmaß-Berechnung nur für Kreise (nicht Bögen/Ellipsen), Werkzeugfolge ohne Abschluss, Aufheben der Auswahl im Browser, Bearbeiten einer bestehenden Abhängigkeit über das Zahlenfeld; erneutes Anklicken derselben Fläche löscht die Skizzenhervorhebung nicht.
 
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).
