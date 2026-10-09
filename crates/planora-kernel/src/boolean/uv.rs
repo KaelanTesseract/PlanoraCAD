@@ -43,11 +43,14 @@ pub fn face_geom(solid: &Solid, id: Id<Face>) -> FaceGeom {
     }
 }
 
+/// Abtastdichte der Bögen in den Randpolygonen: Abschnitte je Vollkreis (alle 5°).
+pub(crate) const ARC_SAMPLES_PER_TURN: usize = 72;
+
 /// Zahl der Abtastpunkte eines Stücks: Geraden nur ihr Anfangspunkt, Bögen alle 5°.
-fn samples(s: &Seg) -> usize {
+pub(crate) fn samples(s: &Seg) -> usize {
     match s.curve {
         Curve::Line { .. } => 1,
-        _ => sample_count(s.t0, s.t1, 72, 2),
+        _ => sample_count(s.t0, s.t1, ARC_SAMPLES_PER_TURN, 2),
     }
 }
 

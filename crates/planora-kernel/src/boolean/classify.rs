@@ -7,9 +7,10 @@
 
 use super::error::BooleanError;
 use super::roots::{CurveSurface, curve_surface_roots};
+use super::seg::Seg;
 use super::split::Region;
 use super::uv::{
-    Containment, FaceGeom, face_geom, loop_points, point_in_face, points_to_uv, winding,
+    Containment, FaceGeom, face_geom, loop_points, point_in_face, points_to_uv, samples, winding,
 };
 use crate::geometry::{Curve, Surface};
 use crate::topology::Solid;
@@ -79,8 +80,34 @@ fn reach(other: &[FaceGeom], p: DVec3) -> f64 {
         + 1.0
 }
 
+/// Sicherheitsfaktor auf den Sehnenpfeil: Die Randpolygone entstehen im Parameterraum, dessen
+/// Abbildung den Pfeil verzerren kann.
+const SAG_SAFETY: f64 = 2.0;
+
+/// Größter Abstand zwischen einem Randstück und dem Sehnenpolygon, mit dem `point_in_face` es
+/// annähert (Bögen: `r·(1 − cos(Δt/2))` bei der Schrittweite `Δt` der Abtastung, für Ellipsen mit
+/// der großen Halbachse als obere Schranke; Geraden: 0).
+fn chord_sag(s: &Seg) -> f64 {
+    let r = match &s.curve {
+        Curve::Line { .. } => return 0.0,
+        Curve::Circle { radius, .. } => radius.abs(),
+        Curve::Ellipse { major, minor, .. } => major.abs().max(minor.abs()),
+    };
+    let half_step = (s.t1 - s.t0).abs() / samples(s) as f64 / 2.0;
+    r * (1.0 - half_step.min(std::f64::consts::PI).cos())
+}
+
+/// Liegt `p` so nah am Rand der Fläche, dass das Randpolygon von `point_in_face` hier nicht
+/// verlässlich zwischen innen und außen unterscheidet (Toleranz plus Sehnenpfeil)?
+fn near_boundary(g: &FaceGeom, p: DVec3, tol: &Tolerance) -> bool {
+    g.loops
+        .iter()
+        .flatten()
+        .any(|s| s.closest(p).1 <= tol.linear + SAG_SAFETY * chord_sag(s))
+}
+
 /// Strahlverfahren: `Some(true)` = innen, `Some(false)` = außen, `None` = mehrdeutig
-/// (Treffer auf einem Rand oder einer Naht, Berührung, Strahl liegt in einer Fläche).
+/// (Treffer auf oder dicht an einem Rand oder einer Naht, Berührung, Strahl liegt in einer Fläche).
 fn cast(other: &[FaceGeom], p: DVec3, dir: DVec3, reach: f64, tol: &Tolerance) -> Option<bool> {
     let ray = Curve::Line { origin: p, dir };
     let mut hits = 0;
@@ -93,6 +120,10 @@ fn cast(other: &[FaceGeom], p: DVec3, dir: DVec3, reach: f64, tol: &Tolerance) -
                         continue;
                     }
                     let hit = p + dir * r.t;
+                    // Treffer im Pfeilband eines Randbogens: innen/außen unsicher, nächste Richtung.
+                    if near_boundary(g, hit, tol) {
+                        return None;
+                    }
                     match point_in_face(g, hit, tol) {
                         Containment::Boundary => return None,
                         Containment::Inside => {
@@ -166,13 +197,13 @@ fn interior_point(face: &FaceGeom, region: &Region, tol: &Tolerance) -> Option<D
         .iter()
         .map(|h| points_to_uv(&face.surface, face.same_sense, &loop_points(h)))
         .collect();
+    if outer.len() < 3 {
+        return None;
+    }
     let (mut lo, mut hi) = (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN));
     for p in &outer {
         lo = lo.min(*p);
         hi = hi.max(*p);
-    }
-    if !(lo.is_finite() && hi.is_finite()) {
-        return None;
     }
     let shifts = shifts(&face.surface);
     let sgn = if face.same_sense { 1 } else { -1 };
