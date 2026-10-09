@@ -119,9 +119,10 @@ Unterstützte Paare (alles andere → `UnsupportedIntersection`):
 
 **Ergebnisprüfung (immer):**
 1. Validator (Topologie, Orientierung, Euler-Poincaré **je Schale**).
-2. Volumenprobe über das Netz: V(Ergebnis) liegt in den erwarteten Grenzen (z. B. Vereinigen ≥ max(V_A, V_B) − Toleranz).
-3. Leeres Ergebnis → `Err(EmptyResult)`; die App zeigt eine Meldung.
+2. Leeres Ergebnis → `Err(EmptyResult)`; die App zeigt eine Meldung.
 Schlägt eine Prüfung fehl → `ResultInvalid`.
+
+**Volumenprobe (nicht im Kernel):** Der Kernel kennt keine Netze. Deshalb liefert `planora-mesh` die Funktion `boolean_volume_plausible(op, v_a, v_b, v_result, rel_tol)` (Vereinigen: max(V_A, V_B) ≤ V ≤ V_A + V_B; Abziehen: V_A − V_B ≤ V ≤ V_A; Schneiden: 0 ≤ V ≤ min(V_A, V_B), jeweils mit Spielraum). Die App ruft sie nach jeder Operation auf und lehnt unplausible Ergebnisse mit einer Meldung ab; die Tests nutzen sie ebenfalls.
 
 ## 7. Validator und Netz
 
@@ -140,7 +141,7 @@ Schlägt eine Prüfung fehl → `ResultInvalid`.
 
 ## 9. Oberfläche (`planora-app`)
 
-- Menü **Bearbeiten → Vereinigen / Abziehen / Schneiden** öffnet einen Dialog mit Auswahl von Körper A, Körper B und Operation. Das Ergebnis ersetzt beide Eingangskörper; der Name nennt die Herkunft (z. B. „Abzug: Quader 1 − Zylinder 2“). Bei Mehrschalen-Ergebnissen entsteht je ein Körper pro Schale.
+- Menü **Bearbeiten → Vereinigen / Abziehen / Schneiden** öffnet einen Dialog mit Auswahl von Körper A, Körper B und Operation. Das Ergebnis ersetzt beide Eingangskörper und bleibt an der Stelle der Eingangskörper (es wird nicht neu platziert); der Name nennt die Herkunft (z. B. „Abzug: Quader 1 − Zylinder 2“). Ein Ergebnis mit mehreren Schalen (getrennte Teile oder Hohlraum) bleibt **ein** Körper mit mehreren Schalen.
 - **Körper verschieben:** In den Eigenschaften lassen sich Position x/y/z des gewählten Körpers ändern (Translation über `Kernel::transform`). Heute werden neue Körper nebeneinander platziert; ohne Verschieben ließen sich Boolesche Operationen nicht vorführen.
 - Fehler des Kernels erscheinen auf Deutsch in der Statuszeile.
 - Alle UI-Texte deutsch; Icons weiterhin selbst gezeichnet.
