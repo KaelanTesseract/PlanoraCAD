@@ -10,4 +10,4 @@ pub mod solver;
 pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, LineOrPoints};
 pub use error::SketchError;
 pub use model::{CurveData, CurveId, CurveKind, PointData, PointId, Sketch};
-pub use solver::{Soft, SolveReport, SolveStatus};
+pub use solver::{Drag, Soft, SolveReport, SolveStatus};

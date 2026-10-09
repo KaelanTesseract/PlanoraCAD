@@ -5,8 +5,10 @@
 //! Gruppe; jede Gruppe wird für sich gelöst. Nur gelöste Gruppen schreiben ihre Werte zurück.
 
 use crate::constraint::ConstraintId;
+use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_math::DVec2;
 use std::collections::{HashMap, HashSet};
 
 /// Höchstzahl der Levenberg-Marquardt-Schritte je Lauf.
@@ -71,6 +73,19 @@ pub struct Soft {
     pub var: usize,
     pub target: f64,
     pub weight: f64,
+}
+
+/// Gewicht der weichen Zugbedingung. Klein gegen die harten Residuen (Gewicht 1), damit die
+/// Abhängigkeiten im Zuglauf gewinnen und die Politur nur wenig korrigieren muss; groß genug,
+/// damit der Zug die freien Freiheitsgrade in wenigen Schritten bewegt (Kosten des Zugs bei
+/// 10 mm Abstand: 1e-2, deutlich über der Stillstandsschwelle).
+const DRAG_WEIGHT: f64 = 1e-2;
+
+/// Zug eines Punktes zu einer Zielposition.
+#[derive(Clone, Copy, Debug)]
+pub struct Drag {
+    pub point: PointId,
+    pub target: DVec2,
 }
 
 /// Zusammenhangskomponente aus Variablen und Abhängigkeiten.
@@ -183,8 +198,8 @@ impl Sketch {
         }
     }
 
-    /// Levenberg-Marquardt mit Marquardt-Skalierung. Ändert `x` nur durch Schritte, die die
-    /// Kosten senken.
+    /// Levenberg-Marquardt mit einheitlicher Dämpfung `λ · max_k (JᵀJ)_kk · I` (siehe
+    /// `MIN_DIAG`). Ändert `x` nur durch Schritte, die die Kosten senken.
     fn levenberg_marquardt(
         &self,
         g: &Group,
@@ -389,10 +404,17 @@ impl Sketch {
         for g in &groups {
             let col: HashMap<usize, usize> =
                 g.vars.iter().enumerate().map(|(c, v)| (*v, c)).collect();
+            // Nur die weichen Bedingungen auf Variablen dieser Gruppe zählen. Gruppen ohne sie
+            // werden genau wie von `solve` gelöst (kein Zug- und Politurlauf).
+            let group_soft: Vec<Soft> = soft
+                .iter()
+                .filter(|s| col.contains_key(&s.var))
+                .copied()
+                .collect();
             let mut x = start.clone();
-            let mut lm = self.levenberg_marquardt(g, &col, &mut x, soft, None, tol_r);
+            let mut lm = self.levenberg_marquardt(g, &col, &mut x, &group_soft, None, tol_r);
             let mut used = lm.iterations;
-            if !soft.is_empty() {
+            if !group_soft.is_empty() {
                 // Politur: Die weichen Bedingungen liefern nur eine Näherung. Von dort aus wird
                 // ohne sie exakt nachgelöst; gelingt das nicht, wird ohne Zug vom Start gelöst.
                 lm = self.levenberg_marquardt(g, &col, &mut x, &[], None, tol_r);
@@ -461,6 +483,58 @@ impl Sketch {
             free_curves,
             iterations,
         }
+    }
+
+    /// Zieht Punkte zu Zielpositionen; harte Abhängigkeiten bleiben erfüllt. Der Solver startet
+    /// vom aktuellen Zustand, die gewählte Lage mehrdeutiger Abhängigkeiten (`branch`) bleibt
+    /// unverändert, deshalb klappt nichts in die Spiegellage um. Nicht lösbare Gruppen bleiben
+    /// unverändert (siehe `solve`).
+    pub fn drag(&mut self, drags: &[Drag]) -> Result<SolveReport, SketchError> {
+        for d in drags {
+            self.check_point(d.point)?;
+            if !d.target.is_finite() {
+                return Err(SketchError::InvalidInput(
+                    "Das Ziel muss eine endliche Position sein".into(),
+                ));
+            }
+        }
+        let mut soft = Vec::with_capacity(2 * drags.len());
+        for d in drags {
+            let (xv, yv) = (self.points[d.point].x, self.points[d.point].y);
+            soft.push(Soft {
+                var: xv,
+                target: d.target.x,
+                weight: DRAG_WEIGHT,
+            });
+            soft.push(Soft {
+                var: yv,
+                target: d.target.y,
+                weight: DRAG_WEIGHT,
+            });
+        }
+        // Punkte ohne jede Abhängigkeit folgen dem Zug direkt.
+        for d in drags {
+            if self.point_unconstrained(d.point) {
+                self.set_point_xy(d.point, d.target.x, d.target.y)?;
+            }
+        }
+        Ok(self.solve_with_soft(&soft))
+    }
+
+    /// Wahr, wenn keine aktive Abhängigkeit (lebend, eingeschaltet, nicht nur anzeigend, auch
+    /// interne) den Punkt direkt oder über eine Kurve benutzt, die ihn enthält.
+    fn point_unconstrained(&self, p: PointId) -> bool {
+        !self
+            .constraints
+            .iter()
+            .filter(|(_, c)| c.alive && c.enabled && !c.driven)
+            .any(|(_, c)| {
+                c.kind.points().contains(&p)
+                    || c.kind
+                        .curves()
+                        .iter()
+                        .any(|&cu| self.curves[cu].kind.points().contains(&p))
+            })
     }
 
     /// Alle Variablen lebender Punkte und Kurven (ohne Doppelte).
