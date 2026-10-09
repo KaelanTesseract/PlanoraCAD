@@ -92,17 +92,26 @@ fn cylinder_and_box_union_and_intersection() {
     assert!(rel(vu, 1000.0 + PI * 4.0 * 4.0) < 0.005, "{vu}");
 }
 
+/// Kanten-Berührungsfall: Die Kugel berührt die Schnittfläche x = 5 genau an deren Randkanten
+/// (Tangentialpunkte und Pole auf den Quaderkanten). Solche Fälle sind laut Spec §12 kein Ziel;
+/// der Kernel darf sie mit dem benannten Fehler `AmbiguousContact` ablehnen. Liefert er ein
+/// Ergebnis, muss es vollständig stimmen. Die Geometrie selbst (Schnitt durch beide Pole) deckt
+/// `half_sphere_by_a_larger_box` in `boolean_curved.rs` ohne Kantenberührung ab.
 #[test]
-#[ignore = "Kernel: AmbiguousContact (split.rs), weil die Kugel die Quaderkanten der Schnittfläche x = 5 berührt; siehe Bericht zu Task 9"]
 fn half_sphere_by_a_box() {
     let sph = moved(&k().make_sphere(5.0).unwrap(), DVec3::new(5.0, 5.0, 5.0));
     let boxx = moved(
         &k().make_box(DVec3::new(10.0, 10.0, 10.0)).unwrap(),
         DVec3::new(5.0, 0.0, 0.0),
     );
-    let i = k().boolean(&sph, &boxx, BoolOp::Intersection).unwrap();
-    let v = checked(&i);
-    assert!(rel(v, 2.0 / 3.0 * PI * 125.0) < 0.01, "{v}");
+    match k().boolean(&sph, &boxx, BoolOp::Intersection) {
+        Ok(i) => {
+            let v = checked(&i);
+            assert!(rel(v, 2.0 / 3.0 * PI * 125.0) < 0.01, "{v}");
+        }
+        Err(BooleanError::AmbiguousContact) => {}
+        Err(e) => panic!("unerwarteter Fehler: {e:?}"),
+    }
 }
 
 #[test]

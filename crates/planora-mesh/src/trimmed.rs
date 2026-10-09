@@ -88,12 +88,18 @@ impl Builder {
 }
 
 /// Verschiebt die Löcher einer periodischen Fläche um ganze Perioden, sodass sie in der
-/// äußeren Schleife liegen (jede Schleife wird für sich aufgerollt).
-fn align_holes(surface: &Surface, rings: &mut [Vec<(DVec2, Option<usize>)>]) {
-    if !surface.is_periodic() || rings.len() < 2 {
-        return;
+/// äußeren Schleife liegen (jede Schleife wird für sich aufgerollt). Liegt ein Loch bei keiner
+/// Verschiebung in der äußeren Schleife, ist die Fläche widersprüchlich: `Err`.
+fn align_holes(surface: &Surface, rings: &mut [Vec<(DVec2, Option<usize>)>]) -> Result<(), ()> {
+    if rings.len() < 2 {
+        return Ok(());
     }
     let outer: Vec<DVec2> = rings[0].iter().map(|(p, _)| *p).collect();
+    let dus: &[f64] = if surface.is_periodic() {
+        &[0.0, -TAU, TAU, -2.0 * TAU, 2.0 * TAU]
+    } else {
+        &[0.0]
+    };
     let dvs: &[f64] = if matches!(surface, Surface::Torus { .. }) {
         &[0.0, -TAU, TAU]
     } else {
@@ -101,23 +107,30 @@ fn align_holes(surface: &Surface, rings: &mut [Vec<(DVec2, Option<usize>)>]) {
     };
     for ring in rings.iter_mut().skip(1) {
         let Some(&(first, _)) = ring.first() else {
-            continue;
+            return Err(());
         };
-        let shift = [0.0, -TAU, TAU, -2.0 * TAU, 2.0 * TAU]
+        let s = dus
             .iter()
             .flat_map(|du| dvs.iter().map(move |dv| DVec2::new(*du, *dv)))
-            .find(|s| winding(&outer, first + *s) != 0);
-        if let Some(s) = shift {
-            for (p, _) in ring.iter_mut() {
-                *p += s;
-            }
+            .find(|s| winding(&outer, first + *s) != 0)
+            .ok_or(())?;
+        for (p, _) in ring.iter_mut() {
+            *p += s;
         }
     }
+    Ok(())
 }
 
 /// Rasterpunkte (in `(u, v)`) im Inneren der Fläche, mit Abstand zum Rand. Abstände werden im
-/// gestreckten Raum (`scale`) gemessen, die Maschenweite dort ist `h`.
-fn grid_points(polys: &[Vec<DVec2>], scale: DVec2, h: f64, sign: f64) -> Vec<DVec2> {
+/// gestreckten Raum (`scale`) gemessen, die Maschenweite dort ist `h`. Wären es mehr als
+/// `MAX_GRID_POINTS` Rasterpunkte, wird das Raster in `v` gröber; reicht das nicht (zu viele
+/// Spalten), folgt `TooLarge`.
+fn grid_points(
+    polys: &[Vec<DVec2>],
+    scale: DVec2,
+    h: f64,
+    sign: f64,
+) -> Result<Vec<DVec2>, MeshError> {
     let sp: Vec<Vec<DVec2>> = polys
         .iter()
         .map(|p| p.iter().map(|q| *q * scale).collect())
@@ -130,11 +143,19 @@ fn grid_points(polys: &[Vec<DVec2>], scale: DVec2, h: f64, sign: f64) -> Vec<DVe
     // auch NaN führt zu einem leeren Raster
     let usable = h > 0.0 && hi.x > lo.x && hi.y > lo.y;
     if !usable {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let nu = ((hi.x - lo.x) / h).ceil().max(1.0) as usize;
-    let nv_fine = ((hi.y - lo.y) / h).ceil().max(1.0) as usize;
-    let nv = nv_fine.min((MAX_GRID_POINTS / nu).max(2));
+    let (nu_f, nv_f) = (
+        ((hi.x - lo.x) / h).ceil().max(1.0),
+        ((hi.y - lo.y) / h).ceil().max(1.0),
+    );
+    // Mindestens zwei Zeilen müssen in die Obergrenze passen (auch ∞ wird hier abgewiesen).
+    if !(nu_f.is_finite() && nv_f.is_finite()) || nu_f * 2.0 > MAX_GRID_POINTS as f64 {
+        return Err(MeshError::TooLarge);
+    }
+    let nu = nu_f as usize;
+    let nv = (nv_f as usize).min(MAX_GRID_POINTS / nu);
+    (nu + 1).checked_mul(nv + 1).ok_or(MeshError::TooLarge)?;
     let at = |i: usize, j: usize| {
         DVec2::new(
             lo.x + (hi.x - lo.x) * i as f64 / nu as f64,
@@ -203,7 +224,7 @@ fn grid_points(polys: &[Vec<DVec2>], scale: DVec2, h: f64, sign: f64) -> Vec<DVe
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Triangulierung einer beschnittenen gekrümmten Fläche im Parameterraum.
@@ -225,7 +246,7 @@ pub fn tessellate_trimmed(
     if indexed.is_empty() || indexed.iter().any(|r| r.len() < 3) {
         return Err(fail());
     }
-    align_holes(&g.surface, &mut indexed);
+    align_holes(&g.surface, &mut indexed).map_err(|_| fail())?;
     let polys: Vec<Vec<DVec2>> = indexed
         .iter()
         .map(|r| r.iter().map(|(p, _)| *p).collect())
@@ -244,7 +265,9 @@ pub fn tessellate_trimmed(
     };
 
     // Randpunkte: exakte 3D-Lage aus den gemeinsamen Polylinien; eingefügte Polpunkte werten die
-    // Fläche aus.
+    // Fläche aus. Ein so ausgewerteter Polpunkt weicht von der Polecke der Nachbarflächen nur um
+    // Rundungsfehler (~1e-15·Radius) ab, weit unter der Schweißtoleranz beim Verschweißen über die
+    // Position (`is_watertight`: 1e-6); die Pol-Kante selbst ist entartet und entfällt.
     let mut handles: Vec<Vec<FixedVertexHandle>> = Vec::with_capacity(indexed.len());
     for (ring, pts) in indexed.iter().zip(rings.iter()) {
         let mut hs = Vec::with_capacity(ring.len());
@@ -265,7 +288,7 @@ pub fn tessellate_trimmed(
         Surface::Torus { minor, .. } => step * minor.abs(),
         _ => step * scale.x,
     };
-    let grid = grid_points(&polys, scale, h, sign);
+    let grid = grid_points(&polys, scale, h, sign)?;
     ensure_room(b.pts3.len(), grid.len())?;
     for q in grid {
         b.add(q, g.surface.point(q.x, q.y)).map_err(|_| fail())?;
@@ -319,4 +342,80 @@ pub fn tessellate_trimmed(
         mesh.indices.extend(t.iter().map(|&i| base + i as u32));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use planora_kernel::Solid;
+    use planora_math::Frame;
+
+    fn geom(surface: Surface) -> FaceGeom {
+        FaceGeom {
+            surface,
+            same_sense: true,
+            domain: None,
+            loops: Vec::new(),
+        }
+    }
+
+    /// Rechteck im Parameterraum als 3D-Punkte (gegen den Uhrzeigersinn, bei `hole` andersherum).
+    fn rect(s: &Surface, u: (f64, f64), v: (f64, f64), hole: bool) -> Vec<DVec3> {
+        let mut c = vec![(u.0, v.0), (u.1, v.0), (u.1, v.1), (u.0, v.1)];
+        if hole {
+            c.reverse();
+        }
+        c.into_iter().map(|(a, b)| s.point(a, b)).collect()
+    }
+
+    fn disc() -> Discretizer {
+        Discretizer::new(&Solid::new(), 0.001)
+    }
+
+    #[test]
+    fn huge_grid_is_rejected_instead_of_exhausting_memory() {
+        // Torus mit R ≫ r: Maschenweite folgt dem kleinen Rohrradius, in u wären es ~5·10⁵ Spalten.
+        let s = Surface::Torus {
+            frame: Frame::WORLD,
+            major: 1000.0,
+            minor: 0.001,
+        };
+        let ring = rect(&s, (0.0, 0.2), (0.0, 1.0), false);
+        let mut mesh = Mesh::default();
+        assert_eq!(
+            tessellate_trimmed(&geom(s), &[ring], &disc(), &mut mesh, 3),
+            Err(MeshError::TooLarge)
+        );
+    }
+
+    #[test]
+    fn hole_outside_every_period_is_an_error() {
+        let s = Surface::Cylinder {
+            frame: Frame::WORLD,
+            radius: 1.0,
+        };
+        let outer = rect(&s, (0.0, 1.0), (0.0, 1.0), false);
+        let hole = rect(&s, (3.0, 3.5), (0.2, 0.8), true);
+        let mut mesh = Mesh::default();
+        assert_eq!(
+            tessellate_trimmed(&geom(s), &[outer, hole], &disc(), &mut mesh, 7),
+            Err(MeshError::Triangulation(7))
+        );
+    }
+
+    #[test]
+    fn hole_inside_is_accepted() {
+        let s = Surface::Cylinder {
+            frame: Frame::WORLD,
+            radius: 1.0,
+        };
+        let outer = rect(&s, (0.0, 1.0), (0.0, 1.0), false);
+        let hole = rect(&s, (0.3, 0.6), (0.2, 0.8), true);
+        let mut mesh = Mesh::default();
+        assert_eq!(
+            tessellate_trimmed(&geom(s), &[outer, hole], &disc(), &mut mesh, 7),
+            Ok(())
+        );
+        assert!(!mesh.indices.is_empty());
+    }
 }
