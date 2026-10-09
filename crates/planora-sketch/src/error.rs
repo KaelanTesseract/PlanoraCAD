@@ -10,4 +10,14 @@ pub enum SketchError {
     Degenerate(String),
     #[error("Falscher Objekttyp: {0}")]
     WrongType(String),
+    #[error("Das Profil ist nicht geschlossen")]
+    OpenLoop,
+    #[error("Das Profil ist nicht eindeutig: {0}")]
+    AmbiguousTopology(String),
+    #[error("Das Profil schneidet oder berührt sich selbst oder ein anderes Profil")]
+    SelfIntersecting,
+    #[error("Die Verschachtelung der Profile ist nicht eindeutig")]
+    AmbiguousNesting,
+    #[error("Dieses Profil enthält {0} und kann noch nicht zu einem Körper werden")]
+    UnsupportedForSolid(String),
 }
