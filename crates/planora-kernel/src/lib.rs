@@ -1,5 +1,6 @@
 //! Geometrie-Kernel von PlanoraCAD (B-Rep mit analytischen Flächen).
 
+pub mod boolean;
 pub mod error;
 pub mod extrude;
 pub mod geometry;
@@ -12,6 +13,7 @@ pub mod topology;
 mod transform;
 pub mod validate;
 
+pub use boolean::{BoolOp, BooleanError};
 pub use error::KernelError;
 pub use extrude::extrude;
 pub use geometry::{Curve, Surface, UvRect};

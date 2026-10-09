@@ -1,7 +1,11 @@
 use glam::{Vec2, Vec3};
+use planora_kernel::boolean::BoolOp;
 use planora_kernel::{AnalyticKernel, Kernel, Solid};
 use planora_math::{DMat4, DVec3};
-use planora_mesh::{MassProperties, Mesh, TessellationOptions, mass_properties, tessellate};
+use planora_mesh::{
+    MassProperties, Mesh, TessellationOptions, boolean_volume_plausible, mass_properties,
+    tessellate,
+};
 use planora_render::{
     EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, SceneData, build_scene, pick_edge,
     pick_face,
@@ -107,20 +111,100 @@ impl AppState {
                     .map_err(|e| format!("Platzieren fehlgeschlagen: {e}"))?
             }
         };
+        let body = self.make_body(kind, name, solid)?;
+        self.bodies.push(body);
+        self.rebuild_scene();
+        self.frame_all();
+        Ok(self.bodies.len() - 1)
+    }
+
+    /// Wie `add_body`, aber ohne das Verschieben neben die vorhandenen Körper.
+    pub fn add_body_in_place(
+        &mut self,
+        kind: BodyKind,
+        name: String,
+        solid: Solid,
+    ) -> Result<usize, String> {
+        self.kernel
+            .validate(&solid)
+            .map_err(|e| format!("Ungültiger Körper: {e}"))?;
+        let body = self.make_body(kind, name, solid)?;
+        self.bodies.push(body);
+        self.rebuild_scene();
+        self.frame_all();
+        Ok(self.bodies.len() - 1)
+    }
+
+    /// Verschiebt den Körper `index` um `delta` (Millimeter).
+    pub fn translate_body(&mut self, index: usize, delta: DVec3) -> Result<(), String> {
+        let body = self
+            .bodies
+            .get(index)
+            .ok_or_else(|| "Körper nicht gefunden".to_string())?;
+        if !delta.is_finite() {
+            return Err("Ungültige Verschiebung".into());
+        }
+        let moved = self
+            .kernel
+            .transform(&body.solid, &DMat4::from_translation(delta))
+            .map_err(|e| format!("Verschieben fehlgeschlagen: {e}"))?;
+        let (kind, name) = (body.kind, body.name.clone());
+        let new = self.make_body(kind, name, moved)?;
+        self.bodies[index] = new;
+        self.rebuild_scene();
+        Ok(())
+    }
+
+    /// Führt `a op b` aus und ersetzt beide Körper durch das Ergebnis (an der Stelle des
+    /// vorderen in der Liste, ohne neu zu platzieren). Liefert den Index des Ergebnisses; bei
+    /// einem Fehler bleibt alles unverändert.
+    pub fn boolean(&mut self, a: usize, b: usize, op: BoolOp) -> Result<usize, String> {
+        if a == b || a >= self.bodies.len() || b >= self.bodies.len() {
+            return Err("Bitte zwei verschiedene Körper wählen".into());
+        }
+        let result = self
+            .kernel
+            .boolean(&self.bodies[a].solid, &self.bodies[b].solid, op)
+            .map_err(|e| e.to_string())?;
+        let (name_a, name_b) = (&self.bodies[a].name, &self.bodies[b].name);
+        let name = match op {
+            BoolOp::Union => format!("Vereinigung: {name_a} + {name_b}"),
+            BoolOp::Difference => format!("Abzug: {name_a} − {name_b}"),
+            BoolOp::Intersection => format!("Schnitt: {name_a} ∩ {name_b}"),
+        };
+        let kind = self.bodies[a].kind;
+        let body = self.make_body(kind, name, result)?;
+        let (va, vb) = (self.bodies[a].mass.volume, self.bodies[b].mass.volume);
+        if !boolean_volume_plausible(op, va, vb, body.mass.volume, 0.02) {
+            return Err(
+                "Das Ergebnis ist unplausibel (Volumenprobe fehlgeschlagen) und wurde verworfen"
+                    .into(),
+            );
+        }
+        let (lo, hi) = (a.min(b), a.max(b));
+        self.bodies.remove(hi);
+        self.bodies[lo] = body;
+        self.hover = None;
+        self.selection = None;
+        self.selected_body = Some(lo);
+        self.rebuild_scene();
+        Ok(lo)
+    }
+
+    /// Netz, Masse und Hülle eines Körpers berechnen (gemeinsam für Platzieren, Verschieben und
+    /// Ergebnisse Boolescher Operationen).
+    fn make_body(&self, kind: BodyKind, name: String, solid: Solid) -> Result<Body, String> {
         let mesh = self.mesh_of(&solid)?;
         let mass = mass_properties(&mesh);
         let bounds = bounds_of(&mesh);
-        self.bodies.push(Body {
+        Ok(Body {
             name,
             kind,
             solid,
             mesh,
             mass,
             bounds,
-        });
-        self.rebuild_scene();
-        self.frame_all();
-        Ok(self.bodies.len() - 1)
+        })
     }
 
     fn mesh_of(&self, solid: &Solid) -> Result<Mesh, String> {

@@ -10,6 +10,7 @@ publish.workspace = true
 planora-math.workspace = true
 planora-kernel.workspace = true
 earcutr.workspace = true
+spade.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
