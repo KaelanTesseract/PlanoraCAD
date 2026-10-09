@@ -19,6 +19,7 @@ planora-math.workspace = true
 planora-kernel.workspace = true
 planora-mesh.workspace = true
 planora-render.workspace = true
+planora-sketch.workspace = true
 glam.workspace = true
 eframe.workspace = true
 egui.workspace = true

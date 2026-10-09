@@ -2424,6 +2424,7 @@ dependencies = [
  "planora-math",
  "planora-mesh",
  "planora-render",
+ "planora-sketch",
  "winit",
 ]
 

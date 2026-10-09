@@ -1,6 +1,10 @@
 use crate::viewcube::{ISO_VIEW, ViewFace};
 use glam::{Mat4, Vec2, Vec3};
 
+/// Ab diesem Betrag der z-Komponente gilt eine Blickrichtung in `look_along` als senkrecht; die
+/// Drehung um z richtet sich dann nach dem Aufwärts-Hinweis statt nach der Blickrichtung.
+const NEAR_VERTICAL: f32 = 0.999;
+
 /// Umlaufkamera um einen Zielpunkt. Z zeigt nach oben.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OrbitCamera {
@@ -126,6 +130,27 @@ impl OrbitCamera {
         let (yaw, pitch) = face.view();
         self.yaw = yaw;
         self.pitch = pitch;
+    }
+
+    /// Stellt die Kamera vom Ziel aus in Richtung `to_camera` (Höhenwinkel auf `±MAX_PITCH`
+    /// geklemmt). Bei (fast) senkrechter Blickrichtung wird die Drehung so gewählt, dass die
+    /// Bildschirm-Aufwärtsrichtung der Projektion von `up_hint` entspricht.
+    pub fn look_along(&mut self, to_camera: Vec3, up_hint: Vec3) {
+        let d = to_camera.normalize_or_zero();
+        if d == Vec3::ZERO {
+            return;
+        }
+        self.pitch = d.z.asin().clamp(-Self::MAX_PITCH, Self::MAX_PITCH);
+        self.yaw = if d.z.abs() > NEAR_VERTICAL {
+            let up = Vec3::new(up_hint.x, up_hint.y, 0.0);
+            if d.z > 0.0 {
+                (-up.y).atan2(-up.x)
+            } else {
+                up.y.atan2(up.x)
+            }
+        } else {
+            d.y.atan2(d.x)
+        };
     }
 
     pub fn set_iso_view(&mut self) {

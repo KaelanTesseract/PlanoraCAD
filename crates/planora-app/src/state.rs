@@ -1,7 +1,8 @@
+use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
 use planora_kernel::boolean::BoolOp;
-use planora_kernel::{AnalyticKernel, Kernel, Solid};
-use planora_math::{DMat4, DVec3};
+use planora_kernel::{AnalyticKernel, Face, Id, Kernel, Profile, Solid};
+use planora_math::{DMat4, DVec2, DVec3, Frame};
 use planora_mesh::{
     MassProperties, Mesh, TessellationOptions, boolean_volume_plausible, mass_properties,
     tessellate,
@@ -10,6 +11,8 @@ use planora_render::{
     EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, SceneData, build_scene, pick_edge,
     pick_face,
 };
+use planora_sketch::model::{CurveId, Sketch};
+use planora_sketch::{extrude_profile, plane_of_face, revolve_profile};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +23,14 @@ pub enum BodyKind {
     Cone,
     Extrusion,
     Revolution,
+}
+
+/// Grundebenen für neue Skizzen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StandardPlane {
+    XY,
+    XZ,
+    YZ,
 }
 
 pub struct Body {
@@ -49,6 +60,15 @@ pub struct AppState {
     /// Laufende Nummer für den nächsten erzeugten Körper; zählt nur hoch, damit Namen auch nach
     /// dem Löschen eindeutig bleiben.
     pub next_body_number: u64,
+    /// Skizzen des Dokuments.
+    pub sketches: Vec<Sketch>,
+    /// Geöffneter Skizzen-Modus.
+    pub sketch_session: Option<SketchSession>,
+    /// Kamera vor dem Öffnen des Skizzen-Modus.
+    saved_camera: Option<OrbitCamera>,
+    /// Laufende Nummer für den Namen der nächsten Skizze; zählt nur hoch, damit Namen auch nach
+    /// dem Löschen eindeutig bleiben.
+    pub next_sketch_number: u64,
 }
 
 const GRID_HALF_EXTENT: f32 = 500.0;
@@ -76,6 +96,10 @@ impl AppState {
             chord_tolerance: 0.05,
             message: None,
             next_body_number: 1,
+            sketches: Vec::new(),
+            sketch_session: None,
+            saved_camera: None,
+            next_sketch_number: 1,
         };
         state.rebuild_scene();
         state
@@ -86,6 +110,15 @@ impl AppState {
             Palette::dark()
         } else {
             Palette::light()
+        }
+    }
+
+    /// Palette der Szene: im Skizzen-Modus gedämpft.
+    fn scene_palette(&self) -> Palette {
+        if self.sketch_session.is_some() {
+            self.palette().dimmed()
+        } else {
+            self.palette()
         }
     }
 
@@ -241,7 +274,7 @@ impl AppState {
         self.scene = Arc::new(build_scene(
             &meshes,
             &highlight,
-            &self.palette(),
+            &self.scene_palette(),
             GRID_HALF_EXTENT,
         ));
         self.scene_version += 1;
@@ -330,6 +363,185 @@ impl AppState {
                 face: hit.face,
             })
         })
+    }
+}
+
+fn to_vec3(v: DVec3) -> Vec3 {
+    Vec3::new(v.x as f32, v.y as f32, v.z as f32)
+}
+
+// ---- Skizzen ----------------------------------------------------------------------------------
+
+impl AppState {
+    /// Lage einer Grundebene (rechtshändig, `z` = Normale).
+    pub fn standard_frame(plane: StandardPlane) -> Frame {
+        let (x, y, z) = match plane {
+            StandardPlane::XY => (DVec3::X, DVec3::Y, DVec3::Z),
+            StandardPlane::XZ => (DVec3::X, DVec3::Z, -DVec3::Y),
+            StandardPlane::YZ => (DVec3::Y, DVec3::Z, DVec3::X),
+        };
+        Frame {
+            origin: DVec3::ZERO,
+            x,
+            y,
+            z,
+        }
+    }
+
+    /// Legt eine leere Skizze „Skizze N“ auf der Ebene `frame` an.
+    pub fn new_sketch(&mut self, frame: Frame) -> usize {
+        let name = format!("Skizze {}", self.next_sketch_number);
+        self.next_sketch_number += 1;
+        self.sketches
+            .push(Sketch::new(frame, name, self.kernel.tolerance));
+        self.sketches.len() - 1
+    }
+
+    /// Fehler als Meldung ablegen und zurückgeben.
+    fn fail<T>(&mut self, e: String) -> Result<T, String> {
+        self.message = Some(e.clone());
+        Err(e)
+    }
+
+    /// Legt eine Skizze auf der ebenen Fläche `face` des Körpers `body` an.
+    pub fn new_sketch_on_face(&mut self, body: usize, face: Id<Face>) -> Result<usize, String> {
+        let Some(b) = self.bodies.get(body) else {
+            return self.fail("Körper nicht gefunden".into());
+        };
+        if b.solid.faces.get(face).is_none() {
+            return self.fail("Fläche nicht gefunden".into());
+        }
+        match plane_of_face(&b.solid, face) {
+            Some(frame) => Ok(self.new_sketch(frame)),
+            None => self.fail("Skizzen lassen sich nur auf ebenen Flächen anlegen".into()),
+        }
+    }
+
+    /// Öffnet den Skizzen-Modus für die Skizze `index`: Kamera senkrecht auf die Skizzenebene,
+    /// übrige Szene gedämpft. Beim Wechsel zwischen Skizzen bleibt die gemerkte Kamera erhalten.
+    pub fn open_sketch(&mut self, index: usize) -> Result<(), String> {
+        let Some(sk) = self.sketches.get(index) else {
+            return self.fail("Skizze nicht gefunden".into());
+        };
+        let frame = *sk.frame();
+        let bounds = sk.bounds();
+        let mut session = SketchSession::new(index);
+        session.last_report = Some(sk.clone().solve());
+        if self.sketch_session.is_none() {
+            self.saved_camera = Some(self.camera);
+        }
+        self.sketch_session = Some(session);
+        match bounds {
+            Some((lo, hi)) => {
+                let corners = [
+                    frame.point_2d(lo),
+                    frame.point_2d(hi),
+                    frame.point_2d(DVec2::new(lo.x, hi.y)),
+                    frame.point_2d(DVec2::new(hi.x, lo.y)),
+                ];
+                let (min, max) = corners
+                    .iter()
+                    .fold((corners[0], corners[0]), |(a, b), &p| (a.min(p), b.max(p)));
+                self.camera.frame_bounds(to_vec3(min), to_vec3(max));
+            }
+            None => self.camera.target = to_vec3(frame.origin),
+        }
+        self.camera.look_along(to_vec3(frame.z), to_vec3(frame.y));
+        self.rebuild_scene();
+        Ok(())
+    }
+
+    /// Beendet den Skizzen-Modus und stellt die vorherige Kamera wieder her.
+    pub fn close_sketch(&mut self) {
+        if self.sketch_session.take().is_none() {
+            return;
+        }
+        if let Some(mut cam) = self.saved_camera.take() {
+            // Das Seitenverhältnis gehört zum aktuellen Fenster.
+            cam.aspect = self.camera.aspect;
+            self.camera = cam;
+        }
+        self.rebuild_scene();
+    }
+
+    /// Löscht die Skizze `index`; eine Sitzung auf dieser Skizze wird geschlossen, die Indizes
+    /// einer Sitzung auf einer späteren Skizze werden angepasst.
+    pub fn delete_sketch(&mut self, index: usize) {
+        if index >= self.sketches.len() {
+            return;
+        }
+        match self.sketch_session.as_ref().map(|s| s.sketch) {
+            Some(i) if i == index => self.close_sketch(),
+            Some(i) if i > index => {
+                if let Some(s) = self.sketch_session.as_mut() {
+                    s.sketch = i - 1;
+                }
+            }
+            _ => {}
+        }
+        self.sketches.remove(index);
+    }
+
+    /// Skizze `sketch` und ihr Profil `profile` (Index in `profiles()`).
+    fn sketch_profile(&self, sketch: usize, profile: usize) -> Result<(&Sketch, Profile), String> {
+        let sk = self
+            .sketches
+            .get(sketch)
+            .ok_or_else(|| "Skizze nicht gefunden".to_string())?;
+        let p = sk
+            .profiles()
+            .profiles
+            .into_iter()
+            .nth(profile)
+            .ok_or_else(|| "Profil nicht gefunden".to_string())?;
+        Ok((sk, p))
+    }
+
+    /// Nimmt einen Körper aus einer Skizze an Ort und Stelle auf oder legt den Fehler ab.
+    fn add_sketch_body(
+        &mut self,
+        kind: BodyKind,
+        made: Result<(Solid, String), String>,
+    ) -> Result<usize, String> {
+        match made.and_then(|(solid, name)| self.add_body_in_place(kind, name, solid)) {
+            Ok(i) => Ok(i),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    /// Extrudiert Profil `profile` der Skizze `sketch` um `height` entlang der Skizzennormalen;
+    /// der Körper entsteht an Ort und Stelle. Bei einem Fehler bleibt das Dokument unverändert.
+    pub fn extrude_sketch(
+        &mut self,
+        sketch: usize,
+        profile: usize,
+        height: f64,
+    ) -> Result<usize, String> {
+        let made = if !(height.is_finite() && height > self.kernel.tolerance.linear) {
+            Err("Die Höhe muss größer als null sein".to_string())
+        } else {
+            self.sketch_profile(sketch, profile).and_then(|(sk, p)| {
+                let solid =
+                    extrude_profile(&self.kernel, sk, &p, height).map_err(|e| e.to_string())?;
+                Ok((solid, format!("Extrusion: {}", sk.name)))
+            })
+        };
+        self.add_sketch_body(BodyKind::Extrusion, made)
+    }
+
+    /// Dreht Profil `profile` der Skizze `sketch` um die Linie `axis` (360°); der Körper entsteht
+    /// an Ort und Stelle. Bei einem Fehler bleibt das Dokument unverändert.
+    pub fn revolve_sketch(
+        &mut self,
+        sketch: usize,
+        profile: usize,
+        axis: CurveId,
+    ) -> Result<usize, String> {
+        let made = self.sketch_profile(sketch, profile).and_then(|(sk, p)| {
+            let solid = revolve_profile(&self.kernel, sk, &p, axis).map_err(|e| e.to_string())?;
+            Ok((solid, format!("Rotation: {}", sk.name)))
+        });
+        self.add_sketch_body(BodyKind::Revolution, made)
     }
 }
 

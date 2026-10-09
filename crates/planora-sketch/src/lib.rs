@@ -8,6 +8,7 @@ pub mod helpers;
 pub mod linalg;
 pub mod model;
 pub mod profile;
+pub mod query;
 pub mod solid;
 pub mod solver;
 
