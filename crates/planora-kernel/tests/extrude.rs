@@ -88,7 +88,8 @@ fn concave_l_shape_is_valid() {
             DVec2::new(1.0, 1.0),
             DVec2::new(1.0, 3.0),
             DVec2::new(0.0, 3.0),
-        ]),
+        ])
+        .unwrap(),
         holes: vec![],
     };
     let s = k().extrude(&p, &Frame::WORLD, 2.0).unwrap();

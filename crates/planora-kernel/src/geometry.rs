@@ -214,3 +214,67 @@ impl Surface {
         }
     }
 }
+
+/// Art einer Fläche ohne Parameter, für Anzeigen in der Oberfläche.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SurfaceKind {
+    Plane,
+    Cylinder,
+    Cone,
+    Sphere,
+    Torus,
+}
+
+impl SurfaceKind {
+    /// Deutscher Anzeigename.
+    pub fn label(self) -> &'static str {
+        match self {
+            SurfaceKind::Plane => "Ebene",
+            SurfaceKind::Cylinder => "Zylinderfläche",
+            SurfaceKind::Cone => "Kegelfläche",
+            SurfaceKind::Sphere => "Kugelfläche",
+            SurfaceKind::Torus => "Torusfläche",
+        }
+    }
+}
+
+impl Surface {
+    pub fn kind(&self) -> SurfaceKind {
+        match self {
+            Surface::Plane { .. } => SurfaceKind::Plane,
+            Surface::Cylinder { .. } => SurfaceKind::Cylinder,
+            Surface::Cone { .. } => SurfaceKind::Cone,
+            Surface::Sphere { .. } => SurfaceKind::Sphere,
+            Surface::Torus { .. } => SurfaceKind::Torus,
+        }
+    }
+}
+
+/// Art einer Kurve ohne Parameter, für Anzeigen in der Oberfläche.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CurveKind {
+    Line,
+    Circle,
+    Ellipse,
+}
+
+impl CurveKind {
+    /// Deutscher Anzeigename.
+    pub fn label(self) -> &'static str {
+        match self {
+            CurveKind::Line => "Gerade",
+            CurveKind::Circle => "Kreis",
+            CurveKind::Ellipse => "Ellipse",
+        }
+    }
+}
+
+impl Curve {
+    pub fn kind(&self) -> CurveKind {
+        match self {
+            Curve::Line { .. } => CurveKind::Line,
+            Curve::Circle { .. } => CurveKind::Circle,
+            Curve::Ellipse { .. } => CurveKind::Ellipse,
+        }
+    }
+}

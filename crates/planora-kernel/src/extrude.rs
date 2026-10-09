@@ -1,7 +1,7 @@
 use crate::error::KernelError;
 use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
-use crate::profile::{Profile, ProfileLoop, Segment, check_loop_input};
+use crate::profile::{Profile, ProfileLoop, Segment, check_hole_layout, check_loop_input};
 use crate::topology::{Edge, Face, HalfEdge, Loop, Solid};
 use planora_math::{Frame, Tolerance};
 
@@ -21,6 +21,9 @@ pub fn extrude(
     height: f64,
     tol: &Tolerance,
 ) -> Result<Solid, KernelError> {
+    if !frame.is_orthonormal(tol.linear) {
+        return Err(KernelError::InvalidFrame);
+    }
     if !(height.is_finite() && height > tol.linear) {
         return Err(KernelError::InvalidDimension(height));
     }
@@ -28,6 +31,7 @@ pub fn extrude(
     for lp in std::iter::once(&profile.outer).chain(profile.holes.iter()) {
         check_loop_input(lp, tol)?;
     }
+    check_hole_layout(profile)?;
     let profile = profile.oriented();
     for lp in std::iter::once(&profile.outer).chain(profile.holes.iter()) {
         let area = lp.signed_area();

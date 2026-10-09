@@ -25,6 +25,21 @@ impl Frame {
         Frame { origin, x, y, z }
     }
 
+    /// Prüft, ob das System endlich, orthonormal und rechtshändig ist (Abweichung je Bedingung ≤ `eps`).
+    pub fn is_orthonormal(&self, eps: f64) -> bool {
+        let finite = [self.origin, self.x, self.y, self.z]
+            .iter()
+            .all(|v| v.is_finite());
+        finite
+            && (self.x.length() - 1.0).abs() <= eps
+            && (self.y.length() - 1.0).abs() <= eps
+            && (self.z.length() - 1.0).abs() <= eps
+            && self.x.dot(self.y).abs() <= eps
+            && self.x.dot(self.z).abs() <= eps
+            && self.y.dot(self.z).abs() <= eps
+            && (self.x.cross(self.y) - self.z).length() <= eps
+    }
+
     pub fn point(&self, x: f64, y: f64, z: f64) -> DVec3 {
         self.origin + self.x * x + self.y * y + self.z * z
     }

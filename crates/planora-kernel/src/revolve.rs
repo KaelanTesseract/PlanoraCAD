@@ -26,6 +26,9 @@ struct Curved {
 // Die negierten Vergleiche lehnen absichtlich auch NaN ab.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn revolve(chain: &ProfileLoop, frame: &Frame, tol: &Tolerance) -> Result<Solid, KernelError> {
+    if !frame.is_orthonormal(tol.linear) {
+        return Err(KernelError::InvalidFrame);
+    }
     check_loop_input(chain, tol)?;
     let area = chain.signed_area();
     if !(area.is_finite() && area.abs() > 1e-12) {

@@ -49,7 +49,8 @@ impl ExtrudeSample {
                     DVec2::new(10.0, 10.0),
                     DVec2::new(10.0, 30.0),
                     DVec2::new(0.0, 30.0),
-                ]),
+                ])
+                .expect("Beispielprofil"),
                 holes: vec![],
             },
             ExtrudeSample::NotchedBar => Profile {

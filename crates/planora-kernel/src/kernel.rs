@@ -1,10 +1,12 @@
 use crate::boolean::{BoolOp, BooleanError};
 use crate::error::KernelError;
 use crate::extrude::extrude;
+use crate::geometry::{CurveKind, SurfaceKind};
+use crate::ids::Id;
 use crate::primitives;
 use crate::profile::{Profile, ProfileLoop};
 use crate::revolve::revolve;
-use crate::topology::Solid;
+use crate::topology::{Edge, Face, Solid};
 use crate::validate::{ValidationError, ValidationReport, validate};
 use planora_math::{DMat4, DVec3, Frame, Tolerance};
 
@@ -19,6 +21,12 @@ pub trait Kernel {
     fn transform(&self, solid: &Solid, matrix: &DMat4) -> Result<Solid, KernelError>;
     fn validate(&self, solid: &Solid) -> Result<ValidationReport, ValidationError>;
     fn boolean(&self, a: &Solid, b: &Solid, op: BoolOp) -> Result<Solid, BooleanError>;
+    /// Art der Trägerfläche einer Fläche; `None` für eine Id außerhalb des Körpers.
+    fn face_kind(&self, solid: &Solid, face: Id<Face>) -> Option<SurfaceKind>;
+    /// Art der Trägerkurve einer Kante; `None` für eine Id außerhalb des Körpers.
+    fn edge_kind(&self, solid: &Solid, edge: Id<Edge>) -> Option<CurveKind>;
+    /// Anzahl der Flächen und Kanten.
+    fn counts(&self, solid: &Solid) -> (usize, usize);
 }
 
 /// Kernel mit analytischen Flächen (Ebene, Zylinder, Kegel, Kugel, Torus).
@@ -62,5 +70,17 @@ impl Kernel for AnalyticKernel {
 
     fn boolean(&self, a: &Solid, b: &Solid, op: BoolOp) -> Result<Solid, BooleanError> {
         crate::boolean::boolean(a, b, op, &self.tolerance)
+    }
+
+    fn face_kind(&self, solid: &Solid, face: Id<Face>) -> Option<SurfaceKind> {
+        solid.faces.get(face).map(|f| f.surface.kind())
+    }
+
+    fn edge_kind(&self, solid: &Solid, edge: Id<Edge>) -> Option<CurveKind> {
+        solid.edges.get(edge).map(|e| e.curve.kind())
+    }
+
+    fn counts(&self, solid: &Solid) -> (usize, usize) {
+        (solid.faces.len(), solid.edges.len())
     }
 }
