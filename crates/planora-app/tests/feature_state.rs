@@ -255,7 +255,8 @@ fn deleting_a_moved_body_removes_its_moves_but_a_combined_input_is_protected() {
     s.add_boolean(0, 1, BoolOp::Union).unwrap();
     let a = s.document.features()[0].id;
     let e = s.delete_feature(a).unwrap_err();
-    assert!(e.contains("Vereinigung"), "{e}");
+    // Seit Task 9 heißen Boolesche Features nach ihrer Art („Boolesche Operation N“).
+    assert!(e.contains("Boolesche Operation"), "{e}");
     assert_eq!(s.message.as_deref(), Some(e.as_str()));
 }
 
@@ -307,7 +308,7 @@ fn a_reader_behind_the_marker_also_prevents_extending_the_move() {
 }
 
 #[test]
-fn a_huge_move_is_rolled_back() {
+fn a_huge_move_is_rejected() {
     let mut s = AppState::new();
     s.create_box(DVec3::splat(4.0)).unwrap();
     s.move_body(0, DVec3::X).unwrap();

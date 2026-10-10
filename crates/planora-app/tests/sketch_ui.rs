@@ -288,7 +288,7 @@ fn in_sketch_mode_the_viewport_does_not_orbit_but_still_pans() {
 }
 
 #[test]
-fn the_browser_lists_sketches_under_their_own_heading() {
+fn the_tree_lists_sketches_and_marks_the_open_one() {
     let ctx = context();
     let mut s = populated();
     s.add_sketch(SketchPlane::Standard(StandardPlane::YZ))
@@ -299,7 +299,9 @@ fn the_browser_lists_sketches_under_their_own_heading() {
         collect_text(&clipped.shape, &mut seen);
     }
     out.drop_without_applying_deltas();
-    for must in ["Körper", "Skizzen", "Skizze 1 (in Bearbeitung)", "Skizze 2"] {
+    // Seit dem Feature-Baum (Task 9) gibt es keine eigenen Überschriften „Körper“/„Skizzen“
+    // mehr; Skizzen stehen als Zeilen der Zeitleiste im Baum.
+    for must in ["Feature-Baum", "Skizze 1 (in Bearbeitung)", "Skizze 2"] {
         assert!(
             seen.contains(must),
             "„{must}“ fehlt im Browser:

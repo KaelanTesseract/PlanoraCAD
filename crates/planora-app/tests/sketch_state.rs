@@ -419,11 +419,15 @@ fn dimmed_scene_only_while_a_sketch_is_open() {
     assert_eq!(s.camera, original, "ursprüngliche Kamera zurück");
     s.open_sketch(j).unwrap();
     s.delete_feature(i).unwrap();
-    assert_eq!(
-        s.open_sketch_id(),
-        Some(j),
-        "die Sitzung bleibt auf der anderen Skizze"
+    // Seit Task 9 (R12, Prüfung von Task 8): Löschen eines anderen Features beendet die offene
+    // Skizze vorher (Entwurf übernommen), damit Dokument und Entwurf nicht auseinanderlaufen.
+    assert!(
+        s.sketch_session.is_none(),
+        "die andere Skizze wurde beendet"
     );
+    assert!(s.document.feature(j).is_some());
+    assert_eq!(s.camera, original, "Kamera beim Beenden zurück");
+    s.open_sketch(j).unwrap();
     s.delete_feature(j).unwrap();
     assert!(s.sketch_session.is_none() && s.sketch_draft.is_none());
     assert_eq!(s.camera, original, "Kamera beim Verwerfen zurück");

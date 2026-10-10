@@ -58,6 +58,53 @@ pub fn paint_body_icon(painter: &Painter, rect: Rect, kind: BodyKind, color: Col
     }
 }
 
+/// Symbol einer Zeile im Feature-Baum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeatureIcon {
+    Sketch,
+    Body(BodyKind),
+    Move,
+}
+
+impl FeatureIcon {
+    /// Symbol zur Art eines Features.
+    pub fn of(kind: &planora_feature::FeatureKind) -> FeatureIcon {
+        use planora_feature::FeatureKind as K;
+        match kind {
+            K::Sketch(_) => FeatureIcon::Sketch,
+            K::Box { .. } => FeatureIcon::Body(BodyKind::Box),
+            K::Cylinder { .. } => FeatureIcon::Body(BodyKind::Cylinder),
+            K::Sphere { .. } => FeatureIcon::Body(BodyKind::Sphere),
+            K::Cone { .. } => FeatureIcon::Body(BodyKind::Cone),
+            K::Extrude { .. } => FeatureIcon::Body(BodyKind::Extrusion),
+            K::Revolve { .. } => FeatureIcon::Body(BodyKind::Revolution),
+            K::Boolean { .. } => FeatureIcon::Body(BodyKind::Combined),
+            K::Move { .. } => FeatureIcon::Move,
+        }
+    }
+}
+
+/// Zeichnet das Symbol eines Features in `rect`.
+pub fn paint_feature_icon(painter: &Painter, rect: Rect, icon: FeatureIcon, color: Color32) {
+    match icon {
+        FeatureIcon::Sketch => paint_sketch_icon(painter, rect, color),
+        FeatureIcon::Body(kind) => paint_body_icon(painter, rect, kind, color),
+        FeatureIcon::Move => paint_move_icon(painter, rect, color),
+    }
+}
+
+/// Verschieben: ein Pfeil nach rechts oben mit Spitze.
+fn paint_move_icon(painter: &Painter, rect: Rect, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.38;
+    let from = c + vec2(-r, r);
+    let to = c + vec2(r, -r);
+    painter.line_segment([from, to], stroke);
+    painter.line_segment([to, to + vec2(-r * 0.7, 0.0)], stroke);
+    painter.line_segment([to, to + vec2(0.0, r * 0.7)], stroke);
+}
+
 /// Zeichnet das Skizzensymbol in `rect`: ein Rechteck mit Eckpunkten und ein Kreis.
 pub fn paint_sketch_icon(painter: &Painter, rect: Rect, color: Color32) {
     let stroke = Stroke::new(1.5, color);

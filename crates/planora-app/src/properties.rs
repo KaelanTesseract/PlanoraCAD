@@ -1,39 +1,221 @@
+use crate::browser::ERROR_COLOR;
+use crate::sketch_view::format_number;
 use crate::state::AppState;
-use planora_kernel::Kernel;
+use planora_feature::{FeatureId, FeatureKind, FeatureStatus, SketchPlane, StandardPlane};
+use planora_kernel::{BoolOp, Kernel};
 use planora_math::DVec3;
 use planora_render::Pick;
 
-/// Maße des gewählten Körpers sowie Angaben zur gewählten Fläche oder Kante.
+/// Eigenschaften: für einen gewählten Körper Maße, Fläche/Kante und Position; für ein
+/// gewähltes Feature Art, Name, Status und Parameter.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     ui.heading("Eigenschaften");
     ui.add_space(4.0);
-    let Some(index) = state.selected_body.filter(|&i| i < state.bodies.len()) else {
+    if let Some(index) = state.selected_body.filter(|&i| i < state.bodies.len()) {
+        body(ui, state, index);
+    } else if let Some(id) = state
+        .selected_feature
+        .filter(|id| state.document.feature(*id).is_some())
+    {
+        feature(ui, state, id);
+    } else {
         ui.weak("Nichts ausgewählt.");
+    }
+}
+
+/// Namensfeld eines Features. Während der Eingabe steht der Entwurf im Speicher von egui,
+/// damit sich das Feld auch kurz leeren lässt (leere Namen sind ungültig und werden nicht
+/// übernommen). Liefert einen neuen, gültigen Namen.
+fn name_field(ui: &mut egui::Ui, id: Option<FeatureId>, current: &str) -> Option<String> {
+    let key = egui::Id::new(("feature_name", id));
+    let mut name = ui
+        .data(|d| d.get_temp::<String>(key))
+        .unwrap_or_else(|| current.to_string());
+    let response = ui.text_edit_singleline(&mut name);
+    let mut renamed = None;
+    if response.changed() {
+        if !name.trim().is_empty() && name != current {
+            renamed = Some(name.clone());
+        }
+        ui.data_mut(|d| d.insert_temp(key, name));
+    } else if !response.has_focus() {
+        ui.data_mut(|d| d.remove::<String>(key));
+    }
+    renamed
+}
+
+fn mm(v: f64) -> String {
+    format!("{} mm", format_number(v, 2))
+}
+
+fn triple(v: DVec3) -> String {
+    format!(
+        "{} / {} / {} mm",
+        format_number(v.x, 2),
+        format_number(v.y, 2),
+        format_number(v.z, 2)
+    )
+}
+
+/// Parameter eines Features als Text (Bezeichnung, Wert).
+pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str, String)> {
+    let doc = &state.document;
+    let feature_name = |id: FeatureId| {
+        doc.feature(id)
+            .map_or_else(|| format!("Feature {}", id.0), |f| f.name.clone())
+    };
+    match kind {
+        FeatureKind::Sketch(s) => {
+            let plane = match &s.plane {
+                SketchPlane::Standard(StandardPlane::XY) => "XY-Ebene".to_string(),
+                SketchPlane::Standard(StandardPlane::XZ) => "XZ-Ebene".to_string(),
+                SketchPlane::Standard(StandardPlane::YZ) => "YZ-Ebene".to_string(),
+                SketchPlane::OnFace(r) => format!(
+                    "Fläche „{}“ von „{}“",
+                    r.role,
+                    feature_name(FeatureId(r.origin))
+                ),
+            };
+            vec![
+                ("Ebene", plane),
+                ("Kurven", s.sketch.curves().count().to_string()),
+                ("Kantenkopien", s.copies.len().to_string()),
+            ]
+        }
+        FeatureKind::Box { size, origin } => vec![
+            (
+                "Größe",
+                format!(
+                    "{} × {} × {} mm",
+                    format_number(size.x, 2),
+                    format_number(size.y, 2),
+                    format_number(size.z, 2)
+                ),
+            ),
+            ("Position", triple(*origin)),
+        ],
+        FeatureKind::Cylinder {
+            radius,
+            height,
+            origin,
+        }
+        | FeatureKind::Cone {
+            radius,
+            height,
+            origin,
+        } => vec![
+            ("Radius", mm(*radius)),
+            ("Höhe", mm(*height)),
+            ("Position", triple(*origin)),
+        ],
+        FeatureKind::Sphere { radius, origin } => {
+            vec![("Radius", mm(*radius)), ("Position", triple(*origin))]
+        }
+        FeatureKind::Extrude {
+            sketch,
+            profile,
+            height,
+        } => vec![
+            ("Skizze", feature_name(*sketch)),
+            ("Profil", (profile + 1).to_string()),
+            ("Höhe", mm(*height)),
+        ],
+        FeatureKind::Revolve {
+            sketch,
+            profile,
+            axis,
+        } => vec![
+            ("Skizze", feature_name(*sketch)),
+            ("Profil", (profile + 1).to_string()),
+            ("Drehachse", format!("Kurve {}", axis.index() + 1)),
+        ],
+        FeatureKind::Boolean { target, tool, op } => vec![
+            ("Ziel", state.body_ref_name(*target)),
+            ("Werkzeug", state.body_ref_name(*tool)),
+            (
+                "Operation",
+                match op {
+                    BoolOp::Union => "Vereinigen",
+                    BoolOp::Difference => "Abziehen",
+                    BoolOp::Intersection => "Schneiden",
+                }
+                .to_string(),
+            ),
+        ],
+        FeatureKind::Move { body, delta } => vec![
+            ("Körper", state.body_ref_name(*body)),
+            ("Verschiebung", triple(*delta)),
+        ],
+    }
+}
+
+/// Eigenschaften eines Features der Zeitleiste.
+fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
+    let Some(f) = state.document.feature(id) else {
         return;
     };
+    let (name, label, status) = (f.name.clone(), f.kind.label(), f.status.clone());
+    let rows = parameter_rows(state, &f.kind);
+    let sketch = matches!(f.kind, FeatureKind::Sketch(_));
+    ui.label("Name");
+    let renamed = name_field(ui, Some(id), &name);
+    ui.add_space(6.0);
+    egui::Grid::new("feature_props")
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.label("Art");
+            ui.label(label);
+            ui.end_row();
+            ui.label("Status");
+            match &status {
+                FeatureStatus::Ok => ui.label("berechnet"),
+                FeatureStatus::Error(e) => ui.colored_label(ERROR_COLOR, format!("Fehler: {e}")),
+                FeatureStatus::Skipped(why) => ui.weak(format!("übersprungen: {why}")),
+                FeatureStatus::Suppressed => ui.weak("unterdrückt"),
+                FeatureStatus::NotComputed => {
+                    ui.weak("nicht berechnet (hinter dem Rückrollmarker)")
+                }
+            };
+            ui.end_row();
+            for (k, v) in &rows {
+                ui.label(*k);
+                ui.label(v);
+                ui.end_row();
+            }
+        });
+    ui.add_space(8.0);
+    let edit = ui
+        .button(if sketch {
+            "Skizze öffnen"
+        } else {
+            "Bearbeiten …"
+        })
+        .clicked();
+    if let Some(name) = renamed {
+        let _ = state.rename_feature(id, &name);
+    }
+    if edit {
+        if sketch {
+            if state.open_sketch_id() != Some(id) {
+                let _ = state.open_sketch(id);
+            }
+        } else {
+            state.close_sketch();
+            state.edit_request = Some(id);
+        }
+    }
+}
 
-    let mut delete = false;
+/// Maße des gewählten Körpers sowie Angaben zur gewählten Fläche oder Kante. Gelöscht wird
+/// über das Feature im Feature-Baum.
+fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
     let mut moved: Option<DVec3> = None;
-    let mut renamed: Option<String> = None;
+    let renamed;
     {
         let body = &state.bodies[index];
         ui.label("Name");
-        // Der Name gehört dem erzeugenden Feature. Während der Eingabe steht der Entwurf im
-        // Speicher von egui, damit sich das Feld auch kurz leeren lässt (leere Namen sind
-        // ungültig und werden nicht übernommen).
-        let key = egui::Id::new(("feature_name", state.naming_feature(index)));
-        let mut name = ui
-            .data(|d| d.get_temp::<String>(key))
-            .unwrap_or_else(|| body.name.clone());
-        let response = ui.text_edit_singleline(&mut name);
-        if response.changed() {
-            if !name.trim().is_empty() && name != body.name {
-                renamed = Some(name.clone());
-            }
-            ui.data_mut(|d| d.insert_temp(key, name));
-        } else if !response.has_focus() {
-            ui.data_mut(|d| d.remove::<String>(key));
-        }
+        // Der Name gehört dem erzeugenden Feature.
+        renamed = name_field(ui, state.naming_feature(index), &body.name);
         ui.add_space(6.0);
         let (min, max) = body.bounds;
         let size = max - min;
@@ -70,10 +252,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             ui.label(format!("{faces} / {edges}"));
             ui.end_row();
         });
-        ui.add_space(8.0);
-        if ui.button("Körper löschen").clicked() {
-            delete = true;
-        }
     }
 
     ui.separator();
@@ -120,9 +298,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     if let (Some(name), Some(id)) = (renamed, state.naming_feature(index)) {
         let _ = state.rename_feature(id, &name);
     }
-    if delete {
-        let _ = state.delete_body(index);
-    } else if let Some(delta) = moved {
+    if let Some(delta) = moved {
         let _ = state.move_body(index, delta);
     }
 }

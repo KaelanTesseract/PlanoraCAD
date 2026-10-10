@@ -1,5 +1,6 @@
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
+use crate::feature_dialog::FeatureDialog;
 use crate::state::{AppState, SketchRequest, StandardPlane};
 use crate::{browser, fonts, properties, sketch_panel, theme, viewport};
 use egui_tiles::{Container, SimplificationOptions, TileId, Tiles, Tree, UiResponse};
@@ -95,6 +96,7 @@ pub struct PlanoraApp {
     dock: Tree<Pane>,
     dialog: Option<CreateDialog>,
     boolean_dialog: Option<BooleanDialog>,
+    feature_dialog: Option<FeatureDialog>,
     applied_dark: Option<bool>,
 }
 
@@ -114,6 +116,7 @@ impl PlanoraApp {
             dock: build_docking(),
             dialog: None,
             boolean_dialog: None,
+            feature_dialog: None,
             applied_dark: None,
         }
     }
@@ -210,6 +213,17 @@ impl PlanoraApp {
                         self.boolean_dialog = Some(BooleanDialog::with_op(&self.state, op));
                         ui.close();
                     }
+                }
+                ui.separator();
+                let rolled_back =
+                    self.state.document.marker() < self.state.document.features().len();
+                if ui
+                    .add_enabled(rolled_back, egui::Button::new("Zum Ende der Zeitleiste"))
+                    .on_disabled_hover_text("Es wird bereits die ganze Zeitleiste berechnet.")
+                    .clicked()
+                {
+                    let _ = browser::roll_to_end(&mut self.state);
+                    ui.close();
                 }
             });
             ui.menu_button("Ansicht", |ui| {
@@ -318,13 +332,15 @@ impl eframe::App for PlanoraApp {
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let sketch = self.state.session_sketch();
-                match (&self.state.message, sketch) {
-                    (Some(m), _) => ui.colored_label(egui::Color32::from_rgb(230, 90, 90), m),
-                    (None, Some(sk)) => ui.weak(format!(
+                // Vorrang: letzte Meldung, Skizzen-Modus, erstes Feature mit Fehler, Körperzahl.
+                match (&self.state.message, sketch, browser::status_text(&self.state)) {
+                    (Some(m), _, _) => ui.colored_label(browser::ERROR_COLOR, m),
+                    (None, Some(sk), _) => ui.weak(format!(
                         "Skizzen-Modus: {} – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt",
                         sk.name
                     )),
-                    (None, None) => ui.weak(format!("{} Körper", self.state.bodies.len())),
+                    (None, None, Some(e)) => ui.colored_label(browser::ERROR_COLOR, e),
+                    (None, None, None) => ui.weak(format!("{} Körper", self.state.bodies.len())),
                 };
             });
         });
@@ -338,12 +354,23 @@ impl eframe::App for PlanoraApp {
         if let Some(dialog) = dialog_for_request(&mut self.state) {
             self.dialog = Some(dialog);
         }
+        if let Some(id) = self.state.edit_request.take() {
+            self.feature_dialog = FeatureDialog::new(&self.state, id);
+        }
         drop_dialogs_in_sketch_mode(&self.state, &mut self.dialog, &mut self.boolean_dialog);
+        if self.state.sketch_session.is_some() {
+            self.feature_dialog = None;
+        }
         sketch_panel::show(ui.ctx(), &mut self.state);
         if let Some(mut dialog) = self.dialog.take()
             && dialog.show(ui.ctx(), &mut self.state)
         {
             self.dialog = Some(dialog);
+        }
+        if let Some(mut dialog) = self.feature_dialog.take()
+            && dialog.show(ui.ctx(), &mut self.state)
+        {
+            self.feature_dialog = Some(dialog);
         }
         if let Some(mut dialog) = self.boolean_dialog.take()
             && dialog.show(ui.ctx(), &mut self.state)

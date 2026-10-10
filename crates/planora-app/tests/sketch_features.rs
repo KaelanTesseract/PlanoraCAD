@@ -168,6 +168,144 @@ fn bodies_created_after_a_sketch_cannot_be_projected_into_it() {
     assert!(err.contains("nach der Skizze"), "{err}");
 }
 
+// ---- Aus der Prüfung von Task 8 (Task 9) ------------------------------------------------------
+
+#[test]
+fn an_untagged_planar_face_gives_a_german_error() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::new(10.0, 20.0, 5.0)).unwrap();
+    let top = s.bodies[0]
+        .solid
+        .faces
+        .iter()
+        .find(|(_, f)| f.tag.as_ref().is_some_and(|t| t.role == "Deckel"))
+        .map(|(i, _)| i)
+        .unwrap();
+    s.bodies[0].solid.faces[top].tag = None;
+    let n = s.document.features().len();
+    let e = s.new_sketch_on_face(0, top).unwrap_err();
+    assert!(e.contains("Auf dieser Fläche geht keine Skizze"), "{e}");
+    assert!(e.contains("keinem Feature zugeordnet"), "{e}");
+    assert_eq!(s.document.features().len(), n, "Dokument unverändert");
+}
+
+#[test]
+fn a_sketch_on_a_face_stores_the_face_frame_in_its_definition() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::new(10.0, 20.0, 5.0)).unwrap();
+    let top = s.bodies[0]
+        .solid
+        .faces
+        .iter()
+        .find(|(_, f)| f.tag.as_ref().is_some_and(|t| t.role == "Deckel"))
+        .map(|(i, _)| i)
+        .unwrap();
+    let id = s.new_sketch_on_face(0, top).unwrap();
+    match &s.document.feature(id).unwrap().kind {
+        FeatureKind::Sketch(def) => {
+            let f = def.sketch.frame();
+            assert!((f.origin.z - 5.0).abs() < 1e-9, "{f:?}");
+            assert!(f.z.z > 0.99, "{f:?}");
+        }
+        k => panic!("{k:?}"),
+    }
+}
+
+#[test]
+fn switching_to_another_sketch_writes_the_edited_draft_back() {
+    let mut s = AppState::new();
+    let a = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    let b = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XZ))
+        .unwrap();
+    let cam = s.camera;
+    s.open_sketch(a).unwrap();
+    draw_rectangle(&mut s, 4.0, 3.0);
+    s.open_sketch(b).unwrap();
+    assert_eq!(s.open_sketch_id(), Some(b));
+    assert_eq!(s.document.sketch_of(a).unwrap().curves().count(), 4);
+    assert_eq!(s.document.sketch_of(b).unwrap().curves().count(), 0);
+    s.close_sketch();
+    assert_eq!(
+        s.camera.target, cam.target,
+        "Kamera von vor der ersten Skizze"
+    );
+}
+
+#[test]
+fn a_body_moved_after_the_sketch_names_the_move_as_a_cause() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(5.0)).unwrap();
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.move_body(0, DVec3::X).unwrap(); // das Verschieben steht hinter der Skizze
+    s.open_sketch(id).unwrap();
+    let e = s.bodies[0]
+        .solid
+        .edges
+        .iter()
+        .next()
+        .map(|(i, _)| i)
+        .unwrap();
+    let err = s.project_edge_into_sketch(0, e).unwrap_err();
+    assert!(err.contains("nach der Skizze"), "{err}");
+    assert!(err.contains("Verschieben"), "{err}");
+}
+
+#[test]
+fn a_copied_edge_keeps_its_length_relation_after_a_resize() {
+    let mut s = AppState::new();
+    let b = s.create_box(DVec3::new(10.0, 20.0, 5.0)).unwrap();
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    let solid = s.bodies[0].solid.clone();
+    assert!(
+        solid
+            .edges
+            .iter()
+            .any(|(e, _)| s.project_edge_into_sketch(0, e).is_ok())
+    );
+    s.close_sketch();
+    let copy_length = |s: &AppState| -> f64 {
+        let FeatureKind::Sketch(def) = &s.document.feature(id).unwrap().kind else {
+            panic!("Skizze");
+        };
+        assert_eq!(def.copies.len(), 1);
+        s.document
+            .sketch_of(id)
+            .unwrap()
+            .line_length(def.copies[0].curve)
+            .unwrap()
+    };
+    let before = copy_length(&s);
+    s.document
+        .update(b, |k| {
+            if let FeatureKind::Box { size, .. } = k {
+                size.x = 14.0;
+                size.y = 27.0;
+            }
+        })
+        .unwrap();
+    s.refresh();
+    let after = copy_length(&s);
+    // Eine Kante in x (10 mm) wird 14 mm lang, eine in y (20 mm) 27 mm.
+    let expected = if (before - 10.0).abs() < 1e-6 {
+        14.0
+    } else {
+        assert!((before - 20.0).abs() < 1e-6, "{before}");
+        27.0
+    };
+    assert!(
+        (after - expected).abs() < 1e-6,
+        "vorher {before}, nachher {after}"
+    );
+}
+
 #[test]
 fn deleting_an_open_sketch_feature_closes_the_session() {
     let mut s = AppState::new();

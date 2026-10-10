@@ -48,7 +48,9 @@ fn boolean_replaces_both_bodies_with_the_result() {
         (vol - (1000.0 - std::f64::consts::PI * 4.0 * 10.0)).abs() / 1000.0 < 0.01,
         "{vol}"
     );
-    assert!(s.bodies[0].name.contains("Abzug") || s.bodies[0].name.contains("Quader"));
+    // Seit Task 9 heißen Boolesche Features nach ihrer Art (Brief-Test des Feature-Baums
+    // verlangt „Boolesche Operation 1“); vorher „Abzug N“.
+    assert!(s.bodies[0].name.contains("Boolesche Operation"));
 }
 
 #[test]
@@ -147,7 +149,8 @@ fn boolean_result_takes_the_lower_index_and_is_selected() {
     assert_eq!(s.bodies[1].source.feature, f);
     assert_eq!(s.bodies.len(), 2);
     assert_eq!(s.bodies[0].name, "Erster");
-    assert_eq!(s.bodies[1].name, "Schnitt 1");
+    // Seit Task 9 heißen Boolesche Features nach ihrer Art (Brief-Test des Feature-Baums).
+    assert_eq!(s.bodies[1].name, "Boolesche Operation 1");
     assert_eq!(s.bodies[1].kind, BodyKind::Combined);
     assert_eq!(s.selected_body, Some(1));
     assert!(s.selection.is_none() && s.hover.is_none());
