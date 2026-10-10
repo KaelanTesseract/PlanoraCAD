@@ -308,3 +308,54 @@ fn copied_body_edges_follow_a_resized_body() {
         "die Kantenkopie ist mitgewachsen"
     );
 }
+
+#[test]
+fn deleting_an_extrusion_removes_the_sketch_on_its_face_and_the_extrusion_on_it() {
+    let mut d = Document::new();
+    let s1 = d
+        .add_feature("Skizze 1", sketch_feature(rect(40.0, 30.0)))
+        .unwrap();
+    let e1 = d
+        .add_feature(
+            "Extrusion 1",
+            FeatureKind::Extrude {
+                sketch: s1,
+                profile: 0,
+                height: 10.0,
+            },
+        )
+        .unwrap();
+    let face = deckel_ref(&d, e1);
+    let s2 = d
+        .add_feature(
+            "Skizze 2",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: circle_sketch(),
+                plane: SketchPlane::OnFace(face),
+                copies: vec![],
+            }),
+        )
+        .unwrap();
+    let e2 = d
+        .add_feature(
+            "Extrusion 2",
+            FeatureKind::Extrude {
+                sketch: s2,
+                profile: 0,
+                height: 5.0,
+            },
+        )
+        .unwrap();
+    assert_eq!(d.dependents(e1), vec![s2, e2]);
+    assert_eq!(
+        d.delete(e1),
+        Err(FeatureError::HasDependents(vec![s2.0, e2.0]))
+    );
+    assert_eq!(d.features().len(), 4, "unverändert");
+    let removed = d.delete_with_dependents(e1).unwrap();
+    assert_eq!(removed, vec![e1, s2, e2]);
+    let left: Vec<FeatureId> = d.features().iter().map(|f| f.id).collect();
+    assert_eq!(left, vec![s1]);
+    assert!(d.visible_bodies().is_empty());
+    d.check_invariants().unwrap();
+}

@@ -10,6 +10,9 @@ use planora_kernel::Solid;
 use planora_sketch::Sketch;
 
 /// Welche Features eine Neuberechnung berechnet und welche sie übernommen hat.
+///
+/// `reused` enthält auch Features, deren Fehler aus dem letzten Lauf übernommen wurde (gleiche
+/// Eingaben wie beim Fehlschlag): Sie haben dann den Status `Error` und kein Ergebnis.
 #[derive(Clone, Debug, Default)]
 pub struct RecomputeReport {
     pub computed: Vec<FeatureId>,
@@ -168,9 +171,24 @@ impl Document {
         report
     }
 
-    /// Sichtbare Körper in der Reihenfolge der Zeitleiste.
+    /// Sichtbare Körper in der Reihenfolge der Zeitleiste (Ergebnisse von Verschieben und
+    /// Booleschen Operationen stehen an der Stelle ihrer Eingangskörper).
     pub fn visible_bodies(&self) -> Vec<VisibleBody<'_>> {
-        self.visible_at(self.features.len())
+        self.visible_bodies_at(self.features.len())
+    }
+
+    /// Die Körper, die unmittelbar vor dem Feature `id` sichtbar sind (in derselben Ordnung wie
+    /// [`Document::visible_bodies`]). Für ein unbekanntes Feature eine leere Liste.
+    pub fn visible_bodies_before(&self, id: FeatureId) -> Vec<VisibleBody<'_>> {
+        match self.index_of(id) {
+            Some(idx) => self.visible_bodies_at(idx),
+            None => Vec::new(),
+        }
+    }
+
+    /// Sichtbare Körper vor dem Index `end` mit Geometrie und Anzeigenamen.
+    fn visible_bodies_at(&self, end: usize) -> Vec<VisibleBody<'_>> {
+        self.visible_at(end)
             .into_iter()
             .filter_map(|r| {
                 let f = self.feature(r.feature)?;
@@ -204,8 +222,10 @@ impl Document {
         self.feature(id)?.result.as_ref()?.sketch.as_ref()
     }
 
-    /// Spielt die Zeitleiste bis vor `end` nach und liefert die dann sichtbaren Körper,
-    /// geordnet nach dem Feature, das sie erzeugt hat.
+    /// Spielt die Zeitleiste bis vor `end` nach und liefert die dann sichtbaren Körper in der
+    /// Reihenfolge ihres Entstehens. Das Ergebnis eines Verschiebens oder einer Booleschen
+    /// Operation nimmt die Stelle des vordersten Eingangskörpers ein, damit die Körperliste der
+    /// Oberfläche beim Bearbeiten nicht umsortiert wird.
     pub(crate) fn visible_at(&self, end: usize) -> Vec<BodyRef> {
         let mut visible: Vec<BodyRef> = Vec::new();
         for f in &self.features[..end.min(self.features.len())] {
@@ -213,17 +233,20 @@ impl Document {
                 continue;
             }
             let Some(result) = &f.result else { continue };
-            match &f.kind {
-                FeatureKind::Boolean { target, tool, .. } => {
-                    visible.retain(|r| r != target && r != tool);
-                }
-                FeatureKind::Move { body, .. } => visible.retain(|r| r != body),
-                _ => {}
-            }
-            visible.extend((0..result.bodies.len()).map(|index| BodyRef {
+            let produced = (0..result.bodies.len()).map(|index| BodyRef {
                 feature: f.id,
                 index,
-            }));
+            });
+            let consumed = |r: &BodyRef| match &f.kind {
+                FeatureKind::Boolean { target, tool, .. } => r == target || r == tool,
+                FeatureKind::Move { body, .. } => r == body,
+                _ => false,
+            };
+            // Die erste verbrauchte Stelle bleibt beim Entfernen gleich (nur Spätere fallen weg).
+            let at = visible.iter().position(consumed).unwrap_or(visible.len());
+            visible.retain(|r| !consumed(r));
+            let at = at.min(visible.len());
+            visible.splice(at..at, produced);
         }
         visible
     }

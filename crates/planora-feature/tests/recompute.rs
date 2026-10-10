@@ -263,3 +263,119 @@ fn the_marker_hides_later_features_and_inserts_at_its_position() {
     d.set_marker(3).unwrap();
     assert_eq!(d.visible_bodies().len(), 3);
 }
+
+fn body(feature: FeatureId) -> BodyRef {
+    BodyRef { feature, index: 0 }
+}
+
+#[test]
+fn visible_bodies_before_shows_the_inputs_before_a_boolean_and_only_the_result_after_it() {
+    let mut d = Document::new();
+    let a = boxed(&mut d, "A");
+    let b = d
+        .add_feature(
+            "B",
+            FeatureKind::Box {
+                size: DVec3::splat(4.0),
+                origin: DVec3::new(2.0, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    let u = d
+        .add_feature(
+            "U",
+            FeatureKind::Boolean {
+                target: body(a),
+                tool: body(b),
+                op: BoolOp::Union,
+            },
+        )
+        .unwrap();
+    let c = boxed(&mut d, "C");
+    let before_u: Vec<BodyRef> = d.visible_bodies_before(u).iter().map(|v| v.body).collect();
+    assert_eq!(before_u, vec![body(a), body(b)]);
+    let before_c: Vec<BodyRef> = d.visible_bodies_before(c).iter().map(|v| v.body).collect();
+    assert_eq!(before_c, vec![body(u)]);
+    assert!(d.visible_bodies_before(a).is_empty());
+    assert!(
+        d.visible_bodies_before(FeatureId(999)).is_empty(),
+        "unbekannt"
+    );
+    assert_eq!(d.visible_bodies_before(c)[0].name, "U");
+}
+
+#[test]
+fn results_of_moves_and_booleans_take_the_place_of_their_inputs() {
+    let mut d = Document::new();
+    let a = boxed(&mut d, "A");
+    let b = boxed(&mut d, "B");
+    let c = boxed(&mut d, "C");
+    let m = d
+        .add_feature(
+            "M",
+            FeatureKind::Move {
+                body: body(a),
+                delta: DVec3::X,
+            },
+        )
+        .unwrap();
+    let order: Vec<BodyRef> = d.visible_bodies().iter().map(|v| v.body).collect();
+    assert_eq!(
+        order,
+        vec![body(m), body(b), body(c)],
+        "Move bleibt an der Stelle"
+    );
+    // Ziel hinten, Werkzeug vorn: das Ergebnis steht an der vorderen Stelle
+    let u = d
+        .add_feature(
+            "U",
+            FeatureKind::Boolean {
+                target: body(c),
+                tool: body(b),
+                op: BoolOp::Union,
+            },
+        )
+        .unwrap();
+    assert_eq!(d.feature(u).unwrap().status, FeatureStatus::Ok);
+    let order: Vec<BodyRef> = d.visible_bodies().iter().map(|v| v.body).collect();
+    assert_eq!(order, vec![body(m), body(u)]);
+}
+
+#[test]
+fn a_failed_feature_keeps_its_error_without_recomputing_until_its_input_changes() {
+    let mut d = Document::new();
+    let z = d
+        .add_feature(
+            "Z",
+            FeatureKind::Cylinder {
+                radius: -1.0,
+                height: 4.0,
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        d.feature(z).unwrap().status,
+        FeatureStatus::Error(_)
+    ));
+    let again = d.recompute();
+    assert!(!again.computed.contains(&z), "{:?}", again.computed);
+    assert!(
+        again.reused.contains(&z),
+        "übernommener Fehler steht in reused"
+    );
+    assert!(matches!(
+        d.feature(z).unwrap().status,
+        FeatureStatus::Error(_)
+    ));
+    let fixed = d
+        .update_with_report(z, |k| {
+            if let FeatureKind::Cylinder { radius, .. } = k {
+                *radius = 1.0;
+            }
+        })
+        .unwrap();
+    assert_eq!(d.feature(z).unwrap().status, FeatureStatus::Ok);
+    assert!(fixed.computed.contains(&z), "{:?}", fixed.computed);
+    d.check_invariants().unwrap();
+}

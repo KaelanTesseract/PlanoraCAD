@@ -126,7 +126,8 @@ impl Document {
     }
 
     /// Prüft die Invarianten des Dokuments (für Tests): eindeutige Ids, Verweise nur auf
-    /// frühere Features, Marker im Bereich, Features ab dem Marker `NotComputed`, Ergebnis
+    /// frühere Features, Marker im Bereich, Features ab dem Marker `NotComputed` und davor nie
+    /// `NotComputed` (außer unterdrückt), Ergebnis
     /// genau bei `Ok` (alte Ergebnisse dürfen nur `NotComputed`/`Suppressed` behalten) und
     /// gültige sichtbare Körper. Liefert die erste Verletzung als Text.
     pub fn check_invariants(&self) -> Result<(), String> {
@@ -153,6 +154,12 @@ impl Document {
                 return Err(format!(
                     "Feature „{}“ steht hinter dem Marker, hat aber Status {:?}",
                     f.name, f.status
+                ));
+            }
+            if idx < self.marker && !f.suppressed && f.status == FeatureStatus::NotComputed {
+                return Err(format!(
+                    "Feature „{}“ steht vor dem Marker, wurde aber nicht berechnet",
+                    f.name
                 ));
             }
             match (&f.status, f.result.is_some()) {
@@ -183,5 +190,36 @@ impl Document {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::{Document, FeatureKind, FeatureStatus};
+    use planora_math::DVec3;
+
+    #[test]
+    fn a_not_computed_feature_before_the_marker_violates_the_invariants() {
+        let mut d = Document::new();
+        let a = d
+            .add_feature(
+                "A",
+                FeatureKind::Box {
+                    size: DVec3::ONE,
+                    origin: DVec3::ZERO,
+                },
+            )
+            .unwrap();
+        d.check_invariants().unwrap();
+        let idx = d.index_of(a).unwrap();
+        d.features[idx].status = FeatureStatus::NotComputed;
+        d.features[idx].result = None;
+        let e = d.check_invariants().unwrap_err();
+        assert!(e.contains("nicht berechnet"), "{e}");
+        // unterdrückt vor dem Marker ist erlaubt (Status Suppressed), hinter dem Marker auch
+        d.set_suppressed(a, true).unwrap();
+        d.check_invariants().unwrap();
+        d.set_marker(0).unwrap();
+        d.check_invariants().unwrap();
     }
 }
