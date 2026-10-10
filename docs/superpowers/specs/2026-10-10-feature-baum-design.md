@@ -116,3 +116,37 @@ Verschwindet eine Fläche oder entsteht sie neu, ist der Verweis verloren und da
 ## 9. Lizenzen und Abhängigkeiten
 
 Keine neue externe Abhängigkeit geplant. Falls doch nötig: vorher Lizenz prüfen, `cargo deny check` grün halten, `deny.toml` nie ohne Rückfrage erweitern. Kein Autodesk-Material.
+
+## 10. Änderungen bei der Umsetzung
+
+Stand: 2026-10-10, nach Abschluss der Umsetzung (Branch `feature/feature-baum`). Die Punkte F1–F13 stammen aus dem Plan und wurden dort vor Beginn festgelegt; die weiteren Punkte sind bei der Umsetzung entstanden.
+
+**Entscheidungen aus dem Plan (F1–F13)**
+- **F1 – Rollen der Grundkörper:** Quader, Zylinder, Kegel und Kugel werden im Kernel über `extrude`/`revolve` gebaut und erben deren Rollen (`Boden`, `Deckel`, `Wand k`, `Fläche k`). Eigene Rollen wie „Seite +x“ gibt es nicht (ändert §4.1).
+- **F2 – Herkunft nachträglich:** Der Kernel erzeugt Marken mit `origin = 0` („noch nicht zugewiesen“); `Solid::assign_origin(feature_id)` setzt die Herkunft aller unzugewiesenen Marken. `FeatureId`s beginnen bei 1.
+- **F3 – Zwischenspeicher über Versionen statt Hashes:** Jedes Feature hat eine `version` und ein Ergebnis mit `result_version`. Der Schlüssel eines Features ist die eigene Version plus die Ergebnisversionen aller gelesenen Eingaben. `Document::recompute()` hat kein Argument `from`: es durchläuft immer die Zeitleiste bis zum Marker und rechnet nur dort neu, wo der Schlüssel abweicht.
+- **F4 – Volumenprobe im Feature:** `planora-feature` hängt von `planora-mesh` ab und führt die Volumenprobe der Booleschen Operation (`boolean_volume_plausible`) beim Berechnen des Features aus (bisher in der App).
+- **F5 – Körperverbrauch:** Ein `Boolean`-Feature verbraucht Ziel und Werkzeug, `Move` ersetzt den Körper; sichtbar ist, was kein späteres Feature verbraucht hat. `Move` behält keine Körperidentität (neuer Körper ist `BodyRef { feature: move_id, index: 0 }`).
+- **F6 – Skizzen-Entwurf:** Der Skizzen-Modus arbeitet auf einer Kopie der Skizze (`sketch_draft`); „Skizze beenden“ schreibt sie per `Document::update` zurück und rechnet neu. Während des Zeichnens wird nicht neu berechnet.
+- **F7 – Kantenkopien folgen:** Kopierte Körperkanten werden als `EdgeCopy { curve, edge }` im Skizzen-Feature geführt und beim Neuberechnen mit `Sketch::reproject_edge` angepasst. Ändert die Kante ihre Art, meldet das Skizzen-Feature einen Fehler.
+- **F8 – Profilindex:** `Extrude`/`Revolve` verweisen mit `profile: usize` auf das Profil in `Sketch::profiles()`.
+- **F9 – Position:** Position und Verschieben laufen über `Move`-Features. Das Positionsfeld ändert das neueste `Move` desselben Körpers, wenn es das letzte Feature ist, das diesen Körper liest; sonst entsteht ein neues `Move` am Marker.
+- **F10 – Status:** `FeatureStatus` hat fünf Varianten (`Ok`, `Error`, `Skipped`, `Suppressed`, `NotComputed`).
+- **F11 – Rückrollmarker per Menü** („Zurückrollen bis hier“, „Zum Ende“); Ziehen mit der Maus gibt es nicht.
+- **F12 – Beispielprofile entfernt:** `samples.rs` und die zugehörigen Dialoge entfallen; Skizzen ersetzen sie.
+- **F13 – Übergang:** Zwischenzeitlich legten `extrude_sketch`/`revolve_sketch` je ein Skizzen-Feature als Kopie an; mit der Oberfläche des Baums (Aufgabe 8) wurde die alte Skizzenliste abgelöst.
+
+**Weitere Abweichungen**
+- **Fehler „unplausibles Ergebnis“:** Die Volumenprobe meldet `FeatureError::ImplausibleResult`. Die Probe mit 2 % Abweichung kann kleine gekrümmte Körper zu Unrecht ablehnen.
+- **Fehler werden zwischengespeichert:** Ein fehlgeschlagenes Feature trägt einen eigenen Schlüssel (`failed`) und wird bei unveränderten Eingaben nicht jedes Mal neu berechnet; `RecomputeReport.reused` enthält daher auch übernommene Fehler. Die erste Fassung rechnete Fehler bei jedem Lauf neu.
+- **Unterdrücken meldet seinen Umfang:** Neben `set_suppressed` gibt es `set_suppressed_with_report`. Wiederholtes Setzen desselben Werts ändert nichts.
+- **Reihenfolge der sichtbaren Körper:** Das Ergebnis einer Booleschen Operation oder eines `Move` nimmt den Platz seines ersten Eingangs ein (statt am Ende angehängt zu werden). Die Oberfläche darf sich nicht auf feste Listenplätze verlassen.
+- **Zusatzfunktionen im Dokument:** `delete_body`, `naming_feature`, eine Prüfung `check_invariants` (inkl. Regel „kein `NotComputed` vor dem Marker“) und eine Liste der Abhängigen (`dependents`) für „Löschen mit Folgen“.
+- **Fehlgeschlagene Boolesche Operation oder Verschiebung** werden in der App zurückgenommen, damit das Dokument unverändert bleibt.
+- **Grenze für Verschiebungen:** `move_body` weist Lagen jenseits von ±1e9 mm ab (`MAX_COORD_MM`).
+- **Leser hinter dem Marker:** Beim Verschieben werden auch Features hinter dem Rückrollmarker als Leser des Körpers berücksichtigt.
+- **Position nach Zeitleistenlogik (R9):** Wird ein Körper im Eigenschaftenfenster verschoben, kommt ein `Move` ans Ende der Zeitleiste; eine Skizze oder Extrusion, die davor liegt, folgt nicht. Änderungen am Quader-Feature selbst werden dagegen von abhängigen Skizzen übernommen.
+- **Skizzenebene bei Skizzen auf Flächen:** Die Ebene wird aus der Fläche abgeleitet; fehlt dem Skizzen-Feature ein Ergebnis, nutzt die Oberfläche die gespeicherte Definition.
+- **Offene Skizze:** Vor Änderungen am Dokument wird der Entwurf zuerst übernommen („Commit zuerst“); wird er abgelehnt, bleibt die Skizze offen. Löschen eines Features beendet die offene Skizze.
+- **Namen von Booleschen Operationen:** „Boolesche Operation N“ (statt Vereinigen/Abziehen/Schneiden im Namen); drei ältere Tests wurden mechanisch angepasst.
+- **Prüfstand:** Die Oberfläche wurde nicht von Hand durchgespielt, weil die Bildschirmsteuerung in Aufgaben 7–9 unterbrochen wurde (siehe `docs/superpowers/offene-punkte.md`).
