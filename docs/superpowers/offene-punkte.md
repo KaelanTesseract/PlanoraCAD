@@ -146,7 +146,7 @@ Stand: 2026-10-10. Skizzen, Extrusionen, Drehungen, Boolesche Operationen und Ve
 - Die offene Skizze wird auch dann verworfen, wenn ihr Entwurf von dem gelöschten Feature gar nicht mehr abhängt.
 - `extrude_sketch`/`revolve_sketch` und einige Menüaufrufe nutzen noch `close_sketch()` und überhören einen abgelehnten Entwurf; richtig wäre `try_close_sketch()`.
 - Fehlt dem Skizzen-Feature ein Ergebnis, nutzt die Oberfläche die gespeicherte Definition.
-- **Von Hand nicht geprüft:** Die Oberfläche des Feature-Baums wurde in Aufgaben 7–9 nie von Hand durchgespielt, weil die Bildschirmsteuerung unterbrochen wurde. Abgesichert ist sie nur durch automatische Tests (App ohne Fenster).
+- **Von Hand kaum geprüft:** Die Oberfläche des Feature-Baums wurde in Aufgaben 7–9 nicht von Hand durchgespielt, weil die Bildschirmsteuerung unterbrochen wurde. Bei der Abschlussprüfung wurde nur gesehen, dass die App startet, ein Quader entsteht, im Baum erscheint und das Rechtsklickmenü (Bearbeiten, Umbenennen, Unterdrücken, Zurückrollen, Zum Ende, Löschen) da ist; auch dieser Versuch wurde unterbrochen. Die ganze Kette (Skizze, Extrusion, Boolesche Operation, Maße ändern, Fehler am richtigen Feature) wurde nicht von Hand geprüft, nur durch automatische Tests (App ohne Fenster).
 
 **Aktualisierung früherer Abschnitte**
 - „Körper aus Skizzen sind Momentaufnahmen“ und „Keine lebende Verknüpfung“ gelten nicht mehr: Skizzen sind Features, Körper und Kantenkopien folgen Änderungen (Grenzen oben).

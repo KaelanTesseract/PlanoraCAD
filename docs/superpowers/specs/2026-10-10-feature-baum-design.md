@@ -149,4 +149,4 @@ Stand: 2026-10-10, nach Abschluss der Umsetzung (Branch `feature/feature-baum`).
 - **Skizzenebene bei Skizzen auf Flächen:** Die Ebene wird aus der Fläche abgeleitet; fehlt dem Skizzen-Feature ein Ergebnis, nutzt die Oberfläche die gespeicherte Definition.
 - **Offene Skizze:** Vor Änderungen am Dokument wird der Entwurf zuerst übernommen („Commit zuerst“); wird er abgelehnt, bleibt die Skizze offen. Löschen eines Features beendet die offene Skizze.
 - **Namen von Booleschen Operationen:** „Boolesche Operation N“ (statt Vereinigen/Abziehen/Schneiden im Namen); drei ältere Tests wurden mechanisch angepasst.
-- **Prüfstand:** Die Oberfläche wurde nicht von Hand durchgespielt, weil die Bildschirmsteuerung in Aufgaben 7–9 unterbrochen wurde (siehe `docs/superpowers/offene-punkte.md`).
+- **Handprüfung:** Die Oberfläche wurde nicht von Hand durchgespielt; die Bildschirmsteuerung wurde in Aufgaben 7–9 und bei der Abschlussprüfung unterbrochen. Gesehen wurde nur Start, Quader anlegen und das Rechtsklickmenü des Baums (siehe `docs/superpowers/offene-punkte.md`).
