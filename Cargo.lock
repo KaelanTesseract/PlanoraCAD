@@ -2429,6 +2429,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "planora-feature"
+version = "0.1.0"
+dependencies = [
+ "planora-kernel",
+ "planora-math",
+ "planora-mesh",
+ "planora-sketch",
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "planora-kernel"
 version = "0.1.0"
 dependencies = [
