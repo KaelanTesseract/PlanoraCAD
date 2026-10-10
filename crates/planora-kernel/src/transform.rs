@@ -49,6 +49,7 @@ impl Solid {
                 outer: fix(&f.outer),
                 inner: f.inner.iter().map(fix).collect(),
                 patch,
+                tag: f.tag.clone(),
             });
         }
         out.shells = self.shells.clone();

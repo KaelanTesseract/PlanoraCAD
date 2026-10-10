@@ -2,7 +2,7 @@ use crate::error::KernelError;
 use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
 use crate::profile::{ProfileLoop, Segment, check_loop_input};
-use crate::topology::{Edge, Face, HalfEdge, Loop, Solid};
+use crate::topology::{Edge, Face, FaceTag, HalfEdge, Loop, Solid};
 use planora_math::{DVec2, Frame, TAU, Tolerance};
 
 /// Beschreibung eines gekrümmten Flächenstücks, das durch ein Segment entsteht.
@@ -34,7 +34,9 @@ pub fn revolve(chain: &ProfileLoop, frame: &Frame, tol: &Tolerance) -> Result<So
     if !(area.is_finite() && area.abs() > 1e-12) {
         return Err(KernelError::ZeroAreaProfile);
     }
-    let chain = if area < 0.0 {
+    // Wird die Kette umgedreht, entspricht Segment `i` dem Eingabesegment `m − 1 − i`.
+    let reversed = area < 0.0;
+    let chain = if reversed {
         chain.reversed()
     } else {
         chain.clone()
@@ -79,6 +81,10 @@ pub fn revolve(chain: &ProfileLoop, frame: &Frame, tol: &Tolerance) -> Result<So
     for i in 0..m {
         let (p, q) = (pts[i], pts[i + 1]);
         let seg = chain.segments[i];
+        let tag = Some(FaceTag {
+            origin: 0,
+            role: format!("Fläche {}", if reversed { m - i } else { i + 1 }),
+        });
 
         let curved = match seg {
             Segment::Line { .. } => {
@@ -88,7 +94,7 @@ pub fn revolve(chain: &ProfileLoop, frame: &Frame, tol: &Tolerance) -> Result<So
                     return Err(KernelError::DegenerateSegment);
                 }
                 if d.y.abs() <= tol.linear {
-                    add_planar_face(&mut solid, frame, &circles, i, p, q);
+                    add_planar_face(&mut solid, frame, &circles, i, p, q, tag);
                     continue;
                 }
                 let meridian = Curve::Line {
@@ -245,6 +251,7 @@ pub fn revolve(chain: &ProfileLoop, frame: &Frame, tol: &Tolerance) -> Result<So
                 v0: curved.v_start.min(curved.v_end),
                 v1: curved.v_start.max(curved.v_end),
             }),
+            tag,
         });
     }
 
@@ -260,6 +267,7 @@ fn add_planar_face(
     i: usize,
     p: DVec2,
     q: DVec2,
+    tag: Option<FaceTag>,
 ) {
     let plane_frame = Frame {
         origin: frame.origin + frame.z * p.y,
@@ -294,5 +302,6 @@ fn add_planar_face(
         outer,
         inner,
         patch: None,
+        tag,
     });
 }

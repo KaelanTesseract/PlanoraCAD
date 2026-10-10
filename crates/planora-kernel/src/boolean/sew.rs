@@ -165,6 +165,7 @@ pub fn sew(pieces: Vec<Piece>, tol: &Tolerance) -> Result<Solid, BooleanError> {
             outer,
             inner,
             patch,
+            tag: None,
         }));
     }
 
