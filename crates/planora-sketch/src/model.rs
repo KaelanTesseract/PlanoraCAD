@@ -151,6 +151,19 @@ impl Sketch {
         &self.frame
     }
 
+    /// Ersetzt die Skizzenebene; die 2D-Werte bleiben unverändert. Bei einem ungültigen
+    /// Koordinatensystem bleibt die Skizze unverändert.
+    pub fn set_frame(&mut self, frame: Frame) -> Result<(), SketchError> {
+        if !frame.is_orthonormal(self.tol.linear) {
+            return Err(SketchError::InvalidInput(
+                "Das Koordinatensystem der Skizze ist ungültig".into(),
+            ));
+        }
+        self.frame = frame;
+        self.touch_structure();
+        Ok(())
+    }
+
     pub fn tolerance(&self) -> &Tolerance {
         &self.tol
     }

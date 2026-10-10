@@ -4,7 +4,7 @@
 
 use crate::constraint::{ConstraintKind, LineOrPoints};
 use crate::error::SketchError;
-use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use crate::model::{CurveId, CurveKind, PointId, Sketch, finite};
 use planora_kernel::{Curve, Edge, Face, Id, Solid, Surface};
 use planora_math::{DVec2, DVec3, Frame, TAU};
 use std::collections::HashMap;
@@ -25,6 +25,28 @@ pub struct RectIds {
 fn reflect(p: DVec2, a: DVec2, d: DVec2) -> DVec2 {
     let v = p - a;
     a + d * (2.0 * v.dot(d)) - v
+}
+
+/// Eine in die Skizzenebene projizierte Körperkante (Werte in Skizzenkoordinaten).
+#[derive(Clone, Copy, Debug)]
+enum Projected {
+    Line(DVec2, DVec2),
+    Circle {
+        center: DVec2,
+        radius: f64,
+    },
+    /// Gegen den Uhrzeigersinn von `start` nach `end`.
+    Arc {
+        center: DVec2,
+        start: DVec2,
+        end: DVec2,
+    },
+    /// Große Halbachse als Vektor, kleine Halbachse als Länge.
+    Ellipse {
+        center: DVec2,
+        axis: DVec2,
+        minor: f64,
+    },
 }
 
 fn unsupported(what: &str) -> SketchError {
@@ -287,6 +309,152 @@ impl Sketch {
         solid: &Solid,
         edge: Id<Edge>,
     ) -> Result<CurveId, SketchError> {
+        let projected = self.project_edge(solid, edge)?;
+        self.atomically(|s| {
+            let c = match projected {
+                Projected::Line(p0, p1) => {
+                    let a = s.add_fixed_construction_point(p0)?;
+                    let b = s.add_fixed_construction_point(p1)?;
+                    s.add_line(a, b)?
+                }
+                Projected::Circle { center, radius } => {
+                    let m = s.add_fixed_construction_point(center)?;
+                    let c = s.add_circle(m, radius)?;
+                    s.add_constraint(ConstraintKind::Radius(c, radius))?;
+                    c
+                }
+                Projected::Arc { center, start, end } => {
+                    let m = s.add_fixed_construction_point(center)?;
+                    let a = s.add_fixed_construction_point(start)?;
+                    let b = s.add_fixed_construction_point(end)?;
+                    s.add_arc(m, a, b)?
+                }
+                Projected::Ellipse {
+                    center,
+                    axis,
+                    minor,
+                } => {
+                    let m = s.add_fixed_construction_point(center)?;
+                    let e = s.add_ellipse(m, axis, minor)?;
+                    s.add_constraint(ConstraintKind::EllipseMajor(e, axis.length()))?;
+                    s.add_constraint(ConstraintKind::EllipseMinor(e, minor))?;
+                    s.add_constraint(ConstraintKind::EllipseAngle(e, axis.y.atan2(axis.x)))?;
+                    e
+                }
+            };
+            s.curves[c].construction = true;
+            Ok(c)
+        })
+    }
+
+    /// Führt die kopierte Körperkante `curve` nach: Die Kante wird wie bei
+    /// [`Sketch::add_projected_edge`] projiziert, die vorhandene Kurve bekommt die neue Lage
+    /// und Größe, ebenso die dazugehörigen `Fixed`-, `Radius`- und `Ellipse…`-Werte. Die Kurve
+    /// behält ihre Id und alle Abhängigkeiten, die der Nutzer daran geknüpft hat. Ändert die
+    /// Kante ihre Art oder lässt sie sich nicht projizieren, bleibt die Skizze unverändert.
+    pub fn reproject_edge(
+        &mut self,
+        curve: CurveId,
+        solid: &Solid,
+        edge: Id<Edge>,
+    ) -> Result<(), SketchError> {
+        self.check_curve(curve)?;
+        let projected = self.project_edge(solid, edge)?;
+        self.atomically(|s| {
+            let kind = s.curves[curve].kind.clone();
+            // Neue Maße, die in den Abhängigkeiten nachgeführt werden.
+            let mut radius_value = None;
+            let mut ellipse_values = None;
+            match (projected, kind) {
+                (Projected::Line(p0, p1), CurveKind::Line { a, b }) => {
+                    s.set_point_xy(a, p0.x, p0.y)?;
+                    s.set_point_xy(b, p1.x, p1.y)?;
+                }
+                (
+                    Projected::Circle { center, radius },
+                    CurveKind::Circle {
+                        center: m,
+                        radius: r,
+                    },
+                ) => {
+                    finite(radius, "Der Radius")?;
+                    s.set_point_xy(m, center.x, center.y)?;
+                    s.vars[r] = radius;
+                    radius_value = Some(radius);
+                }
+                (
+                    Projected::Arc { center, start, end },
+                    CurveKind::Arc {
+                        center: m,
+                        start: a,
+                        end: b,
+                    },
+                ) => {
+                    s.set_point_xy(m, center.x, center.y)?;
+                    s.set_point_xy(a, start.x, start.y)?;
+                    s.set_point_xy(b, end.x, end.y)?;
+                }
+                (
+                    Projected::Ellipse {
+                        center,
+                        axis,
+                        minor,
+                    },
+                    CurveKind::Ellipse {
+                        center: m,
+                        ax,
+                        ay,
+                        minor: mi,
+                    },
+                ) => {
+                    finite(axis.x, "Die große Halbachse")?;
+                    finite(axis.y, "Die große Halbachse")?;
+                    finite(minor, "Die kleine Halbachse")?;
+                    s.set_point_xy(m, center.x, center.y)?;
+                    (s.vars[ax], s.vars[ay], s.vars[mi]) = (axis.x, axis.y, minor);
+                    ellipse_values = Some((axis.length(), minor, axis.y.atan2(axis.x)));
+                }
+                _ => return Err(unsupported("Die Kante hat ihre Art geändert")),
+            }
+            // Die Fixwerte und Maße, die `add_projected_edge` angelegt hat, mitführen.
+            let points = s.curves[curve].kind.points();
+            let ids: Vec<_> = s
+                .constraints
+                .iter()
+                .filter(|(_, c)| c.alive)
+                .map(|(id, _)| id)
+                .collect();
+            for id in ids {
+                let new_kind = match s.constraints[id].kind {
+                    ConstraintKind::Fixed(p, ..) if points.contains(&p) => {
+                        let xy = s.pos(p);
+                        Some(ConstraintKind::Fixed(p, xy.x, xy.y))
+                    }
+                    ConstraintKind::Radius(c, _) if c == curve => {
+                        radius_value.map(|r| ConstraintKind::Radius(c, r))
+                    }
+                    ConstraintKind::EllipseMajor(c, _) if c == curve => {
+                        ellipse_values.map(|(l, ..)| ConstraintKind::EllipseMajor(c, l))
+                    }
+                    ConstraintKind::EllipseMinor(c, _) if c == curve => {
+                        ellipse_values.map(|(_, m, _)| ConstraintKind::EllipseMinor(c, m))
+                    }
+                    ConstraintKind::EllipseAngle(c, _) if c == curve => {
+                        ellipse_values.map(|(.., a)| ConstraintKind::EllipseAngle(c, a))
+                    }
+                    _ => None,
+                };
+                if let Some(k) = new_kind {
+                    s.constraints[id].kind = k;
+                }
+            }
+            s.touch_structure();
+            Ok(())
+        })
+    }
+
+    /// Projiziert die Körperkante `edge` in die Skizzenebene, ohne die Skizze zu ändern.
+    fn project_edge(&self, solid: &Solid, edge: Id<Edge>) -> Result<Projected, SketchError> {
         let e = solid.edges.get(edge).ok_or(SketchError::UnknownObject)?;
         let frame = *self.frame();
         let tol = *self.tolerance();
@@ -304,13 +472,7 @@ impl Sketch {
                         "Die Kante steht senkrecht zur Skizzenebene und wäre nur ein Punkt",
                     ));
                 }
-                self.atomically(|s| {
-                    let a = s.add_fixed_construction_point(p0)?;
-                    let b = s.add_fixed_construction_point(p1)?;
-                    let c = s.add_line(a, b)?;
-                    s.curves[c].construction = true;
-                    Ok(c)
-                })
+                Ok(Projected::Line(p0, p1))
             }
             Curve::Circle {
                 frame: cf,
@@ -323,30 +485,16 @@ impl Sketch {
                             "Kreisbögen, die nicht parallel zur Skizzenebene liegen, werden nicht unterstützt",
                         ));
                     }
-                    return self.add_projected_ellipse(cf, *r, *r);
+                    return self.project_ellipse(cf, *r, *r);
                 }
                 let center = project(cf.origin);
-                let radius = *r;
                 if full {
-                    self.atomically(|s| {
-                        let m = s.add_fixed_construction_point(center)?;
-                        let c = s.add_circle(m, radius)?;
-                        s.curves[c].construction = true;
-                        s.add_constraint(ConstraintKind::Radius(c, radius))?;
-                        Ok(c)
-                    })
+                    Ok(Projected::Circle { center, radius: *r })
                 } else {
                     let (p0, p1) = (project(e.curve.point(e.t0)), project(e.curve.point(e.t1)));
                     let ccw = (e.t1 - e.t0).signum() * cf.z.dot(frame.z).signum() > 0.0;
                     let (start, end) = if ccw { (p0, p1) } else { (p1, p0) };
-                    self.atomically(|s| {
-                        let m = s.add_fixed_construction_point(center)?;
-                        let a = s.add_fixed_construction_point(start)?;
-                        let b = s.add_fixed_construction_point(end)?;
-                        let c = s.add_arc(m, a, b)?;
-                        s.curves[c].construction = true;
-                        Ok(c)
-                    })
+                    Ok(Projected::Arc { center, start, end })
                 }
             }
             Curve::Ellipse {
@@ -359,21 +507,21 @@ impl Sketch {
                         "Ellipsenbögen werden nicht unterstützt, nur ganze Ellipsen",
                     ));
                 }
-                self.add_projected_ellipse(cf, *major, *minor)
+                self.project_ellipse(cf, *major, *minor)
             }
         }
     }
 
     /// Projiziert die ganze Ellipse `cf.origin + major·cos t·cf.x + minor·sin t·cf.y` (Kreise:
-    /// `major = minor = r`) als feste Konstruktions-Ellipse in die Skizze. Die Projektion ist
-    /// `c + A·cos t + B·sin t`; ihre Hauptachsen ergeben sich durch Verschieben des Parameters
-    /// um `φ = ½·atan2(2·A·B, |A|² − |B|²)`, die längere wird die große Halbachse.
-    fn add_projected_ellipse(
-        &mut self,
+    /// `major = minor = r`). Die Projektion ist `c + A·cos t + B·sin t`; ihre Hauptachsen
+    /// ergeben sich durch Verschieben des Parameters um
+    /// `φ = ½·atan2(2·A·B, |A|² − |B|²)`, die längere wird die große Halbachse.
+    fn project_ellipse(
+        &self,
         cf: &Frame,
         major: f64,
         minor: f64,
-    ) -> Result<CurveId, SketchError> {
+    ) -> Result<Projected, SketchError> {
         let frame = *self.frame();
         let tol = *self.tolerance();
         let center = frame.to_local(cf.origin).truncate();
@@ -395,15 +543,10 @@ impl Sketch {
                 "Die Kurve steht senkrecht zur Skizzenebene und wäre nur eine Strecke",
             ));
         }
-        let (len, angle) = (axis.length(), axis.y.atan2(axis.x));
-        self.atomically(|s| {
-            let m = s.add_fixed_construction_point(center)?;
-            let e = s.add_ellipse(m, axis, short)?;
-            s.curves[e].construction = true;
-            s.add_constraint(ConstraintKind::EllipseMajor(e, len))?;
-            s.add_constraint(ConstraintKind::EllipseMinor(e, short))?;
-            s.add_constraint(ConstraintKind::EllipseAngle(e, angle))?;
-            Ok(e)
+        Ok(Projected::Ellipse {
+            center,
+            axis,
+            minor: short,
         })
     }
 
