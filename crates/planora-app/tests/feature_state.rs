@@ -1,5 +1,5 @@
 use planora_app::state::{AppState, BodyKind};
-use planora_feature::{FeatureKind, FeatureStatus};
+use planora_feature::{BodyRef, FeatureKind, FeatureStatus};
 use planora_kernel::BoolOp;
 use planora_math::DVec3;
 use planora_mesh::{TessellationOptions, mass_properties, tessellate};
@@ -103,15 +103,24 @@ fn moving_after_a_foreign_feature_read_the_body_adds_a_new_move() {
     s.create_box(DVec3::new(10.0, 10.0, 4.0)).unwrap();
     s.move_body(0, DVec3::X).unwrap();
     let i = s.new_sketch_on_face(0, top_face(&s, 0)).unwrap();
-    let frame = *s.sketches[i].frame();
+    let frame = *s.document.sketch_of(i).unwrap().frame();
     let local = |p: DVec3| frame.to_local(p).truncate();
     let (a, b) = (
         local(DVec3::new(3.0, 3.0, 4.0)),
         local(DVec3::new(6.0, 6.0, 4.0)),
     );
-    s.sketches[i].add_rectangle(a.min(b), a.max(b)).unwrap();
-    let e = s.extrude_sketch(i, 0, 2.0).unwrap();
-    let extrusion = s.bodies[e].source;
+    s.open_sketch(i).unwrap();
+    s.session_sketch_mut()
+        .unwrap()
+        .1
+        .add_rectangle(a.min(b), a.max(b))
+        .unwrap();
+    s.close_sketch();
+    let extrusion = BodyRef {
+        feature: s.extrude_sketch(i, 0, 2.0).unwrap(),
+        index: 0,
+    };
+    let e = s.body_index(extrusion).unwrap();
     let extrusion_bounds = s.bodies[e].bounds;
     let box_bounds = s.bodies[0].bounds;
     let n = s.document.features().len();

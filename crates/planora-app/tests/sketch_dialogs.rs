@@ -4,7 +4,9 @@ use planora_app::create_dialog::CreateDialog;
 use planora_app::fonts;
 use planora_app::sketch_view;
 use planora_app::state::{AppState, BodyKind, StandardPlane};
+use planora_feature::{FeatureId, SketchPlane};
 use planora_math::DVec2;
+use planora_sketch::model::Sketch;
 
 fn context() -> egui::Context {
     let ctx = egui::Context::default();
@@ -12,17 +14,32 @@ fn context() -> egui::Context {
     ctx
 }
 
-fn state_with_sketch() -> AppState {
+/// Legt ein Skizzen-Feature auf der XY-Ebene an.
+fn new_sketch(s: &mut AppState) -> FeatureId {
+    s.add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap()
+}
+
+/// Bearbeitet die Skizze `id` wie im Skizzen-Modus: öffnen, `f` auf dem Entwurf, beenden.
+fn edit_sketch<T>(s: &mut AppState, id: FeatureId, f: impl FnOnce(&mut Sketch) -> T) -> T {
+    s.open_sketch(id).unwrap();
+    let r = f(s.session_sketch_mut().unwrap().1);
+    s.close_sketch();
+    r
+}
+
+fn state_with_sketch() -> (AppState, FeatureId) {
     let mut s = AppState::new();
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
-    s.sketches[i]
-        .add_rectangle(DVec2::ZERO, DVec2::new(10.0, 4.0))
-        .unwrap();
-    // offene Kette, die abgelehnt wird
-    let a = s.sketches[i].add_point(30.0, 0.0).unwrap();
-    let b = s.sketches[i].add_point(35.0, 0.0).unwrap();
-    s.sketches[i].add_line(a, b).unwrap();
-    s
+    let i = new_sketch(&mut s);
+    edit_sketch(&mut s, i, |sk| {
+        sk.add_rectangle(DVec2::ZERO, DVec2::new(10.0, 4.0))
+            .unwrap();
+        // offene Kette, die abgelehnt wird
+        let a = sk.add_point(30.0, 0.0).unwrap();
+        let b = sk.add_point(35.0, 0.0).unwrap();
+        sk.add_line(a, b).unwrap();
+    });
+    (s, i)
 }
 
 /// Alle Texte der Ausgabe (auch in verschachtelten Formen).
@@ -39,9 +56,9 @@ fn collect_text(shape: &egui::epaint::Shape, seen: &mut String) {
 
 #[test]
 fn the_extrude_dialog_creates_a_body_and_stays_open_on_errors() {
-    let mut s = state_with_sketch();
+    let (mut s, id) = state_with_sketch();
     let ok = CreateDialog::ExtrudeSketch {
-        sketch: 0,
+        sketch: id,
         profile: 0,
         height: 3.0,
     };
@@ -51,7 +68,7 @@ fn the_extrude_dialog_creates_a_body_and_stays_open_on_errors() {
     assert!(s.message.is_none());
 
     let bad = CreateDialog::ExtrudeSketch {
-        sketch: 0,
+        sketch: id,
         profile: 7,
         height: 3.0,
     };
@@ -63,9 +80,9 @@ fn the_extrude_dialog_creates_a_body_and_stays_open_on_errors() {
 #[test]
 fn the_dialogs_draw_and_list_profiles_and_rejections() {
     let ctx = context();
-    let mut s = state_with_sketch();
+    let (mut s, id) = state_with_sketch();
     let mut dialog = CreateDialog::ExtrudeSketch {
-        sketch: 0,
+        sketch: id,
         profile: 0,
         height: 3.0,
     };
@@ -85,7 +102,7 @@ fn the_dialogs_draw_and_list_profiles_and_rejections() {
         "abgelehnte Kette wird erklärt:\n{text}"
     );
     let mut revolve = CreateDialog::RevolveSketch {
-        sketch: 0,
+        sketch: id,
         profile: 0,
         axis: None,
     };
@@ -98,9 +115,9 @@ fn the_dialogs_draw_and_list_profiles_and_rejections() {
 
 #[test]
 fn revolve_dialog_reports_a_missing_axis() {
-    let mut s = state_with_sketch();
+    let (mut s, id) = state_with_sketch();
     let d = CreateDialog::RevolveSketch {
-        sketch: 0,
+        sketch: id,
         profile: 0,
         axis: None,
     };
@@ -131,7 +148,7 @@ fn finished_sketches_are_drawn_as_lines_in_3d() {
         "ohne Skizzen wird nichts gezeichnet"
     );
 
-    let s = prepared(state_with_sketch());
+    let s = prepared(state_with_sketch().0);
     let shapes = sketch_view::finished_sketch_shapes(&s, SCREEN);
     assert!(
         !shapes.is_empty(),
@@ -141,8 +158,9 @@ fn finished_sketches_are_drawn_as_lines_in_3d() {
 
 #[test]
 fn the_sketch_in_edit_is_not_drawn_twice() {
-    let mut s = prepared(state_with_sketch());
-    s.open_sketch(0).unwrap();
+    let (s, id) = state_with_sketch();
+    let mut s = prepared(s);
+    s.open_sketch(id).unwrap();
     assert!(
         sketch_view::finished_sketch_shapes(&s, SCREEN).is_empty(),
         "die geöffnete Skizze zeichnet das Skizzen-Overlay"
@@ -154,12 +172,14 @@ fn the_sketch_in_edit_is_not_drawn_twice() {
 #[test]
 fn construction_geometry_of_finished_sketches_is_dashed() {
     let mut s = prepared(AppState::new());
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
-    let a = s.sketches[i].add_point(0.0, 0.0).unwrap();
-    let b = s.sketches[i].add_point(20.0, 0.0).unwrap();
-    let line = s.sketches[i].add_line(a, b).unwrap();
+    let i = new_sketch(&mut s);
+    let line = edit_sketch(&mut s, i, |sk| {
+        let a = sk.add_point(0.0, 0.0).unwrap();
+        let b = sk.add_point(20.0, 0.0).unwrap();
+        sk.add_line(a, b).unwrap()
+    });
     let solid = sketch_view::finished_sketch_shapes(&s, SCREEN).len();
-    s.sketches[i].set_construction(line, true).unwrap();
+    edit_sketch(&mut s, i, |sk| sk.set_construction(line, true).unwrap());
     let dashed = sketch_view::finished_sketch_shapes(&s, SCREEN).len();
     assert_eq!(solid, 1, "eine Linie ist ein Linienzug");
     assert!(dashed > 1, "gestrichelt zerfällt sie in Stücke ({dashed})");
@@ -168,7 +188,7 @@ fn construction_geometry_of_finished_sketches_is_dashed() {
 #[test]
 fn the_viewport_draws_finished_sketches_without_errors() {
     let ctx = context();
-    let mut s = state_with_sketch();
+    let (mut s, _) = state_with_sketch();
     for _ in 0..2 {
         ctx.run_ui(egui::RawInput::default(), |ui| {
             planora_app::viewport::show(ui, &mut s)
@@ -182,25 +202,28 @@ fn the_viewport_draws_finished_sketches_without_errors() {
 fn browser_requests_become_sketch_dialogs() {
     use planora_app::app::dialog_for_request;
     use planora_app::state::SketchRequest;
-    let mut s = state_with_sketch();
+    let (mut s, id) = state_with_sketch();
     assert_eq!(dialog_for_request(&mut s), None);
-    s.sketch_request = Some(SketchRequest::Extrude(0));
+    s.sketch_request = Some(SketchRequest::Extrude(id));
     assert_eq!(
         dialog_for_request(&mut s),
-        Some(CreateDialog::extrude_sketch(0))
+        Some(CreateDialog::extrude_sketch(id))
     );
     assert_eq!(s.sketch_request, None, "der Wunsch wird verbraucht");
 
     // Drehen: die erste Konstruktionslinie ist als Achse vorgewählt.
-    let a = s.sketches[0].add_point(0.0, -5.0).unwrap();
-    let b = s.sketches[0].add_point(10.0, -5.0).unwrap();
-    let axis = s.sketches[0].add_line(a, b).unwrap();
-    s.sketches[0].set_construction(axis, true).unwrap();
-    s.sketch_request = Some(SketchRequest::Revolve(0));
+    let axis = edit_sketch(&mut s, id, |sk| {
+        let a = sk.add_point(0.0, -5.0).unwrap();
+        let b = sk.add_point(10.0, -5.0).unwrap();
+        let axis = sk.add_line(a, b).unwrap();
+        sk.set_construction(axis, true).unwrap();
+        axis
+    });
+    s.sketch_request = Some(SketchRequest::Revolve(id));
     assert_eq!(
         dialog_for_request(&mut s),
         Some(CreateDialog::RevolveSketch {
-            sketch: 0,
+            sketch: id,
             profile: 0,
             axis: Some(axis),
         })
@@ -210,14 +233,15 @@ fn browser_requests_become_sketch_dialogs() {
 #[test]
 fn the_revolve_dialog_creates_a_body_around_a_construction_line() {
     let mut s = AppState::new();
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
-    s.sketches[i]
-        .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(5.0, 10.0))
-        .unwrap();
-    let a = s.sketches[i].add_point(0.0, -2.0).unwrap();
-    let b = s.sketches[i].add_point(0.0, 12.0).unwrap();
-    let axis = s.sketches[i].add_line(a, b).unwrap();
-    s.sketches[i].set_construction(axis, true).unwrap();
+    let i = new_sketch(&mut s);
+    edit_sketch(&mut s, i, |sk| {
+        sk.add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(5.0, 10.0))
+            .unwrap();
+        let a = sk.add_point(0.0, -2.0).unwrap();
+        let b = sk.add_point(0.0, 12.0).unwrap();
+        let axis = sk.add_line(a, b).unwrap();
+        sk.set_construction(axis, true).unwrap();
+    });
     let d = CreateDialog::revolve_sketch(&s, i);
     assert!(d.create(&mut s), "{:?}", s.message);
     assert_eq!(s.bodies.len(), 1);
@@ -283,23 +307,23 @@ fn use_context_menu(s: &mut AppState, entry: &str) {
 
 #[test]
 fn the_browser_context_menu_extrudes_after_closing_the_sketch() {
-    let mut s = state_with_sketch();
-    s.open_sketch(0).unwrap();
+    let (mut s, id) = state_with_sketch();
+    s.open_sketch(id).unwrap();
     use_context_menu(&mut s, "Extrudieren");
     assert!(s.sketch_session.is_none(), "die Skizze wird vorher beendet");
     assert_eq!(
         s.sketch_request,
-        Some(planora_app::state::SketchRequest::Extrude(0))
+        Some(planora_app::state::SketchRequest::Extrude(id))
     );
 }
 
 #[test]
 fn the_browser_context_menu_deletes_and_edits() {
-    let mut s = state_with_sketch();
+    let (mut s, id) = state_with_sketch();
     use_context_menu(&mut s, "Bearbeiten");
-    assert_eq!(s.sketch_session.as_ref().map(|se| se.sketch), Some(0));
+    assert_eq!(s.sketch_session.as_ref().map(|se| se.sketch), Some(id));
     use_context_menu(&mut s, "Löschen");
-    assert!(s.sketches.is_empty());
+    assert!(s.sketch_features().is_empty());
     assert!(s.sketch_session.is_none());
 }
 
@@ -308,40 +332,43 @@ fn the_browser_context_menu_deletes_and_edits() {
 #[test]
 fn the_browser_context_menu_clears_the_body_selection() {
     for entry in ["Extrudieren", "Drehen"] {
-        let mut s = state_with_sketch();
-        assert!(CreateDialog::extrude_sketch(0).create(&mut s));
+        let (mut s, id) = state_with_sketch();
+        assert!(CreateDialog::extrude_sketch(id).create(&mut s));
         s.selected_body = Some(0);
         use_context_menu(&mut s, entry);
         assert!(s.sketch_request.is_some(), "{entry}");
         assert_eq!(s.selected_body, None, "{entry}: Körperauswahl aufgehoben");
         assert_eq!(s.selection, None, "{entry}: 3D-Auswahl aufgehoben");
-        assert_eq!(s.selected_sketch, Some(0));
+        assert_eq!(s.selected_feature, Some(id));
     }
 }
 
 #[test]
 fn a_stale_revolve_axis_is_rejected() {
     let mut s = AppState::new();
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
-    s.sketches[i]
-        .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(5.0, 10.0))
-        .unwrap();
-    let a = s.sketches[i].add_point(0.0, -2.0).unwrap();
-    let b = s.sketches[i].add_point(0.0, 12.0).unwrap();
-    let axis = s.sketches[i].add_line(a, b).unwrap();
-    s.sketches[i].set_construction(axis, true).unwrap();
+    let i = new_sketch(&mut s);
+    let axis = edit_sketch(&mut s, i, |sk| {
+        sk.add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(5.0, 10.0))
+            .unwrap();
+        let a = sk.add_point(0.0, -2.0).unwrap();
+        let b = sk.add_point(0.0, 12.0).unwrap();
+        let axis = sk.add_line(a, b).unwrap();
+        sk.set_construction(axis, true).unwrap();
+        axis
+    });
     let d = CreateDialog::revolve_sketch(&s, i);
     // Die Achse wird gelöscht, während der Dialog offen ist.
-    s.sketches[i].remove_curve(axis).unwrap();
+    edit_sketch(&mut s, i, |sk| sk.remove_curve(axis).unwrap());
     assert!(!d.create(&mut s));
     assert!(s.bodies.is_empty());
     let msg = s.message.clone().unwrap_or_default();
     assert!(msg.contains("Drehachse"), "{msg}");
-    // Eine Linie einer anderen Skizze (Index verschoben) gilt ebenso nicht.
-    let j = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
-    s.sketches[j]
-        .add_rectangle(DVec2::new(1.0, 0.0), DVec2::new(5.0, 10.0))
-        .unwrap();
+    // Eine Linie, die es in der gewählten Skizze nicht gibt, gilt ebenso nicht.
+    let j = new_sketch(&mut s);
+    edit_sketch(&mut s, j, |sk| {
+        sk.add_rectangle(DVec2::new(1.0, 0.0), DVec2::new(5.0, 10.0))
+            .unwrap()
+    });
     let foreign = CreateDialog::RevolveSketch {
         sketch: j,
         profile: 0,
@@ -353,9 +380,9 @@ fn a_stale_revolve_axis_is_rejected() {
 
 #[test]
 fn profiles_are_computed_again_only_after_a_change() {
-    let mut s = state_with_sketch();
+    let (mut s, id) = state_with_sketch();
     let ctx = context();
-    let mut d = CreateDialog::extrude_sketch(0);
+    let mut d = CreateDialog::extrude_sketch(id);
     for _ in 0..3 {
         let out = ctx.run_ui(raw(vec![]), |ui| {
             d.show(ui.ctx(), &mut s);
@@ -367,18 +394,26 @@ fn profiles_are_computed_again_only_after_a_change() {
         1,
         "drei Bilder, eine Berechnung"
     );
-    let n = s.profile_cache.get(&s.sketches[0]).profiles.len();
+    // Die Dialoge lesen die berechnete Skizze des Features.
+    let n = s
+        .profile_cache
+        .get(s.document.sketch_of(id).unwrap())
+        .profiles
+        .len();
     assert_eq!(s.profile_cache.computations(), 1);
     // Eine Änderung (zweites Rechteck) macht den Speicher ungültig.
-    s.sketches[0]
-        .add_rectangle(DVec2::new(50.0, 0.0), DVec2::new(60.0, 4.0))
-        .unwrap();
-    let after = s.profile_cache.get(&s.sketches[0]);
+    edit_sketch(&mut s, id, |sk| {
+        sk.add_rectangle(DVec2::new(50.0, 0.0), DVec2::new(60.0, 4.0))
+            .unwrap()
+    });
+    let after = s.profile_cache.get(s.document.sketch_of(id).unwrap());
     assert_eq!(s.profile_cache.computations(), 2);
     assert_eq!(after.profiles.len(), n + 1);
     // Auch reines Verschieben eines Punktes ändert den Stand.
-    let p = s.sketches[0].points().next().unwrap().0;
-    s.sketches[0].set_point_xy(p, -1.0, -1.0).unwrap();
-    s.profile_cache.get(&s.sketches[0]);
+    edit_sketch(&mut s, id, |sk| {
+        let p = sk.points().next().unwrap().0;
+        sk.set_point_xy(p, -1.0, -1.0).unwrap();
+    });
+    s.profile_cache.get(s.document.sketch_of(id).unwrap());
     assert_eq!(s.profile_cache.computations(), 3);
 }

@@ -4,6 +4,7 @@
 use planora_app::sketch_state::{Item, Tool};
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::{browser, fonts, sketch_panel, sketch_view, viewport};
+use planora_feature::SketchPlane;
 use planora_math::DVec2;
 use planora_sketch::constraint::ConstraintKind as K;
 
@@ -15,9 +16,13 @@ fn context() -> egui::Context {
 
 fn populated() -> AppState {
     let mut s = AppState::new();
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    let i = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    // Inhalt wie im Skizzen-Modus anlegen und zurückschreiben; danach neu öffnen.
+    s.open_sketch(i).unwrap();
     {
-        let sk = &mut s.sketches[i];
+        let sk = s.session_sketch_mut().unwrap().1;
         let r = sk
             .add_rectangle(DVec2::ZERO, DVec2::new(40.0, 30.0))
             .unwrap();
@@ -27,19 +32,22 @@ fn populated() -> AppState {
         sk.add_circle(c, 5.0).unwrap();
         sk.solve();
     }
+    s.close_sketch();
     s.open_sketch(i).unwrap();
     s
 }
 
 /// Wechselt in der offenen Skizze das Werkzeug.
 fn set_tool(s: &mut AppState, tool: Tool) {
-    let se = s.sketch_session.as_mut().unwrap();
-    se.set_tool(&mut s.sketches[se.sketch], tool);
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    se.set_tool(sk, tool);
 }
 
 fn empty_sketch() -> AppState {
     let mut s = AppState::new();
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    let i = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
     s.open_sketch(i).unwrap();
     s
 }
@@ -94,7 +102,7 @@ fn play_overlay(ctx: &egui::Context, s: &mut AppState, frames: Vec<Vec<egui::Eve
 fn the_panel_and_overlay_draw_without_changing_the_sketch() {
     let ctx = context();
     let mut s = populated();
-    let before = s.sketches[0].variables().to_vec();
+    let before = s.session_sketch().unwrap().variables().to_vec();
     for _ in 0..3 {
         ctx.run_ui(egui::RawInput::default(), |ui| {
             sketch_panel::show(ui.ctx(), &mut s);
@@ -103,7 +111,7 @@ fn the_panel_and_overlay_draw_without_changing_the_sketch() {
         })
         .drop_without_applying_deltas();
     }
-    assert_eq!(s.sketches[0].variables(), before.as_slice());
+    assert_eq!(s.session_sketch().unwrap().variables(), before.as_slice());
     assert!(s.sketch_session.is_some());
 }
 
@@ -111,7 +119,7 @@ fn the_panel_and_overlay_draw_without_changing_the_sketch() {
 fn every_tool_and_a_selection_can_be_drawn() {
     let ctx = context();
     let mut s = populated();
-    let first_curve = s.sketches[0].curves().next().unwrap().0;
+    let first_curve = s.session_sketch().unwrap().curves().next().unwrap().0;
     for tool in [
         Tool::Select,
         Tool::Point,
@@ -200,7 +208,7 @@ fn a_click_in_the_overlay_places_a_point_at_the_cursor() {
             vec![],
         ],
     );
-    let sk = &s.sketches[0];
+    let sk = s.session_sketch().unwrap();
     assert_eq!(sk.points().count(), 1, "{:?}", s.sketch_session);
     let (p, _) = sk.points().next().unwrap();
     let xy = sk.point_xy(p).unwrap();
@@ -214,7 +222,12 @@ fn a_click_in_the_overlay_places_a_point_at_the_cursor() {
 fn dragging_a_point_in_the_select_tool_moves_it() {
     let ctx = context();
     let mut s = empty_sketch();
-    let p = s.sketches[0].add_point(0.0, 0.0).unwrap();
+    let p = s
+        .session_sketch_mut()
+        .unwrap()
+        .1
+        .add_point(0.0, 0.0)
+        .unwrap();
     play_overlay(
         &ctx,
         &mut s,
@@ -227,7 +240,7 @@ fn dragging_a_point_in_the_select_tool_moves_it() {
             vec![],
         ],
     );
-    let xy = s.sketches[0].point_xy(p).unwrap();
+    let xy = s.session_sketch().unwrap().point_xy(p).unwrap();
     assert!(
         xy.x > 1.0 && xy.y.abs() < 1e-3,
         "nach rechts gezogen: {xy:?}"
@@ -278,7 +291,8 @@ fn in_sketch_mode_the_viewport_does_not_orbit_but_still_pans() {
 fn the_browser_lists_sketches_under_their_own_heading() {
     let ctx = context();
     let mut s = populated();
-    s.new_sketch(AppState::standard_frame(StandardPlane::YZ));
+    s.add_sketch(SketchPlane::Standard(StandardPlane::YZ))
+        .unwrap();
     let mut seen = String::new();
     let out = ctx.run_ui(egui::RawInput::default(), |ui| browser::show(ui, &mut s));
     for clipped in &out.shapes {
@@ -298,10 +312,20 @@ fn the_browser_lists_sketches_under_their_own_heading() {
 fn shift_on_the_click_itself_extends_the_selection() {
     let ctx = context();
     let mut s = empty_sketch();
-    let a = s.sketches[0].add_point(0.0, 0.0).unwrap();
+    let a = s
+        .session_sketch_mut()
+        .unwrap()
+        .1
+        .add_point(0.0, 0.0)
+        .unwrap();
     // Zweiter Punkt rechts der Bildmitte; Lage auf dem Bildschirm aus der Abbildung.
-    let b = s.sketches[0].add_point(10.0, 0.0).unwrap();
-    let frame = *s.sketches[0].frame();
+    let b = s
+        .session_sketch_mut()
+        .unwrap()
+        .1
+        .add_point(10.0, 0.0)
+        .unwrap();
+    let frame = *s.session_sketch().unwrap().frame();
     let mut cam = s.camera;
     cam.set_viewport(800.0, 600.0);
     let pb = sketch_view::sketch_to_screen(
@@ -359,7 +383,7 @@ fn two_fast_clicks_at_different_places_are_two_clicks() {
     frames.push(vec![]);
     play_overlay(&ctx, &mut s, frames);
     assert_eq!(
-        s.sketches[0].points().count(),
+        s.session_sketch().unwrap().points().count(),
         2,
         "zweiter Punkt nicht verschluckt"
     );
@@ -377,14 +401,18 @@ fn a_real_double_click_still_finishes_the_tool() {
     frames.push(vec![]);
     play_overlay(&ctx, &mut s, frames);
     let se = s.sketch_session.as_ref().unwrap();
-    assert_eq!(s.sketches[0].curves().count(), 1, "Spline angelegt: {se:?}");
+    assert_eq!(
+        s.session_sketch().unwrap().curves().count(),
+        1,
+        "Spline angelegt: {se:?}"
+    );
     assert!(se.pending.is_empty());
 }
 
 /// Skizze mit einer Linie (ausgewählt) und einem laufenden Linienwerkzeug.
 fn with_line_and_pending() -> AppState {
     let mut s = empty_sketch();
-    let sk = &mut s.sketches[0];
+    let sk = s.session_sketch_mut().unwrap().1;
     let a = sk.add_point(-10.0, -10.0).unwrap();
     let b = sk.add_point(10.0, -10.0).unwrap();
     let line = sk.add_line(a, b).unwrap();
@@ -427,14 +455,14 @@ fn escape_cancels_the_running_tool() {
 #[test]
 fn enter_finishes_a_spline() {
     let mut s = empty_sketch();
-    let sk = &mut s.sketches[0];
+    let sk = s.session_sketch_mut().unwrap().1;
     let a = sk.add_point(0.0, 0.0).unwrap();
     let b = sk.add_point(10.0, 5.0).unwrap();
     set_tool(&mut s, Tool::Spline);
     let se = s.sketch_session.as_mut().unwrap();
     se.pending = vec![a, b];
     press_key_in_overlay(&mut s, egui::Key::Enter, false);
-    assert_eq!(s.sketches[0].curves().count(), 1);
+    assert_eq!(s.session_sketch().unwrap().curves().count(), 1);
     assert!(s.sketch_session.as_ref().unwrap().pending.is_empty());
 }
 
@@ -442,7 +470,7 @@ fn enter_finishes_a_spline() {
 fn delete_removes_the_selection() {
     let mut s = with_line_and_pending();
     press_key_in_overlay(&mut s, egui::Key::Delete, false);
-    assert_eq!(s.sketches[0].curves().count(), 0);
+    assert_eq!(s.session_sketch().unwrap().curves().count(), 0);
     assert!(s.sketch_session.as_ref().unwrap().selection.is_empty());
 }
 
@@ -458,7 +486,11 @@ fn keys_do_not_reach_the_overlay_while_the_dimension_field_has_focus() {
             "{k:?}: laufendes Werkzeug unverändert"
         );
         assert_eq!(se.selection, before.selection, "{k:?}: Auswahl unverändert");
-        assert_eq!(s.sketches[0].curves().count(), 1, "{k:?}: nichts gelöscht");
+        assert_eq!(
+            s.session_sketch().unwrap().curves().count(),
+            1,
+            "{k:?}: nichts gelöscht"
+        );
     }
 }
 
@@ -466,7 +498,12 @@ fn keys_do_not_reach_the_overlay_while_the_dimension_field_has_focus() {
 fn the_dimension_editor_closes_when_the_selection_changes() {
     let ctx = context();
     let mut s = populated();
-    let curves: Vec<_> = s.sketches[0].curves().map(|(c, _)| c).collect();
+    let curves: Vec<_> = s
+        .session_sketch()
+        .unwrap()
+        .curves()
+        .map(|(c, _)| c)
+        .collect();
     s.sketch_session.as_mut().unwrap().selection = vec![Item::Curve(curves[1])];
     sketch_panel::open_dimension_editor(
         &ctx,

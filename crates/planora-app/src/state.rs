@@ -1,11 +1,11 @@
 use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
 use planora_feature::{
-    BodyRef, Document, FeatureError, FeatureId, FeatureKind, FeatureStatus, SketchFeature,
-    SketchPlane,
+    BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
+    SketchFeature, SketchPlane,
 };
 use planora_kernel::boolean::BoolOp;
-use planora_kernel::{AnalyticKernel, Face, Id, Profile, Solid};
+use planora_kernel::{AnalyticKernel, Edge, Face, Id, Solid};
 use planora_math::{DVec2, DVec3, Frame};
 use planora_mesh::{MassProperties, Mesh, TessellationOptions, mass_properties, tessellate};
 use planora_render::{
@@ -30,13 +30,8 @@ pub enum BodyKind {
     Combined,
 }
 
-/// Grundebenen für neue Skizzen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StandardPlane {
-    XY,
-    XZ,
-    YZ,
-}
+/// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
+pub use planora_feature::StandardPlane;
 
 /// Sichtbarer Körper, abgeleitet aus dem Feature-Dokument (nie direkt verändert).
 pub struct Body {
@@ -55,10 +50,10 @@ pub struct Body {
 /// im selben Bild in den passenden Dialog um.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SketchRequest {
-    /// „Skizze extrudieren“ für die Skizze mit diesem Index.
-    Extrude(usize),
-    /// „Skizze drehen“ für die Skizze mit diesem Index.
-    Revolve(usize),
+    /// „Skizze extrudieren“ für dieses Skizzen-Feature.
+    Extrude(FeatureId),
+    /// „Skizze drehen“ für dieses Skizzen-Feature.
+    Revolve(FeatureId),
 }
 
 /// Alles, was die Oberfläche anzeigt. Enthält keine egui-Typen und ist deshalb testbar.
@@ -81,17 +76,16 @@ pub struct AppState {
     /// Laufende Nummer je Bezeichnung für neue Features („Quader 1“, „Quader 2“, …); zählt
     /// nur hoch, damit Namen auch nach dem Löschen eindeutig bleiben.
     name_counters: BTreeMap<String, u64>,
-    /// Skizzen des Dokuments.
-    pub sketches: Vec<Sketch>,
-    /// Im Browser gewählte Skizze.
-    pub selected_sketch: Option<usize>,
+    /// Im Browser gewähltes Feature (bis zum Feature-Baum: eine Skizze).
+    pub selected_feature: Option<FeatureId>,
     /// Geöffneter Skizzen-Modus.
     pub sketch_session: Option<SketchSession>,
+    /// Entwurf des geöffneten Skizzen-Features (Entscheidung F6): eine Kopie der Definition mit
+    /// der berechneten Skizze. Der Skizzen-Modus arbeitet nur hierauf; erst
+    /// [`AppState::close_sketch`] schreibt den Entwurf ins Dokument zurück.
+    pub sketch_draft: Option<SketchFeature>,
     /// Kamera vor dem Öffnen des Skizzen-Modus.
     saved_camera: Option<OrbitCamera>,
-    /// Laufende Nummer für den Namen der nächsten Skizze; zählt nur hoch, damit Namen auch nach
-    /// dem Löschen eindeutig bleiben.
-    pub next_sketch_number: u64,
     /// Offener Dialogwunsch aus dem Browser (siehe [`SketchRequest`]).
     pub sketch_request: Option<SketchRequest>,
     /// Zuletzt berechnete Profile (für die Dialoge, die jedes Bild neu zeichnen).
@@ -129,6 +123,8 @@ impl ProfileCache {
 }
 
 const GRID_HALF_EXTENT: f32 = 500.0;
+/// Bezeichnung (und Namensstamm) von Skizzen-Features.
+const SKETCH_LABEL: &str = "Skizze";
 const PICK_EDGE_PX: f32 = 6.0;
 const BODY_GAP_MM: f64 = 10.0;
 /// Mindestgröße des Bereichs, auf den die Ansicht beim Öffnen einer Skizze eingepasst wird.
@@ -157,11 +153,10 @@ impl AppState {
             chord_tolerance,
             message: None,
             name_counters: BTreeMap::new(),
-            sketches: Vec::new(),
-            selected_sketch: None,
+            selected_feature: None,
             sketch_session: None,
+            sketch_draft: None,
             saved_camera: None,
-            next_sketch_number: 1,
             sketch_request: None,
             profile_cache: ProfileCache::default(),
         };
@@ -384,16 +379,19 @@ impl AppState {
     /// Legt ein Feature an und nimmt es wieder heraus, wenn es nicht berechnet werden konnte
     /// (die Meldung steht dann in `message`). Aktualisiert die Körper nicht.
     fn add_checked(&mut self, label: &str, kind: FeatureKind) -> Result<FeatureId, String> {
-        let name = self.next_name(label);
+        let id = self.add_checked_named(self.next_name(label), kind)?;
+        self.count_name(label);
+        Ok(id)
+    }
+
+    /// Wie [`AppState::add_checked`], mit festem Namen (ohne Zähler).
+    fn add_checked_named(&mut self, name: String, kind: FeatureKind) -> Result<FeatureId, String> {
         let id = match self.document.add_feature(name, kind) {
             Ok(id) => id,
             Err(e) => return self.fail(e.to_string()),
         };
         match self.document.feature(id).map(|f| f.status.clone()) {
-            Some(FeatureStatus::Ok) => {
-                self.count_name(label);
-                Ok(id)
-            }
+            Some(FeatureStatus::Ok) => Ok(id),
             status => {
                 let _ = self.document.delete_with_dependents(id);
                 self.fail(status_message(status))
@@ -538,6 +536,7 @@ impl AppState {
     pub fn delete_feature(&mut self, id: FeatureId) -> Result<(), String> {
         match self.document.delete(id) {
             Ok(()) => {
+                self.forget_deleted();
                 self.refresh();
                 Ok(())
             }
@@ -567,6 +566,7 @@ impl AppState {
     ) -> Result<Vec<FeatureId>, String> {
         match self.document.delete_with_dependents(id) {
             Ok(removed) => {
+                self.forget_deleted();
                 self.refresh();
                 Ok(removed)
             }
@@ -666,7 +666,7 @@ impl AppState {
         if self.selection != selection {
             self.selection = selection;
             if selection.is_some() {
-                self.selected_sketch = None;
+                self.selected_feature = None;
             }
             self.selected_body = match selection {
                 Some(Pick::Face(FaceRef { body, .. })) | Some(Pick::Edge(EdgeRef { body, .. })) => {
@@ -736,54 +736,103 @@ fn to_vec3(v: DVec3) -> Vec3 {
 // ---- Skizzen ----------------------------------------------------------------------------------
 
 impl AppState {
-    /// Lage einer Grundebene (rechtshändig, `z` = Normale).
-    pub fn standard_frame(plane: StandardPlane) -> Frame {
-        feature_plane_of(plane).frame()
-    }
-
-    /// Legt eine leere Skizze „Skizze N“ auf der Ebene `frame` an.
-    pub fn new_sketch(&mut self, frame: Frame) -> usize {
-        let name = format!("Skizze {}", self.next_sketch_number);
-        self.next_sketch_number += 1;
-        self.sketches
-            .push(Sketch::new(frame, name, self.kernel.tolerance));
-        self.sketches.len() - 1
-    }
-
     /// Fehler als Meldung ablegen und zurückgeben.
     fn fail<T>(&mut self, e: String) -> Result<T, String> {
         self.message = Some(e.clone());
         Err(e)
     }
 
-    /// Legt eine Skizze auf der ebenen Fläche `face` des Körpers `body` an.
-    pub fn new_sketch_on_face(&mut self, body: usize, face: Id<Face>) -> Result<usize, String> {
+    /// Skizzen-Features der Zeitleiste in ihrer Reihenfolge, mit Namen.
+    pub fn sketch_features(&self) -> Vec<(FeatureId, String)> {
+        self.document
+            .features()
+            .iter()
+            .filter(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+            .map(|f| (f.id, f.name.clone()))
+            .collect()
+    }
+
+    /// Das geöffnete Skizzen-Feature.
+    pub fn open_sketch_id(&self) -> Option<FeatureId> {
+        self.sketch_session.as_ref().map(|s| s.sketch)
+    }
+
+    /// Legt ein leeres Skizzen-Feature „Skizze N“ auf der Ebene `plane` am Marker an. Bei
+    /// `OnFace` bestimmt die Berechnung die Lage aus der Fläche. Lässt sich die Skizze nicht
+    /// berechnen (etwa weil es die Fläche nicht gibt), bleibt das Dokument unverändert.
+    pub fn add_sketch(&mut self, plane: SketchPlane) -> Result<FeatureId, String> {
+        let frame = match &plane {
+            SketchPlane::Standard(p) => p.frame(),
+            // Vorläufig; die Berechnung setzt die Ebene der Fläche.
+            SketchPlane::OnFace(_) => Frame::WORLD,
+        };
+        let sketch = Sketch::new(frame, self.next_name(SKETCH_LABEL), self.kernel.tolerance);
+        let kind = FeatureKind::Sketch(SketchFeature {
+            sketch,
+            plane,
+            copies: Vec::new(),
+        });
+        self.add_checked(SKETCH_LABEL, kind)
+    }
+
+    /// Legt ein Skizzen-Feature auf der ebenen Fläche `face` des sichtbaren Körpers `body` an.
+    /// Die Skizze verweist über Marke und Hinweispunkt auf die Fläche und wandert mit ihr.
+    pub fn new_sketch_on_face(&mut self, body: usize, face: Id<Face>) -> Result<FeatureId, String> {
         let Some(b) = self.bodies.get(body) else {
             return self.fail("Körper nicht gefunden".into());
         };
         if b.solid.faces.get(face).is_none() {
             return self.fail("Fläche nicht gefunden".into());
         }
-        match plane_of_face(&b.solid, face) {
-            Some(frame) => Ok(self.new_sketch(frame)),
-            None => self.fail("Skizzen lassen sich nur auf ebenen Flächen anlegen".into()),
+        if plane_of_face(&b.solid, face).is_none() {
+            return self.fail("Skizzen lassen sich nur auf ebenen Flächen anlegen".into());
         }
+        let r = match planora_feature::FaceRef::from_face(&b.solid, face, &self.kernel.tolerance) {
+            Ok(r) => r,
+            Err(e) => return self.fail(format!("Auf dieser Fläche geht keine Skizze: {e}")),
+        };
+        self.add_sketch(SketchPlane::OnFace(r))
     }
 
-    /// Öffnet den Skizzen-Modus für die Skizze `index`: Kamera senkrecht auf die Skizzenebene,
-    /// übrige Szene gedämpft. Beim Wechsel zwischen Skizzen bleibt die gemerkte Kamera erhalten.
-    pub fn open_sketch(&mut self, index: usize) -> Result<(), String> {
-        let Some(sk) = self.sketches.get(index) else {
+    /// Öffnet den Skizzen-Modus für das Skizzen-Feature `id` auf einem Entwurf (Kopie der
+    /// Definition mit der berechneten Skizze): Kamera senkrecht auf die Skizzenebene, übrige
+    /// Szene gedämpft. Eine schon geöffnete Skizze wird vorher zurückgeschrieben; die gemerkte
+    /// Kamera bleibt dabei erhalten.
+    pub fn open_sketch(&mut self, id: FeatureId) -> Result<(), String> {
+        if !self
+            .document
+            .feature(id)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+        {
+            return self.fail("Skizze nicht gefunden".into());
+        }
+        let switching = self.sketch_session.is_some();
+        if switching {
+            self.commit_draft();
+        }
+        let Some(f) = self.document.feature(id) else {
             return self.fail("Skizze nicht gefunden".into());
         };
-        let frame = *sk.frame();
-        let extent = sk.extent();
-        let mut session = SketchSession::new(index);
-        session.last_report = Some(sk.clone().solve());
-        if self.sketch_session.is_none() {
+        let FeatureKind::Sketch(def) = &f.kind else {
+            return self.fail("Skizze nicht gefunden".into());
+        };
+        let mut draft = def.clone();
+        // Die berechnete Skizze trägt die aufgelöste Ebene und die nachgeführten Kantenkopien;
+        // ohne Ergebnis (etwa hinter dem Marker) dient die Definition.
+        if let Some(sk) = self.document.sketch_of(id) {
+            draft.sketch = sk.clone();
+        }
+        draft.sketch.name = f.name.clone();
+        let frame = *draft.sketch.frame();
+        let extent = draft.sketch.extent();
+        let mut session = SketchSession::new(id);
+        session.last_report = Some(draft.sketch.clone().solve());
+        if !switching {
             self.saved_camera = Some(self.camera);
         }
         self.sketch_session = Some(session);
+        self.sketch_draft = Some(draft);
+        self.selected_feature = Some(id);
         match extent {
             Some((lo, hi)) => {
                 // Sehr kleine Skizzen (ein Punkt, eine winzige Kurve) mit Mindestgröße einpassen.
@@ -812,11 +861,76 @@ impl AppState {
         Ok(())
     }
 
-    /// Beendet den Skizzen-Modus und stellt die vorherige Kamera wieder her.
-    pub fn close_sketch(&mut self) {
-        if self.sketch_session.take().is_none() {
+    /// Skizze der offenen Sitzung (der Entwurf).
+    pub fn session_sketch(&self) -> Option<&Sketch> {
+        self.sketch_session.as_ref()?;
+        self.sketch_draft.as_ref().map(|d| &d.sketch)
+    }
+
+    /// Sitzung und Entwurfsskizze gemeinsam (für die Werkzeuge des Skizzen-Modus).
+    pub fn session_sketch_mut(&mut self) -> Option<(&mut SketchSession, &mut Sketch)> {
+        let AppState {
+            sketch_session,
+            sketch_draft,
+            ..
+        } = self;
+        Some((sketch_session.as_mut()?, &mut sketch_draft.as_mut()?.sketch))
+    }
+
+    /// Schreibt den Entwurf ins Dokument zurück (Ebene und Kopien aus dem Entwurf) und beendet
+    /// die Sitzung, ohne die Kamera anzufassen. Ein unveränderter Entwurf löst keine
+    /// Neuberechnung aus.
+    fn commit_draft(&mut self) {
+        let (Some(se), Some(draft)) = (self.sketch_session.take(), self.sketch_draft.take()) else {
+            return;
+        };
+        let id = se.sketch;
+        let Some(FeatureKind::Sketch(def)) = self.document.feature(id).map(|f| &f.kind) else {
+            return;
+        };
+        let unchanged = draft.copies == def.copies
+            && self
+                .document
+                .sketch_of(id)
+                .is_some_and(|sk| sk.revision() == draft.sketch.revision());
+        if unchanged {
             return;
         }
+        match self
+            .document
+            .update(id, |k| *k = FeatureKind::Sketch(draft))
+        {
+            Ok(()) => {
+                self.refresh();
+                if let Some(FeatureStatus::Error(e)) = self.document.feature(id).map(|f| &f.status)
+                {
+                    self.message = Some(e.clone());
+                }
+            }
+            Err(e) => self.message = Some(format!("Die Skizze ließ sich nicht übernehmen: {e}")),
+        }
+    }
+
+    /// Beendet den Skizzen-Modus: schreibt den Entwurf zurück, berechnet neu und stellt die
+    /// vorherige Kamera wieder her.
+    pub fn close_sketch(&mut self) {
+        if self.sketch_session.is_none() {
+            self.sketch_draft = None;
+            return;
+        }
+        self.commit_draft();
+        self.restore_camera();
+    }
+
+    /// Verwirft Sitzung und Entwurf (das Skizzen-Feature gibt es nicht mehr).
+    fn discard_sketch(&mut self) {
+        self.sketch_draft = None;
+        if self.sketch_session.take().is_some() {
+            self.restore_camera();
+        }
+    }
+
+    fn restore_camera(&mut self) {
         if let Some(mut cam) = self.saved_camera.take() {
             // Das Seitenverhältnis gehört zum aktuellen Fenster.
             cam.aspect = self.camera.aspect;
@@ -825,179 +939,172 @@ impl AppState {
         self.rebuild_scene();
     }
 
-    /// Löscht die Skizze `index`; eine Sitzung auf dieser Skizze wird geschlossen, die Indizes
-    /// einer Sitzung auf einer späteren Skizze werden angepasst.
-    pub fn delete_sketch(&mut self, index: usize) {
-        if index >= self.sketches.len() {
+    /// Nach dem Löschen von Features: Auswahl und Sitzung auf gelöschte Features aufgeben;
+    /// Kantenkopien des Entwurfs, deren Körper-Feature gelöscht ist, verlieren ihren Verweis
+    /// (die Kurven bleiben als feste Geometrie).
+    fn forget_deleted(&mut self) {
+        if self
+            .selected_feature
+            .is_some_and(|id| self.document.feature(id).is_none())
+        {
+            self.selected_feature = None;
+        }
+        let Some(id) = self.open_sketch_id() else {
+            return;
+        };
+        if self.document.feature(id).is_none() {
+            self.discard_sketch();
             return;
         }
-        match self.sketch_session.as_ref().map(|s| s.sketch) {
-            Some(i) if i == index => self.close_sketch(),
-            Some(i) if i > index => {
-                if let Some(s) = self.sketch_session.as_mut() {
-                    s.sketch = i - 1;
-                }
-            }
-            _ => {}
+        let doc = &self.document;
+        if let Some(d) = self.sketch_draft.as_mut() {
+            d.copies.retain(|c| {
+                doc.feature(FeatureId(c.edge.a.origin)).is_some()
+                    && doc.feature(FeatureId(c.edge.b.origin)).is_some()
+            });
         }
-        self.selected_sketch = match self.selected_sketch {
-            Some(i) if i == index => None,
-            Some(i) if i > index => Some(i - 1),
-            other => other,
+    }
+
+    /// Kopiert die Kante `edge` des sichtbaren Körpers `body` in die geöffnete Skizze und merkt
+    /// sich den Verweis, damit die Kopie dem Körper folgt. Nur Körper, die vor dem
+    /// Skizzen-Feature sichtbar sind, sind erlaubt. Fehler stehen auch in der Meldung der
+    /// Sitzung.
+    pub fn project_edge_into_sketch(&mut self, body: usize, edge: Id<Edge>) -> Result<(), String> {
+        let result = self.try_project_edge(body, edge);
+        if let (Err(e), Some(se)) = (&result, self.sketch_session.as_mut()) {
+            se.message = Some(e.clone());
+        }
+        result
+    }
+
+    fn try_project_edge(&mut self, body: usize, edge: Id<Edge>) -> Result<(), String> {
+        let id = self
+            .open_sketch_id()
+            .ok_or_else(|| "Es ist keine Skizze geöffnet".to_string())?;
+        let source = self
+            .bodies
+            .get(body)
+            .map(|b| b.source)
+            .ok_or_else(|| "Körper nicht gefunden".to_string())?;
+        let solid = self
+            .document
+            .visible_bodies_before(id)
+            .into_iter()
+            .find(|v| v.body == source)
+            .map(|v| v.solid.clone())
+            .ok_or_else(|| {
+                "Dieser Körper entsteht erst nach der Skizze; seine Kanten lassen sich nicht \
+                 hineinkopieren"
+                    .to_string()
+            })?;
+        let edge_ref = planora_feature::EdgeRef::from_edge(&solid, edge, &self.kernel.tolerance)
+            .map_err(|e| format!("Diese Kante lässt sich nicht kopieren: {e}"))?;
+        let (Some(se), Some(draft)) = (self.sketch_session.as_mut(), self.sketch_draft.as_mut())
+        else {
+            return Err("Es ist keine Skizze geöffnet".into());
         };
-        self.sketches.remove(index);
+        let curve = se.project_edge(&mut draft.sketch, &solid, edge)?;
+        draft.copies.push(EdgeCopy {
+            curve,
+            edge: edge_ref,
+        });
+        Ok(())
     }
 
     /// Wunsch aus dem Kontextmenü des Browsers, „Skizze extrudieren/drehen“ zu öffnen: beendet
     /// die offene Skizze, wählt die Skizze im Browser und hebt die Auswahl von Körpern und in
     /// der 3D-Ansicht auf (wie ein einfacher Klick auf die Skizze).
     pub fn request_sketch_dialog(&mut self, request: SketchRequest) {
-        let (SketchRequest::Extrude(i) | SketchRequest::Revolve(i)) = request;
+        let (SketchRequest::Extrude(id) | SketchRequest::Revolve(id)) = request;
         self.close_sketch();
-        self.selected_sketch = Some(i);
+        self.selected_feature = Some(id);
         self.selected_body = None;
         self.set_selection(None);
         self.sketch_request = Some(request);
     }
 
-    /// Skizze `sketch` und ihr Profil `profile` (Index in `profiles()`).
-    fn sketch_profile(&self, sketch: usize, profile: usize) -> Result<(&Sketch, Profile), String> {
-        let sk = self
-            .sketches
-            .get(sketch)
+    /// Prüft, dass `sketch` eine berechnete Skizze mit dem Profil `profile` (Index in
+    /// `profiles()`) ist; liefert den Namen des Skizzen-Features.
+    fn check_profile(&self, sketch: FeatureId, profile: usize) -> Result<String, String> {
+        let f = self
+            .document
+            .feature(sketch)
+            .filter(|f| matches!(f.kind, FeatureKind::Sketch(_)))
             .ok_or_else(|| "Skizze nicht gefunden".to_string())?;
-        let p = self
-            .profile_cache
-            .get(sk)
-            .profiles
-            .get(profile)
-            .cloned()
-            .ok_or_else(|| "Profil nicht gefunden".to_string())?;
-        Ok((sk, p))
+        let sk = self.document.sketch_of(sketch).ok_or_else(|| {
+            format!(
+                "Die Skizze „{}“ ist nicht berechnet ({})",
+                f.name,
+                status_message(Some(f.status.clone()))
+            )
+        })?;
+        if profile >= self.profile_cache.get(sk).profiles.len() {
+            return Err("Profil nicht gefunden".into());
+        }
+        Ok(f.name.clone())
     }
 
-    /// Ebene für das Skizzen-Feature einer Skizze aus der Liste (Übergang, F13): eine Grundebene,
-    /// wenn die Lage der Skizze ihr gleicht, sonst die ebene Fläche eines sichtbaren Körpers,
-    /// auf der die Skizze liegt.
-    fn feature_plane(&self, frame: &Frame) -> Result<SketchPlane, String> {
-        let tol = self.kernel.tolerance;
-        for p in [StandardPlane::XY, StandardPlane::XZ, StandardPlane::YZ].map(feature_plane_of) {
-            if same_frame(&p.frame(), frame, tol.linear) {
-                return Ok(SketchPlane::Standard(p));
-            }
-        }
-        for b in &self.bodies {
-            for (face, _) in b.solid.faces.iter() {
-                if plane_of_face(&b.solid, face).is_some_and(|f| same_frame(&f, frame, tol.linear))
-                    && let Ok(r) = planora_feature::FaceRef::from_face(&b.solid, face, &tol)
-                {
-                    return Ok(SketchPlane::OnFace(r));
-                }
-            }
-        }
-        Err(
-            "Die Skizze liegt weder auf einer Grundebene noch auf einer Fläche eines sichtbaren \
-             Körpers; bitte die Skizze neu anlegen"
-                .into(),
-        )
-    }
-
-    /// Legt die Skizze `sketch` als Skizzen-Feature (Kopie) und darauf das Feature `make(id)`
-    /// an. Schlägt eines davon fehl, werden beide wieder entfernt und die Meldung abgelegt.
-    /// Liefert den Index des neuen Körpers.
-    fn add_sketch_body(
+    /// Legt ein Körper-Feature aus einer Skizze an (Name ohne Zähler). Lässt es sich nicht
+    /// berechnen, wird es wieder entfernt; sonst wird die Körperliste aktualisiert.
+    fn add_body_from_sketch(
         &mut self,
-        sketch: usize,
         name: String,
-        make: impl FnOnce(FeatureId) -> FeatureKind,
-    ) -> Result<usize, String> {
-        let Some(sk) = self.sketches.get(sketch) else {
-            return self.fail("Skizze nicht gefunden".into());
-        };
-        let (sk, sketch_name) = (sk.clone(), sk.name.clone());
-        let plane = match self.feature_plane(sk.frame()) {
-            Ok(p) => p,
-            Err(e) => return self.fail(e),
-        };
-        let sketch_feature = FeatureKind::Sketch(SketchFeature {
-            sketch: sk,
-            plane,
-            copies: Vec::new(),
-        });
-        let s_id = match self.document.add_feature(sketch_name, sketch_feature) {
-            Ok(id) => id,
-            Err(e) => return self.fail(e.to_string()),
-        };
-        let result = match self.document.feature(s_id).map(|f| f.status.clone()) {
-            Some(FeatureStatus::Ok) => self
-                .document
-                .add_feature(name, make(s_id))
-                .map_err(|e| e.to_string())
-                .and_then(
-                    |id| match self.document.feature(id).map(|f| f.status.clone()) {
-                        Some(FeatureStatus::Ok) => Ok(id),
-                        status => Err(status_message(status)),
-                    },
-                ),
-            status => Err(status_message(status)),
-        };
-        match result {
-            Ok(id) => {
-                self.refresh();
-                self.body_index(BodyRef {
-                    feature: id,
-                    index: 0,
-                })
-                .ok_or_else(|| "Der neue Körper ist nicht sichtbar".to_string())
-            }
-            Err(e) => {
-                let _ = self.document.delete_with_dependents(s_id);
-                self.fail(e)
-            }
-        }
+        kind: FeatureKind,
+    ) -> Result<FeatureId, String> {
+        let id = self.add_checked_named(name, kind)?;
+        self.refresh();
+        Ok(id)
     }
 
-    /// Extrudiert Profil `profile` der Skizze `sketch` um `height` entlang der Skizzennormalen;
-    /// der Körper entsteht an Ort und Stelle (als Skizzen- und Extrusions-Feature). Bei einem
-    /// Fehler bleibt das Dokument unverändert.
+    /// Extrudiert Profil `profile` des Skizzen-Features `sketch` um `height` entlang der
+    /// Skizzennormalen; der Körper entsteht an Ort und Stelle. Eine offene Skizze wird vorher
+    /// beendet. Bei einem Fehler bleibt das Dokument unverändert.
     pub fn extrude_sketch(
         &mut self,
-        sketch: usize,
+        sketch: FeatureId,
         profile: usize,
         height: f64,
-    ) -> Result<usize, String> {
+    ) -> Result<FeatureId, String> {
+        self.close_sketch();
         if !(height.is_finite() && height > self.kernel.tolerance.linear) {
             return self.fail("Die Höhe muss größer als null sein".into());
         }
-        let name = match self.sketch_profile(sketch, profile) {
-            Ok((sk, _)) => format!("Extrusion: {}", sk.name),
+        let name = match self.check_profile(sketch, profile) {
+            Ok(n) => n,
             Err(e) => return self.fail(e),
         };
-        self.add_sketch_body(sketch, name, |id| FeatureKind::Extrude {
-            sketch: id,
-            profile,
-            height,
-        })
+        self.add_body_from_sketch(
+            format!("Extrusion: {name}"),
+            FeatureKind::Extrude {
+                sketch,
+                profile,
+                height,
+            },
+        )
     }
 
-    /// Dreht Profil `profile` der Skizze `sketch` um die Linie `axis` (360°); der Körper entsteht
-    /// an Ort und Stelle (als Skizzen- und Rotations-Feature). Bei einem Fehler bleibt das
-    /// Dokument unverändert.
+    /// Dreht Profil `profile` des Skizzen-Features `sketch` um die Linie `axis` (360°); der
+    /// Körper entsteht an Ort und Stelle. Eine offene Skizze wird vorher beendet. Bei einem
+    /// Fehler bleibt das Dokument unverändert.
     pub fn revolve_sketch(
         &mut self,
-        sketch: usize,
+        sketch: FeatureId,
         profile: usize,
         axis: CurveId,
-    ) -> Result<usize, String> {
-        let name = match self.sketch_profile(sketch, profile) {
-            Ok((sk, _)) => format!("Rotation: {}", sk.name),
+    ) -> Result<FeatureId, String> {
+        self.close_sketch();
+        let name = match self.check_profile(sketch, profile) {
+            Ok(n) => n,
             Err(e) => return self.fail(e),
         };
-        self.add_sketch_body(sketch, name, |id| FeatureKind::Revolve {
-            sketch: id,
-            profile,
-            axis,
-        })
+        self.add_body_from_sketch(
+            format!("Rotation: {name}"),
+            FeatureKind::Revolve {
+                sketch,
+                profile,
+                axis,
+            },
+        )
     }
 }
 
@@ -1058,22 +1165,5 @@ fn body_kind(doc: &Document, r: BodyRef) -> BodyKind {
         Some(FeatureKind::Extrude { .. }) => BodyKind::Extrusion,
         Some(FeatureKind::Revolve { .. }) => BodyKind::Revolution,
         _ => BodyKind::Combined,
-    }
-}
-
-/// Stimmen zwei Koordinatensysteme überein (Ursprung und Achsen innerhalb von `tol`)?
-fn same_frame(a: &Frame, b: &Frame, tol: f64) -> bool {
-    a.origin.distance(b.origin) <= tol
-        && a.x.distance(b.x) <= tol
-        && a.y.distance(b.y) <= tol
-        && a.z.distance(b.z) <= tol
-}
-
-/// Grundebene der App als Grundebene des Feature-Modells (eine gemeinsame Definition der Lage).
-fn feature_plane_of(plane: StandardPlane) -> planora_feature::StandardPlane {
-    match plane {
-        StandardPlane::XY => planora_feature::StandardPlane::XY,
-        StandardPlane::XZ => planora_feature::StandardPlane::XZ,
-        StandardPlane::YZ => planora_feature::StandardPlane::YZ,
     }
 }

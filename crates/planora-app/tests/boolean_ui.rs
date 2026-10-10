@@ -97,7 +97,9 @@ fn opening_a_sketch_drops_open_body_and_boolean_dialogs() {
         create.is_some() && boolean.is_some(),
         "ohne Skizze bleiben sie offen"
     );
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    let i = s
+        .add_sketch(planora_feature::SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
     s.open_sketch(i).unwrap();
     drop_dialogs_in_sketch_mode(&s, &mut create, &mut boolean);
     assert!(create.is_none() && boolean.is_none());

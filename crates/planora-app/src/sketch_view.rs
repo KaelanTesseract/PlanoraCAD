@@ -441,12 +441,17 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     if rect.width() < 2.0 || rect.height() < 2.0 {
         return out;
     }
-    let open = state.sketch_session.as_ref().map(|s| s.sketch);
+    let open = state.open_sketch_id();
     let col = colors(state.dark);
-    for (i, sk) in state.sketches.iter().enumerate() {
-        if open == Some(i) {
+    // Die berechneten Skizzen der übrigen Skizzen-Features (aufgelöste Ebene, nachgeführte
+    // Kantenkopien); die geöffnete zeichnet das Overlay aus dem Entwurf.
+    for (id, _) in state.sketch_features() {
+        if open == Some(id) {
             continue;
         }
+        let Some(sk) = state.document.sketch_of(id) else {
+            continue;
+        };
         let map = Mapper {
             camera: state.camera,
             frame: *sk.frame(),
@@ -473,10 +478,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
 /// Skizzen-Modus. Orbit ist gesperrt; Verschieben (mittlere Maustaste oder Umschalt + Ziehen) und
 /// Zoomen (Mausrad) bleiben.
 pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) {
-    let Some(index) = state.sketch_session.as_ref().map(|s| s.sketch) else {
-        return;
-    };
-    if index >= state.sketches.len() || rect.width() < 2.0 || rect.height() < 2.0 {
+    if state.session_sketch().is_none() || rect.width() < 2.0 || rect.height() < 2.0 {
         return;
     }
     let response = ui.interact(
@@ -485,17 +487,11 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) {
         Sense::click_and_drag(),
     );
     state.camera.set_viewport(rect.width(), rect.height());
-    handle_input(ui, &response, rect, state, index);
-    draw(ui, rect, state, index, response.hover_pos());
+    handle_input(ui, &response, rect, state);
+    draw(ui, rect, state, response.hover_pos());
 }
 
-fn handle_input(
-    ui: &egui::Ui,
-    response: &egui::Response,
-    rect: Rect,
-    state: &mut AppState,
-    index: usize,
-) {
+fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mut AppState) {
     // Umschalt zählt auch, wenn sie nur beim Klick selbst gedrückt war (Ereignis und Loslassen der
     // Taste können im selben Frame ankommen).
     let shift = ui.input(|i| {
@@ -504,7 +500,9 @@ fn handle_input(
                 |e| matches!(e, egui::Event::PointerButton { modifiers, .. } if modifiers.shift),
             )
     });
-    let frame = *state.sketches[index].frame();
+    let Some(frame) = state.session_sketch().map(|sk| *sk.frame()) else {
+        return;
+    };
 
     // Navigation: Verschieben und Zoomen; kein Orbit.
     let dragging_point = state
@@ -533,12 +531,7 @@ fn handle_input(
     let at = pointer.and_then(|p| map.to_sketch(p));
     let radius = pointer.and_then(|p| map.radius_at(p)).unwrap_or(0.0);
 
-    let AppState {
-        sketches,
-        sketch_session,
-        ..
-    } = &mut *state;
-    let (Some(se), Some(sk)) = (sketch_session.as_mut(), sketches.get_mut(index)) else {
+    let Some((se, sk)) = state.session_sketch_mut() else {
         return;
     };
     if let Some(at) = at {
@@ -616,24 +609,17 @@ fn handle_input(
     };
     state.set_hover(hover);
     if let Some(p) = project_at {
-        let hit = state.pick(map.local(p), map.viewport());
-        let AppState {
-            sketches,
-            sketch_session,
-            bodies,
-            ..
-        } = &mut *state;
-        let (Some(se), Some(sk)) = (sketch_session.as_mut(), sketches.get_mut(index)) else {
-            return;
-        };
-        match hit {
-            Some(Pick::Edge(EdgeRef { body, edge })) => match bodies.get(body) {
-                Some(b) => {
-                    let _ = se.project_edge(sk, &b.solid, edge);
+        match state.pick(map.local(p), map.viewport()) {
+            // Fehler (etwa ein Körper, der erst nach der Skizze entsteht) stehen in der
+            // Meldung der Sitzung.
+            Some(Pick::Edge(EdgeRef { body, edge })) => {
+                let _ = state.project_edge_into_sketch(body, edge);
+            }
+            _ => {
+                if let Some(se) = state.sketch_session.as_mut() {
+                    se.message = Some("Bitte eine Körperkante anklicken".into());
                 }
-                None => se.message = Some("Körper nicht gefunden".into()),
-            },
-            _ => se.message = Some("Bitte eine Körperkante anklicken".into()),
+            }
         }
     }
 }
@@ -647,8 +633,8 @@ fn curve_determined(report: Option<&SolveReport>, c: CurveId) -> bool {
     report.is_some_and(|r| r.status == SolveStatus::Solved && !r.free_curves.contains(&c))
 }
 
-fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, index: usize, pointer: Option<Pos2>) {
-    let (Some(se), Some(sk)) = (state.sketch_session.as_ref(), state.sketches.get(index)) else {
+fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
+    let (Some(se), Some(sk)) = (state.sketch_session.as_ref(), state.session_sketch()) else {
         return;
     };
     let painter = ui.painter_at(rect);

@@ -1,14 +1,15 @@
 use crate::icons::{paint_body_icon, paint_sketch_icon};
 use crate::state::{AppState, SketchRequest};
 use egui::{Sense, vec2};
+use planora_feature::FeatureId;
 
 const ROW_HEIGHT: f32 = 28.0;
 
 /// Befehl aus dem Kontextmenü einer Skizzenzeile.
 enum SketchAction {
-    Extrude(usize),
-    Revolve(usize),
-    Delete(usize),
+    Extrude(FeatureId),
+    Revolve(FeatureId),
+    Delete(FeatureId),
 }
 
 /// Eine Zeile mit Symbol und Name; liefert die Antwort für Klicks.
@@ -61,24 +62,26 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     }
     if let Some(i) = clicked {
         state.selected_body = Some(i);
-        state.selected_sketch = None;
+        state.selected_feature = None;
     }
 
     ui.add_space(12.0);
     ui.heading("Skizzen");
     ui.add_space(4.0);
-    if state.sketches.is_empty() {
+    // Bis zum Feature-Baum: die Skizzen-Features der Zeitleiste.
+    let sketches = state.sketch_features();
+    if sketches.is_empty() {
         ui.weak("Noch keine Skizzen. Über „Erzeugen“ lässt sich eine auf einer Ebene anlegen.");
         return;
     }
-    let open = state.sketch_session.as_ref().map(|s| s.sketch);
+    let open = state.open_sketch_id();
     let (mut select, mut edit, mut action) = (None, None, None);
-    for (i, sketch) in state.sketches.iter().enumerate() {
-        let selected = state.selected_sketch == Some(i) || open == Some(i);
+    for (i, sketch_name) in sketches {
+        let selected = state.selected_feature == Some(i) || open == Some(i);
         let name = if open == Some(i) {
-            format!("{} (in Bearbeitung)", sketch.name)
+            format!("{sketch_name} (in Bearbeitung)")
         } else {
-            sketch.name.clone()
+            sketch_name
         };
         let r = row(ui, selected, &name, paint_sketch_icon).on_hover_text(
             "Doppelklick öffnet die Skizze zum Bearbeiten; Rechtsklick zeigt weitere Befehle.",
@@ -113,14 +116,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         Some(SketchAction::Extrude(i)) => state.request_sketch_dialog(SketchRequest::Extrude(i)),
         Some(SketchAction::Revolve(i)) => state.request_sketch_dialog(SketchRequest::Revolve(i)),
         Some(SketchAction::Delete(i)) => {
-            state.delete_sketch(i);
+            // Darauf aufbauende Features nennt die Meldung; gelöscht wird dann nichts.
+            let _ = state.delete_feature(i);
             return;
         }
         None => {}
     }
     if let Some(i) = select.or(edit) {
         // Nur eines ist hervorgehoben: Skizze statt Körper bzw. 3D-Auswahl.
-        state.selected_sketch = Some(i);
+        state.selected_feature = Some(i);
         state.selected_body = None;
         state.set_selection(None);
     }

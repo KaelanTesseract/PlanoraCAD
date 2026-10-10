@@ -3,6 +3,7 @@ use crate::create_dialog::CreateDialog;
 use crate::state::{AppState, SketchRequest, StandardPlane};
 use crate::{browser, fonts, properties, sketch_panel, theme, viewport};
 use egui_tiles::{Container, SimplificationOptions, TileId, Tiles, Tree, UiResponse};
+use planora_feature::SketchPlane;
 use planora_kernel::BoolOp;
 use planora_render::gpu::GpuScene;
 use planora_render::{FaceRef, Pick, ViewFace};
@@ -167,12 +168,13 @@ impl PlanoraApp {
                 self.sketch_menu(ui);
                 ui.separator();
                 // Körper aus Skizzen: die gewählte (sonst die geöffnete, sonst die letzte) Skizze.
+                let sketches = self.state.sketch_features();
                 let target = self
                     .state
-                    .selected_sketch
-                    .or(self.state.sketch_session.as_ref().map(|s| s.sketch))
-                    .filter(|&i| i < self.state.sketches.len())
-                    .or(self.state.sketches.len().checked_sub(1));
+                    .selected_feature
+                    .or(self.state.open_sketch_id())
+                    .filter(|id| sketches.iter().any(|(s, _)| s == id))
+                    .or(sketches.last().map(|(id, _)| *id));
                 for (label, revolve) in [("Skizze extrudieren …", false), ("Skizze drehen …", true)]
                 {
                     if ui
@@ -251,9 +253,9 @@ impl PlanoraApp {
             ("Skizze auf YZ-Ebene", StandardPlane::YZ),
         ] {
             if ui.button(label).clicked() {
-                let i = self.state.new_sketch(AppState::standard_frame(plane));
-                self.state.selected_sketch = Some(i);
-                let _ = self.state.open_sketch(i);
+                if let Ok(id) = self.state.add_sketch(SketchPlane::Standard(plane)) {
+                    let _ = self.state.open_sketch(id);
+                }
                 ui.close();
             }
         }
@@ -275,9 +277,8 @@ impl PlanoraApp {
             .clicked()
             && let Some((body, face)) = face
         {
-            if let Ok(i) = self.state.new_sketch_on_face(body, face) {
-                self.state.selected_sketch = Some(i);
-                let _ = self.state.open_sketch(i);
+            if let Ok(id) = self.state.new_sketch_on_face(body, face) {
+                let _ = self.state.open_sketch(id);
             }
             ui.close();
         }
@@ -316,11 +317,7 @@ impl eframe::App for PlanoraApp {
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
-                let sketch = self
-                    .state
-                    .sketch_session
-                    .as_ref()
-                    .and_then(|s| self.state.sketches.get(s.sketch));
+                let sketch = self.state.session_sketch();
                 match (&self.state.message, sketch) {
                     (Some(m), _) => ui.colored_label(egui::Color32::from_rgb(230, 90, 90), m),
                     (None, Some(sk)) => ui.weak(format!(
