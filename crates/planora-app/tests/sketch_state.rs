@@ -666,3 +666,54 @@ fn the_end_of_a_drag_runs_the_full_diagnosis() {
     assert_eq!(after.conflicting.len(), 2, "{after:?}");
     assert!(se.dragging.is_none());
 }
+
+#[test]
+fn a_patterned_rectangle_shows_no_redundant_constraints_in_the_status() {
+    let (mut sk, mut se) = setup();
+    se.set_tool(Tool::Rectangle);
+    click(&mut se, &mut sk, 0.0, 0.0);
+    click(&mut se, &mut sk, 10.0, 5.0);
+    se.set_tool(Tool::Select);
+    se.selection = sk.curves().map(|(id, _)| Item::Curve(id)).collect();
+    se.pattern_selection(&mut sk, DVec2::new(15.0, 0.0), 3)
+        .unwrap();
+    let (text, severity) = se.status(&sk);
+    assert!(!text.contains("überzählig"), "{text}");
+    assert_eq!(severity, Severity::Info, "{text}");
+    // Ziehen einer Ecke des Originals: die Kopien folgen, Status bleibt sauber.
+    se.selection.clear();
+    assert!(se.begin_drag(&mut sk, DVec2::new(10.0, 5.0), R));
+    se.drag_to(&mut sk, DVec2::new(12.0, 6.0));
+    se.end_drag(&mut sk);
+    let (text, _) = se.status(&sk);
+    assert!(!text.contains("überzählig"), "{text}");
+    assert!(se.message.is_none(), "{:?}", se.message);
+}
+
+#[test]
+fn a_hole_tangent_to_an_edge_explains_why_it_is_not_usable() {
+    let (mut sk, mut se) = setup();
+    se.set_tool(Tool::Rectangle);
+    click(&mut se, &mut sk, 0.0, 0.0);
+    click(&mut se, &mut sk, 20.0, 10.0);
+    se.set_tool(Tool::Circle);
+    click(&mut se, &mut sk, 10.0, 4.0);
+    click(&mut se, &mut sk, 13.0, 4.0);
+    se.set_tool(Tool::Select);
+    let bottom = sk
+        .curves()
+        .find(|(_, c)| matches!(c.kind, CurveKind::Line { .. }))
+        .unwrap()
+        .0;
+    let circle = sk
+        .curves()
+        .find(|(_, c)| matches!(c.kind, CurveKind::Circle { .. }))
+        .unwrap()
+        .0;
+    se.selection = vec![Item::Curve(bottom), Item::Curve(circle)];
+    se.apply(&mut sk, ConstraintAction::Tangent, None).unwrap();
+    let e = sk.profiles();
+    assert!(e.profiles.is_empty());
+    let text = e.rejected[0].reason.to_string();
+    assert!(text.contains("berührt"), "{text}");
+}
