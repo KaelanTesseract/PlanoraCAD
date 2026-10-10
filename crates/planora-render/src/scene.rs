@@ -71,7 +71,30 @@ impl Palette {
             axis_z: [0.20, 0.40, 0.90, 1.0],
         }
     }
+
+    /// Gedämpfte Farben für den Hintergrund des Skizzen-Modus: Flächen- und Kantenfarben zu
+    /// [`DIM_AMOUNT`] in Richtung Mittelgrau gemischt, Raster und Achsen bleiben.
+    pub fn dimmed(&self) -> Palette {
+        let mix = |c: [f32; 4]| {
+            let m = |v: f32| (DIM_GREY + (v - DIM_GREY) * (1.0 - DIM_AMOUNT)).clamp(0.0, 1.0);
+            [m(c[0]), m(c[1]), m(c[2]), c[3]]
+        };
+        Palette {
+            face_base: mix(self.face_base),
+            face_hover: mix(self.face_hover),
+            face_selected: mix(self.face_selected),
+            edge_base: mix(self.edge_base),
+            edge_hover: mix(self.edge_hover),
+            edge_selected: mix(self.edge_selected),
+            ..*self
+        }
+    }
 }
+
+/// Grauwert, zu dem `Palette::dimmed` die Farben mischt.
+const DIM_GREY: f32 = 0.5;
+/// Anteil der Mischung zum Grau in `Palette::dimmed` (60 %).
+const DIM_AMOUNT: f32 = 0.6;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]

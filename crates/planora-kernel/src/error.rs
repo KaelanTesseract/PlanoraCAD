@@ -20,4 +20,12 @@ pub enum KernelError {
         "Die Matrix ist keine Ähnlichkeitstransformation (verschieben, drehen, spiegeln, gleichmäßig skalieren)"
     )]
     NonSimilarityTransform,
+    #[error("Das Koordinatensystem ist ungültig (nicht endlich oder nicht orthonormal)")]
+    InvalidFrame,
+    #[error("Ein Loch liegt nicht vollständig innerhalb der äußeren Schleife")]
+    HoleOutsideOuter,
+    #[error("Zwei Schleifen des Profils schneiden oder berühren sich")]
+    ProfileLoopsIntersect,
+    #[error("Ein Loch liegt innerhalb eines anderen Lochs")]
+    NestedHoles,
 }

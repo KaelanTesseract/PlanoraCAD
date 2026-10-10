@@ -79,6 +79,11 @@ impl<T> Arena<T> {
         id
     }
 
+    /// Element zu `id`, oder `None`, wenn die Id nicht zu dieser Arena gehört.
+    pub fn get(&self, id: Id<T>) -> Option<&T> {
+        self.items.get(id.index())
+    }
+
     pub fn len(&self) -> usize {
         self.items.len()
     }

@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use crate::theme;
+use crate::{sketch_view, theme};
 use egui::{Align2, Color32, FontId, PointerButton, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::Vec2;
 use planora_render::gpu::ViewportCallback;
@@ -25,87 +25,115 @@ pub fn remember_keyboard_focus(ctx: &egui::Context) {
     ctx.data_mut(|d| d.insert_temp(keyboard_focus_id(), focused));
 }
 
-/// 3D-Ansicht: Navigation, Auswahl, Zeichnen und Navigationswürfel.
+/// Hat ein Eingabefeld die Tastatur (in diesem oder im vorigen Frame)? Dann sind Tastenkürzel
+/// der Ansicht gesperrt. egui nimmt bei Escape den Fokus schon zu Beginn des Frames weg; deshalb
+/// zählt auch, ob im vorigen Frame ein Eingabefeld (z. B. der Name) die Tastatur hatte.
+pub fn typing(ctx: &egui::Context) -> bool {
+    ctx.egui_wants_keyboard_input()
+        || ctx
+            .data(|d| d.get_temp::<bool>(keyboard_focus_id()))
+            .unwrap_or(false)
+}
+
+/// 3D-Ansicht: Navigation, Auswahl, Zeichnen und Navigationswürfel. Im Skizzen-Modus übernimmt
+/// [`sketch_view::show_overlay`] die Eingaben (Orbit gesperrt, Verschieben und Zoomen bleiben).
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
-    let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+    let sketching = state.sketch_session.is_some();
+    let sense = if sketching {
+        Sense::hover()
+    } else {
+        Sense::click_and_drag()
+    };
+    let (rect, response) = ui.allocate_exact_size(ui.available_size(), sense);
     if rect.width() < 2.0 || rect.height() < 2.0 {
         return;
     }
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, theme::viewport_background(state.dark));
     state.camera.set_viewport(rect.width(), rect.height());
+    // Platz für die 3D-Szene; sie wird am Ende mit der endgültigen Kamera eingesetzt, damit die
+    // Skizze darüber liegt.
+    let scene_slot = painter.add(Shape::Noop);
+    // Fertige Skizzen als dünne Linien über der Szene; ihr Platz wird ebenfalls erst am Ende mit
+    // der endgültigen Kamera gefüllt.
+    let sketches_slot = painter.add(Shape::Noop);
 
     let cube = cube_rect(rect);
-    let pointer = response.hover_pos();
-    let over_cube = pointer.is_some_and(|p| cube.contains(p));
-
-    // Navigation
-    let pan = response.dragged_by(PointerButton::Middle)
-        || (response.dragged_by(PointerButton::Primary) && ui.input(|i| i.modifiers.shift));
-    if pan {
-        let d = response.drag_motion();
-        state.camera.pan(d.x, d.y, rect.height());
-    } else if response.dragged_by(PointerButton::Primary) {
-        let d = response.drag_motion();
-        state.camera.orbit(d.x, d.y);
-    }
-    if response.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta().y);
-        if scroll != 0.0 {
-            state.camera.zoom(scroll);
+    if sketching {
+        sketch_view::show_overlay(ui, rect, state);
+    } else {
+        // Navigation
+        let pan = response.dragged_by(PointerButton::Middle)
+            || (response.dragged_by(PointerButton::Primary) && ui.input(|i| i.modifiers.shift));
+        if pan {
+            let d = response.drag_motion();
+            state.camera.pan(d.x, d.y, rect.height());
+        } else if response.dragged_by(PointerButton::Primary) {
+            let d = response.drag_motion();
+            state.camera.orbit(d.x, d.y);
+        }
+        if response.hovered() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta().y);
+            if scroll != 0.0 {
+                state.camera.zoom(scroll);
+            }
         }
     }
 
-    // Navigationswürfel
+    // Navigationswürfel: eigene Schaltfläche über der Ansicht (auch im Skizzen-Modus).
+    let cube_response = ui.interact(cube, ui.id().with("planora-view-cube"), Sense::click());
     let faces = cube_faces(&state.camera);
     let cube_center = cube.center();
     let half = CUBE_SIZE * 0.28;
     let to_screen = |v: Vec2| pos2(cube_center.x + v.x * half, cube_center.y - v.y * half);
-    let mut cube_hover: Option<ViewFace> = None;
-    if let (true, Some(p)) = (over_cube, pointer) {
+    let cube_hover: Option<ViewFace> = cube_response.hover_pos().and_then(|p| {
         let local = Vec2::new((p.x - cube_center.x) / half, -(p.y - cube_center.y) / half);
-        cube_hover = cube_hit_test(&faces, local);
-    }
-    if response.clicked()
+        cube_hit_test(&faces, local)
+    });
+    if cube_response.clicked()
         && let Some(face) = cube_hover
     {
         state.camera.set_view(face);
     }
 
-    // Auswahl (nicht über dem Würfel)
-    if let (false, Some(p)) = (over_cube, pointer) {
-        let cursor = Vec2::new(p.x - rect.left(), p.y - rect.top());
-        let viewport = Vec2::new(rect.width(), rect.height());
-        let hit = state.pick(cursor, viewport);
-        state.set_hover(hit);
-        if response.clicked() {
-            state.set_selection(hit);
+    if !sketching {
+        // Auswahl (nicht über dem Würfel; dort ist die Ansicht nicht „hovered“)
+        match response.hover_pos() {
+            Some(p) => {
+                let cursor = Vec2::new(p.x - rect.left(), p.y - rect.top());
+                let viewport = Vec2::new(rect.width(), rect.height());
+                let hit = state.pick(cursor, viewport);
+                state.set_hover(hit);
+                if response.clicked() {
+                    state.set_selection(hit);
+                }
+            }
+            None => state.set_hover(None),
         }
-    } else if pointer.is_none() || over_cube {
-        state.set_hover(None);
-    }
-    // egui nimmt bei Escape den Fokus schon zu Beginn des Frames weg; deshalb zählt auch, ob im
-    // vorigen Frame ein Eingabefeld (z. B. der Name) die Tastatur hatte.
-    let typing = ui.ctx().egui_wants_keyboard_input()
-        || ui
-            .ctx()
-            .data(|d| d.get_temp::<bool>(keyboard_focus_id()))
-            .unwrap_or(false);
-    if !typing && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        state.set_selection(None);
+        if !typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            state.set_selection(None);
+        }
     }
 
     // 3D-Szene
     let cam = state.camera;
-    painter.add(eframe::egui_wgpu::Callback::new_paint_callback(
-        rect,
-        ViewportCallback {
-            view_proj: cam.view_proj().to_cols_array_2d(),
-            light_dir: cam.light_dir().to_array(),
-            scene: state.scene.clone(),
-            scene_version: state.scene_version,
-        },
-    ));
+    painter.set(
+        scene_slot,
+        eframe::egui_wgpu::Callback::new_paint_callback(
+            rect,
+            ViewportCallback {
+                view_proj: cam.view_proj().to_cols_array_2d(),
+                light_dir: cam.light_dir().to_array(),
+                scene: state.scene.clone(),
+                scene_version: state.scene_version,
+            },
+        ),
+    );
+    painter.set(
+        sketches_slot,
+        Shape::Vec(sketch_view::finished_sketch_shapes(state, rect)),
+    );
+    let faces = cube_faces(&state.camera);
 
     // Würfel zeichnen
     let (fill, hover_fill, line, text) = if state.dark {

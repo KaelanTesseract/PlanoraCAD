@@ -38,7 +38,8 @@ fn reversed_twice_visits_same_points() {
         DVec2::new(4.0, 0.0),
         DVec2::new(4.0, 2.0),
         DVec2::new(0.0, 2.0),
-    ]);
+    ])
+    .unwrap();
     let rr = r.reversed().reversed();
     assert_eq!(r.chain_points().len(), rr.chain_points().len());
     for (a, b) in r.chain_points().iter().zip(rr.chain_points().iter()) {
