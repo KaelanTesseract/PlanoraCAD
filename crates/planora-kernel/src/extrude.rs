@@ -31,7 +31,7 @@ pub fn extrude(
     for lp in std::iter::once(&profile.outer).chain(profile.holes.iter()) {
         check_loop_input(lp, tol)?;
     }
-    check_hole_layout(profile)?;
+    check_hole_layout(profile, tol)?;
     let profile = profile.oriented();
     for lp in std::iter::once(&profile.outer).chain(profile.holes.iter()) {
         let area = lp.signed_area();

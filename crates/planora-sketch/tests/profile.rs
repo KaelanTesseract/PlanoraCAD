@@ -340,3 +340,69 @@ fn an_arc_with_a_vanishing_sweep_is_rejected() {
         e.rejected
     );
 }
+
+// ---- Abschlusswelle I2: Berührung mit Spielraum -------------------------------------------
+
+/// 20×10-Rechteck und Kreis (r = 3) tangential an der unteren Kante, mal `scale`.
+fn tangent_hole(scale: f64) -> (Sketch, planora_sketch::CurveId) {
+    let mut s = sketch();
+    let p = rect(&mut s, 0.0, 0.0, 20.0 * scale, 10.0 * scale);
+    let bottom = s
+        .curves()
+        .find(|(_, c)| c.kind.points() == vec![p[0], p[1]])
+        .unwrap()
+        .0;
+    let m = s.add_point(10.0 * scale, 3.1 * scale).unwrap();
+    let c = s.add_circle(m, 3.0 * scale).unwrap();
+    s.add_constraint(planora_sketch::ConstraintKind::Tangent(bottom, c))
+        .unwrap();
+    assert_eq!(s.solve().status, planora_sketch::SolveStatus::Solved);
+    (s, c)
+}
+
+#[test]
+fn a_hole_tangent_to_an_edge_is_rejected_at_every_scale() {
+    for scale in [1.0, 1e5] {
+        let (s, c) = tangent_hole(scale);
+        let e = s.profiles();
+        assert!(e.profiles.is_empty(), "Maßstab {scale}: {:?}", e.profiles);
+        let reasons: Vec<_> = e.rejected.iter().map(|r| r.reason.clone()).collect();
+        assert_eq!(
+            reasons,
+            vec![SketchError::SelfIntersecting, SketchError::SelfIntersecting],
+            "Maßstab {scale}"
+        );
+        assert!(e.rejected.iter().any(|r| r.curves == vec![c]));
+    }
+}
+
+#[test]
+fn internally_tangent_circles_are_rejected_and_a_small_gap_is_fine() {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    s.add_circle(a, 10.0).unwrap();
+    let b = s.add_point(0.0, 4.0).unwrap();
+    s.add_circle(b, 6.0).unwrap();
+    let e = s.profiles();
+    assert!(e.profiles.is_empty());
+    assert!(
+        e.rejected
+            .iter()
+            .all(|r| r.reason == SketchError::SelfIntersecting)
+    );
+
+    // Loch mit 1 mm Abstand zur Kante (r = 10): ein Profil mit einem Loch.
+    let mut s = sketch();
+    rect(&mut s, 0.0, 0.0, 40.0, 30.0);
+    let m = s.add_point(20.0, 11.0).unwrap();
+    s.add_circle(m, 10.0).unwrap();
+    let e = s.profiles();
+    assert_eq!(e.profiles.len(), 1, "{:?}", e.rejected);
+    assert_eq!(e.profiles[0].holes.len(), 1);
+    assert!(e.rejected.is_empty());
+    let k = AnalyticKernel::default();
+    assert!(
+        k.extrude(&e.profiles[0], &Frame::WORLD, 2.0).is_ok(),
+        "Kernel und Skizze urteilen gleich"
+    );
+}

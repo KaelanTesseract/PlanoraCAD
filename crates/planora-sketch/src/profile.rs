@@ -6,11 +6,16 @@
 //! und Splines werden (noch) abgelehnt. Schleifen, die sich selbst oder andere schneiden oder
 //! berühren, werden abgelehnt; die übrigen werden nach Schachtelungstiefe zu äußeren Schleifen
 //! (gerade Tiefe) und Löchern (ungerade Tiefe) sortiert.
+//!
+//! „Berühren“ heißt: näher als `tol.linear` plus die Sehnenabweichung der Abtastung
+//! (`planora_kernel::SampledLoop`, dieselbe Prüfung wie im Kernel). Ein tangential an eine
+//! Kante gelegtes Loch wird so in jedem Maßstab abgelehnt; sehr knappe echte Abstände (unter
+//! etwa 0,12 % des Radius beteiligter Bögen) gelten ebenfalls als Berührung.
 
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, Sketch};
-use planora_kernel::{Profile, ProfileLoop, Segment, segment_end};
-use planora_math::{DVec2, TAU, orient2d};
+use planora_kernel::{Profile, ProfileLoop, SampledLoop, Segment, segment_end};
+use planora_math::{DVec2, TAU, Tolerance};
 
 /// Meldung für Bögen, deren Endpunkte nicht auf demselben Kreis um die Mitte liegen.
 const ARC_OFF_CIRCLE: &str =
@@ -39,9 +44,8 @@ pub struct ExtractedProfiles {
 struct Candidate {
     curves: Vec<CurveId>,
     lp: ProfileLoop,
-    /// Abgetastete Punkte, geschlossen gedacht (letzter Punkt ≠ erster).
-    samples: Vec<DVec2>,
-    bbox: (DVec2, DVec2),
+    /// Abtastung mit Fehlerschranke je Sehne (gemeinsame Prüfung mit dem Kernel).
+    sampled: SampledLoop,
 }
 
 /// Kante des Kurvengraphen: Kurve von Knoten `a` nach Knoten `b` (in Kurvenrichtung).
@@ -89,7 +93,7 @@ impl Sketch {
                         continue;
                     }
                     let lp = ProfileLoop::circle(self.pos(*center), r);
-                    candidates.push(Candidate::new(vec![id], lp, tol));
+                    candidates.push(Candidate::new(vec![id], lp, self.tolerance()));
                 }
                 CurveKind::Line { a, b }
                 | CurveKind::Arc {
@@ -156,7 +160,7 @@ impl Sketch {
             match self.trace_loop(&comp, &edges, &reps) {
                 Ok(lp_curves) => {
                     let (order, lp) = lp_curves;
-                    candidates.push(Candidate::new(order, lp, tol));
+                    candidates.push(Candidate::new(order, lp, self.tolerance()));
                 }
                 Err(reason) => out.rejected.push(RejectedLoop { curves, reason }),
             }
@@ -166,13 +170,11 @@ impl Sketch {
         let n = candidates.len();
         let mut bad = vec![false; n];
         for i in 0..n {
-            if polyline_self_touches(&candidates[i].samples) {
+            if candidates[i].sampled.touches_itself(tol) {
                 bad[i] = true;
             }
             for j in i + 1..n {
-                if boxes_overlap(candidates[i].bbox, candidates[j].bbox)
-                    && polylines_touch(&candidates[i].samples, &candidates[j].samples)
-                {
+                if candidates[i].sampled.touches(&candidates[j].sampled, tol) {
                     bad[i] = true;
                     bad[j] = true;
                 }
@@ -208,8 +210,12 @@ impl Sketch {
                     .copied()
                     .filter(|&j| {
                         j != i
-                            && boxes_overlap(candidates[i].bbox, candidates[j].bbox)
-                            && point_in_polygon(candidates[i].samples[0], &candidates[j].samples)
+                            && candidates[i]
+                                .sampled
+                                .boxes_near(&candidates[j].sampled, tol)
+                            && candidates[j]
+                                .sampled
+                                .contains(candidates[i].sampled.points[0])
                     })
                     .collect()
             })
@@ -361,94 +367,12 @@ impl Sketch {
 }
 
 impl Candidate {
-    fn new(curves: Vec<CurveId>, lp: ProfileLoop, tol: f64) -> Candidate {
-        let mut samples = lp.sample(CHECK_STEPS);
-        // Die Abtastung einer geschlossenen Schleife endet am Startpunkt; der doppelte
-        // Punkt entfällt, die Linienzüge gelten im Folgenden als geschlossen.
-        if samples.len() > 1 && samples[samples.len() - 1].distance(samples[0]) <= tol {
-            samples.pop();
-        }
-        let bbox = samples.iter().fold(
-            (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
-            |(lo, hi), p| (lo.min(*p), hi.max(*p)),
-        );
+    fn new(curves: Vec<CurveId>, lp: ProfileLoop, tol: &Tolerance) -> Candidate {
+        let sampled = SampledLoop::new(&lp, CHECK_STEPS, tol);
         Candidate {
             curves,
             lp,
-            samples,
-            bbox,
+            sampled,
         }
     }
-}
-
-/// Überlappen oder berühren sich zwei Hüllrechtecke (Rand zählt mit)?
-fn boxes_overlap(a: (DVec2, DVec2), b: (DVec2, DVec2)) -> bool {
-    a.0.x <= b.1.x && b.0.x <= a.1.x && a.0.y <= b.1.y && b.0.y <= a.1.y
-}
-
-/// Segmente eines geschlossen gedachten Linienzugs (letzter Punkt zurück zum ersten).
-fn closed_segments(pts: &[DVec2]) -> impl Iterator<Item = (DVec2, DVec2)> + '_ {
-    let n = pts.len();
-    (0..n).map(move |i| (pts[i], pts[(i + 1) % n]))
-}
-
-/// Liegt `p` (kollinear zu `a`–`b`) im achsparallelen Bereich der Strecke?
-fn within_range(a: DVec2, b: DVec2, p: DVec2) -> bool {
-    p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x) && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y)
-}
-
-/// Haben `a` und `b` streng entgegengesetzte Vorzeichen?
-fn opposite(a: f64, b: f64) -> bool {
-    (a > 0.0 && b < 0.0) || (a < 0.0 && b > 0.0)
-}
-
-/// Schneiden oder berühren sich die Strecken `p`–`q` und `r`–`s`? Exakter Vorzeichentest.
-fn segments_touch(p: DVec2, q: DVec2, r: DVec2, s: DVec2) -> bool {
-    let d1 = orient2d(p, q, r);
-    let d2 = orient2d(p, q, s);
-    let d3 = orient2d(r, s, p);
-    let d4 = orient2d(r, s, q);
-    if opposite(d1, d2) && opposite(d3, d4) {
-        return true;
-    }
-    (d1 == 0.0 && within_range(p, q, r))
-        || (d2 == 0.0 && within_range(p, q, s))
-        || (d3 == 0.0 && within_range(r, s, p))
-        || (d4 == 0.0 && within_range(r, s, q))
-}
-
-/// Schneidet oder berührt irgendein Segment von `a` irgendeines von `b` (beide geschlossen)?
-fn polylines_touch(a: &[DVec2], b: &[DVec2]) -> bool {
-    closed_segments(a).any(|(p, q)| closed_segments(b).any(|(r, s)| segments_touch(p, q, r, s)))
-}
-
-/// Berühren sich nicht benachbarte Segmente desselben geschlossenen Linienzugs?
-fn polyline_self_touches(pts: &[DVec2]) -> bool {
-    let n = pts.len();
-    if n < 4 {
-        // Mit höchstens drei Segmenten ist jedes Segmentpaar benachbart.
-        return false;
-    }
-    for i in 0..n {
-        for j in i + 2..n {
-            if i == 0 && j == n - 1 {
-                continue; // benachbart über den Schluss
-            }
-            if segments_touch(pts[i], pts[i + 1], pts[j], pts[(j + 1) % n]) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Strahlverfahren (gerade/ungerade Anzahl Schnitte); das Polygon gilt als geschlossen.
-fn point_in_polygon(p: DVec2, poly: &[DVec2]) -> bool {
-    let mut inside = false;
-    for (a, b) in closed_segments(poly) {
-        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-            inside = !inside;
-        }
-    }
-    inside
 }

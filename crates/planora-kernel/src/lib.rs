@@ -19,7 +19,7 @@ pub use extrude::extrude;
 pub use geometry::{Curve, CurveKind, Surface, SurfaceKind, UvRect};
 pub use ids::{Arena, Id};
 pub use kernel::{AnalyticKernel, Kernel};
-pub use profile::{MAX_SAMPLES_PER_ARC, Profile, ProfileLoop, Segment, segment_end};
+pub use profile::{MAX_SAMPLES_PER_ARC, Profile, ProfileLoop, SampledLoop, Segment, segment_end};
 pub use revolve::revolve;
 pub use topology::{Edge, Face, HalfEdge, Loop, Shell, Solid, Vertex};
 pub use validate::{ValidationError, ValidationReport, validate};

@@ -213,44 +213,37 @@ pub(crate) fn check_loop_input(lp: &ProfileLoop, tol: &Tolerance) -> Result<(), 
 /// Prüft, dass jedes Loch vollständig in der äußeren Schleife liegt, keine zwei Schleifen
 /// sich schneiden oder berühren und kein Loch in einem anderen Loch liegt.
 ///
-/// Arbeitet auf den mit `LAYOUT_STEPS_PER_TURN` Schritten je Vollkreis abgetasteten
-/// Linienzügen; Berührung zählt als Schnitt. Bögen werden dabei durch Sehnen ersetzt
-/// (Pfeilhöhe bei 64 Schritten ≈ 0,12 % des Radius), sehr knappe Abstände zwischen
-/// gekrümmten Schleifen werden also nur bis auf diese Abweichung erkannt.
-///
-/// Vorfilter: Schleifenpaare, deren Hüllrechtecke sich nicht überlappen, können sich weder
-/// berühren noch ineinander liegen und werden ohne Segmenttest entschieden.
-pub(crate) fn check_hole_layout(profile: &Profile) -> Result<(), KernelError> {
-    let outer = profile.outer.sample(LAYOUT_STEPS_PER_TURN);
-    let outer_box = BoundingBox::of(&outer);
-    let holes: Vec<(Vec<DVec2>, BoundingBox)> = profile
+/// Arbeitet auf [`SampledLoop`]s mit `LAYOUT_STEPS_PER_TURN` Schritten je Vollkreis. Zwei
+/// Schleifen gelten als sich berührend, wenn ihre Abtastungen sich näher kommen als
+/// `tol.linear` plus die Pfeilhöhen der beteiligten Sehnen (siehe [`SampledLoop::touches`]).
+/// Ein Loch, das die äußere Schleife tangential berührt, wird damit unabhängig von Rundung und
+/// Maßstab abgelehnt.
+pub(crate) fn check_hole_layout(profile: &Profile, tol: &Tolerance) -> Result<(), KernelError> {
+    let outer = SampledLoop::new(&profile.outer, LAYOUT_STEPS_PER_TURN, tol);
+    let holes: Vec<SampledLoop> = profile
         .holes
         .iter()
-        .map(|h| {
-            let pts = h.sample(LAYOUT_STEPS_PER_TURN);
-            let bb = BoundingBox::of(&pts);
-            (pts, bb)
-        })
+        .map(|h| SampledLoop::new(h, LAYOUT_STEPS_PER_TURN, tol))
         .collect();
-    for (i, (h, h_box)) in holes.iter().enumerate() {
-        if !outer_box.overlaps(h_box) {
+    for (i, h) in holes.iter().enumerate() {
+        if !outer.boxes_near(h, tol.linear) {
             return Err(KernelError::HoleOutsideOuter);
         }
-        if polylines_touch(&outer, h) {
+        if outer.touches(h, tol.linear) {
             return Err(KernelError::ProfileLoopsIntersect);
         }
-        if !point_in_polygon(h[0], &outer) {
+        if !outer.contains(h.points[0]) {
             return Err(KernelError::HoleOutsideOuter);
         }
-        for (other, other_box) in &holes[i + 1..] {
-            if !h_box.overlaps(other_box) {
+        for other in &holes[i + 1..] {
+            if !h.boxes_near(other, tol.linear) {
                 continue;
             }
-            if polylines_touch(h, other) {
+            if h.touches(other, tol.linear) {
                 return Err(KernelError::ProfileLoopsIntersect);
             }
             // Ohne Berührung liegt entweder eine Schleife ganz in der anderen oder keine.
-            if point_in_polygon(h[0], other) || point_in_polygon(other[0], h) {
+            if other.contains(h.points[0]) || h.contains(other.points[0]) {
                 return Err(KernelError::NestedHoles);
             }
         }
@@ -258,40 +251,164 @@ pub(crate) fn check_hole_layout(profile: &Profile) -> Result<(), KernelError> {
     Ok(())
 }
 
-/// Achsparalleles Hüllrechteck eines Linienzugs.
-#[derive(Clone, Copy, Debug)]
-struct BoundingBox {
-    min: DVec2,
-    max: DVec2,
+/// Geschlossen gedachter Linienzug einer abgetasteten Schleife mit der Fehlerschranke jeder
+/// Sehne. Gemeinsame Grundlage der Schnitt-, Berühr- und Enthaltensein-Prüfungen von Kernel
+/// und Skizze (`planora-sketch` benutzt sie für `Sketch::profiles`).
+///
+/// Bögen werden durch Sehnen ersetzt; eine Sehne über den Winkel `φ` eines Bogens mit Radius
+/// `r` weicht höchstens um die Pfeilhöhe `r·(1 − cos(φ/2))` vom Bogen ab (bei 64 Schritten je
+/// Vollkreis etwa 0,12 % des Radius). Die Prüfungen rechnen diese Abweichung als Spielraum
+/// hinzu, damit eine echte Berührung (Abstand 0) immer erkannt wird, egal ob ein Abtastpunkt
+/// genau auf der Berührstelle liegt und unabhängig vom Maßstab.
+///
+/// Grenze: Echte Abstände unter `tol.linear` plus den Pfeilhöhen der beiden nächsten Sehnen
+/// gelten als Berührung, bei Bögen also etwa unter 0,12 % des Radius je beteiligtem Bogen
+/// (Radius 10 mm: etwa 0,012 mm).
+#[derive(Clone, Debug)]
+pub struct SampledLoop {
+    /// Abgetastete Punkte, geschlossen gedacht (der letzte ist nicht der erste).
+    pub points: Vec<DVec2>,
+    /// Pfeilhöhe der Sehne `i` (von `points[i]` nach `points[(i + 1) % n]`); 0 bei Linien.
+    pub sagitta: Vec<f64>,
+    /// Hüllrechteck `(min, max)` der Punkte.
+    pub bbox: (DVec2, DVec2),
 }
 
-impl BoundingBox {
-    fn of(pts: &[DVec2]) -> BoundingBox {
-        pts.iter().fold(
-            BoundingBox {
-                min: DVec2::splat(f64::INFINITY),
-                max: DVec2::splat(f64::NEG_INFINITY),
-            },
-            |bb, p| BoundingBox {
-                min: bb.min.min(*p),
-                max: bb.max.max(*p),
-            },
-        )
+impl SampledLoop {
+    /// Tastet `lp` mit `steps_per_turn` Schritten je Vollkreis ab (dieselben Punkte wie
+    /// [`ProfileLoop::sample`]). Endet die Abtastung höchstens `tol.linear` vom Start entfernt,
+    /// entfällt der doppelte Endpunkt.
+    pub fn new(lp: &ProfileLoop, steps_per_turn: usize, tol: &Tolerance) -> SampledLoop {
+        let steps_per_turn = steps_per_turn.clamp(1, MAX_SAMPLES_PER_ARC);
+        let mut points = vec![lp.start];
+        // Pfeilhöhe der Sehne, die beim jeweiligen Punkt endet.
+        let mut into = vec![0.0];
+        let mut p = lp.start;
+        for s in &lp.segments {
+            match s {
+                Segment::Line { to } => {
+                    points.push(*to);
+                    into.push(0.0);
+                }
+                Segment::Arc { center, sweep } => {
+                    // dieselbe Schrittzahl wie `ProfileLoop::sample`
+                    let n = ((sweep.abs() / TAU) * steps_per_turn as f64)
+                        .ceil()
+                        .max(2.0)
+                        .min(MAX_SAMPLES_PER_ARC as f64) as usize;
+                    let r = (p - *center).length();
+                    let sag = r * (1.0 - (0.5 * sweep.abs() / n as f64).cos());
+                    for k in 1..=n {
+                        points.push(*center + rotate(p - *center, sweep * k as f64 / n as f64));
+                        into.push(sag);
+                    }
+                }
+            }
+            p = segment_end(p, s);
+        }
+        // Liegt der letzte Punkt auf dem ersten, ist die Schlusssehne die letzte echte Sehne.
+        if points.len() > 1 && points[points.len() - 1].distance(points[0]) <= tol.linear {
+            points.pop();
+            into[0] = into.pop().unwrap_or(0.0);
+        }
+        let n = points.len();
+        // `into[k]` gehört zur Sehne `k − 1 → k`, die Sehne `i` also zu `into[i + 1]`.
+        let sagitta = (0..n).map(|i| into[(i + 1) % n]).collect();
+        let bbox = points.iter().fold(
+            (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+            |(lo, hi), q| (lo.min(*q), hi.max(*q)),
+        );
+        SampledLoop {
+            points,
+            sagitta,
+            bbox,
+        }
     }
 
-    /// Überlappen oder berühren sich die Rechtecke (Rand zählt mit)?
-    fn overlaps(&self, other: &BoundingBox) -> bool {
-        self.min.x <= other.max.x
-            && other.min.x <= self.max.x
-            && self.min.y <= other.max.y
-            && other.min.y <= self.max.y
+    /// Größte Pfeilhöhe aller Sehnen.
+    pub fn max_sagitta(&self) -> f64 {
+        self.sagitta.iter().copied().fold(0.0, f64::max)
+    }
+
+    fn segment(&self, i: usize) -> (DVec2, DVec2) {
+        (self.points[i], self.points[(i + 1) % self.points.len()])
+    }
+
+    /// Können sich die Schleifen nach ihren um den Spielraum vergrößerten Hüllrechtecken
+    /// überhaupt berühren?
+    pub fn boxes_near(&self, other: &SampledLoop, linear: f64) -> bool {
+        let m = linear + self.max_sagitta() + other.max_sagitta();
+        self.bbox.0.x - m <= other.bbox.1.x
+            && other.bbox.0.x - m <= self.bbox.1.x
+            && self.bbox.0.y - m <= other.bbox.1.y
+            && other.bbox.0.y - m <= self.bbox.1.y
+    }
+
+    /// Schneiden oder berühren sich die beiden Schleifen? Zwei Sehnen gelten als berührend, wenn
+    /// ihr Abstand höchstens `linear` plus ihre beiden Pfeilhöhen beträgt.
+    pub fn touches(&self, other: &SampledLoop, linear: f64) -> bool {
+        if !self.boxes_near(other, linear) {
+            return false;
+        }
+        (0..self.points.len()).any(|i| {
+            let (p, q) = self.segment(i);
+            (0..other.points.len()).any(|j| {
+                let (r, s) = other.segment(j);
+                segment_distance(p, q, r, s) <= linear + self.sagitta[i] + other.sagitta[j]
+            })
+        })
+    }
+
+    /// Kommen sich zwei nicht benachbarte Sehnen derselben Schleife näher als `linear` plus
+    /// ihre Pfeilhöhen (Selbstschnitt oder Selbstberührung)?
+    pub fn touches_itself(&self, linear: f64) -> bool {
+        let n = self.points.len();
+        if n < 4 {
+            // Mit höchstens drei Sehnen ist jedes Paar benachbart.
+            return false;
+        }
+        for i in 0..n {
+            for j in i + 2..n {
+                if i == 0 && j == n - 1 {
+                    continue; // benachbart über den Schluss
+                }
+                let (p, q) = self.segment(i);
+                let (r, s) = self.segment(j);
+                if segment_distance(p, q, r, s) <= linear + self.sagitta[i] + self.sagitta[j] {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Liegt `p` im Inneren des Linienzugs (Strahlverfahren, gerade/ungerade Schnittzahl)?
+    /// Eindeutig für Punkte, die weiter als der Spielraum vom Rand entfernt sind.
+    pub fn contains(&self, p: DVec2) -> bool {
+        point_in_polygon(p, &self.points)
     }
 }
 
-/// Segmente eines geschlossen betrachteten Linienzugs (letzter Punkt zurück zum ersten).
-fn closed_segments(pts: &[DVec2]) -> impl Iterator<Item = (DVec2, DVec2)> + '_ {
-    let n = pts.len();
-    (0..n).map(move |i| (pts[i], pts[(i + 1) % n]))
+/// Abstand von `p` zur Strecke `a`–`b`.
+fn point_segment_distance(p: DVec2, a: DVec2, b: DVec2) -> f64 {
+    let d = b - a;
+    let len2 = d.length_squared();
+    if len2 == 0.0 {
+        return p.distance(a);
+    }
+    let t = ((p - a).dot(d) / len2).clamp(0.0, 1.0);
+    p.distance(a + d * t)
+}
+
+/// Abstand der Strecken `a`–`b` und `c`–`d` (0, wenn sie sich schneiden).
+fn segment_distance(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> f64 {
+    if segments_touch(a, b, c, d) {
+        return 0.0;
+    }
+    point_segment_distance(a, c, d)
+        .min(point_segment_distance(b, c, d))
+        .min(point_segment_distance(c, a, b))
+        .min(point_segment_distance(d, a, b))
 }
 
 /// Liegt `p` (kollinear zu `a`–`b`) im achsparallelen Bereich der Strecke?
@@ -316,15 +433,12 @@ fn segments_touch(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> bool {
         || (d4 == 0.0 && within_range(a, b, d))
 }
 
-/// Schneidet oder berührt irgendein Segment von `a` irgendeines von `b` (beide geschlossen)?
-fn polylines_touch(a: &[DVec2], b: &[DVec2]) -> bool {
-    closed_segments(a).any(|(p, q)| closed_segments(b).any(|(r, s)| segments_touch(p, q, r, s)))
-}
-
 /// Strahlverfahren (gerade/ungerade Anzahl Schnitte); das Polygon gilt als geschlossen.
 fn point_in_polygon(p: DVec2, poly: &[DVec2]) -> bool {
+    let n = poly.len();
     let mut inside = false;
-    for (a, b) in closed_segments(poly) {
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[(i + 1) % n]);
         if (a.y > p.y) != (b.y > p.y) {
             let x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x);
             if p.x < x {

@@ -205,3 +205,76 @@ fn nested_holes_are_rejected_disjoint_holes_are_fine() {
     };
     assert!(k().extrude(&disjoint, &Frame::WORLD, 1.0).is_ok());
 }
+
+/// Abschlusswelle I2: Ein Kreisloch, das eine Kante tangential berührt, wird unabhängig vom
+/// Maßstab abgelehnt (früher entschied die Rundung, ob ein Abtastpunkt genau auf der Kante
+/// lag); ein Loch mit kleinem, aber echtem Abstand bleibt erlaubt.
+#[test]
+fn a_hole_tangent_to_the_outer_loop_is_rejected_at_every_scale() {
+    for scale in [1.0, 1e5, 1e-2] {
+        let outer = ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(20.0, 10.0) * scale);
+        let tangent = Profile {
+            outer: outer.clone(),
+            holes: vec![ProfileLoop::circle(
+                DVec2::new(10.0, 3.0) * scale,
+                3.0 * scale,
+            )],
+        };
+        assert_eq!(
+            k().extrude(&tangent, &Frame::WORLD, scale).unwrap_err(),
+            KernelError::ProfileLoopsIntersect,
+            "Maßstab {scale}"
+        );
+        // um 45° gedreht startender Kreis: kein Abtastpunkt auf der Berührstelle
+        let rotated = ProfileLoop {
+            start: DVec2::new(10.0 + 3.0 * 0.6, 3.0 + 3.0 * 0.8) * scale,
+            segments: vec![Segment::Arc {
+                center: DVec2::new(10.0, 3.0) * scale,
+                sweep: TAU,
+            }],
+        };
+        let tangent = Profile {
+            outer: outer.clone(),
+            holes: vec![rotated],
+        };
+        assert_eq!(
+            k().extrude(&tangent, &Frame::WORLD, scale).unwrap_err(),
+            KernelError::ProfileLoopsIntersect,
+            "Maßstab {scale}, gedreht"
+        );
+    }
+    // 1 mm Abstand bei Radius 10 mm: erlaubt.
+    let gap = Profile {
+        outer: ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(40.0, 30.0)),
+        holes: vec![ProfileLoop::circle(DVec2::new(20.0, 11.0), 10.0)],
+    };
+    assert!(k().extrude(&gap, &Frame::WORLD, 2.0).is_ok());
+    // Zwei Löcher, die sich von außen berühren: abgelehnt.
+    let two = Profile {
+        outer: ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(40.0, 30.0)),
+        holes: vec![
+            ProfileLoop::circle(DVec2::new(10.0, 15.0), 5.0),
+            ProfileLoop::circle(DVec2::new(20.0, 15.0), 5.0),
+        ],
+    };
+    assert_eq!(
+        k().extrude(&two, &Frame::WORLD, 2.0).unwrap_err(),
+        KernelError::ProfileLoopsIntersect
+    );
+}
+
+#[test]
+fn sampled_loops_know_their_chord_error() {
+    let tol = Tolerance::default();
+    let c = SampledLoop::new(&ProfileLoop::circle(DVec2::ZERO, 10.0), 64, &tol);
+    assert_eq!(c.points.len(), 64, "doppelter Endpunkt entfällt");
+    let want = 10.0 * (1.0 - (TAU / 128.0).cos());
+    assert!((c.max_sagitta() - want).abs() < 1e-12);
+    let r = SampledLoop::new(&ProfileLoop::rectangle(DVec2::ZERO, DVec2::ONE), 64, &tol);
+    assert_eq!(r.points.len(), 4);
+    assert_eq!(r.max_sagitta(), 0.0);
+    assert!(r.contains(DVec2::splat(0.5)));
+    assert!(!r.contains(DVec2::splat(1.5)));
+    assert!(!r.touches_itself(tol.linear));
+    assert!(!c.touches_itself(tol.linear));
+}
