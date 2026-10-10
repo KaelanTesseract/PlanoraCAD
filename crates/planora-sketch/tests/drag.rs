@@ -296,3 +296,105 @@ fn a_conflict_in_a_large_group_is_reported_without_the_full_search() {
     // unverändert im letzten Zustand
     assert_eq!(s.point_xy(pts[60]).unwrap(), DVec2::new(60.0, 0.0));
 }
+
+// ---- Zwischenspeicher: Kurven, die über die Gruppe hinausreichen -----------------------------
+
+/// Neue Skizze mit denselben Punkten, Linien und Abhängigkeiten wie `s` (nur für die Fälle
+/// unten): liefert den Status eines frischen Laufs ohne Zwischenspeicher.
+fn fresh_status(s: &Sketch) -> SolveStatus {
+    let mut c = s.clone();
+    // Ein strukturelles Ändern leert den Zwischenspeicher: Punkt anlegen und wieder löschen.
+    let p = c.add_point(0.0, 0.0).unwrap();
+    c.remove_point(p).unwrap();
+    c.solve().status
+}
+
+#[test]
+fn moving_a_free_end_of_a_line_into_a_group_is_seen_by_the_cache() {
+    // a und b fest, c frei, Linie b–c: Die Linie gehört zur Gruppe von b, c aber nicht.
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(5.0, 0.0).unwrap();
+    let c = s.add_point(9.0, 3.0).unwrap();
+    s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    s.add_constraint(K::Fixed(b, 5.0, 0.0)).unwrap();
+    s.add_line(b, c).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    // c auf b: Linie entartet.
+    s.set_point_xy(c, 5.0, 0.0).unwrap();
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::NotConverged, "{r:?}");
+    assert_eq!(r.status, fresh_status(&s));
+    // c wieder weg: Die Gruppe muss neu bewertet werden.
+    s.set_point_xy(c, 9.0, 3.0).unwrap();
+    let r = s.solve();
+    assert!(r.group_solves >= 1, "{r:?}");
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    assert_eq!(r.status, fresh_status(&s));
+    // Ziehen von c (frei) wirkt genauso.
+    s.set_point_xy(c, 5.0, 0.0).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::NotConverged);
+    let r = s
+        .drag(&[Drag {
+            point: c,
+            target: DVec2::new(1.0, 7.0),
+        }])
+        .unwrap();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    assert_eq!(r.status, fresh_status(&s));
+}
+
+#[test]
+fn a_line_between_two_groups_is_seen_by_the_cache() {
+    // Gruppe 1: a fest. Gruppe 2: e fest, b im Abstand 8 von e. Linie a–b verbindet beide.
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let e = s.add_point(0.0, 8.0).unwrap();
+    let b = s.add_point(8.0, 8.0).unwrap();
+    s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    s.add_constraint(K::Fixed(e, 0.0, 8.0)).unwrap();
+    s.add_constraint(K::Distance(e, b, 8.0)).unwrap();
+    s.add_line(a, b).unwrap();
+    s.add_line(e, b).unwrap();
+    // b auf a (Abstand zu e bleibt 8): Linie a–b entartet. Strukturänderung danach, damit
+    // beide Gruppen frisch (und erfolglos) gerechnet werden.
+    s.set_point_xy(b, 0.0, 0.0).unwrap();
+    let p = s.add_point(0.0, 0.0).unwrap();
+    s.remove_point(p).unwrap();
+    let r = s.solve();
+    assert_eq!(r.group_solves, 2, "{r:?}");
+    assert_eq!(r.status, SolveStatus::NotConverged, "{r:?}");
+    assert_eq!(r.status, fresh_status(&s));
+    // b nach (8, 8) ziehen: Der Zug bewegt b. Die Gruppe von a wird im selben Lauf noch am
+    // Start (b auf a) geprüft, das volle Lösen danach muss die neue Lage von b sehen.
+    s.drag(&[Drag {
+        point: b,
+        target: DVec2::new(8.0, 8.0),
+    }])
+    .unwrap();
+    let pb = s.point_xy(b).unwrap();
+    assert!(pb.length() > 1.0, "{pb:?}");
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    assert!(r.group_solves >= 1, "{r:?}");
+    assert_eq!(r.status, fresh_status(&s));
+    // Danach ist alles gemerkt.
+    assert_eq!(s.solve().group_solves, 0);
+}
+
+#[test]
+fn drag_rejects_targets_beyond_max_coord() {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(4.0, 0.0).unwrap();
+    s.add_constraint(K::Distance(a, b, 4.0)).unwrap();
+    for target in [DVec2::new(2e9, 0.0), DVec2::new(0.0, -2e9)] {
+        assert!(matches!(
+            s.drag(&[Drag { point: b, target }]),
+            Err(SketchError::InvalidInput(_))
+        ));
+    }
+    assert_eq!(s.point_xy(b).unwrap(), DVec2::new(4.0, 0.0));
+}

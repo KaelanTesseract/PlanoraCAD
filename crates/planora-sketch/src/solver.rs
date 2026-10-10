@@ -9,8 +9,10 @@
 //! größer als `tol.linear` sein. Sonst gilt die Gruppe als nicht gelöst und bleibt im letzten
 //! Zustand; die Diagnose nennt die Ursache.
 //!
-//! Zwischenspeicher: Das Ergebnis jeder Gruppe wird mit den Werten ihrer Variablen gemerkt.
-//! Stimmen Abhängigkeiten und Werte beim nächsten Lauf überein, wird es übernommen statt neu
+//! Zwischenspeicher: Das Ergebnis jeder Gruppe wird mit den Werten aller Variablen gemerkt,
+//! die es bestimmen: ihre eigenen und sämtliche Variablen ihrer Kurven, auch solche außerhalb
+//! der Gruppe (die Prüfung auf Entartung liest etwa das freie Ende einer Linie oder einen
+//! Punkt einer anderen Gruppe). Stimmen Abhängigkeiten und Werte beim nächsten Lauf überein, wird es übernommen statt neu
 //! gerechnet. Das ist exakt dasselbe Ergebnis, denn ein neuer Lauf ab denselben Werten rechnet
 //! deterministisch dasselbe (eine gelöste Gruppe ist an ihren Werten schon gelöst). Jede
 //! Änderung an Objekten oder Abhängigkeiten leert den Speicher. So rechnet beim Ziehen nur die
@@ -104,9 +106,10 @@ pub(crate) struct SolveCache {
 
 #[derive(Clone, Debug)]
 struct CachedGroup {
-    vars: Vec<usize>,
-    /// Bitmuster der Variablenwerte nach dem Lauf (gelöst: die übernommene Lösung; nicht
-    /// gelöst: der unveränderte Start).
+    /// `Group::reads` beim Lauf.
+    reads: Vec<usize>,
+    /// Bitmuster der Werte dieser Variablen nach dem Lauf (gelöst: die übernommene Lösung;
+    /// nicht gelöst: der unveränderte Start).
     values: Vec<u64>,
     outcome: Outcome,
 }
@@ -128,9 +131,9 @@ enum Outcome {
 impl SolveCache {
     fn lookup(&self, g: &Group, x: &[f64]) -> Option<&Outcome> {
         let hit = self.groups.get(&g.constraints)?;
-        (hit.vars == g.vars
+        (hit.reads == g.reads
             && hit
-                .vars
+                .reads
                 .iter()
                 .zip(&hit.values)
                 .all(|(&v, &bits)| x[v].to_bits() == bits))
@@ -141,8 +144,8 @@ impl SolveCache {
         self.groups.insert(
             g.constraints.clone(),
             CachedGroup {
-                vars: g.vars.clone(),
-                values: g.vars.iter().map(|&v| x[v].to_bits()).collect(),
+                reads: g.reads.clone(),
+                values: g.reads.iter().map(|&v| x[v].to_bits()).collect(),
                 outcome,
             },
         );
@@ -168,6 +171,11 @@ struct Group {
     constraints: Vec<ConstraintId>,
     /// Lebende Kurven mit mindestens einer Variablen in der Gruppe.
     curves: Vec<CurveId>,
+    /// Alle Variablen, die das Ergebnis der Gruppe bestimmen: `vars` und sämtliche Variablen
+    /// der Kurven in `curves` (die Prüfung auf Entartung liest auch Punkte außerhalb der
+    /// Gruppe, etwa das freie Ende einer Linie oder einen Punkt einer anderen Gruppe).
+    /// Aufsteigend, ohne Doppelte. Schlüssel des Zwischenspeichers.
+    reads: Vec<usize>,
 }
 
 /// Residuen und Jacobi-Matrix einer Gruppe.
@@ -534,6 +542,7 @@ impl Sketch {
                     vars: Vec::new(),
                     constraints: Vec::new(),
                     curves: Vec::new(),
+                    reads: Vec::new(),
                 });
                 groups.len() - 1
             });
@@ -554,13 +563,19 @@ impl Sketch {
                 .collect();
             vars.extend(own_vars(&c.kind));
             let mut seen: Vec<usize> = Vec::new();
-            for v in vars.into_iter().filter(|&v| in_constraint[v]) {
+            for &v in vars.iter().filter(|&&v| in_constraint[v]) {
                 let gi = index[&find(&mut parent, v)];
                 if !seen.contains(&gi) {
                     seen.push(gi);
                     groups[gi].curves.push(cid);
+                    groups[gi].reads.extend(vars.iter().copied());
                 }
             }
+        }
+        for g in &mut groups {
+            g.reads.extend(g.vars.iter().copied());
+            g.reads.sort_unstable();
+            g.reads.dedup();
         }
         (groups, in_constraint)
     }
@@ -769,6 +784,8 @@ impl Sketch {
                     "Das Ziel muss eine endliche Position sein".into(),
                 ));
             }
+            crate::model::finite(d.target.x, "Die x-Koordinate des Ziels")?;
+            crate::model::finite(d.target.y, "Die y-Koordinate des Ziels")?;
         }
         let mut soft = Vec::with_capacity(2 * drags.len());
         for d in drags {
