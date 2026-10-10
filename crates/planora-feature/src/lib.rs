@@ -1,9 +1,10 @@
 //! Feature-Baum von PlanoraCAD: Datenmodell, stabile Verweise auf Flächen und Kanten,
-//! Berechnung und Neuberechnung mit Zwischenspeicher.
+//! Berechnung und Neuberechnung mit Zwischenspeicher sowie Änderungsoperationen.
 
 mod compute;
 pub mod error;
 pub mod model;
+mod ops;
 pub mod recompute;
 pub mod refs;
 

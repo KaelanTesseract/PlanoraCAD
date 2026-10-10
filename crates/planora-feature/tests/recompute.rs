@@ -97,7 +97,9 @@ fn suppressing_a_feature_skips_its_dependents() {
             },
         )
         .unwrap();
-    d.set_suppressed(a, true).unwrap();
+    let report = d.set_suppressed_with_report(a, true).unwrap();
+    assert!(report.computed.is_empty(), "{:?}", report.computed);
+    assert_eq!(report.reused, vec![b], "A unterdrückt, U ausgesetzt");
     assert_eq!(d.feature(a).unwrap().status, FeatureStatus::Suppressed);
     assert!(
         matches!(&d.feature(u).unwrap().status, FeatureStatus::Skipped(m) if m.contains("unterdrückt")),
@@ -106,9 +108,101 @@ fn suppressing_a_feature_skips_its_dependents() {
     );
     let names: Vec<String> = d.visible_bodies().into_iter().map(|v| v.name).collect();
     assert_eq!(names, ["B"]);
-    d.set_suppressed(a, false).unwrap();
+    let report = d.set_suppressed_with_report(a, false).unwrap();
+    assert_eq!(report.computed, vec![a, u]);
+    assert_eq!(report.reused, vec![b]);
     assert_eq!(d.feature(u).unwrap().status, FeatureStatus::Ok);
     assert_eq!(d.visible_bodies().len(), 1);
+}
+
+#[test]
+fn setting_the_current_suppression_state_changes_nothing() {
+    let mut d = Document::new();
+    let a = boxed(&mut d, "A");
+    let report = d.set_suppressed_with_report(a, false).unwrap();
+    assert!(
+        report.computed.is_empty() && report.reused.is_empty(),
+        "{report:?}"
+    );
+    d.set_suppressed(a, true).unwrap();
+    let report = d.set_suppressed_with_report(a, true).unwrap();
+    assert!(
+        report.computed.is_empty() && report.reused.is_empty(),
+        "{report:?}"
+    );
+    assert_eq!(d.feature(a).unwrap().status, FeatureStatus::Suppressed);
+    assert!(d.set_suppressed(FeatureId(99), true).is_err());
+}
+
+#[test]
+fn suppressing_an_unrelated_box_recomputes_only_readers_of_the_visible_bodies() {
+    use planora_math::{DVec2, Frame, Tolerance};
+    use planora_sketch::model::Sketch;
+    let mut d = Document::new();
+    let a = boxed(&mut d, "A");
+    let b = boxed(&mut d, "B");
+    let c = d
+        .add_feature(
+            "C",
+            FeatureKind::Box {
+                size: DVec3::ONE,
+                origin: DVec3::new(20.0, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    let u = d
+        .add_feature(
+            "U",
+            FeatureKind::Boolean {
+                target: BodyRef {
+                    feature: a,
+                    index: 0,
+                },
+                tool: BodyRef {
+                    feature: b,
+                    index: 0,
+                },
+                op: BoolOp::Union,
+            },
+        )
+        .unwrap();
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    sk.add_rectangle(DVec2::new(30.0, 0.0), DVec2::new(35.0, 5.0))
+        .unwrap();
+    let s = d
+        .add_feature(
+            "S",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: sk,
+                plane: SketchPlane::Standard(StandardPlane::XY),
+                copies: vec![],
+            }),
+        )
+        .unwrap();
+    let e = d
+        .add_feature(
+            "E",
+            FeatureKind::Extrude {
+                sketch: s,
+                profile: 0,
+                height: 2.0,
+            },
+        )
+        .unwrap();
+    for id in [a, b, c, u, s, e] {
+        assert_eq!(d.feature(id).unwrap().status, FeatureStatus::Ok, "{id:?}");
+    }
+    let report = d.set_suppressed_with_report(c, true).unwrap();
+    assert_eq!(
+        report.computed,
+        vec![u],
+        "die Boolesche Operation liest die sichtbaren Körper"
+    );
+    assert_eq!(
+        report.reused,
+        vec![a, b, s, e],
+        "die Extrusion liest nur ihre Skizze"
+    );
 }
 
 #[test]

@@ -233,3 +233,24 @@ fn compute_sketch(
         hints: Some(SketchHints { plane, copies }),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_implausible_boolean_volume_is_reported() {
+        let doc = Document::new();
+        let big = doc.kernel.make_box(DVec3::splat(4.0)).unwrap();
+        let tiny = doc.kernel.make_box(DVec3::splat(1.0)).unwrap();
+        // Vereinigung kleiner als jeder Eingangskörper: unplausibel
+        let r = check_volume(&doc, BoolOp::Union, &big, &big, &tiny);
+        assert_eq!(r, Err(FeatureError::ImplausibleResult));
+        assert!(
+            FeatureError::ImplausibleResult
+                .to_string()
+                .contains("unplausibel")
+        );
+        assert_eq!(check_volume(&doc, BoolOp::Union, &big, &tiny, &big), Ok(()));
+    }
+}

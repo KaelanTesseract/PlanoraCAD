@@ -31,20 +31,14 @@ enum Blocked {
 }
 
 impl Document {
-    /// Fügt ein Feature am Rückführungsmarker ein und berechnet neu. Alle Verweise müssen auf
+    /// Fügt ein Feature am Rückrollmarker ein und berechnet neu. Alle Verweise müssen auf
     /// Features vor der Einfügestelle zeigen; sonst bleibt das Dokument unverändert.
     pub fn add_feature(
         &mut self,
         name: impl Into<String>,
         kind: FeatureKind,
     ) -> Result<FeatureId, FeatureError> {
-        for dep in kind.dependencies() {
-            match self.index_of(dep) {
-                None => return Err(FeatureError::UnknownFeature),
-                Some(i) if i >= self.marker => return Err(FeatureError::ForwardReference),
-                Some(_) => {}
-            }
-        }
+        self.check_references(&kind, self.marker)?;
         let id = FeatureId(self.next_id);
         self.next_id += 1;
         let version = self.bump();
@@ -58,6 +52,7 @@ impl Document {
                 status: FeatureStatus::NotComputed,
                 version,
                 result: None,
+                failed: None,
             },
         );
         self.marker += 1;
@@ -67,16 +62,29 @@ impl Document {
 
     /// Unterdrückt ein Feature oder hebt die Unterdrückung auf und berechnet neu.
     pub fn set_suppressed(&mut self, id: FeatureId, suppressed: bool) -> Result<(), FeatureError> {
+        self.set_suppressed_with_report(id, suppressed).map(|_| ())
+    }
+
+    /// Wie [`Document::set_suppressed`], liefert den Bericht der Neuberechnung. Hat das
+    /// Feature den Zustand schon, ändert sich nichts (keine neue Version, keine Neuberechnung,
+    /// leerer Bericht).
+    pub fn set_suppressed_with_report(
+        &mut self,
+        id: FeatureId,
+        suppressed: bool,
+    ) -> Result<RecomputeReport, FeatureError> {
         let idx = self.index_of(id).ok_or(FeatureError::UnknownFeature)?;
+        if self.features[idx].suppressed == suppressed {
+            return Ok(RecomputeReport::default());
+        }
         let version = self.bump();
         let f = &mut self.features[idx];
         f.suppressed = suppressed;
         f.version = version;
-        self.recompute();
-        Ok(())
+        Ok(self.recompute())
     }
 
-    /// Setzt den Rückführungsmarker auf `n` (Anzahl der aktiven Features) und berechnet neu.
+    /// Setzt den Rückrollmarker auf `n` (Anzahl der aktiven Features) und berechnet neu.
     pub fn set_marker(&mut self, n: usize) -> Result<(), FeatureError> {
         if n > self.features.len() {
             return Err(FeatureError::InvalidInput(format!(
@@ -128,15 +136,31 @@ impl Document {
                 report.reused.push(id);
                 continue;
             }
+            let failed_before = self.features[idx]
+                .failed
+                .as_ref()
+                .filter(|(k, _)| *k == key)
+                .map(|(_, message)| message.clone());
+            if let Some(message) = failed_before {
+                // gleiche Eingaben wie beim letzten Fehlschlag: Fehler übernehmen
+                self.features[idx].status = FeatureStatus::Error(message);
+                self.features[idx].result = None;
+                report.reused.push(id);
+                continue;
+            }
             match compute_feature(self, idx, &visible) {
                 Ok(computed) => {
                     let result_version = self.bump();
                     self.store(idx, computed, key, result_version);
                     self.features[idx].status = FeatureStatus::Ok;
+                    self.features[idx].failed = None;
                 }
                 Err(e) => {
-                    self.features[idx].result = None;
-                    self.features[idx].status = FeatureStatus::Error(e.to_string());
+                    let message = e.to_string();
+                    let f = &mut self.features[idx];
+                    f.result = None;
+                    f.status = FeatureStatus::Error(message.clone());
+                    f.failed = Some((key, message));
                 }
             }
             report.computed.push(id);
@@ -292,5 +316,96 @@ impl Document {
             sf.plane = h.plane;
             sf.copies = h.copies;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::{BodyRef, Document, FeatureKind, FeatureStatus, SketchFeature, SketchPlane};
+    use crate::refs::FaceRef;
+    use planora_kernel::face_probe_point;
+    use planora_math::{DVec2, DVec3, Frame, Tolerance};
+    use planora_sketch::Sketch;
+
+    /// Versatz des absichtlich falschen Hinweispunkts in Millimetern (deutlich größer als jede
+    /// Toleranz, aber auf derselben Fläche auflösbar, weil die Marke eindeutig ist).
+    const HINT_OFFSET: f64 = 3.0;
+
+    #[test]
+    fn hints_are_written_back_after_a_resolution_without_a_new_version() {
+        let mut d = Document::new();
+        let a = d
+            .add_feature(
+                "A",
+                FeatureKind::Box {
+                    size: DVec3::new(20.0, 20.0, 5.0),
+                    origin: DVec3::ZERO,
+                },
+            )
+            .unwrap();
+        let tol = Tolerance::default();
+        let solid = d
+            .body(BodyRef {
+                feature: a,
+                index: 0,
+            })
+            .unwrap();
+        let (top, _) = solid
+            .faces
+            .iter()
+            .find(|(f, _)| {
+                planora_sketch::plane_of_face(solid, *f)
+                    .is_some_and(|fr| fr.z.z > 0.5 && fr.origin.z > 4.0)
+            })
+            .unwrap();
+        let probe = face_probe_point(solid, top, &tol).unwrap();
+        let mut face = FaceRef::from_face(solid, top, &tol).unwrap();
+        face.hint += DVec3::new(HINT_OFFSET, -HINT_OFFSET, 0.0);
+        let mut sk = Sketch::new(Frame::WORLD, "S", tol);
+        sk.add_rectangle(DVec2::ZERO, DVec2::new(2.0, 2.0)).unwrap();
+        let s = d
+            .add_feature(
+                "S",
+                FeatureKind::Sketch(SketchFeature {
+                    sketch: sk,
+                    plane: SketchPlane::OnFace(face),
+                    copies: vec![],
+                }),
+            )
+            .unwrap();
+        let f = d.feature(s).unwrap();
+        assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+        let version = f.version;
+        let FeatureKind::Sketch(sf) = &f.kind else {
+            panic!("keine Skizze")
+        };
+        let SketchPlane::OnFace(written) = &sf.plane else {
+            panic!("Ebene verloren")
+        };
+        assert_eq!(
+            written.hint, probe,
+            "Hinweispunkt = Prüfpunkt der gefundenen Fläche"
+        );
+        let again = d.recompute();
+        assert!(again.computed.is_empty(), "{:?}", again.computed);
+        assert_eq!(d.feature(s).unwrap().version, version, "keine neue Version");
+    }
+
+    #[test]
+    fn setting_the_current_suppression_state_keeps_the_version() {
+        let mut d = Document::new();
+        let a = d
+            .add_feature(
+                "A",
+                FeatureKind::Box {
+                    size: DVec3::ONE,
+                    origin: DVec3::ZERO,
+                },
+            )
+            .unwrap();
+        let (version, next) = (d.feature(a).unwrap().version, d.next_version);
+        d.set_suppressed(a, false).unwrap();
+        assert_eq!(d.feature(a).unwrap().version, version);
+        assert_eq!(d.next_version, next, "nichts wurde neu berechnet");
     }
 }

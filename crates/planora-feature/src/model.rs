@@ -187,9 +187,12 @@ pub struct Feature {
     /// Wird bei jeder Änderung der Parameter erhöht.
     pub(crate) version: u64,
     pub(crate) result: Option<FeatureResult>,
+    /// Schlüssel der Eingaben und Meldung der zuletzt fehlgeschlagenen Berechnung. Bei gleichen
+    /// Eingaben wird der Fehler übernommen statt erneut gerechnet.
+    pub(crate) failed: Option<(Vec<u64>, String)>,
 }
 
-/// Geordnete Liste der Features mit Rückführungsmarke.
+/// Geordnete Liste der Features mit Rückrollmarker.
 #[derive(Clone, Debug)]
 pub struct Document {
     pub(crate) features: Vec<Feature>,
