@@ -404,3 +404,194 @@ fn an_edge_copy_reference_goes_away_with_its_source_feature() {
     );
     s.document.check_invariants().unwrap();
 }
+
+// ---- Fix-Runde 1 ------------------------------------------------------------------------------
+
+#[test]
+fn a_stale_delete_confirmation_is_refreshed_instead_of_deleting() {
+    let mut s = AppState::new();
+    let x = s.create_box(DVec3::splat(10.0)).unwrap();
+    s.create_cylinder(2.0, 14.0).unwrap();
+    s.move_body(1, DVec3::new(-17.0, 5.0, -2.0)).unwrap();
+    s.add_boolean(0, 1, BoolOp::Union).unwrap();
+    browser::request_delete(&mut s, x);
+    let shown = s.pending_delete.clone().expect("Rückfrage");
+    assert!(!shown.text().contains("Skizze 1"));
+    // Während die Rückfrage offen ist: Skizze S anlegen und eine Kante von X hineinkopieren.
+    let sk = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(sk).unwrap();
+    let solid = s.bodies[0].solid.clone();
+    let mut copied = false;
+    for (e, _) in solid.edges.iter() {
+        if s.project_edge_into_sketch(0, e).is_ok() {
+            let c = s.sketch_draft.as_ref().unwrap().copies.last().unwrap();
+            if c.edge.a.origin == x.0 || c.edge.b.origin == x.0 {
+                copied = true;
+                break;
+            }
+        }
+    }
+    assert!(copied, "eine Kante von X kopiert");
+    // „Löschen“ im Rückfragefenster
+    let c = ctx();
+    frame(&c, &mut s, vec![], "");
+    let (_, confirm) = frame(&c, &mut s, vec![], "Löschen");
+    frame(
+        &c,
+        &mut s,
+        click(confirm.unwrap(), egui::PointerButton::Primary),
+        "",
+    );
+    assert!(s.document.feature(x).is_some(), "nichts gelöscht");
+    assert!(s.document.feature(sk).is_some());
+    let plan = s.pending_delete.clone().expect("Rückfrage mit neuer Liste");
+    assert!(plan.dependents.contains(&sk), "{}", plan.text());
+    assert!(plan.text().contains("Skizze 1"), "{}", plan.text());
+    // Jetzt bestätigt: alles weg
+    browser::apply_delete(&mut s, &plan).unwrap();
+    assert!(s.document.feature(x).is_none() && s.document.feature(sk).is_none());
+}
+
+/// Zwei Klicks an derselben Stelle kurz nacheinander (Doppelklick) ab der Zeit `t0` (s).
+fn double_click(c: &egui::Context, s: &mut AppState, pos: egui::Pos2, t0: f64) {
+    for (i, events) in [
+        click(pos, egui::PointerButton::Primary),
+        click(pos, egui::PointerButton::Primary),
+        vec![],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let input = egui::RawInput {
+            screen_rect: Some(SCREEN),
+            time: Some(t0 + 0.05 * i as f64),
+            events,
+            ..Default::default()
+        };
+        c.run_ui(input, |ui| browser::show(ui, s))
+            .drop_without_applying_deltas();
+    }
+}
+
+#[test]
+fn a_double_click_opens_the_sketch_or_asks_for_the_edit_dialog() {
+    let mut s = AppState::new();
+    let b = s.create_box(DVec3::splat(4.0)).unwrap();
+    let sk = sketch_with_rectangle(&mut s);
+    let c = ctx();
+    let (_, row) = frame(&c, &mut s, vec![], "Skizze 1");
+    double_click(&c, &mut s, row.unwrap(), 1.0);
+    assert_eq!(s.open_sketch_id(), Some(sk));
+    s.close_sketch();
+    let (_, row) = frame(&c, &mut s, vec![], "Quader 1");
+    double_click(&c, &mut s, row.unwrap(), 10.0);
+    assert_eq!(s.edit_request, Some(b));
+}
+
+/// Texte des Kontextmenüs der Zeile `row`.
+fn menu_texts(s: &mut AppState, row: &str) -> String {
+    let c = ctx();
+    let (_, pos) = frame(&c, s, vec![], row);
+    frame(
+        &c,
+        s,
+        click(pos.unwrap(), egui::PointerButton::Secondary),
+        "",
+    );
+    frame(&c, s, vec![], "").0
+}
+
+#[test]
+fn only_sketch_rows_offer_extrude_and_revolve() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    sketch_with_rectangle(&mut s);
+    let sketch_menu = menu_texts(&mut s, "Skizze 1");
+    for must in [
+        "Extrudieren …",
+        "Drehen …",
+        "Bearbeiten",
+        "Umbenennen",
+        "Löschen",
+    ] {
+        assert!(sketch_menu.contains(must), "„{must}“ fehlt:\n{sketch_menu}");
+    }
+    let box_menu = menu_texts(&mut s, "Quader 1");
+    assert!(box_menu.contains("Unterdrücken"), "{box_menu}");
+    assert!(!box_menu.contains("Extrudieren"), "{box_menu}");
+    assert!(!box_menu.contains("Drehen"), "{box_menu}");
+}
+
+#[test]
+fn error_rows_explain_themselves_and_skipped_rows_are_grey() {
+    let mut s = AppState::new();
+    s.add_feature(
+        None,
+        planora_feature::FeatureKind::Cylinder {
+            radius: -1.0,
+            height: 2.0,
+            origin: DVec3::ZERO,
+        },
+    )
+    .unwrap();
+    let reason = match &s.document.features()[0].status {
+        FeatureStatus::Error(e) => e.clone(),
+        st => panic!("{st:?}"),
+    };
+    let a = s.create_box(DVec3::splat(4.0)).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    browser::toggle_suppress(&mut s, a).unwrap();
+    assert!(matches!(
+        s.document.features()[2].status,
+        FeatureStatus::Skipped(_)
+    ));
+    // Tooltip: Zeiger über der Fehlerzeile, die Zeit läuft weiter.
+    let c = ctx();
+    let (_, row) = frame(&c, &mut s, vec![], "Zylinder 1");
+    let row = row.unwrap();
+    let mut text = String::new();
+    for t in 0..6 {
+        let input = egui::RawInput {
+            screen_rect: Some(SCREEN),
+            time: Some(f64::from(t)),
+            events: if t == 0 {
+                vec![egui::Event::PointerMoved(row)]
+            } else {
+                vec![]
+            },
+            ..Default::default()
+        };
+        let out = c.run_ui(input, |ui| browser::show(ui, &mut s));
+        text = texts(&out);
+        out.drop_without_applying_deltas();
+    }
+    assert!(
+        text.contains(&reason),
+        "Tooltip mit dem Fehlertext:\n{text}"
+    );
+    // „übersprungen“ und der Name des Verschiebens sind grau gezeichnet.
+    let mut weak = egui::Color32::TRANSPARENT;
+    let out = c.run_ui(raw(vec![]), |ui| {
+        weak = ui.visuals().weak_text_color();
+        browser::show(ui, &mut s)
+    });
+    let mut colors = Vec::new();
+    fn walk(shape: &egui::epaint::Shape, colors: &mut Vec<(String, egui::Color32)>) {
+        match shape {
+            egui::epaint::Shape::Text(t) => colors.push((
+                t.galley.text().to_string(),
+                t.galley.job.sections[0].format.color,
+            )),
+            egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, colors)),
+            _ => {}
+        }
+    }
+    out.shapes.iter().for_each(|c| walk(&c.shape, &mut colors));
+    out.drop_without_applying_deltas();
+    for must in ["übersprungen", "Verschieben 1"] {
+        let found = colors.iter().find(|(t, _)| t == must);
+        assert_eq!(found.map(|f| f.1), Some(weak), "{must}: {colors:?}");
+    }
+}

@@ -132,3 +132,96 @@ fn the_dialog_draws_without_input_and_stays_open() {
         assert!(text.contains(must), "„{must}“ fehlt:\n{text}");
     }
 }
+
+// ---- Fix-Runde 1 ------------------------------------------------------------------------------
+
+#[test]
+fn a_dialog_on_a_changed_feature_refuses_and_reloads() {
+    let mut s = AppState::new();
+    let id = s.create_box(DVec3::splat(4.0)).unwrap();
+    let mut d = FeatureDialog::new(&s, id).unwrap();
+    // Das Feature ändert sich, während der Dialog offen ist.
+    s.document
+        .update(id, |k| {
+            if let FeatureKind::Box { size, .. } = k {
+                size.z = 9.0;
+            }
+        })
+        .unwrap();
+    s.refresh();
+    d.set_box_size(DVec3::new(5.0, 6.0, 7.0));
+    let e = d.apply(&mut s).unwrap_err();
+    assert!(e.contains("inzwischen geändert"), "{e}");
+    match &s.document.feature(id).unwrap().kind {
+        FeatureKind::Box { size, .. } => assert_eq!(size.z, 9.0, "nicht überschrieben"),
+        k => panic!("{k:?}"),
+    }
+    assert!(d.reload(&s));
+    d.set_text("Breite", "5");
+    d.apply(&mut s).unwrap();
+    match &s.document.feature(id).unwrap().kind {
+        FeatureKind::Box { size, .. } => assert_eq!(*size, DVec3::new(5.0, 4.0, 9.0)),
+        k => panic!("{k:?}"),
+    }
+}
+
+#[test]
+fn the_move_dialog_edits_the_delta() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    let x0 = s.bodies[0].bounds.0.x;
+    s.move_body(0, DVec3::X).unwrap();
+    let m = s.bodies[0].source.feature;
+    let mut d = FeatureDialog::new(&s, m).unwrap();
+    assert!(d.set_text("Δx", "2,5"));
+    assert!(d.set_text("Δz", "-1"));
+    d.apply(&mut s).unwrap();
+    match &s.document.feature(m).unwrap().kind {
+        FeatureKind::Move { delta, .. } => assert_eq!(*delta, DVec3::new(2.5, 0.0, -1.0)),
+        k => panic!("{k:?}"),
+    }
+    assert!((s.bodies[0].bounds.0.x - (x0 + 2.5)).abs() < 1e-9);
+    assert!(!d.set_text("Höhe", "1"), "kein Höhenfeld beim Verschieben");
+}
+
+#[test]
+fn the_revolve_dialog_offers_the_axis_and_applies() {
+    use planora_feature::{SketchPlane, StandardPlane};
+    use planora_math::DVec2;
+    let mut s = AppState::new();
+    let sk = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(sk).unwrap();
+    let axis = {
+        let sketch = s.session_sketch_mut().unwrap().1;
+        sketch
+            .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(5.0, 10.0))
+            .unwrap();
+        let a = sketch.add_point(0.0, -2.0).unwrap();
+        let b = sketch.add_point(0.0, 12.0).unwrap();
+        let axis = sketch.add_line(a, b).unwrap();
+        sketch.set_construction(axis, true).unwrap();
+        axis
+    };
+    s.close_sketch();
+    let r = s.revolve_sketch(sk, 0, axis).unwrap();
+    let mut d = FeatureDialog::new(&s, r).expect("Dialog für Rotation");
+    assert!(!d.set_text("Höhe", "1"), "keine Zahlenfelder");
+    let ctx = egui::Context::default();
+    ctx.set_fonts(planora_app::fonts::definitions());
+    let mut text = String::new();
+    for _ in 0..3 {
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            d.show(ui.ctx(), &mut s);
+        });
+        text = planora_app::testing::collect_texts(&out);
+        out.drop_without_applying_deltas();
+    }
+    for must in ["Skizze 1", "Profil 1", "Drehachse", "Konstruktionslinie 1"] {
+        assert!(text.contains(must), "„{must}“ fehlt:\n{text}");
+    }
+    d.apply(&mut s).unwrap();
+    assert_eq!(s.document.feature(r).unwrap().status, FeatureStatus::Ok);
+    assert_eq!(s.bodies.len(), 1);
+}

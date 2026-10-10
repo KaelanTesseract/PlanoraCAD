@@ -146,18 +146,6 @@ fn every_tool_and_a_selection_can_be_drawn() {
     }
 }
 
-/// Alle Texte der Ausgabe (auch in verschachtelten Formen).
-fn collect_text(shape: &egui::epaint::Shape, seen: &mut String) {
-    match shape {
-        egui::epaint::Shape::Text(t) => {
-            seen.push_str(t.galley.text());
-            seen.push('\n');
-        }
-        egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| collect_text(s, seen)),
-        _ => {}
-    }
-}
-
 #[test]
 fn texts_in_the_panel_are_german() {
     let ctx = context();
@@ -169,9 +157,7 @@ fn texts_in_the_panel_are_german() {
             sketch_panel::show(ui.ctx(), &mut s);
         });
         if frame == 2 {
-            for clipped in &out.shapes {
-                collect_text(&clipped.shape, &mut seen);
-            }
+            seen.push_str(&planora_app::testing::collect_texts(&out));
         }
         out.drop_without_applying_deltas();
     }
@@ -295,9 +281,7 @@ fn the_tree_lists_sketches_and_marks_the_open_one() {
         .unwrap();
     let mut seen = String::new();
     let out = ctx.run_ui(egui::RawInput::default(), |ui| browser::show(ui, &mut s));
-    for clipped in &out.shapes {
-        collect_text(&clipped.shape, &mut seen);
-    }
+    seen.push_str(&planora_app::testing::collect_texts(&out));
     out.drop_without_applying_deltas();
     // Seit dem Feature-Baum (Task 9) gibt es keine eigenen Überschriften „Körper“/„Skizzen“
     // mehr; Skizzen stehen als Zeilen der Zeitleiste im Baum.

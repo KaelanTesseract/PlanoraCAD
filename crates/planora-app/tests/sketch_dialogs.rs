@@ -42,18 +42,6 @@ fn state_with_sketch() -> (AppState, FeatureId) {
     (s, i)
 }
 
-/// Alle Texte der Ausgabe (auch in verschachtelten Formen).
-fn collect_text(shape: &egui::epaint::Shape, seen: &mut String) {
-    match shape {
-        egui::epaint::Shape::Text(t) => {
-            seen.push_str(t.galley.text());
-            seen.push('\n');
-        }
-        egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| collect_text(s, seen)),
-        _ => {}
-    }
-}
-
 #[test]
 fn the_extrude_dialog_creates_a_body_and_stays_open_on_errors() {
     let (mut s, id) = state_with_sketch();
@@ -91,9 +79,7 @@ fn the_dialogs_draw_and_list_profiles_and_rejections() {
         let out = ctx.run_ui(egui::RawInput::default(), |ui| {
             assert!(dialog.show(ui.ctx(), &mut s), "bleibt ohne Klick offen");
         });
-        for c in &out.shapes {
-            collect_text(&c.shape, &mut text);
-        }
+        text.push_str(&planora_app::testing::collect_texts(&out));
         out.drop_without_applying_deltas();
     }
     assert!(text.contains("Profil 1"), "{text}");

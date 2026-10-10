@@ -428,7 +428,7 @@ impl AppState {
         }
         // Beim Übernehmen des Entwurfs kann sich die Körperliste ändern (etwa wenn eine
         // Extrusion der Skizze danach fehlschlägt): den Körper über seinen Verweis neu suchen.
-        self.close_sketch();
+        self.try_close_sketch()?;
         let Some((index, (lo, hi))) = self.body_index(r).map(|i| (i, self.bodies[i].bounds)) else {
             return self
                 .fail("Der Körper ist nach dem Beenden der Skizze nicht mehr sichtbar".into());
@@ -575,19 +575,19 @@ impl AppState {
                     .into(),
             );
         }
-        self.close_sketch();
-        Ok(())
+        self.try_close_sketch()
     }
 
     /// Vor dem Löschen von `id`: Eine offene Skizze, die dabei mitgelöscht wird, wird verworfen
     /// (siehe [`AppState::forget_deleted`]); jede andere wird beendet und übernommen.
-    pub(crate) fn end_sketch_before_delete(&mut self, id: FeatureId) {
+    /// Bleibt die Skizze offen (Entwurf abgelehnt), liefert es den Fehler.
+    pub(crate) fn end_sketch_before_delete(&mut self, id: FeatureId) -> Result<(), String> {
         if let Some(open) = self.open_sketch_id()
             && (open == id || self.document.dependents(id).contains(&open))
         {
-            return;
+            return Ok(());
         }
-        self.close_sketch();
+        self.try_close_sketch()
     }
 
     /// Löscht ein Feature, von dem nichts abhängt. Hängen andere Features davon ab, bleibt
@@ -595,7 +595,7 @@ impl AppState {
     /// wird vorher beendet, außer sie selbst wird gelöscht.
     pub fn delete_feature(&mut self, id: FeatureId) -> Result<(), String> {
         if self.document.feature(id).is_some() {
-            self.end_sketch_before_delete(id);
+            self.end_sketch_before_delete(id)?;
         }
         match self.document.delete(id) {
             Ok(()) => {
@@ -629,7 +629,7 @@ impl AppState {
         id: FeatureId,
     ) -> Result<Vec<FeatureId>, String> {
         if self.document.feature(id).is_some() {
-            self.end_sketch_before_delete(id);
+            self.end_sketch_before_delete(id)?;
         }
         match self.document.delete_with_dependents(id) {
             Ok(removed) => {
@@ -650,7 +650,7 @@ impl AppState {
             return self.fail("Körper nicht gefunden".into());
         };
         // Beim Übernehmen des Entwurfs kann sich die Körperliste ändern.
-        self.close_sketch();
+        self.try_close_sketch()?;
         let Some(id) = self.body_index(r).and_then(|i| self.naming_feature(i)) else {
             return self.fail("Körper nicht gefunden".into());
         };
@@ -888,7 +888,8 @@ impl AppState {
         }
         let switching = self.sketch_session.is_some();
         if switching {
-            self.commit_draft();
+            // Bleibt die alte Skizze offen (Entwurf abgelehnt), wird nicht gewechselt.
+            self.commit_draft()?;
         }
         let Some(f) = self.document.feature(id) else {
             return self.fail("Skizze nicht gefunden".into());
@@ -961,14 +962,18 @@ impl AppState {
     /// bleibt die der aktuellen Definition, im Skizzen-Modus lässt sie sich nicht ändern) und beendet
     /// die Sitzung, ohne die Kamera anzufassen. Ein unveränderter Entwurf löst keine
     /// Neuberechnung aus.
-    fn commit_draft(&mut self) {
-        let (Some(se), Some(mut draft)) = (self.sketch_session.take(), self.sketch_draft.take())
+    ///
+    /// Lehnt das Dokument den Entwurf ab, bleiben Sitzung und Entwurf offen; die Meldung steht
+    /// in `message` und im Skizzenfenster.
+    fn commit_draft(&mut self) -> Result<(), String> {
+        let (Some(mut se), Some(mut draft)) =
+            (self.sketch_session.take(), self.sketch_draft.take())
         else {
-            return;
+            return Ok(());
         };
         let id = se.sketch;
         let Some(FeatureKind::Sketch(def)) = self.document.feature(id).map(|f| &f.kind) else {
-            return;
+            return Ok(());
         };
         draft.plane = def.plane.clone();
         let unchanged = draft.copies == def.copies
@@ -977,32 +982,46 @@ impl AppState {
                 .sketch_of(id)
                 .is_some_and(|sk| sk.revision() == draft.sketch.revision());
         if unchanged {
-            return;
+            return Ok(());
         }
-        match self
-            .document
-            .update(id, |k| *k = FeatureKind::Sketch(draft))
-        {
+        let kind = FeatureKind::Sketch(draft.clone());
+        match self.document.update(id, |k| *k = kind) {
             Ok(()) => {
                 self.refresh();
                 if let Some(FeatureStatus::Error(e)) = self.document.feature(id).map(|f| &f.status)
                 {
                     self.message = Some(e.clone());
                 }
+                Ok(())
             }
-            Err(e) => self.message = Some(format!("Die Skizze ließ sich nicht übernehmen: {e}")),
+            Err(e) => {
+                let message = format!("Die Skizze ließ sich nicht übernehmen: {e}");
+                se.message = Some(message.clone());
+                self.sketch_session = Some(se);
+                self.sketch_draft = Some(draft);
+                self.fail(message)
+            }
         }
     }
 
     /// Beendet den Skizzen-Modus: schreibt den Entwurf zurück, berechnet neu und stellt die
     /// vorherige Kamera wieder her.
+    /// Lässt sich der Entwurf nicht übernehmen, bleibt die Skizze offen (Meldung in
+    /// `message`); siehe [`AppState::try_close_sketch`].
     pub fn close_sketch(&mut self) {
+        let _ = self.try_close_sketch();
+    }
+
+    /// Wie [`AppState::close_sketch`], mit Ergebnis: Ein Fehler bedeutet, dass die Skizze
+    /// offen geblieben ist.
+    pub fn try_close_sketch(&mut self) -> Result<(), String> {
         if self.sketch_session.is_none() {
             self.sketch_draft = None;
-            return;
+            return Ok(());
         }
-        self.commit_draft();
+        self.commit_draft()?;
         self.restore_camera();
+        Ok(())
     }
 
     /// Verwirft Sitzung und Entwurf (das Skizzen-Feature gibt es nicht mehr).

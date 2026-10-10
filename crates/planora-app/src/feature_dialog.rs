@@ -19,7 +19,14 @@ pub struct FeatureDialog {
     /// Zahlenfelder in der Reihenfolge von [`numbers_of`]: Bezeichnung und eingegebener Text.
     numbers: Vec<(&'static str, String)>,
     error: Option<String>,
+    /// Stand des Features beim Öffnen (siehe [`planora_feature::Feature::version`]).
+    version: u64,
 }
+
+/// Meldung, wenn sich das Feature geändert hat, seit der Dialog geöffnet wurde.
+pub const STALE_MESSAGE: &str = "Das Feature wurde inzwischen geändert; der Dialog zeigt jetzt \
+                                 den aktuellen Stand. Bitte die Werte prüfen und erneut \
+                                 übernehmen.";
 
 /// Die Zahlen einer Feature-Art mit ihren Bezeichnungen (Millimeter).
 fn numbers_of(kind: &FeatureKind) -> Vec<(&'static str, f64)> {
@@ -126,7 +133,20 @@ impl FeatureDialog {
                 .map(|(l, v)| (l, number_text(v)))
                 .collect(),
             error: None,
+            version: f.version(),
         })
+    }
+
+    /// Lädt den aktuellen Stand des Features neu (Eingaben gehen verloren); `false`, wenn es
+    /// das Feature nicht mehr gibt.
+    pub fn reload(&mut self, state: &AppState) -> bool {
+        match FeatureDialog::new(state, self.id) {
+            Some(d) => {
+                *self = d;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Das bearbeitete Feature.
@@ -187,12 +207,17 @@ impl FeatureDialog {
     /// „Übernehmen“: ändert das Feature im Dokument und berechnet neu. Ungültige Eingaben und
     /// abgelehnte Änderungen liefern einen Fehler (Dokument unverändert). Lässt sich das
     /// Feature danach nicht berechnen, steht der Grund in `message` und im Baum; das gilt
-    /// trotzdem als übernommen. Eine offene Skizze wird vorher beendet.
+    /// trotzdem als übernommen. Eine offene Skizze wird vorher beendet. Hat sich das Feature
+    /// seit dem Öffnen geändert, wird nichts überschrieben ([`STALE_MESSAGE`]).
     pub fn apply(&self, state: &mut AppState) -> Result<(), String> {
         let kind = match self.edited_kind() {
             Ok(k) => k,
             Err(e) => return state.fail(e),
         };
+        let current = state.document.feature(self.id).map(|f| f.version());
+        if current != Some(self.version) {
+            return state.fail(STALE_MESSAGE.into());
+        }
         state.end_sketch_for(None)?;
         state.message = None;
         if let Err(e) = state.document.update(self.id, |k| *k = kind) {
@@ -250,6 +275,9 @@ impl FeatureDialog {
             return match self.apply(state) {
                 Ok(()) => false,
                 Err(e) => {
+                    if e == STALE_MESSAGE && !self.reload(state) {
+                        return false;
+                    }
                     self.error = Some(e);
                     true
                 }

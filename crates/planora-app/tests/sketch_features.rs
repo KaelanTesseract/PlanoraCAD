@@ -317,3 +317,40 @@ fn deleting_an_open_sketch_feature_closes_the_session() {
     assert!(s.sketch_session.is_none() && s.sketch_draft.is_none());
     assert!(s.document.features().is_empty());
 }
+
+#[test]
+fn a_rejected_draft_keeps_the_sketch_open() {
+    // Eine Kantenkopie im Entwurf, die auf ein späteres Feature verweist, lehnt das Dokument
+    // ab (Verweis nach vorn): Die Skizze bleibt offen, der Entwurf erhalten.
+    let mut s = AppState::new();
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.create_box(DVec3::splat(4.0)).unwrap(); // entsteht nach der Skizze
+    s.open_sketch(id).unwrap();
+    let solid = s.bodies[0].solid.clone();
+    let edge = solid
+        .edges
+        .iter()
+        .find_map(|(e, _)| planora_feature::EdgeRef::from_edge(&solid, e, &s.kernel.tolerance).ok())
+        .expect("Kantenverweis");
+    let curve = {
+        let sk = s.session_sketch_mut().unwrap().1;
+        let a = sk.add_point(0.0, 0.0).unwrap();
+        let b = sk.add_point(1.0, 0.0).unwrap();
+        sk.add_line(a, b).unwrap()
+    };
+    s.sketch_draft
+        .as_mut()
+        .unwrap()
+        .copies
+        .push(planora_feature::EdgeCopy { curve, edge });
+    let e = s.try_close_sketch().unwrap_err();
+    assert!(e.contains("nicht übernehmen"), "{e}");
+    assert_eq!(s.open_sketch_id(), Some(id), "Skizze bleibt offen");
+    assert_eq!(s.sketch_draft.as_ref().unwrap().copies.len(), 1);
+    assert_eq!(s.message.as_deref(), Some(e.as_str()));
+    // Auch Dokument-Änderungen von außen werden dann abgelehnt.
+    assert!(s.move_body(0, DVec3::X).is_err());
+    assert_eq!(s.document.features().len(), 2);
+}

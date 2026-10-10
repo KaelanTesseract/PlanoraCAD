@@ -192,6 +192,14 @@ pub struct Feature {
     pub(crate) failed: Option<(Vec<u64>, String)>,
 }
 
+impl Feature {
+    /// Stand der Parameter (und der Unterdrückung); ändert sich bei jeder solchen Änderung.
+    /// Dialoge erkennen daran, dass ihre Kopie veraltet ist.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+}
+
 /// Geordnete Liste der Features mit Rückrollmarker.
 #[derive(Clone, Debug)]
 pub struct Document {

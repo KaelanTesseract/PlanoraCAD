@@ -118,9 +118,29 @@ pub fn delete_plan(state: &AppState, id: FeatureId) -> DeletePlan {
 }
 
 /// Führt einen Löschplan aus (das Feature samt Folgen) und schließt die Rückfrage.
+///
+/// Die Rückfrage kann veraltet sein (etwa weil inzwischen eine Skizze eine Kante des Features
+/// kopiert hat). Deshalb wird eine offene Skizze erst beendet und der Plan neu berechnet:
+/// Weichen die Folgen vom gezeigten Plan ab, wird nichts gelöscht und die Rückfrage zeigt die
+/// neue Liste.
 pub fn apply_delete(state: &mut AppState, plan: &DeletePlan) -> Result<(), String> {
-    state.pending_delete = None;
     state.message = None;
+    if state.document.feature(plan.target).is_none() {
+        state.pending_delete = None;
+        return state.fail("Das Feature gibt es nicht mehr".into());
+    }
+    if let Err(e) = state.end_sketch_before_delete(plan.target) {
+        state.pending_delete = None;
+        return Err(e);
+    }
+    let current = delete_plan(state, plan.target);
+    if current.dependents != plan.dependents || current.note != plan.note {
+        state.pending_delete = Some(current);
+        return state.fail(
+            "Die Folgen des Löschens haben sich geändert; bitte die neue Liste prüfen".into(),
+        );
+    }
+    state.pending_delete = None;
     state
         .delete_feature_with_dependents(plan.target)
         .map(|_| ())
@@ -134,7 +154,9 @@ pub fn request_delete(state: &mut AppState, id: FeatureId) {
         return;
     }
     state.message = None;
-    state.end_sketch_before_delete(id);
+    if state.end_sketch_before_delete(id).is_err() {
+        return;
+    }
     let plan = delete_plan(state, id);
     if plan.needs_confirmation() {
         state.pending_delete = Some(plan);
