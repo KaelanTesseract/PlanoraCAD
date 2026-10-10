@@ -98,6 +98,8 @@ fn invalid_data_is_rejected_without_panic() {
     });
 }
 
+type MismatchCase = Box<dyn Fn(CurveId, CurveId, CurveId) -> ConstraintKind>;
+
 fn first_line_and_circle(d: &SketchData) -> (CurveId, CurveId, CurveId) {
     let idx = |f: &dyn Fn(&CurveKind) -> bool| {
         CurveId::from_index(d.curves.iter().position(|c| c.alive && f(&c.kind)).unwrap())
@@ -124,7 +126,7 @@ fn push_constraint(d: &mut SketchData, kind: ConstraintKind, alive: bool) {
 #[test]
 fn type_mismatched_constraints_are_rejected_alive_or_dead() {
     for alive in [true, false] {
-        let mut cases: Vec<Box<dyn Fn(CurveId, CurveId, CurveId) -> ConstraintKind>> = vec![
+        let mut cases: Vec<MismatchCase> = vec![
             Box::new(|l, _, _| ConstraintKind::Radius(l, 3.0)),
             Box::new(|l, _, _| ConstraintKind::Diameter(l, 3.0)),
             Box::new(|_, c, _| ConstraintKind::Horizontal(LineOrPoints::Line(c))),
