@@ -2,6 +2,7 @@
 
 pub mod constraint;
 pub(crate) mod curves;
+pub mod data;
 /// Interne Hilfe des Solvers (Dual-Zahlen); nur für die Tests öffentlich.
 #[doc(hidden)]
 pub mod dual;
@@ -17,6 +18,7 @@ pub mod solid;
 pub mod solver;
 
 pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, LineOrPoints};
+pub use data::{ConstraintRecord, CurveRecord, PointRecord, SketchData};
 pub use error::SketchError;
 pub use helpers::{RectIds, plane_of_face};
 pub use model::{CurveData, CurveId, CurveKind, PointData, PointId, Sketch};
