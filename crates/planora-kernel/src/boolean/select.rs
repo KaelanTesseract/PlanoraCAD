@@ -6,6 +6,7 @@ use super::seg::{Seg, reverse_loop};
 use super::split::Region;
 use super::uv::FaceGeom;
 use crate::geometry::{Surface, UvRect};
+use crate::topology::FaceTag;
 
 /// Herkunft eines Flächenstücks: Körper A oder Körper B.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +23,8 @@ pub struct Piece {
     pub domain: Option<UvRect>,
     pub outer: Vec<Seg>,
     pub holes: Vec<Vec<Seg>>,
+    /// Marke der Quellfläche (auch bei umgedrehten Stücken unverändert).
+    pub tag: Option<FaceTag>,
 }
 
 /// Auswahltabelle (siehe Spec §6). Bündige Stücke werden nur von Körper A übernommen.
@@ -73,5 +76,6 @@ pub fn select_piece(
         domain: geom.domain,
         outer,
         holes,
+        tag: geom.tag.clone(),
     })
 }

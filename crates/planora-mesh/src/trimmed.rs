@@ -393,6 +393,7 @@ mod tests {
             same_sense: true,
             domain: None,
             loops: Vec::new(),
+            tag: None,
         }
     }
 

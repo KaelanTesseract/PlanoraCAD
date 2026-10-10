@@ -13,7 +13,7 @@ pub mod topology;
 mod transform;
 pub mod validate;
 
-pub use boolean::{BoolOp, BooleanError};
+pub use boolean::{BoolOp, BooleanError, edge_probe_point, face_probe_point};
 pub use error::KernelError;
 pub use extrude::extrude;
 pub use geometry::{Curve, CurveKind, Surface, SurfaceKind, UvRect};
