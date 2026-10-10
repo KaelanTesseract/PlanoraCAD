@@ -7,6 +7,7 @@ pub mod model;
 mod ops;
 pub mod recompute;
 pub mod refs;
+mod snapshot;
 
 pub use compute::MAX_COORD_MM;
 pub use error::FeatureError;
@@ -16,3 +17,4 @@ pub use model::{
 };
 pub use recompute::{RecomputeReport, VisibleBody};
 pub use refs::{EdgeRef, FaceRef, ResolvedEdge, ResolvedFace, resolve_edge, resolve_face};
+pub use snapshot::{Snapshot, SnapshotFeature};

@@ -59,6 +59,7 @@ impl Document {
             },
         );
         self.marker += 1;
+        self.edits += 1;
         self.recompute();
         Ok(id)
     }
@@ -84,6 +85,7 @@ impl Document {
         let f = &mut self.features[idx];
         f.suppressed = suppressed;
         f.version = version;
+        self.edits += 1;
         Ok(self.recompute())
     }
 
@@ -95,7 +97,10 @@ impl Document {
                 self.features.len()
             )));
         }
-        self.marker = n;
+        if n != self.marker {
+            self.marker = n;
+            self.edits += 1;
+        }
         self.recompute();
         Ok(())
     }
