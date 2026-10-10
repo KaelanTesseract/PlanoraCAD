@@ -164,12 +164,13 @@ impl SketchSession {
         }
     }
 
-    /// Wechselt das Werkzeug; ein laufendes Werkzeug wird abgebrochen.
-    pub fn set_tool(&mut self, tool: Tool) {
+    /// Wechselt das Werkzeug; ein laufendes Werkzeug wird abgebrochen, ein laufendes Ziehen
+    /// wie mit [`end_drag`](Self::end_drag) beendet.
+    pub fn set_tool(&mut self, sk: &mut Sketch, tool: Tool) {
+        self.end_drag(sk);
         self.tool = tool;
         self.pending.clear();
         self.pending_pos.clear();
-        self.dragging = None;
     }
 
     /// Fang an der Stelle `at`: Punkte vor Kurven.
@@ -570,11 +571,13 @@ impl SketchSession {
         })
     }
 
-    /// Bricht das laufende Werkzeug ab; im Auswahlwerkzeug wird die Auswahl geleert.
-    pub fn cancel(&mut self) {
+    /// Bricht das laufende Werkzeug ab; im Auswahlwerkzeug wird die Auswahl geleert. Ein
+    /// laufendes Ziehen wird wie mit [`end_drag`](Self::end_drag) beendet (der Punkt bleibt,
+    /// wo er ist).
+    pub fn cancel(&mut self, sk: &mut Sketch) {
+        self.end_drag(sk);
         self.pending.clear();
         self.pending_pos.clear();
-        self.dragging = None;
         if self.tool == Tool::Select {
             self.selection.clear();
         }

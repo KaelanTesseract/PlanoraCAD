@@ -243,7 +243,7 @@ fn contents(
     ui.horizontal_wrapped(|ui| {
         for (tool, label, _) in TOOLS {
             if ui.selectable_label(se.tool == tool, label).clicked() && se.tool != tool {
-                se.set_tool(tool);
+                se.set_tool(sk, tool);
             }
         }
     });

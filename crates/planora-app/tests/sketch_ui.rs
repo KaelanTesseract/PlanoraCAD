@@ -31,6 +31,12 @@ fn populated() -> AppState {
     s
 }
 
+/// Wechselt in der offenen Skizze das Werkzeug.
+fn set_tool(s: &mut AppState, tool: Tool) {
+    let se = s.sketch_session.as_mut().unwrap();
+    se.set_tool(&mut s.sketches[se.sketch], tool);
+}
+
 fn empty_sketch() -> AppState {
     let mut s = AppState::new();
     let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
@@ -118,8 +124,8 @@ fn every_tool_and_a_selection_can_be_drawn() {
         Tool::ProjectEdge,
     ] {
         {
+            set_tool(&mut s, tool);
             let se = s.sketch_session.as_mut().unwrap();
-            se.set_tool(tool);
             se.selection = vec![Item::Curve(first_curve)];
             se.cursor = Some(DVec2::new(10.0, 10.0));
         }
@@ -184,7 +190,7 @@ fn numbers_are_shown_with_a_comma_and_read_with_comma_or_dot() {
 fn a_click_in_the_overlay_places_a_point_at_the_cursor() {
     let ctx = context();
     let mut s = empty_sketch();
-    s.sketch_session.as_mut().unwrap().set_tool(Tool::Point);
+    set_tool(&mut s, Tool::Point);
     play_overlay(
         &ctx,
         &mut s,
@@ -346,7 +352,7 @@ fn click_at(x: f32, y: f32) -> Vec<Vec<egui::Event>> {
 fn two_fast_clicks_at_different_places_are_two_clicks() {
     let ctx = context();
     let mut s = empty_sketch();
-    s.sketch_session.as_mut().unwrap().set_tool(Tool::Point);
+    set_tool(&mut s, Tool::Point);
     // Aufeinanderfolgende Frames liegen weit unter der Doppelklickzeit von egui.
     let mut frames = click_at(300.0, 300.0);
     frames.extend(click_at(500.0, 300.0));
@@ -363,7 +369,7 @@ fn two_fast_clicks_at_different_places_are_two_clicks() {
 fn a_real_double_click_still_finishes_the_tool() {
     let ctx = context();
     let mut s = empty_sketch();
-    s.sketch_session.as_mut().unwrap().set_tool(Tool::Spline);
+    set_tool(&mut s, Tool::Spline);
     let mut frames = click_at(300.0, 300.0);
     frames.push(vec![]);
     frames.extend(click_at(500.0, 250.0));
@@ -382,8 +388,8 @@ fn with_line_and_pending() -> AppState {
     let a = sk.add_point(-10.0, -10.0).unwrap();
     let b = sk.add_point(10.0, -10.0).unwrap();
     let line = sk.add_line(a, b).unwrap();
+    set_tool(&mut s, Tool::Line);
     let se = s.sketch_session.as_mut().unwrap();
-    se.set_tool(Tool::Line);
     se.pending = vec![a];
     se.selection = vec![Item::Curve(line)];
     s
@@ -424,8 +430,8 @@ fn enter_finishes_a_spline() {
     let sk = &mut s.sketches[0];
     let a = sk.add_point(0.0, 0.0).unwrap();
     let b = sk.add_point(10.0, 5.0).unwrap();
+    set_tool(&mut s, Tool::Spline);
     let se = s.sketch_session.as_mut().unwrap();
-    se.set_tool(Tool::Spline);
     se.pending = vec![a, b];
     press_key_in_overlay(&mut s, egui::Key::Enter, false);
     assert_eq!(s.sketches[0].curves().count(), 1);

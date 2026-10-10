@@ -582,7 +582,7 @@ fn handle_input(
         }
     }
     if response.clicked_by(PointerButton::Secondary) {
-        se.cancel();
+        se.cancel(sk);
     }
 
     // Tasten (nicht, solange ein Eingabefeld die Tastatur hat)
@@ -595,7 +595,7 @@ fn handle_input(
             )
         });
         if esc {
-            se.cancel();
+            se.cancel(sk);
         }
         if enter {
             let _ = se.finish_tool(sk);

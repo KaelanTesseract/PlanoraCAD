@@ -21,7 +21,7 @@ fn click(se: &mut SketchSession, sk: &mut Sketch, x: f64, y: f64) {
 #[test]
 fn the_line_tool_draws_a_chain_and_adds_horizontal_and_vertical() {
     let (mut sk, mut se) = setup();
-    se.set_tool(Tool::Line);
+    se.set_tool(&mut sk, Tool::Line);
     click(&mut se, &mut sk, 0.0, 0.0);
     click(&mut se, &mut sk, 10.0, 0.1);
     assert_eq!(sk.curves().count(), 1);
@@ -47,7 +47,7 @@ fn the_line_tool_draws_a_chain_and_adds_horizontal_and_vertical() {
 fn auto_constraints_can_be_switched_off() {
     let (mut sk, mut se) = setup();
     se.auto_constrain = false;
-    se.set_tool(Tool::Line);
+    se.set_tool(&mut sk, Tool::Line);
     click(&mut se, &mut sk, 0.0, 0.0);
     click(&mut se, &mut sk, 10.0, 0.1);
     assert_eq!(sk.constraints().count(), 0);
@@ -56,20 +56,20 @@ fn auto_constraints_can_be_switched_off() {
 #[test]
 fn rectangle_circle_and_arc_tools() {
     let (mut sk, mut se) = setup();
-    se.set_tool(Tool::Rectangle);
+    se.set_tool(&mut sk, Tool::Rectangle);
     click(&mut se, &mut sk, 0.0, 0.0);
     assert!(se.pending_pos.len() == 1);
     click(&mut se, &mut sk, 8.0, 5.0);
     assert_eq!((sk.curves().count(), sk.constraints().count()), (4, 4));
     assert!(se.pending_pos.is_empty());
 
-    se.set_tool(Tool::Circle);
+    se.set_tool(&mut sk, Tool::Circle);
     click(&mut se, &mut sk, 20.0, 20.0);
     click(&mut se, &mut sk, 23.0, 20.0);
     let circle = sk.curves().last().unwrap().0;
     assert!((sk.radius(circle).unwrap() - 3.0).abs() < 1e-9);
 
-    se.set_tool(Tool::Arc);
+    se.set_tool(&mut sk, Tool::Arc);
     click(&mut se, &mut sk, 40.0, 0.0);
     click(&mut se, &mut sk, 45.0, 0.0);
     click(&mut se, &mut sk, 40.0, 9.0);
@@ -91,7 +91,7 @@ fn a_point_clicked_on_a_curve_stays_on_it() {
     let a = sk.add_point(0.0, 0.0).unwrap();
     let b = sk.add_point(10.0, 0.0).unwrap();
     sk.add_line(a, b).unwrap();
-    se.set_tool(Tool::Point);
+    se.set_tool(&mut sk, Tool::Point);
     click(&mut se, &mut sk, 5.0, 0.3);
     assert_eq!(sk.points().count(), 3);
     assert_eq!(sk.constraints().count(), 1, "PointOnCurve");
@@ -104,7 +104,7 @@ fn selection_prefers_points_and_toggles_with_extend() {
     let a = sk.add_point(0.0, 0.0).unwrap();
     let b = sk.add_point(10.0, 0.0).unwrap();
     let l = sk.add_line(a, b).unwrap();
-    se.set_tool(Tool::Select);
+    se.set_tool(&mut sk, Tool::Select);
     click(&mut se, &mut sk, 0.2, 0.2);
     assert_eq!(se.selection, vec![Item::Point(a)]);
     se.click(&mut sk, DVec2::new(5.0, 0.1), R, true).unwrap();
@@ -126,7 +126,7 @@ fn dragging_moves_free_points_and_respects_constraints() {
     let b = sk.add_point(10.0, 0.0).unwrap();
     sk.add_line(a, b).unwrap();
     sk.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
-    se.set_tool(Tool::Select);
+    se.set_tool(&mut sk, Tool::Select);
     assert!(se.begin_drag(&mut sk, DVec2::new(10.1, 0.0), R));
     se.drag_to(&mut sk, DVec2::new(14.0, 3.0));
     se.end_drag(&mut sk);
@@ -205,7 +205,7 @@ fn contradicting_and_redundant_dimensions_are_handled() {
 #[test]
 fn delete_cascades_and_status_texts() {
     let (mut sk, mut se) = setup();
-    se.set_tool(Tool::Rectangle);
+    se.set_tool(&mut sk, Tool::Rectangle);
     click(&mut se, &mut sk, 0.0, 0.0);
     click(&mut se, &mut sk, 8.0, 5.0);
     let (text, sev) = se.status(&sk);
@@ -225,7 +225,7 @@ fn delete_cascades_and_status_texts() {
 #[test]
 fn ellipse_and_spline_tools() {
     let (mut sk, mut se) = setup();
-    se.set_tool(Tool::Ellipse);
+    se.set_tool(&mut sk, Tool::Ellipse);
     click(&mut se, &mut sk, 0.0, 0.0);
     click(&mut se, &mut sk, 6.0, 0.0);
     click(&mut se, &mut sk, 0.0, 2.0);
@@ -233,7 +233,7 @@ fn ellipse_and_spline_tools() {
         sk.curves().last().unwrap().1.kind,
         CurveKind::Ellipse { .. }
     ));
-    se.set_tool(Tool::Spline);
+    se.set_tool(&mut sk, Tool::Spline);
     click(&mut se, &mut sk, 20.0, 0.0);
     click(&mut se, &mut sk, 24.0, 5.0);
     click(&mut se, &mut sk, 28.0, 0.0);
@@ -242,7 +242,7 @@ fn ellipse_and_spline_tools() {
         sk.curves().last().unwrap().1.kind,
         CurveKind::Spline { .. }
     ));
-    se.set_tool(Tool::Spline);
+    se.set_tool(&mut sk, Tool::Spline);
     click(&mut se, &mut sk, 50.0, 50.0);
     assert!(se.finish_tool(&mut sk).is_err(), "ein Punkt reicht nicht");
 }
@@ -375,7 +375,7 @@ fn body_edges_can_be_copied_into_the_open_sketch() {
 #[test]
 fn failed_clicks_leave_sketch_and_session_unchanged() {
     let (mut sk, mut se) = setup();
-    se.set_tool(Tool::Circle);
+    se.set_tool(&mut sk, Tool::Circle);
     click(&mut se, &mut sk, 1.0, 1.0);
     let (points, vars, pending) = (sk.points().count(), sk.variable_count(), se.pending.clone());
     // zweiter Klick auf den Mittelpunkt: Radius null
@@ -385,7 +385,7 @@ fn failed_clicks_leave_sketch_and_session_unchanged() {
     assert_eq!(se.pending, pending, "das Werkzeug läuft weiter");
     assert_eq!(sk.curves().count(), 0);
 
-    se.set_tool(Tool::Line);
+    se.set_tool(&mut sk, Tool::Line);
     click(&mut se, &mut sk, 5.0, 5.0);
     let before = sk.variable_count();
     assert!(
@@ -494,7 +494,7 @@ fn a_tool_change_in_an_already_broken_sketch_warns() {
     let b = sk.add_point(5.0, 0.0).unwrap();
     sk.add_constraint(K::Distance(a, b, 10.0)).unwrap();
     sk.add_constraint(K::Distance(a, b, 20.0)).unwrap();
-    se.set_tool(Tool::Point);
+    se.set_tool(&mut sk, Tool::Point);
     click(&mut se, &mut sk, 30.0, 30.0);
     assert!(
         se.message.as_deref().unwrap_or("").contains("weiterhin"),
@@ -506,7 +506,7 @@ fn a_tool_change_in_an_already_broken_sketch_warns() {
 #[test]
 fn an_arc_ending_on_its_start_is_rejected() {
     let (mut sk, mut se) = setup();
-    se.set_tool(Tool::Arc);
+    se.set_tool(&mut sk, Tool::Arc);
     click(&mut se, &mut sk, 0.0, 0.0);
     click(&mut se, &mut sk, 5.0, 0.0);
     let pending = se.pending.clone();
@@ -649,7 +649,7 @@ fn the_end_of_a_drag_runs_the_full_diagnosis() {
     sk.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
     sk.add_constraint(K::Distance(a, b, 3.0)).unwrap();
     sk.add_constraint(K::Distance(a, b, 5.0)).unwrap();
-    se.set_tool(Tool::Select);
+    se.set_tool(&mut sk, Tool::Select);
     assert!(se.begin_drag(&mut sk, DVec2::new(4.0, 0.0), R));
     se.drag_to(&mut sk, DVec2::new(4.0, 2.0));
     let during = se.last_report.clone().unwrap();
@@ -668,12 +668,44 @@ fn the_end_of_a_drag_runs_the_full_diagnosis() {
 }
 
 #[test]
+fn switching_tools_or_cancelling_ends_a_drag_with_the_full_diagnosis() {
+    // Wie oben, das Ziehen endet aber durch Werkzeugwechsel bzw. Abbrechen statt durch
+    // `end_drag`: Auch dann holt ein volles Lösen die Ursache nach.
+    use planora_sketch::solver::SolveStatus;
+    for by_cancel in [false, true] {
+        let (mut sk, mut se) = setup();
+        let a = sk.add_point(0.0, 0.0).unwrap();
+        let b = sk.add_point(4.0, 0.0).unwrap();
+        sk.add_line(a, b).unwrap();
+        sk.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+        sk.add_constraint(K::Distance(a, b, 3.0)).unwrap();
+        sk.add_constraint(K::Distance(a, b, 5.0)).unwrap();
+        se.set_tool(&mut sk, Tool::Select);
+        assert!(se.begin_drag(&mut sk, DVec2::new(4.0, 0.0), R));
+        se.drag_to(&mut sk, DVec2::new(4.0, 2.0));
+        assert_eq!(
+            se.last_report.as_ref().unwrap().status,
+            SolveStatus::NotConverged
+        );
+        if by_cancel {
+            se.cancel(&mut sk);
+        } else {
+            se.set_tool(&mut sk, Tool::Line);
+        }
+        assert!(se.dragging.is_none());
+        let after = se.last_report.clone().unwrap();
+        assert_eq!(after.status, SolveStatus::Conflicting, "{after:?}");
+        assert_eq!(after.conflicting.len(), 2, "{after:?}");
+    }
+}
+
+#[test]
 fn a_patterned_rectangle_shows_no_redundant_constraints_in_the_status() {
     let (mut sk, mut se) = setup();
-    se.set_tool(Tool::Rectangle);
+    se.set_tool(&mut sk, Tool::Rectangle);
     click(&mut se, &mut sk, 0.0, 0.0);
     click(&mut se, &mut sk, 10.0, 5.0);
-    se.set_tool(Tool::Select);
+    se.set_tool(&mut sk, Tool::Select);
     se.selection = sk.curves().map(|(id, _)| Item::Curve(id)).collect();
     se.pattern_selection(&mut sk, DVec2::new(15.0, 0.0), 3)
         .unwrap();
@@ -693,13 +725,13 @@ fn a_patterned_rectangle_shows_no_redundant_constraints_in_the_status() {
 #[test]
 fn a_hole_tangent_to_an_edge_explains_why_it_is_not_usable() {
     let (mut sk, mut se) = setup();
-    se.set_tool(Tool::Rectangle);
+    se.set_tool(&mut sk, Tool::Rectangle);
     click(&mut se, &mut sk, 0.0, 0.0);
     click(&mut se, &mut sk, 20.0, 10.0);
-    se.set_tool(Tool::Circle);
+    se.set_tool(&mut sk, Tool::Circle);
     click(&mut se, &mut sk, 10.0, 4.0);
     click(&mut se, &mut sk, 13.0, 4.0);
-    se.set_tool(Tool::Select);
+    se.set_tool(&mut sk, Tool::Select);
     let bottom = sk
         .curves()
         .find(|(_, c)| matches!(c.kind, CurveKind::Line { .. }))
