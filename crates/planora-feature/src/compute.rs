@@ -8,6 +8,12 @@ use planora_math::{DMat4, DVec3};
 use planora_mesh::{TessellationOptions, boolean_volume_plausible, mass_properties, tessellate};
 use planora_sketch::{Sketch, extrude_profile, plane_of_face, revolve_profile};
 
+/// Größter Betrag einer Koordinate oder eines Maßes in mm (wie
+/// [`planora_sketch::model::MAX_COORD`]): Darüber ist der Abstand benachbarter `f64`-Werte größer
+/// als die Toleranz, Toleranzvergleiche würden bedeutungslos und die Tessellierung bricht
+/// zusammen. Maße, Lagen, Verschiebungen und alle Ergebniskörper werden dagegen geprüft.
+pub const MAX_COORD_MM: f64 = planora_sketch::model::MAX_COORD;
+
 /// Spielraum der Volumenprobe relativ zur Summe der Eingangsvolumen (wie in der App).
 const VOLUME_REL_TOL: f64 = 0.02;
 
@@ -37,6 +43,98 @@ impl Computed {
 
 /// Berechnet das Feature an Position `idx` aus den Körpern `visible` (sichtbar vor ihm).
 pub(crate) fn compute_feature(
+    doc: &Document,
+    idx: usize,
+    visible: &[BodyRef],
+) -> Result<Computed, FeatureError> {
+    check_parameters(&doc.features[idx].kind)?;
+    let computed = compute_unchecked(doc, idx, visible)?;
+    for body in &computed.bodies {
+        check_extent(body)?;
+    }
+    Ok(computed)
+}
+
+/// Endlich und betragsmäßig höchstens [`MAX_COORD_MM`]?
+fn in_range(v: f64) -> bool {
+    v.is_finite() && v.abs() <= MAX_COORD_MM
+}
+
+/// Prüft die Zahlen eines Features gegen [`MAX_COORD_MM`], bevor der Kernel rechnet. Die
+/// Ausdehnung eines Grundkörpers (Lage plus Maß) muss ebenfalls im Bereich liegen.
+fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
+    let out = |what: &str| Err(FeatureError::OutOfRange(what.to_string()));
+    let place = |origin: DVec3, extent: f64| {
+        origin
+            .to_array()
+            .iter()
+            .all(|c| in_range(*c) && in_range(c.abs() + extent))
+    };
+    match kind {
+        FeatureKind::Box { size, origin } => {
+            if !size.to_array().iter().all(|v| in_range(*v)) {
+                return out("Die Größe des Quaders");
+            }
+            if !place(*origin, size.abs().max_element()) {
+                return out("Der Quader");
+            }
+        }
+        FeatureKind::Cylinder {
+            radius,
+            height,
+            origin,
+        }
+        | FeatureKind::Cone {
+            radius,
+            height,
+            origin,
+        } => {
+            if !(in_range(*radius) && in_range(*height)) {
+                return out("Radius oder Höhe");
+            }
+            if !place(*origin, radius.abs().max(height.abs())) {
+                return out("Der Körper");
+            }
+        }
+        FeatureKind::Sphere { radius, origin } => {
+            if !in_range(*radius) {
+                return out("Der Radius");
+            }
+            if !place(*origin, radius.abs()) {
+                return out("Die Kugel");
+            }
+        }
+        FeatureKind::Extrude { height, .. } => {
+            if !in_range(*height) {
+                return out("Die Höhe der Extrusion");
+            }
+        }
+        FeatureKind::Move { delta, .. } => {
+            if !delta.to_array().iter().all(|v| in_range(*v)) {
+                return out("Die Verschiebung");
+            }
+        }
+        FeatureKind::Sketch(_) | FeatureKind::Revolve { .. } | FeatureKind::Boolean { .. } => {}
+    }
+    Ok(())
+}
+
+/// Alle Eckpunkte des Ergebniskörpers liegen im Bereich ±[`MAX_COORD_MM`] (deckt auch
+/// verschobene und aus Skizzen erzeugte Körper ab).
+fn check_extent(solid: &Solid) -> Result<(), FeatureError> {
+    if solid
+        .vertices
+        .iter()
+        .all(|(_, v)| v.point.to_array().iter().all(|c| in_range(*c)))
+    {
+        Ok(())
+    } else {
+        Err(FeatureError::OutOfRange("Der Körper".into()))
+    }
+}
+
+/// Berechnung ohne die Bereichsprüfung (siehe [`compute_feature`]).
+fn compute_unchecked(
     doc: &Document,
     idx: usize,
     visible: &[BodyRef],
@@ -237,6 +335,85 @@ fn compute_sketch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn huge_numbers_become_an_error_status_instead_of_a_body() {
+        use crate::model::FeatureStatus;
+        let mut doc = Document::new();
+        let a = doc
+            .add_feature(
+                "A",
+                FeatureKind::Box {
+                    size: DVec3::splat(1e300),
+                    origin: DVec3::new(1e300, 0.0, 0.0),
+                },
+            )
+            .unwrap();
+        match &doc.feature(a).unwrap().status {
+            FeatureStatus::Error(e) => assert!(e.contains("außerhalb"), "{e}"),
+            s => panic!("{s:?}"),
+        }
+        assert!(doc.visible_bodies().is_empty());
+        // Lage allein zu groß, Maß klein
+        let b = doc
+            .add_feature(
+                "B",
+                FeatureKind::Sphere {
+                    radius: 1.0,
+                    origin: DVec3::new(0.0, 2e9, 0.0),
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            doc.feature(b).unwrap().status,
+            FeatureStatus::Error(_)
+        ));
+        // Verschieben über die Grenze
+        let c = doc
+            .add_feature(
+                "C",
+                FeatureKind::Box {
+                    size: DVec3::ONE,
+                    origin: DVec3::ZERO,
+                },
+            )
+            .unwrap();
+        let body = BodyRef {
+            feature: c,
+            index: 0,
+        };
+        let m = doc
+            .add_feature(
+                "M",
+                FeatureKind::Move {
+                    body,
+                    delta: DVec3::new(MAX_COORD_MM, 0.0, 0.0),
+                },
+            )
+            .unwrap();
+        assert!(
+            matches!(doc.feature(m).unwrap().status, FeatureStatus::Error(_)),
+            "Ecke bei 1e9 + 1"
+        );
+        doc.update(m, |k| {
+            if let FeatureKind::Move { delta, .. } = k {
+                *delta = DVec3::new(f64::MAX, 0.0, 0.0);
+            }
+        })
+        .unwrap();
+        assert!(matches!(
+            doc.feature(m).unwrap().status,
+            FeatureStatus::Error(_)
+        ));
+        doc.update(m, |k| {
+            if let FeatureKind::Move { delta, .. } = k {
+                *delta = DVec3::new(5.0, 0.0, 0.0);
+            }
+        })
+        .unwrap();
+        assert_eq!(doc.feature(m).unwrap().status, FeatureStatus::Ok);
+        doc.check_invariants().unwrap();
+    }
 
     #[test]
     fn an_implausible_boolean_volume_is_reported() {

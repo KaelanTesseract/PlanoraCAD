@@ -28,6 +28,11 @@ pub enum FeatureError {
     HasDependents(Vec<u64>),
     #[error("Ungültige Eingabe: {0}")]
     InvalidInput(String),
+    #[error(
+        "{0} liegt außerhalb des darstellbaren Bereichs (Beträge höchstens {max:e} mm)",
+        max = crate::compute::MAX_COORD_MM
+    )]
+    OutOfRange(String),
 }
 
 fn join_ids(ids: &[u64]) -> String {

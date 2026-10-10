@@ -8,6 +8,7 @@ mod ops;
 pub mod recompute;
 pub mod refs;
 
+pub use compute::MAX_COORD_MM;
 pub use error::FeatureError;
 pub use model::{
     BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus, SketchFeature,

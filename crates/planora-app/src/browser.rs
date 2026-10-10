@@ -555,8 +555,9 @@ fn run(state: &mut AppState, action: Action, open: Option<FeatureId>) {
                 }
             } else {
                 // Bearbeiten ändert das Dokument: eine offene Skizze wird vorher beendet.
-                state.close_sketch();
-                state.edit_request = Some(id);
+                if state.try_close_sketch().is_ok() {
+                    state.edit_request = Some(id);
+                }
             }
         }
         Action::Rename(id) => {

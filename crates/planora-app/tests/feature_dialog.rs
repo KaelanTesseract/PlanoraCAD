@@ -225,3 +225,46 @@ fn the_revolve_dialog_offers_the_axis_and_applies() {
     assert_eq!(s.document.feature(r).unwrap().status, FeatureStatus::Ok);
     assert_eq!(s.bodies.len(), 1);
 }
+
+// ---- Schlusswelle: riesige Zahlen ---------------------------------------------------------------
+
+#[test]
+fn huge_values_in_the_dialog_are_rejected_without_a_panic() {
+    let mut s = AppState::new();
+    let id = s.create_box(DVec3::splat(4.0)).unwrap();
+    let mut d = FeatureDialog::new(&s, id).unwrap();
+    assert!(d.set_text("Position x", "1e300"));
+    assert!(d.set_text("Breite", "1e300"));
+    let e = d.apply(&mut s).unwrap_err();
+    assert!(e.contains("zu groß"), "{e}");
+    assert_eq!(s.bodies.len(), 1, "Körper unverändert");
+    // Knapp unter der Grenze der Eingabe, aber Lage plus Maß darüber: Fehlerstatus, kein Absturz
+    let mut d = FeatureDialog::new(&s, id).unwrap();
+    assert!(d.set_text("Position x", "9e8"));
+    assert!(d.set_text("Breite", "9e8"));
+    d.apply(&mut s).unwrap();
+    assert!(matches!(
+        s.document.feature(id).unwrap().status,
+        FeatureStatus::Error(_)
+    ));
+    assert!(s.bodies.is_empty());
+}
+
+#[test]
+fn huge_values_through_the_document_and_create_do_not_panic() {
+    let mut s = AppState::new();
+    let id = s.create_box(DVec3::splat(4.0)).unwrap();
+    s.document
+        .update(id, |k| {
+            if let FeatureKind::Box { size, origin } = k {
+                *size = DVec3::splat(1e300);
+                *origin = DVec3::new(1e300, 0.0, 0.0);
+            }
+        })
+        .unwrap();
+    s.refresh();
+    assert!(s.bodies.is_empty());
+    assert!(s.create_box(DVec3::splat(1e300)).is_err());
+    assert!(s.create_cylinder(1e300, 1.0).is_err());
+    assert!(s.create_sphere(2e9).is_err());
+}

@@ -131,9 +131,11 @@ impl PlanoraApp {
             ui.menu_button("Erzeugen", |ui| {
                 // Körper entstehen außerhalb des Skizzen-Modus: eine offene Skizze wird vorher
                 // beendet.
+                // Wird der Entwurf abgelehnt, bleibt die Skizze offen und der Dialog entfällt.
                 let mut open = |dialog: CreateDialog, ui: &mut egui::Ui| {
-                    self.state.close_sketch();
-                    self.dialog = Some(dialog);
+                    if self.state.try_close_sketch().is_ok() {
+                        self.dialog = Some(dialog);
+                    }
                     ui.close();
                 };
                 if ui.button("Quader …").clicked() {
@@ -186,12 +188,13 @@ impl PlanoraApp {
                         .clicked()
                         && let Some(i) = target
                     {
-                        self.state.close_sketch();
-                        self.dialog = Some(if revolve {
-                            CreateDialog::revolve_sketch(&self.state, i)
-                        } else {
-                            CreateDialog::extrude_sketch(i)
-                        });
+                        if self.state.try_close_sketch().is_ok() {
+                            self.dialog = Some(if revolve {
+                                CreateDialog::revolve_sketch(&self.state, i)
+                            } else {
+                                CreateDialog::extrude_sketch(i)
+                            });
+                        }
                         ui.close();
                     }
                 }
@@ -209,8 +212,9 @@ impl PlanoraApp {
                         .on_disabled_hover_text("Dafür werden mindestens zwei Körper benötigt.")
                         .clicked()
                     {
-                        self.state.close_sketch();
-                        self.boolean_dialog = Some(BooleanDialog::with_op(&self.state, op));
+                        if self.state.try_close_sketch().is_ok() {
+                            self.boolean_dialog = Some(BooleanDialog::with_op(&self.state, op));
+                        }
                         ui.close();
                     }
                 }

@@ -4,7 +4,7 @@
 use crate::browser::ERROR_COLOR;
 use crate::create_dialog::axis_candidates;
 use crate::sketch_view::{format_number, parse_number};
-use crate::state::AppState;
+use crate::state::{AppState, MAX_COORD_MM};
 use planora_feature::{BodyRef, FeatureId, FeatureKind, FeatureStatus};
 use planora_kernel::BoolOp;
 use planora_math::DVec3;
@@ -195,7 +195,12 @@ impl FeatureDialog {
         let mut values = Vec::with_capacity(self.numbers.len());
         for (label, text) in &self.numbers {
             match parse_number(text) {
-                Some(v) => values.push(v),
+                Some(v) if v.abs() <= MAX_COORD_MM => values.push(v),
+                Some(_) => {
+                    return Err(format!(
+                        "Der Wert bei „{label}“ ist zu groß (Betrag höchstens {MAX_COORD_MM:e} mm)"
+                    ));
+                }
                 None => return Err(format!("Ungültige Zahl bei „{label}“: „{text}“")),
             }
         }

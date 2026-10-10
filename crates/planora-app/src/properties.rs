@@ -200,8 +200,9 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
                 let _ = state.open_sketch(id);
             }
         } else {
-            state.close_sketch();
-            state.edit_request = Some(id);
+            if state.try_close_sketch().is_ok() {
+                state.edit_request = Some(id);
+            }
         }
     }
 }
@@ -210,6 +211,7 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
 /// über das Feature im Feature-Baum.
 fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
     let mut moved: Option<DVec3> = None;
+    let mut dragging = false;
     let renamed;
     {
         let body = &state.bodies[index];
@@ -240,7 +242,8 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
             let mut position = min;
             ui.horizontal(|ui| {
                 for value in [&mut position.x, &mut position.y, &mut position.z] {
-                    ui.add(egui::DragValue::new(value).speed(0.5).suffix(" mm"));
+                    let r = ui.add(egui::DragValue::new(value).speed(0.5).suffix(" mm"));
+                    dragging |= r.dragged();
                 }
             });
             if position != min {
@@ -298,7 +301,15 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
     if let (Some(name), Some(id)) = (renamed, state.naming_feature(index)) {
         let _ = state.rename_feature(id, &name);
     }
-    if let Some(delta) = moved {
-        let _ = state.move_body(index, delta);
+    // Während des Ziehens erweitert jedes Bild das Verschieben desselben Zugs.
+    match (moved, dragging) {
+        (Some(delta), true) => {
+            let _ = state.move_body_dragging(index, delta);
+        }
+        (Some(delta), false) => {
+            let _ = state.move_body(index, delta);
+        }
+        (None, true) => {}
+        (None, false) => state.end_drag(),
     }
 }

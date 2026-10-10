@@ -330,3 +330,36 @@ fn a_huge_move_is_rejected() {
         FeatureStatus::Ok
     );
 }
+
+// ---- Schlusswelle: Ziehen der Position --------------------------------------------------------
+
+#[test]
+fn dragging_a_blocked_body_adds_one_move_for_the_whole_drag() {
+    // Wie a_reader_behind_the_marker_also_prevents_extending_the_move: Jedes neue Verschieben
+    // steht vor einem Leser, Erweitern ist gesperrt. Ein Zug darf trotzdem nur eines anlegen.
+    let mut s = AppState::new();
+    s.create_box(DVec3::new(10.0, 10.0, 4.0)).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    s.new_sketch_on_face(0, top_face(&s, 0)).unwrap();
+    s.document.set_marker(2).unwrap();
+    s.refresh();
+    let n = s.document.features().len();
+    for _ in 0..5 {
+        s.move_body_dragging(0, DVec3::Y).unwrap();
+    }
+    s.end_drag();
+    assert_eq!(
+        s.document.features().len(),
+        n + 1,
+        "ein Verschieben für den Zug"
+    );
+    match &s.document.features()[2].kind {
+        FeatureKind::Move { delta, .. } => {
+            assert!((*delta - DVec3::new(0.0, 5.0, 0.0)).length() < 1e-12)
+        }
+        k => panic!("{k:?}"),
+    }
+    // Ein neuer Zug (bzw. ein einzelnes Verschieben) legt wieder ein eigenes an.
+    s.move_body(0, DVec3::Y).unwrap();
+    assert_eq!(s.document.features().len(), n + 2);
+}

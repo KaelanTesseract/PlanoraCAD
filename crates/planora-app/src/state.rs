@@ -96,6 +96,8 @@ pub struct AppState {
     pub rename_draft: Option<(FeatureId, String)>,
     /// Wunsch aus dem Feature-Baum, den Bearbeiten-Dialog für dieses Feature zu öffnen.
     pub edit_request: Option<FeatureId>,
+    /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
+    drag_move: Option<FeatureId>,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -129,10 +131,10 @@ impl ProfileCache {
 }
 
 const GRID_HALF_EXTENT: f32 = 500.0;
-/// Größter Betrag einer Koordinate eines verschobenen Körpers in mm (wie
-/// [`planora_sketch::model::MAX_COORD`]): Darüber ist der Abstand benachbarter `f64`-Werte
-/// größer als die Toleranz, und Toleranzvergleiche würden bedeutungslos.
-const MAX_COORD_MM: f64 = planora_sketch::model::MAX_COORD;
+/// Größter Betrag einer Koordinate oder eines Maßes in mm (wie
+/// [`planora_feature::MAX_COORD_MM`], dort für jede Berechnung geprüft): Darüber ist der
+/// Abstand benachbarter `f64`-Werte größer als die Toleranz.
+pub const MAX_COORD_MM: f64 = planora_feature::MAX_COORD_MM;
 /// Bezeichnung (und Namensstamm) von Skizzen-Features.
 const SKETCH_LABEL: &str = "Skizze";
 const PICK_EDGE_PX: f32 = 6.0;
@@ -172,6 +174,7 @@ impl AppState {
             pending_delete: None,
             rename_draft: None,
             edit_request: None,
+            drag_move: None,
         };
         state.rebuild_scene();
         state
@@ -311,11 +314,16 @@ impl AppState {
     /// Prüft die Maße eines Grundkörpers (endlich und größer als die Toleranz).
     fn check_sizes(&mut self, values: &[f64]) -> Result<(), String> {
         let min = self.kernel.tolerance.linear;
-        if values.iter().all(|v| v.is_finite() && *v > min) {
-            Ok(())
-        } else {
-            self.fail("Erzeugen fehlgeschlagen: Die Maße müssen größer als null sein".into())
+        if !values.iter().all(|v| v.is_finite() && *v > min) {
+            return self
+                .fail("Erzeugen fehlgeschlagen: Die Maße müssen größer als null sein".into());
         }
+        if values.iter().any(|v| *v > MAX_COORD_MM) {
+            return self.fail(format!(
+                "Erzeugen fehlgeschlagen: Die Maße dürfen höchstens {MAX_COORD_MM:e} mm betragen"
+            ));
+        }
+        Ok(())
     }
 
     /// Quader neben den vorhandenen Körpern.
@@ -417,6 +425,25 @@ impl AppState {
     /// unverändert. Eine offene Skizze wird vorher beendet (ihr Entwurf übernommen), damit
     /// Dokument und Entwurf nicht auseinanderlaufen.
     pub fn move_body(&mut self, index: usize, delta: DVec3) -> Result<(), String> {
+        self.drag_move = None;
+        self.move_body_with(index, delta, false)
+    }
+
+    /// Wie [`AppState::move_body`] während eines Zugs (Ziehen der Position im
+    /// Eigenschaftenfenster): Ein Verschieben, das derselbe Zug angelegt hat, wird erweitert,
+    /// auch wenn ein späteres Feature den Körper liest. Der Zug wirkt damit wie eine einzige
+    /// Verschiebung um die Gesamtstrecke, statt je Bild ein neues Verschieben anzulegen.
+    /// [`AppState::end_drag`] beendet den Zug.
+    pub fn move_body_dragging(&mut self, index: usize, delta: DVec3) -> Result<(), String> {
+        self.move_body_with(index, delta, true)
+    }
+
+    /// Beendet einen Zug (siehe [`AppState::move_body_dragging`]).
+    pub fn end_drag(&mut self) {
+        self.drag_move = None;
+    }
+
+    fn move_body_with(&mut self, index: usize, delta: DVec3, dragging: bool) -> Result<(), String> {
         if !delta.is_finite() {
             return self.fail("Ungültige Verschiebung".into());
         }
@@ -446,12 +473,15 @@ impl AppState {
                 .document
                 .feature(r.feature)
                 .is_some_and(|f| matches!(f.kind, FeatureKind::Move { .. }))
-            && !self.read_later(index);
+            && (!self.read_later(index) || (dragging && self.drag_move == Some(r.feature)));
         let moved = if extendable {
             self.extend_move(r.feature, delta)?;
             r
         } else {
             let id = self.add_checked("Verschieben", FeatureKind::Move { body: r, delta })?;
+            if dragging {
+                self.drag_move = Some(id);
+            }
             BodyRef {
                 feature: id,
                 index: 0,
@@ -1126,7 +1156,10 @@ impl AppState {
     /// der 3D-Ansicht auf (wie ein einfacher Klick auf die Skizze).
     pub fn request_sketch_dialog(&mut self, request: SketchRequest) {
         let (SketchRequest::Extrude(id) | SketchRequest::Revolve(id)) = request;
-        self.close_sketch();
+        // Wird der Entwurf abgelehnt, bleibt die Skizze offen und es öffnet sich kein Dialog.
+        if self.try_close_sketch().is_err() {
+            return;
+        }
         self.selected_feature = Some(id);
         self.selected_body = None;
         self.set_selection(None);
@@ -1175,7 +1208,7 @@ impl AppState {
         profile: usize,
         height: f64,
     ) -> Result<FeatureId, String> {
-        self.close_sketch();
+        self.try_close_sketch()?;
         if !(height.is_finite() && height > self.kernel.tolerance.linear) {
             return self.fail("Die Höhe muss größer als null sein".into());
         }
@@ -1202,7 +1235,7 @@ impl AppState {
         profile: usize,
         axis: CurveId,
     ) -> Result<FeatureId, String> {
-        self.close_sketch();
+        self.try_close_sketch()?;
         let name = match self.check_profile(sketch, profile) {
             Ok(n) => n,
             Err(e) => return self.fail(e),

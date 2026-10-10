@@ -353,4 +353,9 @@ fn a_rejected_draft_keeps_the_sketch_open() {
     // Auch Dokument-Änderungen von außen werden dann abgelehnt.
     assert!(s.move_body(0, DVec3::X).is_err());
     assert_eq!(s.document.features().len(), 2);
+    // Ebenso Körper aus der Skizze und der Dialogwunsch aus dem Baum.
+    assert!(s.extrude_sketch(id, 0, 1.0).is_err());
+    s.request_sketch_dialog(planora_app::state::SketchRequest::Extrude(id));
+    assert!(s.sketch_request.is_none());
+    assert_eq!(s.open_sketch_id(), Some(id));
 }
