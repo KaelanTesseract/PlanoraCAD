@@ -47,6 +47,14 @@ pub fn paint_body_icon(painter: &Painter, rect: Rect, kind: BodyKind, color: Col
                 stroke,
             ));
         }
+        BodyKind::Combined => {
+            // zwei überlappende Quadrate: aus zwei Körpern entstanden
+            let side = vec2(r * 1.2, r * 1.2);
+            let back = Rect::from_center_size(c + vec2(r * 0.3, -r * 0.3), side);
+            let front = Rect::from_center_size(c + vec2(-r * 0.3, r * 0.3), side);
+            painter.rect_stroke(back, 1.0, stroke, egui::StrokeKind::Inside);
+            painter.rect_stroke(front, 1.0, stroke, egui::StrokeKind::Inside);
+        }
     }
 }
 

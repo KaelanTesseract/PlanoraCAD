@@ -1,8 +1,6 @@
-use crate::samples::{ExtrudeSample, RevolveSample};
 use crate::sketch_view::{format_length, format_number};
-use crate::state::{AppState, BodyKind};
-use planora_kernel::Kernel;
-use planora_math::{DVec3, Frame};
+use crate::state::AppState;
+use planora_math::DVec3;
 use planora_sketch::model::{CurveId, CurveKind, Sketch};
 
 /// Voreingestellte Höhe für „Skizze extrudieren“ in Millimetern.
@@ -26,13 +24,6 @@ pub enum CreateDialog {
     Cone {
         radius: f64,
         height: f64,
-    },
-    Extrude {
-        sample: ExtrudeSample,
-        height: f64,
-    },
-    Revolve {
-        sample: RevolveSample,
     },
     /// Profil `profile` (Index in `Sketch::profiles()`) der Skizze `sketch` um `height` entlang
     /// der Skizzennormalen extrudieren.
@@ -106,8 +97,6 @@ impl CreateDialog {
             CreateDialog::Cylinder { .. } => "Zylinder erzeugen",
             CreateDialog::Sphere { .. } => "Kugel erzeugen",
             CreateDialog::Cone { .. } => "Kegel erzeugen",
-            CreateDialog::Extrude { .. } => "Extrusion erzeugen",
-            CreateDialog::Revolve { .. } => "Rotation erzeugen",
             CreateDialog::ExtrudeSketch { .. } => "Skizze extrudieren",
             CreateDialog::RevolveSketch { .. } => "Skizze drehen",
         }
@@ -230,19 +219,6 @@ impl CreateDialog {
                         Self::drag(ui, "Radius", radius);
                         Self::drag(ui, "Höhe", height);
                     }
-                    CreateDialog::Extrude { sample, height } => {
-                        ui.label("Beispielprofil");
-                        for s in ExtrudeSample::ALL {
-                            ui.selectable_value(sample, s, s.label());
-                        }
-                        Self::drag(ui, "Höhe", height);
-                    }
-                    CreateDialog::Revolve { sample } => {
-                        ui.label("Beispielprofil");
-                        for s in RevolveSample::ALL {
-                            ui.selectable_value(sample, s, s.label());
-                        }
-                    }
                     CreateDialog::ExtrudeSketch {
                         sketch,
                         profile,
@@ -272,13 +248,6 @@ impl CreateDialog {
                         Self::axis_choice(ui, state, *sketch, axis);
                     }
                 }
-                if matches!(
-                    self,
-                    CreateDialog::Extrude { .. } | CreateDialog::Revolve { .. }
-                ) {
-                    ui.add_space(4.0);
-                    ui.weak(crate::samples::OWN_PROFILE_HINT);
-                }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui.button("Erzeugen").clicked() {
@@ -297,42 +266,15 @@ impl CreateDialog {
         open && !cancel
     }
 
-    /// Erzeugt den Körper mit den aktuellen Werten und nimmt ihn in `state` auf. Liefert `true`
-    /// bei Erfolg; sonst steht der Fehler in `state.message`.
+    /// Erzeugt den Körper mit den aktuellen Werten als Feature in `state`. Liefert `true` bei
+    /// Erfolg; sonst steht der Fehler in `state.message`.
     pub fn create(&self, state: &mut AppState) -> bool {
         state.message = None;
-        let k = state.kernel;
-        let (kind, name, solid) = match self {
-            CreateDialog::Box { x, y, z } => (
-                BodyKind::Box,
-                "Quader".to_string(),
-                k.make_box(DVec3::new(*x, *y, *z)),
-            ),
-            CreateDialog::Cylinder { radius, height } => (
-                BodyKind::Cylinder,
-                "Zylinder".to_string(),
-                k.make_cylinder(*radius, *height),
-            ),
-            CreateDialog::Sphere { radius } => (
-                BodyKind::Sphere,
-                "Kugel".to_string(),
-                k.make_sphere(*radius),
-            ),
-            CreateDialog::Cone { radius, height } => (
-                BodyKind::Cone,
-                "Kegel".to_string(),
-                k.make_cone(*radius, *height),
-            ),
-            CreateDialog::Extrude { sample, height } => (
-                BodyKind::Extrusion,
-                format!("Extrusion: {}", sample.label()),
-                k.extrude(&sample.profile(), &Frame::WORLD, *height),
-            ),
-            CreateDialog::Revolve { sample } => (
-                BodyKind::Revolution,
-                format!("Rotation: {}", sample.label()),
-                k.revolve(&sample.chain(), &Frame::WORLD),
-            ),
+        let result = match self {
+            CreateDialog::Box { x, y, z } => state.create_box(DVec3::new(*x, *y, *z)),
+            CreateDialog::Cylinder { radius, height } => state.create_cylinder(*radius, *height),
+            CreateDialog::Sphere { radius } => state.create_sphere(*radius),
+            CreateDialog::Cone { radius, height } => state.create_cone(*radius, *height),
             // Körper aus Skizzen entstehen an Ort und Stelle; Fehler legt `AppState` ab.
             CreateDialog::ExtrudeSketch {
                 sketch,
@@ -357,7 +299,7 @@ impl CreateDialog {
                     .is_some_and(|sk| axis_candidates(sk).iter().any(|(id, _)| id == axis));
                 if !valid {
                     state.message = Some(
-                        "Die gewählte Drehachse gibt es in dieser Skizze nicht mehr; bitte neu                          wählen."
+                        "Die gewählte Drehachse gibt es in dieser Skizze nicht mehr; bitte neu wählen."
                             .into(),
                     );
                     return false;
@@ -365,24 +307,7 @@ impl CreateDialog {
                 return state.revolve_sketch(*sketch, *profile, *axis).is_ok();
             }
         };
-        match solid {
-            Ok(solid) => {
-                let number = state.next_body_number;
-                match state.add_body(kind, format!("{name} {number}"), solid) {
-                    Ok(_) => {
-                        state.next_body_number += 1;
-                        true
-                    }
-                    Err(e) => {
-                        state.message = Some(e);
-                        false
-                    }
-                }
-            }
-            Err(e) => {
-                state.message = Some(format!("Erzeugen fehlgeschlagen: {e}"));
-                false
-            }
-        }
+        // Ein Feature mit Fehler gilt nicht als Erfolg (die Meldung steht in `message`).
+        result.is_ok() && state.message.is_none()
     }
 }

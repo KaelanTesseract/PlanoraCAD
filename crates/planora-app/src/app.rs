@@ -1,6 +1,5 @@
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
-use crate::samples::{ExtrudeSample, RevolveSample};
 use crate::state::{AppState, SketchRequest, StandardPlane};
 use crate::{browser, fonts, properties, sketch_panel, theme, viewport};
 use egui_tiles::{Container, SimplificationOptions, TileId, Tiles, Tree, UiResponse};
@@ -160,25 +159,6 @@ impl PlanoraApp {
                         CreateDialog::Cone {
                             radius: 20.0,
                             height: 40.0,
-                        },
-                        ui,
-                    );
-                }
-                ui.separator();
-                if ui.button("Extrusion …").clicked() {
-                    let sample = ExtrudeSample::PlateWithHole;
-                    open(
-                        CreateDialog::Extrude {
-                            sample,
-                            height: sample.default_height(),
-                        },
-                        ui,
-                    );
-                }
-                if ui.button("Rotation …").clicked() {
-                    open(
-                        CreateDialog::Revolve {
-                            sample: RevolveSample::Vase,
                         },
                         ui,
                     );

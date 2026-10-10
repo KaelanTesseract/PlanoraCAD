@@ -14,10 +14,26 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
     let mut delete = false;
     let mut moved: Option<DVec3> = None;
+    let mut renamed: Option<String> = None;
     {
-        let body = &mut state.bodies[index];
+        let body = &state.bodies[index];
         ui.label("Name");
-        ui.text_edit_singleline(&mut body.name);
+        // Der Name gehört dem erzeugenden Feature. Während der Eingabe steht der Entwurf im
+        // Speicher von egui, damit sich das Feld auch kurz leeren lässt (leere Namen sind
+        // ungültig und werden nicht übernommen).
+        let key = egui::Id::new(("feature_name", state.naming_feature(index)));
+        let mut name = ui
+            .data(|d| d.get_temp::<String>(key))
+            .unwrap_or_else(|| body.name.clone());
+        let response = ui.text_edit_singleline(&mut name);
+        if response.changed() {
+            if !name.trim().is_empty() && name != body.name {
+                renamed = Some(name.clone());
+            }
+            ui.data_mut(|d| d.insert_temp(key, name));
+        } else if !response.has_focus() {
+            ui.data_mut(|d| d.remove::<String>(key));
+        }
         ui.add_space(6.0);
         let (min, max) = body.bounds;
         let size = max - min;
@@ -99,14 +115,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         }
     }
 
-    // Erst nach dem Zeichnen anwenden, wenn der Körper nicht mehr geliehen ist.
-    if let Some(delta) = moved
-        && !delete
-        && let Err(e) = state.translate_body(index, delta)
-    {
-        state.message = Some(e);
+    // Erst nach dem Zeichnen anwenden, wenn der Körper nicht mehr geliehen ist. Fehler legt
+    // `AppState` in `message` ab.
+    if let (Some(name), Some(id)) = (renamed, state.naming_feature(index)) {
+        let _ = state.rename_feature(id, &name);
     }
     if delete {
-        state.remove_body(index);
+        let _ = state.delete_body(index);
+    } else if let Some(delta) = moved {
+        let _ = state.move_body(index, delta);
     }
 }

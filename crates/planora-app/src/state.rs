@@ -1,19 +1,21 @@
 use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
-use planora_kernel::boolean::BoolOp;
-use planora_kernel::{AnalyticKernel, Face, Id, Kernel, Profile, Solid};
-use planora_math::{DMat4, DVec2, DVec3, Frame};
-use planora_mesh::{
-    MassProperties, Mesh, TessellationOptions, boolean_volume_plausible, mass_properties,
-    tessellate,
+use planora_feature::{
+    BodyRef, Document, FeatureError, FeatureId, FeatureKind, FeatureStatus, SketchFeature,
+    SketchPlane,
 };
+use planora_kernel::boolean::BoolOp;
+use planora_kernel::{AnalyticKernel, Face, Id, Profile, Solid};
+use planora_math::{DVec2, DVec3, Frame};
+use planora_mesh::{MassProperties, Mesh, TessellationOptions, mass_properties, tessellate};
 use planora_render::{
     EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, SceneData, build_scene, pick_edge,
     pick_face,
 };
 use planora_sketch::model::{CurveId, Sketch};
-use planora_sketch::{ExtractedProfiles, extrude_profile, plane_of_face, revolve_profile};
+use planora_sketch::{ExtractedProfiles, plane_of_face};
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +26,8 @@ pub enum BodyKind {
     Cone,
     Extrusion,
     Revolution,
+    /// Ergebnis einer Booleschen Operation (oder Art unbekannt).
+    Combined,
 }
 
 /// Grundebenen für neue Skizzen.
@@ -34,9 +38,12 @@ pub enum StandardPlane {
     YZ,
 }
 
+/// Sichtbarer Körper, abgeleitet aus dem Feature-Dokument (nie direkt verändert).
 pub struct Body {
     pub name: String,
     pub kind: BodyKind,
+    /// Verweis auf den Körper im Dokument.
+    pub source: BodyRef,
     pub solid: Solid,
     pub mesh: Mesh,
     pub mass: MassProperties,
@@ -56,6 +63,9 @@ pub enum SketchRequest {
 
 /// Alles, was die Oberfläche anzeigt. Enthält keine egui-Typen und ist deshalb testbar.
 pub struct AppState {
+    /// Das Feature-Dokument; Quelle aller Körper.
+    pub document: Document,
+    /// Sichtbare Körper des Dokuments, abgeleitet mit [`AppState::refresh`].
     pub bodies: Vec<Body>,
     pub selected_body: Option<usize>,
     pub selection: Option<Pick>,
@@ -68,9 +78,9 @@ pub struct AppState {
     pub chord_tolerance: f64,
     /// Letzte Fehlermeldung für die Statuszeile.
     pub message: Option<String>,
-    /// Laufende Nummer für den nächsten erzeugten Körper; zählt nur hoch, damit Namen auch nach
-    /// dem Löschen eindeutig bleiben.
-    pub next_body_number: u64,
+    /// Laufende Nummer je Bezeichnung für neue Features („Quader 1“, „Quader 2“, …); zählt
+    /// nur hoch, damit Namen auch nach dem Löschen eindeutig bleiben.
+    name_counters: BTreeMap<String, u64>,
     /// Skizzen des Dokuments.
     pub sketches: Vec<Sketch>,
     /// Im Browser gewählte Skizze.
@@ -132,7 +142,9 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        let chord_tolerance = 0.05;
         let mut state = Self {
+            document: Document::with_options(chord_tolerance),
             bodies: Vec::new(),
             selected_body: None,
             selection: None,
@@ -142,9 +154,9 @@ impl AppState {
             scene_version: 0,
             dark: true,
             kernel: AnalyticKernel::default(),
-            chord_tolerance: 0.05,
+            chord_tolerance,
             message: None,
-            next_body_number: 1,
+            name_counters: BTreeMap::new(),
             sketches: Vec::new(),
             selected_sketch: None,
             sketch_session: None,
@@ -174,117 +186,373 @@ impl AppState {
         }
     }
 
-    /// Prüft den Körper, stellt ihn neben die vorhandenen und nimmt ihn auf.
-    pub fn add_body(
+    /// Baut Körperliste, Netze, Maße und Szene aus den sichtbaren Körpern des Dokuments neu
+    /// auf. Auswahl, Hervorhebung und gewählter Körper bleiben, solange ihr Körper sichtbar ist
+    /// (Indizes werden auf die neue Liste abgebildet); sonst werden sie gelöscht. Die Ansicht
+    /// wird nur neu eingepasst, wenn sich die Zahl der Körper geändert hat.
+    pub fn refresh(&mut self) {
+        self.refresh_following(None);
+    }
+
+    /// Wie [`AppState::refresh`]; Verweise auf den Körper `follow.0` gehen auf `follow.1` über
+    /// (z. B. auf das Ergebnis eines neuen Verschiebens).
+    fn refresh_following(&mut self, follow: Option<(BodyRef, BodyRef)>) {
+        let old: Vec<BodyRef> = self.bodies.iter().map(|b| b.source).collect();
+        let count_before = self.bodies.len();
+        let mut bodies = Vec::new();
+        let mut failed = Vec::new();
+        for v in self.document.visible_bodies() {
+            let name = body_name(&self.document, v.body).unwrap_or_else(|| v.name.clone());
+            let kind = body_kind(&self.document, v.body);
+            match self.make_body(kind, name.clone(), v.body, v.solid.clone()) {
+                Ok(b) => bodies.push(b),
+                Err(e) => failed.push(format!("„{name}“: {e}")),
+            }
+        }
+        self.bodies = bodies;
+        let new: Vec<BodyRef> = self.bodies.iter().map(|b| b.source).collect();
+        let map = |i: usize| -> Option<usize> {
+            let mut r = *old.get(i)?;
+            if let Some((from, to)) = follow
+                && r == from
+            {
+                r = to;
+            }
+            new.iter().position(|n| *n == r)
+        };
+        self.selected_body = self.selected_body.and_then(map);
+        self.selection = self.selection.and_then(|p| self.remap_pick(p, map));
+        self.hover = self.hover.and_then(|p| self.remap_pick(p, map));
+        if !failed.is_empty() {
+            self.message = Some(failed.join("; "));
+        }
+        self.rebuild_scene();
+        if self.bodies.len() != count_before {
+            self.frame_all();
+        }
+    }
+
+    /// Bildet eine Auswahl auf den neuen Körperindex ab; gibt es die Fläche oder Kante im
+    /// neuen Körper nicht mehr, entfällt sie.
+    fn remap_pick(&self, pick: Pick, map: impl Fn(usize) -> Option<usize>) -> Option<Pick> {
+        match pick {
+            Pick::Face(FaceRef { body, face }) => {
+                let body = map(body)?;
+                self.bodies[body].solid.faces.get(face)?;
+                Some(Pick::Face(FaceRef { body, face }))
+            }
+            Pick::Edge(EdgeRef { body, edge }) => {
+                let body = map(body)?;
+                self.bodies[body].solid.edges.get(edge)?;
+                Some(Pick::Edge(EdgeRef { body, edge }))
+            }
+        }
+    }
+
+    /// Index des Körpers `r` in der Körperliste, falls er sichtbar ist.
+    pub fn body_index(&self, r: BodyRef) -> Option<usize> {
+        self.bodies.iter().position(|b| b.source == r)
+    }
+
+    /// Nächster Name `{Bezeichnung} {Nummer}` für `label`, ohne den Zähler zu erhöhen.
+    fn next_name(&self, label: &str) -> String {
+        let n = self.name_counters.get(label).copied().unwrap_or(0) + 1;
+        format!("{label} {n}")
+    }
+
+    /// Zählt den Namenszähler für `label` weiter (nur nach erfolgreichem Anlegen).
+    fn count_name(&mut self, label: &str) {
+        *self.name_counters.entry(label.to_string()).or_insert(0) += 1;
+    }
+
+    /// Legt ein Feature `{Bezeichnung} {Nummer}` am Marker an (Bezeichnung `base_name` oder
+    /// die der Feature-Art; der Zähler je Bezeichnung zählt nur hoch) und aktualisiert die
+    /// Körper. Ein Feature mit dem Status `Error` wird trotzdem angelegt; seine Meldung steht
+    /// dann in `message`.
+    pub fn add_feature(
         &mut self,
-        kind: BodyKind,
-        name: String,
-        solid: Solid,
-    ) -> Result<usize, String> {
-        self.kernel
-            .validate(&solid)
-            .map_err(|e| format!("Ungültiger Körper: {e}"))?;
-        let solid = match self.bodies.iter().map(|b| b.bounds.1.x).reduce(f64::max) {
-            None => solid,
-            Some(max_x) => {
-                let mesh = self.mesh_of(&solid)?;
-                let (min, _) = bounds_of(&mesh);
-                let shift =
-                    DMat4::from_translation(DVec3::new(max_x + BODY_GAP_MM - min.x, 0.0, 0.0));
-                self.kernel
-                    .transform(&solid, &shift)
-                    .map_err(|e| format!("Platzieren fehlgeschlagen: {e}"))?
+        base_name: Option<&str>,
+        kind: FeatureKind,
+    ) -> Result<FeatureId, String> {
+        let label = base_name.unwrap_or(kind.label()).to_string();
+        let name = self.next_name(&label);
+        match self.document.add_feature(name, kind) {
+            Ok(id) => {
+                self.count_name(&label);
+                self.refresh();
+                if let Some(FeatureStatus::Error(e)) = self.document.feature(id).map(|f| &f.status)
+                {
+                    self.message = Some(e.clone());
+                }
+                Ok(id)
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Ursprung für einen neuen Grundkörper rechts neben den vorhandenen Körpern (10 mm
+    /// Abstand). `extent_x` ist der Abstand vom Ursprung des Grundkörpers zu seiner linken
+    /// Kante (Quader 0, sonst der Radius). Ohne Körper liegt er im Nullpunkt.
+    pub fn free_origin(&self, extent_x: f64) -> DVec3 {
+        match self.bodies.iter().map(|b| b.bounds.1.x).reduce(f64::max) {
+            None => DVec3::ZERO,
+            Some(max_x) => DVec3::new(max_x + BODY_GAP_MM + extent_x, 0.0, 0.0),
+        }
+    }
+
+    /// Prüft die Maße eines Grundkörpers (endlich und größer als die Toleranz).
+    fn check_sizes(&mut self, values: &[f64]) -> Result<(), String> {
+        let min = self.kernel.tolerance.linear;
+        if values.iter().all(|v| v.is_finite() && *v > min) {
+            Ok(())
+        } else {
+            self.fail("Erzeugen fehlgeschlagen: Die Maße müssen größer als null sein".into())
+        }
+    }
+
+    /// Quader neben den vorhandenen Körpern.
+    pub fn create_box(&mut self, size: DVec3) -> Result<FeatureId, String> {
+        self.check_sizes(&size.to_array())?;
+        let origin = self.free_origin(0.0);
+        self.add_feature(None, FeatureKind::Box { size, origin })
+    }
+
+    /// Zylinder neben den vorhandenen Körpern.
+    pub fn create_cylinder(&mut self, radius: f64, height: f64) -> Result<FeatureId, String> {
+        self.check_sizes(&[radius, height])?;
+        let origin = self.free_origin(radius);
+        self.add_feature(
+            None,
+            FeatureKind::Cylinder {
+                radius,
+                height,
+                origin,
+            },
+        )
+    }
+
+    /// Kugel neben den vorhandenen Körpern (linke Kante am freien Rand).
+    pub fn create_sphere(&mut self, radius: f64) -> Result<FeatureId, String> {
+        self.check_sizes(&[radius])?;
+        let origin = self.free_origin(radius);
+        self.add_feature(None, FeatureKind::Sphere { radius, origin })
+    }
+
+    /// Kegel neben den vorhandenen Körpern.
+    pub fn create_cone(&mut self, radius: f64, height: f64) -> Result<FeatureId, String> {
+        self.check_sizes(&[radius, height])?;
+        let origin = self.free_origin(radius);
+        self.add_feature(
+            None,
+            FeatureKind::Cone {
+                radius,
+                height,
+                origin,
+            },
+        )
+    }
+
+    /// Legt eine Boolesche Operation `a op b` (Körperindizes) an. Das Ergebnis ersetzt beide
+    /// Körper an der Stelle des vorderen und wird gewählt. Schlägt die Operation fehl, wird das
+    /// Feature wieder entfernt: Dokument und Körper bleiben unverändert, die Meldung steht in
+    /// `message`.
+    pub fn add_boolean(&mut self, a: usize, b: usize, op: BoolOp) -> Result<FeatureId, String> {
+        if a == b || a >= self.bodies.len() || b >= self.bodies.len() {
+            return self.fail("Bitte zwei verschiedene Körper wählen".into());
+        }
+        let label = match op {
+            BoolOp::Union => "Vereinigung",
+            BoolOp::Difference => "Abzug",
+            BoolOp::Intersection => "Schnitt",
+        };
+        let kind = FeatureKind::Boolean {
+            target: self.bodies[a].source,
+            tool: self.bodies[b].source,
+            op,
+        };
+        let id = self.add_checked(label, kind)?;
+        self.hover = None;
+        self.selection = None;
+        self.refresh();
+        self.selected_body = self.body_index(BodyRef {
+            feature: id,
+            index: 0,
+        });
+        Ok(id)
+    }
+
+    /// Legt ein Feature an und nimmt es wieder heraus, wenn es nicht berechnet werden konnte
+    /// (die Meldung steht dann in `message`). Aktualisiert die Körper nicht.
+    fn add_checked(&mut self, label: &str, kind: FeatureKind) -> Result<FeatureId, String> {
+        let name = self.next_name(label);
+        let id = match self.document.add_feature(name, kind) {
+            Ok(id) => id,
+            Err(e) => return self.fail(e.to_string()),
+        };
+        match self.document.feature(id).map(|f| f.status.clone()) {
+            Some(FeatureStatus::Ok) => {
+                self.count_name(label);
+                Ok(id)
+            }
+            status => {
+                let _ = self.document.delete_with_dependents(id);
+                self.fail(status_message(status))
+            }
+        }
+    }
+
+    /// Verschiebt den Körper `index` um `delta` (Millimeter) **zusätzlich** zur derzeitigen
+    /// Lage. Ist der Körper das Ergebnis eines Verschiebens, das kein anderes Feature liest,
+    /// wird dessen Verschiebung erhöht; sonst entsteht ein neues Verschieben am Marker. Auswahl
+    /// und gewählter Körper gehen auf das Ergebnis über. Bei einem Fehler bleibt alles
+    /// unverändert.
+    pub fn move_body(&mut self, index: usize, delta: DVec3) -> Result<(), String> {
+        if !delta.is_finite() {
+            return self.fail("Ungültige Verschiebung".into());
+        }
+        let Some(r) = self.bodies.get(index).map(|b| b.source) else {
+            return self.fail("Körper nicht gefunden".into());
+        };
+        if delta == DVec3::ZERO {
+            return Ok(());
+        }
+        let extendable = r.index == 0
+            && self
+                .document
+                .feature(r.feature)
+                .is_some_and(|f| matches!(f.kind, FeatureKind::Move { .. }))
+            && self.document.dependents(r.feature).is_empty();
+        let moved = if extendable {
+            self.extend_move(r.feature, delta)?;
+            r
+        } else {
+            let id = self.add_checked("Verschieben", FeatureKind::Move { body: r, delta })?;
+            BodyRef {
+                feature: id,
+                index: 0,
             }
         };
-        let body = self.make_body(kind, name, solid)?;
-        self.bodies.push(body);
-        self.rebuild_scene();
-        self.frame_all();
-        Ok(self.bodies.len() - 1)
-    }
-
-    /// Wie `add_body`, aber ohne das Verschieben neben die vorhandenen Körper.
-    pub fn add_body_in_place(
-        &mut self,
-        kind: BodyKind,
-        name: String,
-        solid: Solid,
-    ) -> Result<usize, String> {
-        self.kernel
-            .validate(&solid)
-            .map_err(|e| format!("Ungültiger Körper: {e}"))?;
-        let body = self.make_body(kind, name, solid)?;
-        self.bodies.push(body);
-        self.rebuild_scene();
-        self.frame_all();
-        Ok(self.bodies.len() - 1)
-    }
-
-    /// Verschiebt den Körper `index` um `delta` (Millimeter).
-    pub fn translate_body(&mut self, index: usize, delta: DVec3) -> Result<(), String> {
-        let body = self
-            .bodies
-            .get(index)
-            .ok_or_else(|| "Körper nicht gefunden".to_string())?;
-        if !delta.is_finite() {
-            return Err("Ungültige Verschiebung".into());
-        }
-        let moved = self
-            .kernel
-            .transform(&body.solid, &DMat4::from_translation(delta))
-            .map_err(|e| format!("Verschieben fehlgeschlagen: {e}"))?;
-        let (kind, name) = (body.kind, body.name.clone());
-        let new = self.make_body(kind, name, moved)?;
-        self.bodies[index] = new;
-        self.rebuild_scene();
+        self.refresh_following(Some((r, moved)));
         Ok(())
     }
 
-    /// Führt `a op b` aus und ersetzt beide Körper durch das Ergebnis (an der Stelle des
-    /// vorderen in der Liste, ohne neu zu platzieren). Liefert den Index des Ergebnisses; bei
-    /// einem Fehler bleibt alles unverändert.
-    pub fn boolean(&mut self, a: usize, b: usize, op: BoolOp) -> Result<usize, String> {
-        if a == b || a >= self.bodies.len() || b >= self.bodies.len() {
-            return Err("Bitte zwei verschiedene Körper wählen".into());
-        }
-        let result = self
-            .kernel
-            .boolean(&self.bodies[a].solid, &self.bodies[b].solid, op)
-            .map_err(|e| e.to_string())?;
-        let (name_a, name_b) = (&self.bodies[a].name, &self.bodies[b].name);
-        let name = match op {
-            BoolOp::Union => format!("Vereinigung: {name_a} + {name_b}"),
-            BoolOp::Difference => format!("Abzug: {name_a} − {name_b}"),
-            BoolOp::Intersection => format!("Schnitt: {name_a} ∩ {name_b}"),
+    /// Erhöht die Verschiebung des Features `id` um `delta`; schlägt die Neuberechnung fehl,
+    /// wird der alte Wert wiederhergestellt.
+    fn extend_move(&mut self, id: FeatureId, delta: DVec3) -> Result<(), String> {
+        let add = |k: &mut FeatureKind, by: DVec3| {
+            if let FeatureKind::Move { delta, .. } = k {
+                *delta += by;
+            }
         };
-        let kind = self.bodies[a].kind;
-        let body = self.make_body(kind, name, result)?;
-        let (va, vb) = (self.bodies[a].mass.volume, self.bodies[b].mass.volume);
-        if !boolean_volume_plausible(op, va, vb, body.mass.volume, 0.02) {
-            return Err(
-                "Das Ergebnis ist unplausibel (Volumenprobe fehlgeschlagen) und wurde verworfen"
-                    .into(),
-            );
+        if let Err(e) = self.document.update(id, |k| add(k, delta)) {
+            return self.fail(e.to_string());
         }
-        let (lo, hi) = (a.min(b), a.max(b));
-        self.bodies.remove(hi);
-        self.bodies[lo] = body;
-        self.hover = None;
-        self.selection = None;
-        self.selected_body = Some(lo);
-        self.rebuild_scene();
-        Ok(lo)
+        match self.document.feature(id).map(|f| f.status.clone()) {
+            Some(FeatureStatus::Ok) => Ok(()),
+            status => {
+                let _ = self.document.update(id, |k| add(k, -delta));
+                self.fail(status_message(status))
+            }
+        }
     }
 
-    /// Netz, Masse und Hülle eines Körpers berechnen (gemeinsam für Platzieren, Verschieben und
-    /// Ergebnisse Boolescher Operationen).
-    fn make_body(&self, kind: BodyKind, name: String, solid: Solid) -> Result<Body, String> {
+    /// Das Feature, das den Namen des Körpers `index` trägt: das erzeugende Feature, bei
+    /// verschobenen Körpern das Feature, das den Körper ursprünglich erzeugt hat.
+    pub fn naming_feature(&self, index: usize) -> Option<FeatureId> {
+        let r = self.bodies.get(index)?.source;
+        Some(origin_of(&self.document, r).feature)
+    }
+
+    /// Benennt ein Feature um (leere Namen sind ungültig) und aktualisiert die Körpernamen.
+    pub fn rename_feature(&mut self, id: FeatureId, name: &str) -> Result<(), String> {
+        match self.document.rename(id, name) {
+            Ok(()) => {
+                for i in 0..self.bodies.len() {
+                    if let Some(n) = body_name(&self.document, self.bodies[i].source) {
+                        self.bodies[i].name = n;
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Löscht ein Feature, von dem nichts abhängt. Hängen andere Features davon ab, bleibt
+    /// alles unverändert und der Fehlertext nennt die abhängigen Features.
+    pub fn delete_feature(&mut self, id: FeatureId) -> Result<(), String> {
+        match self.document.delete(id) {
+            Ok(()) => {
+                self.refresh();
+                Ok(())
+            }
+            Err(FeatureError::HasDependents(ids)) => {
+                let name = self
+                    .document
+                    .feature(id)
+                    .map_or_else(String::new, |f| f.name.clone());
+                let names: Vec<String> = ids
+                    .iter()
+                    .filter_map(|d| self.document.feature(FeatureId(*d)))
+                    .map(|f| format!("„{}“", f.name))
+                    .collect();
+                self.fail(format!(
+                    "„{name}“ lässt sich nicht löschen, weil diese Features darauf aufbauen: {}",
+                    names.join(", ")
+                ))
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Löscht ein Feature samt allen abhängigen Features; liefert die entfernten Ids.
+    pub fn delete_feature_with_dependents(
+        &mut self,
+        id: FeatureId,
+    ) -> Result<Vec<FeatureId>, String> {
+        match self.document.delete_with_dependents(id) {
+            Ok(removed) => {
+                self.refresh();
+                Ok(removed)
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// „Körper löschen“ im Eigenschaftenfenster: löscht das Feature, das den Körper erzeugt
+    /// hat, samt seiner Verschiebungen. Bauen andere Features darauf auf, bleibt alles
+    /// unverändert und die Meldung nennt sie (die Rückfrage folgt mit dem Feature-Baum).
+    pub fn delete_body(&mut self, index: usize) -> Result<(), String> {
+        let Some(id) = self.naming_feature(index) else {
+            return self.fail("Körper nicht gefunden".into());
+        };
+        let only_moves = self.document.dependents(id).iter().all(|d| {
+            self.document
+                .feature(*d)
+                .is_some_and(|f| matches!(f.kind, FeatureKind::Move { .. }))
+        });
+        if only_moves {
+            self.delete_feature_with_dependents(id).map(|_| ())
+        } else {
+            self.delete_feature(id)
+        }
+    }
+
+    /// Netz, Masse und Hülle eines sichtbaren Körpers berechnen.
+    fn make_body(
+        &self,
+        kind: BodyKind,
+        name: String,
+        source: BodyRef,
+        solid: Solid,
+    ) -> Result<Body, String> {
         let mesh = self.mesh_of(&solid)?;
         let mass = mass_properties(&mesh);
         let bounds = bounds_of(&mesh);
         Ok(Body {
             name,
             kind,
+            source,
             solid,
             mesh,
             mass,
@@ -300,21 +568,6 @@ impl AppState {
             },
         )
         .map_err(|e| format!("Tessellierung fehlgeschlagen: {e}"))
-    }
-
-    pub fn remove_body(&mut self, index: usize) {
-        if index >= self.bodies.len() {
-            return;
-        }
-        self.bodies.remove(index);
-        self.hover = None;
-        self.selection = None;
-        self.selected_body = match self.selected_body {
-            Some(i) if i == index => None,
-            Some(i) if i > index => Some(i - 1),
-            other => other,
-        };
-        self.rebuild_scene();
     }
 
     pub fn rebuild_scene(&mut self) {
@@ -578,51 +831,132 @@ impl AppState {
         Ok((sk, p))
     }
 
-    /// Nimmt einen Körper aus einer Skizze an Ort und Stelle auf oder legt den Fehler ab.
+    /// Ebene für das Skizzen-Feature einer Skizze aus der Liste (Übergang, F13): eine Grundebene,
+    /// wenn die Lage der Skizze ihr gleicht, sonst die ebene Fläche eines sichtbaren Körpers,
+    /// auf der die Skizze liegt.
+    fn feature_plane(&self, frame: &Frame) -> Result<SketchPlane, String> {
+        let tol = self.kernel.tolerance;
+        for p in [
+            planora_feature::StandardPlane::XY,
+            planora_feature::StandardPlane::XZ,
+            planora_feature::StandardPlane::YZ,
+        ] {
+            if same_frame(&p.frame(), frame, tol.linear) {
+                return Ok(SketchPlane::Standard(p));
+            }
+        }
+        for b in &self.bodies {
+            for (face, _) in b.solid.faces.iter() {
+                if plane_of_face(&b.solid, face).is_some_and(|f| same_frame(&f, frame, tol.linear))
+                    && let Ok(r) = planora_feature::FaceRef::from_face(&b.solid, face, &tol)
+                {
+                    return Ok(SketchPlane::OnFace(r));
+                }
+            }
+        }
+        Err(
+            "Die Skizze liegt weder auf einer Grundebene noch auf einer Fläche eines sichtbaren \
+             Körpers; bitte die Skizze neu anlegen"
+                .into(),
+        )
+    }
+
+    /// Legt die Skizze `sketch` als Skizzen-Feature (Kopie) und darauf das Feature `make(id)`
+    /// an. Schlägt eines davon fehl, werden beide wieder entfernt und die Meldung abgelegt.
+    /// Liefert den Index des neuen Körpers.
     fn add_sketch_body(
         &mut self,
-        kind: BodyKind,
-        made: Result<(Solid, String), String>,
+        sketch: usize,
+        name: String,
+        make: impl FnOnce(FeatureId) -> FeatureKind,
     ) -> Result<usize, String> {
-        match made.and_then(|(solid, name)| self.add_body_in_place(kind, name, solid)) {
-            Ok(i) => Ok(i),
-            Err(e) => self.fail(e),
+        let Some(sk) = self.sketches.get(sketch) else {
+            return self.fail("Skizze nicht gefunden".into());
+        };
+        let (sk, sketch_name) = (sk.clone(), sk.name.clone());
+        let plane = match self.feature_plane(sk.frame()) {
+            Ok(p) => p,
+            Err(e) => return self.fail(e),
+        };
+        let sketch_feature = FeatureKind::Sketch(SketchFeature {
+            sketch: sk,
+            plane,
+            copies: Vec::new(),
+        });
+        let s_id = match self.document.add_feature(sketch_name, sketch_feature) {
+            Ok(id) => id,
+            Err(e) => return self.fail(e.to_string()),
+        };
+        let result = match self.document.feature(s_id).map(|f| f.status.clone()) {
+            Some(FeatureStatus::Ok) => self
+                .document
+                .add_feature(name, make(s_id))
+                .map_err(|e| e.to_string())
+                .and_then(
+                    |id| match self.document.feature(id).map(|f| f.status.clone()) {
+                        Some(FeatureStatus::Ok) => Ok(id),
+                        status => Err(status_message(status)),
+                    },
+                ),
+            status => Err(status_message(status)),
+        };
+        match result {
+            Ok(id) => {
+                self.refresh();
+                self.body_index(BodyRef {
+                    feature: id,
+                    index: 0,
+                })
+                .ok_or_else(|| "Der neue Körper ist nicht sichtbar".to_string())
+            }
+            Err(e) => {
+                let _ = self.document.delete_with_dependents(s_id);
+                self.fail(e)
+            }
         }
     }
 
     /// Extrudiert Profil `profile` der Skizze `sketch` um `height` entlang der Skizzennormalen;
-    /// der Körper entsteht an Ort und Stelle. Bei einem Fehler bleibt das Dokument unverändert.
+    /// der Körper entsteht an Ort und Stelle (als Skizzen- und Extrusions-Feature). Bei einem
+    /// Fehler bleibt das Dokument unverändert.
     pub fn extrude_sketch(
         &mut self,
         sketch: usize,
         profile: usize,
         height: f64,
     ) -> Result<usize, String> {
-        let made = if !(height.is_finite() && height > self.kernel.tolerance.linear) {
-            Err("Die Höhe muss größer als null sein".to_string())
-        } else {
-            self.sketch_profile(sketch, profile).and_then(|(sk, p)| {
-                let solid =
-                    extrude_profile(&self.kernel, sk, &p, height).map_err(|e| e.to_string())?;
-                Ok((solid, format!("Extrusion: {}", sk.name)))
-            })
+        if !(height.is_finite() && height > self.kernel.tolerance.linear) {
+            return self.fail("Die Höhe muss größer als null sein".into());
+        }
+        let name = match self.sketch_profile(sketch, profile) {
+            Ok((sk, _)) => format!("Extrusion: {}", sk.name),
+            Err(e) => return self.fail(e),
         };
-        self.add_sketch_body(BodyKind::Extrusion, made)
+        self.add_sketch_body(sketch, name, |id| FeatureKind::Extrude {
+            sketch: id,
+            profile,
+            height,
+        })
     }
 
     /// Dreht Profil `profile` der Skizze `sketch` um die Linie `axis` (360°); der Körper entsteht
-    /// an Ort und Stelle. Bei einem Fehler bleibt das Dokument unverändert.
+    /// an Ort und Stelle (als Skizzen- und Rotations-Feature). Bei einem Fehler bleibt das
+    /// Dokument unverändert.
     pub fn revolve_sketch(
         &mut self,
         sketch: usize,
         profile: usize,
         axis: CurveId,
     ) -> Result<usize, String> {
-        let made = self.sketch_profile(sketch, profile).and_then(|(sk, p)| {
-            let solid = revolve_profile(&self.kernel, sk, &p, axis).map_err(|e| e.to_string())?;
-            Ok((solid, format!("Rotation: {}", sk.name)))
-        });
-        self.add_sketch_body(BodyKind::Revolution, made)
+        let name = match self.sketch_profile(sketch, profile) {
+            Ok((sk, _)) => format!("Rotation: {}", sk.name),
+            Err(e) => return self.fail(e),
+        };
+        self.add_sketch_body(sketch, name, |id| FeatureKind::Revolve {
+            sketch: id,
+            profile,
+            axis,
+        })
     }
 }
 
@@ -631,4 +965,65 @@ fn bounds_of(mesh: &Mesh) -> (DVec3, DVec3) {
         (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN)),
         |(lo, hi), p| (lo.min(*p), hi.max(*p)),
     )
+}
+
+/// Meldung zu einem Feature, das nicht berechnet werden konnte.
+fn status_message(status: Option<FeatureStatus>) -> String {
+    match status {
+        Some(FeatureStatus::Error(e) | FeatureStatus::Skipped(e)) => e,
+        _ => "Das Feature konnte nicht berechnet werden".into(),
+    }
+}
+
+/// Folgt einer Kette von Verschiebungen bis zu dem Körper, den ein anderes Feature erzeugt hat.
+fn origin_of(doc: &Document, mut r: BodyRef) -> BodyRef {
+    // Verweise zeigen nur nach vorn: spätestens nach so vielen Schritten ist die Kette zu Ende.
+    for _ in 0..doc.features().len() {
+        match doc.feature(r.feature).map(|f| &f.kind) {
+            Some(FeatureKind::Move { body, .. }) => r = *body,
+            _ => break,
+        }
+    }
+    r
+}
+
+/// Anzeigename eines Körpers: der Name des Features, das ihn ursprünglich erzeugt hat (mit
+/// laufender Nummer, wenn es mehrere Körper erzeugt).
+fn body_name(doc: &Document, r: BodyRef) -> Option<String> {
+    let r = origin_of(doc, r);
+    let f = doc.feature(r.feature)?;
+    let several = r.index > 0
+        || doc
+            .body(BodyRef {
+                feature: r.feature,
+                index: 1,
+            })
+            .is_some();
+    Some(if several {
+        format!("{} {}", f.name, r.index + 1)
+    } else {
+        f.name.clone()
+    })
+}
+
+/// Art eines Körpers aus dem Feature, das ihn erzeugt hat; Verschieben übernimmt die Art des
+/// verschobenen Körpers.
+fn body_kind(doc: &Document, r: BodyRef) -> BodyKind {
+    match doc.feature(origin_of(doc, r).feature).map(|f| &f.kind) {
+        Some(FeatureKind::Box { .. }) => BodyKind::Box,
+        Some(FeatureKind::Cylinder { .. }) => BodyKind::Cylinder,
+        Some(FeatureKind::Sphere { .. }) => BodyKind::Sphere,
+        Some(FeatureKind::Cone { .. }) => BodyKind::Cone,
+        Some(FeatureKind::Extrude { .. }) => BodyKind::Extrusion,
+        Some(FeatureKind::Revolve { .. }) => BodyKind::Revolution,
+        _ => BodyKind::Combined,
+    }
+}
+
+/// Stimmen zwei Koordinatensysteme überein (Ursprung und Achsen innerhalb von `tol`)?
+fn same_frame(a: &Frame, b: &Frame, tol: f64) -> bool {
+    a.origin.distance(b.origin) <= tol
+        && a.x.distance(b.x) <= tol
+        && a.y.distance(b.y) <= tol
+        && a.z.distance(b.z) <= tol
 }
