@@ -5,6 +5,7 @@ use crate::sketch_state::{ConstraintAction, Item, Severity, SketchSession, Tool}
 use crate::sketch_view::{constraint_name, format_number, is_angle, parse_number, shown_value};
 use crate::state::AppState;
 use egui::{Color32, RichText};
+use planora_feature::FeatureId;
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::model::{CurveKind, Sketch};
@@ -112,7 +113,7 @@ enum Section {
 /// Zustand des Fensters zwischen den Frames (im egui-Speicher).
 #[derive(Clone, Debug)]
 struct PanelState {
-    sketch: usize,
+    sketch: FeatureId,
     editor: Option<Editor>,
     section: Option<Section>,
     pattern_dx: String,
@@ -123,7 +124,7 @@ struct PanelState {
 }
 
 impl PanelState {
-    fn new(sketch: usize) -> Self {
+    fn new(sketch: FeatureId) -> Self {
         Self {
             sketch,
             editor: None,
@@ -155,7 +156,7 @@ fn new_editor(se: &SketchSession, sk: &Sketch, action: ConstraintAction) -> Edit
     }
 }
 
-fn load_panel(ctx: &egui::Context, index: usize) -> PanelState {
+fn load_panel(ctx: &egui::Context, index: FeatureId) -> PanelState {
     ctx.data(|d| d.get_temp::<PanelState>(panel_id()))
         .filter(|p| p.sketch == index)
         .unwrap_or_else(|| PanelState::new(index))
@@ -167,7 +168,7 @@ pub fn open_dimension_editor(ctx: &egui::Context, state: &AppState, action: Cons
     let Some(se) = state.sketch_session.as_ref() else {
         return;
     };
-    let Some(sk) = state.sketches.get(se.sketch) else {
+    let Some(sk) = state.session_sketch() else {
         return;
     };
     if !action.is_dimension() {
@@ -187,10 +188,10 @@ pub fn dimension_editor_open(ctx: &egui::Context) -> bool {
 
 /// Zeigt das Fenster „Skizze“, solange der Skizzen-Modus offen ist.
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
-    let Some(index) = state.sketch_session.as_ref().map(|s| s.sketch) else {
+    let Some(index) = state.open_sketch_id() else {
         return;
     };
-    if index >= state.sketches.len() {
+    if state.session_sketch().is_none() {
         return;
     }
     let mut panel = load_panel(ctx, index);
@@ -203,12 +204,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         .max_width(PANEL_WIDTH)
         .resizable(false)
         .show(ctx, |ui| {
-            let AppState {
-                sketches,
-                sketch_session,
-                ..
-            } = &mut *state;
-            let (Some(se), Some(sk)) = (sketch_session.as_mut(), sketches.get_mut(index)) else {
+            let Some((se, sk)) = state.session_sketch_mut() else {
                 return;
             };
             close = contents(ui, se, sk, &mut panel);

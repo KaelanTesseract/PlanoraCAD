@@ -1,6 +1,6 @@
-# Offene Punkte nach Teilprojekt 1–4
+# Offene Punkte nach Teilprojekt 1–5
 
-Stand: 2026-10-09. Ergebnis der Abschlussprüfungen; bewusst nicht in Teilprojekt 1–4 behoben.
+Stand: 2026-10-10 (Teilprojekt 5 siehe eigener Abschnitt weiter unten). Teilprojekt 1–4: 2026-10-09. Ergebnis der Abschlussprüfungen; bewusst nicht in Teilprojekt 1–4 behoben.
 
 ## Entscheidung des Projekteigners nötig
 - **Markenrecherche** für „PlanoraCAD“ (DPMA, EUIPO, WIPO, Klasse 9) vor einer Veröffentlichung.
@@ -64,8 +64,8 @@ Stand: 2026-10-10 (nach der Abschlusswelle). Bewusst offen gelassen; Fehlerfäll
 - Profile müssen einfache geschlossene Ketten aus Linien und Bögen oder Kreise sein: keine T-Verzweigungen, keine Kreuzungen, kein Zerschneiden von Kurven an Schnittpunkten. Schleifen ohne Fläche oder ohne Schluss gelten als entartet.
 - Drehen nur für Profile ohne Löcher, mit genau einer Linie auf der Drehachse und ganz auf einer Seite der Achse; immer 360°. Extrudieren nur in Richtung der Skizzennormalen (kein Gegen- oder Symmetrisch-Extrudieren).
 - Skizzen nur auf den Grundebenen und auf ebenen Körperflächen; die Ebene einer Skizze lässt sich nachträglich nicht verschieben.
-- Körperkanten werden nur einmalig kopiert (Geraden; Kreise und Bögen in parallelen Ebenen; ganze Kreise und Ellipsen auch schräg, dann als Ellipse). Schräge Bögen und Ellipsenbögen werden abgelehnt. Keine lebende Verknüpfung.
-- Körper aus Skizzen sind Momentaufnahmen (keine Neuberechnung bei späterer Änderung der Skizze); das bringt der Feature-Baum.
+- Körperkanten werden nur einmalig kopiert (Geraden; Kreise und Bögen in parallelen Ebenen; ganze Kreise und Ellipsen auch schräg, dann als Ellipse). Schräge Bögen und Ellipsenbögen werden abgelehnt. (Seit Teilprojekt 5 folgen die Kopien der Kante, solange sie ihre Art behält.)
+- (Erledigt in Teilprojekt 5:) Körper aus Skizzen rechnen sich bei Änderung der Skizze neu; siehe Abschnitt „Nach Teilprojekt 5“.
 - Kein Rückgängig, kein Speichern/Laden.
 - Mehrdeutige Lagen werden vom nächstgelegenen Zustand entschieden: Der Winkel-Rest ist auch bei θ + π null (gespiegelte Lösung), ebenso bei `EllipseAngle`; es gibt keine Auswahl der Lösung.
 - Maße nur als Zahl; keine Gleichungen, Parameter oder Ausdrücke.
@@ -110,6 +110,53 @@ Stand: 2026-10-10 (nach der Abschlusswelle). Bewusst offen gelassen; Fehlerfäll
 - `status()` löst eine Kopie der Skizze, wenn noch kein Lösungsbericht vorliegt.
 - Von Hand nicht geprüft: Eingabe/Esc/Entf-Tasten (die Automatisierung konnte sie nicht senden), Verschieben mit der mittleren Maustaste, Zoomen, Spiegeln/Muster, Kanten kopieren, helles Design.
 - Fehlende Tests: Ausmaß-Berechnung nur für Kreise (nicht Bögen/Ellipsen), Werkzeugfolge ohne Abschluss, Aufheben der Auswahl im Browser, Bearbeiten einer bestehenden Abhängigkeit über das Zahlenfeld; erneutes Anklicken derselben Fläche löscht die Skizzenhervorhebung nicht.
+
+## Nach Teilprojekt 5 (Feature-Baum)
+Stand: 2026-10-10. Skizzen, Extrusionen, Drehungen, Boolesche Operationen und Verschiebungen sind jetzt Features in einer Zeitleiste; sie rechnen sich neu, wenn ein früheres Feature geändert wird. Fehler werden an dem Feature gemeldet, das sie verursacht; die übrigen Features bleiben benutzbar.
+
+**Funktionsumfang (Grenzen)**
+- Kein Speichern und Laden, kein Rückgängig, keine benannten Parameter oder Gleichungen, keine Muster- oder Spiegel-Features.
+- Der Rückrollmarker lässt sich nur per Menü setzen, nicht mit der Maus ziehen.
+- Die Ebene einer Skizze lässt sich nachträglich nicht ändern. Ein Körper lässt sich nicht vor die Skizze „projizieren“, die ihn braucht.
+- Die festen Beispielprofile sind entfernt; Profile kommen nur noch aus Skizzen.
+- Körper aus Booleschen Operationen haben die Art `BodyKind::Combined` und keine eigenen Maße, die sich nachträglich bearbeiten ließen.
+
+**Verweise (stabile Namen)**
+- Das Profil einer Extrusion oder Drehung wird über die Nummer in der Profilliste gefunden. Ändert sich die Reihenfolge der Profile (z. B. durch eine geänderte Skizze), kann das Feature ein anderes Profil meinen.
+- Vertauschen sich zwei gleichartige Flächen (gleiche Rolle, gleiche Herkunft), kann ein Verweis auf die falsche zeigen; der Hinweispunkt entscheidet nur bei mehreren Treffern.
+- Eine Skizze auf einer Fläche hängt nur von dem Grundkörper ab, der die Fläche erzeugt hat. Wird ein später entstandenes Feature gelöscht (z. B. eine Vereinigung), erscheint es nicht in der Liste der Folgen.
+- `Move` behält keine Körperidentität: Nach einer Verschiebung ist der Körper ein neuer, die Verweise laufen über die Marken der Flächen.
+- Kantenkopien in Skizzen folgen der Kante nur, solange sie die gleiche Art behält (Gerade bleibt Gerade, Kreis bleibt Kreis); sonst meldet das Skizzen-Feature einen Fehler. Wird das Feature gelöscht, von dem die Marken der Kante stammen (z. B. der Quader), zählt die Skizze als abhängig: Sie wird nach Rückfrage samt ihren Extrusionen mitgelöscht. Wird dagegen eine Boolesche Operation oder ein Verschieben gelöscht, dessen Ergebniskante kopiert wurde, bleibt die Skizze stehen und meldet danach „Kante nicht mehr vorhanden“ (`EdgeNotFound`), wenn es die Kante am ursprünglichen Körper so nicht gibt.
+- Ein Hinweispunkt kann bei sehr schmalen Flächen fehlen; dann bleibt der alte Hinweis stehen.
+
+**Zeitleiste und Neuberechnung**
+- Der Zwischenspeicher gilt nur im Speicher und geht beim Beenden verloren.
+- Ein `Move`, das nach einer abhängigen Skizze oder Extrusion hinzukommt, verschiebt diese nicht mit (Zeitleiste: ein späteres Feature ändert frühere nicht). Wer will, dass die Skizze folgt, ändert die Maße im Quader-Feature selbst.
+- Die Volumenprobe (2 % Abweichung) kann sehr kleine gekrümmte Körper zu Unrecht ablehnen.
+- Das Ergebnis einer Booleschen Operation oder Verschiebung nimmt den Listenplatz seines ersten Eingangs ein; die Oberfläche darf nicht auf feste Plätze bauen.
+- Kantenkopien nach dem Löschen: siehe „Verweise“ oben (Herkunfts-Feature gelöscht → Skizze wird mitgelöscht; Boolesche Operation/Verschieben gelöscht → Skizze bleibt und kann `EdgeNotFound` melden).
+- Die Neuberechnung invalidiert großzügig: Ändert sich ein Körper, rechnen alle Features neu, die sichtbare Körper lesen (Skizzen auf Flächen, Kantenkopien, Boolesche Operationen), auch wenn sie den geänderten Körper gar nicht brauchen.
+- Umbenennen rechnet nicht neu; zwischengespeicherte Fehlermeldungen nennen deshalb bis zur nächsten Neuberechnung den alten Namen.
+- Fehlertexte aus dem Feature-Modell nennen Features teils nur über ihre interne Nummer („Fläche … von Feature 3“, „Körper 0 von Feature 5“); `EdgeNotFound` nennt keine Herkunft.
+- Zahlen sind auf ±1e9 mm begrenzt (`MAX_COORD_MM`): Maße, Lagen, Verschiebungen und die Eckpunkte jedes Ergebniskörpers werden beim Berechnen geprüft; größere Werte ergeben einen Fehlerstatus statt eines Absturzes. Die Prüfung sieht nur Eckpunkte; gekrümmte Flächen können bis etwa um ihren Radius darüber hinausreichen.
+- Boolesche Operationen heißen „Boolesche Operation N“; die Art steht nicht im Namen.
+- Der Zweig, der eine fehlgeschlagene Verschiebung zurücknimmt (`move_body`), ist nicht getestet; riesige Verschiebungen werden vorher abgelehnt (±1e9 mm).
+
+**Oberfläche**
+- Beim Ziehen am Feld „Position“ werden alle Körper in jedem Bild neu vernetzt (später Netze zwischenspeichern).
+- Verschiebt man einen Körper im Eigenschaftenfenster, während eine Skizze offen ist, wird die Skizze beendet.
+- Löscht man die offene Skizze, geht ihr Entwurf ohne Nachfrage verloren.
+- „Löschen“ beendet die offene Skizze auch dann, wenn die Rückfrage abgebrochen wird.
+- Die offene Skizze wird auch dann verworfen, wenn ihr Entwurf von dem gelöschten Feature gar nicht mehr abhängt.
+- Der Hinweis in der Löschen-Rückfrage nennt nur Skizzen auf Flächen, nicht Skizzen mit Kantenkopien, die nach dem Löschen einer Booleschen Operation oder eines Verschiebens auf `EdgeNotFound` laufen.
+- Die Ansicht passt sich neu ein, sobald sich die Zahl der Körper ändert; gewählte Flächen und Kanten werden nach einer Neuberechnung über ihre Arena-Nummer weitergeführt und können dann eine andere Fläche meinen.
+- Ziehen am Feld „Position“ legt höchstens ein Verschieben je Zug an (es wird im selben Zug erweitert, auch wenn danach ein Leser steht).
+- Fehlt dem Skizzen-Feature ein Ergebnis, nutzt die Oberfläche die gespeicherte Definition.
+- **Von Hand nur teilweise geprüft:** Die frühere Annahme, die App stürze ab, war falsch: die Bildschirmsteuerung der Agenten scheiterte, weil `planora-app` keine installierte App ist. Mit `tools/gui-drive.ps1` (echte Mausklicks per PowerShell) wurden Quader, Skizze auf Fläche, Extrusion, Vereinigen, Unterdrücken, Zurückrollen, Löschen mit Rückfrage und Position ziehen von Hand geprüft. Nicht von Hand geprüft: Rotation, Fehlerfälle, Skizze mit Kantenkopie. Beobachtung: Nach „Zurückrollen“ bleibt die Umrisslinie der nicht berechneten Skizze im Bild sichtbar.
+
+**Aktualisierung früherer Abschnitte**
+- „Körper aus Skizzen sind Momentaufnahmen“ und „Keine lebende Verknüpfung“ gelten nicht mehr: Skizzen sind Features, Körper und Kantenkopien folgen Änderungen (Grenzen oben).
+- „Kein Rückgängig“ und „Kein Speichern/Laden“ gelten weiter.
 
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).

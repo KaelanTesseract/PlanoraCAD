@@ -2,7 +2,7 @@ use crate::error::KernelError;
 use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
 use crate::profile::{Profile, ProfileLoop, Segment, check_hole_layout, check_loop_input};
-use crate::topology::{Edge, Face, HalfEdge, Loop, Solid};
+use crate::topology::{Edge, Face, FaceTag, HalfEdge, Loop, Solid};
 use planora_math::{Frame, Tolerance};
 
 /// Kanten einer Schleife auf der Unter- und Oberseite.
@@ -32,6 +32,14 @@ pub fn extrude(
         check_loop_input(lp, tol)?;
     }
     check_hole_layout(profile, tol)?;
+    // Welche Schleifen dreht `oriented()` um? Nötig, um die Wandnummern auf die eingegebene
+    // Reihenfolge zurückzurechnen (gleiche Bedingungen wie in `Profile::oriented`).
+    let outer_reversed = profile.outer.signed_area() < 0.0;
+    let holes_reversed: Vec<bool> = profile
+        .holes
+        .iter()
+        .map(|h| h.signed_area() > 0.0)
+        .collect();
     let profile = profile.oriented();
     for lp in std::iter::once(&profile.outer).chain(profile.holes.iter()) {
         let area = lp.signed_area();
@@ -41,11 +49,24 @@ pub fn extrude(
     }
 
     let mut solid = Solid::new();
-    let outer = build_loop(&mut solid, frame, height, &profile.outer, tol)?;
+    let outer = build_loop(
+        &mut solid,
+        frame,
+        height,
+        &profile.outer,
+        tol,
+        "",
+        outer_reversed,
+    )?;
     let holes = profile
         .holes
         .iter()
-        .map(|h| build_loop(&mut solid, frame, height, h, tol))
+        .zip(&holes_reversed)
+        .enumerate()
+        .map(|(j, (h, &reversed))| {
+            let prefix = format!("Loch {}, ", j + 1);
+            build_loop(&mut solid, frame, height, h, tol, &prefix, reversed)
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     let forward = |edges: &[Id<Edge>]| Loop {
@@ -79,6 +100,10 @@ pub fn extrude(
         outer: forward(&outer.top),
         inner: holes.iter().map(|h| forward(&h.top)).collect(),
         patch: None,
+        tag: Some(FaceTag {
+            origin: 0,
+            role: "Deckel".into(),
+        }),
     });
     // Boden: Normale -z, alle Schleifen in umgekehrter Richtung.
     solid.add_face(Face {
@@ -87,6 +112,10 @@ pub fn extrude(
         outer: backward_reversed(&outer.bottom),
         inner: holes.iter().map(|h| backward_reversed(&h.bottom)).collect(),
         patch: None,
+        tag: Some(FaceTag {
+            origin: 0,
+            role: "Boden".into(),
+        }),
     });
 
     solid.seal();
@@ -121,6 +150,11 @@ fn side_loop(
     }
 }
 
+/// Baut Kanten und Wandflächen einer (bereits orientierten) Schleife.
+///
+/// `prefix` steht vor der Wandrolle (`""` außen, `"Loch j, "` für Löcher). `reversed` sagt, ob
+/// `lp` gegenüber der Eingabe umgedreht wurde; dann entspricht Segment `i` dem Eingabesegment
+/// `m − 1 − i`, die 1-basierte Wandnummer ist also `m − i`.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn build_loop(
     solid: &mut Solid,
@@ -128,6 +162,8 @@ fn build_loop(
     height: f64,
     lp: &ProfileLoop,
     tol: &Tolerance,
+    prefix: &str,
+    reversed: bool,
 ) -> Result<LoopEdges, KernelError> {
     if !lp.is_closed(tol) {
         return Err(KernelError::ProfileNotClosed);
@@ -164,6 +200,11 @@ fn build_loop(
 
     for i in 0..m {
         let next = (i + 1) % m;
+        let wall = if reversed { m - i } else { i + 1 };
+        let tag = Some(FaceTag {
+            origin: 0,
+            role: format!("{prefix}Wand {wall}"),
+        });
         match lp.segments[i] {
             Segment::Line { .. } => {
                 let a = frame.point_2d(pts[i]);
@@ -203,6 +244,7 @@ fn build_loop(
                     outer: side_loop(be, te, vertical[i], vertical[next]),
                     inner: vec![],
                     patch: None,
+                    tag,
                 });
                 edges.bottom.push(be);
                 edges.top.push(te);
@@ -260,6 +302,7 @@ fn build_loop(
                         v0: 0.0,
                         v1: height,
                     }),
+                    tag,
                 });
                 edges.bottom.push(be);
                 edges.top.push(te);

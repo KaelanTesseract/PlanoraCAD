@@ -7,7 +7,7 @@
 use super::seg::{Seg, sample_count};
 use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
-use crate::topology::{Face, Loop, Solid};
+use crate::topology::{Face, FaceTag, Loop, Solid};
 use planora_math::{DVec2, DVec3, TAU, Tolerance, orient2d};
 
 /// Geometrische Beschreibung einer (ggf. beschnittenen) Fläche, unabhängig vom `Solid`.
@@ -18,6 +18,8 @@ pub struct FaceGeom {
     pub domain: Option<UvRect>,
     /// `loops[0]` ist die äußere Schleife, danach folgen Löcher.
     pub loops: Vec<Vec<Seg>>,
+    /// Marke der Quellfläche; wandert über die Flächenstücke in die Ergebnisflächen.
+    pub tag: Option<FaceTag>,
 }
 
 pub fn face_geom(solid: &Solid, id: Id<Face>) -> FaceGeom {
@@ -40,6 +42,7 @@ pub fn face_geom(solid: &Solid, id: Id<Face>) -> FaceGeom {
             .chain(f.inner.iter())
             .map(to_loop)
             .collect(),
+        tag: f.tag.clone(),
     }
 }
 

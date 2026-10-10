@@ -51,7 +51,7 @@ impl BooleanDialog {
     /// Fehler steht die Meldung dann in `error` (und in der Statuszeile); nach Erfolg schließt er.
     pub fn execute(&mut self, state: &mut AppState) -> bool {
         state.message = None;
-        match state.boolean(self.a, self.b, self.op) {
+        match state.add_boolean(self.a, self.b, self.op) {
             Ok(_) => {
                 self.error = None;
                 false

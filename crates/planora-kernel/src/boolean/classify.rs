@@ -13,7 +13,8 @@ use super::uv::{
     Containment, FaceGeom, face_geom, loop_points, point_in_face, points_to_uv, samples, winding,
 };
 use crate::geometry::{Curve, Surface};
-use crate::topology::Solid;
+use crate::ids::Id;
+use crate::topology::{Edge, Face, Solid};
 use planora_math::{DVec2, DVec3, TAU, Tolerance};
 
 /// Lage eines Flächenstücks relativ zum anderen Körper.
@@ -237,6 +238,32 @@ fn interior_point(face: &FaceGeom, region: &Region, tol: &Tolerance) -> Option<D
         }
     }
     best.filter(|(_, d)| *d > tol.linear * 2.0).map(|(q, _)| q)
+}
+
+/// Ein Punkt im Inneren der Fläche `face` (nicht auf ihrem Rand und nicht auf einer Naht), mit
+/// derselben Suche wie bei der Einordnung der Flächenstücke. `None` bei unbekannter Id oder wenn
+/// kein Punkt gefunden wird.
+///
+/// Das Flächenstück ist die ganze Fläche: äußere Schleife und Löcher direkt aus der Fläche. Das
+/// ist genau das, was `split_face` ohne Schnitte liefert, umgeht aber dessen Graphaufbau, der für
+/// den Prüfpunkt nichts beiträgt. Nähte periodischer Flächen sind gewöhnliche Stücke der äußeren
+/// Schleife; `interior_point` hält deshalb auch zu ihnen Abstand.
+pub fn face_probe_point(solid: &Solid, face: Id<Face>, tol: &Tolerance) -> Option<DVec3> {
+    solid.faces.get(face)?;
+    let geom = face_geom(solid, face);
+    let mut loops = geom.loops.iter().cloned();
+    let region = Region {
+        outer: loops.next()?,
+        holes: loops.collect(),
+    };
+    interior_point(&geom, &region, tol)
+}
+
+/// Ein Punkt auf der Kante `edge`: Kurvenpunkt in der Mitte ihres Parameterbereichs.
+/// `None` bei unbekannter Id.
+pub fn edge_probe_point(solid: &Solid, edge: Id<Edge>) -> Option<DVec3> {
+    let e = solid.edges.get(edge)?;
+    Some(e.curve.point(0.5 * (e.t0 + e.t1)))
 }
 
 /// Ordnet ein Flächenstück relativ zum anderen Körper ein.

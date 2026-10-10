@@ -1,14 +1,17 @@
 use glam::Vec2;
 use planora_app::create_dialog::CreateDialog;
 use planora_app::state::*;
-use planora_kernel::*;
 use planora_math::DVec3;
 use planora_render::*;
 
-fn boxed(size: f64) -> Solid {
-    AnalyticKernel::default()
-        .make_box(DVec3::new(size, size, size))
-        .unwrap()
+/// Würfel als Feature neben den vorhandenen Körpern; liefert den Index des neuen Körpers.
+fn add_cube(s: &mut AppState, size: f64) -> usize {
+    let id = s.create_box(DVec3::splat(size)).unwrap();
+    s.body_index(planora_feature::BodyRef {
+        feature: id,
+        index: 0,
+    })
+    .unwrap()
 }
 
 #[test]
@@ -37,8 +40,8 @@ fn new_state_is_empty_and_framing_it_does_not_panic() {
 #[test]
 fn bodies_are_placed_next_to_each_other() {
     let mut s = AppState::new();
-    let a = s.add_body(BodyKind::Box, "A".into(), boxed(10.0)).unwrap();
-    let b = s.add_body(BodyKind::Box, "B".into(), boxed(10.0)).unwrap();
+    let a = add_cube(&mut s, 10.0);
+    let b = add_cube(&mut s, 10.0);
     assert_eq!((a, b), (0, 1));
     assert!(
         s.bodies[1].bounds.0.x > s.bodies[0].bounds.1.x,
@@ -54,57 +57,60 @@ fn bodies_are_placed_next_to_each_other() {
 fn adding_a_body_fills_mass_properties_and_bumps_the_scene_version() {
     let mut s = AppState::new();
     let v0 = s.scene_version;
-    s.add_body(BodyKind::Box, "Würfel".into(), boxed(10.0))
-        .unwrap();
+    add_cube(&mut s, 10.0);
     assert!(s.scene_version > v0);
     assert!((s.bodies[0].mass.volume - 1000.0).abs() < 1e-6);
 }
 
 #[test]
 fn invalid_solids_are_rejected_with_a_message() {
+    // Körper entstehen nur noch aus Features: ungültige Maße werden abgelehnt, das Dokument
+    // bleibt leer.
     let mut s = AppState::new();
-    let mut bad = boxed(1.0);
-    let id = Id::<Face>::from_index(0);
-    bad.faces[id].outer.half_edges[0].forward = !bad.faces[id].outer.half_edges[0].forward;
-    let err = s.add_body(BodyKind::Box, "kaputt".into(), bad).unwrap_err();
+    let err = s.create_box(DVec3::new(1.0, -1.0, 1.0)).unwrap_err();
     assert!(!err.is_empty());
+    assert_eq!(s.message.as_deref(), Some(err.as_str()));
+    assert!(s.create_cylinder(f64::NAN, 1.0).is_err());
     assert!(s.bodies.is_empty());
+    assert!(s.document.features().is_empty());
 }
 
 #[test]
 fn removing_a_body_clears_references_to_it() {
     let mut s = AppState::new();
-    s.add_body(BodyKind::Box, "A".into(), boxed(10.0)).unwrap();
-    s.add_body(BodyKind::Box, "B".into(), boxed(10.0)).unwrap();
-    s.add_body(BodyKind::Box, "C".into(), boxed(10.0)).unwrap();
+    add_cube(&mut s, 10.0);
+    add_cube(&mut s, 10.0);
+    add_cube(&mut s, 10.0);
     let face = s.bodies[1].mesh.face_ranges[0].face;
     s.set_selection(Some(Pick::Face(FaceRef { body: 1, face })));
     s.set_hover(Some(Pick::Face(FaceRef { body: 1, face })));
-    s.remove_body(1);
+    s.delete_feature(s.bodies[1].source.feature).unwrap();
     assert_eq!(s.bodies.len(), 2);
     assert!(s.selection.is_none());
     assert!(s.hover.is_none());
     assert_eq!(s.selected_body, None);
 
-    // Wird ein Körper vor dem ausgewählten entfernt, rückt der Index nach.
+    // Wird ein Körper vor dem ausgewählten entfernt, rückt der Index nach; Auswahl und
+    // Hervorhebung bleiben auf dem (weiter sichtbaren) Körper.
     s.set_selection(Some(Pick::Face(FaceRef { body: 1, face })));
     s.set_hover(Some(Pick::Face(FaceRef { body: 1, face })));
     assert_eq!(s.selected_body, Some(1));
-    assert_eq!(s.bodies[1].name, "C");
-    s.remove_body(0);
+    assert_eq!(s.bodies[1].name, "Quader 3");
+    s.delete_feature(s.bodies[0].source.feature).unwrap();
     assert_eq!(s.selected_body, Some(0));
-    assert_eq!(s.bodies[0].name, "C");
-    assert!(s.hover.is_none());
-    assert!(s.selection.is_none());
+    assert_eq!(s.bodies[0].name, "Quader 3");
+    assert_eq!(s.hover, Some(Pick::Face(FaceRef { body: 0, face })));
+    assert_eq!(s.selection, Some(Pick::Face(FaceRef { body: 0, face })));
 
-    s.remove_body(5); // ungültiger Index → ignoriert
+    // unbekanntes Feature → Fehler, nichts ändert sich
+    assert!(s.delete_feature(planora_feature::FeatureId(999)).is_err());
     assert_eq!(s.bodies.len(), 1);
 }
 
 #[test]
 fn picking_in_empty_or_tiny_viewports_finds_nothing() {
     let mut s = AppState::new();
-    s.add_body(BodyKind::Box, "A".into(), boxed(10.0)).unwrap();
+    add_cube(&mut s, 10.0);
     for viewport in [
         Vec2::new(0.0, 0.0),
         Vec2::new(0.5, 100.0),
@@ -125,7 +131,7 @@ fn body_names_stay_unique_after_deleting() {
     };
     dialog.create(&mut s);
     dialog.create(&mut s);
-    s.remove_body(0);
+    s.delete_feature(s.bodies[0].source.feature).unwrap();
     dialog.create(&mut s);
     let names: Vec<&str> = s.bodies.iter().map(|b| b.name.as_str()).collect();
     assert_eq!(names.len(), 2);
@@ -135,7 +141,7 @@ fn body_names_stay_unique_after_deleting() {
 #[test]
 fn picking_hits_a_face_in_the_middle_of_the_screen() {
     let mut s = AppState::new();
-    s.add_body(BodyKind::Box, "A".into(), boxed(10.0)).unwrap();
+    add_cube(&mut s, 10.0);
     s.camera.set_viewport(800.0, 600.0);
     // In der Standardansicht (isometrisch) liegt die vordere senkrechte Würfelkante genau in der
     // Bildmitte; dort gewinnt zu Recht die Kante. Eine Fläche trifft man neben der Mitte.
@@ -154,7 +160,7 @@ fn picking_hits_a_face_in_the_middle_of_the_screen() {
 #[test]
 fn hover_and_selection_changes_rebuild_the_scene_only_when_needed() {
     let mut s = AppState::new();
-    s.add_body(BodyKind::Box, "A".into(), boxed(10.0)).unwrap();
+    add_cube(&mut s, 10.0);
     let face = s.bodies[0].mesh.face_ranges[0].face;
     let v = s.scene_version;
     s.set_hover(None);
@@ -169,9 +175,7 @@ fn hover_and_selection_changes_rebuild_the_scene_only_when_needed() {
 #[test]
 fn a_sphere_at_the_dialog_maximum_gives_a_bounded_scene() {
     let mut s = AppState::new();
-    let sphere = AnalyticKernel::default().make_sphere(100_000.0).unwrap();
-    s.add_body(BodyKind::Sphere, "Kugel 1".into(), sphere)
-        .unwrap();
+    s.create_sphere(100_000.0).unwrap();
     assert!(
         s.scene.face_indices.len() < 3_000_000,
         "{}",

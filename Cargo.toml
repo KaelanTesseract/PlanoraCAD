@@ -17,6 +17,7 @@ planora-kernel = { path = "crates/planora-kernel" }
 planora-mesh = { path = "crates/planora-mesh" }
 planora-render = { path = "crates/planora-render" }
 planora-sketch = { path = "crates/planora-sketch" }
+planora-feature = { path = "crates/planora-feature" }
 
 # externe Crates (Lizenzen am 2026-10-09 geprüft: alle MIT und/oder Apache-2.0, earcutr ISC, spade MIT OR Apache-2.0, egui_tiles MIT OR Apache-2.0, Roboto-Schrift Apache-2.0)
 glam = "0.34"

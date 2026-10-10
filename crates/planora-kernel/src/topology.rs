@@ -59,6 +59,17 @@ pub struct Face {
     pub outer: Loop,
     pub inner: Vec<Loop>,
     pub patch: Option<UvRect>,
+    /// Beschreibende Marke (Herkunft und Rolle). Fließt weder in die Geometrie noch in den
+    /// Validator ein.
+    pub tag: Option<FaceTag>,
+}
+
+/// Beschreibende Marke einer Fläche (siehe Spec Feature-Baum §4). `origin == 0`: noch keinem
+/// Feature zugewiesen.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FaceTag {
+    pub origin: u64,
+    pub role: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -75,6 +86,28 @@ pub struct Solid {
 }
 
 impl Solid {
+    /// Weist allen noch nicht zugewiesenen Marken (`origin == 0`) die Herkunft `origin` zu.
+    /// Flächen ohne Marke und bereits zugewiesene Marken bleiben unverändert.
+    pub fn assign_origin(&mut self, origin: u64) {
+        let ids: Vec<Id<Face>> = self.faces.iter().map(|(id, _)| id).collect();
+        for id in ids {
+            if let Some(tag) = self.faces[id].tag.as_mut()
+                && tag.origin == 0
+            {
+                tag.origin = origin;
+            }
+        }
+    }
+
+    /// Alle Flächen mit genau dieser Marke, aufsteigend nach Id.
+    pub fn faces_with_tag(&self, tag: &FaceTag) -> Vec<Id<Face>> {
+        self.faces
+            .iter()
+            .filter(|(_, f)| f.tag.as_ref() == Some(tag))
+            .map(|(id, _)| id)
+            .collect()
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

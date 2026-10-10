@@ -1,9 +1,10 @@
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
-use crate::samples::{ExtrudeSample, RevolveSample};
+use crate::feature_dialog::FeatureDialog;
 use crate::state::{AppState, SketchRequest, StandardPlane};
 use crate::{browser, fonts, properties, sketch_panel, theme, viewport};
 use egui_tiles::{Container, SimplificationOptions, TileId, Tiles, Tree, UiResponse};
+use planora_feature::SketchPlane;
 use planora_kernel::BoolOp;
 use planora_render::gpu::GpuScene;
 use planora_render::{FaceRef, Pick, ViewFace};
@@ -95,6 +96,7 @@ pub struct PlanoraApp {
     dock: Tree<Pane>,
     dialog: Option<CreateDialog>,
     boolean_dialog: Option<BooleanDialog>,
+    feature_dialog: Option<FeatureDialog>,
     applied_dark: Option<bool>,
 }
 
@@ -114,6 +116,7 @@ impl PlanoraApp {
             dock: build_docking(),
             dialog: None,
             boolean_dialog: None,
+            feature_dialog: None,
             applied_dark: None,
         }
     }
@@ -128,9 +131,11 @@ impl PlanoraApp {
             ui.menu_button("Erzeugen", |ui| {
                 // Körper entstehen außerhalb des Skizzen-Modus: eine offene Skizze wird vorher
                 // beendet.
+                // Wird der Entwurf abgelehnt, bleibt die Skizze offen und der Dialog entfällt.
                 let mut open = |dialog: CreateDialog, ui: &mut egui::Ui| {
-                    self.state.close_sketch();
-                    self.dialog = Some(dialog);
+                    if self.state.try_close_sketch().is_ok() {
+                        self.dialog = Some(dialog);
+                    }
                     ui.close();
                 };
                 if ui.button("Quader …").clicked() {
@@ -165,34 +170,16 @@ impl PlanoraApp {
                     );
                 }
                 ui.separator();
-                if ui.button("Extrusion …").clicked() {
-                    let sample = ExtrudeSample::PlateWithHole;
-                    open(
-                        CreateDialog::Extrude {
-                            sample,
-                            height: sample.default_height(),
-                        },
-                        ui,
-                    );
-                }
-                if ui.button("Rotation …").clicked() {
-                    open(
-                        CreateDialog::Revolve {
-                            sample: RevolveSample::Vase,
-                        },
-                        ui,
-                    );
-                }
-                ui.separator();
                 self.sketch_menu(ui);
                 ui.separator();
                 // Körper aus Skizzen: die gewählte (sonst die geöffnete, sonst die letzte) Skizze.
+                let sketches = self.state.sketch_features();
                 let target = self
                     .state
-                    .selected_sketch
-                    .or(self.state.sketch_session.as_ref().map(|s| s.sketch))
-                    .filter(|&i| i < self.state.sketches.len())
-                    .or(self.state.sketches.len().checked_sub(1));
+                    .selected_feature
+                    .or(self.state.open_sketch_id())
+                    .filter(|id| sketches.iter().any(|(s, _)| s == id))
+                    .or(sketches.last().map(|(id, _)| *id));
                 for (label, revolve) in [("Skizze extrudieren …", false), ("Skizze drehen …", true)]
                 {
                     if ui
@@ -201,12 +188,13 @@ impl PlanoraApp {
                         .clicked()
                         && let Some(i) = target
                     {
-                        self.state.close_sketch();
-                        self.dialog = Some(if revolve {
-                            CreateDialog::revolve_sketch(&self.state, i)
-                        } else {
-                            CreateDialog::extrude_sketch(i)
-                        });
+                        if self.state.try_close_sketch().is_ok() {
+                            self.dialog = Some(if revolve {
+                                CreateDialog::revolve_sketch(&self.state, i)
+                            } else {
+                                CreateDialog::extrude_sketch(i)
+                            });
+                        }
                         ui.close();
                     }
                 }
@@ -224,10 +212,22 @@ impl PlanoraApp {
                         .on_disabled_hover_text("Dafür werden mindestens zwei Körper benötigt.")
                         .clicked()
                     {
-                        self.state.close_sketch();
-                        self.boolean_dialog = Some(BooleanDialog::with_op(&self.state, op));
+                        if self.state.try_close_sketch().is_ok() {
+                            self.boolean_dialog = Some(BooleanDialog::with_op(&self.state, op));
+                        }
                         ui.close();
                     }
+                }
+                ui.separator();
+                let rolled_back =
+                    self.state.document.marker() < self.state.document.features().len();
+                if ui
+                    .add_enabled(rolled_back, egui::Button::new("Zum Ende der Zeitleiste"))
+                    .on_disabled_hover_text("Es wird bereits die ganze Zeitleiste berechnet.")
+                    .clicked()
+                {
+                    let _ = browser::roll_to_end(&mut self.state);
+                    ui.close();
                 }
             });
             ui.menu_button("Ansicht", |ui| {
@@ -271,9 +271,9 @@ impl PlanoraApp {
             ("Skizze auf YZ-Ebene", StandardPlane::YZ),
         ] {
             if ui.button(label).clicked() {
-                let i = self.state.new_sketch(AppState::standard_frame(plane));
-                self.state.selected_sketch = Some(i);
-                let _ = self.state.open_sketch(i);
+                if let Ok(id) = self.state.add_sketch(SketchPlane::Standard(plane)) {
+                    let _ = self.state.open_sketch(id);
+                }
                 ui.close();
             }
         }
@@ -295,9 +295,8 @@ impl PlanoraApp {
             .clicked()
             && let Some((body, face)) = face
         {
-            if let Ok(i) = self.state.new_sketch_on_face(body, face) {
-                self.state.selected_sketch = Some(i);
-                let _ = self.state.open_sketch(i);
+            if let Ok(id) = self.state.new_sketch_on_face(body, face) {
+                let _ = self.state.open_sketch(id);
             }
             ui.close();
         }
@@ -336,18 +335,16 @@ impl eframe::App for PlanoraApp {
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
-                let sketch = self
-                    .state
-                    .sketch_session
-                    .as_ref()
-                    .and_then(|s| self.state.sketches.get(s.sketch));
-                match (&self.state.message, sketch) {
-                    (Some(m), _) => ui.colored_label(egui::Color32::from_rgb(230, 90, 90), m),
-                    (None, Some(sk)) => ui.weak(format!(
+                let sketch = self.state.session_sketch();
+                // Vorrang: letzte Meldung, Skizzen-Modus, erstes Feature mit Fehler, Körperzahl.
+                match (&self.state.message, sketch, browser::status_text(&self.state)) {
+                    (Some(m), _, _) => ui.colored_label(browser::ERROR_COLOR, m),
+                    (None, Some(sk), _) => ui.weak(format!(
                         "Skizzen-Modus: {} – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt",
                         sk.name
                     )),
-                    (None, None) => ui.weak(format!("{} Körper", self.state.bodies.len())),
+                    (None, None, Some(e)) => ui.colored_label(browser::ERROR_COLOR, e),
+                    (None, None, None) => ui.weak(format!("{} Körper", self.state.bodies.len())),
                 };
             });
         });
@@ -361,12 +358,23 @@ impl eframe::App for PlanoraApp {
         if let Some(dialog) = dialog_for_request(&mut self.state) {
             self.dialog = Some(dialog);
         }
+        if let Some(id) = self.state.edit_request.take() {
+            self.feature_dialog = FeatureDialog::new(&self.state, id);
+        }
         drop_dialogs_in_sketch_mode(&self.state, &mut self.dialog, &mut self.boolean_dialog);
+        if self.state.sketch_session.is_some() {
+            self.feature_dialog = None;
+        }
         sketch_panel::show(ui.ctx(), &mut self.state);
         if let Some(mut dialog) = self.dialog.take()
             && dialog.show(ui.ctx(), &mut self.state)
         {
             self.dialog = Some(dialog);
+        }
+        if let Some(mut dialog) = self.feature_dialog.take()
+            && dialog.show(ui.ctx(), &mut self.state)
+        {
+            self.feature_dialog = Some(dialog);
         }
         if let Some(mut dialog) = self.boolean_dialog.take()
             && dialog.show(ui.ctx(), &mut self.state)

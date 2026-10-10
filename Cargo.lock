@@ -2420,12 +2420,25 @@ dependencies = [
  "egui",
  "egui_tiles",
  "glam",
+ "planora-feature",
  "planora-kernel",
  "planora-math",
  "planora-mesh",
  "planora-render",
  "planora-sketch",
  "winit",
+]
+
+[[package]]
+name = "planora-feature"
+version = "0.1.0"
+dependencies = [
+ "planora-kernel",
+ "planora-math",
+ "planora-mesh",
+ "planora-sketch",
+ "proptest",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -3,6 +3,7 @@
 //! Alle Methoden, die die Skizze ändern, sind atomar: Bei einem Fehler bleiben Skizze und
 //! Sitzung (laufendes Werkzeug, Auswahl) unverändert, und `message` erklärt den Fehler.
 
+use planora_feature::FeatureId;
 use planora_kernel::{Edge, Id, Solid};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
@@ -102,8 +103,8 @@ pub enum Severity {
 /// Zustand des geöffneten Skizzen-Modus.
 #[derive(Clone, Debug)]
 pub struct SketchSession {
-    /// Index in `AppState::sketches`.
-    pub sketch: usize,
+    /// Das bearbeitete Skizzen-Feature (die Sitzung arbeitet auf seinem Entwurf).
+    pub sketch: FeatureId,
     pub tool: Tool,
     pub selection: Vec<Item>,
     /// Punkte des laufenden Werkzeugs.
@@ -149,7 +150,7 @@ fn status_ok(r: &SolveReport) -> bool {
 }
 
 impl SketchSession {
-    pub fn new(sketch: usize) -> SketchSession {
+    pub fn new(sketch: FeatureId) -> SketchSession {
         SketchSession {
             sketch,
             tool: Tool::Select,

@@ -11,7 +11,10 @@ mod split;
 mod surfsurf;
 mod uv;
 
-pub use classify::{Class, Location, classify_region, solid_contains, solid_faces};
+pub use classify::{
+    Class, Location, classify_region, edge_probe_point, face_probe_point, solid_contains,
+    solid_faces,
+};
 pub use error::{BoolOp, BooleanError};
 pub use imprint::{FaceWork, imprint};
 pub use roots::{CurveSurface, Root, curve_surface_roots, seg_intersections};

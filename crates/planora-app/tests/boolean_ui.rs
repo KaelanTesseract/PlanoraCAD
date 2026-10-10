@@ -3,24 +3,12 @@
 use planora_app::boolean_dialog::BooleanDialog;
 use planora_app::state::*;
 use planora_app::{fonts, properties};
-use planora_kernel::*;
 use planora_math::DVec3;
 
 fn state() -> AppState {
     let mut s = AppState::new();
-    let k = s.kernel;
-    s.add_body(
-        BodyKind::Box,
-        "Quader".into(),
-        k.make_box(DVec3::splat(10.0)).unwrap(),
-    )
-    .unwrap();
-    s.add_body(
-        BodyKind::Cylinder,
-        "Zylinder".into(),
-        k.make_cylinder(2.0, 14.0).unwrap(),
-    )
-    .unwrap();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    s.create_cylinder(2.0, 14.0).unwrap();
     s
 }
 
@@ -109,7 +97,9 @@ fn opening_a_sketch_drops_open_body_and_boolean_dialogs() {
         create.is_some() && boolean.is_some(),
         "ohne Skizze bleiben sie offen"
     );
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    let i = s
+        .add_sketch(planora_feature::SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
     s.open_sketch(i).unwrap();
     drop_dialogs_in_sketch_mode(&s, &mut create, &mut boolean);
     assert!(create.is_none() && boolean.is_none());

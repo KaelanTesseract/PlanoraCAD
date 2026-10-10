@@ -80,6 +80,7 @@ fn seal_puts_all_faces_into_one_shell() {
         },
         inner: vec![],
         patch: None,
+        tag: None,
     };
     let f1 = s.add_face(face.clone());
     let f2 = s.add_face(face);

@@ -1,6 +1,7 @@
 use planora_app::sketch_state::*;
 use planora_app::state::{AppState, BodyKind, StandardPlane};
-use planora_kernel::{Kernel, Surface};
+use planora_feature::{BodyRef, FeatureId, SketchPlane};
+use planora_kernel::Surface;
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::{CurveKind, Sketch};
@@ -10,12 +11,25 @@ const R: f64 = 0.5; // Fangradius in Skizzeneinheiten
 fn setup() -> (Sketch, SketchSession) {
     (
         Sketch::new(Frame::WORLD, "S", Tolerance::default()),
-        SketchSession::new(0),
+        SketchSession::new(FeatureId(0)),
     )
 }
 
 fn click(se: &mut SketchSession, sk: &mut Sketch, x: f64, y: f64) {
     se.click(sk, DVec2::new(x, y), R, false).unwrap();
+}
+
+/// Legt ein Skizzen-Feature auf einer Grundebene an.
+fn new_sketch(s: &mut AppState, plane: StandardPlane) -> FeatureId {
+    s.add_sketch(SketchPlane::Standard(plane)).unwrap()
+}
+
+/// Bearbeitet die Skizze `id` wie im Skizzen-Modus: öffnen, `f` auf dem Entwurf, beenden.
+fn edit_sketch<T>(s: &mut AppState, id: FeatureId, f: impl FnOnce(&mut Sketch) -> T) -> T {
+    s.open_sketch(id).unwrap();
+    let r = f(s.session_sketch_mut().unwrap().1);
+    s.close_sketch();
+    r
 }
 
 #[test]
@@ -251,8 +265,8 @@ fn ellipse_and_spline_tools() {
 fn app_state_creates_opens_and_closes_sketches() {
     let mut s = AppState::new();
     let before_cam = s.camera;
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
-    assert_eq!(s.sketches[i].name, "Skizze 1");
+    let i = new_sketch(&mut s, StandardPlane::XY);
+    assert_eq!(s.document.feature(i).unwrap().name, "Skizze 1");
     s.open_sketch(i).unwrap();
     assert!(s.sketch_session.is_some());
     let to_cam = (s.camera.eye() - s.camera.target).normalize();
@@ -260,21 +274,32 @@ fn app_state_creates_opens_and_closes_sketches() {
     s.close_sketch();
     assert!(s.sketch_session.is_none());
     assert_eq!(s.camera, before_cam, "Kamera zurückgesetzt");
-    s.delete_sketch(i);
-    assert!(s.sketches.is_empty());
-    let j = s.new_sketch(AppState::standard_frame(StandardPlane::XZ));
-    assert_eq!(s.sketches[j].name, "Skizze 2", "Zähler zählt nur hoch");
-    assert!(s.open_sketch(99).is_err());
+    s.delete_feature(i).unwrap();
+    assert!(s.sketch_features().is_empty());
+    let j = new_sketch(&mut s, StandardPlane::XZ);
+    assert_eq!(
+        s.document.feature(j).unwrap().name,
+        "Skizze 2",
+        "Zähler zählt nur hoch"
+    );
+    assert!(s.open_sketch(FeatureId(99)).is_err());
 }
 
 #[test]
 fn bodies_from_sketches_appear_in_place_and_errors_leave_the_document_alone() {
     let mut s = AppState::new();
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
-    s.sketches[i]
-        .add_rectangle(DVec2::new(2.0, 3.0), DVec2::new(12.0, 8.0))
+    let i = new_sketch(&mut s, StandardPlane::XY);
+    edit_sketch(&mut s, i, |sk| {
+        sk.add_rectangle(DVec2::new(2.0, 3.0), DVec2::new(12.0, 8.0))
+            .unwrap()
+    });
+    let e = s.extrude_sketch(i, 0, 6.0).unwrap();
+    let b = s
+        .body_index(BodyRef {
+            feature: e,
+            index: 0,
+        })
         .unwrap();
-    let b = s.extrude_sketch(i, 0, 6.0).unwrap();
     assert_eq!(s.bodies[b].kind, BodyKind::Extrusion);
     assert_eq!(s.bodies[b].name, "Extrusion: Skizze 1");
     let (lo, hi) = s.bodies[b].bounds;
@@ -286,7 +311,7 @@ fn bodies_from_sketches_appear_in_place_and_errors_leave_the_document_alone() {
     let count = s.bodies.len();
     assert!(s.extrude_sketch(i, 5, 6.0).is_err(), "Profil gibt es nicht");
     assert!(s.extrude_sketch(i, 0, -1.0).is_err());
-    assert!(s.extrude_sketch(77, 0, 1.0).is_err());
+    assert!(s.extrude_sketch(FeatureId(77), 0, 1.0).is_err());
     assert_eq!(s.bodies.len(), count);
     assert!(s.message.is_some());
 }
@@ -294,14 +319,7 @@ fn bodies_from_sketches_appear_in_place_and_errors_leave_the_document_alone() {
 #[test]
 fn a_sketch_can_be_started_on_a_planar_face() {
     let mut s = AppState::new();
-    let k = s.kernel;
-    let bi = s
-        .add_body(
-            BodyKind::Box,
-            "Q".into(),
-            k.make_box(DVec3::new(10.0, 20.0, 5.0)).unwrap(),
-        )
-        .unwrap();
+    let bi = new_body(&mut s, |s| s.create_box(DVec3::new(10.0, 20.0, 5.0)));
     let top = s.bodies[bi]
         .solid
         .faces
@@ -315,19 +333,13 @@ fn a_sketch_can_be_started_on_a_planar_face() {
         .map(|(id, _)| id)
         .expect("Deckfläche");
     let i = s.new_sketch_on_face(bi, top).unwrap();
-    let f = s.sketches[i].frame();
+    let f = s.document.sketch_of(i).unwrap().frame();
     assert!((f.z - DVec3::Z).length() < 1e-9 && (f.origin.z - 5.0).abs() < 1e-9);
     assert!(
         s.new_sketch_on_face(bi, planora_kernel::Id::from_index(99))
             .is_err()
     );
-    let cyl = s
-        .add_body(
-            BodyKind::Cylinder,
-            "Z".into(),
-            k.make_cylinder(2.0, 4.0).unwrap(),
-        )
-        .unwrap();
+    let cyl = new_body(&mut s, |s| s.create_cylinder(2.0, 4.0));
     let side = s.bodies[cyl]
         .solid
         .faces
@@ -344,15 +356,8 @@ fn a_sketch_can_be_started_on_a_planar_face() {
 #[test]
 fn body_edges_can_be_copied_into_the_open_sketch() {
     let mut s = AppState::new();
-    let k = s.kernel;
-    let bi = s
-        .add_body(
-            BodyKind::Box,
-            "Q".into(),
-            k.make_box(DVec3::new(10.0, 20.0, 5.0)).unwrap(),
-        )
-        .unwrap();
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    let bi = new_body(&mut s, |s| s.create_box(DVec3::new(10.0, 20.0, 5.0)));
+    let i = new_sketch(&mut s, StandardPlane::XY);
     s.open_sketch(i).unwrap();
     let edge = s.bodies[bi]
         .solid
@@ -361,15 +366,13 @@ fn body_edges_can_be_copied_into_the_open_sketch() {
         .next()
         .map(|(id, _)| id)
         .unwrap();
-    let mut session = s.sketch_session.take().unwrap();
-    let before = s.sketches[i].curves().count();
-    let res = session.project_edge(&mut s.sketches[i], &s.bodies[bi].solid, edge);
-    s.sketch_session = Some(session);
+    let before = s.session_sketch().unwrap().curves().count();
+    let res = s.project_edge_into_sketch(bi, edge);
     assert!(
         res.is_ok() || res.is_err(),
         "kein Panic; senkrechte Kanten werden mit Meldung abgelehnt"
     );
-    assert!(s.sketches[i].curves().count() >= before);
+    assert!(s.session_sketch().unwrap().curves().count() >= before);
 }
 
 #[test]
@@ -403,26 +406,31 @@ fn failed_clicks_leave_sketch_and_session_unchanged() {
 fn dimmed_scene_only_while_a_sketch_is_open() {
     let mut s = AppState::new();
     let original = s.camera;
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::YZ));
+    let i = new_sketch(&mut s, StandardPlane::YZ);
     let v = s.scene_version;
     s.open_sketch(i).unwrap();
     assert!(s.scene_version > v, "Szene neu gebaut");
     let to_cam = (s.camera.eye() - s.camera.target).normalize();
     assert!(to_cam.x > 0.99, "Blick auf die YZ-Ebene: {to_cam:?}");
     // Wechsel auf eine andere Skizze überschreibt die gemerkte Kamera nicht
-    let j = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    let j = new_sketch(&mut s, StandardPlane::XY);
     s.open_sketch(j).unwrap();
     s.close_sketch();
     assert_eq!(s.camera, original, "ursprüngliche Kamera zurück");
     s.open_sketch(j).unwrap();
-    s.delete_sketch(i);
-    assert_eq!(
-        s.sketch_session.as_ref().unwrap().sketch,
-        0,
-        "Index angepasst"
+    s.delete_feature(i).unwrap();
+    // Seit Task 9 (R12, Prüfung von Task 8): Löschen eines anderen Features beendet die offene
+    // Skizze vorher (Entwurf übernommen), damit Dokument und Entwurf nicht auseinanderlaufen.
+    assert!(
+        s.sketch_session.is_none(),
+        "die andere Skizze wurde beendet"
     );
-    s.delete_sketch(0);
-    assert!(s.sketch_session.is_none());
+    assert!(s.document.feature(j).is_some());
+    assert_eq!(s.camera, original, "Kamera beim Beenden zurück");
+    s.open_sketch(j).unwrap();
+    s.delete_feature(j).unwrap();
+    assert!(s.sketch_session.is_none() && s.sketch_draft.is_none());
+    assert_eq!(s.camera, original, "Kamera beim Verwerfen zurück");
 }
 
 // ---- Nachbesserung 1 -------------------------------------------------------------------------
@@ -430,9 +438,11 @@ fn dimmed_scene_only_while_a_sketch_is_open() {
 #[test]
 fn opening_frames_curves_and_tiny_sketches_sensibly() {
     let mut s = AppState::new();
-    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
-    let c = s.sketches[i].add_point(0.0, 0.0).unwrap();
-    s.sketches[i].add_circle(c, 5.0).unwrap();
+    let i = new_sketch(&mut s, StandardPlane::XY);
+    edit_sketch(&mut s, i, |sk| {
+        let c = sk.add_point(0.0, 0.0).unwrap();
+        sk.add_circle(c, 5.0).unwrap();
+    });
     s.open_sketch(i).unwrap();
     assert!(
         s.camera.distance > 5.0 && s.camera.distance < 1000.0,
@@ -441,8 +451,8 @@ fn opening_frames_curves_and_tiny_sketches_sensibly() {
     );
     s.close_sketch();
 
-    let j = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
-    s.sketches[j].add_point(3.0, 4.0).unwrap();
+    let j = new_sketch(&mut s, StandardPlane::XY);
+    edit_sketch(&mut s, j, |sk| sk.add_point(3.0, 4.0).unwrap());
     s.open_sketch(j).unwrap();
     assert!(
         s.camera.distance > 5.0 && s.camera.distance < 1000.0,
@@ -452,7 +462,7 @@ fn opening_frames_curves_and_tiny_sketches_sensibly() {
     assert!((s.camera.target - glam::Vec3::new(3.0, 4.0, 0.0)).length() < 1e-4);
     s.close_sketch();
 
-    let k = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    let k = new_sketch(&mut s, StandardPlane::XY);
     let d = s.camera.distance;
     s.open_sketch(k).unwrap();
     assert_eq!(s.camera.distance, d, "leere Skizze: Abstand bleibt");
@@ -748,4 +758,72 @@ fn a_hole_tangent_to_an_edge_explains_why_it_is_not_usable() {
     assert!(e.profiles.is_empty());
     let text = e.rejected[0].reason.to_string();
     assert!(text.contains("berührt"), "{text}");
+}
+
+/// Legt einen Grundkörper über `make` an und liefert seinen Index in der Körperliste.
+fn new_body(
+    s: &mut AppState,
+    make: impl FnOnce(&mut AppState) -> Result<planora_feature::FeatureId, String>,
+) -> usize {
+    let id = make(s).unwrap();
+    s.body_index(planora_feature::BodyRef {
+        feature: id,
+        index: 0,
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_sketch_on_a_body_face_is_extruded_on_that_face() {
+    // Die Skizze ist ein Skizzen-Feature auf der Fläche (Verweis über Marke und Hinweispunkt).
+    let mut s = AppState::new();
+    let bi = new_body(&mut s, |s| s.create_box(DVec3::new(10.0, 20.0, 5.0)));
+    let top = s.bodies[bi]
+        .solid
+        .faces
+        .iter()
+        .find(|(_, f)| {
+            matches!(f.surface, Surface::Plane { .. })
+                && f.same_sense
+                && (f.surface.frame().z.z - 1.0).abs() < 1e-9
+                && (f.surface.frame().origin.z - 5.0).abs() < 1e-9
+        })
+        .map(|(id, _)| id)
+        .expect("Deckfläche");
+    let i = s.new_sketch_on_face(bi, top).unwrap();
+    // Rechteck in Skizzenkoordinaten mitten auf der Deckfläche
+    let frame = *s.document.sketch_of(i).unwrap().frame();
+    let local = |p: DVec3| frame.to_local(p).truncate();
+    let (a, b) = (
+        local(DVec3::new(2.0, 2.0, 5.0)),
+        local(DVec3::new(6.0, 8.0, 5.0)),
+    );
+    edit_sketch(&mut s, i, |sk| {
+        sk.add_rectangle(a.min(b), a.max(b)).unwrap()
+    });
+    let e = s.extrude_sketch(i, 0, 3.0).unwrap();
+    let e = s
+        .body_index(BodyRef {
+            feature: e,
+            index: 0,
+        })
+        .unwrap();
+    assert_eq!(s.bodies.len(), 2);
+    let (lo, hi) = s.bodies[e].bounds;
+    assert!(
+        (lo.z - 5.0).abs() < 1e-6 && (hi.z - 8.0).abs() < 1e-6,
+        "{lo:?} {hi:?}"
+    );
+    assert!(
+        (lo.x - 2.0).abs() < 1e-6 && (hi.y - 8.0).abs() < 1e-6,
+        "{lo:?} {hi:?}"
+    );
+    // ein gelöschter Grundkörper: Die Skizze liegt auf keiner Fläche mehr
+    let count = s.document.features().len();
+    s.delete_feature_with_dependents(s.bodies[bi].source.feature)
+        .unwrap();
+    assert!(s.extrude_sketch(i, 0, 3.0).is_err());
+    assert!(s.message.is_some());
+    assert!(s.document.features().len() < count);
+    assert!(s.bodies.is_empty());
 }

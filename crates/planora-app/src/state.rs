@@ -1,19 +1,21 @@
 use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
-use planora_kernel::boolean::BoolOp;
-use planora_kernel::{AnalyticKernel, Face, Id, Kernel, Profile, Solid};
-use planora_math::{DMat4, DVec2, DVec3, Frame};
-use planora_mesh::{
-    MassProperties, Mesh, TessellationOptions, boolean_volume_plausible, mass_properties,
-    tessellate,
+use planora_feature::{
+    BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
+    SketchFeature, SketchPlane,
 };
+use planora_kernel::boolean::BoolOp;
+use planora_kernel::{AnalyticKernel, Edge, Face, Id, Solid};
+use planora_math::{DVec2, DVec3, Frame};
+use planora_mesh::{MassProperties, Mesh, TessellationOptions, mass_properties, tessellate};
 use planora_render::{
     EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, SceneData, build_scene, pick_edge,
     pick_face,
 };
 use planora_sketch::model::{CurveId, Sketch};
-use planora_sketch::{ExtractedProfiles, extrude_profile, plane_of_face, revolve_profile};
+use planora_sketch::{ExtractedProfiles, plane_of_face};
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,19 +26,19 @@ pub enum BodyKind {
     Cone,
     Extrusion,
     Revolution,
+    /// Ergebnis einer Booleschen Operation (oder Art unbekannt).
+    Combined,
 }
 
-/// Grundebenen für neue Skizzen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StandardPlane {
-    XY,
-    XZ,
-    YZ,
-}
+/// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
+pub use planora_feature::StandardPlane;
 
+/// Sichtbarer Körper, abgeleitet aus dem Feature-Dokument (nie direkt verändert).
 pub struct Body {
     pub name: String,
     pub kind: BodyKind,
+    /// Verweis auf den Körper im Dokument.
+    pub source: BodyRef,
     pub solid: Solid,
     pub mesh: Mesh,
     pub mass: MassProperties,
@@ -48,14 +50,17 @@ pub struct Body {
 /// im selben Bild in den passenden Dialog um.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SketchRequest {
-    /// „Skizze extrudieren“ für die Skizze mit diesem Index.
-    Extrude(usize),
-    /// „Skizze drehen“ für die Skizze mit diesem Index.
-    Revolve(usize),
+    /// „Skizze extrudieren“ für dieses Skizzen-Feature.
+    Extrude(FeatureId),
+    /// „Skizze drehen“ für dieses Skizzen-Feature.
+    Revolve(FeatureId),
 }
 
 /// Alles, was die Oberfläche anzeigt. Enthält keine egui-Typen und ist deshalb testbar.
 pub struct AppState {
+    /// Das Feature-Dokument; Quelle aller Körper.
+    pub document: Document,
+    /// Sichtbare Körper des Dokuments, abgeleitet mit [`AppState::refresh`].
     pub bodies: Vec<Body>,
     pub selected_body: Option<usize>,
     pub selection: Option<Pick>,
@@ -68,24 +73,31 @@ pub struct AppState {
     pub chord_tolerance: f64,
     /// Letzte Fehlermeldung für die Statuszeile.
     pub message: Option<String>,
-    /// Laufende Nummer für den nächsten erzeugten Körper; zählt nur hoch, damit Namen auch nach
-    /// dem Löschen eindeutig bleiben.
-    pub next_body_number: u64,
-    /// Skizzen des Dokuments.
-    pub sketches: Vec<Sketch>,
-    /// Im Browser gewählte Skizze.
-    pub selected_sketch: Option<usize>,
+    /// Laufende Nummer je Bezeichnung für neue Features („Quader 1“, „Quader 2“, …); zählt
+    /// nur hoch, damit Namen auch nach dem Löschen eindeutig bleiben.
+    name_counters: BTreeMap<String, u64>,
+    /// Im Browser gewähltes Feature (bis zum Feature-Baum: eine Skizze).
+    pub selected_feature: Option<FeatureId>,
     /// Geöffneter Skizzen-Modus.
     pub sketch_session: Option<SketchSession>,
+    /// Entwurf des geöffneten Skizzen-Features (Entscheidung F6): eine Kopie der Definition mit
+    /// der berechneten Skizze. Der Skizzen-Modus arbeitet nur hierauf; erst
+    /// [`AppState::close_sketch`] schreibt den Entwurf ins Dokument zurück.
+    pub sketch_draft: Option<SketchFeature>,
     /// Kamera vor dem Öffnen des Skizzen-Modus.
     saved_camera: Option<OrbitCamera>,
-    /// Laufende Nummer für den Namen der nächsten Skizze; zählt nur hoch, damit Namen auch nach
-    /// dem Löschen eindeutig bleiben.
-    pub next_sketch_number: u64,
     /// Offener Dialogwunsch aus dem Browser (siehe [`SketchRequest`]).
     pub sketch_request: Option<SketchRequest>,
     /// Zuletzt berechnete Profile (für die Dialoge, die jedes Bild neu zeichnen).
     pub profile_cache: ProfileCache,
+    /// Offene Rückfrage „Löschen mit Folgen“ aus dem Feature-Baum.
+    pub pending_delete: Option<crate::browser::DeletePlan>,
+    /// Offenes Fenster „Umbenennen“: Feature und Entwurf des Namens.
+    pub rename_draft: Option<(FeatureId, String)>,
+    /// Wunsch aus dem Feature-Baum, den Bearbeiten-Dialog für dieses Feature zu öffnen.
+    pub edit_request: Option<FeatureId>,
+    /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
+    drag_move: Option<FeatureId>,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -119,6 +131,12 @@ impl ProfileCache {
 }
 
 const GRID_HALF_EXTENT: f32 = 500.0;
+/// Größter Betrag einer Koordinate oder eines Maßes in mm (wie
+/// [`planora_feature::MAX_COORD_MM`], dort für jede Berechnung geprüft): Darüber ist der
+/// Abstand benachbarter `f64`-Werte größer als die Toleranz.
+pub const MAX_COORD_MM: f64 = planora_feature::MAX_COORD_MM;
+/// Bezeichnung (und Namensstamm) von Skizzen-Features.
+const SKETCH_LABEL: &str = "Skizze";
 const PICK_EDGE_PX: f32 = 6.0;
 const BODY_GAP_MM: f64 = 10.0;
 /// Mindestgröße des Bereichs, auf den die Ansicht beim Öffnen einer Skizze eingepasst wird.
@@ -132,7 +150,9 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        let chord_tolerance = 0.05;
         let mut state = Self {
+            document: Document::with_options(chord_tolerance),
             bodies: Vec::new(),
             selected_body: None,
             selection: None,
@@ -142,16 +162,19 @@ impl AppState {
             scene_version: 0,
             dark: true,
             kernel: AnalyticKernel::default(),
-            chord_tolerance: 0.05,
+            chord_tolerance,
             message: None,
-            next_body_number: 1,
-            sketches: Vec::new(),
-            selected_sketch: None,
+            name_counters: BTreeMap::new(),
+            selected_feature: None,
             sketch_session: None,
+            sketch_draft: None,
             saved_camera: None,
-            next_sketch_number: 1,
             sketch_request: None,
             profile_cache: ProfileCache::default(),
+            pending_delete: None,
+            rename_draft: None,
+            edit_request: None,
+            drag_move: None,
         };
         state.rebuild_scene();
         state
@@ -174,117 +197,520 @@ impl AppState {
         }
     }
 
-    /// Prüft den Körper, stellt ihn neben die vorhandenen und nimmt ihn auf.
-    pub fn add_body(
-        &mut self,
-        kind: BodyKind,
-        name: String,
-        solid: Solid,
-    ) -> Result<usize, String> {
-        self.kernel
-            .validate(&solid)
-            .map_err(|e| format!("Ungültiger Körper: {e}"))?;
-        let solid = match self.bodies.iter().map(|b| b.bounds.1.x).reduce(f64::max) {
-            None => solid,
-            Some(max_x) => {
-                let mesh = self.mesh_of(&solid)?;
-                let (min, _) = bounds_of(&mesh);
-                let shift =
-                    DMat4::from_translation(DVec3::new(max_x + BODY_GAP_MM - min.x, 0.0, 0.0));
-                self.kernel
-                    .transform(&solid, &shift)
-                    .map_err(|e| format!("Platzieren fehlgeschlagen: {e}"))?
+    /// Baut Körperliste, Netze, Maße und Szene aus den sichtbaren Körpern des Dokuments neu
+    /// auf. Auswahl, Hervorhebung und gewählter Körper bleiben, solange ihr Körper sichtbar ist
+    /// (Indizes werden auf die neue Liste abgebildet); sonst werden sie gelöscht. Die Ansicht
+    /// wird nur neu eingepasst, wenn sich die Zahl der Körper geändert hat.
+    pub fn refresh(&mut self) {
+        self.refresh_following(None);
+    }
+
+    /// Wie [`AppState::refresh`]; Verweise auf den Körper `follow.0` gehen auf `follow.1` über
+    /// (z. B. auf das Ergebnis eines neuen Verschiebens).
+    fn refresh_following(&mut self, follow: Option<(BodyRef, BodyRef)>) {
+        let old: Vec<BodyRef> = self.bodies.iter().map(|b| b.source).collect();
+        let count_before = self.bodies.len();
+        let mut bodies = Vec::new();
+        let mut failed = Vec::new();
+        for v in self.document.visible_bodies() {
+            let name = body_name(&self.document, v.body).unwrap_or_else(|| v.name.clone());
+            let kind = body_kind(&self.document, v.body);
+            match self.make_body(kind, name.clone(), v.body, v.solid.clone()) {
+                Ok(b) => bodies.push(b),
+                Err(e) => failed.push(format!("„{name}“: {e}")),
             }
-        };
-        let body = self.make_body(kind, name, solid)?;
-        self.bodies.push(body);
-        self.rebuild_scene();
-        self.frame_all();
-        Ok(self.bodies.len() - 1)
-    }
-
-    /// Wie `add_body`, aber ohne das Verschieben neben die vorhandenen Körper.
-    pub fn add_body_in_place(
-        &mut self,
-        kind: BodyKind,
-        name: String,
-        solid: Solid,
-    ) -> Result<usize, String> {
-        self.kernel
-            .validate(&solid)
-            .map_err(|e| format!("Ungültiger Körper: {e}"))?;
-        let body = self.make_body(kind, name, solid)?;
-        self.bodies.push(body);
-        self.rebuild_scene();
-        self.frame_all();
-        Ok(self.bodies.len() - 1)
-    }
-
-    /// Verschiebt den Körper `index` um `delta` (Millimeter).
-    pub fn translate_body(&mut self, index: usize, delta: DVec3) -> Result<(), String> {
-        let body = self
-            .bodies
-            .get(index)
-            .ok_or_else(|| "Körper nicht gefunden".to_string())?;
-        if !delta.is_finite() {
-            return Err("Ungültige Verschiebung".into());
         }
-        let moved = self
-            .kernel
-            .transform(&body.solid, &DMat4::from_translation(delta))
-            .map_err(|e| format!("Verschieben fehlgeschlagen: {e}"))?;
-        let (kind, name) = (body.kind, body.name.clone());
-        let new = self.make_body(kind, name, moved)?;
-        self.bodies[index] = new;
+        self.bodies = bodies;
+        let new: Vec<BodyRef> = self.bodies.iter().map(|b| b.source).collect();
+        let map = |i: usize| -> Option<usize> {
+            let mut r = *old.get(i)?;
+            if let Some((from, to)) = follow
+                && r == from
+            {
+                r = to;
+            }
+            new.iter().position(|n| *n == r)
+        };
+        self.selected_body = self.selected_body.and_then(map);
+        self.selection = self.selection.and_then(|p| self.remap_pick(p, map));
+        self.hover = self.hover.and_then(|p| self.remap_pick(p, map));
+        if !failed.is_empty() {
+            self.message = Some(failed.join("; "));
+        }
         self.rebuild_scene();
+        if self.bodies.len() != count_before {
+            self.frame_all();
+        }
+    }
+
+    /// Bildet eine Auswahl auf den neuen Körperindex ab; gibt es die Fläche oder Kante im
+    /// neuen Körper nicht mehr, entfällt sie.
+    fn remap_pick(&self, pick: Pick, map: impl Fn(usize) -> Option<usize>) -> Option<Pick> {
+        match pick {
+            Pick::Face(FaceRef { body, face }) => {
+                let body = map(body)?;
+                self.bodies[body].solid.faces.get(face)?;
+                Some(Pick::Face(FaceRef { body, face }))
+            }
+            Pick::Edge(EdgeRef { body, edge }) => {
+                let body = map(body)?;
+                self.bodies[body].solid.edges.get(edge)?;
+                Some(Pick::Edge(EdgeRef { body, edge }))
+            }
+        }
+    }
+
+    /// Index des Körpers `r` in der Körperliste, falls er sichtbar ist.
+    pub fn body_index(&self, r: BodyRef) -> Option<usize> {
+        self.bodies.iter().position(|b| b.source == r)
+    }
+
+    /// Nächster Name `{Bezeichnung} {Nummer}` für `label`, ohne den Zähler zu erhöhen.
+    fn next_name(&self, label: &str) -> String {
+        let n = self.name_counters.get(label).copied().unwrap_or(0) + 1;
+        format!("{label} {n}")
+    }
+
+    /// Zählt den Namenszähler für `label` weiter (nur nach erfolgreichem Anlegen).
+    fn count_name(&mut self, label: &str) {
+        *self.name_counters.entry(label.to_string()).or_insert(0) += 1;
+    }
+
+    /// Legt ein Feature `{Bezeichnung} {Nummer}` am Marker an (Bezeichnung `base_name` oder
+    /// die der Feature-Art; der Zähler je Bezeichnung zählt nur hoch) und aktualisiert die
+    /// Körper. Ein Feature mit dem Status `Error` wird trotzdem angelegt; seine Meldung steht
+    /// dann in `message`.
+    pub fn add_feature(
+        &mut self,
+        base_name: Option<&str>,
+        kind: FeatureKind,
+    ) -> Result<FeatureId, String> {
+        let label = base_name.unwrap_or(kind.label()).to_string();
+        let name = self.next_name(&label);
+        match self.document.add_feature(name, kind) {
+            Ok(id) => {
+                self.count_name(&label);
+                self.refresh();
+                if let Some(FeatureStatus::Error(e)) = self.document.feature(id).map(|f| &f.status)
+                {
+                    self.message = Some(e.clone());
+                }
+                Ok(id)
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Ursprung für einen neuen Grundkörper rechts neben den vorhandenen Körpern (10 mm
+    /// Abstand). `extent_x` ist der Abstand vom Ursprung des Grundkörpers zu seiner linken
+    /// Kante (Quader 0, sonst der Radius). Ohne Körper liegt er im Nullpunkt.
+    pub fn free_origin(&self, extent_x: f64) -> DVec3 {
+        match self.bodies.iter().map(|b| b.bounds.1.x).reduce(f64::max) {
+            None => DVec3::ZERO,
+            Some(max_x) => DVec3::new(max_x + BODY_GAP_MM + extent_x, 0.0, 0.0),
+        }
+    }
+
+    /// Prüft die Maße eines Grundkörpers (endlich und größer als die Toleranz).
+    fn check_sizes(&mut self, values: &[f64]) -> Result<(), String> {
+        let min = self.kernel.tolerance.linear;
+        if !values.iter().all(|v| v.is_finite() && *v > min) {
+            return self
+                .fail("Erzeugen fehlgeschlagen: Die Maße müssen größer als null sein".into());
+        }
+        if values.iter().any(|v| *v > MAX_COORD_MM) {
+            return self.fail(format!(
+                "Erzeugen fehlgeschlagen: Die Maße dürfen höchstens {MAX_COORD_MM:e} mm betragen"
+            ));
+        }
         Ok(())
     }
 
-    /// Führt `a op b` aus und ersetzt beide Körper durch das Ergebnis (an der Stelle des
-    /// vorderen in der Liste, ohne neu zu platzieren). Liefert den Index des Ergebnisses; bei
-    /// einem Fehler bleibt alles unverändert.
-    pub fn boolean(&mut self, a: usize, b: usize, op: BoolOp) -> Result<usize, String> {
+    /// Quader neben den vorhandenen Körpern.
+    pub fn create_box(&mut self, size: DVec3) -> Result<FeatureId, String> {
+        self.check_sizes(&size.to_array())?;
+        let origin = self.free_origin(0.0);
+        self.add_feature(None, FeatureKind::Box { size, origin })
+    }
+
+    /// Zylinder neben den vorhandenen Körpern.
+    pub fn create_cylinder(&mut self, radius: f64, height: f64) -> Result<FeatureId, String> {
+        self.check_sizes(&[radius, height])?;
+        let origin = self.free_origin(radius);
+        self.add_feature(
+            None,
+            FeatureKind::Cylinder {
+                radius,
+                height,
+                origin,
+            },
+        )
+    }
+
+    /// Kugel neben den vorhandenen Körpern (linke Kante am freien Rand).
+    pub fn create_sphere(&mut self, radius: f64) -> Result<FeatureId, String> {
+        self.check_sizes(&[radius])?;
+        let origin = self.free_origin(radius);
+        self.add_feature(None, FeatureKind::Sphere { radius, origin })
+    }
+
+    /// Kegel neben den vorhandenen Körpern.
+    pub fn create_cone(&mut self, radius: f64, height: f64) -> Result<FeatureId, String> {
+        self.check_sizes(&[radius, height])?;
+        let origin = self.free_origin(radius);
+        self.add_feature(
+            None,
+            FeatureKind::Cone {
+                radius,
+                height,
+                origin,
+            },
+        )
+    }
+
+    /// Legt eine Boolesche Operation `a op b` (Körperindizes) an. Das Ergebnis ersetzt beide
+    /// Körper an der Stelle des vorderen und wird gewählt. Schlägt die Operation fehl, wird das
+    /// Feature wieder entfernt: Dokument und Körper bleiben unverändert, die Meldung steht in
+    /// `message`.
+    pub fn add_boolean(&mut self, a: usize, b: usize, op: BoolOp) -> Result<FeatureId, String> {
         if a == b || a >= self.bodies.len() || b >= self.bodies.len() {
-            return Err("Bitte zwei verschiedene Körper wählen".into());
+            return self.fail("Bitte zwei verschiedene Körper wählen".into());
         }
-        let result = self
-            .kernel
-            .boolean(&self.bodies[a].solid, &self.bodies[b].solid, op)
-            .map_err(|e| e.to_string())?;
-        let (name_a, name_b) = (&self.bodies[a].name, &self.bodies[b].name);
-        let name = match op {
-            BoolOp::Union => format!("Vereinigung: {name_a} + {name_b}"),
-            BoolOp::Difference => format!("Abzug: {name_a} − {name_b}"),
-            BoolOp::Intersection => format!("Schnitt: {name_a} ∩ {name_b}"),
+        let kind = FeatureKind::Boolean {
+            target: self.bodies[a].source,
+            tool: self.bodies[b].source,
+            op,
         };
-        let kind = self.bodies[a].kind;
-        let body = self.make_body(kind, name, result)?;
-        let (va, vb) = (self.bodies[a].mass.volume, self.bodies[b].mass.volume);
-        if !boolean_volume_plausible(op, va, vb, body.mass.volume, 0.02) {
-            return Err(
-                "Das Ergebnis ist unplausibel (Volumenprobe fehlgeschlagen) und wurde verworfen"
+        // Name nach der Art („Boolesche Operation N“); die Operation zeigen Baum und
+        // Eigenschaften.
+        let id = self.add_checked(kind.label(), kind)?;
+        self.hover = None;
+        self.selection = None;
+        self.refresh();
+        self.selected_body = self.body_index(BodyRef {
+            feature: id,
+            index: 0,
+        });
+        Ok(id)
+    }
+
+    /// Legt ein Feature an und nimmt es wieder heraus, wenn es nicht berechnet werden konnte
+    /// (die Meldung steht dann in `message`). Aktualisiert die Körper nicht.
+    fn add_checked(&mut self, label: &str, kind: FeatureKind) -> Result<FeatureId, String> {
+        let id = self.add_checked_named(self.next_name(label), kind)?;
+        self.count_name(label);
+        Ok(id)
+    }
+
+    /// Wie [`AppState::add_checked`], mit festem Namen (ohne Zähler).
+    fn add_checked_named(&mut self, name: String, kind: FeatureKind) -> Result<FeatureId, String> {
+        let id = match self.document.add_feature(name, kind) {
+            Ok(id) => id,
+            Err(e) => return self.fail(e.to_string()),
+        };
+        match self.document.feature(id).map(|f| f.status.clone()) {
+            Some(FeatureStatus::Ok) => Ok(id),
+            status => {
+                let _ = self.document.delete_with_dependents(id);
+                self.fail(status_message(status))
+            }
+        }
+    }
+
+    /// Verschiebt den Körper `index` um `delta` (Millimeter) **zusätzlich** zur derzeitigen
+    /// Lage (Entscheidung F9). Ist der Körper das Ergebnis eines Verschiebens und liest ihn
+    /// danach kein anderes Feature (siehe [`AppState::read_later`]), wird dessen Verschiebung
+    /// erhöht; sonst entsteht ein neues Verschieben am Marker. Auswahl
+    /// und gewählter Körper gehen auf das Ergebnis über. Bei einem Fehler bleibt alles
+    /// unverändert. Eine offene Skizze wird vorher beendet (ihr Entwurf übernommen), damit
+    /// Dokument und Entwurf nicht auseinanderlaufen.
+    pub fn move_body(&mut self, index: usize, delta: DVec3) -> Result<(), String> {
+        self.drag_move = None;
+        self.move_body_with(index, delta, false)
+    }
+
+    /// Wie [`AppState::move_body`] während eines Zugs (Ziehen der Position im
+    /// Eigenschaftenfenster): Ein Verschieben, das derselbe Zug angelegt hat, wird erweitert,
+    /// auch wenn ein späteres Feature den Körper liest. Der Zug wirkt damit wie eine einzige
+    /// Verschiebung um die Gesamtstrecke, statt je Bild ein neues Verschieben anzulegen.
+    /// [`AppState::end_drag`] beendet den Zug.
+    pub fn move_body_dragging(&mut self, index: usize, delta: DVec3) -> Result<(), String> {
+        self.move_body_with(index, delta, true)
+    }
+
+    /// Beendet einen Zug (siehe [`AppState::move_body_dragging`]).
+    pub fn end_drag(&mut self) {
+        self.drag_move = None;
+    }
+
+    fn move_body_with(&mut self, index: usize, delta: DVec3, dragging: bool) -> Result<(), String> {
+        if !delta.is_finite() {
+            return self.fail("Ungültige Verschiebung".into());
+        }
+        let Some(r) = self.bodies.get(index).map(|b| b.source) else {
+            return self.fail("Körper nicht gefunden".into());
+        };
+        if delta == DVec3::ZERO {
+            return Ok(());
+        }
+        // Beim Übernehmen des Entwurfs kann sich die Körperliste ändern (etwa wenn eine
+        // Extrusion der Skizze danach fehlschlägt): den Körper über seinen Verweis neu suchen.
+        self.try_close_sketch()?;
+        let Some((index, (lo, hi))) = self.body_index(r).map(|i| (i, self.bodies[i].bounds)) else {
+            return self
+                .fail("Der Körper ist nach dem Beenden der Skizze nicht mehr sichtbar".into());
+        };
+        // Der Körper muss danach im darstellbaren Bereich liegen; das deckt auch Summen ab, die
+        // beim Erweitern eines Verschiebens nicht mehr endlich wären.
+        let inside = |p: DVec3| p.is_finite() && p.abs().max_element() <= MAX_COORD_MM;
+        if !(inside(lo + delta) && inside(hi + delta)) {
+            return self.fail(format!(
+                "Verschieben abgelehnt: Der Körper läge außerhalb von ±{MAX_COORD_MM:e} mm"
+            ));
+        }
+        let extendable = r.index == 0
+            && self
+                .document
+                .feature(r.feature)
+                .is_some_and(|f| matches!(f.kind, FeatureKind::Move { .. }))
+            && (!self.read_later(index) || (dragging && self.drag_move == Some(r.feature)));
+        let moved = if extendable {
+            self.extend_move(r.feature, delta)?;
+            r
+        } else {
+            let id = self.add_checked("Verschieben", FeatureKind::Move { body: r, delta })?;
+            if dragging {
+                self.drag_move = Some(id);
+            }
+            BodyRef {
+                feature: id,
+                index: 0,
+            }
+        };
+        self.refresh_following(Some((r, moved)));
+        Ok(())
+    }
+
+    /// Liest ein Feature nach dem erzeugenden Feature des Körpers `index` (auch hinter dem
+    /// Marker) diesen Körper? Gelesen wird über einen Verweis auf das erzeugende Feature selbst
+    /// oder über die Flächenmarken des Körpers: Skizzen auf Flächen und Kantenkopien verweisen
+    /// auf die Herkunft der Marke (etwa den Quader), nicht auf das Verschieben.
+    fn read_later(&self, index: usize) -> bool {
+        let Some(body) = self.bodies.get(index) else {
+            return false;
+        };
+        let mut origins: Vec<FeatureId> = body
+            .solid
+            .faces
+            .iter()
+            .filter_map(|(_, f)| f.tag.as_ref().map(|t| FeatureId(t.origin)))
+            .collect();
+        origins.push(body.source.feature);
+        let Some(start) = self.document.index_of(body.source.feature) else {
+            return false;
+        };
+        // Auch Features hinter dem Marker zählen: Sie wanderten sonst beim Vorrücken des Markers
+        // mit dem erweiterten Verschieben mit.
+        self.document.features()[start + 1..]
+            .iter()
+            .any(|f| f.kind.dependencies().iter().any(|d| origins.contains(d)))
+    }
+
+    /// Erhöht die Verschiebung des Features `id` um `delta`. Ist das Verschieben danach nicht
+    /// berechenbar oder schlägt dadurch ein späteres, bisher fehlerfreies Feature fehl, wird
+    /// die alte Verschiebung zurückgeschrieben: Das Dokument bleibt dann unverändert.
+    fn extend_move(&mut self, id: FeatureId, delta: DVec3) -> Result<(), String> {
+        let old = match self.document.feature(id).map(|f| &f.kind) {
+            Some(FeatureKind::Move { delta, .. }) => *delta,
+            _ => return self.fail("Das Verschieben gibt es nicht mehr".into()),
+        };
+        let was_ok: Vec<FeatureId> = self
+            .document
+            .features()
+            .iter()
+            .filter(|f| f.status == FeatureStatus::Ok)
+            .map(|f| f.id)
+            .collect();
+        let set = |k: &mut FeatureKind, to: DVec3| {
+            if let FeatureKind::Move { delta, .. } = k {
+                *delta = to;
+            }
+        };
+        if let Err(e) = self.document.update(id, |k| set(k, old + delta)) {
+            return self.fail(e.to_string());
+        }
+        let broken = self
+            .document
+            .features()
+            .iter()
+            .find(|f| was_ok.contains(&f.id) && f.status != FeatureStatus::Ok)
+            .map(|f| (f.id, f.status.clone()));
+        match broken {
+            None => Ok(()),
+            Some((broken_id, status)) => {
+                let _ = self.document.update(id, |k| set(k, old));
+                let message = status_message(Some(status));
+                if broken_id == id {
+                    self.fail(message)
+                } else {
+                    let name = self
+                        .document
+                        .feature(broken_id)
+                        .map_or_else(String::new, |f| f.name.clone());
+                    self.fail(format!(
+                        "Verschieben verworfen: Feature „{name}“ ließe sich danach nicht mehr \
+                         berechnen ({message})"
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Anzeigename des Körpers `r` (auch wenn er gerade nicht sichtbar ist); ohne Feature
+    /// „Feature {Id}“.
+    pub fn body_ref_name(&self, r: BodyRef) -> String {
+        body_name(&self.document, r).unwrap_or_else(|| format!("Feature {}", r.feature.0))
+    }
+
+    /// Das Feature, das den Namen des Körpers `index` trägt: das erzeugende Feature, bei
+    /// verschobenen Körpern das Feature, das den Körper ursprünglich erzeugt hat.
+    pub fn naming_feature(&self, index: usize) -> Option<FeatureId> {
+        let r = self.bodies.get(index)?.source;
+        Some(origin_of(&self.document, r).feature)
+    }
+
+    /// Benennt ein Feature um (leere Namen sind ungültig) und aktualisiert die Körpernamen.
+    pub fn rename_feature(&mut self, id: FeatureId, name: &str) -> Result<(), String> {
+        match self.document.rename(id, name) {
+            Ok(()) => {
+                for i in 0..self.bodies.len() {
+                    if let Some(n) = body_name(&self.document, self.bodies[i].source) {
+                        self.bodies[i].name = n;
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Vor einer Änderung am Dokument aus dem Feature-Baum (R12): Betrifft sie die geöffnete
+    /// Skizze selbst (`target`), bleibt alles unverändert und die Meldung bittet, die Skizze
+    /// zuerst zu beenden; sonst wird eine offene Skizze beendet und ihr Entwurf übernommen.
+    pub fn end_sketch_for(&mut self, target: Option<FeatureId>) -> Result<(), String> {
+        if target.is_some() && target == self.open_sketch_id() {
+            return self.fail(
+                "Zuerst die Skizze beenden („Skizze beenden“ im Skizzenfenster), dann erneut \
+                 versuchen"
                     .into(),
             );
         }
-        let (lo, hi) = (a.min(b), a.max(b));
-        self.bodies.remove(hi);
-        self.bodies[lo] = body;
-        self.hover = None;
-        self.selection = None;
-        self.selected_body = Some(lo);
-        self.rebuild_scene();
-        Ok(lo)
+        self.try_close_sketch()
     }
 
-    /// Netz, Masse und Hülle eines Körpers berechnen (gemeinsam für Platzieren, Verschieben und
-    /// Ergebnisse Boolescher Operationen).
-    fn make_body(&self, kind: BodyKind, name: String, solid: Solid) -> Result<Body, String> {
+    /// Vor dem Löschen von `id`: Eine offene Skizze, die dabei mitgelöscht wird, wird verworfen
+    /// (siehe [`AppState::forget_deleted`]); jede andere wird beendet und übernommen.
+    /// Bleibt die Skizze offen (Entwurf abgelehnt), liefert es den Fehler.
+    pub(crate) fn end_sketch_before_delete(&mut self, id: FeatureId) -> Result<(), String> {
+        if let Some(open) = self.open_sketch_id()
+            && (open == id || self.document.dependents(id).contains(&open))
+        {
+            return Ok(());
+        }
+        self.try_close_sketch()
+    }
+
+    /// Löscht ein Feature, von dem nichts abhängt. Hängen andere Features davon ab, bleibt
+    /// alles unverändert und der Fehlertext nennt die abhängigen Features. Eine offene Skizze
+    /// wird vorher beendet, außer sie selbst wird gelöscht.
+    pub fn delete_feature(&mut self, id: FeatureId) -> Result<(), String> {
+        if self.document.feature(id).is_some() {
+            self.end_sketch_before_delete(id)?;
+        }
+        match self.document.delete(id) {
+            Ok(()) => {
+                self.forget_deleted();
+                self.refresh();
+                Ok(())
+            }
+            Err(FeatureError::HasDependents(ids)) => {
+                let name = self
+                    .document
+                    .feature(id)
+                    .map_or_else(String::new, |f| f.name.clone());
+                let names: Vec<String> = ids
+                    .iter()
+                    .filter_map(|d| self.document.feature(FeatureId(*d)))
+                    .map(|f| format!("„{}“", f.name))
+                    .collect();
+                self.fail(format!(
+                    "„{name}“ lässt sich nicht löschen, weil diese Features darauf aufbauen: {}",
+                    names.join(", ")
+                ))
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Löscht ein Feature samt allen abhängigen Features; liefert die entfernten Ids. Eine
+    /// offene Skizze wird vorher beendet, außer sie wird mitgelöscht.
+    pub fn delete_feature_with_dependents(
+        &mut self,
+        id: FeatureId,
+    ) -> Result<Vec<FeatureId>, String> {
+        if self.document.feature(id).is_some() {
+            self.end_sketch_before_delete(id)?;
+        }
+        match self.document.delete_with_dependents(id) {
+            Ok(removed) => {
+                self.forget_deleted();
+                self.refresh();
+                Ok(removed)
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Löscht das Feature, das den Körper erzeugt hat, samt seiner Verschiebungen. Bauen
+    /// andere Features darauf auf, bleibt alles unverändert und die Meldung nennt sie (in der
+    /// Oberfläche läuft Löschen über den Feature-Baum mit Rückfrage). Eine offene Skizze wird
+    /// vorher beendet.
+    pub fn delete_body(&mut self, index: usize) -> Result<(), String> {
+        let Some(r) = self.bodies.get(index).map(|b| b.source) else {
+            return self.fail("Körper nicht gefunden".into());
+        };
+        // Beim Übernehmen des Entwurfs kann sich die Körperliste ändern.
+        self.try_close_sketch()?;
+        let Some(id) = self.body_index(r).and_then(|i| self.naming_feature(i)) else {
+            return self.fail("Körper nicht gefunden".into());
+        };
+        let only_moves = self.document.dependents(id).iter().all(|d| {
+            self.document
+                .feature(*d)
+                .is_some_and(|f| matches!(f.kind, FeatureKind::Move { .. }))
+        });
+        if only_moves {
+            self.delete_feature_with_dependents(id).map(|_| ())
+        } else {
+            self.delete_feature(id)
+        }
+    }
+
+    /// Netz, Masse und Hülle eines sichtbaren Körpers berechnen.
+    fn make_body(
+        &self,
+        kind: BodyKind,
+        name: String,
+        source: BodyRef,
+        solid: Solid,
+    ) -> Result<Body, String> {
         let mesh = self.mesh_of(&solid)?;
         let mass = mass_properties(&mesh);
         let bounds = bounds_of(&mesh);
         Ok(Body {
             name,
             kind,
+            source,
             solid,
             mesh,
             mass,
@@ -300,21 +726,6 @@ impl AppState {
             },
         )
         .map_err(|e| format!("Tessellierung fehlgeschlagen: {e}"))
-    }
-
-    pub fn remove_body(&mut self, index: usize) {
-        if index >= self.bodies.len() {
-            return;
-        }
-        self.bodies.remove(index);
-        self.hover = None;
-        self.selection = None;
-        self.selected_body = match self.selected_body {
-            Some(i) if i == index => None,
-            Some(i) if i > index => Some(i - 1),
-            other => other,
-        };
-        self.rebuild_scene();
     }
 
     pub fn rebuild_scene(&mut self) {
@@ -358,7 +769,7 @@ impl AppState {
         if self.selection != selection {
             self.selection = selection;
             if selection.is_some() {
-                self.selected_sketch = None;
+                self.selected_feature = None;
             }
             self.selected_body = match selection {
                 Some(Pick::Face(FaceRef { body, .. })) | Some(Pick::Edge(EdgeRef { body, .. })) => {
@@ -428,64 +839,111 @@ fn to_vec3(v: DVec3) -> Vec3 {
 // ---- Skizzen ----------------------------------------------------------------------------------
 
 impl AppState {
-    /// Lage einer Grundebene (rechtshändig, `z` = Normale).
-    pub fn standard_frame(plane: StandardPlane) -> Frame {
-        let (x, y, z) = match plane {
-            StandardPlane::XY => (DVec3::X, DVec3::Y, DVec3::Z),
-            StandardPlane::XZ => (DVec3::X, DVec3::Z, -DVec3::Y),
-            StandardPlane::YZ => (DVec3::Y, DVec3::Z, DVec3::X),
-        };
-        Frame {
-            origin: DVec3::ZERO,
-            x,
-            y,
-            z,
-        }
-    }
-
-    /// Legt eine leere Skizze „Skizze N“ auf der Ebene `frame` an.
-    pub fn new_sketch(&mut self, frame: Frame) -> usize {
-        let name = format!("Skizze {}", self.next_sketch_number);
-        self.next_sketch_number += 1;
-        self.sketches
-            .push(Sketch::new(frame, name, self.kernel.tolerance));
-        self.sketches.len() - 1
-    }
-
     /// Fehler als Meldung ablegen und zurückgeben.
-    fn fail<T>(&mut self, e: String) -> Result<T, String> {
+    pub(crate) fn fail<T>(&mut self, e: String) -> Result<T, String> {
         self.message = Some(e.clone());
         Err(e)
     }
 
-    /// Legt eine Skizze auf der ebenen Fläche `face` des Körpers `body` an.
-    pub fn new_sketch_on_face(&mut self, body: usize, face: Id<Face>) -> Result<usize, String> {
+    /// Skizzen-Features der Zeitleiste in ihrer Reihenfolge, mit Namen.
+    pub fn sketch_features(&self) -> Vec<(FeatureId, String)> {
+        self.document
+            .features()
+            .iter()
+            .filter(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+            .map(|f| (f.id, f.name.clone()))
+            .collect()
+    }
+
+    /// Das geöffnete Skizzen-Feature.
+    pub fn open_sketch_id(&self) -> Option<FeatureId> {
+        self.sketch_session.as_ref().map(|s| s.sketch)
+    }
+
+    /// Legt ein leeres Skizzen-Feature „Skizze N“ auf der Ebene `plane` am Marker an. Bei
+    /// `OnFace` bestimmt die Berechnung die Lage aus der Fläche. Lässt sich die Skizze nicht
+    /// berechnen (etwa weil es die Fläche nicht gibt), bleibt das Dokument unverändert.
+    pub fn add_sketch(&mut self, plane: SketchPlane) -> Result<FeatureId, String> {
+        let frame = match &plane {
+            SketchPlane::Standard(p) => p.frame(),
+            // Ohne bekannte Fläche vorläufig; die Berechnung setzt die Ebene der Fläche.
+            // [`AppState::new_sketch_on_face`] gibt die echte Ebene mit.
+            SketchPlane::OnFace(_) => Frame::WORLD,
+        };
+        self.add_sketch_in(plane, frame)
+    }
+
+    /// Legt ein leeres Skizzen-Feature auf `plane` an; `frame` ist die Lage der Ebene, die in
+    /// der Definition gespeichert wird.
+    fn add_sketch_in(&mut self, plane: SketchPlane, frame: Frame) -> Result<FeatureId, String> {
+        let sketch = Sketch::new(frame, self.next_name(SKETCH_LABEL), self.kernel.tolerance);
+        let kind = FeatureKind::Sketch(SketchFeature {
+            sketch,
+            plane,
+            copies: Vec::new(),
+        });
+        self.add_checked(SKETCH_LABEL, kind)
+    }
+
+    /// Legt ein Skizzen-Feature auf der ebenen Fläche `face` des sichtbaren Körpers `body` an.
+    /// Die Skizze verweist über Marke und Hinweispunkt auf die Fläche und wandert mit ihr.
+    pub fn new_sketch_on_face(&mut self, body: usize, face: Id<Face>) -> Result<FeatureId, String> {
         let Some(b) = self.bodies.get(body) else {
             return self.fail("Körper nicht gefunden".into());
         };
         if b.solid.faces.get(face).is_none() {
             return self.fail("Fläche nicht gefunden".into());
         }
-        match plane_of_face(&b.solid, face) {
-            Some(frame) => Ok(self.new_sketch(frame)),
-            None => self.fail("Skizzen lassen sich nur auf ebenen Flächen anlegen".into()),
-        }
+        let Some(frame) = plane_of_face(&b.solid, face) else {
+            return self.fail("Skizzen lassen sich nur auf ebenen Flächen anlegen".into());
+        };
+        let r = match planora_feature::FaceRef::from_face(&b.solid, face, &self.kernel.tolerance) {
+            Ok(r) => r,
+            Err(e) => return self.fail(format!("Auf dieser Fläche geht keine Skizze: {e}")),
+        };
+        self.add_sketch_in(SketchPlane::OnFace(r), frame)
     }
 
-    /// Öffnet den Skizzen-Modus für die Skizze `index`: Kamera senkrecht auf die Skizzenebene,
-    /// übrige Szene gedämpft. Beim Wechsel zwischen Skizzen bleibt die gemerkte Kamera erhalten.
-    pub fn open_sketch(&mut self, index: usize) -> Result<(), String> {
-        let Some(sk) = self.sketches.get(index) else {
+    /// Öffnet den Skizzen-Modus für das Skizzen-Feature `id` auf einem Entwurf (Kopie der
+    /// Definition mit der berechneten Skizze): Kamera senkrecht auf die Skizzenebene, übrige
+    /// Szene gedämpft. Eine schon geöffnete Skizze wird vorher zurückgeschrieben; die gemerkte
+    /// Kamera bleibt dabei erhalten.
+    pub fn open_sketch(&mut self, id: FeatureId) -> Result<(), String> {
+        if !self
+            .document
+            .feature(id)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+        {
+            return self.fail("Skizze nicht gefunden".into());
+        }
+        let switching = self.sketch_session.is_some();
+        if switching {
+            // Bleibt die alte Skizze offen (Entwurf abgelehnt), wird nicht gewechselt.
+            self.commit_draft()?;
+        }
+        let Some(f) = self.document.feature(id) else {
             return self.fail("Skizze nicht gefunden".into());
         };
-        let frame = *sk.frame();
-        let extent = sk.extent();
-        let mut session = SketchSession::new(index);
-        session.last_report = Some(sk.clone().solve());
-        if self.sketch_session.is_none() {
+        let FeatureKind::Sketch(def) = &f.kind else {
+            return self.fail("Skizze nicht gefunden".into());
+        };
+        let mut draft = def.clone();
+        // Die berechnete Skizze trägt die aufgelöste Ebene und die nachgeführten Kantenkopien;
+        // ohne Ergebnis (etwa hinter dem Marker) dient die Definition.
+        if let Some(sk) = self.document.sketch_of(id) {
+            draft.sketch = sk.clone();
+        }
+        draft.sketch.name = f.name.clone();
+        let frame = *draft.sketch.frame();
+        let extent = draft.sketch.extent();
+        let mut session = SketchSession::new(id);
+        session.last_report = Some(draft.sketch.clone().solve());
+        if !switching {
             self.saved_camera = Some(self.camera);
         }
         self.sketch_session = Some(session);
+        self.sketch_draft = Some(draft);
+        self.selected_feature = Some(id);
         match extent {
             Some((lo, hi)) => {
                 // Sehr kleine Skizzen (ein Punkt, eine winzige Kurve) mit Mindestgröße einpassen.
@@ -514,11 +972,97 @@ impl AppState {
         Ok(())
     }
 
-    /// Beendet den Skizzen-Modus und stellt die vorherige Kamera wieder her.
-    pub fn close_sketch(&mut self) {
-        if self.sketch_session.take().is_none() {
-            return;
+    /// Skizze der offenen Sitzung (der Entwurf).
+    pub fn session_sketch(&self) -> Option<&Sketch> {
+        self.sketch_session.as_ref()?;
+        self.sketch_draft.as_ref().map(|d| &d.sketch)
+    }
+
+    /// Sitzung und Entwurfsskizze gemeinsam (für die Werkzeuge des Skizzen-Modus).
+    pub fn session_sketch_mut(&mut self) -> Option<(&mut SketchSession, &mut Sketch)> {
+        let AppState {
+            sketch_session,
+            sketch_draft,
+            ..
+        } = self;
+        Some((sketch_session.as_mut()?, &mut sketch_draft.as_mut()?.sketch))
+    }
+
+    /// Schreibt den Entwurf ins Dokument zurück (Skizze und Kopien aus dem Entwurf; die Ebene
+    /// bleibt die der aktuellen Definition, im Skizzen-Modus lässt sie sich nicht ändern) und beendet
+    /// die Sitzung, ohne die Kamera anzufassen. Ein unveränderter Entwurf löst keine
+    /// Neuberechnung aus.
+    ///
+    /// Lehnt das Dokument den Entwurf ab, bleiben Sitzung und Entwurf offen; die Meldung steht
+    /// in `message` und im Skizzenfenster.
+    fn commit_draft(&mut self) -> Result<(), String> {
+        let (Some(mut se), Some(mut draft)) =
+            (self.sketch_session.take(), self.sketch_draft.take())
+        else {
+            return Ok(());
+        };
+        let id = se.sketch;
+        let Some(FeatureKind::Sketch(def)) = self.document.feature(id).map(|f| &f.kind) else {
+            return Ok(());
+        };
+        draft.plane = def.plane.clone();
+        let unchanged = draft.copies == def.copies
+            && self
+                .document
+                .sketch_of(id)
+                .is_some_and(|sk| sk.revision() == draft.sketch.revision());
+        if unchanged {
+            return Ok(());
         }
+        let kind = FeatureKind::Sketch(draft.clone());
+        match self.document.update(id, |k| *k = kind) {
+            Ok(()) => {
+                self.refresh();
+                if let Some(FeatureStatus::Error(e)) = self.document.feature(id).map(|f| &f.status)
+                {
+                    self.message = Some(e.clone());
+                }
+                Ok(())
+            }
+            Err(e) => {
+                let message = format!("Die Skizze ließ sich nicht übernehmen: {e}");
+                se.message = Some(message.clone());
+                self.sketch_session = Some(se);
+                self.sketch_draft = Some(draft);
+                self.fail(message)
+            }
+        }
+    }
+
+    /// Beendet den Skizzen-Modus: schreibt den Entwurf zurück, berechnet neu und stellt die
+    /// vorherige Kamera wieder her.
+    /// Lässt sich der Entwurf nicht übernehmen, bleibt die Skizze offen (Meldung in
+    /// `message`); siehe [`AppState::try_close_sketch`].
+    pub fn close_sketch(&mut self) {
+        let _ = self.try_close_sketch();
+    }
+
+    /// Wie [`AppState::close_sketch`], mit Ergebnis: Ein Fehler bedeutet, dass die Skizze
+    /// offen geblieben ist.
+    pub fn try_close_sketch(&mut self) -> Result<(), String> {
+        if self.sketch_session.is_none() {
+            self.sketch_draft = None;
+            return Ok(());
+        }
+        self.commit_draft()?;
+        self.restore_camera();
+        Ok(())
+    }
+
+    /// Verwirft Sitzung und Entwurf (das Skizzen-Feature gibt es nicht mehr).
+    fn discard_sketch(&mut self) {
+        self.sketch_draft = None;
+        if self.sketch_session.take().is_some() {
+            self.restore_camera();
+        }
+    }
+
+    fn restore_camera(&mut self) {
         if let Some(mut cam) = self.saved_camera.take() {
             // Das Seitenverhältnis gehört zum aktuellen Fenster.
             cam.aspect = self.camera.aspect;
@@ -527,102 +1071,183 @@ impl AppState {
         self.rebuild_scene();
     }
 
-    /// Löscht die Skizze `index`; eine Sitzung auf dieser Skizze wird geschlossen, die Indizes
-    /// einer Sitzung auf einer späteren Skizze werden angepasst.
-    pub fn delete_sketch(&mut self, index: usize) {
-        if index >= self.sketches.len() {
-            return;
+    /// Nach dem Löschen von Features: Auswahl, Dialogwünsche und eine Sitzung auf gelöschte
+    /// Features aufgeben. Eine überlebende Skizze ist vor dem Löschen schon beendet worden
+    /// (ihr Entwurf übernommen), Kantenkopien hängen also im Dokument und werden mitgelöscht.
+    fn forget_deleted(&mut self) {
+        if self
+            .selected_feature
+            .is_some_and(|id| self.document.feature(id).is_none())
+        {
+            self.selected_feature = None;
         }
-        match self.sketch_session.as_ref().map(|s| s.sketch) {
-            Some(i) if i == index => self.close_sketch(),
-            Some(i) if i > index => {
-                if let Some(s) = self.sketch_session.as_mut() {
-                    s.sketch = i - 1;
-                }
-            }
-            _ => {}
+        let gone = |doc: &Document, id: &FeatureId| doc.feature(*id).is_none();
+        if self
+            .edit_request
+            .as_ref()
+            .is_some_and(|id| gone(&self.document, id))
+        {
+            self.edit_request = None;
         }
-        self.selected_sketch = match self.selected_sketch {
-            Some(i) if i == index => None,
-            Some(i) if i > index => Some(i - 1),
-            other => other,
+        if self
+            .rename_draft
+            .as_ref()
+            .is_some_and(|(id, _)| gone(&self.document, id))
+        {
+            self.rename_draft = None;
+        }
+        if self
+            .open_sketch_id()
+            .is_some_and(|id| gone(&self.document, &id))
+        {
+            self.discard_sketch();
+        }
+    }
+
+    /// Kopiert die Kante `edge` des sichtbaren Körpers `body` in die geöffnete Skizze und merkt
+    /// sich den Verweis, damit die Kopie dem Körper folgt. Nur Körper, die vor dem
+    /// Skizzen-Feature sichtbar sind, sind erlaubt. Fehler stehen auch in der Meldung der
+    /// Sitzung.
+    pub fn project_edge_into_sketch(&mut self, body: usize, edge: Id<Edge>) -> Result<(), String> {
+        let result = self.try_project_edge(body, edge);
+        if let (Err(e), Some(se)) = (&result, self.sketch_session.as_mut()) {
+            se.message = Some(e.clone());
+        }
+        result
+    }
+
+    fn try_project_edge(&mut self, body: usize, edge: Id<Edge>) -> Result<(), String> {
+        let id = self
+            .open_sketch_id()
+            .ok_or_else(|| "Es ist keine Skizze geöffnet".to_string())?;
+        let source = self
+            .bodies
+            .get(body)
+            .map(|b| b.source)
+            .ok_or_else(|| "Körper nicht gefunden".to_string())?;
+        let solid = self
+            .document
+            .visible_bodies_before(id)
+            .into_iter()
+            .find(|v| v.body == source)
+            .map(|v| v.solid.clone())
+            .ok_or_else(|| {
+                "Dieser Körper entsteht erst nach der Skizze (etwa durch ein späteres \
+                 Verschieben oder eine spätere Boolesche Operation); seine Kanten lassen sich nicht \
+                 hineinkopieren"
+                    .to_string()
+            })?;
+        let edge_ref = planora_feature::EdgeRef::from_edge(&solid, edge, &self.kernel.tolerance)
+            .map_err(|e| format!("Diese Kante lässt sich nicht kopieren: {e}"))?;
+        let (Some(se), Some(draft)) = (self.sketch_session.as_mut(), self.sketch_draft.as_mut())
+        else {
+            return Err("Es ist keine Skizze geöffnet".into());
         };
-        self.sketches.remove(index);
+        let curve = se.project_edge(&mut draft.sketch, &solid, edge)?;
+        draft.copies.push(EdgeCopy {
+            curve,
+            edge: edge_ref,
+        });
+        Ok(())
     }
 
     /// Wunsch aus dem Kontextmenü des Browsers, „Skizze extrudieren/drehen“ zu öffnen: beendet
     /// die offene Skizze, wählt die Skizze im Browser und hebt die Auswahl von Körpern und in
     /// der 3D-Ansicht auf (wie ein einfacher Klick auf die Skizze).
     pub fn request_sketch_dialog(&mut self, request: SketchRequest) {
-        let (SketchRequest::Extrude(i) | SketchRequest::Revolve(i)) = request;
-        self.close_sketch();
-        self.selected_sketch = Some(i);
+        let (SketchRequest::Extrude(id) | SketchRequest::Revolve(id)) = request;
+        // Wird der Entwurf abgelehnt, bleibt die Skizze offen und es öffnet sich kein Dialog.
+        if self.try_close_sketch().is_err() {
+            return;
+        }
+        self.selected_feature = Some(id);
         self.selected_body = None;
         self.set_selection(None);
         self.sketch_request = Some(request);
     }
 
-    /// Skizze `sketch` und ihr Profil `profile` (Index in `profiles()`).
-    fn sketch_profile(&self, sketch: usize, profile: usize) -> Result<(&Sketch, Profile), String> {
-        let sk = self
-            .sketches
-            .get(sketch)
+    /// Prüft, dass `sketch` eine berechnete Skizze mit dem Profil `profile` (Index in
+    /// `profiles()`) ist; liefert den Namen des Skizzen-Features.
+    fn check_profile(&self, sketch: FeatureId, profile: usize) -> Result<String, String> {
+        let f = self
+            .document
+            .feature(sketch)
+            .filter(|f| matches!(f.kind, FeatureKind::Sketch(_)))
             .ok_or_else(|| "Skizze nicht gefunden".to_string())?;
-        let p = self
-            .profile_cache
-            .get(sk)
-            .profiles
-            .get(profile)
-            .cloned()
-            .ok_or_else(|| "Profil nicht gefunden".to_string())?;
-        Ok((sk, p))
-    }
-
-    /// Nimmt einen Körper aus einer Skizze an Ort und Stelle auf oder legt den Fehler ab.
-    fn add_sketch_body(
-        &mut self,
-        kind: BodyKind,
-        made: Result<(Solid, String), String>,
-    ) -> Result<usize, String> {
-        match made.and_then(|(solid, name)| self.add_body_in_place(kind, name, solid)) {
-            Ok(i) => Ok(i),
-            Err(e) => self.fail(e),
+        let sk = self.document.sketch_of(sketch).ok_or_else(|| {
+            format!(
+                "Die Skizze „{}“ ist nicht berechnet ({})",
+                f.name,
+                status_message(Some(f.status.clone()))
+            )
+        })?;
+        if profile >= self.profile_cache.get(sk).profiles.len() {
+            return Err("Profil nicht gefunden".into());
         }
+        Ok(f.name.clone())
     }
 
-    /// Extrudiert Profil `profile` der Skizze `sketch` um `height` entlang der Skizzennormalen;
-    /// der Körper entsteht an Ort und Stelle. Bei einem Fehler bleibt das Dokument unverändert.
+    /// Legt ein Körper-Feature aus einer Skizze an (Name ohne Zähler). Lässt es sich nicht
+    /// berechnen, wird es wieder entfernt; sonst wird die Körperliste aktualisiert.
+    fn add_body_from_sketch(
+        &mut self,
+        name: String,
+        kind: FeatureKind,
+    ) -> Result<FeatureId, String> {
+        let id = self.add_checked_named(name, kind)?;
+        self.refresh();
+        Ok(id)
+    }
+
+    /// Extrudiert Profil `profile` des Skizzen-Features `sketch` um `height` entlang der
+    /// Skizzennormalen; der Körper entsteht an Ort und Stelle. Eine offene Skizze wird vorher
+    /// beendet. Bei einem Fehler bleibt das Dokument unverändert.
     pub fn extrude_sketch(
         &mut self,
-        sketch: usize,
+        sketch: FeatureId,
         profile: usize,
         height: f64,
-    ) -> Result<usize, String> {
-        let made = if !(height.is_finite() && height > self.kernel.tolerance.linear) {
-            Err("Die Höhe muss größer als null sein".to_string())
-        } else {
-            self.sketch_profile(sketch, profile).and_then(|(sk, p)| {
-                let solid =
-                    extrude_profile(&self.kernel, sk, &p, height).map_err(|e| e.to_string())?;
-                Ok((solid, format!("Extrusion: {}", sk.name)))
-            })
+    ) -> Result<FeatureId, String> {
+        self.try_close_sketch()?;
+        if !(height.is_finite() && height > self.kernel.tolerance.linear) {
+            return self.fail("Die Höhe muss größer als null sein".into());
+        }
+        let name = match self.check_profile(sketch, profile) {
+            Ok(n) => n,
+            Err(e) => return self.fail(e),
         };
-        self.add_sketch_body(BodyKind::Extrusion, made)
+        self.add_body_from_sketch(
+            format!("Extrusion: {name}"),
+            FeatureKind::Extrude {
+                sketch,
+                profile,
+                height,
+            },
+        )
     }
 
-    /// Dreht Profil `profile` der Skizze `sketch` um die Linie `axis` (360°); der Körper entsteht
-    /// an Ort und Stelle. Bei einem Fehler bleibt das Dokument unverändert.
+    /// Dreht Profil `profile` des Skizzen-Features `sketch` um die Linie `axis` (360°); der
+    /// Körper entsteht an Ort und Stelle. Eine offene Skizze wird vorher beendet. Bei einem
+    /// Fehler bleibt das Dokument unverändert.
     pub fn revolve_sketch(
         &mut self,
-        sketch: usize,
+        sketch: FeatureId,
         profile: usize,
         axis: CurveId,
-    ) -> Result<usize, String> {
-        let made = self.sketch_profile(sketch, profile).and_then(|(sk, p)| {
-            let solid = revolve_profile(&self.kernel, sk, &p, axis).map_err(|e| e.to_string())?;
-            Ok((solid, format!("Rotation: {}", sk.name)))
-        });
-        self.add_sketch_body(BodyKind::Revolution, made)
+    ) -> Result<FeatureId, String> {
+        self.try_close_sketch()?;
+        let name = match self.check_profile(sketch, profile) {
+            Ok(n) => n,
+            Err(e) => return self.fail(e),
+        };
+        self.add_body_from_sketch(
+            format!("Rotation: {name}"),
+            FeatureKind::Revolve {
+                sketch,
+                profile,
+                axis,
+            },
+        )
     }
 }
 
@@ -631,4 +1256,57 @@ fn bounds_of(mesh: &Mesh) -> (DVec3, DVec3) {
         (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN)),
         |(lo, hi), p| (lo.min(*p), hi.max(*p)),
     )
+}
+
+/// Meldung zu einem Feature, das nicht berechnet werden konnte.
+fn status_message(status: Option<FeatureStatus>) -> String {
+    match status {
+        Some(FeatureStatus::Error(e) | FeatureStatus::Skipped(e)) => e,
+        _ => "Das Feature konnte nicht berechnet werden".into(),
+    }
+}
+
+/// Folgt einer Kette von Verschiebungen bis zu dem Körper, den ein anderes Feature erzeugt hat.
+fn origin_of(doc: &Document, mut r: BodyRef) -> BodyRef {
+    // Verweise zeigen nur nach vorn: spätestens nach so vielen Schritten ist die Kette zu Ende.
+    for _ in 0..doc.features().len() {
+        match doc.feature(r.feature).map(|f| &f.kind) {
+            Some(FeatureKind::Move { body, .. }) => r = *body,
+            _ => break,
+        }
+    }
+    r
+}
+
+/// Anzeigename eines Körpers: der Name des Features, das ihn ursprünglich erzeugt hat (mit
+/// laufender Nummer, wenn es mehrere Körper erzeugt).
+fn body_name(doc: &Document, r: BodyRef) -> Option<String> {
+    let r = origin_of(doc, r);
+    let f = doc.feature(r.feature)?;
+    let several = r.index > 0
+        || doc
+            .body(BodyRef {
+                feature: r.feature,
+                index: 1,
+            })
+            .is_some();
+    Some(if several {
+        format!("{} {}", f.name, r.index + 1)
+    } else {
+        f.name.clone()
+    })
+}
+
+/// Art eines Körpers aus dem Feature, das ihn erzeugt hat; Verschieben übernimmt die Art des
+/// verschobenen Körpers.
+fn body_kind(doc: &Document, r: BodyRef) -> BodyKind {
+    match doc.feature(origin_of(doc, r).feature).map(|f| &f.kind) {
+        Some(FeatureKind::Box { .. }) => BodyKind::Box,
+        Some(FeatureKind::Cylinder { .. }) => BodyKind::Cylinder,
+        Some(FeatureKind::Sphere { .. }) => BodyKind::Sphere,
+        Some(FeatureKind::Cone { .. }) => BodyKind::Cone,
+        Some(FeatureKind::Extrude { .. }) => BodyKind::Extrusion,
+        Some(FeatureKind::Revolve { .. }) => BodyKind::Revolution,
+        _ => BodyKind::Combined,
+    }
 }
