@@ -79,19 +79,73 @@ fn moving_a_body_edits_the_last_move_feature_instead_of_stacking_new_ones() {
     assert_eq!(s.document.features().len(), 2);
 }
 
+/// Deckfläche (ebene Fläche mit Normale +z ganz oben) des Körpers `i`.
+fn top_face(s: &AppState, i: usize) -> planora_kernel::Id<planora_kernel::Face> {
+    let solid = &s.bodies[i].solid;
+    let top_z = s.bodies[i].bounds.1.z;
+    solid
+        .faces
+        .iter()
+        .find(|(id, _)| {
+            planora_sketch::plane_of_face(solid, *id)
+                .is_some_and(|f| f.z.z > 0.5 && (f.origin.z - top_z).abs() < 1e-9)
+        })
+        .map(|(id, _)| id)
+        .expect("Deckfläche")
+}
+
 #[test]
 fn moving_after_a_foreign_feature_read_the_body_adds_a_new_move() {
+    // Quader → Verschieben → Skizze auf seiner Deckfläche → Extrusion. Die Skizze liest den
+    // verschobenen Körper (über die Flächenmarke des Quaders); ein weiteres Verschieben darf das
+    // alte Verschieben deshalb nicht erweitern, sonst wanderten Skizze und Extrusion mit.
     let mut s = AppState::new();
-    s.create_box(DVec3::splat(4.0)).unwrap();
-    s.create_cylinder(1.0, 4.0).unwrap();
-    s.move_body(0, DVec3::X).unwrap(); // Move für Körper 0 (Feature 3)
-    let _ = s.add_boolean(0, 1, BoolOp::Union); // liest beide (ob erfolgreich oder nicht)
+    s.create_box(DVec3::new(10.0, 10.0, 4.0)).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    let i = s.new_sketch_on_face(0, top_face(&s, 0)).unwrap();
+    let frame = *s.sketches[i].frame();
+    let local = |p: DVec3| frame.to_local(p).truncate();
+    let (a, b) = (
+        local(DVec3::new(3.0, 3.0, 4.0)),
+        local(DVec3::new(6.0, 6.0, 4.0)),
+    );
+    s.sketches[i].add_rectangle(a.min(b), a.max(b)).unwrap();
+    let e = s.extrude_sketch(i, 0, 2.0).unwrap();
+    let extrusion = s.bodies[e].source;
+    let extrusion_bounds = s.bodies[e].bounds;
+    let box_bounds = s.bodies[0].bounds;
     let n = s.document.features().len();
     s.move_body(0, DVec3::Y).unwrap();
-    assert!(
-        s.document.features().len() >= n,
-        "ein weiteres Feature entsteht oder der letzte Move wird erweitert, nie beides verloren"
+    assert_eq!(s.document.features().len(), n + 1, "ein neues Verschieben");
+    let ei = s.body_index(extrusion).expect("Extrusion sichtbar");
+    assert_eq!(
+        s.bodies[ei].bounds, extrusion_bounds,
+        "Extrusion bleibt liegen"
     );
+    let moved = s.bodies.iter().position(|b| b.source != extrusion).unwrap();
+    assert!((s.bodies[moved].bounds.0 - (box_bounds.0 + DVec3::Y)).length() < 1e-9);
+    match &s.document.features()[1].kind {
+        FeatureKind::Move { delta, .. } => assert!((*delta - DVec3::X).length() < 1e-12),
+        k => panic!("{k:?}"),
+    }
+}
+
+#[test]
+fn moving_again_extends_the_move_when_only_unrelated_features_follow() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    // ein Quader, der den verschobenen Körper nicht liest
+    s.create_box(DVec3::splat(2.0)).unwrap();
+    let n = s.document.features().len();
+    s.move_body(0, DVec3::Y).unwrap();
+    assert_eq!(s.document.features().len(), n, "kein neues Feature");
+    match &s.document.features()[1].kind {
+        FeatureKind::Move { delta, .. } => {
+            assert!((*delta - DVec3::new(1.0, 1.0, 0.0)).length() < 1e-12)
+        }
+        k => panic!("{k:?}"),
+    }
 }
 
 #[test]

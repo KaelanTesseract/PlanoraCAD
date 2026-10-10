@@ -402,8 +402,9 @@ impl AppState {
     }
 
     /// Verschiebt den Körper `index` um `delta` (Millimeter) **zusätzlich** zur derzeitigen
-    /// Lage. Ist der Körper das Ergebnis eines Verschiebens, das kein anderes Feature liest,
-    /// wird dessen Verschiebung erhöht; sonst entsteht ein neues Verschieben am Marker. Auswahl
+    /// Lage (Entscheidung F9). Ist der Körper das Ergebnis eines Verschiebens und liest ihn
+    /// danach kein anderes Feature (siehe [`AppState::read_later`]), wird dessen Verschiebung
+    /// erhöht; sonst entsteht ein neues Verschieben am Marker. Auswahl
     /// und gewählter Körper gehen auf das Ergebnis über. Bei einem Fehler bleibt alles
     /// unverändert.
     pub fn move_body(&mut self, index: usize, delta: DVec3) -> Result<(), String> {
@@ -421,7 +422,7 @@ impl AppState {
                 .document
                 .feature(r.feature)
                 .is_some_and(|f| matches!(f.kind, FeatureKind::Move { .. }))
-            && self.document.dependents(r.feature).is_empty();
+            && !self.read_later(index);
         let moved = if extendable {
             self.extend_move(r.feature, delta)?;
             r
@@ -436,22 +437,76 @@ impl AppState {
         Ok(())
     }
 
-    /// Erhöht die Verschiebung des Features `id` um `delta`; schlägt die Neuberechnung fehl,
-    /// wird der alte Wert wiederhergestellt.
+    /// Liest ein Feature nach dem erzeugenden Feature des Körpers `index` (und vor dem
+    /// Marker) diesen Körper? Gelesen wird über einen Verweis auf das erzeugende Feature selbst
+    /// oder über die Flächenmarken des Körpers: Skizzen auf Flächen und Kantenkopien verweisen
+    /// auf die Herkunft der Marke (etwa den Quader), nicht auf das Verschieben.
+    fn read_later(&self, index: usize) -> bool {
+        let Some(body) = self.bodies.get(index) else {
+            return false;
+        };
+        let mut origins: Vec<FeatureId> = body
+            .solid
+            .faces
+            .iter()
+            .filter_map(|(_, f)| f.tag.as_ref().map(|t| FeatureId(t.origin)))
+            .collect();
+        origins.push(body.source.feature);
+        let Some(start) = self.document.index_of(body.source.feature) else {
+            return false;
+        };
+        let end = self.document.marker();
+        self.document.features()[start + 1..end.max(start + 1)]
+            .iter()
+            .any(|f| f.kind.dependencies().iter().any(|d| origins.contains(d)))
+    }
+
+    /// Erhöht die Verschiebung des Features `id` um `delta`. Ist das Verschieben danach nicht
+    /// berechenbar oder schlägt dadurch ein späteres, bisher fehlerfreies Feature fehl, wird
+    /// die alte Verschiebung zurückgeschrieben: Das Dokument bleibt dann unverändert.
     fn extend_move(&mut self, id: FeatureId, delta: DVec3) -> Result<(), String> {
-        let add = |k: &mut FeatureKind, by: DVec3| {
+        let old = match self.document.feature(id).map(|f| &f.kind) {
+            Some(FeatureKind::Move { delta, .. }) => *delta,
+            _ => return self.fail("Das Verschieben gibt es nicht mehr".into()),
+        };
+        let was_ok: Vec<FeatureId> = self
+            .document
+            .features()
+            .iter()
+            .filter(|f| f.status == FeatureStatus::Ok)
+            .map(|f| f.id)
+            .collect();
+        let set = |k: &mut FeatureKind, to: DVec3| {
             if let FeatureKind::Move { delta, .. } = k {
-                *delta += by;
+                *delta = to;
             }
         };
-        if let Err(e) = self.document.update(id, |k| add(k, delta)) {
+        if let Err(e) = self.document.update(id, |k| set(k, old + delta)) {
             return self.fail(e.to_string());
         }
-        match self.document.feature(id).map(|f| f.status.clone()) {
-            Some(FeatureStatus::Ok) => Ok(()),
-            status => {
-                let _ = self.document.update(id, |k| add(k, -delta));
-                self.fail(status_message(status))
+        let broken = self
+            .document
+            .features()
+            .iter()
+            .find(|f| was_ok.contains(&f.id) && f.status != FeatureStatus::Ok)
+            .map(|f| (f.id, f.status.clone()));
+        match broken {
+            None => Ok(()),
+            Some((broken_id, status)) => {
+                let _ = self.document.update(id, |k| set(k, old));
+                let message = status_message(Some(status));
+                if broken_id == id {
+                    self.fail(message)
+                } else {
+                    let name = self
+                        .document
+                        .feature(broken_id)
+                        .map_or_else(String::new, |f| f.name.clone());
+                    self.fail(format!(
+                        "Verschieben verworfen: Feature „{name}“ ließe sich danach nicht mehr \
+                         berechnen ({message})"
+                    ))
+                }
             }
         }
     }
@@ -683,17 +738,7 @@ fn to_vec3(v: DVec3) -> Vec3 {
 impl AppState {
     /// Lage einer Grundebene (rechtshändig, `z` = Normale).
     pub fn standard_frame(plane: StandardPlane) -> Frame {
-        let (x, y, z) = match plane {
-            StandardPlane::XY => (DVec3::X, DVec3::Y, DVec3::Z),
-            StandardPlane::XZ => (DVec3::X, DVec3::Z, -DVec3::Y),
-            StandardPlane::YZ => (DVec3::Y, DVec3::Z, DVec3::X),
-        };
-        Frame {
-            origin: DVec3::ZERO,
-            x,
-            y,
-            z,
-        }
+        feature_plane_of(plane).frame()
     }
 
     /// Legt eine leere Skizze „Skizze N“ auf der Ebene `frame` an.
@@ -836,11 +881,7 @@ impl AppState {
     /// auf der die Skizze liegt.
     fn feature_plane(&self, frame: &Frame) -> Result<SketchPlane, String> {
         let tol = self.kernel.tolerance;
-        for p in [
-            planora_feature::StandardPlane::XY,
-            planora_feature::StandardPlane::XZ,
-            planora_feature::StandardPlane::YZ,
-        ] {
+        for p in [StandardPlane::XY, StandardPlane::XZ, StandardPlane::YZ].map(feature_plane_of) {
             if same_frame(&p.frame(), frame, tol.linear) {
                 return Ok(SketchPlane::Standard(p));
             }
@@ -1026,4 +1067,13 @@ fn same_frame(a: &Frame, b: &Frame, tol: f64) -> bool {
         && a.x.distance(b.x) <= tol
         && a.y.distance(b.y) <= tol
         && a.z.distance(b.z) <= tol
+}
+
+/// Grundebene der App als Grundebene des Feature-Modells (eine gemeinsame Definition der Lage).
+fn feature_plane_of(plane: StandardPlane) -> planora_feature::StandardPlane {
+    match plane {
+        StandardPlane::XY => planora_feature::StandardPlane::XY,
+        StandardPlane::XZ => planora_feature::StandardPlane::XZ,
+        StandardPlane::YZ => planora_feature::StandardPlane::YZ,
+    }
 }
