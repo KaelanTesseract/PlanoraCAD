@@ -54,7 +54,7 @@ Alles, was du baust, steht als Liste von Schritten im Feature-Baum: Quader, Skiz
 - Die Ebene einer Skizze lässt sich nachträglich nicht ändern.
 - Ein Körper lässt sich nicht nachträglich vor eine Skizze setzen, die ihn braucht.
 - Verschiebst du einen Körper im Eigenschaftenfenster, kommt ein neuer Schritt ans Ende; Skizzen und Extrusionen davor ziehen nicht mit. Änderst du dagegen die Maße des Quaders selbst, folgen sie.
-- Die Oberfläche des Feature-Baums wurde bisher fast nur durch automatische Tests geprüft; von Hand wurde nur der Start, das Anlegen eines Quaders und das Rechtsklickmenü gesehen.
+- Die Oberfläche des Feature-Baums wurde zuletzt von Hand durchgespielt (mit `tools/gui-drive.ps1`): Quader anlegen und ändern, Skizze auf einer Fläche, Extrusion, Vereinigen, Unterdrücken, Zurückrollen, Löschen mit Rückfrage und Position ziehen liefen ohne Absturz. Rotation und Fehlerfälle wurden nur durch automatische Tests geprüft.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Nach Teilprojekt 5 (Feature-Baum)“.
 
