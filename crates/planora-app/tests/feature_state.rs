@@ -284,3 +284,48 @@ fn creating_a_primitive_with_invalid_sizes_leaves_the_document_alone() {
     assert!(s.message.is_some());
     assert!(s.bodies.is_empty());
 }
+
+// ---- R8: Verschieben und Features hinter dem Marker, Rücknahme bei riesiger Verschiebung ----
+
+#[test]
+fn a_reader_behind_the_marker_also_prevents_extending_the_move() {
+    // Quader → Verschieben → Skizze auf der Deckfläche; der Marker steht vor der Skizze. Würde
+    // das alte Verschieben erweitert, wanderte die Skizze beim Vorrücken des Markers mit.
+    let mut s = AppState::new();
+    s.create_box(DVec3::new(10.0, 10.0, 4.0)).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    s.new_sketch_on_face(0, top_face(&s, 0)).unwrap();
+    s.document.set_marker(2).unwrap();
+    s.refresh();
+    let n = s.document.features().len();
+    s.move_body(0, DVec3::Y).unwrap();
+    assert_eq!(s.document.features().len(), n + 1, "ein neues Verschieben");
+    match &s.document.features()[1].kind {
+        FeatureKind::Move { delta, .. } => assert!((*delta - DVec3::X).length() < 1e-12),
+        k => panic!("{k:?}"),
+    }
+}
+
+#[test]
+fn a_huge_move_is_rolled_back() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    let bounds = s.bodies[0].bounds;
+    let n = s.document.features().len();
+    assert!(s.move_body(0, DVec3::splat(f64::MAX)).is_err());
+    assert!(s.message.is_some());
+    assert_eq!(s.document.features().len(), n, "kein neues Feature");
+    match &s.document.features()[1].kind {
+        FeatureKind::Move { delta, .. } => assert_eq!(*delta, DVec3::X, "alte Verschiebung"),
+        k => panic!("{k:?}"),
+    }
+    assert_eq!(s.bodies[0].bounds, bounds, "Körper unverändert");
+    assert_eq!(
+        s.document
+            .feature(s.bodies[0].source.feature)
+            .unwrap()
+            .status,
+        FeatureStatus::Ok
+    );
+}

@@ -123,6 +123,10 @@ impl ProfileCache {
 }
 
 const GRID_HALF_EXTENT: f32 = 500.0;
+/// Größter Betrag einer Koordinate eines verschobenen Körpers in mm (wie
+/// [`planora_sketch::model::MAX_COORD`]): Darüber ist der Abstand benachbarter `f64`-Werte
+/// größer als die Toleranz, und Toleranzvergleiche würden bedeutungslos.
+const MAX_COORD_MM: f64 = planora_sketch::model::MAX_COORD;
 /// Bezeichnung (und Namensstamm) von Skizzen-Features.
 const SKETCH_LABEL: &str = "Skizze";
 const PICK_EDGE_PX: f32 = 6.0;
@@ -409,11 +413,19 @@ impl AppState {
         if !delta.is_finite() {
             return self.fail("Ungültige Verschiebung".into());
         }
-        let Some(r) = self.bodies.get(index).map(|b| b.source) else {
+        let Some((r, (lo, hi))) = self.bodies.get(index).map(|b| (b.source, b.bounds)) else {
             return self.fail("Körper nicht gefunden".into());
         };
         if delta == DVec3::ZERO {
             return Ok(());
+        }
+        // Der Körper muss danach im darstellbaren Bereich liegen; das deckt auch Summen ab, die
+        // beim Erweitern eines Verschiebens nicht mehr endlich wären.
+        let inside = |p: DVec3| p.is_finite() && p.abs().max_element() <= MAX_COORD_MM;
+        if !(inside(lo + delta) && inside(hi + delta)) {
+            return self.fail(format!(
+                "Verschieben abgelehnt: Der Körper läge außerhalb von ±{MAX_COORD_MM:e} mm"
+            ));
         }
         let extendable = r.index == 0
             && self
@@ -435,7 +447,7 @@ impl AppState {
         Ok(())
     }
 
-    /// Liest ein Feature nach dem erzeugenden Feature des Körpers `index` (und vor dem
+    /// Liest ein Feature nach dem erzeugenden Feature des Körpers `index` (auch hinter dem
     /// Marker) diesen Körper? Gelesen wird über einen Verweis auf das erzeugende Feature selbst
     /// oder über die Flächenmarken des Körpers: Skizzen auf Flächen und Kantenkopien verweisen
     /// auf die Herkunft der Marke (etwa den Quader), nicht auf das Verschieben.
@@ -453,8 +465,9 @@ impl AppState {
         let Some(start) = self.document.index_of(body.source.feature) else {
             return false;
         };
-        let end = self.document.marker();
-        self.document.features()[start + 1..end.max(start + 1)]
+        // Auch Features hinter dem Marker zählen: Sie wanderten sonst beim Vorrücken des Markers
+        // mit dem erweiterten Verschieben mit.
+        self.document.features()[start + 1..]
             .iter()
             .any(|f| f.kind.dependencies().iter().any(|d| origins.contains(d)))
     }
