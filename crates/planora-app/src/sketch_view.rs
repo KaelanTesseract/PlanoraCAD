@@ -560,7 +560,7 @@ fn handle_input(
             se.drag_to(sk, at);
         }
         if response.drag_stopped() || !response.dragged() {
-            se.end_drag();
+            se.end_drag(sk);
         }
     }
 

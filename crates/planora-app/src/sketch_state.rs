@@ -225,9 +225,10 @@ impl SketchSession {
     /// Löst die Skizze und merkt sich den Bericht. Macht die Änderung die Skizze widersprüchlich
     /// oder unlösbar, ist das ein Fehler (siehe [`check_change`]).
     fn solve_checked(&mut self, sk: &mut Sketch, prior: &Sketch) -> Result<SolveReport, String> {
+        let before = self.last_report.take();
         let report = sk.solve();
         self.last_report = Some(report.clone());
-        if let Some(problem) = check_change(&report, prior, None) {
+        if let Some(problem) = check_change(&report, before.as_ref(), prior, None) {
             return Err(match problem {
                 SolveStatus::Conflicting => {
                     "Widerspruch: Die Änderung widerspricht vorhandenen Abhängigkeiten".to_string()
@@ -608,8 +609,13 @@ impl SketchSession {
         }
     }
 
-    pub fn end_drag(&mut self) {
-        self.dragging = None;
+    /// Beendet das Ziehen. Ein volles Lösen holt dabei die Diagnose nach, die während des
+    /// Ziehens für die gezogene Gruppe entfällt (unveränderte Gruppen kommen aus dem
+    /// Zwischenspeicher des Solvers und kosten nichts).
+    pub fn end_drag(&mut self, sk: &mut Sketch) {
+        if self.dragging.take().is_some() {
+            self.last_report = Some(sk.solve());
+        }
     }
 
     // ---- Abhängigkeiten -----------------------------------------------------------------
@@ -741,15 +747,13 @@ impl SketchSession {
                         .measure(&kind)
                         .ok_or_else(|| "Das Maß lässt sich nicht messen".to_string())?,
                 };
-                if value.is_some() {
-                    check_dimension_value(&kind, v, sk.tolerance().linear)?;
-                }
-                set_value(&mut kind, v);
+                kind = with_checked_value(sk, &kind, v)?;
             }
             let id = sk.add_constraint(kind).map_err(err)?;
+            let before = se.last_report.take();
             let report = sk.solve();
             se.last_report = Some(report.clone());
-            if let Some(problem) = check_change(&report, prior, Some(id)) {
+            if let Some(problem) = check_change(&report, before.as_ref(), prior, Some(id)) {
                 return Err(match problem {
                     SolveStatus::Conflicting => format!(
                         "Widerspruch: „{}“ widerspricht vorhandenen Abhängigkeiten",
@@ -802,7 +806,7 @@ impl SketchSession {
                 .constraint(id)
                 .map(|c| c.kind.clone())
                 .ok_or_else(|| "Abhängigkeit nicht gefunden".to_string())?;
-            check_dimension_value(&kind, value, sk.tolerance().linear)?;
+            with_checked_value(sk, &kind, value)?;
             sk.set_constraint_value(id, value).map_err(err)?;
             se.solve_checked(sk, prior)?;
             Ok(())
@@ -830,9 +834,12 @@ impl SketchSession {
                 sk.set_constraint_value(id, v).map_err(err)?;
             }
             sk.set_driven(id, driven).map_err(err)?;
+            let before = se.last_report.take();
             let report = sk.solve();
             se.last_report = Some(report.clone());
-            if let Some(problem) = check_change(&report, prior, (!driven).then_some(id)) {
+            if let Some(problem) =
+                check_change(&report, before.as_ref(), prior, (!driven).then_some(id))
+            {
                 return Err(match problem {
                     SolveStatus::Conflicting => {
                         "Widerspruch: Das Maß widerspricht vorhandenen Abhängigkeiten".to_string()
@@ -883,13 +890,7 @@ impl SketchSession {
                 }
             }
         }
-        for p in orphans {
-            let used = sk.curves().any(|(_, c)| c.kind.points().contains(&p))
-                || sk.constraints().any(|(_, k)| k.kind.points().contains(&p));
-            if !used {
-                let _ = sk.remove_point(p);
-            }
-        }
+        sk.prune_points(&orphans);
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
         if self.dragging.is_some_and(|p| sk.point_xy(p).is_err()) {
             self.dragging = None;
@@ -993,17 +994,21 @@ impl SketchSession {
     }
 }
 
-/// Prüft den Bericht nach einer Änderung gegen den Zustand davor (`prior`). Liefert den Grund
+/// Prüft den Bericht nach einer Änderung gegen den Zustand davor. Liefert den Grund
 /// (`Conflicting`/`NotConverged`), wenn die Änderung zurückgenommen werden muss:
 /// - die Skizze ist nicht gelöst, war es aber vorher;
 /// - die neue Abhängigkeit `new` gehört zu den widersprüchlichen;
 /// - die Skizze war schon vorher kaputt, jetzt widersprechen sich aber Abhängigkeiten, die es
 ///   vorher nicht taten, oder sie wurde von widersprüchlich zu nicht lösbar.
 ///
-/// Grenze: Der Bericht nennt bei nicht lösbaren Gruppen keine Abhängigkeiten; eine neue nicht
-/// lösbare Gruppe neben einem schon bestehenden Widerspruch wird deshalb nicht erkannt.
+/// Der Zustand davor ist `before` (der letzte Bericht der Sitzung), sonst wird `prior` gelöst.
+///
+/// Grenze: Der Bericht nennt bei nicht lösbaren Gruppen nur Abhängigkeiten mit zu großem
+/// Residuum; eine neue nicht lösbare Gruppe neben einem schon bestehenden Widerspruch wird nur
+/// erkannt, wenn sie dabei neue Abhängigkeiten nennt.
 fn check_change(
     report: &SolveReport,
+    before: Option<&SolveReport>,
     prior: &Sketch,
     new: Option<ConstraintId>,
 ) -> Option<SolveStatus> {
@@ -1014,8 +1019,15 @@ fn check_change(
     if new.is_some_and(|id| report.conflicting.contains(&id)) {
         return bad;
     }
-    let before = prior.clone().solve();
-    if status_ok(&before) {
+    let solved_prior;
+    let before = match before {
+        Some(b) => b,
+        None => {
+            solved_prior = prior.clone().solve();
+            &solved_prior
+        }
+    };
+    if status_ok(before) {
         return bad;
     }
     let grown = report
@@ -1027,41 +1039,20 @@ fn check_change(
     (grown || worse).then_some(report.status)
 }
 
-/// Prüft einen Maßwert: endlich; Längen größer als `min_length`, Abstände Punkt–Linie nicht
-/// negativ; Winkel beliebig.
-pub fn check_dimension_value(
+/// Das Maß `kind` mit dem Wert `value`, geprüft nach der gemeinsamen Regel der Skizze
+/// ([`Sketch::check_constraint_value`]). Nicht endliche Eingaben ergeben die Meldung des
+/// Zahlenfelds.
+pub fn with_checked_value(
+    sk: &Sketch,
     kind: &ConstraintKind,
     value: f64,
-    min_length: f64,
-) -> Result<(), String> {
-    use ConstraintKind as K;
+) -> Result<ConstraintKind, String> {
     if !value.is_finite() {
         return Err("Bitte eine Zahl eingeben".into());
     }
-    match kind {
-        K::Distance(..)
-        | K::Radius(..)
-        | K::Diameter(..)
-        | K::EllipseMajor(..)
-        | K::EllipseMinor(..)
-            if value <= min_length =>
-        {
-            Err("Der Wert muss größer als null sein".into())
-        }
-        K::DistancePointLine(..) if value < 0.0 => Err("Der Wert darf nicht negativ sein".into()),
-        _ => Ok(()),
-    }
-}
-
-/// Setzt den Zahlenwert eines Maßes.
-fn set_value(kind: &mut ConstraintKind, v: f64) {
-    use ConstraintKind as K;
-    match kind {
-        K::Distance(_, _, x)
-        | K::DistancePointLine(_, _, x)
-        | K::Radius(_, x)
-        | K::Diameter(_, x)
-        | K::Angle(_, _, x) => *x = v,
-        _ => {}
-    }
+    let changed = kind
+        .with_value(value)
+        .ok_or_else(|| "Das ist kein Maß".to_string())?;
+    sk.check_constraint_value(&changed).map_err(err)?;
+    Ok(changed)
 }

@@ -129,7 +129,7 @@ fn dragging_moves_free_points_and_respects_constraints() {
     se.set_tool(Tool::Select);
     assert!(se.begin_drag(&mut sk, DVec2::new(10.1, 0.0), R));
     se.drag_to(&mut sk, DVec2::new(14.0, 3.0));
-    se.end_drag();
+    se.end_drag(&mut sk);
     assert!(
         (sk.point_xy(b).unwrap() - DVec2::new(14.0, 3.0)).length() < 1e-6,
         "b ist frei"
@@ -588,4 +588,81 @@ fn a_dimension_can_be_switched_to_driven_and_back() {
         }
         _ => panic!(),
     }
+}
+
+// ---- Abschlusswelle -----------------------------------------------------------------------
+
+#[test]
+fn dimension_values_follow_the_rule_of_the_sketch_crate() {
+    let (mut sk, mut se) = setup();
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(5.0, 0.0).unwrap();
+    se.selection = vec![Item::Point(a), Item::Point(b)];
+    // Abstand null (oder winzig) wird abgelehnt, genau wie von `Sketch::add_constraint`.
+    assert!(
+        se.apply(&mut sk, ConstraintAction::Distance, Some(0.0))
+            .is_err()
+    );
+    assert!(
+        se.apply(&mut sk, ConstraintAction::Distance, Some(1e-300))
+            .is_err()
+    );
+    assert_eq!(
+        se.apply(&mut sk, ConstraintAction::Distance, Some(f64::NAN)),
+        Err("Bitte eine Zahl eingeben".to_string())
+    );
+    assert_eq!(sk.constraints().count(), 0);
+    let d = se
+        .apply(&mut sk, ConstraintAction::Distance, Some(7.0))
+        .unwrap();
+    assert!(se.set_dimension_value(&mut sk, d, 1e-300).is_err());
+    assert!(
+        se.set_dimension_value(&mut sk, d, 2e9).is_err(),
+        "Betragsgrenze"
+    );
+    // Ellipsenmaße lassen sich über dieselbe Regel ändern (früher ignorierte die App sie).
+    let m = sk.add_point(20.0, 0.0).unwrap();
+    let e = sk.add_ellipse(m, DVec2::new(4.0, 0.0), 2.0).unwrap();
+    let major = sk.add_constraint(K::EllipseMajor(e, 4.0)).unwrap();
+    let minor = sk.add_constraint(K::EllipseMinor(e, 2.0)).unwrap();
+    se.set_dimension_value(&mut sk, major, 6.0).unwrap();
+    assert!(
+        se.set_dimension_value(&mut sk, minor, 7.0).is_err(),
+        "kleine > große"
+    );
+    se.set_dimension_value(&mut sk, minor, 3.0).unwrap();
+    assert_eq!(
+        sk.measure(&K::EllipseMinor(e, 0.0))
+            .map(|v| (v * 1e6).round()),
+        Some(3e6)
+    );
+}
+
+#[test]
+fn the_end_of_a_drag_runs_the_full_diagnosis() {
+    // Die gezogene Gruppe ist schon widersprüchlich: Während des Ziehens wird nicht nach der
+    // Ursache gesucht (nur „nicht lösbar“), am Ende des Ziehens schon.
+    let (mut sk, mut se) = setup();
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(4.0, 0.0).unwrap();
+    sk.add_line(a, b).unwrap();
+    sk.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    sk.add_constraint(K::Distance(a, b, 3.0)).unwrap();
+    sk.add_constraint(K::Distance(a, b, 5.0)).unwrap();
+    se.set_tool(Tool::Select);
+    assert!(se.begin_drag(&mut sk, DVec2::new(4.0, 0.0), R));
+    se.drag_to(&mut sk, DVec2::new(4.0, 2.0));
+    let during = se.last_report.clone().unwrap();
+    assert_eq!(
+        during.status,
+        planora_sketch::solver::SolveStatus::NotConverged
+    );
+    se.end_drag(&mut sk);
+    let after = se.last_report.clone().unwrap();
+    assert_eq!(
+        after.status,
+        planora_sketch::solver::SolveStatus::Conflicting
+    );
+    assert_eq!(after.conflicting.len(), 2, "{after:?}");
+    assert!(se.dragging.is_none());
 }
