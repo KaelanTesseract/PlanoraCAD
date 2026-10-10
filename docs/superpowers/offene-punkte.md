@@ -126,7 +126,7 @@ Stand: 2026-10-10. Skizzen, Extrusionen, Drehungen, Boolesche Operationen und Ve
 - Vertauschen sich zwei gleichartige Flächen (gleiche Rolle, gleiche Herkunft), kann ein Verweis auf die falsche zeigen; der Hinweispunkt entscheidet nur bei mehreren Treffern.
 - Eine Skizze auf einer Fläche hängt nur von dem Grundkörper ab, der die Fläche erzeugt hat. Wird ein später entstandenes Feature gelöscht (z. B. eine Vereinigung), erscheint es nicht in der Liste der Folgen.
 - `Move` behält keine Körperidentität: Nach einer Verschiebung ist der Körper ein neuer, die Verweise laufen über die Marken der Flächen.
-- Kantenkopien in Skizzen folgen der Kante nur, solange sie die gleiche Art behält (Gerade bleibt Gerade, Kreis bleibt Kreis); sonst meldet das Skizzen-Feature einen Fehler. Wird das Feature gelöscht, das die Kante erzeugt hat, verlieren die Kopien ihre Verknüpfung und bleiben als feste Linien in der Skizze.
+- Kantenkopien in Skizzen folgen der Kante nur, solange sie die gleiche Art behält (Gerade bleibt Gerade, Kreis bleibt Kreis); sonst meldet das Skizzen-Feature einen Fehler. Wird das Feature gelöscht, von dem die Marken der Kante stammen (z. B. der Quader), zählt die Skizze als abhängig: Sie wird nach Rückfrage samt ihren Extrusionen mitgelöscht. Wird dagegen eine Boolesche Operation oder ein Verschieben gelöscht, dessen Ergebniskante kopiert wurde, bleibt die Skizze stehen und meldet danach „Kante nicht mehr vorhanden“ (`EdgeNotFound`), wenn es die Kante am ursprünglichen Körper so nicht gibt.
 - Ein Hinweispunkt kann bei sehr schmalen Flächen fehlen; dann bleibt der alte Hinweis stehen.
 
 **Zeitleiste und Neuberechnung**
@@ -134,7 +134,11 @@ Stand: 2026-10-10. Skizzen, Extrusionen, Drehungen, Boolesche Operationen und Ve
 - Ein `Move`, das nach einer abhängigen Skizze oder Extrusion hinzukommt, verschiebt diese nicht mit (Zeitleiste: ein späteres Feature ändert frühere nicht). Wer will, dass die Skizze folgt, ändert die Maße im Quader-Feature selbst.
 - Die Volumenprobe (2 % Abweichung) kann sehr kleine gekrümmte Körper zu Unrecht ablehnen.
 - Das Ergebnis einer Booleschen Operation oder Verschiebung nimmt den Listenplatz seines ersten Eingangs ein; die Oberfläche darf nicht auf feste Plätze bauen.
-- Kopien einer Skizze verlieren ihre Verknüpfung, wenn ihr Kanten-Feature gelöscht wird (siehe oben).
+- Kantenkopien nach dem Löschen: siehe „Verweise“ oben (Herkunfts-Feature gelöscht → Skizze wird mitgelöscht; Boolesche Operation/Verschieben gelöscht → Skizze bleibt und kann `EdgeNotFound` melden).
+- Die Neuberechnung invalidiert großzügig: Ändert sich ein Körper, rechnen alle Features neu, die sichtbare Körper lesen (Skizzen auf Flächen, Kantenkopien, Boolesche Operationen), auch wenn sie den geänderten Körper gar nicht brauchen.
+- Umbenennen rechnet nicht neu; zwischengespeicherte Fehlermeldungen nennen deshalb bis zur nächsten Neuberechnung den alten Namen.
+- Fehlertexte aus dem Feature-Modell nennen Features teils nur über ihre interne Nummer („Fläche … von Feature 3“, „Körper 0 von Feature 5“); `EdgeNotFound` nennt keine Herkunft.
+- Zahlen sind auf ±1e9 mm begrenzt (`MAX_COORD_MM`): Maße, Lagen, Verschiebungen und die Eckpunkte jedes Ergebniskörpers werden beim Berechnen geprüft; größere Werte ergeben einen Fehlerstatus statt eines Absturzes. Die Prüfung sieht nur Eckpunkte; gekrümmte Flächen können bis etwa um ihren Radius darüber hinausreichen.
 - Boolesche Operationen heißen „Boolesche Operation N“; die Art steht nicht im Namen.
 - Der Zweig, der eine fehlgeschlagene Verschiebung zurücknimmt (`move_body`), ist nicht getestet; riesige Verschiebungen werden vorher abgelehnt (±1e9 mm).
 
@@ -144,7 +148,9 @@ Stand: 2026-10-10. Skizzen, Extrusionen, Drehungen, Boolesche Operationen und Ve
 - Löscht man die offene Skizze, geht ihr Entwurf ohne Nachfrage verloren.
 - „Löschen“ beendet die offene Skizze auch dann, wenn die Rückfrage abgebrochen wird.
 - Die offene Skizze wird auch dann verworfen, wenn ihr Entwurf von dem gelöschten Feature gar nicht mehr abhängt.
-- `extrude_sketch`/`revolve_sketch` und einige Menüaufrufe nutzen noch `close_sketch()` und überhören einen abgelehnten Entwurf; richtig wäre `try_close_sketch()`.
+- Der Hinweis in der Löschen-Rückfrage nennt nur Skizzen auf Flächen, nicht Skizzen mit Kantenkopien, die nach dem Löschen einer Booleschen Operation oder eines Verschiebens auf `EdgeNotFound` laufen.
+- Die Ansicht passt sich neu ein, sobald sich die Zahl der Körper ändert; gewählte Flächen und Kanten werden nach einer Neuberechnung über ihre Arena-Nummer weitergeführt und können dann eine andere Fläche meinen.
+- Ziehen am Feld „Position“ legt höchstens ein Verschieben je Zug an (es wird im selben Zug erweitert, auch wenn danach ein Leser steht).
 - Fehlt dem Skizzen-Feature ein Ergebnis, nutzt die Oberfläche die gespeicherte Definition.
 - **Von Hand kaum geprüft:** Die Oberfläche des Feature-Baums wurde in Aufgaben 7–9 nicht von Hand durchgespielt, weil die Bildschirmsteuerung unterbrochen wurde. Bei der Abschlussprüfung wurde nur gesehen, dass die App startet, ein Quader entsteht, im Baum erscheint und das Rechtsklickmenü (Bearbeiten, Umbenennen, Unterdrücken, Zurückrollen, Zum Ende, Löschen) da ist; auch dieser Versuch wurde unterbrochen. Die ganze Kette (Skizze, Extrusion, Boolesche Operation, Maße ändern, Fehler am richtigen Feature) wurde nicht von Hand geprüft, nur durch automatische Tests (App ohne Fenster).
 
