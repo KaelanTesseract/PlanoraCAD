@@ -135,3 +135,89 @@ fn rename_goes_through_the_feature() {
     assert_eq!(s.bodies[0].name, "Grundplatte");
     assert!(s.rename_feature(a, "  ").is_err());
 }
+
+// Zusätzliche Tests (über den Brief hinaus).
+
+#[test]
+fn a_moved_body_keeps_its_name_kind_and_selection() {
+    use planora_render::{FaceRef, Pick};
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    s.create_cylinder(1.0, 4.0).unwrap();
+    let face = s.bodies[0].mesh.face_ranges[0].face;
+    s.set_selection(Some(Pick::Face(FaceRef { body: 0, face })));
+    s.move_body(0, DVec3::new(0.0, 0.0, 3.0)).unwrap();
+    assert_eq!(
+        s.bodies[0].name, "Quader 1",
+        "Name des erzeugenden Features"
+    );
+    assert_eq!(s.bodies[0].kind, BodyKind::Box);
+    assert_eq!(
+        s.selected_body,
+        Some(0),
+        "Auswahl folgt dem verschobenen Körper"
+    );
+    assert_eq!(s.selection, Some(Pick::Face(FaceRef { body: 0, face })));
+    assert_eq!(s.bodies[1].name, "Zylinder 1", "Reihenfolge bleibt");
+    // Umbenennen trifft das erzeugende Feature, nicht das Verschieben
+    let id = s.naming_feature(0).unwrap();
+    s.rename_feature(id, "Platte").unwrap();
+    assert_eq!(s.bodies[0].name, "Platte");
+    assert_eq!(s.document.feature(id).unwrap().name, "Platte");
+}
+
+#[test]
+fn deleting_a_moved_body_removes_its_moves_but_a_combined_input_is_protected() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    s.move_body(1, DVec3::Z).unwrap();
+    s.delete_body(1).unwrap();
+    assert_eq!(s.bodies.len(), 1);
+    assert_eq!(
+        s.document.features().len(),
+        1,
+        "Quader und Verschieben entfernt"
+    );
+
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    s.move_body(1, DVec3::new(-12.0, 1.0, 1.0)).unwrap(); // überlappt Quader 1
+    s.add_boolean(0, 1, BoolOp::Union).unwrap();
+    let n = s.document.features().len();
+    // Der Körper ist das Ergebnis der Vereinigung: Löschen nimmt nur sie heraus.
+    s.delete_body(0).unwrap();
+    assert_eq!(s.document.features().len(), n - 1);
+    assert_eq!(s.bodies.len(), 2, "die Eingangskörper sind wieder sichtbar");
+    // Ein Quader, auf dem eine Vereinigung aufbaut, wird nicht ohne Rückfrage gelöscht.
+    s.add_boolean(0, 1, BoolOp::Union).unwrap();
+    let a = s.document.features()[0].id;
+    let e = s.delete_feature(a).unwrap_err();
+    assert!(e.contains("Vereinigung"), "{e}");
+    assert_eq!(s.message.as_deref(), Some(e.as_str()));
+}
+
+#[test]
+fn creating_a_primitive_with_invalid_sizes_leaves_the_document_alone() {
+    let mut s = AppState::new();
+    assert!(s.create_box(DVec3::new(1.0, 0.0, 1.0)).is_err());
+    assert!(s.create_sphere(f64::INFINITY).is_err());
+    assert!(s.create_cone(1.0, -2.0).is_err());
+    assert!(s.document.features().is_empty());
+    // ein Feature mit Fehler über die allgemeine Schnittstelle bleibt stehen, mit Meldung
+    let id = s
+        .add_feature(
+            None,
+            FeatureKind::Cylinder {
+                radius: -1.0,
+                height: 1.0,
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        s.document.feature(id).unwrap().status,
+        FeatureStatus::Error(_)
+    ));
+    assert!(s.message.is_some());
+    assert!(s.bodies.is_empty());
+}

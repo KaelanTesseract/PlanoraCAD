@@ -3,24 +3,12 @@
 use planora_app::boolean_dialog::BooleanDialog;
 use planora_app::state::*;
 use planora_app::{fonts, properties};
-use planora_kernel::*;
 use planora_math::DVec3;
 
 fn state() -> AppState {
     let mut s = AppState::new();
-    let k = s.kernel;
-    s.add_body(
-        BodyKind::Box,
-        "Quader".into(),
-        k.make_box(DVec3::splat(10.0)).unwrap(),
-    )
-    .unwrap();
-    s.add_body(
-        BodyKind::Cylinder,
-        "Zylinder".into(),
-        k.make_cylinder(2.0, 14.0).unwrap(),
-    )
-    .unwrap();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    s.create_cylinder(2.0, 14.0).unwrap();
     s
 }
 

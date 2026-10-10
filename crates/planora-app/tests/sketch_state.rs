@@ -1,6 +1,6 @@
 use planora_app::sketch_state::*;
 use planora_app::state::{AppState, BodyKind, StandardPlane};
-use planora_kernel::{Kernel, Surface};
+use planora_kernel::Surface;
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::{CurveKind, Sketch};
@@ -294,14 +294,7 @@ fn bodies_from_sketches_appear_in_place_and_errors_leave_the_document_alone() {
 #[test]
 fn a_sketch_can_be_started_on_a_planar_face() {
     let mut s = AppState::new();
-    let k = s.kernel;
-    let bi = s
-        .add_body(
-            BodyKind::Box,
-            "Q".into(),
-            k.make_box(DVec3::new(10.0, 20.0, 5.0)).unwrap(),
-        )
-        .unwrap();
+    let bi = new_body(&mut s, |s| s.create_box(DVec3::new(10.0, 20.0, 5.0)));
     let top = s.bodies[bi]
         .solid
         .faces
@@ -321,13 +314,7 @@ fn a_sketch_can_be_started_on_a_planar_face() {
         s.new_sketch_on_face(bi, planora_kernel::Id::from_index(99))
             .is_err()
     );
-    let cyl = s
-        .add_body(
-            BodyKind::Cylinder,
-            "Z".into(),
-            k.make_cylinder(2.0, 4.0).unwrap(),
-        )
-        .unwrap();
+    let cyl = new_body(&mut s, |s| s.create_cylinder(2.0, 4.0));
     let side = s.bodies[cyl]
         .solid
         .faces
@@ -344,14 +331,7 @@ fn a_sketch_can_be_started_on_a_planar_face() {
 #[test]
 fn body_edges_can_be_copied_into_the_open_sketch() {
     let mut s = AppState::new();
-    let k = s.kernel;
-    let bi = s
-        .add_body(
-            BodyKind::Box,
-            "Q".into(),
-            k.make_box(DVec3::new(10.0, 20.0, 5.0)).unwrap(),
-        )
-        .unwrap();
+    let bi = new_body(&mut s, |s| s.create_box(DVec3::new(10.0, 20.0, 5.0)));
     let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
     s.open_sketch(i).unwrap();
     let edge = s.bodies[bi]
@@ -748,4 +728,64 @@ fn a_hole_tangent_to_an_edge_explains_why_it_is_not_usable() {
     assert!(e.profiles.is_empty());
     let text = e.rejected[0].reason.to_string();
     assert!(text.contains("berührt"), "{text}");
+}
+
+/// Legt einen Grundkörper über `make` an und liefert seinen Index in der Körperliste.
+fn new_body(
+    s: &mut AppState,
+    make: impl FnOnce(&mut AppState) -> Result<planora_feature::FeatureId, String>,
+) -> usize {
+    let id = make(s).unwrap();
+    s.body_index(planora_feature::BodyRef {
+        feature: id,
+        index: 0,
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_sketch_on_a_body_face_is_extruded_on_that_face() {
+    // Übergang (F13): Die Skizze aus der Liste wird als Skizzen-Feature auf der Fläche angelegt.
+    let mut s = AppState::new();
+    let bi = new_body(&mut s, |s| s.create_box(DVec3::new(10.0, 20.0, 5.0)));
+    let top = s.bodies[bi]
+        .solid
+        .faces
+        .iter()
+        .find(|(_, f)| {
+            matches!(f.surface, Surface::Plane { .. })
+                && f.same_sense
+                && (f.surface.frame().z.z - 1.0).abs() < 1e-9
+                && (f.surface.frame().origin.z - 5.0).abs() < 1e-9
+        })
+        .map(|(id, _)| id)
+        .expect("Deckfläche");
+    let i = s.new_sketch_on_face(bi, top).unwrap();
+    // Rechteck in Skizzenkoordinaten mitten auf der Deckfläche
+    let frame = *s.sketches[i].frame();
+    let local = |p: DVec3| frame.to_local(p).truncate();
+    let (a, b) = (
+        local(DVec3::new(2.0, 2.0, 5.0)),
+        local(DVec3::new(6.0, 8.0, 5.0)),
+    );
+    s.sketches[i].add_rectangle(a.min(b), a.max(b)).unwrap();
+    let e = s.extrude_sketch(i, 0, 3.0).unwrap();
+    assert_eq!(s.bodies.len(), 2);
+    let (lo, hi) = s.bodies[e].bounds;
+    assert!(
+        (lo.z - 5.0).abs() < 1e-6 && (hi.z - 8.0).abs() < 1e-6,
+        "{lo:?} {hi:?}"
+    );
+    assert!(
+        (lo.x - 2.0).abs() < 1e-6 && (hi.y - 8.0).abs() < 1e-6,
+        "{lo:?} {hi:?}"
+    );
+    // ein gelöschter Grundkörper: Die Skizze liegt auf keiner Fläche mehr
+    let count = s.document.features().len();
+    s.delete_feature_with_dependents(s.bodies[bi].source.feature)
+        .unwrap();
+    assert!(s.extrude_sketch(i, 0, 3.0).is_err());
+    assert!(s.message.is_some());
+    assert!(s.document.features().len() < count);
+    assert!(s.bodies.is_empty());
 }
