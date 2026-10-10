@@ -12,7 +12,8 @@ use planora_render::{
     pick_face,
 };
 use planora_sketch::model::{CurveId, Sketch};
-use planora_sketch::{extrude_profile, plane_of_face, revolve_profile};
+use planora_sketch::{ExtractedProfiles, extrude_profile, plane_of_face, revolve_profile};
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,6 +84,38 @@ pub struct AppState {
     pub next_sketch_number: u64,
     /// Offener Dialogwunsch aus dem Browser (siehe [`SketchRequest`]).
     pub sketch_request: Option<SketchRequest>,
+    /// Zuletzt berechnete Profile (für die Dialoge, die jedes Bild neu zeichnen).
+    pub profile_cache: ProfileCache,
+}
+
+/// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
+/// ([`Sketch::revision`], über alle Skizzen eindeutig). Ändert sich die Skizze, ändert sich der
+/// Stand, und die Profile werden neu berechnet.
+#[derive(Debug, Default)]
+pub struct ProfileCache {
+    entry: RefCell<Option<(u64, Arc<ExtractedProfiles>)>>,
+    computed: Cell<usize>,
+}
+
+impl ProfileCache {
+    /// Die Profile von `sk`, aus dem Speicher, wenn sich die Skizze seither nicht geändert hat.
+    pub fn get(&self, sk: &Sketch) -> Arc<ExtractedProfiles> {
+        let mut entry = self.entry.borrow_mut();
+        if let Some((rev, p)) = entry.as_ref()
+            && *rev == sk.revision()
+        {
+            return Arc::clone(p);
+        }
+        let p = Arc::new(sk.profiles());
+        self.computed.set(self.computed.get() + 1);
+        *entry = Some((sk.revision(), Arc::clone(&p)));
+        p
+    }
+
+    /// Wie oft bisher tatsächlich berechnet wurde (für Tests).
+    pub fn computations(&self) -> usize {
+        self.computed.get()
+    }
 }
 
 const GRID_HALF_EXTENT: f32 = 500.0;
@@ -118,6 +151,7 @@ impl AppState {
             saved_camera: None,
             next_sketch_number: 1,
             sketch_request: None,
+            profile_cache: ProfileCache::default(),
         };
         state.rebuild_scene();
         state
@@ -516,17 +550,30 @@ impl AppState {
         self.sketches.remove(index);
     }
 
+    /// Wunsch aus dem Kontextmenü des Browsers, „Skizze extrudieren/drehen“ zu öffnen: beendet
+    /// die offene Skizze, wählt die Skizze im Browser und hebt die Auswahl von Körpern und in
+    /// der 3D-Ansicht auf (wie ein einfacher Klick auf die Skizze).
+    pub fn request_sketch_dialog(&mut self, request: SketchRequest) {
+        let (SketchRequest::Extrude(i) | SketchRequest::Revolve(i)) = request;
+        self.close_sketch();
+        self.selected_sketch = Some(i);
+        self.selected_body = None;
+        self.set_selection(None);
+        self.sketch_request = Some(request);
+    }
+
     /// Skizze `sketch` und ihr Profil `profile` (Index in `profiles()`).
     fn sketch_profile(&self, sketch: usize, profile: usize) -> Result<(&Sketch, Profile), String> {
         let sk = self
             .sketches
             .get(sketch)
             .ok_or_else(|| "Skizze nicht gefunden".to_string())?;
-        let p = sk
-            .profiles()
+        let p = self
+            .profile_cache
+            .get(sk)
             .profiles
-            .into_iter()
-            .nth(profile)
+            .get(profile)
+            .cloned()
             .ok_or_else(|| "Profil nicht gefunden".to_string())?;
         Ok((sk, p))
     }

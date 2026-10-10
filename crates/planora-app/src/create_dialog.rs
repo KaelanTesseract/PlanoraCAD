@@ -146,8 +146,8 @@ impl CreateDialog {
             ui.weak("Skizze nicht gefunden.");
             return;
         };
-        // Pro Bild neu berechnet: bei Skizzengröße billig, und der Dialog bleibt aktuell.
-        let extracted = sk.profiles();
+        // Zwischengespeichert je Stand der Skizze: neu berechnet nur nach einer Änderung.
+        let extracted = state.profile_cache.get(sk);
         ui.label("Profil");
         if extracted.profiles.is_empty() {
             ui.weak("Die Skizze enthält kein geschlossenes Profil.");
@@ -349,6 +349,19 @@ impl CreateDialog {
                         Some("Bitte eine Drehachse wählen (eine Linie der Skizze).".into());
                     return false;
                 };
+                // Die Achse kann veraltet sein (Linie oder Skizze inzwischen gelöscht, Index
+                // verschoben): nur Linien aus der Auswahlliste der aktuellen Skizze gelten.
+                let valid = state
+                    .sketches
+                    .get(*sketch)
+                    .is_some_and(|sk| axis_candidates(sk).iter().any(|(id, _)| id == axis));
+                if !valid {
+                    state.message = Some(
+                        "Die gewählte Drehachse gibt es in dieser Skizze nicht mehr; bitte neu                          wählen."
+                            .into(),
+                    );
+                    return false;
+                }
                 return state.revolve_sketch(*sketch, *profile, *axis).is_ok();
             }
         };

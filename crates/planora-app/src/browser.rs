@@ -110,16 +110,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     }
     match action {
         // Körper entstehen außerhalb des Skizzen-Modus: die offene Skizze wird vorher beendet.
-        Some(SketchAction::Extrude(i)) => {
-            state.close_sketch();
-            state.selected_sketch = Some(i);
-            state.sketch_request = Some(SketchRequest::Extrude(i));
-        }
-        Some(SketchAction::Revolve(i)) => {
-            state.close_sketch();
-            state.selected_sketch = Some(i);
-            state.sketch_request = Some(SketchRequest::Revolve(i));
-        }
+        Some(SketchAction::Extrude(i)) => state.request_sketch_dialog(SketchRequest::Extrude(i)),
+        Some(SketchAction::Revolve(i)) => state.request_sketch_dialog(SketchRequest::Revolve(i)),
         Some(SketchAction::Delete(i)) => {
             state.delete_sketch(i);
             return;

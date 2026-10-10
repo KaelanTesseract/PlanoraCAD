@@ -302,3 +302,83 @@ fn the_browser_context_menu_deletes_and_edits() {
     assert!(s.sketches.is_empty());
     assert!(s.sketch_session.is_none());
 }
+
+// ---- Abschlusswelle -----------------------------------------------------------------------
+
+#[test]
+fn the_browser_context_menu_clears_the_body_selection() {
+    for entry in ["Extrudieren", "Drehen"] {
+        let mut s = state_with_sketch();
+        assert!(CreateDialog::extrude_sketch(0).create(&mut s));
+        s.selected_body = Some(0);
+        use_context_menu(&mut s, entry);
+        assert!(s.sketch_request.is_some(), "{entry}");
+        assert_eq!(s.selected_body, None, "{entry}: Körperauswahl aufgehoben");
+        assert_eq!(s.selection, None, "{entry}: 3D-Auswahl aufgehoben");
+        assert_eq!(s.selected_sketch, Some(0));
+    }
+}
+
+#[test]
+fn a_stale_revolve_axis_is_rejected() {
+    let mut s = AppState::new();
+    let i = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    s.sketches[i]
+        .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(5.0, 10.0))
+        .unwrap();
+    let a = s.sketches[i].add_point(0.0, -2.0).unwrap();
+    let b = s.sketches[i].add_point(0.0, 12.0).unwrap();
+    let axis = s.sketches[i].add_line(a, b).unwrap();
+    s.sketches[i].set_construction(axis, true).unwrap();
+    let d = CreateDialog::revolve_sketch(&s, i);
+    // Die Achse wird gelöscht, während der Dialog offen ist.
+    s.sketches[i].remove_curve(axis).unwrap();
+    assert!(!d.create(&mut s));
+    assert!(s.bodies.is_empty());
+    let msg = s.message.clone().unwrap_or_default();
+    assert!(msg.contains("Drehachse"), "{msg}");
+    // Eine Linie einer anderen Skizze (Index verschoben) gilt ebenso nicht.
+    let j = s.new_sketch(AppState::standard_frame(StandardPlane::XY));
+    s.sketches[j]
+        .add_rectangle(DVec2::new(1.0, 0.0), DVec2::new(5.0, 10.0))
+        .unwrap();
+    let foreign = CreateDialog::RevolveSketch {
+        sketch: j,
+        profile: 0,
+        axis: Some(planora_kernel::Id::from_index(40)),
+    };
+    assert!(!foreign.create(&mut s));
+    assert!(s.bodies.is_empty());
+}
+
+#[test]
+fn profiles_are_computed_again_only_after_a_change() {
+    let mut s = state_with_sketch();
+    let ctx = context();
+    let mut d = CreateDialog::extrude_sketch(0);
+    for _ in 0..3 {
+        let out = ctx.run_ui(raw(vec![]), |ui| {
+            d.show(ui.ctx(), &mut s);
+        });
+        out.drop_without_applying_deltas();
+    }
+    assert_eq!(
+        s.profile_cache.computations(),
+        1,
+        "drei Bilder, eine Berechnung"
+    );
+    let n = s.profile_cache.get(&s.sketches[0]).profiles.len();
+    assert_eq!(s.profile_cache.computations(), 1);
+    // Eine Änderung (zweites Rechteck) macht den Speicher ungültig.
+    s.sketches[0]
+        .add_rectangle(DVec2::new(50.0, 0.0), DVec2::new(60.0, 4.0))
+        .unwrap();
+    let after = s.profile_cache.get(&s.sketches[0]);
+    assert_eq!(s.profile_cache.computations(), 2);
+    assert_eq!(after.profiles.len(), n + 1);
+    // Auch reines Verschieben eines Punktes ändert den Stand.
+    let p = s.sketches[0].points().next().unwrap().0;
+    s.sketches[0].set_point_xy(p, -1.0, -1.0).unwrap();
+    s.profile_cache.get(&s.sketches[0]);
+    assert_eq!(s.profile_cache.computations(), 3);
+}
