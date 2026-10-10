@@ -248,12 +248,16 @@ fn parametric_constraints_get_an_extra_variable_only_on_success() {
 
     // implizit auf der Ellipse: keine Zusatzvariable
     let on_e = s.add_constraint(K::PointOnCurve(q, e)).unwrap();
-    assert_eq!(s.constraint(on_e).unwrap().extra, None);
+    assert_eq!(s.constraint(on_e).unwrap().extra(), None);
     assert_eq!(s.variable_count(), n);
 
     // parametrisch auf dem Spline: eine Zusatzvariable, die in `locals` steht
     let on_sp = s.add_constraint(K::PointOnCurve(q, sp)).unwrap();
-    let t = s.constraint(on_sp).unwrap().extra.expect("Zusatzvariable");
+    let t = s
+        .constraint(on_sp)
+        .unwrap()
+        .extra()
+        .expect("Zusatzvariable");
     assert_eq!(s.variable_count(), n + 1);
     assert_eq!(t, n);
     let ev = s.evaluate(on_sp, s.variables()).unwrap();

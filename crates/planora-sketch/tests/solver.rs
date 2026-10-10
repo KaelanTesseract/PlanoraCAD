@@ -233,11 +233,17 @@ fn collapsing_geometry_never_produces_nan() {
     let a = s.add_point(0.0, 0.0).unwrap();
     let b = s.add_point(1.0, 1.0).unwrap();
     let l = s.add_line(a, b).unwrap();
-    s.add_constraint(K::Distance(a, b, 0.0)).unwrap();
+    // Abstand 0 lehnt die API inzwischen ab (Abschlusswelle I1); das Zusammenziehen erzwingt
+    // jetzt `Coincident`. Der Solver darf dabei kein NaN erzeugen und die Linie nicht
+    // entarten lassen.
+    assert!(s.add_constraint(K::Distance(a, b, 0.0)).is_err());
+    s.add_constraint(K::Coincident(a, b)).unwrap();
     s.add_constraint(K::Horizontal(LineOrPoints::Line(l)))
         .unwrap();
-    let _ = s.solve();
+    let r = s.solve();
     assert!(s.variables().iter().all(|v| v.is_finite()));
+    assert_ne!(r.status, SolveStatus::Solved, "{r:?}");
+    assert!(s.line_length(l).unwrap() > s.tolerance().linear);
 }
 
 #[test]

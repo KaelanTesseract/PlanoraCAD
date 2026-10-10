@@ -227,6 +227,8 @@ impl Sketch {
         let vertical = offset.x.abs() <= tol;
         self.atomically(|s| {
             let mut out = Vec::with_capacity(count);
+            // Vom Muster angelegte Abhängigkeiten (zum Aufräumen der überzähligen, siehe unten).
+            let mut created = Vec::new();
             for k in 1..=count {
                 let shift = offset * k as f64;
                 let mut map: HashMap<PointId, PointId> = HashMap::new();
@@ -238,22 +240,40 @@ impl Sketch {
                         }
                     }
                     let copy = s.copy_curve(c, &map, false)?;
-                    s.add_constraint(ConstraintKind::Equal(c, copy))?;
+                    created.push(s.add_constraint(ConstraintKind::Equal(c, copy))?);
                     if matches!(s.curves[c].kind, CurveKind::Line { .. }) {
-                        s.add_constraint(ConstraintKind::Parallel(c, copy))?;
+                        created.push(s.add_constraint(ConstraintKind::Parallel(c, copy))?);
                     }
                     group.push(copy);
                 }
                 let moved = map[&first];
-                s.add_constraint(ConstraintKind::Distance(first, moved, shift.length()))?;
+                created.push(s.add_constraint(ConstraintKind::Distance(
+                    first,
+                    moved,
+                    shift.length(),
+                ))?);
                 if horizontal {
-                    s.add_constraint(ConstraintKind::Horizontal(LineOrPoints::Points(
-                        first, moved,
-                    )))?;
+                    created.push(s.add_constraint(ConstraintKind::Horizontal(
+                        LineOrPoints::Points(first, moved),
+                    ))?);
                 } else if vertical {
-                    s.add_constraint(ConstraintKind::Vertical(LineOrPoints::Points(first, moved)))?;
+                    created.push(s.add_constraint(ConstraintKind::Vertical(
+                        LineOrPoints::Points(first, moved),
+                    ))?);
                 }
                 out.push(group);
+            }
+            // Bei geschlossenen Formen folgen Gleichheit und Parallelität der letzten Kante aus
+            // den übrigen (je Kopie zwei überzählige Abhängigkeiten bei einem Rechteck). Die vom
+            // Muster angelegten überzähligen werden wieder entfernt; die Form bleibt dieselbe,
+            // weil jede überzählige Abhängigkeit aus den verbleibenden folgt. Jede dieser
+            // Abhängigkeiten hat genau eine Zeile, die Rangprüfung meldet also genau die
+            // entbehrlichen.
+            let report = s.solve();
+            for id in report.redundant {
+                if created.contains(&id) {
+                    s.remove_constraint(id)?;
+                }
             }
             Ok(out)
         })

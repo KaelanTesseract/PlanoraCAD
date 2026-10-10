@@ -204,3 +204,95 @@ fn dragging_one_group_does_not_touch_an_unrelated_conflicting_group() {
     assert!((pb.length() - 4.0).abs() < 1e-6, "{pb:?}");
     assert!(pb.y > 3.9, "b folgt dem Zug: {pb:?}");
 }
+
+// ---- Zwischenspeicher je Gruppe (Abschlusswelle I3) ----------------------------------------
+
+#[test]
+fn an_untouched_group_is_not_solved_again() {
+    let mut s = sketch();
+    let unrelated = unrelated_groups(&mut s);
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(4.0, 0.0).unwrap();
+    s.add_line(a, b).unwrap();
+    s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    s.add_constraint(K::Distance(a, b, 4.0)).unwrap();
+    let first = s.solve();
+    assert_eq!(first.group_solves, 3, "{first:?}");
+    // Nichts geändert: kein Lauf, gleiches Ergebnis.
+    let second = s.solve();
+    assert_eq!(second.group_solves, 0, "{second:?}");
+    assert_eq!(second.status, first.status);
+    assert_eq!(second.conflicting, first.conflicting);
+    assert_eq!(second.dof, first.dof);
+    assert_eq!(second.redundant, first.redundant);
+    assert_eq!(second.free_points, first.free_points);
+
+    // Ziehen rechnet nur die gezogene Gruppe; die anderen bleiben bitgleich.
+    let before = bits(&s, &unrelated);
+    let r = s
+        .drag(&[Drag {
+            point: b,
+            target: DVec2::new(0.0, 10.0),
+        }])
+        .unwrap();
+    assert_eq!(r.group_solves, 1, "{r:?}");
+    assert_eq!(r.conflicting, first.conflicting);
+    assert_eq!(r.dof, first.dof);
+    assert_eq!(bits(&s, &unrelated), before);
+    // Am Ende des Ziehens ist alles gemerkt: das volle Lösen rechnet nichts mehr.
+    let end = s.solve();
+    assert_eq!(end.group_solves, 0, "{end:?}");
+    assert_eq!(end.status, SolveStatus::Conflicting);
+}
+
+#[test]
+fn any_change_invalidates_the_remembered_results() {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(4.0, 0.0).unwrap();
+    s.add_line(a, b).unwrap();
+    s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    let d = s.add_constraint(K::Distance(a, b, 4.0)).unwrap();
+    s.solve();
+    assert_eq!(s.solve().group_solves, 0);
+    // Wertänderung über die API
+    s.set_constraint_value(d, 6.0).unwrap();
+    let r = s.solve();
+    assert_eq!(r.group_solves, 1);
+    assert!((s.point_xy(b).unwrap().length() - 6.0).abs() < 1e-9);
+    // Punkt von außen verschoben
+    s.set_point_xy(b, 0.0, 3.0).unwrap();
+    let r = s.solve();
+    assert_eq!(r.group_solves, 1);
+    assert!((s.point_xy(b).unwrap().length() - 6.0).abs() < 1e-9);
+    // Abhängigkeit abgeschaltet
+    s.set_enabled(d, false).unwrap();
+    assert_eq!(s.solve().group_solves, 1);
+}
+
+#[test]
+fn a_conflict_in_a_large_group_is_reported_without_the_full_search() {
+    // Kette p0 … p60 mit waagerechten Verbindungen und Abständen 1: mehr als 48 Abhängigkeiten
+    // in einer Gruppe. Ein zusätzlicher Gesamtabstand 100 widerspricht.
+    let mut s = sketch();
+    let pts: Vec<PointId> = (0..=60)
+        .map(|i| s.add_point(f64::from(i), 0.0).unwrap())
+        .collect();
+    s.add_constraint(K::Fixed(pts[0], 0.0, 0.0)).unwrap();
+    for w in pts.windows(2) {
+        s.add_line(w[0], w[1]).unwrap();
+        s.add_constraint(K::Distance(w[0], w[1], 1.0)).unwrap();
+        s.add_constraint(K::Horizontal(LineOrPoints::Points(w[0], w[1])))
+            .unwrap();
+    }
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let bad = s
+        .add_constraint(K::Distance(pts[0], pts[60], 100.0))
+        .unwrap();
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::NotConverged, "{r:?}");
+    assert!(!r.conflicting.is_empty());
+    assert!(r.conflicting.contains(&bad), "{:?}", r.conflicting);
+    // unverändert im letzten Zustand
+    assert_eq!(s.point_xy(pts[60]).unwrap(), DVec2::new(60.0, 0.0));
+}

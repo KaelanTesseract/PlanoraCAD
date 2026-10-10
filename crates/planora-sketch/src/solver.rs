@@ -3,6 +3,18 @@
 //! Aktiv sind alle lebenden, eingeschalteten und nicht nur anzeigenden Abhängigkeiten
 //! (einschließlich der internen). Variablen, die über Abhängigkeiten verbunden sind, bilden eine
 //! Gruppe; jede Gruppe wird für sich gelöst. Nur gelöste Gruppen schreiben ihre Werte zurück.
+//!
+//! Eine Lösung zählt nur, wenn die Geometrie der Gruppe dabei nicht entartet (Spec §4.5):
+//! Kreisradius, Bogenradius (Start und Ende), Linienlänge und beide Ellipsen-Halbachsen müssen
+//! größer als `tol.linear` sein. Sonst gilt die Gruppe als nicht gelöst und bleibt im letzten
+//! Zustand; die Diagnose nennt die Ursache.
+//!
+//! Zwischenspeicher: Das Ergebnis jeder Gruppe wird mit den Werten ihrer Variablen gemerkt.
+//! Stimmen Abhängigkeiten und Werte beim nächsten Lauf überein, wird es übernommen statt neu
+//! gerechnet. Das ist exakt dasselbe Ergebnis, denn ein neuer Lauf ab denselben Werten rechnet
+//! deterministisch dasselbe (eine gelöste Gruppe ist an ihren Werten schon gelöst). Jede
+//! Änderung an Objekten oder Abhängigkeiten leert den Speicher. So rechnet beim Ziehen nur die
+//! Gruppe mit dem gezogenen Punkt.
 
 use crate::constraint::ConstraintId;
 use crate::error::SketchError;
@@ -10,6 +22,12 @@ use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_math::DVec2;
 use std::collections::{HashMap, HashSet};
+
+/// Höchstzahl nutzererzeugter Abhängigkeiten einer Gruppe, für die die Widerspruchsdiagnose
+/// je Abhängigkeit einen eigenen Lauf rechnet (Entscheidung D4). Jeder Lauf kostet so viel wie
+/// ein Lösen der Gruppe; bei mehr Abhängigkeiten meldet der Solver „nicht lösbar“ mit den
+/// Abhängigkeiten, deren Residuum am Ende des gescheiterten Laufs zu groß ist.
+const MAX_DIAGNOSE_RUNS: usize = 48;
 
 /// Höchstzahl der Levenberg-Marquardt-Schritte je Lauf.
 const MAX_ITERATIONS: usize = 100;
@@ -65,14 +83,70 @@ pub struct SolveReport {
     pub free_curves: Vec<CurveId>,
     /// Höchste Schrittzahl über alle Gruppen.
     pub iterations: usize,
+    /// Zahl der Gruppen, die in diesem Lauf tatsächlich gerechnet wurden; die übrigen kamen
+    /// unverändert aus dem Zwischenspeicher (siehe Moduldoku).
+    pub group_solves: usize,
 }
 
 /// Weiche Zusatzbedingung `weight·(x[var] − target)` (zum Ziehen).
 #[derive(Clone, Copy, Debug)]
-pub struct Soft {
+pub(crate) struct Soft {
     pub var: usize,
     pub target: f64,
     pub weight: f64,
+}
+
+/// Gemerkte Ergebnisse je Gruppe, Schlüssel: die Abhängigkeiten der Gruppe.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SolveCache {
+    groups: HashMap<Vec<ConstraintId>, CachedGroup>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedGroup {
+    vars: Vec<usize>,
+    /// Bitmuster der Variablenwerte nach dem Lauf (gelöst: die übernommene Lösung; nicht
+    /// gelöst: der unveränderte Start).
+    values: Vec<u64>,
+    outcome: Outcome,
+}
+
+#[derive(Clone, Debug)]
+enum Outcome {
+    Solved {
+        dof: usize,
+        redundant: Vec<ConstraintId>,
+        free_vars: Vec<usize>,
+    },
+    Failed {
+        conflict: bool,
+        found: Vec<ConstraintId>,
+        iterations: usize,
+    },
+}
+
+impl SolveCache {
+    fn lookup(&self, g: &Group, x: &[f64]) -> Option<&Outcome> {
+        let hit = self.groups.get(&g.constraints)?;
+        (hit.vars == g.vars
+            && hit
+                .vars
+                .iter()
+                .zip(&hit.values)
+                .all(|(&v, &bits)| x[v].to_bits() == bits))
+        .then_some(&hit.outcome)
+    }
+
+    fn insert(&mut self, g: &Group, x: &[f64], outcome: Outcome) {
+        self.groups.insert(
+            g.constraints.clone(),
+            CachedGroup {
+                vars: g.vars.clone(),
+                values: g.vars.iter().map(|&v| x[v].to_bits()).collect(),
+                outcome,
+            },
+        );
+    }
 }
 
 /// Gewicht der weichen Zugbedingung. Klein gegen die harten Residuen (Gewicht 1), damit die
@@ -92,6 +166,8 @@ pub struct Drag {
 struct Group {
     vars: Vec<usize>,
     constraints: Vec<ConstraintId>,
+    /// Lebende Kurven mit mindestens einer Variablen in der Gruppe.
+    curves: Vec<CurveId>,
 }
 
 /// Residuen und Jacobi-Matrix einer Gruppe.
@@ -327,13 +403,42 @@ impl Sketch {
         }
     }
 
-    /// Konvergiert und alle Spline-Parameter im Bereich.
+    /// Ist eine der Kurven `curves` an der Stelle `x` entartet? Kreis- und Bogenradius,
+    /// Linienlänge und beide Halbachsen einer Ellipse müssen größer als `tol.linear` sein (NaN
+    /// zählt als entartet). Ein negativer Kreisradius (gespiegelter Kreis, etwa bei einer
+    /// Tangente durch die Linie hindurch) ist ebenfalls entartet.
+    fn degenerate(&self, curves: &[CurveId], x: &[f64]) -> bool {
+        let tol = self.tolerance().linear;
+        let at = |p: PointId| DVec2::new(x[self.points[p].x], x[self.points[p].y]);
+        let ok = |v: f64| v > tol;
+        curves.iter().any(|&c| match &self.curves[c].kind {
+            CurveKind::Line { a, b } => !ok(at(*a).distance(at(*b))),
+            CurveKind::Circle { radius, .. } => !ok(x[*radius]),
+            CurveKind::Arc { center, start, end } => {
+                let m = at(*center);
+                !(ok(at(*start).distance(m)) && ok(at(*end).distance(m)))
+            }
+            CurveKind::Ellipse { ax, ay, minor, .. } => {
+                !(ok(DVec2::new(x[*ax], x[*ay]).length()) && ok(x[*minor]))
+            }
+            CurveKind::Spline { .. } => false,
+        })
+    }
+
+    /// Konvergiert, alle Spline-Parameter im Bereich und keine Kurve der Gruppe entartet.
     fn acceptable(&self, g: &Group, lm: &Lm, x: &[f64]) -> bool {
-        lm.converged && self.spline_parameters_outside(g, x).is_empty()
+        lm.converged
+            && self.spline_parameters_outside(g, x).is_empty()
+            && !self.degenerate(&g.curves, x)
     }
 
     /// Bestimmt, welche einzelne Abhängigkeit einer nicht lösbaren Gruppe den Widerspruch
     /// verursacht (Entscheidung D4). Leer, wenn auch der Rückfall nichts findet.
+    ///
+    /// Ohne `full` (beim Ziehen für die gezogene Gruppe) und bei mehr als
+    /// [`MAX_DIAGNOSE_RUNS`] Abhängigkeiten entfällt die teure Suche; gemeldet werden dann nur
+    /// die Abhängigkeiten mit zu großem Residuum, der Status ist „nicht lösbar“.
+    #[allow(clippy::too_many_arguments)]
     fn diagnose(
         &self,
         g: &Group,
@@ -341,31 +446,44 @@ impl Sketch {
         start: &[f64],
         failed: &[f64],
         tol_r: f64,
+        full: bool,
     ) -> (Vec<ConstraintId>, bool) {
-        // Erfüllt schon der Start alles (etwa beim Ziehen), ist keine Abhängigkeit schuld.
+        // Erfüllt schon der Start alles und ist dort nichts entartet (etwa beim Ziehen), ist
+        // keine Abhängigkeit schuld.
         let at_start = self.assemble(g, col, start, &[], None);
-        if at_start.hard_inf() <= tol_r && self.spline_parameters_outside(g, start).is_empty() {
+        if at_start.hard_inf() <= tol_r
+            && self.spline_parameters_outside(g, start).is_empty()
+            && !self.degenerate(&g.curves, start)
+        {
             return (Vec::new(), false);
         }
-        let mut candidates = Vec::new();
-        for &id in &g.constraints {
-            if self.constraints[id].internal {
-                continue;
+        let user = g
+            .constraints
+            .iter()
+            .filter(|&&id| !self.constraints[id].internal)
+            .count();
+        if full && user <= MAX_DIAGNOSE_RUNS {
+            let mut candidates = Vec::new();
+            for &id in &g.constraints {
+                if self.constraints[id].internal {
+                    continue;
+                }
+                let mut x = start.to_vec();
+                if self
+                    .levenberg_marquardt(g, col, &mut x, &[], Some(id), tol_r)
+                    .converged
+                    && self
+                        .spline_parameters_outside(g, &x)
+                        .iter()
+                        .all(|&o| o == id)
+                    && !self.degenerate(&g.curves, &x)
+                {
+                    candidates.push(id);
+                }
             }
-            let mut x = start.to_vec();
-            if self
-                .levenberg_marquardt(g, col, &mut x, &[], Some(id), tol_r)
-                .converged
-                && self
-                    .spline_parameters_outside(g, &x)
-                    .iter()
-                    .all(|&o| o == id)
-            {
-                candidates.push(id);
+            if !candidates.is_empty() {
+                return (candidates, true);
             }
-        }
-        if !candidates.is_empty() {
-            return (candidates, true);
         }
         let a = self.assemble(g, col, failed, &[], None);
         let mut big = Vec::new();
@@ -415,6 +533,7 @@ impl Sketch {
                 groups.push(Group {
                     vars: Vec::new(),
                     constraints: Vec::new(),
+                    curves: Vec::new(),
                 });
                 groups.len() - 1
             });
@@ -423,6 +542,25 @@ impl Sketch {
         for (id, locals) in active {
             let gi = index[&find(&mut parent, locals[0])];
             groups[gi].constraints.push(id);
+        }
+        // Kurven, deren Variablen (Punkte oder eigene) in einer Gruppe liegen, gehören zu ihr
+        // (für die Prüfung auf Entartung).
+        for (cid, c) in self.curves() {
+            let mut vars: Vec<usize> = c
+                .kind
+                .points()
+                .iter()
+                .flat_map(|&p| [self.points[p].x, self.points[p].y])
+                .collect();
+            vars.extend(own_vars(&c.kind));
+            let mut seen: Vec<usize> = Vec::new();
+            for v in vars.into_iter().filter(|&v| in_constraint[v]) {
+                let gi = index[&find(&mut parent, v)];
+                if !seen.contains(&gi) {
+                    seen.push(gi);
+                    groups[gi].curves.push(cid);
+                }
+            }
         }
         (groups, in_constraint)
     }
@@ -439,8 +577,11 @@ impl Sketch {
         let mut free_vars: HashSet<usize> = HashSet::new();
         let mut dof = 0;
         let mut iterations = 0;
+        let mut group_solves = 0;
         let start = self.vars.clone();
         let mut committed = self.vars.clone();
+        let old_cache = std::mem::take(&mut self.solve_cache);
+        let mut cache = SolveCache::default();
         for g in &groups {
             let col: HashMap<usize, usize> =
                 g.vars.iter().enumerate().map(|(c, v)| (*v, c)).collect();
@@ -451,6 +592,48 @@ impl Sketch {
                 .filter(|s| col.contains_key(&s.var))
                 .copied()
                 .collect();
+            // Unverändert seit dem letzten Lauf: Ergebnis übernehmen (siehe Moduldoku). Eine
+            // gelöste Gruppe ist an ihren Werten schon gelöst, ein neuer Lauf bräuchte keinen
+            // Schritt; eine gescheiterte rechnete ab demselben Start dasselbe.
+            if group_soft.is_empty()
+                && let Some(outcome) = old_cache.lookup(g, &start)
+            {
+                match outcome {
+                    Outcome::Solved {
+                        dof: d,
+                        redundant: red,
+                        free_vars: fv,
+                    } => {
+                        dof += d;
+                        free_vars.extend(fv.iter().copied());
+                        for id in red {
+                            if !redundant.contains(id) {
+                                redundant.push(*id);
+                            }
+                        }
+                    }
+                    Outcome::Failed {
+                        conflict,
+                        found,
+                        iterations: used,
+                    } => {
+                        iterations = iterations.max(*used);
+                        if *conflict {
+                            status = SolveStatus::Conflicting;
+                        } else if status == SolveStatus::Solved {
+                            status = SolveStatus::NotConverged;
+                        }
+                        for id in found {
+                            if !conflicting.contains(id) {
+                                conflicting.push(*id);
+                            }
+                        }
+                    }
+                }
+                cache.insert(g, &start, outcome.clone());
+                continue;
+            }
+            group_solves += 1;
             let mut x = start.clone();
             let mut lm = self.levenberg_marquardt(g, &col, &mut x, &group_soft, None, tol_r);
             let mut used = lm.iterations;
@@ -479,11 +662,11 @@ impl Sketch {
             } else {
                 Vec::new()
             };
-            if lm.converged && outside.is_empty() {
+            if lm.converged && outside.is_empty() && !self.degenerate(&g.curves, &x) {
                 let analysis = self.analyze(g, &col, &x);
                 dof += analysis.dof;
-                free_vars.extend(analysis.free_vars);
-                for id in analysis.redundant {
+                free_vars.extend(analysis.free_vars.iter().copied());
+                for &id in &analysis.redundant {
                     if !redundant.contains(&id) {
                         redundant.push(id);
                     }
@@ -491,22 +674,57 @@ impl Sketch {
                 for &v in &g.vars {
                     committed[v] = x[v];
                 }
+                cache.insert(
+                    g,
+                    &x,
+                    Outcome::Solved {
+                        dof: analysis.dof,
+                        redundant: analysis.redundant,
+                        free_vars: analysis.free_vars,
+                    },
+                );
             } else {
-                let (found, conflict) = self.diagnose(g, &col, &start, &x, tol_r);
+                // Beim Ziehen sucht die Diagnose für die gezogene Gruppe nicht nach der
+                // Ursache; das holt das volle Lösen am Ende des Ziehens nach.
+                let full = group_soft.is_empty();
+                let (found, conflict) = self.diagnose(g, &col, &start, &x, tol_r, full);
                 // Widerspruch gewinnt gegen „nicht konvergiert“.
                 if conflict {
                     status = SolveStatus::Conflicting;
                 } else if status == SolveStatus::Solved {
                     status = SolveStatus::NotConverged;
                 }
+                let mut blamed = Vec::new();
                 for id in found.into_iter().chain(outside) {
+                    if !blamed.contains(&id) {
+                        blamed.push(id);
+                    }
                     if !conflicting.contains(&id) {
                         conflicting.push(id);
                     }
                 }
+                if full {
+                    cache.insert(
+                        g,
+                        &start,
+                        Outcome::Failed {
+                            conflict,
+                            found: blamed,
+                            iterations: used,
+                        },
+                    );
+                }
             }
         }
+        if committed
+            .iter()
+            .zip(&start)
+            .any(|(a, b)| a.to_bits() != b.to_bits())
+        {
+            self.touch_values();
+        }
         self.vars = committed;
+        self.solve_cache = cache;
 
         // Lebende Variablen, die in keiner aktiven Abhängigkeit vorkommen, sind frei.
         for v in self.live_variables() {
@@ -535,6 +753,7 @@ impl Sketch {
             free_points,
             free_curves,
             iterations,
+            group_solves,
         }
     }
 
@@ -644,5 +863,36 @@ mod tests {
         let p = s.point_xy(b).unwrap();
         assert!((p.length() - 10.0).abs() < 1e-8, "{p:?}");
         assert!(p.y > 9.0, "b folgt dem Zug: {p:?}");
+    }
+
+    #[test]
+    fn degenerate_ellipses_lines_and_negative_circles_are_detected() {
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let m = s.add_point(0.0, 0.0).unwrap();
+        let e = s.add_ellipse(m, DVec2::new(3.0, 0.0), 1.0).unwrap();
+        let c = s.add_circle(m, 2.0).unwrap();
+        let b = s.add_point(1.0, 0.0).unwrap();
+        let l = s.add_line(m, b).unwrap();
+        let CurveKind::Ellipse { ax, minor, .. } = s.curves[e].kind else {
+            unreachable!()
+        };
+        let CurveKind::Circle { radius, .. } = s.curves[c].kind else {
+            unreachable!()
+        };
+        assert!(!s.degenerate(&[e, c, l], &s.vars));
+        let mut x = s.vars.clone();
+        x[minor] = 0.0;
+        assert!(s.degenerate(&[e], &x));
+        let mut x = s.vars.clone();
+        x[ax] = 0.0;
+        assert!(s.degenerate(&[e], &x));
+        let mut x = s.vars.clone();
+        x[radius] = -2.0;
+        assert!(s.degenerate(&[c], &x));
+        x[radius] = f64::NAN;
+        assert!(s.degenerate(&[c], &x));
+        let mut x = s.vars.clone();
+        x[s.points[b].x] = 0.0;
+        assert!(s.degenerate(&[l], &x));
     }
 }

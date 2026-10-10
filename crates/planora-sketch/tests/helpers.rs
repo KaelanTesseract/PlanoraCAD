@@ -2,7 +2,7 @@ use planora_kernel::{AnalyticKernel, Kernel};
 use planora_math::{DVec2, DVec3, Frame, PI, Tolerance};
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::{CurveKind, Sketch};
-use planora_sketch::solver::SolveStatus;
+use planora_sketch::solver::{Drag, SolveStatus};
 use planora_sketch::{SketchError, plane_of_face};
 
 fn sketch() -> Sketch {
@@ -345,4 +345,49 @@ fn projected_arcs_keep_their_sense_and_tilted_circles_are_rejected() {
         rep.redundant.is_empty(),
         "projizierte Bögen sind nicht überbestimmt: {rep:?}"
     );
+}
+
+/// Muster eines Rechtecks (Abschlusswelle I4): keine überzähligen Abhängigkeiten, Freiheitsgrade
+/// nur die des Originals, und die Kopien behalten beim Ziehen ihre Form.
+#[test]
+fn a_patterned_rectangle_has_no_redundant_constraints() {
+    for n in [3usize, 10] {
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let r = s.add_rectangle(DVec2::ZERO, DVec2::new(10.0, 5.0)).unwrap();
+        let copies = s
+            .add_linear_pattern(&r.lines, DVec2::new(15.0, 0.0), n)
+            .unwrap();
+        let rep = s.solve();
+        assert_eq!(rep.status, SolveStatus::Solved, "{rep:?}");
+        assert!(rep.redundant.is_empty(), "n={n}: {:?}", rep.redundant);
+        // Rechteck: 8 Variablen − 4 (waagerecht/senkrecht); Kopien sind voll bestimmt.
+        assert_eq!(rep.dof, 4, "n={n}");
+
+        let dragged = s
+            .drag(&[Drag {
+                point: r.points[2],
+                target: DVec2::new(12.0, 7.0),
+            }])
+            .unwrap();
+        assert_eq!(dragged.status, SolveStatus::Solved, "{dragged:?}");
+        let corner = |c: planora_sketch::CurveId, end: usize| {
+            let CurveKind::Line { a, b } = s.curve(c).unwrap().kind.clone() else {
+                unreachable!()
+            };
+            s.point_xy(if end == 0 { a } else { b }).unwrap()
+        };
+        let orig: Vec<DVec2> = r.points.iter().map(|&p| s.point_xy(p).unwrap()).collect();
+        assert!((orig[2] - orig[0]).length() > 12.0, "Zug wirkt: {orig:?}");
+        for (k, copy) in copies.iter().enumerate() {
+            let shift = DVec2::new(15.0 * (k + 1) as f64, 0.0);
+            for (i, &line) in copy.iter().enumerate() {
+                let want = orig[i] + shift;
+                assert!(
+                    (corner(line, 0) - want).length() < 1e-6,
+                    "Kopie {k} Ecke {i}: {:?} statt {want:?}",
+                    corner(line, 0)
+                );
+            }
+        }
+    }
 }

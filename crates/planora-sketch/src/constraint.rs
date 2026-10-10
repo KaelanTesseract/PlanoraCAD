@@ -93,6 +93,25 @@ impl ConstraintKind {
         )
     }
 
+    /// Dieselbe Abhängigkeit mit dem Zahlenwert `v`; `None`, wenn sie kein Maß ist. Prüft
+    /// nichts (dafür gibt es [`Sketch::check_constraint_value`]).
+    pub fn with_value(&self, v: f64) -> Option<ConstraintKind> {
+        use ConstraintKind::*;
+        let mut kind = self.clone();
+        match &mut kind {
+            Distance(_, _, x)
+            | DistancePointLine(_, _, x)
+            | Angle(_, _, x)
+            | Radius(_, x)
+            | Diameter(_, x)
+            | EllipseMajor(_, x)
+            | EllipseMinor(_, x)
+            | EllipseAngle(_, x) => *x = v,
+            _ => return None,
+        }
+        Some(kind)
+    }
+
     /// Die direkt beteiligten Punkte.
     pub fn points(&self) -> Vec<PointId> {
         use ConstraintKind::*;
@@ -136,7 +155,7 @@ impl ConstraintKind {
 pub struct ConstraintData {
     pub kind: ConstraintKind,
     /// Gewählte Lage bei mehrdeutigen Abhängigkeiten (Tangente, Abstand Punkt–Linie).
-    pub branch: i8,
+    pub(crate) branch: i8,
     /// Nur anzeigen, nicht erzwingen.
     pub driven: bool,
     pub enabled: bool,
@@ -144,10 +163,22 @@ pub struct ConstraintData {
     /// Zusatzvariable (Index im Variablenvektor) parametrischer Abhängigkeiten: der
     /// Kurvenparameter `t` bei Punkt auf Spline und Tangente Linie–Ellipse/Spline. Sie wird mit
     /// der Abhängigkeit angelegt; entfällt die Abhängigkeit, bleibt sie unbenutzt im Vektor.
-    pub extra: Option<usize>,
+    pub(crate) extra: Option<usize>,
     pub(crate) alive: bool,
 }
 pub type ConstraintId = Id<ConstraintData>;
+
+impl ConstraintData {
+    /// Gewählte Lage bei mehrdeutigen Abhängigkeiten: `1`/`-1` je Seite, `0` ohne Wahl.
+    pub fn branch(&self) -> i8 {
+        self.branch
+    }
+
+    /// Index der Zusatzvariablen (Kurvenparameter) parametrischer Abhängigkeiten, sonst `None`.
+    pub fn extra(&self) -> Option<usize> {
+        self.extra
+    }
+}
 
 /// Ergebnis einer Auswertung: beteiligte Variablen und Residuen mit Gradient nach `locals`.
 #[derive(Clone, Debug)]
@@ -480,7 +511,13 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
     }
 }
 
+/// Endliche Länge oder Koordinate mit Betrag höchstens `MAX_COORD`.
 fn finite(v: f64) -> Result<(), SketchError> {
+    crate::model::finite(v, "Der Wert")
+}
+
+/// Endlicher Winkel (ohne Betragsgrenze).
+fn finite_angle(v: f64) -> Result<(), SketchError> {
     if v.is_finite() {
         Ok(())
     } else {
@@ -547,6 +584,7 @@ impl Sketch {
     }
 
     pub(crate) fn push_internal(&mut self, kind: ConstraintKind) {
+        self.touch_structure();
         self.constraints.push(ConstraintData {
             kind,
             branch: 0,
@@ -569,32 +607,27 @@ impl Sketch {
     pub fn set_driven(&mut self, id: ConstraintId, driven: bool) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
         self.constraints[id].driven = driven;
+        self.touch_structure();
         Ok(())
     }
 
     pub fn set_enabled(&mut self, id: ConstraintId, enabled: bool) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
         self.constraints[id].enabled = enabled;
+        self.touch_structure();
         Ok(())
     }
 
     /// Ändert den Zahlenwert eines Maßes. Die gewählte Lage (`branch`) bleibt erhalten.
     pub fn set_constraint_value(&mut self, id: ConstraintId, v: f64) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
-        let mut kind = self.constraints[id].kind.clone();
-        match &mut kind {
-            ConstraintKind::Distance(_, _, x)
-            | ConstraintKind::DistancePointLine(_, _, x)
-            | ConstraintKind::Angle(_, _, x)
-            | ConstraintKind::Radius(_, x)
-            | ConstraintKind::Diameter(_, x)
-            | ConstraintKind::EllipseMajor(_, x)
-            | ConstraintKind::EllipseMinor(_, x)
-            | ConstraintKind::EllipseAngle(_, x) => *x = v,
-            _ => return Err(SketchError::WrongType("Das ist kein Maß".into())),
-        }
+        let kind = self.constraints[id]
+            .kind
+            .with_value(v)
+            .ok_or_else(|| SketchError::WrongType("Das ist kein Maß".into()))?;
         self.check_refs(&kind)?;
         self.constraints[id].kind = kind;
+        self.touch_structure();
         Ok(())
     }
 
@@ -630,7 +663,7 @@ impl Sketch {
     /// Prüft Ids, Objekttypen und Zahlenwerte einer Abhängigkeit.
     fn check_refs(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
         self.check_structure(kind)?;
-        self.check_values(kind)
+        self.check_constraint_value(kind)
     }
 
     /// Prüft Ids und Objekttypen (ohne die Zahlenwerte der Maße).
@@ -713,11 +746,22 @@ impl Sketch {
         }
     }
 
-    /// Prüft die Zahlenwerte (endlich, Abstände ≥ 0, Radien > `tol.linear`).
-    fn check_values(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
+    /// Prüft die Zahlenwerte eines Maßes oder einer festen Lage, ohne Ids und Objekttypen zu
+    /// prüfen. Dieselbe Regel gilt für [`Sketch::add_constraint`],
+    /// [`Sketch::set_constraint_value`] und die Eingabe in der Oberfläche:
+    /// - alle Werte endlich, Längen und Koordinaten betragsmäßig höchstens
+    ///   [`MAX_COORD`](crate::model::MAX_COORD);
+    /// - Abstand zweier Punkte, Radius, Durchmesser und Halbachsen größer als `tol.linear`
+    ///   (ein Abstand null ließe eine Linie zu einem Punkt zusammenfallen; dafür gibt es
+    ///   „deckungsgleich“);
+    /// - Abstand Punkt–Linie nicht negativ (null heißt: Punkt auf der Linie);
+    /// - die kleine Halbachse nicht länger als ein erzwungenes Gegenstück (siehe
+    ///   `check_axis_pair`); Winkel beliebig.
+    pub fn check_constraint_value(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
         use ConstraintKind::*;
         match kind {
-            Distance(_, _, v) | DistancePointLine(_, _, v) => {
+            Distance(_, _, v) | Radius(_, v) | Diameter(_, v) => self.check_positive(*v),
+            DistancePointLine(_, _, v) => {
                 finite(*v)?;
                 if *v < 0.0 {
                     Err(SketchError::Degenerate(
@@ -727,12 +771,11 @@ impl Sketch {
                     Ok(())
                 }
             }
-            Radius(_, v) | Diameter(_, v) => self.check_positive(*v),
             EllipseMajor(e, v) | EllipseMinor(e, v) => {
                 self.check_positive(*v)?;
                 self.check_axis_pair(kind, *e, *v)
             }
-            Angle(_, _, v) | EllipseAngle(_, v) => finite(*v),
+            Angle(_, _, v) | EllipseAngle(_, v) => finite_angle(*v),
             Fixed(_, x, y) => {
                 finite(*x)?;
                 finite(*y)
@@ -741,7 +784,7 @@ impl Sketch {
         }
     }
 
-    /// Endlich und größer als `tol.linear`.
+    /// Endlich, höchstens `MAX_COORD` und größer als `tol.linear`.
     fn check_positive(&self, v: f64) -> Result<(), SketchError> {
         finite(v)?;
         if v <= self.tolerance().linear {
@@ -904,6 +947,7 @@ impl Sketch {
         let branch = self.initial_branch(&kind);
         // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
         let extra = self.extra_start(&kind).map(|t| self.new_var(t));
+        self.touch_structure();
         Ok(self.constraints.push(ConstraintData {
             kind,
             branch,
@@ -919,12 +963,14 @@ impl Sketch {
     pub fn remove_constraint(&mut self, id: ConstraintId) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
         self.constraints[id].alive = false;
+        self.touch_structure();
         Ok(())
     }
 
     /// Entfernt die Kurve samt allen Abhängigkeiten, die sie benutzen (auch interne).
     pub fn remove_curve(&mut self, c: CurveId) -> Result<(), SketchError> {
         self.check_curve(c)?;
+        self.touch_structure();
         self.curves[c].alive = false;
         let dead: Vec<ConstraintId> = self
             .constraints
@@ -941,6 +987,7 @@ impl Sketch {
     /// Entfernt den Punkt samt allen Kurven und Abhängigkeiten, die ihn benutzen.
     pub fn remove_point(&mut self, p: PointId) -> Result<(), SketchError> {
         self.check_point(p)?;
+        self.touch_structure();
         self.points[p].alive = false;
         let curves: Vec<CurveId> = self
             .curves()
@@ -965,6 +1012,14 @@ impl Sketch {
     /// Entfernt Punkte, die weder eine Kurve noch eine (nicht interne) Abhängigkeit benutzt.
     /// Gibt die Zahl der entfernten Punkte zurück.
     pub fn prune_unused_points(&mut self) -> usize {
+        let all: Vec<PointId> = self.points().map(|(i, _)| i).collect();
+        self.prune_points(&all)
+    }
+
+    /// Entfernt diejenigen der Punkte `candidates`, die (noch) leben und weder eine Kurve noch
+    /// eine (nicht interne) Abhängigkeit benutzt; andere freie Punkte bleiben. Gibt die Zahl
+    /// der entfernten Punkte zurück; unbekannte und doppelte Ids werden übergangen.
+    pub fn prune_points(&mut self, candidates: &[PointId]) -> usize {
         let mut used = std::collections::HashSet::new();
         for (_, c) in self.curves() {
             used.extend(c.kind.points());
@@ -972,14 +1027,16 @@ impl Sketch {
         for (_, k) in self.constraints() {
             used.extend(k.kind.points());
         }
-        let unused: Vec<PointId> = self
-            .points()
-            .map(|(i, _)| i)
-            .filter(|i| !used.contains(i))
-            .collect();
-        for p in &unused {
-            self.points[*p].alive = false;
+        let mut removed = 0;
+        for &p in candidates {
+            if self.check_point(p).is_ok() && !used.contains(&p) {
+                self.points[p].alive = false;
+                removed += 1;
+            }
         }
-        unused.len()
+        if removed > 0 {
+            self.touch_structure();
+        }
+        removed
     }
 }

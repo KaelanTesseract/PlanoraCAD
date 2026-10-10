@@ -1,8 +1,10 @@
 //! Skizze: Punkte, Kurven, Zahlenvektor. Abhängigkeiten stehen in `constraint.rs`.
 
 use crate::error::SketchError;
+use crate::solver::SolveCache;
 use planora_kernel::{Arena, Id};
 use planora_math::{DVec2, Frame, Tolerance};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Punkt: zwei Einträge im Variablenvektor.
 #[derive(Clone, Debug)]
@@ -73,18 +75,41 @@ pub struct Sketch {
     pub(crate) points: Arena<PointData>,
     pub(crate) curves: Arena<CurveData>,
     pub(crate) constraints: Arena<crate::constraint::ConstraintData>,
+    /// Stand der Skizze, siehe [`Sketch::revision`].
+    revision: u64,
+    /// Ergebnisse der letzten Solver-Läufe je Gruppe (siehe `solver.rs`). Jede Änderung an
+    /// Objekten oder Abhängigkeiten leert ihn; reine Wertänderungen erkennt der Solver selbst.
+    pub(crate) solve_cache: SolveCache,
 }
+
+/// Quelle eindeutiger Stände: Jede Änderung irgendeiner Skizze bekommt eine neue Nummer, so
+/// verwechselt ein Zwischenspeicher auch zwei verschiedene Skizzen nicht.
+static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    NEXT_REVISION.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Größter erlaubter Betrag von Koordinaten, Längen und Maßen in mm (1000 km). Bei
+/// `f64` liegt der Abstand benachbarter Zahlen dort bei etwa 1e9 · 2⁻⁵² ≈ 2e-7 mm, also noch
+/// unter der Standardtoleranz; größere Werte würden Toleranzvergleiche bedeutungslos machen.
+pub const MAX_COORD: f64 = 1e9;
 
 /// Höchstzahl der Stützpunkte eines Splines.
 pub const MAX_SPLINE_POINTS: usize = 64;
 
-fn finite(v: f64, what: &str) -> Result<(), SketchError> {
-    if v.is_finite() {
-        Ok(())
-    } else {
+/// Endlich und betragsmäßig höchstens [`MAX_COORD`].
+pub(crate) fn finite(v: f64, what: &str) -> Result<(), SketchError> {
+    if !v.is_finite() {
         Err(SketchError::InvalidInput(format!(
             "{what} muss eine endliche Zahl sein"
         )))
+    } else if v.abs() > MAX_COORD {
+        Err(SketchError::InvalidInput(format!(
+            "{what} ist zu groß (Betrag höchstens {MAX_COORD:e} mm)"
+        )))
+    } else {
+        Ok(())
     }
 }
 
@@ -98,7 +123,28 @@ impl Sketch {
             points: Arena::new(),
             curves: Arena::new(),
             constraints: Arena::new(),
+            revision: next_revision(),
+            solve_cache: SolveCache::default(),
         }
+    }
+
+    /// Stand der Skizze: ändert sich bei jeder Änderung an Objekten, Abhängigkeiten oder
+    /// Werten (auch durch den Solver). Die Nummern sind über alle Skizzen eindeutig; gleicher
+    /// Stand heißt also gleicher Inhalt (Kopien mit `clone` teilen den Stand ihres Originals).
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Objekte oder Abhängigkeiten haben sich geändert: neuer Stand, Solver-Zwischenspeicher
+    /// verworfen.
+    pub(crate) fn touch_structure(&mut self) {
+        self.revision = next_revision();
+        self.solve_cache = SolveCache::default();
+    }
+
+    /// Nur Werte im Variablenvektor haben sich geändert: neuer Stand.
+    pub(crate) fn touch_values(&mut self) {
+        self.revision = next_revision();
     }
 
     pub fn frame(&self) -> &Frame {
@@ -114,6 +160,7 @@ impl Sketch {
     }
 
     pub(crate) fn new_var(&mut self, v: f64) -> usize {
+        self.touch_structure();
         self.vars.push(v);
         self.vars.len() - 1
     }
@@ -164,10 +211,12 @@ impl Sketch {
         let (xi, yi) = (self.points[p].x, self.points[p].y);
         self.vars[xi] = x;
         self.vars[yi] = y;
+        self.touch_values();
         Ok(())
     }
 
     fn push_curve(&mut self, kind: CurveKind) -> CurveId {
+        self.touch_structure();
         self.curves.push(CurveData {
             kind,
             construction: false,
@@ -349,6 +398,7 @@ impl Sketch {
     pub fn set_construction(&mut self, c: CurveId, construction: bool) -> Result<(), SketchError> {
         self.check_curve(c)?;
         self.curves[c].construction = construction;
+        self.touch_structure();
         Ok(())
     }
 

@@ -75,7 +75,7 @@ fn check_jacobian(s: &mut Sketch, kind: K) {
     let x0 = s.variables().to_vec();
     let ev = s.evaluate(id, &x0).unwrap();
     assert!(!ev.residuals.is_empty(), "{kind:?}");
-    if let Some(extra) = s.constraint(id).unwrap().extra {
+    if let Some(extra) = s.constraint(id).unwrap().extra() {
         assert!(ev.locals.contains(&extra), "{kind:?}: Zusatzvariable fehlt");
     }
     for (ri, r) in ev.residuals.iter().enumerate() {
