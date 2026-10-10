@@ -1,7 +1,7 @@
 //! Datenmodell des Feature-Baums: Features, ihre Arten und das Dokument.
 
 use crate::refs::{EdgeRef, FaceRef};
-use planora_kernel::{BoolOp, Solid};
+use planora_kernel::{AnalyticKernel, BoolOp, Solid};
 use planora_math::{DVec3, Frame};
 use planora_sketch::{CurveId, Sketch};
 
@@ -166,9 +166,8 @@ pub enum FeatureStatus {
     NotComputed,
 }
 
-/// Zwischengespeichertes Ergebnis eines Features (wird mit der Neuberechnung ausgebaut).
+/// Zwischengespeichertes Ergebnis eines Features.
 #[derive(Clone, Debug)]
-#[allow(dead_code, reason = "wird mit der Neuberechnung (Task 5) gelesen")]
 pub(crate) struct FeatureResult {
     pub(crate) bodies: Vec<Solid>,
     pub(crate) sketch: Option<Sketch>,
@@ -186,9 +185,7 @@ pub struct Feature {
     pub kind: FeatureKind,
     pub status: FeatureStatus,
     /// Wird bei jeder Änderung der Parameter erhöht.
-    #[allow(dead_code, reason = "wird mit der Neuberechnung (Task 5) gelesen")]
     pub(crate) version: u64,
-    #[allow(dead_code, reason = "wird mit der Neuberechnung (Task 5) gelesen")]
     pub(crate) result: Option<FeatureResult>,
 }
 
@@ -199,12 +196,16 @@ pub struct Document {
     /// Anzahl der aktiven Features von vorn; Features ab diesem Index sind zurückgestellt.
     pub(crate) marker: usize,
     /// Nächste zu vergebende Feature-Id (beginnt bei 1, da 0 „nicht zugewiesen“ bedeutet).
-    #[allow(
-        dead_code,
-        reason = "wird mit den Änderungsoperationen (Task 5) gelesen"
-    )]
     pub(crate) next_id: u64,
+    /// Zähler für Feature-Versionen und Ergebnisstände (beginnt bei 1; 0 heißt „kein Ergebnis“).
+    pub(crate) next_version: u64,
+    pub(crate) kernel: AnalyticKernel,
+    /// Sehnentoleranz der Tessellierung für die Volumenprobe Boolescher Operationen.
+    pub(crate) chord_tolerance: f64,
 }
+
+/// Standard-Sehnentoleranz in Millimetern (wie in der App).
+pub const DEFAULT_CHORD_TOLERANCE: f64 = 0.05;
 
 impl Default for Document {
     fn default() -> Self {
@@ -213,12 +214,38 @@ impl Default for Document {
 }
 
 impl Document {
+    /// Leeres Dokument mit der Standard-Sehnentoleranz.
     pub fn new() -> Document {
+        Document::with_options(DEFAULT_CHORD_TOLERANCE)
+    }
+
+    /// Leeres Dokument mit eigener Sehnentoleranz für die Volumenprobe. Ein nicht endlicher
+    /// oder nicht positiver Wert wird durch [`DEFAULT_CHORD_TOLERANCE`] ersetzt.
+    pub fn with_options(chord_tolerance: f64) -> Document {
+        let chord_tolerance = if chord_tolerance.is_finite() && chord_tolerance > 0.0 {
+            chord_tolerance
+        } else {
+            DEFAULT_CHORD_TOLERANCE
+        };
         Document {
             features: Vec::new(),
             marker: 0,
             next_id: 1,
+            next_version: 1,
+            kernel: AnalyticKernel::default(),
+            chord_tolerance,
         }
+    }
+
+    pub fn kernel(&self) -> &AnalyticKernel {
+        &self.kernel
+    }
+
+    /// Vergibt die nächste Version (für Parameter und Ergebnisstände gemeinsam, nie 0).
+    pub(crate) fn bump(&mut self) -> u64 {
+        let v = self.next_version;
+        self.next_version += 1;
+        v
     }
 
     pub fn features(&self) -> &[Feature] {

@@ -1,7 +1,10 @@
-//! Feature-Baum von PlanoraCAD: Datenmodell und stabile Verweise auf Flächen und Kanten.
+//! Feature-Baum von PlanoraCAD: Datenmodell, stabile Verweise auf Flächen und Kanten,
+//! Berechnung und Neuberechnung mit Zwischenspeicher.
 
+mod compute;
 pub mod error;
 pub mod model;
+pub mod recompute;
 pub mod refs;
 
 pub use error::FeatureError;
@@ -9,4 +12,5 @@ pub use model::{
     BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus, SketchFeature,
     SketchPlane, StandardPlane,
 };
+pub use recompute::{RecomputeReport, VisibleBody};
 pub use refs::{EdgeRef, FaceRef, ResolvedEdge, ResolvedFace, resolve_edge, resolve_face};

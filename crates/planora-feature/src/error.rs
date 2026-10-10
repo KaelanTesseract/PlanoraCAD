@@ -22,6 +22,8 @@ pub enum FeatureError {
     Kernel(String),
     #[error("Fehler in der Skizze: {0}")]
     Sketch(String),
+    #[error("Das Ergebnis ist unplausibel (Volumenprobe fehlgeschlagen)")]
+    ImplausibleResult,
     #[error("Folgende Features hängen davon ab: {}", join_ids(.0))]
     HasDependents(Vec<u64>),
     #[error("Ungültige Eingabe: {0}")]
