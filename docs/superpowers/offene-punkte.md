@@ -57,7 +57,7 @@ Die Liste „Vor Teilprojekt 4“ ist abgearbeitet:
 - Die Oberfläche liest Flächen- und Kantenzahl über die Kernel-Fassade (`Kernel::counts`) statt über `solid.faces[..]`.
 
 ## Nach Teilprojekt 4 (Skizzen)
-Stand: 2026-10-09. Bewusst offen gelassen; Fehlerfälle liefern eine deutsche Meldung, die Skizze bleibt im letzten gültigen Zustand.
+Stand: 2026-10-10 (nach der Abschlusswelle). Bewusst offen gelassen; Fehlerfälle liefern eine deutsche Meldung. Der Solver arbeitet je zusammenhängender Gruppe: Eine nicht lösbare oder widersprüchliche Gruppe bleibt in ihrem letzten Zustand, andere Gruppen werden trotzdem gelöst. Entartete Lösungen (Radius ≤ 0, Linie der Länge null, Bogenanfang/-ende auf der Mitte, Ellipsen-Halbachse null) gelten nicht als Lösung. Eine neue Abhängigkeit wird nur zurückgenommen, wenn die Skizze vorher gelöst war oder sie selbst als Ursache gemeldet wird; in einer schon fehlerhaften Skizze bleibt sie mit Warnung.
 
 **Funktionsumfang (Grenzen)**
 - Ellipsen und Splines werden nicht zu Körpern („Dieses Profil enthält … und kann noch nicht zu einem Körper werden“); der Kernel kennt elliptische Zylinder und NURBS-Flächen noch nicht.
@@ -70,10 +70,11 @@ Stand: 2026-10-09. Bewusst offen gelassen; Fehlerfälle liefern eine deutsche Me
 - Mehrdeutige Lagen werden vom nächstgelegenen Zustand entschieden: Der Winkel-Rest ist auch bei θ + π null (gespiegelte Lösung), ebenso bei `EllipseAngle`; es gibt keine Auswahl der Lösung.
 - Maße nur als Zahl; keine Gleichungen, Parameter oder Ausdrücke.
 - Konstruktionsgeometrie nur über den Umschalter „Konstruktion umschalten“ (kein eigenes Werkzeug).
-- Punkte, die über das Ende eines Splines hinausgezogen werden, bleiben am Ende stehen (keine Ungleichungs-Abhängigkeiten).
+- Ein Punkt auf einem Spline, der über dessen Ende hinausgezogen wird, bleibt dort stehen, wo er zuletzt gültig war (er rutscht nicht ans Ende; keine Ungleichungs-Abhängigkeiten). Ebenso bleibt ein Punkt stehen, wenn der Zug Geometrie entarten ließe (z. B. Kreismitte durch die Tangente hindurch).
 
 **Solver und Algebra**
-- Dichte Matrizen je zusammenhängender Gruppe: sehr große Gruppen (> ~500 Variablen) werden langsam. Die Widerspruchsdiagnose löst die Gruppe je Abhängigkeit einmal neu (O(Abhängigkeiten) Lösungen); beim Ziehen fällt das nur an, wenn eine andere Gruppe schon widersprüchlich ist.
+- Dichte Matrizen je zusammenhängender Gruppe. Ergebnisse je Gruppe werden mit den Variablenwerten gemerkt; unveränderte Gruppen rechnen nicht neu (Zähler `SolveReport::group_solves`). Innerhalb einer Gruppe wird Ziehen ab etwa 150–300 Variablen zäh (Release, geschlossene Kette mit Abständen, 300 Variablen: Lösen etwa 30 ms, Zugschritt etwa 150 ms). Ein Muster mit 100 Rechteck-Kopien (808 Variablen, eine Gruppe): Anlegen etwa 1,7 s (das Muster löst einmal selbst, um überzählige Abhängigkeiten zu entfernen), Zugschritt etwa 1,5 s.
+- Widerspruchsdiagnose: Sie löst die Gruppe je nutzererzeugter Abhängigkeit einmal neu. Beim Ziehen entfällt sie für die gezogene Gruppe und läuft beim Loslassen (volles Lösen in `end_drag`); andere Gruppen kommen aus dem Speicher. Bei mehr als 48 Abhängigkeiten in einer Gruppe (`MAX_DIAGNOSE_RUNS`) entfällt die Einzelsuche: Status „nicht lösbar“ mit den Abhängigkeiten, deren Residuum zu groß ist. Zugschritte in einer schon widersprüchlichen Gruppe kosten trotzdem drei gescheiterte Läufe (200 Variablen etwa 70 ms, 300 etwa 220 ms).
 - Der Zustand gilt je Gruppe: Ziehen kann „widersprüchlich“ melden, während eine andere Gruppe sich bewegt hat; die Oberfläche muss den Status lesen.
 - Abhängigkeiten mit Jacobi-Zeile null werden als überzählig gemeldet; interne Abhängigkeiten (z. B. Bogenradius) nie.
 - Zusatzvariablen entfernter Abhängigkeiten (Spline- und Ellipsen-Parameter) werden nicht aufgeräumt.
@@ -86,7 +87,7 @@ Stand: 2026-10-09. Bewusst offen gelassen; Fehlerfälle liefern eine deutsche Me
 
 **Profile und Körper**
 - Endpunkte werden gierig (nicht transitiv) zu Knoten zusammengefasst; zwei Schleifen, die sich in einem zusammengefassten Knoten treffen, gelten als „nicht eindeutig“.
-- Die Schnittprüfung der Schleifen ist quadratisch (250 konzentrische Kreise brauchen Sekunden); Hilfsfunktionen (z. B. `segments_touch`) gibt es doppelt im Kernel und in der Skizze; die Berührprüfung arbeitet exakt auf den Sehnen (ohne Toleranz).
+- Die Schnittprüfung der Schleifen ist quadratisch (250 konzentrische Kreise brauchen Sekunden). Kernel und Skizze benutzen dieselbe Prüfung (`planora_kernel::SampledLoop`): Schleifen, die sich näher kommen als `tol.linear` plus die Sehnenabweichung der Abtastung (64 Schritte je Vollkreis, etwa 0,12 % des Radius), gelten als sich berührend. Sehr knappe echte Abstände zwischen Bögen werden damit ebenfalls abgelehnt; sehr große Bögen in Profilen mit kleinen Einzelheiten können so zu früh als „berührend“ gelten.
 - Die Reihenfolge der abgelehnten Schleifen ist nicht global sortiert; die Meldung zum Öffnungswinkel ist nahe 2π ungenau.
 - Drehen: Die Achsprüfung kommt vor der Seitenprüfung (eine Achse quer durchs Profil meldet „keine Kante auf der Achse“); ein zweites kollineares Achsstück lehnt erst der Kernel ab. Kein Test für einen gespiegelten Halbkreis (Drehsinn −1).
 - Kernel: Die Frame-Prüfung nutzt `tol.linear` als Orthonormalitäts-Schwelle (künftig benannte Konstante); in `check_loop_input` und `extrude` stehen noch feste Werte (1e-9, 1e-12).
@@ -97,13 +98,15 @@ Stand: 2026-10-09. Bewusst offen gelassen; Fehlerfälle liefern eine deutsche Me
 
 **Oberfläche**
 - Fertige Skizzen werden in der 3D-Ansicht als Linien über alles gezeichnet (keine Verdeckung durch Körper) und lassen sich dort nicht anklicken.
-- Die Dialoge „Skizze extrudieren/drehen“ und „Boolesche Operation“ merken sich Skizze bzw. Körper als Listenplatz; wird währenddessen gelöscht, zeigen sie auf einen anderen Eintrag.
+- Die Dialoge „Skizze extrudieren/drehen“ und „Boolesche Operation“ merken sich Skizze bzw. Körper als Listenplatz; wird währenddessen gelöscht, zeigen sie auf einen anderen Eintrag. Eine Drehachse, die nicht (mehr) zur gewählten Skizze gehört, wird mit Meldung abgelehnt.
+- Fertige Skizzen werden in der 3D-Ansicht jedes Bild neu in Linien zerlegt; Linienstücke mit einem Endpunkt hinter der Kamera fallen weg (kein Abschneiden an der Nahebene).
 - Körper entstehen nur außerhalb des Skizzen-Modus (die offene Skizze wird vorher beendet).
 - Hinweise erscheinen in der Statuszeile und im Skizzenfenster ebenfalls rot (keine Unterscheidung Hinweis/Fehler).
+- Esc schließt das Zahlenfeld für Maße nicht (es schließt bei neuer Auswahl oder mit Eingabe).
 - Roboto enthält `∥` und `⟂` nicht; angezeigt werden `||` und „Lot“. Beschriftungen an derselben Stelle können sich bei dichten Skizzen überlappen.
-- Ein Klick auf den Navigationswürfel im Skizzen-Modus kippt die Kamera; danach ist die Sicht nicht mehr senkrecht, bis die Skizze neu geöffnet wird. Mit großer Skizze erscheint die z-Achse des Gitters in der Draufsicht als schräge Linie.
+- Ein Klick auf den Navigationswürfel im Skizzen-Modus kippt die Kamera (auch Ziehen am Würfel ist im Skizzen-Modus nicht gesperrt); danach ist die Sicht nicht mehr senkrecht, bis die Skizze neu geöffnet wird. Mit großer Skizze erscheint die z-Achse des Gitters in der Draufsicht als schräge Linie.
 - Die Kurvenfarben der Skizze sind fest im Code hinterlegt (nicht Teil des Designs/Themes).
-- Ein neuer, nicht konvergierender Teil neben einem schon fehlerhaften Teil wird beim Prüfen einer Änderung nicht erkannt (der Lösungsbericht kennt nur den Gesamtstatus); in einer fehlerhaften Skizze werden keine automatischen Waagerecht-/Senkrecht-Abhängigkeiten angelegt, und die Ziehen-Warnung erscheint immer.
+- Ein neuer, nicht konvergierender Teil neben einem schon fehlerhaften Teil wird beim Prüfen einer Änderung nur erkannt, wenn er dabei neue verletzte Abhängigkeiten nennt (der Vergleich nutzt den letzten Lösungsbericht der Sitzung); in einer fehlerhaften Skizze werden keine automatischen Waagerecht-/Senkrecht-Abhängigkeiten angelegt, und die Ziehen-Warnung erscheint immer.
 - `status()` löst eine Kopie der Skizze, wenn noch kein Lösungsbericht vorliegt.
 - Von Hand nicht geprüft: Eingabe/Esc/Entf-Tasten (die Automatisierung konnte sie nicht senden), Verschieben mit der mittleren Maustaste, Zoomen, Spiegeln/Muster, Kanten kopieren, helles Design.
 - Fehlende Tests: Ausmaß-Berechnung nur für Kreise (nicht Bögen/Ellipsen), Werkzeugfolge ohne Abschluss, Aufheben der Auswahl im Browser, Bearbeiten einer bestehenden Abhängigkeit über das Zahlenfeld; erneutes Anklicken derselben Fläche löscht die Skizzenhervorhebung nicht.
