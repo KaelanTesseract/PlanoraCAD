@@ -921,6 +921,18 @@ impl Sketch {
         }
     }
 
+    /// Braucht die (geprüfte) Abhängigkeit eine Zusatzvariable? Dieselbe Regel wie in
+    /// `extra_start`: Punkt auf Spline, Tangente zwischen Linie und Ellipse/Spline.
+    pub(crate) fn needs_extra(&self, kind: &ConstraintKind) -> bool {
+        match kind {
+            ConstraintKind::PointOnCurve(_, c) => {
+                matches!(self.curves[*c].kind, CurveKind::Spline { .. })
+            }
+            ConstraintKind::Tangent(a, b) => line_and_param(self, *a, *b).is_some(),
+            _ => false,
+        }
+    }
+
     /// Startwert der Zusatzvariablen einer (geprüften) parametrischen Abhängigkeit: der
     /// nächstgelegene Kurvenparameter. `None`, wenn die Abhängigkeit keine braucht.
     fn extra_start(&self, kind: &ConstraintKind) -> Option<f64> {

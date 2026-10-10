@@ -189,3 +189,61 @@ fn a_round_tripped_sketch_survives_all_follow_up_calls() {
     let d = t.to_data();
     assert_eq!(Sketch::from_data(d.clone()).unwrap().to_data(), d);
 }
+
+/// Skizze mit Punkt auf Spline und Tangente Linie-Ellipse/Spline (brauchen eine Zusatzvariable).
+fn parametric_sketch() -> Sketch {
+    let mut s = rich_sketch();
+    let (line, ellipse, spline) = {
+        let d = s.to_data();
+        let find = |f: &dyn Fn(&CurveKind) -> bool| {
+            CurveId::from_index(d.curves.iter().position(|c| c.alive && f(&c.kind)).unwrap())
+        };
+        (
+            find(&|k| matches!(k, CurveKind::Line { .. })),
+            find(&|k| matches!(k, CurveKind::Ellipse { .. })),
+            find(&|k| matches!(k, CurveKind::Spline { .. })),
+        )
+    };
+    let p = s.add_point(5.0, 22.0).unwrap();
+    s.add_constraint(ConstraintKind::PointOnCurve(p, spline))
+        .unwrap();
+    s.add_constraint(ConstraintKind::Tangent(line, ellipse))
+        .unwrap();
+    s.add_constraint(ConstraintKind::Tangent(spline, line))
+        .unwrap();
+    s
+}
+
+#[test]
+fn missing_extra_variable_is_rejected() {
+    let d = parametric_sketch().to_data();
+    let mut hit = 0;
+    for (i, c) in d.constraints.iter().enumerate() {
+        if c.alive && c.extra.is_some() {
+            let mut e = d.clone();
+            e.constraints[i].extra = None;
+            assert!(matches!(
+                Sketch::from_data(e).unwrap_err(),
+                SketchError::InvalidInput(_)
+            ));
+            hit += 1;
+        }
+    }
+    assert!(hit >= 3, "hit={hit}");
+}
+
+#[test]
+fn any_extra_change_never_panics_in_load_or_solve() {
+    let d = parametric_sketch().to_data();
+    for i in 0..d.constraints.len() {
+        for extra in [None, Some(usize::MAX), Some(d.vars.len()), Some(0)] {
+            let mut e = d.clone();
+            e.constraints[i].extra = extra;
+            if let Ok(mut s) = Sketch::from_data(e) {
+                s.solve();
+                let _ = s.profiles();
+                let _ = s.to_data();
+            }
+        }
+    }
+}

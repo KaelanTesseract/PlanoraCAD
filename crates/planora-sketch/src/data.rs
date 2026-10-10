@@ -218,6 +218,9 @@ impl Sketch {
         for (_, c) in s.constraints.iter() {
             s.check_types(&c.kind)?;
             if c.alive {
+                if c.extra.is_none() && s.needs_extra(&c.kind) {
+                    return Err(bad("Einer Abhängigkeit fehlt ihre Zusatzvariable"));
+                }
                 s.check_constraint_value(&c.kind)?;
             }
         }
