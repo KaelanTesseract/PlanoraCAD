@@ -97,3 +97,93 @@ fn invalid_data_is_rejected_without_panic() {
         d.constraints[0].kind = ConstraintKind::Radius(CurveId::from_index(0), f64::INFINITY)
     });
 }
+
+fn first_line_and_circle(d: &SketchData) -> (CurveId, CurveId, CurveId) {
+    let idx = |f: &dyn Fn(&CurveKind) -> bool| {
+        CurveId::from_index(d.curves.iter().position(|c| c.alive && f(&c.kind)).unwrap())
+    };
+    (
+        idx(&|k| matches!(k, CurveKind::Line { .. })),
+        idx(&|k| matches!(k, CurveKind::Circle { .. })),
+        idx(&|k| matches!(k, CurveKind::Ellipse { .. })),
+    )
+}
+
+fn push_constraint(d: &mut SketchData, kind: ConstraintKind, alive: bool) {
+    d.constraints.push(ConstraintRecord {
+        kind,
+        branch: 0,
+        driven: false,
+        enabled: true,
+        internal: false,
+        extra: None,
+        alive,
+    });
+}
+
+#[test]
+fn type_mismatched_constraints_are_rejected_alive_or_dead() {
+    for alive in [true, false] {
+        let mut cases: Vec<Box<dyn Fn(CurveId, CurveId, CurveId) -> ConstraintKind>> = vec![
+            Box::new(|l, _, _| ConstraintKind::Radius(l, 3.0)),
+            Box::new(|l, _, _| ConstraintKind::Diameter(l, 3.0)),
+            Box::new(|_, c, _| ConstraintKind::Horizontal(LineOrPoints::Line(c))),
+            Box::new(|_, c, _| ConstraintKind::ArcRadius(c)),
+            Box::new(|_, c, _| ConstraintKind::Midpoint(PointId::from_index(0), c)),
+            Box::new(|_, c, _| ConstraintKind::EllipseMajor(c, 5.0)),
+            Box::new(|l, _, _| ConstraintKind::EllipseAngle(l, 0.5)),
+            Box::new(|l, c, _| ConstraintKind::Equal(l, c)),
+        ];
+        for case in cases.drain(..) {
+            let err = broken(|d| {
+                let (l, c, e) = first_line_and_circle(d);
+                let kind = case(l, c, e);
+                push_constraint(d, kind, alive);
+            });
+            assert!(
+                matches!(err, SketchError::WrongType(_)),
+                "alive={alive}: {err:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn bad_numbers_and_splines_and_extra_are_rejected() {
+    let err = broken(|d| {
+        let (_, c, _) = first_line_and_circle(d);
+        push_constraint(d, ConstraintKind::Radius(c, -1.0), true);
+    });
+    assert!(matches!(err, SketchError::Degenerate(_)));
+    let err = broken(|d| {
+        let (_, c, _) = first_line_and_circle(d);
+        push_constraint(d, ConstraintKind::Radius(c, 0.0), true);
+    });
+    assert!(matches!(err, SketchError::Degenerate(_)));
+    let spline = |d: &mut SketchData, n: usize| {
+        let i = d
+            .curves
+            .iter()
+            .position(|c| matches!(c.kind, CurveKind::Spline { .. }))
+            .unwrap();
+        d.curves[i].kind = CurveKind::Spline {
+            points: vec![PointId::from_index(0); n],
+        };
+    };
+    for n in [0, 1, 65, 10_000] {
+        let err = broken(|d| spline(d, n));
+        assert!(matches!(err, SketchError::InvalidInput(_)), "n={n}");
+    }
+    let err = broken(|d| d.constraints[0].extra = Some(d.vars.len()));
+    assert!(matches!(err, SketchError::InvalidInput(_)));
+}
+
+#[test]
+fn a_round_tripped_sketch_survives_all_follow_up_calls() {
+    let mut t = Sketch::from_data(rich_sketch().to_data()).unwrap();
+    assert!(matches!(t.solve().status, SolveStatus::Solved));
+    assert!(!t.profiles().profiles.is_empty());
+    assert!(t.extent().is_some());
+    let d = t.to_data();
+    assert_eq!(Sketch::from_data(d.clone()).unwrap().to_data(), d);
+}

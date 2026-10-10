@@ -213,6 +213,14 @@ impl Sketch {
         s.constraints = constraints;
         s.solve_cache = SolveCache::default();
         s.touch_structure();
+        // Typen und Entartungen aller Abhängigkeiten (auch gelöschter) wie bei add_constraint
+        // prüfen, sonst könnten spätere Solver-Läufe auf falschen Objekttypen abstürzen.
+        for (_, c) in s.constraints.iter() {
+            s.check_types(&c.kind)?;
+            if c.alive {
+                s.check_constraint_value(&c.kind)?;
+            }
+        }
         Ok(s)
     }
 }

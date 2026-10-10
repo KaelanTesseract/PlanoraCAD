@@ -674,6 +674,12 @@ impl Sketch {
         for c in kind.curves() {
             self.check_curve(c)?;
         }
+        self.check_types(kind)
+    }
+
+    /// Prüft nur die Objekttypen und Entartungen; die Ids müssen im Bereich der Arenen liegen
+    /// (auch gelöschte Objekte sind erlaubt). Genutzt von `check_structure` und `from_data`.
+    pub(crate) fn check_types(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
         let is_line = |c: CurveId| is_line_kind(&self.curves[c].kind);
         let is_round = |c: CurveId| {
             matches!(
