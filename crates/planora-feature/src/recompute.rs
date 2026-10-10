@@ -43,7 +43,10 @@ impl Document {
     ) -> Result<FeatureId, FeatureError> {
         self.check_references(&kind, self.marker)?;
         let id = FeatureId(self.next_id);
-        self.next_id += 1;
+        let next_id = self.next_id.checked_add(1).ok_or_else(|| {
+            FeatureError::InvalidInput("Die Feature-Kennungen sind aufgebraucht".into())
+        })?;
+        self.next_id = next_id;
         let version = self.bump();
         self.features.insert(
             self.marker,

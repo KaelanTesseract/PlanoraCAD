@@ -41,6 +41,9 @@ impl Document {
     /// betroffenen Feature (kein Panic, kein Abbruch des Ladens).
     pub fn from_snapshot(s: Snapshot, chord_tolerance: f64) -> Result<Document, FeatureError> {
         let bad = |m: &str| FeatureError::InvalidInput(m.to_string());
+        if s.next_id == u64::MAX {
+            return Err(bad("Der Kennungszähler ist ungültig"));
+        }
         if s.marker > s.features.len() {
             return Err(bad("Der Rückrollmarker liegt hinter dem letzten Feature"));
         }

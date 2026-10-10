@@ -157,3 +157,27 @@ fn a_snapshot_with_huge_numbers_loads_with_an_error_status_not_a_panic() {
     assert!(matches!(d.features()[0].status, FeatureStatus::Error(_)));
     d.check_invariants().unwrap();
 }
+
+#[test]
+fn an_exhausted_id_counter_is_rejected_and_never_overflows() {
+    let mut s = sample().snapshot();
+    s.next_id = u64::MAX;
+    assert!(Document::from_snapshot(s, 0.05).is_err());
+
+    // Größter zulässiger Zähler: ein Feature passt noch hinein, danach ist Schluss.
+    let mut s = sample().snapshot();
+    s.next_id = u64::MAX - 1;
+    for (i, f) in s.features.iter_mut().enumerate() {
+        f.id = FeatureId(i as u64 + 1);
+    }
+    let mut d = Document::from_snapshot(s, 0.05).unwrap();
+    let unit = || FeatureKind::Box {
+        size: DVec3::ONE,
+        origin: DVec3::ZERO,
+    };
+    d.add_feature("X", unit()).unwrap();
+    let (count, edits) = (d.features().len(), d.edit_count());
+    assert!(d.add_feature("Y", unit()).is_err());
+    assert_eq!(d.features().len(), count);
+    assert_eq!(d.edit_count(), edits);
+}
