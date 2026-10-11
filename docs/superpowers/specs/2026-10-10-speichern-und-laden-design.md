@@ -60,12 +60,12 @@ Das Bedienprinzip orientiert sich an gängigen CAD-Datenverwaltungen. Es wird ke
 - **Kommentar nachtragen:** ändert nur `dokument.json`.
 - **Löschen:** nur Zweigspitzen ohne Kinder (Version) bzw. Zweige, die nicht der aktive sind und deren Versionen nur diesem Zweig gehören; Versionen, auf die andere aufbauen, bleiben. Gelöscht wird endgültig nur im Papierkorb nach Rückfrage.
 - **Projekte/Ordner/Dokumente:** Anlegen, Umbenennen, Verschieben, Löschen (in `.papierkorb`, mit Zeitstempel im Namen). Namen werden bereinigt: keine Pfadtrenner, kein `..`, keine reservierten Windows-Namen (CON, NUL, COM1 …), keine führenden/abschließenden Punkte und Leerzeichen, Länge ≤ 80; kollidierende Namen werden abgelehnt. Nichts außerhalb der Wurzel wird gelesen oder geschrieben (kanonische Pfadprüfung, auch gegen Symlinks/Junctions).
-- **Nebenläufigkeit:** Eine Sperrdatei `.sperre` (Prozess-Id, Zeit) im Dokumentordner verhindert, dass zwei Programminstanzen dasselbe Dokument schreiben; veraltete Sperren (Prozess nicht mehr vorhanden) werden nach Rückfrage übernommen.
+- **Nebenläufigkeit:** Eine Sperrdatei `.sperre` (Prozess-Id, Zeit) im Dokumentordner verhindert, dass zwei Programminstanzen dasselbe Dokument schreiben; eine vorhandene Sperre wird immer gemeldet und nur nach Rückfrage übernommen (ob der Prozess noch lebt, wird nicht geprüft; siehe §11, P4).
 
 ## 5. Umwandlung `Document` ↔ Format
 
-- `planora-feature` bekommt keine Abhängigkeit von `serde`. Es erhält eine kleine, geprüfte Schnittstelle zum **Zerlegen und Zusammensetzen**: `Document::snapshot() -> Snapshot` (reine Daten: Features, Marker, `next_id`) und `Document::from_snapshot(Snapshot) -> Result<Document, FeatureError>` (prüft Ids, Verweise, Zeitleistenordnung und Wertebereiche wie §3, setzt Versionen neu, alle Features „nicht berechnet“).
-- `planora-sketch` bekommt entsprechend `Sketch::to_data()`/`Sketch::from_data()` über öffentliche, stabile Datentypen (Punkte, Kurven, Constraints, Flags) – `from_data` baut den Löser-Zustand neu auf und löst einmal.
+- `planora-feature` bekommt keine Abhängigkeit von `serde`. Es erhält eine kleine, geprüfte Schnittstelle zum **Zerlegen und Zusammensetzen**: `Document::snapshot() -> Snapshot` (reine Daten: Features, Marker, `next_id`) und `Document::from_snapshot(Snapshot) -> Result<Document, FeatureError>` (prüft Ids, Verweise, Zeitleistenordnung und Wertebereiche wie §3, setzt Versionen neu, alle Features „nicht berechnet“). Die Typen heißen `Snapshot`/`SnapshotFeature`; `Document::edit_count()` liefert den Änderungszähler (siehe §11).
+- `planora-sketch` bekommt entsprechend `Sketch::to_data()`/`Sketch::from_data()` über öffentliche, stabile Datentypen (Punkte, Kurven, Constraints, Flags) – `from_data` baut den Löser-Zustand neu auf und prüft alle Typen und Werte, löst aber **nicht** (siehe §11, P2).
 - `planora-project` enthält die Format-Typen mit `serde`-Ableitungen und die Abbildung Snapshot ↔ Format. Eine **Golden-Datei** im Repository (`tests/data/`) pinnt das Format 1; ein Test liest sie und vergleicht mit dem erwarteten `Document`.
 
 ## 6. Oberfläche (`planora-app`)
@@ -82,7 +82,7 @@ Das Bedienprinzip orientiert sich an gängigen CAD-Datenverwaltungen. Es wird ke
 
 - Beschädigte, zu neue oder unvollständige Dateien: klare Meldung mit Pfad; das Dokument wird nicht verändert. Fehlen Versionsdateien, öffnet das Dokument die letzte lesbare Version des Zweigs und meldet den Rest.
 - Schreibfehler (Platte voll, kein Zugriff, gesperrt): Meldung, der Tab bleibt geändert, die vorherige Version bleibt unversehrt.
-- **Autosicherung:** alle 2 Minuten, nur wenn der Tab geändert ist, als `.autosave.json` neben dem Dokument (bzw. im Konfigurationsordner für unbenannte Dokumente); erzeugt keine Version. Beim Öffnen eines Dokuments mit neuerer Autosicherung bietet die App Wiederherstellen/Verwerfen an. Nach erfolgreichem Speichern oder Verwerfen wird sie gelöscht.
+- **Autosicherung:** alle 2 Minuten, nur wenn der Tab geändert ist, als `.autosave.json` neben dem Dokument (bzw. im Konfigurationsordner für unbenannte Dokumente); erzeugt keine Version. Beim Öffnen eines Dokuments mit Autosicherung bietet die App Wiederherstellen/Verwerfen an (nur für gespeicherte Dokumente; siehe §11, P9). Nach erfolgreichem Speichern oder Verwerfen wird sie gelöscht.
 - Keine Panics auf Dateiinhalten: jede Verarbeitung ist fehlerrückgebend, auch bei absichtlich verfälschten Dateien (Tests, siehe §8).
 
 ## 8. Tests
@@ -106,6 +106,68 @@ Das Bedienprinzip orientiert sich an gängigen CAD-Datenverwaltungen. Es wird ke
 ## 10. Risiken
 
 - **Mehrere Tabs** berühren den App-Zustand breit (Viewport, Dialoge, Eingabeverarbeitung greifen auf einen einzigen `AppState` zu); Aufteilung in Aufgaben so legen, dass zuerst „Tab-Rahmen mit einem Tab“ lauffähig ist.
-- **Skizzen-Rundlauf:** die Löser-Zustände (Constraints, Dragging) müssen exakt reproduziert werden; `from_data` löst einmal und vergleicht gegen die gespeicherten Punkte (Abweichung → Warnung am Feature, nicht Fehler).
+- **Skizzen-Rundlauf:** die Löser-Zustände (Constraints, Dragging) müssen exakt reproduziert werden; `from_data` löst nicht und vergleicht nicht; die Neuberechnung des Dokuments löst die Skizzen (siehe §11, P2).
 - **Dateisystem unter Windows:** reservierte Namen, Junctions, gesperrte Dateien (Virenscanner) – Umbenennen mit kurzen Wiederholungen bei Zugriffsfehlern.
 - **Wachsende Datenmenge:** vollständige Stände je Version sind für typische Dokumente klein; große Skizzen können hunderte KB je Version erreichen – akzeptiert, Delta/Komprimierung als offener Punkt.
+
+## 11. Änderungen bei der Umsetzung
+
+Dieser Abschnitt hält fest, was beim Bauen anders wurde als oben beschrieben, jeweils mit Grund. Wo der Wortlaut oben abweicht, gilt dieser Abschnitt.
+
+### Entscheidungen aus dem Plan (P1–P10)
+
+| Nr. | Entscheidung | Grund |
+|---|---|---|
+| P1 | `Document::snapshot()` liefert reine Daten (`Snapshot { features, marker, next_id }`, Features als `SnapshotFeature { id, name, suppressed, kind }`); `Document::from_snapshot(snapshot, chord_tolerance)` baut ein Dokument neu auf und rechnet einmal. Die Format-Typen liegen nur in `planora-project`. | Kein Zugriff auf Interna von außen; `planora-feature` bleibt ohne `serde`. |
+| P2 | `Sketch::to_data()`/`from_data()` übertragen alle Einträge der Arenen, auch gelöschte (`alive = false`), damit Ids unverändert bleiben. `from_data` löst **nicht**; die Neuberechnung des Dokuments löst die Skizzen. Abweichung von §10 (Lösen mit Vergleich). | Einfacher, derselbe Nutzen: Eine Skizze wird ohnehin beim Berechnen gelöst. |
+| P3 | `Document::edit_count()` steigt bei jeder öffentlichen Änderung (Hinzufügen, Ändern, Umbenennen, Löschen, Unterdrücken, Marker setzen), nur nach erfolgreicher Prüfung; bei Umbenennen, Unterdrücken und Marker nur bei tatsächlicher Änderung. Ein Tab ist „geändert“, wenn der Zähler vom beim Speichern notierten Wert abweicht oder eine Skizze offen ist. | Billige, eindeutige Änderungserkennung (§6). Bekannte Folge: `update` zählt auch dann, wenn der Dialog unveränderte Werte übernimmt. |
+| P4 | Eine vorhandene Sperre wird immer gemeldet; der Nutzer kann sie nach Rückfrage übernehmen. Abweichung von §4 („veraltete Sperren“). | Ob der Prozess einer `.sperre` noch lebt, lässt sich ohne neue Abhängigkeit nicht prüfen. |
+| P5 | Schreibgeschützte Versions-Tabs sperren Browser, Eigenschaften und die Menüs „Erzeugen“/„Bearbeiten“ als deaktivierte Bedienelemente; `AppState` bekommt kein Schreibschutz-Flag. | Kleinste Änderung am bestehenden Zustand. Folge: Nicht jede Zustandsmethode prüft den Schreibschutz. |
+| P6 | Jeder Tab merkt sich die Version, auf der sein Stand beruht (`based_on`). Beim Speichern entscheidet sie: Ist sie die Spitze ihres Zweigs, wird dort angehängt; sonst muss ein neuer Zweigname angegeben werden. `aktiver_zweig` in `dokument.json` ist nur der Zweig, dessen Spitze beim Öffnen geladen wird. | Ein Dokument kann Ansichten in mehreren Tabs haben; der Zweig darf nicht von einer globalen Einstellung abhängen. |
+| P7 | `AppState::scene_version` stammt aus einem globalen Zähler. | Beim Wechsel zwischen Tabs muss die GPU-Szene sicher neu hochgeladen werden. |
+| P8 | `Config { root }` liegt in `planora-project`; Speicherort `%APPDATA%\PlanoraCAD\config.json` bzw. `$XDG_CONFIG_HOME/planora-cad/config.json` (Rückfall `~/.config`). | Dort ist `serde` schon vorhanden; keine neue Abhängigkeit. |
+| P9 | Autosicherung nur für gespeicherte Dokumente. Abweichung von §7 (Konfigurationsordner für unbenannte). | Unbenannte Dokumente haben keinen Ort; später nachrüstbar. |
+| P10 | *Wiederherstellen* aus einer Ansicht: Ist das Dokument schon beschreibbar in einem Tab offen, wirkt es in diesem Tab (nur ohne ungespeicherte Änderungen); sonst wird die Ansicht bearbeitbar (holt die Sperre). Scheitert das, wird der Tab wieder zur Ansicht und die Sperre frei. | Zwei beschreibbare Tabs desselben Dokuments sind wegen der Sperre ausgeschlossen. |
+
+### Tatsächliche Abweichungen und Ergänzungen
+
+**Skizzen und Format**
+- `Sketch::from_data` prüft alles: die Typen der Constraint-Argumente (auch bei gelöschten Einträgen), Wertebereiche, Punktzahlen von Splines und dass jede lebende Abhängigkeit, die die zusätzliche Löservariable braucht (Punkt auf Spline, Tangente mit Ellipse oder Spline), diese Variable auch hat. Grund: Ohne diese Prüfungen konnte eine verfälschte Datei beim späteren Lösen abstürzen (Fund der Prüfung von Aufgabe 2).
+- `encode_version` prüft sich selbst, indem es das Geschriebene wieder dekodiert. Format 0 ist ungültig; ein Byte-Order-Mark am Dateianfang wird ignoriert. Fehlertexte nennen das Feature.
+- Zwei Referenzdateien statt einer: `format1.json` (kleines Dokument) und `format1_voll.json` (alle Feature-Arten, alle Kurven- und Abhängigkeitsarten, Fläche und Kantenkopie, Konstruktions- und Maß-Flags). Die Golden-Tests vergleichen den erzeugten Text mit der Datei, nicht nur das Dokument. `.gitattributes` setzt für diese Dateien LF-Zeilenenden, sonst schlüge der Test nach einem CRLF-Checkout fehl.
+- `Document::from_snapshot` lehnt `next_id == u64::MAX` ab; `add_feature` meldet eine erschöpfte Id-Zählung, statt zu überlaufen.
+- Feste Grenzen (benannte Konstanten): Listen in einer Datei höchstens eine Million Einträge, Zweignamen 60 Zeichen, Kommentare 500, Namen 80, höchstens 100 000 Versionen je Dokument; `COM`/`LPT` mit hochgestellten Ziffern gelten als reserviert.
+
+**Dokumentspeicher (`DocStore`)**
+- `dokument.json` enthält zusätzlich `hoechste_nummer`: Versionsnummern werden nie wiederverwendet, auch nicht nach dem Löschen der Spitze. Ältere Dateien ohne das Feld laden (der Wert wird aus dem Baum bestimmt).
+- Beim Laden wird der Versionsbaum vollständig geprüft (Nummern aufsteigend, Eltern vorhanden und früher, Spitzen, Zweignamen, aktiver Zweig, Zeit- und Kommentarform). Die Prüfung ist linear; ein Baum mit 20 000 Versionen lädt sofort.
+- Zu neue Dateien werden am Formatkopf erkannt (`TooNew`), auch wenn sich der Aufbau geändert hat, und nicht als beschädigt gemeldet. Das gilt auch für Autosicherungen.
+- `peek` und `read_version` lesen Dokumentinfo und einzelne Versionen ohne Sperre; die Ansichten des Versionen-Panels nutzen sie.
+- `save` ohne Version und mit Zweigname legt einen neuen Zweig an der aktiven Spitze an; Speichern auf einer alten Version ohne Zweigname wird mit `NeedsBranch` abgelehnt.
+- Schreibt ein Speicher, dessen Sperre inzwischen von einem anderen Programm übernommen wurde, schlägt jede Schreiboperation mit `LockLost` fehl, ohne etwas zu verändern.
+- `create` räumt den eben angelegten Ordner bei einem Fehler wieder auf; `open` räumt liegengebliebene `.tmp`-Dateien auf.
+- `atomic_write` entfernt die `.tmp`-Datei, wenn das Schreiben scheitert. Der Papierkorbname nutzt die mittleren Zeichen der Id (die ersten acht kollidierten bei zwei Löschungen in derselben Sekunde).
+- Der Verzeichnisbaum überspringt Symlinks und Junctions sowie Einträge, deren Namen die Pfadprüfung ablehnt; Projektnamen dürfen nicht auf `.pcad` enden; reine Groß-/Kleinschreibungsänderungen beim Umbenennen sind erlaubt.
+
+**Autosicherung**
+- Eine nicht lesbare Autosicherung (beschädigt oder zu neu) wird nie gelöscht und nie überschrieben: Sie wird gemeldet, und der Tab bekommt in dieser Sitzung keine eigene Autosicherung.
+- Angebote stehen in einer Warteschlange: `Workspace::refresh_prompts()` (jedes Bild vor den Rückfragen) bringt das nächste Angebot hervor; solange eines offen ist, kehren `request_close` und `request_quit` mit `false` zurück. Ein Tab mit offenem Angebot wird nicht automatisch gesichert, und Speichern löscht die Datei nicht, solange das Angebot offen ist.
+- Keine Autosicherung für offene Skizzenentwürfe und (P9) für unbenannte Dokumente. Ein fehlgeschlagenes Schreiben wird erst nach dem nächsten Intervall wiederholt. Beim Verwerfen eines geänderten Tabs bleibt die Autosicherung liegen und wird beim nächsten Öffnen wieder angeboten.
+
+**Oberfläche**
+- Das Schließen des Fensters wird in `App::logic` behandelt (`handle_close_request`), nicht in `ui()`: eframe ruft bei minimiertem oder verdecktem Fenster nur `logic` auf; sonst ginge das Fenster ohne Rückfrage zu. Bei einer Schließanfrage mit Änderungen wird das Fenster wiederhergestellt und fokussiert, die Anfrage abgebrochen und gefragt. `Close` wird nur einmal gesendet. Dort läuft auch die Autosicherung, mit einem Wiederholungstakt von 30 Sekunden.
+- Workaround für das erste Bild: egui 0.36 zeichnet ein neues Fenster im ersten Durchlauf unsichtbar. Die Rückfragefenster verwerfen diesen Durchlauf (`request_discard`) und schalten die Einblendung ab; Tastenkürzel laufen deshalb nur im ersten Durchlauf.
+- Der Punkt „●“ am Tab wird gezeichnet: Roboto enthält U+25CF nicht. Das Zeichen steht weiter im Text (für Tests und Bildschirmleser), ist aber unsichtbar.
+- Solange eine Rückfrage offen ist, sind Menü, Tab-Leiste, Projekt-Panel und Versionen-Panel gesperrt, und Tastenkürzel werden ignoriert; sonst könnte ein Klick eine wartende Beenden- oder Autosicherungs-Rückfrage ersetzen.
+- Das Fenster „Speichern unter“ zeigt den Projektbaum; ohne Projekt weist der Text auf das Projekt-Panel hin.
+- Angeordnet sind Projekte, Browser, 3D-Ansicht und rechts als Tabs Eigenschaften und Versionen. „Projekte“ blendet den ganzen Container aus, „Versionen“ nur seinen Tab (Menü „Ansicht“).
+- Das Projekt-Panel liest den Baum nur nach Aktionen, „Aktualisieren“, Wurzelwechsel und Strg+O; auch ein Lesefehler wird zwischengespeichert. Umbenennen, Verschieben und Löschen verlangen geschlossene Tabs (auch Ansichten). „Wurzel wählen“ ist nur ohne offene gespeicherte Dokumente möglich, weil Tab-Pfade zur Wurzel relativ sind; die Prüfung liegt im Panel, nicht in `Workspace::choose_root`.
+- Das Versionen-Panel liest keine Dateien je Bild: Beschreibbare Tabs nutzen den Stand im Speicher, reine Ansichten eine einmal gelesene und zwischengespeicherte Kopie. Löschen verlangt eine Rückfrage; die Fenster für Kommentar und Löschen gehören zu einem Tab und werden verworfen, wenn der Tab wechselt.
+- `Workspace::delete_version` und `delete_branch` führen `based_on` der Tabs nach: Verschwindet die Ausgangsversion, zeigt der Tab auf die neue Spitze des Zweigs (sonst des aktiven Zweigs), damit er speicherbar bleibt.
+- „Zu diesem Zweig wechseln“ öffnet die Spitze als Ansicht; der Arbeitsstand des beschreibbaren Tabs bleibt.
+- Ein geöffnetes Dokument übernimmt das Thema (hell/dunkel) des aktiven Tabs.
+- Die Namenszähler („Quader n“) laufen nach dem Laden weiter; Zahlen über 1 000 000 in geladenen Namen werden ignoriert, und die Zähler rechnen überlaufsicher.
+
+**Nicht umgesetzt oder offen**
+- Kein Test mit einem echten zweiten Prozess für die Sperre (P4).
+- Die Handprüfung nach §8 ist noch offen; siehe `offene-punkte.md`.

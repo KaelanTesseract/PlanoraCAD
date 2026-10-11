@@ -158,6 +158,54 @@ Stand: 2026-10-10. Skizzen, Extrusionen, Drehungen, Boolesche Operationen und Ve
 - „Körper aus Skizzen sind Momentaufnahmen“ und „Keine lebende Verknüpfung“ gelten nicht mehr: Skizzen sind Features, Körper und Kantenkopien folgen Änderungen (Grenzen oben).
 - „Kein Rückgängig“ und „Kein Speichern/Laden“ gelten weiter.
 
+## Teilprojekt 6 – Speichern und Projekte
+Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen mit Zweigen verwalten und in mehreren Tabs öffnen; es gibt eine Autosicherung. Spec: `specs/2026-10-10-speichern-und-laden-design.md` (Abschnitt 11 listet, was bei der Umsetzung anders wurde).
+
+**Handprüfung: noch offen.** Die ganze Oberfläche (Tabs, Speichern-Fenster, Projekt- und Versionen-Panel, Rückfragen, Autosicherung) wurde nur durch automatische Tests ohne Fenster geprüft. Das Durchspielen mit `tools/gui-drive.ps1` ist für später vereinbart. Insbesondere nicht von Hand gesehen: Aussehen und Breiten der neuen Anordnung, Kontextmenüs, Ein-/Ausblenden über „Ansicht“, Strg+N/O/S/W, der „●“ am Tab, das Verhalten beim Schließen eines minimierten Fensters (nur aus dem Quelltext von eframe abgeleitet und durch Tests des Ablaufs belegt).
+
+**Funktionsumfang (Grenzen)**
+- Kein Zusammenführen von Zweigen, keine Cloud, kein Teilen, keine Berechtigungen.
+- Jede Version ist ein vollständiger Stand (kein Delta, keine Komprimierung). Große Skizzen erzeugen große Versionsdateien.
+- Keine Vorschaubilder; die Kameraansicht wird nicht gespeichert.
+- Unbenannte (noch nie gespeicherte) Dokumente haben keine Autosicherung. Offene Skizzenentwürfe werden nicht mit gesichert; beim Speichern wird der Entwurf dagegen mitgenommen.
+- Die Sperre eines Dokuments wird immer gemeldet und nur nach Rückfrage übernommen; ob der Prozess der Sperre noch lebt, wird nicht geprüft (dafür wäre eine neue Abhängigkeit nötig). Eine vorübergehend nicht lesbare Sperrdatei kann zu einer falschen Meldung „Sperre übernommen“ führen. Ein Speicher, dessen Sperre übernommen wurde, schreibt nichts mehr.
+- Verschieben im Projektbaum nur über ein Auswahlfenster, nicht durch Ziehen.
+- Umbenennen, Verschieben und Löschen verlangen geschlossene Tabs der betroffenen Dokumente (auch Ansichten alter Versionen). „Wurzel wählen“ ist nur ohne offene gespeicherte Dokumente möglich; die Prüfung steckt im Panel, nicht in `Workspace::choose_root` selbst.
+- Ein beschädigter Dokumentordner (ohne lesbare `dokument.json`) lässt sich in der Oberfläche nicht umbenennen oder löschen.
+- Versionsnummern werden nie wiederverwendet (`hoechste_nummer` in `dokument.json`); Zähler und Listen haben feste Obergrenzen (Namen ≤ 80 Zeichen, Zweignamen ≤ 60, Kommentare ≤ 500, höchstens 100 000 Versionen je Dokument, Listen in einer Datei höchstens eine Million Einträge, Namenszähler „Quader n“ ab 1 000 000 ignoriert). Die Grenzen sind benannte Werte im Code und nicht einstellbar.
+
+**Prüfung beim Laden**
+- Das Format ist durch zwei Referenzdateien (`format1.json`, `format1_voll.json`) und durch verfälschte Dateien in Tests abgesichert.
+- Alle Dateien werden vollständig geprüft (Typen, Ids, Verweise, Zahlen bis ±1e9 mm, Längen). Die Wertebereichsprüfung gilt für Skizzen und Zahlenfelder; Werte von Features außerhalb des sinnvollen Bereichs (z. B. eine riesige Höhe) werden nicht abgelehnt, sondern führen beim Rechnen zu einem Fehlerstatus am Feature.
+- Skizzen werden beim Laden nicht auf Abweichung gegen die gespeicherten Punkte verglichen; sie werden erst bei der Neuberechnung des Dokuments gelöst.
+- Die Länge von Listen wird erst geprüft, nachdem die JSON-Bibliothek sie gelesen hat; der Speicher wird dabei nicht vorab begrenzt (nur lokale Dateien).
+
+**Dateisystem**
+- Unter Windows werden `COM0`, `LPT0`, `CONIN$` und `CONOUT$` nicht als reservierte Namen abgelehnt.
+- Die Prüfung gegen Verknüpfungen (Symlinks/Junctions) ist nicht gegen Wettlaufsituationen zwischen Prüfen und Schreiben gesichert (bewusst akzeptiert).
+- Die Groß-/Kleinschreibung beim Verschieben in einen eigenen Unterordner wird auf Windows nicht eigens abgefangen; statt einer klaren Meldung erscheint dann der Text des Betriebssystems.
+- `rename_with_retries` entfernt die Quelldatei nach einem fehlgeschlagenen Umbenennen; heute betrifft das nur Ordner. `DocLock::acquire` ignoriert einen Fehler beim Schreiben der Sperrzeile.
+- `Library::kind_of` akzeptiert auch Pfade, deren erster Teil kein Projekt ist; die Oberfläche bietet nur Knoten des Baums an, daher ohne Folgen.
+- Eine unlesbare Autosicherung (z. B. neueres Format) bleibt für immer liegen und wird gemeldet, aber nie überschrieben; solange sie liegt, gibt es für diesen Tab in der Sitzung keine eigene Autosicherung.
+
+**Oberfläche**
+- Die Rückfragefenster sind nicht modal: Ansicht und Browser lassen sich dahinter bedienen. Menü, Tab-Leiste und beide Panels sind dagegen gesperrt, solange ein Fenster offen ist. Kommt während einer Rückfrage eine Schließanfrage, ersetzt die Beenden-Rückfrage die erste; ein Autosicherungs-Angebot hält Beenden und Schließen an, bis es beantwortet ist.
+- Das Autosicherungs-Angebot hat kein „später entscheiden“. Nach erfolgreichem Strg+S bleibt ein noch offenes Angebot stehen.
+- Der Punkt am Tab wird gezeichnet, nicht als Zeichen gesetzt: Die Schrift Roboto enthält das Zeichen ● (U+25CF) nicht. Andere Sonderzeichen in neuen Texten sind nur für die geprüften Stellen kontrolliert.
+- Schlägt „Speichern unter“ fehl, geht der eingetragene Name im Hinweis verloren (neu eintippen). Ein Dialog, der unveränderte Werte übernimmt, markiert das Dokument trotzdem als geändert (der Änderungszähler steigt auch bei einer Änderung ohne Wirkung).
+- Das Versionen-Panel liest für reine Ansichten alter Versionen die Datei einmal und merkt sich das Ergebnis; Änderungen eines anderen Programms am Dokument werden dort erst nach einer Aktion oder einem Tabwechsel sichtbar. Der Zwischenspeicher kann bei ungewöhnlicher Reihenfolge (Panel nicht gezeichnet, ungespeicherter Tab aktiv) kurz veraltet sein. Eine Ansicht, deren Ausgangsversion gelöscht wird, wird nicht nachgeführt.
+- Im Versionen-Panel zeigen Menüeinträge auf einer Ansicht ohne beschreibbaren Tab einen Hinweis, statt zu wirken; mehrere Menüeinträge sind dann ausgegraut.
+- Die Anordnung der Panels wird nicht gespeichert; bei jedem Start gilt die Standardanordnung (Projekte, Browser, 3D-Ansicht, Eigenschaften und Versionen als Tabs). Wird der rechte Tab-Container später entfernt, könnten Kennungen im Dock veralten.
+- Schreibgeschützte Tabs sperren nur die Oberfläche (Browser, Eigenschaften, Menüs „Erzeugen“/„Bearbeiten“); nicht jede Zustandsmethode in `AppState` prüft den Schreibschutz.
+- Die Wahl eines Zweigs im Versionen-Panel öffnet seine Spitze als Ansicht; der Arbeitsstand des bearbeitbaren Tabs bleibt unberührt.
+
+**Tests**
+- Schwache Plantests, bewusst nicht geändert: `the_tree_is_not_reread_every_frame` (Teil der Aussage ist immer wahr). Es fehlen strengere Tests: ein auf der Platte neu angelegtes Projekt erscheint erst nach „Aktualisieren“; ein zwischengespeicherter Lesefehler; Umbenennen/Verschieben/Löschen bei Ansichten und bei anderer Groß-/Kleinschreibung; die „Ansicht“-Schalter.
+- `PlanoraApp::logic` selbst (die drei Zeilen Verdrahtung des Schließablaufs) ist nicht ohne Grafikkarte testbar; getestet ist `handle_close_request`.
+
+**Aktualisierung früherer Abschnitte**
+- „Kein Speichern und Laden“ in den Abschnitten zu den Teilprojekten 1–5 gilt nicht mehr. „Kein Rückgängig“ gilt weiter.
+
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).
 - `eframe` mit Standard-Features baut auch den `glow`-Renderer mit.
