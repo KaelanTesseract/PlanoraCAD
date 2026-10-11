@@ -45,3 +45,60 @@ pub const MIN_KNOT_DOMAIN: f64 = 1e-6;
 /// Höchste Ableitungsordnung, die Kurven und Basisfunktionen liefern (Ordnungen darüber
 /// werden darauf begrenzt; Ableitungen über dem Grad sind ohnehin 0).
 pub const MAX_DERIV_ORDER: usize = MAX_DEGREE;
+
+/// Summe der Knickwinkel (Bogenmaß) eines Streckenzugs: Winkel zwischen aufeinanderfolgenden
+/// Strecken; Strecken der Länge 0 (zusammenfallende Punkte) werden übersprungen. Für ein
+/// Kontrollpolygon ist das eine obere Schranke der Gesamtkrümmung der Kurve.
+pub fn polygon_turning(points: &[crate::DVec3]) -> f64 {
+    let mut total = 0.0;
+    let mut prev: Option<crate::DVec3> = None;
+    for w in points.windows(2) {
+        let d = w[1] - w[0];
+        let len = d.length();
+        if !(len > 0.0 && len.is_finite()) {
+            continue;
+        }
+        let d = d / len;
+        if let Some(p) = prev {
+            total += p.dot(d).clamp(-1.0, 1.0).acos();
+        }
+        prev = Some(d);
+    }
+    total
+}
+
+#[cfg(test)]
+mod turning_tests {
+    use super::*;
+    use crate::{DVec3, PI, TAU};
+
+    #[test]
+    fn turning_of_a_square_and_degenerate_polygons() {
+        let sq = [
+            DVec3::ZERO,
+            DVec3::X,
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::Y,
+            DVec3::ZERO,
+        ];
+        assert!((polygon_turning(&sq) - 1.5 * PI).abs() < 1e-12);
+        let line = [DVec3::ZERO, DVec3::X, DVec3::X, DVec3::new(2.0, 0.0, 0.0)];
+        assert_eq!(polygon_turning(&line), 0.0);
+        assert_eq!(polygon_turning(&[]), 0.0);
+        let c = NurbsCurve::elliptic_arc(DVec3::ZERO, DVec3::X, DVec3::Y, 0.0, TAU).unwrap();
+        // Kontrollpolygon des Vollkreises: Quadrat, vier Ecken zu je 90°, Seitenmitten 0°.
+        assert!((polygon_turning(c.control_points()) - TAU).abs() < 1e-9);
+    }
+
+    #[test]
+    fn spans_in_counts_overlapping_bezier_pieces() {
+        let k =
+            KnotVector::new(2, vec![0.0, 0.0, 0.0, 0.25, 0.5, 0.5, 0.75, 1.0, 1.0, 1.0]).unwrap();
+        assert_eq!(k.spans_in(0.0, 1.0), 4);
+        assert_eq!(k.spans_in(1.0, 0.0), 4);
+        assert_eq!(k.spans_in(0.1, 0.3), 2);
+        assert_eq!(k.spans_in(0.25, 0.5), 1);
+        assert_eq!(k.spans_in(0.3, 0.3), 0);
+        assert_eq!(k.spans_in(f64::NAN, 0.3), 4);
+    }
+}

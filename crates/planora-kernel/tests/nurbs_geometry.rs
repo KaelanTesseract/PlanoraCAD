@@ -515,3 +515,163 @@ fn roots_on_a_large_patch_finish_quickly() {
         assert!(s.implicit(line.point(t)).abs() <= 1e-5, "{t}");
     }
 }
+
+/// Zylinder (r = 3, h = 5) aus dem Profil; der Mantel wird durch `mantle` ersetzt.
+fn extruded_cylinder_with(
+    mantle: Surface,
+) -> (
+    planora_kernel::Solid,
+    planora_kernel::Id<planora_kernel::Face>,
+) {
+    use planora_kernel::{AnalyticKernel, Kernel, Profile, ProfileLoop};
+    let kernel = AnalyticKernel::default();
+    let profile = Profile {
+        outer: ProfileLoop::circle(planora_math::DVec2::ZERO, 3.0),
+        holes: vec![],
+    };
+    let frame = planora_math::Frame::from_origin_normal(DVec3::ZERO, DVec3::Z);
+    let mut solid = kernel.extrude(&profile, &frame, 5.0).unwrap();
+    let id = solid
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Cylinder { .. }))
+        .map(|(id, _)| id)
+        .unwrap();
+    solid.faces[id].surface = mantle;
+    (solid, id)
+}
+
+#[test]
+fn surface_periods_follow_the_kind_and_the_nurbs_domain() {
+    let frame = planora_math::Frame::WORLD;
+    assert_eq!(Surface::Plane { frame }.u_period(), None);
+    assert_eq!(Surface::Plane { frame }.v_period(), None);
+    let cyl = Surface::Cylinder { frame, radius: 1.0 };
+    assert_eq!((cyl.u_period(), cyl.v_period()), (Some(TAU), None));
+    let torus = Surface::Torus {
+        frame,
+        major: 3.0,
+        minor: 1.0,
+    };
+    assert_eq!((torus.u_period(), torus.v_period()), (Some(TAU), Some(TAU)));
+    // Drehfläche: u-Bereich ist der Winkel (Breite 2π).
+    let n = cylinder_as_nurbs(3.0, 5.0);
+    assert_eq!(n.v_period(), None);
+    assert!((n.u_period().unwrap() - TAU).abs() < 1e-12);
+    // Extrudierter NURBS-Kreis: u-Bereich 0..1, also Periode 1.
+    let circle =
+        NurbsCurve::elliptic_arc(DVec3::ZERO, DVec3::X * 3.0, DVec3::Y * 3.0, 0.0, TAU).unwrap();
+    let ext = Surface::nurbs(
+        NurbsSurface::extrude(&circle, DVec3::Z * 5.0).unwrap(),
+        true,
+        false,
+    )
+    .unwrap();
+    assert!((ext.u_period().unwrap() - 1.0).abs() < 1e-12);
+    let open = Surface::nurbs(
+        NurbsSurface::extrude(&circle, DVec3::Z * 5.0).unwrap(),
+        false,
+        false,
+    )
+    .unwrap();
+    assert_eq!((open.u_period(), open.v_period()), (None, None));
+}
+
+#[test]
+fn loops_on_a_closed_nurbs_surface_unwrap_with_its_own_period() {
+    use planora_kernel::boolean::points_to_uv_indexed;
+    // Periode 1 in u, Naht der Fläche bei (3, 0, z); die Schleife beginnt bei 80° und läuft
+    // einmal herum, kreuzt also die Naht mitten in der Schleife.
+    let circle =
+        NurbsCurve::elliptic_arc(DVec3::ZERO, DVec3::X * 3.0, DVec3::Y * 3.0, 0.0, TAU).unwrap();
+    let s = Surface::nurbs(
+        NurbsSurface::extrude(&circle, DVec3::Z * 5.0).unwrap(),
+        true,
+        false,
+    )
+    .unwrap();
+    let n = 90;
+    let pts: Vec<DVec3> = (0..n)
+        .map(|i| {
+            let a = 80f64.to_radians() + TAU * i as f64 / n as f64;
+            DVec3::new(3.0 * a.cos(), 3.0 * a.sin(), 2.0)
+        })
+        .collect();
+    let uv = points_to_uv_indexed(&s, true, &pts);
+    assert_eq!(uv.len(), n);
+    for w in uv.windows(2) {
+        let du = w[1].0.x - w[0].0.x;
+        assert!(du > 0.0 && du < 0.05, "u springt: {du}");
+        assert!((w[1].0.y - 0.4).abs() < 1e-9);
+    }
+    let span = uv[n - 1].0.x - uv[0].0.x;
+    assert!(span > 0.9 && span < 1.0, "fast eine Periode: {span}");
+    for (p, (q, src)) in pts.iter().zip(&uv) {
+        assert_eq!(*src, Some(pts.iter().position(|x| x == p).unwrap()));
+        assert!(s.point(q.x, q.y).distance(*p) < 1e-9);
+    }
+}
+
+#[test]
+fn validate_checks_that_edges_lie_on_their_nurbs_faces() {
+    use planora_kernel::{ValidationError, validate};
+    // Richtige Fläche: besteht.
+    let (good, _) = extruded_cylinder_with(cylinder_as_nurbs(3.0, 5.0));
+    validate(&good).unwrap();
+    // Mantel mit Radius 3,1: Die Kreiskanten liegen 0,1 mm daneben.
+    let (bad, id) = extruded_cylinder_with(cylinder_as_nurbs(3.1, 5.0));
+    match validate(&bad) {
+        Err(ValidationError::EdgeOffSurface(_, f)) => assert_eq!(f, id.index()),
+        other => panic!("erwartet EdgeOffSurface, erhalten {other:?}"),
+    }
+    // Abweichung knapp unter NURBS_EDGE_TOL wird angenommen, deutlich darüber nicht.
+    let (near, _) = extruded_cylinder_with(cylinder_as_nurbs(
+        3.0 + 0.5 * planora_kernel::NURBS_EDGE_TOL,
+        5.0,
+    ));
+    validate(&near).unwrap();
+    let (off, _) = extruded_cylinder_with(cylinder_as_nurbs(
+        3.0 + 3.0 * planora_kernel::NURBS_EDGE_TOL,
+        5.0,
+    ));
+    assert!(matches!(
+        validate(&off),
+        Err(ValidationError::EdgeOffSurface(..))
+    ));
+}
+
+#[test]
+fn validate_checks_nurbs_edges_against_analytic_faces() {
+    use planora_kernel::{ValidationError, validate};
+    let (mut solid, _) = extruded_cylinder_with(cylinder_as_nurbs(3.0, 5.0));
+    // Untere Kreiskante als NURBS-Kreis (gleiche Lage, Start bei (0, 3, 0) wie die Kante).
+    let bottom = solid
+        .edges
+        .iter()
+        .find(|(_, e)| {
+            matches!(e.curve, Curve::Circle { .. }) && solid.vertices[e.start].point.z.abs() < 1e-12
+        })
+        .map(|(id, _)| id)
+        .unwrap();
+    let circle = |z: f64| {
+        NurbsCurve::elliptic_arc(
+            DVec3::new(0.0, 0.0, z),
+            DVec3::Y * 3.0,
+            DVec3::X * -3.0,
+            0.0,
+            TAU,
+        )
+        .unwrap()
+    };
+    let mut ok = solid.clone();
+    ok.edges[bottom].curve = Curve::nurbs(circle(0.0));
+    (ok.edges[bottom].t0, ok.edges[bottom].t1) = (0.0, 1.0);
+    validate(&ok).unwrap();
+    // Dieselbe Kurve 0,1 mm über dem Boden: liegt weder auf der Bodenebene noch auf dem Mantel.
+    solid.edges[bottom].curve = Curve::nurbs(circle(0.1));
+    (solid.edges[bottom].t0, solid.edges[bottom].t1) = (0.0, 1.0);
+    assert!(matches!(
+        validate(&solid),
+        Err(ValidationError::EdgeOffSurface(..))
+    ));
+}

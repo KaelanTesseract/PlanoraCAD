@@ -96,6 +96,24 @@ impl KnotVector {
         )
     }
 
+    /// Zahl der nichtleeren Knotenabschnitte (Bézier-Stücke), die das Intervall zwischen `a`
+    /// und `b` (Reihenfolge beliebig) mit positiver Länge überdeckt. Nicht endliche Grenzen
+    /// zählen als ganzer Bereich.
+    pub fn spans_in(&self, a: f64, b: f64) -> usize {
+        let (d0, d1) = self.domain();
+        let (lo, hi) = if a.is_finite() && b.is_finite() {
+            (a.min(b), a.max(b))
+        } else {
+            (d0, d1)
+        };
+        self.knots
+            .windows(2)
+            .filter(|w| {
+                w[1] > w[0] && w[0] >= d0 && w[1] <= d1 && w[1] > lo && w[0] < hi && hi > lo
+            })
+            .count()
+    }
+
     /// Spiegelt den Knotenvektor am Parameterbereich (`a + b − k`, rückwärts). Fehler, wenn
     /// Rundung Knoten verschmelzen lässt (dann ist der Vektor nicht mehr gültig).
     pub fn mirrored(&self) -> Result<KnotVector, NurbsError> {

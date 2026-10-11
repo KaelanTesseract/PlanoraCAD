@@ -1,4 +1,4 @@
-use crate::geometry::Curve;
+use crate::geometry::{Curve, nurbs_divisions};
 use planora_math::{DVec3, TAU};
 
 /// Obergrenze für die Zahl der Stützstellen einer Abtastung (schützt vor riesigen Parameterbereichen).
@@ -82,7 +82,7 @@ impl Seg {
             };
             return (f, (self.curve.point(t) - p).length());
         }
-        let n = sample_count(self.t0, self.t1, 96, 8);
+        let n = curve_sample_count(&self.curve, self.t0, self.t1, 96, 8);
         let mut best = (0usize, f64::MAX);
         for i in 0..=n {
             let d = (self.at(i as f64 / n as f64) - p).length();
@@ -105,6 +105,24 @@ pub(crate) fn sample_count(t0: f64, t1: f64, per_turn: usize, min: usize) -> usi
     }
     let n = (span / (TAU / per_turn as f64)).ceil();
     (n as usize).clamp(min, MAX_SAMPLES)
+}
+
+/// Wie [`sample_count`], aber Freiformkurven nach ihrer Struktur ([`nurbs_divisions`] mit dem
+/// Winkelschritt `TAU / per_turn`) statt nach der Breite des Parameterbereichs; ebenfalls
+/// mindestens `min`, höchstens [`MAX_SAMPLES`]. Andere Kurven: genau `sample_count`.
+pub(crate) fn curve_sample_count(
+    curve: &Curve,
+    t0: f64,
+    t1: f64,
+    per_turn: usize,
+    min: usize,
+) -> usize {
+    match curve {
+        Curve::Nurbs(c) => {
+            nurbs_divisions(c, t0, t1, TAU / per_turn.max(1) as f64).clamp(min, MAX_SAMPLES)
+        }
+        _ => sample_count(t0, t1, per_turn, min),
+    }
 }
 
 /// Dreht eine Schleife um: Reihenfolge umkehren und jedes Stück umdrehen.

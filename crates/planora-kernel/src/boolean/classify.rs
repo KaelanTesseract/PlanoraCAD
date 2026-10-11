@@ -16,7 +16,7 @@ use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
 use crate::topology::{Edge, Face, Solid};
 use crate::validate::point_surface_tol;
-use planora_math::{DVec2, DVec3, TAU, Tolerance};
+use planora_math::{DVec2, DVec3, Tolerance};
 
 /// Lage eines Flächenstücks relativ zum anderen Körper.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -204,16 +204,11 @@ pub fn solid_contains(
 
 /// Verschiebungen um eine Periode, mit denen ein Punkt gegen aufgerollte Polygone geprüft wird.
 fn shifts(surface: &Surface) -> Vec<DVec2> {
-    let us: &[f64] = if surface.is_periodic() {
-        &[-TAU, 0.0, TAU]
-    } else {
-        &[0.0]
+    let around = |period: Option<f64>| match period {
+        Some(t) => vec![-t, 0.0, t],
+        None => vec![0.0],
     };
-    let vs: &[f64] = if matches!(surface, Surface::Torus { .. }) {
-        &[-TAU, 0.0, TAU]
-    } else {
-        &[0.0]
-    };
+    let (us, vs) = (around(surface.u_period()), around(surface.v_period()));
     us.iter()
         .flat_map(|&du| vs.iter().map(move |&dv| DVec2::new(du, dv)))
         .collect()

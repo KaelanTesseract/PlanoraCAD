@@ -17,7 +17,7 @@ pub mod validate;
 pub use boolean::{BoolOp, BooleanError, edge_probe_point, face_probe_point};
 pub use error::KernelError;
 pub use extrude::extrude;
-pub use geometry::{Curve, CurveKind, Surface, SurfaceKind, UvRect};
+pub use geometry::{Curve, CurveKind, Surface, SurfaceKind, UvRect, nurbs_divisions};
 pub use ids::{Arena, Id};
 pub use kernel::{AnalyticKernel, Kernel};
 pub use nurbs_surface::NurbsSurfaceData;

@@ -1,6 +1,6 @@
 use crate::error::KernelError;
 use crate::nurbs_surface::NurbsSurfaceData;
-use planora_math::nurbs::{NurbsCurve, NurbsSurface};
+use planora_math::nurbs::{NurbsCurve, NurbsSurface, polygon_turning};
 use planora_math::{DVec3, Frame, PI, TAU, Tolerance};
 use std::cell::Cell;
 use std::sync::Arc;
@@ -46,6 +46,45 @@ fn nurbs_param(c: &NurbsCurve, t: f64) -> f64 {
     } else {
         t
     }
+}
+
+/// Zahl der Abschnitte, in die das Stück `t0 … t1` einer Freiformkurve mindestens zu teilen ist,
+/// nach ihrer Struktur statt nach der Breite des Parameterbereichs (der bei NURBS oft nur
+/// `[0, 1]` ist): `max(Bézier-Stücke · Grad, 2 · Bézier-Stücke, ⌈Knickwinkel / dtheta⌉)`.
+/// Der Knickwinkel ist die Winkelsumme des Kontrollpolygons, anteilig zur Länge des Stücks;
+/// die Bézier-Stücke werden für das Stück gezählt (bei geschlossenen Kurven auch über die Naht).
+/// Mindestens 1; keine Obergrenze (die setzt der Aufrufer). Nicht endliche Grenzen oder ein
+/// nicht positives `dtheta` zählen wie die ganze Kurve bzw. ohne Winkelanteil.
+pub fn nurbs_divisions(c: &NurbsCurve, t0: f64, t1: f64, dtheta: f64) -> usize {
+    let (d0, d1) = c.domain();
+    let width = d1 - d0;
+    let knots = c.knots();
+    let len = (t1 - t0).abs();
+    let (spans, frac) = if !len.is_finite() || len >= width {
+        (knots.spans_in(d0, d1), 1.0)
+    } else {
+        let mut a = t0.min(t1);
+        if (a < d0 || a > d1) && nurbs_closed(c) {
+            a = d0 + (a - d0).rem_euclid(width);
+        }
+        let b = a + len;
+        let mut s = knots.spans_in(a, b.min(d1));
+        if b > d1 && nurbs_closed(c) {
+            s += knots.spans_in(d0, d0 + (b - d1));
+        }
+        (s.max(1), len / width)
+    };
+    let by_angle = if dtheta > 0.0 {
+        let a = (polygon_turning(c.control_points()) * frac / dtheta).ceil();
+        if a.is_finite() {
+            a.max(0.0) as usize
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    (spans * c.degree()).max(2 * spans).max(by_angle).max(1)
 }
 
 /// Newton auf `(C(u) − p) · C'(u) = 0` von `u` aus (begrenzt auf den Bereich); liefert den
@@ -369,6 +408,32 @@ impl Surface {
             Surface::Plane { .. } => false,
             Surface::Nurbs(d) => d.is_periodic_u() || d.is_periodic_v(),
             _ => true,
+        }
+    }
+
+    /// Periode von `u`: analytische gekrümmte Flächen `TAU` (Winkel), Freiformflächen die Breite
+    /// des u-Bereichs, wenn sie in u geschlossen sind; sonst (und bei Ebenen) `None`.
+    pub fn u_period(&self) -> Option<f64> {
+        match self {
+            Surface::Plane { .. } => None,
+            Surface::Nurbs(d) => d.is_periodic_u().then(|| {
+                let ((u0, u1), _) = d.surface().domain();
+                u1 - u0
+            }),
+            _ => Some(TAU),
+        }
+    }
+
+    /// Periode von `v`: Torus `TAU` (Winkel um das Rohr), Freiformflächen die Breite des
+    /// v-Bereichs, wenn sie in v geschlossen sind; sonst `None`.
+    pub fn v_period(&self) -> Option<f64> {
+        match self {
+            Surface::Torus { .. } => Some(TAU),
+            Surface::Nurbs(d) => d.is_periodic_v().then(|| {
+                let (_, (v0, v1)) = d.surface().domain();
+                v1 - v0
+            }),
+            _ => None,
         }
     }
 

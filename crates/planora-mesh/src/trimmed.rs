@@ -3,10 +3,11 @@
 use crate::discretize::Discretizer;
 use crate::mesh::Mesh;
 use crate::tessellate::{MeshError, ensure_room, index_u32};
-use planora_kernel::Surface;
 use planora_kernel::boolean::{
     FaceGeom, loop_points, oriented_area, points_to_uv, points_to_uv_indexed, winding,
 };
+use planora_kernel::{NurbsSurfaceData, Surface, UvRect};
+use planora_math::nurbs::NurbsSurface;
 use planora_math::{DVec2, DVec3, TAU};
 use spade::handles::FixedVertexHandle;
 use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation, mitigate_underflow};
@@ -50,9 +51,57 @@ fn uv_scale(surface: &Surface, polys: &[Vec<DVec2>]) -> DVec2 {
         }
         Surface::Torus { major, minor, .. } => DVec2::new(major + minor, minor.abs()),
         Surface::Sphere { radius, .. } => DVec2::splat(radius.abs()),
-        // Vorläufig ohne Streckung (das Netz für Freiformflächen folgt eigens).
-        Surface::Plane { .. } | Surface::Nurbs(_) => DVec2::ONE,
+        Surface::Nurbs(d) => nurbs_uv_scale(d.surface(), &nurbs_patch(d, polys)),
+        Surface::Plane { .. } => DVec2::ONE,
     }
+}
+
+/// Zahl der Stützstellen je Richtung für die mittleren Ableitungslängen einer Freiformfläche.
+const SCALE_SAMPLES: usize = 9;
+
+/// Kleinster Maßstab einer Parameterrichtung (verhindert eine Division durch null, wenn eine
+/// Richtung überall entartet ist).
+const MIN_SCALE: f64 = 1e-9;
+
+/// Maßstab einer Freiformfläche: mittlere Längen `|S_u|` und `|S_v|` auf einem Gitter über dem
+/// Parameterrechteck (Längen auf der Fläche je Parametereinheit).
+fn nurbs_uv_scale(s: &NurbsSurface, patch: &UvRect) -> DVec2 {
+    let n = SCALE_SAMPLES;
+    let mut sum = DVec2::ZERO;
+    for i in 0..n {
+        for j in 0..n {
+            let u = patch.u0 + (patch.u1 - patch.u0) * i as f64 / (n - 1) as f64;
+            let v = patch.v0 + (patch.v1 - patch.v0) * j as f64 / (n - 1) as f64;
+            let d = s.derivs(u, v, 1);
+            sum += DVec2::new(d[1][0].length(), d[0][1].length());
+        }
+    }
+    let mean = sum / (n * n) as f64;
+    let fix = |x: f64| if x.is_finite() { x.max(MIN_SCALE) } else { 1.0 };
+    DVec2::new(fix(mean.x), fix(mean.y))
+}
+
+/// Parameterrechteck einer Freiformfläche für Raster und Maßstab: Hüllrechteck der
+/// Randpolygone, auf den Parameterbereich begrenzt. Reicht es in einer geschlossenen Richtung
+/// über den Bereich hinaus (aufgerollte Naht), gilt dort der ganze Bereich.
+fn nurbs_patch(d: &NurbsSurfaceData, polys: &[Vec<DVec2>]) -> UvRect {
+    let ((du0, du1), (dv0, dv1)) = d.surface().domain();
+    let (mut lo, mut hi) = (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN));
+    for p in polys.iter().flatten() {
+        lo = lo.min(*p);
+        hi = hi.max(*p);
+    }
+    let range = |lo: f64, hi: f64, a: f64, b: f64, periodic: bool| {
+        if !(lo.is_finite() && hi.is_finite()) || hi <= lo || (periodic && (lo < a || hi > b)) {
+            (a, b)
+        } else {
+            let (x, y) = (lo.max(a), hi.min(b));
+            if y > x { (x, y) } else { (a, b) }
+        }
+    };
+    let (u0, u1) = range(lo.x, hi.x, du0, du1, d.is_periodic_u());
+    let (v0, v1) = range(lo.y, hi.y, dv0, dv1, d.is_periodic_v());
+    UvRect { u0, u1, v0, v1 }
 }
 
 /// Abstand von `q` zur Strecke `a`–`b`.
@@ -88,23 +137,21 @@ impl Builder {
     }
 }
 
-/// Verschiebt die Löcher einer periodischen Fläche um ganze Perioden, sodass sie in der
-/// äußeren Schleife liegen (jede Schleife wird für sich aufgerollt). Liegt ein Loch bei keiner
-/// Verschiebung in der äußeren Schleife, ist die Fläche widersprüchlich: `Err`.
+/// Verschiebt die Löcher einer periodischen Fläche um ganze Perioden (`u_period`/`v_period`),
+/// sodass sie in der äußeren Schleife liegen (jede Schleife wird für sich aufgerollt). Liegt ein
+/// Loch bei keiner Verschiebung in der äußeren Schleife, ist die Fläche widersprüchlich: `Err`.
 fn align_holes(surface: &Surface, rings: &mut [Vec<(DVec2, Option<usize>)>]) -> Result<(), ()> {
     if rings.len() < 2 {
         return Ok(());
     }
     let outer: Vec<DVec2> = rings[0].iter().map(|(p, _)| *p).collect();
-    let dus: &[f64] = if surface.is_periodic() {
-        &[0.0, -TAU, TAU, -2.0 * TAU, 2.0 * TAU]
-    } else {
-        &[0.0]
+    let dus: Vec<f64> = match surface.u_period() {
+        Some(t) => vec![0.0, -t, t, -2.0 * t, 2.0 * t],
+        None => vec![0.0],
     };
-    let dvs: &[f64] = if matches!(surface, Surface::Torus { .. }) {
-        &[0.0, -TAU, TAU]
-    } else {
-        &[0.0]
+    let dvs: Vec<f64> = match surface.v_period() {
+        Some(t) => vec![0.0, -t, t],
+        None => vec![0.0],
     };
     for ring in rings.iter_mut().skip(1) {
         let Some(&(first, _)) = ring.first() else {
@@ -132,6 +179,50 @@ fn grid_points(
     h: f64,
     sign: f64,
 ) -> Result<Vec<DVec2>, MeshError> {
+    grid_points_with(polys, scale, sign, |lo, hi| {
+        // auch NaN führt zu einem leeren Raster
+        if h.is_nan() || h <= 0.0 {
+            return None;
+        }
+        Some((
+            ((hi.x - lo.x) / h).ceil().max(1.0),
+            ((hi.y - lo.y) / h).ceil().max(1.0),
+            h,
+        ))
+    })
+}
+
+/// Wie [`grid_points`], aber mit Zellgrößen in Parametern (`cell`, ungestreckt): Freiformflächen
+/// bekommen ihre Teilung aus [`Discretizer::nurbs_grid`]. Der Randabstand ist ein Bruchteil der
+/// kleineren gestreckten Zellkante.
+fn grid_points_cells(
+    polys: &[Vec<DVec2>],
+    scale: DVec2,
+    cell: DVec2,
+    sign: f64,
+) -> Result<Vec<DVec2>, MeshError> {
+    let c = cell * scale;
+    grid_points_with(polys, scale, sign, |lo, hi| {
+        if !(c.x > 0.0 && c.y > 0.0) {
+            return None;
+        }
+        Some((
+            ((hi.x - lo.x) / c.x).ceil().max(1.0),
+            ((hi.y - lo.y) / c.y).ceil().max(1.0),
+            c.x,
+        ))
+    })
+}
+
+/// Gemeinsamer Kern der Raster: `cells(lo, hi)` liefert im gestreckten Raum die Spalten- und
+/// Zeilenzahl über dem Hüllrechteck `lo … hi` sowie die Zellbreite für den Randabstand (`None`:
+/// kein Raster).
+fn grid_points_with(
+    polys: &[Vec<DVec2>],
+    scale: DVec2,
+    sign: f64,
+    cells: impl Fn(DVec2, DVec2) -> Option<(f64, f64, f64)>,
+) -> Result<Vec<DVec2>, MeshError> {
     let sp: Vec<Vec<DVec2>> = polys
         .iter()
         .map(|p| p.iter().map(|q| *q * scale).collect())
@@ -142,14 +233,13 @@ fn grid_points(
         hi = hi.max(*p);
     }
     // auch NaN führt zu einem leeren Raster
-    let usable = h > 0.0 && hi.x > lo.x && hi.y > lo.y;
+    let usable = hi.x > lo.x && hi.y > lo.y;
     if !usable {
         return Ok(Vec::new());
     }
-    let (nu_f, nv_f) = (
-        ((hi.x - lo.x) / h).ceil().max(1.0),
-        ((hi.y - lo.y) / h).ceil().max(1.0),
-    );
+    let Some((nu_f, nv_f, h)) = cells(lo, hi) else {
+        return Ok(Vec::new());
+    };
     // Mindestens zwei Zeilen müssen in die Obergrenze passen (auch ∞ wird hier abgewiesen).
     if !(nu_f.is_finite() && nv_f.is_finite()) || nu_f * 2.0 > MAX_GRID_POINTS as f64 {
         return Err(MeshError::TooLarge);
@@ -314,12 +404,27 @@ pub fn tessellate_trimmed(
 
     // Innenpunkte als Raster mit der Winkelschrittweite des Discretizers (gestreckt auf Längen):
     // so überspannt kein Dreieck mehr als etwa einen Winkelschritt und die Sehnentoleranz hält.
-    let step = TAU / disc.segments(TAU).max(8) as f64;
-    let h = match g.surface {
-        Surface::Torus { minor, .. } => step * minor.abs(),
-        _ => step * scale.x,
+    // Freiformflächen: Teilung aus `nurbs_grid` (Bézier-Abschnitte, Knickwinkel, Sehnenprüfung)
+    // über dem Parameterrechteck der Randpolygone.
+    let grid = match &g.surface {
+        Surface::Nurbs(d) => {
+            let patch = nurbs_patch(d, &polys);
+            let (nu, nv) = disc.nurbs_grid(d.surface(), &patch);
+            let cell = DVec2::new(
+                (patch.u1 - patch.u0) / nu as f64,
+                (patch.v1 - patch.v0) / nv as f64,
+            );
+            grid_points_cells(&polys, scale, cell, sign)?
+        }
+        _ => {
+            let step = TAU / disc.segments(TAU).max(8) as f64;
+            let h = match g.surface {
+                Surface::Torus { minor, .. } => step * minor.abs(),
+                _ => step * scale.x,
+            };
+            grid_points(&polys, scale, h, sign)?
+        }
     };
-    let grid = grid_points(&polys, scale, h, sign)?;
     ensure_room(b.pts3.len(), grid.len())?;
     for q in grid {
         b.add(q, g.surface.point(q.x, q.y)).map_err(|_| fail())?;

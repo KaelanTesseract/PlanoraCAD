@@ -47,7 +47,11 @@ pub fn tessellate(solid: &Solid, options: &TessellationOptions) -> Result<Mesh, 
             }
             _ => {
                 let g = planora_kernel::boolean::face_geom(solid, fid);
-                if crate::trimmed::is_trimmed(&g) {
+                // Freiformflächen immer über die Triangulierung im Parameterraum: Der Rand
+                // besteht dann genau aus den gemeinsamen Kantenpunkten (auch wenn die Kanten
+                // analytisch sind und ihre Teilpunkte nicht auf Parameterlinien des Rasters
+                // liegen), das Netz bleibt geschlossen.
+                if matches!(face.surface, Surface::Nurbs(_)) || crate::trimmed::is_trimmed(&g) {
                     let rings: Vec<Vec<DVec3>> = std::iter::once(&face.outer)
                         .chain(face.inner.iter())
                         .map(|lp| loop_points(lp, &polylines))
