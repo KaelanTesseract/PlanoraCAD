@@ -25,3 +25,12 @@ pub const MAX_COORD: f64 = 1e9;
 pub const MIN_WEIGHT: f64 = 1e-6;
 /// Größtes erlaubtes Gewicht.
 pub const MAX_WEIGHT: f64 = 1e6;
+/// Größter erlaubter Betrag eines Knotens und größte Länge des Parameterbereichs
+/// (verhindert Überlauf bei Knotendifferenzen).
+pub const MAX_KNOT_MAGNITUDE: f64 = 1e9;
+/// Kleinster erlaubter Abstand zweier verschiedener Knoten, bezogen auf die Länge des
+/// Parameterbereichs (verhindert unendliche Ableitungen und beim Spiegeln verschmelzende Knoten).
+pub const MIN_KNOT_GAP_RATIO: f64 = 1e-9;
+/// Höchste Ableitungsordnung, die Kurven und Basisfunktionen liefern (Ordnungen darüber
+/// werden darauf begrenzt; Ableitungen über dem Grad sind ohnehin 0).
+pub const MAX_DERIV_ORDER: usize = MAX_DEGREE;

@@ -227,17 +227,9 @@ impl NurbsSurface {
     }
 
     /// Dieselbe Fläche mit umgekehrter u-Richtung (gleicher Bereich); die Normale kehrt sich um.
-    pub fn reversed_u(&self) -> NurbsSurface {
-        let (a, b) = self.knots_u.domain();
-        let knots: Vec<f64> = self
-            .knots_u
-            .knots()
-            .iter()
-            .rev()
-            .map(|k| a + b - k)
-            .collect();
-        let knots_u = KnotVector::new(self.degree_u(), knots)
-            .expect("gespiegelter Knotenvektor eines gültigen Vektors ist gültig");
+    /// Fehler, wenn beim Spiegeln der Knoten Rundung Knoten verschmelzen ließe.
+    pub fn reversed_u(&self) -> Result<NurbsSurface, NurbsError> {
+        let knots_u = self.knots_u.mirrored()?;
         let mut control = Vec::with_capacity(self.control.len());
         let mut weights = Vec::with_capacity(self.weights.len());
         for i in (0..self.nu).rev() {
@@ -246,14 +238,14 @@ impl NurbsSurface {
                 weights.push(self.weight_at(i, j));
             }
         }
-        NurbsSurface {
+        Ok(NurbsSurface {
             knots_u,
             knots_v: self.knots_v.clone(),
             nu: self.nu,
             nv: self.nv,
             control,
             weights,
-        }
+        })
     }
 
     /// Homogene Kontrollpunkte als Gitter `[i][j]`.

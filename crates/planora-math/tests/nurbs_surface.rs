@@ -288,7 +288,7 @@ fn flatness_is_zero_for_planar_patches_and_does_not_grow_when_subdividing() {
 #[test]
 fn reversing_u_mirrors_the_parameter_and_flips_the_normal() {
     let s = sample();
-    let r = s.reversed_u();
+    let r = s.reversed_u().unwrap(); // mechanisch: reversed_u liefert jetzt Result
     for &(u, v) in &[(0.2, 0.3), (0.7, 0.6)] {
         assert!(r.point(1.0 - u, v).distance(s.point(u, v)) < 1e-12);
         assert!((r.normal(1.0 - u, v) + s.normal(u, v)).length() < 1e-9);

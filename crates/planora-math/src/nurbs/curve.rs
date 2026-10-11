@@ -1,6 +1,8 @@
 //! Rationale B-Spline-Kurve (NURBS) mit vollständiger Prüfung im Konstruktor.
 
-use super::{KnotVector, MAX_CONTROL_POINTS, MAX_COORD, MAX_WEIGHT, MIN_WEIGHT, NurbsError};
+use super::{
+    KnotVector, MAX_CONTROL_POINTS, MAX_COORD, MAX_DERIV_ORDER, MAX_WEIGHT, MIN_WEIGHT, NurbsError,
+};
 use crate::DVec3;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -33,12 +35,8 @@ impl NurbsCurve {
                 "zu viele Kontrollpunkte (höchstens {MAX_CONTROL_POINTS})"
             )));
         }
-        if control.len() < degree + 1 {
-            return Err(NurbsError::Control(format!(
-                "mindestens {} Kontrollpunkte nötig",
-                degree + 1
-            )));
-        }
+        // Zu wenige Kontrollpunkte fängt der Vergleich mit der Knotenzahl unten ab
+        // (KnotVector::new verlangt mindestens 2*(Grad+1) Knoten).
         if knots.basis_count() != control.len() {
             return Err(NurbsError::Knots(
                 "die Knotenzahl passt nicht zu Kontrollpunkten und Grad".into(),
@@ -100,7 +98,10 @@ impl NurbsCurve {
     /// C, C', C'', ... (`n + 1` Einträge) über homogene Ableitungen (A4.2):
     /// C^(k) = ( A^(k) − Σ_{i=1..k} binom(k,i) · w^(i) · C^(k−i) ) / w^(0),
     /// mit A = Σ N·w·P und w = Σ N·w.
+    /// `n` wird auf `MAX_DERIV_ORDER` begrenzt; das Ergebnis hat `min(n, MAX_DERIV_ORDER) + 1`
+    /// Einträge.
     pub fn derivs(&self, u: f64, n: usize) -> Vec<DVec3> {
+        let n = n.min(MAX_DERIV_ORDER);
         let p = self.knots.degree();
         let (a, b) = self.knots.domain();
         let u = if u.is_finite() { u.clamp(a, b) } else { a };
@@ -138,16 +139,14 @@ impl NurbsCurve {
     }
 
     /// Dieselbe Form in umgekehrter Richtung (gleicher Parameterbereich).
-    pub fn reversed(&self) -> NurbsCurve {
-        let (a, b) = self.domain();
-        let knots: Vec<f64> = self.knots.knots().iter().rev().map(|k| a + b - k).collect();
-        let knots = KnotVector::new(self.degree(), knots)
-            .expect("gespiegelter Knotenvektor eines gültigen Vektors ist gültig");
-        NurbsCurve {
+    /// Fehler, wenn beim Spiegeln der Knoten Rundung Knoten verschmelzen ließe.
+    pub fn reversed(&self) -> Result<NurbsCurve, NurbsError> {
+        let knots = self.knots.mirrored()?;
+        Ok(NurbsCurve {
             knots,
             control: self.control.iter().rev().copied().collect(),
             weights: self.weights.iter().rev().copied().collect(),
-        }
+        })
     }
 
     /// Affine Abbildung der Kontrollpunkte; die Prüfung läuft erneut.

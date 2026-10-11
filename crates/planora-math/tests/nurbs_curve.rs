@@ -215,7 +215,7 @@ fn reversal_keeps_the_shape() {
         vec![1.0, 2.0, 1.0, 0.5, 1.0],
     )
     .unwrap();
-    let r = c.reversed();
+    let r = c.reversed().unwrap(); // mechanisch: reversed liefert jetzt Result
     let (a, b) = c.domain();
     let (ra, rb) = r.domain();
     for i in 0..=20 {
@@ -224,4 +224,104 @@ fn reversal_keeps_the_shape() {
         let q = r.point(rb - (rb - ra) * f);
         assert!(p.distance(q) < 1e-12);
     }
+}
+
+#[test]
+fn reversing_never_panics_for_nearly_colliding_knots() {
+    // 1 - 1e-20 rundet auf 1.0: die Knoten müssen schon im Konstruktor abgewiesen werden.
+    let k = vec![0.0, 0.0, 0.0, 1e-20, 1.0, 1.0, 1.0];
+    let p = vec![DVec3::ZERO, DVec3::X, DVec3::Y, DVec3::Z];
+    assert!(NurbsCurve::new(2, k, p.clone(), vec![1.0; 4]).is_err());
+    // Gültige Kurve mit kleinster erlaubter Lücke: Spiegeln liefert Ok oder Err, nie Absturz.
+    let k = vec![0.0, 0.0, 0.0, 1e-8, 1.0, 1.0, 1.0];
+    let c = NurbsCurve::new(2, k, p, vec![1.0; 4]).unwrap();
+    let _ = c.reversed();
+}
+
+#[test]
+fn extreme_knots_are_rejected() {
+    let p = vec![DVec3::ZERO, DVec3::X, DVec3::Y, DVec3::Z];
+    let big = vec![-1e308, -1e308, -1e308, 0.0, 1e308, 1e308, 1e308];
+    assert!(
+        NurbsCurve::new(2, big, p.clone(), vec![1.0; 4]).is_err(),
+        "riesige Knoten"
+    );
+    let tiny = vec![0.0, 0.0, 0.0, 1e-300, 1.0, 1.0, 1.0];
+    assert!(
+        NurbsCurve::new(2, tiny, p, vec![1.0; 4]).is_err(),
+        "winzige Lücke"
+    );
+}
+
+#[test]
+fn derivative_order_is_capped() {
+    let c = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![DVec3::ZERO, DVec3::X, DVec3::Y],
+        vec![1.0; 3],
+    )
+    .unwrap();
+    let d = c.derivs(0.5, usize::MAX);
+    assert_eq!(d.len(), MAX_DERIV_ORDER + 1);
+    assert!(d.iter().all(|v| v.is_finite()));
+}
+
+#[test]
+fn accepted_random_knot_vectors_evaluate_finitely() {
+    // Fester Startwert (xorshift), kein Zufall zwischen Läufen.
+    let mut s: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut rnd = move || {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        (s >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let mut accepted = 0;
+    for _ in 0..3000 {
+        let p = 1 + (rnd() * 4.0) as usize;
+        let inner = (rnd() * 4.0) as usize;
+        let n = p + 1 + inner;
+        let scale = 10f64.powf(rnd() * 12.0 - 6.0);
+        let mut mid: Vec<f64> = (0..inner)
+            .map(|_| {
+                // Teils sehr nah an Nachbarn, teils Wiederholungen.
+                let r = rnd();
+                if r < 0.2 {
+                    (rnd() * 4.0).floor() / 4.0
+                } else if r < 0.3 {
+                    10f64.powf(-rnd() * 14.0)
+                } else {
+                    rnd()
+                }
+            })
+            .collect();
+        mid.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut k = vec![0.0; p + 1];
+        k.extend(mid.iter().copied());
+        k.extend(std::iter::repeat_n(1.0, p + 1));
+        let k: Vec<f64> = k.iter().map(|x| x * scale - scale * 0.3).collect();
+        let pts: Vec<DVec3> = (0..n)
+            .map(|i| DVec3::new(i as f64, (i * i) as f64 * 0.5, -(i as f64)))
+            .collect();
+        let w: Vec<f64> = (0..n).map(|_| 0.5 + rnd() * 3.0).collect();
+        let Ok(c) = NurbsCurve::new(p, k, pts, w) else {
+            continue;
+        };
+        accepted += 1;
+        let (a, b) = c.domain();
+        for _ in 0..50 {
+            let u = a + (b - a) * rnd();
+            assert!(c.point(u).is_finite(), "{:?} u={u}", c.knots().knots());
+            assert!(
+                c.derivs(u, 3).iter().all(|d| d.is_finite()),
+                "{:?} u={u}",
+                c.knots().knots()
+            );
+        }
+        if let Ok(r) = c.reversed() {
+            assert!(r.point(a).is_finite());
+        }
+    }
+    assert!(accepted > 300, "zu wenige gültige Fälle: {accepted}");
 }
