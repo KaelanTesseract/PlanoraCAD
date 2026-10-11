@@ -15,13 +15,37 @@ const NOT_SAVED: &str = "Das Dokument ist noch nicht gespeichert.";
 
 #[derive(Default)]
 pub struct VersionsUi {
-    /// Kommentar-Entwurf: Versionsnummer und Text (Fenster offen, wenn `Some`).
-    comment_edit: Option<(u32, String)>,
-    confirm_delete: Option<Confirm>,
+    /// Kommentar-Entwurf (Fenster offen, wenn `Some`).
+    comment_edit: Option<Pending<(u32, String)>>,
+    confirm_delete: Option<Pending<Confirm>>,
     /// Versionsbaum einer schreibgeschützten Ansicht ohne beschreibbaren Tab, gemerkt je Tab,
     /// damit die Dateien nicht in jedem Bild gelesen werden. Ungültig nach jeder Aktion und
     /// beim Wechsel des Tabs.
     view_cache: Option<(u64, Option<DocumentInfo>)>,
+}
+
+/// Eine offene Rückfrage gehört zu genau einem Tab und Dokument; wechselt der aktive Tab,
+/// verfällt sie.
+struct Pending<T> {
+    tab: u64,
+    path: Option<NodePath>,
+    what: T,
+}
+
+impl<T> Pending<T> {
+    fn new(ws: &Workspace, what: T) -> Pending<T> {
+        let t = ws.active_tab();
+        Pending {
+            tab: t.id,
+            path: t.path.clone(),
+            what,
+        }
+    }
+
+    fn valid(&self, ws: &Workspace) -> bool {
+        let t = ws.active_tab();
+        t.id == self.tab && t.path == self.path
+    }
 }
 
 enum Confirm {
@@ -123,19 +147,67 @@ pub fn set_comment(ws: &mut Workspace, n: u32, text: &str) {
 
 pub fn delete_version(ws: &mut Workspace, n: u32) {
     let Some(i) = writable(ws) else { return };
-    if let Some(store) = ws.tabs[i].store.as_mut()
-        && let Err(e) = store.delete_version(n)
-    {
-        notice(ws, e.to_string());
+    if let Err(e) = ws.delete_version(i, n) {
+        notice(ws, e);
     }
 }
 
 pub fn delete_branch(ws: &mut Workspace, name: &str) {
     let Some(i) = writable(ws) else { return };
-    if let Some(store) = ws.tabs[i].store.as_mut()
-        && let Err(e) = store.delete_branch(name)
-    {
-        notice(ws, e.to_string());
+    if let Err(e) = ws.delete_branch(i, name) {
+        notice(ws, e);
+    }
+}
+
+/// Öffnet die Rückfrage „Löschen“ für Version `n`; ohne beschreibbaren Tab steht stattdessen
+/// ein Hinweis.
+pub fn request_delete_version(ws: &mut Workspace, st: &mut VersionsUi, n: u32) {
+    if writable(ws).is_some() {
+        st.confirm_delete = Some(Pending::new(ws, Confirm::Version(n)));
+    }
+}
+
+/// Öffnet die Rückfrage „Zweig löschen“.
+pub fn request_delete_branch(ws: &mut Workspace, st: &mut VersionsUi, name: &str) {
+    if writable(ws).is_some() {
+        st.confirm_delete = Some(Pending::new(ws, Confirm::Branch(name.to_string())));
+    }
+}
+
+/// Öffnet das Fenster „Kommentar ändern“.
+pub fn request_comment(ws: &mut Workspace, st: &mut VersionsUi, n: u32, text: &str) {
+    if writable(ws).is_some() {
+        st.comment_edit = Some(Pending::new(ws, (n, text.to_string())));
+    }
+}
+
+/// Führt die offene Löschrückfrage aus, wenn sie noch zum aktiven Tab gehört.
+pub fn confirm_pending_delete(ws: &mut Workspace, st: &mut VersionsUi) {
+    st.view_cache = None;
+    let Some(p) = st.confirm_delete.take() else {
+        return;
+    };
+    if !p.valid(ws) {
+        return;
+    }
+    match &p.what {
+        Confirm::Version(n) => delete_version(ws, *n),
+        Confirm::Branch(b) => delete_branch(ws, b),
+    }
+}
+
+/// Gibt es eine offene Rückfrage oder ein offenes Kommentarfenster?
+pub fn has_pending(st: &VersionsUi) -> bool {
+    st.confirm_delete.is_some() || st.comment_edit.is_some()
+}
+
+/// Verwirft offene Rückfragen, die nicht zum aktiven Tab gehören.
+fn drop_stale(ws: &Workspace, st: &mut VersionsUi) {
+    if st.confirm_delete.as_ref().is_some_and(|p| !p.valid(ws)) {
+        st.confirm_delete = None;
+    }
+    if st.comment_edit.as_ref().is_some_and(|p| !p.valid(ws)) {
+        st.comment_edit = None;
     }
 }
 
@@ -169,6 +241,8 @@ enum Action {
     Restore(u32),
     Branch(u32),
     Comment(u32, String),
+    AskDelete(u32),
+    AskDeleteBranch(String),
     Switch(String),
 }
 
@@ -184,6 +258,8 @@ fn current_info(ws: &Workspace, st: &mut VersionsUi) -> Option<Result<DocumentIn
         ws.tab_for_path(path).map(|i| &ws.tabs[i])
     };
     if let Some(info) = live.and_then(|t| t.store.as_ref()).map(|s| s.info()) {
+        // der Stand der Ansicht kann sich geändert haben, solange sie nicht angezeigt wurde
+        st.view_cache = None;
         return Some(Ok(info.clone()));
     }
     if st.view_cache.as_ref().map(|c| c.0) != Some(tab.id) {
@@ -194,6 +270,7 @@ fn current_info(ws: &Workspace, st: &mut VersionsUi) -> Option<Result<DocumentIn
 
 /// Zeichnet das Panel; solange eine Rückfrage offen ist, ist es gesperrt.
 pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi) {
+    drop_stale(ws, st);
     let enabled = ws.prompt.is_none();
     ui.add_enabled_ui(enabled, |ui| show_enabled(ui, ws, st));
 }
@@ -215,6 +292,7 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi) {
         let t = ws.active_tab();
         (t.read_only, t.is_dirty(), t.based_on)
     };
+    let can_write = active_path(ws).and_then(|p| ws.tab_for_path(&p)).is_some();
     let mut actions = Vec::new();
     if read_only {
         ui.label("Du siehst eine alte Version.");
@@ -269,20 +347,25 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi) {
                 actions.push(Action::Branch(r.number));
                 ui.close();
             }
-            if ui.button("Kommentar ändern …").clicked() {
+            let w = |ui: &mut egui::Ui, label: &str| {
+                ui.add_enabled(can_write, egui::Button::new(label))
+                    .on_disabled_hover_text(OPEN_EDITABLE)
+                    .clicked()
+            };
+            if w(ui, "Kommentar ändern …") {
                 actions.push(Action::Comment(r.number, v.comment.clone()));
                 ui.close();
             }
-            if ui.button("Löschen …").clicked() {
-                st.confirm_delete = Some(Confirm::Version(r.number));
+            if w(ui, "Löschen …") {
+                actions.push(Action::AskDelete(r.number));
                 ui.close();
             }
             if r.is_tip {
-                if ui.button("Zweig löschen …").clicked() {
-                    st.confirm_delete = Some(Confirm::Branch(r.branch.clone()));
+                if w(ui, "Zweig löschen …") {
+                    actions.push(Action::AskDeleteBranch(r.branch.clone()));
                     ui.close();
                 }
-                if ui.button("Zu diesem Zweig wechseln").clicked() {
+                if w(ui, "Zu diesem Zweig wechseln") {
                     actions.push(Action::Switch(r.branch.clone()));
                     ui.close();
                 }
@@ -295,27 +378,32 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi) {
             Action::Open(n) => open_version(ws, n),
             Action::Restore(n) => restore(ws, n),
             Action::Branch(n) => branch_from(ws, n),
-            Action::Comment(n, text) => st.comment_edit = Some((n, text)),
+            Action::Comment(n, text) => request_comment(ws, st, n, &text),
+            Action::AskDelete(n) => request_delete_version(ws, st, n),
+            Action::AskDeleteBranch(b) => request_delete_branch(ws, st, &b),
             Action::Switch(name) => switch_branch(ws, &name),
         }
     }
     if acted {
         st.view_cache = None;
     }
-    dialogs(ui.ctx(), ws, st);
+    // die Fenster sind eigene Ebenen: nur zeichnen, solange keine Rückfrage des Programms offen ist
+    if ws.prompt.is_none() {
+        dialogs(ui.ctx(), ws, st);
+    }
 }
 
 /// Fenster „Kommentar ändern“ und Rückfrage „Löschen“.
 fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
-    if let Some((n, mut text)) = st.comment_edit.take() {
+    if let Some(mut p) = st.comment_edit.take() {
         let mut keep = true;
         let mut apply = false;
         egui::Window::new("Kommentar ändern")
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.label(format!("Kommentar zu v{n}"));
-                ui.add(egui::TextEdit::singleline(&mut text));
+                ui.label(format!("Kommentar zu v{}", p.what.0));
+                ui.add(egui::TextEdit::singleline(&mut p.what.1));
                 ui.horizontal(|ui| {
                     if ui.button("Übernehmen").clicked() {
                         apply = true;
@@ -327,15 +415,15 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
                 });
             });
         if apply {
+            let (n, text) = p.what.clone();
             set_comment(ws, n, &text);
             st.view_cache = None;
-        }
-        if keep {
-            st.comment_edit = Some((n, text));
+        } else if keep {
+            st.comment_edit = Some(p);
         }
     }
-    if let Some(c) = st.confirm_delete.take() {
-        let question = match &c {
+    if let Some(p) = st.confirm_delete.take() {
+        let question = match &p.what {
             Confirm::Version(n) => format!("Version v{n} endgültig löschen?"),
             Confirm::Branch(b) => {
                 format!("Zweig „{b}“ mit allen seinen Versionen endgültig löschen?")
@@ -358,14 +446,11 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
             });
         match answer {
             Some(true) => {
-                match &c {
-                    Confirm::Version(n) => delete_version(ws, *n),
-                    Confirm::Branch(b) => delete_branch(ws, b),
-                }
-                st.view_cache = None;
+                st.confirm_delete = Some(p);
+                confirm_pending_delete(ws, st);
             }
             Some(false) => {}
-            None => st.confirm_delete = Some(c),
+            None => st.confirm_delete = Some(p),
         }
     }
 }

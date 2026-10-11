@@ -726,6 +726,44 @@ impl Workspace {
         Ok(())
     }
 
+    /// Löscht Version `n` über den beschreibbaren Tab `i`. Beruht der Tab auf dieser Version,
+    /// beruht er danach auf der neuen Spitze ihres Zweigs (sonst auf der des aktiven Zweigs),
+    /// damit Speichern weiter möglich ist. Offene Ansichten bleiben als Kopien bestehen.
+    pub fn delete_version(&mut self, i: usize, n: u32) -> Result<(), String> {
+        let tab = self.tabs.get_mut(i).ok_or("Kein solcher Tab.")?;
+        let store = tab
+            .store
+            .as_mut()
+            .ok_or("Das Dokument ist nicht gespeichert.")?;
+        let branch = store.info().version(n).map(|v| v.branch.clone());
+        store.delete_version(n).map_err(err)?;
+        Self::fix_based_on(tab, branch.as_deref());
+        Ok(())
+    }
+
+    /// Löscht den Zweig `name` über den beschreibbaren Tab `i` (siehe `delete_version`).
+    pub fn delete_branch(&mut self, i: usize, name: &str) -> Result<(), String> {
+        let tab = self.tabs.get_mut(i).ok_or("Kein solcher Tab.")?;
+        let store = tab
+            .store
+            .as_mut()
+            .ok_or("Das Dokument ist nicht gespeichert.")?;
+        store.delete_branch(name).map_err(err)?;
+        Self::fix_based_on(tab, Some(name));
+        Ok(())
+    }
+
+    fn fix_based_on(tab: &mut DocTab, branch: Option<&str>) {
+        let Some(store) = &tab.store else { return };
+        let info = store.info();
+        if tab.based_on.is_some_and(|b| info.version(b).is_none()) {
+            let new = branch
+                .and_then(|b| info.tip(b))
+                .or_else(|| info.tip(&info.active_branch));
+            tab.based_on = new;
+        }
+    }
+
     /// Wählt die Wurzel (Projektordner, wird bei Bedarf angelegt) und merkt sie in der
     /// Konfiguration (gespeichert wird mit `persist_config`).
     pub fn choose_root(&mut self, root: &Path) -> Result<(), String> {

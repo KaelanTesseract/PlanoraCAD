@@ -179,3 +179,104 @@ fn switching_the_branch_opens_its_tip_as_a_view() {
     switch_branch(&mut w, "Gibtsnicht");
     assert!(matches!(w.prompt, Some(Prompt::Notice(_))));
 }
+
+fn the_writable(w: &Workspace) -> &DocTab {
+    w.tabs.iter().find(|t| !t.read_only).unwrap()
+}
+
+#[test]
+fn deleting_the_current_version_keeps_the_tab_saveable() {
+    let mut w = ws_with_doc(3);
+    assert_eq!(w.active_tab().based_on, Some(3));
+    delete_version(&mut w, 3);
+    assert!(w.prompt.is_none(), "{:?}", w.prompt);
+    assert_eq!(w.active_tab().based_on, Some(2));
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(11.0))
+        .unwrap();
+    let SaveOutcome::Saved(n) = w.save_active("neu", None).unwrap() else {
+        panic!("not saved");
+    };
+    let info = the_writable(&w).version_info().unwrap();
+    let v = info.version(n).unwrap();
+    assert_eq!((v.parent, v.branch.as_str()), (Some(2), "Haupt"));
+}
+
+#[test]
+fn deleting_the_branch_of_the_current_version_keeps_the_tab_saveable() {
+    let mut w = ws_with_doc(2);
+    let path = w.active_tab().path.clone().unwrap();
+    w.close_tab(w.tab_for_path(&path).unwrap());
+    w.open_version(&path, 1).unwrap();
+    branch_from(&mut w, 1);
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(7.0))
+        .unwrap();
+    assert_eq!(
+        w.save_active("", Some("Variante")).unwrap(),
+        SaveOutcome::Saved(3)
+    );
+    switch_branch(&mut w, "Haupt");
+    assert!(w.prompt.is_none(), "{:?}", w.prompt);
+    delete_branch(&mut w, "Variante");
+    assert!(w.prompt.is_none(), "{:?}", w.prompt);
+    let i = w.tab_for_path(&path).unwrap();
+    assert_eq!(w.tabs[i].based_on, Some(2));
+    w.activate(i);
+    let SaveOutcome::Saved(n) = w.save_active("x", None).unwrap() else {
+        panic!("not saved");
+    };
+    let info = w.tabs[i].version_info().unwrap();
+    assert_eq!(info.version(n).unwrap().parent, Some(2));
+}
+
+#[test]
+fn the_view_tree_is_refreshed_after_the_writable_tab_saved() {
+    let c = ctx();
+    let mut w = ws_with_doc(2);
+    let path = w.active_tab().path.clone().unwrap();
+    let mut st = VersionsUi::default();
+    open_version(&mut w, 1);
+    let t = frame(&c, &mut w, &mut st);
+    assert!(!t.contains("v3"), "{t}");
+    let i = w.tab_for_path(&path).unwrap();
+    w.activate(i);
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(5.0))
+        .unwrap();
+    w.save_active("drei", None).unwrap();
+    frame(&c, &mut w, &mut st);
+    w.close_tab(i);
+    // die Ansicht rückt nach dem Schließen des beschreibbaren Tabs nach vorn
+    w.activate(0);
+    assert!(w.active_tab().read_only);
+    let t = frame(&c, &mut w, &mut st);
+    assert!(t.contains("v3"), "{t}");
+}
+
+#[test]
+fn a_pending_delete_does_not_follow_a_tab_switch() {
+    let c = ctx();
+    let mut w = ws_with_doc(3);
+    let a = w.active;
+    let mut st = VersionsUi::default();
+    request_delete_version(&mut w, &mut st, 3);
+    assert!(has_pending(&st));
+    w.new_tab();
+    confirm_pending_delete(&mut w, &mut st);
+    assert!(w.prompt.is_none());
+    assert_eq!(w.tabs[a].version_info().unwrap().versions.len(), 3);
+    // und über die Oberfläche: das Fenster verschwindet beim Wechsel
+    w.activate(a);
+    request_delete_version(&mut w, &mut st, 3);
+    w.new_tab();
+    frame(&c, &mut w, &mut st);
+    assert!(!has_pending(&st));
+    // ohne beschreibbaren Tab öffnet sich keine Rückfrage, nur ein Hinweis
+    request_delete_version(&mut w, &mut st, 3);
+    assert!(!has_pending(&st));
+    assert!(matches!(w.prompt, Some(Prompt::Notice(_))));
+}
