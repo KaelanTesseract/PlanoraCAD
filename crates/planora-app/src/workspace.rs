@@ -159,6 +159,9 @@ pub struct Workspace {
     pub config: Config,
     pub prompt: Option<Prompt>,
     pub quit: bool,
+    /// Zählt Änderungen an der Bibliothek auf der Festplatte, die über den Arbeitsbereich laufen
+    /// (Speichern unter, Wurzelwechsel); das Projekt-Panel liest danach den Baum neu.
+    pub library_revision: u64,
     pub autosave_interval: Duration,
     next_tab_id: u64,
     untitled: usize,
@@ -184,6 +187,7 @@ impl Workspace {
             config,
             prompt: None,
             quit: false,
+            library_revision: 0,
             autosave_interval: AUTOSAVE_INTERVAL,
             next_tab_id: 1,
             untitled: 0,
@@ -423,6 +427,7 @@ impl Workspace {
         tab.pending_autosave = None;
         tab.keep_autosave = false;
         tab.mark_clean();
+        self.library_revision += 1;
         Ok(path)
     }
 
@@ -779,6 +784,7 @@ impl Workspace {
         let lib = Library::open(root).map_err(err)?;
         self.library = Some(lib);
         self.config.root = Some(root.to_path_buf());
+        self.library_revision += 1;
         Ok(())
     }
 

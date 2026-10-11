@@ -167,3 +167,16 @@ fn notes_are_not_lost_when_an_autosave_is_offered() {
     );
     let _ = LockMode::Acquire;
 }
+
+#[test]
+fn a_save_as_through_the_workspace_shows_up_without_refresh() {
+    let c = ctx();
+    let mut w = ws();
+    let mut st = ProjectsUi::default();
+    let p = create_project(&mut w, &mut st, "Gehäuse").unwrap();
+    let t = frame(&c, &mut w, &mut st);
+    assert!(!t.contains("Neuteil"), "{t}");
+    w.save_as(&p, "Neuteil", "").unwrap();
+    let t = frame(&c, &mut w, &mut st);
+    assert!(t.contains("Neuteil"), "{t}");
+}

@@ -36,6 +36,8 @@ pub struct ProjectsUi {
     confirm_delete: Option<NodePath>,
     /// Eingabe „Wurzel wählen“ (offen, wenn `Some`).
     root_text: Option<String>,
+    /// Letzte gesehene `Workspace::library_revision`.
+    seen_revision: u64,
 }
 
 impl ProjectsUi {
@@ -202,7 +204,24 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut ProjectsUi) {
     ui.add_enabled_ui(enabled, |ui| show_enabled(ui, ws, st));
 }
 
+/// Pfad für die Anzeige ohne das Windows-Präfix für lange Pfade (`\\?\`; bei Netzpfaden wird
+/// `\\?\UNC\` zu `\\`). Für Dateizugriffe gilt weiter der echte Pfad.
+pub fn display_path(path: &Path) -> String {
+    let s = path.display().to_string();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        s
+    }
+}
+
 fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut ProjectsUi) {
+    if st.seen_revision != ws.library_revision {
+        st.seen_revision = ws.library_revision;
+        st.invalidate();
+    }
     let Some(root) = ws.library.as_ref().map(|l| l.root().path().to_path_buf()) else {
         ui.label(NO_LIBRARY);
         ui.add_space(4.0);
@@ -222,7 +241,7 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut ProjectsUi) {
         return;
     };
 
-    ui.small(root.display().to_string());
+    ui.small(display_path(&root));
     ui.horizontal_wrapped(|ui| {
         if ui.button("Neues Projekt").clicked() {
             st.new_project = Some(String::new());
@@ -231,7 +250,7 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut ProjectsUi) {
             st.invalidate();
         }
         if ui.button("Wurzel wählen …").clicked() {
-            st.root_text = Some(root.display().to_string());
+            st.root_text = Some(display_path(&root));
         }
     });
     if let Some(name) = &mut st.new_project {
@@ -559,6 +578,14 @@ mod tests {
         let t = collect_texts(&out);
         out.drop_without_applying_deltas();
         t
+    }
+
+    #[test]
+    fn the_verbatim_prefix_is_hidden_in_the_display_only() {
+        assert_eq!(display_path(Path::new(r"\\?\C:\Users\x")), r"C:\Users\x");
+        assert_eq!(display_path(Path::new(r"\\?\UNC\srv\frei")), r"\\srv\frei");
+        assert_eq!(display_path(Path::new(r"C:\a")), r"C:\a");
+        assert_eq!(display_path(Path::new("/home/x")), "/home/x");
     }
 
     #[test]
