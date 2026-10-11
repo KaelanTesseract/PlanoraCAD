@@ -34,7 +34,12 @@ pub struct DocTab {
     /// Version, auf der der Stand beruht.
     pub based_on: Option<u32>,
     pub read_only: bool,
+    /// Angebotene, noch nicht beantwortete Autosicherung. Solange sie offen ist, wird die
+    /// Datei weder überschrieben noch gelöscht (sie ist nach einem Absturz die einzige Kopie).
     pub pending_autosave: Option<Autosave>,
+    /// Eine vorhandene Autosicherung ließ sich nicht lesen (z. B. von einer neueren
+    /// Programmversion). Sie bleibt unangetastet: keine neue Autosicherung, kein Löschen.
+    keep_autosave: bool,
     saved_edits: u64,
     autosaved_edits: u64,
     last_autosave: Instant,
@@ -56,6 +61,7 @@ impl DocTab {
             based_on: None,
             read_only: false,
             pending_autosave: None,
+            keep_autosave: false,
             saved_edits: edits,
             autosaved_edits: edits,
             last_autosave: Instant::now(),
@@ -84,6 +90,11 @@ impl DocTab {
             (None, Some(dir)) => peek(dir).ok().map(|(i, _)| i),
             _ => None,
         }
+    }
+
+    /// Darf die Autosicherungsdatei dieses Tabs geschrieben oder gelöscht werden?
+    fn owns_autosave(&self) -> bool {
+        self.pending_autosave.is_none() && !self.keep_autosave
     }
 
     fn mark_clean(&mut self) {
@@ -246,6 +257,8 @@ impl Workspace {
     }
 
     /// Schließt einen Tab ohne Rückfrage; nach dem letzten entsteht ein frischer leerer Tab.
+    /// Eine vorhandene `.autosave.json` des Dokuments bleibt liegen (auch beim Verwerfen) und
+    /// wird beim nächsten Öffnen wieder angeboten.
     pub fn close_tab(&mut self, i: usize) {
         if i >= self.tabs.len() {
             return;
@@ -258,11 +271,34 @@ impl Workspace {
         }
     }
 
-    /// `true` = geschlossen, `false` = Rückfrage (steht in `prompt`).
+    /// Hebt ein offenes Autosicherungs-Angebot wieder als Prompt hervor, wenn gerade keiner
+    /// steht. Die Oberfläche ruft das in jedem Bild vor dem Zeichnen der Prompts auf; so geht
+    /// kein Angebot verloren, auch wenn mehrere Dokumente mit Autosicherung geöffnet wurden.
+    pub fn refresh_prompts(&mut self) {
+        if self.prompt.is_none()
+            && let Some(t) = self.tabs.iter().find(|t| t.pending_autosave.is_some())
+        {
+            self.prompt = Some(Prompt::AutosaveOffer { tab: t.id });
+        }
+    }
+
+    /// Steht (nach `refresh_prompts`) ein Autosicherungs-Angebot an? Dann muss es zuerst
+    /// beantwortet werden; Schließen und Beenden warten darauf.
+    fn autosave_offer_pending(&mut self) -> bool {
+        self.refresh_prompts();
+        matches!(self.prompt, Some(Prompt::AutosaveOffer { .. }))
+    }
+
+    /// `true` = geschlossen, `false` = Rückfrage (steht in `prompt`, auch ein noch offenes
+    /// Autosicherungs-Angebot, das zuerst beantwortet werden muss).
     pub fn request_close(&mut self, i: usize) -> bool {
-        let Some(t) = self.tabs.get(i) else {
+        if i >= self.tabs.len() {
             return true;
-        };
+        }
+        if self.autosave_offer_pending() {
+            return false;
+        }
+        let t = &self.tabs[i];
         if t.is_dirty() {
             self.prompt = Some(Prompt::SaveChanges {
                 tab: t.id,
@@ -275,8 +311,12 @@ impl Workspace {
         }
     }
 
-    /// `true` = darf beenden (setzt `quit`); sonst fragt `prompt` nach dem ersten geänderten Tab.
+    /// `true` = darf beenden (setzt `quit`); sonst fragt `prompt` nach dem ersten geänderten Tab
+    /// (oder zeigt ein noch offenes Autosicherungs-Angebot).
     pub fn request_quit(&mut self) -> bool {
+        if self.autosave_offer_pending() {
+            return false;
+        }
         if let Some(t) = self.tabs.iter().find(|t| t.is_dirty()) {
             self.prompt = Some(Prompt::SaveChanges {
                 tab: t.id,
@@ -328,7 +368,10 @@ impl Workspace {
         };
         match store.save(tab.based_on, &snapshot, comment, new_branch) {
             Ok(n) => {
-                store.discard_autosave();
+                if tab.pending_autosave.is_none() && !tab.keep_autosave {
+                    // nicht über owns_autosave(): `store` leiht `tab.store` gerade
+                    store.discard_autosave();
+                }
                 tab.based_on = Some(n);
                 tab.mark_clean();
                 Ok(SaveOutcome::Saved(n))
@@ -361,6 +404,11 @@ impl Workspace {
         let mut path = parent.clone();
         path.push(format!("{name}.pcad"));
         let dir = lib.root().resolve(&path).map_err(err)?;
+        // vor dem Schließen einer offenen Skizze prüfen, damit ein vergebener Name den Tab
+        // nicht verändert (DocStore::create prüft das noch einmal, gegen Wettläufe)
+        if dir.exists() {
+            return Err(err(ProjectError::Exists(dir.display().to_string())));
+        }
         let i = self.active_index();
         let tab = &mut self.tabs[i];
         tab.state.try_close_sketch()?;
@@ -371,6 +419,9 @@ impl Workspace {
         tab.based_on = Some(1);
         tab.read_only = false;
         tab.source_dir = None;
+        // ein Angebot des bisherigen Dokuments gilt nicht für das neue; seine Datei bleibt dort
+        tab.pending_autosave = None;
+        tab.keep_autosave = false;
         tab.mark_clean();
         Ok(path)
     }
@@ -466,14 +517,17 @@ impl Workspace {
         }
         // Eine Autosicherung existiert nur, wenn das letzte Speichern nicht abgeschlossen wurde;
         // „>=“, weil Zeitstempel sekundengenau sind.
+        let mut keep_autosave = false;
         let autosave = match store.read_autosave() {
             Ok(Some(a)) if a.time.as_str() >= store.info().latest_time() => Some(a),
             Ok(_) => None,
+            // Die Datei bleibt erhalten (nach einem Absturz womöglich die einzige Kopie, oder
+            // von einer neueren Programmversion); sie wird weder angeboten noch überschrieben.
             Err(e) => {
                 notes.push(format!(
-                    "Die Autosicherung ist unlesbar und wird ignoriert: {e}"
+                    "Die Autosicherung lässt sich nicht lesen und wird nicht verwendet; die Datei bleibt erhalten: {e}"
                 ));
-                store.discard_autosave();
+                keep_autosave = true;
                 None
             }
         };
@@ -487,8 +541,11 @@ impl Workspace {
         tab.store = Some(store);
         tab.based_on = Some(v);
         tab.pending_autosave = autosave;
+        tab.keep_autosave = keep_autosave;
         let i = self.push_tab(tab);
-        if offered {
+        // ein schon stehender Prompt (z. B. das Angebot eines anderen Dokuments) bleibt;
+        // `refresh_prompts` bietet diese Sicherung danach an
+        if offered && self.prompt.is_none() {
             self.prompt = Some(Prompt::AutosaveOffer { tab: id });
         }
         Ok(OpenResult {
@@ -498,11 +555,16 @@ impl Workspace {
         })
     }
 
-    /// Übernimmt die angebotene Autosicherung in den Tab (gilt danach als ungespeichert).
-    pub fn apply_autosave(&mut self, tab: u64) {
-        if matches!(self.prompt, Some(Prompt::AutosaveOffer { .. })) {
+    /// Nimmt das Angebot für `tab` aus dem Prompt und hebt das nächste offene hervor.
+    fn close_autosave_offer(&mut self, tab: u64) {
+        if matches!(self.prompt, Some(Prompt::AutosaveOffer { tab: t }) if t == tab) {
             self.prompt = None;
         }
+    }
+
+    /// Übernimmt die angebotene Autosicherung in den Tab (gilt danach als ungespeichert).
+    pub fn apply_autosave(&mut self, tab: u64) {
+        self.close_autosave_offer(tab);
         let Some(i) = self.tab_index(tab) else { return };
         let Some(a) = self.tabs[i].pending_autosave.take() else {
             return;
@@ -518,24 +580,29 @@ impl Workspace {
                 t.saved_edits = u64::MAX;
             }
             Err(e) => {
+                // Datei unangetastet lassen
+                self.tabs[i].keep_autosave = true;
                 self.prompt = Some(Prompt::Notice(format!(
-                    "Die Autosicherung lässt sich nicht laden: {e}"
+                    "Die Autosicherung lässt sich nicht laden; die Datei bleibt erhalten: {e}"
                 )))
             }
         }
+        self.refresh_prompts();
     }
 
     /// Verwirft die angebotene Autosicherung und löscht ihre Datei.
     pub fn discard_autosave(&mut self, tab: u64) {
-        if matches!(self.prompt, Some(Prompt::AutosaveOffer { .. })) {
-            self.prompt = None;
-        }
+        self.close_autosave_offer(tab);
         if let Some(i) = self.tab_index(tab) {
-            self.tabs[i].pending_autosave = None;
-            if let Some(s) = &self.tabs[i].store {
+            let t = &mut self.tabs[i];
+            t.pending_autosave = None;
+            if let Some(s) = &t.store
+                && !t.keep_autosave
+            {
                 s.discard_autosave();
             }
         }
+        self.refresh_prompts();
     }
 
     /// Öffnet Version `n` schreibgeschützt (ein zweites Mal: nur dorthin springen).
@@ -601,24 +668,37 @@ impl Workspace {
     /// Stellt Version `n` wieder her: neue Version am Zweig des beschreibbaren Tabs dieses
     /// Dokuments (bei einer Ansicht: im schon offenen beschreibbaren Tab, sonst wird die Ansicht
     /// bearbeitbar). Danach zeigt der beschreibbare Tab den Stand und ist aktiv. Ungespeicherte
-    /// Änderungen im Zieltab verhindern das Wiederherstellen.
+    /// Änderungen im Zieltab verhindern das Wiederherstellen. Schlägt es fehl, nachdem die
+    /// Ansicht dafür bearbeitbar gemacht wurde, wird sie wieder zur schreibgeschützten Ansicht
+    /// (Sperre freigegeben).
     pub fn restore_version(&mut self, i: usize, n: u32) -> Result<(), String> {
         let read_only = self.tabs.get(i).ok_or("Kein solcher Tab.")?.read_only;
-        let target = if read_only {
+        let (target, made_editable) = if read_only {
             match self.tabs[i]
                 .path
                 .as_ref()
                 .and_then(|p| self.tab_for_path(p))
             {
-                Some(j) => j,
+                Some(j) => (j, false),
                 None => {
                     self.make_editable(i)?;
-                    i
+                    (i, true)
                 }
             }
         } else {
-            i
+            (i, false)
         };
+        let result = self.restore_into(target, n);
+        if result.is_err() && made_editable {
+            let tab = &mut self.tabs[target];
+            tab.source_dir = tab.store.take().map(|s| s.dir().to_path_buf());
+            tab.read_only = true;
+            tab.mark_clean();
+        }
+        result
+    }
+
+    fn restore_into(&mut self, target: usize, n: u32) -> Result<(), String> {
         let tab = &mut self.tabs[target];
         if tab.is_dirty() {
             return Err(
@@ -661,11 +741,19 @@ impl Workspace {
     }
 
     /// Schreibt für geänderte, gespeicherte Dokumente eine Autosicherung, wenn das Intervall
-    /// seit der letzten abgelaufen ist.
+    /// seit der letzten abgelaufen ist. Gesichert wird der Dokumentstand; der Entwurf einer
+    /// gerade offenen Skizze ist nicht darin (er kommt erst beim Schließen der Skizze ins
+    /// Dokument). Tabs mit unbeantwortetem Angebot oder unlesbarer Sicherung werden
+    /// übersprungen, damit deren Datei nicht überschrieben wird. Auch ein fehlgeschlagener
+    /// Versuch zählt als Versuch: der nächste kommt erst nach dem Intervall.
     pub fn autosave_tick(&mut self, now: Instant) {
         let interval = self.autosave_interval;
         for t in &mut self.tabs {
-            if t.read_only || !t.is_dirty() || t.state.document.edit_count() == t.autosaved_edits {
+            if t.read_only
+                || !t.owns_autosave()
+                || !t.is_dirty()
+                || t.state.document.edit_count() == t.autosaved_edits
+            {
                 continue;
             }
             if now.saturating_duration_since(t.last_autosave) < interval {
@@ -677,8 +765,8 @@ impl Workspace {
                 .is_ok()
             {
                 t.autosaved_edits = t.state.document.edit_count();
-                t.last_autosave = now;
             }
+            t.last_autosave = now;
         }
     }
 }

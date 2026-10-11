@@ -516,3 +516,70 @@ mod random {
         }
     }
 }
+
+#[test]
+fn a_store_whose_lock_was_taken_over_writes_nothing() {
+    let p = dir();
+    let mut old = DocStore::create(&p, &snap(1), "").unwrap();
+    old.save(Some(1), &snap(2), "", None).unwrap();
+    let (new, _) = DocStore::open(&p, LockMode::TakeOver).unwrap();
+    new.write_autosave(Some(2), &snap(3)).unwrap();
+    let listing = |p: &PathBuf| {
+        let mut v: Vec<(String, Vec<u8>)> = std::fs::read_dir(p.join(VERSIONS_DIR))
+            .unwrap()
+            .flatten()
+            .map(|e| {
+                (
+                    e.file_name().to_string_lossy().to_string(),
+                    std::fs::read(e.path()).unwrap(),
+                )
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    let doc_before = std::fs::read(p.join("dokument.json")).unwrap();
+    let auto_before = std::fs::read(p.join(AUTOSAVE_FILE)).unwrap();
+    let versions_before = listing(&p);
+    assert!(matches!(
+        old.save(Some(2), &snap(4), "", None),
+        Err(ProjectError::LockLost)
+    ));
+    assert!(matches!(
+        old.restore(1, MAIN_BRANCH),
+        Err(ProjectError::LockLost)
+    ));
+    assert!(matches!(
+        old.set_comment(1, "x"),
+        Err(ProjectError::LockLost)
+    ));
+    assert!(matches!(
+        old.set_active_branch(MAIN_BRANCH),
+        Err(ProjectError::LockLost)
+    ));
+    assert!(matches!(old.delete_version(2), Err(ProjectError::LockLost)));
+    assert!(matches!(
+        old.delete_branch("Nebenzweig"),
+        Err(ProjectError::LockLost)
+    ));
+    assert!(matches!(
+        old.write_autosave(Some(2), &snap(5)),
+        Err(ProjectError::LockLost)
+    ));
+    old.discard_autosave();
+    assert_eq!(std::fs::read(p.join("dokument.json")).unwrap(), doc_before);
+    assert_eq!(std::fs::read(p.join(AUTOSAVE_FILE)).unwrap(), auto_before);
+    assert_eq!(listing(&p), versions_before);
+    assert_eq!(
+        old.info().versions.len(),
+        2,
+        "auch der Speicher im Arbeitsspeicher bleibt"
+    );
+    drop(old);
+    // die übernommene Sperre bleibt beim neuen Besitzer
+    assert!(matches!(
+        DocStore::open(&p, LockMode::Acquire),
+        Err(ProjectError::Locked { .. })
+    ));
+    drop(new);
+}

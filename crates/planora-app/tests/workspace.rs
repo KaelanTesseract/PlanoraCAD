@@ -387,3 +387,146 @@ fn choosing_a_root_creates_it_and_remembers_it() {
     assert!(w.library.is_some());
     assert_eq!(w.config.root.as_deref(), Some(r.as_path()));
 }
+
+// ---- Nachbesserung 1 ---------------------------------------------------------------
+
+/// Schreibt für das Dokument `name` (aktiver Tab) eine Autosicherung mit einem Quader mehr
+/// und schließt den Tab („Absturz“).
+fn crash_with_autosave(w: &mut Workspace, name: &str) -> NodePath {
+    let path = saved_document(w, name, 1);
+    w.autosave_interval = Duration::ZERO;
+    add_box(w);
+    w.autosave_tick(Instant::now());
+    w.close_tab(w.tab_for_path(&path).unwrap());
+    path
+}
+
+fn autosave_bytes(w: &Workspace, path: &NodePath) -> Option<Vec<u8>> {
+    let dir = w.library.as_ref().unwrap().document_dir(path).unwrap();
+    std::fs::read(dir.join(".autosave.json")).ok()
+}
+
+#[test]
+fn an_unreadable_autosave_is_kept_reported_and_never_overwritten() {
+    let mut w = ws();
+    let path = saved_document(&mut w, "Teil", 1);
+    let dir = w.library.as_ref().unwrap().document_dir(&path).unwrap();
+    w.close_tab(0);
+    let foreign = r#"{"format":99,"basiert_auf":1,"zeit":"9999-01-01T00:00:00Z","inhalt":""}"#;
+    std::fs::write(dir.join(".autosave.json"), foreign).unwrap();
+    let r = w.open_document(&path, LockMode::Acquire).unwrap();
+    assert!(!r.autosave_offered);
+    assert!(
+        r.notes.iter().any(|n| n.contains("Autosicherung")),
+        "{:?}",
+        r.notes
+    );
+    assert!(w.prompt.is_none());
+    assert_eq!(autosave_bytes(&w, &path).unwrap(), foreign.as_bytes());
+    // weder Autosicherung noch Speichern überschreiben oder löschen die Datei
+    w.autosave_interval = Duration::ZERO;
+    add_box(&mut w);
+    w.autosave_tick(Instant::now());
+    assert_eq!(autosave_bytes(&w, &path).unwrap(), foreign.as_bytes());
+    w.save_active("", None).unwrap();
+    assert_eq!(autosave_bytes(&w, &path).unwrap(), foreign.as_bytes());
+}
+
+#[test]
+fn two_autosave_offers_in_a_row_are_both_reachable_and_not_overwritten() {
+    let mut w = ws();
+    let a = crash_with_autosave(&mut w, "A");
+    let b = crash_with_autosave(&mut w, "B");
+    let a_before = autosave_bytes(&w, &a).unwrap();
+    let ra = w.open_document(&a, LockMode::Acquire).unwrap();
+    assert!(ra.autosave_offered);
+    let id_a = w.tabs[ra.tab].id;
+    assert!(matches!(w.prompt, Some(Prompt::AutosaveOffer { tab }) if tab == id_a));
+    // Bearbeiten vor der Antwort überschreibt die Absturzsicherung nicht
+    add_box(&mut w);
+    w.autosave_tick(Instant::now());
+    assert_eq!(autosave_bytes(&w, &a).unwrap(), a_before);
+    let rb = w.open_document(&b, LockMode::Acquire).unwrap();
+    assert!(rb.autosave_offered);
+    let id_b = w.tabs[rb.tab].id;
+    assert!(
+        matches!(w.prompt, Some(Prompt::AutosaveOffer { tab }) if tab == id_a),
+        "erstes Angebot bleibt"
+    );
+    // Schließen und Beenden warten auf die Antwort
+    assert!(!w.request_quit());
+    assert!(!w.quit);
+    assert!(!w.request_close(rb.tab));
+    assert_eq!(w.tabs.len(), 2);
+    assert!(matches!(w.prompt, Some(Prompt::AutosaveOffer { tab }) if tab == id_a));
+    // ein anderer Prompt verdrängt das Angebot nur vorübergehend
+    w.prompt = Some(Prompt::Notice("x".into()));
+    w.refresh_prompts();
+    assert!(matches!(w.prompt, Some(Prompt::Notice(_))));
+    w.prompt = None;
+    w.refresh_prompts();
+    assert!(matches!(w.prompt, Some(Prompt::AutosaveOffer { tab }) if tab == id_a));
+    w.apply_autosave(id_a);
+    assert!(
+        matches!(w.prompt, Some(Prompt::AutosaveOffer { tab }) if tab == id_b),
+        "danach das zweite"
+    );
+    w.discard_autosave(id_b);
+    assert!(w.prompt.is_none());
+    assert!(autosave_bytes(&w, &b).is_none());
+    assert!(autosave_bytes(&w, &a).is_some());
+}
+
+#[test]
+fn a_failed_autosave_is_not_retried_before_the_interval() {
+    let mut w = ws();
+    let path = saved_document(&mut w, "Teil", 1);
+    let dir = w.library.as_ref().unwrap().document_dir(&path).unwrap();
+    // ein Ordner an der Stelle der Datei: das Schreiben schlägt fehl
+    std::fs::create_dir(dir.join(".autosave.json")).unwrap();
+    let base = Instant::now();
+    add_box(&mut w);
+    w.autosave_tick(base + AUTOSAVE_INTERVAL + Duration::from_secs(1));
+    std::fs::remove_dir(dir.join(".autosave.json")).unwrap();
+    w.autosave_tick(base + AUTOSAVE_INTERVAL + Duration::from_secs(2));
+    assert!(
+        !dir.join(".autosave.json").exists(),
+        "kein neuer Versuch in jedem Bild"
+    );
+    w.autosave_tick(base + AUTOSAVE_INTERVAL * 2 + Duration::from_secs(2));
+    assert!(dir.join(".autosave.json").is_file());
+}
+
+#[test]
+fn a_failed_restore_turns_a_freshly_editable_view_back_into_a_view() {
+    let mut w = ws();
+    let path = saved_document(&mut w, "Teil", 1);
+    w.close_tab(w.tab_for_path(&path).unwrap());
+    let v = w.open_version(&path, 1).unwrap();
+    assert!(w.restore_version(v, 99).is_err());
+    assert!(w.tabs[v].read_only);
+    assert!(w.tabs[v].store.is_none() && w.tabs[v].source_dir.is_some());
+    assert!(w.tab_for_path(&path).is_none());
+    // die Sperre ist wieder frei
+    assert!(w.open_document(&path, LockMode::Acquire).is_ok());
+}
+
+#[test]
+fn save_as_onto_a_taken_name_leaves_an_open_sketch_open() {
+    let mut w = ws();
+    let p = w.library.as_ref().unwrap().create_project("P").unwrap();
+    w.save_as(&p, "Teil", "").unwrap();
+    w.new_tab();
+    {
+        let s = &mut w.active_tab_mut().state;
+        let id = s
+            .add_sketch(planora_feature::SketchPlane::Standard(
+                planora_app::state::StandardPlane::XY,
+            ))
+            .unwrap();
+        s.open_sketch(id).unwrap();
+    }
+    assert!(w.save_as(&p, "Teil", "").is_err());
+    assert!(w.active_tab().state.sketch_session.is_some());
+    assert!(w.active_tab().store.is_none());
+}

@@ -197,3 +197,25 @@ fn scene_versions_are_unique_across_states_and_loading_continues_the_names() {
     t.create_box(planora_math::DVec3::splat(5.0)).unwrap();
     assert!(t.document.features().iter().any(|f| f.name == "Quader 3"));
 }
+
+#[test]
+fn a_loaded_name_with_a_huge_number_does_not_break_naming() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(3.0)).unwrap();
+    let mut snap = s.snapshot();
+    snap.features[0].name = format!("Quader {}", u64::MAX);
+    let mut t = AppState::from_snapshot(snap).unwrap();
+    t.create_box(DVec3::splat(4.0)).unwrap();
+    t.create_box(DVec3::splat(5.0)).unwrap();
+    let names: Vec<&str> = t
+        .document
+        .features()
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
+    assert_eq!(names.len(), 3);
+    assert!(
+        names.contains(&"Quader 1") && names.contains(&"Quader 2"),
+        "{names:?}"
+    );
+}

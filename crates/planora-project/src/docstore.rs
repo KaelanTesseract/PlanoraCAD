@@ -362,7 +362,7 @@ pub fn read_version(dir: &Path, n: u32) -> Result<Snapshot> {
 pub struct DocStore {
     dir: PathBuf,
     info: DocumentInfo,
-    _lock: DocLock,
+    lock: DocLock,
 }
 
 impl DocStore {
@@ -422,7 +422,7 @@ impl DocStore {
             let store = DocStore {
                 dir: dir.to_path_buf(),
                 info,
-                _lock: lock,
+                lock,
             };
             store.persist(&store.info)?;
             Ok(store)
@@ -455,7 +455,7 @@ impl DocStore {
             DocStore {
                 dir: dir.to_path_buf(),
                 info,
-                _lock: lock,
+                lock,
             },
             report,
         ))
@@ -463,6 +463,16 @@ impl DocStore {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Vor jedem Schreiben: Hat ein anderes Programm die Sperre übernommen, wird nichts
+    /// geschrieben (sonst überschriebe dieser Speicher dessen Stand).
+    fn ensure_lock(&self) -> Result<()> {
+        if self.lock.still_held() {
+            Ok(())
+        } else {
+            Err(ProjectError::LockLost)
+        }
     }
 
     pub fn info(&self) -> &DocumentInfo {
@@ -529,6 +539,7 @@ impl DocStore {
         comment: &str,
         new_branch: Option<&str>,
     ) -> Result<u32> {
+        self.ensure_lock()?;
         let comment = clean_comment(comment)?;
         let (parent, branch) = match based_on {
             None => {
@@ -571,6 +582,7 @@ impl DocStore {
     }
 
     pub fn restore(&mut self, version: u32, onto_branch: &str) -> Result<u32> {
+        self.ensure_lock()?;
         let tip = self
             .info
             .tip(onto_branch)
@@ -618,6 +630,7 @@ impl DocStore {
     }
 
     pub fn set_comment(&mut self, n: u32, text: &str) -> Result<()> {
+        self.ensure_lock()?;
         let text = clean_comment(text)?;
         let mut info = self.info.clone();
         let v = info
@@ -632,6 +645,7 @@ impl DocStore {
     }
 
     pub fn set_active_branch(&mut self, name: &str) -> Result<()> {
+        self.ensure_lock()?;
         if !self.info.branches.contains_key(name) {
             return Err(ProjectError::NotFound(format!("Zweig {name}")));
         }
@@ -643,6 +657,7 @@ impl DocStore {
     }
 
     pub fn delete_version(&mut self, n: u32) -> Result<()> {
+        self.ensure_lock()?;
         let v = self
             .info
             .version(n)
@@ -696,6 +711,7 @@ impl DocStore {
     }
 
     pub fn delete_branch(&mut self, name: &str) -> Result<()> {
+        self.ensure_lock()?;
         if !self.info.branches.contains_key(name) {
             return Err(ProjectError::NotFound(format!("Zweig {name}")));
         }
@@ -732,6 +748,7 @@ impl DocStore {
     }
 
     pub fn write_autosave(&self, based_on: Option<u32>, snapshot: &Snapshot) -> Result<()> {
+        self.ensure_lock()?;
         let file = AutosaveFile {
             format: FORMAT_VERSION,
             basiert_auf: based_on,
@@ -768,7 +785,11 @@ impl DocStore {
         }))
     }
 
+    /// Löscht die Autosicherung; ohne Sperre nichts (sie gehört dann dem anderen Programm).
     pub fn discard_autosave(&self) {
+        if self.ensure_lock().is_err() {
+            return;
+        }
         let _ = fs::remove_file(self.dir.join(AUTOSAVE_FILE));
     }
 }

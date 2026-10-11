@@ -273,6 +273,14 @@ impl DocLock {
         let _ = fs::remove_file(&file);
         DocLock::acquire(dir)
     }
+
+    /// Gehört die Sperre noch uns? Falsch, wenn ein anderes Programm sie übernommen hat (oder
+    /// die Sperrdatei fehlt oder unlesbar ist).
+    pub fn still_held(&self) -> bool {
+        fs::read_to_string(&self.file)
+            .map(|text| text.lines().next() == Some(self.token.as_str()))
+            .unwrap_or(false)
+    }
 }
 
 impl Drop for DocLock {

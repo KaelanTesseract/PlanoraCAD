@@ -18,6 +18,10 @@ pub enum ProjectError {
     NotFound(String),
     #[error("Das Dokument wird gerade von einem anderen Programm benutzt (gesperrt seit {since}).")]
     Locked { since: String },
+    #[error(
+        "Die Sperre wurde von einem anderen Programm übernommen. Das Dokument wurde nicht verändert; bitte neu öffnen."
+    )]
+    LockLost,
     #[error("{0}")]
     Invalid(String),
     #[error(

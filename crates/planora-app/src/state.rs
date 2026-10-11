@@ -33,6 +33,11 @@ pub enum BodyKind {
 /// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
 pub use planora_feature::StandardPlane;
 
+/// Größte Nummer „Bezeichnung N“, die beim Laden als Namenszähler fortgesetzt wird. Größere
+/// Nummern (nur aus fremden oder bösartigen Dateien denkbar) werden ignoriert, damit der Zähler
+/// nicht an `u64::MAX` stößt; neue Namen kollidieren mit ihnen erst nach so vielen Features.
+const MAX_NAME_COUNTER: u64 = 1_000_000;
+
 static NEXT_SCENE_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Szenenstände sind über alle Tabs eindeutig, damit ein Tab-Wechsel die GPU-Szene sicher
@@ -298,6 +303,7 @@ impl AppState {
         for f in self.document.features() {
             if let Some((label, num)) = f.name.rsplit_once(' ')
                 && let Ok(n) = num.parse::<u64>()
+                && n <= MAX_NAME_COUNTER
             {
                 let c = self.name_counters.entry(label.to_string()).or_insert(0);
                 *c = (*c).max(n);
@@ -307,13 +313,19 @@ impl AppState {
 
     /// Nächster Name `{Bezeichnung} {Nummer}` für `label`, ohne den Zähler zu erhöhen.
     fn next_name(&self, label: &str) -> String {
-        let n = self.name_counters.get(label).copied().unwrap_or(0) + 1;
+        let n = self
+            .name_counters
+            .get(label)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1);
         format!("{label} {n}")
     }
 
     /// Zählt den Namenszähler für `label` weiter (nur nach erfolgreichem Anlegen).
     fn count_name(&mut self, label: &str) {
-        *self.name_counters.entry(label.to_string()).or_insert(0) += 1;
+        let c = self.name_counters.entry(label.to_string()).or_insert(0);
+        *c = c.saturating_add(1);
     }
 
     /// Legt ein Feature `{Bezeichnung} {Nummer}` am Marker an (Bezeichnung `base_name` oder
