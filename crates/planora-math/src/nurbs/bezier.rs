@@ -40,10 +40,10 @@ pub(super) fn check_insertion(knots: &[f64], p: usize, u: f64, r: usize) -> Resu
         )));
     }
     let (_, s) = span_and_multiplicity(knots, p, u);
-    if s + r > p {
+    // `r > p` zuerst prüfen: so kann `s + r` (mit `s ≤ p`) nicht überlaufen.
+    if r > p || s + r > p {
         return Err(NurbsError::Knots(format!(
-            "Vielfachheit {} des Knotens {u} wäre größer als der Grad {p}",
-            s + r
+            "{r}-faches Einfügen des Knotens {u} (bisher {s}-fach) ergäbe eine Vielfachheit über dem Grad {p}"
         )));
     }
     Ok(())

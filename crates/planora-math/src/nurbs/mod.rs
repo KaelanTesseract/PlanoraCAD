@@ -17,6 +17,9 @@ pub use surface::{MAX_SURFACE_DERIV, NurbsSurface};
 pub const MAX_DEGREE: usize = 9;
 /// Höchstzahl Kontrollpunkte je Richtung.
 pub const MAX_CONTROL_POINTS: usize = 4096;
+/// Höchstzahl Bézier-Flicken bei der Zerlegung einer Fläche (begrenzt Speicher und Rechenzeit;
+/// bei Grad 9 × 9 etwa 65 536 · 100 Kontrollpunkte).
+pub const MAX_BEZIER_PATCHES: usize = 65_536;
 /// Höchstzahl Kontrollpunkte einer Fläche insgesamt.
 pub const MAX_CONTROL_TOTAL: usize = 262_144;
 /// Größter erlaubter Koordinatenbetrag in Millimetern.

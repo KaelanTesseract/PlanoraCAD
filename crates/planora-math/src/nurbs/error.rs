@@ -14,4 +14,6 @@ pub enum NurbsError {
     Fit(String),
     #[error("Ungültige Eingabe: {0}")]
     Input(String),
+    #[error("Die Rechnung überschreitet eine Größengrenze: {0}")]
+    TooLarge(String),
 }

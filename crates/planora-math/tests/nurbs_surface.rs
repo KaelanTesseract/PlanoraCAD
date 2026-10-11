@@ -80,7 +80,7 @@ fn knot_insertion_does_not_change_the_surface() {
 #[test]
 fn bezier_patches_cover_the_surface_and_their_boxes_contain_it() {
     let s = sample();
-    let patches = s.bezier_patches();
+    let patches = s.bezier_patches().unwrap();
     assert_eq!(patches.len(), (5 - 3) * (6 - 3)); // 2 × 3 Abschnitte
     for p in &patches {
         let (lo, hi) = p.bounds();
@@ -101,7 +101,7 @@ fn bezier_patches_cover_the_surface_and_their_boxes_contain_it() {
 #[test]
 fn subdividing_a_patch_gives_four_patches_with_the_same_surface() {
     let s = sample();
-    let p = &s.bezier_patches()[0];
+    let p = &s.bezier_patches().unwrap()[0];
     let kids = p.subdivide();
     let mut inside = 0;
     for k in &kids {
@@ -219,7 +219,7 @@ fn patch_surface(p: &BezierPatch) -> NurbsSurface {
 #[test]
 fn bezier_patches_reproduce_the_surface_exactly() {
     let s = sample();
-    for p in s.bezier_patches() {
+    for p in s.bezier_patches().unwrap() {
         let ps = patch_surface(&p);
         for i in 0..=6 {
             for j in 0..=6 {
@@ -234,7 +234,7 @@ fn bezier_patches_reproduce_the_surface_exactly() {
 #[test]
 fn subdivided_patches_reproduce_the_surface_exactly() {
     let s = sample();
-    let p = &s.bezier_patches()[4];
+    let p = &s.bezier_patches().unwrap()[4];
     for k in p.subdivide() {
         let ks = patch_surface(&k);
         for i in 0..=4 {
@@ -270,7 +270,7 @@ fn flatness_is_zero_for_planar_patches_and_does_not_grow_when_subdividing() {
     assert!(plane.flatness() < 1e-12, "{}", plane.flatness());
     // Wiederholtes Unterteilen der Beispielflicken: das Maß wächst nie.
     let s = sample();
-    for p in s.bezier_patches() {
+    for p in s.bezier_patches().unwrap() {
         let mut level = vec![p];
         for _ in 0..3 {
             let mut next = Vec::new();
@@ -385,4 +385,124 @@ fn curve_knot_insertion_and_bezier_segments_keep_the_shape() {
             );
         }
     }
+}
+
+// ---- Nachbesserung nach Review (fix1) ----
+
+#[test]
+fn inserting_a_knot_usize_max_times_is_an_error_not_a_panic() {
+    let s = sample();
+    assert!(matches!(
+        s.insert_knot_u(0.37, usize::MAX),
+        Err(NurbsError::Knots(_))
+    ));
+    assert!(matches!(
+        s.insert_knot_v(0.5, usize::MAX),
+        Err(NurbsError::Knots(_))
+    ));
+    let c = sample_curve();
+    assert!(matches!(
+        c.insert_knot(0.45, usize::MAX),
+        Err(NurbsError::Knots(_))
+    ));
+    assert!(matches!(
+        c.insert_knot(0.3, usize::MAX),
+        Err(NurbsError::Knots(_))
+    ));
+}
+
+/// Exakte rationale Kugel (u: Vollkreis, v: Halbkreis von Süd- zu Nordpol), Grad 2 × 2.
+fn sphere(centre: DVec3, r: f64) -> NurbsSurface {
+    let h = std::f64::consts::FRAC_1_SQRT_2;
+    let circle = [
+        (1.0, 0.0, 1.0),
+        (1.0, 1.0, h),
+        (0.0, 1.0, 1.0),
+        (-1.0, 1.0, h),
+        (-1.0, 0.0, 1.0),
+        (-1.0, -1.0, h),
+        (0.0, -1.0, 1.0),
+        (1.0, -1.0, h),
+        (1.0, 0.0, 1.0),
+    ];
+    let profile = [
+        (0.0, -1.0, 1.0),
+        (1.0, -1.0, h),
+        (1.0, 0.0, 1.0),
+        (1.0, 1.0, h),
+        (0.0, 1.0, 1.0),
+    ];
+    let mut c = Vec::new();
+    let mut w = Vec::new();
+    for &(x, y, wu) in &circle {
+        for &(rho, z, wv) in &profile {
+            c.push(centre + DVec3::new(x * rho, y * rho, z) * r);
+            w.push(wu * wv);
+        }
+    }
+    let ku = vec![
+        0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+    ];
+    let kv = vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0];
+    NurbsSurface::new(2, 2, ku, kv, 9, 5, c, w).unwrap()
+}
+
+#[test]
+fn sphere_poles_have_a_zero_normal_even_far_from_the_origin() {
+    for &(centre, r) in &[
+        (DVec3::ZERO, 1.0),
+        (DVec3::new(123.0, -78.0, 3.3), 1.0),
+        (DVec3::new(123.0, -78.0, 3.3), 25.0),
+        (DVec3::splat(1e5), 1.0),
+        (DVec3::splat(1e5), 40.0),
+    ] {
+        let s = sphere(centre, r);
+        for i in 0..=16 {
+            let u = i as f64 / 16.0;
+            assert_eq!(
+                s.normal(u, 0.0),
+                DVec3::ZERO,
+                "Südpol u={u} c={centre} r={r}"
+            );
+            assert_eq!(
+                s.normal(u, 1.0),
+                DVec3::ZERO,
+                "Nordpol u={u} c={centre} r={r}"
+            );
+            for j in 1..=9 {
+                let v = j as f64 / 10.0;
+                let p = s.point(u, v);
+                assert!(((p - centre).length() - r).abs() < 1e-9 * (1.0 + centre.length()));
+                let n = s.normal(u, v);
+                let radial = (p - centre).normalize();
+                // Gleiche Ausrichtung überall (keine Vorzeichenwechsel), Betrag 1.
+                assert!((n.length() - 1.0).abs() < 1e-12, "u={u} v={v}");
+                assert!(n.dot(radial).abs() > 1.0 - 1e-6, "u={u} v={v}");
+                assert!(
+                    n.dot(radial)
+                        * s.normal(0.3, 0.5)
+                            .dot((s.point(0.3, 0.5) - centre).normalize())
+                        > 0.0
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn too_many_bezier_patches_are_refused_before_decomposition() {
+    // Grad 1, 300 × 300 Kontrollpunkte: 299 · 299 = 89 401 Abschnitte > MAX_BEZIER_PATCHES.
+    let n = 300;
+    let kn: Vec<f64> = std::iter::once(0.0)
+        .chain((0..n).map(|i| i as f64 / (n - 1) as f64))
+        .chain(std::iter::once(1.0))
+        .collect();
+    let c: Vec<DVec3> = (0..n * n)
+        .map(|k| DVec3::new((k / n) as f64, (k % n) as f64, 0.0))
+        .collect();
+    let s = NurbsSurface::new(1, 1, kn.clone(), kn, n, n, c, vec![1.0; n * n]).unwrap();
+    assert_eq!(s.bezier_patch_count(), 299 * 299);
+    assert!(matches!(s.bezier_patches(), Err(NurbsError::TooLarge(_))));
+    assert_eq!(sample().bezier_patch_count(), 6);
+    assert_eq!(sample().bezier_patches().unwrap().len(), 6);
 }

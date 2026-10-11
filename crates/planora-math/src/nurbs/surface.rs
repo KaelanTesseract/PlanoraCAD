@@ -4,8 +4,8 @@
 use super::bezier::{cartesian, check_insertion, decompose_row, homogeneous, insert_row};
 use super::curve::binom;
 use super::{
-    BezierPatch, KnotVector, MAX_CONTROL_POINTS, MAX_CONTROL_TOTAL, MAX_COORD, MAX_WEIGHT,
-    MIN_WEIGHT, NurbsError,
+    BezierPatch, KnotVector, MAX_BEZIER_PATCHES, MAX_CONTROL_POINTS, MAX_CONTROL_TOTAL, MAX_COORD,
+    MAX_WEIGHT, MIN_WEIGHT, NurbsError,
 };
 use crate::DVec3;
 use glam::DVec4;
@@ -17,6 +17,11 @@ pub const MAX_SURFACE_DERIV: usize = 2;
 /// Ist `|S_u × S_v|` kleiner als dieser Bruchteil von `|S_u|·|S_v|`, gilt die Normale als
 /// entartet (Pol, zusammenfallende Kontrollpunkte) und `normal` liefert `DVec3::ZERO`.
 const DEGENERATE_NORMAL_RATIO: f64 = 1e-14;
+/// Ist eine Tangente, mal Länge des Parameterbereichs, kleiner als dieser Bruchteil der örtlichen
+/// Größe der Kontrollpunkte (`local_scale`), gilt sie als null (Pol einer Kugel o. Ä., an dem
+/// zusammengefallene Kontrollpunkte nur Rundungsrauschen liefern) und `normal` liefert
+/// `DVec3::ZERO`. Rauschen liegt bei etwa 1e-16 · Betrag, echte Tangenten weit darüber.
+const DEGENERATE_TANGENT_RATIO: f64 = 1e-10;
 /// Untergrenze für das Produkt der Tangentenlängen im Entartungstest (verhindert 0 · Schranke).
 const DEGENERATE_NORMAL_FLOOR: f64 = 1e-300;
 
@@ -122,10 +127,19 @@ impl NurbsSurface {
         (self.nu, self.nv)
     }
 
+    /// Anzahl der Bézier-Flicken, die `bezier_patches` liefern würde (Produkt der Zahl
+    /// nichtleerer Knotenabschnitte in u und v; ohne Rechnung, sättigend).
+    pub fn bezier_patch_count(&self) -> usize {
+        span_count(&self.knots_u).saturating_mul(span_count(&self.knots_v))
+    }
+
+    /// Kontrollpunkt `(i, j)`; Panik, wenn `i >= nu` oder `j >= nv` (Programmierfehler,
+    /// keine Nutzereingabe – die Grenzen liefert `counts`).
     pub fn control_at(&self, i: usize, j: usize) -> DVec3 {
         self.control[i * self.nv + j]
     }
 
+    /// Gewicht `(i, j)`; Panik bei Index außerhalb wie `control_at`.
     pub fn weight_at(&self, i: usize, j: usize) -> f64 {
         self.weights[i * self.nv + j]
     }
@@ -202,6 +216,14 @@ impl NurbsSurface {
     pub fn normal(&self, u: f64, v: f64) -> DVec3 {
         let d = self.derivs(u, v, 1);
         let (su, sv) = (d[1][0], d[0][1]);
+        // Pol-Test: eine Tangente, die (auf den ganzen Parameterbereich hochgerechnet) im
+        // Rundungsrauschen der örtlichen Kontrollpunkte liegt, gilt als null. Das Rauschen wächst
+        // mit dem Koordinatenbetrag, daher zählt auch der größte Betrag, nicht nur die Ausdehnung.
+        let ((u0, u1), (v0, v1)) = self.domain();
+        let reach = (su.length() * (u1 - u0)).min(sv.length() * (v1 - v0));
+        if reach.is_nan() || reach < DEGENERATE_TANGENT_RATIO * self.local_scale(u, v) {
+            return DVec3::ZERO;
+        }
         let n = su.cross(sv);
         let len = n.length();
         let limit =
@@ -210,6 +232,26 @@ impl NurbsSurface {
             return DVec3::ZERO;
         }
         n / len
+    }
+
+    /// Größenmaß der Kontrollpunkte, die bei `(u, v)` wirken: das Maximum aus der Diagonale
+    /// ihres Hüllquaders und ihrem größten Koordinatenbetrag.
+    fn local_scale(&self, u: f64, v: f64) -> f64 {
+        let (p, q) = (self.degree_u(), self.degree_v());
+        let ((u0, u1), (v0, v1)) = self.domain();
+        let u = if u.is_finite() { u.clamp(u0, u1) } else { u0 };
+        let v = if v.is_finite() { v.clamp(v0, v1) } else { v0 };
+        let (su, sv) = (self.knots_u.find_span(u), self.knots_v.find_span(v));
+        let mut lo = DVec3::splat(f64::INFINITY);
+        let mut hi = DVec3::splat(f64::NEG_INFINITY);
+        for i in su - p..=su {
+            for j in sv - q..=sv {
+                let c = self.control_at(i, j);
+                lo = lo.min(c);
+                hi = hi.max(c);
+            }
+        }
+        (hi - lo).length().max(lo.abs().max(hi.abs()).max_element())
     }
 
     /// Affine Abbildung der Kontrollpunkte; die Prüfung läuft erneut.
@@ -322,7 +364,16 @@ impl NurbsSurface {
     /// Zerlegung in rationale Bézier-Flicken: alle inneren Knoten werden bis Vielfachheit Grad
     /// eingefügt (erst u, dann v); je ein Flicken pro nichtleerem Knotenrechteck, Reihenfolge
     /// u-Abschnitt außen, v-Abschnitt innen.
-    pub fn bezier_patches(&self) -> Vec<BezierPatch> {
+    ///
+    /// Fehler `NurbsError::TooLarge`, wenn mehr als `MAX_BEZIER_PATCHES` Flicken entstünden;
+    /// die Prüfung läuft vor jeder Rechnung oder Speicheranforderung.
+    pub fn bezier_patches(&self) -> Result<Vec<BezierPatch>, NurbsError> {
+        let count = self.bezier_patch_count();
+        if count > MAX_BEZIER_PATCHES {
+            return Err(NurbsError::TooLarge(format!(
+                "die Zerlegung ergäbe {count} Bézier-Flicken (höchstens {MAX_BEZIER_PATCHES})"
+            )));
+        }
         let (p, q) = (self.degree_u(), self.degree_v());
         let grid = self.grid();
         // u-Richtung: jede Spalte zerlegen.
@@ -366,6 +417,12 @@ impl NurbsSurface {
                 });
             }
         }
-        patches
+        Ok(patches)
     }
+}
+
+/// Anzahl der nichtleeren Knotenabschnitte (verschiedene Knotenwerte minus eins).
+fn span_count(knots: &KnotVector) -> usize {
+    let k = knots.knots();
+    k.windows(2).filter(|w| w[1] > w[0]).count()
 }
