@@ -2463,6 +2463,7 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "robust",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
