@@ -1,5 +1,6 @@
 use super::seg::{Seg, golden_min, sample_count};
 use crate::geometry::{Curve, Surface};
+use crate::validate::edge_surface_tol;
 use planora_math::{TAU, Tolerance};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -35,10 +36,16 @@ fn bisect(mut a: f64, mut b: f64, g: &impl Fn(f64) -> f64) -> f64 {
     0.5 * (a + b)
 }
 
-/// Ein Vollkreis oder eine Vollellipse: Anfang und Ende des Parameterbereichs sind derselbe Punkt.
+/// Abweichung der Parameterspanne von der Periode, bis zu der ein Stück als ganze geschlossene
+/// Kurve gilt.
+const FULL_PERIOD_TOL: f64 = 1e-9;
+
+/// Eine ganze geschlossene Kurve (Vollkreis, Vollellipse, geschlossene Freiformkurve über ihre
+/// ganze Periode): Anfang und Ende des Parameterbereichs sind derselbe Punkt.
 fn is_closed(curve: &Curve, t0: f64, t1: f64) -> bool {
-    matches!(curve, Curve::Circle { .. } | Curve::Ellipse { .. })
-        && ((t1 - t0).abs() - TAU).abs() < 1e-9
+    curve
+        .period()
+        .is_some_and(|p| ((t1 - t0).abs() - p).abs() < FULL_PERIOD_TOL)
 }
 
 /// Schnittpunkte der Kurve auf `[t0, t1]` mit einer Fläche (Nullstellen von `F(c(t))`).
@@ -63,12 +70,15 @@ pub fn curve_surface_roots(
         .map(|i| t0 + (t1 - t0) * i as f64 / n as f64)
         .collect();
     let gs: Vec<f64> = ts.iter().map(|&t| g(t)).collect();
-    if gs.iter().all(|v| v.abs() <= tol.linear) {
+    // „Liegt auf der Fläche“: mit Freiformbeteiligten gilt die größere Toleranz.
+    let lin = edge_surface_tol(curve, surface, tol);
+    if gs.iter().all(|v| v.abs() <= lin) {
         return CurveSurface::Lies;
     }
     let closed = is_closed(curve, t0, t1);
+    // Periode für das Zurückfalten an der Naht (nur bei geschlossenen Kurven gebraucht).
+    let period = curve.period().unwrap_or(TAU);
     let dir = if t1 >= t0 { 1.0 } else { -1.0 };
-    let lin = tol.linear;
 
     let mut roots: Vec<Root> = Vec::new();
     let add = |roots: &mut Vec<Root>, t: f64, touching: bool| {
@@ -102,7 +112,7 @@ pub fn curve_surface_roots(
                 if seam {
                     // in den Parameterbereich zurückfalten
                     if (te - t0) * dir < 0.0 {
-                        te += dir * TAU;
+                        te += dir * period;
                     }
                     if (te - t1).abs() < 1e-6 {
                         te = t0;
@@ -121,7 +131,7 @@ pub fn curve_surface_roots(
                 let right = if gb == 0.0 { hi } else { bisect(te, hi, &g) };
                 for t in [left, right] {
                     let t = if seam && (t - t0) * dir < 0.0 {
-                        t + dir * TAU
+                        t + dir * period
                     } else {
                         t
                     };

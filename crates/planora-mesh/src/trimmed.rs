@@ -50,7 +50,8 @@ fn uv_scale(surface: &Surface, polys: &[Vec<DVec2>]) -> DVec2 {
         }
         Surface::Torus { major, minor, .. } => DVec2::new(major + minor, minor.abs()),
         Surface::Sphere { radius, .. } => DVec2::splat(radius.abs()),
-        Surface::Plane { .. } => DVec2::ONE,
+        // Vorläufig ohne Streckung (das Netz für Freiformflächen folgt eigens).
+        Surface::Plane { .. } | Surface::Nurbs(_) => DVec2::ONE,
     }
 }
 

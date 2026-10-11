@@ -15,6 +15,7 @@ use super::uv::{
 use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
 use crate::topology::{Edge, Face, Solid};
+use crate::validate::point_surface_tol;
 use planora_math::{DVec2, DVec3, TAU, Tolerance};
 
 /// Lage eines Flächenstücks relativ zum anderen Körper.
@@ -64,7 +65,7 @@ fn on_surface(other: &[FaceGeom], p: DVec3, tol: &Tolerance) -> Option<DVec3> {
     other
         .iter()
         .find(|g| {
-            g.surface.implicit(p).abs() <= tol.linear
+            g.surface.implicit(p).abs() <= point_surface_tol(&g.surface, tol)
                 && point_in_face(g, p, tol) != Containment::Outside
         })
         .map(|g| outward_normal(g, p))
@@ -87,15 +88,44 @@ const SAG_SAFETY: f64 = 2.0;
 
 /// Größter Abstand zwischen einem Randstück und dem Sehnenpolygon, mit dem `point_in_face` es
 /// annähert (Bögen: `r·(1 − cos(Δt/2))` bei der Schrittweite `Δt` der Abtastung, für Ellipsen mit
-/// der großen Halbachse als obere Schranke; Geraden: 0).
+/// der großen Halbachse als obere Schranke; Geraden: 0; Freiformkurven: gemessen, siehe
+/// [`nurbs_chord_sag`]).
 fn chord_sag(s: &Seg) -> f64 {
     let r = match &s.curve {
         Curve::Line { .. } => return 0.0,
         Curve::Circle { radius, .. } => radius.abs(),
         Curve::Ellipse { major, minor, .. } => major.abs().max(minor.abs()),
+        Curve::Nurbs(_) => return nurbs_chord_sag(s),
     };
     let half_step = (s.t1 - s.t0).abs() / samples(s) as f64 / 2.0;
     r * (1.0 - half_step.min(std::f64::consts::PI).cos())
+}
+
+/// Probestellen je Sehne bei der Messung des Sehnenpfeils einer Freiformkurve.
+const SAG_PROBES_PER_CHORD: usize = 4;
+
+/// Sehnenpfeil einer Freiformkurve: größter Abstand von Kurvenpunkten zwischen den Abtaststellen
+/// (je Sehne `SAG_PROBES_PER_CHORD` innere Proben) zur jeweiligen Sehne. Eine Messung, keine
+/// strenge Schranke; `SAG_SAFETY` deckt den Rest ab.
+fn nurbs_chord_sag(s: &Seg) -> f64 {
+    let n = samples(s);
+    let mut sag = 0.0_f64;
+    for k in 0..n {
+        let (f0, f1) = (k as f64 / n as f64, (k + 1) as f64 / n as f64);
+        let (a, b) = (s.at(f0), s.at(f1));
+        let ab = b - a;
+        let len2 = ab.length_squared();
+        for j in 1..=SAG_PROBES_PER_CHORD {
+            let q = s.at(f0 + (f1 - f0) * j as f64 / (SAG_PROBES_PER_CHORD + 1) as f64);
+            let t = if len2 > 0.0 {
+                ((q - a).dot(ab) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            sag = sag.max(q.distance(a + ab * t));
+        }
+    }
+    sag
 }
 
 /// Liegt `p` so nah am Rand der Fläche, dass das Randpolygon von `point_in_face` hier nicht

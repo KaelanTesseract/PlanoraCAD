@@ -2,6 +2,15 @@ use planora_kernel::{Curve, Edge, Id, Solid, Surface};
 use planora_math::DVec3;
 use std::f64::consts::{PI, TAU};
 
+/// Halbe Diagonale des Hüllquaders der Punkte (vorläufiges Krümmungsmaß für Freiformkurven).
+fn half_diagonal(points: impl Iterator<Item = DVec3>) -> f64 {
+    let (lo, hi) = points.fold(
+        (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+        |(lo, hi), p| (lo.min(p), hi.max(p)),
+    );
+    0.5 * (hi - lo).length()
+}
+
 /// Legt fest, in wie viele Segmente Bögen unterteilt werden. Der Winkelschritt hängt nur vom
 /// größten Radius des Körpers ab; dadurch bekommen benachbarte Flächen und Kanten mit gleicher
 /// Winkelspanne immer dieselben Teilpunkte und das Netz bleibt geschlossen.
@@ -22,6 +31,7 @@ impl Discretizer {
                 Curve::Line { .. } => 0.0,
                 Curve::Circle { radius, .. } => *radius,
                 Curve::Ellipse { major, minor, .. } => major.max(*minor),
+                Curve::Nurbs(c) => half_diagonal(c.control_points().iter().copied()),
             });
         }
         for (_, f) in solid.faces.iter() {
@@ -36,6 +46,10 @@ impl Discretizer {
                 },
                 Surface::Sphere { radius, .. } => *radius,
                 Surface::Torus { major, minor, .. } => major + minor,
+                Surface::Nurbs(d) => {
+                    let (lo, hi) = d.control_bounds();
+                    0.5 * (hi - lo).length()
+                }
             });
         }
         let tol = chord_tolerance.max(1e-9);

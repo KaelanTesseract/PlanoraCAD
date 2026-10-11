@@ -2,6 +2,7 @@ use crate::error::KernelError;
 use crate::geometry::{Curve, Surface, UvRect};
 use crate::topology::{Face, Loop, Solid};
 use planora_math::DMat4;
+use std::sync::Arc;
 
 impl Solid {
     /// Wendet eine Ähnlichkeitstransformation an (verschieben, drehen, spiegeln,
@@ -37,11 +38,11 @@ impl Solid {
             out.add_vertex(m.transform_point3(v.point));
         }
         for (_, e) in self.edges.iter() {
-            let (curve, t0, t1) = transform_curve(&e.curve, e.t0, e.t1, m, s);
+            let (curve, t0, t1) = transform_curve(&e.curve, e.t0, e.t1, m, s)?;
             out.add_edge(curve, t0, t1, e.start, e.end);
         }
         for (_, f) in self.faces.iter() {
-            let (surface, same_sense, patch) = transform_surface(f, m, s, mirrored);
+            let (surface, same_sense, patch) = transform_surface(f, m, s, mirrored)?;
             let fix = |l: &Loop| if mirrored { l.reversed() } else { l.clone() };
             out.add_face(Face {
                 surface,
@@ -57,8 +58,16 @@ impl Solid {
     }
 }
 
-fn transform_curve(c: &Curve, t0: f64, t1: f64, m: &DMat4, s: f64) -> (Curve, f64, f64) {
-    match c {
+/// Freiformkurven behalten ihren Parameter (die Kontrollpunkte werden abgebildet); die Prüfung
+/// läuft erneut (etwa Koordinatengrenze nach starker Skalierung).
+fn transform_curve(
+    c: &Curve,
+    t0: f64,
+    t1: f64,
+    m: &DMat4,
+    s: f64,
+) -> Result<(Curve, f64, f64), KernelError> {
+    Ok(match c {
         Curve::Line { origin, dir } => (
             Curve::Line {
                 origin: m.transform_point3(*origin),
@@ -88,18 +97,28 @@ fn transform_curve(c: &Curve, t0: f64, t1: f64, m: &DMat4, s: f64) -> (Curve, f6
             t0,
             t1,
         ),
-    }
+        Curve::Nurbs(c) => (
+            Curve::nurbs(
+                c.transformed(|p| m.transform_point3(p))
+                    .map_err(|e| KernelError::InvalidCurve(e.to_string()))?,
+            ),
+            t0,
+            t1,
+        ),
+    })
 }
 
 /// Bei einer Spiegelung bleibt die Parametrisierung `(u, v)` erhalten, außer dass `v` (die Achse
 /// bzw. der Breitenwinkel) das Vorzeichen wechselt. Ebenen behalten `(u, v)`, ihre natürliche
 /// Normale `x × y` zeigt aber nach der Spiegelung entgegengesetzt, daher kippt `same_sense`.
+/// Freiformflächen ebenso: `(u, v)` bleibt (Kontrollpunkte werden abgebildet), die natürliche
+/// Normale `S_u × S_v` kehrt sich bei einer Spiegelung gegenüber der abgebildeten Normale um.
 fn transform_surface(
     f: &Face,
     m: &DMat4,
     s: f64,
     mirrored: bool,
-) -> (Surface, bool, Option<UvRect>) {
+) -> Result<(Surface, bool, Option<UvRect>), KernelError> {
     let length_range = |r: UvRect| {
         if mirrored {
             UvRect {
@@ -126,7 +145,7 @@ fn transform_surface(
             r
         }
     };
-    match &f.surface {
+    Ok(match &f.surface {
         Surface::Plane { frame } => (
             Surface::Plane {
                 frame: frame.transformed(m),
@@ -180,5 +199,14 @@ fn transform_surface(
             f.same_sense,
             f.patch.map(angle_range),
         ),
-    }
+        Surface::Nurbs(d) => (
+            Surface::Nurbs(Arc::new(d.transformed(|p| m.transform_point3(p))?)),
+            if mirrored {
+                !f.same_sense
+            } else {
+                f.same_sense
+            },
+            f.patch,
+        ),
+    })
 }

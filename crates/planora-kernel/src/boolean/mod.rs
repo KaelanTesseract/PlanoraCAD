@@ -33,7 +33,19 @@ use crate::topology::Solid;
 use crate::validate::{ValidationError, validate};
 use planora_math::{DVec3, Frame, Tolerance};
 
-/// Eingangsprüfung: nicht leer, alle Zahlen endlich, danach der Validator.
+/// Liegen `t0` und `t1` im Parameterbereich einer Freiformkurve? Bei geschlossenen Kurven darf
+/// ein Stück über die Naht reichen (höchstens eine Periode jenseits des Bereichs). Andere Kurven
+/// haben keinen festen Bereich.
+fn nurbs_params_ok(c: &Curve, t0: f64, t1: f64) -> bool {
+    let Some((a, b)) = c.domain() else {
+        return true;
+    };
+    let slack = c.period().unwrap_or(0.0);
+    [t0, t1].iter().all(|t| (a - slack..=b + slack).contains(t))
+}
+
+/// Eingangsprüfung: nicht leer, alle Zahlen endlich, Freiformkanten im Parameterbereich, danach
+/// der Validator.
 fn check_input(s: &Solid) -> Result<(), String> {
     if s.faces.is_empty() {
         return Err("leerer Körper (keine Flächen)".into());
@@ -52,9 +64,14 @@ fn check_input(s: &Solid) -> Result<(), String> {
                 major,
                 minor,
             } => frame_ok(frame) && major.is_finite() && minor.is_finite(),
+            // Endlich durch den geprüften Konstruktor.
+            Curve::Nurbs(_) => true,
         };
         if !(curve_ok && e.t0.is_finite() && e.t1.is_finite()) {
             return Err("Kante mit ungültigem Wert (NaN oder unendlich)".into());
+        }
+        if !nurbs_params_ok(&e.curve, e.t0, e.t1) {
+            return Err("Kante einer Freiformkurve außerhalb ihres Parameterbereichs".into());
         }
     }
     validate(s).map_err(|e| e.to_string())?;
@@ -112,6 +129,31 @@ fn result_error(e: ValidationError, interiors_overlap: bool) -> BooleanError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use planora_math::TAU;
+    use planora_math::nurbs::NurbsCurve;
+
+    #[test]
+    fn nurbs_edges_must_stay_in_their_parameter_range() {
+        let arc = Curve::nurbs(
+            NurbsCurve::elliptic_arc(DVec3::ZERO, DVec3::X, DVec3::Y, 0.0, 1.0).unwrap(),
+        );
+        assert!(nurbs_params_ok(&arc, 0.0, 1.0));
+        assert!(nurbs_params_ok(&arc, 0.7, 0.2));
+        assert!(!nurbs_params_ok(&arc, 0.0, 1.5));
+        assert!(!nurbs_params_ok(&arc, -0.1, 0.5));
+        // geschlossen: ein Stück darf über die Naht reichen, aber nicht beliebig weit
+        let circle = Curve::nurbs(
+            NurbsCurve::elliptic_arc(DVec3::ZERO, DVec3::X, DVec3::Y, 0.0, TAU).unwrap(),
+        );
+        assert!(nurbs_params_ok(&circle, 0.8, 1.3));
+        assert!(!nurbs_params_ok(&circle, 0.0, 2.5));
+        // analytische Kurven haben keinen festen Bereich
+        let line = Curve::Line {
+            origin: DVec3::ZERO,
+            dir: DVec3::X,
+        };
+        assert!(nurbs_params_ok(&line, -1e6, 1e6));
+    }
 
     #[test]
     fn edge_use_count_is_contact_only_without_interior_overlap() {

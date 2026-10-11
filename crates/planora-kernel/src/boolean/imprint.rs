@@ -13,7 +13,8 @@ use super::surfsurf::{SurfaceIntersection, intersect_surfaces, surface_name};
 use super::uv::{Containment, FaceGeom, face_geom, loop_points, point_in_face};
 use crate::geometry::{Curve, Surface};
 use crate::topology::Solid;
-use planora_math::{DVec3, TAU, Tolerance};
+use crate::validate::edge_surface_tol;
+use planora_math::{DVec3, Tolerance};
 
 /// Zuschlag zum Hüllquader als Anteil seiner Diagonale (deckt die Sehnenabweichung der
 /// 5°-Abtastung von Bögen ab: höchstens etwa 0,1 % des Radius).
@@ -56,6 +57,12 @@ fn bbox(g: &FaceGeom, tol: &Tolerance) -> (DVec3, DVec3) {
             pts.push(frame.origin - DVec3::splat(r));
             pts.push(frame.origin + DVec3::splat(r));
         }
+        // Hüllquader der Kontrollpunkte (enthält die ganze Fläche).
+        Surface::Nurbs(d) => {
+            let (lo, hi) = d.control_bounds();
+            pts.push(lo);
+            pts.push(hi);
+        }
         _ => {}
     }
     let (lo, hi) = pts.iter().fold(
@@ -76,16 +83,24 @@ fn overlaps(a: &(DVec3, DVec3), b: &(DVec3, DVec3)) -> bool {
 }
 
 fn is_closed_curve(c: &Curve) -> bool {
-    !matches!(c, Curve::Line { .. })
+    c.period().is_some()
+}
+
+/// Anfang des Parameterbereichs einer geschlossenen Kurve (Kreis, Ellipse: 0).
+fn period_start(c: &Curve) -> f64 {
+    c.domain().map_or(0.0, |(a, _)| a)
 }
 
 /// Parameter von `p` auf der Kurve, falls `p` (innerhalb der Toleranz) auf ihr liegt.
+/// Bei geschlossenen Kurven in `[Anfang, Anfang + Periode)` gefaltet.
 fn param_on_curve(c: &Curve, p: DVec3, tol: &Tolerance) -> Option<f64> {
     let t = c.project(p);
-    let t = if is_closed_curve(c) {
-        t.rem_euclid(TAU)
-    } else {
-        t
+    let t = match c.period() {
+        Some(period) => {
+            let a = period_start(c);
+            a + (t - a).rem_euclid(period)
+        }
+        None => t,
     };
     (c.point(t).distance(p) <= tol.linear * 10.0).then_some(t)
 }
@@ -116,7 +131,9 @@ fn breakpoints(c: &Curve, fa: &FaceGeom, fb: &FaceGeom, tol: &Tolerance) -> Vec<
                     // Ein Kantenende knapp innerhalb der Toleranz kann der Nullstellensuche
                     // entgehen, wenn die Kante gleich dahinter die Fläche verlässt.
                     for p in [e.start(), e.end()] {
-                        if other.surface.implicit(p).abs() <= tol.linear {
+                        if other.surface.implicit(p).abs()
+                            <= edge_surface_tol(&e.curve, &other.surface, tol)
+                        {
                             add(p);
                         }
                     }
@@ -185,14 +202,15 @@ fn pieces(
 ) -> Vec<(Seg, Containment, Containment)> {
     ts.sort_by(|x, y| x.total_cmp(y));
     let mut intervals: Vec<(f64, f64)> = Vec::new();
-    if is_closed_curve(c) {
+    if let Some(period) = c.period() {
         if ts.is_empty() {
-            intervals.push((0.0, TAU));
+            let a = period_start(c);
+            intervals.push((a, a + period));
         } else {
             for w in ts.windows(2) {
                 intervals.push((w[0], w[1]));
             }
-            intervals.push((ts[ts.len() - 1], ts[0] + TAU));
+            intervals.push((ts[ts.len() - 1], ts[0] + period));
         }
     } else {
         for w in ts.windows(2) {

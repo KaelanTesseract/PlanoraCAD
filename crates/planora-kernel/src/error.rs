@@ -28,4 +28,8 @@ pub enum KernelError {
     ProfileLoopsIntersect,
     #[error("Ein Loch liegt innerhalb eines anderen Lochs")]
     NestedHoles,
+    #[error("Die Freiformfläche ist ungültig: {0}")]
+    InvalidSurface(String),
+    #[error("Die Freiformkurve ist ungültig: {0}")]
+    InvalidCurve(String),
 }

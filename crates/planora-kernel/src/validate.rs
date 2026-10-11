@@ -1,8 +1,33 @@
-use crate::geometry::Surface;
+use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
 use crate::topology::{Edge, Face, Solid, Vertex};
+use planora_math::Tolerance;
 use std::collections::HashSet;
 use thiserror::Error;
+
+/// Toleranz (mm), mit der eine Ecke oder Kante auf einer Fläche liegt, wenn Freiformkurven oder
+/// -flächen beteiligt sind (Annäherung von Schnittkurven, Spec N4).
+pub const NURBS_EDGE_TOL: f64 = 1e-5;
+
+/// Toleranz für „Kante liegt auf Fläche“: `tol.linear`, mit einer Freiformkurve oder -fläche als
+/// Beteiligter mindestens [`NURBS_EDGE_TOL`].
+pub fn edge_surface_tol(curve: &Curve, surface: &Surface, tol: &Tolerance) -> f64 {
+    if matches!(curve, Curve::Nurbs(_)) {
+        tol.linear.max(NURBS_EDGE_TOL)
+    } else {
+        point_surface_tol(surface, tol)
+    }
+}
+
+/// Toleranz für „Punkt liegt auf Fläche“: `tol.linear`, bei Freiformflächen mindestens
+/// [`NURBS_EDGE_TOL`].
+pub fn point_surface_tol(surface: &Surface, tol: &Tolerance) -> f64 {
+    if matches!(surface, Surface::Nurbs(_)) {
+        tol.linear.max(NURBS_EDGE_TOL)
+    } else {
+        tol.linear
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ValidationError {
