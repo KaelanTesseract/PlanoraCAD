@@ -1,10 +1,14 @@
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
+use crate::dock::{Dock, Pane};
 use crate::feature_dialog::FeatureDialog;
+use crate::projects_panel::ProjectsUi;
 use crate::state::{AppState, SketchRequest, StandardPlane};
 use crate::workspace::{Prompt, Workspace};
-use crate::{browser, fonts, prompts, properties, sketch_panel, tabs, theme, viewport};
-use egui_tiles::{Container, SimplificationOptions, TileId, Tiles, Tree, UiResponse};
+use crate::{
+    browser, fonts, projects_panel, prompts, properties, sketch_panel, tabs, theme, viewport,
+};
+use egui_tiles::{SimplificationOptions, TileId, Tiles, UiResponse};
 use planora_feature::SketchPlane;
 use planora_kernel::BoolOp;
 use planora_render::gpu::GpuScene;
@@ -15,56 +19,55 @@ use std::time::{Duration, Instant};
 /// Wie oft die App ohne Eingaben neu zeichnet, damit die Autosicherung auch im Leerlauf läuft.
 const AUTOSAVE_REPAINT: Duration = Duration::from_secs(30);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Pane {
-    Browser,
-    Viewport,
-    Properties,
+struct Behavior<'a> {
+    ws: &'a mut Workspace,
+    projects_ui: &'a mut ProjectsUi,
 }
 
-struct Behavior<'a> {
-    state: &'a mut AppState,
-    /// Schreibgeschützte Ansicht einer alten Version: Browser und Eigenschaften sind gesperrt.
-    read_only: bool,
+/// Rollbarer Bereich mit Innenabstand für die Panels.
+fn scrolled(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, add_contents);
+        });
 }
 
 impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     fn tab_title_for_pane(&mut self, pane: &Pane) -> egui::WidgetText {
         match pane {
+            Pane::Projects => "Projekte",
             Pane::Browser => "Browser",
             Pane::Viewport => "3D-Ansicht",
             Pane::Properties => "Eigenschaften",
+            Pane::Versions => "Versionen",
         }
         .into()
     }
 
     fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut Pane) -> UiResponse {
-        let enabled = !self.read_only;
+        // Schreibgeschützte Ansicht einer alten Version: Browser und Eigenschaften sind gesperrt.
+        let enabled = !self.ws.active_tab().read_only;
         match pane {
             // Der Viewport füllt den Platz selbst aus und braucht keine Rollbalken.
-            Pane::Viewport => viewport::show(ui, self.state),
-            Pane::Browser => {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        egui::Frame::NONE
-                            .inner_margin(egui::Margin::same(8))
-                            .show(ui, |ui| {
-                                ui.add_enabled_ui(enabled, |ui| browser::show(ui, self.state));
-                            });
-                    });
-            }
-            Pane::Properties => {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        egui::Frame::NONE
-                            .inner_margin(egui::Margin::same(8))
-                            .show(ui, |ui| {
-                                ui.add_enabled_ui(enabled, |ui| properties::show(ui, self.state));
-                            });
-                    });
-            }
+            Pane::Viewport => viewport::show(ui, &mut self.ws.active_tab_mut().state),
+            Pane::Browser => scrolled(ui, |ui| {
+                let state = &mut self.ws.active_tab_mut().state;
+                ui.add_enabled_ui(enabled, |ui| browser::show(ui, state));
+            }),
+            Pane::Properties => scrolled(ui, |ui| {
+                let state = &mut self.ws.active_tab_mut().state;
+                ui.add_enabled_ui(enabled, |ui| properties::show(ui, state));
+            }),
+            Pane::Projects => scrolled(ui, |ui| {
+                projects_panel::show(ui, self.ws, self.projects_ui);
+            }),
+            // Task 11 füllt diesen Bereich mit dem Versionsbaum.
+            Pane::Versions => scrolled(ui, |ui| {
+                ui.weak("Hier erscheinen die Versionen des aktiven Dokuments.");
+            }),
         }
         UiResponse::None
     }
@@ -83,29 +86,10 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
     }
 }
 
-/// Anfangsanordnung: Browser links (20 %), 3D-Ansicht in der Mitte, Eigenschaften rechts (22 %).
-fn build_docking() -> Tree<Pane> {
-    let mut tiles = Tiles::default();
-    let mut tab_of = |pane: Pane| {
-        let id = tiles.insert_pane(pane);
-        tiles.insert_tab_tile(vec![id])
-    };
-    let browser = tab_of(Pane::Browser);
-    let viewport = tab_of(Pane::Viewport);
-    let properties = tab_of(Pane::Properties);
-    let root = tiles.insert_horizontal_tile(vec![browser, viewport, properties]);
-    if let Some(egui_tiles::Tile::Container(Container::Linear(linear))) = tiles.get_mut(root) {
-        // Anteile; Summe 3 (= Anzahl der Kinder): 20 %, 58 %, 22 %.
-        linear.shares.set_share(browser, 0.6);
-        linear.shares.set_share(viewport, 1.74);
-        linear.shares.set_share(properties, 0.66);
-    }
-    Tree::new("planora_docking", root, tiles)
-}
-
 pub struct PlanoraApp {
     ws: Workspace,
-    dock: Tree<Pane>,
+    dock: Dock,
+    projects_ui: ProjectsUi,
     applied_dark: Option<bool>,
     /// `ViewportCommand::Close` wurde nach freigegebenem Beenden schon geschickt.
     close_sent: bool,
@@ -131,14 +115,19 @@ impl PlanoraApp {
         let ws = Workspace::new(library, config);
         Self {
             ws,
-            dock: build_docking(),
+            dock: Dock::new(),
+            projects_ui: ProjectsUi::default(),
             applied_dark: None,
             close_sent: false,
         }
     }
 
-    /// Zeigt das Projekt-Panel (füllt Task 10 mit dem Dock-Bereich „Projekte“).
-    fn show_projects(&mut self) {}
+    /// Öffnen (Strg+O): blendet das Projekt-Panel ein; dort wird das Dokument gewählt. Der Baum
+    /// wird dabei neu gelesen, damit er aktuell ist.
+    fn show_projects(&mut self) {
+        self.dock.set_visible(Pane::Projects, true);
+        self.projects_ui.invalidate();
+    }
 
     /// Strg+S / Speichern: fragt nach Kommentar (Dialog), Ort oder Zweig.
     fn begin_save(&mut self, as_new: bool) {
@@ -347,6 +336,13 @@ impl PlanoraApp {
             self.ws.set_dark(!dark);
             ui.close();
         }
+        ui.separator();
+        for (label, pane) in [("Projekte", Pane::Projects), ("Versionen", Pane::Versions)] {
+            let mut visible = self.dock.is_visible(pane);
+            if ui.checkbox(&mut visible, label).changed() {
+                self.dock.set_visible(pane, visible);
+            }
+        }
     }
 
     /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
@@ -498,7 +494,7 @@ impl eframe::App for PlanoraApp {
                 ));
             }
         });
-        let tab = self.ws.active_tab_mut();
+        let tab = self.ws.active_tab();
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let state = &tab.state;
@@ -515,15 +511,16 @@ impl eframe::App for PlanoraApp {
                 };
             });
         });
-        let read_only = tab.read_only;
         egui::CentralPanel::default().show(ui, |ui| {
             let mut behavior = Behavior {
-                state: &mut tab.state,
-                read_only,
+                ws: &mut self.ws,
+                projects_ui: &mut self.projects_ui,
             };
-            self.dock.ui(&mut behavior, ui);
+            self.dock.tree.ui(&mut behavior, ui);
         });
 
+        // Das Projekt-Panel kann den aktiven Tab gewechselt haben (Dokument geöffnet).
+        let tab = self.ws.active_tab_mut();
         if let Some(dialog) = dialog_for_request(&mut tab.state) {
             tab.dialog = Some(dialog);
         }
