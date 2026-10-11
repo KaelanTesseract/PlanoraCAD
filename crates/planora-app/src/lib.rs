@@ -14,6 +14,7 @@ pub mod sketch_view;
 pub mod state;
 pub mod theme;
 pub mod viewport;
+pub mod workspace;
 
 /// Hilfen für die fensterlosen Oberflächentests.
 #[doc(hidden)]

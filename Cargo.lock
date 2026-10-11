@@ -2430,6 +2430,7 @@ dependencies = [
  "planora-kernel",
  "planora-math",
  "planora-mesh",
+ "planora-project",
  "planora-render",
  "planora-sketch",
  "winit",

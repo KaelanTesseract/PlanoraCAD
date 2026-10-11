@@ -183,3 +183,17 @@ fn a_sphere_at_the_dialog_maximum_gives_a_bounded_scene() {
     );
     assert!(s.scene.face_vertices.len() < 1_000_000);
 }
+
+#[test]
+fn scene_versions_are_unique_across_states_and_loading_continues_the_names() {
+    let a = AppState::new();
+    let b = AppState::new();
+    assert_ne!(a.scene_version, b.scene_version);
+    let mut s = AppState::new();
+    s.create_box(planora_math::DVec3::splat(3.0)).unwrap();
+    s.create_box(planora_math::DVec3::splat(4.0)).unwrap();
+    let mut t = AppState::from_snapshot(s.snapshot()).unwrap();
+    assert_eq!(t.bodies.len(), 2);
+    t.create_box(planora_math::DVec3::splat(5.0)).unwrap();
+    assert!(t.document.features().iter().any(|f| f.name == "Quader 3"));
+}
