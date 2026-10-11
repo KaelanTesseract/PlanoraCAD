@@ -33,6 +33,19 @@ pub enum BodyKind {
 /// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
 pub use planora_feature::StandardPlane;
 
+/// Größte Nummer „Bezeichnung N“, die beim Laden als Namenszähler fortgesetzt wird. Größere
+/// Nummern (nur aus fremden oder bösartigen Dateien denkbar) werden ignoriert, damit der Zähler
+/// nicht an `u64::MAX` stößt; neue Namen kollidieren mit ihnen erst nach so vielen Features.
+const MAX_NAME_COUNTER: u64 = 1_000_000;
+
+static NEXT_SCENE_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Szenenstände sind über alle Tabs eindeutig, damit ein Tab-Wechsel die GPU-Szene sicher
+/// neu hochlädt (siehe viewport.rs).
+fn next_scene_version() -> u64 {
+    NEXT_SCENE_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Sichtbarer Körper, abgeleitet aus dem Feature-Dokument (nie direkt verändert).
 pub struct Body {
     pub name: String,
@@ -265,15 +278,54 @@ impl AppState {
         self.bodies.iter().position(|b| b.source == r)
     }
 
+    /// Stand der Zeitleiste zum Speichern (eine offene Skizze wird vorher mit `try_close_sketch`
+    /// ins Dokument geschrieben; das ist Sache des Aufrufers).
+    pub fn snapshot(&self) -> planora_feature::Snapshot {
+        self.document.snapshot()
+    }
+
+    /// Neuer Zustand aus einem geladenen Stand: Dokument aufbauen und berechnen, Namenszähler
+    /// fortsetzen, Körper ableiten, Ansicht einpassen.
+    pub fn from_snapshot(snapshot: planora_feature::Snapshot) -> Result<AppState, String> {
+        let mut s = AppState::new();
+        s.document =
+            Document::from_snapshot(snapshot, s.chord_tolerance).map_err(|e| e.to_string())?;
+        s.rebuild_name_counters();
+        s.refresh();
+        s.frame_all();
+        Ok(s)
+    }
+
+    /// Setzt die Zähler je Bezeichnung aus vorhandenen Namen „Bezeichnung N“ fort, damit neue
+    /// Namen nach dem Laden nicht doppelt vergeben werden.
+    fn rebuild_name_counters(&mut self) {
+        self.name_counters.clear();
+        for f in self.document.features() {
+            if let Some((label, num)) = f.name.rsplit_once(' ')
+                && let Ok(n) = num.parse::<u64>()
+                && n <= MAX_NAME_COUNTER
+            {
+                let c = self.name_counters.entry(label.to_string()).or_insert(0);
+                *c = (*c).max(n);
+            }
+        }
+    }
+
     /// Nächster Name `{Bezeichnung} {Nummer}` für `label`, ohne den Zähler zu erhöhen.
     fn next_name(&self, label: &str) -> String {
-        let n = self.name_counters.get(label).copied().unwrap_or(0) + 1;
+        let n = self
+            .name_counters
+            .get(label)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1);
         format!("{label} {n}")
     }
 
     /// Zählt den Namenszähler für `label` weiter (nur nach erfolgreichem Anlegen).
     fn count_name(&mut self, label: &str) {
-        *self.name_counters.entry(label.to_string()).or_insert(0) += 1;
+        let c = self.name_counters.entry(label.to_string()).or_insert(0);
+        *c = c.saturating_add(1);
     }
 
     /// Legt ein Feature `{Bezeichnung} {Nummer}` am Marker an (Bezeichnung `base_name` oder
@@ -740,7 +792,7 @@ impl AppState {
             &self.scene_palette(),
             GRID_HALF_EXTENT,
         ));
-        self.scene_version += 1;
+        self.scene_version = next_scene_version();
     }
 
     /// Richtet die Kamera auf alle Körper aus (ohne Körper: Standardansicht auf den Ursprung).

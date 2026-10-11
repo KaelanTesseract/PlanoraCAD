@@ -674,6 +674,12 @@ impl Sketch {
         for c in kind.curves() {
             self.check_curve(c)?;
         }
+        self.check_types(kind)
+    }
+
+    /// Prüft nur die Objekttypen und Entartungen; die Ids müssen im Bereich der Arenen liegen
+    /// (auch gelöschte Objekte sind erlaubt). Genutzt von `check_structure` und `from_data`.
+    pub(crate) fn check_types(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
         let is_line = |c: CurveId| is_line_kind(&self.curves[c].kind);
         let is_round = |c: CurveId| {
             matches!(
@@ -912,6 +918,18 @@ impl Sketch {
                 Some(Sampled::spline(&xy))
             }
             _ => None,
+        }
+    }
+
+    /// Braucht die (geprüfte) Abhängigkeit eine Zusatzvariable? Dieselbe Regel wie in
+    /// `extra_start`: Punkt auf Spline, Tangente zwischen Linie und Ellipse/Spline.
+    pub(crate) fn needs_extra(&self, kind: &ConstraintKind) -> bool {
+        match kind {
+            ConstraintKind::PointOnCurve(_, c) => {
+                matches!(self.curves[*c].kind, CurveKind::Spline { .. })
+            }
+            ConstraintKind::Tangent(a, b) => line_and_param(self, *a, *b).is_some(),
+            _ => false,
         }
     }
 

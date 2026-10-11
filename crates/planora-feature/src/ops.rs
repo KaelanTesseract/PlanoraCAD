@@ -32,6 +32,7 @@ impl Document {
         let feature = &mut self.features[idx];
         feature.kind = kind;
         feature.version = version;
+        self.edits += 1;
         Ok(self.recompute())
     }
 
@@ -54,7 +55,10 @@ impl Document {
             ));
         }
         let idx = self.index_of(id).ok_or(FeatureError::UnknownFeature)?;
-        self.features[idx].name = name;
+        if self.features[idx].name != name {
+            self.features[idx].name = name;
+            self.edits += 1;
+        }
         Ok(())
     }
 
@@ -105,6 +109,7 @@ impl Document {
             .count();
         self.features.retain(|f| !removed.contains(&f.id));
         self.marker -= before_marker;
+        self.edits += 1;
         self.recompute();
         Ok(removed)
     }

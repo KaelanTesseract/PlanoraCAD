@@ -274,14 +274,14 @@ fn status_view(
         FeatureStatus::Suppressed => (
             Some(STATUS_WORDS[2]),
             Some(weak),
-            Some("Unterdrückt: wird nicht berechnet (Rechtsklick → „Aktivieren“)".into()),
+            Some("Unterdrückt: wird nicht berechnet (Rechtsklick, dann „Aktivieren“)".into()),
         ),
         FeatureStatus::NotComputed => (
             Some(STATUS_WORDS[3]),
             Some(weak),
             Some(
                 "Steht hinter der Linie „Berechnung endet hier“ und wird nicht berechnet \
-                 (Rechtsklick → „Zum Ende“)"
+                 (Rechtsklick, dann „Zum Ende“)"
                     .into(),
             ),
         ),
@@ -368,7 +368,7 @@ fn marker_line(ui: &mut egui::Ui) {
         stroke,
     );
     response.on_hover_text(
-        "Features unter dieser Linie werden nicht berechnet. Rechtsklick auf ein Feature → \
+        "Features unter dieser Linie werden nicht berechnet. Rechtsklick auf ein Feature, dann \
          „Zum Ende“ berechnet wieder alles.",
     );
 }

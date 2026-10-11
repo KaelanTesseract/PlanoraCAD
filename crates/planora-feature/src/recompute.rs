@@ -43,7 +43,10 @@ impl Document {
     ) -> Result<FeatureId, FeatureError> {
         self.check_references(&kind, self.marker)?;
         let id = FeatureId(self.next_id);
-        self.next_id += 1;
+        let next_id = self.next_id.checked_add(1).ok_or_else(|| {
+            FeatureError::InvalidInput("Die Feature-Kennungen sind aufgebraucht".into())
+        })?;
+        self.next_id = next_id;
         let version = self.bump();
         self.features.insert(
             self.marker,
@@ -59,6 +62,7 @@ impl Document {
             },
         );
         self.marker += 1;
+        self.edits += 1;
         self.recompute();
         Ok(id)
     }
@@ -84,6 +88,7 @@ impl Document {
         let f = &mut self.features[idx];
         f.suppressed = suppressed;
         f.version = version;
+        self.edits += 1;
         Ok(self.recompute())
     }
 
@@ -95,7 +100,10 @@ impl Document {
                 self.features.len()
             )));
         }
-        self.marker = n;
+        if n != self.marker {
+            self.marker = n;
+            self.edits += 1;
+        }
         self.recompute();
         Ok(())
     }

@@ -1,0 +1,290 @@
+{
+  "format": 1,
+  "marker": 8,
+  "naechste_id": 9,
+  "features": [
+    {
+      "id": 1,
+      "name": "Quader 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "quader",
+        "groesse": [
+          30.0,
+          20.0,
+          10.0
+        ],
+        "ursprung": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "name": "Zylinder 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "zylinder",
+        "radius": 4.0,
+        "hoehe": 14.0,
+        "ursprung": [
+          10.0,
+          10.0,
+          -2.0
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "name": "Kugel 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "kugel",
+        "radius": 3.0,
+        "ursprung": [
+          50.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "name": "Kegel 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "kegel",
+        "radius": 3.0,
+        "hoehe": 6.0,
+        "ursprung": [
+          60.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "name": "Abzug",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "boolesch",
+        "ziel": {
+          "feature": 1,
+          "index": 0
+        },
+        "werkzeug": {
+          "feature": 2,
+          "index": 0
+        },
+        "operation": "abziehen"
+      }
+    },
+    {
+      "id": 6,
+      "name": "Weg",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "verschieben",
+        "koerper": {
+          "feature": 5,
+          "index": 0
+        },
+        "versatz": [
+          0.0,
+          0.0,
+          5.0
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "name": "Skizze 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "skizze",
+        "skizze": {
+          "name": "Skizze 1",
+          "ebene": {
+            "ursprung": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              1.0,
+              0.0
+            ],
+            "z": [
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "linear": 1e-6,
+          "winkel": 1e-9,
+          "werte": [
+            0.0,
+            0.0,
+            8.0,
+            0.0,
+            8.0,
+            6.0,
+            0.0,
+            6.0
+          ],
+          "punkte": [
+            {
+              "x": 0,
+              "y": 1,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 2,
+              "y": 3,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 4,
+              "y": 5,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 6,
+              "y": 7,
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "kurven": [
+            {
+              "art": {
+                "typ": "linie",
+                "a": 0,
+                "b": 1
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 1,
+                "b": 2
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 2,
+                "b": 3
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 3,
+                "b": 0
+              },
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "abhaengigkeiten": [
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 0
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 1
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 2
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 3
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            }
+          ]
+        },
+        "lage": {
+          "typ": "standard",
+          "ebene": "xy"
+        },
+        "kopien": []
+      }
+    },
+    {
+      "id": 8,
+      "name": "Extrusion 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "extrusion",
+        "skizze": 7,
+        "profil": 0,
+        "hoehe": 4.0
+      }
+    }
+  ]
+}

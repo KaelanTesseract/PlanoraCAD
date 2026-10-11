@@ -4,16 +4,22 @@ pub mod app;
 pub mod boolean_dialog;
 pub mod browser;
 pub mod create_dialog;
+pub mod dock;
 pub mod feature_dialog;
 pub mod fonts;
 pub mod icons;
+pub mod projects_panel;
+pub mod prompts;
 pub mod properties;
 pub mod sketch_panel;
 pub mod sketch_state;
 pub mod sketch_view;
 pub mod state;
+pub mod tabs;
 pub mod theme;
+pub mod versions_panel;
 pub mod viewport;
+pub mod workspace;
 
 /// Hilfen für die fensterlosen Oberflächentests.
 #[doc(hidden)]

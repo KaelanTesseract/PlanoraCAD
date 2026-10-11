@@ -213,6 +213,8 @@ pub struct Document {
     pub(crate) kernel: AnalyticKernel,
     /// Sehnentoleranz der Tessellierung für die Volumenprobe Boolescher Operationen.
     pub(crate) chord_tolerance: f64,
+    /// Zähler der öffentlichen Änderungen (siehe [`Document::edit_count`]).
+    pub(crate) edits: u64,
 }
 
 /// Standard-Sehnentoleranz in Millimetern (wie in der App).
@@ -245,6 +247,7 @@ impl Document {
             next_version: 1,
             kernel: AnalyticKernel::default(),
             chord_tolerance,
+            edits: 0,
         }
     }
 
@@ -257,6 +260,12 @@ impl Document {
         let v = self.next_version;
         self.next_version += 1;
         v
+    }
+
+    /// Zähler aller öffentlichen Änderungen am Dokument (Hinzufügen, Ändern, Umbenennen,
+    /// Löschen, Unterdrücken, Marker). Die Oberfläche erkennt daran ungespeicherte Änderungen.
+    pub fn edit_count(&self) -> u64 {
+        self.edits
     }
 
     pub fn features(&self) -> &[Feature] {

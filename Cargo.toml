@@ -18,6 +18,7 @@ planora-mesh = { path = "crates/planora-mesh" }
 planora-render = { path = "crates/planora-render" }
 planora-sketch = { path = "crates/planora-sketch" }
 planora-feature = { path = "crates/planora-feature" }
+planora-project = { path = "crates/planora-project" }
 
 # externe Crates (Lizenzen am 2026-10-09 geprüft: alle MIT und/oder Apache-2.0, earcutr ISC, spade MIT OR Apache-2.0, egui_tiles MIT OR Apache-2.0, Roboto-Schrift Apache-2.0)
 glam = "0.34"
@@ -36,6 +37,9 @@ egui-wgpu = "0.36"
 # da das wegen der Schriften abgeschaltet ist, werden sie hier gleichwertig angefordert.
 winit = "0.30"
 egui_tiles = { version = "0.17", default-features = false }
+# Dateiformat (Teilprojekt 6). Lizenzen: serde und serde_json MIT OR Apache-2.0; Unterpakete siehe cargo deny.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
