@@ -270,6 +270,190 @@ fn autosave_round_trips_and_is_discarded() {
     assert!(st.read_autosave().is_err());
 }
 
+fn mutate_doc(p: &std::path::Path, f: impl FnOnce(&mut serde_json::Value)) {
+    let doc = p.join("dokument.json");
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&doc).unwrap()).unwrap();
+    f(&mut v);
+    std::fs::write(&doc, v.to_string()).unwrap();
+}
+
+#[test]
+fn newer_files_with_changed_structure_report_too_new() {
+    let p = dir();
+    let st = DocStore::create(&p, &snap(1), "").unwrap();
+    st.write_autosave(Some(1), &snap(2)).unwrap();
+    std::fs::write(
+        p.join(".autosave.json"),
+        r#"{"format":2,"basiert_auf":{"neu":1}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        st.read_autosave(),
+        Err(ProjectError::TooNew { found: 2, .. })
+    ));
+    drop(st);
+    std::fs::write(
+        p.join("dokument.json"),
+        r#"{"format":2,"versionen":{"neu":true}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        peek(&p),
+        Err(ProjectError::TooNew { found: 2, .. })
+    ));
+    assert!(matches!(
+        DocStore::open(&p, LockMode::Acquire),
+        Err(ProjectError::TooNew { .. })
+    ));
+}
+
+#[test]
+fn a_huge_version_tree_loads_quickly() {
+    let p = dir();
+    drop(DocStore::create(&p, &snap(1), "").unwrap());
+    mutate_doc(&p, |v| {
+        let mut versions = vec![];
+        let mut branches = serde_json::Map::new();
+        for n in 1..=20_000u32 {
+            let branch = if n == 1 {
+                "Haupt".to_string()
+            } else {
+                format!("B{n}")
+            };
+            versions.push(serde_json::json!({
+                "nummer": n, "eltern": if n == 1 { None } else { Some(n - 1) },
+                "zweig": branch, "zeit": "2026-01-01T00:00:00Z",
+                "kommentar": "", "programm": "t"
+            }));
+            branches.insert(branch, n.into());
+        }
+        v["versionen"] = versions.into();
+        v["zweige"] = branches.into();
+    });
+    let t = std::time::Instant::now();
+    let (info, report) = peek(&p).unwrap();
+    assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
+    assert_eq!(info.versions.len(), 20_000);
+    assert_eq!(report.missing.len(), 19_999);
+}
+
+#[test]
+fn a_branch_name_without_a_base_version_branches_from_the_active_tip() {
+    let p = dir();
+    let mut st = DocStore::create(&p, &snap(1), "").unwrap();
+    st.save(None, &snap(2), "", None).unwrap();
+    let v = st.save(None, &snap(3), "", Some("Neu")).unwrap();
+    assert_eq!(v, 3);
+    assert_eq!(st.info().version(3).unwrap().parent, Some(2));
+    assert_eq!(st.info().version(3).unwrap().branch, "Neu");
+    assert_eq!(st.info().tip(MAIN_BRANCH), Some(2));
+    assert!(st.save(None, &snap(3), "", Some("Neu")).is_err());
+    assert!(st.save(None, &snap(3), "", Some("")).is_err());
+    st.info().check().unwrap();
+}
+
+#[test]
+fn only_the_childless_tip_of_a_branch_can_be_deleted() {
+    let p = dir();
+    let mut st = DocStore::create(&p, &snap(1), "").unwrap();
+    st.save(None, &snap(2), "", None).unwrap();
+    st.save(None, &snap(3), "", None).unwrap();
+    assert!(st.delete_version(2).is_err());
+    assert!(st.delete_version(1).is_err());
+    st.delete_version(3).unwrap();
+    assert_eq!(st.info().tip(MAIN_BRANCH), Some(2));
+}
+
+#[test]
+fn version_numbers_are_never_reused() {
+    let p = dir();
+    let mut st = DocStore::create(&p, &snap(1), "").unwrap();
+    st.save(None, &snap(2), "", None).unwrap();
+    st.save(None, &snap(3), "", None).unwrap();
+    st.delete_version(3).unwrap();
+    assert_eq!(st.save(None, &snap(4), "", None).unwrap(), 4);
+    st.delete_version(4).unwrap();
+    drop(st);
+    let (mut st, _) = DocStore::open(&p, LockMode::Acquire).unwrap();
+    assert_eq!(st.info().max_number, 4);
+    assert_eq!(st.save(None, &snap(5), "", None).unwrap(), 5);
+    drop(st);
+    // ältere Dateien ohne das Feld laden weiterhin
+    mutate_doc(&p, |v| {
+        v.as_object_mut().unwrap().remove("hoechste_nummer");
+    });
+    let (st, _) = DocStore::open(&p, LockMode::Acquire).unwrap();
+    assert_eq!(st.info().max_number, 5);
+}
+
+#[test]
+fn comments_times_and_formats_in_the_file_are_validated() {
+    let p = dir();
+    let mut st = DocStore::create(&p, &snap(1), "").unwrap();
+    st.save(None, &snap(2), "", None).unwrap();
+    drop(st);
+    let good = std::fs::read_to_string(p.join("dokument.json")).unwrap();
+    type Mutation = Box<dyn Fn(&mut serde_json::Value)>;
+    let cases: Vec<Mutation> = vec![
+        Box::new(|v| v["versionen"][1]["kommentar"] = "a\u{7}b".into()),
+        Box::new(|v| v["versionen"][1]["kommentar"] = "x".repeat(MAX_COMMENT_CHARS + 1).into()),
+        Box::new(|v| v["versionen"][1]["zeit"] = "gestern".into()),
+        Box::new(|v| v["versionen"][1]["zeit"] = "2026-01-01 00:00:00Z".into()),
+        Box::new(|v| v["versionen"][1]["zeit"] = "2026-01-0aT00:00:00Z".into()),
+        Box::new(|v| v["format"] = 0.into()),
+    ];
+    for c in cases {
+        std::fs::write(p.join("dokument.json"), &good).unwrap();
+        mutate_doc(&p, c);
+        assert!(
+            matches!(peek(&p), Err(ProjectError::Corrupt { .. })),
+            "{:?}",
+            peek(&p).map(|_| ())
+        );
+    }
+    std::fs::write(p.join("dokument.json"), &good).unwrap();
+    let (st, _) = DocStore::open(&p, LockMode::Acquire).unwrap();
+    // Autosicherung mit unbekannter Ausgangsversion
+    st.write_autosave(Some(1), &snap(1)).unwrap();
+    assert!(st.read_autosave().is_ok());
+    st.write_autosave(Some(99), &snap(1)).unwrap();
+    assert!(matches!(
+        st.read_autosave(),
+        Err(ProjectError::Corrupt { .. })
+    ));
+    st.write_autosave(None, &snap(1)).unwrap();
+    assert!(st.read_autosave().unwrap().is_some());
+}
+
+#[test]
+fn open_removes_leftover_temp_files_and_a_failed_create_cleans_up() {
+    let p = dir();
+    drop(DocStore::create(&p, &snap(1), "").unwrap());
+    for n in [
+        "dokument.json.tmp",
+        ".autosave.json.tmp",
+        "versionen/0002.json.tmp",
+    ] {
+        std::fs::write(p.join(n), "x").unwrap();
+    }
+    let (_st, report) = DocStore::open(&p, LockMode::Acquire).unwrap();
+    assert!(report.orphans.is_empty());
+    for n in [
+        "dokument.json.tmp",
+        ".autosave.json.tmp",
+        "versionen/0002.json.tmp",
+    ] {
+        assert!(!p.join(n).exists(), "{n}");
+    }
+    // ein vorhandener Ordner wird nicht angefasst
+    assert!(matches!(
+        DocStore::create(&p, &snap(1), ""),
+        Err(ProjectError::Exists(_))
+    ));
+    assert!(p.join("dokument.json").is_file());
+}
+
 mod random {
     use super::*;
     use proptest::prelude::*;

@@ -35,11 +35,18 @@ pub struct DocumentInfo {
     pub versions: Vec<VersionInfo>,
     pub branches: BTreeMap<String, u32>,
     pub active_branch: String,
+    /// Höchste Versionsnummer, die je vergeben wurde (auch für inzwischen gelöschte Versionen),
+    /// damit Nummern nie wiederverwendet werden.
+    pub max_number: u32,
 }
 
 impl DocumentInfo {
+    /// Sucht eine Version. `versions` ist (nach `check`) aufsteigend nach Nummer sortiert.
     pub fn version(&self, n: u32) -> Option<&VersionInfo> {
-        self.versions.iter().find(|v| v.number == n)
+        self.versions
+            .binary_search_by_key(&n, |v| v.number)
+            .ok()
+            .map(|i| &self.versions[i])
     }
 
     pub fn tip(&self, branch: &str) -> Option<u32> {
@@ -72,6 +79,8 @@ impl DocumentInfo {
         }
         let mut seen = BTreeSet::new();
         let mut last = 0;
+        // jüngste Version je Zweig, in einem Durchgang
+        let mut newest: BTreeMap<&str, u32> = BTreeMap::new();
         for (i, v) in self.versions.iter().enumerate() {
             if v.number == 0 || v.number <= last {
                 return Err(format!(
@@ -90,12 +99,6 @@ impl DocumentInfo {
                         v.number
                     ));
                 }
-                Some(_) if i == 0 => {
-                    return Err(format!(
-                        "Die erste Version {} darf keine Elternversion haben",
-                        v.number
-                    ));
-                }
                 _ => {}
             }
             seen.insert(v.number);
@@ -105,24 +108,32 @@ impl DocumentInfo {
                     v.number
                 ));
             }
+            if !time_ok(&v.time) {
+                return Err(format!(
+                    "Version {} hat eine ungültige Zeitangabe",
+                    v.number
+                ));
+            }
+            if v.comment.chars().count() > MAX_COMMENT_CHARS
+                || v.comment.chars().any(|c| c.is_control() && c != '\n')
+            {
+                return Err(format!(
+                    "Version {} hat einen ungültigen Kommentar",
+                    v.number
+                ));
+            }
+            newest.insert(&v.branch, v.number);
+        }
+        if self.max_number < last {
+            return Err("Die höchste vergebene Versionsnummer stimmt nicht".into());
+        }
+        if newest.len() != self.branches.len() {
+            return Err("Zweige und Versionen passen nicht zusammen".into());
         }
         for (name, tip) in &self.branches {
-            let newest = self
-                .versions
-                .iter()
-                .filter(|v| &v.branch == name)
-                .map(|v| v.number)
-                .max();
-            if newest != Some(*tip) {
+            if newest.get(name.as_str()) != Some(tip) {
                 return Err(format!("Die Spitze des Zweigs „{name}“ stimmt nicht"));
             }
-        }
-        if self
-            .versions
-            .iter()
-            .any(|v| !self.branches.contains_key(&v.branch))
-        {
-            return Err("Eine Version gehört zu keinem Zweig".into());
         }
         if !self.branches.contains_key(&self.active_branch) {
             return Err("Der aktive Zweig gibt es nicht".into());
@@ -137,6 +148,41 @@ pub fn branch_name_ok(n: &str) -> bool {
         && n == n.trim()
         && n.chars().count() <= MAX_BRANCH_CHARS
         && !n.chars().any(char::is_control)
+}
+
+/// Zeitangabe in der festen Form „JJJJ-MM-TTThh:mm:ssZ“ (nur Ziffern und Trennzeichen), damit
+/// Textvergleiche stimmen.
+fn time_ok(t: &str) -> bool {
+    let b = t.as_bytes();
+    b.len() == 20
+        && b.iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            10 => *c == b'T',
+            13 | 16 => *c == b':',
+            19 => *c == b'Z',
+            _ => c.is_ascii_digit(),
+        })
+}
+
+/// Liest zuerst nur das Format, damit eine neuere Datei auch bei geänderter Struktur die
+/// richtige Meldung (zu neu) bekommt.
+fn check_head(text: &str, origin: &str) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Head {
+        format: u32,
+    }
+    let head: Head =
+        serde_json::from_str(text).map_err(|e| ProjectError::corrupt(origin, e.to_string()))?;
+    if head.format > FORMAT_VERSION {
+        return Err(ProjectError::TooNew {
+            path: origin.into(),
+            found: head.format,
+        });
+    }
+    if head.format == 0 {
+        return Err(ProjectError::corrupt(origin, "ungültiges Format 0"));
+    }
+    Ok(())
 }
 
 fn clean_comment(t: &str) -> Result<String> {
@@ -163,6 +209,9 @@ struct DocFile {
     versionen: Vec<VersionDto>,
     zweige: BTreeMap<String, u32>,
     aktiver_zweig: String,
+    /// Höchste je vergebene Versionsnummer (fehlt in älteren Dateien).
+    #[serde(default)]
+    hoechste_nummer: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -194,19 +243,15 @@ fn to_file(i: &DocumentInfo) -> DocFile {
             .collect(),
         zweige: i.branches.clone(),
         aktiver_zweig: i.active_branch.clone(),
+        hoechste_nummer: i.max_number,
     }
 }
 
 fn from_file(f: DocFile, origin: &str) -> Result<DocumentInfo> {
-    if f.format > FORMAT_VERSION {
-        return Err(ProjectError::TooNew {
-            path: origin.into(),
-            found: f.format,
-        });
-    }
     if f.versionen.len() > MAX_VERSIONS {
         return Err(ProjectError::corrupt(origin, "zu viele Versionen"));
     }
+    let tree_max = f.versionen.iter().map(|v| v.nummer).max().unwrap_or(0);
     let info = DocumentInfo {
         id: f.id,
         versions: f
@@ -223,6 +268,7 @@ fn from_file(f: DocFile, origin: &str) -> Result<DocumentInfo> {
             .collect(),
         branches: f.zweige,
         active_branch: f.aktiver_zweig,
+        max_number: f.hoechste_nummer.max(tree_max),
     };
     info.check().map_err(|m| ProjectError::corrupt(origin, m))?;
     Ok(info)
@@ -269,6 +315,7 @@ pub fn peek(dir: &Path) -> Result<(DocumentInfo, OpenReport)> {
     let doc = dir.join(DOCUMENT_FILE);
     let origin = doc.display().to_string();
     let text = fs::read_to_string(&doc).map_err(|e| ProjectError::io(&doc, &e))?;
+    check_head(&text, &origin)?;
     let file: DocFile = serde_json::from_str(&text)
         .map_err(|e| ProjectError::corrupt(origin.clone(), e.to_string()))?;
     let info = from_file(file, &origin)?;
@@ -320,38 +367,71 @@ pub struct DocStore {
 
 impl DocStore {
     /// Legt ein neues Dokument an. `dir` darf noch nicht existieren (Ordnername endet auf `.pcad`).
+    /// Schlägt das Schreiben fehl, wird der angelegte Ordner wieder entfernt.
     pub fn create(dir: &Path, snapshot: &Snapshot, comment: &str) -> Result<DocStore> {
+        Self::create_with(dir, snapshot, comment, |_| {})
+    }
+
+    /// Wie `create`; `after_mkdir` läuft direkt nach dem Anlegen der Ordner (Prüfhaken für Tests).
+    fn create_with(
+        dir: &Path,
+        snapshot: &Snapshot,
+        comment: &str,
+        after_mkdir: impl FnOnce(&Path),
+    ) -> Result<DocStore> {
         if dir.exists() {
             return Err(ProjectError::Exists(dir.display().to_string()));
         }
         let comment = clean_comment(comment)?;
         let text = encode_version(snapshot)?;
-        fs::create_dir_all(dir.join(VERSIONS_DIR)).map_err(|e| ProjectError::io(dir, &e))?;
-        let lock = DocLock::acquire(dir)?;
-        let info = DocumentInfo {
-            id: new_id(),
-            versions: vec![VersionInfo {
-                number: 1,
-                parent: None,
-                branch: MAIN_BRANCH.into(),
-                time: now_iso(),
-                comment,
-                program: PROGRAM.into(),
-            }],
-            branches: BTreeMap::from([(MAIN_BRANCH.to_string(), 1)]),
-            active_branch: MAIN_BRANCH.into(),
-        };
-        atomic_write(
-            &dir.join(VERSIONS_DIR).join(version_file(1)),
-            text.as_bytes(),
-        )?;
-        let store = DocStore {
-            dir: dir.to_path_buf(),
-            info,
-            _lock: lock,
-        };
-        store.persist(&store.info)?;
-        Ok(store)
+        if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent).map_err(|e| ProjectError::io(parent, &e))?;
+        }
+        // create_dir (nicht create_dir_all): ein gleichzeitig angelegter Ordner ist ein Fehler
+        fs::create_dir(dir).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                ProjectError::Exists(dir.display().to_string())
+            } else {
+                ProjectError::io(dir, &e)
+            }
+        })?;
+        // ab hier gehört der Ordner uns: bei einem Fehler wieder entfernen
+        let built = (|| {
+            fs::create_dir(dir.join(VERSIONS_DIR))
+                .map_err(|e| ProjectError::io(&dir.join(VERSIONS_DIR), &e))?;
+            after_mkdir(dir);
+            let lock = DocLock::acquire(dir)?;
+            let info = DocumentInfo {
+                id: new_id(),
+                versions: vec![VersionInfo {
+                    number: 1,
+                    parent: None,
+                    branch: MAIN_BRANCH.into(),
+                    time: now_iso(),
+                    comment,
+                    program: PROGRAM.into(),
+                }],
+                branches: BTreeMap::from([(MAIN_BRANCH.to_string(), 1)]),
+                active_branch: MAIN_BRANCH.into(),
+                max_number: 1,
+            };
+            atomic_write(
+                &dir.join(VERSIONS_DIR).join(version_file(1)),
+                text.as_bytes(),
+            )?;
+            let store = DocStore {
+                dir: dir.to_path_buf(),
+                info,
+                _lock: lock,
+            };
+            store.persist(&store.info)?;
+            Ok(store)
+        })();
+        if built.is_err() {
+            // die Sperre ist hier schon freigegeben (Store und Sperre wurden verworfen)
+            let _ = fs::remove_dir_all(dir);
+        }
+        built
     }
 
     pub fn open(dir: &Path, mode: LockMode) -> Result<(DocStore, OpenReport)> {
@@ -361,6 +441,9 @@ impl DocStore {
         };
         let (info, report) = peek(dir)?;
         // Reste abgebrochener Schreibvorgänge entfernen (nur mit Sperre)
+        for name in [DOCUMENT_FILE, AUTOSAVE_FILE] {
+            let _ = fs::remove_file(dir.join(format!("{name}.tmp")));
+        }
         if let Ok(rd) = fs::read_dir(dir.join(VERSIONS_DIR)) {
             for e in rd.flatten() {
                 if e.file_name().to_string_lossy().ends_with(".tmp") {
@@ -402,6 +485,7 @@ impl DocStore {
     }
 
     /// Spitze des Zweigs oder, wenn deren Datei fehlt, die nächste Vorfahrenversion mit Datei.
+    /// Prüft nur, dass die Datei existiert, nicht, dass sie sich lesen lässt.
     pub fn latest_readable(&self, branch: &str) -> Option<u32> {
         let mut cur = self.info.tip(branch);
         while let Some(n) = cur {
@@ -414,13 +498,14 @@ impl DocStore {
     }
 
     fn next_number(&self) -> Result<u32> {
-        let mut max = self
-            .info
-            .versions
-            .iter()
-            .map(|v| v.number)
-            .max()
-            .unwrap_or(0);
+        let mut max = self.info.max_number.max(
+            self.info
+                .versions
+                .iter()
+                .map(|v| v.number)
+                .max()
+                .unwrap_or(0),
+        );
         if let Ok(rd) = fs::read_dir(self.dir.join(VERSIONS_DIR)) {
             for e in rd.flatten() {
                 if let Some(n) = e
@@ -448,7 +533,20 @@ impl DocStore {
         let (parent, branch) = match based_on {
             None => {
                 let b = self.info.active_branch.clone();
-                (self.info.tip(&b), b)
+                let tip = self.info.tip(&b);
+                match new_branch {
+                    // Mit Zweigname und ohne Ausgangsversion: neuer Zweig ab der Spitze des
+                    // aktiven Zweigs (der Name wird nie stillschweigend ignoriert).
+                    Some(name) => {
+                        if !branch_name_ok(name) || self.info.branches.contains_key(name) {
+                            return Err(ProjectError::InvalidName(
+                                "Der Zweigname ist ungültig oder vergeben.".into(),
+                            ));
+                        }
+                        (tip, name.to_string())
+                    }
+                    None => (tip, b),
+                }
             }
             Some(n) => {
                 let v = self
@@ -506,6 +604,7 @@ impl DocStore {
         });
         info.branches.insert(branch.clone(), number);
         info.active_branch = branch;
+        info.max_number = info.max_number.max(number);
         info.check().map_err(ProjectError::Invalid)?;
         // erst die Versionsdatei, dann der Versionsbaum: bricht es dazwischen ab, bleibt der
         // alte Stand gültig und die Datei verwaist
@@ -557,6 +656,11 @@ impl DocStore {
         if !self.info.children(n).is_empty() {
             return Err(ProjectError::Invalid(
                 "Auf dieser Version bauen andere auf.".into(),
+            ));
+        }
+        if self.info.tip(&v.branch) != Some(n) {
+            return Err(ProjectError::Invalid(
+                "Nur die neueste Version eines Zweigs lässt sich löschen.".into(),
             ));
         }
         let mut info = self.info.clone();
@@ -646,13 +750,16 @@ impl DocStore {
         }
         let origin = path.display().to_string();
         let text = fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, &e))?;
+        check_head(&text, &origin)?;
         let f: AutosaveFile = serde_json::from_str(&text)
             .map_err(|e| ProjectError::corrupt(origin.clone(), e.to_string()))?;
-        if f.format > FORMAT_VERSION {
-            return Err(ProjectError::TooNew {
-                path: origin,
-                found: f.format,
-            });
+        if let Some(n) = f.basiert_auf
+            && self.info.version(n).is_none()
+        {
+            return Err(ProjectError::corrupt(
+                origin,
+                format!("die Autosicherung beruht auf der unbekannten Version {n}"),
+            ));
         }
         Ok(Some(Autosave {
             based_on: f.basiert_auf,
@@ -663,5 +770,22 @@ impl DocStore {
 
     pub fn discard_autosave(&self) {
         let _ = fs::remove_file(self.dir.join(AUTOSAVE_FILE));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_create_removes_the_folder_it_made() {
+        let dir = std::env::temp_dir().join(format!("planora-create-{}.pcad", new_id()));
+        let snap = planora_feature::Document::new().snapshot();
+        let r = DocStore::create_with(&dir, &snap, "", |d| {
+            // Die Versionsdatei lässt sich nicht schreiben, wenn dort ein Ordner steht.
+            fs::create_dir_all(d.join(VERSIONS_DIR).join(version_file(1))).unwrap();
+        });
+        assert!(r.is_err());
+        assert!(!dir.exists(), "der halb gebaute Ordner wurde entfernt");
     }
 }
