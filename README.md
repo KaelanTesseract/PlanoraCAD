@@ -87,7 +87,7 @@ Deine Arbeit bleibt jetzt erhalten. Gespeichert wird die Liste der Schritte aus 
 - Unbenannte Dokumente (noch nie gespeichert) haben keine Autosicherung.
 - Umbenennen, Verschieben und Löschen im Projektbaum geht nur, wenn die betroffenen Dokumente geschlossen sind. Verschoben wird über ein Auswahlfenster, nicht durch Ziehen.
 
-**Handprüfung: noch offen.** Speichern, Projekte, Versionen, Tabs und Autosicherung wurden bisher nur durch automatische Tests ohne Fenster geprüft. Das Durchspielen in der echten Oberfläche steht noch aus.
+**Handprüfung:** Am 11.10.2026 von Hand im echten Fenster geprüft (mit `tools/gui-drive.ps1`): Projekt anlegen, Quader anlegen, Strg+S und „Speichern unter“, zweite Version mit Kommentar, Versionen-Panel, alte Version öffnen (schreibgeschützt, Menüs ausgegraut), Wiederherstellen, Fenster-× mit ungespeicherten Änderungen (Rückfrage, das Programm bleibt offen), „Speichern“ in der Rückfrage beendet das Programm und gibt die Sperre frei, Neustart und Öffnen aus dem Projekt-Panel (der Stand ist vollständig da), × ohne Änderungen schließt sofort. Nicht von Hand geprüft (nur durch automatische Tests ohne Fenster): Abzweigen mit Zweignamen-Fenster, Zweig oder Version löschen, Kommentar ändern, Ordner anlegen, umbenennen, verschieben und löschen im Projekt-Panel, Autosicherungs-Angebot nach einem Absturz, Sperre übernehmen, Schließen bei minimiertem Fenster, mehrere Tabs mit mehreren Dokumenten.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 6 – Speichern und Projekte“.
 

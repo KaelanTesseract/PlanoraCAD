@@ -171,4 +171,4 @@ Dieser Abschnitt hält fest, was beim Bauen anders wurde als oben beschrieben, j
 
 **Nicht umgesetzt oder offen**
 - Kein Test mit einem echten zweiten Prozess für die Sperre (P4).
-- Die Handprüfung nach §8 ist noch offen; siehe `offene-punkte.md`.
+- Die Handprüfung nach §8 ist teilweise erledigt (Stand und Lücken in `offene-punkte.md`). Die Handprüfung fand zwei Fehler, beide behoben: Das Projekt-Panel zeigte nach „Speichern unter“ das neue Dokument erst nach „Aktualisieren“ (jetzt zählt `Workspace::library_revision` Änderungen, und das Panel liest den Baum danach neu); und der Wurzelpfad erschien mit dem Windows-Präfix `\\?\` (jetzt wird er nur in der Anzeige entfernt).
