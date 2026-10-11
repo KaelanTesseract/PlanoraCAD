@@ -11,7 +11,7 @@ pub struct NurbsCurve {
 }
 
 /// Binomialkoeffizient (kleine Werte, in `f64`).
-fn binom(n: usize, k: usize) -> f64 {
+pub(super) fn binom(n: usize, k: usize) -> f64 {
     let mut r = 1.0;
     for i in 0..k {
         r = r * (n - i) as f64 / (i + 1) as f64;

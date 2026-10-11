@@ -1,12 +1,17 @@
-//! NURBS-Kurven: geprüfte Konstruktoren, Basisfunktionen und rationale Auswertung.
+//! NURBS-Kurven und -Flächen: geprüfte Konstruktoren, Basisfunktionen, rationale Auswertung,
+//! Knoteneinfügen und Zerlegung in rationale Bézier-Stücke.
 
+mod bezier;
 mod curve;
 mod error;
 mod knots;
+mod surface;
 
+pub use bezier::{BezierPatch, BezierSegment};
 pub use curve::NurbsCurve;
 pub use error::NurbsError;
 pub use knots::KnotVector;
+pub use surface::{MAX_SURFACE_DERIV, NurbsSurface};
 
 /// Größter erlaubter Grad (Schutz vor Rechenaufwand und Zahlenüberlauf).
 pub const MAX_DEGREE: usize = 9;
