@@ -183,6 +183,7 @@ Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen m
 **Dateisystem**
 - Die Prüfung gegen Verknüpfungen (Symlinks/Junctions) ist nicht gegen Wettlaufsituationen zwischen Prüfen und Schreiben gesichert (bewusst akzeptiert).
 - Die Groß-/Kleinschreibung beim Verschieben in einen eigenen Unterordner wird auf Windows nicht eigens abgefangen; statt einer klaren Meldung erscheint dann der Text des Betriebssystems.
+- `DocLock::acquire` ignoriert einen Fehler beim Schreiben der Sperrdatei: dann bleibt eine leere Sperrdatei und jedes Speichern meldet fälschlich, die Sperre sei übernommen worden; selten (Festplatte voll).
 - `Library::kind_of` akzeptiert auch Pfade, deren erster Teil kein Projekt ist; die Oberfläche bietet nur Knoten des Baums an, daher ohne Folgen.
 - Eine unlesbare Autosicherung (z. B. neueres Format) bleibt für immer liegen und wird gemeldet, aber nie überschrieben; solange sie liegt, gibt es für diesen Tab in der Sitzung keine eigene Autosicherung.
 
