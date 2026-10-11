@@ -1,15 +1,20 @@
 //! NURBS-Kurven und -Flächen: geprüfte Konstruktoren, Basisfunktionen, rationale Auswertung,
-//! Knoteneinfügen und Zerlegung in rationale Bézier-Stücke.
+//! Knoteneinfügen, Zerlegung in rationale Bézier-Stücke, exakte Konstruktionen (Kreis, Ellipse,
+//! Spline, Extrusion, Drehfläche) und Annäherung von Punktfolgen.
 
 mod bezier;
+mod build;
 mod curve;
+mod dense;
 mod error;
+mod fit;
 mod knots;
 mod surface;
 
 pub use bezier::{BezierPatch, BezierSegment};
 pub use curve::NurbsCurve;
 pub use error::NurbsError;
+pub use fit::MAX_FIT_CONTROL_POINTS;
 pub use knots::KnotVector;
 pub use surface::{MAX_SURFACE_DERIV, NurbsSurface};
 
