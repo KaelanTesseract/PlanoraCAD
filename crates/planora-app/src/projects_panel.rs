@@ -86,8 +86,15 @@ fn may_change(ws: &mut Workspace, path: &NodePath) -> bool {
 pub fn open_node(ws: &mut Workspace, path: &NodePath) {
     match ws.open_document(path, LockMode::Acquire) {
         Ok(r) => {
-            if !r.notes.is_empty() && !r.autosave_offered {
-                notice(ws, r.notes.join("\n"));
+            if !r.notes.is_empty() {
+                let text = r.notes.join("\n");
+                if r.autosave_offered {
+                    // Das Angebot hat Vorrang; die Hinweise stehen dann in der Statuszeile
+                    // des Tabs (wie nach dem Übernehmen einer Sperre).
+                    ws.tabs[r.tab].state.message = Some(text);
+                } else {
+                    notice(ws, text);
+                }
             }
         }
         Err(ProjectError::Locked { .. }) => {
@@ -301,7 +308,10 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut ProjectsUi) {
             Action::Delete(p) => st.confirm_delete = Some(p),
         }
     }
-    dialogs(ui.ctx(), ws, st);
+    // die Fenster sind eigene Ebenen: nur zeichnen, solange keine Rückfrage des Programms offen ist
+    if ws.prompt.is_none() {
+        dialogs(ui.ctx(), ws, st);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -327,11 +337,6 @@ fn root_field(
             let t = text.trim();
             if t.is_empty() {
                 notice(ws, "Bitte einen Ordner angeben.");
-            } else if ws.tabs.iter().any(|t| t.path.is_some()) {
-                notice(
-                    ws,
-                    "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt.",
-                );
             } else {
                 match ws.choose_root(Path::new(t)) {
                     Ok(()) => {
@@ -539,5 +544,39 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) {
         } else if !cancel {
             st.confirm_delete = Some(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{fonts, testing::collect_texts};
+    use planora_project::config::Config;
+    use planora_project::fsutil::new_id;
+
+    fn frame(c: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) -> String {
+        let out = c.run_ui(egui::RawInput::default(), |ui| show(ui, ws, st));
+        let t = collect_texts(&out);
+        out.drop_without_applying_deltas();
+        t
+    }
+
+    #[test]
+    fn the_dialog_windows_are_not_drawn_while_a_prompt_is_open() {
+        let c = egui::Context::default();
+        c.set_fonts(fonts::definitions());
+        let root = std::env::temp_dir().join(format!("planora-pp-unit-{}", new_id()));
+        let mut ws = Workspace::new(Some(Library::open(&root).unwrap()), Config::default());
+        let mut st = ProjectsUi::default();
+        let p = create_project(&mut ws, &mut st, "P").unwrap();
+        st.new_folder = Some((p, String::new()));
+        ws.prompt = Some(Prompt::Notice("Hinweis".into()));
+        let t = frame(&c, &mut ws, &mut st);
+        assert!(!t.contains("Anlegen"), "{t}");
+        assert!(st.new_folder.is_some(), "der Zustand bleibt erhalten");
+        ws.prompt = None;
+        frame(&c, &mut ws, &mut st);
+        let t = frame(&c, &mut ws, &mut st);
+        assert!(t.contains("Anlegen"), "{t}");
     }
 }

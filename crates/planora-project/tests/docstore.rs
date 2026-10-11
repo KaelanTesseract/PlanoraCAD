@@ -583,3 +583,16 @@ fn a_store_whose_lock_was_taken_over_writes_nothing() {
     ));
     drop(new);
 }
+
+#[test]
+fn files_with_a_utf8_bom_still_load() {
+    let p = dir();
+    let mut st = DocStore::create(&p, &snap(1), "").unwrap();
+    st.save(Some(1), &snap(2), "", None).unwrap();
+    drop(st);
+    let doc = p.join("dokument.json");
+    let good = std::fs::read_to_string(&doc).unwrap();
+    std::fs::write(&doc, format!("\u{feff}{good}")).unwrap();
+    assert!(peek(&p).is_ok());
+    assert!(DocStore::open(&p, LockMode::Acquire).is_ok());
+}

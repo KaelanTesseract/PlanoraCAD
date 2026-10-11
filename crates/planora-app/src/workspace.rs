@@ -171,7 +171,7 @@ fn err(e: impl std::fmt::Display) -> String {
 /// Anzeigename eines Dokuments aus seinem Pfad (letzter Teil ohne `.pcad`).
 fn display_name(path: &NodePath) -> String {
     path.last()
-        .map(|p| p.trim_end_matches(".pcad").to_string())
+        .map(|p| p.strip_suffix(".pcad").unwrap_or(p).to_string())
         .unwrap_or_default()
 }
 
@@ -766,7 +766,16 @@ impl Workspace {
 
     /// Wählt die Wurzel (Projektordner, wird bei Bedarf angelegt) und merkt sie in der
     /// Konfiguration (gespeichert wird mit `persist_config`).
+    ///
+    /// Solange gespeicherte Dokumente offen sind, wird die Wurzel nicht gewechselt: ihre Pfade
+    /// gehören zur bisherigen Wurzel.
     pub fn choose_root(&mut self, root: &Path) -> Result<(), String> {
+        if self.tabs.iter().any(|t| t.path.is_some()) {
+            return Err(
+                "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt."
+                    .into(),
+            );
+        }
         let lib = Library::open(root).map_err(err)?;
         self.library = Some(lib);
         self.config.root = Some(root.to_path_buf());

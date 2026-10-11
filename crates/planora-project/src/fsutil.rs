@@ -22,8 +22,10 @@ const DOC_SUFFIX: &str = ".pcad";
 const TRASH_ID_RANGE: std::ops::Range<usize> = 8..24;
 
 /// Von Windows reservierte Gerätenamen (auch mit Endung und mit hochgestellten Ziffern).
-const RESERVED: [&str; 28] = [
+const RESERVED: [&str; 32] = [
     "CON",
+    "CONIN$",
+    "CONOUT$",
     "PRN",
     "AUX",
     "NUL",
@@ -36,6 +38,7 @@ const RESERVED: [&str; 28] = [
     "COM7",
     "COM8",
     "COM9",
+    "COM0",
     "COM\u{b9}",
     "COM\u{b2}",
     "COM\u{b3}",
@@ -48,6 +51,7 @@ const RESERVED: [&str; 28] = [
     "LPT7",
     "LPT8",
     "LPT9",
+    "LPT0",
     "LPT\u{b9}",
     "LPT\u{b2}",
     "LPT\u{b3}",
@@ -100,7 +104,12 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         let _ = fs::remove_file(&tmp);
         return Err(ProjectError::io(&tmp, &e));
     }
-    rename_with_retries(&tmp, path)
+    let renamed = rename_with_retries(&tmp, path);
+    if renamed.is_err() {
+        // Eine halb fertige Zwischendatei bleibt nicht liegen.
+        let _ = fs::remove_file(&tmp);
+    }
+    renamed
 }
 
 /// Benennt um (ersetzt eine vorhandene Datei) und versucht es kurz mehrfach.
@@ -115,8 +124,6 @@ fn rename_with_retries(from: &Path, to: &Path) -> Result<()> {
             }
         }
     }
-    // Eine halb fertige Zwischendatei bleibt nicht liegen; Verzeichnisse lässt das unberührt.
-    let _ = fs::remove_file(from);
     let err = last.unwrap_or_else(|| std::io::Error::other("Umbenennen fehlgeschlagen"));
     Err(ProjectError::io(to, &err))
 }
@@ -298,4 +305,25 @@ impl Drop for DocLock {
 pub fn lock_age(dir: &Path) -> Option<String> {
     let text = fs::read_to_string(dir.join(LOCK_FILE)).ok()?;
     text.lines().nth(1).map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_rename_leaves_the_source_untouched() {
+        let d = std::env::temp_dir().join(format!("planora-fsutil-{}", new_id()));
+        fs::create_dir_all(d.join("ziel")).unwrap();
+        fs::write(d.join("ziel").join("x"), b"x").unwrap();
+        let src = d.join("quelle.txt");
+        fs::write(&src, b"daten").unwrap();
+        // Eine Datei lässt sich nicht über einen nicht leeren Ordner umbenennen.
+        assert!(rename_with_retries(&src, &d.join("ziel")).is_err());
+        assert_eq!(fs::read(&src).unwrap(), b"daten");
+        // atomic_write räumt seine eigene Zwischendatei dagegen weg.
+        assert!(atomic_write(&d.join("ziel"), b"neu").is_err());
+        assert!(!d.join("ziel.tmp").exists());
+        let _ = fs::remove_dir_all(&d);
+    }
 }

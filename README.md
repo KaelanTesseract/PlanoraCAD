@@ -65,7 +65,7 @@ Deine Arbeit bleibt jetzt erhalten. Gespeichert wird die Liste der Schritte aus 
 **Wo die Dateien liegen**
 - Alles liegt in einem normalen Ordner auf deiner Festplatte, vorgegeben ist `Dokumente\PlanoraCAD`. Im Fenster „Projekte“ kannst du einen anderen Ordner wählen („Wurzel wählen“). Das Programm merkt sich die Wahl.
 - Ein **Projekt** ist ein Ordner direkt darin. Darin kannst du beliebig viele **Ordner** anlegen und verschachteln. Ein **Dokument** ist ein Ordner mit der Endung `.pcad`; darin liegen die Versionen als einzelne Textdateien. Du kannst den ganzen Projektordner also einfach kopieren oder sichern.
-- Gelöschte Projekte, Ordner und Dokumente landen im versteckten Ordner `.papierkorb` und werden nie endgültig gelöscht.
+- Gelöschte Projekte, Ordner und Dokumente landen im Ordner `.papierkorb` unter dem Projektordner und werden vom Programm nie endgültig gelöscht. Gelöschte Versionen und Zweige im Fenster „Versionen“ sind dagegen nach der Rückfrage endgültig weg.
 
 **Speichern und Versionen**
 - Mit „Datei → Speichern“ (Strg+S) legst du eine **neue Version** an; dabei kannst du einen Kommentar eintragen. Frühere Versionen bleiben unverändert erhalten.

@@ -166,11 +166,15 @@ fn time_ok(t: &str) -> bool {
 
 /// Liest zuerst nur das Format, damit eine neuere Datei auch bei geänderter Struktur die
 /// richtige Meldung (zu neu) bekommt.
-fn check_head(text: &str, origin: &str) -> Result<()> {
+///
+/// Ein vorangestelltes UTF-8-Byte-Order-Mark wird übergangen; der Rückgabewert ist der Text
+/// ohne dieses Zeichen.
+fn check_head<'a>(text: &'a str, origin: &str) -> Result<&'a str> {
     #[derive(Deserialize)]
     struct Head {
         format: u32,
     }
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let head: Head =
         serde_json::from_str(text).map_err(|e| ProjectError::corrupt(origin, e.to_string()))?;
     if head.format > FORMAT_VERSION {
@@ -182,7 +186,7 @@ fn check_head(text: &str, origin: &str) -> Result<()> {
     if head.format == 0 {
         return Err(ProjectError::corrupt(origin, "ungültiges Format 0"));
     }
-    Ok(())
+    Ok(text)
 }
 
 fn clean_comment(t: &str) -> Result<String> {
@@ -315,8 +319,8 @@ pub fn peek(dir: &Path) -> Result<(DocumentInfo, OpenReport)> {
     let doc = dir.join(DOCUMENT_FILE);
     let origin = doc.display().to_string();
     let text = fs::read_to_string(&doc).map_err(|e| ProjectError::io(&doc, &e))?;
-    check_head(&text, &origin)?;
-    let file: DocFile = serde_json::from_str(&text)
+    let text = check_head(&text, &origin)?;
+    let file: DocFile = serde_json::from_str(text)
         .map_err(|e| ProjectError::corrupt(origin.clone(), e.to_string()))?;
     let info = from_file(file, &origin)?;
     let mut report = OpenReport::default();
@@ -767,8 +771,8 @@ impl DocStore {
         }
         let origin = path.display().to_string();
         let text = fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, &e))?;
-        check_head(&text, &origin)?;
-        let f: AutosaveFile = serde_json::from_str(&text)
+        let text = check_head(&text, &origin)?;
+        let f: AutosaveFile = serde_json::from_str(text)
             .map_err(|e| ProjectError::corrupt(origin.clone(), e.to_string()))?;
         if let Some(n) = f.basiert_auf
             && self.info.version(n).is_none()

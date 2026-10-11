@@ -316,9 +316,9 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi) {
             continue;
         };
         let mark = if based_on == Some(r.number) {
-            "● "
+            "* "
         } else if r.is_tip && r.depth > 0 {
-            "▸ "
+            "> "
         } else {
             ""
         };

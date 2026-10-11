@@ -138,3 +138,32 @@ fn without_a_library_the_panel_asks_for_a_root() {
     let t = frame(&c, &mut w, &mut st);
     assert!(t.contains("Projektordner"), "{t}");
 }
+
+#[test]
+fn notes_are_not_lost_when_an_autosave_is_offered() {
+    use planora_project::docstore::LockMode;
+    use std::time::{Duration, Instant};
+    let mut w = ws();
+    let mut st = ProjectsUi::default();
+    let p = create_project(&mut w, &mut st, "P").unwrap();
+    let doc = w.save_as(&p, "Teil", "").unwrap();
+    // „Absturz“ mit Autosicherung
+    w.autosave_interval = Duration::ZERO;
+    w.active_tab_mut()
+        .state
+        .create_box(planora_math::DVec3::splat(5.0))
+        .unwrap();
+    w.autosave_tick(Instant::now());
+    w.close_tab(w.tab_for_path(&doc).unwrap());
+    // verwaiste Versionsdatei
+    let dir = w.library.as_ref().unwrap().document_dir(&doc).unwrap();
+    std::fs::write(dir.join("versionen").join("0099.json"), "{}").unwrap();
+    open_node(&mut w, &doc);
+    assert!(matches!(w.prompt, Some(Prompt::AutosaveOffer { .. })));
+    let msg = w.active_tab().state.message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("Reste eines abgebrochenen Speicherns"),
+        "{msg}"
+    );
+    let _ = LockMode::Acquire;
+}

@@ -530,3 +530,25 @@ fn save_as_onto_a_taken_name_leaves_an_open_sketch_open() {
     assert!(w.active_tab().state.sketch_session.is_some());
     assert!(w.active_tab().store.is_none());
 }
+
+#[test]
+fn choosing_a_root_is_refused_while_saved_documents_are_open() {
+    let mut w = ws();
+    let path = saved_document(&mut w, "Teil", 1);
+    let old = w.config.root.clone();
+    let err = w.choose_root(&root()).unwrap_err();
+    assert!(err.contains("schließen"), "{err}");
+    assert_eq!(w.config.root, old);
+    assert!(w.tab_for_path(&path).is_some());
+    w.close_tab(0);
+    assert!(w.choose_root(&root()).is_ok());
+}
+
+#[test]
+fn the_display_name_strips_the_document_suffix_only_once() {
+    let mut w = ws();
+    let path = saved_document(&mut w, "Teil", 1);
+    let project = vec![path[0].clone()];
+    let p2 = w.save_as(&project, "x.pcad", "").unwrap();
+    assert_eq!(w.tabs[w.tab_for_path(&p2).unwrap()].title(), "x.pcad");
+}
