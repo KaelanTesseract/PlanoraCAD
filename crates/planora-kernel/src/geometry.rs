@@ -2,6 +2,7 @@ use crate::error::KernelError;
 use crate::nurbs_surface::NurbsSurfaceData;
 use planora_math::nurbs::{NurbsCurve, NurbsSurface};
 use planora_math::{DVec3, Frame, PI, TAU, Tolerance};
+use std::cell::Cell;
 use std::sync::Arc;
 
 /// Probestellen je Kontrollpunkt bei der Rückrechnung eines Punkts auf eine NURBS-Kurve.
@@ -204,8 +205,10 @@ impl Surface {
         )?)))
     }
 
-    /// Wie [`Surface::project`], mit Startwert (für fortlaufende Punkte einer Schleife). Für
-    /// analytische Flächen ist der Startwert ohne Bedeutung.
+    /// Wie [`Surface::project`], mit Startwert (für fortlaufende Punkte einer Schleife). Das
+    /// Ergebnis liegt im Parameterbereich (geschlossene Richtungen gefaltet), es wird **nicht**
+    /// fortlaufend zum Startwert entfaltet; das macht der Aufrufer. Für analytische Flächen ist
+    /// der Startwert ohne Bedeutung.
     pub fn project_near(&self, p: DVec3, hint: (f64, f64)) -> (f64, f64) {
         match self {
             Surface::Nurbs(d) => d.project_near(p, hint),
@@ -329,8 +332,9 @@ impl Surface {
     }
 
     /// Umkehrabbildung Punkt → (u, v). Bei periodischen analytischen Flächen liegt `u` in
-    /// (−π, π]. Freiformflächen: nächster Punkt; konvergiert die Suche nicht, die Mitte des
-    /// Parameterbereichs (Aufrufer prüfen den Abstand selbst).
+    /// (−π, π]. Freiformflächen: nächster Punkt (im Bereich, gefaltet); konvergiert die Suche
+    /// nicht, der nächste Rasterpunkt – ein echter Flächenpunkt (Aufrufer prüfen den Abstand
+    /// selbst; das Scheitern selbst meldet `NurbsSurfaceData::closest` mit `None`).
     pub fn project(&self, p: DVec3) -> (f64, f64) {
         let l = self.frame().to_local(p);
         let u = l.y.atan2(l.x);
@@ -345,6 +349,21 @@ impl Surface {
     }
 
     /// Geschlossen in mindestens einer Richtung (Freiformflächen: Kennzeichen in u oder v).
+    /// Wie [`Surface::implicit`]; bei Freiformflächen dient `hint` als Startwert der
+    /// Fußpunktsuche und erhält den neuen Fußpunkt (für fortlaufende Auswertungen entlang einer
+    /// Kurve). Der Startwert wird gegen das Raster geprüft und ändert das Ergebnis nicht.
+    /// Analytische Flächen: genau `implicit`, `hint` bleibt unberührt.
+    pub fn implicit_hinted(&self, p: DVec3, hint: &Cell<Option<(f64, f64)>>) -> f64 {
+        match self {
+            Surface::Nurbs(d) => {
+                let (s, foot) = d.signed_distance_hinted(p, hint.get());
+                hint.set(foot);
+                s
+            }
+            _ => self.implicit(p),
+        }
+    }
+
     pub fn is_periodic(&self) -> bool {
         match self {
             Surface::Plane { .. } => false,

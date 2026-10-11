@@ -325,3 +325,193 @@ fn mirroring_flips_the_sense_of_a_nurbs_face() {
             .is_err()
     );
 }
+
+// ---- Nachbesserung 1: Ränder beschränkter Flächen, Randminima, Laufzeit ----
+
+fn unit_square() -> Surface {
+    let flat = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        2,
+        2,
+        vec![DVec3::ZERO, DVec3::Y, DVec3::X, DVec3::new(1.0, 1.0, 0.0)],
+        vec![1.0; 4],
+    )
+    .unwrap();
+    Surface::nurbs(flat, false, false).unwrap()
+}
+
+fn roots_of(line: &Curve, t1: f64, s: &Surface) -> Vec<f64> {
+    use planora_kernel::boolean::{CurveSurface, curve_surface_roots};
+    match curve_surface_roots(line, 0.0, t1, s, &planora_math::Tolerance::default()) {
+        CurveSurface::Roots(rs) => rs.iter().map(|r| r.t).collect(),
+        CurveSurface::Lies => panic!("liegt nicht auf der Fläche"),
+    }
+}
+
+#[test]
+fn no_false_roots_beside_a_bounded_patch() {
+    // Gerade neben dem Einheitsquadrat: der Fußpunkt springt auf den Rand, das Vorzeichen
+    // wechselt, aber die Gerade trifft die Fläche nicht.
+    let sq = unit_square();
+    let beside = Curve::Line {
+        origin: DVec3::new(2.0, 0.5, -1.0),
+        dir: DVec3::Z,
+    };
+    assert_eq!(roots_of(&beside, 2.0, &sq), Vec::<f64>::new());
+    // Strahl aus dem Zylinder, der die Mantelfläche erst oberhalb ihres Endes (z = 5) träfe.
+    let cyl = cylinder_as_nurbs(3.0, 5.0);
+    let ray = Curve::Line {
+        origin: DVec3::new(0.0, 0.0, 2.5),
+        dir: DVec3::new(0.3, 0.0, 1.0).normalize(),
+    };
+    assert_eq!(roots_of(&ray, 40.0, &cyl), Vec::<f64>::new());
+}
+
+#[test]
+fn genuine_roots_on_bounded_patches_remain() {
+    let sq = unit_square();
+    let through = Curve::Line {
+        origin: DVec3::new(0.5, 0.25, -1.0),
+        dir: DVec3::Z,
+    };
+    let rs = roots_of(&through, 2.0, &sq);
+    assert_eq!(rs.len(), 1, "{rs:?}");
+    assert!((rs[0] - 1.0).abs() < 1e-9);
+    // schräg durch den Zylindermantel innerhalb der Höhe
+    let cyl = cylinder_as_nurbs(3.0, 5.0);
+    let dir = DVec3::new(1.0, 0.0, 0.2).normalize();
+    let ray = Curve::Line {
+        origin: DVec3::new(0.0, 0.0, 2.0),
+        dir,
+    };
+    let rs = roots_of(&ray, 40.0, &cyl);
+    assert_eq!(rs.len(), 1, "{rs:?}");
+    assert!((ray.point(rs[0]).truncate().length() - 3.0).abs() < 1e-9);
+}
+
+/// Kleiner Zufallsgenerator mit festem Startwert (keine Abhängigkeit).
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64
+    }
+    fn range(&mut self, a: f64, b: f64) -> f64 {
+        a + (b - a) * self.next()
+    }
+}
+
+fn random_patch(rng: &mut Lcg) -> NurbsSurface {
+    let n = 6;
+    let k = vec![0.0, 0.0, 0.0, 0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0, 1.0, 1.0, 1.0];
+    let mut c = Vec::new();
+    let mut w = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            c.push(DVec3::new(
+                2.0 * i as f64 + rng.range(-0.7, 0.7),
+                2.0 * j as f64 + rng.range(-0.7, 0.7),
+                rng.range(-3.0, 3.0),
+            ));
+            w.push(rng.range(0.3, 3.0));
+        }
+    }
+    NurbsSurface::new(3, 3, k.clone(), k, n, n, c, w).unwrap()
+}
+
+#[test]
+fn closest_never_misses_the_brute_force_minimum_on_random_rational_patches() {
+    let mut rng = Lcg(0x5eed_1234);
+    let brute_n = 80;
+    let mut checked = 0;
+    let mut misses: Vec<String> = Vec::new();
+    for _ in 0..10 {
+        let s = random_patch(&mut rng);
+        let data = Surface::nurbs(s.clone(), false, false).unwrap();
+        let Surface::Nurbs(d) = &data else {
+            unreachable!()
+        };
+        let samples: Vec<DVec3> = (0..=brute_n)
+            .flat_map(|i| (0..=brute_n).map(move |j| (i, j)))
+            .map(|(i, j)| s.point(i as f64 / brute_n as f64, j as f64 / brute_n as f64))
+            .collect();
+        for _ in 0..20 {
+            // Punkte im Hüllquader und bis zum Doppelten darüber hinaus
+            let p = DVec3::new(
+                rng.range(-6.0, 16.0),
+                rng.range(-6.0, 16.0),
+                rng.range(-8.0, 8.0),
+            );
+            let brute = samples
+                .iter()
+                .map(|q| q.distance(p))
+                .fold(f64::INFINITY, f64::min);
+            checked += 1;
+            let Some((u, v, dist)) = d.closest(p, None) else {
+                misses.push(format!("{p:?}: keine Konvergenz"));
+                continue;
+            };
+            assert!((s.point(u, v).distance(p) - dist).abs() < 1e-9);
+            if dist > brute + 1e-9 {
+                misses.push(format!(
+                    "{p:?}: gefunden {dist} bei ({u}, {v}), Probe {brute}"
+                ));
+                continue;
+            }
+            assert!((data.implicit(p).abs() - dist).abs() < 1e-9, "{p:?}");
+        }
+    }
+    assert_eq!(checked, 200);
+    assert!(
+        misses.is_empty(),
+        "{} Fehlgriffe:
+{}",
+        misses.len(),
+        misses.join(
+            "
+"
+        )
+    );
+}
+
+#[test]
+fn roots_on_a_large_patch_finish_quickly() {
+    // 125 × 125 Kontrollpunkte (Raster am Höchstwert): vorher etwa 1,7 s je Aufruf im
+    // Release-Build; die Grenze ist großzügig, auch für den Debug-Build.
+    let n = 125;
+    let mut k = vec![0.0; 4];
+    for i in 1..n - 3 {
+        k.push(i as f64 / (n - 3) as f64);
+    }
+    k.extend([1.0; 4]);
+    let mut c = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            let (x, y) = (i as f64 * 10.0 / n as f64, j as f64 * 10.0 / n as f64);
+            c.push(DVec3::new(x, y, (x * 1.3).sin() * (y * 0.7).cos()));
+        }
+    }
+    let s = Surface::nurbs(
+        NurbsSurface::new(3, 3, k.clone(), k, n, n, c, vec![1.0; n * n]).unwrap(),
+        false,
+        false,
+    )
+    .unwrap();
+    let line = Curve::Line {
+        origin: DVec3::new(-1.0, 3.3, 0.2),
+        dir: DVec3::new(1.0, 0.31, 0.0).normalize(),
+    };
+    let start = std::time::Instant::now();
+    let rs = roots_of(&line, 12.0, &s);
+    let took = start.elapsed();
+    assert!(took.as_secs_f64() < 20.0, "{took:?}");
+    for t in rs {
+        assert!(s.implicit(line.point(t)).abs() <= 1e-5, "{t}");
+    }
+}

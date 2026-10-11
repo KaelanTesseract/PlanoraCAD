@@ -2,6 +2,7 @@ use super::seg::{Seg, golden_min, sample_count};
 use crate::geometry::{Curve, Surface};
 use crate::validate::edge_surface_tol;
 use planora_math::{TAU, Tolerance};
+use std::cell::Cell;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Root {
@@ -54,6 +55,11 @@ fn is_closed(curve: &Curve, t0: f64, t1: f64) -> bool {
 /// Vorzeichen nicht (Berührung). Randstellen innerhalb der Toleranz zählen als ein Schnitt.
 /// Bei einer geschlossenen Kurve (Vollkreis) ist die Naht keine Randstelle: sie wird nur
 /// einmal gemeldet und nach dem Vorzeichen davor und dahinter eingestuft.
+///
+/// Freiformflächen und -kurven: `F` ist der vorzeichenbehaftete Abstand zum beschränkten
+/// Flächenstück und springt an dessen Rand das Vorzeichen, ohne null zu werden. Eine durch
+/// Halbieren gefundene Stelle zählt deshalb nur, wenn dort `|F|` innerhalb der Toleranz liegt;
+/// für analytische Flächen bleibt alles wie bisher.
 pub fn curve_surface_roots(
     curve: &Curve,
     t0: f64,
@@ -65,7 +71,10 @@ pub fn curve_surface_roots(
         return CurveSurface::Roots(Vec::new());
     }
     let n = sample_count(t0, t1, 64, 64);
-    let g = |t: f64| surface.implicit(curve.point(t));
+    // Freiformflächen: Fußpunkt des vorigen Auswertepunkts als Startwert (geprüft, siehe
+    // `Surface::implicit_hinted`); analytische Flächen: unverändert `implicit`.
+    let hint = Cell::new(None);
+    let g = |t: f64| surface.implicit_hinted(curve.point(t), &hint);
     let ts: Vec<f64> = (0..=n)
         .map(|i| t0 + (t1 - t0) * i as f64 / n as f64)
         .collect();
@@ -79,6 +88,11 @@ pub fn curve_surface_roots(
     // Periode für das Zurückfalten an der Naht (nur bei geschlossenen Kurven gebraucht).
     let period = curve.period().unwrap_or(TAU);
     let dir = if t1 >= t0 { 1.0 } else { -1.0 };
+    // Bei Freiformbeteiligten ist `g` am Rand eines beschränkten Flächenstücks unstetig (der
+    // Fußpunkt springt auf den Rand, das Vorzeichen wechselt ohne Nullstelle). Eine halbierte
+    // Stelle zählt dort nur als Schnitt, wenn sie wirklich auf der Fläche liegt.
+    let numeric = matches!(curve, Curve::Nurbs(_)) || matches!(surface, Surface::Nurbs(_));
+    let genuine = |t: f64| !numeric || g(t).abs() <= lin;
 
     let mut roots: Vec<Root> = Vec::new();
     let add = |roots: &mut Vec<Root>, t: f64, touching: bool| {
@@ -130,6 +144,9 @@ pub fn curve_surface_roots(
                 let left = if ga == 0.0 { lo } else { bisect(lo, te, &g) };
                 let right = if gb == 0.0 { hi } else { bisect(te, hi, &g) };
                 for t in [left, right] {
+                    if !genuine(t) {
+                        continue;
+                    }
                     let t = if seam && (t - t0) * dir < 0.0 {
                         t + dir * period
                     } else {
@@ -194,7 +211,10 @@ pub fn curve_surface_roots(
             continue;
         }
         if gs[i] * gs[i + 1] < 0.0 {
-            add(&mut roots, bisect(ts[i], ts[i + 1], &g), false);
+            let t = bisect(ts[i], ts[i + 1], &g);
+            if genuine(t) {
+                add(&mut roots, t, false);
+            }
         } else if gs[i] == 0.0 && i > 0 && gs[i - 1] * gs[i + 1] < 0.0 {
             add(&mut roots, ts[i], false);
         }

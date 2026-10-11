@@ -106,3 +106,9 @@ Keine neuen Bedienelemente. Der Nutzer sieht: Ellipse und Spline lassen sich ext
 ## 12. Abhängigkeiten und Lizenzen
 
 Keine neue externe Abhängigkeit geplant (`spade`, `earcutr`, `robust` sind schon da). Sollte sich unterwegs ein Paket als sinnvoll erweisen, wird zuerst `cargo deny check` ausgeführt; liegt ein Paket außerhalb der Erlaubnisliste, wird angehalten und der Eigner gefragt; die Liste wird nie selbstständig erweitert. Projektlizenz GPL-3.0-only; kein Fremdmaterial.
+
+## 13. Änderungen bei der Umsetzung
+
+- **Rückrechnung bei misslungener Suche (Stufe 2, Task 4):** §4 verlangt „Scheitert die Suche, ist das ein Fehler, kein Raten.“ Umgesetzt: `NurbsSurfaceData::closest(p, hint)` liefert `Option` und meldet so das Scheitern (`None`); wer es unterscheiden muss, nimmt `closest`. `Surface::project`/`project_near` (gemeinsame Schnittstelle aller Flächenarten, ohne Fehlerrückgabe) fallen dann auf den **nächsten Rasterpunkt** zurück – einen echten Flächenpunkt, nicht die Bereichsmitte. Aufrufer, die einen Punkt auf der Fläche erwarten, prüfen den Abstand (`implicit` bzw. `edge_surface_tol`).
+- **`project_near` entfaltet nicht:** das Ergebnis liegt im Parameterbereich (geschlossene Richtungen gefaltet); das fortlaufende Entfalten an der Naht macht der Aufrufer (Task 9).
+- **Vorzeichenbehafteter Abstand am Rand beschränkter Flächen:** Für ein beschränktes NURBS-Flächenstück springt `implicit` jenseits des Rands das Vorzeichen, ohne null zu werden. `curve_surface_roots` nimmt bei Freiformbeteiligten eine halbierte Stelle deshalb nur an, wenn dort `|implicit|` innerhalb der Toleranz liegt.
