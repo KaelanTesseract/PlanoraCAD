@@ -170,3 +170,92 @@ fn revolution_of_a_line_gives_a_cylinder_and_of_a_half_circle_a_sphere() {
     );
     assert!(NurbsSurface::revolve(&line, DVec3::ZERO, DVec3::Z, 0.0, 8.0).is_err());
 }
+
+// --- Nachbesserung 1 (Review) ---
+
+fn wiggly(n: usize) -> Vec<DVec3> {
+    (0..n)
+        .map(|i| {
+            let x = i as f64;
+            DVec3::new(
+                x + (1.7 * x).sin(),
+                3.0 * (2.3 * x).cos(),
+                2.0 * (0.9 * x).sin(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn fit_survives_a_failing_least_squares_step() {
+    let tol = 1e-6;
+    for n in [33, 65, 66, 67, 68, 69, 70] {
+        let pts = wiggly(n);
+        let c = NurbsCurve::fit(&pts, tol).unwrap_or_else(|e| panic!("n={n}: {e}"));
+        for p in &pts {
+            let d = c.distance_to(*p);
+            assert!(d <= tol, "n={n}: {d}");
+        }
+    }
+}
+
+/// Abstand per dichter Probe (obere Schranke des wahren Abstands).
+fn brute_distance(c: &NurbsCurve, p: DVec3, samples: usize) -> f64 {
+    let (a, b) = c.domain();
+    (0..=samples)
+        .map(|i| c.point(a + (b - a) * i as f64 / samples as f64).distance(p))
+        .fold(f64::INFINITY, f64::min)
+}
+
+#[test]
+fn distance_to_finds_the_minimum_behind_the_seam() {
+    let circle =
+        NurbsCurve::elliptic_arc(DVec3::ZERO, DVec3::X * 5.0, DVec3::Y * 5.0, 0.0, TAU).unwrap();
+    let p = DVec3::new(3.70582, -0.054275, -3.40160);
+    let d = circle.distance_to(p);
+    let exact = ((DVec3::new(p.x, p.y, 0.0).length() - 5.0).powi(2) + p.z * p.z).sqrt();
+    assert!((d - exact).abs() < 1e-9, "{d} {exact}");
+    assert!(d <= brute_distance(&circle, p, 200_000) + 1e-9);
+
+    let ellipse =
+        NurbsCurve::elliptic_arc(DVec3::ZERO, DVec3::X * 100.0, DVec3::Y, 0.0, TAU).unwrap();
+    let p = DVec3::new(101.779, -2.720, 0.180);
+    let d = ellipse.distance_to(p);
+    let brute = brute_distance(&ellipse, p, 200_000);
+    assert!(d <= brute + 1e-9 && d >= brute - 1e-6, "{d} {brute}");
+}
+
+#[test]
+fn distance_to_matches_brute_force_on_a_zigzag_spline() {
+    let pts: Vec<DVec3> = (0..12)
+        .map(|i| {
+            DVec3::new(
+                i as f64,
+                if i % 2 == 0 { 0.0 } else { 5.0 },
+                ((i * 7) % 3) as f64 - 1.0,
+            )
+        })
+        .collect();
+    let params: Vec<f64> = (0..12).map(|i| i as f64).collect();
+    let c = NurbsCurve::natural_cubic(&pts, &params).unwrap();
+    let mut probes = vec![DVec3::new(3.9969, 4.8030, -0.9258)];
+    let mut s: u64 = 12345;
+    for _ in 0..40 {
+        let mut r = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        probes.push(DVec3::new(
+            -1.0 + 13.0 * r(),
+            -2.0 + 9.0 * r(),
+            -3.0 + 6.0 * r(),
+        ));
+    }
+    for p in probes {
+        let d = c.distance_to(p);
+        let brute = brute_distance(&c, p, 50_000);
+        assert!(d <= brute + 1e-9, "{p}: {d} > {brute}");
+    }
+}

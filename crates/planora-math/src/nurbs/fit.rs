@@ -9,17 +9,27 @@ use crate::DVec3;
 /// Höchstzahl Kontrollpunkte einer Annäherung oder eines Interpolations-Splines
 /// (begrenzt die Größe der dichten Gleichungssysteme).
 pub const MAX_FIT_CONTROL_POINTS: usize = 512;
+/// Ausgleich nach kleinsten Quadraten nur bis zu `Punktzahl / LSQ_MAX_FRACTION` Kontrollpunkten;
+/// darüber wird interpoliert. Nahe an der Punktzahl hat der Ausgleich zu wenige Punkte je
+/// Abschnitt, das System wird fast singulär und die Kontrollpunkte schwingen weit aus.
+const LSQ_MAX_FRACTION: usize = 2;
 /// Anfangszahl Kontrollpunkte der Annäherung (wird bis zur Schranke verdoppelt).
 const FIT_START_CONTROL_POINTS: usize = 8;
 /// Kleinste Gesamtlänge der Punktfolge in Millimetern (darunter fallen alle Punkte zusammen).
 const MIN_FIT_LENGTH: f64 = 1e-12;
 /// Aufeinanderfolgende Punkte, deren Abstand kleiner als dieser Bruchteil der Gesamtlänge ist,
 /// werden für die Parametrisierung zusammengefasst (sonst entstünden Knoten unter der
-/// Knotengrenze `MIN_KNOT_GAP_RATIO` oder ein singuläres System). Der Fehler wird trotzdem für
-/// alle Punkte geprüft.
+/// Knotengrenze `MIN_KNOT_GAP_RATIO` = 1e-9 oder ein singuläres System). Der Wert liegt mit
+/// Abstand über dieser Grenze, damit gemittelte Knoten (Lücke ≥ kleinste Parameterlücke) sie auch
+/// nach Rundung einhalten. Zusammengefasste Punkte liegen höchstens 1e-8 · Gesamtlänge von einem
+/// verbliebenen Punkt entfernt; der Fehler wird trotzdem für **alle** Originalpunkte geprüft, die
+/// Fehlerschranke gilt also unverändert auch für sie.
 const MIN_CHORD_RATIO: f64 = 1e-8;
 /// Probestellen von `distance_to` je Kontrollpunkt.
 const DISTANCE_SAMPLES_PER_CONTROL: usize = 16;
+/// Zahl der besten örtlichen Probenminima, von denen `distance_to` Newton startet (mehrere, weil
+/// das beste Probenminimum nicht immer im Einzugsbereich des wahren Minimums liegt).
+const DISTANCE_NEWTON_STARTS: usize = 3;
 /// Höchstzahl Newton-Schritte in `distance_to`.
 const DISTANCE_NEWTON_STEPS: usize = 30;
 /// Newton in `distance_to` endet, wenn der Schritt kleiner als dieser Bruchteil des
@@ -37,24 +47,33 @@ impl NurbsCurve {
         fit_capped(points, tol, MAX_FIT_CONTROL_POINTS)
     }
 
-    /// Abstand eines Punktes zur Kurve: gleichmäßige Probe (16 Stellen je Kontrollpunkt), bester
-    /// Startwert, dann höchstens 30 Newton-Schritte auf `(C(u) − p) · C'(u) = 0`, begrenzt auf den
-    /// Parameterbereich. Nicht endliche Punkte ergeben `NaN`.
+    /// Abstand eines Punktes zur Kurve: gleichmäßige Probe (16 Stellen je Kontrollpunkt), dann
+    /// höchstens 30 Newton-Schritte auf `(C(u) − p) · C'(u) = 0` (begrenzt auf den
+    /// Parameterbereich) von den `DISTANCE_NEWTON_STARTS` besten örtlichen Minima der Probe und
+    /// zusätzlich von beiden Enden aus (bei geschlossenen Kurven liegt das wahre Minimum oft knapp
+    /// hinter der Naht). Das Ergebnis ist immer der Abstand zu einem echten Kurvenpunkt (nie
+    /// kleiner als der wahre Abstand). Nicht endliche Punkte ergeben `NaN`.
     pub fn distance_to(&self, p: DVec3) -> f64 {
         if !p.is_finite() {
             return f64::NAN;
         }
         let (a, b) = self.domain();
         let samples = DISTANCE_SAMPLES_PER_CONTROL * self.control_points().len();
-        let (mut best_u, mut best) = (a, f64::INFINITY);
-        for i in 0..=samples {
-            let u = a + (b - a) * i as f64 / samples as f64;
-            let d = self.point(u).distance_squared(p);
-            if d < best {
-                (best_u, best) = (u, d);
-            }
-        }
-        self.newton_distance(best_u, p)
+        let u_at = |i: usize| a + (b - a) * i as f64 / samples as f64;
+        let d: Vec<f64> = (0..=samples)
+            .map(|i| self.point(u_at(i)).distance_squared(p))
+            .collect();
+        let mut minima: Vec<usize> = (0..=samples)
+            .filter(|&i| (i == 0 || d[i] <= d[i - 1]) && (i == samples || d[i] <= d[i + 1]))
+            .collect();
+        minima.sort_by(|x, y| d[*x].total_cmp(&d[*y]));
+        minima
+            .iter()
+            .take(DISTANCE_NEWTON_STARTS)
+            .map(|i| u_at(*i))
+            .chain([a, b])
+            .map(|u| self.newton_distance(u, p))
+            .fold(f64::INFINITY, f64::min)
     }
 
     /// Abstand von `p` zum nächsten Kurvenpunkt, den Newton von `u` aus findet (höchstens
@@ -146,34 +165,54 @@ fn fit_capped(points: &[DVec3], tol: f64, cap: usize) -> Result<NurbsCurve, Nurb
     let n = q.len();
     let p = 3.min(n - 1);
     let cap = n.min(cap).min(MAX_FIT_CONTROL_POINTS);
-    let mut m = cap.min(FIT_START_CONTROL_POINTS.max(p + 1));
+    let mut m = next_count(cap.min(FIT_START_CONTROL_POINTS.max(p + 1)), n, cap);
     loop {
-        let curve = if m == n {
-            interpolate(&q, &params, p)?
+        // Ein misslungener Ausgleich (singulär, Kontrollpunkte außerhalb der Grenzen) gilt als
+        // „nicht gut genug“: weiter mit mehr Kontrollpunkten bzw. Interpolation.
+        let (curve, failure) = if m == n {
+            (Some(interpolate(&q, &params, p)?), None)
         } else {
-            least_squares(&q, &params, p, m)?
+            match least_squares(&q, &params, p, m) {
+                Ok(c) => (Some(c), None),
+                Err(e) => (None, Some(e)),
+            }
         };
-        let err = points
-            .iter()
-            .zip(&rep)
-            .map(|(x, r)| {
-                let d = curve.newton_distance(params[*r], *x);
-                if d > tol {
-                    d.min(curve.distance_to(*x))
-                } else {
-                    d
-                }
-            })
-            .fold(0.0, f64::max);
-        if err <= tol {
-            return Ok(curve);
+        let err = match &curve {
+            Some(c) => points
+                .iter()
+                .zip(&rep)
+                .map(|(x, r)| {
+                    let d = c.newton_distance(params[*r], *x);
+                    if d > tol { d.min(c.distance_to(*x)) } else { d }
+                })
+                .fold(0.0, f64::max),
+            None => f64::INFINITY,
+        };
+        if let Some(c) = curve
+            && err <= tol
+        {
+            return Ok(c);
         }
         if m >= cap {
+            let why = match failure {
+                Some(e) => format!("Ausgleich misslungen: {e}"),
+                None => format!("größter Abstand {err}"),
+            };
             return Err(NurbsError::Fit(format!(
-                "Fehlerschranke {tol} mit höchstens {cap} Kontrollpunkten nicht erreichbar                  (größter Abstand {err})"
+                "Fehlerschranke {tol} mit höchstens {cap} Kontrollpunkten nicht erreichbar ({why})"
             )));
         }
-        m = (2 * m).min(cap);
+        m = next_count(2 * m, n, cap);
+    }
+}
+
+/// Nächste Kontrollpunktzahl: höchstens `cap`; liegt sie über `n / LSQ_MAX_FRACTION` und ist
+/// Interpolation erlaubt (`n ≤ cap`), wird gleich interpoliert (`n`).
+fn next_count(m: usize, n: usize, cap: usize) -> usize {
+    if m >= n || (m * LSQ_MAX_FRACTION > n && n <= cap) {
+        n.min(cap)
+    } else {
+        m.min(cap)
     }
 }
 

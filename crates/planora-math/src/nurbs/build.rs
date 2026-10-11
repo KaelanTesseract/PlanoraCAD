@@ -103,8 +103,9 @@ fn check_point(p: DVec3, what: &str) -> Result<(), NurbsError> {
 
 impl NurbsCurve {
     /// Kreis-/Ellipsenbogen: `P(t) = center + cos t · a + sin t · b`, `t ∈ [start, start + sweep]`;
-    /// Parameter `0..1`, gleichmäßig je Segment (höchstens 90° je Segment; die Knoten an den
-    /// Segmentgrenzen entsprechen den Winkeln dort). `|sweep| ≤ 2π` (Vollkreis erlaubt),
+    /// Parameter `0..1`, gleichmäßig je Segment (höchstens 90° je Segment). Der Parameter
+    /// entspricht dem Winkel nur an den Segmentgrenzen (Knoten), dazwischen nicht linear;
+    /// für den Parameter zu einem Punkt die Rückrechnung (`project`) verwenden. `|sweep| ≤ 2π` (Vollkreis erlaubt),
     /// `a` und `b` nicht parallel, Öffnungswinkel mindestens `MIN_ARC_SWEEP`.
     pub fn elliptic_arc(
         center: DVec3,
@@ -240,8 +241,10 @@ impl NurbsSurface {
     }
 
     /// Drehfläche: Kurve um die Achse (Punkt + Richtung) über den Winkel `sweep`
-    /// (`0 < |sweep| ≤ 2π`). **u = Winkel** im Bereich `[start, start + sweep]` (exakt an den
-    /// Segmentgrenzen, dazwischen rational quadratisch), **v = Kurvenparameter**. Bei negativem
+    /// (`0 < |sweep| ≤ 2π`). **u = Winkel** im Bereich `[start, start + sweep]`, aber u = Winkel
+    /// nur an den Segmentgrenzen (dazwischen rational quadratisch, nicht linear im Winkel; für
+    /// den Parameter zu einem Punkt die Rückrechnung `project` verwenden); **v = Kurvenparameter**.
+    /// Liegt die ganze Profilkurve auf der Achse, ist das ein Fehler (keine Fläche). Bei negativem
     /// `sweep` überdeckt die Fläche dieselben Winkel, der u-Bereich ist dann steigend
     /// `[start + sweep, start]` (u bleibt der Winkel, die Orientierung wie bei positivem Winkel).
     pub fn revolve(
@@ -269,6 +272,7 @@ impl NurbsSurface {
         let nv = curve.control_points().len();
         let mut control = vec![DVec3::ZERO; nu * nv];
         let mut weights = vec![0.0; nu * nv];
+        let mut off_axis = false;
         for (j, (p, w)) in curve
             .control_points()
             .iter()
@@ -280,6 +284,7 @@ impl NurbsSurface {
             if x.length() < ON_AXIS_DISTANCE {
                 x = DVec3::ZERO;
             }
+            off_axis |= x != DVec3::ZERO;
             let y = d.cross(x);
             for (i, ((ca, cb), om)) in arc.coeffs.iter().zip(&arc.weights).enumerate() {
                 control[i * nv + j] = if x == DVec3::ZERO {
@@ -289,6 +294,11 @@ impl NurbsSurface {
                 };
                 weights[i * nv + j] = w * om;
             }
+        }
+        if !off_axis {
+            return Err(NurbsError::Input(
+                "die Profilkurve liegt ganz auf der Drehachse".into(),
+            ));
         }
         NurbsSurface::new(
             2,
@@ -347,6 +357,14 @@ mod tests {
         assert!(NurbsSurface::revolve(&line, DVec3::ZERO, DVec3::Z, 2e9, 1.0).is_err());
         assert!(NurbsSurface::revolve(&line, DVec3::ZERO, DVec3::Z, 0.0, 1e-12).is_err());
         assert!(NurbsSurface::extrude(&line, DVec3::ZERO).is_err());
+        let on_axis = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![DVec3::Z, DVec3::Z * 3.0],
+            vec![1.0; 2],
+        )
+        .unwrap();
+        assert!(NurbsSurface::revolve(&on_axis, DVec3::ZERO, DVec3::Z, 0.0, TAU).is_err());
         assert!(NurbsSurface::extrude(&line, DVec3::new(f64::NAN, 0.0, 0.0)).is_err());
     }
 
