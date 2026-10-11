@@ -28,8 +28,5 @@ egui.workspace = true
 egui_tiles.workspace = true
 winit.workspace = true
 
-[dev-dependencies]
-ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
-
 [lints]
 workspace = true
