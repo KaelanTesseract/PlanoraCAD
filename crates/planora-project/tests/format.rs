@@ -126,6 +126,8 @@ fn the_golden_file_pins_format_1() {
     }
     let golden = std::fs::read_to_string(&path)
         .expect("tests/data/format1.json fehlt – mit PLANORA_UPDATE_GOLDEN=1 erzeugen");
+    // Streng: das Dokument muss genau den Text der Golden-Datei ergeben (fängt geänderte Abbildungen).
+    assert_eq!(text, golden.trim_end_matches('\n'));
     // Die Golden-Datei muss sich (a) fehlerfrei lesen lassen und (b) zum selben Text führen.
     let snap = decode_version(&golden, "format1.json").unwrap();
     assert_eq!(
@@ -187,4 +189,25 @@ fn a_non_finite_number_is_never_written() {
         size.x = f64::NAN;
     }
     assert!(encode_version(&s).is_err());
+}
+
+#[test]
+fn format_0_is_rejected_and_a_leading_bom_is_ignored() {
+    assert!(matches!(
+        bad(r#"{"format":0,"marker":0,"naechste_id":1,"features":[]}"#),
+        ProjectError::Corrupt { .. }
+    ));
+    let good = encode_version(&full_document().snapshot()).unwrap();
+    let with_bom = format!("\u{feff}{good}");
+    let s = decode_version(&with_bom, "x.json").unwrap();
+    assert_eq!(encode_version(&s).unwrap(), good);
+}
+
+#[test]
+fn errors_name_the_feature() {
+    let good = encode_version(&full_document().snapshot()).unwrap();
+    let e = bad(&good.replace("abziehen", "teilen")).to_string();
+    assert!(e.contains("Abzug") && e.contains("teilen"), "{e}");
+    let e = bad(&good.replacen("30.0", "1e300", 1)).to_string();
+    assert!(e.contains("Quader 1"), "{e}");
 }

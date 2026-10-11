@@ -47,12 +47,13 @@ impl Document {
         if s.marker > s.features.len() {
             return Err(bad("Der Rückrollmarker liegt hinter dem letzten Feature"));
         }
+        let mut seen = std::collections::HashSet::with_capacity(s.features.len());
         let mut doc = Document::with_options(chord_tolerance);
-        for (i, f) in s.features.iter().enumerate() {
+        for f in s.features.iter() {
             if f.id.0 == 0 || f.id.0 >= s.next_id {
                 return Err(bad("Ein Feature hat eine ungültige Kennung"));
             }
-            if s.features[..i].iter().any(|g| g.id == f.id) {
+            if !seen.insert(f.id) {
                 return Err(bad("Eine Feature-Kennung kommt doppelt vor"));
             }
             if f.name.trim().is_empty() {

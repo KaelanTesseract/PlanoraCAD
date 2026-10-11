@@ -22,6 +22,9 @@ fn v3(v: DVec3) -> V3 {
     [v.x, v.y, v.z]
 }
 
+/// Prueft eine Zahl aus der Datei: endlich und im Betrag hoechstens `2 * MAX_COORD_MM`. Der
+/// Faktor 2 laesst Ursprung plus Groesse (z. B. ein Quader am Rand des Raums) zu, waehrend
+/// Werte weit ueber dem Rechenbereich abgelehnt werden.
 fn num(origin: &str, what: &str, x: f64) -> Result<f64> {
     if x.is_finite() && x.abs() <= MAX_COORD_MM * 2.0 {
         Ok(x)
@@ -62,11 +65,11 @@ fn face_to(r: &FaceRef) -> FaceRefDto {
     }
 }
 
-fn face_from(origin: &str, d: &FaceRefDto) -> Result<FaceRef> {
+fn face_from(origin: &str, name: &str, d: &FaceRefDto) -> Result<FaceRef> {
     Ok(FaceRef {
         origin: d.herkunft,
         role: d.rolle.clone(),
-        hint: dv3(origin, "Hinweispunkt", d.hinweis)?,
+        hint: dv3(origin, &format!("„{name}“ Hinweispunkt"), d.hinweis)?,
     })
 }
 
@@ -78,11 +81,11 @@ fn edge_to(r: &EdgeRef) -> EdgeRefDto {
     }
 }
 
-fn edge_from(origin: &str, d: &EdgeRefDto) -> Result<EdgeRef> {
+fn edge_from(origin: &str, name: &str, d: &EdgeRefDto) -> Result<EdgeRef> {
     Ok(EdgeRef {
-        a: face_from(origin, &d.a)?,
-        b: face_from(origin, &d.b)?,
-        hint: dv3(origin, "Hinweispunkt", d.hinweis)?,
+        a: face_from(origin, name, &d.a)?,
+        b: face_from(origin, name, &d.b)?,
+        hint: dv3(origin, &format!("„{name}“ Hinweispunkt"), d.hinweis)?,
     })
 }
 
@@ -343,10 +346,14 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Sketch> {
     let data = SketchData {
         name: d.name.clone(),
         frame: Frame {
-            origin: dv3(origin, "Ursprung", d.ebene.ursprung)?,
-            x: dv3(origin, "x-Achse", d.ebene.x)?,
-            y: dv3(origin, "y-Achse", d.ebene.y)?,
-            z: dv3(origin, "z-Achse", d.ebene.z)?,
+            origin: dv3(
+                origin,
+                &format!("Skizze „{feature}“ Ursprung"),
+                d.ebene.ursprung,
+            )?,
+            x: dv3(origin, &format!("Skizze „{feature}“ x-Achse"), d.ebene.x)?,
+            y: dv3(origin, &format!("Skizze „{feature}“ y-Achse"), d.ebene.y)?,
+            z: dv3(origin, &format!("Skizze „{feature}“ z-Achse"), d.ebene.z)?,
         },
         tolerance: Tolerance {
             linear: d.linear,
@@ -497,12 +504,12 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
                         other => {
                             return Err(ProjectError::corrupt(
                                 origin,
-                                format!("Unbekannte Ebene „{other}“"),
+                                format!("„{name}“: Unbekannte Ebene „{other}“"),
                             ));
                         }
                     }),
                     PlaneDto::Flaeche { flaeche } => {
-                        SketchPlane::OnFace(face_from(origin, flaeche)?)
+                        SketchPlane::OnFace(face_from(origin, name, flaeche)?)
                     }
                 },
                 copies: s
@@ -511,7 +518,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
                     .map(|c| {
                         Ok(EdgeCopy {
                             curve: CurveId::from_index(c.kurve),
-                            edge: edge_from(origin, &c.kante)?,
+                            edge: edge_from(origin, name, &c.kante)?,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?,
@@ -575,7 +582,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
                 other => {
                     return Err(ProjectError::corrupt(
                         origin,
-                        format!("Unbekannte Operation „{other}“"),
+                        format!("„{name}“: Unbekannte Operation „{other}“"),
                     ));
                 }
             },
@@ -628,8 +635,13 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     struct Head {
         format: u32,
     }
+    // Ein vorangestelltes UTF-8-Byte-Order-Mark ist harmlos und wird uebergangen.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let head: Head =
         serde_json::from_str(text).map_err(|e| ProjectError::corrupt(origin, e.to_string()))?;
+    if head.format == 0 {
+        return Err(ProjectError::corrupt(origin, "Ungültige Formatnummer 0"));
+    }
     if head.format > FORMAT_VERSION {
         return Err(ProjectError::TooNew {
             path: origin.into(),
