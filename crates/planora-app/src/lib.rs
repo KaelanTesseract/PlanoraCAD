@@ -17,6 +17,7 @@ pub mod sketch_view;
 pub mod state;
 pub mod tabs;
 pub mod theme;
+pub mod versions_panel;
 pub mod viewport;
 pub mod workspace;
 

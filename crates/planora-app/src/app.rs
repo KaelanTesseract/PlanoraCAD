@@ -4,9 +4,11 @@ use crate::dock::{Dock, Pane};
 use crate::feature_dialog::FeatureDialog;
 use crate::projects_panel::ProjectsUi;
 use crate::state::{AppState, SketchRequest, StandardPlane};
+use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
 use crate::{
-    browser, fonts, projects_panel, prompts, properties, sketch_panel, tabs, theme, viewport,
+    browser, fonts, projects_panel, prompts, properties, sketch_panel, tabs, theme, versions_panel,
+    viewport,
 };
 use egui_tiles::{SimplificationOptions, TileId, Tiles, UiResponse};
 use planora_feature::SketchPlane;
@@ -22,6 +24,7 @@ const AUTOSAVE_REPAINT: Duration = Duration::from_secs(30);
 struct Behavior<'a> {
     ws: &'a mut Workspace,
     projects_ui: &'a mut ProjectsUi,
+    versions_ui: &'a mut VersionsUi,
 }
 
 /// Rollbarer Bereich mit Innenabstand für die Panels.
@@ -64,9 +67,8 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             Pane::Projects => scrolled(ui, |ui| {
                 projects_panel::show(ui, self.ws, self.projects_ui);
             }),
-            // Task 11 füllt diesen Bereich mit dem Versionsbaum.
             Pane::Versions => scrolled(ui, |ui| {
-                ui.weak("Hier erscheinen die Versionen des aktiven Dokuments.");
+                versions_panel::show(ui, self.ws, self.versions_ui);
             }),
         }
         UiResponse::None
@@ -90,6 +92,7 @@ pub struct PlanoraApp {
     ws: Workspace,
     dock: Dock,
     projects_ui: ProjectsUi,
+    versions_ui: VersionsUi,
     applied_dark: Option<bool>,
     /// `ViewportCommand::Close` wurde nach freigegebenem Beenden schon geschickt.
     close_sent: bool,
@@ -117,6 +120,7 @@ impl PlanoraApp {
             ws,
             dock: Dock::new(),
             projects_ui: ProjectsUi::default(),
+            versions_ui: VersionsUi::default(),
             applied_dark: None,
             close_sent: false,
         }
@@ -515,6 +519,7 @@ impl eframe::App for PlanoraApp {
             let mut behavior = Behavior {
                 ws: &mut self.ws,
                 projects_ui: &mut self.projects_ui,
+                versions_ui: &mut self.versions_ui,
             };
             self.dock.tree.ui(&mut behavior, ui);
         });
