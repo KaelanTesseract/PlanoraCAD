@@ -107,6 +107,8 @@ pub struct PlanoraApp {
     ws: Workspace,
     dock: Tree<Pane>,
     applied_dark: Option<bool>,
+    /// `ViewportCommand::Close` wurde nach freigegebenem Beenden schon geschickt.
+    close_sent: bool,
 }
 
 impl PlanoraApp {
@@ -131,6 +133,7 @@ impl PlanoraApp {
             ws,
             dock: build_docking(),
             applied_dark: None,
+            close_sent: false,
         }
     }
 
@@ -194,9 +197,8 @@ impl PlanoraApp {
             ui.close();
         }
         if ui.button("Beenden").clicked() {
-            if self.ws.request_quit() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+            // Ist Beenden freigegeben, schickt `handle_close_request` im nächsten Bild `Close`.
+            self.ws.request_quit();
             ui.close();
         }
     }
@@ -412,19 +414,29 @@ impl PlanoraApp {
             self.ws.request_close(i);
         }
     }
+}
 
-    /// Schließen des Fensters (Titelleiste, Alt+F4): erst nach Rückfrage bei ungespeicherten
-    /// Änderungen oder offenem Autosicherungs-Angebot. Ist das Beenden über die Rückfragen
-    /// freigegeben (`ws.quit`), schließt die App selbst.
-    fn handle_close(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.viewport().close_requested()) {
-            if !self.ws.quit && !self.ws.request_quit() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+/// Schließen des Fensters (Titelleiste, Alt+F4, Taskleiste – auch minimiert): erst nach
+/// Rückfrage bei ungespeicherten Änderungen oder offenem Autosicherungs-Angebot. Dann wird das
+/// Schließen abgebrochen und das Fenster wieder hervorgeholt, damit die Rückfrage sichtbar ist.
+/// Ist das Beenden freigegeben (`ws.quit`, z. B. nach „Verwerfen“ in der letzten Rückfrage),
+/// schickt die Funktion selbst einmal `Close` (`close_sent` merkt sich das).
+///
+/// Läuft in `App::logic`, also vor jedem Bild und auch bei minimiertem Fenster. Mehrfaches
+/// Aufrufen mit derselben Schließanfrage (mehrere Durchgänge eines Bildes, oder erst minimiert,
+/// dann sichtbar) ist harmlos: `request_quit` setzt dieselbe Rückfrage noch einmal.
+pub fn handle_close_request(ctx: &egui::Context, ws: &mut Workspace, close_sent: &mut bool) {
+    if ctx.input(|i| i.viewport().close_requested()) {
+        if !ws.quit && !ws.request_quit() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if ctx.input(|i| i.viewport().minimized == Some(true)) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             }
-        } else if self.ws.quit {
-            // nach „Verwerfen“/„Speichern“ der letzten Rückfrage beim Beenden
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
+    } else if ws.quit && !*close_sent {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        *close_sent = true;
     }
 }
 
@@ -451,6 +463,15 @@ pub fn dialog_for_request(state: &mut AppState) -> Option<CreateDialog> {
 }
 
 impl eframe::App for PlanoraApp {
+    /// Läuft vor jedem `ui` und – anders als `ui` – auch bei minimiertem oder verdecktem Fenster
+    /// (eframe plant dann gedrosselte Wiederholungen ein). Deshalb stehen hier das Schließen
+    /// und die Autosicherung.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        handle_close_request(ctx, &mut self.ws, &mut self.close_sent);
+        self.ws.autosave_tick(Instant::now());
+        ctx.request_repaint_after(AUTOSAVE_REPAINT);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let dark = self.ws.active_tab().state.dark;
@@ -459,7 +480,6 @@ impl eframe::App for PlanoraApp {
             self.applied_dark = Some(dark);
         }
 
-        self.handle_close(&ctx);
         self.shortcuts(&ctx);
 
         // Solange eine Rückfrage offen ist, sind Menü und Tab-Leiste gesperrt (sonst könnte
@@ -535,7 +555,10 @@ impl eframe::App for PlanoraApp {
         prompts::show(&ctx, &mut self.ws);
 
         viewport::remember_keyboard_focus(&ctx);
-        self.ws.autosave_tick(Instant::now());
-        ctx.request_repaint_after(AUTOSAVE_REPAINT);
+        if self.ws.quit && !self.close_sent {
+            // Beenden ist freigegeben (Menü oder letzte Rückfrage): `logic` des nächsten Bildes
+            // schickt `Close`.
+            ctx.request_repaint();
+        }
     }
 }

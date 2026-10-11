@@ -56,7 +56,8 @@ fn tab_label(ui: &mut egui::Ui, selected: bool, title: &str, dirty: bool) -> egu
     }
     let font = egui::TextStyle::Button.resolve(ui.style());
     let mut job = egui::text::LayoutJob::default();
-    // PLACEHOLDER: egui setzt die passende Textfarbe des Knopfs ein
+    // Farbe `Color32::PLACEHOLDER` ersetzt egui beim Zeichnen durch die Textfarbe des Knopfs
+    // (normal, überfahren, gewählt).
     job.append(
         &format!("{title} "),
         0.0,
@@ -76,7 +77,14 @@ fn tab_label(ui: &mut egui::Ui, selected: bool, title: &str, dirty: bool) -> egu
         .and_then(|r| r.glyphs.last())
         .map(|g| g.advance_width)
         .unwrap_or(font.size * 0.5);
-    let response = ui.selectable_label(selected, job);
+    // Der Kopf bricht nie um (einzeilig), sonst stünde der Kreis nicht auf dem Zeichen: er wird
+    // vom rechten Rand und der Mitte des Kopfs aus gesetzt.
+    let response = ui
+        .scope(|ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            ui.selectable_label(selected, job)
+        })
+        .inner;
     let visuals = ui.style().interact_selectable(&response, selected);
     let center = egui::pos2(
         response.rect.right() - ui.spacing().button_padding.x - mark_width / 2.0,
