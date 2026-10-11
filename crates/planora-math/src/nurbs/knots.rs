@@ -1,7 +1,10 @@
 //! Geklemmte Knotenvektoren mit Basisfunktionen und deren Ableitungen
 //! (Algorithmen A2.1 bis A2.3 nach Piegl/Tiller).
 
-use super::{MAX_DEGREE, MAX_DERIV_ORDER, MAX_KNOT_MAGNITUDE, MIN_KNOT_GAP_RATIO, NurbsError};
+use super::{
+    MAX_DEGREE, MAX_DERIV_ORDER, MAX_KNOT_MAGNITUDE, MIN_KNOT_DOMAIN, MIN_KNOT_GAP_RATIO,
+    NurbsError,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct KnotVector {
@@ -46,6 +49,11 @@ impl KnotVector {
         if knots.iter().any(|k| k.abs() > MAX_KNOT_MAGNITUDE) || length > MAX_KNOT_MAGNITUDE {
             return Err(NurbsError::Knots(format!(
                 "Knoten und Parameterbereich dürfen höchstens {MAX_KNOT_MAGNITUDE} betragen"
+            )));
+        }
+        if length < MIN_KNOT_DOMAIN {
+            return Err(NurbsError::Knots(format!(
+                "der Parameterbereich ist zu klein (mindestens {MIN_KNOT_DOMAIN})"
             )));
         }
         let min_gap = knots

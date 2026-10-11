@@ -34,6 +34,9 @@ pub const MAX_KNOT_MAGNITUDE: f64 = 1e9;
 /// Kleinster erlaubter Abstand zweier verschiedener Knoten, bezogen auf die Länge des
 /// Parameterbereichs (verhindert unendliche Ableitungen und beim Spiegeln verschmelzende Knoten).
 pub const MIN_KNOT_GAP_RATIO: f64 = 1e-9;
+/// Kleinste erlaubte Länge des Parameterbereichs (mit `MIN_KNOT_GAP_RATIO` ergibt das absolute
+/// Knotenabstände von mindestens 1e-15; Auswertung und Ableitungen bleiben endlich).
+pub const MIN_KNOT_DOMAIN: f64 = 1e-6;
 /// Höchste Ableitungsordnung, die Kurven und Basisfunktionen liefern (Ordnungen darüber
 /// werden darauf begrenzt; Ableitungen über dem Grad sind ohnehin 0).
 pub const MAX_DERIV_ORDER: usize = MAX_DEGREE;

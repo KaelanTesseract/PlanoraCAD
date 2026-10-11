@@ -325,3 +325,29 @@ fn accepted_random_knot_vectors_evaluate_finitely() {
     }
     assert!(accepted > 300, "zu wenige gültige Fälle: {accepted}");
 }
+
+#[test]
+fn tiny_parameter_domains_are_rejected_and_the_minimum_evaluates_finitely() {
+    let pts = vec![
+        DVec3::new(-1e6, 0.0, 0.0),
+        DVec3::new(1e6, 1e6, 0.0),
+        DVec3::new(1e6, -1e6, 1e6),
+        DVec3::new(-1e6, 1e6, -1e6),
+    ];
+    for len in [1e-300, 1e-10] {
+        let k = vec![0.0, 0.0, 0.0, 0.0, len, len, len, len];
+        assert!(KnotVector::new(3, k.clone()).is_err(), "len={len}");
+        assert!(
+            NurbsCurve::new(3, k, pts.clone(), vec![1.0; 4]).is_err(),
+            "len={len}"
+        );
+    }
+    let len = 1e-6;
+    let k = vec![0.0, 0.0, 0.0, 0.0, len, len, len, len];
+    let c = NurbsCurve::new(3, k, pts, vec![1.0, 2.0, 0.5, 1.0]).unwrap();
+    for i in 0..=20 {
+        let u = len * i as f64 / 20.0;
+        assert!(c.point(u).is_finite());
+        assert!(c.derivs(u, 9).iter().all(|d| d.is_finite()), "u={u}");
+    }
+}
