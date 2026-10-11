@@ -20,6 +20,10 @@ pub enum ProjectError {
     Locked { since: String },
     #[error("{0}")]
     Invalid(String),
+    #[error(
+        "Diese Version ist nicht die neueste ihres Zweigs. Bitte einen neuen Zweignamen angeben."
+    )]
+    NeedsBranch,
 }
 
 impl ProjectError {

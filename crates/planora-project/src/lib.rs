@@ -1,6 +1,7 @@
 //! Dateiformat, Projektverwaltung und Versionsspeicher von PlanoraCAD (ohne Oberfläche).
 pub mod config;
 pub mod convert;
+pub mod docstore;
 pub mod error;
 pub mod format;
 pub mod fsutil;
