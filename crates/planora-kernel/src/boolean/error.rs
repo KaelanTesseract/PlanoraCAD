@@ -29,3 +29,34 @@ pub enum BooleanError {
     #[error("Ein Eingangskörper ist ungültig: {0}")]
     InvalidInput(String),
 }
+
+/// Name der Freiformfläche in Meldungen (wie `surface_name`).
+const FREEFORM_NAME: &str = "Freiformfläche";
+
+impl BooleanError {
+    /// Stammt die Meldung aus einem Weg, den es nur mit Freiformflächen gibt (Schnittrechner,
+    /// Einordnen gegen Freiformflächen, dünne Gebilde, Arbeitsgrenze, Kante neben der
+    /// Freiformfläche)? Grenzen analytischer Wege (etwa Ebene gegen Kegel) zählen nicht, auch wenn
+    /// ein Körper Freiformflächen hat. `AmbiguousContact` und `AmbiguousClassification` entstehen
+    /// in der gemeinsamen Pipeline; ihre Ursache lässt sich nicht zuordnen, sie zählen nicht.
+    pub fn is_freeform_limit(&self) -> bool {
+        match self {
+            BooleanError::UnsupportedIntersection { a, b } => {
+                *a == FREEFORM_NAME || *b == FREEFORM_NAME
+            }
+            BooleanError::Unsupported(msg) => {
+                [
+                    super::budget::TOO_EXPENSIVE,
+                    super::classify::FREEFORM_GRAZING,
+                    super::classify::FREEFORM_RAYS_DISAGREE,
+                    super::classify::OBLIQUE_ON_FREEFORM,
+                    super::THIN_FEATURE,
+                    super::uv::EDGE_OFF_FREEFORM,
+                ]
+                .contains(&msg.as_str())
+                    || (msg.starts_with("Der Schnitt von ") && msg.contains(FREEFORM_NAME))
+            }
+            _ => false,
+        }
+    }
+}

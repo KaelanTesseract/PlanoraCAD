@@ -130,7 +130,7 @@ fn revolve_roles_follow_the_input_order_of_the_chain() {
         "Segment 1 ist die Grundscheibe"
     );
     assert_eq!(kind(&a, "Fläche 2"), SurfaceKind::Cone);
-    let down = up.reversed();
+    let down = up.try_reversed().unwrap();
     let b = k().revolve(&down, &planora_math::Frame::WORLD).unwrap();
     assert_eq!(
         kind(&b, "Fläche 1"),

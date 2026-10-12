@@ -1,5 +1,6 @@
 //! Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit analytischen Flächen.
 
+mod budget;
 mod classify;
 mod error;
 mod imprint;
@@ -12,6 +13,7 @@ mod split;
 mod surfsurf;
 mod uv;
 
+pub use budget::{MAX_FREEFORM_EVALUATIONS, TOO_EXPENSIVE};
 pub use classify::{
     Class, Location, classify_region, edge_probe_point, face_probe_point, solid_contains,
     solid_faces,
@@ -35,7 +37,7 @@ pub use uv::{
 
 use crate::geometry::{Curve, Surface};
 use crate::topology::Solid;
-use crate::validate::{NURBS_EDGE_TOL, ValidationError, validate};
+use crate::validate::{NURBS_EDGE_TOL, ValidationError, validate_with};
 use planora_math::{DVec3, Frame, Tolerance};
 
 /// Längentoleranz für Knoten, Teilungen und das Verschweißen von Ecken, sobald Freiformkurven
@@ -80,7 +82,7 @@ fn nurbs_params_ok(c: &Curve, t0: f64, t1: f64) -> bool {
 
 /// Eingangsprüfung: nicht leer, alle Zahlen endlich, Freiformkanten im Parameterbereich, danach
 /// der Validator.
-fn check_input(s: &Solid) -> Result<(), String> {
+fn check_input(s: &Solid, tol: &Tolerance) -> Result<(), String> {
     if s.faces.is_empty() {
         return Err("leerer Körper (keine Flächen)".into());
     }
@@ -108,16 +110,34 @@ fn check_input(s: &Solid) -> Result<(), String> {
             return Err("Kante einer Freiformkurve außerhalb ihres Parameterbereichs".into());
         }
     }
-    validate(s).map_err(|e| e.to_string())?;
+    validate_with(s, tol).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// Boolesche Operation `a op b`. Das Ergebnis besteht immer den Validator; sonst ein benannter Fehler.
+/// Mit Freiformflächen gilt die Arbeitsgrenze [`MAX_FREEFORM_EVALUATIONS`].
 pub fn boolean(a: &Solid, b: &Solid, op: BoolOp, tol: &Tolerance) -> Result<Solid, BooleanError> {
-    check_input(a).map_err(|e| BooleanError::InvalidInput(format!("Körper A: {e}")))?;
-    check_input(b).map_err(|e| BooleanError::InvalidInput(format!("Körper B: {e}")))?;
+    boolean_limited(a, b, op, tol, MAX_FREEFORM_EVALUATIONS)
+}
 
+/// Wie [`boolean`], mit eigener Arbeitsgrenze für Operationen mit Freiformflächen: Nach mehr als
+/// `max_evaluations` NURBS-Auswertungen endet die Operation mit
+/// `Unsupported(`[`TOO_EXPENSIVE`]`)` (deterministisch, siehe `budget`). Rein analytische
+/// Operationen kennen keine Grenze (unverändert).
+pub fn boolean_limited(
+    a: &Solid,
+    b: &Solid,
+    op: BoolOp,
+    tol: &Tolerance,
+    max_evaluations: u64,
+) -> Result<Solid, BooleanError> {
+    check_input(a, tol).map_err(|e| BooleanError::InvalidInput(format!("Körper A: {e}")))?;
+    check_input(b, tol).map_err(|e| BooleanError::InvalidInput(format!("Körper B: {e}")))?;
+
+    let freeform = has_freeform(a) || has_freeform(b);
+    let _scope = freeform.then(|| budget::Scope::start(max_evaluations));
     let (work_a, work_b) = imprint(a, b, tol)?;
+    budget::check()?;
     let faces_a = solid_faces(a);
     let faces_b = solid_faces(b);
 
@@ -127,6 +147,7 @@ pub fn boolean(a: &Solid, b: &Solid, op: BoolOp, tol: &Tolerance) -> Result<Soli
     for (side, works, other) in [(Side::A, &work_a, &faces_b), (Side::B, &work_b, &faces_a)] {
         for w in works {
             for region in split_face(&w.geom, &w.sections, tol)? {
+                budget::check()?;
                 let class = classify_region(&w.geom, &region, other, tol)?;
                 interiors_overlap |= class == Class::Inside;
                 if let Some(p) = select_piece(op, side, class, &w.geom, region) {
@@ -138,9 +159,10 @@ pub fn boolean(a: &Solid, b: &Solid, op: BoolOp, tol: &Tolerance) -> Result<Soli
     if pieces.is_empty() {
         return Err(BooleanError::EmptyResult);
     }
+    budget::check()?;
     let solid = sew(pieces, tol)?;
-    validate(&solid).map_err(|e| result_error(e, interiors_overlap))?;
-    if has_freeform(a) || has_freeform(b) {
+    validate_with(&solid, tol).map_err(|e| result_error(e, interiors_overlap))?;
+    if freeform {
         check_freeform_result(&solid, tol)?;
     }
     Ok(solid)

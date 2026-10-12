@@ -463,3 +463,152 @@ fn an_empty_freeform_result_keeps_its_plain_message() {
         s => panic!("{s:?}"),
     }
 }
+
+/// Volumenprobe mit Freiformflächen (Review, I1): Eine flache Ellipsenplatte vereinigt mit einer
+/// Kugel galt als „unplausibel“, weil die Kugel allein grob, im Ergebnis aber mit dem feineren
+/// Winkelschritt der Freiformfläche vernetzt wurde. Jetzt werden alle drei Körper gleich geteilt.
+#[test]
+fn a_flat_ellipse_united_with_a_sphere_passes_the_volume_check() {
+    for (radius, origin, disjoint) in [
+        (3.0, DVec3::new(20.0, 0.0, 0.0), true),
+        (4.0, DVec3::new(5.5, 0.0, 0.0), false),
+    ] {
+        // Sehnentoleranz der App (0,05), wie im Review
+        let mut d = Document::with_options(0.05);
+        let (sk, _) = ellipse_sketch_ab(10.0, 0.5);
+        let s = d.add_feature("Skizze 1", feature_sketch(sk)).unwrap();
+        let e = d
+            .add_feature(
+                "Extrusion 1",
+                FeatureKind::Extrude {
+                    sketch: s,
+                    profile: 0,
+                    height: 0.5,
+                },
+            )
+            .unwrap();
+        let k = d
+            .add_feature("Kugel 1", FeatureKind::Sphere { radius, origin })
+            .unwrap();
+        let u = d
+            .add_feature(
+                "Vereinigung 1",
+                FeatureKind::Boolean {
+                    target: body(e),
+                    tool: body(k),
+                    op: BoolOp::Union,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            d.feature(u).unwrap().status,
+            FeatureStatus::Ok,
+            "r = {radius}: {:?}",
+            d.feature(u).unwrap().status
+        );
+        let v = volume(d.visible_bodies()[0].solid);
+        let (ve, vs) = (PI * 10.0 * 0.5 * 0.5, 4.0 / 3.0 * PI * radius.powi(3));
+        if disjoint {
+            assert_rel(v, ve + vs, "getrennt");
+        } else {
+            assert!(v > vs.max(ve) && v < ve + vs, "{v}");
+        }
+        d.check_invariants().unwrap();
+    }
+}
+
+/// Ein sehr kleines Freiformteil weit vom Ursprung (Review, I3): Das Netzvolumen löschte sich
+/// dort aus (negativ), die Volumenprobe schlug fehl. Vereinigt mit einem kleinen Quader.
+#[test]
+fn a_tiny_freeform_part_far_from_the_origin_is_united() {
+    let far = DVec3::new(-48717.0, -36565.0, -23341.0);
+    let mut d = Document::with_options(0.05);
+    let (sk, _) = ellipse_sketch_ab(0.05, 0.02);
+    let s = d.add_feature("Skizze 1", feature_sketch(sk)).unwrap();
+    let e = d
+        .add_feature(
+            "Extrusion 1",
+            FeatureKind::Extrude {
+                sketch: s,
+                profile: 0,
+                height: 0.03,
+            },
+        )
+        .unwrap();
+    let m = d
+        .add_feature(
+            "Verschieben 1",
+            FeatureKind::Move {
+                body: body(e),
+                delta: far,
+            },
+        )
+        .unwrap();
+    let b = d
+        .add_feature(
+            "Quader 1",
+            FeatureKind::Box {
+                size: DVec3::splat(0.0089),
+                origin: far + DVec3::new(0.03, -0.0045, 0.01),
+            },
+        )
+        .unwrap();
+    let u = d
+        .add_feature(
+            "Vereinigung 1",
+            FeatureKind::Boolean {
+                target: body(m),
+                tool: body(b),
+                op: BoolOp::Union,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        d.feature(u).unwrap().status,
+        FeatureStatus::Ok,
+        "{:?}",
+        d.feature(u).unwrap().status
+    );
+    let v = mass_properties(
+        &tessellate(
+            d.visible_bodies()[0].solid,
+            &TessellationOptions {
+                chord_tolerance: 1e-5,
+            },
+        )
+        .unwrap(),
+    )
+    .volume;
+    assert!(v > 0.0, "{v}");
+    d.check_invariants().unwrap();
+}
+
+/// Eine sehr flache Ellipse (kleine Halbachse 2e-6) wird nicht zum Profil (ihre Seiten berühren
+/// sich innerhalb der Toleranz); die Extrusion nennt den Grund statt nur „Profil 0 gibt es nicht“
+/// (Review, Minor b).
+#[test]
+fn a_rejected_ellipse_names_its_reason_at_the_extrusion() {
+    let mut d = Document::new();
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let c = sk.add_point(0.0, 0.0).unwrap();
+    sk.add_ellipse(c, DVec2::new(5.0, 0.0), 2e-6).unwrap();
+    let s = d.add_feature("Skizze 1", feature_sketch(sk)).unwrap();
+    let e = d
+        .add_feature(
+            "Extrusion 1",
+            FeatureKind::Extrude {
+                sketch: s,
+                profile: 0,
+                height: 1.0,
+            },
+        )
+        .unwrap();
+    match &d.feature(e).unwrap().status {
+        FeatureStatus::Error(m) => {
+            assert!(m.contains("Profil 0 gibt es nicht"), "{m}");
+            assert!(m.contains("abgelehnte Kurvenzüge"), "{m}");
+            assert!(m.contains("berührt sich"), "{m}");
+        }
+        st => panic!("Fehler erwartet: {st:?}"),
+    }
+}

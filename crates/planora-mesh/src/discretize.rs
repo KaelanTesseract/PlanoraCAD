@@ -70,33 +70,17 @@ pub struct Discretizer {
 
 impl Discretizer {
     pub fn new(solid: &Solid, chord_tolerance: f64) -> Self {
-        let mut r_max = 0.0_f64;
-        for (_, e) in solid.edges.iter() {
-            r_max = r_max.max(match &e.curve {
-                Curve::Line { .. } => 0.0,
-                Curve::Circle { radius, .. } => *radius,
-                Curve::Ellipse { major, minor, .. } => major.max(*minor),
-                Curve::Nurbs(c) => diagonal(c.control_points().iter().copied()),
-            });
-        }
-        for (_, f) in solid.faces.iter() {
-            r_max = r_max.max(match &f.surface {
-                Surface::Plane { .. } => 0.0,
-                Surface::Cylinder { radius, .. } => *radius,
-                Surface::Cone { radius, slope, .. } => match f.patch {
-                    Some(p) => (radius + slope * p.v0)
-                        .abs()
-                        .max((radius + slope * p.v1).abs()),
-                    None => *radius,
-                },
-                Surface::Sphere { radius, .. } => *radius,
-                Surface::Torus { major, minor, .. } => major + minor,
-                Surface::Nurbs(d) => {
-                    let (lo, hi) = d.control_bounds();
-                    diagonal([lo, hi].into_iter())
-                }
-            });
-        }
+        Self::for_solids(&[solid], chord_tolerance)
+    }
+
+    /// Gemeinsamer Winkelschritt für mehrere Körper (größter Radius aller): Körper, die damit
+    /// vernetzt werden, haben dieselbe Teilung, ihre Netzvolumen sind also vergleichbar (etwa
+    /// Eingangskörper und Ergebnis einer Booleschen Operation).
+    pub fn for_solids(solids: &[&Solid], chord_tolerance: f64) -> Self {
+        let r_max = solids
+            .iter()
+            .map(|s| radius_measure(s))
+            .fold(0.0_f64, f64::max);
         let tol = chord_tolerance.max(1e-9);
         let r = r_max.max(tol);
         let c = (1.0 - tol / r).clamp(-1.0, 1.0);
@@ -316,4 +300,37 @@ fn clamp_range(a: f64, b: f64, d0: f64, d1: f64) -> (f64, f64) {
     } else {
         (d0, d1)
     }
+}
+
+/// Größter Radius eines Körpers für den Winkelschritt (Freiformkurven und -flächen: Diagonale
+/// des Kontrollpunkt-Hüllquaders, siehe [`diagonal`]).
+fn radius_measure(solid: &Solid) -> f64 {
+    let mut r_max = 0.0_f64;
+    for (_, e) in solid.edges.iter() {
+        r_max = r_max.max(match &e.curve {
+            Curve::Line { .. } => 0.0,
+            Curve::Circle { radius, .. } => *radius,
+            Curve::Ellipse { major, minor, .. } => major.max(*minor),
+            Curve::Nurbs(c) => diagonal(c.control_points().iter().copied()),
+        });
+    }
+    for (_, f) in solid.faces.iter() {
+        r_max = r_max.max(match &f.surface {
+            Surface::Plane { .. } => 0.0,
+            Surface::Cylinder { radius, .. } => *radius,
+            Surface::Cone { radius, slope, .. } => match f.patch {
+                Some(p) => (radius + slope * p.v0)
+                    .abs()
+                    .max((radius + slope * p.v1).abs()),
+                None => *radius,
+            },
+            Surface::Sphere { radius, .. } => *radius,
+            Surface::Torus { major, minor, .. } => major + minor,
+            Surface::Nurbs(d) => {
+                let (lo, hi) = d.control_bounds();
+                diagonal([lo, hi].into_iter())
+            }
+        });
+    }
+    r_max
 }

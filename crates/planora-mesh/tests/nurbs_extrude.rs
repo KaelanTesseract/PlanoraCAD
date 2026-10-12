@@ -661,3 +661,49 @@ fn a_self_intersecting_spline_loop_is_rejected() {
         KernelError::ProfileSelfIntersects
     );
 }
+
+/// Volumen kleiner Teile weit vom Ursprung (Review, I3): Die Spatprodukte gegen den Ursprung
+/// löschten sich aus (eine Ellipsenwalze von 0,05 mm ergab ein negatives Volumen). Gerechnet
+/// wird jetzt relativ zur Mitte des Hüllquaders.
+#[test]
+fn small_parts_far_from_the_origin_keep_their_volume() {
+    use planora_math::DMat4;
+    let far = DMat4::from_translation(DVec3::new(-48717.0, -36565.0, -23341.0));
+    let tol = Tolerance::default();
+    let profile = Profile {
+        outer: ProfileLoop::nurbs_loop(ellipse(0.05, 0.02)).unwrap(),
+        holes: vec![],
+    };
+    let near = extrude(&profile, &world(), 0.03, &tol).unwrap();
+    let moved = near.transformed(&far).unwrap();
+    let exact = PI * 0.05 * 0.02 * 0.03;
+    let at_origin = mass_properties(&tessellate(&near, &opts(1e-5)).unwrap());
+    let far_away = mass_properties(&tessellate(&moved, &opts(1e-5)).unwrap());
+    assert!(
+        (at_origin.volume - exact).abs() / exact < 3e-3,
+        "{}",
+        at_origin.volume
+    );
+    assert!(
+        (far_away.volume - exact).abs() / exact < 3e-3,
+        "{} statt {}",
+        far_away.volume,
+        at_origin.volume
+    );
+    // Schwerpunkt mitverschoben
+    let shift = DVec3::new(-48717.0, -36565.0, -23341.0);
+    assert!(
+        (far_away.centroid - (at_origin.centroid + shift)).length() < 1e-4,
+        "{:?}",
+        far_away.centroid
+    );
+    // Analytischer Quader 0,01 mm weit draußen
+    let k = planora_kernel::AnalyticKernel::default();
+    let cube = planora_kernel::Kernel::make_box(&k, DVec3::splat(0.01))
+        .unwrap()
+        .transformed(&far)
+        .unwrap();
+    let m = mass_properties(&tessellate(&cube, &opts(1e-3)).unwrap());
+    assert!((m.volume - 1e-6).abs() < 1e-12, "{}", m.volume);
+    assert!((m.surface_area - 6e-4).abs() < 1e-10, "{}", m.surface_area);
+}

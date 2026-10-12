@@ -415,10 +415,15 @@ impl Sketch {
         let a = DVec2::new(self.vars[ax], self.vars[ay]);
         let minor = self.vars[minor];
         let len = a.length();
-        if !(len.is_finite() && len > tol && minor.is_finite() && minor > tol) {
-            return Err(SketchError::Degenerate(
-                "Die Halbachsen der Ellipse müssen länger als null sein".into(),
-            ));
+        if !(len.is_finite() && len > tol) {
+            return Err(SketchError::Degenerate(format!(
+                "Die große Halbachse der Ellipse ist zu klein (mindestens {tol} mm)"
+            )));
+        }
+        if !(minor.is_finite() && minor > tol) {
+            return Err(SketchError::Degenerate(format!(
+                "Die kleine Halbachse der Ellipse ist zu klein (mindestens {tol} mm)"
+            )));
         }
         let b = a.perp() / len * minor;
         let c = self.pos(center);

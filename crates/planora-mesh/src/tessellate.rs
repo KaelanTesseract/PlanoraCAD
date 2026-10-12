@@ -33,7 +33,13 @@ pub(crate) fn ensure_room(current: usize, extra: usize) -> Result<(), MeshError>
 
 /// Zerlegt einen Körper in Dreiecke. Alle Dreiecke sind so orientiert, dass sie nach außen zeigen.
 pub fn tessellate(solid: &Solid, options: &TessellationOptions) -> Result<Mesh, MeshError> {
-    let disc = Discretizer::new(solid, options.chord_tolerance);
+    tessellate_with(solid, &Discretizer::new(solid, options.chord_tolerance))
+}
+
+/// Wie [`tessellate`], mit vorgegebener Teilung (etwa [`Discretizer::for_solids`], damit mehrere
+/// Körper vergleichbar vernetzt werden).
+pub fn tessellate_with(solid: &Solid, disc: &Discretizer) -> Result<Mesh, MeshError> {
+    let disc = *disc;
     let polylines: Vec<Vec<DVec3>> = (0..solid.edges.len())
         .map(|i| disc.edge_polyline(solid, Id::from_index(i)))
         .collect();

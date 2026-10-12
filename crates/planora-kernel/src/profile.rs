@@ -288,23 +288,6 @@ impl ProfileLoop {
             / 2.0
     }
 
-    /// Dieselbe Kurve in umgekehrter Richtung.
-    ///
-    /// Für Freiformsegmente siehe [`ProfileLoop::try_reversed`]; deren Umkehr scheitert bei
-    /// gültigen Kurven nicht (dann wäre das ein Programmfehler; im Debug-Build ein Abbruch, sonst
-    /// bleibt das Segment unverändert). Der Kernel selbst nimmt `try_reversed`.
-    pub fn reversed(&self) -> ProfileLoop {
-        match self.try_reversed() {
-            Ok(r) => r,
-            Err(e) => {
-                if cfg!(debug_assertions) {
-                    panic!("Umkehr einer gültigen Freiformkurve gescheitert: {e}");
-                }
-                self.clone()
-            }
-        }
-    }
-
     /// Dieselbe Kurve in umgekehrter Richtung; Fehler `InvalidCurve`, wenn sich ein
     /// Freiformsegment nicht umkehren lässt.
     pub fn try_reversed(&self) -> Result<ProfileLoop, KernelError> {
@@ -340,8 +323,8 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// Wie [`Profile::oriented`], mit Fehler statt stiller Annahme, wenn sich ein Freiformsegment
-    /// nicht umkehren lässt.
+    /// Äußere Schleife gegen, Löcher im Uhrzeigersinn; Fehler `InvalidCurve`, wenn sich ein
+    /// Freiformsegment nicht umkehren lässt (es gibt keine Fassung ohne Fehlerrückgabe mehr).
     pub fn try_oriented(&self) -> Result<Profile, KernelError> {
         let outer = if self.outer.signed_area() < 0.0 {
             self.outer.try_reversed()?
@@ -360,27 +343,6 @@ impl Profile {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Profile { outer, holes })
-    }
-
-    /// Äußere Schleife gegen, Löcher im Uhrzeigersinn.
-    pub fn oriented(&self) -> Profile {
-        let outer = if self.outer.signed_area() < 0.0 {
-            self.outer.reversed()
-        } else {
-            self.outer.clone()
-        };
-        let holes = self
-            .holes
-            .iter()
-            .map(|h| {
-                if h.signed_area() > 0.0 {
-                    h.reversed()
-                } else {
-                    h.clone()
-                }
-            })
-            .collect();
-        Profile { outer, holes }
     }
 }
 

@@ -101,6 +101,7 @@ impl NurbsCurve {
     /// `n` wird auf `MAX_DERIV_ORDER` begrenzt; das Ergebnis hat `min(n, MAX_DERIV_ORDER) + 1`
     /// Einträge.
     pub fn derivs(&self, u: f64, n: usize) -> Vec<DVec3> {
+        super::work::count();
         let n = n.min(MAX_DERIV_ORDER);
         let p = self.knots.degree();
         let (a, b) = self.knots.domain();

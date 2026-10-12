@@ -31,14 +31,14 @@ pub fn extrude(
     if !(height.is_finite() && height > tol.linear) {
         return Err(KernelError::InvalidDimension(height));
     }
-    // Erst prüfen, dann orientieren: `oriented()` tastet die Bögen ab.
+    // Erst prüfen, dann orientieren: `try_oriented()` tastet die Bögen ab.
     for lp in std::iter::once(&profile.outer).chain(profile.holes.iter()) {
         check_loop_input(lp, tol)?;
     }
     check_self_intersection(profile, tol)?;
     check_hole_layout(profile, tol)?;
-    // Welche Schleifen dreht `oriented()` um? Nötig, um die Wandnummern auf die eingegebene
-    // Reihenfolge zurückzurechnen (gleiche Bedingungen wie in `Profile::oriented`).
+    // Welche Schleifen dreht `try_oriented()` um? Nötig, um die Wandnummern auf die eingegebene
+    // Reihenfolge zurückzurechnen (gleiche Bedingungen wie in `Profile::try_oriented`).
     let outer_reversed = profile.outer.signed_area() < 0.0;
     let holes_reversed: Vec<bool> = profile
         .holes

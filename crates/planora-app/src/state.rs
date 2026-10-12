@@ -7,7 +7,9 @@ use planora_feature::{
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{AnalyticKernel, Edge, Face, Id, Solid};
 use planora_math::{DVec2, DVec3, Frame};
-use planora_mesh::{MassProperties, Mesh, TessellationOptions, mass_properties, tessellate};
+use planora_mesh::{
+    MassProperties, Mesh, TessellationOptions, is_watertight, mass_properties, tessellate,
+};
 use planora_render::{
     EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, SceneData, build_scene, pick_edge,
     pick_face,
@@ -57,7 +59,17 @@ pub struct Body {
     pub mass: MassProperties,
     /// Achsenparallele Hülle `(min, max)` in Millimetern.
     pub bounds: (DVec3, DVec3),
+    /// Das Netz ist an einzelnen Stellen ungenau (`Mesh::inexact_faces`) oder nicht geschlossen;
+    /// die Statuszeile zeigt dann [`MESH_NOTE`]. Der Körper selbst ist davon nicht betroffen.
+    pub mesh_inexact: bool,
 }
+
+/// Hinweis in der Statuszeile, wenn das Netz eines Körpers ungenau ist.
+pub const MESH_NOTE: &str = "Hinweis: Das Netz dieses Körpers ist an einzelnen Stellen ungenau; die Anzeige kann kleine Lücken haben.";
+
+/// Punkte näher als das gelten bei der Prüfung auf ein geschlossenes Netz als derselbe Punkt
+/// (wie in den Netztests; benachbarte Flächen teilen ihre Kantenpunkte exakt).
+const WATERTIGHT_EPS: f64 = 1e-6;
 
 /// Wunsch aus dem Browser (Kontextmenü einer Skizze), einen Dialog zu öffnen; die App setzt ihn
 /// im selben Bild in den passenden Dialog um.
@@ -759,6 +771,7 @@ impl AppState {
         let mesh = self.mesh_of(&solid)?;
         let mass = mass_properties(&mesh);
         let bounds = bounds_of(&mesh);
+        let mesh_inexact = !mesh.inexact_faces.is_empty() || !is_watertight(&mesh, WATERTIGHT_EPS);
         Ok(Body {
             name,
             kind,
@@ -767,6 +780,7 @@ impl AppState {
             mesh,
             mass,
             bounds,
+            mesh_inexact,
         })
     }
 
@@ -891,6 +905,17 @@ fn to_vec3(v: DVec3) -> Vec3 {
 // ---- Skizzen ----------------------------------------------------------------------------------
 
 impl AppState {
+    /// Hinweis für die Statuszeile, wenn das Netz eines sichtbaren Körpers ungenau ist: mit dem
+    /// Namen des Körpers (des gewählten, wenn er betroffen ist, sonst des ersten). Ändert nichts.
+    pub fn mesh_note(&self) -> Option<String> {
+        let chosen = self
+            .selected_body
+            .and_then(|i| self.bodies.get(i))
+            .filter(|b| b.mesh_inexact);
+        let body = chosen.or_else(|| self.bodies.iter().find(|b| b.mesh_inexact))?;
+        Some(format!("„{}“: {MESH_NOTE}", body.name))
+    }
+
     /// Fehler als Meldung ablegen und zurückgeben.
     pub(crate) fn fail<T>(&mut self, e: String) -> Result<T, String> {
         self.message = Some(e.clone());

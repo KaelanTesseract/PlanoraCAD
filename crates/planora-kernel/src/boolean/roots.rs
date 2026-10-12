@@ -1,7 +1,7 @@
-use super::seg::{Seg, curve_sample_count, golden_min};
+use super::seg::{Seg, box_gap, boxes_distance, curve_sample_count, golden_min, union_box};
 use crate::geometry::{Curve, Surface};
 use crate::validate::edge_surface_tol;
-use planora_math::{TAU, Tolerance};
+use planora_math::{DVec3, TAU, Tolerance};
 use std::cell::Cell;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -248,8 +248,27 @@ pub fn seg_intersections(a: &Seg, b: &Seg, tol: &Tolerance) -> Vec<(f64, f64)> {
     if ![a.t0, a.t1, b.t0, b.t1].iter().all(|v| v.is_finite()) {
         return Vec::new();
     }
-    let mut out = one_way(a, b, tol);
-    for (fb, fa) in one_way(b, a, tol) {
+    // Jeder Treffer verlangt einen gefundenen Abstand ≤ `tol.linear`, und der gefundene Abstand
+    // ist nie kleiner als der Abstand der sicheren Hüllquader: Liegen diese weiter auseinander,
+    // gibt es keinen Treffer (spart bei Freiformkurven die teure Abtastung; analytisch unverändert).
+    // Erst die billigen Hüllen (ganze Kurve), dann die engeren der Bézier-Stücke (je Stück einmal).
+    let freeform = matches!(a.curve, Curve::Nurbs(_)) || matches!(b.curve, Curve::Nurbs(_));
+    if freeform && box_gap(a.sound_box(), b.sound_box()) > tol.linear {
+        return Vec::new();
+    }
+    let (boxes_a, boxes_b) = (a.piece_boxes(), b.piece_boxes());
+    let piece_box = |s: &Seg, bx: &Option<Vec<(DVec3, DVec3)>>| match bx {
+        Some(bx) => union_box(bx),
+        None => Some(s.sound_box()),
+    };
+    if freeform
+        && let (Some(ba), Some(bb)) = (piece_box(a, &boxes_a), piece_box(b, &boxes_b))
+        && box_gap(ba, bb) > tol.linear
+    {
+        return Vec::new();
+    }
+    let mut out = one_way(a, b, tol, boxes_b.as_deref());
+    for (fb, fa) in one_way(b, a, tol, boxes_a.as_deref()) {
         let p = a.at(fa);
         if !out
             .iter()
@@ -273,7 +292,14 @@ pub fn seg_intersections(a: &Seg, b: &Seg, tol: &Tolerance) -> Vec<(f64, f64)> {
 }
 
 /// Abtastung von `a` gegen `b`.
-fn one_way(a: &Seg, b: &Seg, tol: &Tolerance) -> Vec<(f64, f64)> {
+/// `b_boxes`: [`Seg::piece_boxes`] von `b` (nur bei Freiformkurven), für den sicheren Ausschluss
+/// ferner Stützstellen.
+fn one_way(
+    a: &Seg,
+    b: &Seg,
+    tol: &Tolerance,
+    b_boxes: Option<&[(DVec3, DVec3)]>,
+) -> Vec<(f64, f64)> {
     let near = tol.linear;
     // Punktförmiges Stück: nur prüfen, ob es auf `b` liegt.
     if a.t0 == a.t1 {
@@ -286,8 +312,21 @@ fn one_way(a: &Seg, b: &Seg, tol: &Tolerance) -> Vec<(f64, f64)> {
     }
     let n = curve_sample_count(&a.curve, a.t0, a.t1, 64, 64);
     let dist = |f: f64| b.closest(a.at(f)).1;
-    let ds: Vec<f64> = (0..=n).map(|i| dist(i as f64 / n as f64)).collect();
     let reach = (a.length() / n as f64) * 2.0 + near;
+    // Bei einer Freiformkurve `b` ersetzt eine sichere untere Schranke (Abstand zu den Hüllen
+    // ihrer Bézier-Stücke) den gesuchten Abstand, wenn sie über `reach` liegt: Solche Stützstellen
+    // entscheiden nichts (weder Lauf ≤ tol noch Minimum < reach), und jeder Vergleich mit einem
+    // Nachbarn unter `reach` fällt gleich aus.
+    let sample = |f: f64| {
+        if let Some(bx) = b_boxes {
+            let lb = boxes_distance(bx, a.at(f));
+            if lb > reach {
+                return lb;
+            }
+        }
+        dist(f)
+    };
+    let ds: Vec<f64> = (0..=n).map(|i| sample(i as f64 / n as f64)).collect();
     let mut out: Vec<(f64, f64)> = Vec::new();
     let push = |out: &mut Vec<(f64, f64)>, fa: f64| {
         let fb = b.closest(a.at(fa)).0;

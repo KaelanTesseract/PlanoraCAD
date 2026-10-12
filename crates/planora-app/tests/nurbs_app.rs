@@ -223,3 +223,29 @@ fn moving_a_freeform_body_moves_it_without_changing_its_volume() {
             .all(|f| f.status == FeatureStatus::Ok)
     );
 }
+
+/// Ungenaues Netz (Review, I4): Die Statuszeile bekommt einen Hinweis, sonst ändert sich nichts.
+/// Eine große Ellipse bei feiner Netzgenauigkeit überschreitet die Höchstteilung ihrer Kanten
+/// (`MAX_NURBS_DIVISIONS`); die Fläche steht dann in `Mesh::inexact_faces`.
+#[test]
+fn an_inexact_mesh_shows_a_note_in_the_status_line() {
+    let mut s = AppState::new();
+    let e = add_sketch(&mut s, ellipse_sketch(5.0, 3.0));
+    s.extrude_sketch(e, 0, 4.0).unwrap();
+    assert!(!s.bodies[0].mesh_inexact);
+    assert_eq!(s.mesh_note(), None);
+
+    let mut fine = AppState::new();
+    fine.chord_tolerance = 1e-4;
+    let big = add_sketch(&mut fine, ellipse_sketch(500.0, 300.0));
+    fine.extrude_sketch(big, 0, 1.0).unwrap();
+    assert_eq!(fine.bodies.len(), 1);
+    assert!(fine.bodies[0].mesh_inexact);
+    assert!(!fine.bodies[0].mesh.inexact_faces.is_empty());
+    let note = fine.mesh_note().expect("Hinweis");
+    assert!(note.contains(planora_app::state::MESH_NOTE), "{note}");
+    assert!(note.contains(&fine.bodies[0].name), "{note}");
+    // Nur ein Hinweis: keine Fehlermeldung, der Körper bleibt.
+    assert!(fine.message.is_none(), "{:?}", fine.message);
+    assert!(fine.bodies[0].mass.volume > 0.0);
+}

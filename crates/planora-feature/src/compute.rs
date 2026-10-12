@@ -6,7 +6,10 @@ use crate::refs::{FaceRef, resolve_edge, resolve_face};
 use planora_kernel::boolean::BooleanError;
 use planora_kernel::{BoolOp, Kernel, Solid, SurfaceKind};
 use planora_math::{DMat4, DVec3};
-use planora_mesh::{TessellationOptions, boolean_volume_plausible, mass_properties, tessellate};
+use planora_mesh::{
+    Discretizer, TessellationOptions, boolean_volume_plausible, mass_properties, tessellate,
+    tessellate_with,
+};
 use planora_sketch::{Sketch, extrude_profile, plane_of_face, revolve_profile};
 
 /// Größter Betrag einer Koordinate oder eines Maßes in mm (wie
@@ -205,32 +208,40 @@ fn compute_unchecked(
 }
 
 /// Fehlermeldung einer gescheiterten Booleschen Operation. Ist ein Eingangskörper mit
-/// Freiformflächen im Spiel, sagt die Meldung das ausdrücklich: Das Ergebnis lässt sich dann
-/// nur in Grenzen berechnen (siehe Spec §13), und der Nutzer soll den Grund erkennen. Der Hinweis
-/// gilt nur für die Grenzen des Rechners (nicht unterstützte Lage, mehrdeutige Berührung oder
-/// Einordnung, dazu Streifschuss, dünne Gebilde und Meldungen des Schnittrechners, die als
-/// `Unsupported` kommen). Leeres Ergebnis, ungültige Eingabe, offenes oder ungültiges Ergebnis
-/// sind keine solchen Grenzen und behalten ihre Meldung. Der Vorschlag folgt der Form der übrigen
-/// Meldungen („…; bitte …“).
+/// Freiformflächen im Spiel und stammt die Ursache aus einem Freiform-Weg des Kernels
+/// ([`BooleanError::is_freeform_limit`]: Schnittrechner, Einordnen gegen Freiformflächen, dünne
+/// Gebilde, Arbeitsgrenze), beginnt die Meldung mit „Bei Körpern mit Freiformflächen:“ und
+/// schlägt eine kleine Änderung vor. `AmbiguousContact` und `AmbiguousClassification` entstehen
+/// in der gemeinsamen Pipeline; mit Freiformbeteiligung bekommen sie den Hinweis ebenfalls (die
+/// Pipeline rechnet dann mit der weiteren Freiform-Toleranz, die Ursache lässt sich nicht
+/// trennen). Alle übrigen Fehler (etwa Ebene gegen Kegel, leeres oder ungültiges Ergebnis)
+/// behalten ihren Text, ebenso alles bei rein analytischen Körpern. Der Vorschlag folgt der Form
+/// der übrigen Meldungen („…; bitte …“) und entfällt, wenn die Ursache schon einen enthält.
 fn boolean_error(a: &Solid, b: &Solid, e: &BooleanError) -> FeatureError {
-    let freeform = |s: &Solid| {
-        s.faces
-            .iter()
-            .any(|(_, f)| f.surface.kind() == SurfaceKind::Nurbs)
-    };
-    let limit = matches!(
-        e,
-        BooleanError::UnsupportedIntersection { .. }
-            | BooleanError::Unsupported(_)
-            | BooleanError::AmbiguousContact
-            | BooleanError::AmbiguousClassification
-    );
-    if !limit || !(freeform(a) || freeform(b)) {
+    let freeform_body = is_freeform(a) || is_freeform(b);
+    let hinted = e.is_freeform_limit()
+        || matches!(
+            e,
+            BooleanError::AmbiguousContact | BooleanError::AmbiguousClassification
+        );
+    if !(freeform_body && hinted) {
         return FeatureError::Kernel(e.to_string());
     }
-    FeatureError::Kernel(format!(
-        "Mit Freiformflächen nicht berechenbar: {e}; bitte Lage oder Maße eines Körpers leicht ändern"
-    ))
+    let cause = e.to_string();
+    if cause.contains("; bitte ") {
+        FeatureError::Kernel(format!("Bei Körpern mit Freiformflächen: {cause}"))
+    } else {
+        FeatureError::Kernel(format!(
+            "Bei Körpern mit Freiformflächen: {cause}; bitte Lage oder Maße eines Körpers leicht ändern"
+        ))
+    }
+}
+
+/// Hat der Körper eine Freiformfläche?
+fn is_freeform(s: &Solid) -> bool {
+    s.faces
+        .iter()
+        .any(|(_, f)| f.surface.kind() == SurfaceKind::Nurbs)
 }
 
 /// Grundkörper: Kernel-Ergebnis, verschoben um `origin`, geprüft und markiert.
@@ -271,12 +282,28 @@ fn input_sketch(doc: &Document, id: crate::model::FeatureId) -> Result<&Sketch, 
     })
 }
 
+/// Profil `n` der Skizze. Gibt es das nicht, nennt die Meldung die Gründe der abgelehnten
+/// Kurvenzüge (etwa eine zu kleine Ellipse), damit die Ursache sichtbar bleibt.
 fn nth_profile(sk: &Sketch, n: usize) -> Result<planora_kernel::Profile, FeatureError> {
-    sk.profiles()
-        .profiles
-        .into_iter()
-        .nth(n)
-        .ok_or_else(|| FeatureError::InvalidInput(format!("Profil {n} gibt es nicht")))
+    let extracted = sk.profiles();
+    if let Some(p) = extracted.profiles.into_iter().nth(n) {
+        return Ok(p);
+    }
+    let mut reasons: Vec<String> = Vec::new();
+    for r in &extracted.rejected {
+        let text = r.reason.to_string();
+        if !reasons.contains(&text) {
+            reasons.push(text);
+        }
+    }
+    Err(FeatureError::InvalidInput(if reasons.is_empty() {
+        format!("Profil {n} gibt es nicht")
+    } else {
+        format!(
+            "Profil {n} gibt es nicht; abgelehnte Kurvenzüge der Skizze: {}",
+            reasons.join("; ")
+        )
+    }))
 }
 
 /// Der Körper `r`, sofern er vor dem Feature sichtbar ist.
@@ -311,6 +338,25 @@ fn check_volume(
     b: &Solid,
     result: &Solid,
 ) -> Result<(), FeatureError> {
+    // Mit Freiformflächen werden alle drei Körper mit derselben Teilung vernetzt: Der
+    // Winkelschritt hängt vom größten Radius des Körpers ab, und die Diagonale einer
+    // Freiformfläche macht ihn im Ergebnis feiner als bei einem kleinen Eingangskörper (eine
+    // Kugel allein grob, im Ergebnis fein vernetzt: Ergebnis größer als die Summe). Rein
+    // analytische Körper: unverändert je Körper.
+    if is_freeform(a) || is_freeform(b) {
+        let disc = Discretizer::for_solids(&[a, b, result], doc.chord_tolerance);
+        let vol = |s: &Solid| -> Result<f64, FeatureError> {
+            let mesh =
+                tessellate_with(s, &disc).map_err(|e| FeatureError::Kernel(e.to_string()))?;
+            Ok(mass_properties(&mesh).volume)
+        };
+        let (va, vb, v) = (vol(a)?, vol(b)?, vol(result)?);
+        return if boolean_volume_plausible(op, va, vb, v, VOLUME_REL_TOL) {
+            Ok(())
+        } else {
+            Err(FeatureError::ImplausibleFreeformResult)
+        };
+    }
     let (va, vb, v) = (volume(doc, a)?, volume(doc, b)?, volume(doc, result)?);
     if boolean_volume_plausible(op, va, vb, v, VOLUME_REL_TOL) {
         Ok(())
@@ -394,27 +440,40 @@ mod tests {
             other => panic!("{other:?}"),
         };
         let hinted = [
-            BooleanError::Unsupported("Streifschuss".into()),
+            BooleanError::Unsupported(planora_kernel::boolean::TOO_EXPENSIVE.into()),
+            BooleanError::Unsupported(
+                "Der Schnitt von Freiformfläche mit Zylinder wird nicht unterstützt: x".into(),
+            ),
             BooleanError::AmbiguousContact,
             BooleanError::AmbiguousClassification,
-            BooleanError::UnsupportedIntersection { a: "A", b: "B" },
+            BooleanError::UnsupportedIntersection {
+                a: "Freiformfläche",
+                b: "Ebene",
+            },
         ];
         for e in hinted {
             let m = text(&freeform, &plain, e.clone());
-            assert!(
-                m.starts_with("Mit Freiformflächen nicht berechenbar: "),
-                "{m}"
-            );
-            assert!(m.contains(&e.to_string()) && m.contains("; bitte "), "{m}");
+            assert!(m.starts_with("Bei Körpern mit Freiformflächen: "), "{m}");
+            assert!(m.contains(&e.to_string()), "{m}");
+            assert_eq!(m.matches("; bitte ").count(), 1, "genau ein Vorschlag: {m}");
             // Andere Reihenfolge: auch mit Hinweis; rein analytisch: ohne.
             assert!(text(&plain, &freeform, e.clone()).contains("Freiformflächen"));
             assert_eq!(text(&plain, &plain, e.clone()), e.to_string());
         }
+        // Grenzen analytischer Wege und Fehler, die keine Grenzen sind: alter Text, auch mit
+        // Freiformkörper.
         let plain_kinds = [
             BooleanError::EmptyResult,
             BooleanError::NotClosed,
             BooleanError::ResultInvalid("x".into()),
             BooleanError::InvalidInput("y".into()),
+            BooleanError::UnsupportedIntersection {
+                a: "Ebene",
+                b: "Kegel",
+            },
+            BooleanError::Unsupported(
+                "Der Schnitt von Ebene mit Torus wird nicht unterstützt".into(),
+            ),
         ];
         for e in plain_kinds {
             assert_eq!(text(&freeform, &plain, e.clone()), e.to_string());

@@ -12,5 +12,5 @@ pub use check::is_watertight;
 pub use discretize::{Discretizer, MAX_NURBS_DIVISIONS};
 pub use mass::{MassProperties, mass_properties};
 pub use mesh::{EdgeLine, FaceRange, Mesh, TessellationOptions};
-pub use tessellate::{MeshError, tessellate};
+pub use tessellate::{MeshError, tessellate, tessellate_with};
 pub use volume::boolean_volume_plausible;

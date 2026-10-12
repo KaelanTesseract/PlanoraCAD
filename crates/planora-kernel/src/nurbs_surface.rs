@@ -7,7 +7,7 @@ mod ray;
 pub use ray::RAY_GRAZING_COS;
 
 use crate::error::KernelError;
-use planora_math::nurbs::{BezierPatch, MAX_CONTROL_TOTAL, NurbsSurface};
+use planora_math::nurbs::{BezierPatch, MAX_CONTROL_TOTAL, NurbsSurface, uncounted};
 use planora_math::{DVec3, Frame};
 use std::sync::OnceLock;
 
@@ -315,61 +315,65 @@ impl NurbsSurfaceData {
 
     fn grid(&self) -> &Grid {
         self.grid.get_or_init(|| {
-            let (cu, cv) = self.surface.counts();
-            let mut nu = (GRID_PER_CONTROL * cu).max(GRID_MIN);
-            let mut nv = (GRID_PER_CONTROL * cv).max(GRID_MIN);
-            if nu * nv > GRID_MAX_POINTS {
-                let f = (GRID_MAX_POINTS as f64 / (nu * nv) as f64).sqrt();
-                nu = ((nu as f64 * f) as usize).max(2);
-                nv = ((nv as f64 * f) as usize).max(2);
-                nv = nv.min(GRID_MAX_POINTS / nu);
-            }
-            let ((u0, u1), (v0, v1)) = self.surface.domain();
-            let at = |a: f64, b: f64, k: usize, n: usize| a + (b - a) * k as f64 / (n - 1) as f64;
-            let us: Vec<f64> = (0..nu).map(|i| at(u0, u1, i, nu)).collect();
-            let vs: Vec<f64> = (0..nv).map(|j| at(v0, v1, j, nv)).collect();
-            let mut points = Vec::with_capacity(nu * nv);
-            let mut normals = Vec::with_capacity(nu * nv);
-            for &u in &us {
-                for &v in &vs {
-                    points.push(self.surface.point(u, v));
-                    normals.push(self.normal(u, v));
+            // Zwischenspeicher: Auswertungen nicht zählen (siehe `uncounted`).
+            uncounted(|| {
+                let (cu, cv) = self.surface.counts();
+                let mut nu = (GRID_PER_CONTROL * cu).max(GRID_MIN);
+                let mut nv = (GRID_PER_CONTROL * cv).max(GRID_MIN);
+                if nu * nv > GRID_MAX_POINTS {
+                    let f = (GRID_MAX_POINTS as f64 / (nu * nv) as f64).sqrt();
+                    nu = ((nu as f64 * f) as usize).max(2);
+                    nv = ((nv as f64 * f) as usize).max(2);
+                    nv = nv.min(GRID_MAX_POINTS / nu);
                 }
-            }
-            let mut tiles = Vec::new();
-            for i0 in (0..nu).step_by(TILE) {
-                for j0 in (0..nv).step_by(TILE) {
-                    let (i1, j1) = ((i0 + TILE).min(nu), (j0 + TILE).min(nv));
-                    let (mut lo, mut hi) =
-                        (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
-                    for i in i0..i1 {
-                        for q in &points[i * nv + j0..i * nv + j1] {
-                            lo = lo.min(*q);
-                            hi = hi.max(*q);
-                        }
+                let ((u0, u1), (v0, v1)) = self.surface.domain();
+                let at =
+                    |a: f64, b: f64, k: usize, n: usize| a + (b - a) * k as f64 / (n - 1) as f64;
+                let us: Vec<f64> = (0..nu).map(|i| at(u0, u1, i, nu)).collect();
+                let vs: Vec<f64> = (0..nv).map(|j| at(v0, v1, j, nv)).collect();
+                let mut points = Vec::with_capacity(nu * nv);
+                let mut normals = Vec::with_capacity(nu * nv);
+                for &u in &us {
+                    for &v in &vs {
+                        points.push(self.surface.point(u, v));
+                        normals.push(self.normal(u, v));
                     }
-                    tiles.push((i0, i1, j0, j1, lo, hi));
                 }
-            }
-            let mut cell_reach = 0.0_f64;
-            for i in 0..nu - 1 {
-                for j in 0..nv - 1 {
-                    let at = |a: usize, b: usize| points[a * nv + b];
-                    cell_reach = cell_reach
-                        .max(at(i, j).distance(at(i + 1, j + 1)))
-                        .max(at(i + 1, j).distance(at(i, j + 1)));
+                let mut tiles = Vec::new();
+                for i0 in (0..nu).step_by(TILE) {
+                    for j0 in (0..nv).step_by(TILE) {
+                        let (i1, j1) = ((i0 + TILE).min(nu), (j0 + TILE).min(nv));
+                        let (mut lo, mut hi) =
+                            (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+                        for i in i0..i1 {
+                            for q in &points[i * nv + j0..i * nv + j1] {
+                                lo = lo.min(*q);
+                                hi = hi.max(*q);
+                            }
+                        }
+                        tiles.push((i0, i1, j0, j1, lo, hi));
+                    }
                 }
-            }
-            Grid {
-                nu,
-                nv,
-                us,
-                vs,
-                points,
-                normals,
-                tiles,
-                cell_reach,
-            }
+                let mut cell_reach = 0.0_f64;
+                for i in 0..nu - 1 {
+                    for j in 0..nv - 1 {
+                        let at = |a: usize, b: usize| points[a * nv + b];
+                        cell_reach = cell_reach
+                            .max(at(i, j).distance(at(i + 1, j + 1)))
+                            .max(at(i + 1, j).distance(at(i, j + 1)));
+                    }
+                }
+                Grid {
+                    nu,
+                    nv,
+                    us,
+                    vs,
+                    points,
+                    normals,
+                    tiles,
+                    cell_reach,
+                }
+            })
         })
     }
 
@@ -580,7 +584,9 @@ impl NurbsSurfaceData {
     /// `(1 − PATCH_CHECK_GAP) · Abstand` an `p` liegt, kann einen deutlich näheren Fußpunkt
     /// enthalten: Newton aus seiner Mitte. Nie ein schlechteres Ergebnis.
     fn patch_check(&self, p: DVec3, mut best: (f64, f64, f64)) -> (f64, f64, f64) {
-        let tree = self.patches.get_or_init(|| self.build_patch_tree());
+        let tree = self
+            .patches
+            .get_or_init(|| uncounted(|| self.build_patch_tree()));
         let box_dist = |(lo, hi): &(DVec3, DVec3)| (*lo - p).max(p - *hi).max(DVec3::ZERO).length();
         let limit = |d: f64| d * (1.0 - PATCH_CHECK_GAP);
         let mut newtons = 0usize;

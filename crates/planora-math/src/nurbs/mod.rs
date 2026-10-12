@@ -10,6 +10,7 @@ mod error;
 mod fit;
 mod knots;
 mod surface;
+mod work;
 
 pub use bezier::{BezierPatch, BezierSegment};
 pub use curve::NurbsCurve;
@@ -17,6 +18,7 @@ pub use error::NurbsError;
 pub use fit::MAX_FIT_CONTROL_POINTS;
 pub use knots::KnotVector;
 pub use surface::{MAX_SURFACE_DERIV, NurbsSurface};
+pub use work::{evaluations, uncounted};
 
 /// Größter erlaubter Grad (Schutz vor Rechenaufwand und Zahlenüberlauf).
 pub const MAX_DEGREE: usize = 9;

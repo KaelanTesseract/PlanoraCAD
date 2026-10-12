@@ -64,6 +64,9 @@ fn split_at_points(segs: &[Seg], pts: &[DVec3], tol: &Tolerance) -> Vec<Seg> {
             if p.distance(a) <= tol.linear || p.distance(b) <= tol.linear {
                 continue;
             }
+            if s.surely_farther(*p, tol.linear) {
+                continue;
+            }
             let (f, d) = s.closest(*p);
             if d <= tol.linear
                 && f > 1e-9
@@ -134,8 +137,10 @@ fn seam_crossings(surface: &Surface, s: &Seg, seam: &Seg, tol: &Tolerance) -> Ve
     let g = |f: f64| wrap_period(pick(surface.project(s.at(f))) - c_seam, period);
     let n = curve_sample_count(&s.curve, s.t0, s.t1, 720, 64);
     let mut out = Vec::new();
+    let seam_boxes = seam.piece_boxes();
+    let near = |p: DVec3, d: f64| seam.within_boxes(seam_boxes.as_deref(), p, d);
     let mut push = |p: DVec3| {
-        if seam.closest(p).1 <= tol.linear {
+        if near(p, tol.linear) {
             out.push(p);
         }
     };
@@ -146,7 +151,7 @@ fn seam_crossings(surface: &Surface, s: &Seg, seam: &Seg, tol: &Tolerance) -> Ve
     // bereits Knoten).
     let on: Vec<bool> = fs
         .iter()
-        .map(|f| seam.closest(s.at(*f)).1 <= tol.linear * 4.0)
+        .map(|f| near(s.at(*f), tol.linear * 4.0))
         .collect();
     for i in 0..=n {
         let along = (i > 0 && on[i - 1]) || (i < n && on[i + 1]);
@@ -181,7 +186,7 @@ fn on_seam(seams: &[Seg], s: &Seg, tol: &Tolerance) -> bool {
     seams.iter().any(|m| {
         [s.start(), s.at(0.5), s.end()]
             .iter()
-            .all(|p| m.closest(*p).1 <= tol.linear * 4.0)
+            .all(|p| m.within(*p, tol.linear * 4.0))
     })
 }
 
@@ -257,7 +262,7 @@ fn same_piece(a: &Seg, b: &Seg, tol: &Tolerance, freeform: bool) -> bool {
     }
     ends && [0.25, 0.5, 0.75]
         .iter()
-        .all(|f| a.closest(b.at(*f)).1 <= tol.linear)
+        .all(|f| a.within(b.at(*f), tol.linear))
 }
 
 fn find(parent: &mut [usize], mut x: usize) -> usize {
@@ -315,6 +320,7 @@ pub fn split_face(
             all_pts.extend(seam_crossings(&face.surface, s, seam, tol));
         }
     }
+    super::budget::check()?;
     let degenerate = |s: &Seg| {
         s.start().distance(s.end()) <= tol.linear * 4.0
             && s.at(0.5).distance(s.start()) <= tol.linear * 4.0
@@ -545,6 +551,7 @@ pub fn split_face(
         walks.push(walk);
     }
 
+    super::budget::check()?;
     // Umläufe klassifizieren: positive = Außenkontur, negative = Loch
     let (u_period, v_period) = (face.surface.u_period(), face.surface.v_period());
     let polys: Vec<Vec<DVec2>> = walks
@@ -586,6 +593,11 @@ pub fn split_face(
     };
     let (u_shifts, v_shifts) = (shifts(u_period), shifts(v_period));
     let sgn = if face.same_sense { 1 } else { -1 };
+    // Hüllen der Bézier-Stücke jeder Außenkontur, einmal je Fläche (für die Lochzuordnung).
+    let walk_boxes: Vec<Vec<_>> = walks
+        .iter()
+        .map(|w| w.iter().map(Seg::piece_boxes).collect())
+        .collect();
     for i in (0..walks.len()).filter(|&i| areas[i] <= 0.0) {
         let candidates: Vec<DVec3> = loop_points(&walks[i])
             .into_iter()
@@ -598,7 +610,8 @@ pub fn split_face(
             let Some(q) = candidates.iter().find(|q| {
                 walks[pi]
                     .iter()
-                    .all(|s| s.closest(**q).1 > tol.linear * 10.0)
+                    .zip(&walk_boxes[pi])
+                    .all(|(s, bx)| !s.within_boxes(bx.as_deref(), **q, tol.linear * 10.0))
             }) else {
                 continue;
             };

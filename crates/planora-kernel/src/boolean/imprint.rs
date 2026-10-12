@@ -445,6 +445,7 @@ pub fn imprint(
             if !overlaps(&fa.bbox, &fb.bbox) {
                 continue;
             }
+            super::budget::check()?;
             let (ga, gb) = (&fa.geom, &fb.geom);
             let unsupported = || BooleanError::UnsupportedIntersection {
                 a: surface_name(&ga.surface),
@@ -474,6 +475,7 @@ pub fn imprint(
                     }
                 }
                 SurfaceIntersection::Curves(cs) => {
+                    super::budget::check()?;
                     let cache = freeform.then_some((&mut cache, i, j));
                     let hits = pair_hits(ga, gb, tol_p, cache);
                     for c in cs {

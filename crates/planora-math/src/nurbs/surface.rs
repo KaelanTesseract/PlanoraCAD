@@ -164,6 +164,7 @@ impl NurbsSurface {
     ///            − Σ_i C(k,i) Σ_j C(l,j)·W[i][j]·S[k−i][l−j]) / W[0][0]`.
     /// `d` wird auf `MAX_SURFACE_DERIV` begrenzt.
     pub fn derivs(&self, u: f64, v: f64, d: usize) -> Vec<Vec<DVec3>> {
+        super::work::count();
         let d = d.min(MAX_SURFACE_DERIV);
         let (p, q) = (self.degree_u(), self.degree_v());
         let ((u0, u1), (v0, v1)) = self.domain();

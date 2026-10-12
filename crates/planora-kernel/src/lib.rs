@@ -26,5 +26,5 @@ pub use revolve::revolve;
 pub use topology::{Edge, Face, FaceTag, HalfEdge, Loop, Shell, Solid, Vertex};
 pub use validate::{
     NURBS_EDGE_TOL, ValidationError, ValidationReport, edge_surface_tol, point_surface_tol,
-    validate,
+    validate, validate_with,
 };

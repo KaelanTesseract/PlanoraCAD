@@ -503,7 +503,8 @@ impl eframe::App for PlanoraApp {
             ui.horizontal(|ui| {
                 let state = &tab.state;
                 let sketch = state.session_sketch();
-                // Vorrang: letzte Meldung, Skizzen-Modus, erstes Feature mit Fehler, Körperzahl.
+                // Vorrang: letzte Meldung, Skizzen-Modus, erstes Feature mit Fehler, Körperzahl (mit
+                // Hinweis bei ungenauem Netz).
                 match (&state.message, sketch, browser::status_text(state)) {
                     (Some(m), _, _) => ui.colored_label(browser::ERROR_COLOR, m),
                     (None, Some(sk), _) => ui.weak(format!(
@@ -511,7 +512,10 @@ impl eframe::App for PlanoraApp {
                         sk.name
                     )),
                     (None, None, Some(e)) => ui.colored_label(browser::ERROR_COLOR, e),
-                    (None, None, None) => ui.weak(format!("{} Körper", state.bodies.len())),
+                    (None, None, None) => match state.mesh_note() {
+                        Some(note) => ui.weak(format!("{} Körper – {note}", state.bodies.len())),
+                        None => ui.weak(format!("{} Körper", state.bodies.len())),
+                    },
                 };
             });
         });
