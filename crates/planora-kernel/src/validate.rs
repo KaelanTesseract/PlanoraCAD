@@ -76,6 +76,79 @@ pub enum ValidationError {
     ShellMembership(usize),
     #[error("Die Kante {0} liegt nicht auf der Fläche {1} (Freiformkurve oder -fläche beteiligt)")]
     EdgeOffSurface(usize, usize),
+    #[error("Ein Loch der Fläche {0} reicht über die Naht ihrer Trägerfläche")]
+    HoleAcrossSeam(usize),
+}
+
+/// Spielraum (Anteil der Periode), um den ein Loch über den Nahtrand der äußeren Schleife ragen
+/// darf, ohne als „über die Naht“ zu gelten: deckt Rundungsfehler der Rückrechnung auf Parameter
+/// ab (bei einem Zylinder r = 3 etwa 1,9e-5 mm am Umfang, also unter der Knotentoleranz der
+/// Booleschen Operationen); echte Überschreitungen sind viel größer.
+const SEAM_MARGIN_REL: f64 = 1e-6;
+
+/// Grenze, ab der eine Schleife eine ganze Periode überspannt (Anteil der Periode).
+const FULL_PERIOD_REL: f64 = 1e-9;
+
+/// Löcher periodischer Flächen liegen innerhalb der Naht: Überspannt die äußere Schleife einer
+/// Fläche in einer geschlossenen Richtung eine ganze Periode (sie läuft an der Naht entlang, wie
+/// der Mantel eines Zylinders oder einer Kugel mit ungeteilter Nahtkante), muss jedes Loch, um
+/// ganze Perioden verschoben, zwischen den beiden Nahträndern liegen. Ein Loch, das über die Naht
+/// reicht (die Naht wäre beim Verschneiden zu teilen gewesen), ergibt eine Fläche, die sich im
+/// Parameterraum nicht beschreiben und nicht vernetzen lässt.
+///
+/// Bewusst eng: Geprüft werden nur Löcher mit einer Ausdehnung unter einer Periode an äußeren
+/// Schleifen über eine ganze Periode; Kreuzungen von Schleifen ohne Naht werden nicht gesucht (die
+/// abgetasteten Polygone liegen bei dünnen Gebilden dichter beieinander als ihr Sehnenfehler).
+fn check_holes_within_seams(solid: &Solid) -> Result<(), ValidationError> {
+    use crate::boolean::{face_geom, loop_points, points_to_uv};
+    for (fid, face) in solid.faces.iter() {
+        if face.inner.is_empty() {
+            continue;
+        }
+        let periods = [face.surface.u_period(), face.surface.v_period()];
+        if periods.iter().all(Option::is_none) {
+            continue;
+        }
+        let g = face_geom(solid, fid);
+        let polys: Vec<Vec<planora_math::DVec2>> = g
+            .loops
+            .iter()
+            .map(|lp| points_to_uv(&g.surface, g.same_sense, &loop_points(lp)))
+            .collect();
+        for (axis, period) in periods.into_iter().enumerate() {
+            let Some(t) = period.filter(|t| t.is_finite() && *t > 0.0) else {
+                continue;
+            };
+            let extent = |poly: &[planora_math::DVec2]| {
+                poly.iter()
+                    .map(|p| if axis == 0 { p.x } else { p.y })
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
+                        (lo.min(x), hi.max(x))
+                    })
+            };
+            let (o0, o1) = extent(&polys[0]);
+            let spans_period = o1 - o0 >= t * (1.0 - FULL_PERIOD_REL);
+            if !spans_period {
+                continue;
+            }
+            let margin = SEAM_MARGIN_REL * t;
+            for hole in &polys[1..] {
+                let (h0, h1) = extent(hole);
+                let below_period = h1 - h0 < t * (1.0 - FULL_PERIOD_REL);
+                if !below_period {
+                    continue;
+                }
+                let inside = (-2..=2).any(|k| {
+                    let s = f64::from(k) * t;
+                    h0 + s >= o0 - margin && h1 + s <= o1 + margin
+                });
+                if !inside {
+                    return Err(ValidationError::HoleAcrossSeam(fid.index()));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Zahl der Abschnitte, an deren Grenzen eine Kante mit Freiformbeteiligung auf ihrer Fläche
@@ -194,6 +267,8 @@ pub fn validate_with(solid: &Solid, tol: &Tolerance) -> Result<ValidationReport,
         }
         total_genus += (twice_genus / 2) as usize;
     }
+
+    check_holes_within_seams(solid)?;
 
     Ok(ValidationReport {
         vertices: used_all.len(),
