@@ -3,7 +3,7 @@
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, Sketch};
 use planora_kernel::{Kernel, Profile, ProfileLoop, Segment, Solid, segment_end};
-use planora_math::{DVec2, Frame};
+use planora_math::{DVec2, DVec3, Frame};
 
 /// Abtastung je Vollkreis für die Seitenprüfung der Bögen (wie `ProfileLoop::signed_area`).
 const SIDE_CHECK_STEPS_PER_TURN: usize = 64;
@@ -101,14 +101,25 @@ impl Sketch {
         let mut segments = Vec::with_capacity(m.saturating_sub(1));
         let mut at = start_point;
         for k in 1..m {
-            let seg = lp.segments[(axis_seg + k) % m];
-            let end = segment_end(at, &seg);
+            let seg = &lp.segments[(axis_seg + k) % m];
+            let end = segment_end(at, seg);
             segments.push(match seg {
                 Segment::Line { .. } => Segment::Line { to: to_rz(end) },
                 // Die Abbildung (Skizze → (r, z)) kehrt für s = +1 den Drehsinn um.
-                Segment::Arc { center, sweep } => Segment::Arc {
+                &Segment::Arc { center, sweep } => Segment::Arc {
                     center: to_rz(center),
                     sweep: -s * sweep,
+                },
+                // Freiformkurven werden mit derselben (affinen) Abbildung umgerechnet.
+                Segment::Nurbs { curve } => Segment::Nurbs {
+                    curve: std::sync::Arc::new(
+                        curve
+                            .transformed(|p| {
+                                let q = to_rz(DVec2::new(p.x, p.y));
+                                DVec3::new(q.x, q.y, 0.0)
+                            })
+                            .map_err(kernel_error)?,
+                    ),
                 },
             });
             at = end;

@@ -3,7 +3,8 @@ use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
 use crate::profile::{Profile, ProfileLoop, Segment, check_hole_layout, check_loop_input};
 use crate::topology::{Edge, Face, FaceTag, HalfEdge, Loop, Solid};
-use planora_math::{Frame, Tolerance};
+use planora_math::nurbs::{NurbsCurve, NurbsError, NurbsSurface};
+use planora_math::{DVec3, Frame, Tolerance};
 
 /// Kanten einer Schleife auf der Unter- und Oberseite.
 struct LoopEdges {
@@ -205,7 +206,7 @@ fn build_loop(
             origin: 0,
             role: format!("{prefix}Wand {wall}"),
         });
-        match lp.segments[i] {
+        match &lp.segments[i] {
             Segment::Line { .. } => {
                 let a = frame.point_2d(pts[i]);
                 let b = frame.point_2d(pts[next]);
@@ -249,7 +250,7 @@ fn build_loop(
                 edges.bottom.push(be);
                 edges.top.push(te);
             }
-            Segment::Arc { center, sweep } => {
+            &Segment::Arc { center, sweep } => {
                 let radius = pts[i].distance(center);
                 if !(radius > tol.linear) || !(sweep.abs() > tol.angular) {
                     return Err(KernelError::DegenerateSegment);
@@ -307,7 +308,69 @@ fn build_loop(
                 edges.bottom.push(be);
                 edges.top.push(te);
             }
+            Segment::Nurbs { curve } => {
+                let to_plane = |p: DVec3| frame.point(p.x, p.y, 0.0);
+                let bottom = curve.transformed(to_plane).map_err(invalid_curve)?;
+                let top = bottom.transformed(|p| p + up).map_err(invalid_curve)?;
+                let surface = NurbsSurface::extrude(&bottom, up).map_err(invalid_curve)?;
+                let (t0, t1) = bottom.domain();
+                // Eine einzelne geschlossene Kurve (Vollellipse): Naht wie beim Vollkreis, mit
+                // einem Eckpunkt und einer geschlossenen Kante unten und oben.
+                let closed = m == 1;
+                // Die Seitenschleife läuft gegen den Uhrzeigersinn im (u, v)-Rechteck, also um die
+                // natürliche Normale; die muss deshalb nach außen zeigen. Wegen `S_v = z · Höhe`
+                // gilt das für jede richtig orientierte Schleife; sonst ist die Kurve entartet.
+                if !extrude_normal_points_outward(&surface, &bottom, frame) {
+                    return Err(KernelError::DegenerateSegment);
+                }
+                let be = solid.add_edge(Curve::nurbs(bottom), t0, t1, bottom_v[i], bottom_v[next]);
+                let te = solid.add_edge(Curve::nurbs(top), t0, t1, top_v[i], top_v[next]);
+                solid.add_face(Face {
+                    surface: Surface::nurbs(surface, closed, false)?,
+                    same_sense: true,
+                    outer: side_loop(be, te, vertical[i], vertical[next]),
+                    inner: vec![],
+                    patch: Some(UvRect {
+                        u0: t0,
+                        u1: t1,
+                        v0: 0.0,
+                        v1: 1.0,
+                    }),
+                    tag,
+                });
+                edges.bottom.push(be);
+                edges.top.push(te);
+            }
         }
     }
     Ok(edges)
+}
+
+fn invalid_curve(e: NurbsError) -> KernelError {
+    KernelError::InvalidCurve(e.to_string())
+}
+
+/// Zahl der Probestellen, an denen die Normale einer extrudierten Freiformwand mit der
+/// Außenrichtung verglichen wird (über den Parameterbereich verteilt, ohne die Enden).
+const SENSE_SAMPLES: usize = 16;
+
+/// Zeigt die natürliche Normale `S_u × S_v` der extrudierten Wand nach außen? Außen ist bei
+/// richtig orientierter Schleife `Tangente × z` (wie bei den Geraden). Aus der Geometrie
+/// bestimmt (Summe über mehrere Probestellen, damit Stellen mit verschwindender Tangente nicht
+/// entscheiden).
+fn extrude_normal_points_outward(
+    surface: &NurbsSurface,
+    bottom: &NurbsCurve,
+    frame: &Frame,
+) -> bool {
+    let ((u0, u1), (v0, v1)) = surface.domain();
+    let v = 0.5 * (v0 + v1);
+    let sum: f64 = (1..=SENSE_SAMPLES)
+        .map(|k| {
+            let u = u0 + (u1 - u0) * k as f64 / (SENSE_SAMPLES + 1) as f64;
+            let outward = bottom.tangent(u).cross(frame.z);
+            surface.normal(u, v).dot(outward)
+        })
+        .sum();
+    sum > 0.0
 }

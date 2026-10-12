@@ -1,5 +1,8 @@
 use crate::error::KernelError;
-use planora_math::{DVec2, TAU, Tolerance, orient2d};
+use crate::geometry::nurbs_divisions;
+use planora_math::nurbs::NurbsCurve;
+use planora_math::{DVec2, DVec3, TAU, Tolerance, orient2d};
+use std::sync::Arc;
 
 /// Obergrenze der Abtastschritte je Bogen (verhindert Hängen und riesige Allokationen
 /// bei sehr großen oder nicht endlichen Öffnungswinkeln).
@@ -8,8 +11,20 @@ pub const MAX_SAMPLES_PER_ARC: usize = 65_536;
 /// Abtastung je Vollkreis für die Lageprüfung der Löcher (wie bei `signed_area`).
 const LAYOUT_STEPS_PER_TURN: usize = 64;
 
+/// Mindestzahl der Abtastpunkte je Freiformsegment.
+const MIN_NURBS_SAMPLES: usize = 64;
+/// Abtastpunkte je Kontrollpunkt eines Freiformsegments (Kurven hohen Grades oder mit vielen
+/// Kontrollpunkten werden dadurch feiner abgetastet).
+const NURBS_SAMPLES_PER_CONTROL: usize = 16;
+/// Sicherheitsfaktor auf die geschätzte Pfeilhöhe einer Sehne über einem Freiformsegment
+/// (geschätzt aus dem Abstand des Kurvenpunkts in der Parametermitte zur Sehne; die größte
+/// Abweichung liegt bei ungleichmäßiger Parametrisierung nicht genau dort).
+const NURBS_SAGITTA_SAFETY: f64 = 2.0;
+
 /// Profilsegment. Der Startpunkt ist immer das Ende des vorigen Segments.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// Nicht `Copy` (wegen der geteilten Freiformkurve); Kopieren mit `clone` ist billig.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Segment {
     Line {
         to: DVec2,
@@ -19,6 +34,55 @@ pub enum Segment {
         center: DVec2,
         sweep: f64,
     },
+    /// Freiformkurve in der xy-Ebene des Profils (`z = 0`, Abweichung höchstens `tol.linear`).
+    /// Ihr Anfang muss innerhalb `tol.linear` am Ende des vorigen Segments liegen; das Ende des
+    /// Segments ist das Kurvenende `curve.point(u_end)` (nur x und y).
+    Nurbs {
+        curve: Arc<NurbsCurve>,
+    },
+}
+
+fn xy(p: DVec3) -> DVec2 {
+    DVec2::new(p.x, p.y)
+}
+
+/// Kurvenpunkt (nur x und y) an `k / n` des Parameterbereichs; `k = n` ist exakt das Ende.
+fn nurbs_xy(c: &NurbsCurve, k: usize, n: usize) -> DVec2 {
+    let (a, b) = c.domain();
+    let t = if k >= n {
+        b
+    } else {
+        a + (b - a) * k as f64 / n as f64
+    };
+    xy(c.point(t))
+}
+
+/// Zahl der Abtastschritte eines Freiformsegments: mindestens `MIN_NURBS_SAMPLES`, mindestens
+/// `NURBS_SAMPLES_PER_CONTROL` je Kontrollpunkt und mindestens so viele, wie die Form bei
+/// `steps_per_turn` Schritten je Vollkreis verlangt ([`nurbs_divisions`]); höchstens
+/// `MAX_SAMPLES_PER_ARC`.
+pub(crate) fn nurbs_steps(c: &NurbsCurve, steps_per_turn: usize) -> usize {
+    let (a, b) = c.domain();
+    let by_shape = nurbs_divisions(c, a, b, TAU / steps_per_turn.max(1) as f64);
+    MIN_NURBS_SAMPLES
+        .max(NURBS_SAMPLES_PER_CONTROL.saturating_mul(c.control_points().len()))
+        .max(by_shape)
+        .min(MAX_SAMPLES_PER_ARC)
+}
+
+/// Dieselbe Kurve in umgekehrter Richtung. Zuerst mit gespiegeltem Knotenvektor (gleicher
+/// Parameterbereich); lässt Rundung dabei Knoten verschmelzen, mit negierten Knoten (Bereich
+/// `[−b, −a]`). Das Negieren ist in Gleitkomma exakt, und alle Prüfungen von `KnotVector::new`
+/// und `NurbsCurve::new` sind dagegen symmetrisch; für eine gültige Kurve scheitert es deshalb
+/// nie. Der letzte Zweig (Kurve unverändert) ist unerreichbar und nur da, um ohne Panik zu bleiben.
+fn reverse_curve(c: &NurbsCurve) -> NurbsCurve {
+    if let Ok(r) = c.reversed() {
+        return r;
+    }
+    let knots: Vec<f64> = c.knots().knots().iter().rev().map(|k| -k).collect();
+    let control: Vec<DVec3> = c.control_points().iter().rev().copied().collect();
+    let weights: Vec<f64> = c.weights().iter().rev().copied().collect();
+    NurbsCurve::new(c.degree(), knots, control, weights).unwrap_or_else(|_| c.clone())
 }
 
 fn rotate(v: DVec2, angle: f64) -> DVec2 {
@@ -31,6 +95,7 @@ pub fn segment_end(from: DVec2, seg: &Segment) -> DVec2 {
     match seg {
         Segment::Line { to } => *to,
         Segment::Arc { center, sweep } => *center + rotate(from - *center, *sweep),
+        Segment::Nurbs { curve } => xy(curve.point(curve.domain().1)),
     }
 }
 
@@ -78,6 +143,25 @@ impl ProfileLoop {
         }
     }
 
+    /// Schleife aus einer einzigen geschlossenen Freiformkurve (etwa einer Vollellipse) in der
+    /// xy-Ebene. Fehler `InvalidCurve`, wenn die Kurve nicht in der Ebene `z = 0` liegt,
+    /// `ProfileNotClosed`, wenn Anfang und Ende weiter als die Längentoleranz auseinanderliegen.
+    pub fn nurbs_loop(curve: NurbsCurve) -> Result<ProfileLoop, KernelError> {
+        let tol = Tolerance::default();
+        check_nurbs_plane(&curve, &tol)?;
+        let start = xy(curve.point(curve.domain().0));
+        let lp = ProfileLoop {
+            start,
+            segments: vec![Segment::Nurbs {
+                curve: Arc::new(curve),
+            }],
+        };
+        if !lp.is_closed(&tol) {
+            return Err(KernelError::ProfileNotClosed);
+        }
+        Ok(lp)
+    }
+
     /// Alle Segmentgrenzen: Startpunkt und das Ende jedes Segments (`segments.len() + 1` Punkte).
     pub fn chain_points(&self) -> Vec<DVec2> {
         let mut pts = vec![self.start];
@@ -116,6 +200,10 @@ impl ProfileLoop {
                         out.push(*center + rotate(p - *center, sweep * k as f64 / n as f64));
                     }
                 }
+                Segment::Nurbs { curve } => {
+                    let n = nurbs_steps(curve, steps_per_turn);
+                    out.extend((1..=n).map(|k| nurbs_xy(curve, k, n)));
+                }
             }
             p = segment_end(p, s);
         }
@@ -139,11 +227,14 @@ impl ProfileLoop {
         let m = self.segments.len();
         let segments = (0..m)
             .rev()
-            .map(|i| match self.segments[i] {
+            .map(|i| match &self.segments[i] {
                 Segment::Line { .. } => Segment::Line { to: pts[i] },
                 Segment::Arc { center, sweep } => Segment::Arc {
-                    center,
+                    center: *center,
                     sweep: -sweep,
+                },
+                Segment::Nurbs { curve } => Segment::Nurbs {
+                    curve: Arc::new(reverse_curve(curve)),
                 },
             })
             .collect();
@@ -184,12 +275,59 @@ impl Profile {
     }
 }
 
+/// Liegt die Freiformkurve in der Ebene `z = 0`? Geprüft an den Kontrollpunkten (die Kurve liegt
+/// in deren konvexer Hülle, die Gewichte sind positiv), Abweichung höchstens `tol.linear`.
+fn check_nurbs_plane(curve: &NurbsCurve, tol: &Tolerance) -> Result<(), KernelError> {
+    if curve
+        .control_points()
+        .iter()
+        .any(|p| !p.is_finite() || p.z.abs() > tol.linear)
+    {
+        return Err(KernelError::InvalidCurve(
+            "die Kurve liegt nicht in der Profilebene".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Prüft ein Freiformsegment, das bei `from` beginnt: in der Profilebene, Anfang am Ende des
+/// vorigen Segments (innerhalb `tol.linear`), nicht zu einem Punkt zusammengefallen; eine in sich
+/// geschlossene Kurve nur als einziges Segment der Schleife (`alone`).
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn check_nurbs_segment(
+    curve: &NurbsCurve,
+    from: DVec2,
+    alone: bool,
+    tol: &Tolerance,
+) -> Result<(), KernelError> {
+    check_nurbs_plane(curve, tol)?;
+    let (a, b) = curve.domain();
+    if !(xy(curve.point(a)).distance(from) <= tol.linear) {
+        return Err(KernelError::InvalidCurve(
+            "die Kurve schließt nicht an das vorige Segment an".into(),
+        ));
+    }
+    let cp = curve.control_points();
+    let spread = cp.iter().map(|p| p.distance(cp[0])).fold(0.0, f64::max);
+    // Die negierte Form lehnt auch NaN ab.
+    if !(spread > tol.linear) {
+        return Err(KernelError::DegenerateSegment);
+    }
+    if !alone && xy(curve.point(b)).distance(from) <= tol.linear {
+        return Err(KernelError::DegenerateSegment);
+    }
+    Ok(())
+}
+
 /// Prüft eine Schleife, bevor sie abgetastet wird: nicht leer, alle Werte endlich,
-/// jeder Bogen mit Öffnungswinkel zwischen `tol.angular` und einer Vollkreisdrehung.
+/// jeder Bogen mit Öffnungswinkel zwischen `tol.angular` und einer Vollkreisdrehung,
+/// jedes Freiformsegment wie in [`check_nurbs_segment`].
 pub(crate) fn check_loop_input(lp: &ProfileLoop, tol: &Tolerance) -> Result<(), KernelError> {
     if lp.segments.is_empty() || !lp.start.is_finite() {
         return Err(KernelError::DegenerateSegment);
     }
+    let alone = lp.segments.len() == 1;
+    let mut from = lp.start;
     for seg in &lp.segments {
         let ok = match seg {
             Segment::Line { to } => to.is_finite(),
@@ -199,10 +337,15 @@ pub(crate) fn check_loop_input(lp: &ProfileLoop, tol: &Tolerance) -> Result<(), 
                     && sweep.abs() > tol.angular
                     && sweep.abs() <= TAU + 1e-9
             }
+            Segment::Nurbs { curve } => {
+                check_nurbs_segment(curve, from, alone, tol)?;
+                true
+            }
         };
         if !ok {
             return Err(KernelError::DegenerateSegment);
         }
+        from = segment_end(from, seg);
     }
     if lp.chain_points().iter().any(|p| !p.is_finite()) {
         return Err(KernelError::DegenerateSegment);
@@ -301,6 +444,20 @@ impl SampledLoop {
                     for k in 1..=n {
                         points.push(*center + rotate(p - *center, sweep * k as f64 / n as f64));
                         into.push(sag);
+                    }
+                }
+                Segment::Nurbs { curve } => {
+                    // Dieselben Punkte wie `ProfileLoop::sample`; die Pfeilhöhe jeder Sehne wird
+                    // aus dem Kurvenpunkt in ihrer Parametermitte geschätzt (mit Sicherheitsfaktor).
+                    let n = nurbs_steps(curve, steps_per_turn);
+                    let mut prev = points[points.len() - 1];
+                    for k in 1..=n {
+                        let q = nurbs_xy(curve, k, n);
+                        let mid = nurbs_xy(curve, 2 * k - 1, 2 * n);
+                        let sag = point_segment_distance(mid, prev, q) * NURBS_SAGITTA_SAFETY;
+                        points.push(q);
+                        into.push(if sag.is_finite() { sag } else { 0.0 });
+                        prev = q;
                     }
                 }
             }
