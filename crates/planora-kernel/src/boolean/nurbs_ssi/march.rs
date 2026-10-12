@@ -69,6 +69,12 @@ enum Corr {
     Failed,
 }
 
+/// Art der Korrektur ohne Daten (für Wächter in `step`).
+enum CorrKind {
+    Outside,
+    Other,
+}
+
 /// Ergebnis eines Schritts.
 struct Step {
     probe: Probe,
@@ -163,7 +169,12 @@ impl Ssi<'_> {
         loop {
             let at_min = *h <= H_MIN;
             let pred = p.q + t * *h;
-            let fail = match self.correct(pred, pred, t, p.hints(), CORRECT_REACH * *h, self.eps)? {
+            let corr = self.correct(pred, pred, t, p.hints(), CORRECT_REACH * *h, self.eps)?;
+            let corr_kind = match corr {
+                Corr::Outside => CorrKind::Outside,
+                _ => CorrKind::Other,
+            };
+            let fail = match corr {
                 Corr::Ok(q) => match self.tangent(&q) {
                     None => MSG_TANGENTIAL,
                     Some(tq) => {
@@ -188,7 +199,13 @@ impl Ssi<'_> {
                         MSG_LOST
                     }
                 },
-                Corr::Outside if at_min => {
+                // Am Rand: Auch eine gescheiterte (statt „jenseits“ gemeldete) Korrektur endet die
+                // Kurve, wenn der vorhergesagte Punkt jenseits des Rands der Freiformfläche liegt.
+                Corr::Outside | Corr::Failed
+                    if at_min
+                        && (matches!(corr_kind, CorrKind::Outside)
+                            || self.beyond_edge(pred, p.hints())?) =>
+                {
                     let end = self.bisect(p, t, *h)?;
                     let dist = end.q.distance(p.q);
                     return Ok(Step {
@@ -207,6 +224,23 @@ impl Ssi<'_> {
             }
             *h = (*h * 0.5).max(H_MIN);
         }
+    }
+
+    /// Liegt `x` jenseits des Rands einer Freiformseite (Fußpunkt auf einem offenen Rand und
+    /// nicht auf der Fläche)?
+    fn beyond_edge(&self, x: DVec3, hints: Hints) -> Result<bool, String> {
+        for (side, hint) in [(&self.a, hints.a), (&self.b, hints.b)] {
+            if side.nurbs.is_none() {
+                continue;
+            }
+            if let Some(e) = self.eval_side(side, x, hint)?
+                && e.edge
+                && e.f.abs() > self.eps
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Randpunkt zwischen `p` (gültig) und `p + h·t` (jenseits des Rands), auf `BISECT_TOL`.

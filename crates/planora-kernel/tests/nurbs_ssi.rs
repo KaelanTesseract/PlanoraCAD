@@ -708,3 +708,278 @@ fn invalid_analytic_surfaces_and_tolerance_contacts_are_named_like_the_analytic_
         SsiOutcome::Touch
     ));
 }
+
+// ---- Nachbesserung Task 8, Runde 2 (Review): kurze Bögen an Rändern und Ecken ----
+
+/// Drehfläche einer Strecke `a → b` um die z-Achse, Naht bei `start`.
+fn revolved_line(a: DVec3, b: DVec3, start: f64) -> Surface {
+    let line = NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![a, b], vec![1.0; 2]).unwrap();
+    Surface::nurbs(
+        NurbsSurface::revolve(&line, DVec3::ZERO, DVec3::Z, start, TAU).unwrap(),
+        true,
+        false,
+    )
+    .unwrap()
+}
+
+/// Zufällige 13 × 13-Beule wie in `a_random_bump_cut_by_a_tilted_plane_is_fitted_quickly`.
+fn random_bump(seed: u64) -> Surface {
+    let n = 13usize;
+    let mut kn = vec![0.0; 4];
+    for i in 1..=(n - 4) {
+        kn.push(i as f64 / (n - 3) as f64);
+    }
+    kn.extend([1.0; 4]);
+    let mut rng = Rng(seed);
+    let mut c = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            c.push(DVec3::new(
+                i as f64 * 10.0 / 12.0,
+                j as f64 * 10.0 / 12.0,
+                (rng.next() - 0.5) * 2.0 * 1.53,
+            ));
+        }
+    }
+    let s = NurbsSurface::new(3, 3, kn.clone(), kn, n, n, c, vec![1.0; n * n]).unwrap();
+    Surface::nurbs(s, false, false).unwrap()
+}
+
+/// Parameterlinie eines Rands: `t ∈ [0, 1]` ↦ `(u, v)`.
+type EdgeParam = Box<dyn Fn(f64) -> (f64, f64)>;
+
+/// Bodenwahrheit: Schnittpunkte der offenen Ränder der Freiformfläche `a` mit `b` (fein
+/// abgetastet, Vorzeichenwechsel halbiert).
+fn boundary_crossings(a: &Surface, b: &Surface) -> Vec<DVec3> {
+    let Surface::Nurbs(d) = a else { unreachable!() };
+    let ((u0, u1), (v0, v1)) = d.surface().domain();
+    let mut edges: Vec<EdgeParam> = Vec::new();
+    if !d.is_periodic_v() {
+        edges.push(Box::new(move |t| (u0 + (u1 - u0) * t, v0)));
+        edges.push(Box::new(move |t| (u0 + (u1 - u0) * t, v1)));
+    }
+    if !d.is_periodic_u() {
+        edges.push(Box::new(move |t| (u0, v0 + (v1 - v0) * t)));
+        edges.push(Box::new(move |t| (u1, v0 + (v1 - v0) * t)));
+    }
+    let n = 4000;
+    let mut out = Vec::new();
+    for e in &edges {
+        let f = |t: f64| {
+            let (u, v) = e(t);
+            b.implicit(d.point(u, v))
+        };
+        let mut prev = f(0.0);
+        for i in 1..=n {
+            let (ta, tb) = ((i - 1) as f64 / n as f64, i as f64 / n as f64);
+            let fb = f(tb);
+            if prev * fb < 0.0 {
+                let (mut lo, mut hi) = (ta, tb);
+                for _ in 0..60 {
+                    let m = 0.5 * (lo + hi);
+                    if (f(m) < 0.0) == (prev < 0.0) {
+                        lo = m
+                    } else {
+                        hi = m
+                    }
+                }
+                let (u, v) = e(0.5 * (lo + hi));
+                out.push(d.point(u, v));
+            }
+            prev = fb;
+        }
+    }
+    out
+}
+
+/// Jede Randkreuzung liegt auf einer der Kurven (bis 1e-5), alle Kurvenpunkte auf beiden Flächen.
+fn assert_boundary_covered(name: &str, a: &Surface, b: &Surface, r: &SsiOutcome) {
+    let crossings = boundary_crossings(a, b);
+    let SsiOutcome::Curves(cs) = r else {
+        panic!(
+            "{name}: Kurven erwartet ({} Randkreuzungen), erhalten {r:?}",
+            crossings.len()
+        )
+    };
+    let pts: Vec<DVec3> = cs.iter().flat_map(|c| sample(c, 4000)).collect();
+    for x in &crossings {
+        let d = pts
+            .iter()
+            .map(|p| p.distance(*x))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            d < 1e-5,
+            "{name}: Randkreuzung {x:?} fehlt (Abstand {d:.1e})"
+        );
+    }
+    on_both(cs, a, b);
+}
+
+#[test]
+fn short_arcs_clipping_a_rim_are_found() {
+    // Review C-new: Bögen von 0,02 … 0,2 mm Länge am Rand fehlten (None).
+    let cyl = |s: f64| revolved_line(DVec3::new(2.0, 0.0, 0.0), DVec3::new(2.0, 0.0, 10.0), s);
+    let cone = |s: f64| revolved_line(DVec3::new(2.0, 0.0, 0.0), DVec3::new(6.0, 0.0, 10.0), s);
+    let sph = Surface::Sphere {
+        frame: Frame::from_origin_normal(DVec3::new(2.0, 0.0, 10.999), DVec3::Z),
+        radius: 1.0,
+    };
+    let rim_plane = plane(
+        DVec3::new(2.0, 0.0, 9.9999),
+        DVec3::new(1.0, 0.0, 1.0).normalize(),
+    );
+    for s in [0.0, 1.0] {
+        let c = cyl(s);
+        assert_boundary_covered(
+            "Zylinder–Kugel",
+            &c,
+            &sph,
+            &intersect_nurbs(&c, &sph, &tol()),
+        );
+    }
+    for s in [0.0, 0.5, 1.0, 4.0] {
+        let c = cyl(s);
+        let r = intersect_nurbs(&c, &rim_plane, &tol());
+        assert_boundary_covered("Zylinder–Ebene", &c, &rim_plane, &r);
+    }
+    for (x, starts) in [(5.999, vec![0.0, 0.5, 1.0]), (5.997, vec![1.0])] {
+        let pl = plane(DVec3::new(x, 0.0, 0.0), DVec3::X);
+        for s in starts {
+            let c = cone(s);
+            assert_boundary_covered("Kegel–Ebene", &c, &pl, &intersect_nurbs(&c, &pl, &tol()));
+        }
+    }
+}
+
+#[test]
+fn a_corner_arc_of_a_bump_is_found() {
+    // Review C-new: Der 17-µm-Bogen an der Ecke (10, 10) der Beule mit Seed 5 fehlte.
+    let bump = random_bump(5);
+    let pl = plane(
+        DVec3::new(5.0, 5.0, 0.0),
+        DVec3::new(0.2, 0.1, 1.0).normalize(),
+    );
+    let r = intersect_nurbs(&bump, &pl, &tol());
+    assert_boundary_covered("Beule 5", &bump, &pl, &r);
+    let SsiOutcome::Curves(cs) = &r else {
+        unreachable!()
+    };
+    let corner = DVec3::new(9.9863, 10.0, -1.498);
+    let near = cs
+        .iter()
+        .flat_map(|c| sample(c, 2000))
+        .map(|p| p.distance(corner))
+        .fold(f64::INFINITY, f64::min);
+    assert!(near < 1e-3, "Eckbogen fehlt ({near})");
+}
+
+#[test]
+fn random_rim_and_corner_clips_are_found() {
+    // Review C-new: zufällige Anschnitte von Rändern und Ecken (Tiefe 1e-4 … 1e-2) gegen die
+    // Bodenwahrheit aus feiner Abtastung der Ränder.
+    let mut rng = Rng(808);
+    let mut checked = 0;
+    for k in 0..24 {
+        let depth = 10f64.powf(-4.0 + 2.0 * rng.next());
+        let alpha = rng.next() * TAU;
+        let start = rng.next() * TAU;
+        let (a, b, name) = match k % 4 {
+            0 | 1 => {
+                // Zylinder (r = 2) oder Kegel (oben r = 6), oberer Rand bei z = 10
+                let top = if k % 4 == 0 { 2.0 } else { 6.0 };
+                let s = revolved_line(DVec3::new(2.0, 0.0, 0.0), DVec3::new(top, 0.0, 10.0), start);
+                let radial = DVec3::new(alpha.cos(), alpha.sin(), 0.0);
+                let p = radial * top + DVec3::Z * 10.0;
+                let other = if k % 8 < 4 {
+                    let n = (radial + DVec3::Z * (0.5 + 1.5 * rng.next())).normalize();
+                    plane(p - DVec3::Z * depth, n)
+                } else {
+                    let rho = 0.5 + 1.5 * rng.next();
+                    Surface::Sphere {
+                        frame: Frame::from_origin_normal(p + DVec3::Z * (rho - depth), DVec3::Z),
+                        radius: rho,
+                    }
+                };
+                (s, other, format!("Fall {k} (Rand, Tiefe {depth:.1e})"))
+            }
+            _ => {
+                // Ecke einer Beule: Ebene knapp über bzw. unter einer Ecke, zufällig geneigt
+                let bump = random_bump(100 + k as u64);
+                let Surface::Nurbs(d) = &bump else {
+                    unreachable!()
+                };
+                let (cu, cv) = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)][k % 4];
+                let c = d.point(cu, cv);
+                let n = d.normal(cu, cv);
+                let t = n.any_orthonormal_vector();
+                let tilt = (n + t * (rng.next() - 0.5)).normalize();
+                let sign = if rng.next() < 0.5 { 1.0 } else { -1.0 };
+                let pl = plane(c + n * (sign * depth), tilt);
+                (bump, pl, format!("Fall {k} (Ecke, Tiefe {depth:.1e})"))
+            }
+        };
+        let r = intersect_nurbs(&a, &b, &tol());
+        if boundary_crossings(&a, &b).is_empty() {
+            // kein Randschnitt in der Abtastung: nur Kurven auf beiden Flächen verlangt
+            if let SsiOutcome::Curves(cs) = &r {
+                on_both(cs, &a, &b);
+            }
+            continue;
+        }
+        checked += 1;
+        match &r {
+            SsiOutcome::Unsupported(msg) => panic!("{name}: {msg}"),
+            _ => assert_boundary_covered(&name, &a, &b, &r),
+        }
+    }
+    assert!(checked >= 18, "nur {checked} Fälle mit Randschnitt");
+}
+
+#[test]
+fn transversal_and_disjoint_quadric_pairs_are_not_refused() {
+    // Review I-B: früher abgelehnt.
+    let cyl1 = revolved_line(DVec3::new(2.0, 0.0, 0.0), DVec3::new(2.0, 0.0, 10.0), 1.0);
+    for r in [2.28, 2.1, 2.05, 2.01] {
+        let s = Surface::Sphere {
+            frame: Frame::from_origin_normal(DVec3::new(0.0, 0.0, 5.0), DVec3::Z),
+            radius: r,
+        };
+        let SsiOutcome::Curves(cs) = intersect_nurbs(&cyl1, &s, &tol()) else {
+            panic!("r = {r}")
+        };
+        assert_eq!(cs.len(), 2, "r = {r}");
+        on_both(&cs, &cyl1, &s);
+    }
+    let cone = revolved_line(DVec3::new(1.0, 0.0, 0.0), DVec3::new(2.0, 0.0, 10.0), 0.0);
+    let c13 = Surface::Cylinder {
+        frame: Frame::WORLD,
+        radius: 1.3,
+    };
+    let SsiOutcome::Curves(cs) = intersect_nurbs(&cone, &c13, &tol()) else {
+        panic!("Kegel–Zylinder")
+    };
+    assert_eq!(cs.len(), 1);
+    on_both(&cs, &cone, &c13);
+    let cyl0 = revolved_line(DVec3::new(2.0, 0.0, 0.0), DVec3::new(2.0, 0.0, 10.0), 0.0);
+    for r in [2.1, 2.05, 2.02, 2.01] {
+        let c = Surface::Cylinder {
+            frame: Frame::WORLD,
+            radius: r,
+        };
+        assert!(
+            matches!(intersect_nurbs(&cyl0, &c, &tol()), SsiOutcome::None),
+            "r = {r}"
+        );
+    }
+    let sph = nurbs_sphere(DVec3::ZERO, DVec3::Z, DVec3::X, 3.0, 0.0);
+    for r in [3.05, 3.02, 3.01] {
+        let s = Surface::Sphere {
+            frame: Frame::WORLD,
+            radius: r,
+        };
+        assert!(
+            matches!(intersect_nurbs(&sph, &s, &tol()), SsiOutcome::None),
+            "r = {r}"
+        );
+    }
+}

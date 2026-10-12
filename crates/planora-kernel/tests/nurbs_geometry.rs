@@ -768,3 +768,69 @@ fn signed_distance_is_exact_near_the_poles_of_a_revolved_sphere() {
         assert!((got - exact).abs() < 1e-7, "{p:?}: {got} statt {exact}");
     }
 }
+
+/// Zufällige bikubische 13 × 13-Beule über 10 × 10 mm (Höhe ±1,53), wie in `tests/nurbs_ssi.rs`.
+fn random_bump(seed: u64) -> Surface {
+    let n = 13usize;
+    let mut kn = vec![0.0; 4];
+    for i in 1..=(n - 4) {
+        kn.push(i as f64 / (n - 3) as f64);
+    }
+    kn.extend([1.0; 4]);
+    let mut rng = Lcg(seed);
+    let mut c = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            c.push(DVec3::new(
+                i as f64 * 10.0 / 12.0,
+                j as f64 * 10.0 / 12.0,
+                (rng.next() - 0.5) * 2.0 * 1.53,
+            ));
+        }
+    }
+    let s = NurbsSurface::new(3, 3, kn.clone(), kn, n, n, c, vec![1.0; n * n]).unwrap();
+    Surface::nurbs(s, false, false).unwrap()
+}
+
+#[test]
+fn points_on_a_steep_surface_near_a_corner_have_distance_zero() {
+    // Regression (Task 8, Review I-A): An steilen Ecken ist eine Rasterzelle im Raum groß; die
+    // globale Suche fand dort nichts und lieferte den Abstand eines Rasterpunkts (bis 0,31 mm).
+    for (seed, p) in [
+        (
+            101,
+            DVec3::new(
+                0.10950613031765893,
+                0.022834544708931228,
+                1.0057466521971514,
+            ),
+        ),
+        (
+            113,
+            DVec3::new(
+                0.05585842660977101,
+                0.07416988900015285,
+                -1.1442076483051893,
+            ),
+        ),
+    ] {
+        let s = random_bump(seed);
+        assert!(s.implicit(p).abs() < 2e-6, "{seed}: {}", s.implicit(p));
+    }
+    let mut rng = Lcg(7);
+    let bumps: Vec<Surface> = (0..20).map(|i| random_bump(100 + i)).collect();
+    for k in 0..2000 {
+        let s = &bumps[k % bumps.len()];
+        let Surface::Nurbs(d) = s else { unreachable!() };
+        let (u, v) = (rng.next() * 0.06, rng.next() * 0.06);
+        let (u, v) = match k % 4 {
+            0 => (u, v),
+            1 => (1.0 - u, v),
+            2 => (u, 1.0 - v),
+            _ => (1.0 - u, 1.0 - v),
+        };
+        let p = d.point(u, v);
+        assert!(d.closest(p, None).is_some(), "{k}: {p:?}");
+        assert!(s.implicit(p).abs() < 1e-6, "{k}: {p:?} {}", s.implicit(p));
+    }
+}

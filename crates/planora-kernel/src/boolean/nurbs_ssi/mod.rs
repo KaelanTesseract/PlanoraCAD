@@ -20,6 +20,7 @@
 //! Teilergebnis. Alle Schleifen haben harte Grenzen; zusätzlich begrenzt `MAX_PROBES` die Zahl
 //! der Flächenauswertungen insgesamt.
 
+mod edges;
 mod fit;
 mod march;
 mod seeds;
@@ -322,6 +323,7 @@ struct Ssi<'a> {
     grid: HashMap<CellKey, Vec<(usize, usize)>>,
     cell: f64,
     visits: usize,
+    edge_visits: usize,
     candidates: usize,
     probes: Cell<usize>,
     /// Größte Diagonale eines Kandidaten-Flickens.
@@ -360,6 +362,7 @@ impl<'a> Ssi<'a> {
             grid: HashMap::new(),
             cell: march::CELL_FACTOR * h_max,
             visits: 0,
+            edge_visits: 0,
             candidates: 0,
             probes: Cell::new(0),
             max_patch: seeds::max_patch(a, b, diag),

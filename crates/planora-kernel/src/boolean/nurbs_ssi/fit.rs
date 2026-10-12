@@ -31,6 +31,33 @@ impl Ssi<'_> {
     /// Annäherung eines Zweigs: in Stücke zu höchstens `MAX_FIT_POINTS` Punkten geteilt (deren
     /// Enden aufeinanderfallen), jedes geprüft angenähert.
     pub(super) fn fit_branch(&self, br: &Branch) -> Result<Vec<Curve>, String> {
+        // Punkte, die (bis auf `same`) auf ihrem Vorgänger liegen, entfallen (etwa ein Randpunkt
+        // der Bisektion direkt neben dem Startpunkt); sie gäben der Annäherung eine willkürliche
+        // Tangente. Der letzte Punkt bleibt (er ersetzt seinen Vorgänger).
+        let (mut pts, mut hints): (Vec<DVec3>, Vec<Hints>) = (Vec::new(), Vec::new());
+        for (p, h) in br.pts.iter().zip(&br.hints) {
+            match pts.last() {
+                Some(q) if q.distance(*p) <= self.same => {
+                    if pts.len() > 1 {
+                        let k = pts.len() - 1;
+                        (pts[k], hints[k]) = (*p, *h);
+                    }
+                }
+                _ => {
+                    pts.push(*p);
+                    hints.push(*h);
+                }
+            }
+        }
+        if pts.len() < 2 {
+            return Err(MSG_FIT.into());
+        }
+        let br = Branch {
+            pts,
+            hints,
+            closed: br.closed,
+        };
+        let br = &br;
         let n = br.pts.len();
         let pieces = n.div_ceil(MAX_FIT_POINTS).max(1);
         let mut out = Vec::new();

@@ -40,6 +40,9 @@ const HESSIAN_FLOOR: f64 = 1e-300;
 /// Versätze (Bruchteil des Wegs zur Bereichsmitte), an denen die Ersatznormale eines entarteten
 /// Punkts (Pol) gesucht wird.
 const NORMAL_OFFSETS: [f64; 3] = [1e-6, 1e-4, 1e-2];
+/// Feineres Raster je Richtung über den Zellen um den besten Rasterpunkt, wenn die grobe Suche
+/// nichts oder nur einen Randpunkt findet.
+const REFINE_SAMPLES: usize = 16;
 /// Meridiane, auf denen neben einem Pol neu gestartet wird, und der Abstand dieser Startpunkte
 /// vom Pol als Bruchteil des v-Bereichs.
 const POLE_MERIDIANS: usize = 16;
@@ -546,6 +549,16 @@ impl NurbsSurfaceData {
             .into_iter()
             .flatten()
             .min_by(|a, b| a.2.total_cmp(&b.2));
+        // Immer noch nichts oder am Rand: feineres Raster in den Zellen um den besten
+        // Rasterpunkt (steile Ecken: eine Rasterzelle ist dort im Raum groß, und keiner der
+        // groben Startpunkte liegt im Einzugsbereich).
+        let result = match result {
+            Some(r) if !self.on_open_edge(r.0, r.1) => Some(r),
+            r => [r, run(self.refined_starts(p, best.0))]
+                .into_iter()
+                .flatten()
+                .min_by(|a, b| a.2.total_cmp(&b.2)),
+        };
         match result {
             Some(r) if self.pole_at(r.1).is_some() => [Some(r), run(self.pole_starts(p, r.1))]
                 .into_iter()
@@ -559,6 +572,31 @@ impl NurbsSurfaceData {
                 .min_by(|a, b| a.2.total_cmp(&b.2)),
             r => r,
         }
+    }
+
+    /// Die besten `NEWTON_STARTS` Punkte eines feineren Rasters (`REFINE_SAMPLES²`) über den
+    /// bis zu vier Rasterzellen um den Rasterpunkt `best`.
+    fn refined_starts(&self, p: DVec3, best: usize) -> Vec<(f64, f64)> {
+        let g = self.grid();
+        let (bi, bj) = (best / g.nv, best % g.nv);
+        let (i0, i1) = (bi.saturating_sub(1), (bi + 1).min(g.nu - 1));
+        let (j0, j1) = (bj.saturating_sub(1), (bj + 1).min(g.nv - 1));
+        let (u0, u1, v0, v1) = (g.us[i0], g.us[i1], g.vs[j0], g.vs[j1]);
+        let n = REFINE_SAMPLES;
+        let mut samples: Vec<(f64, f64, f64)> = Vec::with_capacity((n + 1) * (n + 1));
+        for i in 0..=n {
+            for j in 0..=n {
+                let u = u0 + (u1 - u0) * i as f64 / n as f64;
+                let v = v0 + (v1 - v0) * j as f64 / n as f64;
+                samples.push((u, v, self.surface.point(u, v).distance_squared(p)));
+            }
+        }
+        samples.sort_by(|a, b| a.2.total_cmp(&b.2));
+        samples
+            .into_iter()
+            .take(NEWTON_STARTS)
+            .map(|(u, v, _)| (u, v))
+            .collect()
     }
 
     /// Pol, an dem `v` liegt (`v` gleich einem Polwert).

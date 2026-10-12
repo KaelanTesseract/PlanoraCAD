@@ -26,10 +26,6 @@ const MIN_PATCH_DIAG: f64 = 1e-4;
 const MAX_PATCH_VISITS: usize = 200_000;
 /// Höchstzahl Kandidaten-Flicken (jeder liefert höchstens einen Startpunkt).
 const MAX_CANDIDATES: usize = 8 * MAX_SEEDS;
-/// Liegt der gefundene Startpunkt nicht beim Kandidaten (Hüllquader, vergrößert um diesen Anteil
-/// der Flickendiagonale), wird der Kandidat bis zu `SEED_RETRY_LEVELS`-mal weiter unterteilt.
-const SEED_LOCAL_FACTOR: f64 = 1.0;
-const SEED_RETRY_LEVELS: usize = 2;
 /// Höchstzahl Newton-Schritte bei der Suche eines Startpunkts.
 const SEED_NEWTON_STEPS: usize = 50;
 /// Newton endet vorzeitig, wenn der beste Rest in `STAGNATION_STEPS` Schritten nicht wenigstens
@@ -83,22 +79,21 @@ fn feature_size(s: &Surface) -> f64 {
 
 /// Flicken mit Unterteilungstiefe je Richtung.
 #[derive(Clone)]
-struct Piece {
-    p: BezierPatch,
+pub(super) struct Piece {
+    pub(super) p: BezierPatch,
     depth: [usize; 2],
 }
 
 /// Knoten der Unterteilung: je Freiformseite ein Flicken.
 #[derive(Clone)]
-struct Node {
-    a: Option<Piece>,
-    b: Option<Piece>,
-    retries: usize,
+pub(super) struct Node {
+    pub(super) a: Option<Piece>,
+    pub(super) b: Option<Piece>,
 }
 
 /// Kegel von Richtungen: Achse (Einheitsvektor) und halber Öffnungswinkel.
 #[derive(Clone, Copy, Debug)]
-struct Cone {
+pub(super) struct Cone {
     axis: DVec3,
     half: f64,
 }
@@ -114,8 +109,8 @@ enum ConeCheck {
 }
 
 /// Ergebnis der Startpunktsuche eines Kandidaten.
-struct SeedResult {
-    found: Option<Probe>,
+pub(super) struct SeedResult {
+    pub(super) found: Option<Probe>,
     last: Option<Probe>,
     residual: f64,
 }
@@ -211,7 +206,7 @@ fn extent(p: &BezierPatch, along_u: bool) -> f64 {
 /// `w_ij = α_i β_j` (Dreh- und Verschiebeflächen): alle Differenzen `P_l − P_k` (l > k) einer
 /// Linie (rationale Bézier-Kurve); sonst alle Differenzen `P_{l,j'} − P_{k,j}` (l > k, beliebige
 /// Linien). Nullvektoren (Pole) entfallen, sie tragen nichts bei.
-fn tangents(p: &BezierPatch, along_u: bool) -> Vec<DVec3> {
+pub(super) fn tangents(p: &BezierPatch, along_u: bool) -> Vec<DVec3> {
     let (nu, nv) = (p.degree_u + 1, p.degree_v + 1);
     let (lines, len) = if along_u { (nv, nu) } else { (nu, nv) };
     let get = |line: usize, k: usize| {
@@ -295,7 +290,7 @@ fn normal_cone_from(du: &[DVec3], dv: &[DVec3]) -> Option<Cone> {
 /// Liegen alle Vektoren echt auf einer Seite jeder Ebene senkrecht zu einer Richtung im Kegel?
 /// Dann ist `n · S ≠ 0` (festes Vorzeichen) für jede Normale `n` im Kegel und jede positive
 /// Kombination `S`. Liefert dazu die Spannweite der Skalarprodukte (für die Wahl der Teilung).
-fn separates(v: &[DVec3], cone: &Cone) -> (bool, f64) {
+pub(super) fn separates(v: &[DVec3], cone: &Cone) -> (bool, f64) {
     if v.is_empty() || cone.half >= FRAC_PI_2 {
         return (false, 0.0);
     }
@@ -317,7 +312,7 @@ fn cones_apart(a: &Cone, b: &Cone) -> bool {
 
 /// Normalen einer analytischen Fläche an allen ihren Punkten im Quader `[lo, hi]` (sichere
 /// Schranke); `None`, wenn sie alle Richtungen umfassen können.
-fn analytic_cone(s: &Surface, lo: DVec3, hi: DVec3) -> Option<Cone> {
+pub(super) fn analytic_cone(s: &Surface, lo: DVec3, hi: DVec3) -> Option<Cone> {
     let c = (lo + hi) * 0.5;
     let r = 0.5 * (hi - lo).length();
     let f = s.frame();
@@ -381,7 +376,12 @@ fn at_pole(d: &NurbsSurfaceData, p: &BezierPatch) -> bool {
 /// Normalenkegel eines Flickens: sicher aus den Tangentenkegeln; an Polen (dort umfassen die
 /// Tangentenkegel alle Richtungen) aus Stichproben der Normalen, erweitert um den größten Winkel
 /// benachbarter Stichproben (Schätzung, keine sichere Schranke).
-fn patch_cone(d: &NurbsSurfaceData, p: &BezierPatch, du: &[DVec3], dv: &[DVec3]) -> Option<Cone> {
+pub(super) fn patch_cone(
+    d: &NurbsSurfaceData,
+    p: &BezierPatch,
+    du: &[DVec3],
+    dv: &[DVec3],
+) -> Option<Cone> {
     if let Some(c) = normal_cone_from(du, dv) {
         return Some(c);
     }
@@ -421,6 +421,63 @@ fn patch_cone(d: &NurbsSurfaceData, p: &BezierPatch, du: &[DVec3], dv: &[DVec3])
     })
 }
 
+/// Kann ein Stück mit diesen Kontrollpunkten (es liegt in ihrer konvexen Hülle, alle Gewichte
+/// positiv) die analytische Fläche `other` nicht treffen? Sicher: Lipschitz-Schranke über dem
+/// Hüllquader, Ebene: alle Kontrollpunkte echt auf einer Seite; Kugel, Zylinder, Kegel: `F` ist
+/// konvex (Abstand zu Punkt bzw. Achse), also ist die Hülle innen, wenn alle Kontrollpunkte innen
+/// sind; außen ist `F` mindestens die lineare Stützfunktion längs der Radialrichtung der
+/// Quadermitte, deren Minimum über der Hülle an einem Kontrollpunkt liegt.
+pub(super) fn excluded_points(other: &Surface, control: &[DVec3], lin: f64) -> bool {
+    let (lo, hi) = control.iter().fold(
+        (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+        |(l, h), q| (l.min(*q), h.max(*q)),
+    );
+    let c = (lo + hi) * 0.5;
+    let r = 0.5 * (hi - lo).length();
+    let f = other.implicit(c);
+    if f.is_finite() && f.abs() > r + lin {
+        return true;
+    }
+    let fs: Vec<f64> = control.iter().map(|q| other.implicit(*q)).collect();
+    match other {
+        // linear: alle Kontrollpunkte echt auf einer Seite
+        Surface::Plane { .. } => fs.iter().all(|f| *f > lin) || fs.iter().all(|f| *f < -lin),
+        Surface::Sphere { frame, radius } => {
+            let m = (c - frame.origin).normalize_or_zero();
+            fs.iter().all(|f| *f < -lin)
+                || (m != DVec3::ZERO
+                    && control
+                        .iter()
+                        .all(|q| m.dot(*q - frame.origin) - radius > lin))
+        }
+        Surface::Cylinder { frame, radius } => {
+            let w = c - frame.origin;
+            let m = (w - frame.z * w.dot(frame.z)).normalize_or_zero();
+            fs.iter().all(|f| *f < -lin)
+                || (m != DVec3::ZERO
+                    && control
+                        .iter()
+                        .all(|q| m.dot(*q - frame.origin) - radius > lin))
+        }
+        Surface::Cone {
+            frame,
+            radius,
+            slope,
+        } => {
+            let w = c - frame.origin;
+            let m = (w - frame.z * w.dot(frame.z)).normalize_or_zero();
+            let k = (1.0 + slope * slope).sqrt();
+            fs.iter().all(|f| *f < -lin)
+                || (m != DVec3::ZERO
+                    && control.iter().all(|q| {
+                        let d = *q - frame.origin;
+                        (m.dot(d) - (radius + slope * d.dot(frame.z))) / k > lin
+                    }))
+        }
+        Surface::Torus { .. } | Surface::Nurbs(_) => false,
+    }
+}
+
 impl Ssi<'_> {
     /// Anteil der Stichproben (10 · 10 im Parameterbereich) der Freiformseite `s`, die innerhalb
     /// `tol.linear` auf `o` liegen. Analytische Seiten sind unbeschränkt und werden nicht
@@ -458,27 +515,9 @@ impl Ssi<'_> {
         Ok(())
     }
 
-    /// Kann der Flicken die analytische Fläche `other` nicht treffen? Sicher, weil die
-    /// Abstandsfunktionen analytischer Flächen 1-Lipschitz sind: Liegt der Mittelpunkt des
-    /// Hüllquaders weiter als dessen halbe Diagonale von der Fläche, liegt kein Punkt des Quaders
-    /// (und damit des Flickens) auf ihr. Für die Ebene schließt zusätzlich „alle Kontrollpunkte
-    /// echt auf einer Seite“ aus.
+    /// Kann der Flicken die analytische Fläche `other` nicht treffen (siehe `excluded_points`)?
     fn excluded_by(&self, other: &Side, p: &BezierPatch) -> bool {
-        let (lo, hi) = bounds(p);
-        let c = (lo + hi) * 0.5;
-        let r = 0.5 * (hi - lo).length();
-        let f = other.surf.implicit(c);
-        if f.is_finite() && f.abs() > r + self.tol.linear {
-            return true;
-        }
-        if let Surface::Plane { .. } = other.surf {
-            let fs: Vec<f64> = p.control.iter().map(|q| other.surf.implicit(*q)).collect();
-            let lin = self.tol.linear;
-            if fs.iter().all(|f| *f > lin) || fs.iter().all(|f| *f < -lin) {
-                return true;
-            }
-        }
-        false
+        excluded_points(other.surf, &p.control, self.tol.linear)
     }
 
     /// Zwei Freiform-Flicken können sich nicht treffen: Hüllquader getrennt oder die
@@ -587,7 +626,6 @@ impl Ssi<'_> {
             side_a: bool,
             along_u: bool,
             splittable: bool,
-            blind: bool,
         }
         let mut options: Vec<Opt> = Vec::new();
         for (is_a, own, other, other_side) in
@@ -596,7 +634,6 @@ impl Ssi<'_> {
             let Some(own) = own else { continue };
             let oc = other_cone(own, other, other_side);
             for (along_u, d) in [(true, &own.du), (false, &own.dv)] {
-                let theta = cone_of(d).map_or(PI, |c| c.half);
                 let spread = match &oc {
                     Some(c) => {
                         let (ok, spread) = separates(d, c);
@@ -612,34 +649,31 @@ impl Ssi<'_> {
                 {
                     return ConeCheck::Pass;
                 }
-                // Ohne Kegel der anderen Seite (analytisch: Quader zu groß) hilft jede Teilung,
-                // am meisten die der längeren Richtung.
-                let size = if oc.is_none() {
-                    extent(&own.piece.p, along_u) / diag_of(&own.piece.p).max(f64::MIN_POSITIVE)
-                } else {
-                    0.0
-                };
+                // Bewertung: Spannweite der Skalarprodukte (Teilen dieser Richtung trennt die
+                // Vorzeichen) plus Kegelweite der anderen Seite, anteilig zur Ausdehnung in dieser
+                // Richtung (Teilen der langen Richtung verkleinert den Hüllquader und verengt so
+                // den Kegel; ohne Kegel zählt nur die Ausdehnung).
+                let gamma = oc.map_or(FRAC_PI_2, |c| c.half.min(FRAC_PI_2));
+                let (eu, ev) = (extent(&own.piece.p, true), extent(&own.piece.p, false));
+                let ext = if along_u { eu } else { ev } / eu.max(ev).max(f64::MIN_POSITIVE);
                 options.push(Opt {
-                    score: spread + theta + size,
+                    score: spread + gamma * ext,
                     side_a: is_a,
                     along_u,
                     splittable: Self::can_split(own.piece, along_u),
-                    blind: oc.is_none(),
                 });
             }
         }
-        // Die beste Teilung; ist sie nicht mehr möglich, ist der Kandidat an der Grenze (eine
-        // andere Richtung würde den Test nicht bestehen lassen, nur die Zahl der Kandidaten
-        // vervielfachen). Ausnahme: ohne Kegel der anderen Seite hilft jede Verkleinerung.
-        let best = |it: &mut dyn Iterator<Item = &Opt>| {
-            it.max_by(|x, y| x.score.total_cmp(&y.score)).copied()
-        };
-        match best(&mut options.iter()) {
-            Some(o) if o.splittable => ConeCheck::Split(o.side_a, o.along_u),
-            _ => match best(&mut options.iter().filter(|o| o.blind && o.splittable)) {
-                Some(o) => ConeCheck::Split(o.side_a, o.along_u),
-                None => ConeCheck::Limit,
-            },
+        // Die beste noch mögliche Teilung (auch die andere Richtung verkleinert den Hüllquader,
+        // verengt so den Kegel der anderen Seite und ermöglicht den Ausschluss); erst wenn
+        // nichts mehr teilbar ist, ist der Kandidat an der Grenze.
+        match options
+            .iter()
+            .filter(|o| o.splittable)
+            .max_by(|x, y| x.score.total_cmp(&y.score))
+        {
+            Some(o) => ConeCheck::Split(o.side_a, o.along_u),
+            None => ConeCheck::Limit,
         }
     }
 
@@ -661,7 +695,6 @@ impl Ssi<'_> {
                 Node {
                     a: if side_a { child.clone() } else { n.a.clone() },
                     b: if side_a { n.b.clone() } else { child },
-                    retries: n.retries,
                 }
             })
             .collect()
@@ -701,7 +734,6 @@ impl Ssi<'_> {
             stack.push(Node {
                 a: i.and_then(|i| pa.as_ref().map(|v| piece(&v[i]))),
                 b: j.and_then(|j| pb.as_ref().map(|v| piece(&v[j]))),
-                retries: 0,
             });
             while let Some(n) = stack.pop() {
                 self.count_visit()?;
@@ -713,14 +745,14 @@ impl Ssi<'_> {
                     continue;
                 }
                 match self.cone_check(&n) {
-                    ConeCheck::Pass => self.candidate(&n, false, &mut stack)?,
+                    ConeCheck::Pass => self.candidate(&n, false)?,
                     // Normalen dort möglicherweise parallel, aber an dieser Stelle ist schon eine
                     // Berührung eingeordnet: nicht weiter teilen.
                     ConeCheck::Split(..) if self.touch_inside(&n) => {}
                     ConeCheck::Split(side, dir) => {
                         stack.extend(Self::split_node(&n, side, dir).into_iter().rev())
                     }
-                    ConeCheck::Limit => self.candidate(&n, true, &mut stack)?,
+                    ConeCheck::Limit => self.candidate(&n, true)?,
                 }
             }
         }
@@ -761,84 +793,48 @@ impl Ssi<'_> {
         (start, hints, lo, hi)
     }
 
-    /// Ein Kandidat. Normal: Startpunkt suchen; liegt er nicht beim Kandidaten (oder findet sich
-    /// keiner, aber die Flächen kommen sich dort näher als die Flickengröße), kommen die Hälften
-    /// auf den Stapel (höchstens `SEED_RETRY_LEVELS`-mal). Grenz-Kandidat (Normalen dort
-    /// möglicherweise parallel, nicht weiter teilbar): nur ein Berührpunkt ist zulässig, sonst
-    /// „nahezu tangential“.
-    fn candidate(&mut self, n: &Node, limit: bool, stack: &mut Vec<Node>) -> Result<(), String> {
+    /// Ein Kandidat. Angenommen (Normalen getrennt): Startpunkte von seinem Rand
+    /// (`edge_seeds`, vollständig, siehe dort). Grenz-Kandidat (Normalen dort möglicherweise
+    /// parallel, nicht weiter teilbar): Startpunkt aus der Mitte; nur ein Berührpunkt ist
+    /// zulässig, sonst „nahezu tangential“ – nie wird ein Kandidat stillschweigend verworfen.
+    fn candidate(&mut self, n: &Node, limit: bool) -> Result<(), String> {
         let (start, hints, lo, hi) = self.cand_start(n);
         let size = (hi - lo).length();
-        // Kandidaten an einer schon eingeordneten Berührung (etwa längs einer Berührlinie oder
-        // eines gemeinsamen Rands) brauchen keinen eigenen Startpunkt: Liegt ein Berührpunkt im
-        // (um die eigene Größe vergrößerten) Hüllquader, wird der Kandidat übergangen.
-        // Grenz-Kandidaten (Normalen dort ohnehin fast parallel) schon, wenn ein Berührpunkt
-        // näher als die Kandidatengröße liegt.
-        let m = DVec3::splat(size);
-        let reach = self.max_patch.min(self.diag) + size;
-        let center = (lo + hi) * 0.5;
-        if self.touches.iter().any(|t| {
-            (lo - m).cmple(t.q).all() && t.q.cmple(hi + m).all()
-                || (limit && t.q.distance(center) <= reach)
-        }) {
-            return Ok(());
-        }
         self.candidates += 1;
         if self.candidates > MAX_CANDIDATES {
             return Err(format!(
                 "Zu viele Schnittbereiche (mehr als {MAX_CANDIDATES} Kandidaten-Flicken)"
             ));
         }
+        if !limit {
+            return self.edge_seeds(n);
+        }
+        // Grenz-Kandidaten an einer schon eingeordneten Berührung (etwa längs einer Berührlinie
+        // oder eines gemeinsamen Rands) brauchen keinen eigenen Startpunkt.
+        let m = DVec3::splat(size);
+        let reach = self.max_patch.min(self.diag) + size;
+        let center = (lo + hi) * 0.5;
+        if self.touches.iter().any(|t| {
+            (lo - m).cmple(t.q).all() && t.q.cmple(hi + m).all() || t.q.distance(center) <= reach
+        }) {
+            self.candidates -= 1;
+            return Ok(());
+        }
         let r = self.refine_seed(start, hints)?;
-        if limit {
-            return match r.found {
-                Some(p) if p.cross().length() < PARALLEL_NORMALS => self.handle_seed(p),
-                Some(p) => self.limit_transversal(p),
-                None if r.residual <= NEAR_CONTACT_FACTOR * self.tol.linear => match r.last {
-                    Some(p) => self.handle_touch(p),
-                    None => Ok(()),
-                },
-                None if r.residual > size => Ok(()),
+        match r.found {
+            Some(p) if p.cross().length() < PARALLEL_NORMALS => self.handle_seed(p),
+            Some(p) => self.limit_transversal(p),
+            None if r.residual <= NEAR_CONTACT_FACTOR * self.tol.linear => match r.last {
+                Some(p) => self.handle_touch(p),
                 None => Err(MSG_NEAR_TANGENT.into()),
-            };
-        }
-        let m = DVec3::splat(SEED_LOCAL_FACTOR * size);
-        let local = r
-            .found
-            .as_ref()
-            .is_some_and(|p| (lo - m).cmple(p.q).all() && p.q.cmple(hi + m).all());
-        let worth = r.found.is_some() || r.residual <= size;
-        if !local && worth && n.retries < SEED_RETRY_LEVELS {
-            for side_a in [true, false] {
-                let piece = if side_a { &n.a } else { &n.b };
-                let Some(piece) = piece else { continue };
-                let dir = extent(&piece.p, true) >= extent(&piece.p, false);
-                if Self::can_split(piece, dir) {
-                    for mut c in Self::split_node(n, side_a, dir) {
-                        c.retries = n.retries + 1;
-                        stack.push(c);
-                    }
-                    break;
-                }
-            }
-        }
-        match (r.found, r.last) {
-            (Some(p), _) => self.handle_seed(p),
-            // Kein Schnittpunkt, aber die Flächen kommen sich bis auf die Toleranz nahe, mit
-            // parallelen Normalen: Berührung (wie bei analytischen Flächen).
-            (None, Some(p))
-                if r.residual <= NEAR_CONTACT_FACTOR * self.tol.linear
-                    && p.cross().length() < PARALLEL_NORMALS =>
-            {
-                self.handle_touch(p)
-            }
-            _ => Ok(()),
+            },
+            None => Err(MSG_NEAR_TANGENT.into()),
         }
     }
 
     /// Neuer Startpunkt: Duplikate und Punkte auf verfolgten Kurven entfallen; sonst gezählt und
     /// verfolgt (bzw. als Berührpunkt eingeordnet).
-    fn handle_seed(&mut self, s: Probe) -> Result<(), String> {
+    pub(super) fn handle_seed(&mut self, s: Probe) -> Result<(), String> {
         if self.starts.iter().any(|q| q.distance(s.q) <= self.same) {
             return Ok(());
         }
@@ -912,7 +908,7 @@ impl Ssi<'_> {
     /// Newton im Raum auf beide Flächen (kleinster Schritt, der beide linearisierten Gleichungen
     /// erfüllt; bei fast parallelen Normalen abwechselnde Projektion). Endet bei Konvergenz,
     /// Stillstand oder nach `SEED_NEWTON_STEPS`.
-    fn refine_seed(&self, start: DVec3, hints: Hints) -> Result<SeedResult, String> {
+    pub(super) fn refine_seed(&self, start: DVec3, hints: Hints) -> Result<SeedResult, String> {
         let mut q = start;
         let mut hints = hints;
         let max_move = SEED_MAX_MOVE * self.diag.max(H_MIN);
