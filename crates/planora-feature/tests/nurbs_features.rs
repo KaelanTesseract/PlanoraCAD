@@ -1,0 +1,233 @@
+//! Features aus Skizzen mit Ellipse und Spline: Extrusion, Rotation, Neuberechnung.
+
+use planora_feature::*;
+use planora_kernel::{Kernel, Solid, SurfaceKind};
+use planora_math::{DVec2, Frame, PI, Tolerance};
+use planora_mesh::{TessellationOptions, mass_properties, tessellate};
+use planora_sketch::ConstraintKind as K;
+use planora_sketch::model::Sketch;
+use planora_sketch::{ConstraintId, CurveId};
+
+/// Erlaubter relativer Volumenfehler des Netzes.
+const VOLUME_REL: f64 = 2e-3;
+
+fn volume(s: &Solid) -> f64 {
+    mass_properties(
+        &tessellate(
+            s,
+            &TessellationOptions {
+                chord_tolerance: 1e-3,
+            },
+        )
+        .unwrap(),
+    )
+    .volume
+}
+
+fn assert_rel(got: f64, want: f64, what: &str) {
+    assert!(
+        ((got - want) / want).abs() < VOLUME_REL,
+        "{what}: {got} statt {want}"
+    );
+}
+
+fn feature_sketch(sk: Sketch) -> FeatureKind {
+    FeatureKind::Sketch(SketchFeature {
+        sketch: sk,
+        plane: SketchPlane::Standard(StandardPlane::XY),
+        copies: vec![],
+    })
+}
+
+/// Skizze mit einer Ellipse (große Halbachse 5 bemaßt, kleine 2 bemaßt).
+fn ellipse_sketch() -> (Sketch, ConstraintId) {
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let c = sk.add_point(0.0, 0.0).unwrap();
+    let e = sk.add_ellipse(c, DVec2::new(5.0, 0.0), 2.0).unwrap();
+    sk.add_constraint(K::Fixed(c, 0.0, 0.0)).unwrap();
+    sk.add_constraint(K::EllipseAngle(e, 0.0)).unwrap();
+    let major = sk.add_constraint(K::EllipseMajor(e, 5.0)).unwrap();
+    sk.add_constraint(K::EllipseMinor(e, 2.0)).unwrap();
+    (sk, major)
+}
+
+#[test]
+fn an_ellipse_sketch_extrudes_and_follows_its_dimension() {
+    let mut d = Document::new();
+    let (sk, major) = ellipse_sketch();
+    let s = d.add_feature("Skizze 1", feature_sketch(sk)).unwrap();
+    let e = d
+        .add_feature(
+            "Extrusion 1",
+            FeatureKind::Extrude {
+                sketch: s,
+                profile: 0,
+                height: 3.0,
+            },
+        )
+        .unwrap();
+    for id in [s, e] {
+        assert_eq!(
+            d.feature(id).unwrap().status,
+            FeatureStatus::Ok,
+            "{:?}",
+            d.feature(id).unwrap().status
+        );
+    }
+    let vis = d.visible_bodies();
+    assert_eq!(vis.len(), 1);
+    let solid = vis[0].solid;
+    d.kernel().validate(solid).unwrap();
+    assert!(
+        solid
+            .faces
+            .iter()
+            .any(|(_, f)| f.surface.kind() == SurfaceKind::Nurbs),
+        "der Mantel ist eine Freiformfläche"
+    );
+    assert_rel(volume(solid), PI * 5.0 * 2.0 * 3.0, "vorher");
+    d.check_invariants().unwrap();
+
+    // Maß der großen Halbachse ändern: Skizze und Extrusion werden neu berechnet.
+    let report = d
+        .update_with_report(s, |k| {
+            if let FeatureKind::Sketch(sf) = k {
+                sf.sketch.set_constraint_value(major, 7.0).unwrap();
+            }
+        })
+        .unwrap();
+    assert!(report.computed.contains(&s) && report.computed.contains(&e));
+    assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+    assert_rel(
+        volume(d.visible_bodies()[0].solid),
+        PI * 7.0 * 2.0 * 3.0,
+        "nachher",
+    );
+
+    // Ein zweiter Lauf ohne Änderung rechnet nichts neu.
+    let report = d.recompute();
+    assert!(report.computed.is_empty(), "{:?}", report.computed);
+    assert_eq!(report.reused.len(), 2);
+
+    // Umbenennen ändert nichts am Körper; Löschen entfernt ihn.
+    d.rename(e, "Ellipsenzylinder").unwrap();
+    assert_eq!(d.visible_bodies()[0].name, "Ellipsenzylinder");
+    assert!(d.recompute().computed.is_empty());
+    d.delete(e).unwrap();
+    assert!(d.visible_bodies().is_empty());
+    d.check_invariants().unwrap();
+}
+
+/// Achse `x = 0` (Konstruktionslinie) und ein Profil mit Spline als Außenkontur.
+fn spline_revolve_sketch() -> (Sketch, CurveId, CurveId) {
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let ap = sk.add_point(0.0, -2.0).unwrap();
+    let aq = sk.add_point(0.0, 8.0).unwrap();
+    let axis = sk.add_line(ap, aq).unwrap();
+    sk.set_construction(axis, true).unwrap();
+    let p: Vec<_> = [
+        (0.0, 0.0),
+        (0.0, 5.0),
+        (2.0, 5.0),
+        (3.0, 3.0),
+        (2.5, 1.0),
+        (2.0, 0.0),
+    ]
+    .iter()
+    .map(|&(x, y)| sk.add_point(x, y).unwrap())
+    .collect();
+    sk.add_line(p[0], p[1]).unwrap();
+    sk.add_line(p[1], p[2]).unwrap();
+    let sp = sk.add_spline(&p[2..6]).unwrap();
+    sk.add_line(p[5], p[0]).unwrap();
+    (sk, axis, sp)
+}
+
+#[test]
+fn a_spline_sketch_revolves() {
+    let (sk, axis, sp) = spline_revolve_sketch();
+    // Referenz: V = π ∫ x² dy längs des Splines (die übrigen Kanten tragen nichts bei).
+    let n = 12000;
+    let pts: Vec<DVec2> = (0..=n)
+        .map(|i| sk.spline_point(sp, 3.0 * i as f64 / n as f64).unwrap())
+        .collect();
+    let want = PI
+        * pts
+            .windows(2)
+            .map(|w| {
+                let (x0, x1) = (w[0].x, w[1].x);
+                (x0 * x0 + x0 * x1 + x1 * x1) / 3.0 * (w[0].y - w[1].y)
+            })
+            .sum::<f64>();
+
+    let mut d = Document::new();
+    let s = d.add_feature("Skizze 1", feature_sketch(sk)).unwrap();
+    let r = d
+        .add_feature(
+            "Rotation 1",
+            FeatureKind::Revolve {
+                sketch: s,
+                profile: 0,
+                axis,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        d.feature(r).unwrap().status,
+        FeatureStatus::Ok,
+        "{:?}",
+        d.feature(r).unwrap().status
+    );
+    let solid = d.visible_bodies()[0].solid;
+    assert!(
+        solid
+            .faces
+            .iter()
+            .any(|(_, f)| f.surface.kind() == SurfaceKind::Nurbs)
+    );
+    assert_rel(volume(solid), want, "Spline-Drehkörper");
+    assert!(d.recompute().computed.is_empty(), "Zwischenspeicher");
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn a_spline_sketch_extrudes_and_a_bad_spline_reports_an_error() {
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let p: Vec<_> = [(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (5.0, 7.0), (0.0, 5.0)]
+        .iter()
+        .map(|&(x, y)| sk.add_point(x, y).unwrap())
+        .collect();
+    sk.add_line(p[0], p[1]).unwrap();
+    sk.add_line(p[1], p[2]).unwrap();
+    sk.add_spline(&p[2..5]).unwrap();
+    sk.add_line(p[4], p[0]).unwrap();
+    let mid = p[3];
+    let mut d = Document::new();
+    let s = d.add_feature("Skizze 1", feature_sketch(sk)).unwrap();
+    let e = d
+        .add_feature(
+            "Extrusion 1",
+            FeatureKind::Extrude {
+                sketch: s,
+                profile: 0,
+                height: 2.0,
+            },
+        )
+        .unwrap();
+    assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+
+    // Der mittlere Punkt wandert unter die Grundlinie: Das Profil schneidet sich, es gibt
+    // kein Profil 0 mehr, die Extrusion trägt einen Fehler statt eines Absturzes.
+    d.update(s, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            sf.sketch.add_constraint(K::Fixed(mid, 5.0, -3.0)).unwrap();
+        }
+    })
+    .unwrap();
+    assert!(matches!(
+        d.feature(e).unwrap().status,
+        FeatureStatus::Error(_)
+    ));
+    assert!(d.visible_bodies().is_empty());
+    d.check_invariants().unwrap();
+}

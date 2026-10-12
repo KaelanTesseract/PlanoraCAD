@@ -110,7 +110,11 @@ impl Sketch {
                     center: to_rz(center),
                     sweep: -s * sweep,
                 },
-                // Freiformkurven werden mit derselben (affinen) Abbildung umgerechnet.
+                // Freiformkurven werden mit derselben (affinen) Abbildung umgerechnet. Anders als
+                // beim Bogen ist keine Korrektur nötig: Die abgebildeten Kontrollpunkte beschreiben
+                // die gespiegelte Kurve schon in derselben Durchlaufrichtung (Anfang und Ende
+                // bleiben an ihren Kettenpunkten). Eine Umkehr würde die Kette zerreißen; den
+                // Umlaufsinn der ganzen Kette richtet der Kernel selbst (`revolve`, Flächeninhalt).
                 Segment::Nurbs { curve } => Segment::Nurbs {
                     curve: std::sync::Arc::new(
                         curve

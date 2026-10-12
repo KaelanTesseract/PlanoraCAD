@@ -1,9 +1,13 @@
-//! Profil-Extraktion: geschlossene Ketten aus Linien/Bögen und Kreise werden zu Kernel-Profilen.
+//! Profil-Extraktion: geschlossene Ketten aus Linien, Bögen und Splines sowie Kreise und
+//! Ellipsen werden zu Kernel-Profilen.
 //!
 //! Regeln: Es zählen lebende Kurven, die keine Konstruktionsgeometrie sind. Endpunkte im Abstand
-//! `≤ tol.linear` bilden denselben Knoten. Kreise sind eigene Schleifen, Linien und Bögen bilden
-//! einen Graphen, dessen Zusammenhangskomponenten je ein einfacher Kreis sein müssen. Ellipsen
-//! und Splines werden (noch) abgelehnt. Schleifen, die sich selbst oder andere schneiden oder
+//! `≤ tol.linear` bilden denselben Knoten. Kreise und Ellipsen sind eigene Schleifen (Ellipsen als
+//! ein geschlossenes Freiformsegment), Linien, Bögen und Splines bilden einen Graphen, dessen
+//! Zusammenhangskomponenten je ein einfacher Kreis sein müssen. Splines werden zu natürlichen
+//! kubischen Freiformkurven mit derselben Parametrisierung wie in der Skizze (Stützpunkt `i` bei
+//! `t = i`); ein Spline, dessen Enden zusammenfallen, ist allein eine Schleife. Schleifen, die
+//! sich selbst oder andere schneiden oder
 //! berühren, werden abgelehnt; die übrigen werden nach Schachtelungstiefe zu äußeren Schleifen
 //! (gerade Tiefe) und Löchern (ungerade Tiefe) sortiert.
 //!
@@ -15,11 +19,16 @@
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, Sketch};
 use planora_kernel::{Profile, ProfileLoop, SampledLoop, Segment, segment_end};
-use planora_math::{DVec2, TAU, Tolerance};
+use planora_math::nurbs::NurbsCurve;
+use planora_math::{DVec2, DVec3, TAU, Tolerance};
+use std::sync::Arc;
 
 /// Meldung für Bögen, deren Endpunkte nicht auf demselben Kreis um die Mitte liegen.
 const ARC_OFF_CIRCLE: &str =
     "Ein Bogenende liegt nicht auf dem Bogenkreis; die Skizze zuerst lösen";
+
+/// Meldung für Splines, deren Kurvenenden nicht an den Knoten der Schleife liegen.
+const SPLINE_OFF_NODE: &str = "Ein Spline-Ende liegt nicht am Nachbarpunkt der Schleife";
 
 /// Abtastschritte je Vollkreis für Schnitt- und Enthaltensein-Prüfungen (wie im Kernel).
 const CHECK_STEPS: usize = 64;
@@ -76,8 +85,8 @@ impl Sketch {
                 })
         };
 
-        // Kreise sind eigene Schleifen; Ellipsen werden abgelehnt; Linien, Bögen und Splines
-        // bilden den Graphen (Splines hängen mit ihren Endpunkten daran).
+        // Kreise und Ellipsen sind eigene Schleifen; Linien, Bögen und Splines bilden den
+        // Graphen (Splines hängen mit ihren Endpunkten daran).
         let mut edges: Vec<Edge> = Vec::new();
         for (id, c) in self.curves().filter(|(_, c)| !c.construction) {
             match &c.kind {
@@ -106,10 +115,13 @@ impl Sketch {
                         b: nb,
                     });
                 }
-                CurveKind::Ellipse { .. } => out.rejected.push(RejectedLoop {
-                    curves: vec![id],
-                    reason: SketchError::UnsupportedForSolid("Ellipse".into()),
-                }),
+                CurveKind::Ellipse { .. } => match self.ellipse_loop(id) {
+                    Ok(lp) => candidates.push(Candidate::new(vec![id], lp, self.tolerance())),
+                    Err(reason) => out.rejected.push(RejectedLoop {
+                        curves: vec![id],
+                        reason,
+                    }),
+                },
                 CurveKind::Spline { points } => match (points.first(), points.last()) {
                     (Some(first), Some(last)) if points.len() >= 2 => {
                         let (na, nb) = (node(self.pos(*first)), node(self.pos(*last)));
@@ -119,9 +131,13 @@ impl Sketch {
                             b: nb,
                         });
                     }
+                    // Kann bei einer gültigen Skizze nicht auftreten (`add_spline` und das Laden
+                    // verlangen zwei Punkte); zur Sicherheit benannt statt einer Panik.
                     _ => out.rejected.push(RejectedLoop {
                         curves: vec![id],
-                        reason: SketchError::UnsupportedForSolid("Spline".into()),
+                        reason: SketchError::Degenerate(
+                            "Ein Spline braucht mindestens zwei Punkte".into(),
+                        ),
                     }),
                 },
             }
@@ -261,15 +277,19 @@ impl Sketch {
         reps: &[DVec2],
     ) -> Result<(Vec<CurveId>, ProfileLoop), SketchError> {
         let tol = self.tolerance();
-        if comp
-            .iter()
-            .any(|&e| matches!(self.curves[edges[e].curve].kind, CurveKind::Spline { .. }))
+        let is_spline =
+            |e: usize| matches!(self.curves[edges[e].curve].kind, CurveKind::Spline { .. });
+        // Ein Spline, dessen Enden zusammenfallen, ist allein eine geschlossene Schleife (ein
+        // geschlossenes Freiformsegment wie eine Vollellipse). Hängen an diesem Knoten weitere
+        // Kurven, ist das keine einfache Schleife.
+        if let Some(&e) = comp.iter().find(|&&e| edges[e].a == edges[e].b)
+            && !(comp.len() == 1 && is_spline(e))
         {
-            return Err(SketchError::UnsupportedForSolid("Spline".into()));
-        }
-        if let Some(&e) = comp.iter().find(|&&e| edges[e].a == edges[e].b) {
             let msg = match self.curves[edges[e].curve].kind {
                 CurveKind::Arc { .. } => "Ein Bogen beginnt und endet im selben Punkt",
+                CurveKind::Spline { .. } => {
+                    "Ein Spline beginnt und endet im selben Punkt, an dem weitere Kurven hängen"
+                }
                 _ => "Eine Linie hat die Länge null",
             };
             return Err(SketchError::Degenerate(msg.into()));
@@ -326,8 +346,9 @@ impl Sketch {
         for &(e, forward) in &order {
             let edge = &edges[e];
             let target = reps[if forward { edge.b } else { edge.a }];
-            let seg = match self.curves[edge.curve].kind {
-                CurveKind::Arc { center, .. } => {
+            let seg = match &self.curves[edge.curve].kind {
+                CurveKind::Spline { points } => self.spline_segment(points, forward)?,
+                &CurveKind::Arc { center, .. } => {
                     // Der Bogen läuft gegen den Uhrzeigersinn vom Knoten `a` (Start) zu `b` (Ende).
                     let c = self.pos(center);
                     let (ra, rb) = ((reps[edge.a] - c).length(), (reps[edge.b] - c).length());
@@ -351,9 +372,19 @@ impl Sketch {
                 }
                 _ => Segment::Line { to: target },
             };
+            let off_node = if let Segment::Nurbs { curve } = &seg {
+                // Der Kernel verlangt, dass ein Freiformsegment am Ende des vorigen beginnt.
+                let p = curve.point(curve.domain().0);
+                if at.distance(DVec2::new(p.x, p.y)) > tol.linear {
+                    return Err(SketchError::Degenerate(SPLINE_OFF_NODE.into()));
+                }
+                SPLINE_OFF_NODE
+            } else {
+                ARC_OFF_CIRCLE
+            };
             at = segment_end(at, &seg);
             if at.distance(target) > tol.linear {
-                return Err(SketchError::Degenerate(ARC_OFF_CIRCLE.into()));
+                return Err(SketchError::Degenerate(off_node.into()));
             }
             segments.push(seg);
         }
@@ -363,6 +394,84 @@ impl Sketch {
             return Err(SketchError::Degenerate(ARC_OFF_CIRCLE.into()));
         }
         Ok((order.iter().map(|&(e, _)| edges[e].curve).collect(), lp))
+    }
+}
+
+impl Sketch {
+    /// Schleife aus einer Ellipse der Skizze: ein geschlossenes Freiformsegment
+    /// `c + a·cos t + b·sin t` mit `b = minor · (−ay, ax)/|a|` (gegen den Uhrzeigersinn, wie
+    /// [`Sketch::ellipse_point`]).
+    fn ellipse_loop(&self, id: CurveId) -> Result<ProfileLoop, SketchError> {
+        let CurveKind::Ellipse {
+            center,
+            ax,
+            ay,
+            minor,
+        } = self.curves[id].kind
+        else {
+            return Err(SketchError::WrongType("Das ist keine Ellipse".into()));
+        };
+        let tol = self.tolerance().linear;
+        let a = DVec2::new(self.vars[ax], self.vars[ay]);
+        let minor = self.vars[minor];
+        let len = a.length();
+        if !(len.is_finite() && len > tol && minor.is_finite() && minor > tol) {
+            return Err(SketchError::Degenerate(
+                "Die Halbachsen der Ellipse müssen länger als null sein".into(),
+            ));
+        }
+        let b = a.perp() / len * minor;
+        let c = self.pos(center);
+        let curve = NurbsCurve::elliptic_arc(
+            DVec3::new(c.x, c.y, 0.0),
+            DVec3::new(a.x, a.y, 0.0),
+            DVec3::new(b.x, b.y, 0.0),
+            0.0,
+            TAU,
+        )
+        .map_err(|e| SketchError::Degenerate(format!("Die Ellipse ist ungültig: {e}")))?;
+        ProfileLoop::nurbs_loop(curve).map_err(|e| SketchError::Kernel(e.to_string()))
+    }
+
+    /// Freiformsegment eines Splines: natürlicher kubischer Spline durch die Stützpunkte mit
+    /// den Parametern `0, 1, …, n − 1` (wie [`Sketch::spline_point`]); umgekehrt, wenn die
+    /// Schleife ihn gegen seine Richtung durchläuft.
+    fn spline_segment(
+        &self,
+        points: &[crate::model::PointId],
+        forward: bool,
+    ) -> Result<Segment, SketchError> {
+        let tol = self.tolerance().linear;
+        let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
+        // `add_spline` prüft das beim Anlegen; das Lösen kann Punkte danach zusammenlegen.
+        if xy.windows(2).any(|w| w[0].distance(w[1]) <= tol) {
+            return Err(SketchError::Degenerate(
+                "Benachbarte Punkte des Splines liegen aufeinander".into(),
+            ));
+        }
+        let pts: Vec<DVec3> = xy.iter().map(|p| DVec3::new(p.x, p.y, 0.0)).collect();
+        let params: Vec<f64> = (0..pts.len()).map(|i| i as f64).collect();
+        let curve = NurbsCurve::natural_cubic(&pts, &params)
+            .map_err(|e| SketchError::Degenerate(format!("Der Spline ist ungültig: {e}")))?;
+        let seg = Segment::Nurbs {
+            curve: Arc::new(curve),
+        };
+        if forward {
+            return Ok(seg);
+        }
+        // Umkehr wie im Kernel (gespiegelte Knoten, bei Rundungsproblemen negierte Knoten).
+        let single = ProfileLoop {
+            start: xy[0],
+            segments: vec![seg],
+        };
+        let reversed = single
+            .try_reversed()
+            .map_err(|e| SketchError::Kernel(e.to_string()))?;
+        reversed
+            .segments
+            .into_iter()
+            .next()
+            .ok_or_else(|| SketchError::Degenerate("Der Spline lässt sich nicht umkehren".into()))
     }
 }
 
