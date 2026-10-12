@@ -339,6 +339,48 @@ fn a_box_cutting_a_nurbs_sphere_near_its_pole_gives_results() {
     sphere_cap_case(2.97, cap_rotations()[1], BoolOp::Difference);
 }
 
+/// Ergebnis `sphere op box` für einen Quader `x ≥ 3 − d`, der die (mit `rot` gedrehte)
+/// NURBS-Kugel r = 3 nur hauchdünn anschneidet: ein gültiger Körper mit geschlossenem Netz oder
+/// eine benannte Meldung, nie ein „gültiger“ Körper, der sich nicht vernetzen lässt. Liefert die
+/// Meldung.
+fn shallow_sphere_cut(rot: DMat4, d: f64, op: BoolOp) -> Option<String> {
+    let sphere = k().transform(&nurbs_sphere_solid(3.0), &rot).unwrap();
+    let boxx = box_solid(
+        DVec3::new(10.0 + d, 10.0, 10.0),
+        DVec3::new(3.0 - d, -5.0, -5.0),
+    );
+    match boolean(&sphere, &boxx, op, &tol()) {
+        Ok(r) => {
+            validate(&r).unwrap_or_else(|e| panic!("d {d} {op:?}: {e}"));
+            let m = tessellate(&r, &opts(0.002)).unwrap_or_else(|e| panic!("d {d} {op:?}: {e}"));
+            assert!(is_watertight(&m, 1e-6), "d {d} {op:?}: Netz offen");
+            None
+        }
+        Err(e) => {
+            assert!(!e.to_string().is_empty());
+            Some(e.to_string())
+        }
+    }
+}
+
+#[test]
+fn a_shallow_cut_across_the_seam_of_a_nurbs_sphere_is_valid_or_named() {
+    // Der Schnittkreis liegt über der Naht der Kugel, die Naht blieb ungeteilt (äußere Schleife
+    // Naht hin und zurück, der Schnittkreis als Loch über der Naht). Früher bestand das Ergebnis
+    // die Prüfung, `tessellate` lieferte `Triangulation(0)`; jetzt lehnt `validate` es ab (die
+    // Ursache, die übersehene Nahtkreuzung bei flachen Schnitten, ist eine eigene Kernel-Aufgabe).
+    let rot = cap_rotations();
+    for (r, d) in [(0, 2e-5), (1, 3e-5)] {
+        let msg = shallow_sphere_cut(rot[r], d, BoolOp::Union);
+        assert!(
+            msg.as_deref().is_some_and(|m| m.contains("Naht")),
+            "Drehung {r}, d {d}: {msg:?}"
+        );
+    }
+    // dieselbe Lage gedreht, Naht abseits: gültig und geschlossen
+    assert_eq!(shallow_sphere_cut(rot[2], 2e-5, BoolOp::Union), None);
+}
+
 #[test]
 #[ignore = "Kugel nahe dem Pol geschnitten, alle Lagen, nur mit --release --ignored (etwa 30 s)"]
 fn a_box_cutting_a_nurbs_sphere_near_its_pole_gives_results_in_all_placements() {

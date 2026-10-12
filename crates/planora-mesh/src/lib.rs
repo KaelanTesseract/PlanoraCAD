@@ -8,7 +8,7 @@ mod tessellate;
 mod trimmed;
 mod volume;
 
-pub use check::is_watertight;
+pub use check::{check_face_boundaries, is_watertight};
 pub use discretize::{Discretizer, MAX_NURBS_DIVISIONS};
 pub use mass::{MassProperties, mass_properties};
 pub use mesh::{EdgeLine, FaceRange, Mesh, TessellationOptions};

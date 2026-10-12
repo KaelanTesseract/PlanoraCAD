@@ -8,7 +8,9 @@ use planora_kernel::{
 };
 use planora_math::nurbs::{NurbsCurve, NurbsSurface};
 use planora_math::{DMat4, DVec2, DVec3, Frame, TAU, Tolerance};
-use planora_mesh::{TessellationOptions, is_watertight, mass_properties, tessellate};
+use planora_mesh::{
+    TessellationOptions, check_face_boundaries, is_watertight, mass_properties, tessellate,
+};
 
 pub fn k() -> AnalyticKernel {
     AnalyticKernel::default()
@@ -120,6 +122,7 @@ pub fn is_nurbs(s: &Surface) -> bool {
 pub fn checked_volume(s: &Solid) -> f64 {
     validate(s).unwrap_or_else(|e| panic!("validate: {e}"));
     let m = tessellate(s, &opts(0.002)).unwrap();
+    check_face_boundaries(s, &m).unwrap_or_else(|e| panic!("{e}"));
     assert!(is_watertight(&m, 1e-6), "Netz nicht geschlossen");
     mass_properties(&m).volume
 }

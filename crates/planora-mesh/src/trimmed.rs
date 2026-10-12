@@ -337,8 +337,21 @@ const MAX_EDGE_SPLIT: f64 = 16.0;
 /// [`MAX_CDT_REFINE_ROUNDS`] und [`MAX_GRID_POINTS`]. `Ok(true)`: Toleranz erreicht; `Ok(false)`:
 /// eine Grenze wurde erreicht oder der Rand ist zu grob, die Toleranz gilt nicht überall (der Aufrufer vermerkt die Fläche
 /// in `Mesh::inexact_faces`).
-fn refine_to_chord_tolerance(b: &mut Builder, surface: &Surface, tol: f64) -> Result<bool, ()> {
+///
+/// Zusätzlich bekommt jedes Dreieck, dessen drei Ecken Randpunkte sind (Index unter
+/// `n_boundary`), seinen Schwerpunkt als Innenpunkt, sobald es um mehr als [`fin_tolerance`] von
+/// der Fläche abweicht, auch unter `tol`. Sonst kann ein solches Dreieck über einem kurzen
+/// Bogenstück einer ebenen Schnittkante genau in der Ebene der Nachbarfläche liegen, die dasselbe
+/// Stück zwischen Bogen und Sehne mit denselben Randpunkten abdeckt: vier Dreiecke an einer Kante
+/// („Flosse“), das Netz wäre nicht geschlossen.
+fn refine_to_chord_tolerance(
+    b: &mut Builder,
+    surface: &Surface,
+    tol: f64,
+    n_boundary: usize,
+) -> Result<bool, ()> {
     use std::collections::HashMap;
+    let fin_tol = fin_tolerance(&b.pts3[..n_boundary.min(b.pts3.len())]);
     // Eine Randkante (Zwangskante), die selbst weiter als `tol` von der Fläche abweicht (etwa
     // weil die Kantenteilung an ihrer Obergrenze liegt), lässt sich hier nicht verbessern: Die
     // Fläche wird als ungenau gemeldet. An den Ecken solcher Randkanten gilt als Schranke die
@@ -367,6 +380,9 @@ fn refine_to_chord_tolerance(b: &mut Builder, surface: &Surface, tol: f64) -> Re
         let inner = inner_faces_by_parity(&b.cdt);
         let mut edge_bad: HashMap<(usize, usize), bool> = HashMap::new();
         let mut inserts: Vec<DVec2> = Vec::new();
+        // Schwerpunkte von Dreiecken nur aus Randpunkten (siehe oben), getrennt gezählt: Lässt
+        // sich keiner davon einfügen, ist die Sehnentoleranz trotzdem erreicht.
+        let mut fin_inserts: Vec<DVec2> = Vec::new();
         for f in b.cdt.inner_faces() {
             if !inner[f.fix().index()] {
                 continue;
@@ -414,25 +430,64 @@ fn refine_to_chord_tolerance(b: &mut Builder, surface: &Surface, tol: f64) -> Re
             let limit = idx.iter().map(|i| local(*i)).fold(tol, f64::max);
             if deviation(surface, c, avg, limit) > limit {
                 inserts.push(c);
+            } else if idx.iter().all(|i| *i < n_boundary)
+                && deviation(surface, c, avg, fin_tol) > fin_tol
+            {
+                fin_inserts.push(c);
             }
         }
-        if inserts.is_empty() {
+        if inserts.is_empty() && fin_inserts.is_empty() {
             return Ok(!limited);
         }
-        if b.pts3.len() + inserts.len() > MAX_GRID_POINTS {
-            return Ok(false);
+        if b.pts3.len() + inserts.len() + fin_inserts.len() > MAX_GRID_POINTS {
+            // Hält die Fläche die Sehnentoleranz schon ein und fehlen nur Schwerpunkte von
+            // Randdreiecken, ist sie nicht ungenau (nur diese Punkte entfallen).
+            return Ok(inserts.is_empty() && !limited);
         }
         let mut added = 0;
-        for q in inserts {
-            added += usize::from(b.add_interior(q, surface.point(q.x, q.y))?);
+        for q in &inserts {
+            added += usize::from(b.add_interior(*q, surface.point(q.x, q.y))?);
         }
-        if added == 0 {
-            // Nichts mehr einzufügen (alle Punkte lägen auf dem Rand oder einer Ecke).
-            return Ok(false);
+        let mut fins_added = 0;
+        for q in fin_inserts {
+            fins_added += usize::from(b.add_interior(q, surface.point(q.x, q.y))?);
+        }
+        if added == 0 && fins_added == 0 {
+            // Nichts mehr einzufügen (alle Punkte lägen auf dem Rand oder einer Ecke). Waren es
+            // nur Schwerpunkte von Randdreiecken, hält das Netz die Sehnentoleranz trotzdem.
+            return Ok(inserts.is_empty() && !limited);
         }
     }
     // Letzte Runde: Toleranz nur erreicht, wenn nichts mehr einzufügen wäre.
     Ok(!limited && within_chord_tolerance(b, surface, tol))
+}
+
+/// Anteil der Flächengröße (Diagonale der Randpunkte), ab dem ein Dreieck nur aus Randpunkten
+/// als von der Fläche abweichend gilt (siehe [`refine_to_chord_tolerance`]).
+const FIN_REL: f64 = 1e-9;
+
+/// Untergrenze dieser Schranke: ein Hundertstel von [`NURBS_EDGE_TOL`]. Randpunkte von
+/// Freiformflächen liegen nur bis `NURBS_EDGE_TOL` genau auf der Fläche; der Schwerpunkt eines
+/// Randdreiecks weicht darum oft schon um diesen Betrag ab. Schwerpunkte solcher Dreiecke werden
+/// dann eingefügt (wenige Punkte, unschädlich); die Schranke trennt nur ebene Dreiecke ohne
+/// messbare Abweichung (dort hilft ein zusätzlicher Punkt nicht) von gekrümmten, nicht die
+/// Größe der Abweichung ab.
+const FIN_FLOOR: f64 = NURBS_EDGE_TOL / 100.0;
+
+/// Schranke für Dreiecke nur aus Randpunkten: `FIN_REL` mal Diagonale der Randpunkte, mindestens
+/// [`FIN_FLOOR`]. Weit unter jeder üblichen Sehnentoleranz, weil die Flosse bei beliebig kleiner
+/// Bogenhöhe entsteht.
+fn fin_tolerance(boundary: &[DVec3]) -> f64 {
+    let (lo, hi) = boundary.iter().fold(
+        (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+        |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+    );
+    let size = (hi - lo).length();
+    if size.is_finite() {
+        (FIN_REL * size).max(FIN_FLOOR)
+    } else {
+        FIN_FLOOR
+    }
 }
 
 /// Abweichung eines Netzpunkts `p` (Sehnen- oder Dreiecksmitte) von der Fläche. Schnell über den
@@ -864,6 +919,8 @@ pub fn tessellate_trimmed(
         }
         handles.push(hs);
     }
+    // Randpunkte haben die Indizes `0 .. n_boundary` (vor dem Raster eingefügt).
+    let n_boundary = b.pts3.len();
 
     // Innenpunkte als Raster mit der Winkelschrittweite des Discretizers (gestreckt auf Längen):
     // so überspannt kein Dreieck mehr als etwa einen Winkelschritt und die Sehnentoleranz hält.
@@ -917,8 +974,9 @@ pub fn tessellate_trimmed(
     }
 
     if matches!(g.surface, Surface::Nurbs(_)) {
-        let exact = refine_to_chord_tolerance(&mut b, &g.surface, disc.chord_tolerance())
-            .map_err(|_| fail())?;
+        let exact =
+            refine_to_chord_tolerance(&mut b, &g.surface, disc.chord_tolerance(), n_boundary)
+                .map_err(|_| fail())?;
         if !exact {
             mesh.inexact_faces.push(Id::from_index(face_index));
         }
@@ -1070,7 +1128,7 @@ mod tests {
             b.cdt.add_constraint(hs[i], hs[(i + 1) % hs.len()]);
         }
         assert!(
-            refine_to_chord_tolerance(&mut b, &s, tol).unwrap(),
+            refine_to_chord_tolerance(&mut b, &s, tol, ring.len()).unwrap(),
             "Toleranz erreicht"
         );
         assert!(b.pts3.len() > ring.len(), "Verfeinerung fügt Punkte ein");

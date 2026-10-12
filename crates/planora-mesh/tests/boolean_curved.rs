@@ -24,6 +24,7 @@ fn vol(s: &Solid) -> f64 {
         },
     )
     .unwrap();
+    check_face_boundaries(s, &m).unwrap();
     assert!(is_watertight(&m, 1e-6), "Netz nicht geschlossen");
     mass_properties(&m).volume
 }
