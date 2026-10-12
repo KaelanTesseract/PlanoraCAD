@@ -24,6 +24,16 @@ const RAY_RANGE_SLACK: f64 = 1e-9;
 /// Newton gilt als konvergiert, wenn der Rest höchstens diesen Bruchteil des Koordinatenmaßes
 /// beträgt (weit unter der Modelltoleranz 1e-6 mm bei Teilen bis 1 m).
 const RAY_RESIDUAL_RATIO: f64 = 1e-12;
+/// Größte Teilungstiefe für Blätter ohne Entscheidung (Newton scheitert oder verlässt den
+/// Bereich an einem Pol), bevor der Strahl als unsicher gilt.
+const RAY_UNRESOLVED_DEPTH: usize = RAY_MAX_DEPTH + 4;
+/// Höchstzahl solcher Nachteilungen je Strahl (ein Strahl genau durch einen Pol trifft alle
+/// Keile um ihn; ohne Grenze wüchse die Arbeit mit jeder Stufe um das Vierfache).
+const RAY_UNRESOLVED_SPLITS: usize = 64;
+/// Neustarts vom Randpunkt, wenn ein Newton-Schritt den Bereich verlässt.
+const RAY_RIM_RESTARTS: usize = 3;
+/// Abstand des Neustarts vom Pol als Bruchteil des halben v-Bereichs.
+const RAY_POLE_NUDGE: f64 = 1e-6;
 /// Untergrenze des Koordinatenmaßes für die Restschranke (mm).
 const RAY_SCALE_FLOOR: f64 = 1.0;
 /// Ein Blatt, in dem der Strahl fast in der Tangentialebene liegt (`|dir · n| <` diesem Wert,
@@ -44,6 +54,37 @@ enum Newton {
     Failed,
 }
 
+/// Schichtprobe: Alle Kontrollpunkte des Flickens (und damit der Flicken, Gewichte positiv)
+/// liegen längs `n` im Intervall `[lo, hi]`. Liegt das Stück des Strahls im Hüllquader ganz auf
+/// einer Seite dieser Schicht, trifft er den Flicken sicher nicht.
+fn slab_excludes(
+    q: &BezierPatch,
+    n: DVec3,
+    origin: DVec3,
+    dir: DVec3,
+    reach: f64,
+    pad: f64,
+) -> bool {
+    let len = n.length();
+    if len.is_nan() || len <= 0.0 {
+        return false;
+    }
+    let n = n / len;
+    let (blo, bhi) = q.bounds();
+    let Some((ta, tb)) = ray_box_interval(origin, dir, reach, blo, bhi, pad) else {
+        return true;
+    };
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for c in &q.control {
+        let x = n.dot(*c);
+        lo = lo.min(x);
+        hi = hi.max(x);
+    }
+    let (lo, hi) = (lo - pad, hi + pad);
+    let (sa, sb) = (n.dot(origin + dir * ta), n.dot(origin + dir * tb));
+    (sa < lo && sb < lo) || (sa > hi && sb > hi)
+}
+
 /// Löst `[a b c] · x = r` (Spalten `a`, `b`, `c`) nach Cramer; `None` bei (fast) singulärem System.
 fn solve3(a: DVec3, b: DVec3, c: DVec3, r: DVec3) -> Option<[f64; 3]> {
     let det = a.dot(b.cross(c));
@@ -60,13 +101,25 @@ fn solve3(a: DVec3, b: DVec3, c: DVec3, r: DVec3) -> Option<[f64; 3]> {
 
 /// Schneidet der Strahl `origin + t·dir`, `t ∈ [0, reach]`, den Quader `[lo − pad, hi + pad]`?
 fn ray_box(origin: DVec3, dir: DVec3, reach: f64, lo: DVec3, hi: DVec3, pad: f64) -> bool {
+    ray_box_interval(origin, dir, reach, lo, hi, pad).is_some()
+}
+
+/// Parameterintervall `[t0, t1] ⊂ [0, reach]` des Strahls im Quader `[lo − pad, hi + pad]`.
+fn ray_box_interval(
+    origin: DVec3,
+    dir: DVec3,
+    reach: f64,
+    lo: DVec3,
+    hi: DVec3,
+    pad: f64,
+) -> Option<(f64, f64)> {
     let (lo, hi) = (lo - DVec3::splat(pad), hi + DVec3::splat(pad));
     let (mut t0, mut t1) = (0.0_f64, reach);
     for k in 0..3 {
         let (o, d) = (origin[k], dir[k]);
         if d == 0.0 {
             if o < lo[k] || o > hi[k] {
-                return false;
+                return None;
             }
             continue;
         }
@@ -75,10 +128,10 @@ fn ray_box(origin: DVec3, dir: DVec3, reach: f64, lo: DVec3, hi: DVec3, pad: f64
         t0 = t0.max(a);
         t1 = t1.min(b);
         if t0 > t1 {
-            return false;
+            return None;
         }
     }
-    true
+    Some((t0, t1))
 }
 
 impl NurbsSurfaceData {
@@ -108,7 +161,7 @@ impl NurbsSurfaceData {
     /// Wie [`Self::ray_hits`], aber `None`, sobald ein Blatt keine verlässliche Entscheidung
     /// erlaubt: Strahl fast in der Tangentialebene eines Blatts, das er durchquert
     /// (`|dir · n| <` [`RAY_GRAZING_COS`]), Newton ohne Konvergenz, Newton verlässt den
-    /// Bereich in einem Blatt am offenen Rand (dort liegen auch die Pole), Arbeitsgrenze überschritten,
+    /// Bereich in einem Blatt an einem Pol, Arbeitsgrenze überschritten,
     /// Zerlegung zu groß oder nicht endliche Eingaben. Der Aufrufer wählt dann einen anderen
     /// Strahl, statt zu raten.
     pub fn ray_hits_checked(
@@ -153,6 +206,7 @@ impl NurbsSurfaceData {
             .map(|q| (q.clone(), 0))
             .collect();
         let mut visits = 0usize;
+        let mut unresolved_splits = 0usize;
         let mut hits: Vec<(f64, f64, f64)> = Vec::new();
         while let Some((q, depth)) = stack.pop() {
             visits += 1;
@@ -174,36 +228,54 @@ impl NurbsSurfaceData {
                 }
                 continue;
             }
-            // Blatt: fast tangentialer Strahl ist unsicher.
+            // Blatt. Ein Blatt, das der Strahl sicher nicht trifft (Schichtprobe), braucht
+            // keine Rechnung; sonst ist ein fast tangentialer Strahl unsicher.
             let (uc, vc) = (0.5 * (q.u.0 + q.u.1), 0.5 * (q.v.0 + q.v.1));
             let n = self.normal(uc, vc);
+            if slab_excludes(&q, n, origin, dir, reach, pad) {
+                continue;
+            }
             if strict && (n == DVec3::ZERO || (dir.dot(n) / dir_len).abs() < RAY_GRAZING_COS) {
                 return None;
             }
-            match self.ray_newton(origin, dir, uc, vc, scale) {
+            let unresolved = match self.ray_newton(origin, dir, uc, vc, scale) {
                 Newton::Root(t, u, v) => {
                     if t >= 0.0 && t <= reach && self.in_patch(&q, u, v) {
                         hits.push((t, u, v));
                     }
+                    false
                 }
-                // Am offenen Rand (auch an einem Pol, der auf dem Rand liegt) kann Newton über
+                // An einem Pol ist die Parametrisierung entartet (`S_u = 0`): Newton kann über
                 // den Rand hinausschießen, obwohl der Treffer im Blatt liegt (Strahl dicht am
-                // Pol: Schritt über v = v1, der Randpunkt liegt neben dem Strahl). Dort ist
-                // „verlassen“ kein Nachweis für „kein Treffer“.
-                Newton::Left if strict && self.touches_open_rim(&q) => return None,
-                Newton::Left => {}
-                Newton::Failed if strict => return None,
-                Newton::Failed => {}
+                // Pol). Dort ist „verlassen“ kein Nachweis für „kein Treffer“. An gewöhnlichen
+                // Rändern setzt Newton vom Randpunkt neu an (`ray_newton`); die Regel für alle
+                // Ränder (Runde 1) machte Strahlen an Rändern und Nähten unnötig oft mehrdeutig.
+                Newton::Left => self.touches_pole(&q),
+                Newton::Failed => true,
+            };
+            if unresolved && strict {
+                // Weiter teilen (bis `RAY_UNRESOLVED_DEPTH`): kleinere Blätter scheiden über die
+                // Schichtprobe aus oder lassen Newton konvergieren; sonst ist der Strahl unsicher.
+                unresolved_splits += 1;
+                if depth >= RAY_UNRESOLVED_DEPTH || unresolved_splits > RAY_UNRESOLVED_SPLITS {
+                    return None;
+                }
+                for c in q.subdivide() {
+                    let (lo, hi) = c.bounds();
+                    if ray_box(origin, dir, reach, lo, hi, pad) {
+                        stack.push((c, depth + 1));
+                    }
+                }
             }
         }
         Some(sorted(hits, dir_len, scale))
     }
 
-    /// Berührt der Flicken einen Rand einer offenen Richtung (dort liegen auch die Pole)?
-    fn touches_open_rim(&self, q: &BezierPatch) -> bool {
-        let ((u0, u1), (v0, v1)) = self.surface.domain();
-        (!self.periodic_u && (q.u.0 <= u0 || q.u.1 >= u1))
-            || (!self.periodic_v && (q.v.0 <= v0 || q.v.1 >= v1))
+    /// Berührt der Flicken einen Pol (zusammengefallene Kontrollpunktreihe bei `v0` oder `v1`)?
+    fn touches_pole(&self, q: &BezierPatch) -> bool {
+        // Die Flickengrenzen am Bereichsrand sind exakt die Knotenwerte (Halbieren lässt die
+        // äußeren Grenzen unverändert), ebenso die Polwerte.
+        self.poles_v.iter().any(|pv| q.v.0 == *pv || q.v.1 == *pv)
     }
 
     /// Liegt `(u, v)` im Bereich des Flickens (± `RAY_RANGE_SLACK` der Bereichsbreite)? In
@@ -230,6 +302,7 @@ impl NurbsSurfaceData {
         let mut t = (p - origin).dot(dir) / dir.length_squared();
         let limit = RAY_RESIDUAL_RATIO * scale;
         let outside = |x: f64, a: f64, b: f64, periodic: bool| !periodic && (x < a || x > b);
+        let mut restarts = 0;
         for _ in 0..RAY_NEWTON_STEPS {
             let d = self.surface.derivs(u, v, 1);
             let r = d[0][0] - origin - dir * t;
@@ -248,7 +321,24 @@ impl NurbsSurfaceData {
                 if (s - origin - dir * tt).length() <= limit {
                     return Newton::Root(tt, cu, cv);
                 }
-                return Newton::Left;
+                // Projiziertes Newton: vom Randpunkt aus weiter. Liegt der Treffer dicht am
+                // Rand, schießt der erste Schritt aus der Blattmitte (lineares Modell eines
+                // gekrümmten Blatts) leicht über den Rand hinaus; vom Rand aus konvergiert
+                // Newton dann zum Treffer (Review Runde 2: Punkte 1e-5 neben der Kante einer
+                // Spline-Wand verloren so ihren Treffer). Erst wenn auch die Neustarts den
+                // Bereich verlassen, gilt das Blatt als ohne Treffer.
+                if restarts == RAY_RIM_RESTARTS {
+                    return Newton::Left;
+                }
+                restarts += 1;
+                // An einem Pol ist das System singulär (`S_u = 0`): ein Stück neben dem Pol
+                // neu ansetzen.
+                let cv = match self.poles_v.iter().find(|pv| **pv == cv) {
+                    Some(pv) => pv + (0.5 * (v0 + v1) - pv) * RAY_POLE_NUDGE,
+                    None => cv,
+                };
+                (u, v, t) = (cu, cv, tt);
+                continue;
             }
             (u, v) = self.wrap(nu, nv);
             t += dt;

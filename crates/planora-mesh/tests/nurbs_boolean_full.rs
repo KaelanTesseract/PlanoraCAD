@@ -461,3 +461,66 @@ fn a_large_plate_with_a_small_nurbs_hole_is_cut_again() {
 fn a_very_large_plate_with_a_small_nurbs_hole_is_cut_again() {
     plate_with_hole_and_cut(3000.0);
 }
+
+#[test]
+fn a_tilted_spline_extrusion_and_box_from_the_review_fuzz() {
+    // Runde 2, R2 (Fall 129 des Reviews): Spline-Extrusion und Quader, beide schräg gelegt. In
+    // Runde 1 meldete jede Operation „Streifschuss“ (Strahlen an Rändern galten zu oft als
+    // unsicher). Erwartet: gültige Ergebnisse, Vereinigung + Schnitt = Summe der Volumina.
+    let (profile, _) = spline_profile();
+    let h = 3.7008438563989285;
+    let ma = DMat4::from_cols_array(&[
+        0.648372740113281,
+        0.1653187233811757,
+        -0.7431571230753387,
+        0.0,
+        0.7611699349330077,
+        -0.1211872451191113,
+        0.6371294858774952,
+        0.0,
+        0.01526826879762766,
+        -0.9787662495816143,
+        -0.20441014810391542,
+        0.0,
+        -0.9685648196515544,
+        0.7633476381897619,
+        0.2606895689988644,
+        1.0,
+    ]);
+    let mb = DMat4::from_cols_array(&[
+        0.9837071549009779,
+        -0.17160174451179822,
+        0.05360106973868117,
+        0.0,
+        0.1698889418731483,
+        0.9848393914416756,
+        0.03505881478333303,
+        0.0,
+        -0.05880459867940155,
+        -0.0253813779235395,
+        0.997946794588197,
+        0.0,
+        2.4290481677130673,
+        -0.820144641122259,
+        0.220637082710464,
+        1.0,
+    ]);
+    let a = k()
+        .transform(&k().extrude(&profile, &Frame::WORLD, h).unwrap(), &ma)
+        .unwrap();
+    let size = DVec3::new(5.159688090432621, 5.48383429291366, 5.679183611338258);
+    let b = k().transform(&k().make_box(size).unwrap(), &mb).unwrap();
+    let (va, vb) = (checked_volume(&a), size.x * size.y * size.z);
+    let mut v = std::collections::HashMap::new();
+    for op in [BoolOp::Union, BoolOp::Intersection, BoolOp::Difference] {
+        let r = boolean(&a, &b, op, &tol()).unwrap_or_else(|e| panic!("{op:?}: {e}"));
+        let vol = checked_volume(&r);
+        assert!(
+            boolean_volume_plausible(op, va, vb, vol, 3e-3),
+            "{op:?}: {vol}"
+        );
+        v.insert(format!("{op:?}"), vol);
+    }
+    assert!(rel(v["Union"] + v["Intersection"], va + vb) < 3e-3, "{v:?}");
+    assert!(rel(v["Difference"] + v["Intersection"], va) < 3e-3, "{v:?}");
+}

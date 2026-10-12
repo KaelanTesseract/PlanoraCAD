@@ -267,3 +267,86 @@ fn a_cut_made_of_several_open_curves_near_the_seam_is_sewn() {
     let (ok, named) = run_tilts(6..7);
     assert_eq!((ok, named.len()), (1, 0), "{named:?}");
 }
+
+// ---- Nachbesserung Task 10, Runde 2 ----
+
+/// NURBS-Kugel r = 3 und Quader `[−5, 5]² × [h, h + 5]` (Deckel nahe dem Nordpol), beide mit
+/// `rot` gedreht: Ergebnis gültig, wasserdicht, Volumen exakt (Kugelkappe der Höhe `3 − h`).
+fn sphere_cap_case(h: f64, rot: DMat4, op: BoolOp) {
+    let sphere = k().transform(&nurbs_sphere_solid(3.0), &rot).unwrap();
+    let boxx = k()
+        .transform(
+            &box_solid(DVec3::new(10.0, 10.0, 5.0), DVec3::new(-5.0, -5.0, h)),
+            &rot,
+        )
+        .unwrap();
+    let c = 3.0 - h;
+    let cap = PI * c * c * (9.0 - c) / 3.0;
+    let (vs, vb) = (4.0 / 3.0 * PI * 27.0, 500.0);
+    let expect = match op {
+        BoolOp::Intersection => cap,
+        BoolOp::Difference => vs - cap,
+        BoolOp::Union => vs + vb - cap,
+    };
+    let r = boolean(&sphere, &boxx, op, &tol()).unwrap_or_else(|e| panic!("h {h} {op:?}: {e}"));
+    validate(&r).unwrap();
+    // Die Kappe allein ist klein und flach (Pfeilhöhe 3 − h): fein vernetzen, sonst kostet der
+    // Sehnenfehler am Kappenrand allein schon fast 1 % ihres Volumens.
+    let chord = if op == BoolOp::Intersection {
+        c / 200.0
+    } else {
+        0.002
+    };
+    let m = tessellate(&r, &opts(chord)).unwrap();
+    assert!(is_watertight(&m, 1e-6), "h {h} {op:?}: Netz offen");
+    let v = mass_properties(&m).volume;
+    let area: f64 = m
+        .indices
+        .chunks(3)
+        .map(|t| {
+            let p = |i: usize| m.positions[t[i] as usize];
+            (p(1) - p(0)).cross(p(2) - p(0)).length() / 2.0
+        })
+        .sum();
+    let limit = 3e-3 * expect + area * NURBS_EDGE_TOL;
+    assert!(
+        (v - expect).abs() <= limit,
+        "h {h} {op:?}: {v} statt {expect}"
+    );
+}
+
+/// Drehungen der Kugel-Quader-Lage: keine und zwei aus dem Startwert 0xabc8.
+fn cap_rotations() -> Vec<DMat4> {
+    let mut rng = Rng(0xabc8);
+    let mut out = vec![DMat4::IDENTITY];
+    for _ in 0..2 {
+        out.push(
+            DMat4::from_rotation_z(TAU * rng.next())
+                * DMat4::from_rotation_x(PI * rng.next())
+                * DMat4::from_rotation_y(PI * rng.next()),
+        );
+    }
+    out
+}
+
+#[test]
+fn a_box_cutting_a_nurbs_sphere_near_its_pole_gives_results() {
+    // Runde 2, R1: Der Prüfpunkt des Quaderbodens liegt nahe am Pol; in Runde 1 galt von dort
+    // jede Strahlrichtung als „am Pol vorbei“ (Streifschuss). Auswahl für den Debug-Lauf.
+    for h in [2.95, 2.99] {
+        sphere_cap_case(h, DMat4::IDENTITY, BoolOp::Intersection);
+    }
+    sphere_cap_case(2.97, cap_rotations()[1], BoolOp::Difference);
+}
+
+#[test]
+#[ignore = "Kugel nahe dem Pol geschnitten, alle Lagen, nur mit --release --ignored (etwa 30 s)"]
+fn a_box_cutting_a_nurbs_sphere_near_its_pole_gives_results_in_all_placements() {
+    for h in [2.95, 2.97, 2.99, 2.995, 2.999] {
+        for rot in cap_rotations() {
+            for op in [BoolOp::Intersection, BoolOp::Difference, BoolOp::Union] {
+                sphere_cap_case(h, rot, op);
+            }
+        }
+    }
+}

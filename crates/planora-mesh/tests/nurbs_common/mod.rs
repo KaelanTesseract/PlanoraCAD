@@ -131,3 +131,31 @@ pub fn rel(a: f64, b: f64) -> f64 {
 pub fn count_nurbs_faces(s: &Solid) -> usize {
     s.faces.iter().filter(|(_, f)| is_nurbs(&f.surface)).count()
 }
+
+/// Kugel r um den Ursprung, deren Fläche eine NURBS-Drehfläche (Halbkreis) ist; Pole auf der
+/// z-Achse (wie in `planora-kernel/tests/nurbs_ray.rs`).
+pub fn nurbs_sphere_solid(r: f64) -> Solid {
+    let mut solid = k().make_sphere(r).unwrap();
+    let half = NurbsCurve::elliptic_arc(
+        DVec3::ZERO,
+        DVec3::new(0.0, 0.0, -r),
+        DVec3::new(r, 0.0, 0.0),
+        0.0,
+        std::f64::consts::PI,
+    )
+    .unwrap();
+    let ns = NurbsSurface::revolve(&half, DVec3::ZERO, DVec3::Z, 0.0, TAU).unwrap();
+    let ((u0, u1), (v0, v1)) = ns.domain();
+    let surface = Surface::nurbs(ns, true, false).unwrap();
+    let (id, f) = solid.faces.iter().next().unwrap();
+    let p = DVec3::new(r * 0.6, r * 0.8, 0.0);
+    let (ou, ov) = f.surface.project(p);
+    let outward = f.surface.normal(ou, ov) * if f.same_sense { 1.0 } else { -1.0 };
+    let (nu, nv) = surface.project(p);
+    let same_sense = surface.normal(nu, nv).dot(outward) > 0.0;
+    let f = &mut solid.faces[id];
+    f.surface = surface;
+    f.same_sense = same_sense;
+    f.patch = Some(UvRect { u0, u1, v0, v1 });
+    solid
+}

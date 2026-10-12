@@ -46,6 +46,21 @@ pub fn solid_faces(s: &Solid) -> Vec<FaceGeom> {
     s.faces.iter().map(|(id, _)| face_geom(s, id)).collect()
 }
 
+/// Weitere feste Richtungen, die gegen Körper mit Freiformfläche nach den sechs gewöhnlichen
+/// versucht werden (dort sind wegen Randband, Polen und Streifschüssen mehr Strahlen mehrdeutig;
+/// rein analytische Körper nutzen nur die sechs, unverändert).
+fn more_directions() -> [DVec3; 6] {
+    [
+        DVec3::new(0.3187, 0.8714, -0.3729),
+        DVec3::new(-0.8236, -0.4417, -0.3555),
+        DVec3::new(0.5521, -0.6639, 0.5043),
+        DVec3::new(-0.2771, -0.1913, -0.9416),
+        DVec3::new(0.6894, 0.6181, 0.3778),
+        DVec3::new(-0.7149, 0.5338, -0.4517),
+    ]
+    .map(|d| d.normalize())
+}
+
 /// Feste, „unrunde“ Strahlrichtungen für das Strahlverfahren.
 fn directions() -> [DVec3; 6] {
     [
@@ -190,15 +205,17 @@ fn near_freeform_boundary(g: &FaceGeom, hit: DVec3, band: f64) -> bool {
     g.loops.iter().flatten().any(|s| s.closest(hit).1 <= band)
 }
 
-/// Läuft der Strahl `p + t·dir`, `t ∈ [0, reach]`, im Band `band` an einem Pol vorbei? Ein
-/// Treffer am Pol kann der Strahlrechnung entgehen (siehe `ray_hits_checked`); dann soll das
-/// Band greifen, auch wenn kein Treffer gefunden wurde.
+/// Läuft der Strahl `p + t·dir` im Band `band` an einem Pol vorbei, und zwar vorwärts
+/// (nächste Annäherung bei `0 < t ≤ reach`)? Ein Treffer am Pol kann der Strahlrechnung entgehen
+/// (siehe `ray_hits_checked`); dann soll das Band greifen, auch wenn kein Treffer gefunden wurde.
+/// Ein Strahl, der von einem Startpunkt im Band vom Pol weg läuft, zählt nicht (Runde 1 begrenzte
+/// `t` auf `[0, reach]`: dann galt von einem Punkt nahe am Pol jede Richtung als ungeeignet).
 fn passes_a_pole(d: &NurbsSurfaceData, p: DVec3, dir: DVec3, reach: f64, band: f64) -> bool {
     let u0 = d.surface().domain().0.0;
     d.poles_v().iter().any(|pv| {
         let q = d.point(u0, *pv);
-        let t = (q - p).dot(dir).clamp(0.0, reach);
-        q.distance(p + dir * t) <= band
+        let t = (q - p).dot(dir);
+        t > 0.0 && t <= reach && q.distance(p + dir * t) <= band
     })
 }
 
@@ -227,10 +244,17 @@ fn cast(
                 return None;
             }
             for (t, u, v) in d.ray_hits_checked(p, dir, reach)? {
+                let hit = p + dir * t;
                 if t <= tol.linear {
+                    // Der Startpunkt liegt auf der Fläche, ohne dass `on_surface` ihn erkannt
+                    // hat (etwa dicht an einem Pol, wo die Rückrechnung von `u` unsicher ist):
+                    // Liegt der Treffer in der Fläche, ist die Zählung unsicher; außerhalb der
+                    // beschnittenen Fläche zählt er wie bisher nicht.
+                    if point_in_face_at(g, &info.polys, hit, (u, v), tol) != Containment::Outside {
+                        return None;
+                    }
                     continue;
                 }
-                let hit = p + dir * t;
                 let n = d.normal(u, v);
                 if n == DVec3::ZERO || (dir.dot(n) / n.length()).abs() < RAY_GRAZING_COS {
                     return None;
@@ -285,7 +309,8 @@ pub(crate) const FREEFORM_RAYS_DISAGREE: &str = "Die Lage des Flächenstücks zu
 
 /// Strahlverfahren mit allen festen Richtungen, bis eine eindeutig ist.
 ///
-/// Hat der Körper eine Freiformfläche, müssen **zwei** eindeutige Richtungen dasselbe ergeben
+/// Hat der Körper eine Freiformfläche, werden nach den sechs gewöhnlichen noch sechs weitere
+/// Richtungen versucht, und **zwei** eindeutige Richtungen müssen dasselbe ergeben
 /// (Gegenprobe gegen einen übersehenen Treffer der numerischen Strahlrechnung); widersprechen sie
 /// sich: [`FREEFORM_RAYS_DISAGREE`]; gibt es keine zwei eindeutigen: [`FREEFORM_GRAZING`].
 /// Rein analytische Körper: unverändert die erste eindeutige Richtung.
@@ -299,7 +324,7 @@ fn cast_all(other: &[FaceGeom], p: DVec3, tol: &Tolerance) -> Result<bool, Boole
             .ok_or(BooleanError::AmbiguousClassification);
     }
     let mut first: Option<bool> = None;
-    for d in directions() {
+    for d in directions().into_iter().chain(more_directions()) {
         let Some(inside) = cast(other, &cache, p, d, reach, tol) else {
             continue;
         };
