@@ -675,3 +675,54 @@ fn validate_checks_nurbs_edges_against_analytic_faces() {
         Err(ValidationError::EdgeOffSurface(..))
     ));
 }
+
+/// NURBS-Kreis (r = 3 um die z-Achse, Start bei (0, 3, 0) gegen den Uhrzeigersinn) mit dem
+/// Parameterbereich `offset … offset + width` statt 0 … 1.
+fn shifted_circle(z: f64, offset: f64, width: f64) -> NurbsCurve {
+    let c = NurbsCurve::elliptic_arc(
+        DVec3::new(0.0, 0.0, z),
+        DVec3::Y * 3.0,
+        DVec3::X * -3.0,
+        0.0,
+        TAU,
+    )
+    .unwrap();
+    let knots = c
+        .knots()
+        .knots()
+        .iter()
+        .map(|k| offset + width * k)
+        .collect();
+    NurbsCurve::new(2, knots, c.control_points().to_vec(), c.weights().to_vec()).unwrap()
+}
+
+/// Geschlossener NURBS-Mantel (r = 3, h = 5) mit verschobenem u-Bereich.
+fn shifted_mantle(offset: f64, width: f64) -> Surface {
+    let s = NurbsSurface::extrude(&shifted_circle(0.0, offset, width), DVec3::Z * 5.0).unwrap();
+    Surface::nurbs(s, true, false).unwrap()
+}
+
+#[test]
+fn projection_converges_on_domains_far_from_zero() {
+    use planora_kernel::validate;
+    for (offset, width) in [(1e5, 1.0), (-100.0, 0.01)] {
+        let s = shifted_mantle(offset, width);
+        for i in 0..24 {
+            let a = 0.3 + TAU * i as f64 / 24.0;
+            let p = DVec3::new(3.0 * a.cos(), 3.0 * a.sin(), 0.2 * i as f64);
+            let (u, v) = s.project(p);
+            assert!(
+                s.point(u, v).distance(p) < 1e-9,
+                "Bereich {offset}: Abstand {}",
+                s.point(u, v).distance(p)
+            );
+            assert!(s.implicit(p).abs() < 1e-9);
+            // und von außen
+            let q = p + DVec3::new(a.cos(), a.sin(), 0.0) * 1.5;
+            let (u, v) = s.project(q);
+            assert!((s.point(u, v).distance(q) - 1.5).abs() < 1e-9);
+        }
+        let (solid, _) = extruded_cylinder_with(s);
+        validate(&solid).unwrap();
+    }
+}

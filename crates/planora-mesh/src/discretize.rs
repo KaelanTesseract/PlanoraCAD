@@ -212,6 +212,9 @@ impl Discretizer {
             (v1 - v0) / (dv1 - dv0),
         );
         for _ in 0..MAX_REFINE_ROUNDS {
+            if nu >= MAX_NURBS_DIVISIONS && nv >= MAX_NURBS_DIVISIONS {
+                break;
+            }
             let (us, vs) = (steps(u0, u1, nu), steps(v0, v1, nv));
             let grid: Vec<Vec<DVec3>> = vs
                 .iter()

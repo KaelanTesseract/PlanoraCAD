@@ -12,6 +12,8 @@ pub enum MeshError {
     MissingPatch(usize),
     #[error("Netz zu groß: mehr als 2³² Eckpunkte oder Indizes")]
     TooLarge,
+    #[error("Fläche {0}: ein Randpunkt lässt sich nicht auf die Freiformfläche zurückrechnen")]
+    OffSurface(usize),
 }
 
 /// Wandelt eine Anzahl in einen `u32`-Index um, ohne still abzuschneiden.

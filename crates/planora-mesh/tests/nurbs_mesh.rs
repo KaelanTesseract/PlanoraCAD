@@ -141,6 +141,7 @@ fn a_nurbs_sphere_with_two_poles_has_the_exact_volume_and_no_nan() {
     );
     let exact = 4.0 / 3.0 * PI * 8.0;
     assert!((mass_properties(&mesh).volume - exact).abs() / exact < 3e-3);
+    assert!(is_watertight(&mesh, 1e-9));
 }
 
 /// Zylinder (r = 3, h = 5) geschnitten mit einem großen, um die x-Achse gekippten Quader: Der
@@ -378,4 +379,215 @@ fn the_nurbs_grid_follows_bezier_pieces_curvature_and_chord_tolerance() {
     };
     let (hu, hv) = Discretizer::new(&solid, 0.01).nurbs_grid(s, &half);
     assert!(hu >= 4 && hu < nu && hv == 2, "{hu} × {hv}");
+}
+
+/// Ersetzt die einzige Zylinderfläche (Achse z, Radius `r`) durch die NURBS-Drehfläche einer
+/// Linie bei Radius `r` von `z0` bis `z1`; Patch und Randschleifen bleiben.
+fn with_nurbs_mantle(
+    analytic: &Solid,
+    r: f64,
+    z0: f64,
+    z1: f64,
+) -> (Solid, planora_kernel::Id<planora_kernel::Face>) {
+    let line = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![DVec3::new(r, 0.0, z0), DVec3::new(r, 0.0, z1)],
+        vec![1.0; 2],
+    )
+    .unwrap();
+    let nurbs = Surface::nurbs(
+        NurbsSurface::revolve(&line, DVec3::ZERO, DVec3::Z, 0.0, TAU).unwrap(),
+        true,
+        false,
+    )
+    .unwrap();
+    let mut solid = analytic.clone();
+    let ids: Vec<_> = solid
+        .faces
+        .iter()
+        .filter(|(_, f)| matches!(f.surface, Surface::Cylinder { .. }))
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(ids.len(), 1, "genau eine Zylinderfläche");
+    solid.faces[ids[0]].surface = nurbs;
+    (solid, ids[0])
+}
+
+/// Größte Abweichung der Dreiecke einer Fläche vom Zylinder (Achse z, Radius `r`), baryzentrisch
+/// abgetastet (Ecken, Kantenpunkte und Innenpunkte).
+fn mantle_deviation(
+    mesh: &planora_mesh::Mesh,
+    face: planora_kernel::Id<planora_kernel::Face>,
+    r: f64,
+) -> f64 {
+    const N: usize = 8;
+    let range = mesh.face_ranges.iter().find(|fr| fr.face == face).unwrap();
+    let first = range.first_index as usize;
+    let mut worst = 0.0_f64;
+    for t in mesh.indices[first..first + range.index_count as usize].chunks(3) {
+        let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+        for i in 0..=N {
+            for j in 0..=N - i {
+                let (wa, wb) = (i as f64 / N as f64, j as f64 / N as f64);
+                let p = a * wa + b * wb + c * (1.0 - wa - wb);
+                worst = worst.max((DVec3::new(p.x, p.y, 0.0).length() - r).abs());
+            }
+        }
+    }
+    worst
+}
+
+/// Prüft den Körper und seine NURBS-Version: beide gültig, Netz dicht, Volumen wie beim fein
+/// vernetzten analytischen Körper,
+/// Abweichung des NURBS-Mantels höchstens die Sehnentoleranz (plus 5 % für Rundung/Abtastung).
+fn check_trimmed_mantle(analytic: &Solid, r: f64, h: f64, tol: f64) {
+    planora_kernel::validate(analytic).unwrap();
+    // Bezugsvolumen: analytischer Körper, sehr fein vernetzt.
+    let expected = mass_properties(&tessellate(analytic, &opts(3e-4)).unwrap()).volume;
+    // Volumenfehler wächst mit der Sehnentoleranz (Kreiskanten der Deckel und Löcher).
+    let limit = if tol <= 0.001 { 1e-3 } else { 3e-3 };
+    let (solid, face) = with_nurbs_mantle(analytic, r, -1.0, h + 1.0);
+    planora_kernel::validate(&solid).unwrap();
+    let mesh = tessellate(&solid, &opts(tol)).unwrap();
+    assert!(
+        is_watertight(&mesh, 1e-6),
+        "Netz nicht geschlossen (tol {tol})"
+    );
+    let v = mass_properties(&mesh).volume;
+    assert!(
+        (v - expected).abs() / expected < limit,
+        "{v} statt {expected}"
+    );
+    let dev = mantle_deviation(&mesh, face, r);
+    assert!(dev <= tol * 1.05, "Abweichung {dev} bei Toleranz {tol}");
+}
+
+fn cylinder_r3_h5() -> Solid {
+    let kernel = AnalyticKernel::default();
+    let profile = Profile {
+        outer: ProfileLoop::circle(DVec2::ZERO, 3.0),
+        holes: vec![],
+    };
+    kernel.extrude(&profile, &world(), 5.0).unwrap()
+}
+
+#[test]
+fn trimmed_nurbs_faces_keep_the_chord_tolerance() {
+    use planora_kernel::boolean::{BoolOp, boolean};
+    use planora_math::{DMat4, Tolerance};
+    let kernel = AnalyticKernel::default();
+    let tol = Tolerance::default();
+    let cylinder = cylinder_r3_h5();
+    // Quader 10 × 1 × 1 entlang x durch den Mantel (zwei rechteckige Löcher).
+    let bar = kernel
+        .transform(
+            &kernel.make_box(DVec3::new(10.0, 1.0, 1.0)).unwrap(),
+            &DMat4::from_translation(DVec3::new(-5.0, -0.5, 2.0)),
+        )
+        .unwrap();
+    let holed = boolean(&cylinder, &bar, BoolOp::Difference, &tol).unwrap();
+    for c in [0.01, 0.001] {
+        check_trimmed_mantle(&holed, 3.0, 5.0, c);
+    }
+    // Schräg gekippte Scheibe (15° um x): Mantel oben und unten schräg beschnitten.
+    let slab = kernel
+        .transform(
+            &kernel.make_box(DVec3::new(20.0, 20.0, 3.0)).unwrap(),
+            &(DMat4::from_translation(DVec3::new(0.0, 0.0, 2.5))
+                * DMat4::from_rotation_x(15f64.to_radians())
+                * DMat4::from_translation(DVec3::new(-10.0, -10.0, -1.5))),
+        )
+        .unwrap();
+    let cut = boolean(&cylinder, &slab, BoolOp::Intersection, &tol).unwrap();
+    check_trimmed_mantle(&cut, 3.0, 5.0, 0.001);
+    // Diagonaler Stab (45° um z, 20° um x): schräge Löcher im Mantel.
+    let diagonal = kernel
+        .transform(
+            &kernel.make_box(DVec3::new(10.0, 1.5, 1.5)).unwrap(),
+            &(DMat4::from_translation(DVec3::new(0.0, 0.0, 2.5))
+                * DMat4::from_rotation_x(20f64.to_radians())
+                * DMat4::from_rotation_z(45f64.to_radians())
+                * DMat4::from_translation(DVec3::new(-5.0, -0.75, -0.75))),
+        )
+        .unwrap();
+    let crossed = boolean(&cylinder, &diagonal, BoolOp::Difference, &tol).unwrap();
+    for c in [0.01, 0.003, 0.001] {
+        check_trimmed_mantle(&crossed, 3.0, 5.0, c);
+    }
+}
+
+/// NURBS-Mantel (r = 3, h = 5) aus einem extrudierten Kreis mit dem u-Bereich
+/// `offset … offset + width`.
+fn shifted_mantle_solid(offset: f64, width: f64) -> Solid {
+    let mut solid = nurbs_cylinder_solid(3.0, 5.0);
+    let c =
+        NurbsCurve::elliptic_arc(DVec3::ZERO, DVec3::Y * 3.0, DVec3::X * -3.0, 0.0, TAU).unwrap();
+    let knots = c
+        .knots()
+        .knots()
+        .iter()
+        .map(|k| offset + width * k)
+        .collect();
+    let c = NurbsCurve::new(2, knots, c.control_points().to_vec(), c.weights().to_vec()).unwrap();
+    let s = Surface::nurbs(
+        NurbsSurface::extrude(&c, DVec3::Z * 5.0).unwrap(),
+        true,
+        false,
+    )
+    .unwrap();
+    let id = solid
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Nurbs(_)))
+        .map(|(id, _)| id)
+        .unwrap();
+    solid.faces[id].surface = s;
+    solid.faces[id].patch = Some(UvRect {
+        u0: offset,
+        u1: offset + width,
+        v0: 0.0,
+        v1: 1.0,
+    });
+    solid
+}
+
+#[test]
+fn nurbs_faces_with_parameters_far_from_zero_mesh_closed() {
+    for (offset, width) in [(1e5, 1.0), (-100.0, 0.01)] {
+        let solid = shifted_mantle_solid(offset, width);
+        planora_kernel::validate(&solid).unwrap();
+        let mesh = tessellate(&solid, &opts(0.01)).unwrap();
+        assert!(is_watertight(&mesh, 1e-9), "Bereich ab {offset}");
+        let exact = PI * 9.0 * 5.0;
+        let v = mass_properties(&mesh).volume;
+        assert!((v - exact).abs() / exact < 2e-3, "{v}");
+    }
+}
+
+#[test]
+fn boundary_points_off_the_nurbs_face_are_an_error_not_an_open_mesh() {
+    // Mantel mit Radius 3,1 an Kreiskanten mit Radius 3: Die Randpunkte liegen 0,1 mm neben der
+    // Fläche, die Rückrechnung führt nicht auf sie zurück.
+    let mut solid = nurbs_cylinder_solid(3.0, 5.0);
+    let (wrong, _) = with_nurbs_mantle(&cylinder_r3_h5(), 3.1, 0.0, 5.0);
+    let id = solid
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Nurbs(_)))
+        .map(|(id, _)| id)
+        .unwrap();
+    let mantle = wrong
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Nurbs(_)))
+        .unwrap()
+        .1
+        .surface
+        .clone();
+    solid.faces[id].surface = mantle;
+    assert_eq!(
+        tessellate(&solid, &opts(0.01)).unwrap_err(),
+        planora_mesh::MeshError::OffSurface(id.index())
+    );
 }

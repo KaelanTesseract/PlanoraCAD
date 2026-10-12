@@ -6,7 +6,7 @@ use crate::tessellate::{MeshError, ensure_room, index_u32};
 use planora_kernel::boolean::{
     FaceGeom, loop_points, oriented_area, points_to_uv, points_to_uv_indexed, winding,
 };
-use planora_kernel::{NurbsSurfaceData, Surface, UvRect};
+use planora_kernel::{NURBS_EDGE_TOL, NurbsSurfaceData, Surface, UvRect};
 use planora_math::nurbs::NurbsSurface;
 use planora_math::{DVec2, DVec3, TAU};
 use spade::handles::FixedVertexHandle;
@@ -102,6 +102,104 @@ fn nurbs_patch(d: &NurbsSurfaceData, polys: &[Vec<DVec2>]) -> UvRect {
     let (u0, u1) = range(lo.x, hi.x, du0, du1, d.is_periodic_u());
     let (v0, v1) = range(lo.y, hi.y, dv0, dv1, d.is_periodic_v());
     UvRect { u0, u1, v0, v1 }
+}
+
+/// Größtes Seitenverhältnis einer Rasterzelle im gestreckten Parameterraum. Ohne Grenze hätte
+/// etwa eine Regelfläche (Grad 1 in v) nur eine Innenzeile; die Delaunay-Triangulierung bildet
+/// dann an Beschnitten lange, schräge Dreiecke über viele Spalten.
+const MAX_CELL_ASPECT: f64 = 1.5;
+
+/// Verkleinert die längere Kante einer Rasterzelle (in Parametern), bis ihr Seitenverhältnis im
+/// gestreckten Raum höchstens [`MAX_CELL_ASPECT`] ist.
+fn isotropic_cell(cell: DVec2, scale: DVec2) -> DVec2 {
+    let s = cell * scale;
+    if !(s.x > 0.0 && s.y > 0.0 && s.is_finite()) {
+        return cell;
+    }
+    let mut out = cell;
+    if s.y > MAX_CELL_ASPECT * s.x {
+        out.y = MAX_CELL_ASPECT * s.x / scale.y;
+    } else if s.x > MAX_CELL_ASPECT * s.y {
+        out.x = MAX_CELL_ASPECT * s.y / scale.x;
+    }
+    out
+}
+
+/// Höchstzahl der Verfeinerungsrunden nach der Triangulierung einer Freiformfläche.
+const MAX_CDT_REFINE_ROUNDS: usize = 24;
+
+/// Zuschlag beim Teilen einer zu ungenauen Innenkante (wie `REFINE_MARGIN` beim Raster).
+const SPLIT_MARGIN: f64 = 1.2;
+
+/// Höchstzahl Stücke, in die eine Innenkante je Runde geteilt wird.
+const MAX_EDGE_SPLIT: f64 = 16.0;
+
+/// Verfeinert die Triangulierung einer Freiformfläche, bis jedes Dreieck im Inneren der Fläche
+/// höchstens um `tol` von ihr abweicht: gemessen an den Mitten der Innenkanten (Kantenmitte im
+/// Parameterraum gegen die Mitte der 3D-Sehne) und am Schwerpunkt. Zu ungenaue Innenkanten werden
+/// in der Mitte geteilt, sonst wird der Schwerpunkt eingefügt. Randkanten (Zwangskanten) bleiben
+/// unberührt, damit die Randpunkte mit den Nachbarflächen übereinstimmen. Begrenzt durch
+/// [`MAX_CDT_REFINE_ROUNDS`] und [`MAX_GRID_POINTS`] (darüber gilt die Toleranz nicht mehr
+/// garantiert, wie beim Raster).
+fn refine_to_chord_tolerance(b: &mut Builder, surface: &Surface, tol: f64) -> Result<(), ()> {
+    use std::collections::HashMap;
+    for _ in 0..MAX_CDT_REFINE_ROUNDS {
+        let inner = inner_faces_by_parity(&b.cdt);
+        let mut edge_bad: HashMap<(usize, usize), bool> = HashMap::new();
+        let mut inserts: Vec<DVec2> = Vec::new();
+        for f in b.cdt.inner_faces() {
+            if !inner[f.fix().index()] {
+                continue;
+            }
+            let mut any_bad = false;
+            for e in f.adjacent_edges() {
+                if e.is_constraint_edge() {
+                    continue;
+                }
+                let (i, j) = (e.from().fix().index(), e.to().fix().index());
+                let key = (i.min(j), i.max(j));
+                if let Some(bad) = edge_bad.get(&key) {
+                    any_bad |= *bad;
+                    continue;
+                }
+                let mid = 0.5 * (b.uv[i] + b.uv[j]);
+                let dev = surface
+                    .point(mid.x, mid.y)
+                    .distance(0.5 * (b.pts3[i] + b.pts3[j]));
+                let bad = dev > tol;
+                edge_bad.insert(key, bad);
+                if bad {
+                    // Sehnenabweichung fällt quadratisch: in k gleiche Stücke teilen.
+                    let k = ((dev / tol).sqrt() * SPLIT_MARGIN)
+                        .ceil()
+                        .clamp(2.0, MAX_EDGE_SPLIT);
+                    let k = k as usize;
+                    for m in 1..k {
+                        let t = m as f64 / k as f64;
+                        inserts.push(b.uv[i] + (b.uv[j] - b.uv[i]) * t);
+                    }
+                    any_bad = true;
+                }
+            }
+            if any_bad {
+                continue;
+            }
+            let v = f.vertices();
+            let idx = [v[0].fix().index(), v[1].fix().index(), v[2].fix().index()];
+            let c = (b.uv[idx[0]] + b.uv[idx[1]] + b.uv[idx[2]]) / 3.0;
+            let avg = (b.pts3[idx[0]] + b.pts3[idx[1]] + b.pts3[idx[2]]) / 3.0;
+            if surface.point(c.x, c.y).distance(avg) > tol {
+                inserts.push(c);
+            }
+        }
+        if inserts.is_empty() || b.pts3.len() + inserts.len() > MAX_GRID_POINTS {
+            return Ok(());
+        }
+        for q in inserts {
+            b.add(q, surface.point(q.x, q.y))?;
+        }
+    }
+    Ok(())
 }
 
 /// Abstand von `q` zur Strecke `a`–`b`.
@@ -372,6 +470,19 @@ pub fn tessellate_trimmed(
     if indexed.is_empty() || indexed.iter().any(|r| r.len() < 3) {
         return Err(fail());
     }
+    // Freiformflächen: Die Rückrechnung kann scheitern (Suche konvergiert nicht); ein Randpunkt,
+    // dessen Parameter nicht auf ihn zurückführen, ergäbe ein offenes Netz. Dann Fehler.
+    if matches!(g.surface, Surface::Nurbs(_)) {
+        for (ring, pts) in indexed.iter().zip(rings.iter()) {
+            for (q, src) in ring {
+                if let Some(i) = src
+                    && g.surface.point(q.x, q.y).distance(pts[*i]) > NURBS_EDGE_TOL
+                {
+                    return Err(MeshError::OffSurface(face_index));
+                }
+            }
+        }
+    }
     align_holes(&g.surface, &mut indexed).map_err(|_| fail())?;
     let polys: Vec<Vec<DVec2>> = indexed
         .iter()
@@ -410,9 +521,12 @@ pub fn tessellate_trimmed(
         Surface::Nurbs(d) => {
             let patch = nurbs_patch(d, &polys);
             let (nu, nv) = disc.nurbs_grid(d.surface(), &patch);
-            let cell = DVec2::new(
-                (patch.u1 - patch.u0) / nu as f64,
-                (patch.v1 - patch.v0) / nv as f64,
+            let cell = isotropic_cell(
+                DVec2::new(
+                    (patch.u1 - patch.u0) / nu as f64,
+                    (patch.v1 - patch.v0) / nv as f64,
+                ),
+                scale,
             );
             grid_points_cells(&polys, scale, cell, sign)?
         }
@@ -442,6 +556,11 @@ pub fn tessellate_trimmed(
             }
             b.cdt.add_constraint(p, q);
         }
+    }
+
+    if matches!(g.surface, Surface::Nurbs(_)) {
+        refine_to_chord_tolerance(&mut b, &g.surface, disc.chord_tolerance())
+            .map_err(|_| fail())?;
     }
 
     // Dreiecke der Fläche: Flutfüllung über die Triangulierung, beginnend außen (Außengebiet
@@ -545,6 +664,71 @@ mod tests {
             tessellate_trimmed(&geom(s), &[outer, hole], &disc(), &mut mesh, 7),
             Err(MeshError::Triangulation(7))
         );
+    }
+
+    /// Ohne Innenraster (nur ein fein geteilter Rand) füllt die Verfeinerung die Fläche so,
+    /// dass jedes Dreieck die Sehnentoleranz einhält.
+    #[test]
+    fn refinement_alone_reaches_the_chord_tolerance() {
+        use planora_math::nurbs::{NurbsCurve, NurbsSurface};
+        // Kugel (r = 2) als Drehfläche eines Halbkreises: in beiden Richtungen gekrümmt.
+        let half = NurbsCurve::elliptic_arc(
+            DVec3::ZERO,
+            DVec3::new(0.0, 0.0, 2.0),
+            DVec3::new(2.0, 0.0, 0.0),
+            std::f64::consts::PI,
+            -std::f64::consts::PI,
+        )
+        .unwrap();
+        let s = Surface::nurbs(
+            NurbsSurface::revolve(&half, DVec3::ZERO, DVec3::Z, 0.0, TAU).unwrap(),
+            true,
+            false,
+        )
+        .unwrap();
+        let tol = 0.001;
+        // Rechteck u ∈ [0, 1,5], v ∈ [0,3, 0,7], alle Seiten fein geteilt (Sehne ≪ tol).
+        let n = 200;
+        let side = |a: DVec2, b: DVec2| (0..n).map(move |k| a + (b - a) * (k as f64 / n as f64));
+        let c = [
+            DVec2::new(0.0, 0.3),
+            DVec2::new(1.5, 0.3),
+            DVec2::new(1.5, 0.7),
+            DVec2::new(0.0, 0.7),
+        ];
+        let ring: Vec<DVec2> = (0..4).flat_map(|i| side(c[i], c[(i + 1) % 4])).collect();
+        let mut b = Builder {
+            cdt: Cdt::new(),
+            scale: DVec2::new(2.0, 6.0),
+            pts3: Vec::new(),
+            uv: Vec::new(),
+        };
+        let hs: Vec<_> = ring
+            .iter()
+            .map(|q| b.add(*q, s.point(q.x, q.y)).unwrap())
+            .collect();
+        for i in 0..hs.len() {
+            b.cdt.add_constraint(hs[i], hs[(i + 1) % hs.len()]);
+        }
+        refine_to_chord_tolerance(&mut b, &s, tol).unwrap();
+        assert!(b.pts3.len() > ring.len(), "Verfeinerung fügt Punkte ein");
+        let inner = inner_faces_by_parity(&b.cdt);
+        let mut worst = 0.0_f64;
+        for f in b.cdt.inner_faces() {
+            if !inner[f.fix().index()] {
+                continue;
+            }
+            let v = f.vertices();
+            let p = [0, 1, 2].map(|k| b.pts3[v[k].fix().index()]);
+            for i in 0..=8 {
+                for j in 0..=8 - i {
+                    let (wa, wb) = (i as f64 / 8.0, j as f64 / 8.0);
+                    let q = p[0] * wa + p[1] * wb + p[2] * (1.0 - wa - wb);
+                    worst = worst.max((2.0 - q.length()).abs());
+                }
+            }
+        }
+        assert!(worst <= tol * 1.05, "Abweichung {worst}");
     }
 
     #[test]

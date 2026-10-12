@@ -22,8 +22,13 @@ const GRID_MAX_POINTS: usize = 250_000;
 const NEWTON_STARTS: usize = 3;
 /// Höchstzahl Newton-Schritte je Start.
 const NEWTON_STEPS: usize = 40;
-/// Newton endet, wenn der Schritt kleiner als dieser Bruchteil des Parameterbereichs ist.
+/// Newton endet, wenn der Schritt kleiner als dieser Bruchteil des Parameterbereichs ist
+/// (oder kleiner als die Auflösung des Parameters, siehe `PARAM_RESOLUTION_ULPS`).
 const STEP_RATIO: f64 = 1e-12;
+/// Auflösung eines Parameterwerts in Vielfachen von `f64::EPSILON · |Wert|`: Liegt der Bereich
+/// weit von 0 (etwa `[1e5, 1e5 + 1]`), ist ein Schritt von `STEP_RATIO` · Bereich in `f64` gar
+/// nicht darstellbar; dann gilt die Auflösung als Schrittgrenze und als Rest beim Gradienten.
+const PARAM_RESOLUTION_ULPS: f64 = 4.0;
 /// Größter Newton-Schritt je Richtung als Bruchteil des Parameterbereichs (Dämpfung).
 const MAX_STEP_FRACTION: f64 = 0.5;
 /// Höchstzahl Halbierungen des Schritts, bis der Abstand sinkt.
@@ -623,12 +628,16 @@ impl NurbsSurfaceData {
     /// Richtung am Rand ist fest, wenn der Abstieg (−Gradient) nach außen zeigt; für die freien
     /// Richtungen wird das verkleinerte System gelöst und geprüft, ob deren Schritt nun selbst
     /// über einen Rand führt (dann auch fest). `Some((u, v, Abstand))` bei Konvergenz: Schritt
-    /// kleiner als `STEP_RATIO` · Bereich, oder kein Abstieg mehr möglich **und** der Gradient in
+    /// kleiner als `STEP_RATIO` · Bereich (mindestens die Parameterauflösung), oder kein Abstieg mehr möglich **und** der Gradient in
     /// den freien Richtungen ist null (bis auf `ORTHO_TOL`/`ROUND_TOL`). Sonst `None`.
     fn newton(&self, p: DVec3, mut u: f64, mut v: f64) -> Option<(f64, f64, f64)> {
         let ((u0, u1), (v0, v1)) = self.surface.domain();
         let (ru, rv) = (u1 - u0, v1 - v0);
         let (pu, pv) = (self.periodic_u, self.periodic_v);
+        // Kleinster darstellbarer Parameterschritt je Richtung (absolut).
+        let resolution =
+            |a: f64, b: f64| PARAM_RESOLUTION_ULPS * f64::EPSILON * a.abs().max(b.abs());
+        let (res_u, res_v) = (resolution(u0, u1), resolution(v0, v1));
         let dist2 = |u: f64, v: f64| self.surface.point(u, v).distance_squared(p);
         let mut f = dist2(u, v);
         for _ in 0..NEWTON_STEPS {
@@ -714,9 +723,12 @@ impl NurbsSurfaceData {
             // Stationär in den freien Richtungen?
             let size = d[0][0].abs().max(p.abs()).max_element();
             let rl = r.length();
-            let flat =
-                |gi: f64, si: DVec3| gi.abs() <= si.length() * (ORTHO_TOL * rl + ROUND_TOL * size);
-            let stationary = (fix[0] || flat(g[0], su)) && (fix[1] || flat(g[1], sv));
+            // Rest durch die Parameterauflösung: `|S_i| · res_i` Abstand ist nicht zu unterbieten.
+            let flat = |gi: f64, si: DVec3, res: f64| {
+                let l = si.length();
+                gi.abs() <= l * (ORTHO_TOL * rl + ROUND_TOL * size + l * res)
+            };
+            let stationary = (fix[0] || flat(g[0], su, res_u)) && (fix[1] || flat(g[1], sv, res_v));
             if !step[0].is_finite() || !step[1].is_finite() {
                 return None;
             }
@@ -732,10 +744,10 @@ impl NurbsSurfaceData {
                 // Kein Abstieg mehr möglich: nur bei verschwindendem Gradienten ein Minimum.
                 return stationary.then(|| (u, v, f.sqrt()));
             };
-            let step_u = periodic_delta(nu - u, ru, pu).abs() / ru;
-            let step_v = periodic_delta(nv - v, rv, pv).abs() / rv;
+            let step_u = periodic_delta(nu - u, ru, pu).abs();
+            let step_v = periodic_delta(nv - v, rv, pv).abs();
             (u, v, f) = (nu, nv, fnew);
-            if step_u.max(step_v) < STEP_RATIO {
+            if step_u < (STEP_RATIO * ru).max(res_u) && step_v < (STEP_RATIO * rv).max(res_v) {
                 return Some((u, v, f.sqrt()));
             }
         }
