@@ -215,6 +215,13 @@ Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen m
 - Das gilt genauso für Splines, die mit Linien oder Bögen eine geschlossene Schleife bilden.
 - Ein Test (`old_documents_may_extrude_a_different_profile` in `planora-feature/tests/nurbs_features.rs`) hält den ersten Fall fest, damit eine spätere Änderung bewusst geschieht. Abhilfe wäre ein dauerhafter Verweis auf das Profil statt der Nummer (eigene Aufgabe).
 
+**Schnitt von Freiformflächen (Stand nach Task 8)**
+- *Seltene Lücke (bekannte Grenze):* Liegt ein kurzes Stück Schnittkurve direkt neben einer schon gefundenen geschlossenen Schnittkurve, kann es fehlen, ohne dass eine Meldung kommt. Das betrifft etwa 7 von 1000 Fällen mit einer Freiform- und einer einfachen Fläche und etwa 1 von 100 Fällen mit zwei Freiformflächen; die Lücken sind 1 bis 3 tausendstel Millimeter groß. Folge: Eine Boolesche Operation mit Freiformflächen kann in seltenen Fällen ein falsches Ergebnis liefern. Die Prüfung des fertigen Körpers erkennt die meisten dieser Fälle und meldet dann einen Fehler statt eines falschen Körpers, aber nicht alle. Das Problem besteht seit der ersten Fassung des Schnittrechners.
+- *Ränder zweier Freiformflächen:* Wo eine Fläche den Rand der anderen schneidet, findet der Rechner die Schnittpunkte in der Praxis zuverlässig. Bewiesen ist das nicht: Er nimmt an, dass ein kleines Flächenstück keine Falten hat, und prüft einen Teilschritt nicht vollständig.
+- *Flache Randberührungen:* Streift eine Fläche den Rand der anderen nur knapp, liefert der Rechner alle Schnittkurven oder lehnt mit „nahezu tangential“ ab, nie nur einen Teil. Auch Fälle, die eigentlich lösbar wären (Eintauchtiefe ab 1 hundertstel Millimeter), werden manchmal abgelehnt (im Test etwa 1 von 13 Fällen, bei zwei Beulenflächen rund die Hälfte). Idee: die Flächenstücke nach Größe statt nach fester Tiefe teilen und einen zusätzlichen Ausschlusstest einbauen.
+- *Berührung statt Schnitt:* Zwei Flächen, die sich nur berühren (tangential eintauchen), werden jetzt immer abgelehnt. Zwei gleich dicke Zylinder auf derselben Achse, die sich um 1 bis 10 tausendstel Millimeter überlappen, gelten als „Berührung“.
+- *Geschwindigkeit:* Die Suche nach dem nächsten Punkt auf einer Freiformfläche ist für Punkte etwas abseits der Fläche (0,3 mm) bei kleinen Beulenflächen bis etwa dreimal langsamer als vorher; nahe an der Fläche ist sie gleich schnell.
+
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).
 - `eframe` mit Standard-Features baut auch den `glow`-Renderer mit.
