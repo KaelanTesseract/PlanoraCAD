@@ -53,15 +53,20 @@ const MAX_PROBES: usize = 120_000;
 const CONVERGE_REL: f64 = 1e-9;
 const COORD_ULPS: f64 = 64.0;
 /// Zwei Punkte (Startpunkte, Kurvenenden, Prüfung „dieselbe Kurve“) gelten als gleich, wenn sie
-/// höchstens `max(tol.linear, SAME_REL · Diagonale)` auseinander liegen (das Hundertfache der
-/// Konvergenzschranke; bei großen Teilen wächst die Schranke mit).
-const SAME_REL: f64 = 1e-7;
+/// höchstens `max(tol.linear, SAME_FACTOR · Konvergenzschranke)` auseinander liegen (bei großen
+/// Teilen wächst die Schranke mit der Konvergenzschranke).
+const SAME_FACTOR: f64 = 100.0;
 /// `|g_a × g_b|` darunter: Normalen parallel (tangentiale Berührung).
 const PARALLEL_NORMALS: f64 = 1e-4;
 /// Größte Schrittweite = Diagonale / `STEP_DIVISOR`.
 const STEP_DIVISOR: f64 = 200.0;
-/// Kleinste Schrittweite (mm).
+/// Kleinste Schrittweite (mm), bei kleinen Teilen `H_MIN_REL · Diagonale` (mindestens das
+/// Hundertfache der Koordinatenauflösung).
 const H_MIN: f64 = 1e-4;
+const H_MIN_REL: f64 = 1e-5;
+/// Die Konvergenzschranke bleibt höchstens dieser Anteil von `NURBS_FIT_TOL` (sonst könnten bei
+/// großen Teilen die verfolgten Punkte selbst die Prüfung der Annäherung nicht bestehen).
+const EPS_FIT_FRACTION: f64 = 0.01;
 /// Sehnenfehler der Polylinie je Schritt (mm), mindestens; mit der Größe wachsend
 /// (`MARCH_SAGITTA_REL · Diagonale`). Die Kurve selbst hält `NURBS_FIT_TOL` über die geprüfte
 /// Annäherung ein (die kubische Annäherung ist zwischen den Punkten weit genauer als die Sehne);
@@ -305,6 +310,9 @@ fn on_open_edge(d: &NurbsSurfaceData, u: f64, v: f64) -> bool {
 }
 
 type CellKey = (i64, i64, i64);
+/// Schlüssel eines Flickens bzw. einer Randkurve: Seite, Kennzeichen und vier Parameterwerte
+/// (als Bitmuster).
+type PieceKey = (bool, u64, u64, u64, u64);
 
 struct Ssi<'a> {
     a: Side<'a>,
@@ -319,6 +327,8 @@ struct Ssi<'a> {
     /// Sehnenfehler je Schritt (siehe `MARCH_SAGITTA`).
     sagitta: f64,
     h_max: f64,
+    /// Kleinste Schrittweite (siehe `H_MIN`).
+    h_min: f64,
     polys: Vec<Poly>,
     grid: HashMap<CellKey, Vec<(usize, usize)>>,
     cell: f64,
@@ -326,6 +336,10 @@ struct Ssi<'a> {
     edge_visits: usize,
     candidates: usize,
     probes: Cell<usize>,
+    /// Ergebnis von `piece_far` je Flicken (Seite, Parameterbereich).
+    far_cache: std::cell::RefCell<HashMap<PieceKey, bool>>,
+    /// Schon nach Nullstellen abgesuchte Randkurven (Seite, Richtung, fester Wert, Bereich).
+    done_edges: std::collections::HashSet<PieceKey>,
     /// Größte Diagonale eines Kandidaten-Flickens.
     max_patch: f64,
     /// Gezählte Startpunkte, Berührpunkte, Zweige.
@@ -345,17 +359,22 @@ impl<'a> Ssi<'a> {
             },
         );
         let diag = (hi - lo).length();
-        let h_max = (diag / STEP_DIVISOR).max(H_MIN);
         let res = COORD_ULPS * f64::EPSILON * lo.abs().max(hi.abs()).max_element();
+        let h_min = (H_MIN_REL * diag).min(H_MIN).max(100.0 * res);
+        let h_max = (diag / STEP_DIVISOR).max(h_min);
+        // Bei großen Koordinaten begrenzt die Auflösung von f64 die erreichbare Genauigkeit.
+        let eps = (CONVERGE_REL * diag.max(1.0))
+            .min(EPS_FIT_FRACTION * NURBS_FIT_TOL)
+            .max(res);
         Ssi {
             a: sa,
             b: sb,
             tol,
             diag,
-            // Bei großen Koordinaten begrenzt die Auflösung von f64 die erreichbare Genauigkeit.
-            eps: (CONVERGE_REL * diag.max(1.0)).max(res),
+            eps,
             res,
-            same: tol.linear.max(SAME_REL * diag),
+            same: tol.linear.max(SAME_FACTOR * eps),
+            h_min,
             sagitta: MARCH_SAGITTA.max(MARCH_SAGITTA_REL * diag),
             h_max,
             polys: Vec::new(),
@@ -365,6 +384,8 @@ impl<'a> Ssi<'a> {
             edge_visits: 0,
             candidates: 0,
             probes: Cell::new(0),
+            far_cache: std::cell::RefCell::new(HashMap::new()),
+            done_edges: std::collections::HashSet::new(),
             max_patch: seeds::max_patch(a, b, diag),
             starts: Vec::new(),
             touches: Vec::new(),

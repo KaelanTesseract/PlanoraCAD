@@ -4,8 +4,8 @@
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use super::{
-    H_MIN, Hints, MAX_SEEDS, MAX_SUBDIVISION_DEPTH, MSG_NEAR_TANGENT, MSG_NUMERIC,
-    PARALLEL_NORMALS, Probe, Side, Ssi, msg_too_many_seeds,
+    Hints, MAX_SEEDS, MAX_SUBDIVISION_DEPTH, MSG_NEAR_TANGENT, MSG_NUMERIC, PARALLEL_NORMALS,
+    Probe, Side, Ssi, msg_too_many_seeds,
 };
 use crate::geometry::Surface;
 use crate::nurbs_surface::NurbsSurfaceData;
@@ -22,10 +22,12 @@ const SEED_PATCH_FRACTION: f64 = 1.0 / 16.0;
 const SEED_FEATURE_FACTOR: f64 = 1.0;
 /// Absolute Untergrenze der Flickenausdehnung (mm), unter der nicht mehr unterteilt wird.
 const MIN_PATCH_DIAG: f64 = 1e-4;
+/// … bei kleinen Teilen dieser Anteil der Gesamtdiagonale.
+const MIN_PATCH_REL: f64 = 1e-5;
 /// Höchstzahl geprüfter Flicken bzw. Flickenpaare bei der Unterteilung (Arbeitsgrenze).
 const MAX_PATCH_VISITS: usize = 200_000;
 /// Höchstzahl Kandidaten-Flicken (jeder liefert höchstens einen Startpunkt).
-const MAX_CANDIDATES: usize = 8 * MAX_SEEDS;
+const MAX_CANDIDATES: usize = 32 * MAX_SEEDS;
 /// Höchstzahl Newton-Schritte bei der Suche eines Startpunkts.
 const SEED_NEWTON_STEPS: usize = 50;
 /// Newton endet vorzeitig, wenn der beste Rest in `STAGNATION_STEPS` Schritten nicht wenigstens
@@ -112,7 +114,7 @@ enum ConeCheck {
 pub(super) struct SeedResult {
     pub(super) found: Option<Probe>,
     last: Option<Probe>,
-    residual: f64,
+    pub(super) residual: f64,
 }
 
 fn bounds(p: &BezierPatch) -> (DVec3, DVec3) {
@@ -550,19 +552,50 @@ impl Ssi<'_> {
         })
     }
 
+    /// Liegt der Freiform-Flicken (Seite a, wenn `side_a`) sicher fern der ganzen anderen
+    /// Freiformfläche? Der Abstand zu ihr ist 1-Lipschitz: Ist er an der Mitte des Hüllquaders
+    /// größer als dessen halbe Diagonale, trifft kein Punkt des Flickens die andere Fläche (also
+    /// auch keinen ihrer Flicken). Je Flicken einmal berechnet.
+    fn piece_far(&self, side_a: bool, piece: &Piece) -> bool {
+        let p = &piece.p;
+        let key = (
+            side_a,
+            p.u.0.to_bits(),
+            p.u.1.to_bits(),
+            p.v.0.to_bits(),
+            p.v.1.to_bits(),
+        );
+        if let Some(far) = self.far_cache.borrow().get(&key) {
+            return *far;
+        }
+        let (lo, hi) = bounds(p);
+        let c = (lo + hi) * 0.5;
+        let r = 0.5 * (hi - lo).length();
+        let other = if side_a { &self.b } else { &self.a };
+        let far = matches!(
+            self.eval_side(other, c, None),
+            Ok(Some(e)) if e.f.abs() > r + self.tol.linear
+        );
+        self.far_cache.borrow_mut().insert(key, far);
+        far
+    }
+
     fn keep(&self, n: &Node) -> bool {
         match (&n.a, &n.b) {
             (Some(p), None) => !self.excluded_by(&self.b, &p.p),
             (None, Some(p)) => !self.excluded_by(&self.a, &p.p),
-            (Some(p), Some(q)) => !self.pair_excluded(p, q),
+            (Some(p), Some(q)) => {
+                !(self.pair_excluded(p, q) || self.piece_far(true, p) || self.piece_far(false, q))
+            }
             (None, None) => false,
         }
     }
 
     /// Ist die Richtung noch teilbar?
-    fn can_split(piece: &Piece, along_u: bool) -> bool {
+    fn can_split(&self, piece: &Piece, along_u: bool) -> bool {
         let k = if along_u { 0 } else { 1 };
-        piece.depth[k] < MAX_SUBDIVISION_DEPTH && extent(&piece.p, along_u) >= MIN_PATCH_DIAG
+        piece.depth[k] < MAX_SUBDIVISION_DEPTH
+            && extent(&piece.p, along_u) >= MIN_PATCH_DIAG.min(MIN_PATCH_REL * self.diag)
     }
 
     /// Muss ein Flicken wegen Größe oder Wölbung geteilt werden? Seite und Richtung (die längere).
@@ -575,7 +608,7 @@ impl Ssi<'_> {
                 continue;
             }
             let (eu, ev) = (extent(&piece.p, true), extent(&piece.p, false));
-            let dir = match (Self::can_split(piece, true), Self::can_split(piece, false)) {
+            let dir = match (self.can_split(piece, true), self.can_split(piece, false)) {
                 (true, true) => eu >= ev,
                 (true, false) => true,
                 (false, true) => false,
@@ -660,7 +693,7 @@ impl Ssi<'_> {
                     score: spread + gamma * ext,
                     side_a: is_a,
                     along_u,
-                    splittable: Self::can_split(own.piece, along_u),
+                    splittable: self.can_split(own.piece, along_u),
                 });
             }
         }
@@ -800,15 +833,15 @@ impl Ssi<'_> {
     fn candidate(&mut self, n: &Node, limit: bool) -> Result<(), String> {
         let (start, hints, lo, hi) = self.cand_start(n);
         let size = (hi - lo).length();
-        self.candidates += 1;
-        if self.candidates > MAX_CANDIDATES {
-            return Err(format!(
-                "Zu viele Schnittbereiche (mehr als {MAX_CANDIDATES} Kandidaten-Flicken)"
-            ));
-        }
+        // Gezählt werden Kandidaten, die Arbeit verursachen (angenommene Kandidaten, deren
+        // Randkurven schon alle abgesucht sind, kosten nichts).
         if !limit {
-            return self.edge_seeds(n);
+            if self.edge_seeds(n)? {
+                self.count_candidate()?;
+            }
+            return Ok(());
         }
+        self.count_candidate()?;
         // Grenz-Kandidaten an einer schon eingeordneten Berührung (etwa längs einer Berührlinie
         // oder eines gemeinsamen Rands) brauchen keinen eigenen Startpunkt.
         let m = DVec3::splat(size);
@@ -830,6 +863,16 @@ impl Ssi<'_> {
             },
             None => Err(MSG_NEAR_TANGENT.into()),
         }
+    }
+
+    fn count_candidate(&mut self) -> Result<(), String> {
+        self.candidates += 1;
+        if self.candidates > MAX_CANDIDATES {
+            return Err(format!(
+                "Zu viele Schnittbereiche (mehr als {MAX_CANDIDATES} Kandidaten-Flicken)"
+            ));
+        }
+        Ok(())
     }
 
     /// Neuer Startpunkt: Duplikate und Punkte auf verfolgten Kurven entfallen; sonst gezählt und
@@ -882,7 +925,7 @@ impl Ssi<'_> {
 
     /// Berührpunkt: Punkte nahe einem schon eingeordneten (innerhalb der Kandidatengröße, etwa
     /// längs einer Berührlinie) zählen nicht erneut.
-    fn handle_touch(&mut self, s: Probe) -> Result<(), String> {
+    pub(super) fn handle_touch(&mut self, s: Probe) -> Result<(), String> {
         if self
             .touches
             .iter()
@@ -911,7 +954,7 @@ impl Ssi<'_> {
     pub(super) fn refine_seed(&self, start: DVec3, hints: Hints) -> Result<SeedResult, String> {
         let mut q = start;
         let mut hints = hints;
-        let max_move = SEED_MAX_MOVE * self.diag.max(H_MIN);
+        let max_move = SEED_MAX_MOVE * self.diag.max(self.h_min);
         let mut history: Vec<f64> = Vec::new();
         let mut last: Option<Probe> = None;
         let mut best = f64::INFINITY;

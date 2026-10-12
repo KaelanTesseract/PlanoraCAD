@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use super::{
-    CellKey, H_MIN, Hints, MAX_CURVE_LENGTH_FACTOR, MAX_MARCH_STEPS, MSG_BRANCH, MSG_LOST,
-    MSG_SINGULAR, MSG_TANGENTIAL, PARALLEL_NORMALS, Probe, Ssi, msg_too_long, msg_too_many_steps,
+    CellKey, Hints, MAX_CURVE_LENGTH_FACTOR, MAX_MARCH_STEPS, MSG_BRANCH, MSG_LOST, MSG_SINGULAR,
+    MSG_TANGENTIAL, PARALLEL_NORMALS, Probe, Ssi, msg_too_long, msg_too_many_steps,
 };
 use planora_math::DVec3;
 
@@ -167,7 +167,7 @@ impl Ssi<'_> {
     /// Ein Schritt von `p` in Richtung `t` mit Schrittweite `h` (wird bei Bedarf halbiert).
     fn step(&self, p: &Probe, t: DVec3, sign: f64, h: &mut f64) -> Result<Step, String> {
         loop {
-            let at_min = *h <= H_MIN;
+            let at_min = *h <= self.h_min;
             let pred = p.q + t * *h;
             let corr = self.correct(pred, pred, t, p.hints(), CORRECT_REACH * *h, self.eps)?;
             let corr_kind = match corr {
@@ -222,7 +222,7 @@ impl Ssi<'_> {
             if at_min {
                 return Err(fail.into());
             }
-            *h = (*h * 0.5).max(H_MIN);
+            *h = (*h * 0.5).max(self.h_min);
         }
     }
 
@@ -278,7 +278,7 @@ impl Ssi<'_> {
         hints: Hints,
         scale: f64,
     ) -> Result<Option<Probe>, String> {
-        let reach = CORRECT_REACH * scale.max(start.distance(plane)).max(H_MIN);
+        let reach = CORRECT_REACH * scale.max(start.distance(plane)).max(self.h_min);
         Ok(
             match self.correct(start, plane, t, hints, reach, self.eps)? {
                 Corr::Ok(q) => Some(q),
@@ -484,7 +484,7 @@ impl Ssi<'_> {
         let mut p = *seed;
         let mut t = self.tangent(&p).ok_or(MSG_TANGENTIAL)? * sign;
         let mut h = self.h_max;
-        let max_len = MAX_CURVE_LENGTH_FACTOR * self.diag.max(H_MIN);
+        let max_len = MAX_CURVE_LENGTH_FACTOR * self.diag.max(self.h_min);
         // Für die Suche tangentialer Stellen: vorletzter Punkt und die letzten beiden |g_a × g_b|.
         let mut before = *seed;
         let mut sin_before = f64::INFINITY;
@@ -550,7 +550,9 @@ impl Ssi<'_> {
             } else {
                 self.h_max
             };
-            h = by_curvature.clamp(H_MIN, self.h_max).min(MAX_GROWTH * h);
+            h = by_curvature
+                .clamp(self.h_min, self.h_max)
+                .min(MAX_GROWTH * h);
             p = q;
             t = st.t;
         }

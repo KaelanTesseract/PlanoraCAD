@@ -549,11 +549,12 @@ impl NurbsSurfaceData {
             .into_iter()
             .flatten()
             .min_by(|a, b| a.2.total_cmp(&b.2));
-        // Immer noch nichts oder am Rand: feineres Raster in den Zellen um den besten
+        // Immer noch nichts oder ein verdächtiger Randpunkt (der Abstieg zeigt dort ins Innere,
+        // es ist also kein echtes Randminimum): feineres Raster in den Zellen um den besten
         // Rasterpunkt (steile Ecken: eine Rasterzelle ist dort im Raum groß, und keiner der
         // groben Startpunkte liegt im Einzugsbereich).
         let result = match result {
-            Some(r) if !self.on_open_edge(r.0, r.1) => Some(r),
+            Some(r) if !self.on_open_edge(r.0, r.1) || self.edge_minimum_ok(p, r.0, r.1) => Some(r),
             r => [r, run(self.refined_starts(p, best.0))]
                 .into_iter()
                 .flatten()
@@ -572,6 +573,21 @@ impl NurbsSurfaceData {
                 .min_by(|a, b| a.2.total_cmp(&b.2)),
             r => r,
         }
+    }
+
+    /// Ist der Randpunkt `(u, v)` ein echtes Randminimum des Abstands zu `p`? In jeder Richtung,
+    /// die am Rand liegt, muss der Abstieg (−Gradient) nach außen zeigen (oder null sein).
+    fn edge_minimum_ok(&self, p: DVec3, u: f64, v: f64) -> bool {
+        let ((u0, u1), (v0, v1)) = self.surface.domain();
+        let d = self.surface.derivs(u, v, 1);
+        let r = d[0][0] - p;
+        let (gu, gv) = (r.dot(d[1][0]), r.dot(d[0][1]));
+        let size = d[0][0].abs().max(p.abs()).max_element();
+        let slack = |s: DVec3| s.length() * (ORTHO_TOL * r.length() + ROUND_TOL * size);
+        let ok = |x: f64, a: f64, b: f64, g: f64, periodic: bool, s: DVec3| {
+            periodic || (x > a && x < b) || (x <= a && g >= -slack(s)) || (x >= b && g <= slack(s))
+        };
+        ok(u, u0, u1, gu, self.periodic_u, d[1][0]) && ok(v, v0, v1, gv, self.periodic_v, d[0][1])
     }
 
     /// Die besten `NEWTON_STARTS` Punkte eines feineren Rasters (`REFINE_SAMPLES²`) über den

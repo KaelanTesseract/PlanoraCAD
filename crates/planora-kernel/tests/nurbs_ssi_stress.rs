@@ -159,11 +159,11 @@ fn analytic_kind(rng: &mut Rng, k: usize) -> (String, Surface) {
     }
 }
 
-/// Bodenwahrheit auf einem Raster von a: Kreuzungen von F_b und ihr kleinster Schnittwinkel.
-fn truth(a: &Surface, b: &Surface) -> (Vec<DVec3>, f64) {
+/// Bodenwahrheit auf einem `n × n`-Raster von a: Kreuzungen von F_b (auf |F_b| < 1e-6
+/// nachgehalbiert) und ihr kleinster Schnittwinkel.
+fn truth(a: &Surface, b: &Surface, n: usize) -> (Vec<DVec3>, f64) {
     let Surface::Nurbs(d) = a else { panic!() };
     let ((u0, u1), (v0, v1)) = d.surface().domain();
-    let n = 80;
     let at = |i: usize, j: usize| {
         (
             u0 + (u1 - u0) * i as f64 / n as f64,
@@ -224,36 +224,36 @@ fn truth(a: &Surface, b: &Surface) -> (Vec<DVec3>, f64) {
     (pts, min_angle)
 }
 
-/// Review I-B: 400 zufällige Fälle (200 Freiform–analytisch, 200 Freiform–Freiform) gegen die
-/// Bodenwahrheit eines Rasters. Kein falsches Ergebnis; Ablehnungen bei Schnittwinkel über 10°
-/// höchstens 10 %. Läuft nur im Release-Build (`cargo test --release -- --ignored`, etwa 7 min).
-#[test]
-#[ignore = "Belastungstest, nur mit --release --ignored (etwa 7 min)"]
-fn random_pairs_are_rarely_refused_and_never_wrong() {
+/// Auswertung einer Zufallsmenge.
+#[derive(Default, Debug)]
+struct Stats {
+    /// Falsch: Rasterkreuzung weiter als 0,05 mm von jeder Kurve, Kurvenpunkt mehr als 2e-5
+    /// neben einer Fläche oder `None` trotz Kreuzung.
+    wrong: usize,
+    /// je Paarart (Freiform–analytisch, Freiform–Freiform): abgelehnt / gesamt, und bei
+    /// Schnittwinkel über 10°: abgelehnt / gesamt
+    refused: [usize; 2],
+    total: [usize; 2],
+    refused_steep: [usize; 2],
+    steep: [usize; 2],
+}
+
+/// `n_na` Fälle Freiform–analytisch und `n_nn` Fälle Freiform–Freiform aus dem Zufallsgenerator
+/// mit `seed`, Bodenwahrheit auf einem `grid × grid`-Raster.
+fn run_set(seed: u64, n_na: usize, n_nn: usize, grid: usize) -> Stats {
     let tol = Tolerance::default();
-    let mut rng = Rng(4242);
-    let mut rows: Vec<(bool, String, String, f64, usize)> = Vec::new(); // (nn, name, outcome, angle, crossings)
-    let mut wrong = 0;
-    for k in 0..400 {
-        let nn = k >= 200;
+    let mut rng = Rng(seed);
+    let mut st = Stats::default();
+    for k in 0..n_na + n_nn {
+        let nn = k >= n_na;
         let (na, a) = nurbs_kind(&mut rng, k);
         let (nb, b) = if nn {
             nurbs_kind(&mut rng, k / 5 + k)
         } else {
             analytic_kind(&mut rng, k / 5 + k)
         };
-        let t = std::time::Instant::now();
         let r = intersect_nurbs(&a, &b, &tol);
-        let el = t.elapsed();
-        let (cross, ang) = truth(&a, &b);
-        let out = match &r {
-            SsiOutcome::Curves(cs) => format!("Curves({})", cs.len()),
-            SsiOutcome::Unsupported(m) => {
-                format!("Unsupported: {}", m.chars().take(60).collect::<String>())
-            }
-            o => format!("{o:?}"),
-        };
-        // grobe Prüfung: alle Kreuzungen nahe einer Kurve
+        let (cross, ang) = truth(&a, &b, grid);
         if let SsiOutcome::Curves(cs) = &r {
             let pts: Vec<DVec3> = cs
                 .iter()
@@ -274,72 +274,58 @@ fn random_pairs_are_rarely_refused_and_never_wrong() {
                 .iter()
                 .map(|p| a.implicit(*p).abs().max(b.implicit(*p).abs()))
                 .fold(0.0, f64::max);
-            let worst = cross.iter().copied().max_by(|x, y| {
-                let dx = pts
-                    .iter()
-                    .map(|p| p.distance(*x))
-                    .fold(f64::INFINITY, f64::min);
-                let dy = pts
-                    .iter()
-                    .map(|p| p.distance(*y))
-                    .fold(f64::INFINITY, f64::min);
-                dx.total_cmp(&dy)
-            });
             if gap > 0.05 || off > 2e-5 {
-                wrong += 1;
-                println!(
-                    "WRONG? {k} {na}-{nb} gap={gap:.2e} off={off:.1e} at {worst:?} fa={:?} fb={:?}",
-                    worst.map(|x| a.implicit(x)),
-                    worst.map(|x| b.implicit(x))
-                );
+                st.wrong += 1;
+                println!("FALSCH {k} {na}-{nb}: Lücke {gap:.2e}, Abweichung {off:.1e}");
             }
         } else if matches!(r, SsiOutcome::None) && !cross.is_empty() {
-            wrong += 1;
-            println!("WRONG None {k} {na}-{nb} crossings={}", cross.len());
+            st.wrong += 1;
+            println!(
+                "FALSCH {k} {na}-{nb}: None trotz {} Kreuzungen",
+                cross.len()
+            );
         }
-        let deg = if ang.is_finite() {
-            ang.to_degrees()
-        } else {
-            f64::NAN
-        };
-        println!(
-            "{k} {}{na}-{nb}: {out} angle={deg:.1} cross={} {:?}",
-            if nn { "NN " } else { "" },
-            cross.len(),
-            el
-        );
-        rows.push((nn, format!("{na}-{nb}"), out, deg, cross.len()));
+        let refused = matches!(r, SsiOutcome::Unsupported(_));
+        let i = usize::from(nn);
+        st.total[i] += 1;
+        st.refused[i] += usize::from(refused);
+        if !cross.is_empty() && ang.to_degrees() > 10.0 {
+            st.steep[i] += 1;
+            st.refused_steep[i] += usize::from(refused);
+        }
+        if let SsiOutcome::Unsupported(m) = &r {
+            println!(
+                "{k} {na}-{nb}: abgelehnt ({m}), Winkel {:.1}°",
+                ang.to_degrees()
+            );
+        }
     }
-    for nn in [false, true] {
-        let set: Vec<_> = rows.iter().filter(|r| r.0 == nn).collect();
-        let refused = set
-            .iter()
-            .filter(|r| r.2.starts_with("Unsupported"))
-            .count();
-        let crossing: Vec<_> = set.iter().filter(|r| r.4 > 0 && r.3 > 10.0).collect();
-        let refused_crossing = crossing
-            .iter()
-            .filter(|r| r.2.starts_with("Unsupported"))
-            .count();
-        let disjoint: Vec<_> = set.iter().filter(|r| r.4 == 0).collect();
-        let refused_disjoint = disjoint
-            .iter()
-            .filter(|r| r.2.starts_with("Unsupported"))
-            .count();
-        println!(
-            "{}: refused {}/{} ; angle>10°: {}/{} ; no grid crossing: {}/{}",
-            if nn {
-                "NURBS-NURBS"
-            } else {
-                "NURBS-analytisch"
-            },
-            refused,
-            set.len(),
-            refused_crossing,
-            crossing.len(),
-            refused_disjoint,
-            disjoint.len()
-        );
-    }
-    println!("wrong {wrong}");
+    println!("{st:?}");
+    st
+}
+
+fn check(st: &Stats) {
+    assert_eq!(st.wrong, 0, "falsche Ergebnisse");
+    assert_eq!(st.refused[0], 0, "Freiform–analytisch abgelehnt");
+    assert!(
+        st.refused_steep[1] * 10 <= st.steep[1],
+        "Freiform–Freiform bei über 10° zu oft abgelehnt: {}/{}",
+        st.refused_steep[1],
+        st.steep[1]
+    );
+}
+
+/// Review I-B (klein, auch im Debug-Build): 12 Freiform–analytisch- und 4 Freiform–Freiform-Fälle.
+#[test]
+fn a_small_random_set_is_never_wrong_and_rarely_refused() {
+    check(&run_set(7, 12, 4, 30));
+}
+
+/// Review I-B (groß): 200 Freiform–analytisch- und 60 Freiform–Freiform-Fälle gegen die
+/// Bodenwahrheit eines 80 × 80-Rasters. Nur im Release-Build
+/// (`cargo test --release -- --ignored`, einige Minuten).
+#[test]
+#[ignore = "Belastungstest, nur mit --release --ignored (einige Minuten)"]
+fn random_pairs_are_never_wrong_and_rarely_refused() {
+    check(&run_set(4242, 200, 60, 80));
 }

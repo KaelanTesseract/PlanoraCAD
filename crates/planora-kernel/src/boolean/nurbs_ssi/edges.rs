@@ -9,7 +9,7 @@
 //! sicher: Lipschitz-Ausschluss und Monotonie über Tangenten- und Gradientenkegel).
 
 use super::seeds::{Cone, Node, analytic_cone, excluded_points, patch_cone, separates, tangents};
-use super::{Hints, MSG_LOST, Side, Ssi, Uv};
+use super::{Hints, MSG_LOST, PARALLEL_NORMALS, Probe, Side, Ssi, Uv};
 use std::cell::Cell;
 
 use planora_math::DVec3;
@@ -167,8 +167,10 @@ fn mid_uv(p: &BezierPatch) -> Uv {
 impl Ssi<'_> {
     /// Startpunkte eines angenommenen Kandidaten: Nullstellen der jeweils anderen Fläche längs der
     /// Randkurven jedes Freiform-Flickens, von dort mit Newton auf beide Flächen.
-    pub(super) fn edge_seeds(&mut self, n: &Node) -> Result<(), String> {
-        let mut roots: Vec<(DVec3, Hints)> = Vec::new();
+    /// Liefert, ob eine noch nicht abgesuchte Randkurve dabei war.
+    pub(super) fn edge_seeds(&mut self, n: &Node) -> Result<bool, String> {
+        let mut fresh = false;
+        let mut roots: Vec<Root> = Vec::new();
         for side_a in [true, false] {
             let (own, other) = if side_a { (&n.a, &n.b) } else { (&n.b, &n.a) };
             let Some(piece) = own else { continue };
@@ -183,19 +185,60 @@ impl Ssi<'_> {
                 _ => None,
             };
             for e in patch_edges(&piece.p) {
+                // Jede Randkurve nur einmal (sie gehört zu mehreren Paaren und zwei Nachbarn);
+                // ihre Nullstellen hängen nur von der anderen Fläche ab.
+                let key = (
+                    side_a,
+                    e.fixed.to_bits(),
+                    e.s.0.to_bits(),
+                    e.s.1.to_bits(),
+                    u64::from(e.along_u),
+                );
+                if !self.done_edges.insert(key) {
+                    continue;
+                }
+                fresh = true;
                 self.edge_roots(&e, side_a, other_hint, other_cone, &mut roots)?;
             }
         }
-        for (x, hints) in roots {
+        for Root { x, hints, exact } in roots {
             let r = self.refine_seed(x, hints)?;
             match r.found {
                 Some(p) if p.q.distance(x) <= self.h_max => self.handle_seed(p)?,
-                // Die Nullstelle ist echt (Vorzeichenwechsel), konvergiert aber nicht in ihrer
-                // Nähe: lieber melden als einen Bogen verlieren.
-                _ => return Err(MSG_LOST.into()),
+                _ => match self.refine_in_plane(x, hints)? {
+                    Some(p) => self.handle_seed(p)?,
+                    // Die Nullstelle ist echt (Vorzeichenwechsel), konvergiert aber nicht in
+                    // ihrer Nähe: lieber melden als einen Bogen verlieren.
+                    None if exact => return Err(MSG_LOST.into()),
+                    // Nur eine Annäherung bis auf die Toleranz ohne Vorzeichenwechsel (das
+                    // Randstück berührt die andere Fläche): eine Berührung am Rand.
+                    None => match self.probe(x, hints)? {
+                        Some(p) if p.residual() <= EDGE_ROOT_FACTOR * self.tol.linear => {
+                            self.handle_touch(p)?
+                        }
+                        _ => {}
+                    },
+                },
             }
         }
-        Ok(())
+        Ok(fresh)
+    }
+
+    /// Zweiter Versuch für eine Randnullstelle `x`: Korrektur in der Ebene durch `x` senkrecht
+    /// zur geschätzten Kurventangente `g_a × g_b`. Am Rand einer beschränkten Fläche führt der
+    /// freie Newton-Schritt oft über den Rand hinaus (dort ist der Abstand zur Fläche nie null);
+    /// in der Ebene bleibt der Punkt beim Bogen.
+    fn refine_in_plane(&self, x: DVec3, hints: Hints) -> Result<Option<Probe>, String> {
+        let Some(pr) = self.probe(x, hints)? else {
+            return Ok(None);
+        };
+        let Some(t) = self.tangent(&pr) else {
+            return Ok(None);
+        };
+        let scale = (pr.residual() / PARALLEL_NORMALS).min(self.h_max);
+        Ok(self
+            .point_in_plane(x, x, t, pr.hints(), scale)?
+            .filter(|p| p.q.distance(x) <= self.h_max))
     }
 
     /// Nullstellen von `F_other` längs der Randkurve `e` (gehört zur Seite a, wenn `side_a`).
@@ -205,7 +248,7 @@ impl Ssi<'_> {
         side_a: bool,
         other_hint: Option<Uv>,
         other_cone: Option<Cone>,
-        out: &mut Vec<(DVec3, Hints)>,
+        out: &mut Vec<Root>,
     ) -> Result<(), String> {
         let lin = self.tol.linear;
         let hints_at = |e: &Edge, t: f64| {
@@ -239,7 +282,7 @@ impl Ssi<'_> {
                 if let Some(ev) = self.eval_side(other, ctrl[0], other_hint)?
                     && ev.f.abs() <= self.eps
                 {
-                    push_root(out, ctrl[0], hints_at(&e, 0.5), self.same);
+                    push_root(out, ctrl[0], hints_at(&e, 0.5), self.same, true);
                 }
                 continue;
             }
@@ -258,8 +301,11 @@ impl Ssi<'_> {
             // Lipschitz-Ausschluss (der Abstand zur anderen Fläche ist 1-Lipschitz), gegen
             // analytische Flächen zusätzlich über die Kontrollpunkte (konvexe Hülle).
             let other = self.other_side(side_a);
+            // Gegen die Kontrollpunkte genügt ein echtes Vorzeichen (Randen, die innerhalb der
+            // Toleranz an der anderen Fläche liegen, aber sie nicht schneiden, ergeben keine
+            // Nullstelle; Berührungen findet die Kandidatensuche).
             if fc.abs() > r + lin
-                || (other.nurbs.is_none() && excluded_points(other.surf, &ctrl, lin))
+                || (other.nurbs.is_none() && excluded_points(other.surf, &ctrl, 0.0))
             {
                 continue;
             }
@@ -279,12 +325,12 @@ impl Ssi<'_> {
             ) else {
                 continue;
             };
-            if !monotone && f0.abs().max(f1.abs()).max(fc.abs()) <= EDGE_ROOT_FACTOR * lin {
-                // Das Randstück liegt (bis auf die Toleranz) auf der anderen Fläche, etwa ein Rand
-                // in einer Ebene oder längs einer Berührlinie: ein Startpunkt genügt, die
-                // Verfolgung bzw. die Einordnung als Berührung übernimmt den Rest. (Weiter teilen
-                // brächte hier keinen Ausschluss: das Stück bliebe überall innerhalb der Schranke.)
-                push_root(out, p0, hints_at(&e, 0.0), self.same);
+            if !monotone && f0.abs().max(f1.abs()).max(fc.abs()) <= self.eps {
+                // Das Randstück liegt auf der anderen Fläche, etwa ein Rand in einer Ebene oder
+                // längs einer Berührlinie: ein Startpunkt genügt, die Verfolgung bzw. die
+                // Einordnung als Berührung übernimmt den Rest. (Weiter teilen brächte hier keinen
+                // Ausschluss.)
+                push_root(out, p0, hints_at(&e, 0.0), self.same, true);
                 continue;
             }
             if !monotone && depth < EDGE_MAX_DEPTH {
@@ -292,10 +338,10 @@ impl Ssi<'_> {
                 continue;
             }
             if f0.abs() <= self.eps {
-                push_root(out, p0, hints_at(&e, 0.0), self.same);
+                push_root(out, p0, hints_at(&e, 0.0), self.same, true);
             }
             if f1.abs() <= self.eps {
-                push_root(out, p1, hints_at(&e, 1.0), self.same);
+                push_root(out, p1, hints_at(&e, 1.0), self.same, true);
             }
             if f0.abs() > self.eps && f1.abs() > self.eps && (f0 < 0.0) != (f1 < 0.0) {
                 // Regula falsi (Illinois): die Nullstelle bleibt eingeschlossen, konvergiert aber
@@ -335,12 +381,12 @@ impl Ssi<'_> {
                 // Gegen Freiformflächen kann der Wechsel ein Vorzeichensprung jenseits des
                 // Rands sein; dann ist es keine Nullstelle.
                 if fx.is_some_and(|f| f.abs() <= EDGE_ROOT_FACTOR * lin) {
-                    push_root(out, x, hints_at(&e, t), self.same);
+                    push_root(out, x, hints_at(&e, t), self.same, true);
                 }
             } else if !monotone && fc.abs() <= EDGE_ROOT_FACTOR * lin {
                 // an der Teilungsgrenze, nicht monoton, die Flächen kommen sich hier bis auf die
                 // Toleranz nahe: Kandidat für eine Berührung am Rand
-                push_root(out, c, hints_at(&e, 0.5), self.same);
+                push_root(out, c, hints_at(&e, 0.5), self.same, false);
             }
         }
         Ok(())
@@ -367,9 +413,18 @@ impl Ssi<'_> {
     }
 }
 
-fn push_root(out: &mut Vec<(DVec3, Hints)>, x: DVec3, h: Hints, same: f64) {
-    if !out.iter().any(|(y, _)| y.distance(x) <= same) {
-        out.push((x, h));
+/// Nullstelle auf einer Randkurve; `exact`: Vorzeichenwechsel oder `|F| ≤ eps` (sonst nur eine
+/// Annäherung bis auf die Toleranz an der Teilungsgrenze).
+struct Root {
+    x: DVec3,
+    hints: Hints,
+    exact: bool,
+}
+
+fn push_root(out: &mut Vec<Root>, x: DVec3, hints: Hints, same: f64, exact: bool) {
+    match out.iter_mut().find(|r| r.x.distance(x) <= same) {
+        Some(r) => r.exact |= exact,
+        None => out.push(Root { x, hints, exact }),
     }
 }
 

@@ -983,3 +983,125 @@ fn transversal_and_disjoint_quadric_pairs_are_not_refused() {
         );
     }
 }
+
+// ---- Nachbesserung Task 8, Runde 3 (Review): sehr große und sehr kleine Teile ----
+
+/// Freiform-Zylinder (r = 2·s, Höhe 10·s um die Mitte), gedreht und verschoben.
+fn scaled_cylinder(s: f64, start: f64, rot: planora_math::DMat3, off: DVec3) -> Surface {
+    let l = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            DVec3::new(2.0 * s, 0.0, -5.0 * s),
+            DVec3::new(2.0 * s, 0.0, 5.0 * s),
+        ],
+        vec![1.0; 2],
+    )
+    .unwrap();
+    let n = NurbsSurface::revolve(&l, DVec3::ZERO, DVec3::Z, start, TAU).unwrap();
+    Surface::nurbs(n.transformed(|p| rot * p + off).unwrap(), true, false).unwrap()
+}
+
+#[test]
+fn transversal_cuts_work_at_every_scale() {
+    // Review Runde 3: Bei 1000 mm scheiterte die Annäherung (die Konvergenzschranke
+    // 1e-9 · Diagonale lag über NURBS_FIT_TOL); jetzt ist sie auf 1 % davon begrenzt.
+    use planora_math::DMat3;
+    for s in [0.01, 1.0, 300.0, 1000.0] {
+        let cyl = scaled_cylinder(s, 0.3, DMat3::IDENTITY, DVec3::ZERO);
+        let a20 = 20f64.to_radians();
+        let mut others = vec![
+            (
+                "Ebene 20°",
+                plane(
+                    DVec3::new(0.0, 0.0, 0.3 * s),
+                    DVec3::new(a20.cos(), 0.0, a20.sin()),
+                ),
+            ),
+            (
+                "Kugel",
+                Surface::Sphere {
+                    frame: Frame::from_origin_normal(DVec3::new(2.0 * s * 1.7, 0.0, 0.0), DVec3::Z),
+                    radius: 2.0 * s,
+                },
+            ),
+            (
+                "Zylinder 45°",
+                Surface::Cylinder {
+                    frame: Frame::from_origin_normal(
+                        DVec3::new(1.2 * s, 0.0, 0.0),
+                        DMat3::from_axis_angle(DVec3::X, 45f64.to_radians()) * DVec3::Z,
+                    ),
+                    radius: 1.4 * s,
+                },
+            ),
+        ];
+        if s == 0.01 || s == 1000.0 {
+            others.push((
+                "Freiform-Zylinder 20°",
+                scaled_cylinder(
+                    0.7 * s,
+                    1.1,
+                    DMat3::from_axis_angle(DVec3::X, a20),
+                    DVec3::new(1.2 * s, 0.0, 0.0),
+                ),
+            ));
+        }
+        for (name, other) in &others {
+            let SsiOutcome::Curves(cs) = intersect_nurbs(&cyl, other, &tol()) else {
+                panic!(
+                    "s = {s}, {name}: {:?}",
+                    intersect_nurbs(&cyl, other, &tol())
+                )
+            };
+            assert!(!cs.is_empty());
+            on_both(&cs, &cyl, other);
+        }
+        // Beule (Seed 3, um die Mitte) gegen eine um 19° geneigte Ebene
+        let bump = random_bump(3);
+        let Surface::Nurbs(d) = &bump else {
+            unreachable!()
+        };
+        let scaled = Surface::nurbs(
+            d.surface()
+                .transformed(|p| (p - DVec3::new(5.0, 5.0, 0.0)) * s)
+                .unwrap(),
+            false,
+            false,
+        )
+        .unwrap();
+        let pl = plane(DVec3::ZERO, DVec3::new(0.34, 0.0, 1.0).normalize());
+        let SsiOutcome::Curves(cs) = intersect_nurbs(&scaled, &pl, &tol()) else {
+            panic!("s = {s}, Beule")
+        };
+        on_both(&cs, &scaled, &pl);
+    }
+}
+
+#[test]
+fn arcs_within_the_tolerance_of_a_small_rim_are_found() {
+    // Review Runde 3: bei 0,01–0,1 mm großen Teilen und Anschnitttiefe bis 1e-7 meldete der
+    // Rechner „lässt sich nicht verfolgen“ (feste kleinste Schrittweite 1e-4 mm, Randstart
+    // über den Rand hinaus); jetzt relativ zur Größe und mit Korrektur in der Ebene.
+    use planora_math::DMat3;
+    for s in [0.01, 0.1] {
+        let cyl = scaled_cylinder(s, 0.3, DMat3::IDENTITY, DVec3::ZERO);
+        for depth in [1e-6, 1e-7] {
+            let pl = plane(
+                DVec3::new(2.0 * s, 0.0, 5.0 * s - depth),
+                DVec3::new(1.0, 0.0, 1.0).normalize(),
+            );
+            let sph = Surface::Sphere {
+                frame: Frame::from_origin_normal(
+                    DVec3::new(2.0 * s, 0.0, 5.5 * s - depth),
+                    DVec3::Z,
+                ),
+                radius: 0.5 * s,
+            };
+            for other in [pl, sph] {
+                let r = intersect_nurbs(&cyl, &other, &tol());
+                assert_boundary_covered(&format!("s = {s}, Tiefe {depth}"), &cyl, &other, &r);
+            }
+        }
+    }
+}
