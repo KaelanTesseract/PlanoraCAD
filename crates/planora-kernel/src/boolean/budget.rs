@@ -11,13 +11,15 @@ use planora_math::nurbs::evaluations;
 use std::cell::Cell;
 
 /// Höchstzahl der NURBS-Auswertungen einer Booleschen Operation mit Freiformflächen.
-/// Festgelegt nach Messung (Release): Die aufwendigste Operation aller Tests (auch der nur mit
-/// `--ignored` laufenden Reihen) braucht gut 6 Millionen, ein Drehkörper aus einem Spline mit
-/// 39 Punkten gegen einen Zylinder 3 bis 7 Millionen (3 bis 7 s); im Mittel schafft der
-/// Release-Build gut 1 Million Auswertungen je Sekunde. 15 Millionen lassen den Tests den
-/// 2,5-fachen Spielraum und begrenzen eine Operation auf etwa 10 bis 15 Sekunden. Nicht gezählt
-/// werden Auswertungen von Bézier-Flicken (Strahlschnitt, Unterteilung im Schnittrechner); der
-/// Schnittrechner hat dafür eigene Grenzen (`MAX_PROBES` u. a.).
+/// Festgelegt nach Messung (Release): Die aufwendigste Operation der eigenen Tests (auch der nur
+/// mit `--ignored` laufenden Reihen) brauchte gut 6 Millionen (gemessen, bevor der Aufbau der
+/// Zwischenspeicher aus der Zählung genommen wurde); im Review brauchten gültige Ergebnisse
+/// zufälliger Drehkörper aus Splines mit 39 Punkten gegen einen Zylinder bis 11,8 Millionen
+/// (etwa 13 s). Der Spielraum ist also nur etwa das 1,25-Fache; manche lösbare Lage kann an der
+/// Grenze enden. Eine Operation dauert damit bis etwa 16 s (geprüft wird an festen Stellen, die
+/// letzte Stufe läuft über die Grenze hinaus). Nicht gezählt werden Auswertungen von
+/// Bézier-Flicken (Strahlschnitt, Unterteilung im Schnittrechner); der Schnittrechner hat dafür
+/// eigene Grenzen (`MAX_PROBES` u. a.).
 pub const MAX_FREEFORM_EVALUATIONS: u64 = 15_000_000;
 
 /// Meldung bei überschrittener Arbeitsgrenze.
