@@ -205,6 +205,16 @@ Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen m
 **Aktualisierung früherer Abschnitte**
 - „Kein Speichern und Laden“ in den Abschnitten zu den Teilprojekten 1–5 gilt nicht mehr. „Kein Rückgängig“ gilt weiter.
 
+## Teilprojekt 7 – NURBS (Freiformkurven)
+
+**Alte Dokumente (bewusst hingenommen)**
+- Extrusion und Rotation merken sich ihr Profil nur als Nummer („Profil 0“, „Profil 1“ …). Die Profile einer Skizze sind nach der kleinsten Kurven-Nummer sortiert. Bis Teilprojekt 7 wurden Ellipsen und Splines abgelehnt und bekamen keine Profilnummer; jetzt bekommen sie eine. Das Dateiformat bleibt 1, beim Öffnen wird neu berechnet. Deshalb kann eine alte Datei jetzt ein anderes Ergebnis zeigen:
+  - Ellipse vor dem Rechteck gezeichnet: Die alte „Extrusion 1“ (Profil 0 war das Rechteck) extrudiert jetzt die Ellipse.
+  - Ellipse innerhalb eines Rechtecks: Die Platte bekommt jetzt ein Loch.
+  - Ellipse überlappt den Rand des Rechtecks: Früher in Ordnung, jetzt werden beide Schleifen als „schneidet sich“ abgelehnt, und die Extrusion zeigt den Fehler „Profil 0 gibt es nicht“.
+- Das gilt genauso für Splines, die mit Linien oder Bögen eine geschlossene Schleife bilden.
+- Ein Test (`old_documents_may_extrude_a_different_profile` in `planora-feature/tests/nurbs_features.rs`) hält den ersten Fall fest, damit eine spätere Änderung bewusst geschieht. Abhilfe wäre ein dauerhafter Verweis auf das Profil statt der Nummer (eigene Aufgabe).
+
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).
 - `eframe` mit Standard-Features baut auch den `glow`-Renderer mit.

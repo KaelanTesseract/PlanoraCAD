@@ -231,3 +231,46 @@ fn a_spline_sketch_extrudes_and_a_bad_spline_reports_an_error() {
     assert!(d.visible_bodies().is_empty());
     d.check_invariants().unwrap();
 }
+
+/// Bewusst hingenommene Folge (Spec §13 „Alte Dokumente“, `offene-punkte.md`): Extrusionen
+/// verweisen über die Profilnummer, die Profile sind nach der kleinsten Kurven-Id sortiert. Vor
+/// Task 7 bekam eine Ellipse keine Nummer; ein altes Dokument mit einer Ellipse, die vor dem
+/// Rechteck gezeichnet wurde, extrudierte als „Profil 0“ das Rechteck. Jetzt ist Profil 0 die
+/// Ellipse. Wer dieses Verhalten ändert (etwa mit dauerhaften Profilverweisen), passt diesen
+/// Test bewusst an.
+#[test]
+fn old_documents_may_extrude_a_different_profile() {
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let c = sk.add_point(-20.0, 0.0).unwrap();
+    let ellipse = sk.add_ellipse(c, DVec2::new(4.0, 0.0), 2.0).unwrap();
+    let rect = sk
+        .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(10.0, 6.0))
+        .unwrap();
+    let ex = sk.profiles();
+    assert_eq!(ex.profiles.len(), 2);
+    assert_eq!(ex.curve_loops[0], vec![ellipse], "Profil 0 ist die Ellipse");
+    assert!(rect.lines.iter().all(|l| ex.curve_loops[1].contains(l)));
+
+    let mut d = Document::new();
+    let s = d.add_feature("Skizze 1", feature_sketch(sk)).unwrap();
+    let e = d
+        .add_feature(
+            "Extrusion 1",
+            FeatureKind::Extrude {
+                sketch: s,
+                profile: 0,
+                height: 3.0,
+            },
+        )
+        .unwrap();
+    assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+    let solid = d.visible_bodies()[0].solid;
+    assert!(
+        solid
+            .faces
+            .iter()
+            .any(|(_, f)| f.surface.kind() == SurfaceKind::Nurbs),
+        "extrudiert wird die Ellipse, nicht mehr das Rechteck"
+    );
+    assert_rel(volume(solid), PI * 4.0 * 2.0 * 3.0, "Ellipsenzylinder");
+}
