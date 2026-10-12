@@ -555,7 +555,9 @@ impl Ssi<'_> {
     /// Liegt der Freiform-Flicken (Seite a, wenn `side_a`) sicher fern der ganzen anderen
     /// Freiformfläche? Der Abstand zu ihr ist 1-Lipschitz: Ist er an der Mitte des Hüllquaders
     /// größer als dessen halbe Diagonale, trifft kein Punkt des Flickens die andere Fläche (also
-    /// auch keinen ihrer Flicken). Je Flicken einmal berechnet.
+    /// auch keinen ihrer Flicken). Sicher nur, soweit die globale Fußpunktsuche den nächsten Punkt
+    /// findet (sonst ist der Abstand zu groß); Freiform–Freiform ist ohnehin nur geschätzt (Spec
+    /// §13). Je Flicken einmal berechnet.
     fn piece_far(&self, side_a: bool, piece: &Piece) -> bool {
         let p = &piece.p;
         let key = (
