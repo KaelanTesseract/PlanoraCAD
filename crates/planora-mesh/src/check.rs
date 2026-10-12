@@ -48,39 +48,61 @@ pub fn is_watertight(mesh: &Mesh, eps: f64) -> bool {
 /// 6e-14 bei Koordinaten bis 100).
 const BOUNDARY_MATCH_REL: f64 = 1e-9;
 
-/// Punkte, sortiert nach `x`, für die Suche nach einem Punkt im Abstand `eps`.
-struct PointIndex {
-    sorted: Vec<(DVec3, usize)>,
+/// Punkte in einem Raster aus Würfeln der Kantenlänge `eps` (Hash nach Würfel), für die Suche
+/// nach Punkten höchstens `eps` entfernt: Es genügen die 27 Nachbarwürfel. Laufzeit fast linear,
+/// auch wenn viele Punkte eine Koordinate teilen (etwa eine Lochplatte quer zu einer Achse).
+pub(crate) struct PointIndex {
+    eps: f64,
+    cells: HashMap<(i64, i64, i64), Vec<(DVec3, usize)>>,
 }
 
 impl PointIndex {
-    fn new(points: impl Iterator<Item = (DVec3, usize)>) -> Self {
-        let mut sorted: Vec<(DVec3, usize)> = points.collect();
-        sorted.sort_by(|a, b| a.0.x.total_cmp(&b.0.x));
-        Self { sorted }
+    /// `eps` muss positiv und endlich sein. Sehr große Koordinaten (über etwa 9e18 · `eps`)
+    /// landen gesättigt im selben Würfel; das kostet nur Zeit, die Abstände werden immer geprüft.
+    pub(crate) fn new(points: impl Iterator<Item = (DVec3, usize)>, eps: f64) -> Self {
+        let mut index = Self {
+            eps,
+            cells: HashMap::new(),
+        };
+        for (p, id) in points {
+            index.cells.entry(index.key(p)).or_default().push((p, id));
+        }
+        index
+    }
+
+    fn key(&self, p: DVec3) -> (i64, i64, i64) {
+        let k = |x: f64| (x / self.eps).floor() as i64;
+        (k(p.x), k(p.y), k(p.z))
+    }
+
+    /// Alle Punkte höchstens `eps` von `p` entfernt, mit Abstand.
+    pub(crate) fn near(&self, p: DVec3) -> impl Iterator<Item = (f64, usize)> + '_ {
+        let (x, y, z) = self.key(p);
+        let eps = self.eps;
+        (-1..=1)
+            .flat_map(move |dx| (-1..=1).flat_map(move |dy| (-1..=1).map(move |dz| (dx, dy, dz))))
+            .filter_map(move |(dx, dy, dz)| {
+                self.cells.get(&(
+                    x.saturating_add(dx),
+                    y.saturating_add(dy),
+                    z.saturating_add(dz),
+                ))
+            })
+            .flatten()
+            .map(move |(q, id)| (q.distance(p), *id))
+            .filter(move |(d, _)| *d <= eps)
     }
 
     /// Kennung des nächsten Punkts höchstens `eps` von `p` entfernt.
-    fn find(&self, p: DVec3, eps: f64) -> Option<usize> {
-        let start = self.sorted.partition_point(|q| q.0.x < p.x - eps);
-        self.sorted[start..]
-            .iter()
-            .take_while(|q| q.0.x <= p.x + eps)
-            .map(|q| (q.0.distance(p), q.1))
-            .filter(|(d, _)| *d <= eps)
+    pub(crate) fn find(&self, p: DVec3) -> Option<usize> {
+        self.near(p)
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, id)| id)
     }
 
     /// Kleinste Kennung aller Punkte höchstens `eps` von `p` entfernt.
-    fn find_min(&self, p: DVec3, eps: f64) -> Option<usize> {
-        let start = self.sorted.partition_point(|q| q.0.x < p.x - eps);
-        self.sorted[start..]
-            .iter()
-            .take_while(|q| q.0.x <= p.x + eps)
-            .filter(|q| q.0.distance(p) <= eps)
-            .map(|q| q.1)
-            .min()
+    fn find_min(&self, p: DVec3) -> Option<usize> {
+        self.near(p).map(|(_, id)| id).min()
     }
 }
 
@@ -136,11 +158,11 @@ pub fn check_face_boundaries(solid: &Solid, mesh: &Mesh) -> Result<(), String> {
         // Schleifenpunkte verschweißen: Kennung = kleinster Index eines Schleifenpunkts an
         // derselben Lage (Pole, Nahtenden).
         let ids: Vec<DVec3> = rings.iter().flatten().copied().collect();
-        let index = PointIndex::new(ids.iter().copied().zip(0..));
+        let index = PointIndex::new(ids.iter().copied().zip(0..), eps);
         let canonical: Vec<usize> = ids
             .iter()
             .enumerate()
-            .map(|(i, p)| index.find_min(*p, eps).unwrap_or(i))
+            .map(|(i, p)| index.find_min(*p).unwrap_or(i))
             .collect();
         let mut ring_ids: Vec<Vec<usize>> = Vec::new();
         let mut k = 0;
@@ -150,22 +172,34 @@ pub fn check_face_boundaries(solid: &Solid, mesh: &Mesh) -> Result<(), String> {
         }
         let n_loop = ids.len();
         // Netzpunkte: Schleifenpunkt in der Nähe oder eigene Kennung hinter den Schleifenpunkten.
-        let mut vertex_id: HashMap<u32, usize> = HashMap::new();
-        let mut id_of = |v: u32| -> usize {
-            *vertex_id.entry(v).or_insert_with(|| {
-                index
-                    .find(mesh.positions[v as usize], eps)
-                    .map_or(n_loop + v as usize, |i| canonical[i])
-            })
-        };
-        // Gerichtete Kanten als Kette: (a, b) mit a < b zählt +1, die Gegenrichtung −1.
-        let mut chain: HashMap<(usize, usize), i64> = HashMap::new();
-        let mut add = |a: usize, b: usize, k: i64| {
-            if a == b {
-                return;
+        // Gesucht wird von den (wenigen) Schleifenpunkten aus in einem Raster über den
+        // Netzpunkten der Fläche (ihre Indizes liegen in `lo ..= hi`).
+        let (lo, hi) = tris
+            .iter()
+            .fold((u32::MAX, 0), |(lo, hi), &i| (lo.min(i), hi.max(i)));
+        let mut vertex_id: Vec<usize> = Vec::new();
+        if lo <= hi {
+            let (lo, hi) = (lo as usize, hi as usize);
+            vertex_id = (lo..=hi).map(|v| n_loop + v).collect();
+            let mut best = vec![f64::INFINITY; hi - lo + 1];
+            let verts = PointIndex::new((lo..=hi).map(|v| (mesh.positions[v], v)), eps);
+            for (i, p) in ids.iter().enumerate() {
+                for (d, v) in verts.near(*p) {
+                    if d < best[v - lo] {
+                        best[v - lo] = d;
+                        vertex_id[v - lo] = canonical[i];
+                    }
+                }
             }
-            let (key, s) = if a < b { ((a, b), k) } else { ((b, a), -k) };
-            *chain.entry(key).or_insert(0) += s;
+        }
+        let id_of = |v: u32| vertex_id[v as usize - lo as usize];
+        // Gerichtete Kanten als Kette: (a, b) mit a < b zählt +1, die Gegenrichtung −1; gleiche
+        // Kanten werden nach dem Sortieren zusammengezählt.
+        let mut edges: Vec<((usize, usize), i64)> = Vec::with_capacity(tris.len() + n_loop);
+        let mut add = |a: usize, b: usize, k: i64| {
+            if a != b {
+                edges.push(if a < b { ((a, b), k) } else { ((b, a), -k) });
+            }
         };
         for t in tris.as_chunks::<3>().0 {
             let v = [id_of(t[0]), id_of(t[1]), id_of(t[2])];
@@ -181,7 +215,15 @@ pub fn check_face_boundaries(solid: &Solid, mesh: &Mesh) -> Result<(), String> {
                 add(ring[k], ring[(k + 1) % ring.len()], -1);
             }
         }
-        if let Some(((a, b), n)) = chain.iter().find(|(_, n)| **n != 0) {
+        edges.sort_unstable_by_key(|e| e.0);
+        let mut chain: Vec<((usize, usize), i64)> = Vec::new();
+        for (key, s) in edges {
+            match chain.last_mut() {
+                Some((k, n)) if *k == key => *n += s,
+                _ => chain.push((key, s)),
+            }
+        }
+        if let Some(((a, b), n)) = chain.iter().find(|(_, n)| *n != 0) {
             let at = |i: usize| {
                 if i < n_loop {
                     format!("Randpunkt {:?}", ids[i])

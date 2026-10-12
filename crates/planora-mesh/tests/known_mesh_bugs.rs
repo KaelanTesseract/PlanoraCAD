@@ -59,3 +59,44 @@ fn box_on_a_rotated_analytic_cylinder_meshes_closed() {
         assert!(((v1 - v2) / v2).abs() < 1e-3, "{op:?}: {volumes:?}");
     }
 }
+
+#[test]
+fn a_box_on_the_end_cap_of_a_large_cylinder_meshes_closed_and_lean() {
+    // Review der Netz-Nachbesserung: Zylinder r = 300, h = 500 (Stirnfläche oben bei z = 0) mit
+    // einem Quader 200 × 200 × 100 bei (200, 0, 0) vereinigt. Der Randkreis des Mantels ist
+    // geteilt; die Triangulierung im Parameterraum füllte den Mantel mit einem gleichmäßigen
+    // Raster (bis 95-mal so viele Dreiecke wie vorher). Jetzt ein Streifen zwischen den
+    // Randkreisen. Vorher (Netz offen): 501, 1553, 2893 Dreiecke bei 0,1, 0,01, 0,001.
+    let k = AnalyticKernel::default();
+    let cyl = k
+        .transform(
+            &k.make_cylinder(300.0, 500.0).unwrap(),
+            &DMat4::from_translation(DVec3::new(0.0, 0.0, -500.0)),
+        )
+        .unwrap();
+    let b = k
+        .transform(
+            &k.make_box(DVec3::new(200.0, 200.0, 100.0)).unwrap(),
+            &DMat4::from_translation(DVec3::new(200.0, 0.0, 0.0)),
+        )
+        .unwrap();
+    let s = boolean(&cyl, &b, BoolOp::Union, &Tolerance::default()).unwrap();
+    validate(&s).unwrap();
+    for (chord, before) in [(0.1, 501), (0.01, 1553), (0.001, 2893)] {
+        let m = tessellate(
+            &s,
+            &TessellationOptions {
+                chord_tolerance: chord,
+            },
+        )
+        .unwrap();
+        check_face_boundaries(&s, &m).unwrap();
+        assert!(is_watertight(&m, 1e-6), "Sehnentoleranz {chord}");
+        let tris = m.indices.len() / 3;
+        println!("Sehnentoleranz {chord}: {tris} Dreiecke (vorher {before})");
+        assert!(
+            tris <= 3 * before,
+            "Sehnentoleranz {chord}: {tris} Dreiecke"
+        );
+    }
+}

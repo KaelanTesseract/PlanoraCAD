@@ -440,7 +440,9 @@ fn refine_to_chord_tolerance(
             return Ok(!limited);
         }
         if b.pts3.len() + inserts.len() + fin_inserts.len() > MAX_GRID_POINTS {
-            return Ok(false);
+            // Hält die Fläche die Sehnentoleranz schon ein und fehlen nur Schwerpunkte von
+            // Randdreiecken, ist sie nicht ungenau (nur diese Punkte entfallen).
+            return Ok(inserts.is_empty() && !limited);
         }
         let mut added = 0;
         for q in &inserts {

@@ -83,7 +83,10 @@ pub enum ValidationError {
 /// Spielraum (Anteil der Periode), um den ein Loch über den Nahtrand der äußeren Schleife ragen
 /// darf, ohne als „über die Naht“ zu gelten: deckt Rundungsfehler der Rückrechnung auf Parameter
 /// ab (bei einem Zylinder r = 3 etwa 1,9e-5 mm am Umfang, also unter der Knotentoleranz der
-/// Booleschen Operationen); echte Überschreitungen sind viel größer.
+/// Booleschen Operationen); echte Überschreitungen sind viel größer. Bekannte Grenze: Der
+/// Spielraum ist relativ zur Periode, nicht zur Länge. Bei Radien unter etwa 0,16 mm ist er
+/// kürzer als `tol.linear` (1e-6 mm); ein Loch, das die Naht nur innerhalb der Modelltoleranz
+/// berührt, würde dort schon abgelehnt (nicht beobachtet).
 const SEAM_MARGIN_REL: f64 = 1e-6;
 
 /// Grenze, ab der eine Schleife eine ganze Periode überspannt (Anteil der Periode).

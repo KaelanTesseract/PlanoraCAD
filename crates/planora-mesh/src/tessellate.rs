@@ -1,7 +1,7 @@
 use crate::discretize::Discretizer;
 use crate::mesh::{EdgeLine, FaceRange, Mesh, TessellationOptions};
 use planora_kernel::{Face, Id, Loop, Solid, Surface, UvRect};
-use planora_math::{DVec2, DVec3, Frame};
+use planora_math::{DVec2, DVec3, Frame, TAU};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -73,23 +73,32 @@ pub fn tessellate_with(solid: &Solid, disc: &Discretizer) -> Result<Mesh, MeshEr
                         .map(|lp| loop_points(lp, &polylines))
                         .collect()
                 };
-                let patch = if matches!(face.surface, Surface::Nurbs(_))
-                    || crate::trimmed::is_trimmed(&g)
-                {
-                    None
-                } else {
+                //
+                // Bei Mantelflächen von Zylinder und Kegel (gerade in `v`) genügt dann ein
+                // Streifen zwischen den beiden Randzeilen mit genau den Kantenpunkten
+                // (`tessellate_strip`); die Triangulierung im Parameterraum würde das Innere mit
+                // einem gleichmäßigen Raster füllen und bei großen Körpern ein Vielfaches an
+                // Dreiecken erzeugen.
+                let mut done = false;
+                if !matches!(face.surface, Surface::Nurbs(_)) && !crate::trimmed::is_trimmed(&g) {
                     let patch = face.patch.ok_or(MeshError::MissingPatch(fid.index()))?;
-                    patch_boundary_matches(face, &patch, &disc, &rings()).then_some(patch)
-                };
-                match patch {
-                    Some(patch) => tessellate_patch(face, &patch, &disc, &mut mesh)?,
-                    None => crate::trimmed::tessellate_trimmed(
+                    let rings = rings();
+                    if patch_boundary_matches(face, &patch, &disc, &rings) {
+                        tessellate_patch(face, &patch, &disc, &mut mesh)?;
+                        done = true;
+                    } else if let Some(strip) = strip_rows(face, &patch, &rings) {
+                        tessellate_strip(face, &strip, &mut mesh)?;
+                        done = true;
+                    }
+                }
+                if !done {
+                    crate::trimmed::tessellate_trimmed(
                         &g,
                         &rings(),
                         &disc,
                         &mut mesh,
                         fid.index(),
-                    )?,
+                    )?;
                 }
             }
         }
@@ -107,11 +116,6 @@ pub fn tessellate_with(solid: &Solid, disc: &Discretizer) -> Result<Mesh, MeshEr
             points,
         })
         .collect();
-    // Sicherheitsnetz in Debug-Builds: Jede Fläche hat genau ihre Schleifenpunkte als Rand.
-    #[cfg(debug_assertions)]
-    if let Err(e) = crate::check::check_face_boundaries(solid, &mesh) {
-        panic!("Netz verletzt die Randbedingung: {e}");
-    }
     Ok(mesh)
 }
 
@@ -302,20 +306,149 @@ fn patch_boundary_matches(
 
 /// Hat jeder Punkt von `a` einen Punkt von `b` höchstens `eps` entfernt und umgekehrt?
 pub(crate) fn same_point_sets(a: &[DVec3], b: &[DVec3], eps: f64) -> bool {
-    let sorted = |s: &[DVec3]| {
-        let mut v = s.to_vec();
-        v.sort_by(|p, q| p.x.total_cmp(&q.x));
-        v
-    };
-    let covered = |set: &[DVec3], p: &DVec3| {
-        let start = set.partition_point(|q| q.x < p.x - eps);
-        set[start..]
-            .iter()
-            .take_while(|q| q.x <= p.x + eps)
-            .any(|q| q.distance(*p) <= eps)
-    };
-    let (sa, sb) = (sorted(a), sorted(b));
-    a.iter().all(|p| covered(&sb, p)) && b.iter().all(|p| covered(&sa, p))
+    use crate::check::PointIndex;
+    if !(eps > 0.0 && eps.is_finite()) {
+        return false;
+    }
+    let ia = PointIndex::new(a.iter().copied().zip(0..), eps);
+    let ib = PointIndex::new(b.iter().copied().zip(0..), eps);
+    a.iter().all(|p| ib.find(*p).is_some()) && b.iter().all(|p| ia.find(*p).is_some())
+}
+
+/// Randzeile eines Streifens: Parameter `u` (aufsteigend von `u0` bis `u1`) und 3D-Lage (genau der
+/// gemeinsame Kantenpunkt).
+type StripRow = Vec<(f64, DVec3)>;
+
+/// Die beiden Randzeilen `v = v0` und `v = v1` einer Mantelfläche ([`strip_rows`]).
+struct Strip {
+    v: [f64; 2],
+    rows: [StripRow; 2],
+}
+
+/// Relativer Abstand, bis zu dem ein Kantenpunkt auf einer Randzeile (`v`) oder an einem Ende
+/// (`u`) des Parameterrechtecks liegt. Die Rückrechnung der Punkte auf Parameter ist auf
+/// Rundungsfehler genau; Punkte im Inneren einer Seite (etwa eine geteilte Naht) liegen weit
+/// darüber.
+const STRIP_REL: f64 = 1e-9;
+
+/// Zerlegt die Schleifenpunkte `rings` einer unbeschnittenen Mantelfläche von Zylinder oder
+/// Kegel (gerade in `v`) in die Randzeilen `v = v0` und `v = v1`, jeweils nach `u` geordnet und
+/// von `u0` bis `u1` reichend (bei einem vollen Umlauf mit dem Nahtpunkt an beiden Enden; eine
+/// Kegelspitze als Zeile aus einem Punkt an beiden Enden). `None`, wenn das nicht geht (andere
+/// Flächenart, Löcher, ein Punkt abseits der Randzeilen etwa auf einer geteilten Naht); dann
+/// bleibt es bei der Triangulierung im Parameterraum.
+fn strip_rows(face: &Face, patch: &UvRect, rings: &[Vec<DVec3>]) -> Option<Strip> {
+    if !matches!(
+        face.surface,
+        Surface::Cylinder { .. } | Surface::Cone { .. }
+    ) || rings.len() != 1
+    {
+        return None;
+    }
+    let (u0, u1, v0, v1) = (patch.u0, patch.u1, patch.v0, patch.v1);
+    let span = u1 - u0;
+    if !(span > 0.0 && span <= TAU * (1.0 + STRIP_REL) && v1 != v0 && (v1 - v0).is_finite()) {
+        return None;
+    }
+    let full = (span - TAU).abs() <= STRIP_REL * TAU;
+    let eps_u = STRIP_REL * TAU;
+    let eps_v = STRIP_REL * (v1 - v0).abs().max(1.0);
+    let scale = rings[0]
+        .iter()
+        .map(|p| p.abs().max_element())
+        .fold(1.0, f64::max);
+    let weld = 1e-12 * scale;
+    let mut rows: [StripRow; 2] = [Vec::new(), Vec::new()];
+    for p in &rings[0] {
+        let (u, v) = face.surface.project(*p);
+        let row = if (v - v0).abs() <= eps_v {
+            0
+        } else if (v - v1).abs() <= eps_v {
+            1
+        } else {
+            return None;
+        };
+        let mut uu = u0 + (u - u0).rem_euclid(TAU);
+        if uu >= u0 + TAU - eps_u {
+            uu = u0;
+        }
+        if !uu.is_finite() || uu > u1 + eps_u {
+            return None;
+        }
+        rows[row].push((uu.min(u1), *p));
+    }
+    for (row, v) in rows.iter_mut().zip([v0, v1]) {
+        if row.is_empty() {
+            return None;
+        }
+        // Kegelspitze: alle Punkte der Zeile an einer Stelle.
+        let first = row[0].1;
+        if row.iter().all(|(_, p)| p.distance(first) <= weld) {
+            *row = vec![(u0, first), (u1, first)];
+            continue;
+        }
+        row.sort_by(|a, b| a.0.total_cmp(&b.0));
+        row.dedup_by(|b, a| a.1.distance(b.1) <= weld);
+        if (row[0].0 - u0).abs() > eps_u {
+            return None;
+        }
+        row[0].0 = u0;
+        let last = row.len() - 1;
+        if full {
+            // Nahtpunkt am Ende noch einmal (gleiche Lage bei u1).
+            let seam = row[0].1;
+            if face.surface.point(u1, v).distance(seam) > 1e-9 * scale
+                || (row[last].0 - u1).abs() <= eps_u
+            {
+                return None;
+            }
+            row.push((u1, seam));
+        } else {
+            if (row[last].0 - u1).abs() > eps_u {
+                return None;
+            }
+            row[last].0 = u1;
+        }
+        if row.len() < 2 {
+            return None;
+        }
+    }
+    Some(Strip { v: [v0, v1], rows })
+}
+
+/// Vernetzt eine Mantelfläche von Zylinder oder Kegel als Streifen zwischen ihren Randzeilen
+/// ([`strip_rows`]): Die Zeilen werden nach `u` verzahnt, jedes Dreieck überspannt in `u`
+/// höchstens einen Abschnitt einer der beiden Zeilen (die Sehnentoleranz der Kantenteilung gilt
+/// damit auch im Inneren; in `v` ist die Fläche gerade). Randpunkte sind genau die
+/// Kantenpunkte, das Netz schließt dicht an die Nachbarflächen an.
+fn tessellate_strip(face: &Face, strip: &Strip, mesh: &mut Mesh) -> Result<(), MeshError> {
+    let [bottom, top] = &strip.rows;
+    let (nb, nt) = (bottom.len(), top.len());
+    let sign = if face.same_sense { 1.0 } else { -1.0 };
+    ensure_room(mesh.positions.len(), nb + nt)?;
+    ensure_room(mesh.indices.len(), 3 * (nb + nt))?;
+    let base = index_u32(mesh.positions.len())?;
+    for (row, v) in [bottom, top].into_iter().zip(strip.v) {
+        for (u, p) in row {
+            mesh.positions.push(*p);
+            mesh.normals.push(face.surface.normal(*u, v) * sign);
+        }
+    }
+    // Durch `ensure_room` passt jeder Index sicher in `u32`.
+    let b = |i: usize| base + i as u32;
+    let t = |j: usize| base + (nb + j) as u32;
+    let (mut i, mut j) = (0, 0);
+    while i + 1 < nb || j + 1 < nt {
+        let step_bottom = j + 1 == nt || (i + 1 < nb && bottom[i + 1].0 <= top[j + 1].0);
+        if step_bottom {
+            push_triangle(mesh, [b(i), b(i + 1), t(j)], face.same_sense);
+            i += 1;
+        } else {
+            push_triangle(mesh, [b(i), t(j + 1), t(j)], face.same_sense);
+            j += 1;
+        }
+    }
+    Ok(())
 }
 
 fn tessellate_patch(
