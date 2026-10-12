@@ -386,13 +386,142 @@ fn points_are_located_against_a_nurbs_sphere() {
 }
 
 #[test]
-fn a_body_smaller_than_the_boundary_band_reports_a_grazing_ray() {
-    // Ein Treffer im Band 0,01 · Strahllänge um eine Randkante oder einen Pol der Freiformfläche
-    // ist unsicher. Bei einer winzigen Freiformkugel (r = 0,002) liegt jeder Treffer darin: Alle
+fn a_small_nurbs_sphere_is_located_and_a_tiny_one_reports_a_grazing_ray() {
+    // Das Band um Randkanten und Pole richtet sich nach der Fläche (0,01 · Diagonale, höchstens
+    // 0,01 · Strahllänge, mindestens die Knotentoleranz 2e-5): Eine Kugel r = 0,002 lässt sich
+    // einordnen. Bei r = 1,8e-5 läuft jeder Strahl im Band an einem Pol vorbei (Untergrenze): alle
     // Richtungen sind ungeeignet, benannte Meldung statt eines geratenen Ergebnisses.
-    let faces = solid_faces(&nurbs_sphere_solid(0.002));
-    match solid_contains(&faces, DVec3::ZERO, &Tolerance::default()) {
+    let tol = Tolerance::default();
+    let small = solid_faces(&nurbs_sphere_solid(0.002));
+    assert_eq!(
+        solid_contains(&small, DVec3::ZERO, &tol),
+        Ok(Location::Inside)
+    );
+    assert_eq!(
+        solid_contains(&small, DVec3::new(0.0, 0.003, 0.0), &tol),
+        Ok(Location::Outside)
+    );
+    // r = 1,8e-5: der Mittelpunkt liegt nicht mehr innerhalb `NURBS_EDGE_TOL` auf der Fläche,
+    // jeder Strahl läuft aber näher als 2e-5 an einem Pol vorbei.
+    let tiny = solid_faces(&nurbs_sphere_solid(1.8e-5));
+    match solid_contains(&tiny, DVec3::ZERO, &tol) {
         Err(BooleanError::Unsupported(msg)) => assert!(msg.contains("Streifschuss"), "{msg}"),
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn a_piece_meeting_a_nurbs_face_obliquely_is_not_guessed_as_flush() {
+    // Ein Flächenstück, dessen innerer Punkt auf der Freiformfläche des anderen Körpers liegt,
+    // sie dort aber schräg schneidet, ist nicht bündig (dort fehlte ein Schnitt): benannte
+    // Meldung statt OnSame/OnOpposite nach dem Vorzeichen eines fast senkrechten Skalarprodukts.
+    use planora_kernel::boolean::{Region, classify_region, face_geom, face_probe_point};
+    let k = AnalyticKernel::default();
+    // Quader x ∈ [1, 5], y ∈ [−2, 0], z ∈ [3, 7]; der Zylindermantel geht durch den inneren
+    // Punkt `q` seiner Seite y = 0 (derselbe Punkt wie beim Einordnen) und steht dort senkrecht
+    // auf ihr: Mantelnormale (1, 0, 0), Seitennormale (0, ±1, 0).
+    let b = k
+        .transform(
+            &k.make_box(DVec3::new(4.0, 2.0, 4.0)).unwrap(),
+            &planora_math::DMat4::from_translation(DVec3::new(1.0, -2.0, 3.0)),
+        )
+        .unwrap();
+    let (id, side) = b
+        .faces
+        .iter()
+        .map(|(id, _)| (id, face_geom(&b, id)))
+        .find(|(_, g)| match &g.surface {
+            Surface::Plane { frame } => frame.z.y.abs() > 0.9 && frame.origin.y.abs() < 1e-9,
+            _ => false,
+        })
+        .expect("Seite y = 0");
+    let q = face_probe_point(&b, id, &Tolerance::default()).unwrap();
+    assert!(q.y.abs() < 1e-12 && q.x > 1.0);
+    let cyl = solid_faces(&nurbs_cylinder_solid(q.x, 10.0));
+    let region = Region {
+        outer: side.loops[0].clone(),
+        holes: vec![],
+    };
+    match classify_region(&side, &region, &cyl, &Tolerance::default()) {
+        Err(BooleanError::Unsupported(msg)) => assert!(msg.contains("schräg"), "{msg}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+// ---- Nachbesserung Task 10 (I1): Strahlen dicht an einem Pol ----
+
+/// Die ersten beiden festen Strahlrichtungen des Einordnens (wie in `classify.rs`).
+fn first_two_directions() -> (DVec3, DVec3) {
+    (
+        DVec3::new(0.7321, 0.4123, 0.5471).normalize(),
+        DVec3::new(-0.3911, 0.8312, 0.3977).normalize(),
+    )
+}
+
+/// NURBS-Kugel r = 3, so gedreht, dass ihre Polachse `a` ist.
+fn sphere_with_pole_axis(a: DVec3) -> Solid {
+    let x = a.any_orthonormal_vector();
+    let y = a.cross(x);
+    let m = planora_math::DMat4::from_mat3(planora_math::DMat3::from_cols(x, y, a));
+    AnalyticKernel::default()
+        .transform(&nurbs_sphere_solid(3.0), &m)
+        .unwrap()
+}
+
+#[test]
+fn a_ray_just_beside_a_pole_keeps_its_hit_or_is_uncertain() {
+    // Strahl im Abstand delta am Nordpol (0, 0, 2) der Kugel r = 2 vorbei, schräg von außen
+    // durch die Kugel: Er trifft sie zweimal. Fehlt der Treffer am Pol, wäre die Zählung falsch.
+    let d = sphere();
+    let mut rng = Lcg(0x901e);
+    for pole in [DVec3::new(0.0, 0.0, 2.0), DVec3::new(0.0, 0.0, -2.0)] {
+        for _ in 0..40 {
+            // schräg nach innen durch die Kugel
+            let dir = (-pole.normalize()
+                + DVec3::new(rng.range(-0.8, 0.8), rng.range(-0.8, 0.8), 0.0))
+            .normalize();
+            for delta in [0.0, 1e-11, 1e-9, 1e-7, 1e-6, 1e-5] {
+                let side = dir
+                    .cross(DVec3::new(rng.range(-1.0, 1.0), 1.0, 0.3))
+                    .normalize();
+                let through = pole + side * delta;
+                let o = through - dir * 5.0;
+                if let Some(hits) = d.ray_hits_checked(o, dir, 20.0) {
+                    assert_eq!(hits.len(), 2, "delta {delta}: {hits:?}");
+                    assert!((hits[0].0 - 5.0).abs() < 1e-4, "delta {delta}: {hits:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn rays_through_both_poles_never_give_a_wrong_location() {
+    // Gezielter Doppelfehler: Die ersten beiden Strahlrichtungen laufen von `p0` aus genau durch
+    // je einen Pol der gedrehten Kugel. `p0` liegt außen (|p0| ≈ 3,97); leicht verschobene
+    // Punkte müssen „außen“ oder eine benannte Meldung ergeben, nie „innen“.
+    let (d0, d1) = first_two_directions();
+    let a = (d0 - d1).normalize();
+    let faces = solid_faces(&sphere_with_pole_axis(a));
+    let p0 = a * 3.0 - d0 * (6.0 / (d0 - d1).length());
+    assert!(p0.length() > 3.5);
+    let tol = Tolerance::default();
+    let mut rng = Lcg(0x9013);
+    for k in 0..400 {
+        let scale = [0.0, 1e-8, 1e-7, 1e-6, 3e-6][k % 5];
+        let p = p0
+            + DVec3::new(
+                rng.range(-1.0, 1.0),
+                rng.range(-1.0, 1.0),
+                rng.range(-1.0, 1.0),
+            ) * scale;
+        match solid_contains(&faces, p, &tol) {
+            Ok(Location::Outside) | Err(BooleanError::Unsupported(_)) => {}
+            other => panic!("{p:?} (Verschiebung {scale}): {other:?}"),
+        }
+    }
+    // Strahl im Abstand 1e-7 an einem Pol: ein Punkt innen bleibt innen
+    let q = a * 2.0 - d0 * 1.0 + d0.any_orthonormal_vector() * 1e-7;
+    let q = q.normalize() * 1.0; // sicher innen
+    assert_eq!(solid_contains(&faces, q, &tol), Ok(Location::Inside));
 }

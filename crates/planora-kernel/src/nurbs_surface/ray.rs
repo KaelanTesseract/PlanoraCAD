@@ -107,7 +107,8 @@ impl NurbsSurfaceData {
 
     /// Wie [`Self::ray_hits`], aber `None`, sobald ein Blatt keine verlässliche Entscheidung
     /// erlaubt: Strahl fast in der Tangentialebene eines Blatts, das er durchquert
-    /// (`|dir · n| <` [`RAY_GRAZING_COS`]), Newton ohne Konvergenz, Arbeitsgrenze überschritten,
+    /// (`|dir · n| <` [`RAY_GRAZING_COS`]), Newton ohne Konvergenz, Newton verlässt den
+    /// Bereich in einem Blatt am offenen Rand (dort liegen auch die Pole), Arbeitsgrenze überschritten,
     /// Zerlegung zu groß oder nicht endliche Eingaben. Der Aufrufer wählt dann einen anderen
     /// Strahl, statt zu raten.
     pub fn ray_hits_checked(
@@ -185,12 +186,24 @@ impl NurbsSurfaceData {
                         hits.push((t, u, v));
                     }
                 }
+                // Am offenen Rand (auch an einem Pol, der auf dem Rand liegt) kann Newton über
+                // den Rand hinausschießen, obwohl der Treffer im Blatt liegt (Strahl dicht am
+                // Pol: Schritt über v = v1, der Randpunkt liegt neben dem Strahl). Dort ist
+                // „verlassen“ kein Nachweis für „kein Treffer“.
+                Newton::Left if strict && self.touches_open_rim(&q) => return None,
                 Newton::Left => {}
                 Newton::Failed if strict => return None,
                 Newton::Failed => {}
             }
         }
         Some(sorted(hits, dir_len, scale))
+    }
+
+    /// Berührt der Flicken einen Rand einer offenen Richtung (dort liegen auch die Pole)?
+    fn touches_open_rim(&self, q: &BezierPatch) -> bool {
+        let ((u0, u1), (v0, v1)) = self.surface.domain();
+        (!self.periodic_u && (q.u.0 <= u0 || q.u.1 >= u1))
+            || (!self.periodic_v && (q.v.0 <= v0 || q.v.1 >= v1))
     }
 
     /// Liegt `(u, v)` im Bereich des Flickens (± `RAY_RANGE_SLACK` der Bereichsbreite)? In

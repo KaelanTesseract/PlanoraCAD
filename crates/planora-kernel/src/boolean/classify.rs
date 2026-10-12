@@ -144,31 +144,74 @@ fn near_boundary(g: &FaceGeom, p: DVec3, tol: &Tolerance) -> bool {
 }
 
 /// Breite des Bands um die Randkanten (und Pole) einer Freiformfläche, als Bruchteil der
-/// Strahllänge: Ein Treffer darin ist unsicher (Randpolygone im Parameterraum, Rückrechnung),
-/// es wird die nächste Strahlrichtung versucht.
+/// Strahllänge und zugleich der Diagonale der Fläche (das Kleinere zählt): Ein Treffer darin ist
+/// unsicher (Randpolygone im Parameterraum, deren Sehnenpfeil bei 5°-Abtastung unter
+/// `1e-3 ·` Krümmungsradius bleibt, und die Rückrechnung), es wird die nächste Richtung versucht.
+/// Nur auf die Strahllänge bezogen wuchs das Band mit dem ganzen Körper: Bei einer Platte von
+/// 1000 mm mit einer Bohrung r = 2 lag jeder Treffer auf der Bohrung im Band.
 const FREEFORM_BOUNDARY_BAND: f64 = 0.01;
 
-/// Liegt der Treffer `hit` auf der Freiformfläche `g` im Band [`FREEFORM_BOUNDARY_BAND`] `· reach`
-/// um eine Randkante oder einen Pol?
-fn near_freeform_boundary(g: &FaceGeom, d: &NurbsSurfaceData, hit: DVec3, reach: f64) -> bool {
-    let band = FREEFORM_BOUNDARY_BAND * reach;
-    let u0 = d.surface().domain().0.0;
+/// Untergrenze des Bands (mm): die Knotentoleranz der Pipeline mit Freiformbeteiligung.
+const FREEFORM_BAND_FLOOR: f64 = super::NURBS_NODE_TOL;
+
+/// Je Freiformfläche des anderen Körpers einmal je Einordnung berechnet: Randpolygone im
+/// Parameterraum und die Diagonale des Hüllquaders ihrer Randpunkte.
+struct FreeformFace {
+    polys: Vec<Vec<DVec2>>,
+    size: f64,
+}
+
+impl FreeformFace {
+    fn new(g: &FaceGeom) -> Self {
+        let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+        for q in g.loops.iter().flat_map(|l| loop_points(l)) {
+            lo = lo.min(q);
+            hi = hi.max(q);
+        }
+        let size = if lo.x <= hi.x {
+            (hi - lo).length()
+        } else {
+            0.0
+        };
+        FreeformFace {
+            polys: face_polys(g),
+            size,
+        }
+    }
+
+    /// Bandbreite für einen Strahl der Länge `reach`.
+    fn band(&self, reach: f64) -> f64 {
+        (FREEFORM_BOUNDARY_BAND * reach.min(self.size)).max(FREEFORM_BAND_FLOOR)
+    }
+}
+
+/// Liegt der Treffer `hit` auf der Freiformfläche `g` im Band `band` um eine Randkante?
+fn near_freeform_boundary(g: &FaceGeom, hit: DVec3, band: f64) -> bool {
     g.loops.iter().flatten().any(|s| s.closest(hit).1 <= band)
-        || d.poles_v()
-            .iter()
-            .any(|pv| d.point(u0, *pv).distance(hit) <= band)
+}
+
+/// Läuft der Strahl `p + t·dir`, `t ∈ [0, reach]`, im Band `band` an einem Pol vorbei? Ein
+/// Treffer am Pol kann der Strahlrechnung entgehen (siehe `ray_hits_checked`); dann soll das
+/// Band greifen, auch wenn kein Treffer gefunden wurde.
+fn passes_a_pole(d: &NurbsSurfaceData, p: DVec3, dir: DVec3, reach: f64, band: f64) -> bool {
+    let u0 = d.surface().domain().0.0;
+    d.poles_v().iter().any(|pv| {
+        let q = d.point(u0, *pv);
+        let t = (q - p).dot(dir).clamp(0.0, reach);
+        q.distance(p + dir * t) <= band
+    })
 }
 
 /// Strahlverfahren: `Some(true)` = innen, `Some(false)` = außen, `None` = mehrdeutig
 /// (Treffer auf oder dicht an einem Rand oder einer Naht, Berührung, Strahl liegt in einer Fläche).
 ///
 /// Freiformflächen: Strahlschnitt über [`NurbsSurfaceData::ray_hits_checked`]; unsichere Blätter,
-/// Streifschüsse (`|dir · n| <` [`RAY_GRAZING_COS`]) und Treffer im Randband
-/// [`near_freeform_boundary`] machen den Strahl mehrdeutig. `polys` hält die Randpolygone der
-/// Flächen im Parameterraum (nur für Freiformflächen, beim ersten Treffer berechnet).
+/// Streifschüsse (`|dir · n| <` [`RAY_GRAZING_COS`]), ein Strahl im Band an einem Pol vorbei und
+/// Treffer im Randband [`near_freeform_boundary`] machen den Strahl mehrdeutig. `cache` hält je
+/// Freiformfläche Randpolygone und Größe (beim ersten Gebrauch berechnet).
 fn cast(
     other: &[FaceGeom],
-    polys: &[OnceCell<Vec<Vec<DVec2>>>],
+    cache: &[OnceCell<FreeformFace>],
     p: DVec3,
     dir: DVec3,
     reach: f64,
@@ -178,6 +221,11 @@ fn cast(
     let mut hits = 0;
     for (i, g) in other.iter().enumerate() {
         if let Surface::Nurbs(d) = &g.surface {
+            let info = cache[i].get_or_init(|| FreeformFace::new(g));
+            let band = info.band(reach);
+            if passes_a_pole(d, p, dir, reach, band) {
+                return None;
+            }
             for (t, u, v) in d.ray_hits_checked(p, dir, reach)? {
                 if t <= tol.linear {
                     continue;
@@ -187,11 +235,10 @@ fn cast(
                 if n == DVec3::ZERO || (dir.dot(n) / n.length()).abs() < RAY_GRAZING_COS {
                     return None;
                 }
-                if near_freeform_boundary(g, d, hit, reach) {
+                if near_freeform_boundary(g, hit, band) {
                     return None;
                 }
-                let polys = polys[i].get_or_init(|| face_polys(g));
-                match point_in_face_at(g, polys, hit, (u, v), tol) {
+                match point_in_face_at(g, &info.polys, hit, (u, v), tol) {
                     Containment::Boundary => return None,
                     Containment::Inside => hits += 1,
                     Containment::Outside => {}
@@ -244,16 +291,16 @@ pub(crate) const FREEFORM_RAYS_DISAGREE: &str = "Die Lage des Flächenstücks zu
 /// Rein analytische Körper: unverändert die erste eindeutige Richtung.
 fn cast_all(other: &[FaceGeom], p: DVec3, tol: &Tolerance) -> Result<bool, BooleanError> {
     let reach = reach(other, p);
-    let polys: Vec<OnceCell<Vec<Vec<DVec2>>>> = other.iter().map(|_| OnceCell::new()).collect();
+    let cache: Vec<OnceCell<FreeformFace>> = other.iter().map(|_| OnceCell::new()).collect();
     if !other.iter().any(|g| matches!(g.surface, Surface::Nurbs(_))) {
         return directions()
             .into_iter()
-            .find_map(|d| cast(other, &polys, p, d, reach, tol))
+            .find_map(|d| cast(other, &cache, p, d, reach, tol))
             .ok_or(BooleanError::AmbiguousClassification);
     }
     let mut first: Option<bool> = None;
     for d in directions() {
-        let Some(inside) = cast(other, &polys, p, d, reach, tol) else {
+        let Some(inside) = cast(other, &cache, p, d, reach, tol) else {
             continue;
         };
         match first {

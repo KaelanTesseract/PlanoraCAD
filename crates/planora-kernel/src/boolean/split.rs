@@ -185,8 +185,15 @@ fn on_seam(seams: &[Seg], s: &Seg, tol: &Tolerance) -> bool {
     })
 }
 
+/// Knoten innerhalb `NODE_MERGE_FACTOR · tol.linear` fallen zusammen (`node_of`); derselbe
+/// Abstand trennt mit Freiformbeteiligung gemeinsame Enden von Kreuzungen im Inneren.
+const NODE_MERGE_FACTOR: f64 = 4.0;
+
 fn node_of(nodes: &mut Vec<DVec3>, p: DVec3, tol: &Tolerance) -> usize {
-    if let Some(i) = nodes.iter().position(|q| q.distance(p) <= tol.linear * 4.0) {
+    if let Some(i) = nodes
+        .iter()
+        .position(|q| q.distance(p) <= tol.linear * NODE_MERGE_FACTOR)
+    {
         return i;
     }
     nodes.push(p);
@@ -349,7 +356,7 @@ pub fn split_face(
     // Freiformbeteiligung fallen gemeinsame Enden zweier Stücke nur bis auf die Knotentoleranz
     // zusammen; ein Treffer dort ist das gemeinsame Ende, keine Kreuzung im Inneren: Zählt nur,
     // wer weiter als der Knotenabstand von den Enden beider Stücke liegt. Analytisch unverändert.
-    let node_gap = tol.linear * 4.0;
+    let node_gap = tol.linear * NODE_MERGE_FACTOR;
     for (i, a) in unique.iter().enumerate() {
         for b in &unique[i + 1..] {
             let inner = |f: f64| f > 1e-6 && f < 1.0 - 1e-6;

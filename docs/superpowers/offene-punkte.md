@@ -224,9 +224,17 @@ Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen m
 
 **Boolesche Operationen mit Freiformflächen (Stand nach Task 10)**
 - *Sehr dünne Stellen:* Entstehen beim Verschneiden Stellen, die dünner als etwa 5 hundertstel Millimeter sind (Freiformfläche streift einen Quader nur knapp, ein Deckel liegt knapp unter einer Kante), meldet das Programm oft einen Fehler, obwohl die gleiche Operation mit einfachen Flächen gelingt. Ein falsches Ergebnis entsteht dabei nicht.
-- *Sehr kleine Freiformkörper:* Körper mit Freiformfläche, die kleiner als etwa 1 hundertstel Millimeter sind, lassen sich nicht verschneiden (Meldung „Streifschuss“).
+- *Sehr kleine Freiformkörper:* Körper mit Freiformfläche, die kleiner als etwa 2 hunderttausendstel Millimeter sind, lassen sich nicht verschneiden (Meldung „Streifschuss“).
+- *Flache Schnitte in eine Ellipsenwalze:* Schneidet ein Quader nur knapp (bis 1 tausendstel Millimeter tief) in die Wand einer extrudierten Ellipse, und zwar dort, wo die Naht der Wand liegt, kommt eine Fehlermeldung; ab 1 hundertstel Millimeter klappt es. An anderen Stellen klappt es ab 1 zehntausendstel Millimeter, bei gedrehten Körpern oft nicht (Meldung, kein falsches Ergebnis).
 - *Netz schmaler Streifen:* Ist ein Teil der Oberfläche schmaler als die Genauigkeit des Netzes, kann das Netz dort Lücken haben, ohne dass es gemeldet wird. Betrifft nur winzige Streifen; der Körper selbst ist richtig.
 - *Voller Ring als Freiformfläche* ist nicht geprüft, weil das Programm solche Körper noch nicht erzeugt.
+
+**Netz (Vernetzung), gefunden beim Prüfen von Task 10 – eigene Aufgabe**
+- Bei Ergebnissen Boolescher Operationen hat das Netz an geraden Freiformkanten manchmal winzige Lücken (im Test 17 von 3456 Fällen).
+- Sehr schmale Streifen werden je nach eingestellter Netzgenauigkeit lückenhaft vernetzt, etwa bei der Grundeinstellung der App.
+- Schon vorher vorhanden, ohne Freiformflächen: Ein Quader auf einem gedrehten Zylinder (vereinigt oder abgezogen) ergibt ein lückenhaftes Netz, egal wie fein. Der Test dazu steht in `known_mesh_bugs.rs` und ist vorerst abgeschaltet.
+- Eine gedrehte Freiformkugel, mit einem Quader vereinigt, der sie nur hauchdünn anschneidet, lässt sich gar nicht vernetzen.
+- Vorschlag: Beide Nachbarflächen einer Kante nutzen beim Vernetzen dieselben Kantenpunkte, und die App prüft das Netz eines Ergebnisses auf Lücken und meldet einen Fehler.
 
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).

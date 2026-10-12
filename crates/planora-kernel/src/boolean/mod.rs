@@ -163,19 +163,23 @@ const RESULT_CHECK_SECTIONS: usize = 8;
 /// Fläche oder neben ihren Ecken hat.
 pub(crate) const THIN_FEATURE: &str = "Ein Gebilde ist dünner als die Toleranz für Freiformflächen; das Ergebnis lässt sich nicht sicher bilden";
 
-/// `x ≤ limit`; NaN ist nie innerhalb.
+/// `x ≤ limit`; NaN ist nie innerhalb. Eigene Funktion, weil die Prüfungen „nicht innerhalb“
+/// brauchen und clippy `!(x <= limit)` (gewollt: NaN zählt als außerhalb) ablehnt.
 fn within(x: f64, limit: f64) -> bool {
     x <= limit
 }
 
-/// Analytische Kanten auf analytischen Flächen: erlaubter Abstand in Vielfachen von `tol.linear`
-/// (wie die Mittenprobe beim Zusammenlegen von Stücken in der analytischen Pipeline).
-const ANALYTIC_EDGE_FACTOR: f64 = 4.0;
+/// Analytische Kanten auf analytischen Flächen: erlaubter Abstand in Vielfachen von `tol.linear`.
+/// Analytische Kurven auf analytischen Flächen sind exakt; liegt eine Kante weiter daneben, hat
+/// das Verschweißen mit der Knotentoleranz ein dünneres Gebilde zusammengelegt. Mit dem Faktor 4
+/// (wie die Mittenprobe der analytischen Pipeline) blieb ein Deckel 1,5e-6 bis 3,9e-6 unter einer
+/// Mantelkante ein „gültiger“ Körper, dessen Netz nicht schließt.
+const ANALYTIC_EDGE_FACTOR: f64 = 1.0;
 
 /// Geometrische Prüfung des Ergebnisses, wenn Freiformflächen beteiligt sind, zusätzlich zu
 /// `validate` (das Kanten mit Freiformbeteiligung schon mit [`NURBS_EDGE_TOL`] prüft): Analytische
 /// Kanten auf analytischen Flächen liegen an `RESULT_CHECK_SECTIONS + 1` Stellen höchstens
-/// `ANALYTIC_EDGE_FACTOR · tol.linear` neben jeder Fläche, die sie benutzt (exakte Kurven), und
+/// `ANALYTIC_EDGE_FACTOR · tol.linear` (= `tol.linear`) neben jeder Fläche, die sie benutzt (exakte Kurven), und
 /// die Kurvenenden jeder Kante liegen höchstens [`NURBS_NODE_TOL`] neben ihren Ecken. Pipeline
 /// und Verschweißen arbeiten mit der weiteren Knotentoleranz; ein Gebilde dünner als diese (etwa
 /// ein Deckel 1e-5 unter einer Mantelkante) würde sonst still zu einer Fläche verschmolzen, deren
