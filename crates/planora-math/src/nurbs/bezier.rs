@@ -92,21 +92,61 @@ pub(super) fn insert_row(
 /// (verschiedene Knotenwerte von Anfang bis Ende) und die Kontrollpunkte, in denen je
 /// `p + 1` aufeinanderfolgende (Überlapp um einen) ein Bézier-Stück bilden.
 pub(super) fn decompose_row(p: usize, knots: &[f64], pw: &[DVec4]) -> (Vec<f64>, Vec<DVec4>) {
+    // A5.6 (DecomposeCurve) nach Piegl/Tiller: jedes Stück wird nur aus seinen p + 1 örtlichen
+    // Kontrollpunkten gebildet, Aufwand O(Stücke · p²) statt eines Einfügens über den ganzen
+    // Vektor je Knoten (das war bei Tausenden Kontrollpunkten quadratisch).
     let mut breaks: Vec<f64> = Vec::new();
     for &k in knots {
         if breaks.last() != Some(&k) {
             breaks.push(k);
         }
     }
-    let mut kn = knots.to_vec();
-    let mut cp = pw.to_vec();
-    for &u in &breaks[1..breaks.len() - 1] {
-        let (_, s) = span_and_multiplicity(&kn, p, u);
-        if s < p {
-            let (k2, c2) = insert_row(p, &kn, &cp, u, p - s);
-            kn = k2;
-            cp = c2;
+    let m = knots.len() - 1;
+    let mut pieces: Vec<Vec<DVec4>> = vec![pw[..=p].to_vec()];
+    let mut alphas = vec![0.0; p.max(1)];
+    let (mut a, mut b) = (p, p + 1);
+    while b < m {
+        let i = b;
+        while b < m && knots[b + 1] == knots[b] {
+            b += 1;
         }
+        let mult = b - i + 1;
+        let nb = pieces.len() - 1;
+        if mult < p {
+            let numer = knots[b] - knots[a];
+            for j in (mult + 1..=p).rev() {
+                alphas[j - mult - 1] = numer / (knots[a + j] - knots[a]);
+            }
+            let r = p - mult;
+            let mut next = vec![DVec4::ZERO; p + 1];
+            for j in 1..=r {
+                let save = r - j;
+                let s = mult + j;
+                for k in (s..=p).rev() {
+                    let alpha = alphas[k - s];
+                    pieces[nb][k] = pieces[nb][k] * alpha + pieces[nb][k - 1] * (1.0 - alpha);
+                }
+                if b < m {
+                    next[save] = pieces[nb][p];
+                }
+            }
+            if b < m {
+                for (k, slot) in next.iter_mut().enumerate().take(p + 1).skip(p - mult) {
+                    *slot = pw[b - p + k];
+                }
+                pieces.push(next);
+            }
+        } else if b < m {
+            pieces.push((0..=p).map(|k| pw[b - p + k]).collect());
+        }
+        if b < m {
+            a = b;
+            b += 1;
+        }
+    }
+    let mut cp = Vec::with_capacity(pieces.len() * p + 1);
+    for (k, piece) in pieces.iter().enumerate() {
+        cp.extend_from_slice(if k == 0 { &piece[..] } else { &piece[1..] });
     }
     (breaks, cp)
 }
@@ -390,5 +430,68 @@ impl NurbsCurve {
             .enumerate()
             .map(|(k, w)| BezierSegment::from_homogeneous((w[0], w[1]), p, &cp[k * p..=k * p + p]))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod decompose_tests {
+    use super::*;
+
+    /// Bisheriger Weg: jeden inneren Knoten bis zur Vielfachheit p einfügen (Vergleich).
+    fn by_insertion(p: usize, knots: &[f64], pw: &[DVec4]) -> Vec<DVec4> {
+        let mut breaks: Vec<f64> = Vec::new();
+        for &k in knots {
+            if breaks.last() != Some(&k) {
+                breaks.push(k);
+            }
+        }
+        let mut kn = knots.to_vec();
+        let mut cp = pw.to_vec();
+        for &u in &breaks[1..breaks.len() - 1] {
+            let (_, s) = span_and_multiplicity(&kn, p, u);
+            if s < p {
+                let (k2, c2) = insert_row(p, &kn, &cp, u, p - s);
+                kn = k2;
+                cp = c2;
+            }
+        }
+        cp
+    }
+
+    #[test]
+    fn local_decomposition_matches_knot_insertion() {
+        let cases: Vec<(usize, Vec<f64>)> = vec![
+            (1, vec![0.0, 0.0, 0.501, 0.502, 0.503, 1.0, 1.0]),
+            (2, vec![0.0, 0.0, 0.0, 0.3, 0.3, 0.7, 1.0, 1.0, 1.0]),
+            (
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 0.2, 0.5, 0.5, 0.9, 1.0, 1.0, 1.0, 1.0],
+            ),
+            (3, vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]),
+            (
+                4,
+                vec![
+                    -2.0, -2.0, -2.0, -2.0, -2.0, -1.0, 0.5, 0.5, 0.5, 3.0, 3.0, 3.0, 3.0, 3.0,
+                ],
+            ),
+        ];
+        for (p, knots) in cases {
+            let n = knots.len() - p - 1;
+            let pw: Vec<DVec4> = (0..n)
+                .map(|i| {
+                    let t = i as f64;
+                    homogeneous(
+                        DVec3::new(t.sin() * 3.0, t * 0.7, (t * 1.3).cos()),
+                        1.0 + 0.3 * (t * 2.1).sin().abs(),
+                    )
+                })
+                .collect();
+            let (_, fast) = decompose_row(p, &knots, &pw);
+            let slow = by_insertion(p, &knots, &pw);
+            assert_eq!(fast.len(), slow.len(), "Grad {p}");
+            for (a, b) in fast.iter().zip(&slow) {
+                assert!((*a - *b).length() < 1e-12, "Grad {p}: {a} gegen {b}");
+            }
+        }
     }
 }

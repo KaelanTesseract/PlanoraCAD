@@ -392,3 +392,272 @@ fn bad_nurbs_profiles_and_chains_are_named_errors() {
         KernelError::ProfileCrossesAxis
     );
 }
+
+// ---- Nachbesserung Runde 1 (Review Task 6) ----
+
+fn line(x: f64, y: f64) -> Segment {
+    Segment::Line {
+        to: DVec2::new(x, y),
+    }
+}
+
+#[test]
+fn a_spike_in_a_short_knot_span_is_sampled_and_its_hole_contact_found() {
+    // Grad 1, die Spitze nach (5, 2) liegt in Knotenabschnitten der Breite 0,001: bei gleichmäßiger
+    // Abtastung im Parameter fiel sie früher durch (Fläche 100 statt 96, Loch nicht erkannt).
+    let tol = Tolerance::default();
+    let spike = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 0.501, 0.502, 0.503, 1.0, 1.0],
+        vec![
+            DVec3::new(10.0, 10.0, 0.0),
+            DVec3::new(5.5, 10.0, 0.0),
+            DVec3::new(5.0, 2.0, 0.0),
+            DVec3::new(4.5, 10.0, 0.0),
+            DVec3::new(0.0, 10.0, 0.0),
+        ],
+        vec![1.0; 5],
+    )
+    .unwrap();
+    let outer = ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![
+            line(10.0, 0.0),
+            line(10.0, 10.0),
+            nurbs(spike),
+            line(0.0, 0.0),
+        ],
+    };
+    assert!(
+        (outer.signed_area() - 96.0).abs() < 1e-9,
+        "{}",
+        outer.signed_area()
+    );
+    let profile = Profile {
+        outer: outer.clone(),
+        holes: vec![ProfileLoop::circle(DVec2::new(5.0, 5.0), 1.0)],
+    };
+    assert_eq!(
+        extrude(&profile, &world(), 1.0, &tol).unwrap_err(),
+        KernelError::ProfileLoopsIntersect
+    );
+    // Ohne Loch: gültiger, dichter Körper mit dem Volumen der echten Fläche.
+    let solid = extrude(
+        &Profile {
+            outer,
+            holes: vec![],
+        },
+        &world(),
+        1.0,
+        &tol,
+    )
+    .unwrap();
+    validate(&solid).unwrap();
+    let mesh = tessellate(&solid, &opts(0.005)).unwrap();
+    assert!(is_watertight(&mesh, 1e-9));
+    let vol = mass_properties(&mesh).volume;
+    // Die Kantenpolylinien von Freiformkurven sind gleichmäßig im Parameter geteilt und dann
+    // verfeinert; die Spitze wird damit nur angenähert (Fläche als ungenau gemeldet).
+    assert!((vol - 96.0).abs() / 96.0 < 2e-3, "{vol}");
+}
+
+#[test]
+fn a_spline_dipping_across_the_axis_between_samples_is_rejected() {
+    // r(t) = 8 (t − 0,4)² − 1e-4: nur auf einem kleinen Stück um t = 0,4 negativ.
+    let tol = Tolerance::default();
+    let dip = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            DVec3::new(1.2799, 0.0, 0.0),
+            DVec3::new(-1.9201, 2.0, 0.0),
+            DVec3::new(2.8799, 4.0, 0.0),
+        ],
+        vec![1.0; 3],
+    )
+    .unwrap();
+    let chain = ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![line(1.2799, 0.0), nurbs(dip), line(0.0, 4.0)],
+    };
+    assert_eq!(
+        revolve(&chain, &world(), &tol).unwrap_err(),
+        KernelError::ProfileCrossesAxis
+    );
+}
+
+#[test]
+fn an_inner_control_point_on_the_axis_is_refined_away() {
+    // Kontrollpunkte (2,0), (0,2), (2,4): die Kurve hat r ≥ 1, der mittlere Kontrollpunkt liegt
+    // aber auf der Achse (früher „innerer Pol“).
+    let tol = Tolerance::default();
+    let c = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            DVec3::new(2.0, 0.0, 0.0),
+            DVec3::new(0.0, 2.0, 0.0),
+            DVec3::new(2.0, 4.0, 0.0),
+        ],
+        vec![1.0; 3],
+    )
+    .unwrap();
+    let chain = ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![line(2.0, 0.0), nurbs(c), line(0.0, 4.0)],
+    };
+    let solid = revolve(&chain, &world(), &tol).unwrap();
+    validate(&solid).unwrap();
+    let mesh = tessellate(&solid, &opts(0.005)).unwrap();
+    assert!(is_watertight(&mesh, 1e-9));
+    let exact = pappus(&chain);
+    let vol = mass_properties(&mesh).volume;
+    assert!((vol - exact).abs() / exact < 3e-3, "{vol} vs {exact}");
+}
+
+/// Ellipse um `(cx, 0)` mit Halbachsen `a`, `b`, im Uhrzeigersinn (Überstreichung −2π).
+fn cw_ellipse(cx: f64, a: f64, b: f64) -> NurbsCurve {
+    NurbsCurve::elliptic_arc(
+        DVec3::new(cx, 0.0, 0.0),
+        DVec3::X * a,
+        DVec3::Y * b,
+        0.0,
+        -TAU,
+    )
+    .unwrap()
+}
+
+#[test]
+fn caps_with_an_ellipse_hole_and_aligned_box_corners_are_watertight() {
+    // Die Naht der Ellipse (−5, 0) und die Ecken (0, 0), (6, 0) des Rechtecklochs liegen auf
+    // einer Geraden; `earcut` ließ dort früher einen T-Stoß im Deckel.
+    let tol = Tolerance::default();
+    let holes = || {
+        vec![
+            ProfileLoop::nurbs_loop(cw_ellipse(-8.0, 3.0, 2.0)).unwrap(),
+            ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(6.0, 4.0)),
+        ]
+    };
+    let rect = Profile {
+        outer: ProfileLoop::rectangle(DVec2::new(-20.0, -12.0), DVec2::new(20.0, 12.0)),
+        holes: holes(),
+    };
+    let ellipse_outer = Profile {
+        outer: ProfileLoop::nurbs_loop(ellipse(20.0, 12.0)).unwrap(),
+        holes: holes(),
+    };
+    let holes_area = PI * 6.0 + 24.0;
+    for (profile, outer_area) in [(rect, 40.0 * 24.0), (ellipse_outer, PI * 240.0)] {
+        let solid = extrude(&profile, &world(), 2.0, &tol).unwrap();
+        validate(&solid).unwrap();
+        for chord in [0.005, 0.05] {
+            let mesh = tessellate(&solid, &opts(chord)).unwrap();
+            assert!(is_watertight(&mesh, 1e-9), "Sehnentoleranz {chord}");
+            let exact = (outer_area - holes_area) * 2.0;
+            let vol = mass_properties(&mesh).volume;
+            assert!((vol - exact).abs() / exact < 2e-3, "{vol} vs {exact}");
+        }
+    }
+}
+
+/// Geschlossene kubische Kurve mit `n` Kontrollpunkten auf einem Kreis (erster = letzter).
+fn many_point_loop(r: f64, n: usize) -> NurbsCurve {
+    let mut control: Vec<DVec3> = (0..n)
+        .map(|i| {
+            let t = TAU * i as f64 / (n - 1) as f64;
+            DVec3::new(r * t.cos(), r * t.sin(), 0.0)
+        })
+        .collect();
+    control[n - 1] = control[0];
+    let inner = n - 4;
+    let mut knots = vec![0.0; 4];
+    knots.extend((1..=inner).map(|k| k as f64 / (inner + 1) as f64));
+    knots.extend([1.0; 4]);
+    NurbsCurve::new(3, knots, control, vec![1.0; n]).unwrap()
+}
+
+#[test]
+fn profile_checks_with_thousands_of_control_points_stay_fast() {
+    let tol = Tolerance::default();
+    let profile = Profile {
+        outer: ProfileLoop::nurbs_loop(many_point_loop(10.0, 4096)).unwrap(),
+        holes: vec![ProfileLoop::nurbs_loop(many_point_loop(5.0, 4096)).unwrap()],
+    };
+    let start = std::time::Instant::now();
+    let solid = extrude(&profile, &world(), 1.0, &tol).unwrap();
+    let elapsed = start.elapsed();
+    assert_eq!(solid.faces.len(), 4);
+    // Früher (quadratische Paarprüfung, 65 536 Abtastpunkte je Segment) 81 s im Release-Build.
+    assert!(elapsed.as_secs_f64() < 5.0, "{elapsed:?}");
+}
+
+#[test]
+fn a_closure_gap_within_the_tolerance_is_closed_exactly() {
+    // Letzter Kontrollpunkt 5e-7 neben dem ersten: innerhalb von `tol.linear`, aber weit über der
+    // Grenze, mit der die geschlossene Wandfläche gleiche Randreihen verlangt.
+    let tol = Tolerance::default();
+    let e = ellipse(4.0, 2.0);
+    let mut control = e.control_points().to_vec();
+    let n = control.len();
+    control[n - 1] += DVec3::new(0.0, 5e-7, 0.0);
+    let gap = NurbsCurve::new(
+        e.degree(),
+        e.knots().knots().to_vec(),
+        control,
+        e.weights().to_vec(),
+    )
+    .unwrap();
+    let via_loop = ProfileLoop::nurbs_loop(gap.clone()).unwrap();
+    let by_hand = ProfileLoop {
+        start: DVec2::new(4.0, 0.0),
+        segments: vec![nurbs(gap)],
+    };
+    for lp in [via_loop, by_hand] {
+        let solid = extrude(
+            &Profile {
+                outer: lp,
+                holes: vec![],
+            },
+            &world(),
+            6.0,
+            &tol,
+        )
+        .unwrap();
+        validate(&solid).unwrap();
+        let mesh = tessellate(&solid, &opts(0.005)).unwrap();
+        assert!(is_watertight(&mesh, 1e-9));
+    }
+}
+
+#[test]
+fn a_self_intersecting_spline_loop_is_rejected() {
+    // Der Spline von (10, 0) über (5, −4) und (5, 6) nach (0, 0) kreuzt die Grundlinie.
+    let tol = Tolerance::default();
+    let s = NurbsCurve::natural_cubic(
+        &[
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(5.0, -4.0, 0.0),
+            DVec3::new(5.0, 6.0, 0.0),
+            DVec3::new(0.0, 0.0, 0.0),
+        ],
+        &[0.0, 1.0, 2.0, 3.0],
+    )
+    .unwrap();
+    let lp = ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![line(10.0, 0.0), nurbs(s)],
+    };
+    assert_eq!(
+        extrude(
+            &Profile {
+                outer: lp,
+                holes: vec![]
+            },
+            &world(),
+            1.0,
+            &tol
+        )
+        .unwrap_err(),
+        KernelError::ProfileSelfIntersects
+    );
+}

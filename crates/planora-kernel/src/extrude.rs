@@ -1,7 +1,10 @@
 use crate::error::KernelError;
 use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
-use crate::profile::{Profile, ProfileLoop, Segment, check_hole_layout, check_loop_input};
+use crate::profile::{
+    Profile, ProfileLoop, Segment, check_hole_layout, check_loop_input, check_self_intersection,
+    snap_closed,
+};
 use crate::topology::{Edge, Face, FaceTag, HalfEdge, Loop, Solid};
 use planora_math::nurbs::{NurbsCurve, NurbsError, NurbsSurface};
 use planora_math::{DVec3, Frame, Tolerance};
@@ -32,6 +35,7 @@ pub fn extrude(
     for lp in std::iter::once(&profile.outer).chain(profile.holes.iter()) {
         check_loop_input(lp, tol)?;
     }
+    check_self_intersection(profile, tol)?;
     check_hole_layout(profile, tol)?;
     // Welche Schleifen dreht `oriented()` um? Nötig, um die Wandnummern auf die eingegebene
     // Reihenfolge zurückzurechnen (gleiche Bedingungen wie in `Profile::oriented`).
@@ -41,7 +45,7 @@ pub fn extrude(
         .iter()
         .map(|h| h.signed_area() > 0.0)
         .collect();
-    let profile = profile.oriented();
+    let profile = profile.try_oriented()?;
     for lp in std::iter::once(&profile.outer).chain(profile.holes.iter()) {
         let area = lp.signed_area();
         if !(area.is_finite() && area.abs() > 1e-12) {
@@ -310,6 +314,13 @@ fn build_loop(
             }
             Segment::Nurbs { curve } => {
                 let to_plane = |p: DVec3| frame.point(p.x, p.y, 0.0);
+                // Eine einzelne geschlossene Kurve (Vollellipse): Ende exakt auf den Anfang legen,
+                // die geschlossene Wand verlangt gleiche Randreihen.
+                let curve = if m == 1 {
+                    snap_closed(curve, tol)?
+                } else {
+                    (**curve).clone()
+                };
                 let bottom = curve.transformed(to_plane).map_err(invalid_curve)?;
                 let top = bottom.transformed(|p| p + up).map_err(invalid_curve)?;
                 let surface = NurbsSurface::extrude(&bottom, up).map_err(invalid_curve)?;

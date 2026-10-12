@@ -59,6 +59,194 @@ fn uv_scale(surface: &Surface, polys: &[Vec<DVec2>]) -> DVec2 {
     }
 }
 
+/// Abbildung einer Parameterrichtung in den gestreckten Raum der Triangulierung: linear (fester
+/// Maßstab, wie bisher) oder stückweise linear über den Knotenabschnitten einer Freiformfläche,
+/// deren Ableitungslänge von Abschnitt zu Abschnitt stark schwankt (sonst wären die Dreiecke in
+/// schnellen Abschnitten im gestreckten Raum extrem schmal).
+#[derive(Clone, Debug)]
+enum Axis {
+    Linear(f64),
+    /// Stützstellen `t` (steigend) und Bildwerte `s` (steigend); außerhalb linear fortgesetzt
+    /// (bei `period` um ganze Perioden verschoben).
+    Pieces {
+        t: Vec<f64>,
+        s: Vec<f64>,
+        period: Option<f64>,
+    },
+}
+
+impl Axis {
+    fn map(&self, x: f64) -> f64 {
+        match self {
+            Axis::Linear(k) => x * k,
+            Axis::Pieces { t, s, period } => {
+                let (t0, t1) = (t[0], t[t.len() - 1]);
+                let (s0, s1) = (s[0], s[s.len() - 1]);
+                if let Some(p) = period
+                    && x.is_finite()
+                    && (x < t0 || x > t1)
+                {
+                    let k = ((x - t0) / p).floor();
+                    return Self::map_inside(t, s, x - k * p) + k * (s1 - s0);
+                }
+                Self::map_inside(t, s, x)
+            }
+        }
+    }
+
+    /// Stückweise lineare Abbildung; jenseits der Enden mit der Steigung des Randabschnitts.
+    fn map_inside(t: &[f64], s: &[f64], x: f64) -> f64 {
+        let n = t.len();
+        let k = t.partition_point(|v| *v <= x).clamp(1, n - 1);
+        let (a, b) = (t[k - 1], t[k]);
+        s[k - 1] + (s[k] - s[k - 1]) * (x - a) / (b - a)
+    }
+
+    fn inverse(&self, y: f64) -> f64 {
+        match self {
+            Axis::Linear(k) => y / k,
+            Axis::Pieces { t, s, period } => {
+                let (t0, t1) = (t[0], t[t.len() - 1]);
+                let (s0, s1) = (s[0], s[s.len() - 1]);
+                if period.is_some() && y.is_finite() && (y < s0 || y > s1) {
+                    let k = ((y - s0) / (s1 - s0)).floor();
+                    return Self::map_inside(s, t, y - k * (s1 - s0)) + k * (t1 - t0);
+                }
+                Self::map_inside(s, t, y)
+            }
+        }
+    }
+
+    /// Mittlere Steigung (gestreckte Länge je Parametereinheit).
+    fn mean(&self) -> f64 {
+        match self {
+            Axis::Linear(k) => *k,
+            Axis::Pieces { t, s, .. } => (s[s.len() - 1] - s[0]) / (t[t.len() - 1] - t[0]),
+        }
+    }
+}
+
+/// Abbildung `(u, v)` → gestreckter Raum der Triangulierung (je Richtung eine [`Axis`]).
+#[derive(Clone, Debug)]
+struct UvMap {
+    u: Axis,
+    v: Axis,
+}
+
+impl UvMap {
+    fn linear(scale: DVec2) -> UvMap {
+        UvMap {
+            u: Axis::Linear(scale.x),
+            v: Axis::Linear(scale.y),
+        }
+    }
+
+    fn apply(&self, p: DVec2) -> DVec2 {
+        match (&self.u, &self.v) {
+            // genau wie früher `p * scale`
+            (Axis::Linear(a), Axis::Linear(b)) => p * DVec2::new(*a, *b),
+            _ => DVec2::new(self.u.map(p.x), self.v.map(p.y)),
+        }
+    }
+
+    fn invert(&self, q: DVec2) -> DVec2 {
+        match (&self.u, &self.v) {
+            (Axis::Linear(a), Axis::Linear(b)) => q / DVec2::new(*a, *b),
+            _ => DVec2::new(self.u.inverse(q.x), self.v.inverse(q.y)),
+        }
+    }
+
+    /// Mittlerer Maßstab je Richtung.
+    fn mean(&self) -> DVec2 {
+        DVec2::new(self.u.mean(), self.v.mean())
+    }
+}
+
+/// Schwanken die mittleren Ableitungslängen einer Freiformfläche zwischen ihren Knotenabschnitten
+/// um mehr als diesen Faktor, wird stückweise gestreckt (siehe [`Axis`]); sonst linear wie bisher.
+const MAX_SPAN_SPEED_RATIO: f64 = 4.0;
+
+/// Stützstellen je Knotenabschnitt (und quer dazu) für die Ableitungslänge eines Abschnitts.
+const SPAN_SPEED_SAMPLES: usize = 5;
+
+/// Stückweise Streckung einer Richtung (`along_u`) einer Freiformfläche über ihren
+/// Knotenabschnitten im Bereich `lo … hi`, oder `None`, wenn die Ableitungslängen der Abschnitte
+/// höchstens um [`MAX_SPAN_SPEED_RATIO`] schwanken (dann bleibt es beim linearen Maßstab).
+fn span_axis(
+    s: &NurbsSurface,
+    along_u: bool,
+    (lo, hi): (f64, f64),
+    (qlo, qhi): (f64, f64),
+    period: Option<f64>,
+) -> Option<Axis> {
+    let knots = if along_u { s.knots_u() } else { s.knots_v() };
+    let (d0, d1) = knots.domain();
+    let mut t: Vec<f64> = vec![d0];
+    for &k in knots.knots() {
+        if k > *t.last()? && k <= d1 {
+            t.push(k);
+        }
+    }
+    if t.len() < 3 || lo.is_nan() || hi.is_nan() || lo >= hi {
+        return None;
+    }
+    let n = SPAN_SPEED_SAMPLES;
+    let speeds: Vec<f64> = t
+        .windows(2)
+        .map(|w| {
+            let mut sum = 0.0;
+            for i in 0..n {
+                let a = w[0] + (w[1] - w[0]) * (i as f64 + 0.5) / n as f64;
+                for j in 0..n {
+                    let b = qlo + (qhi - qlo) * (j as f64 + 0.5) / n as f64;
+                    let (u, v) = if along_u { (a, b) } else { (b, a) };
+                    let d = s.derivs(u, v, 1);
+                    sum += if along_u {
+                        d[1][0].length()
+                    } else {
+                        d[0][1].length()
+                    };
+                }
+            }
+            sum / (n * n) as f64
+        })
+        .collect();
+    let max = speeds.iter().copied().fold(0.0, f64::max);
+    let min = speeds.iter().copied().fold(f64::INFINITY, f64::min);
+    if !(max.is_finite() && min > 0.0) || max <= MAX_SPAN_SPEED_RATIO * min {
+        return None;
+    }
+    let mut out = vec![t[0] * speeds[0]];
+    for (k, w) in t.windows(2).enumerate() {
+        let last = out[out.len() - 1];
+        out.push(last + (w[1] - w[0]) * speeds[k].max(MIN_SCALE));
+    }
+    Some(Axis::Pieces { t, s: out, period })
+}
+
+/// Abbildung in den gestreckten Raum: analytische Flächen und gleichmäßige Freiformflächen linear
+/// mit [`uv_scale`]; Freiformflächen mit stark schwankender Ableitungslänge zwischen den
+/// Knotenabschnitten stückweise ([`span_axis`]).
+fn uv_map(surface: &Surface, polys: &[Vec<DVec2>]) -> UvMap {
+    let lin = UvMap::linear(uv_scale(surface, polys));
+    let Surface::Nurbs(d) = surface else {
+        return lin;
+    };
+    let patch = nurbs_patch(d, polys);
+    let s = d.surface();
+    let pu = surface.u_period();
+    let pv = surface.v_period();
+    let u = span_axis(s, true, (patch.u0, patch.u1), (patch.v0, patch.v1), pu);
+    let v = span_axis(s, false, (patch.v0, patch.v1), (patch.u0, patch.u1), pv);
+    if u.is_none() && v.is_none() {
+        return lin;
+    }
+    UvMap {
+        u: u.unwrap_or(lin.u),
+        v: v.unwrap_or(lin.v),
+    }
+}
+
 /// Zahl der Stützstellen je Richtung für die mittleren Ableitungslängen einer Freiformfläche.
 const SCALE_SAMPLES: usize = 9;
 
@@ -309,7 +497,7 @@ fn segment_distance(q: DVec2, a: DVec2, b: DVec2) -> f64 {
 
 struct Builder {
     cdt: Cdt,
-    scale: DVec2,
+    map: UvMap,
     pts3: Vec<DVec3>,
     uv: Vec<DVec2>,
 }
@@ -320,7 +508,7 @@ impl Builder {
     /// Randkante hätte eine Ecke, die der Nachbarfläche fehlt (Netz nicht dicht).
     /// `Ok(true)`, wenn eine neue Ecke entstand.
     fn add_interior(&mut self, p2: DVec2, p3: DVec3) -> Result<bool, ()> {
-        let s = p2 * self.scale;
+        let s = self.map.apply(p2);
         let q = mitigate_underflow(Point2::new(s.x, s.y));
         match self.cdt.locate(q) {
             PositionInTriangulation::OnVertex(_) => return Ok(false),
@@ -338,7 +526,7 @@ impl Builder {
 
     /// Punkt einfügen (gleiche Lage ergibt denselben Punkt) und seine 3D-Lage merken.
     fn add(&mut self, p2: DVec2, p3: DVec3) -> Result<FixedVertexHandle, ()> {
-        let s = p2 * self.scale;
+        let s = self.map.apply(p2);
         let q = mitigate_underflow(Point2::new(s.x, s.y));
         let h = self.cdt.insert(q).map_err(|_| ())?;
         if h.index() == self.pts3.len() {
@@ -387,11 +575,11 @@ fn align_holes(surface: &Surface, rings: &mut [Vec<(DVec2, Option<usize>)>]) -> 
 /// Spalten), folgt `TooLarge`.
 fn grid_points(
     polys: &[Vec<DVec2>],
-    scale: DVec2,
+    map: &UvMap,
     h: f64,
     sign: f64,
 ) -> Result<Vec<DVec2>, MeshError> {
-    grid_points_with(polys, scale, sign, |lo, hi| {
+    grid_points_with(polys, map, sign, |lo, hi| {
         // auch NaN führt zu einem leeren Raster
         if h.is_nan() || h <= 0.0 {
             return None;
@@ -409,12 +597,12 @@ fn grid_points(
 /// kleineren gestreckten Zellkante.
 fn grid_points_cells(
     polys: &[Vec<DVec2>],
-    scale: DVec2,
+    map: &UvMap,
     cell: DVec2,
     sign: f64,
 ) -> Result<Vec<DVec2>, MeshError> {
-    let c = cell * scale;
-    grid_points_with(polys, scale, sign, |lo, hi| {
+    let c = cell * map.mean();
+    grid_points_with(polys, map, sign, |lo, hi| {
         if !(c.x > 0.0 && c.y > 0.0) {
             return None;
         }
@@ -431,13 +619,13 @@ fn grid_points_cells(
 /// kein Raster).
 fn grid_points_with(
     polys: &[Vec<DVec2>],
-    scale: DVec2,
+    map: &UvMap,
     sign: f64,
     cells: impl Fn(DVec2, DVec2) -> Option<(f64, f64, f64)>,
 ) -> Result<Vec<DVec2>, MeshError> {
     let sp: Vec<Vec<DVec2>> = polys
         .iter()
-        .map(|p| p.iter().map(|q| *q * scale).collect())
+        .map(|p| p.iter().map(|q| map.apply(*q)).collect())
         .collect();
     let (mut lo, mut hi) = (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN));
     for p in sp.iter().flatten() {
@@ -523,11 +711,60 @@ fn grid_points_with(
                 c += 1;
             }
             if f64::from(w) * sign >= 1.0 && !blocked[j * (nu + 1) + i] {
-                out.push(q / scale);
+                out.push(map.invert(q));
             }
         }
     }
     Ok(out)
+}
+
+/// Eingeschränkte Delaunay-Triangulierung eines ebenen Polygons mit Löchern (Ersatz, wenn
+/// `earcut` kein dichtes Ergebnis liefert, siehe `tessellate_planar`). `points` sind alle
+/// Ringpunkte hintereinander, `rings` die Indexbereiche je Ring. Liefert Dreiecke gegen den
+/// Uhrzeigersinn aus Indizes in `points`; jeder Ringpunkt bleibt eine Ecke (keine T-Stöße).
+/// `None`, wenn sich Randkanten kreuzen oder ein Punkt nicht eingefügt werden kann.
+pub(crate) fn triangulate_planar_cdt(
+    points: &[DVec2],
+    rings: &[std::ops::Range<usize>],
+) -> Option<Vec<[usize; 3]>> {
+    let mut cdt = Cdt::new();
+    let mut handles = Vec::with_capacity(points.len());
+    // Index von `spade` → erster Ringpunkt an dieser Lage
+    let mut source: Vec<usize> = Vec::with_capacity(points.len());
+    for (i, p) in points.iter().enumerate() {
+        let h = cdt.insert(mitigate_underflow(Point2::new(p.x, p.y))).ok()?;
+        if h.index() == source.len() {
+            source.push(i);
+        }
+        handles.push(h);
+    }
+    for r in rings {
+        let n = r.len();
+        for k in 0..n {
+            let (p, q) = (handles[r.start + k], handles[r.start + (k + 1) % n]);
+            if p == q || cdt.exists_constraint(p, q) {
+                continue;
+            }
+            if !cdt.can_add_constraint(p, q) {
+                return None;
+            }
+            cdt.add_constraint(p, q);
+        }
+    }
+    let inner = inner_faces_by_parity(&cdt);
+    Some(
+        cdt.inner_faces()
+            .filter(|f| inner[f.fix().index()])
+            .map(|f| {
+                let v = f.vertices();
+                [
+                    source[v[0].fix().index()],
+                    source[v[1].fix().index()],
+                    source[v[2].fix().index()],
+                ]
+            })
+            .collect(),
+    )
 }
 
 /// Innen/außen je Dreieck (Index = Flächenindex von `spade`) per Breitensuche ab dem Außengebiet:
@@ -602,10 +839,11 @@ pub fn tessellate_trimmed(
         .iter()
         .map(|r| r.iter().map(|(p, _)| *p).collect())
         .collect();
-    let scale = uv_scale(&g.surface, &polys);
+    let map = uv_map(&g.surface, &polys);
+    let scale = map.mean();
     let mut b = Builder {
         cdt: Cdt::new(),
-        scale,
+        map: map.clone(),
         pts3: Vec::new(),
         uv: Vec::new(),
     };
@@ -648,7 +886,7 @@ pub fn tessellate_trimmed(
             } else {
                 cells(disc.nurbs_grid(d.surface(), &patch))
             };
-            grid_points_cells(&polys, scale, cell, sign)?
+            grid_points_cells(&polys, &map, cell, sign)?
         }
         _ => {
             let step = TAU / disc.segments(TAU).max(8) as f64;
@@ -656,7 +894,7 @@ pub fn tessellate_trimmed(
                 Surface::Torus { minor, .. } => step * minor.abs(),
                 _ => step * scale.x,
             };
-            grid_points(&polys, scale, h, sign)?
+            grid_points(&polys, &map, h, sign)?
         }
     };
     ensure_room(b.pts3.len(), grid.len())?;
@@ -820,7 +1058,7 @@ mod tests {
         let ring: Vec<DVec2> = (0..4).flat_map(|i| side(c[i], c[(i + 1) % 4])).collect();
         let mut b = Builder {
             cdt: Cdt::new(),
-            scale: DVec2::new(2.0, 6.0),
+            map: UvMap::linear(DVec2::new(2.0, 6.0)),
             pts3: Vec::new(),
             uv: Vec::new(),
         };
