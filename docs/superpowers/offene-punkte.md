@@ -1,4 +1,4 @@
-# Offene Punkte nach Teilprojekt 1–5
+# Offene Punkte nach Teilprojekt 1–7
 
 Stand: 2026-10-10 (Teilprojekt 5 siehe eigener Abschnitt weiter unten). Teilprojekt 1–4: 2026-10-09. Ergebnis der Abschlussprüfungen; bewusst nicht in Teilprojekt 1–4 behoben.
 
@@ -206,6 +206,9 @@ Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen m
 - „Kein Speichern und Laden“ in den Abschnitten zu den Teilprojekten 1–5 gilt nicht mehr. „Kein Rückgängig“ gilt weiter.
 
 ## Teilprojekt 7 – NURBS (Freiformkurven)
+Stand: 2026-10-12. Ellipsen und Splines aus Skizzen werden zu Körpern mit Freiformflächen; Boolesche Operationen gehen auch damit. Spec: `specs/2026-10-11-nurbs-design.md` (Abschnitt 13 listet, was bei der Umsetzung anders wurde). Zahlen in Millimetern.
+
+**Handprüfung:** steht noch aus. Bisher nur durch automatische Tests ohne Fenster geprüft.
 
 **Alte Dokumente (bewusst hingenommen)**
 - Extrusion und Rotation merken sich ihr Profil nur als Nummer („Profil 0“, „Profil 1“ …). Die Profile einer Skizze sind nach der kleinsten Kurven-Nummer sortiert. Bis Teilprojekt 7 wurden Ellipsen und Splines abgelehnt und bekamen keine Profilnummer; jetzt bekommen sie eine. Das Dateiformat bleibt 1, beim Öffnen wird neu berechnet. Deshalb kann eine alte Datei jetzt ein anderes Ergebnis zeigen:
@@ -215,19 +218,51 @@ Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen m
 - Das gilt genauso für Splines, die mit Linien oder Bögen eine geschlossene Schleife bilden.
 - Ein Test (`old_documents_may_extrude_a_different_profile` in `planora-feature/tests/nurbs_features.rs`) hält den ersten Fall fest, damit eine spätere Änderung bewusst geschieht. Abhilfe wäre ein dauerhafter Verweis auf das Profil statt der Nummer (eigene Aufgabe).
 
-**Schnitt von Freiformflächen (Stand nach Task 8)**
-- *Seltene Lücke (bekannte Grenze):* Liegt ein kurzes Stück Schnittkurve direkt neben einer schon gefundenen geschlossenen Schnittkurve, kann es fehlen, ohne dass eine Meldung kommt. Das betrifft etwa 7 von 1000 Fällen mit einer Freiform- und einer einfachen Fläche und etwa 1 von 100 Fällen mit zwei Freiformflächen; die Lücken sind 1 bis 3 tausendstel Millimeter groß. Folge: Eine Boolesche Operation mit Freiformflächen kann in seltenen Fällen ein falsches Ergebnis liefern. Die Prüfung des fertigen Körpers erkennt die meisten dieser Fälle und meldet dann einen Fehler statt eines falschen Körpers, aber nicht alle. Das Problem besteht seit der ersten Fassung des Schnittrechners.
-- *Ränder zweier Freiformflächen:* Wo eine Fläche den Rand der anderen schneidet, findet der Rechner die Schnittpunkte in der Praxis zuverlässig. Bewiesen ist das nicht: Er nimmt an, dass ein kleines Flächenstück keine Falten hat, und prüft einen Teilschritt nicht vollständig.
-- *Flache Randberührungen:* Streift eine Fläche den Rand der anderen nur knapp, liefert der Rechner alle Schnittkurven oder lehnt mit „nahezu tangential“ ab, nie nur einen Teil. Auch Fälle, die eigentlich lösbar wären (Eintauchtiefe ab 1 hundertstel Millimeter), werden manchmal abgelehnt (im Test etwa 1 von 13 Fällen, bei zwei Beulenflächen rund die Hälfte). Idee: die Flächenstücke nach Größe statt nach fester Tiefe teilen und einen zusätzlichen Ausschlusstest einbauen.
-- *Berührung statt Schnitt:* Zwei Flächen, die sich nur berühren (tangential eintauchen), werden jetzt immer abgelehnt. Zwei gleich dicke Zylinder auf derselben Achse, die sich um 1 bis 10 tausendstel Millimeter überlappen, gelten als „Berührung“.
-- *Geschwindigkeit:* Die Suche nach dem nächsten Punkt auf einer Freiformfläche ist für Punkte etwas abseits der Fläche (0,3 mm) bei kleinen Beulenflächen bis etwa dreimal langsamer als vorher; nahe an der Fläche ist sie gleich schnell.
+**Fälle, die das Programm meldet statt rechnet**
+Die Meldung steht am Feature und beginnt mit „Mit Freiformflächen nicht berechenbar: …; bitte Lage oder Maße eines Körpers leicht ändern“. Das Dokument bleibt unverändert, abhängige Schritte werden übersprungen.
+- *Berührung statt Schnitt:* Flächen, die sich nur berühren oder tangential eintauchen, werden immer abgelehnt. Zwei gleich dicke Zylinder auf derselben Achse, die sich um 0,0001 bis 0,001 mm überlappen, gelten als Berührung.
+- *Gleich große Querzylinder:* Zwei gleich dicke Freiform-Walzen, deren Achsen sich kreuzen, haben zwei Schnittkurven, die sich an einer Stelle treffen, an der sich die Flächen tangential berühren. Das wird benannt abgelehnt (Test `equal_radius_crossing_reports_a_named_error_and_keeps_the_inputs`). Verschieden dicke Walzen gehen.
+- *Teilweise aufeinanderliegende Freiformflächen* (etwa zwei Flächen in derselben Ebene, die sich halb überdecken): „teilweise zusammen“, abgelehnt. Liegen zwei Körper ganz deckungsgleich aufeinander (Freiformzylinder und sein einfacher Zwilling), gibt es ein Ergebnis.
+- *Selbstdurchdringung:* Ein Profil, dessen Spline sich selbst oder die übrige Schleife schneidet, wird abgelehnt (`ProfileSelfIntersects`). Flächen, die sich selbst durchdringen, entstehen aus Skizzen nicht; der Schnittrechner rechnet sie nicht.
+- *Flache Randberührungen:* Streift eine Fläche den Rand der anderen nur knapp, liefert der Rechner alle Schnittkurven oder lehnt mit „nahezu tangential“ ab, nie nur einen Teil. Auch lösbare Fälle (Eintauchtiefe ab 0,00001 mm) werden manchmal abgelehnt: im Test etwa 1 von 13 Fällen, bei zwei Beulenflächen rund die Hälfte. Idee: die Flächenstücke nach Größe statt nach fester Tiefe teilen und einen zusätzlichen Ausschlusstest einbauen.
+- *Sehr dünne Stellen:* Entstehen beim Verschneiden Stellen, die dünner als etwa 0,00005 bis 0,0001 mm sind (Freiformfläche streift einen Quader nur knapp, ein Deckel liegt knapp unter einer Kante), meldet das Programm oft einen Fehler, obwohl die gleiche Operation mit einfachen Flächen gelingt. Ein falsches Ergebnis entsteht dabei nicht.
+- *Sehr kleine Freiformkörper:* Körper mit Freiformfläche, die kleiner als etwa 0,00002 mm sind, lassen sich nicht verschneiden (Meldung „Streifschuss“). Eine Freiformkugel mit Radius 0,002 geht.
+- *Flache Schnitte in eine Ellipsenwalze:* Schneidet ein Quader nur knapp (bis 0,001 mm tief) in die Wand einer extrudierten Ellipse, und zwar dort, wo die Naht der Wand liegt, kommt eine Fehlermeldung; ab 0,01 mm klappt es. An anderen Stellen klappt es ab 0,0001 mm, bei gedrehten Körpern oft nicht (Meldung, kein falsches Ergebnis).
+- *Arbeitsgrenzen:* Jede Rechnung hat feste Obergrenzen (Unterteilungstiefe 12 je Richtung, höchstens 512 Startpunkte, 20 000 Schritte je Kurve, Kurvenlänge höchstens das 20-Fache der Körpergröße, 120 000 Punktproben je Flächenpaar, 4096 Kandidaten, 200 000 Flickenprüfungen). Wird eine erreicht, kommt eine eigene Meldung.
 
-**Boolesche Operationen mit Freiformflächen (Stand nach Task 10)**
-- *Sehr dünne Stellen:* Entstehen beim Verschneiden Stellen, die dünner als etwa 5 hundertstel Millimeter sind (Freiformfläche streift einen Quader nur knapp, ein Deckel liegt knapp unter einer Kante), meldet das Programm oft einen Fehler, obwohl die gleiche Operation mit einfachen Flächen gelingt. Ein falsches Ergebnis entsteht dabei nicht.
-- *Sehr kleine Freiformkörper:* Körper mit Freiformfläche, die kleiner als etwa 2 hunderttausendstel Millimeter sind, lassen sich nicht verschneiden (Meldung „Streifschuss“).
-- *Flache Schnitte in eine Ellipsenwalze:* Schneidet ein Quader nur knapp (bis 1 tausendstel Millimeter tief) in die Wand einer extrudierten Ellipse, und zwar dort, wo die Naht der Wand liegt, kommt eine Fehlermeldung; ab 1 hundertstel Millimeter klappt es. An anderen Stellen klappt es ab 1 zehntausendstel Millimeter, bei gedrehten Körpern oft nicht (Meldung, kein falsches Ergebnis).
+**Seltene stille Fehler (bekannte Grenze)**
+- Liegt ein kurzes Stück Schnittkurve direkt neben einer schon gefundenen geschlossenen Schnittkurve, kann es fehlen, ohne dass eine Meldung kommt. Das betrifft etwa 7 von 1000 Fällen mit einer Freiform- und einer einfachen Fläche und etwa 1 von 100 Fällen mit zwei Freiformflächen; die Lücken sind 0,001 bis 0,003 mm groß. Folge: Eine Boolesche Operation mit Freiformflächen kann in seltenen Fällen ein falsches Ergebnis liefern. Die Prüfung des fertigen Körpers erkennt die meisten dieser Fälle und meldet dann einen Fehler statt eines falschen Körpers, aber nicht alle. Das Problem besteht seit der ersten Fassung des Schnittrechners.
+- *Ränder zweier Freiformflächen:* Wo eine Fläche den Rand der anderen schneidet, findet der Rechner die Schnittpunkte in der Praxis zuverlässig. Bewiesen ist das nicht: Er nimmt an, dass ein kleines Flächenstück keine Falten hat, und prüft einen Teilschritt nicht vollständig.
+- *Fußpunktsuche:* Die Suche nach dem nächsten Punkt auf einer Freiformfläche verfehlt für Punkte 0,05 bis 0,3 mm neben der Fläche in 1 bis 3 von 100 Stichproben einen viel näheren Punkt. Für Punkte dicht an der Fläche (die der Schnittrechner braucht) tritt das nicht auf.
+
+**Toleranz `NURBS_FIT_TOL = 1e-5`**
+- Schnittkurven mit Freiformflächen werden als Freiformkurve angenähert. Jeder Prüfpunkt der Näherung liegt höchstens 0,8 · 1e-5 mm neben beiden Flächen. Kanten mit Freiformkurven dürfen deshalb bis 1e-5 mm (`NURBS_EDGE_TOL`) neben ihren Flächen liegen, Punkte gelten beim Teilen und Vernähen bis 2e-5 mm (`NURBS_NODE_TOL`) als gleich. Einfache Körper rechnen weiter mit 1e-6 mm. Gebilde, die dünner als diese weitere Toleranz sind, kann das Programm mit Freiformflächen nicht sicher auseinanderhalten (siehe „Sehr dünne Stellen“).
+- Geschlossene Schnittkurven schließen genau, sind an ihrer Naht aber nur stetig, nicht glatt.
+- Bei sehr großen Koordinaten (um 1 000 000 mm) ist der Schnitt nur auf etwa 1e-8 relativ genau.
+
+**Grenzwerte für Freiformdaten (`planora_math::nurbs`)**
+Freiformkurven und -flächen werden nur mit geprüften Werten angelegt, auch beim Laden; sonst kommt ein Fehler statt eines Absturzes:
+- Grad 1 bis 9 (`MAX_DEGREE`), höchstens 4096 Kontrollpunkte je Richtung (`MAX_CONTROL_POINTS`) und 262 144 je Fläche (`MAX_CONTROL_TOTAL`), höchstens 65 536 Bézier-Stücke beim Zerlegen einer Fläche (`MAX_BEZIER_PATCHES`).
+- Koordinaten höchstens 1e9 mm (`MAX_COORD`), Gewichte zwischen 1e-6 und 1e6.
+- Knoten höchstens 1e9 im Betrag (`MAX_KNOT_MAGNITUDE`), Parameterbereich mindestens 1e-6 lang (`MIN_KNOT_DOMAIN`), verschiedene Knoten mindestens 1e-9 des Bereichs auseinander (`MIN_KNOT_GAP_RATIO`).
+- Annäherung höchstens 512 Kontrollpunkte (`MAX_FIT_CONTROL_POINTS`); Profile höchstens 4096 Sehnen je Freiformsegment (`MAX_NURBS_CHORDS`); Netz höchstens 512 Teilungen je Richtung einer Freiformfläche (`MAX_NURBS_DIVISIONS`). Ein Skizzen-Spline hat wie bisher höchstens 64 Punkte.
+- Die Grenzen sind benannte Werte im Code und nicht einstellbar.
+
+**Rechenzeiten**
+- Eine Boolesche Operation mit Freiformfläche braucht im Release-Build etwa 0,5 bis 1 s (im Debug-Build 2 bis 7 s), vor allem für die Suche nach Kantentreffern und Fußpunkten. Bei zwei Freiformkörpern brauchen Fälle, die am Ende abgelehnt werden, bis zur Arbeitsgrenze 3 bis 5 s (Release).
+- Die Suche nach dem nächsten Punkt ist für Punkte etwas abseits der Fläche (0,3 mm) bei kleinen Beulenflächen bis etwa dreimal langsamer als in einer früheren Fassung; nahe an der Fläche ist sie gleich schnell.
+- Körper mit Freiformflächen werden feiner vernetzt (etwa 1,8-mal so viele Dreiecke), damit Volumen und Schwerpunkt genau genug sind.
+- Mehrere Testreihen laufen wegen ihrer Dauer nur mit `cargo test --release -- --ignored` (Liste im Bericht zu Task 12).
+
+**Nicht umgesetzt (geplant für später)**
+- *Gradanhebung* (Grad einer Kurve oder Fläche erhöhen): in diesem Teilprojekt nicht gebraucht; kommt mit Loft und Sweep.
+- *Versatzfläche* (`offset`, Fläche im festen Abstand): nicht gebaut; sie gehört zu Teilprojekt 8 (Rundungen und Fasen).
+- Kontrollpunkte bearbeiten, Import/Export, Loft und Sweep: nicht Teil dieses Teilprojekts.
+
+**Boolesche Operationen mit Freiformflächen, weitere Grenzen**
 - *Netz schmaler Streifen:* Ist ein Teil der Oberfläche schmaler als die Genauigkeit des Netzes, kann das Netz dort Lücken haben, ohne dass es gemeldet wird. Betrifft nur winzige Streifen; der Körper selbst ist richtig.
 - *Voller Ring als Freiformfläche* ist nicht geprüft, weil das Programm solche Körper noch nicht erzeugt.
+- In der App liegt das Volumen eines Ellipsenkörpers bei grober Netzgenauigkeit etwa 0,5 % unter dem genauen Wert.
 
 **Netz (Vernetzung), gefunden beim Prüfen von Task 10 – eigene Aufgabe**
 - Bei Ergebnissen Boolescher Operationen hat das Netz an geraden Freiformkanten manchmal winzige Lücken (im Test 17 von 3456 Fällen).
@@ -235,6 +270,17 @@ Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen m
 - Schon vorher vorhanden, ohne Freiformflächen: Ein Quader auf einem gedrehten Zylinder (vereinigt oder abgezogen) ergibt ein lückenhaftes Netz, egal wie fein. Der Test dazu steht in `known_mesh_bugs.rs` und ist vorerst abgeschaltet.
 - Eine gedrehte Freiformkugel, mit einem Quader vereinigt, der sie nur hauchdünn anschneidet, lässt sich gar nicht vernetzen.
 - Vorschlag: Beide Nachbarflächen einer Kante nutzen beim Vernetzen dieselben Kantenpunkte, und die App prüft das Netz eines Ergebnisses auf Lücken und meldet einen Fehler.
+
+**Aufgeschobene Kleinigkeiten aus den Prüfungen (ohne Folgen für übliche Teile)**
+- Netz: Kanten mit Freiformkurven werden gleichmäßig im Parameter geteilt. Ballen sich die Knoten einer Kurve (sehr ungleich verteilte Spline-Punkte), weicht das Netz dort um 0,04 bis 0,06 mm ab; die Fläche steht dann in `Mesh::inexact_faces`, Form und Volumen stimmen. Drehkörper aus sehr ungleich verteilten Splines können `OffSurface` melden oder sehr viele Dreiecke erzeugen. Abhilfe: Streckenzüge je Knotenabschnitt teilen.
+- Netz: Eine beschnittene Freiformfläche bei sehr feiner Netzgenauigkeit verbraucht viele Dreiecke (Radius 20 bei 0,00001: 224 000 Dreiecke, 6,7 s).
+- Drehen: Kurven sehr nah an der Drehachse (Abstand 0,000002 bis 0,00001) werden als „schneidet sich selbst“ abgelehnt statt mit „kreuzt die Achse“.
+- Profile: Eine geschlossene Freiformkurve mit ungleichen Gewichten an ihren Enden wird abgelehnt.
+- Normale: Für winzige Flächen weit vom Ursprung (Größe unter 1e-10 der Entfernung) kann die Flächennormale fälschlich null sein.
+- Annäherung (`fit`): Scheitert sie, dauert das länger als nötig.
+- Fußpunktsuche: In etwa 1 von 4600 Fällen verfehlt sie den nächsten Punkt um bis 0,01 mm; mit Startwert kann das Ergebnis bis 0,1 mm von dem ohne Startwert abweichen. Die Nullstellensuche einer Kurve gegen eine Freiformfläche kostet etwa 8 ms je Aufruf, auch bei kleinen Flächen.
+- Einordnen: Ein Punkt 0,0001 mm außerhalb einer Spline-Kante auf einem Deckel kann als „auf dem Rand“ oder „innen“ gelten (1 von 34 000 Stichproben).
+- Tests: Zwei Testprogramme brauchen im Debug-Build je etwa 25 s.
 
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).
