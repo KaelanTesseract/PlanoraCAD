@@ -6,11 +6,14 @@ use crate::tessellate::{MeshError, ensure_room, index_u32};
 use planora_kernel::boolean::{
     FaceGeom, loop_points, oriented_area, points_to_uv, points_to_uv_indexed, winding,
 };
-use planora_kernel::{NURBS_EDGE_TOL, NurbsSurfaceData, Surface, UvRect};
+use planora_kernel::{Id, NURBS_EDGE_TOL, NurbsSurfaceData, Surface, UvRect};
 use planora_math::nurbs::NurbsSurface;
 use planora_math::{DVec2, DVec3, TAU};
 use spade::handles::FixedVertexHandle;
-use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation, mitigate_underflow};
+use spade::{
+    ConstrainedDelaunayTriangulation, Point2, PositionInTriangulation, Triangulation,
+    mitigate_underflow,
+};
 
 type Cdt = ConstrainedDelaunayTriangulation<Point2<f64>>;
 
@@ -109,14 +112,17 @@ fn nurbs_patch(d: &NurbsSurfaceData, polys: &[Vec<DVec2>]) -> UvRect {
 /// dann an Beschnitten lange, schräge Dreiecke über viele Spalten.
 const MAX_CELL_ASPECT: f64 = 1.5;
 
-/// Verkleinert die längere Kante einer Rasterzelle (in Parametern), bis ihr Seitenverhältnis im
-/// gestreckten Raum höchstens [`MAX_CELL_ASPECT`] ist.
-fn isotropic_cell(cell: DVec2, scale: DVec2) -> DVec2 {
-    let s = cell * scale;
+/// Rasterzelle (in Parametern) einer beschnittenen Freiformfläche aus der *nötigen* Schrittweite
+/// je Richtung (`need`, aus [`Discretizer::nurbs_needed_grid`]): Die längere Kante wird im
+/// gestreckten Raum auf höchstens [`MAX_CELL_ASPECT`] mal die kürzere begrenzt. Maßgeblich ist die
+/// nötige Schrittweite der anderen Richtung, nicht ein feineres Raster – sonst würde etwa eine
+/// lange Röhre in ihrer geraden Richtung unnötig fein geteilt.
+fn isotropic_cell(need: DVec2, scale: DVec2) -> DVec2 {
+    let s = need * scale;
     if !(s.x > 0.0 && s.y > 0.0 && s.is_finite()) {
-        return cell;
+        return need;
     }
-    let mut out = cell;
+    let mut out = need;
     if s.y > MAX_CELL_ASPECT * s.x {
         out.y = MAX_CELL_ASPECT * s.x / scale.y;
     } else if s.x > MAX_CELL_ASPECT * s.y {
@@ -138,17 +144,48 @@ const MAX_EDGE_SPLIT: f64 = 16.0;
 /// höchstens um `tol` von ihr abweicht: gemessen an den Mitten der Innenkanten (Kantenmitte im
 /// Parameterraum gegen die Mitte der 3D-Sehne) und am Schwerpunkt. Zu ungenaue Innenkanten werden
 /// in der Mitte geteilt, sonst wird der Schwerpunkt eingefügt. Randkanten (Zwangskanten) bleiben
-/// unberührt, damit die Randpunkte mit den Nachbarflächen übereinstimmen. Begrenzt durch
-/// [`MAX_CDT_REFINE_ROUNDS`] und [`MAX_GRID_POINTS`] (darüber gilt die Toleranz nicht mehr
-/// garantiert, wie beim Raster).
-fn refine_to_chord_tolerance(b: &mut Builder, surface: &Surface, tol: f64) -> Result<(), ()> {
+/// unberührt, damit die Randpunkte mit den Nachbarflächen übereinstimmen; weicht eine Randkante
+/// selbst zu weit ab, werden ihre Dreiecke nicht weiter verfeinert. Begrenzt durch
+/// [`MAX_CDT_REFINE_ROUNDS`] und [`MAX_GRID_POINTS`]. `Ok(true)`: Toleranz erreicht; `Ok(false)`:
+/// eine Grenze wurde erreicht oder der Rand ist zu grob, die Toleranz gilt nicht überall (der Aufrufer vermerkt die Fläche
+/// in `Mesh::inexact_faces`).
+fn refine_to_chord_tolerance(b: &mut Builder, surface: &Surface, tol: f64) -> Result<bool, ()> {
     use std::collections::HashMap;
+    // Eine Randkante (Zwangskante), die selbst weiter als `tol` von der Fläche abweicht (etwa
+    // weil die Kantenteilung an ihrer Obergrenze liegt), lässt sich hier nicht verbessern: Die
+    // Fläche wird als ungenau gemeldet. An den Ecken solcher Randkanten gilt als Schranke die
+    // Abweichung der Randkante selbst (genauer geht es dort nicht); sonst wanderten immer neue
+    // Punkte gegen die zu grobe Sehne.
+    let mut coarse: HashMap<usize, f64> = HashMap::new();
+    for e in b.cdt.undirected_edges() {
+        if !e.is_constraint_edge() {
+            continue;
+        }
+        let [p, q] = e.vertices().map(|v| v.fix().index());
+        // Echter Abstand der Sehnenmitte zur Fläche: Die Parametermitte einer Randkante liegt
+        // bei gekrümmten Rändern nicht auf der Randkurve und würde die Abweichung überschätzen.
+        let dev = surface.implicit(0.5 * (b.pts3[p] + b.pts3[q])).abs();
+        if dev > tol {
+            for k in [p, q] {
+                let e = coarse.entry(k).or_insert(dev);
+                *e = e.max(dev);
+            }
+        }
+    }
+    let limited = !coarse.is_empty();
+    // Schranke an einer Ecke: `tol`, an Ecken zu grober Randkanten deren Abweichung.
+    let local = |i: usize| coarse.get(&i).copied().unwrap_or(tol);
     for _ in 0..MAX_CDT_REFINE_ROUNDS {
         let inner = inner_faces_by_parity(&b.cdt);
         let mut edge_bad: HashMap<(usize, usize), bool> = HashMap::new();
         let mut inserts: Vec<DVec2> = Vec::new();
         for f in b.cdt.inner_faces() {
             if !inner[f.fix().index()] {
+                continue;
+            }
+            let v = f.vertices();
+            let idx = [v[0].fix().index(), v[1].fix().index(), v[2].fix().index()];
+            if degenerate(b, idx) {
                 continue;
             }
             let mut any_bad = false;
@@ -163,14 +200,14 @@ fn refine_to_chord_tolerance(b: &mut Builder, surface: &Surface, tol: f64) -> Re
                     continue;
                 }
                 let mid = 0.5 * (b.uv[i] + b.uv[j]);
-                let dev = surface
-                    .point(mid.x, mid.y)
-                    .distance(0.5 * (b.pts3[i] + b.pts3[j]));
-                let bad = dev > tol;
+                let chord = 0.5 * (b.pts3[i] + b.pts3[j]);
+                let limit = local(i).max(local(j));
+                let dev = deviation(surface, mid, chord, limit);
+                let bad = dev > limit;
                 edge_bad.insert(key, bad);
                 if bad {
                     // Sehnenabweichung fällt quadratisch: in k gleiche Stücke teilen.
-                    let k = ((dev / tol).sqrt() * SPLIT_MARGIN)
+                    let k = ((dev / limit).sqrt() * SPLIT_MARGIN)
                         .ceil()
                         .clamp(2.0, MAX_EDGE_SPLIT);
                     let k = k as usize;
@@ -184,22 +221,78 @@ fn refine_to_chord_tolerance(b: &mut Builder, surface: &Surface, tol: f64) -> Re
             if any_bad {
                 continue;
             }
-            let v = f.vertices();
-            let idx = [v[0].fix().index(), v[1].fix().index(), v[2].fix().index()];
             let c = (b.uv[idx[0]] + b.uv[idx[1]] + b.uv[idx[2]]) / 3.0;
             let avg = (b.pts3[idx[0]] + b.pts3[idx[1]] + b.pts3[idx[2]]) / 3.0;
-            if surface.point(c.x, c.y).distance(avg) > tol {
+            let limit = idx.iter().map(|i| local(*i)).fold(tol, f64::max);
+            if deviation(surface, c, avg, limit) > limit {
                 inserts.push(c);
             }
         }
-        if inserts.is_empty() || b.pts3.len() + inserts.len() > MAX_GRID_POINTS {
-            return Ok(());
+        if inserts.is_empty() {
+            return Ok(!limited);
         }
+        if b.pts3.len() + inserts.len() > MAX_GRID_POINTS {
+            return Ok(false);
+        }
+        let mut added = 0;
         for q in inserts {
-            b.add(q, surface.point(q.x, q.y))?;
+            added += usize::from(b.add_interior(q, surface.point(q.x, q.y))?);
+        }
+        if added == 0 {
+            // Nichts mehr einzufügen (alle Punkte lägen auf dem Rand oder einer Ecke).
+            return Ok(false);
         }
     }
-    Ok(())
+    // Letzte Runde: Toleranz nur erreicht, wenn nichts mehr einzufügen wäre.
+    Ok(!limited && within_chord_tolerance(b, surface, tol))
+}
+
+/// Abweichung eines Netzpunkts `p` (Sehnen- oder Dreiecksmitte) von der Fläche. Schnell über den
+/// Flächenpunkt an der Parametermitte `uv` (eine obere Schranke); liegt dieser weiter als
+/// `limit` entfernt, entscheidet der echte Abstand zur Fläche. Nötig an Polen: Dort ist `u`
+/// beliebig, die Parametermitte einer Kante vom Pol liegt dann weit neben der Sehne, obwohl
+/// die Sehne die Fläche genau trifft.
+fn deviation(surface: &Surface, uv: DVec2, p: DVec3, limit: f64) -> f64 {
+    let quick = surface.point(uv.x, uv.y).distance(p);
+    if quick <= limit {
+        quick
+    } else {
+        surface.implicit(p).abs().min(quick)
+    }
+}
+
+/// Kleinster Abstand zweier Ecken eines Dreiecks im Raum, unter dem es als entartet gilt (wie in
+/// der Ausgabe: Polpunkte haben zwei Parameterlagen, aber eine 3D-Lage).
+const WELD: f64 = 1e-12;
+
+/// Fallen zwei Ecken des Dreiecks im Raum zusammen? Solche Dreiecke entfallen in der Ausgabe
+/// und werden nicht verfeinert.
+fn degenerate(b: &Builder, idx: [usize; 3]) -> bool {
+    let [p0, p1, p2] = idx.map(|i| b.pts3[i]);
+    p0.distance(p1) < WELD || p1.distance(p2) < WELD || p0.distance(p2) < WELD
+}
+
+/// Halten alle Innenkanten und Schwerpunkte der Dreiecke im Inneren die Toleranz ein?
+fn within_chord_tolerance(b: &Builder, surface: &Surface, tol: f64) -> bool {
+    let inner = inner_faces_by_parity(&b.cdt);
+    b.cdt.inner_faces().all(|f| {
+        let v = f.vertices();
+        let idx = [v[0].fix().index(), v[1].fix().index(), v[2].fix().index()];
+        if !inner[f.fix().index()] || degenerate(b, idx) {
+            return true;
+        }
+        let edges_ok = f.adjacent_edges().into_iter().all(|e| {
+            if e.is_constraint_edge() {
+                return true;
+            }
+            let (i, j) = (e.from().fix().index(), e.to().fix().index());
+            let mid = 0.5 * (b.uv[i] + b.uv[j]);
+            deviation(surface, mid, 0.5 * (b.pts3[i] + b.pts3[j]), tol) <= tol
+        });
+        let c = (b.uv[idx[0]] + b.uv[idx[1]] + b.uv[idx[2]]) / 3.0;
+        let avg = (b.pts3[idx[0]] + b.pts3[idx[1]] + b.pts3[idx[2]]) / 3.0;
+        edges_ok && deviation(surface, c, avg, tol) <= tol
+    })
 }
 
 /// Abstand von `q` zur Strecke `a`–`b`.
@@ -222,6 +315,27 @@ struct Builder {
 }
 
 impl Builder {
+    /// Wie `add`, aber nur für Punkte im Inneren: Fällt der Punkt (im gestreckten Raum) genau
+    /// auf eine Randkante oder eine vorhandene Ecke, wird er nicht eingefügt – eine geteilte
+    /// Randkante hätte eine Ecke, die der Nachbarfläche fehlt (Netz nicht dicht).
+    /// `Ok(true)`, wenn eine neue Ecke entstand.
+    fn add_interior(&mut self, p2: DVec2, p3: DVec3) -> Result<bool, ()> {
+        let s = p2 * self.scale;
+        let q = mitigate_underflow(Point2::new(s.x, s.y));
+        match self.cdt.locate(q) {
+            PositionInTriangulation::OnVertex(_) => return Ok(false),
+            PositionInTriangulation::OnEdge(e)
+                if self.cdt.is_constraint_edge(e.as_undirected()) =>
+            {
+                return Ok(false);
+            }
+            _ => {}
+        }
+        let before = self.pts3.len();
+        self.add(p2, p3)?;
+        Ok(self.pts3.len() > before)
+    }
+
     /// Punkt einfügen (gleiche Lage ergibt denselben Punkt) und seine 3D-Lage merken.
     fn add(&mut self, p2: DVec2, p3: DVec3) -> Result<FixedVertexHandle, ()> {
         let s = p2 * self.scale;
@@ -520,14 +634,20 @@ pub fn tessellate_trimmed(
     let grid = match &g.surface {
         Surface::Nurbs(d) => {
             let patch = nurbs_patch(d, &polys);
-            let (nu, nv) = disc.nurbs_grid(d.surface(), &patch);
-            let cell = isotropic_cell(
+            let cells = |(nu, nv): (usize, usize)| {
                 DVec2::new(
                     (patch.u1 - patch.u0) / nu as f64,
                     (patch.v1 - patch.v0) / nv as f64,
-                ),
-                scale,
-            );
+                )
+            };
+            // Unbeschnitten: Raster aus `nurbs_grid` (wie der Plan, auch für die Volumengenauigkeit).
+            // Beschnitten: nötige Schrittweite je Richtung, Zellen fast isotrop, damit die
+            // Delaunay-Triangulierung an den Beschnitten keine langen, schrägen Dreiecke bildet.
+            let cell = if is_trimmed(g) {
+                isotropic_cell(cells(disc.nurbs_needed_grid(d.surface(), &patch)), scale)
+            } else {
+                cells(disc.nurbs_grid(d.surface(), &patch))
+            };
             grid_points_cells(&polys, scale, cell, sign)?
         }
         _ => {
@@ -559,8 +679,11 @@ pub fn tessellate_trimmed(
     }
 
     if matches!(g.surface, Surface::Nurbs(_)) {
-        refine_to_chord_tolerance(&mut b, &g.surface, disc.chord_tolerance())
+        let exact = refine_to_chord_tolerance(&mut b, &g.surface, disc.chord_tolerance())
             .map_err(|_| fail())?;
+        if !exact {
+            mesh.inexact_faces.push(Id::from_index(face_index));
+        }
     }
 
     // Dreiecke der Fläche: Flutfüllung über die Triangulierung, beginnend außen (Außengebiet
@@ -580,9 +703,7 @@ pub fn tessellate_trimmed(
         // 3D-Lage), wie beim Raster in `tessellate_patch`. Flächenlose Dreiecke mit getrennten
         // Ecken bleiben: Am Kegelspitzenpunkt liegen Rasterpunkte einer Mantellinie mit der
         // Spitze auf einer Geraden; ohne diese Fächer entstünden T-Stöße (Netz nicht dicht).
-        let (p0, p1, p2) = (b.pts3[idx[0]], b.pts3[idx[1]], b.pts3[idx[2]]);
-        const WELD: f64 = 1e-12;
-        if p0.distance(p1) < WELD || p1.distance(p2) < WELD || p0.distance(p2) < WELD {
+        if degenerate(&b, idx) {
             continue;
         }
         tris.push(if g.same_sense {
@@ -710,7 +831,10 @@ mod tests {
         for i in 0..hs.len() {
             b.cdt.add_constraint(hs[i], hs[(i + 1) % hs.len()]);
         }
-        refine_to_chord_tolerance(&mut b, &s, tol).unwrap();
+        assert!(
+            refine_to_chord_tolerance(&mut b, &s, tol).unwrap(),
+            "Toleranz erreicht"
+        );
         assert!(b.pts3.len() > ring.len(), "Verfeinerung fügt Punkte ein");
         let inner = inner_faces_by_parity(&b.cdt);
         let mut worst = 0.0_f64;

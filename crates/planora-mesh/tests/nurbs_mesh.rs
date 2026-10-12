@@ -421,6 +421,18 @@ fn mantle_deviation(
     face: planora_kernel::Id<planora_kernel::Face>,
     r: f64,
 ) -> f64 {
+    face_deviation(mesh, face, |p| {
+        (DVec3::new(p.x, p.y, 0.0).length() - r).abs()
+    })
+}
+
+/// Größte Abweichung der Dreiecke einer Fläche, gemessen mit dem Abstand `dist` zur exakten
+/// Fläche, baryzentrisch abgetastet.
+fn face_deviation(
+    mesh: &planora_mesh::Mesh,
+    face: planora_kernel::Id<planora_kernel::Face>,
+    dist: impl Fn(DVec3) -> f64,
+) -> f64 {
     const N: usize = 8;
     let range = mesh.face_ranges.iter().find(|fr| fr.face == face).unwrap();
     let first = range.first_index as usize;
@@ -431,7 +443,7 @@ fn mantle_deviation(
             for j in 0..=N - i {
                 let (wa, wb) = (i as f64 / N as f64, j as f64 / N as f64);
                 let p = a * wa + b * wb + c * (1.0 - wa - wb);
-                worst = worst.max((DVec3::new(p.x, p.y, 0.0).length() - r).abs());
+                worst = worst.max(dist(p));
             }
         }
     }
@@ -461,6 +473,7 @@ fn check_trimmed_mantle(analytic: &Solid, r: f64, h: f64, tol: f64) {
     );
     let dev = mantle_deviation(&mesh, face, r);
     assert!(dev <= tol * 1.05, "Abweichung {dev} bei Toleranz {tol}");
+    assert!(mesh.inexact_faces.is_empty(), "Toleranz überall erreicht");
 }
 
 fn cylinder_r3_h5() -> Solid {
@@ -489,6 +502,17 @@ fn trimmed_nurbs_faces_keep_the_chord_tolerance() {
     let holed = boolean(&cylinder, &bar, BoolOp::Difference, &tol).unwrap();
     for c in [0.01, 0.001] {
         check_trimmed_mantle(&holed, 3.0, 5.0, c);
+    }
+    // Derselbe Stab entlang y (Löcher bei 90° und 270°, eines liegt auf der Naht der Kante).
+    let bar_y = kernel
+        .transform(
+            &kernel.make_box(DVec3::new(1.0, 10.0, 1.0)).unwrap(),
+            &DMat4::from_translation(DVec3::new(-0.5, -5.0, 2.0)),
+        )
+        .unwrap();
+    let holed_y = boolean(&cylinder, &bar_y, BoolOp::Difference, &tol).unwrap();
+    for c in [0.01, 0.001] {
+        check_trimmed_mantle(&holed_y, 3.0, 5.0, c);
     }
     // Schräg gekippte Scheibe (15° um x): Mantel oben und unten schräg beschnitten.
     let slab = kernel
@@ -589,5 +613,129 @@ fn boundary_points_off_the_nurbs_face_are_an_error_not_an_open_mesh() {
     assert_eq!(
         tessellate(&solid, &opts(0.01)).unwrap_err(),
         planora_mesh::MeshError::OffSurface(id.index())
+    );
+}
+
+#[test]
+fn a_cut_nurbs_sphere_keeps_the_chord_tolerance() {
+    use planora_kernel::boolean::{BoolOp, boolean};
+    use planora_math::{DMat4, Tolerance};
+    let kernel = AnalyticKernel::default();
+    let sphere = kernel.make_sphere(2.0).unwrap();
+    // Würfel schneidet eine schräge Kappe ab (gekippt um 25° um y).
+    let cube = kernel
+        .transform(
+            &kernel.make_box(DVec3::new(6.0, 6.0, 6.0)).unwrap(),
+            &(DMat4::from_rotation_y(25f64.to_radians())
+                * DMat4::from_translation(DVec3::new(0.8, -3.0, -3.0))),
+        )
+        .unwrap();
+    let cut = boolean(&sphere, &cube, BoolOp::Difference, &Tolerance::default()).unwrap();
+    planora_kernel::validate(&cut).unwrap();
+    let expected = mass_properties(&tessellate(&cut, &opts(3e-4)).unwrap()).volume;
+    let half = NurbsCurve::elliptic_arc(
+        DVec3::ZERO,
+        DVec3::new(0.0, 0.0, 2.0),
+        DVec3::new(2.0, 0.0, 0.0),
+        PI,
+        -PI,
+    )
+    .unwrap();
+    let surf = Surface::nurbs(
+        NurbsSurface::revolve(&half, DVec3::ZERO, DVec3::Z, 0.0, TAU).unwrap(),
+        true,
+        false,
+    )
+    .unwrap();
+    let mut solid = cut.clone();
+    let face = solid
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Sphere { .. }))
+        .map(|(id, _)| id)
+        .unwrap();
+    solid.faces[face].surface = surf;
+    planora_kernel::validate(&solid).unwrap();
+    for tol in [0.01, 0.001] {
+        let mesh = tessellate(&solid, &opts(tol)).unwrap();
+        assert!(is_watertight(&mesh, 1e-6));
+        let v = mass_properties(&mesh).volume;
+        // Ein einbeschriebenes Netz mit Tiefe ≤ tol verliert höchstens etwa 3 · tol / r Volumen.
+        let limit = 3.0 * tol / 2.0;
+        assert!(
+            (v - expected).abs() / expected < limit,
+            "{v} statt {expected}"
+        );
+        let dev = face_deviation(&mesh, face, |p| (p.length() - 2.0).abs());
+        assert!(dev <= tol * 1.05, "Abweichung {dev} bei Toleranz {tol}");
+        assert!(mesh.inexact_faces.is_empty());
+    }
+}
+
+#[test]
+fn untrimmed_nurbs_tubes_keep_their_mesh_size() {
+    // Obergrenzen: das Dreifache der Dreieckszahlen vor der isotropen Zellgrenze (Commit
+    // 6739179: 1320, 426 und 1332 Dreiecke für den ganzen Körper).
+    for (r, h, tol, before) in [
+        (3.0, 5.0, 0.001, 1320),
+        (1.0, 10.0, 0.01, 426),
+        (1.0, 100.0, 0.01, 1332),
+    ] {
+        let solid = nurbs_cylinder_solid(r, h);
+        let mesh = tessellate(&solid, &opts(tol)).unwrap();
+        let tris = mesh.indices.len() / 3;
+        assert!(
+            tris <= 3 * before,
+            "r {r}, h {h}, tol {tol}: {tris} Dreiecke"
+        );
+        assert!(is_watertight(&mesh, 1e-9));
+        let face = solid
+            .faces
+            .iter()
+            .find(|(_, f)| matches!(f.surface, Surface::Nurbs(_)))
+            .map(|(id, _)| id)
+            .unwrap();
+        let dev = mantle_deviation(&mesh, face, r);
+        assert!(dev <= tol * 1.05, "Abweichung {dev} bei Toleranz {tol}");
+        assert!(mesh.inexact_faces.is_empty());
+    }
+}
+
+#[test]
+fn a_face_whose_boundary_is_too_coarse_is_reported_as_inexact() {
+    use planora_kernel::boolean::{BoolOp, boolean};
+    use planora_math::{DMat4, Tolerance};
+    // Zylinder r = 50, h = 1 minus schräger Stab, Sehnentoleranz 1e-4: Die Kreiskanten sind auf
+    // 720 Abschnitte begrenzt (Sehne ≈ 4,8e-4), der Mantel kann die Toleranz nicht überall halten.
+    let kernel = AnalyticKernel::default();
+    let profile = Profile {
+        outer: ProfileLoop::circle(DVec2::ZERO, 50.0),
+        holes: vec![],
+    };
+    let cylinder = kernel.extrude(&profile, &world(), 1.0).unwrap();
+    let bar = kernel
+        .transform(
+            &kernel.make_box(DVec3::new(200.0, 5.0, 0.5)).unwrap(),
+            &(DMat4::from_rotation_x(20f64.to_radians())
+                * DMat4::from_rotation_z(30f64.to_radians())
+                * DMat4::from_translation(DVec3::new(-100.0, -2.5, 0.2))),
+        )
+        .unwrap();
+    let holed = boolean(&cylinder, &bar, BoolOp::Difference, &Tolerance::default()).unwrap();
+    let (solid, face) = with_nurbs_mantle(&holed, 50.0, -1.0, 2.0);
+    let tol = 1e-4;
+    let mesh = tessellate(&solid, &opts(tol)).unwrap();
+    assert!(is_watertight(&mesh, 1e-9), "geschlossen trotz Grenze");
+    assert_eq!(
+        mesh.inexact_faces,
+        vec![face],
+        "Fläche als ungenau gemeldet"
+    );
+    // Die Abweichung bleibt bei der des Randes (Sehne der Kreiskante), nicht darüber hinaus.
+    let rim = 50.0 * (1.0 - (PI / 720.0).cos());
+    let dev = mantle_deviation(&mesh, face, 50.0);
+    assert!(
+        dev > tol && dev <= rim * 1.05,
+        "Abweichung {dev}, Rand {rim}"
     );
 }

@@ -9,6 +9,10 @@ pub const MAX_NURBS_DIVISIONS: usize = 512;
 /// Höchstzahl der Verfeinerungsrunden nach der Sehnenprüfung (Freiformkanten und -flächen).
 const MAX_REFINE_ROUNDS: usize = 3;
 
+/// Höchstzahl der Runden bei der Bestimmung der nötigen Teilung (`nurbs_needed_grid`), die von
+/// der groben Mindestteilung ausgeht.
+const NEEDED_REFINE_ROUNDS: usize = 8;
+
 /// Zuschlag beim Verfeinern: Die Sehnenabweichung fällt quadratisch mit der Schrittweite, der
 /// neue Schritt wird mit diesem Faktor etwas kleiner gewählt, als die Schätzung verlangt.
 const REFINE_MARGIN: f64 = 1.2;
@@ -199,19 +203,53 @@ impl Discretizer {
                 .max(2 * spans)
                 .clamp(1, MAX_NURBS_DIVISIONS)
         };
-        let mut nu = initial(
+        let nu = initial(
             s.knots_u().spans_in(u0, u1),
             s.degree_u(),
             turn_u,
             (u1 - u0) / (du1 - du0),
         );
-        let mut nv = initial(
+        let nv = initial(
             s.knots_v().spans_in(v0, v1),
             s.degree_v(),
             turn_v,
             (v1 - v0) / (dv1 - dv0),
         );
-        for _ in 0..MAX_REFINE_ROUNDS {
+        self.refine_counts(s, (u0, u1), (v0, v1), (nu, nv), MAX_REFINE_ROUNDS)
+    }
+
+    /// Unterteilung `(nu, nv)`, die die Sehnentoleranz gerade einhält: Beginn mit der
+    /// Mindestteilung nach der Struktur (`max(Bézier-Abschnitte · Grad, 2 · Abschnitte)`, ohne
+    /// den Winkelschritt des Discretizers), dann bis zu [`NEEDED_REFINE_ROUNDS`] Runden der
+    /// Sehnenprüfung wie in [`Discretizer::nurbs_grid`]. Dient als Maß für die nötige
+    /// Schrittweite je Richtung (z. B. für das Seitenverhältnis der Rasterzellen beschnittener
+    /// Flächen), unabhängig davon, wie fein der gemeinsame Winkelschritt ist.
+    pub fn nurbs_needed_grid(&self, s: &NurbsSurface, patch: &UvRect) -> (usize, usize) {
+        let ((du0, du1), (dv0, dv1)) = s.domain();
+        let (u0, u1) = clamp_range(patch.u0, patch.u1, du0, du1);
+        let (v0, v1) = clamp_range(patch.v0, patch.v1, dv0, dv1);
+        let structural = |spans: usize, degree: usize| {
+            let spans = spans.max(1);
+            (spans * degree)
+                .max(2 * spans)
+                .clamp(1, MAX_NURBS_DIVISIONS)
+        };
+        let nu = structural(s.knots_u().spans_in(u0, u1), s.degree_u());
+        let nv = structural(s.knots_v().spans_in(v0, v1), s.degree_v());
+        self.refine_counts(s, (u0, u1), (v0, v1), (nu, nv), NEEDED_REFINE_ROUNDS)
+    }
+
+    /// Sehnenprüfung des Rasters `nu × nv` über `u0 … u1`, `v0 … v1` (Sehnenmitten in u und v,
+    /// Zellmitte gegen das Eckenmittel), höchstens `rounds` Verfeinerungsrunden.
+    fn refine_counts(
+        &self,
+        s: &NurbsSurface,
+        (u0, u1): (f64, f64),
+        (v0, v1): (f64, f64),
+        (mut nu, mut nv): (usize, usize),
+        rounds: usize,
+    ) -> (usize, usize) {
+        for _ in 0..rounds {
             if nu >= MAX_NURBS_DIVISIONS && nv >= MAX_NURBS_DIVISIONS {
                 break;
             }
