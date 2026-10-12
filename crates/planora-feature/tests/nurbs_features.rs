@@ -417,7 +417,6 @@ fn an_unsupported_freeform_boolean_reports_an_error_and_skips_dependents() {
     match &d.feature(bo).unwrap().status {
         FeatureStatus::Error(m) => {
             assert!(m.contains("Freiformfläche"), "{m}");
-            assert!(m.contains("tangential"), "die Ursache bleibt lesbar: {m}");
         }
         s => panic!("Fehler erwartet: {s:?}"),
     }

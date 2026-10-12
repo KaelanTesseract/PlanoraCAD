@@ -206,19 +206,30 @@ fn compute_unchecked(
 
 /// Fehlermeldung einer gescheiterten Booleschen Operation. Ist ein Eingangskörper mit
 /// Freiformflächen im Spiel, sagt die Meldung das ausdrücklich: Das Ergebnis lässt sich dann
-/// nur in Grenzen berechnen (siehe Spec §13), und der Nutzer soll den Grund erkennen. Ein leeres
-/// Ergebnis ist kein Grenzfall des Rechners und bleibt unverändert.
+/// nur in Grenzen berechnen (siehe Spec §13), und der Nutzer soll den Grund erkennen. Der Hinweis
+/// gilt nur für die Grenzen des Rechners (nicht unterstützte Lage, mehrdeutige Berührung oder
+/// Einordnung, dazu Streifschuss, dünne Gebilde und Meldungen des Schnittrechners, die als
+/// `Unsupported` kommen). Leeres Ergebnis, ungültige Eingabe, offenes oder ungültiges Ergebnis
+/// sind keine solchen Grenzen und behalten ihre Meldung. Der Vorschlag folgt der Form der übrigen
+/// Meldungen („…; bitte …“).
 fn boolean_error(a: &Solid, b: &Solid, e: &BooleanError) -> FeatureError {
     let freeform = |s: &Solid| {
         s.faces
             .iter()
             .any(|(_, f)| f.surface.kind() == SurfaceKind::Nurbs)
     };
-    if matches!(e, BooleanError::EmptyResult) || !(freeform(a) || freeform(b)) {
+    let limit = matches!(
+        e,
+        BooleanError::UnsupportedIntersection { .. }
+            | BooleanError::Unsupported(_)
+            | BooleanError::AmbiguousContact
+            | BooleanError::AmbiguousClassification
+    );
+    if !limit || !(freeform(a) || freeform(b)) {
         return FeatureError::Kernel(e.to_string());
     }
     FeatureError::Kernel(format!(
-        "Mit Freiformflächen nicht berechenbar: {e}. Hilfe: Lage oder Maße eines Körpers leicht ändern"
+        "Mit Freiformflächen nicht berechenbar: {e}; bitte Lage oder Maße eines Körpers leicht ändern"
     ))
 }
 
@@ -354,6 +365,61 @@ fn compute_sketch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Nur die Grenzen des Rechners bekommen den Freiform-Hinweis; andere Kernfehler behalten
+    /// ihren Text, auch wenn ein Freiformkörper beteiligt ist.
+    #[test]
+    fn only_limit_errors_get_the_freeform_hint() {
+        use planora_kernel::{Profile, ProfileLoop};
+        use planora_math::nurbs::NurbsCurve;
+        use planora_math::{Frame, Tolerance};
+        let tol = Tolerance::default();
+        let ellipse = NurbsCurve::elliptic_arc(
+            DVec3::ZERO,
+            DVec3::new(5.0, 0.0, 0.0),
+            DVec3::new(0.0, 3.0, 0.0),
+            0.0,
+            std::f64::consts::TAU,
+        )
+        .unwrap();
+        let profile = Profile {
+            outer: ProfileLoop::nurbs_loop(ellipse).unwrap(),
+            holes: vec![],
+        };
+        let frame = Frame::from_origin_normal(DVec3::ZERO, DVec3::Z);
+        let freeform = planora_kernel::extrude(&profile, &frame, 4.0, &tol).unwrap();
+        let plain = planora_kernel::primitives::make_box(DVec3::ONE, &tol).unwrap();
+        let text = |a: &Solid, b: &Solid, e: BooleanError| match boolean_error(a, b, &e) {
+            FeatureError::Kernel(m) => m,
+            other => panic!("{other:?}"),
+        };
+        let hinted = [
+            BooleanError::Unsupported("Streifschuss".into()),
+            BooleanError::AmbiguousContact,
+            BooleanError::AmbiguousClassification,
+            BooleanError::UnsupportedIntersection { a: "A", b: "B" },
+        ];
+        for e in hinted {
+            let m = text(&freeform, &plain, e.clone());
+            assert!(
+                m.starts_with("Mit Freiformflächen nicht berechenbar: "),
+                "{m}"
+            );
+            assert!(m.contains(&e.to_string()) && m.contains("; bitte "), "{m}");
+            // Andere Reihenfolge: auch mit Hinweis; rein analytisch: ohne.
+            assert!(text(&plain, &freeform, e.clone()).contains("Freiformflächen"));
+            assert_eq!(text(&plain, &plain, e.clone()), e.to_string());
+        }
+        let plain_kinds = [
+            BooleanError::EmptyResult,
+            BooleanError::NotClosed,
+            BooleanError::ResultInvalid("x".into()),
+            BooleanError::InvalidInput("y".into()),
+        ];
+        for e in plain_kinds {
+            assert_eq!(text(&freeform, &plain, e.clone()), e.to_string());
+        }
+    }
 
     #[test]
     fn huge_numbers_become_an_error_status_instead_of_a_body() {

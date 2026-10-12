@@ -125,8 +125,10 @@ fn a_nan_ellipse_value_is_rejected_at_load() {
 }
 
 /// Gültiges JSON, aber unsinnige Ellipsenmaße: Laden und Neuberechnen dürfen nicht abstürzen;
-/// entweder lehnt das Laden die Datei ab, oder die Skizze und alles, was von ihr abhängt, trägt
-/// einen Fehlerstatus statt eines Körpers.
+/// entweder lehnt das Laden die Datei ab, oder das Dokument wird neu berechnet, und jeder
+/// sichtbare Körper ist gültig (sonst trägt das Feature einen Fehlerstatus statt eines Körpers).
+/// Negative, null, winzige (1e-300) und riesige Werte lehnt schon das Laden ab; eine sehr flache
+/// Ellipse (1e-5) und kleine = große Halbachse (5) kommen bis zur Neuberechnung.
 #[test]
 fn absurd_but_finite_ellipse_values_never_panic_and_never_produce_a_body() {
     let text = encode_version(&freeform_document().snapshot()).unwrap();
@@ -134,7 +136,10 @@ fn absurd_but_finite_ellipse_values_never_panic_and_never_produce_a_body() {
     let at = text.find(needle).unwrap();
     let value_at = at + text[at..].find("\"wert\": ").unwrap() + "\"wert\": ".len();
     let value_end = value_at + text[value_at..].find('\n').unwrap();
-    for bad in ["-3.0", "0.0", "1e300", "1e-300"] {
+    // Zählt die Werte, die bis zur Neuberechnung kommen: Würde jeder Wert schon beim Laden
+    // abgelehnt, prüfte der Test die Neuberechnung gar nicht.
+    let mut recomputed = 0;
+    for bad in ["-3.0", "0.0", "1e300", "1e-300", "1e-5", "5.0"] {
         let hostile = format!("{}{bad}{}", &text[..value_at], &text[value_end..]);
         let Ok(snap) = decode_version(&hostile, "feindlich.json") else {
             continue;
@@ -146,5 +151,10 @@ fn absurd_but_finite_ellipse_values_never_panic_and_never_produce_a_body() {
         for b in doc.visible_bodies() {
             doc.kernel().validate(b.solid).unwrap();
         }
+        recomputed += 1;
     }
+    assert!(
+        recomputed >= 2,
+        "zu wenige Werte erreichten die Neuberechnung: {recomputed}"
+    );
 }
