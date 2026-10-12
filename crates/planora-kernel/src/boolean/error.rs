@@ -11,6 +11,9 @@ pub enum BoolOp {
 pub enum BooleanError {
     #[error("Der Schnitt von {a} mit {b} wird noch nicht unterstützt")]
     UnsupportedIntersection { a: &'static str, b: &'static str },
+    /// Nicht lösbare Lage mit benannter Ursache (etwa vom numerischen Schnittrechner).
+    #[error("{0}")]
+    Unsupported(String),
     #[error(
         "Die Körper berühren sich nur an einer Kante oder tangential oder liegen zu knapp beieinander; diese Lage lässt sich nicht sicher auswerten"
     )]

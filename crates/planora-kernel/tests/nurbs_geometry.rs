@@ -250,21 +250,26 @@ fn a_line_meets_the_nurbs_cylinder_twice() {
 }
 
 #[test]
-fn intersections_with_nurbs_are_unsupported_for_now() {
+fn intersections_with_nurbs_go_to_the_numerical_solver() {
+    // Angepasst in Task 8: Früher hielt dieser Test fest, dass Schnitte mit Freiformflächen
+    // „vorläufig“ `Unsupported` ergeben; seit dem numerischen Schnittrechner liefern sie die
+    // Schnittkurve (hier den Randkreis bei z = 0, in beiden Reihenfolgen).
     use planora_kernel::boolean::{SurfaceIntersection, intersect_surfaces, surface_name};
     let n = cylinder_as_nurbs(3.0, 5.0);
     let plane = Surface::Plane {
         frame: planora_math::Frame::WORLD,
     };
     let tol = planora_math::Tolerance::default();
-    assert!(matches!(
+    for r in [
         intersect_surfaces(&n, &plane, &tol),
-        SurfaceIntersection::Unsupported
-    ));
-    assert!(matches!(
         intersect_surfaces(&plane, &n, &tol),
-        SurfaceIntersection::Unsupported
-    ));
+    ] {
+        let SurfaceIntersection::Curves(cs) = r else {
+            panic!("{r:?}")
+        };
+        assert_eq!(cs.len(), 1);
+        assert!(cs[0].period().is_some());
+    }
     assert_eq!(surface_name(&n), "Freiformfläche");
     assert_eq!(SurfaceKind::Nurbs.label(), "Freiformfläche");
     assert_eq!(CurveKind::Nurbs.label(), "Freiformkurve");

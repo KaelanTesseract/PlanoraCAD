@@ -334,13 +334,27 @@ pub fn imprint(
                 continue;
             }
             let (ga, gb) = (&fa.geom, &fb.geom);
+            let unsupported = || BooleanError::UnsupportedIntersection {
+                a: surface_name(&ga.surface),
+                b: surface_name(&gb.surface),
+            };
+            let with_nurbs =
+                matches!(ga.surface, Surface::Nurbs(_)) || matches!(gb.surface, Surface::Nurbs(_));
             match intersect_surfaces(&ga.surface, &gb.surface, tol) {
                 SurfaceIntersection::None | SurfaceIntersection::Touch => {}
-                SurfaceIntersection::Unsupported => {
-                    return Err(BooleanError::UnsupportedIntersection {
-                        a: surface_name(&ga.surface),
-                        b: surface_name(&gb.surface),
-                    });
+                SurfaceIntersection::Unsupported => return Err(unsupported()),
+                SurfaceIntersection::UnsupportedBecause(msg) => {
+                    return Err(BooleanError::Unsupported(format!(
+                        "Der Schnitt von {} mit {} wird nicht unterstützt: {msg}",
+                        surface_name(&ga.surface),
+                        surface_name(&gb.surface)
+                    )));
+                }
+                // Vorläufig (bis die Pipeline Freiformkurven und -flächen verarbeitet): Schnitte
+                // mit Freiformflächen werden berechnet, aber noch nicht weiterverarbeitet; das
+                // Verhalten der Booleschen Operation bleibt wie bisher (benannter Fehler).
+                SurfaceIntersection::Curves(_) | SurfaceIntersection::Coincident if with_nurbs => {
+                    return Err(unsupported());
                 }
                 SurfaceIntersection::Coincident => {
                     for s in coincident_sections(fb, fa, tol) {

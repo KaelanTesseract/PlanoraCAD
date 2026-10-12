@@ -3,6 +3,7 @@
 mod classify;
 mod error;
 mod imprint;
+mod nurbs_ssi;
 mod roots;
 mod seg;
 mod select;
@@ -17,6 +18,10 @@ pub use classify::{
 };
 pub use error::{BoolOp, BooleanError};
 pub use imprint::{FaceWork, imprint};
+pub use nurbs_ssi::{
+    MAX_CURVE_LENGTH_FACTOR, MAX_MARCH_STEPS, MAX_SEEDS, MAX_SUBDIVISION_DEPTH, NURBS_FIT_TOL,
+    SsiOutcome, intersect_nurbs,
+};
 pub use roots::{CurveSurface, Root, curve_surface_roots, seg_intersections};
 pub use seg::{Seg, reverse_loop};
 pub use select::{Piece, Side, select_piece};

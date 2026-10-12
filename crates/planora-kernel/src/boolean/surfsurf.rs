@@ -1,3 +1,4 @@
+use super::nurbs_ssi::{SsiOutcome, intersect_nurbs};
 use crate::geometry::{Curve, Surface};
 use planora_math::{DVec3, Frame, Tolerance};
 
@@ -12,6 +13,8 @@ pub enum SurfaceIntersection {
     Curves(Vec<Curve>),
     /// Paar außerhalb von Stufe A.
     Unsupported,
+    /// Nicht lösbare Lage mit benannter Ursache (numerischer Schnittrechner, deutsche Meldung).
+    UnsupportedBecause(String),
 }
 
 const ANG: f64 = 1e-9;
@@ -44,9 +47,15 @@ fn circle(center: DVec3, normal: DVec3, radius: f64) -> Curve {
 /// Schnitt zweier Flächen (symmetrisch in den Argumenten).
 pub fn intersect_surfaces(a: &Surface, b: &Surface, tol: &Tolerance) -> SurfaceIntersection {
     use Surface::*;
-    // Vorläufig: Schnitte mit Freiformflächen gibt es noch nicht (numerischer Schnittrechner folgt).
+    // Mindestens eine Freiformfläche: numerischer Schnittrechner (analytische Wege unverändert).
     if matches!(a, Nurbs(_)) || matches!(b, Nurbs(_)) {
-        return SurfaceIntersection::Unsupported;
+        return match intersect_nurbs(a, b, tol) {
+            SsiOutcome::Curves(cs) => SurfaceIntersection::Curves(cs),
+            SsiOutcome::None => SurfaceIntersection::None,
+            SsiOutcome::Touch => SurfaceIntersection::Touch,
+            SsiOutcome::Coincident => SurfaceIntersection::Coincident,
+            SsiOutcome::Unsupported(msg) => SurfaceIntersection::UnsupportedBecause(msg),
+        };
     }
     match (a, b) {
         (Plane { frame: fa }, Plane { frame: fb }) => plane_plane(fa, fb, tol),
