@@ -782,8 +782,8 @@ impl Ssi<'_> {
         let (pa, pb) = (patches(&self.a)?, patches(&self.b)?);
         if pa.is_some() && pb.is_some() {
             // für den sicheren Fern-Nachweis zwischen zwei Freiformflächen
-            self.patches_a = pa.clone();
-            self.patches_b = pb.clone();
+            self.patches_a = pa.clone().map(std::sync::Arc::new);
+            self.patches_b = pb.clone().map(std::sync::Arc::new);
         }
         let piece = |p: &BezierPatch| Piece {
             p: p.clone(),

@@ -117,6 +117,15 @@ impl Ssi<'_> {
             }
             tol *= 0.5;
         }
+        // Die Prüfung scheitert trotz Verdichtung (etwa eine Interpolation mit fast so vielen
+        // Kontrollpunkten wie Punkten, die zwischen ungleich verteilten Punkten ausschwingt):
+        // das Stück halbieren, wie bei der Kontrollpunktgrenze.
+        let m = pts.len() / 2;
+        if depth < MAX_FIT_SPLITS && m >= MIN_PIECE_POINTS {
+            let mut out = self.fit_piece(&pts[..=m], &hints[..=m], depth + 1)?;
+            out.extend(self.fit_piece(&pts[m..], &hints[m..], depth + 1)?);
+            return Ok(out);
+        }
         Err(MSG_FIT.into())
     }
 

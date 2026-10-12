@@ -575,10 +575,8 @@ fn cylinders_sharing_a_rim_touch_and_overlapping_ones_are_partly_coincident() {
     // Review I2: Proben jenseits einer beschränkten Fläche zählen nicht als Durchdringung.
     let a = nurbs_cylinder(DVec3::ZERO, DVec3::Z, 2.0, 20.0);
     let rim = nurbs_cylinder(DVec3::new(0.0, 0.0, 20.0 - 1e-7), DVec3::Z, 2.0, 20.0);
-    assert!(matches!(
-        intersect_nurbs(&a, &rim, &tol()),
-        SsiOutcome::Touch
-    ));
+    let r = intersect_nurbs(&a, &rim, &tol());
+    assert!(matches!(r, SsiOutcome::Touch), "{r:?}");
     let overlap = nurbs_cylinder(DVec3::new(0.0, 0.0, 19.8), DVec3::Z, 2.0, 20.0);
     match intersect_nurbs(&a, &overlap, &tol()) {
         SsiOutcome::Unsupported(msg) => assert!(msg.contains("teilweise"), "{msg}"),
@@ -1007,7 +1005,7 @@ fn transversal_cuts_work_at_every_scale() {
     // Review Runde 3: Bei 1000 mm scheiterte die Annäherung (die Konvergenzschranke
     // 1e-9 · Diagonale lag über NURBS_FIT_TOL); jetzt ist sie auf 1 % davon begrenzt.
     use planora_math::DMat3;
-    for s in [0.01, 1.0, 1000.0] {
+    for s in [0.01, 1.0, 300.0, 1000.0] {
         let cyl = scaled_cylinder(s, 0.3, DMat3::IDENTITY, DVec3::ZERO);
         let a20 = 20f64.to_radians();
         let mut others = vec![
@@ -1036,7 +1034,7 @@ fn transversal_cuts_work_at_every_scale() {
                 },
             ),
         ];
-        if s == 1000.0 {
+        if s == 0.01 || s == 1000.0 {
             others.push((
                 "Freiform-Zylinder 20°",
                 scaled_cylinder(
@@ -1058,9 +1056,6 @@ fn transversal_cuts_work_at_every_scale() {
             on_both(&cs, &cyl, other);
         }
         // Beule (Seed 3, um die Mitte) gegen eine um 19° geneigte Ebene
-        if s == 1.0 {
-            continue;
-        }
         let bump = random_bump(3);
         let Surface::Nurbs(d) = &bump else {
             unreachable!()
@@ -1260,11 +1255,188 @@ fn a_large_tilted_cylinder_against_a_plane() {
         DVec3::new(100.73215, -255.52006, 1.66539),
         DVec3::new(0.297159, 0.656761, 0.693081).normalize(),
     );
-    for m in [m, m.transpose()] {
+    // Review Runde 5, B (erste Eingabe): die Matrix nach Gram-Schmidt orthonormiert.
+    let x = m.x_axis.normalize();
+    let y = (m.y_axis - x * m.y_axis.dot(x)).normalize();
+    let gs = planora_math::DMat3::from_cols(x, y, x.cross(y));
+    for m in [m, m.transpose(), gs] {
         let a = Surface::nurbs(s.transformed(|p| m * p + off).unwrap(), true, false).unwrap();
         let SsiOutcome::Curves(cs) = intersect_nurbs(&a, &pl, &tol()) else {
             panic!("Kurven erwartet")
         };
         on_both(&cs, &a, &pl);
     }
+}
+
+// ---- Nachbesserung Task 8, Runde 5 (Review) ----
+
+/// Randschnitte von `a` (oberer Rand) mit `b`, die von Kurvenenden auf 1e-6 getroffen werden,
+/// und ihre Anzahl.
+fn rim_hits(a: &Surface, b: &Surface, cs: &[Curve]) -> (usize, usize) {
+    let ends: Vec<DVec3> = cs
+        .iter()
+        .flat_map(|c| {
+            let (t0, t1) = c.domain().unwrap();
+            [c.point(t0), c.point(t1)]
+        })
+        .collect();
+    let crossings = rim_crossings(a, b);
+    let hit = crossings
+        .iter()
+        .filter(|x| ends.iter().any(|e| e.distance(**x) < 1e-6))
+        .count();
+    (hit, crossings.len())
+}
+
+/// Ein Freiform-Zylinder (Radius `r`, Länge 8) quer über dem oberen Rand eines Freiform-Kegels
+/// (`r1`, Naht `seam_a`), um `depth` unter die Randebene getaucht; Sehne unter dem Winkel `phi`.
+fn shallow_rim_case(
+    r1: f64,
+    seam_a: f64,
+    phi: f64,
+    alpha: f64,
+    r: f64,
+    seam_b: f64,
+    depth: f64,
+) -> (Surface, Surface) {
+    let a = rim_cone(r1, seam_a);
+    let dir = DVec3::new(phi.cos(), phi.sin(), 0.0);
+    let nrm = DVec3::new(-phi.sin(), phi.cos(), 0.0);
+    let centre = nrm * (r1 * (alpha / 2.0).cos()) + DVec3::Z * (5.0 + r - depth);
+    (a, axis_cylinder(r, 8.0, seam_b, dir, centre))
+}
+
+/// Prüft eine Rand-Streifung: Tiefe über `10 · tol.linear` verlangt alle Bögen, darunter alle
+/// Bögen oder eine benannte Ablehnung / Berührung; nie Teilergebnisse oder „kein Schnitt“.
+fn check_shallow(name: &str, a: &Surface, b: &Surface, depth: f64) {
+    let res = intersect_nurbs(a, b, &tol());
+    match &res {
+        SsiOutcome::Curves(cs) => {
+            let (hit, n) = rim_hits(a, b, cs);
+            assert!(n >= 2 && hit == n, "{name}: {hit} von {n} Randschnitten");
+            on_both(cs, a, b);
+        }
+        SsiOutcome::Unsupported(msg) if depth < 1e-5 => {
+            assert!(msg.contains("tangential"), "{name}: {msg}")
+        }
+        SsiOutcome::Touch if depth < 1e-5 => {}
+        other => panic!("{name} (Tiefe {depth:e}): {other:?}"),
+    }
+}
+
+#[test]
+fn shallow_rim_crossings_of_two_freeform_surfaces_are_all_found() {
+    // Review Runde 5, D: zwei Eingaben, bei denen Randstücke gegen eine Freiformfläche nur
+    // geschätzt „höchstens eine Nullstelle“ hatten und ein Bogen fehlte.
+    let a = revolved_line(
+        DVec3::new(2.0, 0.0, -5.0),
+        DVec3::new(2.9323886127917342, 0.0, 5.0),
+        3.844505991122473,
+    );
+    let b = axis_cylinder(
+        0.9967615504231817,
+        8.066634698818216,
+        1.3509948157797407,
+        DVec3::new(-0.9896545150661898, -0.14347104519416007, 0.0),
+        DVec3::new(-0.2118910544972401, 1.4616115642117415, 5.996751550423182),
+    );
+    check_shallow("Eingabe 1 (Tiefe 1e-5)", &a, &b, 1e-5);
+    let a = rim_cone(2.9746381476929447, 5.770924841681106);
+    let b = axis_cylinder(
+        0.4715909498579281,
+        8.029830556680029,
+        5.621140119587627,
+        DVec3::new(0.6993812961889876, 0.7147487688279088, 0.0),
+        DVec3::new(1.1354551340676315, -1.111042254372685, 5.471587949857928),
+    );
+    check_shallow("Eingabe 2 (Tiefe 3e-6)", &a, &b, 3e-6);
+}
+
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+fn shallow_rim_set(cases: usize) {
+    let mut rng = Lcg(555);
+    for k in 0..cases {
+        let r1 = 2.5 + rng.next();
+        let seam_a = rng.next() * TAU;
+        let phi = rng.next() * TAU;
+        let alpha = (3.0 + 57.0 * rng.next()).to_radians();
+        let r = 0.3 + 0.7 * rng.next();
+        let depth = [1e-3, 1e-4, 3e-5, 1e-5, 3e-6, 1e-6][k % 6];
+        let seam_b = rng.next() * TAU;
+        let (a, b) = shallow_rim_case(r1, seam_a, phi, alpha, r, seam_b, depth);
+        check_shallow(&format!("Fall {k}"), &a, &b, depth);
+    }
+}
+
+#[test]
+fn seeded_shallow_rim_crossings_small() {
+    shallow_rim_set(6);
+}
+
+#[test]
+#[ignore = "40 Fälle, etwa 80 s im Release-Build"]
+fn seeded_shallow_rim_crossings_40() {
+    shallow_rim_set(40);
+}
+
+#[test]
+fn a_scaled_freeform_cylinder_against_an_analytic_cylinder() {
+    // Review Runde 5, B (zweite Eingabe): Maßstab 300, lange Schnittkurve.
+    let r = planora_math::DMat3::from_cols(
+        DVec3::new(0.5870045120605493, 0.38069675143709336, 0.7144898083708403),
+        DVec3::new(-0.8094678277565011, 0.26106359155993886, 0.525935012134576),
+        DVec3::new(
+            0.013694475080397228,
+            -0.8870827383097188,
+            0.46140727860015707,
+        ),
+    );
+    let t = DVec3::new(
+        0.19481279522151462,
+        -0.5600458562706905,
+        -0.9333031311345372,
+    );
+    let s = NurbsSurface::revolve(
+        &NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                DVec3::new(2.554591113060023, 0.0, -4.542508659999205),
+                DVec3::new(2.554591113060023, 0.0, 4.542508659999205),
+            ],
+            vec![1.0; 2],
+        )
+        .unwrap(),
+        DVec3::ZERO,
+        DVec3::Z,
+        0.8599716301799407,
+        TAU,
+    )
+    .unwrap();
+    let a = Surface::nurbs(s.transformed(|p| (r * p + t) * 300.0).unwrap(), true, false).unwrap();
+    let c = Surface::Cylinder {
+        frame: Frame::from_origin_normal(
+            DVec3::new(62.141328651864214, -447.44786143791134, 387.4865103610493),
+            DVec3::new(
+                -0.5928358072025249,
+                -0.19363267204946769,
+                -0.7816982115967223,
+            ),
+        ),
+        radius: 487.5068642961147,
+    };
+    let SsiOutcome::Curves(cs) = intersect_nurbs(&a, &c, &tol()) else {
+        panic!("Kurven erwartet")
+    };
+    on_both(&cs, &a, &c);
 }

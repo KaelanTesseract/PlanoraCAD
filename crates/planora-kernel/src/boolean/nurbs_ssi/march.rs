@@ -42,6 +42,11 @@ const CHORD_FACTOR: f64 = 8.0;
 const MAX_GROWTH: f64 = 2.0;
 /// Genauigkeit des Randpunkts bei der Bisektion (mm).
 const BISECT_TOL: f64 = 1e-9;
+/// Höchste Unsicherheit eines Kurvenendes längs des Rands als Anteil von `NURBS_FIT_TOL`
+/// (`snap_to_edge` lehnt darüber ab).
+const GRAZING_FRACTION: f64 = 0.1;
+/// Abstand (mm) der Punkte für die Steigung längs des Rands.
+const GRAZING_STEP: f64 = 1e-4;
 /// Sekantenverfahren auf den Rand (`snap_to_edge`): Startschritt als Anteil des
 /// Parameterbereichs und Höchstzahl Schritte.
 const SNAP_START: f64 = 1e-6;
@@ -264,13 +269,29 @@ impl Ssi<'_> {
         let Some((side_a, fixed_u, bound, along0, gap)) = best else {
             return Ok(*end);
         };
-        if gap > h {
-            return Ok(*end);
-        }
         let side = if side_a { &self.a } else { &self.b };
         let Some(d) = side.nurbs else {
             return Ok(*end);
         };
+        // Ohne Verbesserung bleibt der Punkt der Bisektion; streift die Kurve den Rand, ist er
+        // längs des Rands nur auf (Rest / Sinus des Winkels zum Rand) bestimmt.
+        let unsnapped = || -> Result<Probe, String> {
+            let foot = if side_a { end.ea.foot } else { end.eb.foot };
+            if let (Some(tc), Some((u, v))) = (self.tangent(end), foot) {
+                let ders = d.surface().derivs(u, v, 1);
+                let te = if fixed_u { ders[0][1] } else { ders[1][0] }.normalize_or_zero();
+                let sin = tc.cross(te).length();
+                if te != DVec3::ZERO
+                    && end.residual() + self.res > GRAZING_FRACTION * super::NURBS_FIT_TOL * sin
+                {
+                    return Err(super::MSG_NEAR_TANGENT.into());
+                }
+            }
+            Ok(*end)
+        };
+        if gap > h {
+            return unsnapped();
+        }
         let other = if side_a { &self.b } else { &self.a };
         let other_hint = if side_a { end.eb.foot } else { end.ea.foot };
         let ((u0, u1), (v0, v1)) = d.surface().domain();
@@ -290,7 +311,7 @@ impl Ssi<'_> {
         let span = hi - lo;
         let (mut t0, mut t1) = (along0, (along0 + SNAP_START * span).min(hi));
         let (Some(mut g0), Some(mut g1)) = (g(t0)?, g(t1)?) else {
-            return Ok(*end);
+            return unsnapped();
         };
         for _ in 0..SNAP_STEPS {
             if g1.abs() <= self.eps.min(BISECT_TOL.max(self.res)) || g1 == g0 {
@@ -298,13 +319,32 @@ impl Ssi<'_> {
             }
             let t2 = (t1 - g1 * (t1 - t0) / (g1 - g0)).clamp(lo, hi);
             let Some(g2) = g(t2)? else {
-                return Ok(*end);
+                return unsnapped();
             };
             (t0, g0, t1, g1) = (t1, g1, t2, g2);
         }
         let x = at(t1);
         if g1.abs() > self.eps || x.distance(end.q) > h {
-            return Ok(*end);
+            return unsnapped();
+        }
+        // Streift die Kurve den Rand fast tangential, ist ihr Ende längs des Rands schlecht
+        // bestimmt: Unsicherheit ≈ erreichter Rest / Steigung der Abstandsfunktion längs des
+        // Rands. Liegt sie über `GRAZING_FRACTION · NURBS_FIT_TOL`, benannt ablehnen.
+        // Steigung längs des Rands über eine zentrale Differenz im Abstand `GRAZING_STEP`.
+        let speed = {
+            let dt = SNAP_START * span;
+            at((t1 + dt).min(hi)).distance(at((t1 - dt).max(lo))) / (2.0 * dt)
+        };
+        if speed > 0.0 && speed.is_finite() {
+            let dt = GRAZING_STEP / speed;
+            if let (Some(gp), Some(gm)) = (g(t1 + dt)?, g(t1 - dt)?) {
+                let slope =
+                    (gp - gm).abs() / (at(t1 + dt).distance(at(t1 - dt))).max(f64::MIN_POSITIVE);
+                // erreichter Rest (plus Koordinatenauflösung) geteilt durch die Steigung
+                if g1.abs() + self.res > GRAZING_FRACTION * super::NURBS_FIT_TOL * slope {
+                    return Err(super::MSG_NEAR_TANGENT.into());
+                }
+            }
         }
         Ok(self.probe(x, end.hints())?.unwrap_or(*end))
     }

@@ -339,8 +339,8 @@ struct Ssi<'a> {
     /// Ergebnis von `piece_far` je Flicken (Seite, Parameterbereich).
     far_cache: std::cell::RefCell<HashMap<PieceKey, bool>>,
     /// Bézier-Flicken beider Seiten (nur bei zwei Freiformflächen, für `far_certified`).
-    patches_a: Option<Vec<planora_math::nurbs::BezierPatch>>,
-    patches_b: Option<Vec<planora_math::nurbs::BezierPatch>>,
+    patches_a: Option<std::sync::Arc<Vec<planora_math::nurbs::BezierPatch>>>,
+    patches_b: Option<std::sync::Arc<Vec<planora_math::nurbs::BezierPatch>>>,
     /// Schon nach Nullstellen abgesuchte Randkurven (Seite, Richtung, fester Wert, Bereich).
     done_edges: std::collections::HashSet<PieceKey>,
     /// Größte Diagonale eines Kandidaten-Flickens.

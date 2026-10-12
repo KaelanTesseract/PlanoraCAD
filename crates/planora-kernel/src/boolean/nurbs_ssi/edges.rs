@@ -22,6 +22,12 @@ const EDGE_MAX_DEPTH: usize = 40;
 /// Anteil der Kandidatengröße lang ist, gelten als Stück mit höchstens einer Nullstelle
 /// (Schätzung, siehe Spec §13).
 const EDGE_NURBS_FRACTION: f64 = 1.0 / 32.0;
+/// Randstück gegen Freiformfläche (`nn_edge_roots`): Teilungstiefe der Flicken, kleinste
+/// Ausdehnung (Anteil der Diagonale), Newton-Schritte und Spielraum der Parameter.
+const NN_PATCH_DEPTH: usize = 16;
+const NN_MIN_SIZE: f64 = 1e-7;
+const NN_NEWTON_STEPS: usize = 20;
+const NN_SLACK: f64 = 1e-9;
 /// Bisektionsschritte für eine Nullstelle auf der Randkurve.
 const EDGE_BISECT_STEPS: usize = 64;
 /// Höchstzahl geprüfter Randstücke insgesamt.
@@ -88,6 +94,26 @@ impl Edge {
 
     fn control(&self) -> Vec<DVec3> {
         self.h.iter().map(|(p, w)| *p / *w).collect()
+    }
+
+    /// Punkt und Ableitung nach `t` (rationale Bézier-Kurve, Quotientenregel).
+    fn point_and_derivative(&self, t: f64) -> (DVec3, DVec3) {
+        let n = self.h.len() - 1;
+        let (.., (p, w)) = self.casteljau(t);
+        if n == 0 {
+            return (p / w, DVec3::ZERO);
+        }
+        let diff = Edge {
+            h: self
+                .h
+                .windows(2)
+                .map(|x| ((x[1].0 - x[0].0) * n as f64, (x[1].1 - x[0].1) * n as f64))
+                .collect(),
+            ..self.clone()
+        };
+        let (.., (dp, dw)) = diff.casteljau(t);
+        let c = p / w;
+        (c, (dp - c * dw) / w)
     }
 
     fn uv(&self, t: f64) -> Uv {
@@ -252,6 +278,10 @@ impl Ssi<'_> {
         other_cone: Option<Cone>,
         out: &mut Vec<Root>,
     ) -> Result<(), String> {
+        if self.other_side(side_a).nurbs.is_some() {
+            return self.nn_edge_roots(e0, side_a, out);
+        }
+        let _ = other_cone;
         let lin = self.tol.linear;
         let hints_at = |e: &Edge, t: f64| {
             let own = Some(e.uv(t));
@@ -421,6 +451,206 @@ impl Ssi<'_> {
         Ok(())
     }
 
+    /// Nullstellen einer Randkurve gegen eine Freiformfläche, sicher: Verzweigen und Beschränken
+    /// über Paare (Randstück, Bézier-Flicken der anderen Fläche). Getrennte Hüllquader: kein
+    /// Schnitt. Sind die Tangenten des Randstücks vom Normalenkegel des Flickens getrennt, ist
+    /// der Flicken über einer Ebene senkrecht zur Kegelachse ein Graph und die Kurve schneidet
+    /// ihn höchstens einmal; Newton auf `C(t) = S(u, v)` findet ihn. Gelingt das nicht oder sind
+    /// die Kegel nicht getrennt, wird weiter geteilt; bleibt an der Teilungsgrenze ein Paar mit
+    /// überlappenden Quadern ohne Nachweis, ist das „nahezu tangential“ (nie ein Teilergebnis).
+    fn nn_edge_roots(
+        &mut self,
+        e0: &Edge,
+        side_a: bool,
+        out: &mut Vec<Root>,
+    ) -> Result<(), String> {
+        let other_nurbs = if side_a { self.b.nurbs } else { self.a.nurbs };
+        let Some(d) = other_nurbs else {
+            return Ok(());
+        };
+        let patches = if side_a {
+            self.patches_b.clone()
+        } else {
+            self.patches_a.clone()
+        };
+        let Some(patches) = patches else {
+            return Err(MSG_NEAR_TANGENT.into());
+        };
+        // Echte Überlappung (ohne Zuschlag): ein Schnittpunkt liegt in beiden Quadern;
+        // Annäherungen innerhalb der Toleranz ohne Schnitt sind hier keine Nullstellen.
+        let overlap =
+            |a: &(DVec3, DVec3), b: &(DVec3, DVec3)| a.0.cmple(b.1).all() && b.0.cmple(a.1).all();
+        let ebox = |e: &Edge| {
+            let c = e.control();
+            c.iter().fold(
+                (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+                |(l, h), q| (l.min(*q), h.max(*q)),
+            )
+        };
+        let b0 = ebox(e0);
+        let mut stack: Vec<(Edge, BezierPatch, usize, usize)> = patches
+            .iter()
+            .filter(|q| overlap(&b0, &q.bounds()))
+            .map(|q| (e0.clone(), q.clone(), 0, 0))
+            .collect();
+        while let Some((e, q, de, dq)) = stack.pop() {
+            self.edge_visits += 1;
+            if self.edge_visits > MAX_EDGE_VISITS {
+                return Err(format!(
+                    "Zu viele Schnittbereiche (mehr als {MAX_EDGE_VISITS} geprüfte Randstücke)"
+                ));
+            }
+            let eb = ebox(&e);
+            let qb = q.bounds();
+            if !overlap(&eb, &qb) {
+                continue;
+            }
+            let te = e.tangents();
+            let cone = patch_cone(d, &q, &tangents(&q, true), &tangents(&q, false));
+            let separated = cone.is_some_and(|c| separates(&te, &c).0);
+            let found = if separated {
+                self.curve_patch_newton(&e, &q, d)?
+            } else {
+                Nn::Failed
+            };
+            if let Nn::Elsewhere = found {
+                // Höchstens ein Schnitt mit diesem Flicken, und Newton fand den Schnitt der
+                // Randkurve gleich daneben: in diesem Paar keiner.
+                continue;
+            }
+            if let Nn::Root(t, uv) = found {
+                let own = Some(e.uv(t));
+                let hints = if side_a {
+                    Hints {
+                        a: own,
+                        b: Some(uv),
+                    }
+                } else {
+                    Hints {
+                        a: Some(uv),
+                        b: own,
+                    }
+                };
+                push_root(out, e.point(t), hints, self.same, true);
+                continue;
+            }
+            // Nicht getrennt: liegt das Randstück ganz auf der anderen Fläche (etwa ein Rand in
+            // einem gemeinsamen Streifen), genügt ein Startpunkt; die Verfolgung bzw. die
+            // Einordnung als Berührung übernimmt den Rest.
+            if !separated {
+                let hint = Some((0.5 * (q.u.0 + q.u.1), 0.5 * (q.v.0 + q.v.1)));
+                let mut on = true;
+                for t in [0.0, 0.5, 1.0] {
+                    let f = self.eval_side(self.other_side(side_a), e.point(t), hint)?;
+                    if !f.is_some_and(|f| f.f.abs() <= self.eps) {
+                        on = false;
+                        break;
+                    }
+                }
+                if on {
+                    let own = Some(e.uv(0.0));
+                    let hints = if side_a {
+                        Hints { a: own, b: hint }
+                    } else {
+                        Hints { a: hint, b: own }
+                    };
+                    push_root(out, e.point(0.0), hints, self.same, true);
+                    continue;
+                }
+            }
+            let (le, lq) = ((eb.1 - eb.0).length(), (qb.1 - qb.0).length());
+            let e_ok = de < EDGE_MAX_DEPTH && le > NN_MIN_SIZE * self.diag;
+            let q_ok = dq < NN_PATCH_DEPTH && lq > NN_MIN_SIZE * self.diag;
+            if !e_ok && !q_ok {
+                // An der Teilungsgrenze ohne Nachweis. Liegt das Stück bis auf die Toleranz an
+                // der anderen Fläche, ist es eine Annäherung innerhalb der Modelltoleranz
+                // (Kandidat für eine Berührung am Rand, siehe `edge_seeds`); sonst benannt ablehnen.
+                let hint = Some((0.5 * (q.u.0 + q.u.1), 0.5 * (q.v.0 + q.v.1)));
+                let mut near = true;
+                for t in [0.0, 0.5, 1.0] {
+                    let f = self.eval_side(self.other_side(side_a), e.point(t), hint)?;
+                    if !f.is_some_and(|f| f.f.abs() <= EDGE_ROOT_FACTOR * self.tol.linear) {
+                        near = false;
+                        break;
+                    }
+                }
+                if !near {
+                    return Err(MSG_NEAR_TANGENT.into());
+                }
+                let own = Some(e.uv(0.5));
+                let hints = if side_a {
+                    Hints { a: own, b: hint }
+                } else {
+                    Hints { a: hint, b: own }
+                };
+                push_root(out, e.point(0.5), hints, self.same, false);
+                continue;
+            }
+            if e_ok && (le >= lq || !q_ok) {
+                for half in e.split() {
+                    stack.push((half, q.clone(), de + 1, dq));
+                }
+            } else {
+                for c in q.subdivide() {
+                    stack.push((e.clone(), c, de, dq + 1));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Newton auf `C(t) = S(u, v)` (Randstück `e`, Flicken `q` der Freiformfläche `d`) von den
+    /// Mitten aus (siehe `Nn`).
+    fn curve_patch_newton(
+        &self,
+        e: &Edge,
+        q: &BezierPatch,
+        d: &crate::nurbs_surface::NurbsSurfaceData,
+    ) -> Result<Nn, String> {
+        self.spend()?;
+        let (mut t, mut u, mut v) = (0.5, 0.5 * (q.u.0 + q.u.1), 0.5 * (q.v.0 + q.v.1));
+        let ((u0, u1), (v0, v1)) = d.surface().domain();
+        for _ in 0..NN_NEWTON_STEPS {
+            let (c, dc) = e.point_and_derivative(t);
+            let ders = d.surface().derivs(u, v, 1);
+            let (s, su, sv) = (ders[0][0], ders[1][0], ders[0][1]);
+            let r = c - s;
+            if !r.is_finite() {
+                return Err(super::MSG_NUMERIC.into());
+            }
+            if r.length() <= self.eps {
+                // Ein konvergierter Punkt mit `t` im Randstück ist ein echter Schnitt der
+                // Randkurve mit der Fläche (auch wenn `(u, v)` knapp außerhalb des Flickens
+                // liegt); liegt `t` außerhalb, gehört er zu einem Nachbarstück.
+                return Ok(if (-NN_SLACK..=1.0 + NN_SLACK).contains(&t) {
+                    Nn::Root(t.clamp(0.0, 1.0), (u, v))
+                } else {
+                    Nn::Elsewhere
+                });
+            }
+            // Spalten der Jacobi-Matrix: dC/dt, -S_u, -S_v (Cramer)
+            let (a, b, cc) = (dc, -su, -sv);
+            let det = a.dot(b.cross(cc));
+            if !det.is_finite() || det.abs() <= f64::MIN_POSITIVE {
+                return Ok(Nn::Failed);
+            }
+            let rhs = -r;
+            t += rhs.dot(b.cross(cc)) / det;
+            u += a.dot(rhs.cross(cc)) / det;
+            v += a.dot(b.cross(rhs)) / det;
+            if !(t.is_finite() && u.is_finite() && v.is_finite())
+                || !(-1.0..=2.0).contains(&t)
+                || u < u0
+                || u > u1
+                || v < v0
+                || v > v1
+            {
+                return Ok(Nn::Failed);
+            }
+        }
+        Ok(Nn::Failed)
+    }
+
     fn other_side(&self, side_a: bool) -> &Side<'_> {
         if side_a { &self.b } else { &self.a }
     }
@@ -442,6 +672,15 @@ impl Ssi<'_> {
     }
 }
 
+/// Ergebnis von `curve_patch_newton`.
+enum Nn {
+    /// Schnitt bei `t` (im Randstück) und `(u, v)` auf der Fläche.
+    Root(f64, Uv),
+    /// Konvergiert, aber `t` außerhalb des Randstücks.
+    Elsewhere,
+    Failed,
+}
+
 /// Nullstelle auf einer Randkurve; `exact`: Vorzeichenwechsel oder `|F| ≤ eps` (sonst nur eine
 /// Annäherung bis auf die Toleranz an der Teilungsgrenze).
 struct Root {
@@ -450,9 +689,12 @@ struct Root {
     exact: bool,
 }
 
+/// Nahe beieinanderliegende Nullstellen zählen einmal; eine echte ersetzt dabei eine bloße
+/// Annäherung (deren Punkt liegt nicht auf beiden Flächen).
 fn push_root(out: &mut Vec<Root>, x: DVec3, hints: Hints, same: f64, exact: bool) {
     match out.iter_mut().find(|r| r.x.distance(x) <= same) {
-        Some(r) => r.exact |= exact,
+        Some(r) if exact && !r.exact => *r = Root { x, hints, exact },
+        Some(_) => {}
         None => out.push(Root { x, hints, exact }),
     }
 }
