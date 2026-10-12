@@ -27,6 +27,12 @@ fn opts(c: f64) -> TessellationOptions {
 /// Zylinder um die z-Achse (Boden bei z = 0), dessen Mantel eine NURBS-Drehfläche ist
 /// (wie in `nurbs_mesh.rs`, Task 5).
 fn nurbs_cylinder_solid(r: f64, h: f64) -> Solid {
+    nurbs_cylinder_solid_from(r, h, false)
+}
+
+/// Wie [`nurbs_cylinder_solid`]; mit `at_seam_edge` beginnt die Drehfläche (u = u0) genau an der
+/// Nahtkante des extrudierten Kreises, sonst bei (r, 0).
+fn nurbs_cylinder_solid_from(r: f64, h: f64, at_seam_edge: bool) -> Solid {
     let profile = Profile {
         outer: ProfileLoop::circle(DVec2::ZERO, r),
         holes: vec![],
@@ -38,10 +44,22 @@ fn nurbs_cylinder_solid(r: f64, h: f64) -> Solid {
             h,
         )
         .unwrap();
+    let foot = if at_seam_edge {
+        let seams: Vec<DVec3> = solid
+            .edges
+            .iter()
+            .filter(|(_, e)| matches!(e.curve, Curve::Line { .. }))
+            .map(|(_, e)| e.curve.point(e.t0.min(e.t1)))
+            .collect();
+        assert_eq!(seams.len(), 1, "eine Nahtkante");
+        DVec3::new(seams[0].x, seams[0].y, 0.0)
+    } else {
+        DVec3::new(r, 0.0, 0.0)
+    };
     let line = NurbsCurve::new(
         1,
         vec![0.0, 0.0, 1.0, 1.0],
-        vec![DVec3::new(r, 0.0, 0.0), DVec3::new(r, 0.0, h)],
+        vec![foot, foot + DVec3::Z * h],
         vec![1.0; 2],
     )
     .unwrap();
@@ -247,8 +265,12 @@ fn the_seam_may_lie_on_a_box_edge_without_panic() {
 
 #[test]
 fn a_box_side_along_the_seam_line_is_cut_without_panic() {
-    // Ein Quader mit einer Kante auf der Zylinderachse: seine Seitenfläche y = 0 schneidet den
-    // Mantel genau längs der Naht (x = 3, y = 0), die Seitenfläche x = 0 längs x = 0, y = 3.
+    // Ein Quader mit einer Kante auf der Zylinderachse. Seine Seitenfläche y = 0 schneidet den
+    // Mantel längs x = 3, y = 0: dort liegt die Parameternaht u = u0 der Drehfläche (die
+    // Hilfsfunktion dreht die Linie bei (r, 0)), aber keine Kante des Körpers. Die Seitenfläche
+    // x = 0 schneidet längs x = 0, y = 3: dort liegt die Nahtkante der Fläche (aus dem
+    // extrudierten Kreis). Den Fall „Parameternaht = Nahtkante“ prüft
+    // `a_box_side_along_the_seam_edge_matches_the_analytic_twin`.
     let corner = box_solid(DVec3::new(10.0, 10.0, 10.0), DVec3::new(0.0, 0.0, -5.0));
     let cyl = placed_cylinder(0.0, 0.0);
     let (wa, wb) = imprint(&corner, &cyl, &tol()).unwrap();
@@ -269,6 +291,90 @@ fn a_box_side_along_the_seam_line_is_cut_without_panic() {
             .len(),
         2
     );
+}
+
+/// Schnitt- und Stückzahlen je Fläche beider Körper (Reihenfolge der Flächen).
+fn cut_counts(a: &Solid, b: &Solid) -> Vec<(usize, usize)> {
+    let (wa, wb) = imprint(a, b, &tol()).unwrap();
+    wa.iter()
+        .chain(&wb)
+        .map(|w| {
+            let regions = split_face(&w.geom, &w.sections, &tol()).unwrap();
+            (w.sections.len(), regions.len())
+        })
+        .collect()
+}
+
+#[test]
+fn a_box_side_along_the_seam_edge_matches_the_analytic_twin() {
+    // Häufiger Fall: Die Parameternaht u = u0 der Freiformfläche ist zugleich die Nahtkante der
+    // Fläche. Eine Quaderseite schneidet genau längs dieser Naht; Schnitte und Stücke müssen
+    // dieselben sein wie beim analytischen Zwilling.
+    let nurbs = k()
+        .transform(
+            &nurbs_cylinder_solid_from(3.0, 20.0, true),
+            &DMat4::from_translation(DVec3::new(0.0, 0.0, -10.0)),
+        )
+        .unwrap();
+    let analytic = k()
+        .transform(
+            &k().make_cylinder(3.0, 20.0).unwrap(),
+            &DMat4::from_translation(DVec3::new(0.0, 0.0, -10.0)),
+        )
+        .unwrap();
+    // Nahtkante des Mantels (Gerade): ihre Lage bestimmt den Quader
+    let seam = nurbs
+        .edges
+        .iter()
+        .find(|(_, e)| matches!(e.curve, Curve::Line { .. }))
+        .map(|(_, e)| e.curve.point(e.t0))
+        .unwrap();
+    // Quader [0, 10]² × [−5, 5] mit einer Kante auf der Achse: Liegt die Naht bei (3, 0) oder
+    // (0, 3), enthält seine Seite y = 0 bzw. x = 0 die Nahtkante.
+    assert!(
+        (seam.x.abs() < 1e-9 && seam.y > 0.0) || (seam.y.abs() < 1e-9 && seam.x > 0.0),
+        "Naht auf einer positiven Achse: {seam:?}"
+    );
+    let corner = box_solid(DVec3::new(10.0, 10.0, 10.0), DVec3::new(0.0, 0.0, -5.0));
+    let n = cut_counts(&corner, &nurbs);
+    let a = cut_counts(&corner, &analytic);
+    assert_eq!(n, a);
+    // Plausibilität: der Mantel bekommt Schnitte und wird geteilt
+    assert!(n.iter().any(|&(s, r)| s >= 3 && r == 2), "{n:?}");
+}
+
+/// NURBS-Zylinder r = 3, h = 20 ab z = −10 und sein analytischer Zwilling.
+fn congruent_pair() -> (Solid, Solid) {
+    let analytic = k()
+        .transform(
+            &k().make_cylinder(3.0, 20.0).unwrap(),
+            &DMat4::from_translation(DVec3::new(0.0, 0.0, -10.0)),
+        )
+        .unwrap();
+    (placed_cylinder(0.0, 0.0), analytic)
+}
+
+#[test]
+fn congruent_bodies_need_no_ray_and_give_results() {
+    // Deckungsgleiche Körper: Jedes Flächenstück liegt auf einer Fläche des anderen Körpers
+    // (OnSame), das Einordnen braucht keinen Strahl gegen die Freiformfläche. Vereinigung und
+    // Schnitt ergeben den Zylinder selbst, die Differenz ist leer – in beiden Reihenfolgen,
+    // mit sich selbst und mit dem analytischen Zwilling.
+    let (nurbs, analytic) = congruent_pair();
+    let expect = PI * 9.0 * 20.0;
+    for (a, b) in [(&nurbs, &nurbs), (&nurbs, &analytic), (&analytic, &nurbs)] {
+        for op in [BoolOp::Union, BoolOp::Intersection] {
+            let r = boolean(a, b, op, &tol()).unwrap_or_else(|e| panic!("{op:?}: {e:?}"));
+            let rep = validate(&r).unwrap();
+            assert_eq!((rep.faces, rep.edges, rep.vertices), (3, 3, 2), "{op:?}");
+            let v = volume(&r);
+            assert!(((v - expect) / expect).abs() < 0.005, "{op:?}: {v}");
+        }
+        assert_eq!(
+            boolean(a, b, BoolOp::Difference, &tol()).map(|_| ()),
+            Err(BooleanError::EmptyResult)
+        );
+    }
 }
 
 #[test]
@@ -321,8 +427,10 @@ fn unsupported_pairs_give_a_named_message() {
 
 #[test]
 fn a_whole_boolean_with_a_nurbs_side_reports_the_missing_classification_by_name() {
-    // Bis Task 10 lässt sich die Lage zur Freiformfläche nicht bestimmen (kein Strahlschnitt
-    // gegen Freiformflächen): benannte Meldung statt eines Ergebnisses.
+    // Bis Task 10 lässt sich die Lage zur Freiformfläche per Strahl nicht bestimmen: Braucht ein
+    // Flächenstück den Strahl (es liegt nicht auf einer Fläche des anderen Körpers), benannte
+    // Meldung statt eines Ergebnisses. Deckungsgleiche Stücke brauchen keinen Strahl (siehe
+    // `congruent_bodies_need_no_ray_and_give_results`).
     match boolean(
         &centered_box(),
         &placed_cylinder(0.0, 0.0),
