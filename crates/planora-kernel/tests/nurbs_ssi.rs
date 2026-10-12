@@ -1384,7 +1384,7 @@ fn seeded_shallow_rim_crossings_small() {
 }
 
 #[test]
-#[ignore = "40 Fälle, etwa 80 s im Release-Build"]
+#[ignore = "40 Fälle, nur mit --release --ignored (etwa 15 s)"]
 fn seeded_shallow_rim_crossings_40() {
     shallow_rim_set(40);
 }
