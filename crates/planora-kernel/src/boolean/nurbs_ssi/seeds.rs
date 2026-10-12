@@ -52,6 +52,11 @@ pub(super) const COINCIDENT_SHARE: f64 = 0.9;
 pub(super) const PARTIAL_SHARE: f64 = 0.25;
 /// Relative Toleranz, mit der Gewichte als gleich bzw. als Produkt `α_i · β_j` erkannt werden.
 const WEIGHT_RATIO: f64 = 1e-12;
+/// Fern-Nachweis (`far_certified`): Teilung der Flicken der anderen Fläche höchstens bis zu
+/// diesem Anteil der Quaderdiagonale bzw. dieser Tiefe, höchstens so viele Schritte.
+const FAR_MIN_FRACTION: f64 = 1.0 / 8.0;
+const FAR_MAX_DEPTH: usize = 8;
+const FAR_MAX_WORK: usize = 4096;
 /// Normalenkegel an Polen (dort fehlt die sichere Schranke aus den Tangentenkegeln) aus
 /// `POLE_CONE_SAMPLES²` Stichproben, erweitert um den größten Winkel benachbarter Stichproben.
 const POLE_CONE_SAMPLES: usize = 5;
@@ -553,11 +558,8 @@ impl Ssi<'_> {
     }
 
     /// Liegt der Freiform-Flicken (Seite a, wenn `side_a`) sicher fern der ganzen anderen
-    /// Freiformfläche? Der Abstand zu ihr ist 1-Lipschitz: Ist er an der Mitte des Hüllquaders
-    /// größer als dessen halbe Diagonale, trifft kein Punkt des Flickens die andere Fläche (also
-    /// auch keinen ihrer Flicken). Sicher nur, soweit die globale Fußpunktsuche den nächsten Punkt
-    /// findet (sonst ist der Abstand zu groß); Freiform–Freiform ist ohnehin nur geschätzt (Spec
-    /// §13). Je Flicken einmal berechnet.
+    /// Freiformfläche? Sicherer Nachweis `far_certified` über die Hüllquader der Bézier-Flicken
+    /// der anderen Fläche (keine Fußpunktsuche). Je Flicken einmal berechnet.
     fn piece_far(&self, side_a: bool, piece: &Piece) -> bool {
         let p = &piece.p;
         let key = (
@@ -571,15 +573,48 @@ impl Ssi<'_> {
             return *far;
         }
         let (lo, hi) = bounds(p);
-        let c = (lo + hi) * 0.5;
-        let r = 0.5 * (hi - lo).length();
-        let other = if side_a { &self.b } else { &self.a };
-        let far = matches!(
-            self.eval_side(other, c, None),
-            Ok(Some(e)) if e.f.abs() > r + self.tol.linear
-        );
+        let far = self.far_certified(side_a, lo, hi);
         self.far_cache.borrow_mut().insert(key, far);
         far
+    }
+
+    /// Sicherer Nachweis, dass kein Punkt der anderen Freiformfläche näher als `tol.linear` am
+    /// Quader `[lo, hi]` liegt: Die Fläche liegt (positive Gewichte) in der Vereinigung der
+    /// Hüllquader ihrer Bézier-Flicken; Flicken, deren Quader dem Quader nahekommen, werden
+    /// geteilt, bis alle fern sind (nachgewiesen) oder einer zu klein bzw. zu tief geteilt ist
+    /// (dann kein Nachweis).
+    fn far_certified(&self, side_a: bool, lo: DVec3, hi: DVec3) -> bool {
+        let Some(patches) = (if side_a {
+            &self.patches_b
+        } else {
+            &self.patches_a
+        }) else {
+            return false;
+        };
+        let lin = self.tol.linear;
+        let small = FAR_MIN_FRACTION * (hi - lo).length();
+        let box_dist = |p: &BezierPatch| {
+            let (l, h) = bounds(p);
+            (l - hi).max(lo - h).max(DVec3::ZERO).length()
+        };
+        let mut stack: Vec<(BezierPatch, usize)> = patches
+            .iter()
+            .filter(|p| box_dist(p) <= lin)
+            .map(|p| (p.clone(), 0))
+            .collect();
+        let mut work = 0usize;
+        while let Some((p, depth)) = stack.pop() {
+            work += 1;
+            if work > FAR_MAX_WORK || depth >= FAR_MAX_DEPTH || diag_of(&p) <= small {
+                return false;
+            }
+            for c in p.subdivide() {
+                if box_dist(&c) <= lin {
+                    stack.push((c, depth + 1));
+                }
+            }
+        }
+        true
     }
 
     fn keep(&self, n: &Node) -> bool {
@@ -745,6 +780,11 @@ impl Ssi<'_> {
                 .map_err(|e| format!("Die Freiformfläche lässt sich nicht zerlegen: {e}"))
         };
         let (pa, pb) = (patches(&self.a)?, patches(&self.b)?);
+        if pa.is_some() && pb.is_some() {
+            // für den sicheren Fern-Nachweis zwischen zwei Freiformflächen
+            self.patches_a = pa.clone();
+            self.patches_b = pb.clone();
+        }
         let piece = |p: &BezierPatch| Piece {
             p: p.clone(),
             depth: [0, 0],

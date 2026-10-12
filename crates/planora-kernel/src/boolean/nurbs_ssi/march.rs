@@ -42,6 +42,10 @@ const CHORD_FACTOR: f64 = 8.0;
 const MAX_GROWTH: f64 = 2.0;
 /// Genauigkeit des Randpunkts bei der Bisektion (mm).
 const BISECT_TOL: f64 = 1e-9;
+/// Sekantenverfahren auf den Rand (`snap_to_edge`): Startschritt als Anteil des
+/// Parameterbereichs und Höchstzahl Schritte.
+const SNAP_START: f64 = 1e-6;
+const SNAP_STEPS: usize = 40;
 /// Höchstzahl Bisektionsschritte.
 const BISECT_STEPS: usize = 60;
 /// Hat `|g_a × g_b|` längs der Kurve ein örtliches Minimum unter diesem Wert, wird dort genau
@@ -207,6 +211,7 @@ impl Ssi<'_> {
                             || self.beyond_edge(pred, p.hints())?) =>
                 {
                     let end = self.bisect(p, t, *h)?;
+                    let end = self.snap_to_edge(&end, *h)?;
                     let dist = end.q.distance(p.q);
                     return Ok(Step {
                         probe: end,
@@ -224,6 +229,84 @@ impl Ssi<'_> {
             }
             *h = (*h * 0.5).max(self.h_min);
         }
+    }
+
+    /// Legt den Endpunkt einer Kurve am Rand genau auf den Rand: Nullstelle der anderen
+    /// Abstandsfunktion längs der Randkurve (Parameterlinie) der Freiformseite, deren Rand am
+    /// nächsten liegt (Sekantenverfahren). Läuft die Kurve flach an den Rand, liegt der Punkt der
+    /// Bisektion zwar auf `1e-9` an der Fläche, längs des Rands aber merklich daneben. Ohne
+    /// Ergebnis in der Nähe (höchstens `h`) bleibt der Punkt der Bisektion.
+    fn snap_to_edge(&self, end: &Probe, h: f64) -> Result<Probe, String> {
+        // (Fußpunkt-Seite a?, Rand in u?, Randwert, Startwert längs des Rands, Abstand im Raum)
+        let mut best: Option<(bool, bool, f64, f64, f64)> = None;
+        for (side_a, e) in [(true, &end.ea), (false, &end.eb)] {
+            let side = if side_a { &self.a } else { &self.b };
+            let (Some(d), Some((u, v))) = (side.nurbs, e.foot) else {
+                continue;
+            };
+            let ((u0, u1), (v0, v1)) = d.surface().domain();
+            let ders = d.surface().derivs(u, v, 1);
+            let (su, sv) = (ders[1][0].length(), ders[0][1].length());
+            let mut consider = |fixed_u: bool, bound: f64, gap: f64, along: f64| {
+                if best.is_none_or(|b| gap < b.4) {
+                    best = Some((side_a, fixed_u, bound, along, gap));
+                }
+            };
+            if !d.is_periodic_u() {
+                consider(true, u0, (u - u0).abs() * su, v);
+                consider(true, u1, (u1 - u).abs() * su, v);
+            }
+            if !d.is_periodic_v() {
+                consider(false, v0, (v - v0).abs() * sv, u);
+                consider(false, v1, (v1 - v).abs() * sv, u);
+            }
+        }
+        let Some((side_a, fixed_u, bound, along0, gap)) = best else {
+            return Ok(*end);
+        };
+        if gap > h {
+            return Ok(*end);
+        }
+        let side = if side_a { &self.a } else { &self.b };
+        let Some(d) = side.nurbs else {
+            return Ok(*end);
+        };
+        let other = if side_a { &self.b } else { &self.a };
+        let other_hint = if side_a { end.eb.foot } else { end.ea.foot };
+        let ((u0, u1), (v0, v1)) = d.surface().domain();
+        let (lo, hi) = if fixed_u { (v0, v1) } else { (u0, u1) };
+        let at = |t: f64| {
+            let t = t.clamp(lo, hi);
+            if fixed_u {
+                d.point(bound, t)
+            } else {
+                d.point(t, bound)
+            }
+        };
+        let g = |t: f64| -> Result<Option<f64>, String> {
+            Ok(self.eval_side(other, at(t), other_hint)?.map(|e| e.f))
+        };
+        // Sekante von `along0` aus mit einem Startschritt in der Größenordnung von `h`.
+        let span = hi - lo;
+        let (mut t0, mut t1) = (along0, (along0 + SNAP_START * span).min(hi));
+        let (Some(mut g0), Some(mut g1)) = (g(t0)?, g(t1)?) else {
+            return Ok(*end);
+        };
+        for _ in 0..SNAP_STEPS {
+            if g1.abs() <= self.eps.min(BISECT_TOL.max(self.res)) || g1 == g0 {
+                break;
+            }
+            let t2 = (t1 - g1 * (t1 - t0) / (g1 - g0)).clamp(lo, hi);
+            let Some(g2) = g(t2)? else {
+                return Ok(*end);
+            };
+            (t0, g0, t1, g1) = (t1, g1, t2, g2);
+        }
+        let x = at(t1);
+        if g1.abs() > self.eps || x.distance(end.q) > h {
+            return Ok(*end);
+        }
+        Ok(self.probe(x, end.hints())?.unwrap_or(*end))
     }
 
     /// Liegt `x` jenseits des Rands einer Freiformseite (Fußpunkt auf einem offenen Rand und

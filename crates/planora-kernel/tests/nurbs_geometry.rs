@@ -834,3 +834,49 @@ fn points_on_a_steep_surface_near_a_corner_have_distance_zero() {
         assert!(s.implicit(p).abs() < 1e-6, "{k}: {p:?} {}", s.implicit(p));
     }
 }
+
+#[test]
+fn the_global_search_does_not_miss_a_much_closer_foot_point() {
+    // Regression (Task 8, Review Runde 4): 40 × 40-Beule, Punkt nahe einer steilen Ecke; das
+    // Raster lieferte 0,2026 statt 0,0117 (kein Rasterpunkt lag näher). Jetzt Gegenprobe über
+    // die Hüllquader der Bézier-Flicken.
+    let n = 40usize;
+    let mut kn = vec![0.0; 4];
+    for i in 1..=(n - 4) {
+        kn.push(i as f64 / (n - 3) as f64);
+    }
+    kn.extend([1.0; 4]);
+    let mut rng = Lcg(3636 * 31337 + 7);
+    rng.next();
+    let mut c = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            c.push(DVec3::new(
+                i as f64 * 10.0 / 39.0 - 5.0,
+                j as f64 * 10.0 / 39.0 - 5.0,
+                -1.53 + 3.06 * rng.next(),
+            ));
+        }
+    }
+    let s = NurbsSurface::new(3, 3, kn.clone(), kn, n, n, c, vec![1.0; n * n]).unwrap();
+    let surf = Surface::nurbs(s, false, false).unwrap();
+    let Surface::Nurbs(d) = &surf else {
+        unreachable!()
+    };
+    let p = DVec3::new(4.9226, 4.9873, 0.0009);
+    // Bruteforce in der Ecke
+    let mut best = f64::INFINITY;
+    let m = 600;
+    for i in 0..=m {
+        for j in 0..=m {
+            let (u, v) = (
+                0.95 + 0.05 * i as f64 / m as f64,
+                0.95 + 0.05 * j as f64 / m as f64,
+            );
+            best = best.min(d.point(u, v).distance(p));
+        }
+    }
+    let got = surf.implicit(p).abs();
+    assert!(got <= best + 1e-9, "{got} statt höchstens {best}");
+    assert!(got > best - 1e-3);
+}

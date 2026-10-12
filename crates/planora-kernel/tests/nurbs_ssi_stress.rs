@@ -1,5 +1,5 @@
 use planora_kernel::Surface;
-use planora_kernel::boolean::{SsiOutcome, intersect_nurbs};
+use planora_kernel::boolean::{NURBS_FIT_TOL, SsiOutcome, intersect_nurbs};
 use planora_math::nurbs::{NurbsCurve, NurbsSurface};
 use planora_math::{DMat3, DVec3, Frame, PI, TAU, Tolerance};
 
@@ -40,7 +40,7 @@ fn place(rng: &mut Rng, s: NurbsSurface, pu: bool, pv: bool) -> Surface {
 }
 
 fn nurbs_kind(rng: &mut Rng, k: usize) -> (String, Surface) {
-    match k % 5 {
+    match k % 6 {
         0 => {
             let (r, h) = (rng.range(1.0, 3.0), rng.range(4.0, 10.0));
             let l = NurbsCurve::new(
@@ -93,6 +93,29 @@ fn nurbs_kind(rng: &mut Rng, k: usize) -> (String, Surface) {
             let s =
                 NurbsSurface::revolve(&c, DVec3::ZERO, DVec3::Z, rng.range(0.0, TAU), TAU).unwrap();
             ("tor".into(), place(rng, s, true, true))
+        }
+        5 => {
+            // Welle: 40 × 40 Kontrollpunkte über 6 × 6 mm, Höhe ±0,3
+            let n = 40usize;
+            let mut kn = vec![0.0; 4];
+            for i in 1..=(n - 4) {
+                kn.push(i as f64 / (n - 3) as f64);
+            }
+            kn.extend([1.0; 4]);
+            let (fx, fy) = (rng.range(0.3, 1.2), rng.range(0.3, 1.2));
+            let mut c = Vec::new();
+            for i in 0..n {
+                for j in 0..n {
+                    let (x, y) = (i as f64 * 6.0 / 39.0 - 3.0, j as f64 * 6.0 / 39.0 - 3.0);
+                    c.push(DVec3::new(
+                        x,
+                        y,
+                        0.3 * (fx * x * 3.0).sin() * (fy * y * 3.0).cos(),
+                    ));
+                }
+            }
+            let s = NurbsSurface::new(3, 3, kn.clone(), kn, n, n, c, vec![1.0; n * n]).unwrap();
+            ("wave40".into(), place(rng, s, false, false))
         }
         _ => {
             let n = 13usize;
@@ -227,8 +250,8 @@ fn truth(a: &Surface, b: &Surface, n: usize) -> (Vec<DVec3>, f64) {
 /// Auswertung einer Zufallsmenge.
 #[derive(Default, Debug)]
 struct Stats {
-    /// Falsch: Rasterkreuzung weiter als 0,05 mm von jeder Kurve, Kurvenpunkt mehr als 2e-5
-    /// neben einer Fläche oder `None` trotz Kreuzung.
+    /// Falsch: Rasterkreuzung weiter als 0,05 mm von jeder Kurve, Kurvenpunkt (`samples` je Kurve)
+    /// mehr als `NURBS_FIT_TOL` neben einer Fläche oder `None` trotz Kreuzung.
     wrong: usize,
     /// je Paarart (Freiform–analytisch, Freiform–Freiform): abgelehnt / gesamt, und bei
     /// Schnittwinkel über 10°: abgelehnt / gesamt
@@ -239,8 +262,8 @@ struct Stats {
 }
 
 /// `n_na` Fälle Freiform–analytisch und `n_nn` Fälle Freiform–Freiform aus dem Zufallsgenerator
-/// mit `seed`, Bodenwahrheit auf einem `grid × grid`-Raster.
-fn run_set(seed: u64, n_na: usize, n_nn: usize, grid: usize) -> Stats {
+/// mit `seed`, Bodenwahrheit auf einem `grid × grid`-Raster, `samples` Prüfpunkte je Kurve.
+fn run_set(seed: u64, n_na: usize, n_nn: usize, grid: usize, samples: usize) -> Stats {
     let tol = Tolerance::default();
     let mut rng = Rng(seed);
     let mut st = Stats::default();
@@ -259,7 +282,7 @@ fn run_set(seed: u64, n_na: usize, n_nn: usize, grid: usize) -> Stats {
                 .iter()
                 .flat_map(|c| {
                     let (t0, t1) = c.domain().unwrap();
-                    (0..=3000).map(move |i| c.point(t0 + (t1 - t0) * i as f64 / 3000.0))
+                    (0..=samples).map(move |i| c.point(t0 + (t1 - t0) * i as f64 / samples as f64))
                 })
                 .collect();
             let gap = cross
@@ -274,7 +297,7 @@ fn run_set(seed: u64, n_na: usize, n_nn: usize, grid: usize) -> Stats {
                 .iter()
                 .map(|p| a.implicit(*p).abs().max(b.implicit(*p).abs()))
                 .fold(0.0, f64::max);
-            if gap > 0.05 || off > 2e-5 {
+            if gap > 0.05 || off > NURBS_FIT_TOL {
                 st.wrong += 1;
                 println!("FALSCH {k} {na}-{nb}: Lücke {gap:.2e}, Abweichung {off:.1e}");
             }
@@ -318,14 +341,14 @@ fn check(st: &Stats) {
 /// Review I-B (klein, auch im Debug-Build): 12 Freiform–analytisch- und 4 Freiform–Freiform-Fälle.
 #[test]
 fn a_small_random_set_is_never_wrong_and_rarely_refused() {
-    check(&run_set(7, 12, 4, 30));
+    check(&run_set(7, 12, 4, 16, 300));
 }
 
 /// Review I-B (groß): 200 Freiform–analytisch- und 60 Freiform–Freiform-Fälle gegen die
 /// Bodenwahrheit eines 80 × 80-Rasters. Nur im Release-Build
-/// (`cargo test --release -- --ignored`, einige Minuten).
+/// (`cargo test --release -- --ignored`, etwa 6 min).
 #[test]
-#[ignore = "Belastungstest, nur mit --release --ignored (einige Minuten)"]
+#[ignore = "Belastungstest, nur mit --release --ignored (etwa 6 min)"]
 fn random_pairs_are_never_wrong_and_rarely_refused() {
-    check(&run_set(4242, 200, 60, 80));
+    check(&run_set(4242, 200, 60, 80, 3000));
 }

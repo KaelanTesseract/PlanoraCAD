@@ -3,7 +3,7 @@
 //! Stützpunkten für die Suche nach dem nächsten Punkt.
 
 use crate::error::KernelError;
-use planora_math::nurbs::{MAX_CONTROL_TOTAL, NurbsSurface};
+use planora_math::nurbs::{BezierPatch, MAX_CONTROL_TOTAL, NurbsSurface};
 use planora_math::{DVec3, Frame};
 use std::sync::OnceLock;
 
@@ -40,6 +40,13 @@ const HESSIAN_FLOOR: f64 = 1e-300;
 /// Versätze (Bruchteil des Wegs zur Bereichsmitte), an denen die Ersatznormale eines entarteten
 /// Punkts (Pol) gesucht wird.
 const NORMAL_OFFSETS: [f64; 3] = [1e-6, 1e-4, 1e-2];
+/// Gegenprobe über die Bézier-Flicken: gesucht wird nur ein um mindestens diesen Anteil näherer
+/// Fußpunkt (grobe Fehlgriffe des Rasters); Teilungstiefe und Arbeit sind begrenzt.
+const PATCH_CHECK_GAP: f64 = 0.01;
+const PATCH_CHECK_DEPTH: usize = 5;
+const PATCH_CHECK_WORK: usize = 64;
+/// … und nur für Abstände unter diesem Vielfachen der größten Rasterzelle.
+const PATCH_CHECK_REACH: f64 = 2.0;
 /// Feineres Raster je Richtung über den Zellen um den besten Rasterpunkt, wenn die grobe Suche
 /// nichts oder nur einen Randpunkt findet.
 const REFINE_SAMPLES: usize = 16;
@@ -62,6 +69,9 @@ const VERIFY_RATIO: f64 = 1e-9;
 
 /// Parameterpaar `(u, v)`.
 type Uv = (f64, f64);
+
+/// Bézier-Flicken mit seinem Hüllquader.
+type PatchBox = ((DVec3, DVec3), BezierPatch);
 
 /// Kachel des Rasters `(i0, i1, j0, j1, lo, hi)`: Indexbereiche `[i0, i1) × [j0, j1)` und der
 /// Hüllquader ihrer Rasterpunkte.
@@ -102,6 +112,8 @@ pub struct NurbsSurfaceData {
     periodic_v: bool,
     poles_v: Vec<f64>,
     grid: OnceLock<Grid>,
+    /// Bézier-Flicken für `patch_check` (`None`, wenn die Zerlegung zu groß wäre).
+    patches: OnceLock<Option<Vec<PatchBox>>>,
 }
 
 impl std::fmt::Debug for NurbsSurfaceData {
@@ -193,6 +205,7 @@ impl NurbsSurfaceData {
             periodic_v,
             poles_v,
             grid: OnceLock::new(),
+            patches: OnceLock::new(),
         };
         let (lo, hi) = data.control_bounds();
         data.frame.origin = (lo + hi) * 0.5;
@@ -530,7 +543,72 @@ impl NurbsSurfaceData {
         self.newton(p, u, v)
     }
 
+    /// Globale Suche (`grid_search`), danach Gegenprobe über die Hüllquader der Bézier-Flicken
+    /// (`patch_check`): Das Raster kann an steilen Stellen einen deutlich näheren Fußpunkt
+    /// übersehen.
     fn global_closest(&self, p: DVec3) -> Option<(f64, f64, f64)> {
+        let r = self.grid_search(p)?;
+        // Nur wenn der Abstand in der Größenordnung der Rasterzellen liegt, kann das Raster
+        // einen näheren Fußpunkt grob verfehlen (weiter weg ist jede Zelle klein dagegen).
+        if r.2 < PATCH_CHECK_REACH * self.grid().cell_reach {
+            Some(self.patch_check(p, r))
+        } else {
+            Some(r)
+        }
+    }
+
+    /// Verzweigen und Beschränken über die Bézier-Flicken: Flicken, deren Hüllquader näher als
+    /// `(1 − PATCH_CHECK_GAP) · Abstand` an `p` liegt, werden geteilt; an kleinen Flicken startet
+    /// Newton aus der Mitte. Höchstens `PATCH_CHECK_WORK` Schritte (danach bleibt das bisher beste
+    /// Ergebnis, nie ein schlechteres).
+    fn patch_check(&self, p: DVec3, mut best: (f64, f64, f64)) -> (f64, f64, f64) {
+        let Some(patches) = self.patches.get_or_init(|| {
+            self.surface
+                .bezier_patches()
+                .ok()
+                .map(|ps| ps.into_iter().map(|q| (q.bounds(), q)).collect())
+        }) else {
+            return best;
+        };
+        let box_dist = |q: &BezierPatch| {
+            let (lo, hi) = q.bounds();
+            (lo - p).max(p - hi).max(DVec3::ZERO).length()
+        };
+        let limit = |d: f64| d * (1.0 - PATCH_CHECK_GAP);
+        let mut stack: Vec<(BezierPatch, usize)> = patches
+            .iter()
+            .filter(|((lo, hi), _)| {
+                (*lo - p).max(p - *hi).max(DVec3::ZERO).length() < limit(best.2)
+            })
+            .map(|(_, q)| (q.clone(), 0))
+            .collect();
+        let mut work = 0usize;
+        while let Some((q, depth)) = stack.pop() {
+            if box_dist(&q) >= limit(best.2) {
+                continue;
+            }
+            work += 1;
+            if work > PATCH_CHECK_WORK {
+                break;
+            }
+            let (lo, hi) = q.bounds();
+            // Blatt: klein gegen den Abstand (dort liegt sicher ein näherer Punkt in der Nähe)
+            // oder tief genug: Newton aus der Mitte. Sonst teilen, ohne Newton.
+            if depth >= PATCH_CHECK_DEPTH || (hi - lo).length() <= PATCH_CHECK_GAP * best.2 {
+                let (um, vm) = (0.5 * (q.u.0 + q.u.1), 0.5 * (q.v.0 + q.v.1));
+                if let Some(r) = self.newton(p, um, vm)
+                    && r.2 < best.2
+                {
+                    best = r;
+                }
+                continue;
+            }
+            stack.extend(q.subdivide().into_iter().map(|c| (c, depth + 1)));
+        }
+        best
+    }
+
+    fn grid_search(&self, p: DVec3) -> Option<(f64, f64, f64)> {
         let (starts, best) = self.grid_starts(p);
         let run = |starts: Vec<(f64, f64)>| {
             starts
@@ -542,7 +620,12 @@ impl NurbsSurfaceData {
         let Some(best) = best else {
             return result;
         };
-        if result.is_some_and(|r| !self.on_open_edge(r.0, r.1)) {
+        // Ein Ergebnis, dem ein Rasterpunkt näher liegt, ist sicher kein globales Minimum (etwa
+        // ein örtliches Minimum an einer steilen Ecke, während das wahre in einer Zelle ohne
+        // Startpunkt liegt): dann wie am Rand weitersuchen.
+        let beaten =
+            |r: &(f64, f64, f64)| self.grid_has_closer(p, r.2 * r.2 * (1.0 - VERIFY_RATIO));
+        if result.is_some_and(|r| !self.on_open_edge(r.0, r.1) && !beaten(&r)) {
             return result;
         }
         let result = [result, run(self.extra_starts(p, best))]

@@ -10,6 +10,10 @@ use planora_math::{DVec3, TAU};
 /// Schranke, mit der angenähert wird, als Anteil von `NURBS_FIT_TOL` (Reserve für die Prüfung
 /// zwischen den Punkten); sie halbiert sich in jeder weiteren Runde.
 const FIT_MARGIN: f64 = 0.5;
+/// Prüfstellen je Abschnitt zwischen zwei Punkten (Anteile der Sehne) und die dort verlangte
+/// Schranke als Anteil von `NURBS_FIT_TOL` (Reserve für die Abweichung zwischen den Prüfstellen).
+const VERIFY_STEPS: [f64; 3] = [0.25, 0.5, 0.75];
+const VERIFY_FRACTION: f64 = 0.8;
 /// Runden „annähern, prüfen, verdichten“ je Stück.
 const FIT_ROUNDS: usize = 5;
 /// Höchstzahl Punkte eines Stücks (längere Zweige werden geteilt; die Annäherung hat höchstens
@@ -116,8 +120,9 @@ impl Ssi<'_> {
         Err(MSG_FIT.into())
     }
 
-    /// Abschnitte `i` (zwischen Punkt `i` und `i + 1`), an deren Anfang oder Mitte die Kurve
-    /// (Parameter nach Sehnenlänge) nicht innerhalb `NURBS_FIT_TOL` auf beiden Flächen liegt.
+    /// Abschnitte `i` (zwischen Punkt `i` und `i + 1`), an deren Anfang oder an einer der
+    /// `VERIFY_STEPS` die Kurve (Parameter nach Sehnenlänge) nicht innerhalb
+    /// `VERIFY_FRACTION · NURBS_FIT_TOL` auf beiden Flächen liegt.
     fn verify(&self, c: &NurbsCurve, pts: &[DVec3], hints: &[Hints]) -> Result<Vec<usize>, String> {
         let n = pts.len();
         let mut chord = Vec::with_capacity(n);
@@ -135,13 +140,21 @@ impl Ssi<'_> {
         let ok = |p: DVec3, h: Hints| -> Result<bool, String> {
             Ok(self
                 .probe(p, h)?
-                .is_some_and(|pr| pr.residual() <= NURBS_FIT_TOL))
+                .is_some_and(|pr| pr.residual() <= VERIFY_FRACTION * NURBS_FIT_TOL))
         };
         let mut bad = Vec::new();
         for i in 0..n.saturating_sub(1) {
             let start_ok = ok(c.point(at(chord[i])), hints[i])?;
-            let mid_ok = ok(c.point(at(0.5 * (chord[i] + chord[i + 1]))), hints[i])?;
-            if !(start_ok && mid_ok) {
+            let mut inner_ok = true;
+            for f in VERIFY_STEPS {
+                let x = chord[i] + f * (chord[i + 1] - chord[i]);
+                let h = if f < 0.5 { hints[i] } else { hints[i + 1] };
+                if !ok(c.point(at(x)), h)? {
+                    inner_ok = false;
+                    break;
+                }
+            }
+            if !(start_ok && inner_ok) {
                 if !start_ok && i > 0 && bad.last() != Some(&(i - 1)) {
                     bad.push(i - 1);
                 }

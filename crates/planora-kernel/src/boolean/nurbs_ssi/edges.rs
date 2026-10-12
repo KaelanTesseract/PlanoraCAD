@@ -9,7 +9,7 @@
 //! sicher: Lipschitz-Ausschluss und Monotonie über Tangenten- und Gradientenkegel).
 
 use super::seeds::{Cone, Node, analytic_cone, excluded_points, patch_cone, separates, tangents};
-use super::{Hints, MSG_LOST, PARALLEL_NORMALS, Probe, Side, Ssi, Uv};
+use super::{Hints, MSG_LOST, MSG_NEAR_TANGENT, PARALLEL_NORMALS, Probe, Side, Ssi, Uv};
 use std::cell::Cell;
 
 use planora_math::DVec3;
@@ -185,8 +185,10 @@ impl Ssi<'_> {
                 _ => None,
             };
             for e in patch_edges(&piece.p) {
-                // Jede Randkurve nur einmal (sie gehört zu mehreren Paaren und zwei Nachbarn);
-                // ihre Nullstellen hängen nur von der anderen Fläche ab.
+                // Jede Randkurve nur einmal (sie gehört zu mehreren Paaren und zwei Nachbarn).
+                // Gegen eine analytische Fläche hängen ihre Nullstellen nur von dieser ab; gegen
+                // eine Freiformfläche nutzt die (ohnehin nur geschätzte) Monotonie den
+                // Normalenkegel und Startwert des ersten Paars, in dem die Kurve vorkommt.
                 let key = (
                     side_a,
                     e.fixed.to_bits(),
@@ -336,6 +338,33 @@ impl Ssi<'_> {
             if !monotone && depth < EDGE_MAX_DEPTH {
                 stack.extend(e.split().into_iter().map(|s| (s, depth + 1)));
                 continue;
+            }
+            // Gegen eine Freiformfläche ist „höchstens eine Nullstelle“ nur geschätzt. Zeigt die
+            // Mitte ein anderes Vorzeichen als beide Enden, liegen mindestens zwei Nullstellen im
+            // Stück: weiter teilen. Taucht die andere Fläche in der Mitte bis auf `tol.linear` an
+            // das Stück heran (näher als an den Enden, ohne Vorzeichenwechsel), könnte sie es
+            // zweimal knapp schneiden (zwei gleich tiefe Bögen, einer unentdeckt): dann benannt
+            // ablehnen statt nur einen Teil der Kurven zu liefern.
+            let estimated = monotone && other.nurbs.is_some();
+            let same_ends = (f0 < 0.0) == (f1 < 0.0);
+            if estimated
+                && same_ends
+                && (fc < 0.0) != (f0 < 0.0)
+                && f0.abs() > self.eps
+                && f1.abs() > self.eps
+                && depth < EDGE_MAX_DEPTH
+            {
+                stack.extend(e.split().into_iter().map(|s| (s, depth + 1)));
+                continue;
+            }
+            if estimated
+                && same_ends
+                && f0.abs() > self.eps
+                && f1.abs() > self.eps
+                && fc.abs() <= lin
+                && fc.abs() < f0.abs().min(f1.abs())
+            {
+                return Err(MSG_NEAR_TANGENT.into());
             }
             if f0.abs() <= self.eps {
                 push_root(out, p0, hints_at(&e, 0.0), self.same, true);
