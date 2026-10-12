@@ -261,3 +261,29 @@ fn huge_rounded_puck_keeps_a_bounded_mesh() {
     let p = mass_properties(&m);
     assert!(rel(p.volume, expected) < 0.02, "{} vs {expected}", p.volume);
 }
+
+/// Die Randprüfung (`check_face_boundaries`) erkennt eine Fläche, deren Dreiecke nicht genau
+/// ihre Schleifenpunkte als Rand haben, und lässt geschlossene Netze aller Grundkörper durch.
+#[test]
+fn face_boundary_check_accepts_primitives_and_finds_a_missing_triangle() {
+    let bodies = [
+        k().make_box(DVec3::new(1.0, 2.0, 3.0)).unwrap(),
+        k().make_cylinder(2.0, 3.0).unwrap(),
+        k().make_sphere(2.0).unwrap(),
+        k().make_cone(2.0, 3.0).unwrap(),
+    ];
+    for s in &bodies {
+        let m = mesh_of(s);
+        check_face_boundaries(s, &m).unwrap();
+        // ein Dreieck der ersten Fläche fehlt: Ihr Rand hat dann zusätzliche Strecken
+        let mut broken = m.clone();
+        let r = broken.face_ranges[0];
+        let at = (r.first_index + r.index_count - 3) as usize;
+        broken.indices.drain(at..at + 3);
+        broken.face_ranges[0].index_count -= 3;
+        for fr in broken.face_ranges.iter_mut().skip(1) {
+            fr.first_index -= 3;
+        }
+        assert!(check_face_boundaries(s, &broken).is_err());
+    }
+}

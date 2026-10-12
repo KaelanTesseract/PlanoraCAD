@@ -1,18 +1,20 @@
-//! Bekannte Fehler der Vernetzung (nicht Teilprojekt 7, eigene Aufgabe). Die Tests laufen nur
-//! mit `--ignored` und schlagen heute fehl; sie halten die Eingaben fest.
+//! Früher bekannte Fehler der Vernetzung, jetzt als Regressionstests.
 
 use planora_kernel::boolean::{BoolOp, boolean};
 use planora_kernel::{AnalyticKernel, Curve, Kernel, validate};
 use planora_math::{DMat4, DVec3, Tolerance};
-use planora_mesh::{TessellationOptions, is_watertight, tessellate};
+use planora_mesh::{
+    TessellationOptions, check_face_boundaries, is_watertight, mass_properties, tessellate,
+};
 
 #[test]
-#[ignore = "known mesh bug, not Task 10: Netz bei jeder Sehnentoleranz offen"]
 fn box_on_a_rotated_analytic_cylinder_meshes_closed() {
     // Rein analytisch (gefunden im Review von Task 10): Quader [−1,192; 1,192] × [−3; 4] × [−5; 5]
     // auf einem Zylinder r = 3,368 (Achse z von −12,19 bis −5, Mitte (−3,65; 0,33), Naht bei
-    // (−4,977; 3,422)). Vereinigung und Zylinder minus Quader sind gültige Körper, ihr Netz ist
-    // bei jeder Sehnentoleranz offen.
+    // (−4,977; 3,422)). Vereinigung und Zylinder minus Quader sind gültige Körper; ihr Netz war bei
+    // jeder Sehnentoleranz offen: Der Randkreis des Mantels oben ist in mehrere Kanten geteilt, der
+    // Mantel galt aber als unbeschnitten (volle Parameterfläche) und bekam das gleichmäßige Raster
+    // über dem Parameterrechteck, dessen Randpunkte nicht die Teilpunkte der Nachbarfläche sind.
     let k = AnalyticKernel::default();
     let c = k.make_cylinder(3.368, 12.19 - 5.0).unwrap();
     let seam = c
@@ -39,7 +41,8 @@ fn box_on_a_rotated_analytic_cylinder_meshes_closed() {
     for (a, b, op) in [(&b, &cyl, BoolOp::Union), (&cyl, &b, BoolOp::Difference)] {
         let s = boolean(a, b, op, &tol).unwrap();
         validate(&s).unwrap();
-        for chord in [0.05, 0.002] {
+        let mut volumes = Vec::new();
+        for chord in [0.05, 0.002, 0.0005] {
             let m = tessellate(
                 &s,
                 &TessellationOptions {
@@ -47,7 +50,12 @@ fn box_on_a_rotated_analytic_cylinder_meshes_closed() {
                 },
             )
             .unwrap();
+            check_face_boundaries(&s, &m).unwrap();
             assert!(is_watertight(&m, 1e-6), "{op:?}, Sehnentoleranz {chord}");
+            volumes.push(mass_properties(&m).volume);
         }
+        // feinere Netze nähern sich dem Volumen an (Sehnenfehler der Bögen)
+        let (v1, v2) = (volumes[1], volumes[2]);
+        assert!(((v1 - v2) / v2).abs() < 1e-3, "{op:?}: {volumes:?}");
     }
 }
