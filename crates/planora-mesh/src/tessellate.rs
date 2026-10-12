@@ -65,20 +65,19 @@ pub fn tessellate_with(solid: &Solid, disc: &Discretizer) -> Result<Mesh, MeshEr
                 // (`tessellate_patch`), aber nur, wenn dessen Randpunkte genau die gemeinsamen
                 // Kantenpunkte sind. Sonst (etwa ein Mantel, dessen Randkreis in mehrere Kanten
                 // geteilt ist: gleiche Parameterfläche, aber zusätzliche Teilpunkte) hätte das
-                // Raster andere Randpunkte als die Nachbarflächen, das Netz wäre offen; dann
-                // ebenfalls die Triangulierung im Parameterraum.
+                // Raster andere Randpunkte als die Nachbarflächen, das Netz wäre offen. Dann
+                // bekommen Mantelflächen von Zylinder und Kegel (gerade in `v`) einen Streifen
+                // zwischen ihren beiden Randzeilen mit genau den Kantenpunkten
+                // (`tessellate_strip`); die Triangulierung im Parameterraum würde das Innere mit
+                // einem gleichmäßigen Raster füllen und bei großen Körpern ein Vielfaches an
+                // Dreiecken erzeugen. Geht auch das nicht (Kugel, Ring, ein Schlitz im Mantel),
+                // bleibt die Triangulierung im Parameterraum.
                 let rings = || -> Vec<Vec<DVec3>> {
                     std::iter::once(&face.outer)
                         .chain(face.inner.iter())
                         .map(|lp| loop_points(lp, &polylines))
                         .collect()
                 };
-                //
-                // Bei Mantelflächen von Zylinder und Kegel (gerade in `v`) genügt dann ein
-                // Streifen zwischen den beiden Randzeilen mit genau den Kantenpunkten
-                // (`tessellate_strip`); die Triangulierung im Parameterraum würde das Innere mit
-                // einem gleichmäßigen Raster füllen und bei großen Körpern ein Vielfaches an
-                // Dreiecken erzeugen.
                 let mut done = false;
                 if !matches!(face.surface, Surface::Nurbs(_)) && !crate::trimmed::is_trimmed(&g) {
                     let patch = face.patch.ok_or(MeshError::MissingPatch(fid.index()))?;
@@ -333,9 +332,13 @@ const STRIP_REL: f64 = 1e-9;
 
 /// Zerlegt die Schleifenpunkte `rings` einer unbeschnittenen Mantelfläche von Zylinder oder
 /// Kegel (gerade in `v`) in die Randzeilen `v = v0` und `v = v1`, jeweils nach `u` geordnet und
-/// von `u0` bis `u1` reichend (bei einem vollen Umlauf mit dem Nahtpunkt an beiden Enden; eine
-/// Kegelspitze als Zeile aus einem Punkt an beiden Enden). `None`, wenn das nicht geht (andere
-/// Flächenart, Löcher, ein Punkt abseits der Randzeilen etwa auf einer geteilten Naht); dann
+/// von `u0` bis `u1` reichend (bei einem vollen Umlauf mit dem Nahtpunkt an beiden Enden). Eine
+/// Kegelspitze wird zu einer Zeile mit denselben `u` wie die andere Zeile (je ein Spitzenpunkt
+/// mit eigener Normale, wie beim Raster). Die Schleife darf nur an den Enden `u0`/`u1` (Naht
+/// bzw. Seitenkanten) zwischen den Zeilen wechseln, genau zweimal; sonst (etwa ein Schlitz quer
+/// durch den Mantel, schmaler als die Flächentoleranz von `is_trimmed`) wäre der Streifen über
+/// den Schlitz gespannt. `None`, wenn das nicht geht (andere Flächenart, Löcher, ein Punkt
+/// abseits der Randzeilen etwa auf einer geteilten Naht, ein Wechsel abseits der Enden); dann
 /// bleibt es bei der Triangulierung im Parameterraum.
 fn strip_rows(face: &Face, patch: &UvRect, rings: &[Vec<DVec3>]) -> Option<Strip> {
     if !matches!(
@@ -358,6 +361,8 @@ fn strip_rows(face: &Face, patch: &UvRect, rings: &[Vec<DVec3>]) -> Option<Strip
         .map(|p| p.abs().max_element())
         .fold(1.0, f64::max);
     let weld = 1e-12 * scale;
+    // Zeile und `u` je Schleifenpunkt, in Schleifenreihenfolge.
+    let mut seq: Vec<(usize, f64)> = Vec::with_capacity(rings[0].len());
     let mut rows: [StripRow; 2] = [Vec::new(), Vec::new()];
     for p in &rings[0] {
         let (u, v) = face.surface.project(*p);
@@ -375,16 +380,36 @@ fn strip_rows(face: &Face, patch: &UvRect, rings: &[Vec<DVec3>]) -> Option<Strip
         if !uu.is_finite() || uu > u1 + eps_u {
             return None;
         }
-        rows[row].push((uu.min(u1), *p));
+        let uu = uu.min(u1);
+        seq.push((row, uu));
+        rows[row].push((uu, *p));
     }
-    for (row, v) in rows.iter_mut().zip([v0, v1]) {
-        if row.is_empty() {
-            return None;
+    // Kegelspitze: alle Punkte einer Zeile an einer Stelle.
+    let mut apex = [false; 2];
+    for (k, row) in rows.iter().enumerate() {
+        let first = row.first()?.1;
+        apex[k] = row.iter().all(|(_, p)| p.distance(first) <= weld);
+    }
+    if apex[0] && apex[1] {
+        return None;
+    }
+    // Wechsel zwischen den Zeilen nur an den Enden, genau zwei.
+    let at_end = |u: f64| (u - u0).abs() <= eps_u || (u - u1).abs() <= eps_u;
+    let mut changes = 0;
+    for k in 0..seq.len() {
+        let (a, b) = (seq[k], seq[(k + 1) % seq.len()]);
+        if a.0 != b.0 {
+            changes += 1;
+            if [a, b].iter().any(|(r, u)| !apex[*r] && !at_end(*u)) {
+                return None;
+            }
         }
-        // Kegelspitze: alle Punkte der Zeile an einer Stelle.
-        let first = row[0].1;
-        if row.iter().all(|(_, p)| p.distance(first) <= weld) {
-            *row = vec![(u0, first), (u1, first)];
+    }
+    if changes != 2 {
+        return None;
+    }
+    for ((row, v), is_apex) in rows.iter_mut().zip([v0, v1]).zip(apex) {
+        if is_apex {
             continue;
         }
         row.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -411,6 +436,13 @@ fn strip_rows(face: &Face, patch: &UvRect, rings: &[Vec<DVec3>]) -> Option<Strip
         }
         if row.len() < 2 {
             return None;
+        }
+    }
+    // Spitze: ein Punkt je `u` der anderen Zeile.
+    for k in 0..2 {
+        if apex[k] {
+            let tip = rows[k][0].1;
+            rows[k] = rows[1 - k].iter().map(|(u, _)| (*u, tip)).collect();
         }
     }
     Some(Strip { v: [v0, v1], rows })

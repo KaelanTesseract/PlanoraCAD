@@ -100,3 +100,104 @@ fn a_box_on_the_end_cap_of_a_large_cylinder_meshes_closed_and_lean() {
         );
     }
 }
+
+#[test]
+fn a_cone_apex_on_the_strip_path_keeps_its_normals() {
+    // Review: Auf dem Streifenweg teilten sich alle Dreiecke an der Kegelspitze eine Ecke mit der
+    // Normale bei u0 (kleinstes Skalarprodukt mit der Flächennormale −0,38). Jetzt ein
+    // Spitzenpunkt je Abschnitt mit eigener Normale, wie beim Raster.
+    let k = AnalyticKernel::default();
+    let cone = k
+        .transform(
+            &k.make_cone(2.0, 3.0).unwrap(),
+            &DMat4::from_rotation_z(0.3),
+        )
+        .unwrap();
+    let b = k
+        .transform(
+            &k.make_box(DVec3::new(2.5, 5.0, 1.0)).unwrap(),
+            &DMat4::from_translation(DVec3::new(0.0, -2.5, -1.0)),
+        )
+        .unwrap();
+    let s = boolean(&cone, &b, BoolOp::Union, &Tolerance::default()).unwrap();
+    validate(&s).unwrap();
+    let expect = 4.0 * std::f64::consts::PI + 12.5;
+    for chord in [0.1, 0.01, 0.001] {
+        let m = tessellate(
+            &s,
+            &TessellationOptions {
+                chord_tolerance: chord,
+            },
+        )
+        .unwrap();
+        check_face_boundaries(&s, &m).unwrap();
+        assert!(is_watertight(&m, 1e-6), "Sehnentoleranz {chord}");
+        let v = mass_properties(&m).volume;
+        // Sehnenfehler der Bögen (r = 2): etwa 0,46 · Sehnentoleranz / r relativ
+        assert!(
+            ((v - expect) / expect).abs() < chord / 2.0,
+            "{chord}: {v} statt {expect}"
+        );
+        let mut worst = f64::INFINITY;
+        for r in &m.face_ranges {
+            let f = &s.faces[r.face];
+            if !matches!(f.surface, planora_kernel::Surface::Cone { .. }) {
+                continue;
+            }
+            let sign = if f.same_sense { 1.0 } else { -1.0 };
+            let first = r.first_index as usize;
+            for t in m.indices[first..first + r.index_count as usize].chunks(3) {
+                let c = (m.positions[t[0] as usize]
+                    + m.positions[t[1] as usize]
+                    + m.positions[t[2] as usize])
+                    / 3.0;
+                let (u, w) = f.surface.project(c);
+                let n = f.surface.normal(u, w) * sign;
+                for &i in t {
+                    worst = worst.min(m.normals[i as usize].dot(n));
+                }
+            }
+        }
+        assert!(worst >= 0.9, "Sehnentoleranz {chord}: Normale {worst}");
+    }
+}
+
+#[test]
+fn a_hair_thin_slit_through_a_large_mantle_is_not_bridged() {
+    // Review: Ein Schlitz quer durch den ganzen Mantel, schmaler als die Flächentoleranz von
+    // `is_trimmed`, liegt mit allen Punkten auf den Randkreisen; der Streifen überspannte ihn
+    // (Netz offen). Jetzt wechselt die Schleife abseits der Naht die Zeile: Triangulierung im
+    // Parameterraum, geschlossen.
+    let k = AnalyticKernel::default();
+    for (r, h, w) in [
+        (300.0, 500.0, 0.001),
+        (300.0, 500.0, 0.0015),
+        (1000.0, 100.0, 0.005),
+        (1000.0, 100.0, 0.002),
+    ] {
+        let cyl = k.make_cylinder(r, h).unwrap();
+        let slit = k
+            .transform(
+                &k.make_box(DVec3::new(25.0, w, h + 2.0)).unwrap(),
+                &(DMat4::from_rotation_z(1.0)
+                    * DMat4::from_translation(DVec3::new(r - 20.0, -w / 2.0, -1.0))),
+            )
+            .unwrap();
+        let s = boolean(&cyl, &slit, BoolOp::Difference, &Tolerance::default()).unwrap();
+        validate(&s).unwrap();
+        for chord in [0.1, 0.01] {
+            let m = tessellate(
+                &s,
+                &TessellationOptions {
+                    chord_tolerance: chord,
+                },
+            )
+            .unwrap();
+            check_face_boundaries(&s, &m).unwrap_or_else(|e| panic!("r {r} w {w} {chord}: {e}"));
+            assert!(
+                is_watertight(&m, 1e-6),
+                "r {r} w {w}, Sehnentoleranz {chord}"
+            );
+        }
+    }
+}
