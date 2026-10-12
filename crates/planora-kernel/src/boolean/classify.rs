@@ -139,7 +139,13 @@ fn near_boundary(g: &FaceGeom, p: DVec3, tol: &Tolerance) -> bool {
 
 /// Strahlverfahren: `Some(true)` = innen, `Some(false)` = außen, `None` = mehrdeutig
 /// (Treffer auf oder dicht an einem Rand oder einer Naht, Berührung, Strahl liegt in einer Fläche).
+///
+/// Freiformflächen: Der Strahlschnitt folgt erst (Task 10); bis dahin ist jeder Strahl gegen einen
+/// Körper mit Freiformfläche mehrdeutig (`None`).
 fn cast(other: &[FaceGeom], p: DVec3, dir: DVec3, reach: f64, tol: &Tolerance) -> Option<bool> {
+    if other.iter().any(|g| matches!(g.surface, Surface::Nurbs(_))) {
+        return None;
+    }
     let ray = Curve::Line { origin: p, dir };
     let mut hits = 0;
     for g in other {
@@ -172,8 +178,17 @@ fn cast(other: &[FaceGeom], p: DVec3, dir: DVec3, reach: f64, tol: &Tolerance) -
     Some(hits % 2 == 1)
 }
 
-/// Strahlverfahren mit allen festen Richtungen, bis eine eindeutig ist.
+/// Meldung, solange sich die Lage zu einem Körper mit Freiformfläche nicht bestimmen lässt.
+pub(crate) const FREEFORM_CLASSIFICATION: &str =
+    "Die Lage zur Freiformfläche lässt sich nicht bestimmen";
+
+/// Strahlverfahren mit allen festen Richtungen, bis eine eindeutig ist. Hat der Körper eine
+/// Freiformfläche, ist jeder Strahl mehrdeutig (siehe [`cast`]): dann sofort die benannte
+/// Meldung [`FREEFORM_CLASSIFICATION`] statt aller Richtungen.
 fn cast_all(other: &[FaceGeom], p: DVec3, tol: &Tolerance) -> Result<bool, BooleanError> {
+    if other.iter().any(|g| matches!(g.surface, Surface::Nurbs(_))) {
+        return Err(BooleanError::Unsupported(FREEFORM_CLASSIFICATION.into()));
+    }
     let reach = reach(other, p);
     directions()
         .into_iter()

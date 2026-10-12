@@ -1,4 +1,4 @@
-use super::seg::{Seg, golden_min, sample_count};
+use super::seg::{Seg, curve_sample_count, golden_min};
 use crate::geometry::{Curve, Surface};
 use crate::validate::edge_surface_tol;
 use planora_math::{TAU, Tolerance};
@@ -70,7 +70,9 @@ pub fn curve_surface_roots(
     if !t0.is_finite() || !t1.is_finite() {
         return CurveSurface::Roots(Vec::new());
     }
-    let n = sample_count(t0, t1, 64, 64);
+    // Freiformkurven nach ihrer Gestalt (ihr Parameterbereich ist oft nur [0, 1]), sonst wie bisher
+    // nach der Breite des Parameterbereichs.
+    let n = curve_sample_count(curve, t0, t1, 64, 64);
     // Freiformflächen: Fußpunkt des vorigen Auswertepunkts als Startwert (geprüft, siehe
     // `Surface::implicit_hinted`); analytische Flächen: unverändert `implicit`.
     let hint = Cell::new(None);
@@ -282,7 +284,7 @@ fn one_way(a: &Seg, b: &Seg, tol: &Tolerance) -> Vec<(f64, f64)> {
             Vec::new()
         };
     }
-    let n = sample_count(a.t0, a.t1, 64, 64);
+    let n = curve_sample_count(&a.curve, a.t0, a.t1, 64, 64);
     let dist = |f: f64| b.closest(a.at(f)).1;
     let ds: Vec<f64> = (0..=n).map(|i| dist(i as f64 / n as f64)).collect();
     let reach = (a.length() / n as f64) * 2.0 + near;

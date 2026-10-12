@@ -57,9 +57,13 @@ impl Seg {
         if self.t1 >= self.t0 { d } else { -d }
     }
 
-    /// Länge, aus einem Streckenzug mit 48 Abschnitten geschätzt.
+    /// Länge, aus einem Streckenzug mit 48 Abschnitten geschätzt (Freiformkurven: mindestens
+    /// 48, sonst nach ihrer Gestalt wie [`curve_sample_count`]).
     pub fn length(&self) -> f64 {
-        let n = 48;
+        let n = match self.curve {
+            Curve::Nurbs(_) => curve_sample_count(&self.curve, self.t0, self.t1, 72, 48),
+            _ => 48,
+        };
         (0..n)
             .map(|i| {
                 self.at(i as f64 / n as f64)

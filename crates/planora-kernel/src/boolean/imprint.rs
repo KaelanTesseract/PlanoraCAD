@@ -8,9 +8,12 @@
 use super::error::BooleanError;
 use super::roots::{CurveSurface, curve_surface_roots, seg_intersections};
 use super::seg::Seg;
-use super::split::seam_segments;
+use super::split::{pole_point, seam_segments};
 use super::surfsurf::{SurfaceIntersection, intersect_surfaces, surface_name};
-use super::uv::{Containment, FaceGeom, face_geom, loop_points, point_in_face};
+use super::uv::{
+    Containment, FaceGeom, check_loops_on_surface, face_geom, loop_points, point_in_face,
+};
+use super::{face_is_freeform, pipeline_tol};
 use crate::geometry::{Curve, Surface};
 use crate::topology::Solid;
 use crate::validate::edge_surface_tol;
@@ -105,11 +108,116 @@ fn param_on_curve(c: &Curve, p: DVec3, tol: &Tolerance) -> Option<f64> {
     (c.point(t).distance(p) <= tol.linear * 10.0).then_some(t)
 }
 
+/// Punkte, an denen die Randkante `e` die Trägerfläche `other` trifft: Nullstellen, Kantenenden
+/// innerhalb der Toleranz auf der Fläche und bei ganz aufliegenden (nicht geschlossenen) Kanten
+/// ihre Enden.
+fn edge_hits(e: &Seg, other: &Surface, tol: &Tolerance) -> Vec<DVec3> {
+    let mut out = Vec::new();
+    match curve_surface_roots(&e.curve, e.t0, e.t1, other, tol) {
+        CurveSurface::Roots(rs) => {
+            for r in rs {
+                out.push(e.curve.point(r.t));
+            }
+            // Ein Kantenende knapp innerhalb der Toleranz kann der Nullstellensuche
+            // entgehen, wenn die Kante gleich dahinter die Fläche verlässt.
+            for p in [e.start(), e.end()] {
+                if other.implicit(p).abs() <= edge_surface_tol(&e.curve, other, tol) {
+                    out.push(p);
+                }
+            }
+        }
+        // Der Anfangspunkt einer geschlossenen Kante ist kein Teilungspunkt.
+        CurveSurface::Lies if e.start().distance(e.end()) <= tol.linear => {}
+        CurveSurface::Lies => {
+            out.push(e.start());
+            out.push(e.end());
+        }
+    }
+    out
+}
+
+/// Bereits berechnete Kantentreffer (nur bei Freiformbeteiligung): Die Nullstellensuche gegen
+/// eine Freiformfläche ist teuer, und jede Kante gehört zu zwei Flächen (die Naht sogar zweimal zu
+/// derselben). Schlüssel: Seite und Index der getroffenen Fläche, dazu Enden und Mitte der Kante
+/// (Richtung beliebig).
+struct HitCache {
+    entries: Vec<HitEntry>,
+}
+
+struct HitEntry {
+    /// (Kante von A?, Index der getroffenen Fläche im anderen Körper)
+    key: (bool, usize),
+    start: DVec3,
+    end: DVec3,
+    mid: DVec3,
+    hits: Vec<DVec3>,
+}
+
+impl HitCache {
+    fn hits(
+        &mut self,
+        key: (bool, usize),
+        e: &Seg,
+        other: &Surface,
+        tol: &Tolerance,
+    ) -> Vec<DVec3> {
+        let (a, b, m) = (e.start(), e.end(), e.at(0.5));
+        let same = |x: DVec3, y: DVec3| x.distance(y) <= tol.linear;
+        if let Some(entry) = self.entries.iter().find(|x| {
+            x.key == key
+                && ((same(x.start, a) && same(x.end, b)) || (same(x.start, b) && same(x.end, a)))
+                && x.mid.distance(m) <= tol.linear * 4.0
+        }) {
+            return entry.hits.clone();
+        }
+        let hits = edge_hits(e, other, tol);
+        self.entries.push(HitEntry {
+            key,
+            start: a,
+            end: b,
+            mid: m,
+            hits: hits.clone(),
+        });
+        hits
+    }
+}
+
+/// Kandidaten für Haltepunkte eines Flächenpaars (unabhängig von der Schnittkurve): Treffer der
+/// Randkanten beider Flächen auf der jeweils anderen Trägerfläche, in der Reihenfolge der Kanten.
+/// `cache` (nur mit Freiformbeteiligung) mit den Indizes `(i, j)` der Flächen in A und B.
+fn pair_hits(
+    fa: &FaceGeom,
+    fb: &FaceGeom,
+    tol: &Tolerance,
+    mut cache: Option<(&mut HitCache, usize, usize)>,
+) -> Vec<DVec3> {
+    let mut out = Vec::new();
+    for (own, other, a_edges) in [(fa, fb, true), (fb, fa, false)] {
+        for e in own.loops.iter().flatten() {
+            match cache.as_mut() {
+                Some((c, i, j)) => {
+                    // Kanten von A treffen Fläche j von B, Kanten von B Fläche i von A.
+                    let key = (a_edges, if a_edges { *j } else { *i });
+                    out.extend(c.hits(key, e, &other.surface, tol));
+                }
+                None => out.extend(edge_hits(e, &other.surface, tol)),
+            }
+        }
+    }
+    out
+}
+
 /// Haltepunkte der Schnittkurve `c`: dort, wo Randkanten der beiden Flächen die jeweils andere
-/// Trägerfläche treffen (auch Nahtkanten: so wird die Kurve an der Naht geteilt), dazu
-/// Kantenenden, die innerhalb der Toleranz auf der anderen Fläche liegen, sowie Pole und
-/// Kegelspitzen beider Flächen, durch die die Kurve läuft.
-fn breakpoints(c: &Curve, fa: &FaceGeom, fb: &FaceGeom, tol: &Tolerance) -> Vec<f64> {
+/// Trägerfläche treffen (`hits` aus [`pair_hits`]; auch Nahtkanten: so wird die Kurve an der Naht
+/// geteilt), dazu Kantenenden, die innerhalb der Toleranz auf der anderen Fläche liegen, sowie
+/// Pole und Kegelspitzen beider Flächen, durch die die Kurve läuft.
+fn breakpoints(
+    c: &Curve,
+    hits: &[DVec3],
+    fa: &FaceGeom,
+    fb: &FaceGeom,
+    tol: &Tolerance,
+) -> Vec<f64> {
     let mut ts: Vec<f64> = Vec::new();
     let mut pts: Vec<DVec3> = Vec::new();
     let mut add = |p: DVec3| {
@@ -121,35 +229,24 @@ fn breakpoints(c: &Curve, fa: &FaceGeom, fb: &FaceGeom, tol: &Tolerance) -> Vec<
             }
         }
     };
-    for (own, other) in [(fa, fb), (fb, fa)] {
-        for e in own.loops.iter().flatten() {
-            match curve_surface_roots(&e.curve, e.t0, e.t1, &other.surface, tol) {
-                CurveSurface::Roots(rs) => {
-                    for r in rs {
-                        add(e.curve.point(r.t));
-                    }
-                    // Ein Kantenende knapp innerhalb der Toleranz kann der Nullstellensuche
-                    // entgehen, wenn die Kante gleich dahinter die Fläche verlässt.
-                    for p in [e.start(), e.end()] {
-                        if other.surface.implicit(p).abs()
-                            <= edge_surface_tol(&e.curve, &other.surface, tol)
-                        {
-                            add(p);
-                        }
-                    }
-                }
-                // Der Anfangspunkt einer geschlossenen Kante ist kein Teilungspunkt.
-                CurveSurface::Lies if e.start().distance(e.end()) <= tol.linear => {}
-                CurveSurface::Lies => {
-                    add(e.start());
-                    add(e.end());
-                }
-            }
-        }
+    for p in hits {
+        add(*p);
     }
     for s in [&fa.surface, &fb.surface] {
         for pv in s.pole_vs() {
-            add(s.point(0.0, pv));
+            add(pole_point(s, pv));
+        }
+    }
+    // Offene Freiformkurven (Äste des numerischen Schnittrechners) enden auf dem Rand einer
+    // Fläche oder dort, wo der nächste Teil desselben Asts beginnt: Ihre Enden sind Haltepunkte,
+    // sonst gingen die Stücke zwischen dem letzten Haltepunkt und dem Kurvenende verloren.
+    if let (Curve::Nurbs(_), None, Some((a, b))) = (c, c.period(), c.domain()) {
+        for t in [a, b] {
+            let q = c.point(t);
+            if !pts.iter().any(|x| x.distance(q) <= tol.linear) {
+                pts.push(q);
+                ts.push(t);
+            }
         }
     }
     ts
@@ -298,16 +395,23 @@ fn push_unique(sections: &mut Vec<Seg>, s: Seg, tol: &Tolerance) {
     }
 }
 
-fn prepare(solid: &Solid, tol: &Tolerance) -> Vec<Prepared> {
+/// Flächen samt Nähten und Hüllquader. Freiformflächen, deren Randkanten nicht auf ihnen liegen,
+/// ergeben eine benannte Meldung.
+fn prepare(solid: &Solid, tol: &Tolerance) -> Result<Vec<Prepared>, BooleanError> {
     solid
         .faces
         .iter()
         .map(|(id, _)| {
             let geom = face_geom(solid, id);
+            check_loops_on_surface(&geom, tol)?;
             let boundary: Vec<Seg> = geom.loops.iter().flatten().cloned().collect();
-            let seams = seam_segments(&geom, &boundary, tol);
+            let seams = seam_segments(
+                &geom,
+                &boundary,
+                &pipeline_tol(tol, face_is_freeform(&geom)),
+            );
             let bbox = bbox(&geom, tol);
-            Prepared { geom, seams, bbox }
+            Ok(Prepared { geom, seams, bbox })
         })
         .collect()
 }
@@ -316,17 +420,25 @@ fn prepare(solid: &Solid, tol: &Tolerance) -> Vec<Prepared> {
 ///
 /// Die Listen folgen der Reihenfolge der Flächen im jeweiligen Körper. Ein Flächenpaar, dessen
 /// Schnitt nicht unterstützt wird und dessen Hüllquader sich überlappen, liefert
-/// [`BooleanError::UnsupportedIntersection`]. Doppelte Schnittstücke einer Fläche (etwa von
-/// einer zusammenfallenden Fläche und einer anstoßenden Seitenfläche) werden nur einmal geführt.
+/// [`BooleanError::UnsupportedIntersection`] (analytische Paare ohne Rechenweg) bzw.
+/// [`BooleanError::Unsupported`] mit der Ursache des numerischen Schnittrechners. Ist eine
+/// Freiformfläche oder -kurve beteiligt, gilt für Haltepunkte, Stücke und Lage die Toleranz
+/// [`pipeline_tol`] (Schnittkurven liegen nur auf `NURBS_FIT_TOL` genau), und eine Randkante
+/// neben ihrer Freiformfläche ergibt [`BooleanError::Unsupported`]. Doppelte Schnittstücke
+/// einer Fläche (etwa von einer zusammenfallenden Fläche und einer anstoßenden Seitenfläche)
+/// werden nur einmal geführt.
 pub fn imprint(
     a: &Solid,
     b: &Solid,
     tol: &Tolerance,
 ) -> Result<(Vec<FaceWork>, Vec<FaceWork>), BooleanError> {
-    let pa = prepare(a, tol);
-    let pb = prepare(b, tol);
+    let pa = prepare(a, tol)?;
+    let pb = prepare(b, tol)?;
     let mut sa: Vec<Vec<Seg>> = vec![Vec::new(); pa.len()];
     let mut sb: Vec<Vec<Seg>> = vec![Vec::new(); pb.len()];
+    let mut cache = HitCache {
+        entries: Vec::new(),
+    };
 
     for (i, fa) in pa.iter().enumerate() {
         for (j, fb) in pb.iter().enumerate() {
@@ -338,13 +450,11 @@ pub fn imprint(
                 a: surface_name(&ga.surface),
                 b: surface_name(&gb.surface),
             };
-            // Vorläufig (bis Task 9 die Pipeline für Freiformkurven und -flächen anpasst): Paare
-            // mit einer Freiformfläche ergeben wie vor dem numerischen Schnittrechner den
-            // benannten Fehler – auch ohne Schnitt oder bei Berührung, damit keine Operation ein
-            // Ergebnis liefert, das die Pipeline noch nicht sicher verarbeitet.
-            if matches!(ga.surface, Surface::Nurbs(_)) || matches!(gb.surface, Surface::Nurbs(_)) {
-                return Err(unsupported());
-            }
+            // Der Schnitt selbst rechnet mit der Modelltoleranz; Haltepunkte, Stücke und ihre Lage
+            // bei Freiformbeteiligung mit der weiteren Toleranz.
+            let freeform = face_is_freeform(ga) || face_is_freeform(gb);
+            let ptol = pipeline_tol(tol, freeform);
+            let tol_p = &ptol;
             match intersect_surfaces(&ga.surface, &gb.surface, tol) {
                 SurfaceIntersection::None | SurfaceIntersection::Touch => {}
                 SurfaceIntersection::Unsupported => return Err(unsupported()),
@@ -356,22 +466,24 @@ pub fn imprint(
                     )));
                 }
                 SurfaceIntersection::Coincident => {
-                    for s in coincident_sections(fb, fa, tol) {
-                        push_unique(&mut sa[i], s, tol);
+                    for s in coincident_sections(fb, fa, tol_p) {
+                        push_unique(&mut sa[i], s, tol_p);
                     }
-                    for s in coincident_sections(fa, fb, tol) {
-                        push_unique(&mut sb[j], s, tol);
+                    for s in coincident_sections(fa, fb, tol_p) {
+                        push_unique(&mut sb[j], s, tol_p);
                     }
                 }
                 SurfaceIntersection::Curves(cs) => {
+                    let cache = freeform.then_some((&mut cache, i, j));
+                    let hits = pair_hits(ga, gb, tol_p, cache);
                     for c in cs {
-                        let ts = breakpoints(&c, ga, gb, tol);
-                        for (seg, ca, cb) in pieces(&c, ts, fa, fb, tol) {
+                        let ts = breakpoints(&c, &hits, ga, gb, tol_p);
+                        for (seg, ca, cb) in pieces(&c, ts, fa, fb, tol_p) {
                             if ca == Containment::Inside && cb != Containment::Outside {
-                                push_unique(&mut sa[i], seg.clone(), tol);
+                                push_unique(&mut sa[i], seg.clone(), tol_p);
                             }
                             if cb == Containment::Inside && ca != Containment::Outside {
-                                push_unique(&mut sb[j], seg, tol);
+                                push_unique(&mut sb[j], seg, tol_p);
                             }
                         }
                     }

@@ -15,10 +15,13 @@
 
 use super::error::BooleanError;
 use super::roots::seg_intersections;
-use super::seg::{Seg, sample_count};
-use super::uv::{FaceGeom, loop_points, oriented_area, points_to_uv, winding};
+use super::seg::{Seg, curve_sample_count};
+use super::uv::{
+    FaceGeom, check_segs_on_surface, loop_points, oriented_area, points_to_uv, winding,
+};
+use super::{face_is_freeform, pipeline_tol, seg_is_freeform};
 use crate::geometry::Surface;
-use planora_math::{DVec2, DVec3, PI, TAU, Tolerance};
+use planora_math::{DVec2, DVec3, TAU, Tolerance};
 
 /// Ein zusammenhängendes Flächenstück: eine äußere Schleife und beliebig viele Löcher.
 #[derive(Clone, Debug)]
@@ -36,9 +39,18 @@ struct He {
     twin: Option<usize>,
 }
 
-/// Winkel `x` auf (−π, π] gefaltet.
-fn wrap_angle(x: f64) -> f64 {
-    x - TAU * (x / TAU).round()
+/// `x` auf eine Periode um 0 gefaltet (bei `TAU`: Winkel auf (−π, π]).
+fn wrap_period(x: f64, period: f64) -> f64 {
+    x - period * (x / period).round()
+}
+
+/// Punkt eines Pols `v = pv`: analytische Flächen bei `u = 0`, Freiformflächen am Anfang ihres
+/// u-Bereichs (die u-Linie ist dort ein Punkt, jeder u-Wert liefert ihn).
+pub(super) fn pole_point(s: &Surface, pv: f64) -> DVec3 {
+    match s {
+        Surface::Nurbs(d) => d.point(d.surface().domain().0.0, pv),
+        _ => s.point(0.0, pv),
+    }
 }
 
 /// Teilt Segmente an fremden Knotenpunkten, die in ihrem Inneren liegen.
@@ -95,11 +107,32 @@ pub(super) fn seam_segments(face: &FaceGeom, boundary: &[Seg], tol: &Tolerance) 
     out
 }
 
-/// Punkte, an denen das Schnittstück `s` die Naht `seam` (eine Linie `u = const`) kreuzt.
+/// Punkte, an denen das Schnittstück `s` die Naht `seam` kreuzt.
+///
+/// Analytische Flächen: die Naht ist eine Linie `u = const` (Winkelgrenze), wie bisher. Bei
+/// Freiformflächen ist sie eine Parameterlinie `u = u0` (in u geschlossen) oder `v = v0` (in v
+/// geschlossen); welche, zeigt die Lage ihrer beiden Enden im Parameterraum. Gefaltet wird mit der
+/// Periode der Fläche; die Abtastung folgt bei Freiformkurven deren Gestalt.
 fn seam_crossings(surface: &Surface, s: &Seg, seam: &Seg, tol: &Tolerance) -> Vec<DVec3> {
-    let u_seam = surface.project(seam.at(0.5)).0;
-    let g = |f: f64| wrap_angle(surface.project(s.at(f)).0 - u_seam);
-    let n = sample_count(s.t0, s.t1, 720, 64);
+    // (Koordinate 0 = u, 1 = v; Periode)
+    let (coord, period) = match surface {
+        Surface::Nurbs(_) => {
+            let (a, b) = (surface.project(seam.start()), surface.project(seam.end()));
+            let along_v = (a.0 - b.0).abs() <= (a.1 - b.1).abs();
+            match (along_v, surface.u_period(), surface.v_period()) {
+                (true, Some(p), _) => (0, p),
+                (false, _, Some(p)) => (1, p),
+                (_, Some(p), _) => (0, p),
+                (_, _, Some(p)) => (1, p),
+                _ => return Vec::new(),
+            }
+        }
+        _ => (0, TAU),
+    };
+    let pick = |uv: (f64, f64)| if coord == 0 { uv.0 } else { uv.1 };
+    let c_seam = pick(surface.project(seam.at(0.5)));
+    let g = |f: f64| wrap_period(pick(surface.project(s.at(f))) - c_seam, period);
+    let n = curve_sample_count(&s.curve, s.t0, s.t1, 720, 64);
     let mut out = Vec::new();
     let mut push = |p: DVec3| {
         if seam.closest(p).1 <= tol.linear {
@@ -124,7 +157,7 @@ fn seam_crossings(surface: &Surface, s: &Seg, seam: &Seg, tol: &Tolerance) -> Ve
     for i in 0..n {
         let (g0, g1) = (gs[i], gs[i + 1]);
         // echter Vorzeichenwechsel, nicht der Sprung bei ±π und nicht Rauschen längs der Naht
-        if g0 * g1 < 0.0 && (g0 - g1).abs() < PI && !(on[i] && on[i + 1]) {
+        if g0 * g1 < 0.0 && (g0 - g1).abs() < 0.5 * period && !(on[i] && on[i + 1]) {
             let (mut lo, mut hi) = (fs[i], fs[i + 1]);
             let mut glo = g0;
             for _ in 0..80 {
@@ -169,8 +202,14 @@ fn node_frame(face: &FaceGeom, p: DVec3, tol: &Tolerance) -> (DVec3, DVec3) {
         .surface
         .pole_vs()
         .into_iter()
-        .find(|pv| face.surface.point(0.0, *pv).distance(p) <= tol.linear * 4.0);
+        .find(|pv| pole_point(&face.surface, *pv).distance(p) <= tol.linear * 4.0);
     let n = match pole {
+        // Freiformfläche: die Normale am Pol (dort aus einem leicht versetzten Punkt, siehe
+        // `NurbsSurfaceData::normal`); der Rahmen der Freiformfläche hat keine Achse.
+        Some(pv) if matches!(face.surface, Surface::Nurbs(_)) => {
+            let (u, _) = face.surface.project(p);
+            face.surface.normal(u, pv) * sgn
+        }
         Some(pv) => {
             let z = face.surface.frame().z;
             let side = if face.surface.normal(0.0, pv).dot(z) >= 0.0 {
@@ -212,11 +251,25 @@ fn find(parent: &mut [usize], mut x: usize) -> usize {
 /// (nur in Flächenrichtung) und Schnittstücken (beide Richtungen); Umläufe werden über das
 /// Drehsystem an jedem Knoten gebildet (nächste Halbkante = im Uhrzeigersinn erste nach der
 /// Gegenkante). Positive Umläufe sind Außenkonturen, negative Löcher.
+///
+/// Freiformbeteiligung (Fläche, Randkante oder Schnitt): Rand und Schnitte müssen auf der Fläche
+/// liegen (sonst [`BooleanError::Unsupported`]); Knoten und Teilungen nutzen die Toleranz
+/// [`pipeline_tol`](super::pipeline_tol).
 pub fn split_face(
     face: &FaceGeom,
     sections: &[Seg],
     tol: &Tolerance,
 ) -> Result<Vec<Region>, BooleanError> {
+    check_segs_on_surface(
+        &face.surface,
+        face.loops.iter().flatten().chain(sections),
+        tol,
+    )?;
+    let ptol = pipeline_tol(
+        tol,
+        face_is_freeform(face) || sections.iter().any(seg_is_freeform),
+    );
+    let tol = &ptol;
     let finite = |s: &Seg| {
         s.t0.is_finite()
             && s.t1.is_finite()
@@ -463,7 +516,7 @@ pub fn split_face(
     }
 
     // Umläufe klassifizieren: positive = Außenkontur, negative = Loch
-    let wrap_v = matches!(face.surface, Surface::Torus { .. });
+    let (u_period, v_period) = (face.surface.u_period(), face.surface.v_period());
     let polys: Vec<Vec<DVec2>> = walks
         .iter()
         .map(|w| points_to_uv(&face.surface, face.same_sense, &loop_points(w)))
@@ -475,8 +528,8 @@ pub fn split_face(
             return Err(BooleanError::AmbiguousContact);
         };
         if p.len() < 2
-            || (face.surface.is_periodic() && (last.x - first.x).abs() > PI)
-            || (wrap_v && (last.y - first.y).abs() > PI)
+            || u_period.is_some_and(|t| (last.x - first.x).abs() > 0.5 * t)
+            || v_period.is_some_and(|t| (last.y - first.y).abs() > 0.5 * t)
         {
             return Err(BooleanError::AmbiguousContact);
         }
@@ -497,13 +550,11 @@ pub fn split_face(
         })
         .collect();
 
-    let periodic: &[f64] = &[-TAU, 0.0, TAU];
-    let u_shifts: &[f64] = if face.surface.is_periodic() {
-        periodic
-    } else {
-        &[0.0]
+    let shifts = |period: Option<f64>| match period {
+        Some(t) => vec![-t, 0.0, t],
+        None => vec![0.0],
     };
-    let v_shifts: &[f64] = if wrap_v { periodic } else { &[0.0] };
+    let (u_shifts, v_shifts) = (shifts(u_period), shifts(v_period));
     let sgn = if face.same_sense { 1 } else { -1 };
     for i in (0..walks.len()).filter(|&i| areas[i] <= 0.0) {
         let candidates: Vec<DVec3> = loop_points(&walks[i])

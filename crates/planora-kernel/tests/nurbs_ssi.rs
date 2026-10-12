@@ -363,10 +363,11 @@ fn invalid_tolerances_are_a_named_error_not_a_panic() {
 }
 
 #[test]
-fn booleans_with_nurbs_faces_keep_the_old_named_error_until_the_pipeline_follows() {
-    // Die Boolesche Pipeline verarbeitet Freiformflächen erst mit Task 9: bis dahin ergibt jedes
-    // Flächenpaar mit einer Freiformfläche (überlappende Hüllquader) den benannten Fehler wie
-    // vor dem Schnittrechner – auch ohne Schnitt (Würfel ganz im Körper) und bei Durchdringung.
+fn booleans_with_nurbs_faces_report_the_missing_classification_by_name() {
+    // Seit Task 9 schneidet und teilt die Pipeline Freiformflächen; die Lage eines Flächenstücks
+    // zu einem Körper mit Freiformfläche (Strahl gegen Freiformfläche) folgt erst in Task 10.
+    // Bis dahin ergibt jede solche Operation die benannte Meldung – ohne Schnitt (Würfel ganz im
+    // Körper) wie bei Durchdringung, nie ein Ergebnis.
     use planora_kernel::boolean::{BoolOp, BooleanError, boolean};
     use planora_kernel::{AnalyticKernel, Kernel, Profile, ProfileLoop};
     let ellipse = NurbsCurve::elliptic_arc(
@@ -400,9 +401,10 @@ fn booleans_with_nurbs_faces_keep_the_old_named_error_until_the_pipeline_follows
             )
             .unwrap();
         match boolean(&body, &cube, BoolOp::Union, &tol()) {
-            Err(BooleanError::UnsupportedIntersection { a, b }) => {
-                assert!(a == "Freiformfläche" || b == "Freiformfläche", "{a} {b}")
-            }
+            Err(BooleanError::Unsupported(msg)) => assert!(
+                msg.contains("Lage zur Freiformfläche lässt sich nicht bestimmen"),
+                "{msg}"
+            ),
             other => panic!("{other:?}"),
         }
     }

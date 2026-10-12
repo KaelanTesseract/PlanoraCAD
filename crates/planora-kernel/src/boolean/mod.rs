@@ -33,10 +33,39 @@ pub use uv::{
     points_to_uv_indexed, winding,
 };
 
-use crate::geometry::Curve;
+use crate::geometry::{Curve, Surface};
 use crate::topology::Solid;
-use crate::validate::{ValidationError, validate};
+use crate::validate::{NURBS_EDGE_TOL, ValidationError, validate};
 use planora_math::{DVec3, Frame, Tolerance};
+
+/// Längentoleranz für Knoten, Teilungen und das Verschweißen von Ecken, sobald Freiformkurven
+/// oder -flächen beteiligt sind. Schnittkurven des numerischen Rechners liegen nur bis
+/// `0,8 · NURBS_FIT_TOL` auf beiden Flächen; ihr Haltepunkt auf einer Randkante (etwa der Naht)
+/// kann deshalb bis etwa `√2 · 0,8 · NURBS_FIT_TOL ≈ 1,1e-5` neben dem exakten Kantenpunkt liegen.
+/// Die doppelte Kantentoleranz deckt das mit Abstand ab und ist klein gegen jedes Bauteilmaß.
+pub(crate) const NURBS_NODE_TOL: f64 = 2.0 * NURBS_EDGE_TOL;
+
+/// Toleranz für Pipeline-Schritte mit Freiformbeteiligung: `tol.linear` mindestens
+/// [`NURBS_NODE_TOL`]; ohne Freiformbeteiligung unverändert `tol` (analytische Wege bitgleich).
+pub(crate) fn pipeline_tol(tol: &Tolerance, freeform: bool) -> Tolerance {
+    if freeform {
+        Tolerance {
+            linear: tol.linear.max(NURBS_NODE_TOL),
+            angular: tol.angular,
+        }
+    } else {
+        *tol
+    }
+}
+
+/// Ist an dieser Fläche eine Freiformfläche oder -kurve beteiligt (Fläche oder eine Randkante)?
+pub(crate) fn face_is_freeform(g: &FaceGeom) -> bool {
+    matches!(g.surface, Surface::Nurbs(_)) || g.loops.iter().flatten().any(seg_is_freeform)
+}
+
+pub(crate) fn seg_is_freeform(s: &Seg) -> bool {
+    matches!(s.curve, Curve::Nurbs(_))
+}
 
 /// Liegen `t0` und `t1` im Parameterbereich einer Freiformkurve? Bei geschlossenen Kurven darf
 /// ein Stück über die Naht reichen (höchstens eine Periode jenseits des Bereichs). Andere Kurven

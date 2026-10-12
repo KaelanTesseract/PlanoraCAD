@@ -3,6 +3,7 @@
 use super::error::BooleanError;
 use super::seg::Seg;
 use super::select::Piece;
+use super::{pipeline_tol, seg_is_freeform};
 use crate::geometry::Surface;
 use crate::ids::Id;
 use crate::topology::{Edge, Face, HalfEdge, Loop, Shell, Solid, Vertex};
@@ -125,7 +126,19 @@ fn find(parent: &mut [usize], x: usize) -> usize {
 
 /// Näht Flächenstücke zu einem `Solid` zusammen: Ecken und Kanten werden verschweißt, die Schalen
 /// ergeben sich aus dem Zusammenhang über gemeinsame Kanten (Union-Find).
+///
+/// Mit Freiformflächen oder -kurven gilt für das Verschweißen die Toleranz
+/// [`pipeline_tol`](super::pipeline_tol): Schnittkurven liegen nur auf `NURBS_FIT_TOL` genau.
 pub fn sew(pieces: Vec<Piece>, tol: &Tolerance) -> Result<Solid, BooleanError> {
+    let freeform = pieces.iter().any(|p| {
+        matches!(p.surface, Surface::Nurbs(_))
+            || std::iter::once(&p.outer)
+                .chain(p.holes.iter())
+                .flatten()
+                .any(seg_is_freeform)
+    });
+    let ptol = pipeline_tol(tol, freeform);
+    let tol = &ptol;
     let mut s = Sewer {
         solid: Solid::new(),
         verts: Vec::new(),

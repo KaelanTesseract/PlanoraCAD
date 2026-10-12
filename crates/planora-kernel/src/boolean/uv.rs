@@ -4,12 +4,14 @@
 //! Uhrzeigersinn. Da die natürliche Normale `∂u × ∂v` ist, läuft sie bei `same_sense` auch in
 //! `(u, v)` gegen den Uhrzeigersinn (sonst im Uhrzeigersinn); Löcher laufen jeweils andersherum.
 
+use super::error::BooleanError;
 use super::seg::{Seg, curve_sample_count};
 use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
 use crate::topology::{Face, FaceTag, Loop, Solid};
-use crate::validate::NURBS_EDGE_TOL;
+use crate::validate::{NURBS_EDGE_TOL, edge_surface_tol};
 use planora_math::{DVec2, DVec3, TAU, Tolerance, orient2d};
+use std::cell::Cell;
 
 /// Geometrische Beschreibung einer (ggf. beschnittenen) Fläche, unabhängig vom `Solid`.
 #[derive(Clone, Debug)]
@@ -118,6 +120,42 @@ fn project_all(surface: &Surface, pts: &[DVec3]) -> Vec<(f64, f64)> {
         out.push(uv);
     }
     out
+}
+
+/// Meldung, wenn eine Randkante einer Freiformfläche nicht auf ihr liegt.
+pub(crate) const EDGE_OFF_FREEFORM: &str = "Eine Kante liegt nicht auf der Freiformfläche";
+
+/// Liegen alle Randkanten (an ihren Abtastpunkten und Enden) auf der Freiformfläche, höchstens
+/// [`edge_surface_tol`] entfernt? Sonst ließen sich ihre Parameter nicht sinnvoll zurückrechnen:
+/// [`BooleanError::Unsupported`] mit [`EDGE_OFF_FREEFORM`]. Analytische Flächen: immer `Ok`
+/// (wie bisher keine geometrische Prüfung).
+pub(crate) fn check_loops_on_surface(face: &FaceGeom, tol: &Tolerance) -> Result<(), BooleanError> {
+    check_segs_on_surface(&face.surface, face.loops.iter().flatten(), tol)
+}
+
+/// Wie [`check_loops_on_surface`] für beliebige Stücke auf der Fläche `surface`.
+pub(crate) fn check_segs_on_surface<'a>(
+    surface: &Surface,
+    segs: impl IntoIterator<Item = &'a Seg>,
+    tol: &Tolerance,
+) -> Result<(), BooleanError> {
+    if !matches!(surface, Surface::Nurbs(_)) {
+        return Ok(());
+    }
+    let hint = Cell::new(None);
+    for s in segs {
+        let limit = edge_surface_tol(&s.curve, surface, tol);
+        let n = samples(s);
+        let off = (0..=n).any(|k| {
+            let d = surface.implicit_hinted(s.at(k as f64 / n as f64), &hint);
+            // `implicit` ist nie NaN; nicht endliche Punkte ergeben einen riesigen Wert.
+            d.abs() > limit
+        });
+        if off {
+            return Err(BooleanError::Unsupported(EDGE_OFF_FREEFORM.into()));
+        }
+    }
+    Ok(())
 }
 
 /// Polygon im Parameterraum. Bei periodischen Flächen wird `u` (beim Torus und bei in `v`
