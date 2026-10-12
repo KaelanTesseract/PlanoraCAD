@@ -219,7 +219,7 @@ Stand: 2026-10-12. Ellipsen und Splines aus Skizzen werden zu Körpern mit Freif
 - Ein Test (`old_documents_may_extrude_a_different_profile` in `planora-feature/tests/nurbs_features.rs`) hält den ersten Fall fest, damit eine spätere Änderung bewusst geschieht. Abhilfe wäre ein dauerhafter Verweis auf das Profil statt der Nummer (eigene Aufgabe).
 
 **Fälle, die das Programm meldet statt rechnet**
-Die Meldung steht am Feature und beginnt mit „Mit Freiformflächen nicht berechenbar: …; bitte Lage oder Maße eines Körpers leicht ändern“. Das Dokument bleibt unverändert, abhängige Schritte werden übersprungen.
+Die Meldung steht am Feature und lautet „Bei Körpern mit Freiformflächen: <Ursache>; bitte Lage oder Maße eines Körpers leicht ändern“, wenn die Ursache aus einem Freiform-Weg des Programms stammt oder eine mehrdeutige Berührung ist; andere Fehler (etwa Ebene gegen Kegel) behalten ihren gewohnten Text. Schlägt die Volumenprobe fehl, heißt es „Bei Körpern mit Freiformflächen: Das Ergebnis ist unplausibel …“. Das Dokument bleibt unverändert, abhängige Schritte werden übersprungen.
 - *Berührung statt Schnitt:* Flächen, die sich nur berühren oder tangential eintauchen, werden immer abgelehnt. Zwei gleich dicke Zylinder auf derselben Achse, die sich um 0,0001 bis 0,001 mm überlappen, gelten als Berührung.
 - *Gleich große Querzylinder:* Zwei gleich dicke Freiform-Walzen, deren Achsen sich kreuzen, haben zwei Schnittkurven, die sich an einer Stelle treffen, an der sich die Flächen tangential berühren. Das wird benannt abgelehnt (Test `equal_radius_crossing_reports_a_named_error_and_keeps_the_inputs`). Verschieden dicke Walzen gehen.
 - *Teilweise aufeinanderliegende Freiformflächen* (etwa zwei Flächen in derselben Ebene, die sich halb überdecken): „teilweise zusammen“, abgelehnt. Liegen zwei Körper ganz deckungsgleich aufeinander (Freiformzylinder und sein einfacher Zwilling), gibt es ein Ergebnis.
@@ -249,10 +249,13 @@ Freiformkurven und -flächen werden nur mit geprüften Werten angelegt, auch bei
 - Die Grenzen sind benannte Werte im Code und nicht einstellbar.
 
 **Rechenzeiten**
-- Eine Boolesche Operation mit Freiformfläche braucht im Release-Build etwa 0,5 bis 1 s (im Debug-Build 2 bis 7 s), vor allem für die Suche nach Kantentreffern und Fußpunkten. Bei zwei Freiformkörpern brauchen Fälle, die am Ende abgelehnt werden, bis zur Arbeitsgrenze 3 bis 5 s (Release).
+- Eine Boolesche Operation mit Freiformfläche braucht im Release-Build meist etwa 0,5 bis 1 s (im Debug-Build 2 bis 7 s), vor allem für die Suche nach Kantentreffern und Fußpunkten. Bei zwei Freiformkörpern brauchen Fälle, die am Ende abgelehnt werden, bis zur Arbeitsgrenze des Schnittrechners 3 bis 5 s (Release).
+- *Körper aus Splines mit vielen Punkten sind langsam:* Ein gedrehter Spline mit 39 Punkten (die Skizze erlaubt 64), mit einem Zylinder verschnitten, brauchte im Release-Build 11 bis 14 s, in der Abschlussprüfung auch 68 bis 100 s. Die Abschlussnachbesserung macht die Abstandsprüfungen beim Teilen der Flächen billiger (sichere Hüllquader der Freiformkurven statt Suche); der 11–14-s-Fall braucht jetzt knapp 4 s. Die gemessenen Lagen brauchen jetzt 1 bis 7 s; die langsamste war schon vorher so langsam, dort hilft die Nachbesserung nicht. Die 68–100-s-Fälle der Prüfung lagen nicht vor und sind nicht nachgemessen.
+- *Arbeitsgrenze:* Jede Boolesche Operation mit Freiformflächen endet spätestens nach 15 Millionen Auswertungen von Freiformkurven und -flächen (`MAX_FREEFORM_EVALUATIONS`; gezählt, nicht gestoppt, daher bei jedem Lauf gleich) mit der Meldung „Die Berechnung ist zu aufwendig …; bitte weniger Spline-Punkte oder eine einfachere Form verwenden“. Das entspricht etwa 10 bis 15 s im Release-Build. Die aufwendigste Operation aller Tests braucht gut 6 Millionen. Geprüft wird an festen Stellen; eine einzelne Stufe kann etwas darüber hinausgehen. Nicht gezählt werden Bézier-Flicken (Strahlschnitt) und der Aufbau dauerhafter Zwischenspeicher.
+- *Fenster friert ein:* Die App rechnet im Fenster-Thread. Bis die Rechnung oder die Arbeitsgrenze fertig ist, reagiert das Fenster nicht, auch beim Öffnen eines Dokuments mit solchen Schritten. Abhilfe wäre eine Rechnung im Hintergrund (eigene Aufgabe).
 - Die Suche nach dem nächsten Punkt ist für Punkte etwas abseits der Fläche (0,3 mm) bei kleinen Beulenflächen bis etwa dreimal langsamer als in einer früheren Fassung; nahe an der Fläche ist sie gleich schnell.
 - Körper mit Freiformflächen werden feiner vernetzt (etwa 1,8-mal so viele Dreiecke), damit Volumen und Schwerpunkt genau genug sind.
-- Mehrere Testreihen laufen wegen ihrer Dauer nur mit `cargo test --release -- --ignored` (Liste im Bericht zu Task 12).
+- Mehrere Testreihen laufen wegen ihrer Dauer nur mit `cargo test --release -- --ignored`: `seeded_shallow_rim_crossings_40` (etwa 15 s), `random_pairs_are_never_wrong_and_rarely_refused` (etwa 3 bis 6 min), `a_very_large_plate_with_a_small_nurbs_hole_is_cut_again`, `a_box_cutting_a_nurbs_sphere_near_its_pole_gives_results_in_all_placements` (etwa 30 s), `hostile_tilts_do_not_panic` (etwa 30 s), `thin_features_give_valid_results_or_named_errors` (etwa 3 min), `a_spline_with_39_points_ends_within_the_real_limit` (etwa 35 s). Dazu der bekannte Netzfehler `box_on_a_rotated_analytic_cylinder_meshes_closed`, der heute fehlschlägt.
 
 **Nicht umgesetzt (geplant für später)**
 - *Gradanhebung* (Grad einer Kurve oder Fläche erhöhen): in diesem Teilprojekt nicht gebraucht; kommt mit Loft und Sweep.
@@ -265,7 +268,8 @@ Freiformkurven und -flächen werden nur mit geprüften Werten angelegt, auch bei
 - In der App liegt das Volumen eines Ellipsenkörpers bei grober Netzgenauigkeit etwa 0,5 % unter dem genauen Wert.
 
 **Netz (Vernetzung), gefunden beim Prüfen von Task 10 – eigene Aufgabe**
-- Bei Ergebnissen Boolescher Operationen hat das Netz an geraden Freiformkanten manchmal winzige Lücken (im Test 17 von 3456 Fällen).
+- Bei Ergebnissen Boolescher Operationen hat das Netz an geraden Freiformkanten manchmal winzige Lücken: im Review von Task 10 17 von 3456 Ergebnissen (0,5 %), in der Abschlussprüfung 14 von 769 (1,8 %) bei Sehnentoleranz 0,001. Also etwa 0,5 bis 2 von 100 Ergebnissen.
+- Die App zeigt jetzt in der Statuszeile „Hinweis: Das Netz dieses Körpers ist an einzelnen Stellen ungenau; die Anzeige kann kleine Lücken haben.“, wenn das Netz eines Körpers nicht geschlossen ist oder eine Fläche in `Mesh::inexact_faces` steht (nur wenn keine andere Meldung ansteht). Sonst ändert sich nichts; der Körper bleibt nutzbar.
 - Sehr schmale Streifen werden je nach eingestellter Netzgenauigkeit lückenhaft vernetzt, etwa bei der Grundeinstellung der App.
 - Schon vorher vorhanden, ohne Freiformflächen: Ein Quader auf einem gedrehten Zylinder (vereinigt oder abgezogen) ergibt ein lückenhaftes Netz, egal wie fein. Der Test dazu steht in `known_mesh_bugs.rs` und ist vorerst abgeschaltet.
 - Eine gedrehte Freiformkugel, mit einem Quader vereinigt, der sie nur hauchdünn anschneidet, lässt sich gar nicht vernetzen.
@@ -277,9 +281,12 @@ Freiformkurven und -flächen werden nur mit geprüften Werten angelegt, auch bei
 - Drehen: Kurven sehr nah an der Drehachse (Abstand 0,000002 bis 0,00001) werden als „schneidet sich selbst“ abgelehnt statt mit „kreuzt die Achse“.
 - Profile: Eine geschlossene Freiformkurve mit ungleichen Gewichten an ihren Enden wird abgelehnt.
 - Normale: Für winzige Flächen weit vom Ursprung (Größe unter 1e-10 der Entfernung) kann die Flächennormale fälschlich null sein.
-- Annäherung (`fit`): Scheitert sie, dauert das länger als nötig.
+- Annäherung (`fit`): Scheitert sie, dauert das länger als nötig (Review Task 3, M5).
+- Review Task 3, M2: Nicht endliche Eingaben (NaN) an `distance_to` werden nicht dort, sondern erst bei den Aufrufern abgefangen (Task 4: `implicit` liefert nie NaN). Die Punkte M4 und M8 dieses Reviews sind im Ablaufprotokoll nur als Kürzel vermerkt; ihr Inhalt ist nicht überliefert.
+- Belastungstest des Schnittrechners (`random_pairs_are_never_wrong_and_rarely_refused`): Er zählt eine Schnittkurve erst als „falsch“, wenn sie mehr als 0,05 mm neben der Referenz liegt. Den bekannten stillen Wegfall kurzer Äste (Lücken 0,001 bis 0,003 mm) kann er deshalb nicht erkennen; „kein falsches Ergebnis“ heißt dort nur: keine groben Fehler.
+- Drehkörper aus ungleichmäßigen Splines: Bei den Messungen zur Arbeitsgrenze (Spline mit 39 zufälligen Punkten, gedreht, gegen einen Zylinder) endeten mehrere Lagen mit „Eine Kante liegt nicht auf der Freiformfläche“ und eine schon an der Eingangsprüfung des Körpers (gleiche Ursache wie die Netzabweichung bei geballten Knoten, oben).
 - Fußpunktsuche: In etwa 1 von 4600 Fällen verfehlt sie den nächsten Punkt um bis 0,01 mm; mit Startwert kann das Ergebnis bis 0,1 mm von dem ohne Startwert abweichen. Die Nullstellensuche einer Kurve gegen eine Freiformfläche kostet etwa 8 ms je Aufruf, auch bei kleinen Flächen.
-- Einordnen: Ein Punkt 0,0001 mm außerhalb einer Spline-Kante auf einem Deckel kann als „auf dem Rand“ oder „innen“ gelten (1 von 34 000 Stichproben).
+- Einordnen (Review Task 10): Das Randpolygon einer Deckelfläche weicht an einer Spline-Kante um mehr als 0,0001 mm von der echten Kante ab; ein Punkt 0,0001 mm außerhalb der Kante kann deshalb als „auf dem Rand“ oder „innen“ gelten (1 von 34 000 Stichproben).
 - Tests: Zwei Testprogramme brauchen im Debug-Build je etwa 25 s.
 
 ## Aufräumen / Qualität
