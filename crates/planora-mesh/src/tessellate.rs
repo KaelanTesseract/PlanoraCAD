@@ -1,7 +1,8 @@
 use crate::discretize::Discretizer;
 use crate::mesh::{EdgeLine, FaceRange, Mesh, TessellationOptions};
 use planora_kernel::{Face, Id, Loop, Solid, Surface, UvRect};
-use planora_math::{DVec3, Frame};
+use planora_math::{DVec2, DVec3, Frame};
+use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -12,6 +13,8 @@ pub enum MeshError {
     MissingPatch(usize),
     #[error("Netz zu groß: mehr als 2³² Eckpunkte oder Indizes")]
     TooLarge,
+    #[error("Fläche {0}: ein Randpunkt lässt sich nicht auf die Freiformfläche zurückrechnen")]
+    OffSurface(usize),
 }
 
 /// Wandelt eine Anzahl in einen `u32`-Index um, ohne still abzuschneiden.
@@ -30,7 +33,13 @@ pub(crate) fn ensure_room(current: usize, extra: usize) -> Result<(), MeshError>
 
 /// Zerlegt einen Körper in Dreiecke. Alle Dreiecke sind so orientiert, dass sie nach außen zeigen.
 pub fn tessellate(solid: &Solid, options: &TessellationOptions) -> Result<Mesh, MeshError> {
-    let disc = Discretizer::new(solid, options.chord_tolerance);
+    tessellate_with(solid, &Discretizer::new(solid, options.chord_tolerance))
+}
+
+/// Wie [`tessellate`], mit vorgegebener Teilung (etwa [`Discretizer::for_solids`], damit mehrere
+/// Körper vergleichbar vernetzt werden).
+pub fn tessellate_with(solid: &Solid, disc: &Discretizer) -> Result<Mesh, MeshError> {
+    let disc = *disc;
     let polylines: Vec<Vec<DVec3>> = (0..solid.edges.len())
         .map(|i| disc.edge_polyline(solid, Id::from_index(i)))
         .collect();
@@ -47,7 +56,11 @@ pub fn tessellate(solid: &Solid, options: &TessellationOptions) -> Result<Mesh, 
             }
             _ => {
                 let g = planora_kernel::boolean::face_geom(solid, fid);
-                if crate::trimmed::is_trimmed(&g) {
+                // Freiformflächen immer über die Triangulierung im Parameterraum: Der Rand
+                // besteht dann genau aus den gemeinsamen Kantenpunkten (auch wenn die Kanten
+                // analytisch sind und ihre Teilpunkte nicht auf Parameterlinien des Rasters
+                // liegen), das Netz bleibt geschlossen.
+                if matches!(face.surface, Surface::Nurbs(_)) || crate::trimmed::is_trimmed(&g) {
                     let rings: Vec<Vec<DVec3>> = std::iter::once(&face.outer)
                         .chain(face.inner.iter())
                         .map(|lp| loop_points(lp, &polylines))
@@ -127,7 +140,32 @@ fn tessellate_planar(
             flat.push(local.y);
         }
     }
-    let triangles = earcutr::earcut(&flat, &holes, 2).map_err(|_| PlanarError::Triangulation)?;
+    let mut triangles =
+        earcutr::earcut(&flat, &holes, 2).map_err(|_| PlanarError::Triangulation)?;
+    // `earcut` entfernt beim Verbinden der Löcher Punkte, die mit ihren Nachbarn auf einer
+    // Geraden liegen (etwa wenn die Brücke zu einem Loch genau auf dessen Kante trifft); die
+    // Nachbarflächen behalten diese Punkte, das Netz wäre an einem T-Stoß offen. Dann wird
+    // dieselbe Fläche mit der eingeschränkten Delaunay-Triangulierung aufgebaut, die jeden
+    // Randpunkt als Ecke behält. Gute `earcut`-Ergebnisse bleiben unverändert.
+    let mut ranges = Vec::with_capacity(rings.len());
+    let mut start = 0;
+    for ring in &rings {
+        ranges.push(start..start + ring.len());
+        start += ring.len();
+    }
+    if !uses_every_boundary_edge_once(&triangles, &ranges) {
+        let pts: Vec<DVec2> = flat
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| DVec2::new(c[0], c[1]))
+            .collect();
+        triangles = crate::trimmed::triangulate_planar_cdt(&pts, &ranges)
+            .ok_or(PlanarError::Triangulation)?
+            .into_iter()
+            .flatten()
+            .collect();
+    }
 
     ensure_room(mesh.positions.len(), flat.len() / 2)?;
     ensure_room(mesh.indices.len(), triangles.len())?;
@@ -152,6 +190,31 @@ fn tessellate_planar(
             .extend_from_slice(&[base + a as u32, base + b as u32, base + c as u32]);
     }
     Ok(())
+}
+
+/// Ist die Triangulierung am Rand dicht? Jede Ringkante (Indizes `k`, `k + 1` je Ring) kommt in
+/// genau einem Dreieck vor, jede andere Kante in genau zwei.
+fn uses_every_boundary_edge_once(triangles: &[usize], rings: &[std::ops::Range<usize>]) -> bool {
+    let key = |a: usize, b: usize| (a.min(b), a.max(b));
+    let mut count: HashMap<(usize, usize), u32> = HashMap::new();
+    for t in triangles.as_chunks::<3>().0 {
+        for k in 0..3 {
+            *count.entry(key(t[k], t[(k + 1) % 3])).or_insert(0) += 1;
+        }
+    }
+    let mut boundary = 0;
+    for r in rings {
+        let n = r.len();
+        for k in 0..n {
+            let e = key(r.start + k, r.start + (k + 1) % n);
+            if count.get(&e) != Some(&1) {
+                return false;
+            }
+            boundary += 1;
+        }
+    }
+    let ones = count.values().filter(|c| **c == 1).count();
+    ones == boundary && count.values().all(|c| *c == 1 || *c == 2)
 }
 
 fn tessellate_patch(

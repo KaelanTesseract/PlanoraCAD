@@ -509,6 +509,9 @@ impl Sketch {
                 }
                 self.project_ellipse(cf, *major, *minor)
             }
+            Curve::Nurbs(_) => Err(unsupported(
+                "Freiformkanten können noch nicht in die Skizze übernommen werden",
+            )),
         }
     }
 

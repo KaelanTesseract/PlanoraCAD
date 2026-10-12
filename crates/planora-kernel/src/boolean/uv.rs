@@ -4,11 +4,14 @@
 //! Uhrzeigersinn. Da die natürliche Normale `∂u × ∂v` ist, läuft sie bei `same_sense` auch in
 //! `(u, v)` gegen den Uhrzeigersinn (sonst im Uhrzeigersinn); Löcher laufen jeweils andersherum.
 
-use super::seg::{Seg, sample_count};
+use super::error::BooleanError;
+use super::seg::{Seg, curve_sample_count};
 use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
 use crate::topology::{Face, FaceTag, Loop, Solid};
+use crate::validate::{NURBS_EDGE_TOL, edge_surface_tol};
 use planora_math::{DVec2, DVec3, TAU, Tolerance, orient2d};
+use std::cell::Cell;
 
 /// Geometrische Beschreibung einer (ggf. beschnittenen) Fläche, unabhängig vom `Solid`.
 #[derive(Clone, Debug)]
@@ -49,11 +52,12 @@ pub fn face_geom(solid: &Solid, id: Id<Face>) -> FaceGeom {
 /// Abtastdichte der Bögen in den Randpolygonen: Abschnitte je Vollkreis (alle 5°).
 pub(crate) const ARC_SAMPLES_PER_TURN: usize = 72;
 
-/// Zahl der Abtastpunkte eines Stücks: Geraden nur ihr Anfangspunkt, Bögen alle 5°.
+/// Zahl der Abtastpunkte eines Stücks: Geraden nur ihr Anfangspunkt, Bögen alle 5°,
+/// Freiformkurven nach Bézier-Stücken und Knickwinkel des Kontrollpolygons (ebenfalls 5°).
 pub(crate) fn samples(s: &Seg) -> usize {
     match s.curve {
         Curve::Line { .. } => 1,
-        _ => sample_count(s.t0, s.t1, ARC_SAMPLES_PER_TURN, 2),
+        _ => curve_sample_count(&s.curve, s.t0, s.t1, ARC_SAMPLES_PER_TURN, 2),
     }
 }
 
@@ -69,29 +73,95 @@ pub fn loop_points(lp: &[Seg]) -> Vec<DVec3> {
     pts
 }
 
-/// Ist die Fläche auch in `v` periodisch (Torus: Winkel um das Rohr)?
-fn v_periodic(surface: &Surface) -> bool {
-    matches!(surface, Surface::Torus { .. })
+/// Wert `x + k·period`, der `reference` am nächsten liegt.
+fn unwrap_near(x: f64, reference: f64, period: f64) -> f64 {
+    x + period * ((reference - x) / period).round()
 }
 
-/// Wert `x + k·2π`, der `reference` am nächsten liegt.
-fn unwrap_near(x: f64, reference: f64) -> f64 {
-    x + TAU * ((reference - x) / TAU).round()
-}
+/// Kleinster Sprung über einen Pol, bezogen auf die Periode (bei `TAU` genau 1e-9): darunter
+/// gilt der Zielwert als schon erreicht, und es folgt ein voller Umlauf.
+const POLE_JUMP_MIN_RATIO: f64 = 1e-9 / TAU;
 
 /// Sprung über einen Pol: von `u_at` in Richtung `dir` (±1) bis zum nächsten Wert, der
-/// `u_target` modulo 2π entspricht (mindestens ein Stück, höchstens ein voller Umlauf).
-fn pole_jump(u_at: f64, u_target: f64, dir: f64) -> f64 {
-    let mut delta = ((u_target - u_at) * dir).rem_euclid(TAU);
-    if delta < 1e-9 {
-        delta = TAU;
+/// `u_target` modulo der Periode entspricht (mindestens ein Stück, höchstens ein voller Umlauf).
+/// Ohne Periode in `u` (offene Freiformfläche mit Pol) direkt zum Zielwert.
+fn pole_jump(u_at: f64, u_target: f64, dir: f64, period: Option<f64>) -> f64 {
+    let Some(period) = period else {
+        return u_target;
+    };
+    let mut delta = ((u_target - u_at) * dir).rem_euclid(period);
+    if delta < POLE_JUMP_MIN_RATIO * period {
+        delta = period;
     }
     u_at + dir * delta
 }
 
-/// Polygon im Parameterraum. Bei periodischen Flächen wird `u` (beim Torus auch `v`) entlang der
-/// Schleife stetig aufgerollt; Pole (Kugelpole, Kegelspitze) werden als Strecke entlang
-/// `v = const` eingefügt.
+/// Parameter aller Punkte. Analytische Flächen: `project`. Freiformflächen: `project_near` mit
+/// dem vorigen Ergebnis als Startwert (fortlaufende Punkte einer Schleife); liegt der so
+/// gefundene Flächenpunkt weiter als [`NURBS_EDGE_TOL`] vom Eingabepunkt, entscheidet die
+/// globale Suche (`project`). Ergebnisse im Parameterbereich (gefaltet).
+fn project_all(surface: &Surface, pts: &[DVec3]) -> Vec<(f64, f64)> {
+    if !matches!(surface, Surface::Nurbs(_)) {
+        return pts.iter().map(|p| surface.project(*p)).collect();
+    }
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
+    for p in pts {
+        let uv = match out.last() {
+            Some(&hint) => {
+                let (u, v) = surface.project_near(*p, hint);
+                if surface.point(u, v).distance(*p) <= NURBS_EDGE_TOL {
+                    (u, v)
+                } else {
+                    surface.project(*p)
+                }
+            }
+            None => surface.project(*p),
+        };
+        out.push(uv);
+    }
+    out
+}
+
+/// Meldung, wenn eine Randkante einer Freiformfläche nicht auf ihr liegt.
+pub(crate) const EDGE_OFF_FREEFORM: &str = "Eine Kante liegt nicht auf der Freiformfläche";
+
+/// Liegen alle Randkanten (an ihren Abtastpunkten und Enden) auf der Freiformfläche, höchstens
+/// [`edge_surface_tol`] entfernt? Sonst ließen sich ihre Parameter nicht sinnvoll zurückrechnen:
+/// [`BooleanError::Unsupported`] mit [`EDGE_OFF_FREEFORM`]. Analytische Flächen: immer `Ok`
+/// (wie bisher keine geometrische Prüfung).
+pub(crate) fn check_loops_on_surface(face: &FaceGeom, tol: &Tolerance) -> Result<(), BooleanError> {
+    check_segs_on_surface(&face.surface, face.loops.iter().flatten(), tol)
+}
+
+/// Wie [`check_loops_on_surface`] für beliebige Stücke auf der Fläche `surface`.
+pub(crate) fn check_segs_on_surface<'a>(
+    surface: &Surface,
+    segs: impl IntoIterator<Item = &'a Seg>,
+    tol: &Tolerance,
+) -> Result<(), BooleanError> {
+    if !matches!(surface, Surface::Nurbs(_)) {
+        return Ok(());
+    }
+    let hint = Cell::new(None);
+    for s in segs {
+        let limit = edge_surface_tol(&s.curve, surface, tol);
+        let n = samples(s);
+        let off = (0..=n).any(|k| {
+            let d = surface.implicit_hinted(s.at(k as f64 / n as f64), &hint);
+            // `implicit` ist nie NaN; nicht endliche Punkte ergeben einen riesigen Wert.
+            d.abs() > limit
+        });
+        if off {
+            return Err(BooleanError::Unsupported(EDGE_OFF_FREEFORM.into()));
+        }
+    }
+    Ok(())
+}
+
+/// Polygon im Parameterraum. Bei periodischen Flächen wird `u` (beim Torus und bei in `v`
+/// geschlossenen Freiformflächen auch `v`) entlang der Schleife stetig aufgerollt, mit der
+/// Periode der Fläche (`u_period`/`v_period`); Pole (Kugelpole, Kegelspitze, zusammengefallene
+/// Kontrollpunktreihen) werden als Strecke entlang `v = const` eingefügt.
 ///
 /// Richtung der Polstrecke: Die Fläche liegt links der Laufrichtung, wenn die Schleife in `(u, v)`
 /// gegen den Uhrzeigersinn läuft (`same_sense`). Wer von unten (kleineres `v`) auf einen Pol zuläuft,
@@ -105,22 +175,20 @@ pub fn points_to_uv_indexed(
     same_sense: bool,
     pts: &[DVec3],
 ) -> Vec<(DVec2, Option<usize>)> {
-    if !surface.is_periodic() {
-        return pts
-            .iter()
+    let poles = surface.pole_vs();
+    if !surface.is_periodic() && poles.is_empty() {
+        return project_all(surface, pts)
+            .into_iter()
             .enumerate()
-            .map(|(i, p)| {
-                let (u, v) = surface.project(*p);
-                (DVec2::new(u, v), Some(i))
-            })
+            .map(|(i, (u, v))| (DVec2::new(u, v), Some(i)))
             .collect();
     }
     if pts.is_empty() {
         return Vec::new();
     }
     let s = if same_sense { 1.0 } else { -1.0 };
-    let wrap_v = v_periodic(surface);
-    let poles = surface.pole_vs();
+    let u_period = surface.u_period();
+    let v_period = surface.v_period();
     let pole_of = |v: f64| {
         poles
             .iter()
@@ -131,7 +199,7 @@ pub fn points_to_uv_indexed(
     let pole_dir = |v_before: f64, v_pole: f64| if v_before < v_pole { -s } else { s };
 
     // Schleife so drehen, dass sie nicht an einem Pol beginnt.
-    let proj: Vec<(f64, f64)> = pts.iter().map(|p| surface.project(*p)).collect();
+    let proj = project_all(surface, pts);
     let start = proj
         .iter()
         .position(|(_, v)| pole_of(*v).is_none())
@@ -152,13 +220,13 @@ pub fn points_to_uv_indexed(
         }
         let (mut u, v) = match prev {
             Some(p) => (
-                unwrap_near(u0, p.x),
-                if wrap_v { unwrap_near(v0, p.y) } else { v0 },
+                u_period.map_or(u0, |t| unwrap_near(u0, p.x, t)),
+                v_period.map_or(v0, |t| unwrap_near(v0, p.y, t)),
             ),
             None => (u0, v0),
         };
         if let Some((vp, v_before, u_at)) = pole.take() {
-            let u_new = pole_jump(u_at, u0, pole_dir(v_before, vp));
+            let u_new = pole_jump(u_at, u0, pole_dir(v_before, vp), u_period);
             out.push((DVec2::new(u_at, vp), None));
             out.push((DVec2::new(u_new, vp), None));
             u = u_new;
@@ -171,7 +239,10 @@ pub fn points_to_uv_indexed(
         let first_u = out.first().map(|p| p.0.x).unwrap_or(0.0);
         out.push((DVec2::new(u_at, vp), None));
         out.push((
-            DVec2::new(pole_jump(u_at, first_u, pole_dir(v_before, vp)), vp),
+            DVec2::new(
+                pole_jump(u_at, first_u, pole_dir(v_before, vp), u_period),
+                vp,
+            ),
             None,
         ));
     }
@@ -222,31 +293,57 @@ pub enum Containment {
 
 /// Liegt `p` (auf der Fläche) innerhalb der beschnittenen Fläche, auf ihrem Rand oder außerhalb?
 pub fn point_in_face(f: &FaceGeom, p: DVec3, tol: &Tolerance) -> Containment {
-    if f.loops
+    if on_face_boundary(f, p, tol) {
+        return Containment::Boundary;
+    }
+    let uv = f.surface.project(p);
+    winding_containment(f, &face_polys(f), uv)
+}
+
+/// Liegt `p` höchstens `tol.linear` von einer Randkante der Fläche entfernt?
+fn on_face_boundary(f: &FaceGeom, p: DVec3, tol: &Tolerance) -> bool {
+    f.loops
         .iter()
         .flatten()
         .any(|s| s.closest(p).1 <= tol.linear)
-    {
+}
+
+/// Randschleifen der Fläche als Polygone im Parameterraum (wie in [`point_in_face`]).
+pub(crate) fn face_polys(f: &FaceGeom) -> Vec<Vec<DVec2>> {
+    f.loops
+        .iter()
+        .map(|lp| points_to_uv(&f.surface, f.same_sense, &loop_points(lp)))
+        .collect()
+}
+
+/// Wie [`point_in_face`] für einen Punkt `p` mit bekannten Parametern `uv` (etwa einem
+/// Strahltreffer) und vorab berechneten Polygonen [`face_polys`].
+pub(crate) fn point_in_face_at(
+    f: &FaceGeom,
+    polys: &[Vec<DVec2>],
+    p: DVec3,
+    uv: (f64, f64),
+    tol: &Tolerance,
+) -> Containment {
+    if on_face_boundary(f, p, tol) {
         return Containment::Boundary;
     }
-    let (u, v) = f.surface.project(p);
-    let periodic: &[f64] = &[-TAU, 0.0, TAU];
-    let u_shifts: &[f64] = if f.surface.is_periodic() {
-        periodic
-    } else {
-        &[0.0]
+    winding_containment(f, polys, uv)
+}
+
+/// Windungszahl um `(u, v)` über alle Polygone (mit Periodenverschiebungen).
+fn winding_containment(f: &FaceGeom, polys: &[Vec<DVec2>], (u, v): (f64, f64)) -> Containment {
+    let shifts = |period: Option<f64>| match period {
+        Some(t) => vec![-t, 0.0, t],
+        None => vec![0.0],
     };
-    let v_shifts: &[f64] = if v_periodic(&f.surface) {
-        periodic
-    } else {
-        &[0.0]
-    };
+    let u_shifts = shifts(f.surface.u_period());
+    let v_shifts = shifts(f.surface.v_period());
     let mut total = 0;
-    for lp in &f.loops {
-        let poly = points_to_uv(&f.surface, f.same_sense, &loop_points(lp));
-        for du in u_shifts {
-            for dv in v_shifts {
-                total += winding(&poly, DVec2::new(u + du, v + dv));
+    for poly in polys {
+        for du in &u_shifts {
+            for dv in &v_shifts {
+                total += winding(poly, DVec2::new(u + du, v + dv));
             }
         }
     }

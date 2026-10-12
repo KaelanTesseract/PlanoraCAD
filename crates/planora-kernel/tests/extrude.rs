@@ -71,7 +71,9 @@ fn plate_with_two_holes_has_genus_two() {
 #[test]
 fn clockwise_outer_and_ccw_hole_are_fixed_automatically() {
     let p = Profile {
-        outer: ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(20.0, 20.0)).reversed(),
+        outer: ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(20.0, 20.0))
+            .try_reversed()
+            .unwrap(),
         holes: vec![ProfileLoop::circle(DVec2::new(10.0, 10.0), 3.0)],
     };
     let s = k().extrude(&p, &Frame::WORLD, 5.0).unwrap();

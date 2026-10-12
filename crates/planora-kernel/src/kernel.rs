@@ -7,7 +7,7 @@ use crate::primitives;
 use crate::profile::{Profile, ProfileLoop};
 use crate::revolve::revolve;
 use crate::topology::{Edge, Face, Solid};
-use crate::validate::{ValidationError, ValidationReport, validate};
+use crate::validate::{ValidationError, ValidationReport, validate_with};
 use planora_math::{DMat4, DVec3, Frame, Tolerance};
 
 /// Die kleine Schnittstelle, über die Oberfläche und andere Crates mit dem Kernel sprechen.
@@ -65,7 +65,7 @@ impl Kernel for AnalyticKernel {
     }
 
     fn validate(&self, solid: &Solid) -> Result<ValidationReport, ValidationError> {
-        validate(solid)
+        validate_with(solid, &self.tolerance)
     }
 
     fn boolean(&self, a: &Solid, b: &Solid, op: BoolOp) -> Result<Solid, BooleanError> {

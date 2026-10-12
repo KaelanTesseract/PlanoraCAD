@@ -1,6 +1,7 @@
 //! Grundlegende Mathematik für PlanoraCAD: Vektoren, Koordinatensysteme, Toleranzen.
 
 mod frame;
+pub mod nurbs;
 mod predicates;
 mod tolerance;
 

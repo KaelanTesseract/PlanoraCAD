@@ -159,8 +159,11 @@ fn a_point_can_lie_on_a_spline_and_a_line_can_touch_it() {
     let _ = LineOrPoints::Line(line);
 }
 
+// Bis zur NURBS-Stufe 4 (Task 7) hieß dieser Test `ellipses_and_splines_never_become_solids`
+// und erwartete `UnsupportedForSolid("Ellipse"/"Spline")`. Die Spec (§5) hebt diese Ablehnung
+// auf; dieselben Skizzen liefern jetzt Profile. Die Körper prüft `tests/nurbs_profiles.rs`.
 #[test]
-fn ellipses_and_splines_never_become_solids() {
+fn ellipses_and_splines_become_profiles() {
     let mut s = sketch();
     let c = s.add_point(0.0, 0.0).unwrap();
     s.add_ellipse(c, DVec2::new(3.0, 0.0), 2.0).unwrap();
@@ -168,9 +171,8 @@ fn ellipses_and_splines_never_become_solids() {
     s.add_rectangle(DVec2::new(10.0, 0.0), DVec2::new(14.0, 3.0))
         .unwrap();
     let e = s.profiles();
-    assert_eq!(e.profiles.len(), 1);
-    assert_eq!(e.rejected.len(), 1);
-    assert!(matches!(&e.rejected[0].reason, SketchError::UnsupportedForSolid(w) if w == "Ellipse"));
+    assert_eq!(e.profiles.len(), 2);
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
 
     let mut s = sketch();
     let a = s.add_point(0.0, 0.0).unwrap();
@@ -179,8 +181,8 @@ fn ellipses_and_splines_never_become_solids() {
     s.add_spline(&[a, m, b]).unwrap();
     s.add_line(b, a).unwrap();
     let e = s.profiles();
-    assert!(e.profiles.is_empty());
-    assert!(matches!(&e.rejected[0].reason, SketchError::UnsupportedForSolid(w) if w == "Spline"));
+    assert_eq!(e.profiles.len(), 1);
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
 }
 
 #[test]

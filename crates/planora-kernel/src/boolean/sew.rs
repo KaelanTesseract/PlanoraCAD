@@ -3,6 +3,7 @@
 use super::error::BooleanError;
 use super::seg::Seg;
 use super::select::Piece;
+use super::{pipeline_tol, seg_is_freeform};
 use crate::geometry::Surface;
 use crate::ids::Id;
 use crate::topology::{Edge, Face, HalfEdge, Loop, Shell, Solid, Vertex};
@@ -17,6 +18,8 @@ struct EdgeRec {
     mid: DVec3,
     q1: DVec3,
     q3: DVec3,
+    /// Das Stück selbst (Kurvenprobe bei Freiformbeteiligung).
+    seg: Seg,
 }
 
 struct Sewer<'t> {
@@ -26,7 +29,15 @@ struct Sewer<'t> {
     /// Flächen (Index in der Stückliste), die eine Kante benutzen, je Benutzung ein Eintrag.
     uses: HashMap<Id<Edge>, Vec<usize>>,
     tol: &'t Tolerance,
+    /// Freiformbeteiligung (strengere Kantenprobe, siehe `half_edge`).
+    freeform: bool,
 }
+
+/// Abstand (in Vielfachen der Knotentoleranz), bis zu dem zwei Stücke mit Freiformbeteiligung an
+/// Mitte und Viertelpunkten als dieselbe Kante gelten: Zwei Darstellungen derselben Schnittkurve
+/// liegen je höchstens `0,8 · NURBS_FIT_TOL` neben der exakten Kurve, also weniger als eine
+/// Knotentoleranz (2e-5) auseinander; das Doppelte lässt Spielraum.
+const FREEFORM_EDGE_MATCH: f64 = 2.0;
 
 impl Sewer<'_> {
     /// Ecke an `p`; Ecken innerhalb der Toleranz werden verschweißt.
@@ -49,8 +60,20 @@ impl Sewer<'_> {
         let b = self.vertex(seg.end());
         let (m, q1, q3) = (seg.at(0.5), seg.at(0.25), seg.at(0.75));
         let tol = self.tol.linear * 8.0;
+        let freeform = self.freeform;
         let found = self.edges.iter().find(|r| {
-            ((r.a == a && r.b == b) || (r.a == b && r.b == a)) && r.mid.distance(m) <= tol
+            let ends = (r.a == a && r.b == b) || (r.a == b && r.b == a);
+            if !freeform {
+                return ends && r.mid.distance(m) <= tol;
+            }
+            // Freiformbeteiligung: `tol.linear` ist hier schon die weitere Knotentoleranz; zwei
+            // Stücke sind dieselbe Kante nur, wenn Mitte und Viertelpunkte höchstens
+            // `FREEFORM_EDGE_MATCH · tol.linear` neben dem schon angelegten Stück liegen
+            // (Abstand zur Kurve, nicht zum Punkt gleichen Bruchteils: die Enden dürfen sich
+            // beim Verschweißen längs der Kurve verschieben). Die Mittenprobe allein mit
+            // `8 · tol.linear` legte einen flachen Bogen (Pfeilhöhe 1e-4) mit seiner Sehne zusammen.
+            let close = self.tol.linear * FREEFORM_EDGE_MATCH;
+            ends && [m, q1, q3].iter().all(|q| r.seg.closest(*q).1 <= close)
         });
         if let Some(r) = found {
             let forward =
@@ -67,6 +90,7 @@ impl Sewer<'_> {
             mid: m,
             q1,
             q3,
+            seg: seg.clone(),
         });
         self.uses.entry(edge).or_default().push(face);
         HalfEdge {
@@ -125,13 +149,26 @@ fn find(parent: &mut [usize], x: usize) -> usize {
 
 /// Näht Flächenstücke zu einem `Solid` zusammen: Ecken und Kanten werden verschweißt, die Schalen
 /// ergeben sich aus dem Zusammenhang über gemeinsame Kanten (Union-Find).
+///
+/// Mit Freiformflächen oder -kurven gilt für das Verschweißen die Toleranz
+/// [`pipeline_tol`](super::pipeline_tol): Schnittkurven liegen nur auf `NURBS_FIT_TOL` genau.
 pub fn sew(pieces: Vec<Piece>, tol: &Tolerance) -> Result<Solid, BooleanError> {
+    let freeform = pieces.iter().any(|p| {
+        matches!(p.surface, Surface::Nurbs(_))
+            || std::iter::once(&p.outer)
+                .chain(p.holes.iter())
+                .flatten()
+                .any(seg_is_freeform)
+    });
+    let ptol = pipeline_tol(tol, freeform);
+    let tol = &ptol;
     let mut s = Sewer {
         solid: Solid::new(),
         verts: Vec::new(),
         edges: Vec::new(),
         uses: HashMap::new(),
         tol,
+        freeform,
     };
     let corners: Vec<DVec3> = pieces
         .iter()

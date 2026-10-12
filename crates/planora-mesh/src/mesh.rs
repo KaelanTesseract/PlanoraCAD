@@ -10,6 +10,10 @@ pub struct Mesh {
     pub indices: Vec<u32>,
     pub face_ranges: Vec<FaceRange>,
     pub edge_lines: Vec<EdgeLine>,
+    /// Flächen, auf denen die Sehnentoleranz nicht überall garantiert ist, weil eine Grenze der
+    /// Verfeinerung (Rundenzahl, Punktzahl) erreicht wurde. Das Netz ist trotzdem geschlossen und
+    /// brauchbar, nur gröber als verlangt; leer im Normalfall.
+    pub inexact_faces: Vec<Id<Face>>,
 }
 
 /// Indexbereich `first_index .. first_index + index_count` gehört zu `face`.

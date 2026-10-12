@@ -1,3 +1,4 @@
+use super::nurbs_ssi::{SsiOutcome, intersect_nurbs};
 use crate::geometry::{Curve, Surface};
 use planora_math::{DVec3, Frame, Tolerance};
 
@@ -12,6 +13,8 @@ pub enum SurfaceIntersection {
     Curves(Vec<Curve>),
     /// Paar außerhalb von Stufe A.
     Unsupported,
+    /// Nicht lösbare Lage mit benannter Ursache (numerischer Schnittrechner, deutsche Meldung).
+    UnsupportedBecause(String),
 }
 
 const ANG: f64 = 1e-9;
@@ -23,6 +26,7 @@ pub fn surface_name(s: &Surface) -> &'static str {
         Surface::Cone { .. } => "Kegel",
         Surface::Sphere { .. } => "Kugel",
         Surface::Torus { .. } => "Torus",
+        Surface::Nurbs(_) => "Freiformfläche",
     }
 }
 
@@ -43,6 +47,16 @@ fn circle(center: DVec3, normal: DVec3, radius: f64) -> Curve {
 /// Schnitt zweier Flächen (symmetrisch in den Argumenten).
 pub fn intersect_surfaces(a: &Surface, b: &Surface, tol: &Tolerance) -> SurfaceIntersection {
     use Surface::*;
+    // Mindestens eine Freiformfläche: numerischer Schnittrechner (analytische Wege unverändert).
+    if matches!(a, Nurbs(_)) || matches!(b, Nurbs(_)) {
+        return match intersect_nurbs(a, b, tol) {
+            SsiOutcome::Curves(cs) => SurfaceIntersection::Curves(cs),
+            SsiOutcome::None => SurfaceIntersection::None,
+            SsiOutcome::Touch => SurfaceIntersection::Touch,
+            SsiOutcome::Coincident => SurfaceIntersection::Coincident,
+            SsiOutcome::Unsupported(msg) => SurfaceIntersection::UnsupportedBecause(msg),
+        };
+    }
     match (a, b) {
         (Plane { frame: fa }, Plane { frame: fb }) => plane_plane(fa, fb, tol),
         (Plane { frame: p }, Cylinder { frame, radius })
@@ -335,7 +349,7 @@ enum Mer {
 }
 
 /// Meridiankurve in der (ρ, h)-Halbebene bezüglich der gemeinsamen Achse `(o, z)`;
-/// `None` für Ebenen (haben keine Meridiankurve).
+/// `None` für Ebenen und Freiformflächen (haben keine Meridiankurve).
 fn meridian(s: &Surface, o: DVec3, z: DVec3) -> Option<Mer> {
     let f = s.frame();
     let h0 = (f.origin - o).dot(z);
@@ -359,7 +373,7 @@ fn meridian(s: &Surface, o: DVec3, z: DVec3) -> Option<Mer> {
             hc: h0,
             r: *minor,
         },
-        Surface::Plane { .. } => return None,
+        Surface::Plane { .. } | Surface::Nurbs(_) => return None,
     })
 }
 

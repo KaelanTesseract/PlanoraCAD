@@ -24,6 +24,10 @@ pub enum FeatureError {
     Sketch(String),
     #[error("Das Ergebnis ist unplausibel (Volumenprobe fehlgeschlagen)")]
     ImplausibleResult,
+    #[error(
+        "Bei Körpern mit Freiformflächen: Das Ergebnis ist unplausibel (Volumenprobe fehlgeschlagen); bitte Lage oder Maße eines Körpers leicht ändern"
+    )]
+    ImplausibleFreeformResult,
     #[error("Folgende Features hängen davon ab: {}", join_ids(.0))]
     HasDependents(Vec<u64>),
     #[error("Ungültige Eingabe: {0}")]

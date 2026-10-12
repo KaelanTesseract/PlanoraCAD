@@ -9,7 +9,7 @@ fn close(a: f64, b: f64, eps: f64) {
 fn rectangle_area_and_orientation() {
     let r = ProfileLoop::rectangle(DVec2::new(0.0, 0.0), DVec2::new(2.0, 3.0));
     close(r.signed_area(), 6.0, 1e-12);
-    close(r.reversed().signed_area(), -6.0, 1e-12);
+    close(r.try_reversed().unwrap().signed_area(), -6.0, 1e-12);
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn reversed_twice_visits_same_points() {
         DVec2::new(0.0, 2.0),
     ])
     .unwrap();
-    let rr = r.reversed().reversed();
+    let rr = r.try_reversed().unwrap().try_reversed().unwrap();
     assert_eq!(r.chain_points().len(), rr.chain_points().len());
     for (a, b) in r.chain_points().iter().zip(rr.chain_points().iter()) {
         assert!(a.distance(*b) < 1e-12);
@@ -68,13 +68,16 @@ fn closed_and_open_loops_are_detected() {
 
 #[test]
 fn oriented_profile_has_ccw_outer_and_cw_holes() {
-    let cw_outer = ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(10.0, 10.0)).reversed();
+    let cw_outer = ProfileLoop::rectangle(DVec2::ZERO, DVec2::new(10.0, 10.0))
+        .try_reversed()
+        .unwrap();
     let ccw_hole = ProfileLoop::circle(DVec2::new(5.0, 5.0), 1.0);
     let p = Profile {
         outer: cw_outer,
         holes: vec![ccw_hole],
     }
-    .oriented();
+    .try_oriented()
+    .unwrap();
     assert!(p.outer.signed_area() > 0.0);
     assert!(p.holes[0].signed_area() < 0.0);
 }

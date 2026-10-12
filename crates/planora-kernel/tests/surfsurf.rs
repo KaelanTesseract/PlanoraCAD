@@ -351,6 +351,8 @@ fn kind(r: &SurfaceIntersection) -> &'static str {
         SurfaceIntersection::Coincident => "Coincident",
         SurfaceIntersection::Curves(_) => "Curves",
         SurfaceIntersection::Unsupported => "Unsupported",
+        // Neue Variante seit Task 8 (nur bei Freiformflächen; mechanische Anpassung).
+        SurfaceIntersection::UnsupportedBecause(_) => "UnsupportedBecause",
     }
 }
 

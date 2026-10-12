@@ -1,8 +1,62 @@
-use crate::geometry::Surface;
+use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
 use crate::topology::{Edge, Face, Solid, Vertex};
+use planora_math::Tolerance;
 use std::collections::HashSet;
 use thiserror::Error;
+
+/// Toleranz (mm), mit der eine Ecke oder Kante auf einer Fläche liegt, wenn Freiformkurven oder
+/// -flächen beteiligt sind (Annäherung von Schnittkurven, Spec N4).
+pub const NURBS_EDGE_TOL: f64 = 1e-5;
+
+/// Toleranz für „Kante liegt auf Fläche“: `tol.linear`, mit einer Freiformkurve oder -fläche als
+/// Beteiligter mindestens [`NURBS_EDGE_TOL`].
+pub fn edge_surface_tol(curve: &Curve, surface: &Surface, tol: &Tolerance) -> f64 {
+    if matches!(curve, Curve::Nurbs(_)) {
+        tol.linear.max(NURBS_EDGE_TOL)
+    } else {
+        point_surface_tol(surface, tol)
+    }
+}
+
+/// Toleranz für „Punkt liegt auf Fläche“: `tol.linear`, bei Freiformflächen mindestens
+/// [`NURBS_EDGE_TOL`].
+pub fn point_surface_tol(surface: &Surface, tol: &Tolerance) -> f64 {
+    if matches!(surface, Surface::Nurbs(_)) {
+        tol.linear.max(NURBS_EDGE_TOL)
+    } else {
+        tol.linear
+    }
+}
+
+/// Jede Kante mit Freiformkurve oder an einer Freiformfläche liegt auf dieser Fläche.
+fn check_freeform_edges(solid: &Solid, tol: &Tolerance) -> Result<(), ValidationError> {
+    for (fid, face) in solid.faces.iter() {
+        for lp in std::iter::once(&face.outer).chain(face.inner.iter()) {
+            for he in &lp.half_edges {
+                let e = &solid.edges[he.edge];
+                let freeform =
+                    matches!(e.curve, Curve::Nurbs(_)) || matches!(face.surface, Surface::Nurbs(_));
+                if !freeform {
+                    continue;
+                }
+                let limit = edge_surface_tol(&e.curve, &face.surface, tol);
+                let off = (0..=EDGE_CHECK_SECTIONS).any(|k| {
+                    let t = e.t0 + (e.t1 - e.t0) * k as f64 / EDGE_CHECK_SECTIONS as f64;
+                    // `implicit` ist nie NaN; ein nicht endlicher Punkt ergibt einen riesigen Wert.
+                    face.surface.implicit(e.curve.point(t)).abs() > limit
+                });
+                if off {
+                    return Err(ValidationError::EdgeOffSurface(
+                        he.edge.index(),
+                        fid.index(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ValidationError {
@@ -20,7 +74,13 @@ pub enum ValidationError {
     InvalidEulerCharacteristic(i64),
     #[error("Die Fläche {0} gehört nicht zu genau einer Schale")]
     ShellMembership(usize),
+    #[error("Die Kante {0} liegt nicht auf der Fläche {1} (Freiformkurve oder -fläche beteiligt)")]
+    EdgeOffSurface(usize, usize),
 }
+
+/// Zahl der Abschnitte, an deren Grenzen eine Kante mit Freiformbeteiligung auf ihrer Fläche
+/// geprüft wird (Enden eingeschlossen).
+const EDGE_CHECK_SECTIONS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationReport {
@@ -35,8 +95,20 @@ pub struct ValidationReport {
 }
 
 /// Prüft Topologie und Orientierung. Dass die Normalen nach außen zeigen, wird nicht hier,
-/// sondern in `planora-mesh` über ein positives Volumen geprüft.
+/// sondern in `planora-mesh` über ein positives Volumen geprüft (für Freiformflächen genauso).
+///
+/// Ist eine Freiformkurve oder -fläche beteiligt, wird zusätzlich geprüft, dass jede Kante auf
+/// den Flächen liegt, die sie begrenzt (Abstand höchstens [`edge_surface_tol`], also
+/// [`NURBS_EDGE_TOL`]); rein analytische Körper werden wie bisher nur topologisch geprüft.
+///
+/// Mit der Standardtoleranz; [`validate_with`] nimmt die Toleranz des Kernels.
 pub fn validate(solid: &Solid) -> Result<ValidationReport, ValidationError> {
+    validate_with(solid, &Tolerance::default())
+}
+
+/// Wie [`validate`], mit vorgegebener Toleranz für die Lage der Kanten auf Freiformflächen
+/// ([`edge_surface_tol`]; die topologischen Prüfungen brauchen keine).
+pub fn validate_with(solid: &Solid, tol: &Tolerance) -> Result<ValidationReport, ValidationError> {
     let n_edges = solid.edges.len();
     let mut forward = vec![0usize; n_edges];
     let mut backward = vec![0usize; n_edges];
@@ -74,6 +146,8 @@ pub fn validate(solid: &Solid) -> Result<ValidationReport, ValidationError> {
             return Err(ValidationError::EdgeOrientation(e));
         }
     }
+
+    check_freeform_edges(solid, tol)?;
 
     // Euler-Poincaré je Schale: V − E + F − R = 2 − 2g (Henkel g); ohne Schalen gilt das Solid
     // als eine Schale.

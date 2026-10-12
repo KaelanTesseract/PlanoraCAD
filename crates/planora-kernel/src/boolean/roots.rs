@@ -1,6 +1,8 @@
-use super::seg::{Seg, golden_min, sample_count};
+use super::seg::{Seg, box_gap, boxes_distance, curve_sample_count, golden_min, union_box};
 use crate::geometry::{Curve, Surface};
-use planora_math::{TAU, Tolerance};
+use crate::validate::edge_surface_tol;
+use planora_math::{DVec3, TAU, Tolerance};
+use std::cell::Cell;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Root {
@@ -35,10 +37,16 @@ fn bisect(mut a: f64, mut b: f64, g: &impl Fn(f64) -> f64) -> f64 {
     0.5 * (a + b)
 }
 
-/// Ein Vollkreis oder eine Vollellipse: Anfang und Ende des Parameterbereichs sind derselbe Punkt.
+/// Abweichung der Parameterspanne von der Periode, bis zu der ein Stück als ganze geschlossene
+/// Kurve gilt.
+const FULL_PERIOD_TOL: f64 = 1e-9;
+
+/// Eine ganze geschlossene Kurve (Vollkreis, Vollellipse, geschlossene Freiformkurve über ihre
+/// ganze Periode): Anfang und Ende des Parameterbereichs sind derselbe Punkt.
 fn is_closed(curve: &Curve, t0: f64, t1: f64) -> bool {
-    matches!(curve, Curve::Circle { .. } | Curve::Ellipse { .. })
-        && ((t1 - t0).abs() - TAU).abs() < 1e-9
+    curve
+        .period()
+        .is_some_and(|p| ((t1 - t0).abs() - p).abs() < FULL_PERIOD_TOL)
 }
 
 /// Schnittpunkte der Kurve auf `[t0, t1]` mit einer Fläche (Nullstellen von `F(c(t))`).
@@ -47,6 +55,11 @@ fn is_closed(curve: &Curve, t0: f64, t1: f64) -> bool {
 /// Vorzeichen nicht (Berührung). Randstellen innerhalb der Toleranz zählen als ein Schnitt.
 /// Bei einer geschlossenen Kurve (Vollkreis) ist die Naht keine Randstelle: sie wird nur
 /// einmal gemeldet und nach dem Vorzeichen davor und dahinter eingestuft.
+///
+/// Freiformflächen und -kurven: `F` ist der vorzeichenbehaftete Abstand zum beschränkten
+/// Flächenstück und springt an dessen Rand das Vorzeichen, ohne null zu werden. Eine durch
+/// Halbieren gefundene Stelle zählt deshalb nur, wenn dort `|F|` innerhalb der Toleranz liegt;
+/// für analytische Flächen bleibt alles wie bisher.
 pub fn curve_surface_roots(
     curve: &Curve,
     t0: f64,
@@ -57,18 +70,31 @@ pub fn curve_surface_roots(
     if !t0.is_finite() || !t1.is_finite() {
         return CurveSurface::Roots(Vec::new());
     }
-    let n = sample_count(t0, t1, 64, 64);
-    let g = |t: f64| surface.implicit(curve.point(t));
+    // Freiformkurven nach ihrer Gestalt (ihr Parameterbereich ist oft nur [0, 1]), sonst wie bisher
+    // nach der Breite des Parameterbereichs.
+    let n = curve_sample_count(curve, t0, t1, 64, 64);
+    // Freiformflächen: Fußpunkt des vorigen Auswertepunkts als Startwert (geprüft, siehe
+    // `Surface::implicit_hinted`); analytische Flächen: unverändert `implicit`.
+    let hint = Cell::new(None);
+    let g = |t: f64| surface.implicit_hinted(curve.point(t), &hint);
     let ts: Vec<f64> = (0..=n)
         .map(|i| t0 + (t1 - t0) * i as f64 / n as f64)
         .collect();
     let gs: Vec<f64> = ts.iter().map(|&t| g(t)).collect();
-    if gs.iter().all(|v| v.abs() <= tol.linear) {
+    // „Liegt auf der Fläche“: mit Freiformbeteiligten gilt die größere Toleranz.
+    let lin = edge_surface_tol(curve, surface, tol);
+    if gs.iter().all(|v| v.abs() <= lin) {
         return CurveSurface::Lies;
     }
     let closed = is_closed(curve, t0, t1);
+    // Periode für das Zurückfalten an der Naht (nur bei geschlossenen Kurven gebraucht).
+    let period = curve.period().unwrap_or(TAU);
     let dir = if t1 >= t0 { 1.0 } else { -1.0 };
-    let lin = tol.linear;
+    // Bei Freiformbeteiligten ist `g` am Rand eines beschränkten Flächenstücks unstetig (der
+    // Fußpunkt springt auf den Rand, das Vorzeichen wechselt ohne Nullstelle). Eine halbierte
+    // Stelle zählt dort nur als Schnitt, wenn sie wirklich auf der Fläche liegt.
+    let numeric = matches!(curve, Curve::Nurbs(_)) || matches!(surface, Surface::Nurbs(_));
+    let genuine = |t: f64| !numeric || g(t).abs() <= lin;
 
     let mut roots: Vec<Root> = Vec::new();
     let add = |roots: &mut Vec<Root>, t: f64, touching: bool| {
@@ -102,7 +128,7 @@ pub fn curve_surface_roots(
                 if seam {
                     // in den Parameterbereich zurückfalten
                     if (te - t0) * dir < 0.0 {
-                        te += dir * TAU;
+                        te += dir * period;
                     }
                     if (te - t1).abs() < 1e-6 {
                         te = t0;
@@ -120,8 +146,11 @@ pub fn curve_surface_roots(
                 let left = if ga == 0.0 { lo } else { bisect(lo, te, &g) };
                 let right = if gb == 0.0 { hi } else { bisect(te, hi, &g) };
                 for t in [left, right] {
+                    if !genuine(t) {
+                        continue;
+                    }
                     let t = if seam && (t - t0) * dir < 0.0 {
-                        t + dir * TAU
+                        t + dir * period
                     } else {
                         t
                     };
@@ -184,7 +213,10 @@ pub fn curve_surface_roots(
             continue;
         }
         if gs[i] * gs[i + 1] < 0.0 {
-            add(&mut roots, bisect(ts[i], ts[i + 1], &g), false);
+            let t = bisect(ts[i], ts[i + 1], &g);
+            if genuine(t) {
+                add(&mut roots, t, false);
+            }
         } else if gs[i] == 0.0 && i > 0 && gs[i - 1] * gs[i + 1] < 0.0 {
             add(&mut roots, ts[i], false);
         }
@@ -216,8 +248,27 @@ pub fn seg_intersections(a: &Seg, b: &Seg, tol: &Tolerance) -> Vec<(f64, f64)> {
     if ![a.t0, a.t1, b.t0, b.t1].iter().all(|v| v.is_finite()) {
         return Vec::new();
     }
-    let mut out = one_way(a, b, tol);
-    for (fb, fa) in one_way(b, a, tol) {
+    // Jeder Treffer verlangt einen gefundenen Abstand ≤ `tol.linear`, und der gefundene Abstand
+    // ist nie kleiner als der Abstand der sicheren Hüllquader: Liegen diese weiter auseinander,
+    // gibt es keinen Treffer (spart bei Freiformkurven die teure Abtastung; analytisch unverändert).
+    // Erst die billigen Hüllen (ganze Kurve), dann die engeren der Bézier-Stücke (je Stück einmal).
+    let freeform = matches!(a.curve, Curve::Nurbs(_)) || matches!(b.curve, Curve::Nurbs(_));
+    if freeform && box_gap(a.sound_box(), b.sound_box()) > tol.linear {
+        return Vec::new();
+    }
+    let (boxes_a, boxes_b) = (a.piece_boxes(), b.piece_boxes());
+    let piece_box = |s: &Seg, bx: &Option<Vec<(DVec3, DVec3)>>| match bx {
+        Some(bx) => union_box(bx),
+        None => Some(s.sound_box()),
+    };
+    if freeform
+        && let (Some(ba), Some(bb)) = (piece_box(a, &boxes_a), piece_box(b, &boxes_b))
+        && box_gap(ba, bb) > tol.linear
+    {
+        return Vec::new();
+    }
+    let mut out = one_way(a, b, tol, boxes_b.as_deref());
+    for (fb, fa) in one_way(b, a, tol, boxes_a.as_deref()) {
         let p = a.at(fa);
         if !out
             .iter()
@@ -241,7 +292,14 @@ pub fn seg_intersections(a: &Seg, b: &Seg, tol: &Tolerance) -> Vec<(f64, f64)> {
 }
 
 /// Abtastung von `a` gegen `b`.
-fn one_way(a: &Seg, b: &Seg, tol: &Tolerance) -> Vec<(f64, f64)> {
+/// `b_boxes`: [`Seg::piece_boxes`] von `b` (nur bei Freiformkurven), für den sicheren Ausschluss
+/// ferner Stützstellen.
+fn one_way(
+    a: &Seg,
+    b: &Seg,
+    tol: &Tolerance,
+    b_boxes: Option<&[(DVec3, DVec3)]>,
+) -> Vec<(f64, f64)> {
     let near = tol.linear;
     // Punktförmiges Stück: nur prüfen, ob es auf `b` liegt.
     if a.t0 == a.t1 {
@@ -252,10 +310,23 @@ fn one_way(a: &Seg, b: &Seg, tol: &Tolerance) -> Vec<(f64, f64)> {
             Vec::new()
         };
     }
-    let n = sample_count(a.t0, a.t1, 64, 64);
+    let n = curve_sample_count(&a.curve, a.t0, a.t1, 64, 64);
     let dist = |f: f64| b.closest(a.at(f)).1;
-    let ds: Vec<f64> = (0..=n).map(|i| dist(i as f64 / n as f64)).collect();
     let reach = (a.length() / n as f64) * 2.0 + near;
+    // Bei einer Freiformkurve `b` ersetzt eine sichere untere Schranke (Abstand zu den Hüllen
+    // ihrer Bézier-Stücke) den gesuchten Abstand, wenn sie über `reach` liegt: Solche Stützstellen
+    // entscheiden nichts (weder Lauf ≤ tol noch Minimum < reach), und jeder Vergleich mit einem
+    // Nachbarn unter `reach` fällt gleich aus.
+    let sample = |f: f64| {
+        if let Some(bx) = b_boxes {
+            let lb = boxes_distance(bx, a.at(f));
+            if lb > reach {
+                return lb;
+            }
+        }
+        dist(f)
+    };
+    let ds: Vec<f64> = (0..=n).map(|i| sample(i as f64 / n as f64)).collect();
     let mut out: Vec<(f64, f64)> = Vec::new();
     let push = |out: &mut Vec<(f64, f64)>, fa: f64| {
         let fb = b.closest(a.at(fa)).0;
