@@ -40,6 +40,10 @@ const HESSIAN_FLOOR: f64 = 1e-300;
 /// Versätze (Bruchteil des Wegs zur Bereichsmitte), an denen die Ersatznormale eines entarteten
 /// Punkts (Pol) gesucht wird.
 const NORMAL_OFFSETS: [f64; 3] = [1e-6, 1e-4, 1e-2];
+/// Meridiane, auf denen neben einem Pol neu gestartet wird, und der Abstand dieser Startpunkte
+/// vom Pol als Bruchteil des v-Bereichs.
+const POLE_MERIDIANS: usize = 16;
+const POLE_START_FRACTION: f64 = 1e-3;
 /// Ergebnis von `signed_distance` für nicht endliche Punkte (sehr weit weg, nie NaN).
 const FAR_AWAY: f64 = f64::MAX;
 /// Rasterpunkte je Kachel und Richtung (Kacheln mit Hüllquader beschleunigen die Rastersuche).
@@ -508,7 +512,10 @@ impl NurbsSurfaceData {
         if !p.is_finite() {
             return None;
         }
-        if let Some(r) = self.newton_from_hint(p, hint) {
+        // Ein Ergebnis am Pol kann falsch stationär sein (siehe `pole_starts`): dann global.
+        if let Some(r) = self.newton_from_hint(p, hint)
+            && self.pole_at(r.1).is_none()
+        {
             return Some(r);
         }
         self.global_closest(p)
@@ -535,10 +542,50 @@ impl NurbsSurfaceData {
         if result.is_some_and(|r| !self.on_open_edge(r.0, r.1)) {
             return result;
         }
-        [result, run(self.extra_starts(p, best))]
+        let result = [result, run(self.extra_starts(p, best))]
             .into_iter()
             .flatten()
-            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        match result {
+            Some(r) if self.pole_at(r.1).is_some() => [Some(r), run(self.pole_starts(p, r.1))]
+                .into_iter()
+                .flatten()
+                .min_by(|a, b| a.2.total_cmp(&b.2)),
+            // Keine Suche konvergiert: neben den Polen neu starten (Pole bremsen die Suche).
+            None => self
+                .poles_v
+                .iter()
+                .filter_map(|pv| run(self.pole_starts(p, *pv)))
+                .min_by(|a, b| a.2.total_cmp(&b.2)),
+            r => r,
+        }
+    }
+
+    /// Pol, an dem `v` liegt (`v` gleich einem Polwert).
+    fn pole_at(&self, v: f64) -> Option<f64> {
+        self.poles_v.iter().copied().find(|pv| *pv == v)
+    }
+
+    /// Startpunkte neben einem Pol: Am Pol ist `S_u = 0`, die Suche hält dort jede u-Richtung
+    /// für stationär und bleibt am Pol hängen, obwohl der nächste Punkt auf dem Meridian zu `p`
+    /// knapp daneben liegt. Gestartet wird deshalb ein Stück neben dem Pol auf
+    /// `POLE_MERIDIANS` Meridianen (der zu `p` zeigende zuerst).
+    fn pole_starts(&self, p: DVec3, pv: f64) -> Vec<(f64, f64)> {
+        let ((u0, u1), (v0, v1)) = self.surface.domain();
+        let inward = if pv <= v0 { 1.0 } else { -1.0 };
+        let v = pv + inward * POLE_START_FRACTION * (v1 - v0);
+        let pole = self.surface.point(u0, pv);
+        let us: Vec<f64> = (0..POLE_MERIDIANS)
+            .map(|k| u0 + (u1 - u0) * (k as f64 + 0.5) / POLE_MERIDIANS as f64)
+            .collect();
+        let toward = |u: f64| {
+            let d = self.surface.point(u, v) - pole;
+            d.dot(p - pole) / d.length().max(f64::MIN_POSITIVE)
+        };
+        let mut starts: Vec<(f64, f64)> = us.iter().map(|&u| (u, v)).collect();
+        // der beste Meridian zuerst (gleich gute Ergebnisse: der erste gewinnt)
+        starts.sort_by(|a, b| toward(b.0).total_cmp(&toward(a.0)));
+        starts
     }
 
     /// Wie `closest`, aber ein Startwert-Ergebnis wird nur genommen, wenn kein Rasterpunkt
@@ -550,6 +597,7 @@ impl NurbsSurfaceData {
             return None;
         }
         if let Some(r) = self.newton_from_hint(p, hint)
+            && self.pole_at(r.1).is_none()
             && !self.grid_has_closer(p, r.2 * r.2 * (1.0 - VERIFY_RATIO))
         {
             return Some(r);

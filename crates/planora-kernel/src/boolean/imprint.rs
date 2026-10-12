@@ -338,8 +338,13 @@ pub fn imprint(
                 a: surface_name(&ga.surface),
                 b: surface_name(&gb.surface),
             };
-            let with_nurbs =
-                matches!(ga.surface, Surface::Nurbs(_)) || matches!(gb.surface, Surface::Nurbs(_));
+            // Vorläufig (bis Task 9 die Pipeline für Freiformkurven und -flächen anpasst): Paare
+            // mit einer Freiformfläche ergeben wie vor dem numerischen Schnittrechner den
+            // benannten Fehler – auch ohne Schnitt oder bei Berührung, damit keine Operation ein
+            // Ergebnis liefert, das die Pipeline noch nicht sicher verarbeitet.
+            if matches!(ga.surface, Surface::Nurbs(_)) || matches!(gb.surface, Surface::Nurbs(_)) {
+                return Err(unsupported());
+            }
             match intersect_surfaces(&ga.surface, &gb.surface, tol) {
                 SurfaceIntersection::None | SurfaceIntersection::Touch => {}
                 SurfaceIntersection::Unsupported => return Err(unsupported()),
@@ -349,12 +354,6 @@ pub fn imprint(
                         surface_name(&ga.surface),
                         surface_name(&gb.surface)
                     )));
-                }
-                // Vorläufig (bis die Pipeline Freiformkurven und -flächen verarbeitet): Schnitte
-                // mit Freiformflächen werden berechnet, aber noch nicht weiterverarbeitet; das
-                // Verhalten der Booleschen Operation bleibt wie bisher (benannter Fehler).
-                SurfaceIntersection::Curves(_) | SurfaceIntersection::Coincident if with_nurbs => {
-                    return Err(unsupported());
                 }
                 SurfaceIntersection::Coincident => {
                     for s in coincident_sections(fb, fa, tol) {

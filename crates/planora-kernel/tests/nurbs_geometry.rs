@@ -731,3 +731,40 @@ fn projection_converges_on_domains_far_from_zero() {
         validate(&solid).unwrap();
     }
 }
+
+#[test]
+fn signed_distance_is_exact_near_the_poles_of_a_revolved_sphere() {
+    // Regression (Task 8, Review I4): Am Pol ist S_u = 0; die Fußpunktsuche blieb dort hängen
+    // und lieferte bis zu 0,1 mm zu große Abstände. Prüfung gegen den exakten Kugelabstand.
+    use planora_math::PI;
+    let c = DVec3::new(1.0, -2.0, 0.5);
+    let ax = DVec3::new(0.3, 0.2, 1.0).normalize();
+    let e = ax.any_orthonormal_vector();
+    let r = 3.0;
+    let semi = NurbsCurve::elliptic_arc(c, e * r, ax * r, -PI / 2.0, PI).unwrap();
+    let s = Surface::nurbs(
+        NurbsSurface::revolve(&semi, c, ax, 0.0, TAU).unwrap(),
+        true,
+        false,
+    )
+    .unwrap();
+    let (e1, e2) = ax.any_orthonormal_pair();
+    let mut seed = 12345u64;
+    let mut rnd = || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 11) as f64 / (1u64 << 53) as f64
+    };
+    for k in 0..1500 {
+        let pole = if k % 2 == 0 { 1.0 } else { -1.0 };
+        let polar = rnd() * 0.3;
+        let az = rnd() * TAU;
+        let rad = r * (1.0 + (rnd() - 0.5) * 0.2);
+        let dir = ax * (pole * polar.cos()) + (e1 * az.cos() + e2 * az.sin()) * polar.sin();
+        let p = c + dir * rad;
+        let exact = (p - c).length() - r;
+        let got = s.implicit(p);
+        assert!((got - exact).abs() < 1e-7, "{p:?}: {got} statt {exact}");
+    }
+}

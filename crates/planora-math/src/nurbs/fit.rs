@@ -177,15 +177,25 @@ fn fit_capped(points: &[DVec3], tol: f64, cap: usize) -> Result<NurbsCurve, Nurb
                 Err(e) => (None, Some(e)),
             }
         };
+        // Größter Abstand; beim ersten Punkt über der Schranke wird abgebrochen (die Runde ist
+        // dann ohnehin verloren, die teure globale Suche für alle weiteren Punkte entfällt).
         let err = match &curve {
-            Some(c) => points
-                .iter()
-                .zip(&rep)
-                .map(|(x, r)| {
-                    let d = c.newton_distance(params[*r], *x);
-                    if d > tol { d.min(c.distance_to(*x)) } else { d }
-                })
-                .fold(0.0, f64::max),
+            Some(c) => {
+                let mut worst = 0.0_f64;
+                for (x, r) in points.iter().zip(&rep) {
+                    let mut d = c.newton_distance(params[*r], *x);
+                    if d > tol {
+                        d = d.min(c.distance_to(*x));
+                    }
+                    // `!(d <= tol)` fängt auch NaN.
+                    if d.is_nan() || d > tol {
+                        worst = if d.is_nan() { f64::INFINITY } else { d };
+                        break;
+                    }
+                    worst = worst.max(d);
+                }
+                worst
+            }
             None => f64::INFINITY,
         };
         if let Some(c) = curve
@@ -196,7 +206,7 @@ fn fit_capped(points: &[DVec3], tol: f64, cap: usize) -> Result<NurbsCurve, Nurb
         if m >= cap {
             let why = match failure {
                 Some(e) => format!("Ausgleich misslungen: {e}"),
-                None => format!("größter Abstand {err}"),
+                None => format!("Abstand {err} über der Schranke"),
             };
             return Err(NurbsError::Fit(format!(
                 "Fehlerschranke {tol} mit höchstens {cap} Kontrollpunkten nicht erreichbar ({why})"

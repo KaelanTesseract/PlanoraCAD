@@ -363,9 +363,10 @@ fn invalid_tolerances_are_a_named_error_not_a_panic() {
 }
 
 #[test]
-fn booleans_with_nurbs_faces_keep_a_named_error_until_the_pipeline_follows() {
-    // Die Schnitte werden jetzt berechnet, die Boolesche Pipeline verarbeitet Freiformkurven aber
-    // erst mit Task 9: bis dahin bleibt es beim benannten Fehler (kein stilles Teilergebnis).
+fn booleans_with_nurbs_faces_keep_the_old_named_error_until_the_pipeline_follows() {
+    // Die Boolesche Pipeline verarbeitet Freiformflächen erst mit Task 9: bis dahin ergibt jedes
+    // Flächenpaar mit einer Freiformfläche (überlappende Hüllquader) den benannten Fehler wie
+    // vor dem Schnittrechner – auch ohne Schnitt (Würfel ganz im Körper) und bei Durchdringung.
     use planora_kernel::boolean::{BoolOp, BooleanError, boolean};
     use planora_kernel::{AnalyticKernel, Kernel, Profile, ProfileLoop};
     let ellipse = NurbsCurve::elliptic_arc(
@@ -388,17 +389,322 @@ fn booleans_with_nurbs_faces_keep_a_named_error_until_the_pipeline_follows() {
             5.0,
         )
         .unwrap();
-    let cube = k
-        .transform(
-            &k.make_box(DVec3::splat(2.0)).unwrap(),
-            &planora_math::DMat4::from_translation(DVec3::new(1.5, 0.5, 1.0)),
-        )
-        .unwrap();
-    match boolean(&body, &cube, BoolOp::Union, &tol()) {
-        Err(BooleanError::UnsupportedIntersection { a, b }) => {
-            assert!(a == "Freiformfläche" || b == "Freiformfläche", "{a} {b}")
+    for (size, at) in [
+        (2.0, DVec3::new(1.5, 0.5, 1.0)),
+        (1.0, DVec3::new(-0.5, -0.5, 2.0)),
+    ] {
+        let cube = k
+            .transform(
+                &k.make_box(DVec3::splat(size)).unwrap(),
+                &planora_math::DMat4::from_translation(at),
+            )
+            .unwrap();
+        match boolean(&body, &cube, BoolOp::Union, &tol()) {
+            Err(BooleanError::UnsupportedIntersection { a, b }) => {
+                assert!(a == "Freiformfläche" || b == "Freiformfläche", "{a} {b}")
+            }
+            other => panic!("{other:?}"),
         }
-        Err(BooleanError::Unsupported(msg)) => assert!(msg.contains("Freiformfläche"), "{msg}"),
+    }
+}
+
+// ---- Nachbesserung Task 8 (Review): Eingaben des Reviews ----
+
+/// Einfacher Zufallsgenerator (reproduzierbar, keine Abhängigkeit).
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+fn rotate(radial: DVec3, axis: DVec3, phi: f64) -> DVec3 {
+    radial * phi.cos() + axis.cross(radial) * phi.sin()
+}
+
+fn curve_length(c: &Curve) -> f64 {
+    let pts = sample(c, 4000);
+    pts.windows(2).map(|w| w[0].distance(w[1])).sum()
+}
+
+fn nurbs_sphere(c: DVec3, axis: DVec3, radial: DVec3, r: f64, phase: f64) -> Surface {
+    let semi = NurbsCurve::elliptic_arc(c, radial * r, axis * r, -PI / 2.0, PI).unwrap();
+    Surface::nurbs(
+        NurbsSurface::revolve(&semi, c, axis, phase, TAU).unwrap(),
+        true,
+        false,
+    )
+    .unwrap()
+}
+
+/// Torus aus einem Vollkreis (Phase `p0`) um die Achse gedreht (Phase `p1`).
+fn nurbs_torus(
+    c: DVec3,
+    axis: DVec3,
+    radial: DVec3,
+    radii: (f64, f64),
+    p0: f64,
+    p1: f64,
+) -> Surface {
+    let (big, small) = radii;
+    let prof =
+        NurbsCurve::elliptic_arc(c + radial * big, radial * small, axis * small, p0, TAU).unwrap();
+    Surface::nurbs(
+        NurbsSurface::revolve(&prof, c, axis, p1, TAU).unwrap(),
+        true,
+        true,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_plane_just_below_the_top_of_a_nurbs_torus_gives_both_circles() {
+    // Review C1: Früher fand der Rechner nur einen der beiden Kreise (beide lagen in einem
+    // flachen Kandidaten). Naht nicht oben, zwei Phasen.
+    for phase in [0.3, 2.0] {
+        let t = nurbs_torus(DVec3::ZERO, DVec3::Z, DVec3::X, (3.0, 1.0), phase, phase);
+        let pl = plane(DVec3::new(0.0, 0.0, 0.999), DVec3::Z);
+        let SsiOutcome::Curves(cs) = intersect_nurbs(&t, &pl, &tol()) else {
+            panic!("Kurven erwartet")
+        };
+        assert_eq!(cs.len(), 2);
+        let total: f64 = cs.iter().map(curve_length).sum();
+        assert!((total - 4.0 * PI * 3.0).abs() < 1e-4, "{total}");
+        on_both(&cs, &t, &pl);
+    }
+}
+
+#[test]
+fn random_quadrics_near_tangent_planes_match_the_analytic_solution() {
+    // Review C1: 40 Fälle Torus/Zylinder/Kugel (Achse, Lage, Nähte zufällig) gegen eine Ebene im
+    // Abstand r·(1 − ε), ε zwischen 1e-4 und 0,3. Anzahl und Gesamtlänge wie analytisch; eine
+    // benannte Meldung mit „tangential“ wäre ehrlich, kommt hier aber nicht vor.
+    let mut rng = Rng(2026);
+    for k in 0..40 {
+        let axis = DVec3::new(rng.next() - 0.5, rng.next() - 0.5, rng.next() - 0.5).normalize();
+        let radial = rotate(axis.any_orthonormal_vector(), axis, rng.next() * TAU);
+        let eps = 10f64.powf(-4.0 + rng.next() * (4.0 + 0.3f64.log10()));
+        let o = DVec3::new(rng.next(), rng.next(), rng.next()) * 4.0 - 2.0;
+        let (s, pl, count, len) = match k % 3 {
+            0 => {
+                let (big, r) = (3.0, 1.0);
+                let (p0, p1) = (rng.next() * TAU, rng.next() * TAU);
+                let s = nurbs_torus(o, axis, radial, (big, r), p0, p1);
+                (
+                    s,
+                    plane(o + axis * r * (1.0 - eps), axis),
+                    2,
+                    4.0 * PI * big,
+                )
+            }
+            1 => {
+                let (r, h) = (2.0, 10.0);
+                let line = NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    vec![o + radial * r, o + radial * r + axis * h],
+                    vec![1.0; 2],
+                )
+                .unwrap();
+                let s = Surface::nurbs(
+                    NurbsSurface::revolve(&line, o, axis, 0.0, TAU).unwrap(),
+                    true,
+                    false,
+                )
+                .unwrap();
+                let n = rotate(radial, axis, rng.next() * TAU);
+                (s, plane(o + n * r * (1.0 - eps), n), 2, 2.0 * h)
+            }
+            _ => {
+                let r = 3.0;
+                let s = nurbs_sphere(o, axis, radial, r, rng.next() * TAU);
+                let n =
+                    DVec3::new(rng.next() - 0.5, rng.next() - 0.5, rng.next() - 0.5).normalize();
+                let rho = r * (1.0 - (1.0 - eps) * (1.0 - eps)).sqrt();
+                (s, plane(o + n * r * (1.0 - eps), n), 1, TAU * rho)
+            }
+        };
+        match intersect_nurbs(&s, &pl, &tol()) {
+            SsiOutcome::Curves(cs) => {
+                assert_eq!(cs.len(), count, "Fall {k}, eps = {eps}");
+                let total: f64 = cs.iter().map(curve_length).sum();
+                assert!(
+                    (total - len).abs() / len < 1e-5,
+                    "Fall {k}: {total} statt {len}"
+                );
+                on_both(&cs, &s, &pl);
+            }
+            SsiOutcome::Unsupported(msg) => assert!(msg.contains("tangential"), "Fall {k}: {msg}"),
+            other => panic!("Fall {k}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn nearly_coincident_and_stacked_cylinders_finish_quickly() {
+    // Review C2: früher Minuten. Erlaubt: sauberes Ergebnis oder benannte Meldung, schnell.
+    let a = nurbs_cylinder(DVec3::ZERO, DVec3::Z, 2.0, 20.0);
+    for b in [
+        nurbs_cylinder(DVec3::ZERO, DVec3::Z, 2.0001, 20.0),
+        nurbs_cylinder(DVec3::new(0.0, 0.0, 20.0 + 1e-7), DVec3::Z, 2.0, 20.0),
+    ] {
+        let start = std::time::Instant::now();
+        let r = intersect_nurbs(&a, &b, &tol());
+        assert!(
+            start.elapsed().as_secs_f64() < 10.0,
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(
+            matches!(
+                r,
+                SsiOutcome::None | SsiOutcome::Touch | SsiOutcome::Unsupported(_)
+            ),
+            "{r:?}"
+        );
+    }
+}
+
+#[test]
+fn cylinders_sharing_a_rim_touch_and_overlapping_ones_are_partly_coincident() {
+    // Review I2: Proben jenseits einer beschränkten Fläche zählen nicht als Durchdringung.
+    let a = nurbs_cylinder(DVec3::ZERO, DVec3::Z, 2.0, 20.0);
+    let rim = nurbs_cylinder(DVec3::new(0.0, 0.0, 20.0 - 1e-7), DVec3::Z, 2.0, 20.0);
+    assert!(matches!(
+        intersect_nurbs(&a, &rim, &tol()),
+        SsiOutcome::Touch
+    ));
+    let overlap = nurbs_cylinder(DVec3::new(0.0, 0.0, 19.8), DVec3::Z, 2.0, 20.0);
+    match intersect_nurbs(&a, &overlap, &tol()) {
+        SsiOutcome::Unsupported(msg) => assert!(msg.contains("teilweise"), "{msg}"),
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn large_parts_are_cut_like_small_ones() {
+    // Review I1: Toleranzen wachsen mit der Größe; keine falsche Meldung „verzweigt“ oder
+    // „zu lang“ bei Radien 300 und 1000 mm und bei 1-m-Teilen.
+    let n = DVec3::new(0.3, 0.1, 1.0).normalize();
+    for r in [300.0, 1000.0] {
+        let cyl = nurbs_cylinder(DVec3::new(0.0, 0.0, -r), DVec3::Z, r, 2.0 * r);
+        let pl = plane(DVec3::new(0.0, 0.0, 30.0), n);
+        let SsiOutcome::Curves(cs) = intersect_nurbs(&cyl, &pl, &tol()) else {
+            panic!("r = {r}")
+        };
+        assert_eq!(cs.len(), 1, "r = {r}");
+        assert!(cs[0].period().is_some());
+        on_both(&cs, &cyl, &pl);
+    }
+    let ax = DVec3::new(0.1, 0.2, 1.0).normalize();
+    let sph = nurbs_sphere(DVec3::ZERO, ax, ax.any_orthonormal_vector(), 1000.0, 0.0);
+    let pl = plane(DVec3::new(0.0, 0.0, 300.0), n);
+    let SsiOutcome::Curves(cs) = intersect_nurbs(&sph, &pl, &tol()) else {
+        panic!("Kugel")
+    };
+    assert_eq!(cs.len(), 1);
+    let d = 300.0 * n.z;
+    let expect = TAU * (1000.0f64 * 1000.0 - d * d).sqrt();
+    assert!((curve_length(&cs[0]) - expect).abs() / expect < 1e-5);
+    on_both(&cs, &sph, &pl);
+    // zwei sich kreuzende Freiform-Zylinder in Metergröße
+    let a = nurbs_cylinder(DVec3::new(0.0, 0.0, -500.0), DVec3::Z, 200.0, 1000.0);
+    let b = nurbs_cylinder(DVec3::new(-500.0, 0.0, 0.0), DVec3::X, 100.0, 1000.0);
+    let SsiOutcome::Curves(cs) = intersect_nurbs(&a, &b, &tol()) else {
+        panic!("Meterteile")
+    };
+    assert_eq!(cs.len(), 2);
+    for c in &cs {
+        assert!(c.period().is_some());
+    }
+    on_both(&cs, &a, &b);
+}
+
+#[test]
+fn a_random_bump_cut_by_a_tilted_plane_is_fitted_quickly() {
+    // Review I3: früher scheiterte die Annäherung eines langen Zweigs nach 19 s.
+    let n = 13usize;
+    let mut kn = vec![0.0; 4];
+    for i in 1..=(n - 4) {
+        kn.push(i as f64 / (n - 3) as f64);
+    }
+    kn.extend([1.0; 4]);
+    let mut rng = Rng(99);
+    let mut c = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            c.push(DVec3::new(
+                i as f64 * 10.0 / 12.0,
+                j as f64 * 10.0 / 12.0,
+                (rng.next() - 0.5) * 2.0 * 1.53,
+            ));
+        }
+    }
+    let s = NurbsSurface::new(3, 3, kn.clone(), kn, n, n, c, vec![1.0; n * n]).unwrap();
+    let bump = Surface::nurbs(s, false, false).unwrap();
+    let pl = plane(
+        DVec3::new(5.0, 5.0, 0.0),
+        DVec3::new(0.2, 0.1, 1.0).normalize(),
+    );
+    let start = std::time::Instant::now();
+    let SsiOutcome::Curves(cs) = intersect_nurbs(&bump, &pl, &tol()) else {
+        panic!("Kurven erwartet")
+    };
+    assert!(
+        start.elapsed().as_secs_f64() < 10.0,
+        "{:?}",
+        start.elapsed()
+    );
+    assert!(!cs.is_empty());
+    on_both(&cs, &bump, &pl);
+}
+
+#[test]
+fn invalid_analytic_surfaces_and_tolerance_contacts_are_named_like_the_analytic_solver() {
+    // Review M1
+    let cyl = nurbs_cylinder(DVec3::ZERO, DVec3::Z, 2.0, 10.0);
+    let bad_cone = Surface::Cone {
+        frame: Frame::WORLD,
+        radius: 1.0,
+        slope: f64::NAN,
+    };
+    let zero_plane = Surface::Plane {
+        frame: Frame {
+            origin: DVec3::ZERO,
+            x: DVec3::ZERO,
+            y: DVec3::ZERO,
+            z: DVec3::ZERO,
+        },
+    };
+    let thin = Surface::Cylinder {
+        frame: Frame::from_origin_normal(DVec3::new(0.0, 0.0, 5.0), DVec3::X),
+        radius: 1e-5,
+    };
+    for s in [bad_cone, zero_plane, thin] {
+        match intersect_nurbs(&cyl, &s, &tol()) {
+            SsiOutcome::Unsupported(msg) => assert!(msg.contains("Ungültige Fläche"), "{msg}"),
+            other => panic!("{other:?}"),
+        }
+    }
+    // Ebene 1e-9 neben der Berührlinie: innerhalb der Toleranz eine Berührung
+    let near = plane(DVec3::new(2.0 + 1e-9, 0.0, 0.0), DVec3::X);
+    assert!(matches!(
+        intersect_nurbs(&cyl, &near, &tol()),
+        SsiOutcome::Touch
+    ));
+    // Kreis mit r = 1,3e-3 am Pol einer Freiform-Kugel: die Ebene liegt 2,8e-7 unter dem Pol
+    let sph = nurbs_sphere(DVec3::ZERO, DVec3::Z, DVec3::X, 3.0, 0.0);
+    let cap = plane(
+        DVec3::new(0.0, 0.0, (9.0f64 - 1.3e-3 * 1.3e-3).sqrt()),
+        DVec3::Z,
+    );
+    assert!(matches!(
+        intersect_nurbs(&sph, &cap, &tol()),
+        SsiOutcome::Touch
+    ));
 }
