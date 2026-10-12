@@ -140,7 +140,77 @@ pub fn boolean(a: &Solid, b: &Solid, op: BoolOp, tol: &Tolerance) -> Result<Soli
     }
     let solid = sew(pieces, tol)?;
     validate(&solid).map_err(|e| result_error(e, interiors_overlap))?;
+    if has_freeform(a) || has_freeform(b) {
+        check_freeform_result(&solid, tol)?;
+    }
     Ok(solid)
+}
+
+/// Hat der Körper eine Freiformfläche oder -kante?
+fn has_freeform(s: &Solid) -> bool {
+    s.faces
+        .iter()
+        .any(|(_, f)| matches!(f.surface, Surface::Nurbs(_)))
+        || s.edges
+            .iter()
+            .any(|(_, e)| matches!(e.curve, Curve::Nurbs(_)))
+}
+
+/// Zahl der Abschnitte, an deren Grenzen [`check_freeform_result`] jede Kante prüft.
+const RESULT_CHECK_SECTIONS: usize = 8;
+
+/// Meldung, wenn das vernähte Ergebnis einer Operation mit Freiformflächen eine Kante neben ihrer
+/// Fläche oder neben ihren Ecken hat.
+pub(crate) const THIN_FEATURE: &str = "Ein Gebilde ist dünner als die Toleranz für Freiformflächen; das Ergebnis lässt sich nicht sicher bilden";
+
+/// `x ≤ limit`; NaN ist nie innerhalb.
+fn within(x: f64, limit: f64) -> bool {
+    x <= limit
+}
+
+/// Analytische Kanten auf analytischen Flächen: erlaubter Abstand in Vielfachen von `tol.linear`
+/// (wie die Mittenprobe beim Zusammenlegen von Stücken in der analytischen Pipeline).
+const ANALYTIC_EDGE_FACTOR: f64 = 4.0;
+
+/// Geometrische Prüfung des Ergebnisses, wenn Freiformflächen beteiligt sind, zusätzlich zu
+/// `validate` (das Kanten mit Freiformbeteiligung schon mit [`NURBS_EDGE_TOL`] prüft): Analytische
+/// Kanten auf analytischen Flächen liegen an `RESULT_CHECK_SECTIONS + 1` Stellen höchstens
+/// `ANALYTIC_EDGE_FACTOR · tol.linear` neben jeder Fläche, die sie benutzt (exakte Kurven), und
+/// die Kurvenenden jeder Kante liegen höchstens [`NURBS_NODE_TOL`] neben ihren Ecken. Pipeline
+/// und Verschweißen arbeiten mit der weiteren Knotentoleranz; ein Gebilde dünner als diese (etwa
+/// ein Deckel 1e-5 unter einer Mantelkante) würde sonst still zu einer Fläche verschmolzen, deren
+/// Kanten neben ihr liegen. Rein analytische Operationen laufen nicht hierüber (unverändert).
+fn check_freeform_result(s: &Solid, tol: &Tolerance) -> Result<(), BooleanError> {
+    let limit = ANALYTIC_EDGE_FACTOR * tol.linear;
+    let fail = || BooleanError::Unsupported(THIN_FEATURE.into());
+    for (_, e) in s.edges.iter() {
+        let (p0, p1) = (e.curve.point(e.t0), e.curve.point(e.t1));
+        if !within(p0.distance(s.vertices[e.start].point), NURBS_NODE_TOL)
+            || !within(p1.distance(s.vertices[e.end].point), NURBS_NODE_TOL)
+        {
+            return Err(fail());
+        }
+    }
+    for (_, face) in s.faces.iter() {
+        for lp in std::iter::once(&face.outer).chain(face.inner.iter()) {
+            for he in &lp.half_edges {
+                let e = &s.edges[he.edge];
+                // Kanten mit Freiformbeteiligung hat `validate` schon so geprüft.
+                if matches!(e.curve, Curve::Nurbs(_)) || matches!(face.surface, Surface::Nurbs(_)) {
+                    continue;
+                }
+                let off = (0..=RESULT_CHECK_SECTIONS).any(|k| {
+                    let t = e.t0 + (e.t1 - e.t0) * k as f64 / RESULT_CHECK_SECTIONS as f64;
+                    // auch NaN gilt als „neben der Fläche“
+                    !within(face.surface.implicit(e.curve.point(t)).abs(), limit)
+                });
+                if off {
+                    return Err(fail());
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Fehler für ein Ergebnis, das den Validator nicht besteht.

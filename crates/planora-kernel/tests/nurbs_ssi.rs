@@ -363,12 +363,13 @@ fn invalid_tolerances_are_a_named_error_not_a_panic() {
 }
 
 #[test]
-fn booleans_with_nurbs_faces_report_the_missing_classification_by_name() {
-    // Seit Task 9 schneidet und teilt die Pipeline Freiformflächen; die Lage eines Flächenstücks
-    // zu einem Körper mit Freiformfläche (Strahl gegen Freiformfläche) folgt erst in Task 10.
-    // Bis dahin ergibt jede solche Operation die benannte Meldung – ohne Schnitt (Würfel ganz im
-    // Körper) wie bei Durchdringung, nie ein Ergebnis.
-    use planora_kernel::boolean::{BoolOp, BooleanError, boolean};
+fn booleans_with_nurbs_faces_give_valid_results() {
+    // Seit Task 10 ordnet der Strahlschnitt Flächenstücke auch gegen Freiformflächen ein (bis
+    // Task 9 stand hier die benannte Meldung „Lage zur Freiformfläche lässt sich nicht
+    // bestimmen“). Ohne Schnitt (Würfel ganz im Körper) ist die Vereinigung der Körper selbst,
+    // bei Durchdringung ein gültiger Körper mit mehr Flächen; Volumen prüft `nurbs_boolean.rs`.
+    use planora_kernel::boolean::{BoolOp, boolean};
+    use planora_kernel::validate;
     use planora_kernel::{AnalyticKernel, Kernel, Profile, ProfileLoop};
     let ellipse = NurbsCurve::elliptic_arc(
         DVec3::ZERO,
@@ -390,9 +391,9 @@ fn booleans_with_nurbs_faces_report_the_missing_classification_by_name() {
             5.0,
         )
         .unwrap();
-    for (size, at) in [
-        (2.0, DVec3::new(1.5, 0.5, 1.0)),
-        (1.0, DVec3::new(-0.5, -0.5, 2.0)),
+    for (size, at, inside) in [
+        (2.0, DVec3::new(1.5, 0.5, 1.0), false),
+        (1.0, DVec3::new(-0.5, -0.5, 2.0), true),
     ] {
         let cube = k
             .transform(
@@ -400,12 +401,12 @@ fn booleans_with_nurbs_faces_report_the_missing_classification_by_name() {
                 &planora_math::DMat4::from_translation(at),
             )
             .unwrap();
-        match boolean(&body, &cube, BoolOp::Union, &tol()) {
-            Err(BooleanError::Unsupported(msg)) => assert!(
-                msg.contains("Lage zur Freiformfläche lässt sich nicht bestimmen"),
-                "{msg}"
-            ),
-            other => panic!("{other:?}"),
+        let r = boolean(&body, &cube, BoolOp::Union, &tol()).unwrap_or_else(|e| panic!("{e}"));
+        let rep = validate(&r).unwrap();
+        if inside {
+            assert_eq!(rep.faces, body.faces.len(), "Würfel ganz im Körper");
+        } else {
+            assert!(rep.faces > body.faces.len(), "{rep:?}");
         }
     }
 }

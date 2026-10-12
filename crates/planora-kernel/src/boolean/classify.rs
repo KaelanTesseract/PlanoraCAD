@@ -8,15 +8,19 @@
 use super::error::BooleanError;
 use super::roots::{CurveSurface, curve_surface_roots};
 use super::seg::Seg;
+use super::seg_is_freeform;
 use super::split::Region;
 use super::uv::{
-    Containment, FaceGeom, face_geom, loop_points, point_in_face, points_to_uv, samples, winding,
+    Containment, FaceGeom, face_geom, face_polys, loop_points, point_in_face, point_in_face_at,
+    points_to_uv, samples, winding,
 };
 use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
+use crate::nurbs_surface::{NurbsSurfaceData, RAY_GRAZING_COS};
 use crate::topology::{Edge, Face, Solid};
 use crate::validate::point_surface_tol;
 use planora_math::{DVec2, DVec3, Tolerance};
+use std::cell::OnceCell;
 
 /// Lage eines Flächenstücks relativ zum anderen Körper.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,13 +66,15 @@ fn outward_normal(g: &FaceGeom, p: DVec3) -> DVec3 {
 
 /// Liegt `p` auf einer Fläche von `other`? Liefert die Außennormale dieser Fläche.
 fn on_surface(other: &[FaceGeom], p: DVec3, tol: &Tolerance) -> Option<DVec3> {
-    other
-        .iter()
-        .find(|g| {
-            g.surface.implicit(p).abs() <= point_surface_tol(&g.surface, tol)
-                && point_in_face(g, p, tol) != Containment::Outside
-        })
-        .map(|g| outward_normal(g, p))
+    on_surface_face(other, p, tol).map(|g| outward_normal(g, p))
+}
+
+/// Die Fläche von `other`, auf der `p` liegt (siehe [`on_surface`]).
+fn on_surface_face<'a>(other: &'a [FaceGeom], p: DVec3, tol: &Tolerance) -> Option<&'a FaceGeom> {
+    other.iter().find(|g| {
+        g.surface.implicit(p).abs() <= point_surface_tol(&g.surface, tol)
+            && point_in_face(g, p, tol) != Containment::Outside
+    })
 }
 
 /// Strahllänge, die sicher aus dem Körper hinausreicht (von `p` aus gemessen).
@@ -137,18 +143,62 @@ fn near_boundary(g: &FaceGeom, p: DVec3, tol: &Tolerance) -> bool {
         .any(|s| s.closest(p).1 <= tol.linear + SAG_SAFETY * chord_sag(s))
 }
 
+/// Breite des Bands um die Randkanten (und Pole) einer Freiformfläche, als Bruchteil der
+/// Strahllänge: Ein Treffer darin ist unsicher (Randpolygone im Parameterraum, Rückrechnung),
+/// es wird die nächste Strahlrichtung versucht.
+const FREEFORM_BOUNDARY_BAND: f64 = 0.01;
+
+/// Liegt der Treffer `hit` auf der Freiformfläche `g` im Band [`FREEFORM_BOUNDARY_BAND`] `· reach`
+/// um eine Randkante oder einen Pol?
+fn near_freeform_boundary(g: &FaceGeom, d: &NurbsSurfaceData, hit: DVec3, reach: f64) -> bool {
+    let band = FREEFORM_BOUNDARY_BAND * reach;
+    let u0 = d.surface().domain().0.0;
+    g.loops.iter().flatten().any(|s| s.closest(hit).1 <= band)
+        || d.poles_v()
+            .iter()
+            .any(|pv| d.point(u0, *pv).distance(hit) <= band)
+}
+
 /// Strahlverfahren: `Some(true)` = innen, `Some(false)` = außen, `None` = mehrdeutig
 /// (Treffer auf oder dicht an einem Rand oder einer Naht, Berührung, Strahl liegt in einer Fläche).
 ///
-/// Freiformflächen: Der Strahlschnitt folgt erst (Task 10); bis dahin ist jeder Strahl gegen einen
-/// Körper mit Freiformfläche mehrdeutig (`None`).
-fn cast(other: &[FaceGeom], p: DVec3, dir: DVec3, reach: f64, tol: &Tolerance) -> Option<bool> {
-    if other.iter().any(|g| matches!(g.surface, Surface::Nurbs(_))) {
-        return None;
-    }
+/// Freiformflächen: Strahlschnitt über [`NurbsSurfaceData::ray_hits_checked`]; unsichere Blätter,
+/// Streifschüsse (`|dir · n| <` [`RAY_GRAZING_COS`]) und Treffer im Randband
+/// [`near_freeform_boundary`] machen den Strahl mehrdeutig. `polys` hält die Randpolygone der
+/// Flächen im Parameterraum (nur für Freiformflächen, beim ersten Treffer berechnet).
+fn cast(
+    other: &[FaceGeom],
+    polys: &[OnceCell<Vec<Vec<DVec2>>>],
+    p: DVec3,
+    dir: DVec3,
+    reach: f64,
+    tol: &Tolerance,
+) -> Option<bool> {
     let ray = Curve::Line { origin: p, dir };
     let mut hits = 0;
-    for g in other {
+    for (i, g) in other.iter().enumerate() {
+        if let Surface::Nurbs(d) = &g.surface {
+            for (t, u, v) in d.ray_hits_checked(p, dir, reach)? {
+                if t <= tol.linear {
+                    continue;
+                }
+                let hit = p + dir * t;
+                let n = d.normal(u, v);
+                if n == DVec3::ZERO || (dir.dot(n) / n.length()).abs() < RAY_GRAZING_COS {
+                    return None;
+                }
+                if near_freeform_boundary(g, d, hit, reach) {
+                    return None;
+                }
+                let polys = polys[i].get_or_init(|| face_polys(g));
+                match point_in_face_at(g, polys, hit, (u, v), tol) {
+                    Containment::Boundary => return None,
+                    Containment::Inside => hits += 1,
+                    Containment::Outside => {}
+                }
+            }
+            continue;
+        }
         match curve_surface_roots(&ray, 0.0, reach, &g.surface, tol) {
             CurveSurface::Lies => return None,
             CurveSurface::Roots(rs) => {
@@ -178,22 +228,41 @@ fn cast(other: &[FaceGeom], p: DVec3, dir: DVec3, reach: f64, tol: &Tolerance) -
     Some(hits % 2 == 1)
 }
 
-/// Meldung, solange sich die Lage zu einem Körper mit Freiformfläche nicht bestimmen lässt.
-pub(crate) const FREEFORM_CLASSIFICATION: &str =
-    "Die Lage zur Freiformfläche lässt sich nicht bestimmen";
+/// Meldung, wenn gegen einen Körper mit Freiformfläche keine zwei Strahlrichtungen eindeutig sind.
+pub(crate) const FREEFORM_GRAZING: &str =
+    "Die Lage des Flächenstücks zum Körper ist nicht eindeutig bestimmbar (Streifschuss)";
 
-/// Strahlverfahren mit allen festen Richtungen, bis eine eindeutig ist. Hat der Körper eine
-/// Freiformfläche, ist jeder Strahl mehrdeutig (siehe [`cast`]): dann sofort die benannte
-/// Meldung [`FREEFORM_CLASSIFICATION`] statt aller Richtungen.
+/// Meldung, wenn sich zwei eindeutige Strahlrichtungen gegen einen Körper mit Freiformfläche
+/// widersprechen (ein Treffer wurde übersehen oder doppelt gezählt).
+pub(crate) const FREEFORM_RAYS_DISAGREE: &str = "Die Lage des Flächenstücks zum Körper ist nicht eindeutig bestimmbar (die Teststrahlen widersprechen sich)";
+
+/// Strahlverfahren mit allen festen Richtungen, bis eine eindeutig ist.
+///
+/// Hat der Körper eine Freiformfläche, müssen **zwei** eindeutige Richtungen dasselbe ergeben
+/// (Gegenprobe gegen einen übersehenen Treffer der numerischen Strahlrechnung); widersprechen sie
+/// sich: [`FREEFORM_RAYS_DISAGREE`]; gibt es keine zwei eindeutigen: [`FREEFORM_GRAZING`].
+/// Rein analytische Körper: unverändert die erste eindeutige Richtung.
 fn cast_all(other: &[FaceGeom], p: DVec3, tol: &Tolerance) -> Result<bool, BooleanError> {
-    if other.iter().any(|g| matches!(g.surface, Surface::Nurbs(_))) {
-        return Err(BooleanError::Unsupported(FREEFORM_CLASSIFICATION.into()));
-    }
     let reach = reach(other, p);
-    directions()
-        .into_iter()
-        .find_map(|d| cast(other, p, d, reach, tol))
-        .ok_or(BooleanError::AmbiguousClassification)
+    let polys: Vec<OnceCell<Vec<Vec<DVec2>>>> = other.iter().map(|_| OnceCell::new()).collect();
+    if !other.iter().any(|g| matches!(g.surface, Surface::Nurbs(_))) {
+        return directions()
+            .into_iter()
+            .find_map(|d| cast(other, &polys, p, d, reach, tol))
+            .ok_or(BooleanError::AmbiguousClassification);
+    }
+    let mut first: Option<bool> = None;
+    for d in directions() {
+        let Some(inside) = cast(other, &polys, p, d, reach, tol) else {
+            continue;
+        };
+        match first {
+            None => first = Some(inside),
+            Some(f) if f == inside => return Ok(inside),
+            Some(_) => return Err(BooleanError::Unsupported(FREEFORM_RAYS_DISAGREE.into())),
+        }
+    }
+    Err(BooleanError::Unsupported(FREEFORM_GRAZING.into()))
 }
 
 /// Lage eines Punkts relativ zu einem Körper (gegeben durch seine Flächen).
@@ -248,6 +317,25 @@ fn interior_point(face: &FaceGeom, region: &Region, tol: &Tolerance) -> Option<D
     }
     let shifts = shifts(&face.surface);
     let sgn = if face.same_sense { 1 } else { -1 };
+    let segs = || region.outer.iter().chain(region.holes.iter().flatten());
+    // Mit Freiformkurven im Rand ist `Seg::closest` teuer (Abtastung plus Goldener Schnitt je
+    // Rasterpunkt): Dann wird der Abstand zum Rand über einen feinen Streckenzug geschätzt und
+    // nur für den gewählten Punkt genau nachgerechnet. Ohne Freiformkurven unverändert.
+    let polyline: Option<Vec<(DVec3, DVec3)>> = segs().any(seg_is_freeform).then(|| {
+        segs()
+            .flat_map(|s| {
+                let n = samples(s) * INTERIOR_POLYLINE_REFINE;
+                (0..n).map(move |k| (s.at(k as f64 / n as f64), s.at((k + 1) as f64 / n as f64)))
+            })
+            .collect()
+    });
+    let boundary_distance = |q: DVec3| match &polyline {
+        Some(lines) => lines
+            .iter()
+            .map(|(a, b)| segment_distance(q, *a, *b))
+            .fold(f64::MAX, f64::min),
+        None => segs().map(|s| s.closest(q).1).fold(f64::MAX, f64::min),
+    };
     let n = 24;
     let mut best: Option<(DVec3, f64)> = None;
     for i in 0..n {
@@ -266,18 +354,33 @@ fn interior_point(face: &FaceGeom, region: &Region, tol: &Tolerance) -> Option<D
                 continue;
             }
             let q = face.surface.point(uv.x, uv.y);
-            let d = region
-                .outer
-                .iter()
-                .chain(region.holes.iter().flatten())
-                .map(|s| s.closest(q).1)
-                .fold(f64::MAX, f64::min);
+            let d = boundary_distance(q);
             if best.is_none_or(|(_, bd)| d > bd) {
                 best = Some((q, d));
             }
         }
     }
+    if polyline.is_some() {
+        // genauer Abstand des gewählten Punkts
+        best = best.map(|(q, _)| (q, segs().map(|s| s.closest(q).1).fold(f64::MAX, f64::min)));
+    }
     best.filter(|(_, d)| *d > tol.linear * 2.0).map(|(q, _)| q)
+}
+
+/// Verfeinerung des Streckenzugs, mit dem `interior_point` den Randabstand bei Freiformkurven
+/// schätzt (Vielfaches der gewöhnlichen Abtastung `samples`).
+const INTERIOR_POLYLINE_REFINE: usize = 4;
+
+/// Abstand von `q` zur Strecke `ab`.
+fn segment_distance(q: DVec3, a: DVec3, b: DVec3) -> f64 {
+    let ab = b - a;
+    let len2 = ab.length_squared();
+    let t = if len2 > 0.0 {
+        ((q - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    q.distance(a + ab * t)
 }
 
 /// Ein Punkt im Inneren der Fläche `face` (nicht auf ihrem Rand und nicht auf einer Naht), mit
@@ -306,6 +409,14 @@ pub fn edge_probe_point(solid: &Solid, edge: Id<Edge>) -> Option<DVec3> {
     Some(e.curve.point(0.5 * (e.t0 + e.t1)))
 }
 
+/// Kleinster Betrag des Kosinus zwischen den Normalen eines Flächenstücks und der Fläche, auf der
+/// es (mit Freiformbeteiligung) liegen soll; deckungsgleiche Flächen haben `|cos| ≈ 1`.
+const ON_SURFACE_MIN_COS: f64 = 0.5;
+
+/// Meldung, wenn ein Flächenstück eine Freiformfläche nur schräg berührt (siehe
+/// [`classify_region`]).
+pub(crate) const OBLIQUE_ON_FREEFORM: &str = "Ein Flächenstück liegt schräg auf einer Freiformfläche des anderen Körpers; die Lage lässt sich nicht sicher bestimmen";
+
 /// Ordnet ein Flächenstück relativ zum anderen Körper ein.
 pub fn classify_region(
     face: &FaceGeom,
@@ -315,7 +426,16 @@ pub fn classify_region(
 ) -> Result<Class, BooleanError> {
     let q = interior_point(face, region, tol).ok_or(BooleanError::AmbiguousClassification)?;
     let n = outward_normal(face, q);
-    if let Some(n2) = on_surface(other, q, tol) {
+    if let Some(g) = on_surface_face(other, q, tol) {
+        let n2 = outward_normal(g, q);
+        // Mit Freiformbeteiligung reicht die weitere Toleranz `NURBS_EDGE_TOL` für „liegt auf“:
+        // Ein Stück, das die andere Fläche dort nur schräg trifft, ist nicht deckungsgleich (ein
+        // fehlender Schnitt oder ein Gebilde unter der Toleranz); OnSame/OnOpposite wären geraten.
+        let freeform =
+            matches!(face.surface, Surface::Nurbs(_)) || matches!(g.surface, Surface::Nurbs(_));
+        if freeform && n.dot(n2).abs() < ON_SURFACE_MIN_COS {
+            return Err(BooleanError::Unsupported(OBLIQUE_ON_FREEFORM.into()));
+        }
         return Ok(if n.dot(n2) > 0.0 {
             Class::OnSame
         } else {

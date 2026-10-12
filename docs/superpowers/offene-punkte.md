@@ -222,6 +222,12 @@ Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen m
 - *Berührung statt Schnitt:* Zwei Flächen, die sich nur berühren (tangential eintauchen), werden jetzt immer abgelehnt. Zwei gleich dicke Zylinder auf derselben Achse, die sich um 1 bis 10 tausendstel Millimeter überlappen, gelten als „Berührung“.
 - *Geschwindigkeit:* Die Suche nach dem nächsten Punkt auf einer Freiformfläche ist für Punkte etwas abseits der Fläche (0,3 mm) bei kleinen Beulenflächen bis etwa dreimal langsamer als vorher; nahe an der Fläche ist sie gleich schnell.
 
+**Boolesche Operationen mit Freiformflächen (Stand nach Task 10)**
+- *Sehr dünne Stellen:* Entstehen beim Verschneiden Stellen, die dünner als etwa 5 hundertstel Millimeter sind (Freiformfläche streift einen Quader nur knapp, ein Deckel liegt knapp unter einer Kante), meldet das Programm oft einen Fehler, obwohl die gleiche Operation mit einfachen Flächen gelingt. Ein falsches Ergebnis entsteht dabei nicht.
+- *Sehr kleine Freiformkörper:* Körper mit Freiformfläche, die kleiner als etwa 1 hundertstel Millimeter sind, lassen sich nicht verschneiden (Meldung „Streifschuss“).
+- *Netz schmaler Streifen:* Ist ein Teil der Oberfläche schmaler als die Genauigkeit des Netzes, kann das Netz dort Lücken haben, ohne dass es gemeldet wird. Betrifft nur winzige Streifen; der Körper selbst ist richtig.
+- *Voller Ring als Freiformfläche* ist nicht geprüft, weil das Programm solche Körper noch nicht erzeugt.
+
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).
 - `eframe` mit Standard-Features baut auch den `glow`-Renderer mit.

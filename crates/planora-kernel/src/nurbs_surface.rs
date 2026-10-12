@@ -2,8 +2,12 @@
 //! (Naht wie beim Zylinder), erkannte Pole und ein beim ersten Gebrauch aufgebautes Raster aus
 //! Stützpunkten für die Suche nach dem nächsten Punkt.
 
+mod ray;
+
+pub use ray::RAY_GRAZING_COS;
+
 use crate::error::KernelError;
-use planora_math::nurbs::{MAX_CONTROL_TOTAL, NurbsSurface};
+use planora_math::nurbs::{BezierPatch, MAX_CONTROL_TOTAL, NurbsSurface};
 use planora_math::{DVec3, Frame};
 use std::sync::OnceLock;
 
@@ -121,6 +125,8 @@ pub struct NurbsSurfaceData {
     grid: OnceLock<Grid>,
     /// Bézier-Flicken für `patch_check` (`None`, wenn die Zerlegung zu groß wäre).
     patches: OnceLock<Vec<PatchNode>>,
+    /// Bézier-Flicken für den Strahlschnitt (None, wenn die Zerlegung zu groß wäre).
+    bezier: OnceLock<Option<Vec<BezierPatch>>>,
 }
 
 impl std::fmt::Debug for NurbsSurfaceData {
@@ -213,6 +219,7 @@ impl NurbsSurfaceData {
             poles_v,
             grid: OnceLock::new(),
             patches: OnceLock::new(),
+            bezier: OnceLock::new(),
         };
         let (lo, hi) = data.control_bounds();
         data.frame.origin = (lo + hi) * 0.5;

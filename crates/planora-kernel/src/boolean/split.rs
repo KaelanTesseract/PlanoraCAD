@@ -232,11 +232,25 @@ fn angle(n: DVec3, e1: DVec3, t: DVec3) -> f64 {
     t.dot(e2).atan2(t.dot(e1))
 }
 
-fn same_piece(a: &Seg, b: &Seg, tol: &Tolerance) -> bool {
+/// Sind `a` und `b` dasselbe Stück (gleiche Enden, Mitte innerhalb `4 · tol.linear`)?
+///
+/// Mit Freiformbeteiligung (`freeform`, `tol` ist dann die Knotentoleranz) strenger: Mitte und
+/// Viertelpunkte von `b` liegen höchstens `tol.linear` neben `a` (Abstand zur Kurve). Die
+/// Mittenprobe mit `4 · tol.linear` (8e-5) legte sonst einen flachen Bogen mit seiner Sehne
+/// zusammen (Übergabe Task 9: Quader `[3 − d, 13] × [−5, 5]²` gegen einen Freiformzylinder r = 3,
+/// d bis 5e-5): Der Bogen fehlte in der einen Fläche, während die Nachbarfläche ihn behielt.
+/// Darunter (Pfeilhöhe bis zur Knotentoleranz) gilt ein Stück als Randstück; dass das Ergebnis
+/// dann zusammenpasst, prüft `check_freeform_result` nach dem Vernähen.
+fn same_piece(a: &Seg, b: &Seg, tol: &Tolerance, freeform: bool) -> bool {
     let ends = (a.start().distance(b.start()) <= tol.linear
         && a.end().distance(b.end()) <= tol.linear)
         || (a.start().distance(b.end()) <= tol.linear && a.end().distance(b.start()) <= tol.linear);
-    ends && a.at(0.5).distance(b.at(0.5)) <= tol.linear * 4.0
+    if !freeform {
+        return ends && a.at(0.5).distance(b.at(0.5)) <= tol.linear * 4.0;
+    }
+    ends && [0.25, 0.5, 0.75]
+        .iter()
+        .all(|f| a.closest(b.at(*f)).1 <= tol.linear)
 }
 
 fn find(parent: &mut [usize], mut x: usize) -> usize {
@@ -265,10 +279,8 @@ pub fn split_face(
         face.loops.iter().flatten().chain(sections),
         tol,
     )?;
-    let ptol = pipeline_tol(
-        tol,
-        face_is_freeform(face) || sections.iter().any(seg_is_freeform),
-    );
+    let freeform = face_is_freeform(face) || sections.iter().any(seg_is_freeform);
+    let ptol = pipeline_tol(tol, freeform);
     let tol = &ptol;
     let finite = |s: &Seg| {
         s.t0.is_finite()
@@ -317,12 +329,12 @@ pub fn split_face(
     for s in secs {
         let mut on_boundary = false;
         for (bi, b) in boundary.iter().enumerate() {
-            if same_piece(b, &s, tol) {
+            if same_piece(b, &s, tol, freeform) {
                 on_boundary = true;
                 cut_seam[bi] = true;
             }
         }
-        if !on_boundary && !unique.iter().any(|u| same_piece(u, &s, tol)) {
+        if !on_boundary && !unique.iter().any(|u| same_piece(u, &s, tol, freeform)) {
             unique.push(s);
         }
     }
@@ -333,13 +345,24 @@ pub fn split_face(
         .map(|(b, &cut)| !cut && on_seam(&seams, b, tol))
         .collect();
 
-    // Schnitte, die sich im Inneren kreuzen, hätte der Aufrufer teilen müssen.
+    // Schnitte, die sich im Inneren kreuzen, hätte der Aufrufer teilen müssen. Mit
+    // Freiformbeteiligung fallen gemeinsame Enden zweier Stücke nur bis auf die Knotentoleranz
+    // zusammen; ein Treffer dort ist das gemeinsame Ende, keine Kreuzung im Inneren: Zählt nur,
+    // wer weiter als der Knotenabstand von den Enden beider Stücke liegt. Analytisch unverändert.
+    let node_gap = tol.linear * 4.0;
     for (i, a) in unique.iter().enumerate() {
         for b in &unique[i + 1..] {
             let inner = |f: f64| f > 1e-6 && f < 1.0 - 1e-6;
+            let inner_at = |s: &Seg, f: f64| {
+                inner(f)
+                    && (!freeform || {
+                        let p = s.at(f);
+                        p.distance(s.start()) > node_gap && p.distance(s.end()) > node_gap
+                    })
+            };
             if seg_intersections(a, b, tol)
                 .iter()
-                .any(|&(fa, fb)| inner(fa) && inner(fb))
+                .any(|&(fa, fb)| inner_at(a, fa) && inner_at(b, fb))
             {
                 return Err(BooleanError::AmbiguousContact);
             }

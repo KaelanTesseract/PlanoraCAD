@@ -293,14 +293,46 @@ pub enum Containment {
 
 /// Liegt `p` (auf der Fläche) innerhalb der beschnittenen Fläche, auf ihrem Rand oder außerhalb?
 pub fn point_in_face(f: &FaceGeom, p: DVec3, tol: &Tolerance) -> Containment {
-    if f.loops
+    if on_face_boundary(f, p, tol) {
+        return Containment::Boundary;
+    }
+    let uv = f.surface.project(p);
+    winding_containment(f, &face_polys(f), uv)
+}
+
+/// Liegt `p` höchstens `tol.linear` von einer Randkante der Fläche entfernt?
+fn on_face_boundary(f: &FaceGeom, p: DVec3, tol: &Tolerance) -> bool {
+    f.loops
         .iter()
         .flatten()
         .any(|s| s.closest(p).1 <= tol.linear)
-    {
+}
+
+/// Randschleifen der Fläche als Polygone im Parameterraum (wie in [`point_in_face`]).
+pub(crate) fn face_polys(f: &FaceGeom) -> Vec<Vec<DVec2>> {
+    f.loops
+        .iter()
+        .map(|lp| points_to_uv(&f.surface, f.same_sense, &loop_points(lp)))
+        .collect()
+}
+
+/// Wie [`point_in_face`] für einen Punkt `p` mit bekannten Parametern `uv` (etwa einem
+/// Strahltreffer) und vorab berechneten Polygonen [`face_polys`].
+pub(crate) fn point_in_face_at(
+    f: &FaceGeom,
+    polys: &[Vec<DVec2>],
+    p: DVec3,
+    uv: (f64, f64),
+    tol: &Tolerance,
+) -> Containment {
+    if on_face_boundary(f, p, tol) {
         return Containment::Boundary;
     }
-    let (u, v) = f.surface.project(p);
+    winding_containment(f, polys, uv)
+}
+
+/// Windungszahl um `(u, v)` über alle Polygone (mit Periodenverschiebungen).
+fn winding_containment(f: &FaceGeom, polys: &[Vec<DVec2>], (u, v): (f64, f64)) -> Containment {
     let shifts = |period: Option<f64>| match period {
         Some(t) => vec![-t, 0.0, t],
         None => vec![0.0],
@@ -308,11 +340,10 @@ pub fn point_in_face(f: &FaceGeom, p: DVec3, tol: &Tolerance) -> Containment {
     let u_shifts = shifts(f.surface.u_period());
     let v_shifts = shifts(f.surface.v_period());
     let mut total = 0;
-    for lp in &f.loops {
-        let poly = points_to_uv(&f.surface, f.same_sense, &loop_points(lp));
+    for poly in polys {
         for du in &u_shifts {
             for dv in &v_shifts {
-                total += winding(&poly, DVec2::new(u + du, v + dv));
+                total += winding(poly, DVec2::new(u + du, v + dv));
             }
         }
     }
