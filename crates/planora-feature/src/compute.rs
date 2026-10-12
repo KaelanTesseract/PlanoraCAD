@@ -3,7 +3,8 @@
 use crate::error::FeatureError;
 use crate::model::{BodyRef, Document, EdgeCopy, FeatureKind, SketchFeature, SketchPlane};
 use crate::refs::{FaceRef, resolve_edge, resolve_face};
-use planora_kernel::{BoolOp, Kernel, Solid};
+use planora_kernel::boolean::BooleanError;
+use planora_kernel::{BoolOp, Kernel, Solid, SurfaceKind};
 use planora_math::{DMat4, DVec3};
 use planora_mesh::{TessellationOptions, boolean_volume_plausible, mass_properties, tessellate};
 use planora_sketch::{Sketch, extrude_profile, plane_of_face, revolve_profile};
@@ -188,7 +189,7 @@ fn compute_unchecked(
             }
             let mut result = kernel
                 .boolean(a, b, *op)
-                .map_err(|e| FeatureError::Kernel(e.to_string()))?;
+                .map_err(|e| boolean_error(a, b, &e))?;
             check_volume(doc, *op, a, b, &result)?;
             result.assign_origin(id.0);
             Ok(Computed::bodies(vec![result]))
@@ -201,6 +202,24 @@ fn compute_unchecked(
             Ok(Computed::bodies(vec![moved]))
         }
     }
+}
+
+/// Fehlermeldung einer gescheiterten Booleschen Operation. Ist ein Eingangskörper mit
+/// Freiformflächen im Spiel, sagt die Meldung das ausdrücklich: Das Ergebnis lässt sich dann
+/// nur in Grenzen berechnen (siehe Spec §13), und der Nutzer soll den Grund erkennen. Ein leeres
+/// Ergebnis ist kein Grenzfall des Rechners und bleibt unverändert.
+fn boolean_error(a: &Solid, b: &Solid, e: &BooleanError) -> FeatureError {
+    let freeform = |s: &Solid| {
+        s.faces
+            .iter()
+            .any(|(_, f)| f.surface.kind() == SurfaceKind::Nurbs)
+    };
+    if matches!(e, BooleanError::EmptyResult) || !(freeform(a) || freeform(b)) {
+        return FeatureError::Kernel(e.to_string());
+    }
+    FeatureError::Kernel(format!(
+        "Mit Freiformflächen nicht berechenbar: {e}. Hilfe: Lage oder Maße eines Körpers leicht ändern"
+    ))
 }
 
 /// Grundkörper: Kernel-Ergebnis, verschoben um `origin`, geprüft und markiert.

@@ -1,8 +1,8 @@
 //! Features aus Skizzen mit Ellipse und Spline: Extrusion, Rotation, Neuberechnung.
 
 use planora_feature::*;
-use planora_kernel::{Kernel, Solid, SurfaceKind};
-use planora_math::{DVec2, Frame, PI, Tolerance};
+use planora_kernel::{BoolOp, Kernel, Solid, SurfaceKind};
+use planora_math::{DVec2, DVec3, Frame, PI, Tolerance};
 use planora_mesh::{TessellationOptions, mass_properties, tessellate};
 use planora_sketch::ConstraintKind as K;
 use planora_sketch::model::Sketch;
@@ -273,4 +273,194 @@ fn old_documents_may_extrude_a_different_profile() {
         "extrudiert wird die Ellipse, nicht mehr das Rechteck"
     );
     assert_rel(volume(solid), PI * 4.0 * 2.0 * 3.0, "Ellipsenzylinder");
+}
+
+/// Ellipsen-Skizze mit beliebigen Halbachsen (beide bemaßt).
+fn ellipse_sketch_ab(a: f64, b: f64) -> (Sketch, ConstraintId) {
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let c = sk.add_point(0.0, 0.0).unwrap();
+    let e = sk.add_ellipse(c, DVec2::new(a, 0.0), b).unwrap();
+    sk.add_constraint(K::Fixed(c, 0.0, 0.0)).unwrap();
+    sk.add_constraint(K::EllipseAngle(e, 0.0)).unwrap();
+    let major = sk.add_constraint(K::EllipseMajor(e, a)).unwrap();
+    sk.add_constraint(K::EllipseMinor(e, b)).unwrap();
+    (sk, major)
+}
+
+fn body(feature: FeatureId) -> BodyRef {
+    BodyRef { feature, index: 0 }
+}
+
+/// Ellipsenzylinder (a = 5, b = 3, Höhe 4) und ein Quader, dessen Fläche bei `x = 5 - depth`
+/// liegt und sich nach +x erstreckt (Tiefe, mit der er in den Zylinder ragt).
+fn ellipse_and_box(depth: f64) -> (Document, FeatureId, FeatureId, FeatureId, ConstraintId) {
+    let mut d = Document::new();
+    let (sk, major) = ellipse_sketch_ab(5.0, 3.0);
+    let s = d.add_feature("Skizze 1", feature_sketch(sk)).unwrap();
+    let e = d
+        .add_feature(
+            "Extrusion 1",
+            FeatureKind::Extrude {
+                sketch: s,
+                profile: 0,
+                height: 4.0,
+            },
+        )
+        .unwrap();
+    let b = d
+        .add_feature(
+            "Quader 1",
+            FeatureKind::Box {
+                size: DVec3::new(10.0, 10.0, 10.0),
+                origin: DVec3::new(5.0 - depth, -5.0, -3.0),
+            },
+        )
+        .unwrap();
+    (d, s, e, b, major)
+}
+
+#[test]
+fn a_boolean_with_a_freeform_body_follows_the_sketch_dimension() {
+    let (mut d, s, e, b, major) = ellipse_and_box(1.0);
+    let bo = d
+        .add_feature(
+            "Abzug 1",
+            FeatureKind::Boolean {
+                target: body(e),
+                tool: body(b),
+                op: BoolOp::Difference,
+            },
+        )
+        .unwrap();
+    let mv = d
+        .add_feature(
+            "Verschieben 1",
+            FeatureKind::Move {
+                body: body(bo),
+                delta: DVec3::new(2.0, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    for id in [s, e, b, bo, mv] {
+        assert_eq!(
+            d.feature(id).unwrap().status,
+            FeatureStatus::Ok,
+            "{:?}",
+            d.feature(id).unwrap().status
+        );
+    }
+    d.check_invariants().unwrap();
+    let vis = d.visible_bodies();
+    assert_eq!(vis.len(), 1);
+    d.kernel().validate(vis[0].solid).unwrap();
+    // Ellipse (a = 5, b = 3) bis x = 4 abgeschnitten: Segmentfläche der Ellipse.
+    let seg = |a: f64, b: f64, x: f64| {
+        let t = (x / a).acos();
+        a * b * (t - t.sin() * t.cos())
+    };
+    let ellipse_area = PI * 5.0 * 3.0;
+    let cut_area = seg(5.0, 3.0, 4.0);
+    let before = volume(vis[0].solid);
+    assert_rel(before, (ellipse_area - cut_area) * 4.0, "Abzug");
+
+    // Das Skizzen-Maß ändern (a = 6): Skizze, Extrusion, Abzug und Verschieben rechnen neu,
+    // der Quader bleibt im Zwischenspeicher.
+    let report = d
+        .update_with_report(s, |k| {
+            if let FeatureKind::Sketch(sf) = k {
+                sf.sketch.set_constraint_value(major, 6.0).unwrap();
+            }
+        })
+        .unwrap();
+    for id in [s, e, bo, mv] {
+        assert!(report.computed.contains(&id), "{id:?} neu berechnet");
+    }
+    assert!(!report.computed.contains(&b), "Quader nicht neu berechnet");
+    assert!(report.reused.contains(&b));
+    for id in [s, e, bo, mv] {
+        assert_eq!(d.feature(id).unwrap().status, FeatureStatus::Ok);
+    }
+    let after = volume(d.visible_bodies()[0].solid);
+    assert_rel(
+        after,
+        (PI * 6.0 * 3.0 - seg(6.0, 3.0, 4.0)) * 4.0,
+        "Abzug nach der Maßänderung",
+    );
+    assert!(after > before * 1.1);
+    d.check_invariants().unwrap();
+}
+
+/// Eine Lage, die der Rechner benannt ablehnt (Spec §13): Die Quaderfläche liegt 1e-3 mm
+/// innerhalb der Mantelspitze der Ellipse und schneidet den Mantel fast tangential.
+#[test]
+fn an_unsupported_freeform_boolean_reports_an_error_and_skips_dependents() {
+    let (mut d, _s, e, b, _) = ellipse_and_box(1e-3);
+    let bo = d
+        .add_feature(
+            "Abzug 1",
+            FeatureKind::Boolean {
+                target: body(e),
+                tool: body(b),
+                op: BoolOp::Difference,
+            },
+        )
+        .unwrap();
+    let mv = d
+        .add_feature(
+            "Verschieben 1",
+            FeatureKind::Move {
+                body: body(bo),
+                delta: DVec3::X,
+            },
+        )
+        .unwrap();
+    match &d.feature(bo).unwrap().status {
+        FeatureStatus::Error(m) => {
+            assert!(m.contains("Freiformfläche"), "{m}");
+            assert!(m.contains("tangential"), "die Ursache bleibt lesbar: {m}");
+        }
+        s => panic!("Fehler erwartet: {s:?}"),
+    }
+    assert!(
+        matches!(d.feature(mv).unwrap().status, FeatureStatus::Skipped(_)),
+        "{:?}",
+        d.feature(mv).unwrap().status
+    );
+    // Die Eingangskörper bleiben sichtbar (Ellipsenzylinder und Quader).
+    assert_eq!(d.visible_bodies().len(), 2);
+    d.check_invariants().unwrap();
+
+    // Behoben: Die Lage wird eindeutig, alles rechnet wieder.
+    d.update(b, |k| {
+        if let FeatureKind::Box { origin, .. } = k {
+            origin.x = 4.0;
+        }
+    })
+    .unwrap();
+    assert_eq!(d.feature(bo).unwrap().status, FeatureStatus::Ok);
+    assert_eq!(d.feature(mv).unwrap().status, FeatureStatus::Ok);
+    d.check_invariants().unwrap();
+}
+
+/// Ein leeres Ergebnis ist keine Grenze des Rechners und trägt den Freiform-Hinweis nicht.
+#[test]
+fn an_empty_freeform_result_keeps_its_plain_message() {
+    let (mut d, _s, e, b, _) = ellipse_and_box(0.0);
+    let bo = d
+        .add_feature(
+            "Schnitt 1",
+            FeatureKind::Boolean {
+                target: body(e),
+                tool: body(b),
+                op: BoolOp::Intersection,
+            },
+        )
+        .unwrap();
+    match &d.feature(bo).unwrap().status {
+        FeatureStatus::Error(m) => {
+            assert!(m.contains("leer"), "{m}");
+            assert!(!m.contains("Freiformfläche"), "{m}");
+        }
+        s => panic!("{s:?}"),
+    }
 }
