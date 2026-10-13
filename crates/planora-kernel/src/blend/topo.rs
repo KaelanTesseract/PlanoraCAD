@@ -12,11 +12,11 @@ use std::f64::consts::PI;
 /// Die Kugel hätte dort keine sichere Lage (Spec §3.4).
 pub const NEAR_TANGENT_ANGLE: f64 = 2.0 * PI / 180.0;
 
-/// Stellen (Bruchteile des Kantenbereichs), an denen Kantenwinkel und Konvexität geprüft werden;
-/// die mittlere liefert den gemeldeten Winkel.
 /// Mindestlänge der normierten Tangente (sonst null oder NaN; das gilt als fast tangential).
 const MIN_TANGENT_LEN: f64 = 0.5;
 
+/// Stellen (Bruchteile des Kantenbereichs), an denen Kantenwinkel und Konvexität geprüft werden;
+/// die mittlere liefert den gemeldeten Winkel.
 const ANGLE_PROBES: [f64; 3] = [0.25, 0.5, 0.75];
 
 /// Verwendung einer Kante in einer Schleife einer Fläche.
@@ -69,7 +69,7 @@ pub fn edge_uses(solid: &Solid, edge: Id<Edge>) -> Vec<EdgeUse> {
 
 /// Die beiden Seiten der Kante. `first_face` legt Fläche 1 fest (sonst die erste Verwendung).
 /// Fehler: Kante nicht im Körper, nicht genau zwei Verwendungen, Naht (beide Seiten dieselbe
-/// Fläche).
+/// Fläche) oder `first_face` grenzt nicht an die Kante.
 pub fn edge_sides(
     solid: &Solid,
     edge: Id<Edge>,
@@ -90,6 +90,11 @@ pub fn edge_sides(
     }
     let (a, b) = match first_face {
         Some(f) if uses[1].face == f => (uses[1], uses[0]),
+        Some(f) if uses[0].face != f => {
+            return Err(BlendError::InvalidInput(
+                "Die gewählte erste Fläche grenzt nicht an die Kante".into(),
+            ));
+        }
         _ => (uses[0], uses[1]),
     };
     Ok(EdgeSides { a, b })
@@ -111,6 +116,7 @@ fn edge_tangent(e: &Edge, t: f64) -> DVec3 {
 /// `(nA × nB) · T_A > 0` mit `T_A` = Laufrichtung der Halbkante in Fläche A (Schleifen laufen
 /// gegen den Uhrzeigersinn um die Außennormale). Fast tangentiale Flächen oder eine Schneide
 /// ergeben `NearlyTangent`, ein Wechsel zwischen konvex und konkav `Unsupported`.
+/// `sides` muss von `edge_sides` für dieselbe Kante stammen (sonst Panik bei fremden Ids).
 pub fn edge_angle(
     solid: &Solid,
     edge: Id<Edge>,
@@ -155,7 +161,8 @@ pub fn edge_angle(
 }
 
 /// Richtungen von der Kante in Fläche A bzw. B hinein (senkrecht zur Kante, in der Tangentialebene
-/// der Fläche) beim Kurvenparameter `t`. Das Innere einer Fläche liegt links ihrer Schleife,
+/// der Fläche) beim Kurvenparameter `t`. `sides` muss von `edge_sides` für dieselbe Kante stammen.
+/// Das Innere einer Fläche liegt links ihrer Schleife,
 /// also in Richtung `n × T`; Fläche B durchläuft die Kante entgegengesetzt.
 pub fn inward_directions(
     solid: &Solid,
