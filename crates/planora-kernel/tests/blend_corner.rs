@@ -325,7 +325,7 @@ fn triangle_prism() -> Solid {
 }
 
 #[test]
-fn oblique_corners_miter_but_get_no_sphere_yet() {
+fn oblique_corners_miter_and_get_a_sphere() {
     let s = triangle_prism();
     let top: Vec<Id<Edge>> = ["Wand 1", "Wand 2", "Wand 3"]
         .iter()
@@ -335,14 +335,12 @@ fn oblique_corners_miter_but_get_no_sphere_yet() {
     let r = blend(&s, &top, BlendKind::Fillet { radius: 1.0 }).unwrap();
     validate(&r.solid).unwrap();
     assert_eq!(r.solid.faces.len(), s.faces.len() + 3);
-    // Drei Kanten an einer schrägen Ecke: benannt (Stufe 2 nur rechtwinklig).
+    // Drei Kanten an einer schrägen Ecke: Kugelstück (Task 17; vorher nur rechtwinklig).
     let three = [top[0], top[1], edge_between(&s, "Wand 1", "Wand 2")];
-    match blend(&s, &three, BlendKind::Fillet { radius: 1.0 }) {
-        Err(BlendError::Corner(m)) => {
-            assert!(m.contains("rechtwinklig") && m.contains("Deckel"), "{m}")
-        }
-        other => panic!("{:?}", other.map(|b| b.solid.faces.len())),
-    }
+    let c = blend(&s, &three, BlendKind::Fillet { radius: 1.0 }).unwrap();
+    validate(&c.solid).unwrap();
+    assert_eq!(c.solid.faces.len(), s.faces.len() + 4);
+    assert!(names(&c.solid).contains(&"Ecke 1".to_string()));
 }
 
 #[test]
@@ -531,4 +529,41 @@ fn equal_sizes_at_an_oblique_prism_corner_name_the_missing_mirror_image() {
             other => panic!("{kind:?}: {:?}", other.map(|b| b.solid.faces.len())),
         }
     }
+}
+
+#[test]
+fn oblique_corners_of_three_planes_and_skin_corners() {
+    let tri = k()
+        .extrude(
+            &Profile {
+                outer: ProfileLoop::polygon(&[
+                    DVec2::new(0.0, 0.0),
+                    DVec2::new(10.0, 0.0),
+                    DVec2::new(5.0, 75f64.sqrt()),
+                ])
+                .unwrap(),
+                holes: vec![],
+            },
+            &Frame::WORLD,
+            6.0,
+        )
+        .unwrap();
+    let edges = [
+        edge_between(&tri, "Deckel", "Wand 1"),
+        edge_between(&tri, "Deckel", "Wand 2"),
+        edge_between(&tri, "Wand 1", "Wand 2"),
+    ];
+    let r = blend(&tri, &edges, BlendKind::Fillet { radius: 0.5 }).unwrap();
+    validate(&r.solid).unwrap();
+    assert!(names(&r.solid).contains(&"Ecke 1".to_string()));
+    // Variabler Radius an einer Ecke: benannt abgelehnt.
+    let b = k().make_box(DVec3::splat(10.0)).unwrap();
+    let two = [
+        edge_between(&b, "Deckel", "Wand 1"),
+        edge_between(&b, "Deckel", "Wand 2"),
+    ];
+    assert!(matches!(
+        blend(&b, &two, BlendKind::VariableFillet { points: vec![(0.0, 1.0), (1.0, 1.0)] }),
+        Err(BlendError::Corner(m)) if m.contains("variablem Radius")
+    ));
 }

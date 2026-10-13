@@ -1,7 +1,11 @@
 //! Ecken im Stil „rollende Kugel“ (Spec §4.3, R7, P6): Zwei gerundete Kanten an einer Ecke
 //! treffen sich an der winkelhalbierenden Ebene (Gehrung, nur bei spiegelgleicher Lage, sonst
 //! benannt abgelehnt); drei Rundungen mit gleichem Radius an einer Ecke aus drei Ebenen bekommen
-//! ein Kugelstück um den Punkt im Abstand r von allen drei Ebenen.
+//! ein Kugelstück um den Punkt im Abstand r von allen drei Ebenen (auch bei schiefen Ecken,
+//! Task 17; die Ebenen dürfen nur nicht fast parallel sein, `MIN_CORNER_DET`).
+//!
+//! Grenzen (bewusst): keine Ecken an Hautflächen (Freiformkanten, variabler Radius), keine
+//! Ecken aus drei Fasen, keine konkaven Kugelecken, keine Kugelecken an gekrümmten Flächen.
 //!
 //! Gehrung nur, wenn sie die Schnittmenge der einzeln gerundeten Körper ist (P6): Die dritte,
 //! ungerundete Kante an der Ecke muss dieselbe Art (konvex/konkav) haben wie die beiden
@@ -12,8 +16,8 @@
 
 use super::analytic::{EdgeGeom, outward_sense};
 use super::build::{
-    EndCut, ON_CURVE_FACTOR, blend_tol, chain_loop, cut_with, loop_patch, orient_outer, same_cut,
-    three_faces,
+    EndCut, ON_CURVE_FACTOR, blend_tol, chain_loop, cut_with, cut_within, loop_patch, orient_outer,
+    same_cut, three_faces,
 };
 use super::chain::leaving_direction;
 use super::error::BlendError;
@@ -24,9 +28,11 @@ use crate::ids::Id;
 use crate::topology::{Face, FaceTag, Solid, Vertex};
 use planora_math::{DVec3, Frame, PI, Tolerance};
 
-/// Größter Betrag von `nᵢ · nⱼ`, bei dem drei Flächen als paarweise rechtwinklig gelten
-/// (Stufe 2; Task 17 lockert).
-pub const ORTHOGONAL_TOL: f64 = 1e-9;
+/// Meldung für Ecken an Hautflächen (Task 17: bewusst nicht gelockert). Der Schnitt einer
+/// Hautfläche mit der Gehrungsebene bzw. Kugel wäre ein numerischer Schnitt ohne sichere
+/// Gegenprobe.
+const SKIN_CORNER: &str =
+    "Ecken an Freiformflächen oder mit variablem Radius werden nicht unterstützt";
 /// Kleinster Betrag der Determinante der drei Normalen: darunter schneiden sich die drei
 /// Ebenen nicht sicher in einem Punkt.
 const MIN_CORNER_DET: f64 = 1e-6;
@@ -57,6 +63,20 @@ fn names(solid: &Solid, faces: &[Id<Face>]) -> String {
     }
 }
 
+/// Ablehnung einer Ecke an Hautflächen; nennt die Flächen der betroffenen Kanten.
+fn skin_corner(solid: &Solid, geoms: &[&EdgeGeom]) -> BlendError {
+    let mut faces: Vec<Id<Face>> = Vec::new();
+    for f in geoms.iter().flat_map(|g| [g.sides.a.face, g.sides.b.face]) {
+        if !faces.contains(&f) {
+            faces.push(f);
+        }
+    }
+    BlendError::Corner(format!(
+        "{SKIN_CORNER} (Kanten an den Flächen {})",
+        names(solid, &faces)
+    ))
+}
+
 /// Liegt die Kurve an allen Stützstellen höchstens `weld` neben der Fläche? NaN gilt als „nicht“.
 fn lies_on(seg: &Seg, surface: &Surface, weld: f64) -> bool {
     (0..=CORNER_PROBES).all(|k| {
@@ -75,19 +95,15 @@ pub fn miter_pair(
     tol: &Tolerance,
 ) -> Result<CornerCuts, BlendError> {
     let (gi, gj) = (&geoms[i], &geoms[j]);
+    if !gi.analytic || !gj.analytic {
+        return Err(skin_corner(solid, &[gi, gj]));
+    }
     let faces = three_faces(solid, v)?;
     if gi.convex != gj.convex {
         return Err(at_corner(
             solid,
             &faces,
             "An der Ecke treffen eine konvexe und eine konkave Kante zusammen; das wird nicht unterstützt",
-        ));
-    }
-    if !(gi.analytic && gj.analytic) {
-        return Err(at_corner(
-            solid,
-            &faces,
-            "Ecken mit Freiform-Rundungsflächen werden noch nicht unterstützt",
         ));
     }
     let fi = [gi.sides.a.face, gi.sides.b.face];
@@ -221,9 +237,12 @@ pub fn corner_three(
     let mut pairs: Vec<[Id<Face>; 2]> = Vec::with_capacity(3);
     for &(i, _) in list {
         let g = &geoms[i];
+        if !g.analytic {
+            return Err(skin_corner(solid, &[g]));
+        }
         let r = match g.surface {
-            Surface::Cylinder { radius, .. } if g.analytic => radius,
-            Surface::Plane { .. } if g.analytic => {
+            Surface::Cylinder { radius, .. } => radius,
+            Surface::Plane { .. } => {
                 return Err(at_corner(
                     solid,
                     &faces,
@@ -274,12 +293,6 @@ pub fn corner_three(
         };
         n[k] = if face.same_sense { frame.z } else { -frame.z };
     }
-    if (0..3).any(|a| !(n[a].dot(n[(a + 1) % 3]).abs() <= ORTHOGONAL_TOL)) {
-        return Err(BlendError::Corner(format!(
-            "Nur rechtwinklige Ecken bekommen bisher ein Kugelstück (Flächen {})",
-            names(solid, &faces)
-        )));
-    }
     let vp = solid.vertices[v].point;
     let center = ball_center(n, vp, r).ok_or_else(|| {
         at_corner(
@@ -301,7 +314,9 @@ pub fn corner_three(
         let plane = Surface::Plane {
             frame: Frame::from_origin_normal(center, leaving_direction(solid, g.edge, v)),
         };
-        let (sa, sb, curve) = cut_with(g, end, &plane, vp, tol).ok_or_else(|| {
+        // Suchfenster bis zum Kugelmittelpunkt (spitze Ecken: Mittelpunkt weit von der Ecke).
+        let reach = center.distance(vp);
+        let (sa, sb, curve) = cut_within(g, end, &plane, vp, reach, tol).ok_or_else(|| {
             BlendError::Corner(format!(
                 "Die Rundung zwischen {} lässt sich an der Kugelecke nicht abschließen",
                 names(solid, &[g.sides.a.face, g.sides.b.face])
@@ -363,7 +378,10 @@ pub fn corner_three(
             role: format!("Ecke {index}"),
         }),
     };
-    // Rechtwinklige Ecke: Würfel r³ minus Kugelachtel.
-    let volume = -(1.0 - PI / 6.0) * r * r * r;
+    // Spat der drei Einheitsnormalen: bei rechtwinkligen Ecken 1. Das Gebiet zwischen Ecke und
+    // Kugel ist ein schiefer Würfel mit Volumen r³/|det| minus das Kugelstück; das Kugelstück
+    // ist hier mit dem Achtel angenähert (Schätzung für die Volumenprobe, P2).
+    let det = n[0].dot(n[1].cross(n[2])).abs();
+    let volume = -(1.0 / det - PI / 6.0) * r * r * r;
     Ok((cuts, piece, volume))
 }

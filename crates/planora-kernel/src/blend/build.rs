@@ -219,8 +219,22 @@ pub fn cut_with(
     near: DVec3,
     tol: &Tolerance,
 ) -> Option<(f64, f64, Seg)> {
+    cut_within(g, at_end, surface, near, 0.0, tol)
+}
+
+/// Wie [`cut_with`], das Suchfenster auf den Berührkurven ist aber um `extra` länger. Für
+/// Kugelecken an spitzen Ecken: Die Abschlussebene durch den Kugelmittelpunkt liegt dort bis
+/// zum Abstand Ecke–Mittelpunkt von der Ecke entfernt, weiter als `END_SEARCH_FACTOR · reach`.
+pub fn cut_within(
+    g: &EdgeGeom,
+    at_end: bool,
+    surface: &Surface,
+    near: DVec3,
+    extra: f64,
+    tol: &Tolerance,
+) -> Option<(f64, f64, Seg)> {
     let s_ref = if at_end { g.range.1 } else { g.range.0 };
-    let len = END_SEARCH_FACTOR * (g.reach + tol.linear);
+    let len = END_SEARCH_FACTOR * (g.reach + tol.linear) + extra;
     let sa = end_param(&g.contact_a, s_ref, len, surface, tol)?;
     let sb = end_param(&g.contact_b, s_ref, len, surface, tol)?;
     let (qa, qb) = (g.contact_a.point(sa), g.contact_b.point(sb));
