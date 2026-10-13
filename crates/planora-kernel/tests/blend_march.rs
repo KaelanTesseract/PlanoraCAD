@@ -176,7 +176,9 @@ fn hostile_and_freeform_laws_are_named() {
         "{:?}",
         r.map(|_| ())
     );
-    // Variabler Radius an Freiformflächen: erst mit Task 15 geprüft, bis dahin benannt.
+    // Variabler Radius an Freiformflächen: bis Task 14 benannt abgelehnt (`VARIABLE_FREEFORM`);
+    // Übergangstest in Task 15 ersetzt (wie P12): jetzt über die Bahn mit Freiform-Prüfungen,
+    // gültig und Material weg (Volumen nach Formel in `planora-mesh/tests/blend_freeform_volume.rs`).
     let c = planora_math::nurbs::NurbsCurve::elliptic_arc(
         DVec3::ZERO,
         DVec3::new(5.0, 0.0, 0.0),
@@ -205,10 +207,11 @@ fn hostile_and_freeform_laws_are_named() {
             },
         ),
     ) {
-        Err(BlendError::Unsupported(m)) => {
-            assert_eq!(m, planora_kernel::blend::VARIABLE_FREEFORM)
+        Ok(b) => {
+            validate(&b.solid).unwrap();
+            assert!(b.volume_change < 0.0, "{}", b.volume_change);
         }
-        other => panic!("{:?}", other.map(|_| ())),
+        Err(e) => panic!("{e}"),
     }
 }
 

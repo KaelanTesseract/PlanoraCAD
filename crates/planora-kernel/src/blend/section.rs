@@ -246,8 +246,8 @@ pub fn chamfer_section(
 
 /// Liegt die Kugel auf der gewölbten Innenseite einer gekrümmten Fläche und ist ihr Radius
 /// mindestens so groß wie der Krümmungsradius dort, findet sie keine Lage:
-/// `CurvatureTooSmall` (Spec §3.4). Ebenen und Freiformflächen werden hier nicht geprüft (bei
-/// Freiformflächen prüft die Bahn die Genauigkeit, Task 14).
+/// `CurvatureTooSmall` (Spec §3.4). Ebenen und Freiformflächen werden hier nicht geprüft
+/// (Freiformflächen: [`check_freeform_curvature`] in der Bahn, Task 15).
 pub fn check_curvature(
     side: Side,
     p: DVec3,
@@ -275,4 +275,57 @@ pub fn check_curvature(
         }
         _ => Ok(()),
     }
+}
+
+/// Spielraum der Krümmungsprüfung für Freiformflächen (relativ): Der Radius muss unter
+/// `(1 − FREEFORM_CURVATURE_MARGIN)` mal dem kleinsten Krümmungsradius zur Kugel hin bleiben.
+/// Weiter als bei analytischen Flächen, weil die Krümmung aus zweiten Ableitungen am Fußpunkt der
+/// numerischen Projektion stammt und zwischen den Prüfstellen etwas größer sein kann.
+pub const FREEFORM_CURVATURE_MARGIN: f64 = 1e-3;
+/// Kleinster Wert von `(E·G − F²) / (|S_u|² · |S_v|²)` (Quadrat des Sinus zwischen den
+/// Parameterrichtungen); darunter ist die Parametrisierung am Fußpunkt entartet (Pol).
+const MIN_PARAM_SIN2: f64 = 1e-12;
+/// Meldung, wenn die Krümmung einer Freiformfläche an einem Berührpunkt nicht bestimmbar ist.
+pub const FREEFORM_POLE: &str = "Die Rundung berührt eine Freiformfläche an einer entarteten Stelle (etwa einem Pol); dort lässt sich die Krümmung nicht prüfen";
+
+/// Krümmungsprüfung für Freiformflächen (Spec §3.4): Am Fußpunkt `p` (Punkt auf der Fläche)
+/// werden aus erster und zweiter Fundamentalform die Hauptkrümmungen zur Kugel hin (`toward`,
+/// Richtung von der Fläche zum Kugelmittelpunkt) bestimmt. Ist die größte positiv (die Fläche
+/// wölbt sich um die Kugel) und der Radius nicht deutlich kleiner als ihr Kehrwert, findet die
+/// Kugel dort keine Lage: `CurvatureTooSmall`. Andere Flächenarten: keine Prüfung (dafür gibt es
+/// [`check_curvature`]).
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn check_freeform_curvature(
+    side: Side,
+    p: DVec3,
+    toward: DVec3,
+    radius: f64,
+    face: &str,
+) -> Result<(), BlendError> {
+    let Surface::Nurbs(d) = side.surface else {
+        return Ok(());
+    };
+    let (u, v) = d.project(p);
+    let (u, v) = d.wrap(u, v);
+    let s = d.surface().derivs(u, v, 2);
+    let (su, sv, suu, suv, svv) = (s[1][0], s[0][1], s[2][0], s[1][1], s[0][2]);
+    let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
+    let det = e * g - f * f;
+    let n = su.cross(sv).normalize_or_zero();
+    if !(det > MIN_PARAM_SIN2 * e * g && det.is_finite() && n != DVec3::ZERO) {
+        return Err(BlendError::Unsupported(FREEFORM_POLE.into()));
+    }
+    // Normale zur Kugel hin: positive Krümmung heißt, die Fläche biegt sich zur Kugel.
+    let m = if n.dot(toward) >= 0.0 { n } else { -n };
+    let (l, mm, nn) = (suu.dot(m), suv.dot(m), svv.dot(m));
+    let k_gauss = (l * nn - mm * mm) / det;
+    let k_mean = (e * nn - 2.0 * f * mm + g * l) / (2.0 * det);
+    let k_max = k_mean + (k_mean * k_mean - k_gauss).max(0.0).sqrt();
+    if !k_max.is_finite() {
+        return Err(BlendError::Unsupported(FREEFORM_POLE.into()));
+    }
+    if radius * k_max >= 1.0 - FREEFORM_CURVATURE_MARGIN {
+        return Err(BlendError::CurvatureTooSmall { face: face.into() });
+    }
+    Ok(())
 }

@@ -1086,6 +1086,7 @@ pub fn assemble(
     for (i, blend) in pieces[kept..].iter().enumerate() {
         let bound = blend_box(&geoms[i], &plan.starts[i], &plan.ends[i]);
         for (piece, name) in pieces[..kept].iter().zip(&names) {
+            super::march::check_budget()?;
             check_piercing(piece, blend, bound.as_ref(), name, &btol)?;
         }
     }
@@ -1098,6 +1099,7 @@ pub fn assemble(
         }
     }
     pieces.extend(plan.corners.iter().cloned());
+    super::march::check_budget()?;
     let result = sew(pieces, tol).map_err(|e| BlendError::ResultInvalid(e.to_string()))?;
     validate_with(&result, tol).map_err(|e| BlendError::ResultInvalid(e.to_string()))?;
     Ok(result)

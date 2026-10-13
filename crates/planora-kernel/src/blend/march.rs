@@ -12,6 +12,12 @@
 //! überall höchstens `NURBS_FIT_TOL / 2` beträgt und die Berührkurven beide Flächen auf
 //! `NURBS_EDGE_TOL / 2` treffen; sonst benannte Ablehnung ([`INACCURATE`]).
 //!
+//! Freiformflächen und -kanten (Task 15) laufen denselben Weg; zusätzlich wird der Startwert in
+//! die Querschnittsebene gelegt, jeder Berührpunkt auf einer Freiformfläche als echter Fußpunkt
+//! geprüft (auf der Fläche, Mittelpunkt auf seiner Normale; sonst liegt die Kugel jenseits des
+//! Flächenstücks: `TooLarge`) und die Krümmung der Freiformfläche zur Kugel hin aus den
+//! Fundamentalformen bestimmt (`check_freeform_curvature`, am Kantenpunkt und am Berührpunkt).
+//!
 //! Geometrische Grenzen werden vor dem Bau geprüft und benannt abgelehnt: Krümmung der
 //! Nachbarflächen (`check_curvature`), Querschnitte, die die Drehachse einer Kreiskante bzw. den
 //! Krümmungsmittelpunkt der Kante erreichen (die Querschnittsebenen schnitten sich im Bereich der
@@ -25,7 +31,8 @@ use super::analytic::{
 use super::chain::ChainedEdge;
 use super::error::BlendError;
 use super::section::{
-    ChamferSpec, Section, Side, chamfer_section, check_curvature, fillet_section,
+    ChamferSpec, Section, Side, chamfer_section, check_curvature, check_freeform_curvature,
+    fillet_section,
 };
 use super::topo::{EdgeSides, face_name, inward_directions};
 use crate::boolean::NURBS_FIT_TOL;
@@ -37,6 +44,7 @@ use planora_math::nurbs::{
     NurbsError, NurbsSurface, SkinSection, SkinTangent, evaluations, skin_sided,
 };
 use planora_math::{DVec3, RadiusLaw, Tolerance};
+use std::cell::Cell;
 
 /// Anfangszahl der gleichmäßigen Stationen (verdoppelt bis `MAX_STATIONS`: 9, 17, 33, 65, 129, 257).
 pub const MIN_STATIONS: usize = 9;
@@ -44,6 +52,43 @@ pub const MIN_STATIONS: usize = 9;
 pub const MAX_STATIONS: usize = 257;
 /// Höchstzahl NURBS-Auswertungen je Kante (deterministisch, wie `MAX_FREEFORM_EVALUATIONS`).
 pub const MAX_BLEND_EVALUATIONS: u64 = 20_000_000;
+/// Höchstzahl NURBS-Auswertungen einer ganzen Anfrage (Bahnen aller Kanten, Abschlüsse,
+/// Prüfungen gegen Löcher und Durchdringungen); geprüft je Querschnitt der Bahn, je Kante, vor
+/// jeder Durchdringungsprüfung und vor dem Vernähen (eine einzelne Stufe kann die Grenze um ihren
+/// eigenen Aufwand überschreiten). Rein analytische Anfragen werten keine NURBS aus.
+pub const MAX_BLEND_REQUEST_EVALUATIONS: u64 = 40_000_000;
+
+thread_local! {
+    /// Zählerstand, ab dem die laufende Anfrage abbricht (`None`: keine Anfrage-Grenze).
+    static STOP_AT: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+/// Setzt die Anfrage-Grenze für die Dauer des Werts; danach gilt wieder die vorige.
+pub(crate) struct BudgetScope {
+    previous: Option<u64>,
+}
+
+impl BudgetScope {
+    /// Grenze von `limit` weiteren NURBS-Auswertungen ab jetzt.
+    pub(crate) fn start(limit: u64) -> BudgetScope {
+        let previous = STOP_AT.with(|c| c.replace(Some(evaluations().saturating_add(limit))));
+        BudgetScope { previous }
+    }
+}
+
+impl Drop for BudgetScope {
+    fn drop(&mut self) {
+        STOP_AT.with(|c| c.set(self.previous));
+    }
+}
+
+/// `TooExpensive`, wenn die laufende Anfrage ihre Grenze überschritten hat.
+pub(crate) fn check_budget() -> Result<(), BlendError> {
+    match STOP_AT.with(Cell::get) {
+        Some(stop) if evaluations() > stop => Err(BlendError::TooExpensive),
+        _ => Ok(()),
+    }
+}
 /// Abschnitte der Bogenlängentabelle einer Kante.
 const LENGTH_SAMPLES: usize = 512;
 /// Gauß-Legendre-Stützstellen auf [−1, 1] und Gewichte (4 Punkte, exakt bis Grad 7).
@@ -59,8 +104,10 @@ const ARC_NEWTON_STEPS: usize = 3;
 /// Schritt der zentralen Differenzen relativ zum Stationsabstand (Fehler ~ (Schritt)², Rauschen
 /// ~ Newton-Rest / Schritt; beide weit unter der Schranke).
 const DERIV_STEP: f64 = 1e-3;
-/// Stützstellen des Radiengesetzes, die näher als dieser Bruchteil der Kantenlänge an einer
-/// Station liegen, werden nicht zusätzlich eingefügt.
+/// Abstand (Bruchteil der Kantenlänge) zwischen Stützstellen des Radiengesetzes und Stationen:
+/// Stützstellen näher als das an einem Kantenende entfallen (das Ende ist schon Station); liegt
+/// eine innere gleichmäßige Station so nahe an einer Stützstelle, rückt sie genau auf die
+/// Stützstelle, sonst wird die Stützstelle als eigene Station eingefügt.
 const MIN_STATION_GAP: f64 = 1e-6;
 /// Erlaubte Abweichung der Hautfläche vom exakten Querschnitt.
 const SKIN_TOL: f64 = 0.5 * NURBS_FIT_TOL;
@@ -77,9 +124,9 @@ const MIN_ROW_SPEED: f64 = 1e-3;
 /// Spielraum, mit dem der Kugelmittelpunkt weiter von der Drehachse einer Kreiskante entfernt
 /// sein muss als der Radius (wie bei der analytischen Rundung).
 const AXIS_MARGIN: f64 = 1e-9;
-/// Spielraum der Krümmungsprüfung der Kante: Reichweite des Querschnitts mal Kantenkrümmung muss
-/// darunter bleiben (Querschnittsebenen benachbarter Stellen schneiden sich im Abstand des
-/// Krümmungsradius).
+/// Spielraum der Krümmungsprüfung der Kante: Reichweite des Querschnitts längs der Hauptnormale
+/// mal Kantenkrümmung muss darunter bleiben (Querschnittsebenen benachbarter Stellen schneiden
+/// sich in der Krümmungsachse, im Abstand des Krümmungsradius).
 const EDGE_CURVATURE_LIMIT: f64 = 1.0 - 1e-6;
 /// Parameterschritt (Anteil des Kantenbereichs) der numerischen Kantenkrümmung.
 const CURVATURE_STEP: f64 = 1e-5;
@@ -221,8 +268,9 @@ type Diff = (SkinTangent, SkinSection, SkinSection, f64);
 
 /// Startwert des Kugelmittelpunkts aus der Nachbarstation `prev`: ihr Mittelpunkt, verschoben um
 /// die Änderung des Radius längs der Winkelhalbierenden (Ebenenformel
-/// `c = o − s·r·(nA + nB)/(1 + nA·nB)` mit den Normalen am Kantenpunkt `o`). Ohne Rundung oder bei
-/// fast entgegengesetzten Normalen unverändert; `fillet_section` legt ihn in die Querschnittsebene
+/// `c = o + s·r·(nA + nB)/(1 + nA·nB)` mit den Außennormalen am Kantenpunkt `o`, `s = −1` bei
+/// konvexen Kanten (Kugel im Material), `s = +1` bei konkaven). Ohne Rundung oder bei fast
+/// entgegengesetzten Normalen unverändert; `fillet_section` legt ihn in die Querschnittsebene
 /// und rechnet mit dem vollen Newton-Kriterium.
 fn shifted_start(a: Side, b: Side, o: DVec3, prev: &Station, radius: f64, convex: bool) -> DVec3 {
     let SectionKind::Fillet { radius: old } = prev.kind else {
@@ -237,6 +285,37 @@ fn shifted_start(a: Side, b: Side, o: DVec3, prev: &Station, radius: f64, convex
     } else {
         prev.sec.center
     }
+}
+
+/// Startwert nach der Ebenenformel (siehe [`shifted_start`]) ohne Nachbarstation; `None` bei fast
+/// entgegengesetzten Normalen (dann meldet `fillet_section` selbst).
+fn plane_start(a: Side, b: Side, o: DVec3, radius: f64, convex: bool) -> Option<DVec3> {
+    let (na, nb) = (a.normal_at(o), b.normal_at(o));
+    let denom = 1.0 + na.dot(nb);
+    let s = if convex { -1.0 } else { 1.0 };
+    let c = o + (na + nb) * (s * radius / denom);
+    (denom > MIN_BISECTOR_START && c.is_finite()).then_some(c)
+}
+
+fn is_freeform(s: &Surface) -> bool {
+    matches!(s, Surface::Nurbs(_))
+}
+
+/// Fußpunkt einer Freiformfläche echt? Der Berührpunkt muss auf der Fläche liegen und der
+/// Kugelmittelpunkt auf seiner Normale (seitlicher Versatz höchstens [`CONTACT_TOL`]). Sonst
+/// hat die Fußpunktsuche einen Randpunkt der Fläche geliefert (die Kugel liegt jenseits des
+/// Flächenstücks, `implicit` springt dort) – die Fläche reicht für das Maß nicht aus.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn check_foot(side: Side, center: &DVec3, foot: DVec3, face: &str) -> Result<(), BlendError> {
+    if !is_freeform(side.surface) {
+        return Ok(());
+    }
+    let n = side.normal_at(foot);
+    let lateral = (*center - foot).cross(n).length();
+    if !(side.outside(foot).abs() <= CONTACT_TOL && lateral <= CONTACT_TOL) {
+        return Err(BlendError::TooLarge { face: face.into() });
+    }
+    Ok(())
 }
 
 fn invalid(err: NurbsError) -> BlendError {
@@ -271,10 +350,34 @@ fn section_area(st: &Station) -> (f64, DVec3) {
     (area, (tri_c * tri - seg_c * seg) / area)
 }
 
+/// Größter Wert von `w · k` über die Einheitsrichtungen `w` vom Kugelmittelpunkt zu den Punkten
+/// des Bogens (von `pa` nach `pb`, kürzerer Weg): `|k|` (Anteil in der Bogenebene), wenn dessen
+/// Richtung im Bogen liegt, sonst der größere Wert an den Enden. Bei entartetem Bogen der
+/// sichere Wert `|k|`.
+fn arc_extent(sec: &Section, k: DVec3) -> f64 {
+    let (ea, eb) = (
+        (sec.pa - sec.center).normalize_or_zero(),
+        (sec.pb - sec.center).normalize_or_zero(),
+    );
+    let n = ea.cross(eb);
+    if n == DVec3::ZERO || !n.is_finite() {
+        return k.length();
+    }
+    let n = n.normalize();
+    let kp = k - n * k.dot(n);
+    let within = ea.cross(kp).dot(n) >= 0.0 && kp.cross(eb).dot(n) >= 0.0;
+    if within && kp != DVec3::ZERO {
+        kp.length()
+    } else {
+        ea.dot(k).max(eb.dot(k))
+    }
+}
+
 /// Kreuzen sich benachbarte Querschnittsebenen im Bereich des Querschnitts? Kreiskanten: Der
 /// Kugelmittelpunkt muss weiter von der Drehachse entfernt sein als der Radius (sonst erreicht der
 /// Bogen die Achse, in der sich alle Querschnittsebenen schneiden). Andere gekrümmte Kanten:
-/// Reichweite des Querschnitts mal Kantenkrümmung unter [`EDGE_CURVATURE_LIMIT`]. Geraden: nie.
+/// Reichweite des Querschnitts zur Krümmungsachse hin (Abstand längs der Hauptnormale) mal
+/// Kantenkrümmung unter [`EDGE_CURVATURE_LIMIT`]. Geraden: nie.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn check_spine(e: &Edge, t: f64, st: &Station) -> Result<(), BlendError> {
     let near_axis = || {
@@ -302,15 +405,28 @@ fn check_spine(e: &Edge, t: f64, st: &Station) -> Result<(), BlendError> {
             if ok { Ok(()) } else { Err(near_axis()) }
         }
         _ => {
+            // Die Querschnittsebenen drehen sich um die Krümmungsachse der Kante: Ein Punkt `p`
+            // der Ebene bewegt sich längs mit dem Faktor `1 − κ·((p − o)·N)` (N Hauptnormale).
+            // Der Querschnitt muss also überall `(p − o)·κN < 1` erfüllen; für die Rundung
+            // schätzt `(c − o)·κN + r·κ` den Bogen nach oben ab, für die Fase sind die
+            // Berührpunkte die äußersten Punkte (die Strecke ist linear).
             let span = (e.t1 - e.t0).abs();
             let dt = CURVATURE_STEP * span;
             let (lo, hi) = (e.t0.min(e.t1), e.t0.max(e.t1));
             let (ta, tb) = ((t - dt).max(lo), (t + dt).min(hi));
             let d1 = e.curve.tangent(t);
             let d2 = (e.curve.tangent(tb) - e.curve.tangent(ta)) / (tb - ta);
-            let kappa = d1.cross(d2).length() / d1.length().powi(3);
-            let reach = st.sec.center.distance(st.o) + reach_r;
-            if !(kappa.is_finite() && reach * kappa < EDGE_CURVATURE_LIMIT) {
+            let speed2 = d1.length_squared();
+            let kvec = (d2 - d1 * (d2.dot(d1) / speed2)) / speed2;
+            let reach = match st.kind {
+                SectionKind::Fillet { .. } => {
+                    (st.sec.center - st.o).dot(kvec) + reach_r * arc_extent(&st.sec, kvec)
+                }
+                SectionKind::Chamfer(_) => (st.sec.pa - st.o)
+                    .dot(kvec)
+                    .max((st.sec.pb - st.o).dot(kvec)),
+            };
+            if !(kvec.is_finite() && reach < EDGE_CURVATURE_LIMIT) {
                 return Err(BlendError::Unsupported(
                     "Die Rundung ist für die Krümmung der Kante zu groß; bitte ein kleineres Maß wählen"
                         .into(),
@@ -369,6 +485,12 @@ pub fn march_geom(
         face_name(solid, sides.a.face),
         face_name(solid, sides.b.face),
     );
+    // Freiformbeteiligung: eine Nachbarfläche ist eine Freiformfläche oder die Kante weder Gerade
+    // noch Kreis. Dann gelten zusätzlich die Freiform-Prüfungen (Fußpunkte, Krümmung); rein
+    // analytische Bahnen (Task 14) bleiben unverändert.
+    let freeform = is_freeform(&fa.surface)
+        || is_freeform(&fb.surface)
+        || !matches!(e.curve, Curve::Line { .. } | Curve::Circle { .. });
     let table = ArcTable::new(e);
     let length = table.length();
     if !(length > tol.linear && length.is_finite()) {
@@ -429,7 +551,7 @@ pub fn march_geom(
         if evaluations().saturating_sub(start) > MAX_BLEND_EVALUATIONS {
             Err(BlendError::TooExpensive)
         } else {
-            Ok(())
+            check_budget()
         }
     };
     // Exakter Querschnitt bei der Bogenlänge `x`; `prev` ist eine Nachbarstation (ihr Mittelpunkt,
@@ -449,15 +571,35 @@ pub fn march_geom(
             SectionKind::Fillet { radius } => {
                 check_curvature(a, o, convex, radius, &name_a)?;
                 check_curvature(b, o, convex, radius, &name_b)?;
-                let start = prev.map(|p| shifted_start(a, b, o, p, radius, convex));
-                match fillet_section(a, b, o, tangent, convex, radius, start) {
+                if freeform {
+                    // Krümmung der Freiformflächen schon am Kantenpunkt (zur Kugel hin).
+                    let ball = if convex { -1.0 } else { 1.0 };
+                    check_freeform_curvature(a, o, a.normal_at(o) * ball, radius, &name_a)?;
+                    check_freeform_curvature(b, o, b.normal_at(o) * ball, radius, &name_b)?;
+                }
+                // Ohne Nachbarstation: bei Freiformbeteiligung die Ebenenformel als Startwert,
+                // den `fillet_section` in die Querschnittsebene legt (die numerischen Normalen
+                // stehen nicht genau senkrecht zur Kante; Task-2-Hinweis).
+                let start = match prev {
+                    Some(p) => Some(shifted_start(a, b, o, p, radius, convex)),
+                    None if freeform => plane_start(a, b, o, radius, convex),
+                    None => None,
+                };
+                let sec = match fillet_section(a, b, o, tangent, convex, radius, start) {
                     // Ein unpassender Startwert (sehr steiles Gesetz) darf die Bahn nicht
                     // abbrechen lassen: noch einmal mit der Ebenenformel am Kantenpunkt.
                     Err(BlendError::SpineLost) if start.is_some() => {
                         fillet_section(a, b, o, tangent, convex, radius, None)?
                     }
                     other => other?,
+                };
+                if freeform {
+                    check_foot(a, &sec.center, sec.pa, &name_a)?;
+                    check_foot(b, &sec.center, sec.pb, &name_b)?;
+                    check_freeform_curvature(a, sec.pa, sec.center - sec.pa, radius, &name_a)?;
+                    check_freeform_curvature(b, sec.pb, sec.center - sec.pb, radius, &name_b)?;
                 }
+                sec
             }
             SectionKind::Chamfer(spec) => {
                 let (wa, wb) = inward_directions(solid, edge, sides, t);

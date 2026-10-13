@@ -13,7 +13,6 @@ pub mod topo;
 pub use error::BlendError;
 
 use crate::boolean::{Containment, face_geom, pipeline_tol, point_in_face};
-use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
 use crate::topology::{Edge, Face, Solid};
 use crate::validate::validate_with;
@@ -24,7 +23,7 @@ use march::{SectionLaw, march_geom};
 use planora_math::nurbs::MAX_COORD;
 use planora_math::{PI, RadiusLaw, Tolerance};
 use section::ChamferSpec;
-use topo::{EdgeSides, edge_angle, edge_sides, face_name};
+use topo::{edge_angle, edge_sides, face_name};
 
 /// Höchstzahl Kanten je Anfrage (nach Ausdehnung der Tangentenkette).
 pub const MAX_BLEND_EDGES: usize = 256;
@@ -42,10 +41,6 @@ pub const MIN_CHAMFER_ANGLE: f64 = PI / 180.0;
 pub const MIN_BLEND_SIZE_FACTOR: f64 = 100.0;
 /// Stellen je Berührkurve, an denen geprüft wird, ob sie in ihrer Fläche liegt.
 const CONTACT_PROBES: usize = 8;
-/// Meldung für einen variablen Radius an Freiformflächen oder -kanten (Bahn dort erst mit
-/// Task 15 geprüft).
-pub const VARIABLE_FREEFORM: &str =
-    "Ein variabler Radius an Freiformflächen oder Freiformkanten wird noch nicht unterstützt";
 
 /// Art der Verrundung (Maße in mm, Winkel im Bogenmaß).
 #[derive(Clone, Debug, PartialEq)]
@@ -126,7 +121,9 @@ pub fn min_blend_size_for(solid: &Solid, tol: &Tolerance) -> f64 {
 
 /// Kleinstes erlaubtes Maß für diese Anfrage: Ein variabler Radius ergibt Hautflächen
 /// (Freiform), der Umbau verschweißt dann mit der Knotentoleranz; deshalb gilt dort das
-/// Mindestmaß für Freiformkörper (mindestens [`min_blend_size_for`]).
+/// Mindestmaß für Freiformkörper (mindestens [`min_blend_size_for`]). Konstante Maße an Kanten
+/// ohne analytische Klasse (ebenfalls Hautflächen) prüft die Geometrie je Kante mit demselben
+/// Mindestmaß.
 pub fn min_blend_size_request(solid: &Solid, kind: &BlendKind, tol: &Tolerance) -> f64 {
     let body = min_blend_size_for(solid, tol);
     match kind {
@@ -211,7 +208,6 @@ pub fn check_request(r: &BlendRequest, tol: &Tolerance) -> Result<(), BlendError
     check_request_min(r, min_blend_size(tol))
 }
 
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn check_request_min(r: &BlendRequest, min: f64) -> Result<(), BlendError> {
     if r.edges.is_empty() {
         return Err(BlendError::NoEdges);
@@ -221,7 +217,13 @@ fn check_request_min(r: &BlendRequest, min: f64) -> Result<(), BlendError> {
             "Zu viele Kanten (höchstens {MAX_BLEND_EDGES})"
         )));
     }
-    match &r.kind {
+    check_kind_min(&r.kind, min)
+}
+
+/// Prüft die Maße einer Art (endlich, mindestens `min`, Punkte streng steigend, Winkel).
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn check_kind_min(kind: &BlendKind, min: f64) -> Result<(), BlendError> {
+    match kind {
         BlendKind::Fillet { radius } => check_size(*radius, "Der Radius", min),
         BlendKind::VariableFillet { points } => {
             if points.len() < 2 || points.len() > MAX_RADIUS_POINTS {
@@ -292,20 +294,9 @@ fn section_kind(kind: &BlendKind) -> Option<SectionKind> {
     })
 }
 
-fn unsupported_pair(solid: &Solid, sides: &EdgeSides) -> BlendError {
-    let label = |f: Id<Face>| {
-        solid
-            .faces
-            .get(f)
-            .map_or("unbekannte Fläche", |face| face.surface.kind().label())
-    };
-    BlendError::Unsupported(format!(
-        "Die Verrundung zwischen {} und {} an dieser Kante wird noch nicht unterstützt",
-        label(sides.a.face),
-        label(sides.b.face)
-    ))
-}
-
+/// Analytische Geometrie einer Kante (Einheitstest `build::tests::chain_plan`); Kanten ohne
+/// analytische Klasse rechnet [`chained_geom`] über die Bahn.
+#[cfg(test)]
 fn edge_geom(
     solid: &Solid,
     be: &BlendEdge,
@@ -314,12 +305,13 @@ fn edge_geom(
 ) -> Result<EdgeGeom, BlendError> {
     let sides = edge_sides(solid, be.edge, be.first_face)?;
     let angle = edge_angle(solid, be.edge, &sides)?;
-    analytic_geom(solid, be.edge, &sides, angle.convex, kind, tol)?
-        .ok_or_else(|| unsupported_pair(solid, &sides))
+    analytic_geom(solid, be.edge, &sides, angle.convex, kind, tol)?.ok_or(BlendError::SpineLost)
 }
 
-/// Geometrie einer Kante der Anfrage: mit Radiengesetz über die Bahn mit Hautfläche (Task 14),
-/// sonst analytisch (unverändert wie in Stufe 1 und 2).
+/// Geometrie einer Kante der Anfrage: mit Radiengesetz über die Bahn mit Hautfläche (Task 14);
+/// konstante Rundungen und Fasen analytisch, wenn die Kante einer analytischen Klasse angehört
+/// (unverändert wie in Stufe 1 und 2), sonst – Freiformflächen und -kanten, übrige Flächenpaare –
+/// ebenfalls über die Bahn (Task 15).
 fn chained_geom(
     solid: &Solid,
     ce: &ChainedEdge,
@@ -327,25 +319,22 @@ fn chained_geom(
     law: Option<&RadiusLaw>,
     tol: &Tolerance,
 ) -> Result<EdgeGeom, BlendError> {
-    let Some(l) = law else {
-        let sk = section_kind(kind).ok_or(BlendError::SpineLost)?;
-        return edge_geom(solid, &ce.edge, sk, tol);
-    };
     let sides = edge_sides(solid, ce.edge.edge, ce.edge.first_face)?;
     let angle = edge_angle(solid, ce.edge.edge, &sides)?;
-    let freeform = |f: Id<Face>| {
-        solid
-            .faces
-            .get(f)
-            .is_none_or(|face| matches!(face.surface, Surface::Nurbs(_)))
+    let Some(l) = law else {
+        let sk = section_kind(kind).ok_or(BlendError::SpineLost)?;
+        if let Some(g) = analytic_geom(solid, ce.edge.edge, &sides, angle.convex, sk, tol)? {
+            return Ok(g);
+        }
+        // Die Bahn ergibt eine Hautfläche (Freiform): Umbau und Verschweißen dann mit der
+        // Knotentoleranz, also das Mindestmaß für Freiformkörper (wie beim variablen Radius).
+        check_kind_min(kind, MIN_BLEND_SIZE_FACTOR * pipeline_tol(tol, true).linear)?;
+        let law = match sk {
+            SectionKind::Fillet { radius } => SectionLaw::Fillet(radius),
+            SectionKind::Chamfer(spec) => SectionLaw::Chamfer(spec),
+        };
+        return march_geom(solid, ce, &sides, angle.convex, law, tol);
     };
-    let curve_freeform = solid
-        .edges
-        .get(ce.edge.edge)
-        .is_none_or(|e| matches!(e.curve, Curve::Nurbs(_)));
-    if freeform(sides.a.face) || freeform(sides.b.face) || curve_freeform {
-        return Err(BlendError::Unsupported(VARIABLE_FREEFORM.into()));
-    }
     march_geom(
         solid,
         ce,
@@ -464,11 +453,27 @@ fn roles(kind: &BlendKind, n: usize) -> Vec<String> {
 /// Schalen), dann die Gültigkeit des Körpers, danach die Auswahl der Kanten (Tangentenkette,
 /// Gruppierung in Ketten, Höchstzahl nach Ausdehnung) und erst dann die Geometrie. Neue Flächen
 /// heißen nach der Reihenfolge der Kanten nach Ausdehnung der Tangentenkette (P9).
+///
+/// Arbeitsgrenze: [`march::MAX_BLEND_REQUEST_EVALUATIONS`] NURBS-Auswertungen je Anfrage (siehe
+/// [`blend_limited`]).
 pub fn blend(
     solid: &Solid,
     request: &BlendRequest,
     tol: &Tolerance,
 ) -> Result<Blended, BlendError> {
+    blend_limited(solid, request, tol, march::MAX_BLEND_REQUEST_EVALUATIONS)
+}
+
+/// Wie [`blend`], mit eigener Arbeitsgrenze: Nach mehr als `max_evaluations` NURBS-Auswertungen
+/// (`planora_math::nurbs::evaluations`, deterministisch) endet die Anfrage mit
+/// [`BlendError::TooExpensive`]. Rein analytische Anfragen werten keine NURBS aus.
+pub fn blend_limited(
+    solid: &Solid,
+    request: &BlendRequest,
+    tol: &Tolerance,
+    max_evaluations: u64,
+) -> Result<Blended, BlendError> {
+    let _scope = march::BudgetScope::start(max_evaluations);
     check_request_min(request, min_blend_size_request(solid, &request.kind, tol))?;
     let law = match &request.kind {
         BlendKind::VariableFillet { points } => {
@@ -493,10 +498,16 @@ pub fn blend(
     }
     let geoms = chained
         .iter()
-        .map(|ce| chained_geom(solid, ce, &request.kind, law.as_ref(), tol))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|ce| {
+            let g = chained_geom(solid, ce, &request.kind, law.as_ref(), tol)?;
+            march::check_budget()?;
+            Ok(g)
+        })
+        .collect::<Result<Vec<_>, BlendError>>()?;
     let plan = end_cuts(solid, &geoms, tol)?;
+    march::check_budget()?;
     check_contacts(solid, &geoms, &plan, tol)?;
+    march::check_budget()?;
     let per_edge: Vec<f64> = geoms
         .iter()
         .enumerate()
