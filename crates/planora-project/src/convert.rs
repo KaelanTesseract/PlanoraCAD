@@ -14,7 +14,23 @@ use planora_sketch::{
     PointRecord, Sketch, SketchData,
 };
 
-pub const FORMAT_VERSION: u32 = 1;
+/// Höchste lesbare Formatnummer der Versionsdateien (P7).
+pub const FORMAT_VERSION: u32 = 2;
+/// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
+/// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
+pub const CONTAINER_FORMAT: u32 = 1;
+
+/// Kleinste Formatnummer, die den Stand darstellt: 2 mit Rundungen oder Fasen, sonst 1 (P7).
+pub fn required_format(s: &Snapshot) -> u32 {
+    if s.features
+        .iter()
+        .any(|f| matches!(f.kind, FeatureKind::Verrunden { .. }))
+    {
+        2
+    } else {
+        1
+    }
+}
 /// Längste erlaubte Liste (Features, Punkte, Kurven, Abhängigkeiten, Werte) in einer Datei.
 const MAX_LIST: usize = 1_000_000;
 
@@ -681,7 +697,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
 /// Fehler (das Dokument wird dann nicht geschrieben).
 pub fn encode_version(s: &Snapshot) -> Result<String> {
     let file = VersionFile {
-        format: FORMAT_VERSION,
+        format: required_format(s),
         marker: s.marker,
         naechste_id: s.next_id,
         features: s
@@ -731,6 +747,17 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     }
     let file: VersionFile =
         serde_json::from_str(text).map_err(|e| ProjectError::corrupt(origin, e.to_string()))?;
+    if file.format < 2
+        && file
+            .features
+            .iter()
+            .any(|f| matches!(f.art, KindDto::Verrunden { .. }))
+    {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Rundungen und Fasen gibt es erst ab Dateiformat 2",
+        ));
+    }
     check_len(origin, "Features", file.features.len())?;
     let mut features = Vec::with_capacity(file.features.len());
     for f in &file.features {
