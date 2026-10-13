@@ -549,11 +549,11 @@ fn check_piercing(
 pub const CAVITY: &str = "Der Körper hat mehrere Schalen (etwa einen Hohlraum); Rundungen und Fasen an solchen Körpern werden noch nicht unterstützt";
 
 /// Hat der Körper mehr als eine Schale mit Flächen (Hohlraum oder getrennte Teile)? Eine solche
-/// Schale berührt keine
-/// Fläche der Kante; ob sie im abgetragenen Bereich liegt oder die neue Fläche schneidet, prüfen
-/// weder `check_holes` noch `check_piercing` sicher. Deshalb vorerst immer abgelehnt (auch
-/// Hohlräume weit weg von der Kante). Keine Schalenliste gilt wie bei `validate` als eine Schale.
-fn has_cavity(solid: &Solid) -> bool {
+/// Schale berührt keine Fläche der Kante; ob sie im abgetragenen Bereich liegt oder die neue
+/// Fläche schneidet, prüfen weder `check_holes` noch `check_piercing` sicher. Deshalb vorerst
+/// immer abgelehnt (auch Hohlräume weit weg von der Kante). Keine Schalenliste gilt wie bei
+/// `validate` als eine Schale. `blend` prüft das schon vor der Geometrie (billig zuerst).
+pub(crate) fn has_cavity(solid: &Solid) -> bool {
     solid.shells.iter().filter(|s| !s.faces.is_empty()).count() > 1
 }
 
