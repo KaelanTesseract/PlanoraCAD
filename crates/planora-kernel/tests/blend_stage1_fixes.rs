@@ -413,7 +413,7 @@ fn the_minimum_size_follows_the_weld_tolerance_of_the_body() {
     ] {
         match blend(&s, e, kind.clone(), false) {
             Err(BlendError::InvalidParameter(m)) => assert!(
-                m.contains("Das Maß ist zu klein") && m.contains("mindestens 0.002 mm"),
+                m.contains("ist zu klein") && m.contains("mindestens 0.002 mm"),
                 "{kind:?}: {m}"
             ),
             other => panic!("{kind:?}: {:?}", other.map(|b| b.solid.faces.len())),

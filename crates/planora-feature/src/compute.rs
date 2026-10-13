@@ -299,7 +299,8 @@ fn blend_error(input: &Solid, e: &BlendError) -> FeatureError {
 
 /// Volumenprobe einer Verrundung (Spec §4.5, P2): Eingang und Ergebnis mit gemeinsamer Teilung
 /// vernetzen und die Änderung mit der Schätzung des Kernels vergleichen (Spielräume
-/// [`BLEND_REL`] und [`BLEND_SLACK_FACTOR`] aus `planora-mesh`, gemeinsam mit dessen Tests).
+/// [`BLEND_REL`] relativ zur Summe der Beträge `volume_scale` und [`BLEND_SLACK_FACTOR`] aus
+/// `planora-mesh`, gemeinsam mit dessen Tests).
 fn check_blend_volume(
     doc: &Document,
     input: &Solid,
@@ -316,6 +317,7 @@ fn check_blend_volume(
         mass_properties(&mi).volume,
         mass_properties(&mo).volume,
         blended.volume_change,
+        blended.volume_scale,
         BLEND_REL,
         slack,
     ) {
@@ -684,6 +686,75 @@ mod tests {
         let mut b = doc.kernel.blend(&s, &request).unwrap();
         assert_eq!(check_blend_volume(&doc, &s, &b), Ok(()));
         b.volume_change = 500.0;
+        assert_eq!(
+            check_blend_volume(&doc, &s, &b),
+            Err(FeatureError::ImplausibleBlend)
+        );
+    }
+
+    /// Konvexe und konkave Kante zusammen (Review Stufe 2, I1): Abtrag und Zugabe heben sich
+    /// auf, die Probe misst ihren Spielraum an der Summe der Beträge. Ein Ergebnis, das um mehr
+    /// als `BLEND_REL` mal diese Summe danebenliegt, bleibt unplausibel.
+    #[test]
+    fn the_blend_volume_probe_uses_the_gross_estimate_for_mixed_edges() {
+        use planora_kernel::{Profile, ProfileLoop};
+        use planora_math::{DVec2, Frame};
+        let doc = Document::new();
+        let pts = [
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 4.0),
+            (4.0, 4.0),
+            (4.0, 10.0),
+            (0.0, 10.0),
+        ]
+        .map(|(x, y)| DVec2::new(x, y));
+        let profile = Profile {
+            outer: ProfileLoop::polygon(&pts).unwrap(),
+            holes: vec![],
+        };
+        let s = doc.kernel.extrude(&profile, &Frame::WORLD, 5.0).unwrap();
+        let vertical = |x: f64, y: f64| {
+            s.edges
+                .iter()
+                .find(|(_, e)| {
+                    let (a, b) = (s.vertices[e.start].point, s.vertices[e.end].point);
+                    let at = |p: DVec3| (p.x - x).abs() < 1e-9 && (p.y - y).abs() < 1e-9;
+                    at(a) && at(b)
+                })
+                .map(|(id, _)| id)
+                .unwrap()
+        };
+        let request =
+            |edges: &[planora_kernel::Id<planora_kernel::Edge>], d1: f64, d2: f64| BlendRequest {
+                edges: edges
+                    .iter()
+                    .map(|&edge| BlendEdge {
+                        edge,
+                        first_face: None,
+                    })
+                    .collect(),
+                kind: planora_kernel::BlendKind::ChamferTwo {
+                    distance1: d1,
+                    distance2: d2,
+                },
+                tangent_chain: false,
+            };
+        let (concave, convex) = (vertical(4.0, 4.0), vertical(10.0, 0.0));
+        let mut b = doc
+            .kernel
+            .blend(&s, &request(&[concave, convex], 0.5, 0.8))
+            .unwrap();
+        // Je Kante 0,5 · 0,5 · 0,8 · 5 = 1: netto 0, brutto 2.
+        assert!(b.volume_change.abs() < 1e-9, "{}", b.volume_change);
+        assert!((b.volume_scale - 2.0).abs() < 1e-9, "{}", b.volume_scale);
+        assert_eq!(check_blend_volume(&doc, &s, &b), Ok(()));
+        // Falscher Körper: nur die konvexe Kante, größer gefast (ΔV = −4).
+        b.solid = doc
+            .kernel
+            .blend(&s, &request(&[convex], 1.0, 1.6))
+            .unwrap()
+            .solid;
         assert_eq!(
             check_blend_volume(&doc, &s, &b),
             Err(FeatureError::ImplausibleBlend)

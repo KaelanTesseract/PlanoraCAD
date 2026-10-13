@@ -80,6 +80,7 @@ pub fn plausible(before: &Solid, b: &Blended, chord: f64) -> bool {
         mass_properties(&mb).volume,
         mass_properties(&ma).volume,
         b.volume_change,
+        b.volume_scale,
         BLEND_REL,
         slack,
     )

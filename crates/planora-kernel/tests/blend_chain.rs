@@ -527,3 +527,89 @@ fn chain_helpers_survive_unknown_ids() {
         Err(BlendError::EdgeNotFound)
     ));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Nachbesserungen aus dem Review von Stufe 2.
+
+/// Kante mit den Endpunkten `p0` und `p1` (in beliebiger Richtung).
+fn edge_at(s: &Solid, p0: DVec3, p1: DVec3) -> Id<Edge> {
+    let near = |v: Id<Vertex>, p: DVec3| s.vertices[v].point.distance(p) < 1e-9;
+    s.edges
+        .iter()
+        .find(|(_, e)| {
+            (near(e.start, p0) && near(e.end, p1)) || (near(e.start, p1) && near(e.end, p0))
+        })
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| panic!("keine Kante {p0} – {p1}"))
+}
+
+#[test]
+fn the_tangent_chain_does_not_follow_edges_between_coplanar_faces() {
+    // M1: Quader 10 × 8 × 3 vereinigt mit Quader 4 × 8 × 3 bei (0, 0, 2). Die Vorderfläche y = 0
+    // bleibt in Stücke geteilt; ihre Trennkanten sind keine echten Kanten.
+    let lower = k().make_box(DVec3::new(10.0, 8.0, 3.0)).unwrap();
+    let upper = k().make_box(DVec3::new(4.0, 8.0, 3.0)).unwrap();
+    let upper = k()
+        .transform(&upper, &DMat4::from_translation(DVec3::new(0.0, 0.0, 2.0)))
+        .unwrap();
+    let s = k().boolean(&lower, &upper, BoolOp::Union).unwrap();
+    let e = edge_at(&s, DVec3::new(4.0, 0.0, 3.0), DVec3::new(10.0, 0.0, 3.0));
+    // Die Kette bleibt bei der gewählten Kante.
+    assert_eq!(tangent_chain(&s, e), vec![e]);
+    // Mit und ohne Kette dieselbe benannte Ablehnung an der Ecke der gewählten Kante (dort
+    // treffen fünf Flächenstücke zusammen); die nicht gewählte Trennkante wird nicht genannt
+    // (früher: „gehen fast tangential ineinander über (Kantenwinkel 180°)“).
+    for chain in [false, true] {
+        match k().blend(&s, &req(&[e], BlendKind::Fillet { radius: 0.5 }, chain)) {
+            Err(BlendError::Corner(m)) => assert!(
+                m.contains("5 Flächen") && !m.contains("tangential"),
+                "Kette {chain}: {m}"
+            ),
+            other => panic!("Kette {chain}: {:?}", other.map(|b| b.edges.len())),
+        }
+    }
+}
+
+#[test]
+fn the_gross_volume_estimate_adds_magnitudes() {
+    let b = k().make_box(DVec3::splat(10.0)).unwrap();
+    let e1 = edge_between(&b, "Deckel", "Wand 1");
+    let e2 = edge_between(&b, "Boden", "Wand 3");
+    let r = k()
+        .blend(
+            &b,
+            &req(&[e1, e2], BlendKind::Fillet { radius: 1.0 }, false),
+        )
+        .unwrap();
+    // Nur konvexe Kanten: Summe der Beträge = Betrag der Summe.
+    assert!((r.volume_scale - r.volume_change.abs()).abs() < 1e-12);
+    // L-Profil: konkave Kante bei (4, 4) und konvexe bei (10, 0), Fase 0,5 × 0,8, Höhe 5.
+    let pts = [
+        (0.0, 0.0),
+        (10.0, 0.0),
+        (10.0, 4.0),
+        (4.0, 4.0),
+        (4.0, 10.0),
+        (0.0, 10.0),
+    ]
+    .map(|(x, y)| DVec2::new(x, y));
+    let profile = Profile {
+        outer: ProfileLoop::polygon(&pts).unwrap(),
+        holes: vec![],
+    };
+    let l = k().extrude(&profile, &Frame::WORLD, 5.0).unwrap();
+    let concave = edge_at(&l, DVec3::new(4.0, 4.0, 0.0), DVec3::new(4.0, 4.0, 5.0));
+    let convex = edge_at(&l, DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 0.0, 5.0));
+    let kind = BlendKind::ChamferTwo {
+        distance1: 0.5,
+        distance2: 0.8,
+    };
+    let r = k()
+        .blend(&l, &req(&[concave, convex], kind.clone(), false))
+        .unwrap();
+    validate(&r.solid).unwrap();
+    assert!(r.volume_change.abs() < 1e-12, "{}", r.volume_change);
+    assert!((r.volume_scale - 2.0).abs() < 1e-12, "{}", r.volume_scale);
+    let one = k().blend(&l, &req(&[concave], kind, false)).unwrap();
+    assert!((one.volume_change - 1.0).abs() < 1e-12 && (one.volume_scale - 1.0).abs() < 1e-12);
+}

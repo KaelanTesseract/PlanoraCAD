@@ -2,7 +2,7 @@
 //! gewählten Kanten in Ketten mit Längen (für den variablen Radius, Task 14).
 
 use super::error::BlendError;
-use super::topo::{edge_uses, vertex_edges};
+use super::topo::{edge_angle, edge_sides, edge_uses, vertex_edges};
 use super::{BlendEdge, BlendRequest, MAX_BLEND_EDGES};
 use crate::boolean::Seg;
 use crate::ids::Id;
@@ -61,12 +61,27 @@ fn is_seam(solid: &Solid, edge: Id<Edge>) -> bool {
     u.len() == 2 && u[0].face == u[1].face
 }
 
+/// Kante zwischen zwei Flächen, die tangential ineinander übergehen (Kantenwinkel nahe 180°,
+/// etwa zwei nicht zusammengefasste Stücke derselben Ebene nach einer Vereinigung)? Sie ist
+/// keine echte Kante: Eine Kette läuft nicht über sie weiter (Review Stufe 2, M1).
+fn is_flat(solid: &Solid, edge: Id<Edge>) -> bool {
+    /// Grenze zwischen Schneide (Kantenwinkel nahe 0°) und glattem Übergang (nahe 180°).
+    const RIGHT_ANGLE_DEG: f64 = 90.0;
+    edge_sides(solid, edge, None).is_ok_and(|sides| {
+        matches!(
+            edge_angle(solid, edge, &sides),
+            Err(BlendError::NearlyTangent { angle_deg }) if angle_deg > RIGHT_ANGLE_DEG
+        )
+    })
+}
+
 /// Geschlossene Kante (Anfang = Ende)? Sie läuft nur in sich selbst weiter.
 fn is_loop(solid: &Solid, edge: Id<Edge>) -> bool {
     solid.edges.get(edge).is_none_or(|e| e.start == e.end)
 }
 
-/// Die Kante, die an `v` glatt an `edge` anschließt, wenn es genau eine gibt (Nähte zählen nicht).
+/// Die Kante, die an `v` glatt an `edge` anschließt, wenn es genau eine gibt (Nähte und Kanten
+/// zwischen tangential ineinander übergehenden Flächen zählen nicht).
 pub fn smooth_neighbour(solid: &Solid, edge: Id<Edge>, v: Id<Vertex>) -> Option<Id<Edge>> {
     if is_loop(solid, edge) {
         return None;
@@ -76,6 +91,7 @@ pub fn smooth_neighbour(solid: &Solid, edge: Id<Edge>, v: Id<Vertex>) -> Option<
         .into_iter()
         .filter(|&o| o != edge && !is_seam(solid, o) && !is_loop(solid, o))
         .filter(|&o| leaving_direction(solid, o, v).dot(d) <= -CHAIN_ANGLE.cos())
+        .filter(|&o| !is_flat(solid, o))
         .collect();
     (found.len() == 1).then(|| found[0])
 }

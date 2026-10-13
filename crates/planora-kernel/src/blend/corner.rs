@@ -168,7 +168,7 @@ pub fn miter_pair(
         && lies_on(&cj.curve, &gi.surface, weld))
     {
         return Err(BlendError::Corner(format!(
-            "Die Rundungen treffen sich an der Ecke der Flächen {} nicht auf der winkelhalbierenden Ebene (verschiedene Maße oder Winkel); das wird nicht unterstützt",
+            "Die Rundungen treffen sich an der Ecke der Flächen {} nicht auf der winkelhalbierenden Ebene, weil sie dort nicht spiegelbildlich liegen (etwa bei verschieden großen Kantenwinkeln oder verschiedenen Maßen auf den Flächen); eine solche Gehrung wird nicht unterstützt",
             names(solid, &faces)
         )));
     }

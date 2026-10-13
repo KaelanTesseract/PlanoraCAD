@@ -436,3 +436,92 @@ fn rounding_a_rounded_edge_is_named() {
         .unwrap();
     assert_eq!(status(&d, f3), FeatureStatus::Ok);
 }
+
+/// Review Stufe 2, I1: eine konkave und eine konvexe Kante in einem Feature (FaseZwei 0,5/0,8
+/// an den senkrechten Kanten bei (4, 4) und (10, 0) eines L-Profils). Abtrag und Zugabe heben
+/// sich auf; die Volumenprobe darf das richtige Ergebnis nicht ablehnen.
+#[test]
+fn convex_and_concave_edges_in_one_feature_pass_the_volume_probe() {
+    use planora_math::Frame;
+    use planora_sketch::model::Sketch;
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let pts: Vec<_> = [
+        (0.0, 0.0),
+        (10.0, 0.0),
+        (10.0, 4.0),
+        (4.0, 4.0),
+        (4.0, 10.0),
+        (0.0, 10.0),
+    ]
+    .iter()
+    .map(|&(x, y)| sk.add_point(x, y).unwrap())
+    .collect();
+    for i in 0..pts.len() {
+        sk.add_line(pts[i], pts[(i + 1) % pts.len()]).unwrap();
+    }
+    let mut d = Document::new();
+    let skf = d
+        .add_feature(
+            "Skizze 1",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: sk,
+                plane: SketchPlane::Standard(StandardPlane::XY),
+                copies: vec![],
+            }),
+        )
+        .unwrap();
+    let ex = d
+        .add_feature(
+            "Extrusion 1",
+            FeatureKind::Extrude {
+                sketch: skf,
+                profile: 0,
+                height: 5.0,
+            },
+        )
+        .unwrap();
+    let body = BodyRef {
+        feature: ex,
+        index: 0,
+    };
+    let s = d.body(body).unwrap();
+    assert!((volume(s) - 320.0).abs() < 1e-6);
+    let vertical = |x: f64, y: f64| {
+        let id = s
+            .edges
+            .iter()
+            .find(|(_, e)| {
+                let (a, b) = (s.vertices[e.start].point, s.vertices[e.end].point);
+                let at = |p: DVec3| (p.x - x).abs() < 1e-9 && (p.y - y).abs() < 1e-9;
+                at(a) && at(b)
+            })
+            .map(|(id, _)| id)
+            .unwrap();
+        EdgeRef::from_edge(s, id, &Tolerance::default()).unwrap()
+    };
+    let edges = vec![vertical(4.0, 4.0), vertical(10.0, 0.0)];
+    for art in [
+        BlendArt::FaseZwei {
+            abstand1: 0.5,
+            abstand2: 0.8,
+        },
+        BlendArt::FaseGleich { abstand: 0.5 },
+    ] {
+        let f = d
+            .add_feature(
+                "Fase 1",
+                FeatureKind::Verrunden {
+                    body,
+                    edges: edges.clone(),
+                    art: art.clone(),
+                    tangentenkette: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(status(&d, f), FeatureStatus::Ok, "{art:?}");
+        // Je Kante ein Dreieck mal Höhe 5: einmal abgetragen, einmal hinzugefügt.
+        let v = volume(d.visible_bodies()[0].solid);
+        assert!((v - 320.0).abs() < 1e-6, "{art:?}: {v}");
+        d.delete(f).unwrap();
+    }
+}

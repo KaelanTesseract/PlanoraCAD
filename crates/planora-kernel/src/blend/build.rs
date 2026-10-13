@@ -56,6 +56,8 @@ pub struct EndPlan {
     pub corners: Vec<Piece>,
     /// Geschätzte Volumenänderung der Eckstücke (mm³, negativ = Material weg).
     pub corner_volume: f64,
+    /// Summe der Beträge der Eckstück-Schätzungen (mm³, für [`super::Blended::volume_scale`]).
+    pub corner_scale: f64,
 }
 
 /// Längentoleranz des Umbaus: mit Freiformflächen, Freiformkanten oder Hautflächen die weitere
@@ -359,6 +361,7 @@ fn corner_many(
     let (cuts, piece, volume) = super::corner::corner_three(solid, geoms, v, list, index, tol)?;
     plan.corners.push(piece);
     plan.corner_volume += volume;
+    plan.corner_scale += volume.abs();
     Ok(cuts)
 }
 
@@ -913,7 +916,7 @@ pub fn assemble(
         // NaN gilt als zu kurz.
         if !(cut.curve.length() > weld) {
             return Err(BlendError::InvalidParameter(format!(
-                "Das Maß ist zu klein: die Abschlusskurve ist nicht länger als {} mm",
+                "zu klein, die Abschlusskurve ist nicht länger als {} mm",
                 super::show_num(weld)
             )));
         }

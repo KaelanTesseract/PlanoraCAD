@@ -508,3 +508,27 @@ fn corners_follow_the_tangent_chain_switch_and_stay_deterministic() {
         assert!(a.distance(*b) < 1e-12, "{a} {b}");
     }
 }
+
+#[test]
+fn equal_sizes_at_an_oblique_prism_corner_name_the_missing_mirror_image() {
+    // Review Stufe 2: Deckelkante (Kantenwinkel 90°) und senkrechte Kante (Kantenwinkel der
+    // Prismenecke, nicht 90°) mit gleichem Maß. Die Rundungen liegen nicht spiegelbildlich; die
+    // Meldung darf nicht von verschiedenen Maßen oder Winkeln der Eingabe sprechen.
+    let s = triangle_prism();
+    let top = edge_between(&s, "Deckel", "Wand 1");
+    let vertical = edge_at(&s, DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 0.0, 5.0));
+    for kind in [
+        BlendKind::Fillet { radius: 1.0 },
+        BlendKind::ChamferEqual { distance: 1.0 },
+    ] {
+        match blend(&s, &[top, vertical], kind.clone()) {
+            Err(BlendError::Corner(m)) => assert!(
+                m.contains("winkelhalbierenden")
+                    && m.contains("spiegelbildlich")
+                    && m.contains("Kantenwinkel"),
+                "{kind:?}: {m}"
+            ),
+            other => panic!("{kind:?}: {:?}", other.map(|b| b.solid.faces.len())),
+        }
+    }
+}

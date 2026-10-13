@@ -7,10 +7,15 @@ use blend_common::*;
 use planora_kernel::blend::topo::vertex_edges;
 use planora_kernel::*;
 use planora_math::{DMat4, DVec2, DVec3, Frame, PI};
-use planora_mesh::{Discretizer, mass_properties, tessellate_with};
 
-const CHORD: f64 = 1e-3;
-const REL: f64 = 5e-3;
+/// Sehne der Einzeltests (Review Stufe 2, M3: mit 1e-3 verbrauchte der Netzfehler 43–93 % der
+/// Schranke, immer in dieselbe Richtung; ein Kernel, der bis etwa 1 % zu wenig abträgt, wäre
+/// durchgerutscht).
+const CHORD: f64 = 1e-4;
+/// Schranke der Einzeltests bei Sehne `CHORD` (Netzfehler dort höchstens etwa 6e-4 relativ).
+const REL: f64 = 1.5e-3;
+/// Schranke der Zufallsreihe (unverändert seit Task 12).
+const SERIES_REL: f64 = 5e-3;
 /// Feinere Sehne für die Zufallsreihe: bei kleinen Radien (Fall 8: r = 0,56) ist der Netzfehler
 /// eines Zylinders mit Sehne 1e-3 größer als 0,5 % der Volumenänderung (gemessen: Netz
 /// konvergiert gegen die Formel, -2,0729 / -2,0622 / -2,0613 bei 1e-3 / 1e-4 / 3e-5; Formel -2,0609).
@@ -111,12 +116,6 @@ fn all_twelve_edges_follow_steiner() {
     );
 }
 
-/// Netzvolumen eines Körpers (Sehne `CHORD`).
-fn mesh_volume(s: &Solid) -> f64 {
-    let disc = Discretizer::for_solids(&[s], CHORD);
-    mass_properties(&tessellate_with(s, &disc).unwrap()).volume
-}
-
 #[test]
 fn corner_results_survive_follow_ups() {
     let b = k().make_box(DVec3::splat(10.0)).unwrap();
@@ -128,20 +127,24 @@ fn corner_results_survive_follow_ups() {
     let one = blend_edges(&b, &edges, BlendKind::Fillet { radius: 1.0 }, false)
         .unwrap()
         .solid;
-    // R-7: Der Würfel (2 mm) schneidet das Kugelstück und beide angrenzenden Rundungen an der
-    // Ecke (10, 0, 10).
+    // R-7 (Review Stufe 2, M2): Der Quader x 8,5…10,5, y −1…1,5, z 8,5…10,5 schneidet das
+    // Kugelstück und alle drei angrenzenden Rundungen an der Ecke (10, 0, 10). Abgetragen wird
+    // der Teil des gerundeten Körpers in x 8,5…10, y 0…1,5, z 8,5…10; dort ist der Körper die
+    // Menge der Punkte im Abstand ≤ 1 vom Kern x ≤ 9, y ≥ 1, z ≤ 9. Je Richtung ein ebenes Stück
+    // der Länge 0,5 und ein gekrümmtes der Länge 1: 0,5³ + 3 · 0,5² + 3 · 0,5 · π/4 + π/6.
     let cutter = k()
         .transform(
-            &k().make_box(DVec3::splat(2.0)).unwrap(),
-            &DMat4::from_translation(DVec3::new(9.5, -1.0, 9.5)),
+            &k().make_box(DVec3::new(2.0, 2.5, 2.0)).unwrap(),
+            &DMat4::from_translation(DVec3::new(8.5, -1.0, 8.5)),
         )
         .unwrap();
     let cut = k().boolean(&one, &cutter, BoolOp::Difference).unwrap();
-    validate(&cut).unwrap();
-    let (v_one, v_cut) = (mesh_volume(&one), mesh_volume(&cut));
-    assert!(
-        v_cut < v_one,
-        "Schnitt durch das Eckstück trägt nichts ab: {v_cut} statt weniger als {v_one}"
+    let removed = 0.125 + 0.75 + 3.0 * PI / 8.0 + PI / 6.0;
+    assert_rel(
+        delta_volume(&one, &cut, CHORD),
+        -removed,
+        REL,
+        "Schnitt durch Eckstück und Rundungen",
     );
     let e = edge_between(&one, "Boden", "Wand 3");
     let two = blend_edges(&one, &[e], BlendKind::Fillet { radius: 0.5 }, false).unwrap();
@@ -207,7 +210,7 @@ fn random_box_selections(cases: usize, seed: u64) {
         assert_rel(
             delta_volume(&s, &b.solid, SERIES_CHORD),
             want,
-            REL,
+            SERIES_REL,
             &format!("Fall {case}"),
         );
         assert!(plausible(&s, &b, 0.05), "Fall {case}: Volumenprobe");
@@ -246,4 +249,74 @@ fn concave_corners_and_mixed_corners_are_named_not_wrong() {
         blend_edges(&l, &mixed, BlendKind::Fillet { radius: 1.0 }, false),
         Err(BlendError::Corner(_))
     ));
+}
+
+/// Platte 20 × 10 × 2 mit einem Zapfen (r = 1, Mitte (10; 2,9)) auf dem Deckel. Die Rundung der
+/// Deckelkante an Wand 1 (konvex, Berührgerade y = r) und die der Zapfenkante (konkav,
+/// Berührkreis mit Radius 1 + r) schneiden sich im Deckel, sobald 2,9 − (1 + r) < r, also ab
+/// r = 0,95 – ohne eine vorhandene Kante zu berühren (Review Stufe 2).
+fn plate_with_boss() -> (Solid, Id<Edge>, Id<Edge>) {
+    let plate = k().make_box(DVec3::new(20.0, 10.0, 2.0)).unwrap();
+    let boss = k()
+        .transform(
+            &k().make_cylinder(1.0, 3.0).unwrap(),
+            &DMat4::from_translation(DVec3::new(10.0, 2.9, 1.0)),
+        )
+        .unwrap();
+    let s = k().boolean(&plate, &boss, BoolOp::Union).unwrap();
+    let front = s
+        .edges
+        .iter()
+        .find(|(_, e)| {
+            let (a, b) = (s.vertices[e.start].point, s.vertices[e.end].point);
+            a.y.abs() < 1e-9
+                && b.y.abs() < 1e-9
+                && (a.z - 2.0).abs() < 1e-9
+                && (b.z - 2.0).abs() < 1e-9
+        })
+        .map(|(id, _)| id)
+        .expect("Deckelkante an Wand 1");
+    let rim = s
+        .edges
+        .iter()
+        .find(|(_, e)| {
+            matches!(e.curve, Curve::Circle { .. })
+                && (s.vertices[e.start].point.z - 2.0).abs() < 1e-9
+        })
+        .map(|(id, _)| id)
+        .expect("Zapfenrand auf dem Deckel");
+    (s, front, rim)
+}
+
+#[test]
+fn crossing_contact_curves_of_two_blends_are_refused_at_the_crossing_radius() {
+    let (s, front, rim) = plate_with_boss();
+    for r in [0.9, 0.94] {
+        let b = blend_edges(&s, &[front, rim], BlendKind::Fillet { radius: r }, false)
+            .unwrap_or_else(|e| panic!("r {r}: {e}"));
+        // Konvex: Zwickel mal Kantenlänge 20 weg; konkav: Zwickel um die Zapfenachse dazu
+        // (Pappus, Schwerpunkt im Abstand 1 + r (5/6 − π/4)/(1 − π/4) von der Achse).
+        let area = A * r * r;
+        let offset = r * (5.0 / 6.0 - PI / 4.0) / A;
+        let want = -area * 20.0 + area * 2.0 * PI * (1.0 + offset);
+        assert_rel(
+            delta_volume(&s, &b.solid, CHORD),
+            want,
+            REL,
+            &format!("r {r}"),
+        );
+        assert!(plausible(&s, &b, 0.05), "r {r}: Volumenprobe");
+    }
+    for r in [0.96, 1.0, 1.2] {
+        match blend_edges(&s, &[front, rim], BlendKind::Fillet { radius: r }, false) {
+            Err(BlendError::Unsupported(m)) => {
+                assert!(
+                    m.contains("im Bereich der Rundung") && m.contains("Deckel"),
+                    "r {r}: {m}"
+                )
+            }
+            Err(BlendError::TooLarge { face }) => assert_eq!(face, "Deckel", "r {r}"),
+            other => panic!("r {r}: {:?}", other.map(|b| b.solid.faces.len())),
+        }
+    }
 }

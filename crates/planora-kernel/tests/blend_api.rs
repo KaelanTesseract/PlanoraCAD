@@ -430,7 +430,7 @@ fn sizes_below_the_minimum_are_named_too_small() {
         for kind in &too_small {
             match k().blend(s, &req(&[e], kind.clone())) {
                 Err(BlendError::InvalidParameter(m)) => {
-                    assert!(m.contains("Das Maß ist zu klein"), "{kind:?}: {m}")
+                    assert!(m.contains("ist zu klein"), "{kind:?}: {m}")
                 }
                 other => panic!("{kind:?}: {:?}", other.map(|_| ())),
             }

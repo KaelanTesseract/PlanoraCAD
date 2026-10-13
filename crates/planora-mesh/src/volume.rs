@@ -30,22 +30,45 @@ pub const BLEND_REL: f64 = 0.5;
 /// weicht höchstens die Sehnentoleranz von der Fläche ab; Eingang und Ergebnis zusammen.
 pub const BLEND_SLACK_FACTOR: f64 = 2.0;
 
+/// Kleinster Spielraum der Volumenprobe (mm³): Rundungsrauschen der Volumenberechnung, wenn
+/// sich die Schätzungen aufheben und ebene Flächen keinen Netzfehler beitragen.
+pub const BLEND_ABS_SLACK: f64 = 1e-6;
+
+/// Haben alle Stücke der Schätzung dasselbe Vorzeichen? Dann ist `|Summe| = Summe der Beträge`
+/// bis auf Rundung; diese relative Schranke deckt die Rundung ab.
+const SAME_SIGN_REL: f64 = 1e-9;
+
 /// Volumenprobe einer Verrundung (Spec §4.5, Plan P2): `estimate` ist die Schätzung des
-/// Kernels (negativ = Material abgetragen). Die gemessene Änderung `v_out − v_in` muss das
-/// Vorzeichen der Schätzung haben (bis `slack`) und höchstens `rel · |estimate| + slack` von ihr
-/// abweichen. `slack` deckt den Netzfehler ab (Sehnentoleranz mal gekrümmte Oberfläche).
-pub fn blend_volume_plausible(v_in: f64, v_out: f64, estimate: f64, rel: f64, slack: f64) -> bool {
+/// Kernels (Summe über Kanten und Eckstücke, negativ = Material abgetragen), `scale` die Summe
+/// der Beträge dieser Stücke (`Blended::volume_scale`). Die gemessene Änderung `v_out − v_in`
+/// darf höchstens `rel · scale + slack + BLEND_ABS_SLACK` von der Schätzung abweichen. Haben
+/// alle Stücke dasselbe Vorzeichen (nur konvexe oder nur konkave Kanten), muss die Änderung
+/// außerdem dieses Vorzeichen haben (bis `slack`); bei gemischten Kanten heben sich Abtrag und
+/// Zugabe auf, dann gibt es kein erwartetes Vorzeichen. `slack` deckt den Netzfehler ab
+/// (Sehnentoleranz mal gekrümmte Oberfläche).
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn blend_volume_plausible(
+    v_in: f64,
+    v_out: f64,
+    estimate: f64,
+    scale: f64,
+    rel: f64,
+    slack: f64,
+) -> bool {
     let d = v_out - v_in;
-    if !(d.is_finite() && estimate.is_finite() && v_out > 0.0) {
+    if !(d.is_finite() && estimate.is_finite() && scale.is_finite() && v_out > 0.0) {
         return false;
     }
-    if estimate < 0.0 && d > slack {
+    // Die Summe der Beträge ist nie kleiner als der Betrag der Summe.
+    let scale = scale.max(estimate.abs());
+    let same_sign = estimate.abs() >= scale * (1.0 - SAME_SIGN_REL);
+    if same_sign && estimate < 0.0 && d > slack {
         return false;
     }
-    if estimate > 0.0 && d < -slack {
+    if same_sign && estimate > 0.0 && d < -slack {
         return false;
     }
-    (d - estimate).abs() <= rel * estimate.abs() + slack
+    (d - estimate).abs() <= rel * scale + slack + BLEND_ABS_SLACK
 }
 
 /// Summe der Dreiecksflächen aller nicht ebenen Flächen des Körpers (ebene Flächen werden exakt
@@ -91,14 +114,64 @@ mod tests {
     #[test]
     fn blend_volumes_must_match_sign_and_estimate() {
         // Rundung trägt 30 ab (Schätzung −30), Netz sagt −28: plausibel.
-        assert!(blend_volume_plausible(1000.0, 972.0, -30.0, 0.5, 0.5));
+        assert!(blend_volume_plausible(1000.0, 972.0, -30.0, 30.0, 0.5, 0.5));
         // Falsches Vorzeichen: Material kam hinzu, obwohl abgetragen werden sollte.
-        assert!(!blend_volume_plausible(1000.0, 1005.0, -30.0, 0.5, 0.5));
+        assert!(!blend_volume_plausible(
+            1000.0, 1005.0, -30.0, 30.0, 0.5, 0.5
+        ));
         // Viel zu viel abgetragen.
-        assert!(!blend_volume_plausible(1000.0, 900.0, -30.0, 0.5, 0.5));
+        assert!(!blend_volume_plausible(
+            1000.0, 900.0, -30.0, 30.0, 0.5, 0.5
+        ));
         // Konkav: Material kommt hinzu.
-        assert!(blend_volume_plausible(1000.0, 1010.0, 10.0, 0.5, 0.5));
-        assert!(!blend_volume_plausible(1000.0, f64::NAN, 10.0, 0.5, 0.5));
-        assert!(!blend_volume_plausible(1000.0, -1.0, -1001.0, 0.5, 0.5));
+        assert!(blend_volume_plausible(1000.0, 1010.0, 10.0, 10.0, 0.5, 0.5));
+        assert!(!blend_volume_plausible(
+            1000.0,
+            f64::NAN,
+            10.0,
+            10.0,
+            0.5,
+            0.5
+        ));
+        assert!(!blend_volume_plausible(
+            1000.0, -1.0, -1001.0, 1001.0, 0.5, 0.5
+        ));
+        // Eine zu kleine Summe der Beträge zählt wie der Betrag der Schätzung.
+        assert!(!blend_volume_plausible(
+            1000.0, 1005.0, -30.0, 0.0, 0.5, 0.5
+        ));
+        assert!(!blend_volume_plausible(
+            1000.0,
+            972.0,
+            -30.0,
+            f64::NAN,
+            0.5,
+            0.5
+        ));
+    }
+
+    #[test]
+    fn mixed_convex_and_concave_blends_use_the_gross_estimate() {
+        // Abtrag 1 und Zugabe 1 heben sich auf (Rauschen 1e-15); ebene Fasen, kein Netzfehler.
+        let (net, gross) = (-1e-15, 2.0);
+        for d in [0.0, 1e-12, -3e-13, 0.9, -0.9] {
+            assert!(
+                blend_volume_plausible(320.0, 320.0 + d, net, gross, 0.5, 0.0),
+                "{d}"
+            );
+        }
+        // Mehr als 0,5 · 2 daneben: abgelehnt (in beide Richtungen).
+        for d in [1.01, -1.01, 5.0] {
+            assert!(
+                !blend_volume_plausible(320.0, 320.0 + d, net, gross, 0.5, 0.0),
+                "{d}"
+            );
+        }
+        // Überwiegt die Zugabe (Netto +0,5 von brutto 1,5), gibt es kein Vorzeichen zu prüfen,
+        // die Abweichung bleibt beschränkt.
+        assert!(blend_volume_plausible(320.0, 319.9, 0.5, 1.5, 0.5, 0.0));
+        assert!(!blend_volume_plausible(320.0, 319.0, 0.5, 1.5, 0.5, 0.0));
+        // Nur eine Sorte Kanten: Vorzeichenprüfung bleibt.
+        assert!(!blend_volume_plausible(320.0, 320.1, -0.2, 0.2, 0.5, 0.0));
     }
 }

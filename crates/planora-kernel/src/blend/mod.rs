@@ -100,6 +100,11 @@ pub struct BlendRequest {
 pub struct Blended {
     pub solid: Solid,
     pub volume_change: f64,
+    /// Summe der Beträge der Schätzungen je Kante und Eckstück (mm³, ≥ |`volume_change`|).
+    /// Werden konvexe und konkave Kanten zusammen gerundet, heben sich abgetragenes und
+    /// hinzugefügtes Material in `volume_change` auf; die Volumenprobe misst ihren Spielraum
+    /// deshalb an dieser Größe.
+    pub volume_scale: f64,
     pub edges: Vec<Id<Edge>>,
 }
 
@@ -168,12 +173,12 @@ fn check_size(x: f64, what: &str, min: f64) -> Result<(), BlendError> {
     }
     if x <= 0.0 {
         return Err(BlendError::InvalidParameter(format!(
-            "Das Maß ist zu klein: {what} muss größer als 0 sein"
+            "{what} ist zu klein (muss größer als 0 sein)"
         )));
     }
     if !(x >= min) {
         return Err(BlendError::InvalidParameter(format!(
-            "Das Maß ist zu klein: {what} muss mindestens {} mm betragen (war {})",
+            "{what} ist zu klein (mindestens {} mm, war {})",
             show_num(min),
             show_num(x)
         )));
@@ -217,7 +222,7 @@ fn check_request_min(r: &BlendRequest, min: f64) -> Result<(), BlendError> {
                         "Die Positionen müssen streng steigen".into(),
                     ));
                 }
-                check_size(*radius, "Jeder Radius", min)?;
+                check_size(*radius, "Ein Radius", min)?;
             }
             Ok(())
         }
@@ -393,13 +398,14 @@ pub fn blend(
         .collect::<Result<Vec<_>, _>>()?;
     let plan = end_cuts(solid, &geoms, tol)?;
     check_contacts(solid, &geoms, &plan, tol)?;
-    let volume_change = geoms
+    let per_edge: Vec<f64> = geoms
         .iter()
         .enumerate()
         .map(|(i, g)| edge_volume(g, &plan.starts[i], &plan.ends[i]))
-        .sum::<f64>()
-        + plan.corner_volume;
-    if !volume_change.is_finite() {
+        .collect();
+    let volume_change = per_edge.iter().sum::<f64>() + plan.corner_volume;
+    let volume_scale = per_edge.iter().map(|v| v.abs()).sum::<f64>() + plan.corner_scale;
+    if !(volume_change.is_finite() && volume_scale.is_finite()) {
         return Err(BlendError::ResultInvalid(
             "Die Volumenschätzung ist keine endliche Zahl".into(),
         ));
@@ -414,6 +420,7 @@ pub fn blend(
     Ok(Blended {
         solid: result,
         volume_change,
+        volume_scale,
         edges: chained.iter().map(|c| c.edge.edge).collect(),
     })
 }
