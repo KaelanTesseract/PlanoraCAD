@@ -2,13 +2,15 @@
 
 use crate::error::FeatureError;
 use crate::model::{BodyRef, Document, EdgeCopy, FeatureKind, SketchFeature, SketchPlane};
-use crate::refs::{FaceRef, resolve_edge, resolve_face};
+use crate::refs::{FaceRef, first_face, resolve_edge, resolve_face};
 use planora_kernel::boolean::BooleanError;
-use planora_kernel::{BoolOp, Kernel, Solid, SurfaceKind};
+use planora_kernel::{
+    BlendEdge, BlendError, BlendRequest, Blended, BoolOp, Kernel, Solid, SurfaceKind,
+};
 use planora_math::{DMat4, DVec3};
 use planora_mesh::{
-    Discretizer, TessellationOptions, boolean_volume_plausible, mass_properties, tessellate,
-    tessellate_with,
+    BLEND_REL, BLEND_SLACK_FACTOR, Discretizer, TessellationOptions, blend_volume_plausible,
+    boolean_volume_plausible, curved_area, mass_properties, tessellate, tessellate_with,
 };
 use planora_sketch::{Sketch, extrude_profile, plane_of_face, revolve_profile};
 
@@ -118,6 +120,16 @@ fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
                 return out("Die Verschiebung");
             }
         }
+        FeatureKind::Verrunden { edges, art, .. } => {
+            if edges.is_empty() {
+                return Err(FeatureError::InvalidInput(
+                    "Es ist keine Kante gewählt".into(),
+                ));
+            }
+            if !art.numbers().iter().all(|v| in_range(*v)) {
+                return out("Ein Maß der Rundung oder Fase");
+            }
+        }
         FeatureKind::Sketch(_) | FeatureKind::Revolve { .. } | FeatureKind::Boolean { .. } => {}
     }
     Ok(())
@@ -204,6 +216,33 @@ fn compute_unchecked(
                 .map_err(|e| FeatureError::Kernel(e.to_string()))?;
             Ok(Computed::bodies(vec![moved]))
         }
+        FeatureKind::Verrunden {
+            body,
+            edges,
+            art,
+            tangentenkette,
+        } => {
+            let s = visible_body(doc, visible, *body)?;
+            let tol = kernel.tolerance;
+            let mut list = Vec::with_capacity(edges.len());
+            for r in edges {
+                let found = resolve_edge(&[s], r, &tol)?;
+                list.push(BlendEdge {
+                    edge: found.edge,
+                    first_face: first_face(s, found.edge, &r.a),
+                });
+            }
+            let request = BlendRequest {
+                edges: list,
+                kind: art.kernel_kind(),
+                tangent_chain: *tangentenkette,
+            };
+            let blended = kernel.blend(s, &request).map_err(|e| blend_error(s, &e))?;
+            check_blend_volume(doc, s, &blended)?;
+            let mut result = blended.solid;
+            result.assign_origin(id.0);
+            Ok(Computed::bodies(vec![result]))
+        }
     }
 }
 
@@ -242,6 +281,48 @@ fn is_freeform(s: &Solid) -> bool {
     s.faces
         .iter()
         .any(|(_, f)| f.surface.kind() == SurfaceKind::Nurbs)
+}
+
+/// Meldung einer gescheiterten Verrundung (P11): bei Freiformkörpern und Ursachen aus der Bahn
+/// mit dem bekannten Vorsatz.
+fn blend_error(input: &Solid, e: &BlendError) -> FeatureError {
+    let limit = matches!(
+        e,
+        BlendError::SpineLost | BlendError::Unsupported(_) | BlendError::TooExpensive
+    );
+    if is_freeform(input) && limit {
+        FeatureError::Kernel(format!("Bei Körpern mit Freiformflächen: {e}"))
+    } else {
+        FeatureError::Kernel(e.to_string())
+    }
+}
+
+/// Volumenprobe einer Verrundung (Spec §4.5, P2): Eingang und Ergebnis mit gemeinsamer Teilung
+/// vernetzen und die Änderung mit der Schätzung des Kernels vergleichen (Spielräume
+/// [`BLEND_REL`] und [`BLEND_SLACK_FACTOR`] aus `planora-mesh`, gemeinsam mit dessen Tests).
+fn check_blend_volume(
+    doc: &Document,
+    input: &Solid,
+    blended: &Blended,
+) -> Result<(), FeatureError> {
+    let disc = Discretizer::for_solids(&[input, &blended.solid], doc.chord_tolerance);
+    let mesh =
+        |s: &Solid| tessellate_with(s, &disc).map_err(|e| FeatureError::Kernel(e.to_string()));
+    let (mi, mo) = (mesh(input)?, mesh(&blended.solid)?);
+    let slack = BLEND_SLACK_FACTOR
+        * disc.chord_tolerance()
+        * (curved_area(input, &mi) + curved_area(&blended.solid, &mo));
+    if blend_volume_plausible(
+        mass_properties(&mi).volume,
+        mass_properties(&mo).volume,
+        blended.volume_change,
+        BLEND_REL,
+        slack,
+    ) {
+        Ok(())
+    } else {
+        Err(FeatureError::ImplausibleBlend)
+    }
 }
 
 /// Grundkörper: Kernel-Ergebnis, verschoben um `origin`, geprüft und markiert.
@@ -573,5 +654,39 @@ mod tests {
                 .contains("unplausibel")
         );
         assert_eq!(check_volume(&doc, BoolOp::Union, &big, &tiny, &big), Ok(()));
+    }
+
+    #[test]
+    fn the_blend_volume_probe_rejects_a_wrong_estimate() {
+        use planora_kernel::blend::topo::{edge_uses, face_name};
+        let doc = Document::new();
+        let s = doc.kernel.make_box(DVec3::splat(10.0)).unwrap();
+        let e = s
+            .edges
+            .iter()
+            .map(|(id, _)| id)
+            .find(|&id| {
+                let n: Vec<String> = edge_uses(&s, id)
+                    .iter()
+                    .map(|u| face_name(&s, u.face))
+                    .collect();
+                n.contains(&"Deckel".to_string()) && n.contains(&"Wand 1".to_string())
+            })
+            .unwrap();
+        let request = BlendRequest {
+            edges: vec![BlendEdge {
+                edge: e,
+                first_face: None,
+            }],
+            kind: planora_kernel::BlendKind::Fillet { radius: 2.0 },
+            tangent_chain: false,
+        };
+        let mut b = doc.kernel.blend(&s, &request).unwrap();
+        assert_eq!(check_blend_volume(&doc, &s, &b), Ok(()));
+        b.volume_change = 500.0;
+        assert_eq!(
+            check_blend_volume(&doc, &s, &b),
+            Err(FeatureError::ImplausibleBlend)
+        );
     }
 }

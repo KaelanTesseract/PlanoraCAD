@@ -5,7 +5,7 @@ use crate::browser::ERROR_COLOR;
 use crate::create_dialog::axis_candidates;
 use crate::sketch_view::{format_number, parse_number};
 use crate::state::{AppState, MAX_COORD_MM};
-use planora_feature::{BodyRef, FeatureId, FeatureKind, FeatureStatus};
+use planora_feature::{BlendArt, BodyRef, FeatureId, FeatureKind, FeatureStatus};
 use planora_kernel::BoolOp;
 use planora_math::DVec3;
 
@@ -64,10 +64,26 @@ fn numbers_of(kind: &FeatureKind) -> Vec<(&'static str, f64)> {
         }
         FeatureKind::Extrude { height, .. } => vec![("Höhe", *height)],
         FeatureKind::Move { delta, .. } => vec![("Δx", delta.x), ("Δy", delta.y), ("Δz", delta.z)],
+        FeatureKind::Verrunden { art, .. } => match art {
+            BlendArt::Rundung { radius } => vec![("Radius", *radius)],
+            BlendArt::FaseGleich { abstand } => vec![("Abstand", *abstand)],
+            BlendArt::FaseZwei { abstand1, abstand2 } => {
+                vec![("Abstand 1", *abstand1), ("Abstand 2", *abstand2)]
+            }
+            BlendArt::FaseWinkel { abstand, winkel } => {
+                vec![("Abstand", *abstand), ("Winkel", *winkel)]
+            }
+            BlendArt::RundungVariabel { .. } => Vec::new(),
+        },
         FeatureKind::Sketch(_) | FeatureKind::Revolve { .. } | FeatureKind::Boolean { .. } => {
             Vec::new()
         }
     }
+}
+
+/// Einheit eines Zahlenfelds.
+fn unit(label: &str) -> &'static str {
+    if label == "Winkel" { "°" } else { "mm" }
 }
 
 /// Schreibt Zahlen (in der Reihenfolge von [`numbers_of`]) in die Feature-Art.
@@ -100,6 +116,15 @@ fn set_numbers(kind: &mut FeatureKind, v: &[f64]) {
         }
         (FeatureKind::Extrude { height, .. }, [h]) => *height = *h,
         (FeatureKind::Move { delta, .. }, [_, _, _]) => *delta = p(v),
+        (FeatureKind::Verrunden { art, .. }, values) => match (art, values) {
+            (BlendArt::Rundung { radius }, [r]) => *radius = *r,
+            (BlendArt::FaseGleich { abstand }, [a]) => *abstand = *a,
+            (BlendArt::FaseZwei { abstand1, abstand2 }, [a, b]) => {
+                (*abstand1, *abstand2) = (*a, *b)
+            }
+            (BlendArt::FaseWinkel { abstand, winkel }, [a, w]) => (*abstand, *winkel) = (*a, *w),
+            _ => {}
+        },
         _ => {}
     }
 }
@@ -257,7 +282,7 @@ impl FeatureDialog {
                             for (label, text) in &mut self.numbers {
                                 ui.label(*label);
                                 ui.add(egui::TextEdit::singleline(text).desired_width(90.0));
-                                ui.label("mm");
+                                ui.label(unit(label));
                                 ui.end_row();
                             }
                         });

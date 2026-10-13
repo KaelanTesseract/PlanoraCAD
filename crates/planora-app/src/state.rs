@@ -1343,12 +1343,12 @@ fn status_message(status: Option<FeatureStatus>) -> String {
     }
 }
 
-/// Folgt einer Kette von Verschiebungen bis zu dem Körper, den ein anderes Feature erzeugt hat.
+/// Folgt einer Kette von Verschiebungen und Verrundungen bis zu dem Körper, den ein anderes Feature erzeugt hat.
 fn origin_of(doc: &Document, mut r: BodyRef) -> BodyRef {
     // Verweise zeigen nur nach vorn: spätestens nach so vielen Schritten ist die Kette zu Ende.
     for _ in 0..doc.features().len() {
         match doc.feature(r.feature).map(|f| &f.kind) {
-            Some(FeatureKind::Move { body, .. }) => r = *body,
+            Some(FeatureKind::Move { body, .. } | FeatureKind::Verrunden { body, .. }) => r = *body,
             _ => break,
         }
     }

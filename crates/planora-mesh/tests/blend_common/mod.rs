@@ -7,8 +7,8 @@ use planora_kernel::blend::topo::{edge_uses, face_name};
 use planora_kernel::*;
 use planora_math::{DVec2, DVec3, Frame, PI, Tolerance};
 use planora_mesh::{
-    Discretizer, blend_volume_plausible, check_face_boundaries, curved_area, is_watertight,
-    mass_properties, tessellate_with,
+    BLEND_REL, BLEND_SLACK_FACTOR, Discretizer, blend_volume_plausible, check_face_boundaries,
+    curved_area, is_watertight, mass_properties, tessellate_with,
 };
 
 pub fn k() -> AnalyticKernel {
@@ -73,13 +73,14 @@ pub fn plausible(before: &Solid, b: &Blended, chord: f64) -> bool {
     let disc = Discretizer::for_solids(&[before, &b.solid], chord);
     let mb = tessellate_with(before, &disc).unwrap();
     let ma = tessellate_with(&b.solid, &disc).unwrap();
-    let slack =
-        2.0 * disc.chord_tolerance() * (curved_area(before, &mb) + curved_area(&b.solid, &ma));
+    let slack = BLEND_SLACK_FACTOR
+        * disc.chord_tolerance()
+        * (curved_area(before, &mb) + curved_area(&b.solid, &ma));
     blend_volume_plausible(
         mass_properties(&mb).volume,
         mass_properties(&ma).volume,
         b.volume_change,
-        0.5,
+        BLEND_REL,
         slack,
     )
 }

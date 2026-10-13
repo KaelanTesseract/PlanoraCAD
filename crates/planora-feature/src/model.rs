@@ -1,7 +1,7 @@
 //! Datenmodell des Feature-Baums: Features, ihre Arten und das Dokument.
 
 use crate::refs::{EdgeRef, FaceRef};
-use planora_kernel::{AnalyticKernel, BoolOp, Solid};
+use planora_kernel::{AnalyticKernel, BlendKind, BoolOp, Solid};
 use planora_math::{DVec3, Frame};
 use planora_sketch::{CurveId, Sketch};
 
@@ -63,6 +63,88 @@ pub struct SketchFeature {
     pub copies: Vec<EdgeCopy>,
 }
 
+/// Art einer Verrundung (Maße in mm, Winkel in Grad, Positionen in Prozent der Kettenlänge).
+#[derive(Clone, Debug, PartialEq)]
+pub enum BlendArt {
+    Rundung {
+        radius: f64,
+    },
+    /// Punkte (Position in % der Kettenlänge, Radius), Positionen streng steigend.
+    RundungVariabel {
+        punkte: Vec<(f64, f64)>,
+    },
+    FaseGleich {
+        abstand: f64,
+    },
+    /// Abstand auf Fläche 1 (Marke `EdgeRef.a`) und auf Fläche 2.
+    FaseZwei {
+        abstand1: f64,
+        abstand2: f64,
+    },
+    /// Abstand auf Fläche 1 und Winkel der Fase zu Fläche 1.
+    FaseWinkel {
+        abstand: f64,
+        winkel: f64,
+    },
+}
+
+impl BlendArt {
+    pub fn is_chamfer(&self) -> bool {
+        matches!(
+            self,
+            BlendArt::FaseGleich { .. } | BlendArt::FaseZwei { .. } | BlendArt::FaseWinkel { .. }
+        )
+    }
+
+    /// Bezeichnung der Feature-Art: „Rundung“ oder „Fase“.
+    pub fn label(&self) -> &'static str {
+        if self.is_chamfer() { "Fase" } else { "Rundung" }
+    }
+
+    /// Ausführliche Bezeichnung für Eigenschaften und Fenster.
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            BlendArt::Rundung { .. } => "Rundung",
+            BlendArt::RundungVariabel { .. } => "Rundung mit variablem Radius",
+            BlendArt::FaseGleich { .. } => "Fase mit gleichem Abstand",
+            BlendArt::FaseZwei { .. } => "Fase mit zwei Abständen",
+            BlendArt::FaseWinkel { .. } => "Fase mit Abstand und Winkel",
+        }
+    }
+
+    /// Alle Zahlen (für die Bereichsprüfung).
+    pub fn numbers(&self) -> Vec<f64> {
+        match self {
+            BlendArt::Rundung { radius } => vec![*radius],
+            BlendArt::RundungVariabel { punkte } => {
+                punkte.iter().flat_map(|(p, r)| [*p, *r]).collect()
+            }
+            BlendArt::FaseGleich { abstand } => vec![*abstand],
+            BlendArt::FaseZwei { abstand1, abstand2 } => vec![*abstand1, *abstand2],
+            BlendArt::FaseWinkel { abstand, winkel } => vec![*abstand, *winkel],
+        }
+    }
+
+    /// Anfrage-Art des Kernels (Grad → Bogenmaß, Prozent → Anteil).
+    pub fn kernel_kind(&self) -> BlendKind {
+        match self {
+            BlendArt::Rundung { radius } => BlendKind::Fillet { radius: *radius },
+            BlendArt::RundungVariabel { punkte } => BlendKind::VariableFillet {
+                points: punkte.iter().map(|(p, r)| (p / 100.0, *r)).collect(),
+            },
+            BlendArt::FaseGleich { abstand } => BlendKind::ChamferEqual { distance: *abstand },
+            BlendArt::FaseZwei { abstand1, abstand2 } => BlendKind::ChamferTwo {
+                distance1: *abstand1,
+                distance2: *abstand2,
+            },
+            BlendArt::FaseWinkel { abstand, winkel } => BlendKind::ChamferAngle {
+                distance: *abstand,
+                angle: winkel.to_radians(),
+            },
+        }
+    }
+}
+
 /// Art eines Features mit seinen Parametern (Maße in Millimetern).
 #[derive(Clone, Debug)]
 #[allow(
@@ -108,6 +190,13 @@ pub enum FeatureKind {
         body: BodyRef,
         delta: DVec3,
     },
+    /// Rundung oder Fase an Kanten eines Körpers; ersetzt den Körper (wie Verschieben).
+    Verrunden {
+        body: BodyRef,
+        edges: Vec<EdgeRef>,
+        art: BlendArt,
+        tangentenkette: bool,
+    },
 }
 
 impl FeatureKind {
@@ -123,6 +212,7 @@ impl FeatureKind {
             FeatureKind::Revolve { .. } => "Rotation",
             FeatureKind::Boolean { .. } => "Boolesche Operation",
             FeatureKind::Move { .. } => "Verschieben",
+            FeatureKind::Verrunden { art, .. } => art.label(),
         }
     }
 
@@ -149,6 +239,14 @@ impl FeatureKind {
             }
             FeatureKind::Boolean { target, tool, .. } => vec![target.feature, tool.feature],
             FeatureKind::Move { body, .. } => vec![body.feature],
+            FeatureKind::Verrunden { body, edges, .. } => {
+                let mut d = vec![body.feature];
+                for e in edges {
+                    d.push(FeatureId(e.a.origin));
+                    d.push(FeatureId(e.b.origin));
+                }
+                d
+            }
         };
         deps.sort();
         deps.dedup();

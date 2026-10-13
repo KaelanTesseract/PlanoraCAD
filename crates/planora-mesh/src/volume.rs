@@ -23,6 +23,13 @@ pub fn boolean_volume_plausible(
     }
 }
 
+/// Spielraum der Volumenprobe einer Verrundung relativ zur Schätzung des Kernels (Plan P2).
+pub const BLEND_REL: f64 = 0.5;
+
+/// Netzfehler je mm² gekrümmter Fläche in Vielfachen der Sehnentoleranz (Plan P2): jedes Dreieck
+/// weicht höchstens die Sehnentoleranz von der Fläche ab; Eingang und Ergebnis zusammen.
+pub const BLEND_SLACK_FACTOR: f64 = 2.0;
+
 /// Volumenprobe einer Verrundung (Spec §4.5, Plan P2): `estimate` ist die Schätzung des
 /// Kernels (negativ = Material abgetragen). Die gemessene Änderung `v_out − v_in` muss das
 /// Vorzeichen der Schätzung haben (bis `slack`) und höchstens `rel · |estimate| + slack` von ihr

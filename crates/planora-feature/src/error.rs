@@ -28,6 +28,8 @@ pub enum FeatureError {
         "Bei Körpern mit Freiformflächen: Das Ergebnis ist unplausibel (Volumenprobe fehlgeschlagen); bitte Lage oder Maße eines Körpers leicht ändern"
     )]
     ImplausibleFreeformResult,
+    #[error("Das Ergebnis der Rundung oder Fase ist unplausibel (Volumenprobe fehlgeschlagen)")]
+    ImplausibleBlend,
     #[error("Folgende Features hängen davon ab: {}", join_ids(.0))]
     HasDependents(Vec<u64>),
     #[error("Ungültige Eingabe: {0}")]

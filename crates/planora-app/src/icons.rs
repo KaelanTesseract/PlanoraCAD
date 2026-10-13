@@ -64,6 +64,7 @@ pub enum FeatureIcon {
     Sketch,
     Body(BodyKind),
     Move,
+    Blend,
 }
 
 impl FeatureIcon {
@@ -80,6 +81,7 @@ impl FeatureIcon {
             K::Revolve { .. } => FeatureIcon::Body(BodyKind::Revolution),
             K::Boolean { .. } => FeatureIcon::Body(BodyKind::Combined),
             K::Move { .. } => FeatureIcon::Move,
+            K::Verrunden { .. } => FeatureIcon::Blend,
         }
     }
 }
@@ -90,6 +92,7 @@ pub fn paint_feature_icon(painter: &Painter, rect: Rect, icon: FeatureIcon, colo
         FeatureIcon::Sketch => paint_sketch_icon(painter, rect, color),
         FeatureIcon::Body(kind) => paint_body_icon(painter, rect, kind, color),
         FeatureIcon::Move => paint_move_icon(painter, rect, color),
+        FeatureIcon::Blend => paint_blend_icon(painter, rect, color),
     }
 }
 
@@ -103,6 +106,23 @@ fn paint_move_icon(painter: &Painter, rect: Rect, color: Color32) {
     painter.line_segment([from, to], stroke);
     painter.line_segment([to, to + vec2(-r * 0.7, 0.0)], stroke);
     painter.line_segment([to, to + vec2(0.0, r * 0.7)], stroke);
+}
+
+/// Rundung bzw. Fase: Winkel mit abgerundeter Ecke.
+fn paint_blend_icon(painter: &Painter, rect: Rect, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.38;
+    let corner = c + vec2(-r, r);
+    let bend = r * 0.9;
+    let mut pts: Vec<Pos2> = vec![c + vec2(-r, -r), corner + vec2(0.0, -bend)];
+    for i in 1..8 {
+        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+        pts.push(corner + vec2(bend * (1.0 - a.cos()), -bend * (1.0 - a.sin())));
+    }
+    pts.push(corner + vec2(bend, 0.0));
+    pts.push(c + vec2(r, r));
+    painter.add(egui::Shape::line(pts, stroke));
 }
 
 /// Zeichnet das Skizzensymbol in `rect`: ein Rechteck mit Eckpunkten und ein Kreis.

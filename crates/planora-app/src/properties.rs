@@ -1,7 +1,9 @@
 use crate::browser::ERROR_COLOR;
 use crate::sketch_view::format_number;
 use crate::state::AppState;
-use planora_feature::{FeatureId, FeatureKind, FeatureStatus, SketchPlane, StandardPlane};
+use planora_feature::{
+    BlendArt, FeatureId, FeatureKind, FeatureStatus, SketchPlane, StandardPlane,
+};
 use planora_kernel::{BoolOp, Kernel};
 use planora_math::DVec3;
 use planora_render::Pick;
@@ -146,6 +148,38 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str
             ("Körper", state.body_ref_name(*body)),
             ("Verschiebung", triple(*delta)),
         ],
+        FeatureKind::Verrunden {
+            body,
+            edges,
+            art,
+            tangentenkette,
+        } => {
+            let mut rows = vec![
+                ("Körper", state.body_ref_name(*body)),
+                ("Kanten", edges.len().to_string()),
+                ("Art", art.kind_label().to_string()),
+            ];
+            match art {
+                BlendArt::Rundung { radius } => rows.push(("Radius", mm(*radius))),
+                BlendArt::RundungVariabel { punkte } => {
+                    rows.push(("Punkte", punkte.len().to_string()))
+                }
+                BlendArt::FaseGleich { abstand } => rows.push(("Abstand", mm(*abstand))),
+                BlendArt::FaseZwei { abstand1, abstand2 } => {
+                    rows.push(("Abstand 1", mm(*abstand1)));
+                    rows.push(("Abstand 2", mm(*abstand2)));
+                }
+                BlendArt::FaseWinkel { abstand, winkel } => {
+                    rows.push(("Abstand", mm(*abstand)));
+                    rows.push(("Winkel", format!("{} °", format_number(*winkel, 2))));
+                }
+            }
+            rows.push((
+                "Tangentenkette",
+                if *tangentenkette { "an" } else { "aus" }.to_string(),
+            ));
+            rows
+        }
     }
 }
 

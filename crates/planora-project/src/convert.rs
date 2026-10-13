@@ -4,8 +4,8 @@
 use crate::error::{ProjectError, Result};
 use crate::format::*;
 use planora_feature::{
-    BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM, SketchFeature,
-    SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
+    BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM,
+    SketchFeature, SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
 };
 use planora_kernel::BoolOp;
 use planora_math::{DVec3, Frame, Tolerance};
@@ -485,7 +485,65 @@ fn kind_to(k: &FeatureKind) -> KindDto {
             koerper: body_to(body),
             versatz: v3(*delta),
         },
+        FeatureKind::Verrunden {
+            body,
+            edges,
+            art,
+            tangentenkette,
+        } => KindDto::Verrunden {
+            koerper: body_to(body),
+            kanten: edges.iter().map(edge_to).collect(),
+            art: art_to(art),
+            tangentenkette: *tangentenkette,
+        },
     }
+}
+
+fn art_to(a: &BlendArt) -> BlendArtDto {
+    match a {
+        BlendArt::Rundung { radius } => BlendArtDto::Rundung { radius: *radius },
+        BlendArt::RundungVariabel { punkte } => BlendArtDto::RundungVariabel {
+            punkte: punkte.iter().map(|(p, r)| [*p, *r]).collect(),
+        },
+        BlendArt::FaseGleich { abstand } => BlendArtDto::FaseGleich { abstand: *abstand },
+        BlendArt::FaseZwei { abstand1, abstand2 } => BlendArtDto::FaseZwei {
+            abstand1: *abstand1,
+            abstand2: *abstand2,
+        },
+        BlendArt::FaseWinkel { abstand, winkel } => BlendArtDto::FaseWinkel {
+            abstand: *abstand,
+            winkel: *winkel,
+        },
+    }
+}
+
+fn art_from(origin: &str, name: &str, d: &BlendArtDto) -> Result<BlendArt> {
+    let n = |what: &str, x: f64| num(origin, &format!("„{name}“ {what}"), x);
+    Ok(match d {
+        BlendArtDto::Rundung { radius } => BlendArt::Rundung {
+            radius: n("Radius", *radius)?,
+        },
+        BlendArtDto::RundungVariabel { punkte } => {
+            check_len(origin, "Radienpunkte", punkte.len())?;
+            BlendArt::RundungVariabel {
+                punkte: punkte
+                    .iter()
+                    .map(|[p, r]| Ok((n("Position", *p)?, n("Radius", *r)?)))
+                    .collect::<Result<Vec<_>>>()?,
+            }
+        }
+        BlendArtDto::FaseGleich { abstand } => BlendArt::FaseGleich {
+            abstand: n("Abstand", *abstand)?,
+        },
+        BlendArtDto::FaseZwei { abstand1, abstand2 } => BlendArt::FaseZwei {
+            abstand1: n("Abstand 1", *abstand1)?,
+            abstand2: n("Abstand 2", *abstand2)?,
+        },
+        BlendArtDto::FaseWinkel { abstand, winkel } => BlendArt::FaseWinkel {
+            abstand: n("Abstand", *abstand)?,
+            winkel: n("Winkel", *winkel)?,
+        },
+    })
 }
 
 fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
@@ -591,6 +649,29 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
             body: body_from(koerper),
             delta: v("Versatz", *versatz)?,
         },
+        KindDto::Verrunden {
+            koerper,
+            kanten,
+            art,
+            tangentenkette,
+        } => {
+            check_len(origin, "Kanten", kanten.len())?;
+            if kanten.is_empty() {
+                return Err(ProjectError::corrupt(
+                    origin,
+                    format!("„{name}“: keine Kante gewählt"),
+                ));
+            }
+            FeatureKind::Verrunden {
+                body: body_from(koerper),
+                edges: kanten
+                    .iter()
+                    .map(|k| edge_from(origin, name, k))
+                    .collect::<Result<Vec<_>>>()?,
+                art: art_from(origin, name, art)?,
+                tangentenkette: *tangentenkette,
+            }
+        }
     })
 }
 

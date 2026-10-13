@@ -12,9 +12,11 @@ mod snapshot;
 pub use compute::MAX_COORD_MM;
 pub use error::FeatureError;
 pub use model::{
-    BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus, SketchFeature,
-    SketchPlane, StandardPlane,
+    BlendArt, BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus,
+    SketchFeature, SketchPlane, StandardPlane,
 };
 pub use recompute::{RecomputeReport, VisibleBody};
-pub use refs::{EdgeRef, FaceRef, ResolvedEdge, ResolvedFace, resolve_edge, resolve_face};
+pub use refs::{
+    EdgeRef, FaceRef, ResolvedEdge, ResolvedFace, first_face, resolve_edge, resolve_face,
+};
 pub use snapshot::{Snapshot, SnapshotFeature};

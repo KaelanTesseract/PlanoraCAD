@@ -83,7 +83,7 @@ pub fn delete_plan(state: &AppState, id: FeatureId) -> DeletePlan {
     let operation = doc.feature(id).is_some_and(|f| {
         matches!(
             f.kind,
-            FeatureKind::Boolean { .. } | FeatureKind::Move { .. }
+            FeatureKind::Boolean { .. } | FeatureKind::Move { .. } | FeatureKind::Verrunden { .. }
         )
     });
     let note = if operation {

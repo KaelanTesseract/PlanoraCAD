@@ -13,4 +13,6 @@ pub use discretize::{Discretizer, MAX_NURBS_DIVISIONS};
 pub use mass::{MassProperties, mass_properties};
 pub use mesh::{EdgeLine, FaceRange, Mesh, TessellationOptions};
 pub use tessellate::{MeshError, tessellate, tessellate_with};
-pub use volume::{blend_volume_plausible, boolean_volume_plausible, curved_area};
+pub use volume::{
+    BLEND_REL, BLEND_SLACK_FACTOR, blend_volume_plausible, boolean_volume_plausible, curved_area,
+};
