@@ -4,6 +4,7 @@
 pub mod analytic;
 pub mod build;
 pub mod chain;
+pub mod corner;
 pub mod error;
 pub mod section;
 pub mod topo;

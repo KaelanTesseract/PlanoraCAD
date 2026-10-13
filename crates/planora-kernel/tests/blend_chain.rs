@@ -175,21 +175,6 @@ fn independent_edges_in_one_feature_add_up() {
     assert!((r.volume_change - want).abs() < 1e-3 * want.abs());
 }
 
-#[test]
-fn two_edges_at_a_corner_are_refused_until_corners_exist() {
-    // Übergang (P12): Task 11 ersetzt diesen Test durch Gehrung und Kugelecke.
-    let b = k().make_box(DVec3::splat(10.0)).unwrap();
-    let e1 = edge_between(&b, "Deckel", "Wand 1");
-    let e2 = edge_between(&b, "Deckel", "Wand 2");
-    assert!(matches!(
-        k().blend(
-            &b,
-            &req(&[e1, e2], BlendKind::Fillet { radius: 1.0 }, false)
-        ),
-        Err(BlendError::Corner(_))
-    ));
-}
-
 // ---------------------------------------------------------------------------------------------
 // Zusätzliche Prüfungen (Task 9): Gruppierung, Fläche 1 längs der Kette, Ablehnungen, Grenzen.
 

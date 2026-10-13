@@ -331,7 +331,7 @@ fn smooth_pair(
     Ok(Some((ci, cj)))
 }
 
-/// Zwei gerundete Kanten an einer Ecke: glatter Übergang (Ecken folgen in Task 11).
+/// Zwei gerundete Kanten an einer Ecke: glatter Übergang, sonst Gehrung (Task 11).
 fn vertex_pair(
     solid: &Solid,
     geoms: &[EdgeGeom],
@@ -343,24 +343,23 @@ fn vertex_pair(
     if let Some((cx, cy)) = smooth_pair(solid, geoms, v, x, y, tol)? {
         return Ok(vec![(x.0, x.1, cx), (y.0, y.1, cy)]);
     }
-    Err(BlendError::Corner(
-        "Zwei gerundete Kanten treffen sich an einer Ecke; das wird noch nicht unterstützt".into(),
-    ))
+    super::corner::miter_pair(solid, geoms, v, x, y, tol)
 }
 
-/// Drei und mehr gerundete Kanten an einer Ecke (Task 11).
+/// Drei gerundete Kanten an einer Ecke: Kugelstück (Task 11); mehr: benannt abgelehnt.
 fn corner_many(
-    _solid: &Solid,
-    _geoms: &[EdgeGeom],
-    _v: Id<Vertex>,
+    solid: &Solid,
+    geoms: &[EdgeGeom],
+    v: Id<Vertex>,
     list: &[(usize, bool)],
-    _plan: &mut EndPlan,
-    _tol: &Tolerance,
+    plan: &mut EndPlan,
+    tol: &Tolerance,
 ) -> Result<Vec<(usize, bool, EndCut)>, BlendError> {
-    Err(BlendError::Corner(format!(
-        "An der Ecke treffen {} gerundete Kanten zusammen; das wird noch nicht unterstützt",
-        list.len()
-    )))
+    let index = plan.corners.len() + 1;
+    let (cuts, piece, volume) = super::corner::corner_three(solid, geoms, v, list, index, tol)?;
+    plan.corners.push(piece);
+    plan.corner_volume += volume;
+    Ok(cuts)
 }
 
 /// Abschlüsse aller Kanten, je Ecke entschieden: geschlossene Kanten an ihrer Naht, eine
@@ -749,6 +748,17 @@ fn blend_box(g: &EdgeGeom, start: &EndCut, end: &EndCut) -> Option<Aabb> {
     }
 }
 
+/// Sicherer Hüllquader eines Eckstücks: Kugelstücke liegen in der ganzen Kugel; sonst keiner.
+fn corner_box(piece: &Piece) -> Option<Aabb> {
+    match &piece.surface {
+        Surface::Sphere { frame, radius } => {
+            let h = DVec3::splat(radius.abs());
+            Some((frame.origin - h, frame.origin + h))
+        }
+        _ => None,
+    }
+}
+
 /// Liegen die Quader mehr als `margin` auseinander? NaN gilt als „nicht“.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn apart(a: &Aabb, b: &Aabb, margin: f64) -> bool {
@@ -945,6 +955,14 @@ pub fn assemble(
     }
     for (i, blend) in pieces[kept..].iter().enumerate() {
         let bound = blend_box(&geoms[i], &plan.starts[i], &plan.ends[i]);
+        for (piece, name) in pieces[..kept].iter().zip(&names) {
+            check_piercing(piece, blend, bound.as_ref(), name, &btol)?;
+        }
+    }
+    // Eckstücke ebenso: Keine Kante des Eingangskörpers (Loch- oder Taschenwand) darf ins Innere
+    // eines Kugelstücks reichen.
+    for blend in &plan.corners {
+        let bound = corner_box(blend);
         for (piece, name) in pieces[..kept].iter().zip(&names) {
             check_piercing(piece, blend, bound.as_ref(), name, &btol)?;
         }
