@@ -103,6 +103,7 @@ fn stadium() -> Solid {
 
 #[test]
 fn chamfers_ending_at_a_smoothly_continuing_face_are_refused_by_name() {
+    // Ohne Kette benannt abgelehnt; mit Kette (Task 9) läuft die Fase glatt über die Rundung.
     // C1 (a): Würfel mit Rundung r = 2 an Deckel/Wand 1; die Rundungsfläche setzt Wand 1 und den
     // Deckel glatt fort. Fasen an Wand 1/Wand 2 und Deckel/Wand 2 enden an ihr.
     let cube = k().make_box(DVec3::splat(10.0)).unwrap();
@@ -120,15 +121,31 @@ fn chamfers_ending_at_a_smoothly_continuing_face_are_refused_by_name() {
         for kind in [&equal, &angled] {
             let what = format!("{a}/{b} {kind:?}");
             assert_smooth_end_refused(blend(&rounded, e, kind.clone(), false), &what);
-            // Mit Kette: die Kante läuft über den Abschlussbogen glatt weiter (Kette) – auch das
-            // ist eine benannte Ablehnung, nie ein Körper.
-            match blend(&rounded, e, kind.clone(), true) {
-                Err(BlendError::Unsupported(m)) => assert!(
-                    m.contains("Tangentenkette") || m.contains("glatt fort"),
-                    "{what}: {m}"
-                ),
-                other => panic!("{what}: {:?}", other.map(|b| b.solid.faces.len())),
-            }
+            // Mit Kette (Übergang P12, seit Task 9): die Fase läuft über den Abschlussbogen der
+            // Rundung glatt weiter – senkrechte Kante (Länge 8), Viertelbogen (r = 2) und
+            // Deckelkante (Länge 8). Querschnitt Dreieck mit Schenkel 1 auf Fläche 1 und t auf
+            // Fläche 2 (t = 1 bzw. tan 30°); am Bogen Pappus mit dem Abstand des Schwerpunkts von
+            // der Bogenachse: (2 + 1 + 2)/3, wenn Fläche 1 die Wand der Bögen ist, sonst
+            // (2 + 2 + (2 − t))/3.
+            let b = blend(&rounded, e, kind.clone(), true).unwrap();
+            validate(&b.solid).unwrap();
+            assert_eq!(b.edges.len(), 3, "{what}");
+            let t = match kind {
+                BlendKind::ChamferAngle { angle, .. } => angle.tan(),
+                _ => 1.0,
+            };
+            let face_one = face_name(&rounded, edge_uses(&rounded, e)[0].face);
+            let rho = if face_one == "Wand 2" {
+                5.0 / 3.0
+            } else {
+                (6.0 - t) / 3.0
+            };
+            let want = -0.5 * t * (16.0 + rho * PI / 2.0);
+            assert!(
+                (b.volume_change - want).abs() < 1e-9 * want.abs(),
+                "{what} (Fläche 1 {face_one}): {} statt {want}",
+                b.volume_change
+            );
         }
     }
     // C1 (b): Langloch, Kante Boden/gerade Wand: an beiden Enden setzt ein Halbzylinder die
@@ -317,13 +334,28 @@ fn the_tangent_chain_switch_is_not_ignored() {
         BlendKind::Fillet { radius: 0.5 },
         BlendKind::ChamferEqual { distance: 0.5 },
     ] {
-        match blend(&s, e, kind.clone(), true) {
-            Err(BlendError::Unsupported(m)) => assert!(
-                m.contains("Tangentenkette") && m.contains("Deckel") && m.contains("Stufe 2"),
-                "{m}"
+        // Mit Kette (Übergang P12, seit Task 9): die ganze Deckelschleife, vier Kanten, gültig;
+        // Volumen nach Steiner (Querschnitt mal Weg des Schwerpunkts: 2 · 5 + 2π · (2 − Abstand
+        // des Schwerpunkts von der Wand)).
+        let b = blend(&s, e, kind.clone(), true).unwrap();
+        validate(&b.solid).unwrap();
+        assert_eq!(b.edges.len(), 4, "{kind:?}");
+        // Die Schätzung des Kernels nähert den Bogenquerschnitt der Rundung als Vieleck (daher
+        // 2e-3 relativ wie in `blend_chain.rs`); die Fase ist exakt.
+        let (area, offset, rel) = match kind {
+            BlendKind::Fillet { radius: r } => (
+                (1.0 - PI / 4.0) * r * r,
+                r * (5.0 / 6.0 - PI / 4.0) / (1.0 - PI / 4.0),
+                2e-3,
             ),
-            other => panic!("{kind:?}: {:?}", other.map(|b| b.solid.faces.len())),
-        }
+            _ => (0.5 * 0.5 * 0.5, 0.5 / 3.0, 1e-9),
+        };
+        let want = -area * (10.0 + TAU * (2.0 - offset));
+        assert!(
+            (b.volume_change - want).abs() < rel * want.abs(),
+            "{kind:?}: {} statt {want}",
+            b.volume_change
+        );
         // Ohne Kette: die einzelne Kante endet an glatt anschließenden Flächen (C1).
         assert_smooth_end_refused(blend(&s, e, kind.clone(), false), &format!("{kind:?}"));
     }

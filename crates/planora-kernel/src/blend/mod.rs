@@ -3,6 +3,7 @@
 
 pub mod analytic;
 pub mod build;
+pub mod chain;
 pub mod error;
 pub mod section;
 pub mod topo;
@@ -11,16 +12,15 @@ pub use error::BlendError;
 
 use crate::boolean::{Containment, face_geom, point_in_face};
 use crate::ids::Id;
-use crate::topology::{Edge, Face, Solid, Vertex};
+use crate::topology::{Edge, Face, Solid};
 use crate::validate::validate_with;
 use analytic::{EdgeGeom, SectionKind, VolumeModel, analytic_geom};
 use build::{CAVITY, EndCut, EndPlan, assemble, end_cuts, has_cavity};
+use chain::select_edges;
 use planora_math::nurbs::MAX_COORD;
-use planora_math::{DVec3, PI, Tolerance};
+use planora_math::{PI, Tolerance};
 use section::ChamferSpec;
-use topo::{
-    EdgeSides, NEAR_TANGENT_ANGLE, edge_angle, edge_sides, edge_uses, face_name, vertex_edges,
-};
+use topo::{EdgeSides, edge_angle, edge_sides, face_name};
 
 /// Höchstzahl Kanten je Anfrage (nach Ausdehnung der Tangentenkette).
 pub const MAX_BLEND_EDGES: usize = 256;
@@ -38,8 +38,6 @@ pub const MIN_CHAMFER_ANGLE: f64 = PI / 180.0;
 pub const MIN_BLEND_SIZE_FACTOR: f64 = 100.0;
 /// Stellen je Berührkurve, an denen geprüft wird, ob sie in ihrer Fläche liegt.
 const CONTACT_PROBES: usize = 8;
-/// Übergangsmeldung bis Task 9.
-const SEVERAL_LATER: &str = "Mehrere Kanten in einem Feature werden noch nicht unterstützt";
 /// Übergangsmeldung bis Task 14.
 const VARIABLE_LATER: &str = "Der variable Radius wird noch nicht unterstützt";
 
@@ -272,72 +270,6 @@ fn section_kind(kind: &BlendKind) -> Result<SectionKind, BlendError> {
     })
 }
 
-/// Kanten der Anfrage ohne Doppelte (die erste Nennung gilt, auch für `first_face`);
-/// Stufe 1: genau eine.
-fn select_edges(solid: &Solid, r: &BlendRequest) -> Result<Vec<BlendEdge>, BlendError> {
-    let mut out: Vec<BlendEdge> = Vec::new();
-    for be in &r.edges {
-        if solid.edges.get(be.edge).is_none() {
-            return Err(BlendError::EdgeNotFound);
-        }
-        if !out.iter().any(|o| o.edge == be.edge) {
-            out.push(*be);
-        }
-    }
-    if out.len() > 1 {
-        return Err(BlendError::Unsupported(SEVERAL_LATER.into()));
-    }
-    Ok(out)
-}
-
-/// Einheitsrichtung, in der die Kante `e` die Ecke `v` verlässt (für beide Enden, wenn die
-/// Kante dort anfängt und endet).
-fn leaving_directions(solid: &Solid, e: Id<Edge>, v: Id<Vertex>) -> Vec<DVec3> {
-    let Some(edge) = solid.edges.get(e) else {
-        return Vec::new();
-    };
-    let sign = (edge.t1 - edge.t0).signum();
-    let mut out = Vec::new();
-    if edge.start == v {
-        out.push((edge.curve.tangent(edge.t0) * sign).normalize_or_zero());
-    }
-    if edge.end == v {
-        out.push((edge.curve.tangent(edge.t1) * -sign).normalize_or_zero());
-    }
-    out
-}
-
-/// Mit „Tangentenkette“: Läuft die Kante an einer Ecke glatt (Tangenten fast entgegengesetzt,
-/// Schranke wie `NEAR_TANGENT_ANGLE`) in eine weitere Kante an einer ihrer Flächen weiter, ist
-/// sie Teil einer Kette. Stufe 1 rundet keine Ketten; statt still nur diese eine Kante zu runden
-/// (und später, mit Task 9, einen anderen Körper zu liefern) wird benannt abgelehnt.
-fn check_no_chain(solid: &Solid, e: Id<Edge>) -> Result<(), BlendError> {
-    let Some(edge) = solid.edges.get(e) else {
-        return Err(BlendError::EdgeNotFound);
-    };
-    let faces: Vec<Id<Face>> = edge_uses(solid, e).iter().map(|u| u.face).collect();
-    let limit = -NEAR_TANGENT_ANGLE.cos();
-    for v in [edge.start, edge.end] {
-        let own = leaving_directions(solid, e, v);
-        for other in vertex_edges(solid, v).into_iter().filter(|o| *o != e) {
-            let shares = edge_uses(solid, other)
-                .iter()
-                .any(|u| faces.contains(&u.face));
-            let smooth = leaving_directions(solid, other, v)
-                .iter()
-                .any(|d| own.iter().any(|o| o.dot(*d) < limit));
-            if shares && smooth {
-                let names: Vec<String> = faces.iter().map(|f| face_name(solid, *f)).collect();
-                return Err(BlendError::Unsupported(format!(
-                    "Die Kante zwischen „{}“ läuft glatt in weitere Kanten weiter (Tangentenkette); Ketten werden erst in Stufe 2 unterstützt – Schalter „Tangentenkette“ ausschalten",
-                    names.join("“ und „")
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn unsupported_pair(solid: &Solid, sides: &EdgeSides) -> BlendError {
     let label = |f: Id<Face>| {
         solid
@@ -432,7 +364,9 @@ fn roles(kind: &BlendKind, n: usize) -> Vec<String> {
 /// Scheitern ist eine benannte Ablehnung.
 ///
 /// Reihenfolge: zuerst die billigen Prüfungen (Zahlen der Anfrage, Art, Kanten-Ids, mehrere
-/// Schalen), dann die Gültigkeit des Körpers, erst danach die Geometrie.
+/// Schalen), dann die Gültigkeit des Körpers, danach die Auswahl der Kanten (Tangentenkette,
+/// Gruppierung in Ketten, Höchstzahl nach Ausdehnung) und erst dann die Geometrie. Neue Flächen
+/// heißen nach der Reihenfolge der Kanten nach Ausdehnung der Tangentenkette (P9).
 pub fn blend(
     solid: &Solid,
     request: &BlendRequest,
@@ -440,19 +374,21 @@ pub fn blend(
 ) -> Result<Blended, BlendError> {
     check_request_min(request, min_blend_size_for(solid, tol))?;
     let kind = section_kind(&request.kind)?;
-    let edges = select_edges(solid, request)?;
-    if request.tangent_chain {
-        for be in &edges {
-            check_no_chain(solid, be.edge)?;
-        }
+    if request
+        .edges
+        .iter()
+        .any(|be| solid.edges.get(be.edge).is_none())
+    {
+        return Err(BlendError::EdgeNotFound);
     }
     if has_cavity(solid) {
         return Err(BlendError::Unsupported(CAVITY.into()));
     }
     validate_with(solid, tol).map_err(|e| BlendError::InvalidInput(e.to_string()))?;
-    let geoms = edges
+    let chained = select_edges(solid, request)?;
+    let geoms = chained
         .iter()
-        .map(|be| edge_geom(solid, be, kind, tol))
+        .map(|ce| edge_geom(solid, &ce.edge, kind, tol))
         .collect::<Result<Vec<_>, _>>()?;
     let plan = end_cuts(solid, &geoms, tol)?;
     check_contacts(solid, &geoms, &plan, tol)?;
@@ -477,7 +413,7 @@ pub fn blend(
     Ok(Blended {
         solid: result,
         volume_change,
-        edges: edges.iter().map(|e| e.edge).collect(),
+        edges: chained.iter().map(|c| c.edge.edge).collect(),
     })
 }
 

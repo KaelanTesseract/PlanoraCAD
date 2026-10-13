@@ -197,15 +197,10 @@ fn too_large_sizes_are_refused_by_name() {
 }
 
 #[test]
-fn stage_one_refuses_several_edges_and_variable_radii() {
-    // Übergang (P12): wird in Task 9 bzw. Task 14 durch echte Ergebnisse ersetzt.
+fn variable_radii_wait_for_stage_three() {
+    // Übergang (P12): Task 14 ersetzt diesen Test.
     let s = k().make_box(DVec3::splat(10.0)).unwrap();
     let e1 = edge_between(&s, "Deckel", "Wand 1");
-    let e2 = edge_between(&s, "Boden", "Wand 3");
-    assert!(matches!(
-        k().blend(&s, &req(&[e1, e2], BlendKind::Fillet { radius: 1.0 })),
-        Err(BlendError::Unsupported(m)) if m.contains("Mehrere Kanten")
-    ));
     assert!(matches!(
         k().blend(&s, &req(&[e1], BlendKind::VariableFillet { points: vec![(0.0, 1.0), (1.0, 2.0)] })),
         Err(BlendError::Unsupported(m)) if m.contains("variable")

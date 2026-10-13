@@ -3,7 +3,8 @@
 //! Abschlusskurve als neue Kante, alle Flächen gehen als `Piece` in `sew`; danach prüft
 //! `validate_with` das Ergebnis.
 
-use super::analytic::EdgeGeom;
+use super::analytic::{EdgeGeom, VolumeModel};
+use super::chain::{CHAIN_ANGLE, leaving_direction};
 use super::error::BlendError;
 use super::topo::{NEAR_TANGENT_ANGLE, face_name, outward_normal, vertex_faces};
 use crate::boolean::{
@@ -16,7 +17,7 @@ use crate::ids::Id;
 use crate::topology::{Face, FaceTag, Solid, Vertex};
 use crate::validate::validate_with;
 use planora_math::{DVec3, PI, Tolerance};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Vielfaches der (ggf. erweiterten) Längentoleranz, bis zu dem ein Punkt auf einer Kurve liegt
 /// oder zwei Punkte zusammenfallen (Abschlusskurven, gekürzte Nachbarkanten, Ecken). Die
@@ -142,7 +143,8 @@ fn end_param(
 /// Setzt die dritte Fläche `c` an der Ecke `vp` eine der Kantenflächen glatt fort (Normalen
 /// fast parallel, wie `NEAR_TANGENT_ANGLE`)? Dann schneidet die Berührkurve diese Fläche
 /// symmetrisch um die Ecke (oder gar nicht); ein Abschluss dort wäre geraten. Benannte Ablehnung;
-/// glatte Übergänge folgen mit den Ketten (Task 9).
+/// weiter geht es dort nur als glatter Übergang, wenn die anschließende Kante mitgerundet wird
+/// (Tangentenkette oder ausdrücklich gewählt, `smooth_pair`).
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn check_transversal_end(
     solid: &Solid,
@@ -156,7 +158,7 @@ fn check_transversal_end(
         // NaN (Normale nicht bestimmbar) zählt wie „glatt“.
         if !(nc.cross(ns).length() >= NEAR_TANGENT_ANGLE.sin()) {
             return Err(BlendError::Unsupported(format!(
-                "Die Fläche „{}“ setzt an der Ecke die Fläche „{}“ glatt fort; dort lässt sich die Rundung oder Fase nicht abschließen (glatte Übergänge folgen in Stufe 2)",
+                "Die Fläche „{}“ setzt an der Ecke die Fläche „{}“ glatt fort; dort lässt sich die Rundung oder Fase nicht abschließen (fortsetzen lässt sie sich nur zusammen mit einer glatt anschließenden Kante, etwa über „Tangentenkette“)",
                 face_name(solid, c),
                 face_name(solid, side)
             )));
@@ -268,19 +270,141 @@ pub fn cap_cut(
     })
 }
 
-/// Abschlüsse aller Kanten: geschlossene Kanten an ihrer Naht, offene an der dritten Fläche ihrer
-/// Endecken (Stufe 1; Ketten und Ecken ab Task 9 und 11).
-pub fn end_cuts(solid: &Solid, geoms: &[EdgeGeom], tol: &Tolerance) -> Result<EndPlan, BlendError> {
-    let mut plan = EndPlan::default();
-    for g in geoms {
-        if g.closed {
-            plan.starts.push(seam_cut(g, false));
-            plan.ends.push(seam_cut(g, true));
+/// Querschnitt als Abschluss am Anfang bzw. Ende (glatter Übergang, Task 9).
+pub(crate) fn section_cut(g: &EdgeGeom, at_end: bool) -> EndCut {
+    let s = if at_end { g.range.1 } else { g.range.0 };
+    EndCut {
+        sa: s,
+        sb: s,
+        curve: if at_end {
+            g.section_end.clone()
         } else {
-            plan.starts.push(cap_cut(solid, g, false, tol)?);
-            plan.ends.push(cap_cut(solid, g, true, tol)?);
+            g.section_start.clone()
+        },
+        cap: None,
+    }
+}
+
+/// Fallen zwei Abschlusskurven zusammen (Enden in beliebiger Reihenfolge, Mitte)? NaN gilt als
+/// „nicht“.
+pub(crate) fn same_cut(x: &Seg, y: &Seg, weld: f64) -> bool {
+    let (a, b, c, d) = (x.start(), x.end(), y.start(), y.end());
+    ((a.distance(c) <= weld && b.distance(d) <= weld)
+        || (a.distance(d) <= weld && b.distance(c) <= weld))
+        && x.at(0.5).distance(y.at(0.5)) <= weld
+}
+
+/// Glatter Übergang an `v` zwischen den Enden `(i, ei)` und `(j, ej)`: beide Rundungsflächen
+/// enden an ihrem Querschnitt, der derselbe sein muss. `None`, wenn die Kanten dort nicht glatt
+/// anschließen (Richtungen nicht innerhalb `CHAIN_ANGLE` entgegengesetzt).
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn smooth_pair(
+    solid: &Solid,
+    geoms: &[EdgeGeom],
+    v: Id<Vertex>,
+    (i, ei): (usize, bool),
+    (j, ej): (usize, bool),
+    tol: &Tolerance,
+) -> Result<Option<(EndCut, EndCut)>, BlendError> {
+    let (gi, gj) = (&geoms[i], &geoms[j]);
+    let (di, dj) = (
+        leaving_direction(solid, gi.edge, v),
+        leaving_direction(solid, gj.edge, v),
+    );
+    // NaN oder Nullrichtung zählt als „nicht glatt“.
+    if !(di.dot(dj) <= -CHAIN_ANGLE.cos()) {
+        return Ok(None);
+    }
+    three_faces(solid, v)?;
+    if gi.convex != gj.convex {
+        return Err(BlendError::Unsupported(
+            "Am glatten Übergang wechselt die Kante zwischen konvex und konkav".into(),
+        ));
+    }
+    let (ci, cj) = (section_cut(gi, ei), section_cut(gj, ej));
+    let weld = ON_CURVE_FACTOR * blend_tol(solid, geoms, tol).linear;
+    if !same_cut(&ci.curve, &cj.curve, weld) {
+        return Err(BlendError::Unsupported(
+            "Die Rundung lässt sich am glatten Übergang nicht fortsetzen".into(),
+        ));
+    }
+    Ok(Some((ci, cj)))
+}
+
+/// Zwei gerundete Kanten an einer Ecke: glatter Übergang (Ecken folgen in Task 11).
+fn vertex_pair(
+    solid: &Solid,
+    geoms: &[EdgeGeom],
+    v: Id<Vertex>,
+    x: (usize, bool),
+    y: (usize, bool),
+    tol: &Tolerance,
+) -> Result<Vec<(usize, bool, EndCut)>, BlendError> {
+    if let Some((cx, cy)) = smooth_pair(solid, geoms, v, x, y, tol)? {
+        return Ok(vec![(x.0, x.1, cx), (y.0, y.1, cy)]);
+    }
+    Err(BlendError::Corner(
+        "Zwei gerundete Kanten treffen sich an einer Ecke; das wird noch nicht unterstützt".into(),
+    ))
+}
+
+/// Drei und mehr gerundete Kanten an einer Ecke (Task 11).
+fn corner_many(
+    _solid: &Solid,
+    _geoms: &[EdgeGeom],
+    _v: Id<Vertex>,
+    list: &[(usize, bool)],
+    _plan: &mut EndPlan,
+    _tol: &Tolerance,
+) -> Result<Vec<(usize, bool, EndCut)>, BlendError> {
+    Err(BlendError::Corner(format!(
+        "An der Ecke treffen {} gerundete Kanten zusammen; das wird noch nicht unterstützt",
+        list.len()
+    )))
+}
+
+/// Abschlüsse aller Kanten, je Ecke entschieden: geschlossene Kanten an ihrer Naht, eine
+/// gerundete Kante an der Ecke → dritte Fläche, zwei → glatter Übergang (oder Ecke), drei → Ecke.
+/// Die Ecken werden nach ihrer Id abgearbeitet (deterministisch).
+pub fn end_cuts(solid: &Solid, geoms: &[EdgeGeom], tol: &Tolerance) -> Result<EndPlan, BlendError> {
+    let n = geoms.len();
+    let mut starts: Vec<Option<EndCut>> = vec![None; n];
+    let mut ends: Vec<Option<EndCut>> = vec![None; n];
+    let mut at: BTreeMap<Id<Vertex>, Vec<(usize, bool)>> = BTreeMap::new();
+    for (i, g) in geoms.iter().enumerate() {
+        if g.closed {
+            starts[i] = Some(seam_cut(g, false));
+            ends[i] = Some(seam_cut(g, true));
+            continue;
+        }
+        let e = solid.edges.get(g.edge).ok_or(BlendError::EdgeNotFound)?;
+        at.entry(e.start).or_default().push((i, false));
+        at.entry(e.end).or_default().push((i, true));
+    }
+    let mut plan = EndPlan::default();
+    for (v, list) in at {
+        let cuts = match list.as_slice() {
+            [(i, end)] => vec![(*i, *end, cap_cut(solid, &geoms[*i], *end, tol)?)],
+            [x, y] => vertex_pair(solid, geoms, v, *x, *y, tol)?,
+            _ => corner_many(solid, geoms, v, &list, &mut plan, tol)?,
+        };
+        for (i, end, cut) in cuts {
+            if end {
+                ends[i] = Some(cut);
+            } else {
+                starts[i] = Some(cut);
+            }
         }
     }
+    let missing = || BlendError::ResultInvalid("Ein Abschluss der Rundung fehlt".into());
+    plan.starts = starts
+        .into_iter()
+        .map(|c| c.ok_or_else(missing))
+        .collect::<Result<_, _>>()?;
+    plan.ends = ends
+        .into_iter()
+        .map(|c| c.ok_or_else(missing))
+        .collect::<Result<_, _>>()?;
     Ok(plan)
 }
 
@@ -548,15 +672,105 @@ fn check_holes(
     Ok(())
 }
 
+/// Achsenparalleler Quader (kleinste, größte Ecke).
+type Aabb = (DVec3, DVec3);
+
+/// Komponentenweise Schranke für `|a cos t + b sin t|` über alle `t`: `sqrt(a_i² + b_i²)`.
+fn swing(a: DVec3, b: DVec3) -> DVec3 {
+    (a * a + b * b).map(f64::sqrt)
+}
+
+/// Sicherer Hüllquader eines Kurvenstücks: Gerade über ihre Enden, Kreis und Ellipse ganz
+/// (unabhängig vom Parameterbereich). `None` bei Freiformkurven (dann kein Vorfilter).
+fn seg_box(seg: &Seg) -> Option<Aabb> {
+    let around = |c: DVec3, h: DVec3| Some((c - h, c + h));
+    match &seg.curve {
+        Curve::Line { .. } => {
+            let (a, b) = (seg.start(), seg.end());
+            Some((a.min(b), a.max(b)))
+        }
+        Curve::Circle { frame, radius } => {
+            around(frame.origin, swing(frame.x, frame.y) * radius.abs())
+        }
+        Curve::Ellipse {
+            frame,
+            major,
+            minor,
+        } => around(frame.origin, swing(frame.x * *major, frame.y * *minor)),
+        Curve::Nurbs(_) => None,
+    }
+}
+
+/// Sicherer Hüllquader der Rundungsfläche der Kante `g` mit den Abschlüssen `start` und `end`,
+/// wo er sich ohne Annahmen über Abschlusskurven angeben lässt (sonst `None`, kein Vorfilter):
+/// - Torus (Rundung an einer Kreiskante): der ganze Torus.
+/// - Prisma (gerade Kante) mit Querschnitten an beiden Enden (glatter Übergang): die Fläche ist der
+///   zwischen ihnen verschobene Querschnitt, liegt also im Quader beider Querschnitte.
+/// - Drehfläche einer Fase (Kegel, Zylinder, Ebene um die Achse) mit Querschnitten oder Naht an
+///   beiden Enden: der volle Umlauf des Querschnitts um die Achse (`frame.z`, Ursprung auf ihr);
+///   Höhe und Abstand von der Achse sind längs der Querschnittsstrecke an ihren Enden extrem.
+fn blend_box(g: &EdgeGeom, start: &EndCut, end: &EndCut) -> Option<Aabb> {
+    let sections = start.cap.is_none() && end.cap.is_none();
+    match (&g.surface, g.volume) {
+        (
+            Surface::Torus {
+                frame,
+                major,
+                minor,
+            },
+            _,
+        ) => {
+            let h =
+                swing(frame.x, frame.y) * (major.abs() + minor.abs()) + frame.z.abs() * minor.abs();
+            Some((frame.origin - h, frame.origin + h))
+        }
+        (_, VolumeModel::Prism { .. }) if sections => {
+            let (a0, a1) = seg_box(&start.curve)?;
+            let (b0, b1) = seg_box(&end.curve)?;
+            Some((a0.min(b0), a1.max(b1)))
+        }
+        (
+            Surface::Cone { frame, .. }
+            | Surface::Cylinder { frame, .. }
+            | Surface::Plane { frame },
+            VolumeModel::Pappus { .. },
+        ) if sections && matches!(start.curve.curve, Curve::Line { .. }) => {
+            let (o, z) = (frame.origin, frame.z);
+            let (pa, pb) = (start.curve.start(), start.curve.end());
+            let height = |p: DVec3| (p - o).dot(z);
+            let rho = |p: DVec3| (p - o - z * height(p)).length();
+            let (h0, h1) = (height(pa).min(height(pb)), height(pa).max(height(pb)));
+            let r = rho(pa).max(rho(pb));
+            let (lo, hi) = ((z * h0).min(z * h1), (z * h0).max(z * h1));
+            let side = swing(frame.x, frame.y) * r;
+            Some((o + lo - side, o + hi + side))
+        }
+        _ => None,
+    }
+}
+
+/// Liegen die Quader mehr als `margin` auseinander? NaN gilt als „nicht“.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn apart(a: &Aabb, b: &Aabb, margin: f64) -> bool {
+    let gap = (b.0 - a.1).max(a.0 - b.1);
+    gap.x > margin || gap.y > margin || gap.z > margin
+}
+
 /// Reicht eine Kante der umgebauten Fläche `piece` ins Innere der neuen Rundungsfläche `blend`
 /// (etwa die Wand eines Lochs oder einer Tasche im abgetragenen Bereich)? Treffer auf dem Rand der
 /// Rundungsfläche (gekürzte Nachbarkanten, Berühr- und Abschlusskurven) zählen nicht.
+///
+/// Vorfilter: Ist `bound` ein sicherer Hüllquader der Rundungsfläche und liegt der sichere
+/// Hüllquader eines Kurvenstücks weiter als die Verschweißweite davon entfernt, kann kein Punkt des
+/// Stücks in der Fläche liegen; die Nullstellensuche entfällt dann.
 fn check_piercing(
     piece: &Piece,
     blend: &Piece,
+    bound: Option<&Aabb>,
     face: &str,
     tol: &Tolerance,
 ) -> Result<(), BlendError> {
+    let margin = ON_CURVE_FACTOR * tol.linear;
     let shape = FaceGeom {
         surface: blend.surface.clone(),
         same_sense: blend.same_sense,
@@ -569,6 +783,11 @@ fn check_piercing(
         .chain(piece.holes.iter())
         .flatten()
     {
+        if let (Some(b), Some(sb)) = (bound, seg_box(seg))
+            && apart(b, &sb, margin)
+        {
+            continue;
+        }
         let (lo, hi) = (seg.t0.min(seg.t1), seg.t0.max(seg.t1));
         let hit = match curve_surface_roots(&seg.curve, lo, hi, &blend.surface, tol) {
             CurveSurface::Roots(rs) => rs.iter().any(|r| inside(seg.curve.point(r.t))),
@@ -724,13 +943,264 @@ pub fn assemble(
             }),
         });
     }
-    for blend in &pieces[kept..] {
+    for (i, blend) in pieces[kept..].iter().enumerate() {
+        let bound = blend_box(&geoms[i], &plan.starts[i], &plan.ends[i]);
         for (piece, name) in pieces[..kept].iter().zip(&names) {
-            check_piercing(piece, blend, name, &btol)?;
+            check_piercing(piece, blend, bound.as_ref(), name, &btol)?;
         }
     }
     pieces.extend(plan.corners.iter().cloned());
     let result = sew(pieces, tol).map_err(|e| BlendError::ResultInvalid(e.to_string()))?;
     validate_with(&result, tol).map_err(|e| BlendError::ResultInvalid(e.to_string()))?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::blend::analytic::SectionKind;
+    use crate::blend::chain::select_edges;
+    use crate::blend::section::ChamferSpec;
+    use crate::blend::{BlendKind, BlendRequest};
+    use crate::{AnalyticKernel, Kernel, Profile, ProfileLoop, Segment};
+    use planora_math::{DVec2, Frame};
+
+    /// Rasterweite der Stichproben je Richtung.
+    const GRID: usize = 40;
+    /// Spielraum der Enthaltenseins-Prüfung (Rundung der Auswertung).
+    const SLACK: f64 = 1e-9;
+
+    fn stadium() -> Solid {
+        let profile = Profile {
+            outer: ProfileLoop {
+                start: DVec2::ZERO,
+                segments: vec![
+                    Segment::Line {
+                        to: DVec2::new(10.0, 0.0),
+                    },
+                    Segment::Arc {
+                        center: DVec2::new(10.0, 2.0),
+                        sweep: PI,
+                    },
+                    Segment::Line {
+                        to: DVec2::new(0.0, 4.0),
+                    },
+                    Segment::Arc {
+                        center: DVec2::new(0.0, 2.0),
+                        sweep: PI,
+                    },
+                ],
+            },
+            holes: vec![],
+        };
+        AnalyticKernel::default()
+            .extrude(&profile, &Frame::WORLD, 3.0)
+            .unwrap()
+    }
+
+    fn inside_box(b: &Aabb, p: DVec3) -> bool {
+        p.cmpge(b.0 - SLACK).all() && p.cmple(b.1 + SLACK).all()
+    }
+
+    /// Geometrien und Abschlüsse der Tangentenkette ab `edge`.
+    fn chain_plan(
+        s: &Solid,
+        edge: Id<crate::topology::Edge>,
+        kind: SectionKind,
+        bk: BlendKind,
+    ) -> (Vec<EdgeGeom>, EndPlan) {
+        let tol = Tolerance::default();
+        let r = BlendRequest {
+            edges: vec![crate::blend::BlendEdge {
+                edge,
+                first_face: None,
+            }],
+            kind: bk,
+            tangent_chain: true,
+        };
+        let geoms: Vec<EdgeGeom> = select_edges(s, &r)
+            .unwrap()
+            .iter()
+            .map(|c| super::super::edge_geom(s, &c.edge, kind, &tol).unwrap())
+            .collect();
+        let plan = end_cuts(s, &geoms, &tol).unwrap();
+        (geoms, plan)
+    }
+
+    /// Prüft für jede Rundungsfläche mit Hüllquader, dass Stichproben der Fläche darin liegen;
+    /// gibt die Zahl der Flächen mit Quader zurück.
+    fn check_boxes(geoms: &[EdgeGeom], plan: &EndPlan) -> usize {
+        let tol = Tolerance::default();
+        let mut boxed = 0;
+        for (i, g) in geoms.iter().enumerate() {
+            let (s, e) = (&plan.starts[i], &plan.ends[i]);
+            let Some(b) = blend_box(g, s, e) else {
+                continue;
+            };
+            boxed += 1;
+            let segs = vec![
+                Seg::new(g.contact_a.clone(), s.sa, e.sa),
+                e.curve.clone(),
+                Seg::new(g.contact_b.clone(), e.sb, s.sb),
+                s.curve.reversed(),
+            ];
+            let outer = orient_outer(&g.surface, g.same_sense, segs);
+            for p in dense_points(&outer) {
+                assert!(inside_box(&b, p), "Rand {i}: {p} nicht in {b:?}");
+            }
+            // Querschnitte zwischen den Abschlüssen (Prisma: verschoben, Drehfläche: gedreht).
+            let mut hits = 0;
+            if let Some(dom) = loop_patch(&g.surface, g.same_sense, &outer) {
+                let shape = FaceGeom {
+                    surface: g.surface.clone(),
+                    same_sense: g.same_sense,
+                    domain: Some(dom),
+                    loops: vec![outer.clone()],
+                    tag: None,
+                };
+                for a in 0..=GRID {
+                    for c in 0..=GRID {
+                        let u = dom.u0 + (dom.u1 - dom.u0) * a as f64 / GRID as f64;
+                        let v = dom.v0 + (dom.v1 - dom.v0) * c as f64 / GRID as f64;
+                        let p = g.surface.point(u, v);
+                        if point_in_face(&shape, p, &tol) == Containment::Inside {
+                            hits += 1;
+                            assert!(inside_box(&b, p), "Fläche {i}: {p} nicht in {b:?}");
+                        }
+                    }
+                }
+            } else {
+                for a in 0..=GRID {
+                    for c in 0..=GRID {
+                        let (f, t) = (a as f64 / GRID as f64, c as f64 / GRID as f64);
+                        let p = s.curve.at(t).lerp(e.curve.at(t), f);
+                        hits += 1;
+                        assert!(inside_box(&b, p), "Ebene {i}: {p} nicht in {b:?}");
+                    }
+                }
+            }
+            assert!(hits > 0, "Fläche {i} ohne Stichprobe");
+        }
+        boxed
+    }
+
+    fn top_edge(s: &Solid) -> Id<crate::topology::Edge> {
+        s.edges
+            .iter()
+            .map(|(id, _)| id)
+            .find(|&id| {
+                let e = &s.edges[id];
+                matches!(e.curve, Curve::Line { .. })
+                    && s.vertices[e.start].point.z > 2.5
+                    && s.vertices[e.end].point.z > 2.5
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn blend_boxes_contain_their_faces() {
+        let s = stadium();
+        let e = top_edge(&s);
+        let fillet = (
+            SectionKind::Fillet { radius: 0.5 },
+            BlendKind::Fillet { radius: 0.5 },
+        );
+        let chamfer = (
+            SectionKind::Chamfer(ChamferSpec::Distances { a: 0.3, b: 0.6 }),
+            BlendKind::ChamferTwo {
+                distance1: 0.3,
+                distance2: 0.6,
+            },
+        );
+        for (kind, bk) in [fillet, chamfer] {
+            let (geoms, plan) = chain_plan(&s, e, kind, bk);
+            assert_eq!(geoms.len(), 4);
+            // Alle vier Flächen enden an Querschnitten: alle bekommen einen Quader.
+            assert_eq!(check_boxes(&geoms, &plan), 4, "{kind:?}");
+        }
+        // Zylinderdeckel: Torus bzw. Kegel mit Naht.
+        let cyl = AnalyticKernel::default().make_cylinder(5.0, 8.0).unwrap();
+        let rim = cyl
+            .edges
+            .iter()
+            .map(|(id, _)| id)
+            .find(|&id| matches!(cyl.edges[id].curve, Curve::Circle { .. }))
+            .unwrap();
+        for (kind, bk) in [
+            (
+                SectionKind::Fillet { radius: 1.0 },
+                BlendKind::Fillet { radius: 1.0 },
+            ),
+            (
+                SectionKind::Chamfer(ChamferSpec::Distances { a: 1.0, b: 0.5 }),
+                BlendKind::ChamferTwo {
+                    distance1: 1.0,
+                    distance2: 0.5,
+                },
+            ),
+        ] {
+            let (geoms, plan) = chain_plan(&cyl, rim, kind, bk);
+            assert_eq!(check_boxes(&geoms, &plan), 1, "{kind:?}");
+        }
+        // Würfelkante mit Abschlussflächen: kein Quader (Abschlusskurven ohne sichere Hülle).
+        let cube = AnalyticKernel::default()
+            .make_box(DVec3::splat(10.0))
+            .unwrap();
+        let (geoms, plan) = chain_plan(
+            &cube,
+            top_edge(&cube),
+            SectionKind::Fillet { radius: 1.0 },
+            BlendKind::Fillet { radius: 1.0 },
+        );
+        assert_eq!(check_boxes(&geoms, &plan), 0);
+    }
+
+    #[test]
+    fn segment_boxes_contain_their_curves() {
+        let frame = Frame {
+            origin: DVec3::new(1.0, -2.0, 3.0),
+            x: DVec3::new(0.6, 0.8, 0.0),
+            y: DVec3::new(0.0, 0.0, 1.0),
+            z: DVec3::new(0.8, -0.6, 0.0),
+        };
+        let segs = [
+            Seg::new(
+                Curve::Line {
+                    origin: DVec3::new(1.0, 2.0, 3.0),
+                    dir: DVec3::new(0.0, 0.6, -0.8),
+                },
+                -2.0,
+                5.0,
+            ),
+            Seg::new(Curve::Circle { frame, radius: 2.5 }, 0.3, 2.0),
+            Seg::new(
+                Curve::Ellipse {
+                    frame,
+                    major: 3.0,
+                    minor: 1.0,
+                },
+                -1.0,
+                4.0,
+            ),
+        ];
+        for seg in &segs {
+            let b = seg_box(seg).unwrap();
+            for k in 0..=200 {
+                let p = seg.at(k as f64 / 200.0);
+                assert!(inside_box(&b, p), "{p} nicht in {b:?}");
+            }
+        }
+        assert!(apart(
+            &(DVec3::ZERO, DVec3::ONE),
+            &(DVec3::splat(2.0), DVec3::splat(3.0)),
+            0.5
+        ));
+        assert!(!apart(
+            &(DVec3::ZERO, DVec3::ONE),
+            &(DVec3::splat(1.2), DVec3::splat(3.0)),
+            0.5
+        ));
+        let nan = DVec3::splat(f64::NAN);
+        assert!(!apart(&(nan, nan), &(DVec3::ZERO, DVec3::ONE), 0.5));
+    }
 }
