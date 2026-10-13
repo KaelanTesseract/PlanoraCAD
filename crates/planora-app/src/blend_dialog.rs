@@ -229,7 +229,7 @@ impl BlendDialog {
     /// Zeigt das Fenster; `true`, solange es offen bleiben soll.
     pub fn show(&mut self, ctx: &egui::Context, state: &mut AppState) -> bool {
         state.edge_picking = true;
-        state.chain_marking = self.tangentenkette;
+        state.set_chain_marking(self.tangentenkette);
         if !self.seeded {
             self.seeded = true;
             if let Some(Pick::Edge(e)) = state.selection {

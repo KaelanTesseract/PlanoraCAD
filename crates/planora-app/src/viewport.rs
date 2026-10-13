@@ -118,6 +118,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         }
         if !typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             state.set_selection(None);
+            state.clear_edge_marks();
         }
     }
 

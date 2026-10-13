@@ -161,6 +161,29 @@ impl ProfileCache {
     }
 }
 
+/// Länge des Geometrieschlüssels einer Kante (Anfangs- und Endpunkt, Parameterbereich).
+const EDGE_KEY_LEN: usize = 8;
+
+/// Geometrieschlüssel einer Kante (Bitmuster von Endpunkten und Parameterbereich); gleich nur,
+/// wenn die Kante unverändert liegt. `None`, wenn es die Kante nicht gibt.
+fn edge_key(solid: &Solid, edge: Id<Edge>) -> Option<[u64; EDGE_KEY_LEN]> {
+    let e = solid.edges.get(edge)?;
+    let (a, b) = (
+        solid.vertices.get(e.start)?.point,
+        solid.vertices.get(e.end)?.point,
+    );
+    Some([
+        a.x.to_bits(),
+        a.y.to_bits(),
+        a.z.to_bits(),
+        b.x.to_bits(),
+        b.y.to_bits(),
+        b.z.to_bits(),
+        e.t0.to_bits(),
+        e.t1.to_bits(),
+    ])
+}
+
 const GRID_HALF_EXTENT: f32 = 500.0;
 /// Größter Betrag einer Koordinate oder eines Maßes in mm (wie
 /// [`planora_feature::MAX_COORD_MM`], dort für jede Berechnung geprüft): Darüber ist der
@@ -243,6 +266,18 @@ impl AppState {
     /// (z. B. auf das Ergebnis eines neuen Verschiebens).
     fn refresh_following(&mut self, follow: Option<(BodyRef, BodyRef)>) {
         let old: Vec<BodyRef> = self.bodies.iter().map(|b| b.source).collect();
+        // Geometrie der markierten Kanten vor der Neuberechnung: Ändert sich der Körper, können
+        // Kanten-Ids umnummeriert sein; eine Markierung darf dann nicht still auf eine andere
+        // Kante zeigen.
+        let mark_keys: Vec<Option<[u64; EDGE_KEY_LEN]>> = self
+            .marked_edges
+            .iter()
+            .map(|m| {
+                self.bodies
+                    .get(m.body)
+                    .and_then(|b| edge_key(&b.solid, m.edge))
+            })
+            .collect();
         let count_before = self.bodies.len();
         let mut bodies = Vec::new();
         let mut failed = Vec::new();
@@ -268,15 +303,20 @@ impl AppState {
         self.selected_body = self.selected_body.and_then(map);
         self.selection = self.selection.and_then(|p| self.remap_pick(p, map));
         self.hover = self.hover.and_then(|p| self.remap_pick(p, map));
-        let marks: Vec<EdgeRef> = self
+        // Markierungen bleiben nur, wenn jede Kante im selben Körper mit derselben Geometrie
+        // wieder da ist; sonst ändert sich der Körper und die Markierung entfällt ganz.
+        let marks: Option<Vec<EdgeRef>> = self
             .marked_edges
             .iter()
-            .filter_map(|m| match self.remap_pick(Pick::Edge(*m), map) {
-                Some(Pick::Edge(x)) => Some(x),
+            .zip(&mark_keys)
+            .map(|(m, key)| match self.remap_pick(Pick::Edge(*m), map) {
+                Some(Pick::Edge(x)) => (edge_key(&self.bodies[x.body].solid, x.edge) == *key
+                    && key.is_some())
+                .then_some(x),
                 _ => None,
             })
             .collect();
-        self.marked_edges = marks;
+        self.marked_edges = marks.unwrap_or_default();
         if !failed.is_empty() {
             self.message = Some(failed.join("; "));
         }
@@ -915,9 +955,13 @@ impl AppState {
     /// dazu oder wird entfernt, wenn sie schon ganz markiert ist. Kanten eines anderen Körpers
     /// ersetzen die Markierung.
     pub fn toggle_edge_mark(&mut self, e: EdgeRef, extend: bool) {
+        // Unbekannter Körper oder unbekannte Kante: nichts ändern (bestehende Markierung bleibt).
         let Some(b) = self.bodies.get(e.body) else {
             return;
         };
+        if b.solid.edges.get(e.edge).is_none() {
+            return;
+        }
         let group: Vec<EdgeRef> = if self.chain_marking {
             planora_kernel::blend::chain::tangent_chain(&b.solid, e.edge)
                 .into_iter()
@@ -944,6 +988,33 @@ impl AppState {
         }
         self.selected_body = Some(e.body);
         self.rebuild_scene();
+    }
+
+    /// Schaltet die Tangentenkette beim Markieren um. Wird sie eingeschaltet, werden die schon
+    /// markierten Kanten sofort um ihre Ketten ergänzt (die Vorschau gleicht dem, was der Kernel
+    /// rechnet); beim Ausschalten bleibt die Markierung, wie sie ist.
+    pub fn set_chain_marking(&mut self, on: bool) {
+        let turned_on = on && !self.chain_marking;
+        self.chain_marking = on;
+        if !turned_on || self.marked_edges.is_empty() {
+            return;
+        }
+        let mut all = self.marked_edges.clone();
+        for m in &self.marked_edges {
+            let Some(b) = self.bodies.get(m.body) else {
+                continue;
+            };
+            for edge in planora_kernel::blend::chain::tangent_chain(&b.solid, m.edge) {
+                let r = EdgeRef { body: m.body, edge };
+                if !all.contains(&r) {
+                    all.push(r);
+                }
+            }
+        }
+        if all.len() != self.marked_edges.len() {
+            self.marked_edges = all;
+            self.rebuild_scene();
+        }
     }
 
     /// Löscht die Markierung.

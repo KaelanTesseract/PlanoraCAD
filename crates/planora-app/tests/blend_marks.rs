@@ -238,3 +238,102 @@ fn showing_the_dialog_takes_over_the_clicked_edge_and_switches_picking_on() {
     d.finish(&mut s);
     assert!(!s.edge_picking && s.marked_edges.is_empty());
 }
+
+#[test]
+fn marks_survive_an_unrelated_refresh_but_not_a_change_of_their_body() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    s.edge_picking = true;
+    let e = EdgeRef {
+        body: 0,
+        edge: edge_between(&s.bodies[0].solid, "Deckel", "Wand 1"),
+    };
+    s.toggle_edge_mark(e, false);
+    // Unbeteiligte Neuberechnung: weiterer Körper, Hover, Auswahl eines anderen Körpers.
+    s.create_box(DVec3::splat(5.0)).unwrap();
+    s.set_hover(None);
+    s.refresh();
+    assert_eq!(s.marked_edges, vec![e], "Markierung bleibt");
+    // Änderung davor, die den markierten Körper verändert: Markierung entfällt.
+    let id = s.document.features()[0].id;
+    s.document
+        .update(id, |k| {
+            if let FeatureKind::Box { size, .. } = k {
+                *size = DVec3::new(12.0, 12.0, 12.0);
+            }
+        })
+        .unwrap();
+    s.refresh();
+    assert!(s.marked_edges.is_empty(), "Markierung entfällt");
+}
+
+#[test]
+fn an_unknown_edge_click_keeps_the_marks() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    s.edge_picking = true;
+    let e = EdgeRef {
+        body: 0,
+        edge: edge_between(&s.bodies[0].solid, "Deckel", "Wand 1"),
+    };
+    s.toggle_edge_mark(e, false);
+    let unknown = EdgeRef {
+        body: 0,
+        edge: Id::from_index(10_000),
+    };
+    s.toggle_edge_mark(unknown, false);
+    s.toggle_edge_mark(unknown, true);
+    s.toggle_edge_mark(
+        EdgeRef {
+            body: 9,
+            edge: e.edge,
+        },
+        false,
+    );
+    assert_eq!(s.marked_edges, vec![e]);
+}
+
+#[test]
+fn switching_the_tangent_chain_on_expands_the_marks_at_once() {
+    let mut s = AppState::new();
+    let profile = Profile {
+        outer: ProfileLoop {
+            start: DVec2::ZERO,
+            segments: vec![
+                Segment::Line {
+                    to: DVec2::new(10.0, 0.0),
+                },
+                Segment::Arc {
+                    center: DVec2::new(10.0, 2.0),
+                    sweep: PI,
+                },
+                Segment::Line {
+                    to: DVec2::new(0.0, 4.0),
+                },
+                Segment::Arc {
+                    center: DVec2::new(0.0, 2.0),
+                    sweep: PI,
+                },
+            ],
+        },
+        holes: vec![],
+    };
+    s.create_box(DVec3::splat(1.0)).unwrap();
+    s.bodies[0].solid = s
+        .kernel
+        .extrude(&profile, &planora_math::Frame::WORLD, 3.0)
+        .unwrap();
+    s.chain_marking = false;
+    let e = EdgeRef {
+        body: 0,
+        edge: edge_between(&s.bodies[0].solid, "Deckel", "Wand 1"),
+    };
+    s.toggle_edge_mark(e, false);
+    assert_eq!(s.marked_edges.len(), 1);
+    let v = s.scene_version;
+    s.set_chain_marking(true);
+    assert_eq!(s.marked_edges.len(), 4);
+    assert!(s.scene_version > v);
+    s.set_chain_marking(false);
+    assert_eq!(s.marked_edges.len(), 4, "Ausschalten lässt die Markierung");
+}
