@@ -38,7 +38,8 @@ pub enum Sweep {
     /// Gerade Kante: Verschiebung um `dir` (Einheitsvektor in Kantenrichtung), Länge `length`.
     Translate { dir: DVec3, length: f64 },
     /// Kreiskante: Drehung um die Achse durch `center` mit Richtung `axis` um `sweep`
-    /// (Bogenmaß, Vorzeichen wie der Kantenparameter); `x` zeigt von der Achse zum Kantenanfang.
+    /// (Bogenmaß, Vorzeichen wie der Kantenparameter); `x` zeigt von der Achse zum Kantenanfang,
+    /// `axis = x × dP/dt` am Kantenanfang (rechtsdrehend in Richtung des Kantenparameters).
     Rotate {
         center: DVec3,
         axis: DVec3,
@@ -137,12 +138,20 @@ pub fn classify(
             )
         }
         Curve::Circle { frame, .. } => {
+            // Achse aus der Parametrisierung der Kante selbst (`x × dP/dt`), nicht aus
+            // `frame.z`: So dreht ein positiver Winkel wie ein wachsender Kantenparameter, auch
+            // wenn der Kreisrahmen linkshändig ist.
             let x = (e.curve.point(e.t0) - frame.origin).normalize_or_zero();
-            (revolves_about(sa, frame.origin, frame.z, tol)
-                && revolves_about(sb, frame.origin, frame.z, tol))
+            let y = e.curve.tangent(e.t0).normalize_or_zero();
+            let axis = x.cross(y).normalize_or_zero();
+            if axis == DVec3::ZERO {
+                return None;
+            }
+            (revolves_about(sa, frame.origin, axis, tol)
+                && revolves_about(sb, frame.origin, axis, tol))
             .then_some(Sweep::Rotate {
                 center: frame.origin,
-                axis: frame.z,
+                axis,
                 x,
                 sweep: e.t1 - e.t0,
             })
