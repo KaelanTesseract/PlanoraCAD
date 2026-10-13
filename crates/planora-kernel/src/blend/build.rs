@@ -671,6 +671,60 @@ fn check_holes(
     Ok(())
 }
 
+/// Kreuzt oder berührt ein neues oder gekürztes Stück einer umgebauten Fläche (Berührkurve,
+/// Abschlusskurve, gekürzte Nachbarkante) irgendein anderes Stück ihrer Schleifen außerhalb einer
+/// gemeinsamen Ecke? Dann liefe die Berührkurve etwa durch eine Aussparung der Fläche (Sackloch,
+/// das die Wand anschneidet) und die Schleife durchdränge sich selbst: benannte Ablehnung statt
+/// eines Körpers, der `validate` besteht, sich aber nicht vernetzen lässt. Genau über
+/// `seg_intersections` (nicht über Stichproben); erlaubt sind nur Treffer an Punkten, die Ende
+/// beider Stücke sind. Überlappungen zählen als Treffer. Unveränderte Stücke (gleiche Enden wie im
+/// Eingangskörper) werden nur gegen veränderte geprüft; Hüllquader filtern sicher vor.
+fn check_crossings(
+    original: &[Vec<Seg>],
+    loops: &[Vec<Seg>],
+    face: &str,
+    tol: &Tolerance,
+) -> Result<(), BlendError> {
+    let weld = ON_CURVE_FACTOR * tol.linear;
+    let same = |a: &Seg, b: &Seg| a.start() == b.start() && a.end() == b.end();
+    let segs: Vec<&Seg> = loops.iter().flatten().collect();
+    let changed: Vec<bool> = segs
+        .iter()
+        .map(|s| !original.iter().flatten().any(|o| same(o, s)))
+        .collect();
+    let boxes: Vec<Option<Aabb>> = segs.iter().map(|s| seg_box(s)).collect();
+    let ends = |s: &Seg| [s.start(), s.end()];
+    for i in 0..segs.len() {
+        if !changed[i] {
+            continue;
+        }
+        for j in 0..segs.len() {
+            if i == j || (changed[j] && j < i) {
+                continue;
+            }
+            if let (Some(a), Some(b)) = (&boxes[i], &boxes[j])
+                && apart(a, b, weld)
+            {
+                continue;
+            }
+            let (a, b) = (segs[i], segs[j]);
+            let shared = |p: DVec3| {
+                ends(a).iter().any(|q| q.distance(p) <= weld)
+                    && ends(b).iter().any(|q| q.distance(p) <= weld)
+            };
+            if seg_intersections(a, b, tol)
+                .iter()
+                .any(|&(fa, _)| !shared(a.at(fa)))
+            {
+                return Err(in_blend_area(&format!(
+                    "Eine Aussparung oder Kante der Fläche „{face}“"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Achsenparalleler Quader (kleinste, größte Ecke).
 type Aabb = (DVec3, DVec3);
 
@@ -788,6 +842,15 @@ fn check_piercing(
         loops: vec![blend.outer.clone()],
         tag: None,
     };
+    // Treffer im Inneren zählen immer; Treffer auf dem Rand der Rundungsfläche nur dann nicht,
+    // wenn sie an einem Ende des Kurvenstücks liegen (gemeinsame Ecke). Ein Stück, das den Rand
+    // mitten auf seinem Lauf berührt (etwa die Kante einer Aussparung, die die Berührkurve
+    // tangential trifft), gilt als Durchdringung.
+    let hit_at = |seg: &Seg, p: DVec3| match point_in_face(&shape, p, tol) {
+        Containment::Inside => true,
+        Containment::Boundary => seg.start().distance(p) > margin && seg.end().distance(p) > margin,
+        Containment::Outside => false,
+    };
     let inside = |p: DVec3| point_in_face(&shape, p, tol) == Containment::Inside;
     for seg in std::iter::once(&piece.outer)
         .chain(piece.holes.iter())
@@ -800,7 +863,7 @@ fn check_piercing(
         }
         let (lo, hi) = (seg.t0.min(seg.t1), seg.t0.max(seg.t1));
         let hit = match curve_surface_roots(&seg.curve, lo, hi, &blend.surface, tol) {
-            CurveSurface::Roots(rs) => rs.iter().any(|r| inside(seg.curve.point(r.t))),
+            CurveSurface::Roots(rs) => rs.iter().any(|r| hit_at(seg, seg.curve.point(r.t))),
             CurveSurface::Lies => inside(seg.at(0.5)),
         };
         if hit {
@@ -916,6 +979,7 @@ pub fn assemble(
         }
         let touched = caps.contains_key(&fid) || repl.keys().any(|(f, _, _)| *f == fid);
         if touched {
+            check_crossings(&g.loops, &loops, &name, &btol)?;
             check_holes(&face.surface, face.same_sense, &loops, &name, &btol)?;
         }
         let domain = grow_patch(&face.surface, face.same_sense, face.patch, &loops);

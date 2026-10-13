@@ -39,8 +39,9 @@ const CORNER_PROBES: usize = 16;
 /// Abschlüsse an einer Ecke: (Index der Kante, Ende statt Anfang?, Abschluss).
 pub type CornerCuts = Vec<(usize, bool, EndCut)>;
 
-fn corner(msg: &str) -> BlendError {
-    BlendError::Corner(msg.into())
+/// Benannte Ablehnung an der Ecke der Flächen `faces`.
+fn at_corner(solid: &Solid, faces: &[Id<Face>], msg: &str) -> BlendError {
+    BlendError::Corner(format!("{msg} (Ecke der Flächen {})", names(solid, faces)))
 }
 
 /// Namen der Flächen für Meldungen: „A“, „B“ und „C“.
@@ -74,23 +75,31 @@ pub fn miter_pair(
     tol: &Tolerance,
 ) -> Result<CornerCuts, BlendError> {
     let (gi, gj) = (&geoms[i], &geoms[j]);
+    let faces = three_faces(solid, v)?;
     if gi.convex != gj.convex {
-        return Err(corner(
+        return Err(at_corner(
+            solid,
+            &faces,
             "An der Ecke treffen eine konvexe und eine konkave Kante zusammen; das wird nicht unterstützt",
         ));
     }
     if !(gi.analytic && gj.analytic) {
-        return Err(corner(
+        return Err(at_corner(
+            solid,
+            &faces,
             "Ecken mit Freiform-Rundungsflächen werden noch nicht unterstützt",
         ));
     }
-    let faces = three_faces(solid, v)?;
     let fi = [gi.sides.a.face, gi.sides.b.face];
     let fj = [gj.sides.a.face, gj.sides.b.face];
     if fj.iter().filter(|f| fi.contains(f)).count() != 1
         || fi.iter().chain(&fj).any(|f| !faces.contains(f))
     {
-        return Err(corner("Die beiden Kanten haben keine gemeinsame Fläche"));
+        return Err(at_corner(
+            solid,
+            &faces,
+            "Die beiden Kanten haben keine gemeinsame Fläche",
+        ));
     }
     // Die dritte, ungerundete Kante an der Ecke (zwischen den beiden nicht gemeinsamen Flächen).
     let third: Vec<_> = vertex_edges(solid, v)
@@ -128,7 +137,11 @@ pub fn miter_pair(
     let n = (leaving_direction(solid, gi.edge, v) - leaving_direction(solid, gj.edge, v))
         .normalize_or_zero();
     if !n.is_finite() || n == DVec3::ZERO {
-        return Err(corner("Die beiden Kanten laufen in dieselbe Richtung"));
+        return Err(at_corner(
+            solid,
+            &faces,
+            "Die beiden Kanten laufen in dieselbe Richtung",
+        ));
     }
     let plane = Surface::Plane {
         frame: Frame::from_origin_normal(vp, n),
@@ -211,7 +224,11 @@ pub fn corner_three(
         let r = match g.surface {
             Surface::Cylinder { radius, .. } if g.analytic => radius,
             Surface::Plane { .. } if g.analytic => {
-                return Err(corner("Ecken mit drei Fasen werden nicht unterstützt"));
+                return Err(at_corner(
+                    solid,
+                    &faces,
+                    "Ecken mit drei Fasen werden nicht unterstützt",
+                ));
             }
             _ => {
                 return Err(BlendError::Corner(format!(
@@ -245,7 +262,7 @@ pub fn corner_three(
         }
         pairs.push(pair);
     }
-    let r = radius.ok_or_else(|| corner("An der Ecke fehlt eine Rundung"))?;
+    let r = radius.ok_or_else(|| at_corner(solid, &faces, "An der Ecke fehlt eine Rundung"))?;
     let mut n = [DVec3::ZERO; 3];
     for (k, f) in faces.iter().enumerate() {
         let face = &solid.faces[*f];
@@ -264,8 +281,13 @@ pub fn corner_three(
         )));
     }
     let vp = solid.vertices[v].point;
-    let center = ball_center(n, vp, r)
-        .ok_or_else(|| corner("Die drei Flächen schneiden sich nicht in einem Punkt"))?;
+    let center = ball_center(n, vp, r).ok_or_else(|| {
+        at_corner(
+            solid,
+            &faces,
+            "Die drei Flächen schneiden sich nicht in einem Punkt",
+        )
+    })?;
     let weld = ON_CURVE_FACTOR * blend_tol(solid, geoms, tol).linear;
     let sphere_miss = || {
         BlendError::Corner(format!(
@@ -309,7 +331,13 @@ pub fn corner_three(
         .into_iter()
         .map(|d| d.normalize())
         .find(|d| !inside_cone(n, *d) && !inside_cone(n, -*d))
-        .ok_or_else(|| corner("Für das Kugelstück gibt es keine Lage ohne Pol"))?;
+        .ok_or_else(|| {
+            at_corner(
+                solid,
+                &faces,
+                "Für das Kugelstück gibt es keine Lage ohne Pol",
+            )
+        })?;
     let mid = (n[0] + n[1] + n[2]).normalize();
     let x = (mid - z * mid.dot(z)).normalize();
     let frame = Frame {
