@@ -2,10 +2,13 @@
 //! Maße eintragen, Art wählen, „Erzeugen“. Zahlen nehmen Komma und Punkt an.
 
 use crate::browser::ERROR_COLOR;
-use crate::sketch_view::parse_number;
+use crate::sketch_view::{format_number, parse_number};
 use crate::state::{AppState, MAX_COORD_MM};
 use planora_feature::BlendArt;
-use planora_kernel::{Edge, Id};
+use planora_kernel::blend::min_blend_size_request;
+use planora_kernel::blend::topo::{edge_uses, face_name};
+use planora_kernel::{BlendKind, Edge, Id, Solid};
+use planora_math::Tolerance;
 use planora_render::{EdgeRef, Pick};
 
 /// Meldung, solange keine Kante angeklickt ist.
@@ -19,11 +22,14 @@ const MAX_ANGLE_DEG: f64 = 179.0;
 const DEFAULT_SECOND_DISTANCE: &str = "1";
 /// Vorgabe des Fasenwinkels bei „Fase: Abstand und Winkel“ in Grad.
 const DEFAULT_ANGLE: &str = "45";
+/// Dasselbe als Zahl (Umwandlung einer bestehenden Fase).
+const DEFAULT_ANGLE_DEG: f64 = 45.0;
 
 /// Art im Fenster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArtChoice {
     Rundung,
+    RundungVariabel,
     FaseGleich,
     FaseZwei,
     FaseWinkel,
@@ -33,6 +39,7 @@ impl ArtChoice {
     pub fn label(self) -> &'static str {
         match self {
             ArtChoice::Rundung => "Rundung",
+            ArtChoice::RundungVariabel => "Rundung mit variablem Radius",
             ArtChoice::FaseGleich => "Fase: gleicher Abstand",
             ArtChoice::FaseZwei => "Fase: zwei Abstände",
             ArtChoice::FaseWinkel => "Fase: Abstand und Winkel",
@@ -42,10 +49,129 @@ impl ArtChoice {
     /// Bezeichnungen der Maßfelder (das zweite fehlt bei Rundung und gleicher Fase).
     pub fn fields(self) -> (&'static str, Option<&'static str>) {
         match self {
-            ArtChoice::Rundung => ("Radius", None),
+            ArtChoice::Rundung | ArtChoice::RundungVariabel => ("Radius", None),
             ArtChoice::FaseGleich => ("Abstand", None),
             ArtChoice::FaseZwei => ("Abstand 1", Some("Abstand 2")),
             ArtChoice::FaseWinkel => ("Abstand", Some("Winkel")),
+        }
+    }
+
+    /// Art einer bestehenden Verrundung.
+    pub fn of(art: &BlendArt) -> ArtChoice {
+        match art {
+            BlendArt::Rundung { .. } => ArtChoice::Rundung,
+            BlendArt::RundungVariabel { .. } => ArtChoice::RundungVariabel,
+            BlendArt::FaseGleich { .. } => ArtChoice::FaseGleich,
+            BlendArt::FaseZwei { .. } => ArtChoice::FaseZwei,
+            BlendArt::FaseWinkel { .. } => ArtChoice::FaseWinkel,
+        }
+    }
+
+    /// `art` in diese Art umwandeln: das erste Maß bleibt, fehlende Werte bekommen Vorgaben.
+    pub fn convert(self, art: &BlendArt) -> BlendArt {
+        let first = match art {
+            BlendArt::Rundung { radius } => *radius,
+            BlendArt::RundungVariabel { punkte } => punkte.first().map_or(1.0, |p| p.1),
+            BlendArt::FaseGleich { abstand } | BlendArt::FaseWinkel { abstand, .. } => *abstand,
+            BlendArt::FaseZwei { abstand1, .. } => *abstand1,
+        };
+        match self {
+            ArtChoice::Rundung => BlendArt::Rundung { radius: first },
+            ArtChoice::RundungVariabel => BlendArt::RundungVariabel {
+                punkte: vec![(0.0, first), (100.0, first)],
+            },
+            ArtChoice::FaseGleich => BlendArt::FaseGleich { abstand: first },
+            ArtChoice::FaseZwei => BlendArt::FaseZwei {
+                abstand1: first,
+                abstand2: first,
+            },
+            ArtChoice::FaseWinkel => BlendArt::FaseWinkel {
+                abstand: first,
+                winkel: DEFAULT_ANGLE_DEG,
+            },
+        }
+    }
+
+    /// Hängt das Ergebnis von der Wahl der Fläche 1 ab?
+    pub fn uses_first_face(self) -> bool {
+        matches!(self, ArtChoice::FaseZwei | ArtChoice::FaseWinkel)
+    }
+}
+
+/// Neuer Punkt in der Mitte des größten Abstands (Position, Radius als Mittel der Nachbarn).
+pub fn insert_point(points: &mut Vec<(f64, f64)>) {
+    if points.len() < 2 {
+        return;
+    }
+    let k = (0..points.len() - 1)
+        .max_by(|&a, &b| {
+            (points[a + 1].0 - points[a].0).total_cmp(&(points[b + 1].0 - points[b].0))
+        })
+        .unwrap_or(0);
+    let (p, q) = (points[k], points[k + 1]);
+    points.insert(k + 1, (0.5 * (p.0 + q.0), 0.5 * (p.1 + q.1)));
+}
+
+/// Kleinstes Maß in mm, das der Kern für diesen Körper und diese Art zulässt.
+pub fn min_size_for(solid: &Solid, variable: bool, tol: &Tolerance) -> f64 {
+    let kind = if variable {
+        BlendKind::VariableFillet { points: Vec::new() }
+    } else {
+        BlendKind::Fillet { radius: 1.0 }
+    };
+    min_blend_size_request(solid, &kind, tol)
+}
+
+/// Zahl für Meldungen: Komma, ohne überflüssige Nullen.
+pub fn min_text(v: f64) -> String {
+    let s = format!("{v:.6}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    s.replace('.', ",")
+}
+
+/// Prüft die Maße (Radien, Abstände) gegen das Mindestmaß des Kerns.
+pub fn check_min_sizes(art: &BlendArt, min: f64) -> Result<(), String> {
+    let sizes: Vec<(String, f64)> = match art {
+        BlendArt::Rundung { radius } => vec![("Radius".into(), *radius)],
+        BlendArt::RundungVariabel { punkte } => punkte
+            .iter()
+            .enumerate()
+            .map(|(k, p)| (format!("Radius {}", k + 1), p.1))
+            .collect(),
+        BlendArt::FaseGleich { abstand } | BlendArt::FaseWinkel { abstand, .. } => {
+            vec![("Abstand".into(), *abstand)]
+        }
+        BlendArt::FaseZwei { abstand1, abstand2 } => vec![
+            ("Abstand 1".into(), *abstand1),
+            ("Abstand 2".into(), *abstand2),
+        ],
+    };
+    match sizes.into_iter().find(|(_, v)| *v < min) {
+        Some((label, _)) => Err(format!(
+            "„{label}“ ist zu klein; das kleinste mögliche Maß ist {} mm",
+            min_text(min)
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Namen der beiden Flächen an der Kante `edge` (die erste ist die Vorgabe für Fläche 1).
+pub fn face_pair(solid: &Solid, edge: Id<Edge>) -> Option<(String, String)> {
+    let uses = edge_uses(solid, edge);
+    (uses.len() >= 2).then(|| {
+        (
+            face_name(solid, uses[0].face),
+            face_name(solid, uses[1].face),
+        )
+    })
+}
+
+/// Macht an allen Kanten die Fläche mit der Rolle `role` zu Fläche 1 (Kanten ohne diese Rolle
+/// bleiben unverändert).
+pub fn set_first_face(refs: &mut [planora_feature::EdgeRef], role: &str) {
+    for r in refs {
+        if r.a.role != role && r.b.role == role {
+            std::mem::swap(&mut r.a, &mut r.b);
         }
     }
 }
@@ -57,6 +183,11 @@ pub struct BlendDialog {
     pub first: String,
     pub second: String,
     pub tangentenkette: bool,
+    /// Punkte der variablen Rundung: Position in % und Radius.
+    pub points: Vec<(String, String)>,
+    /// Rolle der gewählten Fläche 1 (nur bei „zwei Abstände“ und „Abstand und Winkel“);
+    /// `None`: die erste Fläche der Kante.
+    pub first_face: Option<String>,
     /// Die beim Öffnen angeklickte Kante ist schon in die Markierung übernommen.
     seeded: bool,
     error: Option<String>,
@@ -79,6 +210,8 @@ impl BlendDialog {
             first: "1".into(),
             second: String::new(),
             tangentenkette: true,
+            points: Vec::new(),
+            first_face: None,
             seeded: false,
             error: None,
         }
@@ -90,13 +223,49 @@ impl BlendDialog {
             first: "1".into(),
             second: DEFAULT_ANGLE.into(),
             tangentenkette: true,
+            points: Vec::new(),
+            first_face: None,
             seeded: false,
             error: None,
         }
     }
 
+    pub fn variable() -> Self {
+        BlendDialog {
+            art: ArtChoice::RundungVariabel,
+            points: vec![("0".into(), "1".into()), ("100".into(), "1".into())],
+            ..BlendDialog::fillet()
+        }
+    }
+
+    /// Punkt in der Mitte des größten Abstands einfügen (ungültige Felder: ans Ende, 100 %).
+    pub fn add_point(&mut self) {
+        let parsed: Option<Vec<(f64, f64)>> = self
+            .points
+            .iter()
+            .map(|(p, r)| Some((parse_number(p)?, parse_number(r)?)))
+            .collect();
+        match parsed {
+            Some(mut pts) if pts.len() >= 2 => {
+                insert_point(&mut pts);
+                self.points = pts
+                    .iter()
+                    .map(|(p, r)| (format_number(*p, 2), format_number(*r, 3)))
+                    .collect();
+            }
+            _ => self.points.push(("100".into(), "1".into())),
+        }
+    }
+
+    /// Punkt `i` entfernen; mindestens zwei bleiben.
+    pub fn remove_point(&mut self, i: usize) {
+        if self.points.len() > 2 && i < self.points.len() {
+            self.points.remove(i);
+        }
+    }
+
     pub fn title(&self) -> &'static str {
-        if self.art == ArtChoice::Rundung {
+        if matches!(self.art, ArtChoice::Rundung | ArtChoice::RundungVariabel) {
             "Verrunden"
         } else {
             "Fase"
@@ -113,12 +282,30 @@ impl BlendDialog {
         if self.art == art {
             return;
         }
+        // Das erste Maß bleibt: beim Wechsel von „variabel“ der Radius des ersten Punkts,
+        // beim Wechsel zu „variabel“ zwei Punkte mit diesem Radius.
+        if self.art == ArtChoice::RundungVariabel
+            && let Some((_, r)) = self.points.first()
+        {
+            self.first = r.clone();
+        }
         self.art = art;
         self.second = match art {
             ArtChoice::FaseZwei => DEFAULT_SECOND_DISTANCE.into(),
             ArtChoice::FaseWinkel => DEFAULT_ANGLE.into(),
-            ArtChoice::Rundung | ArtChoice::FaseGleich => String::new(),
+            ArtChoice::Rundung | ArtChoice::RundungVariabel | ArtChoice::FaseGleich => {
+                String::new()
+            }
         };
+        if art == ArtChoice::RundungVariabel {
+            self.points = vec![
+                ("0".into(), self.first.clone()),
+                ("100".into(), self.first.clone()),
+            ];
+        }
+        if !art.uses_first_face() {
+            self.first_face = None;
+        }
     }
 
     /// Gewählte Kanten: die markierten (alle aus einem Körper), sonst die angeklickte Kante.
@@ -136,6 +323,23 @@ impl BlendDialog {
             Some(Pick::Edge(EdgeRef { body, edge })) => Some((body, vec![edge])),
             _ => None,
         }
+    }
+
+    /// Kleinstes Maß des Kerns für den gewählten Körper und die gewählte Art.
+    pub fn min_size(&self, state: &AppState) -> Option<f64> {
+        let (body, _) = self.chosen_edges(state)?;
+        let solid = &state.bodies.get(body)?.solid;
+        Some(min_size_for(
+            solid,
+            self.art == ArtChoice::RundungVariabel,
+            &state.kernel.tolerance,
+        ))
+    }
+
+    /// Namen der beiden Flächen an der ersten gewählten Kante (Fläche 1 zur Wahl).
+    pub fn faces(&self, state: &AppState) -> Option<(String, String)> {
+        let (body, edges) = self.chosen_edges(state)?;
+        face_pair(&state.bodies.get(body)?.solid, *edges.first()?)
     }
 
     /// Beendet das Markieren (Fenster geschlossen).
@@ -168,10 +372,22 @@ impl BlendDialog {
 
     /// Art mit den eingegebenen Maßen; ein Fehlertext nennt das ungültige Feld.
     pub fn art_value(&self) -> Result<BlendArt, String> {
+        if self.art == ArtChoice::RundungVariabel {
+            let mut punkte = Vec::with_capacity(self.points.len());
+            for (k, (p, r)) in self.points.iter().enumerate() {
+                let pos = parse_number(p)
+                    .filter(|v| (0.0..=100.0).contains(v))
+                    .ok_or_else(|| {
+                        format!("„Position {}“ muss zwischen 0 und 100 % liegen", k + 1)
+                    })?;
+                punkte.push((pos, size(&format!("Radius {}", k + 1), r)?));
+            }
+            return Ok(BlendArt::RundungVariabel { punkte });
+        }
         let (l1, l2) = self.art.fields();
         let a = size(l1, &self.first)?;
         Ok(match self.art {
-            ArtChoice::Rundung => BlendArt::Rundung { radius: a },
+            ArtChoice::Rundung | ArtChoice::RundungVariabel => BlendArt::Rundung { radius: a },
             ArtChoice::FaseGleich => BlendArt::FaseGleich { abstand: a },
             ArtChoice::FaseZwei => BlendArt::FaseZwei {
                 abstand1: a,
@@ -206,7 +422,10 @@ impl BlendDialog {
             state.message = Some(NO_EDGE.into());
             return true;
         };
-        let art = match self.art_value() {
+        let art = match self.art_value().and_then(|a| {
+            let min = self.min_size(state).unwrap_or(0.0);
+            check_min_sizes(&a, min).map(|()| a)
+        }) {
             Ok(a) => a,
             Err(e) => {
                 state.message = Some(e.clone());
@@ -214,7 +433,11 @@ impl BlendDialog {
                 return true;
             }
         };
-        match state.add_blend(body, &edges, art, self.tangentenkette) {
+        let first_face = self
+            .first_face
+            .as_deref()
+            .filter(|_| self.art.uses_first_face());
+        match state.add_blend_first(body, &edges, art, self.tangentenkette, first_face) {
             Ok(_) => {
                 self.error = None;
                 false
@@ -248,37 +471,86 @@ impl BlendDialog {
                     None => ui.weak("Kante im Fenster anklicken (Umschalt: mehrere)."),
                 };
                 ui.add_space(4.0);
-                let choices: &[ArtChoice] = if self.art == ArtChoice::Rundung {
-                    &[ArtChoice::Rundung]
-                } else {
-                    &[
-                        ArtChoice::FaseGleich,
-                        ArtChoice::FaseZwei,
-                        ArtChoice::FaseWinkel,
-                    ]
-                };
+                let choices: &[ArtChoice] =
+                    if matches!(self.art, ArtChoice::Rundung | ArtChoice::RundungVariabel) {
+                        &[ArtChoice::Rundung, ArtChoice::RundungVariabel]
+                    } else {
+                        &[
+                            ArtChoice::FaseGleich,
+                            ArtChoice::FaseZwei,
+                            ArtChoice::FaseWinkel,
+                        ]
+                    };
                 let mut chosen = self.art;
                 for c in choices {
                     ui.radio_value(&mut chosen, *c, c.label());
                 }
                 self.set_art(chosen);
-                let (l1, l2) = self.art.fields();
-                egui::Grid::new("blend_numbers")
-                    .num_columns(3)
-                    .show(ui, |ui| {
-                        ui.label(l1);
-                        ui.add(egui::TextEdit::singleline(&mut self.first).desired_width(90.0));
-                        ui.label("mm");
-                        ui.end_row();
-                        if let Some(l2) = l2 {
-                            ui.label(l2);
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.second).desired_width(90.0),
-                            );
-                            ui.label(if l2 == "Winkel" { "°" } else { "mm" });
+                if self.art == ArtChoice::RundungVariabel {
+                    if self.points.is_empty() {
+                        self.points = vec![
+                            ("0".into(), self.first.clone()),
+                            ("100".into(), self.first.clone()),
+                        ];
+                    }
+                    let mut remove = None;
+                    egui::Grid::new("blend_points")
+                        .num_columns(5)
+                        .show(ui, |ui| {
+                            for (k, (p, r)) in self.points.iter_mut().enumerate() {
+                                ui.label(format!("Punkt {}", k + 1));
+                                ui.add(egui::TextEdit::singleline(p).desired_width(60.0));
+                                ui.label("%");
+                                ui.add(egui::TextEdit::singleline(r).desired_width(60.0));
+                                if ui.button("Entfernen").clicked() {
+                                    remove = Some(k);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                    if let Some(k) = remove {
+                        self.remove_point(k);
+                    }
+                    if ui.button("Punkt hinzufügen").clicked() {
+                        self.add_point();
+                    }
+                } else {
+                    let (l1, l2) = self.art.fields();
+                    egui::Grid::new("blend_numbers")
+                        .num_columns(3)
+                        .show(ui, |ui| {
+                            ui.label(l1);
+                            ui.add(egui::TextEdit::singleline(&mut self.first).desired_width(90.0));
+                            ui.label("mm");
                             ui.end_row();
-                        }
-                    });
+                            if let Some(l2) = l2 {
+                                ui.label(l2);
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.second)
+                                        .desired_width(90.0),
+                                );
+                                ui.label(if l2 == "Winkel" { "°" } else { "mm" });
+                                ui.end_row();
+                            }
+                        });
+                }
+                if self.art.uses_first_face()
+                    && let Some((a, b)) = self.faces(state)
+                {
+                    let current = self.first_face.clone().unwrap_or_else(|| a.clone());
+                    egui::ComboBox::from_label("Fläche 1")
+                        .selected_text(current.clone())
+                        .show_ui(ui, |ui| {
+                            for name in [&a, &b] {
+                                if ui.selectable_label(*name == current, name).clicked() {
+                                    self.first_face = Some(name.clone());
+                                }
+                            }
+                        });
+                }
+                if let Some(min) = self.min_size(state) {
+                    ui.weak(format!("Kleinstes Maß: {} mm", min_text(min)));
+                }
                 ui.checkbox(
                     &mut self.tangentenkette,
                     "Tangentenkette (glatt anschließende Kanten mitnehmen)",

@@ -526,6 +526,19 @@ impl AppState {
         art: BlendArt,
         tangentenkette: bool,
     ) -> Result<FeatureId, String> {
+        self.add_blend_first(body, edges, art, tangentenkette, None)
+    }
+
+    /// Wie [`AppState::add_blend`]; `first_face` ist die Rolle der Fläche 1 (bei Fasen mit zwei
+    /// Abständen oder Winkel), `None`: die erste Fläche der Kante.
+    pub fn add_blend_first(
+        &mut self,
+        body: usize,
+        edges: &[Id<Edge>],
+        art: BlendArt,
+        tangentenkette: bool,
+        first_face: Option<&str>,
+    ) -> Result<FeatureId, String> {
         let Some(b) = self.bodies.get(body) else {
             return self.fail("Körper nicht gefunden".into());
         };
@@ -539,6 +552,9 @@ impl AppState {
                 Ok(r) => refs.push(r),
                 Err(err) => return self.fail(err.to_string()),
             }
+        }
+        if let Some(role) = first_face {
+            crate::blend_dialog::set_first_face(&mut refs, role);
         }
         let source = b.source;
         self.try_close_sketch()?;
