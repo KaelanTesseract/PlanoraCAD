@@ -15,6 +15,11 @@ pub const NO_EDGE: &str = "Bitte zuerst eine Kante im Fenster anklicken.";
 const MIN_ANGLE_DEG: f64 = 1.0;
 const MAX_ANGLE_DEG: f64 = 179.0;
 
+/// Vorgabe des zweiten Abstands bei „Fase: zwei Abstände“ in mm (wie der erste).
+const DEFAULT_SECOND_DISTANCE: &str = "1";
+/// Vorgabe des Fasenwinkels bei „Fase: Abstand und Winkel“ in Grad.
+const DEFAULT_ANGLE: &str = "45";
+
 /// Art im Fenster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArtChoice {
@@ -52,6 +57,8 @@ pub struct BlendDialog {
     pub first: String,
     pub second: String,
     pub tangentenkette: bool,
+    /// Die beim Öffnen angeklickte Kante ist schon in die Markierung übernommen.
+    seeded: bool,
     error: Option<String>,
 }
 
@@ -72,6 +79,7 @@ impl BlendDialog {
             first: "1".into(),
             second: String::new(),
             tangentenkette: true,
+            seeded: false,
             error: None,
         }
     }
@@ -80,8 +88,9 @@ impl BlendDialog {
         BlendDialog {
             art: ArtChoice::FaseGleich,
             first: "1".into(),
-            second: "45".into(),
+            second: DEFAULT_ANGLE.into(),
             tangentenkette: true,
+            seeded: false,
             error: None,
         }
     }
@@ -98,12 +107,63 @@ impl BlendDialog {
         self.error.as_deref()
     }
 
-    /// Gewählte Kanten: (Körperindex, Kanten). Stufe 1: die angeklickte Kante.
+    /// Wechselt die Art. Das zweite Maß bekommt dabei die Vorgabe der neuen Art (sonst stünde
+    /// nach „Abstand und Winkel“ bei „zwei Abstände“ noch 45 mm).
+    pub fn set_art(&mut self, art: ArtChoice) {
+        if self.art == art {
+            return;
+        }
+        self.art = art;
+        self.second = match art {
+            ArtChoice::FaseZwei => DEFAULT_SECOND_DISTANCE.into(),
+            ArtChoice::FaseWinkel => DEFAULT_ANGLE.into(),
+            ArtChoice::Rundung | ArtChoice::FaseGleich => String::new(),
+        };
+    }
+
+    /// Gewählte Kanten: die markierten (alle aus einem Körper), sonst die angeklickte Kante.
     pub fn chosen_edges(&self, state: &AppState) -> Option<(usize, Vec<Id<Edge>>)> {
+        if let Some(first) = state.marked_edges.first() {
+            let edges = state
+                .marked_edges
+                .iter()
+                .filter(|m| m.body == first.body)
+                .map(|m| m.edge)
+                .collect();
+            return Some((first.body, edges));
+        }
         match state.selection {
             Some(Pick::Edge(EdgeRef { body, edge })) => Some((body, vec![edge])),
             _ => None,
         }
+    }
+
+    /// Beendet das Markieren (Fenster geschlossen).
+    pub fn finish(&self, state: &mut AppState) {
+        state.edge_picking = false;
+        state.clear_edge_marks();
+    }
+
+    /// Meldung, wenn die Markierung Kanten mehrerer Körper enthält (Körper mit Namen).
+    fn mixed_bodies(state: &AppState) -> Option<String> {
+        let first = state.marked_edges.first()?.body;
+        if state.marked_edges.iter().all(|m| m.body == first) {
+            return None;
+        }
+        let mut names: Vec<String> = Vec::new();
+        for m in &state.marked_edges {
+            let name = state
+                .bodies
+                .get(m.body)
+                .map_or_else(|| format!("Körper {}", m.body + 1), |b| b.name.clone());
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        Some(format!(
+            "Die Kanten gehören zu verschiedenen Körpern ({}); es geht nur ein Körper auf einmal",
+            names.join(", ")
+        ))
     }
 
     /// Art mit den eingegebenen Maßen; ein Fehlertext nennt das ungültige Feld.
@@ -136,6 +196,11 @@ impl BlendDialog {
     /// und in der Statuszeile).
     pub fn execute(&mut self, state: &mut AppState) -> bool {
         state.message = None;
+        if let Some(e) = Self::mixed_bodies(state) {
+            state.message = Some(e.clone());
+            self.error = Some(e);
+            return true;
+        }
         let Some((body, edges)) = self.chosen_edges(state) else {
             self.error = Some(NO_EDGE.into());
             state.message = Some(NO_EDGE.into());
@@ -163,6 +228,14 @@ impl BlendDialog {
 
     /// Zeigt das Fenster; `true`, solange es offen bleiben soll.
     pub fn show(&mut self, ctx: &egui::Context, state: &mut AppState) -> bool {
+        state.edge_picking = true;
+        state.chain_marking = self.tangentenkette;
+        if !self.seeded {
+            self.seeded = true;
+            if let Some(Pick::Edge(e)) = state.selection {
+                state.toggle_edge_mark(e, false);
+            }
+        }
         let mut open = true;
         let (mut run, mut cancel) = (false, false);
         egui::Window::new(self.title())
@@ -172,7 +245,7 @@ impl BlendDialog {
             .show(ctx, |ui| {
                 match self.chosen_edges(state) {
                     Some((_, edges)) => ui.label(format!("Gewählte Kanten: {}", edges.len())),
-                    None => ui.weak("Kante im Fenster anklicken."),
+                    None => ui.weak("Kante im Fenster anklicken (Umschalt: mehrere)."),
                 };
                 ui.add_space(4.0);
                 let choices: &[ArtChoice] = if self.art == ArtChoice::Rundung {
@@ -184,9 +257,11 @@ impl BlendDialog {
                         ArtChoice::FaseWinkel,
                     ]
                 };
+                let mut chosen = self.art;
                 for c in choices {
-                    ui.radio_value(&mut self.art, *c, c.label());
+                    ui.radio_value(&mut chosen, *c, c.label());
                 }
+                self.set_art(chosen);
                 let (l1, l2) = self.art.fields();
                 egui::Grid::new("blend_numbers")
                     .num_columns(3)
@@ -220,9 +295,14 @@ impl BlendDialog {
                     }
                 });
             });
-        if run {
-            return self.execute(state);
+        let keep = if run {
+            self.execute(state)
+        } else {
+            open && !cancel
+        };
+        if !keep {
+            self.finish(state);
         }
-        open && !cancel
+        keep
     }
 }

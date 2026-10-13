@@ -580,6 +580,10 @@ impl eframe::App for PlanoraApp {
         {
             tab.blend_dialog = Some(dialog);
         }
+        if tab.blend_dialog.is_none() && tab.state.edge_picking {
+            tab.state.edge_picking = false;
+            tab.state.clear_edge_marks();
+        }
 
         self.ws.refresh_prompts();
         prompts::show(&ctx, &mut self.ws);

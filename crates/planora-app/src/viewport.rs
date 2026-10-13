@@ -3,7 +3,7 @@ use crate::{sketch_view, theme};
 use egui::{Align2, Color32, FontId, PointerButton, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::Vec2;
 use planora_render::gpu::ViewportCallback;
-use planora_render::{ViewFace, cube_faces, cube_hit_test};
+use planora_render::{Pick, ViewFace, cube_faces, cube_hit_test};
 
 const CUBE_SIZE: f32 = 96.0;
 
@@ -105,7 +105,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 let hit = state.pick(cursor, viewport);
                 state.set_hover(hit);
                 if response.clicked() {
-                    state.set_selection(hit);
+                    match hit {
+                        Some(Pick::Edge(e)) if state.edge_picking => {
+                            let extend = ui.input(|i| i.modifiers.shift);
+                            state.toggle_edge_mark(e, extend);
+                        }
+                        _ => state.set_selection(hit),
+                    }
                 }
             }
             None => state.set_hover(None),

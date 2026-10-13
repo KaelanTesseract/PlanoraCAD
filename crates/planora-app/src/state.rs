@@ -11,8 +11,8 @@ use planora_mesh::{
     MassProperties, Mesh, TessellationOptions, is_watertight, mass_properties, tessellate,
 };
 use planora_render::{
-    EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, SceneData, build_scene, pick_edge,
-    pick_face,
+    EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, SceneData, build_scene_marked,
+    pick_edge, pick_face,
 };
 use planora_sketch::model::{CurveId, Sketch};
 use planora_sketch::{ExtractedProfiles, plane_of_face};
@@ -121,6 +121,12 @@ pub struct AppState {
     pub rename_draft: Option<(FeatureId, String)>,
     /// Wunsch aus dem Feature-Baum, den Bearbeiten-Dialog für dieses Feature zu öffnen.
     pub edit_request: Option<FeatureId>,
+    /// Markierte Kanten (Mehrfachauswahl im Fenster „Verrunden“/„Fase“), alle aus einem Körper.
+    pub marked_edges: Vec<EdgeRef>,
+    /// Klicks auf Kanten markieren statt zu wählen (solange das Fenster offen ist).
+    pub edge_picking: bool,
+    /// Ein Klick markiert die ganze Tangentenkette.
+    pub chain_marking: bool,
     /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
     drag_move: Option<FeatureId>,
 }
@@ -199,6 +205,9 @@ impl AppState {
             pending_delete: None,
             rename_draft: None,
             edit_request: None,
+            marked_edges: Vec::new(),
+            edge_picking: false,
+            chain_marking: true,
             drag_move: None,
         };
         state.rebuild_scene();
@@ -259,6 +268,15 @@ impl AppState {
         self.selected_body = self.selected_body.and_then(map);
         self.selection = self.selection.and_then(|p| self.remap_pick(p, map));
         self.hover = self.hover.and_then(|p| self.remap_pick(p, map));
+        let marks: Vec<EdgeRef> = self
+            .marked_edges
+            .iter()
+            .filter_map(|m| match self.remap_pick(Pick::Edge(*m), map) {
+                Some(Pick::Edge(x)) => Some(x),
+                _ => None,
+            })
+            .collect();
+        self.marked_edges = marks;
         if !failed.is_empty() {
             self.message = Some(failed.join("; "));
         }
@@ -843,9 +861,11 @@ impl AppState {
             hover: self.hover,
             selected: self.selection,
         };
-        self.scene = Arc::new(build_scene(
+        let marked: Vec<Pick> = self.marked_edges.iter().map(|e| Pick::Edge(*e)).collect();
+        self.scene = Arc::new(build_scene_marked(
             &meshes,
             &highlight,
+            &marked,
             &self.scene_palette(),
             GRID_HALF_EXTENT,
         ));
@@ -886,6 +906,50 @@ impl AppState {
                 }
                 None => self.selected_body,
             };
+            self.rebuild_scene();
+        }
+    }
+
+    /// Markiert die Kante `e` (mit `chain_marking` ihre Tangentenkette). Ohne `extend` ersetzt
+    /// die Gruppe die Markierung (dieselbe Gruppe noch einmal: leeren); mit `extend` kommt sie
+    /// dazu oder wird entfernt, wenn sie schon ganz markiert ist. Kanten eines anderen Körpers
+    /// ersetzen die Markierung.
+    pub fn toggle_edge_mark(&mut self, e: EdgeRef, extend: bool) {
+        let Some(b) = self.bodies.get(e.body) else {
+            return;
+        };
+        let group: Vec<EdgeRef> = if self.chain_marking {
+            planora_kernel::blend::chain::tangent_chain(&b.solid, e.edge)
+                .into_iter()
+                .map(|edge| EdgeRef { body: e.body, edge })
+                .collect()
+        } else {
+            vec![e]
+        };
+        let all_marked = group.iter().all(|g| self.marked_edges.contains(g));
+        if !extend || self.marked_edges.iter().any(|m| m.body != e.body) {
+            self.marked_edges = if all_marked && self.marked_edges.len() == group.len() {
+                Vec::new()
+            } else {
+                group
+            };
+        } else if all_marked {
+            self.marked_edges.retain(|m| !group.contains(m));
+        } else {
+            for g in group {
+                if !self.marked_edges.contains(&g) {
+                    self.marked_edges.push(g);
+                }
+            }
+        }
+        self.selected_body = Some(e.body);
+        self.rebuild_scene();
+    }
+
+    /// Löscht die Markierung.
+    pub fn clear_edge_marks(&mut self) {
+        if !self.marked_edges.is_empty() {
+            self.marked_edges.clear();
             self.rebuild_scene();
         }
     }
