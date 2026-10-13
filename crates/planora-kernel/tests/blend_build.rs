@@ -435,3 +435,72 @@ fn a_pocket_reaching_into_the_rounded_area_is_refused() {
     let ok = round_edge(&s, e, 1.0).unwrap();
     validate(&ok).unwrap();
 }
+
+fn moved(s: Solid, by: DVec3) -> Solid {
+    k().transform(&s, &DMat4::from_translation(by)).unwrap()
+}
+
+fn assert_cavity_refused(r: Result<Solid, BlendError>) {
+    match r {
+        Err(BlendError::Unsupported(m)) => assert_eq!(m, CAVITY),
+        other => panic!("{:?}", other.map(|s| s.faces.len())),
+    }
+}
+
+fn round_or_chamfer(s: &Solid, e: Id<Edge>, kind: SectionKind) -> Result<Solid, BlendError> {
+    let sides = edge_sides(s, e, None)?;
+    let angle = edge_angle(s, e, &sides)?;
+    let g = analytic_geom(s, e, &sides, angle.convex, kind, &tol())?.expect("analytische Kante");
+    let geoms = vec![g];
+    let plan = end_cuts(s, &geoms, &tol())?;
+    assemble(s, &geoms, &plan, &["Rundung 1".into()], &tol())
+}
+
+#[test]
+fn bodies_with_cavities_are_refused_by_name() {
+    // Regression (Review Task 4, Runde 2): innere Schalen im oder quer zum abgetragenen Bereich
+    // ergaben früher einen „gültigen“ falschen Körper.
+    let cube = || k().make_box(DVec3::splat(10.0)).unwrap();
+    let top_edge = |s: &Solid| edge_at(s, DVec3::new(0.0, 0.0, 10.0), DVec3::new(0.0, 10.0, 10.0));
+    // Quaderförmiger Hohlraum x 0,2…0,6, y 4…6, z 9,4…9,8 unter der Deckelkante an x = 0.
+    let void = moved(
+        k().make_box(DVec3::new(0.4, 2.0, 0.4)).unwrap(),
+        DVec3::new(0.2, 4.0, 9.4),
+    );
+    let s = k().boolean(&cube(), &void, BoolOp::Difference).unwrap();
+    assert_eq!(s.shells.len(), 2);
+    let e = top_edge(&s);
+    assert_cavity_refused(round_or_chamfer(&s, e, SectionKind::Fillet { radius: 3.0 }));
+    let chamfer = SectionKind::Chamfer(ChamferSpec::Distances { a: 3.0, b: 3.0 });
+    assert_cavity_refused(round_or_chamfer(&s, e, chamfer));
+    // Kugelhohlraum r = 0,4 bei (0,6; 0,6; 5) an der senkrechten Kante (0, 0).
+    let ball = |x: f64, y: f64| moved(k().make_sphere(0.4).unwrap(), DVec3::new(x, y, 5.0));
+    let vertical =
+        |s: &Solid, x: f64, y: f64| edge_at(s, DVec3::new(x, y, 0.0), DVec3::new(x, y, 10.0));
+    let s = k()
+        .boolean(&cube(), &ball(0.6, 0.6), BoolOp::Difference)
+        .unwrap();
+    let fillet = SectionKind::Fillet { radius: 3.0 };
+    assert_cavity_refused(round_or_chamfer(&s, vertical(&s, 0.0, 0.0), fillet));
+    // Kugelhohlraum im Abstand 3,2 von der Achse der Rundung (schneidet die neue Fläche), an
+    // allen vier senkrechten Kanten.
+    let off = 3.0 - 3.2 / 2f64.sqrt();
+    for (x, y) in [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)] {
+        let (bx, by) = (
+            if x == 0.0 { off } else { 10.0 - off },
+            if y == 0.0 { off } else { 10.0 - off },
+        );
+        let s = k()
+            .boolean(&cube(), &ball(bx, by), BoolOp::Difference)
+            .unwrap();
+        assert_cavity_refused(round_or_chamfer(&s, vertical(&s, x, y), fillet));
+    }
+    // Ohne Hohlraum unverändert gültig.
+    let s = cube();
+    assert!(round_or_chamfer(&s, top_edge(&s), fillet).is_ok());
+    // Ohne Schalenliste gilt der Körper (wie bei `validate`) als eine Schale.
+    let mut bare = cube();
+    bare.shells.clear();
+    let e = top_edge(&bare);
+    validate(&round_or_chamfer(&bare, e, fillet).unwrap()).unwrap();
+}

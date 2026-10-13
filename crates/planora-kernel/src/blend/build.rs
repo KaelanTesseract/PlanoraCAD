@@ -545,6 +545,18 @@ fn check_piercing(
     Ok(())
 }
 
+/// Meldung für Körper mit mehreren Schalen (Hohlraum oder getrennte Teile).
+pub const CAVITY: &str = "Der Körper hat mehrere Schalen (etwa einen Hohlraum); Rundungen und Fasen an solchen Körpern werden noch nicht unterstützt";
+
+/// Hat der Körper mehr als eine Schale mit Flächen (Hohlraum oder getrennte Teile)? Eine solche
+/// Schale berührt keine
+/// Fläche der Kante; ob sie im abgetragenen Bereich liegt oder die neue Fläche schneidet, prüfen
+/// weder `check_holes` noch `check_piercing` sicher. Deshalb vorerst immer abgelehnt (auch
+/// Hohlräume weit weg von der Kante). Keine Schalenliste gilt wie bei `validate` als eine Schale.
+fn has_cavity(solid: &Solid) -> bool {
+    solid.shells.iter().filter(|s| !s.faces.is_empty()).count() > 1
+}
+
 /// Baut den neuen Körper: alle Flächen mit ersetzten und gekürzten Kanten, Abschlusskurven in den
 /// Abschlussflächen, die Rundungsflächen (Rollen `roles`) und die Eckstücke des Plans; danach
 /// `sew` und `validate_with`.
@@ -563,6 +575,9 @@ pub fn assemble(
         return Err(BlendError::ResultInvalid(
             "Kanten, Abschlüsse und Flächennamen passen nicht zusammen".into(),
         ));
+    }
+    if has_cavity(solid) {
+        return Err(BlendError::Unsupported(CAVITY.into()));
     }
     let btol = blend_tol(solid, geoms, tol);
     let weld = ON_CURVE_FACTOR * btol.linear;
