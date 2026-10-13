@@ -12,8 +12,13 @@
 //! überall höchstens `NURBS_FIT_TOL / 2` beträgt und die Berührkurven beide Flächen auf
 //! `NURBS_EDGE_TOL / 2` treffen; sonst benannte Ablehnung ([`INACCURATE`]).
 //!
-//! Freiformflächen und -kanten (Task 15) laufen denselben Weg; zusätzlich wird der Startwert in
-//! die Querschnittsebene gelegt, jeder Berührpunkt auf einer Freiformfläche als echter Fußpunkt
+//! Freiformflächen und -kanten (Task 15) laufen denselben Weg mit diesen Unterschieden: Startwert
+//! jedes Querschnitts ist die Ebenenformel am Kantenpunkt (der verschobene Nachbarmittelpunkt nur
+//! als zweiter Kandidat), Stationen liegen zusätzlich an den inneren Knoten der Kante, und statt
+//! gleichmäßig zu verdoppeln wird jedes Stück halbiert, dessen Nachprüfung scheitert
+//! ([`march_adaptive`]); an der Naht geschlossener Kanten einseitige Ableitungen und eine
+//! geglättete Ebenennormale (angepasste Kurven schließen mit kleinem Knick). Zusätzlich wird
+//! jeder Berührpunkt auf einer Freiformfläche als echter Fußpunkt
 //! geprüft (auf der Fläche, Mittelpunkt auf seiner Normale; sonst liegt die Kugel jenseits des
 //! Flächenstücks: `TooLarge`) und die Krümmung der Freiformfläche zur Kugel hin aus den
 //! Fundamentalformen bestimmt (`check_freeform_curvature`, am Kantenpunkt und am Berührpunkt).
@@ -136,6 +141,22 @@ const MIN_BISECTOR_START: f64 = 1e-6;
 /// Größter Differenzenschritt als Anteil des Abstands zur Nachbarstation (zwei Schritte der
 /// einseitigen Differenz bleiben vor ihr).
 const MAX_STEP_GAP: f64 = 0.4;
+/// Fensterbreite (Bruchteil der Kantenlänge), in der die Querschnittsebenen an der Naht einer
+/// geschlossenen Freiformkante auf die mittlere Tangente gezogen werden.
+const SEAM_BLEND: f64 = 0.05;
+/// Höchstzahl der Stationen einer Freiform-Bahn (Knoten der Kante plus angepasste Teilung).
+/// Größer als [`MAX_STATIONS`], weil angepasste Kurven (Boolesche Schnittkanten) bis über 200
+/// Knoten haben; begrenzt zusätzlich durch [`MAX_BLEND_EVALUATIONS`].
+pub const MAX_FREEFORM_STATIONS: usize = 1025;
+/// Kleinster Stationsabstand der angepassten Teilung (Bruchteil der Kantenlänge); ein Stück, das
+/// darunter noch ungenau ist, ergibt [`INACCURATE`].
+const MIN_SPAN_FRACTION: f64 = 1e-6;
+/// Größter Abstand (in Vielfachen von r) des Kugelmittelpunkts vom Startwert der Ebenenformel,
+/// ab dem bei Freiform-Bahnen der zweite Startwert (Nachbarstation) versucht wird.
+const MAX_START_JUMP: f64 = 0.5;
+/// Meldung, wenn der Querschnittsbogen nicht als ein rationales Stück darstellbar ist (Kanten
+/// fast tangential oder sehr spitz; Review M1).
+pub const SECTION_ARC: &str = "Der Querschnitt der Rundung ist an dieser Kante zu flach oder fast ein Halbkreis (Kantenwinkel sehr spitz oder fast gestreckt); als Freiform-Rundung lässt er sich nicht darstellen";
 /// Meldung bei schrägem Abschluss einer Hautfläche (P5).
 pub const OBLIQUE_END: &str = "Eine Freiform- oder variable Rundung lässt sich nur an einer Ebene senkrecht zur Kante abschließen";
 /// Meldung, wenn die Hautfläche die geforderte Genauigkeit nicht erreicht.
@@ -201,6 +222,17 @@ impl<'a> ArcTable<'a> {
         self.s.last().copied().unwrap_or(0.0)
     }
 
+    /// Bogenlänge ab Kantenanfang beim Kantenparameter `t` (zwischen den Tabellenwerten per
+    /// Gauß-Legendre).
+    fn arc_at(&self, t: f64) -> f64 {
+        let up = self.t.last().copied().unwrap_or(0.0) >= self.t[0];
+        let k = self
+            .t
+            .partition_point(|&v| if up { v < t } else { v > t })
+            .clamp(1, self.t.len() - 1);
+        self.s[k - 1] + self.piece(self.t[k - 1], t)
+    }
+
     /// Kantenparameter bei der Bogenlänge `x` (begrenzt auf die Kante).
     fn param(&self, x: f64) -> f64 {
         let k = self
@@ -244,9 +276,7 @@ struct Station {
 fn to_skin(st: &Station) -> Result<SkinSection, BlendError> {
     match st.kind {
         SectionKind::Fillet { .. } => SkinSection::arc(st.sec.center, st.sec.pa, st.sec.pb)
-            .map_err(|e| {
-                BlendError::Unsupported(format!("Ein Querschnitt der Rundung ist ungültig: {e}"))
-            }),
+            .map_err(|_| BlendError::Unsupported(SECTION_ARC.into())),
         SectionKind::Chamfer(_) => Ok(SkinSection::line(st.sec.pa, st.sec.pb)),
     }
 }
@@ -295,6 +325,30 @@ fn plane_start(a: Side, b: Side, o: DVec3, radius: f64, convex: bool) -> Option<
     let s = if convex { -1.0 } else { 1.0 };
     let c = o + (na + nb) * (s * radius / denom);
     (denom > MIN_BISECTOR_START && c.is_finite()).then_some(c)
+}
+
+/// Innere Knoten einer Freiformkante als Bogenlängen ab Kantenanfang (aufsteigend; bei
+/// geschlossenen Kurven auch um eine Periode verschoben, falls der Kantenbereich darüber reicht).
+/// Dort ist die Kurve nur endlich oft differenzierbar; Stationen dort halten jedes Stück der
+/// Hautfläche innerhalb eines glatten Kurvenstücks.
+fn edge_knots(e: &Edge, table: &ArcTable) -> Vec<f64> {
+    let Curve::Nurbs(c) = &e.curve else {
+        return Vec::new();
+    };
+    let (lo, hi) = (e.t0.min(e.t1), e.t0.max(e.t1));
+    let period = e.curve.period();
+    let mut out: Vec<f64> = Vec::new();
+    for &k in c.knots().knots() {
+        for shift in [-1.0, 0.0, 1.0] {
+            let t = k + shift * period.unwrap_or(0.0);
+            if t > lo && t < hi && (shift == 0.0 || period.is_some()) {
+                out.push(table.arc_at(t));
+            }
+        }
+    }
+    out.sort_by(f64::total_cmp);
+    out.dedup();
+    out
 }
 
 fn is_freeform(s: &Surface) -> bool {
@@ -547,6 +601,30 @@ pub fn march_geom(
         _ => Vec::new(),
     };
     let start = evaluations();
+    // Naht geschlossener Freiformkanten: Angepasste Kurven (Boolesche Schnittkanten) schließen nur
+    // bis auf einen kleinen Knick der Tangente; die Querschnittsebenen sprängen dort, die exakten
+    // Querschnitte wären unstetig. Die Ebenennormale wird deshalb in einem Fenster
+    // `SEAM_BLEND · Länge` zu beiden Seiten glatt (C¹) auf die mittlere Tangente gezogen; die
+    // Querschnitte bleiben exakt (Kugel berührt beide Flächen, Mittelpunkt in der Ebene), nur die
+    // Ebenen stehen dort um höchstens den halben Knickwinkel schräg.
+    let seam_fix = (freeform && closed).then(|| {
+        let dir = (e.t1 - e.t0).signum();
+        let t_start = (e.curve.tangent(e.t0) * dir).normalize_or_zero();
+        let t_end = (e.curve.tangent(e.t1) * dir).normalize_or_zero();
+        let avg = (t_start + t_end).normalize_or_zero();
+        (avg - t_start, avg - t_end)
+    });
+    let window = SEAM_BLEND * length;
+    let seam_tangent = |x: f64, t: DVec3| -> DVec3 {
+        let Some((c0, c1)) = seam_fix else {
+            return t;
+        };
+        let w = |d: f64| {
+            let s = (d / window).clamp(0.0, 1.0);
+            (1.0 - s) * (1.0 - s) * (1.0 + 2.0 * s)
+        };
+        (t + c0 * w(x) + c1 * w(length - x)).normalize_or_zero()
+    };
     let budget = || {
         if evaluations().saturating_sub(start) > MAX_BLEND_EVALUATIONS {
             Err(BlendError::TooExpensive)
@@ -559,7 +637,10 @@ pub fn march_geom(
     let section_at = |x: f64, prev: Option<&Station>| -> Result<Station, BlendError> {
         let t = table.param(x);
         let o = e.curve.point(t);
-        let tangent = (e.curve.tangent(t) * (e.t1 - e.t0).signum()).normalize_or_zero();
+        let tangent = seam_tangent(
+            x,
+            (e.curve.tangent(t) * (e.t1 - e.t0).signum()).normalize_or_zero(),
+        );
         let kind = match law {
             SectionLaw::Fillet(r) => SectionKind::Fillet { radius: r },
             SectionLaw::Variable(l) => SectionKind::Fillet {
@@ -580,18 +661,53 @@ pub fn march_geom(
                 // Ohne Nachbarstation: bei Freiformbeteiligung die Ebenenformel als Startwert,
                 // den `fillet_section` in die Querschnittsebene legt (die numerischen Normalen
                 // stehen nicht genau senkrecht zur Kante; Task-2-Hinweis).
-                let start = match prev {
-                    Some(p) => Some(shifted_start(a, b, o, p, radius, convex)),
-                    None if freeform => plane_start(a, b, o, radius, convex),
-                    None => None,
-                };
-                let sec = match fillet_section(a, b, o, tangent, convex, radius, start) {
-                    // Ein unpassender Startwert (sehr steiles Gesetz) darf die Bahn nicht
-                    // abbrechen lassen: noch einmal mit der Ebenenformel am Kantenpunkt.
-                    Err(BlendError::SpineLost) if start.is_some() => {
-                        fillet_section(a, b, o, tangent, convex, radius, None)?
+                let sec = if freeform {
+                    // Freiform (Review I-1): Der verschobene Mittelpunkt der Nachbarstation kann
+                    // bei groben Stationen auf der falschen Seite einer engen Krümmung landen,
+                    // Newton findet dann eine echte, aber ferne Kugel. Erster Startwert ist
+                    // deshalb die Ebenenformel am Kantenpunkt (unabhängig vom Stationsabstand);
+                    // der Nachbar-Startwert nur als zweiter Kandidat, wenn der erste weiter als
+                    // `MAX_START_JUMP · r` von seinem Startwert wegläuft oder scheitert. Von
+                    // mehreren Lösungen gilt die nächste zur Ebenenformel.
+                    let ps = plane_start(a, b, o, radius, convex);
+                    let first = fillet_section(a, b, o, tangent, convex, radius, ps);
+                    let near = |s: &Section| {
+                        ps.is_none_or(|c| s.center.distance(c) <= MAX_START_JUMP * radius)
+                    };
+                    match (&first, prev) {
+                        (Ok(s), _) if near(s) => first?,
+                        (_, Some(p)) => {
+                            let second = fillet_section(
+                                a,
+                                b,
+                                o,
+                                tangent,
+                                convex,
+                                radius,
+                                Some(shifted_start(a, b, o, p, radius, convex)),
+                            );
+                            match (first, second) {
+                                (Ok(x), Ok(y)) => match ps {
+                                    Some(c) if y.center.distance(c) < x.center.distance(c) => y,
+                                    _ => x,
+                                },
+                                (Ok(x), Err(_)) => x,
+                                (Err(_), Ok(y)) => y,
+                                (Err(e1), Err(_)) => return Err(e1),
+                            }
+                        }
+                        (_, None) => first?,
                     }
-                    other => other?,
+                } else {
+                    let start = prev.map(|p| shifted_start(a, b, o, p, radius, convex));
+                    match fillet_section(a, b, o, tangent, convex, radius, start) {
+                        // Ein unpassender Startwert (sehr steiles Gesetz) darf die Bahn nicht
+                        // abbrechen lassen: noch einmal mit der Ebenenformel am Kantenpunkt.
+                        Err(BlendError::SpineLost) if start.is_some() => {
+                            fillet_section(a, b, o, tangent, convex, radius, None)?
+                        }
+                        other => other?,
+                    }
                 };
                 if freeform {
                     check_foot(a, &sec.center, sec.pa, &name_a)?;
@@ -618,6 +734,139 @@ pub fn march_geom(
         budget()?;
         Ok(st)
     };
+    // Ableitungen der Station `i`, links (für das Stück davor) und rechts (danach), mit den
+    // Differenzenschritten `step_l`/`step_r` und dem Schritt `seam` über die Naht. Glatte innere
+    // Stationen: zentrale Differenz. Kantenenden und Knicke des Gesetzes: einseitige Differenzen
+    // zweiter Ordnung je Seite (am Knick verschieden, die Fläche ist dort nur stetig). Naht einer
+    // geschlossenen Kante: zentral über die Naht, außer beim variablen Radius (Steigung am
+    // Kettenanfang und -ende darf verschieden sein, dann je Seite einseitig). Die Schritte bleiben
+    // unter `MAX_STEP_GAP` des Abstands zur Nachbarstation, so überspannt keine Differenz einen
+    // Knick (Knicke sind Stationen).
+    let seam_central = closed && !matches!(law, SectionLaw::Variable(_));
+    let derive = |stations: &[Station],
+                  sk: &[SkinSection],
+                  i: usize,
+                  step_l: f64,
+                  step_r: f64,
+                  seam: f64,
+                  free: bool|
+     -> Result<(SkinTangent, SkinTangent), BlendError> {
+        let st = &stations[i];
+        let m = stations.len();
+        let at = |x: f64| -> Result<SkinSection, BlendError> { to_skin(&section_at(x, Some(st))?) };
+        let (first, last) = (i == 0, i == m - 1);
+        let kink = kinks.contains(&st.x);
+        let central = |step: f64| -> Result<Diff, BlendError> {
+            let (sl, sh) = (at(st.x - step)?, at(st.x + step)?);
+            Ok((
+                SkinTangent::between(&sl, &sh, 2.0 * step),
+                sl,
+                sh,
+                2.0 * step,
+            ))
+        };
+        let side = |dir: f64, step: f64| -> Result<Diff, BlendError> {
+            // Freiform, Naht am Kantenende: der wahre Endquerschnitt (die Hautfläche übernimmt
+            // dort den Anfangsquerschnitt; beide unterscheiden sich um den kleinen Knick der
+            // angepassten Kurve an ihrer Naht).
+            let s0 = if free && closed && last {
+                to_skin(&section_at(length, Some(st))?)?
+            } else {
+                sk[i]
+            };
+            let (s1, s2) = (at(st.x + dir * step)?, at(st.x + 2.0 * dir * step)?);
+            Ok((one_sided(&s0, &s1, &s2, dir * step), s0, s1, step))
+        };
+        let pair = if (first || last) && seam_central && !free {
+            let (sl, sh) = (at(length - seam)?, at(seam)?);
+            let t = (
+                SkinTangent::between(&sl, &sh, 2.0 * seam),
+                sl,
+                sh,
+                2.0 * seam,
+            );
+            (t, t)
+        } else if first {
+            let r = side(1.0, step_r)?;
+            (r, r)
+        } else if last {
+            let l = side(-1.0, step_l)?;
+            (l, l)
+        } else if kink {
+            (side(-1.0, step_l)?, side(1.0, step_r)?)
+        } else {
+            let c = central(step_l.min(step_r))?;
+            (c, c)
+        };
+        // Stehende Querschnitte (∂S/∂u ≈ 0): Berührpunkte und Bogenmitte müssen sich längs
+        // bewegen.
+        for (_, p, q, span) in [&pair.0, &pair.1] {
+            let speed = |u: DVec3, v: DVec3| u.distance(v) / span;
+            let slow = [
+                speed(p.p0, q.p0),
+                speed(p.point(0.5), q.point(0.5)),
+                speed(p.p2, q.p2),
+            ]
+            .iter()
+            .any(|v| !(*v >= MIN_ROW_SPEED));
+            if slow {
+                return Err(BlendError::Unsupported(FOLDED.into()));
+            }
+        }
+        Ok((pair.0.0, pair.1.0))
+    };
+    // Nachprüfung eines Stücks gegen exakte Querschnitte: `Some(Mitte)`, wenn es genau genug ist
+    // (die Mitte dient der Volumenschätzung), sonst `None`.
+    let check_span = |surface: &NurbsSurface,
+                      w: &[Station],
+                      from: &Station|
+     -> Result<Option<Station>, BlendError> {
+        let mut mid = None;
+        for f in CHECK_U {
+            let xu = w[0].x + (w[1].x - w[0].x) * f;
+            let exact = section_at(xu, Some(from))?;
+            let want = to_skin(&exact)?;
+            let off = CHECK_V
+                .iter()
+                .any(|&v| !(surface.point(xu, v).distance(want.point(v)) <= SKIN_TOL));
+            let loose = !(a.outside(surface.point(xu, 0.0)).abs() <= CONTACT_TOL
+                && b.outside(surface.point(xu, 1.0)).abs() <= CONTACT_TOL);
+            budget()?;
+            if off || loose {
+                return Ok(None);
+            }
+            if f == 0.5 {
+                mid = Some(exact);
+            }
+        }
+        Ok(mid)
+    };
+    let skin_of = |sk: &[SkinSection],
+                   lefts: &[SkinTangent],
+                   rights: &[SkinTangent],
+                   xs: &[f64]|
+     -> Result<NurbsSurface, BlendError> {
+        skin_sided(sk, lefts, rights, xs).map_err(|err| {
+            BlendError::Unsupported(format!("Die Rundungsfläche lässt sich nicht bilden: {err}"))
+        })
+    };
+    if freeform {
+        return march_adaptive(Adaptive {
+            length,
+            closed,
+            breaks: &breaks,
+            knots: edge_knots(e, &table),
+            section_at: &section_at,
+            derive: &derive,
+            check_span: &check_span,
+            skin_of: &skin_of,
+        })
+        .and_then(|(surface, stations, mids)| {
+            finish(
+                edge, sides, convex, closed, length, surface, &stations, &mids,
+            )
+        });
+    }
     let mut n = MIN_STATIONS;
     loop {
         let mut xs: Vec<f64> = (0..n).map(|i| length * i as f64 / (n - 1) as f64).collect();
@@ -652,19 +901,9 @@ pub fn march_geom(
             .map(to_skin)
             .collect::<Result<Vec<_>, _>>()?;
         let delta = DERIV_STEP * length / (n - 1) as f64;
-        // Ableitungen je Station, links (für das Stück davor) und rechts (danach). Glatte innere
-        // Stationen: zentrale Differenz. Kantenenden und Knicke des Gesetzes: einseitige
-        // Differenzen zweiter Ordnung je Seite (am Knick verschieden, die Fläche ist dort nur
-        // stetig). Naht einer geschlossenen Kante: zentral über die Naht, außer beim variablen
-        // Radius (Steigung am Kettenanfang und -ende darf verschieden sein, dann je Seite
-        // einseitig). Der Schritt bleibt unter `MAX_STEP_GAP` des Abstands zur Nachbarstation, so
-        // überspannt keine Differenz einen Knick (Knicke sind Stationen).
-        let seam_central = closed && !matches!(law, SectionLaw::Variable(_));
         let mut lefts = Vec::with_capacity(m);
         let mut rights = Vec::with_capacity(m);
         for (i, st) in stations.iter().enumerate() {
-            let at =
-                |x: f64| -> Result<SkinSection, BlendError> { to_skin(&section_at(x, Some(st))?) };
             let (first, last) = (i == 0, i == m - 1);
             let gap_l = if first {
                 f64::INFINITY
@@ -678,83 +917,20 @@ pub fn march_geom(
             };
             let step_l = delta.min(MAX_STEP_GAP * gap_l);
             let step_r = delta.min(MAX_STEP_GAP * gap_r);
-            let kink = kinks.contains(&st.x);
-            let central = |step: f64| -> Result<Diff, BlendError> {
-                let (sl, sh) = (at(st.x - step)?, at(st.x + step)?);
-                Ok((
-                    SkinTangent::between(&sl, &sh, 2.0 * step),
-                    sl,
-                    sh,
-                    2.0 * step,
-                ))
-            };
-            let side = |dir: f64, step: f64| -> Result<Diff, BlendError> {
-                let s0 = sk[i];
-                let (s1, s2) = (at(st.x + dir * step)?, at(st.x + 2.0 * dir * step)?);
-                Ok((one_sided(&s0, &s1, &s2, dir * step), s0, s1, step))
-            };
-            let pair = if (first || last) && seam_central {
-                let (sl, sh) = (at(length - delta)?, at(delta)?);
-                let t = (
-                    SkinTangent::between(&sl, &sh, 2.0 * delta),
-                    sl,
-                    sh,
-                    2.0 * delta,
-                );
-                (t, t)
-            } else if first {
-                let r = side(1.0, step_r)?;
-                (r, r)
-            } else if last {
-                let l = side(-1.0, step_l)?;
-                (l, l)
-            } else if kink {
-                (side(-1.0, step_l)?, side(1.0, step_r)?)
-            } else {
-                let c = central(step_l.min(step_r))?;
-                (c, c)
-            };
-            // Stehende Querschnitte (∂S/∂u ≈ 0): Berührpunkte und Bogenmitte müssen sich längs
-            // bewegen.
-            for (_, p, q, span) in [&pair.0, &pair.1] {
-                let speed = |u: DVec3, v: DVec3| u.distance(v) / span;
-                let slow = [
-                    speed(p.p0, q.p0),
-                    speed(p.point(0.5), q.point(0.5)),
-                    speed(p.p2, q.p2),
-                ]
-                .iter()
-                .any(|v| !(*v >= MIN_ROW_SPEED));
-                if slow {
-                    return Err(BlendError::Unsupported(FOLDED.into()));
-                }
-            }
-            lefts.push(pair.0.0);
-            rights.push(pair.1.0);
+            let (l, r) = derive(&stations, &sk, i, step_l, step_r, delta, false)?;
+            lefts.push(l);
+            rights.push(r);
         }
-        let surface = skin_sided(&sk, &lefts, &rights, &xs).map_err(|err| {
-            BlendError::Unsupported(format!("Die Rundungsfläche lässt sich nicht bilden: {err}"))
-        })?;
+        let surface = skin_of(&sk, &lefts, &rights, &xs)?;
         // Nachprüfung gegen exakte Querschnitte; die Mitten dienen auch der Volumenschätzung.
         let mut mids: Vec<Station> = Vec::with_capacity(m - 1);
         let mut accurate = true;
-        'check: for (i, w) in stations.windows(2).enumerate() {
-            for f in CHECK_U {
-                let xu = w[0].x + (w[1].x - w[0].x) * f;
-                let exact = section_at(xu, Some(&stations[i]))?;
-                let want = to_skin(&exact)?;
-                let off = CHECK_V
-                    .iter()
-                    .any(|&v| !(surface.point(xu, v).distance(want.point(v)) <= SKIN_TOL));
-                let loose = !(a.outside(surface.point(xu, 0.0)).abs() <= CONTACT_TOL
-                    && b.outside(surface.point(xu, 1.0)).abs() <= CONTACT_TOL);
-                budget()?;
-                if off || loose {
+        for (i, w) in stations.windows(2).enumerate() {
+            match check_span(&surface, w, &stations[i])? {
+                Some(mid) => mids.push(mid),
+                None => {
                     accurate = false;
-                    break 'check;
-                }
-                if f == 0.5 {
-                    mids.push(exact);
+                    break;
                 }
             }
         }
@@ -767,6 +943,186 @@ pub fn march_geom(
             return Err(BlendError::Unsupported(INACCURATE.into()));
         }
         n = 2 * n - 1;
+    }
+}
+
+/// Zwischenstand der Bahn für [`march_adaptive`]: Kantenlänge, Naht, Stützstellen des Gesetzes,
+/// Knoten der Kante und die Schritte der Bahn (Querschnitt, Ableitungen, Nachprüfung, Haut).
+struct Adaptive<'a> {
+    length: f64,
+    closed: bool,
+    breaks: &'a [f64],
+    knots: Vec<f64>,
+    #[allow(clippy::type_complexity)]
+    section_at: &'a dyn Fn(f64, Option<&Station>) -> Result<Station, BlendError>,
+    #[allow(clippy::type_complexity)]
+    derive: &'a dyn Fn(
+        &[Station],
+        &[SkinSection],
+        usize,
+        f64,
+        f64,
+        f64,
+        bool,
+    ) -> Result<(SkinTangent, SkinTangent), BlendError>,
+    #[allow(clippy::type_complexity)]
+    check_span:
+        &'a dyn Fn(&NurbsSurface, &[Station], &Station) -> Result<Option<Station>, BlendError>,
+    #[allow(clippy::type_complexity)]
+    skin_of: &'a dyn Fn(
+        &[SkinSection],
+        &[SkinTangent],
+        &[SkinTangent],
+        &[f64],
+    ) -> Result<NurbsSurface, BlendError>,
+}
+
+/// Bitmuster einer Ableitung (Schlüssel der Nachprüfungs-Ablage).
+fn tangent_bits(t: &SkinTangent, out: &mut Vec<u64>) {
+    for v in [t.d0, t.d1, t.d2] {
+        out.extend(v.to_array().map(f64::to_bits));
+    }
+    out.push(t.dw.to_bits());
+}
+
+/// Freiform-Bahn mit angepasster Teilung (Review I-2): Anfangsstationen gleichmäßig
+/// ([`MIN_STATIONS`]) plus Stützstellen des Gesetzes plus innere Knoten der Kante; danach wird
+/// jedes Stück, dessen Nachprüfung gegen exakte Querschnitte scheitert, halbiert (alle solchen
+/// Stücke je Durchgang), bis alles genau genug ist. Grenzen: [`MAX_FREEFORM_STATIONS`], kleinstes
+/// Stück [`MIN_SPAN_FRACTION`] der Kantenlänge, Auswertungsgrenzen der Bahn; sonst
+/// [`INACCURATE`]. Querschnitte, Ableitungen und Prüfergebnisse unveränderter Stücke werden
+/// wiederverwendet (Schlüssel: Lage, Nachbarabstände bzw. Werte und Ableitungen der Enden), das
+/// Ergebnis hängt nur von den Eingaben ab. Die Differenzenschritte sind `DERIV_STEP` mal dem
+/// Abstand zur Nachbarstation (Rauschen des Newton-Rests / Schritt mal Stücklänge bleibt so
+/// unabhängig von der Teilung).
+fn march_adaptive(p: Adaptive) -> Result<(NurbsSurface, Vec<Station>, Vec<Station>), BlendError> {
+    use std::collections::HashMap;
+    let length = p.length;
+    let inside = |x: f64| x > MIN_STATION_GAP * length && x < length * (1.0 - MIN_STATION_GAP);
+    let mut xs: Vec<f64> = (0..MIN_STATIONS)
+        .map(|i| length * i as f64 / (MIN_STATIONS - 1) as f64)
+        .collect();
+    xs.extend(p.breaks.iter().copied().filter(|x| inside(*x)));
+    xs.extend(p.knots.iter().copied().filter(|x| inside(*x)));
+    xs.sort_by(f64::total_cmp);
+    // Fast zusammenfallende Stellen zusammenlegen; Stützstellen des Gesetzes haben Vorrang (sie
+    // müssen Stationen sein), die Enden bleiben.
+    let mut merged: Vec<f64> = Vec::with_capacity(xs.len());
+    for x in xs {
+        match merged.last_mut() {
+            Some(last) if x - *last <= MIN_STATION_GAP * length => {
+                let end = *last == 0.0 || x == length;
+                if x == length {
+                    *last = length;
+                } else if !end && p.breaks.contains(&x) {
+                    *last = x;
+                }
+            }
+            _ => merged.push(x),
+        }
+    }
+    let mut xs = merged;
+    if xs.len() > MAX_FREEFORM_STATIONS {
+        return Err(BlendError::Unsupported(INACCURATE.into()));
+    }
+    let mut sections: HashMap<u64, Station> = HashMap::new();
+    let mut diffs: HashMap<[u64; 4], (SkinTangent, SkinTangent)> = HashMap::new();
+    let mut spans: HashMap<Vec<u64>, Option<Station>> = HashMap::new();
+    loop {
+        let m = xs.len();
+        let mut stations: Vec<Station> = Vec::with_capacity(m);
+        for &x in &xs {
+            let st = match sections.get(&x.to_bits()) {
+                Some(s) => *s,
+                None => {
+                    let s = (p.section_at)(x, stations.last())?;
+                    sections.insert(x.to_bits(), s);
+                    s
+                }
+            };
+            stations.push(st);
+        }
+        if p.closed {
+            stations[m - 1] = Station {
+                x: length,
+                ..stations[0]
+            };
+        }
+        let sk = stations
+            .iter()
+            .map(to_skin)
+            .collect::<Result<Vec<_>, _>>()?;
+        let seam_gap = (xs[1] - xs[0]).min(xs[m - 1] - xs[m - 2]);
+        let mut lefts = Vec::with_capacity(m);
+        let mut rights = Vec::with_capacity(m);
+        for i in 0..m {
+            let gap_l = if i == 0 {
+                f64::INFINITY
+            } else {
+                xs[i] - xs[i - 1]
+            };
+            let gap_r = if i == m - 1 {
+                f64::INFINITY
+            } else {
+                xs[i + 1] - xs[i]
+            };
+            let key = [
+                xs[i].to_bits(),
+                gap_l.to_bits(),
+                gap_r.to_bits(),
+                seam_gap.to_bits(),
+            ];
+            let (l, r) = match diffs.get(&key) {
+                Some(d) => *d,
+                None => {
+                    let d = (p.derive)(
+                        &stations,
+                        &sk,
+                        i,
+                        DERIV_STEP * gap_l,
+                        DERIV_STEP * gap_r,
+                        DERIV_STEP * seam_gap,
+                        true,
+                    )?;
+                    diffs.insert(key, d);
+                    d
+                }
+            };
+            lefts.push(l);
+            rights.push(r);
+        }
+        let surface = (p.skin_of)(&sk, &lefts, &rights, &xs)?;
+        let mut mids: Vec<Station> = Vec::with_capacity(m - 1);
+        let mut bad: Vec<usize> = Vec::new();
+        for i in 0..m - 1 {
+            let mut key = vec![xs[i].to_bits(), xs[i + 1].to_bits()];
+            tangent_bits(&rights[i], &mut key);
+            tangent_bits(&lefts[i + 1], &mut key);
+            let result = match spans.get(&key) {
+                Some(r) => *r,
+                None => {
+                    let r = (p.check_span)(&surface, &stations[i..i + 2], &stations[i])?;
+                    spans.insert(key, r);
+                    r
+                }
+            };
+            match result {
+                Some(mid) => mids.push(mid),
+                None => bad.push(i),
+            }
+        }
+        if bad.is_empty() {
+            return Ok((surface, stations, mids));
+        }
+        let too_short = bad
+            .iter()
+            .any(|&i| xs[i + 1] - xs[i] <= 2.0 * MIN_SPAN_FRACTION * length);
+        if too_short || m + bad.len() > MAX_FREEFORM_STATIONS {
+            return Err(BlendError::Unsupported(INACCURATE.into()));
+        }
+        let halves: Vec<f64> = bad.iter().map(|&i| 0.5 * (xs[i] + xs[i + 1])).collect();
+        xs.extend(halves);
+        xs.sort_by(f64::total_cmp);
     }
 }
 

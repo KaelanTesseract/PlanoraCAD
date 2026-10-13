@@ -569,7 +569,7 @@ fn a_spline_wall_edge_matches_the_planar_fillet_area() {
 }
 
 #[test]
-#[ignore = "feine Sehne 1e-4, nur mit --release --ignored (etwa 270 s)"]
+#[ignore = "feine Sehne 1e-4, nur mit --release --ignored (etwa 200 s)"]
 fn freeform_volumes_at_a_fine_chord() {
     // Nur die Freiform-Fälle (die analytischen Zwillinge prüfen die Tests der Stufen 1 bis 3).
     let all: Vec<Case> = [

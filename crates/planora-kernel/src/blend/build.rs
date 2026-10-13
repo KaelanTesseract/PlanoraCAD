@@ -1095,6 +1095,7 @@ pub fn assemble(
     for blend in &plan.corners {
         let bound = corner_box(blend);
         for (piece, name) in pieces[..kept].iter().zip(&names) {
+            super::march::check_budget()?;
             check_piercing(piece, blend, bound.as_ref(), name, &btol)?;
         }
     }
