@@ -5,7 +5,7 @@
 
 use super::analytic::EdgeGeom;
 use super::error::BlendError;
-use super::topo::{face_name, vertex_faces};
+use super::topo::{NEAR_TANGENT_ANGLE, face_name, outward_normal, vertex_faces};
 use crate::boolean::{
     Containment, CurveSurface, FaceGeom, Piece, Seg, SurfaceIntersection, curve_surface_roots,
     face_geom, intersect_surfaces, loop_points, oriented_area, pipeline_tol, point_in_face,
@@ -111,7 +111,10 @@ fn param_window(curve: &Curve, s: f64, len: f64) -> f64 {
     }
 }
 
-/// Schnitt der Kurve mit der Fläche, der `s_ref` am nächsten liegt.
+/// Schnitt der Kurve mit der Fläche, der `s_ref` am nächsten liegt. Liegen zwei verschiedene
+/// Schnitte gleich weit (innerhalb `ON_CURVE_FACTOR · tol.linear`) vom Kurvenpunkt bei `s_ref`
+/// entfernt (etwa symmetrisch um die Ecke, wenn die Abschlussfläche eine Kantenfläche glatt
+/// fortsetzt), ist die Wahl nicht eindeutig: `None` statt eines Zufallstreffers.
 fn end_param(
     curve: &Curve,
     s_ref: f64,
@@ -120,14 +123,46 @@ fn end_param(
     tol: &Tolerance,
 ) -> Option<f64> {
     let w = param_window(curve, s_ref, len);
-    match curve_surface_roots(curve, s_ref - w, s_ref + w, surface, tol) {
-        CurveSurface::Roots(rs) => rs
-            .iter()
-            .map(|r| r.t)
-            .filter(|t| t.is_finite())
-            .min_by(|x, y| (x - s_ref).abs().total_cmp(&(y - s_ref).abs())),
-        CurveSurface::Lies => None,
+    let CurveSurface::Roots(rs) = curve_surface_roots(curve, s_ref - w, s_ref + w, surface, tol)
+    else {
+        return None;
+    };
+    let mut ts: Vec<f64> = rs.iter().map(|r| r.t).filter(|t| t.is_finite()).collect();
+    ts.sort_by(|x, y| (x - s_ref).abs().total_cmp(&(y - s_ref).abs()));
+    let best = *ts.first()?;
+    let weld = ON_CURVE_FACTOR * tol.linear;
+    let reference = curve.point(s_ref);
+    let gap = |t: f64| curve.point(t).distance(reference);
+    let ambiguous = ts.iter().skip(1).any(|&t| {
+        (gap(t) - gap(best)).abs() <= weld && curve.point(t).distance(curve.point(best)) > weld
+    });
+    (!ambiguous).then_some(best)
+}
+
+/// Setzt die dritte Fläche `c` an der Ecke `vp` eine der Kantenflächen glatt fort (Normalen
+/// fast parallel, wie `NEAR_TANGENT_ANGLE`)? Dann schneidet die Berührkurve diese Fläche
+/// symmetrisch um die Ecke (oder gar nicht); ein Abschluss dort wäre geraten. Benannte Ablehnung;
+/// glatte Übergänge folgen mit den Ketten (Task 9).
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn check_transversal_end(
+    solid: &Solid,
+    g: &EdgeGeom,
+    c: Id<Face>,
+    vp: DVec3,
+) -> Result<(), BlendError> {
+    let nc = outward_normal(&solid.faces[c], vp);
+    for side in [g.sides.a.face, g.sides.b.face] {
+        let ns = outward_normal(&solid.faces[side], vp);
+        // NaN (Normale nicht bestimmbar) zählt wie „glatt“.
+        if !(nc.cross(ns).length() >= NEAR_TANGENT_ANGLE.sin()) {
+            return Err(BlendError::Unsupported(format!(
+                "Die Fläche „{}“ setzt an der Ecke die Fläche „{}“ glatt fort; dort lässt sich die Rundung oder Fase nicht abschließen (glatte Übergänge folgen in Stufe 2)",
+                face_name(solid, c),
+                face_name(solid, side)
+            )));
+        }
     }
+    Ok(())
 }
 
 /// Stück einer Schnittkurve von `qa` nach `qb`; bei geschlossenen Kurven der Bogen, dessen
@@ -217,6 +252,7 @@ pub fn cap_cut(
     }
     let c = others[0];
     let vp = solid.vertices[v].point;
+    check_transversal_end(solid, g, c, vp)?;
     let (sa, sb, curve) =
         cut_with(g, at_end, &solid.faces[c].surface, vp, tol).ok_or_else(|| {
             BlendError::Unsupported(format!(
@@ -585,7 +621,8 @@ pub fn assemble(
         // NaN gilt als zu kurz.
         if !(cut.curve.length() > weld) {
             return Err(BlendError::InvalidParameter(format!(
-                "Das Maß ist zu klein (die Abschlusskurve ist nicht länger als {weld} mm)"
+                "Das Maß ist zu klein: die Abschlusskurve ist nicht länger als {} mm",
+                super::show_num(weld)
             )));
         }
     }

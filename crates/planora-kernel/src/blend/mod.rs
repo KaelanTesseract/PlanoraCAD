@@ -11,14 +11,16 @@ pub use error::BlendError;
 
 use crate::boolean::{Containment, face_geom, point_in_face};
 use crate::ids::Id;
-use crate::topology::{Edge, Face, Solid};
+use crate::topology::{Edge, Face, Solid, Vertex};
 use crate::validate::validate_with;
 use analytic::{EdgeGeom, SectionKind, VolumeModel, analytic_geom};
 use build::{CAVITY, EndCut, EndPlan, assemble, end_cuts, has_cavity};
 use planora_math::nurbs::MAX_COORD;
-use planora_math::{PI, Tolerance};
+use planora_math::{DVec3, PI, Tolerance};
 use section::ChamferSpec;
-use topo::{EdgeSides, edge_angle, edge_sides, face_name};
+use topo::{
+    EdgeSides, NEAR_TANGENT_ANGLE, edge_angle, edge_sides, edge_uses, face_name, vertex_edges,
+};
 
 /// Höchstzahl Kanten je Anfrage (nach Ausdehnung der Tangentenkette).
 pub const MAX_BLEND_EDGES: usize = 256;
@@ -26,11 +28,13 @@ pub const MAX_BLEND_EDGES: usize = 256;
 pub const MAX_RADIUS_POINTS: usize = 64;
 /// Kleinster (und π minus größter) Fasenwinkel: 1°.
 pub const MIN_CHAMFER_ANGLE: f64 = PI / 180.0;
-/// Kleinstes Maß (Radius, Fasenabstand) als Vielfaches von `tol.linear`. Mit `tol.linear = 1e-6`
-/// sind das 1e-4 mm. Begründung: `sew` verschweißt Punkte bis `ON_CURVE_FACTOR · tol.linear`
-/// (1e-5 mm); bei Maßen um 1e-5 mm schloss `sew` den Körper nicht mehr (Task-4-Probe: 43 Fälle
-/// „nicht geschlossen“, ab 1,5e-5 mm keiner). Der Faktor 100 hält eine Größenordnung Abstand zu
-/// dieser Grenze; kleinere Maße sind in der Konstruktion ohnehin bedeutungslos.
+/// Kleinstes Maß (Radius, Fasenabstand) als Vielfaches der Längentoleranz des Umbaus
+/// (`build::blend_tol`: `tol.linear`, mit Freiformflächen die Knotentoleranz 2e-5 mm). Ohne
+/// Freiformflächen sind das 1e-4 mm, mit ihnen 2e-3 mm. Begründung: `assemble` legt Ecken und
+/// gekürzte Kanten bis `ON_CURVE_FACTOR · Toleranz` zusammen (`sew` selbst verschweißt Ecken bis
+/// `4 · Toleranz`); bei Maßen um diese Weite schloss `sew` den Körper nicht mehr (Task-4-Probe:
+/// 43 Fälle „nicht geschlossen“ bei 1e-5 mm, ab 1,5e-5 mm keiner). Der Faktor 100 hält eine
+/// Größenordnung Abstand zu dieser Grenze; kleinere Maße sind in der Konstruktion bedeutungslos.
 pub const MIN_BLEND_SIZE_FACTOR: f64 = 100.0;
 /// Stellen je Berührkurve, an denen geprüft wird, ob sie in ihrer Fläche liegt.
 const CONTACT_PROBES: usize = 8;
@@ -100,14 +104,29 @@ pub struct Blended {
     pub edges: Vec<Id<Edge>>,
 }
 
-/// Kleinstes erlaubtes Maß (Radius, Fasenabstand) in mm.
+/// Kleinstes erlaubtes Maß (Radius, Fasenabstand) in mm für Körper ohne Freiformflächen.
 pub fn min_blend_size(tol: &Tolerance) -> f64 {
     MIN_BLEND_SIZE_FACTOR * tol.linear
 }
 
+/// Kleinstes erlaubtes Maß für diesen Körper: mit Freiformflächen oder -kanten nach der weiteren
+/// Knotentoleranz (sonst gleich [`min_blend_size`]).
+pub fn min_blend_size_for(solid: &Solid, tol: &Tolerance) -> f64 {
+    MIN_BLEND_SIZE_FACTOR * build::blend_tol(solid, &[], tol).linear
+}
+
+/// Beträge ab hier (und unter [`SHOW_EXP_BELOW`]) zeigt [`show_num`] in Exponentenschreibweise.
+const SHOW_EXP_FROM: f64 = 1e9;
+/// Beträge unter dieser Grenze zeigt [`show_num`] in Exponentenschreibweise.
+const SHOW_EXP_BELOW: f64 = 1e-5;
+/// Gültige Ziffern nach der ersten in [`show_num`] (insgesamt sechs).
+const SHOW_DIGITS: i32 = 5;
+/// Höchstzahl Nachkommastellen in [`show_num`].
+const SHOW_MAX_DECIMALS: i32 = 12;
+
 /// Zahl für Meldungen: höchstens sechs gültige Ziffern ohne Gleitkomma-Rauschen; sehr kleine
 /// und sehr große Werte in Exponentenschreibweise, nicht endliche als Wort.
-fn show_num(x: f64) -> String {
+pub(crate) fn show_num(x: f64) -> String {
     if x.is_nan() {
         return "keine Zahl".into();
     }
@@ -130,23 +149,27 @@ fn show_num(x: f64) -> String {
             t.to_string()
         }
     };
-    if !(1e-5..1e9).contains(&a) {
-        let t = format!("{x:.5e}");
+    if !(SHOW_EXP_BELOW..SHOW_EXP_FROM).contains(&a) {
+        let t = format!("{x:.prec$e}", prec = SHOW_DIGITS as usize);
         let (m, e) = t.split_once('e').unwrap_or((&t, "0"));
         return format!("{}e{e}", trim(m));
     }
-    let decimals = (5 - a.log10().floor() as i32).clamp(0, 12) as usize;
+    let decimals = (SHOW_DIGITS - a.log10().floor() as i32).clamp(0, SHOW_MAX_DECIMALS) as usize;
     trim(&format!("{x:.decimals$}"))
 }
 
-/// Ein Maß muss endlich sein, mindestens `min_blend_size` und höchstens `MAX_COORD` betragen.
+/// Ein Maß muss endlich sein, mindestens `min` und höchstens `MAX_COORD` betragen.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn check_size(x: f64, what: &str, tol: &Tolerance) -> Result<(), BlendError> {
-    let min = min_blend_size(tol);
+fn check_size(x: f64, what: &str, min: f64) -> Result<(), BlendError> {
     if !(x.is_finite() && x <= MAX_COORD) {
         return Err(BlendError::InvalidParameter(format!(
             "{what} muss eine endliche Zahl bis {MAX_COORD:e} mm sein (war {})",
             show_num(x)
+        )));
+    }
+    if x <= 0.0 {
+        return Err(BlendError::InvalidParameter(format!(
+            "Das Maß ist zu klein: {what} muss größer als 0 sein"
         )));
     }
     if !(x >= min) {
@@ -159,9 +182,15 @@ fn check_size(x: f64, what: &str, tol: &Tolerance) -> Result<(), BlendError> {
     Ok(())
 }
 
-/// Prüft die Zahlen einer Anfrage (endlich, im Bereich, Punkte streng steigend).
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
+/// Prüft die Zahlen einer Anfrage (endlich, im Bereich, Punkte streng steigend) mit dem
+/// Mindestmaß für Körper ohne Freiformflächen; `blend` prüft mit dem Mindestmaß des Körpers
+/// ([`min_blend_size_for`]).
 pub fn check_request(r: &BlendRequest, tol: &Tolerance) -> Result<(), BlendError> {
+    check_request_min(r, min_blend_size(tol))
+}
+
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn check_request_min(r: &BlendRequest, min: f64) -> Result<(), BlendError> {
     if r.edges.is_empty() {
         return Err(BlendError::NoEdges);
     }
@@ -171,7 +200,7 @@ pub fn check_request(r: &BlendRequest, tol: &Tolerance) -> Result<(), BlendError
         )));
     }
     match &r.kind {
-        BlendKind::Fillet { radius } => check_size(*radius, "Der Radius", tol),
+        BlendKind::Fillet { radius } => check_size(*radius, "Der Radius", min),
         BlendKind::VariableFillet { points } => {
             if points.len() < 2 || points.len() > MAX_RADIUS_POINTS {
                 return Err(BlendError::InvalidParameter(format!(
@@ -189,20 +218,20 @@ pub fn check_request(r: &BlendRequest, tol: &Tolerance) -> Result<(), BlendError
                         "Die Positionen müssen streng steigen".into(),
                     ));
                 }
-                check_size(*radius, "Jeder Radius", tol)?;
+                check_size(*radius, "Jeder Radius", min)?;
             }
             Ok(())
         }
-        BlendKind::ChamferEqual { distance } => check_size(*distance, "Der Abstand", tol),
+        BlendKind::ChamferEqual { distance } => check_size(*distance, "Der Abstand", min),
         BlendKind::ChamferTwo {
             distance1,
             distance2,
         } => {
-            check_size(*distance1, "Abstand 1", tol)?;
-            check_size(*distance2, "Abstand 2", tol)
+            check_size(*distance1, "Abstand 1", min)?;
+            check_size(*distance2, "Abstand 2", min)
         }
         BlendKind::ChamferAngle { distance, angle } => {
-            check_size(*distance, "Der Abstand", tol)?;
+            check_size(*distance, "Der Abstand", min)?;
             if angle.is_finite() && *angle >= MIN_CHAMFER_ANGLE && *angle <= PI - MIN_CHAMFER_ANGLE
             {
                 Ok(())
@@ -259,6 +288,54 @@ fn select_edges(solid: &Solid, r: &BlendRequest) -> Result<Vec<BlendEdge>, Blend
         return Err(BlendError::Unsupported(SEVERAL_LATER.into()));
     }
     Ok(out)
+}
+
+/// Einheitsrichtung, in der die Kante `e` die Ecke `v` verlässt (für beide Enden, wenn die
+/// Kante dort anfängt und endet).
+fn leaving_directions(solid: &Solid, e: Id<Edge>, v: Id<Vertex>) -> Vec<DVec3> {
+    let Some(edge) = solid.edges.get(e) else {
+        return Vec::new();
+    };
+    let sign = (edge.t1 - edge.t0).signum();
+    let mut out = Vec::new();
+    if edge.start == v {
+        out.push((edge.curve.tangent(edge.t0) * sign).normalize_or_zero());
+    }
+    if edge.end == v {
+        out.push((edge.curve.tangent(edge.t1) * -sign).normalize_or_zero());
+    }
+    out
+}
+
+/// Mit „Tangentenkette“: Läuft die Kante an einer Ecke glatt (Tangenten fast entgegengesetzt,
+/// Schranke wie `NEAR_TANGENT_ANGLE`) in eine weitere Kante an einer ihrer Flächen weiter, ist
+/// sie Teil einer Kette. Stufe 1 rundet keine Ketten; statt still nur diese eine Kante zu runden
+/// (und später, mit Task 9, einen anderen Körper zu liefern) wird benannt abgelehnt.
+fn check_no_chain(solid: &Solid, e: Id<Edge>) -> Result<(), BlendError> {
+    let Some(edge) = solid.edges.get(e) else {
+        return Err(BlendError::EdgeNotFound);
+    };
+    let faces: Vec<Id<Face>> = edge_uses(solid, e).iter().map(|u| u.face).collect();
+    let limit = -NEAR_TANGENT_ANGLE.cos();
+    for v in [edge.start, edge.end] {
+        let own = leaving_directions(solid, e, v);
+        for other in vertex_edges(solid, v).into_iter().filter(|o| *o != e) {
+            let shares = edge_uses(solid, other)
+                .iter()
+                .any(|u| faces.contains(&u.face));
+            let smooth = leaving_directions(solid, other, v)
+                .iter()
+                .any(|d| own.iter().any(|o| o.dot(*d) < limit));
+            if shares && smooth {
+                let names: Vec<String> = faces.iter().map(|f| face_name(solid, *f)).collect();
+                return Err(BlendError::Unsupported(format!(
+                    "Die Kante zwischen „{}“ läuft glatt in weitere Kanten weiter (Tangentenkette); Ketten werden erst in Stufe 2 unterstützt – Schalter „Tangentenkette“ ausschalten",
+                    names.join("“ und „")
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn unsupported_pair(solid: &Solid, sides: &EdgeSides) -> BlendError {
@@ -361,9 +438,14 @@ pub fn blend(
     request: &BlendRequest,
     tol: &Tolerance,
 ) -> Result<Blended, BlendError> {
-    check_request(request, tol)?;
+    check_request_min(request, min_blend_size_for(solid, tol))?;
     let kind = section_kind(&request.kind)?;
     let edges = select_edges(solid, request)?;
+    if request.tangent_chain {
+        for be in &edges {
+            check_no_chain(solid, be.edge)?;
+        }
+    }
     if has_cavity(solid) {
         return Err(BlendError::Unsupported(CAVITY.into()));
     }
@@ -415,7 +497,7 @@ mod tests {
         assert_eq!(show_num(f64::NEG_INFINITY), "minus unendlich");
         assert_eq!(show_num(0.1 + 0.2), "0.3");
         assert_eq!(show_num(0.0), "0");
-        let m = check_size(1e-300, "Der Radius", &tol)
+        let m = check_size(1e-300, "Der Radius", min_blend_size(&tol))
             .unwrap_err()
             .to_string();
         assert!(

@@ -166,6 +166,11 @@ fn chord_point(side: Side, o: DVec3, t: DVec3, w: DVec3, d: f64) -> Result<DVec3
 /// Fase: Berührpunkte im Sehnenabstand (Fläche A, Fläche B) oder Punkt auf A im Abstand und
 /// Schnitt des Strahls unter dem Winkel zu A mit B. `wa`, `wb` zeigen von der Kante in die
 /// Flächen hinein (siehe `topo::inward_directions`).
+///
+/// Winkel (P4): gemessen im Querschnitt (Ebene senkrecht zur Kante durch den Kantenpunkt)
+/// zwischen der Fasenlinie und der Tangente von Fläche A im Berührpunkt `pa`, die zur Kante hin
+/// zeigt; die Fase läuft von dort ins Material. Bei ebener Fläche A (und bei Flächen, die im
+/// Querschnitt gerade sind, etwa ein Zylinder längs seiner Achse) ist das der Winkel zur Sehne.
 #[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn chamfer_section(
     a: Side,
@@ -190,9 +195,19 @@ pub fn chamfer_section(
         ChamferSpec::DistanceAngle { distance, angle } => {
             let pa = chord_point(a, o, t, wa, distance)?;
             let back = o - pa;
-            let u = (back - t * back.dot(t)).normalize_or_zero();
             let na = a.normal_at(pa);
+            // Tangente von Fläche A im Querschnitt bei `pa` (senkrecht zu Kante und Normale),
+            // zur Kante hin gerichtet; bei Ebenen gleich der Sehnenrichtung zurück zur Kante.
+            let mut u = t.cross(na).normalize_or_zero();
+            if u.dot(back) < 0.0 {
+                u = -u;
+            }
+            if u == DVec3::ZERO || !na.is_finite() {
+                return Err(BlendError::SpineLost);
+            }
             let s = if convex { 1.0 } else { -1.0 };
+            // Drehung in der Querschnittsebene: `u` und `na` stehen senkrecht aufeinander, der
+            // Winkel zwischen Fase und Tangente von A ist genau `angle` (P4).
             let dir = u * angle.cos() - na * (s * angle.sin());
             let misfit = || {
                 BlendError::InvalidParameter(

@@ -343,7 +343,8 @@ fn check_section(
         && sec.pa.distance(sec.pb) > min)
     {
         return Err(BlendError::InvalidParameter(format!(
-            "Das Maß ist zu klein (die Berührpunkte liegen nicht weiter als {min} mm auseinander)"
+            "Das Maß ist zu klein: die Berührpunkte liegen nicht weiter als {} mm auseinander",
+            super::show_num(min)
         )));
     }
     Ok(())
