@@ -9,18 +9,32 @@
 //! Genauigkeit dazwischen: Je Stück der Länge `h` weicht jede homogene Reihe `f` (`p0`,
 //! `w1 · p1`, `p2`, `w1`) höchstens um `h⁴/384 · max|f⁗|` von der wahren Reihe ab (Fehlerformel
 //! der kubischen Hermite-Interpolation, Ableitungen exakt vorausgesetzt). Bleibt das Gewicht
-//! exakt, ist der Punktfehler höchstens dieser Wert geteilt durch `min(1, w1)`. Für die
-//! Einhaltung einer Toleranz sorgt der Aufrufer (Stationsdichte, Nachprüfung).
+//! exakt, ist der Punktfehler höchstens dieser Wert geteilt durch `min(1, w1)` (scharf: im
+//! Zufallstest mit Tori bis etwa 0,98 der Schranke ausgeschöpft).
+//!
+//! Ändert sich das Gewicht längs (Öffnungswinkel ändert sich entlang der Bahn), gilt diese
+//! einfache Schranke **nicht**: auch der Nenner ist dann nur genähert, und sein Fehler geht mit
+//! dem Punktabstand von der Gewichtsmitte ein. Beobachtet wird weiter ein Fehler der Ordnung
+//! `h⁴` (Radius 2 mm, Öffnung linear 30° → 150° über 10 mm: 33 Stationen etwa 1e-7 mm, 5
+//! Stationen etwa 4e-4 mm, Verhältnis ≈ 8⁴). Für die Einhaltung einer Toleranz sorgt deshalb
+//! der Aufrufer: Stationsdichte wählen und die Fläche gegen exakte Querschnitte nachprüfen
+//! (Task 14).
 
-use super::{MAX_CONTROL_POINTS, NurbsCurve, NurbsError, NurbsSurface};
+use super::{MAX_CONTROL_POINTS, MIN_WEIGHT, NurbsCurve, NurbsError, NurbsSurface};
 use crate::DVec3;
 use std::f64::consts::PI;
 
 /// Kleinster Öffnungswinkel eines Querschnittsbogens (wie `MIN_ARC_SWEEP` der Kreisbögen).
 const MIN_SECTION_SWEEP: f64 = 1e-9;
+/// Sicherheitsfaktor des Zwischengewichts über `MIN_WEIGHT` beim größten Öffnungswinkel.
+const SWEEP_WEIGHT_MARGIN: f64 = 2.0;
 /// Größter Öffnungswinkel eines einzelnen rationalen quadratischen Stücks (knapp unter π; ein
-/// Halbkreis hätte das Gewicht 0).
-pub const MAX_SECTION_SWEEP: f64 = PI - 1e-6;
+/// Halbkreis hätte das Gewicht 0). Aus `MIN_WEIGHT` abgeleitet: `w1 = cos(θ/2) = sin((π − θ)/2)`
+/// ist an der Grenze `sin(SWEEP_WEIGHT_MARGIN · MIN_WEIGHT) ≈ 2e-6 ≥ MIN_WEIGHT` (für so kleine
+/// Winkel ist `sin x = x` bis auf `x³/6`), also lehnt schon `SkinSection::arc` ab, nicht erst
+/// `NurbsSurface::new`. Der Zwischenpunkt liegt im Abstand `r / w1` vom Mittelpunkt: nahe der
+/// Grenze überschreiten schon Radien ab etwa 1000 mm `MAX_COORD`, das lehnt `skin` benannt ab.
+pub const MAX_SECTION_SWEEP: f64 = PI - 2.0 * SWEEP_WEIGHT_MARGIN * MIN_WEIGHT;
 /// Relativer Unterschied der Abstände beider Bogenenden vom Mittelpunkt, bis zu dem sie als
 /// gleich gelten (Querschnitte aus dem Newton-Verfahren sind auf etwa 1e-12 genau). Bezogen auf
 /// `max(Radius, 1 mm)`: unter 1 mm Radius gilt also eine absolute Schranke von 1e-9 mm.
@@ -47,9 +61,10 @@ pub struct SkinTangent {
 
 impl SkinSection {
     /// Kreisbogen um `center` von `from` nach `to` (gleicher Abstand, Öffnungswinkel in
-    /// `[1e-9, π − 1e-6]`): Zwischenpunkt im Schnitt der Tangenten, Gewicht `cos(θ/2)`.
+    /// `[1e-9, MAX_SECTION_SWEEP]`): Zwischenpunkt im Schnitt der Tangenten, Gewicht `cos(θ/2)`.
     /// Exakter Kreisbogen; Radius null, nicht endliche Zahlen und ungleiche Abstände werden
     /// abgelehnt.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn arc(center: DVec3, from: DVec3, to: DVec3) -> Result<SkinSection, NurbsError> {
         let (a, b) = (from - center, to - center);
         let (ra, rb) = (a.length(), b.length());
@@ -62,9 +77,14 @@ impl SkinSection {
         }
         // Bei unterlaufendem `ra · rb` ergibt sich NaN und die Bereichsprüfung lehnt ab.
         let theta = (a.dot(b) / (ra * rb)).clamp(-1.0, 1.0).acos();
-        if !(MIN_SECTION_SWEEP..=MAX_SECTION_SWEEP).contains(&theta) {
+        if !(theta >= MIN_SECTION_SWEEP) {
             return Err(NurbsError::Input(
-                "der Öffnungswinkel des Querschnitts ist zu klein oder zu groß".into(),
+                "der Öffnungswinkel des Querschnitts ist zu klein".into(),
+            ));
+        }
+        if theta > MAX_SECTION_SWEEP {
+            return Err(NurbsError::Input(
+                "der Öffnungswinkel des Querschnitts liegt zu nahe an 180°".into(),
             ));
         }
         let w1 = (0.5 * theta).cos();
@@ -121,8 +141,9 @@ impl SkinTangent {
 /// Hautfläche durch die Querschnitte an den streng steigenden Parametern `params` mit den
 /// Ableitungen `tangents` (je Station eine; mindestens zwei Stationen, höchstens
 /// `(MAX_CONTROL_POINTS − 1)/3 + 1`). Grad 3 × 2, u-Bereich `[params[0], params[n−1]]`,
-/// v-Bereich `[0, 1]`. Querschnitte der Länge null (`p0 = p2`), nicht positive Gewichte und
-/// alles, was `NurbsSurface::new` ablehnt (Knotenabstände, Beträge, nicht endliche Zahlen),
+/// v-Bereich `[0, 1]`. Querschnitte der Länge null (`p0 = p2`), nicht endliche Ableitungen,
+/// eine stehende Fläche (alle Querschnitte gleich, alle Ableitungen null, also `∂S/∂u = 0`),
+/// nicht positive Gewichte und alles, was `NurbsSurface::new` ablehnt (Knotenabstände, Beträge, nicht endliche Zahlen),
 /// ergeben einen benannten Fehler.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn skin(
@@ -144,6 +165,20 @@ pub fn skin(
     if sections.iter().any(|s| !(s.p0.distance(s.p2) > 0.0)) {
         return Err(NurbsError::Input(
             "ein Querschnitt hat die Länge null".into(),
+        ));
+    }
+    let finite = |t: &SkinTangent| {
+        t.d0.is_finite() && t.d1.is_finite() && t.d2.is_finite() && t.dw.is_finite()
+    };
+    if !tangents.iter().all(finite) {
+        return Err(NurbsError::Input("eine Tangente ist nicht endlich".into()));
+    }
+    let still = |t: &SkinTangent| {
+        t.d0 == DVec3::ZERO && t.d1 == DVec3::ZERO && t.d2 == DVec3::ZERO && t.dw == 0.0
+    };
+    if sections.windows(2).all(|w| w[0] == w[1]) && tangents.iter().all(still) {
+        return Err(NurbsError::Input(
+            "die Querschnitte bewegen sich längs nicht (entartete Fläche)".into(),
         ));
     }
     let nu = 3 * (n - 1) + 1;

@@ -30,8 +30,11 @@ fn arcs_along_a_line_give_an_exact_cylinder() {
     let s = skin(&secs, &tans, &params).unwrap();
     for i in 0..=40 {
         for j in 0..=10 {
-            let p = s.point(4.0 * i as f64 / 40.0, j as f64 / 10.0);
+            let u = 4.0 * i as f64 / 40.0;
+            let p = s.point(u, j as f64 / 10.0);
             assert!(((p.y * p.y + p.z * p.z).sqrt() - 1.5).abs() < 1e-9, "{p:?}");
+            // Auch die Lage längs: der Querschnitt bei u liegt in der Ebene x = u.
+            assert!((p.x - u).abs() < 1e-9, "{u} {p:?}");
         }
     }
     for (k, sec) in secs.iter().enumerate() {
@@ -190,9 +193,11 @@ fn arcs_of_linearly_growing_radius_give_an_exact_cone() {
     let s = skin(&secs, &tans, &params).unwrap();
     for i in 0..=50 {
         for j in 0..=10 {
-            let p = s.point(5.0 * i as f64 / 50.0, j as f64 / 10.0);
+            let u = 5.0 * i as f64 / 50.0;
+            let p = s.point(u, j as f64 / 10.0);
             let r = (p.y * p.y + p.z * p.z).sqrt();
             assert!((r - (1.0 + 0.2 * p.x)).abs() < 1e-9, "{p:?}");
+            assert!((p.x - u).abs() < 1e-9, "{u} {p:?}");
         }
     }
 }
@@ -322,42 +327,134 @@ fn hostile_numbers_and_limits_are_rejected_by_name() {
     assert!(SkinSection::arc(c, DVec3::new(f64::INFINITY, 0.0, 0.0), DVec3::Y).is_err());
     assert!(SkinSection::arc(c, DVec3::X * 1e300, DVec3::Y * 1e300).is_err());
     assert!(SkinSection::arc(DVec3::splat(f64::NAN), DVec3::X, DVec3::Y).is_err());
-    // Fast ein Halbkreis: knapp unter der Grenze erlaubt, darüber nicht.
+    // Fast ein Halbkreis: knapp unter der Grenze erlaubt (und von `skin` angenommen), darüber
+    // lehnt schon `arc` mit eigener Meldung ab, nicht erst das Gewicht in `skin`.
     let at = |a: f64| DVec3::new(a.cos(), a.sin(), 0.0);
-    assert!(SkinSection::arc(c, DVec3::X, at(MAX_SECTION_SWEEP - 1e-4)).is_ok());
-    assert!(SkinSection::arc(c, DVec3::X, at(MAX_SECTION_SWEEP + 5e-7)).is_err());
+    assert!(
+        (0.5 * MAX_SECTION_SWEEP).cos() >= MIN_WEIGHT,
+        "Grenze passt zu MIN_WEIGHT"
+    );
+    let edge = SkinSection::arc(c, DVec3::X, at(MAX_SECTION_SWEEP - 1e-9)).unwrap();
+    assert!(edge.w1 >= MIN_WEIGHT);
+    let slide = SkinTangent {
+        d0: DVec3::Z,
+        d1: DVec3::Z * edge.w1,
+        d2: DVec3::Z,
+        dw: 0.0,
+    };
+    let moved = SkinSection {
+        p0: edge.p0 + DVec3::Z,
+        p1: edge.p1 + DVec3::Z,
+        p2: edge.p2 + DVec3::Z,
+        ..edge
+    };
+    assert!(skin(&[edge, moved], &[slide, slide], &[0.0, 1.0]).is_ok());
+    for deg in [179.9999, 180.0 - 1e-5, 180.0] {
+        match SkinSection::arc(c, DVec3::X, at(deg * PI / 180.0)) {
+            Err(NurbsError::Input(m)) => assert!(m.contains("180°"), "{deg}: {m}"),
+            other => panic!("{deg}: {other:?}"),
+        }
+    }
+    match SkinSection::arc(c, DVec3::X, DVec3::X) {
+        Err(NurbsError::Input(m)) => assert!(m.contains("zu klein"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    // Nahe der Grenze liegt p1 bei r / w1: großer Radius überschreitet MAX_COORD, benannt.
+    let big = SkinSection::arc(c, DVec3::X * 1e4, at(MAX_SECTION_SWEEP - 1e-9) * 1e4).unwrap();
+    let big_moved = SkinSection {
+        p0: big.p0 + DVec3::Z,
+        p1: big.p1 + DVec3::Z,
+        p2: big.p2 + DVec3::Z,
+        ..big
+    };
+    let big_slide = SkinTangent {
+        d1: DVec3::Z * big.w1,
+        ..slide
+    };
+    assert!(matches!(
+        skin(&[big, big_moved], &[big_slide, big_slide], &[0.0, 1.0]),
+        Err(NurbsError::Control(_))
+    ));
     let line = SkinSection::line(DVec3::ZERO, DVec3::X);
     let still = SkinTangent::between(&line, &line, 1.0);
-    // Nicht endliche oder zu dichte Parameter.
-    for params in [
-        [0.0, f64::NAN],
-        [f64::NEG_INFINITY, 1.0],
-        [0.0, 0.0],
-        [0.0, 1e-9],
-        [0.0, 1e12],
-    ] {
+    // Längs bewegte Ableitung, damit die folgenden Fälle nicht schon an der Prüfung auf eine
+    // stehende Fläche scheitern, sondern an der gemeinten Ursache.
+    let go = SkinTangent {
+        d0: DVec3::Z,
+        d1: DVec3::Z,
+        d2: DVec3::Z,
+        dw: 0.0,
+    };
+    // Nicht endliche oder fallende Parameter.
+    for params in [[0.0, f64::NAN], [f64::NEG_INFINITY, 1.0], [0.0, 0.0]] {
         assert!(
-            skin(&[line, line], &[still, still], &params).is_err(),
+            matches!(
+                skin(&[line, line], &[go, go], &params),
+                Err(NurbsError::Input(_))
+            ),
+            "{params:?}"
+        );
+    }
+    // Zu kleiner oder zu großer Bereich, zu dichte Knoten.
+    for params in [[0.0, 1e-9], [0.0, 1e12]] {
+        assert!(
+            matches!(
+                skin(&[line, line], &[go, go], &params),
+                Err(NurbsError::Knots(_))
+            ),
             "{params:?}"
         );
     }
     assert!(
-        skin(&[line; 3], &[still; 3], &[0.0, 1e-12, 1.0]).is_err(),
+        matches!(
+            skin(&[line; 3], &[go; 3], &[0.0, 1e-12, 1.0]),
+            Err(NurbsError::Knots(_))
+        ),
         "Knoten zu nah"
     );
-    // Nicht endliche oder riesige Ableitungen und Querschnitte.
+    // Nicht endliche Ableitungen (auch aus `between` mit Abstand null) mit eigener Meldung.
     let nan = SkinTangent {
         d0: DVec3::splat(f64::NAN),
         ..still
     };
-    assert!(skin(&[line, line], &[nan, still], &[0.0, 1.0]).is_err());
+    let other = SkinSection::line(DVec3::Z, DVec3::X + DVec3::Z);
+    for bad in [
+        nan,
+        SkinTangent::between(&line, &line, 0.0),
+        SkinTangent::between(&line, &other, 0.0),
+        SkinTangent {
+            dw: f64::INFINITY,
+            ..go
+        },
+    ] {
+        match skin(&[line, other], &[bad, go], &[0.0, 1.0]) {
+            Err(NurbsError::Input(m)) => assert!(m.contains("Tangente"), "{m}"),
+            r => panic!("{bad:?}: {r:?}"),
+        }
+    }
     let huge = SkinTangent {
         d2: DVec3::splat(1e300),
         ..still
     };
-    assert!(skin(&[line, line], &[huge, still], &[0.0, 1.0]).is_err());
+    assert!(matches!(
+        skin(&[line, line], &[huge, still], &[0.0, 1.0]),
+        Err(NurbsError::Control(_))
+    ));
     let far = SkinSection::line(DVec3::splat(1e300), DVec3::splat(2e300));
-    assert!(skin(&[far, far], &[still, still], &[0.0, 1.0]).is_err());
+    assert!(matches!(
+        skin(&[far, far], &[go, go], &[0.0, 1.0]),
+        Err(NurbsError::Control(_))
+    ));
+    // Stehende Fläche: gleiche Querschnitte an verschiedenen Stellen, Ableitungen null.
+    for m in [2, 5] {
+        let params: Vec<f64> = (0..m).map(|i| i as f64).collect();
+        match skin(&vec![line; m], &vec![still; m], &params) {
+            Err(NurbsError::Input(msg)) => assert!(msg.contains("bewegen"), "{msg}"),
+            r => panic!("{r:?}"),
+        }
+    }
+    // Gleiche Querschnitte, aber Ableitung ungleich null, sind keine stehende Fläche.
+    assert!(skin(&[line, line], &[go, go], &[0.0, 1.0]).is_ok());
     let bad_weight = SkinSection {
         w1: f64::NAN,
         ..line
@@ -395,4 +492,70 @@ fn hostile_numbers_and_limits_are_rejected_by_name() {
     };
     assert!(many(most).is_ok());
     assert!(matches!(many(most + 1), Err(NurbsError::TooLarge(_))));
+}
+
+/// Querschnitt mit Radius 2 um `(x, 0, 0)` in der yz-Ebene, Öffnung `theta(x)` linear von `a0`
+/// nach `a1` (Grad) über `0 ≤ x ≤ 10`, von `+Y` aus gedreht um `+X`; dazu die exakten
+/// Ableitungen der homogenen Reihen (auch `dw`), unabhängig von `SkinTangent::between`.
+fn opening(a0: f64, a1: f64, x: f64) -> (SkinSection, SkinTangent) {
+    let r = 2.0;
+    let rate = (a1 - a0).to_radians() / 10.0;
+    let theta = a0.to_radians() + rate * x;
+    let c = DVec3::new(x, 0.0, 0.0);
+    let dir = |a: f64| DVec3::new(0.0, a.cos(), a.sin());
+    let ddir = |a: f64| DVec3::new(0.0, -a.sin(), a.cos());
+    let sec = SkinSection::arc(c, c + dir(0.0) * r, c + dir(theta) * r).unwrap();
+    let (w, dw) = ((0.5 * theta).cos(), -(0.5 * theta).sin() * 0.5 * rate);
+    // w1 · p1 = w1 · c + r · dir(θ/2).
+    let tan = SkinTangent {
+        d0: DVec3::X,
+        d1: c * dw + DVec3::X * w + ddir(0.5 * theta) * (r * 0.5 * rate),
+        d2: DVec3::X + ddir(theta) * (r * rate),
+        dw,
+    };
+    (sec, tan)
+}
+
+/// Größter radialer Fehler (Abstand von der x-Achse gegen Radius 2) der Hautfläche mit `n`
+/// Stationen, analytische oder (mit `numeric`) numerische Ableitungen.
+fn opening_error(a0: f64, a1: f64, n: usize, numeric: bool) -> f64 {
+    let params: Vec<f64> = (0..n).map(|i| 10.0 * i as f64 / (n - 1) as f64).collect();
+    let (secs, tans): (Vec<_>, Vec<_>) = if numeric {
+        sections_with_tangents(&params, |x| opening(a0, a1, x).0)
+    } else {
+        params.iter().map(|&x| opening(a0, a1, x)).unzip()
+    };
+    assert!(secs[0].w1 != secs[n - 1].w1, "Gewicht ändert sich längs");
+    let s = skin(&secs, &tans, &params).unwrap();
+    let mut worst: f64 = 0.0;
+    for i in 0..=200 {
+        for j in 0..=10 {
+            let p = s.point(10.0 * i as f64 / 200.0, j as f64 / 10.0);
+            worst = worst.max(((p.y * p.y + p.z * p.z).sqrt() - 2.0).abs());
+        }
+    }
+    // An den Stationen exakt.
+    for (k, sec) in secs.iter().enumerate() {
+        for j in 0..=4 {
+            let v = j as f64 / 4.0;
+            assert!(s.point(params[k], v).distance(sec.point(v)) < 1e-12);
+        }
+    }
+    worst
+}
+
+#[test]
+fn a_changing_opening_angle_converges_with_the_fourth_power() {
+    // Das Gewicht w1 = cos(θ/2) ändert sich längs: prüft den Weg über `dw` und `d1 = d(w1·p1)`.
+    let fine = opening_error(30.0, 150.0, 33, false);
+    assert!(fine < 1e-6, "{fine}");
+    let wide = opening_error(10.0, 170.0, 33, false);
+    assert!(wide < 1e-6, "{wide}");
+    let coarse = opening_error(30.0, 150.0, 5, false);
+    assert!(coarse < 1e-3, "{coarse}");
+    // Achtfache Stationsdichte: Fehler fällt etwa um 8⁴ ≈ 4096 (Ordnung h⁴); mindestens 1000.
+    assert!(coarse / fine > 1000.0, "{coarse} / {fine}");
+    // Mit numerischen Ableitungen aus `SkinTangent::between` ebenso genau.
+    let numeric = opening_error(30.0, 150.0, 33, true);
+    assert!(numeric < 1e-6, "{numeric}");
 }
