@@ -16,8 +16,11 @@
 //! jedes Querschnitts ist die Ebenenformel am Kantenpunkt (der verschobene Nachbarmittelpunkt nur
 //! als zweiter Kandidat), Stationen liegen zusätzlich an den inneren Knoten der Kante, und statt
 //! gleichmäßig zu verdoppeln wird jedes Stück halbiert, dessen Nachprüfung scheitert
-//! ([`march_adaptive`]); an der Naht geschlossener Kanten einseitige Ableitungen und eine
-//! geglättete Ebenennormale (angepasste Kurven schließen mit kleinem Knick). Zusätzlich wird
+//! ([`march_adaptive`]); die Querschnittsebenen stehen senkrecht auf der Tangente der wahren
+//! Schnittkurve beider Flächen (`nA × nB`, [`true_tangent`]) statt auf der einer angepassten
+//! Kantenkurve (deren Tangente schwankt und an der Naht geschlossener Kurven einen Knick bis
+//! einige 1e-3 rad hat), und die Krümmung der Querschnittsebenen kommt aus diesen Tangenten; an
+//! der Naht einseitige Ableitungen mit den wahren Endquerschnitten. Zusätzlich wird
 //! jeder Berührpunkt auf einer Freiformfläche als echter Fußpunkt
 //! geprüft (auf der Fläche, Mittelpunkt auf seiner Normale; sonst liegt die Kugel jenseits des
 //! Flächenstücks: `TooLarge`) und die Krümmung der Freiformfläche zur Kugel hin aus den
@@ -141,9 +144,14 @@ const MIN_BISECTOR_START: f64 = 1e-6;
 /// Größter Differenzenschritt als Anteil des Abstands zur Nachbarstation (zwei Schritte der
 /// einseitigen Differenz bleiben vor ihr).
 const MAX_STEP_GAP: f64 = 0.4;
-/// Fensterbreite (Bruchteil der Kantenlänge), in der die Querschnittsebenen an der Naht einer
-/// geschlossenen Freiformkante auf die mittlere Tangente gezogen werden.
-const SEAM_BLEND: f64 = 0.05;
+/// Abstand (Bruchteil der Kantenlänge) der Nachbarstellen, aus deren Flächentangenten die
+/// Freiform-Bahn die Krümmung der Querschnittsebenen bestimmt (groß gegen die Anpassungswellen
+/// einer angepassten Kantenkurve, klein gegen ihre Gestalt).
+const SPINE_STEP: f64 = 1e-3;
+/// Größte Abweichung (Sinus) der Flächentangente `nA × nB` von der Tangente der Kantenkurve, bis
+/// zu der die Freiform-Bahn die Flächentangente nimmt; darüber (Fußpunktsuche verfehlt, fast
+/// tangentiale Flächen) die Kurventangente.
+const MAX_TANGENT_SIN: f64 = 1e-2;
 /// Höchstzahl der Stationen einer Freiform-Bahn (Knoten der Kante plus angepasste Teilung).
 /// Größer als [`MAX_STATIONS`], weil angepasste Kurven (Boolesche Schnittkanten) bis über 200
 /// Knoten haben; begrenzt zusätzlich durch [`MAX_BLEND_EVALUATIONS`].
@@ -319,8 +327,8 @@ fn shifted_start(a: Side, b: Side, o: DVec3, prev: &Station, radius: f64, convex
 
 /// Startwert nach der Ebenenformel (siehe [`shifted_start`]) ohne Nachbarstation; `None` bei fast
 /// entgegengesetzten Normalen (dann meldet `fillet_section` selbst).
-fn plane_start(a: Side, b: Side, o: DVec3, radius: f64, convex: bool) -> Option<DVec3> {
-    let (na, nb) = (a.normal_at(o), b.normal_at(o));
+/// `(na, nb)`: Außennormalen beider Flächen am Kantenpunkt `o`.
+fn plane_start(na: DVec3, nb: DVec3, o: DVec3, radius: f64, convex: bool) -> Option<DVec3> {
     let denom = 1.0 + na.dot(nb);
     let s = if convex { -1.0 } else { 1.0 };
     let c = o + (na + nb) * (s * radius / denom);
@@ -349,6 +357,24 @@ fn edge_knots(e: &Edge, table: &ArcTable) -> Vec<f64> {
     out.sort_by(f64::total_cmp);
     out.dedup();
     out
+}
+
+/// Tangente der wahren Schnittkurve beider Flächen aus ihren Normalen `na`, `nb` am Kantenpunkt:
+/// `nA × nB` (Richtung wie
+/// `curve`). Angepasste Kantenkurven (Boolesche Schnittkanten) liegen nur bis auf die
+/// Anpassungsgenauigkeit auf beiden Flächen, ihre Tangente schwankt um bis zu einige 1e-3 rad und
+/// hat an der Naht geschlossener Kurven einen Knick; die Querschnittsebenen stehen deshalb
+/// senkrecht auf der Flächentangente (glatt, an der Naht stetig). Weicht sie mehr als
+/// [`MAX_TANGENT_SIN`] ab, gilt die Kurventangente.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn true_tangent(na: DVec3, nb: DVec3, curve: DVec3) -> DVec3 {
+    let t = na.cross(nb).normalize_or_zero();
+    let t = if t.dot(curve) < 0.0 { -t } else { t };
+    if t != DVec3::ZERO && t.is_finite() && t.cross(curve).length() <= MAX_TANGENT_SIN {
+        t
+    } else {
+        curve
+    }
 }
 
 fn is_freeform(s: &Surface) -> bool {
@@ -433,7 +459,7 @@ fn arc_extent(sec: &Section, k: DVec3) -> f64 {
 /// Reichweite des Querschnitts zur Krümmungsachse hin (Abstand längs der Hauptnormale) mal
 /// Kantenkrümmung unter [`EDGE_CURVATURE_LIMIT`]. Geraden: nie.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn check_spine(e: &Edge, t: f64, st: &Station) -> Result<(), BlendError> {
+fn check_spine(e: &Edge, t: f64, st: &Station, curvature: Option<DVec3>) -> Result<(), BlendError> {
     let near_axis = || {
         BlendError::Unsupported(
             "Die Kugelbahn kommt der Drehachse näher als der Radius; bitte einen kleineren Radius wählen"
@@ -468,10 +494,15 @@ fn check_spine(e: &Edge, t: f64, st: &Station) -> Result<(), BlendError> {
             let dt = CURVATURE_STEP * span;
             let (lo, hi) = (e.t0.min(e.t1), e.t0.max(e.t1));
             let (ta, tb) = ((t - dt).max(lo), (t + dt).min(hi));
-            let d1 = e.curve.tangent(t);
-            let d2 = (e.curve.tangent(tb) - e.curve.tangent(ta)) / (tb - ta);
-            let speed2 = d1.length_squared();
-            let kvec = (d2 - d1 * (d2.dot(d1) / speed2)) / speed2;
+            let kvec = match curvature {
+                Some(k) => k,
+                None => {
+                    let d1 = e.curve.tangent(t);
+                    let d2 = (e.curve.tangent(tb) - e.curve.tangent(ta)) / (tb - ta);
+                    let speed2 = d1.length_squared();
+                    (d2 - d1 * (d2.dot(d1) / speed2)) / speed2
+                }
+            };
             let reach = match st.kind {
                 SectionKind::Fillet { .. } => {
                     (st.sec.center - st.o).dot(kvec) + reach_r * arc_extent(&st.sec, kvec)
@@ -601,30 +632,6 @@ pub fn march_geom(
         _ => Vec::new(),
     };
     let start = evaluations();
-    // Naht geschlossener Freiformkanten: Angepasste Kurven (Boolesche Schnittkanten) schließen nur
-    // bis auf einen kleinen Knick der Tangente; die Querschnittsebenen sprängen dort, die exakten
-    // Querschnitte wären unstetig. Die Ebenennormale wird deshalb in einem Fenster
-    // `SEAM_BLEND · Länge` zu beiden Seiten glatt (C¹) auf die mittlere Tangente gezogen; die
-    // Querschnitte bleiben exakt (Kugel berührt beide Flächen, Mittelpunkt in der Ebene), nur die
-    // Ebenen stehen dort um höchstens den halben Knickwinkel schräg.
-    let seam_fix = (freeform && closed).then(|| {
-        let dir = (e.t1 - e.t0).signum();
-        let t_start = (e.curve.tangent(e.t0) * dir).normalize_or_zero();
-        let t_end = (e.curve.tangent(e.t1) * dir).normalize_or_zero();
-        let avg = (t_start + t_end).normalize_or_zero();
-        (avg - t_start, avg - t_end)
-    });
-    let window = SEAM_BLEND * length;
-    let seam_tangent = |x: f64, t: DVec3| -> DVec3 {
-        let Some((c0, c1)) = seam_fix else {
-            return t;
-        };
-        let w = |d: f64| {
-            let s = (d / window).clamp(0.0, 1.0);
-            (1.0 - s) * (1.0 - s) * (1.0 + 2.0 * s)
-        };
-        (t + c0 * w(x) + c1 * w(length - x)).normalize_or_zero()
-    };
     let budget = || {
         if evaluations().saturating_sub(start) > MAX_BLEND_EVALUATIONS {
             Err(BlendError::TooExpensive)
@@ -637,10 +644,13 @@ pub fn march_geom(
     let section_at = |x: f64, prev: Option<&Station>| -> Result<Station, BlendError> {
         let t = table.param(x);
         let o = e.curve.point(t);
-        let tangent = seam_tangent(
-            x,
-            (e.curve.tangent(t) * (e.t1 - e.t0).signum()).normalize_or_zero(),
-        );
+        let curve_tangent = (e.curve.tangent(t) * (e.t1 - e.t0).signum()).normalize_or_zero();
+        // Freiform: Normalen am Kantenpunkt einmal (Flächentangente, Startwert, Krümmung).
+        let normals = freeform.then(|| (a.normal_at(o), b.normal_at(o)));
+        let tangent = match normals {
+            Some((na, nb)) => true_tangent(na, nb, curve_tangent),
+            None => curve_tangent,
+        };
         let kind = match law {
             SectionLaw::Fillet(r) => SectionKind::Fillet { radius: r },
             SectionLaw::Variable(l) => SectionKind::Fillet {
@@ -652,11 +662,11 @@ pub fn march_geom(
             SectionKind::Fillet { radius } => {
                 check_curvature(a, o, convex, radius, &name_a)?;
                 check_curvature(b, o, convex, radius, &name_b)?;
-                if freeform {
+                if let Some((na, nb)) = normals {
                     // Krümmung der Freiformflächen schon am Kantenpunkt (zur Kugel hin).
                     let ball = if convex { -1.0 } else { 1.0 };
-                    check_freeform_curvature(a, o, a.normal_at(o) * ball, radius, &name_a)?;
-                    check_freeform_curvature(b, o, b.normal_at(o) * ball, radius, &name_b)?;
+                    check_freeform_curvature(a, o, na * ball, radius, &name_a)?;
+                    check_freeform_curvature(b, o, nb * ball, radius, &name_b)?;
                 }
                 // Ohne Nachbarstation: bei Freiformbeteiligung die Ebenenformel als Startwert,
                 // den `fillet_section` in die Querschnittsebene legt (die numerischen Normalen
@@ -669,23 +679,22 @@ pub fn march_geom(
                     // der Nachbar-Startwert nur als zweiter Kandidat, wenn der erste weiter als
                     // `MAX_START_JUMP · r` von seinem Startwert wegläuft oder scheitert. Von
                     // mehreren Lösungen gilt die nächste zur Ebenenformel.
-                    let ps = plane_start(a, b, o, radius, convex);
+                    let ps = normals.and_then(|(na, nb)| plane_start(na, nb, o, radius, convex));
                     let first = fillet_section(a, b, o, tangent, convex, radius, ps);
                     let near = |s: &Section| {
                         ps.is_none_or(|c| s.center.distance(c) <= MAX_START_JUMP * radius)
                     };
-                    match (&first, prev) {
+                    // Zweiter Startwert: die Nachbarstation, ohne sie der halbe Weg vom
+                    // Kantenpunkt zur Ebenenformel (Review: auch die erste Station prüft).
+                    let alt = match prev {
+                        Some(p) => Some(shifted_start(a, b, o, p, radius, convex)),
+                        None => ps.map(|c| o + (c - o) * 0.5),
+                    };
+                    match (&first, alt) {
                         (Ok(s), _) if near(s) => first?,
-                        (_, Some(p)) => {
-                            let second = fillet_section(
-                                a,
-                                b,
-                                o,
-                                tangent,
-                                convex,
-                                radius,
-                                Some(shifted_start(a, b, o, p, radius, convex)),
-                            );
+                        (_, Some(alt)) => {
+                            let second =
+                                fillet_section(a, b, o, tangent, convex, radius, Some(alt));
                             match (first, second) {
                                 (Ok(x), Ok(y)) => match ps {
                                     Some(c) if y.center.distance(c) < x.center.distance(c) => y,
@@ -719,6 +728,14 @@ pub fn march_geom(
             }
             SectionKind::Chamfer(spec) => {
                 let (wa, wb) = inward_directions(solid, edge, sides, t);
+                // Freiform: Startrichtungen in die Querschnittsebene legen (sie stehen senkrecht
+                // auf der Kurventangente, die Ebene auf der Flächentangente; Task-2-Hinweis).
+                let (wa, wb) = if freeform {
+                    let flat = |w: DVec3| (w - tangent * w.dot(tangent)).normalize_or_zero();
+                    (flat(wa), flat(wb))
+                } else {
+                    (wa, wb)
+                };
                 chamfer_section(a, b, o, tangent, convex, wa, wb, spec)?
             }
         };
@@ -730,7 +747,22 @@ pub fn march_geom(
             kind,
         };
         check_section(&st, tol)?;
-        check_spine(e, t, &st)?;
+        // Freiform: Krümmungsvektor der Querschnittsebenen aus der Flächentangente benachbarter
+        // Stellen (Abstand `SPINE_STEP` der Länge); die zweite Ableitung einer angepassten
+        // Kantenkurve schwankt mit ihren Anpassungswellen (bis über 10/mm quer zur Kante).
+        let curvature = freeform.then(|| {
+            let h = SPINE_STEP * length;
+            let (xl, xh) = ((x - h).max(0.0), (x + h).min(length));
+            let at = |y: f64| {
+                let ty = table.param(y);
+                let oy = e.curve.point(ty);
+                let cy = (e.curve.tangent(ty) * (e.t1 - e.t0).signum()).normalize_or_zero();
+                true_tangent(a.normal_at(oy), b.normal_at(oy), cy)
+            };
+            let d = (at(xh) - at(xl)) / (xh - xl);
+            d - tangent * d.dot(tangent)
+        });
+        check_spine(e, t, &st, curvature)?;
         budget()?;
         Ok(st)
     };

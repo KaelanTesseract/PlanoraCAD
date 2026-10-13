@@ -14,6 +14,8 @@ use std::sync::Arc;
 
 /// Relative Schranke der Schätzung gegen die Formel.
 const ESTIMATE_REL: f64 = 1e-4;
+/// Anpassungsgenauigkeit Boolescher Schnittkanten (`NURBS_FIT_TOL`).
+const FIT_TOL: f64 = 1e-5;
 const A: f64 = 1.0 - PI / 4.0;
 
 struct Lcg(u64);
@@ -103,19 +105,61 @@ struct Tally {
 }
 
 impl Tally {
+    /// `fitted`: Kantenkurve eine angepasste Boolesche Schnittkante mit Umfang `fitted`; die
+    /// Schätzung nimmt den Kantenpunkt als Ecke des Querschnitts, der bis `FIT_TOL` neben der
+    /// wahren Ecke liegt (Spielraum `Umfang · FIT_TOL · 2 · Maß`, bei kleinsten Maßen maßgebend;
+    /// die Lage der Fläche selbst prüft `blend_freeform_seam.rs` punktweise).
     fn run(&mut self, s: &Solid, e: Id<Edge>, kind: BlendKind, want: f64, what: &str) {
+        self.run_fitted(s, e, kind, want, 0.0, what);
+    }
+
+    fn run_fitted(
+        &mut self,
+        s: &Solid,
+        e: Id<Edge>,
+        kind: BlendKind,
+        want: f64,
+        fitted: f64,
+        what: &str,
+    ) {
+        let size = match &kind {
+            BlendKind::Fillet { radius } => *radius,
+            BlendKind::ChamferEqual { distance } => *distance,
+            _ => 0.0,
+        };
         self.total += 1;
         match k().blend(s, &req(e, kind)) {
             Ok(b) => {
                 self.ok += 1;
                 let valid = validate(&b.solid).is_ok();
-                let exact = (b.volume_change + want).abs() <= ESTIMATE_REL * want;
+                let exact = (b.volume_change + want).abs()
+                    <= ESTIMATE_REL * want + fitted * FIT_TOL * 2.0 * size;
                 if !(valid && exact) {
                     self.wrong += 1;
                     eprintln!(
                         "FALSCH {what}: gültig {valid}, Schätzung {} statt {}",
                         b.volume_change, -want
                     );
+                }
+            }
+            Err(err) => {
+                let m = err.to_string();
+                eprintln!("  abgelehnt {what}: {m}");
+                let key: String = m.chars().take(60).collect();
+                *self.refusals.entry(key).or_default() += 1;
+            }
+        }
+    }
+
+    /// Ohne Formel (variabler Radius): nur `validate`.
+    fn run_valid(&mut self, s: &Solid, e: Id<Edge>, kind: BlendKind, what: &str) {
+        self.total += 1;
+        match k().blend(s, &req(e, kind)) {
+            Ok(b) => {
+                self.ok += 1;
+                if validate(&b.solid).is_err() {
+                    self.wrong += 1;
+                    eprintln!("FALSCH {what}: ungültig");
                 }
             }
             Err(err) => {
@@ -170,7 +214,7 @@ fn min_rho(c: &NurbsCurve) -> f64 {
 }
 
 #[test]
-#[ignore = "Zufallsreihe, nur mit --release --ignored (etwa 2 min)"]
+#[ignore = "Zufallsreihe, nur mit --release --ignored (etwa 5 min)"]
 fn freeform_ok_rates() {
     let mut rng = Lcg(20261013);
     // Ellipsenränder.
@@ -278,13 +322,166 @@ fn freeform_ok_rates() {
             .unwrap();
         let r = rng.range(0.05, 0.6);
         let p = perimeter(a, b);
-        t.run(
+        t.run_fitted(
             &s,
             e,
             BlendKind::Fillet { radius: r },
             p * r * r * A + PI * r.powi(3) * (5.0 / 3.0 - PI / 2.0),
+            p,
             &format!("Loch {a:.3}×{b:.3} r {r:.4}"),
         );
     }
     t.report("Quader minus Ellipse");
+    // Weitere Lochränder: Fasen (Loch wächst um τ: ΔV = P d²/2 + π d³/3), variable Radien
+    // (geschlossen, gleiche Endradien; nur `validate`) und sehr kleine Maße.
+    let mut chamfers = Tally::default();
+    let mut variable = Tally::default();
+    let mut tiny = Tally::default();
+    for i in 0..60 {
+        let a = rng.range(1.0, 3.0);
+        let b = a / (1.0 + 4.0 * rng.next());
+        let block = k().make_box(DVec3::new(10.0, 10.0, 5.0)).unwrap();
+        let tool = k()
+            .transform(
+                &ellipse_prism(a, b, 0.0, 7.0),
+                &DMat4::from_translation(DVec3::new(5.0, 5.0, -1.0)),
+            )
+            .unwrap();
+        let Ok(s) = k().boolean(&block, &tool, BoolOp::Difference) else {
+            continue;
+        };
+        let e = s
+            .edges
+            .iter()
+            .map(|(id, _)| id)
+            .find(|&id| {
+                let ed = &s.edges[id];
+                matches!(ed.curve, Curve::Nurbs(_)) && (ed.curve.point(ed.t0).z - 5.0).abs() < 1e-6
+            })
+            .unwrap();
+        let p = perimeter(a, b);
+        match i % 3 {
+            0 => {
+                let d = rng.range(0.05, 0.6);
+                chamfers.run_fitted(
+                    &s,
+                    e,
+                    BlendKind::ChamferEqual { distance: d },
+                    p * d * d / 2.0 + PI * d.powi(3) / 3.0,
+                    p,
+                    &format!("Loch {a:.3}×{b:.3} Fase {d:.4}"),
+                );
+            }
+            1 => {
+                let (r0, r1) = (rng.range(0.05, 0.3), rng.range(0.1, 0.6));
+                let f = rng.range(0.1, 0.4);
+                variable.run_valid(
+                    &s,
+                    e,
+                    BlendKind::VariableFillet {
+                        points: vec![(0.0, r0), (f, r1), (1.0 - f, r1), (1.0, r0)],
+                    },
+                    &format!("Loch {a:.3}×{b:.3} variabel {r0:.3}/{r1:.3}/{f:.3}"),
+                );
+            }
+            _ => {
+                let r = rng.range(0.002, 0.015);
+                tiny.run_fitted(
+                    &s,
+                    e,
+                    BlendKind::Fillet { radius: r },
+                    p * r * r * A + PI * r.powi(3) * (5.0 / 3.0 - PI / 2.0),
+                    p,
+                    &format!("Loch {a:.3}×{b:.3} klein r {r:.4}"),
+                );
+            }
+        }
+    }
+    chamfers.report("Lochrand-Fasen");
+    variable.report("Lochrand variabel");
+    tiny.report("Lochrand kleine Radien");
+}
+
+/// Quader 10 × 10 × 5 minus elliptischer Zylinder ab der Höhe `z0` (Durchbruch bei z0 < 0,
+/// sonst Sackloch) und seine obere Randkante.
+fn holed(a: f64, b: f64, z0: f64) -> (Solid, Id<Edge>) {
+    let block = k().make_box(DVec3::new(10.0, 10.0, 5.0)).unwrap();
+    let tool = k()
+        .transform(
+            &ellipse_prism(a, b, 0.0, 7.0),
+            &DMat4::from_translation(DVec3::new(5.0, 5.0, z0)),
+        )
+        .unwrap();
+    let s = k().boolean(&block, &tool, BoolOp::Difference).unwrap();
+    let e = s
+        .edges
+        .iter()
+        .map(|(id, _)| id)
+        .find(|&id| {
+            let ed = &s.edges[id];
+            matches!(ed.curve, Curve::Nurbs(_)) && (ed.curve.point(ed.t0).z - 5.0).abs() < 1e-6
+        })
+        .unwrap();
+    (s, e)
+}
+
+#[test]
+#[ignore = "Konstruktionen des Reviews (Runde 2), nur mit --release --ignored (etwa 70 s)"]
+fn review_round_two_constructions() {
+    let mut t = Tally::default();
+    // Vernähen scheiterte im ganzen Bereich r 0,356 … 0,435 (Loch 2,589 × 1,128).
+    let (s, e) = holed(2.589, 1.128, -1.0);
+    let p = perimeter(2.589, 1.128);
+    for r in [0.356, 0.38, 0.3954, 0.41, 0.435] {
+        t.run_fitted(
+            &s,
+            e,
+            BlendKind::Fillet { radius: r },
+            p * r * r * A + PI * r.powi(3) * (5.0 / 3.0 - PI / 2.0),
+            p,
+            &format!("Loch 2,589×1,128 r {r}"),
+        );
+    }
+    // Fasen an gestreckten Durchbrüchen und an Sacklöchern (Tiefe 2).
+    for (a, b, z0) in [
+        (2.0, 0.4, -1.0),
+        (3.0, 0.5, -1.0),
+        (1.4726, 0.2267, -1.0),
+        (2.0, 0.4, 3.0),
+        (3.0, 1.0, 3.0),
+    ] {
+        let (s, e) = holed(a, b, z0);
+        let p = perimeter(a, b);
+        for d in [0.1, 0.3] {
+            t.run_fitted(
+                &s,
+                e,
+                BlendKind::ChamferEqual { distance: d },
+                p * d * d / 2.0 + PI * d.powi(3) / 3.0,
+                p,
+                &format!("Loch {a}×{b} ab {z0} Fase {d}"),
+            );
+        }
+        // Sehr kleine Radien (vorher teils „zu groß für Deckel“).
+        for r in [0.002, 0.005, 0.015] {
+            t.run_fitted(
+                &s,
+                e,
+                BlendKind::Fillet { radius: r },
+                p * r * r * A + PI * r.powi(3) * (5.0 / 3.0 - PI / 2.0),
+                p,
+                &format!("Loch {a}×{b} ab {z0} r {r}"),
+            );
+        }
+        // Variable Radien bis 0,6 (vorher teils „Wand 1 liegt im Bereich der Rundung“).
+        t.run_valid(
+            &s,
+            e,
+            BlendKind::VariableFillet {
+                points: vec![(0.0, 0.25), (0.3, 0.6), (0.7, 0.6), (1.0, 0.25)],
+            },
+            &format!("Loch {a}×{b} ab {z0} variabel"),
+        );
+    }
+    t.report("Review Runde 2");
 }

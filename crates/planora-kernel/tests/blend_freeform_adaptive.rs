@@ -218,8 +218,9 @@ fn aspects(list: &[f64]) {
 }
 
 #[test]
-fn ellipse_aspects_two_and_six_round_at_three_and_seven_tenths_of_the_curvature_radius() {
-    aspects(&[2.0, 6.0]);
+fn ellipse_aspect_six_rounds_at_three_and_seven_tenths_of_the_curvature_radius() {
+    // Seitenverhältnis 2 deckt `elongated_ellipse_rims_no_longer_lose_the_ball` (4 × 2) ab.
+    aspects(&[6.0]);
 }
 
 #[test]
