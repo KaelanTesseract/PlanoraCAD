@@ -7,8 +7,9 @@ use super::analytic::EdgeGeom;
 use super::error::BlendError;
 use super::topo::{face_name, vertex_faces};
 use crate::boolean::{
-    CurveSurface, Piece, Seg, SurfaceIntersection, curve_surface_roots, face_geom,
-    intersect_surfaces, loop_points, oriented_area, pipeline_tol, points_to_uv, reverse_loop, sew,
+    Containment, CurveSurface, FaceGeom, Piece, Seg, SurfaceIntersection, curve_surface_roots,
+    face_geom, intersect_surfaces, loop_points, oriented_area, pipeline_tol, point_in_face,
+    points_to_uv, reverse_loop, seg_intersections, sew,
 };
 use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
@@ -319,6 +320,11 @@ fn reconnect(
 
 /// Setzt die Abschlusskurve `cap` an der Ecke `vp` in eine Schleife der Abschlussfläche ein und
 /// kürzt die beiden Kanten an der Ecke bis zu ihren Enden.
+///
+/// Periodische Abschlussflächen (Zylinder, Kegel …): Die Ecke wird im Raum gesucht, die Naht der
+/// Fläche spielt dafür keine Rolle. Ist aber eine der beiden Kanten an der Ecke selbst die Naht,
+/// wird nur diese eine Verwendung gekürzt, die zweite nicht; dann sollte `sew` nicht schließen
+/// oder `validate_with` ablehnen (`ResultInvalid`). Dieser Fall ist nicht getestet.
 fn insert_cap(
     loops: &mut [Vec<Seg>],
     vp: DVec3,
@@ -456,6 +462,89 @@ fn contact_span_ok(range: (f64, f64), s0: f64, s1: f64) -> bool {
     (s1 - s0) * full.signum() > MIN_TRIMMED_FRACTION * full.abs()
 }
 
+/// Meldung für Löcher und Flächen, die in den Bereich der Rundung reichen.
+fn in_blend_area(what: &str) -> BlendError {
+    BlendError::Unsupported(format!(
+        "{what} liegt im Bereich der Rundung; bitte ein kleineres Maß wählen"
+    ))
+}
+
+/// Liegen alle Löcher einer umgebauten Fläche noch ganz innerhalb ihrer neuen Außenschleife, ohne
+/// sie oder einander zu berühren? Sonst bliebe ein Loch (samt Wand) über der Rundung stehen oder
+/// würde von der Berührkurve geschnitten: benannte Ablehnung statt eines falschen Körpers.
+fn check_holes(
+    surface: &Surface,
+    same_sense: bool,
+    loops: &[Vec<Seg>],
+    face: &str,
+    tol: &Tolerance,
+) -> Result<(), BlendError> {
+    let Some((outer, holes)) = loops.split_first() else {
+        return Ok(());
+    };
+    let refuse = || in_blend_area(&format!("Ein Loch der Fläche „{face}“"));
+    let shape = FaceGeom {
+        surface: surface.clone(),
+        same_sense,
+        domain: None,
+        loops: vec![outer.clone()],
+        tag: None,
+    };
+    for (k, hole) in holes.iter().enumerate() {
+        let inside = loop_points(hole)
+            .into_iter()
+            .chain(hole.iter().map(|s| s.at(0.5)))
+            .all(|p| point_in_face(&shape, p, tol) == Containment::Inside);
+        if !inside {
+            return Err(refuse());
+        }
+        for other in std::iter::once(outer).chain(holes[k + 1..].iter()) {
+            for a in hole {
+                if other
+                    .iter()
+                    .any(|b| !seg_intersections(a, b, tol).is_empty())
+                {
+                    return Err(refuse());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reicht eine Kante der umgebauten Fläche `piece` ins Innere der neuen Rundungsfläche `blend`
+/// (etwa die Wand eines Lochs oder einer Tasche im abgetragenen Bereich)? Treffer auf dem Rand der
+/// Rundungsfläche (gekürzte Nachbarkanten, Berühr- und Abschlusskurven) zählen nicht.
+fn check_piercing(
+    piece: &Piece,
+    blend: &Piece,
+    face: &str,
+    tol: &Tolerance,
+) -> Result<(), BlendError> {
+    let shape = FaceGeom {
+        surface: blend.surface.clone(),
+        same_sense: blend.same_sense,
+        domain: blend.domain,
+        loops: vec![blend.outer.clone()],
+        tag: None,
+    };
+    let inside = |p: DVec3| point_in_face(&shape, p, tol) == Containment::Inside;
+    for seg in std::iter::once(&piece.outer)
+        .chain(piece.holes.iter())
+        .flatten()
+    {
+        let (lo, hi) = (seg.t0.min(seg.t1), seg.t0.max(seg.t1));
+        let hit = match curve_surface_roots(&seg.curve, lo, hi, &blend.surface, tol) {
+            CurveSurface::Roots(rs) => rs.iter().any(|r| inside(seg.curve.point(r.t))),
+            CurveSurface::Lies => inside(seg.at(0.5)),
+        };
+        if hit {
+            return Err(in_blend_area(&format!("Die Fläche „{face}“")));
+        }
+    }
+    Ok(())
+}
+
 /// Baut den neuen Körper: alle Flächen mit ersetzten und gekürzten Kanten, Abschlusskurven in den
 /// Abschlussflächen, die Rundungsflächen (Rollen `roles`) und die Eckstücke des Plans; danach
 /// `sew` und `validate_with`.
@@ -511,6 +600,7 @@ pub fn assemble(
         }
     }
     let mut pieces: Vec<Piece> = Vec::with_capacity(solid.faces.len() + geoms.len());
+    let mut names: Vec<String> = Vec::with_capacity(solid.faces.len());
     for (fid, face) in solid.faces.iter() {
         let g = face_geom(solid, fid);
         let name = face_name(solid, fid);
@@ -543,6 +633,10 @@ pub fn assemble(
                 .point;
             insert_cap(&mut loops, vp, cap, &name, &btol)?;
         }
+        let touched = caps.contains_key(&fid) || repl.keys().any(|(f, _, _)| *f == fid);
+        if touched {
+            check_holes(&face.surface, face.same_sense, &loops, &name, &btol)?;
+        }
         let domain = grow_patch(&face.surface, face.same_sense, face.patch, &loops);
         let mut it = loops.into_iter();
         let outer = it.next().unwrap_or_default();
@@ -554,7 +648,9 @@ pub fn assemble(
             holes: it.collect(),
             tag: face.tag.clone(),
         });
+        names.push(name);
     }
+    let kept = pieces.len();
     for (i, g) in geoms.iter().enumerate() {
         let (s, e) = (&plan.starts[i], &plan.ends[i]);
         let segs = vec![
@@ -575,6 +671,11 @@ pub fn assemble(
                 role: roles[i].clone(),
             }),
         });
+    }
+    for blend in &pieces[kept..] {
+        for (piece, name) in pieces[..kept].iter().zip(&names) {
+            check_piercing(piece, blend, name, &btol)?;
+        }
     }
     pieces.extend(plan.corners.iter().cloned());
     let result = sew(pieces, tol).map_err(|e| BlendError::ResultInvalid(e.to_string()))?;

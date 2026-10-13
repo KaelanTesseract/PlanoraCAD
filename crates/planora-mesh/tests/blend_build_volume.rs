@@ -35,8 +35,11 @@ fn edge_between(s: &Solid, a: &str, b: &str) -> Id<Edge> {
 
 /// Volumenänderung (Ergebnis − Eingang) bei gemeinsamer Teilung.
 fn delta_volume(s: &Solid, a: &str, b: &str, kind: SectionKind) -> f64 {
+    delta_volume_at(s, edge_between(s, a, b), kind)
+}
+
+fn delta_volume_at(s: &Solid, e: Id<Edge>, kind: SectionKind) -> f64 {
     let tol = Tolerance::default();
-    let e = edge_between(s, a, b);
     let sides = edge_sides(s, e, None).unwrap();
     let angle = edge_angle(s, e, &sides).unwrap();
     let g = analytic_geom(s, e, &sides, angle.convex, kind, &tol)
@@ -109,4 +112,49 @@ fn rebuilt_bodies_have_the_expected_volume() {
         SectionKind::Fillet { radius: 1.0 },
     );
     assert_close(dv, area * 5.0);
+}
+
+/// Kante mit den Endpunkten `p0` und `p1` (in beliebiger Richtung).
+fn edge_at(s: &Solid, p0: DVec3, p1: DVec3) -> Id<Edge> {
+    let near = |v: Id<Vertex>, p: DVec3| s.vertices[v].point.distance(p) < 1e-9;
+    s.edges
+        .iter()
+        .find(|(_, e)| {
+            (near(e.start, p0) && near(e.end, p1)) || (near(e.start, p1) && near(e.end, p0))
+        })
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| panic!("keine Kante {p0} – {p1}"))
+}
+
+fn holed_box(holes: &[DVec2]) -> Solid {
+    let profile = Profile {
+        outer: ProfileLoop::rectangle(DVec2::ZERO, DVec2::splat(10.0)),
+        holes: holes.iter().map(|c| ProfileLoop::circle(*c, 0.5)).collect(),
+    };
+    k().extrude(&profile, &Frame::WORLD, 10.0).unwrap()
+}
+
+#[test]
+fn bodies_with_holes_outside_the_rounded_area_keep_them() {
+    // Regression (Review Task 4): Löcher 1,5 mm vor den Wänden; r = 0,5 bleibt vor dem Loch.
+    let s = holed_box(&[
+        DVec2::new(1.5, 5.0),
+        DVec2::new(8.5, 5.0),
+        DVec2::new(5.0, 1.5),
+        DVec2::new(5.0, 8.5),
+    ]);
+    let e = edge_at(&s, DVec3::new(0.0, 0.0, 10.0), DVec3::new(0.0, 10.0, 10.0));
+    let fillet = SectionKind::Fillet { radius: 0.5 };
+    assert_close(
+        delta_volume_at(&s, e, fillet),
+        -(1.0 - PI / 4.0) * 0.25 * 10.0,
+    );
+    // Loch nahe der Ecke einer Abschlussfläche, innerhalb der Abschlusskurve (r = 3).
+    let s = holed_box(&[DVec2::new(1.5, 1.5)]);
+    let e = edge_at(&s, DVec3::ZERO, DVec3::new(0.0, 0.0, 10.0));
+    let fillet = SectionKind::Fillet { radius: 3.0 };
+    assert_close(
+        delta_volume_at(&s, e, fillet),
+        -(1.0 - PI / 4.0) * 9.0 * 10.0,
+    );
 }

@@ -6,7 +6,7 @@ use planora_kernel::blend::build::*;
 use planora_kernel::blend::section::ChamferSpec;
 use planora_kernel::blend::topo::*;
 use planora_kernel::*;
-use planora_math::{DVec2, DVec3, Frame, PI, TAU, Tolerance};
+use planora_math::{DMat4, DVec2, DVec3, Frame, PI, TAU, Tolerance};
 
 fn k() -> AnalyticKernel {
     AnalyticKernel::default()
@@ -316,10 +316,8 @@ fn a_radius_beyond_the_face_is_too_large_by_name() {
         let (geoms, plan) =
             parts(&s, "Deckel", "Wand 1", SectionKind::Fillet { radius: r }).unwrap();
         match assemble(&s, &geoms, &plan, &["Rundung 1".into()], &tol()) {
-            Err(BlendError::TooLarge { face }) => assert!(
-                face == "Wand 2" || face == "Wand 4" || face == "Deckel" || face == "Wand 1",
-                "{face}"
-            ),
+            // Die Berührkurve auf Wand 1 reicht bis zur Bodenkante oder darüber hinaus.
+            Err(BlendError::TooLarge { face }) => assert_eq!(face, "Wand 1"),
             other => panic!("{:?}", other.map(|_| ())),
         }
     }
@@ -339,4 +337,101 @@ fn a_radius_beyond_the_face_is_too_large_by_name() {
         ),
         Err(BlendError::ResultInvalid(_))
     ));
+}
+
+/// Kante mit den Endpunkten `p0` und `p1` (in beliebiger Richtung).
+fn edge_at(s: &Solid, p0: DVec3, p1: DVec3) -> Id<Edge> {
+    let near = |v: Id<Vertex>, p: DVec3| s.vertices[v].point.distance(p) < 1e-9;
+    s.edges
+        .iter()
+        .find(|(_, e)| {
+            (near(e.start, p0) && near(e.end, p1)) || (near(e.start, p1) && near(e.end, p0))
+        })
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| panic!("keine Kante {p0} – {p1}"))
+}
+
+fn round_edge(s: &Solid, e: Id<Edge>, radius: f64) -> Result<Solid, BlendError> {
+    let sides = edge_sides(s, e, None)?;
+    let angle = edge_angle(s, e, &sides)?;
+    let kind = SectionKind::Fillet { radius };
+    let g = analytic_geom(s, e, &sides, angle.convex, kind, &tol())?.expect("analytische Kante");
+    let geoms = vec![g];
+    let plan = end_cuts(s, &geoms, &tol())?;
+    assemble(s, &geoms, &plan, &["Rundung 1".into()], &tol())
+}
+
+/// Würfel 10 mit Löchern r = 0,5 durch die ganze Höhe an den Stellen `holes`.
+fn holed_box(holes: &[DVec2]) -> Solid {
+    let profile = Profile {
+        outer: ProfileLoop::rectangle(DVec2::ZERO, DVec2::splat(10.0)),
+        holes: holes.iter().map(|c| ProfileLoop::circle(*c, 0.5)).collect(),
+    };
+    k().extrude(&profile, &Frame::WORLD, 10.0).unwrap()
+}
+
+fn assert_hole_refused(r: Result<Solid, BlendError>) {
+    match r {
+        Err(BlendError::Unsupported(m)) => assert!(m.contains("Bereich der Rundung"), "{m}"),
+        other => panic!("{:?}", other.map(|s| s.faces.len())),
+    }
+}
+
+#[test]
+fn holes_in_the_rounded_area_are_refused_by_name() {
+    // Regression (Review Task 4): vier Löcher je 1,5 mm vor einer Wand; die Rundung der
+    // Deckelkante an x = 0 trägt das Loch bei (1,5; 5) ganz (r = 3) oder teilweise (r = 1,2 und
+    // 1,5: die Berührkurve läuft durch das Loch) ab. Früher kam ein „gültiger“ falscher Körper.
+    let s = holed_box(&[
+        DVec2::new(1.5, 5.0),
+        DVec2::new(8.5, 5.0),
+        DVec2::new(5.0, 1.5),
+        DVec2::new(5.0, 8.5),
+    ]);
+    let e = edge_at(&s, DVec3::new(0.0, 0.0, 10.0), DVec3::new(0.0, 10.0, 10.0));
+    for r in [3.0, 1.2, 1.5] {
+        assert_hole_refused(round_edge(&s, e, r));
+    }
+    // Berührkurve deutlich vor dem Loch (0,5 < 1): gültig, das Loch bleibt im Deckel.
+    let ok = round_edge(&s, e, 0.5).unwrap();
+    validate(&ok).unwrap();
+    assert_eq!(ok.faces.len(), s.faces.len() + 1);
+}
+
+#[test]
+fn a_hole_near_the_corner_of_an_end_face_is_refused_or_kept() {
+    // Loch bei (1,5; 1,5) nahe der senkrechten Kante an (0, 0): Deckel und Boden sind die
+    // Abschlussflächen. Bei r = 3 liegt das Loch innerhalb der Abschlusskurve (Abstand zur
+    // Bogenmitte 2,12 + 0,5 < 3) und bleibt; bei r = 5 schneidet der Bogen das Loch, bei r = 6
+    // liegt es ganz im abgetragenen Bereich.
+    let s = holed_box(&[DVec2::new(1.5, 1.5)]);
+    let e = edge_at(&s, DVec3::ZERO, DVec3::new(0.0, 0.0, 10.0));
+    let ok = round_edge(&s, e, 3.0).unwrap();
+    validate(&ok).unwrap();
+    assert_eq!(ok.faces.len(), s.faces.len() + 1);
+    for r in [5.0, 6.0] {
+        assert_hole_refused(round_edge(&s, e, r));
+    }
+}
+
+#[test]
+fn a_pocket_reaching_into_the_rounded_area_is_refused() {
+    // Tasche von unten (x 0,5…1,5, y 4…6, z bis 8,8), oben geschlossen: keine Fläche der Tasche
+    // grenzt an die Kante, aber r = 3 trägt bis z ≈ 8,66 bei x = 0,5 ab und öffnet sie.
+    let cube = k().make_box(DVec3::splat(10.0)).unwrap();
+    let pocket = k()
+        .transform(
+            &k().make_box(DVec3::new(1.0, 2.0, 9.8)).unwrap(),
+            &DMat4::from_translation(DVec3::new(0.5, 4.0, -1.0)),
+        )
+        .unwrap();
+    let s = k().boolean(&cube, &pocket, BoolOp::Difference).unwrap();
+    let e = edge_at(&s, DVec3::new(0.0, 0.0, 10.0), DVec3::new(0.0, 10.0, 10.0));
+    match round_edge(&s, e, 3.0) {
+        Err(BlendError::Unsupported(m)) => assert!(m.contains("Bereich der Rundung"), "{m}"),
+        other => panic!("{:?}", other.map(|s| s.faces.len())),
+    }
+    // r = 1 bleibt über der Tasche (Bogen bei x = 0,5 erst ab z ≈ 9,87).
+    let ok = round_edge(&s, e, 1.0).unwrap();
+    validate(&ok).unwrap();
 }
