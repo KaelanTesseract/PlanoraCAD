@@ -65,12 +65,16 @@ fn is_seam(solid: &Solid, edge: Id<Edge>) -> bool {
 /// etwa zwei nicht zusammengefasste Stücke derselben Ebene nach einer Vereinigung)? Sie ist
 /// keine echte Kante: Eine Kette läuft nicht über sie weiter (Review Stufe 2, M1).
 fn is_flat(solid: &Solid, edge: Id<Edge>) -> bool {
-    /// Grenze zwischen Schneide (Kantenwinkel nahe 0°) und glattem Übergang (nahe 180°).
-    const RIGHT_ANGLE_DEG: f64 = 90.0;
+    /// Halbe Breite des Bereichs um 180°, in dem ein fast tangentialer Kantenwinkel als glatter
+    /// Übergang gilt; außerhalb liegen die Schneiden (konvex nahe 0°, konkav nahe 360°).
+    const FLAT_HALF_WIDTH_DEG: f64 = 90.0;
+    /// Kantenwinkel eines glatten Übergangs.
+    const STRAIGHT_DEG: f64 = 180.0;
     edge_sides(solid, edge, None).is_ok_and(|sides| {
         matches!(
             edge_angle(solid, edge, &sides),
-            Err(BlendError::NearlyTangent { angle_deg }) if angle_deg > RIGHT_ANGLE_DEG
+            Err(BlendError::NearlyTangent { angle_deg })
+                if (angle_deg - STRAIGHT_DEG).abs() < FLAT_HALF_WIDTH_DEG
         )
     })
 }
@@ -282,4 +286,76 @@ fn group(solid: &Solid, picked: &[BlendEdge]) -> Result<Vec<ChainedEdge>, BlendE
         chain += 1;
     }
     Ok(out.into_iter().flatten().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AnalyticKernel, Kernel, Profile, ProfileLoop};
+    use planora_math::{DVec2, Frame};
+
+    fn prism(points: &[(f64, f64)]) -> Solid {
+        let pts: Vec<DVec2> = points.iter().map(|&(x, y)| DVec2::new(x, y)).collect();
+        let profile = Profile {
+            outer: ProfileLoop::polygon(&pts).unwrap(),
+            holes: vec![],
+        };
+        AnalyticKernel::default()
+            .extrude(&profile, &Frame::WORLD, 3.0)
+            .unwrap()
+    }
+
+    /// Senkrechte Kante über dem Profilpunkt `(x, y)`.
+    fn vertical(s: &Solid, x: f64, y: f64) -> Id<Edge> {
+        s.edges
+            .iter()
+            .find(|(_, e)| {
+                let (a, b) = (s.vertices[e.start].point, s.vertices[e.end].point);
+                let at = |p: DVec3| (p.x - x).abs() < 1e-9 && (p.y - y).abs() < 1e-9;
+                at(a) && at(b)
+            })
+            .map(|(id, _)| id)
+            .unwrap()
+    }
+
+    #[test]
+    fn knife_edges_are_not_flat() {
+        // Konvexe Schneide (Kantenwinkel etwa 0,06°) an der Spitze eines schmalen Keils.
+        let wedge = prism(&[(0.0, 0.0), (10.0, 0.0), (10.0, 0.01)]);
+        let e = vertical(&wedge, 0.0, 0.0);
+        let sides = edge_sides(&wedge, e, None).unwrap();
+        assert!(matches!(
+            edge_angle(&wedge, e, &sides),
+            Err(BlendError::NearlyTangent { angle_deg }) if angle_deg < 1.0
+        ));
+        assert!(!is_flat(&wedge, e));
+        // Konkave Schneide (Kantenwinkel etwa 359,9°) am Grund eines schmalen Schlitzes.
+        let slit = prism(&[
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (5.01, 10.0),
+            (5.0, 2.0),
+            (4.99, 10.0),
+            (0.0, 10.0),
+        ]);
+        let e = vertical(&slit, 5.0, 2.0);
+        let sides = edge_sides(&slit, e, None).unwrap();
+        assert!(matches!(
+            edge_angle(&slit, e, &sides),
+            Err(BlendError::NearlyTangent { angle_deg }) if angle_deg > 359.0
+        ));
+        assert!(!is_flat(&slit, e));
+        // Glatter Übergang: Trennkante zweier Stücke derselben Ebene (Wand mit Zwischenpunkt).
+        let split = prism(&[
+            (0.0, 0.0),
+            (5.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+        ]);
+        assert!(is_flat(&split, vertical(&split, 5.0, 0.0)));
+        // Echte Kante.
+        assert!(!is_flat(&split, vertical(&split, 10.0, 0.0)));
+    }
 }

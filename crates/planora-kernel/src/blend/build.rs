@@ -916,7 +916,7 @@ pub fn assemble(
         // NaN gilt als zu kurz.
         if !(cut.curve.length() > weld) {
             return Err(BlendError::InvalidParameter(format!(
-                "zu klein, die Abschlusskurve ist nicht länger als {} mm",
+                "Die Abschlusskurve ist nicht länger als {} mm; das Maß ist zu klein",
                 super::show_num(weld)
             )));
         }

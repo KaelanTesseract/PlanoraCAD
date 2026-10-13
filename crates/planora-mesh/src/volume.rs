@@ -34,6 +34,26 @@ pub const BLEND_SLACK_FACTOR: f64 = 2.0;
 /// sich die Schätzungen aufheben und ebene Flächen keinen Netzfehler beitragen.
 pub const BLEND_ABS_SLACK: f64 = 1e-6;
 
+/// Spielraum der Volumenprobe relativ zur Summe der Beträge, wenn konvexe und konkave Kanten
+/// zusammen gerundet werden (Review Stufe 2, I1 Runde 2). Ohne Vorzeichenprüfung ist die Probe
+/// dort die einzige Sicherung gegen falsch herum gebaute Stücke; mit [`BLEND_REL`] = 0,5 der
+/// Summe ginge ein Körper durch, dessen konkave Stücke Material abtragen statt hinzufügen.
+///
+/// Gemessen (Zufallsreihen in `planora-mesh/tests/blend_mixed.rs`, richtige Körper, Release):
+/// größte Abweichung |ΔV − Schätzung| / Summe 0,035 bei 441 gemischten Fällen (Prismen mit
+/// einspringenden Ecken, Quader mit gerundeter Tasche oder gerundetem Zapfen, Ketten über glatte
+/// Übergänge, Gehrungen) und 0,064 bei 299 gemischten Fällen mit Gehrungen an kurzen Kanten und
+/// großem Maß. Die Ungenauigkeit stammt aus der Schätzung der Gehrung (Prisma bis zur
+/// Gehrungsebene, nicht exakt); 0,2 lässt dazu etwa den dreifachen Abstand.
+///
+/// Bekannte, hingenommene Grenze (Task 20 nennt sie): Fehlt im Ergebnis die *kleinere* Sorte
+/// Stücke ganz (etwa alle konkaven, wenn sie höchstens 20 % der Summe ausmachen), bleibt die
+/// Abweichung innerhalb der Schranke und die Probe besteht – sie findet nur Fehler, die größer
+/// sind als die Ungenauigkeit der Schätzung. Umgekehrt könnten Gehrungen mit sehr großem Maß an
+/// sehr kurzen Kanten in einer gemischten Anfrage die Schranke überschreiten (dann benannte
+/// Ablehnung „unplausibel“, nie ein falscher Körper).
+pub const BLEND_REL_MIXED: f64 = 0.2;
+
 /// Haben alle Stücke der Schätzung dasselbe Vorzeichen? Dann ist `|Summe| = Summe der Beträge`
 /// bis auf Rundung; diese relative Schranke deckt die Rundung ab.
 const SAME_SIGN_REL: f64 = 1e-9;
@@ -44,7 +64,8 @@ const SAME_SIGN_REL: f64 = 1e-9;
 /// darf höchstens `rel · scale + slack + BLEND_ABS_SLACK` von der Schätzung abweichen. Haben
 /// alle Stücke dasselbe Vorzeichen (nur konvexe oder nur konkave Kanten), muss die Änderung
 /// außerdem dieses Vorzeichen haben (bis `slack`); bei gemischten Kanten heben sich Abtrag und
-/// Zugabe auf, dann gibt es kein erwartetes Vorzeichen. `slack` deckt den Netzfehler ab
+/// Zugabe auf, dann gibt es kein erwartetes Vorzeichen, und statt `rel` gilt höchstens
+/// [`BLEND_REL_MIXED`]. `slack` deckt den Netzfehler ab
 /// (Sehnentoleranz mal gekrümmte Oberfläche).
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn blend_volume_plausible(
@@ -68,6 +89,11 @@ pub fn blend_volume_plausible(
     if same_sign && estimate > 0.0 && d < -slack {
         return false;
     }
+    let rel = if same_sign {
+        rel
+    } else {
+        rel.min(BLEND_REL_MIXED)
+    };
     (d - estimate).abs() <= rel * scale + slack + BLEND_ABS_SLACK
 }
 
@@ -153,25 +179,46 @@ mod tests {
     #[test]
     fn mixed_convex_and_concave_blends_use_the_gross_estimate() {
         // Abtrag 1 und Zugabe 1 heben sich auf (Rauschen 1e-15); ebene Fasen, kein Netzfehler.
+        let ok = |d: f64, net: f64, gross: f64| {
+            blend_volume_plausible(320.0, 320.0 + d, net, gross, BLEND_REL, 0.0)
+        };
         let (net, gross) = (-1e-15, 2.0);
-        for d in [0.0, 1e-12, -3e-13, 0.9, -0.9] {
-            assert!(
-                blend_volume_plausible(320.0, 320.0 + d, net, gross, 0.5, 0.0),
-                "{d}"
-            );
+        for d in [0.0, 1e-12, -3e-13, 0.39, -0.39] {
+            assert!(ok(d, net, gross), "{d}");
         }
-        // Mehr als 0,5 · 2 daneben: abgelehnt (in beide Richtungen).
-        for d in [1.01, -1.01, 5.0] {
-            assert!(
-                !blend_volume_plausible(320.0, 320.0 + d, net, gross, 0.5, 0.0),
-                "{d}"
-            );
+        // Mehr als BLEND_REL_MIXED · 2 = 0,4 daneben: abgelehnt (in beide Richtungen).
+        for d in [0.41, -0.41, 1.01, -1.01, 5.0] {
+            assert!(!ok(d, net, gross), "{d}");
         }
-        // Überwiegt die Zugabe (Netto +0,5 von brutto 1,5), gibt es kein Vorzeichen zu prüfen,
-        // die Abweichung bleibt beschränkt.
-        assert!(blend_volume_plausible(320.0, 319.9, 0.5, 1.5, 0.5, 0.0));
-        assert!(!blend_volume_plausible(320.0, 319.0, 0.5, 1.5, 0.5, 0.0));
-        // Nur eine Sorte Kanten: Vorzeichenprüfung bleibt.
-        assert!(!blend_volume_plausible(320.0, 320.1, -0.2, 0.2, 0.5, 0.0));
+        // Überwiegt die Zugabe (netto +0,5 von brutto 1,5), gibt es kein Vorzeichen zu prüfen;
+        // die Abweichung bleibt auf 0,2 · 1,5 = 0,3 beschränkt.
+        assert!(ok(0.29, 0.5, 1.5) && ok(0.71, 0.5, 1.5));
+        assert!(!ok(-0.1, 0.5, 1.5) && !ok(0.85, 0.5, 1.5));
+        // Nur eine Sorte Kanten: Vorzeichenprüfung und BLEND_REL bleiben.
+        assert!(!ok(0.1, -0.2, 0.2));
+        assert!(ok(-0.29, -0.2, 0.2));
+    }
+
+    #[test]
+    fn flipped_or_missing_pieces_of_a_mixed_blend_are_rejected() {
+        // Review Stufe 2, Runde 2: L-Profil, Rundung r 0,5 an der konkaven Kante (4, 4) und den
+        // konvexen (10, 0), (10, 4), (0, 10), (0, 0), Höhe 5; je Kante p = (1 − π/4) · 0,25 · 5.
+        let p = (1.0 - std::f64::consts::PI / 4.0) * 0.25 * 5.0;
+        let (v, net, gross) = (320.0, -3.0 * p, 5.0 * p);
+        let ok =
+            |measured: f64| blend_volume_plausible(v, v + measured, net, gross, BLEND_REL, 0.0);
+        // Richtiger Körper.
+        assert!(ok(-3.0 * p));
+        // Konkaves Stück falsch herum (trägt ab statt hinzuzufügen): −5p.
+        assert!(!ok(-5.0 * p));
+        // Die konvexe Sorte fehlt ganz (nur die Zugabe): +p.
+        assert!(!ok(p));
+        // Keine Kante gerundet.
+        assert!(!ok(0.0));
+        // Hingenommene Grenze: fehlt nur die kleinere Sorte (das eine konkave Stück, 20 % der
+        // Summe), liegt die Abweichung p genau auf der Schranke 0,2 · 5p.
+        assert!(((-4.0 * p - net).abs() - BLEND_REL_MIXED * gross).abs() < 1e-12);
+        // Mit der alten Schranke (0,5 der Summe) ging der falsch herum gebaute Körper durch.
+        assert!((-5.0 * p - net).abs() <= BLEND_REL * gross);
     }
 }

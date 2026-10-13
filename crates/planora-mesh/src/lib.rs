@@ -14,6 +14,6 @@ pub use mass::{MassProperties, mass_properties};
 pub use mesh::{EdgeLine, FaceRange, Mesh, TessellationOptions};
 pub use tessellate::{MeshError, tessellate, tessellate_with};
 pub use volume::{
-    BLEND_ABS_SLACK, BLEND_REL, BLEND_SLACK_FACTOR, blend_volume_plausible,
+    BLEND_ABS_SLACK, BLEND_REL, BLEND_REL_MIXED, BLEND_SLACK_FACTOR, blend_volume_plausible,
     boolean_volume_plausible, curved_area,
 };
