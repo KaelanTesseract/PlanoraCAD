@@ -34,6 +34,11 @@ const MIN_TRIMMED_FRACTION: f64 = 1e-6;
 /// Stützpunkte je Stück beim Bestimmen des Parameterbereichs neuer Flächen (dichter als
 /// `loop_points`, damit Bögen den Bereich nicht unterschätzen).
 const PATCH_SAMPLES_PER_SEG: usize = 64;
+/// Sinus des größten Winkels zwischen Normale der Abschlussebene und Kante, bei dem eine
+/// Hautfläche noch als senkrecht abgeschlossen gilt (Ebenen aus Skizzen sind auf 1e-12 genau).
+const PERPENDICULAR_SIN: f64 = 1e-9;
+/// Stützstellen, an denen der Endquerschnitt einer Hautfläche in der Abschlussebene liegen muss.
+const CAP_PROBES: usize = 16;
 
 /// Abschluss einer Rundungsfläche an einem Ende.
 #[derive(Clone, Debug)]
@@ -256,6 +261,9 @@ pub fn cap_cut(
     }
     let c = others[0];
     let vp = solid.vertices[v].point;
+    if !g.analytic {
+        return skin_cap(solid, g, at_end, c, v, tol);
+    }
     check_transversal_end(solid, g, c, vp)?;
     let (sa, sb, curve) =
         cut_with(g, at_end, &solid.faces[c].surface, vp, tol).ok_or_else(|| {
@@ -270,6 +278,43 @@ pub fn cap_cut(
         curve,
         cap: Some((c, v)),
     })
+}
+
+/// Abschluss einer Hautfläche (Task 14, P5) an der dritten Fläche `c` der Ecke `v`: nur an einer
+/// Ebene senkrecht zur Kante durch die Ecke, und nur wenn der exakte Endquerschnitt in ihr liegt;
+/// sonst [`OBLIQUE_END`](super::march::OBLIQUE_END).
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn skin_cap(
+    solid: &Solid,
+    g: &EdgeGeom,
+    at_end: bool,
+    c: Id<Face>,
+    v: Id<Vertex>,
+    tol: &Tolerance,
+) -> Result<EndCut, BlendError> {
+    let vp = solid.vertices[v].point;
+    let d = leaving_direction(solid, g.edge, v);
+    let oblique = || BlendError::Unsupported(super::march::OBLIQUE_END.into());
+    let Surface::Plane { frame } = &solid.faces[c].surface else {
+        return Err(oblique());
+    };
+    // NaN (Richtung nicht bestimmbar) gilt als schräg.
+    if !(frame.z.cross(d).length() <= PERPENDICULAR_SIN
+        && frame.z.dot(vp - frame.origin).abs() <= tol.linear)
+    {
+        return Err(oblique());
+    }
+    let mut cut = section_cut(g, at_end);
+    let weld = ON_CURVE_FACTOR * blend_tol(solid, std::slice::from_ref(g), tol).linear;
+    let in_plane = (0..=CAP_PROBES).all(|k| {
+        let p = cut.curve.at(k as f64 / CAP_PROBES as f64);
+        frame.z.dot(p - frame.origin).abs() <= weld
+    });
+    if !in_plane {
+        return Err(oblique());
+    }
+    cut.cap = Some((c, v));
+    Ok(cut)
 }
 
 /// Querschnitt als Abschluss am Anfang bzw. Ende (glatter Übergang, Task 9).
@@ -345,6 +390,9 @@ fn vertex_pair(
     if let Some((cx, cy)) = smooth_pair(solid, geoms, v, x, y, tol)? {
         return Ok(vec![(x.0, x.1, cx), (y.0, y.1, cy)]);
     }
+    if !(geoms[x.0].analytic && geoms[y.0].analytic) {
+        return Err(BlendError::Corner(super::march::VARIABLE_CORNER.into()));
+    }
     super::corner::miter_pair(solid, geoms, v, x, y, tol)
 }
 
@@ -357,6 +405,9 @@ fn corner_many(
     plan: &mut EndPlan,
     tol: &Tolerance,
 ) -> Result<Vec<(usize, bool, EndCut)>, BlendError> {
+    if list.iter().any(|&(i, _)| !geoms[i].analytic) {
+        return Err(BlendError::Corner(super::march::VARIABLE_CORNER.into()));
+    }
     let index = plan.corners.len() + 1;
     let (cuts, piece, volume) = super::corner::corner_three(solid, geoms, v, list, index, tol)?;
     plan.corners.push(piece);

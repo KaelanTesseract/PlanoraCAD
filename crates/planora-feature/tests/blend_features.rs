@@ -525,3 +525,41 @@ fn convex_and_concave_edges_in_one_feature_pass_the_volume_probe() {
         d.delete(f).unwrap();
     }
 }
+
+#[test]
+fn a_variable_fillet_feature_computes_and_passes_the_volume_probe() {
+    // Task 14: Prozent → Anteil; Gesetz linear 1 → 2 längs der Deckelkante (Länge 10), also
+    // abgetragen (1 − π/4) · 10 · 7/3. Status Ok heißt auch: Volumenprobe des Features bestanden.
+    let (mut d, b) = with_box(10.0);
+    let r = edge_ref(&d, b, "Deckel", "Wand 1");
+    let f = d
+        .add_feature(
+            "Rundung 1",
+            fillet(
+                b,
+                vec![r],
+                BlendArt::RundungVariabel {
+                    punkte: vec![(0.0, 1.0), (100.0, 2.0)],
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(status(&d, f), FeatureStatus::Ok);
+    let want = 1000.0 - (1.0 - PI / 4.0) * 10.0 * 7.0 / 3.0;
+    let v = volume(d.visible_bodies()[0].solid);
+    assert!((v - want).abs() < 0.05, "{v} statt {want}");
+    // Ein Radius unter dem Mindestmaß der Hautflächen (2e-3 mm) wird benannt.
+    d.update(f, |k| {
+        if let FeatureKind::Verrunden { art, .. } = k {
+            *art = BlendArt::RundungVariabel {
+                punkte: vec![(0.0, 1.0), (100.0, 1e-3)],
+            };
+        }
+    })
+    .unwrap();
+    match status(&d, f) {
+        FeatureStatus::Error(e) => assert!(e.contains("zu klein"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+    d.check_invariants().unwrap();
+}

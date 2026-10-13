@@ -197,17 +197,6 @@ fn too_large_sizes_are_refused_by_name() {
 }
 
 #[test]
-fn variable_radii_wait_for_stage_three() {
-    // Übergang (P12): Task 14 ersetzt diesen Test.
-    let s = k().make_box(DVec3::splat(10.0)).unwrap();
-    let e1 = edge_between(&s, "Deckel", "Wand 1");
-    assert!(matches!(
-        k().blend(&s, &req(&[e1], BlendKind::VariableFillet { points: vec![(0.0, 1.0), (1.0, 2.0)] })),
-        Err(BlendError::Unsupported(m)) if m.contains("variable")
-    ));
-}
-
-#[test]
 fn seams_tangents_and_curvature_are_named_through_the_api() {
     let c = k().make_cylinder(1.0, 5.0).unwrap();
     let seam = c

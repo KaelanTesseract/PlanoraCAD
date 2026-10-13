@@ -6,20 +6,23 @@ pub mod build;
 pub mod chain;
 pub mod corner;
 pub mod error;
+pub mod march;
 pub mod section;
 pub mod topo;
 
 pub use error::BlendError;
 
-use crate::boolean::{Containment, face_geom, point_in_face};
+use crate::boolean::{Containment, face_geom, pipeline_tol, point_in_face};
+use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
 use crate::topology::{Edge, Face, Solid};
 use crate::validate::validate_with;
 use analytic::{EdgeGeom, SectionKind, VolumeModel, analytic_geom};
 use build::{CAVITY, EndCut, EndPlan, assemble, end_cuts, has_cavity};
-use chain::select_edges;
+use chain::{ChainedEdge, select_edges};
+use march::{SectionLaw, march_geom};
 use planora_math::nurbs::MAX_COORD;
-use planora_math::{PI, Tolerance};
+use planora_math::{PI, RadiusLaw, Tolerance};
 use section::ChamferSpec;
 use topo::{EdgeSides, edge_angle, edge_sides, face_name};
 
@@ -39,8 +42,10 @@ pub const MIN_CHAMFER_ANGLE: f64 = PI / 180.0;
 pub const MIN_BLEND_SIZE_FACTOR: f64 = 100.0;
 /// Stellen je Berührkurve, an denen geprüft wird, ob sie in ihrer Fläche liegt.
 const CONTACT_PROBES: usize = 8;
-/// Übergangsmeldung bis Task 14.
-const VARIABLE_LATER: &str = "Der variable Radius wird noch nicht unterstützt";
+/// Meldung für einen variablen Radius an Freiformflächen oder -kanten (Bahn dort erst mit
+/// Task 15 geprüft).
+pub const VARIABLE_FREEFORM: &str =
+    "Ein variabler Radius an Freiformflächen oder Freiformkanten wird noch nicht unterstützt";
 
 /// Art der Verrundung (Maße in mm, Winkel im Bogenmaß).
 #[derive(Clone, Debug, PartialEq)]
@@ -117,6 +122,19 @@ pub fn min_blend_size(tol: &Tolerance) -> f64 {
 /// Knotentoleranz (sonst gleich [`min_blend_size`]).
 pub fn min_blend_size_for(solid: &Solid, tol: &Tolerance) -> f64 {
     MIN_BLEND_SIZE_FACTOR * build::blend_tol(solid, &[], tol).linear
+}
+
+/// Kleinstes erlaubtes Maß für diese Anfrage: Ein variabler Radius ergibt Hautflächen
+/// (Freiform), der Umbau verschweißt dann mit der Knotentoleranz; deshalb gilt dort das
+/// Mindestmaß für Freiformkörper (mindestens [`min_blend_size_for`]).
+pub fn min_blend_size_request(solid: &Solid, kind: &BlendKind, tol: &Tolerance) -> f64 {
+    let body = min_blend_size_for(solid, tol);
+    match kind {
+        BlendKind::VariableFillet { .. } => {
+            body.max(MIN_BLEND_SIZE_FACTOR * pipeline_tol(tol, true).linear)
+        }
+        _ => body,
+    }
 }
 
 /// Beträge ab hier (und unter [`SHOW_EXP_BELOW`]) zeigt [`show_num`] in Exponentenschreibweise.
@@ -249,9 +267,9 @@ fn check_request_min(r: &BlendRequest, min: f64) -> Result<(), BlendError> {
     }
 }
 
-/// Querschnittsart einer konstanten Verrundung.
-fn section_kind(kind: &BlendKind) -> Result<SectionKind, BlendError> {
-    Ok(match kind {
+/// Querschnittsart einer konstanten Verrundung (`None` beim variablen Radius).
+fn section_kind(kind: &BlendKind) -> Option<SectionKind> {
+    Some(match kind {
         BlendKind::Fillet { radius } => SectionKind::Fillet { radius: *radius },
         BlendKind::ChamferEqual { distance } => SectionKind::Chamfer(ChamferSpec::Distances {
             a: *distance,
@@ -270,9 +288,7 @@ fn section_kind(kind: &BlendKind) -> Result<SectionKind, BlendError> {
                 angle: *angle,
             })
         }
-        BlendKind::VariableFillet { .. } => {
-            return Err(BlendError::Unsupported(VARIABLE_LATER.into()));
-        }
+        BlendKind::VariableFillet { .. } => return None,
     })
 }
 
@@ -300,6 +316,81 @@ fn edge_geom(
     let angle = edge_angle(solid, be.edge, &sides)?;
     analytic_geom(solid, be.edge, &sides, angle.convex, kind, tol)?
         .ok_or_else(|| unsupported_pair(solid, &sides))
+}
+
+/// Geometrie einer Kante der Anfrage: mit Radiengesetz über die Bahn mit Hautfläche (Task 14),
+/// sonst analytisch (unverändert wie in Stufe 1 und 2).
+fn chained_geom(
+    solid: &Solid,
+    ce: &ChainedEdge,
+    kind: &BlendKind,
+    law: Option<&RadiusLaw>,
+    tol: &Tolerance,
+) -> Result<EdgeGeom, BlendError> {
+    let Some(l) = law else {
+        let sk = section_kind(kind).ok_or(BlendError::SpineLost)?;
+        return edge_geom(solid, &ce.edge, sk, tol);
+    };
+    let sides = edge_sides(solid, ce.edge.edge, ce.edge.first_face)?;
+    let angle = edge_angle(solid, ce.edge.edge, &sides)?;
+    let freeform = |f: Id<Face>| {
+        solid
+            .faces
+            .get(f)
+            .is_none_or(|face| matches!(face.surface, Surface::Nurbs(_)))
+    };
+    let curve_freeform = solid
+        .edges
+        .get(ce.edge.edge)
+        .is_none_or(|e| matches!(e.curve, Curve::Nurbs(_)));
+    if freeform(sides.a.face) || freeform(sides.b.face) || curve_freeform {
+        return Err(BlendError::Unsupported(VARIABLE_FREEFORM.into()));
+    }
+    march_geom(
+        solid,
+        ce,
+        &sides,
+        angle.convex,
+        SectionLaw::Variable(l),
+        tol,
+    )
+}
+
+/// Geschlossene Ketten (Ende der letzten Kante = Anfang der ersten) brauchen am Kettenanfang und
+/// -ende denselben Radius, sonst passt die Rundung dort nicht zusammen.
+fn check_closed_chains(
+    solid: &Solid,
+    chained: &[ChainedEdge],
+    law: &RadiusLaw,
+    tol: &Tolerance,
+) -> Result<(), BlendError> {
+    let chains = chained.iter().map(|c| c.chain).max().map_or(0, |c| c + 1);
+    for k in 0..chains {
+        let members: Vec<&ChainedEdge> = chained.iter().filter(|c| c.chain == k).collect();
+        let first = members.iter().min_by(|x, y| x.offset.total_cmp(&y.offset));
+        let last = members.iter().max_by(|x, y| x.offset.total_cmp(&y.offset));
+        let (Some(first), Some(last)) = (first, last) else {
+            continue;
+        };
+        let (Some(e0), Some(e1)) = (
+            solid.edges.get(first.edge.edge),
+            solid.edges.get(last.edge.edge),
+        ) else {
+            return Err(BlendError::EdgeNotFound);
+        };
+        let start = if first.reversed { e0.end } else { e0.start };
+        let end = if last.reversed { e1.start } else { e1.end };
+        if members.len() > 1
+            && start == end
+            && (law.radius(0.0) - law.radius(1.0)).abs() > tol.linear
+        {
+            return Err(BlendError::InvalidParameter(
+                "Auf einer geschlossenen Kette muss der Radius am Anfang und am Ende gleich sein"
+                    .into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Liegt jede Berührkurve in ihrer Fläche (Stichproben im Inneren)? Sonst ist das Maß zu groß
@@ -378,8 +469,13 @@ pub fn blend(
     request: &BlendRequest,
     tol: &Tolerance,
 ) -> Result<Blended, BlendError> {
-    check_request_min(request, min_blend_size_for(solid, tol))?;
-    let kind = section_kind(&request.kind)?;
+    check_request_min(request, min_blend_size_request(solid, &request.kind, tol))?;
+    let law = match &request.kind {
+        BlendKind::VariableFillet { points } => {
+            Some(RadiusLaw::new(points).map_err(|e| BlendError::InvalidParameter(e.to_string()))?)
+        }
+        _ => None,
+    };
     if request
         .edges
         .iter()
@@ -392,9 +488,12 @@ pub fn blend(
     }
     validate_with(solid, tol).map_err(|e| BlendError::InvalidInput(e.to_string()))?;
     let chained = select_edges(solid, request)?;
+    if let Some(l) = &law {
+        check_closed_chains(solid, &chained, l, tol)?;
+    }
     let geoms = chained
         .iter()
-        .map(|ce| edge_geom(solid, &ce.edge, kind, tol))
+        .map(|ce| chained_geom(solid, ce, &request.kind, law.as_ref(), tol))
         .collect::<Result<Vec<_>, _>>()?;
     let plan = end_cuts(solid, &geoms, tol)?;
     check_contacts(solid, &geoms, &plan, tol)?;
