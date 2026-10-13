@@ -148,10 +148,49 @@ fn chamfer_arts_compute_and_switch() {
 fn hostile_blend_parameters_become_error_status() {
     let (mut d, b) = with_box(10.0);
     let r = edge_ref(&d, b, "Deckel", "Wand 1");
+    let points = |n: usize| -> Vec<(f64, f64)> {
+        (0..n)
+            .map(|i| (100.0 * i as f64 / (n - 1) as f64, 1.0))
+            .collect()
+    };
     let arts = [
         BlendArt::Rundung { radius: f64::NAN },
+        BlendArt::Rundung {
+            radius: f64::INFINITY,
+        },
+        BlendArt::Rundung {
+            radius: f64::NEG_INFINITY,
+        },
+        BlendArt::Rundung { radius: 0.0 },
         BlendArt::Rundung { radius: -1.0 },
         BlendArt::Rundung { radius: 1e300 },
+        BlendArt::Rundung { radius: 65.0 },
+        BlendArt::FaseGleich { abstand: 0.0 },
+        BlendArt::FaseGleich { abstand: f64::NAN },
+        BlendArt::FaseZwei {
+            abstand1: 0.0,
+            abstand2: 1.0,
+        },
+        BlendArt::FaseZwei {
+            abstand1: 1.0,
+            abstand2: -2.0,
+        },
+        BlendArt::FaseZwei {
+            abstand1: f64::NAN,
+            abstand2: 1.0,
+        },
+        BlendArt::FaseZwei {
+            abstand1: 1.0,
+            abstand2: f64::INFINITY,
+        },
+        BlendArt::FaseWinkel {
+            abstand: 0.0,
+            winkel: 30.0,
+        },
+        BlendArt::FaseWinkel {
+            abstand: -1.0,
+            winkel: 30.0,
+        },
         BlendArt::FaseWinkel {
             abstand: 1.0,
             winkel: 0.0,
@@ -160,17 +199,52 @@ fn hostile_blend_parameters_become_error_status() {
             abstand: 1.0,
             winkel: 180.0,
         },
+        BlendArt::FaseWinkel {
+            abstand: 1.0,
+            winkel: -30.0,
+        },
+        BlendArt::FaseWinkel {
+            abstand: 1.0,
+            winkel: f64::NAN,
+        },
+        BlendArt::FaseWinkel {
+            abstand: 1.0,
+            winkel: f64::INFINITY,
+        },
         BlendArt::RundungVariabel {
             punkte: vec![(50.0, 1.0), (10.0, 1.0)],
         },
         BlendArt::RundungVariabel { punkte: vec![] },
+        BlendArt::RundungVariabel { punkte: points(65) },
     ];
     for art in arts {
         let f = d
             .add_feature("X", fillet(b, vec![r.clone()], art.clone()))
             .unwrap();
-        assert!(matches!(status(&d, f), FeatureStatus::Error(_)), "{art:?}");
-        // Ein Folgefeature auf dem Ergebnis wird übersprungen oder scheitert, rechnet aber nie.
+        match status(&d, f) {
+            FeatureStatus::Error(e) => {
+                // Deutsche, lesbare Meldung (Kernel- und Feature-Texte nennen Maß, Winkel,
+                // Radius, Abstand, Punkte oder den Bereich) ohne Zahlenmüll.
+                assert!(!e.is_empty(), "{art:?}");
+                assert!(
+                    [
+                        "Maß",
+                        "Winkel",
+                        "Radius",
+                        "Abstand",
+                        "Punkte",
+                        "Positionen",
+                        "außerhalb"
+                    ]
+                    .iter()
+                    .any(|w| e.contains(w)),
+                    "{art:?}: {e}"
+                );
+                assert!(e.len() < 400, "{art:?}: {e}");
+            }
+            s => panic!("{art:?}: {s:?}"),
+        }
+        // Ein Folgefeature auf dem Ergebnis wird übersprungen und rechnet nie.
         let m = d
             .add_feature(
                 "M",
@@ -183,7 +257,11 @@ fn hostile_blend_parameters_become_error_status() {
                 },
             )
             .unwrap();
-        assert!(!matches!(status(&d, m), FeatureStatus::Ok), "{art:?}");
+        assert!(
+            matches!(status(&d, m), FeatureStatus::Skipped(_)),
+            "{art:?}: {:?}",
+            status(&d, m)
+        );
         d.delete(m).unwrap();
         d.delete(f).unwrap();
         d.check_invariants().unwrap();
@@ -195,6 +273,28 @@ fn hostile_blend_parameters_become_error_status() {
         FeatureStatus::Error(e) => assert!(e.contains("keine Kante"), "{e}"),
         s => panic!("{s:?}"),
     }
+    d.delete(f).unwrap();
+    // Doppelte Kanten: dokumentierte Abweichung von Review Focus 3 (dort wird eine Meldung
+    // erwartet). Der Kernel entfernt Duplikate; das Ergebnis ist dasselbe wie mit einer Kante
+    // und gültig (kein falscher Körper, kein Absturz).
+    let single = d
+        .add_feature(
+            "Eine",
+            fillet(b, vec![r.clone()], BlendArt::Rundung { radius: 1.0 }),
+        )
+        .unwrap();
+    assert_eq!(status(&d, single), FeatureStatus::Ok);
+    let want = volume(d.visible_bodies()[0].solid);
+    d.delete(single).unwrap();
+    let dup = d
+        .add_feature(
+            "Doppelt",
+            fillet(b, vec![r.clone(), r], BlendArt::Rundung { radius: 1.0 }),
+        )
+        .unwrap();
+    assert_eq!(status(&d, dup), FeatureStatus::Ok);
+    assert!((volume(d.visible_bodies()[0].solid) - want).abs() < 1e-9);
+    d.check_invariants().unwrap();
 }
 
 #[test]
@@ -221,15 +321,83 @@ fn blend_references_follow_upstream_changes() {
             ),
         )
         .unwrap();
+    let not_found = |d: &Document| match status(d, f2) {
+        FeatureStatus::Error(e) => assert!(e.contains("nicht mehr vorhanden"), "{e}"),
+        s => panic!("{s:?}"),
+    };
+    not_found(&d);
+    // Unterdrücken des Quaders: beide Rundungen werden übersprungen, Dokument bleibt gültig.
+    d.set_suppressed(b.feature, true).unwrap();
+    assert!(matches!(status(&d, f1), FeatureStatus::Skipped(_)));
+    assert!(matches!(status(&d, f2), FeatureStatus::Skipped(_)));
+    d.set_suppressed(b.feature, false).unwrap();
+    assert_eq!(status(&d, f1), FeatureStatus::Ok);
+    // Nach dem Wiedereinschalten rechnet f2 wieder und meldet erneut die verschwundene Kante.
+    not_found(&d);
+    d.check_invariants().unwrap();
+
+    // Eine Rundung, die gültig war, verliert ihre Kante durch eine Änderung davor: f1 rundet die
+    // Kante A, f2 die gegenüberliegende Kante B. Ändert man f1 auf B, ist B verbraucht, f2 meldet
+    // die fehlende Kante und das Folgefeature wird übersprungen.
+    let (mut d, b) = with_box(10.0);
+    let a = edge_ref(&d, b, "Deckel", "Wand 1");
+    let edge_b = edge_ref(&d, b, "Deckel", "Wand 3");
+    let f1 = d
+        .add_feature(
+            "Rundung 1",
+            fillet(b, vec![a.clone()], BlendArt::Rundung { radius: 1.0 }),
+        )
+        .unwrap();
+    let body1 = BodyRef {
+        feature: f1,
+        index: 0,
+    };
+    let f2 = d
+        .add_feature(
+            "Rundung 2",
+            fillet(
+                body1,
+                vec![edge_b.clone()],
+                BlendArt::Rundung { radius: 1.0 },
+            ),
+        )
+        .unwrap();
+    let m = d
+        .add_feature(
+            "M",
+            FeatureKind::Move {
+                body: BodyRef {
+                    feature: f2,
+                    index: 0,
+                },
+                delta: DVec3::X,
+            },
+        )
+        .unwrap();
+    assert_eq!(status(&d, f1), FeatureStatus::Ok);
+    assert_eq!(status(&d, f2), FeatureStatus::Ok);
+    assert_eq!(status(&d, m), FeatureStatus::Ok);
+    d.update(f1, |k| {
+        if let FeatureKind::Verrunden { edges, .. } = k {
+            *edges = vec![edge_b.clone()];
+        }
+    })
+    .unwrap();
+    assert_eq!(status(&d, f1), FeatureStatus::Ok);
     match status(&d, f2) {
         FeatureStatus::Error(e) => assert!(e.contains("nicht mehr vorhanden"), "{e}"),
         s => panic!("{s:?}"),
     }
-    // Unterdrücken des Quaders: beide Rundungen werden übersprungen, Dokument bleibt gültig.
-    d.set_suppressed(b.feature, true).unwrap();
-    assert!(matches!(status(&d, f1), FeatureStatus::Skipped(_)));
-    d.set_suppressed(b.feature, false).unwrap();
-    assert_eq!(status(&d, f1), FeatureStatus::Ok);
+    assert!(matches!(status(&d, m), FeatureStatus::Skipped(_)));
+    // Zurück auf Kante A: beide rechnen wieder.
+    d.update(f1, |k| {
+        if let FeatureKind::Verrunden { edges, .. } = k {
+            *edges = vec![a.clone()];
+        }
+    })
+    .unwrap();
+    assert_eq!(status(&d, f2), FeatureStatus::Ok);
+    assert_eq!(status(&d, m), FeatureStatus::Ok);
     d.check_invariants().unwrap();
 }
 

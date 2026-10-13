@@ -105,18 +105,55 @@ pub fn min_blend_size(tol: &Tolerance) -> f64 {
     MIN_BLEND_SIZE_FACTOR * tol.linear
 }
 
+/// Zahl für Meldungen: höchstens sechs gültige Ziffern ohne Gleitkomma-Rauschen; sehr kleine
+/// und sehr große Werte in Exponentenschreibweise, nicht endliche als Wort.
+fn show_num(x: f64) -> String {
+    if x.is_nan() {
+        return "keine Zahl".into();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 {
+            "unendlich"
+        } else {
+            "minus unendlich"
+        }
+        .into();
+    }
+    let a = x.abs();
+    if a == 0.0 {
+        return "0".into();
+    }
+    let trim = |t: &str| -> String {
+        if t.contains('.') {
+            t.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            t.to_string()
+        }
+    };
+    if !(1e-5..1e9).contains(&a) {
+        let t = format!("{x:.5e}");
+        let (m, e) = t.split_once('e').unwrap_or((&t, "0"));
+        return format!("{}e{e}", trim(m));
+    }
+    let decimals = (5 - a.log10().floor() as i32).clamp(0, 12) as usize;
+    trim(&format!("{x:.decimals$}"))
+}
+
 /// Ein Maß muss endlich sein, mindestens `min_blend_size` und höchstens `MAX_COORD` betragen.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn check_size(x: f64, what: &str, tol: &Tolerance) -> Result<(), BlendError> {
     let min = min_blend_size(tol);
     if !(x.is_finite() && x <= MAX_COORD) {
         return Err(BlendError::InvalidParameter(format!(
-            "{what} muss eine endliche Zahl bis {MAX_COORD:e} mm sein (war {x})"
+            "{what} muss eine endliche Zahl bis {MAX_COORD:e} mm sein (war {})",
+            show_num(x)
         )));
     }
     if !(x >= min) {
         return Err(BlendError::InvalidParameter(format!(
-            "Das Maß ist zu klein: {what} muss mindestens {min} mm betragen (war {x})"
+            "Das Maß ist zu klein: {what} muss mindestens {} mm betragen (war {})",
+            show_num(min),
+            show_num(x)
         )));
     }
     Ok(())
@@ -360,4 +397,30 @@ pub fn blend(
         volume_change,
         edges: edges.iter().map(|e| e.edge).collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numbers_in_messages_are_readable() {
+        let tol = Tolerance::default();
+        assert_eq!(show_num(min_blend_size(&tol)), "0.0001");
+        assert_eq!(show_num(-1.0), "-1");
+        assert_eq!(show_num(2.5), "2.5");
+        assert_eq!(show_num(1e-300), "1e-300");
+        assert_eq!(show_num(1e300), "1e300");
+        assert_eq!(show_num(f64::NAN), "keine Zahl");
+        assert_eq!(show_num(f64::NEG_INFINITY), "minus unendlich");
+        assert_eq!(show_num(0.1 + 0.2), "0.3");
+        assert_eq!(show_num(0.0), "0");
+        let m = check_size(1e-300, "Der Radius", &tol)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            m.contains("mindestens 0.0001 mm") && m.contains("war 1e-300") && m.len() < 150,
+            "{m}"
+        );
+    }
 }
