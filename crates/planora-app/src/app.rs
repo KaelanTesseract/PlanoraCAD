@@ -1,3 +1,4 @@
+use crate::blend_dialog::BlendDialog;
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
 use crate::dock::{Dock, Pane};
@@ -301,6 +302,23 @@ impl PlanoraApp {
             }
         }
         ui.separator();
+        let any = !tab.state.bodies.is_empty();
+        for (label, dialog) in [
+            ("Verrunden …", BlendDialog::fillet()),
+            ("Fase …", BlendDialog::chamfer()),
+        ] {
+            if ui
+                .add_enabled(any, egui::Button::new(label))
+                .on_disabled_hover_text("Dafür wird mindestens ein Körper benötigt.")
+                .clicked()
+            {
+                if tab.state.try_close_sketch().is_ok() {
+                    tab.blend_dialog = Some(dialog);
+                }
+                ui.close();
+            }
+        }
+        ui.separator();
         let rolled_back = tab.state.document.marker() < tab.state.document.features().len();
         if ui
             .add_enabled(rolled_back, egui::Button::new("Zum Ende der Zeitleiste"))
@@ -539,6 +557,7 @@ impl eframe::App for PlanoraApp {
         drop_dialogs_in_sketch_mode(&tab.state, &mut tab.dialog, &mut tab.boolean_dialog);
         if tab.state.sketch_session.is_some() {
             tab.feature_dialog = None;
+            tab.blend_dialog = None;
         }
         sketch_panel::show(&ctx, &mut tab.state);
         if let Some(mut dialog) = tab.dialog.take()
@@ -555,6 +574,11 @@ impl eframe::App for PlanoraApp {
             && dialog.show(&ctx, &mut tab.state)
         {
             tab.boolean_dialog = Some(dialog);
+        }
+        if let Some(mut dialog) = tab.blend_dialog.take()
+            && dialog.show(&ctx, &mut tab.state)
+        {
+            tab.blend_dialog = Some(dialog);
         }
 
         self.ws.refresh_prompts();

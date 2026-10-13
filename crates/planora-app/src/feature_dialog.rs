@@ -383,7 +383,7 @@ impl FeatureDialog {
                 }
                 ui.add_space(4.0);
             }
-            FeatureKind::Move { body, .. } => {
+            FeatureKind::Move { body, .. } | FeatureKind::Verrunden { body, .. } => {
                 ui.label(format!("Körper: {}", state.body_ref_name(*body)));
                 ui.add_space(4.0);
             }

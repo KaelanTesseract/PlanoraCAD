@@ -1,7 +1,7 @@
 use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
 use planora_feature::{
-    BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
+    BlendArt, BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
     SketchFeature, SketchPlane,
 };
 use planora_kernel::boolean::BoolOp;
@@ -447,6 +447,49 @@ impl AppState {
         };
         // Name nach der Art („Boolesche Operation N“); die Operation zeigen Baum und
         // Eigenschaften.
+        let id = self.add_checked(kind.label(), kind)?;
+        self.hover = None;
+        self.selection = None;
+        self.refresh();
+        self.selected_body = self.body_index(BodyRef {
+            feature: id,
+            index: 0,
+        });
+        Ok(id)
+    }
+
+    /// Legt eine Rundung oder Fase an den Kanten `edges` des Körpers `body` an. Das Ergebnis
+    /// ersetzt den Körper (Name bleibt) und wird gewählt. Schlägt sie fehl, wird das Feature
+    /// wieder entfernt: Dokument und Körper bleiben unverändert, die Meldung steht in `message`.
+    pub fn add_blend(
+        &mut self,
+        body: usize,
+        edges: &[Id<Edge>],
+        art: BlendArt,
+        tangentenkette: bool,
+    ) -> Result<FeatureId, String> {
+        let Some(b) = self.bodies.get(body) else {
+            return self.fail("Körper nicht gefunden".into());
+        };
+        if edges.is_empty() {
+            return self.fail("Bitte zuerst eine Kante anklicken".into());
+        }
+        let tol = self.kernel.tolerance;
+        let mut refs = Vec::with_capacity(edges.len());
+        for &e in edges {
+            match planora_feature::EdgeRef::from_edge(&b.solid, e, &tol) {
+                Ok(r) => refs.push(r),
+                Err(err) => return self.fail(err.to_string()),
+            }
+        }
+        let source = b.source;
+        self.try_close_sketch()?;
+        let kind = FeatureKind::Verrunden {
+            body: source,
+            edges: refs,
+            art,
+            tangentenkette,
+        };
         let id = self.add_checked(kind.label(), kind)?;
         self.hover = None;
         self.selection = None;

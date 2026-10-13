@@ -1,6 +1,7 @@
 //! Mehrere offene Dokumente (Tabs) mit Speichern, Öffnen, Versionen und Autosicherung. Die
 //! Logik kennt keine Oberfläche; die Fenster dazu stehen in `tabs.rs`, `prompts.rs` und den Panels.
 
+use crate::blend_dialog::BlendDialog;
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
 use crate::feature_dialog::FeatureDialog;
@@ -25,6 +26,7 @@ pub struct DocTab {
     pub dialog: Option<CreateDialog>,
     pub boolean_dialog: Option<BooleanDialog>,
     pub feature_dialog: Option<FeatureDialog>,
+    pub blend_dialog: Option<BlendDialog>,
     /// Anzeigename ohne `.pcad`, bzw. „Unbenannt n“.
     pub name: String,
     pub path: Option<NodePath>,
@@ -54,6 +56,7 @@ impl DocTab {
             dialog: None,
             boolean_dialog: None,
             feature_dialog: None,
+            blend_dialog: None,
             name,
             path: None,
             store: None,
