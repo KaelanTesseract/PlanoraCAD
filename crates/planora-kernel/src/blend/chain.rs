@@ -148,9 +148,18 @@ pub fn tangent_chain(solid: &Solid, edge: Id<Edge>) -> Vec<Id<Edge>> {
     walk_chain(solid, edge, usize::MAX)
 }
 
-fn edge_length(solid: &Solid, edge: Id<Edge>) -> f64 {
+/// Länge einer Kante für die Kettenanteile eines variablen Radius. Ketten nur aus Geraden und
+/// Kreisen: wie bisher `Seg::length` (48 Sehnen je Kreis, Task 14; die Bahn staucht ihre
+/// Bogenlänge darauf). Ketten mit anderen Kurven (Freiform, Ellipsen): die Bogenlänge der Bahn
+/// (Gauß-Legendre, `march::arc_length`), sonst stünde der Radius an der falschen Stelle (die
+/// Streckenzüge angepasster Kurven sind bis ~1e-3 relativ zu kurz; Review Runde 3).
+fn edge_length(solid: &Solid, edge: Id<Edge>, exact: bool) -> f64 {
     let e = &solid.edges[edge];
-    Seg::new(e.curve.clone(), e.t0, e.t1).length()
+    if exact {
+        super::march::arc_length(e)
+    } else {
+        Seg::new(e.curve.clone(), e.t0, e.t1).length()
+    }
 }
 
 fn faces_of(solid: &Solid, edge: Id<Edge>) -> Vec<Id<Face>> {
@@ -266,7 +275,16 @@ fn group(solid: &Solid, picked: &[BlendEdge]) -> Result<Vec<ChainedEdge>, BlendE
             v = other_end(solid, prev, v);
             cur = prev;
         }
-        let lengths: Vec<f64> = run.iter().map(|(e, _)| edge_length(solid, *e)).collect();
+        let exact = run.iter().any(|(e, _)| {
+            !matches!(
+                solid.edges[*e].curve,
+                crate::geometry::Curve::Line { .. } | crate::geometry::Curve::Circle { .. }
+            )
+        });
+        let lengths: Vec<f64> = run
+            .iter()
+            .map(|(e, _)| edge_length(solid, *e, exact))
+            .collect();
         let total: f64 = lengths.iter().sum();
         let mut offset = 0.0;
         for (&(e, reversed), &length) in run.iter().zip(&lengths) {

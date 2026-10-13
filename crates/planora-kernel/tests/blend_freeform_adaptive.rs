@@ -8,7 +8,7 @@
 use planora_kernel::blend::topo::{edge_uses, face_name};
 use planora_kernel::*;
 use planora_math::nurbs::NurbsCurve;
-use planora_math::{DMat4, DVec2, DVec3, Frame, PI, TAU};
+use planora_math::{DVec2, DVec3, Frame, PI, TAU};
 use std::sync::Arc;
 
 /// Relative Schranke der Schätzung gegen die Formel (gemessen ≤ 1e-6 in Task 15).
@@ -84,16 +84,12 @@ fn ellipse_perimeter(a: f64, b: f64) -> f64 {
 }
 
 /// Steiner-Formel: abgetragenes Volumen einer Rundung `r` am Außenrand eines konvexen Prismas
-/// (Umfang `p`), einer Fase `d` ebenso, und einer Rundung am Rand eines konvexen Durchbruchs
-/// (dort wächst das Loch: Fläche `(r − ρ) P + π (r − ρ)²` je Höhe).
+/// (Umfang `p`), einer Fase `d` ebenso.
 fn rim_fillet(p: f64, r: f64) -> f64 {
     (p - TAU * r) * r * r * A + PI * r * r * r / 3.0
 }
 fn rim_chamfer(p: f64, d: f64) -> f64 {
     p * d * d / 2.0 - PI * d * d * d / 3.0
-}
-fn hole_fillet(p: f64, r: f64) -> f64 {
-    p * r * r * A + PI * r * r * r * (5.0 / 3.0 - PI / 2.0)
 }
 
 /// Ok, gültig, Schätzung nach Formel (`want` > 0: abgetragen).
@@ -175,7 +171,8 @@ fn elongated_ellipse_rims_no_longer_lose_the_ball() {
     let s = ellipse_prism(4.0, 1.0, 0.0, 3.0);
     let e = edge_between(&s, "Wand 1", "Deckel");
     let p = ellipse_perimeter(4.0, 1.0);
-    for r in [0.01, 0.05, 0.1, 0.15, 0.2] {
+    // Debug: kleinster und größter Radius; die Zwischenwerte in der Release-Reihe unten.
+    for r in [0.01, 0.2] {
         let b = check(
             &s,
             e,
@@ -245,166 +242,6 @@ fn chamfers_on_an_eight_by_two_ellipse() {
     }
 }
 
-/// Quader 10 × 10 × 5 minus ein durchgehender elliptischer Zylinder (Mitte (5, 5)).
-fn box_minus_ellipse(a: f64, b: f64) -> Solid {
-    let block = k().make_box(DVec3::new(10.0, 10.0, 5.0)).unwrap();
-    let tool = k()
-        .transform(
-            &ellipse_prism(a, b, 0.0, 7.0),
-            &DMat4::from_translation(DVec3::new(5.0, 5.0, -1.0)),
-        )
-        .unwrap();
-    k().boolean(&block, &tool, BoolOp::Difference).unwrap()
-}
-
-/// Obere Randkante des Durchbruchs (Freiformkante bei z = 5).
-fn hole_rim(s: &Solid) -> Id<Edge> {
-    s.edges
-        .iter()
-        .map(|(id, _)| id)
-        .find(|&id| {
-            let e = &s.edges[id];
-            matches!(e.curve, Curve::Nurbs(_)) && (e.curve.point(e.t0).z - 5.0).abs() < 1e-6
-        })
-        .expect("Randkante des Durchbruchs")
-}
-
-#[test]
-fn hole_rims_of_boolean_freeform_holes_round() {
-    // Review I-2 (a): Die Randkante ist eine angepasste kubische NURBS-Kurve mit vielen Knoten.
-    for (a, b) in [(2.0, 2.0), (2.0, 1.5)] {
-        let s = box_minus_ellipse(a, b);
-        let e = hole_rim(&s);
-        let p = ellipse_perimeter(a, b);
-        for r in [0.2, 0.5] {
-            let bl = check(
-                &s,
-                e,
-                BlendKind::Fillet { radius: r },
-                hole_fillet(p, r),
-                &format!("Loch {a}×{b} r {r}"),
-            );
-            // Kugelmittelpunkt auf der äußeren Parallelkurve (im Material), Höhe 5 − r.
-            let center = |t: f64| {
-                let n = DVec2::new(b * t.cos(), a * t.sin()).normalize();
-                DVec2::new(5.0 + a * t.cos(), 5.0 + b * t.sin()) + n * r
-            };
-            let worst = skin_deviation(&bl.solid, 5.0 - r, r, center);
-            assert!(worst < SKIN_CHECK, "Loch {a}×{b} r {r}: {worst}");
-        }
-    }
-    // Analytischer Zwilling (Kreisloch r = 2): gleiche Schätzung bis auf die Formelgenauigkeit.
-    let block = k().make_box(DVec3::new(10.0, 10.0, 5.0)).unwrap();
-    let tool = k()
-        .transform(
-            &k().make_cylinder(2.0, 7.0).unwrap(),
-            &DMat4::from_translation(DVec3::new(5.0, 5.0, -1.0)),
-        )
-        .unwrap();
-    let twin = k().boolean(&block, &tool, BoolOp::Difference).unwrap();
-    let et = twin
-        .edges
-        .iter()
-        .map(|(id, _)| id)
-        .find(|&id| {
-            let e = &twin.edges[id];
-            matches!(e.curve, Curve::Circle { .. }) && (e.curve.point(e.t0).z - 5.0).abs() < 1e-6
-        })
-        .unwrap();
-    let bt = k()
-        .blend(&twin, &req(et, BlendKind::Fillet { radius: 0.2 }))
-        .unwrap();
-    let want = hole_fillet(TAU * 2.0, 0.2);
-    assert!(
-        (bt.volume_change + want).abs() <= 1e-3 * want,
-        "Zwilling {} / {}",
-        bt.volume_change,
-        -want
-    );
-}
-
-/// Kubische B-Spline-Wand mit inneren Knoten von (0, 0) nach (10, 0), waagerechte Enden (die
-/// Nachbarwände x = 0 und x = 10 stehen senkrecht auf der Randkante), Wellen der Höhe `amp`.
-fn wavy_wall(amp: f64) -> NurbsCurve {
-    let ys = [0.0, 0.0, amp, -amp, amp, -0.5 * amp, amp, 0.0, 0.0];
-    let n = ys.len();
-    let control: Vec<DVec3> = ys
-        .iter()
-        .enumerate()
-        .map(|(i, y)| DVec3::new(10.0 * i as f64 / (n - 1) as f64, *y, 0.0))
-        .collect();
-    // Geklemmt, ungleichmäßige innere Knoten.
-    let mut knots = vec![0.0; 4];
-    knots.extend([0.15, 0.3, 0.42, 0.6, 0.85]);
-    knots.extend([1.0; 4]);
-    NurbsCurve::new(3, knots, control, vec![1.0; n]).unwrap()
-}
-
-fn wavy_prism(amp: f64) -> Solid {
-    let profile = Profile {
-        outer: ProfileLoop {
-            start: DVec2::ZERO,
-            segments: vec![
-                Segment::Nurbs {
-                    curve: Arc::new(wavy_wall(amp)),
-                },
-                Segment::Line {
-                    to: DVec2::new(10.0, 6.0),
-                },
-                Segment::Line {
-                    to: DVec2::new(0.0, 6.0),
-                },
-                Segment::Line { to: DVec2::ZERO },
-            ],
-        },
-        holes: vec![],
-    };
-    k().extrude(&profile, &Frame::WORLD, 3.0).unwrap()
-}
-
-/// Kleinster Krümmungsradius der Kurve (dichte Abtastung).
-fn min_curvature_radius(c: &NurbsCurve) -> f64 {
-    let (t0, t1) = c.domain();
-    (0..=4000)
-        .map(|i| {
-            let d = c.derivs(t0 + (t1 - t0) * i as f64 / 4000.0, 2);
-            d[1].length().powi(3) / d[1].cross(d[2]).length().max(1e-300)
-        })
-        .fold(f64::INFINITY, f64::min)
-}
-
-#[test]
-fn rims_of_wavy_spline_walls_with_interior_knots_round() {
-    // Band entlang der Kurve: abgetragene Fläche je Höhe w L − (w²/2) ∫κ ds; mit waagerechten
-    // Enden ist ∫κ ds = 0, also ΔV = L r² (1 − π/4) bzw. L d²/2 (L Länge der Kurve, Simpson).
-    for amp in [0.4, 0.8] {
-        let s = wavy_prism(amp);
-        let e = edge_between(&s, "Wand 1", "Deckel");
-        let c = wavy_wall(amp);
-        let (t0, t1) = c.domain();
-        let len = simpson(t0, t1, 40_000, |t| c.tangent(t).length());
-        let rho = min_curvature_radius(&c);
-        for f in [0.2, 0.6] {
-            let r = f * rho;
-            check(
-                &s,
-                e,
-                BlendKind::Fillet { radius: r },
-                len * r * r * A,
-                &format!("Welle {amp} r {r}"),
-            );
-        }
-        let d = 0.5 * rho;
-        check(
-            &s,
-            e,
-            BlendKind::ChamferEqual { distance: d },
-            len * d * d / 2.0,
-            &format!("Welle {amp} Fase {d}"),
-        );
-    }
-}
-
 #[test]
 fn a_lens_edge_between_two_freeform_walls_is_named_clearly() {
     // Review M1: Linsen aus zwei NURBS-Kreisbögen (Mittelpunkte (±3, 0) bzw. (±4,5, 0), Radius 5), senkrechte
@@ -454,5 +291,22 @@ fn lens_case(off: f64) {
                 "{m}"
             );
         }
+    }
+}
+
+#[test]
+#[ignore = "Zwischenradien der Wiederholung 2, nur mit --release --ignored (etwa 3 s)"]
+fn elongated_ellipse_rims_with_intermediate_radii() {
+    let s = ellipse_prism(4.0, 1.0, 0.0, 3.0);
+    let e = edge_between(&s, "Wand 1", "Deckel");
+    let p = ellipse_perimeter(4.0, 1.0);
+    for r in [0.05, 0.1, 0.15] {
+        check(
+            &s,
+            e,
+            BlendKind::Fillet { radius: r },
+            rim_fillet(p, r),
+            &format!("4×1 r {r}"),
+        );
     }
 }

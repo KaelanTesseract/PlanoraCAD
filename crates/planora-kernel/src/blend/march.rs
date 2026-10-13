@@ -125,6 +125,17 @@ const CONTACT_TOL: f64 = 0.5 * NURBS_EDGE_TOL;
 const CHECK_U: [f64; 3] = [0.25, 0.5, 0.75];
 /// Querstellen der Nachprüfung.
 const CHECK_V: [f64; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
+/// Prüfstellen längs bei Freiform-Bahnen (dichter; Review Runde 3: zwischen ¼, ½, ¾ lagen
+/// Fasen bis 8,8e-6 neben dem exakten Querschnitt). Enthält ½ (Mitte für die Volumenschätzung).
+const CHECK_U_FREE: [f64; 5] = [1.0 / 6.0, 1.0 / 3.0, 0.5, 2.0 / 3.0, 5.0 / 6.0];
+/// Querstellen der Nachprüfung bei Freiform-Bahnen.
+const CHECK_V_FREE: [f64; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
+/// Newton-Schritte, mit denen der Kantenpunkt einer Freiform-Fase auf die wahre Schnittkurve
+/// beider Flächen (in der Querschnittsebene) gelegt wird.
+const CORNER_STEPS: usize = 8;
+/// Größter Abstand dieses Punkts vom Kantenpunkt (in Vielfachen von `NURBS_EDGE_TOL`); weiter weg
+/// gilt der Kantenpunkt selbst (die Kantenkurve liegt bis `NURBS_EDGE_TOL` auf den Flächen).
+const CORNER_REACH: f64 = 10.0;
 /// Kleinste Geschwindigkeit der Berührpunkte und der Bogenmitte längs (bezogen auf die
 /// Bogenlänge der Kante). Darunter steht der Querschnitt fast still (`∂S/∂u ≈ 0`, entartete
 /// Fläche, etwa wenn sich die Querschnittsebenen im Bereich der Rundung schneiden).
@@ -269,6 +280,11 @@ impl<'a> ArcTable<'a> {
     }
 }
 
+/// Bogenlänge einer Kante wie in der Bahn (Gauß-Legendre über `LENGTH_SAMPLES` Abschnitte).
+pub(crate) fn arc_length(e: &Edge) -> f64 {
+    ArcTable::new(e).length()
+}
+
 /// Exakter Querschnitt an einer Station.
 #[derive(Clone, Copy, Debug)]
 struct Station {
@@ -375,6 +391,36 @@ fn true_tangent(na: DVec3, nb: DVec3, curve: DVec3) -> DVec3 {
     } else {
         curve
     }
+}
+
+/// Wahre Ecke in der Querschnittsebene durch `o` (Normale `t`): Punkt auf beiden Flächen, per
+/// Newton auf `(outside_A, outside_B, (p − o)·t) = 0`. Gelingt das nicht oder liegt er weiter als
+/// `CORNER_REACH · NURBS_EDGE_TOL` von `o`, bleibt `o`.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn true_corner(a: Side, b: Side, o: DVec3, t: DVec3) -> DVec3 {
+    let eps = super::section::SECTION_RESIDUAL_REL * (1.0 + o.abs().max_element());
+    let mut p = o;
+    for _ in 0..CORNER_STEPS {
+        let (fa, fb) = (a.outside(p), b.outside(p));
+        if !(fa.is_finite() && fb.is_finite()) {
+            return o;
+        }
+        if fa.abs() <= eps && fb.abs() <= eps {
+            return if p.distance(o) <= CORNER_REACH * NURBS_EDGE_TOL {
+                p
+            } else {
+                o
+            };
+        }
+        let (na, nb) = (a.normal_at(p), b.normal_at(p));
+        let m = planora_math::DMat3::from_cols(na, nb, t).transpose();
+        if !(m.determinant().abs() > 0.0) {
+            return o;
+        }
+        let g = (p - o).dot(t);
+        p -= m.inverse() * DVec3::new(fa, fb, g);
+    }
+    o
 }
 
 fn is_freeform(s: &Surface) -> bool {
@@ -658,6 +704,8 @@ pub fn march_geom(
             },
             SectionLaw::Chamfer(spec) => SectionKind::Chamfer(spec),
         };
+        // Ecke des Querschnitts (Kantenpunkt; bei Freiform-Fasen die wahre Ecke).
+        let mut corner_at = o;
         let sec = match kind {
             SectionKind::Fillet { radius } => {
                 check_curvature(a, o, convex, radius, &name_a)?;
@@ -736,12 +784,17 @@ pub fn march_geom(
                 } else {
                     (wa, wb)
                 };
-                chamfer_section(a, b, o, tangent, convex, wa, wb, spec)?
+                // Freiform: Die Fasenmaße gelten ab der wahren Ecke (Schnitt beider Flächen in
+                // der Querschnittsebene), nicht ab dem Punkt der angepassten Kantenkurve.
+                if freeform {
+                    corner_at = true_corner(a, b, o, tangent);
+                }
+                chamfer_section(a, b, corner_at, tangent, convex, wa, wb, spec)?
             }
         };
         let st = Station {
             x,
-            o,
+            o: corner_at,
             tangent,
             sec,
             kind,
@@ -854,11 +907,16 @@ pub fn march_geom(
                       from: &Station|
      -> Result<Option<Station>, BlendError> {
         let mut mid = None;
-        for f in CHECK_U {
+        let (check_u, check_v): (&[f64], &[f64]) = if freeform {
+            (&CHECK_U_FREE, &CHECK_V_FREE)
+        } else {
+            (&CHECK_U, &CHECK_V)
+        };
+        for &f in check_u {
             let xu = w[0].x + (w[1].x - w[0].x) * f;
             let exact = section_at(xu, Some(from))?;
             let want = to_skin(&exact)?;
-            let off = CHECK_V
+            let off = check_v
                 .iter()
                 .any(|&v| !(surface.point(xu, v).distance(want.point(v)) <= SKIN_TOL));
             let loose = !(a.outside(surface.point(xu, 0.0)).abs() <= CONTACT_TOL
