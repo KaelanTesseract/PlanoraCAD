@@ -4,8 +4,8 @@
 //! ein Kugelstück um den Punkt im Abstand r von allen drei Ebenen (auch bei schiefen Ecken,
 //! Task 17; die Ebenen dürfen nur nicht fast parallel sein, `MIN_CORNER_DET`).
 //!
-//! Grenzen (bewusst): keine Ecken an Hautflächen (Freiformkanten, variabler Radius), keine
-//! Ecken aus drei Fasen, keine konkaven Kugelecken, keine Kugelecken an gekrümmten Flächen.
+//! Grenzen (bewusst): keine Ecken an Hautflächen (Freiformkanten, variabler Radius; abgelehnt
+//! schon in `build.rs` mit `march::VARIABLE_CORNER`), keine Ecken aus drei Fasen, keine konkaven Kugelecken, keine Kugelecken an gekrümmten Flächen.
 //!
 //! Gehrung nur, wenn sie die Schnittmenge der einzeln gerundeten Körper ist (P6): Die dritte,
 //! ungerundete Kante an der Ecke muss dieselbe Art (konvex/konkav) haben wie die beiden
@@ -26,13 +26,8 @@ use crate::boolean::{Piece, Seg};
 use crate::geometry::Surface;
 use crate::ids::Id;
 use crate::topology::{Face, FaceTag, Solid, Vertex};
-use planora_math::{DVec3, Frame, PI, Tolerance};
+use planora_math::{DVec3, Frame, Tolerance};
 
-/// Meldung für Ecken an Hautflächen (Task 17: bewusst nicht gelockert). Der Schnitt einer
-/// Hautfläche mit der Gehrungsebene bzw. Kugel wäre ein numerischer Schnitt ohne sichere
-/// Gegenprobe.
-const SKIN_CORNER: &str =
-    "Ecken an Freiformflächen oder mit variablem Radius werden nicht unterstützt";
 /// Kleinster Betrag der Determinante der drei Normalen: darunter schneiden sich die drei
 /// Ebenen nicht sicher in einem Punkt.
 const MIN_CORNER_DET: f64 = 1e-6;
@@ -63,20 +58,6 @@ fn names(solid: &Solid, faces: &[Id<Face>]) -> String {
     }
 }
 
-/// Ablehnung einer Ecke an Hautflächen; nennt die Flächen der betroffenen Kanten.
-fn skin_corner(solid: &Solid, geoms: &[&EdgeGeom]) -> BlendError {
-    let mut faces: Vec<Id<Face>> = Vec::new();
-    for f in geoms.iter().flat_map(|g| [g.sides.a.face, g.sides.b.face]) {
-        if !faces.contains(&f) {
-            faces.push(f);
-        }
-    }
-    BlendError::Corner(format!(
-        "{SKIN_CORNER} (Kanten an den Flächen {})",
-        names(solid, &faces)
-    ))
-}
-
 /// Liegt die Kurve an allen Stützstellen höchstens `weld` neben der Fläche? NaN gilt als „nicht“.
 fn lies_on(seg: &Seg, surface: &Surface, weld: f64) -> bool {
     (0..=CORNER_PROBES).all(|k| {
@@ -95,9 +76,6 @@ pub fn miter_pair(
     tol: &Tolerance,
 ) -> Result<CornerCuts, BlendError> {
     let (gi, gj) = (&geoms[i], &geoms[j]);
-    if !gi.analytic || !gj.analytic {
-        return Err(skin_corner(solid, &[gi, gj]));
-    }
     let faces = three_faces(solid, v)?;
     if gi.convex != gj.convex {
         return Err(at_corner(
@@ -237,12 +215,9 @@ pub fn corner_three(
     let mut pairs: Vec<[Id<Face>; 2]> = Vec::with_capacity(3);
     for &(i, _) in list {
         let g = &geoms[i];
-        if !g.analytic {
-            return Err(skin_corner(solid, &[g]));
-        }
         let r = match g.surface {
-            Surface::Cylinder { radius, .. } => radius,
-            Surface::Plane { .. } => {
+            Surface::Cylinder { radius, .. } if g.analytic => radius,
+            Surface::Plane { .. } if g.analytic => {
                 return Err(at_corner(
                     solid,
                     &faces,
@@ -378,10 +353,46 @@ pub fn corner_three(
             role: format!("Ecke {index}"),
         }),
     };
-    // Spat der drei Einheitsnormalen: bei rechtwinkligen Ecken 1. Das Gebiet zwischen Ecke und
-    // Kugel ist ein schiefer Würfel mit Volumen r³/|det| minus das Kugelstück; das Kugelstück
-    // ist hier mit dem Achtel angenähert (Schätzung für die Volumenprobe, P2).
-    let det = n[0].dot(n[1].cross(n[2])).abs();
-    let volume = -(1.0 / det - PI / 6.0) * r * r * r;
+    let volume = -corner_cell_volume(solid, geoms, v, list, &faces, n, center, r);
     Ok((cuts, piece, volume))
+}
+
+/// Entferntes Volumen im Eckstück, passend zu den Kantenschätzungen (`edge_volume`: Querschnitt
+/// mal Weg zwischen den Abschlussebenen): Die Zelle zwischen den drei Flächen und den drei
+/// Abschlussebenen durch den Kugelmittelpunkt `c` ist ein Sechsflach mit den Ecken `v`, den drei
+/// Fußpunkten `v + αₑ·eₑ` auf den Kanten (`αₑ = (c − v)·eₑ`, vorzeichenbehaftet, `eₑ` von der
+/// Ecke weg), den drei Berührpunkten `c + r·nᵢ` und `c`. Von `c` aus zerfällt es in drei
+/// Pyramiden der Höhe r über den Vierecken in den Flächen; jedes Viereck besteht aus zwei
+/// rechtwinkligen Dreiecken `½·αₑ·r·cot(θₑ/2)` (Abstand des Berührpunkts von der Kante,
+/// θₑ = Innenwinkel der Kante). Jede Kante liegt in zwei Flächen:
+/// `V = (r²/3)·Σₑ αₑ·cot(θₑ/2)`. Davon bleibt das Kugelstück mit dem Raumwinkel Ω des
+/// Kugeldreiecks der Normalen (Van Oosterom–Strackee) übrig: `V − Ω·r³/3`. Bei rechtwinkligen
+/// Ecken (α = r, cot 45° = 1, Ω = π/2) ist das `r³·(1 − π/6)`.
+#[allow(clippy::too_many_arguments)]
+fn corner_cell_volume(
+    solid: &Solid,
+    geoms: &[EdgeGeom],
+    v: Id<Vertex>,
+    list: &[(usize, bool)],
+    faces: &[Id<Face>],
+    n: [DVec3; 3],
+    center: DVec3,
+    r: f64,
+) -> f64 {
+    let vp = solid.vertices[v].point;
+    let normal = |f: Id<Face>| faces.iter().position(|x| *x == f).map(|k| n[k]);
+    let mut cell = 0.0;
+    for &(i, _) in list {
+        let g = &geoms[i];
+        let (Some(na), Some(nb)) = (normal(g.sides.a.face), normal(g.sides.b.face)) else {
+            continue;
+        };
+        // cot(θ/2) = tan(φ/2) mit φ = Winkel zwischen den Außennormalen = π − θ.
+        let cot_half = na.cross(nb).length() / (1.0 + na.dot(nb));
+        let alpha = (center - vp).dot(leaving_direction(solid, g.edge, v));
+        cell += alpha * cot_half;
+    }
+    let det = n[0].dot(n[1].cross(n[2])).abs();
+    let omega = 2.0 * det.atan2(1.0 + n[0].dot(n[1]) + n[1].dot(n[2]) + n[2].dot(n[0]));
+    r * r / 3.0 * cell - omega * r * r * r / 3.0
 }

@@ -7,6 +7,10 @@ use blend_common::*;
 use planora_kernel::*;
 use planora_math::{DMat3, DMat4, DVec2, DVec3, PI};
 
+/// Abstand der Kernel-Schätzung `volume_change` von Steiner bei voll gerundeten Polyedern
+/// (Querschnittsfläche im Kernel als Vieleck genähert; gemessen ≤ 3e-4).
+const ESTIMATE_REL: f64 = 1e-3;
+
 #[test]
 fn a_fully_rounded_triangular_prism_follows_steiner() {
     let (side, h, r) = (10.0, 6.0, 0.8);
@@ -38,6 +42,12 @@ fn a_fully_rounded_triangular_prism_follows_steiner() {
         "Steiner-Prisma",
     );
     assert!(plausible(&s, &b, 0.05));
+    assert_rel(
+        b.volume_change,
+        rounded - original,
+        ESTIMATE_REL,
+        "Schätzung Steiner-Prisma",
+    );
 }
 
 /// Konvexes Polyeder als Schnitt der Halbräume `n · x ≤ d` (`n` Einheitsvektor).
@@ -167,6 +177,10 @@ fn round_all_and_check(s: &Solid, planes: &Planes, r: f64, what: &str) {
         what,
     );
     assert!(plausible(s, &b, 0.05), "{what}: Volumenprobe");
+    // Voll gerundet laufen alle Kanten zwischen Kugelecken: Kantenprismen plus Eckzellen sind
+    // dann Steiner bis auf die Vieleck-Näherung der Querschnittsfläche im Kernel
+    // (`polygon_area_centroid`, auch am Würfel ~3e-4 relativ).
+    assert_rel(b.volume_change, rounded - original, ESTIMATE_REL, what);
 }
 
 #[test]
@@ -262,6 +276,12 @@ fn seeded_slanted_prisms(seed: u64, cases: usize) -> (usize, usize) {
             "Fall {tried} (seed {seed}): ΔV {got} statt {want}, r {r}, Dreieck {tri:?}, h {h}, n {n}"
         );
         assert!(plausible(&s, &b, 0.05), "Fall {tried}: Volumenprobe");
+        assert_rel(
+            b.volume_change,
+            want,
+            ESTIMATE_REL,
+            "Schätzung gegen Steiner",
+        );
         ok += 1;
     }
     (ok, refused)
@@ -281,4 +301,45 @@ fn seeded_slanted_prisms_follow_steiner_long() {
     let (ok, refused) = seeded_slanted_prisms(1717, 300);
     eprintln!("schräge Prismen: {ok} Ok, {refused} abgelehnt");
     assert!(ok >= 250, "zu wenige Ok: {ok}");
+}
+
+/// Fünfeck-Prisma (Höhe 5) mit stumpfer Spitze (Innenwinkel `deg`) oben; nur die drei Kanten
+/// an der oberen Spitze gerundet (Kugelecke an schiefer Ecke, Korrekturrunde 1 von Task 17).
+/// Vorher schätzte die Spat-Formel das Eckvolumen um ein Vielfaches zu groß (P2 lehnte korrekte
+/// Körper ab, etwa 157°/r = 3: gemessen −19,9 statt geschätzt −73,6).
+fn pentagon_tip(deg: f64, r: f64) {
+    let hgt = 10.0 * ((180.0 - deg) / 2.0).to_radians().tan();
+    let pts = [
+        DVec2::new(0.0, 0.0),
+        DVec2::new(20.0, 0.0),
+        DVec2::new(20.0, 10.0),
+        DVec2::new(10.0, 10.0 + hgt),
+        DVec2::new(0.0, 10.0),
+    ];
+    let s = extrude_polygon(&pts, 5.0);
+    let tip = DVec3::new(10.0, 10.0 + hgt, 5.0);
+    let (top, _) = s
+        .vertices
+        .iter()
+        .find(|(_, v)| v.point.distance(tip) < 1e-9)
+        .unwrap();
+    let edges: Vec<Id<Edge>> = s
+        .edges
+        .iter()
+        .filter(|(_, e)| e.start == top || e.end == top)
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(edges.len(), 3);
+    let b = blend_edges(&s, &edges, BlendKind::Fillet { radius: r }, false).unwrap();
+    let got = delta_volume(&s, &b.solid, 2e-4);
+    assert!(plausible(&s, &b, 0.05), "{deg}°, r {r}: Volumenprobe");
+    // Rest: Netzfehler und die Schätzung an den schrägen fernen Kantenenden (Task 9, M1).
+    assert_rel(b.volume_change, got, 0.05, "Schätzung Fünfeckspitze");
+}
+
+#[test]
+fn obtuse_pentagon_tips_pass_the_volume_check() {
+    pentagon_tip(157.0, 3.0);
+    pentagon_tip(165.0, 2.0);
+    pentagon_tip(140.0, 3.0);
 }
