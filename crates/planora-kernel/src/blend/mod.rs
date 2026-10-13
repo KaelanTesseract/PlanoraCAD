@@ -2,6 +2,7 @@
 //! Nachbarflächen über `sew` (Spec `2026-10-13-rundungen-und-fasen-design.md`).
 
 pub mod analytic;
+pub mod build;
 pub mod error;
 pub mod section;
 pub mod topo;
