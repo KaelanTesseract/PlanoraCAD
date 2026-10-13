@@ -1,4 +1,4 @@
-# Offene Punkte nach Teilprojekt 1–7
+# Offene Punkte nach Teilprojekt 1–8
 
 Stand: 2026-10-10 (Teilprojekt 5 siehe eigener Abschnitt weiter unten). Teilprojekt 1–4: 2026-10-09. Ergebnis der Abschlussprüfungen; bewusst nicht in Teilprojekt 1–4 behoben.
 
@@ -293,6 +293,55 @@ Freiformkurven und -flächen werden nur mit geprüften Werten angelegt, auch bei
 - Fußpunktsuche: In etwa 1 von 4600 Fällen verfehlt sie den nächsten Punkt um bis 0,01 mm; mit Startwert kann das Ergebnis bis 0,1 mm von dem ohne Startwert abweichen. Die Nullstellensuche einer Kurve gegen eine Freiformfläche kostet etwa 8 ms je Aufruf, auch bei kleinen Flächen.
 - Einordnen (Review Task 10): Das Randpolygon einer Deckelfläche weicht an einer Spline-Kante um mehr als 0,0001 mm von der echten Kante ab; ein Punkt 0,0001 mm außerhalb der Kante kann deshalb als „auf dem Rand“ oder „innen“ gelten (1 von 34 000 Stichproben).
 - Tests: Vier Testprogramme brauchen im Debug-Build je 25 bis 31 s.
+
+## Teilprojekt 8 – Rundungen und Fasen
+Stand: 2026-10-14. Kanten lassen sich runden (fester oder variabler Radius) und fasen (gleicher Abstand, zwei Abstände, Abstand und Winkel), auch an Freiformflächen und mit Tangentenkette; Ecken nur in den unten genannten Fällen. Spec: `specs/2026-10-13-rundungen-und-fasen-design.md` (Abschnitt 12 listet, was bei der Umsetzung anders wurde). Zahlen in Millimetern.
+
+**Handprüfung (offen).** Das Fenster wurde in diesem Teilprojekt nur durch automatische Tests ohne Fenster geprüft (Auswahl per Klick und Umschalttaste, Eingabefenster, Neuberechnung). Von Hand im echten Fenster ist noch nichts geprüft (Aufgabe 21, nur nach Rücksprache).
+
+**Was nicht geht (wird mit einer Meldung abgelehnt)**
+- Körper mit Hohlräumen oder mehreren getrennten Teilen. Das Programm kann dort nicht sicher prüfen, ob die Rundung durch den Hohlraum läuft.
+- Ecken: Zwei gerundete Kanten an einer Ecke laufen nur dann ineinander (Gehrung), wenn ihre Seiten spiegelgleich liegen. Drei Rundungen mit gleichem Radius bekommen ein Kugelstück, jetzt für beliebige drei Ebenen (nicht nur rechtwinklig). Abgelehnt werden: Ecken mit variablem Radius oder an Freiformflächen, nach innen springende oder gemischte Ecken, drei Fasen an einer Ecke, zwei Fasen oder zwei Rundungen ohne spiegelgleiche Flächen an einer schiefen Ecke, sehr spitze Gehrungen (etwa 4 Grad). Die Stile „Setback“ und „glatte Ecke“ kommen später.
+- Abschlüsse: Eine Rundung endet an der dritten Fläche nur dann, wenn der Schnitt mit dieser Fläche unterstützt ist. Das fehlt zum Beispiel an einer gewölbten Wand ohne Tangentenkette. Rundungen an Freiformflächen und variable Rundungen enden nur an Ebenen senkrecht zur Kante, an Nähten, glatten Übergängen und Ecken.
+- Zu kleine Maße: unter 0,0001 mm (bei Freiformflächen oder variablem Radius unter 0,002 mm). Fasenwinkel nur von 1° bis 179°. Der Hinweis zum Mindestmaß erscheint im Fenster erst, nachdem eine Kante gewählt ist.
+- Kanten ohne Rundungsmöglichkeit, je mit eigener Meldung: Naht eines Zylinders, fast glatt anschließende Flächen (etwa ein Langloch ohne Tangentenkette), Schneiden, Flächen, die enger gekrümmt sind als der Radius, Kugelbahnen zu nahe an der Drehachse.
+- Nicht Teil: Rundung ganzer Flächen, Loft, Sweep, Export von Rundungen.
+
+**Abgelehnte Anfragen.** Das Programm lehnt lieber ab, als einen falschen Körper zu liefern. In den Zufallstests der ersten Stufe (einzelne Kanten) wurden abgelehnt: Quader 9 %, Prismen 20 %, L- und Langloch-Profile 61 bis 68 %, Zylinder 69 %, Drehkörper 77 %, Kegel 84 %. In der zweiten Stufe (mehrere Kanten und Ecken, absichtlich gern an Nachbarkanten gewählt): Quader 44 %, Prismen 81 %, Körper mit Löchern 66 %, gestufte Quader 84 %. Mit den späteren Stufen sanken die Quoten bei Freiformkanten und variablem Radius deutlich: bei variablem Radius wurden von 400 Fällen 383 gerechnet, Ellipsenränder 118 von 140, Ketten aus Freiformkanten 50 von 60. In keiner Testreihe kam ein falscher Körper durch.
+
+**Boolesche Operationen danach.** Vereinigen, Abziehen und Schneiden mit einem gerundeten Körper werden oft abgelehnt: Die bekannten Grenzen bei Kegel- und Ringflächen (Teilprojekt 3) gelten weiter, und eine Rundung erzeugt solche Flächen. Es kommt dann eine Meldung am Schritt, kein falscher Körper.
+
+**Eine Fläche je Kante.** Entlang einer glatten Kette bekommt jede Kante ihre eigene Rundungsfläche (Entscheidung P3); die Flächen werden nicht zusammengefasst. Die Rollen heißen „Rundung N“ bzw. „Fase N“; die Zählung beginnt in jedem Schritt bei 1. Doppelt gewählte Kanten werden nicht gemeldet, sondern einmal gerechnet.
+
+**Volumenprobe (P2).** Nach jeder Rundung vergleicht das Programm das Volumen vorher und nachher mit einer Schätzung. Der Spielraum beträgt 50 % der Schätzung bei einheitlichen Rundungen und 20 % bei gemischten (Außen- und Innenkanten zusammen). Das fängt grobe Fehler ab, aber nicht alles: Fehlt in einem gemischten Fall nur die kleinere Art (bis etwa 20 % der Gesamtmenge), geht das durch die Probe. Die eigentliche Sicherheit kommt aus den geometrischen Prüfungen (Körper gültig, Flächen durchstoßen sich nicht, Löcher und Nachbarflächen berücksichtigt); die Probe ist ein zusätzliches Netz. Bei Ecken, an denen nur ein Teil der Kanten gerundet ist, liegt die Schätzung 1 bis 3 % daneben.
+
+**Bildschirmnetz**
+- Bei steilen variablen Radien kann eine ebene Fläche, die an eine steile Freiformkurve grenzt, im Netz kleine Lücken haben (in den Tests 5 von etwa 500 Fällen, rund 1 %). Der Körper selbst ist richtig (Geometrie, Gültigkeit und Punktprobe sind in Ordnung); die Statuszeile zeigt den Hinweis „Netz ungenau“. Die Ursache liegt im Dreiecksnetz für ebene Flächen, das in diesem Teilprojekt nicht verändert wurde. Mögliche spätere Aufgabe.
+- Bei Freiformflächen ist das Netz bei grober Sehne (1e-3) bis zu einigen Prozent im Volumen ungenau (Zylinder 0,84 %, Torus 2,5 %); bei Sehne 1e-4 stimmt es. Die schnellen Tests prüfen mit entsprechend weiteren Schranken, die langen Reihen streng.
+- Sehr kleine Radien (um 0,002 mm) erzeugen ebenfalls ungenaue Netze (90 Fälle in den Tests).
+
+**Genauigkeit**
+- Die Querschnitte der Rundung folgen den beiden Nachbarflächen, nicht der gespeicherten Kantenkurve (Spec Abschnitt 12).
+- Die Naht zwischen zwei Rundungsflächen einer Kette ist nur dann glatt, wenn der Radius an dieser Stelle von beiden Seiten dieselbe Steigung hat.
+- Bei variablem Radius an Ketten aus Kreisbögen rechnet das Programm die Längen mit 48 Sehnen je Kreis; dadurch sind die Radien gegenüber der wahren Bogenlänge bis zu 7 · 10⁻⁴ gestaucht. Bei Ketten aus Freiformkanten sind die Längen genau (Gauß-Bogenlänge).
+- Die Volumenschätzung des Kernels liegt bei steilen variablen Radien bis zu 1,5 · 10⁻³ daneben, bei stark gewölbten Querschnitten deutlich mehr (Kugel 11 %, Torus 7 %); beides liegt im Spielraum der Probe.
+- Ein Zylinder aus Freiformflächen lässt Rundungen bis 0,78 · Radius zu, sein analytischer Zwilling lehnt früher ab (Inkonsistenz, ohne Folgen für die Richtigkeit).
+- An einigen Lochrändern gibt es ein Gebiet von Radien, in dem das Zusammensetzen der Flächen scheitert (Beispiel: Loch 2,589 × 1,128, Radius 0,356 bis 0,435): Meldung, kein falscher Körper. Ein Radius von etwa 0,002 mm an geschlossenen Ketten wird als „zu groß für den Deckel“ gemeldet, obwohl die Ursache eine andere ist.
+
+**Bedienung**
+- Die Kantenverweise im Schritt werden nach einer Neuberechnung nicht zurückgeschrieben. „Fläche 1“ wird über den Flächennamen gewählt und wirkt bei zwei gleich benannten Flächen nicht. Wählt man in einem Schritt mehrere Kanten, geht ein „Fläche 1“ einer später gewählten Kante still verloren, wenn die Kante schon in der Kette einer früheren liegt.
+- Im Fenster geht beim Wechsel der Art oder beim Hinzufügen eines Radienpunkts mit ungültigem Text die Eingabe verloren; ein Radienpunkt außerhalb von 0 bis 100 % wird erst von der Berechnung gemeldet. Das Umschalten der Tangentenkette wirkt erst beim nächsten Klick auf eine Kante.
+- Meldungen des Kerns schreiben Dezimalzahlen mit Punkt, die Oberfläche mit Komma. Ein Mindestmaß erscheint stellenweise mit vielen Stellen (0,00009999999999999999 mm).
+- Kanten, die zwischen 0,5° und 2° abknicken (grobe Vielecke), zählen weder als glatt noch als fast glatt; die Meldung rät dann fälschlich zur Tangentenkette.
+- Die Prüfung auf Durchstoßen wächst bei sehr vielen Kanten quadratisch im Aufwand; eine Auswahl hat höchstens 257 Kanten (mit Kette).
+
+**Dateiformat (P7).** Dokumente mit Rundung oder Fase werden im Dateiformat 2 geschrieben, alle anderen weiter im Format 1. Alte Programme lesen Format 1 weiter und lehnen Format 2 als „zu neu“ ab. Der Test `newer_files_with_changed_structure_report_too_new` nutzt jetzt `3` als „zu neu“ (mechanische Anpassung, mit Kommentar). `dokument.json` und die Autosave-Datei behalten ihre Struktur (`format: 1`). Fehlende Felder in Rundungsschritten melden die rohe Meldung des Dateiformats, wie bei den anderen Schritten.
+
+**Laufzeiten und Testreihen**
+- Teststand am Ende von Teilprojekt 8: 1179 bestanden, 0 fehlgeschlagen, 27 ignoriert in 153 Testprogrammen, Laufzeit etwa 7 Minuten mit Übersetzung (`cargo test --workspace`, Debug).
+- Längste Testprogramme im Debug-Build: `blend_variable` etwa 21 s (Grenze 30 s; auf einem langsamen Rechner knapp), `blend_freeform_volume` etwa 25 s, `blend_freeform` etwa 14 s.
+- Lange Reihen laufen nur mit `cargo test --release -- --ignored`: `blend_stage2` (200 Fälle) etwa 40 s, `blend_stage3` etwa 425 s (feine Tests 30 bis 50 s, 100 Zylinder etwa 340 s), `blend_freeform_volume` etwa 263 s, `blend_corners_general` (300 Fälle: 284 gerechnet und gegen die Formel richtig, 16 mit Meldung abgelehnt) sowie `blend_corner_volume`, `blend_notch`, `blend_mixed`. Sie liefen zuletzt in Aufgabe 17 grün; in Aufgabe 20 wurden sie nicht erneut gestartet.
+- Lizenzen: keine neue Abhängigkeit, `cargo deny check` sauber.
 
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).
