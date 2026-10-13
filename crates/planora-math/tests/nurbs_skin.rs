@@ -559,3 +559,51 @@ fn a_changing_opening_angle_converges_with_the_fourth_power() {
     let numeric = opening_error(30.0, 150.0, 33, true);
     assert!(numeric < 1e-6, "{numeric}");
 }
+
+// ---- Task 14, Fix-Runde 1: Knick längs ----
+
+#[test]
+fn sided_tangents_give_a_kink_with_exact_cones_on_both_sides() {
+    // Radius 1 bis u = 1, dann linear bis 3 bei u = 2: Viertelbögen um die x-Achse. Mit den
+    // einseitigen Ableitungen ist jedes Stück exakt (Zylinder bzw. Kegel), die Fläche hat bei
+    // u = 1 einen Knick.
+    let sec = |u: f64, r: f64| {
+        SkinSection::arc(
+            DVec3::new(u, 0.0, 0.0),
+            DVec3::new(u, r, 0.0),
+            DVec3::new(u, 0.0, r),
+        )
+        .unwrap()
+    };
+    let radius = |u: f64| if u <= 1.0 { 1.0 } else { 1.0 + 2.0 * (u - 1.0) };
+    let us = [0.0, 1.0, 2.0];
+    let secs: Vec<SkinSection> = us.iter().map(|&u| sec(u, radius(u))).collect();
+    let flat = SkinTangent::between(&sec(0.0, 1.0), &sec(1.0, 1.0), 1.0);
+    let cone = SkinTangent::between(&sec(1.0, 1.0), &sec(2.0, 3.0), 1.0);
+    let left = [flat, flat, cone];
+    let right = [flat, cone, cone];
+    let s = skin_sided(&secs, &left, &right, &us).unwrap();
+    for i in 0..=40 {
+        let u = 2.0 * i as f64 / 40.0;
+        for j in 0..=10 {
+            let p = s.point(u, j as f64 / 10.0);
+            let r = (p.y * p.y + p.z * p.z).sqrt();
+            assert!(
+                (p.x - u).abs() < 1e-9 && (r - radius(u)).abs() < 1e-9,
+                "{u}: {p}"
+            );
+        }
+    }
+    // Gleiche Seiten ergeben genau `skin`.
+    let same = skin_sided(&secs, &right, &right, &us).unwrap();
+    let plain = skin(&secs, &right, &us).unwrap();
+    for i in 0..=8 {
+        let u = 2.0 * i as f64 / 8.0;
+        assert_eq!(same.point(u, 0.3), plain.point(u, 0.3));
+    }
+    // Feindlich: Längen passen nicht, nicht endliche Seite.
+    assert!(skin_sided(&secs, &left[..2], &right, &us).is_err());
+    let mut bad = right;
+    bad[1].d0 = DVec3::splat(f64::NAN);
+    assert!(skin_sided(&secs, &left, &bad, &us).is_err());
+}

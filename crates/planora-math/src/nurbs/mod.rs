@@ -18,7 +18,7 @@ pub use curve::NurbsCurve;
 pub use error::NurbsError;
 pub use fit::MAX_FIT_CONTROL_POINTS;
 pub use knots::KnotVector;
-pub use skin::{MAX_SECTION_SWEEP, SkinSection, SkinTangent, skin};
+pub use skin::{MAX_SECTION_SWEEP, SkinSection, SkinTangent, skin, skin_sided};
 pub use surface::{MAX_SURFACE_DERIV, NurbsSurface};
 pub use work::{evaluations, uncounted};
 

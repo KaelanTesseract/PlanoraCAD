@@ -265,3 +265,90 @@ fn the_march_keeps_the_section_on_both_faces_and_the_ends_exact() {
     validate(&b.solid).unwrap();
     assert!(b.volume_change > 0.0);
 }
+
+// ---- Fix-Runde 1 ----
+
+/// (1 − π/4) · ∫₀¹⁰ r(s/10)² ds für ein Gesetz mit stückweise linearem Verlauf zwischen Plateaus
+/// (zwei Punkte: Fritsch–Butland ist linear), geschlossen: Plateaus plus h·(r₀² + r₀r₁ + r₁²)/3.
+fn ramp_volume(f0: f64, r0: f64, f1: f64, r1: f64) -> f64 {
+    let a = 1.0 - PI / 4.0;
+    let l = 10.0;
+    a * (f0 * l * r0 * r0
+        + (f1 - f0) * l * (r0 * r0 + r0 * r1 + r1 * r1) / 3.0
+        + (1.0 - f1) * l * r1 * r1)
+}
+
+#[test]
+fn inner_end_positions_and_steep_laws_are_ok() {
+    let s = k().make_box(DVec3::splat(10.0)).unwrap();
+    let e = edge_between(&s, "Deckel", "Wand 1");
+    for (f0, r0, f1, r1) in [
+        (0.3, 1.0, 0.7, 2.0),
+        (0.0, 1.0, 0.7, 2.0),
+        (0.3, 1.0, 1.0, 2.0),
+    ] {
+        let b = k()
+            .blend(
+                &s,
+                &req(
+                    e,
+                    BlendKind::VariableFillet {
+                        points: vec![(f0, r0), (f1, r1)],
+                    },
+                ),
+            )
+            .unwrap_or_else(|err| panic!("({f0}, {r0}), ({f1}, {r1}): {err}"));
+        validate(&b.solid).unwrap();
+        let want = -ramp_volume(f0, r0, f1, r1);
+        assert!(
+            (b.volume_change - want).abs() < 1e-6 * want.abs(),
+            "{} statt {want}",
+            b.volume_change
+        );
+    }
+    // Steile Gesetze bis zu kleinen Radien (Startwert des Newton-Verfahrens folgt dem Radius);
+    // 0,002 mm ist genau das Mindestmaß für variable Radien.
+    for points in [
+        vec![(0.1, 1.0), (0.5, 1.2), (0.9, 1.0)],
+        vec![(0.0, 0.002), (0.5, 3.0), (1.0, 0.002)],
+        vec![(0.0, 2.07), (0.4, 2.07), (0.6, 0.013), (1.0, 0.013)],
+    ] {
+        let b = k()
+            .blend(
+                &s,
+                &req(
+                    e,
+                    BlendKind::VariableFillet {
+                        points: points.clone(),
+                    },
+                ),
+            )
+            .unwrap_or_else(|err| panic!("{points:?}: {err}"));
+        validate(&b.solid).unwrap();
+        assert!(b.volume_change < 0.0);
+        // Die Hautfläche liegt in der Hülle ihrer Kontrollpunkte (Vorfilter der Prüfungen).
+        let (_, f) = b
+            .solid
+            .faces
+            .iter()
+            .find(|(_, f)| matches!(f.surface, Surface::Nurbs(_)))
+            .unwrap();
+        let Surface::Nurbs(d) = &f.surface else {
+            unreachable!()
+        };
+        let (lo, hi) = d.control_bounds();
+        let ((u0, u1), (v0, v1)) = d.surface().domain();
+        for i in 0..=50 {
+            for j in 0..=10 {
+                let p = d.point(
+                    u0 + (u1 - u0) * i as f64 / 50.0,
+                    v0 + (v1 - v0) * j as f64 / 10.0,
+                );
+                assert!(
+                    p.cmpge(lo - 1e-12).all() && p.cmple(hi + 1e-12).all(),
+                    "{p}"
+                );
+            }
+        }
+    }
+}

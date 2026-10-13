@@ -1,7 +1,10 @@
 //! Radius entlang einer Kantenkette (Spec §3.3, R9, Plan P8): monotone kubische
 //! Hermite-Interpolation (Fritsch–Butland) durch Punkte (Anteil, Radius). Zwischen zwei Punkten
 //! liegt der Radius immer zwischen ihren Werten (kein Überschwingen, also nie unter null),
-//! außerhalb des ersten und letzten Punkts konstant. Stetig differenzierbar.
+//! außerhalb des ersten und letzten Punkts konstant. Zwischen dem ersten und dem letzten Punkt
+//! stetig differenzierbar; am ersten bzw. letzten Punkt nur stetig, wenn die Steigung dort nicht
+//! null ist (außen ist der Radius konstant, innen gilt die Streckensteigung), siehe
+//! [`RadiusLaw::kinks`].
 //!
 //! Steigungen: an inneren Punkten das gewichtete harmonische Mittel der Nachbarsteigungen
 //! (null bei Vorzeichenwechsel oder einer waagrechten Nachbarstrecke), an den Enden die Steigung
@@ -72,6 +75,21 @@ impl RadiusLaw {
     /// Positionen der Punkte (Anteile).
     pub fn positions(&self) -> &[f64] {
         &self.s
+    }
+
+    /// Positionen, an denen das Gesetz nur stetig ist (Steigung links und rechts verschieden):
+    /// der erste bzw. letzte Punkt, wenn die anschließende Steigung nicht null ist. Ob sie im
+    /// Bereich der Kette liegen, entscheidet der Aufrufer.
+    pub fn kinks(&self) -> Vec<f64> {
+        let n = self.s.len();
+        let mut out = Vec::new();
+        if self.m[0] != 0.0 {
+            out.push(self.s[0]);
+        }
+        if self.m[n - 1] != 0.0 {
+            out.push(self.s[n - 1]);
+        }
+        out
     }
 
     /// Radien der Punkte.

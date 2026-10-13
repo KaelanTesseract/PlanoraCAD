@@ -145,14 +145,27 @@ impl SkinTangent {
 /// eine stehende Fläche (alle Querschnitte gleich, alle Ableitungen null, also `∂S/∂u = 0`),
 /// nicht positive Gewichte und alles, was `NurbsSurface::new` ablehnt (Knotenabstände, Beträge, nicht endliche Zahlen),
 /// ergeben einen benannten Fehler.
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn skin(
     sections: &[SkinSection],
     tangents: &[SkinTangent],
     params: &[f64],
 ) -> Result<NurbsSurface, NurbsError> {
+    skin_sided(sections, tangents, tangents, params)
+}
+
+/// Wie [`skin`], aber je Station eine Ableitung für das Stück davor (`left`) und eine für das
+/// Stück danach (`right`). Sind sie verschieden, ist die Fläche an dieser Station nur stetig
+/// (Knick längs), etwa wo der Radius einer Rundung nur stetig ist. Am ersten Querschnitt zählt nur
+/// `right`, am letzten nur `left`. Mit `left == right` genau [`skin`].
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn skin_sided(
+    sections: &[SkinSection],
+    left: &[SkinTangent],
+    right: &[SkinTangent],
+    params: &[f64],
+) -> Result<NurbsSurface, NurbsError> {
     let n = sections.len();
-    if n < 2 || tangents.len() != n || params.len() != n {
+    if n < 2 || left.len() != n || right.len() != n || params.len() != n {
         return Err(NurbsError::Input(
             "Querschnitte, Ableitungen und Parameter passen nicht zusammen".into(),
         ));
@@ -170,13 +183,13 @@ pub fn skin(
     let finite = |t: &SkinTangent| {
         t.d0.is_finite() && t.d1.is_finite() && t.d2.is_finite() && t.dw.is_finite()
     };
-    if !tangents.iter().all(finite) {
+    if !left.iter().chain(right).all(finite) {
         return Err(NurbsError::Input("eine Tangente ist nicht endlich".into()));
     }
     let still = |t: &SkinTangent| {
         t.d0 == DVec3::ZERO && t.d1 == DVec3::ZERO && t.d2 == DVec3::ZERO && t.dw == 0.0
     };
-    if sections.windows(2).all(|w| w[0] == w[1]) && tangents.iter().all(still) {
+    if sections.windows(2).all(|w| w[0] == w[1]) && left.iter().chain(right).all(still) {
         return Err(NurbsError::Input(
             "die Querschnitte bewegen sich längs nicht (entartete Fläche)".into(),
         ));
@@ -193,16 +206,16 @@ pub fn skin(
     // Homogene Kontrollpunkte, Index `i * 3 + j` wie bei `NurbsSurface` (i längs, j quer).
     let mut hom = vec![(DVec3::ZERO, 0.0); nu * 3];
     for i in 0..n {
-        let (r, d) = (rows(&sections[i]), drows(&tangents[i]));
+        let (r, dl, dr) = (rows(&sections[i]), drows(&left[i]), drows(&right[i]));
         for j in 0..3 {
             hom[3 * i * 3 + j] = r[j];
             if i + 1 < n {
                 let h = (params[i + 1] - params[i]) / 3.0;
-                hom[(3 * i + 1) * 3 + j] = (r[j].0 + d[j].0 * h, r[j].1 + d[j].1 * h);
+                hom[(3 * i + 1) * 3 + j] = (r[j].0 + dr[j].0 * h, r[j].1 + dr[j].1 * h);
             }
             if i > 0 {
                 let h = (params[i] - params[i - 1]) / 3.0;
-                hom[(3 * i - 1) * 3 + j] = (r[j].0 - d[j].0 * h, r[j].1 - d[j].1 * h);
+                hom[(3 * i - 1) * 3 + j] = (r[j].0 - dl[j].0 * h, r[j].1 - dl[j].1 * h);
             }
         }
     }

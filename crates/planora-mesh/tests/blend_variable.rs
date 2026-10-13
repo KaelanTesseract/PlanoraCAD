@@ -12,13 +12,19 @@ use blend_common::*;
 use planora_kernel::blend::march::VARIABLE_CORNER;
 use planora_kernel::*;
 use planora_math::{DMat4, DVec2, DVec3, Frame, PI, TAU};
-use planora_mesh::{BLEND_SLACK_FACTOR, Discretizer, curved_area, tessellate_with};
+use planora_mesh::{
+    BLEND_REL, BLEND_SLACK_FACTOR, Discretizer, blend_volume_plausible, check_face_boundaries,
+    curved_area, is_watertight, mass_properties, tessellate_with,
+};
 
 /// Sehnentoleranz der Volumenprobe.
 const CHORD: f64 = 1e-3;
 /// Relative Schranke der vernetzten Volumenänderung gegen die Formel (enger als die P2-Schranke;
 /// bei Sehne 1e-3 gemessen höchstens 4,4e-4, das Netz liegt innen und trägt etwas mehr ab).
 const MESH_REL: f64 = 1e-3;
+/// Feinere Sehne für Gesetze mit kleinen Radien (der Netzfehler wächst mit der Fläche, das
+/// Volumen mit r²; bei 1e-3 lag ein Fall bei 1,3e-3 relativ).
+const FINE_CHORD: f64 = 5e-4;
 /// Relative Schranke der Volumenschätzung des Kernels (Simpson über exakte Querschnitte;
 /// gemessen höchstens 7,4e-6).
 const ESTIMATE_REL: f64 = 1e-4;
@@ -69,28 +75,34 @@ fn simpson(a: f64, b: f64, n: usize, f: impl Fn(f64) -> f64) -> f64 {
     sum * h / 3.0
 }
 
-/// Schranke der Volumenprobe (mm³) nach P2: Sehnentoleranz mal `BLEND_SLACK_FACTOR` mal
-/// gekrümmter Fläche des Ergebnisses.
-fn slack(after: &Solid) -> f64 {
-    let disc = Discretizer::new(after, CHORD);
-    let mesh = tessellate_with(after, &disc).unwrap();
-    BLEND_SLACK_FACTOR * CHORD * curved_area(after, &mesh)
-}
-
 fn variable(points: &[(f64, f64)]) -> BlendKind {
     BlendKind::VariableFillet {
         points: points.to_vec(),
     }
 }
 
-/// Prüft ein `Ok`: gültig, dicht, Volumenänderung nach Formel innerhalb der Sehnenschranke, die
-/// Schätzung des Kernels nahe der Formel und die Volumenprobe des Features besteht.
+/// Prüft ein `Ok`: gültig, Flächenränder, dichtes Netz, Volumenänderung nach Formel innerhalb
+/// der P2-Schranke (`BLEND_SLACK_FACTOR` · Sehne · gekrümmte Fläche) und `MESH_REL`, die
+/// Schätzung des Kernels nahe der Formel, die Volumenprobe des Features besteht, Hautfläche
+/// vorhanden. Ein Netzpaar mit gemeinsamer Teilung für alles.
 fn check_ok(before: &Solid, b: &Blended, want: f64, what: &str) {
-    let got = delta_volume(before, &b.solid, CHORD);
-    let bound = slack(&b.solid);
+    check_ok_with(before, b, want, what, CHORD);
+}
+
+fn check_ok_with(before: &Solid, b: &Blended, want: f64, what: &str, chord: f64) {
+    validate(&b.solid).unwrap_or_else(|e| panic!("{what}: validate: {e}"));
+    let disc = Discretizer::for_solids(&[before, &b.solid], chord);
+    let mb = tessellate_with(before, &disc).unwrap();
+    let ma = tessellate_with(&b.solid, &disc).unwrap_or_else(|e| panic!("{what}: Netz: {e}"));
+    check_face_boundaries(&b.solid, &ma).unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert!(is_watertight(&ma, 1e-6), "{what}: Netz nicht geschlossen");
+    let got = mass_properties(&ma).volume - mass_properties(&mb).volume;
+    let slack = BLEND_SLACK_FACTOR
+        * disc.chord_tolerance()
+        * (curved_area(before, &mb) + curved_area(&b.solid, &ma));
     assert!(
-        (got - want).abs() <= bound.min(MESH_REL * want.abs()),
-        "{what}: ΔV {got} statt {want} (Abweichung {}, Schranke {bound})",
+        (got - want).abs() <= slack.min(MESH_REL * want.abs()),
+        "{what}: ΔV {got} statt {want} (Abweichung {}, Schranke {slack})",
         (got - want).abs()
     );
     assert!(
@@ -98,7 +110,17 @@ fn check_ok(before: &Solid, b: &Blended, want: f64, what: &str) {
         "{what}: Schätzung {} statt {want}",
         b.volume_change
     );
-    assert!(plausible(before, b, CHORD), "{what}: Volumenprobe");
+    assert!(
+        blend_volume_plausible(
+            mass_properties(&mb).volume,
+            mass_properties(&ma).volume,
+            b.volume_change,
+            b.volume_scale,
+            BLEND_REL,
+            slack,
+        ),
+        "{what}: Volumenprobe"
+    );
     assert!(
         b.solid
             .faces
@@ -505,4 +527,176 @@ fn variable_results_are_deterministic_and_constant_requests_stay_analytic() {
             .iter()
             .any(|(_, f)| matches!(f.surface, Surface::Cylinder { .. }))
     );
+}
+
+// ---- Fix-Runde 1: Gesetze mit inneren Endpunkten (Knick) und steile Gesetze ----
+
+/// Stückweise Hermite-Gesetz von Hand: Punkte `(f, r, m)` (Steigung je Anteil), außerhalb
+/// konstant.
+fn piecewise(pts: &[(f64, f64, f64)], f: f64) -> f64 {
+    let n = pts.len();
+    if f <= pts[0].0 {
+        return pts[0].1;
+    }
+    if f >= pts[n - 1].0 {
+        return pts[n - 1].1;
+    }
+    let k = pts.iter().rposition(|p| p.0 <= f).unwrap();
+    let (a, b) = (pts[k], pts[k + 1]);
+    let h = b.0 - a.0;
+    hermite((f - a.0) / h, h, (a.1, a.2), (b.1, b.2))
+}
+
+/// ∫₀¹ g(f) df, stückweise zwischen den Punkten `cuts` (Gauß mit 4 Punkten auf je 64 Teilen;
+/// für die Polynome hier auf Rundungsfehler genau).
+fn integral01(cuts: &[f64], g: impl Fn(f64) -> f64) -> f64 {
+    let gauss = [
+        (-0.861_136_311_594_052_6, 0.347_854_845_137_453_86),
+        (-0.339_981_043_584_856_26, 0.652_145_154_862_546_1),
+        (0.339_981_043_584_856_26, 0.652_145_154_862_546_1),
+        (0.861_136_311_594_052_6, 0.347_854_845_137_453_86),
+    ];
+    let mut pts = vec![0.0];
+    pts.extend(cuts.iter().copied().filter(|c| *c > 0.0 && *c < 1.0));
+    pts.push(1.0);
+    let mut sum = 0.0;
+    for w in pts.windows(2) {
+        for k in 0..64 {
+            let (a, b) = (
+                w[0] + (w[1] - w[0]) * k as f64 / 64.0,
+                w[0] + (w[1] - w[0]) * (k + 1) as f64 / 64.0,
+            );
+            let (m, h) = (0.5 * (a + b), 0.5 * (b - a));
+            for (x, wt) in gauss {
+                sum += wt * h * g(m + h * x);
+            }
+        }
+    }
+    sum
+}
+
+/// Gesetze mit Steigungen von Hand (Fritsch–Butland: Enden Streckensteigung, innen 0 bei
+/// Vorzeichenwechsel oder waagrechter Nachbarstrecke).
+/// Gesetz von Hand: Punkte `(Anteil, Radius, Steigung)`.
+type HandLaw = Vec<(f64, f64, f64)>;
+
+fn hand_laws() -> Vec<(&'static str, HandLaw)> {
+    vec![
+        ("(0,3 1) (0,7 2)", vec![(0.3, 1.0, 2.5), (0.7, 2.0, 2.5)]),
+        (
+            "(0 1) (0,7 2)",
+            vec![(0.0, 1.0, 1.0 / 0.7), (0.7, 2.0, 1.0 / 0.7)],
+        ),
+        (
+            "(0,3 1) (1 2)",
+            vec![(0.3, 1.0, 1.0 / 0.7), (1.0, 2.0, 1.0 / 0.7)],
+        ),
+        (
+            "(0,1 1) (0,5 1,2) (0,9 1)",
+            vec![(0.1, 1.0, 0.5), (0.5, 1.2, 0.0), (0.9, 1.0, -0.5)],
+        ),
+        (
+            "steil (0 0,002) (0,5 3) (1 0,002)",
+            vec![
+                (0.0, 0.002, 2.996 / 0.5),
+                (0.5, 3.0, 0.0),
+                (1.0, 0.002, -2.996 / 0.5),
+            ],
+        ),
+        (
+            "Absturz (0 2,07) (0,4 2,07) (0,6 0,013) (1 0,013)",
+            vec![
+                (0.0, 2.07, 0.0),
+                (0.4, 2.07, 0.0),
+                (0.6, 0.013, 0.0),
+                (1.0, 0.013, 0.0),
+            ],
+        ),
+    ]
+}
+
+fn points_of(law: &[(f64, f64, f64)]) -> Vec<(f64, f64)> {
+    law.iter().map(|p| (p.0, p.1)).collect()
+}
+
+#[test]
+fn inner_end_positions_and_steep_laws_on_a_box_edge() {
+    let s = k().make_box(DVec3::splat(10.0)).unwrap();
+    let e = edge_between(&s, "Deckel", "Wand 1");
+    for (name, law) in hand_laws() {
+        let b = blend_edges(&s, &[e], variable(&points_of(&law)), false)
+            .unwrap_or_else(|err| panic!("{name}: {err}"));
+        let cuts: Vec<f64> = law.iter().map(|p| p.0).collect();
+        let want = -A * 10.0 * integral01(&cuts, |f| piecewise(&law, f).powi(2));
+        check_ok_with(&s, &b, want, name, FINE_CHORD);
+    }
+}
+
+#[test]
+fn inner_end_positions_on_a_concave_edge_a_rim_and_a_chain() {
+    // Konkave Innenkante (Länge 5) mit innerem erstem Punkt.
+    let l = extrude_polygon(
+        &[
+            DVec2::new(0.0, 0.0),
+            DVec2::new(10.0, 0.0),
+            DVec2::new(10.0, 4.0),
+            DVec2::new(4.0, 4.0),
+            DVec2::new(4.0, 10.0),
+            DVec2::new(0.0, 10.0),
+        ],
+        5.0,
+    );
+    let e = edge_between(&l, "Wand 3", "Wand 4");
+    let law = [(0.2, 0.5, 0.625), (1.0, 1.0, 0.625)];
+    let b = blend_edges(&l, &[e], variable(&points_of(&law)), false).unwrap();
+    // Die Kante läuft hier vom Boden zum Deckel (Anteil 0 unten); die Formel nimmt dieselbe
+    // Richtung, eine verkehrte Richtung ergäbe ein anderes Integral.
+    let fwd = A * 5.0 * integral01(&[0.2], |f| piecewise(&law, f).powi(2));
+    check_ok(&l, &b, fwd, "konkav, innerer erster Punkt");
+    // Zylinderdeckel R 5, Knicke bei 0,2 und 0,8 (außen r = 1), Pappus.
+    let big = 5.0;
+    let c = k().make_cylinder(big, 8.0).unwrap();
+    let rim = edge_between(&c, "Wand 1", "Deckel");
+    let pappus = |law: &[(f64, f64, f64)]| {
+        let cuts: Vec<f64> = law.iter().map(|p| p.0).collect();
+        -TAU * integral01(&cuts, |f| {
+            let r = piecewise(law, f);
+            A * r * r * (big - spandrel_offset() * r)
+        })
+    };
+    let law = [
+        (0.2, 1.0, 0.5 / 0.3),
+        (0.5, 1.5, 0.0),
+        (0.8, 1.0, -0.5 / 0.3),
+    ];
+    let b = blend_edges(&c, &[rim], variable(&points_of(&law)), false).unwrap();
+    check_ok(&c, &b, pappus(&law), "Zylinderdeckel, innere Endpunkte");
+    // Steiles Gesetz am Zylinderdeckel.
+    let law = [
+        (0.0, 0.002, 1.498 / 0.5),
+        (0.5, 1.5, 0.0),
+        (1.0, 0.002, -1.498 / 0.5),
+    ];
+    let b = blend_edges(&c, &[rim], variable(&points_of(&law)), false).unwrap();
+    check_ok(&c, &b, pappus(&law), "Zylinderdeckel, steil");
+    // Kette (halbes Stadion) mit Knicken bei 0,2 und 0,8 auf den Geraden.
+    let s = half_stadium();
+    let e = edge_between(&s, "Deckel", "Wand 1");
+    let law = [
+        (0.2, 0.4, 0.4 / 0.3),
+        (0.5, 0.8, 0.0),
+        (0.8, 0.4, -0.4 / 0.3),
+    ];
+    let b = blend_edges(&s, &[e], variable(&points_of(&law)), true).unwrap();
+    let big = 2.0;
+    let arc48 = 96.0 * big * (PI / 96.0).sin();
+    let total = 20.0 + arc48;
+    let cuts: Vec<f64> = law.iter().map(|p| p.0 * total / 10.0).collect();
+    let straight = 10.0 * integral01(&cuts, |f| A * piecewise(&law, f * 10.0 / total).powi(2));
+    let arc = PI
+        * integral01(&[0.5], |g| {
+            let r = piecewise(&law, (10.0 + arc48 * g) / total);
+            A * r * r * (big - spandrel_offset() * r)
+        });
+    check_ok(&s, &b, -(2.0 * straight + arc), "Kette, innere Endpunkte");
 }

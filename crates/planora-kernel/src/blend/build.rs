@@ -788,7 +788,9 @@ fn swing(a: DVec3, b: DVec3) -> DVec3 {
 }
 
 /// Sicherer Hüllquader eines Kurvenstücks: Gerade über ihre Enden, Kreis und Ellipse ganz
-/// (unabhängig vom Parameterbereich). `None` bei Freiformkurven (dann kein Vorfilter).
+/// (unabhängig vom Parameterbereich), Freiformkurven über die Hülle ihrer Kontrollpunkte (bei
+/// positiven Gewichten liegt die Kurve in deren konvexer Hülle; `Seg::sound_box`). `None` bei
+/// nicht endlichen Zahlen (dann kein Vorfilter).
 fn seg_box(seg: &Seg) -> Option<Aabb> {
     let around = |c: DVec3, h: DVec3| Some((c - h, c + h));
     match &seg.curve {
@@ -804,7 +806,10 @@ fn seg_box(seg: &Seg) -> Option<Aabb> {
             major,
             minor,
         } => around(frame.origin, swing(frame.x * *major, frame.y * *minor)),
-        Curve::Nurbs(_) => None,
+        Curve::Nurbs(_) => {
+            let (lo, hi) = seg.sound_box();
+            (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+        }
     }
 }
 
@@ -813,12 +818,19 @@ fn seg_box(seg: &Seg) -> Option<Aabb> {
 /// - Torus (Rundung an einer Kreiskante): der ganze Torus.
 /// - Prisma (gerade Kante) mit Querschnitten an beiden Enden (glatter Übergang): die Fläche ist der
 ///   zwischen ihnen verschobene Querschnitt, liegt also im Quader beider Querschnitte.
+/// - Hautfläche: die Hülle ihrer Kontrollpunkte (ganz, unabhängig von den Abschlüssen).
 /// - Drehfläche einer Fase (Kegel, Zylinder, Ebene um die Achse) mit Querschnitten oder Naht an
 ///   beiden Enden: der volle Umlauf des Querschnitts um die Achse (`frame.z`, Ursprung auf ihr);
 ///   Höhe und Abstand von der Achse sind längs der Querschnittsstrecke an ihren Enden extrem.
 fn blend_box(g: &EdgeGeom, start: &EndCut, end: &EndCut) -> Option<Aabb> {
     let sections = start.cap.is_none() && end.cap.is_none();
     match (&g.surface, g.volume) {
+        // Hautfläche (Task 14): Hülle der Kontrollpunkte; die Fläche liegt bei positiven
+        // Gewichten in deren konvexer Hülle, das beschnittene Stück erst recht.
+        (Surface::Nurbs(d), _) => {
+            let (lo, hi) = d.control_bounds();
+            (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+        }
         (
             Surface::Torus {
                 frame,
