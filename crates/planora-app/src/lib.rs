@@ -12,6 +12,7 @@ pub mod feature_dialog;
 pub mod file_chooser;
 pub mod fonts;
 pub mod icons;
+pub mod import_dialog;
 pub mod jobs;
 pub mod mesh_body;
 pub mod projects_panel;

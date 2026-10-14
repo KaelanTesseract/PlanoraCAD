@@ -4,6 +4,8 @@ use crate::create_dialog::CreateDialog;
 use crate::dock::{Dock, Pane};
 use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
+use crate::file_chooser::default_dir;
+use crate::import_dialog::ImportDialog;
 use crate::projects_panel::ProjectsUi;
 use crate::state::{AppState, SketchRequest, StandardPlane};
 use crate::versions_panel::VersionsUi;
@@ -170,6 +172,17 @@ impl PlanoraApp {
         tab.export_dialog = Some(ExportDialog::new(&tab.state));
     }
 
+    /// Datei → Netz importieren …: öffnet das Fenster im zuletzt benutzten Ordner; eine offene
+    /// Skizze wird vorher beendet. Nicht in schreibgeschützten Ansichten.
+    fn open_import(&mut self) {
+        let dir = self.ws.exchange_dir.clone().unwrap_or_else(default_dir);
+        let tab = self.ws.active_tab_mut();
+        if tab.read_only || tab.state.try_close_sketch().is_err() {
+            return;
+        }
+        tab.import_dialog = Some(ImportDialog::new(dir));
+    }
+
     fn file_menu(&mut self, ui: &mut egui::Ui) {
         let read_only = self.ws.active_tab().read_only;
         if ui.button("Neu              Strg+N").clicked() {
@@ -203,6 +216,14 @@ impl PlanoraApp {
             .clicked()
         {
             self.open_export();
+            ui.close();
+        }
+        if ui
+            .add_enabled(!read_only, egui::Button::new("Netz importieren …"))
+            .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
+            .clicked()
+        {
+            self.open_import();
             ui.close();
         }
         ui.separator();
@@ -592,6 +613,7 @@ impl eframe::App for PlanoraApp {
             tab.feature_dialog = None;
             tab.blend_dialog = None;
             tab.export_dialog = None;
+            tab.import_dialog = None;
         }
         sketch_panel::show(&ctx, &mut tab.state);
         if let Some(mut dialog) = tab.dialog.take()
@@ -618,6 +640,11 @@ impl eframe::App for PlanoraApp {
             && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
         {
             tab.export_dialog = Some(dialog);
+        }
+        if let Some(mut dialog) = tab.import_dialog.take()
+            && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
+        {
+            tab.import_dialog = Some(dialog);
         }
         if tab.blend_dialog.is_none() && tab.state.edge_picking {
             tab.state.edge_picking = false;

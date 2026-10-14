@@ -6,6 +6,7 @@ use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
 use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
+use crate::import_dialog::ImportDialog;
 use crate::state::AppState;
 use planora_project::config::Config;
 use planora_project::docstore::{Autosave, DocStore, DocumentInfo, LockMode, peek, read_version};
@@ -29,6 +30,7 @@ pub struct DocTab {
     pub feature_dialog: Option<FeatureDialog>,
     pub blend_dialog: Option<BlendDialog>,
     pub export_dialog: Option<ExportDialog>,
+    pub import_dialog: Option<ImportDialog>,
     /// Anzeigename ohne `.pcad`, bzw. „Unbenannt n“.
     pub name: String,
     pub path: Option<NodePath>,
@@ -60,6 +62,7 @@ impl DocTab {
             feature_dialog: None,
             blend_dialog: None,
             export_dialog: None,
+            import_dialog: None,
             name,
             path: None,
             store: None,
