@@ -4,6 +4,7 @@
 
 mod check;
 pub mod error;
+mod file;
 mod gltf;
 pub mod limits;
 mod mesh;
@@ -18,6 +19,7 @@ mod zip;
 
 pub use check::{MeshReport, check_mesh, weld_exact};
 pub use error::ExchangeError;
+pub use file::{Format, export_file, import_file, temp_path};
 pub use gltf::{GLTF_SCALE, write_glb};
 pub use limits::{
     CHECK_EVERY, MAX_FILE_BYTES, MAX_LINE_BYTES, MAX_TRIANGLES, MAX_VERTICES, READ_BUFFER,
