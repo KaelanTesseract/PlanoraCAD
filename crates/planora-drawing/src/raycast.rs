@@ -9,10 +9,11 @@
 //! Einordnung je Schnittpunkt mit `tol = 16·geom_tol(E)`: Randabstand höchstens `tol` →
 //! `Boundary`. Fern von gekrümmten Randkurven wie `point_in_face` des Kernels: Windungszahl der
 //! Randpolygone im Parameterraum → `Inside` oder verworfen (die Polygone berechnet
-//! [`Scene::new`] einmal je Fläche). Die Polygone tasten Bögen nur alle 5° ab und weichen bis
-//! etwa `1e-3·r` vom wahren Rand ab; in einem Band von `2e-3 · (größtes Maß der gekrümmten
-//! Randkurven) + tol` um gekrümmte Randkurven entscheidet deshalb der nächste Randpunkt `q`
-//! exakt: Innenseite ist links der Laufrichtung `τ` um die Außennormale `n` (äußere Schleifen
+//! [`Scene::new`] einmal je Fläche). Die Polygone tasten Bögen nur alle 5° ab (Freiformkurven
+//! nach ihrer Struktur, Geraden nur am Anfang) und weichen vom wahren Rand ab; je Randstück
+//! misst [`Scene::new`] diese Abweichung (im Raum und über die Fläche gehoben) und legt ein
+//! Band von `max(2 · Abweichung, 2e-3 · Radius bei Kreis/Ellipse) + tol` um das Stück. Im Band
+//! entscheidet der nächste Randpunkt `q` exakt: Innenseite ist links der Laufrichtung `τ` um die Außennormale `n` (äußere Schleifen
 //! laufen gegen den Uhrzeigersinn, Löcher andersherum), also `(p − q)·(n × τ) > tol` → innen,
 //! `< −tol` → außen, sonst Rand. Liegt `q` an einer Ecke (Ende eines Randstücks), gilt der Punkt
 //! als `Boundary` (vorsichtig; die Sichtprüfung verwirft solche Strahlen). Nähte (Randstücke,
@@ -27,7 +28,9 @@ use crate::DrawBody;
 use crate::error::DrawError;
 use crate::limits::geom_tol;
 use planora_exchange::Progress;
-use planora_kernel::boolean::{FaceGeom, Seg, face_geom, loop_points, points_to_uv, winding};
+use planora_kernel::boolean::{
+    FaceGeom, Seg, face_geom, loop_points, points_to_uv, points_to_uv_indexed, winding,
+};
 use planora_kernel::{Curve, Surface};
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use std::f64::consts::PI;
@@ -41,9 +44,13 @@ const IN_PLANE_REL: f64 = 1e-6;
 /// Doppelwurzel einer Quadrik: halber Wurzelabstand `√|b'² − a·c| / |a| < TANGENT_SEP_REL · E`
 /// (für `a = 1` dasselbe wie `|b'² − a·c| < 1e-12·E²`).
 const TANGENT_SEP_REL: f64 = 1e-6;
-/// Band um gekrümmte Randkurven (relativ zu ihrem größten Maß), in dem der nächste Randpunkt
-/// statt des Polygons entscheidet: `2e-3 ≥ 2·(1 − cos 2,5°)` (Abtastung alle 5°).
+/// Mindestband um Kreise und Ellipsen (relativ zu ihrem größten Maß), in dem der nächste
+/// Randpunkt statt des Polygons entscheidet: `2e-3 ≥ 2·(1 − cos 2,5°)` (Abtastung alle 5°).
 const RIM_BAND_REL: f64 = 2e-3;
+/// Vergleichsstellen je Polygonkante beim Messen der Polygonabweichung (Teilungen).
+const SAG_SUBSAMPLES: usize = 8;
+/// Sicherheitsfaktor auf die gemessene Polygonabweichung.
+const SAG_FACTOR: f64 = 2.0;
 /// Bruchteil am Ende eines Randstücks, ab dem der nächste Randpunkt als Ecke gilt.
 const CORNER_FRACTION: f64 = 1e-6;
 /// `|a|` darunter (Richtung normiert): Strahl parallel zu den Mantellinien.
@@ -104,8 +111,6 @@ struct FaceData {
     polys: Vec<Vec<DVec2>>,
     /// Je Randstück (in der Reihenfolge `loops.iter().flatten()`) seine Art.
     segs: Vec<SegInfo>,
-    /// Breite des Bands um gekrümmte Randkurven (0: keine gekrümmten Randkurven).
-    band: f64,
     /// Hüllbox der Fläche, aufgebläht.
     lo: DVec3,
     hi: DVec3,
@@ -116,67 +121,95 @@ struct FaceData {
 struct SegInfo {
     /// Naht: die Fläche enthält dasselbe Stück auch gegenläufig.
     seam: bool,
-    /// Gekrümmt (Kreis, Ellipse, Freiform).
-    curved: bool,
+    /// Breite des Bands um das Stück, in dem der nächste Randpunkt statt des Polygons
+    /// entscheidet (0: Polygon exakt, etwa Geraden auf Ebenen).
+    band: f64,
     /// Geschlossen (Anfang = Ende): seine Enden sind keine Ecke.
     closed: bool,
 }
 
-/// Größtes Maß einer gekrümmten Randkurve: Kreisradius, große Halbachse, Ausdehnung des
-/// Kontrollpolygons; Geraden 0.
-fn curve_size(c: &Curve) -> f64 {
+/// Größtes Maß eines Kegelschnitts (Kreisradius, große Halbachse); sonst 0.
+fn conic_size(c: &Curve) -> f64 {
     match c {
-        Curve::Line { .. } => 0.0,
         Curve::Circle { radius, .. } => radius.abs(),
         Curve::Ellipse { major, minor, .. } => major.abs().max(minor.abs()),
-        Curve::Nurbs(n) => {
-            let pts = n.control_points();
-            let lo = pts
-                .iter()
-                .fold(DVec3::splat(f64::INFINITY), |a, p| a.min(*p));
-            let hi = pts
-                .iter()
-                .fold(DVec3::splat(f64::NEG_INFINITY), |a, p| a.max(*p));
-            (hi - lo).length()
-        }
+        _ => 0.0,
     }
 }
 
-/// Art aller Randstücke und Bandbreite der Fläche.
-fn seg_infos(g: &FaceGeom, tol: f64) -> (Vec<SegInfo>, f64) {
+/// Gemessene Abweichung des Randpolygons vom wahren Randstück, in den Raum gehoben: Das
+/// Stück wird wie im Kernel abgetastet (`loop_points` auf das Stück allein: Bruchteile `k/n`),
+/// die Punkte wie im Kernel in `(u, v)` umgerechnet (`points_to_uv_indexed`). Zwischen zwei
+/// Abtastpunkten wird an `SAG_SUBSAMPLES − 1` Stellen der wahre Kurvenpunkt mit dem
+/// Flächenpunkt der Sehne im Parameterraum verglichen (das ist die Kante des Polygons, mit dem
+/// die Windungszahl rechnet, in den Raum gehoben); fehlt ein Parameter (Pol), mit der Sehne im
+/// Raum. So erhalten auch Geraden ein Band, die im Parameterraum gekrümmt sind (Geraden auf
+/// Freiformflächen, die keine Parameterlinien sind).
+fn polygon_sag(surface: &Surface, same_sense: bool, s: &Seg) -> f64 {
+    let mut pts = loop_points(std::slice::from_ref(s));
+    let n = pts.len();
+    if n == 0 {
+        return 0.0;
+    }
+    pts.push(s.end());
+    let mut uv: Vec<Option<DVec2>> = vec![None; n + 1];
+    for (q, idx) in points_to_uv_indexed(surface, same_sense, &pts) {
+        if let Some(i) = idx {
+            uv[i] = Some(q);
+        }
+    }
+    let mut sag: f64 = 0.0;
+    for k in 0..n {
+        for j in 1..SAG_SUBSAMPLES {
+            let w = j as f64 / SAG_SUBSAMPLES as f64;
+            let c = s.at((k as f64 + w) / n as f64);
+            // Polygonkante über die Fläche gehoben; an Polen (kein uv) ersatzweise die Sehne.
+            let lifted = match (uv[k], uv[k + 1]) {
+                (Some(a), Some(b)) => {
+                    let m = a.lerp(b, w);
+                    Some(surface.point(m.x, m.y)).filter(|p| p.is_finite())
+                }
+                _ => None,
+            };
+            let edge = lifted.unwrap_or_else(|| pts[k].lerp(pts[k + 1], w));
+            sag = sag.max(c.distance(edge));
+        }
+    }
+    if sag.is_finite() { sag } else { f64::INFINITY }
+}
+
+/// Art aller Randstücke der Fläche: Naht, geschlossen, Bandbreite
+/// `max(SAG_FACTOR · gemessene Abweichung, 2e-3 · Maß bei Kreis/Ellipse) + tol`
+/// (0, wenn das Polygon das Stück genau wiedergibt).
+fn seg_infos(g: &FaceGeom, tol: f64) -> Vec<SegInfo> {
     let all: Vec<&Seg> = g.loops.iter().flatten().collect();
     let ends: Vec<(DVec3, DVec3, DVec3)> = all
         .iter()
         .map(|s| (s.start(), s.at(0.5), s.end()))
         .collect();
-    let mut size: f64 = 0.0;
-    let infos = all
-        .iter()
+    all.iter()
         .enumerate()
         .map(|(i, s)| {
             let (a, m, b) = ends[i];
             let seam = ends.iter().enumerate().any(|(j, &(a2, m2, b2))| {
                 j != i && a.distance(b2) <= tol && b.distance(a2) <= tol && m.distance(m2) <= tol
             });
-            let curved = !matches!(s.curve, Curve::Line { .. });
-            if curved && !seam {
-                size = size.max(curve_size(&s.curve));
-            }
+            let band = if seam {
+                0.0
+            } else {
+                let w = (SAG_FACTOR * polygon_sag(&g.surface, g.same_sense, s))
+                    .max(RIM_BAND_REL * conic_size(&s.curve));
+                // Unterhalb der Toleranz gibt das Polygon das Stück genau genug wieder.
+                if w > tol { w + tol } else { 0.0 }
+            };
             SegInfo {
                 seam,
-                curved,
+                band,
                 closed: a.distance(b) <= tol,
             }
         })
-        .collect();
-    let band = if size > 0.0 {
-        RIM_BAND_REL * size + tol
-    } else {
-        0.0
-    };
-    (infos, band)
+        .collect()
 }
-
 /// Alle Flächen aller Körper, vorbereitet für viele Strahlen (FaceGeom, Hüllbox, Randpolygone
 /// einmal berechnet).
 pub struct Scene {
@@ -228,14 +261,13 @@ impl Scene {
                 } else {
                     pad
                 };
-                let (segs, band) = seg_infos(&geom, pad);
+                let segs = seg_infos(&geom, pad);
                 faces.push(FaceData {
                     body: bi,
                     face: fid.index(),
                     geom,
                     polys,
                     segs,
-                    band,
                     lo: lo - DVec3::splat(p),
                     hi: hi + DVec3::splat(p),
                 });
@@ -414,7 +446,7 @@ impl Scene {
             if info.seam {
                 continue;
             }
-            in_band |= info.curved && dist <= f.band;
+            in_band |= dist <= info.band;
             if nearest.is_none_or(|n| dist < n.0) {
                 nearest = Some((dist, s, *info, fr));
             }

@@ -207,6 +207,37 @@ pub fn plate_with_hole_solid(half: f64, r: f64, h: f64) -> Solid {
     extrude(&profile, &Frame::WORLD, h, &tol()).unwrap()
 }
 
+/// Platte 10 × 10 × 5, deren Kante bei x = 10 durch eine sanft gewölbte kubische Bézierkurve
+/// mit den Kontrollpunkten (10,0), (10,43; 3,33), (10,43; 6,67), (10,10) ersetzt ist (eine
+/// Freiformwand). Bei y = 5 (t = ½) liegt der Rand bei x = 10/8 + 10,43·6/8 + 10/8 = 10,3225.
+pub fn bulged_plate_solid() -> Solid {
+    let bezier = cubic_from_controls(&[
+        (10.0, 0.0, 0.0),
+        (10.43, 3.33, 0.0),
+        (10.43, 6.67, 0.0),
+        (10.0, 10.0, 0.0),
+    ]);
+    let profile = Profile {
+        outer: ProfileLoop {
+            start: DVec2::ZERO,
+            segments: vec![
+                Segment::Line {
+                    to: DVec2::new(10.0, 0.0),
+                },
+                Segment::Nurbs {
+                    curve: Arc::new(bezier),
+                },
+                Segment::Line {
+                    to: DVec2::new(0.0, 10.0),
+                },
+                Segment::Line { to: DVec2::ZERO },
+            ],
+        },
+        holes: vec![],
+    };
+    extrude(&profile, &Frame::WORLD, 5.0, &tol()).unwrap()
+}
+
 /// Platte mit einer Freiformwand: Grundriss (0,0) → (10,0) → Spline durch (10,0), (12,5), (10,10)
 /// → (0,10) → (0,0), Höhe 5. Liefert den Körper und den Index der Freiformfläche.
 pub fn nurbs_slab_solid() -> (Solid, usize) {

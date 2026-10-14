@@ -272,6 +272,33 @@ fn rays_just_inside_a_hole_rim_hit_no_material() {
 }
 
 #[test]
+fn rays_just_inside_a_gently_curved_freeform_rim_are_not_lost() {
+    // Platte mit sanft gewölbter Bézierkante (Rand bei y = 5 genau x = 10,3225, aus den
+    // Kontrollpunkten von Hand): Der Kernel tastet die Kurve nur in 3 Stücken ab, das Polygon
+    // liegt bei y = 5 rund 0,036 innen. Senkrechte Strahlen bei y = 5 innerhalb des Rands
+    // treffen Boden (s = 5) und Deckel (s = 10), außerhalb nichts.
+    let p = bulged_plate_solid();
+    let sc = scene(&p);
+    for x in [10.29, 10.295, 10.30, 10.31, 10.32] {
+        match sc.cast(DVec3::new(x, 5.0, -5.0), DVec3::Z, 0.0) {
+            Ray::Hits(h) => {
+                assert_eq!(h.len(), 2, "x = {x}: {h:?}");
+                assert!((h[0].s - 5.0).abs() < 1e-9 && (h[1].s - 10.0).abs() < 1e-9);
+                assert!(h.iter().all(|x| x.class == HitClass::Inside), "{h:?}");
+            }
+            Ray::Unsafe(r) => panic!("x = {x}: {r}"),
+        }
+    }
+    for x in [10.325, 10.33, 10.35] {
+        let r = sc.cast(DVec3::new(x, 5.0, -5.0), DVec3::Z, 0.0);
+        assert!(
+            matches!(r, Ray::Hits(ref h) if h.is_empty()),
+            "x = {x}: {r:?}"
+        );
+    }
+}
+
+#[test]
 fn ray_exactly_through_the_rim_is_boundary() {
     // Schräger Strahl durch den Randpunkt q des Bodenkreises (32,5°): alle Treffer bei s = 5
     // (Boden und Mantel) sind Rand, keiner innen.
@@ -337,6 +364,7 @@ fn hit_classes_agree_with_point_in_face() {
         half_cylinder_solid(5.0, 8.0),
         lower_hemisphere_solid(7.0),
         nurbs_slab_solid().0,
+        bulged_plate_solid(),
     ];
     // Senkrechte Strahlen dicht an den Randkreisen (Radien 5, 6, 2, 7).
     let mut near_rim: Vec<(DVec3, DVec3)> = Vec::new();
@@ -347,6 +375,13 @@ fn hit_classes_agree_with_point_in_face() {
                 let rho: f64 = rim * (1.0 + rel);
                 near_rim.push((DVec3::new(rho * th.cos(), rho * th.sin(), -20.0), DVec3::Z));
             }
+        }
+    }
+    // Senkrechte Strahlen dicht an der sanft gewölbten Freiformkante der Platte (x ≈ 10,1…10,32).
+    for y in [1.0, 3.0, 5.0, 7.0, 9.0] {
+        for i in 0..20 {
+            let x = 10.05 + 0.015 * i as f64;
+            near_rim.push((DVec3::new(x, y, -20.0), DVec3::Z));
         }
     }
     let (mut checked, mut in_zone) = (0, 0);
