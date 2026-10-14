@@ -563,3 +563,39 @@ fn a_variable_fillet_feature_computes_and_passes_the_volume_probe() {
     }
     d.check_invariants().unwrap();
 }
+
+#[test]
+fn too_many_edges_or_points_are_refused_before_any_search() {
+    // Korrekturwelle (Minor c): Kanten über MAX_BLEND_EDGES und Radienpunkte über 64 werden in
+    // der Parameterprüfung benannt abgelehnt, bevor eine Kante im Körper gesucht wird.
+    let (mut d, b) = with_box(10.0);
+    let r = edge_ref(&d, b, "Deckel", "Wand 1");
+    let many = vec![r.clone(); planora_kernel::blend::MAX_BLEND_EDGES + 44];
+    let f = d
+        .add_feature("Viele", fillet(b, many, BlendArt::Rundung { radius: 1.0 }))
+        .unwrap();
+    match status(&d, f) {
+        FeatureStatus::Error(e) => assert!(e.contains("Zu viele Kanten (höchstens 256)"), "{e}"),
+        s => panic!("{s:?}"),
+    }
+    d.delete(f).unwrap();
+    // Genau 256 Kanten (alle dieselbe) gehen durch die Prüfung; der Kernel entfernt Duplikate.
+    let full = vec![r.clone(); planora_kernel::blend::MAX_BLEND_EDGES];
+    let f = d
+        .add_feature("Grenze", fillet(b, full, BlendArt::Rundung { radius: 1.0 }))
+        .unwrap();
+    assert_eq!(status(&d, f), FeatureStatus::Ok);
+    d.delete(f).unwrap();
+    let punkte: Vec<(f64, f64)> = (0..100).map(|i| (i as f64, 1.0)).collect();
+    let f = d
+        .add_feature(
+            "Punkte",
+            fillet(b, vec![r], BlendArt::RundungVariabel { punkte }),
+        )
+        .unwrap();
+    match status(&d, f) {
+        FeatureStatus::Error(e) => assert!(e.contains("2 bis 64 Punkte"), "{e}"),
+        s => panic!("{s:?}"),
+    }
+    d.check_invariants().unwrap();
+}

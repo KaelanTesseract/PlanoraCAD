@@ -2,7 +2,8 @@
 //! Skizzen-Modus bearbeitet werden). Zahlen nehmen Komma und Punkt an.
 
 use crate::blend_dialog::{
-    ArtChoice, check_min_sizes, insert_point, min_size_for, min_text, set_first_face,
+    ArtChoice, TOO_MANY_POINTS, check_min_sizes, insert_point, min_size_for, min_text,
+    set_first_face,
 };
 use crate::browser::ERROR_COLOR;
 use crate::create_dialog::axis_candidates;
@@ -232,6 +233,11 @@ impl FeatureDialog {
         }
     }
 
+    /// Aktuelle Meldung des Dialogs (für Tests).
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
     /// Bezeichnungen der Zahlenfelder (für Tests).
     pub fn labels(&self) -> Vec<String> {
         self.numbers.iter().map(|(l, _)| l.clone()).collect()
@@ -267,8 +273,9 @@ impl FeatureDialog {
             art: BlendArt::RundungVariabel { punkte },
             ..
         } = &mut self.kind
+            && let Err(e) = insert_point(punkte)
         {
-            insert_point(punkte);
+            self.error = Some(e);
         }
         self.renumber();
     }
@@ -284,6 +291,9 @@ impl FeatureDialog {
             && i < punkte.len()
         {
             punkte.remove(i);
+            if self.error.as_deref() == Some(TOO_MANY_POINTS) {
+                self.error = None;
+            }
         }
         self.renumber();
     }

@@ -233,3 +233,28 @@ fn the_new_dialog_parts_draw() {
     }
     assert_eq!(art(&s, id), BlendArt::Rundung { radius: 2.0 });
 }
+
+#[test]
+fn at_most_sixty_four_radius_points() {
+    // Korrekturwelle (Minor d): Der 65. Punkt wird nicht eingefügt, der Dialog meldet die Grenze.
+    use planora_app::blend_dialog::{TOO_MANY_POINTS, insert_point};
+    let mut pts: Vec<(f64, f64)> = (0..64).map(|i| (i as f64, 1.0)).collect();
+    assert_eq!(insert_point(&mut pts), Err(TOO_MANY_POINTS.to_string()));
+    assert_eq!(pts.len(), 64);
+    let mut d = BlendDialog::variable();
+    d.points = (0..64).map(|i| (i.to_string(), "1".to_string())).collect();
+    d.add_point();
+    assert_eq!(d.points.len(), 64);
+    assert_eq!(d.error(), Some(TOO_MANY_POINTS));
+    let (s, id) = with_fillet();
+    let mut d = FeatureDialog::new(&s, id).unwrap();
+    d.set_blend_art(ArtChoice::RundungVariabel);
+    for _ in 0..62 {
+        d.add_point();
+    }
+    assert_eq!(d.labels().len(), 128);
+    assert_eq!(d.error(), None);
+    d.add_point();
+    assert_eq!(d.labels().len(), 128);
+    assert_eq!(d.error(), Some(TOO_MANY_POINTS));
+}

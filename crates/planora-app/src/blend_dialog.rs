@@ -5,8 +5,8 @@ use crate::browser::ERROR_COLOR;
 use crate::sketch_view::{format_number, parse_number};
 use crate::state::{AppState, MAX_COORD_MM};
 use planora_feature::BlendArt;
-use planora_kernel::blend::min_blend_size_request;
 use planora_kernel::blend::topo::{edge_uses, face_name};
+use planora_kernel::blend::{MAX_RADIUS_POINTS, min_blend_size_request};
 use planora_kernel::{BlendKind, Edge, Id, Solid};
 use planora_math::Tolerance;
 use planora_render::{EdgeRef, Pick};
@@ -98,10 +98,17 @@ impl ArtChoice {
     }
 }
 
+/// Meldung, wenn ein variabler Radius schon die höchste Zahl Punkte hat.
+pub const TOO_MANY_POINTS: &str = "Ein variabler Radius hat höchstens 64 Punkte";
+
 /// Neuer Punkt in der Mitte des größten Abstands (Position, Radius als Mittel der Nachbarn).
-pub fn insert_point(points: &mut Vec<(f64, f64)>) {
+/// Bei schon [`MAX_RADIUS_POINTS`] Punkten ohne Wirkung mit Meldung [`TOO_MANY_POINTS`].
+pub fn insert_point(points: &mut Vec<(f64, f64)>) -> Result<(), String> {
+    if points.len() >= MAX_RADIUS_POINTS {
+        return Err(TOO_MANY_POINTS.into());
+    }
     if points.len() < 2 {
-        return;
+        return Ok(());
     }
     let k = (0..points.len() - 1)
         .max_by(|&a, &b| {
@@ -110,6 +117,7 @@ pub fn insert_point(points: &mut Vec<(f64, f64)>) {
         .unwrap_or(0);
     let (p, q) = (points[k], points[k + 1]);
     points.insert(k + 1, (0.5 * (p.0 + q.0), 0.5 * (p.1 + q.1)));
+    Ok(())
 }
 
 /// Kleinstes Maß in mm, das der Kern für diesen Körper und diese Art zulässt.
@@ -240,6 +248,10 @@ impl BlendDialog {
 
     /// Punkt in der Mitte des größten Abstands einfügen (ungültige Felder: ans Ende, 100 %).
     pub fn add_point(&mut self) {
+        if self.points.len() >= MAX_RADIUS_POINTS {
+            self.error = Some(TOO_MANY_POINTS.into());
+            return;
+        }
         let parsed: Option<Vec<(f64, f64)>> = self
             .points
             .iter()
@@ -247,7 +259,10 @@ impl BlendDialog {
             .collect();
         match parsed {
             Some(mut pts) if pts.len() >= 2 => {
-                insert_point(&mut pts);
+                if let Err(e) = insert_point(&mut pts) {
+                    self.error = Some(e);
+                    return;
+                }
                 self.points = pts
                     .iter()
                     .map(|(p, r)| (format_number(*p, 2), format_number(*r, 3)))
@@ -261,6 +276,9 @@ impl BlendDialog {
     pub fn remove_point(&mut self, i: usize) {
         if self.points.len() > 2 && i < self.points.len() {
             self.points.remove(i);
+            if self.error.as_deref() == Some(TOO_MANY_POINTS) {
+                self.error = None;
+            }
         }
     }
 

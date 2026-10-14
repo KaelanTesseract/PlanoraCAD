@@ -205,3 +205,46 @@ fn hostile_blend_files_are_rejected_or_named() {
         );
     }
 }
+
+#[test]
+fn files_with_too_many_edges_or_points_are_named_quickly() {
+    // Korrekturwelle (Minor c): 300 bzw. 20 000 gleiche Kanten und 100 Radienpunkte laden, das
+    // Feature meldet die Grenze sofort (kein Suchen jeder Kante, kein Hänger).
+    let good = encode_version(&blend_document().snapshot()).unwrap();
+    let edit = |typ: &str, f: &dyn Fn(&mut serde_json::Value)| -> String {
+        let mut v: serde_json::Value = serde_json::from_str(&good).unwrap();
+        let features = v["features"].as_array_mut().unwrap();
+        let blend = features
+            .iter_mut()
+            .find(|x| x["art"]["typ"] == "verrunden" && x["art"]["art"]["typ"] == typ)
+            .unwrap();
+        f(&mut blend["art"]);
+        serde_json::to_string_pretty(&v).unwrap()
+    };
+    let repeat = |n: usize| {
+        move |a: &mut serde_json::Value| {
+            let one = a["kanten"][0].clone();
+            a["kanten"] = serde_json::Value::Array(vec![one; n]);
+        }
+    };
+    let points = |a: &mut serde_json::Value| {
+        let p: Vec<serde_json::Value> = (0..100)
+            .map(|i| serde_json::json!([i as f64, 1.0]))
+            .collect();
+        a["art"]["punkte"] = serde_json::Value::Array(p);
+    };
+    for (text, want) in [
+        (edit("rundung", &repeat(300)), "Zu viele Kanten"),
+        (edit("rundung", &repeat(20_000)), "Zu viele Kanten"),
+        (edit("rundung_variabel", &points), "2 bis 64 Punkte"),
+    ] {
+        let d = Document::from_snapshot(decode_version(&text, "x.json").unwrap(), 0.05).unwrap();
+        d.check_invariants().unwrap();
+        assert!(
+            d.features()
+                .iter()
+                .any(|f| matches!(&f.status, FeatureStatus::Error(e) if e.contains(want))),
+            "{want}"
+        );
+    }
+}

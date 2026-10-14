@@ -1,8 +1,11 @@
 //! Berechnung eines einzelnen Features aus seinen Parametern und den sichtbaren Körpern.
 
 use crate::error::FeatureError;
-use crate::model::{BodyRef, Document, EdgeCopy, FeatureKind, SketchFeature, SketchPlane};
+use crate::model::{
+    BlendArt, BodyRef, Document, EdgeCopy, FeatureKind, SketchFeature, SketchPlane,
+};
 use crate::refs::{FaceRef, first_face, resolve_edge, resolve_face};
+use planora_kernel::blend::{MAX_BLEND_EDGES, MAX_RADIUS_POINTS};
 use planora_kernel::boolean::BooleanError;
 use planora_kernel::{
     BlendEdge, BlendError, BlendRequest, Blended, BoolOp, Kernel, Solid, SurfaceKind,
@@ -125,6 +128,20 @@ fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
                 return Err(FeatureError::InvalidInput(
                     "Es ist keine Kante gewählt".into(),
                 ));
+            }
+            // Grenzen des Kernels schon hier: Eine feindliche Datei mit sehr vielen Kanten oder
+            // Radienpunkten soll nicht erst jede Kante im Körper suchen lassen.
+            if edges.len() > MAX_BLEND_EDGES {
+                return Err(FeatureError::InvalidInput(format!(
+                    "Zu viele Kanten (höchstens {MAX_BLEND_EDGES})"
+                )));
+            }
+            if let BlendArt::RundungVariabel { punkte } = art
+                && punkte.len() > MAX_RADIUS_POINTS
+            {
+                return Err(FeatureError::InvalidInput(format!(
+                    "Ein variabler Radius braucht 2 bis {MAX_RADIUS_POINTS} Punkte"
+                )));
             }
             if !art.numbers().iter().all(|v| in_range(*v)) {
                 return out("Ein Maß der Rundung oder Fase");
