@@ -2434,6 +2434,7 @@ dependencies = [
  "planora-project",
  "planora-render",
  "planora-sketch",
+ "planora-step",
  "winit",
 ]
 

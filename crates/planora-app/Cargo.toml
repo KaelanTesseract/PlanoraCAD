@@ -23,6 +23,7 @@ planora-sketch.workspace = true
 planora-feature.workspace = true
 planora-project.workspace = true
 planora-exchange.workspace = true
+planora-step.workspace = true
 glam.workspace = true
 eframe.workspace = true
 egui.workspace = true

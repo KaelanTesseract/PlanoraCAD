@@ -113,7 +113,8 @@ fn preparing_shows_triangles_estimate_and_report() {
         }
         other => panic!("{other:?}"),
     }
-    d.format = Format::Obj;
+    // Mechanisch angepasst (Teilprojekt 10, Task 13): Formate des Fensters als `ExportFormat`.
+    d.format = ExportFormat::Mesh(Format::Obj);
     assert!(
         matches!(d.status(&s), ExportStatus::Ready { .. }),
         "das Format ändert das Netz nicht"
