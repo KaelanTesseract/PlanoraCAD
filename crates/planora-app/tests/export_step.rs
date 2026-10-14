@@ -316,18 +316,34 @@ fn closing_is_refused_while_step_is_written_and_the_file_is_finished() {
 
 #[test]
 fn the_window_stays_open_with_a_hint_while_step_is_written() {
-    let mut s = mixed_state();
+    // Viele Körper, damit der Arbeitsthread beim Zeichnen sicher noch läuft.
+    let mut s = AppState::new();
+    for _ in 0..300 {
+        s.create_box(DVec3::splat(3.0)).unwrap();
+    }
+    s.selected_body = None;
     let dir = temp_dir("hinweis");
+    let path = dir.join("k.step");
     let mut d = step_dialog(&s);
-    d.write_to(dir.join("k.step"), &s);
+    d.write_to(path.clone(), &s);
     assert!(!d.request_close());
-    // Das Fenster bleibt offen (`draw` verlangt `show == true`); der Hinweis steht da, solange
-    // der Arbeitsthread noch nicht abgeholt ist.
-    let text = draw(&mut d, &mut s);
-    assert!(
-        text.contains(WRITING_HINT) || !d.is_writing_step(),
-        "{text}"
-    );
+    let ctx = context();
+    let mut last = None;
+    let mut text = String::new();
+    for _ in 0..2 {
+        let out = ctx.run_ui(wide(), |ui| {
+            assert!(d.show(ui.ctx(), &mut s, &mut last), "Fenster bleibt offen");
+        });
+        text = collect_texts(&out);
+        out.drop_without_applying_deltas();
+    }
+    assert!(d.is_writing_step(), "das Schreiben muss noch laufen");
+    assert!(text.contains(WRITING_HINT), "{text}");
+    d.cancel_write();
+    d.tick(&s, true);
+    assert_eq!(d.write_state(), WriteState::Failed("Abgebrochen".into()));
+    assert!(!path.exists());
+    assert!(d.request_close());
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -350,36 +366,78 @@ fn cancelling_while_writing_says_so_and_keeps_the_old_file() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Zahl der Hilfsdateien („.…planora-tmp“) im Ordner.
+fn temp_files(dir: &PathBuf) -> usize {
+    fs::read_dir(dir)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with("planora-tmp")
+        })
+        .count()
+}
+
+/// Öffnet im aktiven Tab ein STEP-Schreiben mit `boxes` Quadern und holt es nie ab.
+fn start_writing_in_active_tab(
+    w: &mut planora_app::workspace::Workspace,
+    boxes: usize,
+    to: &PathBuf,
+) {
+    let tab = w.active_tab_mut();
+    for _ in 0..boxes {
+        tab.state.create_box(DVec3::splat(3.0)).unwrap();
+    }
+    tab.state.selected_body = None;
+    let mut d = step_dialog(&tab.state);
+    d.write_to(to.clone(), &tab.state);
+    tab.export_dialog = Some(d);
+}
+
 #[test]
-fn tabs_and_the_program_do_not_close_while_step_is_written() {
+fn closing_tabs_and_quitting_work_with_an_unfetched_step_write_in_a_background_tab() {
     use planora_app::workspace::Workspace;
     use planora_project::config::Config;
     let mut w = Workspace::new(None, Config::default());
     let dir = temp_dir("tab");
-    {
-        let tab = w.active_tab_mut();
-        tab.state.create_box(DVec3::splat(5.0)).unwrap();
-        tab.state.selected_body = None;
-        let mut d = step_dialog(&tab.state);
-        d.write_to(dir.join("t.step"), &tab.state);
-        tab.export_dialog = Some(d);
+    let target = dir.join("t.step");
+    start_writing_in_active_tab(&mut w, 1, &target);
+    // Das Schreiben ist längst fertig, wurde aber nie abgeholt (Hintergrund-Tab ohne `tick`).
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    w.new_tab();
+    // Der erste Tab ist geändert: es gibt die gewohnte Rückfrage, keine Sperre.
+    assert!(!w.request_quit());
+    assert!(w.prompt.is_some(), "die übliche Rückfrage „Speichern?“");
+    w.discard_and_continue();
+    assert!(w.quit, "Beenden geht trotz nicht abgeholtem Schreiben");
+    assert!(target.exists());
+    assert_eq!(temp_files(&dir), 0);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn closing_a_tab_during_a_running_step_write_cancels_it_and_leaves_no_helper_file() {
+    use planora_app::workspace::Workspace;
+    use planora_project::config::Config;
+    let mut w = Workspace::new(None, Config::default());
+    let dir = temp_dir("tab-laeuft");
+    let target = dir.join("alt.step");
+    fs::write(&target, "alt").unwrap();
+    start_writing_in_active_tab(&mut w, 300, &target);
+    assert!(!w.request_close(0));
+    w.discard_and_continue();
+    assert_eq!(w.tabs.len(), 1, "der Tab ist weg, ein frischer ersetzt ihn");
+    assert!(w.tabs[0].export_dialog.is_none());
+    // Der abgebrochene Arbeitsthread räumt auf: keine Hilfsdatei, die Zieldatei ist ganz.
+    let start = std::time::Instant::now();
+    while temp_files(&dir) > 0 && start.elapsed().as_secs() < 10 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    // Der Tab ist geändert: ohne Sperre gäbe es die Rückfrage „Speichern?“ (`prompt`).
-    assert!(!w.request_close(0), "Tab bleibt offen");
-    assert!(
-        w.prompt.is_none(),
-        "keine Rückfrage, sondern der Hinweis im Fenster"
-    );
-    assert!(!w.request_quit(), "Programm bleibt offen");
-    assert!(w.prompt.is_none());
-    assert!(!w.quit);
-    {
-        let tab = w.active_tab_mut();
-        let st = &tab.state;
-        tab.export_dialog.as_mut().unwrap().tick(st, true);
-        assert!(!tab.export_dialog.as_ref().unwrap().is_writing_step());
-    }
-    assert!(dir.join("t.step").exists());
+    assert_eq!(temp_files(&dir), 0);
+    let text = fs::read_to_string(&target).unwrap();
+    assert!(text == "alt" || text.starts_with("ISO-10303-21;"));
     let _ = fs::remove_dir_all(&dir);
 }
 

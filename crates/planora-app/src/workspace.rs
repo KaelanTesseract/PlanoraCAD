@@ -52,14 +52,6 @@ pub struct DocTab {
 }
 
 impl DocTab {
-    /// `true`, wenn im Fenster „Exportieren“ gerade eine STEP-Datei geschrieben wird; dann darf
-    /// der Tab nicht schließen (das Fenster zeigt den Hinweis).
-    pub fn export_dialog_blocks_close(&mut self) -> bool {
-        self.export_dialog
-            .as_mut()
-            .is_some_and(|d| !d.request_close())
-    }
-
     fn new(id: u64, name: String, state: AppState) -> DocTab {
         let edits = state.document.edit_count();
         DocTab {
@@ -323,9 +315,6 @@ impl Workspace {
         if self.autosave_offer_pending() {
             return false;
         }
-        if self.tabs[i].export_dialog_blocks_close() {
-            return false;
-        }
         let t = &self.tabs[i];
         if t.is_dirty() {
             self.prompt = Some(Prompt::SaveChanges {
@@ -343,11 +332,6 @@ impl Workspace {
     /// (oder zeigt ein noch offenes Autosicherungs-Angebot).
     pub fn request_quit(&mut self) -> bool {
         if self.autosave_offer_pending() {
-            return false;
-        }
-        // Läuft in einem Tab das Schreiben einer STEP-Datei, wird nicht beendet (Hinweis im
-        // Fenster „Exportieren“), sonst bliebe die alte Datei ohne Meldung liegen.
-        if self.tabs.iter_mut().any(|t| t.export_dialog_blocks_close()) {
             return false;
         }
         if let Some(t) = self.tabs.iter().find(|t| t.is_dirty()) {
