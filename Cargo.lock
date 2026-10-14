@@ -2440,6 +2440,7 @@ dependencies = [
 name = "planora-exchange"
 version = "0.1.0"
 dependencies = [
+ "planora-kernel",
  "planora-math",
  "planora-mesh",
  "thiserror 2.0.21",

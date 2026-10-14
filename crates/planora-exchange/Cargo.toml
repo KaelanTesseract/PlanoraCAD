@@ -11,5 +11,8 @@ planora-math.workspace = true
 planora-mesh.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+planora-kernel.workspace = true
+
 [lints]
 workspace = true
