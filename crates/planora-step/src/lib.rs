@@ -3,6 +3,7 @@
 
 pub mod entity;
 pub mod error;
+mod file;
 mod geometry;
 pub mod number;
 mod product;
@@ -11,6 +12,7 @@ mod topology;
 
 pub use entity::{Entities, MAX_ENTITIES, WRAP_COLUMN, logical, refs};
 pub use error::StepError;
+pub use file::export_step_file;
 pub use geometry::FRAME_TOL;
 pub use number::{push_real, real};
 pub use product::{SCHEMA, SYSTEM, utc_timestamp};

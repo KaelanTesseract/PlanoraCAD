@@ -227,7 +227,7 @@ fn entity_numbers_of_a_written_file_run_from_one_without_gaps() {
 
 #[test]
 fn names_written_by_the_writer_are_read_back_unchanged() {
-    for name in ["Würfel", "Maß äö", "\u{1F600}", "é\u{1F600}"] {
+    for name in ["Würfel", "Maß äö", "\u{1F600}", "é\u{1F600}", "O'Neil\\x"] {
         let literal = step_string(name).text;
         let text = format!(
             "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'2;1');\n\
