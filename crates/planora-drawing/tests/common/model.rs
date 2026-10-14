@@ -401,7 +401,7 @@ fn boolean_op(a: &Solid, b: &Solid, op: planora_kernel::BoolOp) -> Solid {
 
 /// Zylinder (Radius `r`) längs der Achse `axis` (X, Y oder Z) durch den Punkt `center`, der
 /// zu beiden Seiten `half` lang ist.
-fn axis_cylinder(r: f64, half: f64, axis: DVec3, center: DVec3) -> Solid {
+pub fn axis_cylinder(r: f64, half: f64, axis: DVec3, center: DVec3) -> Solid {
     use planora_math::{DMat4, DQuat};
     let c = cylinder_solid(r, 2.0 * half);
     let rot = DQuat::from_rotation_arc(DVec3::Z, axis.normalize());
@@ -533,6 +533,19 @@ pub fn transformed(s: &Solid, f: f64, shift: f64) -> Solid {
     use planora_math::DMat4;
     let m = DMat4::from_translation(DVec3::splat(shift)) * DMat4::from_scale(DVec3::splat(f));
     mapped(s, &m)
+}
+
+/// Um `v` verschoben.
+pub fn translated(s: &Solid, v: DVec3) -> Solid {
+    mapped(s, &planora_math::DMat4::from_translation(v))
+}
+
+/// Quader `[lo, hi]` (Ecken in Weltkoordinaten).
+pub fn box_at(lo: (f64, f64, f64), hi: (f64, f64, f64)) -> Solid {
+    let lo = DVec3::new(lo.0, lo.1, lo.2);
+    let hi = DVec3::new(hi.0, hi.1, hi.2);
+    let d = hi - lo;
+    translated(&box_solid(d.x, d.y, d.z), lo)
 }
 
 /// Um die Achse `axis` durch den Ursprung um `angle` (Radiant) gedreht.

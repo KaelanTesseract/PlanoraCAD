@@ -42,10 +42,15 @@ pub fn mesh_extent(meshes: &[Mesh]) -> f64 {
 
 /// Feines Netz des Körpers: Sehnentoleranz `1e-3 · extent`.
 pub fn fine_mesh(solid: &Solid, extent: f64) -> Mesh {
+    mesh_with_chord(solid, chord_tol(extent))
+}
+
+/// Netz des Körpers mit der Sehnentoleranz `chord`.
+pub fn mesh_with_chord(solid: &Solid, chord: f64) -> Mesh {
     tessellate(
         solid,
         &TessellationOptions {
-            chord_tolerance: chord_tol(extent),
+            chord_tolerance: chord,
         },
     )
     .expect("Referenznetz")
@@ -109,14 +114,22 @@ pub struct RefScene {
 pub enum RefRay {
     Free,
     Blocked,
-    /// Ein Treffer liegt höchstens `4 · chord_tol` neben einer Merkmalskante des Netzes: Dort
-    /// weicht das Netz um bis zu eine Sehnentoleranz vom Körper ab, der Treffer ist unsicher.
+    /// Ein Treffer liegt höchstens `4 · chord_tol` neben einer Merkmalskante des Netzes, oder
+    /// der Strahlursprung liegt höchstens `4 · chord_tol` von der Ebene des getroffenen Dreiecks
+    /// (streifender Strahl): Dort weicht das Netz um bis zu eine Sehnentoleranz vom Körper ab,
+    /// der Treffer ist unsicher.
     Uncertain,
 }
 
 impl RefScene {
-    /// Bereitet die Netze für die Ansicht `basis` vor; `extent` ist die Ausdehnung der Körper.
+    /// Bereitet die Netze für die Ansicht `basis` vor; `extent` ist die Ausdehnung der Körper,
+    /// die Netze haben die Sehnentoleranz `chord_tol(extent)`.
     pub fn new(meshes: &[Mesh], basis: Basis, extent: f64) -> RefScene {
+        RefScene::with_chord(meshes, basis, extent, chord_tol(extent))
+    }
+
+    /// Wie [`RefScene::new`] für Netze mit der Sehnentoleranz `chord`.
+    pub fn with_chord(meshes: &[Mesh], basis: Basis, extent: f64, chord: f64) -> RefScene {
         let tris: Vec<[DVec3; 3]> = meshes.iter().flat_map(triangles).collect();
         let proj = |p: DVec3| DVec2::new(p.dot(basis.ex), p.dot(basis.ey));
         let mut lo = DVec2::splat(f64::INFINITY);
@@ -139,7 +152,7 @@ impl RefScene {
         let s = RefScene {
             tris: Vec::new(),
             basis,
-            chord: chord_tol(extent),
+            chord,
             reach: (hi3 - lo3).length() + 2.0 * extent,
             lo,
             cell,
@@ -213,11 +226,18 @@ impl RefScene {
         for i in i0..=i1 {
             for j in j0..=j1 {
                 for &k in &self.grid[i * GRID + j] {
-                    if let Some(s) = ray_triangle(o, d, &self.tris[k as usize])
+                    let tri = &self.tris[k as usize];
+                    if let Some(s) = ray_triangle(o, d, tri)
                         && s > min_s
                         && s <= self.reach
                     {
-                        if self.feature_dist(o + d * s) <= near {
+                        // Unsicher: Treffer nahe einer Merkmalskante, oder der Startpunkt liegt
+                        // selbst innerhalb der Netzgenauigkeit an der Ebene des getroffenen
+                        // Dreiecks (streifender Strahl längs einer Fläche – ob er das Netz
+                        // trifft, entscheidet dann nur die Sehnenabweichung).
+                        let n = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero();
+                        let start_gap = (o - tri[0]).dot(n).abs();
+                        if self.feature_dist(o + d * s) <= near || start_gap <= near {
                             return RefRay::Uncertain;
                         }
                         out = RefRay::Blocked;
@@ -226,6 +246,14 @@ impl RefScene {
             }
         }
         out
+    }
+
+    /// Alle Treffer (Abstand, Dreieck) eines Strahls, ohne Abstandsgrenze (Fehlersuche).
+    pub fn all_hits(&self, o: DVec3, d: DVec3) -> Vec<(f64, [DVec3; 3])> {
+        self.tris
+            .iter()
+            .filter_map(|t| ray_triangle(o, d, t).map(|s| (s, *t)))
+            .collect()
     }
 
     /// Eigene Kippabstimmung am Punkt `p`: 8 Strahlen zum Auge, je um `TILT_REF` in

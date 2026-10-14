@@ -87,14 +87,28 @@ fn mesh_reference_agrees_for_all_shapes_and_views() {
         ("sphere_on_box", sphere_on_box(20.0, 7.0)),
         ("rounded_box", rounded_box(20.0, 20.0, 20.0, 3.0)),
     ];
-    let mut tolerated = 0;
-    let mut sampled = 0;
-    let mut warnings = 0;
-    let mut undecided = 0;
-    for (name, s) in &shapes {
+    let cases: Vec<(&str, Vec<&planora_kernel::Solid>)> =
+        shapes.iter().map(|(n, s)| (*n, vec![s])).collect();
+    check_all_views(&cases);
+}
+
+/// Prüft alle Ansichten aller Fälle gegen die Netzreferenz: keine Fehler, je Ansicht höchstens
+/// 30 % und insgesamt höchstens 5 % unentschiedene Referenzstellen.
+fn check_all_views(cases: &[(&str, Vec<&planora_kernel::Solid>)]) {
+    let (mut tolerated, mut sampled, mut warnings, mut undecided) = (0, 0, 0, 0);
+    for (name, solids) in cases {
         for k in planora_drawing::model::ViewKind::ALL {
-            let r = check_view(&[s], k);
+            let r = check_view(solids, k);
             assert!(r.errors.is_empty(), "{name} {k:?}: {:?}", r.errors);
+            assert!(
+                r.undecided * 10 <= r.sampled * 3,
+                "{name} {k:?}: Referenz unentschieden an {} von {} Stellen",
+                r.undecided,
+                r.sampled
+            );
+            if r.undecided > 0 {
+                eprintln!("{name} {k:?}: unentschieden {}/{}", r.undecided, r.sampled);
+            }
             tolerated += r.tolerated;
             sampled += r.sampled;
             warnings += r.warnings.len();
@@ -104,8 +118,101 @@ fn mesh_reference_agrees_for_all_shapes_and_views() {
     eprintln!(
         "Stellen: {sampled}, zulässig abweichend: {tolerated}, Referenz unentschieden: {undecided}, Warnungen (b): {warnings}"
     );
+    assert!(
+        undecided * 20 <= sampled,
+        "Referenz unentschieden an {undecided} von {sampled} Stellen"
+    );
 }
 
+#[test]
+fn bodies_passing_into_each_other_agree_with_the_mesh_reference() {
+    // Getrennte Körper, die ineinander stecken: Die Sichtbarkeit wechselt dort, wo eine Kante
+    // die Fläche des anderen Körpers durchstößt – ohne Kreuzung im Bild.
+    use planora_math::DVec3;
+    let a = box_solid(10.0, 10.0, 10.0);
+    let peg = box_at((3.0, 3.0, 9.5), (6.0, 6.0, 11.5));
+    let column = box_at((2.0, 6.0, 2.0), (5.0, 9.0, 32.0));
+    let rod = axis_cylinder(3.0, 10.0, DVec3::Z, DVec3::new(5.0, 5.0, 5.0));
+    let bar = axis_cylinder(2.0, 10.0, DVec3::X, DVec3::new(5.0, 5.0, 4.0));
+    let cases: Vec<(&str, Vec<&planora_kernel::Solid>)> = vec![
+        ("box+peg", vec![&a, &peg]),
+        ("box+column", vec![&a, &column]),
+        ("box+rod", vec![&a, &rod]),
+        ("box+bar", vec![&a, &bar]),
+    ];
+    check_all_views(&cases);
+}
+
+#[test]
+fn edge_entering_another_body_changes_visibility_exactly_there() {
+    // Isometrisch: Die senkrechte Kante (3, 3, z) des Zapfens [3,6]×[3,6]×[9,5; 11,5] steckt
+    // bis z = 10 im Würfel [0,10]³ (verdeckt) und ragt darüber hinaus (sichtbar); Wechsel genau
+    // bei z = 10, dem Durchstoßpunkt durch die Würfeloberseite (eigene Formel).
+    let a = box_solid(10.0, 10.0, 10.0);
+    let peg = box_at((3.0, 3.0, 9.5), (6.0, 6.0, 11.5));
+    let v = compute_view(
+        &[
+            DrawBody {
+                name: "A".into(),
+                solid: &a,
+            },
+            DrawBody {
+                name: "B".into(),
+                solid: &peg,
+            },
+        ],
+        ViewKind::Isometric,
+        &Progress::new(),
+    )
+    .unwrap();
+    let on_edge = |p: planora_math::DVec3| (p.x - 3.0).abs() < 1e-9 && (p.y - 3.0).abs() < 1e-9;
+    let mut seen = 0;
+    for p in &v.pieces {
+        let s = &v.strokes[p.stroke];
+        let (pa, pb) = (s.point(p.t0), s.point(p.t1));
+        if !(on_edge(pa) && on_edge(pb)) {
+            continue;
+        }
+        seen += 1;
+        let (lo, hi) = (pa.z.min(pb.z), pa.z.max(pb.z));
+        if hi <= 10.0 + 1e-9 {
+            assert_eq!(p.vis, Visibility::Hidden, "{lo}..{hi}");
+        } else {
+            assert!(lo >= 10.0 - 1e-9, "Stück {lo}..{hi} überspannt z = 10");
+        }
+    }
+    assert!(seen >= 2, "Kante (3, 3, z) nicht in zwei Stücken: {seen}");
+}
+
+#[test]
+fn boxes_sharing_a_face_are_drawn_without_ambiguity() {
+    // Zwei Würfel mit gemeinsamer Fläche x = 10 (deckungsgleiche Kanten): keine Meldung,
+    // Netzreferenz stimmt in allen Ansichten.
+    let a = box_solid(10.0, 10.0, 10.0);
+    let b = box_at((10.0, 0.0, 0.0), (20.0, 10.0, 10.0));
+    let cases: Vec<(&str, Vec<&planora_kernel::Solid>)> = vec![("shared_face", vec![&a, &b])];
+    check_all_views(&cases);
+}
+
+#[test]
+fn torus_body_is_reported_unsupported_for_now() {
+    // VORLÄUFIG: Bis Aufgabe 7 den Torus-Umriss liefert, meldet compute_view einen Körper mit
+    // Torusfläche als nicht unterstützt. Aufgabe 7 ersetzt diesen Test.
+    let t = torus_solid(10.0, 3.0);
+    let e = compute_view(
+        &[DrawBody {
+            name: "Ring".into(),
+            solid: &t,
+        }],
+        ViewKind::Front,
+        &Progress::new(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(e, planora_drawing::DrawError::Unsupported(_)),
+        "{e:?}"
+    );
+}
 #[test]
 fn scaled_and_shifted_bodies_give_the_same_classification() {
     // Ausdehnung 1e5 mm, weit vom Ursprung (1e6 mm) und 0,1 mm: gleiche Anzahl sichtbarer/verdeckter Stücke je Ansicht
@@ -286,4 +393,75 @@ fn boundary_hits_never_count_as_hiding() {
     };
     let e = classify_with(&FixedHits(vec![edge]), &[]).unwrap_err();
     assert!(matches!(e, planora_drawing::DrawError::AmbiguousVisibility(n) if n == "Kante 1"));
+}
+
+#[test]
+fn short_entry_into_another_body_is_split_at_the_piercing_point() {
+    // Isometrisch: Der Zapfen [3,6]×[3,6]×[9,99; 20] steckt nur 0,01 mm im Würfel [0,10]³. Seine
+    // Kante (3, 3, z) kreuzt im Bild die Würfelkante (0, 6, 10) bei z = 13 (eigene Rechnung:
+    // (3, 3−y, z−10) ∥ (−1, 1, −1) → y = 6, z = 13); im Stück z ∈ [9,99; 13] liegt der Wechsel
+    // bei 0,3 % der Breite – keine Stützstelle (auch nicht die Endstellen bei 1 %) sieht ihn,
+    // nur der Durchstoßpunkt z = 10 teilt dort.
+    let a = box_solid(10.0, 10.0, 10.0);
+    let peg = box_at((3.0, 3.0, 9.99), (6.0, 6.0, 20.0));
+    let v = compute_view(
+        &[
+            DrawBody {
+                name: "A".into(),
+                solid: &a,
+            },
+            DrawBody {
+                name: "B".into(),
+                solid: &peg,
+            },
+        ],
+        ViewKind::Isometric,
+        &Progress::new(),
+    )
+    .unwrap();
+    let on_edge = |p: planora_math::DVec3| (p.x - 3.0).abs() < 1e-9 && (p.y - 3.0).abs() < 1e-9;
+    let inside: Vec<_> = v
+        .pieces
+        .iter()
+        .filter(|p| {
+            let s = &v.strokes[p.stroke];
+            let (pa, pb) = (s.point(p.t0), s.point(p.t1));
+            on_edge(pa) && on_edge(pb) && pa.z.min(pb.z) < 9.995
+        })
+        .collect();
+    assert_eq!(inside.len(), 1, "{inside:?}");
+    let s = &v.strokes[inside[0].stroke];
+    let top = s.point(inside[0].t0).z.max(s.point(inside[0].t1).z);
+    assert!(
+        (top - 10.0).abs() < 1e-9,
+        "Stück im Würfel endet bei z = {top}"
+    );
+    assert_eq!(inside[0].vis, Visibility::Hidden);
+}
+
+#[test]
+fn transition_in_the_outer_quarter_is_found_by_the_end_probes() {
+    // Wie `missing_split…`, aber der Strich beginnt bei x = −0,5: Wechsel bei t* = 0,5, also bei
+    // 5 % der Breite – alle drei Stützstellen (25/50/75 %) sind verdeckt, nur die Endstelle bei
+    // 1 % ist frei.
+    let (plate, scene, _) = stroke_behind_plate_edge();
+    let y = plate.stroke.point(0.0).y;
+    let st = line_stroke((-0.5, y, 5.0), (1.0, 0.0, 0.0), 10.0);
+    let parts = planora_drawing::visibility::classify_range(
+        &scene,
+        &plate.basis,
+        &st,
+        &[],
+        0,
+        0.0,
+        10.0,
+        100.0,
+        "T",
+        &std::cell::Cell::new(0),
+    )
+    .unwrap();
+    assert_eq!(parts.len(), 2, "{parts:?}");
+    assert!((parts[0].1 - 0.5).abs() < 1e-7, "{parts:?}");
+    assert_eq!(parts[0].2, Visibility::Visible);
+    assert_eq!(parts[1].2, Visibility::Hidden);
 }

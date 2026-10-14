@@ -2,12 +2,13 @@
 //! (`mesh_ref`). Die Bibliothek liefert nur das zu prüfende Ergebnis; Referenzsichtbarkeit,
 //! Merkmalskanten, Längen und Abstände rechnet dieses Modul selbst.
 
-use super::mesh_ref::{RefScene, chord_tol, fine_mesh, seg_dist, seg_dist3};
+use super::mesh_ref::{RefScene, chord_tol, fine_mesh, mesh_with_chord, seg_dist, seg_dist3};
 use planora_drawing::model::ViewKind;
 use planora_drawing::{Basis, DrawBody, ViewLines, Visibility, compute_view};
 use planora_exchange::Progress;
 use planora_kernel::Solid;
 use planora_math::{DVec2, DVec3};
+use std::cell::OnceCell;
 
 /// Probepunkte je Stück für Abstände (dichte Abtastung).
 const PIECE_SAMPLES: usize = 64;
@@ -27,6 +28,10 @@ pub struct Report {
     /// Stellen, an denen die Referenz selbst unentschieden ist (alle Referenzstrahlen treffen
     /// nahe einer Merkmalskante des Netzes); dort ist keine Aussage möglich.
     pub undecided: usize,
+    /// Stellen, die ein feineres Netz nachprüfen musste (Grundnetz unentschieden bzw.
+    /// abweichend ohne eigenen Wechsel in der Nähe).
+    pub refined_undecided: usize,
+    pub refined_differs: usize,
     /// Zahl der Stücke und Merkmalskanten.
     pub pieces: usize,
     pub features: usize,
@@ -133,21 +138,7 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
         .iter()
         .map(|&(a, b)| (proj(&basis, a), proj(&basis, b)))
         .collect();
-    // Die Referenz prüft die Netzfassung der Linie: den nächsten Punkt einer Merkmalskante des
-    // Netzes im Raum, wenn einer höchstens `near` entfernt ist. Sonst läge der exakte
-    // Linienpunkt an hohlen Rundungen (Bohrungsrand) um bis zu eine Sehnentoleranz im Material
-    // des Netzes, und die Referenz sähe die Linie als verdeckt, obwohl sie es im Netz nicht ist.
-    let snap = |x: DVec3| -> DVec3 {
-        let mut best = (near, x);
-        for &(a, b) in feats3 {
-            let (d, q) = seg_dist3(x, a, b);
-            if d <= best.0 {
-                best = (d, q);
-            }
-        }
-        best.1
-    };
-    let ref_at = |x: DVec3| scene.ref_visibility(snap(x));
+
     r.features = feats.len();
     r.pieces = v.pieces.len();
 
@@ -246,36 +237,118 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
         }
     }
 
-    // (e) Sichtbarkeit.
+    // (e) Sichtbarkeit: jedes Stück dicht abgetastet (ohne ein Band von `near` an den Enden),
+    // damit auch ein Wechsel mitten in einem angeblich einheitlichen Stück auffällt. Bleibt die
+    // Referenz unentschieden oder weicht sie ab, ohne dass sie selbst in der Nähe wechselt,
+    // entscheidet ein feineres Netz (Sehnentoleranz `1e-4 · E`, dann `1e-5 · E`); die
+    // Wechselprüfung längs der Linie behält das Band `near` des Grundnetzes.
+    let finer: [OnceCell<RefScene>; 2] = [OnceCell::new(), OnceCell::new()];
+    let level = |i: usize| -> &RefScene {
+        if i == 0 {
+            return &scene;
+        }
+        finer[i - 1].get_or_init(|| {
+            let c = FINER_CHORD_REL[i - 1] * extent;
+            let m: Vec<_> = solids.iter().map(|s| mesh_with_chord(s, c)).collect();
+            RefScene::with_chord(&m, basis, extent, c)
+        })
+    };
+    let chords = [
+        chord,
+        FINER_CHORD_REL[0] * extent,
+        FINER_CHORD_REL[1] * extent,
+    ];
     for (k, p) in v.pieces.iter().enumerate() {
         let s = &v.strokes[p.stroke];
         let lib = p.vis == Visibility::Visible;
-        for f in [0.25, 0.5, 0.75] {
-            let t = p.t0 + f * (p.t1 - p.t0);
+        let (a, b) = (s.curve.point(p.t0), s.curve.point(p.t1));
+        for i in 0..VIS_SAMPLES {
+            let t = p.t0 + (i as f64 + 0.5) / VIS_SAMPLES as f64 * (p.t1 - p.t0);
             let x = s.curve.point(t);
+            if x.distance(a) < near || x.distance(b) < near {
+                continue;
+            }
             r.sampled += 1;
-            let want = ref_at(x);
-            if want == Some(lib) {
-                continue;
-            }
-            if want.is_none() {
-                r.undecided += 1;
-                continue;
-            }
             let h = 1e-6 * (p.t1 - p.t0).abs().max(1e-12);
             let tan = (s.curve.point(t + h) - s.curve.point(t - h)).normalize_or_zero();
-            let changes = [x + tan * near, x - tan * near]
-                .iter()
-                .any(|&y| ref_at(y) != want);
-            if changes {
-                r.tolerated += 1;
-            } else {
-                r.errors.push(format!(
+            let mut verdict = Judged::Undecided;
+            for (li, &c) in chords.iter().enumerate() {
+                let j = judge(level(li), 4.0 * c, near, x, tan, lib);
+                match j {
+                    Judged::Agree | Judged::Tolerated => {
+                        verdict = j;
+                        break;
+                    }
+                    Judged::Differs(_) => verdict = j,
+                    Judged::Undecided => {}
+                }
+                if li + 1 < chords.len() {
+                    if j == Judged::Undecided {
+                        r.refined_undecided += 1;
+                    } else {
+                        r.refined_differs += 1;
+                    }
+                }
+            }
+            match verdict {
+                Judged::Agree => {}
+                Judged::Tolerated => r.tolerated += 1,
+                Judged::Undecided => r.undecided += 1,
+                Judged::Differs(want) => r.errors.push(format!(
                     "(e) Stück {k} (Strich {}, {:?}) bei t = {t} ({:.4}, {:.4}, {:.4}): Bibliothek {:?}, Referenz {want:?}",
                     p.stroke, s.origin, x.x, x.y, x.z, p.vis
-                ));
+                )),
             }
         }
     }
     r
+}
+
+/// Stellen je Stück in (e).
+const VIS_SAMPLES: usize = 24;
+/// Sehnentoleranzen der feineren Netze (relativ zu `E`).
+const FINER_CHORD_REL: [f64; 2] = [1e-4, 1e-5];
+
+/// Urteil der Referenz an einer Stelle gegenüber der Bibliothek.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Judged {
+    Agree,
+    /// Abweichung, aber die Referenz wechselt selbst um `near` längs der Linie.
+    Tolerated,
+    Undecided,
+    Differs(bool),
+}
+/// Nächster Punkt einer Merkmalskante des Netzes im Raum, wenn höchstens `near` entfernt
+/// (die Referenz prüft die Netzfassung der Linie: sonst läge der exakte Linienpunkt an hohlen
+/// Rundungen, etwa am Bohrungsrand, um bis zu eine Sehnentoleranz im Material des Netzes).
+fn snap(scene: &RefScene, near: f64, x: DVec3) -> DVec3 {
+    let mut best = (near, x);
+    for &(a, b) in scene.features() {
+        let (d, q) = seg_dist3(x, a, b);
+        if d <= best.0 {
+            best = (d, q);
+        }
+    }
+    best.1
+}
+
+/// Referenzurteil bei `x` mit der Toleranzregel (e): Eine Abweichung ist zulässig, wenn die
+/// Referenz an `x ± near·tan` (Strichtangente) ein **anderes entschiedenes** Urteil hat;
+/// unentschiedene Nachbarn zählen nicht als Wechsel. `snap_near`: Einrastabstand für dieses Netz.
+fn judge(scene: &RefScene, snap_near: f64, near: f64, x: DVec3, tan: DVec3, lib: bool) -> Judged {
+    let at = |y: DVec3| scene.ref_visibility(snap(scene, snap_near, y));
+    let Some(want) = at(x) else {
+        return Judged::Undecided;
+    };
+    if want == lib {
+        return Judged::Agree;
+    }
+    let changes = [x + tan * near, x - tan * near]
+        .iter()
+        .any(|&y| at(y).is_some_and(|v| v != want));
+    if changes {
+        Judged::Tolerated
+    } else {
+        Judged::Differs(want)
+    }
 }

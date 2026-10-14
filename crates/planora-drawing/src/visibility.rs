@@ -4,7 +4,9 @@
 //! Zeichenkonvention sichtbar); verdeckt nur, wenn alle brauchbaren Strahlen verdeckt sind.
 //! Randtreffer und unsichere Strahlen zählen nicht; ohne brauchbaren Strahl weicht die Stelle
 //! aus, danach `AmbiguousVisibility`. Urteilen die Stellen eines Stücks verschieden, wird es
-//! halbiert, bis der Wechsel auf `BISECT_TOL` genau eingegrenzt ist.
+//! halbiert, bis der Wechsel auf `BISECT_TOL` (relativ) genau eingegrenzt ist, oder – wo die
+//! Strahlen am Wechsel selbst nur den verdeckenden Rand streifen – auf die Breite dieses
+//! Randbands (höchstens `OWN_EPS`), siehe [`classify_range`].
 
 use crate::Visibility;
 use crate::basis::Basis;
@@ -23,6 +25,10 @@ pub const TILT_DIRECTIONS: usize = 8;
 pub const SAMPLE_FRACTIONS: [f64; 3] = [0.25, 0.5, 0.75];
 /// Ausweichstellen (Bruchteil der Stückbreite), nacheinander versucht.
 pub const SHIFTS: [f64; 6] = [0.0123, -0.0123, 0.037, -0.037, 0.071, -0.071];
+
+/// Stellen knapp innerhalb der Stückenden (Bruchteil der Stückbreite), deren Urteil als
+/// bekanntes Ende in die Beurteilung eingeht.
+pub const END_PROBE: f64 = 0.01;
 
 /// Urteil eines einzelnen Kippstrahls.
 enum RayVote {
@@ -211,7 +217,10 @@ impl Ctx<'_> {
             return Ok(());
         }
         let tm = 0.5 * (ta + tb);
-        // Urteil der Mittelstelle (bei Ausweichen nahe der Mitte) gilt als bekanntes Ende.
+        // Urteil der Mittelstelle gilt als bekanntes Ende beider Hälften. Ist sie ausgewichen,
+        // liegt sie bis zu 0,071 Stückbreiten neben `tm`; liegt ein Wechsel genau dazwischen,
+        // urteilt eine Hälfte uneinheitlich und wird weiter halbiert – das kostet nur Schritte,
+        // der Wechsel bleibt auf die Breite der Ausweichstelle genau.
         let mid = Some(v[1]);
         self.range(ta, tm, depth + 1, left, mid, out)?;
         self.range(tm, tb, depth + 1, mid, right, out)
@@ -222,10 +231,13 @@ impl Ctx<'_> {
 ///
 /// Stützstellen bei `SAMPLE_FRACTIONS`, unbrauchbare weichen auf `SHIFTS` aus, sonst
 /// `AmbiguousVisibility(name)`. Ein Teilstück gilt nur als einheitlich, wenn auch die bekannten
-/// Urteile an seinen Enden (Mittelstelle des übergeordneten Stücks) übereinstimmen; so wird der
-/// Wechsel bis auf `BISECT_TOL · param_len` eingegrenzt. Ist ein Teilstück innerhalb der
-/// Bisektion kürzer als `OWN_EPS` und an beiden Enden bekannt, aber nicht beurteilbar (alle
-/// Strahlen im Randband des verdeckenden Rands), endet die Eingrenzung dort in seiner Mitte.
+/// Urteile an seinen Enden übereinstimmen (Mittelstelle des übergeordneten Stücks; auf oberster
+/// Ebene die Stellen bei `END_PROBE` und `1 − END_PROBE`). Genauigkeit des Wechsels:
+/// `BISECT_TOL · param_len`, außer wo die Stellen am Wechsel selbst unbrauchbar sind (alle
+/// Strahlen im Randband des verdeckenden Rands, Breite etwa `16·geom_tol + TILT · Abstand zum
+/// Verdecker`): Ist ein Teilstück dann an beiden Enden bekannt und kürzer
+/// als `OWN_EPS`, endet die Eingrenzung in seiner Mitte – der Wechsel ist auf die Breite dieses
+/// Bands (höchstens `OWN_EPS`) genau.
 /// Benachbarte Ergebnisse gleicher Sichtbarkeit werden zusammengefasst; `counter` zählt die
 /// Strahlwürfe (über `MAX_RAY_TESTS` → `TooComplex`).
 #[allow(clippy::too_many_arguments)]
@@ -253,8 +265,24 @@ pub fn classify_range(
         counter,
         min_width: BISECT_TOL * stroke.param_len(),
     };
+    // Sicherheitsnetz: Urteile knapp innerhalb der Enden (ohne Ausweichen; unbrauchbar → kein
+    // bekanntes Ende), damit ein Wechsel im äußeren Viertel nicht hinter drei gleichen
+    // Stützstellen verschwindet.
+    let probe = |f: f64| -> Result<Option<Visibility>, DrawError> {
+        let p = stroke.point(ta + f * (tb - ta));
+        Ok(
+            sample_counted(caster, basis, p, own, body, extent, counter)?.map(|v| {
+                if v {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                }
+            }),
+        )
+    };
+    let (left, right) = (probe(END_PROBE)?, probe(1.0 - END_PROBE)?);
     let mut raw = Vec::new();
-    ctx.range(ta, tb, 0, None, None, &mut raw)?;
+    ctx.range(ta, tb, 0, left, right, &mut raw)?;
     let mut out: Vec<(f64, f64, Visibility)> = Vec::with_capacity(raw.len());
     for (a, b, vis) in raw {
         match out.last_mut() {

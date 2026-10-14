@@ -111,7 +111,21 @@ pub fn compute_view(
     if strokes.len() as u64 > MAX_STROKES {
         return Err(DrawError::TooComplex(strokes.len() as u64));
     }
-    let splits = isect::split_params(&strokes, &basis, extent, progress)?;
+    let mut splits = isect::split_params(&strokes, &basis, extent, progress)?;
+
+    // Durchstoßpunkte mit Flächen anderer Körper: Dort wechselt die Sichtbarkeit, ohne dass sich
+    // im Bild Striche kreuzen (Körper, die ineinander stecken).
+    let scene = raycast::Scene::new(bodies, extent, progress)?;
+    if bodies.len() > 1 {
+        let pairs = Cell::new(0);
+        for (s, ts) in strokes.iter().zip(splits.iter_mut()) {
+            let extra = scene.pierce_params(s, origin_body(s), &pairs, progress)?;
+            if !extra.is_empty() {
+                ts.extend(extra);
+                *ts = isect::interior_unique(s, std::mem::take(ts));
+            }
+        }
+    }
 
     // Teilstücke zwischen aufeinanderfolgenden Teilparametern. Teilparameter, die ein in der
     // Ansicht zu einem Punkt entartetes Stück abgrenzen (etwa doppelt gefundene Anschlüsse an
@@ -146,7 +160,6 @@ pub fn compute_view(
         }
     }
 
-    let scene = raycast::Scene::new(bodies, extent, progress)?;
     let edge_faces: Vec<EdgeFaces> = bodies.iter().map(|b| EdgeFaces::new(b.solid)).collect();
     let counter = Cell::new(0);
     progress.set_total(ranges.len() as u64);

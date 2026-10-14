@@ -29,7 +29,8 @@ use crate::error::DrawError;
 use crate::limits::geom_tol;
 use planora_exchange::Progress;
 use planora_kernel::boolean::{
-    FaceGeom, Seg, face_geom, loop_points, points_to_uv, points_to_uv_indexed, winding,
+    CurveSurface, FaceGeom, Seg, curve_surface_roots, face_geom, loop_points, points_to_uv,
+    points_to_uv_indexed, winding,
 };
 use planora_kernel::{Curve, Surface};
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
@@ -504,6 +505,74 @@ impl Scene {
         } else {
             Some(HitClass::Boundary)
         }
+    }
+}
+
+/// Probepunkte eines Strichs für seine Hüllbox beim Durchstoßen.
+const PIERCE_BOX_SAMPLES: usize = 65;
+
+impl Scene {
+    /// Parameter, an denen der Strich die beschnittenen Flächen **anderer** Körper als `body`
+    /// durchstößt (oder berührt): Dort kann die Sichtbarkeit wechseln, ohne dass sich im Bild
+    /// zwei Striche kreuzen (Körper, die ineinander stecken). Nullstellen der impliziten
+    /// Flächenfunktion längs der Kurve (`curve_surface_roots` des Kernels), eingeordnet wie die
+    /// Strahltreffer (innen oder Rand zählt). Liegt der Strich ganz in der Trägerfläche
+    /// (gemeinsame Fläche), entsteht kein Teilpunkt. Vorauswahl über die Hüllboxen; jedes
+    /// geprüfte Paar Strich–Fläche zählt `pairs` (über `MAX_PAIR_TESTS` → `TooComplex`).
+    pub fn pierce_params(
+        &self,
+        stroke: &crate::stroke::Stroke,
+        body: usize,
+        pairs: &std::cell::Cell<u64>,
+        progress: &Progress,
+    ) -> Result<Vec<f64>, DrawError> {
+        progress.check()?;
+        let (t0, t1) = (stroke.t0.min(stroke.t1), stroke.t0.max(stroke.t1));
+        let pts: Vec<DVec3> = (0..PIERCE_BOX_SAMPLES)
+            .map(|i| stroke.point(t0 + (t1 - t0) * i as f64 / (PIERCE_BOX_SAMPLES - 1) as f64))
+            .collect();
+        // Zwischen zwei Probepunkten weicht die Kurve höchstens um etwa den Punktabstand ab.
+        let gap = pts
+            .windows(2)
+            .map(|w| w[0].distance(w[1]))
+            .fold(0.0, f64::max);
+        let pad = DVec3::splat(gap + self.tol.linear);
+        let lo = pts
+            .iter()
+            .fold(DVec3::splat(f64::INFINITY), |a, &b| a.min(b))
+            - pad;
+        let hi = pts
+            .iter()
+            .fold(DVec3::splat(f64::NEG_INFINITY), |a, &b| a.max(b))
+            + pad;
+        if !(lo.is_finite() && hi.is_finite()) {
+            return Err(DrawError::NonFinite);
+        }
+        let mut out = Vec::new();
+        for f in self.faces.iter().filter(|f| f.body != body) {
+            if (f.lo.cmpgt(hi) | f.hi.cmplt(lo)).any() {
+                continue;
+            }
+            let n = pairs.get() + 1;
+            pairs.set(n);
+            if n > crate::limits::MAX_PAIR_TESTS {
+                return Err(DrawError::TooComplex(n));
+            }
+            progress.check()?;
+            let roots = match curve_surface_roots(&stroke.curve, t0, t1, &f.geom.surface, &self.tol)
+            {
+                CurveSurface::Roots(r) => r,
+                CurveSurface::Lies => continue,
+            };
+            for r in roots {
+                let p = stroke.point(r.t);
+                let uv = f.geom.surface.project(p);
+                if self.classify(f, p, uv).is_some() {
+                    out.push(r.t);
+                }
+            }
+        }
+        Ok(out)
     }
 }
 

@@ -706,7 +706,7 @@ pub fn split_params(
 
 /// Innere, sortierte, eindeutige Parameter: Abstand ≥ `BISECT_TOL`·Breite vom Rand und
 /// voneinander.
-fn interior_unique(s: &Stroke, mut ts: Vec<f64>) -> Vec<f64> {
+pub(crate) fn interior_unique(s: &Stroke, mut ts: Vec<f64>) -> Vec<f64> {
     let (lo, hi) = range(s);
     let e = slack(s);
     ts.retain(|&t| t >= lo + e && t <= hi - e);
