@@ -1064,11 +1064,20 @@ impl Model {
                 a: self.axis(a[1].reference()?)?,
                 r: Model::positive(&a[2], "Kugelradius")?,
             },
-            "TOROIDAL_SURFACE" => Surf::Torus {
-                a: self.axis(a[1].reference()?)?,
-                major: Model::positive(&a[2], "großer Torusradius")?,
-                minor: Model::positive(&a[3], "kleiner Torusradius")?,
-            },
+            "TOROIDAL_SURFACE" => {
+                let major = Model::positive(&a[2], "großer Torusradius")?;
+                let minor = Model::positive(&a[3], "kleiner Torusradius")?;
+                if minor >= major {
+                    return Err(format!(
+                        "#{id}: Torus mit kleinem Radius {minor} nicht kleiner als dem großen {major} (Spindeltorus)"
+                    ));
+                }
+                Surf::Torus {
+                    a: self.axis(a[1].reference()?)?,
+                    major,
+                    minor,
+                }
+            }
             "B_SPLINE_SURFACE_WITH_KNOTS" => Surf::Spline(self.spline_surface(id)?),
             other => return Err(format!("#{id}: Flächenart {other} unbekannt")),
         })

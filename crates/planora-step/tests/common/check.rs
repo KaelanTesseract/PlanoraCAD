@@ -8,10 +8,26 @@ use planora_math::DVec3;
 use planora_mesh::{TessellationOptions, tessellate};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-/// Lagetoleranz für analytische Kurven und Flächen (mm). Gemessen an Zylinder, Kugel, Torus,
-/// Ellipse, Rohr und Bucht (bis 40 mm lang, in vier Lagen): größte Abweichung 1,4e-14; die
-/// Schranke lässt dazu rund drei Größenordnungen Spielraum für größere Maße.
-pub const GEOM_TOL: f64 = 1e-11;
+/// Untergrenze der Lagetoleranz für analytische Kurven und Flächen (mm). Gemessen an Zylinder,
+/// Kugel, Torus, Ellipse, Rohr und Bucht (bis 40 mm lang, in vier Lagen): größte Abweichung
+/// 1,4e-14; bei Koordinaten bis etwa 1e4 mm wurden 6,8e-13 bis 2,4e-12 gemessen.
+pub const GEOM_TOL_MIN: f64 = 1e-11;
+/// Vielfaches der Maschinengenauigkeit je mm Koordinatengröße, das die Lagetoleranz bei großen
+/// Körpern anhebt (Rundungsfehler wachsen mit den Koordinaten). Bei 1e4 mm ergibt das 1,4e-10,
+/// gut über den gemessenen 2,4e-12.
+pub const GEOM_TOL_REL_EPS: f64 = 64.0;
+
+/// Lagetoleranz für analytische Kurven und Flächen eines Modells (mm): die Untergrenze oder, bei
+/// großen Koordinaten, das Vielfache der Maschinengenauigkeit mal dem größten Koordinatenbetrag
+/// der gelesenen Eckpunkte.
+pub fn geom_tol(m: &Model) -> f64 {
+    let scale = m
+        .vertices
+        .values()
+        .flat_map(|v| [v.x.abs(), v.y.abs(), v.z.abs()])
+        .fold(0.0, f64::max);
+    GEOM_TOL_MIN.max(GEOM_TOL_REL_EPS * f64::EPSILON * scale)
+}
 /// Lagetoleranz, wenn eine Freiformkurve oder -fläche beteiligt ist (mm); über der des Kernels
 /// (`NURBS_EDGE_TOL` = 1e-5), weil Kanten dort nur so genau auf ihren Flächen liegen.
 pub const FREEFORM_TOL: f64 = 2e-5;
@@ -36,11 +52,11 @@ pub struct ShellStats {
 }
 
 /// Toleranz für eine Kurve.
-fn curve_tol(c: &Crv) -> f64 {
+fn curve_tol(c: &Crv, geom: f64) -> f64 {
     if matches!(c, Crv::Spline(_)) {
         FREEFORM_TOL
     } else {
-        GEOM_TOL
+        geom
     }
 }
 
@@ -166,9 +182,10 @@ pub fn edge_points(m: &Model, e: &EdgeM) -> Result<Vec<DVec3>, String> {
 /// Geometrie aus den gelesenen Daten (Spec §5.2): jeder Eckpunkt liegt auf seinen Kurven, jede
 /// Kante auf allen Flächen, die sie begrenzt; die Enden der Kurvenstücke treffen die Eckpunkte.
 pub fn check_geometry(m: &Model) -> Result<(), String> {
+    let geom = geom_tol(m);
     let mut samples: BTreeMap<u64, Vec<DVec3>> = BTreeMap::new();
     for (id, e) in &m.edges {
-        let tol = curve_tol(&e.curve);
+        let tol = curve_tol(&e.curve, geom);
         for v in [e.start, e.end] {
             let d = e.curve.distance(m.vertices[&v]);
             if d > tol {
@@ -189,11 +206,11 @@ pub fn check_geometry(m: &Model) -> Result<(), String> {
             let face_tol = if face.surface.is_spline() {
                 FREEFORM_TOL
             } else {
-                GEOM_TOL
+                geom
             };
             for bound in &face.bounds {
                 for o in &bound.edges {
-                    let tol = face_tol.max(curve_tol(&m.edges[&o.edge].curve));
+                    let tol = face_tol.max(curve_tol(&m.edges[&o.edge].curve, geom));
                     for p in &samples[&o.edge] {
                         let d = face.surface.distance(*p);
                         if d > tol {
@@ -340,6 +357,7 @@ pub fn compare_with_kernel(m: &Model, solids: &[&Solid]) -> Result<(), String> {
 }
 
 fn compare_face(m: &Model, fm: &FaceM, solid: &Solid, fid: Id<Face>) -> Result<(), String> {
+    let geom = geom_tol(m);
     let kf = &solid.faces[fid];
     let loops: Vec<_> = std::iter::once(&kf.outer).chain(kf.inner.iter()).collect();
     if fm.bounds.len() != loops.len() || !fm.bounds[0].outer {
@@ -362,7 +380,7 @@ fn compare_face(m: &Model, fm: &FaceM, solid: &Solid, fid: Id<Face>) -> Result<(
             if m.vertices[&e.start] != ks || m.vertices[&e.end] != kend {
                 return Err(format!("Kante #{}: Eckpunkte nicht bitgleich", o.edge));
             }
-            let tol = curve_tol(&e.curve);
+            let tol = curve_tol(&e.curve, geom);
             for k in 0..=EDGE_SAMPLES {
                 let t = ke.t0 + (ke.t1 - ke.t0) * k as f64 / EDGE_SAMPLES as f64;
                 let d = e.curve.distance(ke.curve.point(t));
@@ -383,7 +401,7 @@ fn compare_face(m: &Model, fm: &FaceM, solid: &Solid, fid: Id<Face>) -> Result<(
     let tol = if fm.surface.is_spline() {
         FREEFORM_TOL
     } else {
-        GEOM_TOL
+        geom
     };
     let sign = if fm.same_sense { 1.0 } else { -1.0 };
     for (p, nk) in kernel_probes(solid, fid) {

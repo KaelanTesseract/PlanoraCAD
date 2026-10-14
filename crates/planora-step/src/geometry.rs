@@ -163,6 +163,13 @@ pub(crate) fn surface(e: &mut Entities, s: &Surface) -> Result<u64, StepError> {
         } => {
             let big = positive(*major, "Der große Radius eines Torus")?;
             let small = positive(*minor, "Der kleine Radius eines Torus")?;
+            if small >= big {
+                // Ein Spindel- oder Hornring (kleiner Radius ≥ großer) ist in STEP keine
+                // gewöhnliche Torusfläche; eine Sonderfläche ist hier nicht überprüft.
+                return Err(reject(
+                    "Eine Torusfläche mit kleinem Radius größer oder gleich dem großen lässt sich noch nicht als STEP ausgeben.",
+                ));
+            }
             let a = frame_placement(e, frame)?;
             with_numbers(e, "TOROIDAL_SURFACE", a, &[big, small])
         }

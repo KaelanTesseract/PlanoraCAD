@@ -3,11 +3,22 @@
 
 mod common;
 
+use common::check::check_geometry;
 use common::model::{Crv, Model, Surf};
-use common::{checked, export};
+use common::{checked, export, options};
+use planora_exchange::Progress;
 use planora_kernel::boolean::BoolOp;
-use planora_kernel::{AnalyticKernel, Curve, Kernel, Profile, ProfileLoop, Segment, Solid};
+use planora_kernel::{
+    AnalyticKernel, Curve, Kernel, Profile, ProfileLoop, Segment, Solid, Surface,
+};
 use planora_math::{DMat4, DVec2, DVec3, Frame, PI};
+use planora_step::{StepBody, StepError, write_step};
+
+/// Verschiebung der großen Körper (mm) und ihr Radius.
+const BIG_OFFSET: f64 = 200_000.0;
+const BIG_RADIUS: f64 = 1000.0;
+/// Verschiebung eines Eckpunkts (mm), die die Prüfung finden muss.
+const SHIFT: f64 = 1e-6;
 
 /// Höchstabstand eines Pols der Kugel von seinem Sollpunkt (mm); die Zahlen stehen verlustfrei
 /// in der Datei.
@@ -292,6 +303,166 @@ fn swap_ellipses(s: &Solid) -> Solid {
         }
     }
     out
+}
+
+/// Spindelring: Halbkreis mit Radius 3 um (2, 0) – der kleine Radius des Torus (3) ist größer
+/// als der große (2).
+fn spindle_ring() -> Solid {
+    k().revolve(
+        &ProfileLoop {
+            start: DVec2::new(0.0, -3.0),
+            segments: vec![
+                Segment::Line {
+                    to: DVec2::new(2.0, -3.0),
+                },
+                Segment::Arc {
+                    center: DVec2::new(2.0, 0.0),
+                    sweep: PI,
+                },
+                Segment::Line {
+                    to: DVec2::new(0.0, 3.0),
+                },
+            ],
+        },
+        &Frame::WORLD,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_spindle_torus_is_refused_by_name_and_a_regular_ring_is_not() {
+    let spindle = spindle_ring();
+    assert!(
+        spindle.faces.iter().any(
+            |(_, f)| matches!(f.surface, Surface::Torus { major, minor, .. } if minor > major)
+        ),
+        "die Probe hat einen Spindeltorus"
+    );
+    let ring = torus_ring();
+    let bodies = [
+        StepBody {
+            name: "Spindel".into(),
+            solid: &spindle,
+        },
+        StepBody {
+            name: "Ring".into(),
+            solid: &ring,
+        },
+    ];
+    let mut out = Vec::new();
+    let report = write_step(&bodies, &options(), &mut out, &Progress::new()).unwrap();
+    assert_eq!(report.bodies, 1);
+    assert_eq!(report.rejected.len(), 1);
+    assert!(
+        matches!(&report.rejected[0], StepError::InvalidBody { name, reason }
+            if name == "Spindel" && reason.contains("Torusfläche")),
+        "{:?}",
+        report.rejected
+    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        !text.contains("Spindel"),
+        "für den Körper wird nichts geschrieben"
+    );
+    checked(&text, &[&ring]);
+}
+
+#[test]
+fn the_model_refuses_a_torus_whose_small_radius_is_not_smaller() {
+    let ring = torus_ring();
+    let (text, _) = export(&[("Ring", &ring)]);
+    assert!(text.contains(",8.,3.)"), "{text}");
+    for swapped in [",3.,8.)", ",8.,8.)"] {
+        let broken = text.replacen(",8.,3.)", swapped, 1);
+        let e = Model::read(&broken).expect_err(swapped);
+        assert!(e.contains("Spindeltorus"), "{swapped}: {e}");
+    }
+}
+
+/// Walze mit Radius 8 und Höhe 10 mit einer runden Nut (Halbkreis, Radius 2) in der Mantelfläche:
+/// der Torus ist hier hohl, die Fläche zeigt gegen seine natürliche Normale.
+fn grooved_tube() -> Solid {
+    k().revolve(
+        &ProfileLoop {
+            start: DVec2::ZERO,
+            segments: vec![
+                Segment::Line {
+                    to: DVec2::new(8.0, 0.0),
+                },
+                Segment::Line {
+                    to: DVec2::new(8.0, 3.0),
+                },
+                Segment::Arc {
+                    center: DVec2::new(8.0, 5.0),
+                    sweep: -PI,
+                },
+                Segment::Line {
+                    to: DVec2::new(8.0, 10.0),
+                },
+                Segment::Line {
+                    to: DVec2::new(0.0, 10.0),
+                },
+            ],
+        },
+        &Frame::WORLD,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_groove_is_a_hollow_torus_face_in_every_pose() {
+    let body = grooved_tube();
+    for (pose, m) in poses() {
+        let s = moved(&body, m);
+        let (text, _) = export(&[("Nut", &s)]);
+        let (model, _) = std::panic::catch_unwind(|| checked(&text, &[&s]))
+            .unwrap_or_else(|_| panic!("Nut, {pose}"));
+        let hollow = model
+            .shells()
+            .iter()
+            .flat_map(|sh| sh.faces.iter())
+            .filter(|f| matches!(f.surface, Surf::Torus { .. }) && !f.same_sense)
+            .count();
+        assert_eq!(hollow, 1, "{pose}");
+    }
+}
+
+/// Große Körper weit vom Ursprung (Koordinaten über 2e5 mm; mit fester Schranke 1e-11 rot):
+/// die Rundungsfehler wachsen mit den Koordinaten, die Prüfung bleibt grün.
+#[test]
+fn large_bodies_far_from_the_origin_pass_all_checks() {
+    let far = DMat4::from_translation(DVec3::new(BIG_OFFSET, 0.0, 0.0))
+        * DMat4::from_rotation_x(0.9)
+        * DMat4::from_rotation_z(0.4);
+    for (name, body) in [
+        (
+            "Zylinder",
+            k().make_cylinder(BIG_RADIUS, 3.0 * BIG_RADIUS).unwrap(),
+        ),
+        ("Kugel", k().make_sphere(BIG_RADIUS).unwrap()),
+        (
+            "Ring",
+            moved(
+                &torus_ring(),
+                DMat4::from_scale(DVec3::splat(BIG_RADIUS / 8.0)),
+            ),
+        ),
+    ] {
+        let s = moved(&body, far);
+        let (text, _) = export(&[(name, &s)]);
+        std::panic::catch_unwind(|| checked(&text, &[&s])).unwrap_or_else(|_| panic!("{name}"));
+    }
+}
+
+#[test]
+fn a_vertex_moved_by_a_micrometre_is_still_caught() {
+    let s = k().make_cylinder(4.0, 9.0).unwrap();
+    let (text, _) = export(&[("Zylinder", &s)]);
+    let mut m = Model::read(&text).unwrap();
+    check_geometry(&m).expect("unverändert grün");
+    let v = m.vertices.values_mut().next().unwrap();
+    v.x += SHIFT;
+    assert!(check_geometry(&m).is_err(), "Verschiebung um {SHIFT} mm");
 }
 
 #[test]
