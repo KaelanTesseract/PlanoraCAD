@@ -7,7 +7,7 @@ use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform};
 use planora_feature::{BlendArt, MESH_LOCKED};
 use planora_kernel::Id;
 use planora_kernel::boolean::BoolOp;
-use planora_math::DVec3;
+use planora_math::{DQuat, DVec3};
 use planora_render::{FaceRef, Pick};
 use std::sync::Arc;
 
@@ -197,4 +197,18 @@ fn report_texts_are_plain_german() {
         "Das Netz ist nicht ganz geschlossen: 1 offene Kante, 2 Kanten mit falsch herum \
          liegenden Dreiecken. 1 Dreieck hat keine Fläche."
     );
+}
+
+#[test]
+fn tiny_angles_show_as_positive_zero() {
+    // Rundungsreste der Euler-Zerlegung dürfen nie „-0 °“ ergeben.
+    let tiny = DQuat::from_rotation_z(-1e-15);
+    let d = euler_degrees(tiny);
+    assert!(
+        d.x.is_sign_positive() && d.y.is_sign_positive() && d.z.is_sign_positive(),
+        "{d}"
+    );
+    assert_eq!(d, DVec3::ZERO);
+    let d = euler_degrees(rotation_from_degrees(DVec3::new(0.0, 0.0, -90.0)));
+    assert!((d.z + 90.0).abs() < 1e-9, "{d}");
 }

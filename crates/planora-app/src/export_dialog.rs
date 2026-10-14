@@ -612,6 +612,11 @@ impl ExportDialog {
         let stale_chooser = self.chooser_key.is_some_and(|k| k != self.key(state));
         if self.format != before || drop_chooser || stale_chooser {
             self.chooser = None;
+            self.chooser_key = None;
+        }
+        if self.format != before || stale_chooser {
+            // Die Meldung „Fertig“ gehörte zum alten Format oder Stand.
+            self.written = None;
         }
         if matches!(status, ExportStatus::Computing(_)) || write_state == WriteState::Writing {
             ctx.request_repaint_after(REPAINT);

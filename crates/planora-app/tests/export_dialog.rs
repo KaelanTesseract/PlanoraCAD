@@ -307,6 +307,27 @@ fn a_stale_result_is_never_written_and_the_chooser_closes() {
 }
 
 #[test]
+fn the_done_line_disappears_when_the_result_no_longer_fits() {
+    let mut s = box_state();
+    let dir = temp_dir("fertig-weg");
+    let mut d = ExportDialog::new(&s);
+    d.tick(&s, true);
+    d.begin_save(dir.clone(), &s);
+    d.write_to(dir.join("Quader 1.stl"), &s);
+    d.tick(&s, true);
+    assert!(matches!(d.write_state(), WriteState::Done(..)));
+    // gleicher Stand: die Zeile bleibt
+    draw(&mut d, &mut s);
+    assert!(matches!(d.write_state(), WriteState::Done(..)));
+    // andere Güte bei offener Dateiauswahl: die Zeile gehört zum alten Stand
+    d.quality = Quality::Fine;
+    let text = draw(&mut d, &mut s);
+    assert_eq!(d.write_state(), WriteState::Idle);
+    assert!(!text.contains("Fertig:"), "{text}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn writing_without_a_result_says_so_and_scope_falls_back_without_selection() {
     let mut s = box_state();
     s.selected_body = Some(0);

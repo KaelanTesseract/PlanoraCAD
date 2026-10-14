@@ -11,6 +11,18 @@ use planora_kernel::{BoolOp, Kernel};
 use planora_math::DVec3;
 use planora_render::Pick;
 
+/// Beschriftung der Zeile „Geschlossen“: Der Bericht stammt vom Einlesen; das Export-Fenster
+/// prüft nach der Lage noch einmal und kann deshalb ein anderes Ergebnis zeigen.
+const CLOSED_AT_IMPORT_LABEL: &str = "Geschlossen beim Einlesen";
+
+/// Vorsatz der Warnung aus dem Bericht beim Einlesen.
+const AT_IMPORT_PREFIX: &str = "Beim Einlesen: ";
+
+/// Warnung unter den Zeilen: der Bericht von damals, als solcher gekennzeichnet.
+fn import_warning(r: &planora_exchange::MeshReport) -> String {
+    format!("{AT_IMPORT_PREFIX}{}", report_text(r))
+}
+
 /// Hinweis unter den Netz-Körpern (ein Satz, ohne doppelte Leerzeichen).
 const MESH_BODY_HINT: &str = concat!(
     "Netz-Körper lassen sich verschieben, drehen, vergrößern, messen und exportieren, ",
@@ -437,7 +449,7 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
                 ui.label("Dreiecke");
                 ui.label(r.triangles.to_string());
                 ui.end_row();
-                ui.label("Geschlossen");
+                ui.label(CLOSED_AT_IMPORT_LABEL);
                 ui.label(if r.closed { "ja" } else { "nein" });
                 ui.end_row();
             }
@@ -445,7 +457,7 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         if let Some(r) = body.mesh_report
             && !r.closed
         {
-            ui.colored_label(WARNING_COLOR, report_text(&r));
+            ui.colored_label(WARNING_COLOR, import_warning(&r));
         }
         ui.add_space(4.0);
         ui.weak(MESH_BODY_HINT);
@@ -472,7 +484,20 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::MESH_BODY_HINT;
+    use super::{CLOSED_AT_IMPORT_LABEL, MESH_BODY_HINT, import_warning};
+    use planora_exchange::MeshReport;
+
+    #[test]
+    fn the_report_is_labelled_as_taken_when_the_file_was_read() {
+        let open = MeshReport {
+            open_edges: 3,
+            ..MeshReport::default()
+        };
+        let text = import_warning(&open);
+        assert!(text.starts_with("Beim Einlesen: "), "{text}");
+        assert!(text.contains("3 offene Kanten"), "{text}");
+        assert!(CLOSED_AT_IMPORT_LABEL.contains("beim Einlesen"));
+    }
 
     #[test]
     fn the_mesh_body_hint_has_no_runs_of_spaces() {

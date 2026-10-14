@@ -87,10 +87,18 @@ pub fn make_body(
     }
 }
 
-/// Drehung als Euler-Winkel in Grad (Reihenfolge XYZ, Plan P17).
+/// Winkel (in Grad), unter dem `euler_degrees` genau +0 liefert; sonst zeigte das Eingabefeld
+/// „-0 °“ für Rundungsreste. Liegt weit unter jeder Eingabegenauigkeit des Feldes.
+const ANGLE_ZERO_DEG: f64 = 1e-9;
+
+/// Drehung als Euler-Winkel in Grad (Reihenfolge XYZ, Plan P17); winzige Beträge sind +0.
 pub fn euler_degrees(q: DQuat) -> DVec3 {
     let (x, y, z) = q.to_euler(EulerRot::XYZ);
-    DVec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees())
+    let deg = |a: f64| {
+        let d = a.to_degrees();
+        if d.abs() < ANGLE_ZERO_DEG { 0.0 } else { d }
+    };
+    DVec3::new(deg(x), deg(y), deg(z))
 }
 
 /// Drehung aus Euler-Winkeln in Grad (Reihenfolge XYZ), normiert.
