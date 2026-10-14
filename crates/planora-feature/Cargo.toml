@@ -10,6 +10,7 @@ publish.workspace = true
 planora-math.workspace = true
 planora-kernel.workspace = true
 planora-mesh.workspace = true
+planora-exchange.workspace = true
 planora-sketch.workspace = true
 thiserror.workspace = true
 

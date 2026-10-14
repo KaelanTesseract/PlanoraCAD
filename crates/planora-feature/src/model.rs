@@ -1,9 +1,12 @@
 //! Datenmodell des Feature-Baums: Features, ihre Arten und das Dokument.
 
 use crate::refs::{EdgeRef, FaceRef};
+use planora_exchange::{ExchangeMesh, MeshTransform};
 use planora_kernel::{AnalyticKernel, BlendKind, BoolOp, Solid};
-use planora_math::{DVec3, Frame};
+use planora_math::{DQuat, DVec3, Frame};
 use planora_sketch::{CurveId, Sketch};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// Dauerhafte Kennung eines Features; wird nie wiederverwendet. `0` ist reserviert für
 /// „keinem Feature zugewiesen“ (siehe [`planora_kernel::FaceTag`]).
@@ -16,6 +19,20 @@ pub struct BodyRef {
     pub feature: FeatureId,
     pub index: usize,
 }
+
+/// Kennung eines Netzes in der Netztabelle des Dokuments (ab 1); wird nie wiederverwendet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MeshId(pub u64);
+
+/// Kleinster und größter Maßstab eines Netz-Körpers (Spec §6).
+pub const MIN_MESH_SCALE: f64 = 1e-6;
+pub const MAX_MESH_SCALE: f64 = 1e6;
+/// Größte Abweichung der Länge der Drehung von 1 (Spec §6 „normiert“, Plan P17); deckt das
+/// Runden beim Speichern und beim Umrechnen aus Grad ab.
+pub const ROTATION_NORM_TOL: f64 = 1e-6;
+/// Meldung der Bearbeitungssperre (Spec §6), gleich dem Text von
+/// [`crate::FeatureError::MeshBodyLocked`].
+pub const MESH_LOCKED: &str = "Netz-Körper lassen sich nicht bearbeiten";
 
 /// Grundebenen für Skizzen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -197,6 +214,15 @@ pub enum FeatureKind {
         art: BlendArt,
         tangentenkette: bool,
     },
+    /// Eingelesenes Netz („Netz-Körper“, Spec §6, Plan P10): Verweis in die Netztabelle des
+    /// Dokuments und Lage (erst skalieren, dann drehen, dann verschieben). Erzeugt keinen
+    /// Kernel-Körper.
+    MeshBody {
+        mesh: MeshId,
+        offset: DVec3,
+        rotation: DQuat,
+        scale: f64,
+    },
 }
 
 impl FeatureKind {
@@ -213,6 +239,7 @@ impl FeatureKind {
             FeatureKind::Boolean { .. } => "Boolesche Operation",
             FeatureKind::Move { .. } => "Verschieben",
             FeatureKind::Verrunden { art, .. } => art.label(),
+            FeatureKind::MeshBody { .. } => "Netz-Körper",
         }
     }
 
@@ -233,7 +260,8 @@ impl FeatureKind {
             FeatureKind::Box { .. }
             | FeatureKind::Cylinder { .. }
             | FeatureKind::Sphere { .. }
-            | FeatureKind::Cone { .. } => Vec::new(),
+            | FeatureKind::Cone { .. }
+            | FeatureKind::MeshBody { .. } => Vec::new(),
             FeatureKind::Extrude { sketch, .. } | FeatureKind::Revolve { sketch, .. } => {
                 vec![*sketch]
             }
@@ -251,6 +279,23 @@ impl FeatureKind {
         deps.sort();
         deps.dedup();
         deps
+    }
+
+    /// Lage eines Netz-Körpers; `None` für alle anderen Arten.
+    pub fn mesh_transform(&self) -> Option<MeshTransform> {
+        match self {
+            FeatureKind::MeshBody {
+                offset,
+                rotation,
+                scale,
+                ..
+            } => Some(MeshTransform {
+                offset: *offset,
+                rotation: *rotation,
+                scale: *scale,
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -313,6 +358,10 @@ pub struct Document {
     pub(crate) chord_tolerance: f64,
     /// Zähler der öffentlichen Änderungen (siehe [`Document::edit_count`]).
     pub(crate) edits: u64,
+    /// Netze der Netz-Körper (Plan P11); mehrere Features können dasselbe Netz benutzen.
+    pub(crate) meshes: BTreeMap<MeshId, Arc<ExchangeMesh>>,
+    /// Nächste zu vergebende Netz-Kennung (beginnt bei 1).
+    pub(crate) next_mesh: u64,
 }
 
 /// Standard-Sehnentoleranz in Millimetern (wie in der App).
@@ -346,6 +395,8 @@ impl Document {
             kernel: AnalyticKernel::default(),
             chord_tolerance,
             edits: 0,
+            meshes: BTreeMap::new(),
+            next_mesh: 1,
         }
     }
 

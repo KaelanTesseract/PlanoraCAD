@@ -288,4 +288,12 @@ pub enum KindDto {
         art: BlendArtDto,
         tangentenkette: bool,
     },
+    /// Netz-Körper (ab Format 3): Netz aus `netze`, Lage in mm, Drehung als Quaternion
+    /// [x, y, z, w], Maßstab.
+    NetzKoerper {
+        netz: u64,
+        versatz: V3,
+        drehung: [f64; 4],
+        massstab: f64,
+    },
 }

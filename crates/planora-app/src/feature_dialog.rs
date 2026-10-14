@@ -103,9 +103,10 @@ fn numbers_fixed(kind: &FeatureKind) -> Vec<(&'static str, f64)> {
             }
             BlendArt::RundungVariabel { .. } => Vec::new(),
         },
-        FeatureKind::Sketch(_) | FeatureKind::Revolve { .. } | FeatureKind::Boolean { .. } => {
-            Vec::new()
-        }
+        FeatureKind::Sketch(_)
+        | FeatureKind::Revolve { .. }
+        | FeatureKind::Boolean { .. }
+        | FeatureKind::MeshBody { .. } => Vec::new(),
     }
 }
 
@@ -186,10 +187,13 @@ fn op_label(op: BoolOp) -> &'static str {
 }
 
 impl FeatureDialog {
-    /// Dialog für das Feature `id`; `None` für Skizzen und unbekannte Features.
+    /// Dialog für das Feature `id`; `None` für Skizzen, Netz-Körper (Lage im Eigenschaftenfenster) und unbekannte Features.
     pub fn new(state: &AppState, id: FeatureId) -> Option<FeatureDialog> {
         let f = state.document.feature(id)?;
-        if matches!(f.kind, FeatureKind::Sketch(_)) {
+        if matches!(
+            f.kind,
+            FeatureKind::Sketch(_) | FeatureKind::MeshBody { .. }
+        ) {
             return None;
         }
         Some(FeatureDialog {

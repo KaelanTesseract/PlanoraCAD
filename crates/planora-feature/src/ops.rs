@@ -109,6 +109,7 @@ impl Document {
             .count();
         self.features.retain(|f| !removed.contains(&f.id));
         self.marker -= before_marker;
+        self.prune_meshes();
         self.edits += 1;
         self.recompute();
         Ok(removed)
@@ -126,6 +127,11 @@ impl Document {
                 Some(i) if i >= idx => return Err(FeatureError::ForwardReference),
                 Some(_) => {}
             }
+        }
+        if let FeatureKind::MeshBody { mesh, .. } = kind
+            && !self.meshes.contains_key(mesh)
+        {
+            return Err(FeatureError::MeshMissing(mesh.0));
         }
         Ok(())
     }

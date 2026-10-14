@@ -30,6 +30,8 @@ pub enum BodyKind {
     Revolution,
     /// Ergebnis einer Booleschen Operation (oder Art unbekannt).
     Combined,
+    /// Eingelesenes Netz (Netz-Körper, Teilprojekt 9).
+    Mesh,
 }
 
 /// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
@@ -1578,6 +1580,7 @@ fn body_kind(doc: &Document, r: BodyRef) -> BodyKind {
         Some(FeatureKind::Cone { .. }) => BodyKind::Cone,
         Some(FeatureKind::Extrude { .. }) => BodyKind::Extrusion,
         Some(FeatureKind::Revolve { .. }) => BodyKind::Revolution,
+        Some(FeatureKind::MeshBody { .. }) => BodyKind::Mesh,
         _ => BodyKind::Combined,
     }
 }

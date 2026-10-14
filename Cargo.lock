@@ -2452,6 +2452,7 @@ dependencies = [
 name = "planora-feature"
 version = "0.1.0"
 dependencies = [
+ "planora-exchange",
  "planora-kernel",
  "planora-math",
  "planora-mesh",

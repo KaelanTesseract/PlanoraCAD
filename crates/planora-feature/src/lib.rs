@@ -1,8 +1,9 @@
 //! Feature-Baum von PlanoraCAD: Datenmodell, stabile Verweise auf Flächen und Kanten,
-//! Berechnung und Neuberechnung mit Zwischenspeicher sowie Änderungsoperationen.
+//! Berechnung und Neuberechnung mit Zwischenspeicher, Änderungsoperationen und Netz-Körper.
 
 mod compute;
 pub mod error;
+mod meshes;
 pub mod model;
 mod ops;
 pub mod recompute;
@@ -11,9 +12,11 @@ mod snapshot;
 
 pub use compute::MAX_COORD_MM;
 pub use error::FeatureError;
+pub use meshes::VisibleMesh;
 pub use model::{
     BlendArt, BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus,
-    SketchFeature, SketchPlane, StandardPlane,
+    MAX_MESH_SCALE, MESH_LOCKED, MIN_MESH_SCALE, MeshId, ROTATION_NORM_TOL, SketchFeature,
+    SketchPlane, StandardPlane,
 };
 pub use recompute::{RecomputeReport, VisibleBody};
 pub use refs::{

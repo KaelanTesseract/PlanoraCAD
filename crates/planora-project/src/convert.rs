@@ -4,15 +4,16 @@
 use crate::error::{ProjectError, Result};
 use crate::format::*;
 use planora_feature::{
-    BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM,
+    BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM, MeshId,
     SketchFeature, SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
 };
 use planora_kernel::BoolOp;
-use planora_math::{DVec3, Frame, Tolerance};
+use planora_math::{DQuat, DVec3, Frame, Tolerance};
 use planora_sketch::{
     ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord, LineOrPoints, PointId,
     PointRecord, Sketch, SketchData,
 };
+use std::collections::BTreeMap;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7).
 pub const FORMAT_VERSION: u32 = 2;
@@ -512,6 +513,17 @@ fn kind_to(k: &FeatureKind) -> KindDto {
             art: art_to(art),
             tangentenkette: *tangentenkette,
         },
+        FeatureKind::MeshBody {
+            mesh,
+            offset,
+            rotation,
+            scale,
+        } => KindDto::NetzKoerper {
+            netz: mesh.0,
+            versatz: v3(*offset),
+            drehung: rotation.to_array(),
+            massstab: *scale,
+        },
     }
 }
 
@@ -688,6 +700,25 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
                 tangentenkette: *tangentenkette,
             }
         }
+        KindDto::NetzKoerper {
+            netz,
+            versatz,
+            drehung,
+            massstab,
+        } => {
+            let [x, y, z, w] = *drehung;
+            FeatureKind::MeshBody {
+                mesh: MeshId(*netz),
+                offset: v("Position", *versatz)?,
+                rotation: DQuat::from_xyzw(
+                    n("Drehung", x)?,
+                    n("Drehung", y)?,
+                    n("Drehung", z)?,
+                    n("Drehung", w)?,
+                ),
+                scale: n("Maßstab", *massstab)?,
+            }
+        }
     })
 }
 
@@ -772,5 +803,6 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         features,
         marker: file.marker,
         next_id: file.naechste_id,
+        meshes: BTreeMap::new(),
     })
 }

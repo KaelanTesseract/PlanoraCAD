@@ -5,7 +5,7 @@ use planora_feature::{
     BlendArt, FeatureId, FeatureKind, FeatureStatus, SketchPlane, StandardPlane,
 };
 use planora_kernel::{BoolOp, Kernel};
-use planora_math::DVec3;
+use planora_math::{DVec3, EulerRot};
 use planora_render::Pick;
 
 /// Eigenschaften: für einen gewählten Körper Maße, Fläche/Kante und Position; für ein
@@ -179,6 +179,29 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str
                 if *tangentenkette { "an" } else { "aus" }.to_string(),
             ));
             rows
+        }
+        FeatureKind::MeshBody {
+            mesh,
+            offset,
+            rotation,
+            scale,
+        } => {
+            let triangles = doc.mesh(*mesh).map_or(0, |m| m.triangle_count());
+            let (x, y, z) = rotation.to_euler(EulerRot::XYZ);
+            vec![
+                ("Netz", format!("{triangles} Dreiecke")),
+                ("Position", triple(*offset)),
+                (
+                    "Drehung",
+                    format!(
+                        "{} / {} / {} °",
+                        format_number(x.to_degrees(), 2),
+                        format_number(y.to_degrees(), 2),
+                        format_number(z.to_degrees(), 2)
+                    ),
+                ),
+                ("Maßstab", format_number(*scale, 4)),
+            ]
         }
     }
 }

@@ -1,7 +1,10 @@
 //! Reine Daten eines Dokuments zum Speichern und Laden (ohne Ergebnisse und Zwischenspeicher).
 
 use crate::error::FeatureError;
-use crate::model::{Document, Feature, FeatureId, FeatureKind, FeatureStatus};
+use crate::model::{Document, Feature, FeatureId, FeatureKind, FeatureStatus, MeshId};
+use planora_exchange::ExchangeMesh;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct SnapshotFeature {
@@ -16,10 +19,13 @@ pub struct Snapshot {
     pub features: Vec<SnapshotFeature>,
     pub marker: usize,
     pub next_id: u64,
+    /// Netze der Netz-Körper; nur die, auf die ein Feature verweist (Plan P11).
+    pub meshes: BTreeMap<MeshId, Arc<ExchangeMesh>>,
 }
 
 impl Document {
     pub fn snapshot(&self) -> Snapshot {
+        let used = self.used_meshes();
         Snapshot {
             features: self
                 .features
@@ -33,12 +39,18 @@ impl Document {
                 .collect(),
             marker: self.marker,
             next_id: self.next_id,
+            meshes: self
+                .meshes
+                .iter()
+                .filter(|(id, _)| used.contains(id))
+                .map(|(id, m)| (*id, Arc::clone(m)))
+                .collect(),
         }
     }
 
-    /// Baut ein Dokument aus einem Snapshot und berechnet es einmal. Prüft Ids, Namen, Marker
-    /// und Verweise; ungültige Zahlen führen erst bei der Berechnung zu einem Fehlerstatus am
-    /// betroffenen Feature (kein Panic, kein Abbruch des Ladens).
+    /// Baut ein Dokument aus einem Snapshot und berechnet es einmal. Prüft Ids, Namen, Marker,
+    /// Netze und Verweise; ungültige Zahlen führen erst bei der Berechnung zu einem Fehlerstatus
+    /// am betroffenen Feature (kein Panic, kein Abbruch des Ladens).
     pub fn from_snapshot(s: Snapshot, chord_tolerance: f64) -> Result<Document, FeatureError> {
         let bad = |m: &str| FeatureError::InvalidInput(m.to_string());
         if s.next_id == u64::MAX {
@@ -60,6 +72,21 @@ impl Document {
                 return Err(bad("Ein Feature hat keinen Namen"));
             }
         }
+        for (id, mesh) in &s.meshes {
+            if id.0 == 0 {
+                return Err(bad("Ein Netz hat eine ungültige Kennung"));
+            }
+            mesh.validate()
+                .map_err(|e| FeatureError::InvalidInput(format!("Netz {}: {e}", id.0)))?;
+        }
+        doc.next_mesh = match s.meshes.last_key_value() {
+            Some((id, _)) => {
+                id.0.checked_add(1)
+                    .ok_or_else(|| bad("Ein Netz hat eine ungültige Kennung"))?
+            }
+            None => 1,
+        };
+        doc.meshes = s.meshes;
         for f in s.features {
             let version = doc.bump();
             doc.features.push(Feature {
