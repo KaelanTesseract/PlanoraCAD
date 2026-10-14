@@ -27,6 +27,10 @@ const DIFF_STEP_REL: f64 = 1e-6;
 const NEWTON_STEP_REL: f64 = 1e-14;
 /// So nah (mm) muss der Punkt aus dem Startwert liegen, damit die Rastersuche entfällt.
 pub const NEAR_ACCEPT: f64 = 1e-9;
+/// Vielfaches der Maschinengenauigkeit (relativ zur Größe der Koordinaten), bis zu dem ein Punkt
+/// als auf der Kegelachse und damit als Spitze gilt: Eine gedrehte oder gespiegelte Spitze liegt
+/// durch Rundung etwas neben der Achse, und dort ist die Richtung von der Achse weg bedeutungslos.
+const APEX_AXIS_EPS_FACTOR: f64 = 64.0;
 /// Die Normale wird so weit (Anteil des Bereichs) vom Rand entfernt ausgewertet; an Polen ist
 /// `S_u` dort null.
 const NORMAL_INSET_REL: f64 = 1e-4;
@@ -517,8 +521,12 @@ impl Surf {
                 // Fußpunkt auf der Mantellinie in der Meridianebene; an der Spitze (auf der
                 // Achse) keine Normale.
                 let l = a.local(p);
-                let dir = radial(a, l);
                 let rho = l.x.hypot(l.y);
+                let scale = [p.x, p.y, p.z, a.origin.x, a.origin.y, a.origin.z]
+                    .iter()
+                    .fold(1.0_f64, |m, v| m.max(v.abs()));
+                let on_axis = rho <= APEX_AXIS_EPS_FACTOR * f64::EPSILON * scale;
+                let dir = if on_axis { DVec3::ZERO } else { radial(a, l) };
                 let (s, c) = semi.sin_cos();
                 let d = (rho - (r + l.z * s / c)) * c;
                 let foot = a.origin + dir * (rho - d * c) + a.z * (l.z + d * s);

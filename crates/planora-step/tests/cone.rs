@@ -204,3 +204,116 @@ fn a_cone_face_beyond_its_apex_is_refused_by_name() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Kantenmaß der Quader für Senkung und Vereinigung (mm).
+const BLOCK: DVec3 = DVec3::new(20.0, 20.0, 12.0);
+/// Mitte des Quaders in x und y, dort sitzt die Kegelachse.
+const BLOCK_CENTER: (f64, f64) = (10.0, 10.0);
+/// Maß der Fase und der Rundung am Kegelfuß (mm).
+const BLEND_SIZE: f64 = 1.0;
+/// Radius des Kegelfußes in diesen Körpern (mm), zum Finden der Kante.
+const BASE_RADIUS: f64 = 6.0;
+
+/// Spitze von Körpern in schrägen Drehungen und Spiegelungen: Die Spitze liegt durch Rundung
+/// neben der Achse und darf die Normalenprüfung nicht stören.
+fn skewed_poses() -> Vec<(&'static str, DMat4)> {
+    vec![
+        (
+            "verschoben, x-, z-gedreht",
+            DMat4::from_translation(DVec3::new(3.0, -1.0, 2.0))
+                * DMat4::from_rotation_x(0.7)
+                * DMat4::from_rotation_z(1.1),
+        ),
+        (
+            "y-gedreht und in y gespiegelt",
+            DMat4::from_rotation_y(2.0) * DMat4::from_scale(DVec3::new(1.0, -1.0, 1.0)),
+        ),
+        (
+            "weit verschoben, x-gedreht",
+            DMat4::from_translation(DVec3::new(2e5, 0.0, 0.0)) * DMat4::from_rotation_x(0.9),
+        ),
+    ]
+}
+
+fn base_circle(s: &Solid) -> planora_kernel::Id<planora_kernel::Edge> {
+    s.edges
+        .iter()
+        .find(|(_, e)| {
+            matches!(e.curve, planora_kernel::Curve::Circle { radius, .. } if radius == BASE_RADIUS)
+        })
+        .unwrap()
+        .0
+}
+
+fn blended(kind: planora_kernel::BlendKind) -> Solid {
+    let cone = k().make_cone(BASE_RADIUS, 9.0).unwrap();
+    let request = planora_kernel::BlendRequest {
+        edges: vec![planora_kernel::BlendEdge {
+            edge: base_circle(&cone),
+            first_face: None,
+        }],
+        kind,
+        tangent_chain: false,
+    };
+    k().blend(&cone, &request).unwrap().solid
+}
+
+fn at_block_center(s: &Solid, z: f64) -> Solid {
+    k().transform(
+        s,
+        &DMat4::from_translation(DVec3::new(BLOCK_CENTER.0, BLOCK_CENTER.1, z)),
+    )
+    .unwrap()
+}
+
+fn apex_bodies() -> Vec<(&'static str, Solid)> {
+    let block = k().make_box(BLOCK).unwrap();
+    let cone = k().make_cone(BASE_RADIUS, 9.0).unwrap();
+    let upside_down = k()
+        .transform(&cone, &DMat4::from_rotation_x(std::f64::consts::PI))
+        .unwrap();
+    let below = at_block_center(&cone, -1.0);
+    let above = at_block_center(&upside_down, BLOCK.z + 1.0);
+    let sunk = at_block_center(&cone, BLOCK.z - 1.0);
+    vec![
+        ("Kegel", cone.clone()),
+        (
+            "Senkung unten",
+            k().boolean(&block, &below, planora_kernel::BoolOp::Difference)
+                .unwrap(),
+        ),
+        (
+            "Senkung oben",
+            k().boolean(&block, &above, planora_kernel::BoolOp::Difference)
+                .unwrap(),
+        ),
+        ("Trichter", revolved(&[(0.0, 0.0), (5.0, 5.0), (0.0, 5.0)])),
+        (
+            "Kegel mit Fase",
+            blended(planora_kernel::BlendKind::ChamferEqual {
+                distance: BLEND_SIZE,
+            }),
+        ),
+        (
+            "Kegel mit Rundung",
+            blended(planora_kernel::BlendKind::Fillet { radius: BLEND_SIZE }),
+        ),
+        (
+            "Quader und Kegel",
+            k().boolean(&block, &sunk, planora_kernel::BoolOp::Union)
+                .unwrap(),
+        ),
+    ]
+}
+
+#[test]
+fn an_apex_beside_the_axis_by_rounding_passes_the_normal_check() {
+    for (name, body) in apex_bodies() {
+        for (pose, m) in skewed_poses() {
+            let s = k().transform(&body, &m).unwrap();
+            let (text, _) = export(&[(name, &s)]);
+            std::panic::catch_unwind(|| checked(&text, &[&s]))
+                .unwrap_or_else(|_| panic!("{name}, {pose}"));
+        }
+    }
+}
