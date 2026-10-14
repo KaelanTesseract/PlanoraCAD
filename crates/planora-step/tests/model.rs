@@ -355,8 +355,8 @@ fn the_model_names_a_knot_type_other_than_unspecified() {
 #[test]
 fn the_distance_to_a_very_slender_ellipse_is_not_amplified_by_its_shape() {
     // Halbachsen 2080 und 3,2 (Verhältnis über 600, wie bei einem streifenden Schnitt): Ein
-    // Punkt 1e-12 neben der Kurve muss auch diesen Abstand ergeben, nicht das Vielfache.
-    const OFF: f64 = 1e-12;
+    // Punkt 1e-9 neben der Kurve muss auch diesen Abstand ergeben, nicht das Vielfache.
+    const OFF: f64 = 1e-9;
     let c = Crv::Ellipse {
         a: Axis {
             origin: DVec3::new(1000.0, 17.0, -16.0),

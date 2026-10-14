@@ -468,7 +468,8 @@ impl Crv {
         }
     }
 
-    /// Abstand zur Kurve (Ellipse: über den Winkel; für Punkte auf der Kurve genau).
+    /// Abstand zur Kurve (Ellipse: Abstand zum Fußpunkt aus `param`, der per Newton verfeinert wird;
+    /// Kreis: Formel).
     pub fn distance(&self, q: DVec3) -> f64 {
         match self {
             Crv::Circle { a, r } => {

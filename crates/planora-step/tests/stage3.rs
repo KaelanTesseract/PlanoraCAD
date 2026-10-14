@@ -8,10 +8,11 @@ use common::check::measure;
 use common::{Lcg, checked, export};
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{
-    AnalyticKernel, BlendEdge, BlendKind, BlendRequest, Edge, Id, Kernel, Solid, Surface, UvRect,
+    AnalyticKernel, BlendEdge, BlendKind, BlendRequest, BooleanError, Edge, Id, Kernel,
+    NURBS_EDGE_TOL, Solid, Surface, UvRect,
 };
 use planora_math::nurbs::{NurbsCurve, NurbsSurface};
-use planora_math::{DMat4, DVec3, EulerRot, TAU};
+use planora_math::{DMat4, DVec3, EulerRot, PI, TAU};
 use planora_mesh::{TessellationOptions, mass_properties, tessellate};
 use std::fs;
 use std::path::PathBuf;
@@ -20,10 +21,33 @@ use std::path::PathBuf;
 const CHORD: f64 = 0.01;
 /// Wie in `stage2.rs`: Volumenfehler höchstens `SAG_FACTOR · CHORD · Oberfläche`.
 const SAG_FACTOR: f64 = 2.0;
+/// Schranke gegen das Kernel-Netz derselben Teilung bei rein analytischen Flächen: nur Rundung
+/// beim Auflegen der Punkte (gemessen höchstens 5,5e-15 über alle Körper und 7e-15 in der
+/// Zufallsreihe, wie in `stage2.rs`).
+const MESH_MATCH_REL: f64 = 1e-9;
+/// Größter Abstand eines Netzpunkts von seiner STEP-Fläche bei analytischen Flächen in mm
+/// (gemessen höchstens 3,4e-13 in der Zufallsreihe, wie in `stage2.rs`).
+const MAX_OFFSET: f64 = 1e-9;
+/// Schranke gegen das Kernel-Netz bei Körpern mit Freiformfläche (wie in `freeform.rs`; gemessen
+/// höchstens 5,2e-11 bei „Kreuz“).
+const FREEFORM_MESH_MATCH_REL: f64 = 1e-7;
+/// Größter Abstand eines Netzpunkts von seiner STEP-Fläche bei Freiformfläche in mm: Die
+/// Schnittkante zwischen Ebene und Freiformfläche trägt Punkte, die der Kernel nur bis
+/// `NURBS_EDGE_TOL` genau auf beide Flächen legt (gemessen 5,1e-7 bei „Kreuz“, also gut ein
+/// Fünfzigstel dieser Schranke).
+const FREEFORM_MAX_OFFSET: f64 = NURBS_EDGE_TOL;
 /// Fälle der kurzen Zufallsreihe (Debug-Build, unter 30 s).
 const SHORT_SERIES: usize = 12;
 /// Fälle der langen Zufallsreihe (nur Release).
 const LONG_SERIES: usize = 300;
+/// Startwert der Zufallsreihen (Tag der Aufgabe, JJJJMMTT).
+const SERIES_SEED: u64 = 20_261_014;
+/// Mindestanteil der Fälle, die der Kernel rechnet (gemessen 93 % in 300 Fällen; der Rest sind
+/// leere Schnittmengen). Alles andere als „leer“ lässt die Reihe fehlschlagen.
+const MIN_VALID_SHARE: f64 = 0.8;
+/// Abstand in mm, bis zu dem zwei Eckpunkte derselben Kante als „an derselben Stelle“ gelten
+/// (Eckpunkte des Quaders liegen bis auf Rundung auf ganzen Zahlen).
+const CORNER_NEAR: f64 = 1e-9;
 /// Sehnentoleranz (mm) für die Volumenangaben der Beispieldateien.
 const SAMPLE_CHORD: f64 = 0.001;
 
@@ -69,7 +93,7 @@ fn cube() -> Solid {
 
 /// Obere vordere Kante (y = 0, z = 10) und die beiden anderen Kanten an der Ecke (10, 0, 10).
 fn corner_edges(s: &Solid) -> Vec<Id<Edge>> {
-    let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+    let near = |a: f64, b: f64| (a - b).abs() < CORNER_NEAR;
     vec![
         edge_where(s, |p| near(p.y, 0.0) && near(p.z, 10.0)),
         edge_where(s, |p| near(p.x, 10.0) && near(p.z, 10.0)),
@@ -169,18 +193,87 @@ fn bodies() -> Vec<(&'static str, Solid)> {
     ]
 }
 
-/// Prüft einen Körper vollständig und vergleicht das Volumen mit dem Netz des Kernels.
-fn full(name: &str, s: &Solid) {
+/// Was ein Körper zusätzlich zum Vergleich mit dem Kernel-Netz erfüllen muss.
+struct Spec {
+    /// Schranke des Abstands der Netzpunkte von den STEP-Flächen.
+    max_offset: f64,
+    /// Schranke des relativen Volumenunterschieds zum Kernel-Netz.
+    mesh_rel: f64,
+    /// Volumen und gekrümmte Oberfläche nach Formel, falls es eine geschlossene gibt.
+    formula: Option<(f64, f64)>,
+}
+
+impl Spec {
+    /// Rein analytische Flächen, keine Formel.
+    fn analytic() -> Spec {
+        Spec {
+            max_offset: MAX_OFFSET,
+            mesh_rel: MESH_MATCH_REL,
+            formula: None,
+        }
+    }
+}
+
+/// Spec der benannten Körper aus [`bodies`]. Formeln: Rundung = Würfel 10³ minus Viertelkreis-
+/// Rest (4 − π) · 10 (gekrümmt: ein Viertelzylinder π · 10); Fase = 10³ minus 1,5²/2 · 10 (nur
+/// Ebenen); Kuppel = Würfel plus Halbkugel r = 4 (2/3 π 4³, gekrümmt 2 π 4²); Kreuz = Quader
+/// 20 · 20 · 10 minus Bohrung r = 3 (π 9 · 10, gekrümmt 2 π 3 · 10). „Ecke“ und „Variabel“ haben
+/// keine geschlossene Formel im Test und werden nur gegen das Kernel-Netz geprüft.
+fn spec(name: &str) -> Spec {
+    let analytic = Spec::analytic();
+    match name {
+        "Rundung" => Spec {
+            formula: Some((1000.0 - (4.0 - PI) * 10.0, PI * 10.0)),
+            ..analytic
+        },
+        "Fase" => Spec {
+            formula: Some((1000.0 - 1.5 * 1.5 / 2.0 * 10.0, 0.0)),
+            ..analytic
+        },
+        "Kuppel" => Spec {
+            formula: Some((1000.0 + 2.0 / 3.0 * PI * 64.0, 2.0 * PI * 16.0)),
+            ..analytic
+        },
+        "Kreuz" => Spec {
+            max_offset: FREEFORM_MAX_OFFSET,
+            mesh_rel: FREEFORM_MESH_MATCH_REL,
+            formula: Some((4000.0 - PI * 9.0 * 10.0, 2.0 * PI * 3.0 * 10.0)),
+        },
+        "Variabel" => Spec {
+            max_offset: FREEFORM_MAX_OFFSET,
+            mesh_rel: FREEFORM_MESH_MATCH_REL,
+            formula: None,
+        },
+        _ => analytic,
+    }
+}
+
+/// Prüft einen Körper vollständig und vergleicht das Netz aus den STEP-Flächen mit dem Netz des
+/// Kernels (Volumen, Abstand der Punkte) und, wo es eine gibt, mit der Formel (Volumenfehler
+/// höchstens `SAG_FACTOR · CHORD · gekrümmte Fläche`, wie in `stage2.rs`, dazu `mesh_rel`).
+fn full(name: &str, s: &Solid, spec: &Spec) {
     let (text, _) = export(&[(name, s)]);
     let (m, _) = checked(&text, &[s]);
     let r = measure(&m, &[s], CHORD).unwrap_or_else(|e| panic!("{name}: {e}"));
     assert_eq!(r.flipped, 0, "{name}");
     assert!(
-        (r.volume - r.kernel_volume).abs() <= SAG_FACTOR * CHORD * r.area,
+        r.max_offset < spec.max_offset,
+        "{name}: Abstand {}",
+        r.max_offset
+    );
+    assert!(
+        ((r.volume - r.kernel_volume) / r.kernel_volume).abs() < spec.mesh_rel,
         "{name}: {} gegen {}",
         r.volume,
         r.kernel_volume
     );
+    if let Some((volume, curved)) = spec.formula {
+        assert!(
+            (r.volume - volume).abs() <= SAG_FACTOR * CHORD * curved + spec.mesh_rel * volume,
+            "{name}: {} statt {volume}",
+            r.volume
+        );
+    }
 }
 
 #[test]
@@ -195,7 +288,7 @@ fn rounded_chamfered_and_combined_bodies_pass_all_checks() {
         ] {
             let s = moved(&s, m);
             let label = format!("{name}, {pose}");
-            full(&label, &s);
+            full(&label, &s, &spec(name));
         }
     }
 }
@@ -238,7 +331,8 @@ fn random_pose(rng: &mut Lcg) -> DMat4 {
 
 /// Zufälliger Körper: ein gedrehter Quader, verrechnet mit einem gedrehten Quader, einem Zylinder
 /// oder einer Kugel (Paare, die der Kernel kann; Zylinder mit Zylinder oder Kugel schräg zur
-/// Achse rechnet er noch nicht). `None`, wenn der Kernel die Operation benannt ablehnt.
+/// Achse rechnet er noch nicht). `None` nur bei leerer Schnittmenge; jeder andere Fehler des
+/// Kernels lässt den Test fehlschlagen.
 fn random_body(rng: &mut Lcg) -> Option<Solid> {
     let size = |rng: &mut Lcg| {
         DVec3::new(
@@ -258,36 +352,46 @@ fn random_body(rng: &mut Lcg) -> Option<Solid> {
     let b = moved(&b, random_pose(rng));
     let op =
         [BoolOp::Union, BoolOp::Difference, BoolOp::Intersection][(rng.uniform() * 3.0) as usize];
-    k().boolean(&a, &b, op).ok()
+    match k().boolean(&a, &b, op) {
+        Ok(s) => Some(s),
+        Err(BooleanError::EmptyResult) => None,
+        Err(e) => panic!("Boolesche Operation {op:?}: {e}"),
+    }
 }
 
-fn series(cases: usize) -> usize {
-    let mut rng = Lcg(20_261_014);
-    let mut done = 0;
+/// Rechnet `cases` Fälle; gibt (geprüfte, übersprungene wegen leerer Schnittmenge) zurück.
+fn series(cases: usize) -> (usize, usize) {
+    let mut rng = Lcg(SERIES_SEED);
+    let (mut done, mut empty) = (0, 0);
     for i in 0..cases {
         if let Some(s) = random_body(&mut rng) {
-            full(&format!("Zufall {i}"), &s);
+            full(&format!("Zufall {i}"), &s, &Spec::analytic());
             done += 1;
+        } else {
+            empty += 1;
         }
     }
-    done
+    println!("{done} geprüft, {empty} leer von {cases}");
+    (done, empty)
+}
+
+fn assert_enough_valid(cases: usize) {
+    let (done, empty) = series(cases);
+    assert!(
+        done as f64 >= MIN_VALID_SHARE * cases as f64,
+        "zu viele leere Schnittmengen: {empty} von {cases}"
+    );
 }
 
 #[test]
 fn a_short_random_series_passes_all_checks() {
-    assert!(
-        series(SHORT_SERIES) >= SHORT_SERIES / 2,
-        "zu viele Ablehnungen"
-    );
+    assert_enough_valid(SHORT_SERIES);
 }
 
 #[test]
 #[ignore = "lange Reihe, nur mit --release --ignored"]
 fn a_long_random_series_passes_all_checks() {
-    assert!(
-        series(LONG_SERIES) >= LONG_SERIES / 2,
-        "zu viele Ablehnungen"
-    );
+    assert_enough_valid(LONG_SERIES);
 }
 
 /// Schreibt Beispieldateien für den Handtest in Fusion 360 (Task 15) in den Ordner aus der
