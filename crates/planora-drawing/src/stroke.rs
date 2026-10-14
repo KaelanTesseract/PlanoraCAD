@@ -71,6 +71,27 @@ impl Stroke {
         for i in 0..=BBOX_SAMPLES - 1 {
             add(self.point2(basis, self.sample_t(i, BBOX_SAMPLES - 1)));
         }
+        // Kreis und Ellipse: exakte Achsextrema der Projektion (f'(t) = 0 bei t = atan2(B, A) + k·π).
+        let conic = match &self.curve {
+            Curve::Circle { frame, radius } => Some((frame.x * *radius, frame.y * *radius)),
+            Curve::Ellipse {
+                frame,
+                major,
+                minor,
+            } => Some((frame.x * *major, frame.y * *minor)),
+            _ => None,
+        };
+        if let Some((ax, ay)) = conic {
+            let (lo_t, hi_t) = (self.t0.min(self.t1), self.t0.max(self.t1));
+            for w in [basis.ex, basis.ey] {
+                let t_star = ay.dot(w).atan2(ax.dot(w));
+                let k0 = ((lo_t - t_star) / std::f64::consts::PI).ceil() as i64;
+                let k1 = ((hi_t - t_star) / std::f64::consts::PI).floor() as i64;
+                for k in k0..=k1 {
+                    add(self.point2(basis, t_star + k as f64 * std::f64::consts::PI));
+                }
+            }
+        }
         if let Curve::Nurbs(c) = &self.curve {
             for &p in c.control_points() {
                 add(basis.project(p));

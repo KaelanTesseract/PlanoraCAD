@@ -158,3 +158,89 @@ fn an_edge_with_one_face_is_an_invalid_body() {
         Err(planora_drawing::DrawError::InvalidBody(m)) if m == "Kante ohne zwei Flächen"
     ));
 }
+
+fn arc_stroke(curve: planora_kernel::Curve, t0: f64, t1: f64) -> Stroke {
+    Stroke {
+        curve,
+        t0,
+        t1,
+        origin: StrokeOrigin::Edge { body: 0, edge: 0 },
+    }
+}
+
+#[test]
+fn conic_bbox_is_conservative_and_tight_between_samples() {
+    use planora_kernel::Curve;
+    use planora_math::{DVec3, Frame};
+    let frame = Frame {
+        origin: DVec3::new(3.0, -2.0, 1.0),
+        ..Frame::from_origin_normal(DVec3::new(3.0, -2.0, 1.0), DVec3::new(1.0, 2.0, 3.0))
+    };
+    let pad = 1e-9;
+    for basis in [Basis::of(ViewKind::Isometric), Basis::of(ViewKind::Front)] {
+        let arcs = [
+            arc_stroke(Curve::Circle { frame, radius: 5.0 }, 0.37, 5.91),
+            arc_stroke(Curve::Circle { frame, radius: 5.0 }, -1.3, 0.9),
+            arc_stroke(
+                Curve::Ellipse {
+                    frame,
+                    major: 7.0,
+                    minor: 2.5,
+                },
+                0.21,
+                4.77,
+            ),
+            arc_stroke(
+                Curve::Ellipse {
+                    frame,
+                    major: 7.0,
+                    minor: 2.5,
+                },
+                0.0,
+                std::f64::consts::TAU,
+            ),
+        ];
+        for st in &arcs {
+            let (lo, hi) = st.bbox2(&basis, pad);
+            let n = 100_000;
+            let (mut tl, mut th) = (
+                planora_math::DVec2::splat(f64::INFINITY),
+                planora_math::DVec2::splat(f64::NEG_INFINITY),
+            );
+            for i in 0..=n {
+                let p = st.point2(&basis, st.t0 + (st.t1 - st.t0) * i as f64 / n as f64);
+                assert!(p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y);
+                tl = tl.min(p);
+                th = th.max(p);
+            }
+            // Dicht abgetastete wahre Ausdehnung (Abtastfehler < 1e-8): Box höchstens pad + 1e-12 größer.
+            for (outer, inner) in [(lo.x, tl.x), (lo.y, tl.y), (th.x, hi.x), (th.y, hi.y)] {
+                let slack = inner - outer;
+                assert!(slack >= 0.0 && slack <= pad + 1e-12 + 1e-8, "{slack}");
+            }
+        }
+    }
+}
+
+#[test]
+fn ellipse_derivative_matches_central_difference() {
+    use planora_kernel::Curve;
+    use planora_math::{DVec3, Frame};
+    let frame = Frame::from_origin_normal(DVec3::new(1.0, 2.0, 3.0), DVec3::new(1.0, 2.0, 3.0));
+    let st = arc_stroke(
+        Curve::Ellipse {
+            frame,
+            major: 7.0,
+            minor: 2.5,
+        },
+        0.2,
+        4.0,
+    );
+    let basis = Basis::of(ViewKind::Isometric);
+    for i in 0..=20 {
+        let t = 0.3 + 3.5 * i as f64 / 20.0;
+        let h = 1e-6;
+        let num = (st.point2(&basis, t + h) - st.point2(&basis, t - h)) / (2.0 * h);
+        assert!((num - st.deriv2(&basis, t)).length() < 1e-6);
+    }
+}
