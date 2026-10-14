@@ -78,6 +78,69 @@ impl ExchangeMesh {
             ..Mesh::default()
         }
     }
+
+    /// Kompakte Form für das Dokument (Spec §7, Plan P12): Punktzahl und Dreieckszahl (u32),
+    /// dann die Punkte (f32) und die Punktnummern (u32), alles little endian.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(8 + 12 * self.positions.len() + 4 * self.indices.len());
+        out.extend_from_slice(&(self.positions.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(self.triangle_count() as u32).to_le_bytes());
+        for p in &self.positions {
+            for c in p {
+                out.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        for i in &self.indices {
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        out
+    }
+
+    /// Erwartete Länge der Bytes aus ihren ersten acht; prüft die Anzahlen gegen die Grenzen,
+    /// bevor etwas reserviert wird.
+    pub fn byte_len_from_header(head: &[u8]) -> Result<u64, ExchangeError> {
+        let Some(h) = head.get(..8) else {
+            return Err(ExchangeError::Corrupt("Die Netzdaten sind zu kurz".into()));
+        };
+        let vertices = u64::from(u32::from_le_bytes([h[0], h[1], h[2], h[3]]));
+        let triangles = u64::from(u32::from_le_bytes([h[4], h[5], h[6], h[7]]));
+        if triangles > MAX_TRIANGLES as u64 {
+            return Err(ExchangeError::TooManyTriangles);
+        }
+        if vertices > MAX_VERTICES as u64 {
+            return Err(ExchangeError::TooManyVertices);
+        }
+        Ok(8 + 12 * vertices + 12 * triangles)
+    }
+
+    /// Liest die Form aus [`ExchangeMesh::to_bytes`] und prüft das Netz.
+    pub fn from_bytes(bytes: &[u8]) -> Result<ExchangeMesh, ExchangeError> {
+        let expected = Self::byte_len_from_header(bytes)?;
+        if expected != bytes.len() as u64 {
+            return Err(ExchangeError::Corrupt(
+                "Die Länge der Netzdaten passt nicht zu den Anzahlen".into(),
+            ));
+        }
+        let vertices = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        let (points, numbers) = bytes[8..].split_at(12 * vertices);
+        let floats: Vec<f32> = points
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
+            .collect();
+        let mesh = ExchangeMesh {
+            positions: floats.as_chunks::<3>().0.to_vec(),
+            indices: numbers
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_le_bytes(*c))
+                .collect(),
+        };
+        mesh.validate()?;
+        Ok(mesh)
+    }
 }
 
 /// Lage eines Netz-Körpers: erst skalieren, dann drehen, dann verschieben (Millimeter).

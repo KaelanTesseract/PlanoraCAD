@@ -1,8 +1,10 @@
 //! Umwandlung zwischen Snapshot und den Format-Typen. `encode_version` schreibt nur, was sich
 //! wieder lesen lässt; `decode_version` prüft alles, bevor etwas entsteht.
 
+use crate::base64;
 use crate::error::{ProjectError, Result};
 use crate::format::*;
+use planora_exchange::{ExchangeMesh, MAX_FILE_BYTES};
 use planora_feature::{
     BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM, MeshId,
     SketchFeature, SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
@@ -14,19 +16,23 @@ use planora_sketch::{
     PointRecord, Sketch, SketchData,
 };
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-/// Höchste lesbare Formatnummer der Versionsdateien (P7).
-pub const FORMAT_VERSION: u32 = 2;
+/// Höchste lesbare Formatnummer der Versionsdateien (P7, P12).
+pub const FORMAT_VERSION: u32 = 3;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
+/// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
+const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 2 mit Rundungen oder Fasen, sonst 1 (P7).
+/// Kleinste Formatnummer, die den Stand darstellt: 3 mit Netz-Körpern, 2 mit Rundungen oder
+/// Fasen, sonst 1 (P7, P12).
 pub fn required_format(s: &Snapshot) -> u32 {
-    if s.features
-        .iter()
-        .any(|f| matches!(f.kind, FeatureKind::Verrunden { .. }))
-    {
+    let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
+    if has(|k| matches!(k, FeatureKind::MeshBody { .. })) {
+        3
+    } else if has(|k| matches!(k, FeatureKind::Verrunden { .. })) {
         2
     } else {
         1
@@ -722,6 +728,38 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
     })
 }
 
+// ---- Netze ------------------------------------------------------------------------------
+
+/// Liest die Netze einer Datei. Vor dem Dekodieren werden Länge der Zeichenkette (auch in
+/// Summe) und der Kopf gegen die Grenzen und gegen die Gesamtlänge geprüft (Spec §7).
+fn meshes_from(origin: &str, list: &[MeshDto]) -> Result<BTreeMap<MeshId, Arc<ExchangeMesh>>> {
+    let mut total: u64 = 0;
+    let mut out = BTreeMap::new();
+    for d in list {
+        let bad = |m: &str| ProjectError::corrupt(origin, format!("Netz {}: {m}", d.id));
+        if d.id == 0 {
+            return Err(bad("Die Kennung ist ungültig"));
+        }
+        let len = base64::decoded_len(&d.daten).map_err(|e| bad(&e.to_string()))? as u64;
+        total = total.saturating_add(len);
+        if len > MAX_MESH_BYTES || total > MAX_MESH_BYTES {
+            return Err(bad("Die Netzdaten sind zu groß"));
+        }
+        let head = base64::decode_prefix(&d.daten, 8).map_err(|e| bad(&e.to_string()))?;
+        let expected =
+            ExchangeMesh::byte_len_from_header(&head).map_err(|e| bad(&e.to_string()))?;
+        if expected != len {
+            return Err(bad("Die Länge der Netzdaten passt nicht zu den Anzahlen"));
+        }
+        let bytes = base64::decode(&d.daten).map_err(|e| bad(&e.to_string()))?;
+        let mesh = ExchangeMesh::from_bytes(&bytes).map_err(|e| bad(&e.to_string()))?;
+        if out.insert(MeshId(d.id), Arc::new(mesh)).is_some() {
+            return Err(bad("Die Kennung kommt doppelt vor"));
+        }
+    }
+    Ok(out)
+}
+
 // ---- Öffentliche Funktionen -------------------------------------------------------------
 
 /// JSON-Text einer Versionsdatei. Enthält der Snapshot eine nicht endliche Zahl, ist das ein
@@ -739,6 +777,14 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
                 name: f.name.clone(),
                 unterdrueckt: f.suppressed,
                 art: kind_to(&f.kind),
+            })
+            .collect(),
+        netze: s
+            .meshes
+            .iter()
+            .map(|(id, m)| MeshDto {
+                id: id.0,
+                daten: base64::encode(&m.to_bytes()),
             })
             .collect(),
     };
@@ -789,6 +835,28 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             "Rundungen und Fasen gibt es erst ab Dateiformat 2",
         ));
     }
+    let has_mesh_body = file
+        .features
+        .iter()
+        .any(|f| matches!(f.art, KindDto::NetzKoerper { .. }));
+    if file.format < 3 && (has_mesh_body || !file.netze.is_empty()) {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Netz-Körper gibt es erst ab Dateiformat 3",
+        ));
+    }
+    check_len(origin, "Netze", file.netze.len())?;
+    let meshes = meshes_from(origin, &file.netze)?;
+    for f in &file.features {
+        if let KindDto::NetzKoerper { netz, .. } = &f.art
+            && !meshes.contains_key(&MeshId(*netz))
+        {
+            return Err(ProjectError::corrupt(
+                origin,
+                format!("„{}“: Das Netz {netz} fehlt in der Datei", f.name),
+            ));
+        }
+    }
     check_len(origin, "Features", file.features.len())?;
     let mut features = Vec::with_capacity(file.features.len());
     for f in &file.features {
@@ -803,6 +871,6 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         features,
         marker: file.marker,
         next_id: file.naechste_id,
-        meshes: BTreeMap::new(),
+        meshes,
     })
 }
