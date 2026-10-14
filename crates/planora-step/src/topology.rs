@@ -103,7 +103,7 @@ impl<'s> TopoWriter<'s> {
     /// `ADVANCED_FACE`; die äußere Schleife wird `FACE_OUTER_BOUND`, Löcher `FACE_BOUND`.
     fn face(&mut self, e: &mut Entities, id: Id<Face>) -> Result<u64, StepError> {
         let f = &self.solid.faces[id];
-        let surface = geometry::surface(e, &f.surface)?;
+        let surface = geometry::surface(e, &f.surface, f.patch)?;
         let mut bounds = Vec::with_capacity(1 + f.inner.len());
         let outer = self.edge_loop(e, &f.outer)?;
         bounds.push(e.push(&format!("FACE_OUTER_BOUND('',#{outer},.T.)"))?);

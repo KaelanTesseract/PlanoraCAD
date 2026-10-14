@@ -3,7 +3,7 @@
 use crate::entity::Entities;
 use crate::error::StepError;
 use crate::number::push_real;
-use planora_kernel::{Curve, Surface};
+use planora_kernel::{Curve, Surface, UvRect};
 use planora_math::{DVec3, Frame};
 
 /// Abweichung, bis zu der ein Koordinatensystem des Kernels als senkrecht und normiert gilt.
@@ -139,8 +139,53 @@ pub(crate) fn curve(e: &mut Entities, c: &Curve) -> Result<u64, StepError> {
     }
 }
 
-/// Trägerfläche einer Fläche.
-pub(crate) fn surface(e: &mut Entities, s: &Surface) -> Result<u64, StepError> {
+/// Kegel (Spec §3): Der Kernel beschreibt den Radius an der Höhe `v` als `radius + slope · v`;
+/// STEP verlangt am Ursprung einen Radius ≥ 0 und einen halben Öffnungswinkel in (0, π/2). Die
+/// Lage wird deshalb auf die Mitte des v-Bereichs der Fläche verschoben (dort ist der Radius der
+/// Fläche positiv) und bei fallendem Radius (`slope < 0`) die Achse umgekehrt; die natürliche
+/// Normale (von der Achse weg) bleibt dieselbe. `slope = 0` ist ein Zylinder.
+fn cone(
+    e: &mut Entities,
+    frame: &Frame,
+    radius: f64,
+    slope: f64,
+    patch: Option<UvRect>,
+) -> Result<u64, StepError> {
+    if !(radius.is_finite() && slope.is_finite()) {
+        return Err(StepError::NotFinite);
+    }
+    if !frame.is_orthonormal(FRAME_TOL) {
+        return Err(reject(
+            "Ein Koordinatensystem ist schief oder nicht normiert",
+        ));
+    }
+    let Some(p) = patch else {
+        return Err(reject("Eine Kegelfläche hat keinen Parameterbereich"));
+    };
+    let v_mid = 0.5 * (p.v0 + p.v1);
+    if !v_mid.is_finite() {
+        return Err(StepError::NotFinite);
+    }
+    let rho = radius + slope * v_mid;
+    if rho.is_nan() || rho <= 0.0 {
+        return Err(reject("Eine Kegelfläche liegt jenseits ihrer Spitze"));
+    }
+    let origin = frame.origin + frame.z * v_mid;
+    if slope == 0.0 {
+        let a = placement(e, origin, frame.z, frame.x)?;
+        return with_numbers(e, "CYLINDRICAL_SURFACE", a, &[rho]);
+    }
+    let z = if slope > 0.0 { frame.z } else { -frame.z };
+    let a = placement(e, origin, z, frame.x)?;
+    with_numbers(e, "CONICAL_SURFACE", a, &[rho, slope.abs().atan()])
+}
+
+/// Trägerfläche einer Fläche; `patch` ist der Parameterbereich der Fläche (für den Kegel).
+pub(crate) fn surface(
+    e: &mut Entities,
+    s: &Surface,
+    patch: Option<UvRect>,
+) -> Result<u64, StepError> {
     match s {
         Surface::Plane { frame } => {
             let a = frame_placement(e, frame)?;
@@ -173,8 +218,11 @@ pub(crate) fn surface(e: &mut Entities, s: &Surface) -> Result<u64, StepError> {
             let a = frame_placement(e, frame)?;
             with_numbers(e, "TOROIDAL_SURFACE", a, &[big, small])
         }
-        Surface::Cone { .. } | Surface::Nurbs(_) => {
-            Err(reject("Diese Flächenart wird noch nicht ausgegeben"))
-        }
+        Surface::Cone {
+            frame,
+            radius,
+            slope,
+        } => cone(e, frame, *radius, *slope, patch),
+        Surface::Nurbs(_) => Err(reject("Diese Flächenart wird noch nicht ausgegeben")),
     }
 }
