@@ -154,6 +154,33 @@ fn edge_faces(solid: &Solid) -> Vec<Vec<usize>> {
     uses
 }
 
+/// Flächen je Kante eines Körpers (einmal je Körper aufgebaut): Kantenindex → Indizes der
+/// anliegenden Flächen in `solid.faces` (ohne Wiederholung).
+#[derive(Clone, Debug)]
+pub struct EdgeFaces {
+    faces: Vec<Vec<usize>>,
+}
+
+impl EdgeFaces {
+    pub fn new(solid: &Solid) -> EdgeFaces {
+        let mut faces = edge_faces(solid);
+        for f in &mut faces {
+            f.sort_unstable();
+            f.dedup();
+        }
+        EdgeFaces { faces }
+    }
+
+    /// Eigene Flächen eines Strichs: bei einer Kante die anliegenden Flächen, bei einem Umriss
+    /// seine Fläche.
+    pub fn own_faces(&self, stroke: &Stroke) -> Vec<usize> {
+        match stroke.origin {
+            StrokeOrigin::Edge { edge, .. } => self.faces.get(edge).cloned().unwrap_or_default(),
+            StrokeOrigin::Silhouette { face, .. } => vec![face],
+        }
+    }
+}
+
 /// Außennormale der Fläche am Raumpunkt `p`; `hint` führt die Suche bei Freiformflächen.
 fn outward_normal(face: &Face, p: DVec3, hint: &mut Option<(f64, f64)>) -> DVec3 {
     let (u, v) = match (&face.surface, *hint) {

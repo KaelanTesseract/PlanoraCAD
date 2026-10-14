@@ -387,6 +387,210 @@ pub fn total_len(strokes: &[Stroke], basis: &Basis) -> f64 {
     total
 }
 
+/// Ähnlichkeitsabbildung `m` auf einen Körper (öffentliche Kernel-Transformation).
+fn mapped(s: &Solid, m: &planora_math::DMat4) -> Solid {
+    s.transformed(m).unwrap()
+}
+
+/// Boolesche Verknüpfung über die öffentliche Kernel-Schnittstelle, Ergebnis geprüft.
+fn boolean_op(a: &Solid, b: &Solid, op: planora_kernel::BoolOp) -> Solid {
+    let out = planora_kernel::boolean::boolean(a, b, op, &tol()).unwrap();
+    validate(&out).expect("Ergebnis der Booleschen Verknüpfung ist gültig");
+    out
+}
+
+/// Zylinder (Radius `r`) längs der Achse `axis` (X, Y oder Z) durch den Punkt `center`, der
+/// zu beiden Seiten `half` lang ist.
+fn axis_cylinder(r: f64, half: f64, axis: DVec3, center: DVec3) -> Solid {
+    use planora_math::{DMat4, DQuat};
+    let c = cylinder_solid(r, 2.0 * half);
+    let rot = DQuat::from_rotation_arc(DVec3::Z, axis.normalize());
+    let m = DMat4::from_translation(center)
+        * DMat4::from_quat(rot)
+        * DMat4::from_translation(DVec3::new(0.0, 0.0, -half));
+    mapped(&c, &m)
+}
+
+/// Quader `[0,a] × [0,b] × [0,c]` mit einer durchgehenden Bohrung (Radius `hole_r`) längs
+/// `axis` (X, Y oder Z) durch die Quadermitte.
+pub fn box_with_hole(a: f64, b: f64, c: f64, hole_r: f64, axis: DVec3) -> Solid {
+    let center = DVec3::new(a, b, c) * 0.5;
+    let half = a.max(b).max(c);
+    let drill = axis_cylinder(hole_r, half, axis, center);
+    boolean_op(
+        &box_solid(a, b, c),
+        &drill,
+        planora_kernel::BoolOp::Difference,
+    )
+}
+
+/// L-Winkel: Grundriss `(0,0) → (a,0) → (a,t) → (t,t) → (t,b) → (0,b)`, Höhe `c` in Z.
+pub fn l_bracket(a: f64, b: f64, c: f64, t: f64) -> Solid {
+    let profile = Profile {
+        outer: ProfileLoop {
+            start: DVec2::ZERO,
+            segments: vec![
+                Segment::Line {
+                    to: DVec2::new(a, 0.0),
+                },
+                Segment::Line {
+                    to: DVec2::new(a, t),
+                },
+                Segment::Line {
+                    to: DVec2::new(t, t),
+                },
+                Segment::Line {
+                    to: DVec2::new(t, b),
+                },
+                Segment::Line {
+                    to: DVec2::new(0.0, b),
+                },
+                Segment::Line { to: DVec2::ZERO },
+            ],
+        },
+        holes: vec![],
+    };
+    extrude(&profile, &Frame::WORLD, c, &tol()).unwrap()
+}
+
+/// Quader `[0,a] × [0,b] × [0,c]` mit einer rechteckigen Tasche (`pw` in X, `pl` in Y, Tiefe
+/// `depth`) mittig in der Oberseite.
+pub fn box_with_pocket(a: f64, b: f64, c: f64, pw: f64, pl: f64, depth: f64) -> Solid {
+    use planora_math::DMat4;
+    let cutter = mapped(
+        &box_solid(pw, pl, depth + 1.0),
+        &DMat4::from_translation(DVec3::new(0.5 * (a - pw), 0.5 * (b - pl), c - depth)),
+    );
+    boolean_op(
+        &box_solid(a, b, c),
+        &cutter,
+        planora_kernel::BoolOp::Difference,
+    )
+}
+
+/// Zylinder (Radius `r`, Höhe `h`, Achse Z) mit einem Querdurchbruch längs X auf halber Höhe
+/// durch die Achse. Der Kernel schneidet zwei sich kreuzende Zylinder nicht
+/// (`UnsupportedIntersection { Zylinder, Zylinder }`); statt der runden Querbohrung hat der
+/// Durchbruch daher einen auf die Spitze gestellten quadratischen Querschnitt (halbe Diagonale
+/// `hole_r`, Seiten unter 45° zur Achse). Seine Seitenflächen schneiden den Mantel in
+/// Ellipsenbögen – gekrümmte Schnittkanten wie bei der Bohrung, mit Ecken.
+pub fn cylinder_cross_hole(r: f64, h: f64, hole_r: f64) -> Solid {
+    use planora_math::{DMat4, DQuat};
+    let side = hole_r * std::f64::consts::SQRT_2;
+    let len = 4.0 * r;
+    let m = DMat4::from_translation(DVec3::new(0.0, 0.0, 0.5 * h))
+        * DMat4::from_quat(DQuat::from_rotation_x(std::f64::consts::FRAC_PI_4))
+        * DMat4::from_translation(DVec3::new(-0.5 * len, -0.5 * side, -0.5 * side));
+    let drill = mapped(&box_solid(len, side, side), &m);
+    boolean_op(
+        &cylinder_solid(r, h),
+        &drill,
+        planora_kernel::BoolOp::Difference,
+    )
+}
+
+/// Würfel `[0,a]³` und Kugel (Radius `r`) um die Mitte der Oberseite, vereinigt.
+pub fn sphere_on_box(a: f64, r: f64) -> Solid {
+    use planora_math::DMat4;
+    let ball = mapped(
+        &sphere_solid(r),
+        &DMat4::from_translation(DVec3::new(0.5 * a, 0.5 * a, a)),
+    );
+    boolean_op(&box_solid(a, a, a), &ball, planora_kernel::BoolOp::Union)
+}
+
+/// Quader `[0,a] × [0,b] × [0,c]`, dessen vier senkrechte Kanten (parallel zu Z) mit Radius `r`
+/// verrundet sind (nur Zylinderflächen, keine Eckflächen).
+pub fn rounded_box(a: f64, b: f64, c: f64, r: f64) -> Solid {
+    let s = box_solid(a, b, c);
+    let at = |id: Id<Vertex>| s.vertices[id].point;
+    let edges: Vec<BlendEdge> = s
+        .edges
+        .iter()
+        .filter(|(_, e)| {
+            let (p, q) = (at(e.start), at(e.end));
+            (p.x - q.x).abs() < 1e-9 && (p.y - q.y).abs() < 1e-9
+        })
+        .map(|(id, _)| BlendEdge {
+            edge: id,
+            first_face: None,
+        })
+        .collect();
+    assert_eq!(edges.len(), 4, "vier senkrechte Kanten");
+    let req = BlendRequest {
+        edges,
+        kind: BlendKind::Fillet { radius: r },
+        tangent_chain: false,
+    };
+    let out = blend::blend(&s, &req, &tol()).unwrap();
+    validate(&out.solid).expect("verrundeter Quader ist gültig");
+    out.solid
+}
+
+/// Gleichmäßig um den Faktor `f` skaliert (um den Ursprung), dann um `shift·(1, 1, 1)`
+/// verschoben (öffentliche Kernel-Transformation).
+pub fn transformed(s: &Solid, f: f64, shift: f64) -> Solid {
+    use planora_math::DMat4;
+    let m = DMat4::from_translation(DVec3::splat(shift)) * DMat4::from_scale(DVec3::splat(f));
+    mapped(s, &m)
+}
+
+/// Um die Achse `axis` durch den Ursprung um `angle` (Radiant) gedreht.
+pub fn rotated(s: &Solid, axis: DVec3, angle: f64) -> Solid {
+    use planora_math::{DMat4, DQuat};
+    mapped(
+        s,
+        &DMat4::from_quat(DQuat::from_axis_angle(axis.normalize(), angle)),
+    )
+}
+
+/// Gerader Strich von `a` in Richtung `dir` (normiert), Parameter `0 … len` (Länge in mm).
+pub fn line_stroke(a: (f64, f64, f64), dir: (f64, f64, f64), len: f64) -> Stroke {
+    Stroke {
+        curve: Curve::Line {
+            origin: DVec3::new(a.0, a.1, a.2),
+            dir: DVec3::new(dir.0, dir.1, dir.2).normalize(),
+        },
+        t0: 0.0,
+        t1: len,
+        origin: planora_drawing::stroke::StrokeOrigin::Edge { body: 0, edge: 0 },
+    }
+}
+
+/// Strich mit seiner Ansichtsbasis.
+pub struct BasisStroke {
+    pub basis: Basis,
+    pub stroke: Stroke,
+}
+
+/// Dünne Platte `[0,10] × [0,1] × [0,10]`, Vorderansicht (Blick in +Y, Auge bei −Y). Dahinter,
+/// im Abstand `GAP` hinter der Rückseite (`y = 1 + GAP`, `z = 5`), läuft ein Strich in +X von
+/// `x = −3` bis `x = 7`. Links von `x = 0` ist er frei, rechts davon verdeckt die Platte ihn:
+/// Übergang bei `t* = 3` (aus der Geometrie: `x(t) = −3 + t = 0`). Der kleine Abstand
+/// `GAP = 5e-4` hält die Verschiebung, die gekippte Prüfstrahlen am Plattenrand bewirken können
+/// (höchstens Kippwinkel · Abstand ≤ 1e-4 · 5e-4 = 5e-8 bei der größten zulässigen Kippung),
+/// unter der Genauigkeit des Tests (1e-7). Szene mit Ausdehnung 100 (wie im Test).
+pub fn stroke_behind_plate_edge() -> (BasisStroke, planora_drawing::raycast::Scene, f64) {
+    const GAP: f64 = 5e-4;
+    let plate = box_solid(10.0, 1.0, 10.0);
+    let bodies = [planora_drawing::DrawBody {
+        name: "Platte".into(),
+        solid: &plate,
+    }];
+    let scene =
+        planora_drawing::raycast::Scene::new(&bodies, 100.0, &planora_exchange::Progress::new())
+            .unwrap();
+    let stroke = line_stroke((-3.0, 1.0 + GAP, 5.0), (1.0, 0.0, 0.0), 10.0);
+    (
+        BasisStroke {
+            basis: Basis::of(planora_drawing::model::ViewKind::Front),
+            stroke,
+        },
+        scene,
+        3.0,
+    )
+}
+
 /// Kubische Bézierkurve als NURBS (offener Knotenvektor `[0,0,0,0,1,1,1,1]`, Gewichte 1) mit
 /// den vier Punkten als Kontrollpunkten.
 pub fn cubic_from_controls(p: &[(f64, f64, f64)]) -> NurbsCurve {
