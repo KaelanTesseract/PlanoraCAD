@@ -178,6 +178,75 @@ fn cards_in_a_row_get_the_same_height_over_the_full_width() {
     );
 }
 
+/// Treiber für die Dateiauswahl: jedes Bild bekommt steigende Zeit, so wie in der Wirklichkeit.
+struct Driver {
+    ctx: egui::Context,
+    time: f64,
+}
+
+impl Driver {
+    fn new() -> Driver {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts::definitions());
+        Driver { ctx, time: 0.0 }
+    }
+
+    /// Ein Bild; liefert die Aktion und die Mitte des Eintrags, dessen Text `find` enthält.
+    fn frame(
+        &mut self,
+        c: &mut FileChooser,
+        events: Vec<egui::Event>,
+        find: &str,
+    ) -> (ChooserAction, Option<egui::Pos2>) {
+        self.time += 0.05;
+        let mut action = ChooserAction::None;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 600.0),
+            )),
+            events,
+            time: Some(self.time),
+            ..Default::default()
+        };
+        let out = self.ctx.run_ui(input, |ui| action = c.show(ui));
+        let mut found = None;
+        fn walk(s: &egui::epaint::Shape, find: &str, found: &mut Option<egui::Pos2>) {
+            match s {
+                egui::epaint::Shape::Text(t) if t.galley.text().contains(find) => {
+                    *found = Some(t.pos + egui::vec2(8.0, t.galley.size().y / 2.0));
+                }
+                egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, find, found)),
+                _ => {}
+            }
+        }
+        for clipped in &out.shapes {
+            walk(&clipped.shape, find, &mut found);
+        }
+        out.drop_without_applying_deltas();
+        (action, found)
+    }
+
+    /// Doppelklick auf den Eintrag mit `find`, je Ereignis ein eigenes Bild; liefert alle Aktionen.
+    fn double_click(&mut self, c: &mut FileChooser, find: &str) -> Vec<ChooserAction> {
+        self.frame(c, vec![], find);
+        let (_, pos) = self.frame(c, vec![], find);
+        let p = pos.expect("Eintrag sichtbar");
+        let mut actions = Vec::new();
+        for ev in [
+            egui::Event::PointerMoved(p),
+            click(p, true),
+            click(p, false),
+            click(p, true),
+            click(p, false),
+        ] {
+            actions.push(self.frame(c, vec![ev], find).0);
+        }
+        actions.push(self.frame(c, vec![], find).0);
+        actions
+    }
+}
+
 fn click(pos: egui::Pos2, pressed: bool) -> egui::Event {
     egui::Event::PointerButton {
         pos,
@@ -187,71 +256,37 @@ fn click(pos: egui::Pos2, pressed: bool) -> egui::Event {
     }
 }
 
-fn frame(
-    ctx: &egui::Context,
-    c: &mut FileChooser,
-    events: Vec<egui::Event>,
-) -> (ChooserAction, egui::Pos2) {
-    let mut action = ChooserAction::None;
-    let input = egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
-            egui::vec2(900.0, 600.0),
-        )),
-        events,
-        time: Some({
-            static T: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
-            f64::from(T.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) * 0.01
-        }),
-        ..Default::default()
-    };
-    ctx.run_ui(input, |ui| action = c.show(ui))
-        .drop_without_applying_deltas();
-    (action, egui::Pos2::ZERO)
-}
-
 #[test]
 fn a_double_click_on_a_folder_enters_it_without_choosing_a_file_inside() {
     let d = temp_dir("doppelklick");
     fs::create_dir_all(d.join("A")).unwrap();
     fs::write(d.join("A").join("inner.stl"), b"x").unwrap();
-    let ctx = egui::Context::default();
-    ctx.set_fonts(fonts::definitions());
+    let mut drv = Driver::new();
     let mut c = FileChooser::open(d.clone(), vec!["stl"]);
-    frame(&ctx, &mut c, vec![]);
-    frame(&ctx, &mut c, vec![]);
-    // Erste Listenzeile liegt unter Ordnerleiste; Zeile suchen.
-    let pos = egui::pos2(60.0, 0.0);
-    let mut chosen = ChooserAction::None;
-    let mut entered = false;
-    {
-        let y = 31.0_f32;
-        // Zeile des Ordners „A“ liegt bei y = 22..40.
-        let mut c2 = FileChooser::open(d.clone(), vec!["stl"]);
-        frame(&ctx, &mut c2, vec![]);
-        let p = egui::pos2(pos.x, y);
-        frame(&ctx, &mut c2, vec![egui::Event::PointerMoved(p)]);
-        let evs = vec![
-            click(p, true),
-            click(p, false),
-            click(p, true),
-            click(p, false),
-        ];
-        let (a, _) = frame(&ctx, &mut c2, evs);
-        let (b, _) = frame(&ctx, &mut c2, vec![]);
-        if matches!(a, ChooserAction::Chosen(_)) || matches!(b, ChooserAction::Chosen(_)) {
-            chosen = ChooserAction::Chosen(PathBuf::new());
-        }
-        if c2.dir() == d.join("A").as_path() {
-            entered = true;
-        }
-    }
-    assert_eq!(
-        chosen,
-        ChooserAction::None,
-        "keine Datei im neuen Ordner gewählt"
+    let actions = drv.double_click(&mut c, "A  (Ordner");
+    assert!(
+        actions.iter().all(|a| *a == ChooserAction::None),
+        "keine Datei im neuen Ordner gewählt: {actions:?}"
     );
-    assert!(entered, "Doppelklick öffnet den Ordner");
+    assert_eq!(
+        c.dir(),
+        d.join("A").as_path(),
+        "Doppelklick öffnet den Ordner"
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_double_click_on_a_file_chooses_it() {
+    let d = temp_dir("doppelklick-datei");
+    fs::write(d.join("x.stl"), b"x").unwrap();
+    let mut drv = Driver::new();
+    let mut c = FileChooser::open(d.clone(), vec!["stl"]);
+    let actions = drv.double_click(&mut c, "x.stl");
+    assert!(
+        actions.contains(&ChooserAction::Chosen(d.join("x.stl"))),
+        "{actions:?}"
+    );
     let _ = fs::remove_dir_all(&d);
 }
 
