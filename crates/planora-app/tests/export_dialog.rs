@@ -155,7 +155,7 @@ fn writing_goes_to_the_chosen_file_and_names_errors() {
         Some(dir.join("Quader 1.stl"))
     );
     let path = dir.join("Quader 1.stl");
-    d.write_to(path.clone());
+    d.write_to(path.clone(), &s);
     d.tick(&s, true);
     assert_eq!(
         d.write_state(),
@@ -167,7 +167,7 @@ fn writing_goes_to_the_chosen_file_and_names_errors() {
             .triangle_count(),
         12
     );
-    d.write_to(dir.join("fehlt").join("x.stl"));
+    d.write_to(dir.join("fehlt").join("x.stl"), &s);
     d.tick(&s, true);
     assert!(matches!(d.write_state(), WriteState::Failed(_)));
     let _ = fs::remove_dir_all(&dir);
@@ -256,7 +256,7 @@ fn the_window_warns_about_open_meshes_and_still_exports() {
     assert!(text.contains(NOT_CLOSED_WARNING), "{text}");
     let dir = temp_dir("offen");
     let path = dir.join("offen.stl");
-    d.write_to(path.clone());
+    d.write_to(path.clone(), &s);
     d.tick(&s, true);
     assert!(matches!(d.write_state(), WriteState::Done(..)));
     assert_eq!(
@@ -281,4 +281,41 @@ fn texts_for_numbers_and_sizes_are_german() {
     let ws = Workspace::new(None, Config::default());
     assert!(ws.exchange_dir.is_none());
     assert!(ws.active_tab().export_dialog.is_none());
+}
+
+#[test]
+fn a_stale_result_is_never_written_and_the_chooser_closes() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    s.create_sphere(10.0).unwrap();
+    let dir = temp_dir("veraltet");
+    s.selected_body = Some(0);
+    let mut d = ExportDialog::new(&s);
+    d.tick(&s, true);
+    d.begin_save(dir.clone(), &s);
+    s.selected_body = Some(1);
+    assert!(matches!(d.status(&s), ExportStatus::Computing(_)));
+    let path = dir.join("Quader 1.stl");
+    d.write_to(path.clone(), &s);
+    d.tick(&s, true);
+    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    assert!(!path.exists(), "es darf nichts geschrieben werden");
+    // Die offene Dateiauswahl schließt, sobald sich die Auswahl ändert.
+    draw(&mut d, &mut s);
+    assert!(d.chooser().is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn writing_without_a_result_says_so_and_scope_falls_back_without_selection() {
+    let mut s = box_state();
+    s.selected_body = Some(0);
+    let mut d = ExportDialog::new(&s);
+    assert_eq!(d.scope, Scope::Selected);
+    d.write_to(temp_dir("leer").join("x.stl"), &s);
+    assert_eq!(d.write_state(), WriteState::Failed(NOT_COMPUTED.into()));
+    s.selected_body = None;
+    d.tick(&s, true);
+    assert_eq!(d.scope, Scope::Visible);
+    assert_eq!(d.items(&s).len(), 1);
 }

@@ -50,6 +50,17 @@ pub(crate) fn wide_window(title: &'static str, ctx: &egui::Context) -> egui::Win
         .max_width(width)
 }
 
+/// Sehnentoleranz „Grob“ in Millimetern (Spec E5).
+const CHORD_COARSE: f64 = 0.1;
+/// Sehnentoleranz „Normal“ in Millimetern (Spec E5).
+const CHORD_NORMAL: f64 = 0.01;
+/// Sehnentoleranz „Fein“ in Millimetern (Spec E5).
+const CHORD_FINE: f64 = 0.001;
+/// Meldung, wenn sich Auswahl, Qualität oder Modell seit der Berechnung geändert haben.
+pub const STALE: &str = "Die Auswahl hat sich geändert, bitte noch einmal speichern.";
+/// Meldung, wenn es noch kein fertiges Netz gibt.
+pub const NOT_COMPUTED: &str = "Es ist noch nichts berechnet. Bitte warten oder neu berechnen.";
+
 /// Qualität des Netzes (Spec E5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Quality {
@@ -64,9 +75,9 @@ impl Quality {
     /// Sehnentoleranz in Millimetern.
     pub fn chord_tolerance(self) -> f64 {
         match self {
-            Quality::Coarse => 0.1,
-            Quality::Normal => 0.01,
-            Quality::Fine => 0.001,
+            Quality::Coarse => CHORD_COARSE,
+            Quality::Normal => CHORD_NORMAL,
+            Quality::Fine => CHORD_FINE,
         }
     }
 
@@ -245,6 +256,8 @@ pub struct ExportDialog {
     prepared: Option<(Key, PrepResult)>,
     job: Option<(Key, PrepJob)>,
     chooser: Option<FileChooser>,
+    /// Schlüssel zur Zeit des Öffnens der Dateiauswahl; ändert er sich, schließt sie.
+    chooser_key: Option<Key>,
     writing: Option<(PathBuf, WriteJob)>,
     written: Option<Result<(PathBuf, u64), String>>,
     /// Rechteck des Fensters im letzten Bild (Tests der vollen Breite).
@@ -268,11 +281,16 @@ impl ExportDialog {
             prepared: None,
             job: None,
             chooser: None,
+            chooser_key: None,
             writing: None,
             written: None,
             last_rect: None,
             last_cards: Vec::new(),
         }
+    }
+
+    fn has_selection(state: &AppState) -> bool {
+        state.selected_body.is_some_and(|i| i < state.bodies.len())
     }
 
     /// Indizes der Körper im Umfang (Spec E4: der gewählte, sonst alle sichtbaren).
@@ -322,6 +340,10 @@ impl ExportDialog {
     /// Startet das Vernetzen, wenn sich Qualität, Umfang oder Dokument geändert haben, und holt
     /// fertige Ergebnisse ab. Mit `block` wird gewartet (Tests).
     pub fn tick(&mut self, state: &AppState, block: bool) {
+        // Ohne Auswahl gibt es „Gewählter Körper“ nicht mehr (Anzeige und Export stimmen überein).
+        if self.scope == Scope::Selected && !Self::has_selection(state) {
+            self.scope = Scope::Visible;
+        }
         let key = self.key(state);
         let fresh = self.prepared.as_ref().is_some_and(|(k, _)| *k == key);
         let running = self.job.as_ref().is_some_and(|(k, _)| *k == key);
@@ -420,6 +442,7 @@ impl ExportDialog {
                 }
             })
             .collect();
+        self.chooser_key = Some(self.key(state));
         self.chooser = Some(FileChooser::save(dir, stem, self.format.extension()));
     }
 
@@ -428,10 +451,17 @@ impl ExportDialog {
     }
 
     /// Schreibt das fertige Netz im Arbeitsthread nach `path` (über eine Hilfsdatei).
-    pub fn write_to(&mut self, path: PathBuf) {
-        let Some((_, Ok(prepared))) = &self.prepared else {
+    /// Schreibt nur, wenn das Netz noch zum Stand von `state` passt; sonst gibt es eine Meldung.
+    pub fn write_to(&mut self, path: PathBuf, state: &AppState) {
+        let key = self.key(state);
+        let Some((k, Ok(prepared))) = &self.prepared else {
+            self.written = Some(Err(NOT_COMPUTED.to_string()));
             return;
         };
+        if *k != key {
+            self.written = Some(Err(STALE.to_string()));
+            return;
+        }
         let (prepared, format, target) = (Arc::clone(prepared), self.format, path.clone());
         self.written = None;
         self.writing = Some((
@@ -451,7 +481,7 @@ impl ExportDialog {
         self.tick(state, false);
         let status = self.status(state);
         let write_state = self.write_state();
-        let has_selection = state.selected_body.is_some_and(|i| i < state.bodies.len());
+        let has_selection = Self::has_selection(state);
         let before = self.format;
         let (mut format, mut quality, mut scope) = (self.format, self.quality, self.scope);
         let (mut open, mut close, mut cancel, mut recompute, mut begin, mut drop_chooser) =
@@ -579,7 +609,8 @@ impl ExportDialog {
         self.last_rect = response.map(|r| r.response.rect);
         self.last_cards = cards;
         (self.format, self.quality, self.scope) = (format, quality, scope);
-        if self.format != before || drop_chooser {
+        let stale_chooser = self.chooser_key.is_some_and(|k| k != self.key(state));
+        if self.format != before || drop_chooser || stale_chooser {
             self.chooser = None;
         }
         if matches!(status, ExportStatus::Computing(_)) || write_state == WriteState::Writing {
@@ -598,7 +629,7 @@ impl ExportDialog {
         if let Some(path) = chosen {
             *last_dir = path.parent().map(Path::to_path_buf);
             self.chooser = None;
-            self.write_to(path);
+            self.write_to(path, state);
         }
         open && !close
     }

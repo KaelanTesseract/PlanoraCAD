@@ -428,8 +428,8 @@ impl PlanoraApp {
         }
     }
 
-    /// Tastenkürzel Strg+N/O/S/W und Strg+Umschalt+E. Nur ohne aktives Eingabefeld, ohne offene Rückfrage (die
-    /// sonst überschrieben würde) und nur im ersten Durchgang eines Bildes (ein verworfener
+    /// Tastenkürzel Strg+N/O/S/W und Strg+Umschalt+E. Nur ohne aktives Eingabefeld, ohne offene
+    /// Rückfrage (die sonst überschrieben würde) und nur im ersten Durchgang eines Bildes (ein verworfener
     /// Durchgang würde das Kürzel sonst zweimal ausführen).
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if viewport::typing(ctx) || self.ws.prompt.is_some() || ctx.current_pass_index() != 0 {
