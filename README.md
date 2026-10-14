@@ -2,7 +2,7 @@
 
 Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
 
-**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch).
+**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export).
 
 Erste Version: Quader, Zylinder, Kugel, Kegel, Extrusion und Rotation von Skizzen, 3D-Ansicht mit Auswahl, Körper verschieben (Feld „Position“) sowie Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit Flächen aus Ebenen, Zylindern, Kegeln, Kugeln und Tori (Stufe A) und für Körper mit Freiformflächen aus Ellipsen und Splines (siehe „Freiformflächen“).
 
@@ -111,10 +111,31 @@ Dokumente mit Netz-Körpern speichert das Programm im Dateiformat 3; das Netz st
 - Wird das Dokument geändert, während das Fenster „Netz importieren“ offen ist, verwirft es die gelesene Datei; sie muss dann neu gewählt werden.
 - Zum Wählen der Datei hat das Programm ein eigenes Fenster mit Ordnerliste und Dateiname; der Dateidialog des Betriebssystems wird nicht benutzt, weil dafür ein zusätzliches Programmpaket nötig wäre. Unter Windows wechselt man das Laufwerk, indem man den Pfad eintippt. Sehr große Ordner und Netzlaufwerke können das Fenster kurz hakeln lassen.
 - Während das Netz berechnet oder eine Datei gelesen wird, bleibt das Fenster bedienbar. „Abbrechen“ wirkt beim Export zwischen zwei Körpern; ein einzelner großer Körper wird noch zu Ende gerechnet.
-- Nicht dabei: STEP-Export, Zeichnungen (SVG/DXF) und das Einlesen von 3MF, glTF oder STEP.
+- Nicht dabei: Zeichnungen (SVG/DXF) und das Einlesen von 3MF, glTF oder STEP.
 - Von Hand im echten Fenster ist der Netz-Austausch teilweise geprüft (Export, Import, Speichern und Laden); Abbrechen, sehr große Netze und das Öffnen der Dateien in fremden Programmen nicht. Siehe „Handprüfung“ in den offenen Punkten.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 9 – Netz-Austausch“.
+
+## STEP-Export (exakte Körper)
+
+Körper lassen sich als STEP-Datei speichern. Andere CAD-Programme öffnen sie als echte Volumenkörper, nicht als Dreiecksnetz: Menü „Datei“ → „Exportieren …“ (Strg+Umschalt+E), Format „STEP – für andere CAD-Programme (exakt)“.
+
+- Rundungen, Bohrungen und Freiformflächen bleiben exakt. Deshalb gibt es bei STEP keine Auswahl der Qualität.
+- Mehrere Körper kommen in eine Datei, jeder als eigenes Teil mit seinem Namen aus dem Feature-Baum. Ein Körper mit Hohlraum bleibt ein Körper mit Hohlraum; getrennte Stücke eines Körpers bleiben ein Teil.
+- Eingelesene Netz-Körper kann STEP nicht aufnehmen. Das Fenster nennt sie mit Namen; für sie STL, OBJ, 3MF oder glTF wählen.
+- Vor dem Schreiben prüft das Programm jeden Körper. Wer die Prüfung nicht besteht, wird ausgelassen und mit Grund genannt; die anderen werden geschrieben.
+- Das Fenster zeigt vorher, wie viele Körper und Flächen es werden. Das Schreiben läuft im Hintergrund mit Fortschrittsbalken und lässt sich abbrechen. Eine vorhandene Datei wird erst ersetzt, wenn alles geklappt hat.
+
+**Grenzen**
+- In der Datei stehen nur Form, Namen und die Einheit Millimeter; keine Farben, Materialien oder Baugruppen. STEP-Dateien einlesen kann das Programm noch nicht.
+- **Fusion 360:** Alle Beispieldateien lassen sich dort ohne Fehler öffnen; bei Kugel und Hohlkörper stimmen Volumen und Oberfläche mit den erwarteten Werten überein. Bei den übrigen wurden sie dort noch nicht verglichen. Beim Bauen prüft das Programm seine Dateien nur mit einem eigenen Leser und eigenen Formeln. Andere Programme können strenger sein als Fusion 360.
+- Beendet man das Programm oder schließt man den Tab, während eine STEP-Datei geschrieben wird, wird das Schreiben abgebrochen und die alte Datei bleibt unverändert (ohne Meldung).
+- Ringe aus einer Drehung, bei denen der Bogen die Drehachse berührt oder überschreitet (sogenannte Spindelringe), kann das Programm noch nicht als STEP ausgeben. Solche Körper werden ausgelassen und mit Grund genannt.
+- Kugeln und Kegelspitzen werden so geschrieben, wie es viele Programme tun: Der Pol ist ein Eckpunkt, die Naht läuft hin und zurück. Falls ein Programm das nicht mag, wird die Kugel später in zwei Hälften geteilt.
+- Körper mit mehreren Schalen braucht das Programm zum Unterscheiden von Hohlraum und Stück ein grobes Netz; lässt es sich nicht berechnen, wird der Körper mit Grund ausgelassen. Bei verschachtelten Hohlräumen kann ein Hohlraum, der sehr nah (unter 0,05 mm) an einer gekrümmten Fläche der inneren Insel beginnt, falsch zugeordnet werden; das ist sehr unwahrscheinlich.
+- Namen über 256 Zeichen werden in der Datei gekürzt; das Fenster nennt sie nach dem Schreiben. Gibt man „.stp“ ein, wird daraus „.step“; Dateien mit „.stp“ stehen aber nicht in der Liste. Zwei Körper mit gleichem Namen werden zwei Teile mit demselben Namen. Bei Körpern mit vielen Hohlräumen dauert die Zuordnung länger.
+
+Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 10 – STEP-Export“.
 
 ## Feature-Baum
 

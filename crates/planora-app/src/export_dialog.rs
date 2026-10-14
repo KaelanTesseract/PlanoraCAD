@@ -1,7 +1,8 @@
-//! Fenster „Exportieren“ (Spec §8): Format, Qualität und Umfang als gleich hohe Karten über die
-//! ganze Breite; das Netz entsteht im Arbeitsthread (Fortschritt, Abbrechen); danach Zahl der
-//! Dreiecke, geschätzte Größe und Prüfbericht mit Warnung (Spec E6); gespeichert wird über die
-//! eigene Dateiauswahl (Plan P14) und eine Hilfsdatei (Spec §5).
+//! Fenster „Exportieren“ (Spec §8 des Netz-Austauschs, Spec §6 des STEP-Exports): Format,
+//! Qualität und Umfang als gleich hohe Karten über die ganze Breite; das Netz bzw. die Prüfung
+//! der Körper entsteht im Arbeitsthread (Fortschritt, Abbrechen); danach Zahl der Dreiecke,
+//! geschätzte Größe und Prüfbericht (Netz) bzw. Zahl der Körper und Flächen (STEP); gespeichert
+//! wird über die eigene Dateiauswahl (Plan P14) und eine Hilfsdatei.
 
 use crate::browser::ERROR_COLOR;
 use crate::cards::card_row;
@@ -16,6 +17,9 @@ use planora_exchange::{
 use planora_feature::BodyRef;
 use planora_kernel::Solid;
 use planora_mesh::{TessellationOptions, tessellate};
+use planora_step::{
+    MAX_NAME_CHARS, StepBody, StepError, StepOptions, check_body, display_name, export_step_file,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +42,16 @@ const MIN_SHOWN_MB: f64 = 0.1;
 pub const LOST: &str = "Die Berechnung wurde unerwartet beendet.";
 /// Warnung bei nicht geschlossenem Netz (Spec E6).
 pub const NOT_CLOSED_WARNING: &str = "Die Datei wird trotzdem geschrieben. Manche Programme für den 3D-Druck melden solche Netze als fehlerhaft.";
+/// Eintrag des fünften Formats (STEP-Spec §6).
+pub const STEP_LABEL: &str = "STEP – für andere CAD-Programme (exakt)";
+/// Steht bei STEP an der Stelle der Karte „Qualität“ (STEP-Spec §6).
+pub const STEP_EXACT: &str = "Rundungen und Bohrungen bleiben exakt.";
+/// Hinweis, wenn das Fenster beim Schreiben einer STEP-Datei nicht geschlossen werden darf.
+pub const WRITING_HINT: &str = "Das Schreiben läuft noch. Bitte warten oder erst abbrechen.";
+/// So viele Zeichen eines Körpernamens zeigt das Fenster in Meldungen und Listen höchstens.
+const MAX_SHOWN_NAME: usize = 40;
+/// Meldung, wenn bei STEP kein Körper übrig bleibt.
+pub const STEP_NOTHING: &str = "Es gibt keinen Körper, der sich als STEP-Datei ausgeben lässt.";
 
 /// Fenster über die ganze Breite (Rand DIALOG_MARGIN), unter Menü und Tab-Leiste.
 pub(crate) fn wide_window(title: &'static str, ctx: &egui::Context) -> egui::Window<'static> {
@@ -97,6 +111,42 @@ pub enum Scope {
     Visible,
 }
 
+/// Format im Fenster: eines der vier Netzformate oder STEP (exakte Körper).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ExportFormat {
+    Mesh(Format),
+    Step,
+}
+
+impl ExportFormat {
+    pub const ALL: [ExportFormat; 5] = [
+        ExportFormat::Mesh(Format::Stl),
+        ExportFormat::Mesh(Format::Obj),
+        ExportFormat::Mesh(Format::ThreeMf),
+        ExportFormat::Mesh(Format::Glb),
+        ExportFormat::Step,
+    ];
+
+    /// Dateiendung ohne Punkt.
+    pub fn extension(self) -> &'static str {
+        match self {
+            ExportFormat::Mesh(f) => f.extension(),
+            ExportFormat::Step => "step",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ExportFormat::Mesh(f) => format_label(f),
+            ExportFormat::Step => STEP_LABEL,
+        }
+    }
+
+    pub fn is_step(self) -> bool {
+        self == ExportFormat::Step
+    }
+}
+
 /// Ein Körper für den Arbeitsthread (Kopie, damit das Dokument frei bleibt).
 #[derive(Clone, Debug)]
 pub enum ExportSource {
@@ -133,7 +183,22 @@ impl Prepared {
     }
 }
 
-/// Was das Fenster zum Netz zeigt.
+/// Für STEP geprüfte Körper (STEP-Spec §4, §6, E3).
+#[derive(Debug)]
+pub struct StepPrepared {
+    /// Körper, die die Prüfung bestanden haben: Name und exakter Körper.
+    pub bodies: Vec<(String, Solid)>,
+    /// Flächen aller geprüften Körper.
+    pub faces: usize,
+    /// Abgelehnte Körper mit Grund („„Name“ wird nicht ausgegeben: …“).
+    pub rejected: Vec<String>,
+    /// Netz-Körper, die STEP nicht enthält (E3).
+    pub skipped_meshes: Vec<String>,
+    /// Körper, deren Name in der Datei auf `MAX_NAME_CHARS` Zeichen gekürzt wird (kurz gezeigt).
+    pub shortened: Vec<String>,
+}
+
+/// Was das Fenster zum Ergebnis zeigt.
 #[derive(Debug, PartialEq)]
 pub enum ExportStatus {
     Computing(f32),
@@ -141,6 +206,13 @@ pub enum ExportStatus {
         triangles: u64,
         bytes: u64,
         report: MeshReport,
+    },
+    /// STEP: Zahl der Körper und Flächen, abgelehnte Körper, ausgelassene Netz-Körper.
+    StepReady {
+        bodies: usize,
+        faces: usize,
+        rejected: Vec<String>,
+        skipped_meshes: Vec<String>,
     },
     Failed(String),
 }
@@ -194,7 +266,108 @@ pub fn prepare(
     })
 }
 
-/// Kurzbeschreibung eines Formats für die Auswahl.
+/// Prüft die Körper für STEP (läuft im Arbeitsthread): Netz-Körper werden ausgelassen und
+/// genannt, jeder exakte Körper durchläuft `check_body`; abgelehnte stehen mit Grund in der
+/// Liste. Bricht zwischen den Körpern und in großen Körpern ab, wenn gewünscht.
+pub fn prepare_step(items: &[ExportItem], progress: &Progress) -> Result<StepPrepared, String> {
+    progress.set_total(items.len() as u64);
+    let mut out = StepPrepared {
+        bodies: Vec::new(),
+        faces: 0,
+        rejected: Vec::new(),
+        skipped_meshes: Vec::new(),
+        shortened: Vec::new(),
+    };
+    for (index, item) in items.iter().enumerate() {
+        progress.check().map_err(|e| e.to_string())?;
+        // Leere Namen werden „Körper n“, damit Meldungen nie „„“ lauten; lange Namen erscheinen
+        // in Meldungen und Listen gekürzt.
+        let name = display_name(&item.name, index);
+        let shown = shorten_for_display(&name);
+        match &item.source {
+            ExportSource::Mesh(..) => out.skipped_meshes.push(shown),
+            ExportSource::Solid(s) => {
+                if name.chars().count() > MAX_NAME_CHARS {
+                    out.shortened.push(shown.clone());
+                }
+                let body = StepBody {
+                    name: shown,
+                    solid: s,
+                };
+                match check_body(&body, &StepOptions::new("x.step"), progress) {
+                    Ok(stats) => {
+                        out.faces += stats.faces;
+                        out.bodies.push((name, s.clone()));
+                    }
+                    Err(e @ StepError::InvalidBody { .. }) => out.rejected.push(e.to_string()),
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+        }
+        progress.advance(1);
+    }
+    Ok(out)
+}
+
+/// Kürzt einen Namen für Meldungen auf `MAX_SHOWN_NAME` Zeichen (mit „…“).
+pub fn shorten_for_display(name: &str) -> String {
+    if name.chars().count() > MAX_SHOWN_NAME {
+        let head: String = name.chars().take(MAX_SHOWN_NAME).collect();
+        format!("{head}…")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Hinweis auf Namen, die in der Datei gekürzt wurden.
+pub fn shortened_text(names: &[String]) -> String {
+    let list: Vec<String> = names.iter().map(|n| format!("„{n}“")).collect();
+    format!(
+        "Name gekürzt (höchstens {MAX_NAME_CHARS} Zeichen in der Datei): {}",
+        list.join(", ")
+    )
+}
+
+/// Endung `.stp` wird bei STEP zu `.step` (statt `x.stp.step`).
+pub fn normalize_target(format: ExportFormat, path: PathBuf) -> PathBuf {
+    let is_stp = path
+        .extension()
+        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("stp"));
+    if format.is_step() && is_stp {
+        path.with_extension(ExportFormat::Step.extension())
+    } else {
+        path
+    }
+}
+
+/// Hinweis am gesperrten Knopf „Exportieren …“: bei STEP ohne Körper der Grund, sonst Warten.
+pub fn disabled_hint(status: &ExportStatus) -> &'static str {
+    match status {
+        ExportStatus::StepReady { bodies: 0, .. } => STEP_NOTHING,
+        _ => "Erst möglich, wenn die Berechnung fertig ist.",
+    }
+}
+
+/// Schreibt geprüfte Körper als STEP-Datei nach `path` (Hilfsdatei, Fortschritt, Abbrechen);
+/// liefert die Dateigröße.
+pub fn write_step_bodies(
+    path: &Path,
+    prepared: &StepPrepared,
+    progress: &Progress,
+) -> Result<u64, StepError> {
+    let bodies: Vec<StepBody> = prepared
+        .bodies
+        .iter()
+        .map(|(name, solid)| StepBody {
+            name: name.clone(),
+            solid,
+        })
+        .collect();
+    let opts = StepOptions::new(&file_name(path));
+    export_step_file(path, &bodies, &opts, progress).map(|(_, bytes)| bytes)
+}
+
+/// Kurzbeschreibung eines Netzformats für die Auswahl.
 pub fn format_label(f: Format) -> &'static str {
     match f {
         Format::Stl => "STL – für den 3D-Druck",
@@ -202,6 +375,15 @@ pub fn format_label(f: Format) -> &'static str {
         Format::ThreeMf => "3MF – für den 3D-Druck, mit Namen",
         Format::Glb => "glTF (.glb) – zum Ansehen und Zeigen",
     }
+}
+
+/// Hinweis auf ausgelassene Netz-Körper (STEP-Spec E3).
+pub fn skipped_text(names: &[String]) -> String {
+    let list: Vec<String> = names.iter().map(|n| format!("„{n}“")).collect();
+    format!(
+        "Netz-Körper werden als STEP nicht ausgegeben: {}. Für sie bitte STL, OBJ, 3MF oder glTF wählen.",
+        list.join(", ")
+    )
 }
 
 /// Zahl mit Leerzeichen als Tausendertrenner („12 345“).
@@ -244,22 +426,35 @@ pub(crate) fn file_name(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-type Key = (Quality, Scope, u64, Option<BodyRef>);
+/// Stand, zu dem ein Ergebnis gehört: Qualität (`None` bei STEP), Umfang, Änderungszahl des
+/// Dokuments, gewählter Körper.
+type Key = (Option<Quality>, Scope, u64, Option<BodyRef>);
 type PrepJob = Job<Result<Prepared, String>>;
 type PrepResult = Result<Arc<Prepared>, String>;
+type StepJob = Job<Result<StepPrepared, String>>;
+type StepResult = Result<Arc<StepPrepared>, String>;
 type WriteJob = Job<Result<u64, ExchangeError>>;
+type StepWriteJob = Job<Result<u64, StepError>>;
 
 pub struct ExportDialog {
-    pub format: Format,
+    pub format: ExportFormat,
     pub quality: Quality,
     pub scope: Scope,
     prepared: Option<(Key, PrepResult)>,
     job: Option<(Key, PrepJob)>,
+    step_prepared: Option<(Key, StepResult)>,
+    step_job: Option<(Key, StepJob)>,
     chooser: Option<FileChooser>,
-    /// Schlüssel zur Zeit des Öffnens der Dateiauswahl; ändert er sich, schließt sie.
+    /// Schlüssel und Format zur Zeit des Öffnens der Dateiauswahl; ändern sie sich, schließt sie.
     chooser_key: Option<Key>,
     writing: Option<(PathBuf, WriteJob)>,
+    step_writing: Option<(PathBuf, StepWriteJob)>,
     written: Option<Result<(PathBuf, u64), String>>,
+    /// Format, mit dem zuletzt geschrieben wurde; die Meldung gehört nur zu diesem Format.
+    write_format: ExportFormat,
+    written_format: Option<ExportFormat>,
+    /// Schließen wurde abgewiesen, weil eine STEP-Datei geschrieben wird (zeigt den Hinweis).
+    close_denied: bool,
     /// Rechteck des Fensters im letzten Bild (Tests der vollen Breite).
     pub last_rect: Option<egui::Rect>,
     /// Rechtecke der Karten im letzten Bild (Tests der gleichen Höhe).
@@ -271,7 +466,7 @@ impl ExportDialog {
     pub fn new(state: &AppState) -> ExportDialog {
         let selected = state.selected_body.is_some_and(|i| i < state.bodies.len());
         ExportDialog {
-            format: Format::Stl,
+            format: ExportFormat::Mesh(Format::Stl),
             quality: Quality::Normal,
             scope: if selected {
                 Scope::Selected
@@ -280,10 +475,16 @@ impl ExportDialog {
             },
             prepared: None,
             job: None,
+            step_prepared: None,
+            step_job: None,
             chooser: None,
             chooser_key: None,
             writing: None,
+            step_writing: None,
             written: None,
+            write_format: ExportFormat::Mesh(Format::Stl),
+            written_format: None,
+            close_denied: false,
             last_rect: None,
             last_cards: Vec::new(),
         }
@@ -329,41 +530,59 @@ impl ExportDialog {
                 .map(|b| b.source),
             Scope::Visible => None,
         };
-        (
-            self.quality,
-            self.scope,
-            state.document.edit_count(),
-            selected,
-        )
+        let quality = (!self.format.is_step()).then_some(self.quality);
+        (quality, self.scope, state.document.edit_count(), selected)
     }
 
-    /// Startet das Vernetzen, wenn sich Qualität, Umfang oder Dokument geändert haben, und holt
-    /// fertige Ergebnisse ab. Mit `block` wird gewartet (Tests).
+    /// Startet das Vernetzen bzw. die STEP-Prüfung, wenn sich Format, Qualität, Umfang oder
+    /// Dokument geändert haben, und holt fertige Ergebnisse ab. Mit `block` wird gewartet
+    /// (Tests).
     pub fn tick(&mut self, state: &AppState, block: bool) {
         // Ohne Auswahl gibt es „Gewählter Körper“ nicht mehr (Anzeige und Export stimmen überein).
         if self.scope == Scope::Selected && !Self::has_selection(state) {
             self.scope = Scope::Visible;
         }
         let key = self.key(state);
-        let fresh = self.prepared.as_ref().is_some_and(|(k, _)| *k == key);
-        let running = self.job.as_ref().is_some_and(|(k, _)| *k == key);
-        if !fresh && !running {
-            let items = self.items(state);
-            let quality = self.quality;
-            // Ein alter Auftrag wird dabei fallengelassen und bricht ab.
-            self.job = Some((key, Job::spawn(move |p| prepare(&items, quality, p))));
-        }
-        let finished = match &self.job {
-            Some((k, job)) => match job.fetch(block) {
-                Poll::Pending => None,
-                Poll::Ready(r) => Some((*k, r.map(Arc::new))),
-                Poll::Lost => Some((*k, Err(LOST.to_string()))),
-            },
-            None => None,
-        };
-        if let Some(done) = finished {
-            self.prepared = Some(done);
-            self.job = None;
+        if self.format.is_step() {
+            let fresh = self.step_prepared.as_ref().is_some_and(|(k, _)| *k == key);
+            let running = self.step_job.as_ref().is_some_and(|(k, _)| *k == key);
+            if !fresh && !running {
+                let items = self.items(state);
+                self.step_job = Some((key, Job::spawn(move |p| prepare_step(&items, p))));
+            }
+            let finished = match &self.step_job {
+                Some((k, job)) => match job.fetch(block) {
+                    Poll::Pending => None,
+                    Poll::Ready(r) => Some((*k, r.map(Arc::new))),
+                    Poll::Lost => Some((*k, Err(LOST.to_string()))),
+                },
+                None => None,
+            };
+            if let Some(done) = finished {
+                self.step_prepared = Some(done);
+                self.step_job = None;
+            }
+        } else {
+            let fresh = self.prepared.as_ref().is_some_and(|(k, _)| *k == key);
+            let running = self.job.as_ref().is_some_and(|(k, _)| *k == key);
+            if !fresh && !running {
+                let items = self.items(state);
+                let quality = self.quality;
+                // Ein alter Auftrag wird dabei fallengelassen und bricht ab.
+                self.job = Some((key, Job::spawn(move |p| prepare(&items, quality, p))));
+            }
+            let finished = match &self.job {
+                Some((k, job)) => match job.fetch(block) {
+                    Poll::Pending => None,
+                    Poll::Ready(r) => Some((*k, r.map(Arc::new))),
+                    Poll::Lost => Some((*k, Err(LOST.to_string()))),
+                },
+                None => None,
+            };
+            if let Some(done) = finished {
+                self.prepared = Some(done);
+                self.job = None;
+            }
         }
         let wrote = match &self.writing {
             Some((path, job)) => match job.fetch(block) {
@@ -374,32 +593,98 @@ impl ExportDialog {
             None => None,
         };
         if let Some(w) = wrote {
-            self.written = Some(w);
+            self.set_written(w);
             self.writing = None;
+        }
+        let wrote = match &self.step_writing {
+            Some((path, job)) => match job.fetch(block) {
+                Poll::Pending => None,
+                Poll::Ready(r) => Some(r.map(|n| (path.clone(), n)).map_err(|e| e.to_string())),
+                Poll::Lost => Some(Err(LOST.to_string())),
+            },
+            None => None,
+        };
+        if let Some(w) = wrote {
+            self.set_written(w);
+            self.step_writing = None;
+        }
+        if self.step_writing.is_none() {
+            self.close_denied = false;
+        }
+    }
+
+    /// Läuft gerade das Schreiben einer STEP-Datei? Dann darf das Fenster nicht verworfen
+    /// werden: Der Arbeitsthread bräche ab und die alte Datei bliebe ohne Meldung liegen.
+    pub fn is_writing_step(&self) -> bool {
+        self.step_writing.is_some()
+    }
+
+    /// Fragt, ob das Fenster geschlossen werden darf; beim Schreiben einer STEP-Datei nicht
+    /// (dann steht im Fenster der Hinweis `WRITING_HINT`).
+    pub fn request_close(&mut self) -> bool {
+        if self.is_writing_step() {
+            self.close_denied = true;
+            false
+        } else {
+            true
         }
     }
 
     pub fn status(&self, state: &AppState) -> ExportStatus {
         let key = self.key(state);
+        if self.format.is_step() {
+            if let Some((k, job)) = &self.step_job
+                && *k == key
+            {
+                return ExportStatus::Computing(job.fraction());
+            }
+            return match &self.step_prepared {
+                Some((k, Ok(p))) if *k == key => ExportStatus::StepReady {
+                    bodies: p.bodies.len(),
+                    faces: p.faces,
+                    rejected: p.rejected.clone(),
+                    skipped_meshes: p.skipped_meshes.clone(),
+                },
+                Some((k, Err(m))) if *k == key => ExportStatus::Failed(m.clone()),
+                _ => ExportStatus::Computing(0.0),
+            };
+        }
         if let Some((k, job)) = &self.job
             && *k == key
         {
             return ExportStatus::Computing(job.fraction());
         }
-        match &self.prepared {
-            Some((k, Ok(p))) if *k == key => ExportStatus::Ready {
+        match (&self.prepared, self.format) {
+            (Some((k, Ok(p))), ExportFormat::Mesh(f)) if *k == key => ExportStatus::Ready {
                 triangles: p.triangles(),
-                bytes: self.format.estimate_bytes(p.triangles(), p.vertices()),
+                bytes: f.estimate_bytes(p.triangles(), p.vertices()),
                 report: p.report,
             },
-            Some((k, Err(m))) if *k == key => ExportStatus::Failed(m.clone()),
+            (Some((k, Err(m))), _) if *k == key => ExportStatus::Failed(m.clone()),
             _ => ExportStatus::Computing(0.0),
         }
     }
 
+    /// Merkt sich das Ergebnis des Schreibens samt Format, mit dem geschrieben wurde.
+    fn set_written(&mut self, w: Result<(PathBuf, u64), String>) {
+        self.written = Some(w);
+        self.written_format = Some(self.write_format);
+    }
+
+    /// Namen, die in der geprüften STEP-Datei gekürzt werden (leer ohne gültiges Ergebnis).
+    pub fn shortened_names(&self, state: &AppState) -> Vec<String> {
+        match &self.step_prepared {
+            Some((k, Ok(p))) if *k == self.key(state) => p.shortened.clone(),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn write_state(&self) -> WriteState {
-        if self.writing.is_some() {
+        if self.writing.is_some() || self.step_writing.is_some() {
             return WriteState::Writing;
+        }
+        if self.written_format != Some(self.format) {
+            return WriteState::Idle;
         }
         match &self.written {
             None => WriteState::Idle,
@@ -408,16 +693,41 @@ impl ExportDialog {
         }
     }
 
-    /// Bricht das Vernetzen ab; das Fenster zeigt „Abgebrochen“, bis neu berechnet wird.
+    /// Bricht das Vernetzen bzw. die Prüfung ab; das Fenster zeigt „Abgebrochen“, bis neu
+    /// berechnet wird.
     pub fn cancel(&mut self) {
-        if let Some((key, _)) = self.job.take() {
+        // Nur der Auftrag des gewählten Formats; der andere läuft im Hintergrund weiter.
+        if self.format.is_step() {
+            if let Some((key, _)) = self.step_job.take() {
+                self.step_prepared = Some((key, Err(StepError::Cancelled.to_string())));
+            }
+        } else if let Some((key, _)) = self.job.take() {
             self.prepared = Some((key, Err(ExchangeError::Cancelled.to_string())));
         }
     }
 
-    /// Verwirft das Ergebnis; das nächste `tick` rechnet neu.
+    /// Erledigter Anteil beim Schreiben einer STEP-Datei (Netzformate: 0).
+    pub fn write_progress(&self) -> f32 {
+        self.step_writing
+            .as_ref()
+            .map_or(0.0, |(_, job)| job.fraction())
+    }
+
+    /// Bricht das Schreiben einer STEP-Datei ab; die Zieldatei bleibt unverändert.
+    pub fn cancel_write(&mut self) {
+        if let Some((_, job)) = &self.step_writing {
+            job.cancel();
+        }
+    }
+
+    /// Verwirft das Ergebnis des gewählten Formats; das nächste `tick` rechnet neu. Das Ergebnis
+    /// des anderen Formats bleibt (Wechsel zurück rechnet nicht neu).
     pub fn recompute(&mut self) {
-        self.prepared = None;
+        if self.format.is_step() {
+            self.step_prepared = None;
+        } else {
+            self.prepared = None;
+        }
     }
 
     /// Öffnet die Dateiauswahl im Ordner `dir` mit dem Namen des Körpers (bei mehreren
@@ -450,24 +760,68 @@ impl ExportDialog {
         self.chooser.as_ref()
     }
 
-    /// Schreibt das fertige Netz im Arbeitsthread nach `path` (über eine Hilfsdatei).
-    /// Schreibt nur, wenn das Netz noch zum Stand von `state` passt; sonst gibt es eine Meldung.
+    /// Schreibt das fertige Ergebnis im Arbeitsthread nach `path` (über eine Hilfsdatei).
+    /// Schreibt nur, wenn das Ergebnis noch zum Stand von `state` passt; sonst gibt es eine
+    /// Meldung.
     pub fn write_to(&mut self, path: PathBuf, state: &AppState) {
         let key = self.key(state);
-        let Some((k, Ok(prepared))) = &self.prepared else {
-            self.written = Some(Err(NOT_COMPUTED.to_string()));
-            return;
-        };
-        if *k != key {
-            self.written = Some(Err(STALE.to_string()));
+        self.write_format = self.format;
+        let path = normalize_target(self.format, path);
+        match self.format {
+            ExportFormat::Step => {
+                let Some((k, Ok(prepared))) = &self.step_prepared else {
+                    self.set_written(Err(NOT_COMPUTED.to_string()));
+                    return;
+                };
+                if *k != key {
+                    self.set_written(Err(STALE.to_string()));
+                    return;
+                }
+                if prepared.bodies.is_empty() {
+                    self.set_written(Err(StepError::NothingToExport.to_string()));
+                    return;
+                }
+                let (prepared, target) = (Arc::clone(prepared), path.clone());
+                self.written = None;
+                self.step_writing = Some((
+                    path,
+                    Job::spawn(move |p| write_step_bodies(&target, &prepared, p)),
+                ));
+            }
+            ExportFormat::Mesh(format) => {
+                let Some((k, Ok(prepared))) = &self.prepared else {
+                    self.set_written(Err(NOT_COMPUTED.to_string()));
+                    return;
+                };
+                if *k != key {
+                    self.set_written(Err(STALE.to_string()));
+                    return;
+                }
+                let (prepared, target) = (Arc::clone(prepared), path.clone());
+                self.written = None;
+                self.writing = Some((
+                    path,
+                    Job::spawn(move |_| export_file(&target, format, &prepared.bodies)),
+                ));
+            }
+        }
+    }
+
+    /// Übernimmt die in der Dateiauswahl gewählte Datei. Wurde bei STEP `.stp` eingegeben und
+    /// gibt es die Datei mit `.step` schon, fragt die Auswahl noch einmal nach dem Ersetzen.
+    pub fn accept_chosen(&mut self, path: PathBuf, state: &AppState) {
+        let target = normalize_target(self.format, path.clone());
+        if target != path
+            && target.exists()
+            && let Some(c) = self.chooser.as_mut()
+        {
+            c.select(&file_name(&target));
+            c.confirm();
             return;
         }
-        let (prepared, format, target) = (Arc::clone(prepared), self.format, path.clone());
-        self.written = None;
-        self.writing = Some((
-            path,
-            Job::spawn(move |_| export_file(&target, format, &prepared.bodies)),
-        ));
+        self.chooser = None;
+        self.chooser_key = None;
+        self.write_to(target, state);
     }
 
     /// Zeichnet das Fenster; `true`, solange es offen bleiben soll. `last_dir` ist der zuletzt
@@ -481,11 +835,20 @@ impl ExportDialog {
         self.tick(state, false);
         let status = self.status(state);
         let write_state = self.write_state();
+        let write_progress = self.write_progress();
+        let denied = self.close_denied;
+        let writing_step = self.is_writing_step();
+        let shortened = if matches!(write_state, WriteState::Done(..)) && self.format.is_step() {
+            self.shortened_names(state)
+        } else {
+            Vec::new()
+        };
         let has_selection = Self::has_selection(state);
         let before = self.format;
         let (mut format, mut quality, mut scope) = (self.format, self.quality, self.scope);
         let (mut open, mut close, mut cancel, mut recompute, mut begin, mut drop_chooser) =
             (true, false, false, false, false, false);
+        let mut cancel_write = false;
         let mut chosen: Option<PathBuf> = None;
         let mut cards = Vec::new();
         let chooser = &mut self.chooser;
@@ -494,16 +857,20 @@ impl ExportDialog {
             .show(ctx, |ui| {
                 let mut format_card = |ui: &mut egui::Ui| {
                     ui.strong("Format");
-                    for f in Format::ALL {
-                        ui.radio_value(&mut format, f, format_label(f));
+                    for f in ExportFormat::ALL {
+                        ui.radio_value(&mut format, f, f.label());
                     }
                 };
                 let mut quality_card = |ui: &mut egui::Ui| {
-                    ui.strong("Qualität");
-                    for q in Quality::ALL {
-                        ui.radio_value(&mut quality, q, q.label());
+                    if before.is_step() {
+                        ui.label(STEP_EXACT);
+                    } else {
+                        ui.strong("Qualität");
+                        for q in Quality::ALL {
+                            ui.radio_value(&mut quality, q, q.label());
+                        }
+                        ui.weak("Feiner heißt mehr Dreiecke und größere Dateien.");
                     }
-                    ui.weak("Feiner heißt mehr Dreiecke und größere Dateien.");
                 };
                 let mut scope_card = |ui: &mut egui::Ui| {
                     ui.strong("Umfang");
@@ -525,11 +892,16 @@ impl ExportDialog {
                 ui.add_space(8.0);
                 match &status {
                     ExportStatus::Computing(f) => {
+                        let text = if before.is_step() {
+                            "Die Körper werden geprüft …"
+                        } else {
+                            "Das Netz wird berechnet …"
+                        };
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::ProgressBar::new(*f)
                                     .desired_width(PROGRESS_WIDTH)
-                                    .text("Das Netz wird berechnet …"),
+                                    .text(text),
                             );
                             if ui.button("Abbrechen").clicked() {
                                 cancel = true;
@@ -559,11 +931,45 @@ impl ExportDialog {
                             ui.colored_label(WARNING_COLOR, NOT_CLOSED_WARNING);
                         }
                     }
+                    ExportStatus::StepReady {
+                        bodies,
+                        faces,
+                        rejected,
+                        skipped_meshes,
+                    } => {
+                        if *bodies == 0 {
+                            ui.colored_label(WARNING_COLOR, STEP_NOTHING);
+                        } else {
+                            ui.label(format!(
+                                "{} Körper, {} Flächen",
+                                group_digits(*bodies as u64),
+                                group_digits(*faces as u64)
+                            ));
+                        }
+                        for r in rejected {
+                            ui.colored_label(WARNING_COLOR, r);
+                        }
+                        if !skipped_meshes.is_empty() {
+                            ui.colored_label(WARNING_COLOR, skipped_text(skipped_meshes));
+                        }
+                    }
                 }
                 match &write_state {
                     WriteState::Idle => {}
                     WriteState::Writing => {
-                        ui.label("Die Datei wird geschrieben …");
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::ProgressBar::new(write_progress)
+                                    .desired_width(PROGRESS_WIDTH)
+                                    .text("Die Datei wird geschrieben …"),
+                            );
+                            if writing_step && ui.button("Abbrechen").clicked() {
+                                cancel_write = true;
+                            }
+                        });
+                        if denied {
+                            ui.colored_label(WARNING_COLOR, WRITING_HINT);
+                        }
                     }
                     WriteState::Done(path, n) => {
                         ui.label(format!(
@@ -571,6 +977,9 @@ impl ExportDialog {
                             file_name(path),
                             mb_text(*n)
                         ));
+                        if !shortened.is_empty() {
+                            ui.colored_label(WARNING_COLOR, shortened_text(&shortened));
+                        }
                     }
                     WriteState::Failed(m) => {
                         ui.colored_label(ERROR_COLOR, format!("Nicht geschrieben: {m}"));
@@ -587,14 +996,15 @@ impl ExportDialog {
                         }
                     }
                     None => {
-                        let ready = matches!(status, ExportStatus::Ready { .. })
-                            && write_state != WriteState::Writing;
+                        let ready = match &status {
+                            ExportStatus::Ready { .. } => true,
+                            ExportStatus::StepReady { bodies, .. } => *bodies > 0,
+                            _ => false,
+                        } && write_state != WriteState::Writing;
                         ui.horizontal(|ui| {
                             if ui
                                 .add_enabled(ready, egui::Button::new("Exportieren …"))
-                                .on_disabled_hover_text(
-                                    "Erst möglich, wenn das Netz fertig berechnet ist.",
-                                )
+                                .on_disabled_hover_text(disabled_hint(&status))
                                 .clicked()
                             {
                                 begin = true;
@@ -606,6 +1016,8 @@ impl ExportDialog {
                     }
                 }
             });
+        let want_close = !open || close;
+        let alive = !want_close || !self.request_close();
         self.last_rect = response.map(|r| r.response.rect);
         self.last_cards = cards;
         (self.format, self.quality, self.scope) = (format, quality, scope);
@@ -618,11 +1030,16 @@ impl ExportDialog {
             // Die Meldung „Fertig“ gehörte zum alten Format oder Stand.
             self.written = None;
         }
-        if matches!(status, ExportStatus::Computing(_)) || write_state == WriteState::Writing {
+        let busy = matches!(status, ExportStatus::Computing(_))
+            || self.write_state() == WriteState::Writing;
+        if busy {
             ctx.request_repaint_after(REPAINT);
         }
         if cancel {
             self.cancel();
+        }
+        if cancel_write {
+            self.cancel_write();
         }
         if recompute {
             self.recompute();
@@ -633,9 +1050,8 @@ impl ExportDialog {
         }
         if let Some(path) = chosen {
             *last_dir = path.parent().map(Path::to_path_buf);
-            self.chooser = None;
-            self.write_to(path, state);
+            self.accept_chosen(path, state);
         }
-        open && !close
+        alive
     }
 }
