@@ -6,11 +6,17 @@
 //! Torus (Vorzeichenwechsel der impliziten Funktion auf 2048 Stützstellen, Bisektion; Berührung
 //! ohne Vorzeichenwechsel ist unsicher), Freiform (`ray_hits_checked` des Kernels).
 //!
-//! Einordnung je Schnittpunkt wie `point_in_face` des Kernels mit
-//! `Tolerance { linear: 16·geom_tol(E) }`: Randabstand höchstens `linear` → `Boundary`, sonst
-//! Windungszahl der Randpolygone im Parameterraum → `Inside` oder verworfen. Die Randpolygone
-//! berechnet [`Scene::new`] einmal je Fläche (`point_in_face` baut sie bei jedem Aufruf neu); der
-//! Test `hit_classes_agree_with_point_in_face` prüft die Gleichheit mit dem Kernel.
+//! Einordnung je Schnittpunkt mit `tol = 16·geom_tol(E)`: Randabstand höchstens `tol` →
+//! `Boundary`. Fern von gekrümmten Randkurven wie `point_in_face` des Kernels: Windungszahl der
+//! Randpolygone im Parameterraum → `Inside` oder verworfen (die Polygone berechnet
+//! [`Scene::new`] einmal je Fläche). Die Polygone tasten Bögen nur alle 5° ab und weichen bis
+//! etwa `1e-3·r` vom wahren Rand ab; in einem Band von `2e-3 · (größtes Maß der gekrümmten
+//! Randkurven) + tol` um gekrümmte Randkurven entscheidet deshalb der nächste Randpunkt `q`
+//! exakt: Innenseite ist links der Laufrichtung `τ` um die Außennormale `n` (äußere Schleifen
+//! laufen gegen den Uhrzeigersinn, Löcher andersherum), also `(p − q)·(n × τ) > tol` → innen,
+//! `< −tol` → außen, sonst Rand. Liegt `q` an einer Ecke (Ende eines Randstücks), gilt der Punkt
+//! als `Boundary` (vorsichtig; die Sichtprüfung verwirft solche Strahlen). Nähte (Randstücke,
+//! die die Fläche zweimal gegenläufig enthält) sind kein Materialrand und zählen dabei nicht.
 //!
 //! Unsichere Strahlen (`Ray::Unsafe`): Strahl in der Ebene einer Planfläche, Strahl berührt
 //! einen Zylinder, Kegel oder eine Kugel (Doppelwurzel) oder liegt in ihrer Mantelfläche,
@@ -32,8 +38,14 @@ const TOL_FACTOR: f64 = 16.0;
 const PLANE_PARALLEL: f64 = 1e-9;
 /// Abstand des Strahls von der Ebene (relativ zu `E`), unter dem er in der Ebene liegt.
 const IN_PLANE_REL: f64 = 1e-6;
-/// Doppelwurzel einer Quadrik: `|b'² − a·c| < TANGENT_DISC_REL · E²`.
-const TANGENT_DISC_REL: f64 = 1e-12;
+/// Doppelwurzel einer Quadrik: halber Wurzelabstand `√|b'² − a·c| / |a| < TANGENT_SEP_REL · E`
+/// (für `a = 1` dasselbe wie `|b'² − a·c| < 1e-12·E²`).
+const TANGENT_SEP_REL: f64 = 1e-6;
+/// Band um gekrümmte Randkurven (relativ zu ihrem größten Maß), in dem der nächste Randpunkt
+/// statt des Polygons entscheidet: `2e-3 ≥ 2·(1 − cos 2,5°)` (Abtastung alle 5°).
+const RIM_BAND_REL: f64 = 2e-3;
+/// Bruchteil am Ende eines Randstücks, ab dem der nächste Randpunkt als Ecke gilt.
+const CORNER_FRACTION: f64 = 1e-6;
 /// `|a|` darunter (Richtung normiert): Strahl parallel zu den Mantellinien.
 const QUAD_A_EPS: f64 = 1e-12;
 /// `|b'|` darunter (relativ zu `E`): Strahl ohne Querung der Mantelfläche.
@@ -42,7 +54,8 @@ const QUAD_B_REL: f64 = 1e-9;
 const IN_SURFACE_REL: f64 = 1e-6;
 /// Stützstellen der Vorzeichenwechsel-Suche am Torus.
 const TORUS_SAMPLES: usize = 2048;
-/// Berührung des Torus: `min |F| < TORUS_TOUCH_REL · minor²` ohne Vorzeichenwechsel.
+/// Berührung des Torus: `min |F| < max(TORUS_TOUCH_REL · minor, tol)` ohne Vorzeichenwechsel
+/// (`F` ist ein Abstand, die Schwelle also eine Länge).
 const TORUS_TOUCH_REL: f64 = 1e-9;
 /// Höchstzahl an Halbierungen (endet früher an der Rechengenauigkeit).
 const BISECT_STEPS: usize = 200;
@@ -89,17 +102,93 @@ struct FaceData {
     geom: FaceGeom,
     /// Randschleifen im Parameterraum (wie `point_in_face` sie bildet).
     polys: Vec<Vec<DVec2>>,
+    /// Je Randstück (in der Reihenfolge `loops.iter().flatten()`) seine Art.
+    segs: Vec<SegInfo>,
+    /// Breite des Bands um gekrümmte Randkurven (0: keine gekrümmten Randkurven).
+    band: f64,
     /// Hüllbox der Fläche, aufgebläht.
     lo: DVec3,
     hi: DVec3,
+}
+
+/// Art eines Randstücks für die exakte Einordnung nahe am Rand.
+#[derive(Clone, Copy, Debug)]
+struct SegInfo {
+    /// Naht: die Fläche enthält dasselbe Stück auch gegenläufig.
+    seam: bool,
+    /// Gekrümmt (Kreis, Ellipse, Freiform).
+    curved: bool,
+    /// Geschlossen (Anfang = Ende): seine Enden sind keine Ecke.
+    closed: bool,
+}
+
+/// Größtes Maß einer gekrümmten Randkurve: Kreisradius, große Halbachse, Ausdehnung des
+/// Kontrollpolygons; Geraden 0.
+fn curve_size(c: &Curve) -> f64 {
+    match c {
+        Curve::Line { .. } => 0.0,
+        Curve::Circle { radius, .. } => radius.abs(),
+        Curve::Ellipse { major, minor, .. } => major.abs().max(minor.abs()),
+        Curve::Nurbs(n) => {
+            let pts = n.control_points();
+            let lo = pts
+                .iter()
+                .fold(DVec3::splat(f64::INFINITY), |a, p| a.min(*p));
+            let hi = pts
+                .iter()
+                .fold(DVec3::splat(f64::NEG_INFINITY), |a, p| a.max(*p));
+            (hi - lo).length()
+        }
+    }
+}
+
+/// Art aller Randstücke und Bandbreite der Fläche.
+fn seg_infos(g: &FaceGeom, tol: f64) -> (Vec<SegInfo>, f64) {
+    let all: Vec<&Seg> = g.loops.iter().flatten().collect();
+    let ends: Vec<(DVec3, DVec3, DVec3)> = all
+        .iter()
+        .map(|s| (s.start(), s.at(0.5), s.end()))
+        .collect();
+    let mut size: f64 = 0.0;
+    let infos = all
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let (a, m, b) = ends[i];
+            let seam = ends.iter().enumerate().any(|(j, &(a2, m2, b2))| {
+                j != i && a.distance(b2) <= tol && b.distance(a2) <= tol && m.distance(m2) <= tol
+            });
+            let curved = !matches!(s.curve, Curve::Line { .. });
+            if curved && !seam {
+                size = size.max(curve_size(&s.curve));
+            }
+            SegInfo {
+                seam,
+                curved,
+                closed: a.distance(b) <= tol,
+            }
+        })
+        .collect();
+    let band = if size > 0.0 {
+        RIM_BAND_REL * size + tol
+    } else {
+        0.0
+    };
+    (infos, band)
 }
 
 /// Alle Flächen aller Körper, vorbereitet für viele Strahlen (FaceGeom, Hüllbox, Randpolygone
 /// einmal berechnet).
 pub struct Scene {
     faces: Vec<FaceData>,
-    /// Größter Strahlabstand: Durchmesser der Hüllbox aller Körper plus `extent`.
+    /// Größter Strahlabstand, gemessen ab dem Strahlursprung: Durchmesser der Hüllbox aller
+    /// Körper plus `extent`. Reicht durch die ganze Szene, solange der Ursprung höchstens
+    /// `extent` außerhalb ihrer Hüllbox liegt (die Sichtprüfung startet auf Strichen, also in
+    /// der Hüllbox); in Debug-Bauten geprüft.
     reach: f64,
+    /// Hüllbox aller Flächen (nicht aufgebläht).
+    scene_lo: DVec3,
+    scene_hi: DVec3,
     extent: f64,
     tol: Tolerance,
 }
@@ -139,11 +228,14 @@ impl Scene {
                 } else {
                     pad
                 };
+                let (segs, band) = seg_infos(&geom, pad);
                 faces.push(FaceData {
                     body: bi,
                     face: fid.index(),
                     geom,
                     polys,
+                    segs,
+                    band,
                     lo: lo - DVec3::splat(p),
                     hi: hi + DVec3::splat(p),
                 });
@@ -157,6 +249,8 @@ impl Scene {
         Ok(Scene {
             faces,
             reach: diameter + extent,
+            scene_lo: all_lo,
+            scene_hi: all_hi,
             extent,
             tol: Tolerance {
                 linear: TOL_FACTOR * geom_tol(extent),
@@ -175,6 +269,16 @@ impl Scene {
             return Ray::Unsafe("ungültiger Strahl");
         }
         let d = dir / len;
+        debug_assert!(
+            self.faces.is_empty()
+                || (origin
+                    .cmpge(self.scene_lo - DVec3::splat(self.extent))
+                    .all()
+                    && origin
+                        .cmple(self.scene_hi + DVec3::splat(self.extent))
+                        .all()),
+            "Strahlursprung weiter als `extent` außerhalb der Szene: `reach` reicht nicht"
+        );
         let mut out = Vec::new();
         if min_s >= self.reach {
             return Ray::Hits(out);
@@ -271,11 +375,17 @@ impl Scene {
             Surface::Torus { minor, .. } => {
                 let lo_s = sa.max(min_s);
                 let hi_s = sb.min(self.reach);
-                torus_roots(&f.geom.surface, *minor, o, d, lo_s, hi_s, min_s)?
+                let touch = (TORUS_TOUCH_REL * minor).max(self.tol.linear);
+                torus_roots(&f.geom.surface, touch, o, d, lo_s, hi_s, min_s)?
             }
             Surface::Nurbs(n) => {
-                let start = min_s;
-                let Some(h) = n.ray_hits_checked(o + d * start, d, self.reach - start) else {
+                // Ab dem Eintritt in die Hüllbox der Fläche (Treffer mit s ≤ min_s zählen nie).
+                let start = sa.max(min_s);
+                let end = sb.min(self.reach);
+                if end < start {
+                    return Ok(Vec::new());
+                }
+                let Some(h) = n.ray_hits_checked(o + d * start, d, end - start) else {
                     return Err("Freiformfläche nicht sicher entscheidbar");
                 };
                 // Rückgabe des Kernels: (t, u, v), t entlang des verschobenen Strahls.
@@ -288,16 +398,29 @@ impl Scene {
         Ok(roots.into_iter().map(|s| (s, None)).collect())
     }
 
-    /// Lage von `p` (Parameter `uv`) auf der beschnittenen Fläche, wie `point_in_face` des
-    /// Kernels mit vorab berechneten Randpolygonen; `None` für außerhalb.
+    /// Lage von `p` (Parameter `uv`) auf der beschnittenen Fläche; `None` für außerhalb.
+    /// Randabstand ≤ `tol` → Rand; im Band um gekrümmte Randkurven der nächste Randpunkt
+    /// (exakt), sonst die Windungszahl der Randpolygone wie `point_in_face` des Kernels.
     fn classify(&self, f: &FaceData, p: DVec3, (u, v): (f64, f64)) -> Option<HitClass> {
-        if f.geom
-            .loops
-            .iter()
-            .flatten()
-            .any(|s| s.closest(p).1 <= self.tol.linear)
-        {
-            return Some(HitClass::Boundary);
+        let tol = self.tol.linear;
+        // Nächster Punkt auf einem Randstück, das keine Naht ist: (Abstand, Stück, Bruchteil).
+        let mut nearest: Option<(f64, &Seg, SegInfo, f64)> = None;
+        let mut in_band = false;
+        for (s, info) in f.geom.loops.iter().flatten().zip(&f.segs) {
+            let (fr, dist) = s.closest(p);
+            if dist <= tol {
+                return Some(HitClass::Boundary);
+            }
+            if info.seam {
+                continue;
+            }
+            in_band |= info.curved && dist <= f.band;
+            if nearest.is_none_or(|n| dist < n.0) {
+                nearest = Some((dist, s, *info, fr));
+            }
+        }
+        if in_band && let Some((_, seg, info, fr)) = nearest {
+            return self.side_of_rim(f, p, seg, info, fr);
         }
         let shifts = |period: Option<f64>| match period {
             Some(t) => vec![-t, 0.0, t],
@@ -316,6 +439,40 @@ impl Scene {
         let sense = if f.geom.same_sense { 1 } else { -1 };
         (total * sense >= 1).then_some(HitClass::Inside)
     }
+
+    /// Exakte Seite von `p` gegenüber dem nächsten Randpunkt `q = seg(fr)`: Die Fläche liegt
+    /// links der Laufrichtung `τ` um die Außennormale `n`, die Innenseite zeigt also nach
+    /// `n × τ`. An einer Ecke (Ende eines nicht geschlossenen Stücks) ist das nicht
+    /// entscheidbar → Rand.
+    fn side_of_rim(
+        &self,
+        f: &FaceData,
+        p: DVec3,
+        seg: &Seg,
+        info: SegInfo,
+        fr: f64,
+    ) -> Option<HitClass> {
+        let tol = self.tol.linear;
+        if !info.closed && !(CORNER_FRACTION..=1.0 - CORNER_FRACTION).contains(&fr) {
+            return Some(HitClass::Boundary);
+        }
+        let q = seg.at(fr);
+        let (qu, qv) = f.geom.surface.project(q);
+        let n = f.geom.surface.normal(qu, qv);
+        let n = if f.geom.same_sense { n } else { -n };
+        let inward = n.cross(seg.tangent_at(fr)).normalize_or_zero();
+        if inward == DVec3::ZERO || !inward.is_finite() {
+            return Some(HitClass::Boundary);
+        }
+        let side = (p - q).dot(inward);
+        if side > tol {
+            Some(HitClass::Inside)
+        } else if side < -tol {
+            None
+        } else {
+            Some(HitClass::Boundary)
+        }
+    }
 }
 
 impl Caster for Scene {
@@ -332,9 +489,9 @@ fn local(frame: &Frame, o: DVec3, d: DVec3) -> (DVec3, DVec3) {
     )
 }
 
-/// Wurzeln von `a·s² + 2b·s + c = 0` (Richtung normiert). Doppelwurzel (`|b² − a·c| <
-/// 1e-12·E²`) bei `min_s < s ≤ reach` und Strahl in der Mantelfläche (`a ≈ 0`, `b ≈ 0`,
-/// Abstand `dist()` < 1e-6·E) sind unsicher.
+/// Wurzeln von `a·s² + 2b·s + c = 0` (Richtung normiert). Doppelwurzel (halber Wurzelabstand
+/// `√|b² − a·c| / |a| < 1e-6·E`), deren Mitte oder eine Wurzel in `(min_s, reach]` liegt, und
+/// Strahl in der Mantelfläche (`a ≈ 0`, `b ≈ 0`, Abstand `dist()` < 1e-6·E) sind unsicher.
 fn quadratic(
     a: f64,
     b: f64,
@@ -355,9 +512,14 @@ fn quadratic(
         return Ok(vec![-c / (2.0 * b)]);
     }
     let disc = b * b - a * c;
-    if disc.abs() < TANGENT_DISC_REL * e * e {
+    // Doppelwurzel gemessen am Wurzelabstand, nicht an `disc` selbst: Bei kleinem `a` (Strahl
+    // fast parallel zu den Mantellinien) liegen die Wurzeln trotz winziger `disc` weit
+    // auseinander und sind gewöhnliche Schnitte.
+    let half_sep = disc.abs().sqrt() / a.abs();
+    if half_sep < TANGENT_SEP_REL * e {
         let s0 = -b / a;
-        if s0 > min_s && s0 <= reach {
+        let in_range = |s: f64| s > min_s && s <= reach;
+        if in_range(s0) || (disc > 0.0 && (in_range(s0 - half_sep) || in_range(s0 + half_sep))) {
             return Err("Strahl streift eine gekrümmte Fläche");
         }
         return Ok(Vec::new());
@@ -377,10 +539,10 @@ fn quadratic(
 /// Stützstellen gleichen Vorzeichens, zwischen denen `|F|` die Null erreichen könnte (`F` ist
 /// ein Abstand, ändert sich also höchstens um die Schrittweite), sucht der Goldene Schnitt das
 /// kleinste `|F|`: Wechselt dort das Vorzeichen, sind es zwei Schnitte; bleibt `min |F|` unter
-/// `1e-9·minor²`, berührt der Strahl den Torus (unsicher).
+/// `touch` (eine Länge), berührt der Strahl den Torus (unsicher).
 fn torus_roots(
     surf: &Surface,
-    minor: f64,
+    touch: f64,
     o: DVec3,
     d: DVec3,
     lo: f64,
@@ -391,7 +553,6 @@ fn torus_roots(
         return Ok(Vec::new());
     }
     let f = |s: f64| surf.implicit(o + d * s);
-    let touch = TORUS_TOUCH_REL * minor * minor;
     let n = TORUS_SAMPLES;
     let h = (hi - lo) / n as f64;
     let ss: Vec<f64> = (0..=n).map(|i| lo + h * i as f64).collect();
@@ -588,7 +749,14 @@ fn check_finite(s: &Surface) -> Result<(), DrawError> {
     let frame_ok =
         fr.origin.is_finite() && fr.x.is_finite() && fr.y.is_finite() && fr.z.is_finite();
     let nums_ok = match s {
-        Surface::Plane { .. } | Surface::Nurbs(_) => true,
+        Surface::Plane { .. } => true,
+        Surface::Nurbs(n) => {
+            let sf = n.surface();
+            let (nu, nv) = sf.counts();
+            (0..nu).all(|i| {
+                (0..nv).all(|j| sf.control_at(i, j).is_finite() && sf.weight_at(i, j).is_finite())
+            })
+        }
         Surface::Cylinder { radius, .. } | Surface::Sphere { radius, .. } => radius.is_finite(),
         Surface::Cone { radius, slope, .. } => radius.is_finite() && slope.is_finite(),
         Surface::Torus { major, minor, .. } => major.is_finite() && minor.is_finite(),

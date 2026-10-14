@@ -195,6 +195,18 @@ pub fn half_cylinder_solid(r: f64, h: f64) -> Solid {
     extrude(&profile, &Frame::WORLD, h, &tol()).unwrap()
 }
 
+/// Quadratische Platte `[−half, half]² × [0, h]` mit einem durchgehenden Rundloch (Radius `r`,
+/// Achse Z durch den Ursprung).
+pub fn plate_with_hole_solid(half: f64, r: f64, h: f64) -> Solid {
+    let profile = Profile {
+        outer: ProfileLoop::rectangle(DVec2::splat(-half), DVec2::splat(half)),
+        holes: vec![ProfileLoop::circle(DVec2::ZERO, r)],
+    }
+    .try_oriented()
+    .unwrap();
+    extrude(&profile, &Frame::WORLD, h, &tol()).unwrap()
+}
+
 /// Platte mit einer Freiformwand: Grundriss (0,0) → (10,0) → Spline durch (10,0), (12,5), (10,10)
 /// → (0,10) → (0,0), Höhe 5. Liefert den Körper und den Index der Freiformfläche.
 pub fn nurbs_slab_solid() -> (Solid, usize) {
