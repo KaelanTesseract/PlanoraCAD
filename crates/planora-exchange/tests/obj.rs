@@ -1,6 +1,7 @@
 //! OBJ schreiben und lesen, Vielecke, feindliche Dateien (Teilprojekt 9, Task 4).
 
 use planora_exchange::*;
+use std::fmt::Write as _;
 
 /// Einheitswürfel, Dreiecke von außen gegen den Uhrzeigersinn.
 fn cube() -> ExchangeMesh {
@@ -217,5 +218,65 @@ fn reading_stops_when_cancelled() {
     assert_eq!(
         read_obj(text.as_bytes(), text.len() as u64, &p),
         Err(ExchangeError::Cancelled)
+    );
+}
+
+/// OBJ-Text: Punktzeilen und eine Fläche über alle `points` in dieser Reihenfolge.
+fn polygon_text(points: &[[f64; 2]]) -> String {
+    let mut text = String::new();
+    for [x, y] in points {
+        writeln!(text, "v {x} {y} 0").unwrap();
+    }
+    text.push('f');
+    for i in 1..=points.len() {
+        write!(text, " {i}").unwrap();
+    }
+    text.push('\n');
+    text
+}
+
+/// Stern aus `n` abwechselnd äußeren und inneren Punkten (nicht konvex).
+fn star(n: usize) -> String {
+    let points: Vec<[f64; 2]> = (0..n)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / n as f64;
+            let r = if i % 2 == 0 { 100.0 } else { 50.0 };
+            [r * a.cos(), r * a.sin()]
+        })
+        .collect();
+    polygon_text(&points)
+}
+
+#[test]
+fn huge_non_convex_polygons_are_refused_quickly_but_big_ones_and_convex_ones_work() {
+    let start = std::time::Instant::now();
+    assert_eq!(
+        read(&star(100_000)),
+        Err(ExchangeError::Polygon { line: 100_001 })
+    );
+    assert!(start.elapsed().as_secs_f64() < 1.0, "{:?}", start.elapsed());
+    let start = std::time::Instant::now();
+    assert_eq!(read(&star(5_000)).unwrap().triangle_count(), 4_998);
+    assert!(start.elapsed().as_secs_f64() < 5.0, "{:?}", start.elapsed());
+    // Konvex mit 100.000 Ecken: Quadrat mit je 25.000 Punkten je Seite (gerade Ecken, ganze
+    // Zahlen, in f32 genau darstellbar).
+    let side = 25_000;
+    let mut square: Vec<[f64; 2]> = Vec::new();
+    for i in 0..side {
+        square.push([f64::from(i), 0.0]);
+    }
+    for i in 0..side {
+        square.push([f64::from(side), f64::from(i)]);
+    }
+    for i in 0..side {
+        square.push([f64::from(side - i), f64::from(side)]);
+    }
+    for i in 0..side {
+        square.push([0.0, f64::from(side - i)]);
+    }
+    assert_eq!(square.len(), 100_000);
+    assert_eq!(
+        read(&polygon_text(&square)).unwrap().triangle_count(),
+        99_998
     );
 }

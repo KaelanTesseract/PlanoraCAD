@@ -154,6 +154,11 @@ fn point(p: [f32; 3]) -> DVec3 {
     DVec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]))
 }
 
+/// Höchstzahl der Ecken eines nicht konvexen Vielecks. `earcut` rechnet quadratisch und lässt
+/// sich nicht abbrechen; bei 5000 Ecken bleibt die Zerlegung im Debug-Build deutlich unter einer
+/// Sekunde. Konvexe Vielecke (Fächer) sind nur durch die Zeilenlänge begrenzt.
+const MAX_EARCUT_CORNERS: usize = 5_000;
+
 /// Zerlegt ein Vieleck in Dreiecke (P6): konvex → Fächer, sonst `earcutr` mit angeglichener
 /// Orientierung.
 fn triangulate(
@@ -177,6 +182,9 @@ fn triangulate(
             out.extend_from_slice(&[corners[0], w[0], w[1]]);
         }
         return Ok(());
+    }
+    if n > MAX_EARCUT_CORNERS {
+        return Err(ExchangeError::Polygon { line });
     }
     let flat = project(&pts, normal);
     let tris = earcutr::earcut(&flat, &[], 2).map_err(|_| ExchangeError::Polygon { line })?;
