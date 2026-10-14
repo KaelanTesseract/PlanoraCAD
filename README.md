@@ -95,7 +95,7 @@ Körper lassen sich als Dreiecksnetz speichern, etwa für den 3D-Druck oder um s
 - **Formate:** STL (für den 3D-Druck), OBJ (für viele 3D-Programme), 3MF (für den 3D-Druck, mit dem Namen jedes Körpers) und glTF als .glb (zum Ansehen und Zeigen).
 - **Qualität:** Grob, Normal oder Fein. Gewölbte Flächen werden aus kleinen Dreiecken zusammengesetzt. Bei „Fein“ weicht das Netz höchstens ein tausendstel Millimeter von der echten Fläche ab; die Datei wird dafür größer. Das Fenster zeigt vorher, wie viele Dreiecke es werden und wie groß die Datei ungefähr wird.
 - **Umfang:** Ist ein Körper gewählt, nur dieser; sonst alle sichtbaren Körper. Unterdrückte Schritte zählen nicht.
-- **Prüfung:** Ist das Netz nicht ganz geschlossen (das kann bei Körpern mit Freiformflächen vorkommen), warnt das Fenster. Die Datei wird trotzdem geschrieben.
+- **Prüfung:** Ist das Netz nicht ganz geschlossen (das kann bei Körpern mit Freiformflächen und bei eingelesenen Netzen mit Rundungsresten vorkommen), warnt das Fenster. Die Datei wird trotzdem geschrieben.
 - Das Programm schreibt zuerst in eine Hilfsdatei. Eine vorhandene Datei wird erst ersetzt, wenn alles geklappt hat.
 
 Netze aus anderen Programmen lassen sich einlesen: „Datei“ → „Netz importieren …“ (STL und OBJ). Das Fenster zeigt vorher, wie viele Dreiecke die Datei hat und ob das Netz geschlossen ist. Die Einheit der Datei lässt sich wählen (Millimeter, Zentimeter, Meter, Zoll). Das Ergebnis ist ein **Netz-Körper**: Er lässt sich anzeigen, verschieben, drehen, vergrößern oder verkleinern, messen und wieder exportieren. Mit anderen Körpern verrechnen, runden oder als Fläche für eine Skizze nutzen lässt er sich nicht; diese Menüpunkte sind dann ausgegraut.
@@ -103,7 +103,7 @@ Netze aus anderen Programmen lassen sich einlesen: „Datei“ → „Netz impor
 Dokumente mit Netz-Körpern speichert das Programm im Dateiformat 3; das Netz steckt im Dokument selbst. Ältere Programmversionen melden dann „zu neu“. Dokumente ohne Netz-Körper bleiben im Format 1 oder 2.
 
 **Grenzen**
-- Höchstens 50 Millionen Dreiecke und 8 GB je Datei. Das schützt nicht vor Speichermangel: Zum Laden braucht das Programm ungefähr das Dreifache der Dokumentgröße an Arbeitsspeicher; ein Netz an der Grenze bräuchte weit über 30 GB. Ab 5 Millionen Dreiecken zeigt die Ansicht nur einen Teil der Dreiecke; gespeichert und exportiert wird alles.
+- Höchstens 50 Millionen Dreiecke und 8 GB je Datei. Das schützt nicht vor Speichermangel: Zum Laden braucht das Programm ungefähr das Dreifache der Dokumentgröße an Arbeitsspeicher; ein einzelnes Netz hat höchstens etwa 2,4 GB Netzdaten und braucht beim Laden rund 13 GB Spitze; bei 8 GB Netzdaten im Dokument sind es bis etwa 35 GB. Ab 5 Millionen Dreiecken zeigt die Ansicht nur einen Teil der Dreiecke; gespeichert und exportiert wird alles.
 - Das Netz steckt als Text im Dokument; das Dokument wird dadurch etwa ein Drittel größer als die reinen Netzdaten und lädt bei großen Netzen langsamer. Bei Netzen um 5 Millionen Dreiecke wird auch die Ansicht spürbar langsam, weil sie nach jeder Änderung am Dokument neu aufgebaut wird.
 - Farben, Materialien und Texturen werden nicht übernommen. 3MF-Dateien über 4 GB kann das Programm nicht schreiben (dann STL wählen); bei glTF gilt dieselbe Grenze.
 - In OBJ-Dateien führen Vielecke, die sich nicht sauber in Dreiecke zerlegen lassen, und Flächen, die auf später stehende Punkte verweisen, zu einer Meldung mit Zeilennummer. Ein Vieleck, das nicht gewölbt nach außen liegt, darf höchstens 5000 Ecken haben. Sehr fein gerundete Einzel-Vielecke mit mehr Ecken werden deshalb abgelehnt.
@@ -112,7 +112,7 @@ Dokumente mit Netz-Körpern speichert das Programm im Dateiformat 3; das Netz st
 - Zum Wählen der Datei hat das Programm ein eigenes Fenster mit Ordnerliste und Dateiname; der Dateidialog des Betriebssystems wird nicht benutzt, weil dafür ein zusätzliches Programmpaket nötig wäre. Unter Windows wechselt man das Laufwerk, indem man den Pfad eintippt. Sehr große Ordner und Netzlaufwerke können das Fenster kurz hakeln lassen.
 - Während das Netz berechnet oder eine Datei gelesen wird, bleibt das Fenster bedienbar. „Abbrechen“ wirkt beim Export zwischen zwei Körpern; ein einzelner großer Körper wird noch zu Ende gerechnet.
 - Nicht dabei: STEP-Export, Zeichnungen (SVG/DXF) und das Einlesen von 3MF, glTF oder STEP.
-- Von Hand im echten Fenster ist der Netz-Austausch noch nicht geprüft, nur durch automatische Tests (siehe offene Punkte).
+- Von Hand im echten Fenster ist der Netz-Austausch teilweise geprüft (Export, Import, Speichern und Laden); Abbrechen, sehr große Netze und das Öffnen der Dateien in fremden Programmen nicht. Siehe „Handprüfung“ in den offenen Punkten.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 9 – Netz-Austausch“.
 
