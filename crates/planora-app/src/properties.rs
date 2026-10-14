@@ -11,6 +11,12 @@ use planora_kernel::{BoolOp, Kernel};
 use planora_math::DVec3;
 use planora_render::Pick;
 
+/// Hinweis unter den Netz-Körpern (ein Satz, ohne doppelte Leerzeichen).
+const MESH_BODY_HINT: &str = concat!(
+    "Netz-Körper lassen sich verschieben, drehen, vergrößern, messen und exportieren, ",
+    "aber nicht mit anderen Körpern verrechnen, runden oder als Fläche für eine Skizze nutzen."
+);
+
 /// Eigenschaften: für einen gewählten Körper Maße, Fläche/Kante und Position; für ein
 /// gewähltes Feature Art, Name, Status und Parameter.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
@@ -442,9 +448,7 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
             ui.colored_label(WARNING_COLOR, report_text(&r));
         }
         ui.add_space(4.0);
-        ui.weak(
-            "Netz-Körper lassen sich verschieben, drehen, vergrößern, messen und exportieren,              aber nicht mit anderen Körpern verrechnen, runden oder als Fläche für eine Skizze nutzen.",
-        );
+        ui.weak(MESH_BODY_HINT);
     }
     if let (Some(name), Some(id)) = (renamed, state.naming_feature(index)) {
         let _ = state.rename_feature(id, &name);
@@ -463,5 +467,16 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
     };
     if new != t {
         let _ = state.set_mesh_transform(index, new);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MESH_BODY_HINT;
+
+    #[test]
+    fn the_mesh_body_hint_has_no_runs_of_spaces() {
+        assert!(!MESH_BODY_HINT.contains("  "), "{MESH_BODY_HINT:?}");
+        assert!(MESH_BODY_HINT.contains("exportieren, aber nicht"));
     }
 }
