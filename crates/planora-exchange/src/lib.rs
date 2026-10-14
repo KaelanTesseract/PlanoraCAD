@@ -11,6 +11,7 @@ mod progress;
 mod source;
 mod stl;
 mod text;
+mod threemf;
 mod zip;
 
 pub use check::{MeshReport, check_mesh, weld_exact};
@@ -24,4 +25,5 @@ pub use obj::{read_obj, write_obj};
 pub use progress::Progress;
 pub use source::{ExportBody, PlacedSource, SolidSource, TriSource, collect_body};
 pub use stl::{STL_HEADER_BYTES, STL_TRIANGLE_BYTES, read_stl, write_stl};
+pub use threemf::write_3mf;
 pub use zip::{Content, Crc32, ZipWriter, crc32};
