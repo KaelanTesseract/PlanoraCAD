@@ -1,4 +1,4 @@
-# Offene Punkte nach Teilprojekt 1–9
+# Offene Punkte nach Teilprojekt 1–10
 
 Stand: 2026-10-10 (Teilprojekt 5 siehe eigener Abschnitt weiter unten). Teilprojekt 1–4: 2026-10-09. Ergebnis der Abschlussprüfungen; bewusst nicht in Teilprojekt 1–4 behoben.
 
@@ -387,6 +387,34 @@ Stand: 2026-10-14. Körper lassen sich als STL, OBJ, 3MF und glTF (.glb) ausgebe
 - Alle Testprogramme von `planora-exchange` laufen im Debug-Build unter 1 s (`planora-project`: längstes 5,4 s). Der Formelvergleich nimmt als Sehnenschranke das Zweifache (`SAG_FACTOR = 2.0`): Die Mitte eines Dreiecks im Breiten-/Längenraster liegt bis zu zwei Sehnenhöhen unter der gekrümmten Fläche (gemessen an der Kugel 1,08- bis 1,10-fach).
 - Die Anzeigetests der Fenster (`export_dialog` 11, `import_dialog` 8, `exchange_infra` 9 plus Nachträge) laufen ohne echtes Fenster; zwei Mutationsproben (Prüfung auf veraltetes Netz im Export und im Import ausgeschaltet) schlugen wie erwartet fehl.
 - Lizenzen: keine neue Abhängigkeit, `cargo deny check` sauber. Die geschützten Pfade (Boolesche Operationen und vier Dateien von `planora-mesh`) und die Golden-Dateien 1 und 2 sind bitgleich zu Beginn des Teilprojekts.
+
+## Teilprojekt 10 – STEP-Export
+Stand: 2026-10-14. Körper lassen sich als STEP-Datei ausgeben („Datei“ → „Exportieren …“, Format „STEP – für andere CAD-Programme (exakt)“). Nur Schreiben, keine Farben, Materialien oder Baugruppen, ein Teil je Körper, Einheit Millimeter. Spec: `specs/2026-10-14-step-export-design.md` (Abschnitt 9 listet, was bei der Umsetzung anders wurde). Plan: `plans/2026-10-14-step-export.md`.
+
+**Handtest (offen, Task 15, nur nach Rücksprache mit dem Nutzer).** Die Dateien wurden noch in keinem fremden CAD-Programm geöffnet. Vorgesehen ist Fusion 360: Datei öffnen, prüfen, ob die Körper als Volumenkörper erkannt werden, Volumen und Flächenzahl mit den Werten des Programms vergleichen. Beispieldateien erzeugt `cargo test -p planora-step --release -- --ignored write_samples_for_the_hand_test` (Ordner über die Umgebungsvariable `PLANORA_STEP_SAMPLES`): Rundung (7 Flächen, 991,395 mm³), Ecke (10; 975,530), Fase (7; 988,750), Variabel (7; 993,022), Kreuz (7; 3717,342), Kuppel (7; 1133,933), Zylinder (3; 942,229), Kegel (2; 339,217), Kugel (1; 1436,072), Hohl (12; 936,000) und `Alle.step` mit 10 Teilen. Was dort auffällt, wird eine Folge-Aufgabe, keine Nacharbeit unter Zeitdruck.
+
+**Was nicht geht oder anders ist**
+- **Prüfung ohne fremdes Programm:** Die Dateien werden beim Bauen nur mit einem eigenen Leser geprüft (Aufbau, alle Verweise, Schreibweise), mit einem Modell, das Ebene, Zylinder, Kegel, Kugel, Torus und B-Splines mit eigenen Formeln auswertet, mit Topologie- und Euler-Prüfung, mit dem Vergleich gegen den Kernel (Punkte und Außennormalen) und mit einem Netz aus den STEP-Flächen (Volumen und Abstand). Das ersetzt die Gegenprobe in einem fremden Programm nicht; fremde Programme können strenger sein.
+- **Pole und Kegelspitzen** (Kugel, Kegel, Freiform-Pole) sind ein Eckpunkt, die Naht läuft in der Randschleife hin und zurück, die Fläche bleibt ganz (Spec §3). Mehrere Programme schreiben Kugeln so. Nimmt Fusion 360 das nicht an, wird die Kugel an einem zweiten Meridian (u = π) in zwei Flächen geteilt; das wäre eine eigene Folge-Aufgabe. (Die in der Spec zuerst genannte Ausweichlösung „Pol als `VERTEX_LOOP`“ war falsch, siehe Spec §9.)
+- **Spindelringe lassen sich nicht ausgeben:** Dreht man in der Skizze einen Bogen, der die Achse berührt oder überschreitet, entsteht ein Ring mit kleinem Radius ≥ großem Radius. Dafür gibt es in STEP nur den Sonderfall `DEGENERATE_TOROIDAL_SURFACE`, den das Programm nicht ohne Gegenprobe schreiben will. Der Körper wird mit Grund ausgelassen. Folge-Aufgabe, sobald es eine Gegenprobe gibt.
+- **Doppelte Rechenzeit:** Jeder Körper wird vor dem Schreiben einmal probeweise geschrieben (P3), das Fenster prüft dazu schon beim Öffnen (`prepare_step`), also dreimal insgesamt. Bei sehr großen Freiformkörpern spürbar. Körper mit mehreren Schalen werden zusätzlich zweimal über ein grobes Netz sortiert.
+- **Hohlräume über ein grobes Netz** (`CLASSIFY_CHORD = 0,05 mm`, P9): Hohlraum und äußere Schale werden am Vorzeichen des Netzvolumens unterschieden, ein Hohlraum gehört zur kleinsten äußeren Schale um seinen ersten Eckpunkt. Scheitert das Netz, wird der Körper benannt ausgelassen. Berührt ein Hohlraum die Außenfläche näher als die Sehne, könnte statt einer falschen Datei die Meldung „Hohlraum liegt in keinem Teil“ kommen (nicht beobachtet).
+- **Unsicherheit 1e-5 mm** bei Körpern mit Freiform (P10), sonst 1e-6 mm; fremde Programme heilen Kanten bis zu dieser Größe.
+- **Kegel:** Nur die Mitte des Flächenbereichs wird auf die Spitze geprüft; der Kernel erzeugt keine Fläche, die über die Spitze reicht.
+- **Freiformkanten über die Naht:** Kanten geschlossener Freiformkurven (der Kernel faltet `t` über das Bereichsende) werden über ihre Eckpunkte begrenzt. Ob fremde Programme bei offenen, nur als geschlossen gekennzeichneten B-Splines über das Ende laufen, ist ungeprüft.
+- **Abbrechen:** Beim Prüfen zwischen den Körpern und alle 4096 Einträge, beim Schreiben alle 4096 Einträge.
+- **Namen:** Leere Namen werden „Körper n“, Namen über 256 Zeichen gekürzt (an einer Zeichengrenze); das Fenster meldet Kürzungen nicht, der Bericht kennt sie.
+- **Hilfsdatei** mit festem Namen (`.Name.planora-tmp`): zwei gleichzeitige Exporte in dasselbe Ziel würden kollidieren; das Fenster startet nur einen.
+- **Fenster:** `ExportFormat` statt `Format` (P14) samt einer mechanisch angepassten Testzeile. Bekannte Mängel: Der Abbrechen-Knopf hängt am gewählten Format, nicht am laufenden Schreibweg; „Fertig“ kann nach einem Formatwechsel während des Schreibens im anderen Format erscheinen; „Abbrechen“ bricht auch die Netzberechnung ab, und „Neu berechnen“ im STEP-Format verwirft ein gültiges Netz-Ergebnis; gekürzte Namen und lange abgelehnte Namen werden nicht gemeldet; „x.stp“ wird zu „x.stp.step“ und `.stp`-Dateien werden nicht aufgelistet; der Hinweis am gesperrten Knopf bei 0 Körpern ist missverständlich.
+- **Nicht Teil:** Einlesen von STEP, Farben, Materialien, Baugruppen, Zeichnungen (SVG/DXF).
+
+**Kernel-Grenze, die beim Testen auffiel:** Schräge Zylinder mit Zylindern oder Kugeln rechnet der Kernel noch nicht. Die Zufallsreihe deckt deshalb nur Quader mit Quader, Zylinder oder Kugel ab; von 300 Fällen werden etwa 20 wegen leerer Schnittmenge übersprungen.
+
+**Laufzeiten und Testreihen**
+- Teststand am Ende von Teilprojekt 10: 1404 bestanden, 0 fehlgeschlagen, 31 ignoriert in 193 Testprogrammen, Gesamtlaufzeit etwa 9,6 Minuten mit Übersetzung.
+- Lange Reihe: `cargo test -p planora-step --release -- --ignored`: 2 bestanden in 3,7 s (die 300-Fälle-Reihe und das Schreiben der Beispieldateien). Die Reihe prüft 300 Zufallskörper (Startwert fest) gegen den Kernel; sie fand einen Fehler im Prüfwerkzeug (sehr schlanke Ellipse, siehe Spec §9), nicht im Schreiber.
+- Größtes Debug-Testprogramm von `planora-step`: `freeform` etwa 12 s, `stage3` etwa 5 s, alle anderen unter 1 s.
+- `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` und `cargo deny check` sind sauber. Keine neue externe Abhängigkeit. Kernel, `planora-math`, `planora-mesh`, `planora-exchange`, `planora-feature`, `planora-project`, `planora-render`, `planora-sketch` und die Golden-Dateien sind bitgleich zu `07bac2b`.
 
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).

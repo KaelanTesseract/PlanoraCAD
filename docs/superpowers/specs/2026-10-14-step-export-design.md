@@ -83,8 +83,9 @@ Flächen mit `same_sense == false` werden mit `.F.` geschrieben (die Fläche sel
   entarteten Kanten, sondern Eckpunkte; die Schleife besteht dort aus der Naht (Meridian) einmal vorwärts und einmal rückwärts.
   STEP wird genauso geschrieben: **ein** `EDGE_CURVE` für die Naht, zwei `ORIENTED_EDGE` mit entgegengesetzter Richtung. Das ist die
   übliche Darstellung vieler STEP-Dateien (z. B. Kugel als eine Fläche); ob Fusion 360 sie ohne Zusatzkante annimmt, klärt der
-  Handtest. Fallback, falls nicht: Pol-Eckpunkt als `VERTEX_LOOP` ergänzen oder die Fläche in zwei Hälften teilen (eigene
-  Folge-Aufgabe im Plan, nur bei Befund).
+  Handtest. Fallback, falls nicht: die Kugel an einem zweiten Meridian (u = π) in zwei Flächen teilen (eigene Folge-Aufgabe im
+  Plan, nur bei Befund). *(Berichtigt in der Umsetzung: Die ursprünglich genannte Ausweichlösung „Pol-Eckpunkt als
+  `VERTEX_LOOP` ergänzen“ war falsch, weil der Pol bereits ein Eckpunkt ist; siehe §9.)*
 - **Vollkreise** (Anfang gleich Ende): derselbe `VERTEX_POINT` am Anfang und Ende.
 - **Periodische/geschlossene** Flächen und Kurven: keine Besonderheit in STEP außer dem Kennzeichen „geschlossen“ bei B-Splines.
 
@@ -142,4 +143,68 @@ Im Fenster „Datei → Exportieren …“ kommt als fünftes Format **„STEP �
 
 ## 9. Änderungen bei der Umsetzung
 
-(wird beim Abschluss des Teilprojekts ergänzt)
+Stand: 2026-10-14. Plan: `docs/superpowers/plans/2026-10-14-step-export.md`. Die Entscheidungen P1–P15 wurden beim Planen
+getroffen und konkretisieren die Spec; die Tabelle nennt je Zeile das Ergebnis aus der Umsetzung.
+
+| Nr. | Entscheidung | Begründung und Ergebnis |
+|---|---|---|
+| P1 | `planora-step` hängt von `planora-kernel`, `planora-math`, `thiserror`, `planora-exchange` (`Progress`, `temp_path`, `CHECK_EVERY`) und ab Task 11 von `planora-mesh` ab | Die Schnittstelle nimmt `&Progress`; das Vorzeichen des Schalenvolumens kommt aus dem Netz. Nur Arbeitsbereichs-Pakete, keine neue externe Abhängigkeit (`cargo deny check` grün). |
+| P2 | `write_step(&[StepBody], &StepOptions, &mut dyn Write, &Progress) -> Result<StepReport, StepError>`; dazu `check_body`, `export_step_file`, `display_name`, `utc_timestamp` | Umgesetzt wie geplant. `StepReport { bodies, faces, edges, entities, rejected, shortened_names }`. |
+| P3 | `check_body`: Verweise prüfen, `validate_with`, dann einmal probeweise nach `io::sink()` schreiben | Geometrische Ablehnungen fallen auf, bevor ein Eintrag geschrieben ist. `NotFinite` eines Körpers wird `InvalidBody` dieses Körpers, die anderen werden geschrieben. Kosten: zwei Durchläufe je Körper, mit `prepare_step` im Fenster drei. Ein Körper ohne Flächen wird abgelehnt (Befund Task 3: sonst entstünde `CLOSED_SHELL('',())`, ungültig nach ISO 10303-42). |
+| P4 | Einträge von unten nach oben; Umbruch ab Spalte 72; Abbruchfrage alle 4096 Einträge; Fortschritt zählt Einträge | Umgesetzt. Die Gesamtzahl für den Fortschritt kommt aus dem Probelauf plus feste Einträge (`CONTEXT_ENTITIES = 9`, `PART_ENTITIES = 11`, Befund Task 3). Abbrechen wirkt beim Prüfen zwischen den Körpern und alle 4096 Einträge, beim Schreiben alle 4096 Einträge. |
+| P5 | `EDGE_CURVE` mit `same_sense = (t1 ≥ t0)` | Spec §3 schreibt immer `.T.`; Bögen im Uhrzeigersinn haben im Kernel `t1 < t0`, sonst liefe die Kante den falschen Bogen entlang. |
+| P6 | Kegel: Lage auf die Mitte des v-Bereichs, bei fallendem Radius Achse umgekehrt, halber Öffnungswinkel `atan(\|slope\|)`; Mitte hinter der Spitze → benannte Ablehnung | Umgesetzt (Task 8). Nur die Mitte wird auf die Spitze geprüft; der Kernel erzeugt keine Fläche, die über die Spitze reicht. `slope = 0` wird `CYLINDRICAL_SURFACE`. |
+| P7 | Ellipse mit `minor > major`: Bezugsrichtung `y`, Halbachsen vertauscht | Parameter um π/2 verschoben, die Kante wird über ihre Eckpunkte begrenzt. Test: `ellipses_with_the_short_axis_first_are_turned_around`. |
+| P8 | B-Splines: Knoten als verschiedene Werte mit Vielfachheiten; rational als zusammengesetzter Eintrag in alphabetischer Teile-Reihenfolge **mit** `GEOMETRIC_REPRESENTATION_ITEM()`; „geschlossen“ nach Kernel-Prüfung; Kontrollpunkte zeilenweise in u | Das Teil `GEOMETRIC_REPRESENTATION_ITEM()` fehlt in der Tabelle von §3, die Norm verlangt es. Die Gewichtsreihenfolge ist mit asymmetrischen Gewichten (Grad 3, `[1,3,0.5,2,1]`) abgesichert (Mutationsprobe: umgekehrte Gewichte → rot). |
+| P9 | Mehrere Schalen: Volumenvorzeichen des groben Netzes (`CLASSIFY_CHORD = 0,05 mm`) trennt äußere Schalen von Hohlräumen; Hohlraum gehört zur kleinsten äußeren Schale um seinen ersten Eckpunkt; getrennte Stücke bleiben ein Teil mit mehreren Körpern | Hohlraumschale umgekehrt geschrieben (`same_sense` gekippt, Ränder `.F.`), eingetragen als `ORIENTED_CLOSED_SHELL('',*,#…,.F.)` (ISO 10303-42). Zusatztest für Schachtelung (Mutationsprobe `min_by` → `max_by` rot). Grenze: nur der erste Eckpunkt wird gegen das grobe Netz geprüft; bei Berührung unter der Sehne könnte „Hohlraum liegt in keinem Teil“ folgen (nie eine falsche Datei). Körper mit mehreren Schalen werden zweimal klassifiziert. |
+| P10 | Unsicherheit `tolerance.linear` (1e-6 mm), bei Freiform `max(linear, NURBS_EDGE_TOL)` = 1e-5 mm | So weit dürfen Kanten bei Freiformflächen von ihren Flächen abweichen (gemessen bis 5,1e-7 beim „Kreuz“). |
+| P11 | Gemeinsamer Kontext einmal je Datei, je Teil `PRODUCT` bis `ADVANCED_BREP_SHAPE_REPRESENTATION` | Umgesetzt; ISO-10303-214-Aufbau vom Reviewer mit Quader, Prisma mit Loch, gespiegelt/gedreht und Boolean-Ergebnis geprüft. |
+| P12 | Leerer Name → „Körper n“; Kürzung auf 256 Zeichen vor der Maskierung; Zeichen über U+FFFF als `\X4\…\X0\` | Umgesetzt. Gekürzt wird an einer Zeichengrenze, nicht an einer Graphem-Grenze. Im Fenster werden Kürzungen nicht gemeldet (der Bericht kennt sie). |
+| P13 | Prüfwerkzeug in `tests/common`: `reader.rs`, `model.rs`, `check.rs`; Zuordnung Teil i ↔ i-ter angenommener Körper, Hüllen über Flächenzahl und ersten Eckpunkt, „Netz aus dem Leser“ aus dem Kernel-Netz mit Punkten auf den STEP-Flächen | Umgesetzt. Prüfungen: Topologie (jede Kante zweimal gegenläufig, Schleifen geschlossen, Euler), Geometrie (Eckpunkte auf Kurven, Kanten auf beiden Flächen), Kernelvergleich (Punkte und Außennormalen), Netzvergleich (umgedrehte Dreiecke = 0, Volumen und Abstand). Schranken siehe unten. |
+| P14 | `ExportFormat { Mesh(Format), Step }` statt `Format` im Fenster; Schlüssel des Ergebnisses `None` bei STEP; Netz- und STEP-Ergebnis getrennt | Eine Zeile in `tests/export_dialog.rs` mechanisch angepasst (mit Kommentar). Prüfen und Schreiben im Arbeitsthread (`prepare_step`, `write_progress`, `cancel_write`). |
+| P15 | Handtest in Fusion 360 nur nach Rückfrage, vom Controller | **Offen** (Task 15, nur nach Rücksprache mit dem Nutzer). Beispieldateien erzeugt `write_samples_for_the_hand_test` (`PLANORA_STEP_SAMPLES`), `Alle.step` mit 10 Teilen. |
+
+### Weitere Abweichungen von §1–§8
+
+**Aufbau (§2)**
+- Zusätzliche Pakete `planora-exchange` und `planora-mesh` (P1). Ein Modul `file.rs` (`export_step_file`: Hilfsdatei, Umbenennen) kam dazu.
+- Ein gemeinsamer Kontext je Datei statt je Körper (P11).
+- Die Hilfsdatei hat wie bei den Netzformaten einen festen Namen (`.Name.planora-tmp`); zwei gleichzeitige Exporte in dasselbe Ziel würden kollidieren (das Fenster startet nur einen).
+
+**Abbildung (§3)**
+- `EDGE_CURVE`: `same_sense = (t1 ≥ t0)` statt immer `.T.` (P5).
+- Rationale B-Splines mit zusätzlichem `GEOMETRIC_REPRESENTATION_ITEM()` (P8). Eine Kurve oder Fläche wird als rational geschrieben, sobald ein Gewicht bitgleich ungleich 1 ist.
+- Hohlraumschale umgekehrt mit `ORIENTED_CLOSED_SHELL … .F.`; getrennte Stücke als mehrere Körper eines Teils (P9).
+- Kegel: Lage auf der Flächenmitte, Achse umgekehrt bei fallendem Radius (P6).
+- **Berichtigung der Ausweichlösung bei Polen:** Die in §3 genannte Ausweichlösung „Pol-Eckpunkt als `VERTEX_LOOP` ergänzen“ ist falsch, denn der Pol ist im Kernel und in der Datei schon ein Eckpunkt (`VERTEX_POINT`); ein `VERTEX_LOOP` würde keine Schleife schließen, die es nicht schon gibt. Die echte Ausweichlösung bei einem Befund im Handtest ist, die Kugel an einem zweiten Meridian (u = π) in zwei Flächen zu teilen. Wie OpenCASCADE eine Kugel schreibt (eine Fläche, Naht zweimal, Pole als Eckpunkte), ist die geschriebene Form.
+- **Spindeltorus (Ruling Task 7):** Der Kernel kann über „Drehen“ eines Bogens, der die Achse berührt oder überschreitet, einen Torus mit kleinem Radius ≥ großem Radius erzeugen (nur das Runden lehnt ihn ab). Für ihn gibt es in der Spec kein Bild. `TOROIDAL_SURFACE` mit `minor ≥ major` ist für fremde Programme ungültig; `DEGENERATE_TOROIDAL_SURFACE` wäre die Norm-Form, ließ sich aber ohne fremdes Programm weder prüfen noch verifizieren. Entscheidung: benannte Ablehnung („Torus mit kleinem Radius größer oder gleich dem großen …“) des betroffenen Körpers, im Schreiber und im Prüfmodell; kein unbelegter Schreiber. Folge: Solche Körper lassen sich nicht als STEP ausgeben, bis ein geprüfter `DEGENERATE_TOROIDAL_SURFACE`-Schreiber vorliegt (Folge-Aufgabe).
+- **Kegelspitze (Task 8):** Der Kernel setzt die Spitze auf eine Stelle, die um ca. 1e-15 neben der Achse liegt. Im Prüfmodell (`Surf::foot`) gilt ein Punkt mit Achsabstand ≤ `64 · ε · max(1, |Koordinaten|)` als Spitze ohne Normale; sonst entstanden zufällige Normalen und falsche Alarme in schrägen Lagen. Der Schreiber war davon nicht betroffen.
+
+**Zahlen, Texte, Schutz (§4)**
+- `NotFinite` in einem Körper lehnt diesen Körper ab, statt die Datei abzubrechen (P3). Der Fehler `NotFinite` bleibt als Fehlerart bestehen (z. B. für die Zahlenausgabe).
+- Leere Namen werden „Körper n“ (P12).
+- Der Fortschritt zählt feste Einträge mit (P4).
+
+**Prüfung (§5)**
+- Das „Dreiecksnetz aus dem Leser“ (§5 Punkt 4) kommt aus der Verbindung der Dreiecke des Kernel-Netzes; jeder Punkt wird auf die STEP-Fläche gelegt und jedes Dreieck nach deren Außennormale ausgerichtet (P13).
+- **Schranken im Prüfwerkzeug:** Die Geometrieschranke ist relativ: `geom_tol = max(1e-11, 64 · ε · größter Koordinatenbetrag)`. Die erste feste Schranke 1e-7 wurde auf gemessene 1,4e-14 gesenkt (Task 7), dann relativ gemacht, weil die feste Schranke ab etwa 1e4 mm (große oder weit verschobene Körper) nicht mehr hielt; ein Test mit Körpern bei 2e5 mm trennt sie von der festen. Freiform: bis `NURBS_EDGE_TOL`. Netzvergleich: Volumenunterschied zum Kernel-Netz höchstens `1e-9` (analytisch) bzw. `1e-7` (Freiform), Abstand 1e-9 bzw. `NURBS_EDGE_TOL`; gemessen höchstens 5,5e-15 bzw. 5,2e-11. Formelvolumen für Rundung, Fase, Kuppel und Kreuz mit Sehnenschranke auf die gekrümmte Fläche bezogen. Alle Tests mit festem Startwert.
+- **Messwerkzeug-Fix Ellipse (Task 12):** Die lange Zufallsreihe (Fall 200: Ellipse mit Halbachsen 2079,86 und 3,17 mm) meldete einen Eckpunkt 6,9e-11 neben der Kurve. Nachrechnen mit 60 Stellen ergab 2,5e-13: Das Messwerkzeug (`Crv::distance`) nahm den Winkel im zum Kreis gestreckten Raum und vergrößerte Rundung um das Achsenverhältnis. Behoben im Prüfwerkzeug (Newton auf dem echten Abstand, `ELLIPSE_NEWTON_STEPS = 8`), Schranken nicht gelockert; Test `the_distance_to_a_very_slender_ellipse_is_not_amplified_by_its_shape` (mit 0 Schritten rot). Schreiber und Kernel waren in Ordnung.
+- Die Zufallsreihe nutzt nur Paare, die der Kernel rechnen kann: Schräge Zylinder mit Zylindern oder Kugeln rechnet er noch nicht, die Reihe deckt Quader mit Quader, Zylinder oder Kugel ab. Von 300 Fällen werden 20 (leere Schnittmenge, `BooleanError::EmptyResult`) übersprungen; jeder andere Kernelfehler lässt die Reihe scheitern; Mindestanteil gültiger Fälle 0,8 (gemessen 0,93).
+- Das Prüfmodell liest `knot_spec` strikt als `.UNSPECIFIED.` und lehnt `TOROIDAL_SURFACE` mit `minor ≥ major` benannt ab.
+
+**Oberfläche (§6)**
+- `ExportFormat` statt `Format` (P14).
+- **Schlüsselprüfung (Task 13):** `write_to` prüft im Zweig Step den Schlüssel `(Option<Quality>, Scope, edit_count, Option<BodyRef>)` des Ergebnisses; ohne diese Prüfung schreibt das Fenster ein veraltetes Ergebnis (Mutationsprobe: `a_stale_step_result_is_never_written` rot).
+- Bekannte Mängel des Fensters (aus der Stufenprüfung, nicht behoben): Der Abbrechen-Knopf hängt am gewählten Format, nicht am laufenden Schreibweg; die Zeile „Fertig“ kann nach einem Formatwechsel während des Schreibens im anderen Format erscheinen; `cancel()` bricht auch die Netzberechnung ab, und „Neu berechnen“ im STEP-Format verwirft ein gültiges Netz-Ergebnis; der `StepReport` (gekürzte Namen) wird nicht angezeigt; lange abgelehnte Namen werden im Fenster nicht gekürzt; „x.stp“ wird zu „x.stp.step“, `.stp`-Dateien werden nicht aufgelistet; der Hinweis am gesperrten Knopf „Exportieren“ bei 0 Körpern ist missverständlich. Zwei Mutationen überlebten (Zeile „Fertig“ beim Formatwechsel nur über Klick, `cancel_write` ohne Fenstertest).
+
+**Weitere Befunde der Stufenprüfungen (alle behoben, soweit nicht oben genannt)**
+- Task 3: Körper ohne Flächen (siehe P3), Fortschrittssumme (P4), Test für Abbruch mitten im Schreiben.
+- Task 5: Zusatztests für Namens-Rundlauf (`'`, `\`, Umlaute, Emoji) und für lückenlose Eintragsnummern `1..=n`.
+- Task 9: Sehnenschranke in Stufentest 2 auf die gekrümmte Fläche bezogen; Spiegeltest vergleicht zusätzlich Volumen und Abstand zum Kernel (Nachtrag in Task 12).
+- Task 10/12: freie Zahlen in Tests zu benannten Konstanten (`MAX_OFFSET`, `CORNER_NEAR`, `SERIES_SEED`); `assert_eq!(flipped, 0)` im Hohlraumtest.
+- Zurückgestellt (nicht behoben): Der Leser hat keine Tiefenbegrenzung (Absturz bei 100 000 verschachtelten Klammern, nur Prüfwerkzeug); Tokenfehler nennen nur die Byte-Stelle; die Spalte beim Umbruch zählt Bytes und Zeichen gemischt (in der Praxis nur ASCII); Prüfmodell wendet keine Orthogonalisierung nach Teil 42 an (< 1e-9 Länge); Richtungsvektor Null wird nicht geprüft (der Kernel erzeugt keinen); nur die Kegelmitte wird auf die Spitze geprüft; die Kegelschranke des Kernels für „fast Zylinder“ (1e-6) ist gröber als die Geometrieschranke.
+
+**Teststand (2026-10-14)**
+- `cargo test --workspace` (Debug): 1404 bestanden, 0 fehlgeschlagen, 31 ignoriert in 193 Testprogrammen, Gesamtlaufzeit etwa 9,6 Minuten mit Übersetzung. Lange Reihe (`cargo test -p planora-step --release -- --ignored`): 2 bestanden in 3,7 s (die 300-Fälle-Reihe und das Schreiben der Beispieldateien).
+- Kernel, `planora-math`, `planora-mesh`, `planora-exchange`, `planora-feature`, `planora-project`, `planora-render`, `planora-sketch` und die Golden-Dateien sind bitgleich zu `07bac2b`; geändert wurden nur `planora-step` (neu) und `planora-app`.
+- Gegenprobe in einem fremden CAD-Programm: **nicht geschehen** (P15).
