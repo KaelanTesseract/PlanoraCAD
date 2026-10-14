@@ -292,3 +292,118 @@ fn cancelling_the_step_check_says_so_and_switching_back_keeps_the_mesh_result() 
         ExportStatus::StepReady { bodies: 2, .. }
     ));
 }
+
+#[test]
+fn closing_is_refused_while_step_is_written_and_the_file_is_finished() {
+    let s = mixed_state();
+    let dir = temp_dir("schliessen");
+    let mut d = step_dialog(&s);
+    let path = dir.join("k.step");
+    d.write_to(path.clone(), &s);
+    assert!(d.is_writing_step());
+    assert!(!d.request_close(), "Schließen muss abgewiesen werden");
+    assert_eq!(d.write_state(), WriteState::Writing);
+    d.tick(&s, true);
+    assert!(matches!(d.write_state(), WriteState::Done(..)));
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .starts_with("ISO-10303-21;")
+    );
+    assert!(d.request_close());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_window_stays_open_with_a_hint_while_step_is_written() {
+    let mut s = mixed_state();
+    let dir = temp_dir("hinweis");
+    let mut d = step_dialog(&s);
+    d.write_to(dir.join("k.step"), &s);
+    assert!(!d.request_close());
+    // Das Fenster bleibt offen (`draw` verlangt `show == true`); der Hinweis steht da, solange
+    // der Arbeitsthread noch nicht abgeholt ist.
+    let text = draw(&mut d, &mut s);
+    assert!(
+        text.contains(WRITING_HINT) || !d.is_writing_step(),
+        "{text}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cancelling_while_writing_says_so_and_keeps_the_old_file() {
+    let mut s = AppState::new();
+    for _ in 0..200 {
+        s.create_box(DVec3::splat(3.0)).unwrap();
+    }
+    s.selected_body = None;
+    let dir = temp_dir("abbruch-fenster");
+    let path = dir.join("alt.step");
+    fs::write(&path, "alt").unwrap();
+    let mut d = step_dialog(&s);
+    d.write_to(path.clone(), &s);
+    d.cancel_write();
+    d.tick(&s, true);
+    assert_eq!(d.write_state(), WriteState::Failed("Abgebrochen".into()));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "alt");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tabs_and_the_program_do_not_close_while_step_is_written() {
+    use planora_app::workspace::Workspace;
+    use planora_project::config::Config;
+    let mut w = Workspace::new(None, Config::default());
+    let dir = temp_dir("tab");
+    {
+        let tab = w.active_tab_mut();
+        tab.state.create_box(DVec3::splat(5.0)).unwrap();
+        tab.state.selected_body = None;
+        let mut d = step_dialog(&tab.state);
+        d.write_to(dir.join("t.step"), &tab.state);
+        tab.export_dialog = Some(d);
+    }
+    // Der Tab ist geändert: ohne Sperre gäbe es die Rückfrage „Speichern?“ (`prompt`).
+    assert!(!w.request_close(0), "Tab bleibt offen");
+    assert!(
+        w.prompt.is_none(),
+        "keine Rückfrage, sondern der Hinweis im Fenster"
+    );
+    assert!(!w.request_quit(), "Programm bleibt offen");
+    assert!(w.prompt.is_none());
+    assert!(!w.quit);
+    {
+        let tab = w.active_tab_mut();
+        let st = &tab.state;
+        tab.export_dialog.as_mut().unwrap().tick(st, true);
+        assert!(!tab.export_dialog.as_ref().unwrap().is_writing_step());
+    }
+    assert!(dir.join("t.step").exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_empty_body_name_becomes_a_numbered_body_in_messages() {
+    let mut open = AnalyticKernel::default()
+        .make_box(DVec3::splat(1.0))
+        .unwrap();
+    let f = open.faces.iter().next().unwrap().0;
+    open.faces[f].outer.half_edges.pop();
+    let items = vec![
+        ExportItem {
+            name: "  ".into(),
+            source: ExportSource::Solid(open),
+        },
+        ExportItem {
+            name: "".into(),
+            source: ExportSource::Mesh(
+                Arc::new(cube()),
+                planora_exchange::MeshTransform::default(),
+            ),
+        },
+    ];
+    let p = prepare_step(&items, &Progress::new()).unwrap();
+    assert!(p.rejected[0].starts_with("„Körper 1“ wird nicht ausgegeben: "));
+    assert_eq!(p.skipped_meshes, vec!["Körper 2".to_string()]);
+}

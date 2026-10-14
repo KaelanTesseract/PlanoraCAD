@@ -17,7 +17,7 @@ use planora_exchange::{
 use planora_feature::BodyRef;
 use planora_kernel::Solid;
 use planora_mesh::{TessellationOptions, tessellate};
-use planora_step::{StepBody, StepError, StepOptions, check_body, export_step_file};
+use planora_step::{StepBody, StepError, StepOptions, check_body, display_name, export_step_file};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,6 +44,8 @@ pub const NOT_CLOSED_WARNING: &str = "Die Datei wird trotzdem geschrieben. Manch
 pub const STEP_LABEL: &str = "STEP – für andere CAD-Programme (exakt)";
 /// Steht bei STEP an der Stelle der Karte „Qualität“ (STEP-Spec §6).
 pub const STEP_EXACT: &str = "Rundungen und Bohrungen bleiben exakt.";
+/// Hinweis, wenn das Fenster beim Schreiben einer STEP-Datei nicht geschlossen werden darf.
+pub const WRITING_HINT: &str = "Das Schreiben läuft noch. Bitte warten oder erst abbrechen.";
 /// Meldung, wenn bei STEP kein Körper übrig bleibt.
 pub const STEP_NOTHING: &str = "Es gibt keinen Körper, der sich als STEP-Datei ausgeben lässt.";
 
@@ -269,19 +271,21 @@ pub fn prepare_step(items: &[ExportItem], progress: &Progress) -> Result<StepPre
         rejected: Vec::new(),
         skipped_meshes: Vec::new(),
     };
-    for item in items {
+    for (index, item) in items.iter().enumerate() {
         progress.check().map_err(|e| e.to_string())?;
+        // Leere Namen werden „Körper n“, damit Meldungen nie „„“ lauten.
+        let name = display_name(&item.name, index);
         match &item.source {
-            ExportSource::Mesh(..) => out.skipped_meshes.push(item.name.clone()),
+            ExportSource::Mesh(..) => out.skipped_meshes.push(name),
             ExportSource::Solid(s) => {
                 let body = StepBody {
-                    name: item.name.clone(),
+                    name: name.clone(),
                     solid: s,
                 };
                 match check_body(&body, progress) {
                     Ok(stats) => {
                         out.faces += stats.faces;
-                        out.bodies.push((item.name.clone(), s.clone()));
+                        out.bodies.push((name, s.clone()));
                     }
                     Err(e @ StepError::InvalidBody { .. }) => out.rejected.push(e.to_string()),
                     Err(e) => return Err(e.to_string()),
@@ -395,6 +399,8 @@ pub struct ExportDialog {
     writing: Option<(PathBuf, WriteJob)>,
     step_writing: Option<(PathBuf, StepWriteJob)>,
     written: Option<Result<(PathBuf, u64), String>>,
+    /// Schließen wurde abgewiesen, weil eine STEP-Datei geschrieben wird (zeigt den Hinweis).
+    close_denied: bool,
     /// Rechteck des Fensters im letzten Bild (Tests der vollen Breite).
     pub last_rect: Option<egui::Rect>,
     /// Rechtecke der Karten im letzten Bild (Tests der gleichen Höhe).
@@ -422,6 +428,7 @@ impl ExportDialog {
             writing: None,
             step_writing: None,
             written: None,
+            close_denied: false,
             last_rect: None,
             last_cards: Vec::new(),
         }
@@ -544,6 +551,26 @@ impl ExportDialog {
         if let Some(w) = wrote {
             self.written = Some(w);
             self.step_writing = None;
+        }
+        if self.step_writing.is_none() {
+            self.close_denied = false;
+        }
+    }
+
+    /// Läuft gerade das Schreiben einer STEP-Datei? Dann darf das Fenster nicht verworfen
+    /// werden: Der Arbeitsthread bräche ab und die alte Datei bliebe ohne Meldung liegen.
+    pub fn is_writing_step(&self) -> bool {
+        self.step_writing.is_some()
+    }
+
+    /// Fragt, ob das Fenster geschlossen werden darf; beim Schreiben einer STEP-Datei nicht
+    /// (dann steht im Fenster der Hinweis `WRITING_HINT`).
+    pub fn request_close(&mut self) -> bool {
+        if self.is_writing_step() {
+            self.close_denied = true;
+            false
+        } else {
+            true
         }
     }
 
@@ -711,6 +738,7 @@ impl ExportDialog {
         let status = self.status(state);
         let write_state = self.write_state();
         let write_progress = self.write_progress();
+        let denied = self.close_denied;
         let has_selection = Self::has_selection(state);
         let before = self.format;
         let (mut format, mut quality, mut scope) = (self.format, self.quality, self.scope);
@@ -835,6 +863,9 @@ impl ExportDialog {
                                 cancel_write = true;
                             }
                         });
+                        if denied {
+                            ui.colored_label(WARNING_COLOR, WRITING_HINT);
+                        }
                     }
                     WriteState::Done(path, n) => {
                         ui.label(format!(
@@ -880,6 +911,8 @@ impl ExportDialog {
                     }
                 }
             });
+        let want_close = !open || close;
+        let alive = !want_close || !self.request_close();
         self.last_rect = response.map(|r| r.response.rect);
         self.last_cards = cards;
         (self.format, self.quality, self.scope) = (format, quality, scope);
@@ -915,6 +948,6 @@ impl ExportDialog {
             self.chooser = None;
             self.write_to(path, state);
         }
-        open && !close
+        alive
     }
 }
