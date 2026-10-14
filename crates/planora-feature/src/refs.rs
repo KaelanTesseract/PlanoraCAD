@@ -208,3 +208,14 @@ fn edge_uses(solid: &Solid) -> BTreeMap<Id<Edge>, Vec<Id<Face>>> {
     }
     uses
 }
+
+/// Die an `edge` angrenzende Fläche mit der Marke von `r` (Fläche 1 einer Fase, P4); `None`,
+/// wenn keine angrenzende Fläche diese Marke trägt.
+pub fn first_face(solid: &Solid, edge: Id<Edge>, r: &FaceRef) -> Option<Id<Face>> {
+    let tag = r.tag();
+    edge_uses(solid)
+        .get(&edge)?
+        .iter()
+        .copied()
+        .find(|f| solid.faces.get(*f).and_then(|x| x.tag.as_ref()) == Some(&tag))
+}

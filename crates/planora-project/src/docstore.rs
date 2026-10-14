@@ -1,6 +1,6 @@
 //! Versionsspeicher eines Dokuments: `dokument.json` (Versionsbaum) und `versionen/NNNN.json`.
 
-use crate::convert::{FORMAT_VERSION, decode_version, encode_version};
+use crate::convert::{CONTAINER_FORMAT, FORMAT_VERSION, decode_version, encode_version};
 use crate::error::{ProjectError, Result};
 use crate::fsutil::{DocLock, atomic_write, new_id, now_iso};
 use crate::library::DOCUMENT_FILE;
@@ -230,7 +230,7 @@ struct VersionDto {
 
 fn to_file(i: &DocumentInfo) -> DocFile {
     DocFile {
-        format: FORMAT_VERSION,
+        format: CONTAINER_FORMAT,
         programm: PROGRAM.into(),
         id: i.id.clone(),
         versionen: i
@@ -754,7 +754,7 @@ impl DocStore {
     pub fn write_autosave(&self, based_on: Option<u32>, snapshot: &Snapshot) -> Result<()> {
         self.ensure_lock()?;
         let file = AutosaveFile {
-            format: FORMAT_VERSION,
+            format: CONTAINER_FORMAT,
             basiert_auf: based_on,
             zeit: now_iso(),
             inhalt: encode_version(snapshot)?,

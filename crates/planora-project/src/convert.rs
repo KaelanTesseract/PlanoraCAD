@@ -4,8 +4,8 @@
 use crate::error::{ProjectError, Result};
 use crate::format::*;
 use planora_feature::{
-    BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM, SketchFeature,
-    SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
+    BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM,
+    SketchFeature, SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
 };
 use planora_kernel::BoolOp;
 use planora_math::{DVec3, Frame, Tolerance};
@@ -14,7 +14,23 @@ use planora_sketch::{
     PointRecord, Sketch, SketchData,
 };
 
-pub const FORMAT_VERSION: u32 = 1;
+/// Höchste lesbare Formatnummer der Versionsdateien (P7).
+pub const FORMAT_VERSION: u32 = 2;
+/// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
+/// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
+pub const CONTAINER_FORMAT: u32 = 1;
+
+/// Kleinste Formatnummer, die den Stand darstellt: 2 mit Rundungen oder Fasen, sonst 1 (P7).
+pub fn required_format(s: &Snapshot) -> u32 {
+    if s.features
+        .iter()
+        .any(|f| matches!(f.kind, FeatureKind::Verrunden { .. }))
+    {
+        2
+    } else {
+        1
+    }
+}
 /// Längste erlaubte Liste (Features, Punkte, Kurven, Abhängigkeiten, Werte) in einer Datei.
 const MAX_LIST: usize = 1_000_000;
 
@@ -485,7 +501,65 @@ fn kind_to(k: &FeatureKind) -> KindDto {
             koerper: body_to(body),
             versatz: v3(*delta),
         },
+        FeatureKind::Verrunden {
+            body,
+            edges,
+            art,
+            tangentenkette,
+        } => KindDto::Verrunden {
+            koerper: body_to(body),
+            kanten: edges.iter().map(edge_to).collect(),
+            art: art_to(art),
+            tangentenkette: *tangentenkette,
+        },
     }
+}
+
+fn art_to(a: &BlendArt) -> BlendArtDto {
+    match a {
+        BlendArt::Rundung { radius } => BlendArtDto::Rundung { radius: *radius },
+        BlendArt::RundungVariabel { punkte } => BlendArtDto::RundungVariabel {
+            punkte: punkte.iter().map(|(p, r)| [*p, *r]).collect(),
+        },
+        BlendArt::FaseGleich { abstand } => BlendArtDto::FaseGleich { abstand: *abstand },
+        BlendArt::FaseZwei { abstand1, abstand2 } => BlendArtDto::FaseZwei {
+            abstand1: *abstand1,
+            abstand2: *abstand2,
+        },
+        BlendArt::FaseWinkel { abstand, winkel } => BlendArtDto::FaseWinkel {
+            abstand: *abstand,
+            winkel: *winkel,
+        },
+    }
+}
+
+fn art_from(origin: &str, name: &str, d: &BlendArtDto) -> Result<BlendArt> {
+    let n = |what: &str, x: f64| num(origin, &format!("„{name}“ {what}"), x);
+    Ok(match d {
+        BlendArtDto::Rundung { radius } => BlendArt::Rundung {
+            radius: n("Radius", *radius)?,
+        },
+        BlendArtDto::RundungVariabel { punkte } => {
+            check_len(origin, "Radienpunkte", punkte.len())?;
+            BlendArt::RundungVariabel {
+                punkte: punkte
+                    .iter()
+                    .map(|[p, r]| Ok((n("Position", *p)?, n("Radius", *r)?)))
+                    .collect::<Result<Vec<_>>>()?,
+            }
+        }
+        BlendArtDto::FaseGleich { abstand } => BlendArt::FaseGleich {
+            abstand: n("Abstand", *abstand)?,
+        },
+        BlendArtDto::FaseZwei { abstand1, abstand2 } => BlendArt::FaseZwei {
+            abstand1: n("Abstand 1", *abstand1)?,
+            abstand2: n("Abstand 2", *abstand2)?,
+        },
+        BlendArtDto::FaseWinkel { abstand, winkel } => BlendArt::FaseWinkel {
+            abstand: n("Abstand", *abstand)?,
+            winkel: n("Winkel", *winkel)?,
+        },
+    })
 }
 
 fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
@@ -591,6 +665,29 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
             body: body_from(koerper),
             delta: v("Versatz", *versatz)?,
         },
+        KindDto::Verrunden {
+            koerper,
+            kanten,
+            art,
+            tangentenkette,
+        } => {
+            check_len(origin, "Kanten", kanten.len())?;
+            if kanten.is_empty() {
+                return Err(ProjectError::corrupt(
+                    origin,
+                    format!("„{name}“: keine Kante gewählt"),
+                ));
+            }
+            FeatureKind::Verrunden {
+                body: body_from(koerper),
+                edges: kanten
+                    .iter()
+                    .map(|k| edge_from(origin, name, k))
+                    .collect::<Result<Vec<_>>>()?,
+                art: art_from(origin, name, art)?,
+                tangentenkette: *tangentenkette,
+            }
+        }
     })
 }
 
@@ -600,7 +697,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
 /// Fehler (das Dokument wird dann nicht geschrieben).
 pub fn encode_version(s: &Snapshot) -> Result<String> {
     let file = VersionFile {
-        format: FORMAT_VERSION,
+        format: required_format(s),
         marker: s.marker,
         naechste_id: s.next_id,
         features: s
@@ -650,6 +747,17 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     }
     let file: VersionFile =
         serde_json::from_str(text).map_err(|e| ProjectError::corrupt(origin, e.to_string()))?;
+    if file.format < 2
+        && file
+            .features
+            .iter()
+            .any(|f| matches!(f.art, KindDto::Verrunden { .. }))
+    {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Rundungen und Fasen gibt es erst ab Dateiformat 2",
+        ));
+    }
     check_len(origin, "Features", file.features.len())?;
     let mut features = Vec::with_capacity(file.features.len());
     for f in &file.features {

@@ -131,6 +131,17 @@ pub fn build_scene(
     palette: &Palette,
     grid_half_extent: f32,
 ) -> SceneData {
+    build_scene_marked(meshes, highlight, &[], palette, grid_half_extent)
+}
+
+/// Wie [`build_scene`]; `marked` (Mehrfachauswahl) bekommen die Farbe der Auswahl.
+pub fn build_scene_marked(
+    meshes: &[&Mesh],
+    highlight: &Highlight,
+    marked: &[Pick],
+    palette: &Palette,
+    grid_half_extent: f32,
+) -> SceneData {
     let mut scene = SceneData::default();
 
     for (body, mesh) in meshes.iter().enumerate() {
@@ -162,7 +173,7 @@ pub fn build_scene(
                 body,
                 face: range.face,
             });
-            let color = if highlight.selected == Some(this) {
+            let color = if highlight.selected == Some(this) || marked.contains(&this) {
                 palette.face_selected
             } else if highlight.hover == Some(this) {
                 palette.face_hover
@@ -184,7 +195,7 @@ pub fn build_scene(
                 body,
                 edge: line.edge,
             });
-            let color = if highlight.selected == Some(this) {
+            let color = if highlight.selected == Some(this) || marked.contains(&this) {
                 palette.edge_selected
             } else if highlight.hover == Some(this) {
                 palette.edge_hover

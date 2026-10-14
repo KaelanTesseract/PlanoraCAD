@@ -1,3 +1,4 @@
+use crate::blend::{BlendError, BlendRequest, Blended};
 use crate::boolean::{BoolOp, BooleanError};
 use crate::error::KernelError;
 use crate::extrude::extrude;
@@ -21,6 +22,8 @@ pub trait Kernel {
     fn transform(&self, solid: &Solid, matrix: &DMat4) -> Result<Solid, KernelError>;
     fn validate(&self, solid: &Solid) -> Result<ValidationReport, ValidationError>;
     fn boolean(&self, a: &Solid, b: &Solid, op: BoolOp) -> Result<Solid, BooleanError>;
+    /// Rundet bzw. fast Kanten (Teilprojekt 8); der Eingangskörper bleibt unverändert.
+    fn blend(&self, solid: &Solid, request: &BlendRequest) -> Result<Blended, BlendError>;
     /// Art der Trägerfläche einer Fläche; `None` für eine Id außerhalb des Körpers.
     fn face_kind(&self, solid: &Solid, face: Id<Face>) -> Option<SurfaceKind>;
     /// Art der Trägerkurve einer Kante; `None` für eine Id außerhalb des Körpers.
@@ -70,6 +73,10 @@ impl Kernel for AnalyticKernel {
 
     fn boolean(&self, a: &Solid, b: &Solid, op: BoolOp) -> Result<Solid, BooleanError> {
         crate::boolean::boolean(a, b, op, &self.tolerance)
+    }
+
+    fn blend(&self, solid: &Solid, request: &BlendRequest) -> Result<Blended, BlendError> {
+        crate::blend::blend(solid, request, &self.tolerance)
     }
 
     fn face_kind(&self, solid: &Solid, face: Id<Face>) -> Option<SurfaceKind> {

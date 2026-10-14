@@ -1,11 +1,15 @@
 //! Dialog „Bearbeiten“ für ein Feature der Zeitleiste (alle Arten außer Skizzen, die im
 //! Skizzen-Modus bearbeitet werden). Zahlen nehmen Komma und Punkt an.
 
+use crate::blend_dialog::{
+    ArtChoice, TOO_MANY_POINTS, check_min_sizes, insert_point, min_size_for, min_text,
+    set_first_face,
+};
 use crate::browser::ERROR_COLOR;
 use crate::create_dialog::axis_candidates;
 use crate::sketch_view::{format_number, parse_number};
 use crate::state::{AppState, MAX_COORD_MM};
-use planora_feature::{BodyRef, FeatureId, FeatureKind, FeatureStatus};
+use planora_feature::{BlendArt, BodyRef, FeatureId, FeatureKind, FeatureStatus};
 use planora_kernel::BoolOp;
 use planora_math::DVec3;
 
@@ -17,7 +21,7 @@ pub struct FeatureDialog {
     name: String,
     kind: FeatureKind,
     /// Zahlenfelder in der Reihenfolge von [`numbers_of`]: Bezeichnung und eingegebener Text.
-    numbers: Vec<(&'static str, String)>,
+    numbers: Vec<(String, String)>,
     error: Option<String>,
     /// Stand des Features beim Öffnen (siehe [`planora_feature::Feature::version`]).
     version: u64,
@@ -29,7 +33,31 @@ pub const STALE_MESSAGE: &str = "Das Feature wurde inzwischen geändert; der Dia
                                  übernehmen.";
 
 /// Die Zahlen einer Feature-Art mit ihren Bezeichnungen (Millimeter).
-fn numbers_of(kind: &FeatureKind) -> Vec<(&'static str, f64)> {
+fn numbers_of(kind: &FeatureKind) -> Vec<(String, f64)> {
+    if let FeatureKind::Verrunden {
+        art: BlendArt::RundungVariabel { punkte },
+        ..
+    } = kind
+    {
+        return punkte
+            .iter()
+            .enumerate()
+            .flat_map(|(k, (p, r))| {
+                [
+                    (format!("Position {}", k + 1), *p),
+                    (format!("Radius {}", k + 1), *r),
+                ]
+            })
+            .collect();
+    }
+    numbers_fixed(kind)
+        .into_iter()
+        .map(|(l, v)| (l.to_string(), v))
+        .collect()
+}
+
+/// Die Zahlen mit festen Bezeichnungen (alle Arten außer der variablen Rundung).
+fn numbers_fixed(kind: &FeatureKind) -> Vec<(&'static str, f64)> {
     let pos = |o: &DVec3| {
         [
             ("Position x", o.x),
@@ -64,9 +92,35 @@ fn numbers_of(kind: &FeatureKind) -> Vec<(&'static str, f64)> {
         }
         FeatureKind::Extrude { height, .. } => vec![("Höhe", *height)],
         FeatureKind::Move { delta, .. } => vec![("Δx", delta.x), ("Δy", delta.y), ("Δz", delta.z)],
+        FeatureKind::Verrunden { art, .. } => match art {
+            BlendArt::Rundung { radius } => vec![("Radius", *radius)],
+            BlendArt::FaseGleich { abstand } => vec![("Abstand", *abstand)],
+            BlendArt::FaseZwei { abstand1, abstand2 } => {
+                vec![("Abstand 1", *abstand1), ("Abstand 2", *abstand2)]
+            }
+            BlendArt::FaseWinkel { abstand, winkel } => {
+                vec![("Abstand", *abstand), ("Winkel", *winkel)]
+            }
+            BlendArt::RundungVariabel { .. } => Vec::new(),
+        },
         FeatureKind::Sketch(_) | FeatureKind::Revolve { .. } | FeatureKind::Boolean { .. } => {
             Vec::new()
         }
+    }
+}
+
+/// Einheit eines Zahlenfelds.
+fn unit(label: &str) -> &'static str {
+    if label == "Winkel" {
+        "°"
+    } else if label
+        .strip_prefix("Position ")
+        .is_some_and(|k| k.chars().all(|c| c.is_ascii_digit()))
+    {
+        // „Position k“ der variablen Rundung (Anteil der Kettenlänge); „Position x“ ist mm.
+        "%"
+    } else {
+        "mm"
     }
 }
 
@@ -100,6 +154,20 @@ fn set_numbers(kind: &mut FeatureKind, v: &[f64]) {
         }
         (FeatureKind::Extrude { height, .. }, [h]) => *height = *h,
         (FeatureKind::Move { delta, .. }, [_, _, _]) => *delta = p(v),
+        (FeatureKind::Verrunden { art, .. }, values) => match (art, values) {
+            (BlendArt::Rundung { radius }, [r]) => *radius = *r,
+            (BlendArt::FaseGleich { abstand }, [a]) => *abstand = *a,
+            (BlendArt::FaseZwei { abstand1, abstand2 }, [a, b]) => {
+                (*abstand1, *abstand2) = (*a, *b)
+            }
+            (BlendArt::FaseWinkel { abstand, winkel }, [a, w]) => (*abstand, *winkel) = (*a, *w),
+            (BlendArt::RundungVariabel { punkte }, values) if values.len() == 2 * punkte.len() => {
+                for (k, p) in punkte.iter_mut().enumerate() {
+                    *p = (values[2 * k], values[2 * k + 1]);
+                }
+            }
+            _ => {}
+        },
         _ => {}
     }
 }
@@ -156,13 +224,115 @@ impl FeatureDialog {
 
     /// Setzt den Text des Zahlenfelds `label`; `false`, wenn es das Feld nicht gibt.
     pub fn set_text(&mut self, label: &str, text: &str) -> bool {
-        match self.numbers.iter_mut().find(|(l, _)| *l == label) {
+        match self.numbers.iter_mut().find(|(l, _)| l == label) {
             Some((_, t)) => {
                 *t = text.to_string();
                 true
             }
             None => false,
         }
+    }
+
+    /// Aktuelle Meldung des Dialogs (für Tests).
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// Bezeichnungen der Zahlenfelder (für Tests).
+    pub fn labels(&self) -> Vec<String> {
+        self.numbers.iter().map(|(l, _)| l.clone()).collect()
+    }
+
+    fn renumber(&mut self) {
+        self.numbers = numbers_of(&self.kind)
+            .into_iter()
+            .map(|(l, v)| (l, number_text(v)))
+            .collect();
+    }
+
+    /// Übernimmt eingegebene Zahlen, soweit gültig, in die Kopie der Art (vor einem Umbau).
+    fn absorb(&mut self) {
+        if let Ok(kind) = self.edited_kind() {
+            self.kind = kind;
+        }
+    }
+
+    /// Art einer Verrundung wechseln (das erste Maß bleibt).
+    pub fn set_blend_art(&mut self, choice: ArtChoice) {
+        self.absorb();
+        if let FeatureKind::Verrunden { art, .. } = &mut self.kind {
+            *art = choice.convert(art);
+        }
+        self.renumber();
+    }
+
+    /// Punkt einer variablen Rundung einfügen (Mitte des größten Abstands).
+    pub fn add_point(&mut self) {
+        self.absorb();
+        if let FeatureKind::Verrunden {
+            art: BlendArt::RundungVariabel { punkte },
+            ..
+        } = &mut self.kind
+            && let Err(e) = insert_point(punkte)
+        {
+            self.error = Some(e);
+        }
+        self.renumber();
+    }
+
+    /// Punkt `i` einer variablen Rundung entfernen; mindestens zwei bleiben.
+    pub fn remove_point(&mut self, i: usize) {
+        self.absorb();
+        if let FeatureKind::Verrunden {
+            art: BlendArt::RundungVariabel { punkte },
+            ..
+        } = &mut self.kind
+            && punkte.len() > 2
+            && i < punkte.len()
+        {
+            punkte.remove(i);
+            if self.error.as_deref() == Some(TOO_MANY_POINTS) {
+                self.error = None;
+            }
+        }
+        self.renumber();
+    }
+
+    pub fn set_tangent_chain(&mut self, on: bool) {
+        if let FeatureKind::Verrunden { tangentenkette, .. } = &mut self.kind {
+            *tangentenkette = on;
+        }
+    }
+
+    /// Namen der beiden Flächen an der ersten Kante; die erste ist Fläche 1.
+    pub fn first_faces(&self) -> Option<(String, String)> {
+        match &self.kind {
+            FeatureKind::Verrunden { edges, .. } => {
+                edges.first().map(|e| (e.a.role.clone(), e.b.role.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Macht die Fläche mit der Rolle `role` zu Fläche 1 (an allen Kanten).
+    pub fn set_first_face(&mut self, role: &str) {
+        if let FeatureKind::Verrunden { edges, .. } = &mut self.kind {
+            set_first_face(edges, role);
+        }
+    }
+
+    /// Kleinstes Maß des Kerns für den Körper, an dem die Verrundung ansetzt.
+    pub fn min_size(&self, state: &AppState) -> Option<f64> {
+        let FeatureKind::Verrunden { body, art, .. } = &self.kind else {
+            return None;
+        };
+        let visible = state.document.visible_bodies_before(self.id);
+        let solid = visible.iter().find(|v| v.body == *body)?.solid;
+        Some(min_size_for(
+            solid,
+            matches!(art, BlendArt::RundungVariabel { .. }),
+            &state.kernel.tolerance,
+        ))
     }
 
     /// Breite, Tiefe und Höhe eines Quaders (für Tests).
@@ -219,6 +389,12 @@ impl FeatureDialog {
             Ok(k) => k,
             Err(e) => return state.fail(e),
         };
+        if let FeatureKind::Verrunden { art, .. } = &kind
+            && let Some(min) = self.min_size(state)
+            && let Err(e) = check_min_sizes(art, min)
+        {
+            return state.fail(e);
+        }
         let current = state.document.feature(self.id).map(|f| f.version());
         if current != Some(self.version) {
             return state.fail(STALE_MESSAGE.into());
@@ -250,17 +426,37 @@ impl FeatureDialog {
                 ui.weak(self.kind.label());
                 ui.add_space(4.0);
                 self.choices(ui, state);
+                let variable = matches!(
+                    self.kind,
+                    FeatureKind::Verrunden {
+                        art: BlendArt::RundungVariabel { .. },
+                        ..
+                    }
+                );
+                let mut remove = None;
                 if !self.numbers.is_empty() {
                     egui::Grid::new(("feature_numbers", self.id))
-                        .num_columns(3)
+                        .num_columns(4)
                         .show(ui, |ui| {
-                            for (label, text) in &mut self.numbers {
-                                ui.label(*label);
+                            for (k, (label, text)) in self.numbers.iter_mut().enumerate() {
+                                ui.label(label.as_str());
                                 ui.add(egui::TextEdit::singleline(text).desired_width(90.0));
-                                ui.label("mm");
+                                ui.label(unit(label));
+                                if variable
+                                    && label.starts_with("Radius")
+                                    && ui.button("Punkt entfernen").clicked()
+                                {
+                                    remove = Some(k / 2);
+                                }
                                 ui.end_row();
                             }
                         });
+                }
+                if let Some(k) = remove {
+                    self.remove_point(k);
+                }
+                if let Some(min) = self.min_size(state) {
+                    ui.weak(format!("Kleinstes Maß: {} mm", min_text(min)));
                 }
                 if let Some(e) = &self.error {
                     ui.add_space(4.0);
@@ -295,6 +491,7 @@ impl FeatureDialog {
     fn choices(&mut self, ui: &mut egui::Ui, state: &AppState) {
         let own = state.document.index_of(self.id).unwrap_or(0);
         let choices = self.body_choices(state);
+        let (mut switch, mut add, mut face) = (None, false, None);
         match &mut self.kind {
             FeatureKind::Extrude {
                 sketch, profile, ..
@@ -362,7 +559,64 @@ impl FeatureDialog {
                 ui.label(format!("Körper: {}", state.body_ref_name(*body)));
                 ui.add_space(4.0);
             }
+            FeatureKind::Verrunden {
+                body,
+                edges,
+                art,
+                tangentenkette,
+            } => {
+                ui.label(format!("Körper: {}", state.body_ref_name(*body)));
+                ui.label(format!("Kanten: {}", edges.len()));
+                let current = ArtChoice::of(art);
+                let options: &[ArtChoice] = if art.is_chamfer() {
+                    &[
+                        ArtChoice::FaseGleich,
+                        ArtChoice::FaseZwei,
+                        ArtChoice::FaseWinkel,
+                    ]
+                } else {
+                    &[ArtChoice::Rundung, ArtChoice::RundungVariabel]
+                };
+                for c in options {
+                    if ui.radio(current == *c, c.label()).clicked() && current != *c {
+                        switch = Some(*c);
+                    }
+                }
+                if current.uses_first_face()
+                    && let Some(e) = edges.first()
+                {
+                    let (a, b) = (e.a.role.clone(), e.b.role.clone());
+                    egui::ComboBox::from_label("Fläche 1")
+                        .selected_text(a.clone())
+                        .show_ui(ui, |ui| {
+                            for name in [&a, &b] {
+                                if ui.selectable_label(*name == a, name).clicked() {
+                                    face = Some(name.clone());
+                                }
+                            }
+                        });
+                }
+                ui.checkbox(
+                    tangentenkette,
+                    "Tangentenkette (glatt anschließende Kanten mitnehmen)",
+                );
+                if matches!(art, BlendArt::RundungVariabel { .. })
+                    && ui.button("Punkt hinzufügen").clicked()
+                {
+                    add = true;
+                }
+                ui.add_space(4.0);
+            }
             _ => {}
+        }
+        if let Some(c) = switch {
+            self.set_blend_art(c);
+        }
+        if add {
+            self.add_point();
+        }
+        if let Some(role) = face {
+            self.set_first_face(&role);
         }
     }
 }

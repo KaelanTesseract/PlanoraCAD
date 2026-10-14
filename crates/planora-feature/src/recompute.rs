@@ -248,6 +248,7 @@ impl Document {
             let consumed = |r: &BodyRef| match &f.kind {
                 FeatureKind::Boolean { target, tool, .. } => r == target || r == tool,
                 FeatureKind::Move { body, .. } => r == body,
+                FeatureKind::Verrunden { body, .. } => r == body,
                 _ => false,
             };
             // Die erste verbrauchte Stelle bleibt beim Entfernen gleich (nur Spätere fallen weg).
@@ -262,7 +263,9 @@ impl Document {
     /// Liest das Feature die sichtbaren Körper (und nicht nur seine Eingangsfeatures)?
     fn reads_visible(kind: &FeatureKind) -> bool {
         match kind {
-            FeatureKind::Boolean { .. } | FeatureKind::Move { .. } => true,
+            FeatureKind::Boolean { .. }
+            | FeatureKind::Move { .. }
+            | FeatureKind::Verrunden { .. } => true,
             FeatureKind::Sketch(s) => {
                 matches!(s.plane, SketchPlane::OnFace(_)) || !s.copies.is_empty()
             }

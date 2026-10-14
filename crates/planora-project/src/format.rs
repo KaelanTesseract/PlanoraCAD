@@ -230,6 +230,17 @@ pub struct SketchFeatureDto {
     pub kopien: Vec<EdgeCopyDto>,
 }
 
+/// Art einer Verrundung (Grad, Prozent und Millimeter wie im Feature).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum BlendArtDto {
+    Rundung { radius: f64 },
+    RundungVariabel { punkte: Vec<[f64; 2]> },
+    FaseGleich { abstand: f64 },
+    FaseZwei { abstand1: f64, abstand2: f64 },
+    FaseWinkel { abstand: f64, winkel: f64 },
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "typ", rename_all = "snake_case")]
 pub enum KindDto {
@@ -270,5 +281,11 @@ pub enum KindDto {
     Verschieben {
         koerper: BodyRefDto,
         versatz: V3,
+    },
+    Verrunden {
+        koerper: BodyRefDto,
+        kanten: Vec<EdgeRefDto>,
+        art: BlendArtDto,
+        tangentenkette: bool,
     },
 }

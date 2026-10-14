@@ -1,6 +1,7 @@
 //! PlanoraCAD – Anwendungslogik und Oberfläche.
 
 pub mod app;
+pub mod blend_dialog;
 pub mod boolean_dialog;
 pub mod browser;
 pub mod create_dialog;
