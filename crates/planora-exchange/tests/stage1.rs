@@ -110,6 +110,7 @@ fn closed_formulas_survive_the_files() {
             let (body, v_mesh) = export_body(name, solid, chord);
             let area = body.mesh.mass(&MeshTransform::IDENTITY).surface_area;
             let closed = check_mesh(&body.mesh).closed;
+            assert!(closed, "{name} {chord}: Netz nicht geschlossen");
             for back in round_trip(&body) {
                 assert_eq!(back.triangle_count(), body.mesh.triangle_count(), "{name}");
                 let m = back.mass(&MeshTransform::IDENTITY);
