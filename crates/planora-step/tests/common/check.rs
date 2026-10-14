@@ -8,8 +8,10 @@ use planora_math::DVec3;
 use planora_mesh::{TessellationOptions, tessellate};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-/// Lagetoleranz für analytische Kurven und Flächen (mm).
-pub const GEOM_TOL: f64 = 1e-7;
+/// Lagetoleranz für analytische Kurven und Flächen (mm). Gemessen an Zylinder, Kugel, Torus,
+/// Ellipse, Rohr und Bucht (bis 40 mm lang, in vier Lagen): größte Abweichung 1,4e-14; die
+/// Schranke lässt dazu rund drei Größenordnungen Spielraum für größere Maße.
+pub const GEOM_TOL: f64 = 1e-11;
 /// Lagetoleranz, wenn eine Freiformkurve oder -fläche beteiligt ist (mm); über der des Kernels
 /// (`NURBS_EDGE_TOL` = 1e-5), weil Kanten dort nur so genau auf ihren Flächen liegen.
 pub const FREEFORM_TOL: f64 = 2e-5;

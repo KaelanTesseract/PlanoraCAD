@@ -110,9 +110,32 @@ pub(crate) fn curve(e: &mut Entities, c: &Curve) -> Result<u64, StepError> {
             let a = frame_placement(e, frame)?;
             with_numbers(e, "CIRCLE", a, &[r])
         }
-        Curve::Ellipse { .. } | Curve::Nurbs(_) => {
-            Err(reject("Diese Kantenart wird noch nicht ausgegeben"))
+        Curve::Ellipse {
+            frame,
+            major,
+            minor,
+        } => {
+            let (a, b) = (
+                positive(*major, "Eine Halbachse einer Ellipse")?,
+                positive(*minor, "Eine Halbachse einer Ellipse")?,
+            );
+            if b > a {
+                // STEP legt die erste Halbachse in die Bezugsrichtung; die längere kommt dorthin
+                // (x' = y, y' = −x, derselbe Umlaufsinn um z). Der Parameter verschiebt sich um
+                // π/2; die Kante wird über ihre Eckpunkte begrenzt.
+                if !frame.is_orthonormal(FRAME_TOL) {
+                    return Err(reject(
+                        "Ein Koordinatensystem ist schief oder nicht normiert",
+                    ));
+                }
+                let p = placement(e, frame.origin, frame.z, frame.y)?;
+                with_numbers(e, "ELLIPSE", p, &[b, a])
+            } else {
+                let p = frame_placement(e, frame)?;
+                with_numbers(e, "ELLIPSE", p, &[a, b])
+            }
         }
+        Curve::Nurbs(_) => Err(reject("Diese Kantenart wird noch nicht ausgegeben")),
     }
 }
 
@@ -123,6 +146,28 @@ pub(crate) fn surface(e: &mut Entities, s: &Surface) -> Result<u64, StepError> {
             let a = frame_placement(e, frame)?;
             e.push(&format!("PLANE('',#{a})"))
         }
-        _ => Err(reject("Diese Flächenart wird noch nicht ausgegeben")),
+        Surface::Cylinder { frame, radius } => {
+            let r = positive(*radius, "Der Radius eines Zylinders")?;
+            let a = frame_placement(e, frame)?;
+            with_numbers(e, "CYLINDRICAL_SURFACE", a, &[r])
+        }
+        Surface::Sphere { frame, radius } => {
+            let r = positive(*radius, "Der Radius einer Kugel")?;
+            let a = frame_placement(e, frame)?;
+            with_numbers(e, "SPHERICAL_SURFACE", a, &[r])
+        }
+        Surface::Torus {
+            frame,
+            major,
+            minor,
+        } => {
+            let big = positive(*major, "Der große Radius eines Torus")?;
+            let small = positive(*minor, "Der kleine Radius eines Torus")?;
+            let a = frame_placement(e, frame)?;
+            with_numbers(e, "TOROIDAL_SURFACE", a, &[big, small])
+        }
+        Surface::Cone { .. } | Surface::Nurbs(_) => {
+            Err(reject("Diese Flächenart wird noch nicht ausgegeben"))
+        }
     }
 }
