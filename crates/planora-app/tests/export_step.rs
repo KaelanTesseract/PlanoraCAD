@@ -367,7 +367,7 @@ fn cancelling_while_writing_says_so_and_keeps_the_old_file() {
 }
 
 /// Zahl der Hilfsdateien („.…planora-tmp“) im Ordner.
-fn temp_files(dir: &PathBuf) -> usize {
+fn temp_files(dir: &std::path::Path) -> usize {
     fs::read_dir(dir)
         .unwrap()
         .filter(|e| {
@@ -384,7 +384,7 @@ fn temp_files(dir: &PathBuf) -> usize {
 fn start_writing_in_active_tab(
     w: &mut planora_app::workspace::Workspace,
     boxes: usize,
-    to: &PathBuf,
+    to: &std::path::Path,
 ) {
     let tab = w.active_tab_mut();
     for _ in 0..boxes {
@@ -392,7 +392,7 @@ fn start_writing_in_active_tab(
     }
     tab.state.selected_body = None;
     let mut d = step_dialog(&tab.state);
-    d.write_to(to.clone(), &tab.state);
+    d.write_to(to.to_path_buf(), &tab.state);
     tab.export_dialog = Some(d);
 }
 
