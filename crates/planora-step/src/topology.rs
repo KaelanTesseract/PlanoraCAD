@@ -135,6 +135,10 @@ pub(crate) fn write_solid(
     solid: &Solid,
 ) -> Result<WrittenSolid, StepError> {
     let shells = shell_faces(solid);
+    // ISO 10303-42: eine Hülle braucht mindestens eine Fläche.
+    if shells.is_empty() || shells.iter().any(Vec::is_empty) {
+        return Err(reject("Der Körper hat keine Flächen"));
+    }
     if shells.len() != 1 {
         return Err(reject(
             "Körper mit mehreren Schalen werden noch nicht ausgegeben",

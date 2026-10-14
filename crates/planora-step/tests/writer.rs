@@ -244,7 +244,100 @@ fn timestamps_are_utc() {
 }
 
 #[test]
-fn cancelling_during_writing_is_a_named_error() {
+fn bodies_without_faces_are_refused_and_nothing_is_written() {
+    let empty = Solid::new();
+    let mut hollow = Solid::new();
+    hollow.shells = vec![planora_kernel::Shell { faces: vec![] }];
+    for (name, solid) in [("Leer", &empty), ("Hülle ohne Flächen", &hollow)] {
+        match check_body(&body(name, solid), &Progress::new()) {
+            Err(StepError::InvalidBody { name: n, reason }) => {
+                assert_eq!(n, name);
+                assert!(reason.contains("keine Flächen"), "{reason}");
+            }
+            other => panic!("{name}: {other:?}"),
+        }
+        let mut out = Vec::new();
+        assert_eq!(
+            write_step(&[body(name, solid)], &opts(), &mut out, &Progress::new()),
+            Err(StepError::NothingToExport)
+        );
+        assert!(out.is_empty(), "nichts geschrieben");
+    }
+}
+
+/// Schreibstrom, der den Fortschritt vor jedem Eintrag festhält.
+struct Spy<'a> {
+    progress: &'a Progress,
+    seen: Vec<f32>,
+}
+
+impl std::io::Write for Spy<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.first() == Some(&b'#') {
+            self.seen.push(self.progress.fraction());
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn progress_reaches_exactly_one_only_at_the_end() {
+    let a = cube(1.0);
+    let b = cube(2.0);
+    let p = Progress::new();
+    let mut spy = Spy {
+        progress: &p,
+        seen: Vec::new(),
+    };
+    let report = write_step(&[body("A", &a), body("B", &b)], &opts(), &mut spy, &p).unwrap();
+    assert_eq!(spy.seen.len() as u64, report.entities);
+    assert!(spy.seen.iter().all(|f| *f < 1.0), "vor dem letzten Eintrag");
+    assert_eq!(p.fraction(), 1.0);
+}
+
+/// Schreibstrom, der nach `limit` Bytes den Abbruch auslöst.
+struct CancelAfter<'a> {
+    progress: &'a Progress,
+    written: usize,
+    limit: usize,
+}
+
+impl std::io::Write for CancelAfter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.written += buf.len();
+        if self.written >= self.limit {
+            self.progress.cancel();
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn cancelling_in_the_middle_of_writing_is_a_named_error() {
+    let s = cube(1.0);
+    // Mehr als zwei Prüfintervalle (4096 Einträge) an Einträgen.
+    let bodies: Vec<StepBody> = (0..60).map(|_| body("Q", &s)).collect();
+    let p = Progress::new();
+    let mut out = CancelAfter {
+        progress: &p,
+        written: 0,
+        limit: 50_000,
+    };
+    assert_eq!(
+        write_step(&bodies, &opts(), &mut out, &p),
+        Err(StepError::Cancelled)
+    );
+    assert!(out.written >= 50_000, "erst nach dem Start abgebrochen");
+}
+
+#[test]
+fn cancelling_before_writing_is_a_named_error() {
     let s = cube(1.0);
     let bodies: Vec<StepBody> = (0..40).map(|_| body("Q", &s)).collect();
     let p = Progress::new();

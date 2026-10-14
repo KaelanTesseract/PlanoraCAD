@@ -13,6 +13,11 @@ pub const SCHEMA: &str = "AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }";
 /// Name des Programms im Kopf.
 pub const SYSTEM: &str = "PlanoraCAD";
 
+/// Zahl der Einträge von [`context`] (für die Gesamtzahl des Fortschritts).
+pub(crate) const CONTEXT_ENTITIES: u64 = 9;
+/// Zahl der Einträge je Teil von [`product`] (ohne die Körper selbst).
+pub(crate) const PART_ENTITIES: u64 = 11;
+
 const SECONDS_PER_DAY: u64 = 86_400;
 const SECONDS_PER_HOUR: u64 = 3_600;
 const SECONDS_PER_MINUTE: u64 = 60;

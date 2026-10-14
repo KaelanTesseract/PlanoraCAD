@@ -165,7 +165,8 @@ pub fn write_step(
     if accepted.is_empty() {
         return Err(StepError::NothingToExport);
     }
-    progress.set_total(accepted.iter().map(|a| a.2.entities).sum());
+    let fixed = product::CONTEXT_ENTITIES + product::PART_ENTITIES * accepted.len() as u64;
+    progress.set_total(fixed + accepted.iter().map(|a| a.2.entities).sum::<u64>());
     let solids: Vec<&Solid> = accepted.iter().map(|a| a.1).collect();
     let mut e = Entities::new(out, progress);
     product::header(&mut e, &opts.file_name, opts.time)?;
