@@ -283,16 +283,16 @@ impl PlanoraApp {
 
     fn edit_menu(&mut self, ui: &mut egui::Ui) {
         let tab = self.ws.active_tab_mut();
-        // Boolesche Operationen brauchen mindestens zwei Körper.
-        let enabled = tab.state.bodies.len() >= 2;
+        // Boolesche Operationen brauchen zwei gewöhnliche Körper; Netz-Körper sind gesperrt.
+        let boolean = tab.state.boolean_blocked();
         for (label, op) in [
             ("Vereinigen …", BoolOp::Union),
             ("Abziehen …", BoolOp::Difference),
             ("Schneiden …", BoolOp::Intersection),
         ] {
             if ui
-                .add_enabled(enabled, egui::Button::new(label))
-                .on_disabled_hover_text("Dafür werden mindestens zwei Körper benötigt.")
+                .add_enabled(boolean.is_none(), egui::Button::new(label))
+                .on_disabled_hover_text(boolean.unwrap_or_default())
                 .clicked()
             {
                 if tab.state.try_close_sketch().is_ok() {
@@ -302,14 +302,14 @@ impl PlanoraApp {
             }
         }
         ui.separator();
-        let any = !tab.state.bodies.is_empty();
+        let blend = tab.state.blend_blocked();
         for (label, dialog) in [
             ("Verrunden …", BlendDialog::fillet()),
             ("Fase …", BlendDialog::chamfer()),
         ] {
             if ui
-                .add_enabled(any, egui::Button::new(label))
-                .on_disabled_hover_text("Dafür wird mindestens ein Körper benötigt.")
+                .add_enabled(blend.is_none(), egui::Button::new(label))
+                .on_disabled_hover_text(blend.unwrap_or_default())
                 .clicked()
             {
                 if tab.state.try_close_sketch().is_ok() {
@@ -390,12 +390,13 @@ impl PlanoraApp {
                 .map(|_| (body, face)),
             _ => None,
         };
+        let blocked = state.sketch_on_face_blocked();
         if ui
             .add_enabled(
-                face.is_some(),
+                blocked.is_none(),
                 egui::Button::new("Skizze auf gewählter Fläche"),
             )
-            .on_disabled_hover_text("Dafür zuerst eine ebene Fläche eines Körpers anklicken.")
+            .on_disabled_hover_text(blocked.unwrap_or_default())
             .clicked()
             && let Some((body, face)) = face
         {

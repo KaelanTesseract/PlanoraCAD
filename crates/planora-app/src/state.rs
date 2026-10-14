@@ -1642,6 +1642,9 @@ fn body_kind(doc: &Document, r: BodyRef) -> BodyKind {
 /// Bezeichnung (und Namensstamm) eingelesener Netze.
 const MESH_LABEL: &str = "Netz-Körper";
 
+/// Hinweis an ausgegrauten Menüpunkten bei gewähltem Netz-Körper (Spec §6).
+pub const MESH_LOCKED_HINT: &str = "Netz-Körper lassen sich nicht bearbeiten.";
+
 /// Schreibt die Lage `t` in einen Netz-Körper.
 fn set_transform(kind: &mut FeatureKind, t: MeshTransform) {
     if let FeatureKind::MeshBody {
@@ -1666,6 +1669,47 @@ impl AppState {
     /// Ist der gewählte Körper ein Netz-Körper?
     pub fn selected_is_mesh(&self) -> bool {
         self.selected_body.is_some_and(|i| self.is_mesh(i))
+    }
+
+    /// Warum „Vereinigen“, „Abziehen“ und „Schneiden“ gerade nicht gehen (`None`: sie gehen).
+    pub fn boolean_blocked(&self) -> Option<&'static str> {
+        if self.selected_is_mesh() {
+            Some(MESH_LOCKED_HINT)
+        } else if self.solid_body_count() < 2 {
+            Some("Dafür werden mindestens zwei Körper benötigt.")
+        } else {
+            None
+        }
+    }
+
+    /// Warum „Verrunden“ und „Fase“ gerade nicht gehen (`None`: sie gehen).
+    pub fn blend_blocked(&self) -> Option<&'static str> {
+        if self.selected_is_mesh() {
+            Some(MESH_LOCKED_HINT)
+        } else if self.solid_body_count() == 0 {
+            Some("Dafür wird mindestens ein Körper benötigt.")
+        } else {
+            None
+        }
+    }
+
+    /// Warum „Skizze auf gewählter Fläche“ gerade nicht geht (`None`: es geht).
+    pub fn sketch_on_face_blocked(&self) -> Option<&'static str> {
+        if self.selected_is_mesh() {
+            return Some(MESH_LOCKED_HINT);
+        }
+        let planar = match self.selection {
+            Some(Pick::Face(FaceRef { body, face })) => self
+                .bodies
+                .get(body)
+                .is_some_and(|b| plane_of_face(&b.solid, face).is_some()),
+            _ => false,
+        };
+        if planar {
+            None
+        } else {
+            Some("Dafür zuerst eine ebene Fläche eines Körpers anklicken.")
+        }
     }
 
     /// Anzahl der sichtbaren Körper, die keine Netz-Körper sind.
