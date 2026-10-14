@@ -15,6 +15,9 @@ pub const ORTHO_TOL: f64 = 1e-9;
 const CURVE_SAMPLES_PER_CONTROL: usize = 16;
 /// Schritte der Intervallschachtelung nach der groben Probe (Kurve).
 const CURVE_REFINE_STEPS: usize = 80;
+/// Newton-Schritte für den Fußpunkt auf einer Ellipse (quadratische Annäherung vom Startwinkel;
+/// jeder Schritt wird nur angenommen, wenn der Abstand sinkt).
+const ELLIPSE_NEWTON_STEPS: usize = 8;
 /// Rasterpunkte je Knotenabschnitt und Richtung bei der Suche des nächsten Flächenpunkts.
 const SURFACE_GRID_PER_SPAN: usize = 8;
 /// Mindestzahl der Rasterpunkte je Richtung.
@@ -416,8 +419,28 @@ impl Crv {
                 l.y.atan2(l.x)
             }
             Crv::Ellipse { a, r1, r2 } => {
+                // Startwert: Winkel im auf einen Kreis gestreckten Raum (für Punkte auf der
+                // Ellipse genau). Bei sehr schlanken Ellipsen vergrößert das Strecken Rundungs-
+                // fehler um das Achsenverhältnis, daher Newton auf dem echten Abstand.
                 let l = a.local(q);
-                (l.y / r2).atan2(l.x / r1)
+                let mut t = (l.y / r2).atan2(l.x / r1);
+                let mut best = self.point(t).distance(q);
+                for _ in 0..ELLIPSE_NEWTON_STEPS {
+                    let c = self.point(t) - q;
+                    let d1 = self.tangent(t);
+                    let d2 = -(c + q - a.origin);
+                    let denom = d1.dot(d1) + c.dot(d2);
+                    if denom <= 0.0 {
+                        break;
+                    }
+                    let next = t - c.dot(d1) / denom;
+                    let dist = self.point(next).distance(q);
+                    if dist >= best {
+                        break;
+                    }
+                    (t, best) = (next, dist);
+                }
+                t
             }
             Crv::Spline(s) => {
                 let (lo, hi) = s.domain();

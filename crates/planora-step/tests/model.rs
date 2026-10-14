@@ -351,3 +351,24 @@ fn the_model_names_a_knot_type_other_than_unspecified() {
         "zusammengesetzte Form geprüft"
     );
 }
+
+#[test]
+fn the_distance_to_a_very_slender_ellipse_is_not_amplified_by_its_shape() {
+    // Halbachsen 2080 und 3,2 (Verhältnis über 600, wie bei einem streifenden Schnitt): Ein
+    // Punkt 1e-12 neben der Kurve muss auch diesen Abstand ergeben, nicht das Vielfache.
+    const OFF: f64 = 1e-12;
+    let c = Crv::Ellipse {
+        a: Axis {
+            origin: DVec3::new(1000.0, 17.0, -16.0),
+            ..world()
+        },
+        r1: 2080.0,
+        r2: 3.2,
+    };
+    for t in [2.6, 3.0, 3.1, 3.3, 4.0, 5.5] {
+        let n = c.tangent(t).cross(DVec3::Z).normalize();
+        let q = c.point(t) + n * OFF;
+        let d = c.distance(q);
+        assert!((d - OFF).abs() < OFF / 10.0, "t = {t}: {d}");
+    }
+}
