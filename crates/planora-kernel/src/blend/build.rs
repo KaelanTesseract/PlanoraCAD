@@ -794,7 +794,7 @@ fn check_crossings(
 }
 
 /// Achsenparalleler Quader (kleinste, größte Ecke).
-type Aabb = (DVec3, DVec3);
+pub(super) type Aabb = (DVec3, DVec3);
 
 /// Komponentenweise Schranke für `|a cos t + b sin t|` über alle `t`: `sqrt(a_i² + b_i²)`.
 fn swing(a: DVec3, b: DVec3) -> DVec3 {
@@ -805,7 +805,7 @@ fn swing(a: DVec3, b: DVec3) -> DVec3 {
 /// (unabhängig vom Parameterbereich), Freiformkurven über die Hülle ihrer Kontrollpunkte (bei
 /// positiven Gewichten liegt die Kurve in deren konvexer Hülle; `Seg::sound_box`). `None` bei
 /// nicht endlichen Zahlen (dann kein Vorfilter).
-fn seg_box(seg: &Seg) -> Option<Aabb> {
+pub(super) fn seg_box(seg: &Seg) -> Option<Aabb> {
     let around = |c: DVec3, h: DVec3| Some((c - h, c + h));
     match &seg.curve {
         Curve::Line { .. } => {
@@ -895,7 +895,7 @@ fn corner_box(piece: &Piece) -> Option<Aabb> {
 
 /// Liegen die Quader mehr als `margin` auseinander? NaN gilt als „nicht“.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn apart(a: &Aabb, b: &Aabb, margin: f64) -> bool {
+pub(super) fn apart(a: &Aabb, b: &Aabb, margin: f64) -> bool {
     let gap = (b.0 - a.1).max(a.0 - b.1);
     gap.x > margin || gap.y > margin || gap.z > margin
 }
@@ -944,7 +944,20 @@ fn check_piercing(
         let (lo, hi) = (seg.t0.min(seg.t1), seg.t0.max(seg.t1));
         let hit = match curve_surface_roots(&seg.curve, lo, hi, &blend.surface, tol) {
             CurveSurface::Roots(rs) => rs.iter().any(|r| hit_at(seg, seg.curve.point(r.t))),
-            CurveSurface::Lies => inside(seg.at(0.5)),
+            // Das Stück liegt ganz auf der Trägerfläche: an seinen Kreuzungen mit dem Rand der
+            // Rundungsfläche teilen und jedes Teilstück an seiner Mitte befragen (früher nur die
+            // Mitte des ganzen Stücks, Ledger Task 4).
+            CurveSurface::Lies => {
+                let mut fs: Vec<f64> = blend
+                    .outer
+                    .iter()
+                    .flat_map(|b| seg_intersections(seg, b, tol))
+                    .map(|(f, _)| f)
+                    .chain([0.0, 1.0])
+                    .collect();
+                fs.sort_by(f64::total_cmp);
+                fs.windows(2).any(|w| inside(seg.at(0.5 * (w[0] + w[1]))))
+            }
         };
         if hit {
             return Err(in_blend_area(&format!("Die Fläche „{face}“")));
@@ -1025,7 +1038,9 @@ pub fn assemble(
     }
     let mut pieces: Vec<Piece> = Vec::with_capacity(solid.faces.len() + geoms.len());
     let mut names: Vec<String> = Vec::with_capacity(solid.faces.len());
+    let mut fids: Vec<Id<Face>> = Vec::with_capacity(solid.faces.len());
     for (fid, face) in solid.faces.iter() {
+        fids.push(fid);
         let g = face_geom(solid, fid);
         let name = face_name(solid, fid);
         let mut loops: Vec<Vec<Seg>> = Vec::with_capacity(g.loops.len());
@@ -1114,6 +1129,43 @@ pub fn assemble(
         }
     }
     pieces.extend(plan.corners.iter().cloned());
+    // Fläche gegen Fläche (K1): Das Innere einer behaltenen Fläche (etwa einer Kugeltasche) kann
+    // die neue Fläche schneiden, ohne dass eine Kante sie trifft; ebenso zwei neue Flächen
+    // untereinander. Die beiden Nachbarflächen einer Rundung berühren sie längs der Berührkurven
+    // tangential (durch die Konstruktion und die Krümmungsprüfungen abgedeckt) und entfallen.
+    let mut new_names: Vec<String> = roles.to_vec();
+    new_names.extend(plan.corners.iter().map(|c| {
+        c.tag
+            .as_ref()
+            .map_or_else(|| "Ecke".to_string(), |t| t.role.clone())
+    }));
+    for (n, new_name) in new_names.iter().enumerate() {
+        let blend = &pieces[kept + n];
+        let sides: Vec<Id<Face>> = geoms
+            .get(n)
+            .map(|g| vec![g.sides.a.face, g.sides.b.face])
+            .unwrap_or_default();
+        let others = (0..kept)
+            .filter(|&k| !sides.contains(&fids[k]))
+            .map(|k| (k, &names[k]))
+            .chain(((kept + n + 1)..pieces.len()).map(|m| (m, &new_names[m - kept])));
+        for (k, name) in others {
+            super::march::check_budget()?;
+            match super::overlap::crossing(&pieces[k], blend, tol, &btol) {
+                super::overlap::Crossing::Clear => {}
+                super::overlap::Crossing::Hit => {
+                    return Err(in_blend_area(&format!("Die Fläche „{name}“")));
+                }
+                super::overlap::Crossing::Unknown => {
+                    return Err(BlendError::Unsupported(format!(
+                        "Die Fläche „{name}“ kommt der neuen Fläche „{new_name}“ nahe; ob sie \
+                         sich durchdringen, lässt sich nicht sicher prüfen. Bitte ein kleineres \
+                         Maß wählen"
+                    )));
+                }
+            }
+        }
+    }
     super::march::check_budget()?;
     let result = sew(pieces, tol).map_err(|e| BlendError::ResultInvalid(e.to_string()))?;
     validate_with(&result, tol).map_err(|e| BlendError::ResultInvalid(e.to_string()))?;

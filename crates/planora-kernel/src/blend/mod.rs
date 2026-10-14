@@ -7,6 +7,7 @@ pub mod chain;
 pub mod corner;
 pub mod error;
 pub mod march;
+mod overlap;
 pub mod section;
 pub mod topo;
 
