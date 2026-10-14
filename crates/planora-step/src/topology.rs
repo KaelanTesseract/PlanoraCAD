@@ -6,6 +6,8 @@ use crate::entity::{Entities, logical, refs};
 use crate::error::StepError;
 use crate::geometry::{self, reject};
 use planora_kernel::{Edge, Face, Id, Loop, Solid, Vertex};
+use planora_math::DVec3;
+use planora_mesh::{TessellationOptions, tessellate};
 
 /// Ergebnis eines geschriebenen Körpers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -100,35 +102,146 @@ impl<'s> TopoWriter<'s> {
         e.push(&format!("EDGE_LOOP('',{})", refs(&oriented)))
     }
 
-    /// `ADVANCED_FACE`; die äußere Schleife wird `FACE_OUTER_BOUND`, Löcher `FACE_BOUND`.
-    fn face(&mut self, e: &mut Entities, id: Id<Face>) -> Result<u64, StepError> {
+    /// `ADVANCED_FACE`; die äußere Schleife wird `FACE_OUTER_BOUND`, Löcher `FACE_BOUND`. Mit
+    /// `reversed` wird die Fläche umgekehrt geschrieben (`same_sense` und die Richtung der
+    /// Ränder gekippt), für die Schalen von Hohlräumen.
+    fn face(&mut self, e: &mut Entities, id: Id<Face>, reversed: bool) -> Result<u64, StepError> {
         let f = &self.solid.faces[id];
         let surface = geometry::surface(e, &f.surface, f.patch)?;
+        let along = logical(!reversed);
         let mut bounds = Vec::with_capacity(1 + f.inner.len());
         let outer = self.edge_loop(e, &f.outer)?;
-        bounds.push(e.push(&format!("FACE_OUTER_BOUND('',#{outer},.T.)"))?);
+        bounds.push(e.push(&format!("FACE_OUTER_BOUND('',#{outer},{along})"))?);
         for lp in &f.inner {
             let inner = self.edge_loop(e, lp)?;
-            bounds.push(e.push(&format!("FACE_BOUND('',#{inner},.T.)"))?);
+            bounds.push(e.push(&format!("FACE_BOUND('',#{inner},{along})"))?);
         }
-        let sense = logical(f.same_sense);
+        let sense = logical(f.same_sense != reversed);
         e.push(&format!(
             "ADVANCED_FACE('',{},#{surface},{sense})",
             refs(&bounds)
         ))
     }
 
-    fn closed_shell(&mut self, e: &mut Entities, faces: &[Id<Face>]) -> Result<u64, StepError> {
+    fn closed_shell(
+        &mut self,
+        e: &mut Entities,
+        faces: &[Id<Face>],
+        reversed: bool,
+    ) -> Result<u64, StepError> {
         let mut ids = Vec::with_capacity(faces.len());
         for &f in faces {
-            ids.push(self.face(e, f)?);
+            ids.push(self.face(e, f, reversed)?);
         }
         e.push(&format!("CLOSED_SHELL('',{})", refs(&ids)))
     }
 }
 
-/// Schreibt den Körper als `MANIFOLD_SOLID_BREP` mit dem Namen `name` (schon als
-/// STEP-Zeichenkette).
+/// Ein zusammenhängendes Stück: äußere Schale und die Hohlräume darin (Indizes in
+/// [`shell_faces`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Lump {
+    pub outer: usize,
+    pub voids: Vec<usize>,
+}
+
+/// Sehnentoleranz (mm) des Netzes, mit dem die Schalen eines Körpers mit mehreren Schalen nach
+/// dem Vorzeichen ihres Volumens unterschieden werden (grob genügt: es zählen nur das Vorzeichen
+/// und ob ein Punkt innen liegt).
+pub const CLASSIFY_CHORD: f64 = 0.05;
+/// Ab diesem Wert der Umlaufzahl liegt ein Punkt innerhalb einer Schale (innen 1, außen 0).
+const INSIDE_WINDING: f64 = 0.5;
+
+/// Raumwinkel des Dreiecks `a, b, c`, von `p` aus gesehen (Formel von Van Oosterom und
+/// Strackee).
+fn solid_angle(p: DVec3, a: DVec3, b: DVec3, c: DVec3) -> f64 {
+    let (a, b, c) = (a - p, b - p, c - p);
+    let (la, lb, lc) = (a.length(), b.length(), c.length());
+    let det = a.dot(b.cross(c));
+    let div = la * lb * lc + a.dot(b) * lc + a.dot(c) * lb + b.dot(c) * la;
+    2.0 * det.atan2(div)
+}
+
+/// Teilt die Schalen eines Körpers in Stücke (Spec §3, Volumenvorzeichen): Schalen mit positivem
+/// Volumen sind äußere Schalen, mit negativem Hohlräume. Jeder Hohlraum gehört zur kleinsten
+/// äußeren Schale, in der sein erster Eckpunkt liegt (Umlaufzahl des Netzes). Ein Körper mit
+/// einer Schale braucht kein Netz.
+pub(crate) fn lumps(solid: &Solid) -> Result<Vec<Lump>, StepError> {
+    let shells = shell_faces(solid);
+    if shells.len() == 1 {
+        return Ok(vec![Lump {
+            outer: 0,
+            voids: Vec::new(),
+        }]);
+    }
+    let mesh = tessellate(
+        solid,
+        &TessellationOptions {
+            chord_tolerance: CLASSIFY_CHORD,
+        },
+    )
+    .map_err(|e| {
+        reject(&format!(
+            "Die Schalen lassen sich nicht unterscheiden ({e})"
+        ))
+    })?;
+    let mut shell_of = vec![usize::MAX; solid.faces.len()];
+    for (k, faces) in shells.iter().enumerate() {
+        for f in faces {
+            shell_of[f.index()] = k;
+        }
+    }
+    let (lo, hi) = mesh
+        .positions
+        .iter()
+        .fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), p| {
+            (lo.min(*p), hi.max(*p))
+        });
+    let o = 0.5 * (lo + hi);
+    let mut volume = vec![0.0; shells.len()];
+    let mut triangles: Vec<Vec<[DVec3; 3]>> = vec![Vec::new(); shells.len()];
+    for r in &mesh.face_ranges {
+        let k = shell_of[r.face.index()];
+        let start = r.first_index as usize;
+        let end = start + r.index_count as usize;
+        for t in mesh.indices[start..end].as_chunks::<3>().0 {
+            let p = t.map(|i| mesh.positions[i as usize]);
+            volume[k] += (p[0] - o).dot((p[1] - o).cross(p[2] - o)) / 6.0;
+            triangles[k].push(p);
+        }
+    }
+    if volume.iter().any(|v| !v.is_finite() || *v == 0.0) {
+        return Err(reject("Eine Schale hat kein Volumen"));
+    }
+    let mut out: Vec<Lump> = (0..shells.len())
+        .filter(|&k| volume[k] > 0.0)
+        .map(|outer| Lump {
+            outer,
+            voids: Vec::new(),
+        })
+        .collect();
+    for void in (0..shells.len()).filter(|&k| volume[k] < 0.0) {
+        let he = solid.faces[shells[void][0]].outer.half_edges[0];
+        let p = solid.vertices[solid.half_edge_start(he)].point;
+        let inside = |k: usize| {
+            let w: f64 = triangles[k]
+                .iter()
+                .map(|t| solid_angle(p, t[0], t[1], t[2]))
+                .sum();
+            w / (4.0 * std::f64::consts::PI) > INSIDE_WINDING
+        };
+        let owner = (0..out.len())
+            .filter(|&i| inside(out[i].outer))
+            .min_by(|&a, &b| volume[out[a].outer].total_cmp(&volume[out[b].outer]))
+            .ok_or_else(|| reject("Ein Hohlraum liegt in keinem Teil des Körpers"))?;
+        out[owner].voids.push(void);
+    }
+    Ok(out)
+}
+
+/// Schreibt den Körper (Spec §3): je Stück ein `MANIFOLD_SOLID_BREP`, mit Hohlräumen ein
+/// `BREP_WITH_VOIDS` (Hohlräume als `ORIENTED_CLOSED_SHELL` mit `.F.`; ihre Schale wird dafür
+/// umgekehrt geschrieben). `name` ist schon eine STEP-Zeichenkette.
 pub(crate) fn write_solid(
     e: &mut Entities,
     name: &str,
@@ -139,17 +252,27 @@ pub(crate) fn write_solid(
     if shells.is_empty() || shells.iter().any(Vec::is_empty) {
         return Err(reject("Der Körper hat keine Flächen"));
     }
-    if shells.len() != 1 {
-        return Err(reject(
-            "Körper mit mehreren Schalen werden noch nicht ausgegeben",
-        ));
-    }
     let mut w = TopoWriter::new(solid);
-    let shell = w.closed_shell(e, &shells[0])?;
-    let brep = e.push(&format!("MANIFOLD_SOLID_BREP({name},#{shell})"))?;
+    let mut items = Vec::new();
+    for lump in lumps(solid)? {
+        let outer = w.closed_shell(e, &shells[lump.outer], false)?;
+        if lump.voids.is_empty() {
+            items.push(e.push(&format!("MANIFOLD_SOLID_BREP({name},#{outer})"))?);
+            continue;
+        }
+        let mut voids = Vec::with_capacity(lump.voids.len());
+        for &v in &lump.voids {
+            let shell = w.closed_shell(e, &shells[v], true)?;
+            voids.push(e.push(&format!("ORIENTED_CLOSED_SHELL('',*,#{shell},.F.)"))?);
+        }
+        items.push(e.push(&format!(
+            "BREP_WITH_VOIDS({name},#{outer},{})",
+            refs(&voids)
+        ))?);
+    }
     Ok(WrittenSolid {
-        items: vec![brep],
-        faces: shells[0].len(),
+        items,
+        faces: shells.iter().map(Vec::len).sum(),
         edges: w.edge_count,
     })
 }

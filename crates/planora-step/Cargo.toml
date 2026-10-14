@@ -10,10 +10,8 @@ publish.workspace = true
 planora-math.workspace = true
 planora-kernel.workspace = true
 planora-exchange.workspace = true
-thiserror.workspace = true
-
-[dev-dependencies]
 planora-mesh.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true
