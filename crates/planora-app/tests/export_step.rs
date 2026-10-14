@@ -465,3 +465,260 @@ fn an_empty_body_name_becomes_a_numbered_body_in_messages() {
     assert!(p.rejected[0].starts_with("„Körper 1“ wird nicht ausgegeben: "));
     assert_eq!(p.skipped_meshes, vec!["Körper 2".to_string()]);
 }
+
+/// Viele Quader, damit Vernetzen und Schreiben beim Zeichnen sicher noch laufen.
+fn big_state() -> AppState {
+    let mut s = AppState::new();
+    for _ in 0..300 {
+        s.create_box(DVec3::splat(3.0)).unwrap();
+    }
+    s.selected_body = None;
+    s
+}
+
+/// Zeichnet `n` Bilder und liefert die Texte des letzten.
+fn draw_frames(d: &mut ExportDialog, s: &mut AppState, n: usize) -> String {
+    let ctx = context();
+    let mut last = None;
+    let mut text = String::new();
+    for _ in 0..n {
+        let out = ctx.run_ui(wide(), |ui| {
+            assert!(d.show(ui.ctx(), s, &mut last));
+        });
+        text = collect_texts(&out);
+        out.drop_without_applying_deltas();
+    }
+    text
+}
+
+#[test]
+fn the_cancel_button_belongs_to_the_running_write_not_to_the_chosen_format() {
+    let mut s = big_state();
+    let dir = temp_dir("abbrechen-format");
+    let mut d = ExportDialog::new(&s);
+    d.tick(&s, true);
+    d.format = ExportFormat::Step;
+    d.tick(&s, true);
+    d.write_to(dir.join("k.step"), &s);
+    d.format = ExportFormat::Mesh(Format::Stl);
+    let text = draw_frames(&mut d, &mut s, 2);
+    assert!(d.is_writing_step(), "das Schreiben muss noch laufen");
+    assert!(text.contains("Die Datei wird geschrieben"), "{text}");
+    assert!(text.contains("Abbrechen"), "{text}");
+    d.cancel_write();
+    d.tick(&s, true);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_result_arriving_after_a_format_change_is_not_shown_in_the_other_format() {
+    let mut s = mixed_state();
+    let dir = temp_dir("anderes-format");
+    let mut d = step_dialog(&s);
+    d.write_to(dir.join("k.step"), &s);
+    d.format = ExportFormat::Mesh(Format::Stl);
+    d.tick(&s, true);
+    assert_eq!(d.write_state(), WriteState::Idle);
+    let text = draw(&mut d, &mut s);
+    assert!(!text.contains("Fertig"), "{text}");
+    d.format = ExportFormat::Step;
+    assert!(matches!(d.write_state(), WriteState::Done(..)));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Treiber: ein Fenster, steigende Zeit; liefert die Texte und die Mitte des Textes `find`.
+struct Clicker {
+    ctx: egui::Context,
+    time: f64,
+}
+
+impl Clicker {
+    fn frame(
+        &mut self,
+        d: &mut ExportDialog,
+        s: &mut AppState,
+        events: Vec<egui::Event>,
+        find: &str,
+    ) -> (String, Option<egui::Pos2>) {
+        self.time += 0.05;
+        let mut input = wide();
+        input.events = events;
+        input.time = Some(self.time);
+        let mut dir = None;
+        let out = self.ctx.run_ui(input, |ui| {
+            d.show(ui.ctx(), s, &mut dir);
+        });
+        let mut found = None;
+        fn walk(sh: &egui::epaint::Shape, find: &str, found: &mut Option<egui::Pos2>) {
+            match sh {
+                egui::epaint::Shape::Text(t) if t.galley.text().contains(find) => {
+                    *found = Some(t.pos + egui::vec2(8.0, t.galley.size().y / 2.0));
+                }
+                egui::epaint::Shape::Vec(v) => v.iter().for_each(|x| walk(x, find, found)),
+                _ => {}
+            }
+        }
+        for c in &out.shapes {
+            walk(&c.shape, find, &mut found);
+        }
+        let text = collect_texts(&out);
+        out.drop_without_applying_deltas();
+        (text, found)
+    }
+
+    /// Klickt auf den Text `find` und liefert die Texte des letzten Bildes.
+    fn click(&mut self, d: &mut ExportDialog, s: &mut AppState, find: &str) -> String {
+        self.frame(d, s, vec![], find);
+        let (_, pos) = self.frame(d, s, vec![], find);
+        let p = pos.unwrap_or_else(|| panic!("„{find}“ nicht sichtbar"));
+        let button = |pressed| egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for ev in [egui::Event::PointerMoved(p), button(true), button(false)] {
+            self.frame(d, s, vec![ev], find);
+        }
+        self.frame(d, s, vec![], find);
+        self.frame(d, s, vec![], find).0
+    }
+}
+
+#[test]
+fn clicking_another_format_removes_the_done_line() {
+    let mut s = mixed_state();
+    let dir = temp_dir("klick");
+    let mut d = step_dialog(&s);
+    d.write_to(dir.join("k.step"), &s);
+    d.tick(&s, true);
+    let mut c = Clicker {
+        ctx: context(),
+        time: 0.0,
+    };
+    c.frame(&mut d, &mut s, vec![], "x");
+    let text = c.frame(&mut d, &mut s, vec![], "x").0;
+    assert!(text.contains("Fertig"), "{text}");
+    let text = c.click(&mut d, &mut s, "STL – für den 3D-Druck");
+    assert_eq!(d.format, ExportFormat::Mesh(Format::Stl));
+    assert!(!text.contains("Fertig"), "{text}");
+    let text = c.click(&mut d, &mut s, STEP_LABEL);
+    assert_eq!(d.format, ExportFormat::Step);
+    assert!(
+        !text.contains("Fertig"),
+        "die Meldung gehört nicht mehr dazu:\n{text}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cancelling_and_recomputing_in_step_leave_the_mesh_result_alone() {
+    let s = big_state();
+    let mut d = ExportDialog::new(&s);
+    d.tick(&s, false);
+    d.format = ExportFormat::Step;
+    d.cancel();
+    d.format = ExportFormat::Mesh(Format::Stl);
+    d.tick(&s, true);
+    assert!(
+        matches!(d.status(&s), ExportStatus::Ready { .. }),
+        "{:?}",
+        d.status(&s)
+    );
+    d.format = ExportFormat::Step;
+    d.recompute();
+    d.format = ExportFormat::Mesh(Format::Stl);
+    assert!(
+        matches!(d.status(&s), ExportStatus::Ready { .. }),
+        "das Netz rechnet nicht neu"
+    );
+}
+
+#[test]
+fn a_typed_stp_ending_becomes_step() {
+    let s = mixed_state();
+    let dir = temp_dir("stp");
+    let mut d = step_dialog(&s);
+    d.write_to(dir.join("x.STP"), &s);
+    d.tick(&s, true);
+    assert!(matches!(d.write_state(), WriteState::Done(p, _) if p == dir.join("x.step")));
+    assert!(dir.join("x.step").exists());
+    assert!(!dir.join("x.STP.step").exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_stp_name_asks_before_replacing_the_existing_step_file() {
+    let s = mixed_state();
+    let dir = temp_dir("stp-ersetzen");
+    fs::write(dir.join("x.step"), "alt").unwrap();
+    let mut d = step_dialog(&s);
+    d.begin_save(dir.clone(), &s);
+    d.accept_chosen(dir.join("x.stp"), &s);
+    assert!(d.chooser().is_some_and(|c| c.asks_to_replace()));
+    assert_eq!(d.write_state(), WriteState::Idle);
+    assert_eq!(fs::read_to_string(dir.join("x.step")).unwrap(), "alt");
+    d.accept_chosen(dir.join("x.step"), &s);
+    d.tick(&s, true);
+    assert!(matches!(d.write_state(), WriteState::Done(..)));
+    assert!(d.chooser().is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_disabled_export_button_says_why_when_nothing_can_be_written() {
+    let mut s = AppState::new();
+    s.import_mesh("Würfel", Arc::new(cube()), 1.0).unwrap();
+    let d = step_dialog(&s);
+    assert_eq!(disabled_hint(&d.status(&s)), STEP_NOTHING);
+    assert_eq!(
+        disabled_hint(&ExportStatus::Computing(0.5)),
+        "Erst möglich, wenn die Berechnung fertig ist."
+    );
+}
+
+#[test]
+fn long_names_are_shortened_in_lists_and_reported_after_writing() {
+    let long = "A".repeat(300);
+    let mut s = mixed_state();
+    s.bodies[0].name = long.clone();
+    let dir = temp_dir("lang");
+    let mut d = step_dialog(&s);
+    assert_eq!(d.shortened_names(&s), vec![format!("{}…", "A".repeat(40))]);
+    d.write_to(dir.join("k.step"), &s);
+    d.tick(&s, true);
+    let text = draw(&mut d, &mut s);
+    assert!(
+        text.contains("Name gekürzt (höchstens 256 Zeichen in der Datei)"),
+        "{text}"
+    );
+    assert!(text.contains(&format!("„{}…“", "A".repeat(40))), "{text}");
+    assert!(!text.contains(&"A".repeat(41)), "{text}");
+    let file = fs::read_to_string(dir.join("k.step")).unwrap();
+    let a256 = "A".repeat(256);
+    assert!(file.contains(&format!("PRODUCT('{a256}',")));
+    assert!(!file.contains(&"A".repeat(257)));
+    let mut open = AnalyticKernel::default()
+        .make_box(DVec3::splat(1.0))
+        .unwrap();
+    let f = open.faces.iter().next().unwrap().0;
+    open.faces[f].outer.half_edges.pop();
+    let items = vec![
+        ExportItem {
+            name: "B".repeat(100),
+            source: ExportSource::Solid(open),
+        },
+        ExportItem {
+            name: "C".repeat(100),
+            source: ExportSource::Mesh(
+                Arc::new(cube()),
+                planora_exchange::MeshTransform::default(),
+            ),
+        },
+    ];
+    let p = prepare_step(&items, &Progress::new()).unwrap();
+    let b40 = "B".repeat(40);
+    assert!(p.rejected[0].starts_with(&format!("„{b40}…“ wird nicht ausgegeben: ")));
+    assert_eq!(p.skipped_meshes, vec![format!("{}…", "C".repeat(40))]);
+    let _ = fs::remove_dir_all(&dir);
+}
