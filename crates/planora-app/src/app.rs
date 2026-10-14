@@ -2,6 +2,7 @@ use crate::blend_dialog::BlendDialog;
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
 use crate::dock::{Dock, Pane};
+use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
 use crate::projects_panel::ProjectsUi;
 use crate::state::{AppState, SketchRequest, StandardPlane};
@@ -159,6 +160,16 @@ impl PlanoraApp {
         });
     }
 
+    /// Datei → Exportieren … (Strg+Umschalt+E): öffnet das Fenster, wenn es Körper gibt; eine
+    /// offene Skizze wird vorher beendet. Auch in schreibgeschützten Ansichten möglich.
+    fn open_export(&mut self) {
+        let tab = self.ws.active_tab_mut();
+        if tab.state.bodies.is_empty() || tab.state.try_close_sketch().is_err() {
+            return;
+        }
+        tab.export_dialog = Some(ExportDialog::new(&tab.state));
+    }
+
     fn file_menu(&mut self, ui: &mut egui::Ui) {
         let read_only = self.ws.active_tab().read_only;
         if ui.button("Neu              Strg+N").clicked() {
@@ -182,6 +193,16 @@ impl PlanoraApp {
             .clicked()
         {
             self.begin_save(true);
+            ui.close();
+        }
+        ui.separator();
+        let any = !self.ws.active_tab().state.bodies.is_empty();
+        if ui
+            .add_enabled(any, egui::Button::new("Exportieren …   Strg+Umschalt+E"))
+            .on_disabled_hover_text("Es gibt noch keinen Körper.")
+            .clicked()
+        {
+            self.open_export();
             ui.close();
         }
         ui.separator();
@@ -407,7 +428,7 @@ impl PlanoraApp {
         }
     }
 
-    /// Tastenkürzel Strg+N/O/S/W. Nur ohne aktives Eingabefeld, ohne offene Rückfrage (die
+    /// Tastenkürzel Strg+N/O/S/W und Strg+Umschalt+E. Nur ohne aktives Eingabefeld, ohne offene Rückfrage (die
     /// sonst überschrieben würde) und nur im ersten Durchgang eines Bildes (ein verworfener
     /// Durchgang würde das Kürzel sonst zweimal ausführen).
     fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -431,6 +452,15 @@ impl PlanoraApp {
         if pressed(egui::Key::W) {
             let i = self.ws.active;
             self.ws.request_close(i);
+        }
+        let export = ctx.input_mut(|i| {
+            i.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::E,
+            ))
+        });
+        if export {
+            self.open_export();
         }
     }
 }
@@ -547,7 +577,9 @@ impl eframe::App for PlanoraApp {
             self.dock.tree.ui(&mut behavior, ui);
         });
 
-        // Das Projekt-Panel kann den aktiven Tab gewechselt haben (Dokument geöffnet).
+        // Das Projekt-Panel kann den aktiven Tab gewechselt haben (Dokument geöffnet). Der
+        // Ordner der Dateiauswahl wird für die Fenster kurz herausgenommen.
+        let mut exchange_dir = self.ws.exchange_dir.take();
         let tab = self.ws.active_tab_mut();
         if let Some(dialog) = dialog_for_request(&mut tab.state) {
             tab.dialog = Some(dialog);
@@ -559,6 +591,7 @@ impl eframe::App for PlanoraApp {
         if tab.state.sketch_session.is_some() {
             tab.feature_dialog = None;
             tab.blend_dialog = None;
+            tab.export_dialog = None;
         }
         sketch_panel::show(&ctx, &mut tab.state);
         if let Some(mut dialog) = tab.dialog.take()
@@ -581,11 +614,17 @@ impl eframe::App for PlanoraApp {
         {
             tab.blend_dialog = Some(dialog);
         }
+        if let Some(mut dialog) = tab.export_dialog.take()
+            && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
+        {
+            tab.export_dialog = Some(dialog);
+        }
         if tab.blend_dialog.is_none() && tab.state.edge_picking {
             tab.state.edge_picking = false;
             tab.state.clear_edge_marks();
         }
 
+        self.ws.exchange_dir = exchange_dir;
         self.ws.refresh_prompts();
         prompts::show(&ctx, &mut self.ws);
 

@@ -7,6 +7,7 @@ pub mod browser;
 pub mod cards;
 pub mod create_dialog;
 pub mod dock;
+pub mod export_dialog;
 pub mod feature_dialog;
 pub mod file_chooser;
 pub mod fonts;

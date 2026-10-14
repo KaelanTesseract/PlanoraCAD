@@ -4,6 +4,7 @@
 use crate::blend_dialog::BlendDialog;
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
+use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
 use crate::state::AppState;
 use planora_project::config::Config;
@@ -27,6 +28,7 @@ pub struct DocTab {
     pub boolean_dialog: Option<BooleanDialog>,
     pub feature_dialog: Option<FeatureDialog>,
     pub blend_dialog: Option<BlendDialog>,
+    pub export_dialog: Option<ExportDialog>,
     /// Anzeigename ohne `.pcad`, bzw. „Unbenannt n“.
     pub name: String,
     pub path: Option<NodePath>,
@@ -57,6 +59,7 @@ impl DocTab {
             boolean_dialog: None,
             feature_dialog: None,
             blend_dialog: None,
+            export_dialog: None,
             name,
             path: None,
             store: None,
@@ -166,6 +169,9 @@ pub struct Workspace {
     /// (Speichern unter, Wurzelwechsel); das Projekt-Panel liest danach den Baum neu.
     pub library_revision: u64,
     pub autosave_interval: Duration,
+    /// Zuletzt benutzter Ordner der Dateiauswahl beim Exportieren und Importieren (nicht
+    /// gespeichert).
+    pub exchange_dir: Option<PathBuf>,
     next_tab_id: u64,
     untitled: usize,
 }
@@ -192,6 +198,7 @@ impl Workspace {
             quit: false,
             library_revision: 0,
             autosave_interval: AUTOSAVE_INTERVAL,
+            exchange_dir: None,
             next_tab_id: 1,
             untitled: 0,
         };
