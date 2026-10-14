@@ -52,6 +52,22 @@ pub fn cone_solid(r0: f64, r1: f64, h: f64) -> Solid {
     revolve(&chain, &Frame::WORLD, &tol()).unwrap()
 }
 
+/// Untere Halbkugel um den Ursprung (z ≤ 0): Viertelkreis von (0, −r) nach (r, 0), dann zurück
+/// zur Achse; Deckfläche ist die Kreisscheibe in z = 0.
+pub fn lower_hemisphere_solid(r: f64) -> Solid {
+    let chain = ProfileLoop {
+        start: DVec2::new(0.0, -r),
+        segments: vec![
+            Segment::Arc {
+                center: DVec2::ZERO,
+                sweep: std::f64::consts::FRAC_PI_2,
+            },
+            Segment::Line { to: DVec2::ZERO },
+        ],
+    };
+    revolve(&chain, &Frame::WORLD, &tol()).unwrap()
+}
+
 /// Vollring (eine Torusfläche, zwei Nähte), Achse Z, Mittelpunkt im Ursprung.
 pub fn torus_solid(major: f64, minor: f64) -> Solid {
     let mut s = Solid::new();

@@ -7,6 +7,7 @@ pub mod isect;
 pub mod layout;
 pub mod limits;
 pub mod model;
+pub mod silhouette;
 pub mod stroke;
 
 pub use basis::Basis;
