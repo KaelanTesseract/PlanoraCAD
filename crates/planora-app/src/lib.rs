@@ -9,6 +9,7 @@ pub mod dock;
 pub mod feature_dialog;
 pub mod fonts;
 pub mod icons;
+pub mod mesh_body;
 pub mod projects_panel;
 pub mod prompts;
 pub mod properties;

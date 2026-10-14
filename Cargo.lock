@@ -2426,6 +2426,7 @@ dependencies = [
  "egui",
  "egui_tiles",
  "glam",
+ "planora-exchange",
  "planora-feature",
  "planora-kernel",
  "planora-math",
