@@ -347,11 +347,7 @@ impl Workspace {
         }
         // Läuft in einem Tab das Schreiben einer STEP-Datei, wird nicht beendet (Hinweis im
         // Fenster „Exportieren“), sonst bliebe die alte Datei ohne Meldung liegen.
-        if self
-            .tabs
-            .iter_mut()
-            .fold(false, |any, t| t.export_dialog_blocks_close() || any)
-        {
+        if self.tabs.iter_mut().any(|t| t.export_dialog_blocks_close()) {
             return false;
         }
         if let Some(t) = self.tabs.iter().find(|t| t.is_dirty()) {
