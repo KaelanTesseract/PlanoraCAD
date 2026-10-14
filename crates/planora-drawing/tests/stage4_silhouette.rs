@@ -205,3 +205,53 @@ fn cancelled_progress_stops_the_silhouette() {
         Err(planora_drawing::DrawError::Cancelled)
     ));
 }
+
+#[test]
+fn slanted_cut_silhouette_ends_lie_on_the_cut_edge() {
+    // Zylinder r = 5, h = 12, oben schräg abgeschnitten (Ellipsenkante, im (u, v)-Raum gekrümmt).
+    // Die oberen Enden der Umrisslinien müssen genau auf der Schnittebene und auf einem Punkt
+    // der Ellipsenkante liegen (sonst teilt isect die Kante dort nicht), die unteren auf z = 0.
+    let s = slanted_cylinder_solid(5.0, 12.0);
+    let b = vec![DrawBody {
+        name: "K".into(),
+        solid: &s,
+    }];
+    let e = extent_of(&b);
+    let near = 16.0 * planora_drawing::limits::geom_tol(e);
+    let (n, c) = slanted_cut_plane();
+    let plane = |p: planora_math::DVec3| (n.dot(p) - c) / n.length();
+    for k in [ViewKind::Front, ViewKind::Isometric] {
+        let basis = Basis::of(k);
+        let st = silhouette_strokes(&b, &basis, e, &Progress::new()).unwrap();
+        assert_eq!(st.len(), 2, "{k:?}");
+        let edges = edge_strokes(&b, &basis, e).unwrap();
+        for l in &st {
+            let (pa, pb) = (l.point(l.t0), l.point(l.t1));
+            let (lo, hi) = if pa.z < pb.z { (pa, pb) } else { (pb, pa) };
+            assert!(lo.z.abs() <= near, "{k:?}: unteres Ende z = {:e}", lo.z);
+            assert!(
+                plane(hi).abs() <= near,
+                "{k:?}: oberes Ende {:e} neben der Schnittebene",
+                plane(hi)
+            );
+            // Abstand zu einer gekrümmten Randkante (Ellipse), über den Kurvenparameter.
+            let on_edge = edges
+                .iter()
+                .filter(|x| !matches!(x.curve, planora_kernel::Curve::Line { .. }))
+                .map(|x| x.curve.point(x.curve.project(hi)).distance(hi))
+                .fold(f64::INFINITY, f64::min);
+            assert!(
+                on_edge <= near,
+                "{k:?}: oberes Ende {on_edge:e} neben der Kante"
+            );
+        }
+    }
+}
+
+#[test]
+fn degenerate_cone_seen_along_its_axis_has_no_silhouette() {
+    // Kegel mit Steigung 0 (Mantel wie ein Zylinder) von oben: n·d ≡ 0, keine Linien.
+    let s = flat_slope_cone_solid(5.0, 10.0);
+    assert!(lines_of(&s, ViewKind::Top).is_empty());
+    assert_eq!(lines_of(&s, ViewKind::Front).len(), 2);
+}

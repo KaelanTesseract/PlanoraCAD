@@ -52,6 +52,56 @@ pub fn cone_solid(r0: f64, r1: f64, h: f64) -> Solid {
     revolve(&chain, &Frame::WORLD, &tol()).unwrap()
 }
 
+/// Normale (nicht normiert) und Höhe der Schnittebene des schräg abgeschnittenen Zylinders:
+/// `z = 8 + 0,5·(x·cos 17° + y·sin 17°)`, als `n·p = c` mit `n = (−0,5·cos 17°, −0,5·sin 17°, 1)`,
+/// `c = 8`.
+pub fn slanted_cut_plane() -> (DVec3, f64) {
+    let a = 17f64.to_radians();
+    (DVec3::new(-0.5 * a.cos(), -0.5 * a.sin(), 1.0), 8.0)
+}
+
+/// Zylinder (Radius `r`, Höhe `h`, Achse Z, Boden im Ursprung), oben schräg abgeschnitten durch
+/// die Ebene aus [`slanted_cut_plane`]: Differenz mit einem großen, gedrehten Quader, dessen
+/// Unterseite in dieser Ebene liegt.
+pub fn slanted_cylinder_solid(r: f64, h: f64) -> Solid {
+    use planora_kernel::BoolOp;
+    use planora_kernel::boolean::boolean;
+    use planora_math::{DMat4, DQuat};
+    let (n, c) = slanted_cut_plane();
+    let l = 40.0;
+    let cutter = make_box(DVec3::splat(l), &tol()).unwrap();
+    let rot = DQuat::from_rotation_arc(DVec3::Z, n.normalize());
+    let m = DMat4::from_translation(DVec3::new(0.0, 0.0, c))
+        * DMat4::from_quat(rot)
+        * DMat4::from_translation(DVec3::new(-l / 2.0, -l / 2.0, 0.0));
+    let cutter = cutter.transformed(&m).unwrap();
+    let out = boolean(&cylinder_solid(r, h), &cutter, BoolOp::Difference, &tol()).unwrap();
+    validate(&out).expect("schräg abgeschnittener Zylinder ist gültig");
+    out
+}
+
+/// Zylinder (Radius `r`, Höhe `h`), dessen Mantel als Kegelfläche mit Steigung 0 beschrieben
+/// ist (geometrisch derselbe Körper; Sonderfall für den Umriss).
+pub fn flat_slope_cone_solid(r: f64, h: f64) -> Solid {
+    let mut s = cylinder_solid(r, h);
+    let id = s
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Cylinder { .. }))
+        .map(|(id, _)| id)
+        .expect("Zylinderfläche");
+    let Surface::Cylinder { frame, radius } = s.faces[id].surface else {
+        unreachable!()
+    };
+    s.faces[id].surface = Surface::Cone {
+        frame,
+        radius,
+        slope: 0.0,
+    };
+    validate(&s).expect("Kegel mit Steigung 0 ist gültig");
+    s
+}
+
 /// Untere Halbkugel um den Ursprung (z ≤ 0): Viertelkreis von (0, −r) nach (r, 0), dann zurück
 /// zur Achse; Deckfläche ist die Kreisscheibe in z = 0.
 pub fn lower_hemisphere_solid(r: f64) -> Solid {

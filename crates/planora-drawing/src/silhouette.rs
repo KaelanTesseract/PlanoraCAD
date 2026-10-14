@@ -24,6 +24,15 @@ const TRIM_SAMPLES: usize = 256;
 const ROOT_SAMPLES: usize = 720;
 /// Höchstzahl der Halbierungen (Bisektion endet spätestens an der Rechengenauigkeit).
 const MAX_BISECT_STEPS: usize = 200;
+/// Fenster für das Anlegen an die Randkante, in Abtastschritten zu jeder Seite.
+const SNAP_WINDOW: f64 = 2.0;
+/// Ein Zuschnittpunkt wird angelegt, wenn die Kante höchstens `SNAP_FACTOR · geom_tol` entfernt
+/// ist (wie das Fenster, in dem isect Endpunkte auf Strichen erkennt).
+const SNAP_FACTOR: f64 = 16.0;
+/// `|n · d|` darunter gilt beim Kegel als null (Blick entlang der Achse bei Steigung 0).
+const ZERO_NORMAL_DOT: f64 = 1e-12;
+/// Erweiterung des aus den Randschleifen bestimmten Höhenbereichs (relativ).
+const V_PAD_REL: f64 = 1e-2;
 /// Blick entlang der Zylinderachse: `|a · d| ≥ 1 − AXIAL_EPS`.
 const AXIAL_EPS: f64 = 1e-12;
 /// Meldung für Flächen, deren Umriss noch nicht berechnet wird.
@@ -68,7 +77,9 @@ pub fn silhouette_strokes(
             check_finite(surface)?;
             let fg = face_geom(solid, fid);
             let candidates = match surface {
-                Surface::Cylinder { frame, radius } => cylinder_lines(&fg, frame, *radius, d)?,
+                Surface::Cylinder { frame, radius } => {
+                    cylinder_lines(&fg, frame, *radius, d, &tol)?
+                }
                 Surface::Cone { .. } => cone_lines(&fg, d, &tol)?,
                 Surface::Sphere { frame, radius } => vec![great_circle(frame, *radius, d)],
                 _ => Vec::new(),
@@ -112,8 +123,9 @@ fn check_finite(surface: &Surface) -> Result<(), DrawError> {
 }
 
 /// Höhenbereich `[v0, v1]` der Fläche: aus dem Parameterbereich, sonst aus den `v`-Werten der
-/// Randschleifen.
-fn v_range(fg: &FaceGeom) -> Result<(f64, f64), DrawError> {
+/// Randschleifen, dann um `V_PAD_REL·(v1 − v0) + tol` erweitert, damit die Enden aus Zuschnitt
+/// und Anlegen an die Kante entstehen und nie aus abgetasteten Extremwerten.
+fn v_range(fg: &FaceGeom, tol: &Tolerance) -> Result<(f64, f64), DrawError> {
     let (v0, v1) = match fg.domain {
         Some(r) => (r.v0.min(r.v1), r.v0.max(r.v1)),
         None => {
@@ -126,7 +138,8 @@ fn v_range(fg: &FaceGeom) -> Result<(f64, f64), DrawError> {
                     hi = hi.max(v);
                 }
             }
-            (lo, hi)
+            let pad = V_PAD_REL * (hi - lo) + tol.linear;
+            (lo - pad, hi + pad)
         }
     };
     if v0.is_finite() && v1.is_finite() {
@@ -143,12 +156,13 @@ fn cylinder_lines(
     frame: &Frame,
     radius: f64,
     d: DVec3,
+    tol: &Tolerance,
 ) -> Result<Vec<Candidate>, DrawError> {
     let a = frame.z;
     if a.dot(d).abs() >= 1.0 - AXIAL_EPS {
         return Ok(Vec::new());
     }
-    let (v0, v1) = v_range(fg)?;
+    let (v0, v1) = v_range(fg, tol)?;
     let phi = d.dot(frame.y).atan2(d.dot(frame.x));
     let lines = [phi + FRAC_PI_2, phi - FRAC_PI_2]
         .into_iter()
@@ -173,7 +187,7 @@ fn cylinder_lines(
 /// über Vorzeichenwechsel an `ROOT_SAMPLES` Stützstellen und Bisektion. Mantellinie von
 /// `P(u, v0)` nach `P(u, v1)`, Parameter = Länge.
 fn cone_lines(fg: &FaceGeom, d: DVec3, tol: &Tolerance) -> Result<Vec<Candidate>, DrawError> {
-    let (v0, v1) = v_range(fg)?;
+    let (v0, v1) = v_range(fg, tol)?;
     let vm = 0.5 * (v0 + v1);
     let s = &fg.surface;
     let f = |u: f64| s.normal(u, vm).dot(d);
@@ -183,6 +197,11 @@ fn cone_lines(fg: &FaceGeom, d: DVec3, tol: &Tolerance) -> Result<Vec<Candidate>
     let fs: Vec<f64> = us.iter().map(|&u| f(u)).collect();
     if fs.iter().any(|x| !x.is_finite()) {
         return Err(DrawError::NonFinite);
+    }
+    // Steigung 0 und Blick entlang der Achse: n·d ≡ 0, die Fläche erscheint als Kreis (wie beim
+    // Zylinder), es gibt keine Umrisslinie.
+    if fs.iter().all(|x| x.abs() <= ZERO_NORMAL_DOT) {
+        return Ok(Vec::new());
     }
     let mut roots = Vec::new();
     for i in 0..ROOT_SAMPLES {
@@ -327,7 +346,14 @@ fn trim_to_face(
             }
         }
         debug_assert!((b - a).abs() <= BISECT_TOL * w.abs());
-        a
+        snap_to_edge(
+            fg,
+            &c.curve,
+            a,
+            SNAP_WINDOW * w.abs() / steps as f64,
+            tol.linear,
+        )
+        .map_or(a, |t| if c.closed { t } else { t.clamp(c.t0, c.t1) })
     };
     let mut out = Vec::new();
     let mut start: Option<f64> = None;
@@ -359,4 +385,59 @@ fn trim_to_face(
         }
     }
     Ok(out)
+}
+
+/// Legt einen Zuschnittpunkt `t_star` genau auf die Randkante, die der Umriss dort kreuzt.
+///
+/// `point_in_face` meldet `Boundary` nur bis `tol` neben einer Kante; sonst entscheidet das
+/// Randpolygon im Parameterraum (5°-Abtastung), und die Bisektion endet auf dessen Sehne – bei
+/// im `(u, v)`-Raum gekrümmten Kanten (Ellipse eines schrägen Schnitts) bis ≈ 1e-3·r neben der
+/// wahren Kante. Deshalb wird je Randstück der Abstand `|P(t) − Kante|` im Fenster
+/// `[t_star − h, t_star + h]` minimiert (Goldener Schnitt) und das kleinste Minimum genommen,
+/// wenn es höchstens `SNAP_FACTOR · tol` beträgt. Randstücke, an denen der Umriss schon am
+/// Fensterrand anliegt (er läuft entlang einer Kante, etwa einer Naht), zählen nicht: Dort ist
+/// der Bisektionspunkt bereits auf `tol` genau. Ohne Treffer (schleifender Schnitt): `None`.
+fn snap_to_edge(fg: &FaceGeom, curve: &Curve, t_star: f64, h: f64, tol: f64) -> Option<f64> {
+    let limit = SNAP_FACTOR * tol;
+    let (lo, hi) = (t_star - h, t_star + h);
+    let mut best: Option<(f64, f64)> = None;
+    for seg in fg.loops.iter().flatten() {
+        let dist = |t: f64| seg.closest(curve.point(t)).1;
+        if dist(lo) <= limit || dist(hi) <= limit {
+            continue;
+        }
+        let (t, d) = golden_min(lo, hi, dist);
+        if d <= limit && best.is_none_or(|(_, bd)| d < bd) {
+            best = Some((t, d));
+        }
+    }
+    best.map(|(t, _)| t)
+}
+
+/// Minimum einer unimodalen Funktion auf `[a, b]` (Goldener Schnitt bis zur Rechengenauigkeit):
+/// `(Stelle, Wert)`.
+fn golden_min(mut a: f64, mut b: f64, f: impl Fn(f64) -> f64) -> (f64, f64) {
+    let g = 0.5 * (5f64.sqrt() - 1.0);
+    let mut x1 = b - g * (b - a);
+    let mut x2 = a + g * (b - a);
+    let (mut f1, mut f2) = (f(x1), f(x2));
+    for _ in 0..MAX_BISECT_STEPS {
+        if !(a < x1 && x1 < x2 && x2 < b) {
+            break;
+        }
+        if f1 <= f2 {
+            b = x2;
+            x2 = x1;
+            f2 = f1;
+            x1 = b - g * (b - a);
+            f1 = f(x1);
+        } else {
+            a = x1;
+            x1 = x2;
+            f1 = f2;
+            x2 = a + g * (b - a);
+            f2 = f(x2);
+        }
+    }
+    if f1 <= f2 { (x1, f1) } else { (x2, f2) }
 }
