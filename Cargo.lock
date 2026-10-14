@@ -2440,6 +2440,7 @@ dependencies = [
 name = "planora-exchange"
 version = "0.1.0"
 dependencies = [
+ "earcutr",
  "planora-kernel",
  "planora-math",
  "planora-mesh",

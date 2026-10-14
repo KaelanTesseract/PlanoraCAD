@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 planora-math.workspace = true
 planora-mesh.workspace = true
+earcutr.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

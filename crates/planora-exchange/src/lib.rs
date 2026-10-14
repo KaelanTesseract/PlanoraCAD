@@ -6,6 +6,7 @@ mod check;
 pub mod error;
 pub mod limits;
 mod mesh;
+mod obj;
 mod progress;
 mod source;
 mod stl;
@@ -18,6 +19,7 @@ pub use limits::{
     RESERVE_STEP,
 };
 pub use mesh::{ExchangeMesh, MeshTransform};
+pub use obj::{read_obj, write_obj};
 pub use progress::Progress;
 pub use source::{ExportBody, PlacedSource, SolidSource, TriSource, collect_body};
 pub use stl::{STL_HEADER_BYTES, STL_TRIANGLE_BYTES, read_stl, write_stl};
