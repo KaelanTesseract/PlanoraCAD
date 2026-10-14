@@ -177,3 +177,118 @@ fn cards_in_a_row_get_the_same_height_over_the_full_width() {
         "über die ganze Breite: {rects:?}"
     );
 }
+
+fn click(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+fn frame(
+    ctx: &egui::Context,
+    c: &mut FileChooser,
+    events: Vec<egui::Event>,
+) -> (ChooserAction, egui::Pos2) {
+    let mut action = ChooserAction::None;
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 600.0),
+        )),
+        events,
+        time: Some({
+            static T: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+            f64::from(T.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) * 0.01
+        }),
+        ..Default::default()
+    };
+    ctx.run_ui(input, |ui| action = c.show(ui))
+        .drop_without_applying_deltas();
+    (action, egui::Pos2::ZERO)
+}
+
+#[test]
+fn a_double_click_on_a_folder_enters_it_without_choosing_a_file_inside() {
+    let d = temp_dir("doppelklick");
+    fs::create_dir_all(d.join("A")).unwrap();
+    fs::write(d.join("A").join("inner.stl"), b"x").unwrap();
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts::definitions());
+    let mut c = FileChooser::open(d.clone(), vec!["stl"]);
+    frame(&ctx, &mut c, vec![]);
+    frame(&ctx, &mut c, vec![]);
+    // Erste Listenzeile liegt unter Ordnerleiste; Zeile suchen.
+    let pos = egui::pos2(60.0, 0.0);
+    let mut chosen = ChooserAction::None;
+    let mut entered = false;
+    {
+        let y = 31.0_f32;
+        // Zeile des Ordners „A“ liegt bei y = 22..40.
+        let mut c2 = FileChooser::open(d.clone(), vec!["stl"]);
+        frame(&ctx, &mut c2, vec![]);
+        let p = egui::pos2(pos.x, y);
+        frame(&ctx, &mut c2, vec![egui::Event::PointerMoved(p)]);
+        let evs = vec![
+            click(p, true),
+            click(p, false),
+            click(p, true),
+            click(p, false),
+        ];
+        let (a, _) = frame(&ctx, &mut c2, evs);
+        let (b, _) = frame(&ctx, &mut c2, vec![]);
+        if matches!(a, ChooserAction::Chosen(_)) || matches!(b, ChooserAction::Chosen(_)) {
+            chosen = ChooserAction::Chosen(PathBuf::new());
+        }
+        if c2.dir() == d.join("A").as_path() {
+            entered = true;
+        }
+    }
+    assert_eq!(
+        chosen,
+        ChooserAction::None,
+        "keine Datei im neuen Ordner gewählt"
+    );
+    assert!(entered, "Doppelklick öffnet den Ordner");
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn file_names_with_forbidden_characters_are_rejected() {
+    let d = temp_dir("namen");
+    let mut c = FileChooser::save(d.clone(), "x".into(), "stl");
+    for bad in ["C:boese", "a<b", "a|b", "q?", "a*b", "..", "."] {
+        c.file_name = bad.into();
+        assert_eq!(c.target(), None, "{bad}");
+    }
+    c.file_name = "Teil.".into();
+    assert_eq!(c.target(), Some(d.join("Teil.stl")));
+    c.file_name = "a<b".into();
+    assert_eq!(c.confirm(), ChooserAction::None);
+    assert!(c.error.is_some());
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn relative_folders_become_absolute_and_errors_are_plain_german() {
+    let mut c = FileChooser::open(default_dir(), vec!["stl"]);
+    c.dir_text = ".".into();
+    assert!(c.go_to_text());
+    assert!(c.dir().is_absolute());
+    c.up();
+    assert!(c.error.is_none() && !c.dir().as_os_str().is_empty());
+    c.dir_text = std::env::temp_dir()
+        .join("planora-gibt-es-nicht-x")
+        .display()
+        .to_string();
+    assert!(!c.go_to_text());
+    let msg = c.error.clone().unwrap();
+    assert!(!msg.contains("os error"), "{msg}");
+    let c2 = FileChooser::open(
+        std::env::temp_dir().join("planora-gibt-es-nicht-y"),
+        vec!["stl"],
+    );
+    assert!(!c2.error.clone().unwrap_or_default().contains("os error"));
+}

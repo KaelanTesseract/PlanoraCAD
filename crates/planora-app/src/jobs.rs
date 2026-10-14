@@ -42,6 +42,8 @@ impl<T: Send + 'static> Job<T> {
 }
 
 impl<T> Job<T> {
+    /// Fragt nach dem Ergebnis. Nach `Ready` meldet jede weitere Abfrage `Lost`: den Auftrag
+    /// danach verwerfen.
     pub fn poll(&self) -> Poll<T> {
         match self.rx.try_recv() {
             Ok(v) => Poll::Ready(v),
@@ -50,7 +52,8 @@ impl<T> Job<T> {
         }
     }
 
-    /// Wartet auf das Ergebnis (für Tests und Abläufe ohne Fenster).
+    /// Wartet auf das Ergebnis (für Tests und Abläufe ohne Fenster). Nach `Ready` liefert eine
+    /// weitere Abfrage `Lost`: den Auftrag danach verwerfen.
     pub fn wait(&self) -> Poll<T> {
         match self.rx.recv() {
             Ok(v) => Poll::Ready(v),
@@ -59,6 +62,7 @@ impl<T> Job<T> {
     }
 
     /// Ergebnis abholen; mit `block` wird gewartet (Tests und Abläufe ohne Fenster).
+    /// Nach `Ready` liefert jede weitere Abfrage `Lost`.
     pub fn fetch(&self, block: bool) -> Poll<T> {
         if block { self.wait() } else { self.poll() }
     }

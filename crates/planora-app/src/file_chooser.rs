@@ -65,6 +65,18 @@ pub fn default_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_default()
 }
 
+/// Einfache Meldung zu einem Lesefehler, ohne Text des Betriebssystems.
+fn io_message(kind: std::io::ErrorKind) -> &'static str {
+    match kind {
+        std::io::ErrorKind::NotFound => "Der Ordner ist nicht vorhanden.",
+        std::io::ErrorKind::PermissionDenied => "Auf diesen Ordner darf nicht zugegriffen werden.",
+        _ => "Der Ordner lässt sich nicht öffnen.",
+    }
+}
+
+/// Zeichen, die in Dateinamen nicht erlaubt sind (Windows).
+const FORBIDDEN_CHARS: [char; 9] = [':', '<', '>', '"', '|', '?', '*', '/', '\\'];
+
 impl FileChooser {
     /// Auswahl zum Speichern mit vorgeschlagenem Namen; die Endung wird ergänzt.
     pub fn save(dir: PathBuf, file_name: String, extension: &'static str) -> FileChooser {
@@ -111,7 +123,7 @@ impl FileChooser {
         let read = match std::fs::read_dir(&self.dir) {
             Ok(r) => r,
             Err(e) => {
-                self.error = Some(format!("Der Ordner lässt sich nicht öffnen: {e}"));
+                self.error = Some(io_message(e.kind()).into());
                 return;
             }
         };
@@ -146,6 +158,7 @@ impl FileChooser {
     }
 
     fn set_dir(&mut self, dir: PathBuf) {
+        let dir = std::path::absolute(&dir).unwrap_or(dir);
         self.dir_text = dir.display().to_string();
         self.dir = dir;
         self.confirm = None;
@@ -184,8 +197,8 @@ impl FileChooser {
     /// Ziel: beim Speichern im aktuellen Ordner, Endung ergänzt; beim Öffnen nur eine
     /// vorhandene Datei. `None` bei leerem Namen oder Namen mit Ordnerteilen.
     pub fn target(&self) -> Option<PathBuf> {
-        let name = self.file_name.trim();
-        if name.is_empty() || name.contains(['/', '\\']) || name == "." || name == ".." {
+        let name = self.file_name.trim().trim_end_matches(['.', ' ']);
+        if name.is_empty() || name.contains(FORBIDDEN_CHARS) || name.chars().any(char::is_control) {
             return None;
         }
         match self.mode {
@@ -210,7 +223,9 @@ impl FileChooser {
         let Some(target) = self.target() else {
             self.error = Some(
                 match self.mode {
-                    ChooserMode::Save => "Bitte einen Dateinamen eingeben.",
+                    ChooserMode::Save => {
+                        "Bitte einen gültigen Dateinamen eingeben (ohne Sonderzeichen wie : ? * oder Schrägstriche)."
+                    }
                     ChooserMode::Open => "Bitte eine vorhandene Datei wählen.",
                 }
                 .into(),
@@ -253,20 +268,22 @@ impl FileChooser {
             .show(ui, |ui| {
                 for e in &self.entries {
                     let text = if e.is_dir {
-                        format!("{}  (Ordner)", e.name)
+                        format!("{}  (Ordner, Doppelklick zum Öffnen)", e.name)
                     } else {
                         e.name.clone()
                     };
                     let selected = !e.is_dir && e.name == self.file_name;
                     let r = ui.selectable_label(selected, text.as_str());
-                    if r.double_clicked() && !e.is_dir {
+                    // Ordner öffnen nur per Doppelklick: ein einfacher Klick würde sofort den
+                    // Ordner wechseln, und der zweite Klick träfe dann einen Eintrag darin.
+                    if e.is_dir {
+                        if r.double_clicked() {
+                            enter = Some(e.name.clone());
+                        }
+                    } else if r.double_clicked() {
                         double = Some(e.name.clone());
                     } else if r.clicked() {
-                        if e.is_dir {
-                            enter = Some(e.name.clone());
-                        } else {
-                            pick = Some(e.name.clone());
-                        }
+                        pick = Some(e.name.clone());
                     }
                 }
                 if self.entries.is_empty() {
