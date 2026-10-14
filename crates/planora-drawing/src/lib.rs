@@ -3,6 +3,7 @@
 
 pub mod basis;
 pub mod error;
+pub mod isect;
 pub mod layout;
 pub mod limits;
 pub mod model;
