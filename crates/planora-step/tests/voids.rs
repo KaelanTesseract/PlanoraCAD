@@ -170,6 +170,7 @@ fn a_piece_inside_a_cavity_is_its_own_solid_and_the_cavity_belongs_to_the_big_bo
     let with_void = solids.iter().filter(|x| x.voids.len() == 1).count();
     assert_eq!(with_void, 1);
     let r = measure(&m, &[&s], CHORD).unwrap();
+    assert_eq!(r.flipped, 0);
     assert!(
         (r.volume - (1728.0 - 512.0 + 8.0)).abs() < 1e-9,
         "{}",

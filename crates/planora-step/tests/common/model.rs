@@ -980,38 +980,52 @@ impl Model {
 
     /// `B_SPLINE_CURVE_WITH_KNOTS` einfach oder zusammengesetzt mit `RATIONAL_B_SPLINE_CURVE`.
     fn spline_curve(&self, id: u64) -> Result<Spline1, String> {
-        let (degree, cps, form, closed, si, mults, values, rational) = match self.file.get(id)? {
-            Entity::Simple(r) if r.name == "B_SPLINE_CURVE_WITH_KNOTS" => {
-                let a = &r.args;
-                (&a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], None)
-            }
-            e @ Entity::Complex(_) => {
-                let want = [
-                    "BOUNDED_CURVE",
-                    "B_SPLINE_CURVE",
-                    "B_SPLINE_CURVE_WITH_KNOTS",
-                    "CURVE",
-                    "GEOMETRIC_REPRESENTATION_ITEM",
-                    "RATIONAL_B_SPLINE_CURVE",
-                    "REPRESENTATION_ITEM",
-                ];
-                if e.names() != want {
-                    return Err(format!("#{id}: Teile {:?}", e.names()));
+        let (degree, cps, form, closed, si, mults, values, spec, rational) =
+            match self.file.get(id)? {
+                Entity::Simple(r) if r.name == "B_SPLINE_CURVE_WITH_KNOTS" => {
+                    let a = &r.args;
+                    (&a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], None)
                 }
-                let b = e.part("B_SPLINE_CURVE").unwrap();
-                let k = e.part("B_SPLINE_CURVE_WITH_KNOTS").unwrap();
-                let w = e.part("RATIONAL_B_SPLINE_CURVE").unwrap();
-                (&b[0], &b[1], &b[2], &b[3], &b[4], &k[0], &k[1], Some(&w[0]))
-            }
-            other => {
-                return Err(format!(
-                    "#{id}: B-Spline erwartet, gefunden {:?}",
-                    other.names()
-                ));
-            }
-        };
+                e @ Entity::Complex(_) => {
+                    let want = [
+                        "BOUNDED_CURVE",
+                        "B_SPLINE_CURVE",
+                        "B_SPLINE_CURVE_WITH_KNOTS",
+                        "CURVE",
+                        "GEOMETRIC_REPRESENTATION_ITEM",
+                        "RATIONAL_B_SPLINE_CURVE",
+                        "REPRESENTATION_ITEM",
+                    ];
+                    if e.names() != want {
+                        return Err(format!("#{id}: Teile {:?}", e.names()));
+                    }
+                    let b = e.part("B_SPLINE_CURVE").unwrap();
+                    let k = e.part("B_SPLINE_CURVE_WITH_KNOTS").unwrap();
+                    let w = e.part("RATIONAL_B_SPLINE_CURVE").unwrap();
+                    (
+                        &b[0],
+                        &b[1],
+                        &b[2],
+                        &b[3],
+                        &b[4],
+                        &k[0],
+                        &k[1],
+                        &k[2],
+                        Some(&w[0]),
+                    )
+                }
+                other => {
+                    return Err(format!(
+                        "#{id}: B-Spline erwartet, gefunden {:?}",
+                        other.names()
+                    ));
+                }
+            };
         if form.enumeration()? != "UNSPECIFIED" || si.logical()? {
             return Err(format!("#{id}: Form oder Selbstschnitt unerwartet"));
+        }
+        if spec.enumeration()? != "UNSPECIFIED" {
+            return Err(format!("#{id}: Knotenart nicht UNSPECIFIED"));
         }
         let degree = usize::try_from(degree.int()?).map_err(|e| e.to_string())?;
         let control: Vec<DVec3> = cps
@@ -1130,6 +1144,9 @@ impl Model {
         }
         if b[3].enumeration()? != "UNSPECIFIED" || b[6].logical()? {
             return Err(format!("#{id}: Form oder Selbstschnitt unerwartet"));
+        }
+        if k[4].enumeration()? != "UNSPECIFIED" {
+            return Err(format!("#{id}: Knotenart nicht UNSPECIFIED"));
         }
         let du = usize::try_from(b[0].int()?).map_err(|e| e.to_string())?;
         let dv = usize::try_from(b[1].int()?).map_err(|e| e.to_string())?;

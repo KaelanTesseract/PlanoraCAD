@@ -20,6 +20,9 @@ const CHORD: f64 = 0.01;
 const SAG_FACTOR: f64 = 2.0;
 /// Schranke gegen das Kernel-Netz derselben Teilung (Fußpunktsuche auf der Freiformfläche).
 const MESH_MATCH_REL: f64 = 1e-7;
+/// Größter Abstand eines Punkts der STEP-Fläche von seiner Fläche in mm: Die Fußpunktsuche auf
+/// Freiformflächen löst nur bis hierher auf (gleiche Größenordnung wie `MESH_MATCH_REL`).
+const MAX_OFFSET: f64 = 1e-7;
 /// Teilung der Simpson-Summen in den Formeln.
 const SIMPSON_STEPS: usize = 2000;
 
@@ -180,9 +183,115 @@ fn vase_volume() -> f64 {
     .abs()
 }
 
+/// Rationale Kurve Grad 3 mit ungleichen Gewichten und einem inneren Knoten bei 0,4 durch
+/// `points` (fünf Stück): Vertauschte Gewichte oder Knoten würden die Gestalt ändern.
+fn weighted(points: [DVec3; 5]) -> NurbsCurve {
+    NurbsCurve::new(
+        3,
+        vec![0.0, 0.0, 0.0, 0.0, 0.4, 1.0, 1.0, 1.0, 1.0],
+        points.to_vec(),
+        vec![1.0, 3.0, 0.5, 2.0, 1.0],
+    )
+    .unwrap()
+}
+
+/// Rechte Seite des Prismas mit ungleichen Gewichten, von (10, 0) nach (10, 10).
+fn weighted_side() -> NurbsCurve {
+    weighted([
+        DVec3::new(10.0, 0.0, 0.0),
+        DVec3::new(13.0, 2.0, 0.0),
+        DVec3::new(11.0, 5.0, 0.0),
+        DVec3::new(14.0, 8.0, 0.0),
+        DVec3::new(10.0, 10.0, 0.0),
+    ])
+}
+
+/// Quadrat 10 × 10 mit der gewichteten rechten Seite, Höhe 4.
+fn weighted_prism() -> Solid {
+    let outer = ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![
+            Segment::Line {
+                to: DVec2::new(10.0, 0.0),
+            },
+            Segment::Nurbs {
+                curve: Arc::new(weighted_side()),
+            },
+            Segment::Line {
+                to: DVec2::new(0.0, 10.0),
+            },
+            Segment::Line { to: DVec2::ZERO },
+        ],
+    };
+    k().extrude(
+        &Profile {
+            outer,
+            holes: vec![],
+        },
+        &Frame::WORLD,
+        4.0,
+    )
+    .unwrap()
+}
+
+/// Meridian mit ungleichen Gewichten in der (r, z)-Halbebene von (4, 0) nach (3, 6).
+fn weighted_meridian() -> NurbsCurve {
+    weighted([
+        DVec3::new(4.0, 0.0, 0.0),
+        DVec3::new(6.0, 1.0, 0.0),
+        DVec3::new(3.0, 3.0, 0.0),
+        DVec3::new(5.0, 5.0, 0.0),
+        DVec3::new(3.0, 6.0, 0.0),
+    ])
+}
+
+/// Drehkörper mit dem gewichteten Meridian.
+fn weighted_vase() -> Solid {
+    k().revolve(
+        &ProfileLoop {
+            start: DVec2::ZERO,
+            segments: vec![
+                Segment::Line {
+                    to: DVec2::new(4.0, 0.0),
+                },
+                Segment::Nurbs {
+                    curve: Arc::new(weighted_meridian()),
+                },
+                Segment::Line {
+                    to: DVec2::new(0.0, 6.0),
+                },
+            ],
+        },
+        &Frame::WORLD,
+    )
+    .unwrap()
+}
+
+/// Volumen des gewichteten Prismas: Quadrat plus Fläche zwischen Kurve und x = 10.
+fn weighted_prism_volume() -> f64 {
+    let c = weighted_side();
+    let area = simpson(0.0, 1.0, |t| {
+        let d = c.derivs(t, 1);
+        (d[0].x - 10.0) * d[1].y
+    });
+    (100.0 + area) * 4.0
+}
+
+/// Volumen der gewichteten Vase: π ∫ r² dz.
+fn weighted_vase_volume() -> f64 {
+    let c = weighted_meridian();
+    PI * simpson(0.0, 1.0, |t| {
+        let d = c.derivs(t, 1);
+        d[0].x * d[0].x * d[1].y
+    })
+    .abs()
+}
+
 /// (Name, Körper, Volumen nach Formel).
 fn bodies() -> Vec<(&'static str, Solid, f64)> {
     vec![
+        ("Gewichte-Prisma", weighted_prism(), weighted_prism_volume()),
+        ("Gewichte-Vase", weighted_vase(), weighted_vase_volume()),
         ("Ellipse", ellipse_prism(), PI * 6.0 * 3.0 * 5.0),
         (
             "Spline-Prisma",
@@ -215,7 +324,11 @@ fn freeform_bodies_pass_all_checks_and_keep_their_volume() {
                 .unwrap_or_else(|_| panic!("{name}, {pose}"));
             let r = measure(&model, &[&s], CHORD).unwrap();
             assert_eq!(r.flipped, 0, "{name}, {pose}");
-            assert!(r.max_offset < 1e-7, "{name}, {pose}: {}", r.max_offset);
+            assert!(
+                r.max_offset < MAX_OFFSET,
+                "{name}, {pose}: {}",
+                r.max_offset
+            );
             assert!(
                 ((r.volume - r.kernel_volume) / r.kernel_volume).abs() < MESH_MATCH_REL,
                 "{name}, {pose}: {} gegen {}",

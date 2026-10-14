@@ -13,7 +13,8 @@ use planora_math::{DMat4, DVec2, DVec3, Frame, PI};
 
 /// Sehnentoleranz der Netze.
 const CHORD: f64 = 0.002;
-/// Volumenfehler eines Netzes gegen die Formel höchstens `SAG_FACTOR · CHORD · Oberfläche`: Jedes
+/// Volumenfehler eines Netzes gegen die Formel höchstens `SAG_FACTOR · CHORD · gekrümmte
+/// Oberfläche` (ebene Flächen sind exakt): Jedes
 /// Dreieck liegt bis zur Sehnentoleranz unter der Fläche, in der Mitte eines Dreiecks im
 /// Breiten-/Längenraster bis zu zwei Sehnenhöhen (wie in Teilprojekt 9, Ruling R-1; gemessen
 /// höchstens 1,1 bei der Kugel).
@@ -23,6 +24,9 @@ const AREA_REL: f64 = 1e-3;
 /// Schranke gegen das Kernel-Netz derselben Teilung: nur Rundung beim Auflegen der Punkte auf
 /// die STEP-Flächen.
 const MESH_MATCH_REL: f64 = 1e-9;
+/// Größter Abstand eines Punkts der STEP-Fläche von seiner Fläche in mm: nur Rundung beim
+/// Auflegen der Punkte (analytische Flächen, keine Fußpunktsuche).
+const MAX_OFFSET: f64 = 1e-9;
 
 fn k() -> AnalyticKernel {
     AnalyticKernel::default()
@@ -91,8 +95,9 @@ fn drilled() -> Solid {
     k().boolean(&block, &pin, BoolOp::Difference).unwrap()
 }
 
-/// (Name, Körper, Volumen, Oberfläche, Geschlecht) nach Formeln.
-fn bodies() -> Vec<(&'static str, Solid, f64, f64, usize)> {
+/// (Name, Körper, Volumen, Oberfläche, Geschlecht, davon gekrümmte Oberfläche) nach Formeln.
+/// Ebene Flächen werden exakt vernetzt und tragen zum Volumenfehler nichts bei.
+fn bodies() -> Vec<(&'static str, Solid, f64, f64, usize, f64)> {
     let (r, h) = (4.0, 9.0);
     let (rc, hc) = (6.0, 9.0);
     let rs = 6.0;
@@ -112,6 +117,7 @@ fn bodies() -> Vec<(&'static str, Solid, f64, f64, usize)> {
             PI * r * r * h,
             2.0 * PI * r * (r + h),
             0,
+            2.0 * PI * r * h,
         ),
         (
             "Kegel",
@@ -119,6 +125,7 @@ fn bodies() -> Vec<(&'static str, Solid, f64, f64, usize)> {
             PI * rc * rc * hc / 3.0,
             PI * rc * (rc + rc.hypot(hc)),
             0,
+            PI * rc * rc.hypot(hc),
         ),
         (
             "Kugel",
@@ -126,29 +133,46 @@ fn bodies() -> Vec<(&'static str, Solid, f64, f64, usize)> {
             4.0 / 3.0 * PI * rs.powi(3),
             4.0 * PI * rs * rs,
             0,
+            4.0 * PI * rs * rs,
         ),
-        ("Ring", torus_ring(), ring_v, ring_a, 0),
+        (
+            "Ring",
+            torus_ring(),
+            ring_v,
+            ring_a,
+            0,
+            ring_a - 2.0 * PI * 64.0,
+        ),
         (
             "Rohr",
             tube(),
             PI * 16.0 * 8.0,
             2.0 * PI * 16.0 + 2.0 * PI * 8.0 * 8.0,
             1,
+            2.0 * PI * 8.0 * 8.0,
         ),
-        ("Schräg", slanted(), PI * 25.0 * 25.0, slant_a, 0),
+        (
+            "Schräg",
+            slanted(),
+            PI * 25.0 * 25.0,
+            slant_a,
+            0,
+            2.0 * PI * 5.0 * 25.0,
+        ),
         (
             "Bohrung",
             drilled(),
             4000.0 - PI * 16.0 * 10.0,
             2.0 * (400.0 - PI * 16.0) + 80.0 * 10.0 + 2.0 * PI * 4.0 * 10.0,
             1,
+            2.0 * PI * 4.0 * 10.0,
         ),
     ]
 }
 
 #[test]
 fn curved_bodies_keep_volume_and_area_through_the_file() {
-    for (name, s, volume, area, genus) in bodies() {
+    for (name, s, volume, area, genus, curved) in bodies() {
         let (text, _) = export(&[(name, &s)]);
         let (m, stats) = checked(&text, &[&s]);
         assert_eq!(
@@ -158,10 +182,10 @@ fn curved_bodies_keep_volume_and_area_through_the_file() {
         );
         let r = measure(&m, &[&s], CHORD).unwrap();
         assert_eq!(r.flipped, 0, "{name}");
-        assert!(r.max_offset < 1e-9, "{name}: {}", r.max_offset);
+        assert!(r.max_offset < MAX_OFFSET, "{name}: {}", r.max_offset);
         assert!(rel(r.volume, r.kernel_volume) < MESH_MATCH_REL, "{name}");
         assert!(
-            (r.volume - volume).abs() <= SAG_FACTOR * CHORD * area,
+            (r.volume - volume).abs() <= SAG_FACTOR * CHORD * curved,
             "{name}: Volumen {} statt {volume}",
             r.volume
         );
@@ -175,7 +199,7 @@ fn curved_bodies_keep_volume_and_area_through_the_file() {
 
 #[test]
 fn mirrored_curved_bodies_keep_a_positive_volume() {
-    for (name, s, volume, area, _) in bodies() {
+    for (name, s, volume, _, _, curved) in bodies() {
         let s = k()
             .transform(
                 &s,
@@ -186,8 +210,10 @@ fn mirrored_curved_bodies_keep_a_positive_volume() {
         let m = Model::read(&text).unwrap();
         let r = measure(&m, &[&s], CHORD).unwrap();
         assert_eq!(r.flipped, 0, "{name}");
+        assert!(r.max_offset < MAX_OFFSET, "{name}: {}", r.max_offset);
+        assert!(rel(r.volume, r.kernel_volume) < MESH_MATCH_REL, "{name}");
         assert!(
-            (r.volume - volume).abs() <= SAG_FACTOR * CHORD * area,
+            (r.volume - volume).abs() <= SAG_FACTOR * CHORD * curved,
             "{name}: {}",
             r.volume
         );

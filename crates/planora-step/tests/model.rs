@@ -6,9 +6,11 @@ mod common;
 use common::export;
 use common::model::*;
 use common::reader::Value;
-use planora_kernel::{AnalyticKernel, Kernel};
-use planora_math::{DVec3, PI, TAU};
+use planora_kernel::{AnalyticKernel, Kernel, Profile, ProfileLoop, Segment};
+use planora_math::nurbs::NurbsCurve;
+use planora_math::{DVec2, DVec3, Frame, PI, TAU};
 use planora_step::text::step_string;
+use std::sync::Arc;
 
 /// Schranke der Formeltests dieser Datei (Rundung bei Größen um 1–10).
 const EPS: f64 = 1e-12;
@@ -277,4 +279,75 @@ fn the_model_refuses_wrong_units_and_skewed_axes() {
             Ok(m) => assert_eq!(m.products[0].solids[0].name, "X", "{from}"),
         }
     }
+}
+
+#[test]
+fn the_model_names_a_knot_type_other_than_unspecified() {
+    let k = AnalyticKernel::default();
+    // Offene Kurve (einfacher Eintrag) und rationale Ellipse (zusammengesetzter Eintrag).
+    let open = NurbsCurve::natural_cubic(
+        &[
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(12.0, 5.0, 0.0),
+            DVec3::new(10.0, 10.0, 0.0),
+        ],
+        &[0.0, 0.5, 1.0],
+    )
+    .unwrap();
+    let ellipse =
+        NurbsCurve::elliptic_arc(DVec3::ZERO, DVec3::X * 6.0, DVec3::Y * 3.0, 0.0, TAU).unwrap();
+    let square = |side: Segment| ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![
+            Segment::Line {
+                to: DVec2::new(10.0, 0.0),
+            },
+            side,
+            Segment::Line {
+                to: DVec2::new(0.0, 10.0),
+            },
+            Segment::Line { to: DVec2::ZERO },
+        ],
+    };
+    let (mut text, mut tried) = (String::new(), 0);
+    for outer in [
+        square(Segment::Nurbs {
+            curve: Arc::new(open),
+        }),
+        ProfileLoop::nurbs_loop(ellipse).unwrap(),
+    ] {
+        let solid = k
+            .extrude(
+                &Profile {
+                    outer,
+                    holes: vec![],
+                },
+                &Frame::WORLD,
+                5.0,
+            )
+            .unwrap();
+        text = export(&[("K", &solid)]).0;
+        assert!(Model::read(&text).is_ok());
+        for entity in ["B_SPLINE_CURVE_WITH_KNOTS(", "B_SPLINE_SURFACE_WITH_KNOTS("] {
+            // Das Kennzeichen steht am Ende des Eintrags (Zeilen sind umbrochen, daher bis `;`).
+            let from = text.find(entity).expect("Eintrag vorhanden");
+            let end = from + text[from..].find(';').unwrap();
+            let at = from + text[from..end].rfind(".UNSPECIFIED.").unwrap();
+            let broken = format!(
+                "{}.PIECEWISE_BEZIER_KNOTS.{}",
+                &text[..at],
+                &text[at + ".UNSPECIFIED.".len()..]
+            );
+            let Err(e) = Model::read(&broken) else {
+                panic!("{entity}: Knotenart nicht abgelehnt");
+            };
+            assert!(e.contains("Knotenart"), "{entity}: {e}");
+            tried += 1;
+        }
+    }
+    assert_eq!(tried, 4, "Kurve und Fläche, einfach und zusammengesetzt");
+    assert!(
+        text.contains("RATIONAL_B_SPLINE_CURVE("),
+        "zusammengesetzte Form geprüft"
+    );
 }
