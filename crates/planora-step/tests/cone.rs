@@ -9,7 +9,7 @@ use common::{checked, export};
 use planora_exchange::Progress;
 use planora_kernel::{AnalyticKernel, Kernel, ProfileLoop, Segment, Solid, Surface};
 use planora_math::{DMat4, DVec2, DVec3, Frame};
-use planora_step::{StepBody, StepError, check_body};
+use planora_step::{StepBody, StepError, StepOptions, check_body};
 
 /// Abweichung (rad), bis zu der der gelesene halbe Öffnungswinkel `atan(|slope|)` entsprechen
 /// muss; der Winkel wird verlustfrei geschrieben, es bleibt nur der Rest der Rundung.
@@ -193,6 +193,7 @@ fn a_cone_face_beyond_its_apex_is_refused_by_name() {
             name: "Jenseits".into(),
             solid: &s,
         },
+        &StepOptions::new("kegel.step"),
         &Progress::new(),
     )
     .unwrap_err();

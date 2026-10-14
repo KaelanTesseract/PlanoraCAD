@@ -86,10 +86,14 @@ pub fn display_name(name: &str, index: usize) -> String {
     }
 }
 
-/// Prüft einen Körper (Spec §4): Verweise, `validate` und ein Probelauf des Schreibens ohne
-/// Ausgabe. Jede Ablehnung ist ein [`StepError::InvalidBody`] mit dem Namen des Körpers;
-/// `Cancelled` und `TooManyEntities` werden durchgereicht.
-pub fn check_body(body: &StepBody, progress: &Progress) -> Result<BodyStats, StepError> {
+/// Prüft einen Körper (Spec §4): Verweise, `validate` (mit der Toleranz aus `opts`) und ein
+/// Probelauf des Schreibens ohne Ausgabe. Jede Ablehnung ist ein [`StepError::InvalidBody`] mit
+/// dem Namen des Körpers; `Cancelled` und `TooManyEntities` werden durchgereicht.
+pub fn check_body(
+    body: &StepBody,
+    opts: &StepOptions,
+    progress: &Progress,
+) -> Result<BodyStats, StepError> {
     let named = |reason: String| StepError::InvalidBody {
         name: body.name.clone(),
         reason,
@@ -99,7 +103,7 @@ pub fn check_body(body: &StepBody, progress: &Progress) -> Result<BodyStats, Ste
             "Der Körper verweist auf Teile, die es nicht gibt".into(),
         ));
     }
-    validate_with(body.solid, &Tolerance::default()).map_err(|e| named(e.to_string()))?;
+    validate_with(body.solid, &opts.tolerance).map_err(|e| named(e.to_string()))?;
     let mut sink = std::io::sink();
     let mut e = Entities::probe(&mut sink, progress);
     match topology::write_solid(&mut e, "''", body.solid) {
@@ -158,7 +162,7 @@ pub fn write_step(
             name: name.clone(),
             solid: b.solid,
         };
-        match check_body(&checked, progress) {
+        match check_body(&checked, opts, progress) {
             Ok(stats) => accepted.push((name, b.solid, stats)),
             Err(e @ StepError::InvalidBody { .. }) => report.rejected.push(e),
             Err(e) => return Err(e),

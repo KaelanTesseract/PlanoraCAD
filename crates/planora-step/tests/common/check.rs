@@ -31,12 +31,28 @@ pub fn geom_tol(m: &Model) -> f64 {
 /// Lagetoleranz, wenn eine Freiformkurve oder -fläche beteiligt ist (mm); über der des Kernels
 /// (`NURBS_EDGE_TOL` = 1e-5), weil Kanten dort nur so genau auf ihren Flächen liegen.
 pub const FREEFORM_TOL: f64 = 2e-5;
+/// Lagetoleranz für das ganze Modell: [`FREEFORM_TOL`], sobald irgendwo eine Freiformkurve oder
+/// -fläche steht (die Datei trägt dann die Unsicherheit von `NURBS_EDGE_TOL`, Entscheidung P10,
+/// auch für ihre Geraden und Kreise, denn Eckpunkte liegen an Freiformkanten nur so genau),
+/// sonst [`geom_tol`].
+pub fn body_tol(m: &Model) -> f64 {
+    let free = m.edges.values().any(|e| matches!(e.curve, Crv::Spline(_)))
+        || m.shells()
+            .iter()
+            .any(|sh| sh.faces.iter().any(|f| f.surface.is_spline()));
+    if free { FREEFORM_TOL } else { geom_tol(m) }
+}
 /// Abschnitte, an deren Grenzen eine Kante geprüft wird (Enden eingeschlossen).
 pub const EDGE_SAMPLES: usize = 8;
 /// Raster der Punktprobe auf gekrümmten Flächen: `(n + 1)²` Punkte über den Parameterbereich.
 pub const PATCH_SAMPLES: usize = 6;
 /// Mindestlänge einer Normale, damit ihre Richtung zählt (an Polen und Spitzen kürzer).
 pub const NORMAL_MIN: f64 = 0.5;
+/// Kleinster Betrag des Kreuzprodukts (mm²), ab dem die Richtung eines Netzdreiecks zählt.
+/// Dreiecke aus drei fast auf einer Geraden liegenden Punkten (Splitter an Freiformschnitten)
+/// haben nur Rundungsrauschen (gemessen bis 6e-15) als Fläche, ihre Richtung ist bedeutungslos;
+/// echte Dreiecke liegen weit darüber (Sehne 0,01 mm gibt Flächen im Bereich 1e-3 mm² und mehr).
+pub const FLIP_MIN_CROSS: f64 = 1e-9;
 /// Mindestwert des Skalarprodukts zweier Einheitsnormalen, die dieselbe Seite meinen.
 pub const NORMAL_AGREE: f64 = 0.9;
 
@@ -182,7 +198,7 @@ pub fn edge_points(m: &Model, e: &EdgeM) -> Result<Vec<DVec3>, String> {
 /// Geometrie aus den gelesenen Daten (Spec §5.2): jeder Eckpunkt liegt auf seinen Kurven, jede
 /// Kante auf allen Flächen, die sie begrenzt; die Enden der Kurvenstücke treffen die Eckpunkte.
 pub fn check_geometry(m: &Model) -> Result<(), String> {
-    let geom = geom_tol(m);
+    let geom = body_tol(m);
     let mut samples: BTreeMap<u64, Vec<DVec3>> = BTreeMap::new();
     for (id, e) in &m.edges {
         let tol = curve_tol(&e.curve, geom);
@@ -357,7 +373,7 @@ pub fn compare_with_kernel(m: &Model, solids: &[&Solid]) -> Result<(), String> {
 }
 
 fn compare_face(m: &Model, fm: &FaceM, solid: &Solid, fid: Id<Face>) -> Result<(), String> {
-    let geom = geom_tol(m);
+    let geom = body_tol(m);
     let kf = &solid.faces[fid];
     let loops: Vec<_> = std::iter::once(&kf.outer).chain(kf.inner.iter()).collect();
     if fm.bounds.len() != loops.len() || !fm.bounds[0].outer {
@@ -493,7 +509,8 @@ pub fn measure(m: &Model, solids: &[&Solid], chord: f64) -> Result<Measure, Stri
                 let s = f.map(|(p, _)| p);
                 let n = (s[1] - s[0]).cross(s[2] - s[0]);
                 let ns = (f[0].1 + f[1].1 + f[2].1) * sign;
-                let flip = n.length() > 0.0 && ns.length() >= NORMAL_MIN && n.dot(ns) < 0.0;
+                let flip =
+                    n.length() > FLIP_MIN_CROSS && ns.length() >= NORMAL_MIN && n.dot(ns) < 0.0;
                 let (a, b, c) = if flip {
                     out.flipped += 1;
                     (s[0], s[2], s[1])

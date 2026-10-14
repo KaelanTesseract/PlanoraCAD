@@ -200,7 +200,7 @@ fn dangling_references_are_refused_without_a_crash() {
     let mut s = cube(1.0);
     let first = s.faces.iter().next().unwrap().0;
     s.faces[first].outer.half_edges[0].edge = planora_kernel::Id::from_index(999);
-    let err = check_body(&body("Kaputt", &s), &Progress::new()).unwrap_err();
+    let err = check_body(&body("Kaputt", &s), &opts(), &Progress::new()).unwrap_err();
     assert!(
         matches!(&err, StepError::InvalidBody { name, .. } if name == "Kaputt"),
         "{err:?}"
@@ -210,7 +210,7 @@ fn dangling_references_are_refused_without_a_crash() {
 #[test]
 fn check_body_counts_faces_edges_and_entities() {
     let s = cube(1.0);
-    let stats = check_body(&body("Q", &s), &Progress::new()).unwrap();
+    let stats = check_body(&body("Q", &s), &opts(), &Progress::new()).unwrap();
     assert_eq!((stats.faces, stats.edges), (6, 12));
     // 8 Punkte + 8 Eckpunkte, 12 × (Punkt, Richtung, Vektor, Gerade, Kante), 24 orientierte
     // Kanten, 6 × (Schleife, Rand, 4 Einträge Ebene, Fläche), Schale, Körper.
@@ -249,7 +249,7 @@ fn bodies_without_faces_are_refused_and_nothing_is_written() {
     let mut hollow = Solid::new();
     hollow.shells = vec![planora_kernel::Shell { faces: vec![] }];
     for (name, solid) in [("Leer", &empty), ("Hülle ohne Flächen", &hollow)] {
-        match check_body(&body(name, solid), &Progress::new()) {
+        match check_body(&body(name, solid), &opts(), &Progress::new()) {
             Err(StepError::InvalidBody { name: n, reason }) => {
                 assert_eq!(n, name);
                 assert!(reason.contains("keine Flächen"), "{reason}");

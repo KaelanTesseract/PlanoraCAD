@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::check::measure;
+use common::check::{check_geometry, measure};
 use common::{Lcg, checked, export};
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{
@@ -291,6 +291,65 @@ fn rounded_chamfered_and_combined_bodies_pass_all_checks() {
             full(&label, &s, &spec(name));
         }
     }
+}
+
+/// Quader minus gedrehter NURBS-Zylinder (Prüfer-Repro: Eckpunkt 6e-9 neben einer Geraden, weil
+/// die Schnittkanten nur auf `NURBS_EDGE_TOL` genau liegen): in drei Lagen, mit der Schranke der
+/// Datei (`body_tol`) statt der analytischen.
+#[test]
+fn rotated_nurbs_cuts_pass_all_checks_in_three_poses() {
+    let poses = [
+        ("wie gebaut", DMat4::IDENTITY),
+        (
+            "gespiegelt und gedreht",
+            DMat4::from_rotation_z(0.6) * DMat4::from_scale(DVec3::new(1.0, 1.0, -1.0)),
+        ),
+        (
+            "schräg",
+            DMat4::from_euler(EulerRot::XYZ, 0.4, -0.3, 0.8)
+                * DMat4::from_translation(DVec3::new(7.0, -3.0, 2.0)),
+        ),
+    ];
+    for (angle, dx) in [(3.0, 10.0), (0.3, -10.0)] {
+        let cut = k()
+            .boolean(
+                &centered_box(),
+                &nurbs_cylinder(angle, dx),
+                BoolOp::Difference,
+            )
+            .unwrap();
+        for (pose, m) in poses {
+            let label = format!("Schnitt {angle}/{dx}, {pose}");
+            let mut spec = spec("Kreuz");
+            spec.formula = None;
+            full(&label, &moved(&cut, m), &spec);
+        }
+    }
+}
+
+/// Verschiebung eines Eckpunkts (mm), die auch die weitere Schranke der Freiformdatei finden muss
+/// (50-mal `FREEFORM_TOL`).
+const FREEFORM_SHIFT: f64 = 1e-3;
+
+/// Die weitere Schranke heißt nicht, dass alles durchgeht: Ein um 1e-3 verschobener Eckpunkt
+/// wird in der Freiformdatei weiterhin gefunden.
+#[test]
+fn a_vertex_moved_by_1e_3_is_still_caught_with_the_freeform_bound() {
+    let cut = k()
+        .boolean(
+            &centered_box(),
+            &nurbs_cylinder(0.3, 2.0),
+            BoolOp::Difference,
+        )
+        .unwrap();
+    let (text, _) = export(&[("Kreuz", &cut)]);
+    let (mut m, _) = checked(&text, &[&cut]);
+    let first = *m.vertices.keys().next().unwrap();
+    m.vertices.get_mut(&first).unwrap().x += FREEFORM_SHIFT;
+    assert!(
+        check_geometry(&m).is_err(),
+        "Verschiebung um {FREEFORM_SHIFT} mm"
+    );
 }
 
 #[test]

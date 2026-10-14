@@ -282,7 +282,7 @@ pub fn prepare_step(items: &[ExportItem], progress: &Progress) -> Result<StepPre
                     name: name.clone(),
                     solid: s,
                 };
-                match check_body(&body, progress) {
+                match check_body(&body, &StepOptions::new("x.step"), progress) {
                     Ok(stats) => {
                         out.faces += stats.faces;
                         out.bodies.push((name, s.clone()));
