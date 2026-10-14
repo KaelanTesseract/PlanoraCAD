@@ -1,10 +1,12 @@
 //! Geometrie (Spec §3): Punkte, Richtungen, Koordinatensysteme, Kurven und Flächen.
 
-use crate::entity::Entities;
+use crate::entity::{Entities, logical, refs};
 use crate::error::StepError;
 use crate::number::push_real;
-use planora_kernel::{Curve, Surface, UvRect};
-use planora_math::{DVec3, Frame};
+use planora_kernel::{Curve, NurbsSurfaceData, Surface, UvRect};
+use planora_math::nurbs::{KnotVector, NurbsCurve};
+use planora_math::{DVec3, Frame, Tolerance};
+use std::fmt::Write as _;
 
 /// Abweichung, bis zu der ein Koordinatensystem des Kernels als senkrecht und normiert gilt.
 /// Die Systeme des Kernels weichen um Rundungsreste (etwa 1e-15) ab; schief gebaute Systeme
@@ -135,8 +137,121 @@ pub(crate) fn curve(e: &mut Entities, c: &Curve) -> Result<u64, StepError> {
                 with_numbers(e, "ELLIPSE", p, &[a, b])
             }
         }
-        Curve::Nurbs(_) => Err(reject("Diese Kantenart wird noch nicht ausgegeben")),
+        Curve::Nurbs(c) => nurbs_curve(e, c),
     }
+}
+
+/// Knoten als verschiedene Werte mit Vielfachheiten (Spec §3): `((m1,m2,…), (k1,k2,…))`. Der
+/// Kernel speichert gleiche Knoten bitgleich, daher genügt der genaue Vergleich.
+fn knot_lists(knots: &KnotVector) -> Result<(String, String), StepError> {
+    let mut values: Vec<f64> = Vec::new();
+    let mut mults: Vec<usize> = Vec::new();
+    for &k in knots.knots() {
+        match values.last() {
+            Some(&last) if last == k => {
+                if let Some(m) = mults.last_mut() {
+                    *m += 1;
+                }
+            }
+            _ => {
+                values.push(k);
+                mults.push(1);
+            }
+        }
+    }
+    let mut m = String::from("(");
+    for (i, n) in mults.iter().enumerate() {
+        if i > 0 {
+            m.push(',');
+        }
+        let _ = write!(m, "{n}");
+    }
+    m.push(')');
+    let mut v = String::new();
+    push_list(&mut v, &values)?;
+    Ok((m, v))
+}
+
+/// Hängt `(x1,x2,…)` an.
+fn push_list(s: &mut String, xs: &[f64]) -> Result<(), StepError> {
+    s.push('(');
+    for (i, x) in xs.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        push_real(s, *x)?;
+    }
+    s.push(')');
+    Ok(())
+}
+
+/// Freiformkurve (Spec §3): `B_SPLINE_CURVE_WITH_KNOTS`; mit Gewichten ungleich 1 als
+/// zusammengesetzter Eintrag mit `RATIONAL_B_SPLINE_CURVE` (Teile in alphabetischer Reihenfolge,
+/// wie ISO 10303-21 sie verlangt). Geschlossene Kurven tragen das Kennzeichen `.T.`.
+fn nurbs_curve(e: &mut Entities, c: &NurbsCurve) -> Result<u64, StepError> {
+    let mut points = Vec::with_capacity(c.control_points().len());
+    for p in c.control_points() {
+        points.push(point(e, *p)?);
+    }
+    let degree = c.degree();
+    let closed = logical(c.is_closed(Tolerance::default().linear));
+    let (mults, values) = knot_lists(c.knots())?;
+    let knots = format!("{mults},{values}");
+    let cps = refs(&points);
+    if c.weights().iter().all(|w| *w == 1.0) {
+        return e.push(&format!(
+            "B_SPLINE_CURVE_WITH_KNOTS('',{degree},{cps},.UNSPECIFIED.,{closed},.F.,{knots},.UNSPECIFIED.)"
+        ));
+    }
+    let mut weights = String::new();
+    push_list(&mut weights, c.weights())?;
+    e.push(&format!(
+        "(BOUNDED_CURVE()B_SPLINE_CURVE({degree},{cps},.UNSPECIFIED.,{closed},.F.)\
+         B_SPLINE_CURVE_WITH_KNOTS({knots},.UNSPECIFIED.)CURVE()GEOMETRIC_REPRESENTATION_ITEM()\
+         RATIONAL_B_SPLINE_CURVE({weights})REPRESENTATION_ITEM(''))"
+    ))
+}
+
+/// Freiformfläche (Spec §3): Kontrollpunkte zeilenweise in u (`control[i][j]`), Kennzeichen
+/// „geschlossen“ in u und v wie im Kernel; rational wie bei [`nurbs_curve`].
+fn nurbs_surface(e: &mut Entities, d: &NurbsSurfaceData) -> Result<u64, StepError> {
+    let s = d.surface();
+    let (nu, nv) = s.counts();
+    let mut rows = String::from("(");
+    let mut weights = String::from("(");
+    let mut rational = false;
+    for i in 0..nu {
+        let mut row = Vec::with_capacity(nv);
+        let mut w = Vec::with_capacity(nv);
+        for j in 0..nv {
+            row.push(point(e, s.control_at(i, j))?);
+            w.push(s.weight_at(i, j));
+            rational |= s.weight_at(i, j) != 1.0;
+        }
+        if i > 0 {
+            rows.push(',');
+            weights.push(',');
+        }
+        rows.push_str(&refs(&row));
+        push_list(&mut weights, &w)?;
+    }
+    rows.push(')');
+    weights.push(')');
+    let (du, dv) = (s.degree_u(), s.degree_v());
+    let (uc, vc) = (logical(d.is_periodic_u()), logical(d.is_periodic_v()));
+    let (mu, ku) = knot_lists(s.knots_u())?;
+    let (mv, kv) = knot_lists(s.knots_v())?;
+    let knots = format!("{mu},{mv},{ku},{kv}");
+    if !rational {
+        return e.push(&format!(
+            "B_SPLINE_SURFACE_WITH_KNOTS('',{du},{dv},{rows},.UNSPECIFIED.,{uc},{vc},.F.,{knots},.UNSPECIFIED.)"
+        ));
+    }
+    e.push(&format!(
+        "(BOUNDED_SURFACE()B_SPLINE_SURFACE({du},{dv},{rows},.UNSPECIFIED.,{uc},{vc},.F.)\
+         B_SPLINE_SURFACE_WITH_KNOTS({knots},.UNSPECIFIED.)GEOMETRIC_REPRESENTATION_ITEM()\
+         RATIONAL_B_SPLINE_SURFACE({weights})REPRESENTATION_ITEM('')SURFACE())"
+    ))
 }
 
 /// Kegel (Spec §3): Der Kernel beschreibt den Radius an der Höhe `v` als `radius + slope · v`;
@@ -223,6 +338,6 @@ pub(crate) fn surface(
             radius,
             slope,
         } => cone(e, frame, *radius, *slope, patch),
-        Surface::Nurbs(_) => Err(reject("Diese Flächenart wird noch nicht ausgegeben")),
+        Surface::Nurbs(d) => nurbs_surface(e, d),
     }
 }
