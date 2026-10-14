@@ -55,6 +55,17 @@ pub fn paint_body_icon(painter: &Painter, rect: Rect, kind: BodyKind, color: Col
             painter.rect_stroke(back, 1.0, stroke, egui::StrokeKind::Inside);
             painter.rect_stroke(front, 1.0, stroke, egui::StrokeKind::Inside);
         }
+        BodyKind::Mesh => {
+            // Dreiecksnetz: ein großes Dreieck mit eingeschriebenem Dreieck
+            let a = c + vec2(0.0, -r);
+            let b = c + vec2(-r, r * 0.8);
+            let d = c + vec2(r, r * 0.8);
+            painter.add(egui::Shape::closed_line(vec![a, b, d], stroke));
+            painter.add(egui::Shape::closed_line(
+                vec![a.lerp(b, 0.5), b.lerp(d, 0.5), d.lerp(a, 0.5)],
+                stroke,
+            ));
+        }
     }
 }
 
@@ -82,6 +93,7 @@ impl FeatureIcon {
             K::Boolean { .. } => FeatureIcon::Body(BodyKind::Combined),
             K::Move { .. } => FeatureIcon::Move,
             K::Verrunden { .. } => FeatureIcon::Blend,
+            K::MeshBody { .. } => FeatureIcon::Body(BodyKind::Mesh),
         }
     }
 }

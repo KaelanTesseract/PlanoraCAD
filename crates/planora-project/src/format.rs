@@ -10,6 +10,10 @@ pub struct VersionFile {
     pub marker: usize,
     pub naechste_id: u64,
     pub features: Vec<FeatureDto>,
+    /// Netze der Netz-Körper (ab Format 3, Plan P12). Fehlt das Feld oder ist die Liste leer,
+    /// bleibt die Datei Byte für Byte wie in Format 1 und 2.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub netze: Vec<MeshDto>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -26,6 +30,13 @@ pub type V3 = [f64; 3];
 pub struct BodyRefDto {
     pub feature: u64,
     pub index: usize,
+}
+
+/// Ein Netz: Kennung und Base64 der Bytes aus `ExchangeMesh::to_bytes`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct MeshDto {
+    pub id: u64,
+    pub daten: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -287,5 +298,13 @@ pub enum KindDto {
         kanten: Vec<EdgeRefDto>,
         art: BlendArtDto,
         tangentenkette: bool,
+    },
+    /// Netz-Körper (ab Format 3): Netz aus `netze`, Lage in mm, Drehung als Quaternion
+    /// [x, y, z, w], Maßstab.
+    NetzKoerper {
+        netz: u64,
+        versatz: V3,
+        drehung: [f64; 4],
+        massstab: f64,
     },
 }

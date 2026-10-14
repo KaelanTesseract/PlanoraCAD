@@ -1,12 +1,33 @@
 use crate::browser::ERROR_COLOR;
+use crate::mesh_body::{WARNING_COLOR, euler_degrees, report_text, rotation_from_degrees};
 use crate::sketch_view::format_number;
 use crate::state::AppState;
+use planora_exchange::MeshTransform;
 use planora_feature::{
-    BlendArt, FeatureId, FeatureKind, FeatureStatus, SketchPlane, StandardPlane,
+    BlendArt, FeatureId, FeatureKind, FeatureStatus, MAX_MESH_SCALE, MIN_MESH_SCALE, SketchPlane,
+    StandardPlane,
 };
 use planora_kernel::{BoolOp, Kernel};
 use planora_math::DVec3;
 use planora_render::Pick;
+
+/// Beschriftung der Zeile „Geschlossen“: Der Bericht stammt vom Einlesen; das Export-Fenster
+/// prüft nach der Lage noch einmal und kann deshalb ein anderes Ergebnis zeigen.
+const CLOSED_AT_IMPORT_LABEL: &str = "Geschlossen beim Einlesen";
+
+/// Vorsatz der Warnung aus dem Bericht beim Einlesen.
+const AT_IMPORT_PREFIX: &str = "Beim Einlesen: ";
+
+/// Warnung unter den Zeilen: der Bericht von damals, als solcher gekennzeichnet.
+fn import_warning(r: &planora_exchange::MeshReport) -> String {
+    format!("{AT_IMPORT_PREFIX}{}", report_text(r))
+}
+
+/// Hinweis unter den Netz-Körpern (ein Satz, ohne doppelte Leerzeichen).
+const MESH_BODY_HINT: &str = concat!(
+    "Netz-Körper lassen sich verschieben, drehen, vergrößern, messen und exportieren, ",
+    "aber nicht mit anderen Körpern verrechnen, runden oder als Fläche für eine Skizze nutzen."
+);
 
 /// Eigenschaften: für einen gewählten Körper Maße, Fläche/Kante und Position; für ein
 /// gewähltes Feature Art, Name, Status und Parameter.
@@ -180,6 +201,29 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str
             ));
             rows
         }
+        FeatureKind::MeshBody {
+            mesh,
+            offset,
+            rotation,
+            scale,
+        } => {
+            let triangles = doc.mesh(*mesh).map_or(0, |m| m.triangle_count());
+            let d = euler_degrees(*rotation);
+            vec![
+                ("Netz", format!("{triangles} Dreiecke")),
+                ("Position", triple(*offset)),
+                (
+                    "Drehung",
+                    format!(
+                        "{} / {} / {} °",
+                        format_number(d.x, 2),
+                        format_number(d.y, 2),
+                        format_number(d.z, 2)
+                    ),
+                ),
+                ("Maßstab", format_number(*scale, 4)),
+            ]
+        }
     }
 }
 
@@ -241,9 +285,23 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
     }
 }
 
+/// Zeilen „Volumen“ und „Oberfläche“ des Eigenschaften-Rasters.
+fn mass_rows(ui: &mut egui::Ui, mass: &planora_mesh::MassProperties) {
+    ui.label("Volumen");
+    ui.label(format!("≈ {:.2} mm³", mass.volume));
+    ui.end_row();
+    ui.label("Oberfläche");
+    ui.label(format!("≈ {:.2} mm²", mass.surface_area));
+    ui.end_row();
+}
+
 /// Maße des gewählten Körpers sowie Angaben zur gewählten Fläche oder Kante. Gelöscht wird
 /// über das Feature im Feature-Baum.
 fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
+    if state.is_mesh(index) {
+        mesh_body(ui, state, index);
+        return;
+    }
     let mut moved: Option<DVec3> = None;
     let mut dragging = false;
     let renamed;
@@ -256,12 +314,7 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         let (min, max) = body.bounds;
         let size = max - min;
         egui::Grid::new("body_props").num_columns(2).show(ui, |ui| {
-            ui.label("Volumen");
-            ui.label(format!("≈ {:.2} mm³", body.mass.volume));
-            ui.end_row();
-            ui.label("Oberfläche");
-            ui.label(format!("≈ {:.2} mm²", body.mass.surface_area));
-            ui.end_row();
+            mass_rows(ui, &body.mass);
             ui.label("Schwerpunkt");
             ui.label(format!(
                 "{:.2} / {:.2} / {:.2} mm",
@@ -345,5 +398,110 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         }
         (None, true) => {}
         (None, false) => state.end_drag(),
+    }
+}
+
+/// Eigenschaften eines Netz-Körpers (Spec §6): Name, Maße, Lage, Drehung in Grad, Maßstab und
+/// Prüfbericht. Änderungen wirken direkt auf den Netz-Körper (kein neues Feature).
+fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
+    let Some(t) = state.mesh_transform(index) else {
+        return;
+    };
+    let shown_degrees = euler_degrees(t.rotation);
+    let (mut offset, mut degrees, mut scale) = (t.offset, shown_degrees, t.scale);
+    let renamed;
+    {
+        let body = &state.bodies[index];
+        ui.label("Name");
+        renamed = name_field(ui, state.naming_feature(index), &body.name);
+        ui.add_space(6.0);
+        let size = body.bounds.1 - body.bounds.0;
+        egui::Grid::new("mesh_props").num_columns(2).show(ui, |ui| {
+            ui.label("Art");
+            ui.label("Netz-Körper");
+            ui.end_row();
+            mass_rows(ui, &body.mass);
+            ui.label("Abmessungen");
+            ui.label(format!("{:.2} × {:.2} × {:.2} mm", size.x, size.y, size.z));
+            ui.end_row();
+            ui.label("Position (x/y/z)");
+            ui.horizontal(|ui| {
+                for v in [&mut offset.x, &mut offset.y, &mut offset.z] {
+                    ui.add(egui::DragValue::new(v).speed(0.5).suffix(" mm"));
+                }
+            });
+            ui.end_row();
+            ui.label("Drehung (x/y/z)");
+            ui.horizontal(|ui| {
+                for v in [&mut degrees.x, &mut degrees.y, &mut degrees.z] {
+                    ui.add(egui::DragValue::new(v).speed(1.0).suffix(" °"));
+                }
+            });
+            ui.end_row();
+            ui.label("Maßstab");
+            ui.add(
+                egui::DragValue::new(&mut scale)
+                    .speed(0.01)
+                    .range(MIN_MESH_SCALE..=MAX_MESH_SCALE),
+            );
+            ui.end_row();
+            if let Some(r) = body.mesh_report {
+                ui.label("Dreiecke");
+                ui.label(r.triangles.to_string());
+                ui.end_row();
+                ui.label(CLOSED_AT_IMPORT_LABEL);
+                ui.label(if r.closed { "ja" } else { "nein" });
+                ui.end_row();
+            }
+        });
+        if let Some(r) = body.mesh_report
+            && !r.closed
+        {
+            ui.colored_label(WARNING_COLOR, import_warning(&r));
+        }
+        ui.add_space(4.0);
+        ui.weak(MESH_BODY_HINT);
+    }
+    if let (Some(name), Some(id)) = (renamed, state.naming_feature(index)) {
+        let _ = state.rename_feature(id, &name);
+    }
+    // Die Drehung wird nur neu gebildet, wenn ein Winkel geändert wurde (sonst bliebe sie durch
+    // das Hin- und Zurückrechnen nicht bitgleich).
+    let rotation = if degrees == shown_degrees {
+        t.rotation
+    } else {
+        rotation_from_degrees(degrees)
+    };
+    let new = MeshTransform {
+        offset,
+        rotation,
+        scale,
+    };
+    if new != t {
+        let _ = state.set_mesh_transform(index, new);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CLOSED_AT_IMPORT_LABEL, MESH_BODY_HINT, import_warning};
+    use planora_exchange::MeshReport;
+
+    #[test]
+    fn the_report_is_labelled_as_taken_when_the_file_was_read() {
+        let open = MeshReport {
+            open_edges: 3,
+            ..MeshReport::default()
+        };
+        let text = import_warning(&open);
+        assert!(text.starts_with("Beim Einlesen: "), "{text}");
+        assert!(text.contains("3 offene Kanten"), "{text}");
+        assert!(CLOSED_AT_IMPORT_LABEL.contains("beim Einlesen"));
+    }
+
+    #[test]
+    fn the_mesh_body_hint_has_no_runs_of_spaces() {
+        assert!(!MESH_BODY_HINT.contains("  "), "{MESH_BODY_HINT:?}");
+        assert!(MESH_BODY_HINT.contains("exportieren, aber nicht"));
     }
 }

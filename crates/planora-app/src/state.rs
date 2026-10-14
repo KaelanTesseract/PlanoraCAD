@@ -1,12 +1,13 @@
 use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
+use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
 use planora_feature::{
     BlendArt, BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
-    SketchFeature, SketchPlane,
+    MESH_LOCKED, MeshId, SketchFeature, SketchPlane,
 };
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{AnalyticKernel, Edge, Face, Id, Solid};
-use planora_math::{DVec2, DVec3, Frame};
+use planora_math::{DQuat, DVec2, DVec3, Frame};
 use planora_mesh::{
     MassProperties, Mesh, TessellationOptions, is_watertight, mass_properties, tessellate,
 };
@@ -30,6 +31,8 @@ pub enum BodyKind {
     Revolution,
     /// Ergebnis einer Booleschen Operation (oder Art unbekannt).
     Combined,
+    /// Eingelesenes Netz (Netz-Körper, Teilprojekt 9).
+    Mesh,
 }
 
 /// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
@@ -62,6 +65,10 @@ pub struct Body {
     /// Das Netz ist an einzelnen Stellen ungenau (`Mesh::inexact_faces`) oder nicht geschlossen;
     /// die Statuszeile zeigt dann [`MESH_NOTE`]. Der Körper selbst ist davon nicht betroffen.
     pub mesh_inexact: bool,
+    /// Prüfbericht des Netzes; nur bei Netz-Körpern (Spec §6).
+    pub mesh_report: Option<MeshReport>,
+    /// Die Ansicht zeigt nur einen Teil der Dreiecke (Netz-Körper über `display_triangles`).
+    pub preview: bool,
 }
 
 /// Hinweis in der Statuszeile, wenn das Netz eines Körpers ungenau ist.
@@ -129,6 +136,10 @@ pub struct AppState {
     pub chain_marking: bool,
     /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
     drag_move: Option<FeatureId>,
+    /// Prüfberichte der Netze, einmal je Netz berechnet (Plan P13).
+    mesh_reports: BTreeMap<MeshId, MeshReport>,
+    /// Ab so vielen Dreiecken zeigt die Ansicht Netz-Körper als Vorschau (Spec §11).
+    pub display_triangles: usize,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -232,6 +243,8 @@ impl AppState {
             edge_picking: false,
             chain_marking: true,
             drag_move: None,
+            mesh_reports: BTreeMap::new(),
+            display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
         };
         state.rebuild_scene();
         state
@@ -289,6 +302,22 @@ impl AppState {
                 Err(e) => failed.push(format!("„{name}“: {e}")),
             }
         }
+        for v in self.document.visible_meshes() {
+            let report = *self
+                .mesh_reports
+                .entry(v.mesh_id)
+                .or_insert_with(|| check_mesh(v.mesh));
+            bodies.push(crate::mesh_body::make_body(
+                v.name.clone(),
+                v.body,
+                v.mesh,
+                &v.transform,
+                report,
+                self.display_triangles,
+            ));
+        }
+        self.mesh_reports
+            .retain(|id, _| self.document.mesh(*id).is_some());
         self.bodies = bodies;
         let new: Vec<BodyRef> = self.bodies.iter().map(|b| b.source).collect();
         let map = |i: usize| -> Option<usize> {
@@ -332,7 +361,10 @@ impl AppState {
         match pick {
             Pick::Face(FaceRef { body, face }) => {
                 let body = map(body)?;
-                self.bodies[body].solid.faces.get(face)?;
+                // Ein Netz-Körper hat eine einzige Fläche ohne Kernel-Gegenstück.
+                if self.bodies[body].kind != BodyKind::Mesh {
+                    self.bodies[body].solid.faces.get(face)?;
+                }
                 Some(Pick::Face(FaceRef { body, face }))
             }
             Pick::Edge(EdgeRef { body, edge }) => {
@@ -498,6 +530,9 @@ impl AppState {
         if a == b || a >= self.bodies.len() || b >= self.bodies.len() {
             return self.fail("Bitte zwei verschiedene Körper wählen".into());
         }
+        if self.is_mesh(a) || self.is_mesh(b) {
+            return self.fail(MESH_LOCKED.into());
+        }
         let kind = FeatureKind::Boolean {
             target: self.bodies[a].source,
             tool: self.bodies[b].source,
@@ -539,6 +574,9 @@ impl AppState {
         tangentenkette: bool,
         first_face: Option<&str>,
     ) -> Result<FeatureId, String> {
+        if self.is_mesh(body) {
+            return self.fail(MESH_LOCKED.into());
+        }
         let Some(b) = self.bodies.get(body) else {
             return self.fail("Körper nicht gefunden".into());
         };
@@ -633,6 +671,10 @@ impl AppState {
         };
         if delta == DVec3::ZERO {
             return Ok(());
+        }
+        // Netz-Körper verschieben sich über ihre eigene Lage (Plan P10), ohne Feature.
+        if self.is_mesh(index) {
+            return self.move_mesh_body(r, delta);
         }
         // Beim Übernehmen des Entwurfs kann sich die Körperliste ändern (etwa wenn eine
         // Extrusion der Skizze danach fehlschlägt): den Körper über seinen Verweis neu suchen.
@@ -898,6 +940,8 @@ impl AppState {
             mass,
             bounds,
             mesh_inexact,
+            mesh_report: None,
+            preview: false,
         })
     }
 
@@ -1099,15 +1143,22 @@ fn to_vec3(v: DVec3) -> Vec3 {
 // ---- Skizzen ----------------------------------------------------------------------------------
 
 impl AppState {
-    /// Hinweis für die Statuszeile, wenn das Netz eines sichtbaren Körpers ungenau ist: mit dem
-    /// Namen des Körpers (des gewählten, wenn er betroffen ist, sonst des ersten). Ändert nichts.
+    /// Hinweis für die Statuszeile, wenn das Netz eines sichtbaren Körpers ungenau ist oder nur
+    /// als Vorschau gezeigt wird: mit dem Namen des Körpers (des gewählten, wenn er betroffen
+    /// ist, sonst des ersten). Ändert nichts.
     pub fn mesh_note(&self) -> Option<String> {
+        let noted = |b: &&Body| b.mesh_inexact || b.preview;
         let chosen = self
             .selected_body
             .and_then(|i| self.bodies.get(i))
-            .filter(|b| b.mesh_inexact);
-        let body = chosen.or_else(|| self.bodies.iter().find(|b| b.mesh_inexact))?;
-        Some(format!("„{}“: {MESH_NOTE}", body.name))
+            .filter(noted);
+        let body = chosen.or_else(|| self.bodies.iter().find(noted))?;
+        let note = if body.preview {
+            crate::mesh_body::PREVIEW_NOTE
+        } else {
+            MESH_NOTE
+        };
+        Some(format!("„{}“: {note}", body.name))
     }
 
     /// Fehler als Meldung ablegen und zurückgeben.
@@ -1159,6 +1210,9 @@ impl AppState {
     /// Legt ein Skizzen-Feature auf der ebenen Fläche `face` des sichtbaren Körpers `body` an.
     /// Die Skizze verweist über Marke und Hinweispunkt auf die Fläche und wandert mit ihr.
     pub fn new_sketch_on_face(&mut self, body: usize, face: Id<Face>) -> Result<FeatureId, String> {
+        if self.is_mesh(body) {
+            return self.fail(MESH_LOCKED.into());
+        }
         let Some(b) = self.bodies.get(body) else {
             return self.fail("Körper nicht gefunden".into());
         };
@@ -1578,6 +1632,186 @@ fn body_kind(doc: &Document, r: BodyRef) -> BodyKind {
         Some(FeatureKind::Cone { .. }) => BodyKind::Cone,
         Some(FeatureKind::Extrude { .. }) => BodyKind::Extrusion,
         Some(FeatureKind::Revolve { .. }) => BodyKind::Revolution,
+        Some(FeatureKind::MeshBody { .. }) => BodyKind::Mesh,
         _ => BodyKind::Combined,
+    }
+}
+
+// ---- Netz-Körper ------------------------------------------------------------------------------
+
+/// Bezeichnung (und Namensstamm) eingelesener Netze.
+const MESH_LABEL: &str = "Netz-Körper";
+
+/// Hinweis an ausgegrauten Menüpunkten bei gewähltem Netz-Körper (Spec §6).
+pub const MESH_LOCKED_HINT: &str = "Netz-Körper lassen sich nicht bearbeiten.";
+
+/// Schreibt die Lage `t` in einen Netz-Körper.
+fn set_transform(kind: &mut FeatureKind, t: MeshTransform) {
+    if let FeatureKind::MeshBody {
+        offset,
+        rotation,
+        scale,
+        ..
+    } = kind
+    {
+        (*offset, *rotation, *scale) = (t.offset, t.rotation, t.scale);
+    }
+}
+
+impl AppState {
+    /// Ist der Körper `index` ein Netz-Körper?
+    pub fn is_mesh(&self, index: usize) -> bool {
+        self.bodies
+            .get(index)
+            .is_some_and(|b| b.kind == BodyKind::Mesh)
+    }
+
+    /// Ist der gewählte Körper ein Netz-Körper?
+    pub fn selected_is_mesh(&self) -> bool {
+        self.selected_body.is_some_and(|i| self.is_mesh(i))
+    }
+
+    /// Warum „Vereinigen“, „Abziehen“ und „Schneiden“ gerade nicht gehen (`None`: sie gehen).
+    pub fn boolean_blocked(&self) -> Option<&'static str> {
+        if self.selected_is_mesh() {
+            Some(MESH_LOCKED_HINT)
+        } else if self.solid_body_count() < 2 {
+            Some("Dafür werden mindestens zwei Körper benötigt.")
+        } else {
+            None
+        }
+    }
+
+    /// Warum „Verrunden“ und „Fase“ gerade nicht gehen (`None`: sie gehen).
+    pub fn blend_blocked(&self) -> Option<&'static str> {
+        if self.selected_is_mesh() {
+            Some(MESH_LOCKED_HINT)
+        } else if self.solid_body_count() == 0 {
+            Some("Dafür wird mindestens ein Körper benötigt.")
+        } else {
+            None
+        }
+    }
+
+    /// Warum „Skizze auf gewählter Fläche“ gerade nicht geht (`None`: es geht).
+    pub fn sketch_on_face_blocked(&self) -> Option<&'static str> {
+        if self.selected_is_mesh() {
+            return Some(MESH_LOCKED_HINT);
+        }
+        let planar = match self.selection {
+            Some(Pick::Face(FaceRef { body, face })) => self
+                .bodies
+                .get(body)
+                .is_some_and(|b| plane_of_face(&b.solid, face).is_some()),
+            _ => false,
+        };
+        if planar {
+            None
+        } else {
+            Some("Dafür zuerst eine ebene Fläche eines Körpers anklicken.")
+        }
+    }
+
+    /// Anzahl der sichtbaren Körper, die keine Netz-Körper sind.
+    pub fn solid_body_count(&self) -> usize {
+        self.bodies
+            .iter()
+            .filter(|b| b.kind != BodyKind::Mesh)
+            .count()
+    }
+
+    /// Lage des Netz-Körpers `index`; `None` für andere Körper.
+    pub fn mesh_transform(&self, index: usize) -> Option<MeshTransform> {
+        let b = self
+            .bodies
+            .get(index)
+            .filter(|b| b.kind == BodyKind::Mesh)?;
+        self.document.mesh_body(b.source.feature).map(|(_, t)| t)
+    }
+
+    /// Legt ein eingelesenes Netz als Netz-Körper an (Lage: Ursprung, Maßstab `unit_scale` =
+    /// Millimeter je Einheit der Datei) und wählt ihn. Ein leerer Name ergibt „Netz-Körper N“.
+    /// Schlägt es fehl, bleibt das Dokument unverändert (Spec §5).
+    pub fn import_mesh(
+        &mut self,
+        name: &str,
+        mesh: Arc<ExchangeMesh>,
+        unit_scale: f64,
+    ) -> Result<FeatureId, String> {
+        self.try_close_sketch()?;
+        let trimmed = name.trim();
+        let (name, counted) = if trimmed.is_empty() {
+            (self.next_name(MESH_LABEL), true)
+        } else {
+            (trimmed.to_string(), false)
+        };
+        let t = MeshTransform {
+            offset: DVec3::ZERO,
+            rotation: DQuat::IDENTITY,
+            scale: unit_scale,
+        };
+        match self.document.add_mesh_body(name, mesh, t) {
+            Ok(id) => {
+                if counted {
+                    self.count_name(MESH_LABEL);
+                }
+                self.hover = None;
+                self.selection = None;
+                self.selected_feature = None;
+                self.refresh();
+                self.selected_body = self.body_index(BodyRef {
+                    feature: id,
+                    index: 0,
+                });
+                Ok(id)
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Setzt die Lage des Netz-Körpers `index`. Lässt er sich damit nicht berechnen, wird die
+    /// alte Lage zurückgeschrieben und die Meldung steht in `message`.
+    pub fn set_mesh_transform(&mut self, index: usize, t: MeshTransform) -> Result<(), String> {
+        let Some(r) = self
+            .bodies
+            .get(index)
+            .filter(|b| b.kind == BodyKind::Mesh)
+            .map(|b| b.source)
+        else {
+            return self.fail("Das ist kein Netz-Körper".into());
+        };
+        self.set_mesh_transform_of(r, t)
+    }
+
+    fn move_mesh_body(&mut self, r: BodyRef, delta: DVec3) -> Result<(), String> {
+        let Some(mut t) = self.document.mesh_body(r.feature).map(|(_, t)| t) else {
+            return self.fail("Körper nicht gefunden".into());
+        };
+        t.offset += delta;
+        self.set_mesh_transform_of(r, t)
+    }
+
+    fn set_mesh_transform_of(&mut self, r: BodyRef, t: MeshTransform) -> Result<(), String> {
+        self.try_close_sketch()?;
+        let Some(old) = self.document.mesh_body(r.feature).map(|(_, t)| t) else {
+            return self.fail("Körper nicht gefunden".into());
+        };
+        if old == t {
+            return Ok(());
+        }
+        if let Err(e) = self.document.update(r.feature, |k| set_transform(k, t)) {
+            return self.fail(e.to_string());
+        }
+        match self.document.feature(r.feature).map(|f| f.status.clone()) {
+            Some(FeatureStatus::Ok) => {
+                self.refresh();
+                Ok(())
+            }
+            status => {
+                let _ = self.document.update(r.feature, |k| set_transform(k, old));
+                self.refresh();
+                self.fail(status_message(status))
+            }
+        }
     }
 }

@@ -2426,6 +2426,7 @@ dependencies = [
  "egui",
  "egui_tiles",
  "glam",
+ "planora-exchange",
  "planora-feature",
  "planora-kernel",
  "planora-math",
@@ -2437,9 +2438,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "planora-exchange"
+version = "0.1.0"
+dependencies = [
+ "earcutr",
+ "planora-kernel",
+ "planora-math",
+ "planora-mesh",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "planora-feature"
 version = "0.1.0"
 dependencies = [
+ "planora-exchange",
  "planora-kernel",
  "planora-math",
  "planora-mesh",
@@ -2482,6 +2496,7 @@ dependencies = [
 name = "planora-project"
 version = "0.1.0"
 dependencies = [
+ "planora-exchange",
  "planora-feature",
  "planora-kernel",
  "planora-math",

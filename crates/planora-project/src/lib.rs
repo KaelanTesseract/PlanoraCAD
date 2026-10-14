@@ -1,4 +1,5 @@
 //! Dateiformat, Projektverwaltung und Versionsspeicher von PlanoraCAD (ohne Oberfläche).
+pub mod base64;
 pub mod config;
 pub mod convert;
 pub mod docstore;

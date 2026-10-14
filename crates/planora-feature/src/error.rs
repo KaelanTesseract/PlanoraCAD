@@ -30,6 +30,10 @@ pub enum FeatureError {
     ImplausibleFreeformResult,
     #[error("Das Ergebnis der Rundung oder Fase ist unplausibel (Volumenprobe fehlgeschlagen)")]
     ImplausibleBlend,
+    #[error("Netz-Körper lassen sich nicht bearbeiten")]
+    MeshBodyLocked,
+    #[error("Das Netz {0} fehlt im Dokument")]
+    MeshMissing(u64),
     #[error("Folgende Features hängen davon ab: {}", join_ids(.0))]
     HasDependents(Vec<u64>),
     #[error("Ungültige Eingabe: {0}")]

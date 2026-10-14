@@ -2,9 +2,11 @@
 
 use crate::error::FeatureError;
 use crate::model::{
-    BlendArt, BodyRef, Document, EdgeCopy, FeatureKind, SketchFeature, SketchPlane,
+    BlendArt, BodyRef, Document, EdgeCopy, FeatureId, FeatureKind, MAX_MESH_SCALE, MIN_MESH_SCALE,
+    ROTATION_NORM_TOL, SketchFeature, SketchPlane,
 };
 use crate::refs::{FaceRef, first_face, resolve_edge, resolve_face};
+use planora_exchange::{ExchangeMesh, MeshTransform};
 use planora_kernel::blend::{MAX_BLEND_EDGES, MAX_RADIUS_POINTS};
 use planora_kernel::boolean::BooleanError;
 use planora_kernel::{
@@ -71,7 +73,7 @@ fn in_range(v: f64) -> bool {
 
 /// Prüft die Zahlen eines Features gegen [`MAX_COORD_MM`], bevor der Kernel rechnet. Die
 /// Ausdehnung eines Grundkörpers (Lage plus Maß) muss ebenfalls im Bereich liegen.
-fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
+pub(crate) fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
     let out = |what: &str| Err(FeatureError::OutOfRange(what.to_string()));
     let place = |origin: DVec3, extent: f64| {
         origin
@@ -147,6 +149,26 @@ fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
                 return out("Ein Maß der Rundung oder Fase");
             }
         }
+        FeatureKind::MeshBody {
+            offset,
+            rotation,
+            scale,
+            ..
+        } => {
+            if !offset.to_array().iter().all(|v| in_range(*v)) {
+                return out("Die Position des Netz-Körpers");
+            }
+            if !(scale.is_finite() && (MIN_MESH_SCALE..=MAX_MESH_SCALE).contains(scale)) {
+                return Err(FeatureError::InvalidInput(
+                    "Der Maßstab muss zwischen 0,000001 und 1 000 000 liegen".into(),
+                ));
+            }
+            if !(rotation.is_finite() && (rotation.length() - 1.0).abs() <= ROTATION_NORM_TOL) {
+                return Err(FeatureError::InvalidInput(
+                    "Die Drehung des Netz-Körpers ist ungültig".into(),
+                ));
+            }
+        }
         FeatureKind::Sketch(_) | FeatureKind::Revolve { .. } | FeatureKind::Boolean { .. } => {}
     }
     Ok(())
@@ -163,6 +185,32 @@ fn check_extent(solid: &Solid) -> Result<(), FeatureError> {
         Ok(())
     } else {
         Err(FeatureError::OutOfRange("Der Körper".into()))
+    }
+}
+
+/// Alle Punkte des Netzes liegen nach der Lage `t` im Bereich ±[`MAX_COORD_MM`].
+pub(crate) fn check_mesh_extent(
+    mesh: &ExchangeMesh,
+    t: &MeshTransform,
+) -> Result<(), FeatureError> {
+    let inside = (0..mesh.positions.len()).all(|i| {
+        t.apply(mesh.point(i))
+            .to_array()
+            .iter()
+            .all(|c| in_range(*c))
+    });
+    if inside {
+        Ok(())
+    } else {
+        Err(FeatureError::OutOfRange("Der Netz-Körper".into()))
+    }
+}
+
+/// Netz-Körper lassen sich nicht weiterverarbeiten (Spec §6, Bearbeitungssperre).
+fn ensure_not_mesh(doc: &Document, id: FeatureId) -> Result<(), FeatureError> {
+    match doc.feature(id).map(|f| &f.kind) {
+        Some(FeatureKind::MeshBody { .. }) => Err(FeatureError::MeshBodyLocked),
+        _ => Ok(()),
     }
 }
 
@@ -259,6 +307,15 @@ fn compute_unchecked(
             let mut result = blended.solid;
             result.assign_origin(id.0);
             Ok(Computed::bodies(vec![result]))
+        }
+        FeatureKind::MeshBody { mesh, .. } => {
+            let m = doc
+                .meshes
+                .get(mesh)
+                .ok_or(FeatureError::MeshMissing(mesh.0))?;
+            let t = feature.kind.mesh_transform().unwrap_or_default();
+            check_mesh_extent(m, &t)?;
+            Ok(Computed::default())
         }
     }
 }
@@ -412,6 +469,7 @@ fn visible_body<'a>(
     visible: &[BodyRef],
     r: BodyRef,
 ) -> Result<&'a Solid, FeatureError> {
+    ensure_not_mesh(doc, r.feature)?;
     let not_found = FeatureError::BodyNotFound {
         feature: r.feature.0,
         index: r.index,
@@ -473,6 +531,13 @@ fn compute_sketch(
 ) -> Result<Computed, FeatureError> {
     let solids: Vec<&Solid> = visible.iter().filter_map(|r| doc.body(*r)).collect();
     let tol = doc.kernel.tolerance;
+    if let SketchPlane::OnFace(r) = &sf.plane {
+        ensure_not_mesh(doc, FeatureId(r.origin))?;
+    }
+    for c in &sf.copies {
+        ensure_not_mesh(doc, FeatureId(c.edge.a.origin))?;
+        ensure_not_mesh(doc, FeatureId(c.edge.b.origin))?;
+    }
     let mut sketch = sf.sketch.clone();
     let (frame, plane) = match &sf.plane {
         SketchPlane::Standard(p) => (p.frame(), sf.plane.clone()),

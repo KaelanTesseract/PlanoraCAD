@@ -20,11 +20,15 @@ impl BooleanDialog {
 
     /// Wie `new`, aber mit vorgewählter Operation (für die Einträge im Menü „Bearbeiten“).
     pub fn with_op(state: &AppState, op: BoolOp) -> Self {
+        // Netz-Körper lassen sich nicht verrechnen (Spec §6): nur gewöhnliche Körper anbieten.
         let a = state
             .selected_body
-            .filter(|&i| i < state.bodies.len())
+            .filter(|&i| i < state.bodies.len() && !state.is_mesh(i))
+            .or_else(|| (0..state.bodies.len()).find(|&i| !state.is_mesh(i)))
             .unwrap_or(0);
-        let b = (0..state.bodies.len()).find(|&i| i != a).unwrap_or(0);
+        let b = (0..state.bodies.len())
+            .find(|&i| i != a && !state.is_mesh(i))
+            .unwrap_or(0);
         Self {
             a,
             b,
@@ -74,12 +78,15 @@ impl BooleanDialog {
             .open(&mut open)
             .show(ctx, |ui| {
                 let names: Vec<String> = state.bodies.iter().map(|b| b.name.clone()).collect();
+                let meshes: Vec<bool> = (0..names.len()).map(|i| state.is_mesh(i)).collect();
                 for (label, slot) in [("Körper A", &mut self.a), ("Körper B", &mut self.b)] {
                     egui::ComboBox::from_label(label)
                         .selected_text(names.get(*slot).cloned().unwrap_or_default())
                         .show_ui(ui, |ui| {
                             for (i, n) in names.iter().enumerate() {
-                                ui.selectable_value(slot, i, n);
+                                if !meshes[i] {
+                                    ui.selectable_value(slot, i, n);
+                                }
                             }
                         });
                 }
