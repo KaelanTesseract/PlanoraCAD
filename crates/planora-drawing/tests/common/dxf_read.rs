@@ -203,6 +203,7 @@ pub struct Dxf {
     pub blocks: Vec<Block>,
     pub entities: Vec<ReadEntity>,
     pub objects: Vec<ReadEntity>,
+    pub classes: Vec<ReadEntity>,
 }
 
 struct Cur {
@@ -298,6 +299,7 @@ pub fn parse(text: &str) -> Result<Dxf, String> {
         blocks: Vec::new(),
         entities: Vec::new(),
         objects: Vec::new(),
+        classes: Vec::new(),
     };
     loop {
         let g = c.next()?;
@@ -427,7 +429,17 @@ pub fn parse(text: &str) -> Result<Dxf, String> {
                 let gs = c.until_zero();
                 d.entities.push(entity_from(e.value, gs));
             },
-            "CLASSES" => c.expect(0, "ENDSEC")?,
+            "CLASSES" => loop {
+                let e = c.next()?;
+                if e.code == 0 && e.value == "ENDSEC" {
+                    break;
+                }
+                if !(e.code == 0 && e.value == "CLASS") {
+                    return Err("CLASS erwartet".into());
+                }
+                let gs = c.until_zero();
+                d.classes.push(entity_from(e.value, gs));
+            },
             "OBJECTS" => loop {
                 let e = c.next()?;
                 if e.code == 0 && e.value == "ENDSEC" {
@@ -801,17 +813,64 @@ pub fn validate(d: &Dxf) -> Result<(), String> {
         Some(g) if g.code == 350 => g.value.clone(),
         _ => return Err("ACAD_GROUP ohne 350".into()),
     };
+    // CLASSES: jede Klasse vollständig und einmalig.
+    let mut class_names = BTreeSet::new();
+    for cl in &d.classes {
+        for code in [1, 2, 3, 90, 280, 281] {
+            if cl.get(code).is_none() {
+                return Err(format!("CLASS ohne Gruppe {code}"));
+            }
+        }
+        if !class_names.insert(cl.get(1).unwrap().to_string()) {
+            return Err("CLASS doppelt".into());
+        }
+    }
     for (i, o) in d.objects.iter().enumerate() {
         add(&o.handle, "Objekt in OBJECTS")?;
-        if o.kind != "DICTIONARY" || markers(&o.groups) != ["AcDbDictionary"] {
-            return Err(format!("OBJECTS: Objekt {} {:?}", i, o.kind));
+        // Eingebaut ist nur DICTIONARY; jede andere Objektart braucht eine Klassendefinition.
+        if o.kind != "DICTIONARY" && !class_names.contains(&o.kind) {
+            return Err(format!("OBJECTS: Objektart {} ohne CLASS", o.kind));
         }
-        if i > 0 && o.owner != root.handle {
-            return Err(format!("OBJECTS: Besitzer {} statt Wurzel", o.owner));
+        let want: &[&str] = match o.kind.as_str() {
+            "DICTIONARY" => &["AcDbDictionary"],
+            "ACDBDICTIONARYWDFLT" => &["AcDbDictionary", "AcDbDictionaryWithDefault"],
+            "ACDBPLACEHOLDER" => &[],
+            other => return Err(format!("OBJECTS: unerwartete Objektart {other}")),
+        };
+        if markers(&o.groups) != want {
+            return Err(format!("OBJECTS: Objekt {} {:?}: Marken", i, o.kind));
+        }
+        if i > 0 && o.owner == "0" {
+            return Err(format!("OBJECTS: Objekt {} ohne Besitzer", o.handle));
         }
     }
     if !d.objects.iter().any(|o| o.handle == target) {
         return Err("ACAD_GROUP zeigt auf kein Verzeichnis".into());
+    }
+    let by_handle = |h: &str| d.objects.iter().find(|o| o.handle == h);
+    let pi = root
+        .groups
+        .iter()
+        .position(|g| g.code == 3 && g.value == "ACAD_PLOTSTYLENAME")
+        .ok_or("ACAD_PLOTSTYLENAME fehlt")?;
+    let wd = match root.groups.get(pi + 1) {
+        Some(g) if g.code == 350 => g.value.clone(),
+        _ => return Err("ACAD_PLOTSTYLENAME ohne 350".into()),
+    };
+    let wdflt = by_handle(&wd).ok_or("ACAD_PLOTSTYLENAME zeigt ins Leere")?;
+    if wdflt.kind != "ACDBDICTIONARYWDFLT" || wdflt.owner != root.handle {
+        return Err("ACAD_PLOTSTYLENAME: Art oder Besitzer falsch".into());
+    }
+    // Jede Ebene verweist mit 390 auf einen Platzhalter, der dem Vorgabeverzeichnis gehört.
+    for r in &d.table("LAYER").unwrap().records {
+        let h = r.get(390).ok_or(format!("Ebene {}: 390 fehlt", r.name()))?;
+        let ph = by_handle(h).ok_or(format!("Ebene {}: 390 zeigt ins Leere", r.name()))?;
+        if ph.kind != "ACDBPLACEHOLDER" || ph.owner != wdflt.handle {
+            return Err(format!(
+                "Ebene {}: 390 zeigt nicht auf den Platzhalter",
+                r.name()
+            ));
+        }
     }
     // Handleschranke.
     let max = handle_set.iter().map(|h| hex(h)).max().unwrap_or(0);

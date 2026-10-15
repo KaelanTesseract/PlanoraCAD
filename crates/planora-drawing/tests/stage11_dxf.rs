@@ -476,11 +476,64 @@ fn structure_is_valid() {
             "HEADER", "CLASSES", "TABLES", "BLOCKS", "ENTITIES", "OBJECTS"
         ]
     );
-    // OBJECTS: Wurzelverzeichnis (Besitzer 0) mit ACAD_GROUP, das auf ein zweites Verzeichnis zeigt.
-    assert_eq!(d.objects.len(), 2);
+    // OBJECTS: Wurzelverzeichnis (Besitzer 0) mit ACAD_GROUP und ACAD_PLOTSTYLENAME, darunter die
+    // Plotstil-Kette Vorgabeverzeichnis -> Platzhalter; jede Ebene verweist mit 390 darauf.
+    let kinds: Vec<&str> = d.objects.iter().map(|o| o.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "DICTIONARY",
+            "DICTIONARY",
+            "ACDBDICTIONARYWDFLT",
+            "ACDBPLACEHOLDER"
+        ]
+    );
     assert_eq!(d.objects[0].owner, "0");
     assert_eq!(d.objects[1].owner, d.objects[0].handle);
     assert_eq!(d.objects[0].get(350), Some(d.objects[1].handle.as_str()));
+    assert_eq!(d.objects[2].owner, d.objects[0].handle);
+    assert_eq!(d.objects[3].owner, d.objects[2].handle);
+    assert_eq!(d.objects[2].get(340), Some(d.objects[3].handle.as_str()));
+    let plot_dict = d.objects[0]
+        .groups
+        .iter()
+        .position(|g| g.value == "ACAD_PLOTSTYLENAME")
+        .unwrap();
+    assert_eq!(
+        d.objects[0].groups[plot_dict + 1].value,
+        d.objects[2].handle
+    );
+    for r in &d.table("LAYER").unwrap().records {
+        assert_eq!(
+            r.get(390),
+            Some(d.objects[3].handle.as_str()),
+            "{}",
+            r.name()
+        );
+        // Reihenfolge der Gruppen wie in Fusion-tauglichen Dateien: ... 62, 6, 370, 390.
+        let codes: Vec<i32> = r.groups.iter().map(|g| g.code).collect();
+        assert_eq!(codes[codes.len() - 4..], [62, 6, 370, 390], "{codes:?}");
+    }
+    // CLASSES: genau die zwei Klassen der Kette.
+    let classes: Vec<(&str, &str)> = d
+        .classes
+        .iter()
+        .map(|c| (c.get(1).unwrap(), c.get(2).unwrap()))
+        .collect();
+    assert_eq!(
+        classes,
+        [
+            ("ACDBDICTIONARYWDFLT", "AcDbDictionaryWithDefault"),
+            ("ACDBPLACEHOLDER", "AcDbPlaceHolder")
+        ]
+    );
+    for c in &d.classes {
+        assert_eq!(c.get(3), Some("ObjectDBX Classes"));
+        assert_eq!(
+            (c.get(90), c.get(280), c.get(281)),
+            (Some("0"), Some("0"), Some("0"))
+        );
+    }
     assert!(s.ends_with("  0\r\nENDSEC\r\n  0\r\nEOF\r\n"), "{s:?}");
     assert!(s.is_ascii());
     assert_eq!(s.matches('\n').count(), s.matches("\r\n").count());
@@ -560,6 +613,8 @@ fn validator_rejects_corrupted_files() {
     let parsed = dxf_read::read(&good).unwrap();
     let hs = parsed.all_handles();
     let root = parsed.objects[0].handle.clone();
+    let wdflt = parsed.objects[2].handle.clone();
+    let placeholder = parsed.objects[3].handle.clone();
     let seed = parsed.header_var("$HANDSEED").unwrap()[0].value.clone();
     let model_br = parsed
         .table("BLOCK_RECORD")
@@ -656,6 +711,28 @@ fn validator_rejects_corrupted_files() {
             ),
         ),
         ("350 ins Leere", good.replacen("350\r\n", "350\r\nFFFFF", 1)),
+        ("390 fehlt", good.replacen("390\r\n", "391\r\n", 1)),
+        ("390 ins Leere", good.replacen("390\r\n", "390\r\nFFFFF", 1)),
+        (
+            "CLASS fehlt",
+            good.replacen(
+                "  1\r\nACDBPLACEHOLDER\r\n",
+                "  1\r\nACDBPLACEHOLDEX\r\n",
+                1,
+            ),
+        ),
+        (
+            "Platzhalter mit falschem Besitzer",
+            good.replacen(
+                &format!("  5\r\n{placeholder}\r\n330\r\n{wdflt}\r\n"),
+                &format!("  5\r\n{placeholder}\r\n330\r\n{root}\r\n"),
+                1,
+            ),
+        ),
+        (
+            "ACAD_PLOTSTYLENAME fehlt",
+            good.replacen("ACAD_PLOTSTYLENAME", "ACAD_PLOTSTYLEXAME", 1),
+        ),
         ("Nicht-ASCII", good.replacen("Vorne", "Vörne", 1)),
         (
             "Tabellenfolge",

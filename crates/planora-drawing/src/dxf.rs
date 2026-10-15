@@ -7,8 +7,8 @@
 //!
 //! * Zeilenende `\r\n`, jedes Paar aus Gruppencode (rechtsbündig in Breite 3) und Wert; die Datei
 //!   enthält nur ASCII (Zeichen darüber hinaus stehen als `\U+XXXX`, siehe Namen).
-//! * Abschnitte in der Reihenfolge `HEADER`, `CLASSES` (leer), `TABLES`, `BLOCKS`, `ENTITIES`,
-//!   `OBJECTS` (Wurzelverzeichnis mit `ACAD_GROUP`), Ende `0 / EOF`.
+//! * Abschnitte in der Reihenfolge `HEADER`, `CLASSES` (zwei Klassen der Plotstil-Kette), `TABLES`, `BLOCKS`, `ENTITIES`,
+//!   `OBJECTS` (Wurzelverzeichnis mit `ACAD_GROUP` und `ACAD_PLOTSTYLENAME`), Ende `0 / EOF`.
 //! * `HEADER`: `$ACADVER = AC1015`, `$DWGCODEPAGE`, `$HANDSEED` (größer als alle Handles),
 //!   `$INSBASE`, `$EXTMIN`/`$EXTMAX` (Blatt), `$LIMMIN`/`$LIMMAX`, `$LTSCALE = 1`,
 //!   `$MEASUREMENT = 1` (metrisch), `$INSUNITS = 4` (Millimeter).
@@ -104,7 +104,7 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
 
     // Handles der Tabellen und Blockeinträge im Voraus; alles Weitere beim Schreiben.
     let mut hs = Handles(0);
-    let t = TableHandles {
+    let mut t = TableHandles {
         vport: hs.next(),
         ltype: hs.next(),
         layer: hs.next(),
@@ -114,11 +114,14 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
         appid: hs.next(),
         dimstyle: hs.next(),
         block_record: hs.next(),
+        plot_placeholder: 0,
     };
     let br_model = hs.next();
     let br_paper = hs.next();
     let br_views: Vec<u64> = names.iter().map(|_| hs.next()).collect();
     let (dict_root, dict_group) = (hs.next(), hs.next());
+    let (dict_plot, placeholder) = (hs.next(), hs.next());
+    t.plot_placeholder = placeholder;
 
     let mut tables = Out::new();
     write_tables(
@@ -153,7 +156,22 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
 
     let mut s = String::new();
     s.push_str(&header(w, h, hs.0 + 1)?);
-    s.push_str("  0\r\nSECTION\r\n  2\r\nCLASSES\r\n  0\r\nENDSEC\r\n");
+    s.push_str("  0\r\nSECTION\r\n  2\r\nCLASSES\r\n");
+    for (name, cpp) in [
+        ("ACDBDICTIONARYWDFLT", "AcDbDictionaryWithDefault"),
+        ("ACDBPLACEHOLDER", "AcDbPlaceHolder"),
+    ] {
+        let mut o = Out::new();
+        o.text(0, "CLASS");
+        o.text(1, name);
+        o.text(2, cpp);
+        o.text(3, "ObjectDBX Classes");
+        o.int(90, 0);
+        o.int(280, 0);
+        o.int(281, 0);
+        s.push_str(&o.s);
+    }
+    s.push_str("  0\r\nENDSEC\r\n");
     s.push_str("  0\r\nSECTION\r\n  2\r\nTABLES\r\n");
     s.push_str(&tables.s);
     s.push_str("  0\r\nENDSEC\r\n");
@@ -172,11 +190,26 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
     objects.int(281, 1);
     objects.text(3, "ACAD_GROUP");
     objects.text(350, &hex(dict_group));
+    objects.text(3, "ACAD_PLOTSTYLENAME");
+    objects.text(350, &hex(dict_plot));
     objects.text(0, "DICTIONARY");
     objects.text(5, &hex(dict_group));
     objects.text(330, &hex(dict_root));
     objects.text(100, "AcDbDictionary");
     objects.int(281, 1);
+    // Plotstil-Kette: Verzeichnis mit Vorgabe „Normal“ -> Platzhalter; jede Ebene verweist mit 390.
+    objects.text(0, "ACDBDICTIONARYWDFLT");
+    objects.text(5, &hex(dict_plot));
+    objects.text(330, &hex(dict_root));
+    objects.text(100, "AcDbDictionary");
+    objects.int(281, 1);
+    objects.text(3, "Normal");
+    objects.text(350, &hex(placeholder));
+    objects.text(100, "AcDbDictionaryWithDefault");
+    objects.text(340, &hex(placeholder));
+    objects.text(0, "ACDBPLACEHOLDER");
+    objects.text(5, &hex(placeholder));
+    objects.text(330, &hex(dict_plot));
     s.push_str("  0\r\nSECTION\r\n  2\r\nOBJECTS\r\n");
     s.push_str(&objects.s);
     s.push_str("  0\r\nENDSEC\r\n");
@@ -432,6 +465,8 @@ struct TableHandles {
     appid: u64,
     dimstyle: u64,
     block_record: u64,
+    /// Platzhalter des Plotstils `Normal`, auf den jede Ebene mit 390 verweist.
+    plot_placeholder: u64,
 }
 
 fn write_tables(
@@ -528,6 +563,7 @@ fn write_tables(
         o.int(62, 7);
         o.text(6, ltype);
         o.int(370, weight);
+        o.text(390, &hex(t.plot_placeholder));
     }
     o.end_table();
 
