@@ -99,9 +99,14 @@ fn manual(sheet: Sheet, views: Vec<(&str, Vec<(Visibility, Out2d)>)>) -> SheetMo
                 name: name.to_string(),
                 lines: lines
                     .into_iter()
-                    .map(|(vis, curve)| SheetLine { vis, curve })
+                    .map(|(vis, curve)| SheetLine {
+                        vis,
+                        curve,
+                        origin: planora_drawing::stroke::StrokeOrigin::Edge { body: 0, edge: 0 },
+                    })
                     .collect(),
                 extent_mm: (0.0, 0.0),
+                marks: Vec::new(),
             })
             .collect(),
     }

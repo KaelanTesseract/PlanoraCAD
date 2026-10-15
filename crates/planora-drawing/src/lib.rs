@@ -2,6 +2,7 @@
 //! Dieses Paket enthält das Datenmodell, die Ansichtsbasis, das Blattlayout und die Berechnung
 //! der Linien einer Ansicht mit ihrer Sichtbarkeit.
 
+pub mod annotate;
 pub mod basis;
 pub mod centerline;
 pub mod dimension;

@@ -3,10 +3,16 @@
 
 use crate::ViewLines;
 use crate::Visibility;
+use crate::annotate::{
+    DimEntry, GroupBase, Mark, ResolvedDims, group_base, layout_centerline, layout_dimension_in,
+    layout_lost,
+};
+use crate::dimension::{ChainMode, Measured};
 use crate::layout::{align_dir, view_extent};
 use crate::model::ViewSpec;
 use crate::model::{Drawing, Placement, Sheet, ViewId, ViewKind};
 use crate::out2d::{Out2d, piece_to_outs};
+use crate::stroke::StrokeOrigin;
 use planora_math::DVec2;
 use std::collections::BTreeMap;
 
@@ -34,6 +40,8 @@ impl SheetTransform {
 pub struct SheetLine {
     pub vis: Visibility,
     pub curve: Out2d,
+    /// Herkunft des Strichs, aus dem die Linie stammt (Kante oder Umriss).
+    pub origin: StrokeOrigin,
 }
 
 /// Eine Ansicht auf dem Blatt.
@@ -44,6 +52,9 @@ pub struct SheetView {
     pub lines: Vec<SheetLine>,
     /// Breite und Höhe auf dem Blatt in mm.
     pub extent_mm: (f64, f64),
+    /// Markierungen der Ansicht in Blattkoordinaten: Mittellinien (nur bei
+    /// `ViewSpec.centerlines`), Maße und verlorene Maße.
+    pub marks: Vec<Mark>,
 }
 
 /// Alle Linien eines Blatts.
@@ -108,6 +119,22 @@ fn is_drawable(spec: &ViewSpec, results: &BTreeMap<ViewId, &ViewLines>) -> bool 
 /// Namen: `ViewKind::label`, bei mehrfach gleicher Art ` 2`, ` 3` (in Reihenfolge der Ansichten
 /// der Zeichnung, auch wenn eine frühere Ansicht gerade nicht berechnet ist).
 pub fn build_sheet(drawing: &Drawing, results: &BTreeMap<ViewId, &ViewLines>) -> SheetModel {
+    build_sheet_with(drawing, results, &ResolvedDims::default())
+}
+
+/// Wie [`build_sheet`], dazu je Ansicht die Markierungen (`SheetView.marks`): die Mittellinien
+/// der Ansicht (`ViewLines.centerlines`, nur bei `ViewSpec.centerlines`, mit Überstand nach
+/// [`layout_centerline`]) und die Maße aus `dims.by_view` (gemessene nach
+/// [`layout_dimension_in`], fehlgeschlagene als verlorene Maße nach [`layout_lost`] mit der
+/// letzten bekannten Lage aus `dims.last_known` und dem Fehlertext als Grund). Gruppen
+/// (`ChainSpec.group`) teilen ihren Bezug quer zur Messrichtung ([`group_base`]); Bezugsmaße
+/// stapeln um `order · DIM_STEP`. Linien und Ausdehnung sind dieselben wie ohne Markierungen.
+/// Maße von Ansichten, die nicht gezeichnet werden, entfallen.
+pub fn build_sheet_with(
+    drawing: &Drawing,
+    results: &BTreeMap<ViewId, &ViewLines>,
+    dims: &ResolvedDims,
+) -> SheetModel {
     let (w, h) = drawing.sheet.size_mm();
     let m = FRAME_MARGIN_MM;
     let mut counts: BTreeMap<u8, usize> = BTreeMap::new();
@@ -145,14 +172,28 @@ pub fn build_sheet(drawing: &Drawing, results: &BTreeMap<ViewId, &ViewLines>) ->
                 continue;
             };
             for curve in piece_to_outs(stroke, &lines.basis, p.t0, p.t1, &xf) {
-                out.push(SheetLine { vis: p.vis, curve });
+                out.push(SheetLine {
+                    vis: p.vis,
+                    curve,
+                    origin: stroke.origin.clone(),
+                });
             }
+        }
+        let mut marks = Vec::new();
+        if spec.centerlines {
+            for c in &lines.centerlines {
+                marks.extend(layout_centerline(c, &xf));
+            }
+        }
+        if let Some(list) = dims.by_view.get(&spec.id) {
+            marks.extend(view_dimension_marks(list, dims, &xf));
         }
         views.push(SheetView {
             id: spec.id,
             name,
             lines: out,
             extent_mm: view_extent(lines.bbox, spec.scale),
+            marks,
         });
     }
     SheetModel {
@@ -160,6 +201,42 @@ pub fn build_sheet(drawing: &Drawing, results: &BTreeMap<ViewId, &ViewLines>) ->
         frame: (DVec2::new(m, m), DVec2::new(w - m, h - m)),
         views,
     }
+}
+
+/// Markierungen der Maße einer Ansicht (Regeln siehe [`build_sheet_with`]).
+fn view_dimension_marks(list: &[DimEntry], dims: &ResolvedDims, xf: &SheetTransform) -> Vec<Mark> {
+    let mut members: BTreeMap<u64, Vec<&Measured>> = BTreeMap::new();
+    for (s, r) in list {
+        if let (Some(c), Ok(m)) = (s.chain, r) {
+            members.entry(c.group).or_default().push(m);
+        }
+    }
+    let bases: BTreeMap<u64, GroupBase> = members
+        .iter()
+        .filter_map(|(g, ms)| group_base(ms, xf).map(|b| (*g, b)))
+        .collect();
+    let mut marks = Vec::new();
+    for (s, r) in list {
+        match r {
+            Ok(m) => {
+                let level = match s.chain {
+                    Some(c) if c.mode == ChainMode::Baseline => c.order as usize,
+                    _ => 0,
+                };
+                let base = s.chain.and_then(|c| bases.get(&c.group));
+                marks.extend(layout_dimension_in(s, m, xf, level, base));
+            }
+            Err(e) => {
+                marks.extend(layout_lost(
+                    s,
+                    dims.last_known.get(&s.id),
+                    xf,
+                    &e.to_string(),
+                ));
+            }
+        }
+    }
+    marks
 }
 
 fn kind_index(k: ViewKind) -> u8 {
