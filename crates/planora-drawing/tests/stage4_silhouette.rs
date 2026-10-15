@@ -172,23 +172,57 @@ fn half_cylinder_silhouette_is_trimmed_to_the_face() {
 }
 
 #[test]
-fn torus_and_freeform_report_unsupported_until_task_7() {
+fn torus_and_freeform_have_silhouettes() {
+    // Seit Aufgabe 7 (vorher: Meldung „nicht unterstützt“). Torus von vorne (Blick in der
+    // Ringebene): vier exakte Kreise – Rohrober- und -unterkante (Radius 10, Mitte (0, 0, ±3))
+    // und die Meridiankreise bei x = ±10 (Radius 3).
     let s = torus_solid(10.0, 3.0);
-    let b = vec![DrawBody {
-        name: "T".into(),
-        solid: &s,
-    }];
-    let r = silhouette_strokes(&b, &Basis::of(ViewKind::Front), 30.0, &Progress::new());
-    assert!(matches!(
-        r,
-        Err(planora_drawing::DrawError::Unsupported(ref m)) if m == "Umriss von Torus/Freiform folgt"
-    ));
-    let (slab, _) = nurbs_slab_solid();
-    let b = vec![DrawBody {
-        name: "N".into(),
-        solid: &slab,
-    }];
-    assert!(silhouette_strokes(&b, &Basis::of(ViewKind::Front), 12.0, &Progress::new()).is_err());
+    let st = lines_of(&s, ViewKind::Front);
+    assert_eq!(st.len(), 4);
+    let mut found: Vec<(f64, planora_math::DVec3)> = st
+        .iter()
+        .map(|x| match &x.curve {
+            planora_kernel::Curve::Circle { frame, radius } => {
+                assert!((x.t1 - x.t0 - std::f64::consts::TAU).abs() < 1e-12);
+                (*radius, frame.origin)
+            }
+            other => panic!("Kreis erwartet: {other:?}"),
+        })
+        .collect();
+    found.sort_by(|a, b| {
+        (a.0, a.1.x, a.1.z)
+            .partial_cmp(&(b.0, b.1.x, b.1.z))
+            .unwrap()
+    });
+    let want = [
+        (3.0, (-10.0, 0.0)),
+        (3.0, (10.0, 0.0)),
+        (10.0, (0.0, -3.0)),
+        (10.0, (0.0, 3.0)),
+    ];
+    for ((r, c), (wr, (wx, wz))) in found.iter().zip(want) {
+        assert!((r - wr).abs() < 1e-12 && (c.x - wx).abs() < 1e-9 && (c.z - wz).abs() < 1e-9);
+        assert!(c.y.abs() < 1e-9);
+    }
+    // Freiformwand der Platte von vorne: senkrechte Linie bei (12, 5, z), z von 0 bis 5 (aus der
+    // Symmetrie des Splines), als angepasster Spline; von oben wird die Wand nur von der Seite
+    // gesehen (n·d ≡ 0) und hat keinen Umriss.
+    let (slab, face) = nurbs_slab_solid();
+    let st = lines_of(&slab, ViewKind::Front);
+    assert_eq!(st.len(), 1);
+    let l = &st[0];
+    assert_eq!(l.origin, StrokeOrigin::Silhouette { body: 0, face });
+    assert!(matches!(l.curve, planora_kernel::Curve::Nurbs(_)));
+    for i in 0..=50 {
+        let p = l.point(l.t0 + (l.t1 - l.t0) * i as f64 / 50.0);
+        assert!(
+            (p.x - 12.0).abs() <= 1e-4 && (p.y - 5.0).abs() <= 1e-4,
+            "{p:?}"
+        );
+    }
+    let (za, zb) = (l.point(l.t0).z, l.point(l.t1).z);
+    assert!(za.min(zb).abs() < 1e-9 && (za.max(zb) - 5.0).abs() < 1e-9);
+    assert!(lines_of(&slab, ViewKind::Top).is_empty());
 }
 
 #[test]

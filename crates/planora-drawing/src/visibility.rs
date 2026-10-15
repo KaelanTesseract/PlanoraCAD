@@ -122,6 +122,8 @@ struct Ctx<'a> {
     name: &'a str,
     counter: &'a Cell<u64>,
     min_width: f64,
+    /// Prüfpunkt zu einem Strichpunkt (Spline-Umrisse: Punkt des wahren Umrisses).
+    map: &'a dyn Fn(DVec3) -> DVec3,
 }
 
 impl Ctx<'_> {
@@ -134,7 +136,7 @@ impl Ctx<'_> {
                 .filter(|g| *g > 0.0 && *g < 1.0),
         );
         for g in candidates {
-            let p = self.stroke.point(ta + g * (tb - ta));
+            let p = (self.map)(self.stroke.point(ta + g * (tb - ta)));
             let v = sample_counted(
                 self.caster,
                 self.basis,
@@ -253,6 +255,38 @@ pub fn classify_range(
     name: &str,
     counter: &Cell<u64>,
 ) -> Result<Vec<(f64, f64, Visibility)>, DrawError> {
+    classify_range_mapped(
+        caster,
+        basis,
+        stroke,
+        own,
+        body,
+        (ta, tb),
+        extent,
+        name,
+        counter,
+        &|p| p,
+    )
+}
+
+/// Wie [`classify_range`], die Prüfstrahlen starten aber bei `map(Strichpunkt)`: Angepasste
+/// Umriss-Splines (Torus, Freiform) liegen bis `SILHOUETTE_TOL` neben dem wahren Umriss, also
+/// auch bis dahin **in** ihrer Fläche; Strahlen von dort träfen die eigene Fläche weit hinter
+/// `OWN_EPS` (bei Krümmungsradius `ρ` und Tiefe `δ` nach etwa `√(2ρδ)`). `compute_view` übergibt
+/// für sie den Punkt des wahren Umrisses (`silhouette::outline_point`).
+#[allow(clippy::too_many_arguments)]
+pub fn classify_range_mapped(
+    caster: &dyn Caster,
+    basis: &Basis,
+    stroke: &Stroke,
+    own: &[usize],
+    body: usize,
+    (ta, tb): (f64, f64),
+    extent: f64,
+    name: &str,
+    counter: &Cell<u64>,
+    map: &dyn Fn(DVec3) -> DVec3,
+) -> Result<Vec<(f64, f64, Visibility)>, DrawError> {
     let (ta, tb) = (ta.min(tb), ta.max(tb));
     let ctx = Ctx {
         caster,
@@ -264,12 +298,13 @@ pub fn classify_range(
         name,
         counter,
         min_width: BISECT_TOL * stroke.param_len(),
+        map,
     };
     // Sicherheitsnetz: Urteile knapp innerhalb der Enden (ohne Ausweichen; unbrauchbar → kein
     // bekanntes Ende), damit ein Wechsel im äußeren Viertel nicht hinter drei gleichen
     // Stützstellen verschwindet.
     let probe = |f: f64| -> Result<Option<Visibility>, DrawError> {
-        let p = stroke.point(ta + f * (tb - ta));
+        let p = map(stroke.point(ta + f * (tb - ta)));
         Ok(
             sample_counted(caster, basis, p, own, body, extent, counter)?.map(|v| {
                 if v {

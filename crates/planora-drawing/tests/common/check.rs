@@ -304,6 +304,43 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
     r
 }
 
+/// Prüft alle Ansichten aller Fälle gegen die Netzreferenz: keine Fehler, je Ansicht höchstens
+/// 30 % und insgesamt höchstens 5 % unentschiedene Referenzstellen. Gibt die Raten aus und
+/// liefert `(unentschieden, Stellen)` insgesamt.
+pub fn check_all_views(cases: &[(&str, Vec<&Solid>)]) -> (usize, usize) {
+    let (mut tolerated, mut sampled, mut warnings, mut undecided) = (0, 0, 0, 0);
+    for (name, solids) in cases {
+        for k in ViewKind::ALL {
+            let r = check_view(solids, k);
+            assert!(r.errors.is_empty(), "{name} {k:?}: {:?}", r.errors);
+            assert!(
+                r.undecided * 10 <= r.sampled * 3,
+                "{name} {k:?}: Referenz unentschieden an {} von {} Stellen",
+                r.undecided,
+                r.sampled
+            );
+            eprintln!(
+                "{name} {k:?}: unentschieden {}/{} ({:.1} %)",
+                r.undecided,
+                r.sampled,
+                100.0 * r.undecided as f64 / r.sampled.max(1) as f64
+            );
+            tolerated += r.tolerated;
+            sampled += r.sampled;
+            warnings += r.warnings.len();
+            undecided += r.undecided;
+        }
+    }
+    eprintln!(
+        "Stellen: {sampled}, zulässig abweichend: {tolerated}, Referenz unentschieden: {undecided}, Warnungen (b): {warnings}"
+    );
+    assert!(
+        undecided * 20 <= sampled,
+        "Referenz unentschieden an {undecided} von {sampled} Stellen"
+    );
+    (undecided, sampled)
+}
+
 /// Stellen je Stück in (e).
 const VIS_SAMPLES: usize = 24;
 /// Sehnentoleranzen der feineren Netze (relativ zu `E`).

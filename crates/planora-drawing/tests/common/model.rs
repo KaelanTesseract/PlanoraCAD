@@ -175,6 +175,314 @@ pub fn torus_solid(major: f64, minor: f64) -> Solid {
     s
 }
 
+/// Umrisspunkte des Vollrings aus [`torus_solid`] (Achse Z, Mitte im Ursprung) für die
+/// Blickrichtung `d`, je Zweig ein Streckenzug mit `n` Abschnitten. Eigene Herleitung über die
+/// implizite Gleichung `F = (ρ − R)² + z² − r²`: Der Umriss ist `∇F · d = 0`, also
+/// `(ρ − R)·a + z·d_z = 0` mit `a = d_x cos u + d_y sin u`; mit `(ρ − R, z) = r·(c, s)` folgt
+/// `(c, s) = ±(d_z, −a) / √(a² + d_z²)` (zwei Zweige). Blick in der Ringebene (`|d_z| ≤ 1e-9`):
+/// `c·a = 0`, also die Kreise `c = 0` (`z = ±r`) und die Meridiankreise bei `a = 0`.
+pub fn torus_silhouette_points(major: f64, minor: f64, d: DVec3, n: usize) -> Vec<Vec<DVec3>> {
+    let pt = |u: f64, c: f64, s: f64| {
+        let rho = major + minor * c;
+        DVec3::new(rho * u.cos(), rho * u.sin(), minor * s)
+    };
+    let at = |k: usize| TAU * k as f64 / n as f64;
+    let mut out = Vec::new();
+    if d.z.abs() > 1e-9 {
+        for sign in [1.0, -1.0] {
+            out.push(
+                (0..=n)
+                    .map(|k| {
+                        let u = at(k);
+                        let a = d.x * u.cos() + d.y * u.sin();
+                        let h = a.hypot(d.z);
+                        pt(u, sign * d.z / h, -sign * a / h)
+                    })
+                    .collect(),
+            );
+        }
+    } else {
+        for s in [1.0, -1.0] {
+            out.push((0..=n).map(|k| pt(at(k), 0.0, s)).collect());
+        }
+        let phi = d.y.atan2(d.x);
+        for um in [
+            phi + std::f64::consts::FRAC_PI_2,
+            phi - std::f64::consts::FRAC_PI_2,
+        ] {
+            out.push((0..=n).map(|k| pt(um, at(k).cos(), at(k).sin())).collect());
+        }
+    }
+    out
+}
+
+/// `n + 1` gleichverteilte Punkte des Strichs, eigene Projektion `(P·ex, P·ey)`.
+pub fn sample2(s: &Stroke, basis: &Basis, n: usize) -> Vec<DVec2> {
+    sample3(s, n)
+        .into_iter()
+        .map(|p| DVec2::new(p.dot(basis.ex), p.dot(basis.ey)))
+        .collect()
+}
+
+/// `n + 1` gleichverteilte Raumpunkte des Strichs.
+pub fn sample3(s: &Stroke, n: usize) -> Vec<DVec3> {
+    (0..=n)
+        .map(|i| s.curve.point(s.t0 + (s.t1 - s.t0) * i as f64 / n as f64))
+        .collect()
+}
+
+/// Abstand des Punkts `p` von der Strecke `a b` (2D).
+fn seg_dist2(p: DVec2, a: DVec2, b: DVec2) -> f64 {
+    let ab = b - a;
+    let l2 = ab.length_squared();
+    let t = if l2 > 0.0 {
+        ((p - a).dot(ab) / l2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    p.distance(a + ab * t)
+}
+
+/// Gerichteter Abstand: größter Abstand eines Punkts der Streckenzüge `a` vom nächsten
+/// Streckenabschnitt der Streckenzüge `b` (Raster über die Abschnitte von `b`).
+fn directed(a: &[Vec<DVec2>], b: &[Vec<DVec2>]) -> f64 {
+    let segs: Vec<(DVec2, DVec2)> = b
+        .iter()
+        .flat_map(|l| l.windows(2).map(|w| (w[0], w[1])))
+        .collect();
+    let mut lo = DVec2::splat(f64::INFINITY);
+    let mut hi = DVec2::splat(f64::NEG_INFINITY);
+    for (p, q) in &segs {
+        lo = lo.min(p.min(*q));
+        hi = hi.max(p.max(*q));
+    }
+    const G: usize = 256;
+    let cell = ((hi - lo) / G as f64).max(DVec2::splat(1e-9));
+    let idx = |p: DVec2| {
+        let q = (p - lo) / cell;
+        (
+            (q.x.floor().max(0.0) as usize).min(G - 1),
+            (q.y.floor().max(0.0) as usize).min(G - 1),
+        )
+    };
+    let mut grid: Vec<Vec<usize>> = vec![Vec::new(); G * G];
+    for (k, (p, q)) in segs.iter().enumerate() {
+        let (i0, j0) = idx(p.min(*q));
+        let (i1, j1) = idx(p.max(*q));
+        for i in i0..=i1 {
+            for j in j0..=j1 {
+                grid[i * G + j].push(k);
+            }
+        }
+    }
+    let mut worst: f64 = 0.0;
+    for p in a.iter().flatten() {
+        // Ringweise wachsende Suche, bis der Ring weiter weg ist als der beste Abstand.
+        let (ci, cj) = idx(*p);
+        let mut best = f64::INFINITY;
+        for ring in 0..G {
+            if ring > 0 && (ring - 1) as f64 * cell.x.min(cell.y) > best {
+                break;
+            }
+            let (i0, i1) = (ci.saturating_sub(ring), (ci + ring).min(G - 1));
+            let (j0, j1) = (cj.saturating_sub(ring), (cj + ring).min(G - 1));
+            for i in i0..=i1 {
+                for j in j0..=j1 {
+                    if i != i0 && i != i1 && j != j0 && j != j1 {
+                        continue;
+                    }
+                    for &k in &grid[i * G + j] {
+                        best = best.min(seg_dist2(*p, segs[k].0, segs[k].1));
+                    }
+                }
+            }
+        }
+        worst = worst.max(best);
+    }
+    worst
+}
+
+/// Symmetrischer Hausdorff-Abstand zweier Mengen von Streckenzügen (Punkt gegen Abschnitt).
+pub fn hausdorff(a: &[Vec<DVec2>], b: &[Vec<DVec2>]) -> f64 {
+    directed(a, b).max(directed(b, a))
+}
+
+/// Eigene Rechnung zur Freiformfläche `face` des Körpers: nächster Flächenpunkt zu `p`
+/// (Raster 64 × 64 über den Parameterbereich, dann Newton auf `(S − p)·S_u = (S − p)·S_v = 0`)
+/// und dort `n·d` mit der eigenen Normale `S_u × S_v / |S_u × S_v|`. Liefert `(Abstand, n·d)`.
+pub fn surface_residual(s: &Solid, face: usize, p: DVec3, d: DVec3) -> (f64, f64) {
+    let Surface::Nurbs(data) = &s.faces[Id::<Face>::from_index(face)].surface else {
+        panic!("keine Freiformfläche");
+    };
+    let sf = data.surface();
+    let ((u0, u1), (v0, v1)) = sf.domain();
+    const N: usize = 64;
+    let mut best = (f64::INFINITY, u0, v0);
+    for i in 0..=N {
+        for j in 0..=N {
+            let u = u0 + (u1 - u0) * i as f64 / N as f64;
+            let v = v0 + (v1 - v0) * j as f64 / N as f64;
+            let dist = sf.point(u, v).distance(p);
+            if dist < best.0 {
+                best = (dist, u, v);
+            }
+        }
+    }
+    let (_, mut u, mut v) = best;
+    for _ in 0..50 {
+        let dv = sf.derivs(u, v, 2);
+        let r = dv[0][0] - p;
+        let (su, sv) = (dv[1][0], dv[0][1]);
+        let (suu, suv, svv) = (dv[2][0], dv[1][1], dv[0][2]);
+        let (f, g) = (r.dot(su), r.dot(sv));
+        let (a, b, c) = (
+            su.dot(su) + r.dot(suu),
+            su.dot(sv) + r.dot(suv),
+            sv.dot(sv) + r.dot(svv),
+        );
+        let det = a * c - b * b;
+        if det.abs() < 1e-300 {
+            break;
+        }
+        let du = (c * f - b * g) / det;
+        let dvv = (a * g - b * f) / det;
+        u = (u - du).clamp(u0, u1);
+        v = (v - dvv).clamp(v0, v1);
+        if du.abs() + dvv.abs() < 1e-15 {
+            break;
+        }
+    }
+    let dv = sf.derivs(u, v, 1);
+    let n = dv[1][0].cross(dv[0][1]).normalize();
+    (sf.point(u, v).distance(p), n.dot(d))
+}
+
+/// Rahmen um Z gedreht (Winkel in Grad): die Naht der Drehflächen liegt dann bei diesem Winkel,
+/// nicht auf den Umrissen der Normalansichten.
+fn turned_frame(deg: f64) -> Frame {
+    let a = deg.to_radians();
+    Frame {
+        origin: DVec3::ZERO,
+        x: DVec3::new(a.cos(), a.sin(), 0.0),
+        y: DVec3::new(-a.sin(), a.cos(), 0.0),
+        z: DVec3::Z,
+    }
+}
+
+/// Kuppel als Drehkörper (Achse Z, Naht bei 20°): Sockel (Zylinder r = 8, Höhe 4), darauf eine
+/// Freiformwand aus der kubischen Bézierkurve mit den (r, z)-Kontrollpunkten `ctrl` (Anfang
+/// (8, 4)), oben eine Kreisscheibe bis zur Achse.
+fn dome_revolved(ctrl: [(f64, f64); 4]) -> Solid {
+    let bezier = cubic_from_controls(&ctrl.map(|(r, z)| (r, z, 0.0)));
+    let chain = ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![
+            Segment::Line {
+                to: DVec2::new(8.0, 0.0),
+            },
+            Segment::Line {
+                to: DVec2::new(8.0, 4.0),
+            },
+            Segment::Nurbs {
+                curve: Arc::new(bezier),
+            },
+            Segment::Line {
+                to: DVec2::new(0.0, ctrl[3].1),
+            },
+        ],
+    };
+    revolve(&chain, &turned_frame(20.0), &tol()).unwrap()
+}
+
+/// Normale (nicht normiert) und Wert der Schnittebene der Kuppel: `x + 0,35·y + 0,25·z = 8`.
+pub fn dome_cut_plane() -> (DVec3, f64) {
+    (DVec3::new(1.0, 0.35, 0.25), 8.0)
+}
+
+/// Der Körper ohne den Halbraum jenseits der Ebene [`dome_cut_plane`] (Differenz mit einem
+/// großen Quader, dessen Unterseite in der Ebene liegt), geprüft; mit dem Index der
+/// Freiformfläche.
+fn cut_by_plane(s: &Solid) -> (Solid, usize) {
+    use planora_kernel::BoolOp;
+    use planora_kernel::boolean::boolean;
+    use planora_math::{DMat4, DQuat};
+    let (n, c) = dome_cut_plane();
+    let nn = n.normalize();
+    let l = 60.0;
+    let cutter = make_box(DVec3::splat(l), &tol()).unwrap();
+    let rot = DQuat::from_rotation_arc(DVec3::Z, nn);
+    let m = DMat4::from_translation(nn * (c / n.length()))
+        * DMat4::from_quat(rot)
+        * DMat4::from_translation(DVec3::new(-l / 2.0, -l / 2.0, 0.0));
+    let cutter = cutter.transformed(&m).unwrap();
+    let out = boolean(s, &cutter, BoolOp::Difference, &tol()).unwrap();
+    validate(&out).expect("abgeschnittene Kuppel ist gültig");
+    let face = out
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Nurbs(_)))
+        .map(|(id, _)| id.index())
+        .expect("Freiformfläche");
+    (out, face)
+}
+
+/// Kuppel aus [`dome_revolved`] mit der Wand (8, 4) → (6,5; 7) → (4,5; 8,5) → (3; 9,5) (z steigt,
+/// r fällt streng: kein Überhang; alle Kanten scharf mit Knick über 20°, wie die Merkmalskanten
+/// des Referenznetzes), leicht gekippt und schräg abgeschnitten ([`cut_by_plane`]): Die
+/// Freiformfläche ist damit **innerhalb** ihres Parameterbereichs beschnitten. Liefert den Körper
+/// und den Index der Freiformfläche.
+pub fn nurbs_dome_solid() -> (Solid, usize) {
+    // Gekippt (9° um (1; 0,6; 0)), damit kein Kreis in einer Normalansicht genau von der Seite
+    // erscheint (deckungsgleiche Kreishälften, deren Sichtbarkeit an Materialtiefen unter der
+    // Sehnentoleranz des Referenznetzes hinge).
+    let dome = dome_revolved([(8.0, 4.0), (6.5, 7.0), (4.5, 8.5), (3.0, 9.5)]);
+    cut_by_plane(&rotated(
+        &dome,
+        DVec3::new(1.0, 0.6, 0.0),
+        9f64.to_radians(),
+    ))
+}
+
+/// Kuppel mit Überhang: Wand (8, 4) → (11, 5) → (7; 8,5) → (3, 9) (r wächst erst bis ≈ 9, die
+/// Wand ragt über den Sockel), ungekippt, schräg abgeschnitten wie [`nurbs_dome_solid`]. Von
+/// hinten endet ein Umriss der Wand auf der Schnittkante an einer Stelle, an der jeder Prüfstrahl
+/// den Rand der Schnittfläche streift.
+pub fn nurbs_overhang_dome_solid() -> (Solid, usize) {
+    cut_by_plane(&dome_revolved([
+        (8.0, 4.0),
+        (11.0, 5.0),
+        (7.0, 8.5),
+        (3.0, 9.0),
+    ]))
+}
+/// Kuppel mit Pol: Sockel (Zylinder r = 8, Höhe 4), darauf eine Freiformwand aus der kubischen
+/// Bézierkurve (8, 4) → (10, 6) → (6, 10) → (0, 10), die auf der Achse endet (Pol oben).
+pub fn nurbs_pole_solid() -> Solid {
+    let bezier = cubic_from_controls(&[
+        (8.0, 4.0, 0.0),
+        (10.0, 6.0, 0.0),
+        (6.0, 10.0, 0.0),
+        (0.0, 10.0, 0.0),
+    ]);
+    let chain = ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![
+            Segment::Line {
+                to: DVec2::new(8.0, 0.0),
+            },
+            Segment::Line {
+                to: DVec2::new(8.0, 4.0),
+            },
+            Segment::Nurbs {
+                curve: Arc::new(bezier),
+            },
+        ],
+    };
+    let s = revolve(&chain, &turned_frame(20.0), &tol()).unwrap();
+    validate(&s).expect("Kuppel mit Pol ist gültig");
+    s
+}
+
 /// Halbzylinder: Halbkreis (Radius `r`, Mittelpunkt im Ursprung, y ≥ 0) mal Höhe `h` in Z.
 pub fn half_cylinder_solid(r: f64, h: f64) -> Solid {
     let profile = Profile {

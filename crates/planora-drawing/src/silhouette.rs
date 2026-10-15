@@ -1,22 +1,45 @@
 //! Umriss-Striche gekrümmter Flächen: Linien, an denen die Fläche von der Blickrichtung aus
-//! gesehen umkippt (`n · d = 0`). Exakt für Zylinder, Kegel und Kugel; Torus und Freiform folgen
-//! (bis dahin eine benannte Meldung statt einer still falschen Zeichnung).
+//! gesehen umkippt (`n · d = 0`). Exakt für Zylinder, Kegel und Kugel (Gerade, Kreis); Torus und
+//! Freiformflächen als angepasste Splines (`Curve::Nurbs`, höchstens `SILHOUETTE_TOL` neben dem
+//! wahren Umriss).
 //!
 //! Jeder Umriss wird auf das tatsächliche Flächengebiet beschnitten: Abtastung mit
-//! `point_in_face` (Rand zählt als innen), Wechselstellen per Bisektion verfeinert. Wo ein Umriss
-//! den Parameterbereich der Fläche nicht verlässt, sind seine Enden aus den Flächenparametern
-//! gebaut und fallen so bis auf Rundung mit den Endpunkten der Randkanten zusammen.
+//! `point_in_face` (Rand zählt als innen), Wechselstellen per Bisektion verfeinert und auf die
+//! Randkante gelegt (siehe [`snap_to_edge`]). Wo ein Umriss den Parameterbereich der Fläche nicht
+//! verlässt, sind seine Enden aus den Flächenparametern gebaut und fallen so bis auf Rundung mit
+//! den Endpunkten der Randkanten zusammen.
+//!
+//! **Splines (Torus, Freiform):** Der wahre Umriss wird als Weg `t ↦ Punkt` dicht abgetastet,
+//! **vor** der Anpassung beschnitten, und jedes Stück wird einzeln angepasst
+//! (`NurbsCurve::fit` hält Anfang und Ende fest; reichen die zulässigen Kontrollpunkte nicht, in
+//! Teilen mit gemeinsamen Endpunkten). Die Enden eines Stücks an einer Randkante sind
+//! damit Punkte **der Kante selbst** (Nächstpunkt aus [`snap_to_edge`]), so dass die
+//! Schnittsuche dort teilt. Jede Anpassung wird gegen den dichten Weg geprüft: Seine Sehnen
+//! weichen höchstens `SILHOUETTE_TOL/8` vom wahren Umriss ab, die angepasste Kurve höchstens
+//! `7/8·SILHOUETTE_TOL` von den Sehnen, zusammen also höchstens `SILHOUETTE_TOL`.
+//!
+//! - **Torus (Festlegung F5):** parametrisch in `u`: `v₁(u) = atan2(−(d_x cos u + d_y sin u),
+//!   d_z)`, `v₂ = v₁ + π` im Rahmen des Torus; Blick in der Ringebene (`|d_z| ≤ 1e-9`): die
+//!   Kreise `v = ±π/2` und die zwei Meridiankreise senkrecht zur Blickrichtung (exakte Kreise).
+//! - **Freiform:** `g(u, v) = n(u, v)·d` auf einem Raster (64 × 64, je Bézier-Spanne mindestens 8
+//!   Teile, höchstens 256 je Richtung), Vorzeichenwechsel an Rasterkanten (Bisektion), Verkettung
+//!   nach dem Marching-Squares-Verfahren (Sattelzellen über den Zellmittelwert), über die Naht
+//!   geschlossener Richtungen hinweg; Zwischenpunkte per Newton auf `g = 0` in Richtung `∇g`.
+//!   Erreicht der Umriss eine Stelle ohne Normale (Pol), ist das
+//!   `DrawError::Unsupported("Umriss an einem Pol der Freiformfläche")`.
 
 use crate::DrawBody;
 use crate::basis::Basis;
 use crate::error::DrawError;
-use crate::limits::{BISECT_TOL, MAX_STROKES, geom_tol};
+use crate::limits::{BISECT_TOL, MAX_PIECES, MAX_STROKES, SILHOUETTE_TOL, geom_tol};
+use crate::raycast::Region;
 use crate::stroke::{Stroke, StrokeOrigin};
 use planora_exchange::Progress;
 use planora_kernel::boolean::{Containment, FaceGeom, face_geom, loop_points, point_in_face};
-use planora_kernel::{Curve, Surface};
-use planora_math::{DVec3, Frame, TAU, Tolerance};
-use std::f64::consts::FRAC_PI_2;
+use planora_kernel::{Curve, NurbsSurfaceData, Surface};
+use planora_math::nurbs::{NurbsCurve, NurbsSurface};
+use planora_math::{DVec2, DVec3, Frame, TAU, Tolerance};
+use std::f64::consts::{FRAC_PI_2, PI};
 
 /// Abtastpunkte je Umrissstück für den Zuschnitt auf die Fläche.
 const TRIM_SAMPLES: usize = 256;
@@ -35,8 +58,44 @@ const ZERO_NORMAL_DOT: f64 = 1e-12;
 const V_PAD_REL: f64 = 1e-2;
 /// Blick entlang der Zylinderachse: `|a · d| ≥ 1 − AXIAL_EPS`.
 const AXIAL_EPS: f64 = 1e-12;
-/// Meldung für Flächen, deren Umriss noch nicht berechnet wird.
-const UNSUPPORTED: &str = "Umriss von Torus/Freiform folgt";
+/// Einordnungstoleranz der Freiform-Zuschnitte in Vielfachen von `geom_tol` (wie die
+/// Strahlprüfung).
+const REGION_FACTOR: f64 = 16.0;
+/// Torus: `|d_z| ≤ TORUS_FLAT` (Blick in der Ringebene) → Kreise statt Splines.
+const TORUS_FLAT: f64 = 1e-9;
+/// Torus: Stützstellen je Zweig vor der Verfeinerung (721 Punkte).
+const TORUS_SAMPLES: usize = 720;
+/// Höchstzahl der Verdopplungen der Stützstellen (Torus) bzw. Halbierungen je Kettenglied
+/// (Freiform).
+const MAX_DOUBLINGS: usize = 8;
+/// Größte Abweichung der Sehnenmitte vom wahren Umriss im dichten Weg (Anteil an
+/// `SILHOUETTE_TOL`).
+const SAG_SHARE: f64 = 1.0 / 8.0;
+/// Größter Abstand der angepassten Kurve von den Sehnen des dichten Wegs (Anteil an
+/// `SILHOUETTE_TOL`); zusammen mit `SAG_SHARE` höchstens `SILHOUETTE_TOL`.
+const FIT_SHARE: f64 = 7.0 / 8.0;
+/// Anpassungsversuche: Schranke der Anpassung `SILHOUETTE_TOL/2`, je Versuch halbiert.
+const FIT_ATTEMPTS: usize = 2;
+/// Höchstzahl der Halbierungen einer Punktfolge, die sich nicht als Ganzes anpassen lässt.
+const FIT_SPLITS: usize = 8;
+/// Prüfstellen der angepassten Kurve je Sehne des dichten Wegs.
+const FIT_CHECKS_PER_CHORD: usize = 4;
+/// Suchfenster (Sehnen zu jeder Seite) beim Prüfen der angepassten Kurve.
+const FIT_CHECK_WINDOW: usize = 16;
+/// Freiform: Rasterteile je Richtung (mindestens) und je Bézier-Spanne (mindestens), höchstens.
+const GRID_MIN: usize = 64;
+const GRID_PER_SPAN: usize = 8;
+const GRID_MAX: usize = 256;
+/// Freiform: Newton-Schritte und Zielgenauigkeit auf `g = 0`.
+const NEWTON_STEPS: usize = 8;
+const NEWTON_G: f64 = 1e-12;
+/// Freiform: `|g|` darunter gilt an Rasterpunkten als 0 (Vorzeichen +); sind alle Rasterwerte so
+/// klein, wird die Fläche nur von der Seite gesehen und hat keinen Umriss.
+const ZERO_G: f64 = 1e-12;
+/// Meldung, wenn ein Freiform-Umriss eine Stelle ohne Normale erreicht.
+pub const POLE_MESSAGE: &str = "Umriss an einem Pol der Freiformfläche";
+/// Meldung, wenn eine Anpassung die Genauigkeit nicht erreicht.
+const FIT_MESSAGE: &str = "Umriss lässt sich nicht genau genug annähern";
 
 /// Ein Umrisskandidat vor dem Zuschnitt: Kurve und Parameterbereich; `closed` bei Vollkreisen.
 struct Candidate {
@@ -48,9 +107,9 @@ struct Candidate {
 
 /// Umriss-Striche aller Flächen aller Körper für die Blickrichtung `basis.d`.
 ///
-/// Ebenen haben keinen Umriss. Torus- und Freiformflächen liefern vorerst
-/// `DrawError::Unsupported`. `StrokeOrigin::Silhouette` trägt den Index der Fläche in
-/// `solid.faces`.
+/// Ebenen haben keinen Umriss. Zylinder, Kegel und Kugel liefern Geraden und Kreise, Torus und
+/// Freiformflächen angepasste Splines (siehe Modulbeschreibung). `StrokeOrigin::Silhouette` trägt
+/// den Index der Fläche in `solid.faces`.
 pub fn silhouette_strokes(
     bodies: &[DrawBody],
     basis: &Basis,
@@ -63,6 +122,7 @@ pub fn silhouette_strokes(
     };
     let d = basis.d;
     let mut out = Vec::new();
+    let mut work = Work::default();
     for (bi, body) in bodies.iter().enumerate() {
         let solid = body.solid;
         for (fid, face) in solid.faces.iter() {
@@ -71,39 +131,755 @@ pub fn silhouette_strokes(
             if matches!(surface, Surface::Plane { .. }) {
                 continue;
             }
-            if matches!(surface, Surface::Torus { .. } | Surface::Nurbs(_)) {
-                return Err(DrawError::Unsupported(UNSUPPORTED.into()));
-            }
             check_finite(surface)?;
             let fg = face_geom(solid, fid);
+            // Lage auf der beschnittenen Fläche: analytische Flächen wie der Kernel; Freiform-
+            // flächen über die einmal vorbereiteten Randpolygone (der Kernel baut sie je Frage neu
+            // und projiziert dabei jeden Randpunkt auf die Fläche).
+            let region = matches!(surface, Surface::Nurbs(_))
+                .then(|| Region::new(fg.clone(), REGION_FACTOR * tol.linear));
+            let in_face = |p: DVec3| match &region {
+                Some(r) => r
+                    .classify(REGION_FACTOR * tol.linear, p, surface.project(p))
+                    .is_some(),
+                None => point_in_face(&fg, p, &tol) != Containment::Outside,
+            };
+            let origin = StrokeOrigin::Silhouette {
+                body: bi,
+                face: fid.index(),
+            };
+            let mut push = |curve: Curve, t0: f64, t1: f64| -> Result<(), DrawError> {
+                out.push(Stroke {
+                    curve,
+                    t0,
+                    t1,
+                    origin: origin.clone(),
+                });
+                if out.len() as u64 > MAX_STROKES {
+                    return Err(DrawError::TooComplex(out.len() as u64));
+                }
+                Ok(())
+            };
             let candidates = match surface {
                 Surface::Cylinder { frame, radius } => {
                     cylinder_lines(&fg, frame, *radius, d, &tol)?
                 }
                 Surface::Cone { .. } => cone_lines(&fg, d, &tol)?,
                 Surface::Sphere { frame, radius } => vec![great_circle(frame, *radius, d)],
-                _ => Vec::new(),
+                Surface::Torus {
+                    frame,
+                    major,
+                    minor,
+                } => {
+                    let dl = local_dir(frame, d);
+                    if dl.z.abs() <= TORUS_FLAT {
+                        torus_circles(frame, *major, *minor, dl)
+                    } else {
+                        for k in 0..2 {
+                            let path = torus_branch(frame, *major, *minor, dl, k);
+                            for (c, t0, t1) in
+                                spline_pieces(&fg, &path, &in_face, &tol, &mut work, progress)?
+                            {
+                                push(c, t0, t1)?;
+                            }
+                        }
+                        Vec::new()
+                    }
+                }
+                Surface::Nurbs(data) => {
+                    for chain in outline_chains(data, d, &mut work, progress)? {
+                        let path = chain.path(data, d);
+                        for (c, t0, t1) in
+                            spline_pieces(&fg, &path, &in_face, &tol, &mut work, progress)?
+                        {
+                            push(c, t0, t1)?;
+                        }
+                    }
+                    Vec::new()
+                }
+                Surface::Plane { .. } => Vec::new(),
             };
             for c in candidates {
                 progress.check()?;
-                for (t0, t1) in trim_to_face(&fg, &c, &tol, progress)? {
-                    out.push(Stroke {
-                        curve: c.curve.clone(),
-                        t0,
-                        t1,
-                        origin: StrokeOrigin::Silhouette {
-                            body: bi,
-                            face: fid.index(),
-                        },
-                    });
-                    if out.len() as u64 > MAX_STROKES {
-                        return Err(DrawError::TooComplex(out.len() as u64));
-                    }
+                let point = |t: f64| c.curve.point(t);
+                let path = Path {
+                    point: &point,
+                    t0: c.t0,
+                    t1: c.t1,
+                    closed: c.closed,
+                };
+                for r in trim_to_face(
+                    &fg,
+                    &path,
+                    &in_face,
+                    &tol,
+                    SNAP_FACTOR * tol.linear,
+                    progress,
+                )? {
+                    push(c.curve.clone(), r.a, r.b)?;
                 }
             }
         }
     }
     Ok(out)
+}
+
+/// Zähler für den Rechenaufwand der Spline-Umrisse (dichte Punkte): über `MAX_PIECES` →
+/// `TooComplex`.
+#[derive(Default)]
+struct Work {
+    points: u64,
+}
+
+impl Work {
+    fn add(&mut self, n: usize) -> Result<(), DrawError> {
+        self.points += n as u64;
+        if self.points > MAX_PIECES {
+            return Err(DrawError::TooComplex(self.points));
+        }
+        Ok(())
+    }
+}
+
+/// Blickrichtung im Rahmen der Fläche.
+fn local_dir(frame: &Frame, d: DVec3) -> DVec3 {
+    DVec3::new(d.dot(frame.x), d.dot(frame.y), d.dot(frame.z))
+}
+
+/// Ein Umrissweg: Punkt zum Parameter `t ∈ [t0, t1]`; `closed`: periodisch mit Periode
+/// `t1 − t0` (Anfang = Ende).
+struct Path<'a> {
+    point: &'a dyn Fn(f64) -> DVec3,
+    t0: f64,
+    t1: f64,
+    closed: bool,
+}
+
+/// Ein Spline-Umrissweg mit eigenem Speicher für die Punktfunktion.
+struct OwnedPath {
+    point: Box<dyn Fn(f64) -> DVec3>,
+    t0: f64,
+    t1: f64,
+    closed: bool,
+    /// Startstützstellen (aufsteigend, `t0` … `t1`) für die Verfeinerung.
+    knots: Vec<f64>,
+}
+
+impl OwnedPath {
+    fn as_path(&self) -> Path<'_> {
+        Path {
+            point: &*self.point,
+            t0: self.t0,
+            t1: self.t1,
+            closed: self.closed,
+        }
+    }
+}
+
+/// Torus-Zweig `k` (0: `v₁`, 1: `v₂ = v₁ + π`) als geschlossener Weg über `u ∈ [0, 2π]`.
+fn torus_branch(frame: &Frame, major: f64, minor: f64, dl: DVec3, k: usize) -> OwnedPath {
+    let f = *frame;
+    let shift = k as f64 * PI;
+    let point = move |u: f64| {
+        let v = (-(dl.x * u.cos() + dl.y * u.sin())).atan2(dl.z) + shift;
+        torus_point(&f, major, minor, u, v)
+    };
+    OwnedPath {
+        point: Box::new(point),
+        t0: 0.0,
+        t1: TAU,
+        closed: true,
+        knots: (0..=TORUS_SAMPLES)
+            .map(|i| TAU * i as f64 / TORUS_SAMPLES as f64)
+            .collect(),
+    }
+}
+
+/// Torusoberfläche `P(u, v) = o + x (R + r cos v) cos u + y (R + r cos v) sin u + z r sin v`.
+fn torus_point(f: &Frame, major: f64, minor: f64, u: f64, v: f64) -> DVec3 {
+    let rho = major + minor * v.cos();
+    f.origin + f.x * (rho * u.cos()) + f.y * (rho * u.sin()) + f.z * (minor * v.sin())
+}
+
+/// Torus, Blick in der Ringebene: `cos v · (d_x cos u + d_y sin u) = 0` → die Kreise `v = ±π/2`
+/// (Radius `R`, Mitte `o ± r·z`) und die Meridiankreise bei `u = atan2(d_y, d_x) ± π/2` (Radius
+/// `r`, Mitte `o + R·n_u`, Ebene durch die Achse).
+fn torus_circles(frame: &Frame, major: f64, minor: f64, dl: DVec3) -> Vec<Candidate> {
+    let full = |curve: Curve| Candidate {
+        curve,
+        t0: 0.0,
+        t1: TAU,
+        closed: true,
+    };
+    let mut out = Vec::new();
+    for s in [1.0, -1.0] {
+        out.push(full(Curve::Circle {
+            frame: Frame {
+                origin: frame.origin + frame.z * (s * minor),
+                ..*frame
+            },
+            radius: major,
+        }));
+    }
+    let phi = dl.y.atan2(dl.x);
+    for um in [phi + FRAC_PI_2, phi - FRAC_PI_2] {
+        let nu = frame.x * um.cos() + frame.y * um.sin();
+        out.push(full(Curve::Circle {
+            frame: Frame {
+                origin: frame.origin + nu * major,
+                x: nu,
+                y: frame.z,
+                z: nu.cross(frame.z),
+            },
+            radius: minor,
+        }));
+    }
+    out
+}
+
+/// Dichte Stützstellen des Wegs: Ausgangsstellen `path.knots`, jedes Glied gleichmäßig in
+/// `2^k` Teile geteilt (`k ≤ MAX_DOUBLINGS`), bis die Sehnenmitten höchstens
+/// `SAG_SHARE · SILHOUETTE_TOL` vom Weg abweichen (sonst benannte Meldung). Liefert
+/// `(t, Punkt)`.
+fn densify(
+    path: &OwnedPath,
+    work: &mut Work,
+    progress: &Progress,
+) -> Result<Vec<(f64, DVec3)>, DrawError> {
+    let limit = SAG_SHARE * SILHOUETTE_TOL;
+    let p = &path.point;
+    let mut out: Vec<(f64, DVec3)> = Vec::new();
+    for w in path.knots.windows(2) {
+        progress.check()?;
+        let (a, b) = (w[0], w[1]);
+        let mut n = 1usize;
+        let mut pts: Vec<(f64, DVec3)>;
+        let mut doublings = 0;
+        loop {
+            pts = (0..=n)
+                .map(|i| {
+                    let t = if i == n {
+                        b
+                    } else {
+                        a + (b - a) * i as f64 / n as f64
+                    };
+                    (t, p(t))
+                })
+                .collect();
+            let sag = pts
+                .windows(2)
+                .map(|q| p(0.5 * (q[0].0 + q[1].0)).distance(0.5 * (q[0].1 + q[1].1)))
+                .fold(0.0, f64::max);
+            if sag.is_nan() {
+                return Err(DrawError::NonFinite);
+            }
+            if sag <= limit {
+                break;
+            }
+            if doublings == MAX_DOUBLINGS {
+                // Ohne die Sehnenschranke wäre die Prüfung der Anpassung nicht mehr streng.
+                return Err(DrawError::Unsupported(format!(
+                    "{FIT_MESSAGE} (Umriss zu stark gekrümmt)"
+                )));
+            }
+            n *= 2;
+            doublings += 1;
+        }
+        work.add(pts.len())?;
+        if out.is_empty() {
+            out.extend(pts);
+        } else {
+            out.extend(pts.into_iter().skip(1));
+        }
+    }
+    Ok(out)
+}
+
+/// Spline-Stücke eines Umrisswegs: dicht abtasten, auf die Fläche beschneiden, jedes Stück
+/// anpassen. Liefert `(Kurve, t0, t1)` (Parameterbereich der angepassten Kurve).
+fn spline_pieces(
+    fg: &FaceGeom,
+    path: &OwnedPath,
+    in_face: &dyn Fn(DVec3) -> bool,
+    tol: &Tolerance,
+    work: &mut Work,
+    progress: &Progress,
+) -> Result<Vec<(Curve, f64, f64)>, DrawError> {
+    let dense = densify(path, work, progress)?;
+    let limit = (SNAP_FACTOR * tol.linear).max(SPLINE_SNAP_SHARE * SILHOUETTE_TOL);
+    let ranges = trim_to_face(fg, &path.as_path(), in_face, tol, limit, progress)?;
+    let period = path.t1 - path.t0;
+    let mut out = Vec::new();
+    for r in ranges {
+        progress.check()?;
+        let gap = BISECT_TOL * period;
+        let whole = path.closed && r.b - r.a >= period - gap;
+        let mut pts: Vec<DVec3> = Vec::new();
+        if whole {
+            pts.extend(dense.iter().map(|x| x.1));
+            if let Some(&first) = pts.first() {
+                // Geschlossen: das letzte Stück endet genau am Anfang.
+                let n = pts.len();
+                pts[n - 1] = first;
+            }
+        } else {
+            pts.push(r.ends[0].unwrap_or_else(|| (path.point)(r.a)));
+            // Stützstellen echt zwischen a und b (bei geschlossenen Wegen auch jenseits t1).
+            let laps: &[f64] = if path.closed { &[0.0, 1.0] } else { &[0.0] };
+            for lap in laps {
+                for &(t, q) in &dense {
+                    let t = t + lap * period;
+                    if t > r.a + gap && t < r.b - gap {
+                        pts.push(q);
+                    }
+                }
+            }
+            pts.push(r.ends[1].unwrap_or_else(|| (path.point)(r.b)));
+        }
+        for c in fit_checked(&pts, tol, 0, progress)? {
+            let (t0, t1) = c.domain();
+            out.push((Curve::nurbs(c), t0, t1));
+        }
+    }
+    Ok(out)
+}
+
+/// Passt die Punkte an (`NurbsCurve::fit`, Schranke `SILHOUETTE_TOL/2`, je Versuch halbiert) und
+/// prüft die Kurve gegen den Streckenzug der Punkte (höchstens `FIT_SHARE · SILHOUETTE_TOL`).
+/// Gelingt das nicht (lange Umrisse brauchten mehr als die zulässigen Kontrollpunkte), wird die
+/// Punktfolge in der Mitte geteilt (gemeinsamer Punkt) und jede Hälfte für sich angepasst,
+/// höchstens `FIT_SPLITS` Stufen tief. Zu kurze Stücke (Länge ≤ `tol`) entfallen.
+fn fit_checked(
+    pts: &[DVec3],
+    tol: &Tolerance,
+    depth: usize,
+    progress: &Progress,
+) -> Result<Vec<NurbsCurve>, DrawError> {
+    progress.check()?;
+    let total: f64 = pts.windows(2).map(|w| w[0].distance(w[1])).sum();
+    if !total.is_finite() {
+        return Err(DrawError::NonFinite);
+    }
+    if pts.len() < 2 || total <= tol.linear {
+        return Ok(Vec::new());
+    }
+    let mut ftol = 0.5 * SILHOUETTE_TOL;
+    let mut why = String::new();
+    for _ in 0..FIT_ATTEMPTS {
+        match NurbsCurve::fit(pts, ftol) {
+            Ok(c) if follows(&c, pts, FIT_SHARE * SILHOUETTE_TOL) => return Ok(vec![c]),
+            Ok(_) => why = "Prüfung zwischen den Stützstellen".into(),
+            Err(e) => why = e.to_string(),
+        }
+        ftol *= 0.5;
+    }
+    if depth < FIT_SPLITS && pts.len() >= 4 {
+        let m = pts.len() / 2;
+        let mut out = fit_checked(&pts[..=m], tol, depth + 1, progress)?;
+        out.extend(fit_checked(&pts[m..], tol, depth + 1, progress)?);
+        return Ok(out);
+    }
+    Err(DrawError::Unsupported(format!("{FIT_MESSAGE} ({why})")))
+}
+
+/// Liegt die Kurve überall höchstens `limit` neben dem Streckenzug `pts`? Geprüft an
+/// `FIT_CHECKS_PER_CHORD` Stellen je Sehne; gesucht wird in einem Fenster um die Sehne mit
+/// demselben Längenanteil (Parameter der Anpassung = Sehnenlängenanteil).
+fn follows(c: &NurbsCurve, pts: &[DVec3], limit: f64) -> bool {
+    let mut cum = Vec::with_capacity(pts.len());
+    let mut s = 0.0;
+    cum.push(0.0);
+    for w in pts.windows(2) {
+        s += w[0].distance(w[1]);
+        cum.push(s);
+    }
+    let total = s;
+    let (a, b) = c.domain();
+    let n = pts.len() - 1;
+    let m = FIT_CHECKS_PER_CHORD * n;
+    for j in 0..=m {
+        let f = j as f64 / m as f64;
+        let q = c.point(a + (b - a) * f);
+        let k = cum
+            .partition_point(|&x| x <= f * total)
+            .saturating_sub(1)
+            .min(n - 1);
+        let lo = k.saturating_sub(FIT_CHECK_WINDOW);
+        let hi = (k + FIT_CHECK_WINDOW).min(n - 1);
+        let near = (lo..=hi).any(|i| seg_dist3(q, pts[i], pts[i + 1]) <= limit);
+        if !near {
+            return false;
+        }
+    }
+    true
+}
+
+/// Abstand des Punkts `q` von der Strecke `a b`.
+fn seg_dist3(q: DVec3, a: DVec3, b: DVec3) -> f64 {
+    let ab = b - a;
+    let l2 = ab.length_squared();
+    let t = if l2 > 0.0 {
+        ((q - a).dot(ab) / l2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    q.distance(a + ab * t)
+}
+
+/// Anteil von `SILHOUETTE_TOL`, bis zu dem ein Spline-Umrissende auf die Randkante gelegt wird
+/// (der wahre Umriss liegt auf der Fläche, die Kante nur auf deren Toleranz).
+const SPLINE_SNAP_SHARE: f64 = 0.25;
+
+// ---------------------------------------------------------------------------------------------
+// Freiform: Raster, Marching Squares, Ketten.
+
+/// Eine verkettete Umrisskurve im Parameterraum (fortlaufend, über Nähte entfaltet).
+struct Chain {
+    uv: Vec<DVec2>,
+    closed: bool,
+}
+
+/// `g = n·d` und `∇g` bei `(u, v)` (gefaltet); `None` ohne Normale.
+fn g_grad(sf: &NurbsSurface, data: &NurbsSurfaceData, d: DVec3, uv: DVec2) -> Option<(f64, DVec2)> {
+    let (u, v) = data.wrap(uv.x, uv.y);
+    let dv = sf.derivs(u, v, 2);
+    let (su, sv) = (dv[1][0], dv[0][1]);
+    let n = su.cross(sv);
+    let len = n.length();
+    if sf.normal(u, v) == DVec3::ZERO || len.is_nan() || len <= 0.0 || !len.is_finite() {
+        return None;
+    }
+    let nh = n / len;
+    let nu = dv[2][0].cross(sv) + su.cross(dv[1][1]);
+    let nv = dv[1][1].cross(sv) + su.cross(dv[0][2]);
+    let gu = (nu - nh * nh.dot(nu)).dot(d) / len;
+    let gv = (nv - nh * nh.dot(nv)).dot(d) / len;
+    Some((nh.dot(d), DVec2::new(gu, gv)))
+}
+
+/// `g = n·d` bei `(u, v)` mit der Normale von `NurbsSurface::normal` (`None` am Pol).
+fn g_at(sf: &NurbsSurface, data: &NurbsSurfaceData, d: DVec3, u: f64, v: f64) -> Option<f64> {
+    let (u, v) = data.wrap(u, v);
+    let n = sf.normal(u, v);
+    (n != DVec3::ZERO).then(|| n.dot(d))
+}
+
+/// Newton auf `g = 0` in Richtung `∇g` (höchstens `NEWTON_STEPS`, bis `|g| < NEWTON_G`);
+/// nicht geschlossene Richtungen bleiben im Bereich. Liefert den besten Punkt.
+fn newton_outline(data: &NurbsSurfaceData, d: DVec3, uv0: DVec2) -> DVec2 {
+    let sf = data.surface();
+    let ((u0, u1), (v0, v1)) = sf.domain();
+    let keep = |p: DVec2| {
+        DVec2::new(
+            if data.is_periodic_u() {
+                p.x
+            } else {
+                p.x.clamp(u0, u1)
+            },
+            if data.is_periodic_v() {
+                p.y
+            } else {
+                p.y.clamp(v0, v1)
+            },
+        )
+    };
+    let mut uv = keep(uv0);
+    let mut best = (f64::INFINITY, uv);
+    for _ in 0..=NEWTON_STEPS {
+        let Some((g, grad)) = g_grad(sf, data, d, uv) else {
+            break;
+        };
+        if g.abs() < best.0 {
+            best = (g.abs(), uv);
+        }
+        let gg = grad.length_squared();
+        if g.abs() < NEWTON_G || gg.is_nan() || gg <= 0.0 || !gg.is_finite() {
+            break;
+        }
+        uv = keep(uv - grad * (g / gg));
+    }
+    best.1
+}
+
+/// Rasterlinien einer Richtung: je Bézier-Spanne gleich viele Teile, insgesamt mindestens
+/// `GRID_MIN`, je Spanne mindestens `GRID_PER_SPAN`, höchstens `GRID_MAX`.
+fn grid_lines(knots: &[f64], lo: f64, hi: f64) -> Result<Vec<f64>, DrawError> {
+    let mut breaks: Vec<f64> = vec![lo];
+    for &k in knots {
+        if k > lo && k < hi && breaks.last().is_some_and(|&b| k > b) {
+            breaks.push(k);
+        }
+    }
+    breaks.push(hi);
+    let spans = breaks.len() - 1;
+    if spans > GRID_MAX {
+        return Err(DrawError::TooComplex(spans as u64));
+    }
+    let per = GRID_PER_SPAN
+        .max(GRID_MIN.div_ceil(spans))
+        .min((GRID_MAX / spans).max(1));
+    let mut out = Vec::with_capacity(spans * per + 1);
+    for w in breaks.windows(2) {
+        for i in 0..per {
+            out.push(w[0] + (w[1] - w[0]) * i as f64 / per as f64);
+        }
+    }
+    out.push(hi);
+    Ok(out)
+}
+
+/// Kennung einer Rasterkante: waagerecht (in u) bei `(i, j)` → `(i, j) – (i+1, j)`, senkrecht
+/// (in v) → `(i, j) – (i, j+1)`; Indizes geschlossener Richtungen gefaltet.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum EdgeKey {
+    H(usize, usize),
+    V(usize, usize),
+}
+
+/// Umrissketten einer Freiformfläche (siehe Modulbeschreibung).
+fn outline_chains(
+    data: &NurbsSurfaceData,
+    d: DVec3,
+    work: &mut Work,
+    progress: &Progress,
+) -> Result<Vec<Chain>, DrawError> {
+    let sf = data.surface();
+    let ((u0, u1), (v0, v1)) = sf.domain();
+    let us = grid_lines(sf.knots_u().knots(), u0, u1)?;
+    let vs = grid_lines(sf.knots_v().knots(), v0, v1)?;
+    let (nu, nv) = (us.len() - 1, vs.len() - 1);
+    let (pu, pv) = (data.is_periodic_u(), data.is_periodic_v());
+    let fold_i = |i: usize| if pu && i == nu { 0 } else { i };
+    let fold_j = |j: usize| if pv && j == nv { 0 } else { j };
+    work.add((nu + 1) * (nv + 1))?;
+    // Werte an den Rasterpunkten (geschlossene Richtungen: letzte Reihe = erste Reihe).
+    let mut gv: Vec<Option<f64>> = vec![None; (nu + 1) * (nv + 1)];
+    let at = |i: usize, j: usize| i * (nv + 1) + j;
+    for i in 0..=nu {
+        progress.check()?;
+        for j in 0..=nv {
+            let (fi, fj) = (fold_i(i), fold_j(j));
+            gv[at(i, j)] = if (fi, fj) != (i, j) {
+                gv[at(fi, fj)]
+            } else {
+                match g_at(sf, data, d, us[i], vs[j]) {
+                    Some(g) if !g.is_finite() => return Err(DrawError::NonFinite),
+                    Some(g) => Some(if g.abs() <= ZERO_G { 0.0 } else { g }),
+                    None => None,
+                }
+            };
+        }
+    }
+    if gv.iter().flatten().all(|g| *g == 0.0) {
+        return Ok(Vec::new());
+    }
+    let pos = |g: f64| g >= 0.0;
+    let mut nodes: Vec<DVec2> = Vec::new();
+    let mut index: std::collections::HashMap<EdgeKey, usize> = std::collections::HashMap::new();
+    let mut links: Vec<Vec<usize>> = Vec::new();
+    // Nullstelle auf einer Rasterkante (Bisektion bis zur Rechengenauigkeit).
+    let mut crossing = |key: EdgeKey,
+                        nodes: &mut Vec<DVec2>,
+                        links: &mut Vec<Vec<usize>>|
+     -> Result<usize, DrawError> {
+        if let Some(&k) = index.get(&key) {
+            return Ok(k);
+        }
+        let (a, b) = match key {
+            EdgeKey::H(i, j) => (DVec2::new(us[i], vs[j]), DVec2::new(us[i + 1], vs[j])),
+            EdgeKey::V(i, j) => (DVec2::new(us[i], vs[j]), DVec2::new(us[i], vs[j + 1])),
+        };
+        let g = |p: DVec2| {
+            g_at(sf, data, d, p.x, p.y).ok_or(DrawError::Unsupported(POLE_MESSAGE.into()))
+        };
+        let (mut lo, mut hi) = (a, b);
+        let ga = g(lo)?;
+        for _ in 0..MAX_BISECT_STEPS {
+            let mid = 0.5 * (lo + hi);
+            if mid == lo || mid == hi {
+                break;
+            }
+            let gm = g(mid)?;
+            if pos(gm) == pos(ga) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let p = 0.5 * (lo + hi);
+        nodes.push(p);
+        links.push(Vec::new());
+        index.insert(key, nodes.len() - 1);
+        Ok(nodes.len() - 1)
+    };
+    for i in 0..nu {
+        progress.check()?;
+        for j in 0..nv {
+            let corners = [
+                gv[at(i, j)],
+                gv[at(i + 1, j)],
+                gv[at(i + 1, j + 1)],
+                gv[at(i, j + 1)],
+            ];
+            let defined: Vec<f64> = corners.iter().flatten().copied().collect();
+            if defined.len() < 4 {
+                if defined.iter().any(|&g| pos(g)) && defined.iter().any(|&g| !pos(g)) {
+                    return Err(DrawError::Unsupported(POLE_MESSAGE.into()));
+                }
+                continue;
+            }
+            let s: Vec<bool> = defined.iter().map(|&g| pos(g)).collect();
+            let keys = [
+                EdgeKey::H(i, fold_j(j)),
+                EdgeKey::V(fold_i(i + 1), j),
+                EdgeKey::H(i, fold_j(j + 1)),
+                EdgeKey::V(fold_i(i), j),
+            ];
+            // Kante e verbindet die Ecken (e, e+1 mod 4) – Ecken in der Reihenfolge c0..c3.
+            let cuts: Vec<usize> = (0..4).filter(|&e| s[e] != s[(e + 1) % 4]).collect();
+            let pairs: Vec<(usize, usize)> = match cuts.len() {
+                0 => continue,
+                2 => vec![(cuts[0], cuts[1])],
+                4 => {
+                    let mid = DVec2::new(0.5 * (us[i] + us[i + 1]), 0.5 * (vs[j] + vs[j + 1]));
+                    let gc = g_at(sf, data, d, mid.x, mid.y)
+                        .ok_or(DrawError::Unsupported(POLE_MESSAGE.into()))?;
+                    if pos(gc) == s[0] {
+                        // c0 und c2 hängen über die Mitte zusammen: c1 und c3 abgetrennt.
+                        vec![(0, 1), (2, 3)]
+                    } else {
+                        vec![(3, 0), (1, 2)]
+                    }
+                }
+                _ => unreachable!("Vorzeichenwechsel im Viereck sind gerade"),
+            };
+            for (ea, eb) in pairs {
+                let ka = crossing(keys[ea], &mut nodes, &mut links)?;
+                let kb = crossing(keys[eb], &mut nodes, &mut links)?;
+                links[ka].push(kb);
+                links[kb].push(ka);
+            }
+        }
+    }
+    work.add(nodes.len())?;
+    // Ketten: zuerst offene (ab Knoten mit einem Nachbarn), dann geschlossene.
+    let mut seen = vec![false; nodes.len()];
+    let unwrap = |prev: DVec2, mut q: DVec2| {
+        if pu {
+            let p = u1 - u0;
+            q.x += ((prev.x - q.x) / p).round() * p;
+        }
+        if pv {
+            let p = v1 - v0;
+            q.y += ((prev.y - q.y) / p).round() * p;
+        }
+        q
+    };
+    let mut chains = Vec::new();
+    let starts: Vec<usize> = (0..nodes.len())
+        .filter(|&k| links[k].len() == 1)
+        .chain(0..nodes.len())
+        .collect();
+    for start in starts {
+        if seen[start] || links[start].is_empty() {
+            continue;
+        }
+        progress.check()?;
+        let mut uv = vec![nodes[start]];
+        seen[start] = true;
+        let (mut prev, mut cur) = (start, links[start][0]);
+        let mut closed = false;
+        loop {
+            let last = *uv.last().expect("Kette nicht leer");
+            if cur == start {
+                // Geschlossen: zurück am Anfang (entfaltet).
+                uv.push(unwrap(last, nodes[start]));
+                closed = true;
+                break;
+            }
+            uv.push(unwrap(last, nodes[cur]));
+            seen[cur] = true;
+            match links[cur].iter().copied().find(|&k| k != prev) {
+                Some(n) if n == start || !seen[n] => {
+                    prev = cur;
+                    cur = n;
+                }
+                _ => break,
+            }
+        }
+        chains.push(Chain { uv, closed });
+    }
+    Ok(chains)
+}
+
+impl Chain {
+    /// Weg über die Kettenglieder: `t ∈ [0, n−1]`; zwischen den Gliedern linear im
+    /// Parameterraum, dann per Newton auf `g = 0`. Ganzzahlige `t` sind die Glieder selbst.
+    fn path(&self, data: &std::sync::Arc<NurbsSurfaceData>, d: DVec3) -> OwnedPath {
+        let uv = self.uv.clone();
+        let n = uv.len() - 1;
+        let data = data.clone();
+        let closed = self.closed;
+        let point = move |t: f64| {
+            let t = if closed && (t < 0.0 || t > n as f64) {
+                t.rem_euclid(n as f64)
+            } else {
+                t.clamp(0.0, n as f64)
+            };
+            let i = (t.floor() as usize).min(n - 1);
+            let f = t - i as f64;
+            let q = if f == 0.0 {
+                uv[i]
+            } else if f == 1.0 {
+                uv[i + 1]
+            } else {
+                newton_outline(&data, d, uv[i].lerp(uv[i + 1], f))
+            };
+            data.point(q.x, q.y)
+        };
+        OwnedPath {
+            point: Box::new(point),
+            t0: 0.0,
+            t1: n as f64,
+            closed,
+            knots: (0..=n).map(|i| i as f64).collect(),
+        }
+    }
+}
+
+/// Punkt des wahren Umrisses der Fläche nahe `p` (für die Sichtprüfung der Spline-Umrisse, die
+/// bis `SILHOUETTE_TOL` neben ihm liegen): Torus über `u` des Punkts und den näheren Zweig,
+/// Freiform über den Fußpunkt auf der Fläche und Newton auf `g = 0`. Andere Flächen: `p`.
+pub fn outline_point(surface: &Surface, d: DVec3, p: DVec3) -> DVec3 {
+    match surface {
+        Surface::Torus {
+            frame,
+            major,
+            minor,
+        } => {
+            let dl = local_dir(frame, d);
+            if dl.z.abs() <= TORUS_FLAT {
+                return p;
+            }
+            let l = frame.to_local(p);
+            let u = l.y.atan2(l.x);
+            let v = l.z.atan2((l.x * l.x + l.y * l.y).sqrt() - major);
+            let v1 = (-(dl.x * u.cos() + dl.y * u.sin())).atan2(dl.z);
+            let ang = |a: f64| {
+                let r = (a - v).rem_euclid(TAU);
+                r.min(TAU - r)
+            };
+            let vb = if ang(v1) <= ang(v1 + PI) { v1 } else { v1 + PI };
+            torus_point(frame, *major, *minor, u, vb)
+        }
+        Surface::Nurbs(data) => {
+            let (u, v) = data.project(p);
+            let q = newton_outline(data, d, DVec2::new(u, v));
+            let s = data.point(q.x, q.y);
+            if s.is_finite() { s } else { p }
+        }
+        _ => p,
+    }
 }
 
 /// Rahmen und Maße der Fläche sind endliche Zahlen.
@@ -113,7 +889,13 @@ fn check_finite(surface: &Surface) -> Result<(), DrawError> {
     let dims_ok = match surface {
         Surface::Cylinder { radius, .. } | Surface::Sphere { radius, .. } => radius.is_finite(),
         Surface::Cone { radius, slope, .. } => radius.is_finite() && slope.is_finite(),
-        _ => true,
+        Surface::Torus { major, minor, .. } => major.is_finite() && minor.is_finite(),
+        Surface::Nurbs(n) => {
+            let sf = n.surface();
+            let (nu, nv) = sf.counts();
+            (0..nu).all(|i| (0..nv).all(|j| sf.control_at(i, j).is_finite()))
+        }
+        Surface::Plane { .. } => true,
     };
     if frame_ok && dims_ok {
         Ok(())
@@ -285,18 +1067,31 @@ fn great_circle(frame: &Frame, radius: f64, d: DVec3) -> Candidate {
     }
 }
 
-/// Teilbereiche von `c`, die in der Fläche liegen (`Inside` oder `Boundary`). Abtastung an
+/// Ein beschnittener Teilbereich `[a, b]` eines Wegs; `ends`: die Punkte der Randkante, auf die
+/// seine Enden gelegt wurden (`None`, wo kein Rand anliegt oder der Bereich am Wegende endet).
+struct Trimmed {
+    a: f64,
+    b: f64,
+    ends: [Option<DVec3>; 2],
+}
+
+/// Teilbereiche des Wegs, die in der Fläche liegen (`Inside` oder `Boundary`). Abtastung an
 /// `TRIM_SAMPLES` Stellen, Wechselstellen per Bisektion (mindestens auf `BISECT_TOL` der
-/// Parameterbreite, weiter bis zur Rechengenauigkeit, damit die Enden auf dem Rand liegen).
-/// Vollkreise: ganz innen bleibt `[t0, t1]`; sonst Bögen, die über `t1` hinausreichen dürfen.
+/// Parameterbreite, weiter bis zur Rechengenauigkeit, damit die Enden auf dem Rand liegen), dann
+/// auf die Randkante gelegt ([`snap_to_edge`] mit der Grenze `snap_limit`).
+/// Geschlossene Wege: ganz innen bleibt `[t0, t1]`; sonst Bögen, die über `t1` hinausreichen
+/// dürfen.
 fn trim_to_face(
     fg: &FaceGeom,
-    c: &Candidate,
+    c: &Path,
+    in_face: &dyn Fn(DVec3) -> bool,
     tol: &Tolerance,
+    snap_limit: f64,
     progress: &Progress,
-) -> Result<Vec<(f64, f64)>, DrawError> {
+) -> Result<Vec<Trimmed>, DrawError> {
     let w = c.t1 - c.t0;
-    let inside = |t: f64| point_in_face(fg, c.curve.point(t), tol) != Containment::Outside;
+    let point = c.point;
+    let inside = |t: f64| in_face(point(t));
     // Offene Kurven: Stellen 0..N−1 einschließlich beider Enden; Vollkreise: N Stellen im Umlauf.
     let steps = if c.closed {
         TRIM_SAMPLES
@@ -310,9 +1105,19 @@ fn trim_to_face(
             c.t0 + w * i as f64 / steps as f64
         }
     };
-    let flags: Vec<bool> = (0..TRIM_SAMPLES).map(|i| inside(t_at(i))).collect();
+    let mut flags: Vec<bool> = Vec::with_capacity(TRIM_SAMPLES);
+    for i in 0..TRIM_SAMPLES {
+        if i % 32 == 0 {
+            progress.check()?;
+        }
+        flags.push(inside(t_at(i)));
+    }
     if flags.iter().all(|&f| f) {
-        return Ok(vec![(c.t0, c.t1)]);
+        return Ok(vec![Trimmed {
+            a: c.t0,
+            b: c.t1,
+            ends: [None, None],
+        }]);
     }
     if flags.iter().all(|&f| !f) {
         return Ok(Vec::new());
@@ -346,28 +1151,34 @@ fn trim_to_face(
             }
         }
         debug_assert!((b - a).abs() <= BISECT_TOL * w.abs());
-        snap_to_edge(
+        match snap_to_edge(
             fg,
-            &c.curve,
+            point,
             a,
             SNAP_WINDOW * w.abs() / steps as f64,
-            tol.linear,
-        )
-        .map_or(a, |t| if c.closed { t } else { t.clamp(c.t0, c.t1) })
+            snap_limit,
+        ) {
+            Some((t, q)) => (if c.closed { t } else { t.clamp(c.t0, c.t1) }, Some(q)),
+            None => (a, None),
+        }
     };
     let mut out = Vec::new();
-    let mut start: Option<f64> = None;
+    let mut start: Option<(f64, Option<DVec3>)> = None;
     for j in 0..seq.len() {
         let (t, is_in) = seq[j];
         if is_in && start.is_none() {
-            start = Some(if j == 0 { t } else { refine(t, seq[j - 1].0) });
+            start = Some(if j == 0 {
+                (t, None)
+            } else {
+                refine(t, seq[j - 1].0)
+            });
         }
         let ends_here = is_in && (j + 1 == seq.len() || !seq[j + 1].1);
         if ends_here {
             progress.check()?;
-            let a = start.take().unwrap_or(t);
-            let b = if j + 1 == seq.len() {
-                t
+            let (a, qa) = start.take().unwrap_or((t, None));
+            let (b, qb) = if j + 1 == seq.len() {
+                (t, None)
             } else {
                 refine(t, seq[j + 1].0)
             };
@@ -377,10 +1188,14 @@ fn trim_to_face(
             } else {
                 (a, b)
             };
-            let mid = c.curve.point(0.5 * (a + b));
-            let (pa, pb) = (c.curve.point(a), c.curve.point(b));
+            let mid = point(0.5 * (a + b));
+            let (pa, pb) = (point(a), point(b));
             if pa.distance(mid).max(mid.distance(pb)) > tol.linear {
-                out.push((a, b));
+                out.push(Trimmed {
+                    a,
+                    b,
+                    ends: [qa, qb],
+                });
             }
         }
     }
@@ -394,24 +1209,35 @@ fn trim_to_face(
 /// im `(u, v)`-Raum gekrümmten Kanten (Ellipse eines schrägen Schnitts) bis ≈ 1e-3·r neben der
 /// wahren Kante. Deshalb wird je Randstück der Abstand `|P(t) − Kante|` im Fenster
 /// `[t_star − h, t_star + h]` minimiert (Goldener Schnitt) und das kleinste Minimum genommen,
-/// wenn es höchstens `SNAP_FACTOR · tol` beträgt. Randstücke, an denen der Umriss schon am
-/// Fensterrand anliegt (er läuft entlang einer Kante, etwa einer Naht), zählen nicht: Dort ist
-/// der Bisektionspunkt bereits auf `tol` genau. Ohne Treffer (schleifender Schnitt): `None`.
-fn snap_to_edge(fg: &FaceGeom, curve: &Curve, t_star: f64, h: f64, tol: f64) -> Option<f64> {
-    let limit = SNAP_FACTOR * tol;
+/// wenn es höchstens `limit` beträgt (exakte Kurven: `SNAP_FACTOR · tol`; Spline-Umrisse, deren
+/// wahrer Weg auf der Fläche liegt, die Kante aber nur auf deren Toleranz: bis
+/// `SPLINE_SNAP_SHARE · SILHOUETTE_TOL`). Randstücke, an denen der Umriss schon am Fensterrand
+/// anliegt (er läuft entlang einer Kante, etwa einer Naht), zählen nicht: Dort ist der
+/// Bisektionspunkt bereits genau. Liefert die Stelle auf dem Umriss und den nächsten Punkt der
+/// Kante (für Splines das Ende selbst); ohne Treffer (schleifender Schnitt): `None`.
+fn snap_to_edge(
+    fg: &FaceGeom,
+    point: &dyn Fn(f64) -> DVec3,
+    t_star: f64,
+    h: f64,
+    limit: f64,
+) -> Option<(f64, DVec3)> {
     let (lo, hi) = (t_star - h, t_star + h);
-    let mut best: Option<(f64, f64)> = None;
+    let mut best: Option<(f64, f64, &planora_kernel::boolean::Seg)> = None;
     for seg in fg.loops.iter().flatten() {
-        let dist = |t: f64| seg.closest(curve.point(t)).1;
+        let dist = |t: f64| seg.closest(point(t)).1;
         if dist(lo) <= limit || dist(hi) <= limit {
             continue;
         }
         let (t, d) = golden_min(lo, hi, dist);
-        if d <= limit && best.is_none_or(|(_, bd)| d < bd) {
-            best = Some((t, d));
+        if d <= limit && best.is_none_or(|(_, bd, _)| d < bd) {
+            best = Some((t, d, seg));
         }
     }
-    best.map(|(t, _)| t)
+    best.map(|(t, _, seg)| {
+        let (f, _) = seg.closest(point(t));
+        (t, seg.at(f))
+    })
 }
 
 /// Minimum einer unimodalen Funktion auf `[a, b]` (Goldener Schnitt bis zur Rechengenauigkeit):
@@ -440,4 +1266,41 @@ fn golden_min(mut a: f64, mut b: f64, f: impl Fn(f64) -> f64) -> (f64, f64) {
         }
     }
     if f1 <= f2 { (x1, f1) } else { (x2, f2) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_wavy_outline_is_fitted_in_parts() {
+        // 150 Wellen (Amplitude 0,05 mm, Wellenlänge 0,6 mm): eine einzige Anpassung bräuchte
+        // mehr als die zulässigen 512 Kontrollpunkte; geteilt hält jedes Stück die Genauigkeit,
+        // und die Stücke schließen lückenlos aneinander an.
+        let wave = |x: f64| DVec3::new(x, 0.05 * (x * std::f64::consts::TAU / 0.6).sin(), 0.0);
+        let n = 30_000;
+        let len = 150.0 * 0.6;
+        let pts: Vec<DVec3> = (0..=n).map(|i| wave(len * i as f64 / n as f64)).collect();
+        let tol = Tolerance {
+            linear: geom_tol(len),
+            ..Tolerance::default()
+        };
+        let parts = fit_checked(&pts, &tol, 0, &Progress::new()).unwrap();
+        assert!(parts.len() > 1, "{}", parts.len());
+        for w in parts.windows(2) {
+            assert_eq!(w[0].point(w[0].domain().1), w[1].point(w[1].domain().0));
+        }
+        assert_eq!(parts[0].point(parts[0].domain().0), pts[0]);
+        let last = &parts[parts.len() - 1];
+        assert_eq!(last.point(last.domain().1), pts[n]);
+        // Eigene Prüfung: jeder Kurvenpunkt liegt höchstens SILHOUETTE_TOL neben der Welle
+        // (Abstand zur Welle über die Senkrechte: |y − 0,05·sin(…x)| begrenzt ihn nach oben).
+        for c in &parts {
+            let (a, b) = c.domain();
+            for i in 0..=2000 {
+                let p = c.point(a + (b - a) * i as f64 / 2000.0);
+                assert!((p.y - wave(p.x).y).abs() <= SILHOUETTE_TOL, "{p:?}");
+            }
+        }
+    }
 }

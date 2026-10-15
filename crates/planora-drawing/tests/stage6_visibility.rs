@@ -92,38 +92,6 @@ fn mesh_reference_agrees_for_all_shapes_and_views() {
     check_all_views(&cases);
 }
 
-/// Prüft alle Ansichten aller Fälle gegen die Netzreferenz: keine Fehler, je Ansicht höchstens
-/// 30 % und insgesamt höchstens 5 % unentschiedene Referenzstellen.
-fn check_all_views(cases: &[(&str, Vec<&planora_kernel::Solid>)]) {
-    let (mut tolerated, mut sampled, mut warnings, mut undecided) = (0, 0, 0, 0);
-    for (name, solids) in cases {
-        for k in planora_drawing::model::ViewKind::ALL {
-            let r = check_view(solids, k);
-            assert!(r.errors.is_empty(), "{name} {k:?}: {:?}", r.errors);
-            assert!(
-                r.undecided * 10 <= r.sampled * 3,
-                "{name} {k:?}: Referenz unentschieden an {} von {} Stellen",
-                r.undecided,
-                r.sampled
-            );
-            if r.undecided > 0 {
-                eprintln!("{name} {k:?}: unentschieden {}/{}", r.undecided, r.sampled);
-            }
-            tolerated += r.tolerated;
-            sampled += r.sampled;
-            warnings += r.warnings.len();
-            undecided += r.undecided;
-        }
-    }
-    eprintln!(
-        "Stellen: {sampled}, zulässig abweichend: {tolerated}, Referenz unentschieden: {undecided}, Warnungen (b): {warnings}"
-    );
-    assert!(
-        undecided * 20 <= sampled,
-        "Referenz unentschieden an {undecided} von {sampled} Stellen"
-    );
-}
-
 #[test]
 fn bodies_passing_into_each_other_agree_with_the_mesh_reference() {
     // Getrennte Körper, die ineinander stecken: Die Sichtbarkeit wechselt dort, wo eine Kante
@@ -194,25 +162,6 @@ fn boxes_sharing_a_face_are_drawn_without_ambiguity() {
     check_all_views(&cases);
 }
 
-#[test]
-fn torus_body_is_reported_unsupported_for_now() {
-    // VORLÄUFIG: Bis Aufgabe 7 den Torus-Umriss liefert, meldet compute_view einen Körper mit
-    // Torusfläche als nicht unterstützt. Aufgabe 7 ersetzt diesen Test.
-    let t = torus_solid(10.0, 3.0);
-    let e = compute_view(
-        &[DrawBody {
-            name: "Ring".into(),
-            solid: &t,
-        }],
-        ViewKind::Front,
-        &Progress::new(),
-    )
-    .unwrap_err();
-    assert!(
-        matches!(e, planora_drawing::DrawError::Unsupported(_)),
-        "{e:?}"
-    );
-}
 #[test]
 fn scaled_and_shifted_bodies_give_the_same_classification() {
     // Ausdehnung 1e5 mm, weit vom Ursprung (1e6 mm) und 0,1 mm: gleiche Anzahl sichtbarer/verdeckter Stücke je Ansicht

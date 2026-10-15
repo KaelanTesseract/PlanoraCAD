@@ -163,28 +163,62 @@ pub fn compute_view(
     let edge_faces: Vec<EdgeFaces> = bodies.iter().map(|b| EdgeFaces::new(b.solid)).collect();
     let counter = Cell::new(0);
     progress.set_total(ranges.len() as u64);
-    let mut pieces = Vec::with_capacity(ranges.len());
+    let mut raw: Vec<(usize, f64, f64, Option<Visibility>)> = Vec::with_capacity(ranges.len());
     for (i, a, b) in ranges {
         progress.check()?;
         let s = &strokes[i];
         let body = origin_body(s);
         let own = edge_faces[body].own_faces(s);
         let name = stroke_name(bodies, s);
-        for (t0, t1, vis) in visibility::classify_range(
-            &scene, &basis, s, &own, body, a, b, extent, &name, &counter,
-        )? {
-            pieces.push(Piece {
-                stroke: i,
-                t0,
-                t1,
-                vis,
-            });
+        // Angepasste Umriss-Splines: Prüfstrahlen vom Punkt des wahren Umrisses.
+        let outline = match (&s.origin, &s.curve) {
+            (StrokeOrigin::Silhouette { body, face }, planora_kernel::Curve::Nurbs(_)) => bodies
+                [*body]
+                .solid
+                .faces
+                .iter()
+                .find(|(id, _)| id.index() == *face)
+                .map(|(_, f)| f.surface.clone()),
+            _ => None,
+        };
+        let map = |p: planora_math::DVec3| match &outline {
+            Some(surface) => silhouette::outline_point(surface, basis.d, p),
+            None => p,
+        };
+        match visibility::classify_range_mapped(
+            &scene,
+            &basis,
+            s,
+            &own,
+            body,
+            (a, b),
+            extent,
+            &name,
+            &counter,
+            &map,
+        ) {
+            Ok(parts) => {
+                for (t0, t1, vis) in parts {
+                    raw.push((i, t0, t1, Some(vis)));
+                }
+            }
+            // Ein Stück, das im Raum kürzer als OWN_EPS ist und an dem kein Strahl entscheidet
+            // (Ecke, an der ein Umriss auf einer Kante endet): Es übernimmt das Urteil des
+            // Nachbarstücks desselben Strichs – der Wechsel ist dann auf OWN_EPS genau, wie
+            // beim Eingrenzen in `classify_range`.
+            Err(DrawError::AmbiguousVisibility(_))
+                if s.point(a).distance(s.point(b)) <= limits::own_eps(extent) =>
+            {
+                raw.push((i, a, b, None));
+            }
+            Err(e) => return Err(e),
         }
-        if pieces.len() as u64 > MAX_PIECES {
-            return Err(DrawError::TooComplex(pieces.len() as u64));
+        if raw.len() as u64 > MAX_PIECES {
+            return Err(DrawError::TooComplex(raw.len() as u64));
         }
         progress.advance(1);
     }
+    let pieces = inherit_short(raw, |i| stroke_name(bodies, &strokes[i]))?;
 
     let bbox = pieces_bbox(&strokes, &pieces, &basis);
     Ok(ViewLines {
@@ -195,6 +229,37 @@ pub fn compute_view(
         pieces,
         bbox,
     })
+}
+
+/// Stücke ohne eigenes Urteil (`None`) übernehmen das Urteil des vorigen, sonst des nächsten
+/// anschließenden Stücks desselben Strichs (die Stücke eines Strichs folgen lückenlos
+/// aufeinander). Bleibt eines ohne Urteil (der ganze Strich ist so ein Stück):
+/// `AmbiguousVisibility` mit dem Namen des Strichs.
+fn inherit_short(
+    mut raw: Vec<(usize, f64, f64, Option<Visibility>)>,
+    name: impl Fn(usize) -> String,
+) -> Result<Vec<Piece>, DrawError> {
+    for k in 1..raw.len() {
+        if raw[k].3.is_none() && raw[k - 1].0 == raw[k].0 && raw[k - 1].2 == raw[k].1 {
+            raw[k].3 = raw[k - 1].3;
+        }
+    }
+    for k in (0..raw.len().saturating_sub(1)).rev() {
+        if raw[k].3.is_none() && raw[k + 1].0 == raw[k].0 && raw[k + 1].1 == raw[k].2 {
+            raw[k].3 = raw[k + 1].3;
+        }
+    }
+    raw.into_iter()
+        .map(|(stroke, t0, t1, vis)| match vis {
+            Some(vis) => Ok(Piece {
+                stroke,
+                t0,
+                t1,
+                vis,
+            }),
+            None => Err(DrawError::AmbiguousVisibility(name(stroke))),
+        })
+        .collect()
 }
 
 /// Hüllbox aller Stücke in Ansichtskoordinaten (ohne Rand).

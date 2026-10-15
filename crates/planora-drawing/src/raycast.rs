@@ -4,7 +4,10 @@
 //!
 //! Schnitte: Ebene (linear), Zylinder, Kegel, Kugel (quadratisch im lokalen Rahmen der Fläche),
 //! Torus (Vorzeichenwechsel der impliziten Funktion auf 2048 Stützstellen, Bisektion; Berührung
-//! ohne Vorzeichenwechsel ist unsicher), Freiform (`ray_hits_checked` des Kernels).
+//! ohne Vorzeichenwechsel ist unsicher, außer der Strahl beginnt auf dem Torus und entfernt sich
+//! von ihm), Freiform (`ray_hits_checked` des Kernels; beginnt der Strahl auf der Fläche – etwa
+//! auf ihrem Umriss –, wird der fast tangentiale Anfang übersprungen und über Vorzeichenwechsel des
+//! Flächenabstands entschieden, siehe `nurbs_hits`).
 //!
 //! Einordnung je Schnittpunkt mit `tol = 16·geom_tol(E)`: Randabstand höchstens `tol` →
 //! `Boundary`. Fern von gekrümmten Randkurven wie `point_in_face` des Kernels: Windungszahl der
@@ -65,6 +68,15 @@ const TORUS_SAMPLES: usize = 2048;
 /// Berührung des Torus: `min |F| < max(TORUS_TOUCH_REL · minor, tol)` ohne Vorzeichenwechsel
 /// (`F` ist ein Abstand, die Schwelle also eine Länge).
 const TORUS_TOUCH_REL: f64 = 1e-9;
+/// Freiform, Strahl beginnt auf der Fläche: Wachstum des übersprungenen Anfangsstücks je neuer
+/// Anfrage beim Kernel (ab `OWN_EPS`).
+const SKIP_GROWTH: f64 = 4.0;
+/// Freiform: Stellen im übersprungenen Anfangsstück für die Vorzeichenwechsel.
+const NEAR_SAMPLES: usize = 32;
+/// Eine Berührung muss `|F|` unter diesen Anteil des Werts am Anfang des Suchbereichs bringen
+/// (eine echte Berührung bringt `|F|` auf null; ein Strahl, der auf der Fläche beginnt und sich
+/// von ihr entfernt, bleibt darüber).
+const START_DIP: f64 = 0.5;
 /// Höchstzahl an Halbierungen (endet früher an der Rechengenauigkeit).
 const BISECT_STEPS: usize = 200;
 /// Schritte des Goldenen Schnitts beim Suchen des kleinsten `|F|` zwischen zwei Stützstellen.
@@ -107,14 +119,34 @@ type Candidate = (f64, Option<(f64, f64)>);
 struct FaceData {
     body: usize,
     face: usize,
-    geom: FaceGeom,
+    region: Region,
+    /// Hüllbox der Fläche, aufgebläht.
+    lo: DVec3,
+    hi: DVec3,
+}
+
+/// Beschnittene Fläche, vorbereitet für viele Lagefragen: Randpolygone im Parameterraum und
+/// Randbänder einmal berechnet (siehe Modulbeschreibung). Auch der Zuschnitt der
+/// Freiform-Umrisse nutzt sie.
+pub(crate) struct Region {
+    pub(crate) geom: FaceGeom,
     /// Randschleifen im Parameterraum (wie `point_in_face` sie bildet).
     polys: Vec<Vec<DVec2>>,
     /// Je Randstück (in der Reihenfolge `loops.iter().flatten()`) seine Art.
     segs: Vec<SegInfo>,
-    /// Hüllbox der Fläche, aufgebläht.
-    lo: DVec3,
-    hi: DVec3,
+}
+
+impl Region {
+    /// Bereitet die Fläche vor; `tol` ist die Einordnungstoleranz (Randbänder).
+    pub(crate) fn new(geom: FaceGeom, tol: f64) -> Region {
+        let polys = geom
+            .loops
+            .iter()
+            .map(|lp| points_to_uv(&geom.surface, geom.same_sense, &loop_points(lp)))
+            .collect();
+        let segs = seg_infos(&geom, tol);
+        Region { geom, polys, segs }
+    }
 }
 
 /// Art eines Randstücks für die exakte Einordnung nahe am Rand.
@@ -252,23 +284,15 @@ impl Scene {
                 }
                 all_lo = all_lo.min(lo);
                 all_hi = all_hi.max(hi);
-                let polys = geom
-                    .loops
-                    .iter()
-                    .map(|lp| points_to_uv(&geom.surface, geom.same_sense, &loop_points(lp)))
-                    .collect();
                 let p = if matches!(geom.surface, Surface::Plane { .. }) {
                     plane_pad
                 } else {
                     pad
                 };
-                let segs = seg_infos(&geom, pad);
                 faces.push(FaceData {
                     body: bi,
                     face: fid.index(),
-                    geom,
-                    polys,
-                    segs,
+                    region: Region::new(geom, pad),
                     lo: lo - DVec3::splat(p),
                     hi: hi + DVec3::splat(p),
                 });
@@ -329,7 +353,7 @@ impl Scene {
                     continue;
                 }
                 let p = origin + d * s;
-                let uv = uv.unwrap_or_else(|| f.geom.surface.project(p));
+                let uv = uv.unwrap_or_else(|| f.region.geom.surface.project(p));
                 if let Some(class) = self.classify(f, p, uv) {
                     out.push(Hit {
                         s,
@@ -355,7 +379,7 @@ impl Scene {
         (sa, sb): (f64, f64),
     ) -> Result<Vec<Candidate>, &'static str> {
         let e = self.extent;
-        let roots = match &f.geom.surface {
+        let roots = match &f.region.geom.surface {
             Surface::Plane { frame } => {
                 let nd = frame.z.dot(d);
                 let dist = frame.z.dot(o - frame.origin);
@@ -373,7 +397,7 @@ impl Scene {
                 let b = lo.x * ld.x + lo.y * ld.y;
                 let c = lo.x * lo.x + lo.y * lo.y - radius * radius;
                 quadratic(a, b, c, e, min_s, self.reach, || {
-                    f.geom.surface.implicit(o).abs()
+                    f.region.geom.surface.implicit(o).abs()
                 })?
             }
             Surface::Cone {
@@ -390,7 +414,7 @@ impl Scene {
                 // Wurzeln auf dem Gegenast des Doppelkegels (Radius < 0, jenseits der Spitze)
                 // haben eine Höhe außerhalb der Fläche und fallen bei der Einordnung heraus.
                 quadratic(a, b, c, e, min_s, self.reach, || {
-                    f.geom.surface.implicit(o).abs()
+                    f.region.geom.surface.implicit(o).abs()
                 })?
             }
             Surface::Sphere { frame, radius } => {
@@ -402,14 +426,14 @@ impl Scene {
                     e,
                     min_s,
                     self.reach,
-                    || f.geom.surface.implicit(o).abs(),
+                    || f.region.geom.surface.implicit(o).abs(),
                 )?
             }
             Surface::Torus { minor, .. } => {
                 let lo_s = sa.max(min_s);
                 let hi_s = sb.min(self.reach);
                 let touch = (TORUS_TOUCH_REL * minor).max(self.tol.linear);
-                torus_roots(&f.geom.surface, touch, o, d, lo_s, hi_s, min_s)?
+                torus_roots(&f.region.geom.surface, touch, o, d, lo_s, hi_s, min_s)?
             }
             Surface::Nurbs(n) => {
                 // Ab dem Eintritt in die Hüllbox der Fläche (Treffer mit s ≤ min_s zählen nie).
@@ -418,28 +442,28 @@ impl Scene {
                 if end < start {
                     return Ok(Vec::new());
                 }
-                let Some(h) = n.ray_hits_checked(o + d * start, d, end - start) else {
-                    return Err("Freiformfläche nicht sicher entscheidbar");
-                };
-                // Rückgabe des Kernels: (t, u, v), t entlang des verschobenen Strahls.
-                return Ok(h
-                    .into_iter()
-                    .map(|(t, u, v)| (t + start, Some((u, v))))
-                    .collect());
+                return nurbs_hits(n, o, d, (start, end), e, self.tol.linear);
             }
         };
         Ok(roots.into_iter().map(|s| (s, None)).collect())
     }
 
+    /// Lage von `p` (Parameter `uv`) auf der beschnittenen Fläche `f` (siehe
+    /// [`Region::classify`]).
+    fn classify(&self, f: &FaceData, p: DVec3, uv: (f64, f64)) -> Option<HitClass> {
+        f.region.classify(self.tol.linear, p, uv)
+    }
+}
+
+impl Region {
     /// Lage von `p` (Parameter `uv`) auf der beschnittenen Fläche; `None` für außerhalb.
     /// Randabstand ≤ `tol` → Rand; im Band um gekrümmte Randkurven der nächste Randpunkt
     /// (exakt), sonst die Windungszahl der Randpolygone wie `point_in_face` des Kernels.
-    fn classify(&self, f: &FaceData, p: DVec3, (u, v): (f64, f64)) -> Option<HitClass> {
-        let tol = self.tol.linear;
+    pub(crate) fn classify(&self, tol: f64, p: DVec3, (u, v): (f64, f64)) -> Option<HitClass> {
         // Nächster Punkt auf einem Randstück, das keine Naht ist: (Abstand, Stück, Bruchteil).
         let mut nearest: Option<(f64, &Seg, SegInfo, f64)> = None;
         let mut in_band = false;
-        for (s, info) in f.geom.loops.iter().flatten().zip(&f.segs) {
+        for (s, info) in self.geom.loops.iter().flatten().zip(&self.segs) {
             let (fr, dist) = s.closest(p);
             if dist <= tol {
                 return Some(HitClass::Boundary);
@@ -453,23 +477,23 @@ impl Scene {
             }
         }
         if in_band && let Some((_, seg, info, fr)) = nearest {
-            return self.side_of_rim(f, p, seg, info, fr);
+            return self.side_of_rim(tol, p, seg, info, fr);
         }
         let shifts = |period: Option<f64>| match period {
             Some(t) => vec![-t, 0.0, t],
             None => vec![0.0],
         };
-        let us = shifts(f.geom.surface.u_period());
-        let vs = shifts(f.geom.surface.v_period());
+        let us = shifts(self.geom.surface.u_period());
+        let vs = shifts(self.geom.surface.v_period());
         let mut total = 0;
-        for poly in &f.polys {
+        for poly in &self.polys {
             for du in &us {
                 for dv in &vs {
                     total += winding(poly, DVec2::new(u + du, v + dv));
                 }
             }
         }
-        let sense = if f.geom.same_sense { 1 } else { -1 };
+        let sense = if self.geom.same_sense { 1 } else { -1 };
         (total * sense >= 1).then_some(HitClass::Inside)
     }
 
@@ -479,20 +503,19 @@ impl Scene {
     /// entscheidbar → Rand.
     fn side_of_rim(
         &self,
-        f: &FaceData,
+        tol: f64,
         p: DVec3,
         seg: &Seg,
         info: SegInfo,
         fr: f64,
     ) -> Option<HitClass> {
-        let tol = self.tol.linear;
         if !info.closed && !(CORNER_FRACTION..=1.0 - CORNER_FRACTION).contains(&fr) {
             return Some(HitClass::Boundary);
         }
         let q = seg.at(fr);
-        let (qu, qv) = f.geom.surface.project(q);
-        let n = f.geom.surface.normal(qu, qv);
-        let n = if f.geom.same_sense { n } else { -n };
+        let (qu, qv) = self.geom.surface.project(q);
+        let n = self.geom.surface.normal(qu, qv);
+        let n = if self.geom.same_sense { n } else { -n };
         let inward = n.cross(seg.tangent_at(fr)).normalize_or_zero();
         if inward == DVec3::ZERO || !inward.is_finite() {
             return Some(HitClass::Boundary);
@@ -559,14 +582,15 @@ impl Scene {
                 return Err(DrawError::TooComplex(n));
             }
             progress.check()?;
-            let roots = match curve_surface_roots(&stroke.curve, t0, t1, &f.geom.surface, &self.tol)
-            {
-                CurveSurface::Roots(r) => r,
-                CurveSurface::Lies => continue,
-            };
+            let roots =
+                match curve_surface_roots(&stroke.curve, t0, t1, &f.region.geom.surface, &self.tol)
+                {
+                    CurveSurface::Roots(r) => r,
+                    CurveSurface::Lies => continue,
+                };
             for r in roots {
                 let p = stroke.point(r.t);
-                let uv = f.geom.surface.project(p);
+                let uv = f.region.geom.surface.project(p);
                 if self.classify(f, p, uv).is_some() {
                     out.push(r.t);
                 }
@@ -688,7 +712,10 @@ fn torus_roots(
         let sign = a.signum();
         let g = |s: f64| sign * f(s);
         let (sm, gm) = golden_min(&g, ss[i], ss[i + 1]);
-        if gm.abs() < touch {
+        // Berührung nur, wo |F| unter `touch` **und** deutlich unter den Wert am Anfang des
+        // Suchbereichs fällt: Ein Prüfstrahl, der auf dem Torus beginnt (von einer Linie auf der
+        // Fläche) und sich von ihr entfernt, bleibt anfangs unter `touch`, ohne sie zu berühren.
+        if gm.abs() < touch && gm.abs() < START_DIP * fs[0].abs() {
             if sm > min_s {
                 return Err("Strahl berührt Torus");
             }
@@ -700,6 +727,84 @@ fn torus_roots(
         }
     }
     Ok(roots)
+}
+
+/// Schnitte des Strahls `o + s·d`, `s ∈ [start, end]`, mit der Freiformfläche über
+/// `ray_hits_checked` des Kernels. Der Kernel verweigert jeden Strahl, der ein Flächenstück fast
+/// tangential durchläuft – also jeden Prüfstrahl, der **auf** der Fläche an ihrem Umriss beginnt
+/// (Umrisslinie, Kante auf der Fläche nahe dem Umriss). Beginnt der Strahl auf der Fläche
+/// (`|Abstand| ≤ IN_SURFACE_REL · E`), wird der Kernel deshalb ab `start + w` erneut gefragt,
+/// `w = OWN_EPS · 4^k`, bis er entscheidet; das übersprungene Stück `[start, start + w]`
+/// entscheiden Vorzeichenwechsel des Flächenabstands an `NEAR_SAMPLES` Stellen (Bisektion). Dort
+/// liegt nur der Anfang des Strahls an seiner eigenen Tangentialstelle; dicht am Anfang
+/// verlassene oder gestreifte Stellen der eigenen Fläche verdecken nach F4 ohnehin nicht.
+fn nurbs_hits(
+    n: &planora_kernel::NurbsSurfaceData,
+    o: DVec3,
+    d: DVec3,
+    (start, end): (f64, f64),
+    e: f64,
+    tol: f64,
+) -> Result<Vec<Candidate>, &'static str> {
+    const UNSAFE: &str = "Freiformfläche nicht sicher entscheidbar";
+    let shifted = |from: f64| {
+        n.ray_hits_checked(o + d * from, d, end - from).map(|h| {
+            h.into_iter()
+                .map(|(t, u, v)| (t + from, Some((u, v))))
+                .collect::<Vec<Candidate>>()
+        })
+    };
+    if let Some(h) = shifted(start) {
+        return Ok(h);
+    }
+    let gap = n.signed_distance(o).abs();
+    if gap.is_nan() || gap > IN_SURFACE_REL * e {
+        return Err(UNSAFE);
+    }
+    let mut w = crate::limits::own_eps(e);
+    while start + w < end {
+        if let Some(far) = shifted(start + w) {
+            let mut out = near_roots(n, o, d, (start, start + w), tol);
+            out.extend(far);
+            return Ok(out);
+        }
+        w *= SKIP_GROWTH;
+    }
+    Err(UNSAFE)
+}
+
+/// Vorzeichenwechsel des Flächenabstands längs `o + s·d` für `s ∈ [a, b]` an `NEAR_SAMPLES`
+/// Stellen, per Bisektion verfeinert. Nur Stellen, an denen der Abstand dabei wirklich auf höchstens`
+/// `tol` sinkt, zählen: Jenseits des Flächenrands liegt der Fußpunkt auf dem Rand, und das`
+/// Vorzeichen springt dort, wo der Strahl die Ebene durch den Rand senkrecht zur Normale quert,`
+/// ohne die Fläche zu treffen.
+fn near_roots(
+    n: &planora_kernel::NurbsSurfaceData,
+    o: DVec3,
+    d: DVec3,
+    (a, b): (f64, f64),
+    tol: f64,
+) -> Vec<Candidate> {
+    let hint = std::cell::Cell::new(None);
+    let f = |s: f64| {
+        let (v, foot) = n.signed_distance_hinted(o + d * s, hint.get());
+        hint.set(foot);
+        v
+    };
+    let ss: Vec<f64> = (0..=NEAR_SAMPLES)
+        .map(|i| a + (b - a) * i as f64 / NEAR_SAMPLES as f64)
+        .collect();
+    let fs: Vec<f64> = ss.iter().map(|&s| f(s)).collect();
+    let mut out = Vec::new();
+    for i in 0..NEAR_SAMPLES {
+        if fs[i] * fs[i + 1] < 0.0 {
+            let s = bisect(&f, ss[i], ss[i + 1], fs[i]);
+            if f(s).abs() <= tol {
+                out.push((s, None));
+            }
+        }
+    }
+    out
 }
 
 /// Nullstelle von `f` in `[a, b]` mit `f(a)` vom Vorzeichen `fa`, `f(b)` vom anderen.
