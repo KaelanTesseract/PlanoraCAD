@@ -94,6 +94,9 @@ pub struct DrawingUi {
     pub pan: egui::Vec2,
     /// Höchstens ein Eintrag je Ansichtsart.
     cache: Vec<Entry>,
+    /// Zeichnung, die beim letzten `tick` (oder `open`) offen war; ein Wechsel setzt Auswahl,
+    /// Zoom und Verschiebung zurück (Ansichtskennungen zählen je Zeichnung).
+    last_drawing: Option<DrawingId>,
     spawned: u64,
     compute: ComputeFn,
 }
@@ -106,6 +109,7 @@ impl Default for DrawingUi {
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             cache: Vec::new(),
+            last_drawing: None,
             spawned: 0,
             compute: compute_view,
         }
@@ -141,6 +145,20 @@ impl DrawingUi {
         self.spawned
     }
 
+    /// Öffnet die Zeichnung `id`: Bereich setzen, Auswahl leeren, Zoom und Verschiebung auf
+    /// die Vorgaben.
+    pub fn open(&mut self, id: DrawingId) {
+        self.area = WorkArea::Drawing(id);
+        self.last_drawing = Some(id);
+        self.reset_sheet_view();
+    }
+
+    fn reset_sheet_view(&mut self) {
+        self.selected_view = None;
+        self.zoom = 1.0;
+        self.pan = egui::Vec2::ZERO;
+    }
+
     /// Ersetzt die Rechnung (nur für Tests: Abstürze, Fehler, lange Rechnungen).
     #[doc(hidden)]
     pub fn set_compute(&mut self, f: ComputeFn) {
@@ -164,6 +182,12 @@ impl DrawingUi {
     /// (laufende Berechnungen dadurch abgebrochen); ebenso laufende Berechnungen für Arten, die
     /// die geöffnete Zeichnung nicht braucht. Fertige Ergebnisse des aktuellen Stands bleiben
     /// (höchstens eines je Art, [`MAX_CACHED`]).
+    ///
+    /// `state_bodies` müssen zum aktuellen Modellstand von `document` gehören (nach
+    /// `AppState::refresh`); sonst gehörte ein Ergebnis zum falschen Stand.
+    ///
+    /// Wurde der Bereich direkt (ohne [`DrawingUi::open`]) auf eine andere Zeichnung gesetzt,
+    /// werden Auswahl, Zoom und Verschiebung hier zurückgesetzt.
     pub fn tick(&mut self, state_bodies: &[Body], document: &Document, block: bool) {
         let WorkArea::Drawing(id) = self.area else {
             return;
@@ -173,6 +197,10 @@ impl DrawingUi {
             self.selected_view = None;
             return;
         };
+        if self.last_drawing != Some(id) {
+            self.last_drawing = Some(id);
+            self.reset_sheet_view();
+        }
         if self
             .selected_view
             .is_some_and(|v| drawing.view(v).is_none())
@@ -250,9 +278,15 @@ impl DrawingUi {
         };
     }
 
-    /// Stand der Linien einer Art (ohne Eintrag: noch nicht angefangen).
-    pub fn result(&self, kind: ViewKind) -> ViewResult {
-        match self.cache.iter().find(|e| e.kind == kind).map(|e| &e.state) {
+    /// Stand der Linien einer Art zum Modellstand `model` (`Document::model_edit_count`).
+    /// Ein Eintrag eines anderen Stands zählt als fehlend (`Pending` mit 0): alte Linien
+    /// erscheinen nie als aktuell, auch nicht vor dem nächsten `tick`.
+    pub fn result(&self, kind: ViewKind, model: u64) -> ViewResult {
+        let entry = self
+            .cache
+            .iter()
+            .find(|e| e.kind == kind && e.model == model);
+        match entry.map(|e| &e.state) {
             None => ViewResult::Pending { fraction: 0.0 },
             Some(EntryState::Running { job, .. }) => ViewResult::Pending {
                 fraction: job.fraction(),
@@ -262,12 +296,13 @@ impl DrawingUi {
         }
     }
 
-    /// Fertige Linien je Ansicht der Zeichnung (Ansichten ohne fertiges Ergebnis fehlen).
-    pub fn results_for(&self, drawing: &Drawing) -> BTreeMap<ViewId, Arc<ViewLines>> {
+    /// Fertige Linien je Ansicht der Zeichnung zum Modellstand `model` (Ansichten ohne
+    /// fertiges Ergebnis dieses Stands fehlen).
+    pub fn results_for(&self, drawing: &Drawing, model: u64) -> BTreeMap<ViewId, Arc<ViewLines>> {
         drawing
             .views
             .iter()
-            .filter_map(|v| match self.result(v.kind) {
+            .filter_map(|v| match self.result(v.kind, model) {
                 ViewResult::Ready(lines) => Some((v.id, lines)),
                 _ => None,
             })
@@ -340,7 +375,8 @@ pub fn estimate_view_size(bodies: &[Body], kind: ViewKind) -> (f64, f64) {
 /// [`GAP_MM`] dazwischen in den Innenrahmen (Blatt abzüglich [`FRAME_MARGIN_MM`] je Seite)
 /// passen. Die Seitenansicht liegt waagerecht neben der Grundansicht (Breite = Tiefe der
 /// Grundansicht), die Draufsicht senkrecht (Höhe = Tiefe); für Erst- und Drittwinkel ergeben
-/// sich dieselben Summen. Passt keine Stufe: die kleinste (1:100).
+/// sich dieselben Summen. Passt keine Stufe: die kleinste (1:100). Ohne exakte Körper gibt es
+/// nichts zu messen: 1:1.
 pub fn suggest_scale(
     bodies: &[Body],
     sheet: Sheet,
@@ -361,7 +397,7 @@ pub fn suggest_scale(
             extent_along(b, basis.ey),
             extent_along(b, basis.d),
         ),
-        None => (0.0, 0.0, 0.0),
+        None => return Scale { num: 1, den: 1 },
     };
     let fits = |s: Scale| {
         let f = s.factor();
