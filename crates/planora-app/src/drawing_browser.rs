@@ -191,10 +191,13 @@ pub fn apply_delete(state: &mut AppState, plan: &DrawingDeletePlan) -> Result<()
                 .document
                 .update_drawing(id, |d| removed = d.remove_view(view))
                 .map_err(|e| e.to_string())?;
-            if state
-                .drawing_ui
-                .selected_view
-                .is_some_and(|v| removed.contains(&v))
+            // Ansichtskennungen zählen je Zeichnung: nur die Auswahl der offenen Zeichnung, aus
+            // der gelöscht wurde, wird geleert.
+            if state.drawing_ui.area == WorkArea::Drawing(id)
+                && state
+                    .drawing_ui
+                    .selected_view
+                    .is_some_and(|v| removed.contains(&v))
             {
                 state.drawing_ui.selected_view = None;
             }

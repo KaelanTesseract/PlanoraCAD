@@ -580,6 +580,28 @@ fn deleting_the_open_view_clears_the_selection_and_stale_questions_vanish() {
     assert_eq!(st.drawing_ui.selected_view, None);
 }
 
+#[test]
+fn deleting_a_view_of_another_drawing_keeps_the_selection_of_the_open_one() {
+    // Ansichtskennungen zählen je Zeichnung: „Vorne“ in Blatt 1 und „Rechts“ in Blatt 2 haben
+    // dieselbe Kennung. Löschen in Blatt 2 darf die Auswahl im offenen Blatt 1 nicht leeren.
+    let mut st = box_state();
+    let (d1, d2, [front, ..]) = two_drawings(&mut st);
+    let other = st.document.drawing(d2).unwrap().views[0].id;
+    assert_eq!(other, front, "gleiche Kennung in beiden Zeichnungen");
+    st.drawing_ui.open(d1);
+    st.drawing_ui.selected_view = Some(front);
+    drawing_browser::request_delete_view(&mut st, d2, other);
+    assert!(st.document.drawing(d2).unwrap().views.is_empty());
+    assert_eq!(st.drawing_ui.selected_view, Some(front));
+    // Im offenen Blatt geleert wird sie weiterhin.
+    drawing_browser::request_delete_view(&mut st, d1, ViewId(3));
+    assert_eq!(st.drawing_ui.selected_view, Some(front));
+    drawing_browser::request_delete_view(&mut st, d1, front);
+    let plan = st.pending_delete_drawing.clone().unwrap();
+    drawing_browser::apply_delete(&mut st, &plan).unwrap();
+    assert_eq!(st.drawing_ui.selected_view, None);
+}
+
 // (f) ------------------------------------------------------------------------------------------
 
 #[test]
