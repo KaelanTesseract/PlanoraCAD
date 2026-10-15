@@ -11,6 +11,14 @@
 //! Spiegelung der Wurzelgruppe wirkt erst danach auf das fertige Bild (sie vertauscht die
 //! Anzeige-Richtung, nicht die Zahlen).
 //!
+//! Markierungen (`SheetView.marks`): Je Ansicht, die Markierungen hat, folgen auf die Liniengruppe
+//! bis zu zwei weitere Gruppen: `„{Ansicht} Maße“` (Maße und verlorene Maße) und
+//! `„{Ansicht} Mittellinien“`. Ansichten ohne Markierungen erzeugen keine zusätzlichen Zeilen. Text
+//! trägt `scale(1 -1)`, das die Spiegelung der Wurzelgruppe für die Schrift wieder aufhebt, sonst
+//! stünde sie spiegelverkehrt; der Winkel (Grad, gegen den Uhrzeigersinn auf dem Blatt) steht als
+//! `rotate(-Winkel)` dahinter. Pfeile sind gefüllte Dreiecke, Bögen werden wie die Kreisbögen der
+//! Linien in Stücke von höchstens 90° zerlegt.
+//!
 //! * Kreisbögen und Ellipsenbögen werden in Stücke von höchstens 90° zerlegt (ein voller Kreis
 //!   besteht aus vier Viertelbögen). Die Mitte eines SVG-Bogens wird beim Lesen aus den
 //!   auf sechs Nachkommastellen gerundeten Endpunkten zurückgerechnet; bei einem Halbkreis ist
@@ -22,6 +30,9 @@
 //!   die gemessene Abweichung höchstens `FIT_TOL` beträgt oder 64 Teile erreicht sind.
 
 use crate::Visibility;
+use crate::annotate::{
+    ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, CENTER_W, DIM_LINE_W, Mark, MarkKind, TextAnchor,
+};
 use crate::error::DrawError;
 use crate::out2d::{Out2d, bezier_pieces};
 use crate::sheet::SheetModel;
@@ -93,9 +104,180 @@ pub fn svg_string(model: &SheetModel) -> Result<String, DrawError> {
             ));
         }
         s.push_str("</g>\n");
+        mark_groups(&mut s, &mut used, &name, &view.marks)?;
     }
     s.push_str("</g>\n</svg>\n");
     Ok(s)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Markierungen
+// ---------------------------------------------------------------------------------------------
+
+/// Farbe der Maße und Mittellinien.
+const MARK_COLOR: &str = "#000";
+/// Farbe verlorener Maße.
+const LOST_COLOR: &str = "#c00";
+
+fn color(kind: MarkKind) -> &'static str {
+    match kind {
+        MarkKind::Lost => LOST_COLOR,
+        MarkKind::Dimension | MarkKind::CenterLine => MARK_COLOR,
+    }
+}
+
+/// Schreibt die Gruppen `„{name} Maße“` und `„{name} Mittellinien“` (nur wenn es Markierungen
+/// dieser Art gibt); die Kennungen sind unter allen Gruppen eindeutig.
+fn mark_groups(
+    s: &mut String,
+    used: &mut BTreeSet<String>,
+    name: &str,
+    marks: &[Mark],
+) -> Result<(), DrawError> {
+    let is_center = |m: &Mark| {
+        matches!(
+            m,
+            Mark::Line {
+                kind: MarkKind::CenterLine,
+                ..
+            } | Mark::Arrow {
+                kind: MarkKind::CenterLine,
+                ..
+            } | Mark::Arc {
+                kind: MarkKind::CenterLine,
+                ..
+            } | Mark::Text {
+                kind: MarkKind::CenterLine,
+                ..
+            }
+        )
+    };
+    for (suffix, center) in [("Maße", false), ("Mittellinien", true)] {
+        let mut body = String::new();
+        for m in marks.iter().filter(|m| is_center(m) == center) {
+            mark_element(&mut body, m)?;
+        }
+        if body.is_empty() {
+            continue;
+        }
+        let id = unique_name(used, &format!("{name} {suffix}"));
+        s.push_str(&format!(
+            "<g id=\"{}\">
+{body}</g>
+",
+            escape(&id)
+        ));
+    }
+    Ok(())
+}
+
+/// Ein Strich-Element mit den Darstellungsmerkmalen einer Markierung.
+fn stroke_path(d: &str, kind: MarkKind) -> Result<String, DrawError> {
+    let (width, dash) = match kind {
+        MarkKind::CenterLine => (
+            CENTER_W,
+            format!(
+                " stroke-dasharray=\"{} {} {} {}\"",
+                num(CENTER_PATTERN[0])?,
+                num(CENTER_PATTERN[1])?,
+                num(CENTER_PATTERN[2])?,
+                num(CENTER_PATTERN[3])?
+            ),
+        ),
+        MarkKind::Dimension | MarkKind::Lost => (DIM_LINE_W, String::new()),
+    };
+    Ok(format!(
+        "<path d=\"{d}\" stroke=\"{}\" stroke-width=\"{}\"{dash} fill=\"none\" stroke-linecap=\"round\"/>
+",
+        color(kind),
+        num(width)?
+    ))
+}
+
+fn mark_element(out: &mut String, m: &Mark) -> Result<(), DrawError> {
+    match m {
+        Mark::Line { a, b, kind } => {
+            let mut d = String::new();
+            move_to(&mut d, *a)?;
+            push_cmd(&mut d, 'L', &[b.x, b.y])?;
+            out.push_str(&stroke_path(&d, *kind)?);
+        }
+        Mark::Arrow { tip, dir, kind } => {
+            let base = *tip + *dir * ARROW_LEN;
+            let perp = DVec2::new(-dir.y, dir.x) * ARROW_HALF_W;
+            let (p, q) = (base + perp, base - perp);
+            let mut d = String::new();
+            move_to(&mut d, *tip)?;
+            push_cmd(&mut d, 'L', &[p.x, p.y])?;
+            push_cmd(&mut d, 'L', &[q.x, q.y])?;
+            sep(&mut d);
+            d.push('Z');
+            out.push_str(&format!(
+                "<path d=\"{d}\" fill=\"{}\" stroke=\"none\"/>
+",
+                color(*kind)
+            ));
+        }
+        Mark::Arc {
+            center,
+            r,
+            start,
+            end,
+            kind,
+        } => {
+            let all = [center.x, center.y, *r, *start, *end];
+            if all.iter().any(|v| !v.is_finite()) {
+                return Err(DrawError::NonFinite);
+            }
+            let span = (end - start).min(TAU);
+            if span <= 0.0 || *r <= 0.0 {
+                return Ok(());
+            }
+            // Wie bei den Bögen der Linien: Stücke von höchstens 90°, also nie `large-arc`; die
+            // Bogenrichtung wachsender Winkel ist `sweep = 1`.
+            let n = ((span / (0.5 * PI)) - 1e-9).ceil().max(1.0) as usize;
+            let pt = |t: f64| *center + DVec2::new(t.cos(), t.sin()) * *r;
+            let first = pt(*start);
+            let mut d = String::new();
+            move_to(&mut d, first)?;
+            for i in 1..=n {
+                let e = if i == n && (span - TAU).abs() < 1e-12 {
+                    first
+                } else {
+                    pt(start + span * i as f64 / n as f64)
+                };
+                let rr = num(*r)?;
+                sep(&mut d);
+                d.push_str(&format!("A {rr} {rr} 0 0 1 {} {}", num(e.x)?, num(e.y)?));
+            }
+            out.push_str(&stroke_path(&d, *kind)?);
+        }
+        Mark::Text {
+            pos,
+            height,
+            angle,
+            anchor,
+            text,
+            kind,
+        } => {
+            let anchor = match anchor {
+                TextAnchor::Start => "start",
+                TextAnchor::Middle => "middle",
+                TextAnchor::End => "end",
+            };
+            out.push_str(&format!(
+                "<text transform=\"translate({} {}) scale(1 -1) rotate({})\" font-family=\"sans-serif\" font-size=\"{}\" text-anchor=\"{anchor}\" fill=\"{}\">{}</text>
+",
+                num(pos.x)?,
+                num(pos.y)?,
+                num(-angle.to_degrees())?,
+                num(*height)?,
+                color(*kind),
+                escape(text)
+            ));
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------

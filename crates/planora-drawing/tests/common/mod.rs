@@ -8,4 +8,5 @@ pub mod dxf_read;
 pub mod mark_check;
 pub mod mesh_ref;
 pub mod model;
+pub mod svg_marks;
 pub mod svg_read;
