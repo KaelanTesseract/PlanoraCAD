@@ -140,6 +140,8 @@ pub struct AppState {
     mesh_reports: BTreeMap<MeshId, MeshReport>,
     /// Ab so vielen Dreiecken zeigt die Ansicht Netz-Körper als Vorschau (Spec §11).
     pub display_triangles: usize,
+    /// Zeichnungsbereich: geöffnete Zeichnung, Auswahl, Blattansicht und Hintergrundberechnung.
+    pub drawing_ui: crate::drawing_state::DrawingUi,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -245,6 +247,7 @@ impl AppState {
             drag_move: None,
             mesh_reports: BTreeMap::new(),
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
+            drawing_ui: crate::drawing_state::DrawingUi::default(),
         };
         state.rebuild_scene();
         state
