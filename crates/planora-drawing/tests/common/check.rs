@@ -43,6 +43,76 @@ pub struct Report {
     /// Je Fehler aus (e): Index in `errors`, Raumpunkt und Urteil der Bibliothek (sichtbar?),
     /// damit ein Aufrufer mit einem genaueren eigenen Richter nachprüfen kann.
     pub vis_diffs: Vec<(usize, DVec3, bool)>,
+    /// (f) Verdeckte Stücke, die streckenweise unter einem sichtbaren liegen, und sichtbare
+    /// Stücke, die streckenweise auf einem anderen sichtbaren liegen.
+    pub hidden_under_visible: usize,
+    pub visible_on_visible: usize,
+}
+
+/// Abtaststellen je Stück für (f).
+const OVERLAP_SAMPLES: usize = 32;
+/// So viele aufeinanderfolgende bedeckte Stellen machen in (f) eine Überdeckung.
+const OVERLAP_RUN: usize = 3;
+/// Toleranz der Überdeckung (f) und der Lückenbedeckung (a) in Vielfachen von `geom_tol`.
+const COVER_FACTOR: f64 = 1e3;
+
+/// Bildpunkt und Bildtangente (Differenzenquotient) eines Stücks bei `t`.
+fn image_at(v: &ViewLines, stroke: usize, t: f64, h: f64) -> (DVec2, DVec2) {
+    let c = &v.strokes[stroke].curve;
+    let b = &v.basis;
+    (
+        proj(b, c.point(t)),
+        (proj(b, c.point(t + h)) - proj(b, c.point(t - h))) / (2.0 * h),
+    )
+}
+
+/// Eigener genauer Abstand von `q` zum Bild des Stücks `k` (64 Stellen, Goldener Schnitt um
+/// jedes örtliche Minimum, 100 Schritte); liefert Abstand und Parameter.
+fn piece_dist(v: &ViewLines, k: usize, q: DVec2) -> (f64, f64) {
+    let p = &v.pieces[k];
+    let s = &v.strokes[p.stroke];
+    let at = |t: f64| proj(&v.basis, s.curve.point(t)).distance(q);
+    const N: usize = 64;
+    let ts: Vec<f64> = (0..=N)
+        .map(|i| p.t0 + (p.t1 - p.t0) * i as f64 / N as f64)
+        .collect();
+    let ds: Vec<f64> = ts.iter().map(|&t| at(t)).collect();
+    let mut best = (f64::INFINITY, p.t0);
+    for i in 0..=N {
+        if ds[i] < best.0 {
+            best = (ds[i], ts[i]);
+        }
+        let left = if i > 0 { ds[i - 1] } else { f64::INFINITY };
+        let right = if i < N { ds[i + 1] } else { f64::INFINITY };
+        if ds[i] > left.min(right) {
+            continue;
+        }
+        let (mut a, mut b) = (ts[i.saturating_sub(1)], ts[(i + 1).min(N)]);
+        let g = 0.5 * (5f64.sqrt() - 1.0);
+        let (mut x1, mut x2) = (b - g * (b - a), a + g * (b - a));
+        let (mut f1, mut f2) = (at(x1), at(x2));
+        for _ in 0..100 {
+            if f1 <= f2 {
+                b = x2;
+                x2 = x1;
+                f2 = f1;
+                x1 = b - g * (b - a);
+                f1 = at(x1);
+            } else {
+                a = x1;
+                x1 = x2;
+                f1 = f2;
+                x2 = a + g * (b - a);
+                f2 = at(x2);
+            }
+        }
+        for (d, t) in [(f1, x1), (f2, x2)] {
+            if d < best.0 {
+                best = (d, t);
+            }
+        }
+    }
+    best
 }
 
 /// Eigene Projektion `(P·ex, P·ey)`.
@@ -262,11 +332,92 @@ pub fn check_lines(solids: &[&Solid], kind: ViewKind, v: &ViewLines) -> Report {
         }
     }
 
+    // Genauer Abstand zum nächsten (sichtbaren) Stück, Toleranz 1e3·geom_tol im Bild.
+    let cover = COVER_FACTOR * gtol;
+    let covered = |q: DVec2, only_visible: bool| -> f64 {
+        let mut best = f64::INFINITY;
+        for (k, ((_, lo, hi), p)) in polys.iter().zip(&v.pieces).enumerate() {
+            if only_visible && p.vis != Visibility::Visible {
+                continue;
+            }
+            if q.x < lo.x - near || q.x > hi.x + near || q.y < lo.y - near || q.y > hi.y + near {
+                continue;
+            }
+            best = best.min(piece_dist(v, k, q).0);
+        }
+        best
+    };
+
+    // (f) Keine Linie doppelt: Kein verdecktes Stück läuft unter einem sichtbaren, kein sichtbares
+    // auf einem anderen sichtbaren – je Stück an 32 inneren Stellen; liegen 3 aufeinanderfolgende
+    // höchstens 1e3·geom_tol neben einem anderen sichtbaren Stück und laufen dort parallel
+    // (Sinus der Bildtangenten ≤ 1e-6; verschwindende Tangente an Umkehrstellen zählt als
+    // parallel), ist das eine Überdeckung. Eine Berührung (Kreis an Gerade) liegt nur in einem
+    // Band `√(2·Toleranz·Radius)` so nah, dort aber nicht parallel genug.
+    for (k, p) in v.pieces.iter().enumerate() {
+        let h = 1e-7 * (p.t1 - p.t0).abs().max(1e-12);
+        let mut run = 0;
+        let mut found = None;
+        for i in 1..=OVERLAP_SAMPLES {
+            let t = p.t0 + (p.t1 - p.t0) * i as f64 / (OVERLAP_SAMPLES + 1) as f64;
+            let (q, tq) = image_at(v, p.stroke, t, h);
+            let mut hit = None;
+            for (j, ((_, lo, hi), o)) in polys.iter().zip(&v.pieces).enumerate() {
+                if j == k || o.vis != Visibility::Visible {
+                    continue;
+                }
+                if q.x < lo.x - cover
+                    || q.x > hi.x + cover
+                    || q.y < lo.y - cover
+                    || q.y > hi.y + cover
+                {
+                    continue;
+                }
+                let (d, tj) = piece_dist(v, j, q);
+                if d > cover {
+                    continue;
+                }
+                let hj = 1e-7 * (o.t1 - o.t0).abs().max(1e-12);
+                let (_, to) = image_at(v, o.stroke, tj, hj);
+                let (la, lb) = (tq.length(), to.length());
+                let small = 1e-9 * (la.max(lb)).max(1e-300);
+                if la <= small || lb <= small || tq.perp_dot(to).abs() <= 1e-6 * la * lb {
+                    hit = Some(j);
+                    break;
+                }
+            }
+            match hit {
+                Some(j) => {
+                    run += 1;
+                    if run >= OVERLAP_RUN {
+                        found = Some((j, q));
+                        break;
+                    }
+                }
+                None => run = 0,
+            }
+        }
+        if let Some((j, q)) = found {
+            let what = if p.vis == Visibility::Visible {
+                r.visible_on_visible += 1;
+                "sichtbar auf sichtbarem"
+            } else {
+                r.hidden_under_visible += 1;
+                "verdeckt unter sichtbarem"
+            };
+            r.errors.push(format!(
+                "(f) Stück {k} (Strich {}, {:?}) {what} Stück {j} (Strich {}) bei ({:.4}, {:.4})",
+                p.stroke, v.strokes[p.stroke].origin, v.pieces[j].stroke, q.x, q.y
+            ));
+        }
+    }
+
     // (a) Abdeckung: Die Stücke eines Strichs liegen in seinem Bereich (geschlossene Striche
     // dürfen über die Naht reichen), aufsteigend und ohne Überlappung. Lücken sind nur erlaubt,
     // wo das Zusammenfassen ein Stück entfernt hat: im Bild kürzer als 128·geom_tol (winziges
-    // Stück), oder jede Stelle der Lücke liegt bei einem anderen Stück (deckungsgleich); ist die
-    // Referenz an der Stelle sichtbar, muss es ein sichtbares sein (sichtbar gewinnt).
+    // Stück), oder jede Stelle der Lücke liegt höchstens 1e3·geom_tol (genauer Abstand) bei einem
+    // anderen Stück (deckungsgleich); ist die Referenz an der Stelle sichtbar, muss es ein
+    // sichtbares sein (sichtbar gewinnt).
     let gap_samples = 8;
     for (i, s) in v.strokes.iter().enumerate() {
         let (lo, hi) = (s.t0.min(s.t1), s.t0.max(s.t1));
@@ -316,14 +467,14 @@ pub fn check_lines(solids: &[&Solid], kind: ViewKind, v: &ViewLines) -> Report {
                 let t = g0 + (g1 - g0) * (k as f64 + 0.5) / gap_samples as f64;
                 let x = s.curve.point(t);
                 let q = proj(&basis, x);
-                if dist_to(q, false) > near {
+                if covered(q, false) > cover {
                     r.errors.push(format!(
                         "(a) Strich {i}: Lücke [{g0}, {g1}] bei ({:.4}, {:.4}) ohne Stück",
                         q.x, q.y
                     ));
                     break;
                 }
-                if dist_to(q, true) > near {
+                if covered(q, true) > cover {
                     let h = 1e-6 * (g1 - g0).abs().max(1e-12);
                     let tan = (s.curve.point(t + h) - s.curve.point(t - h)).normalize_or_zero();
                     if let Judged::Differs(true) = judge(&scene, 4.0 * chord, near, x, tan, false) {

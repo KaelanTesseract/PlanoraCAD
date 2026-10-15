@@ -12,6 +12,7 @@
 
 use crate::basis::Basis;
 use crate::error::DrawError;
+use crate::isect::{Images, tip_params};
 use crate::limits::{
     BISECT_TOL, MAX_PAIR_TESTS, MAX_PIECES, MAX_RAY_TESTS, MAX_SUBDIVISION_DEPTH, geom_tol,
     own_eps, self_eps,
@@ -334,42 +335,43 @@ pub fn classify_range_mapped(
     Ok(out)
 }
 
-/// Vielfaches von `geom_tol`, bis zu dem die Stützpunkte deckungsgleicher Stücke übereinstimmen.
-pub const COINCIDENT_FACTOR: f64 = 16.0;
+/// Vielfaches von `geom_tol`, bis zu dem zwei Linien im Bild als dieselbe gelten (Überdeckung
+/// beim Zusammenfassen; auch die Dicke, bis zu der ein Kegelschnitt als von der Seite gesehen
+/// gilt). Größer als die Toleranz der Teilstellen (16·geom_tol): Silhouetten und Kanten, die
+/// geometrisch zusammenfallen, liegen nach Rundung im Kernel bis etwa 1e-10·E auseinander.
+pub const COINCIDENT_FACTOR: f64 = 1024.0;
 /// Vielfaches von `geom_tol`: Stücke mit kürzerer Bildlänge entfallen.
 pub const TINY_FACTOR: f64 = 64.0;
-/// Stützstellen (Bruchteil des Parameterbereichs) für den Vergleich zweier Stücke.
-const SIGNATURE_FRACTIONS: [f64; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 /// Abschnitte für die Bildlänge eines Stücks.
 const LENGTH_SAMPLES: usize = 16;
-/// Probestellen beim Suchen des Gegenpunkts auf einem geschlossenen Stück.
-const CLOSED_SEARCH: usize = 256;
-/// Schritte des Goldenen Schnitts dabei.
-const CLOSED_GOLDEN: usize = 100;
 /// Abbruchprüfung je so vielen Stücken bzw. Paaren.
 const MERGE_CHECK_EVERY: usize = 1024;
+/// Prüfstellen (Bruchteil eines Teilbereichs), die alle beim anderen Stück liegen müssen, damit
+/// der Teilbereich als überdeckt gilt.
+const COVER_FRACTIONS: [f64; 3] = [0.25, 0.5, 0.75];
+/// Rastergröße (je Bildachse) für die Vorauswahl der schon behaltenen Stücke.
+const MERGE_GRID: usize = 64;
 
-/// Fasst die Stücke einer Ansicht zusammen (Spec §4.4, Festlegung F6):
+/// Fasst die Stücke einer Ansicht zusammen (Spec §4.4, Festlegung F6, Review Focus 1):
 ///
-/// 1. **Deckungsgleiche Stücke**: Zwei Stücke gleicher Kurvenart (Gerade, Kegelschnitt,
-///    Freiform), deren Bildpunkte an den Enden (in beliebiger Reihenfolge), in der Mitte und bei
-///    ¼ und ¾ des Parameters (bei umgekehrter Reihenfolge ¾ und ¼) höchstens `16·geom_tol`
-///    auseinanderliegen, sind dieselbe Linie; es bleibt **eines**: das sichtbare, sonst das
-///    dem Auge nähere (Tiefe der Mitte), sonst das erste (nach Strich, dann Anfangsparameter). Ganze geschlossene Stücke (Vollkreise)
-///    vergleichen ab dem Gegenpunkt des Anfangs (anderer Nahtpunkt). Vorauswahl über die
-///    Hüllboxen; die Paare zählen gegen `MAX_PAIR_TESTS`.
-/// 2. **Anschließende Stücke** desselben Strichs mit gleicher Sichtbarkeit (`t1` des einen =
+/// 1. **Anschließende Stücke** desselben Strichs mit gleicher Sichtbarkeit (`t1` des einen =
 ///    `t0` des nächsten; bei geschlossenen Strichen auch Ende an Anfang, das Stück reicht dann
-///    über die Naht hinaus) werden vereint; danach noch einmal Schritt 1 (Striche mit
-///    verschiedenen Teilstellen, deren vereinte Stücke nun gleich sind).
+///    über die Naht hinaus) werden vereint.
+/// 2. **Überdeckungen** ([`trim_covered`]): Die Stücke werden nach Rang behandelt – sichtbar vor
+///    verdeckt, dann das dem Auge nähere (Tiefe der Stückmitte), dann die Reihenfolge (Strich,
+///    `t0`); eine strenge Ordnung. Von jedem Stück entfällt der Teil, den schon behaltene
+///    (ranghöhere) Stücke im Bild bedecken: Ein Teilbereich zwischen den Fußpunkten der Enden
+///    der anderen Stücke gilt als bedeckt, wenn seine Stellen bei ¼, ½ und ¾ höchstens
+///    `COINCIDENT_FACTOR·geom_tol` neben dem Bild eines solchen Stücks liegen (Abstand geometrisch, unabhängig
+///    von Kurvenart und Parametrisierung – auch Bögen von der Seite gesehener Kreise auf
+///    geraden Kanten). So liegt keine Stelle des Bilds unter zwei Stücken: deckungsgleiche
+///    Linien einmal, keine gestrichelten Reste unter durchgezogenen.
 /// 3. **Winzige Stücke** (Bildlänge unter `64·geom_tol`) entfallen; ihr Bereich geht an das
-///    vorige anschließende Stück desselben Strichs, sonst an das nächste (die Linie bleibt
-///    lückenlos); danach noch einmal Schritt 2.
+///    vorige anschließende Stück desselben Strichs, sonst an das nächste; danach noch einmal
+///    Schritt 1.
 ///
-/// Schritt 1 läuft zuerst auf den unvereinten Stücken: Deckungsgleiche Striche haben dieselben
-/// Teilstellen, ihre Stücke liegen also deckungsgleich, auch wenn sie verschieden urteilen
-/// (vorn sichtbar, hinten teils verdeckt). Ergebnis nach Strich und `t0` sortiert
-/// (deterministisch). Mehr als `MAX_PIECES` Stücke → `TooComplex`.
+/// Ergebnis nach Strich und `t0` sortiert (deterministisch). Mehr als `MAX_PIECES` Stücke oder
+/// mehr als `MAX_PAIR_TESTS` geprüfte Paare → `TooComplex`.
 pub fn merge_pieces(
     strokes: &[Stroke],
     pieces: Vec<Piece>,
@@ -381,10 +383,8 @@ pub fn merge_pieces(
         return Err(DrawError::TooComplex(pieces.len() as u64));
     }
     let tol = geom_tol(extent);
-    let pieces = sorted(pieces);
-    let pieces = drop_coincident(strokes, pieces, basis, COINCIDENT_FACTOR * tol, progress)?;
-    let pieces = join_adjacent(strokes, pieces, progress)?;
-    let pieces = drop_coincident(strokes, pieces, basis, COINCIDENT_FACTOR * tol, progress)?;
+    let pieces = join_adjacent(strokes, sorted(pieces), progress)?;
+    let pieces = trim_covered(strokes, pieces, basis, extent, progress)?;
     let pieces = drop_tiny(strokes, pieces, basis, TINY_FACTOR * tol, progress)?;
     join_adjacent(strokes, pieces, progress)
 }
@@ -441,151 +441,140 @@ fn join_adjacent(
     Ok(sorted(out))
 }
 
-/// Vergleichsmerkmale eines Stücks.
-struct Signature {
-    kind: u8,
-    pts: [DVec2; 5],
-    lo: DVec2,
-    hi: DVec2,
-    /// Ganzes geschlossenes Stück: Periode.
-    full: Option<f64>,
-    /// Tiefe der Stückmitte längs der Blickrichtung (kleiner = näher am Auge).
-    depth: f64,
+/// Rang eines Stücks: sichtbar vor verdeckt, dann kleinere Tiefe (näher am Auge), dann der
+/// Index (nach Strich und `t0` sortiert) – streng und übergangsfest (lexikographisch).
+fn rank_order(pieces: &[Piece], depth: &[f64]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..pieces.len()).collect();
+    let key = |v: Visibility| if v == Visibility::Visible { 0 } else { 1 };
+    order.sort_by(|&i, &j| {
+        key(pieces[i].vis)
+            .cmp(&key(pieces[j].vis))
+            .then(depth[i].total_cmp(&depth[j]))
+            .then(i.cmp(&j))
+    });
+    order
 }
 
-fn signature(strokes: &[Stroke], p: &Piece, basis: &Basis, near: f64) -> Signature {
-    let s = &strokes[p.stroke];
-    let part = Stroke {
+/// Ein Stück als eigener Strich (Parameterbereich des Stücks).
+fn piece_stroke(strokes: &[Stroke], p: &Piece) -> Stroke {
+    Stroke {
         t0: p.t0,
         t1: p.t1,
-        ..s.clone()
-    };
-    let (lo, hi) = part.bbox2(basis, near);
-    let kind = match s.curve {
-        planora_kernel::Curve::Line { .. } => 0,
-        planora_kernel::Curve::Circle { .. } | planora_kernel::Curve::Ellipse { .. } => 1,
-        planora_kernel::Curve::Nurbs(_) => 2,
-    };
-    let full = closed_period(s).filter(|per| p.t1 - p.t0 >= per * (1.0 - BISECT_TOL));
-    Signature {
-        kind,
-        pts: SIGNATURE_FRACTIONS.map(|f| s.point2(basis, p.t0 + f * (p.t1 - p.t0))),
-        lo,
-        hi,
-        full,
-        depth: basis.depth(s.point(0.5 * (p.t0 + p.t1))),
+        ..strokes[p.stroke].clone()
     }
 }
 
-/// Sind die Stücke `a` und `b` deckungsgleich (siehe [`merge_pieces`])?
-fn coincident(
-    strokes: &[Stroke],
-    basis: &Basis,
-    (pa, sa): (&Piece, &Signature),
-    (pb, sb): (&Piece, &Signature),
-    near: f64,
-) -> bool {
-    if sa.kind != sb.kind {
-        return false;
-    }
-    let close = |x: DVec2, y: DVec2| x.distance(y) <= near;
-    match (sa.full, sb.full) {
-        (None, None) => {
-            let (a, b) = (&sa.pts, &sb.pts);
-            let forward = (0..5).all(|i| close(a[i], b[i]));
-            let backward = (0..5).all(|i| close(a[i], b[4 - i]));
-            forward || backward
+/// Raster über dem Bild für die Vorauswahl behaltener Stücke (nach ihrer Hüllbox).
+struct MergeGrid {
+    lo: DVec2,
+    cell: DVec2,
+    cells: Vec<Vec<usize>>,
+}
+
+impl MergeGrid {
+    fn new(lo: DVec2, hi: DVec2) -> MergeGrid {
+        let cell = ((hi - lo) / MERGE_GRID as f64).max(DVec2::splat(1e-300));
+        MergeGrid {
+            lo,
+            cell,
+            cells: vec![Vec::new(); MERGE_GRID * MERGE_GRID],
         }
-        (Some(per_a), Some(per_b)) => {
-            // Gegenpunkt des Anfangs von `a` auf `b`, dann ab dort in beide Richtungen.
-            let sbk = &strokes[pb.stroke];
-            let q = sa.pts[0];
-            let dist = |t: f64| sbk.point2(basis, t).distance(q);
-            let h = per_b / CLOSED_SEARCH as f64;
-            let best = (0..CLOSED_SEARCH)
-                .map(|i| pb.t0 + h * i as f64)
-                .min_by(|x, y| dist(*x).total_cmp(&dist(*y)))
-                .unwrap_or(pb.t0);
-            let tau = golden(&dist, best - h, best + h);
-            if !close(sbk.point2(basis, tau), q) {
-                return false;
+    }
+
+    fn range(&self, lo: DVec2, hi: DVec2) -> (usize, usize, usize, usize) {
+        let c = |x: f64| {
+            if x.is_nan() {
+                0
+            } else {
+                (x.floor().max(0.0) as usize).min(MERGE_GRID - 1)
             }
-            let sak = &strokes[pa.stroke];
-            [1.0, -1.0].iter().any(|dir| {
-                SIGNATURE_FRACTIONS[1..4].iter().all(|f| {
-                    close(
-                        sak.point2(basis, pa.t0 + f * per_a),
-                        sbk.point2(basis, tau + dir * f * per_b),
-                    )
-                })
-            })
+        };
+        let a = (lo - self.lo) / self.cell;
+        let b = (hi - self.lo) / self.cell;
+        (c(a.x), c(a.y), c(b.x), c(b.y))
+    }
+
+    fn insert(&mut self, k: usize, lo: DVec2, hi: DVec2) {
+        let (i0, j0, i1, j1) = self.range(lo, hi);
+        for i in i0..=i1 {
+            for j in j0..=j1 {
+                self.cells[i * MERGE_GRID + j].push(k);
+            }
         }
-        _ => false,
+    }
+
+    /// Behaltene Stücke, deren Rasterzellen die Box berühren (ohne Wiederholung, aufsteigend).
+    fn query(&self, lo: DVec2, hi: DVec2) -> Vec<usize> {
+        let (i0, j0, i1, j1) = self.range(lo, hi);
+        let mut out = Vec::new();
+        for i in i0..=i1 {
+            for j in j0..=j1 {
+                out.extend_from_slice(&self.cells[i * MERGE_GRID + j]);
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 }
 
-/// Stelle des kleinsten Werts von `g` in `[a, b]` (Goldener Schnitt).
-fn golden(g: &dyn Fn(f64) -> f64, mut a: f64, mut b: f64) -> f64 {
-    let r = 0.5 * (5f64.sqrt() - 1.0);
-    let (mut x1, mut x2) = (b - r * (b - a), a + r * (b - a));
-    let (mut g1, mut g2) = (g(x1), g(x2));
-    for _ in 0..CLOSED_GOLDEN {
-        if g1 <= g2 {
-            b = x2;
-            x2 = x1;
-            g2 = g1;
-            x1 = b - r * (b - a);
-            g1 = g(x1);
-        } else {
-            a = x1;
-            x1 = x2;
-            g1 = g2;
-            x2 = a + r * (b - a);
-            g2 = g(x2);
-        }
-    }
-    if g1 <= g2 { x1 } else { x2 }
-}
-
-/// Schritt 1: Von deckungsgleichen Stücken bleibt eines (sichtbar vor verdeckt, sonst das
-/// erste). Das beste Stück jeder Gruppe verliert keinen Vergleich, es bleibt also immer eines.
-fn drop_coincident(
+/// Schritt 2 von [`merge_pieces`]: entfernt von jedem Stück die Teile, die ranghöhere,
+/// schon behaltene Stücke im Bild bedecken (siehe dort).
+fn trim_covered(
     strokes: &[Stroke],
     pieces: Vec<Piece>,
     basis: &Basis,
-    near: f64,
+    extent: f64,
     progress: &Progress,
 ) -> Result<Vec<Piece>, DrawError> {
-    let mut sigs: Vec<Signature> = Vec::with_capacity(pieces.len());
+    if pieces.is_empty() {
+        return Ok(pieces);
+    }
+    // Stücke von der Seite gesehener Kreise an ihren Umkehrstellen teilen: Ein Stück über eine
+    // Umkehrstelle läge im Bild zweimal über sich selbst.
+    let thin = COINCIDENT_FACTOR * geom_tol(extent);
+    let mut split = Vec::with_capacity(pieces.len());
+    for p in pieces {
+        let mut a = p.t0;
+        for t in tip_params(&strokes[p.stroke], basis, thin, p.t0, p.t1) {
+            split.push(Piece { t0: a, t1: t, ..p });
+            a = t;
+        }
+        split.push(Piece { t0: a, ..p });
+    }
+    let pieces = split;
+    let r = strokes[pieces[0].stroke].point(pieces[0].t0);
+    let images = Images::new(basis, r, extent, COINCIDENT_FACTOR);
+    let near = images.near();
+    let mut boxes: Vec<(DVec2, DVec2)> = Vec::with_capacity(pieces.len());
+    let mut depth: Vec<f64> = Vec::with_capacity(pieces.len());
     for (k, p) in pieces.iter().enumerate() {
         if k % MERGE_CHECK_EVERY == 0 {
             progress.check()?;
         }
-        sigs.push(signature(strokes, p, basis, near));
-    }
-    let mut order: Vec<usize> = (0..pieces.len()).collect();
-    order.sort_by(|&i, &j| sigs[i].lo.x.total_cmp(&sigs[j].lo.x).then(i.cmp(&j)));
-    // Rang: sichtbar vor verdeckt, dann das nähere (die vordere Kante ist „die“ Linie; die
-    // hintere gilt nach F9 oft nur als Umriss sichtbar), dann die Reihenfolge (nach Strich und
-    // t0 sortiert).
-    let better = |i: usize, j: usize| {
-        let (vi, vj) = (pieces[i].vis, pieces[j].vis);
-        let (di, dj) = (sigs[i].depth, sigs[j].depth);
-        if vi != vj {
-            vi == Visibility::Visible
-        } else if (di - dj).abs() > near {
-            di < dj
-        } else {
-            i < j
+        let (lo, hi) = piece_stroke(strokes, p).bbox2(basis, near);
+        if !(lo.is_finite() && hi.is_finite()) {
+            return Err(DrawError::NonFinite);
         }
-    };
-    let mut removed = vec![false; pieces.len()];
+        boxes.push((lo, hi));
+        let s = &strokes[p.stroke];
+        depth.push(basis.depth(s.point(0.5 * (p.t0 + p.t1))));
+    }
+    let (glo, ghi) = boxes.iter().fold(
+        (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+        |(a, b), (lo, hi)| (a.min(*lo), b.max(*hi)),
+    );
+    let mut grid = MergeGrid::new(glo, ghi);
+    // Behaltene Stücke: (Stück als Strich, Hüllbox).
+    let mut kept: Vec<(Piece, Stroke)> = Vec::with_capacity(pieces.len());
     let mut pairs: u64 = 0;
-    for (k, &i) in order.iter().enumerate() {
-        for &j in &order[k + 1..] {
-            if sigs[j].lo.x > sigs[i].hi.x {
-                break;
-            }
+    for idx in rank_order(&pieces, &depth) {
+        progress.check()?;
+        let p = pieces[idx];
+        let ps = piece_stroke(strokes, &p);
+        let (plo, phi) = boxes[idx];
+        let mut open: Vec<(f64, f64)> = vec![(p.t0, p.t1)];
+        for q in grid.query(plo, phi) {
             pairs += 1;
             if pairs > MAX_PAIR_TESTS {
                 return Err(DrawError::TooComplex(pairs));
@@ -593,30 +582,85 @@ fn drop_coincident(
             if pairs.is_multiple_of(MERGE_CHECK_EVERY as u64) {
                 progress.check()?;
             }
-            if sigs[j].lo.y > sigs[i].hi.y || sigs[i].lo.y > sigs[j].hi.y {
+            let qs = &kept[q].1;
+            let (qlo, qhi) = qs.bbox2(basis, near);
+            if qlo.x > phi.x || plo.x > qhi.x || qlo.y > phi.y || plo.y > qhi.y {
                 continue;
             }
-            if coincident(
-                strokes,
-                basis,
-                (&pieces[i], &sigs[i]),
-                (&pieces[j], &sigs[j]),
-                near,
-            ) {
-                if better(i, j) {
-                    removed[j] = true;
-                } else {
-                    removed[i] = true;
+            // Teilstellen: Fußpunkte der Enden des anderen Stücks auf diesem. Ein gemeinsamer
+            // Abschnitt zweier Stücke derselben Bildkurve endet an einem ihrer Enden.
+            let mut cuts = images.feet(&ps, images.point(qs, qs.t0)?)?;
+            cuts.extend(images.feet(&ps, images.point(qs, qs.t1)?)?);
+            let ends_near = !images.feet(qs, images.point(&ps, p.t0)?)?.is_empty()
+                || !images.feet(qs, images.point(&ps, p.t1)?)?.is_empty();
+            if cuts.is_empty() && !ends_near {
+                continue;
+            }
+            cuts.sort_by(f64::total_cmp);
+            let mut next: Vec<(f64, f64)> = Vec::with_capacity(open.len() + 2);
+            for &(a, b) in &open {
+                let mut bounds = vec![a];
+                bounds.extend(cuts.iter().copied().filter(|&t| t > a && t < b));
+                bounds.push(b);
+                // Je Teilbereich: Some(bedeckt?) oder None (kaum länger als der
+                // Gleichheitsabstand: liegt nur an einem Punkt beim anderen Stück – Kreuzung,
+                // Anschluss, zwei Fußpunkte desselben Endes; er folgt seinen Nachbarn).
+                let mut state: Vec<Option<bool>> = Vec::with_capacity(bounds.len());
+                for w in bounds.windows(2) {
+                    let (x, y) = (w[0], w[1]);
+                    let part = Piece { t0: x, t1: y, ..p };
+                    if image_len(strokes, &part, basis) <= 4.0 * near {
+                        state.push(None);
+                        continue;
+                    }
+                    let mut covered = true;
+                    for f in COVER_FRACTIONS {
+                        let pt = images.point(&ps, x + f * (y - x))?;
+                        if images.feet(qs, pt)?.is_empty() {
+                            covered = false;
+                            break;
+                        }
+                    }
+                    state.push(Some(covered));
+                }
+                // Kurze Teilbereiche gelten als bedeckt, wenn ein langer Nachbar bedeckt ist und
+                // keiner frei (am Rand einer Überdeckung), sonst als frei.
+                let n = state.len();
+                for i in 0..n {
+                    if state[i].is_some() {
+                        continue;
+                    }
+                    let left = state[..i].iter().rev().find_map(|x| *x);
+                    let right = state[i + 1..].iter().find_map(|x| *x);
+                    let covered = left.unwrap_or(true)
+                        && right.unwrap_or(true)
+                        && (left.is_some() || right.is_some());
+                    state[i] = Some(covered);
+                }
+                for (w, st) in bounds.windows(2).zip(&state) {
+                    if *st != Some(true) {
+                        let (x, y) = (w[0], w[1]);
+                        match next.last_mut() {
+                            Some(l) if l.1 == x => l.1 = y,
+                            _ => next.push((x, y)),
+                        }
+                    }
                 }
             }
+            open = next;
+            if open.is_empty() {
+                break;
+            }
+        }
+        for (a, b) in open {
+            let piece = Piece { t0: a, t1: b, ..p };
+            let st = piece_stroke(strokes, &piece);
+            let (lo, hi) = st.bbox2(basis, near);
+            grid.insert(kept.len(), lo, hi);
+            kept.push((piece, st));
         }
     }
-    Ok(pieces
-        .into_iter()
-        .zip(removed)
-        .filter(|(_, r)| !r)
-        .map(|(p, _)| p)
-        .collect())
+    Ok(sorted(kept.into_iter().map(|(p, _)| p).collect()))
 }
 
 /// Bildlänge eines Stücks: Summe der Sehnen über `LENGTH_SAMPLES` Abschnitte.
@@ -787,11 +831,100 @@ mod tests {
             vec![piece(0, 0.0, 2.0, Visible), piece(1, 0.0, 2.0, Visible)],
         );
         assert_eq!(out, vec![piece(0, 0.0, 2.0, Visible)]);
-        // Nur zur Hälfte deckungsgleich: beide bleiben.
+        // Ein verdecktes Stück ganz unter einem sichtbaren: entfällt.
         let out = merge(
             &s,
             vec![piece(0, 0.0, 1.0, Hidden), piece(1, 0.0, 2.0, Visible)],
         );
-        assert_eq!(out.len(), 2);
+        assert_eq!(out, vec![piece(1, 0.0, 2.0, Visible)]);
+        // Teilüberdeckung: das verdeckte Stück wird am Fußpunkt des sichtbaren Endes gekürzt
+        // (Rückwärtsgerade x = 2 − t: das sichtbare Stück deckt x ∈ [0; 1,5]).
+        let out = merge(
+            &s,
+            vec![piece(0, 0.0, 2.0, Hidden), piece(1, 0.5, 2.0, Visible)],
+        );
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!(out[0].stroke, 0);
+        assert!(
+            (out[0].t0 - 1.5).abs() < 1e-12 && out[0].t1 == 2.0,
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn the_rank_is_a_strict_order() {
+        use Visibility::Visible;
+        // Drei deckungsgleiche sichtbare Geraden in den Tiefen 0, 0,6·near und 1,2·near mit den
+        // Indizes 2, 1, 0 (Draufsicht: Tiefe = −z). Eine Regel „Tiefe nur über near, sonst
+        // Index“ bildete einen Kreis (jede verliert einmal, alle drei entfielen); die strenge
+        // Ordnung behält die nächste.
+        let near = COINCIDENT_FACTOR * geom_tol(2.0);
+        let at = |z: f64, edge: usize| Stroke {
+            curve: Curve::Line {
+                origin: DVec3::new(0.0, 0.0, z),
+                dir: DVec3::X,
+            },
+            ..line(0.0, edge)
+        };
+        let s = [at(-1.2 * near, 0), at(-0.6 * near, 1), at(0.0, 2)];
+        let out = merge(
+            &s,
+            vec![
+                piece(0, 0.0, 2.0, Visible),
+                piece(1, 0.0, 2.0, Visible),
+                piece(2, 0.0, 2.0, Visible),
+            ],
+        );
+        assert_eq!(out, vec![piece(2, 0.0, 2.0, Visible)]);
+        let order = rank_order(
+            &[
+                piece(0, 0.0, 2.0, Visible),
+                piece(1, 0.0, 2.0, Visible),
+                piece(2, 0.0, 2.0, Visible),
+            ],
+            &[1.2 * near, 0.6 * near, 0.0],
+        );
+        assert_eq!(order, vec![2, 1, 0]);
+    }
+
+    #[test]
+    fn a_side_on_arc_on_a_straight_edge_is_drawn_once() {
+        use Visibility::{Hidden, Visible};
+        // Draufsicht: Kreis r = 1 in der XZ-Ebene (von der Seite, Bild die Strecke
+        // x ∈ [−1, 1], y = 0) und eine Gerade y = 0 von x = −1 bis 1 in der Tiefe 5 (weiter weg).
+        // Die Bogenhälfte [0, π] und die Gerade decken einander: eine Linie bleibt (die nähere).
+        // Ein verdeckter Bogen unter der sichtbaren Geraden entfällt ebenso.
+        let arc = Stroke {
+            curve: Curve::Circle {
+                frame: planora_math::Frame {
+                    origin: DVec3::ZERO,
+                    x: DVec3::X,
+                    y: DVec3::Z,
+                    z: -DVec3::Y,
+                },
+                radius: 1.0,
+            },
+            t0: 0.0,
+            t1: std::f64::consts::TAU,
+            origin: StrokeOrigin::Edge { body: 0, edge: 0 },
+        };
+        let far = Stroke {
+            curve: Curve::Line {
+                origin: DVec3::new(-1.0, 0.0, -5.0),
+                dir: DVec3::X,
+            },
+            ..line(0.0, 1)
+        };
+        let pi = std::f64::consts::PI;
+        let out = merge(
+            &[arc.clone(), far.clone()],
+            vec![piece(0, 0.0, pi, Visible), piece(1, 0.0, 2.0, Visible)],
+        );
+        assert_eq!(out, vec![piece(0, 0.0, pi, Visible)]);
+        let out = merge(
+            &[arc, far],
+            vec![piece(0, 0.0, pi, Hidden), piece(1, 0.0, 2.0, Visible)],
+        );
+        assert_eq!(out, vec![piece(1, 0.0, 2.0, Visible)]);
     }
 }

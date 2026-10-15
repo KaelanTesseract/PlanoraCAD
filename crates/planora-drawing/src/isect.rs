@@ -138,6 +138,15 @@ fn proj(basis: &Basis, v: DVec3) -> DVec2 {
 
 impl<'a> Ev<'a> {
     fn new(s: &'a Stroke, basis: &Basis, r: DVec3) -> Result<Ev<'a>, DrawError> {
+        Ev::build(s, basis, r, true)
+    }
+
+    /// Wie [`Ev::new`], ohne die Bézier-Stücke (nur Punkte und Fußpunkte, keine Zerlegung).
+    fn light(s: &'a Stroke, basis: &Basis, r: DVec3) -> Result<Ev<'a>, DrawError> {
+        Ev::build(s, basis, r, false)
+    }
+
+    fn build(s: &'a Stroke, basis: &Basis, r: DVec3, segs: bool) -> Result<Ev<'a>, DrawError> {
         let kind = match &s.curve {
             Curve::Line { origin, dir } => Kind::Line {
                 o: proj(basis, *origin - r),
@@ -161,7 +170,11 @@ impl<'a> Ev<'a> {
                 let shifted = c
                     .transformed(|p| p - r)
                     .map_err(|e| DrawError::InvalidBody(e.to_string()))?;
-                let segs = shifted.bezier_segments();
+                let segs = if segs {
+                    shifted.bezier_segments()
+                } else {
+                    Vec::new()
+                };
                 let domain = shifted.domain();
                 let curve = Curve::nurbs(shifted);
                 Kind::Free {
@@ -954,6 +967,51 @@ pub fn split_params_counted(
         .collect())
 }
 
+/// Bildkurven der Striche relativ zu einem gemeinsamen Bezugspunkt `r` (wie in
+/// [`split_params`]): Bildpunkte und Fußpunkte für das Zusammenfassen deckungsgleicher Stücke
+/// (`visibility::merge_pieces`). Gleichheitsabstand frei wählbar (Vielfaches von `geom_tol(E)`).
+pub(crate) struct Images<'a> {
+    basis: &'a Basis,
+    r: DVec3,
+    tol: f64,
+}
+
+impl<'a> Images<'a> {
+    /// Gleichheitsabstand `factor · geom_tol(extent)`.
+    pub(crate) fn new(basis: &'a Basis, r: DVec3, extent: f64, factor: f64) -> Images<'a> {
+        Images {
+            basis,
+            r,
+            tol: factor / NEAR_FACTOR * geom_tol(extent),
+        }
+    }
+
+    /// Gleichheitsabstand im Bild.
+    pub(crate) fn near(&self) -> f64 {
+        NEAR_FACTOR * self.tol
+    }
+
+    /// Bildpunkt von `s` bei `t`, relativ zur Projektion von `r`.
+    pub(crate) fn point(&self, s: &Stroke, t: f64) -> Result<DVec2, DrawError> {
+        Ok(Ev::light(s, self.basis, self.r)?.p(t))
+    }
+
+    /// Parameter im Bereich von `s` (ein Stück: `t0 … t1`), an denen das Bild höchstens den
+    /// Gleichheitsabstand neben `q` (relativ wie [`Images::point`]) liegt.
+    pub(crate) fn feet(&self, s: &Stroke, q: DVec2) -> Result<Vec<f64>, DrawError> {
+        let ev = Ev::light(s, self.basis, self.r)?;
+        let pairs = Cell::new(0);
+        let ctx = Ctx {
+            basis: self.basis,
+            shift: self.basis.project(self.r),
+            tol: self.tol,
+            pairs: &pairs,
+            progress: None,
+        };
+        Ok(foot_params(&ctx, &ev, q))
+    }
+}
+
 /// Spitzen eines in der Ansicht dünnen Kegelschnitts (Kreis oder Ellipse fast von der Seite
 /// gesehen, kleine Halbachse der Projektion höchstens `near`): Parameter `θ*` der Spitze (die
 /// zweite liegt bei `θ* + π`) und die Breite der Zone um sie, in der die Kurve höchstens etwa
@@ -987,6 +1045,27 @@ fn conic_tip(s: &Stroke, basis: &Basis, near: f64) -> Option<(f64, f64)> {
     }
     let tip = 0.5 * (2.0 * uv).atan2(uu - vv);
     Some((tip, 2.0 * (2.0 * near / a2.sqrt()).sqrt()))
+}
+
+/// Spitzen (Umkehrstellen) eines in der Ansicht dünnen Kegelschnitts (kleine Halbachse höchstens
+/// `thin`) echt innerhalb `(a, b)` (siehe [`conic_tip`]); andere Striche: keine.
+pub(crate) fn tip_params(s: &Stroke, basis: &Basis, thin: f64, a: f64, b: f64) -> Vec<f64> {
+    let Some((th, _)) = conic_tip(s, basis, thin) else {
+        return Vec::new();
+    };
+    let pi = std::f64::consts::PI;
+    let k0 = ((a - th) / pi).floor();
+    let mut out = Vec::new();
+    for i in 0..(MAX_LAPS as i64 * 2 + 2) {
+        let t = th + (k0 + i as f64) * pi;
+        if t >= b {
+            break;
+        }
+        if t > a {
+            out.push(t);
+        }
+    }
+    out
 }
 
 /// Legt Teilparameter in der Spitzenzone eines dünnen Kegelschnitts genau auf die Spitze
