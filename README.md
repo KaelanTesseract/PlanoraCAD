@@ -2,7 +2,7 @@
 
 Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
 
-**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export).
+**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten).
 
 Erste Version: Quader, Zylinder, Kugel, Kegel, Extrusion und Rotation von Skizzen, 3D-Ansicht mit Auswahl, Körper verschieben (Feld „Position“) sowie Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit Flächen aus Ebenen, Zylindern, Kegeln, Kugeln und Tori (Stufe A) und für Körper mit Freiformflächen aus Ellipsen und Splines (siehe „Freiformflächen“).
 
@@ -111,7 +111,7 @@ Dokumente mit Netz-Körpern speichert das Programm im Dateiformat 3; das Netz st
 - Wird das Dokument geändert, während das Fenster „Netz importieren“ offen ist, verwirft es die gelesene Datei; sie muss dann neu gewählt werden.
 - Zum Wählen der Datei hat das Programm ein eigenes Fenster mit Ordnerliste und Dateiname; der Dateidialog des Betriebssystems wird nicht benutzt, weil dafür ein zusätzliches Programmpaket nötig wäre. Unter Windows wechselt man das Laufwerk, indem man den Pfad eintippt. Sehr große Ordner und Netzlaufwerke können das Fenster kurz hakeln lassen.
 - Während das Netz berechnet oder eine Datei gelesen wird, bleibt das Fenster bedienbar. „Abbrechen“ wirkt beim Export zwischen zwei Körpern; ein einzelner großer Körper wird noch zu Ende gerechnet.
-- Nicht dabei: Zeichnungen (SVG/DXF) und das Einlesen von 3MF, glTF oder STEP.
+- Nicht dabei: das Einlesen von 3MF, glTF oder STEP. (Zeichnungen als SVG/DXF gibt es seit Teilprojekt 11, siehe „Zeichnungen“.)
 - Von Hand im echten Fenster ist der Netz-Austausch teilweise geprüft (Export, Import, Speichern und Laden); Abbrechen, sehr große Netze und das Öffnen der Dateien in fremden Programmen nicht. Siehe „Handprüfung“ in den offenen Punkten.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 9 – Netz-Austausch“.
@@ -136,6 +136,29 @@ Körper lassen sich als STEP-Datei speichern. Andere CAD-Programme öffnen sie a
 - Namen über 256 Zeichen werden in der Datei gekürzt; das Fenster nennt sie nach dem Schreiben. Gibt man „.stp“ ein, wird daraus „.step“; Dateien mit „.stp“ stehen aber nicht in der Liste. Zwei Körper mit gleichem Namen werden zwei Teile mit demselben Namen. Bei Körpern mit vielen Hohlräumen dauert die Zuordnung länger.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 10 – STEP-Export“.
+
+## Zeichnungen (Ansichten)
+
+Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Zeichnung“ → „Neue Zeichnung …“. Die Zeichnung gehört zum Dokument, wird mit gespeichert und rechnet sich neu, wenn man das Modell ändert. Ausgeben lässt sie sich als SVG (zum Drucken und für Dokumente) oder als DXF (für Laser, Fräse und andere CAD-Programme): „Datei“ → „Exportieren …“, Format „Zeichnung als SVG“ oder „Zeichnung als DXF“.
+
+**Was geht**
+- Ansichten: Vorne, Hinten, Links, Rechts, Oben, Unten und Isometrisch. Die Normansichten legen sich selbst an die richtige Stelle, wahlweise im Erstwinkel (Europa) oder im Dritten Winkel (USA); sie lassen sich nur entlang ihrer Richtung verschieben. Die isometrische Ansicht steht frei auf dem Blatt.
+- Blatt von A4 bis A0, hoch oder quer, mit Rahmen 10 mm vom Rand. Jede Ansicht hat ihren eigenen Maßstab (1:1, 1:2, 1:5, 1:10, 1:20, 1:50, 1:100, 2:1, 5:1, 10:1). Beim Anlegen schlägt das Programm den größten Maßstab vor, bei dem die drei Hauptansichten aufs Blatt passen.
+- Sichtbare Kanten sind durchgezogen, verdeckte gestrichelt. Das Zeigen der verdeckten Kanten lässt sich je Ansicht abschalten.
+- Kreise bleiben Kreise, Bögen bleiben Bögen, Freiformlinien bleiben glatte Kurven; es werden keine Streckenzüge daraus. Nur die Umrisse von Ringen (Torus) und Freiformflächen sind angenähert (auf 0,0001 mm genau).
+- Im Fenster: Umschalter zwischen 3D-Modell und Zeichnung, Zoomen mit dem Mausrad, Verschieben mit der mittleren Maustaste, Ansichten anklicken und ziehen. Im Browser stehen die Zeichnungen mit ihren Ansichten. Die Berechnung läuft im Hintergrund mit Fortschrittsbalken; scheitert eine Ansicht, steht der Grund an ihr, und die Zeichnung bleibt erhalten.
+- Gespeichert wird nur die Beschreibung (Blatt, Ansichten, Maßstab, Lage), nicht die berechneten Linien. Ein Dokument mit Zeichnung bekommt das Dateiformat 4; ältere Programmversionen melden dann „zu neu“. Dokumente ohne Zeichnung bleiben unverändert.
+
+**Grenzen**
+- Nicht dabei: Maße, Toleranzen, Schriftfeld, Beschriftung, Mittellinien, Schnittansichten, Schraffur, Detailansichten, Stücklisten, PDF und das Einlesen von SVG oder DXF. Es gibt nur diese sieben Blickrichtungen.
+- Netz-Körper (eingelesene Netze) werden nicht gezeichnet; das Programm nennt sie mit Namen.
+- Glatte Übergänge, etwa zwischen einer Rundung und der Fläche daneben, werden nicht als Linie gezeichnet. Der Umriss der Rundung selbst schon.
+- Kann das Programm bei einer Linie nicht sicher sagen, ob sie sichtbar oder verdeckt ist, steht an der Ansicht eine Meldung statt einer Zeichnung; es wird nichts geraten. Bei sehr vielen Flächen meldet es „zu aufwendig“ (höchstens 20 000 Linien je Ansicht).
+- Freiformflächen: Ein sehr kleiner, in sich geschlossener Umriss (kleiner als ein Bruchteil der Körpergröße) kann fehlen, ohne dass es gemeldet wird. Eine Freiform mit einem Pol (die Wand läuft in einer Spitze auf der Achse zusammen) wird in Seitenansichten abgelehnt. Ein ausgezogenes Spline-Profil, das man genau von der Seite sieht, kann eine Linie doppelt zeichnen. Bei einem schräg liegenden Ring, den man fast genau von der Seite seiner Ringebene sieht, meldet das Programm „Umriss zu stark gekrümmt“. Ringe brauchen in jeder Ansicht einige Sekunden.
+- Das Öffnen der Dateien in Fusion 360 und in Inkscape ist noch nicht von Hand geprüft (siehe „Handtest“ in den offenen Punkten). Beim Bauen prüft das Programm seine Dateien nur mit eigenen Lesern. In der DXF-Datei stehen die Ansichten als Blöcke; falls ein Programm sie nicht anzeigt, hilft es, die Blöcke aufzulösen.
+- Das Schreiben der Datei lässt sich abbrechen; die alte Datei bleibt dann unverändert. Unter Windows reservierte Dateinamen (zum Beispiel „CON“) werden im Namensvorschlag nicht abgefangen.
+
+Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 11 – Zeichnungen (Ansichten)“.
 
 ## Feature-Baum
 
