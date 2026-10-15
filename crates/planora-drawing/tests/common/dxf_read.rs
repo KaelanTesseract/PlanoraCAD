@@ -83,12 +83,16 @@ pub fn parse_groups(text: &str) -> Result<Vec<Group>, String> {
         return Err(format!("ungerade Zeilenzahl {}", lines.len()));
     }
     let mut out = Vec::with_capacity(lines.len() / 2);
+    let mut current = String::new();
     for (i, pair) in lines.chunks(2).enumerate() {
         let code: i32 = pair[0]
             .trim()
             .parse()
             .map_err(|_| format!("Paar {i}: Gruppencode {:?} keine Zahl", pair[0]))?;
         let value = pair[1].to_string();
+        if code == 0 {
+            current = value.clone();
+        }
         match group_kind(code) {
             Kind::Float => {
                 let t = value.trim();
@@ -106,7 +110,16 @@ pub fn parse_groups(text: &str) -> Result<Vec<Group>, String> {
                 if t == "-0" || t.starts_with("-0.") && t[3..].chars().all(|c| c == '0') {
                     return Err(format!("Paar {i}: Gruppe {code} Wert {value:?} ist -0"));
                 }
-                if let Some((_, frac)) = t.split_once('.')
+                // Parameter der Ellipse (41/42) stehen in voller f64-Genauigkeit, und zwar in der
+                // kürzesten Schreibweise, die denselben Wert ergibt.
+                let exact_param = current == "ELLIPSE" && (code == 41 || code == 42);
+                if exact_param && format!("{v}") != t {
+                    return Err(format!(
+                        "Paar {i}: Ellipsenparameter {value:?} nicht in kürzester Schreibweise"
+                    ));
+                }
+                if !exact_param
+                    && let Some((_, frac)) = t.split_once('.')
                     && frac.len() > 9
                 {
                     return Err(format!(

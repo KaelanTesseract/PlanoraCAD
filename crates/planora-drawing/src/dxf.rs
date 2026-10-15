@@ -43,7 +43,8 @@
 //!   Ein negativer Radius entspricht dem um 180° gedrehten Bogen mit dem Betrag.
 //! * `Ellipse` → `ELLIPSE`: Mittelpunkt, Hauptachsenendpunkt relativ zur Mitte (11/21/31),
 //!   Normale `0, 0, 1` (210/220/230), Verhältnis Nebenachse/Hauptachse (40, höchstens 1),
-//!   Anfangs- und Endparameter (41/42) in Radiant. Der Parameter der DXF-Ellipse ist wie der von
+//!   Anfangs- und Endparameter (41/42) in Radiant, in voller `f64`-Genauigkeit (ein auf neun Stellen
+//!   gerundetes 2π liegt knapp darunter, und Fusion 360 lässt eine so geschriebene volle Ellipse aus). Der Parameter der DXF-Ellipse ist wie der von
 //!   `Out2d` derselbe Parameter `t` in `c + major·cos t + minor·sin t` (nicht der Polarwinkel),
 //!   gegen den Uhrzeigersinn, `minor = ratio · (−major.y, major.x)`. Es ist also keine
 //!   Umrechnung nötig, nur das Hereinholen nach `[0, 2π]` (voller Umlauf `0 … 2π`); ein Verhältnis
@@ -266,10 +267,22 @@ fn degrees(rad: f64) -> Result<String, DrawError> {
     })
 }
 
-/// Parameter im Bogenmaß in `[0, 2π]` (nach dem Runden nie über 2π).
-fn radians(rad: f64) -> Result<String, DrawError> {
-    num(wrap(rad))
+/// Zahl in kürzester Schreibweise, die denselben `f64` ergibt (volle Genauigkeit, nie mit
+/// Exponent); `-0` wird `0`. Für die Parameter der Ellipse: ein auf neun Stellen gerundetes 2π
+/// liegt knapp unter 2π, und Fusion 360 zeichnet eine so geschriebene volle Ellipse nicht.
+fn exact(x: f64) -> Result<String, DrawError> {
+    if !x.is_finite() {
+        return Err(DrawError::NonFinite);
+    }
+    let t = format!("{x}");
+    Ok(if t == "-0" { "0".to_string() } else { t })
 }
+
+/// Öffnung (Radiant), ab der ein Bogen als voller Kreis gilt: nicht weniger als ein Milliardstel
+/// Grad unter einem Umlauf (feiner löst die Datei mit neun Nachkommastellen in Grad nicht auf).
+const FULL_ARC_SPAN: f64 = TAU - 1e-9 * (PI / 180.0);
+/// Öffnung (Radiant), ab der eine Ellipse als voll gilt (Fehler höchstens 1e-9 · Halbachse).
+const FULL_ELLIPSE_SPAN: f64 = TAU - 1e-9;
 
 /// Ein Zeichen, das in einem Blocknamen nicht vorkommen darf.
 fn illegal(c: char) -> bool {
@@ -763,7 +776,7 @@ fn write_curve(
             let a0 = wrap(s0 + shift);
             let (start, end) = (degrees(a0)?, degrees(a0 + span)?);
             // Fast voller Bogen, dessen Winkel nach dem Runden zusammenfallen: voller Kreis.
-            if span >= TAU - 1e-12 || (start == end && span > PI) {
+            if span >= FULL_ARC_SPAN || (start == end && span > PI) {
                 o.entity_head("CIRCLE", hs.next(), owner, layer);
                 o.text(100, "AcDbCircle");
                 o.point(10, *c)?;
@@ -823,15 +836,21 @@ fn write_curve(
             if span <= 0.0 {
                 return Ok(());
             }
-            let (a, b) = (radians(s0)?, radians(s0 + span)?);
-            // Fast voller Umlauf, dessen Parameter nach dem Runden zusammenfallen: ganze Ellipse.
-            let (p0, p1) = if span >= TAU - 1e-12 || (a == b && span > PI) {
-                ("0".to_string(), num(TAU)?)
-            } else if a == b {
-                return Ok(());
+            // Parameter in voller Genauigkeit; das Ende liegt in (0, 2π] (ein Ende bei 2π bleibt
+            // 2π, nicht 0); eine volle Ellipse läuft von 0 bis genau 2π.
+            let mut e = s0 + span;
+            if e > TAU {
+                e -= TAU;
+            }
+            let (p0, p1) = if span >= FULL_ELLIPSE_SPAN {
+                ("0".to_string(), exact(TAU)?)
             } else {
-                (a, b)
+                (exact(s0)?, exact(e)?)
             };
+            if p0 == p1 && span <= PI {
+                // Öffnung null (kleiner als die Genauigkeit von f64).
+                return Ok(());
+            }
             o.entity_head("ELLIPSE", hs.next(), owner, layer);
             o.text(100, "AcDbEllipse");
             o.point(10, *c)?;

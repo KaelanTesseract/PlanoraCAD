@@ -7,7 +7,8 @@
 //! Punktfehler deshalb unter 1e-9, bei Splines aber nur, wenn die Knoten runde Werte haben:
 //! werden beliebige Knoten auf neun Stellen gerundet, verschiebt das die Kurve um etwa
 //! Hebel · 5e-10 / Knotenabstand. Bei Ellipsen und rationalen Splines kommen Fehler der
-//! gerundeten Hauptachse, des Verhältnisses, des Parameters bzw. der Gewichte hinzu; dafür gilt
+//! gerundeten Hauptachse und des Verhältnisses bzw. der Gewichte hinzu (die Parameter der
+//! Ellipse stehen in voller Genauigkeit); dafür gilt
 //! eine aus der Rundung abgeleitete Schranke (`ell_tol`, `rat_tol`; der Hebel `0,5·R` von
 //! `rat_tol` gilt für Kegelschnittstücke bis etwa 120°), nicht ein fester Wert.
 
@@ -344,10 +345,11 @@ fn two_way_deviation(geoms: &[&Geom], formula: &Curve2, formula_checks: usize) -
     dev
 }
 
-/// Schranke für Ellipsenpunkte bei neun Nachkommastellen: Mittelpunkt und Hauptachse je 7e-10,
-/// Verhältnis und Parameter wirken mit höchstens `a` · 5e-10 je.
+/// Schranke für Ellipsenpunkte: die Parameter stehen in voller Genauigkeit, gerundet (neun
+/// Stellen) werden Mittelpunkt (7e-10), Hauptachse (7e-10) und Verhältnis; dessen Fehler 5e-10
+/// wirkt auf die Nebenachse, also mit höchstens `a` · 5e-10.
 fn ell_tol(a: f64) -> f64 {
-    2e-9 + 1e-9 * a
+    1.5e-9 + 5e-10 * a
 }
 
 /// Schranke für rationale Splines mit auf neun Stellen gerundeten Gewichten: Kontrollpunkte
@@ -1901,7 +1903,7 @@ fn ellipse_arcs_convert_the_parameter_correctly() {
     let (_, d) = read_of(&one_view(vec![vis(ellipse(c, major, ratio, 0.0, TAU))]));
     let v = ents(&d, "Vorne");
     assert_eq!(v[0].0.get(41), Some("0"));
-    assert_eq!(v[0].0.get(42), Some("6.283185307"));
+    assert_eq!(v[0].0.get(42), Some("6.283185307179586"));
 }
 
 #[test]
@@ -2250,8 +2252,11 @@ fn nearly_full_arcs_and_ellipses_become_full() {
     let v = ents(&d, "Vorne");
     assert_eq!(kinds(&v), ["CIRCLE", "ELLIPSE"]);
     assert_eq!(v[1].0.get(41), Some("0"));
-    assert_eq!(v[1].0.get(42), Some("6.283185307"));
-    // Winzige Öffnung bleibt ausgelassen.
+    assert_eq!(v[1].0.get(42), Some("6.283185307179586"));
+    // Öffnung null bleibt ausgelassen; eine winzige, aber von null verschiedene Öffnung bleibt
+    // erhalten (die Parameter stehen in voller Genauigkeit).
+    let (_, d) = read_of(&one_view(vec![vis(ellipse(c, (9.0, 0.0), 0.5, 0.4, 0.4))]));
+    assert!(ents(&d, "Vorne").is_empty());
     let (_, d) = read_of(&one_view(vec![vis(ellipse(
         c,
         (9.0, 0.0),
@@ -2259,5 +2264,107 @@ fn nearly_full_arcs_and_ellipses_become_full() {
         0.4,
         0.4 + 1e-12,
     ))]));
-    assert!(ents(&d, "Vorne").is_empty());
+    assert_eq!(kinds(&ents(&d, "Vorne")), ["ELLIPSE"]);
+}
+
+#[test]
+fn full_ellipses_end_exactly_at_two_pi() {
+    // Fusion 360 lässt eine volle Ellipse mit Endparameter 6.283185307 (gerundetes 2π) aus; sie
+    // muss mit 0 und genau 2π (6.283185307179586) geschrieben werden, in jeder Ansicht.
+    let exact_tau = format!("{TAU}");
+    assert_eq!(exact_tau, "6.283185307179586");
+    // Zylinder isometrisch: die obere Ellipse ist voll.
+    let m = solid_model(&cylinder_solid(10.0, 30.0), ViewKind::Isometric, true);
+    let (s, d) = read_of(&m);
+    let v = ents(&d, "Isometrisch");
+    let full: Vec<_> = v
+        .iter()
+        .filter(|(e, _)| {
+            e.kind == "ELLIPSE" && e.get(41) == Some("0") && e.get(42) == Some(exact_tau.as_str())
+        })
+        .collect();
+    assert_eq!(full.len(), 1, "genau eine volle Ellipse (oben)");
+    assert!(
+        !s.contains(
+            "6.283185307
+"
+        ),
+        "kein gerundetes 2π in der Datei"
+    );
+    // Gekippter Kreis (volle Umlauf) in jeder Ansichtsart: wo er als Ellipse erscheint, ist sie
+    // voll mit Ende genau 2π; sonst Kreis oder Strecke.
+    let mut ellipses = 0;
+    for kind in ViewKind::ALL {
+        let s = stroke(
+            Curve::Circle {
+                frame: frame(v3(2.0, 1.0, 3.0), v3(1.0, 0.0, 0.0), v3(0.0, 0.6, 0.8)),
+                radius: 7.0,
+            },
+            0.0,
+            TAU,
+        );
+        let m = hand_model(
+            kind,
+            vec![(s, 0.0, TAU)],
+            ((-20.0, -20.0), (20.0, 20.0)),
+            (200.0, 150.0),
+        );
+        let (_, d) = read_of(&m);
+        let name = kind.label();
+        for (e, _) in ents(&d, name) {
+            if e.kind == "ELLIPSE" {
+                ellipses += 1;
+                assert_eq!(
+                    (e.get(41), e.get(42)),
+                    (Some("0"), Some(exact_tau.as_str())),
+                    "{name}"
+                );
+            }
+        }
+    }
+    assert!(
+        ellipses >= 3,
+        "mehrere Ansichten zeigen eine Ellipse: {ellipses}"
+    );
+    // Halbe Ellipsen: Anfang und Ende hängen zusammen (π = 3.141592653589793, Ende der zweiten
+    // Hälfte genau 2π und nicht 0).
+    let pi_text = format!("{PI}");
+    assert_eq!(pi_text, "3.141592653589793");
+    let c = (100.0, 80.0);
+    let (_, d) = read_of(&one_view(vec![
+        vis(ellipse(c, (9.0, 0.0), 0.5, 0.0, PI)),
+        vis(ellipse(c, (9.0, 0.0), 0.5, PI, TAU)),
+    ]));
+    let v = ents(&d, "Vorne");
+    assert_eq!(
+        (v[0].0.get(41), v[0].0.get(42)),
+        (Some("0"), Some(pi_text.as_str()))
+    );
+    assert_eq!(
+        (v[1].0.get(41), v[1].0.get(42)),
+        (Some(pi_text.as_str()), Some(exact_tau.as_str()))
+    );
+    // Parameter mit vielen Stellen bleiben erhalten (kein Runden auf neun Stellen).
+    let (s, d) = read_of(&one_view(vec![vis(ellipse(
+        c,
+        (9.0, 0.0),
+        0.5,
+        0.123_456_789_012_345,
+        2.5,
+    ))]));
+    assert!(s.contains("0.123456789012345"), "{s}");
+    let v = ents(&d, "Vorne");
+    assert_eq!(v[0].0.get(41), Some("0.123456789012345"));
+}
+
+#[test]
+fn nearly_full_arc_within_a_billionth_degree_is_a_circle() {
+    // Öffnung höchstens 1e-9° unter 360°: voller Kreis, kein ARC mit Anfang ≈ Ende.
+    let c = (50.0, 60.0);
+    let almost = TAU - 0.5e-9f64.to_radians();
+    let (_, d) = read_of(&one_view(vec![
+        vis(arc(c, 7.0, 0.3, 0.3 + almost)),
+        vis(arc(c, 7.0, 0.3, 0.3 + TAU - 5e-9f64.to_radians())),
+    ]));
+    assert_eq!(kinds(&ents(&d, "Vorne")), ["CIRCLE", "ARC"]);
 }
