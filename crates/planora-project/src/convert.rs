@@ -911,6 +911,7 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
             placement,
             show_hidden: v.verdeckt_zeigen,
             parent: v.eltern.map(ViewId),
+            centerlines: false,
         });
     }
     Ok(Drawing {
@@ -923,6 +924,8 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
         projection,
         views,
         next_view,
+        dimensions: Vec::new(),
+        next_dim: 1,
     })
 }
 

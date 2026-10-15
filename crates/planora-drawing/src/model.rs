@@ -1,5 +1,7 @@
 //! Datenmodell einer Zeichnung: Blatt, Ansichten, Maßstab und Lage.
 
+use crate::dimension::{DimId, DimSpec};
+
 /// Kennung einer Zeichnung im Dokument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DrawingId(pub u64);
@@ -159,6 +161,8 @@ pub struct ViewSpec {
     pub placement: Placement,
     pub show_hidden: bool,
     pub parent: Option<ViewId>,
+    /// Mittellinien zeigen (Vorgabe: an für Normansichten, aus für Isometrisch).
+    pub centerlines: bool,
 }
 
 /// Eine Zeichnung: Blatt, Projektionsart und Ansichten.
@@ -170,6 +174,8 @@ pub struct Drawing {
     pub projection: Projection,
     pub views: Vec<ViewSpec>,
     pub next_view: u64,
+    pub dimensions: Vec<DimSpec>,
+    pub next_dim: u64,
 }
 
 impl Drawing {
@@ -182,6 +188,8 @@ impl Drawing {
             projection,
             views: Vec::new(),
             next_view: 1,
+            dimensions: Vec::new(),
+            next_dim: 1,
         }
     }
 
@@ -203,6 +211,7 @@ impl Drawing {
             placement,
             show_hidden: kind.shows_hidden_by_default(),
             parent,
+            centerlines: kind.is_normal(),
         });
         id
     }
@@ -221,7 +230,29 @@ impl Drawing {
         }
         self.collect_subtree(id, &mut removed);
         self.views.retain(|v| !removed.contains(&v.id));
+        self.dimensions.retain(|m| !removed.contains(&m.view));
         removed
+    }
+
+    /// Fügt ein Maß hinzu; die Kennung in `spec.id` wird ersetzt und zurückgegeben.
+    pub fn add_dimension(&mut self, mut spec: DimSpec) -> DimId {
+        let id = DimId(self.next_dim);
+        self.next_dim += 1;
+        spec.id = id;
+        self.dimensions.push(spec);
+        id
+    }
+
+    /// Sucht ein Maß.
+    pub fn dimension(&self, id: DimId) -> Option<&DimSpec> {
+        self.dimensions.iter().find(|m| m.id == id)
+    }
+
+    /// Entfernt ein Maß; `false`, wenn es die Kennung nicht gibt.
+    pub fn remove_dimension(&mut self, id: DimId) -> bool {
+        let before = self.dimensions.len();
+        self.dimensions.retain(|m| m.id != id);
+        self.dimensions.len() != before
     }
 
     fn collect_subtree(&self, id: ViewId, out: &mut Vec<ViewId>) {

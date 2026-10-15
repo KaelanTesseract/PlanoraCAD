@@ -25,6 +25,8 @@ pub const MAX_OUTLINE_POINTS: u64 = 400_000;
 pub const MAX_PAIR_TESTS: u64 = 50_000_000;
 /// Höchstzahl an Sichtprüfungen (Strahltests).
 pub const MAX_RAY_TESTS: u64 = 20_000_000;
+/// Höchstzahl an Maßen je Zeichnung.
+pub const MAX_DIMENSIONS: usize = 2000;
 /// Höchste Teilungstiefe.
 pub const MAX_SUBDIVISION_DEPTH: u32 = 40;
 

@@ -38,6 +38,19 @@ fn scale(num: u32, den: u32) -> Scale {
 
 /// Zwei Zeichnungen (eine gelöschte dazwischen, also Lücke in den Kennungen), Ansichten aller
 /// Arten, freie und ausgerichtete Lage, verdeckte Kanten an und aus, eine gelöschte Ansicht.
+/// Format 4 kennt keine Mittellinien: Ansichten ohne Mittellinien, damit Rundreisen gleich bleiben.
+fn without_centerlines(d: &mut Document) {
+    let ids: Vec<_> = d.drawings().iter().map(|x| x.id).collect();
+    for id in ids {
+        d.update_drawing(id, |x| {
+            for v in &mut x.views {
+                v.centerlines = false;
+            }
+        })
+        .unwrap();
+    }
+}
+
 fn drawing_document() -> Document {
     let mut d = box_document();
     let a = d
@@ -138,6 +151,7 @@ fn drawing_document() -> Document {
         Some(top),
     )
     .unwrap();
+    without_centerlines(&mut d);
     d
 }
 
@@ -239,6 +253,7 @@ fn every_paper_projection_and_kind_roundtrips() {
             }
         }
     }
+    without_centerlines(&mut d);
     let s = d.snapshot();
     let back = decode_version(&encode_version(&s).unwrap(), "x.json").unwrap();
     assert_eq!(back.drawings, s.drawings);

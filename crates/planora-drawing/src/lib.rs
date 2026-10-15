@@ -3,6 +3,7 @@
 //! der Linien einer Ansicht mit ihrer Sichtbarkeit.
 
 pub mod basis;
+pub mod dimension;
 pub mod dxf;
 pub mod error;
 pub mod file;
