@@ -637,11 +637,12 @@ impl eframe::App for PlanoraApp {
         if tab.state.sketch_session.is_some() {
             tab.feature_dialog = None;
             tab.blend_dialog = None;
-            // Beim Schreiben einer STEP-Datei bleibt das Fenster, damit nichts ohne Meldung endet.
+            // Beim Schreiben einer STEP-Datei oder Zeichnung bleibt das Fenster, damit nichts ohne
+            // Meldung endet.
             if tab
                 .export_dialog
                 .as_ref()
-                .is_some_and(|d| !d.is_writing_step())
+                .is_some_and(|d| !d.is_writing_file())
             {
                 tab.export_dialog = None;
             }

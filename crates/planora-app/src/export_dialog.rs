@@ -3,13 +3,26 @@
 //! der Körper entsteht im Arbeitsthread (Fortschritt, Abbrechen); danach Zahl der Dreiecke,
 //! geschätzte Größe und Prüfbericht (Netz) bzw. Zahl der Körper und Flächen (STEP); gespeichert
 //! wird über die eigene Dateiauswahl (Plan P14) und eine Hilfsdatei.
+//!
+//! Zeichnungen (Teilprojekt 11, Aufgabe 17) als sechstes und siebtes Format: Die Ansichten der
+//! gewählten Zeichnung werden im eigenen Arbeitsthread des Fensters berechnet (nicht über den
+//! Zwischenspeicher des Zeichnungsbereichs, Festlegung F11); geschrieben wird nur, wenn alle
+//! Ansichten berechnet sind.
 
 use crate::browser::ERROR_COLOR;
 use crate::cards::card_row;
+use crate::drawing_dialog::paper_label;
+use crate::drawing_state::{ComputeFn, WorkArea};
+use crate::drawing_view::view_names;
 use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{WARNING_COLOR, report_text};
 use crate::state::{AppState, BodyKind};
+use planora_drawing::sheet::{SheetModel, build_sheet};
+use planora_drawing::{
+    DrawBody, DrawError, Drawing, DrawingFormat, DrawingId, Sheet, ViewId, ViewKind, ViewLines,
+    Visibility, compute_view, export_drawing_file,
+};
 use planora_exchange::{
     ExchangeError, ExchangeMesh, ExportBody, Format, MeshReport, MeshTransform, PlacedSource,
     Progress, SolidSource, check_mesh, collect_body, export_file,
@@ -20,6 +33,7 @@ use planora_mesh::{TessellationOptions, tessellate};
 use planora_step::{
     MAX_NAME_CHARS, StepBody, StepError, StepOptions, check_body, display_name, export_step_file,
 };
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,6 +66,11 @@ pub const WRITING_HINT: &str = "Das Schreiben läuft noch. Bitte warten oder ers
 const MAX_SHOWN_NAME: usize = 40;
 /// Meldung, wenn bei STEP kein Körper übrig bleibt.
 pub const STEP_NOTHING: &str = "Es gibt keinen Körper, der sich als STEP-Datei ausgeben lässt.";
+/// Hinweis bei den Zeichnungsformaten, wenn das Dokument keine Zeichnung hat.
+pub const NO_DRAWING: &str =
+    "Es gibt noch keine Zeichnung. Über „Zeichnung“ im Menü lässt sich eine anlegen.";
+/// So oft schaut der Arbeitsthread nach, ob die Berechnung einer Ansicht abgebrochen werden soll.
+const WATCH: Duration = Duration::from_millis(5);
 
 /// Fenster über die ganze Breite (Rand DIALOG_MARGIN), unter Menü und Tab-Leiste.
 pub(crate) fn wide_window(title: &'static str, ctx: &egui::Context) -> egui::Window<'static> {
@@ -111,20 +130,23 @@ pub enum Scope {
     Visible,
 }
 
-/// Format im Fenster: eines der vier Netzformate oder STEP (exakte Körper).
+/// Format im Fenster: eines der vier Netzformate, STEP (exakte Körper) oder eine Zeichnung.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExportFormat {
     Mesh(Format),
     Step,
+    Drawing(DrawingFormat),
 }
 
 impl ExportFormat {
-    pub const ALL: [ExportFormat; 5] = [
+    pub const ALL: [ExportFormat; 7] = [
         ExportFormat::Mesh(Format::Stl),
         ExportFormat::Mesh(Format::Obj),
         ExportFormat::Mesh(Format::ThreeMf),
         ExportFormat::Mesh(Format::Glb),
         ExportFormat::Step,
+        ExportFormat::Drawing(DrawingFormat::Svg),
+        ExportFormat::Drawing(DrawingFormat::Dxf),
     ];
 
     /// Dateiendung ohne Punkt.
@@ -132,6 +154,7 @@ impl ExportFormat {
         match self {
             ExportFormat::Mesh(f) => f.extension(),
             ExportFormat::Step => "step",
+            ExportFormat::Drawing(f) => f.extension(),
         }
     }
 
@@ -139,11 +162,24 @@ impl ExportFormat {
         match self {
             ExportFormat::Mesh(f) => format_label(f),
             ExportFormat::Step => STEP_LABEL,
+            ExportFormat::Drawing(f) => f.label(),
         }
     }
 
     pub fn is_step(self) -> bool {
         self == ExportFormat::Step
+    }
+
+    pub fn is_drawing(self) -> bool {
+        self.drawing_format().is_some()
+    }
+
+    /// Das Zeichnungsformat, wenn es eines ist.
+    pub fn drawing_format(self) -> Option<DrawingFormat> {
+        match self {
+            ExportFormat::Drawing(f) => Some(f),
+            _ => None,
+        }
     }
 }
 
@@ -214,7 +250,180 @@ pub enum ExportStatus {
         rejected: Vec<String>,
         skipped_meshes: Vec<String>,
     },
+    /// Zeichnung: alle Ansichten berechnet; Zahl der Ansichten, Blatt, Linien (verdeckte nur bei
+    /// Ansichten, die sie zeigen) und ausgelassene Netz-Körper.
+    DrawingReady {
+        views: usize,
+        sheet: String,
+        visible: usize,
+        hidden: usize,
+        skipped_meshes: Vec<String>,
+    },
     Failed(String),
+    /// Es gibt nichts zu berechnen (keine Zeichnung, keine exakten Körper, keine Ansicht).
+    Unavailable(String),
+}
+
+/// Zeichnung mit allen berechneten Ansichten, fertig zum Schreiben.
+#[derive(Debug)]
+pub struct DrawingPrepared {
+    pub model: Arc<SheetModel>,
+    pub views: usize,
+    /// Blatt, z. B. „A3 quer“.
+    pub sheet: String,
+    pub visible: usize,
+    pub hidden: usize,
+    /// Netz-Körper, die die Zeichnung nicht enthält.
+    pub skipped_meshes: Vec<String>,
+}
+
+/// Blatt für die Anzeige, z. B. „A3 quer“.
+pub fn sheet_label(sheet: Sheet) -> String {
+    format!(
+        "{} {}",
+        paper_label(sheet.paper),
+        if sheet.landscape { "quer" } else { "hoch" }
+    )
+}
+
+/// Berechnet eine Ansichtsart in einem eigenen Thread mit eigenem Fortschritt; ein Abbruch von
+/// `outer` wird weitergereicht. `None`, wenn die Rechnung abstürzt.
+fn compute_watched(
+    solids: &[(String, Solid)],
+    kind: ViewKind,
+    compute: ComputeFn,
+    outer: &Progress,
+) -> Option<Result<ViewLines, DrawError>> {
+    let inner = Progress::new();
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(|| {
+            let refs: Vec<DrawBody> = solids
+                .iter()
+                .map(|(name, solid)| DrawBody {
+                    name: name.clone(),
+                    solid,
+                })
+                .collect();
+            compute(&refs, kind, &inner)
+        });
+        while !handle.is_finished() {
+            if outer.is_cancelled() {
+                inner.cancel();
+            }
+            std::thread::sleep(WATCH);
+        }
+        handle.join().ok()
+    })
+}
+
+/// Berechnet die Ansichten der Zeichnung (jede Ansichtsart einmal, Fortschritt je Art) und baut
+/// das Blatt (läuft im Arbeitsthread). Scheitert eine Ansicht, gibt es kein Blatt, sondern die
+/// Meldung „Die Ansicht „Name“ lässt sich nicht berechnen: …“ (Name wie im Browser).
+pub fn prepare_drawing(
+    drawing: &Drawing,
+    solids: &[(String, Solid)],
+    compute: ComputeFn,
+    progress: &Progress,
+) -> Result<DrawingPrepared, String> {
+    let cancelled = || ExchangeError::Cancelled.to_string();
+    let mut kinds: Vec<ViewKind> = Vec::new();
+    for v in &drawing.views {
+        if !kinds.contains(&v.kind) {
+            kinds.push(v.kind);
+        }
+    }
+    progress.set_total(kinds.len() as u64);
+    let names = view_names(drawing);
+    let mut lines: Vec<(ViewKind, ViewLines)> = Vec::with_capacity(kinds.len());
+    for kind in kinds {
+        progress.check().map_err(|_| cancelled())?;
+        match compute_watched(solids, kind, compute, progress) {
+            None => return Err(LOST.to_string()),
+            Some(Ok(l)) => lines.push((kind, l)),
+            Some(Err(DrawError::Cancelled)) => return Err(cancelled()),
+            Some(Err(e)) => {
+                let name = drawing
+                    .views
+                    .iter()
+                    .find(|v| v.kind == kind)
+                    .and_then(|v| names.get(&v.id))
+                    .cloned()
+                    .unwrap_or_else(|| kind.label().to_string());
+                return Err(format!(
+                    "Die Ansicht „{name}“ lässt sich nicht berechnen: {e}"
+                ));
+            }
+        }
+        progress.advance(1);
+    }
+    let map: BTreeMap<ViewId, &ViewLines> = drawing
+        .views
+        .iter()
+        .filter_map(|v| {
+            lines
+                .iter()
+                .find(|(k, _)| *k == v.kind)
+                .map(|(_, l)| (v.id, l))
+        })
+        .collect();
+    let model = build_sheet(drawing, &map);
+    let count = |vis| {
+        model
+            .views
+            .iter()
+            .flat_map(|v| &v.lines)
+            .filter(|l| l.vis == vis)
+            .count()
+    };
+    Ok(DrawingPrepared {
+        views: model.views.len(),
+        sheet: sheet_label(drawing.sheet),
+        visible: count(Visibility::Visible),
+        hidden: count(Visibility::Hidden),
+        skipped_meshes: Vec::new(),
+        model: Arc::new(model),
+    })
+}
+
+/// Hinweis auf Netz-Körper, die eine Zeichnung nicht enthält.
+pub fn drawing_skipped_text(names: &[String]) -> String {
+    let list: Vec<String> = names.iter().map(|n| format!("„{n}“")).collect();
+    format!(
+        "Netz-Körper sind in der Zeichnung nicht enthalten: {}.",
+        list.join(", ")
+    )
+}
+
+/// Meldung zu einem Fehler beim Schreiben einer Zeichnung (Abbrechen wie bei den anderen
+/// Formaten).
+fn draw_write_text(e: DrawError) -> String {
+    match e {
+        DrawError::Cancelled => ExchangeError::Cancelled.to_string(),
+        e => e.to_string(),
+    }
+}
+
+/// Vorgabe der Zeichnung: die geöffnete, sonst die erste.
+fn default_drawing(state: &AppState) -> Option<DrawingId> {
+    match state.drawing_ui.area {
+        WorkArea::Drawing(id) if state.document.drawing(id).is_some() => Some(id),
+        _ => state.document.drawings().first().map(|d| d.id),
+    }
+}
+
+/// Exakte Körper als eigene Kopien für den Arbeitsthread und die Namen der Netz-Körper.
+fn drawing_bodies(state: &AppState) -> (Vec<(String, Solid)>, Vec<String>) {
+    let mut solids = Vec::new();
+    let mut meshes = Vec::new();
+    for (i, b) in state.bodies.iter().enumerate() {
+        let name = display_name(&b.name, i);
+        if b.kind == BodyKind::Mesh {
+            meshes.push(shorten_for_display(&name));
+        } else {
+            solids.push((name, b.solid.clone()));
+        }
+    }
+    (solids, meshes)
 }
 
 /// Stand des Schreibens der Datei.
@@ -328,8 +537,21 @@ pub fn shortened_text(names: &[String]) -> String {
     )
 }
 
-/// Endung `.stp` wird bei STEP zu `.step` (statt `x.stp.step`).
+/// Endung `.stp` wird bei STEP zu `.step` (statt `x.stp.step`). Bei Zeichnungen wird die Endung
+/// `.svg` bzw. `.dxf` erzwungen: in beliebiger Schreibweise klein geschrieben, sonst angehängt.
 pub fn normalize_target(format: ExportFormat, path: PathBuf) -> PathBuf {
+    if let Some(f) = format.drawing_format() {
+        let ext = f.extension();
+        return match path.extension() {
+            Some(e) if e.eq_ignore_ascii_case(ext) => path.with_extension(ext),
+            _ => {
+                let mut s = path.into_os_string();
+                s.push(".");
+                s.push(ext);
+                PathBuf::from(s)
+            }
+        };
+    }
     let is_stp = path
         .extension()
         .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("stp"));
@@ -340,11 +562,13 @@ pub fn normalize_target(format: ExportFormat, path: PathBuf) -> PathBuf {
     }
 }
 
-/// Hinweis am gesperrten Knopf „Exportieren …“: bei STEP ohne Körper der Grund, sonst Warten.
-pub fn disabled_hint(status: &ExportStatus) -> &'static str {
+/// Hinweis am gesperrten Knopf „Exportieren …“: bei STEP ohne Körper und bei einer Zeichnung,
+/// die sich nicht berechnen lässt, der Grund, sonst Warten.
+pub fn disabled_hint(status: &ExportStatus) -> String {
     match status {
-        ExportStatus::StepReady { bodies: 0, .. } => STEP_NOTHING,
-        _ => "Erst möglich, wenn die Berechnung fertig ist.",
+        ExportStatus::StepReady { bodies: 0, .. } => STEP_NOTHING.to_string(),
+        ExportStatus::Unavailable(m) => m.clone(),
+        _ => "Erst möglich, wenn die Berechnung fertig ist.".to_string(),
     }
 }
 
@@ -435,20 +659,42 @@ type StepJob = Job<Result<StepPrepared, String>>;
 type StepResult = Result<Arc<StepPrepared>, String>;
 type WriteJob = Job<Result<u64, ExchangeError>>;
 type StepWriteJob = Job<Result<u64, StepError>>;
+/// Stand, zu dem ein Zeichnungsergebnis gehört: Zeichnung, Änderungszahl des Dokuments (alle
+/// Änderungen, auch an der Zeichnung), Format.
+type DrawKey = (DrawingId, u64, DrawingFormat);
+type DrawJob = Job<Result<DrawingPrepared, String>>;
+type DrawResult = Result<Arc<DrawingPrepared>, String>;
+type DrawWriteJob = Job<Result<u64, String>>;
+/// Das Schreiben einer Zeichnung (austauschbar nur für Tests).
+pub type WriteFn = fn(&Path, &SheetModel, DrawingFormat, &Progress) -> Result<u64, DrawError>;
+
+/// Stand zur Zeit des Öffnens der Dateiauswahl.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ChooserKey {
+    Bodies(Key),
+    Drawing(Option<DrawKey>),
+}
 
 pub struct ExportDialog {
     pub format: ExportFormat,
     pub quality: Quality,
     pub scope: Scope,
+    /// Gewählte Zeichnung (Zeichnungsformate); Vorgabe die geöffnete, sonst die erste.
+    pub drawing: Option<DrawingId>,
     prepared: Option<(Key, PrepResult)>,
     job: Option<(Key, PrepJob)>,
     step_prepared: Option<(Key, StepResult)>,
     step_job: Option<(Key, StepJob)>,
+    drawing_prepared: Option<(DrawKey, DrawResult)>,
+    drawing_job: Option<(DrawKey, DrawJob)>,
     chooser: Option<FileChooser>,
     /// Schlüssel und Format zur Zeit des Öffnens der Dateiauswahl; ändern sie sich, schließt sie.
-    chooser_key: Option<Key>,
+    chooser_key: Option<ChooserKey>,
     writing: Option<(PathBuf, WriteJob)>,
     step_writing: Option<(PathBuf, StepWriteJob)>,
+    drawing_writing: Option<(PathBuf, DrawWriteJob)>,
+    compute: ComputeFn,
+    writer: WriteFn,
     written: Option<Result<(PathBuf, u64), String>>,
     /// Format, mit dem zuletzt geschrieben wurde; die Meldung gehört nur zu diesem Format.
     write_format: ExportFormat,
@@ -473,14 +719,20 @@ impl ExportDialog {
             } else {
                 Scope::Visible
             },
+            drawing: default_drawing(state),
             prepared: None,
             job: None,
             step_prepared: None,
             step_job: None,
+            drawing_prepared: None,
+            drawing_job: None,
             chooser: None,
             chooser_key: None,
             writing: None,
             step_writing: None,
+            drawing_writing: None,
+            compute: compute_view,
+            writer: export_drawing_file,
             written: None,
             write_format: ExportFormat::Mesh(Format::Stl),
             written_format: None,
@@ -534,6 +786,165 @@ impl ExportDialog {
         (quality, self.scope, state.document.edit_count(), selected)
     }
 
+    /// Ersetzt die Rechnung einer Ansicht (nur für Tests: Fehler, lange Rechnungen).
+    #[doc(hidden)]
+    pub fn set_compute(&mut self, f: ComputeFn) {
+        self.compute = f;
+    }
+
+    /// Ersetzt das Schreiben einer Zeichnung (nur für Tests: langes Schreiben).
+    #[doc(hidden)]
+    pub fn set_writer(&mut self, f: WriteFn) {
+        self.writer = f;
+    }
+
+    /// Die gewählte Zeichnung; gibt es sie nicht (mehr), die Vorgabe.
+    fn current_drawing<'a>(&self, state: &'a AppState) -> Option<&'a Drawing> {
+        self.drawing
+            .and_then(|id| state.document.drawing(id))
+            .or_else(|| default_drawing(state).and_then(|id| state.document.drawing(id)))
+    }
+
+    /// Schlüssel des Zeichnungsergebnisses; `None` bei anderen Formaten oder ohne Zeichnung.
+    fn drawing_key(&self, state: &AppState) -> Option<DrawKey> {
+        let f = self.format.drawing_format()?;
+        let d = self.current_drawing(state)?;
+        Some((d.id, state.document.edit_count(), f))
+    }
+
+    /// Warum sich keine Zeichnung berechnen lässt: keine Zeichnung, keine exakten Körper (wie
+    /// im Zeichnungsbereich) oder keine Ansicht.
+    fn drawing_block(&self, state: &AppState) -> Option<String> {
+        let Some(d) = self.current_drawing(state) else {
+            return Some(NO_DRAWING.to_string());
+        };
+        if state.bodies.is_empty() {
+            return Some(DrawError::NoBodies.to_string());
+        }
+        if state.bodies.iter().all(|b| b.kind == BodyKind::Mesh) {
+            return Some(DrawError::MeshBodiesOnly.to_string());
+        }
+        if d.views.is_empty() {
+            return Some(format!(
+                "Die Zeichnung „{}“ hat noch keine Ansicht.",
+                shorten_for_display(&d.name)
+            ));
+        }
+        None
+    }
+
+    fn chooser_key_now(&self, state: &AppState) -> ChooserKey {
+        if self.format.is_drawing() {
+            ChooserKey::Drawing(self.drawing_key(state))
+        } else {
+            ChooserKey::Bodies(self.key(state))
+        }
+    }
+
+    /// Startet die Berechnung der Zeichnung, wenn sich Zeichnung, Dokument oder Format geändert
+    /// haben, und holt ein fertiges Ergebnis ab.
+    fn tick_drawing(&mut self, state: &AppState, block: bool) {
+        if self
+            .drawing
+            .is_none_or(|id| state.document.drawing(id).is_none())
+        {
+            self.drawing = default_drawing(state);
+        }
+        if let (Some(key), None) = (self.drawing_key(state), self.drawing_block(state)) {
+            let fresh = self
+                .drawing_prepared
+                .as_ref()
+                .is_some_and(|(k, _)| *k == key);
+            let running = self.drawing_job.as_ref().is_some_and(|(k, _)| *k == key);
+            if !fresh
+                && !running
+                && let Some(drawing) = self.current_drawing(state).cloned()
+            {
+                let (solids, meshes) = drawing_bodies(state);
+                let compute = self.compute;
+                // Ein alter Auftrag wird dabei fallengelassen und bricht ab.
+                self.drawing_job = Some((
+                    key,
+                    Job::spawn(move |p| {
+                        prepare_drawing(&drawing, &solids, compute, p).map(|mut r| {
+                            r.skipped_meshes = meshes;
+                            r
+                        })
+                    }),
+                ));
+            }
+        }
+        let finished = match &self.drawing_job {
+            Some((k, job)) => match job.fetch(block) {
+                Poll::Pending => None,
+                Poll::Ready(r) => Some((*k, r.map(Arc::new))),
+                Poll::Lost => Some((*k, Err(LOST.to_string()))),
+            },
+            None => None,
+        };
+        if let Some(done) = finished {
+            self.drawing_prepared = Some(done);
+            self.drawing_job = None;
+        }
+    }
+
+    fn drawing_status(&self, state: &AppState) -> ExportStatus {
+        if let Some(m) = self.drawing_block(state) {
+            return ExportStatus::Unavailable(m);
+        }
+        let key = self.drawing_key(state);
+        if let Some((k, job)) = &self.drawing_job
+            && Some(*k) == key
+        {
+            return ExportStatus::Computing(job.fraction());
+        }
+        match &self.drawing_prepared {
+            Some((k, Ok(p))) if Some(*k) == key => ExportStatus::DrawingReady {
+                views: p.views,
+                sheet: p.sheet.clone(),
+                visible: p.visible,
+                hidden: p.hidden,
+                skipped_meshes: p.skipped_meshes.clone(),
+            },
+            Some((k, Err(m))) if Some(*k) == key => ExportStatus::Failed(m.clone()),
+            _ => ExportStatus::Computing(0.0),
+        }
+    }
+
+    /// Schreibt die fertige Zeichnung im Arbeitsthread nach `path` (über eine Hilfsdatei); nur
+    /// wenn alle Ansichten berechnet sind und das Ergebnis zum Stand von `state` passt.
+    fn write_drawing(&mut self, path: PathBuf, format: DrawingFormat, state: &AppState) {
+        if let Some(m) = self.drawing_block(state) {
+            self.set_written(Err(m));
+            return;
+        }
+        let key = self.drawing_key(state);
+        let prepared = match &self.drawing_prepared {
+            Some((k, _)) if Some(*k) != key => {
+                self.set_written(Err(STALE.to_string()));
+                return;
+            }
+            Some((_, Ok(p))) => Arc::clone(p),
+            Some((_, Err(m))) => {
+                let m = m.clone();
+                self.set_written(Err(m));
+                return;
+            }
+            None => {
+                self.set_written(Err(NOT_COMPUTED.to_string()));
+                return;
+            }
+        };
+        let (writer, target) = (self.writer, path.clone());
+        self.written = None;
+        self.drawing_writing = Some((
+            path,
+            Job::spawn(move |p| {
+                writer(&target, &prepared.model, format, p).map_err(draw_write_text)
+            }),
+        ));
+    }
+
     /// Startet das Vernetzen bzw. die STEP-Prüfung, wenn sich Format, Qualität, Umfang oder
     /// Dokument geändert haben, und holt fertige Ergebnisse ab. Mit `block` wird gewartet
     /// (Tests).
@@ -543,7 +954,9 @@ impl ExportDialog {
             self.scope = Scope::Visible;
         }
         let key = self.key(state);
-        if self.format.is_step() {
+        if self.format.is_drawing() {
+            self.tick_drawing(state, block);
+        } else if self.format.is_step() {
             let fresh = self.step_prepared.as_ref().is_some_and(|(k, _)| *k == key);
             let running = self.step_job.as_ref().is_some_and(|(k, _)| *k == key);
             if !fresh && !running {
@@ -608,21 +1021,39 @@ impl ExportDialog {
             self.set_written(w);
             self.step_writing = None;
         }
-        if self.step_writing.is_none() {
+        let wrote = match &self.drawing_writing {
+            Some((path, job)) => match job.fetch(block) {
+                Poll::Pending => None,
+                Poll::Ready(r) => Some(r.map(|n| (path.clone(), n))),
+                Poll::Lost => Some(Err(LOST.to_string())),
+            },
+            None => None,
+        };
+        if let Some(w) = wrote {
+            self.set_written(w);
+            self.drawing_writing = None;
+        }
+        if !self.is_writing_file() {
             self.close_denied = false;
         }
     }
 
-    /// Läuft gerade das Schreiben einer STEP-Datei? Dann darf das Fenster nicht verworfen
-    /// werden: Der Arbeitsthread bräche ab und die alte Datei bliebe ohne Meldung liegen.
+    /// Läuft gerade das Schreiben einer STEP-Datei?
     pub fn is_writing_step(&self) -> bool {
         self.step_writing.is_some()
     }
 
-    /// Fragt, ob das Fenster geschlossen werden darf; beim Schreiben einer STEP-Datei nicht
-    /// (dann steht im Fenster der Hinweis `WRITING_HINT`).
+    /// Läuft gerade das Schreiben einer STEP-Datei oder einer Zeichnung? Dann darf das Fenster
+    /// nicht verworfen werden: Der Arbeitsthread bräche ab und die alte Datei bliebe ohne
+    /// Meldung liegen.
+    pub fn is_writing_file(&self) -> bool {
+        self.step_writing.is_some() || self.drawing_writing.is_some()
+    }
+
+    /// Fragt, ob das Fenster geschlossen werden darf; beim Schreiben einer STEP-Datei oder
+    /// Zeichnung nicht (dann steht im Fenster der Hinweis `WRITING_HINT`).
     pub fn request_close(&mut self) -> bool {
-        if self.is_writing_step() {
+        if self.is_writing_file() {
             self.close_denied = true;
             false
         } else {
@@ -631,6 +1062,9 @@ impl ExportDialog {
     }
 
     pub fn status(&self, state: &AppState) -> ExportStatus {
+        if self.format.is_drawing() {
+            return self.drawing_status(state);
+        }
         let key = self.key(state);
         if self.format.is_step() {
             if let Some((k, job)) = &self.step_job
@@ -680,7 +1114,7 @@ impl ExportDialog {
     }
 
     pub fn write_state(&self) -> WriteState {
-        if self.writing.is_some() || self.step_writing.is_some() {
+        if self.writing.is_some() || self.is_writing_file() {
             return WriteState::Writing;
         }
         if self.written_format != Some(self.format) {
@@ -697,7 +1131,11 @@ impl ExportDialog {
     /// berechnet wird.
     pub fn cancel(&mut self) {
         // Nur der Auftrag des gewählten Formats; der andere läuft im Hintergrund weiter.
-        if self.format.is_step() {
+        if self.format.is_drawing() {
+            if let Some((key, _)) = self.drawing_job.take() {
+                self.drawing_prepared = Some((key, Err(ExchangeError::Cancelled.to_string())));
+            }
+        } else if self.format.is_step() {
             if let Some((key, _)) = self.step_job.take() {
                 self.step_prepared = Some((key, Err(StepError::Cancelled.to_string())));
             }
@@ -706,16 +1144,23 @@ impl ExportDialog {
         }
     }
 
-    /// Erledigter Anteil beim Schreiben einer STEP-Datei (Netzformate: 0).
+    /// Erledigter Anteil beim Schreiben einer STEP-Datei oder Zeichnung (Netzformate: 0).
     pub fn write_progress(&self) -> f32 {
+        if let Some((_, job)) = &self.drawing_writing {
+            return job.fraction();
+        }
         self.step_writing
             .as_ref()
             .map_or(0.0, |(_, job)| job.fraction())
     }
 
-    /// Bricht das Schreiben einer STEP-Datei ab; die Zieldatei bleibt unverändert.
+    /// Bricht das Schreiben einer STEP-Datei oder Zeichnung ab; die Zieldatei bleibt
+    /// unverändert.
     pub fn cancel_write(&mut self) {
         if let Some((_, job)) = &self.step_writing {
+            job.cancel();
+        }
+        if let Some((_, job)) = &self.drawing_writing {
             job.cancel();
         }
     }
@@ -723,7 +1168,9 @@ impl ExportDialog {
     /// Verwirft das Ergebnis des gewählten Formats; das nächste `tick` rechnet neu. Das Ergebnis
     /// des anderen Formats bleibt (Wechsel zurück rechnet nicht neu).
     pub fn recompute(&mut self) {
-        if self.format.is_step() {
+        if self.format.is_drawing() {
+            self.drawing_prepared = None;
+        } else if self.format.is_step() {
             self.step_prepared = None;
         } else {
             self.prepared = None;
@@ -731,16 +1178,21 @@ impl ExportDialog {
     }
 
     /// Öffnet die Dateiauswahl im Ordner `dir` mit dem Namen des Körpers (bei mehreren
-    /// „Körper“); Zeichen, die in Dateinamen nicht erlaubt sind, werden „_“.
+    /// „Körper“) bzw. der Zeichnung; Zeichen, die in Dateinamen nicht erlaubt sind, werden „_“.
     pub fn begin_save(&mut self, dir: PathBuf, state: &AppState) {
-        let names: Vec<&str> = self
-            .chosen(state)
-            .into_iter()
-            .filter_map(|i| state.bodies.get(i).map(|b| b.name.as_str()))
-            .collect();
-        let stem = match names.as_slice() {
-            [one] => (*one).to_string(),
-            _ => "Körper".to_string(),
+        let stem = if self.format.is_drawing() {
+            self.current_drawing(state)
+                .map_or_else(|| "Zeichnung".to_string(), |d| d.name.clone())
+        } else {
+            let names: Vec<&str> = self
+                .chosen(state)
+                .into_iter()
+                .filter_map(|i| state.bodies.get(i).map(|b| b.name.as_str()))
+                .collect();
+            match names.as_slice() {
+                [one] => (*one).to_string(),
+                _ => "Körper".to_string(),
+            }
         };
         let stem: String = stem
             .chars()
@@ -752,7 +1204,7 @@ impl ExportDialog {
                 }
             })
             .collect();
-        self.chooser_key = Some(self.key(state));
+        self.chooser_key = Some(self.chooser_key_now(state));
         self.chooser = Some(FileChooser::save(dir, stem, self.format.extension()));
     }
 
@@ -768,6 +1220,7 @@ impl ExportDialog {
         self.write_format = self.format;
         let path = normalize_target(self.format, path);
         match self.format {
+            ExportFormat::Drawing(format) => self.write_drawing(path, format, state),
             ExportFormat::Step => {
                 let Some((k, Ok(prepared))) = &self.step_prepared else {
                     self.set_written(Err(NOT_COMPUTED.to_string()));
@@ -837,7 +1290,6 @@ impl ExportDialog {
         let write_state = self.write_state();
         let write_progress = self.write_progress();
         let denied = self.close_denied;
-        let writing_step = self.is_writing_step();
         let shortened = if matches!(write_state, WriteState::Done(..)) && self.format.is_step() {
             self.shortened_names(state)
         } else {
@@ -846,6 +1298,36 @@ impl ExportDialog {
         let has_selection = Self::has_selection(state);
         let before = self.format;
         let (mut format, mut quality, mut scope) = (self.format, self.quality, self.scope);
+        // Karte „Zeichnung“: Auswahl und Angaben (Linien erst, wenn alles berechnet ist).
+        let drawing_list: Vec<(DrawingId, String)> = state
+            .document
+            .drawings()
+            .iter()
+            .map(|d| (d.id, shorten_for_display(&d.name)))
+            .collect();
+        let current = self.current_drawing(state);
+        let mut picked = current.map(|d| d.id);
+        let picked_before = picked;
+        let mut drawing_info: Vec<String> = Vec::new();
+        if let Some(d) = current {
+            let views = match &status {
+                ExportStatus::DrawingReady { views, .. } => *views,
+                _ => d.views.len(),
+            };
+            drawing_info.push(format!("Ansichten: {views}"));
+            drawing_info.push(format!("Blatt: {}", sheet_label(d.sheet)));
+            drawing_info.push(match &status {
+                ExportStatus::DrawingReady {
+                    visible, hidden, ..
+                } => format!(
+                    "Linien: {} sichtbar, {} verdeckt",
+                    group_digits(*visible as u64),
+                    group_digits(*hidden as u64)
+                ),
+                _ => "Linien: …".to_string(),
+            });
+        }
+        let writing_file = self.is_writing_file();
         let (mut open, mut close, mut cancel, mut recompute, mut begin, mut drop_chooser) =
             (true, false, false, false, false, false);
         let mut cancel_write = false;
@@ -886,13 +1368,43 @@ impl ExportDialog {
                     ui.radio_value(&mut scope, Scope::Visible, "Alle sichtbaren Körper");
                     ui.weak("Unterdrückte Schritte zählen nicht.");
                 };
-                let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
-                    &mut [&mut format_card, &mut quality_card, &mut scope_card];
-                cards = card_row(ui, "export", row);
+                let mut drawing_card = |ui: &mut egui::Ui| {
+                    ui.strong("Zeichnung");
+                    if drawing_list.is_empty() {
+                        ui.weak("Keine Zeichnung vorhanden.");
+                    } else {
+                        let shown = drawing_list
+                            .iter()
+                            .find(|(id, _)| Some(*id) == picked)
+                            .map_or("", |(_, n)| n.as_str());
+                        egui::ComboBox::from_id_salt("export-drawing")
+                            .selected_text(shown)
+                            .width(ui.available_width())
+                            .show_ui(ui, |ui| {
+                                for (id, name) in &drawing_list {
+                                    ui.selectable_value(&mut picked, Some(*id), name.as_str());
+                                }
+                            });
+                    }
+                    for line in &drawing_info {
+                        ui.label(line);
+                    }
+                };
+                cards = if before.is_drawing() {
+                    let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
+                        &mut [&mut format_card, &mut drawing_card];
+                    card_row(ui, "export-drawing", row)
+                } else {
+                    let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
+                        &mut [&mut format_card, &mut quality_card, &mut scope_card];
+                    card_row(ui, "export", row)
+                };
                 ui.add_space(8.0);
                 match &status {
                     ExportStatus::Computing(f) => {
-                        let text = if before.is_step() {
+                        let text = if before.is_drawing() {
+                            "Die Ansichten werden berechnet …"
+                        } else if before.is_step() {
                             "Die Körper werden geprüft …"
                         } else {
                             "Das Netz wird berechnet …"
@@ -953,6 +1465,15 @@ impl ExportDialog {
                             ui.colored_label(WARNING_COLOR, skipped_text(skipped_meshes));
                         }
                     }
+                    ExportStatus::DrawingReady { skipped_meshes, .. } => {
+                        ui.label("Alle Ansichten sind berechnet.");
+                        if !skipped_meshes.is_empty() {
+                            ui.colored_label(WARNING_COLOR, drawing_skipped_text(skipped_meshes));
+                        }
+                    }
+                    ExportStatus::Unavailable(m) => {
+                        ui.colored_label(WARNING_COLOR, m);
+                    }
                 }
                 match &write_state {
                     WriteState::Idle => {}
@@ -963,7 +1484,7 @@ impl ExportDialog {
                                     .desired_width(PROGRESS_WIDTH)
                                     .text("Die Datei wird geschrieben …"),
                             );
-                            if writing_step && ui.button("Abbrechen").clicked() {
+                            if writing_file && ui.button("Abbrechen").clicked() {
                                 cancel_write = true;
                             }
                         });
@@ -999,6 +1520,7 @@ impl ExportDialog {
                         let ready = match &status {
                             ExportStatus::Ready { .. } => true,
                             ExportStatus::StepReady { bodies, .. } => *bodies > 0,
+                            ExportStatus::DrawingReady { .. } => true,
                             _ => false,
                         } && write_state != WriteState::Writing;
                         ui.horizontal(|ui| {
@@ -1021,12 +1543,18 @@ impl ExportDialog {
         self.last_rect = response.map(|r| r.response.rect);
         self.last_cards = cards;
         (self.format, self.quality, self.scope) = (format, quality, scope);
-        let stale_chooser = self.chooser_key.is_some_and(|k| k != self.key(state));
+        let other_drawing = picked != picked_before;
+        if other_drawing {
+            self.drawing = picked;
+        }
+        let stale_chooser = self
+            .chooser_key
+            .is_some_and(|k| k != self.chooser_key_now(state));
         if self.format != before || drop_chooser || stale_chooser {
             self.chooser = None;
             self.chooser_key = None;
         }
-        if self.format != before || stale_chooser {
+        if self.format != before || stale_chooser || other_drawing {
             // Die Meldung „Fertig“ gehörte zum alten Format oder Stand.
             self.written = None;
         }

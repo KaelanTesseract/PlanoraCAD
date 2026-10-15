@@ -5,6 +5,7 @@
 pub mod basis;
 pub mod dxf;
 pub mod error;
+pub mod file;
 pub mod isect;
 pub mod layout;
 pub mod limits;
@@ -20,6 +21,7 @@ pub mod visibility;
 pub use basis::Basis;
 pub use dxf::{dxf_string, write_dxf};
 pub use error::DrawError;
+pub use file::{DrawingFormat, drawing_to_bytes, export_drawing_file};
 pub use layout::{GAP_MM, align_dir, view_extent};
 pub use model::{
     Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewSpec,
