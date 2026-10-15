@@ -7,7 +7,7 @@ use crate::annotate::{
     DimEntry, GroupBase, Mark, ResolvedDims, group_base, layout_centerline, layout_dimension_in,
     layout_lost_in,
 };
-use crate::dimension::{ChainMode, Measured};
+use crate::dimension::{ChainMode, DimId, Measured};
 use crate::layout::{align_dir, view_extent};
 use crate::model::ViewSpec;
 use crate::model::{Drawing, Placement, Sheet, ViewId, ViewKind};
@@ -147,21 +147,8 @@ pub fn build_sheet_with(
         } else {
             format!("{} {}", spec.kind.label(), n)
         };
-        if !is_drawable(spec, results) {
+        let Some((lines, xf)) = drawable_view(drawing, spec, results) else {
             continue;
-        }
-        let Some(lines) = results.get(&spec.id) else {
-            continue;
-        };
-        let Some(center) = view_center(drawing, spec.id, results) else {
-            continue;
-        };
-        let ((x0, y0), (x1, y1)) = lines.bbox;
-        let xf = SheetTransform {
-            scale: spec.scale.factor(),
-            tx: center.x,
-            ty: center.y,
-            bbox_center: DVec2::new(0.5 * (x0 + x1), 0.5 * (y0 + y1)),
         };
         let mut out = Vec::new();
         for p in &lines.pieces {
@@ -203,8 +190,72 @@ pub fn build_sheet_with(
     }
 }
 
-/// Markierungen der Maße einer Ansicht (Regeln siehe [`build_sheet_with`]).
-fn view_dimension_marks(list: &[DimEntry], dims: &ResolvedDims, xf: &SheetTransform) -> Vec<Mark> {
+/// Linien und Abbildung aufs Blatt einer Ansicht, wenn sie gezeichnet wird (Regeln wie in
+/// [`build_sheet`]).
+fn drawable_view<'a>(
+    drawing: &Drawing,
+    spec: &ViewSpec,
+    results: &BTreeMap<ViewId, &'a ViewLines>,
+) -> Option<(&'a ViewLines, SheetTransform)> {
+    if !is_drawable(spec, results) {
+        return None;
+    }
+    let lines = *results.get(&spec.id)?;
+    let center = view_center(drawing, spec.id, results)?;
+    let ((x0, y0), (x1, y1)) = lines.bbox;
+    let xf = SheetTransform {
+        scale: spec.scale.factor(),
+        tx: center.x,
+        ty: center.y,
+        bbox_center: DVec2::new(0.5 * (x0 + x1), 0.5 * (y0 + y1)),
+    };
+    Some((lines, xf))
+}
+
+/// Markierungen eines einzelnen Maßes auf dem Blatt (für Auswahl und Hinweise der Oberfläche).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DimMarks {
+    pub view: ViewId,
+    pub id: DimId,
+    pub marks: Vec<Mark>,
+}
+
+/// Die Markierungen jedes Maßes einzeln, genau wie [`build_sheet_with`] sie zeichnet (gleiche
+/// Lage, gleicher Gruppenbezug), aber ohne das Zusammenfassen gemeinsamer Hilfslinien einer
+/// Kette. Maße von Ansichten, die nicht gezeichnet werden, fehlen. Reihenfolge: Ansichten der
+/// Zeichnung, darin die Maße wie in `dims.by_view`.
+pub fn dimension_marks(
+    drawing: &Drawing,
+    results: &BTreeMap<ViewId, &ViewLines>,
+    dims: &ResolvedDims,
+) -> Vec<DimMarks> {
+    let mut out = Vec::new();
+    for spec in &drawing.views {
+        let Some(list) = dims.by_view.get(&spec.id) else {
+            continue;
+        };
+        let Some((_, xf)) = drawable_view(drawing, spec, results) else {
+            continue;
+        };
+        out.extend(
+            per_dimension_marks(list, dims, &xf)
+                .into_iter()
+                .map(|(id, marks)| DimMarks {
+                    view: spec.id,
+                    id,
+                    marks,
+                }),
+        );
+    }
+    out
+}
+
+/// Markierungen je Maß einer Ansicht (ohne Entdoppeln).
+fn per_dimension_marks(
+    list: &[DimEntry],
+    dims: &ResolvedDims,
+    xf: &SheetTransform,
+) -> Vec<(DimId, Vec<Mark>)> {
     let mut members: BTreeMap<u64, Vec<&Measured>> = BTreeMap::new();
     for (s, r) in list {
         if let (Some(c), Ok(m)) = (s.chain, r) {
@@ -215,20 +266,29 @@ fn view_dimension_marks(list: &[DimEntry], dims: &ResolvedDims, xf: &SheetTransf
         .iter()
         .filter_map(|(g, ms)| group_base(ms, xf).map(|b| (*g, b)))
         .collect();
+    list.iter()
+        .map(|(s, r)| {
+            let base = s.chain.and_then(|c| bases.get(&c.group));
+            let level = match s.chain {
+                Some(c) if c.mode == ChainMode::Baseline => c.order as usize,
+                _ => 0,
+            };
+            let marks = match r {
+                Ok(m) => layout_dimension_in(s, m, xf, level, base),
+                Err(e) => layout_lost_in(s, dims.last_known.get(&s.id), xf, &e.to_string(), base),
+            };
+            (s.id, marks)
+        })
+        .collect()
+}
+
+/// Markierungen der Maße einer Ansicht (Regeln siehe [`build_sheet_with`]).
+fn view_dimension_marks(list: &[DimEntry], dims: &ResolvedDims, xf: &SheetTransform) -> Vec<Mark> {
     let mut marks = Vec::new();
     // Bereits gezeichnete Linien je Gruppe: Hilfslinien an gemeinsamen Punkten einer Kette
     // erscheinen nur einmal.
     let mut drawn: BTreeMap<u64, Vec<Mark>> = BTreeMap::new();
-    for (s, r) in list {
-        let base = s.chain.and_then(|c| bases.get(&c.group));
-        let level = match s.chain {
-            Some(c) if c.mode == ChainMode::Baseline => c.order as usize,
-            _ => 0,
-        };
-        let new = match r {
-            Ok(m) => layout_dimension_in(s, m, xf, level, base),
-            Err(e) => layout_lost_in(s, dims.last_known.get(&s.id), xf, &e.to_string(), base),
-        };
+    for ((s, _), (_, new)) in list.iter().zip(per_dimension_marks(list, dims, xf)) {
         match s.chain {
             Some(c) => {
                 let seen = drawn.entry(c.group).or_default();

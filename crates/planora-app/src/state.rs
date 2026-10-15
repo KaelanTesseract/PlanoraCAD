@@ -146,6 +146,8 @@ pub struct AppState {
     pub display_triangles: usize,
     /// Zeichnungsbereich: geöffnete Zeichnung, Auswahl, Blattansicht und Hintergrundberechnung.
     pub drawing_ui: crate::drawing_state::DrawingUi,
+    /// Aufgelöste Maße der geöffneten Zeichnung mit Zwischenspeicher und letzten Lagen.
+    pub dimension_ui: crate::dimension_state::DimensionUi,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -254,6 +256,7 @@ impl AppState {
             mesh_reports: BTreeMap::new(),
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
             drawing_ui: crate::drawing_state::DrawingUi::default(),
+            dimension_ui: crate::dimension_state::DimensionUi::default(),
         };
         state.rebuild_scene();
         state

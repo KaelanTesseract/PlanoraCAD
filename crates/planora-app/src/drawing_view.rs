@@ -6,6 +6,7 @@
 //! die Blattmitte in der Mitte des Bereichs plus `pan`; `zoom = 1` heißt „Blatt eingepasst“.
 
 use crate::browser::ERROR_COLOR;
+use crate::dimension_state::resolve_in;
 use crate::drawing_state::{
     ViewResult, WorkArea, default_distance, estimate_view_size, suggest_scale,
 };
@@ -16,8 +17,9 @@ use egui::{
     Color32, FontId, PointerButton, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, UiBuilder, pos2,
     vec2,
 };
+use planora_drawing::annotate::ResolvedDims;
 use planora_drawing::out2d::Out2d;
-use planora_drawing::sheet::{SheetModel, build_sheet};
+use planora_drawing::sheet::{SheetModel, build_sheet_with};
 use planora_drawing::{
     Drawing, DrawingId, Placement, Scale, ViewId, ViewKind, ViewLines, Visibility, align_dir,
     view_extent,
@@ -449,28 +451,38 @@ struct SheetCache {
     drawing: Drawing,
     model: u64,
     ptrs: Vec<usize>,
+    /// Aufgelöste Maße (festgehalten, damit ihre Adresse eindeutig bleibt).
+    dims: Arc<ResolvedDims>,
     sheet: Arc<SheetModel>,
 }
 
-/// Blattmodell der Zeichnung; aus dem Zwischenspeicher, solange sich Zeichnung und Ergebnisse
-/// nicht geändert haben.
+/// Zuletzt im Zeichnungsbereich gezeichnetes Blattmodell (mit Mittellinien und Maßen).
+pub fn last_sheet(ctx: &egui::Context) -> Option<Arc<SheetModel>> {
+    ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()))
+        .map(|c| c.sheet)
+}
+
+/// Blattmodell der Zeichnung mit Mittellinien und den Maßen `dims`; aus dem Zwischenspeicher,
+/// solange sich Zeichnung, Ergebnisse und Maße nicht geändert haben.
 fn sheet_model(
     ctx: &egui::Context,
     state: &AppState,
     drawing: &Drawing,
     model: u64,
+    dims: &Arc<ResolvedDims>,
 ) -> Arc<SheetModel> {
     let owned = state.drawing_ui.results_for(drawing, model);
     let ptrs: Vec<usize> = owned.values().map(|a| Arc::as_ptr(a) as usize).collect();
     if let Some(c) = ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()))
         && c.model == model
         && c.ptrs == ptrs
+        && Arc::ptr_eq(&c.dims, dims)
         && c.drawing == *drawing
     {
         return c.sheet;
     }
     let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
-    let sheet = Arc::new(build_sheet(drawing, &refs));
+    let sheet = Arc::new(build_sheet_with(drawing, &refs, dims));
     ctx.data_mut(|d| {
         d.insert_temp(
             sheet_cache_id(),
@@ -478,6 +490,7 @@ fn sheet_model(
                 drawing: drawing.clone(),
                 model,
                 ptrs,
+                dims: Arc::clone(dims),
                 sheet: Arc::clone(&sheet),
             },
         )
@@ -799,7 +812,8 @@ fn canvas_ui(
 
     // --- Eingaben (mit dem Stand vor diesem Bild) ---
     let k0 = f64::from(fit_px_per_mm(canvas, sheet_mm) * state.drawing_ui.zoom);
-    let sheet = sheet_model(&ctx, state, &drawing, model);
+    let dims = resolve_in(state, id);
+    let sheet = sheet_model(&ctx, state, &drawing, model, &dims);
     let placed = place_views(state, &drawing, &sheet, model);
     let (zoom0, pan0) = (state.drawing_ui.zoom, state.drawing_ui.pan);
     let to_screen0 = |p: DVec2| sheet_to_screen(canvas, sheet_mm, zoom0, pan0, p);
@@ -895,7 +909,8 @@ fn canvas_ui(
     let drawing = state.document.drawing(id)?.clone();
     let (zoom, pan) = (state.drawing_ui.zoom, state.drawing_ui.pan);
     let k = f64::from(fit_px_per_mm(canvas, sheet_mm) * zoom);
-    let sheet = sheet_model(&ctx, state, &drawing, model);
+    let dims = resolve_in(state, id);
+    let sheet = sheet_model(&ctx, state, &drawing, model, &dims);
     let placed = place_views(state, &drawing, &sheet, model);
     let polys = polylines_cached(&ctx, &sheet, k);
     let to_screen = |p: DVec2| sheet_to_screen(canvas, sheet_mm, zoom, pan, p);

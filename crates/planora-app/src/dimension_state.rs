@@ -1,0 +1,634 @@
+//! Maße der App (Teilprojekt 12, Aufgabe 10): Auflösen der Maße einer Zeichnung gegen die
+//! exakten Körper mit Zwischenspeicher, letzte bekannte Lage verlorener Maße, Hinweise
+//! (verloren, außerhalb des Blatts) und der Vorschlag der Grundmaße.
+//!
+//! Der Zwischenspeicher hängt am Stand `(Zeichnung, Document::model_edit_count(),
+//! Document::edit_count())`. Ändert sich nur die Zeichnung (Lage eines Maßes, Text, Ansicht
+//! verschoben) und bleiben Modell, Ansichtsarten und alle Bezüge gleich, werden die Messungen
+//! übernommen statt neu gerechnet. Die Linien der Ansichten rechnet hier nichts: die kommen aus
+//! [`crate::drawing_state::DrawingUi`].
+
+use crate::drawing_state::ViewResult;
+use crate::state::{AppState, Body, BodyKind};
+use planora_drawing::annotate::{
+    ARROW_HALF_W, ARROW_LEN, DEFAULT_OFFSET, DIM_STEP, Mark, ResolvedDims, TextAnchor, text_width,
+};
+use planora_drawing::dimension::{
+    ChainSpec, DimId, DimKind, DimSpec, Geo3, GeoRef, Tolerance as DimTolerance,
+};
+use planora_drawing::limits::MAX_DIMENSIONS;
+use planora_drawing::sheet::dimension_marks;
+use planora_drawing::stroke::extent_of;
+use planora_drawing::{
+    Anchor, Basis, Candidate, CandidateOrigin, DrawBody, DrawError, Drawing, DrawingId, ViewId,
+    ViewKind, ViewLines, ViewSpec, dimension_key, measure, suggest,
+};
+use planora_feature::{geo_ref_for_edge, geo_ref_for_face, resolve_geo};
+use planora_kernel::{Edge, Face, Id, Solid};
+use planora_math::{DVec2, Tolerance};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
+
+/// Meldung, solange die Ansichten für den Vorschlag noch nicht fertig sind.
+pub const VIEWS_PENDING: &str = "Die Ansichten werden noch berechnet.";
+/// Meldung, wenn es die Zeichnung nicht (mehr) gibt.
+pub const NO_DRAWING: &str = "Die Zeichnung gibt es nicht.";
+/// Meldung, wenn es die gewählte Ansicht nicht (mehr) gibt.
+pub const NO_VIEW: &str = "Die Ansicht gibt es nicht.";
+/// Meldung für die isometrische Ansicht.
+pub const NO_ISOMETRIC: &str = "In der isometrischen Ansicht gibt es keine Maße.";
+/// Meldung, wenn die Zeichnung keine Ansicht hat, in der sich Maße vorschlagen lassen.
+pub const NO_NORMAL_VIEW: &str =
+    "Die Zeichnung hat noch keine Ansicht, in der sich Maße vorschlagen lassen.";
+/// Meldung, wenn ein vorgeschlagenes Maß nicht sicher am Modell festzumachen ist.
+pub const NOT_BOUND: &str =
+    "Ein vorgeschlagenes Maß ließ sich nicht sicher am Modell festmachen und wurde ausgelassen.";
+/// Toleranz (Blatt-mm), um die eine Markierung über den Blattrand ragen darf, ohne als
+/// „außerhalb“ zu gelten (Rundung).
+const SHEET_EPS: f64 = 1e-9;
+/// Stützpunkte eines Bogens für die Prüfung „außerhalb des Blatts“.
+const ARC_SAMPLES: usize = 32;
+
+/// Meldung, wenn die Zeichnung schon die Höchstzahl an Maßen hat.
+pub fn full_text() -> String {
+    format!("Die Zeichnung hat schon die Höchstzahl von {MAX_DIMENSIONS} Maßen.")
+}
+
+/// Hinweise zu den Maßen einer Zeichnung.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DimNotes {
+    /// Maße, deren Bezug verloren ist (rot gezeichnet).
+    pub lost: usize,
+    /// Maße, die ganz oder teilweise außerhalb des Blatts liegen (trotzdem gezeichnet).
+    pub outside: usize,
+    /// Die Hinweise als Sätze (leer, wenn alles in Ordnung ist).
+    pub texts: Vec<String>,
+}
+
+/// Ergebnis von [`suggest_for`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SuggestOutcome {
+    /// So viele Maße wurden hinzugefügt (alle Vorschläge).
+    Added(usize),
+    /// Ein Teil wurde hinzugefügt, der Rest ausgelassen; je ausgelassenem Grund ein Satz.
+    Partly { added: usize, skipped: Vec<String> },
+    /// Es gibt nichts Neues vorzuschlagen.
+    NothingNew,
+    /// Kein Vorschlag möglich; der Grund als Satz.
+    Unavailable(String),
+}
+
+impl SuggestOutcome {
+    /// Meldung für die Oberfläche.
+    pub fn message(&self) -> String {
+        match self {
+            SuggestOutcome::Added(n) => added_text(*n),
+            SuggestOutcome::Partly { added, skipped } => {
+                let mut s = added_text(*added);
+                for t in skipped {
+                    s.push(' ');
+                    s.push_str(t);
+                }
+                s
+            }
+            SuggestOutcome::NothingNew => "Es gibt keine neuen Maße vorzuschlagen.".into(),
+            SuggestOutcome::Unavailable(t) => t.clone(),
+        }
+    }
+}
+
+fn added_text(n: usize) -> String {
+    match n {
+        0 => "Es wurde kein Maß hinzugefügt.".into(),
+        1 => "1 Maß wurde hinzugefügt.".into(),
+        n => format!("{n} Maße wurden hinzugefügt."),
+    }
+}
+
+/// Zwischenspeicher eines Auflösungsstands.
+struct Cached {
+    drawing: DrawingId,
+    model: u64,
+    edit: u64,
+    /// Ansichten und ihre Arten zu diesem Stand (eine andere Art misst anders).
+    views: Vec<(ViewId, ViewKind)>,
+    dims: Arc<ResolvedDims>,
+}
+
+/// Aufgelöste Maße mit Zwischenspeicher und den letzten bekannten Lagen.
+#[derive(Default)]
+pub struct DimensionUi {
+    cache: Option<Cached>,
+    /// Letzte erfolgreiche Lage je Maß und Zeichnung; verlorene Maße erscheinen dort rot.
+    last_known: BTreeMap<DrawingId, BTreeMap<DimId, Anchor>>,
+    /// Zahl der echten Auflösungen gegen die Körper (für Tests).
+    resolutions: u64,
+}
+
+impl std::fmt::Debug for DimensionUi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DimensionUi")
+            .field(
+                "cached",
+                &self.cache.as_ref().map(|c| (c.drawing, c.model, c.edit)),
+            )
+            .field("resolutions", &self.resolutions)
+            .finish()
+    }
+}
+
+/// Exakte Körper in der Reihenfolge, in der auch die Ansichten berechnet werden.
+fn exact_bodies(bodies: &[Body]) -> Vec<&Body> {
+    bodies.iter().filter(|b| b.kind != BodyKind::Mesh).collect()
+}
+
+/// Übernimmt die Messungen von `old` für die Maße von `d`, wenn kein Maß neu ist und sich bei
+/// keinem Ansicht, Art oder Bezüge geändert haben; sonst `None`.
+fn reuse(old: &ResolvedDims, d: &Drawing) -> Option<ResolvedDims> {
+    let by_id: HashMap<DimId, &(DimSpec, _)> = old
+        .by_view
+        .values()
+        .flatten()
+        .map(|e| (e.0.id, e))
+        .collect();
+    let mut out = ResolvedDims::default();
+    for m in &d.dimensions {
+        let (s, r) = by_id.get(&m.id)?;
+        if s.view != m.view || s.kind != m.kind || s.refs != m.refs {
+            return None;
+        }
+        out.by_view
+            .entry(m.view)
+            .or_default()
+            .push((m.clone(), r.clone()));
+    }
+    Some(out)
+}
+
+impl DimensionUi {
+    /// Zahl der Auflösungen gegen die Körper bisher (für Tests).
+    pub fn resolutions(&self) -> u64 {
+        self.resolutions
+    }
+
+    /// Löst die Maße der Zeichnung auf (nur wenn Modell- oder Dokumentstand sich geändert
+    /// haben); bei unverändertem Stand dasselbe `Arc`. Gerechnet wird mit den exakten Körpern
+    /// von `state.bodies` (Netz-Körper nicht). Die letzte erfolgreiche Lage jedes Maßes wird
+    /// gemerkt und steht in `last_known` (für verlorene Maße); gelöschte Maße fallen dort weg.
+    /// Gibt es die Zeichnung nicht, ist das Ergebnis leer.
+    pub fn resolve(&mut self, state: &AppState, drawing: DrawingId) -> Arc<ResolvedDims> {
+        let model = state.document.model_edit_count();
+        let edit = state.document.edit_count();
+        if let Some(c) = self.cached(drawing, model, edit) {
+            return c;
+        }
+        let Some(d) = state.document.drawing(drawing) else {
+            self.last_known.remove(&drawing);
+            return self.store(drawing, model, edit, Vec::new(), ResolvedDims::default());
+        };
+        let views: Vec<(ViewId, ViewKind)> = d.views.iter().map(|v| (v.id, v.kind)).collect();
+        let reused = self
+            .cache
+            .as_ref()
+            .filter(|c| c.drawing == drawing && c.model == model && c.views == views)
+            .and_then(|c| reuse(&c.dims, d));
+        let mut dims = match reused {
+            Some(r) => r,
+            None => {
+                self.resolutions += 1;
+                let solids: Vec<&Solid> = exact_bodies(&state.bodies)
+                    .into_iter()
+                    .map(|b| &b.solid)
+                    .collect();
+                state
+                    .document
+                    .resolve_dimensions(drawing, &solids)
+                    .unwrap_or_default()
+            }
+        };
+        let ids: HashSet<DimId> = d.dimensions.iter().map(|m| m.id).collect();
+        let known = self.last_known.entry(drawing).or_default();
+        known.retain(|id, _| ids.contains(id));
+        for (s, r) in dims.by_view.values().flatten() {
+            if let Ok(m) = r {
+                known.insert(s.id, m.anchor.clone());
+            }
+        }
+        dims.last_known = known.clone();
+        self.store(drawing, model, edit, views, dims)
+    }
+
+    fn store(
+        &mut self,
+        drawing: DrawingId,
+        model: u64,
+        edit: u64,
+        views: Vec<(ViewId, ViewKind)>,
+        dims: ResolvedDims,
+    ) -> Arc<ResolvedDims> {
+        let dims = Arc::new(dims);
+        self.cache = Some(Cached {
+            drawing,
+            model,
+            edit,
+            views,
+            dims: Arc::clone(&dims),
+        });
+        dims
+    }
+
+    /// Die zuletzt aufgelösten Maße, aber nur für genau diesen Stand (`model` =
+    /// `Document::model_edit_count`, `doc_edit` = `Document::edit_count`); sonst `None`. So
+    /// erscheinen alte Werte nie als aktuell.
+    pub fn cached(
+        &self,
+        drawing: DrawingId,
+        model: u64,
+        doc_edit: u64,
+    ) -> Option<Arc<ResolvedDims>> {
+        self.cache
+            .as_ref()
+            .filter(|c| c.drawing == drawing && c.model == model && c.edit == doc_edit)
+            .map(|c| Arc::clone(&c.dims))
+    }
+
+    /// Hinweise zu den Maßen `resolved` der Zeichnung: Zahl der verlorenen Maße und der Maße,
+    /// die ganz oder teilweise außerhalb des Blatts liegen (Lage wie im Blattmodell mit den
+    /// fertigen Ansichten aus `state.drawing_ui`), dazu die Sätze für die Hinweiszeile.
+    pub fn notes(&self, state: &AppState, drawing: DrawingId, resolved: &ResolvedDims) -> DimNotes {
+        let lost = resolved
+            .by_view
+            .values()
+            .flatten()
+            .filter(|(_, r)| r.is_err())
+            .count();
+        let outside = state.document.drawing(drawing).map_or(0, |d| {
+            let owned = state
+                .drawing_ui
+                .results_for(d, state.document.model_edit_count());
+            let results: BTreeMap<ViewId, &ViewLines> =
+                owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
+            let size = d.sheet.size_mm();
+            dimension_marks(d, &results, resolved)
+                .iter()
+                .filter(|dm| dm.marks.iter().any(|m| mark_outside(m, size)))
+                .count()
+        });
+        let mut texts = Vec::new();
+        match lost {
+            0 => {}
+            1 => texts.push("1 Maß hat seinen Bezug verloren.".into()),
+            n => texts.push(format!("{n} Maße haben ihren Bezug verloren.")),
+        }
+        match outside {
+            0 => {}
+            1 => texts.push("1 Maß liegt außerhalb des Blatts.".into()),
+            n => texts.push(format!("{n} Maße liegen außerhalb des Blatts.")),
+        }
+        DimNotes {
+            lost,
+            outside,
+            texts,
+        }
+    }
+}
+
+/// Löst die Maße der Zeichnung mit dem Zwischenspeicher `state.dimension_ui` auf (siehe
+/// [`DimensionUi::resolve`]).
+pub fn resolve_in(state: &mut AppState, drawing: DrawingId) -> Arc<ResolvedDims> {
+    let mut ui = std::mem::take(&mut state.dimension_ui);
+    let dims = ui.resolve(state, drawing);
+    state.dimension_ui = ui;
+    dims
+}
+
+/// Liegt ein Punkt der Markierung außerhalb des Blatts `(0, 0)…size` (oder ist er nicht
+/// endlich)? Texte zählen mit ihrer geschätzten Breite und Höhe.
+fn mark_outside(m: &Mark, size: (f64, f64)) -> bool {
+    let out = |p: DVec2| {
+        !p.is_finite()
+            || p.x < -SHEET_EPS
+            || p.y < -SHEET_EPS
+            || p.x > size.0 + SHEET_EPS
+            || p.y > size.1 + SHEET_EPS
+    };
+    match m {
+        Mark::Line { a, b, .. } => out(*a) || out(*b),
+        Mark::Arrow { tip, dir, .. } => {
+            let base = *tip + *dir * ARROW_LEN;
+            let side = dir.perp() * ARROW_HALF_W;
+            [*tip, base + side, base - side].into_iter().any(out)
+        }
+        Mark::Arc {
+            center,
+            r,
+            start,
+            end,
+            ..
+        } => (0..=ARC_SAMPLES).any(|i| {
+            let t = start + (end - start) * i as f64 / ARC_SAMPLES as f64;
+            out(*center + DVec2::new(t.cos(), t.sin()) * *r)
+        }),
+        Mark::Text {
+            pos,
+            height,
+            angle,
+            anchor,
+            text,
+            ..
+        } => {
+            let w = text_width(text, *height);
+            let s = match anchor {
+                TextAnchor::Start => 0.0,
+                TextAnchor::Middle => -0.5 * w,
+                TextAnchor::End => -w,
+            };
+            let u = DVec2::new(angle.cos(), angle.sin());
+            let v = u.perp() * *height;
+            let p0 = *pos + u * s;
+            let p1 = *pos + u * (s + w);
+            [p0, p1, p0 + v, p1 + v].into_iter().any(out)
+        }
+    }
+}
+
+/// Bezug aus der Herkunft eines Vorschlags (Körperindex in den exakten Körpern).
+fn geo_ref(solids: &[&Solid], o: CandidateOrigin, tol: &Tolerance) -> Option<GeoRef> {
+    let edge = |body: usize, edge: usize| {
+        let s = solids.get(body)?;
+        let id = Id::<Edge>::from_index(edge);
+        s.edges.get(id)?;
+        geo_ref_for_edge(s, id, tol).ok()
+    };
+    Some(match o {
+        CandidateOrigin::Edge { body, edge: e } => GeoRef::Edge(edge(body, e)?),
+        CandidateOrigin::EdgeEnd { body, edge: e, end } => GeoRef::EdgeEnd {
+            edge: edge(body, e)?,
+            end,
+        },
+        CandidateOrigin::Center { body, edge: e } => GeoRef::Center(edge(body, e)?),
+        CandidateOrigin::Face { body, face } => {
+            let s = solids.get(body)?;
+            let id = Id::<Face>::from_index(face);
+            s.faces.get(id)?;
+            GeoRef::Face(geo_ref_for_face(s, id, tol).ok()?)
+        }
+    })
+}
+
+/// Richtung eines linearen Maßes auf dem Blatt (für das Stapeln nach P3): `Some(true)`
+/// waagerecht, `Some(false)` senkrecht, `None` ohne Maßlinie (Ø/R mit Führungslinie, Winkel).
+fn direction(anchor: &Anchor) -> Option<bool> {
+    match anchor {
+        Anchor::Linear { dir, .. } => Some(dir.x.abs() >= dir.y.abs()),
+        _ => None,
+    }
+}
+
+/// Richtung eines vorhandenen Maßes ohne Messung (verlorener Bezug) nach seiner Art.
+fn direction_of_kind(kind: DimKind) -> Option<bool> {
+    match kind {
+        DimKind::Horizontal => Some(true),
+        DimKind::Vertical => Some(false),
+        _ => None,
+    }
+}
+
+/// Schlägt Grundmaße für die Zeichnung vor (nur die Ansicht `only_view`, wenn angegeben) und
+/// fügt sie dem Dokument hinzu.
+///
+/// Grundlage sind die **berechneten** Ansichten (`DrawingUi::result`); rechnet eine noch, gibt
+/// es nichts ([`VIEWS_PENDING`]). Vorhandene Maße werden über ihren Schlüssel
+/// (`dimension_key`) erkannt und nicht noch einmal vorgeschlagen; Maße mit verlorenem Bezug
+/// haben keinen Schlüssel und können deshalb erneut vorgeschlagen werden. Jeder Vorschlag wird
+/// in Bezüge des Modells umgewandelt und nur gesetzt, wenn diese Bezüge wieder genau zu ihm
+/// führen. Abstand der Maßlinie nach P3: `DEFAULT_OFFSET + n·DIM_STEP`, `n` = Zahl der Maße
+/// derselben Ansicht und Richtung (Bezugsmaße einer Gruppe teilen den Abstand ihrer ersten
+/// Stufe und zählen je Stufe). Bezugsmaß-Gruppen bekommen in der Zeichnung neue Nummern. Jedes
+/// Maß wird einzeln über `Document::add_dimension` geprüft; scheitert eines, wird es
+/// ausgelassen und sein Grund gemeldet ([`SuggestOutcome::Partly`]).
+pub fn suggest_for(
+    state: &mut AppState,
+    drawing: DrawingId,
+    only_view: Option<ViewId>,
+) -> SuggestOutcome {
+    use SuggestOutcome::Unavailable;
+    let Some(d) = state.document.drawing(drawing).cloned() else {
+        return Unavailable(NO_DRAWING.into());
+    };
+    if state.bodies.is_empty() {
+        return Unavailable(DrawError::NoBodies.to_string());
+    }
+    let exact = exact_bodies(&state.bodies);
+    if exact.is_empty() {
+        return Unavailable(DrawError::MeshBodiesOnly.to_string());
+    }
+    if let Some(o) = only_view {
+        match d.view(o) {
+            None => return Unavailable(NO_VIEW.into()),
+            Some(v) if !v.kind.is_normal() => return Unavailable(NO_ISOMETRIC.into()),
+            Some(_) => {}
+        }
+    }
+    let wanted: Vec<&ViewSpec> = d
+        .views
+        .iter()
+        .filter(|v| v.kind.is_normal() && only_view.is_none_or(|o| v.id == o))
+        .collect();
+    if wanted.is_empty() {
+        return Unavailable(NO_NORMAL_VIEW.into());
+    }
+    if d.dimensions.len() >= MAX_DIMENSIONS {
+        return Unavailable(full_text());
+    }
+    let model = state.document.model_edit_count();
+    let mut ready: Vec<(ViewSpec, Arc<ViewLines>)> = Vec::new();
+    let mut failed: Option<String> = None;
+    for v in &wanted {
+        match state.drawing_ui.result(v.kind, model) {
+            ViewResult::Pending { .. } => return Unavailable(VIEWS_PENDING.into()),
+            ViewResult::Failed(m) => {
+                failed.get_or_insert(m);
+            }
+            ViewResult::Ready(lines) => ready.push(((*v).clone(), lines)),
+        }
+    }
+    if ready.is_empty() {
+        return Unavailable(failed.unwrap_or_else(|| VIEWS_PENDING.into()));
+    }
+
+    let solids: Vec<&Solid> = exact.iter().map(|b| &b.solid).collect();
+    let draw: Vec<DrawBody> = solids
+        .iter()
+        .map(|s| DrawBody {
+            name: String::new(),
+            solid: s,
+        })
+        .collect();
+    let extent = extent_of(&draw);
+    let tol = Tolerance::default();
+    let geos_of = |refs: &[GeoRef]| -> Option<Vec<Geo3>> {
+        refs.iter()
+            .map(|r| resolve_geo(&solids, r, &tol).ok())
+            .collect()
+    };
+
+    // Vorhandene Maße: Schlüssel (gegen Doppelungen) und Zahl je Ansicht und Richtung (P3).
+    let mut existing: Vec<(ViewId, DimKind, String)> = Vec::new();
+    let mut stack: HashMap<(ViewId, bool), usize> = HashMap::new();
+    for m in &d.dimensions {
+        let Some(v) = d.view(m.view) else {
+            continue;
+        };
+        let basis = Basis::of(v.kind);
+        let geos = geos_of(&m.refs);
+        let measured = geos
+            .as_ref()
+            .and_then(|g| measure(m.kind, g, &basis, v.kind, extent).ok());
+        let dir = match &measured {
+            Some(x) => direction(&x.anchor),
+            None => direction_of_kind(m.kind),
+        };
+        if let Some(h) = dir {
+            *stack.entry((m.view, h)).or_insert(0) += 1;
+        }
+        if let Some(key) = geos.and_then(|g| dimension_key(m.kind, &g, &basis, v.kind, extent)) {
+            existing.push((m.view, m.kind, key));
+        }
+    }
+
+    let pairs: Vec<(ViewSpec, &ViewLines)> =
+        ready.iter().map(|(s, l)| (s.clone(), l.as_ref())).collect();
+    let candidates = suggest(&draw, &pairs, &existing);
+    if candidates.is_empty() {
+        return SuggestOutcome::NothingNew;
+    }
+
+    let mut next_group = d
+        .dimensions
+        .iter()
+        .filter_map(|m| m.chain.map(|c| c.group))
+        .max()
+        .unwrap_or(0)
+        .checked_add(1);
+    // Gruppe des Vorschlags → (Nummer in der Zeichnung, Abstand, nächste Stufe).
+    let mut groups: HashMap<u64, (u64, f64, u32)> = HashMap::new();
+    let mut count = d.dimensions.len();
+    let mut added = 0usize;
+    let mut skipped: Vec<String> = Vec::new();
+    let mut unbound = false;
+    for (i, c) in candidates.iter().enumerate() {
+        if count >= MAX_DIMENSIONS {
+            let rest = candidates.len() - i;
+            skipped.push(if rest == 1 {
+                format!("{} 1 weiteres Maß wurde nicht gesetzt.", full_text())
+            } else {
+                format!("{} {rest} weitere Maße wurden nicht gesetzt.", full_text())
+            });
+            break;
+        }
+        // Stufen und Gruppen zählen erst weiter, wenn das Maß wirklich gesetzt ist.
+        let (mut st, mut gr, mut ng) = (stack.clone(), groups.clone(), next_group);
+        let Some(spec) = candidate_spec(
+            c, &d, &solids, &tol, extent, &geos_of, &mut st, &mut gr, &mut ng,
+        ) else {
+            unbound = true;
+            continue;
+        };
+        match state.document.add_dimension(drawing, spec) {
+            Ok(_) => {
+                added += 1;
+                count += 1;
+                (stack, groups, next_group) = (st, gr, ng);
+            }
+            Err(e) => skipped.push(format!("Ein Maß wurde ausgelassen: {e}")),
+        }
+    }
+    if unbound {
+        skipped.insert(0, NOT_BOUND.into());
+    }
+    if skipped.is_empty() {
+        SuggestOutcome::Added(added)
+    } else {
+        SuggestOutcome::Partly { added, skipped }
+    }
+}
+
+/// Maß aus einem Vorschlag: Bezüge aus der Herkunft (nur, wenn sie wieder zum selben Schlüssel
+/// führen), Abstand nach P3, Gruppe mit Nummer der Zeichnung. Zählt Stufen und Gruppen weiter.
+#[allow(clippy::too_many_arguments)]
+fn candidate_spec(
+    c: &Candidate,
+    d: &Drawing,
+    solids: &[&Solid],
+    tol: &Tolerance,
+    extent: f64,
+    geos_of: &dyn Fn(&[GeoRef]) -> Option<Vec<Geo3>>,
+    stack: &mut HashMap<(ViewId, bool), usize>,
+    groups: &mut HashMap<u64, (u64, f64, u32)>,
+    next_group: &mut Option<u64>,
+) -> Option<DimSpec> {
+    let view = d.view(c.view)?;
+    let basis = Basis::of(view.kind);
+    let refs: Vec<GeoRef> = c
+        .origins
+        .iter()
+        .map(|o| geo_ref(solids, *o, tol))
+        .collect::<Option<_>>()?;
+    let geos = geos_of(&refs)?;
+    if dimension_key(c.kind, &geos, &basis, view.kind, extent).as_deref() != Some(c.key.as_str()) {
+        return None;
+    }
+    let measured = measure(c.kind, &geos, &basis, view.kind, extent).ok()?;
+    let dir = direction(&measured.anchor);
+    let level = |stack: &HashMap<(ViewId, bool), usize>, h: bool| {
+        DEFAULT_OFFSET + DIM_STEP * stack.get(&(c.view, h)).copied().unwrap_or(0) as f64
+    };
+    let (offset, chain) = match (c.chain, dir) {
+        (Some(ch), Some(h)) => {
+            let entry = match groups.get(&ch.group) {
+                Some(e) => Some(*e),
+                None => next_group.map(|g| {
+                    *next_group = g.checked_add(1);
+                    let e = (g, level(stack, h), 0);
+                    groups.insert(ch.group, e);
+                    e
+                }),
+            };
+            match entry {
+                Some((g, off, order)) => {
+                    groups.insert(ch.group, (g, off, order + 1));
+                    (
+                        off,
+                        Some(ChainSpec {
+                            group: g,
+                            mode: ch.mode,
+                            order,
+                        }),
+                    )
+                }
+                // Keine freie Gruppennummer mehr: als einzelnes Maß.
+                None => (level(stack, h), None),
+            }
+        }
+        (_, Some(h)) => (level(stack, h), None),
+        (_, None) => (DEFAULT_OFFSET, None),
+    };
+    if let Some(h) = dir {
+        *stack.entry((c.view, h)).or_insert(0) += 1;
+    }
+    Some(DimSpec {
+        id: DimId(0),
+        view: c.view,
+        kind: c.kind,
+        refs,
+        offset,
+        angle: 45.0,
+        text_shift: (0.0, 0.0),
+        tolerance: DimTolerance::None,
+        decimals: 1,
+        text_override: None,
+        chain,
+        suggested: true,
+    })
+}
