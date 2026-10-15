@@ -122,37 +122,35 @@ pub fn compute_view(
             let extra = scene.pierce_params(s, origin_body(s), &pairs, progress)?;
             if !extra.is_empty() {
                 ts.extend(extra);
-                *ts = isect::interior_unique(s, std::mem::take(ts));
+                *ts = isect::tidy_splits(s, &basis, extent, std::mem::take(ts));
             }
         }
     }
 
-    // Teilstücke zwischen aufeinanderfolgenden Teilparametern. Teilparameter, die ein in der
-    // Ansicht zu einem Punkt entartetes Stück abgrenzen (etwa doppelt gefundene Anschlüsse an
-    // der Umkehrstelle eines von der Seite gesehenen Kreises), entfallen wie entartete Striche.
+    // Teilstücke zwischen aufeinanderfolgenden Teilparametern. Doppelte Teilstellen an den
+    // Umkehrstellen von der Seite gesehener Kreise legt `isect::tidy_splits` zusammen; ein zum
+    // Punkt entartetes Teilstück wäre ein Fehler dort (verbliebene winzige Stücke entfernt
+    // ohnehin das Zusammenfassen).
     let mut ranges: Vec<(usize, f64, f64)> = Vec::new();
     for (i, (s, ts)) in strokes.iter().zip(&splits).enumerate() {
         progress.check()?;
         let (lo, hi) = (s.t0.min(s.t1), s.t0.max(s.t1));
-        let point_like = |a: f64, b: f64| {
-            Stroke {
-                t0: a,
-                t1: b,
-                ..s.clone()
-            }
-            .is_degenerate_2d(&basis, degenerate)
-        };
         let mut params = vec![lo];
-        for &t in ts {
-            if !point_like(params[params.len() - 1], t) {
-                params.push(t);
-            }
-        }
-        if params.len() > 1 && point_like(params[params.len() - 1], hi) {
-            params.pop();
-        }
+        params.extend(ts.iter().copied());
         params.push(hi);
         for w in params.windows(2) {
+            debug_assert!(
+                !Stroke {
+                    t0: w[0],
+                    t1: w[1],
+                    ..s.clone()
+                }
+                .is_degenerate_2d(&basis, degenerate),
+                "Teilstück [{}, {}] von {:?} ist zum Punkt entartet",
+                w[0],
+                w[1],
+                s.origin
+            );
             ranges.push((i, w[0], w[1]));
         }
         if ranges.len() as u64 > MAX_PIECES {

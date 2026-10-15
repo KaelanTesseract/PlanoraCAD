@@ -885,8 +885,61 @@ pub fn split_params(
     Ok(strokes
         .iter()
         .zip(cand)
-        .map(|(s, ts)| interior_unique(s, ts))
+        .map(|(s, ts)| tidy_splits(s, basis, extent, ts))
         .collect())
+}
+
+/// Spitzen eines in der Ansicht dünnen Kegelschnitts (Kreis oder Ellipse fast von der Seite
+/// gesehen, kleine Halbachse der Projektion höchstens `near`): Parameter `θ*` der Spitze (die
+/// zweite liegt bei `θ* + π`) und die Breite der Zone um sie, in der die Kurve höchstens etwa
+/// `4·near` neben der Spitze liegt. Sonst `None`.
+///
+/// An der Umkehrstelle eines solchen Kegelschnitts ist der Abstand zu einem Punkt dort in `θ`
+/// von vierter Ordnung flach (`≈ a²·δ⁴/4`); Fußpunktsuche und Schnittformeln treffen die
+/// Spitze daher nur auf etwa `ε^{1/4}` genau, und zwei Quellen derselben Teilstelle (etwa die
+/// Enden zweier Umrisslinien) lieferten zwei Teilparameter mit einem zum Punkt entarteten
+/// Stück dazwischen. Teilparameter in der Zone werden deshalb genau auf die Spitze gelegt.
+fn conic_tip(s: &Stroke, basis: &Basis, near: f64) -> Option<(f64, f64)> {
+    let (u, v) = match &s.curve {
+        Curve::Circle { frame, radius } => (frame.x * *radius, frame.y * *radius),
+        Curve::Ellipse {
+            frame,
+            major,
+            minor,
+        } => (frame.x * *major, frame.y * *minor),
+        _ => return None,
+    };
+    let (u, v) = (proj(basis, u), proj(basis, v));
+    let (uu, vv, uv) = (u.dot(u), v.dot(v), u.dot(v));
+    // Halbachsen² der Projektion: Eigenwerte von [[uu, uv], [uv, vv]].
+    let a2 = 0.5 * (uu + vv) + (0.25 * (uu - vv) * (uu - vv) + uv * uv).sqrt();
+    if !(a2 > 0.0 && a2.is_finite()) {
+        return None;
+    }
+    let b2 = ((uu * vv - uv * uv) / a2).max(0.0);
+    if b2.sqrt() > near {
+        return None;
+    }
+    let tip = 0.5 * (2.0 * uv).atan2(uu - vv);
+    Some((tip, 2.0 * (2.0 * near / a2.sqrt()).sqrt()))
+}
+
+/// Legt Teilparameter in der Spitzenzone eines dünnen Kegelschnitts genau auf die Spitze
+/// (siehe [`conic_tip`]); andere Striche und Parameter bleiben.
+fn snap_to_tip(tip: Option<(f64, f64)>, t: f64) -> f64 {
+    let Some((th, zone)) = tip else {
+        return t;
+    };
+    let k = ((t - th) / std::f64::consts::PI).round();
+    let at = th + k * std::f64::consts::PI;
+    if (t - at).abs() <= zone { at } else { t }
+}
+
+/// Teilparameter eines Strichs aufbereiten: an Spitzen dünner Kegelschnitte einrasten
+/// ([`conic_tip`]), dann innere, sortierte, eindeutige Parameter ([`interior_unique`]).
+pub(crate) fn tidy_splits(s: &Stroke, basis: &Basis, extent: f64, ts: Vec<f64>) -> Vec<f64> {
+    let tip = conic_tip(s, basis, NEAR_FACTOR * geom_tol(extent));
+    interior_unique(s, ts.into_iter().map(|t| snap_to_tip(tip, t)).collect())
 }
 
 /// Innere, sortierte, eindeutige Parameter: Abstand ≥ `BISECT_TOL`·Breite vom Rand und
