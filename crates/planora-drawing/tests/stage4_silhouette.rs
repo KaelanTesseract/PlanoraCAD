@@ -489,3 +489,93 @@ fn torus_fillet_spline_outline_has_a_gap_at_a_small_window() {
     }
     assert!(seen);
 }
+
+// ---------------------------------------------------------------------------------------------
+// I1-Rest: schmale, schräg liegende Schlitze quer über den Umriss (β-Reihe 0,25° … 5°).
+
+/// Ist die Stelle `c` (auf dem Umriss) von einem Umrissstrich bedeckt? Und sind die Stellen im
+/// Abstand `side` (Bogenlänge) zu beiden Seiten bedeckt? Geraden: Lot auf die Gerade; Kreise:
+/// Winkel im Kreisrahmen. Nur Striche, deren Kurve durch `c` läuft (1e-6), zählen.
+fn slot_cover(st: &[Stroke], c: planora_math::DVec3, side: f64) -> (bool, bool, bool) {
+    let tau = std::f64::consts::TAU;
+    let (mut mid, mut below, mut above) = (false, false, false);
+    for l in st {
+        let (tc, dt) = match &l.curve {
+            planora_kernel::Curve::Line { origin, dir } => ((c - *origin).dot(*dir), side),
+            planora_kernel::Curve::Circle { radius, .. } => (l.curve.project(c), side / radius),
+            _ => continue,
+        };
+        if l.curve.point(tc).distance(c) > 1e-6 {
+            continue;
+        }
+        let inside = |t: f64| {
+            let t = match &l.curve {
+                planora_kernel::Curve::Circle { .. } => l.t0 + (t - l.t0).rem_euclid(tau),
+                _ => t,
+            };
+            t > l.t0.min(l.t1) && t < l.t0.max(l.t1)
+        };
+        mid |= inside(tc);
+        below |= inside(tc - dt);
+        above |= inside(tc + dt);
+    }
+    (mid, below, above)
+}
+
+/// β-Reihe: Für jedes β wird der Schlitz um `at` in `base` geschnitten; der Umriss in der
+/// Vorderansicht darf die Schlitzmitte nicht bedecken und muss 3 mm daneben zu beiden Seiten
+/// weiterlaufen. Liefert die β-Werte, bei denen das nicht gilt.
+fn slot_sweep(
+    base: &planora_kernel::Solid,
+    at: planora_math::DVec3,
+    r: f64,
+    s: f64,
+) -> Vec<String> {
+    let mut bad = Vec::new();
+    for i in 1..=20 {
+        let beta = 0.25 * i as f64;
+        let body = slanted_slot(base, at, r, s, beta);
+        let st = lines_of(&body, ViewKind::Front);
+        let (mid, below, above) = slot_cover(&st, at, 3.0);
+        if mid || !below || !above {
+            bad.push(format!(
+                "β = {beta}°: Mitte bedeckt {mid}, unten {below}, oben {above}"
+            ));
+        }
+    }
+    bad
+}
+
+#[test]
+fn oblique_narrow_slot_on_a_cylinder_outline_is_never_bridged() {
+    // Prüfaufbau des Prüfers: r = 20, h = 300, Schlitz 0,35·√2 ≈ 0,495 mm bei (−20, 0, 150);
+    // r = 50, h = 1000, Schlitz ≈ 0,99 mm bei (−50, 0, 500); dazu derselbe Schlitz bei +x
+    // (auf der Naht des Zylinders).
+    let v = planora_math::DVec3::new;
+    let mut bad = Vec::new();
+    for (r, h, s, x) in [
+        (20.0, 300.0, 0.35, -20.0),
+        (50.0, 1000.0, 0.7, -50.0),
+        (20.0, 300.0, 0.35, 20.0),
+    ] {
+        for b in slot_sweep(&cylinder_solid(r, h), v(x, 0.0, 0.5 * h), r, s) {
+            bad.push(format!("r = {r}, x = {x}: {b}"));
+        }
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
+}
+
+#[test]
+fn oblique_narrow_slot_on_a_sphere_outline_is_never_bridged() {
+    // Kugel r = 20: Großkreis in der XZ-Ebene, Schlitz (≈ 0,495 mm) bei (−20, 0, 0). (Einen
+    // schrägen Schlitz in einen Kegel kann der Kernel nicht schneiden – schräge Ebene mit Kegel
+    // ist `UnsupportedIntersection`; der Kegelumriss ist eine Gerade wie beim Zylinder und läuft
+    // durch denselben Zuschnitt.)
+    let bad = slot_sweep(
+        &sphere_solid(20.0),
+        planora_math::DVec3::new(-20.0, 0.0, 0.0),
+        20.0,
+        0.35,
+    );
+    assert!(bad.is_empty(), "{bad:#?}");
+}

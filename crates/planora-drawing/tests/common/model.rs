@@ -1837,3 +1837,17 @@ pub fn rounded_cylinder_with_window(
         .expect("Torusfläche");
     (out, face)
 }
+
+/// Schräger Schlitz (Prüfaufbau der Abschlussprüfung, I1-Rest): Platte
+/// `box_at((−l, −l + yo, −s/2), (l, l + yo, s/2))` mit `l = 0,9·r`, `yo = 0,017·r·β²` (β in Grad),
+/// um 45° um X gedreht, dann um β um Z, verschoben nach `at`, von `base` abgezogen. Auf einer
+/// Geraden längs Z durch `at` ist der Schlitz `s·√2` breit.
+pub fn slanted_slot(base: &Solid, at: DVec3, r: f64, s: f64, beta_deg: f64) -> Solid {
+    let l = 0.9 * r;
+    let yo = 0.017 * r * beta_deg * beta_deg;
+    let slab = box_at((-l, -l + yo, -0.5 * s), (l, l + yo, 0.5 * s));
+    let slab = rotated(&slab, DVec3::X, std::f64::consts::FRAC_PI_4);
+    let slab = rotated(&slab, DVec3::Z, beta_deg.to_radians());
+    let slab = translated(&slab, at);
+    boolean_op(base, &slab, planora_kernel::BoolOp::Difference)
+}

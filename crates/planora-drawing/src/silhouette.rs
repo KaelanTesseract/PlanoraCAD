@@ -1293,18 +1293,30 @@ fn boundary_seg_samples(seg: &planora_kernel::boolean::Seg) -> usize {
     }
 }
 
+/// Vielfaches von `geom_tol`, bis zu dem das verfeinerte Abstandsminimum eines Randstücks als
+/// Kreuzung mit dem Umriss gilt (wie das Fenster, in dem isect Endpunkte erkennt).
+const CROSS_FACTOR: f64 = 16.0;
+
 /// Vielfaches der größten Sehne eines Randstücks, bis zu dem ein Randpunkt als „am Weg“ gilt
 /// (Bogen zu Sehne bei 5°-Schritten ≈ 1,0003; Freiformkanten mit Reserve).
 const BOUNDARY_REACH: f64 = 1.5;
 
-/// Randgeführte Abtaststellen eines Wegs: Jedes Randstück der Fläche wird dicht abgetastet, und
-/// jeder Randpunkt, der dem Weg näher kommt als der Abstand benachbarter Randpunkte (also jeder
-/// Punkt beiderseits einer Stelle, an der der Rand den Weg kreuzt oder berührt), liefert den
-/// Parameter seines nächsten Wegpunkts. Das ist exakt für Aussparungen, deren Rand sich auf
-/// einen einzigen Umrissparameter abbildet (axiale Kerben, Bögen bei konstantem z). Bei schrägen,
-/// schmalen Aussparungen hängt das Erkennen davon ab, wo die Abtaststellen (5°-Schritte des Rands,
-/// projiziert, plus Mitten) zufällig liegen; eine Aussparung, die schmaler ist als ihr Abstand,
-/// kann unentdeckt bleiben (siehe offene-punkte.md). Mehr als `MAX_TRIM_SAMPLES` Stellen → `TooComplex`.
+/// Randgeführte Abtaststellen eines Wegs. Jedes Randstück der Fläche wird abgetastet (Geraden 16
+/// Stellen, Kegelschnitte alle 5°, Freiformkanten 64 Stellen), und zwar zweifach:
+///
+/// 1. Jeder Randpunkt, der dem Weg näher kommt als das 1,5-Fache des Abstands benachbarter
+///    Randpunkte, liefert den Parameter seines nächsten Wegpunkts.
+/// 2. **Genaue Kreuzungen:** Jedes örtliche Minimum des Abstands „Randpunkt – Weg“ über den
+///    Stützstellen eines Randstücks wird mit dem Goldenen Schnitt auf dem Randstück verfeinert;
+///    liegt das Minimum höchstens `CROSS_FACTOR · tol` (Spline-Wege: zuzüglich ihrer Sehnen-
+///    abweichung) neben dem Weg, ist dort eine Kreuzung oder Berührung, und der Wegparameter des
+///    Minimums wird Abtaststelle. So bekommt jede Kante einer Aussparung oder eines Flächenstreifens
+///    genau an ihrer Kreuzung mit dem Umriss eine Stelle – auch bei schrägen Kreuzungen, unabhängig
+///    von der Lage der 5°-Schritte; die Mitten dazwischen (siehe [`trim_to_face`]) liegen dann im
+///    Schlitz. Stützstellen, die schon auf dem Weg liegen (ein Rand **längs** des Umrisses, eine
+///    Kreuzung genau an einer Stützstelle), werden nicht verfeinert: Ihr Parameter steht schon in 1.
+///
+/// Mehr als `MAX_TRIM_SAMPLES` Stellen → `TooComplex`.
 fn boundary_params(
     fg: &FaceGeom,
     c: &Path,
@@ -1313,10 +1325,12 @@ fn boundary_params(
     progress: &Progress,
 ) -> Result<Vec<f64>, DrawError> {
     let mut out = Vec::new();
+    let on_path = proj.slack() + CROSS_FACTOR * tol.linear;
     for seg in fg.loops.iter().flatten() {
         progress.check()?;
         let n = boundary_seg_samples(seg);
-        let pts: Vec<DVec3> = (0..=n).map(|i| seg.at(i as f64 / n as f64)).collect();
+        let fs: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+        let pts: Vec<DVec3> = fs.iter().map(|&f| seg.at(f)).collect();
         let chord = pts
             .windows(2)
             .map(|p| p[0].distance(p[1]))
@@ -1325,9 +1339,33 @@ fn boundary_params(
             return Err(DrawError::NonFinite);
         }
         let reach = BOUNDARY_REACH * chord + proj.slack() + tol.linear;
-        for q in pts {
-            if let Some(t) = proj.nearest(c, q)
-                && (c.point)(t).distance(q) <= reach
+        // Abstand eines Randpunkts zum Weg und der Wegparameter seines Fußpunkts.
+        let foot = |q: DVec3| {
+            proj.nearest(c, q)
+                .map(|t| (t, (c.point)(t).distance(q)))
+                .filter(|x| x.1.is_finite())
+        };
+        let ds: Vec<Option<(f64, f64)>> = pts.iter().map(|&q| foot(q)).collect();
+        for &(t, d) in ds.iter().flatten() {
+            if d <= reach {
+                out.push(t);
+            }
+        }
+        let dist = |i: usize| ds[i].map_or(f64::INFINITY, |x| x.1);
+        for i in 0..=n {
+            let di = dist(i);
+            if di > reach || di <= on_path {
+                continue;
+            }
+            let left = if i > 0 { dist(i - 1) } else { f64::INFINITY };
+            let right = if i < n { dist(i + 1) } else { f64::INFINITY };
+            if !(di <= left && di <= right) {
+                continue;
+            }
+            let (a, b) = (fs[i.saturating_sub(1)], fs[(i + 1).min(n)]);
+            let (f, d) = golden_min(a, b, |f| foot(seg.at(f)).map_or(f64::INFINITY, |x| x.1));
+            if d <= on_path
+                && let Some((t, _)) = foot(seg.at(f))
             {
                 out.push(t);
             }
@@ -1614,6 +1652,119 @@ fn golden_min(mut a: f64, mut b: f64, f: impl Fn(f64) -> f64) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Gerade x-Achse `t ↦ (t, 0, 0)`, `t ∈ [0, 10]`, und eine Zylinderfläche mit den Randstücken
+    /// `segs` (Lage auf der Fläche spielt für `boundary_params` keine Rolle).
+    fn line_case(segs: Vec<planora_kernel::boolean::Seg>) -> (FaceGeom, Tolerance) {
+        let fg = FaceGeom {
+            surface: Surface::Cylinder {
+                frame: Frame::WORLD,
+                radius: 5.0,
+            },
+            same_sense: true,
+            domain: None,
+            loops: vec![segs],
+            tag: None,
+        };
+        let tol = Tolerance {
+            linear: geom_tol(10.0),
+            ..Tolerance::default()
+        };
+        (fg, tol)
+    }
+
+    fn x_line(t: f64) -> DVec3 {
+        DVec3::new(t, 0.0, 0.0)
+    }
+
+    const X_PROJ: Proj<'static> = Proj::Line {
+        origin: DVec3::ZERO,
+        dir: DVec3::X,
+    };
+
+    fn x_path() -> Path<'static> {
+        Path {
+            point: &x_line,
+            t0: 0.0,
+            t1: 10.0,
+            closed: false,
+        }
+    }
+
+    #[test]
+    fn a_huge_number_of_tiny_boundary_pieces_is_too_complex() {
+        // 4000 winzige Randstücke längs des Umrisses ergeben je 17 Stellen (68 000 > 65 536):
+        // benannte Meldung statt stillen Ausdünnens.
+        use planora_kernel::boolean::Seg;
+        let segs: Vec<Seg> = (0..4000)
+            .map(|k| {
+                let a = 10.0 * k as f64 / 4000.0;
+                Seg::new(
+                    Curve::Line {
+                        origin: DVec3::ZERO,
+                        dir: DVec3::X,
+                    },
+                    a,
+                    a + 1e-4,
+                )
+            })
+            .collect();
+        let (fg, tol) = line_case(segs);
+        let r = trim_to_face(
+            &fg,
+            &x_path(),
+            &X_PROJ,
+            &|_| true,
+            &tol,
+            SNAP_FACTOR * tol.linear,
+            &Progress::new(),
+        );
+        assert!(
+            matches!(r, Err(DrawError::TooComplex(n)) if n > MAX_TRIM_SAMPLES as u64),
+            "{:?}",
+            r.as_ref().map(|v| v.len())
+        );
+    }
+
+    #[test]
+    fn a_boundary_along_the_outline_adds_only_its_samples() {
+        // Randstück genau auf dem Umriss (t ∈ [2, 8]): seine 17 Stützstellen, keine Verfeinerung.
+        use planora_kernel::boolean::Seg;
+        let seg = Seg::new(
+            Curve::Line {
+                origin: DVec3::ZERO,
+                dir: DVec3::X,
+            },
+            2.0,
+            8.0,
+        );
+        let (fg, tol) = line_case(vec![seg]);
+        let ps = boundary_params(&fg, &x_path(), &X_PROJ, &tol, &Progress::new()).unwrap();
+        assert_eq!(ps.len(), BOUNDARY_SEG_SAMPLES + 1, "{ps:?}");
+        assert!(ps.iter().all(|&t| (2.0..=8.0).contains(&t)));
+    }
+
+    #[test]
+    fn a_boundary_touching_the_outline_gives_the_touch_point() {
+        // Kreis (Radius 1, Mitte (5, 1, 0), in der XY-Ebene) berührt den Umriss nur bei t = 5;
+        // Stützstellen um 0,0123 rad gegen die 5°-Schritte versetzt, keine liegt im Berührpunkt.
+        use planora_kernel::boolean::Seg;
+        let circle = Curve::Circle {
+            frame: Frame {
+                origin: DVec3::new(5.0, 1.0, 0.0),
+                ..Frame::WORLD
+            },
+            radius: 1.0,
+        };
+        let seg = Seg::new(circle, 0.0123, 0.0123 + TAU);
+        let (fg, tol) = line_case(vec![seg]);
+        let ps = boundary_params(&fg, &x_path(), &X_PROJ, &tol, &Progress::new()).unwrap();
+        assert!(ps.iter().any(|&t| (t - 5.0).abs() < 1e-7), "{ps:?}");
+        // Ein verfeinerter Berührpunkt; dazu nur die Randpunkte im Umkreis von 1,5 Sehnen
+        // (5°-Schritte: etwa ±0,5 mm), keine Wolke von Stellen.
+        assert!(ps.len() <= 16, "{ps:?}");
+        assert!(ps.iter().all(|&t| (t - 5.0).abs() < 0.6), "{ps:?}");
+    }
 
     #[test]
     fn a_long_wavy_outline_is_fitted_in_parts() {
