@@ -212,6 +212,8 @@ fn solid_model(solid: &Solid, kind: ViewKind, show_hidden: bool) -> SheetModel {
         None,
     );
     d.views[0].show_hidden = show_hidden;
+    // Diese Tests prüfen die Linien; Mittellinien-Marken (Vorgabe an) prüft Stufe 17.
+    d.views[0].centerlines = false;
     let res: BTreeMap<ViewId, &ViewLines> = BTreeMap::from([(id, &vl)]);
     build_sheet(&d, &res)
 }
