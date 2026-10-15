@@ -380,6 +380,36 @@ fn failed_view_blocks_writing_with_its_text() {
 }
 
 #[test]
+fn views_that_cannot_be_placed_stop_the_export_with_a_message() {
+    // Eine beschädigte Zeichnung (Maßstab mit Nenner 0, am Dokument vorbei gesetzt): Das Blatt
+    // ließe die Ansicht und ihre abgeleitete still weg. Das Export-Fenster schreibt dann nicht,
+    // sondern nennt den Grund.
+    let mut s = box_state();
+    let id = add_drawing(&mut s, "Blatt 1");
+    let mut drawing = s.document.drawing(id).unwrap().clone();
+    let ok = prepare_drawing(
+        &drawing,
+        &[("K".into(), s.bodies[0].solid.clone())],
+        compute_view,
+        &Progress::new(),
+    )
+    .unwrap();
+    assert_eq!(ok.views, drawing.views.len());
+    drawing.views[0].scale = one(1, 0);
+    let err = prepare_drawing(
+        &drawing,
+        &[("K".into(), s.bodies[0].solid.clone())],
+        compute_view,
+        &Progress::new(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        "Die Zeichnung enthält Ansichten, die sich nicht auf dem Blatt anordnen lassen."
+    );
+}
+
+#[test]
 fn a_repeated_kind_is_named_like_in_the_browser() {
     let mut s = box_state();
     let id = add_drawing(&mut s, "Blatt 1");

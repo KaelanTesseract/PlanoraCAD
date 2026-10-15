@@ -367,6 +367,12 @@ pub fn prepare_drawing(
         })
         .collect();
     let model = build_sheet(drawing, &map);
+    // `build_sheet` lässt Ansichten weg, die sich nicht anordnen lassen; das Dokument prüft Lage,
+    // Maßstab und Eltern, also kommt das nur bei einer beschädigten Zeichnung vor. Nie still
+    // weniger Ansichten schreiben.
+    if model.views.len() < drawing.views.len() {
+        return Err(VIEWS_NOT_PLACEABLE.to_string());
+    }
     let count = |vis| {
         model
             .views
@@ -384,6 +390,10 @@ pub fn prepare_drawing(
         model: Arc::new(model),
     })
 }
+
+/// Meldung, wenn sich nicht alle Ansichten auf dem Blatt anordnen lassen.
+pub const VIEWS_NOT_PLACEABLE: &str =
+    "Die Zeichnung enthält Ansichten, die sich nicht auf dem Blatt anordnen lassen.";
 
 /// Hinweis auf Netz-Körper, die eine Zeichnung nicht enthält.
 pub fn drawing_skipped_text(names: &[String]) -> String {
