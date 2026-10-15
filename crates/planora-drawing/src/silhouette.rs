@@ -1300,9 +1300,11 @@ const BOUNDARY_REACH: f64 = 1.5;
 /// Randgeführte Abtaststellen eines Wegs: Jedes Randstück der Fläche wird dicht abgetastet, und
 /// jeder Randpunkt, der dem Weg näher kommt als der Abstand benachbarter Randpunkte (also jeder
 /// Punkt beiderseits einer Stelle, an der der Rand den Weg kreuzt oder berührt), liefert den
-/// Parameter seines nächsten Wegpunkts. So bekommt jede Aussparung und jeder Flächenstreifen,
-/// den der Weg quert, Abtaststellen an seinen Rändern – unabhängig davon, wie schmal er gegen den
-/// gleichmäßigen Abstand ist. Mehr als `MAX_TRIM_SAMPLES` Stellen → `TooComplex`.
+/// Parameter seines nächsten Wegpunkts. Das ist exakt für Aussparungen, deren Rand sich auf
+/// einen einzigen Umrissparameter abbildet (axiale Kerben, Bögen bei konstantem z). Bei schrägen,
+/// schmalen Aussparungen hängt das Erkennen davon ab, wo die Abtaststellen (5°-Schritte des Rands,
+/// projiziert, plus Mitten) zufällig liegen; eine Aussparung, die schmaler ist als ihr Abstand,
+/// kann unentdeckt bleiben (siehe offene-punkte.md). Mehr als `MAX_TRIM_SAMPLES` Stellen → `TooComplex`.
 fn boundary_params(
     fg: &FaceGeom,
     c: &Path,
