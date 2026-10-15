@@ -18,6 +18,7 @@ pub mod raycast;
 pub mod sheet;
 pub mod silhouette;
 pub mod stroke;
+pub mod suggest;
 pub mod svg;
 pub mod visibility;
 
@@ -31,6 +32,7 @@ pub use layout::{GAP_MM, align_dir, view_extent};
 pub use model::{
     Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewSpec,
 };
+pub use suggest::{Candidate, CandidateOrigin, dimension_key, suggest};
 pub use svg::{svg_string, write_svg};
 
 use limits::{MAX_PIECES, MAX_STROKES, geom_tol};

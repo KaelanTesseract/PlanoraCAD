@@ -260,7 +260,8 @@ fn axis_line(
 
 /// Kleinster und größter Wert `(p − origin)·z` über die Randkanten der Fläche (Enden, Probe-
 /// punkte, bei Kreisen und Ellipsen die exakten Extremstellen). `None` ohne endliche Werte.
-fn axial_range(
+/// Auch der Bereich einer Zylinderfläche als Maßbezug (`suggest`).
+pub(crate) fn axial_range(
     solid: &Solid,
     face: &planora_kernel::Face,
     origin: DVec3,

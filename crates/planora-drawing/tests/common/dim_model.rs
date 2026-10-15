@@ -235,3 +235,242 @@ impl DimRng {
         lo + 0.5 * (self.next_u64() % (n + 1)) as f64
     }
 }
+
+/// Eigene Auflösung einer Vorschlagsherkunft nach den Regeln der Aufgabe 8, von Hand aus den
+/// Daten des Körpers (ohne Code aus `planora-drawing`): Kante mit Gerade → `Line` zwischen
+/// Anfangs- und Endpunkt (Eckpunkte), Kante mit Kreis → `Circle` (Rahmenursprung, Rahmen-z,
+/// Radius); Kantenende → `Point` (Eckpunkt); Mitte → `Point` (Kreismitte); Zylinderfläche →
+/// `Axis` (Rahmenursprung, normierte Rahmen-z, Radius, Bereich der Randkanten längs der Achse,
+/// abgetastet mit 4096 Schritten je Kante); Kugelfläche → `Sphere`. Sonst `None`.
+pub fn resolve_origin(
+    solids: &[&planora_kernel::Solid],
+    o: &planora_drawing::suggest::CandidateOrigin,
+) -> Option<Geo3> {
+    use planora_drawing::dimension::EndSel;
+    use planora_drawing::suggest::CandidateOrigin;
+    use planora_kernel::{Curve, Edge, Face, Id, Surface};
+    let edge = |b: usize, e: usize| -> Option<(&planora_kernel::Solid, &Edge)> {
+        let s = *solids.get(b)?;
+        (e < s.edges.len()).then(|| (s, &s.edges[Id::<Edge>::from_index(e)]))
+    };
+    match *o {
+        CandidateOrigin::Edge { body, edge: e } => {
+            let (s, e) = edge(body, e)?;
+            match &e.curve {
+                Curve::Line { .. } => Some(Geo3::Line {
+                    a: s.vertices[e.start].point,
+                    b: s.vertices[e.end].point,
+                }),
+                Curve::Circle { frame, radius } => Some(Geo3::Circle {
+                    center: frame.origin,
+                    normal: frame.z,
+                    radius: *radius,
+                }),
+                _ => None,
+            }
+        }
+        CandidateOrigin::EdgeEnd { body, edge: e, end } => {
+            let (s, e) = edge(body, e)?;
+            let v = if end == EndSel::Start { e.start } else { e.end };
+            Some(Geo3::Point(s.vertices[v].point))
+        }
+        CandidateOrigin::Center { body, edge: e } => match &edge(body, e)?.1.curve {
+            Curve::Circle { frame, .. } => Some(Geo3::Point(frame.origin)),
+            _ => None,
+        },
+        CandidateOrigin::Face { body, face } => {
+            let s = *solids.get(body)?;
+            if face >= s.faces.len() {
+                return None;
+            }
+            let f = &s.faces[Id::<Face>::from_index(face)];
+            match &f.surface {
+                Surface::Cylinder { frame, radius } => {
+                    let z = frame.z.normalize();
+                    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+                    for lp in std::iter::once(&f.outer).chain(f.inner.iter()) {
+                        for he in &lp.half_edges {
+                            let e = &s.edges[he.edge];
+                            for i in 0..=4096 {
+                                let t = e.t0 + (e.t1 - e.t0) * i as f64 / 4096.0;
+                                let h = (e.curve.point(t) - frame.origin).dot(z);
+                                lo = lo.min(h);
+                                hi = hi.max(h);
+                            }
+                        }
+                    }
+                    Some(Geo3::Axis {
+                        origin: frame.origin,
+                        dir: z,
+                        radius: *radius,
+                        t0: lo,
+                        t1: hi,
+                    })
+                }
+                Surface::Sphere { frame, radius } => Some(Geo3::Sphere {
+                    center: frame.origin,
+                    radius: *radius,
+                }),
+                _ => None,
+            }
+        }
+    }
+}
+
+/// Stimmen zwei Bezüge bis auf `tol` überein (gleiche Art, alle Zahlen; Richtungen normiert)?
+pub fn geo_near(a: &Geo3, b: &Geo3, tol: f64) -> bool {
+    let p = |x: DVec3, y: DVec3| x.distance(y) <= tol;
+    let f = |x: f64, y: f64| (x - y).abs() <= tol;
+    match (a, b) {
+        (Geo3::Point(x), Geo3::Point(y)) => p(*x, *y),
+        (Geo3::Line { a: a1, b: b1 }, Geo3::Line { a: a2, b: b2 }) => p(*a1, *a2) && p(*b1, *b2),
+        (
+            Geo3::Circle {
+                center: c1,
+                normal: n1,
+                radius: r1,
+            },
+            Geo3::Circle {
+                center: c2,
+                normal: n2,
+                radius: r2,
+            },
+        ) => p(*c1, *c2) && p(n1.normalize(), n2.normalize()) && f(*r1, *r2),
+        (
+            Geo3::Axis {
+                origin: o1,
+                dir: d1,
+                radius: r1,
+                t0: s1,
+                t1: e1,
+            },
+            Geo3::Axis {
+                origin: o2,
+                dir: d2,
+                radius: r2,
+                t0: s2,
+                t1: e2,
+            },
+        ) => {
+            p(*o1, *o2)
+                && p(d1.normalize(), d2.normalize())
+                && f(*r1, *r2)
+                && f(*s1, *s2)
+                && f(*e1, *e2)
+        }
+        (
+            Geo3::Sphere {
+                center: c1,
+                radius: r1,
+            },
+            Geo3::Sphere {
+                center: c2,
+                radius: r2,
+            },
+        ) => p(*c1, *c2) && f(*r1, *r2),
+        _ => false,
+    }
+}
+
+/// Radien aller Kreise, die ein Zufallskörper der Prüfreihe nach seinem Formelmodell haben kann
+/// (eigene Formeln aus den Erzeugungsdaten): Zylinder `r`; Kegel `r0`, `r1` und `r(z)` an jeder
+/// Ebene quer zu seiner Achse (Quaderseiten, Enden der Zylinder und Kegel); Kugel `R` und
+/// `√(R² − d²)` an jeder achsparallelen Ebene im Abstand `d < R` von der Mitte; Schnittkreis
+/// zweier Kugeln; Schnitt einer Kugel mit einem Kegel, dessen Achse durch ihre Mitte geht.
+pub fn formula_radii(csg: &super::model::Csg) -> Vec<f64> {
+    use super::model::Prim;
+    let prims: Vec<Prim> = csg.parts.iter().map(|(p, _)| *p).collect();
+    // Achsparallele Ebenen (Weltachse, Lage).
+    let mut planes: Vec<(usize, f64)> = Vec::new();
+    for p in &prims {
+        match *p {
+            Prim::Box { lo, hi } => {
+                for k in 0..3 {
+                    planes.push((k, lo[k]));
+                    planes.push((k, hi[k]));
+                }
+            }
+            Prim::Cylinder { axis, base, h, .. } | Prim::Cone { axis, base, h, .. } => {
+                planes.push((axis, base[axis]));
+                planes.push((axis, base[axis] + h));
+            }
+            Prim::Sphere { .. } => {}
+        }
+    }
+    let mut out = Vec::new();
+    for p in &prims {
+        match *p {
+            Prim::Box { .. } => {}
+            Prim::Cylinder { r, .. } => out.push(r),
+            Prim::Cone {
+                axis,
+                base,
+                r0,
+                r1,
+                h,
+            } => {
+                out.push(r0);
+                if r1 > 0.0 {
+                    out.push(r1);
+                }
+                for &(k, at) in &planes {
+                    let z = at - base[axis];
+                    if k == axis && z > 0.0 && z < h {
+                        out.push(r0 + (r1 - r0) * z / h);
+                    }
+                }
+            }
+            Prim::Sphere { c, r } => {
+                out.push(r);
+                for &(k, at) in &planes {
+                    let d = (c[k] - at).abs();
+                    if d < r {
+                        out.push((r * r - d * d).sqrt());
+                    }
+                }
+                for q in &prims {
+                    match *q {
+                        Prim::Sphere { c: c2, r: r2 } if c2 != c => {
+                            let d = c.distance(c2);
+                            let a = (d * d + r * r - r2 * r2) / (2.0 * d);
+                            if a.abs() < r {
+                                out.push((r * r - a * a).sqrt());
+                            }
+                        }
+                        Prim::Cone {
+                            axis,
+                            base,
+                            r0,
+                            r1,
+                            h,
+                        } => {
+                            // Achse durch die Kugelmitte? Dann ρ(z) = r0 + k·z (z ab `base`)
+                            // und ρ² + (z − zc)² = R².
+                            let mut off = c - base;
+                            let zc = off[axis];
+                            off[axis] = 0.0;
+                            if off.length() > 1e-9 {
+                                continue;
+                            }
+                            let k = (r1 - r0) / h;
+                            let qa = k * k + 1.0;
+                            let qb = 2.0 * (r0 * k - zc);
+                            let qc = r0 * r0 + zc * zc - r * r;
+                            let disc = qb * qb - 4.0 * qa * qc;
+                            if disc >= 0.0 {
+                                for s in [-1.0, 1.0] {
+                                    let z = (-qb + s * disc.sqrt()) / (2.0 * qa);
+                                    if (0.0..=h).contains(&z) {
+                                        out.push(r0 + k * z);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    out
+}
