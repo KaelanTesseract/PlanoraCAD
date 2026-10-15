@@ -4,14 +4,19 @@
 use crate::base64;
 use crate::error::{ProjectError, Result};
 use crate::format::*;
+use planora_drawing::dimension::{
+    ChainMode, ChainSpec, DimId, DimKind, DimSpec, EndSel, GeoRef, GeoRefData, TagData,
+    Tolerance as DimTolerance, ref_count,
+};
+use planora_drawing::limits::MAX_DIMENSIONS;
 use planora_drawing::{
     Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewSpec,
 };
 use planora_exchange::{ExchangeMesh, MAX_FILE_BYTES};
 use planora_feature::{
     BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM,
-    MAX_DRAWINGS, MAX_POS_MM, MAX_VIEWS, MeshId, SketchFeature, SketchPlane, Snapshot,
-    SnapshotFeature, StandardPlane,
+    MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS, MAX_POS_MM, MAX_TOL_MM,
+    MAX_VIEWS, MeshId, SketchFeature, SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
 };
 use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
@@ -19,22 +24,25 @@ use planora_sketch::{
     ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord, LineOrPoints, PointId,
     PointRecord, Sketch, SketchData,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 4 mit Zeichnungen, 3 mit Netz-Körpern, 2
-/// mit Rundungen oder Fasen, sonst 1 (P7, P12, F7).
+/// Kleinste Formatnummer, die den Stand darstellt: 5 mit Maßen oder eingeschalteten
+/// Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder Fasen, sonst 1
+/// (P7, P12, F7, Teilprojekt 12 P11).
 pub fn required_format(s: &Snapshot) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if !s.drawings.is_empty() {
+    if s.drawings.iter().any(needs_format_5) {
+        5
+    } else if !s.drawings.is_empty() {
         4
     } else if has(|k| matches!(k, FeatureKind::MeshBody { .. })) {
         3
@@ -44,6 +52,11 @@ pub fn required_format(s: &Snapshot) -> u32 {
         1
     }
 }
+/// Eine Zeichnung braucht Format 5, wenn sie Maße hat oder eine Ansicht Mittellinien zeigt.
+fn needs_format_5(d: &Drawing) -> bool {
+    !d.dimensions.is_empty() || d.views.iter().any(|v| v.centerlines)
+}
+
 /// Längste erlaubte Liste (Features, Punkte, Kurven, Abhängigkeiten, Werte) in einer Datei.
 const MAX_LIST: usize = 1_000_000;
 
@@ -766,7 +779,7 @@ fn meshes_from(origin: &str, list: &[MeshDto]) -> Result<BTreeMap<MeshId, Arc<Ex
     Ok(out)
 }
 
-// ---- Zeichnungen (Format 4) -------------------------------------------------------------
+// ---- Zeichnungen (Format 4 und 5) -------------------------------------------------------------
 
 const PAPERS: [(Paper, &str); 5] = [
     (Paper::A4, "A4"),
@@ -840,8 +853,317 @@ fn counter(
     Ok(next)
 }
 
-fn drawing_to(d: &Drawing) -> ZeichnungDto {
-    ZeichnungDto {
+// ---- Maße (Format 5) --------------------------------------------------------------------
+
+const DIM_KINDS: [(DimKind, &str); 6] = [
+    (DimKind::Horizontal, "waagerecht"),
+    (DimKind::Vertical, "senkrecht"),
+    (DimKind::Aligned, "schraeg"),
+    (DimKind::Diameter, "durchmesser"),
+    (DimKind::Radius, "radius"),
+    (DimKind::Angle, "winkel"),
+];
+const END_SELS: [(EndSel, &str); 2] = [(EndSel::Start, "anfang"), (EndSel::End, "ende")];
+const CHAIN_MODES: [(ChainMode, &str); 2] =
+    [(ChainMode::Chain, "kette"), (ChainMode::Baseline, "bezug")];
+/// Längste Rolle einer Flächenmarke in einem Maßbezug (die Rollen des Programms sind kurz,
+/// z. B. „Loch 3, Wand 12“).
+pub const MAX_ROLE_CHARS: usize = 64;
+
+fn tag_to(t: &TagData) -> FaceRefDto {
+    FaceRefDto {
+        herkunft: t.origin,
+        rolle: t.role.clone(),
+        hinweis: v3(t.hint),
+    }
+}
+
+/// Bezug in der Datei; `None`, wenn die Daten nicht zur Art passen (Kantenbezug mit
+/// Flächendaten oder umgekehrt), was die Prüfung des Dokuments ausschließt.
+fn georef_to(r: &GeoRef) -> Option<BezugDto> {
+    Some(match r {
+        GeoRef::Edge(GeoRefData::Edge { a, b, hint }) => BezugDto::Kante {
+            a: tag_to(a),
+            b: tag_to(b),
+            hinweis: v3(*hint),
+        },
+        GeoRef::EdgeEnd {
+            edge: GeoRefData::Edge { a, b, hint },
+            end,
+        } => BezugDto::Kantenende {
+            a: tag_to(a),
+            b: tag_to(b),
+            hinweis: v3(*hint),
+            ende: name_of(&END_SELS, *end),
+        },
+        GeoRef::Center(GeoRefData::Edge { a, b, hint }) => BezugDto::Mitte {
+            a: tag_to(a),
+            b: tag_to(b),
+            hinweis: v3(*hint),
+        },
+        GeoRef::Face(GeoRefData::Face(t)) => BezugDto::Flaeche { marke: tag_to(t) },
+        _ => return None,
+    })
+}
+
+fn tolerance_to(t: &DimTolerance) -> ToleranzDto {
+    match t {
+        DimTolerance::None => ToleranzDto::Keine,
+        DimTolerance::Symmetric(wert) => ToleranzDto::Symmetrisch { wert: *wert },
+        DimTolerance::Limits { upper, lower } => ToleranzDto::Abmasse {
+            oben: *upper,
+            unten: *lower,
+        },
+        DimTolerance::LimitSizes { upper, lower } => ToleranzDto::Grenzmasse {
+            oben: *upper,
+            unten: *lower,
+        },
+        DimTolerance::Fit(text) => ToleranzDto::Passung { text: text.clone() },
+    }
+}
+
+fn dimension_to(m: &DimSpec) -> Result<MassDto> {
+    let bezuege = m
+        .refs
+        .iter()
+        .map(|r| {
+            georef_to(r).ok_or_else(|| {
+                ProjectError::Invalid(format!(
+                    "Ein Bezug des Maßes {} passt nicht zu seiner Art",
+                    m.id.0
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(MassDto {
+        id: m.id.0,
+        ansicht: m.view.0,
+        art: name_of(&DIM_KINDS, m.kind),
+        bezuege,
+        abstand: m.offset,
+        winkel: m.angle,
+        textversatz: [m.text_shift.0, m.text_shift.1],
+        toleranz: tolerance_to(&m.tolerance),
+        stellen: m.decimals,
+        text: m.text_override.clone(),
+        kette: m.chain.map(|c| KetteDto {
+            gruppe: c.group,
+            modus: name_of(&CHAIN_MODES, c.mode),
+            reihenfolge: c.order,
+        }),
+        vorgeschlagen: m.suggested,
+    })
+}
+
+fn hint_from(origin: &str, what: &str, v: V3) -> Result<DVec3> {
+    let p = |x: f64| pos(origin, &format!("{what} Hinweispunkt"), x);
+    Ok(DVec3::new(p(v[0])?, p(v[1])?, p(v[2])?))
+}
+
+/// Liest eine Flächenmarke eines Maßbezugs: Rolle höchstens [`MAX_ROLE_CHARS`] Zeichen,
+/// Hinweispunkt endlich und im Betrag höchstens `MAX_POS_MM`.
+fn tag_from(origin: &str, what: &str, d: &FaceRefDto) -> Result<TagData> {
+    if d.rolle.chars().count() > MAX_ROLE_CHARS {
+        return Err(ProjectError::corrupt(
+            origin,
+            format!(
+                "{what}: Die Rolle einer Fläche ist zu lang (höchstens {MAX_ROLE_CHARS} Zeichen)"
+            ),
+        ));
+    }
+    Ok(TagData {
+        origin: d.herkunft,
+        role: d.rolle.clone(),
+        hint: hint_from(origin, what, d.hinweis)?,
+    })
+}
+
+fn edge_data_from(
+    origin: &str,
+    what: &str,
+    a: &FaceRefDto,
+    b: &FaceRefDto,
+    hinweis: V3,
+) -> Result<GeoRefData> {
+    Ok(GeoRefData::Edge {
+        a: tag_from(origin, what, a)?,
+        b: tag_from(origin, what, b)?,
+        hint: hint_from(origin, what, hinweis)?,
+    })
+}
+
+fn georef_from(origin: &str, what: &str, d: &BezugDto) -> Result<GeoRef> {
+    Ok(match d {
+        BezugDto::Kante { a, b, hinweis } => {
+            GeoRef::Edge(edge_data_from(origin, what, a, b, *hinweis)?)
+        }
+        BezugDto::Kantenende {
+            a,
+            b,
+            hinweis,
+            ende,
+        } => GeoRef::EdgeEnd {
+            end: value_of(&END_SELS, ende).ok_or_else(|| {
+                ProjectError::corrupt(origin, format!("{what}: Unbekanntes Kantenende „{ende}“"))
+            })?,
+            edge: edge_data_from(origin, what, a, b, *hinweis)?,
+        },
+        BezugDto::Mitte { a, b, hinweis } => {
+            GeoRef::Center(edge_data_from(origin, what, a, b, *hinweis)?)
+        }
+        BezugDto::Flaeche { marke } => {
+            GeoRef::Face(GeoRefData::Face(tag_from(origin, what, marke)?))
+        }
+    })
+}
+
+fn tolerance_from(origin: &str, what: &str, d: &ToleranzDto) -> Result<DimTolerance> {
+    let t = |x: f64| {
+        if x.is_finite() && x.abs() <= MAX_TOL_MM {
+            Ok(x)
+        } else {
+            Err(ProjectError::corrupt(
+                origin,
+                format!("{what} Toleranz: Zahl ungültig oder zu groß"),
+            ))
+        }
+    };
+    Ok(match d {
+        ToleranzDto::Keine => DimTolerance::None,
+        ToleranzDto::Symmetrisch { wert } => DimTolerance::Symmetric(t(*wert)?),
+        ToleranzDto::Abmasse { oben, unten } => DimTolerance::Limits {
+            upper: t(*oben)?,
+            lower: t(*unten)?,
+        },
+        ToleranzDto::Grenzmasse { oben, unten } => DimTolerance::LimitSizes {
+            upper: t(*oben)?,
+            lower: t(*unten)?,
+        },
+        ToleranzDto::Passung { text } => {
+            if text.chars().count() > MAX_FIT_CHARS {
+                return Err(ProjectError::corrupt(
+                    origin,
+                    format!(
+                        "{what}: Die Passungsangabe ist zu lang (höchstens {MAX_FIT_CHARS} Zeichen)"
+                    ),
+                ));
+            }
+            DimTolerance::Fit(text.clone())
+        }
+    })
+}
+
+/// Liest ein Maß. `views`: Ansichten der Zeichnung mit ihrer Art (das Maß muss zu einer
+/// Normansicht gehören).
+fn dimension_from(
+    origin: &str,
+    drawing: &str,
+    views: &HashMap<ViewId, ViewKind>,
+    d: &MassDto,
+) -> Result<DimSpec> {
+    let what = format!("Zeichnung „{drawing}“, Maß {}", d.id);
+    let bad = |m: String| ProjectError::corrupt(origin, format!("{what}: {m}"));
+    let kind = value_of(&DIM_KINDS, &d.art)
+        .ok_or_else(|| bad(format!("Unbekannte Maßart „{}“", d.art)))?;
+    match views.get(&ViewId(d.ansicht)) {
+        None => return Err(bad("Das Maß gehört zu keiner Ansicht der Zeichnung".into())),
+        Some(k) if !k.is_normal() => {
+            return Err(bad("In der isometrischen Ansicht gibt es keine Maße".into()));
+        }
+        Some(_) => {}
+    }
+    let (lo, hi) = ref_count(kind);
+    if d.bezuege.len() < lo || d.bezuege.len() > hi {
+        return Err(bad("Das Maß hat die falsche Zahl von Bezügen".into()));
+    }
+    let refs = d
+        .bezuege
+        .iter()
+        .map(|r| georef_from(origin, &what, r))
+        .collect::<Result<Vec<_>>>()?;
+    if d.stellen > MAX_DECIMALS {
+        return Err(bad(format!(
+            "Ein Maß darf höchstens {MAX_DECIMALS} Nachkommastellen haben"
+        )));
+    }
+    if d.text
+        .as_ref()
+        .is_some_and(|t| t.chars().count() > MAX_DIM_TEXT_CHARS)
+    {
+        return Err(bad(format!(
+            "Der eigene Maßtext ist zu lang (höchstens {MAX_DIM_TEXT_CHARS} Zeichen)"
+        )));
+    }
+    let chain = match &d.kette {
+        None => None,
+        Some(k) => Some(ChainSpec {
+            group: k.gruppe,
+            mode: value_of(&CHAIN_MODES, &k.modus)
+                .ok_or_else(|| bad(format!("Unbekannte Kettenart „{}“", k.modus)))?,
+            order: k.reihenfolge,
+        }),
+    };
+    let p = |name: &str, x: f64| pos(origin, &format!("{what} {name}"), x);
+    Ok(DimSpec {
+        id: DimId(d.id),
+        view: ViewId(d.ansicht),
+        kind,
+        refs,
+        offset: p("Abstand", d.abstand)?,
+        angle: p("Winkel", d.winkel)?,
+        text_shift: (
+            p("Textversatz", d.textversatz[0])?,
+            p("Textversatz", d.textversatz[1])?,
+        ),
+        tolerance: tolerance_from(origin, &what, &d.toleranz)?,
+        decimals: d.stellen,
+        text_override: d.text.clone(),
+        chain,
+        suggested: d.vorgeschlagen,
+    })
+}
+
+/// Liest die Maße einer Zeichnung samt Maßzähler: Anzahl begrenzt, Kennungen größer als 0,
+/// kleiner als der Zähler und eindeutig, Maße einer Gruppe mit derselben Kettenart. Die
+/// übrigen Regeln (gleiche Art und Ansicht in einer Gruppe, Stellen eindeutig) prüft danach
+/// `validate_drawing` beim Laden des Dokuments.
+fn dimensions_from(
+    origin: &str,
+    d: &ZeichnungDto,
+    views: &HashMap<ViewId, ViewKind>,
+) -> Result<(Vec<DimSpec>, u64)> {
+    let ctx = |m: &str| ProjectError::corrupt(origin, format!("Zeichnung „{}“: {m}", d.name));
+    if d.masse.len() > MAX_DIMENSIONS {
+        return Err(ctx("Maße: zu viele Einträge"));
+    }
+    let next = counter(
+        origin,
+        &format!("Zeichnung „{}“, Maß", d.name),
+        d.naechstes_mass,
+        d.masse.iter().map(|m| m.id),
+    )?;
+    let mut ids = HashSet::with_capacity(d.masse.len());
+    let mut modes: HashMap<u64, ChainMode> = HashMap::new();
+    let mut out = Vec::with_capacity(d.masse.len());
+    for m in &d.masse {
+        if !ids.insert(m.id) {
+            return Err(ctx("Eine Maßkennung kommt doppelt vor"));
+        }
+        let spec = dimension_from(origin, &d.name, views, m)?;
+        if let Some(c) = spec.chain
+            && *modes.entry(c.group).or_insert(c.mode) != c.mode
+        {
+            return Err(ctx(
+                "Die Maße einer Kette mischen Kettenmaße und Bezugsmaße",
+            ));
+        }
+        out.push(spec);
+    }
+    Ok((out, next))
+}
+
+fn drawing_to(d: &Drawing, with_marks: bool) -> Result<ZeichnungDto> {
+    Ok(ZeichnungDto {
         id: d.id.0,
         name: d.name.clone(),
         blatt: BlattDto {
@@ -863,9 +1185,20 @@ fn drawing_to(d: &Drawing) -> ZeichnungDto {
                 },
                 verdeckt_zeigen: v.show_hidden,
                 eltern: v.parent.map(|p| p.0),
+                mittellinien: with_marks.then_some(v.centerlines),
             })
             .collect(),
-    }
+        masse: if with_marks {
+            d.dimensions
+                .iter()
+                .map(dimension_to)
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        },
+        // Bis Format 4 fehlt der Zähler, damit diese Dateien unverändert bleiben.
+        naechstes_mass: if with_marks { d.next_dim } else { 0 },
+    })
 }
 
 fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
@@ -911,9 +1244,11 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
             placement,
             show_hidden: v.verdeckt_zeigen,
             parent: v.eltern.map(ViewId),
-            centerlines: false,
+            centerlines: v.mittellinien.unwrap_or(false),
         });
     }
+    let kinds: HashMap<ViewId, ViewKind> = views.iter().map(|v| (v.id, v.kind)).collect();
+    let (dimensions, next_dim) = dimensions_from(origin, d, &kinds)?;
     Ok(Drawing {
         id: DrawingId(d.id),
         name: d.name.clone(),
@@ -924,8 +1259,8 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
         projection,
         views,
         next_view,
-        dimensions: Vec::new(),
-        next_dim: 1,
+        dimensions,
+        next_dim,
     })
 }
 
@@ -936,6 +1271,17 @@ fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)
         return Err(ProjectError::corrupt(
             origin,
             "Zeichnungen gibt es erst ab Dateiformat 4",
+        ));
+    }
+    let has_marks = |z: &ZeichnungDto| {
+        !z.masse.is_empty()
+            || z.naechstes_mass != 0
+            || z.ansichten.iter().any(|v| v.mittellinien.is_some())
+    };
+    if file.format < 5 && file.zeichnungen.iter().any(has_marks) {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Maße und Mittellinien gibt es erst ab Dateiformat 5",
         ));
     }
     check_len(origin, "Zeichnungen", file.zeichnungen.len())?;
@@ -964,8 +1310,9 @@ fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)
 /// JSON-Text einer Versionsdatei. Enthält der Snapshot eine nicht endliche Zahl, ist das ein
 /// Fehler (das Dokument wird dann nicht geschrieben).
 pub fn encode_version(s: &Snapshot) -> Result<String> {
+    let format = required_format(s);
     let file = VersionFile {
-        format: required_format(s),
+        format,
         marker: s.marker,
         naechste_id: s.next_id,
         features: s
@@ -986,7 +1333,11 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
                 daten: base64::encode(&m.to_bytes()),
             })
             .collect(),
-        zeichnungen: s.drawings.iter().map(drawing_to).collect(),
+        zeichnungen: s
+            .drawings
+            .iter()
+            .map(|d| drawing_to(d, format >= 5))
+            .collect::<Result<Vec<_>>>()?,
         // Ohne Zeichnungen fehlt der Zähler, damit alte Dateien unverändert bleiben (F7).
         naechste_zeichnung: if s.drawings.is_empty() {
             0

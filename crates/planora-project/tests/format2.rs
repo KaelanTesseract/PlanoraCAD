@@ -134,7 +134,7 @@ fn documents_without_blends_still_write_format_1() {
             .contains("\"format\": 1")
     );
     assert_eq!(required_format(&blend_document().snapshot()), 2);
-    assert_eq!(FORMAT_VERSION, 4); // seit Teilprojekt 11 (Zeichnungen, F7)
+    assert_eq!(FORMAT_VERSION, 5); // seit Teilprojekt 12 (Maße, Mittellinien)
 }
 
 #[test]
@@ -146,10 +146,10 @@ fn a_format_1_file_with_a_blend_is_corrupt_and_format_3_is_too_new() {
     }
     let e = bad(&good.replacen("\"format\": 2", "\"format\": 1", 1)).to_string();
     assert!(e.contains("Dateiformat 2"), "{e}");
-    // Seit Teilprojekt 11 ist Format 4 gültig (F7); „zu neu“ ist jetzt 5.
+    // Seit Teilprojekt 12 ist Format 5 gültig; „zu neu“ ist jetzt 6.
     assert!(matches!(
-        bad(&good.replacen("\"format\": 2", "\"format\": 5", 1)),
-        ProjectError::TooNew { found: 5, .. }
+        bad(&good.replacen("\"format\": 2", "\"format\": 6", 1)),
+        ProjectError::TooNew { found: 6, .. }
     ));
 }
 
