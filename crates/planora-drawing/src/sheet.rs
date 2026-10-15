@@ -4,8 +4,9 @@
 use crate::ViewLines;
 use crate::Visibility;
 use crate::layout::{align_dir, view_extent};
+use crate::model::ViewSpec;
 use crate::model::{Drawing, Placement, Sheet, ViewId, ViewKind};
-use crate::out2d::{Out2d, try_piece_to_out};
+use crate::out2d::{Out2d, piece_to_outs};
 use planora_math::DVec2;
 use std::collections::BTreeMap;
 
@@ -78,7 +79,8 @@ fn center_rec(
             // Tiefe begrenzt: ein Kreis in den Elternverweisen (fremde Datei) ergibt `None`.
             let depth = depth.checked_sub(1)?;
             let parent = drawing.view(spec.parent?)?;
-            if !results.contains_key(&parent.id) {
+            // Ein Elternbild, das `build_sheet` auslässt, positioniert kein Kind.
+            if !is_drawable(parent, results) {
                 return None;
             }
             let pc = center_rec(drawing, parent.id, results, depth)?;
@@ -89,9 +91,20 @@ fn center_rec(
     c.is_finite().then_some(c)
 }
 
+/// Kann die Ansicht gezeichnet werden: Ergebnis vorhanden, gültiger Maßstab, endliche Hüllbox?
+/// Gemeinsame Regel von `build_sheet` (Ansicht erscheint) und `view_center` (Elternbild
+/// positioniert Kinder).
+fn is_drawable(spec: &ViewSpec, results: &BTreeMap<ViewId, &ViewLines>) -> bool {
+    let Some(lines) = results.get(&spec.id) else {
+        return false;
+    };
+    let ((x0, y0), (x1, y1)) = lines.bbox;
+    spec.scale.is_valid() && [x0, y0, x1, y1].iter().all(|v| v.is_finite())
+}
+
 /// Baut das Blattmodell: je Ansicht mit Ergebnis die Stücke (verdeckte nur bei `show_hidden`)
 /// als Ausgabekurven. Ansichten ohne Ergebnis, ohne berechenbare Lage, mit ungültigem Maßstab
-/// oder nicht endlicher Hüllbox fehlen in `views`; Stücke mit nicht endlichen Zahlen entfallen.
+/// oder nicht endlicher Hüllbox (oder ohne zeichenbares Elternbild) fehlen in `views`; Stücke mit nicht endlichen Zahlen entfallen.
 /// Namen: `ViewKind::label`, bei mehrfach gleicher Art ` 2`, ` 3` (in Reihenfolge der Ansichten
 /// der Zeichnung, auch wenn eine frühere Ansicht gerade nicht berechnet ist).
 pub fn build_sheet(drawing: &Drawing, results: &BTreeMap<ViewId, &ViewLines>) -> SheetModel {
@@ -107,19 +120,16 @@ pub fn build_sheet(drawing: &Drawing, results: &BTreeMap<ViewId, &ViewLines>) ->
         } else {
             format!("{} {}", spec.kind.label(), n)
         };
+        if !is_drawable(spec, results) {
+            continue;
+        }
         let Some(lines) = results.get(&spec.id) else {
             continue;
         };
         let Some(center) = view_center(drawing, spec.id, results) else {
             continue;
         };
-        if !spec.scale.is_valid() {
-            continue;
-        }
         let ((x0, y0), (x1, y1)) = lines.bbox;
-        if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
-            continue;
-        }
         let xf = SheetTransform {
             scale: spec.scale.factor(),
             tx: center.x,
@@ -134,7 +144,7 @@ pub fn build_sheet(drawing: &Drawing, results: &BTreeMap<ViewId, &ViewLines>) ->
             let Some(stroke) = lines.strokes.get(p.stroke) else {
                 continue;
             };
-            if let Some(curve) = try_piece_to_out(stroke, &lines.basis, p.t0, p.t1, &xf) {
+            for curve in piece_to_outs(stroke, &lines.basis, p.t0, p.t1, &xf) {
                 out.push(SheetLine { vis: p.vis, curve });
             }
         }

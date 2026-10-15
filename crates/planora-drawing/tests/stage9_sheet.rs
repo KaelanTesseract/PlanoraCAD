@@ -3,7 +3,7 @@
 //! eigene Singulärwerte), nicht aus der Bibliothek übernommen.
 
 use planora_drawing::model::{Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet};
-use planora_drawing::out2d::{Out2d, piece_to_out, try_piece_to_out};
+use planora_drawing::out2d::{Out2d, piece_to_outs};
 use planora_drawing::sheet::{SheetTransform, build_sheet, view_center};
 use planora_drawing::stroke::{Stroke, StrokeOrigin};
 use planora_drawing::{Basis, Piece, ViewId, ViewKind, ViewLines, Visibility};
@@ -91,7 +91,9 @@ fn xf_id() -> SheetTransform {
 }
 
 fn out(s: &Stroke, kind: ViewKind, t0: f64, t1: f64) -> Out2d {
-    piece_to_out(s, &Basis::of(kind), t0, t1, &xf_id())
+    let mut v = piece_to_outs(s, &Basis::of(kind), t0, t1, &xf_id());
+    assert_eq!(v.len(), 1, "genau eine Kurve erwartet: {v:?}");
+    v.remove(0)
 }
 
 /// Winkelunterschied auf `(−π, π]` gefaltet.
@@ -822,7 +824,8 @@ fn scale_is_applied() {
         ty: 60.0,
         bbox_center: DVec2::new(1.0, 2.0),
     };
-    let Out2d::Arc { c, r, .. } = piece_to_out(&s, &Basis::of(ViewKind::Top), 0.0, TAU, &xf) else {
+    let v = piece_to_outs(&s, &Basis::of(ViewKind::Top), 0.0, TAU, &xf);
+    let Some(Out2d::Arc { c, r, .. }) = v.first().cloned() else {
         panic!("Arc erwartet")
     };
     assert!((r - 3.0).abs() < 1e-12);
@@ -916,8 +919,7 @@ fn non_finite_input_does_not_panic() {
             (0.0, 1.0),
             (1.0, 1.0),
         ] {
-            let _ = piece_to_out(s, &b, t0, t1, &xf_id());
-            let _ = try_piece_to_out(s, &b, t0, t1, &xf_id());
+            let _ = piece_to_outs(s, &b, t0, t1, &xf_id());
         }
         for xf in [
             SheetTransform {
@@ -929,20 +931,12 @@ fn non_finite_input_does_not_panic() {
                 ..xf_id()
             },
         ] {
-            assert!(try_piece_to_out(s, &b, 0.0, 1.0, &xf).is_none());
-            let _ = piece_to_out(s, &b, 0.0, 1.0, &xf);
+            assert!(piece_to_outs(s, &b, 0.0, 1.0, &xf).is_empty());
         }
     }
-    // Nicht endliche Eingabe → kein Ergebnis, die Ersatzlinie ist eine Nullstrecke.
-    assert!(try_piece_to_out(&strokes[0], &b, 0.0, TAU, &xf_id()).is_none());
-    assert_eq!(
-        piece_to_out(&strokes[0], &b, 0.0, TAU, &xf_id()),
-        Out2d::Line {
-            a: DVec2::ZERO,
-            b: DVec2::ZERO
-        }
-    );
-    assert!(try_piece_to_out(&strokes[3], &b, 0.0, TAU, &xf_id()).is_some());
+    // Nicht endliche Eingabe → nichts zu zeichnen (keine Ersatzlinie).
+    assert!(piece_to_outs(&strokes[0], &b, 0.0, TAU, &xf_id()).is_empty());
+    assert_eq!(piece_to_outs(&strokes[3], &b, 0.0, TAU, &xf_id()).len(), 1);
 
     // Blattmodell: unbrauchbare Stücke, Maßstab 0, nicht endliche Lage und Hüllbox.
     let mut d = drawing(Projection::First);
@@ -1015,4 +1009,272 @@ fn non_finite_input_does_not_panic() {
     // Zyklus in den Elternverweisen (fremde Datei) ergibt None statt Endlosschleife.
     d.views[4].parent = Some(cyc_a);
     assert!(view_center(&d, cyc_a, &res).is_none());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Naht einer geschlossenen Freiformkurve (Überarbeitung 1)
+// ---------------------------------------------------------------------------------------------
+
+/// Geschlossene kubische Kurve in der XY-Ebene, Bereich [0, 1], Anfang = Ende = (10, 0, 0).
+fn closed_loop() -> NurbsCurve {
+    let pts = [
+        (10.0, 0.0),
+        (10.0, 10.0),
+        (-10.0, 10.0),
+        (-10.0, -10.0),
+        (10.0, -10.0),
+        (10.0, -5.0),
+        (10.0, 0.0),
+    ];
+    NurbsCurve::new(
+        3,
+        vec![0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0, 1.0],
+        pts.iter().map(|&(x, y)| v3(x, y, 0.0)).collect(),
+        vec![1.0; 7],
+    )
+    .unwrap()
+}
+
+/// Bild des Kurvenpunkts bei `t` in der Ansicht Oben, ohne die Bibliothek zu fragen: der
+/// Parameter wird von Hand in [0, 1] gefaltet und die Kurve von planora-math ausgewertet.
+fn loop_image(c: &NurbsCurve, t: f64) -> DVec2 {
+    let u = t - t.floor();
+    let u = if t >= 1.0 && u == 0.0 { 1.0 } else { u };
+    img(c.point(u), ViewKind::Top)
+}
+
+fn polyline_len(c: &NurbsCurve, t0: f64, t1: f64) -> f64 {
+    let n = 200_000;
+    let mut len = 0.0;
+    let mut prev = loop_image(c, t0);
+    for i in 1..=n {
+        let p = loop_image(c, t0 + (t1 - t0) * i as f64 / n as f64);
+        len += p.distance(prev);
+        prev = p;
+    }
+    len
+}
+
+/// Prüft, dass die Kurven zusammen das Stück `[t0, t1]` (gefaltet) abbilden: 100 Punkte, dazu
+/// Gesamtlänge gegen einen eigenen Streckenzug.
+fn check_seam(t0: f64, t1: f64, parts: &[(f64, f64)]) {
+    let c = closed_loop();
+    let s = stroke(Curve::Nurbs(Arc::new(c.clone())), 0.0, 1.0);
+    let b = Basis::of(ViewKind::Top);
+    let outs = piece_to_outs(&s, &b, t0, t1, &xf_id());
+    assert_eq!(outs.len(), parts.len(), "{outs:?}");
+    for (o, &(p0, p1)) in outs.iter().zip(parts) {
+        let Out2d::Spline { knots, degree, .. } = o else {
+            panic!("Spline erwartet")
+        };
+        assert!((knots[0] - p0).abs() < 1e-12);
+        assert!((*knots.last().unwrap() - p1).abs() < 1e-12);
+        // Randknoten mit Vielfachheit Grad + 1.
+        assert!(knots[..=*degree].iter().all(|&k| k == knots[0]));
+        assert!(
+            knots[knots.len() - degree - 1..]
+                .iter()
+                .all(|&k| k == *knots.last().unwrap())
+        );
+    }
+    let mut worst: f64 = 0.0;
+    for i in 0..100 {
+        let t = t0 + (t1 - t0) * i as f64 / 99.0;
+        // Bezug: Punkt des Strichs (Kernel faltet selbst) gegen die eigene Faltung von Hand.
+        let want = s.point2(&b, t);
+        assert!(
+            close(want, loop_image(&c, t), 1e-9),
+            "Bezugswerte uneins bei {t}"
+        );
+        // Die Kurve, deren Bereich t (um ganze Perioden verschoben) enthält, muss ihn treffen.
+        let got = outs
+            .iter()
+            .zip(parts)
+            .filter_map(|(o, &(p0, p1))| {
+                let u = t - (t - 0.5 * (p0 + p1)).round();
+                (u >= p0 - 1e-12 && u <= p1 + 1e-12).then(|| o.point(u))
+            })
+            .map(|g| g.distance(want))
+            .fold(f64::INFINITY, f64::min);
+        worst = worst.max(got);
+    }
+    assert!(worst < 1e-9, "größte Abweichung {worst}");
+    let total: f64 = outs.iter().map(Out2d::length).sum();
+    let want = polyline_len(&c, t0, t1);
+    assert!((total - want).abs() < 1e-5, "{total} {want}");
+}
+
+#[test]
+fn piece_across_the_seam_of_a_closed_spline_is_split_in_two() {
+    check_seam(0.8, 1.2, &[(0.8, 1.0), (0.0, 0.2)]);
+}
+
+#[test]
+fn seam_pieces_in_other_positions() {
+    // Vor dem Anfang (gefaltet), ganz hinter dem Ende, im Bereich, volle Periode.
+    check_seam(-0.1, 0.1, &[(0.9, 1.0), (0.0, 0.1)]);
+    check_seam(1.1, 1.3, &[(0.1, 0.3)]);
+    check_seam(0.2, 0.5, &[(0.2, 0.5)]);
+    check_seam(0.0, 1.0, &[(0.0, 1.0)]);
+    // Mehr als eine Periode: kommt aus compute_view nicht vor, ergibt nichts (kein Raten).
+    let s = stroke(Curve::Nurbs(Arc::new(closed_loop())), 0.0, 1.0);
+    assert!(piece_to_outs(&s, &Basis::of(ViewKind::Top), 0.1, 1.3, &xf_id()).is_empty());
+}
+
+#[test]
+fn seam_piece_gives_two_sheet_lines() {
+    let st = stroke(Curve::Nurbs(Arc::new(closed_loop())), 0.0, 1.0);
+    let mut d = drawing(Projection::First);
+    let id = d.add_view(
+        ViewKind::Top,
+        Scale { num: 1, den: 1 },
+        Placement::Free { x: 100.0, y: 100.0 },
+        None,
+    );
+    let vl = ViewLines {
+        kind: ViewKind::Top,
+        basis: Basis::of(ViewKind::Top),
+        extent: 20.0,
+        strokes: vec![st],
+        pieces: vec![Piece {
+            stroke: 0,
+            t0: 0.8,
+            t1: 1.2,
+            vis: Visibility::Visible,
+        }],
+        bbox: ((-10.0, -10.0), (10.0, 10.0)),
+        dropped_splits: 0,
+    };
+    let res: BTreeMap<ViewId, &ViewLines> = BTreeMap::from([(id, &vl)]);
+    let m = build_sheet(&d, &res);
+    assert_eq!(m.views[0].lines.len(), 2);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Härtung der Ausgabekurven (Überarbeitung 1)
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn bounds_survive_huge_parameters() {
+    for (start, end) in [(1e300, 1e300 + 1.0), (-1e300, 1e300), (f64::MAX, f64::MAX)] {
+        let arc = Out2d::Arc {
+            c: DVec2::ZERO,
+            r: 1.0,
+            start,
+            end,
+        };
+        let ell = Out2d::Ellipse {
+            c: DVec2::ZERO,
+            major: DVec2::new(2.0, 0.0),
+            ratio: 0.5,
+            start,
+            end,
+        };
+        for o in [arc, ell] {
+            let _ = o.bounds();
+            let _ = o.length();
+        }
+    }
+    let arc = Out2d::Arc {
+        c: DVec2::ZERO,
+        r: 1.0,
+        start: 1e12,
+        end: 1e12 + TAU,
+    };
+    let (lo, hi) = arc.bounds();
+    assert!(close(lo, DVec2::splat(-1.0), 1e-3) && close(hi, DVec2::splat(1.0), 1e-3));
+}
+
+#[test]
+fn malformed_splines_do_not_panic() {
+    let sp = |degree, knots: Vec<f64>, ctrl: Vec<DVec2>, weights: Vec<f64>| Out2d::Spline {
+        degree,
+        knots,
+        ctrl,
+        weights,
+    };
+    let two = vec![DVec2::ZERO, DVec2::X];
+    let bad = [
+        sp(3, vec![], vec![], vec![]),
+        sp(2, vec![0.0, 0.0, 1.0, 1.0], two.clone(), vec![1.0, 1.0]),
+        sp(1, vec![0.0, 0.0, 1.0], two.clone(), vec![1.0, 1.0]),
+        sp(1, vec![0.0, 1.0, 0.5, 1.0], two.clone(), vec![1.0, 1.0]),
+        sp(0, vec![0.0, 1.0], vec![DVec2::ZERO], vec![1.0]),
+        sp(1, vec![0.0, 0.0, 1.0, 1.0], two.clone(), vec![1.0, 0.0]),
+    ];
+    for o in &bad {
+        assert!(o.point(0.5).is_nan(), "{o:?}");
+        assert!(o.length().is_nan());
+        let (lo, hi) = o.bounds();
+        assert!(lo.is_nan() && hi.is_nan());
+        assert!(!o.is_finite());
+    }
+    // Das gültige Gegenstück (Grad 1) funktioniert.
+    let ok = sp(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![DVec2::ZERO, DVec2::new(3.0, 4.0)],
+        vec![1.0, 1.0],
+    );
+    assert!((ok.length() - 5.0).abs() < 1e-9);
+    assert!(close(ok.point(0.5), DVec2::new(1.5, 2.0), 1e-12));
+}
+
+#[test]
+fn normalized_range_gives_start_in_one_turn_and_sweep() {
+    let arc = |start: f64, end: f64| Out2d::Arc {
+        c: DVec2::ZERO,
+        r: 1.0,
+        start,
+        end,
+    };
+    let (s, w) = arc(-1.0, 2.0).normalized_range().unwrap();
+    assert!((s - (TAU - 1.0)).abs() < 1e-12 && (w - 3.0).abs() < 1e-12);
+    let (s, w) = arc(7.0, 7.0 + TAU).normalized_range().unwrap();
+    assert!((s - (7.0 - TAU)).abs() < 1e-12 && (w - TAU).abs() < 1e-12);
+    let (s, w) = arc(0.5, 1.0).normalized_range().unwrap();
+    assert!((s - 0.5).abs() < 1e-15 && (w - 0.5).abs() < 1e-15);
+    let e = Out2d::Ellipse {
+        c: DVec2::ZERO,
+        major: DVec2::X,
+        ratio: 0.5,
+        start: -TAU - 0.25,
+        end: -TAU + 0.25,
+    };
+    let (s, w) = e.normalized_range().unwrap();
+    assert!((s - (TAU - 0.25)).abs() < 1e-12 && (w - 0.5).abs() < 1e-12);
+    assert!(arc(f64::NAN, 1.0).normalized_range().is_none());
+    let line = Out2d::Line {
+        a: DVec2::ZERO,
+        b: DVec2::X,
+    };
+    assert!(line.normalized_range().is_none());
+}
+
+#[test]
+fn parent_that_is_not_drawn_does_not_position_children() {
+    let mut d = drawing(Projection::First);
+    let sc = Scale { num: 1, den: 1 };
+    let front = d.add_view(
+        ViewKind::Front,
+        Scale { num: 1, den: 0 },
+        Placement::Free { x: 100.0, y: 200.0 },
+        None,
+    );
+    let top = d.add_view(
+        ViewKind::Top,
+        sc,
+        Placement::Aligned { distance: 50.0 },
+        Some(front),
+    );
+    let seg = [(v3(0.0, 0.0, 0.0), v3(10.0, 0.0, 5.0), Visibility::Visible)];
+    let vf = view_lines(ViewKind::Front, &seg);
+    let vt = view_lines(ViewKind::Top, &seg);
+    let res: BTreeMap<ViewId, &ViewLines> = BTreeMap::from([(front, &vf), (top, &vt)]);
+    assert!(view_center(&d, top, &res).is_none());
+    assert!(build_sheet(&d, &res).views.is_empty());
+    // Mit gültigem Maßstab erscheinen beide.
+    d.views[0].scale = sc;
+    assert!(view_center(&d, top, &res).is_some());
+    assert_eq!(build_sheet(&d, &res).views.len(), 2);
 }

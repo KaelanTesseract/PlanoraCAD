@@ -19,6 +19,9 @@ pub enum Out2d {
     /// Strecke von `a` nach `b`; Parameter `t ∈ [0, 1]`.
     Line { a: DVec2, b: DVec2 },
     /// Kreisbogen gegen den Uhrzeigersinn von `start` bis `end` (Radiant, `end > start`, höchstens TAU); voller Kreis: end = start + TAU.
+    /// `start` und `end` dürfen negativ oder größer als TAU sein (sie folgen dem Parameter des
+    /// Strichs); Schreiber müssen über [`Out2d::normalized_range`] auf `[0, TAU)` und Öffnungswinkel
+    /// umrechnen.
     Arc {
         c: DVec2,
         r: f64,
@@ -26,6 +29,7 @@ pub enum Out2d {
         end: f64,
     },
     /// Ellipse mit Hauptachse `major` (Vektor vom Mittelpunkt zum Hauptscheitel), Nebenachse `ratio·|major|`, Parameter gegen den Uhrzeigersinn (Radiant).
+    /// `start`/`end` wie beim Bogen unnormiert (siehe [`Out2d::normalized_range`]).
     Ellipse {
         c: DVec2,
         major: DVec2,
@@ -34,6 +38,9 @@ pub enum Out2d {
         end: f64,
     },
     /// Rationale B-Spline-Kurve (Grad, Knoten, Kontrollpunkte, Gewichte), Parameterbereich = Knotenbereich.
+    /// Ein von Hand gebauter, ungültiger Spline (leer, falsche Knotenzahl, fallende Knoten,
+    /// Gewicht ≤ 0) lässt `point` und `length` NaN und `bounds` (NaN, NaN) liefern, nie eine
+    /// Panik; `is_finite` ist dann `false`.
     Spline {
         degree: usize,
         knots: Vec<f64>,
@@ -80,11 +87,7 @@ impl Out2d {
                 knots,
                 ctrl,
                 weights,
-            } => {
-                let q = homogeneous(ctrl, weights);
-                let h = eval_h(*degree, knots, &q, t);
-                DVec2::new(h[0] / h[2], h[1] / h[2])
-            }
+            } => Spl::new(*degree, knots, ctrl, weights).map_or(DVec2::NAN, |s| s.point(t)),
         }
     }
 
@@ -121,9 +124,10 @@ impl Out2d {
                 ctrl,
                 weights,
             } => {
-                let q = homogeneous(ctrl, weights);
-                let dq = derivative_curve(*degree, knots, &q);
-                let speed = |t: f64| rational_derivative(*degree, knots, &q, &dq, t).length();
+                let Some(sp) = Spl::new(*degree, knots, ctrl, weights) else {
+                    return f64::NAN;
+                };
+                let speed = |t: f64| sp.deriv(t).length();
                 span_edges(*degree, knots)
                     .windows(2)
                     .map(|w| {
@@ -154,35 +158,27 @@ impl Out2d {
                 add(*a);
                 add(*b);
             }
-            Out2d::Arc { start, end, .. } => {
-                add(self.point(*start));
-                add(self.point(*end));
-                // Achsextrema bei Winkeln k·π/2.
-                let (k0, k1) = (
-                    (*start / (0.5 * PI)).ceil() as i64,
-                    (*end / (0.5 * PI)).floor() as i64,
-                );
-                for k in k0..=k1.min(k0 + 4) {
-                    add(self.point(k as f64 * 0.5 * PI));
-                }
-            }
-            Out2d::Ellipse {
-                major,
-                ratio,
-                start,
-                end,
-                ..
-            } => {
-                add(self.point(*start));
-                add(self.point(*end));
-                let minor = DVec2::new(-major.y, major.x) * *ratio;
-                for (m, n) in [(major.x, minor.x), (major.y, minor.y)] {
-                    // d/dt (m cos t + n sin t) = 0 bei t = atan2(n, m) + k·π.
-                    let t_star = n.atan2(m);
-                    let k0 = ((*start - t_star) / PI).ceil() as i64;
-                    let k1 = ((*end - t_star) / PI).floor() as i64;
-                    for k in k0..=k1.min(k0 + 2) {
-                        add(self.point(t_star + k as f64 * PI));
+            Out2d::Arc { .. } | Out2d::Ellipse { .. } => {
+                let Some((s0, sweep)) = self.normalized_range() else {
+                    return (DVec2::NAN, DVec2::NAN);
+                };
+                add(self.point(s0));
+                add(self.point(s0 + sweep));
+                // Achsextrema: Bogen bei Winkeln k·π/2, Ellipse bei atan2(n, m) + k·π je Achse.
+                let extrema: Vec<(f64, f64)> = match self {
+                    Out2d::Ellipse { major, ratio, .. } => {
+                        let minor = DVec2::new(-major.y, major.x) * *ratio;
+                        vec![(minor.x.atan2(major.x), PI), (minor.y.atan2(major.y), PI)]
+                    }
+                    _ => vec![(0.0, 0.5 * PI)],
+                };
+                for (t_star, step) in extrema {
+                    let k0 = ((s0 - t_star) / step).ceil();
+                    for i in 0..5 {
+                        let t = t_star + (k0 + f64::from(i)) * step;
+                        if t <= s0 + sweep {
+                            add(self.point(t));
+                        }
                     }
                 }
             }
@@ -192,8 +188,9 @@ impl Out2d {
                 ctrl,
                 weights,
             } => {
-                let q = homogeneous(ctrl, weights);
-                let dq = derivative_curve(*degree, knots, &q);
+                let Some(sp) = Spl::new(*degree, knots, ctrl, weights) else {
+                    return (DVec2::NAN, DVec2::NAN);
+                };
                 let edges = span_edges(*degree, knots);
                 const N: usize = 32;
                 for w in edges.windows(2) {
@@ -201,18 +198,18 @@ impl Out2d {
                         .map(|i| w[0] + (w[1] - w[0]) * i as f64 / N as f64)
                         .collect();
                     for &t in &ts {
-                        add(self.point(t));
+                        add(sp.point(t));
                     }
                     for axis in 0..2 {
                         let f = |t: f64| {
-                            let d = rational_derivative(*degree, knots, &q, &dq, t);
+                            let d = sp.deriv(t);
                             if axis == 0 { d.x } else { d.y }
                         };
                         for p in ts.windows(2) {
                             let (mut a, mut b) = (p[0], p[1]);
                             let (fa, fb) = (f(a), f(b));
                             if fa == 0.0 {
-                                add(self.point(a));
+                                add(sp.point(a));
                             }
                             if fa * fb < 0.0 {
                                 let mut fa = fa;
@@ -226,7 +223,7 @@ impl Out2d {
                                         fa = fm;
                                     }
                                 }
-                                add(self.point(0.5 * (a + b)));
+                                add(sp.point(0.5 * (a + b)));
                             }
                         }
                     }
@@ -241,7 +238,24 @@ impl Out2d {
         (lo, hi)
     }
 
-    /// Sind alle Zahlen der Kurve endlich?
+    /// Für Bogen und Ellipse: Anfang auf `[0, TAU)` gebracht und Öffnungswinkel `end − start`
+    /// (höchstens TAU); für die Schreiber der Ausgabeformate. `None` bei anderen Kurven oder
+    /// nicht endlichen Winkeln.
+    pub fn normalized_range(&self) -> Option<(f64, f64)> {
+        let (start, end) = match self {
+            Out2d::Arc { start, end, .. } | Out2d::Ellipse { start, end, .. } => (*start, *end),
+            _ => return None,
+        };
+        if !(start.is_finite() && end.is_finite()) {
+            return None;
+        }
+        let s0 = start.rem_euclid(TAU);
+        // rem_euclid kann bei winzigen negativen Werten TAU liefern.
+        let s0 = if s0 >= TAU { 0.0 } else { s0 };
+        Some((s0, (end - start).clamp(0.0, TAU)))
+    }
+
+    /// Sind alle Zahlen der Kurve endlich (bei einem Spline außerdem: Aufbau gültig)?
     pub fn is_finite(&self) -> bool {
         match self {
             Out2d::Line { a, b } => a.is_finite() && b.is_finite(),
@@ -262,14 +276,15 @@ impl Out2d {
                     && end.is_finite()
             }
             Out2d::Spline {
+                degree,
                 knots,
                 ctrl,
                 weights,
-                ..
             } => {
                 knots.iter().all(|k| k.is_finite())
                     && ctrl.iter().all(|p| p.is_finite())
                     && weights.iter().all(|w| w.is_finite())
+                    && Spl::new(*degree, knots, ctrl, weights).is_some()
             }
         }
     }
@@ -278,6 +293,44 @@ impl Out2d {
 // ---------------------------------------------------------------------------------------------
 // B-Spline-Werkzeuge in homogenen Koordinaten (w·x, w·y, w)
 // ---------------------------------------------------------------------------------------------
+
+/// Einmal je Aufruf aufgebaute Auswertung eines geprüften Splines: homogene Kontrollpunkte
+/// und Ableitungskurve.
+struct Spl<'a> {
+    p: usize,
+    knots: &'a [f64],
+    q: Vec<H3>,
+    dq: Vec<H3>,
+}
+
+impl<'a> Spl<'a> {
+    /// `None` bei ungültigem Aufbau (Grad 0, zu wenige Kontrollpunkte, Knotenzahl passt nicht,
+    /// fallende oder nicht endliche Knoten, Gewicht nicht positiv).
+    fn new(p: usize, knots: &'a [f64], ctrl: &[DVec2], weights: &[f64]) -> Option<Spl<'a>> {
+        let ok = p >= 1
+            && ctrl.len() > p
+            && weights.len() == ctrl.len()
+            && knots.len() == ctrl.len() + p + 1
+            && knots.iter().all(|k| k.is_finite())
+            && knots.windows(2).all(|w| w[0] <= w[1])
+            && weights.iter().all(|w| w.is_finite() && *w > 0.0);
+        if !ok {
+            return None;
+        }
+        let q = homogeneous(ctrl, weights);
+        let dq = derivative_curve(p, knots, &q);
+        Some(Spl { p, knots, q, dq })
+    }
+
+    fn point(&self, t: f64) -> DVec2 {
+        let h = eval_h(self.p, self.knots, &self.q, t);
+        DVec2::new(h[0] / h[2], h[1] / h[2])
+    }
+
+    fn deriv(&self, t: f64) -> DVec2 {
+        rational_derivative(self.p, self.knots, &self.q, &self.dq, t)
+    }
+}
 
 fn homogeneous(ctrl: &[DVec2], weights: &[f64]) -> Vec<H3> {
     ctrl.iter()
@@ -420,7 +473,14 @@ fn cut_spline(p: usize, knots: &[f64], q: &[H3], t0: f64, t1: f64) -> (Vec<f64>,
     (kn[i0..=last].to_vec(), qq[i0..i0 + count].to_vec())
 }
 
-fn spline_out(c: &NurbsCurve, basis: &Basis, t0: f64, t1: f64, xf: &SheetTransform) -> Out2d {
+/// Teilstück `[t0, t1]` (innerhalb des Bereichs); `None`, wenn es leer ist.
+fn spline_out(
+    c: &NurbsCurve,
+    basis: &Basis,
+    t0: f64,
+    t1: f64,
+    xf: &SheetTransform,
+) -> Option<Out2d> {
     let p = c.degree();
     let proj = |v: DVec3| basis.project(v);
     let (a, b) = c.domain();
@@ -428,8 +488,7 @@ fn spline_out(c: &NurbsCurve, basis: &Basis, t0: f64, t1: f64, xf: &SheetTransfo
     let ctrl2: Vec<DVec2> = c.control_points().iter().map(|&v| proj(v)).collect();
     let q = homogeneous(&ctrl2, c.weights());
     if hi <= lo {
-        let pt = xf.apply(proj(c.point(lo)));
-        return Out2d::Line { a: pt, b: pt };
+        return None;
     }
     let (kn, qq) = cut_spline(p, c.knots().knots(), &q, lo, hi);
     let mut ctrl = Vec::with_capacity(qq.len());
@@ -438,12 +497,12 @@ fn spline_out(c: &NurbsCurve, basis: &Basis, t0: f64, t1: f64, xf: &SheetTransfo
         ctrl.push(xf.apply(DVec2::new(h[0] / h[2], h[1] / h[2])));
         weights.push(h[2]);
     }
-    Out2d::Spline {
+    Some(Out2d::Spline {
         degree: p,
         knots: kn,
         ctrl,
         weights,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -531,8 +590,9 @@ fn conic_out(c: DVec2, a: DVec2, b: DVec2, t0: f64, t1: f64, xf: &SheetTransform
     })
 }
 
-/// Wandelt das Stück `[t0, t1]` des Strichs in eine Ausgabekurve in Blattkoordinaten
-/// (`Blatt = scale·(p − bbox_center) + (tx, ty)`).
+/// Wandelt das Stück `[t0, t1]` des Strichs in Ausgabekurven in Blattkoordinaten
+/// (`Blatt = scale·(p − bbox_center) + (tx, ty)`); meist genau eine, bei einem Stück über die
+/// Naht einer geschlossenen Freiformkurve zwei.
 ///
 /// * Gerade → `Line` (projizierte Endpunkte).
 /// * Kreis und Ellipse: projizierte konjugierte Halbmesser `A`, `B` (`P(t) = c + A cos t + B sin t`),
@@ -540,39 +600,28 @@ fn conic_out(c: DVec2, a: DVec2, b: DVec2, t0: f64, t1: f64, xf: &SheetTransform
 ///   `Line` (Strecke zwischen den Extrempunkten des gezeichneten Stücks) bei Verhältnis ≤ 1e-9,
 ///   sonst `Ellipse`. Bei negativer Determinante (gespiegelte Abbildung) werden Parameterbereich
 ///   und Richtung so gewendet, dass `start < end` und gegen den Uhrzeigersinn gilt.
-/// * Freiformkurve → `Spline`, Teilbereich durch Knoteneinfügen exakt zugeschnitten.
+/// * Freiformkurve → `Spline`, Teilbereich durch Knoteneinfügen exakt zugeschnitten. Reicht das
+///   Stück einer geschlossenen Kurve über das Bereichsende hinaus (so fasst `compute_view` das
+///   erste und letzte Stück zusammen), wird der Parameter um die Periode gefaltet und das Stück
+///   in `[t0, Ende]` und `[Anfang, t1 − Periode]` geteilt. Ein Stück, das länger als eine
+///   Periode ist, kommt aus `compute_view` nicht vor und ergibt keine Kurve.
 ///
-/// Nicht endliche Eingaben ergeben eine Nullstrecke im Ursprung (kein Absturz).
-pub fn piece_to_out(
+/// Nicht endliche Eingaben ergeben eine leere Liste (nichts zu zeichnen, kein Absturz).
+pub fn piece_to_outs(
     stroke: &Stroke,
     basis: &Basis,
     t0: f64,
     t1: f64,
     xf: &SheetTransform,
-) -> Out2d {
-    try_piece_to_out(stroke, basis, t0, t1, xf).unwrap_or(Out2d::Line {
-        a: DVec2::ZERO,
-        b: DVec2::ZERO,
-    })
-}
-
-/// Wie [`piece_to_out`], aber `None` statt der Nullstrecke, wenn Eingaben oder Ergebnis nicht
-/// endlich sind.
-pub fn try_piece_to_out(
-    stroke: &Stroke,
-    basis: &Basis,
-    t0: f64,
-    t1: f64,
-    xf: &SheetTransform,
-) -> Option<Out2d> {
+) -> Vec<Out2d> {
     if !(t0.is_finite() && t1.is_finite() && xf.scale.is_finite() && xf.bbox_center.is_finite()) {
-        return None;
+        return Vec::new();
     }
-    let out = match &stroke.curve {
-        Curve::Line { .. } => Some(Out2d::Line {
+    let outs: Vec<Out2d> = match &stroke.curve {
+        Curve::Line { .. } => vec![Out2d::Line {
             a: xf.apply(stroke.point2(basis, t0)),
             b: xf.apply(stroke.point2(basis, t1)),
-        }),
+        }],
         Curve::Circle { frame, radius } => {
             let c = basis.project(frame.origin);
             let a = DVec2::new(
@@ -583,7 +632,7 @@ pub fn try_piece_to_out(
                 (frame.y * *radius).dot(basis.ex),
                 (frame.y * *radius).dot(basis.ey),
             );
-            conic_out(c, a, b, t0, t1, xf)
+            conic_out(c, a, b, t0, t1, xf).into_iter().collect()
         }
         Curve::Ellipse {
             frame,
@@ -594,9 +643,37 @@ pub fn try_piece_to_out(
             let (u, v) = (frame.x * *major, frame.y * *minor);
             let a = DVec2::new(u.dot(basis.ex), u.dot(basis.ey));
             let b = DVec2::new(v.dot(basis.ex), v.dot(basis.ey));
-            conic_out(c, a, b, t0, t1, xf)
+            conic_out(c, a, b, t0, t1, xf).into_iter().collect()
         }
-        Curve::Nurbs(c) => Some(spline_out(c, basis, t0, t1, xf)),
-    }?;
-    out.is_finite().then_some(out)
+        Curve::Nurbs(c) => {
+            let (a, b) = c.domain();
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
+            let ranges: Vec<(f64, f64)> = match stroke.curve.period() {
+                Some(per) if per > 0.0 && (lo < a || hi > b) => {
+                    let width = hi - lo;
+                    if width > per * (1.0 + 1e-12) {
+                        Vec::new()
+                    } else {
+                        let mut l = a + (lo - a).rem_euclid(per);
+                        let mut h = l + width;
+                        if l >= b {
+                            l -= per;
+                            h -= per;
+                        }
+                        if h > b {
+                            vec![(l, b), (a, h - per)]
+                        } else {
+                            vec![(l, h)]
+                        }
+                    }
+                }
+                _ => vec![(lo.clamp(a, b), hi.clamp(a, b))],
+            };
+            ranges
+                .into_iter()
+                .filter_map(|(l, h)| spline_out(c, basis, l, h, xf))
+                .collect()
+        }
+    };
+    outs.into_iter().filter(Out2d::is_finite).collect()
 }
