@@ -216,6 +216,135 @@ pub fn torus_silhouette_points(major: f64, minor: f64, d: DVec3, n: usize) -> Ve
     out
 }
 
+/// Zylinder (r = 10, Höhe 7) mit gerundeter Oberkante: Viertelkreis um (7, 7) im (r, z)-Schnitt
+/// bis (7, 10), oben eine Scheibe r = 7; Drehkörper um Z, Naht bei 20°. Die Rundung ist eine
+/// **Teil**-Torusfläche (R = 7, r = 3, Mitte z = 7, v ∈ [0, π/2]). Liefert den Körper und den
+/// Index der Torusfläche.
+pub fn rounded_cylinder_solid() -> (Solid, usize) {
+    let chain = ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![
+            Segment::Line {
+                to: DVec2::new(10.0, 0.0),
+            },
+            Segment::Line {
+                to: DVec2::new(10.0, 7.0),
+            },
+            Segment::Arc {
+                center: DVec2::new(7.0, 7.0),
+                sweep: std::f64::consts::FRAC_PI_2,
+            },
+            Segment::Line {
+                to: DVec2::new(0.0, 10.0),
+            },
+        ],
+    };
+    let s = revolve(&chain, &turned_frame(20.0), &tol()).unwrap();
+    validate(&s).expect("gerundeter Zylinder ist gültig");
+    let face = s
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Torus { .. }))
+        .map(|(id, _)| id.index())
+        .expect("Torusfläche");
+    (s, face)
+}
+
+/// Ein Umrisszweig als Abbildung Parameter ↦ (u, v) auf dem Torus.
+type Branch = Box<dyn Fn(f64) -> (f64, f64)>;
+
+/// Umriss des Teil-Torus aus [`rounded_cylinder_solid`] (Achse Z, R, r, Mitte auf Höhe `zc`),
+/// beschränkt auf `v ∈ [v0, v1]` (eigene Formel wie [`torus_silhouette_points`], Grenzpunkte per
+/// Bisektion in `u` bzw. im Meridianwinkel genau auf `v0`/`v1`). Je zusammenhängendes Stück ein
+/// Streckenzug mit Stützstellen im Abstand `TAU / n`.
+#[allow(clippy::too_many_arguments)]
+pub fn partial_torus_silhouette_points(
+    major: f64,
+    minor: f64,
+    zc: f64,
+    d: DVec3,
+    n: usize,
+    (v0, v1): (f64, f64),
+) -> Vec<Vec<DVec3>> {
+    let pt = |u: f64, v: f64| {
+        let rho = major + minor * v.cos();
+        DVec3::new(rho * u.cos(), rho * u.sin(), zc + minor * v.sin())
+    };
+    let norm = |v: f64| {
+        let x = v.rem_euclid(TAU);
+        if x > std::f64::consts::PI { x - TAU } else { x }
+    };
+    let inside = |v: f64| {
+        let v = norm(v);
+        v >= v0 - 1e-12 && v <= v1 + 1e-12
+    };
+    // Zweige als (Parameter w ↦ (u, v)) über w ∈ [0, 2π].
+    let mut branches: Vec<Branch> = Vec::new();
+    if d.z.abs() > 1e-9 {
+        for sign in [1.0, -1.0] {
+            branches.push(Box::new(move |u: f64| {
+                let a = d.x * u.cos() + d.y * u.sin();
+                (u, (-sign * a).atan2(sign * d.z))
+            }));
+        }
+    } else {
+        for s in [1.0, -1.0] {
+            branches.push(Box::new(move |u: f64| (u, s * std::f64::consts::FRAC_PI_2)));
+        }
+        let phi = d.y.atan2(d.x);
+        for um in [
+            phi + std::f64::consts::FRAC_PI_2,
+            phi - std::f64::consts::FRAC_PI_2,
+        ] {
+            branches.push(Box::new(move |w: f64| (um, w)));
+        }
+    }
+    let mut out = Vec::new();
+    for b in &branches {
+        let at = |k: usize| TAU * k as f64 / n as f64;
+        let mut run: Vec<DVec3> = Vec::new();
+        for k in 0..=n {
+            let (u, v) = b(at(k));
+            let ok = inside(v);
+            if k > 0 {
+                let (_, vp) = b(at(k - 1));
+                if inside(vp) != ok {
+                    // Grenze zwischen at(k−1) und at(k) per Bisektion.
+                    let (mut lo, mut hi) = (at(k - 1), at(k));
+                    let lo_in = inside(vp);
+                    for _ in 0..80 {
+                        let m = 0.5 * (lo + hi);
+                        if inside(b(m).1) == lo_in {
+                            lo = m;
+                        } else {
+                            hi = m;
+                        }
+                    }
+                    let w = if lo_in { lo } else { hi };
+                    let (bu, bv) = b(w);
+                    let bv = if (norm(bv) - v0).abs() < (norm(bv) - v1).abs() {
+                        v0
+                    } else {
+                        v1
+                    };
+                    run.push(pt(bu, bv));
+                    if lo_in {
+                        out.push(std::mem::take(&mut run));
+                    }
+                }
+            }
+            if ok {
+                run.push(pt(u, v));
+            }
+        }
+        if run.len() > 1 {
+            out.push(run);
+        }
+    }
+    out.retain(|r| r.len() > 1);
+    out
+}
+
 /// `n + 1` gleichverteilte Punkte des Strichs, eigene Projektion `(P·ex, P·ey)`.
 pub fn sample2(s: &Stroke, basis: &Basis, n: usize) -> Vec<DVec2> {
     sample3(s, n)
@@ -307,56 +436,212 @@ pub fn hausdorff(a: &[Vec<DVec2>], b: &[Vec<DVec2>]) -> f64 {
     directed(a, b).max(directed(b, a))
 }
 
-/// Eigene Rechnung zur Freiformfläche `face` des Körpers: nächster Flächenpunkt zu `p`
-/// (Raster 64 × 64 über den Parameterbereich, dann Newton auf `(S − p)·S_u = (S − p)·S_v = 0`)
-/// und dort `n·d` mit der eigenen Normale `S_u × S_v / |S_u × S_v|`. Liefert `(Abstand, n·d)`.
+/// Eigene Rechnung zur Freiformfläche `face` des Körpers: nächster Flächenpunkt zu `p` – erst
+/// global (Raster 64 × 64 über den Parameterbereich), dann örtlich von den vier besten
+/// Rasterpunkten aus Newton auf `(S − p)·S_u = (S − p)·S_v = 0` mit Schrittverkürzung (ein
+/// Schritt zählt nur, wenn der Abstand sinkt; am Bereichsrand begrenzt), zuletzt ein feines
+/// Raster um den besten Punkt. Der kleinste je gefundene Abstand gilt. Dort `n·d` mit der eigenen
+/// Normale `S_u × S_v / |S_u × S_v|`. Liefert `(Abstand, n·d)`.
 pub fn surface_residual(s: &Solid, face: usize, p: DVec3, d: DVec3) -> (f64, f64) {
     let Surface::Nurbs(data) = &s.faces[Id::<Face>::from_index(face)].surface else {
         panic!("keine Freiformfläche");
     };
     let sf = data.surface();
     let ((u0, u1), (v0, v1)) = sf.domain();
+    let dist = |u: f64, v: f64| sf.point(u, v).distance(p);
     const N: usize = 64;
-    let mut best = (f64::INFINITY, u0, v0);
+    let mut grid: Vec<(f64, f64, f64)> = Vec::with_capacity((N + 1) * (N + 1));
     for i in 0..=N {
         for j in 0..=N {
             let u = u0 + (u1 - u0) * i as f64 / N as f64;
             let v = v0 + (v1 - v0) * j as f64 / N as f64;
-            let dist = sf.point(u, v).distance(p);
-            if dist < best.0 {
-                best = (dist, u, v);
+            grid.push((dist(u, v), u, v));
+        }
+    }
+    grid.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut best = grid[0];
+    for &(d0, mut u, mut v) in grid.iter().take(4) {
+        let mut cur = d0;
+        for _ in 0..60 {
+            let dv = sf.derivs(u, v, 2);
+            let r = dv[0][0] - p;
+            let (su, sv) = (dv[1][0], dv[0][1]);
+            let (f, g) = (r.dot(su), r.dot(sv));
+            let (a, b, c) = (
+                su.dot(su) + r.dot(dv[2][0]),
+                su.dot(sv) + r.dot(dv[1][1]),
+                sv.dot(sv) + r.dot(dv[0][2]),
+            );
+            let det = a * c - b * b;
+            let (mut du, mut dw) = if det.abs() > 1e-300 && a > 0.0 && det > 0.0 {
+                ((c * f - b * g) / det, (a * g - b * f) / det)
+            } else {
+                // Gradientenschritt, wenn die Hesse-Matrix nicht positiv ist.
+                let l = (su.length_squared() + sv.length_squared()).max(1e-300);
+                (f / l, g / l)
+            };
+            let mut moved = false;
+            for _ in 0..30 {
+                let (nu, nv) = ((u - du).clamp(u0, u1), (v - dw).clamp(v0, v1));
+                let nd = dist(nu, nv);
+                if nd < cur {
+                    (u, v, cur) = (nu, nv, nd);
+                    moved = true;
+                    break;
+                }
+                du *= 0.5;
+                dw *= 0.5;
+            }
+            if !moved {
+                break;
+            }
+        }
+        if cur < best.0 {
+            best = (cur, u, v);
+        }
+    }
+    // Feines Raster um den besten Punkt (eine Rasterzelle zu jeder Seite).
+    let (hu, hv) = ((u1 - u0) / N as f64, (v1 - v0) / N as f64);
+    let (bu, bv) = (best.1, best.2);
+    for i in 0..=40 {
+        for j in 0..=40 {
+            let u = (bu - hu + 2.0 * hu * i as f64 / 40.0).clamp(u0, u1);
+            let v = (bv - hv + 2.0 * hv * j as f64 / 40.0).clamp(v0, v1);
+            let dd = dist(u, v);
+            if dd < best.0 {
+                best = (dd, u, v);
             }
         }
     }
-    let (_, mut u, mut v) = best;
-    for _ in 0..50 {
-        let dv = sf.derivs(u, v, 2);
-        let r = dv[0][0] - p;
-        let (su, sv) = (dv[1][0], dv[0][1]);
-        let (suu, suv, svv) = (dv[2][0], dv[1][1], dv[0][2]);
-        let (f, g) = (r.dot(su), r.dot(sv));
-        let (a, b, c) = (
-            su.dot(su) + r.dot(suu),
-            su.dot(sv) + r.dot(suv),
-            sv.dot(sv) + r.dot(svv),
-        );
-        let det = a * c - b * b;
-        if det.abs() < 1e-300 {
-            break;
-        }
-        let du = (c * f - b * g) / det;
-        let dvv = (a * g - b * f) / det;
-        u = (u - du).clamp(u0, u1);
-        v = (v - dvv).clamp(v0, v1);
-        if du.abs() + dvv.abs() < 1e-15 {
-            break;
-        }
-    }
-    let dv = sf.derivs(u, v, 1);
+    let dv = sf.derivs(best.1, best.2, 1);
     let n = dv[1][0].cross(dv[0][1]).normalize();
-    (sf.point(u, v).distance(p), n.dot(d))
+    (best.0, n.dot(d))
 }
 
+/// Eigenes Sichturteil für eine ungekippte, unbeschnittene Kuppel aus [`dome_revolved`] (Sockel
+/// r = 8 bis z = 4, Wand mit den (r, z)-Kontrollpunkten `wall`, z streng steigend, oben eine
+/// Scheibe bis zur Achse): Der Körper ist `{(ρ, z) : 0 ≤ z ≤ z_top, ρ ≤ R(z)}` mit dem eigenen
+/// Profilradius `R` (Tabelle aus der Bernstein-Form, 100 000 Stellen, linear interpoliert).
+/// Prüfstrahlen von `p` zum Auge, um `1e-4` in vier Richtungen gekippt (eigener Wert); längs eines
+/// Strahls wird `f = max(ρ − R(z), −z, z − z_top)` (< 0 innen) ab `s0 = 0,1` alle 2e-3 abgetastet
+/// und um jedes örtliche Minimum per Goldenem Schnitt verfeinert. Frei: kleinstes `f > 1e-6`;
+/// verdeckt: `f < −1e-6`. Sichtbar, wenn ein Strahl frei ist; verdeckt, wenn alle verdeckt sind;
+/// sonst `None` (unentschieden). Strahlen erst ab `s0`: Die Linienpunkte (auch angepasste Umrisse,
+/// bis 1e-4 neben der Fläche) liegen auf oder an der Fläche.
+pub struct DomeJudge {
+    wall: [(f64, f64); 4],
+    z_lo: f64,
+    z_top: f64,
+    table: Vec<f64>,
+}
+
+impl DomeJudge {
+    pub fn new(wall: [(f64, f64); 4]) -> DomeJudge {
+        let bern = |t: f64, k: usize| {
+            let s = 1.0 - t;
+            let w = [s * s * s, 3.0 * s * s * t, 3.0 * s * t * t, t * t * t];
+            w.iter()
+                .zip(&wall)
+                .map(|(b, c)| b * if k == 0 { c.0 } else { c.1 })
+                .sum::<f64>()
+        };
+        let (z_lo, z_top) = (wall[0].1, wall[3].1);
+        const M: usize = 100_000;
+        let table = (0..=M)
+            .map(|i| {
+                let z = z_lo + (z_top - z_lo) * i as f64 / M as f64;
+                let (mut a, mut b) = (0.0, 1.0);
+                for _ in 0..60 {
+                    let m = 0.5 * (a + b);
+                    if bern(m, 1) < z {
+                        a = m;
+                    } else {
+                        b = m;
+                    }
+                }
+                bern(0.5 * (a + b), 0)
+            })
+            .collect();
+        DomeJudge {
+            wall,
+            z_lo,
+            z_top,
+            table,
+        }
+    }
+
+    fn radius(&self, z: f64) -> f64 {
+        if z <= self.z_lo {
+            return self.wall[0].0;
+        }
+        let m = self.table.len() - 1;
+        let x = ((z - self.z_lo) / (self.z_top - self.z_lo) * m as f64).clamp(0.0, m as f64);
+        let i = (x.floor() as usize).min(m - 1);
+        let f = x - i as f64;
+        self.table[i] * (1.0 - f) + self.table[i + 1] * f
+    }
+
+    fn f(&self, q: DVec3) -> f64 {
+        let rho = q.x.hypot(q.y);
+        (rho - self.radius(q.z.clamp(0.0, self.z_top)))
+            .max(-q.z)
+            .max(q.z - self.z_top)
+    }
+
+    /// Kleinstes `f` längs `p + s·dir`, `s ∈ [s0, Austritt aus der Hüllbox]`.
+    fn ray_min(&self, p: DVec3, dir: DVec3) -> f64 {
+        const S0: f64 = 0.1;
+        const H: f64 = 2e-3;
+        let lo = DVec3::new(-12.0, -12.0, -2.0);
+        let hi = DVec3::new(12.0, 12.0, self.z_top + 2.0);
+        let mut s_end = f64::INFINITY;
+        for k in 0..3 {
+            if dir[k] != 0.0 {
+                let a = (lo[k] - p[k]) / dir[k];
+                let b = (hi[k] - p[k]) / dir[k];
+                s_end = s_end.min(a.max(b));
+            }
+        }
+        let n = ((s_end - S0) / H).ceil().max(1.0) as usize;
+        let at = |i: usize| S0 + (s_end - S0) * i as f64 / n as f64;
+        let vals: Vec<f64> = (0..=n).map(|i| self.f(p + dir * at(i))).collect();
+        let mut best = vals.iter().copied().fold(f64::INFINITY, f64::min);
+        for i in 1..n {
+            if vals[i] <= vals[i - 1] && vals[i] <= vals[i + 1] {
+                let (mut a, mut b) = (at(i - 1), at(i + 1));
+                let g = 0.5 * (5f64.sqrt() - 1.0);
+                for _ in 0..60 {
+                    let (x1, x2) = (b - g * (b - a), a + g * (b - a));
+                    if self.f(p + dir * x1) <= self.f(p + dir * x2) {
+                        b = x2;
+                    } else {
+                        a = x1;
+                    }
+                }
+                best = best.min(self.f(p + dir * (0.5 * (a + b))));
+            }
+        }
+        best
+    }
+
+    /// Sichturteil an `p` für die Ansicht `basis` (siehe Typbeschreibung).
+    pub fn visible(&self, p: DVec3, basis: &Basis) -> Option<bool> {
+        const TILT: f64 = 1e-4;
+        const MARGIN: f64 = 1e-6;
+        let eye = -basis.d;
+        let mut all_blocked = true;
+        for t in [basis.ex, -basis.ex, basis.ey, -basis.ey] {
+            let m = self.ray_min(p, (eye + t * TILT).normalize());
+            if m > MARGIN {
+                return Some(true);
+            }
+            if m >= -MARGIN {
+                all_blocked = false;
+            }
+        }
+        all_blocked.then_some(false)
+    }
+}
 /// Rahmen um Z gedreht (Winkel in Grad): die Naht der Drehflächen liegt dann bei diesem Winkel,
 /// nicht auf den Umrissen der Normalansichten.
 fn turned_frame(deg: f64) -> Frame {
@@ -441,6 +726,25 @@ pub fn nurbs_dome_solid() -> (Solid, usize) {
         DVec3::new(1.0, 0.6, 0.0),
         9f64.to_radians(),
     ))
+}
+
+/// Kontrollpunkte (r, z) der tangential ansetzenden Kuppelwand: (8, 4) → (8, 6) → (6, 9) →
+/// (3; 9,5) – die Wand setzt senkrecht (tangential) auf den Sockelzylinder auf.
+pub const TANGENT_DOME_WALL: [(f64, f64); 4] = [(8.0, 4.0), (8.0, 6.0), (6.0, 9.0), (3.0, 9.5)];
+
+/// Kuppel aus [`dome_revolved`] mit tangential ansetzender Wand ([`TANGENT_DOME_WALL`]),
+/// ungekippt und unbeschnitten (der häufigste Freiformfall: Spline-Profil glatt auf einem
+/// Zylinder). Liefert den Körper und den Index der Freiformfläche.
+pub fn nurbs_tangent_dome_solid() -> (Solid, usize) {
+    let s = dome_revolved(TANGENT_DOME_WALL);
+    validate(&s).expect("tangentiale Kuppel ist gültig");
+    let face = s
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Nurbs(_)))
+        .map(|(id, _)| id.index())
+        .expect("Freiformfläche");
+    (s, face)
 }
 
 /// Kuppel mit Überhang: Wand (8, 4) → (11, 5) → (7; 8,5) → (3, 9) (r wächst erst bis ≈ 9, die

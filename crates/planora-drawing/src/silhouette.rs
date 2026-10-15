@@ -31,7 +31,7 @@
 use crate::DrawBody;
 use crate::basis::Basis;
 use crate::error::DrawError;
-use crate::limits::{BISECT_TOL, MAX_PIECES, MAX_STROKES, SILHOUETTE_TOL, geom_tol};
+use crate::limits::{BISECT_TOL, MAX_OUTLINE_POINTS, MAX_STROKES, SILHOUETTE_TOL, geom_tol};
 use crate::raycast::Region;
 use crate::stroke::{Stroke, StrokeOrigin};
 use planora_exchange::Progress;
@@ -86,14 +86,18 @@ const FIT_CHECK_WINDOW: usize = 16;
 const GRID_MIN: usize = 64;
 const GRID_PER_SPAN: usize = 8;
 const GRID_MAX: usize = 256;
-/// Freiform: Newton-Schritte und Zielgenauigkeit auf `g = 0`.
+/// Freiform: Newton-Schritte, Zielgenauigkeit auf `g = 0` und größtes zulässiges `|g|` danach.
 const NEWTON_STEPS: usize = 8;
 const NEWTON_G: f64 = 1e-12;
+const NEWTON_ACCEPT: f64 = 1e-9;
 /// Freiform: `|g|` darunter gilt an Rasterpunkten als 0 (Vorzeichen +); sind alle Rasterwerte so
 /// klein, wird die Fläche nur von der Seite gesehen und hat keinen Umriss.
 const ZERO_G: f64 = 1e-12;
 /// Meldung, wenn ein Freiform-Umriss eine Stelle ohne Normale erreicht.
 pub const POLE_MESSAGE: &str = "Umriss an einem Pol der Freiformfläche";
+/// Meldung, wenn auch das feinste Raster einen Vorzeichenwechsel von g nur zwischen seinen
+/// Punkten zeigt (Umrissschleife kleiner als eine Rasterzelle).
+pub const HIDDEN_MESSAGE: &str = "Umriss der Freiformfläche feiner als das Suchraster";
 /// Meldung, wenn eine Anpassung die Genauigkeit nicht erreicht.
 const FIT_MESSAGE: &str = "Umriss lässt sich nicht genau genug annähern";
 
@@ -122,11 +126,12 @@ pub fn silhouette_strokes(
     };
     let d = basis.d;
     let mut out = Vec::new();
-    let mut work = Work::default();
     for (bi, body) in bodies.iter().enumerate() {
         let solid = body.solid;
         for (fid, face) in solid.faces.iter() {
             progress.check()?;
+            // Aufwand je Fläche (die Striche insgesamt begrenzt MAX_STROKES).
+            let mut work = Work::default();
             let surface = &face.surface;
             if matches!(surface, Surface::Plane { .. }) {
                 continue;
@@ -224,8 +229,8 @@ pub fn silhouette_strokes(
     Ok(out)
 }
 
-/// Zähler für den Rechenaufwand der Spline-Umrisse (dichte Punkte): über `MAX_PIECES` →
-/// `TooComplex`.
+/// Zähler für den Rechenaufwand der Spline-Umrisse einer Fläche (Rasterpunkte und dichte
+/// Punkte): über `MAX_OUTLINE_POINTS` → `TooComplex`.
 #[derive(Default)]
 struct Work {
     points: u64,
@@ -234,7 +239,7 @@ struct Work {
 impl Work {
     fn add(&mut self, n: usize) -> Result<(), DrawError> {
         self.points += n as u64;
-        if self.points > MAX_PIECES {
+        if self.points > MAX_OUTLINE_POINTS {
             return Err(DrawError::TooComplex(self.points));
         }
         Ok(())
@@ -263,6 +268,8 @@ struct OwnedPath {
     closed: bool,
     /// Startstützstellen (aufsteigend, `t0` … `t1`) für die Verfeinerung.
     knots: Vec<f64>,
+    /// Freiform: wird gesetzt, wenn ein Wegpunkt nicht auf den Umriss fand (Newton).
+    failed: Option<std::rc::Rc<std::cell::Cell<bool>>>,
 }
 
 impl OwnedPath {
@@ -292,6 +299,7 @@ fn torus_branch(frame: &Frame, major: f64, minor: f64, dl: DVec3, k: usize) -> O
         knots: (0..=TORUS_SAMPLES)
             .map(|i| TAU * i as f64 / TORUS_SAMPLES as f64)
             .collect(),
+        failed: None,
     }
 }
 
@@ -408,6 +416,11 @@ fn spline_pieces(
     let dense = densify(path, work, progress)?;
     let limit = (SNAP_FACTOR * tol.linear).max(SPLINE_SNAP_SHARE * SILHOUETTE_TOL);
     let ranges = trim_to_face(fg, &path.as_path(), in_face, tol, limit, progress)?;
+    if path.failed.as_ref().is_some_and(|f| f.get()) {
+        return Err(DrawError::Unsupported(format!(
+            "{FIT_MESSAGE} (Punkt nicht auf dem Umriss)"
+        )));
+    }
     let period = path.t1 - path.t0;
     let mut out = Vec::new();
     for r in ranges {
@@ -565,8 +578,9 @@ fn g_at(sf: &NurbsSurface, data: &NurbsSurfaceData, d: DVec3, u: f64, v: f64) ->
 }
 
 /// Newton auf `g = 0` in Richtung `∇g` (höchstens `NEWTON_STEPS`, bis `|g| < NEWTON_G`);
-/// nicht geschlossene Richtungen bleiben im Bereich. Liefert den besten Punkt.
-fn newton_outline(data: &NurbsSurfaceData, d: DVec3, uv0: DVec2) -> DVec2 {
+/// nicht geschlossene Richtungen bleiben im Bereich. Liefert den besten Punkt, `None`, wenn dort
+/// nicht `|g| ≤ NEWTON_ACCEPT` gilt (der Punkt läge neben dem Umriss).
+fn newton_outline(data: &NurbsSurfaceData, d: DVec3, uv0: DVec2) -> Option<DVec2> {
     let sf = data.surface();
     let ((u0, u1), (v0, v1)) = sf.domain();
     let keep = |p: DVec2| {
@@ -598,12 +612,14 @@ fn newton_outline(data: &NurbsSurfaceData, d: DVec3, uv0: DVec2) -> DVec2 {
         }
         uv = keep(uv - grad * (g / gg));
     }
-    best.1
+    (best.0 <= NEWTON_ACCEPT).then_some(best.1)
 }
 
 /// Rasterlinien einer Richtung: je Bézier-Spanne gleich viele Teile, insgesamt mindestens
-/// `GRID_MIN`, je Spanne mindestens `GRID_PER_SPAN`, höchstens `GRID_MAX`.
-fn grid_lines(knots: &[f64], lo: f64, hi: f64) -> Result<Vec<f64>, DrawError> {
+/// `GRID_MIN`, je Spanne mindestens `GRID_PER_SPAN`, höchstens `GRID_MAX` (bei mehr als 32
+/// Spannen also weniger als 8 je Spanne); auf Stufe `level` je Spanne `2^level`-mal so viele,
+/// ebenfalls höchstens `GRID_MAX`. Liefert die Linien und ob die Obergrenze erreicht ist.
+fn grid_lines(knots: &[f64], lo: f64, hi: f64, level: u32) -> Result<(Vec<f64>, bool), DrawError> {
     let mut breaks: Vec<f64> = vec![lo];
     for &k in knots {
         if k > lo && k < hi && breaks.last().is_some_and(|&b| k > b) {
@@ -615,9 +631,9 @@ fn grid_lines(knots: &[f64], lo: f64, hi: f64) -> Result<Vec<f64>, DrawError> {
     if spans > GRID_MAX {
         return Err(DrawError::TooComplex(spans as u64));
     }
-    let per = GRID_PER_SPAN
-        .max(GRID_MIN.div_ceil(spans))
-        .min((GRID_MAX / spans).max(1));
+    let cap = (GRID_MAX / spans).max(1);
+    let base = GRID_PER_SPAN.max(GRID_MIN.div_ceil(spans)).min(cap);
+    let per = base.saturating_mul(1 << level.min(16)).min(cap);
     let mut out = Vec::with_capacity(spans * per + 1);
     for w in breaks.windows(2) {
         for i in 0..per {
@@ -625,9 +641,8 @@ fn grid_lines(knots: &[f64], lo: f64, hi: f64) -> Result<Vec<f64>, DrawError> {
         }
     }
     out.push(hi);
-    Ok(out)
+    Ok((out, per == cap))
 }
-
 /// Kennung einer Rasterkante: waagerecht (in u) bei `(i, j)` → `(i, j) – (i+1, j)`, senkrecht
 /// (in v) → `(i, j) – (i, j+1)`; Indizes geschlossener Richtungen gefaltet.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -636,6 +651,60 @@ enum EdgeKey {
     V(usize, usize),
 }
 
+/// Versteckter Vorzeichenwechsel: Hat der Mittelpunkt einer Rasterkante, deren Enden gleiches
+/// Vorzeichen haben, das andere Vorzeichen (die Kante wird zweimal gequert), oder die Mitte einer
+/// Zelle mit vier gleichen Ecken (eine Schleife innerhalb der Zelle), würde Marching Squares
+/// den Umriss dort verlieren. Rasterpunkte ohne Normale (Pol) bleiben außen vor.
+fn hidden_change(
+    us: &[f64],
+    vs: &[f64],
+    gv: &[Option<f64>],
+    g: &dyn Fn(f64, f64) -> Result<Option<f64>, DrawError>,
+    work: &mut Work,
+    progress: &Progress,
+) -> Result<bool, DrawError> {
+    let (nu, nv) = (us.len() - 1, vs.len() - 1);
+    let at = |i: usize, j: usize| gv[i * (nv + 1) + j];
+    let pos = |x: f64| x >= 0.0;
+    let differs = |a: Option<f64>, b: Option<f64>, u: f64, v: f64| -> Result<bool, DrawError> {
+        let (Some(a), Some(b)) = (a, b) else {
+            return Ok(false);
+        };
+        if pos(a) != pos(b) {
+            return Ok(false);
+        }
+        Ok(g(u, v)?.is_some_and(|m| pos(m) != pos(a)))
+    };
+    work.add(3 * (nu + 1) * (nv + 1))?;
+    for i in 0..=nu {
+        progress.check()?;
+        for j in 0..=nv {
+            if i < nu && differs(at(i, j), at(i + 1, j), 0.5 * (us[i] + us[i + 1]), vs[j])? {
+                return Ok(true);
+            }
+            if j < nv && differs(at(i, j), at(i, j + 1), us[i], 0.5 * (vs[j] + vs[j + 1]))? {
+                return Ok(true);
+            }
+            if i < nu && j < nv {
+                let c = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+                if c.iter().all(|x| x.is_some())
+                    && c.iter()
+                        .flatten()
+                        .all(|x| pos(*x) == pos(c[0].unwrap_or(0.0)))
+                    && differs(
+                        c[0],
+                        c[2],
+                        0.5 * (us[i] + us[i + 1]),
+                        0.5 * (vs[j] + vs[j + 1]),
+                    )?
+                {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
 /// Umrissketten einer Freiformfläche (siehe Modulbeschreibung).
 fn outline_chains(
     data: &NurbsSurfaceData,
@@ -645,35 +714,53 @@ fn outline_chains(
 ) -> Result<Vec<Chain>, DrawError> {
     let sf = data.surface();
     let ((u0, u1), (v0, v1)) = sf.domain();
-    let us = grid_lines(sf.knots_u().knots(), u0, u1)?;
-    let vs = grid_lines(sf.knots_v().knots(), v0, v1)?;
-    let (nu, nv) = (us.len() - 1, vs.len() - 1);
     let (pu, pv) = (data.is_periodic_u(), data.is_periodic_v());
-    let fold_i = |i: usize| if pu && i == nu { 0 } else { i };
-    let fold_j = |j: usize| if pv && j == nv { 0 } else { j };
-    work.add((nu + 1) * (nv + 1))?;
-    // Werte an den Rasterpunkten (geschlossene Richtungen: letzte Reihe = erste Reihe).
-    let mut gv: Vec<Option<f64>> = vec![None; (nu + 1) * (nv + 1)];
-    let at = |i: usize, j: usize| i * (nv + 1) + j;
-    for i in 0..=nu {
-        progress.check()?;
-        for j in 0..=nv {
-            let (fi, fj) = (fold_i(i), fold_j(j));
-            gv[at(i, j)] = if (fi, fj) != (i, j) {
-                gv[at(fi, fj)]
-            } else {
-                match g_at(sf, data, d, us[i], vs[j]) {
-                    Some(g) if !g.is_finite() => return Err(DrawError::NonFinite),
-                    Some(g) => Some(if g.abs() <= ZERO_G { 0.0 } else { g }),
-                    None => None,
-                }
-            };
+    // Werte wie an den Rasterpunkten: |g| ≤ ZERO_G gilt als 0 (Vorzeichen +).
+    let g_snap = |u: f64, v: f64| -> Result<Option<f64>, DrawError> {
+        match g_at(sf, data, d, u, v) {
+            Some(g) if !g.is_finite() => Err(DrawError::NonFinite),
+            Some(g) => Ok(Some(if g.abs() <= ZERO_G { 0.0 } else { g })),
+            None => Ok(None),
         }
-    }
+    };
+    let pos = |g: f64| g >= 0.0;
+    // Raster verfeinern, bis kein Vorzeichenwechsel zwischen den Rasterpunkten versteckt ist.
+    let mut level = 0;
+    let (us, vs, gv) = loop {
+        let (us, cap_u) = grid_lines(sf.knots_u().knots(), u0, u1, level)?;
+        let (vs, cap_v) = grid_lines(sf.knots_v().knots(), v0, v1, level)?;
+        let (nu, nv) = (us.len() - 1, vs.len() - 1);
+        work.add((nu + 1) * (nv + 1))?;
+        // Werte an den Rasterpunkten (geschlossene Richtungen: letzte Reihe = erste Reihe).
+        let mut gv: Vec<Option<f64>> = vec![None; (nu + 1) * (nv + 1)];
+        let at = |i: usize, j: usize| i * (nv + 1) + j;
+        for i in 0..=nu {
+            progress.check()?;
+            for j in 0..=nv {
+                let fi = if pu && i == nu { 0 } else { i };
+                let fj = if pv && j == nv { 0 } else { j };
+                gv[at(i, j)] = if (fi, fj) != (i, j) {
+                    gv[at(fi, fj)]
+                } else {
+                    g_snap(us[i], vs[j])?
+                };
+            }
+        }
+        if !hidden_change(&us, &vs, &gv, &g_snap, work, progress)? {
+            break (us, vs, gv);
+        }
+        if cap_u && cap_v {
+            return Err(DrawError::Unsupported(HIDDEN_MESSAGE.into()));
+        }
+        level += 1;
+    };
     if gv.iter().flatten().all(|g| *g == 0.0) {
         return Ok(Vec::new());
     }
-    let pos = |g: f64| g >= 0.0;
+    let (nu, nv) = (us.len() - 1, vs.len() - 1);
+    let at = |i: usize, j: usize| i * (nv + 1) + j;
+    let fold_i = |i: usize| if pu && i == nu { 0 } else { i };
+    let fold_j = |j: usize| if pv && j == nv { 0 } else { j };
     let mut nodes: Vec<DVec2> = Vec::new();
     let mut index: std::collections::HashMap<EdgeKey, usize> = std::collections::HashMap::new();
     let mut links: Vec<Vec<usize>> = Vec::new();
@@ -689,8 +776,8 @@ fn outline_chains(
             EdgeKey::H(i, j) => (DVec2::new(us[i], vs[j]), DVec2::new(us[i + 1], vs[j])),
             EdgeKey::V(i, j) => (DVec2::new(us[i], vs[j]), DVec2::new(us[i], vs[j + 1])),
         };
-        let g = |p: DVec2| {
-            g_at(sf, data, d, p.x, p.y).ok_or(DrawError::Unsupported(POLE_MESSAGE.into()))
+        let g = |p: DVec2| -> Result<f64, DrawError> {
+            g_snap(p.x, p.y)?.ok_or(DrawError::Unsupported(POLE_MESSAGE.into()))
         };
         let (mut lo, mut hi) = (a, b);
         let ga = g(lo)?;
@@ -742,8 +829,8 @@ fn outline_chains(
                 2 => vec![(cuts[0], cuts[1])],
                 4 => {
                     let mid = DVec2::new(0.5 * (us[i] + us[i + 1]), 0.5 * (vs[j] + vs[j + 1]));
-                    let gc = g_at(sf, data, d, mid.x, mid.y)
-                        .ok_or(DrawError::Unsupported(POLE_MESSAGE.into()))?;
+                    let gc =
+                        g_snap(mid.x, mid.y)?.ok_or(DrawError::Unsupported(POLE_MESSAGE.into()))?;
                     if pos(gc) == s[0] {
                         // c0 und c2 hängen über die Mitte zusammen: c1 und c3 abgetrennt.
                         vec![(0, 1), (2, 3)]
@@ -820,6 +907,8 @@ impl Chain {
         let n = uv.len() - 1;
         let data = data.clone();
         let closed = self.closed;
+        let failed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let flag = failed.clone();
         let point = move |t: f64| {
             let t = if closed && (t < 0.0 || t > n as f64) {
                 t.rem_euclid(n as f64)
@@ -833,7 +922,11 @@ impl Chain {
             } else if f == 1.0 {
                 uv[i + 1]
             } else {
-                newton_outline(&data, d, uv[i].lerp(uv[i + 1], f))
+                let start = uv[i].lerp(uv[i + 1], f);
+                newton_outline(&data, d, start).unwrap_or_else(|| {
+                    flag.set(true);
+                    start
+                })
             };
             data.point(q.x, q.y)
         };
@@ -843,6 +936,7 @@ impl Chain {
             t1: n as f64,
             closed,
             knots: (0..=n).map(|i| i as f64).collect(),
+            failed: Some(failed),
         }
     }
 }
@@ -874,9 +968,13 @@ pub fn outline_point(surface: &Surface, d: DVec3, p: DVec3) -> DVec3 {
         }
         Surface::Nurbs(data) => {
             let (u, v) = data.project(p);
-            let q = newton_outline(data, d, DVec2::new(u, v));
-            let s = data.point(q.x, q.y);
-            if s.is_finite() { s } else { p }
+            match newton_outline(data, d, DVec2::new(u, v)) {
+                Some(q) => {
+                    let s = data.point(q.x, q.y);
+                    if s.is_finite() { s } else { p }
+                }
+                None => p,
+            }
         }
         _ => p,
     }
@@ -1302,5 +1400,182 @@ mod tests {
                 assert!((p.y - wave(p.x).y).abs() <= SILHOUETTE_TOL, "{p:?}");
             }
         }
+    }
+
+    /// Kubische B-Spline-Fläche (6 × 6 Kontrollpunkte, Knoten 0, ⅓, ⅔, 1) über [0, 10]²:
+    /// geneigte Ebene z = a·y mit einer flachen, schiefen Beule (Kontrollpunkthöhen
+    /// bx[i] · by[j]); am Rand verschwinden die Ableitungen der Beule.
+    fn bump_patch(a: f64) -> NurbsSurfaceData {
+        bump_patch_with(a, 0.6, 1.0)
+    }
+
+    fn bump_patch_with(a: f64, x3: f64, y3: f64) -> NurbsSurfaceData {
+        let (bx, by) = ([0.0, 0.0, 1.0, x3, 0.0, 0.0], [0.0, 0.0, 1.0, y3, 0.0, 0.0]);
+        let mut control = Vec::new();
+        for (i, hx) in bx.iter().enumerate() {
+            for (j, hy) in by.iter().enumerate() {
+                let (x, y) = (10.0 * i as f64 / 5.0, 10.0 * j as f64 / 5.0);
+                control.push(DVec3::new(x, y, a * y + hx * hy));
+            }
+        }
+        let k = vec![0.0, 0.0, 0.0, 0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0, 1.0, 1.0, 1.0];
+        let s = NurbsSurface::new(3, 3, k.clone(), k, 6, 6, control, vec![1.0; 36]).unwrap();
+        NurbsSurfaceData::new(s, false, false).unwrap()
+    }
+    /// Größtes g = n·Y (eigene Normale aus den Ableitungen) und seine Stelle.
+    fn g_max(data: &NurbsSurfaceData) -> (f64, DVec2) {
+        let g = |u: f64, v: f64| {
+            let dv = data.surface().derivs(u, v, 1);
+            dv[1][0].cross(dv[0][1]).normalize().y
+        };
+        let mut best = (f64::NEG_INFINITY, DVec2::ZERO);
+        for i in 0..=100 {
+            for j in 0..=100 {
+                let (u, v) = (i as f64 / 100.0, j as f64 / 100.0);
+                let x = g(u, v);
+                if x > best.0 {
+                    best = (x, DVec2::new(u, v));
+                }
+            }
+        }
+        // Verfeinern: Koordinatensuche mit kleiner werdender Schrittweite.
+        let mut h = 1.0 / 100.0;
+        while h > 1e-12 {
+            let mut moved = false;
+            for dd in [DVec2::X, -DVec2::X, DVec2::Y, -DVec2::Y] {
+                let q = (best.1 + dd * h).clamp(DVec2::ZERO, DVec2::ONE);
+                let x = g(q.x, q.y);
+                if x > best.0 {
+                    best = (x, q);
+                    moved = true;
+                }
+            }
+            if !moved {
+                h *= 0.5;
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn an_outline_loop_inside_one_grid_cell_is_found_or_named() {
+        // Geneigte Fläche mit flacher Beule, von vorne (d = +Y): g = n·Y ist überall negativ,
+        // außer in einer kleinen Insel um die steilste Stelle der Beule (eigene Rechnung: g_max).
+        // Die Neigung a wird so gewählt (Bisektion), dass die Insel in u und v nur etwa 0,7
+        // Rasterzellen breit ist und kein Rasterpunkt in ihr liegt – Marching Squares allein sähe
+        // sie nicht. Erwartet: die Umrissschleife wird gefunden (Verfeinerung) oder benannt.
+        let cell = 1.0 / 66.0; // 3 Spannen zu je 22 Teilen
+        let gy = |data: &NurbsSurfaceData, q: DVec2| {
+            let dv = data.surface().derivs(q.x, q.y, 1);
+            dv[1][0].cross(dv[0][1]).normalize().y
+        };
+        // Breite der Insel längs einer Achse durch die Stelle des Maximums.
+        let width = |data: &NurbsSurfaceData, at: DVec2, axis: DVec2| {
+            let mut w = 0.0;
+            for s in [1.0, -1.0] {
+                let (mut a, mut b) = (0.0, 0.2);
+                for _ in 0..80 {
+                    let m = 0.5 * (a + b);
+                    if gy(data, at + axis * (s * m)) > 0.0 {
+                        a = m;
+                    } else {
+                        b = m;
+                    }
+                }
+                w += a;
+            }
+            w
+        };
+        let (mut lo, mut hi) = (0.2, 0.3);
+        let mut chosen = None;
+        for _ in 0..60 {
+            let a = 0.5 * (lo + hi);
+            let data = bump_patch_with(a, 0.85, 0.875);
+            let (gm, at) = g_max(&data);
+            if gm <= 0.0 {
+                hi = a;
+                continue;
+            }
+            let w = width(&data, at, DVec2::X).min(width(&data, at, DVec2::Y));
+            if w > 0.7 * cell {
+                lo = a;
+            } else {
+                hi = a;
+            }
+            chosen = Some((a, at));
+        }
+        let (a, at) = chosen.unwrap();
+        let data = bump_patch_with(a, 0.85, 0.875);
+        let (wu, wv) = (width(&data, at, DVec2::X), width(&data, at, DVec2::Y));
+        assert!(wu < 1.5 * cell && wv < 1.5 * cell, "Insel {wu} × {wv}");
+        // Kein Rasterpunkt der ersten Stufe liegt in der Insel.
+        let (us, _) = grid_lines(data.surface().knots_u().knots(), 0.0, 1.0, 0).unwrap();
+        let (vs, _) = grid_lines(data.surface().knots_v().knots(), 0.0, 1.0, 0).unwrap();
+        assert_eq!(us.len(), 67);
+        for &u in &us {
+            for &v in &vs {
+                assert!(
+                    gy(&data, DVec2::new(u, v)) < 0.0,
+                    "Rasterpunkt ({u}, {v}) in der Insel"
+                );
+            }
+        }
+        let mut work = Work::default();
+        match outline_chains(&data, DVec3::Y, &mut work, &Progress::new()) {
+            Ok(chains) => {
+                assert_eq!(chains.len(), 1, "eine Schleife");
+                let c = &chains[0];
+                assert!(c.closed);
+                for q in &c.uv {
+                    assert!(
+                        q.distance(at) < 1.5 * cell,
+                        "{q:?} fern der Insel bei {at:?}"
+                    );
+                }
+            }
+            Err(DrawError::Unsupported(m)) => assert_eq!(m, HIDDEN_MESSAGE),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+
+    #[test]
+    fn newton_off_the_outline_is_reported_not_used() {
+        // Ebene Fläche (ohne Beule, a = 0,3): g = n·Y ist überall gleich und ungleich null, ∇g = 0.
+        // Newton kann keinen Umrisspunkt finden; das Ergebnis muss „keiner“ sein statt eines
+        // Punkts neben dem Umriss.
+        let flat = {
+            let mut control = Vec::new();
+            for i in 0..4 {
+                for j in 0..4 {
+                    let (x, y) = (10.0 * i as f64 / 3.0, 10.0 * j as f64 / 3.0);
+                    control.push(DVec3::new(x, y, 0.3 * y));
+                }
+            }
+            let k = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+            let s = NurbsSurface::new(3, 3, k.clone(), k, 4, 4, control, vec![1.0; 16]).unwrap();
+            NurbsSurfaceData::new(s, false, false).unwrap()
+        };
+        assert_eq!(newton_outline(&flat, DVec3::Y, DVec2::new(0.5, 0.5)), None);
+        // Auf der Beulenfläche konvergiert er dagegen von einem Punkt nahe der Insel aus.
+        let bump = bump_patch(0.2);
+        let (_, at) = g_max(&bump);
+        // Start dicht neben dem Rand der Insel (eigene Bisektion längs u).
+        let gy = |q: DVec2| {
+            let dv = bump.surface().derivs(q.x, q.y, 1);
+            dv[1][0].cross(dv[0][1]).normalize().y
+        };
+        let (mut lo, mut hi) = (0.0, 0.3);
+        for _ in 0..60 {
+            let m = 0.5 * (lo + hi);
+            if gy(at + DVec2::new(m, 0.0)) > 0.0 {
+                lo = m;
+            } else {
+                hi = m;
+            }
+        }
+        let start = at + DVec2::new(lo + 1e-3, 0.0);
+        let q = newton_outline(&bump, DVec3::Y, start).expect("Umrisspunkt");
+        let n = bump.surface().normal(q.x, q.y);
+        assert!(n.y.abs() <= NEWTON_ACCEPT);
     }
 }

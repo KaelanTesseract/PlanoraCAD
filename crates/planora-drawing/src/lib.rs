@@ -218,7 +218,12 @@ pub fn compute_view(
         }
         progress.advance(1);
     }
-    let pieces = inherit_short(raw, |i| stroke_name(bodies, &strokes[i]))?;
+    let pieces = inherit_short(
+        raw,
+        |i| stroke_name(bodies, &strokes[i]),
+        |i, a, b| strokes[i].point(a).distance(strokes[i].point(b)),
+        limits::own_eps(extent),
+    )?;
 
     let bbox = pieces_bbox(&strokes, &pieces, &basis);
     Ok(ViewLines {
@@ -233,21 +238,46 @@ pub fn compute_view(
 
 /// Stücke ohne eigenes Urteil (`None`) übernehmen das Urteil des vorigen, sonst des nächsten
 /// anschließenden Stücks desselben Strichs (die Stücke eines Strichs folgen lückenlos
-/// aufeinander). Bleibt eines ohne Urteil (der ganze Strich ist so ein Stück):
-/// `AmbiguousVisibility` mit dem Namen des Strichs.
+/// aufeinander). Eine zusammenhängende Folge solcher Stücke darf im Raum zusammen höchstens
+/// `limit` (OWN_EPS) lang sein (`len`: Sehnenlänge eines Stücks); längere Folgen und Stücke ohne
+/// Nachbarn mit Urteil: `AmbiguousVisibility` mit dem Namen des Strichs.
 fn inherit_short(
     mut raw: Vec<(usize, f64, f64, Option<Visibility>)>,
     name: impl Fn(usize) -> String,
+    len: impl Fn(usize, f64, f64) -> f64,
+    limit: f64,
 ) -> Result<Vec<Piece>, DrawError> {
-    for k in 1..raw.len() {
-        if raw[k].3.is_none() && raw[k - 1].0 == raw[k].0 && raw[k - 1].2 == raw[k].1 {
-            raw[k].3 = raw[k - 1].3;
+    let joined = |a: &(usize, f64, f64, Option<Visibility>),
+                  b: &(usize, f64, f64, Option<Visibility>)| {
+        a.0 == b.0 && a.2 == b.1
+    };
+    let mut k = 0;
+    while k < raw.len() {
+        if raw[k].3.is_some() {
+            k += 1;
+            continue;
         }
-    }
-    for k in (0..raw.len().saturating_sub(1)).rev() {
-        if raw[k].3.is_none() && raw[k + 1].0 == raw[k].0 && raw[k + 1].1 == raw[k].2 {
-            raw[k].3 = raw[k + 1].3;
+        // Folge [k, m) ohne Urteil, lückenlos auf demselben Strich.
+        let mut m = k + 1;
+        while m < raw.len() && raw[m].3.is_none() && joined(&raw[m - 1], &raw[m]) {
+            m += 1;
         }
+        let total: f64 = raw[k..m].iter().map(|r| len(r.0, r.1, r.2)).sum();
+        let before = (k > 0 && joined(&raw[k - 1], &raw[k]))
+            .then(|| raw[k - 1].3)
+            .flatten();
+        let after = (m < raw.len() && joined(&raw[m - 1], &raw[m]))
+            .then(|| raw[m].3)
+            .flatten();
+        match before.or(after) {
+            Some(vis) if total <= limit => {
+                for r in &mut raw[k..m] {
+                    r.3 = Some(vis);
+                }
+            }
+            _ => return Err(DrawError::AmbiguousVisibility(name(raw[k].0))),
+        }
+        k = m;
     }
     raw.into_iter()
         .map(|(stroke, t0, t1, vis)| match vis {
@@ -261,7 +291,6 @@ fn inherit_short(
         })
         .collect()
 }
-
 /// Hüllbox aller Stücke in Ansichtskoordinaten (ohne Rand).
 fn pieces_bbox(strokes: &[Stroke], pieces: &[Piece], basis: &Basis) -> ((f64, f64), (f64, f64)) {
     let mut lo = planora_math::DVec2::splat(f64::INFINITY);

@@ -16,6 +16,8 @@ pub const BISECT_TOL: f64 = 1e-9;
 pub const MAX_STROKES: u64 = 20_000;
 /// Höchstzahl an Teilstücken.
 pub const MAX_PIECES: u64 = 200_000;
+/// Höchstzahl an Rechenpunkten (Raster und dichte Umrisspunkte) je Torus- oder Freiformfläche.
+pub const MAX_OUTLINE_POINTS: u64 = 400_000;
 /// Höchstzahl an Strichpaar-Tests.
 pub const MAX_PAIR_TESTS: u64 = 50_000_000;
 /// Höchstzahl an Sichtprüfungen (Strahltests).

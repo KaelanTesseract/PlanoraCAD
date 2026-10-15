@@ -99,14 +99,26 @@ fn a_tiny_undecidable_piece_at_a_corner_takes_its_neighbours_verdict() {
         solid: &s,
     }];
     let v = compute_view(&b, ViewKind::Back, &Progress::new()).unwrap();
-    let own = v
-        .pieces
-        .iter()
-        .filter(|p| matches!(v.strokes[p.stroke].origin, StrokeOrigin::Silhouette { face: f, .. } if f == face))
-        .count();
-    assert!(own > 0);
+    let own_eps = planora_drawing::limits::own_eps(extent_of(&b));
+    let mut tiny = 0;
+    for (k, p) in v.pieces.iter().enumerate() {
+        let st = &v.strokes[p.stroke];
+        if !matches!(st.origin, StrokeOrigin::Silhouette { face: f, .. } if f == face)
+            || st.point(p.t0).distance(st.point(p.t1)) > own_eps
+        {
+            continue;
+        }
+        tiny += 1;
+        let neighbour = v
+            .pieces
+            .iter()
+            .enumerate()
+            .find(|(j, q)| *j != k && q.stroke == p.stroke && (q.t1 == p.t0 || q.t0 == p.t1));
+        let (_, q) = neighbour.expect("Nachbarstück");
+        assert_eq!(p.vis, q.vis, "kurzes Stück {p:?} gegen Nachbar {q:?}");
+    }
+    assert!(tiny > 0, "kein kurzes Stück am Eck");
 }
-
 #[test]
 fn the_fit_keeps_its_end_points() {
     // Grundlage für Umrissenden auf der Randkante: NurbsCurve::fit hält ersten und letzten Punkt
@@ -373,4 +385,188 @@ fn pole_away_from_the_outline_is_fine_and_the_outline_closes_across_the_seam() {
         &Progress::new(),
     );
     assert!(r.is_ok(), "{:?}", r.err());
+}
+
+/// Abstand zur Fläche und `n·d` für alle Umrisspunkte der Freiformfläche (eigene Rechnung).
+fn residuals_ok(
+    s: &planora_kernel::Solid,
+    face: usize,
+    strokes: &[Stroke],
+    basis: &Basis,
+) -> usize {
+    let mut n = 0;
+    for st in strokes
+        .iter()
+        .filter(|x| matches!(x.origin, StrokeOrigin::Silhouette { face: f, .. } if f == face))
+    {
+        for p in sample3(st, 200) {
+            let (dist, g) = surface_residual(s, face, p, basis.d);
+            assert!(dist <= 1.2e-4, "{p:?}: Abstand {dist}");
+            assert!(g.abs() <= 2e-3, "{p:?}: n·d = {g}");
+            n += 1;
+        }
+    }
+    n
+}
+
+#[test]
+fn tangent_dome_is_drawn_correctly_in_all_views() {
+    // Häufigster Freiformfall: Spline-Wand tangential auf einem Zylindersockel. Von oben laufen
+    // die Prüfstrahlen der Sockelkante tangential an der Wand entlang (der Kernel verweigert
+    // sie). Geprüft in allen 7 Ansichten: Rechnung gelingt, Umrisse liegen auf der Fläche mit
+    // n·d ≈ 0 (eigene Fußpunktsuche), und die Sichtbarkeit stimmt mit einem eigenen Urteil gegen
+    // das exakte Profil (`DomeJudge`) überein – die Netzreferenz kann tangentiale Übergänge nicht
+    // beurteilen.
+    let (s, face) = nurbs_tangent_dome_solid();
+    let judge = DomeJudge::new(TANGENT_DOME_WALL);
+    let b = vec![DrawBody {
+        name: "D".into(),
+        solid: &s,
+    }];
+    let (mut total, mut decided, mut residuals) = (0, 0, 0);
+    let mut wrong = Vec::new();
+    for k in ViewKind::ALL {
+        let basis = Basis::of(k);
+        let v = compute_view(&b, k, &Progress::new()).unwrap_or_else(|e| panic!("{k:?}: {e:?}"));
+        residuals += residuals_ok(&s, face, &v.strokes, &basis);
+        for p in &v.pieces {
+            let st = &v.strokes[p.stroke];
+            let (a, z) = (st.point(p.t0), st.point(p.t1));
+            for f in [0.25, 0.5, 0.75] {
+                let x = st.point(p.t0 + f * (p.t1 - p.t0));
+                if x.distance(a) < 0.2 || x.distance(z) < 0.2 {
+                    continue;
+                }
+                total += 1;
+                if let Some(vis) = judge.visible(x, &basis) {
+                    decided += 1;
+                    if vis != (p.vis == planora_drawing::Visibility::Visible) {
+                        wrong.push(format!("{k:?} {:?} {x:?}: {:?}", st.origin, p.vis));
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("Kuppel tangential: {decided}/{total} Stellen entschieden, {residuals} Umrisspunkte");
+    assert!(wrong.is_empty(), "{wrong:?}");
+    assert!(
+        decided * 10 >= total * 6,
+        "nur {decided} von {total} entschieden"
+    );
+    assert!(residuals > 0);
+}
+
+#[test]
+fn overhang_dome_outlines_stay_on_the_surface_in_all_views() {
+    let (s, face) = nurbs_overhang_dome_solid();
+    let mut n = 0;
+    for k in ViewKind::ALL {
+        n += residuals_ok(&s, face, &strokes_of(&s, k), &Basis::of(k));
+    }
+    assert!(n > 0);
+}
+#[test]
+fn partial_torus_outline_matches_the_formula_on_the_face() {
+    // Gerundete Zylinderkante (Teil-Torus R = 7, r = 3, v ∈ [0, π/2]): Der Umriss wird auf die
+    // Fläche beschnitten. Eigene Formel nur auf der Fläche (Grenzpunkte genau auf v = 0 bzw.
+    // π/2), Hausdorff ≤ 1,05e-4 in allen 7 Ansichten; die Gesamtrechnung gelingt überall.
+    let (s, face) = rounded_cylinder_solid();
+    let b = vec![DrawBody {
+        name: "Z".into(),
+        solid: &s,
+    }];
+    for k in ViewKind::ALL {
+        let basis = Basis::of(k);
+        let st: Vec<_> = strokes_of(&s, k)
+            .into_iter()
+            .filter(|x| matches!(x.origin, StrokeOrigin::Silhouette { face: f, .. } if f == face))
+            .collect();
+        let pts2: Vec<_> = st.iter().map(|x| sample2(x, &basis, 8000)).collect();
+        let want: Vec<Vec<_>> = partial_torus_silhouette_points(
+            7.0,
+            3.0,
+            7.0,
+            basis.d,
+            4000,
+            (0.0, std::f64::consts::FRAC_PI_2),
+        )
+        .iter()
+        .map(|r| r.iter().map(|p| basis.project(*p)).collect())
+        .collect();
+        if want.is_empty() {
+            assert!(st.is_empty(), "{k:?}: {} Striche ohne Umriss", st.len());
+        } else {
+            let h = hausdorff(&pts2, &want);
+            eprintln!("Teil-Torus {k:?}: {} Striche, Hausdorff {h:e}", st.len());
+            assert!(h <= 1.05e-4, "{k:?}: {h}");
+        }
+        compute_view(&b, k, &Progress::new()).unwrap_or_else(|e| panic!("{k:?}: {e:?}"));
+    }
+}
+
+#[test]
+fn many_tori_share_no_work_budget() {
+    // 40 Ringe: Der Aufwand der Umrissberechnung gilt je Fläche, nicht für alle zusammen.
+    let rings: Vec<_> = (0..40)
+        .map(|i| {
+            translated(
+                &torus_solid(10.0, 3.0),
+                planora_math::DVec3::new(30.0 * i as f64, 0.0, 0.0),
+            )
+        })
+        .collect();
+    let b: Vec<_> = rings
+        .iter()
+        .map(|s| DrawBody {
+            name: "R".into(),
+            solid: s,
+        })
+        .collect();
+    let st = silhouette_strokes(
+        &b,
+        &Basis::of(ViewKind::Isometric),
+        extent_of(&b),
+        &Progress::new(),
+    )
+    .unwrap();
+    assert_eq!(st.len(), 80);
+}
+
+#[test]
+fn a_view_just_off_the_torus_plane_is_drawn_or_named() {
+    // Blick knapp neben der Ringebene (|d_z| = 1e-7): v(u) springt an den Meridianen beinahe;
+    // erwartet ist ein genauer Umriss oder eine benannte Meldung, nie ein Absturz oder Raten.
+    let s = rotated(&torus_solid(10.0, 3.0), planora_math::DVec3::X, 1e-7);
+    let basis = Basis::of(ViewKind::Front);
+    let b = vec![DrawBody {
+        name: "R".into(),
+        solid: &s,
+    }];
+    match silhouette_strokes(&b, &basis, extent_of(&b), &Progress::new()) {
+        Ok(st) => {
+            // Eigene Formel im gedrehten Rahmen: Blickrichtung in Ringkoordinaten.
+            let r = planora_math::DQuat::from_axis_angle(planora_math::DVec3::X, 1e-7);
+            let dl = r.inverse() * basis.d;
+            let pts2: Vec<_> = st.iter().map(|x| sample2(x, &basis, 8000)).collect();
+            let want: Vec<Vec<_>> = torus_silhouette_points(10.0, 3.0, dl, 40_000)
+                .iter()
+                .map(|b| b.iter().map(|p| basis.project(r * *p)).collect())
+                .collect();
+            let h = hausdorff(&pts2, &want);
+            eprintln!(
+                "knapp neben der Ringebene: {} Striche, Hausdorff {h:e}",
+                st.len()
+            );
+            assert!(h <= 1.05e-4, "{h}");
+        }
+        Err(planora_drawing::DrawError::Unsupported(m)) => {
+            eprintln!("knapp neben der Ringebene: {m}");
+            assert!(
+                m.starts_with("Umriss lässt sich nicht genau genug annähern"),
+                "{m}"
+            );
+        }
+        Err(planora_drawing::DrawError::TooComplex(n)) => eprintln!("zu aufwendig: {n}"),
+        Err(e) => panic!("{e:?}"),
+    }
 }

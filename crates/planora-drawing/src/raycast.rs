@@ -5,9 +5,9 @@
 //! Schnitte: Ebene (linear), Zylinder, Kegel, Kugel (quadratisch im lokalen Rahmen der Fläche),
 //! Torus (Vorzeichenwechsel der impliziten Funktion auf 2048 Stützstellen, Bisektion; Berührung
 //! ohne Vorzeichenwechsel ist unsicher, außer der Strahl beginnt auf dem Torus und entfernt sich
-//! von ihm), Freiform (`ray_hits_checked` des Kernels; beginnt der Strahl auf der Fläche – etwa
-//! auf ihrem Umriss –, wird der fast tangentiale Anfang übersprungen und über Vorzeichenwechsel des
-//! Flächenabstands entschieden, siehe `nurbs_hits`).
+//! von ihm), Freiform (`ray_hits_checked` des Kernels; verweigert er einen fast tangentialen
+//! Strahl, entscheidet eine eigene Unterteilung der Bézier-Flicken mit strengen Ausschlüssen, siehe
+//! `nurbs_hits`).
 //!
 //! Einordnung je Schnittpunkt mit `tol = 16·geom_tol(E)`: Randabstand höchstens `tol` →
 //! `Boundary`. Fern von gekrümmten Randkurven wie `point_in_face` des Kernels: Windungszahl der
@@ -36,6 +36,7 @@ use planora_kernel::boolean::{
     points_to_uv_indexed, winding,
 };
 use planora_kernel::{Curve, Surface};
+use planora_math::nurbs::BezierPatch;
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use std::f64::consts::PI;
 
@@ -68,11 +69,19 @@ const TORUS_SAMPLES: usize = 2048;
 /// Berührung des Torus: `min |F| < max(TORUS_TOUCH_REL · minor, tol)` ohne Vorzeichenwechsel
 /// (`F` ist ein Abstand, die Schwelle also eine Länge).
 const TORUS_TOUCH_REL: f64 = 1e-9;
-/// Freiform, Strahl beginnt auf der Fläche: Wachstum des übersprungenen Anfangsstücks je neuer
-/// Anfrage beim Kernel (ab `OWN_EPS`).
-const SKIP_GROWTH: f64 = 4.0;
-/// Freiform: Stellen im übersprungenen Anfangsstück für die Vorzeichenwechsel.
-const NEAR_SAMPLES: usize = 32;
+/// Freiform, eigene Flickenunterteilung (wo der Kernel verweigert): kleinste Flickendiagonale
+/// (relativ zu E), größte Tiefe, Höchstzahl untersuchter Flicken, Ebenheit (relativ zur Diagonale)
+/// und Streifgrenze wie im Kernel, Rundungspolster, Newton-Schritte und -Restschranke (relativ
+/// zum Koordinatenmaß), Abstand gleicher Treffer.
+const IMPLICIT_LEAF_REL: f64 = 1e-6;
+const PATCH_MAX_DEPTH: usize = 40;
+const PATCH_MAX_VISITS: usize = 20_000;
+const PATCH_FLATNESS: f64 = 1e-3;
+const PATCH_GRAZING_COS: f64 = 0.01;
+const PATCH_PAD_REL: f64 = 1e-12;
+const PATCH_NEWTON_STEPS: usize = 32;
+const PATCH_RESIDUAL_REL: f64 = 1e-12;
+const PATCH_DEDUP_REL: f64 = 1e-9;
 /// Eine Berührung muss `|F|` unter diesen Anteil des Werts am Anfang des Suchbereichs bringen
 /// (eine echte Berührung bringt `|F|` auf null; ein Strahl, der auf der Fläche beginnt und sich
 /// von ihr entfernt, bleibt darüber).
@@ -120,6 +129,8 @@ struct FaceData {
     body: usize,
     face: usize,
     region: Region,
+    /// Freiform: Bézier-Flicken (beim ersten Bedarf zerlegt; None, wenn zu viele).
+    patches: std::cell::OnceCell<Option<Vec<BezierPatch>>>,
     /// Hüllbox der Fläche, aufgebläht.
     lo: DVec3,
     hi: DVec3,
@@ -293,6 +304,7 @@ impl Scene {
                     body: bi,
                     face: fid.index(),
                     region: Region::new(geom, pad),
+                    patches: std::cell::OnceCell::new(),
                     lo: lo - DVec3::splat(p),
                     hi: hi + DVec3::splat(p),
                 });
@@ -442,7 +454,18 @@ impl Scene {
                 if end < start {
                     return Ok(Vec::new());
                 }
-                return nurbs_hits(n, o, d, (start, end), e, self.tol.linear);
+                let on_face = |p: DVec3| {
+                    let uv = f.region.geom.surface.project(p);
+                    self.classify(f, p, uv).is_some()
+                };
+                let Some(patches) = f
+                    .patches
+                    .get_or_init(|| n.surface().bezier_patches().ok())
+                    .as_deref()
+                else {
+                    return Err("Freiformfläche nicht sicher entscheidbar");
+                };
+                return nurbs_hits(n, patches, o, d, (start, end), e, min_s, &on_face);
             }
         };
         Ok(roots.into_iter().map(|s| (s, None)).collect())
@@ -712,10 +735,11 @@ fn torus_roots(
         let sign = a.signum();
         let g = |s: f64| sign * f(s);
         let (sm, gm) = golden_min(&g, ss[i], ss[i + 1]);
-        // Berührung nur, wo |F| unter `touch` **und** deutlich unter den Wert am Anfang des
-        // Suchbereichs fällt: Ein Prüfstrahl, der auf dem Torus beginnt (von einer Linie auf der
-        // Fläche) und sich von ihr entfernt, bleibt anfangs unter `touch`, ohne sie zu berühren.
-        if gm.abs() < touch && gm.abs() < START_DIP * fs[0].abs() {
+        // Berührung nur, wo |F| unter `touch` **und** deutlich unter beide Endwerte des
+        // Stützintervalls fällt: Ein Prüfstrahl, der auf dem Torus beginnt (von einer Linie auf
+        // der Fläche) und sich von ihr entfernt, bleibt anfangs unter `touch`, ohne sie zu
+        // berühren; eine echte Berührung bringt |F| auf null.
+        if gm.abs() < touch && gm.abs() < START_DIP * a.abs().min(b.abs()) {
             if sm > min_s {
                 return Err("Strahl berührt Torus");
             }
@@ -729,84 +753,203 @@ fn torus_roots(
     Ok(roots)
 }
 
-/// Schnitte des Strahls `o + s·d`, `s ∈ [start, end]`, mit der Freiformfläche über
+/// Schnitte des Strahls `o + s·d`, `s ∈ [start, end]`, mit der Freiformfläche: zuerst
 /// `ray_hits_checked` des Kernels. Der Kernel verweigert jeden Strahl, der ein Flächenstück fast
-/// tangential durchläuft – also jeden Prüfstrahl, der **auf** der Fläche an ihrem Umriss beginnt
-/// (Umrisslinie, Kante auf der Fläche nahe dem Umriss). Beginnt der Strahl auf der Fläche
-/// (`|Abstand| ≤ IN_SURFACE_REL · E`), wird der Kernel deshalb ab `start + w` erneut gefragt,
-/// `w = OWN_EPS · 4^k`, bis er entscheidet; das übersprungene Stück `[start, start + w]`
-/// entscheiden Vorzeichenwechsel des Flächenabstands an `NEAR_SAMPLES` Stellen (Bisektion). Dort
-/// liegt nur der Anfang des Strahls an seiner eigenen Tangentialstelle; dicht am Anfang
-/// verlassene oder gestreifte Stellen der eigenen Fläche verdecken nach F4 ohnehin nicht.
+/// tangential durchläuft (`RAY_GRAZING_COS`) – etwa Prüfstrahlen vom Umriss der Fläche oder von
+/// einer Kante, an der eine Freiformwand tangential ansetzt. Dann entscheidet
+/// [`patch_hits`] (Unterteilung der Bézier-Flicken mit strengen Ausschlüssen). Bleiben dort
+/// Stellen unentschieden (der Strahl verläuft auf weniger als `IMPLICIT_LEAF_REL · E` an der
+/// Fläche entlang), ist das eine Berührung: auf der beschnittenen Fläche (`on_face`) hinter
+/// `min_s` macht sie den Strahl unsicher – außer im Stück bis `OWN_EPS` hinter dem Anfang eines
+/// Strahls, der auf der Fläche selbst beginnt (dort liegt nur seine eigene Tangentialstelle;
+/// Treffer auf eigenen Flächen bis `OWN_EPS` verdecken nach F4 ohnehin nicht).
+#[allow(clippy::too_many_arguments)]
 fn nurbs_hits(
     n: &planora_kernel::NurbsSurfaceData,
+    patches: &[BezierPatch],
     o: DVec3,
     d: DVec3,
     (start, end): (f64, f64),
     e: f64,
-    tol: f64,
+    min_s: f64,
+    on_face: &dyn Fn(DVec3) -> bool,
 ) -> Result<Vec<Candidate>, &'static str> {
-    const UNSAFE: &str = "Freiformfläche nicht sicher entscheidbar";
-    let shifted = |from: f64| {
-        n.ray_hits_checked(o + d * from, d, end - from).map(|h| {
-            h.into_iter()
-                .map(|(t, u, v)| (t + from, Some((u, v))))
-                .collect::<Vec<Candidate>>()
-        })
-    };
-    if let Some(h) = shifted(start) {
-        return Ok(h);
+    if let Some(h) = n.ray_hits_checked(o + d * start, d, end - start) {
+        return Ok(h
+            .into_iter()
+            .map(|(t, u, v)| (t + start, Some((u, v))))
+            .collect());
     }
-    let gap = n.signed_distance(o).abs();
-    if gap.is_nan() || gap > IN_SURFACE_REL * e {
-        return Err(UNSAFE);
-    }
-    let mut w = crate::limits::own_eps(e);
-    while start + w < end {
-        if let Some(far) = shifted(start + w) {
-            let mut out = near_roots(n, o, d, (start, start + w), tol);
-            out.extend(far);
-            return Ok(out);
+    let (hits, touches) = patch_hits(n, patches, o, d, (start, end), IMPLICIT_LEAF_REL * e)?;
+    let on_surface = n.signed_distance(o).abs() <= IN_SURFACE_REL * e;
+    let skip = start + crate::limits::own_eps(e);
+    for t in touches {
+        if on_surface && t <= skip {
+            continue;
         }
-        w *= SKIP_GROWTH;
+        if t > min_s && on_face(o + d * t) {
+            return Err("Strahl streift eine Freiformfläche");
+        }
     }
-    Err(UNSAFE)
+    Ok(hits)
 }
 
-/// Vorzeichenwechsel des Flächenabstands längs `o + s·d` für `s ∈ [a, b]` an `NEAR_SAMPLES`
-/// Stellen, per Bisektion verfeinert. Nur Stellen, an denen der Abstand dabei wirklich auf höchstens`
-/// `tol` sinkt, zählen: Jenseits des Flächenrands liegt der Fußpunkt auf dem Rand, und das`
-/// Vorzeichen springt dort, wo der Strahl die Ebene durch den Rand senkrecht zur Normale quert,`
-/// ohne die Fläche zu treffen.
-fn near_roots(
+/// Schnitte des Strahls mit den Bézier-Flicken der Fläche durch Unterteilung (Gewichte positiv:
+/// jeder Flicken liegt in der Hülle seiner Kontrollpunkte). Ein Flicken fällt weg, wenn der
+/// Strahl seinen Hüllquader verfehlt oder ganz auf einer Seite seiner Schicht längs der Normale
+/// in der Flickenmitte bleibt (streng). Ebene, nicht streifende Flicken (wie im Kernel:
+/// Ebenheit ≤ 1e-3 · Diagonale, `|d·n| ≥ RAY_GRAZING_COS`) entscheidet Newton (Treffer im
+/// Flicken oder keiner); streifende werden – anders als im Kernel – weiter geteilt, bis die
+/// Diagonale `leaf` unterschreitet. Dort liefert Newton einen Treffer, sonst ist die Stelle
+/// eine Berührung (Rückgabe: Strahlparameter). Mehr als `PATCH_MAX_VISITS` Flicken → unsicher.
+fn patch_hits(
     n: &planora_kernel::NurbsSurfaceData,
+    patches: &[BezierPatch],
     o: DVec3,
     d: DVec3,
-    (a, b): (f64, f64),
-    tol: f64,
-) -> Vec<Candidate> {
-    let hint = std::cell::Cell::new(None);
-    let f = |s: f64| {
-        let (v, foot) = n.signed_distance_hinted(o + d * s, hint.get());
-        hint.set(foot);
-        v
-    };
-    let ss: Vec<f64> = (0..=NEAR_SAMPLES)
-        .map(|i| a + (b - a) * i as f64 / NEAR_SAMPLES as f64)
-        .collect();
-    let fs: Vec<f64> = ss.iter().map(|&s| f(s)).collect();
-    let mut out = Vec::new();
-    for i in 0..NEAR_SAMPLES {
-        if fs[i] * fs[i + 1] < 0.0 {
-            let s = bisect(&f, ss[i], ss[i + 1], fs[i]);
-            if f(s).abs() <= tol {
-                out.push((s, None));
+    (start, end): (f64, f64),
+    leaf: f64,
+) -> Result<(Vec<Candidate>, Vec<f64>), &'static str> {
+    const UNSAFE: &str = "Freiformfläche nicht sicher entscheidbar";
+    let sf = n.surface();
+    let scale = patches
+        .iter()
+        .map(|q| {
+            let (lo, hi) = q.bounds();
+            lo.abs().max(hi.abs()).max_element()
+        })
+        .fold(o.abs().max_element(), f64::max)
+        .max(1.0);
+    let pad = PATCH_PAD_REL * scale;
+    let mut stack: Vec<(BezierPatch, usize)> = patches.iter().map(|q| (q.clone(), 0)).collect();
+    let mut visits = 0usize;
+    let mut hits: Vec<Candidate> = Vec::new();
+    let mut touches = Vec::new();
+    while let Some((q, depth)) = stack.pop() {
+        visits += 1;
+        if visits > PATCH_MAX_VISITS {
+            return Err(UNSAFE);
+        }
+        let (lo, hi) = q.bounds();
+        let Some((t0, t1)) = ray_box(
+            o,
+            d,
+            start,
+            end,
+            lo - DVec3::splat(pad),
+            hi + DVec3::splat(pad),
+        ) else {
+            continue;
+        };
+        let (uc, vc) = (0.5 * (q.u.0 + q.u.1), 0.5 * (q.v.0 + q.v.1));
+        let mut nrm = sf.normal(uc, vc);
+        if nrm == DVec3::ZERO {
+            // Pol oder entartete Mitte: Normale der Eckdiagonalen (jede Richtung ist zulässig,
+            // die Schicht bleibt eine strenge Schranke).
+            let c = &q.control;
+            let (nu, nv) = (q.degree_u + 1, q.degree_v + 1);
+            let a = c[nu * nv - 1] - c[0];
+            let b = c[nv - 1] - c[(nu - 1) * nv];
+            nrm = a.cross(b).normalize_or_zero();
+        }
+        if nrm != DVec3::ZERO {
+            let (mut slo, mut shi) = (f64::INFINITY, f64::NEG_INFINITY);
+            for c in &q.control {
+                let x = nrm.dot(*c);
+                slo = slo.min(x);
+                shi = shi.max(x);
+            }
+            let (sa, sb) = (nrm.dot(o + d * t0), nrm.dot(o + d * t1));
+            if (sa < slo - pad && sb < slo - pad) || (sa > shi + pad && sb > shi + pad) {
+                continue;
             }
         }
+        let diag = (hi - lo).length();
+        let small = diag <= leaf || depth >= PATCH_MAX_DEPTH;
+        let flat = q.flatness() <= PATCH_FLATNESS * diag;
+        let grazing = nrm == DVec3::ZERO || nrm.dot(d).abs() < PATCH_GRAZING_COS;
+        if small || (flat && !grazing) {
+            match leaf_newton(sf, n, &q, o, d, (uc, vc), scale) {
+                Some((t, u, v)) => {
+                    if t >= start && t <= end {
+                        hits.push((t, Some((u, v))));
+                    }
+                    continue;
+                }
+                None if small => {
+                    touches.push((0.5 * (lo + hi) - o).dot(d).clamp(start, end));
+                    continue;
+                }
+                // Ebener, nicht streifender Flicken ohne Konvergenz: weiter teilen.
+                None => {}
+            }
+        }
+        for c in q.subdivide() {
+            stack.push((c, depth + 1));
+        }
     }
-    out
+    hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let gap = PATCH_DEDUP_REL * scale;
+    let mut out: Vec<Candidate> = Vec::with_capacity(hits.len());
+    for h in hits {
+        if out.last().is_none_or(|l| h.0 - l.0 > gap) {
+            out.push(h);
+        }
+    }
+    Ok((out, touches))
 }
 
+/// Newton auf `S(u, v) − o − t·d = 0` vom Flickenmittelpunkt aus; `Some((t, u, v))`, wenn er
+/// konvergiert (Rest ≤ `PATCH_RESIDUAL_REL · Maß`) und `(u, v)` im Flicken liegt (± 1e-9 der
+/// Bereichsbreite, geschlossene Richtungen auch um eine Periode versetzt).
+fn leaf_newton(
+    sf: &planora_math::nurbs::NurbsSurface,
+    n: &planora_kernel::NurbsSurfaceData,
+    q: &BezierPatch,
+    o: DVec3,
+    d: DVec3,
+    (u0, v0): (f64, f64),
+    scale: f64,
+) -> Option<(f64, f64, f64)> {
+    let limit = PATCH_RESIDUAL_REL * scale;
+    let (mut u, mut v) = (u0, v0);
+    let mut t = (sf.point(u, v) - o).dot(d);
+    for _ in 0..PATCH_NEWTON_STEPS {
+        let (wu, wv) = n.wrap(u, v);
+        let dv = sf.derivs(wu, wv, 1);
+        let r = dv[0][0] - o - d * t;
+        if !r.is_finite() {
+            return None;
+        }
+        if r.length() <= limit {
+            break;
+        }
+        let (a, b, c) = (dv[1][0], dv[0][1], -d);
+        let det = a.dot(b.cross(c));
+        if !det.is_finite() || det.abs() <= 1e-14 * a.length() * b.length() {
+            return None;
+        }
+        let rhs = -r;
+        u += rhs.dot(b.cross(c)) / det;
+        v += a.dot(rhs.cross(c)) / det;
+        t += a.dot(b.cross(rhs)) / det;
+    }
+    let (wu, wv) = n.wrap(u, v);
+    if (sf.point(wu, wv) - o - d * t).length() > limit {
+        return None;
+    }
+    let ((du0, du1), (dv0, dv1)) = sf.domain();
+    let inside = |x: f64, (a, b): (f64, f64), w: f64, periodic: bool| {
+        let s = 1e-9 * w;
+        let shifts: &[f64] = if periodic { &[0.0, -1.0, 1.0] } else { &[0.0] };
+        shifts.iter().any(|k| {
+            let y = x + k * w;
+            y >= a - s && y <= b + s
+        })
+    };
+    (inside(u, q.u, du1 - du0, n.is_periodic_u()) && inside(v, q.v, dv1 - dv0, n.is_periodic_v()))
+        .then_some((t, wu, wv))
+}
 /// Nullstelle von `f` in `[a, b]` mit `f(a)` vom Vorzeichen `fa`, `f(b)` vom anderen.
 fn bisect(f: &impl Fn(f64) -> f64, mut a: f64, mut b: f64, fa: f64) -> f64 {
     for _ in 0..BISECT_STEPS {
