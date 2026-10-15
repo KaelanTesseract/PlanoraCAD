@@ -20,6 +20,7 @@ pub mod svg;
 pub mod visibility;
 
 pub use basis::Basis;
+pub use dimension::{Anchor, Measured, measure};
 pub use dxf::{dxf_string, write_dxf};
 pub use error::DrawError;
 pub use file::{DrawingFormat, drawing_to_bytes, export_drawing_file};

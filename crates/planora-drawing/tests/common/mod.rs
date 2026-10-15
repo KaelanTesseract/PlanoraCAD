@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod check;
+pub mod dim_model;
 pub mod dxf_read;
 pub mod mesh_ref;
 pub mod model;
