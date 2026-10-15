@@ -79,8 +79,29 @@ fn origin_body(s: &Stroke) -> usize {
 }
 
 /// Berechnet die Linien der Ansicht `kind`: Kanten und Umrisse, geteilt an allen Kreuzungen und
-/// Anschlüssen, jedes Stück als sichtbar oder verdeckt beurteilt.
+/// Anschlüssen, jedes Stück als sichtbar oder verdeckt beurteilt, dann zusammengefasst
+/// (`visibility::merge_pieces`: anschließende Stücke gleicher Sichtbarkeit vereint,
+/// deckungsgleiche Stücke einmal – sichtbar, wenn eines sichtbar ist –, winzige Stücke entfernt).
 pub fn compute_view(
+    bodies: &[DrawBody],
+    kind: ViewKind,
+    progress: &Progress,
+) -> Result<ViewLines, DrawError> {
+    let mut v = compute_view_unmerged(bodies, kind, progress)?;
+    v.pieces = visibility::merge_pieces(
+        &v.strokes,
+        std::mem::take(&mut v.pieces),
+        &v.basis,
+        v.extent,
+        progress,
+    )?;
+    v.bbox = pieces_bbox(&v.strokes, &v.pieces, &v.basis);
+    Ok(v)
+}
+
+/// Wie [`compute_view`], aber ohne das Zusammenfassen: die Stücke so, wie Teilen und
+/// Sichtprüfung sie liefern (lückenlos je Strich). Für Prüfungen der Einzelschritte.
+pub fn compute_view_unmerged(
     bodies: &[DrawBody],
     kind: ViewKind,
     progress: &Progress,
@@ -206,7 +227,7 @@ pub fn compute_view(
             // Nachbarstücks desselben Strichs – der Wechsel ist dann auf OWN_EPS genau, wie
             // beim Eingrenzen in `classify_range`.
             Err(DrawError::AmbiguousVisibility(_))
-                if s.point(a).distance(s.point(b)) <= limits::own_eps(extent) =>
+                if arc_len(s, a, b) <= limits::own_eps(extent) =>
             {
                 raw.push((i, a, b, None));
             }
@@ -220,7 +241,7 @@ pub fn compute_view(
     let pieces = inherit_short(
         raw,
         |i| stroke_name(bodies, &strokes[i]),
-        |i, a, b| strokes[i].point(a).distance(strokes[i].point(b)),
+        |i, a, b| arc_len(&strokes[i], a, b),
         limits::own_eps(extent),
     )?;
 
@@ -235,11 +256,28 @@ pub fn compute_view(
     })
 }
 
+/// Abschnitte für die Bogenlänge eines Stücks im Raum.
+const ARC_SAMPLES: usize = 16;
+
+/// Bogenlänge des Stücks `[a, b]` im Raum: Summe der Sehnen über `ARC_SAMPLES` Abschnitte (von
+/// unten an die Bogenlänge heran; bei kurzen Stücken bis auf Rundung genau). Eine einzelne Sehne
+/// wäre bei einem fast geschlossenen Bogen beliebig kurz.
+fn arc_len(s: &Stroke, a: f64, b: f64) -> f64 {
+    let mut prev = s.point(a);
+    let mut total = 0.0;
+    for k in 1..=ARC_SAMPLES {
+        let q = s.point(a + (b - a) * k as f64 / ARC_SAMPLES as f64);
+        total += q.distance(prev);
+        prev = q;
+    }
+    total
+}
+
 /// Stücke ohne eigenes Urteil (`None`) übernehmen das Urteil des vorigen, sonst des nächsten
 /// anschließenden Stücks desselben Strichs (die Stücke eines Strichs folgen lückenlos
 /// aufeinander). Eine zusammenhängende Folge solcher Stücke darf im Raum zusammen höchstens
-/// `limit` (OWN_EPS) lang sein (`len`: Sehnenlänge eines Stücks); längere Folgen und Stücke ohne
-/// Nachbarn mit Urteil: `AmbiguousVisibility` mit dem Namen des Strichs.
+/// `limit` (OWN_EPS) lang sein (`len`: Bogenlänge eines Stücks, [`arc_len`]); längere Folgen und
+/// Stücke ohne Nachbarn mit Urteil: `AmbiguousVisibility` mit dem Namen des Strichs.
 fn inherit_short(
     mut raw: Vec<(usize, f64, f64, Option<Visibility>)>,
     name: impl Fn(usize) -> String,
@@ -308,4 +346,77 @@ fn pieces_bbox(strokes: &[Stroke], pieces: &[Piece], basis: &Basis) -> ((f64, f6
         return ((0.0, 0.0), (0.0, 0.0));
     }
     ((lo.x, lo.y), (hi.x, hi.y))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use planora_kernel::Curve;
+    use planora_math::{DVec3, Frame};
+
+    fn circle_stroke() -> Stroke {
+        Stroke {
+            curve: Curve::Circle {
+                frame: Frame::WORLD,
+                radius: 1.0,
+            },
+            t0: 0.0,
+            t1: std::f64::consts::TAU,
+            origin: StrokeOrigin::Edge { body: 0, edge: 0 },
+        }
+    }
+
+    #[test]
+    fn arc_length_is_measured_along_the_curve() {
+        // Fast geschlossener Bogen (Radius 1, 2π − 1e-3): Sehne 1e-3, Bogen ≈ 2π.
+        let s = circle_stroke();
+        let b = std::f64::consts::TAU - 1e-3;
+        assert!(s.point(0.0).distance(s.point(b)) < 1.01e-3);
+        let l = arc_len(&s, 0.0, b);
+        assert!((l - b).abs() < 0.03 * b, "{l}");
+        // Gerade: genau.
+        let line = Stroke {
+            curve: Curve::Line {
+                origin: DVec3::ZERO,
+                dir: DVec3::X,
+            },
+            t0: 0.0,
+            t1: 3.0,
+            ..s
+        };
+        assert!((arc_len(&line, 0.5, 2.5) - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_short_piece_prefers_the_verdict_of_its_predecessor() {
+        use Visibility::{Hidden, Visible};
+        let len = |_: usize, a: f64, b: f64| (b - a).abs();
+        let name = |i: usize| format!("S{i}");
+        // Vorgänger sichtbar, Nachfolger verdeckt: das kurze Stück wird sichtbar.
+        let raw = vec![
+            (0, 0.0, 1.0, Some(Visible)),
+            (0, 1.0, 1.1, None),
+            (0, 1.1, 2.0, Some(Hidden)),
+        ];
+        let p = inherit_short(raw, name, len, 0.5).unwrap();
+        assert_eq!(p[1].vis, Visible);
+        // Ohne Vorgänger: der Nachfolger.
+        let raw = vec![(0, 0.0, 0.1, None), (0, 0.1, 2.0, Some(Hidden))];
+        let p = inherit_short(raw, name, len, 0.5).unwrap();
+        assert_eq!(p[0].vis, Hidden);
+        // Ein anderer Strich davor zählt nicht als Vorgänger.
+        let raw = vec![
+            (0, 0.0, 1.0, Some(Visible)),
+            (1, 1.0, 1.1, None),
+            (1, 1.1, 2.0, Some(Hidden)),
+        ];
+        let p = inherit_short(raw, name, len, 0.5).unwrap();
+        assert_eq!(p[1].vis, Hidden);
+        // Zu lang (Bogen statt Sehne gemessen): benannte Meldung.
+        let raw = vec![(0, 0.0, 1.0, Some(Visible)), (0, 1.0, 2.0, None)];
+        assert!(matches!(
+            inherit_short(raw, name, len, 0.5),
+            Err(DrawError::AmbiguousVisibility(n)) if n == "S0"
+        ));
+    }
 }

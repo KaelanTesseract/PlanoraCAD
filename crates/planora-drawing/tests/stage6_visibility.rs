@@ -39,7 +39,9 @@ fn isometric_box_has_nine_visible_and_three_hidden_edges() {
 fn front_view_of_box_has_no_hidden_pieces() {
     let v = view(&box_solid(10.0, 20.0, 30.0), ViewKind::Front);
     assert_eq!(len(&v, Visibility::Hidden), 0.0);
-    assert!(len(&v, Visibility::Visible) >= 2.0 * (10.0 + 30.0) - 1e-9); // Rechteck (hintere Kopien dürfen dazukommen, Aufgabe 8 vereint sie)
+    // Rechteck; die deckungsgleichen hinteren Kanten vereint Aufgabe 8.
+    let vis = len(&v, Visibility::Visible);
+    assert!((vis - 2.0 * (10.0 + 30.0)).abs() < 1e-6, "{vis}");
 }
 
 #[test]

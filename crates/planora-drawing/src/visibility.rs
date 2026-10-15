@@ -6,15 +6,21 @@
 //! aus, danach `AmbiguousVisibility`. Urteilen die Stellen eines Stücks verschieden, wird es
 //! halbiert, bis der Wechsel auf `BISECT_TOL` (relativ) genau eingegrenzt ist, oder – wo die
 //! Strahlen am Wechsel selbst nur den verdeckenden Rand streifen – auf die Breite dieses
-//! Randbands (höchstens `OWN_EPS`), siehe [`classify_range`].
+//! Randbands (höchstens `OWN_EPS`), siehe [`classify_range`]. Zum Schluss fasst
+//! [`merge_pieces`] die Stücke zusammen (deckungsgleiche einmal, anschließende vereint, winzige
+//! entfernt).
 
-use crate::Visibility;
 use crate::basis::Basis;
 use crate::error::DrawError;
-use crate::limits::{BISECT_TOL, MAX_RAY_TESTS, MAX_SUBDIVISION_DEPTH, own_eps, self_eps};
+use crate::limits::{
+    BISECT_TOL, MAX_PAIR_TESTS, MAX_PIECES, MAX_RAY_TESTS, MAX_SUBDIVISION_DEPTH, geom_tol,
+    own_eps, self_eps,
+};
 use crate::raycast::{Caster, HitClass, Ray};
 use crate::stroke::Stroke;
-use planora_math::DVec3;
+use crate::{Piece, Visibility};
+use planora_exchange::Progress;
+use planora_math::{DVec2, DVec3};
 use std::cell::Cell;
 
 /// Kippwinkel der Prüfstrahlen (rad).
@@ -326,4 +332,440 @@ pub fn classify_range_mapped(
         }
     }
     Ok(out)
+}
+
+/// Vielfaches von `geom_tol`, bis zu dem die Stützpunkte deckungsgleicher Stücke übereinstimmen.
+pub const COINCIDENT_FACTOR: f64 = 16.0;
+/// Vielfaches von `geom_tol`: Stücke mit kürzerer Bildlänge entfallen.
+pub const TINY_FACTOR: f64 = 64.0;
+/// Stützstellen (Bruchteil des Parameterbereichs) für den Vergleich zweier Stücke.
+const SIGNATURE_FRACTIONS: [f64; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
+/// Abschnitte für die Bildlänge eines Stücks.
+const LENGTH_SAMPLES: usize = 16;
+/// Probestellen beim Suchen des Gegenpunkts auf einem geschlossenen Stück.
+const CLOSED_SEARCH: usize = 256;
+/// Schritte des Goldenen Schnitts dabei.
+const CLOSED_GOLDEN: usize = 100;
+/// Abbruchprüfung je so vielen Stücken bzw. Paaren.
+const MERGE_CHECK_EVERY: usize = 1024;
+
+/// Fasst die Stücke einer Ansicht zusammen (Spec §4.4, Festlegung F6):
+///
+/// 1. **Deckungsgleiche Stücke**: Zwei Stücke gleicher Kurvenart (Gerade, Kegelschnitt,
+///    Freiform), deren Bildpunkte an den Enden (in beliebiger Reihenfolge), in der Mitte und bei
+///    ¼ und ¾ des Parameters (bei umgekehrter Reihenfolge ¾ und ¼) höchstens `16·geom_tol`
+///    auseinanderliegen, sind dieselbe Linie; es bleibt **eines**: das sichtbare, sonst das
+///    erste (nach Strich, dann Anfangsparameter). Ganze geschlossene Stücke (Vollkreise)
+///    vergleichen ab dem Gegenpunkt des Anfangs (anderer Nahtpunkt). Vorauswahl über die
+///    Hüllboxen; die Paare zählen gegen `MAX_PAIR_TESTS`.
+/// 2. **Anschließende Stücke** desselben Strichs mit gleicher Sichtbarkeit (`t1` des einen =
+///    `t0` des nächsten; bei geschlossenen Strichen auch Ende an Anfang, das Stück reicht dann
+///    über die Naht hinaus) werden vereint; danach noch einmal Schritt 1 (Striche mit
+///    verschiedenen Teilstellen, deren vereinte Stücke nun gleich sind).
+/// 3. **Winzige Stücke** (Bildlänge unter `64·geom_tol`) entfallen; ihr Bereich geht an das
+///    vorige anschließende Stück desselben Strichs, sonst an das nächste (die Linie bleibt
+///    lückenlos); danach noch einmal Schritt 2.
+///
+/// Schritt 1 läuft zuerst auf den unvereinten Stücken: Deckungsgleiche Striche haben dieselben
+/// Teilstellen, ihre Stücke liegen also deckungsgleich, auch wenn sie verschieden urteilen
+/// (vorn sichtbar, hinten teils verdeckt). Ergebnis nach Strich und `t0` sortiert
+/// (deterministisch). Mehr als `MAX_PIECES` Stücke → `TooComplex`.
+pub fn merge_pieces(
+    strokes: &[Stroke],
+    pieces: Vec<Piece>,
+    basis: &Basis,
+    extent: f64,
+    progress: &Progress,
+) -> Result<Vec<Piece>, DrawError> {
+    if pieces.len() as u64 > MAX_PIECES {
+        return Err(DrawError::TooComplex(pieces.len() as u64));
+    }
+    let tol = geom_tol(extent);
+    let pieces = sorted(pieces);
+    let pieces = drop_coincident(strokes, pieces, basis, COINCIDENT_FACTOR * tol, progress)?;
+    let pieces = join_adjacent(strokes, pieces, progress)?;
+    let pieces = drop_coincident(strokes, pieces, basis, COINCIDENT_FACTOR * tol, progress)?;
+    let pieces = drop_tiny(strokes, pieces, basis, TINY_FACTOR * tol, progress)?;
+    join_adjacent(strokes, pieces, progress)
+}
+
+/// Nach Strich, dann `t0` sortiert.
+fn sorted(mut pieces: Vec<Piece>) -> Vec<Piece> {
+    pieces.sort_by(|a, b| a.stroke.cmp(&b.stroke).then(a.t0.total_cmp(&b.t0)));
+    pieces
+}
+
+/// Periode eines geschlossenen Strichs (läuft über eine ganze Periode), sonst `None`.
+fn closed_period(s: &Stroke) -> Option<f64> {
+    s.curve
+        .period()
+        .filter(|p| *p > 0.0 && (s.param_len() - p).abs() <= BISECT_TOL * p)
+}
+
+/// Schritt 2: anschließende Stücke gleicher Sichtbarkeit vereinen (auch über die Naht).
+fn join_adjacent(
+    strokes: &[Stroke],
+    pieces: Vec<Piece>,
+    progress: &Progress,
+) -> Result<Vec<Piece>, DrawError> {
+    let mut out: Vec<Piece> = Vec::with_capacity(pieces.len());
+    for (k, p) in sorted(pieces).into_iter().enumerate() {
+        if k % MERGE_CHECK_EVERY == 0 {
+            progress.check()?;
+        }
+        match out.last_mut() {
+            Some(l) if l.stroke == p.stroke && l.vis == p.vis && l.t1 == p.t0 => l.t1 = p.t1,
+            _ => out.push(p),
+        }
+    }
+    // Über die Naht: Das letzte Stück eines geschlossenen Strichs endet am Bereichsende, das
+    // erste beginnt am Bereichsanfang.
+    let mut k = 0;
+    while k < out.len() {
+        let stroke = out[k].stroke;
+        let mut m = k;
+        while m + 1 < out.len() && out[m + 1].stroke == stroke {
+            m += 1;
+        }
+        let s = &strokes[stroke];
+        if let Some(period) = closed_period(s) {
+            let (lo, hi) = (s.t0.min(s.t1), s.t0.max(s.t1));
+            if m > k && out[m].t1 == hi && out[k].t0 == lo && out[m].vis == out[k].vis {
+                out[m].t1 = out[k].t1 + period;
+                out.remove(k);
+                m -= 1;
+            }
+        }
+        k = m + 1;
+    }
+    Ok(sorted(out))
+}
+
+/// Vergleichsmerkmale eines Stücks.
+struct Signature {
+    kind: u8,
+    pts: [DVec2; 5],
+    lo: DVec2,
+    hi: DVec2,
+    /// Ganzes geschlossenes Stück: Periode.
+    full: Option<f64>,
+}
+
+fn signature(strokes: &[Stroke], p: &Piece, basis: &Basis, near: f64) -> Signature {
+    let s = &strokes[p.stroke];
+    let part = Stroke {
+        t0: p.t0,
+        t1: p.t1,
+        ..s.clone()
+    };
+    let (lo, hi) = part.bbox2(basis, near);
+    let kind = match s.curve {
+        planora_kernel::Curve::Line { .. } => 0,
+        planora_kernel::Curve::Circle { .. } | planora_kernel::Curve::Ellipse { .. } => 1,
+        planora_kernel::Curve::Nurbs(_) => 2,
+    };
+    let full = closed_period(s).filter(|per| p.t1 - p.t0 >= per * (1.0 - BISECT_TOL));
+    Signature {
+        kind,
+        pts: SIGNATURE_FRACTIONS.map(|f| s.point2(basis, p.t0 + f * (p.t1 - p.t0))),
+        lo,
+        hi,
+        full,
+    }
+}
+
+/// Sind die Stücke `a` und `b` deckungsgleich (siehe [`merge_pieces`])?
+fn coincident(
+    strokes: &[Stroke],
+    basis: &Basis,
+    (pa, sa): (&Piece, &Signature),
+    (pb, sb): (&Piece, &Signature),
+    near: f64,
+) -> bool {
+    if sa.kind != sb.kind {
+        return false;
+    }
+    let close = |x: DVec2, y: DVec2| x.distance(y) <= near;
+    match (sa.full, sb.full) {
+        (None, None) => {
+            let (a, b) = (&sa.pts, &sb.pts);
+            let forward = (0..5).all(|i| close(a[i], b[i]));
+            let backward = (0..5).all(|i| close(a[i], b[4 - i]));
+            forward || backward
+        }
+        (Some(per_a), Some(per_b)) => {
+            // Gegenpunkt des Anfangs von `a` auf `b`, dann ab dort in beide Richtungen.
+            let sbk = &strokes[pb.stroke];
+            let q = sa.pts[0];
+            let dist = |t: f64| sbk.point2(basis, t).distance(q);
+            let h = per_b / CLOSED_SEARCH as f64;
+            let best = (0..CLOSED_SEARCH)
+                .map(|i| pb.t0 + h * i as f64)
+                .min_by(|x, y| dist(*x).total_cmp(&dist(*y)))
+                .unwrap_or(pb.t0);
+            let tau = golden(&dist, best - h, best + h);
+            if !close(sbk.point2(basis, tau), q) {
+                return false;
+            }
+            let sak = &strokes[pa.stroke];
+            [1.0, -1.0].iter().any(|dir| {
+                SIGNATURE_FRACTIONS[1..4].iter().all(|f| {
+                    close(
+                        sak.point2(basis, pa.t0 + f * per_a),
+                        sbk.point2(basis, tau + dir * f * per_b),
+                    )
+                })
+            })
+        }
+        _ => false,
+    }
+}
+
+/// Stelle des kleinsten Werts von `g` in `[a, b]` (Goldener Schnitt).
+fn golden(g: &dyn Fn(f64) -> f64, mut a: f64, mut b: f64) -> f64 {
+    let r = 0.5 * (5f64.sqrt() - 1.0);
+    let (mut x1, mut x2) = (b - r * (b - a), a + r * (b - a));
+    let (mut g1, mut g2) = (g(x1), g(x2));
+    for _ in 0..CLOSED_GOLDEN {
+        if g1 <= g2 {
+            b = x2;
+            x2 = x1;
+            g2 = g1;
+            x1 = b - r * (b - a);
+            g1 = g(x1);
+        } else {
+            a = x1;
+            x1 = x2;
+            g1 = g2;
+            x2 = a + r * (b - a);
+            g2 = g(x2);
+        }
+    }
+    if g1 <= g2 { x1 } else { x2 }
+}
+
+/// Schritt 1: Von deckungsgleichen Stücken bleibt eines (sichtbar vor verdeckt, sonst das
+/// erste). Das beste Stück jeder Gruppe verliert keinen Vergleich, es bleibt also immer eines.
+fn drop_coincident(
+    strokes: &[Stroke],
+    pieces: Vec<Piece>,
+    basis: &Basis,
+    near: f64,
+    progress: &Progress,
+) -> Result<Vec<Piece>, DrawError> {
+    let mut sigs: Vec<Signature> = Vec::with_capacity(pieces.len());
+    for (k, p) in pieces.iter().enumerate() {
+        if k % MERGE_CHECK_EVERY == 0 {
+            progress.check()?;
+        }
+        sigs.push(signature(strokes, p, basis, near));
+    }
+    let mut order: Vec<usize> = (0..pieces.len()).collect();
+    order.sort_by(|&i, &j| sigs[i].lo.x.total_cmp(&sigs[j].lo.x).then(i.cmp(&j)));
+    // Rang: sichtbar vor verdeckt, dann die Reihenfolge (nach Strich und t0 sortiert).
+    let better = |i: usize, j: usize| {
+        let (vi, vj) = (pieces[i].vis, pieces[j].vis);
+        if vi != vj {
+            vi == Visibility::Visible
+        } else {
+            i < j
+        }
+    };
+    let mut removed = vec![false; pieces.len()];
+    let mut pairs: u64 = 0;
+    for (k, &i) in order.iter().enumerate() {
+        for &j in &order[k + 1..] {
+            if sigs[j].lo.x > sigs[i].hi.x {
+                break;
+            }
+            pairs += 1;
+            if pairs > MAX_PAIR_TESTS {
+                return Err(DrawError::TooComplex(pairs));
+            }
+            if pairs.is_multiple_of(MERGE_CHECK_EVERY as u64) {
+                progress.check()?;
+            }
+            if sigs[j].lo.y > sigs[i].hi.y || sigs[i].lo.y > sigs[j].hi.y {
+                continue;
+            }
+            if coincident(
+                strokes,
+                basis,
+                (&pieces[i], &sigs[i]),
+                (&pieces[j], &sigs[j]),
+                near,
+            ) {
+                if better(i, j) {
+                    removed[j] = true;
+                } else {
+                    removed[i] = true;
+                }
+            }
+        }
+    }
+    Ok(pieces
+        .into_iter()
+        .zip(removed)
+        .filter(|(_, r)| !r)
+        .map(|(p, _)| p)
+        .collect())
+}
+
+/// Bildlänge eines Stücks: Summe der Sehnen über `LENGTH_SAMPLES` Abschnitte.
+fn image_len(strokes: &[Stroke], p: &Piece, basis: &Basis) -> f64 {
+    let s = &strokes[p.stroke];
+    let mut prev = s.point2(basis, p.t0);
+    let mut total = 0.0;
+    for k in 1..=LENGTH_SAMPLES {
+        let q = s.point2(
+            basis,
+            p.t0 + (p.t1 - p.t0) * k as f64 / LENGTH_SAMPLES as f64,
+        );
+        total += q.distance(prev);
+        prev = q;
+    }
+    total
+}
+
+/// Schritt 3: Winzige Stücke entfallen, ihr Bereich geht an das vorige, sonst das nächste
+/// anschließende Stück desselben Strichs.
+fn drop_tiny(
+    strokes: &[Stroke],
+    pieces: Vec<Piece>,
+    basis: &Basis,
+    tiny: f64,
+    progress: &Progress,
+) -> Result<Vec<Piece>, DrawError> {
+    let mut out: Vec<Piece> = Vec::with_capacity(pieces.len());
+    let mut carry: Option<Piece> = None;
+    for (k, mut p) in sorted(pieces).into_iter().enumerate() {
+        if k % MERGE_CHECK_EVERY == 0 {
+            progress.check()?;
+        }
+        if let Some(c) = carry.take()
+            && c.stroke == p.stroke
+            && c.t1 == p.t0
+        {
+            p.t0 = c.t0;
+        }
+        if image_len(strokes, &p, basis) < tiny {
+            match out.last_mut() {
+                Some(l) if l.stroke == p.stroke && l.t1 == p.t0 => l.t1 = p.t1,
+                _ => carry = Some(p),
+            }
+            continue;
+        }
+        out.push(p);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ViewKind;
+    use crate::stroke::StrokeOrigin;
+    use planora_kernel::Curve;
+
+    fn line(y: f64, edge: usize) -> Stroke {
+        Stroke {
+            curve: Curve::Line {
+                origin: DVec3::new(0.0, y, 0.0),
+                dir: DVec3::X,
+            },
+            t0: 0.0,
+            t1: 2.0,
+            origin: StrokeOrigin::Edge { body: 0, edge },
+        }
+    }
+
+    fn piece(stroke: usize, t0: f64, t1: f64, vis: Visibility) -> Piece {
+        Piece {
+            stroke,
+            t0,
+            t1,
+            vis,
+        }
+    }
+
+    fn merge(strokes: &[Stroke], pieces: Vec<Piece>) -> Vec<Piece> {
+        merge_pieces(
+            strokes,
+            pieces,
+            &Basis::of(ViewKind::Top),
+            2.0,
+            &Progress::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn tiny_pieces_go_to_their_neighbour() {
+        use Visibility::{Hidden, Visible};
+        // geom_tol(2) = 1e-9 (Untergrenze): winzig heißt kürzer als 6,4e-8.
+        let s = [line(0.0, 0)];
+        // Verdecktes Stück von 1e-8 zwischen zwei sichtbaren: entfällt, alles ein Stück.
+        let out = merge(
+            &s,
+            vec![
+                piece(0, 0.0, 1.0, Visible),
+                piece(0, 1.0, 1.0 + 1e-8, Hidden),
+                piece(0, 1.0 + 1e-8, 2.0, Visible),
+            ],
+        );
+        assert_eq!(out, vec![piece(0, 0.0, 2.0, Visible)]);
+        // Am Anfang ohne Vorgänger: an den Nachfolger.
+        let out = merge(
+            &s,
+            vec![piece(0, 0.0, 1e-8, Hidden), piece(0, 1e-8, 2.0, Visible)],
+        );
+        assert_eq!(out, vec![piece(0, 0.0, 2.0, Visible)]);
+        // 1e-7 ist nicht winzig.
+        let out = merge(
+            &s,
+            vec![piece(0, 0.0, 1e-7, Hidden), piece(0, 1e-7, 2.0, Visible)],
+        );
+        assert_eq!(out.len(), 2);
+        // Ein winziger ganzer Strich ohne Nachbarn entfällt.
+        let short = Stroke {
+            t1: 1e-8,
+            ..line(5.0, 1)
+        };
+        let out = merge(
+            &[line(0.0, 0), short],
+            vec![piece(0, 0.0, 2.0, Visible), piece(1, 0.0, 1e-8, Visible)],
+        );
+        assert_eq!(out, vec![piece(0, 0.0, 2.0, Visible)]);
+    }
+
+    #[test]
+    fn coincident_pieces_keep_the_visible_one_in_either_direction() {
+        use Visibility::{Hidden, Visible};
+        // Gegenläufige deckungsgleiche Gerade (andere Tiefe): eines bleibt, das sichtbare.
+        let back = Stroke {
+            curve: Curve::Line {
+                origin: DVec3::new(2.0, 0.0, -3.0),
+                dir: -DVec3::X,
+            },
+            ..line(0.0, 1)
+        };
+        let s = [line(0.0, 0), back];
+        let out = merge(
+            &s,
+            vec![piece(0, 0.0, 2.0, Hidden), piece(1, 0.0, 2.0, Visible)],
+        );
+        assert_eq!(out, vec![piece(1, 0.0, 2.0, Visible)]);
+        // Gleich sichtbar: das erste.
+        let out = merge(
+            &s,
+            vec![piece(0, 0.0, 2.0, Hidden), piece(1, 0.0, 2.0, Hidden)],
+        );
+        assert_eq!(out, vec![piece(0, 0.0, 2.0, Hidden)]);
+        // Nur zur Hälfte deckungsgleich: beide bleiben.
+        let out = merge(
+            &s,
+            vec![piece(0, 0.0, 1.0, Hidden), piece(1, 0.0, 2.0, Visible)],
+        );
+        assert_eq!(out.len(), 2);
+    }
 }

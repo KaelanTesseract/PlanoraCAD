@@ -104,7 +104,8 @@ fn solid_extent(solids: &[&Solid]) -> f64 {
 }
 
 /// Prüft die Ansicht `kind` der Körper gegen das Referenznetz:
-/// (a) Abdeckung jedes Strichs durch seine Stücke, (b) keine zu kurzen Stücke (Warnung),
+/// (a) Abdeckung jedes Strichs durch seine Stücke oder deckungsgleiche Stücke anderer Striche,
+/// (b) keine zu kurzen Stücke (Fehler),
 /// (c) jede Merkmalskante des Netzes liegt bei einem Stück, (d) jedes Stück liegt bei einer
 /// Merkmalskante, (e) Sichtbarkeit wie die Referenz, außer wo die Referenz in der Nähe selbst
 /// wechselt.
@@ -142,25 +143,6 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
     r.features = feats.len();
     r.pieces = v.pieces.len();
 
-    // (a) Abdeckung.
-    for (i, s) in v.strokes.iter().enumerate() {
-        let (lo, hi) = (s.t0.min(s.t1), s.t0.max(s.t1));
-        let mut ps: Vec<_> = v.pieces.iter().filter(|p| p.stroke == i).collect();
-        ps.sort_by(|a, b| a.t0.total_cmp(&b.t0));
-        let same = |x: f64, y: f64| (x - y).abs() <= 1e-12 * (1.0 + x.abs().max(y.abs()));
-        let ok = !ps.is_empty()
-            && same(ps[0].t0, lo)
-            && same(ps[ps.len() - 1].t1, hi)
-            && ps.windows(2).all(|w| same(w[0].t1, w[1].t0))
-            && ps.iter().all(|p| p.t1 > p.t0);
-        if !ok {
-            let ranges: Vec<_> = ps.iter().map(|p| (p.t0, p.t1)).collect();
-            r.errors.push(format!(
-                "(a) Strich {i} [{lo}, {hi}] nicht lückenlos bedeckt: {ranges:?}"
-            ));
-        }
-    }
-
     // Dichte Abtastung der Stücke (2D) mit Hüllbox.
     let polys: Vec<(Vec<DVec2>, DVec2, DVec2)> = v
         .pieces
@@ -183,12 +165,12 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
         })
         .collect();
 
-    // (b) Mindestlänge.
+    // (b) Mindestlänge: Nach dem Zusammenfassen gibt es keine Stücke unter 64·geom_tol.
     let gtol = (64.0 * f64::EPSILON * extent).max(1e-9);
     for (k, p) in v.pieces.iter().enumerate() {
         let l = proj_len(&v, p.stroke, p.t0, p.t1);
         if l < 64.0 * gtol {
-            r.warnings.push(format!(
+            r.errors.push(format!(
                 "(b) Stück {k} (Strich {}) ist nur {l:e} mm lang",
                 p.stroke
             ));
@@ -196,9 +178,13 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
     }
 
     // (c) Vollständigkeit.
-    let dist_to_pieces = |q: DVec2| -> f64 {
+    // Abstand zum nächsten Stück und zum nächsten sichtbaren Stück.
+    let dist_to = |q: DVec2, only_visible: bool| -> f64 {
         let mut best = f64::INFINITY;
-        for (pts, lo, hi) in &polys {
+        for ((pts, lo, hi), p) in polys.iter().zip(&v.pieces) {
+            if only_visible && p.vis != Visibility::Visible {
+                continue;
+            }
             if q.x < lo.x - near || q.x > hi.x + near || q.y < lo.y - near || q.y > hi.y + near {
                 continue;
             }
@@ -208,6 +194,7 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
         }
         best
     };
+    let dist_to_pieces = |q: DVec2| dist_to(q, false);
     for (a, b) in &feats {
         for f in [0.25, 0.5, 0.75] {
             let q = a.lerp(*b, f);
@@ -234,6 +221,82 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
                 "(d) Stück {k} (Strich {}, {:?}) bei ({:.4}, {:.4}) ohne Merkmalskante (Abstand {d:e})",
                 p.stroke, s.origin, m.x, m.y
             ));
+        }
+    }
+
+    // (a) Abdeckung: Die Stücke eines Strichs liegen in seinem Bereich (geschlossene Striche
+    // dürfen über die Naht reichen), aufsteigend und ohne Überlappung. Lücken sind nur erlaubt,
+    // wo das Zusammenfassen ein Stück entfernt hat: im Bild kürzer als 128·geom_tol (winziges
+    // Stück), oder jede Stelle der Lücke liegt bei einem anderen Stück (deckungsgleich); ist die
+    // Referenz an der Stelle sichtbar, muss es ein sichtbares sein (sichtbar gewinnt).
+    let gap_samples = 8;
+    for (i, s) in v.strokes.iter().enumerate() {
+        let (lo, hi) = (s.t0.min(s.t1), s.t0.max(s.t1));
+        let period = s.curve.period().filter(|p| (hi - lo - p).abs() <= 1e-9 * p);
+        let mut ivs: Vec<(f64, f64)> = Vec::new();
+        let mut bad = false;
+        for p in v.pieces.iter().filter(|p| p.stroke == i) {
+            bad |= p.t1 <= p.t0 || p.t0 < lo - 1e-12 * (1.0 + lo.abs());
+            match period {
+                Some(per) if p.t1 > hi => {
+                    bad |= p.t1 - per > p.t0;
+                    ivs.push((p.t0, hi));
+                    ivs.push((lo, p.t1 - per));
+                }
+                _ => {
+                    bad |= p.t1 > hi + 1e-12 * (1.0 + hi.abs());
+                    ivs.push((p.t0, p.t1));
+                }
+            }
+        }
+        ivs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        bad |= ivs
+            .windows(2)
+            .any(|w| w[1].0 < w[0].1 - 1e-12 * (1.0 + w[0].1.abs()));
+        if bad {
+            r.errors.push(format!(
+                "(a) Strich {i} [{lo}, {hi}]: Stücke überlappen oder liegen außerhalb: {ivs:?}"
+            ));
+            continue;
+        }
+        let mut gaps = Vec::new();
+        let mut at = lo;
+        for &(a, b) in &ivs {
+            if a > at {
+                gaps.push((at, a));
+            }
+            at = at.max(b);
+        }
+        if hi > at {
+            gaps.push((at, hi));
+        }
+        for (g0, g1) in gaps {
+            if proj_len(&v, i, g0, g1) < 128.0 * gtol {
+                continue;
+            }
+            for k in 0..gap_samples {
+                let t = g0 + (g1 - g0) * (k as f64 + 0.5) / gap_samples as f64;
+                let x = s.curve.point(t);
+                let q = proj(&basis, x);
+                if dist_to(q, false) > near {
+                    r.errors.push(format!(
+                        "(a) Strich {i}: Lücke [{g0}, {g1}] bei ({:.4}, {:.4}) ohne Stück",
+                        q.x, q.y
+                    ));
+                    break;
+                }
+                if dist_to(q, true) > near {
+                    let h = 1e-6 * (g1 - g0).abs().max(1e-12);
+                    let tan = (s.curve.point(t + h) - s.curve.point(t - h)).normalize_or_zero();
+                    if let Judged::Differs(true) = judge(&scene, 4.0 * chord, near, x, tan, false) {
+                        r.errors.push(format!(
+                            "(a) Strich {i}: Lücke [{g0}, {g1}] bei ({:.4}, {:.4}) sichtbar, aber nur verdeckt bedeckt",
+                            q.x, q.y
+                        ));
+                        break;
+                    }
+                }
+            }
         }
     }
 

@@ -91,14 +91,15 @@ fn a_large_torus_keeps_the_absolute_outline_accuracy() {
 fn a_tiny_undecidable_piece_at_a_corner_takes_its_neighbours_verdict() {
     // Kuppel mit Überhang von hinten: Ein Umriss endet auf der Schnittkante; dicht daneben
     // (Stück kürzer als OWN_EPS, entstanden aus einer Kreuzung knapp neben dem Ende) streift jeder
-    // Prüfstrahl den Rand der Schnittfläche. Das Stück übernimmt das Urteil des Nachbarstücks,
-    // statt die ganze Ansicht mit „nicht sicher“ abzubrechen.
+    // Prüfstrahl den Rand der Schnittfläche. Das Stück übernimmt das Urteil des Nachbarstücks –
+    // des vorigen, wenn es eines gibt, sonst des nächsten –, statt die ganze Ansicht mit „nicht
+    // sicher“ abzubrechen. Geprüft vor dem Zusammenfassen (danach ist es mit dem Nachbarn vereint).
     let (s, face) = nurbs_overhang_dome_solid();
     let b = vec![DrawBody {
         name: "U".into(),
         solid: &s,
     }];
-    let v = compute_view(&b, ViewKind::Back, &Progress::new()).unwrap();
+    let v = planora_drawing::compute_view_unmerged(&b, ViewKind::Back, &Progress::new()).unwrap();
     let own_eps = planora_drawing::limits::own_eps(extent_of(&b));
     let mut tiny = 0;
     for (k, p) in v.pieces.iter().enumerate() {
@@ -109,15 +110,17 @@ fn a_tiny_undecidable_piece_at_a_corner_takes_its_neighbours_verdict() {
             continue;
         }
         tiny += 1;
-        let neighbour = v
-            .pieces
-            .iter()
-            .enumerate()
-            .find(|(j, q)| *j != k && q.stroke == p.stroke && (q.t1 == p.t0 || q.t0 == p.t1));
-        let (_, q) = neighbour.expect("Nachbarstück");
+        let next_to = |before: bool| {
+            v.pieces.iter().enumerate().find(|(j, q)| {
+                *j != k && q.stroke == p.stroke && if before { q.t1 == p.t0 } else { q.t0 == p.t1 }
+            })
+        };
+        let (_, q) = next_to(true).or(next_to(false)).expect("Nachbarstück");
         assert_eq!(p.vis, q.vis, "kurzes Stück {p:?} gegen Nachbar {q:?}");
     }
     assert!(tiny > 0, "kein kurzes Stück am Eck");
+    // Nach dem Zusammenfassen: dieselbe Ansicht ohne Meldung.
+    compute_view(&b, ViewKind::Back, &Progress::new()).unwrap();
 }
 #[test]
 fn the_fit_keeps_its_end_points() {
@@ -163,7 +166,8 @@ fn freeform_outline_ends_lie_on_the_edges_and_split_them() {
         ViewKind::Back,
     ] {
         let basis = Basis::of(k);
-        let v = compute_view(&b, k, &Progress::new()).unwrap();
+        // Teilung vor dem Zusammenfassen (danach sind gleich sichtbare Teile wieder vereint).
+        let v = planora_drawing::compute_view_unmerged(&b, k, &Progress::new()).unwrap();
         for st in v
             .strokes
             .iter()
