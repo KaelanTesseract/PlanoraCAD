@@ -529,9 +529,15 @@ fn a_view_can_hide_or_show_its_hidden_edges_from_the_menu() {
     let mut st = box_state();
     let (d1, _, [front, top, _]) = two_drawings(&mut st);
     let mut h = Harness::new();
+    // Normansichten zeigen verdeckte Kanten von Anfang an (Werkstattzeichnung).
+    {
+        let d = st.document.drawing(d1).unwrap();
+        assert!(d.view(top).unwrap().show_hidden);
+        assert!(d.view(front).unwrap().show_hidden);
+    }
     let shot = h.open_menu(&mut st, "Oben");
     assert!(
-        shot.find("Verdeckte Kanten zeigen").is_some(),
+        shot.find("Verdeckte Kanten ausblenden").is_some(),
         "{}",
         shot.text
     );
@@ -540,22 +546,22 @@ fn a_view_can_hide_or_show_its_hidden_edges_from_the_menu() {
         shot.find("Umbenennen").is_none(),
         "Ansichten haben keinen eigenen Namen"
     );
-    let p = shot.pos_of("Verdeckte Kanten zeigen");
+    let p = shot.pos_of("Verdeckte Kanten ausblenden");
     h.click_at(&mut st, p, PointerButton::Primary);
     h.idle(&mut st);
     let d = st.document.drawing(d1).unwrap();
-    assert!(d.view(top).unwrap().show_hidden);
-    assert!(!d.view(front).unwrap().show_hidden);
+    assert!(!d.view(top).unwrap().show_hidden);
+    assert!(d.view(front).unwrap().show_hidden);
     let shot = h.open_menu(&mut st, "Oben");
     assert!(
-        shot.find("Verdeckte Kanten ausblenden").is_some(),
+        shot.find("Verdeckte Kanten zeigen").is_some(),
         "{}",
         shot.text
     );
-    let p = shot.pos_of("Verdeckte Kanten ausblenden");
+    let p = shot.pos_of("Verdeckte Kanten zeigen");
     h.click_at(&mut st, p, PointerButton::Primary);
     assert!(
-        !st.document
+        st.document
             .drawing(d1)
             .unwrap()
             .view(top)
@@ -651,7 +657,8 @@ fn drawings_survive_save_and_load() {
         st.document
             .update_drawing(d, |dr| {
                 let view = dr.views.iter_mut().find(|x| x.id == v).unwrap();
-                view.show_hidden = true;
+                // vom Vorgabewert abweichend, damit das Speichern ihn wirklich tragen muss
+                view.show_hidden = !view.show_hidden;
             })
             .unwrap();
     }
@@ -771,8 +778,9 @@ fn a_read_only_tab_can_open_and_select_but_not_change() {
     h.idle(&mut st);
     assert!(st.pending_delete_drawing.is_none(), "gesperrt");
     // Ansicht: Löschen und Verdeckte Kanten gesperrt.
+    // (Normansicht: verdeckte Kanten sind vorgegeben an, der Eintrag heißt „ausblenden“.)
     let shot = h.open_menu(&mut st, "Oben");
-    let p = shot.pos_of("Verdeckte Kanten zeigen");
+    let p = shot.pos_of("Verdeckte Kanten ausblenden");
     h.click_at(&mut st, p, PointerButton::Primary);
     h.idle(&mut st);
     assert_eq!(st.document.drawings(), before.as_slice());

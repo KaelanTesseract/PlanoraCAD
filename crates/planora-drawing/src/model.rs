@@ -90,6 +90,13 @@ impl ViewKind {
         }
     }
 
+    /// Vorgabe für „verdeckte Kanten zeigen“ einer neuen Ansicht: an für die Normansichten
+    /// (Vorne, Hinten, Links, Rechts, Oben, Unten; Zeichnungen für die Werkstatt), aus für
+    /// Isometrisch. Einzige Stelle dieser Regel; je Ansicht umschaltbar.
+    pub fn shows_hidden_by_default(self) -> bool {
+        self.is_normal()
+    }
+
     /// Alles außer der isometrischen Ansicht blickt senkrecht auf eine Achsenebene.
     pub fn is_normal(self) -> bool {
         self != ViewKind::Isometric
@@ -178,7 +185,8 @@ impl Drawing {
         }
     }
 
-    /// Fügt eine Ansicht hinzu und gibt ihre Kennung zurück.
+    /// Fügt eine Ansicht hinzu und gibt ihre Kennung zurück. Verdeckte Kanten nach
+    /// [`ViewKind::shows_hidden_by_default`].
     pub fn add_view(
         &mut self,
         kind: ViewKind,
@@ -193,7 +201,7 @@ impl Drawing {
             kind,
             scale,
             placement,
-            show_hidden: false,
+            show_hidden: kind.shows_hidden_by_default(),
             parent,
         });
         id

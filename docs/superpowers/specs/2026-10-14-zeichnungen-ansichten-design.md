@@ -194,7 +194,8 @@ Beide Formate: Zahlenformat mit höchstens 9 Nachkommastellen (mm), nie `NaN`/`i
 - Neue Zeichnung: Dialog mit Name, Papier, Hoch/Quer, Projektion, Grundansicht (Normalfall „Vorne“) und Maßstab (Vorschlag aus
   Körpergröße und Blatt: größter Wert der Reihe, bei dem die drei Hauptansichten aufs Blatt passen).
 - **Ansicht hinzufügen:** Auswahl der Art; abgeleitete Ansichten springen an ihre Normposition; Isometrie wird frei gesetzt.
-- Eigenschaften: Maßstab, Position (bei abgeleiteten nur Längsrichtung), „Verdeckte Kanten zeigen“, Löschen.
+- Eigenschaften: Maßstab, Position (bei abgeleiteten nur Längsrichtung), „Verdeckte Kanten zeigen“ (Vorgabe: an für die
+  Normansichten, aus für Isometrisch; siehe 11.2), Löschen.
 - Neuberechnung: im Hintergrund als Job mit Fortschritt (wie beim Export); bis dahin zeigt die Ansicht den letzten Stand
   mit Hinweis „wird aktualisiert“; gescheiterte Berechnung zeigt den Fehlertext an der Ansicht (die Zeichnung selbst bleibt
   erhalten).
@@ -327,6 +328,10 @@ Ausgabe
 - **Dateiendung:** Eine fremde Endung wird angehängt (`plan.dxf` als SVG → `plan.dxf.svg`), nicht ersetzt.
 
 Dokument, Datei, Oberfläche
+- **Verdeckte Kanten (Abschlussprüfung, Entscheidung des Controllers):** Neue Ansichten zeigen verdeckte Kanten in den
+  Normansichten (Vorne, Hinten, Links, Rechts, Oben, Unten) von Anfang an, weil die Zeichnungen für die Werkstatt gedacht
+  sind; die isometrische Ansicht nicht. Die Regel steht an einer Stelle (`ViewKind::shows_hidden_by_default`, angewandt in
+  `Drawing::add_view`); gespeicherte Zeichnungen behalten ihren Wert.
 - **Datei:** Der Tag der Lage heißt `typ` (nicht `art`, wie bei Art und Ebene in den anderen Strukturen). Listenlängen werden
   beim Lesen begrenzt (`MAX_DRAWINGS`, `MAX_VIEWS`), Kennung 0 gilt als beschädigt, der Zähler der nächsten Zeichnung wird nur
   mit Zeichnungen gespeichert. Der Serde-Schalter `float_roundtrip` ist im Arbeitsbereich eingeschaltet, damit Positionen

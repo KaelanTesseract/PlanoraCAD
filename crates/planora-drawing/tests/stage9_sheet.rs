@@ -711,6 +711,9 @@ fn hidden_pieces_follow_show_hidden() {
         ],
     );
     let res: BTreeMap<ViewId, &ViewLines> = BTreeMap::from([(id, &vl)]);
+    // Normansicht: verdeckte Kanten sind vorgegeben an; hier ausgeschaltet.
+    assert!(d.views[0].show_hidden);
+    d.views[0].show_hidden = false;
     let m = build_sheet(&d, &res);
     assert_eq!(m.views.len(), 1);
     assert_eq!(m.views[0].lines.len(), 2);
@@ -1277,4 +1280,21 @@ fn parent_that_is_not_drawn_does_not_position_children() {
     d.views[0].scale = sc;
     assert!(view_center(&d, top, &res).is_some());
     assert_eq!(build_sheet(&d, &res).views.len(), 2);
+}
+
+#[test]
+fn hidden_lines_default_on_for_normal_views_off_for_isometric() {
+    // Festlegung: Zeichnungen für die Werkstatt zeigen verdeckte Kanten in den Normansichten
+    // von Anfang an; die isometrische Ansicht nicht.
+    let mut d = drawing(Projection::First);
+    for k in ViewKind::ALL {
+        let id = d.add_view(
+            k,
+            Scale { num: 1, den: 1 },
+            Placement::Free { x: 100.0, y: 100.0 },
+            None,
+        );
+        let want = !matches!(k, ViewKind::Isometric);
+        assert_eq!(d.view(id).unwrap().show_hidden, want, "{k:?}");
+    }
 }

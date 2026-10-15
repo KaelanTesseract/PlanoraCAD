@@ -979,10 +979,19 @@ fn selecting_by_click_on_a_line_and_deleting_removes_children() {
 fn scale_and_hidden_edges_of_the_selected_view_can_be_changed() {
     let (mut st, d, front, top, mut h) = front_and_top();
     st.drawing_ui.selected_view = Some(top);
+    // Vorgabe der Normansichten: verdeckte Kanten an; der Haken schaltet sie für Oben aus.
+    assert!(
+        st.document
+            .drawing(d)
+            .unwrap()
+            .view(top)
+            .unwrap()
+            .show_hidden
+    );
     h.click_text(&mut st, "Verdeckte Kanten zeigen");
     let dr = st.document.drawing(d).unwrap();
-    assert!(dr.view(top).unwrap().show_hidden);
-    assert!(!dr.view(front).unwrap().show_hidden);
+    assert!(!dr.view(top).unwrap().show_hidden);
+    assert!(dr.view(front).unwrap().show_hidden);
     h.click_text(&mut st, "1:1");
     h.click_text(&mut st, "1:2");
     let dr = st.document.drawing(d).unwrap();
