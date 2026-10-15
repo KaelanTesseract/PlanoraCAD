@@ -182,7 +182,10 @@ nicht verwendet, damit Druckbreite stimmt). Kurven:
 `HIDDEN`, Skalenfaktor passend). Objekte: `LINE`, `CIRCLE`, `ARC` (Winkel in Grad, gegen den Uhrzeigersinn), `ELLIPSE`
 (Mittelpunkt, Hauptachse, Verhältnis, Start-/Endparameter), `SPLINE` (Grad, Knoten, Kontrollpunkte, Gewichte; Fit-Punkte nicht).
 Ansichten stehen als **Blöcke** (`BLOCK`/`INSERT`) mit dem Ansichtsnamen. Handle-Vergabe fortlaufend, `ENDSEC`/`EOF` korrekt;
-Datei öffnet sich in Fusion 360, FreeCAD, LibreCAD.
+Jede Ebene trägt einen Verweis (Gruppe 390) auf den Plotstil-Platzhalter; dazu gehören die Klassen
+`ACDBDICTIONARYWDFLT` und `ACDBPLACEHOLDER` in `CLASSES` und die Kette `ACAD_PLOTSTYLENAME` → Verzeichnis mit Vorgabe
+„Normal“ → Platzhalter in `OBJECTS`. Ohne diese Kette lehnt Fusion 360 die Datei ab (Handtest). Datei soll sich in Fusion 360,
+FreeCAD, LibreCAD öffnen.
 
 Beide Formate: Zahlenformat mit höchstens 9 Nachkommastellen (mm), nie `NaN`/`inf`; fehlerhafte Werte → `DrawError::NonFinite`.
 
@@ -322,7 +325,8 @@ Ausgabe
   rationale Kegelschnitte ohne `A` (8 Kurvenstücke je Viertelkreis), Rotation auf 6 Stellen gerundet.
 - **DXF:** 9 Nachkommastellen (Punktfehler ≤ ~1e-8 mm); ein Bogen über 0° hat Anfang > Ende (DXF-Semantik); Blocknamen:
   Komma ersetzt, Eindeutigkeit ohne Groß-/Kleinschreibung, Nicht-ASCII als `\U+XXXX`; minimales `DIMSTYLE`. Die Datei enthält
-  leere Abschnitte `CLASSES` und `OBJECTS` (Wurzel-`DICTIONARY` mit `ACAD_GROUP`), aber keine Layouts (`ACAD_LAYOUT`) und keine
+  einen Abschnitt `CLASSES` (zwei Klassen) und `OBJECTS` (Wurzel-`DICTIONARY` mit `ACAD_GROUP` und `ACAD_PLOTSTYLENAME`,
+  Plotstil-Kette; jede Ebene hat 390), aber keine Layouts (`ACAD_LAYOUT`) und keine
   Verweise (340) an den Blockeinträgen. Fällt der Handtest in Fusion 360 negativ aus, ist das der erste Ausweichschritt,
   danach die Geometrie direkt in `ENTITIES`.
 - **Dateiendung:** Eine fremde Endung wird angehängt (`plan.dxf` als SVG → `plan.dxf.svg`), nicht ersetzt.
