@@ -140,7 +140,7 @@ pub fn extent_of(bodies: &[DrawBody]) -> f64 {
 }
 
 /// Flächen, an denen die Halbkanten einer Kante liegen (in Reihenfolge des Auftretens).
-fn edge_faces(solid: &Solid) -> Vec<Vec<usize>> {
+pub(crate) fn edge_faces(solid: &Solid) -> Vec<Vec<usize>> {
     let mut uses: Vec<Vec<usize>> = vec![Vec::new(); solid.edges.len()];
     for (fid, f) in solid.faces.iter() {
         for lp in std::iter::once(&f.outer).chain(f.inner.iter()) {

@@ -677,6 +677,7 @@ fn view_lines(kind: ViewKind, segs: &[(DVec3, DVec3, Visibility)]) -> ViewLines 
         strokes,
         pieces,
         bbox: ((lo.x, lo.y), (hi.x, hi.y)),
+        centerlines: Vec::new(),
         dropped_splits: 0,
     }
 }
@@ -1146,6 +1147,7 @@ fn seam_piece_gives_two_sheet_lines() {
             vis: Visibility::Visible,
         }],
         bbox: ((-10.0, -10.0), (10.0, 10.0)),
+        centerlines: Vec::new(),
         dropped_splits: 0,
     };
     let res: BTreeMap<ViewId, &ViewLines> = BTreeMap::from([(id, &vl)]);

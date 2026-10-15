@@ -237,6 +237,7 @@ fn hand_model(
         strokes,
         pieces,
         bbox,
+        centerlines: Vec::new(),
         dropped_splits: 0,
     };
     let mut d = Drawing::new(
