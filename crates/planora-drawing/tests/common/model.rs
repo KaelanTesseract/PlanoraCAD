@@ -120,6 +120,12 @@ pub fn lower_hemisphere_solid(r: f64) -> Solid {
 
 /// Vollring (eine Torusfläche, zwei Nähte), Achse Z, Mittelpunkt im Ursprung.
 pub fn torus_solid(major: f64, minor: f64) -> Solid {
+    try_torus_solid(major, minor).expect("Torus ist gültig")
+}
+
+/// Wie [`torus_solid`]; `None`, wenn der Kernel den Körper nicht als gültig ansieht (etwa Horn-
+/// oder Spindeltorus, `major ≤ minor`).
+pub fn try_torus_solid(major: f64, minor: f64) -> Option<Solid> {
     let mut s = Solid::new();
     let v = s.add_vertex(DVec3::new(major + minor, 0.0, 0.0));
     // Meridiankreis bei u = 0: Punkt(t) = Torus(u = 0, v = t).
@@ -171,8 +177,8 @@ pub fn torus_solid(major: f64, minor: f64) -> Solid {
         tag: None,
     });
     s.seal();
-    validate(&s).expect("Torus ist gültig");
-    s
+    validate(&s).ok()?;
+    Some(s)
 }
 
 /// Umrisspunkte des Vollrings aus [`torus_solid`] (Achse Z, Mitte im Ursprung) für die

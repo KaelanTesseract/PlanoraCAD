@@ -31,6 +31,8 @@ fn torus_front_view_timing() {
         piece_length_sum(&v, Visibility::Visible),
         piece_length_sum(&v, Visibility::Hidden)
     );
+    // Großzügige Grenze (vorher 17,7 s debug / 2,1 s release, jetzt ~0,4 s / 0,1 s).
+    assert!(t.elapsed().as_secs_f64() < 3.0, "{:?}", t.elapsed());
 }
 
 /// Teilparameter aller nicht entarteten Striche der Ansicht (Kanten und Umrisse, wie
@@ -346,6 +348,11 @@ struct SeriesStats {
     exact_undecided: usize,
     /// Merkmalskanten des Grundnetzes, die das feinere Netz nicht bestätigt.
     refined_features: usize,
+    /// (f): verdeckt unter sichtbar, sichtbar auf sichtbar (müssen 0 sein).
+    hidden_under_visible: usize,
+    visible_on_visible: usize,
+    /// Teilstellen, die `compute_view` als entartet verwarf (`ViewLines::dropped_splits`).
+    dropped_splits: usize,
 }
 
 /// Prüfreihe (Aufgabe 8): Zufallskörper `seeds` (tests/common/model.rs, `random_body_csg`), je
@@ -372,6 +379,7 @@ fn series(seeds: std::ops::RangeInclusive<u64>) -> SeriesStats {
                 &Progress::new(),
             ) {
                 Ok(v) => {
+                    st.dropped_splits += v.dropped_splits;
                     let r = check_lines(&[&s], k, &v);
                     let basis = planora_drawing::basis::Basis::of(k);
                     let mut resolved = vec![false; r.errors.len()];
@@ -405,6 +413,8 @@ fn series(seeds: std::ops::RangeInclusive<u64>) -> SeriesStats {
                     st.undecided += undecided;
                     st.sampled += r.sampled;
                     st.refined_features += r.refined_features;
+                    st.hidden_under_visible += r.hidden_under_visible;
+                    st.visible_on_visible += r.visible_on_visible;
                     st.ok += 1;
                 }
                 Err(
@@ -429,8 +439,14 @@ fn series(seeds: std::ops::RangeInclusive<u64>) -> SeriesStats {
         t.elapsed()
     );
     eprintln!(
-        "Reihe {seeds:?}: exakt bestätigt {}, exakt unentschieden {}, grobe Netzkanten {}",
-        st.exact_agrees, st.exact_undecided, st.refined_features
+        "Reihe {seeds:?}: exakt bestätigt {}, exakt unentschieden (verdeckt, nicht bestätigt) {}, \
+         grobe Netzkanten {}, (f) verdeckt unter sichtbar {}, sichtbar auf sichtbar {},          verworfene Teilstellen {}",
+        st.exact_agrees,
+        st.exact_undecided,
+        st.refined_features,
+        st.hidden_under_visible,
+        st.visible_on_visible,
+        st.dropped_splits
     );
     for f in &failures {
         eprintln!("FEHLER {f}");
@@ -584,11 +600,10 @@ fn ok_or_too_complex_in_time(bodies: &[DrawBody], k: ViewKind) {
 
 #[test]
 fn many_bodies_cost_limit_is_reported_not_exceeded() {
-    // 2 000 kleine Quader in einem Raster: entweder Ergebnis oder TooComplex, innerhalb von 60 s.
-    // (2 000 Quader haben 24 000 Kanten, mehr als MAX_STROKES: TooComplex sofort.) Damit der
-    // Rechenweg selbst gemessen wird, dazu 1 600 Quader (19 200 Kanten) – und an ihnen der
-    // Abbruch: Ein zweiter Faden ruft nach 500 ms `cancel`, die Rechnung endet binnen 2 s mit
-    // `Cancelled`.
+    // 2 000 kleine Quader in einem Raster: entweder Ergebnis oder TooComplex, innerhalb von 60 s;
+    // Abbruch über Progress wirkt binnen 2 s. Vorderansicht: 16 000 Striche (die Kanten längs der
+    // Blickrichtung entfallen) – unter MAX_STROKES, wird gerechnet; isometrisch 24 000 Striche →
+    // TooComplex.
     use planora_drawing::DrawError;
     let solids = box_grid(20);
     assert_eq!(solids.len(), 2000);
@@ -596,30 +611,89 @@ fn many_bodies_cost_limit_is_reported_not_exceeded() {
     for k in [ViewKind::Front, ViewKind::Isometric] {
         ok_or_too_complex_in_time(&bodies, k);
     }
-    let solids = box_grid(16);
-    let bodies = draw_bodies(&solids);
-    for k in [ViewKind::Front, ViewKind::Isometric] {
-        ok_or_too_complex_in_time(&bodies, k);
-    }
-    let progress = std::sync::Arc::new(Progress::new());
-    let canceller = {
-        let p = progress.clone();
+    // Abbruch nach 500 ms (wie im Brief). Ist die Rechnung schneller fertig, gilt das Ergebnis.
+    let cancel_after = |progress: std::sync::Arc<Progress>, wait: bool| {
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            p.cancel();
+            if wait {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            } else {
+                // Sobald die Sichtprüfung läuft (Fortschritt > 0).
+                while progress.fraction() == 0.0 {
+                    std::thread::yield_now();
+                }
+            }
+            progress.cancel();
             Instant::now()
         })
     };
-    let t = Instant::now();
-    let r = compute_view(&bodies, ViewKind::Isometric, &progress);
-    let done = Instant::now();
-    let cancelled_at = canceller.join().unwrap();
-    let lag = done.saturating_duration_since(cancelled_at);
-    eprintln!(
-        "Abbruch: Ende nach {:?}, {lag:?} nach dem Abbruchwunsch: {:?}",
-        t.elapsed(),
-        r.as_ref().err()
-    );
-    assert!(matches!(r, Err(DrawError::Cancelled)), "{:?}", r.err());
-    assert!(lag.as_secs_f64() < 2.0, "{lag:?}");
+    for wait in [true, false] {
+        let progress = std::sync::Arc::new(Progress::new());
+        let canceller = cancel_after(progress.clone(), wait);
+        let t = Instant::now();
+        let r = compute_view(&bodies, ViewKind::Front, &progress);
+        let done = Instant::now();
+        let cancelled_at = canceller.join().unwrap();
+        let lag = done.saturating_duration_since(cancelled_at);
+        eprintln!(
+            "Abbruch ({}): Ende nach {:?}, {lag:?} nach dem Abbruchwunsch: {:?}",
+            if wait {
+                "nach 500 ms"
+            } else {
+                "während der Sichtprüfung"
+            },
+            t.elapsed(),
+            r.as_ref().map(|v| v.pieces.len())
+        );
+        match r {
+            Err(DrawError::Cancelled) => assert!(lag.as_secs_f64() < 2.0, "{lag:?}"),
+            // Nur beim festen Zeitpunkt darf die Rechnung schon fertig sein.
+            Ok(_) if wait && done <= cancelled_at => {}
+            other => panic!("{:?}", other.map(|v| v.pieces.len())),
+        }
+    }
+}
+
+#[test]
+fn horn_and_spindle_tori_give_a_result_or_a_named_error() {
+    // Hinweis aus der Prüfung von Aufgabe 8: Drehkörper können Horn- (R = r) und Spindeltori
+    // (R < r) bilden; die Berührungserkennung nahe der Selbstberührung ist sonst ungeprüft.
+    // Erwartet je Ansicht: Ergebnis oder benannte Meldung, nie ein Absturz.
+    // Gebaut wie der Vollring der Tests (eine Torusfläche, zwei Nähte), mit R = r (Horn),
+    // R < r (Spindel) und knapp darüber.
+    use planora_drawing::DrawError;
+    let mut built = 0;
+    for (center, r) in [(3.0, 3.0), (2.0, 3.0), (3.0, 2.999)] {
+        let Some(s) = try_torus_solid(center, r) else {
+            eprintln!("R = {center}, r = {r}: Kernel lehnt ab");
+            continue;
+        };
+        built += 1;
+        for k in ViewKind::ALL {
+            let r2 = compute_view(
+                &[DrawBody {
+                    name: "T".into(),
+                    solid: &s,
+                }],
+                k,
+                &Progress::new(),
+            );
+            eprintln!(
+                "R = {center}, r = {r} {k:?}: {:?}",
+                r2.as_ref().map(|v| v.pieces.len())
+            );
+            assert!(
+                matches!(
+                    r2,
+                    Ok(_)
+                        | Err(DrawError::AmbiguousVisibility(_)
+                            | DrawError::TooComplex(_)
+                            | DrawError::Unsupported(_)
+                            | DrawError::InvalidBody(_))
+                ),
+                "{r2:?}"
+            );
+        }
+    }
+    eprintln!("{built} Tori gebaut");
+    assert!(built >= 2, "{built}");
 }

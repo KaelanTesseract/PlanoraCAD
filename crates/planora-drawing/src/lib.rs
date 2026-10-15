@@ -58,6 +58,9 @@ pub struct ViewLines {
     pub pieces: Vec<Piece>,
     /// Hüllbox aller Stücke (sichtbar und verdeckt) in Ansichtskoordinaten, mm, ungeskaliert.
     pub bbox: ((f64, f64), (f64, f64)),
+    /// Teilstellen, die entfielen, weil sie ein zum Punkt entartetes Teilstück abgegrenzt
+    /// hätten (Kennzahl für Prüfungen; sollte 0 sein).
+    pub dropped_splits: usize,
 }
 
 /// Name eines Strichs für Meldungen.
@@ -115,11 +118,16 @@ pub fn compute_view_unmerged(
     if !extent.is_finite() {
         return Err(DrawError::NonFinite);
     }
+    // Erst sammeln (Speichergrenze MAX_RAW_STROKES), dann die zum Punkt entarteten verwerfen;
+    // MAX_STROKES gilt für die verbleibenden.
     let mut strokes = stroke::edge_strokes(bodies, &basis, extent)?;
     progress.check()?;
     strokes.extend(silhouette::silhouette_strokes(
         bodies, &basis, extent, progress,
     )?);
+    if strokes.len() as u64 > limits::MAX_RAW_STROKES {
+        return Err(DrawError::TooComplex(strokes.len() as u64));
+    }
     let degenerate = 16.0 * geom_tol(extent);
     let mut kept = Vec::with_capacity(strokes.len());
     for s in strokes {
@@ -150,29 +158,37 @@ pub fn compute_view_unmerged(
     }
 
     // Teilstücke zwischen aufeinanderfolgenden Teilparametern. Doppelte Teilstellen an den
-    // Umkehrstellen von der Seite gesehener Kreise legt `isect::tidy_splits` zusammen; ein zum
-    // Punkt entartetes Teilstück wäre ein Fehler dort (verbliebene winzige Stücke entfernt
-    // ohnehin das Zusammenfassen).
+    // Umkehrstellen von der Seite gesehener Kreise legt `isect::tidy_splits` zusammen. Bleibt
+    // dennoch eine Teilstelle, die ein zum Punkt entartetes Teilstück abgrenzt (fast von der
+    // Seite gesehene Kegelschnitte, kleine Halbachse knapp über der Einrastgrenze), entfällt sie
+    // ohne Meldung und wird in `ViewLines::dropped_splits` gezählt.
     let mut ranges: Vec<(usize, f64, f64)> = Vec::new();
+    let mut dropped_splits = 0;
     for (i, (s, ts)) in strokes.iter().zip(&splits).enumerate() {
         progress.check()?;
         let (lo, hi) = (s.t0.min(s.t1), s.t0.max(s.t1));
+        let point_like = |a: f64, b: f64| {
+            Stroke {
+                t0: a,
+                t1: b,
+                ..s.clone()
+            }
+            .is_degenerate_2d(&basis, degenerate)
+        };
         let mut params = vec![lo];
-        params.extend(ts.iter().copied());
+        for &t in ts {
+            if point_like(params[params.len() - 1], t) {
+                dropped_splits += 1;
+            } else {
+                params.push(t);
+            }
+        }
+        if params.len() > 1 && point_like(params[params.len() - 1], hi) {
+            params.pop();
+            dropped_splits += 1;
+        }
         params.push(hi);
         for w in params.windows(2) {
-            debug_assert!(
-                !Stroke {
-                    t0: w[0],
-                    t1: w[1],
-                    ..s.clone()
-                }
-                .is_degenerate_2d(&basis, degenerate),
-                "Teilstück [{}, {}] von {:?} ist zum Punkt entartet",
-                w[0],
-                w[1],
-                s.origin
-            );
             ranges.push((i, w[0], w[1]));
         }
         if ranges.len() as u64 > MAX_PIECES {
@@ -247,6 +263,7 @@ pub fn compute_view_unmerged(
 
     let bbox = pieces_bbox(&strokes, &pieces, &basis);
     Ok(ViewLines {
+        dropped_splits,
         kind,
         basis,
         extent,

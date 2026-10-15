@@ -31,7 +31,7 @@
 use crate::DrawBody;
 use crate::basis::Basis;
 use crate::error::DrawError;
-use crate::limits::{BISECT_TOL, MAX_OUTLINE_POINTS, MAX_STROKES, SILHOUETTE_TOL, geom_tol};
+use crate::limits::{BISECT_TOL, MAX_OUTLINE_POINTS, MAX_RAW_STROKES, SILHOUETTE_TOL, geom_tol};
 use crate::raycast::Region;
 use crate::stroke::{Stroke, StrokeOrigin};
 use planora_exchange::Progress;
@@ -130,7 +130,7 @@ pub fn silhouette_strokes(
         let solid = body.solid;
         for (fid, face) in solid.faces.iter() {
             progress.check()?;
-            // Aufwand je Fläche (die Striche insgesamt begrenzt MAX_STROKES).
+            // Aufwand je Fläche (die Striche insgesamt begrenzen MAX_RAW_STROKES und MAX_STROKES).
             let mut work = Work::default();
             let surface = &face.surface;
             if matches!(surface, Surface::Plane { .. }) {
@@ -160,7 +160,7 @@ pub fn silhouette_strokes(
                     t1,
                     origin: origin.clone(),
                 });
-                if out.len() as u64 > MAX_STROKES {
+                if out.len() as u64 > MAX_RAW_STROKES {
                     return Err(DrawError::TooComplex(out.len() as u64));
                 }
                 Ok(())

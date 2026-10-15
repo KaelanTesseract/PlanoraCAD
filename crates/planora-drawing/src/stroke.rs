@@ -4,7 +4,7 @@
 use crate::DrawBody;
 use crate::basis::Basis;
 use crate::error::DrawError;
-use crate::limits::{MAX_STROKES, SMOOTH_ANGLE, geom_tol};
+use crate::limits::{MAX_RAW_STROKES, SMOOTH_ANGLE, geom_tol};
 use planora_kernel::{Curve, Edge, Face, Id, Solid, Surface};
 use planora_math::{DVec2, DVec3};
 
@@ -247,7 +247,7 @@ pub fn edge_strokes(
                 t1: e.t1,
                 origin: StrokeOrigin::Edge { body: bi, edge: ei },
             });
-            if out.len() as u64 > MAX_STROKES {
+            if out.len() as u64 > MAX_RAW_STROKES {
                 return Err(DrawError::TooComplex(out.len() as u64));
             }
         }

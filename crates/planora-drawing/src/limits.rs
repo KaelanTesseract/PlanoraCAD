@@ -12,8 +12,11 @@ pub const SMOOTH_ANGLE: f64 = 0.5 * std::f64::consts::PI / 180.0;
 /// Abbruchgenauigkeit der Bisektion, relativ zur Parameterbreite.
 pub const BISECT_TOL: f64 = 1e-9;
 
-/// Höchstzahl an Strichen.
+/// Höchstzahl an Strichen (nach dem Verwerfen der in der Ansicht zu Punkten entarteten).
 pub const MAX_STROKES: u64 = 20_000;
+/// Speichergrenze beim Sammeln der Kanten- und Umrissstriche vor dem Verwerfen entarteter
+/// Striche (`4 · MAX_STROKES`).
+pub const MAX_RAW_STROKES: u64 = 4 * MAX_STROKES;
 /// Höchstzahl an Teilstücken.
 pub const MAX_PIECES: u64 = 200_000;
 /// Höchstzahl an Rechenpunkten (Raster und dichte Umrisspunkte) je Torus- oder Freiformfläche.
