@@ -774,3 +774,139 @@ fn a_wave_touching_a_line_at_its_quarters_is_not_dropped_as_covered() {
     assert_eq!(wave_len, 1.0, "{out:?}");
     assert!(out.iter().any(|p| p.stroke == 0 && p.t1 - p.t0 == len));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Angepasste Umrisse (Torus, Freiform) auf genauen Kurven: keine doppelten Linien
+// ---------------------------------------------------------------------------------------------
+
+/// Abstand eines Punkts zu einem Polygonzug.
+fn poly_dist(p: planora_math::DVec2, poly: &[planora_math::DVec2]) -> f64 {
+    let mut best = f64::INFINITY;
+    for w in poly.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let d = b - a;
+        let l2 = d.dot(d);
+        let t = if l2 > 0.0 {
+            ((p - a).dot(d) / l2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        best = best.min(p.distance(a + d * t));
+    }
+    best
+}
+
+/// Zahl der sichtbaren Stücke, die auf einer Länge von mindestens 8 der 32 gleichmäßigen
+/// inneren Stellen höchstens `tol` neben einem anderen sichtbaren Stück liegen (doppelte Linie).
+/// Eigene Messung: Polygonzüge mit 2000 Sehnen, nicht die Überdeckungsregeln der Bibliothek.
+fn duplicate_pieces(v: &planora_drawing::ViewLines, tol: f64) -> usize {
+    let basis = v.basis;
+    let polys: Vec<Vec<planora_math::DVec2>> = v
+        .pieces
+        .iter()
+        .map(|p| {
+            (0..=2000)
+                .map(|i| {
+                    v.strokes[p.stroke].point2(&basis, p.t0 + (p.t1 - p.t0) * i as f64 / 2000.0)
+                })
+                .collect()
+        })
+        .collect();
+    let mut dups = 0;
+    for (k, p) in v.pieces.iter().enumerate() {
+        if p.vis != Visibility::Visible {
+            continue;
+        }
+        let mut run = 0;
+        let mut best_run = 0;
+        for i in 1..=32 {
+            let q = polys[k][i * 2000 / 33];
+            let near = v.pieces.iter().enumerate().any(|(j, o)| {
+                j != k && o.vis == Visibility::Visible && poly_dist(q, &polys[j]) <= tol
+            });
+            run = if near { run + 1 } else { 0 };
+            best_run = best_run.max(run);
+        }
+        if best_run >= 8 {
+            dups += 1;
+        }
+    }
+    dups
+}
+
+fn visible_len(v: &planora_drawing::ViewLines) -> f64 {
+    piece_length_sum(v, Visibility::Visible)
+}
+
+#[test]
+fn freeform_dome_top_view_has_no_outline_on_its_base_circle() {
+    // Kuppel mit Freiformwand auf Sockel r = 8; Deckel r = 3. Von oben: der Umriss der Wand liegt
+    // im Bild auf dem Kreis des Sockels. Erwartet: genau zwei Kreise (2π·8 + 2π·3), kein Spline.
+    let s = nurbs_tangent_dome_solid().0;
+    let v = view(&s, ViewKind::Top);
+    eprintln!(
+        "Kuppel Oben: {} Stücke, sichtbar {:.6}, doppelt {}",
+        v.pieces.len(),
+        visible_len(&v),
+        duplicate_pieces(&v, 3e-4)
+    );
+    assert_eq!(duplicate_pieces(&v, 3e-4), 0);
+    assert_eq!(v.pieces.len(), 2);
+    assert!(v.pieces.iter().all(|p| matches!(
+        v.strokes[p.stroke].curve,
+        planora_kernel::Curve::Circle { .. }
+    )));
+    let want = std::f64::consts::TAU * (8.0 + 3.0);
+    assert!(
+        (visible_len(&v) - want).abs() < 1e-6,
+        "{} vs {want}",
+        visible_len(&v)
+    );
+}
+
+#[test]
+fn fitted_outlines_never_double_exact_curves_in_any_view() {
+    // Kuppel, Torus und gerundeter Zylinder in allen sieben Ansichten: keine sichtbare Linie liegt
+    // auf einer anderen (Toleranz 3e-4 mm, das Dreifache der Anpassungsgenauigkeit).
+    let dome = nurbs_tangent_dome_solid().0;
+    let torus = torus_solid(10.0, 3.0);
+    let rounded = rounded_cylinder_solid().0;
+    let mut total = 0;
+    for (name, s) in [("Kuppel", &dome), ("Torus", &torus), ("Rundung", &rounded)] {
+        for k in ViewKind::ALL {
+            let v = view(s, k);
+            let d = duplicate_pieces(&v, 3e-4);
+            eprintln!(
+                "{name} {k:?}: {} Stücke, sichtbar {:.6}, doppelt {d}",
+                v.pieces.len(),
+                visible_len(&v)
+            );
+            total += d;
+        }
+    }
+    assert_eq!(total, 0, "doppelte Linien");
+}
+
+#[test]
+fn rounded_cylinder_top_outline_circles_are_single() {
+    // Gerundeter Zylinder von oben: der Umriss der Torusrundung (angepasster Spline) fällt auf die
+    // Kreiskante (Radius 10; der Kreis r = 7 am glatten Übergang zum Deckel ist keine Kante). Erwartet:
+    // ein einziger Kreis, Länge 2π·10.
+    let s = rounded_cylinder_solid().0;
+    let v = view(&s, ViewKind::Top);
+    eprintln!("Rundung Oben: {} Stücke", v.pieces.len());
+    assert_eq!(duplicate_pieces(&v, 3e-4), 0);
+    let circles = v
+        .pieces
+        .iter()
+        .filter(|p| {
+            matches!(
+                v.strokes[p.stroke].curve,
+                planora_kernel::Curve::Circle { .. }
+            )
+        })
+        .count();
+    assert_eq!(circles, v.pieces.len(), "nur Kreise");
+    assert_eq!(v.pieces.len(), 1);
+    assert!((visible_len(&v) - std::f64::consts::TAU * 10.0).abs() < 1e-6);
+}

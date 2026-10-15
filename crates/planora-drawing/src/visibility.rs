@@ -14,13 +14,14 @@ use crate::basis::Basis;
 use crate::error::DrawError;
 use crate::isect::{Images, tip_params};
 use crate::limits::{
-    BISECT_TOL, MAX_PAIR_TESTS, MAX_PIECES, MAX_RAY_TESTS, MAX_SUBDIVISION_DEPTH, geom_tol,
-    own_eps, self_eps,
+    BISECT_TOL, MAX_PAIR_TESTS, MAX_PIECES, MAX_RAY_TESTS, MAX_SUBDIVISION_DEPTH, SILHOUETTE_TOL,
+    geom_tol, own_eps, self_eps,
 };
 use crate::raycast::{Caster, HitClass, Ray};
-use crate::stroke::Stroke;
+use crate::stroke::{Stroke, StrokeOrigin};
 use crate::{Piece, Visibility};
 use planora_exchange::Progress;
+use planora_kernel::Curve;
 use planora_math::{DVec2, DVec3};
 use std::cell::Cell;
 
@@ -444,14 +445,24 @@ fn join_adjacent(
     Ok(sorted(out))
 }
 
-/// Rang eines Stücks: sichtbar vor verdeckt, dann kleinere Tiefe (näher am Auge), dann der
-/// Index (nach Strich und `t0` sortiert) – streng und übergangsfest (lexikographisch).
-fn rank_order(pieces: &[Piece], depth: &[f64]) -> Vec<usize> {
+/// Umriss einer Fläche, der als angepasster Spline vorliegt (Torus, Freiform): nur auf
+/// `SILHOUETTE_TOL` genau, im Gegensatz zu Kanten und den genauen Umrissen von Zylinder, Kegel
+/// und Kugel.
+fn is_fitted(s: &Stroke) -> bool {
+    matches!(s.origin, StrokeOrigin::Silhouette { .. }) && matches!(s.curve, Curve::Nurbs(_))
+}
+
+/// Rang eines Stücks: sichtbar vor verdeckt, dann genaue vor angepassten Strichen (liegt ein
+/// angepasster Umriss auf einer genauen Kurve, bleibt die genaue), dann kleinere Tiefe (näher am
+/// Auge), dann der Index (nach Strich und `t0` sortiert) – streng und übergangsfest
+/// (lexikographisch).
+fn rank_order(pieces: &[Piece], depth: &[f64], fitted: &[bool]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..pieces.len()).collect();
     let key = |v: Visibility| if v == Visibility::Visible { 0 } else { 1 };
     order.sort_by(|&i, &j| {
         key(pieces[i].vis)
             .cmp(&key(pieces[j].vis))
+            .then(fitted[i].cmp(&fitted[j]))
             .then(depth[i].total_cmp(&depth[j]))
             .then(i.cmp(&j))
     });
@@ -549,13 +560,23 @@ fn trim_covered(
     let r = strokes[pieces[0].stroke].point(pieces[0].t0);
     let images = Images::new(basis, r, extent, COINCIDENT_FACTOR);
     let near = images.near();
+    // Paare mit einem angepassten Umriss: Gleichheitsabstand `SILHOUETTE_TOL + near` (angepasst
+    // gegen genau) bzw. `2·SILHOUETTE_TOL + near` (zwei angepasste); genaue Paare behalten `near`.
+    let tol_unit = geom_tol(extent);
+    let wide_one = Images::new(basis, r, extent, (SILHOUETTE_TOL + near) / tol_unit);
+    let wide_two = Images::new(basis, r, extent, (2.0 * SILHOUETTE_TOL + near) / tol_unit);
+    let fitted: Vec<bool> = pieces
+        .iter()
+        .map(|p| is_fitted(&strokes[p.stroke]))
+        .collect();
+    let pad = |f: bool| if f { wide_two.near() } else { near };
     let mut boxes: Vec<(DVec2, DVec2)> = Vec::with_capacity(pieces.len());
     let mut depth: Vec<f64> = Vec::with_capacity(pieces.len());
     for (k, p) in pieces.iter().enumerate() {
         if k % MERGE_CHECK_EVERY == 0 {
             progress.check()?;
         }
-        let (lo, hi) = piece_stroke(strokes, p).bbox2(basis, near);
+        let (lo, hi) = piece_stroke(strokes, p).bbox2(basis, pad(fitted[k]));
         if !(lo.is_finite() && hi.is_finite()) {
             return Err(DrawError::NonFinite);
         }
@@ -571,7 +592,7 @@ fn trim_covered(
     // Behaltene Stücke: (Stück als Strich, Hüllbox).
     let mut kept: Vec<(Piece, Stroke)> = Vec::with_capacity(pieces.len());
     let mut pairs: u64 = 0;
-    for idx in rank_order(&pieces, &depth) {
+    for idx in rank_order(&pieces, &depth, &fitted) {
         progress.check()?;
         let p = pieces[idx];
         let ps = piece_stroke(strokes, &p);
@@ -586,7 +607,13 @@ fn trim_covered(
                 progress.check()?;
             }
             let qs = &kept[q].1;
-            let (qlo, qhi) = qs.bbox2(basis, near);
+            let q_fitted = is_fitted(qs);
+            let (qlo, qhi) = qs.bbox2(basis, pad(q_fitted));
+            let images = match (fitted[idx], q_fitted) {
+                (false, false) => &images,
+                (true, true) => &wide_two,
+                _ => &wide_one,
+            };
             if qlo.x > phi.x || plo.x > qhi.x || qlo.y > phi.y || plo.y > qhi.y {
                 continue;
             }
@@ -612,7 +639,7 @@ fn trim_covered(
                 for w in bounds.windows(2) {
                     let (x, y) = (w[0], w[1]);
                     let part = Piece { t0: x, t1: y, ..p };
-                    if image_len(strokes, &part, basis) <= 4.0 * near {
+                    if image_len(strokes, &part, basis) <= 4.0 * images.near() {
                         state.push(None);
                         continue;
                     }
@@ -658,7 +685,7 @@ fn trim_covered(
         for (a, b) in open {
             let piece = Piece { t0: a, t1: b, ..p };
             let st = piece_stroke(strokes, &piece);
-            let (lo, hi) = st.bbox2(basis, near);
+            let (lo, hi) = st.bbox2(basis, pad(fitted[idx]));
             grid.insert(kept.len(), lo, hi);
             kept.push((piece, st));
         }
@@ -886,6 +913,7 @@ mod tests {
                 piece(2, 0.0, 2.0, Visible),
             ],
             &[1.2 * near, 0.6 * near, 0.0],
+            &[false; 3],
         );
         assert_eq!(order, vec![2, 1, 0]);
     }
