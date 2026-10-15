@@ -289,6 +289,9 @@ fn seg_infos(g: &FaceGeom, tol: f64) -> Vec<SegInfo> {
 /// einmal berechnet).
 pub struct Scene {
     faces: Vec<FaceData>,
+    /// Hüllbox-Baum über den (aufgeblähten) Flächenboxen: Strahlen und Durchstoßsuche prüfen
+    /// nur Flächen, deren Box sie erreichen (bei vielen Körpern sonst je Strahl alle Flächen).
+    bvh: Bvh,
     /// Größter Strahlabstand, gemessen ab dem Strahlursprung: Durchmesser der Hüllbox aller
     /// Körper plus `extent`. Reicht durch die ganze Szene, solange der Ursprung höchstens
     /// `extent` außerhalb ihrer Hüllbox liegt (die Sichtprüfung startet auf Strichen, also in
@@ -346,8 +349,10 @@ impl Scene {
         } else {
             (all_hi - all_lo).length()
         };
+        let bvh = Bvh::new(&faces);
         Ok(Scene {
             faces,
+            bvh,
             reach: diameter + extent,
             scene_lo: all_lo,
             scene_hi: all_hi,
@@ -383,7 +388,13 @@ impl Scene {
         if min_s >= self.reach {
             return Ray::Hits(out);
         }
-        for f in &self.faces {
+        // Flächen, deren Box der Strahl erreicht, in ihrer Reihenfolge (gleiches Ergebnis wie
+        // die Prüfung aller Flächen).
+        let mut idx = Vec::new();
+        self.bvh
+            .ray(origin, d, min_s, self.reach, &mut |i| idx.push(i));
+        idx.sort_unstable();
+        for f in idx.into_iter().map(|i| &self.faces[i]) {
             let Some((sa, sb)) = ray_box(origin, d, min_s, self.reach, f.lo, f.hi) else {
                 continue;
             };
@@ -669,7 +680,14 @@ impl Scene {
             return Err(DrawError::NonFinite);
         }
         let mut out = Vec::new();
-        for f in self.faces.iter().filter(|f| f.body != body) {
+        let mut idx = Vec::new();
+        self.bvh.boxed(lo, hi, &mut |i| idx.push(i));
+        idx.sort_unstable();
+        for f in idx
+            .into_iter()
+            .map(|i| &self.faces[i])
+            .filter(|f| f.body != body)
+        {
             if (f.lo.cmpgt(hi) | f.hi.cmplt(lo)).any() {
                 continue;
             }
@@ -700,6 +718,121 @@ impl Scene {
 impl Caster for Scene {
     fn cast(&self, origin: DVec3, dir: DVec3, min_s: f64) -> Ray {
         Scene::cast(self, origin, dir, min_s)
+    }
+}
+
+/// Höchstzahl der Flächen in einem Blatt des Hüllbox-Baums.
+const BVH_LEAF: usize = 4;
+
+/// Knoten des Hüllbox-Baums: Box und entweder zwei Kinder `left`, `right` (`count = 0`) oder ein
+/// Blatt mit den Flächen `order[start..start + count]`.
+#[derive(Clone, Copy, Debug)]
+struct BvhNode {
+    lo: DVec3,
+    hi: DVec3,
+    left: usize,
+    right: usize,
+    start: usize,
+    count: usize,
+}
+
+/// Hüllbox-Baum über den Flächenboxen (Teilung in der Mitte der längsten Achse der
+/// Boxmittelpunkte, nach Anzahl).
+#[derive(Debug, Default)]
+struct Bvh {
+    nodes: Vec<BvhNode>,
+    order: Vec<usize>,
+}
+
+impl Bvh {
+    fn new(faces: &[FaceData]) -> Bvh {
+        let mut b = Bvh {
+            nodes: Vec::new(),
+            order: (0..faces.len()).collect(),
+        };
+        if !faces.is_empty() {
+            b.build(faces, 0, faces.len());
+        }
+        b
+    }
+
+    /// Baut den Knoten über `order[start..end]` und liefert seinen Index.
+    fn build(&mut self, faces: &[FaceData], start: usize, end: usize) -> usize {
+        let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+        let (mut clo, mut chi) = (lo, hi);
+        for &i in &self.order[start..end] {
+            lo = lo.min(faces[i].lo);
+            hi = hi.max(faces[i].hi);
+            let c = 0.5 * (faces[i].lo + faces[i].hi);
+            clo = clo.min(c);
+            chi = chi.max(c);
+        }
+        let k = self.nodes.len();
+        self.nodes.push(BvhNode {
+            lo,
+            hi,
+            left: 0,
+            right: 0,
+            start,
+            count: end - start,
+        });
+        if end - start <= BVH_LEAF {
+            return k;
+        }
+        let ext = chi - clo;
+        let axis = if ext.x >= ext.y && ext.x >= ext.z {
+            0
+        } else if ext.y >= ext.z {
+            1
+        } else {
+            2
+        };
+        let mid = start + (end - start) / 2;
+        let key = |i: &usize| 0.5 * (faces[*i].lo[axis] + faces[*i].hi[axis]);
+        self.order[start..end]
+            .select_nth_unstable_by(mid - start, |a, b| key(a).total_cmp(&key(b)));
+        let left = self.build(faces, start, mid);
+        let right = self.build(faces, mid, end);
+        let n = &mut self.nodes[k];
+        n.left = left;
+        n.right = right;
+        n.count = 0;
+        k
+    }
+
+    /// Meldet jede Fläche, deren Blattbox der Strahl `o + s·d`, `s ∈ [s0, s1]` erreicht
+    /// (Obermenge der Flächen, deren eigene Box er erreicht).
+    fn ray(&self, o: DVec3, d: DVec3, s0: f64, s1: f64, out: &mut dyn FnMut(usize)) {
+        self.walk(
+            &|n: &BvhNode| ray_box(o, d, s0, s1, n.lo, n.hi).is_some(),
+            out,
+        );
+    }
+
+    /// Meldet jede Fläche, deren Blattbox die Box `[lo, hi]` berührt.
+    fn boxed(&self, lo: DVec3, hi: DVec3, out: &mut dyn FnMut(usize)) {
+        self.walk(&|n: &BvhNode| !(n.lo.cmpgt(hi) | n.hi.cmplt(lo)).any(), out);
+    }
+
+    fn walk(&self, hit: &dyn Fn(&BvhNode) -> bool, out: &mut dyn FnMut(usize)) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let mut stack = vec![0usize];
+        while let Some(k) = stack.pop() {
+            let n = &self.nodes[k];
+            if !hit(n) {
+                continue;
+            }
+            if n.count > 0 {
+                for &i in &self.order[n.start..n.start + n.count] {
+                    out(i);
+                }
+            } else {
+                stack.push(n.left);
+                stack.push(n.right);
+            }
+        }
     }
 }
 
