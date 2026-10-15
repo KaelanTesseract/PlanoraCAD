@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="420mm" height="297mm" viewBox="0 0 420 297">
+<rect x="10" y="10" width="400" height="277" fill="none" stroke="#000" stroke-width="0.5"/>
+<g transform="matrix(1 0 0 -1 0 297)">
+<g id="Vorne">
+<path d="M 100 190 L 140 190 M 140 190 L 140 210 M 100 210 L 140 210 M 100 190 L 100 210 M 125 200 A 5 5 0 0 1 120 205 A 5 5 0 0 1 115 200 A 5 5 0 0 1 120 195 A 5 5 0 0 1 125 200" stroke="#000" stroke-width="0.5" fill="none" stroke-linecap="round"/>
+</g>
+<g id="Oben">
+<path d="M 100 125 L 140 125 M 140 125 L 140 155 M 140 155 L 100 155 M 100 155 L 100 125" stroke="#000" stroke-width="0.5" fill="none" stroke-linecap="round"/>
+<path d="M 115 125 L 115 155 M 125 125 L 125 155" stroke="#000" stroke-width="0.25" stroke-dasharray="3 1" fill="none" stroke-linecap="round"/>
+</g>
+<g id="Rechts">
+<path d="M 35 190 L 35 210 M 35 190 L 65 190 M 65 190 L 65 210 M 35 210 L 65 210" stroke="#000" stroke-width="0.5" fill="none" stroke-linecap="round"/>
+<path d="M 35 205 L 65 205 M 35 195 L 65 195" stroke="#000" stroke-width="0.25" stroke-dasharray="3 1" fill="none" stroke-linecap="round"/>
+</g>
+</g>
+</svg>
