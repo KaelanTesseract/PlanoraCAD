@@ -4,10 +4,14 @@
 use crate::base64;
 use crate::error::{ProjectError, Result};
 use crate::format::*;
+use planora_drawing::{
+    Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewSpec,
+};
 use planora_exchange::{ExchangeMesh, MAX_FILE_BYTES};
 use planora_feature::{
-    BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM, MeshId,
-    SketchFeature, SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
+    BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM,
+    MAX_DRAWINGS, MAX_POS_MM, MAX_VIEWS, MeshId, SketchFeature, SketchPlane, Snapshot,
+    SnapshotFeature, StandardPlane,
 };
 use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
@@ -18,19 +22,21 @@ use planora_sketch::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// Höchste lesbare Formatnummer der Versionsdateien (P7, P12).
-pub const FORMAT_VERSION: u32 = 3;
+/// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
+pub const FORMAT_VERSION: u32 = 4;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 3 mit Netz-Körpern, 2 mit Rundungen oder
-/// Fasen, sonst 1 (P7, P12).
+/// Kleinste Formatnummer, die den Stand darstellt: 4 mit Zeichnungen, 3 mit Netz-Körpern, 2
+/// mit Rundungen oder Fasen, sonst 1 (P7, P12, F7).
 pub fn required_format(s: &Snapshot) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if has(|k| matches!(k, FeatureKind::MeshBody { .. })) {
+    if !s.drawings.is_empty() {
+        4
+    } else if has(|k| matches!(k, FeatureKind::MeshBody { .. })) {
         3
     } else if has(|k| matches!(k, FeatureKind::Verrunden { .. })) {
         2
@@ -760,6 +766,196 @@ fn meshes_from(origin: &str, list: &[MeshDto]) -> Result<BTreeMap<MeshId, Arc<Ex
     Ok(out)
 }
 
+// ---- Zeichnungen (Format 4) -------------------------------------------------------------
+
+const PAPERS: [(Paper, &str); 5] = [
+    (Paper::A4, "A4"),
+    (Paper::A3, "A3"),
+    (Paper::A2, "A2"),
+    (Paper::A1, "A1"),
+    (Paper::A0, "A0"),
+];
+const PROJECTIONS: [(Projection, &str); 2] =
+    [(Projection::First, "erst"), (Projection::Third, "dritt")];
+const VIEW_KINDS: [(ViewKind, &str); 7] = [
+    (ViewKind::Front, "vorne"),
+    (ViewKind::Back, "hinten"),
+    (ViewKind::Left, "links"),
+    (ViewKind::Right, "rechts"),
+    (ViewKind::Top, "oben"),
+    (ViewKind::Bottom, "unten"),
+    (ViewKind::Isometric, "iso"),
+];
+
+fn name_of<T: PartialEq + Copy>(table: &[(T, &'static str)], x: T) -> String {
+    table
+        .iter()
+        .find(|(v, _)| *v == x)
+        .map(|(_, n)| (*n).to_string())
+        .unwrap_or_default()
+}
+
+fn value_of<T: Copy>(table: &[(T, &'static str)], s: &str) -> Option<T> {
+    table.iter().find(|(_, n)| *n == s).map(|(v, _)| *v)
+}
+
+/// Lageangabe auf dem Blatt: endlich und im Betrag höchstens `MAX_POS_MM`.
+fn pos(origin: &str, what: &str, x: f64) -> Result<f64> {
+    if x.is_finite() && x.abs() <= MAX_POS_MM {
+        Ok(x)
+    } else {
+        Err(ProjectError::corrupt(
+            origin,
+            format!("{what}: Zahl ungültig oder zu groß"),
+        ))
+    }
+}
+
+/// Zähler aus der Datei: 0 heißt „größte Kennung + 1“ (bzw. 1 ohne Kennungen). Jede Kennung
+/// muss größer als 0 und kleiner als der Zähler sein; `u64::MAX` ist kein gültiger Zähler.
+fn counter(
+    origin: &str,
+    what: &str,
+    stored: u64,
+    ids: impl Iterator<Item = u64> + Clone,
+) -> Result<u64> {
+    let bad_id = || ProjectError::corrupt(origin, format!("{what}: ungültige Kennung"));
+    let next = if stored == 0 {
+        match ids.clone().max() {
+            Some(m) => m.checked_add(1).ok_or_else(bad_id)?,
+            None => 1,
+        }
+    } else {
+        stored
+    };
+    if next == u64::MAX {
+        return Err(ProjectError::corrupt(
+            origin,
+            format!("{what}: Der Zähler ist ungültig"),
+        ));
+    }
+    if ids.into_iter().any(|id| id == 0 || id >= next) {
+        return Err(bad_id());
+    }
+    Ok(next)
+}
+
+fn drawing_to(d: &Drawing) -> ZeichnungDto {
+    ZeichnungDto {
+        id: d.id.0,
+        name: d.name.clone(),
+        blatt: BlattDto {
+            papier: name_of(&PAPERS, d.sheet.paper),
+            quer: d.sheet.landscape,
+        },
+        projektion: name_of(&PROJECTIONS, d.projection),
+        naechste_ansicht: d.next_view,
+        ansichten: d
+            .views
+            .iter()
+            .map(|v| AnsichtDto {
+                id: v.id.0,
+                art: name_of(&VIEW_KINDS, v.kind),
+                massstab: [v.scale.num, v.scale.den],
+                lage: match v.placement {
+                    Placement::Free { x, y } => LageDto::Frei { x, y },
+                    Placement::Aligned { distance } => LageDto::Ausgerichtet { abstand: distance },
+                },
+                verdeckt_zeigen: v.show_hidden,
+                eltern: v.parent.map(|p| p.0),
+            })
+            .collect(),
+    }
+}
+
+fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
+    let ctx = |m: String| ProjectError::corrupt(origin, format!("Zeichnung „{}“: {m}", d.name));
+    if d.ansichten.len() > MAX_VIEWS {
+        return Err(ctx("Ansichten: zu viele Einträge".into()));
+    }
+    let paper = value_of(&PAPERS, &d.blatt.papier)
+        .ok_or_else(|| ctx(format!("Unbekanntes Papierformat „{}“", d.blatt.papier)))?;
+    let projection = value_of(&PROJECTIONS, &d.projektion)
+        .ok_or_else(|| ctx(format!("Unbekannte Projektion „{}“", d.projektion)))?;
+    let what = format!("Zeichnung „{}“, Ansicht", d.name);
+    let next_view = counter(
+        origin,
+        &what,
+        d.naechste_ansicht,
+        d.ansichten.iter().map(|v| v.id),
+    )?;
+    let mut views = Vec::with_capacity(d.ansichten.len());
+    for v in &d.ansichten {
+        let kind = value_of(&VIEW_KINDS, &v.art)
+            .ok_or_else(|| ctx(format!("Unbekannte Ansichtsart „{}“", v.art)))?;
+        let [num, den] = v.massstab;
+        if !(1..=1000).contains(&num) || !(1..=1000).contains(&den) {
+            return Err(ctx(format!(
+                "Maßstab {num}:{den} liegt nicht zwischen 1:1000 und 1000:1"
+            )));
+        }
+        let p = |what: &str, x: f64| pos(origin, &format!("Zeichnung „{}“ {what}", d.name), x);
+        let placement = match v.lage {
+            LageDto::Frei { x, y } => Placement::Free {
+                x: p("Lage", x)?,
+                y: p("Lage", y)?,
+            },
+            LageDto::Ausgerichtet { abstand } => Placement::Aligned {
+                distance: p("Abstand", abstand)?,
+            },
+        };
+        views.push(ViewSpec {
+            id: ViewId(v.id),
+            kind,
+            scale: Scale { num, den },
+            placement,
+            show_hidden: v.verdeckt_zeigen,
+            parent: v.eltern.map(ViewId),
+        });
+    }
+    Ok(Drawing {
+        id: DrawingId(d.id),
+        name: d.name.clone(),
+        sheet: Sheet {
+            paper,
+            landscape: d.blatt.quer,
+        },
+        projection,
+        views,
+        next_view,
+    })
+}
+
+/// Liest die Zeichnungen und den Zeichnungszähler. Weitere Prüfungen (doppelte Kennungen und
+/// Namen, Ausgangsansichten) macht `Document::from_snapshot`.
+fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)> {
+    if file.format < 4 && (!file.zeichnungen.is_empty() || file.naechste_zeichnung != 0) {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Zeichnungen gibt es erst ab Dateiformat 4",
+        ));
+    }
+    check_len(origin, "Zeichnungen", file.zeichnungen.len())?;
+    if file.zeichnungen.len() > MAX_DRAWINGS {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Zeichnungen: zu viele Einträge",
+        ));
+    }
+    let next = counter(
+        origin,
+        "Zeichnung",
+        file.naechste_zeichnung,
+        file.zeichnungen.iter().map(|z| z.id),
+    )?;
+    let drawings = file
+        .zeichnungen
+        .iter()
+        .map(|z| drawing_from(origin, z))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((drawings, next))
+}
+
 // ---- Öffentliche Funktionen -------------------------------------------------------------
 
 /// JSON-Text einer Versionsdatei. Enthält der Snapshot eine nicht endliche Zahl, ist das ein
@@ -787,6 +983,13 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
                 daten: base64::encode(&m.to_bytes()),
             })
             .collect(),
+        zeichnungen: s.drawings.iter().map(drawing_to).collect(),
+        // Ohne Zeichnungen fehlt der Zähler, damit alte Dateien unverändert bleiben (F7).
+        naechste_zeichnung: if s.drawings.is_empty() {
+            0
+        } else {
+            s.next_drawing
+        },
     };
     let text = serde_json::to_string_pretty(&file).map_err(|e| {
         ProjectError::Invalid(format!("Das Dokument lässt sich nicht schreiben: {e}"))
@@ -845,6 +1048,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             "Netz-Körper gibt es erst ab Dateiformat 3",
         ));
     }
+    let (drawings, next_drawing) = drawings_from(origin, &file)?;
     check_len(origin, "Netze", file.netze.len())?;
     let meshes = meshes_from(origin, &file.netze)?;
     for f in &file.features {
@@ -872,7 +1076,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         marker: file.marker,
         next_id: file.naechste_id,
         meshes,
-        drawings: vec![],
-        next_drawing: 1,
+        drawings,
+        next_drawing,
     })
 }
