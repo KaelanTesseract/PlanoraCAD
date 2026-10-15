@@ -595,3 +595,76 @@ fn far_from_origin_gives_same_result() {
     let sp = split_params(&[a, b], &front, 30.0, &Progress::new()).unwrap();
     assert!(sp[0].is_empty() && sp[1].is_empty(), "{sp:?}");
 }
+
+/// Kubische Freiformkurve in der xz-Ebene (Vorderansicht: Bild = (x, z)) mit einer schmalen
+/// Spitze: gleichmäßige Knoten 0,1 … 0,9 und dazwischen ein Knotenhaufen 0,5297 … 0,5303; der
+/// einzige Kontrollpunkt mit z ≠ 0 (z = 5) wirkt nur über diesem Haufen. Die Spitze (Breite
+/// 6e-4 im Parameter, etwa 6 µm in x) liegt zwischen zwei Probestellen jeder Teilbox.
+fn spiky_spline() -> Stroke {
+    let mut knots: Vec<f64> = vec![0.0; 4];
+    knots.extend([0.1, 0.2, 0.3, 0.4, 0.5]);
+    knots.extend([0.5297, 0.52985, 0.53, 0.53015, 0.5303]);
+    knots.extend([0.6, 0.7, 0.8, 0.9]);
+    knots.extend([1.0; 4]);
+    let n = knots.len() - 4;
+    // Kontrollpunkte an den Greville-Stellen (x = 10 · Mittel von 3 Knoten): x(t) ≈ 10·t.
+    let spike = (0..n)
+        .position(|i| (knots[i] - 0.5297).abs() < 1e-12 && (knots[i + 4] - 0.5303).abs() < 1e-12)
+        .expect("Kontrollpunkt über dem Knotenhaufen");
+    let pts: Vec<DVec3> = (0..n)
+        .map(|i| {
+            let x = 10.0 * (knots[i + 1] + knots[i + 2] + knots[i + 3]) / 3.0;
+            DVec3::new(x, 0.0, if i == spike { 5.0 } else { 0.0 })
+        })
+        .collect();
+    let c = planora_math::nurbs::NurbsCurve::new(3, knots, pts, vec![1.0; n]).unwrap();
+    Stroke {
+        curve: Curve::nurbs(c),
+        t0: 0.0,
+        t1: 1.0,
+        origin: StrokeOrigin::Edge { body: 0, edge: 0 },
+    }
+}
+
+#[test]
+fn a_crossing_between_the_samples_of_a_sharp_spline_is_found() {
+    // Waagerechte Linie z = 1 quer durch die Spitze: zwei Kreuzungen. Die Unterteilung prüfte
+    // Teilbereiche früher nur an 9 Probestellen; die Spitze liegt zwischen ihnen, ihre Box war zu
+    // klein und das Paar fiel weg. Eigene Zählung: brute_force_cross_count (dichte Polygone).
+    let spline = spiky_spline();
+    let peak = (0..=200_000)
+        .map(|i| spline.point(i as f64 / 200_000.0).z)
+        .fold(0.0, f64::max);
+    assert!(peak > 1.5, "Spitze reicht über die Linie: {peak}");
+    let l = line((0.0, 0.0, 1.0), (1.0, 0.0, 0.0), 10.0, 1);
+    let basis = Basis::of(ViewKind::Front);
+    let want = brute_force_cross_count(&spline, &l, &basis, 200_000);
+    assert_eq!(want, 2, "eigene Zählung");
+    let got: Vec<_> = stroke_cross(&spline, &l, &basis, 10.0)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.transversal)
+        .collect();
+    assert_eq!(got.len(), want, "{got:?}");
+    for c in &got {
+        assert!((spline.point(c.ta).z - 1.0).abs() < 1e-9 && (c.ta - 0.53).abs() < 4e-4);
+    }
+    let splits = split_params(&[spline, l], &basis, 10.0, &Progress::new()).unwrap();
+    assert_eq!(splits[0].len(), 2);
+    assert_eq!(splits[1].len(), 2);
+}
+
+#[test]
+fn strokes_without_width_are_rejected() {
+    let a = circle((0.0, 0.0, 0.0), 5.0, 1.0, 1.0, 0);
+    let b = circle((1.0, 0.0, 0.0), 5.0, 0.0, TAU, 1);
+    let basis = Basis::of(ViewKind::Top);
+    assert!(matches!(
+        stroke_cross(&a, &b, &basis, 10.0),
+        Err(DrawError::InvalidBody(ref m)) if m == ZERO_WIDTH
+    ));
+    assert!(matches!(
+        split_params(&[b, a], &basis, 10.0, &Progress::new()),
+        Err(DrawError::InvalidBody(ref m)) if m == ZERO_WIDTH
+    ));
+}

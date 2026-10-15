@@ -20,6 +20,7 @@ use crate::limits::{BISECT_TOL, MAX_PAIR_TESTS, MAX_STROKES, MAX_SUBDIVISION_DEP
 use crate::stroke::Stroke;
 use planora_exchange::Progress;
 use planora_kernel::Curve;
+use planora_math::nurbs::BezierSegment;
 use planora_math::{DVec2, DVec3};
 use std::cell::Cell;
 
@@ -46,6 +47,10 @@ const NEWTON_DIRECT_REL: f64 = 1e-8;
 const WELL_POSED_REL: f64 = 1e-3;
 /// Dämpfung der Normalgleichungen relativ zur Spur von `JᵀJ`.
 const LM_DAMPING: f64 = 1e-12;
+/// Freiform: Ein Abschnitt wird erst Blatt (ein Newton-Start), wenn die Kontrollpunkte seines
+/// Teilstücks höchstens diesen Anteil der Sehnenlänge (oder den Gleichheitsabstand) neben der Sehne
+/// liegen; so enthält kein Blatt eine scharfe Spitze mit zwei Kreuzungen.
+const FLAT_REL: f64 = 1e-2;
 /// Probestellen für die Hüllbox eines Abschnitts.
 const CELL_SAMPLES: usize = 9;
 /// Abschnitte für die Suche des Fußpunkts eines Endpunkts.
@@ -105,9 +110,26 @@ struct Ev<'a> {
 }
 
 enum Kind {
-    Line { o: DVec2, d: DVec2 },
-    Conic { c: DVec2, u: DVec2, v: DVec2 },
-    Free { curve: Curve, ex: DVec3, ey: DVec3 },
+    Line {
+        o: DVec2,
+        d: DVec2,
+    },
+    Conic {
+        c: DVec2,
+        u: DVec2,
+        v: DVec2,
+    },
+    Free {
+        curve: Curve,
+        ex: DVec3,
+        ey: DVec3,
+        /// Rationale Bézier-Stücke der (verschobenen) Kurve, nach Parameter geordnet: Grundlage
+        /// der strikten Hüllboxen von Teilbereichen (`free_hull`).
+        segs: Vec<BezierSegment>,
+        /// Parameterbereich der Kurve und Periode (geschlossene Kurven).
+        domain: (f64, f64),
+        period: Option<f64>,
+    },
 }
 
 fn proj(basis: &Basis, v: DVec3) -> DVec2 {
@@ -135,14 +157,22 @@ impl<'a> Ev<'a> {
                 u: proj(basis, frame.x * *major),
                 v: proj(basis, frame.y * *minor),
             },
-            Curve::Nurbs(c) => Kind::Free {
-                curve: Curve::nurbs(
-                    c.transformed(|p| p - r)
-                        .map_err(|e| DrawError::InvalidBody(e.to_string()))?,
-                ),
-                ex: basis.ex,
-                ey: basis.ey,
-            },
+            Curve::Nurbs(c) => {
+                let shifted = c
+                    .transformed(|p| p - r)
+                    .map_err(|e| DrawError::InvalidBody(e.to_string()))?;
+                let segs = shifted.bezier_segments();
+                let domain = shifted.domain();
+                let curve = Curve::nurbs(shifted);
+                Kind::Free {
+                    period: curve.period(),
+                    curve,
+                    ex: basis.ex,
+                    ey: basis.ey,
+                    segs,
+                    domain,
+                }
+            }
         };
         Ok(Ev { s, kind })
     }
@@ -152,7 +182,7 @@ impl<'a> Ev<'a> {
         match &self.kind {
             Kind::Line { o, d } => *o + *d * t,
             Kind::Conic { c, u, v } => *c + *u * t.cos() + *v * t.sin(),
-            Kind::Free { curve, ex, ey } => {
+            Kind::Free { curve, ex, ey, .. } => {
                 let q = curve.point(t);
                 DVec2::new(q.dot(*ex), q.dot(*ey))
             }
@@ -164,7 +194,7 @@ impl<'a> Ev<'a> {
         match &self.kind {
             Kind::Line { d, .. } => *d,
             Kind::Conic { u, v, .. } => *v * t.cos() - *u * t.sin(),
-            Kind::Free { curve, ex, ey } => {
+            Kind::Free { curve, ex, ey, .. } => {
                 let q = curve.tangent(t);
                 DVec2::new(q.dot(*ex), q.dot(*ey))
             }
@@ -220,6 +250,19 @@ fn finite(s: &Stroke) -> bool {
     s.t0.is_finite() && s.t1.is_finite()
 }
 
+/// Striche ohne Parameterbereich (`t0 = t1`) sind kein Kurvenstück; `compute_view` verwirft sie
+/// vorher als entartet, hier werden sie mit einer Meldung abgewiesen.
+fn check_width(s: &Stroke) -> Result<(), DrawError> {
+    if s.param_len() > 0.0 {
+        Ok(())
+    } else {
+        Err(DrawError::InvalidBody(ZERO_WIDTH.into()))
+    }
+}
+
+/// Meldung für Striche ohne Parameterbereich.
+pub const ZERO_WIDTH: &str = "Linie ohne Länge";
+
 /// Kreuzungen zweier Striche in der Ansicht. Wurzeln gelten im Bereich ± `BISECT_TOL`·Breite und
 /// werden auf den Bereich begrenzt; jede Kreuzung wird genau einmal gemeldet (auch an der Naht
 /// periodischer Parameter). Kollineare oder deckungsgleiche Stücke haben keine transversalen
@@ -233,6 +276,8 @@ pub fn stroke_cross(
     if !(finite(a) && finite(b)) {
         return Err(DrawError::NonFinite);
     }
+    check_width(a)?;
+    check_width(b)?;
     let r = a.point(a.t0);
     let pairs = Cell::new(0);
     let ctx = Ctx {
@@ -335,6 +380,9 @@ struct Piece {
     hi: f64,
     min: DVec2,
     max: DVec2,
+    /// Freiform: Die Kontrollpunkte des Teilstücks liegen in einem schmalen Band um seine Sehne
+    /// (siehe [`piece`]); erst dann darf es ein Blatt werden. Sonst immer wahr.
+    flat: bool,
 }
 
 impl Piece {
@@ -346,31 +394,162 @@ impl Piece {
     }
 }
 
-/// Hüllbox des Abschnitts `lo…hi` aus `CELL_SAMPLES` Probestellen. Gepolstert um die größte
-/// zweite Differenz der Probe (≈ achtfache Ausbauchung zwischen zwei Probestellen) und den
-/// Gleichheitsabstand.
+/// Hüllbox des Abschnitts `lo…hi`. Freiformkurven: strikt aus der konvexen Hülle (Gewichte
+/// positiv) der Kontrollpunkte des Teilstücks selbst – je überdecktem Bézier-Stück per de
+/// Casteljau auf genau den Teilbereich beschnitten ([`free_hull`]), so dass die Box mit dem
+/// Teilbereich schrumpft und keine Kreuzung zwischen Probestellen verloren geht. Gerade und
+/// Kegelschnitt: aus `CELL_SAMPLES` Probestellen, gepolstert um die größte zweite Differenz der
+/// Probe (≈ achtfache Ausbauchung zwischen zwei Probestellen). Immer zusätzlich um den
+/// Gleichheitsabstand gepolstert.
 fn piece(ctx: &Ctx, s: &Ev, lo: f64, hi: f64) -> Piece {
-    let n = CELL_SAMPLES - 1;
-    let pts: Vec<DVec2> = (0..=n)
-        .map(|i| s.p(lo + (hi - lo) * i as f64 / n as f64))
-        .collect();
     let mut min = DVec2::splat(f64::INFINITY);
     let mut max = DVec2::splat(f64::NEG_INFINITY);
-    for p in &pts {
-        min = min.min(*p);
-        max = max.max(*p);
+    let mut bulge = 0.0;
+    let mut flat = true;
+    if let Kind::Free { .. } = &s.kind {
+        let (a, b) = (s.p(lo), s.p(hi));
+        let chord = b - a;
+        let len = chord.length();
+        let normal = if len > 0.0 {
+            chord.perp() / len
+        } else {
+            DVec2::ZERO
+        };
+        let mut band: f64 = 0.0;
+        free_hull(s, lo, hi, &mut |p| {
+            min = min.min(p);
+            max = max.max(p);
+            band = band.max(if len > 0.0 {
+                (p - a).dot(normal).abs()
+            } else {
+                p.distance(a)
+            });
+        });
+        flat = band <= (FLAT_REL * len).max(ctx.near());
+    } else {
+        let n = CELL_SAMPLES - 1;
+        let pts: Vec<DVec2> = (0..=n)
+            .map(|i| s.p(lo + (hi - lo) * i as f64 / n as f64))
+            .collect();
+        for p in &pts {
+            min = min.min(*p);
+            max = max.max(*p);
+        }
+        bulge = pts
+            .windows(3)
+            .map(|w| (w[0] - 2.0 * w[1] + w[2]).length())
+            .fold(0.0, f64::max);
     }
-    let bulge = pts
-        .windows(3)
-        .map(|w| (w[0] - 2.0 * w[1] + w[2]).length())
-        .fold(0.0, f64::max);
     let pad = DVec2::splat(bulge + ctx.near());
     Piece {
         lo,
         hi,
         min: min - pad,
         max: max + pad,
+        flat,
     }
+}
+
+/// Meldet die projizierten Kontrollpunkte, deren konvexe Hülle das Stück `lo…hi` (Strichparameter)
+/// der Freiformkurve enthält: Geschlossene Kurven falten den Bereich in den Parameterbereich
+/// (eine ganze Periode oder mehr: alle Stücke), offene begrenzen ihn darauf (die Auswertung
+/// begrenzt ebenso). Je Bézier-Stück, das der Bereich überdeckt, die Kontrollpunkte des auf den
+/// Bereich beschnittenen Stücks (homogenes de Casteljau; Gewichte positiv, also liegt das
+/// rationale Stück in der Hülle seiner kartesischen Kontrollpunkte).
+fn free_hull(s: &Ev, lo: f64, hi: f64, add: &mut dyn FnMut(DVec2)) {
+    let Kind::Free {
+        segs,
+        domain: (a, b),
+        period,
+        ex,
+        ey,
+        ..
+    } = &s.kind
+    else {
+        return;
+    };
+    let (a, b) = (*a, *b);
+    let (lo, hi) = (lo.min(hi), lo.max(hi));
+    let mut ranges: Vec<(f64, f64)> = Vec::with_capacity(2);
+    match period {
+        Some(p) if *p > 0.0 && (hi - lo >= *p || !(lo.is_finite() && hi.is_finite())) => {
+            ranges.push((a, b));
+        }
+        Some(p) => {
+            let x = if lo < a || lo > b {
+                a + (lo - a).rem_euclid(*p)
+            } else {
+                lo
+            };
+            let y = x + (hi - lo);
+            if y <= b {
+                ranges.push((x, y));
+            } else {
+                ranges.push((x, b));
+                ranges.push((a, (y - p).min(b)));
+            }
+        }
+        None => ranges.push((lo.clamp(a, b), hi.clamp(a, b))),
+    }
+    let proj = |q: DVec3| DVec2::new(q.dot(*ex), q.dot(*ey));
+    for (x, y) in ranges {
+        let first = segs.partition_point(|g| g.u.1 < x);
+        for g in segs[first..].iter().take_while(|g| g.u.0 <= y) {
+            let (u0, u1) = g.u;
+            let w = u1 - u0;
+            if w.is_nan() || w <= 0.0 {
+                continue;
+            }
+            let t0 = ((x.max(u0) - u0) / w).clamp(0.0, 1.0);
+            let t1 = ((y.min(u1) - u0) / w).clamp(0.0, 1.0);
+            for q in bezier_part(g, t0, t1) {
+                add(proj(q));
+            }
+        }
+    }
+}
+
+/// Kartesische Kontrollpunkte des Teilstücks `[t0, t1] ⊂ [0, 1]` eines rationalen
+/// Bézier-Stücks (homogenes de Casteljau: erst bei `t1` teilen, dann den linken Teil bei
+/// `t0 / t1`).
+fn bezier_part(g: &BezierSegment, t0: f64, t1: f64) -> Vec<DVec3> {
+    let mut h: Vec<(DVec3, f64)> = g
+        .control
+        .iter()
+        .zip(&g.weights)
+        .map(|(p, w)| (*p * *w, *w))
+        .collect();
+    let lerp =
+        |a: (DVec3, f64), b: (DVec3, f64), t: f64| (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+    // Linker Teil bei t1: erste Punkte jeder Stufe.
+    if t1 < 1.0 {
+        let n = h.len();
+        let mut left = Vec::with_capacity(n);
+        let mut row = h.clone();
+        left.push(row[0]);
+        for k in 1..n {
+            for i in 0..n - k {
+                row[i] = lerp(row[i], row[i + 1], t1);
+            }
+            left.push(row[0]);
+        }
+        h = left;
+    }
+    // Rechter Teil bei t0 / t1: letzte Punkte jeder Stufe.
+    let s = if t1 > 0.0 { t0 / t1 } else { 0.0 };
+    if s > 0.0 {
+        let n = h.len();
+        let mut right = vec![h[n - 1]; n];
+        let mut row = h.clone();
+        for k in 1..n {
+            for i in 0..n - k {
+                row[i] = lerp(row[i], row[i + 1], s);
+            }
+            right[n - 1 - k] = row[n - 1 - k];
+        }
+        h = right;
+    }
+    h.into_iter().map(|(p, w)| p / w).collect()
 }
 
 fn halves(ctx: &Ctx, s: &Ev, p: &Piece) -> [Piece; 2] {
@@ -392,6 +571,7 @@ fn generic(ctx: &Ctx, a: &Ev, b: &Ev) -> Result<Vec<(f64, f64)>, DrawError> {
             hi,
             min: p.min.min(bmin - ctx.shift),
             max: p.max.max(bmax - ctx.shift),
+            flat: p.flat,
         }
     };
     let pa = top(a, alo, ahi);
@@ -423,8 +603,10 @@ fn subdivide(
     if !pa.overlaps(&pb) {
         return Ok(());
     }
-    let a_small = pa.hi - pa.lo < leaf.0;
-    let b_small = pb.hi - pb.lo < leaf.1;
+    // `<=`: Ein Abschnitt der Breite 0 ist sofort ein Blatt (mit `<` würde er bis zur
+    // Tiefengrenze immer wieder in zwei gleiche Hälften geteilt).
+    let a_small = pa.hi - pa.lo <= leaf.0 && pa.flat;
+    let b_small = pb.hi - pb.lo <= leaf.1 && pb.flat;
     if (a_small && b_small) || depth >= MAX_SUBDIVISION_DEPTH {
         out.push((0.5 * (pa.lo + pa.hi), 0.5 * (pb.lo + pb.hi)));
         return Ok(());
@@ -645,6 +827,9 @@ pub fn split_params(
     if strokes.iter().any(|s| !finite(s)) {
         return Err(DrawError::NonFinite);
     }
+    for s in strokes {
+        check_width(s)?;
+    }
     // Bezugspunkt: Anfang des ersten Strichs (alle Striche liegen innerhalb der Ausdehnung).
     let r = strokes.first().map_or(DVec3::ZERO, |s| s.point(s.t0));
     let pairs = Cell::new(0);
@@ -769,5 +954,35 @@ mod tests {
         assert!(matches!(err, DrawError::TooComplex(n) if n == MAX_PAIR_TESTS + 1));
         // Schnellfälle zählen keine Zerlegung.
         assert!(cross_in(&ctx, &ev(&a), &ev(&circ)).is_ok());
+    }
+
+    #[test]
+    fn a_zero_width_piece_is_a_leaf_at_once() {
+        // Ein Abschnitt der Breite 0 (Punkt auf einem Kreis) gegen den Kreis selbst: Er muss
+        // sofort als Blatt gelten. Mit `width < leaf` (leaf = 0) würde er bis zur Tiefengrenze
+        // halbiert, die Paarzahl wüchse mit jeder Stufe und erreichte die Grenze.
+        let basis = Basis::of(ViewKind::Top);
+        let start = MAX_PAIR_TESTS - 100_000;
+        let pairs = Cell::new(start);
+        let ctx = Ctx {
+            basis: &basis,
+            shift: DVec2::ZERO,
+            tol: geom_tol(20.0),
+            pairs: &pairs,
+            progress: None,
+        };
+        let circ = |t0: f64, t1: f64, edge: usize| Stroke {
+            curve: Curve::Circle {
+                frame: planora_math::Frame::WORLD,
+                radius: 5.0,
+            },
+            t0,
+            t1,
+            origin: crate::stroke::StrokeOrigin::Edge { body: 0, edge },
+        };
+        let (dot, full) = (circ(1.0, 1.0, 0), circ(0.0, std::f64::consts::TAU, 1));
+        let ev = |s| Ev::new(s, &basis, DVec3::ZERO).unwrap();
+        assert!(cross_in(&ctx, &ev(&dot), &ev(&full)).is_ok());
+        assert!(pairs.get() - start < 10_000, "{}", pairs.get() - start);
     }
 }
