@@ -4,9 +4,12 @@
 //!
 //! Genauigkeit: Der Schreiber rundet jede Zahl auf neun Nachkommastellen (Fehler höchstens 5e-10).
 //! Für Strecken, Kreise und Splines mit unverändert übernommenen Kontrollpunkten bleibt der
-//! Punktfehler deshalb unter 1e-9. Bei Ellipsen und rationalen Splines kommen Fehler der
+//! Punktfehler deshalb unter 1e-9, bei Splines aber nur, wenn die Knoten runde Werte haben:
+//! werden beliebige Knoten auf neun Stellen gerundet, verschiebt das die Kurve um etwa
+//! Hebel · 5e-10 / Knotenabstand. Bei Ellipsen und rationalen Splines kommen Fehler der
 //! gerundeten Hauptachse, des Verhältnisses, des Parameters bzw. der Gewichte hinzu; dafür gilt
-//! eine aus der Rundung abgeleitete Schranke (`ell_tol`, `rat_tol`), nicht ein fester Wert.
+//! eine aus der Rundung abgeleitete Schranke (`ell_tol`, `rat_tol`; der Hebel `0,5·R` von
+//! `rat_tol` gilt für Kegelschnittstücke bis etwa 120°), nicht ein fester Wert.
 
 mod common;
 
@@ -467,7 +470,17 @@ fn structure_is_valid() {
     );
     let (s, d) = read_of(&m);
     // Abschnitte, Ende, Zeilenende, nur ASCII.
-    assert_eq!(d.sections, ["HEADER", "TABLES", "BLOCKS", "ENTITIES"]);
+    assert_eq!(
+        d.sections,
+        [
+            "HEADER", "CLASSES", "TABLES", "BLOCKS", "ENTITIES", "OBJECTS"
+        ]
+    );
+    // OBJECTS: Wurzelverzeichnis (Besitzer 0) mit ACAD_GROUP, das auf ein zweites Verzeichnis zeigt.
+    assert_eq!(d.objects.len(), 2);
+    assert_eq!(d.objects[0].owner, "0");
+    assert_eq!(d.objects[1].owner, d.objects[0].handle);
+    assert_eq!(d.objects[0].get(350), Some(d.objects[1].handle.as_str()));
     assert!(s.ends_with("  0\r\nENDSEC\r\n  0\r\nEOF\r\n"), "{s:?}");
     assert!(s.is_ascii());
     assert_eq!(s.matches('\n').count(), s.matches("\r\n").count());
@@ -546,6 +559,7 @@ fn validator_rejects_corrupted_files() {
     assert!(dxf_read::read(&good).is_ok());
     let parsed = dxf_read::read(&good).unwrap();
     let hs = parsed.all_handles();
+    let root = parsed.objects[0].handle.clone();
     let seed = parsed.header_var("$HANDSEED").unwrap()[0].value.clone();
     let model_br = parsed
         .table("BLOCK_RECORD")
@@ -625,6 +639,23 @@ fn validator_rejects_corrupted_files() {
             "ungerade Zeilen",
             good.replacen("EOF\r\n", "EOF\r\n  0\r\n", 1),
         ),
+        (
+            "OBJECTS fehlt",
+            good.replacen(
+                "  0\r\nSECTION\r\n  2\r\nOBJECTS\r\n",
+                "  0\r\nSECTION\r\n  2\r\nOBJEKTE\r\n",
+                1,
+            ),
+        ),
+        (
+            "Wurzelverzeichnis mit Besitzer",
+            good.replacen(
+                &format!("  5\r\n{root}\r\n330\r\n0\r\n100\r\nAcDbDictionary"),
+                &format!("  5\r\n{root}\r\n330\r\n{model_br}\r\n100\r\nAcDbDictionary"),
+                1,
+            ),
+        ),
+        ("350 ins Leere", good.replacen("350\r\n", "350\r\nFFFFF", 1)),
         ("Nicht-ASCII", good.replacen("Vorne", "Vörne", 1)),
         (
             "Tabellenfolge",
@@ -2128,4 +2159,28 @@ fn compare_with_build_sheet_of_real_bodies() {
     let iso = ents(&dx, "Isometrisch");
     assert!(iso.iter().all(|(e, _)| e.kind == "LINE"));
     assert!(iso.len() >= 6);
+}
+
+#[test]
+fn nearly_full_arcs_and_ellipses_become_full() {
+    // Öffnung so knapp unter einem Umlauf, dass Anfang und Ende nach dem Runden zusammenfallen:
+    // nicht auslassen, sondern voller Kreis bzw. volle Ellipse.
+    let c = (50.0, 60.0);
+    let (_, d) = read_of(&one_view(vec![
+        vis(arc(c, 7.0, 0.3, 0.3 + TAU - 3e-12)),
+        vis(ellipse(c, (9.0, 0.0), 0.5, 0.4, 0.4 + TAU - 1e-11)),
+    ]));
+    let v = ents(&d, "Vorne");
+    assert_eq!(kinds(&v), ["CIRCLE", "ELLIPSE"]);
+    assert_eq!(v[1].0.get(41), Some("0"));
+    assert_eq!(v[1].0.get(42), Some("6.283185307"));
+    // Winzige Öffnung bleibt ausgelassen.
+    let (_, d) = read_of(&one_view(vec![vis(ellipse(
+        c,
+        (9.0, 0.0),
+        0.5,
+        0.4,
+        0.4 + 1e-12,
+    ))]));
+    assert!(ents(&d, "Vorne").is_empty());
 }

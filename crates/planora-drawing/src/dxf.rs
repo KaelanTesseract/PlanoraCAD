@@ -7,7 +7,8 @@
 //!
 //! * Zeilenende `\r\n`, jedes Paar aus Gruppencode (rechtsbündig in Breite 3) und Wert; die Datei
 //!   enthält nur ASCII (Zeichen darüber hinaus stehen als `\U+XXXX`, siehe Namen).
-//! * Abschnitte in der Reihenfolge `HEADER`, `TABLES`, `BLOCKS`, `ENTITIES`, Ende `0 / EOF`.
+//! * Abschnitte in der Reihenfolge `HEADER`, `CLASSES` (leer), `TABLES`, `BLOCKS`, `ENTITIES`,
+//!   `OBJECTS` (Wurzelverzeichnis mit `ACAD_GROUP`), Ende `0 / EOF`.
 //! * `HEADER`: `$ACADVER = AC1015`, `$DWGCODEPAGE`, `$HANDSEED` (größer als alle Handles),
 //!   `$INSBASE`, `$EXTMIN`/`$EXTMAX` (Blatt), `$LIMMIN`/`$LIMMAX`, `$LTSCALE = 1`,
 //!   `$MEASUREMENT = 1` (metrisch), `$INSUNITS = 4` (Millimeter).
@@ -117,6 +118,7 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
     let br_model = hs.next();
     let br_paper = hs.next();
     let br_views: Vec<u64> = names.iter().map(|_| hs.next()).collect();
+    let (dict_root, dict_group) = (hs.next(), hs.next());
 
     let mut tables = Out::new();
     write_tables(
@@ -151,6 +153,7 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
 
     let mut s = String::new();
     s.push_str(&header(w, h, hs.0 + 1)?);
+    s.push_str("  0\r\nSECTION\r\n  2\r\nCLASSES\r\n  0\r\nENDSEC\r\n");
     s.push_str("  0\r\nSECTION\r\n  2\r\nTABLES\r\n");
     s.push_str(&tables.s);
     s.push_str("  0\r\nENDSEC\r\n");
@@ -159,6 +162,23 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
     s.push_str("  0\r\nENDSEC\r\n");
     s.push_str("  0\r\nSECTION\r\n  2\r\nENTITIES\r\n");
     s.push_str(&entities.s);
+    s.push_str("  0\r\nENDSEC\r\n");
+    // OBJECTS: Wurzelverzeichnis mit dem Eintrag ACAD_GROUP (ohne Layouts).
+    let mut objects = Out::new();
+    objects.text(0, "DICTIONARY");
+    objects.text(5, &hex(dict_root));
+    objects.text(330, "0");
+    objects.text(100, "AcDbDictionary");
+    objects.int(281, 1);
+    objects.text(3, "ACAD_GROUP");
+    objects.text(350, &hex(dict_group));
+    objects.text(0, "DICTIONARY");
+    objects.text(5, &hex(dict_group));
+    objects.text(330, &hex(dict_root));
+    objects.text(100, "AcDbDictionary");
+    objects.int(281, 1);
+    s.push_str("  0\r\nSECTION\r\n  2\r\nOBJECTS\r\n");
+    s.push_str(&objects.s);
     s.push_str("  0\r\nENDSEC\r\n");
     s.push_str("  0\r\nEOF\r\n");
     Ok(s)
@@ -704,14 +724,15 @@ fn write_curve(
             }
             // Ein negativer Radius liegt auf der Gegenseite des Mittelpunkts.
             let (radius, shift) = if *r < 0.0 { (-*r, PI) } else { (*r, 0.0) };
-            if span >= TAU - 1e-12 {
+            let a0 = wrap(s0 + shift);
+            let (start, end) = (degrees(a0)?, degrees(a0 + span)?);
+            // Fast voller Bogen, dessen Winkel nach dem Runden zusammenfallen: voller Kreis.
+            if span >= TAU - 1e-12 || (start == end && span > PI) {
                 o.entity_head("CIRCLE", hs.next(), owner, layer);
                 o.text(100, "AcDbCircle");
                 o.point(10, *c)?;
                 return o.num(40, radius);
             }
-            let a0 = wrap(s0 + shift);
-            let (start, end) = (degrees(a0)?, degrees(a0 + span)?);
             if start == end {
                 // Öffnung unter der Auflösung der Datei: nichts zu zeichnen.
                 return Ok(());
@@ -766,13 +787,13 @@ fn write_curve(
             if span <= 0.0 {
                 return Ok(());
             }
-            let (p0, p1) = if span >= TAU - 1e-12 {
+            let (a, b) = (radians(s0)?, radians(s0 + span)?);
+            // Fast voller Umlauf, dessen Parameter nach dem Runden zusammenfallen: ganze Ellipse.
+            let (p0, p1) = if span >= TAU - 1e-12 || (a == b && span > PI) {
                 ("0".to_string(), num(TAU)?)
+            } else if a == b {
+                return Ok(());
             } else {
-                let (a, b) = (radians(s0)?, radians(s0 + span)?);
-                if a == b {
-                    return Ok(());
-                }
                 (a, b)
             };
             o.entity_head("ELLIPSE", hs.next(), owner, layer);

@@ -4,7 +4,7 @@
 //! `\r\n`, nur ASCII), prüft jede Zahl nach der Art ihres Gruppencodes, zerlegt sie in Abschnitte,
 //! Tabellen, Blöcke und Objekte und prüft dann den Aufbau einer R2000-Datei (`validate`):
 //!
-//! * Abschnitte `HEADER, TABLES, BLOCKS, ENTITIES`, danach `EOF` und nichts mehr;
+//! * Abschnitte `HEADER, CLASSES, TABLES, BLOCKS, ENTITIES, OBJECTS`, danach `EOF` und nichts mehr;
 //! * Tabellen in der Reihenfolge `VPORT, LTYPE, LAYER, STYLE, VIEW, UCS, APPID, DIMSTYLE,
 //!   BLOCK_RECORD`, Zähler stimmt, jeder Eintrag mit Handle (bei `DIMSTYLE` Gruppe 105), Besitzer
 //!   (330 = Tabelle) und Untertyp-Markierungen (100);
@@ -202,6 +202,7 @@ pub struct Dxf {
     pub tables: Vec<Table>,
     pub blocks: Vec<Block>,
     pub entities: Vec<ReadEntity>,
+    pub objects: Vec<ReadEntity>,
 }
 
 struct Cur {
@@ -296,6 +297,7 @@ pub fn parse(text: &str) -> Result<Dxf, String> {
         tables: Vec::new(),
         blocks: Vec::new(),
         entities: Vec::new(),
+        objects: Vec::new(),
     };
     loop {
         let g = c.next()?;
@@ -425,6 +427,18 @@ pub fn parse(text: &str) -> Result<Dxf, String> {
                 let gs = c.until_zero();
                 d.entities.push(entity_from(e.value, gs));
             },
+            "CLASSES" => c.expect(0, "ENDSEC")?,
+            "OBJECTS" => loop {
+                let e = c.next()?;
+                if e.code == 0 && e.value == "ENDSEC" {
+                    break;
+                }
+                if e.code != 0 {
+                    return Err("Objekt erwartet".into());
+                }
+                let gs = c.until_zero();
+                d.objects.push(entity_from(e.value, gs));
+            },
             other => return Err(format!("unbekannter Abschnitt {other}")),
         }
     }
@@ -538,6 +552,7 @@ impl Dxf {
             v.push(b.end.handle.clone());
         }
         v.extend(self.entities.iter().map(|e| e.handle.clone()));
+        v.extend(self.objects.iter().map(|e| e.handle.clone()));
         v
     }
 }
@@ -548,7 +563,11 @@ fn hex(s: &str) -> u64 {
 
 /// Prüft den Aufbau der Datei (siehe Kopf der Datei). Der erste Fehler als Text.
 pub fn validate(d: &Dxf) -> Result<(), String> {
-    if d.sections != ["HEADER", "TABLES", "BLOCKS", "ENTITIES"] {
+    if d.sections
+        != [
+            "HEADER", "CLASSES", "TABLES", "BLOCKS", "ENTITIES", "OBJECTS",
+        ]
+    {
         return Err(format!("Abschnittsfolge {:?}", d.sections));
     }
     // Kopf.
@@ -765,6 +784,35 @@ pub fn validate(d: &Dxf) -> Result<(), String> {
             ));
         }
     }
+    // OBJECTS: erstes Objekt ist das Wurzelverzeichnis (Besitzer 0) mit ACAD_GROUP.
+    let root = d.objects.first().ok_or("OBJECTS leer")?;
+    if root.kind != "DICTIONARY" || root.owner != "0" {
+        return Err(format!(
+            "Wurzelverzeichnis: {} Besitzer {:?}",
+            root.kind, root.owner
+        ));
+    }
+    let gi = root
+        .groups
+        .iter()
+        .position(|g| g.code == 3 && g.value == "ACAD_GROUP")
+        .ok_or("ACAD_GROUP fehlt")?;
+    let target = match root.groups.get(gi + 1) {
+        Some(g) if g.code == 350 => g.value.clone(),
+        _ => return Err("ACAD_GROUP ohne 350".into()),
+    };
+    for (i, o) in d.objects.iter().enumerate() {
+        add(&o.handle, "Objekt in OBJECTS")?;
+        if o.kind != "DICTIONARY" || markers(&o.groups) != ["AcDbDictionary"] {
+            return Err(format!("OBJECTS: Objekt {} {:?}", i, o.kind));
+        }
+        if i > 0 && o.owner != root.handle {
+            return Err(format!("OBJECTS: Besitzer {} statt Wurzel", o.owner));
+        }
+    }
+    if !d.objects.iter().any(|o| o.handle == target) {
+        return Err("ACAD_GROUP zeigt auf kein Verzeichnis".into());
+    }
     // Handleschranke.
     let max = handle_set.iter().map(|h| hex(h)).max().unwrap_or(0);
     let seed_v = hex(&seed[0].value);
@@ -788,11 +836,11 @@ pub fn validate(d: &Dxf) -> Result<(), String> {
             all_groups.extend(e.groups.iter());
         }
     }
-    for e in &d.entities {
+    for e in d.entities.iter().chain(&d.objects) {
         all_groups.extend(e.groups.iter());
     }
     for g in all_groups {
-        if matches!(g.code, 330 | 340 | 360 | 390)
+        if matches!(g.code, 330 | 340 | 350 | 360 | 390)
             && g.value != "0"
             && !handle_set.contains(&g.value)
         {
