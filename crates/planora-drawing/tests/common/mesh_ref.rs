@@ -248,14 +248,6 @@ impl RefScene {
         out
     }
 
-    /// Alle Treffer (Abstand, Dreieck) eines Strahls, ohne Abstandsgrenze (Fehlersuche).
-    pub fn all_hits(&self, o: DVec3, d: DVec3) -> Vec<(f64, [DVec3; 3])> {
-        self.tris
-            .iter()
-            .filter_map(|t| ray_triangle(o, d, t).map(|s| (s, *t)))
-            .collect()
-    }
-
     /// Eigene Kippabstimmung am Punkt `p`: 8 Strahlen zum Auge, je um `TILT_REF` in
     /// 45°-Schritten gekippt; ein freier Strahl → sichtbar, sonst mindestens ein verdeckter →
     /// verdeckt, sonst (alle unsicher) unentschieden.

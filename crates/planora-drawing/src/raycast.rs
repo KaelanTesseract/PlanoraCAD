@@ -146,18 +146,43 @@ pub(crate) struct Region {
     polys: Vec<Vec<DVec2>>,
     /// Je Randstück (in der Reihenfolge `loops.iter().flatten()`) seine Art.
     segs: Vec<SegInfo>,
+    /// Hüllbox je Randstück (gleiche Reihenfolge) und je Randpolygon (im Parameterraum): Bei
+    /// Flächen mit vielen Löchern prüft die Einordnung nur Randstücke und Polygone in der Nähe.
+    seg_boxes: Vec<(DVec3, DVec3)>,
+    poly_boxes: Vec<(DVec2, DVec2)>,
+    /// Größte Bandbreite aller Randstücke (mindestens die Einordnungstoleranz): Randstücke, deren
+    /// Hüllbox weiter entfernt liegt, können weder Rand noch nächster Randpunkt im Band sein.
+    reach: f64,
 }
 
 impl Region {
     /// Bereitet die Fläche vor; `tol` ist die Einordnungstoleranz (Randbänder).
     pub(crate) fn new(geom: FaceGeom, tol: f64) -> Region {
-        let polys = geom
+        let polys: Vec<Vec<DVec2>> = geom
             .loops
             .iter()
             .map(|lp| points_to_uv(&geom.surface, geom.same_sense, &loop_points(lp)))
             .collect();
         let segs = seg_infos(&geom, tol);
-        Region { geom, polys, segs }
+        let seg_boxes = geom.loops.iter().flatten().map(seg_bbox).collect();
+        let poly_boxes = polys
+            .iter()
+            .map(|poly| {
+                poly.iter().fold(
+                    (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+                    |(lo, hi), q| (lo.min(*q), hi.max(*q)),
+                )
+            })
+            .collect();
+        let reach = segs.iter().map(|s| s.band).fold(tol, f64::max);
+        Region {
+            geom,
+            polys,
+            segs,
+            seg_boxes,
+            poly_boxes,
+            reach,
+        }
     }
 }
 
@@ -487,7 +512,20 @@ impl Region {
         // Nächster Punkt auf einem Randstück, das keine Naht ist: (Abstand, Stück, Bruchteil).
         let mut nearest: Option<(f64, &Seg, SegInfo, f64)> = None;
         let mut in_band = false;
-        for (s, info) in self.geom.loops.iter().flatten().zip(&self.segs) {
+        let reach = self.reach.max(tol);
+        for ((s, info), (lo, hi)) in self
+            .geom
+            .loops
+            .iter()
+            .flatten()
+            .zip(&self.segs)
+            .zip(&self.seg_boxes)
+        {
+            // Hüllbox weiter als jedes Band entfernt: weder Rand noch nächster Randpunkt im Band
+            // (NaN-Boxen werden nicht übersprungen).
+            if p.clamp(*lo, *hi).distance(p) > reach {
+                continue;
+            }
             let (fr, dist) = s.closest(p);
             if dist <= tol {
                 return Some(HitClass::Boundary);
@@ -510,10 +548,15 @@ impl Region {
         let us = shifts(self.geom.surface.u_period());
         let vs = shifts(self.geom.surface.v_period());
         let mut total = 0;
-        for poly in &self.polys {
+        for (poly, (lo, hi)) in self.polys.iter().zip(&self.poly_boxes) {
             for du in &us {
                 for dv in &vs {
-                    total += winding(poly, DVec2::new(u + du, v + dv));
+                    let q = DVec2::new(u + du, v + dv);
+                    // Außerhalb der Hüllbox des Polygons ist seine Windungszahl null.
+                    if q.cmplt(*lo).any() || q.cmpgt(*hi).any() {
+                        continue;
+                    }
+                    total += winding(poly, q);
                 }
             }
         }

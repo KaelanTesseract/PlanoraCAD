@@ -103,3 +103,47 @@ fn side_on_circles_are_split_once_at_their_turnaround_points() {
         }
     }
 }
+
+#[test]
+fn plate_with_a_thousand_holes_from_the_top_is_cheap() {
+    // Aufgabe 3, (4): Ober- und Unterkante jeder Bohrung fallen von oben zusammen. Früher kostete
+    // jedes solche Kreispaar ~12 000 Zerlegungsschritte; jetzt erkennt `isect` die gleiche
+    // Bildellipse vorab. Gemessen wird der Paarzähler der Teilstellensuche.
+    use planora_drawing::stroke::*;
+    use planora_drawing::{basis::Basis, isect::split_params_counted, limits::*, silhouette::*};
+    let t = Instant::now();
+    let s = plate_with_holes(40, 25, 2.0, 0.5, 3.0);
+    eprintln!("Platte gebaut in {:?}", t.elapsed());
+    let b = vec![DrawBody {
+        name: "P".into(),
+        solid: &s,
+    }];
+    let basis = Basis::of(ViewKind::Top);
+    let e = extent_of(&b);
+    let mut st = edge_strokes(&b, &basis, e).unwrap();
+    st.extend(silhouette_strokes(&b, &basis, e, &Progress::new()).unwrap());
+    st.retain(|x| !x.is_degenerate_2d(&basis, 16.0 * geom_tol(e)));
+    let circles = st
+        .iter()
+        .filter(|x| matches!(x.curve, planora_kernel::Curve::Circle { .. }))
+        .count();
+    assert_eq!(circles, 2000);
+    let pairs = std::cell::Cell::new(0);
+    let t = Instant::now();
+    split_params_counted(&st, &basis, e, &pairs, &Progress::new()).unwrap();
+    eprintln!(
+        "{} Striche, {} Paartests ({:.3} % von MAX_PAIR_TESTS) in {:?}",
+        st.len(),
+        pairs.get(),
+        100.0 * pairs.get() as f64 / MAX_PAIR_TESTS as f64,
+        t.elapsed()
+    );
+    assert!(pairs.get() * 100 < MAX_PAIR_TESTS, "{}", pairs.get());
+    let t = Instant::now();
+    let v = view(&s, ViewKind::Top);
+    eprintln!("Draufsicht: {} Stücke in {:?}", v.pieces.len(), t.elapsed());
+    // Rechteck 80 × 50 und 1000 Kreise, je einmal sichtbar (eigene Längenmessung).
+    let want = 2.0 * (80.0 + 50.0) + 1000.0 * std::f64::consts::TAU * 0.5;
+    let got = piece_length_sum(&v, Visibility::Visible);
+    assert!(got >= want - 1e-6, "{got} gegen {want}");
+}

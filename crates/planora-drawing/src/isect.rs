@@ -292,6 +292,9 @@ pub fn stroke_cross(
 
 fn cross_in(ctx: &Ctx, a: &Ev, b: &Ev) -> Result<Vec<Cross>, DrawError> {
     let roots = match (&a.kind, &b.kind) {
+        // Dieselbe projizierte Ellipse (deckungsgleiche Kreise, etwa Ober- und Unterkante einer
+        // Bohrung von oben): keine Kreuzungen, ohne Zerlegung.
+        (Kind::Conic { .. }, Kind::Conic { .. }) if same_conic(ctx, a, b) => Vec::new(),
         (Kind::Line { .. }, Kind::Line { .. }) => line_line(a, b),
         (Kind::Line { .. }, Kind::Conic { .. }) => line_conic(ctx, a, b),
         (Kind::Conic { .. }, Kind::Line { .. }) => line_conic(ctx, b, a)
@@ -301,6 +304,47 @@ fn cross_in(ctx: &Ctx, a: &Ev, b: &Ev) -> Result<Vec<Cross>, DrawError> {
         _ => generic(ctx, a, b)?,
     };
     Ok(finish(ctx, a, b, roots))
+}
+
+/// Liegen zwei projizierte Kegelschnitte auf derselben Kurve? Die Bildkurve
+/// `c + u cos θ + v sin θ` ist als Punktmenge durch die Mitte `c` und die Formmatrix
+/// `M = u uᵀ + v vᵀ` bestimmt (unabhängig von Anfangswinkel und Umlaufsinn; bei von der Seite
+/// gesehenen Kreisen die Strecke `c ± √λ·w`). Gleich heißt: Mitten höchstens `16·geom_tol`
+/// auseinander, `M` bis auf `2·16·geom_tol·(a₁ + a₂)` (`a`: große Halbachse; so weit ändert eine
+/// Verschiebung der Kurve um `16·geom_tol` die Matrix). Zwei verschiedene Ellipsen derselben
+/// Mitte mit so ähnlicher Form liegen überall höchstens etwa `16·geom_tol` auseinander –
+/// Kreuzungen dazwischen wären ohnehin keine transversalen.
+fn same_conic(ctx: &Ctx, a: &Ev, b: &Ev) -> bool {
+    let (
+        Kind::Conic {
+            c: ca,
+            u: ua,
+            v: va,
+        },
+        Kind::Conic {
+            c: cb,
+            u: ub,
+            v: vb,
+        },
+    ) = (&a.kind, &b.kind)
+    else {
+        return false;
+    };
+    let near = ctx.near();
+    if exceeds(ca.distance(*cb), near) || ca.distance(*cb).is_nan() {
+        return false;
+    }
+    let m = |u: DVec2, v: DVec2| {
+        (
+            u.x * u.x + v.x * v.x,
+            u.x * u.y + v.x * v.y,
+            u.y * u.y + v.y * v.y,
+        )
+    };
+    let (ma, mb) = (m(*ua, *va), m(*ub, *vb));
+    let size = |m: (f64, f64, f64)| (m.0 + m.2).sqrt();
+    let lim = 2.0 * near * (size(ma) + size(mb));
+    (ma.0 - mb.0).abs() <= lim && (ma.1 - mb.1).abs() <= lim && (ma.2 - mb.2).abs() <= lim
 }
 
 /// Gerade–Gerade geschlossen. Parallel (auch kollinear) und entartet: keine Wurzel.
@@ -327,15 +371,24 @@ fn in_range(s: &Stroke, t: f64) -> Option<f64> {
     (t >= lo - e && t <= hi + e).then(|| t.clamp(lo, hi))
 }
 
-/// Alle Darstellungen `θ + k·2π` im Bereich des Strichs (± Spielraum), auf ihn begrenzt.
+/// Höchstzahl der Umläufe, die [`periodic_in_range`] meldet (Kanten des Kernels laufen höchstens
+/// einmal herum; ein absurder Parameterbereich darf die Schleife nicht ins Unendliche treiben).
+const MAX_LAPS: usize = 8;
+
+/// Alle Darstellungen `θ + k·2π` im Bereich des Strichs (± Spielraum), auf ihn begrenzt;
+/// höchstens `MAX_LAPS` (die ersten).
 fn periodic_in_range(s: &Stroke, theta: f64) -> Vec<f64> {
     let (lo, hi) = range(s);
     let e = slack(s);
     let p = std::f64::consts::TAU;
-    let k0 = ((lo - e - theta) / p).ceil() as i64;
-    let k1 = ((hi + e - theta) / p).floor() as i64;
-    (k0..=k1)
-        .map(|k| (theta + k as f64 * p).clamp(lo, hi))
+    let k0 = ((lo - e - theta) / p).ceil();
+    let k1 = ((hi + e - theta) / p).floor();
+    if !(k0.is_finite() && k1.is_finite()) || k1 < k0 {
+        return Vec::new();
+    }
+    let laps = (k1 - k0 + 1.0).min(MAX_LAPS as f64) as usize;
+    (0..laps)
+        .map(|i| (theta + (k0 + i as f64) * p).clamp(lo, hi))
         .collect()
 }
 
@@ -819,6 +872,19 @@ pub fn split_params(
     extent: f64,
     progress: &Progress,
 ) -> Result<Vec<Vec<f64>>, DrawError> {
+    split_params_counted(strokes, basis, extent, &Cell::new(0), progress)
+}
+
+/// Wie [`split_params`], mit einem gemeinsamen Paarzähler `pairs` (Strichpaare und
+/// Zerlegungsschritte; `compute_view` zählt darin auch die Durchstoßpaare mit, siehe
+/// `raycast::Scene::pierce_params`). Über `MAX_PAIR_TESTS` → `TooComplex`.
+pub fn split_params_counted(
+    strokes: &[Stroke],
+    basis: &Basis,
+    extent: f64,
+    pairs: &Cell<u64>,
+    progress: &Progress,
+) -> Result<Vec<Vec<f64>>, DrawError> {
     let n = strokes.len();
     if n as u64 > MAX_STROKES {
         return Err(DrawError::TooComplex(n as u64));
@@ -832,12 +898,11 @@ pub fn split_params(
     }
     // Bezugspunkt: Anfang des ersten Strichs (alle Striche liegen innerhalb der Ausdehnung).
     let r = strokes.first().map_or(DVec3::ZERO, |s| s.point(s.t0));
-    let pairs = Cell::new(0);
     let ctx = Ctx {
         basis,
         shift: basis.project(r),
         tol: geom_tol(extent),
-        pairs: &pairs,
+        pairs,
         progress: Some(progress),
     };
     let mut evs = Vec::with_capacity(n);
@@ -1002,11 +1067,97 @@ mod tests {
             t1: std::f64::consts::TAU,
             origin: crate::stroke::StrokeOrigin::Edge { body: 0, edge: 1 },
         };
+        // Ein zweiter, versetzter Kreis (zwei Kreuzungen): Zerlegung.
+        let other = Stroke {
+            curve: Curve::Circle {
+                frame: planora_math::Frame {
+                    origin: DVec3::new(3.0, 0.0, 1.0),
+                    x: DVec3::X,
+                    y: DVec3::Z,
+                    z: -DVec3::Y,
+                },
+                radius: 4.0,
+            },
+            ..circ.clone()
+        };
         let ev = |s| Ev::new(s, &basis, DVec3::ZERO).unwrap();
-        let err = cross_in(&ctx, &ev(&circ), &ev(&circ)).unwrap_err();
+        let err = cross_in(&ctx, &ev(&circ), &ev(&other)).unwrap_err();
         assert!(matches!(err, DrawError::TooComplex(n) if n == MAX_PAIR_TESTS + 1));
-        // Schnellfälle zählen keine Zerlegung.
+        // Schnellfälle zählen keine Zerlegung: Gerade–Kreis und deckungsgleiche Kreise.
+        pairs.set(MAX_PAIR_TESTS);
         assert!(cross_in(&ctx, &ev(&a), &ev(&circ)).is_ok());
+        assert!(cross_in(&ctx, &ev(&circ), &ev(&circ)).unwrap().is_empty());
+        assert_eq!(pairs.get(), MAX_PAIR_TESTS);
+    }
+
+    #[test]
+    fn coincident_conics_are_recognised_by_their_image() {
+        // Dieselbe Bildellipse mit anderem Anfangswinkel, anderem Umlaufsinn und in anderer
+        // Tiefe: deckungsgleich. Eine um 1e-6 größere oder verschobene nicht.
+        let basis = Basis::of(ViewKind::Top);
+        let pairs = Cell::new(0);
+        let ctx = Ctx {
+            basis: &basis,
+            shift: DVec2::ZERO,
+            tol: geom_tol(20.0),
+            pairs: &pairs,
+            progress: None,
+        };
+        let circ = |z: f64, a: f64, flip: bool, r: f64, dx: f64| {
+            let x = DVec3::new(a.cos(), a.sin(), 0.0);
+            let y = DVec3::new(-a.sin(), a.cos(), 0.0) * if flip { -1.0 } else { 1.0 };
+            Stroke {
+                curve: Curve::Circle {
+                    frame: planora_math::Frame {
+                        origin: DVec3::new(dx, 0.0, z),
+                        x,
+                        y,
+                        z: x.cross(y),
+                    },
+                    radius: r,
+                },
+                t0: 0.0,
+                t1: std::f64::consts::TAU,
+                origin: crate::stroke::StrokeOrigin::Edge { body: 0, edge: 0 },
+            }
+        };
+        let same = |a: &Stroke, b: &Stroke| {
+            same_conic(
+                &ctx,
+                &Ev::new(a, &basis, DVec3::ZERO).unwrap(),
+                &Ev::new(b, &basis, DVec3::ZERO).unwrap(),
+            )
+        };
+        let base = circ(0.0, 0.0, false, 5.0, 0.0);
+        assert!(same(&base, &circ(7.0, 1.3, true, 5.0, 0.0)));
+        assert!(!same(&base, &circ(7.0, 1.3, true, 5.000001, 0.0)));
+        assert!(!same(&base, &circ(0.0, 0.0, false, 5.0, 1e-6)));
+        assert_eq!(pairs.get(), 0);
+    }
+
+    #[test]
+    fn absurd_conic_parameter_ranges_are_capped() {
+        // Ein Kreis über 1e15 rad: Die Wurzeldarstellungen θ + k·2π dürfen die Schleife nicht
+        // über ~1e14 Umläufe treiben; gemeldet werden höchstens MAX_LAPS je Wurzel.
+        let basis = Basis::of(ViewKind::Top);
+        let s = Stroke {
+            curve: Curve::Circle {
+                frame: planora_math::Frame::WORLD,
+                radius: 5.0,
+            },
+            t0: 0.0,
+            t1: 1e15,
+            origin: crate::stroke::StrokeOrigin::Edge { body: 0, edge: 0 },
+        };
+        assert_eq!(periodic_in_range(&s, 0.5).len(), MAX_LAPS);
+        let l = line(DVec3::new(-10.0, 0.0, 0.0), DVec3::X, 1);
+        let c = stroke_cross(&l, &s, &basis, 20.0).unwrap();
+        assert!(c.len() <= 2 * MAX_LAPS, "{}", c.len());
+        let nan = Stroke {
+            t1: f64::INFINITY,
+            ..s.clone()
+        };
+        assert!(periodic_in_range(&nan, 0.5).is_empty());
     }
 
     #[test]

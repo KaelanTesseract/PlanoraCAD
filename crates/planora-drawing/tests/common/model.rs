@@ -1358,3 +1358,25 @@ pub fn brute_force_cross_count(a: &Stroke, b: &Stroke, basis: &Basis, n: usize) 
     }
     count
 }
+
+/// Platte `[0, nx·pitch] × [0, ny·pitch] × [0, h]` mit `nx × ny` durchgehenden Rundlöchern
+/// (Radius `r`, Achse Z) in den Mitten eines Rasters der Weite `pitch`.
+pub fn plate_with_holes(nx: usize, ny: usize, pitch: f64, r: f64, h: f64) -> Solid {
+    let mut holes = Vec::with_capacity(nx * ny);
+    for i in 0..nx {
+        for j in 0..ny {
+            let c = DVec2::new((i as f64 + 0.5) * pitch, (j as f64 + 0.5) * pitch);
+            holes.push(ProfileLoop::circle(c, r));
+        }
+    }
+    let profile = Profile {
+        outer: ProfileLoop::rectangle(
+            DVec2::ZERO,
+            DVec2::new(nx as f64 * pitch, ny as f64 * pitch),
+        ),
+        holes,
+    }
+    .try_oriented()
+    .unwrap();
+    extrude(&profile, &Frame::WORLD, h, &tol()).unwrap()
+}

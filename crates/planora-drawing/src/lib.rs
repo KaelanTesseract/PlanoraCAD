@@ -111,13 +111,14 @@ pub fn compute_view(
     if strokes.len() as u64 > MAX_STROKES {
         return Err(DrawError::TooComplex(strokes.len() as u64));
     }
-    let mut splits = isect::split_params(&strokes, &basis, extent, progress)?;
+    // Ein Paarzähler für Strichpaare und Durchstoßpaare (gemeinsame Grenze MAX_PAIR_TESTS).
+    let pairs = Cell::new(0);
+    let mut splits = isect::split_params_counted(&strokes, &basis, extent, &pairs, progress)?;
 
     // Durchstoßpunkte mit Flächen anderer Körper: Dort wechselt die Sichtbarkeit, ohne dass sich
     // im Bild Striche kreuzen (Körper, die ineinander stecken).
     let scene = raycast::Scene::new(bodies, extent, progress)?;
     if bodies.len() > 1 {
-        let pairs = Cell::new(0);
         for (s, ts) in strokes.iter().zip(splits.iter_mut()) {
             let extra = scene.pierce_params(s, origin_body(s), &pairs, progress)?;
             if !extra.is_empty() {
