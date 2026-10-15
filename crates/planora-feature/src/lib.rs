@@ -14,7 +14,9 @@ pub mod refs;
 mod snapshot;
 
 pub use compute::MAX_COORD_MM;
-pub use dimensions::{MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_FIT_CHARS, MAX_TOL_MM};
+pub use dimensions::{
+    MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_FIT_CHARS, MAX_HINT_MM, MAX_ROLE_CHARS, MAX_TOL_MM,
+};
 pub use drawings::{MAX_DRAWINGS, MAX_NAME_CHARS, MAX_POS_MM, MAX_VIEWS, validate_drawing};
 pub use error::FeatureError;
 pub use georef::{

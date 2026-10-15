@@ -15,8 +15,9 @@ use planora_drawing::{
 use planora_exchange::{ExchangeMesh, MAX_FILE_BYTES};
 use planora_feature::{
     BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM,
-    MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS, MAX_POS_MM, MAX_TOL_MM,
-    MAX_VIEWS, MeshId, SketchFeature, SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
+    MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS, MAX_POS_MM, MAX_ROLE_CHARS,
+    MAX_TOL_MM, MAX_VIEWS, MeshId, SketchFeature, SketchPlane, Snapshot, SnapshotFeature,
+    StandardPlane,
 };
 use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
@@ -866,9 +867,6 @@ const DIM_KINDS: [(DimKind, &str); 6] = [
 const END_SELS: [(EndSel, &str); 2] = [(EndSel::Start, "anfang"), (EndSel::End, "ende")];
 const CHAIN_MODES: [(ChainMode, &str); 2] =
     [(ChainMode::Chain, "kette"), (ChainMode::Baseline, "bezug")];
-/// Längste Rolle einer Flächenmarke in einem Maßbezug (die Rollen des Programms sind kurz,
-/// z. B. „Loch 3, Wand 12“).
-pub const MAX_ROLE_CHARS: usize = 64;
 
 fn tag_to(t: &TagData) -> FaceRefDto {
     FaceRefDto {
@@ -955,13 +953,15 @@ fn dimension_to(m: &DimSpec) -> Result<MassDto> {
     })
 }
 
+/// Hinweispunkt eines Maßbezugs: dieselbe Regel wie bei den übrigen Verweisen ([`num`]:
+/// endlich, Betrag höchstens `2·MAX_COORD_MM` = `MAX_HINT_MM`), denn es ist ein Modellpunkt,
+/// kein Blattwert.
 fn hint_from(origin: &str, what: &str, v: V3) -> Result<DVec3> {
-    let p = |x: f64| pos(origin, &format!("{what} Hinweispunkt"), x);
-    Ok(DVec3::new(p(v[0])?, p(v[1])?, p(v[2])?))
+    dv3(origin, &format!("{what} Hinweispunkt"), v)
 }
 
 /// Liest eine Flächenmarke eines Maßbezugs: Rolle höchstens [`MAX_ROLE_CHARS`] Zeichen,
-/// Hinweispunkt endlich und im Betrag höchstens `MAX_POS_MM`.
+/// Hinweispunkt wie in [`hint_from`].
 fn tag_from(origin: &str, what: &str, d: &FaceRefDto) -> Result<TagData> {
     if d.rolle.chars().count() > MAX_ROLE_CHARS {
         return Err(ProjectError::corrupt(
@@ -1196,7 +1196,8 @@ fn drawing_to(d: &Drawing, with_marks: bool) -> Result<ZeichnungDto> {
         } else {
             Vec::new()
         },
-        // Bis Format 4 fehlt der Zähler, damit diese Dateien unverändert bleiben.
+        // Bis Format 4 fehlt der Zähler, damit diese Dateien unverändert bleiben; ohne Maße und
+        // Mittellinien geht er beim Speichern verloren (Kennungen beginnen dann wieder bei 1).
         naechstes_mass: if with_marks { d.next_dim } else { 0 },
     })
 }

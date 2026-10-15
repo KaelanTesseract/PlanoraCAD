@@ -318,7 +318,7 @@ fn positions_roundtrip_bit_exact() {
 // ---- (b) Formatnummer --------------------------------------------------------------------
 
 #[test]
-fn format_is_4_only_with_drawings() {
+fn format_4_with_drawings_and_5_with_centerlines() {
     // Seit Teilprojekt 12 ist Format 5 gültig; Ansichten mit Mittellinien brauchen es.
     assert_eq!(FORMAT_VERSION, 5);
     let plain = box_document();

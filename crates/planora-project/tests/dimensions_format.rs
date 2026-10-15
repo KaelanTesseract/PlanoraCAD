@@ -580,7 +580,8 @@ fn hostile_dimension_files() {
             "Hinweispunkt: Zahl ungültig oder zu groß",
         ),
         (raw(hinweis, "1e999"), ""),
-        (raw(marke, "-100000.5"), "Hinweispunkt"),
+        (raw(marke, "-2000000000.000001"), "Hinweispunkt"),
+        (raw(hinweis, "2.000001e9"), "Hinweispunkt"),
         (raw(flaeche, "1e300"), "Hinweispunkt"),
         (
             raw(toleranz, "1e300"),
@@ -752,7 +753,9 @@ fn hostile_dimension_files() {
         dim(v, 0)["text"] = json!("Ø".repeat(200));
         dim(v, 0)["bezuege"][0]["b"]["rolle"] = json!("ä".repeat(64));
         dim(v, 0)["abstand"] = json!(-100000.0);
-        dim(v, 0)["bezuege"][0]["hinweis"][1] = json!(100000.0);
+        // Hinweispunkte sind Modellpunkte: bis 2·MAX_COORD_MM, nicht nur bis MAX_POS_MM.
+        dim(v, 0)["bezuege"][0]["hinweis"][1] = json!(-2.0e9);
+        dim(v, 0)["bezuege"][0]["a"]["hinweis"][0] = json!(1.0e9);
         dim(v, 0)["stellen"] = json!(3);
         dim(v, 1)["toleranz"]["wert"] = json!(1000.0);
     });
@@ -878,6 +881,48 @@ fn autosave_and_version_store_keep_dimensions() {
     let _ = std::fs::remove_dir_all(&p);
     let back = Document::from_snapshot(auto.snapshot, 0.05).unwrap();
     assert_eq!(back.drawing(z).unwrap().next_dim, 10);
+}
+
+// ---- Hinweispunkte weit draußen -----------------------------------------------------------
+
+/// Alles, was das Dokument annimmt, lässt sich speichern und wieder laden: Hinweispunkte bis
+/// `MAX_HINT_MM` (2·MAX_COORD_MM); darüber lehnen Dokument und Leser gleichermaßen ab.
+#[test]
+fn far_hints_save_and_load_and_beyond_the_limit_are_refused_everywhere() {
+    assert_eq!(MAX_HINT_MM, 2.0 * MAX_COORD_MM);
+    let face = |h: f64| {
+        spec(
+            1,
+            DimKind::Diameter,
+            vec![GeoRef::Face(GeoRefData::Face(tag(
+                1,
+                "Mantel",
+                [h, -h, 0.5],
+            )))],
+        )
+    };
+    let (mut d, z) = fixture_document();
+    d.add_dimension(z, face(1.0e9)).unwrap();
+    d.add_dimension(z, face(MAX_HINT_MM)).unwrap();
+    let text = encode_version(&d.snapshot()).unwrap();
+    let doc = load(&text).unwrap();
+    assert_eq!(doc.drawings(), d.drawings());
+    for h in [2.000001e9, 1.0e300, f64::INFINITY] {
+        let before = d.drawing(z).unwrap().clone();
+        let e = d.add_dimension(z, face(h)).unwrap_err();
+        assert!(e.to_string().contains("Bezug"), "{e}");
+        assert_eq!(d.drawing(z).unwrap(), &before);
+    }
+    // Zu lange Rolle: ebenfalls schon beim Anlegen abgelehnt.
+    let mut long = face(0.0);
+    long.refs = vec![GeoRef::Face(GeoRefData::Face(tag(
+        1,
+        &"r".repeat(65),
+        [0.0; 3],
+    )))];
+    let e = d.add_dimension(z, long).unwrap_err();
+    assert!(e.to_string().contains("Rolle"), "{e}");
+    assert_eq!(MAX_ROLE_CHARS, 64);
 }
 
 // ---- (i) Zahlen bitgenau -----------------------------------------------------------------

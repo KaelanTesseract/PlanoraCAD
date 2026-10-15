@@ -1,19 +1,21 @@
 //! Maße einer Zeichnung im Dokument: Hinzufügen, Ändern, Löschen, Prüfen und Auflösen gegen
 //! die exakten Körper.
 
+use crate::compute::MAX_COORD_MM;
 use crate::drawings::MAX_POS_MM;
 use crate::error::FeatureError;
 use crate::georef::resolve_geo;
 use crate::model::Document;
 use planora_drawing::annotate::ResolvedDims;
 use planora_drawing::dimension::{
-    DimId, DimKind, DimSpec, Geo3, GeoRef, GeoRefData, Tolerance as DimTolerance, ref_count,
+    ChainMode, DimId, DimKind, DimSpec, Geo3, GeoRef, GeoRefData, TagData,
+    Tolerance as DimTolerance, ref_count,
 };
 use planora_drawing::limits::MAX_DIMENSIONS;
 use planora_drawing::stroke::extent_of;
 use planora_drawing::{Basis, DrawBody, Drawing, DrawingId, ViewId, ViewKind, measure};
 use planora_kernel::Solid;
-use planora_math::Tolerance;
+use planora_math::{DVec3, Tolerance};
 use std::collections::{HashMap, HashSet};
 
 /// Höchstzahl der Nachkommastellen eines Maßes.
@@ -24,19 +26,24 @@ pub const MAX_DIM_TEXT_CHARS: usize = 200;
 pub const MAX_FIT_CHARS: usize = 50;
 /// Größter Betrag eines Toleranzwerts in Millimetern.
 pub const MAX_TOL_MM: f64 = 1000.0;
+/// Längste Rolle einer Flächenmarke in einem Maßbezug (die Rollen des Programms sind kurz,
+/// z. B. „Loch 3, Wand 12“).
+pub const MAX_ROLE_CHARS: usize = 64;
+/// Größter Betrag einer Koordinate eines Hinweispunkts (wie bei den übrigen Verweisen in der
+/// Datei: Ursprung plus Größe am Rand des Rechenbereichs).
+pub const MAX_HINT_MM: f64 = 2.0 * MAX_COORD_MM;
 
 fn bad(m: impl Into<String>) -> FeatureError {
     FeatureError::InvalidInput(m.into())
 }
 
 /// Die Daten des Bezugs passen zu seiner Art (Kantenbezüge mit Kantendaten, Flächenbezüge mit
-/// Flächendaten), und alle Hinweispunkte sind endlich.
+/// Flächendaten), und alle Hinweispunkte sind endlich mit Beträgen höchstens [`MAX_HINT_MM`].
 fn ref_ok(r: &GeoRef) -> bool {
+    let p = |v: DVec3| v.is_finite() && v.abs().max_element() <= MAX_HINT_MM;
     let data_ok = |d: &GeoRefData| match d {
-        GeoRefData::Face(t) => t.hint.is_finite(),
-        GeoRefData::Edge { a, b, hint } => {
-            a.hint.is_finite() && b.hint.is_finite() && hint.is_finite()
-        }
+        GeoRefData::Face(t) => p(t.hint),
+        GeoRefData::Edge { a, b, hint } => p(a.hint) && p(b.hint) && p(*hint),
     };
     match r {
         GeoRef::Edge(d @ GeoRefData::Edge { .. })
@@ -50,6 +57,20 @@ fn ref_ok(r: &GeoRef) -> bool {
     }
 }
 
+/// Alle Flächenmarken des Bezugs haben Rollen mit höchstens [`MAX_ROLE_CHARS`] Zeichen.
+fn roles_ok(r: &GeoRef) -> bool {
+    let short = |t: &TagData| t.role.chars().count() <= MAX_ROLE_CHARS;
+    let data = match r {
+        GeoRef::Edge(d) | GeoRef::EdgeEnd { edge: d, .. } | GeoRef::Center(d) | GeoRef::Face(d) => {
+            d
+        }
+    };
+    match data {
+        GeoRefData::Face(t) => short(t),
+        GeoRefData::Edge { a, b, .. } => short(a) && short(b),
+    }
+}
+
 /// Prüft die Zahlen und Texte eines einzelnen Maßes.
 fn validate_spec(m: &DimSpec) -> Result<(), String> {
     let (lo, hi) = ref_count(m.kind);
@@ -58,6 +79,11 @@ fn validate_spec(m: &DimSpec) -> Result<(), String> {
     }
     if !m.refs.iter().all(ref_ok) {
         return Err("Ein Bezug eines Maßes ist ungültig".into());
+    }
+    if !m.refs.iter().all(roles_ok) {
+        return Err(format!(
+            "Die Rolle einer Fläche ist zu lang (höchstens {MAX_ROLE_CHARS} Zeichen)"
+        ));
     }
     let pos = |x: f64| x.is_finite() && x.abs() <= MAX_POS_MM;
     if !pos(m.offset) {
@@ -108,8 +134,8 @@ fn validate_spec(m: &DimSpec) -> Result<(), String> {
 
 /// Prüft die Maße einer Zeichnung (Teil von [`crate::validate_drawing`]): Kennungen eindeutig,
 /// größer als null und kleiner als der Maßzähler; Ansicht vorhanden und keine Isometrie;
-/// Bezugszahl, Zahlen und Texte (siehe `validate_spec`); Maße einer Gruppe mit gleicher Art
-/// und Ansicht, Reihenfolge in der Gruppe eindeutig; höchstens [`MAX_DIMENSIONS`] Maße.
+/// Bezugszahl, Zahlen und Texte (siehe `validate_spec`); Maße einer Gruppe mit gleicher Art,
+/// Ansicht und Kettenart (Kette oder Bezugsmaße), Reihenfolge in der Gruppe eindeutig; höchstens [`MAX_DIMENSIONS`] Maße.
 pub(crate) fn validate_dimensions(d: &Drawing) -> Result<(), String> {
     if d.next_dim == 0 || d.next_dim == u64::MAX {
         return Err("Der Maßzähler der Zeichnung ist ungültig".into());
@@ -121,7 +147,7 @@ pub(crate) fn validate_dimensions(d: &Drawing) -> Result<(), String> {
     }
     let views: HashMap<ViewId, ViewKind> = d.views.iter().map(|v| (v.id, v.kind)).collect();
     let mut ids = HashSet::with_capacity(d.dimensions.len());
-    let mut groups: HashMap<u64, (DimKind, ViewId)> = HashMap::new();
+    let mut groups: HashMap<u64, (DimKind, ViewId, ChainMode)> = HashMap::new();
     let mut orders: HashSet<(u64, u32)> = HashSet::new();
     for m in &d.dimensions {
         if m.id.0 == 0 || m.id.0 >= d.next_dim {
@@ -139,8 +165,11 @@ pub(crate) fn validate_dimensions(d: &Drawing) -> Result<(), String> {
         }
         validate_spec(m)?;
         if let Some(c) = m.chain {
-            let first = *groups.entry(c.group).or_insert((m.kind, m.view));
-            if first != (m.kind, m.view) {
+            let first = *groups.entry(c.group).or_insert((m.kind, m.view, c.mode));
+            if first.2 != c.mode {
+                return Err("Die Maße einer Kette mischen Kettenmaße und Bezugsmaße".into());
+            }
+            if (first.0, first.1) != (m.kind, m.view) {
                 return Err(
                     "Die Maße einer Kette müssen dieselbe Art haben und in derselben Ansicht liegen"
                         .into(),

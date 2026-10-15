@@ -346,6 +346,74 @@ fn validation_refuses_mixed_groups() {
 }
 
 #[test]
+fn validation_refuses_mixed_chain_modes_in_one_group() {
+    let (mut d, id, front, _) = doc_with_views();
+    let with = |mode: ChainMode, order: u32| {
+        let mut m = horizontal(front);
+        m.chain = Some(ChainSpec {
+            group: 9,
+            mode,
+            order,
+        });
+        m
+    };
+    d.add_dimension(id, with(ChainMode::Chain, 0)).unwrap();
+    refused(&mut d, id, with(ChainMode::Baseline, 1), "mischen");
+    d.add_dimension(id, with(ChainMode::Chain, 1)).unwrap();
+    // Im Snapshot ebenso.
+    let mut dr = drawing_with_dims();
+    for (i, mode) in [ChainMode::Baseline, ChainMode::Chain]
+        .into_iter()
+        .enumerate()
+    {
+        dr.dimensions[i].chain = Some(ChainSpec {
+            group: 1,
+            mode,
+            order: i as u32,
+        });
+    }
+    let m = invalid(Document::from_snapshot(snapshot_with(vec![dr], 2), 0.05));
+    assert!(m.contains("mischen"), "{m}");
+}
+
+#[test]
+fn validation_bounds_hints_and_roles() {
+    let (mut d, id, front, _) = doc_with_views();
+    let with_hint = |h: DVec3, role: &str| {
+        let mut m = horizontal(front);
+        m.refs[0] = GeoRef::Edge(GeoRefData::Edge {
+            a: TagData {
+                origin: 1,
+                role: role.into(),
+                hint: h,
+            },
+            b: tag("b"),
+            hint: DVec3::ZERO,
+        });
+        m
+    };
+    // Hinweispunkte: Modellpunkte bis 2·MAX_COORD_MM.
+    assert_eq!(MAX_HINT_MM, 2.0 * MAX_COORD_MM);
+    for h in [2.000001e9, -1.0e300, f64::INFINITY] {
+        refused(&mut d, id, with_hint(DVec3::new(0.0, h, 0.0), "a"), "Bezug");
+    }
+    d.add_dimension(id, with_hint(DVec3::new(1.0e9, -MAX_HINT_MM, 0.0), "a"))
+        .unwrap();
+    // Rollen höchstens 64 Zeichen (Umlaute zählen als eins).
+    refused(&mut d, id, with_hint(DVec3::ZERO, &"r".repeat(65)), "Rolle");
+    let mut face = spec(
+        front,
+        DimKind::Diameter,
+        vec![GeoRef::Face(GeoRefData::Face(tag(&"x".repeat(65))))],
+    );
+    refused(&mut d, id, face.clone(), "Rolle");
+    face.refs = vec![GeoRef::Face(GeoRefData::Face(tag(&"ä".repeat(64))))];
+    d.add_dimension(id, face).unwrap();
+    d.add_dimension(id, with_hint(DVec3::ZERO, &"ö".repeat(64)))
+        .unwrap();
+}
+
+#[test]
 fn validation_refuses_the_2001st_dimension() {
     let (mut d, id, front, _) = doc_with_views();
     d.update_drawing(id, |dr| {
