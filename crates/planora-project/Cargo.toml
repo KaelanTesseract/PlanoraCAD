@@ -11,6 +11,7 @@ planora-math.workspace = true
 planora-kernel.workspace = true
 planora-sketch.workspace = true
 planora-feature.workspace = true
+planora-drawing.workspace = true
 planora-exchange.workspace = true
 serde.workspace = true
 serde_json.workspace = true

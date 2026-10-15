@@ -1,4 +1,4 @@
-//! Die Typen der Versionsdatei (Format 1). Unabhängig von den internen Strukturen.
+//! Die Typen der Versionsdatei (Format 1 bis 4). Unabhängig von den internen Strukturen.
 //! Absichtlich ohne `deny_unknown_fields`: unbekannte Felder in bekannten Versionen werden
 //! ignoriert.
 
@@ -14,6 +14,117 @@ pub struct VersionFile {
     /// bleibt die Datei Byte für Byte wie in Format 1 und 2.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub netze: Vec<MeshDto>,
+    /// Zeichnungen (ab Format 4, Teilprojekt 11). Fehlt das Feld oder ist die Liste leer,
+    /// bleibt die Datei Byte für Byte wie in Format 1 bis 3. Schon beim Lesen begrenzt, damit
+    /// eine feindliche Datei keine riesige Liste anlegen lässt.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "de_drawings"
+    )]
+    pub zeichnungen: Vec<ZeichnungDto>,
+    /// Nächste Zeichnungskennung; 0 oder fehlend heißt „aus den Kennungen ableiten“.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub naechste_zeichnung: u64,
+}
+
+fn is_zero(x: &u64) -> bool {
+    *x == 0
+}
+
+/// Höchstzahl der Zeichnungen, die beim Lesen überhaupt angenommen wird.
+pub const MAX_FILE_DRAWINGS: usize = planora_feature::MAX_DRAWINGS;
+/// Höchstzahl der Ansichten je Zeichnung, die beim Lesen überhaupt angenommen wird.
+pub const MAX_FILE_VIEWS: usize = planora_feature::MAX_VIEWS;
+
+/// Liest eine Liste, bricht aber ab, sobald sie mehr als `max` Einträge hat (vor dem Anlegen
+/// weiterer Einträge; der Rest der Datei wird nicht mehr gelesen).
+fn de_bounded<'de, D, T>(d: D, max: usize, what: &'static str) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct Bounded<T> {
+        max: usize,
+        what: &'static str,
+        marker: std::marker::PhantomData<T>,
+    }
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Bounded<T> {
+        type Value = Vec<T>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "eine Liste mit höchstens {} Einträgen", self.max)
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
+            let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(self.max));
+            while let Some(x) = seq.next_element()? {
+                if out.len() == self.max {
+                    return Err(serde::de::Error::custom(format!(
+                        "{}: zu viele Einträge (höchstens {})",
+                        self.what, self.max
+                    )));
+                }
+                out.push(x);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_seq(Bounded {
+        max,
+        what,
+        marker: std::marker::PhantomData,
+    })
+}
+
+fn de_drawings<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ZeichnungDto>, D::Error> {
+    de_bounded(d, MAX_FILE_DRAWINGS, "Zeichnungen")
+}
+
+fn de_views<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<AnsichtDto>, D::Error> {
+    de_bounded(d, MAX_FILE_VIEWS, "Ansichten")
+}
+
+/// Eine Zeichnung (ab Format 4).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ZeichnungDto {
+    pub id: u64,
+    pub name: String,
+    pub blatt: BlattDto,
+    /// `"erst"` (Erstwinkel) oder `"dritt"` (Dritter Winkel).
+    pub projektion: String,
+    /// Nächste Ansichtskennung; 0 oder fehlend heißt „aus den Kennungen ableiten“.
+    #[serde(default)]
+    pub naechste_ansicht: u64,
+    #[serde(deserialize_with = "de_views")]
+    pub ansichten: Vec<AnsichtDto>,
+}
+
+/// Blatt: Papier `"A4"` bis `"A0"`, quer oder hoch.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct BlattDto {
+    pub papier: String,
+    pub quer: bool,
+}
+
+/// Eine Ansicht. `art`: `"vorne"`, `"hinten"`, `"links"`, `"rechts"`, `"oben"`, `"unten"`,
+/// `"iso"`; `massstab`: `[Zähler, Nenner]`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AnsichtDto {
+    pub id: u64,
+    pub art: String,
+    pub massstab: [u32; 2],
+    pub lage: LageDto,
+    pub verdeckt_zeigen: bool,
+    pub eltern: Option<u64>,
+}
+
+/// Lage einer Ansicht in mm (eigenes Objekt mit Schlüssel `typ` wie die übrigen Arten).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ")]
+pub enum LageDto {
+    #[serde(rename = "frei")]
+    Frei { x: f64, y: f64 },
+    #[serde(rename = "ausgerichtet")]
+    Ausgerichtet { abstand: f64 },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

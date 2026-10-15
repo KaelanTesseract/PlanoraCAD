@@ -1,0 +1,19 @@
+[package]
+name = "planora-drawing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+planora-math.workspace = true
+planora-kernel.workspace = true
+planora-exchange.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+planora-mesh.workspace = true
+
+[lints]
+workspace = true

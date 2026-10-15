@@ -136,7 +136,7 @@ fn the_smallest_fitting_version_is_written() {
     assert_eq!(required_format(&d.snapshot()), 1);
     let mut m = mesh_document();
     assert_eq!(required_format(&m.snapshot()), 3);
-    assert_eq!(FORMAT_VERSION, 3);
+    assert_eq!(FORMAT_VERSION, 4); // seit Teilprojekt 11 (Zeichnungen, F7)
     // Netz-Körper gelöscht: wieder Format 1, keine Netzdaten mehr
     let ids: Vec<FeatureId> = m
         .features()
@@ -172,8 +172,8 @@ fn old_files_stay_readable_and_old_programs_report_too_new() {
     );
     // Eine noch neuere Datei meldet dieses Programm als „zu neu“.
     assert!(matches!(
-        bad(&good.replacen("\"format\": 3", "\"format\": 4", 1)),
-        ProjectError::TooNew { found: 4, .. }
+        bad(&good.replacen("\"format\": 3", "\"format\": 5", 1)),
+        ProjectError::TooNew { found: 5, .. }
     ));
     // Format 1 oder 2 mit Netz-Körper: beschädigt
     for older in ["\"format\": 1", "\"format\": 2"] {

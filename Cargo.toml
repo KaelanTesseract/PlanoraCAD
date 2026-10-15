@@ -21,6 +21,7 @@ planora-feature = { path = "crates/planora-feature" }
 planora-project = { path = "crates/planora-project" }
 planora-exchange = { path = "crates/planora-exchange" }
 planora-step = { path = "crates/planora-step" }
+planora-drawing = { path = "crates/planora-drawing" }
 
 # externe Crates (Lizenzen am 2026-10-09 geprüft: alle MIT und/oder Apache-2.0, earcutr ISC, spade MIT OR Apache-2.0, egui_tiles MIT OR Apache-2.0, Roboto-Schrift Apache-2.0)
 glam = "0.34"
@@ -41,7 +42,7 @@ winit = "0.30"
 egui_tiles = { version = "0.17", default-features = false }
 # Dateiformat (Teilprojekt 6). Lizenzen: serde und serde_json MIT OR Apache-2.0; Unterpakete siehe cargo deny.
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

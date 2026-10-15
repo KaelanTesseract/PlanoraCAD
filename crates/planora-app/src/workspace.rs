@@ -4,6 +4,7 @@
 use crate::blend_dialog::BlendDialog;
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
+use crate::drawing_dialog::NewDrawingDialog;
 use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
 use crate::import_dialog::ImportDialog;
@@ -31,6 +32,8 @@ pub struct DocTab {
     pub blend_dialog: Option<BlendDialog>,
     pub export_dialog: Option<ExportDialog>,
     pub import_dialog: Option<ImportDialog>,
+    /// Fenster „Neue Zeichnung“.
+    pub drawing_dialog: Option<NewDrawingDialog>,
     /// Anzeigename ohne `.pcad`, bzw. „Unbenannt n“.
     pub name: String,
     pub path: Option<NodePath>,
@@ -63,6 +66,7 @@ impl DocTab {
             blend_dialog: None,
             export_dialog: None,
             import_dialog: None,
+            drawing_dialog: None,
             name,
             path: None,
             store: None,

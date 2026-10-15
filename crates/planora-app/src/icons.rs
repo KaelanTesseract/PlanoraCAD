@@ -158,3 +158,43 @@ pub fn paint_sketch_icon(painter: &Painter, rect: Rect, color: Color32) {
         stroke,
     );
 }
+
+/// Zeichnungssymbol: ein Blatt mit Innenrahmen und Schriftfeld.
+pub fn paint_drawing_icon(painter: &Painter, rect: Rect, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let thin = Stroke::new(1.0, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.38;
+    let sheet = Rect::from_center_size(c, vec2(r * 1.7, r * 1.3));
+    painter.rect_stroke(sheet, 1.0, stroke, egui::StrokeKind::Middle);
+    let inner = sheet.shrink(r * 0.22);
+    painter.rect_stroke(inner, 0.0, thin, egui::StrokeKind::Middle);
+    let block = Rect::from_min_max(
+        pos2(inner.right() - r * 0.6, inner.bottom() - r * 0.3),
+        inner.right_bottom(),
+    );
+    painter.rect_stroke(block, 0.0, thin, egui::StrokeKind::Middle);
+}
+
+/// Ansichtssymbol: ein kleines Rechteck mit Mittellinien.
+pub fn paint_view_icon(painter: &Painter, rect: Rect, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.3;
+    let frame = Rect::from_center_size(c, vec2(r * 2.0, r * 1.6));
+    painter.rect_stroke(frame, 1.0, stroke, egui::StrokeKind::Middle);
+    painter.line_segment(
+        [
+            pos2(c.x, frame.top() - 2.0),
+            pos2(c.x, frame.bottom() + 2.0),
+        ],
+        Stroke::new(1.0, color),
+    );
+    painter.line_segment(
+        [
+            pos2(frame.left() - 2.0, c.y),
+            pos2(frame.right() + 2.0, c.y),
+        ],
+        Stroke::new(1.0, color),
+    );
+}

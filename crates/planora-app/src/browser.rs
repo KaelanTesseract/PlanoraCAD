@@ -288,12 +288,29 @@ fn status_view(
     }
 }
 
-/// Eine Zeile mit Symbol, Name und optionalem Status rechts; liefert die Antwort für Klicks.
+fn rows_id() -> egui::Id {
+    egui::Id::new("planora-browser-rows")
+}
+
+/// Namen und Rechtecke (volle Zeilenbreite) der im letzten Bild gezeichneten Zeilen: Features,
+/// Körper, Zeichnungen und Ansichten, von oben nach unten.
+#[doc(hidden)]
+pub fn row_rects(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+    ctx.data(|d| d.get_temp(rows_id())).unwrap_or_default()
+}
+
+/// Einrückung der Zeilen unter einem Eintrag.
+pub(crate) const fn body_indent() -> f32 {
+    BODY_INDENT
+}
+
+/// Eine Zeile mit Symbol, Name, optionalem Zusatz hinter dem Namen und optionalem Status
+/// rechts; liefert die Antwort für Klicks.
 #[allow(
     clippy::too_many_arguments,
     reason = "eine Zeile hat so viele Bestandteile"
 )]
-fn row(
+pub(crate) fn row(
     ui: &mut egui::Ui,
     indent: f32,
     status_width: f32,
@@ -301,10 +318,15 @@ fn row(
     name: &str,
     color: Option<Color32>,
     status: Option<(&str, Color32)>,
+    detail: Option<&str>,
     paint_icon: impl FnOnce(&egui::Painter, egui::Rect, Color32),
 ) -> egui::Response {
     let (full, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+    ui.ctx().data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<(String, egui::Rect)>>(rows_id())
+            .push((name.to_string(), full));
+    });
     let rect = egui::Rect::from_min_max(full.min + vec2(indent, 0.0), full.max);
     if selected {
         ui.painter()
@@ -324,13 +346,23 @@ fn row(
             rect.max.y,
         ),
     );
-    ui.painter().with_clip_rect(name_clip).text(
+    let name_rect = ui.painter().with_clip_rect(name_clip).text(
         rect.min + vec2(36.0, ROW_HEIGHT / 2.0),
         egui::Align2::LEFT_CENTER,
         name,
         egui::FontId::proportional(14.0),
         color,
     );
+    // Kleiner, schwacher Zusatz hinter dem Namen (Blatt und Projektion, Maßstab).
+    if let Some(detail) = detail {
+        ui.painter().with_clip_rect(name_clip).text(
+            egui::pos2(name_rect.right() + 8.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            detail,
+            egui::FontId::proportional(SMALL_FONT),
+            ui.visuals().weak_text_color(),
+        );
+    }
     if let Some((text, c)) = status {
         ui.painter().text(
             egui::pos2(rect.max.x - 6.0, rect.center().y),
@@ -373,8 +405,23 @@ fn marker_line(ui: &mut egui::Ui) {
     );
 }
 
-/// Feature-Baum mit Kontextmenü, Fenster „Umbenennen“ und Rückfrage beim Löschen.
+/// Feature-Baum mit Kontextmenü, Fenster „Umbenennen“ und Rückfrage beim Löschen, darunter
+/// der Abschnitt „Zeichnungen“.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
+    show_with(ui, state, false);
+}
+
+/// Wie [`show`]; `read_only` (alte Version) sperrt den Feature-Baum und alle Änderungen an
+/// Zeichnungen, lässt aber das Wählen und Öffnen von Zeichnungen zu.
+pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(rows_id(), Vec::<(String, egui::Rect)>::new()));
+    ui.add_enabled_ui(!read_only, |ui| feature_tree(ui, state));
+    ui.add_space(10.0);
+    crate::drawing_browser::show(ui, state, read_only);
+}
+
+fn feature_tree(ui: &mut egui::Ui, state: &mut AppState) {
     ui.heading("Feature-Baum");
     ui.add_space(4.0);
     let rows: Vec<RowData> = state
@@ -434,6 +481,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             &name,
             color,
             status.zip(color),
+            None,
             |p, rect, c| paint_feature_icon(p, rect, icon, c),
         );
         resp = match reason {
@@ -510,6 +558,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 &body_name,
                 None,
                 None,
+                None,
                 |p, rect, c| paint_body_icon(p, rect, kind, c),
             )
             .on_hover_text("Körper; Klick wählt ihn für die Eigenschaften.");
@@ -534,6 +583,7 @@ fn run(state: &mut AppState, action: Action, open: Option<FeatureId>) {
         // Nur eines ist hervorgehoben: Feature statt Körper bzw. 3D-Auswahl.
         state.selected_feature = Some(id);
         state.selected_body = None;
+        state.drawing_ui.selected_drawing = None;
         state.set_selection(None);
     };
     match action {
@@ -541,6 +591,7 @@ fn run(state: &mut AppState, action: Action, open: Option<FeatureId>) {
         Action::SelectBody(j) => {
             state.set_selection(None);
             state.selected_feature = None;
+            state.drawing_ui.selected_drawing = None;
             state.selected_body = Some(j);
         }
         Action::Edit(id) => {

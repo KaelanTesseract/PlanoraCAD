@@ -1,0 +1,270 @@
+{
+  "format": 2,
+  "marker": 8,
+  "naechste_id": 9,
+  "features": [
+    {
+      "id": 1,
+      "name": "Quader 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "quader",
+        "groesse": [
+          10.0,
+          10.0,
+          10.0
+        ],
+        "ursprung": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "name": "Rundung 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "verrunden",
+        "koerper": {
+          "feature": 1,
+          "index": 0
+        },
+        "kanten": [
+          {
+            "a": {
+              "herkunft": 1,
+              "rolle": "Wand 1",
+              "hinweis": [
+                4.791666666666667,
+                0.0,
+                4.791666666666667
+              ]
+            },
+            "b": {
+              "herkunft": 1,
+              "rolle": "Deckel",
+              "hinweis": [
+                4.791666666666667,
+                4.791666666666667,
+                10.0
+              ]
+            },
+            "hinweis": [
+              5.0,
+              0.0,
+              10.0
+            ]
+          }
+        ],
+        "art": {
+          "typ": "rundung",
+          "radius": 1.5
+        },
+        "tangentenkette": true
+      }
+    },
+    {
+      "id": 3,
+      "name": "Quader 2",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "quader",
+        "groesse": [
+          10.0,
+          10.0,
+          10.0
+        ],
+        "ursprung": [
+          20.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "name": "Rundung 2",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "verrunden",
+        "koerper": {
+          "feature": 3,
+          "index": 0
+        },
+        "kanten": [
+          {
+            "a": {
+              "herkunft": 3,
+              "rolle": "Wand 1",
+              "hinweis": [
+                24.791666666666668,
+                0.0,
+                4.791666666666667
+              ]
+            },
+            "b": {
+              "herkunft": 3,
+              "rolle": "Deckel",
+              "hinweis": [
+                24.791666666666668,
+                4.791666666666667,
+                10.0
+              ]
+            },
+            "hinweis": [
+              25.0,
+              0.0,
+              10.0
+            ]
+          }
+        ],
+        "art": {
+          "typ": "rundung_variabel",
+          "punkte": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              50.0,
+              1.5
+            ],
+            [
+              100.0,
+              1.2
+            ]
+          ]
+        },
+        "tangentenkette": false
+      }
+    },
+    {
+      "id": 5,
+      "name": "Quader 3",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "quader",
+        "groesse": [
+          10.0,
+          10.0,
+          10.0
+        ],
+        "ursprung": [
+          40.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "name": "Fase 3",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "verrunden",
+        "koerper": {
+          "feature": 5,
+          "index": 0
+        },
+        "kanten": [
+          {
+            "a": {
+              "herkunft": 5,
+              "rolle": "Wand 1",
+              "hinweis": [
+                44.791666666666664,
+                0.0,
+                4.791666666666667
+              ]
+            },
+            "b": {
+              "herkunft": 5,
+              "rolle": "Deckel",
+              "hinweis": [
+                44.791666666666664,
+                4.791666666666667,
+                10.0
+              ]
+            },
+            "hinweis": [
+              45.0,
+              0.0,
+              10.0
+            ]
+          }
+        ],
+        "art": {
+          "typ": "fase_zwei",
+          "abstand1": 1.0,
+          "abstand2": 2.0
+        },
+        "tangentenkette": true
+      }
+    },
+    {
+      "id": 7,
+      "name": "Quader 4",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "quader",
+        "groesse": [
+          10.0,
+          10.0,
+          10.0
+        ],
+        "ursprung": [
+          60.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "name": "Fase 4",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "verrunden",
+        "koerper": {
+          "feature": 7,
+          "index": 0
+        },
+        "kanten": [
+          {
+            "a": {
+              "herkunft": 7,
+              "rolle": "Wand 1",
+              "hinweis": [
+                64.79166666666667,
+                0.0,
+                4.791666666666667
+              ]
+            },
+            "b": {
+              "herkunft": 7,
+              "rolle": "Deckel",
+              "hinweis": [
+                64.79166666666667,
+                4.791666666666667,
+                10.0
+              ]
+            },
+            "hinweis": [
+              65.0,
+              0.0,
+              10.0
+            ]
+          }
+        ],
+        "art": {
+          "typ": "fase_winkel",
+          "abstand": 1.0,
+          "winkel": 30.0
+        },
+        "tangentenkette": false
+      }
+    }
+  ]
+}

@@ -2426,6 +2426,7 @@ dependencies = [
  "egui",
  "egui_tiles",
  "glam",
+ "planora-drawing",
  "planora-exchange",
  "planora-feature",
  "planora-kernel",
@@ -2436,6 +2437,17 @@ dependencies = [
  "planora-sketch",
  "planora-step",
  "winit",
+]
+
+[[package]]
+name = "planora-drawing"
+version = "0.1.0"
+dependencies = [
+ "planora-exchange",
+ "planora-kernel",
+ "planora-math",
+ "planora-mesh",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2454,6 +2466,7 @@ dependencies = [
 name = "planora-feature"
 version = "0.1.0"
 dependencies = [
+ "planora-drawing",
  "planora-exchange",
  "planora-kernel",
  "planora-math",
@@ -2497,6 +2510,7 @@ dependencies = [
 name = "planora-project"
 version = "0.1.0"
 dependencies = [
+ "planora-drawing",
  "planora-exchange",
  "planora-feature",
  "planora-kernel",

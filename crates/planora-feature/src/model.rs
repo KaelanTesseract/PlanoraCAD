@@ -362,6 +362,13 @@ pub struct Document {
     pub(crate) meshes: BTreeMap<MeshId, Arc<ExchangeMesh>>,
     /// Nächste zu vergebende Netz-Kennung (beginnt bei 1).
     pub(crate) next_mesh: u64,
+    /// Zeichnungen des Dokuments (Teilprojekt 11).
+    pub(crate) drawings: Vec<planora_drawing::Drawing>,
+    /// Nächste zu vergebende Zeichnungskennung (beginnt bei 1).
+    pub(crate) next_drawing: u64,
+    /// Zähler der Änderungen an Zeichnungen (zählt zu [`Document::edit_count`], nicht zu
+    /// [`Document::model_edit_count`]).
+    pub(crate) drawing_edits: u64,
 }
 
 /// Standard-Sehnentoleranz in Millimetern (wie in der App).
@@ -397,6 +404,9 @@ impl Document {
             edits: 0,
             meshes: BTreeMap::new(),
             next_mesh: 1,
+            drawings: Vec::new(),
+            next_drawing: 1,
+            drawing_edits: 0,
         }
     }
 
@@ -413,7 +423,14 @@ impl Document {
 
     /// Zähler aller öffentlichen Änderungen am Dokument (Hinzufügen, Ändern, Umbenennen,
     /// Löschen, Unterdrücken, Marker). Die Oberfläche erkennt daran ungespeicherte Änderungen.
+    /// Änderungen an Zeichnungen zählen ebenfalls mit.
     pub fn edit_count(&self) -> u64 {
+        self.edits + self.drawing_edits
+    }
+
+    /// Zähler der Änderungen **an Körpern** (Features); ändert sich bei Zeichnungsänderungen nicht
+    /// (Schlüssel der Ansichtsberechnung).
+    pub fn model_edit_count(&self) -> u64 {
         self.edits
     }
 

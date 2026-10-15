@@ -2,6 +2,7 @@
 
 use crate::error::FeatureError;
 use crate::model::{Document, Feature, FeatureId, FeatureKind, FeatureStatus, MeshId};
+use planora_drawing::Drawing;
 use planora_exchange::ExchangeMesh;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -21,6 +22,10 @@ pub struct Snapshot {
     pub next_id: u64,
     /// Netze der Netz-Körper; nur die, auf die ein Feature verweist (Plan P11).
     pub meshes: BTreeMap<MeshId, Arc<ExchangeMesh>>,
+    /// Zeichnungen des Dokuments.
+    pub drawings: Vec<Drawing>,
+    /// Nächste Zeichnungskennung (mindestens 1).
+    pub next_drawing: u64,
 }
 
 impl Document {
@@ -45,6 +50,8 @@ impl Document {
                 .filter(|(id, _)| used.contains(id))
                 .map(|(id, m)| (*id, Arc::clone(m)))
                 .collect(),
+            drawings: self.drawings.clone(),
+            next_drawing: self.next_drawing,
         }
     }
 
@@ -103,10 +110,12 @@ impl Document {
         for idx in 0..doc.features.len() {
             doc.check_references(&doc.features[idx].kind, idx)?;
         }
+        doc.set_drawings(s.drawings, s.next_drawing)?;
         doc.marker = s.marker;
         doc.next_id = s.next_id;
         doc.recompute();
         doc.edits = 0;
+        doc.drawing_edits = 0;
         Ok(doc)
     }
 }

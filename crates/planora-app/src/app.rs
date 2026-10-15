@@ -2,6 +2,8 @@ use crate::blend_dialog::BlendDialog;
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
 use crate::dock::{Dock, Pane};
+use crate::drawing_dialog::drawing_menu;
+use crate::drawing_state::WorkArea;
 use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
 use crate::file_chooser::default_dir;
@@ -11,8 +13,8 @@ use crate::state::{AppState, SketchRequest, StandardPlane};
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
 use crate::{
-    browser, fonts, projects_panel, prompts, properties, sketch_panel, tabs, theme, versions_panel,
-    viewport,
+    browser, drawing_view, fonts, projects_panel, prompts, properties, sketch_panel, tabs, theme,
+    versions_panel, viewport,
 };
 use egui_tiles::{SimplificationOptions, TileId, Tiles, UiResponse};
 use planora_feature::SketchPlane;
@@ -47,7 +49,10 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         match pane {
             Pane::Projects => "Projekte",
             Pane::Browser => "Browser",
-            Pane::Viewport => "3D-Ansicht",
+            Pane::Viewport => match self.ws.active_tab().state.drawing_ui.area {
+                WorkArea::Model => "3D-Ansicht",
+                WorkArea::Drawing(_) => "Zeichnung",
+            },
             Pane::Properties => "Eigenschaften",
             Pane::Versions => "Versionen",
         }
@@ -59,10 +64,18 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
         let enabled = !self.ws.active_tab().read_only;
         match pane {
             // Der Viewport füllt den Platz selbst aus und braucht keine Rollbalken.
-            Pane::Viewport => viewport::show(ui, &mut self.ws.active_tab_mut().state),
+            // Im Zeichnungsbereich zeigt dasselbe Pane das Blatt; Kamera und Auswahl des
+            // 3D-Modells bleiben dabei unberührt.
+            Pane::Viewport => {
+                let state = &mut self.ws.active_tab_mut().state;
+                match state.drawing_ui.area {
+                    WorkArea::Drawing(_) => drawing_view::show_with(ui, state, enabled),
+                    WorkArea::Model => viewport::show(ui, state),
+                }
+            }
             Pane::Browser => scrolled(ui, |ui| {
                 let state = &mut self.ws.active_tab_mut().state;
-                ui.add_enabled_ui(enabled, |ui| browser::show(ui, state));
+                browser::show_with(ui, state, !enabled);
             }),
             Pane::Properties => scrolled(ui, |ui| {
                 let state = &mut self.ws.active_tab_mut().state;
@@ -245,6 +258,13 @@ impl PlanoraApp {
             ui.menu_button("Datei", |ui| self.file_menu(ui));
             ui.add_enabled_ui(!read_only, |ui| {
                 ui.menu_button("Erzeugen", |ui| self.create_menu(ui));
+            });
+            // Zeichnungen lassen sich auch in alten Versionen öffnen, aber nicht anlegen.
+            ui.menu_button("Zeichnung", |ui| {
+                let tab = self.ws.active_tab_mut();
+                drawing_menu(ui, &mut tab.state, &mut tab.drawing_dialog, read_only);
+            });
+            ui.add_enabled_ui(!read_only, |ui| {
                 ui.menu_button("Bearbeiten", |ui| self.edit_menu(ui));
             });
             ui.menu_button("Ansicht", |ui| self.view_menu(ui));
@@ -551,6 +571,11 @@ impl eframe::App for PlanoraApp {
         }
 
         self.shortcuts(&ctx);
+        // Im Skizzen-Modus gibt es keinen Zeichnungsbereich: die Skizze braucht die 3D-Ansicht.
+        let state = &mut self.ws.active_tab_mut().state;
+        if state.sketch_session.is_some() {
+            state.drawing_ui.area = WorkArea::Model;
+        }
 
         // Solange eine Rückfrage offen ist, sind Menü und Tab-Leiste gesperrt (sonst könnte
         // z. B. „Speichern“ die Rückfrage beim Beenden ersetzen).
@@ -612,15 +637,17 @@ impl eframe::App for PlanoraApp {
         if tab.state.sketch_session.is_some() {
             tab.feature_dialog = None;
             tab.blend_dialog = None;
-            // Beim Schreiben einer STEP-Datei bleibt das Fenster, damit nichts ohne Meldung endet.
+            // Beim Schreiben einer STEP-Datei oder Zeichnung bleibt das Fenster, damit nichts ohne
+            // Meldung endet.
             if tab
                 .export_dialog
                 .as_ref()
-                .is_some_and(|d| !d.is_writing_step())
+                .is_some_and(|d| !d.is_writing_file())
             {
                 tab.export_dialog = None;
             }
             tab.import_dialog = None;
+            tab.drawing_dialog = None;
         }
         sketch_panel::show(&ctx, &mut tab.state);
         if let Some(mut dialog) = tab.dialog.take()
@@ -647,6 +674,11 @@ impl eframe::App for PlanoraApp {
             && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
         {
             tab.export_dialog = Some(dialog);
+        }
+        if let Some(mut dialog) = tab.drawing_dialog.take()
+            && dialog.show(&ctx, &mut tab.state)
+        {
+            tab.drawing_dialog = Some(dialog);
         }
         if let Some(mut dialog) = tab.import_dialog.take()
             && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
