@@ -872,5 +872,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         marker: file.marker,
         next_id: file.naechste_id,
         meshes,
+        drawings: vec![],
+        next_drawing: 1,
     })
 }
