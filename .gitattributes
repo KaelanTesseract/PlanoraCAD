@@ -1,3 +1,4 @@
 crates/planora-project/tests/data/*.json text eol=lf
 crates/planora-project/tests/fixtures/*.json text eol=lf
 crates/planora-drawing/tests/fixtures/*.svg text eol=lf
+crates/planora-drawing/tests/fixtures/*.dxf -text
