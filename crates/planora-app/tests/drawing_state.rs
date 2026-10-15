@@ -340,7 +340,7 @@ fn drawing_errors_and_crashed_workers_become_failures() {
     tick(&mut ui, &st, true);
     assert_eq!(
         failed(&ui, &st, ViewKind::Front),
-        "Der Körper ist für diese Ansicht zu aufwendig (5 Teilstücke)."
+        "Der Körper ist für diese Ansicht zu aufwendig (5 Arbeitsschritte)."
     );
 
     let mut ui = DrawingUi::default();

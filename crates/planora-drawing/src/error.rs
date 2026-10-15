@@ -10,10 +10,12 @@ pub enum DrawError {
     #[error("Alle Körper sind Netze; eine Zeichnung braucht exakte Körper.")]
     MeshBodiesOnly,
     #[error(
-        "Bei „{0}“ lässt sich nicht sicher sagen, ob die Linie verdeckt ist. Eine andere Ansicht oder ein anderer Maßstab hilft nicht; bitte melden Sie den Körper."
+        "Bei „{0}“ lässt sich nicht sicher sagen, ob die Linie verdeckt ist. Ein anderer Maßstab hilft nicht; eine andere Ansicht kann gehen."
     )]
     AmbiguousVisibility(String),
-    #[error("Der Körper ist für diese Ansicht zu aufwendig ({0} Teilstücke).")]
+    /// Eine Arbeitsgrenze ist überschritten; die Zahl kann Striche, Teilstücke, Paartests,
+    /// Sichtprüfungen oder Umrisspunkte zählen.
+    #[error("Der Körper ist für diese Ansicht zu aufwendig ({0} Arbeitsschritte).")]
     TooComplex(u64),
     #[error("Ein Wert im Körper ist keine gültige Zahl.")]
     NonFinite,
@@ -33,5 +35,22 @@ impl From<ExchangeError> for DrawError {
             ExchangeError::Cancelled => DrawError::Cancelled,
             other => DrawError::Unsupported(other.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn messages_name_what_helps_and_stay_neutral() {
+        assert_eq!(
+            DrawError::AmbiguousVisibility("Kante 3".into()).to_string(),
+            "Bei „Kante 3“ lässt sich nicht sicher sagen, ob die Linie verdeckt ist. Ein anderer Maßstab hilft nicht; eine andere Ansicht kann gehen."
+        );
+        assert_eq!(
+            DrawError::TooComplex(123).to_string(),
+            "Der Körper ist für diese Ansicht zu aufwendig (123 Arbeitsschritte)."
+        );
     }
 }

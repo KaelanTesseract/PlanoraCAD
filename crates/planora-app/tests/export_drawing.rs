@@ -365,7 +365,7 @@ fn failed_view_blocks_writing_with_its_text() {
     d.set_compute(fail_top);
     d.format = SVG;
     d.tick(&s, true);
-    let msg = "Die Ansicht „Oben“ lässt sich nicht berechnen: Der Körper ist für diese Ansicht zu aufwendig (123 Teilstücke).";
+    let msg = "Die Ansicht „Oben“ lässt sich nicht berechnen: Der Körper ist für diese Ansicht zu aufwendig (123 Arbeitsschritte).";
     assert_eq!(d.status(&s), ExportStatus::Failed(msg.into()));
     let text = draw(&mut d, &mut s);
     assert!(text.contains(msg), "{text}");
