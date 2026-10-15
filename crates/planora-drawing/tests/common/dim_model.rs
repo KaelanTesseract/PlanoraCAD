@@ -153,12 +153,14 @@ pub fn cylinder_circles(r: f64, h: f64) -> (Geo3, Geo3) {
     )
 }
 
-/// Mantelfläche des Zylinders (Achse z durch den Ursprung).
-pub fn cylinder_axis(r: f64) -> Geo3 {
+/// Mantelfläche des Zylinders (Achse z durch den Ursprung, Fläche von z = 0 bis z = h).
+pub fn cylinder_axis(r: f64, h: f64) -> Geo3 {
     Geo3::Axis {
         origin: DVec3::ZERO,
         dir: DVec3::Z,
         radius: r,
+        t0: 0.0,
+        t1: h,
     }
 }
 

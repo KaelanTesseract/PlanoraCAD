@@ -40,9 +40,26 @@ fn assert_pt(got: DVec2, want: (f64, f64)) {
 #[track_caller]
 fn linear(m: &Measured) -> (DVec2, DVec2, DVec2) {
     match m.anchor {
-        Anchor::Linear { a, b, dir } => (a, b, dir),
+        Anchor::Linear { a, b, dir, .. } => (a, b, dir),
         ref other => panic!("kein lineares Maß: {other:?}"),
     }
+}
+
+type Span = (DVec2, DVec2);
+
+#[track_caller]
+fn spans(m: &Measured) -> (Span, Span) {
+    match m.anchor {
+        Anchor::Linear { a_span, b_span, .. } => (a_span, b_span),
+        ref other => panic!("kein lineares Maß: {other:?}"),
+    }
+}
+
+/// Spanne `(kleinere, größere Querlage)` genau wie erwartet.
+#[track_caller]
+fn assert_span(got: Span, want: ((f64, f64), (f64, f64))) {
+    assert_pt(got.0, want.0);
+    assert_pt(got.1, want.1);
 }
 
 #[track_caller]
@@ -89,6 +106,10 @@ fn horizontal_between_two_vertical_edges_front_view() {
     assert_pt(a, (0.0, 30.0));
     assert_pt(b, (10.0, 30.0));
     assert_pt(dir, (1.0, 0.0));
+    // Spannen quer zur Messrichtung (w = (0, 1)): unten, oben.
+    let (sa, sb) = spans(&m);
+    assert_span(sa, ((0.0, 0.0), (0.0, 30.0)));
+    assert_span(sb, ((10.0, 0.0), (10.0, 30.0)));
     // Reihenfolge der Bezüge vertauscht: gleicher Wert, Anker vertauscht, Richtung bleibt.
     let m = ok(DimKind::Horizontal, &[right, left], ViewKind::Front);
     assert_eq!(m.value, 10.0);
@@ -104,6 +125,7 @@ fn horizontal_between_two_vertical_edges_front_view() {
         ViewKind::Front,
     );
     assert_pt(linear(&m).0, (0.0, 30.0));
+    assert_span(spans(&m).0, ((0.0, 0.0), (0.0, 30.0)));
 }
 
 /// (b) Vorne: waagerechte Kanten (entlang x) bei z = 0 und z = 30 → 30. Anker: Ende mit der
@@ -119,6 +141,10 @@ fn vertical_between_two_horizontal_edges_front_view() {
     assert_pt(a, (10.0, 0.0));
     assert_pt(b, (10.0, 30.0));
     assert_pt(dir, (0.0, 1.0));
+    // Spannen quer zur Messrichtung (w = (1, 0)): links, rechts.
+    let (sa, sb) = spans(&m);
+    assert_span(sa, ((0.0, 0.0), (10.0, 0.0)));
+    assert_span(sb, ((0.0, 30.0), (10.0, 30.0)));
 }
 
 /// (c) Oben (Blick −z, ey = +y): Kanten entlang x bei y = 0 und y = 20 → 20.
@@ -214,7 +240,11 @@ fn aligned_between_two_points_is_euclidean() {
     assert_pt(a, (0.0, 0.0));
     assert_pt(b, (3.0, 4.0));
     assert_pt(dir, (0.6, 0.8));
-    // Tiefe (y) zählt nicht: Punkte in verschiedener Tiefe.
+    // Punkte: Spannen je zweimal der Punkt.
+    let (sa, sb) = spans(&m);
+    assert_span(sa, ((0.0, 0.0), (0.0, 0.0)));
+    assert_span(sb, ((3.0, 4.0), (3.0, 4.0)));
+    // Tiefe (y) zählt nicht: Zeichnungen zeigen Abstände im Bild (Punkte verschiedener Tiefe).
     let m = ok(
         DimKind::Aligned,
         &[
@@ -227,8 +257,12 @@ fn aligned_between_two_points_is_euclidean() {
 }
 
 /// Schräg zwischen zwei parallelen Kanten: (0,0)–(10,10) und (10,0)–(20,10) vorne; Abstand der
-/// Geraden x − z = 0 und x − z = 10 ist 10/√2. Anker: Mitte der ersten Kante (5, 5), Fußpunkt auf
-/// der zweiten Geraden (10, 0); Richtung (1, −1)/√2.
+/// Geraden x − z = 0 und x − z = 10 ist 10/√2. Lagen entlang e = (1,1)/√2: Kante 1 [0, 10√2],
+/// Kante 2 [5√2, 15√2], Überlappung [5√2, 10√2], Mitte 7,5√2 → a = (7,5; 7,5) auf Kante 1,
+/// Fußpunkt b = (12,5; 2,5) auf Kante 2; Richtung (1, −1)/√2. Spannen (Querachse
+/// w = (1, 1)/√2): die Kantenenden.
+/// Ohne Überlappung: (0,0)–(10,10) und (30,20)–(40,30): Kante 2 bei [25√2, 35√2] hinter Kante 1
+/// [0, 10√2] → nächste Enden a = (10, 10), b = (30, 20); Wert |(20, 10)·(−1, 1)/√2| = 10/√2.
 #[test]
 fn aligned_between_two_parallel_edges_is_their_distance() {
     let m = ok(
@@ -241,9 +275,28 @@ fn aligned_between_two_parallel_edges_is_their_distance() {
     );
     assert_close(m.value, 10.0 * SQRT_HALF, 1e-12);
     let (a, b, dir) = linear(&m);
-    assert_pt(a, (5.0, 5.0));
-    assert_pt(b, (10.0, 0.0));
+    assert_pt(a, (7.5, 7.5));
+    assert_pt(b, (12.5, 2.5));
     assert_pt(dir, (SQRT_HALF, -SQRT_HALF));
+    let (sa, sb) = spans(&m);
+    assert_span(sa, ((0.0, 0.0), (10.0, 10.0)));
+    assert_span(sb, ((10.0, 0.0), (20.0, 10.0)));
+    // Ohne Überlappung (beide Reihenfolgen).
+    let k1 = line(xz(0.0, 0.0), xz(10.0, 10.0));
+    let k2 = line(xz(30.0, 20.0), xz(40.0, 30.0));
+    let m = ok(DimKind::Aligned, &[k1.clone(), k2.clone()], ViewKind::Front);
+    assert_close(m.value, 10.0 * SQRT_HALF, 1e-12);
+    let (a, b, dir) = linear(&m);
+    assert_pt(a, (10.0, 10.0));
+    assert_pt(b, (30.0, 20.0));
+    assert_pt(dir, (SQRT_HALF, -SQRT_HALF));
+    assert_close((b - a).dot(dir), 10.0 * SQRT_HALF, 1e-12);
+    let m = ok(DimKind::Aligned, &[k2, k1], ViewKind::Front);
+    assert_close(m.value, 10.0 * SQRT_HALF, 1e-12);
+    let (a, b, dir) = linear(&m);
+    assert_pt(a, (30.0, 20.0));
+    assert_pt(b, (10.0, 10.0));
+    assert_pt(dir, (-SQRT_HALF, SQRT_HALF));
     // Nicht parallel → ungültig; Punkt und Kante gemischt → ungültig.
     assert!(matches!(
         run(
@@ -317,22 +370,34 @@ fn radius_of_a_circle_seen_along_its_axis() {
     assert_eq!(radius, 5.0);
 }
 
-/// (h) Vorne, Zylinderfläche (Achse z durch den Ursprung, r = 5): Achse im Bild senkrecht,
-/// Ø quer dazu: a = (−5, 0), b = (5, 0) (Lage des Achsursprungs), Richtung (1, 0), Wert 10.
+/// (h) Vorne, Zylinderfläche (Achse z durch den Ursprung, r = 5, Fläche z = 0…12): Achse im Bild
+/// senkrecht, Ø quer dazu, Richtung (1, 0), Wert 10. Umrisslinien x = ±5 von z = 0 bis 12:
+/// Spannen ((−5, 0), (−5, 12)) und ((5, 0), (5, 12)); a/b = obere Enden (−5, 12), (5, 12).
 #[test]
 fn diameter_of_a_cylinder_axis_across_view_is_linear_across_the_axis() {
-    let m = ok(DimKind::Diameter, &[cylinder_axis(5.0)], ViewKind::Front);
+    let m = ok(
+        DimKind::Diameter,
+        &[cylinder_axis(5.0, 12.0)],
+        ViewKind::Front,
+    );
     assert_eq!(m.value, 10.0);
     assert_eq!(m.prefix, Some('Ø'));
     let (a, b, dir) = linear(&m);
-    assert_pt(a, (-5.0, 0.0));
-    assert_pt(b, (5.0, 0.0));
+    assert_pt(a, (-5.0, 12.0));
+    assert_pt(b, (5.0, 12.0));
     assert_pt(dir, (1.0, 0.0));
-    // Achse waagerecht (entlang x) durch (0, 0, 7): Ø senkrecht dazu, a = (0, 2), b = (0, 12).
+    let (sa, sb) = spans(&m);
+    assert_span(sa, ((-5.0, 0.0), (-5.0, 12.0)));
+    assert_span(sb, ((5.0, 0.0), (5.0, 12.0)));
+    // Achse entlang −x durch (0, 3, 7), Bereich t ∈ [−4, 6]: Enden (4, 3, 7) und (−6, 3, 7), im
+    // Bild (4, 7) und (−6, 7). Ø senkrecht (Richtung (0, 1)), Querachse w = (1, 0): Umrisslinien
+    // z = 2 und z = 12 von x = −6 bis 4; a/b = rechte Enden (4, 2), (4, 12).
     let ax = Geo3::Axis {
         origin: DVec3::new(0.0, 3.0, 7.0),
         dir: DVec3::NEG_X,
         radius: 5.0,
+        t0: -4.0,
+        t1: 6.0,
     };
     let m = ok(
         DimKind::Diameter,
@@ -340,22 +405,53 @@ fn diameter_of_a_cylinder_axis_across_view_is_linear_across_the_axis() {
         ViewKind::Front,
     );
     let (a, b, dir) = linear(&m);
-    assert_pt(a, (0.0, 2.0));
-    assert_pt(b, (0.0, 12.0));
+    assert_pt(a, (4.0, 2.0));
+    assert_pt(b, (4.0, 12.0));
     assert_pt(dir, (0.0, 1.0));
-    // Radius einer Zylinderfläche quer: nicht vorgesehen.
+    let (sa, sb) = spans(&m);
+    assert_span(sa, ((-6.0, 2.0), (4.0, 2.0)));
+    assert_span(sb, ((-6.0, 12.0), (4.0, 12.0)));
+    // Radius einer Zylinderfläche: nicht vorgesehen (quer und mit Blick entlang der Achse).
+    let radius_axis = invalid("Der Radius ist nur an Kreisen, Bögen und Kugeln möglich.");
+    assert_eq!(run(DimKind::Radius, &[ax], ViewKind::Front), radius_axis);
     assert_eq!(
-        run(DimKind::Radius, &[ax], ViewKind::Front),
-        Err(DimError::NotAcross)
+        run(DimKind::Radius, &[cylinder_axis(5.0, 12.0)], ViewKind::Top),
+        radius_axis
     );
     // Zylinderfläche mit Blick entlang der Achse: erscheint als Kreis → Round, Ø 10.
-    let m = ok(DimKind::Diameter, &[cylinder_axis(5.0)], ViewKind::Top);
+    let m = ok(
+        DimKind::Diameter,
+        &[cylinder_axis(5.0, 12.0)],
+        ViewKind::Top,
+    );
     assert_eq!(m.value, 10.0);
     assert_eq!(round(&m), (DVec2::ZERO, 5.0));
+    // Bereich verkehrt (t1 < t0) → ungültig; leerer Bereich (t0 = t1) ist erlaubt.
+    let bad = Geo3::Axis {
+        origin: DVec3::ZERO,
+        dir: DVec3::Z,
+        radius: 5.0,
+        t0: 12.0,
+        t1: 0.0,
+    };
+    assert_eq!(
+        run(DimKind::Diameter, &[bad], ViewKind::Front),
+        invalid("Der Bereich der Zylinderfläche ist ungültig.")
+    );
+    let flat = Geo3::Axis {
+        origin: DVec3::ZERO,
+        dir: DVec3::Z,
+        radius: 5.0,
+        t0: 3.0,
+        t1: 3.0,
+    };
+    let (a, b, _) = linear(&ok(DimKind::Diameter, &[flat], ViewKind::Front));
+    assert_pt(a, (-5.0, 3.0));
+    assert_pt(b, (5.0, 3.0));
 }
 
 /// (i) Vorne: Deckelkreis von der Seite (Normale z ⟂ Blick y) erscheint als Strecke von (−5, 12)
-/// bis (5, 12) → Ø 10 linear; Radius → `NotAcross`.
+/// bis (5, 12) → Ø 10 linear (Spannen je zweimal der Endpunkt); Radius → ungültig.
 #[test]
 fn circle_seen_from_the_side_gives_diameter_but_not_radius() {
     let (_, top) = cylinder_circles(5.0, 12.0);
@@ -370,9 +466,12 @@ fn circle_seen_from_the_side_gives_diameter_but_not_radius() {
     assert_pt(a, (-5.0, 12.0));
     assert_pt(b, (5.0, 12.0));
     assert_pt(dir, (1.0, 0.0));
+    let (sa, sb) = spans(&m);
+    assert_span(sa, ((-5.0, 12.0), (-5.0, 12.0)));
+    assert_span(sb, ((5.0, 12.0), (5.0, 12.0)));
     assert_eq!(
         run(DimKind::Radius, std::slice::from_ref(&top), ViewKind::Front),
-        Err(DimError::NotAcross)
+        invalid("Der Radius ist nur mit Blick auf den Kreis möglich.")
     );
     // Links (ex = −y): gleiche Strecke im Bild bei y = 12, Richtung (1, 0).
     let (a, b, dir) = linear(&ok(DimKind::Diameter, &[top], ViewKind::Left));
@@ -400,6 +499,8 @@ fn oblique_circle_is_refused() {
         origin: DVec3::ZERO,
         dir: DVec3::new(1.0, 1.0, 0.0),
         radius: 5.0,
+        t0: 0.0,
+        t1: 10.0,
     };
     assert_eq!(
         run(DimKind::Diameter, &[ax], ViewKind::Front),
@@ -531,6 +632,37 @@ fn parallel_lines_for_an_angle_are_invalid() {
         ViewKind::Front,
     );
     assert!(matches!(r, Err(DimError::Invalid(_))), "{r:?}");
+}
+
+/// Winkel nur zwischen Kanten parallel zur Bildebene: Kante (0,0,0)–(1,1,1) liegt vorne schräg
+/// zur Ansicht (|e·d| = 1/√3) → ungültig; Kanten in der Ebene y = 5 (parallel zur Bildebene,
+/// andere Tiefe) sind erlaubt.
+#[test]
+fn angle_refuses_edges_oblique_to_the_view() {
+    let x_edge = line(DVec3::ZERO, DVec3::new(10.0, 0.0, 0.0));
+    let oblique = line(DVec3::ZERO, DVec3::new(1.0, 1.0, 1.0));
+    let text = invalid("Die Kante liegt schräg zur Ansicht; der Winkel würde verzerrt gezeigt.");
+    assert_eq!(
+        run(
+            DimKind::Angle,
+            &[x_edge.clone(), oblique.clone()],
+            ViewKind::Front
+        ),
+        text
+    );
+    assert_eq!(
+        run(DimKind::Angle, &[oblique, x_edge.clone()], ViewKind::Front),
+        text
+    );
+    let m = ok(
+        DimKind::Angle,
+        &[
+            x_edge,
+            line(DVec3::new(0.0, 5.0, 0.0), DVec3::new(10.0, 5.0, 10.0)),
+        ],
+        ViewKind::Front,
+    );
+    assert_close(m.value, 45.0, 1e-9);
 }
 
 /// (n) Vorne: senkrechte Kante vorn (0,0,·) und hinten (0,20,·) liegen im Bild aufeinander →
@@ -775,16 +907,23 @@ fn circles_spheres_and_axes_as_references_of_linear_dimensions() {
         origin: DVec3::new(20.0, 5.0, 0.0),
         dir: DVec3::Z,
         radius: 4.0,
+        t0: 0.0,
+        t1: 12.0,
     };
     let m = ok(DimKind::Horizontal, &[edge.clone(), ax], ViewKind::Front);
     assert_eq!(m.value, 30.0);
+    // Achse von (20, 0) bis (20, 12) im Bild: oberes Ende, Spanne beide Enden.
     let (_, b, _) = linear(&m);
-    assert_pt(b, (20.0, 0.0));
+    assert_pt(b, (20.0, 12.0));
+    assert_span(spans(&m).1, ((20.0, 0.0), (20.0, 12.0)));
+    assert_span(spans(&m).0, ((-10.0, 0.0), (-10.0, 30.0)));
     // Achse entlang y erscheint vorne als Punkt (20, 7).
     let ax_y = Geo3::Axis {
         origin: DVec3::new(20.0, 5.0, 7.0),
         dir: DVec3::Y,
         radius: 4.0,
+        t0: -5.0,
+        t1: 5.0,
     };
     let m = ok(
         DimKind::Horizontal,
@@ -793,6 +932,7 @@ fn circles_spheres_and_axes_as_references_of_linear_dimensions() {
     );
     assert_eq!(m.value, 30.0);
     assert_pt(linear(&m).1, (20.0, 7.0));
+    assert_span(spans(&m).1, ((20.0, 7.0), (20.0, 7.0)));
     let m = ok(
         DimKind::Vertical,
         &[line(xz(0.0, 0.0), xz(5.0, 0.0)), ax_y],
@@ -804,6 +944,8 @@ fn circles_spheres_and_axes_as_references_of_linear_dimensions() {
         origin: DVec3::new(20.0, 5.0, 7.0),
         dir: DVec3::X,
         radius: 4.0,
+        t0: 0.0,
+        t1: 10.0,
     };
     assert_eq!(
         run(DimKind::Horizontal, &[edge.clone(), ax_x], ViewKind::Front),
@@ -820,6 +962,7 @@ fn circles_spheres_and_axes_as_references_of_linear_dimensions() {
     let (a, b, _) = linear(&m);
     assert_pt(a, (0.0, 12.0));
     assert_pt(b, (-3.0, 4.0));
+    assert_span(spans(&m).0, ((0.0, 12.0), (0.0, 12.0)));
 }
 
 /// Nicht endliche Eingaben (NaN, ±∞, Überlauf) und falsche Bezugszahlen: benannter Fehler, nie
@@ -849,6 +992,30 @@ fn non_finite_inputs_are_invalid() {
             origin: DVec3::ZERO,
             dir: DVec3::new(0.0, 0.0, inf),
             radius: 5.0,
+            t0: 0.0,
+            t1: 1.0,
+        },
+        Geo3::Axis {
+            origin: DVec3::ZERO,
+            dir: DVec3::Z,
+            radius: 5.0,
+            t0: nan,
+            t1: 1.0,
+        },
+        Geo3::Axis {
+            origin: DVec3::ZERO,
+            dir: DVec3::Z,
+            radius: 5.0,
+            t0: 0.0,
+            t1: inf,
+        },
+        // Endlich, aber das Ende origin + t1·dir läuft über.
+        Geo3::Axis {
+            origin: DVec3::new(0.0, 0.0, 1e308),
+            dir: DVec3::Z,
+            radius: 5.0,
+            t0: 0.0,
+            t1: 1e308,
         },
         sphere(DVec3::ZERO, -inf),
     ];
@@ -896,6 +1063,8 @@ fn non_finite_inputs_are_invalid() {
             origin: DVec3::ZERO,
             dir: DVec3::ZERO,
             radius: 5.0,
+            t0: 0.0,
+            t1: 1.0,
         },
     ] {
         let r = run(DimKind::Diameter, &[c], ViewKind::Top);
