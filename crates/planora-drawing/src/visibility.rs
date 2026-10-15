@@ -347,8 +347,10 @@ const LENGTH_SAMPLES: usize = 16;
 /// Abbruchprüfung je so vielen Stücken bzw. Paaren.
 const MERGE_CHECK_EVERY: usize = 1024;
 /// Prüfstellen (Bruchteil eines Teilbereichs), die alle beim anderen Stück liegen müssen, damit
-/// der Teilbereich als überdeckt gilt.
-const COVER_FRACTIONS: [f64; 3] = [0.25, 0.5, 0.75];
+/// der Teilbereich als überdeckt gilt: beide Enden, ¼, ½, ¾ und die Stellen des Goldenen
+/// Schnitts (eine Kurve, die das andere Stück genau an den Vierteln kreuzt und an den Enden
+/// berührt, etwa eine Welle mit zwei Perioden auf einer Geraden, gilt so nicht als bedeckt).
+const COVER_FRACTIONS: [f64; 7] = [0.0, 0.25, 0.381_966, 0.5, 0.618_034, 0.75, 1.0];
 /// Rastergröße (je Bildachse) für die Vorauswahl der schon behaltenen Stücke.
 const MERGE_GRID: usize = 64;
 
@@ -361,7 +363,8 @@ const MERGE_GRID: usize = 64;
 ///    verdeckt, dann das dem Auge nähere (Tiefe der Stückmitte), dann die Reihenfolge (Strich,
 ///    `t0`); eine strenge Ordnung. Von jedem Stück entfällt der Teil, den schon behaltene
 ///    (ranghöhere) Stücke im Bild bedecken: Ein Teilbereich zwischen den Fußpunkten der Enden
-///    der anderen Stücke gilt als bedeckt, wenn seine Stellen bei ¼, ½ und ¾ höchstens
+///    der anderen Stücke gilt als bedeckt, wenn seine Enden und seine Stellen bei ¼, ½, ¾ und
+///    an den Stellen des Goldenen Schnitts (`COVER_FRACTIONS`) höchstens
 ///    `COINCIDENT_FACTOR·geom_tol` neben dem Bild eines solchen Stücks liegen (Abstand geometrisch, unabhängig
 ///    von Kurvenart und Parametrisierung – auch Bögen von der Seite gesehener Kreise auf
 ///    geraden Kanten). So liegt keine Stelle des Bilds unter zwei Stücken: deckungsgleiche

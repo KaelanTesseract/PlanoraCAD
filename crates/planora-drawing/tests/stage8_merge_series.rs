@@ -612,25 +612,35 @@ fn many_bodies_cost_limit_is_reported_not_exceeded() {
         ok_or_too_complex_in_time(&bodies, k);
     }
     // Abbruch nach 500 ms (wie im Brief). Ist die Rechnung schneller fertig, gilt das Ergebnis.
-    let cancel_after = |progress: std::sync::Arc<Progress>, wait: bool| {
-        std::thread::spawn(move || {
-            if wait {
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            } else {
-                // Sobald die Sichtprüfung läuft (Fortschritt > 0).
-                while progress.fraction() == 0.0 {
-                    std::thread::yield_now();
+    // Das Warten auf den Fortschritt hat eine Frist (60 s) und endet auch, wenn die Rechnung
+    // schon fertig ist: Der Test scheitert dann, statt zu hängen.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let cancel_after =
+        |progress: std::sync::Arc<Progress>, finished: std::sync::Arc<AtomicBool>, wait: bool| {
+            std::thread::spawn(move || {
+                if wait {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                } else {
+                    // Sobald die Sichtprüfung läuft (Fortschritt > 0).
+                    let deadline = Instant::now() + std::time::Duration::from_secs(60);
+                    while progress.fraction() == 0.0
+                        && !finished.load(Ordering::SeqCst)
+                        && Instant::now() < deadline
+                    {
+                        std::thread::yield_now();
+                    }
                 }
-            }
-            progress.cancel();
-            Instant::now()
-        })
-    };
+                progress.cancel();
+                Instant::now()
+            })
+        };
     for wait in [true, false] {
         let progress = std::sync::Arc::new(Progress::new());
-        let canceller = cancel_after(progress.clone(), wait);
+        let finished = std::sync::Arc::new(AtomicBool::new(false));
+        let canceller = cancel_after(progress.clone(), finished.clone(), wait);
         let t = Instant::now();
         let r = compute_view(&bodies, ViewKind::Front, &progress);
+        finished.store(true, Ordering::SeqCst);
         let done = Instant::now();
         let cancelled_at = canceller.join().unwrap();
         let lag = done.saturating_duration_since(cancelled_at);
@@ -696,4 +706,71 @@ fn horn_and_spindle_tori_give_a_result_or_a_named_error() {
     }
     eprintln!("{built} Tori gebaut");
     assert!(built >= 2, "{built}");
+}
+
+#[test]
+fn a_wave_touching_a_line_at_its_quarters_is_not_dropped_as_covered() {
+    // N1: Eine Welle mit zwei Perioden (vier Bögen als kubische Bézierstücke, an den Vierteln
+    // genau auf z = 0, dort C1) liegt mit beiden Enden auf einer Geraden und kreuzt sie bei ¼, ½
+    // und ¾ ihres Parameters. Von vorne gesehen bedeckt die Gerade die Welle nicht; die Welle
+    // muss ganz erhalten bleiben (früher entschieden nur die Stellen ¼, ½, ¾ – alle auf der
+    // Geraden).
+    use planora_drawing::{Piece, basis::Basis, stroke::*, visibility::merge_pieces};
+    use planora_kernel::Curve;
+    use planora_math::DVec3;
+    use planora_math::nurbs::NurbsCurve;
+    let (len, h) = (10.0, 1.0);
+    let mut ctrl = Vec::new();
+    for k in 0..4 {
+        let x0 = 0.25 * len * k as f64;
+        let s = if k % 2 == 0 { h } else { -h };
+        let step = 0.25 * len / 3.0;
+        if k == 0 {
+            ctrl.push(DVec3::new(x0, 0.0, 0.0));
+        }
+        ctrl.push(DVec3::new(x0 + step, 0.0, s));
+        ctrl.push(DVec3::new(x0 + 2.0 * step, 0.0, s));
+        ctrl.push(DVec3::new(x0 + 3.0 * step, 0.0, 0.0));
+    }
+    let knots = vec![
+        0.0, 0.0, 0.0, 0.0, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5, 0.75, 0.75, 0.75, 1.0, 1.0, 1.0, 1.0,
+    ];
+    let wave = NurbsCurve::new(3, knots, ctrl, vec![1.0; 13]).unwrap();
+    // Eigene Prüfung der Vorlage: Enden und Viertel auf der Geraden, dazwischen nicht.
+    for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        assert!(wave.point(t).z.abs() < 1e-12, "t = {t}");
+    }
+    assert!(wave.point(0.381_966).z.abs() > 0.1 && wave.point(0.125).z.abs() > 0.1);
+    let strokes = vec![
+        line_stroke((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), len),
+        Stroke {
+            curve: Curve::nurbs(wave),
+            t0: 0.0,
+            t1: 1.0,
+            origin: StrokeOrigin::Edge { body: 0, edge: 1 },
+        },
+    ];
+    let pieces = vec![
+        Piece {
+            stroke: 0,
+            t0: 0.0,
+            t1: len,
+            vis: Visibility::Visible,
+        },
+        Piece {
+            stroke: 1,
+            t0: 0.0,
+            t1: 1.0,
+            vis: Visibility::Visible,
+        },
+    ];
+    let basis = Basis::of(ViewKind::Front);
+    let out = merge_pieces(&strokes, pieces, &basis, len, &Progress::new()).unwrap();
+    let wave_len: f64 = out
+        .iter()
+        .filter(|p| p.stroke == 1)
+        .map(|p| p.t1 - p.t0)
+        .sum();
+    assert_eq!(wave_len, 1.0, "{out:?}");
+    assert!(out.iter().any(|p| p.stroke == 0 && p.t1 - p.t0 == len));
 }
