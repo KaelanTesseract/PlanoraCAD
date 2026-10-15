@@ -32,11 +32,17 @@ pub struct Report {
     /// abweichend ohne eigenen Wechsel in der Nähe).
     pub refined_undecided: usize,
     pub refined_differs: usize,
+    /// Stellen von Merkmalskanten des Grundnetzes ohne Stück, die das feinere Netz nicht
+    /// bestätigt (Fehler des groben Netzes).
+    pub refined_features: usize,
     /// Zahl der Stücke und Merkmalskanten.
     pub pieces: usize,
     pub features: usize,
     /// Netzkanten ohne genau zwei Dreiecke (nicht als Merkmalskante gewertet).
     pub open_mesh_edges: usize,
+    /// Je Fehler aus (e): Index in `errors`, Raumpunkt und Urteil der Bibliothek (sichtbar?),
+    /// damit ein Aufrufer mit einem genaueren eigenen Richter nachprüfen kann.
+    pub vis_diffs: Vec<(usize, DVec3, bool)>,
 }
 
 /// Eigene Projektion `(P·ex, P·ey)`.
@@ -110,7 +116,6 @@ fn solid_extent(solids: &[&Solid]) -> f64 {
 /// Merkmalskante, (e) Sichtbarkeit wie die Referenz, außer wo die Referenz in der Nähe selbst
 /// wechselt.
 pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
-    let mut r = Report::default();
     let bodies: Vec<DrawBody> = solids
         .iter()
         .enumerate()
@@ -119,13 +124,18 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
             solid: s,
         })
         .collect();
-    let v = match compute_view(&bodies, kind, &Progress::new()) {
-        Ok(v) => v,
-        Err(e) => {
-            r.errors.push(format!("compute_view: {e:?}"));
-            return r;
-        }
-    };
+    match compute_view(&bodies, kind, &Progress::new()) {
+        Ok(v) => check_lines(solids, kind, &v),
+        Err(e) => Report {
+            errors: vec![format!("compute_view: {e:?}")],
+            ..Report::default()
+        },
+    }
+}
+
+/// Wie [`check_view`] für ein schon berechnetes Ergebnis `v` der Ansicht `kind`.
+pub fn check_lines(solids: &[&Solid], kind: ViewKind, v: &ViewLines) -> Report {
+    let mut r = Report::default();
     let basis = Basis::of(kind);
     // Eigene Ausdehnung (Eckpunkte und Kantenpunkte), dann das feine Referenznetz.
     let extent = solid_extent(solids);
@@ -168,7 +178,7 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
     // (b) Mindestlänge: Nach dem Zusammenfassen gibt es keine Stücke unter 64·geom_tol.
     let gtol = (64.0 * f64::EPSILON * extent).max(1e-9);
     for (k, p) in v.pieces.iter().enumerate() {
-        let l = proj_len(&v, p.stroke, p.t0, p.t1);
+        let l = proj_len(v, p.stroke, p.t0, p.t1);
         if l < 64.0 * gtol {
             r.errors.push(format!(
                 "(b) Stück {k} (Strich {}) ist nur {l:e} mm lang",
@@ -177,7 +187,27 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
         }
     }
 
-    // (c) Vollständigkeit.
+    // Feinere Netze (Sehnentoleranz `1e-4 · E`, dann `1e-5 · E`) für Nachprüfungen in (c) und (e).
+    let finer: [OnceCell<RefScene>; 2] = [OnceCell::new(), OnceCell::new()];
+    let level = |i: usize| -> &RefScene {
+        if i == 0 {
+            return &scene;
+        }
+        finer[i - 1].get_or_init(|| {
+            let c = FINER_CHORD_REL[i - 1] * extent;
+            let m: Vec<_> = solids.iter().map(|s| mesh_with_chord(s, c)).collect();
+            RefScene::with_chord(&m, basis, extent, c)
+        })
+    };
+    let chords = [
+        chord,
+        FINER_CHORD_REL[0] * extent,
+        FINER_CHORD_REL[1] * extent,
+    ];
+
+    // (c) Vollständigkeit. Fehlt bei einer Merkmalskante des Grundnetzes ein Stück, prüft das
+    // feinere Netz (1e-4·E) nach: Hat es dort (im Abstand `near`) keine Merkmalskante, war es
+    // ein Fehler des groben Netzes (etwa lange Dreiecke am Pol einer beschnittenen Kugel).
     // Abstand zum nächsten Stück und zum nächsten sichtbaren Stück.
     let dist_to = |q: DVec2, only_visible: bool| -> f64 {
         let mut best = f64::INFINITY;
@@ -199,7 +229,15 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
         for f in [0.25, 0.5, 0.75] {
             let q = a.lerp(*b, f);
             let d = dist_to_pieces(q);
-            if d > near {
+            let fine_has = || {
+                level(1)
+                    .features()
+                    .iter()
+                    .any(|&(a3, b3)| seg_dist(q, proj(&basis, a3), proj(&basis, b3)) <= near)
+            };
+            if d > near && !fine_has() {
+                r.refined_features += 1;
+            } else if d > near {
                 r.errors.push(format!(
                     "(c) Merkmalskante bei ({:.4}, {:.4}) fehlt (Abstand {d:e})",
                     q.x, q.y
@@ -271,7 +309,7 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
             gaps.push((at, hi));
         }
         for (g0, g1) in gaps {
-            if proj_len(&v, i, g0, g1) < 128.0 * gtol {
+            if proj_len(v, i, g0, g1) < 128.0 * gtol {
                 continue;
             }
             for k in 0..gap_samples {
@@ -305,22 +343,6 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
     // Referenz unentschieden oder weicht sie ab, ohne dass sie selbst in der Nähe wechselt,
     // entscheidet ein feineres Netz (Sehnentoleranz `1e-4 · E`, dann `1e-5 · E`); die
     // Wechselprüfung längs der Linie behält das Band `near` des Grundnetzes.
-    let finer: [OnceCell<RefScene>; 2] = [OnceCell::new(), OnceCell::new()];
-    let level = |i: usize| -> &RefScene {
-        if i == 0 {
-            return &scene;
-        }
-        finer[i - 1].get_or_init(|| {
-            let c = FINER_CHORD_REL[i - 1] * extent;
-            let m: Vec<_> = solids.iter().map(|s| mesh_with_chord(s, c)).collect();
-            RefScene::with_chord(&m, basis, extent, c)
-        })
-    };
-    let chords = [
-        chord,
-        FINER_CHORD_REL[0] * extent,
-        FINER_CHORD_REL[1] * extent,
-    ];
     for (k, p) in v.pieces.iter().enumerate() {
         let s = &v.strokes[p.stroke];
         let lib = p.vis == Visibility::Visible;
@@ -357,10 +379,13 @@ pub fn check_view(solids: &[&Solid], kind: ViewKind) -> Report {
                 Judged::Agree => {}
                 Judged::Tolerated => r.tolerated += 1,
                 Judged::Undecided => r.undecided += 1,
-                Judged::Differs(want) => r.errors.push(format!(
+                Judged::Differs(want) => {
+                    r.vis_diffs.push((r.errors.len(), x, lib));
+                    r.errors.push(format!(
                     "(e) Stück {k} (Strich {}, {:?}) bei t = {t} ({:.4}, {:.4}, {:.4}): Bibliothek {:?}, Referenz {want:?}",
                     p.stroke, s.origin, x.x, x.y, x.z, p.vis
-                )),
+                    ));
+                }
             }
         }
     }

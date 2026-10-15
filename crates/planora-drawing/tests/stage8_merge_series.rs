@@ -330,3 +330,296 @@ fn a_circle_split_by_crossings_is_joined_across_its_seam() {
     assert_eq!(across[0].t1, r[0].t1 + tau);
     assert_eq!(o.iter().filter(|p| p.vis == Visibility::Hidden).count(), 2);
 }
+
+/// Kennzahlen einer Teilreihe.
+#[derive(Default, Debug)]
+struct SeriesStats {
+    ok: usize,
+    named: usize,
+    undecided: usize,
+    sampled: usize,
+    /// (e)-Abweichungen der Netzreferenz, die der exakte Richter am Formelmodell zugunsten der
+    /// Bibliothek entschied (Material dünner als die Netzgenauigkeit).
+    exact_agrees: usize,
+    /// (e)-Abweichungen, bei denen auch der exakte Richter unentschieden ist (zählen als
+    /// unentschieden).
+    exact_undecided: usize,
+    /// Merkmalskanten des Grundnetzes, die das feinere Netz nicht bestätigt.
+    refined_features: usize,
+}
+
+/// Prüfreihe (Aufgabe 8): Zufallskörper `seeds` (tests/common/model.rs, `random_body_csg`), je
+/// alle 7 Ansichten. Erlaubt: Ok – dann alle Prüfungen von `check_view` ohne Fehler und je
+/// Ansicht höchstens 30 % unentschiedene Referenzstellen – oder eine benannte Meldung
+/// (`AmbiguousVisibility`, `TooComplex`, `Unsupported`). Weicht die Netzreferenz in (e) von der
+/// Bibliothek ab, prüft der exakte Richter am Formelmodell (`CsgJudge`) nach: Gibt er der
+/// Bibliothek recht, war das Netz zu grob (gezählt); urteilt er anders, ist es ein Fehler.
+fn series(seeds: std::ops::RangeInclusive<u64>) -> SeriesStats {
+    use planora_drawing::DrawError;
+    let mut st = SeriesStats::default();
+    let mut failures: Vec<String> = Vec::new();
+    let t = Instant::now();
+    for seed in seeds.clone() {
+        let (s, csg) = random_body_csg(seed);
+        let judge = CsgJudge::new(csg, &s);
+        for k in ViewKind::ALL {
+            match compute_view(
+                &[DrawBody {
+                    name: "R".into(),
+                    solid: &s,
+                }],
+                k,
+                &Progress::new(),
+            ) {
+                Ok(v) => {
+                    let r = check_lines(&[&s], k, &v);
+                    let basis = planora_drawing::basis::Basis::of(k);
+                    let mut resolved = vec![false; r.errors.len()];
+                    let mut extra_undecided = 0;
+                    for &(i, x, lib) in &r.vis_diffs {
+                        match judge.visible(x, &basis) {
+                            Some(v) if v == lib => {
+                                resolved[i] = true;
+                                st.exact_agrees += 1;
+                            }
+                            Some(_) => {}
+                            None => {
+                                resolved[i] = true;
+                                extra_undecided += 1;
+                            }
+                        }
+                    }
+                    for (e, done) in r.errors.iter().zip(&resolved) {
+                        if !done {
+                            failures.push(format!("seed {seed} {k:?}: {e}"));
+                        }
+                    }
+                    let undecided = r.undecided + extra_undecided;
+                    if undecided * 10 > r.sampled * 3 {
+                        failures.push(format!(
+                            "seed {seed} {k:?}: Referenz unentschieden an {undecided} von {} Stellen",
+                            r.sampled
+                        ));
+                    }
+                    st.exact_undecided += extra_undecided;
+                    st.undecided += undecided;
+                    st.sampled += r.sampled;
+                    st.refined_features += r.refined_features;
+                    st.ok += 1;
+                }
+                Err(
+                    e @ (DrawError::AmbiguousVisibility(_)
+                    | DrawError::TooComplex(_)
+                    | DrawError::Unsupported(_)),
+                ) => {
+                    eprintln!("seed {seed} {k:?}: benannt: {e}");
+                    st.named += 1;
+                }
+                Err(e) => failures.push(format!("seed {seed} {k:?}: {e}")),
+            }
+        }
+    }
+    eprintln!(
+        "Reihe {seeds:?}: Ok {}, benannt {}, unentschieden {}/{} ({:.2} %), {:?}",
+        st.ok,
+        st.named,
+        st.undecided,
+        st.sampled,
+        100.0 * st.undecided as f64 / st.sampled.max(1) as f64,
+        t.elapsed()
+    );
+    eprintln!(
+        "Reihe {seeds:?}: exakt bestätigt {}, exakt unentschieden {}, grobe Netzkanten {}",
+        st.exact_agrees, st.exact_undecided, st.refined_features
+    );
+    for f in &failures {
+        eprintln!("FEHLER {f}");
+    }
+    assert!(
+        failures.is_empty(),
+        "{} Fehler: {failures:#?}",
+        failures.len()
+    );
+    st
+}
+
+/// Grenzen je Teilreihe: benannte Meldungen höchstens 10 % der Läufe, unentschiedene
+/// Referenzstellen insgesamt höchstens 5 % (wie Aufgabe 6/7).
+fn assert_series(seeds: std::ops::RangeInclusive<u64>) {
+    let st = series(seeds);
+    assert!(
+        st.named * 10 <= st.ok + st.named,
+        "zu viele benannte Fehler: {} von {}",
+        st.named,
+        st.ok + st.named
+    );
+    assert!(
+        st.undecided * 20 <= st.sampled,
+        "Referenz unentschieden an {} von {} Stellen",
+        st.undecided,
+        st.sampled
+    );
+}
+
+// 200 Körper in 8 Teilreihen zu 25 Startwerten (parallel, Fehler genau zuzuordnen).
+#[test]
+fn series_seeds_001_025() {
+    assert_series(1..=25);
+}
+#[test]
+fn series_seeds_026_050() {
+    assert_series(26..=50);
+}
+#[test]
+fn series_seeds_051_075() {
+    assert_series(51..=75);
+}
+#[test]
+fn series_seeds_076_100() {
+    assert_series(76..=100);
+}
+#[test]
+fn series_seeds_101_125() {
+    assert_series(101..=125);
+}
+#[test]
+fn series_seeds_126_150() {
+    assert_series(126..=150);
+}
+#[test]
+fn series_seeds_151_175() {
+    assert_series(151..=175);
+}
+#[test]
+fn series_seeds_176_200() {
+    assert_series(176..=200);
+}
+
+#[test]
+fn the_exact_judge_agrees_with_the_mesh_reference() {
+    // Gegenprobe des exakten Richters (CsgJudge), der in der Reihe Abweichungen des Netzes
+    // entscheidet: An den Mitten aller Stücke der Körper 1–20 in allen Ansichten müssen beide
+    // übereinstimmen, wo beide entschieden sind; Abweichungen nur dort, wo das Netz das Material
+    // nicht auflöst (gezählt, höchstens 1 %).
+    use common::mesh_ref::{RefScene, fine_mesh};
+    let (mut both, mut differ) = (0, 0);
+    for seed in 1..=20u64 {
+        let (s, csg) = random_body_csg(seed);
+        let judge = CsgJudge::new(csg, &s);
+        let extent = judge.extent;
+        let mesh = fine_mesh(&s, extent);
+        for k in ViewKind::ALL {
+            let basis = planora_drawing::basis::Basis::of(k);
+            let scene = RefScene::new(std::slice::from_ref(&mesh), basis, extent);
+            let v = view(&s, k);
+            for p in &v.pieces {
+                let x = v.strokes[p.stroke].point(0.5 * (p.t0 + p.t1));
+                if let (Some(a), Some(b)) = (scene.ref_visibility(x), judge.visible(x, &basis)) {
+                    both += 1;
+                    if a != b {
+                        differ += 1;
+                        eprintln!("seed {seed} {k:?} {x:?}: Netz {a}, exakt {b}");
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("beide entschieden: {both}, verschieden: {differ}");
+    assert!(both > 500, "{both}");
+    assert!(differ * 100 <= both, "{differ} von {both}");
+}
+
+/// `2 · 50 · rows` Quader 1 × 1 × 1 mm im Raster (Abstand 2 mm) in der XZ-Ebene, je ein eigener
+/// Körper (neu konstruiert und verschoben), zwei Lagen hintereinander (y = 0 und y = 3), die
+/// zweite um 0,5 mm in X versetzt (teils verdeckt).
+fn box_grid(rows: usize) -> Vec<planora_kernel::Solid> {
+    let mut out = Vec::with_capacity(100 * rows);
+    for layer in 0..2 {
+        for i in 0..50 {
+            for j in 0..rows {
+                let lo = (
+                    2.0 * i as f64 + 0.5 * layer as f64,
+                    3.0 * layer as f64,
+                    2.0 * j as f64,
+                );
+                out.push(box_at(lo, (lo.0 + 1.0, lo.1 + 1.0, lo.2 + 1.0)));
+            }
+        }
+    }
+    out
+}
+
+fn draw_bodies(solids: &[planora_kernel::Solid]) -> Vec<DrawBody<'_>> {
+    solids
+        .iter()
+        .enumerate()
+        .map(|(i, s)| DrawBody {
+            name: format!("Q{i}"),
+            solid: s,
+        })
+        .collect()
+}
+
+/// Ergebnis oder `TooComplex`, in weniger als 60 s.
+fn ok_or_too_complex_in_time(bodies: &[DrawBody], k: ViewKind) {
+    use planora_drawing::DrawError;
+    let t = Instant::now();
+    let r = compute_view(bodies, k, &Progress::new());
+    let dt = t.elapsed();
+    match &r {
+        Ok(v) => eprintln!(
+            "{} Körper {k:?}: Ergebnis mit {} Stücken in {dt:?}",
+            bodies.len(),
+            v.pieces.len()
+        ),
+        Err(e) => eprintln!("{} Körper {k:?}: {e} nach {dt:?}", bodies.len()),
+    }
+    assert!(
+        matches!(r, Ok(_) | Err(DrawError::TooComplex(_))),
+        "{k:?}: {:?}",
+        r.err()
+    );
+    assert!(dt.as_secs_f64() < 60.0, "{k:?}: {dt:?}");
+}
+
+#[test]
+fn many_bodies_cost_limit_is_reported_not_exceeded() {
+    // 2 000 kleine Quader in einem Raster: entweder Ergebnis oder TooComplex, innerhalb von 60 s.
+    // (2 000 Quader haben 24 000 Kanten, mehr als MAX_STROKES: TooComplex sofort.) Damit der
+    // Rechenweg selbst gemessen wird, dazu 1 600 Quader (19 200 Kanten) – und an ihnen der
+    // Abbruch: Ein zweiter Faden ruft nach 500 ms `cancel`, die Rechnung endet binnen 2 s mit
+    // `Cancelled`.
+    use planora_drawing::DrawError;
+    let solids = box_grid(20);
+    assert_eq!(solids.len(), 2000);
+    let bodies = draw_bodies(&solids);
+    for k in [ViewKind::Front, ViewKind::Isometric] {
+        ok_or_too_complex_in_time(&bodies, k);
+    }
+    let solids = box_grid(16);
+    let bodies = draw_bodies(&solids);
+    for k in [ViewKind::Front, ViewKind::Isometric] {
+        ok_or_too_complex_in_time(&bodies, k);
+    }
+    let progress = std::sync::Arc::new(Progress::new());
+    let canceller = {
+        let p = progress.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            p.cancel();
+            Instant::now()
+        })
+    };
+    let t = Instant::now();
+    let r = compute_view(&bodies, ViewKind::Isometric, &progress);
+    let done = Instant::now();
+    let cancelled_at = canceller.join().unwrap();
+    let lag = done.saturating_duration_since(cancelled_at);
+    eprintln!(
+        "Abbruch: Ende nach {:?}, {lag:?} nach dem Abbruchwunsch: {:?}",
+        t.elapsed(),
+        r.as_ref().err()
+    );
+    assert!(matches!(r, Err(DrawError::Cancelled)), "{:?}", r.err());
+    assert!(lag.as_secs_f64() < 2.0, "{lag:?}");
+}

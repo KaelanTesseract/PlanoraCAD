@@ -1380,3 +1380,393 @@ pub fn plate_with_holes(nx: usize, ny: usize, pitch: f64, r: f64, h: f64) -> Sol
     .unwrap();
     extrude(&profile, &Frame::WORLD, h, &tol()).unwrap()
 }
+
+/// Kleiner eigener Zufallszahlengenerator (SplitMix64) für die Prüfreihe: deterministisch je
+/// Startwert, ohne fremdes Paket.
+pub struct SeedRng(u64);
+
+impl SeedRng {
+    pub fn new(seed: u64) -> SeedRng {
+        SeedRng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03)
+    }
+
+    pub fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Ganzzahl in `[0, n)`.
+    pub fn below(&mut self, n: u64) -> u64 {
+        self.next_u64() % n
+    }
+
+    /// Vielfaches von 0,5 in `[lo, hi]` (beide Vielfache von 0,5).
+    pub fn half_steps(&mut self, lo: f64, hi: f64) -> f64 {
+        let n = ((hi - lo) * 2.0).round() as u64;
+        lo + 0.5 * self.below(n + 1) as f64
+    }
+}
+
+/// Exakte Drehung (Achsvertauschung) so, dass die Z-Achse des Körpers auf die Weltachse
+/// `axis` (0 = X, 1 = Y, 2 = Z) fällt; zyklische Vertauschung, also rechtshändig und ohne
+/// Rundung.
+fn axis_permuted(s: &Solid, axis: u64) -> Solid {
+    use planora_math::{DMat3, DMat4};
+    let m = match axis {
+        // Spalten = Bilder von X, Y, Z. (x, y, z) → (z, x, y): Z → X.
+        0 => DMat4::from_mat3(DMat3::from_cols(DVec3::Y, DVec3::Z, DVec3::X)),
+        // (x, y, z) → (y, z, x): Z → Y.
+        1 => DMat4::from_mat3(DMat3::from_cols(DVec3::Z, DVec3::X, DVec3::Y)),
+        _ => DMat4::IDENTITY,
+    };
+    mapped(s, &m)
+}
+
+/// Grundkörper der Prüfreihe als eigenes Formelmodell (für [`CsgJudge`]): Achse 0/1/2 = X/Y/Z.
+#[derive(Clone, Copy, Debug)]
+pub enum Prim {
+    Box {
+        lo: DVec3,
+        hi: DVec3,
+    },
+    Cylinder {
+        axis: usize,
+        base: DVec3,
+        r: f64,
+        h: f64,
+    },
+    Sphere {
+        c: DVec3,
+        r: f64,
+    },
+    /// Kegel(stumpf): Grundkreis Radius `r0` bei `base`, Deckel Radius `r1` in Höhe `h`.
+    Cone {
+        axis: usize,
+        base: DVec3,
+        r0: f64,
+        r1: f64,
+        h: f64,
+    },
+}
+
+impl Prim {
+    /// Vorzeichenbehaftete Abstandsschätzung (innen negativ, Lipschitz ≤ 1).
+    pub fn f(&self, p: DVec3) -> f64 {
+        let axial = |axis: usize, base: DVec3| {
+            let l = p - base;
+            let z = l[axis];
+            let mut q = l;
+            q[axis] = 0.0;
+            (q.length(), z)
+        };
+        match *self {
+            Prim::Box { lo, hi } => {
+                let q = (p - 0.5 * (lo + hi)).abs() - 0.5 * (hi - lo);
+                q.max_element()
+            }
+            Prim::Cylinder { axis, base, r, h } => {
+                let (rho, z) = axial(axis, base);
+                (rho - r).max(-z).max(z - h)
+            }
+            Prim::Sphere { c, r } => p.distance(c) - r,
+            Prim::Cone {
+                axis,
+                base,
+                r0,
+                r1,
+                h,
+            } => {
+                let (rho, z) = axial(axis, base);
+                let k = h / h.hypot(r0 - r1);
+                ((rho - (r0 + (r1 - r0) * z / h)) * k).max(-z).max(z - h)
+            }
+        }
+    }
+}
+
+/// Ein Grundkörper der Prüfreihe mit Maßen in Vielfachen von 0,5 mm, Mitte bei `center`:
+/// Quader, Zylinder (Achse X, Y oder Z), Kugel oder Kegel/Kegelstumpf (Achse X, Y oder Z).
+/// `scale`: größtes Maß. Liefert den Körper und sein Formelmodell.
+fn random_primitive(rng: &mut SeedRng, center: DVec3, scale: f64) -> (Solid, Prim) {
+    let small = (scale * 0.5).max(1.0);
+    match rng.below(4) {
+        0 => {
+            let (a, b, c) = (
+                rng.half_steps(1.0, scale),
+                rng.half_steps(1.0, scale),
+                rng.half_steps(1.0, scale),
+            );
+            // Ecken auf dem 0,5-Raster.
+            let lo = DVec3::new(
+                ((center.x - a / 2.0) * 2.0).round() / 2.0,
+                ((center.y - b / 2.0) * 2.0).round() / 2.0,
+                ((center.z - c / 2.0) * 2.0).round() / 2.0,
+            );
+            let hi = lo + DVec3::new(a, b, c);
+            (translated(&box_solid(a, b, c), lo), Prim::Box { lo, hi })
+        }
+        1 => {
+            let r = rng.half_steps(1.0, small);
+            let h = rng.half_steps(1.0, scale);
+            let axis = rng.below(3) as usize;
+            let c = axis_permuted(&cylinder_solid(r, h), axis as u64);
+            // Um die halbe Höhe (auf 0,5 abgerundet) zurück, damit die Mitte nahe `center` liegt.
+            let mut lift = DVec3::ZERO;
+            lift[axis] = -h.floor() / 2.0;
+            let base = center + lift;
+            (translated(&c, base), Prim::Cylinder { axis, base, r, h })
+        }
+        2 => {
+            let r = rng.half_steps(1.0, small);
+            (
+                translated(&sphere_solid(r), center),
+                Prim::Sphere { c: center, r },
+            )
+        }
+        _ => {
+            let r0 = rng.half_steps(1.0, small);
+            let r1 = if rng.below(2) == 0 {
+                0.0
+            } else {
+                rng.half_steps(0.5, (r0 - 0.5).max(0.5))
+                    .min(r0 - 0.5)
+                    .max(0.0)
+            };
+            let h = rng.half_steps(1.0, scale);
+            let axis = rng.below(3) as usize;
+            let c = axis_permuted(&cone_solid(r0, r1, h), axis as u64);
+            (
+                translated(&c, center),
+                Prim::Cone {
+                    axis,
+                    base: center,
+                    r0,
+                    r1,
+                    h,
+                },
+            )
+        }
+    }
+}
+
+/// Boolesche Verknüpfung, `None` bei Fehler des Kernels, ungültigem oder leerem Ergebnis.
+fn try_boolean(a: &Solid, b: &Solid, op: planora_kernel::BoolOp) -> Option<Solid> {
+    let out = planora_kernel::boolean::boolean(a, b, op, &tol()).ok()?;
+    validate(&out).ok()?;
+    (!out.faces.is_empty()).then_some(out)
+}
+
+/// Formelmodell eines Zufallskörpers: Grundkörper nacheinander verknüpft (der erste mit
+/// `Union` als Anfang).
+#[derive(Clone, Debug, Default)]
+pub struct Csg {
+    pub parts: Vec<(Prim, planora_kernel::BoolOp)>,
+}
+
+impl Csg {
+    /// Vorzeichenbehaftete Abstandsschätzung des Körpers (innen negativ): Vereinigung `min`,
+    /// Differenz `max(f, −g)`.
+    pub fn f(&self, p: DVec3) -> f64 {
+        let mut f = f64::INFINITY;
+        for (prim, op) in &self.parts {
+            let g = prim.f(p);
+            f = match op {
+                planora_kernel::BoolOp::Union => f.min(g),
+                planora_kernel::BoolOp::Difference => f.max(-g),
+                planora_kernel::BoolOp::Intersection => f.max(g),
+            };
+        }
+        f
+    }
+}
+
+/// Zufallskörper der Prüfreihe zum Startwert `seed` (deterministisch): ein Grundkörper
+/// (Quader, Zylinder, Kugel, Kegel; Maße bis 6…10 mm) um den Ursprung, dann 0–3 Boolesche
+/// Verknüpfungen (Vereinigung oder Differenz) mit kleineren Grundkörpern, deren Mitten auf dem
+/// 0,5-mm-Raster in der Nähe des Körpers liegen. Alle Maße und Lagen sind Vielfache von 0,5 mm.
+/// Lehnt der Kernel eine Verknüpfung ab (etwa Zylinder gegen Zylinder) oder ist ihr Ergebnis
+/// ungültig oder leer, entfällt sie (deterministisch).
+pub fn random_body(seed: u64) -> Solid {
+    random_body_csg(seed).0
+}
+
+/// Wie [`random_body`], dazu das Formelmodell des Körpers.
+pub fn random_body_csg(seed: u64) -> (Solid, Csg) {
+    let mut rng = SeedRng::new(seed);
+    let scale = rng_scale(&mut rng, 6.0, 10.0);
+    let (mut body, first) = random_primitive(&mut rng, DVec3::ZERO, scale);
+    let mut csg = Csg {
+        parts: vec![(first, planora_kernel::BoolOp::Union)],
+    };
+    let ops = rng.below(4);
+    for _ in 0..ops {
+        let center = DVec3::new(
+            rng.half_steps(-4.0, 4.0),
+            rng.half_steps(-4.0, 4.0),
+            rng.half_steps(-2.0, 6.0),
+        );
+        let scale = rng_scale(&mut rng, 3.0, 6.0);
+        let (tool, prim) = random_primitive(&mut rng, center, scale);
+        let op = if rng.below(2) == 0 {
+            planora_kernel::BoolOp::Union
+        } else {
+            planora_kernel::BoolOp::Difference
+        };
+        if let Some(out) = try_boolean(&body, &tool, op) {
+            body = out;
+            csg.parts.push((prim, op));
+        }
+    }
+    (body, csg)
+}
+
+/// Kippwinkel des exakten Richters (Festlegung F9, wie `visibility::TILT`).
+pub const CSG_TILT: f64 = 1e-5;
+
+/// Exaktes Sichturteil am Formelmodell eines Zufallskörpers (unabhängig vom Netz und von der
+/// Bibliothek): 8 Prüfstrahlen zum Auge, je um [`CSG_TILT`] gekippt (die Kippung der Festlegung
+/// F9; das Netz braucht seine größere Kippung nur wegen der Sehnenabweichung). Längs eines
+/// Strahls wird
+/// `f = csg.f` in Schritten von `1e-3·E` abgetastet; in jedem Abschnitt, in dem `f` die Schwelle
+/// erreichen könnte (`f` ändert sich höchstens um die Schrittweite), sucht der Goldene Schnitt das
+/// kleinste `f`. Verdeckt, wenn irgendwo `f < −m` (`m = 0,01 · Kippung · E`); frei, wenn sonst ab
+/// `s₁ = 2·m / Kippung` (hinter dem Anfangsband, in dem der Strahl noch an der eigenen Fläche
+/// liegt) überall `f > m`. Sichtbar, wenn ein Strahl frei ist; verdeckt, wenn alle verdeckt sind;
+/// sonst `None`. Auch Material dünner als jede Netzgenauigkeit (ein Strahl, der eine Kugel knapp
+/// innerhalb ihres Umrisses durchläuft) wird so erkannt.
+pub struct CsgJudge {
+    pub csg: Csg,
+    pub extent: f64,
+    lo: DVec3,
+    hi: DVec3,
+}
+
+impl CsgJudge {
+    /// `lo`, `hi`: Hüllbox des Körpers.
+    pub fn new(csg: Csg, s: &Solid) -> CsgJudge {
+        let mut lo = DVec3::splat(f64::INFINITY);
+        let mut hi = DVec3::splat(f64::NEG_INFINITY);
+        for (_, e) in s.edges.iter() {
+            for i in 0..=64 {
+                let p = e.curve.point(e.t0 + (e.t1 - e.t0) * i as f64 / 64.0);
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+        }
+        for (_, f) in s.faces.iter() {
+            if let Surface::Sphere { frame, radius } = f.surface {
+                lo = lo.min(frame.origin - DVec3::splat(radius));
+                hi = hi.max(frame.origin + DVec3::splat(radius));
+            }
+        }
+        let d = hi - lo;
+        let extent = d.x.max(d.y).max(d.z).max(1e-9);
+        CsgJudge {
+            csg,
+            extent,
+            lo: lo - DVec3::splat(0.1 * extent),
+            hi: hi + DVec3::splat(0.1 * extent),
+        }
+    }
+
+    /// Kleinstes `f` auf `[a, b]` des Strahls (Goldener Schnitt).
+    fn golden(&self, p: DVec3, dir: DVec3, mut a: f64, mut b: f64) -> f64 {
+        let g = 0.5 * (5f64.sqrt() - 1.0);
+        let f = |s: f64| self.csg.f(p + dir * s);
+        let (mut x1, mut x2) = (b - g * (b - a), a + g * (b - a));
+        let (mut f1, mut f2) = (f(x1), f(x2));
+        for _ in 0..80 {
+            if f1 <= f2 {
+                b = x2;
+                x2 = x1;
+                f2 = f1;
+                x1 = b - g * (b - a);
+                f1 = f(x1);
+            } else {
+                a = x1;
+                x1 = x2;
+                f1 = f2;
+                x2 = a + g * (b - a);
+                f2 = f(x2);
+            }
+        }
+        f1.min(f2)
+    }
+
+    /// Urteil eines Strahls mit der Kippung `tilt`: Some(true) frei, Some(false) verdeckt, None
+    /// unentschieden. Schwelle `m = 0,01 · tilt · E`.
+    fn ray(&self, p: DVec3, dir: DVec3, tilt: f64) -> Option<bool> {
+        let m = 1e-2 * tilt * self.extent;
+        let s1 = 2.0 * m / tilt;
+        let mut s_end = f64::INFINITY;
+        for k in 0..3 {
+            if dir[k] != 0.0 {
+                let a = (self.lo[k] - p[k]) / dir[k];
+                let b = (self.hi[k] - p[k]) / dir[k];
+                s_end = s_end.min(a.max(b));
+            }
+        }
+        if s_end.is_nan() || s_end <= 0.0 {
+            return Some(true);
+        }
+        let h = 1e-3 * self.extent;
+        let n = (s_end / h).ceil().max(1.0) as usize;
+        let at = |i: usize| s_end * i as f64 / n as f64;
+        let s0 = 1e-9 * self.extent;
+        let vals: Vec<f64> = (0..=n)
+            .map(|i| self.csg.f(p + dir * at(i).max(s0)))
+            .collect();
+        let step = s_end / n as f64;
+        let mut free = true;
+        for i in 0..n {
+            let (a, b) = (at(i).max(s0), at(i + 1));
+            let (fa, fb) = (vals[i], vals[i + 1]);
+            // Kann f in diesem Abschnitt unter m fallen?
+            let low = if (fa + fb - step) / 2.0 <= m {
+                fa.min(fb).min(self.golden(p, dir, a, b))
+            } else {
+                fa.min(fb)
+            };
+            if low < -m {
+                return Some(false);
+            }
+            if b > s1 && low <= m {
+                free = false;
+            }
+        }
+        free.then_some(true)
+    }
+
+    /// Sichturteil am Punkt `p` für die Ansicht `basis` (siehe Typbeschreibung). Hängt das
+    /// Urteil von der Größe der Kippung ab (gleich mit `CSG_TILT` und `CSG_TILT / 100`), sonst
+    /// `None`: Nahe einer Stelle, an der die Linie den Umriss eines Verdeckers im Bild berührt,
+    /// ist sie nur in einem Streifen der Breite `√(Radius · Kippung · Abstand)` frei – eine
+    /// Folge der Kippung, keine Eigenschaft des Körpers.
+    pub fn visible(&self, p: DVec3, basis: &Basis) -> Option<bool> {
+        let a = self.visible_tilted(p, basis, CSG_TILT)?;
+        let b = self.visible_tilted(p, basis, 1e-2 * CSG_TILT)?;
+        (a == b).then_some(a)
+    }
+
+    fn visible_tilted(&self, p: DVec3, basis: &Basis, tilt: f64) -> Option<bool> {
+        let eye = -basis.d;
+        let mut all_blocked = true;
+        for k in 0..8 {
+            let phi = k as f64 * TAU / 8.0;
+            let dir = (eye + (basis.ex * phi.cos() + basis.ey * phi.sin()) * tilt).normalize();
+            match self.ray(p, dir, tilt) {
+                Some(true) => return Some(true),
+                Some(false) => {}
+                None => all_blocked = false,
+            }
+        }
+        all_blocked.then_some(false)
+    }
+}
+
+fn rng_scale(rng: &mut SeedRng, lo: f64, hi: f64) -> f64 {
+    rng.half_steps(lo, hi)
+}
