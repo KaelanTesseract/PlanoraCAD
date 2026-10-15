@@ -64,7 +64,8 @@ const QUAD_A_EPS: f64 = 1e-12;
 const QUAD_B_REL: f64 = 1e-9;
 /// Abstand des Strahls von der Mantelfläche (relativ zu `E`), unter dem er in ihr liegt.
 const IN_SURFACE_REL: f64 = 1e-6;
-/// Stützstellen der Vorzeichenwechsel-Suche am Torus.
+/// Stützstellen der früheren Vorzeichenwechsel-Suche am Torus (nur noch Vergleich im Test).
+#[cfg(test)]
 const TORUS_SAMPLES: usize = 2048;
 /// Berührung des Torus: `min |F| < max(TORUS_TOUCH_REL · minor, tol)` ohne Vorzeichenwechsel
 /// (`F` ist ein Abstand, die Schwelle also eine Länge).
@@ -682,13 +683,190 @@ fn quadratic(
     Ok(vec![q / a, c / q])
 }
 
-/// Schnitte des Strahls mit dem Torus für `s ∈ [lo, hi]`: Vorzeichenwechsel von
-/// `F(s) = implicit(o + s·d)` auf `TORUS_SAMPLES` Stützstellen, Bisektion. Zwischen zwei
-/// Stützstellen gleichen Vorzeichens, zwischen denen `|F|` die Null erreichen könnte (`F` ist
-/// ein Abstand, ändert sich also höchstens um die Schrittweite), sucht der Goldene Schnitt das
-/// kleinste `|F|`: Wechselt dort das Vorzeichen, sind es zwei Schnitte; bleibt `min |F|` unter
-/// `touch` (eine Länge), berührt der Strahl den Torus (unsicher).
+/// Schnitte des Strahls mit dem Torus für `s ∈ [lo, hi]` über das Viertgradpolynom des Strahls.
+///
+/// Im lokalen Rahmen des Torus ist `F(s) = implicit(o + s·d)` genau dort null, wo
+/// `Q(s) = (|p|² + R² − r²)² − 4R²(p_x² + p_y²)` null ist (`Q = G·H` mit
+/// `G = (ρ − R)² + z² − r²`, dem Vorzeichen von `F`, und `H = (ρ + R)² + z² − r²`). Zwischen
+/// zwei Nullstellen der Ableitung `Q'` ist `Q` monoton, hat also höchstens eine Nullstelle.
+/// Bezogen auf den Strahlpunkt `σ = 0` nächst der Torusmitte ist `Q'` ein reduziertes
+/// Kubikpolynom `σ³ + pσ + q` (geschlossen gelöst, mit Newton nachgeschärft). Seine Wurzeln im
+/// Bereich teilen `[lo, hi]` in Stücke; ein Vorzeichenwechsel von `F` an den Stückenden ergibt
+/// einen Schnitt (Bisektion auf `F`, wie bisher bis zur Rechengenauigkeit).
+///
+/// An jeder Wurzel von `Q'`, an der `|F|` kleiner ist als an den Nachbarteilstellen (Annäherung
+/// an die Fläche ohne Vorzeichenwechsel), sucht der Goldene Schnitt zwischen den Nachbarstellen
+/// das kleinste `|F|` (gegen Rundung der Wurzel): Wechselt dort das Vorzeichen, sind es zwei
+/// Schnitte; bleibt `min |F|` unter `touch` (eine Länge) und deutlich unter den Werten an den
+/// Nachbarstellen (`START_DIP`), berührt der Strahl den Torus (unsicher, wenn hinter `min_s`).
+/// Ein Strahl, der auf dem Torus beginnt und sich entfernt, hat dort kein solches Minimum.
+/// Ergebnis wie die frühere Abtastung an 2048 Stellen (Prüfung im Modultest), aber mit wenigen
+/// Dutzend statt Tausenden Auswertungen.
 fn torus_roots(
+    surf: &Surface,
+    touch: f64,
+    o: DVec3,
+    d: DVec3,
+    lo: f64,
+    hi: f64,
+    min_s: f64,
+) -> Result<Vec<f64>, &'static str> {
+    if hi <= lo {
+        return Ok(Vec::new());
+    }
+    let Surface::Torus {
+        frame,
+        major,
+        minor,
+    } = surf
+    else {
+        return Ok(Vec::new());
+    };
+    let f = |s: f64| surf.implicit(o + d * s);
+    let mut xs = vec![lo];
+    xs.extend(
+        torus_critical_params(frame, *major, *minor, o, d)
+            .into_iter()
+            .filter(|&s| s > lo && s < hi),
+    );
+    xs.push(hi);
+    xs.sort_by(f64::total_cmp);
+    xs.dedup();
+    let fs: Vec<f64> = xs.iter().map(|&s| f(s)).collect();
+    let n = xs.len() - 1;
+    let mut roots = Vec::new();
+    for i in 0..=n {
+        if fs[i] == 0.0 {
+            // Teilstelle genau auf der Fläche: Berührung oder Querung?
+            let before = if i > 0 { fs[i - 1] } else { fs[i] };
+            let after = if i < n { fs[i + 1] } else { fs[i] };
+            if before * after >= 0.0 && xs[i] > min_s {
+                return Err("Strahl berührt Torus");
+            }
+            roots.push(xs[i]);
+        }
+    }
+    // Annäherungen an die Fläche: innere Teilstelle `j`, deren Nachbarn gleiches Vorzeichen
+    // haben und an der `F` (in dieser Richtung) kleiner ist als an beiden. Bleibt das kleinste
+    // `|F|` dort unter `touch`, ist es eine Berührung – auch wenn `F` dabei knapp das Vorzeichen
+    // wechselt (zwei Schnitte im Abstand der Rundung sind nicht verlässlich zu trennen). Die
+    // beiden Teilstücke daneben liefern dann keine Schnitte.
+    let mut done = vec![false; n];
+    for j in 1..n {
+        let (a, m, b) = (fs[j - 1], fs[j], fs[j + 1]);
+        if a * b <= 0.0 || m == 0.0 {
+            continue;
+        }
+        let sign = a.signum();
+        if sign * m >= (sign * a).min(sign * b) {
+            continue;
+        }
+        let g = |s: f64| sign * f(s);
+        let (mut sm, mut gm) = golden_min(&g, xs[j - 1], xs[j + 1]);
+        if sign * m < gm {
+            (sm, gm) = (xs[j], sign * m);
+        }
+        if gm.abs() < touch && gm.abs() < START_DIP * a.abs().min(b.abs()) {
+            if sm > min_s {
+                return Err("Strahl berührt Torus");
+            }
+            done[j - 1] = true;
+            done[j] = true;
+            continue;
+        }
+        if gm < 0.0 && sign * m > 0.0 {
+            // Die Rundung der Teilstelle verdeckt zwei Schnitte daneben.
+            roots.push(bisect(&f, xs[j - 1], sm, a));
+            roots.push(bisect(&f, sm, xs[j + 1], sign * gm));
+            done[j - 1] = true;
+            done[j] = true;
+        }
+    }
+    for i in 0..n {
+        if !done[i] && fs[i] * fs[i + 1] < 0.0 {
+            roots.push(bisect(&f, xs[i], xs[i + 1], fs[i]));
+        }
+    }
+    roots.sort_by(f64::total_cmp);
+    Ok(roots)
+}
+
+/// Strahlparameter `s`, an denen die Ableitung des Viertgradpolynoms `Q` von Strahl und Torus
+/// verschwindet (höchstens drei; siehe [`torus_roots`]).
+fn torus_critical_params(frame: &Frame, major: f64, minor: f64, o: DVec3, d: DVec3) -> Vec<f64> {
+    let (lo, ld) = local(frame, o, d);
+    let dd = ld.length_squared();
+    if !(dd > 0.0 && dd.is_finite()) {
+        return Vec::new();
+    }
+    // Bezugspunkt nächst der Mitte: p = p0 + σ·ld mit p0 · ld = 0, also |p|² = |p0|² + σ²·dd.
+    let sc = -lo.dot(ld) / dd;
+    let p0 = lo + ld * sc;
+    let r2 = major * major;
+    let k = p0.length_squared() + r2 - minor * minor;
+    let b = p0.x * ld.x + p0.y * ld.y;
+    let c = ld.x * ld.x + ld.y * ld.y;
+    // Q(σ) = dd²σ⁴ + 2(k·dd − 2R²c)σ² − 8R²bσ + k² − 4R²|p0_xy|²,
+    // Q'(σ)/(4dd²) = σ³ + pσ + q.
+    let p = (k * dd - 2.0 * r2 * c) / (dd * dd);
+    let q = -2.0 * r2 * b / (dd * dd);
+    depressed_cubic_roots(p, q)
+        .into_iter()
+        .map(|x| sc + x)
+        .filter(|s| s.is_finite())
+        .collect()
+}
+
+/// Reelle Wurzeln von `x³ + p·x + q` (Cardano bzw. trigonometrisch), je mit Newton
+/// nachgeschärft.
+fn depressed_cubic_roots(p: f64, q: f64) -> Vec<f64> {
+    if !(p.is_finite() && q.is_finite()) {
+        return Vec::new();
+    }
+    let h = 0.5 * q;
+    let t = p / 3.0;
+    let disc = h * h + t * t * t;
+    let mut out: Vec<f64> = if disc > 0.0 {
+        // Eine reelle Wurzel; Vorzeichen so, dass sich nichts aufhebt.
+        let a = -(h.signum() * (h.abs() + disc.sqrt())).cbrt();
+        let a = if h == 0.0 { disc.sqrt().cbrt() } else { a };
+        vec![if a == 0.0 { 0.0 } else { a - t / a }]
+    } else if t == 0.0 {
+        vec![0.0]
+    } else {
+        // Drei reelle Wurzeln (p < 0).
+        let m = 2.0 * (-t).sqrt();
+        let arg = (3.0 * q / (p * m)).clamp(-1.0, 1.0);
+        let phi = arg.acos() / 3.0;
+        (0..3)
+            .map(|k| m * (phi - 2.0 * PI * k as f64 / 3.0).cos())
+            .collect()
+    };
+    for x in &mut out {
+        for _ in 0..4 {
+            let fx = (*x * *x + p) * *x + q;
+            let dx = 3.0 * *x * *x + p;
+            if dx == 0.0 || !fx.is_finite() {
+                break;
+            }
+            let nx = *x - fx / dx;
+            if !nx.is_finite() || ((nx * nx + p) * nx + q).abs() >= fx.abs() {
+                break;
+            }
+            *x = nx;
+        }
+    }
+    out
+}
+
+/// Frühere Torus-Schnittsuche (Abtastung an `TORUS_SAMPLES` Stellen), als Vergleich im
+/// Modultest: Vorzeichenwechsel von `F(s) = implicit(o + s·d)` auf `TORUS_SAMPLES` Stützstellen,
+/// Bisektion. Zwischen zwei Stützstellen gleichen Vorzeichens, zwischen denen `|F|` die Null
+/// erreichen könnte (`F` ist ein Abstand, ändert sich also höchstens um die Schrittweite), sucht
+/// der Goldene Schnitt das kleinste `|F|`: Wechselt dort das Vorzeichen, sind es zwei Schnitte;
+/// bleibt `min |F|` unter `touch` (eine Länge), berührt der Strahl den Torus (unsicher).
+#[cfg(test)]
+fn torus_roots_sampled(
     surf: &Surface,
     touch: f64,
     o: DVec3,
@@ -1114,5 +1292,169 @@ fn check_finite(s: &Surface) -> Result<(), DrawError> {
         Ok(())
     } else {
         Err(DrawError::NonFinite)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Kleiner eigener Zufallszahlengenerator (xorshift64*), Werte in [0, 1).
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> f64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            (self.0.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+        }
+        fn range(&mut self, a: f64, b: f64) -> f64 {
+            a + (b - a) * self.next()
+        }
+        fn dir(&mut self) -> DVec3 {
+            loop {
+                let v = DVec3::new(
+                    self.range(-1.0, 1.0),
+                    self.range(-1.0, 1.0),
+                    self.range(-1.0, 1.0),
+                );
+                if v.length() > 0.1 && v.length() <= 1.0 {
+                    return v.normalize();
+                }
+            }
+        }
+    }
+
+    fn tori() -> Vec<Surface> {
+        let tilted = {
+            let z = DVec3::new(0.3, -0.2, 1.0).normalize();
+            let x = z.cross(DVec3::Y).normalize();
+            Frame {
+                origin: DVec3::new(1.5, -2.0, 0.5),
+                x,
+                y: z.cross(x),
+                z,
+            }
+        };
+        vec![
+            Surface::Torus {
+                frame: Frame::WORLD,
+                major: 10.0,
+                minor: 3.0,
+            },
+            Surface::Torus {
+                frame: tilted,
+                major: 7.0,
+                minor: 0.5,
+            },
+            Surface::Torus {
+                frame: Frame::WORLD,
+                major: 4.0,
+                minor: 3.5,
+            },
+        ]
+    }
+
+    /// Vergleich mit der früheren Abtastung: gleiche Treffer (auf 1e-9 genau) und gleiche
+    /// Berührungsmeldungen – für Zufallsstrahlen, Strahlen knapp an Berührung (Höhe ±minor ± δ,
+    /// Abstand zum Rohrkreis r ± δ) und Strahlen, die auf dem Torus beginnen.
+    #[test]
+    fn closed_form_torus_hits_agree_with_the_sampled_search() {
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        let e = 30.0;
+        let touch_tol = TOL_FACTOR * geom_tol(e);
+        let (mut rays, mut hits, mut touches, mut lucky) = (0, 0, 0, 0);
+        for surf in tori() {
+            let Surface::Torus {
+                frame,
+                major,
+                minor,
+            } = &surf
+            else {
+                unreachable!()
+            };
+            let touch = (TORUS_TOUCH_REL * minor).max(touch_tol);
+            let mut cases: Vec<(DVec3, DVec3, f64)> = Vec::new();
+            for _ in 0..3000 {
+                let o = DVec3::new(
+                    rng.range(-20.0, 20.0),
+                    rng.range(-20.0, 20.0),
+                    rng.range(-20.0, 20.0),
+                );
+                cases.push((o, rng.dir(), 0.0));
+            }
+            // Fast berührende Strahlen: waagrecht (lokal) in der Höhe z = ±minor + δ.
+            for k in 0..600 {
+                let delta = [0.0, 1e-12, -1e-12, 1e-9, -1e-9, 1e-7, -1e-6, 1e-4][k % 8];
+                let z = if k % 2 == 0 { *minor } else { -*minor } + delta;
+                let a = rng.range(0.0, TAU_F);
+                let off = rng.range(-major - minor, major + minor);
+                let dl = DVec3::new(a.cos(), a.sin(), 0.0);
+                let ol = DVec3::new(-a.sin(), a.cos(), 0.0) * off - dl * 30.0 + DVec3::Z * z;
+                cases.push((
+                    frame.point(ol.x, ol.y, ol.z),
+                    frame.x * dl.x + frame.y * dl.y + frame.z * dl.z,
+                    0.0,
+                ));
+            }
+            // Strahlen vom Torus aus (Umriss- und Kantenpunkte), leicht gekippt.
+            for _ in 0..600 {
+                let (u, v) = (rng.range(0.0, TAU_F), rng.range(0.0, TAU_F));
+                let p = surf.point(u, v);
+                let n = surf.normal(u, v);
+                let t = n.cross(rng.dir()).normalize();
+                let dir = (t + n * rng.range(-1e-5, 1e-5)).normalize();
+                cases.push((p, dir, 1e-7 * e));
+            }
+            for (o, d, min_s) in cases {
+                rays += 1;
+                let (lo, hi) = (min_s, 60.0);
+                let new = torus_roots(&surf, touch, o, d, lo, hi, min_s);
+                let old = torus_roots_sampled(&surf, touch, o, d, lo, hi, min_s);
+                match (&new, &old) {
+                    (Ok(a), Ok(b)) => {
+                        assert_eq!(a.len(), b.len(), "{o:?} {d:?}: {a:?} gegen {b:?}");
+                        for (x, y) in a.iter().zip(b) {
+                            assert!((x - y).abs() <= 1e-9 * e, "{o:?} {d:?}: {a:?} gegen {b:?}");
+                        }
+                        hits += a.len();
+                    }
+                    (Err(_), Err(_)) => touches += 1,
+                    // Die Abtastung fand zwei Schnitte einer Annäherung mit min |F| < touch nur,
+                    // wenn zufällig eine Stützstelle zwischen sie fiel (sonst: Berührung). Die
+                    // geschlossene Form meldet hier immer die Berührung.
+                    (Err(_), Ok(b))
+                        if b.windows(2).any(|w| {
+                            let g = |s: f64| surf.implicit(o + d * s).abs();
+                            w[1] - w[0] < 1e-2 && golden_min(&g, w[0], w[1]).1 < touch
+                        }) =>
+                    {
+                        lucky += 1
+                    }
+                    _ => panic!("{o:?} {d:?} (min_s {min_s}): neu {new:?}, früher {old:?}"),
+                }
+            }
+        }
+        eprintln!(
+            "{rays} Strahlen, {hits} Treffer, {touches} Berührungen, {lucky} Zufallstreffer der Abtastung"
+        );
+        assert!(touches > 100 && hits > 1000, "{touches} {hits}");
+        assert!(lucky * 100 <= touches, "{lucky} von {touches}");
+    }
+
+    const TAU_F: f64 = std::f64::consts::TAU;
+
+    #[test]
+    fn cubic_roots_are_exact() {
+        // (x − 1)(x − 2)(x + 3) = x³ − 7x + 6; x³ + x + 1 hat eine Wurzel; x³ = 0.
+        let mut r = depressed_cubic_roots(-7.0, 6.0);
+        r.sort_by(f64::total_cmp);
+        for (g, w) in r.iter().zip([-3.0, 1.0, 2.0]) {
+            assert!((g - w).abs() < 1e-12, "{r:?}");
+        }
+        let r = depressed_cubic_roots(1.0, 1.0);
+        assert_eq!(r.len(), 1);
+        assert!((r[0] * r[0] * r[0] + r[0] + 1.0).abs() < 1e-14);
+        assert_eq!(depressed_cubic_roots(0.0, 0.0), vec![0.0]);
     }
 }
