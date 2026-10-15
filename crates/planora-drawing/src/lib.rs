@@ -3,6 +3,7 @@
 //! der Linien einer Ansicht mit ihrer Sichtbarkeit.
 
 pub mod basis;
+pub mod dxf;
 pub mod error;
 pub mod isect;
 pub mod layout;
@@ -17,6 +18,7 @@ pub mod svg;
 pub mod visibility;
 
 pub use basis::Basis;
+pub use dxf::{dxf_string, write_dxf};
 pub use error::DrawError;
 pub use layout::{GAP_MM, align_dir, view_extent};
 pub use model::{
