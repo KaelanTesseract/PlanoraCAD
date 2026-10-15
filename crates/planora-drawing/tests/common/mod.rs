@@ -5,3 +5,4 @@
 pub mod check;
 pub mod mesh_ref;
 pub mod model;
+pub mod svg_read;

@@ -473,6 +473,54 @@ fn cut_spline(p: usize, knots: &[f64], q: &[H3], t0: f64, t1: f64) -> (Vec<f64>,
     (kn[i0..=last].to_vec(), qq[i0..i0 + count].to_vec())
 }
 
+/// Zerlegt eine B-Spline-Kurve (Ausgabe-Spline) in Bézier-Stücke: Boehm-Einfügen jedes inneren
+/// Knotens bis zur Vielfachheit `degree`. Jedes Stück hat `degree + 1` homogene Kontrollpunkte
+/// `(w·x, w·y, w)`; die Stücke folgen dem Parameterbereich. `None` bei ungültigem Aufbau
+/// (Grad 0, falsche Knotenzahl, Gewicht ≤ 0, nicht endliche Zahl), leere Liste bei leerem
+/// Parameterbereich. Für die Schreiber der Ausgabeformate.
+pub(crate) fn bezier_pieces(
+    degree: usize,
+    knots: &[f64],
+    ctrl: &[DVec2],
+    weights: &[f64],
+) -> Option<Vec<Vec<[f64; 3]>>> {
+    Spl::new(degree, knots, ctrl, weights)?;
+    let p = degree;
+    let q0 = homogeneous(ctrl, weights);
+    let (a, b) = (knots[p], knots[q0.len()]);
+    if a >= b {
+        return Some(Vec::new());
+    }
+    // Auf den Parameterbereich zuschneiden: Randknoten mit Vielfachheit p + 1.
+    let (mut kn, mut q) = cut_spline(p, knots, &q0, a, b);
+    for u in span_edges(p, &kn) {
+        if u <= a || u >= b {
+            continue;
+        }
+        while kn.iter().filter(|&&x| x == u).count() < p {
+            let before = kn.len();
+            insert_knot(p, &mut kn, &mut q, u);
+            if kn.len() == before {
+                break;
+            }
+        }
+    }
+    let n = q.len().checked_sub(1)?;
+    if kn.len() != q.len() + p + 1 {
+        return None;
+    }
+    let edges = span_edges(p, &kn);
+    let mut out = Vec::with_capacity(edges.len().saturating_sub(1));
+    for w in edges.windows(2) {
+        let k = find_span(p, &kn, n, w[0]);
+        if k < p || k > n {
+            return None;
+        }
+        out.push(q[k - p..=k].to_vec());
+    }
+    Some(out)
+}
+
 /// Teilstück `[t0, t1]` (innerhalb des Bereichs); `None`, wenn es leer ist.
 fn spline_out(
     c: &NurbsCurve,
