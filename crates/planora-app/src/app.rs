@@ -75,7 +75,7 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
             }
             Pane::Browser => scrolled(ui, |ui| {
                 let state = &mut self.ws.active_tab_mut().state;
-                ui.add_enabled_ui(enabled, |ui| browser::show(ui, state));
+                browser::show_with(ui, state, !enabled);
             }),
             Pane::Properties => scrolled(ui, |ui| {
                 let state = &mut self.ws.active_tab_mut().state;

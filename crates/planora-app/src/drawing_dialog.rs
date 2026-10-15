@@ -279,9 +279,8 @@ pub fn drawing_menu(
             .on_disabled_hover_text(SKETCH_BLOCKED)
             .clicked()
         {
-            if state.drawing_ui.area != WorkArea::Drawing(id) {
-                state.drawing_ui.open(id);
-            }
+            // Die zuletzt offene Zeichnung behält Auswahl, Zoom und Verschiebung.
+            state.drawing_ui.show_drawing(id);
             state.drawing_ui.tick(&state.bodies, &state.document, false);
             ui.close();
         }

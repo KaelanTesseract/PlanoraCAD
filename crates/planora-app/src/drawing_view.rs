@@ -191,10 +191,22 @@ fn seg_dist(p: DVec2, a: DVec2, b: DVec2) -> f64 {
     p.distance(a + ab * t)
 }
 
+thread_local! {
+    static FLATTEN_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Zahl der [`flatten`]-Aufrufe in diesem Thread (nur für Tests: ein Bild ohne Änderung darf
+/// nichts zerlegen).
+#[doc(hidden)]
+pub fn flatten_calls() -> u64 {
+    FLATTEN_CALLS.with(std::cell::Cell::get)
+}
+
 /// Zerlegt eine Kurve (Blatt-mm) in eine Polylinie, die bei `px_per_mm` höchstens 1 px von
 /// der Kurve abweicht. Die Stückzahl folgt aus Länge bzw. Krümmung und Zoom. Ungültige Kurven
 /// liefern keine Punkte.
 pub fn flatten(curve: &Out2d, px_per_mm: f64) -> Vec<DVec2> {
+    FLATTEN_CALLS.with(|c| c.set(c.get() + 1));
     if !curve.is_finite() || !(px_per_mm.is_finite() && px_per_mm > 0.0) {
         return Vec::new();
     }
@@ -315,7 +327,7 @@ pub fn dashes(points: &[DVec2], dash: f64, gap: f64) -> Vec<Vec<DVec2>> {
 }
 
 /// Namen der Ansichten wie auf dem Blatt: Art, bei mehrfach gleicher Art mit Nummer.
-fn view_names(drawing: &Drawing) -> BTreeMap<ViewId, String> {
+pub fn view_names(drawing: &Drawing) -> BTreeMap<ViewId, String> {
     let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
     let mut out = BTreeMap::new();
     for v in &drawing.views {
@@ -760,6 +772,7 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
 }
 
 /// Linienzug einer Blattlinie (mm) mit Ansicht und Sichtbarkeit.
+#[derive(Clone)]
 struct Poly {
     view: ViewId,
     vis: Visibility,
@@ -788,10 +801,14 @@ fn canvas_ui(
     let k0 = f64::from(fit_px_per_mm(canvas, sheet_mm) * state.drawing_ui.zoom);
     let sheet = sheet_model(&ctx, state, &drawing, model);
     let placed = place_views(state, &drawing, &sheet, model);
-    let polys = polylines(&sheet, k0);
     let (zoom0, pan0) = (state.drawing_ui.zoom, state.drawing_ui.pan);
     let to_screen0 = |p: DVec2| sheet_to_screen(canvas, sheet_mm, zoom0, pan0, p);
-    let hit = |pos: Pos2| hit_test(&placed, &polys, &to_screen0, pos);
+    // Die Linienzüge zum Treffen entstehen erst, wenn wirklich geklickt wird (und kommen
+    // aus dem Zwischenspeicher, wenn das Bild sie ohnehin braucht).
+    let hit = |pos: Pos2| {
+        let polys = polylines_cached(&ctx, &sheet, k0);
+        hit_test(&placed, &polys, &to_screen0, pos)
+    };
 
     // Zoom um den Zeiger (Mausrad, Zwei-Finger-Geste).
     if response.hovered()
@@ -880,7 +897,7 @@ fn canvas_ui(
     let k = f64::from(fit_px_per_mm(canvas, sheet_mm) * zoom);
     let sheet = sheet_model(&ctx, state, &drawing, model);
     let placed = place_views(state, &drawing, &sheet, model);
-    let polys = polylines(&sheet, k);
+    let polys = polylines_cached(&ctx, &sheet, k);
     let to_screen = |p: DVec2| sheet_to_screen(canvas, sheet_mm, zoom, pan, p);
     let painter = ui.painter_at(canvas);
     painter.rect_filled(canvas, 0.0, theme::drawing_surround(state.dark));
@@ -906,7 +923,7 @@ fn canvas_ui(
 
     let visible = Stroke::new((VISIBLE_MM * k).max(1.0) as f32, theme::SHEET_INK);
     let hidden = Stroke::new((HIDDEN_MM * k).max(1.0) as f32, theme::SHEET_INK);
-    for p in &polys {
+    for p in polys.iter() {
         match p.vis {
             Visibility::Visible => {
                 painter.add(Shape::line(
@@ -942,6 +959,8 @@ fn canvas_ui(
                     Stroke::new(1.0, theme::SHEET_PENDING),
                     StrokeKind::Inside,
                 );
+                // Texte und Balken bleiben im Rahmen, auch wenn er zu klein ist.
+                let painter = painter.with_clip_rect(rect.intersect(canvas));
                 let inner = rect.shrink(6.0);
                 let name = painter.layout(
                     v.name.clone(),
@@ -981,6 +1000,8 @@ fn canvas_ui(
             }
             DrawnState::Failed(m) => {
                 painter.rect_stroke(rect, 2.0, Stroke::new(1.0, ERROR_COLOR), StrokeKind::Inside);
+                // Der Text bleibt im Rahmen, auch wenn er zu klein ist.
+                let painter = painter.with_clip_rect(rect.intersect(canvas));
                 let inner = rect.shrink(6.0);
                 let galley = painter.layout(
                     format!("{}: {m}", v.name),
@@ -1066,6 +1087,49 @@ fn zoom_about(state: &mut AppState, canvas: Rect, p: Pos2, f: f32) {
     // Der Blattpunkt unter `p` bleibt: p − c − pan' = (p − c − pan) · f.
     ui.pan = rel - (rel - ui.pan) * f;
     ui.zoom = z;
+}
+
+/// Zwischengespeicherte Linienzüge: Blattmodell (festgehalten, damit seine Adresse nicht für
+/// ein anderes Modell wiederverwendet wird), Zoomstufe und Ergebnis.
+#[derive(Clone)]
+struct PolyCache {
+    sheet: Arc<SheetModel>,
+    bucket: i32,
+    polys: Arc<Vec<Poly>>,
+}
+
+fn polys_cache_id() -> egui::Id {
+    egui::Id::new("planora-drawing-polys")
+}
+
+/// Zoomstufe: Viertelschritte von Zweierpotenzen, nach oben gerundet.
+fn zoom_bucket(k: f64) -> i32 {
+    (k.max(1e-9).log2() * 4.0).ceil() as i32
+}
+
+/// Linienzüge für `k` Pixel je mm: gezeichnet wird mit der Stufe, die nicht gröber ist als `k`
+/// (die Abweichung bleibt unter einem Pixel). Solange sich Blattmodell und Stufe nicht ändern,
+/// wird nichts neu zerlegt.
+fn polylines_cached(ctx: &egui::Context, sheet: &Arc<SheetModel>, k: f64) -> Arc<Vec<Poly>> {
+    let bucket = zoom_bucket(k);
+    if let Some(c) = ctx.data(|d| d.get_temp::<PolyCache>(polys_cache_id()))
+        && c.bucket == bucket
+        && Arc::ptr_eq(&c.sheet, sheet)
+    {
+        return c.polys;
+    }
+    let polys = Arc::new(polylines(sheet, 2f64.powf(f64::from(bucket) / 4.0)));
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            polys_cache_id(),
+            PolyCache {
+                sheet: Arc::clone(sheet),
+                bucket,
+                polys: Arc::clone(&polys),
+            },
+        )
+    });
+    polys
 }
 
 fn polylines(sheet: &SheetModel, k: f64) -> Vec<Poly> {

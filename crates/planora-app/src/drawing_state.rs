@@ -90,6 +90,8 @@ struct Entry {
 pub struct DrawingUi {
     pub area: WorkArea,
     pub selected_view: Option<ViewId>,
+    /// Im Browser gewählte Zeichnung (unabhängig davon, ob sie geöffnet ist).
+    pub selected_drawing: Option<DrawingId>,
     pub zoom: f32,
     pub pan: egui::Vec2,
     /// Höchstens ein Eintrag je Ansichtsart.
@@ -106,6 +108,7 @@ impl Default for DrawingUi {
         DrawingUi {
             area: WorkArea::Model,
             selected_view: None,
+            selected_drawing: None,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             cache: Vec::new(),
@@ -153,6 +156,17 @@ impl DrawingUi {
         self.reset_sheet_view();
     }
 
+    /// Zeigt die Zeichnung `id` im Arbeitsbereich. War es die zuletzt offene, bleiben Auswahl,
+    /// Zoom und Verschiebung erhalten (etwa nach dem Wechsel zum 3D-Modell und zurück);
+    /// sonst beginnt die Zeichnung frisch wie bei [`DrawingUi::open`].
+    pub fn show_drawing(&mut self, id: DrawingId) {
+        if self.last_drawing == Some(id) {
+            self.area = WorkArea::Drawing(id);
+        } else {
+            self.open(id);
+        }
+    }
+
     fn reset_sheet_view(&mut self) {
         self.selected_view = None;
         self.zoom = 1.0;
@@ -195,6 +209,9 @@ impl DrawingUi {
         let Some(drawing) = document.drawing(id) else {
             self.area = WorkArea::Model;
             self.selected_view = None;
+            // Die Zeichnung gibt es nicht mehr: eine neue mit derselben Kennung (anderes
+            // Dokument) beginnt frisch.
+            self.last_drawing = None;
             return;
         };
         if self.last_drawing != Some(id) {

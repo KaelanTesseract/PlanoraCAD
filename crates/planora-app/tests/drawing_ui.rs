@@ -100,6 +100,18 @@ struct Shot {
     text: String,
     texts: Vec<Seen>,
     shapes: Vec<Shape>,
+    /// Text und Ausschnitt, in dem er gezeichnet wird.
+    clips: Vec<(String, Rect)>,
+}
+
+fn text_clips(out: &egui::FullOutput) -> Vec<(String, Rect)> {
+    let mut v = Vec::new();
+    for c in &out.shapes {
+        let mut seen = Vec::new();
+        walk_texts(&c.shape, &mut seen);
+        v.extend(seen.into_iter().map(|s| (s.text, c.clip_rect)));
+    }
+    v
 }
 
 impl Shot {
@@ -132,6 +144,10 @@ enum What {
     Area,
     /// Die Einträge des Menüs „Zeichnung“.
     Menu,
+    /// Wie `Area`, aber schreibgeschützt (alte Version).
+    AreaReadOnly,
+    /// Wie `Menu`, aber schreibgeschützt.
+    MenuReadOnly,
 }
 
 impl Harness {
@@ -156,6 +172,8 @@ impl Harness {
             .run_ui(raw_mods(events, self.time, self.mods), |ui| match what {
                 What::Area => drawing_view::show(ui, st),
                 What::Menu => drawing_menu(ui, st, dialog, false),
+                What::AreaReadOnly => drawing_view::show_with(ui, st, false),
+                What::MenuReadOnly => drawing_menu(ui, st, dialog, true),
             });
         // Fenster „Neue Zeichnung“ wie in der App nach den Bereichen.
         let mut texts = Vec::new();
@@ -166,6 +184,7 @@ impl Harness {
             text: collect_texts(&out),
             texts,
             shapes: out.shapes.iter().map(|c| c.shape.clone()).collect(),
+            clips: text_clips(&out),
         };
         out.drop_without_applying_deltas();
         shot
@@ -416,6 +435,7 @@ fn dialog_frame(
         text: collect_texts(&out),
         texts,
         shapes: out.shapes.iter().map(|c| c.shape.clone()).collect(),
+        clips: text_clips(&out),
     };
     out.drop_without_applying_deltas();
     (keep, shot)
@@ -1560,4 +1580,318 @@ fn a_model_edit_while_open_recomputes_and_drops_old_lines() {
         "neue Breite 50 mm: {rect:?}"
     );
     let _ = d;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Aufgabe 16, Übernahme aus der Prüfung von Aufgabe 15
+
+/// Klick auf `word` in der gewählten Darstellung (`What`), in vier Bildern wie `Harness::click`.
+fn click_in(
+    h: &mut Harness,
+    st: &mut AppState,
+    what: What,
+    dialog: &mut Option<NewDrawingDialog>,
+    word: &str,
+) {
+    let shot = h.frame_with(st, dialog, what, vec![]);
+    let p = shot
+        .pos_of(word)
+        .unwrap_or_else(|| panic!("„{word}“ fehlt:\n{}", shot.text));
+    h.frame_with(st, dialog, what, vec![Event::PointerMoved(p)]);
+    h.frame_with(
+        st,
+        dialog,
+        what,
+        vec![button(p, PointerButton::Primary, true)],
+    );
+    h.frame_with(
+        st,
+        dialog,
+        what,
+        vec![button(p, PointerButton::Primary, false)],
+    );
+    h.frame_with(st, dialog, what, vec![]);
+}
+
+#[test]
+fn the_menu_open_entry_keeps_the_sheet_state_of_the_same_drawing() {
+    let (mut st, d, front, _, mut h) = front_and_top();
+    let other = st
+        .document
+        .add_drawing("Zweite", A4_QUER, Projection::First)
+        .unwrap();
+    st.drawing_ui.selected_view = Some(front);
+    st.drawing_ui.zoom = 3.0;
+    st.drawing_ui.pan = vec2(20.0, -9.0);
+    let mut dialog = None;
+    // Zum 3D-Modell und mit „Öffnen: Blatt 1“ zurück: Zoom, Verschiebung und Auswahl bleiben.
+    click_in(&mut h, &mut st, What::Menu, &mut dialog, "Zum 3D-Modell");
+    assert_eq!(st.drawing_ui.area, WorkArea::Model);
+    click_in(&mut h, &mut st, What::Menu, &mut dialog, "Öffnen: Blatt 1");
+    assert_eq!(st.drawing_ui.area, WorkArea::Drawing(d));
+    assert_eq!(st.drawing_ui.zoom, 3.0);
+    assert_eq!(st.drawing_ui.pan, vec2(20.0, -9.0));
+    assert_eq!(st.drawing_ui.selected_view, Some(front));
+    // Eine andere Zeichnung beginnt frisch, und zurück ebenso (Blatt 1 ist nicht mehr die
+    // zuletzt offene).
+    click_in(&mut h, &mut st, What::Menu, &mut dialog, "Öffnen: Zweite");
+    assert_eq!(st.drawing_ui.area, WorkArea::Drawing(other));
+    assert_eq!(
+        (st.drawing_ui.zoom, st.drawing_ui.selected_view),
+        (1.0, None)
+    );
+    st.drawing_ui.zoom = 4.0;
+    click_in(&mut h, &mut st, What::Menu, &mut dialog, "Öffnen: Blatt 1");
+    assert_eq!(st.drawing_ui.area, WorkArea::Drawing(d));
+    assert_eq!(st.drawing_ui.zoom, 1.0);
+}
+
+#[test]
+fn dragging_a_view_does_not_start_a_computation_and_counts_one_edit_per_move() {
+    let (mut st, d, front, _, mut h) = front_and_top();
+    let spawned = st.drawing_ui.spawned();
+    let model = st.document.model_edit_count();
+    let edits = st.document.edit_count();
+    let p = screen(&h, (148.5, 105.0));
+    // `drag` bewegt in zwei Schritten (halbe und ganze Strecke).
+    h.drag(&mut st, p, vec2(30.0, 40.0), PointerButton::Primary);
+    assert_ne!(
+        placement(&st, d, front),
+        Placement::Free { x: 148.5, y: 105.0 }
+    );
+    assert_eq!(
+        st.drawing_ui.spawned(),
+        spawned,
+        "Ziehen rechnet nichts neu"
+    );
+    assert_eq!(st.document.model_edit_count(), model, "Modellstand bleibt");
+    // Jedes Bild mit Bewegung ist eine Änderung des Dokuments (`edit_count`): zwei Schritte.
+    assert_eq!(st.document.edit_count() - edits, 2);
+    // Ein Ziehen ohne Bewegung ändert nichts.
+    let edits = st.document.edit_count();
+    let p = screen(&h, (148.5, 105.0));
+    h.drag(&mut st, p, vec2(0.0, 0.0), PointerButton::Primary);
+    assert_eq!(st.document.edit_count(), edits);
+}
+
+#[test]
+fn a_read_only_area_disables_the_toolbar_and_the_drag() {
+    let (mut st, d, front, top, mut h) = front_and_top();
+    let before = st.document.drawing(d).unwrap().clone();
+    st.drawing_ui.selected_view = Some(top);
+    let mut none = None;
+    // Werkzeugleiste: nichts davon ändert das Dokument.
+    for word in ["Verdeckte Kanten zeigen", "Ansicht löschen"] {
+        click_in(&mut h, &mut st, What::AreaReadOnly, &mut none, word);
+        assert_eq!(st.document.drawing(d).unwrap(), &before, "{word}");
+    }
+    // Das Aufklappmenü „Ansicht hinzufügen“ bleibt zu.
+    click_in(
+        &mut h,
+        &mut st,
+        What::AreaReadOnly,
+        &mut none,
+        "Ansicht hinzufügen",
+    );
+    let shot = h.frame_with(&mut st, &mut none, What::AreaReadOnly, vec![]);
+    assert!(shot.pos_of("Isometrisch").is_none(), "{}", shot.text);
+    // Der Maßstab lässt sich nicht öffnen und wählen.
+    click_in(&mut h, &mut st, What::AreaReadOnly, &mut none, "1:1");
+    let shot = h.frame_with(&mut st, &mut none, What::AreaReadOnly, vec![]);
+    assert!(shot.pos_of("1:50").is_none(), "{}", shot.text);
+    assert_eq!(st.document.drawing(d).unwrap(), &before);
+    // Ziehen wählt, bewegt aber nichts.
+    let p = screen(&h, (148.5, 105.0));
+    let down = |pos| button(pos, PointerButton::Primary, true);
+    let up = |pos| button(pos, PointerButton::Primary, false);
+    let f = |h: &mut Harness, st: &mut AppState, ev: Vec<Event>| {
+        h.frame_with(st, &mut None, What::AreaReadOnly, ev);
+    };
+    f(&mut h, &mut st, vec![Event::PointerMoved(p)]);
+    f(&mut h, &mut st, vec![down(p)]);
+    f(
+        &mut h,
+        &mut st,
+        vec![Event::PointerMoved(p + vec2(15.0, 20.0))],
+    );
+    f(
+        &mut h,
+        &mut st,
+        vec![Event::PointerMoved(p + vec2(30.0, 40.0))],
+    );
+    f(&mut h, &mut st, vec![up(p + vec2(30.0, 40.0))]);
+    f(&mut h, &mut st, vec![]);
+    assert_eq!(st.drawing_ui.selected_view, Some(front), "Wählen geht");
+    assert_eq!(st.document.drawing(d).unwrap(), &before, "nichts bewegt");
+
+    // Menü „Zeichnung“: „Neue Zeichnung …“ gesperrt, Öffnen geht.
+    st.drawing_ui.area = WorkArea::Model;
+    let mut dialog = None;
+    click_in(
+        &mut h,
+        &mut st,
+        What::MenuReadOnly,
+        &mut dialog,
+        "Neue Zeichnung …",
+    );
+    assert!(dialog.is_none(), "gesperrt in alten Versionen");
+    click_in(
+        &mut h,
+        &mut st,
+        What::MenuReadOnly,
+        &mut dialog,
+        "Öffnen: Blatt 1",
+    );
+    assert_eq!(st.drawing_ui.area, WorkArea::Drawing(d));
+}
+
+/// Ein Zylinder: runde Linien (Ellipsen, Bögen) in mehreren Ansichten.
+fn disc_state() -> (AppState, DrawingId) {
+    let mut st = AppState::new();
+    st.create_cylinder(20.0, 30.0).unwrap();
+    let d = st
+        .document
+        .add_drawing("Blatt 1", A4_QUER, Projection::First)
+        .unwrap();
+    let front = st
+        .document
+        .add_view(
+            d,
+            ViewKind::Front,
+            s(1, 1),
+            Placement::Free { x: 100.0, y: 105.0 },
+            None,
+        )
+        .unwrap();
+    st.document
+        .add_view(
+            d,
+            ViewKind::Top,
+            s(1, 1),
+            Placement::Aligned { distance: 60.0 },
+            Some(front),
+        )
+        .unwrap();
+    st.document
+        .add_view(
+            d,
+            ViewKind::Isometric,
+            s(1, 1),
+            Placement::Free { x: 220.0, y: 140.0 },
+            None,
+        )
+        .unwrap();
+    st.drawing_ui.open(d);
+    (st, d)
+}
+
+#[test]
+fn curves_are_flattened_once_per_model_and_zoom_and_never_on_an_unchanged_frame() {
+    let (mut st, _) = disc_state();
+    block(&mut st);
+    let mut h = Harness::new();
+    let c0 = drawing_view::flatten_calls();
+    h.idle(&mut st);
+    let lines = h.layout().lines_drawn as u64;
+    let first = drawing_view::flatten_calls() - c0;
+    assert!(lines >= 6, "runde und gerade Linien: {lines}");
+    assert!(
+        first > 0 && first <= lines,
+        "höchstens einmal je Linie: {first} für {lines}"
+    );
+    // Unverändertes Bild: nichts wird neu zerlegt – auch beim Zeiger über dem Blatt.
+    let c1 = drawing_view::flatten_calls();
+    for _ in 0..3 {
+        h.idle(&mut st);
+    }
+    h.frame(&mut st, vec![Event::PointerMoved(pos2(500.0, 300.0))]);
+    assert_eq!(drawing_view::flatten_calls(), c1, "Bild ohne Änderung");
+    // Ein Klick (Treffersuche) im selben Zoom nutzt dieselben Linienzüge.
+    let p = screen(&h, (100.0, 105.0));
+    h.click(&mut st, p);
+    assert_eq!(
+        drawing_view::flatten_calls(),
+        c1,
+        "Treffersuche ohne neues Zerlegen"
+    );
+    // Ein anderer Zoom zerlegt genau einmal je Linie neu.
+    h.click_text(&mut st, "+");
+    let after_zoom = drawing_view::flatten_calls() - c1;
+    assert!(
+        after_zoom > 0 && after_zoom <= lines,
+        "{after_zoom} für {lines}"
+    );
+    let c2 = drawing_view::flatten_calls();
+    h.idle(&mut st);
+    h.idle(&mut st);
+    assert_eq!(drawing_view::flatten_calls(), c2);
+    // Eine Änderung am Modell (Linien fallen weg und kommen neu) zerlegt neu.
+    st.create_box(DVec3::new(10.0, 10.0, 10.0)).unwrap();
+    block(&mut st);
+    h.idle(&mut st);
+    h.idle(&mut st);
+    let after_model = drawing_view::flatten_calls() - c2;
+    assert!(after_model > 0, "neues Modell, neue Linien");
+    let c3 = drawing_view::flatten_calls();
+    h.idle(&mut st);
+    assert_eq!(drawing_view::flatten_calls(), c3);
+}
+
+#[test]
+fn failure_text_is_clipped_to_its_frame() {
+    // Kleine Ansicht (1:5) mit langem Fehlertext: der Text wird auf den Rahmen beschnitten,
+    // nicht auf das ganze Blatt.
+    let mut st = box_state();
+    st.drawing_ui.set_compute(top_fails);
+    let (d, front) = with_front(&mut st);
+    let top = add_child(&mut st, d, front, ViewKind::Top, 70.0);
+    st.document
+        .update_drawing(d, |dr| {
+            dr.views.iter_mut().find(|v| v.id == top).unwrap().scale = s(1, 5);
+        })
+        .unwrap();
+    block(&mut st);
+    let mut h = Harness::new();
+    h.idle(&mut st);
+    let shot = h.idle(&mut st);
+    let frame = h.layout().views.iter().find(|v| v.id == top).unwrap().rect;
+    let msg = DrawError::TooComplex(5).to_string();
+    let (_, clip) = shot
+        .clips
+        .iter()
+        .find(|(t, _)| t.contains(&msg))
+        .expect("Fehlertext gezeichnet");
+    assert!(
+        frame.expand(0.5).contains_rect(*clip),
+        "Ausschnitt {clip:?} größer als der Rahmen {frame:?}"
+    );
+    // Ebenso der Platzhalter einer Berechnung.
+    let mut st = box_state();
+    st.drawing_ui.set_compute(wait_for_cancel);
+    let (_, front) = with_front(&mut st);
+    let mut h = Harness::new();
+    let start = Instant::now();
+    let shot = loop {
+        let shot = h.idle(&mut st);
+        if shot.text.contains("25 %") || start.elapsed() > Duration::from_secs(10) {
+            break shot;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let frame = h
+        .layout()
+        .views
+        .iter()
+        .find(|v| v.id == front)
+        .unwrap()
+        .rect;
+    let (_, clip) = shot
+        .clips
+        .iter()
+        .find(|(t, _)| t.contains("wird berechnet"))
+        .expect("Platzhaltertext");
+    assert!(
+        frame.expand(0.5).contains_rect(*clip),
+        "{clip:?} / {frame:?}"
+    );
 }

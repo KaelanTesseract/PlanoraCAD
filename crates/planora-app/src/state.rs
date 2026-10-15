@@ -126,6 +126,10 @@ pub struct AppState {
     pub pending_delete: Option<crate::browser::DeletePlan>,
     /// Offenes Fenster „Umbenennen“: Feature und Entwurf des Namens.
     pub rename_draft: Option<(FeatureId, String)>,
+    /// Offene Rückfrage „Zeichnung oder Ansicht löschen“ aus dem Abschnitt „Zeichnungen“.
+    pub pending_delete_drawing: Option<crate::drawing_browser::DrawingDeletePlan>,
+    /// Offenes Fenster „Umbenennen“ einer Zeichnung: Zeichnung und Entwurf des Namens.
+    pub rename_drawing_draft: Option<(planora_drawing::DrawingId, String)>,
     /// Wunsch aus dem Feature-Baum, den Bearbeiten-Dialog für dieses Feature zu öffnen.
     pub edit_request: Option<FeatureId>,
     /// Markierte Kanten (Mehrfachauswahl im Fenster „Verrunden“/„Fase“), alle aus einem Körper.
@@ -240,6 +244,8 @@ impl AppState {
             profile_cache: ProfileCache::default(),
             pending_delete: None,
             rename_draft: None,
+            pending_delete_drawing: None,
+            rename_drawing_draft: None,
             edit_request: None,
             marked_edges: Vec::new(),
             edge_picking: false,

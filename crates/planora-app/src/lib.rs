@@ -7,6 +7,7 @@ pub mod browser;
 pub mod cards;
 pub mod create_dialog;
 pub mod dock;
+pub mod drawing_browser;
 pub mod drawing_dialog;
 pub mod drawing_state;
 pub mod drawing_view;
