@@ -355,7 +355,7 @@ const MERGE_CHECK_EVERY: usize = 1024;
 ///    Freiform), deren Bildpunkte an den Enden (in beliebiger Reihenfolge), in der Mitte und bei
 ///    ¼ und ¾ des Parameters (bei umgekehrter Reihenfolge ¾ und ¼) höchstens `16·geom_tol`
 ///    auseinanderliegen, sind dieselbe Linie; es bleibt **eines**: das sichtbare, sonst das
-///    erste (nach Strich, dann Anfangsparameter). Ganze geschlossene Stücke (Vollkreise)
+///    dem Auge nähere (Tiefe der Mitte), sonst das erste (nach Strich, dann Anfangsparameter). Ganze geschlossene Stücke (Vollkreise)
 ///    vergleichen ab dem Gegenpunkt des Anfangs (anderer Nahtpunkt). Vorauswahl über die
 ///    Hüllboxen; die Paare zählen gegen `MAX_PAIR_TESTS`.
 /// 2. **Anschließende Stücke** desselben Strichs mit gleicher Sichtbarkeit (`t1` des einen =
@@ -449,6 +449,8 @@ struct Signature {
     hi: DVec2,
     /// Ganzes geschlossenes Stück: Periode.
     full: Option<f64>,
+    /// Tiefe der Stückmitte längs der Blickrichtung (kleiner = näher am Auge).
+    depth: f64,
 }
 
 fn signature(strokes: &[Stroke], p: &Piece, basis: &Basis, near: f64) -> Signature {
@@ -471,6 +473,7 @@ fn signature(strokes: &[Stroke], p: &Piece, basis: &Basis, near: f64) -> Signatu
         lo,
         hi,
         full,
+        depth: basis.depth(s.point(0.5 * (p.t0 + p.t1))),
     }
 }
 
@@ -562,11 +565,16 @@ fn drop_coincident(
     }
     let mut order: Vec<usize> = (0..pieces.len()).collect();
     order.sort_by(|&i, &j| sigs[i].lo.x.total_cmp(&sigs[j].lo.x).then(i.cmp(&j)));
-    // Rang: sichtbar vor verdeckt, dann die Reihenfolge (nach Strich und t0 sortiert).
+    // Rang: sichtbar vor verdeckt, dann das nähere (die vordere Kante ist „die“ Linie; die
+    // hintere gilt nach F9 oft nur als Umriss sichtbar), dann die Reihenfolge (nach Strich und
+    // t0 sortiert).
     let better = |i: usize, j: usize| {
         let (vi, vj) = (pieces[i].vis, pieces[j].vis);
+        let (di, dj) = (sigs[i].depth, sigs[j].depth);
         if vi != vj {
             vi == Visibility::Visible
+        } else if (di - dj).abs() > near {
+            di < dj
         } else {
             i < j
         }
@@ -755,12 +763,30 @@ mod tests {
             vec![piece(0, 0.0, 2.0, Hidden), piece(1, 0.0, 2.0, Visible)],
         );
         assert_eq!(out, vec![piece(1, 0.0, 2.0, Visible)]);
-        // Gleich sichtbar: das erste.
+        // Gleich sichtbar: das dem Auge nähere (Draufsicht: größeres z) …
         let out = merge(
             &s,
             vec![piece(0, 0.0, 2.0, Hidden), piece(1, 0.0, 2.0, Hidden)],
         );
         assert_eq!(out, vec![piece(0, 0.0, 2.0, Hidden)]);
+        let front = Stroke {
+            curve: Curve::Line {
+                origin: DVec3::new(2.0, 0.0, 3.0),
+                dir: -DVec3::X,
+            },
+            ..line(0.0, 2)
+        };
+        let out = merge(
+            &[line(0.0, 0), front.clone()],
+            vec![piece(0, 0.0, 2.0, Visible), piece(1, 0.0, 2.0, Visible)],
+        );
+        assert_eq!(out, vec![piece(1, 0.0, 2.0, Visible)]);
+        // … in gleicher Tiefe das erste.
+        let out = merge(
+            &[line(0.0, 0), line(0.0, 1)],
+            vec![piece(0, 0.0, 2.0, Visible), piece(1, 0.0, 2.0, Visible)],
+        );
+        assert_eq!(out, vec![piece(0, 0.0, 2.0, Visible)]);
         // Nur zur Hälfte deckungsgleich: beide bleiben.
         let out = merge(
             &s,
