@@ -62,18 +62,9 @@ pub fn resolve_face(
     r: &FaceRef,
     tol: &Tolerance,
 ) -> Result<ResolvedFace, FeatureError> {
-    let tag = r.tag();
     // Kandidaten in aufsteigender Reihenfolge (Körper, Fläche); `min_by` behält bei
     // Gleichstand den ersten und erfüllt damit die Gleichstandsregel.
-    let candidates: Vec<(usize, Id<Face>, Option<DVec3>)> = solids
-        .iter()
-        .enumerate()
-        .flat_map(|(bi, s)| {
-            s.faces_with_tag(&tag)
-                .into_iter()
-                .map(move |f| (bi, f, face_probe_point(s, f, tol)))
-        })
-        .collect();
+    let candidates = face_candidates(solids, r, tol);
     let best = candidates
         .iter()
         .min_by(|a, b| distance(a.2, r.hint).total_cmp(&distance(b.2, r.hint)))
@@ -86,6 +77,25 @@ pub fn resolve_face(
         face: best.1,
         hint: best.2.unwrap_or(r.hint),
     })
+}
+
+/// Alle Flächen mit der Marke von `r` als `(Körperindex, Fläche, Prüfpunkt)`, aufsteigend nach
+/// Körper und Fläche.
+pub(crate) fn face_candidates(
+    solids: &[&Solid],
+    r: &FaceRef,
+    tol: &Tolerance,
+) -> Vec<(usize, Id<Face>, Option<DVec3>)> {
+    let tag = r.tag();
+    solids
+        .iter()
+        .enumerate()
+        .flat_map(|(bi, s)| {
+            s.faces_with_tag(&tag)
+                .into_iter()
+                .map(move |f| (bi, f, face_probe_point(s, f, tol)))
+        })
+        .collect()
 }
 
 /// Verweis auf eine Kante über die beiden angrenzenden Flächen und einen Hinweispunkt.
@@ -148,8 +158,29 @@ pub fn resolve_edge(
     r: &EdgeRef,
     _tol: &Tolerance,
 ) -> Result<ResolvedEdge, FeatureError> {
+    let candidates = edge_candidates(solids, r);
+    let best = candidates
+        .iter()
+        .min_by(|a, b| distance(a.2, r.hint).total_cmp(&distance(b.2, r.hint)))
+        .ok_or_else(|| FeatureError::EdgeNotFound {
+            a: r.a.role.clone(),
+            b: r.b.role.clone(),
+        })?;
+    Ok(ResolvedEdge {
+        body: best.0,
+        edge: best.1,
+        hint: best.2.unwrap_or(r.hint),
+    })
+}
+
+/// Alle Kanten, auf die `r` passen könnte (Regel siehe [`resolve_edge`]), als
+/// `(Körperindex, Kante, Prüfpunkt)`, aufsteigend nach Körper und Kante.
+pub(crate) fn edge_candidates(
+    solids: &[&Solid],
+    r: &EdgeRef,
+) -> Vec<(usize, Id<Edge>, Option<DVec3>)> {
     let (ta, tb) = (r.a.tag(), r.b.tag());
-    let mut candidates: Vec<(usize, Id<Edge>, Option<DVec3>)> = Vec::new();
+    let mut candidates = Vec::new();
     for (bi, s) in solids.iter().enumerate() {
         let has = |f: Id<Face>, t: &FaceTag| s.faces.get(f).and_then(|f| f.tag.as_ref()) == Some(t);
         for (edge, faces) in edge_uses(s) {
@@ -165,18 +196,7 @@ pub fn resolve_edge(
             }
         }
     }
-    let best = candidates
-        .iter()
-        .min_by(|a, b| distance(a.2, r.hint).total_cmp(&distance(b.2, r.hint)))
-        .ok_or_else(|| FeatureError::EdgeNotFound {
-            a: r.a.role.clone(),
-            b: r.b.role.clone(),
-        })?;
-    Ok(ResolvedEdge {
-        body: best.0,
-        edge: best.1,
-        hint: best.2.unwrap_or(r.hint),
-    })
+    candidates
 }
 
 /// Marke der Fläche, falls vorhanden und einem Feature zugewiesen (`origin != 0`).
@@ -190,7 +210,7 @@ fn assigned_tag(solid: &Solid, face: Id<Face>) -> Option<&FaceTag> {
 }
 
 /// Abstand eines (womöglich fehlenden) Prüfpunkts zum Hinweis; ohne Prüfpunkt unendlich.
-fn distance(probe: Option<DVec3>, hint: DVec3) -> f64 {
+pub(crate) fn distance(probe: Option<DVec3>, hint: DVec3) -> f64 {
     probe.map_or(f64::INFINITY, |p| p.distance(hint))
 }
 
