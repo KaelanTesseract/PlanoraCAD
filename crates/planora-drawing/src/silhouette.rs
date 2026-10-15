@@ -416,11 +416,19 @@ fn spline_pieces(
     let dense = densify(path, work, progress)?;
     let limit = (SNAP_FACTOR * tol.linear).max(SPLINE_SNAP_SHARE * SILHOUETTE_TOL);
     let ranges = trim_to_face(fg, &path.as_path(), in_face, tol, limit, progress)?;
-    if path.failed.as_ref().is_some_and(|f| f.get()) {
-        return Err(DrawError::Unsupported(format!(
-            "{FIT_MESSAGE} (Punkt nicht auf dem Umriss)"
-        )));
-    }
+    // Freiform: Fand ein Wegpunkt nicht auf den Umriss (Newton), ist die Kurve dort geraten.
+    // Geprüft nach jeder Auswertung des Wegs: auch die Endpunkte der Bereiche unten werten ihn
+    // noch einmal aus.
+    let failed = || {
+        if path.failed.as_ref().is_some_and(|f| f.get()) {
+            Err(DrawError::Unsupported(format!(
+                "{FIT_MESSAGE} (Punkt nicht auf dem Umriss)"
+            )))
+        } else {
+            Ok(())
+        }
+    };
+    failed()?;
     let period = path.t1 - path.t0;
     let mut out = Vec::new();
     for r in ranges {
@@ -449,6 +457,7 @@ fn spline_pieces(
             }
             pts.push(r.ends[1].unwrap_or_else(|| (path.point)(r.b)));
         }
+        failed()?;
         for c in fit_checked(&pts, tol, 0, progress)? {
             let (t0, t1) = c.domain();
             out.push((Curve::nurbs(c), t0, t1));
@@ -1536,6 +1545,53 @@ mod tests {
             Err(DrawError::Unsupported(m)) => assert_eq!(m, HIDDEN_MESSAGE),
             Err(e) => panic!("{e:?}"),
         }
+    }
+
+    #[test]
+    fn a_failed_outline_point_at_a_range_end_is_reported() {
+        // Der Weg wird an den Bereichsenden für die Anpassung noch einmal ausgewertet. Scheitert
+        // Newton erst dort (hier: die dritte Auswertung bei t = 0 meldet den Fehler), darf die
+        // Kurve nicht trotzdem angepasst werden.
+        let solid = planora_kernel::primitives::make_box(DVec3::ONE, &Tolerance::default())
+            .expect("Würfel");
+        let fid = solid.faces.iter().next().map(|(id, _)| id).expect("Fläche");
+        let fg = face_geom(&solid, fid);
+        let failed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let flag = failed.clone();
+        let calls = std::cell::Cell::new(0);
+        let path = OwnedPath {
+            point: Box::new(move |t: f64| {
+                if t == 0.0 {
+                    calls.set(calls.get() + 1);
+                    if calls.get() == 3 {
+                        flag.set(true);
+                    }
+                }
+                DVec3::new(t, 0.0, 0.0)
+            }),
+            t0: 0.0,
+            t1: 1.0,
+            closed: false,
+            knots: vec![0.0, 1.0],
+            failed: Some(failed),
+        };
+        let tol = Tolerance {
+            linear: geom_tol(1.0),
+            ..Tolerance::default()
+        };
+        let r = spline_pieces(
+            &fg,
+            &path,
+            &|_| true,
+            &tol,
+            &mut Work::default(),
+            &Progress::new(),
+        );
+        assert!(
+            matches!(&r, Err(DrawError::Unsupported(m)) if m.contains("nicht auf dem Umriss")),
+            "{:?}",
+            r.as_ref().map(|v| v.len())
+        );
     }
 
     #[test]

@@ -124,6 +124,11 @@ pub trait Caster {
 
 /// Schnittparameter `s` und, wenn bekannt (Freiform), die Flächenparameter `(u, v)`.
 type Candidate = (f64, Option<(f64, f64)>);
+/// Berührstelle der Flickenteilung: Strahlparameter und Diagonale des Flickens.
+type Touch = (f64, f64);
+/// Lagefragen an eine Freiformfläche: liegt ein Punkt auf der beschnittenen Fläche; liegt er
+/// höchstens `tol` + Größe von ihrem Rand entfernt.
+type FaceTests<'a> = (&'a dyn Fn(DVec3) -> bool, &'a dyn Fn(DVec3, f64) -> bool);
 
 /// Eine Fläche, vorbereitet für viele Strahlen.
 struct FaceData {
@@ -491,7 +496,20 @@ impl Scene {
                 else {
                     return Err("Freiformfläche nicht sicher entscheidbar");
                 };
-                return nurbs_hits(n, patches, o, d, (start, end), e, min_s, &on_face);
+                // Abstand zum Rand der Fläche (Randkurven einschließlich Nähte, also auch zum
+                // Rand des Parameterbereichs, soweit er Rand der Fläche ist).
+                let near_rim =
+                    |p: DVec3, size: f64| f.region.rim_distance(p) <= self.tol.linear + size;
+                return nurbs_hits(
+                    n,
+                    patches,
+                    o,
+                    d,
+                    (start, end),
+                    e,
+                    min_s,
+                    (&on_face, &near_rim),
+                );
             }
         };
         Ok(roots.into_iter().map(|s| (s, None)).collect())
@@ -562,6 +580,18 @@ impl Region {
         }
         let sense = if self.geom.same_sense { 1 } else { -1 };
         (total * sense >= 1).then_some(HitClass::Inside)
+    }
+
+    /// Kleinster Abstand von `p` zu einem Randstück der Fläche (Nähte eingeschlossen).
+    pub(crate) fn rim_distance(&self, p: DVec3) -> f64 {
+        let mut best = f64::INFINITY;
+        for (s, (lo, hi)) in self.geom.loops.iter().flatten().zip(&self.seg_boxes) {
+            if p.clamp(*lo, *hi).distance(p) >= best {
+                continue;
+            }
+            best = best.min(s.closest(p).1);
+        }
+        best
     }
 
     /// Exakte Seite von `p` gegenüber dem nächsten Randpunkt `q = seg(fr)`: Die Fläche liegt
@@ -984,6 +1014,12 @@ fn torus_roots_sampled(
 /// `min_s` macht sie den Strahl unsicher – außer im Stück bis `OWN_EPS` hinter dem Anfang eines
 /// Strahls, der auf der Fläche selbst beginnt (dort liegt nur seine eigene Tangentialstelle;
 /// Treffer auf eigenen Flächen bis `OWN_EPS` verdecken nach F4 ohnehin nicht).
+///
+/// Eine solche Stelle **neben** der beschnittenen Fläche zählt nur dann nicht, wenn sie weiter als
+/// `tol` + Flickengröße von ihrem Rand entfernt liegt (`near_rim`): Newton im Flicken hat keinen
+/// Neustart am Rand und keine Polbehandlung wie der Kernel; ein echter Treffer knapp innerhalb
+/// des Rands könnte so als Berührung knapp außerhalb erscheinen. Nahe am Rand ist der Strahl
+/// daher unsicher, statt den Treffer zu raten.
 #[allow(clippy::too_many_arguments)]
 fn nurbs_hits(
     n: &planora_kernel::NurbsSurfaceData,
@@ -993,7 +1029,7 @@ fn nurbs_hits(
     (start, end): (f64, f64),
     e: f64,
     min_s: f64,
-    on_face: &dyn Fn(DVec3) -> bool,
+    (on_face, near_rim): FaceTests,
 ) -> Result<Vec<Candidate>, &'static str> {
     if let Some(h) = n.ray_hits_checked(o + d * start, d, end - start) {
         return Ok(h
@@ -1004,12 +1040,18 @@ fn nurbs_hits(
     let (hits, touches) = patch_hits(n, patches, o, d, (start, end), IMPLICIT_LEAF_REL * e)?;
     let on_surface = n.signed_distance(o).abs() <= IN_SURFACE_REL * e;
     let skip = start + crate::limits::own_eps(e);
-    for t in touches {
+    for (t, size) in touches {
         if on_surface && t <= skip {
             continue;
         }
-        if t > min_s && on_face(o + d * t) {
-            return Err("Strahl streift eine Freiformfläche");
+        if t > min_s {
+            let p = o + d * t;
+            if on_face(p) {
+                return Err("Strahl streift eine Freiformfläche");
+            }
+            if near_rim(p, size) {
+                return Err("Strahl streift den Rand einer Freiformfläche");
+            }
         }
     }
     Ok(hits)
@@ -1022,7 +1064,8 @@ fn nurbs_hits(
 /// Ebenheit ≤ 1e-3 · Diagonale, `|d·n| ≥ RAY_GRAZING_COS`) entscheidet Newton (Treffer im
 /// Flicken oder keiner); streifende werden – anders als im Kernel – weiter geteilt, bis die
 /// Diagonale `leaf` unterschreitet. Dort liefert Newton einen Treffer, sonst ist die Stelle
-/// eine Berührung (Rückgabe: Strahlparameter). Mehr als `PATCH_MAX_VISITS` Flicken → unsicher.
+/// eine Berührung (Rückgabe: Strahlparameter und Flickendiagonale). Mehr als
+/// `PATCH_MAX_VISITS` Flicken → unsicher.
 fn patch_hits(
     n: &planora_kernel::NurbsSurfaceData,
     patches: &[BezierPatch],
@@ -1030,7 +1073,7 @@ fn patch_hits(
     d: DVec3,
     (start, end): (f64, f64),
     leaf: f64,
-) -> Result<(Vec<Candidate>, Vec<f64>), &'static str> {
+) -> Result<(Vec<Candidate>, Vec<Touch>), &'static str> {
     const UNSAFE: &str = "Freiformfläche nicht sicher entscheidbar";
     let sf = n.surface();
     let scale = patches
@@ -1098,7 +1141,7 @@ fn patch_hits(
                     continue;
                 }
                 None if small => {
-                    touches.push((0.5 * (lo + hi) - o).dot(d).clamp(start, end));
+                    touches.push(((0.5 * (lo + hi) - o).dot(d).clamp(start, end), diag));
                     continue;
                 }
                 // Ebener, nicht streifender Flicken ohne Konvergenz: weiter teilen.
@@ -1486,6 +1529,82 @@ mod tests {
     }
 
     const TAU_F: f64 = std::f64::consts::TAU;
+
+    #[test]
+    fn rim_distance_is_the_distance_to_the_nearest_edge() {
+        // Bodenfläche z = 0 des Quaders [0,10] × [0,20] × [0,30]: Punkt (3, 4, 0) → 3; Punkt
+        // (3, 4, 2) über der Fläche → √(3² + 2²); Punkt (12, 25, 0) außerhalb → √(2² + 5²).
+        let solid = planora_kernel::primitives::make_box(
+            DVec3::new(10.0, 20.0, 30.0),
+            &Tolerance::default(),
+        )
+        .unwrap();
+        let (fid, _) = solid
+            .faces
+            .iter()
+            .find(|(_, f)| {
+                matches!(f.surface, Surface::Plane { frame } if frame.origin.z.abs() < 1e-12
+                    && frame.z.z.abs() > 0.5)
+            })
+            .expect("Bodenfläche");
+        let r = Region::new(face_geom(&solid, fid), 1e-9);
+        for (p, want) in [
+            (DVec3::new(3.0, 4.0, 0.0), 3.0),
+            (DVec3::new(3.0, 4.0, 2.0), 13f64.sqrt()),
+            (DVec3::new(12.0, 25.0, 0.0), 29f64.sqrt()),
+        ] {
+            assert!((r.rim_distance(p) - want).abs() < 1e-12, "{p:?}");
+        }
+    }
+
+    #[test]
+    fn a_touch_next_to_the_rim_of_a_freeform_face_is_unsafe() {
+        // Kuppelflicken z = 4u(1−u)·4v(1−v) über [0,10]² (biquadratisch, Gipfel (5, 5, 1)).
+        // Ein Strahl in Höhe 1 längs X berührt den Gipfel: Der Kernel verweigert ihn (streifend),
+        // die Flickenteilung findet dort eine Berührung. Liegt die Stelle neben der beschnittenen
+        // Fläche, aber nah an ihrem Rand, ist der Strahl unsicher (früher: übergangen); weit vom
+        // Rand bleibt sie ohne Folge.
+        use planora_math::nurbs::NurbsSurface;
+        let h = [0.0, 2.0, 0.0];
+        let mut control = Vec::new();
+        for (i, hx) in h.iter().enumerate() {
+            for (j, hy) in h.iter().enumerate() {
+                control.push(DVec3::new(5.0 * i as f64, 5.0 * j as f64, hx * hy));
+            }
+        }
+        let k = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let sf = NurbsSurface::new(2, 2, k.clone(), k, 3, 3, control, vec![1.0; 9]).unwrap();
+        let n = planora_kernel::NurbsSurfaceData::new(sf, false, false).unwrap();
+        assert!((n.surface().point(0.5, 0.5).z - 1.0).abs() < 1e-12);
+        let patches = n.surface().bezier_patches().unwrap();
+        let (o, d) = (DVec3::new(-5.0, 5.0, 1.0), DVec3::X);
+        assert!(
+            n.ray_hits_checked(o, d, 20.0).is_none(),
+            "Kernel verweigert nicht"
+        );
+        let asked = std::cell::Cell::new(false);
+        let run = |rim: bool| {
+            nurbs_hits(
+                &n,
+                &patches,
+                o,
+                d,
+                (0.0, 20.0),
+                10.0,
+                0.0,
+                (&|_| false, &|_, _| {
+                    asked.set(true);
+                    rim
+                }),
+            )
+        };
+        assert!(matches!(run(true), Err(m) if m.contains("Rand")));
+        assert!(asked.get());
+        // Fern vom Rand: Die Berührung neben der Fläche bleibt ohne Folge (die beiden
+        // Newton-Treffer am Gipfel selbst ordnet erst die Einordnung ein).
+        let r = run(false);
+        assert!(r.is_ok(), "{r:?}");
+    }
 
     #[test]
     fn cubic_roots_are_exact() {
