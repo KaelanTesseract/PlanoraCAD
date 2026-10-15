@@ -8,7 +8,9 @@
 //!   der Seite gesehener Kreis (als Strecke im Bild). Gibt es keine solche Kante, dient ein
 //!   Eckpunkt (Ende einer Kante, das Ende eines sichtbaren Stücks ist) an der äußersten Lage als
 //!   Bezug. Fehlt an einer Seite jeder Bezug (etwa am Umriss eines Zylinders oder einer Kugel),
-//!   gibt es für diese Richtung kein Gesamtmaß.
+//!   gibt es für diese Richtung kein Gesamtmaß. Sind beide Bezüge Eckpunkte auf demselben vollen
+//!   Kreis (etwa die Nahtpunkte eines aus zwei Halbkreisen gebauten Zylinders), wäre das
+//!   Gesamtmaß nur dessen Ø noch einmal: es entfällt.
 //! - **Ø/R:** Kreiskanten mit Blick in Achsrichtung werden nach Mitte (im Raum) und Radius
 //!   zusammengefasst; ist eine davon sichtbar und ergeben sie zusammen einen vollen Kreis → Ø,
 //!   sonst (Bogen, etwa eine Rundung) → R. Jede sichtbare Kugel → Ø. Jede Zylinderfläche, deren
@@ -24,7 +26,11 @@
 //! Je Schlüssel bleibt ein Vorschlag: zuerst der, dessen Kreis als Kreis erscheint, dann nach der
 //! Ansicht (Breite: Vorne, Oben, Hinten, Unten; Höhe: Vorne, Links, Rechts, Hinten; Tiefe: Oben,
 //! Links, Rechts, Unten; Ø/R: Vorne, Oben, Links, Rechts, Hinten, Unten), zuletzt nach der
-//! Reihenfolge der Ansichten. Schlüssel, die in `existing` stehen, fallen weg.
+//! Reihenfolge der Ansichten. Schlüssel, die in `existing` stehen, fallen weg. Bewusst so
+//! gewollt: Zwei Maße mit derselben Messrichtung zwischen denselben Lagen (gleiche Bezugsebenen,
+//! gleicher Wert) gelten als **ein** Maß, auch wenn sie an verschiedenen Kanten hängen – etwa
+//! eine Bohrungsmitte, die genau so weit vom Rand liegt wie die Gesamtbreite, oder zwei Kanten in
+//! derselben Ebene.
 //!
 //! Jeder Vorschlag wird vor der Ausgabe mit [`measure`] gemessen; was dort scheitert (etwa die
 //! Länge null), wird nicht vorgeschlagen. Reihenfolge der Ausgabe: nach Ansicht (Reihenfolge in
@@ -42,7 +48,7 @@ use crate::stroke::{Stroke, StrokeOrigin};
 use crate::{DrawBody, ViewLines, Visibility};
 use planora_kernel::{Curve, Edge, Face, Id, Solid, Surface, Vertex};
 use planora_math::{DVec2, DVec3};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Eine Lage gilt als äußerste Lage der sichtbaren Linien, wenn sie höchstens
 /// `EXTREME_REL · Ausdehnung` (mindestens `geom_tol`) davon entfernt ist.
@@ -354,6 +360,11 @@ struct ViewCtx<'v, 'b> {
 }
 
 impl ViewCtx<'_, '_> {
+    /// Abstand, bis zu dem eine Lage als äußerste Lage gilt (und Punkte als gleich).
+    fn near(&self) -> f64 {
+        (EXTREME_REL * self.lines.extent).max(self.tol)
+    }
+
     /// Misst den Vorschlag und legt ihn ab (scheitert die Messung, entfällt er).
     fn push(
         &self,
@@ -445,12 +456,26 @@ fn view_proposals(
         Default::default()
     };
 
-    // (a) Gesamtmaße.
+    // (a) Gesamtmaße. Zwei Eckpunkte auf demselben vollen Kreis messen dessen Ø noch einmal
+    // (etwa die Nahtpunkte eines Zylinders bei 0° und 180°): kein Gesamtmaß.
+    let full = full_circles(&ctx);
+    let on_one_circle = |a: &Ref, b: &Ref| match (&a.geo, &b.geo, a.edge || b.edge) {
+        (Geo3::Point(p), Geo3::Point(q), false) => full.iter().any(|&(c, n, r)| {
+            let on = |x: DVec3| {
+                let v = x - c;
+                (v.length() - r).abs() <= ctx.near() && v.dot(n).abs() <= ctx.near()
+            };
+            on(*p) && on(*q)
+        }),
+        _ => false,
+    };
     for (k, kind, cat) in [
         (0, DimKind::Horizontal, Cat::OverallH),
         (1, DimKind::Vertical, Cat::OverallV),
     ] {
-        if let [Some(a), Some(b)] = &refs[k] {
+        if let [Some(a), Some(b)] = &refs[k]
+            && !on_one_circle(a, b)
+        {
             ctx.push(
                 out,
                 kind,
@@ -503,7 +528,16 @@ fn view_proposals(
             visible: false,
         });
         r.turn += (e.t1 - e.t0).abs();
-        r.visible |= visible[i];
+        // Herkunft: die erste sichtbare Kante der Gruppe (vor verdeckten).
+        if visible[i] && !r.visible {
+            r.geo = Geo3::Circle {
+                center: frame.origin,
+                normal: frame.z,
+                radius: *radius,
+            };
+            (r.body, r.edge, r.center) = (body, edge, frame.origin);
+            r.visible = true;
+        }
     }
     for r in rounds.values() {
         if !r.visible {
@@ -638,6 +672,41 @@ fn view_proposals(
     }
 }
 
+/// Volle Kreise der Ansicht (jede Lage): Kreiskanten der Striche, zusammengefasst nach Mitte,
+/// Achse und Radius, deren Winkel zusammen einen vollen Kreis ergeben; je Kreis
+/// `(Mitte, Einheitsnormale, Radius)`.
+fn full_circles(ctx: &ViewCtx) -> Vec<(DVec3, DVec3, f64)> {
+    let mut groups: BTreeMap<String, ((DVec3, DVec3, f64), f64)> = BTreeMap::new();
+    for s in &ctx.lines.strokes {
+        let StrokeOrigin::Edge { body, edge } = s.origin else {
+            continue;
+        };
+        let Some((_, e)) = edge_of(ctx.bodies, body, edge) else {
+            continue;
+        };
+        let Curve::Circle { frame, radius } = &e.curve else {
+            continue;
+        };
+        let n = frame.z.normalize_or_zero();
+        if !(radius.is_finite() && *radius > 0.0 && frame.origin.is_finite()) || n == DVec3::ZERO {
+            continue;
+        }
+        let Some(key) = axis_key("C", frame.origin, n, *radius) else {
+            continue;
+        };
+        let key = format!("{key}|{}", qv(frame.origin));
+        groups
+            .entry(key)
+            .or_insert(((frame.origin, n, *radius), 0.0))
+            .1 += (e.t1 - e.t0).abs();
+    }
+    groups
+        .into_values()
+        .filter(|(_, turn)| *turn >= std::f64::consts::TAU - FULL_TURN_TOL)
+        .map(|(c, _)| c)
+        .collect()
+}
+
 /// Bezüge an den äußersten Lagen der sichtbaren Linien: `[Richtung x, y][Seite min, max]`.
 /// Kanten vor Eckpunkten, sonst der erste Strich in der Reihenfolge der Linien.
 fn extreme_refs(
@@ -648,8 +717,28 @@ fn extreme_refs(
 ) -> [[Option<Ref>; 2]; 2] {
     let basis = &ctx.lines.basis;
     let d = basis.d;
-    let near = (EXTREME_REL * ctx.lines.extent).max(ctx.tol);
+    let near = ctx.near();
     let ext = [[lo.x, hi.x], [lo.y, hi.y]];
+    let at_extreme =
+        |p: DVec2| (0..2).any(|k| (0..2).any(|side| (p[k] - ext[k][side]).abs() <= near));
+    // Nur Enden an einer äußersten Lage zählen; in Zellen der Größe `near` abgelegt, damit
+    // die Suche je Eckpunkt nicht alle Enden durchläuft.
+    let cell = |p: DVec2| ((p.x / near).floor() as i64, (p.y / near).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<DVec2>> = HashMap::new();
+    for &p in ends {
+        if p.is_finite() && at_extreme(p) {
+            grid.entry(cell(p)).or_default().push(p);
+        }
+    }
+    let is_visible_end = |q: DVec2| {
+        let (cx, cy) = cell(q);
+        (cx - 1..=cx + 1).any(|x| {
+            (cy - 1..=cy + 1).any(|y| {
+                grid.get(&(x, y))
+                    .is_some_and(|v| v.iter().any(|p| p.distance(q) <= near))
+            })
+        })
+    };
     let mut out: [[Option<Ref>; 2]; 2] = Default::default();
     let offer = |out: &mut [[Option<Ref>; 2]; 2], k: usize, at: f64, r: &Ref| {
         for side in 0..2 {
@@ -697,7 +786,12 @@ fn extreme_refs(
             Curve::Circle { frame, radius } => {
                 let n = frame.z.normalize_or_zero();
                 let t = basis.project(n).perp().normalize_or_zero();
-                if n.dot(d).abs() <= VIEW_TOL && t != DVec2::ZERO && frame.origin.is_finite() {
+                if n.dot(d).abs() <= VIEW_TOL
+                    && t != DVec2::ZERO
+                    && frame.origin.is_finite()
+                    && radius.is_finite()
+                    && *radius > 0.0
+                {
                     let r = Ref {
                         geo: Geo3::Circle {
                             center: frame.origin,
@@ -723,7 +817,7 @@ fn extreme_refs(
                 continue;
             };
             let qp = basis.project(p);
-            if !ends.iter().any(|x| x.distance(qp) <= near) {
+            if !(at_extreme(qp) && is_visible_end(qp)) {
                 continue;
             }
             let r = Ref {

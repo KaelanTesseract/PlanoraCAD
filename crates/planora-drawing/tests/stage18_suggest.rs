@@ -498,6 +498,212 @@ fn baseline_order_increases_with_distance() {
     assert_origins_match(&solids, &cs, 1e-9);
 }
 
+// --- Nachbesserung 1 ---------------------------------------------------------------------
+
+#[test]
+fn many_strokes_with_corner_vertices_stay_fast() {
+    // Die Linien der Vorderansicht eines Quaders 10 × 20 × 30, `COPIES`-mal wiederholt; von jedem
+    // Strich ist nur die mittlere Hälfte sichtbar. Die Eckpunkte liegen an den äußersten Lagen,
+    // sind aber nie Ende eines sichtbaren Stücks: Ein Vergleich jedes Eckpunkts mit allen Enden
+    // wäre quadratisch (hier über 10⁹ Vergleiche, im Prüfbau weit über der Zeitgrenze).
+    const COPIES: usize = 5000;
+    let s = box_solid(10.0, 20.0, 30.0);
+    let solids = [&s];
+    let sheet = Sheet::new(&solids, &[ViewKind::Front]);
+    let base = sheet.lines[0].clone();
+    let mut lines = base.clone();
+    lines.strokes.clear();
+    lines.pieces.clear();
+    for _ in 0..COPIES {
+        for st in &base.strokes {
+            let (a, b) = (st.t0, st.t1);
+            lines.pieces.push(planora_drawing::Piece {
+                stroke: lines.strokes.len(),
+                t0: a + 0.25 * (b - a),
+                t1: a + 0.75 * (b - a),
+                vis: planora_drawing::Visibility::Visible,
+            });
+            lines.strokes.push(st.clone());
+        }
+    }
+    assert!(lines.strokes.len() >= 4 * COPIES, "{}", lines.strokes.len());
+    let t = std::time::Instant::now();
+    let cs = suggest(
+        &bodies_of(&solids),
+        &[(sheet.specs[0].clone(), &lines)],
+        &[],
+    );
+    let took = t.elapsed();
+    // Sichtbar: die mittleren Hälften; sie reichen quer bis an die äußersten Lagen (x = 0, 10
+    // und z = 0, 30): Breite 10 und Höhe 30 an Kanten.
+    let sm: Vec<(DimKind, f64)> = cs
+        .iter()
+        .map(|c| {
+            let m = measure(c.kind, &c.geos, &lines.basis, ViewKind::Front, lines.extent);
+            (c.kind, m.unwrap().value)
+        })
+        .collect();
+    assert_eq!(sm.len(), 2, "{sm:?}");
+    assert_eq!((sm[0].0, sm[1].0), (DimKind::Horizontal, DimKind::Vertical));
+    assert!(
+        (sm[0].1 - 10.0).abs() <= TOL && (sm[1].1 - 30.0).abs() <= TOL,
+        "{sm:?}"
+    );
+    assert!(
+        cs.iter().all(|c| c
+            .origins
+            .iter()
+            .all(|o| matches!(o, CandidateOrigin::Edge { .. }))),
+        "{cs:?}"
+    );
+    eprintln!("suggest: {took:?}");
+    // Vorher (Vergleich mit allen Enden) im Prüfbau 44 s, jetzt 0,2 s; Grenze mit viel Luft.
+    assert!(took.as_secs_f64() < 10.0, "{took:?}");
+}
+
+#[test]
+fn diameter_origin_prefers_a_visible_edge() {
+    // Zweimal derselbe Körper; vor die Linien der Vorderansicht kommt je Kreiskante eine verdeckte
+    // Kopie mit Herkunft im zweiten Körper. Die Gruppe (gleiche Mitte, gleicher Radius) muss die
+    // sichtbare Kante des ersten Körpers als Herkunft nehmen.
+    let s = box_with_hole(40.0, 20.0, 30.0, 5.0, DVec3::Y);
+    let solids = [&s, &s];
+    let sheet = Sheet::new(&[&s], &[ViewKind::Front]);
+    let base = &sheet.lines[0];
+    let mut lines = base.clone();
+    let hidden: Vec<_> = base
+        .strokes
+        .iter()
+        .filter(|st| matches!(st.curve, planora_kernel::Curve::Circle { .. }))
+        .map(|st| {
+            let mut c = st.clone();
+            if let planora_drawing::stroke::StrokeOrigin::Edge { edge, .. } = st.origin {
+                c.origin = planora_drawing::stroke::StrokeOrigin::Edge { body: 1, edge };
+            }
+            c
+        })
+        .collect();
+    assert!(!hidden.is_empty());
+    let shift = hidden.len();
+    lines.strokes = hidden
+        .iter()
+        .cloned()
+        .chain(base.strokes.iter().cloned())
+        .collect();
+    lines.pieces = hidden
+        .iter()
+        .enumerate()
+        .map(|(i, st)| planora_drawing::Piece {
+            stroke: i,
+            t0: st.t0,
+            t1: st.t1,
+            vis: planora_drawing::Visibility::Hidden,
+        })
+        .chain(base.pieces.iter().map(|p| planora_drawing::Piece {
+            stroke: p.stroke + shift,
+            ..*p
+        }))
+        .collect();
+    let cs = suggest(
+        &bodies_of(&solids),
+        &[(sheet.specs[0].clone(), &lines)],
+        &[],
+    );
+    let d: Vec<&Candidate> = cs.iter().filter(|c| c.kind == DimKind::Diameter).collect();
+    assert_eq!(d.len(), 1, "{cs:?}");
+    assert!(
+        matches!(d[0].origins[0], CandidateOrigin::Edge { body: 0, .. }),
+        "{:?}",
+        d[0]
+    );
+    for c in cs.iter().filter(|c| c.chain.is_some()) {
+        assert!(
+            matches!(c.origins[1], CandidateOrigin::Center { body: 0, .. }),
+            "{c:?}"
+        );
+    }
+}
+
+#[test]
+fn circle_edges_with_broken_radius_are_no_reference() {
+    // Zylinder r = 5, h = 12, dessen Kreiskanten den Radius NaN tragen (Linien vom heilen
+    // Zylinder): die Kreise taugen nicht als Bezug der Höhe, die Höhe hängt an den Eckpunkten
+    // der Naht; kein Absturz, kein Vorschlag mit kaputten Zahlen.
+    let good = cylinder_solid(5.0, 12.0);
+    let bad = cylinder_with_bad_numbers(f64::NAN, 5.0);
+    let sheet = Sheet::new(&[&good], &[ViewKind::Front]);
+    let cs = sheet.suggest(&[&bad], &[]);
+    let v: Vec<&Candidate> = cs.iter().filter(|c| c.kind == DimKind::Vertical).collect();
+    assert_eq!(v.len(), 1, "{cs:?}");
+    assert!((sheet.value(v[0]) - 12.0).abs() <= TOL);
+    assert!(
+        v[0].origins
+            .iter()
+            .all(|o| matches!(o, CandidateOrigin::EdgeEnd { .. })),
+        "{:?}",
+        v[0]
+    );
+    // Ø nur über die (heile) Zylinderfläche, nie über die kaputten Kreise.
+    assert!(
+        cs.iter()
+            .filter(|c| c.kind == DimKind::Diameter)
+            .all(|c| matches!(c.geos[0], Geo3::Axis { .. })),
+        "{cs:?}"
+    );
+}
+
+/// Zylinder (Radius `r`, Höhe `h`, Achse Z) aus zwei Halbkreisbögen: Eckpunkte bei 0° und 180°
+/// auf Boden- und Deckelkreis.
+fn two_arc_cylinder(r: f64, h: f64) -> Solid {
+    use planora_kernel::{Profile, ProfileLoop, Segment};
+    let profile = Profile {
+        outer: ProfileLoop {
+            start: DVec2::new(r, 0.0),
+            segments: vec![
+                Segment::Arc {
+                    center: DVec2::ZERO,
+                    sweep: std::f64::consts::PI,
+                },
+                Segment::Arc {
+                    center: DVec2::ZERO,
+                    sweep: std::f64::consts::PI,
+                },
+            ],
+        },
+        holes: vec![],
+    };
+    planora_kernel::extrude(
+        &profile,
+        &planora_math::Frame::WORLD,
+        h,
+        &planora_math::Tolerance::default(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn vertices_on_one_circle_give_no_second_diameter() {
+    // Zylinder r = 5, h = 12 aus zwei Halbkreisen: Die Eckpunkte bei x = ±5 sind die äußersten
+    // Lagen von oben und von vorn; ein Gesamtmaß 10 zwischen ihnen wäre das Ø noch einmal.
+    let s = two_arc_cylinder(5.0, 12.0);
+    let solids = [&s];
+    let sheet = Sheet::new(&solids, &[ViewKind::Front, ViewKind::Top]);
+    let cs = sheet.suggest(&solids, &[]);
+    let sm = summary(&sheet, &cs);
+    assert_eq!(sm.len(), 2, "{sm:?}");
+    assert_eq!(
+        count(&sm, ViewKind::Top, DimKind::Diameter, 10.0),
+        1,
+        "{sm:?}"
+    );
+    assert_eq!(
+        count(&sm, ViewKind::Front, DimKind::Vertical, 12.0),
+        1,
+        "{sm:?}"
+    );
+    assert_origins_match(&solids, &cs, 1e-9);
+}
+
 // --- Prüfreihe ---------------------------------------------------------------------------
 
 /// Bildlage entlang der Messrichtung eines linearen Maßes in der Normansicht `kind` (eigene
