@@ -61,8 +61,17 @@ pub enum GeoRef {
 pub enum Tolerance {
     None,
     Symmetric(f64),
-    Limits { upper: f64, lower: f64 },
-    LimitSizes { upper: f64, lower: f64 },
+    Limits {
+        upper: f64,
+        lower: f64,
+    },
+    /// Grenzmaße: `upper`/`lower` sind **Abweichungen** vom Nennmaß (wie bei `Limits`); gezeigt
+    /// werden Höchst- und Mindestmaß `Nennmaß + upper` / `Nennmaß + lower` statt des Nennmaßes,
+    /// z. B. 12,5 mit +0,1/−0,1 → „12,6“ und „12,4“.
+    LimitSizes {
+        upper: f64,
+        lower: f64,
+    },
     Fit(String),
 }
 

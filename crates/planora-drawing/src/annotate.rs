@@ -41,7 +41,9 @@
 //! außen, tangential und lesbar (gedreht → eine Texthöhe weiter außen).
 
 use crate::centerline::CenterLine;
-use crate::dimension::{Anchor, ChainMode, DimError, DimId, DimKind, DimSpec, Measured, Tolerance};
+use crate::dimension::{
+    ACROSS_TOL, Anchor, ChainMode, DimError, DimId, DimKind, DimSpec, Measured, Tolerance,
+};
 use crate::model::ViewId;
 use crate::sheet::SheetTransform;
 use planora_math::DVec2;
@@ -306,7 +308,7 @@ pub fn group_base(members: &[&Measured], xf: &SheetTransform) -> Option<GroupBas
         };
         let Some(u) = unit(*dir) else { continue };
         let u0 = *first.get_or_insert(u);
-        if u0.perp_dot(u).abs() > PARALLEL_TOL {
+        if !parallel(u0, u) {
             continue;
         }
         let w = cross_axis(u0);
@@ -320,8 +322,14 @@ pub fn group_base(members: &[&Measured], xf: &SheetTransform) -> Option<GroupBas
     (min.is_finite() && max.is_finite()).then_some(GroupBase { w, min, max })
 }
 
-/// Grenze für „parallel“ bei Gruppen (Sinus).
-const PARALLEL_TOL: f64 = 1e-9;
+/// Strecken bis zu dieser Länge (Blatt-mm) entfallen.
+const ZERO_LEN: f64 = 1e-12;
+
+/// Zwei Einheitsrichtungen gelten als parallel (gleichsinnig, falls `same_sense`), wenn der
+/// Sinus ihres Winkels höchstens [`ACROSS_TOL`] ist (dieselbe Grenze wie bei der Messung).
+fn parallel(a: DVec2, b: DVec2) -> bool {
+    a.perp_dot(b).abs() <= ACROSS_TOL
+}
 
 /// Markierungen eines gemessenen Maßes ohne Gruppenbezug (siehe [`layout_dimension_in`]).
 pub fn layout_dimension(
@@ -571,7 +579,8 @@ fn linear(
         ea.dot(w).min(eb.dot(w))
     };
     if let Some(g) = base
-        && g.w.dot(w) >= 1.0 - PARALLEL_TOL
+        && parallel(g.w, w)
+        && g.w.dot(w) > 0.0
     {
         c0 = if outward {
             c0.max(g.max)
@@ -632,7 +641,12 @@ fn round(ctx: &Ctx, c: DVec2, r: f64, angle_deg: f64, diameter: bool) -> Vec<Mar
         out.push(ctx.arrow(p1, u));
         let (a, flipped) = readable(th);
         let t = if flipped { -u } else { u };
-        ctx.text(&mut out, c + t.perp() * TEXT_GAP, a, TextAnchor::Middle);
+        // Nicht in der Mitte (dort kreuzen sich die Mittellinien): auf der Hälfte der Linie, in
+        // die der Text liest, bei r/2 – mindestens so weit, dass der Text die Mitte nicht
+        // überdeckt.
+        let along = (0.5 * r).max(0.5 * ctx.text.width() + TEXT_GAP);
+        let pos = c + t * along + t.perp() * TEXT_GAP;
+        ctx.text(&mut out, pos, a, TextAnchor::Middle);
         return out;
     }
     let tip = c + u * r;
@@ -641,7 +655,10 @@ fn round(ctx: &Ctx, c: DVec2, r: f64, angle_deg: f64, diameter: bool) -> Vec<Mar
     let side = if u.x < 0.0 { -1.0 } else { 1.0 };
     let end = knee + DVec2::new(side * SHOULDER, 0.0);
     out.push(ctx.arrow(tip, u * s));
-    out.push(ctx.line(tip, knee));
+    // Abstand null: keine Führungslinie der Länge null, nur Schulter.
+    if ctx.offset.abs() > ZERO_LEN {
+        out.push(ctx.line(tip, knee));
+    }
     out.push(ctx.line(knee, end));
     let pos = end + DVec2::new(side * TEXT_GAP, -0.5 * DIM_TEXT_H);
     let anchor = if side > 0.0 {
@@ -707,14 +724,27 @@ fn angle(ctx: &Ctx, v: DVec2, d1: DVec2, d2: DVec2) -> Vec<Mark> {
 
 /// Ein verlorenes Maß in Rot (`MarkKind::Lost`): mit letzter bekannter Lage deren Maß-,
 /// Hilfs- und Führungslinien und Pfeile (wie [`layout_dimension`], Bezugsmaße mit ihrer Stufe
-/// `order`) und an der Textstelle `"? " + Grund` (Grund auf `LOST_REASON_MAX` Zeichen gekürzt,
-/// dann „…“); ohne letzte Lage (oder wenn sie sich nicht zeichnen lässt) nur ein `?` in der
+/// `order`) und als Text `"? " + Grund` (Grund auf `LOST_REASON_MAX` Zeichen gekürzt, dann „…“),
+/// gesetzt nach denselben Regeln wie ein Maßtext (passt er nicht zwischen die Pfeile, steht er
+/// dahinter); ohne letzte Lage (oder wenn sie sich nicht zeichnen lässt) nur ein `?` in der
 /// Mitte der Ansicht (`xf.apply(xf.bbox_center)`).
 pub fn layout_lost(
     spec: &DimSpec,
     last: Option<&Anchor>,
     xf: &SheetTransform,
     reason: &str,
+) -> Vec<Mark> {
+    layout_lost_in(spec, last, xf, reason, None)
+}
+
+/// Wie [`layout_lost`], mit dem gemeinsamen Bezug der Gruppe ([`group_base`] der messbaren
+/// Glieder): ein verlorenes Kettenglied bleibt auf der Linie seiner Gruppe.
+pub fn layout_lost_in(
+    spec: &DimSpec,
+    last: Option<&Anchor>,
+    xf: &SheetTransform,
+    reason: &str,
+    base: Option<&GroupBase>,
 ) -> Vec<Mark> {
     let center_mark = || {
         finite_or_empty(vec![Mark::Text {
@@ -757,23 +787,9 @@ pub fn layout_lost(
         stack_height: DIM_TEXT_H,
     };
     let level = spec.chain.map_or(0, |c| c.order as usize);
-    // Lage des Textes wie bei einem kurzen Wert, damit die Linien dieselben bleiben.
-    let mut plain = spec.clone();
-    plain.tolerance = Tolerance::None;
-    plain.text_override = None;
-    let probe = dimension_text(&plain, &m);
-    let mut marks = layout_with_text(&plain, &m, xf, level, None, &probe, MarkKind::Lost);
-    let mut first = true;
-    marks.retain_mut(|mk| {
-        if let Mark::Text { text: t, .. } = mk {
-            if !first {
-                return false;
-            }
-            first = false;
-            *t = text.main.clone();
-        }
-        true
-    });
+    // Die Beschriftung selbst bestimmt die Textlage (Passt-Regel): ein langer Grund steht
+    // rechts neben dem Maß statt quer über den Hilfslinien.
+    let marks = layout_with_text(spec, &m, xf, level, base, &text, MarkKind::Lost);
     let marks = finite_or_empty(marks);
     if marks.is_empty() {
         center_mark()

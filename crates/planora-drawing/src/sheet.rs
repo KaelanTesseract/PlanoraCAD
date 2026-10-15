@@ -5,7 +5,7 @@ use crate::ViewLines;
 use crate::Visibility;
 use crate::annotate::{
     DimEntry, GroupBase, Mark, ResolvedDims, group_base, layout_centerline, layout_dimension_in,
-    layout_lost,
+    layout_lost_in,
 };
 use crate::dimension::{ChainMode, Measured};
 use crate::layout::{align_dir, view_extent};
@@ -216,27 +216,55 @@ fn view_dimension_marks(list: &[DimEntry], dims: &ResolvedDims, xf: &SheetTransf
         .filter_map(|(g, ms)| group_base(ms, xf).map(|b| (*g, b)))
         .collect();
     let mut marks = Vec::new();
+    // Bereits gezeichnete Linien je Gruppe: Hilfslinien an gemeinsamen Punkten einer Kette
+    // erscheinen nur einmal.
+    let mut drawn: BTreeMap<u64, Vec<Mark>> = BTreeMap::new();
     for (s, r) in list {
-        match r {
-            Ok(m) => {
-                let level = match s.chain {
-                    Some(c) if c.mode == ChainMode::Baseline => c.order as usize,
-                    _ => 0,
-                };
-                let base = s.chain.and_then(|c| bases.get(&c.group));
-                marks.extend(layout_dimension_in(s, m, xf, level, base));
+        let base = s.chain.and_then(|c| bases.get(&c.group));
+        let level = match s.chain {
+            Some(c) if c.mode == ChainMode::Baseline => c.order as usize,
+            _ => 0,
+        };
+        let new = match r {
+            Ok(m) => layout_dimension_in(s, m, xf, level, base),
+            Err(e) => layout_lost_in(s, dims.last_known.get(&s.id), xf, &e.to_string(), base),
+        };
+        match s.chain {
+            Some(c) => {
+                let seen = drawn.entry(c.group).or_default();
+                for mk in new {
+                    if matches!(mk, Mark::Line { .. }) && seen.iter().any(|o| same_line(o, &mk)) {
+                        continue;
+                    }
+                    seen.push(mk.clone());
+                    marks.push(mk);
+                }
             }
-            Err(e) => {
-                marks.extend(layout_lost(
-                    s,
-                    dims.last_known.get(&s.id),
-                    xf,
-                    &e.to_string(),
-                ));
-            }
+            None => marks.extend(new),
         }
     }
     marks
+}
+
+/// Gleiche Linie (Art gleich, Enden bis auf 1e-9 gleich, Richtung egal)?
+fn same_line(a: &Mark, b: &Mark) -> bool {
+    const EPS: f64 = 1e-9;
+    let near = |p: DVec2, q: DVec2| (p.x - q.x).abs() <= EPS && (p.y - q.y).abs() <= EPS;
+    match (a, b) {
+        (
+            Mark::Line {
+                a: p,
+                b: q,
+                kind: k,
+            },
+            Mark::Line {
+                a: p2,
+                b: q2,
+                kind: k2,
+            },
+        ) => k == k2 && ((near(*p, *p2) && near(*q, *q2)) || (near(*p, *q2) && near(*q, *p2))),
+        _ => false,
+    }
 }
 
 fn kind_index(k: ViewKind) -> u8 {

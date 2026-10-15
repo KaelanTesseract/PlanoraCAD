@@ -518,8 +518,10 @@ fn diameter_leader_default_45_degrees() {
 }
 
 // (h) Kreis 30 mm auf dem Blatt (r = 15): Linie durch die Mitte von (100,100) ∓ 15·u =
-// (89,393…; 89,393…) bis (110,606…; 110,606…), zwei Pfeile innen, Text auf der Linie mittig:
-// (100,100) + (−√2/2, √2/2) = (99,292…; 100,707…), Winkel π/4. Grenze 25 mm: r = 12,5 →
+// (89,393…; 89,393…) bis (110,606…; 110,606…), zwei Pfeile innen, Text auf der Linie, nicht in
+// der Mitte (Mittellinienkreuz), sondern bei r/2 = 7,5 entlang u (Text „Ø30,0“ 10,5 breit:
+// 7,5 ≥ 5,25 + 1) plus 1 senkrecht: (100 + 7,5·√2/2 − √2/2, 100 + 7,5·√2/2 + √2/2) =
+// (100 + 6,5·√2/2, 100 + 8,5·√2/2), Winkel π/4. Grenze 25 mm: r = 12,5 →
 // durch die Mitte, r = 12,49 → Führungslinie. Maßstab 1:2 mit r = 25 → 25 mm → durch.
 #[test]
 fn large_diameter_gets_a_through_line_with_two_arrows() {
@@ -535,7 +537,10 @@ fn large_diameter_gets_a_through_line_with_two_arrows() {
     assert_eq!(t.text, "Ø30,0");
     assert_eq!(t.anchor, TextAnchor::Middle);
     assert!((t.angle - FRAC_PI_4).abs() < 1e-12);
-    assert!(close(t.pos, v(100.0 - H2, 100.0 + H2), 1e-9), "{t:?}");
+    assert!(
+        close(t.pos, v(100.0 + 6.5 * H2, 100.0 + 8.5 * H2), 1e-9),
+        "{t:?}"
+    );
 
     let m = layout_dimension(&sp, &round(v(100.0, 100.0), 12.5, 'Ø'), &id_xf(), 0);
     assert_eq!(find_arrows(&m).len(), 2);
@@ -881,7 +886,10 @@ fn format_value_rounds_and_uses_the_german_comma() {
 }
 
 // (o) Verlorenes Maß: alles rot (`Lost`), die letzte Maßlinie (20,60)–(50,60), ein Text
-// „? <Grund>“ an der Textstelle (35, 61). Langer Grund wird auf 40 Zeichen gekürzt („…“).
+// „? <Grund>“ nach der Passt-Regel: „? Der Bezug wurde nicht gefunden: Kante 3“ hat 39
+// Zeichen = 81,9 mm > 30 − 7 → rechts daneben, Start bei 50 + 3,5 + 2 = 55,5, Höhe 61. Kurzer
+// Grund „? a“ (6,3 mm) mittig bei (35, 61). Langer Grund wird auf 40 Zeichen gekürzt („…“):
+// 43 Zeichen = 90,3 mm, ebenfalls Start bei (55,5; 61), nicht quer über den Hilfslinien.
 // Ohne letzte Lage: nur „?“ in der Mitte der Ansicht (tx, ty).
 #[test]
 fn lost_dimension_is_red_with_a_question_mark_and_reason() {
@@ -893,10 +901,19 @@ fn lost_dimension_is_red_with_a_question_mark_and_reason() {
     assert!(has_line(&m, v(20.0, 60.0), v(50.0, 60.0), TOL));
     let t = one_text(&m);
     assert_eq!(t.text, "? Der Bezug wurde nicht gefunden: Kante 3");
+    assert_eq!(t.anchor, TextAnchor::Start);
+    assert!(close(t.pos, v(55.5, 61.0), TOL), "{t:?}");
+    let t = one_text(&layout_lost(&sp, Some(&last), &id_xf(), "a"));
+    assert_eq!(t.anchor, TextAnchor::Middle);
     assert!(close(t.pos, v(35.0, 61.0), TOL));
     let long = "x".repeat(60);
     let t = one_text(&layout_lost(&sp, Some(&last), &id_xf(), &long));
     assert_eq!(t.text, format!("? {}…", "x".repeat(40)));
+    assert!((text_w(&t.text) - 90.3).abs() < 1e-9);
+    assert_eq!(t.anchor, TextAnchor::Start);
+    assert!(close(t.pos, v(55.5, 61.0), TOL), "{t:?}");
+    // Der Textkasten (Start bis Start + 90,3) beginnt rechts der rechten Hilfslinie (x = 50).
+    assert!(t.pos.x > 50.0);
     // Rundes Maß verloren: Führungslinie rot.
     let m = layout_lost(
         &spec(DimKind::Diameter, 10.0),
@@ -1609,4 +1626,186 @@ fn old_sheet_construction_is_unchanged() {
     let m3 = build_sheet(&d, &res);
     assert_eq!(golden_text(&m3), golden);
     assert!(m3.views.iter().all(|v| v.marks.is_empty()));
+}
+
+/// Eigene Textbreite: 0,6 · 3,5 · Zeichenzahl.
+fn text_w(t: &str) -> f64 {
+    0.6 * 3.5 * t.chars().count() as f64
+}
+
+// Fix 1: Text eines großen Ø nicht auf dem Mittellinienkreuz. Für 0°, 45°, 90°, 135°, 180°,
+// 270°: Anker mindestens halbe Textbreite (5,25) von der Mitte entfernt, und der Textkasten
+// (Anker ± Breite/2 in Leserichtung, 0 … 3,5 senkrecht dazu) enthält die Mitte nicht.
+#[test]
+fn large_diameter_text_avoids_the_centre() {
+    let c = v(100.0, 100.0);
+    for deg in [0.0f64, 45.0, 90.0, 135.0, 180.0, 270.0] {
+        let mut sp = spec(DimKind::Diameter, 10.0);
+        sp.angle = deg;
+        let m = layout_dimension(&sp, &round(c, 15.0, 'Ø'), &id_xf(), 0);
+        let t = one_text(&m);
+        assert_eq!(t.anchor, TextAnchor::Middle);
+        let w = text_w(&t.text);
+        let d = t.pos - c;
+        assert!(d.length() >= 0.5 * w, "{deg}: {t:?}");
+        let along = v(t.angle.cos(), t.angle.sin());
+        let up = v(-along.y, along.x);
+        // Lage der Mitte im Textsystem (Ursprung Anker).
+        let (x, y) = (-d.x * along.x - d.y * along.y, -d.x * up.x - d.y * up.y);
+        let inside = x.abs() <= 0.5 * w && (0.0..=3.5).contains(&y);
+        assert!(!inside, "{deg}: Mitte im Textkasten {t:?}");
+        // Lesbar und auf der Linie (Abstand 1 von der Linie durch die Mitte).
+        assert!(t.angle > -FRAC_PI_2 && t.angle <= FRAC_PI_2 + 1e-12);
+        let th = deg.to_radians();
+        let u = v(th.cos(), th.sin());
+        assert!(
+            (dist_point_line(t.pos, c, c + u) - 1.0).abs() < 1e-9,
+            "{deg}"
+        );
+    }
+}
+
+// Fix 8: Führungslinie mit Abstand 0: keine Strecke der Länge null, Pfeil, Schulter und Text
+// bleiben. Kreis (100,100) r 10, 45°: Spitze = Knick (107,07…), Schulter bis 111,07….
+#[test]
+fn leader_with_zero_offset_has_no_zero_length_line() {
+    let m = layout_dimension(
+        &spec(DimKind::Diameter, 0.0),
+        &round(v(100.0, 100.0), 10.0, 'Ø'),
+        &id_xf(),
+        0,
+    );
+    let tip = v(100.0 + 10.0 * H2, 100.0 + 10.0 * H2);
+    assert_lines(&m, &[(tip, v(tip.x + 4.0, tip.y))], 1e-9);
+    for (a, b, _) in lines(&m) {
+        assert!(a.distance(b) > 1e-9);
+    }
+    assert_eq!(find_arrows(&m).len(), 1);
+    assert_eq!(one_text(&m).text, "Ø20,0");
+}
+
+// Fix 5: dieselbe Parallel-Grenze (Sinus 1e-6) für Gruppen und Bezug: ein Glied mit Richtung
+// (1, 1e-7) zählt zur Gruppe (seine Spanne bis y = 90 hebt den Bezug), eines mit (1, 1e-5)
+// nicht.
+#[test]
+fn group_parallelism_uses_the_across_tolerance() {
+    let m1 = meas(30.0, lin(v(20.0, 50.0), v(50.0, 50.0), v(1.0, 0.0)), None);
+    let tall = |dy: f64| {
+        meas(
+            30.0,
+            Anchor::Linear {
+                a: v(50.0, 50.0),
+                b: v(80.0, 90.0),
+                dir: v(1.0, dy),
+                a_span: (v(50.0, 50.0), v(50.0, 50.0)),
+                b_span: (v(80.0, 40.0), v(80.0, 90.0)),
+            },
+            None,
+        )
+    };
+    let near = tall(1e-7);
+    let far = tall(1e-5);
+    let b = group_base(&[&m1, &near], &id_xf()).unwrap();
+    assert!(
+        (b.max - 90.0).abs() < 1e-9 && (b.min - 40.0).abs() < 1e-9,
+        "{b:?}"
+    );
+    let b2 = group_base(&[&m1, &far], &id_xf()).unwrap();
+    assert!((b2.max - 50.0).abs() < 1e-9, "{b2:?}");
+    // Der Bezug gilt für ein Maß, dessen Richtung um 1e-7 abweicht (Linie bei 100), nicht bei
+    // 1e-5 (eigener Bezug 50 → Linie bei 60). Neigung nach unten rechts: die Querachse bleibt
+    // oben (bei Neigung nach oben rechts zeigt sie nach der Anker-Regel `rightward` nach unten).
+    let s = chained(ChainMode::Chain, 1, 0, 10.0);
+    let tilt = |dy: f64| meas(30.0, lin(v(20.0, 50.0), v(50.0, 50.0), v(1.0, dy)), None);
+    let m = layout_dimension_in(&s, &tilt(-1e-7), &id_xf(), 0, Some(&b));
+    assert_eq!(line_through(&m, v(35.0, 100.0), 1e-4).len(), 1, "{m:?}");
+    let m = layout_dimension_in(&s, &tilt(-1e-5), &id_xf(), 0, Some(&b));
+    assert_eq!(line_through(&m, v(35.0, 60.0), 1e-3).len(), 1, "{m:?}");
+}
+
+// Fix 6 und 7 über `build_sheet_with` (Vorne: Blatt = p + (80,90)).
+// Fix 7: Kette Gruppe 9, offset 10, Punkte (0,20), (10,20), (40,20) → Blatt x 80, 90, 120 bei
+// y 110: Linie 120, Hilfslinien je Punkt einmal (90 nur einmal, obwohl beide Glieder sie
+// haben): 3 senkrechte Linien von 111 bis 122, nicht 4.
+// Fix 6: Kette Gruppe 8, offset −10: Glied 1 verloren (letzte Lage (0,20)–(10,0), Spanne a
+// 0…20), Glied 2 messbar mit Spanne (40,−5)…(40,0) → Gruppenbezug min = −5 → Blatt 85 → beide
+// Linien bei 75 (das verlorene ohne Gruppenbezug läge bei 90 − 10 = 80).
+#[test]
+fn chain_witness_lines_once_and_lost_member_on_the_group_line() {
+    let f = fixture();
+    let mut dims = ResolvedDims::default();
+    let mut list = Vec::new();
+    for (order, (x0, x1)) in [(0u32, (0.0, 10.0)), (1, (10.0, 40.0))] {
+        let mut s = h_spec(f.front, 30 + order as u64, 10.0);
+        s.chain = Some(ChainSpec {
+            group: 9,
+            mode: ChainMode::Chain,
+            order,
+        });
+        list.push((
+            s,
+            Ok(meas(
+                x1 - x0,
+                lin(v(x0, 20.0), v(x1, 20.0), v(1.0, 0.0)),
+                None,
+            )),
+        ));
+    }
+    let mut c1 = h_spec(f.front, 40, -10.0);
+    c1.chain = Some(ChainSpec {
+        group: 8,
+        mode: ChainMode::Chain,
+        order: 0,
+    });
+    let mut c2 = c1.clone();
+    c2.id = DimId(41);
+    c2.chain = Some(ChainSpec {
+        group: 8,
+        mode: ChainMode::Chain,
+        order: 1,
+    });
+    list.push((c1, Err(DimError::Lost("Kante 1".into()))));
+    dims.last_known.insert(
+        DimId(40),
+        Anchor::Linear {
+            a: v(0.0, 20.0),
+            b: v(10.0, 0.0),
+            dir: v(1.0, 0.0),
+            a_span: (v(0.0, 0.0), v(0.0, 20.0)),
+            b_span: (v(10.0, 0.0), v(10.0, 0.0)),
+        },
+    );
+    list.push((
+        c2,
+        Ok(meas(
+            30.0,
+            Anchor::Linear {
+                a: v(10.0, 0.0),
+                b: v(40.0, 0.0),
+                dir: v(1.0, 0.0),
+                a_span: (v(10.0, 0.0), v(10.0, 0.0)),
+                b_span: (v(40.0, -5.0), v(40.0, 0.0)),
+            },
+            None,
+        )),
+    ));
+    dims.by_view.insert(f.front, list);
+    let m = build_sheet_with(&f.d, &res(&f), &dims);
+    let dm = of_kind(&m.views[0].marks, MarkKind::Dimension);
+    let up: Vec<_> = lines(&dm)
+        .into_iter()
+        .filter(|(a, b, _)| (a.x - b.x).abs() < 1e-12 && a.y.max(b.y) > 115.0)
+        .collect();
+    assert_eq!(up.len(), 3, "{up:?}");
+    for x in [80.0, 90.0, 120.0] {
+        assert!(has_line(&dm, v(x, 111.0), v(x, 122.0), TOL), "{x}");
+    }
+    assert!(has_line(&dm, v(80.0, 120.0), v(90.0, 120.0), TOL));
+    assert!(has_line(&dm, v(90.0, 120.0), v(120.0, 120.0), TOL));
+    let lost = of_kind(&m.views[0].marks, MarkKind::Lost);
+    assert!(
+        has_line(&lost, v(80.0, 75.0), v(90.0, 75.0), TOL),
+        "{lost:?}"
+    );
+    assert!(has_line(&dm, v(90.0, 75.0), v(120.0, 75.0), TOL));
 }
