@@ -1,0 +1,1230 @@
+{
+  "format": 1,
+  "marker": 16,
+  "naechste_id": 17,
+  "features": [
+    {
+      "id": 1,
+      "name": "Quader 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "quader",
+        "groesse": [
+          20.0,
+          20.0,
+          10.0
+        ],
+        "ursprung": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "name": "Zylinder 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "zylinder",
+        "radius": 4.0,
+        "hoehe": 14.0,
+        "ursprung": [
+          10.0,
+          10.0,
+          -2.0
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "name": "Vereinigung",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "boolesch",
+        "ziel": {
+          "feature": 1,
+          "index": 0
+        },
+        "werkzeug": {
+          "feature": 2,
+          "index": 0
+        },
+        "operation": "vereinigen"
+      }
+    },
+    {
+      "id": 4,
+      "name": "Weg",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "verschieben",
+        "koerper": {
+          "feature": 3,
+          "index": 0
+        },
+        "versatz": [
+          0.0,
+          0.0,
+          5.0
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "name": "Quader 2",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "quader",
+        "groesse": [
+          20.0,
+          20.0,
+          10.0
+        ],
+        "ursprung": [
+          100.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "name": "Kugel 2",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "kugel",
+        "radius": 5.0,
+        "ursprung": [
+          110.0,
+          10.0,
+          10.0
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "name": "Abzug",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "boolesch",
+        "ziel": {
+          "feature": 5,
+          "index": 0
+        },
+        "werkzeug": {
+          "feature": 6,
+          "index": 0
+        },
+        "operation": "abziehen"
+      }
+    },
+    {
+      "id": 8,
+      "name": "Quader 3",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "quader",
+        "groesse": [
+          20.0,
+          20.0,
+          10.0
+        ],
+        "ursprung": [
+          200.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "name": "Kegel 3",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "kegel",
+        "radius": 6.0,
+        "hoehe": 6.0,
+        "ursprung": [
+          210.0,
+          10.0,
+          2.0
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "name": "Schnitt",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "boolesch",
+        "ziel": {
+          "feature": 8,
+          "index": 0
+        },
+        "werkzeug": {
+          "feature": 9,
+          "index": 0
+        },
+        "operation": "schneiden"
+      }
+    },
+    {
+      "id": 11,
+      "name": "Profil",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "skizze",
+        "skizze": {
+          "name": "Profil",
+          "ebene": {
+            "ursprung": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "z": [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          },
+          "linear": 1e-6,
+          "winkel": 1e-9,
+          "werte": [
+            0.0,
+            0.0,
+            10.0,
+            0.0,
+            10.0,
+            10.0,
+            0.0,
+            10.0
+          ],
+          "punkte": [
+            {
+              "x": 0,
+              "y": 1,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 2,
+              "y": 3,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 4,
+              "y": 5,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 6,
+              "y": 7,
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "kurven": [
+            {
+              "art": {
+                "typ": "linie",
+                "a": 0,
+                "b": 1
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 1,
+                "b": 2
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 2,
+                "b": 3
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 3,
+                "b": 0
+              },
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "abhaengigkeiten": [
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 0
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 1
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 2
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 3
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            }
+          ]
+        },
+        "lage": {
+          "typ": "standard",
+          "ebene": "xz"
+        },
+        "kopien": []
+      }
+    },
+    {
+      "id": 12,
+      "name": "Rotation 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "rotation",
+        "skizze": 11,
+        "profil": 0,
+        "achse": 3
+      }
+    },
+    {
+      "id": 13,
+      "name": "Alles",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "skizze",
+        "skizze": {
+          "name": "Alles",
+          "ebene": {
+            "ursprung": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x": [
+              0.0,
+              1.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "z": [
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "linear": 1e-6,
+          "winkel": 1e-9,
+          "werte": [
+            0.0,
+            0.0,
+            10.0,
+            0.0,
+            0.0,
+            5.0,
+            10.0,
+            5.0,
+            0.0,
+            10.0,
+            10.0,
+            12.0,
+            20.0,
+            0.0,
+            20.0,
+            10.0,
+            30.0,
+            5.0,
+            40.0,
+            5.0,
+            50.0,
+            0.0,
+            55.0,
+            0.0,
+            50.0,
+            5.0,
+            60.0,
+            0.0,
+            70.0,
+            0.0,
+            72.0,
+            3.0,
+            75.0,
+            1.0,
+            3.0,
+            3.0,
+            6.0,
+            0.0,
+            3.0
+          ],
+          "punkte": [
+            {
+              "x": 0,
+              "y": 1,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 2,
+              "y": 3,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 4,
+              "y": 5,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 6,
+              "y": 7,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 8,
+              "y": 9,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 10,
+              "y": 11,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 12,
+              "y": 13,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 14,
+              "y": 15,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 16,
+              "y": 17,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 18,
+              "y": 19,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 20,
+              "y": 21,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 22,
+              "y": 23,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 24,
+              "y": 25,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 26,
+              "y": 27,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 28,
+              "y": 29,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 30,
+              "y": 31,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 32,
+              "y": 33,
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "kurven": [
+            {
+              "art": {
+                "typ": "linie",
+                "a": 0,
+                "b": 1
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 2,
+                "b": 3
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 4,
+                "b": 5
+              },
+              "konstruktion": true,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 6,
+                "b": 7
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "kreis",
+                "mitte": 8,
+                "radius": 34
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "kreis",
+                "mitte": 9,
+                "radius": 35
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "bogen",
+                "mitte": 10,
+                "start": 11,
+                "ende": 12
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "ellipse",
+                "mitte": 13,
+                "ax": 36,
+                "ay": 37,
+                "klein": 38
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "spline",
+                "punkte": [
+                  14,
+                  15,
+                  16
+                ]
+              },
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "abhaengigkeiten": [
+            {
+              "art": {
+                "typ": "bogen_radius",
+                "kurve": 6
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": true,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "deckungsgleich",
+                "a": 1,
+                "b": 6
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "punkt_auf_kurve",
+                "punkt": 7,
+                "kurve": 1
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 0
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "punkte",
+                  "a": 6,
+                  "b": 7
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "parallel",
+                "a": 0,
+                "b": 1
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "rechtwinklig",
+                "a": 0,
+                "b": 3
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "tangential",
+                "a": 1,
+                "b": 5
+              },
+              "zweig": 1,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "gleich",
+                "a": 4,
+                "b": 5
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "fest",
+                "punkt": 0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "symmetrisch",
+                "a": 2,
+                "b": 3,
+                "achse": 3
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "mittelpunkt",
+                "punkt": 5,
+                "kurve": 1
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "abstand",
+                "a": 0,
+                "b": 1,
+                "wert": 10.0
+              },
+              "zweig": 0,
+              "gesteuert": true,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "abstand_punkt_linie",
+                "punkt": 4,
+                "kurve": 0,
+                "wert": 10.0
+              },
+              "zweig": 1,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "radius",
+                "kurve": 4,
+                "wert": 3.0
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "durchmesser",
+                "kurve": 5,
+                "wert": 6.0
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": false,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "winkel",
+                "a": 0,
+                "b": 2,
+                "wert": 0.2
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "ellipse_gross",
+                "kurve": 7,
+                "wert": 6.0
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "ellipse_klein",
+                "kurve": 7,
+                "wert": 3.0
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "ellipse_winkel",
+                "kurve": 7,
+                "wert": 0.0
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            }
+          ]
+        },
+        "lage": {
+          "typ": "standard",
+          "ebene": "yz"
+        },
+        "kopien": []
+      }
+    },
+    {
+      "id": 14,
+      "name": "Grund",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "skizze",
+        "skizze": {
+          "name": "Grund",
+          "ebene": {
+            "ursprung": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              1.0,
+              0.0
+            ],
+            "z": [
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "linear": 1e-6,
+          "winkel": 1e-9,
+          "werte": [
+            300.0,
+            0.0,
+            340.0,
+            0.0,
+            340.0,
+            30.0,
+            300.0,
+            30.0
+          ],
+          "punkte": [
+            {
+              "x": 0,
+              "y": 1,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 2,
+              "y": 3,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 4,
+              "y": 5,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 6,
+              "y": 7,
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "kurven": [
+            {
+              "art": {
+                "typ": "linie",
+                "a": 0,
+                "b": 1
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 1,
+                "b": 2
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 2,
+                "b": 3
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 3,
+                "b": 0
+              },
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "abhaengigkeiten": [
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 0
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 1
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 2
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 3
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            }
+          ]
+        },
+        "lage": {
+          "typ": "standard",
+          "ebene": "xy"
+        },
+        "kopien": []
+      }
+    },
+    {
+      "id": 15,
+      "name": "Extrusion 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "extrusion",
+        "skizze": 14,
+        "profil": 0,
+        "hoehe": 10.0
+      }
+    },
+    {
+      "id": 16,
+      "name": "Auf Fläche",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "skizze",
+        "skizze": {
+          "name": "Auf Fläche",
+          "ebene": {
+            "ursprung": [
+              0.0,
+              0.0,
+              10.0
+            ],
+            "x": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              1.0,
+              0.0
+            ],
+            "z": [
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "linear": 1e-6,
+          "winkel": 1e-9,
+          "werte": [
+            300.0,
+            0.0,
+            340.0,
+            0.0
+          ],
+          "punkte": [
+            {
+              "x": 0,
+              "y": 1,
+              "konstruktion": true,
+              "aktiv": true
+            },
+            {
+              "x": 2,
+              "y": 3,
+              "konstruktion": true,
+              "aktiv": true
+            }
+          ],
+          "kurven": [
+            {
+              "art": {
+                "typ": "linie",
+                "a": 0,
+                "b": 1
+              },
+              "konstruktion": true,
+              "aktiv": true
+            }
+          ],
+          "abhaengigkeiten": [
+            {
+              "art": {
+                "typ": "fest",
+                "punkt": 0,
+                "x": 300.0,
+                "y": 0.0
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "fest",
+                "punkt": 1,
+                "x": 340.0,
+                "y": 0.0
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            }
+          ]
+        },
+        "lage": {
+          "typ": "flaeche",
+          "flaeche": {
+            "herkunft": 15,
+            "rolle": "Deckel",
+            "hinweis": [
+              315.8333333333333,
+              14.375,
+              10.0
+            ]
+          }
+        },
+        "kopien": [
+          {
+            "kurve": 0,
+            "kante": {
+              "a": {
+                "herkunft": 15,
+                "rolle": "Wand 1",
+                "hinweis": [
+                  305.8333333333333,
+                  0.0,
+                  4.791666666666667
+                ]
+              },
+              "b": {
+                "herkunft": 15,
+                "rolle": "Boden",
+                "hinweis": [
+                  315.8333333333333,
+                  14.375,
+                  0.0
+                ]
+              },
+              "hinweis": [
+                320.0,
+                0.0,
+                0.0
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
