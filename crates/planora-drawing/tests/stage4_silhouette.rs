@@ -289,3 +289,203 @@ fn degenerate_cone_seen_along_its_axis_has_no_silhouette() {
     assert!(lines_of(&s, ViewKind::Top).is_empty());
     assert_eq!(lines_of(&s, ViewKind::Front).len(), 2);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Schmale Aussparungen und Streifen, die der Umriss quert (feiner als die gleichmäßige Abtastung).
+
+/// z-Bereiche der Umrissstriche auf der Mantellinie x = 5, y = 0 (aufsteigend sortiert).
+fn ranges_at_plus_x(st: &[Stroke]) -> Vec<(f64, f64)> {
+    let mut out: Vec<(f64, f64)> = st
+        .iter()
+        .filter_map(|l| {
+            let (a, b) = (l.point(l.t0), l.point(l.t1));
+            let on = |p: planora_math::DVec3| (p.x - 5.0).abs() < 1e-9 && p.y.abs() < 1e-9;
+            (on(a) && on(b)).then(|| (a.z.min(b.z), a.z.max(b.z)))
+        })
+        .collect();
+    out.sort_by(|p, q| p.0.total_cmp(&q.0));
+    out
+}
+
+#[test]
+fn outline_leaves_a_gap_at_a_narrow_notch() {
+    // Langer Zylinder (h = 300) mit einer 1 mm bzw. 0,5 mm hohen Kerbe ab z = 150 (Abtastabstand
+    // 300/255 ≈ 1,18 mm): Der Umriss bei x = 5 muss dort unterbrochen sein.
+    for (z0, z1) in [(150.0, 151.0), (150.0, 150.5)] {
+        let s = notched_cylinder(5.0, 300.0, z0, z1);
+        let st = lines_of(&s, ViewKind::Front);
+        let r = ranges_at_plus_x(&st);
+        assert_eq!(r.len(), 2, "Kerbe {z0}–{z1}: {r:?}");
+        assert!(r[0].0.abs() < 1e-9 && (r[0].1 - z0).abs() < 1e-9, "{r:?}");
+        assert!(
+            (r[1].0 - z1).abs() < 1e-9 && (r[1].1 - 300.0).abs() < 1e-9,
+            "{r:?}"
+        );
+    }
+}
+
+#[test]
+fn outline_view_has_no_line_across_a_narrow_notch() {
+    // Ganze Ansicht (Probe aus der Abschlussprüfung): kein Stück auf x = 5 überbrückt die Kerbe,
+    // oberhalb geht der Umriss sichtbar weiter.
+    let s = notched_cylinder(5.0, 300.0, 150.0, 151.0);
+    let b = vec![DrawBody {
+        name: "K".into(),
+        solid: &s,
+    }];
+    let v = planora_drawing::compute_view(&b, ViewKind::Front, &Progress::new()).unwrap();
+    let mut above = false;
+    for p in &v.pieces {
+        let st = &v.strokes[p.stroke];
+        let (a, c) = (st.point2(&v.basis, p.t0), st.point2(&v.basis, p.t1));
+        if (a.x - 5.0).abs() > 1e-6 || (c.x - 5.0).abs() > 1e-6 {
+            continue;
+        }
+        let (lo, hi) = (a.y.min(c.y), a.y.max(c.y));
+        assert!(
+            !(lo < 150.5 && hi > 150.5),
+            "Stück {lo}–{hi} ({:?}) überbrückt die Kerbe",
+            p.vis
+        );
+        if lo <= 200.0 && hi >= 200.0 && p.vis == planora_drawing::Visibility::Visible {
+            above = true;
+        }
+    }
+    assert!(above, "Umriss oberhalb der Kerbe fehlt");
+}
+
+#[test]
+fn outline_keeps_a_narrow_strip_of_face() {
+    // Gegenstück: Vom Mantel bleibt bei +X nur ein 0,5 mm hoher Streifen z ∈ [150, 150,5]
+    // (dazu die Ränder z ∈ [0, 1] und [299, 300]); der Umriss muss dort einen Strich haben.
+    let s = strip_cylinder(5.0);
+    let r = ranges_at_plus_x(&lines_of(&s, ViewKind::Front));
+    assert_eq!(r.len(), 3, "{r:?}");
+    assert!(
+        (r[1].0 - 150.0).abs() < 1e-9 && (r[1].1 - 150.5).abs() < 1e-9,
+        "{r:?}"
+    );
+    assert!(r[0].0.abs() < 1e-9 && (r[0].1 - 1.0).abs() < 1e-9, "{r:?}");
+    assert!(
+        (r[2].0 - 299.0).abs() < 1e-9 && (r[2].1 - 300.0).abs() < 1e-9,
+        "{r:?}"
+    );
+}
+
+/// Mitte zwischen zwei gleichmäßigen Abtaststellen eines Vollkreises (256 je Umlauf).
+fn between_samples(i: usize) -> f64 {
+    std::f64::consts::TAU * (i as f64 + 0.5) / 256.0
+}
+
+/// Liegt der Kreisparameter von `p` im Bereich des Strichs (modulo 2π)?
+fn circle_stroke_contains(l: &Stroke, p: planora_math::DVec3) -> bool {
+    let t = l.curve.project(p);
+    let t = l.t0 + (t - l.t0).rem_euclid(std::f64::consts::TAU);
+    t <= l.t1
+}
+
+#[test]
+fn sphere_outline_has_a_gap_at_a_small_hole() {
+    // Kugel r = 10 von vorne: Großkreis in der XZ-Ebene (eigene Rechnung: e1 = X, e2 = −Z).
+    // Kleine radiale Bohrung (r = 0,05) genau zwischen zwei Abtaststellen (Abstand ≈ 0,245 mm).
+    let (big, hr) = (10.0, 0.05);
+    let t = between_samples(32);
+    let dir = planora_math::DVec3::new(t.cos(), 0.0, -t.sin());
+    let s = sphere_with_radial_hole(big, hr, dir);
+    let st: Vec<Stroke> = lines_of(&s, ViewKind::Front)
+        .into_iter()
+        .filter(|l| {
+            matches!(l.curve, planora_kernel::Curve::Circle { radius, .. }
+                if (radius - big).abs() < 1e-9)
+        })
+        .collect();
+    let center = dir * big;
+    for l in &st {
+        assert!(
+            !circle_stroke_contains(l, center),
+            "Umriss quert die Bohrung"
+        );
+    }
+    let total: f64 = st.iter().map(|l| (l.t1 - l.t0) * big).sum();
+    let gap = 2.0 * big * (hr / big).asin();
+    assert!(
+        (total - (std::f64::consts::TAU * big - gap)).abs() < 1e-6,
+        "{total}"
+    );
+}
+
+#[test]
+fn torus_fillet_outline_has_a_gap_at_a_small_window() {
+    // Gerundeter Zylinder (Rundung R = 7, r = 3, Mitte z = 7) von vorne: der Umriss der Rundung
+    // ist der Meridian-Viertelkreis in der Ebene y = 0 bei +X, P(t) = (7 + 3 cos t, 0, 7 + 3 sin t),
+    // t ∈ [0, π/2] (eigene Rechnung). Ein Fenster z ∈ [z_c ± 0,02] um u = 0 mitten zwischen zwei
+    // Abtaststellen (Abstand 3·2π/256 ≈ 0,074 mm) muss eine Lücke t ∈ [asin((z_c − 0,02 − 7)/3),
+    // asin((z_c + 0,02 − 7)/3)] geben.
+    let hz = 0.02;
+    let tc = between_samples(32);
+    let zc = 7.0 + 3.0 * tc.sin();
+    let (s, face) = rounded_cylinder_with_window(0.0, 0.01, zc, hz);
+    let st: Vec<Stroke> = lines_of(&s, ViewKind::Front)
+        .into_iter()
+        .filter(|l| {
+            l.origin == StrokeOrigin::Silhouette { body: 0, face }
+                && matches!(&l.curve, planora_kernel::Curve::Circle { frame, radius }
+                    if (radius - 3.0).abs() < 1e-9 && frame.origin.x > 0.0)
+        })
+        .collect();
+    assert!(!st.is_empty());
+    let p = planora_math::DVec3::new(7.0 + 3.0 * tc.cos(), 0.0, zc);
+    for l in &st {
+        assert!(!circle_stroke_contains(l, p), "Umriss quert das Fenster");
+    }
+    let total: f64 = st.iter().map(|l| (l.t1 - l.t0) * 3.0).sum();
+    let gap = 3.0 * (((zc + hz - 7.0) / 3.0).asin() - ((zc - hz - 7.0) / 3.0).asin());
+    assert!(
+        (total - (std::f64::consts::FRAC_PI_2 * 3.0 - gap)).abs() < 1e-6,
+        "{total}"
+    );
+}
+
+#[test]
+fn torus_fillet_spline_outline_has_a_gap_at_a_small_window() {
+    // Dieselbe Rundung isometrisch (Spline-Umriss). Umrisspunkt nach eigener Rechnung: Normale
+    // n(u, v) = (cos v cos u, cos v sin u, sin v) im Rahmen der Rundung (um 20° gedreht), n·d = 0
+    // → tan v = −(d_x cos u + d_y sin u)/d_z; u mitten zwischen zwei Abtaststellen, v in der
+    // Rundung. Fenster dort: ±0,05 mm in z und längs des Umfangs; kein Umrisspunkt darf näher
+    // als 0,03 mm an den Fenstermittelpunkt herankommen.
+    let d = Basis::of(ViewKind::Isometric).d;
+    let a = 20f64.to_radians();
+    let fx = planora_math::DVec3::new(a.cos(), a.sin(), 0.0);
+    let fy = planora_math::DVec3::new(-a.sin(), a.cos(), 0.0);
+    let (dx, dy, dz) = (d.dot(fx), d.dot(fy), d.z);
+    let (u, v) = (0..256)
+        .find_map(|i| {
+            let u = between_samples(i);
+            let v1 = (-(dx * u.cos() + dy * u.sin())).atan2(dz);
+            [v1, v1 + std::f64::consts::PI]
+                .into_iter()
+                .map(|v| v.rem_euclid(std::f64::consts::TAU))
+                .find(|&v| v > 0.4 && v < 1.1)
+                .map(|v| (u, v))
+        })
+        .expect("Umrissstelle auf der Rundung");
+    let radial = fx * u.cos() + fy * u.sin();
+    let rho = 7.0 + 3.0 * v.cos();
+    let p = radial * rho + planora_math::DVec3::Z * (7.0 + 3.0 * v.sin());
+    let normal = radial * v.cos() + planora_math::DVec3::Z * v.sin();
+    assert!(normal.dot(d).abs() < 1e-12);
+    let (s, face) = rounded_cylinder_with_window(u + a, 0.05 / rho, p.z, 0.05);
+    let st = lines_of(&s, ViewKind::Isometric);
+    let mut seen = false;
+    for l in st
+        .iter()
+        .filter(|l| l.origin == StrokeOrigin::Silhouette { body: 0, face })
+    {
+        seen = true;
+        for i in 0..=8000 {
+            let q = l.point(l.t0 + (l.t1 - l.t0) * i as f64 / 8000.0);
+            assert!(q.distance(p) > 0.03, "Umriss quert das Fenster bei {q:?}");
+        }
+    }
+    assert!(seen);
+}

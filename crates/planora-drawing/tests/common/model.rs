@@ -1776,3 +1776,64 @@ impl CsgJudge {
 fn rng_scale(rng: &mut SeedRng, lo: f64, hi: f64) -> f64 {
     rng.half_steps(lo, hi)
 }
+
+/// Zylinder (Radius `r`, Höhe `h`, Achse Z) mit einer Kerbe an der Seite +X: Quader
+/// `x ∈ [r − 2, r + 1]`, `y ∈ [−r − 1, r + 1]`, `z ∈ [z0, z1]` abgezogen.
+pub fn notched_cylinder(r: f64, h: f64, z0: f64, z1: f64) -> Solid {
+    let cut = box_at((r - 2.0, -r - 1.0, z0), (r + 1.0, r + 1.0, z1));
+    boolean_op(
+        &cylinder_solid(r, h),
+        &cut,
+        planora_kernel::BoolOp::Difference,
+    )
+}
+
+/// Zylinder (Radius `r`, Höhe 300) mit zwei Kerben an der Seite +X (`z ∈ [1, 150]` und
+/// `z ∈ [150,5, 299]`): Vom Mantel bleibt bei +X nur ein schmaler Streifen `z ∈ [150, 150,5]`
+/// (dazu die Ränder `z ∈ [0, 1]` und `[299, 300]`).
+pub fn strip_cylinder(r: f64) -> Solid {
+    let a = notched_cylinder(r, 300.0, 1.0, 150.0);
+    let cut = box_at((r - 2.0, -r - 1.0, 150.5), (r + 1.0, r + 1.0, 299.0));
+    boolean_op(&a, &cut, planora_kernel::BoolOp::Difference)
+}
+
+/// Kugel (Radius `big_r`) mit einer kleinen radialen Sackbohrung (Radius `hole_r`, Tiefe 1)
+/// in Richtung `dir` (normiert) von außen.
+pub fn sphere_with_radial_hole(big_r: f64, hole_r: f64, dir: DVec3) -> Solid {
+    let dir = dir.normalize();
+    let drill = axis_cylinder(hole_r, 1.0, dir, dir * big_r);
+    boolean_op(
+        &sphere_solid(big_r),
+        &drill,
+        planora_kernel::BoolOp::Difference,
+    )
+}
+
+/// Gerundeter Zylinder aus [`rounded_cylinder_solid`] mit einem schmalen Schlitz: Keil um die
+/// Achse Z zwischen den Winkeln `u_world ± half_u` (Weltwinkel), Höhe `z ∈ [z_c − half_z,
+/// z_c + half_z]` (innerhalb der Rundung, 7 < z < 10). Auf der Rundung entsteht ein kleines
+/// Fenster, begrenzt von Kreisen `z = konst.` und Meridianen (der Kernel schneidet den Torus nur
+/// mit waagrechten Ebenen und Ebenen durch die Achse). Der Keil ist der Schnitt zweier um Z
+/// gedrehter Quader. Liefert den Körper und den Index der Torusfläche.
+pub fn rounded_cylinder_with_window(
+    u_world: f64,
+    half_u: f64,
+    z_c: f64,
+    half_z: f64,
+) -> (Solid, usize) {
+    let (s, _) = rounded_cylinder_solid();
+    let (z0, z1, l) = (z_c - half_z, z_c + half_z, 20.0);
+    // Quadrant [0°, 90°] um −half_u gedreht und Quadrant [−90°, 0°] um +half_u gedreht.
+    let a = rotated(&box_at((0.0, 0.0, z0), (l, l, z1)), DVec3::Z, -half_u);
+    let b = rotated(&box_at((0.0, -l, z0), (l, 0.0, z1)), DVec3::Z, half_u);
+    let wedge = boolean_op(&a, &b, planora_kernel::BoolOp::Intersection);
+    let wedge = rotated(&wedge, DVec3::Z, u_world);
+    let out = boolean_op(&s, &wedge, planora_kernel::BoolOp::Difference);
+    let face = out
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Torus { .. }))
+        .map(|(id, _)| id.index())
+        .expect("Torusfläche");
+    (out, face)
+}

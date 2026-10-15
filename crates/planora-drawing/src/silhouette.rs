@@ -41,8 +41,18 @@ use planora_math::nurbs::{NurbsCurve, NurbsSurface};
 use planora_math::{DVec2, DVec3, Frame, TAU, Tolerance};
 use std::f64::consts::{FRAC_PI_2, PI};
 
-/// Abtastpunkte je Umrissstück für den Zuschnitt auf die Fläche.
+/// Gleichmäßige Abtastpunkte je Umrissstück für den Zuschnitt auf die Fläche (dazu kommen die
+/// Stellen aus dem Flächenrand, siehe [`boundary_params`]).
 const TRIM_SAMPLES: usize = 256;
+/// Höchstzahl der Abtaststellen eines Umrissstücks (gleichmäßige und randgeführte zusammen);
+/// darüber `TooComplex`, nie stilles Ausdünnen.
+const MAX_TRIM_SAMPLES: usize = 65_536;
+/// Mindestzahl der Stützstellen je Randstück für die randgeführten Abtaststellen.
+const BOUNDARY_SEG_SAMPLES: usize = 16;
+/// Stützstellen je Vollkreis bei gekrümmten Randstücken (alle 5°, wie die Randpolygone).
+const BOUNDARY_SAMPLES_PER_TURN: f64 = 72.0;
+/// Freiformkanten: Stützstellen je Randstück.
+const BOUNDARY_NURBS_SAMPLES: usize = 64;
 /// Stützstellen der Vorzeichenwechsel-Suche über einen vollen Umlauf (Kegel).
 const ROOT_SAMPLES: usize = 720;
 /// Höchstzahl der Halbierungen (Bisektion endet spätestens an der Rechengenauigkeit).
@@ -52,6 +62,11 @@ const SNAP_WINDOW: f64 = 2.0;
 /// Ein Zuschnittpunkt wird angelegt, wenn die Kante höchstens `SNAP_FACTOR · geom_tol` entfernt
 /// ist (wie das Fenster, in dem isect Endpunkte auf Strichen erkennt).
 const SNAP_FACTOR: f64 = 16.0;
+/// Probestellen im Fenster beim Anlegen an die Randkante (je Randstück; jedes örtliche Minimum
+/// wird verfeinert).
+const SNAP_PROBES: usize = 64;
+/// Reserve für die Krümmung des Umrisses im Fenster (Bogen gegen Sehne).
+const SNAP_REACH: f64 = 2.0;
 /// `|n · d|` darunter gilt beim Kegel als null (Blick entlang der Achse bei Steigung 0).
 const ZERO_NORMAL_DOT: f64 = 1e-12;
 /// Erweiterung des aus den Randschleifen bestimmten Höhenbereichs (relativ).
@@ -213,9 +228,18 @@ pub fn silhouette_strokes(
                     t1: c.t1,
                     closed: c.closed,
                 };
+                let proj = match &c.curve {
+                    Curve::Line { origin, dir } => Proj::Line {
+                        origin: *origin,
+                        dir: *dir,
+                    },
+                    Curve::Circle { frame, .. } => Proj::Circle(*frame),
+                    _ => unreachable!("Umrisskandidaten sind Geraden und Kreise"),
+                };
                 for r in trim_to_face(
                     &fg,
                     &path,
+                    &proj,
                     &in_face,
                     &tol,
                     SNAP_FACTOR * tol.linear,
@@ -415,7 +439,15 @@ fn spline_pieces(
 ) -> Result<Vec<(Curve, f64, f64)>, DrawError> {
     let dense = densify(path, work, progress)?;
     let limit = (SNAP_FACTOR * tol.linear).max(SPLINE_SNAP_SHARE * SILHOUETTE_TOL);
-    let ranges = trim_to_face(fg, &path.as_path(), in_face, tol, limit, progress)?;
+    let ranges = trim_to_face(
+        fg,
+        &path.as_path(),
+        &Proj::Dense(&dense),
+        in_face,
+        tol,
+        limit,
+        progress,
+    )?;
     // Freiform: Fand ein Wegpunkt nicht auf den Umriss (Newton), ist die Kurve dort geraten.
     // Geprüft nach jeder Auswertung des Wegs: auch die Endpunkte der Bereiche unten werten ihn
     // noch einmal aus.
@@ -1174,6 +1206,137 @@ fn great_circle(frame: &Frame, radius: f64, d: DVec3) -> Candidate {
     }
 }
 
+/// Nächster Wegpunkt zu einem Raumpunkt, je nach Art des Wegs.
+enum Proj<'a> {
+    /// Gerade `origin + t·dir` (`dir` normiert).
+    Line { origin: DVec3, dir: DVec3 },
+    /// Kreis im Rahmen (Parameter = Winkel um `z` ab `x`).
+    Circle(Frame),
+    /// Dichter Streckenzug `(t, Punkt)` des Wegs (Spline-Umrisse).
+    Dense(&'a [(f64, DVec3)]),
+}
+
+impl Proj<'_> {
+    /// Größte Abweichung des nächsten Wegpunkts vom wahren nächsten Punkt (Streckenzug: die
+    /// Sehnenabweichung des dichten Wegs).
+    fn slack(&self) -> f64 {
+        match self {
+            Proj::Dense(_) => SILHOUETTE_TOL,
+            _ => 0.0,
+        }
+    }
+
+    /// Parameter des Wegpunkts nächst `q` im Bereich des Wegs (geschlossene Wege: in
+    /// `[t0, t1)`); `None`, wenn es keinen gibt (Punkt auf der Kreisachse, leerer Streckenzug).
+    fn nearest(&self, c: &Path, q: DVec3) -> Option<f64> {
+        let w = c.t1 - c.t0;
+        let wrap = |t: f64| {
+            if c.closed && w > 0.0 {
+                c.t0 + (t - c.t0).rem_euclid(w)
+            } else {
+                t.clamp(c.t0.min(c.t1), c.t0.max(c.t1))
+            }
+        };
+        match self {
+            Proj::Line { origin, dir } => Some(wrap((q - *origin).dot(*dir))),
+            Proj::Circle(frame) => {
+                let l = frame.to_local(q);
+                if l.x == 0.0 && l.y == 0.0 {
+                    return None;
+                }
+                let a = l.y.atan2(l.x);
+                if c.closed {
+                    Some(wrap(a))
+                } else {
+                    let t = c.t0 + (a - c.t0).rem_euclid(TAU);
+                    (t <= c.t1).then_some(t)
+                }
+            }
+            Proj::Dense(pts) => {
+                let mut best: Option<(f64, f64)> = None;
+                for s in pts.windows(2) {
+                    let (ta, a) = s[0];
+                    let (tb, b) = s[1];
+                    let ab = b - a;
+                    let l2 = ab.length_squared();
+                    let f = if l2 > 0.0 {
+                        ((q - a).dot(ab) / l2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let dist = q.distance(a + ab * f);
+                    if best.is_none_or(|(_, bd)| dist < bd) {
+                        best = Some((ta + (tb - ta) * f, dist));
+                    }
+                }
+                best.map(|(t, _)| wrap(t))
+            }
+        }
+    }
+}
+
+/// Stützstellen eines Randstücks für die randgeführten Abtaststellen: Geraden
+/// `BOUNDARY_SEG_SAMPLES`, Kreise und Ellipsen alle 5° (mindestens `BOUNDARY_SEG_SAMPLES`),
+/// Freiformkanten `BOUNDARY_NURBS_SAMPLES`.
+fn boundary_seg_samples(seg: &planora_kernel::boolean::Seg) -> usize {
+    match seg.curve {
+        Curve::Line { .. } => BOUNDARY_SEG_SAMPLES,
+        Curve::Circle { .. } | Curve::Ellipse { .. } => {
+            let n = ((seg.t1 - seg.t0).abs() * BOUNDARY_SAMPLES_PER_TURN / TAU).ceil();
+            if n.is_finite() {
+                (n as usize).clamp(BOUNDARY_SEG_SAMPLES, MAX_TRIM_SAMPLES)
+            } else {
+                BOUNDARY_SEG_SAMPLES
+            }
+        }
+        Curve::Nurbs(_) => BOUNDARY_NURBS_SAMPLES,
+    }
+}
+
+/// Vielfaches der größten Sehne eines Randstücks, bis zu dem ein Randpunkt als „am Weg“ gilt
+/// (Bogen zu Sehne bei 5°-Schritten ≈ 1,0003; Freiformkanten mit Reserve).
+const BOUNDARY_REACH: f64 = 1.5;
+
+/// Randgeführte Abtaststellen eines Wegs: Jedes Randstück der Fläche wird dicht abgetastet, und
+/// jeder Randpunkt, der dem Weg näher kommt als der Abstand benachbarter Randpunkte (also jeder
+/// Punkt beiderseits einer Stelle, an der der Rand den Weg kreuzt oder berührt), liefert den
+/// Parameter seines nächsten Wegpunkts. So bekommt jede Aussparung und jeder Flächenstreifen,
+/// den der Weg quert, Abtaststellen an seinen Rändern – unabhängig davon, wie schmal er gegen den
+/// gleichmäßigen Abstand ist. Mehr als `MAX_TRIM_SAMPLES` Stellen → `TooComplex`.
+fn boundary_params(
+    fg: &FaceGeom,
+    c: &Path,
+    proj: &Proj,
+    tol: &Tolerance,
+    progress: &Progress,
+) -> Result<Vec<f64>, DrawError> {
+    let mut out = Vec::new();
+    for seg in fg.loops.iter().flatten() {
+        progress.check()?;
+        let n = boundary_seg_samples(seg);
+        let pts: Vec<DVec3> = (0..=n).map(|i| seg.at(i as f64 / n as f64)).collect();
+        let chord = pts
+            .windows(2)
+            .map(|p| p[0].distance(p[1]))
+            .fold(0.0, f64::max);
+        if !chord.is_finite() {
+            return Err(DrawError::NonFinite);
+        }
+        let reach = BOUNDARY_REACH * chord + proj.slack() + tol.linear;
+        for q in pts {
+            if let Some(t) = proj.nearest(c, q)
+                && (c.point)(t).distance(q) <= reach
+            {
+                out.push(t);
+            }
+        }
+        if out.len() > MAX_TRIM_SAMPLES {
+            return Err(DrawError::TooComplex(out.len() as u64));
+        }
+    }
+    Ok(out)
+}
+
 /// Ein beschnittener Teilbereich `[a, b]` eines Wegs; `ends`: die Punkte der Randkante, auf die
 /// seine Enden gelegt wurden (`None`, wo kein Rand anliegt oder der Bereich am Wegende endet).
 struct Trimmed {
@@ -1182,15 +1345,19 @@ struct Trimmed {
     ends: [Option<DVec3>; 2],
 }
 
-/// Teilbereiche des Wegs, die in der Fläche liegen (`Inside` oder `Boundary`). Abtastung an
-/// `TRIM_SAMPLES` Stellen, Wechselstellen per Bisektion (mindestens auf `BISECT_TOL` der
-/// Parameterbreite, weiter bis zur Rechengenauigkeit, damit die Enden auf dem Rand liegen), dann
-/// auf die Randkante gelegt ([`snap_to_edge`] mit der Grenze `snap_limit`).
-/// Geschlossene Wege: ganz innen bleibt `[t0, t1]`; sonst Bögen, die über `t1` hinausreichen
-/// dürfen.
+/// Teilbereiche des Wegs, die in der Fläche liegen (`Inside` oder `Boundary`).
+///
+/// Abtaststellen: `TRIM_SAMPLES` gleichmäßige Stellen, dazu die randgeführten Stellen aus
+/// [`boundary_params`] und je eine Stelle mitten zwischen einer randgeführten Stelle und ihren
+/// Nachbarn (die Randpunkte selbst zählen als innen; die Mitte liegt in einer schmalen
+/// Aussparung). Wechselstellen per Bisektion (mindestens auf `BISECT_TOL` der Parameterbreite,
+/// weiter bis zur Rechengenauigkeit), dann auf die Randkante gelegt ([`snap_to_edge`] mit der
+/// Grenze `snap_limit`). Geschlossene Wege: ganz innen bleibt `[t0, t1]`; sonst Bögen, die über
+/// `t1` hinausreichen dürfen.
 fn trim_to_face(
     fg: &FaceGeom,
     c: &Path,
+    proj: &Proj,
     in_face: &dyn Fn(DVec3) -> bool,
     tol: &Tolerance,
     snap_limit: f64,
@@ -1199,25 +1366,67 @@ fn trim_to_face(
     let w = c.t1 - c.t0;
     let point = c.point;
     let inside = |t: f64| in_face(point(t));
-    // Offene Kurven: Stellen 0..N−1 einschließlich beider Enden; Vollkreise: N Stellen im Umlauf.
+    // Gleichmäßig: offene Wege 0..N−1 einschließlich beider Enden; geschlossene N Stellen.
     let steps = if c.closed {
         TRIM_SAMPLES
     } else {
         TRIM_SAMPLES - 1
     };
-    let t_at = |i: usize| {
-        if !c.closed && i == steps {
-            c.t1
-        } else {
-            c.t0 + w * i as f64 / steps as f64
-        }
+    let mut ts: Vec<(f64, bool)> = (0..TRIM_SAMPLES)
+        .map(|i| {
+            let t = if !c.closed && i == steps {
+                c.t1
+            } else {
+                c.t0 + w * i as f64 / steps as f64
+            };
+            (t, false)
+        })
+        .collect();
+    ts.extend(
+        boundary_params(fg, c, proj, tol, progress)?
+            .into_iter()
+            .map(|t| (t, true)),
+    );
+    let sort_dedup = |ts: &mut Vec<(f64, bool)>| {
+        ts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        ts.dedup_by(|later, kept| {
+            if later.0 == kept.0 {
+                kept.1 |= later.1;
+                true
+            } else {
+                false
+            }
+        });
     };
-    let mut flags: Vec<bool> = Vec::with_capacity(TRIM_SAMPLES);
-    for i in 0..TRIM_SAMPLES {
+    sort_dedup(&mut ts);
+    // Mitten neben randgeführten Stellen (geschlossen auch über das Ende hinweg).
+    let n = ts.len();
+    let mut mids = Vec::new();
+    for i in 0..n {
+        let (a, fa) = ts[i];
+        let (b, fb) = if i + 1 < n {
+            ts[i + 1]
+        } else if c.closed {
+            (ts[0].0 + w, ts[0].1)
+        } else {
+            continue;
+        };
+        if fa || fb {
+            let m = 0.5 * (a + b);
+            mids.push((if c.closed && m >= c.t1 { m - w } else { m }, false));
+        }
+    }
+    ts.extend(mids);
+    sort_dedup(&mut ts);
+    if ts.len() > MAX_TRIM_SAMPLES {
+        return Err(DrawError::TooComplex(ts.len() as u64));
+    }
+    let mut flags: Vec<bool> = Vec::with_capacity(ts.len());
+    for (i, &(t, _)) in ts.iter().enumerate() {
         if i % 32 == 0 {
             progress.check()?;
         }
-        flags.push(inside(t_at(i)));
+        flags.push(inside(t));
     }
     if flags.iter().all(|&f| f) {
         return Ok(vec![Trimmed {
@@ -1229,21 +1438,22 @@ fn trim_to_face(
     if flags.iter().all(|&f| !f) {
         return Ok(Vec::new());
     }
-    // Folge der Stellen (Parameter, innen?). Vollkreise: ab einer äußeren Stelle einmal herum,
-    // so dass jeder innere Abschnitt beidseitig von äußeren Stellen begrenzt ist.
+    // Folge der Stellen (Parameter, innen?). Geschlossene Wege: ab einer äußeren Stelle einmal
+    // herum, so dass jeder innere Abschnitt beidseitig von äußeren Stellen begrenzt ist.
+    let n = ts.len();
     let seq: Vec<(f64, bool)> = if c.closed {
         let k = flags.iter().position(|&f| !f).unwrap_or(0);
-        (0..=TRIM_SAMPLES)
+        (0..=n)
             .map(|m| {
-                (
-                    c.t0 + w * (k + m) as f64 / TRIM_SAMPLES as f64,
-                    flags[(k + m) % TRIM_SAMPLES],
-                )
+                let i = (k + m) % n;
+                let lap = ((k + m) / n) as f64;
+                (ts[i].0 + lap * w, flags[i])
             })
             .collect()
     } else {
-        (0..TRIM_SAMPLES).map(|i| (t_at(i), flags[i])).collect()
+        ts.iter().zip(&flags).map(|(&(t, _), &f)| (t, f)).collect()
     };
+    let spacing = w.abs() / steps as f64;
     let refine = |t_in: f64, t_out: f64| {
         let (mut a, mut b) = (t_in, t_out);
         for _ in 0..MAX_BISECT_STEPS {
@@ -1258,13 +1468,7 @@ fn trim_to_face(
             }
         }
         debug_assert!((b - a).abs() <= BISECT_TOL * w.abs());
-        match snap_to_edge(
-            fg,
-            point,
-            a,
-            SNAP_WINDOW * w.abs() / steps as f64,
-            snap_limit,
-        ) {
+        match snap_to_edge(fg, point, a, SNAP_WINDOW * spacing, snap_limit) {
             Some((t, q)) => (if c.closed { t } else { t.clamp(c.t0, c.t1) }, Some(q)),
             None => (a, None),
         }
@@ -1315,12 +1519,15 @@ fn trim_to_face(
 /// Randpolygon im Parameterraum (5°-Abtastung), und die Bisektion endet auf dessen Sehne – bei
 /// im `(u, v)`-Raum gekrümmten Kanten (Ellipse eines schrägen Schnitts) bis ≈ 1e-3·r neben der
 /// wahren Kante. Deshalb wird je Randstück der Abstand `|P(t) − Kante|` im Fenster
-/// `[t_star − h, t_star + h]` minimiert (Goldener Schnitt) und das kleinste Minimum genommen,
-/// wenn es höchstens `limit` beträgt (exakte Kurven: `SNAP_FACTOR · tol`; Spline-Umrisse, deren
-/// wahrer Weg auf der Fläche liegt, die Kante aber nur auf deren Toleranz: bis
-/// `SPLINE_SNAP_SHARE · SILHOUETTE_TOL`). Randstücke, an denen der Umriss schon am Fensterrand
+/// `[t_star − h, t_star + h]` minimiert (Goldener Schnitt); unter den Minima, die höchstens
+/// `limit` betragen, gilt das mit der Stelle **nächst `t_star`** (im Fenster kann bei einer
+/// schmalen Aussparung auch deren gegenüberliegende Kante liegen). Grenze `limit`: exakte
+/// Kurven `SNAP_FACTOR · tol`; Spline-Umrisse, deren wahrer Weg auf der Fläche liegt, die Kante
+/// aber nur auf deren Toleranz, bis `SPLINE_SNAP_SHARE · SILHOUETTE_TOL`. Randstücke, an denen der Umriss schon am Fensterrand
 /// anliegt (er läuft entlang einer Kante, etwa einer Naht), zählen nicht: Dort ist der
-/// Bisektionspunkt bereits genau. Liefert die Stelle auf dem Umriss und den nächsten Punkt der
+/// Bisektionspunkt bereits genau. Jedes Randstück wird im Fenster an `SNAP_PROBES` Stellen
+/// abgetastet, jedes örtliche Minimum einzeln verfeinert (ein kleines Loch kreuzt den Umriss im
+/// Fenster zweimal). Liefert die Stelle auf dem Umriss und den nächsten Punkt der
 /// Kante (für Splines das Ende selbst); ohne Treffer (schleifender Schnitt): `None`.
 fn snap_to_edge(
     fg: &FaceGeom,
@@ -1330,15 +1537,42 @@ fn snap_to_edge(
     limit: f64,
 ) -> Option<(f64, DVec3)> {
     let (lo, hi) = (t_star - h, t_star + h);
+    let p_star = point(t_star);
+    // Reichweite des Fensters im Raum (Sehnen mit Reserve für die Krümmung): Randstücke, die
+    // weiter weg sind, kann der Umriss im Fenster nicht erreichen.
+    let reach = SNAP_REACH * point(lo).distance(p_star).max(point(hi).distance(p_star)) + limit;
+    let probes: Vec<f64> = (0..=SNAP_PROBES)
+        .map(|i| lo + (hi - lo) * i as f64 / SNAP_PROBES as f64)
+        .collect();
     let mut best: Option<(f64, f64, &planora_kernel::boolean::Seg)> = None;
     for seg in fg.loops.iter().flatten() {
         let dist = |t: f64| seg.closest(point(t)).1;
-        if dist(lo) <= limit || dist(hi) <= limit {
+        if dist(t_star) > reach {
             continue;
         }
-        let (t, d) = golden_min(lo, hi, dist);
-        if d <= limit && best.is_none_or(|(_, bd, _)| d < bd) {
-            best = Some((t, d, seg));
+        let ds: Vec<f64> = probes.iter().map(|&t| dist(t)).collect();
+        if ds[0] <= limit || ds[SNAP_PROBES] <= limit {
+            continue;
+        }
+        // Jedes örtliche Minimum der Probe einzeln verfeinern: Eine Randschleife (kleines Loch)
+        // kann den Umriss im Fenster zweimal kreuzen.
+        for i in 0..=SNAP_PROBES {
+            let left = if i == 0 { f64::INFINITY } else { ds[i - 1] };
+            let right = if i == SNAP_PROBES {
+                f64::INFINITY
+            } else {
+                ds[i + 1]
+            };
+            if !(ds[i] <= left && ds[i] <= right) {
+                continue;
+            }
+            let a = probes[i.saturating_sub(1)];
+            let b = probes[(i + 1).min(SNAP_PROBES)];
+            let (t, d) = golden_min(a, b, dist);
+            if d <= limit && best.is_none_or(|(bt, _, _)| (t - t_star).abs() < (bt - t_star).abs())
+            {
+                best = Some((t, d, seg));
+            }
         }
     }
     best.map(|(t, _, seg)| {
