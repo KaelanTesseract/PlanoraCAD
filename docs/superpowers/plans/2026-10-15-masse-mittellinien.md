@@ -36,7 +36,7 @@
 
 ## Festlegungen der Planung (Rulings gegenüber der Spec)
 
-- **P1 Geometrie-Typ `Geo3`:** `planora-feature` löst `GeoRefData` zu `Geo3` auf (`Point(DVec3)`, `Line { a, b }` (Strecke mit Enden), `Circle { center, normal, radius }`, `Axis { origin, dir, radius: f64 }` für Zylinderflächen, `Sphere { center, radius }`); `planora-drawing` kennt nur diese Typen, nicht die Körper. Die **Messung** (Aufgabe 2) bekommt `&[Geo3]` plus `Basis` und liefert Wert und Anker.
+- **P1 Geometrie-Typ `Geo3`:** `planora-feature` löst `GeoRefData` zu `Geo3` auf (`Point(DVec3)`, `Line { a, b }` (Strecke mit Enden), `Circle { center, normal, radius }`, `Axis { origin, dir, radius, t0, t1 }` für Zylinderflächen (berichtigt: mit Bereich `t0`/`t1` entlang der normierten Richtung), `Sphere { center, radius }`); `planora-drawing` kennt nur diese Typen, nicht die Körper. Die **Messung** (Aufgabe 2) bekommt `&[Geo3]` plus `Basis` und liefert Wert und Anker.
 - **P2 Verweisdaten:** `GeoRefData` hat dieselben Felder wie `EdgeRef`/`FaceRef` (je Marke `origin: u64`, `role: String`, `hint: DVec3`; Kante: zwei Flächenmarken `a`, `b` plus `hint`), aber ohne Abhängigkeit zu `planora-feature`. Umwandlung in `planora-feature::georef` (verlustfrei, beide Richtungen getestet).
 - **P3 Vorgaben:** `decimals = 1`; neue Normansichten haben `centerlines = true`, die Isometrie `false`; Ø/R-Führungslinie Vorgabe 45° (`angle = 45.0`); `offset` bei linearen Maßen Vorgabe `DEFAULT_OFFSET`, bei weiteren Maßen derselben Ansicht und Richtung `DEFAULT_OFFSET + n·DIM_STEP`.
 - **P4 Messrichtungen:** `Horizontal` misst entlang `ex`, `Vertical` entlang `ey` der Ansichtsbasis, `Aligned` zwischen zwei Punkten (euklidisch in der Bildebene). Ein Bezug „Kante“ liefert die Lage der projizierten Geraden quer zur Messrichtung (sie muss quer stehen, sonst `NotAcross`), „Eckpunkt“/„Mitte“ liefern den Punkt, „Achse“ die Lage der projizierten Achse (muss quer stehen).
@@ -49,6 +49,20 @@
 - **P11 Format 5:** `FORMAT_VERSION = 5`; geschrieben nur, wenn eine Zeichnung Maße enthält **oder** eine Ansicht `centerlines = true` hat; Format-4-Dateien laden mit `centerlines = false`; der Schreiber lässt `mittellinien`/`masse` bei Format ≤ 4 weg (Byte-genau).
 - **P13 Export bei verlorenen Maßen:** Hat ein Maß seinen Bezug verloren, wird der Export **gesperrt** (Zustand „Fehlgeschlagen“ mit Text „Das Maß … hat seinen Bezug verloren: …“); nichts wird geschrieben (Aufgabe 14).
 - **P12 Außerhalb des Blatts:** Ein Maß, dessen Darstellung außerhalb des Blatts liegt, wird trotzdem gezeichnet und in der Oberfläche **gewarnt** („liegt außerhalb des Blatts“); der Export schreibt es und zählt es in der Karte („Maße außerhalb: n“).
+
+## Berichtigungen nach der Umsetzung (Stand Aufgabe 15)
+
+Der Plan wurde bei der Umsetzung an folgenden Stellen verlassen; maßgeblich ist die Spec, Abschnitt 10 „Festlegungen der Umsetzung“ (dort mit Begründung).
+
+- **Aufgabe 2:** `Anchor::Linear` trägt je Bezug beide Enden quer zur Messrichtung (`a_span`/`b_span`), nicht nur zwei Punkte; `Geo3::Axis` bekommt `t0`/`t1`; `Angle` wird bei einer Kante, die nicht parallel zur Bildebene liegt, abgelehnt; `Aligned` zwischen Punkten misst den Abstand im Bild; Radius an Zylinderfläche oder Kreis von der Seite ist ungültig.
+- **Aufgabe 3:** Keine Mittellinien bei Blick nicht entlang einer Weltachse; überlappende kollineare Linien werden verbunden, konzentrische Kreuze zu einem; die Randbegrenzung (Spec §3.4) wurde nicht umgesetzt.
+- **Aufgabe 4:** Für Ketten und Bezugsmaße gibt es `GroupBase`/`group_base` und `layout_dimension_in`; jeder Messfehler wird rot; `LimitSizes` sind Abweichungen (12,5 mit +0,1/−0,1 gibt 12,6/12,4); die Hilfslinie nimmt je Bezug das der Maßlinie nähere Ende; großes Ø als Linie durch die Mitte.
+- **Aufgaben 5, 6:** SVG-Bögen in Stücken bis 90° mit `sweep = 1`; DXF: Latin-1 als `\U+XXXX`, `%` als `%%%`, `\` als `\U+005C`.
+- **Aufgabe 7:** Der Schlüssel ist geometrisch (`L|<Richtung>|<Lage 1>|<Lage 2>`, `D|A|…`), nicht aus Kantenkennungen (`H|e:<body>:<edge>|…` hätte dasselbe Maß in zwei Ansichten nicht erkannt); `Candidate.chain` ist ergänzt; neue Funktion `dimension_key`.
+- **Aufgabe 8:** `Geo3::Axis` mit `t0`/`t1` (`axial_range` ist öffentlich); Gleichstand gibt `Ambiguous`; zusätzliche Prüfungen der Bezugsdaten.
+- **Aufgabe 9:** Hinweise sind auf `2·MAX_COORD_MM` begrenzt, Rollen auf 64 Zeichen; Format 4 speichert `next_dim` nicht; ein Kettenmodus je Gruppe auch in `validate_dimensions`.
+- **Aufgabe 10 bis 14:** `notes(&self, state, drawing, resolved)`; `DimMarks`/`dimension_marks`; `SuggestOutcome::Partly`; Werkzeugleiste immer zweizeilig; `finish` liefert mehrere Kennungen; Fenster „Maß bearbeiten“ im `AppState`; Export löst im Arbeitsfaden über `resolve_drawing_dimensions` auf; P13 hat einen zweiten Satz für nicht mehr messbare Maße; P12 heißt „Maße außerhalb des Blatts: n“.
+- **Aufgabe 15:** Der Proben-Test schreibt je Probe zwei Zeichnungen (`<Name>` mit dem Vorschlag und `<Name>_Hand` mit von Hand gesetzten Maßen); `Verloren` nur einmal ohne Zusatz.
 
 ## Dateistruktur
 
@@ -103,7 +117,7 @@ crates/planora-app/src/dimension_browser.rs // Browser-Abschnitt „Maße“
     pub tolerance: Tolerance, pub decimals: u8, pub text_override: Option<String>, pub chain: Option<ChainSpec>,
     pub suggested: bool }
 pub enum Geo3 { Point(DVec3), Line { a: DVec3, b: DVec3 }, Circle { center: DVec3, normal: DVec3, radius: f64 },
-    Axis { origin: DVec3, dir: DVec3, radius: f64 }, Sphere { center: DVec3, radius: f64 } }   // Clone, Debug, PartialEq
+    Axis { origin: DVec3, dir: DVec3, radius: f64, t0: f64, t1: f64 }, Sphere { center: DVec3, radius: f64 } }   // Clone, Debug, PartialEq
 #[derive(Debug, thiserror::Error, Clone, PartialEq)] pub enum DimError {
     #[error("Die Kante steht nicht quer zum Maß.")] NotAcross,
     #[error("Der Bezug ist in dieser Ansicht nicht zu sehen.")] NotVisible,
@@ -271,7 +285,7 @@ pub fn layout_centerline(line: &CenterLine, xf: &SheetTransform) -> Vec<Mark>;
 - Produces:
 ```rust
 /// Kandidat für ein Maß: beschreibt die Bezüge als Geo3 (zum Messen) UND die Herkunft (zum späteren Verweisbau durch die Oberfläche).
-pub struct Candidate { pub kind: DimKind, pub view: ViewId, pub geos: Vec<Geo3>, pub origins: Vec<CandidateOrigin>, pub key: String }
+pub struct Candidate { pub kind: DimKind, pub view: ViewId, pub geos: Vec<Geo3>, pub origins: Vec<CandidateOrigin>, pub key: String, pub chain: Option<ChainSpec> }  // berichtigt: `chain` für Bezugsmaße, `key` geometrisch (siehe Berichtigungen)
 pub enum CandidateOrigin { Edge { body: usize, edge: usize }, EdgeEnd { body: usize, edge: usize, end: EndSel }, Center { body: usize, edge: usize }, Face { body: usize, face: usize } }
 pub fn suggest(bodies: &[DrawBody], views: &[(ViewSpec, &ViewLines)], existing: &[(ViewId, DimKind, String /*key*/)]) -> Vec<Candidate>;
 ```

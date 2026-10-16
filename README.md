@@ -147,10 +147,10 @@ Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Ze
 - Sichtbare Kanten sind durchgezogen, verdeckte gestrichelt. Das Zeigen der verdeckten Kanten lässt sich je Ansicht ausschalten (Vorgabe: an für die Normansichten, aus für Isometrisch).
 - Kreise bleiben Kreise, Bögen bleiben Bögen, Freiformlinien bleiben glatte Kurven; es werden keine Streckenzüge daraus. Nur die Umrisse von Ringen (Torus) und Freiformflächen sind angenähert (auf 0,0001 mm genau).
 - Im Fenster: Umschalter zwischen 3D-Modell und Zeichnung, Zoomen mit dem Mausrad, Verschieben mit der mittleren Maustaste, Ansichten anklicken und ziehen. Im Browser stehen die Zeichnungen mit ihren Ansichten. Die Berechnung läuft im Hintergrund mit Fortschrittsbalken; scheitert eine Ansicht, steht der Grund an ihr, und die Zeichnung bleibt erhalten.
-- Gespeichert wird nur die Beschreibung (Blatt, Ansichten, Maßstab, Lage), nicht die berechneten Linien. Ein Dokument mit Zeichnung bekommt das Dateiformat 4; ältere Programmversionen melden dann „zu neu“. Dokumente ohne Zeichnung bleiben unverändert.
+- Gespeichert wird nur die Beschreibung (Blatt, Ansichten, Maßstab, Lage), nicht die berechneten Linien. Ein Dokument mit Zeichnung bekommt das Dateiformat 4 (mit Maßen oder Mittellinien das Dateiformat 5); ältere Programmversionen melden dann „zu neu“. Dokumente ohne Zeichnung bleiben unverändert.
 
 **Grenzen**
-- Nicht dabei: Maße, Toleranzen, Schriftfeld, Beschriftung, Mittellinien, Schnittansichten, Schraffur, Detailansichten, Stücklisten, PDF und das Einlesen von SVG oder DXF. Es gibt nur diese sieben Blickrichtungen.
+- Nicht dabei: Schriftfeld, Beschriftung, Schnittansichten, Schraffur, Detailansichten, Stücklisten, PDF und das Einlesen von SVG oder DXF. Es gibt nur diese sieben Blickrichtungen. Maße und Mittellinien stehen im nächsten Abschnitt.
 - Netz-Körper (eingelesene Netze) werden nicht gezeichnet; das Programm nennt sie mit Namen.
 - Glatte Übergänge, etwa zwischen einer Rundung und der Fläche daneben, werden nicht als Linie gezeichnet. Der Umriss der Rundung selbst schon.
 - Kann das Programm bei einer Linie nicht sicher sagen, ob sie sichtbar oder verdeckt ist, steht an der Ansicht eine Meldung statt einer Zeichnung; es wird nichts geraten. Bei sehr vielen Flächen meldet es „zu aufwendig“ (höchstens 20 000 Linien je Ansicht).
@@ -160,6 +160,28 @@ Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Ze
 - Das Schreiben der Datei lässt sich abbrechen; die alte Datei bleibt dann unverändert. Unter Windows reservierte Dateinamen (zum Beispiel „CON“) werden im Namensvorschlag nicht abgefangen.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 11 – Zeichnungen (Ansichten)“.
+
+## Maße und Mittellinien
+
+In einer Zeichnung lassen sich Maße setzen und Mittellinien zeigen. Die Maße hängen am Körper: Ändert man den Körper, ändert sich das Maß mit. Alles kommt in die SVG- und DXF-Dateien.
+
+**Was geht**
+- Mittellinien: Bohrungen, Zylinder, Kugeln und Ringe bekommen strichpunktierte Mittellinien. In den Normansichten sind sie von Anfang an an, je Ansicht lassen sie sich ausschalten (zweite Zeile der Werkzeugleiste, wenn eine Ansicht gewählt ist).
+- „Maße vorschlagen“: Ein Knopf setzt die wichtigsten Maße selbst: Breite, Höhe und Tiefe, Durchmesser und Radien sowie den Abstand der Bohrungsmitten von der Kante. Jedes Maß kommt nur einmal aufs Blatt, ein zweiter Druck setzt nichts doppelt. Danach lässt sich alles ändern.
+- Werkzeug „Maß“: Man wählt die Art (waagerecht, senkrecht, schräg, Durchmesser, Radius, Winkel, Maßkette oder Bezugsmaße), klickt die Linien an und klickt dann dorthin, wo die Maßlinie stehen soll. Mit der Esc-Taste bricht man ab. Gesetzte Maße lassen sich anklicken und ziehen; ein Doppelklick öffnet das Fenster „Maß bearbeiten“. Im Browser steht unter der Zeichnung der Abschnitt „Maße“.
+- Toleranzen: plus/minus, oben und unten, Grenzmaße, und eine Passung (zum Beispiel H7) als Text hinter dem Wert. Dazu Nachkommastellen und ein eigener Text.
+- Geht der Bezug eines Maßes verloren (zum Beispiel weil man die Kante gelöscht hat), bleibt das Maß erhalten und wird rot, mit dem Grund. Ein falscher Wert wird nie gezeigt. Solange ein rotes Maß da ist, schreibt das Programm die Zeichnung nicht in eine Datei; man ändert oder löscht das Maß und exportiert dann.
+
+**Grenzen**
+- Maße gibt es nur in den sechs Normansichten, nicht in der Isometrie. Steht eine Kante oder ein Kreis schräg zur Ansicht, lehnt das Programm das Maß ab, statt einen verzerrten Wert zu zeigen.
+- Bemaßen lassen sich gerade Kanten, Kreise und Bögen, Zylinder, Kugeln und Eckpunkte. Ellipsen, Freiformkurven und ebene Flächen nicht.
+- Der Vorschlag setzt nur Grundmaße, keine vollständige Fertigungsbemaßung.
+- Passungen sind nur ein Text; es gibt keine Passungstabellen. In der DXF-Datei sind die Maße einfache Linien, Pfeile und Texte, keine echten CAD-Maße.
+- Wie breit ein Text wird, schätzt das Programm nur. Mit einer anderen Schrift kann er etwas breiter ausfallen.
+- Ob Fusion 360 die Maßtexte und Pfeile der DXF-Dateien richtig anzeigt, ist noch nicht von Hand geprüft.
+- Nicht dabei: Schriftfeld, freie Texte, Stückliste und Schnitte (kommen später).
+
+Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 12 – Maße und Mittellinien“.
 
 ## Feature-Baum
 
