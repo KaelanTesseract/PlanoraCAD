@@ -4,6 +4,8 @@
 //! rechten Rand seines Felds, und kein Feld deckt den Navigationswürfel ab. Geprüft bei
 //! 1400 × 900, 1100 × 700 und 800 × 600, dunkel und hell.
 
+mod common;
+
 use std::sync::Arc;
 
 use egui::epaint::{ClippedShape, Shape};
@@ -14,7 +16,6 @@ use planora_app::{fonts, shell_panels, theme, viewport};
 use planora_exchange::ExchangeMesh;
 use planora_math::DVec3;
 use planora_project::config::Config;
-use planora_project::fsutil::new_id;
 use planora_project::library::Library;
 use planora_render::{EdgeRef, FaceRef, Pick};
 
@@ -85,7 +86,7 @@ fn settle(c: &egui::Context, app: &mut PlanoraApp, size: Vec2) -> Vec<Seen> {
 }
 
 fn library_ws() -> Workspace {
-    let root = std::env::temp_dir().join(format!("planora-width-{}", new_id()));
+    let root = common::temp_root("planora-width");
     Workspace::new(Some(Library::open(&root).unwrap()), Config::default())
 }
 

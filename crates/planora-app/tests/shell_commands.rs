@@ -4,6 +4,8 @@
 //! beziehen. Ohne Fenster: Rohereignisse je Bild gegen einen egui-Kontext, die Knopflagen kommen
 //! aus `shell_panels::bottom_buttons`.
 
+mod common;
+
 use egui::epaint::{ClippedShape, Shape};
 use egui::{Color32, Event, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use planora_app::app::PlanoraApp;
@@ -15,7 +17,6 @@ use planora_feature::SketchPlane;
 use planora_kernel::BoolOp;
 use planora_math::DVec3;
 use planora_project::config::Config;
-use planora_project::fsutil::new_id;
 use planora_project::library::Library;
 
 fn context(dark: bool) -> egui::Context {
@@ -45,7 +46,7 @@ fn input(size: Vec2, events: Vec<Event>) -> egui::RawInput {
 }
 
 fn library_ws() -> Workspace {
-    let root = std::env::temp_dir().join(format!("planora-cmd-{}", new_id()));
+    let root = common::temp_root("planora-cmd");
     Workspace::new(Some(Library::open(&root).unwrap()), Config::default())
 }
 
