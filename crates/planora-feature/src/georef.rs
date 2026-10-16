@@ -9,7 +9,9 @@
 //! ([`axial_range`]), Kugelfläche → `Sphere`.
 
 use crate::error::FeatureError;
-use crate::refs::{EdgeRef, FaceRef, distance, edge_candidates, face_candidates};
+use crate::refs::{
+    EdgeRef, FaceRef, RefCache, distance, edge_candidates_cached, face_candidates_cached,
+};
 use planora_drawing::centerline::axial_range;
 use planora_drawing::dimension::{DimError, EndSel, Geo3, GeoRef, GeoRefData, TagData};
 use planora_kernel::{Curve, Edge, Face, Id, Solid, Surface};
@@ -82,7 +84,19 @@ pub fn geo_ref_for_edge(
     edge: Id<Edge>,
     tol: &Tolerance,
 ) -> Result<GeoRefData, FeatureError> {
-    Ok(from_edge_ref(&EdgeRef::from_edge(solid, edge, tol)?))
+    geo_ref_for_edge_cached(solid, edge, tol, &RefCache::new())
+}
+
+/// Wie [`geo_ref_for_edge`], mit Prüfpunkten aus `cache` (gleiches Ergebnis).
+pub fn geo_ref_for_edge_cached<'a>(
+    solid: &'a Solid,
+    edge: Id<Edge>,
+    tol: &Tolerance,
+    cache: &RefCache<'a>,
+) -> Result<GeoRefData, FeatureError> {
+    Ok(from_edge_ref(&EdgeRef::from_edge_cached(
+        solid, edge, tol, cache,
+    )?))
 }
 
 /// Verweisdaten für die Fläche `face` von `solid` (wie [`FaceRef::from_face`]).
@@ -91,7 +105,19 @@ pub fn geo_ref_for_face(
     face: Id<Face>,
     tol: &Tolerance,
 ) -> Result<GeoRefData, FeatureError> {
-    Ok(from_face_ref(&FaceRef::from_face(solid, face, tol)?))
+    geo_ref_for_face_cached(solid, face, tol, &RefCache::new())
+}
+
+/// Wie [`geo_ref_for_face`], mit Prüfpunkten aus `cache` (gleiches Ergebnis).
+pub fn geo_ref_for_face_cached<'a>(
+    solid: &'a Solid,
+    face: Id<Face>,
+    tol: &Tolerance,
+    cache: &RefCache<'a>,
+) -> Result<GeoRefData, FeatureError> {
+    Ok(from_face_ref(&FaceRef::from_face_cached(
+        solid, face, tol, cache,
+    )?))
 }
 
 /// Wählt unter den Kandidaten `(Körper, Element, Prüfpunkt)` den mit dem kleinsten Abstand des
@@ -130,9 +156,10 @@ fn find_edge<'a>(
     solids: &[&'a Solid],
     d: &GeoRefData,
     tol: &Tolerance,
+    cache: &RefCache<'a>,
 ) -> Result<(&'a Solid, &'a Edge), DimError> {
     let r = to_edge_ref(d).ok_or_else(|| lost(MISMATCH))?;
-    let candidates = edge_candidates(solids, &r);
+    let candidates = edge_candidates_cached(solids, &r, cache);
     let (body, edge) = pick(&candidates, r.hint, tol)?.ok_or_else(|| {
         lost(
             &FeatureError::EdgeNotFound {
@@ -166,9 +193,22 @@ fn vertex(solid: &Solid, v: Id<planora_kernel::Vertex>) -> Result<DVec3, DimErro
 /// Zylinderfläche → `Axis` (Ursprung und normierte Achse des Rahmens, Radius, Bereich der
 /// Randkanten entlang der Achse), Kugel → `Sphere`, andere Flächen → `Lost`.
 pub fn resolve_geo(solids: &[&Solid], r: &GeoRef, tol: &Tolerance) -> Result<Geo3, DimError> {
+    resolve_geo_cached(solids, r, tol, &RefCache::new())
+}
+
+/// Wie [`resolve_geo`], mit Prüfpunkten, Kantenverwendungen und Achsbereichen aus `cache`
+/// (gleiches Ergebnis). Ein Durchgang über viele Maße (Auflösen, Vorschlag, Werkzeug) berechnet
+/// so die Prüfpunkte aller Kandidatenflächen und den Achsbereich einer Zylinderfläche nur
+/// einmal.
+pub fn resolve_geo_cached<'a>(
+    solids: &[&'a Solid],
+    r: &GeoRef,
+    tol: &Tolerance,
+    cache: &RefCache<'a>,
+) -> Result<Geo3, DimError> {
     match r {
         GeoRef::Edge(d) => {
-            let (solid, e) = find_edge(solids, d, tol)?;
+            let (solid, e) = find_edge(solids, d, tol, cache)?;
             match &e.curve {
                 Curve::Line { .. } => Ok(Geo3::Line {
                     a: vertex(solid, e.start)?,
@@ -183,7 +223,7 @@ pub fn resolve_geo(solids: &[&Solid], r: &GeoRef, tol: &Tolerance) -> Result<Geo
             }
         }
         GeoRef::EdgeEnd { edge, end } => {
-            let (solid, e) = find_edge(solids, edge, tol)?;
+            let (solid, e) = find_edge(solids, edge, tol, cache)?;
             // Ein Vollkreis beginnt und endet im selben Eckpunkt: Ende = Anfang.
             let v = match end {
                 EndSel::Start => e.start,
@@ -192,7 +232,7 @@ pub fn resolve_geo(solids: &[&Solid], r: &GeoRef, tol: &Tolerance) -> Result<Geo
             Ok(Geo3::Point(vertex(solid, v)?))
         }
         GeoRef::Center(d) => {
-            let (_, e) = find_edge(solids, d, tol)?;
+            let (_, e) = find_edge(solids, d, tol, cache)?;
             match &e.curve {
                 Curve::Circle { frame, .. } => Ok(Geo3::Point(frame.origin)),
                 _ => Err(lost(NO_CENTER)),
@@ -200,7 +240,7 @@ pub fn resolve_geo(solids: &[&Solid], r: &GeoRef, tol: &Tolerance) -> Result<Geo
         }
         GeoRef::Face(d) => {
             let fr = to_face_ref(d).ok_or_else(|| lost(MISMATCH))?;
-            let candidates = face_candidates(solids, &fr, tol);
+            let candidates = face_candidates_cached(solids, &fr, tol, cache);
             let (body, face) = pick(&candidates, fr.hint, tol)?.ok_or_else(|| {
                 lost(
                     &FeatureError::FaceNotFound {
@@ -215,8 +255,17 @@ pub fn resolve_geo(solids: &[&Solid], r: &GeoRef, tol: &Tolerance) -> Result<Geo
             match &f.surface {
                 Surface::Cylinder { frame, radius } => {
                     let z = frame.z.normalize_or_zero();
-                    let (t0, t1) =
-                        axial_range(solid, f, frame.origin, z).ok_or_else(|| lost(NO_RANGE))?;
+                    let key = (solid as *const Solid, face);
+                    let cached = cache.axial.borrow().get(&key).copied();
+                    let range = match cached {
+                        Some(r) => r,
+                        None => {
+                            let r = axial_range(solid, f, frame.origin, z);
+                            cache.axial.borrow_mut().insert(key, r);
+                            r
+                        }
+                    };
+                    let (t0, t1) = range.ok_or_else(|| lost(NO_RANGE))?;
                     Ok(Geo3::Axis {
                         origin: frame.origin,
                         dir: z,

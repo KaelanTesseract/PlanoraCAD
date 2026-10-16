@@ -23,7 +23,9 @@ use planora_drawing::{
     Anchor, Basis, Candidate, CandidateOrigin, DrawBody, DrawError, Drawing, DrawingId, ViewId,
     ViewKind, ViewLines, ViewSpec, dimension_key, measure, suggest,
 };
-use planora_feature::{geo_ref_for_edge, geo_ref_for_face, resolve_geo};
+use planora_feature::{
+    RefCache, geo_ref_for_edge_cached, geo_ref_for_face_cached, resolve_geo_cached,
+};
 use planora_kernel::{Edge, Face, Id, Solid};
 use planora_math::{DVec2, Tolerance};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -482,13 +484,20 @@ pub fn next_group(d: &Drawing) -> Option<u64> {
 
 /// Bezug aus der Herkunft eines Vorschlags bzw. einer angeklickten Linie (Körperindex in den
 /// exakten Körpern). Vorschlag und Werkzeug „Maß“ bilden Bezüge nur hiermit, damit gleiche
-/// Maße gleiche Schlüssel haben.
-pub(crate) fn geo_ref(solids: &[&Solid], o: CandidateOrigin, tol: &Tolerance) -> Option<GeoRef> {
+/// Maße gleiche Schlüssel haben. `cache` hält die Prüfpunkte der Flächen für den ganzen
+/// Durchgang (ein Vorschlag, ein Klick): sonst kostete jeder Bezug an einer großen Fläche mit
+/// vielen Bohrungen Zehntelsekunden.
+pub(crate) fn geo_ref<'a>(
+    solids: &[&'a Solid],
+    o: CandidateOrigin,
+    tol: &Tolerance,
+    cache: &RefCache<'a>,
+) -> Option<GeoRef> {
     let edge = |body: usize, edge: usize| {
-        let s = solids.get(body)?;
+        let s: &'a Solid = solids.get(body)?;
         let id = Id::<Edge>::from_index(edge);
         s.edges.get(id)?;
-        geo_ref_for_edge(s, id, tol).ok()
+        geo_ref_for_edge_cached(s, id, tol, cache).ok()
     };
     Some(match o {
         CandidateOrigin::Edge { body, edge: e } => GeoRef::Edge(edge(body, e)?),
@@ -498,10 +507,10 @@ pub(crate) fn geo_ref(solids: &[&Solid], o: CandidateOrigin, tol: &Tolerance) ->
         },
         CandidateOrigin::Center { body, edge: e } => GeoRef::Center(edge(body, e)?),
         CandidateOrigin::Face { body, face } => {
-            let s = solids.get(body)?;
+            let s: &'a Solid = solids.get(body)?;
             let id = Id::<Face>::from_index(face);
             s.faces.get(id)?;
-            GeoRef::Face(geo_ref_for_face(s, id, tol).ok()?)
+            GeoRef::Face(geo_ref_for_face_cached(s, id, tol, cache).ok()?)
         }
     })
 }
@@ -597,9 +606,11 @@ pub fn suggest_for(
         .collect();
     let extent = extent_of(&draw);
     let tol = Tolerance::default();
+    // Ein Speicher für den ganzen Vorschlag (Prüfpunkte, Kantenverwendungen, Achsbereiche).
+    let cache = RefCache::new();
     let geos_of = |refs: &[GeoRef]| -> Option<Vec<Geo3>> {
         refs.iter()
-            .map(|r| resolve_geo(&solids, r, &tol).ok())
+            .map(|r| resolve_geo_cached(&solids, r, &tol, &cache).ok())
             .collect()
     };
 
@@ -654,7 +665,7 @@ pub fn suggest_for(
         // Stufen und Gruppen zählen erst weiter, wenn das Maß wirklich gesetzt ist.
         let (mut st, mut gr, mut ng) = (stack.clone(), groups.clone(), next_group);
         let Some(spec) = candidate_spec(
-            c, &d, &solids, &tol, extent, &geos_of, &mut st, &mut gr, &mut ng,
+            c, &d, &solids, &tol, &cache, extent, &geos_of, &mut st, &mut gr, &mut ng,
         ) else {
             unbound = true;
             continue;
@@ -681,11 +692,12 @@ pub fn suggest_for(
 /// Maß aus einem Vorschlag: Bezüge aus der Herkunft (nur, wenn sie wieder zum selben Schlüssel
 /// führen), Abstand nach P3, Gruppe mit Nummer der Zeichnung. Zählt Stufen und Gruppen weiter.
 #[allow(clippy::too_many_arguments)]
-fn candidate_spec(
+fn candidate_spec<'a>(
     c: &Candidate,
     d: &Drawing,
-    solids: &[&Solid],
+    solids: &[&'a Solid],
     tol: &Tolerance,
+    cache: &RefCache<'a>,
     extent: f64,
     geos_of: &dyn Fn(&[GeoRef]) -> Option<Vec<Geo3>>,
     stack: &mut HashMap<(ViewId, bool), usize>,
@@ -697,7 +709,7 @@ fn candidate_spec(
     let refs: Vec<GeoRef> = c
         .origins
         .iter()
-        .map(|o| geo_ref(solids, *o, tol))
+        .map(|o| geo_ref(solids, *o, tol, cache))
         .collect::<Option<_>>()?;
     let geos = geos_of(&refs)?;
     if dimension_key(c.kind, &geos, &basis, view.kind, extent).as_deref() != Some(c.key.as_str()) {

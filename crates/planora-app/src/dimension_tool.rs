@@ -42,7 +42,7 @@ use planora_drawing::{
     Anchor, Basis, CandidateOrigin, DrawBody, DrawError, Drawing, DrawingId, Measured, ViewId,
     ViewKind, ViewLines, ViewSpec, measure,
 };
-use planora_feature::resolve_geo;
+use planora_feature::{RefCache, resolve_geo_cached};
 use planora_kernel::{Curve, Edge, Id, Solid};
 use planora_math::{DVec2, DVec3, Tolerance};
 use std::collections::BTreeMap;
@@ -217,6 +217,9 @@ struct Ctx<'a> {
     extent: f64,
     tol: Tolerance,
     results: BTreeMap<ViewId, std::sync::Arc<ViewLines>>,
+    /// Prüfpunkte der Flächen für diesen Klick bzw. dieses Bild (jeder Bezug an derselben
+    /// Fläche rechnet sie sonst neu).
+    cache: RefCache<'a>,
 }
 
 impl<'a> Ctx<'a> {
@@ -261,6 +264,7 @@ impl<'a> Ctx<'a> {
             extent,
             tol: Tolerance::default(),
             results,
+            cache: RefCache::new(),
         })
     }
 
@@ -273,7 +277,7 @@ impl<'a> Ctx<'a> {
     fn measure(&self, kind: DimKind, refs: &[GeoRef]) -> Result<Measured, String> {
         let geos = refs
             .iter()
-            .map(|r| resolve_geo(&self.solids, r, &self.tol))
+            .map(|r| resolve_geo_cached(&self.solids, r, &self.tol, &self.cache))
             .collect::<Result<Vec<Geo3>, _>>()
             .map_err(|_| NOT_DIMENSIONABLE.to_string())?;
         measure(kind, &geos, &self.basis, self.view.kind, self.extent).map_err(|e| dim_text(&e))
@@ -296,7 +300,8 @@ impl<'a> Ctx<'a> {
                 }
             }
         };
-        geo_ref(&self.solids, origin, &self.tol).ok_or_else(|| NOT_DIMENSIONABLE.to_string())
+        geo_ref(&self.solids, origin, &self.tol, &self.cache)
+            .ok_or_else(|| NOT_DIMENSIONABLE.to_string())
     }
 
     /// Kante, Kantenende (bis [`END_PX`] an einem Ende) oder Kreismitte (bis [`END_PX`] an der
@@ -539,7 +544,7 @@ impl DimensionTool {
             Ok(r) => r,
             Err(t) => return Rejected(t),
         };
-        let geo = match resolve_geo(&ctx.solids, &r, &ctx.tol) {
+        let geo = match resolve_geo_cached(&ctx.solids, &r, &ctx.tol, &ctx.cache) {
             Ok(g) => g,
             Err(_) => return Rejected(NOT_DIMENSIONABLE.into()),
         };

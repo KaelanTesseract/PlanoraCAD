@@ -4,8 +4,9 @@
 use crate::compute::MAX_COORD_MM;
 use crate::drawings::MAX_POS_MM;
 use crate::error::FeatureError;
-use crate::georef::resolve_geo;
+use crate::georef::resolve_geo_cached;
 use crate::model::Document;
+use crate::refs::RefCache;
 use planora_drawing::annotate::ResolvedDims;
 use planora_drawing::dimension::{
     ChainMode, DimId, DimKind, DimSpec, Geo3, GeoRef, GeoRefData, TagData,
@@ -237,7 +238,7 @@ impl Document {
     }
 
     /// Löst alle Maße der Zeichnung gegen die Körper `solids` auf und misst sie: je Maß die
-    /// Bezüge über [`resolve_geo`], dann [`measure`] mit der Basis der Ansicht und der
+    /// Bezüge über [`resolve_geo`](crate::resolve_geo), dann [`measure`] mit der Basis der Ansicht und der
     /// Ausdehnung der Körper. Fehler bleiben im Ergebnis des einzelnen Maßes (kein Abbruch);
     /// `last_known` bleibt leer (das führt die Oberfläche).
     pub fn resolve_dimensions(
@@ -272,6 +273,9 @@ pub fn resolve_drawing_dimensions<E>(
         })
         .collect();
     let extent = extent_of(&bodies);
+    // Ein Speicher für den ganzen Durchgang: Prüfpunkte und Achsbereiche werden je Fläche nur
+    // einmal berechnet (gleiches Ergebnis wie ohne Speicher).
+    let cache = RefCache::new();
     let mut out = ResolvedDims::default();
     for m in &d.dimensions {
         check()?;
@@ -282,7 +286,7 @@ pub fn resolve_drawing_dimensions<E>(
         let result = m
             .refs
             .iter()
-            .map(|r| resolve_geo(solids, r, &tol))
+            .map(|r| resolve_geo_cached(solids, r, &tol, &cache))
             .collect::<Result<Vec<Geo3>, _>>()
             .and_then(|geos| measure(m.kind, &geos, &Basis::of(view.kind), view.kind, extent));
         out.by_view

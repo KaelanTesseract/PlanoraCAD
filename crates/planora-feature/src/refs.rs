@@ -4,11 +4,87 @@
 //! mehrere Flächen mit derselben Marke (etwa weil eine Boolesche Operation eine Fläche geteilt
 //! hat), entscheidet der Abstand ihres Prüfpunkts zum gespeicherten Hinweispunkt.
 
-use std::collections::BTreeMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, HashMap};
+use std::marker::PhantomData;
+use std::rc::Rc;
 
 use crate::error::FeatureError;
 use planora_kernel::{Edge, Face, FaceTag, Id, Solid, edge_probe_point, face_probe_point};
 use planora_math::{DVec3, Tolerance};
+
+thread_local! {
+    static FACE_PROBES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Zahl der Prüfpunkt-Berechnungen für Flächen (`face_probe_point`) in diesem Thread seit
+/// Programmstart. Nur für Tests, die prüfen, dass teure Prüfpunkte nicht mehrfach berechnet
+/// werden (zählt im aufrufenden Thread, deshalb unabhängig von parallel laufenden Tests).
+#[doc(hidden)]
+pub fn face_probe_calls() -> u64 {
+    FACE_PROBES.with(Cell::get)
+}
+
+/// Prüfpunkt einer Fläche; jede Berechnung wird gezählt ([`face_probe_calls`]).
+fn probe_face(solid: &Solid, face: Id<Face>, tol: &Tolerance) -> Option<DVec3> {
+    FACE_PROBES.with(|c| c.set(c.get() + 1));
+    face_probe_point(solid, face, tol)
+}
+
+type EdgeUses = BTreeMap<Id<Edge>, Vec<Id<Face>>>;
+/// Schlüssel einer Fläche im Speicher: Adresse des Körpers und Fläche.
+type FaceKey = (*const Solid, Id<Face>);
+
+/// Zwischenspeicher für Verweise und ihre Auflösung: Prüfpunkte der Flächen und die
+/// Kantenverwendungen je Körper. Der Prüfpunkt einer großen Fläche mit vielen Bohrungen kostet
+/// Zehntelsekunden; ohne Speicher würde er für jede angrenzende Kante neu berechnet.
+///
+/// Die Ergebnisse sind dieselben wie ohne Speicher. Ein Speicher gilt für Körper, die sich
+/// während seiner Lebensdauer nicht ändern (die Lebensdauer `'a` stellt das sicher: alle
+/// Körper sind für `'a` geteilt geliehen) und für eine Toleranz; er wird je Durchgang (ein
+/// Vorschlag, ein Klick, eine Auflösung aller Maße) neu angelegt. Schlüssel ist die Adresse des
+/// Körpers.
+#[derive(Default)]
+pub struct RefCache<'a> {
+    probes: RefCell<HashMap<FaceKey, Option<DVec3>>>,
+    uses: RefCell<HashMap<*const Solid, Rc<EdgeUses>>>,
+    /// Achsbereiche von Zylinderflächen (siehe `georef`).
+    pub(crate) axial: RefCell<HashMap<FaceKey, Option<(f64, f64)>>>,
+    _solids: PhantomData<&'a Solid>,
+}
+
+impl<'a> RefCache<'a> {
+    pub fn new() -> RefCache<'a> {
+        RefCache::default()
+    }
+
+    /// Prüfpunkt der Fläche (einmal je Körper und Fläche berechnet).
+    pub(crate) fn face_probe(
+        &self,
+        solid: &'a Solid,
+        face: Id<Face>,
+        tol: &Tolerance,
+    ) -> Option<DVec3> {
+        let key = (solid as *const Solid, face);
+        if let Some(p) = self.probes.borrow().get(&key) {
+            return *p;
+        }
+        let p = probe_face(solid, face, tol);
+        self.probes.borrow_mut().insert(key, p);
+        p
+    }
+
+    /// Kantenverwendungen des Körpers (einmal je Körper berechnet).
+    fn edge_uses(&self, solid: &'a Solid) -> Rc<EdgeUses> {
+        let key = solid as *const Solid;
+        if let Some(u) = self.uses.borrow().get(&key) {
+            return Rc::clone(u);
+        }
+        let u = Rc::new(edge_uses(solid));
+        self.uses.borrow_mut().insert(key, Rc::clone(&u));
+        u
+    }
+}
 
 /// Verweis auf eine Fläche über ihre Marke und einen Hinweispunkt.
 #[derive(Clone, Debug, PartialEq)]
@@ -33,8 +109,19 @@ impl FaceRef {
         face: Id<Face>,
         tol: &Tolerance,
     ) -> Result<FaceRef, FeatureError> {
+        FaceRef::from_face_cached(solid, face, tol, &RefCache::new())
+    }
+
+    /// Wie [`FaceRef::from_face`], mit Prüfpunkten aus `cache`.
+    pub fn from_face_cached<'a>(
+        solid: &'a Solid,
+        face: Id<Face>,
+        tol: &Tolerance,
+        cache: &RefCache<'a>,
+    ) -> Result<FaceRef, FeatureError> {
         let tag = assigned_tag(solid, face).ok_or(FeatureError::UntaggedFace)?;
-        let hint = face_probe_point(solid, face, tol)
+        let hint = cache
+            .face_probe(solid, face, tol)
             .ok_or_else(|| FeatureError::InvalidInput("Die Fläche hat keinen Prüfpunkt".into()))?;
         Ok(FaceRef {
             origin: tag.origin,
@@ -86,14 +173,24 @@ pub(crate) fn face_candidates(
     r: &FaceRef,
     tol: &Tolerance,
 ) -> Vec<(usize, Id<Face>, Option<DVec3>)> {
+    face_candidates_cached(solids, r, tol, &RefCache::new())
+}
+
+/// Wie [`face_candidates`], mit Prüfpunkten aus `cache`.
+pub(crate) fn face_candidates_cached<'a>(
+    solids: &[&'a Solid],
+    r: &FaceRef,
+    tol: &Tolerance,
+    cache: &RefCache<'a>,
+) -> Vec<(usize, Id<Face>, Option<DVec3>)> {
     let tag = r.tag();
     solids
         .iter()
         .enumerate()
-        .flat_map(|(bi, s)| {
+        .flat_map(|(bi, &s)| {
             s.faces_with_tag(&tag)
                 .into_iter()
-                .map(move |f| (bi, f, face_probe_point(s, f, tol)))
+                .map(move |f| (bi, f, cache.face_probe(s, f, tol)))
         })
         .collect()
 }
@@ -116,7 +213,19 @@ impl EdgeRef {
         edge: Id<Edge>,
         tol: &Tolerance,
     ) -> Result<EdgeRef, FeatureError> {
-        let uses = edge_uses(solid);
+        EdgeRef::from_edge_cached(solid, edge, tol, &RefCache::new())
+    }
+
+    /// Wie [`EdgeRef::from_edge`], mit Prüfpunkten und Kantenverwendungen aus `cache` (gleiches
+    /// Ergebnis; viele Verweise auf Kanten derselben Flächen berechnen deren Prüfpunkte nur
+    /// einmal).
+    pub fn from_edge_cached<'a>(
+        solid: &'a Solid,
+        edge: Id<Edge>,
+        tol: &Tolerance,
+        cache: &RefCache<'a>,
+    ) -> Result<EdgeRef, FeatureError> {
+        let uses = cache.edge_uses(solid);
         let faces = uses
             .get(&edge)
             .filter(|u| u.len() >= 2)
@@ -130,7 +239,7 @@ impl EdgeRef {
             Ok(FaceRef {
                 origin: tag.origin,
                 role: tag.role.clone(),
-                hint: face_probe_point(solid, face, tol).unwrap_or(hint),
+                hint: cache.face_probe(solid, face, tol).unwrap_or(hint),
             })
         };
         Ok(EdgeRef {
@@ -179,11 +288,21 @@ pub(crate) fn edge_candidates(
     solids: &[&Solid],
     r: &EdgeRef,
 ) -> Vec<(usize, Id<Edge>, Option<DVec3>)> {
+    edge_candidates_cached(solids, r, &RefCache::new())
+}
+
+/// Wie [`edge_candidates`], mit Kantenverwendungen aus `cache`.
+pub(crate) fn edge_candidates_cached<'a>(
+    solids: &[&'a Solid],
+    r: &EdgeRef,
+    cache: &RefCache<'a>,
+) -> Vec<(usize, Id<Edge>, Option<DVec3>)> {
     let (ta, tb) = (r.a.tag(), r.b.tag());
     let mut candidates = Vec::new();
-    for (bi, s) in solids.iter().enumerate() {
+    for (bi, &s) in solids.iter().enumerate() {
         let has = |f: Id<Face>, t: &FaceTag| s.faces.get(f).and_then(|f| f.tag.as_ref()) == Some(t);
-        for (edge, faces) in edge_uses(s) {
+        let uses = cache.edge_uses(s);
+        for (&edge, faces) in uses.iter() {
             let matches = faces.iter().enumerate().any(|(i, &fa)| {
                 has(fa, &ta)
                     && faces
@@ -217,8 +336,8 @@ pub(crate) fn distance(probe: Option<DVec3>, hint: DVec3) -> f64 {
 /// Für jede Kante die Flächen, deren Schleifen sie benutzen, in der Reihenfolge
 /// (Fläche aufsteigend, äußere vor inneren Schleifen, Halbkanten-Reihenfolge). Benutzt eine
 /// Fläche die Kante zweimal (Naht), steht sie zweimal in der Liste.
-fn edge_uses(solid: &Solid) -> BTreeMap<Id<Edge>, Vec<Id<Face>>> {
-    let mut uses: BTreeMap<Id<Edge>, Vec<Id<Face>>> = BTreeMap::new();
+fn edge_uses(solid: &Solid) -> EdgeUses {
+    let mut uses: EdgeUses = BTreeMap::new();
     for (fid, face) in solid.faces.iter() {
         for lp in std::iter::once(&face.outer).chain(face.inner.iter()) {
             for he in &lp.half_edges {
