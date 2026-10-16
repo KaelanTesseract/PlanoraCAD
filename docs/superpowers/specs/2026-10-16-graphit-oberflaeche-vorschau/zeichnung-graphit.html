@@ -1,0 +1,101 @@
+<h2>Zeichnung im Graphit-Stil (dunkel)</h2>
+<p class="subtitle">Das Blatt bleibt weiß, weil es ein Papier ist. Die Leisten aus der heutigen Zeichnungsansicht werden zu schwebenden Feldern: Werkzeuge oben, Ansicht-Einstellungen rechts, Hinweise unten.</p>
+
+<style>
+  .gz{position:relative;width:100%;aspect-ratio:16/9;background:#0e0e0e;border-radius:10px;overflow:hidden;font-family:Montserrat,"Segoe UI",system-ui,sans-serif;color:#939393;font-size:12px}
+  .gz .p{position:absolute;background:#181818;border:1px solid #383838;border-radius:14px;padding:10px}
+  .gz .row{height:24px;display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:6px;white-space:nowrap}
+  .gz .row.on{background:#333;color:#fff}
+  .gz .row .i{width:12px;height:12px;border:1.5px solid #939393;border-radius:3px;flex:none}
+  .gz .row.on .i{border-color:#fff}
+  .gz .hd{height:28px;display:flex;align-items:center;padding:0 8px;background:#1a1a1a;border-radius:10px;margin:6px 0 4px;color:#fff;font-weight:600;justify-content:space-between}
+  .gz .tabs{display:flex;gap:4px}.gz .tab{padding:5px 12px;border-radius:8px}.gz .tab.on{background:#333;color:#fff}
+  .gz .menu{display:flex;gap:2px;margin-right:12px}.gz .menu span{padding:5px 9px;border-radius:7px}
+  .gz .div{width:1px;height:20px;background:#383838;margin:0 8px}
+  .gz .ibtn{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center}
+  .gz .ibtn i{display:block;width:14px;height:14px;border:1.5px solid #939393;border-radius:4px}
+  .gz .ibtn.on{background:#333}.gz .ibtn.on i{border-color:#fff}
+  .gz .btn{padding:6px 12px;border-radius:8px;background:#262626;color:#fff;font-weight:500}
+  .gz .btn.on{background:#333;box-shadow:inset 0 0 0 1px #fff}
+  .gz .field{background:#0d0d0d;border-radius:6px;height:26px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:500;flex:1}
+  .gz .lab{color:#fff;font-weight:500;margin:10px 0 6px}
+  .gz .tg{display:flex;align-items:center;gap:8px;height:26px}
+  .gz .sw{width:30px;height:16px;border-radius:999px;background:#262626;position:relative}
+  .gz .sw.on{background:#006dfd}.gz .sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff}.gz .sw.on::after{left:16px}
+  .gz .paper{position:absolute;left:19%;right:25%;top:84px;bottom:70px;background:#fff;box-shadow:0 0 0 1px #383838}
+  .gz .frame{position:absolute;inset:14px;border:1.5px solid #505560}
+  .gz .v{position:absolute;border:1.5px solid #14161a}
+  .gz .ln{position:absolute;background:#14161a}
+  .gz .t{position:absolute;color:#14161a;font-size:11px}
+</style>
+
+<div class="gz">
+  <div class="paper">
+    <div class="frame"></div>
+    <!-- Vorderansicht -->
+    <div class="v" style="left:14%;top:26%;width:26%;height:16%"></div>
+    <div class="ln" style="left:14%;top:21%;width:26%;height:1px"></div>
+    <div class="t" style="left:25%;top:17%">40,0</div>
+    <div class="ln" style="left:42%;top:26%;width:1px;height:16%"></div>
+    <div class="t" style="left:43.5%;top:32%">12,0</div>
+    <!-- Draufsicht -->
+    <div class="v" style="left:14%;top:56%;width:26%;height:26%"></div>
+    <div style="position:absolute;left:23%;top:63%;width:9%;height:13%;border:1.5px solid #14161a;border-radius:50%"></div>
+    <div class="t" style="left:32.5%;top:60%">Ø10,0</div>
+    <div class="ln" style="left:42%;top:56%;width:1px;height:26%"></div>
+    <div class="t" style="left:43.5%;top:68%">30,0</div>
+    <!-- Seitenansicht -->
+    <div class="v" style="left:56%;top:26%;width:18%;height:16%"></div>
+    <!-- Isometrie -->
+    <div class="v" style="left:62%;top:56%;width:22%;height:20%;transform:skewY(-12deg)"></div>
+  </div>
+
+  <!-- oben: Menü + Tabs -->
+  <div class="p" style="left:50%;top:16px;transform:translateX(-50%);padding:6px;display:flex;align-items:center">
+    <div class="menu"><span>Datei</span><span>Erzeugen</span><span>Zeichnung</span><span>Bearbeiten</span><span>Ansicht</span></div>
+    <div class="div"></div>
+    <div class="tabs"><div class="tab on">Teil · v1</div><div class="tab">+</div></div>
+  </div>
+
+  <!-- links: Browser -->
+  <div class="p" style="left:16px;top:16px;width:190px;bottom:16px;overflow:hidden">
+    <div class="hd">Zeichnungen <span>▾</span></div>
+    <div class="row on"><span class="i"></span>Zeichnung 1</div>
+    <div class="row" style="padding-left:22px"><span class="i"></span>Vorne</div>
+    <div class="row" style="padding-left:22px"><span class="i"></span>Oben</div>
+    <div class="row" style="padding-left:22px"><span class="i"></span>Rechts</div>
+    <div class="row" style="padding-left:22px"><span class="i"></span>Isometrisch</div>
+    <div class="hd">Maße <span>▾</span></div>
+    <div class="row"><span class="i"></span>Vorne: 40,0</div>
+    <div class="row"><span class="i"></span>Vorne: 12,0</div>
+    <div class="row"><span class="i"></span>Oben: Ø10,0</div>
+    <div class="row"><span class="i"></span>Oben: 30,0</div>
+  </div>
+
+  <!-- Zeichnungs-Werkzeuge: oben unter dem Menü -->
+  <div class="p" style="left:50%;top:76px;transform:translateX(-50%);padding:6px;display:flex;align-items:center;gap:6px">
+    <span class="btn">← 3D-Modell</span>
+    <span style="color:#fff;font-weight:600;padding:0 6px">Zeichnung 1</span>
+    <div class="div"></div>
+    <span class="btn">Ansicht hinzufügen ▾</span>
+    <div class="div"></div>
+    <span class="btn">Maße vorschlagen</span>
+    <span class="btn on">Maß ▾</span>
+    <div class="div"></div>
+    <div class="ibtn"><i></i></div><div class="ibtn"><i></i></div><div class="ibtn"><i></i></div>
+  </div>
+
+  <!-- rechts: gewählte Ansicht -->
+  <div class="p" style="right:16px;top:16px;width:220px;bottom:16px;overflow:hidden">
+    <div class="hd">Ansicht „Vorne“</div>
+    <div class="lab">Maßstab</div>
+    <div class="field" style="flex:none;width:100%">1 : 2</div>
+    <div class="lab">Darstellung</div>
+    <div class="tg"><span class="sw on"></span>Verdeckte Kanten zeigen</div>
+    <div class="tg"><span class="sw on"></span>Mittellinien</div>
+    <div style="margin-top:14px"><span class="btn" style="display:inline-block">Ansicht löschen</span></div>
+  </div>
+
+  <!-- unten: Hinweis -->
+  <div class="p" style="left:50%;bottom:16px;transform:translateX(-50%);padding:6px 14px;color:#fff;white-space:nowrap">Klicken Sie zwei Kanten an, dann setzen Sie das Maß mit einem weiteren Klick.</div>
+</div>

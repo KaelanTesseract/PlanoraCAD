@@ -1,0 +1,88 @@
+<h2>So könnte die Modell-Ansicht im Graphit-Stil aussehen</h2>
+<p class="subtitle">Der 3D-Bereich füllt das ganze Fenster, alle Felder schweben darüber. Inhalte sind die echten aus PlanoraCAD (Feature-Baum, Eigenschaften, Versionen).</p>
+
+<style>
+  .gx{position:relative;width:100%;aspect-ratio:16/9;background:#0e0e0e;border-radius:10px;overflow:hidden;font-family:Montserrat,"Segoe UI",system-ui,sans-serif;color:#939393;font-size:12px;
+      background-image:linear-gradient(#262626 1px,transparent 1px),linear-gradient(90deg,#262626 1px,transparent 1px);background-size:44px 44px;background-position:center}
+  .gx .p{position:absolute;background:#181818;border:1px solid #383838;border-radius:14px;padding:10px}
+  .gx .row{height:24px;display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:6px;white-space:nowrap}
+  .gx .row.on{background:#333;color:#fff}
+  .gx .row .i{width:12px;height:12px;border:1.5px solid #939393;border-radius:3px;flex:none}
+  .gx .row.on .i{border-color:#fff}
+  .gx .hd{height:28px;display:flex;align-items:center;padding:0 8px;background:#1a1a1a;border-radius:10px;margin:6px 0 4px;color:#fff;font-weight:600;font-size:12px;justify-content:space-between}
+  .gx .tabs{display:flex;gap:4px}
+  .gx .tab{padding:5px 12px;border-radius:8px;color:#939393}
+  .gx .tab.on{background:#333;color:#fff}
+  .gx .menu{display:flex;gap:2px;margin-right:12px}
+  .gx .menu span{padding:5px 9px;border-radius:7px}
+  .gx .div{width:1px;height:20px;background:#383838;margin:0 8px}
+  .gx .ibtn{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center}
+  .gx .ibtn i{display:block;width:14px;height:14px;border:1.5px solid #939393;border-radius:4px}
+  .gx .ibtn.on{background:#333}.gx .ibtn.on i{border-color:#fff}
+  .gx .field{background:#0d0d0d;border-radius:6px;height:26px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:500;flex:1}
+  .gx .lab{color:#fff;font-weight:500;margin:10px 0 6px}
+  .gx .seg{display:flex;background:#0d0d0d;border-radius:8px;padding:3px;margin-bottom:8px}
+  .gx .seg span{flex:1;text-align:center;padding:5px;border-radius:6px}
+  .gx .seg .on{background:#333;color:#fff}
+  .gx .chip{padding:4px 10px;border-radius:4px;font-weight:500}
+  .gx .box{position:absolute;left:41%;top:34%;width:19%;height:26%;border:2px solid #f1f05c;background:rgba(255,255,255,.06);transform:skewY(-6deg)}
+  .gx .box2{position:absolute;left:41%;top:26%;width:19%;height:8%;border:1px solid #bbb;border-bottom:none;background:rgba(255,255,255,.1);transform:skewX(-35deg) translateX(20px)}
+  .gx .axisx{position:absolute;left:0;right:0;top:78%;height:2px;background:#38733b}
+</style>
+
+<div class="gx">
+  <div class="axisx"></div><div class="box2"></div><div class="box"></div>
+
+  <!-- oben: Menü + Dokument-Tabs -->
+  <div class="p" style="left:50%;top:16px;transform:translateX(-50%);padding:6px;display:flex;align-items:center">
+    <div class="menu"><span>Datei</span><span>Erzeugen</span><span>Zeichnung</span><span>Bearbeiten</span><span>Ansicht</span></div>
+    <div class="div"></div>
+    <div class="tabs"><div class="tab on">Teil · v1</div><div class="tab">Unbenannt 1 ●</div><div class="tab">+</div></div>
+  </div>
+
+  <!-- links: Projekte + Feature-Baum -->
+  <div class="p" style="left:16px;top:16px;width:210px;bottom:64px;overflow:hidden">
+    <div class="hd">Projekte <span>▾</span></div>
+    <div class="row">Meine Teile</div>
+    <div class="hd">Feature-Baum <span>▾</span></div>
+    <div class="row on"><span class="i"></span>Quader 1</div>
+    <div class="row"><span class="i"></span>Skizze 1</div>
+    <div class="row"><span class="i"></span>Extrusion 1</div>
+    <div class="row"><span class="i"></span>Verrunden 1</div>
+    <div class="row" style="color:#7d7d7d;border-top:1px solid #383838;border-radius:0;margin-top:4px;height:20px">Berechnung endet hier</div>
+    <div class="hd">Zeichnungen <span>▾</span></div>
+    <div class="row"><span class="i"></span>Zeichnung 1</div>
+    <div class="hd">Maße <span>▾</span></div>
+    <div class="row"><span class="i"></span>40,0</div>
+  </div>
+
+  <!-- rechts oben: Modus -->
+  <div class="p" style="right:16px;top:16px;width:226px;padding:6px;display:flex;gap:4px;justify-content:center">
+    <div class="ibtn on"><i></i></div><div class="ibtn"><i></i></div><div class="ibtn on"><i></i></div><div class="ibtn"><i></i></div>
+  </div>
+
+  <!-- rechts: Eigenschaften / Versionen -->
+  <div class="p" style="right:16px;top:76px;width:226px;bottom:64px;overflow:hidden">
+    <div class="seg"><span class="on">Eigenschaften</span><span>Versionen</span></div>
+    <div class="lab">Quader 1</div>
+    <div style="display:flex;gap:6px;margin-bottom:6px"><div class="field">40,0</div><div class="field">30,0</div><div class="field">12,0</div></div>
+    <div class="lab">Lage</div>
+    <div style="display:flex;gap:6px;margin-bottom:6px"><div class="field">0,0</div><div class="field">0,0</div><div class="field">0,0</div></div>
+    <div class="lab">Volumen</div>
+    <div style="color:#fff">14 400 mm³</div>
+  </div>
+
+  <!-- unten: Befehle -->
+  <div class="p" style="left:50%;bottom:16px;transform:translateX(-50%);padding:8px;display:flex;align-items:center;gap:6px">
+    <span class="chip" style="background:#251f0c;color:#e2ab63">Vereinigen</span>
+    <span class="chip" style="background:#0a1d25;color:#1f6dcc">Abziehen</span>
+    <span class="chip" style="background:#0f260c;color:#6ecd62">Schneiden</span>
+    <div class="div"></div>
+    <div class="ibtn"><i></i></div><div class="ibtn"><i></i></div><div class="ibtn on"><i></i></div><div class="ibtn"><i></i></div><div class="ibtn"><i></i></div>
+  </div>
+
+  <!-- unten links: Meldung -->
+  <div class="p" style="left:16px;bottom:16px;padding:6px 12px;color:#fff">1 Körper</div>
+</div>
+
+<p class="subtitle" style="margin-top:14px">Hinweis: Die Symbole sind hier nur Kästchen als Platzhalter. Dem Entwurf entsprechend wären es dünne Linien-Symbole.</p>

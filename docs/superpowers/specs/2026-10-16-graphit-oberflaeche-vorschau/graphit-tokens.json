@@ -1,0 +1,358 @@
+{
+  "name": "Graphit",
+  "version": 1,
+  "color": {
+    "themes": [
+      {
+        "id": "dark",
+        "name": "Dark"
+      }
+    ],
+    "tokens": [
+      {
+        "name": "bg-viewport",
+        "value": "#0e0e0e",
+        "usage": "3D viewport background; everything else floats above it."
+      },
+      {
+        "name": "bg-panel",
+        "value": "#181818",
+        "usage": "Fill of floating panels, top bar, tool dock, context menu."
+      },
+      {
+        "name": "bg-section",
+        "value": "#1a1a1a",
+        "usage": "Collapsible section header boxes inside a panel (Solids, Curve)."
+      },
+      {
+        "name": "bg-field",
+        "value": "#262626",
+        "usage": "Search field, header chevron button, coordinate value chips, toggle track."
+      },
+      {
+        "name": "bg-inset",
+        "value": "#0d0d0d",
+        "usage": "Recessed fills: numeric inputs, command bar, file-name pill. Darker than the panel on purpose."
+      },
+      {
+        "name": "bg-active",
+        "value": "#333333",
+        "usage": "Selected icon button, active segment, keyboard badge, secondary button, plan buttons."
+      },
+      {
+        "name": "border-subtle",
+        "value": "#383838",
+        "usage": "1px outline of every panel, box, toolbar and field group."
+      },
+      {
+        "name": "viewport-grid",
+        "value": "#333333",
+        "usage": "1px grid lines on the viewport floor."
+      },
+      {
+        "name": "viewport-ground-axis",
+        "value": "#38733b",
+        "usage": "The green ground axis line through the grid origin."
+      },
+      {
+        "name": "text-primary",
+        "value": "#ffffff",
+        "usage": "Values, titles, menu items, active icons. On every surface above (15:1+ on bg-panel)."
+      },
+      {
+        "name": "text-secondary",
+        "value": "#939393",
+        "usage": "Outliner rows, icon strokes at rest. 5.7:1 on bg-panel."
+      },
+      {
+        "name": "text-tertiary",
+        "value": "#7d7d7d",
+        "usage": "Section header labels, inactive tab text. Source value: 4.3:1 on bg-section, just under 4.5 — keep it at 13px+ medium."
+      },
+      {
+        "name": "text-muted",
+        "value": "#737373",
+        "usage": "Placeholder text only (find a layer…, Command). Source value: 3.2:1 on bg-field — never use for real content."
+      },
+      {
+        "name": "text-disabled",
+        "value": "#8e8e8e",
+        "usage": "Labels on disabled-looking buttons (Plan from selection). 3.9:1 on bg-active."
+      },
+      {
+        "name": "accent-primary",
+        "value": "#006dfd",
+        "usage": "The only saturated UI fill: active snap toggle, focus ring, selection in lists. Use sparingly."
+      },
+      {
+        "name": "on-accent",
+        "value": "#ffffff",
+        "usage": "Text on accent-primary (4.6:1)."
+      },
+      {
+        "name": "focus-ring",
+        "value": "{accent-primary}",
+        "usage": "2px solid focus outline on any control; 3.9:1 on bg-panel."
+      },
+      {
+        "name": "chip-bridge-bg",
+        "value": "#251f0c",
+        "usage": "Fill of the amber operation chip (Bridge)."
+      },
+      {
+        "name": "chip-bridge-fg",
+        "value": "#e2ab63",
+        "usage": "Text of the amber chip; 8:1 on chip-bridge-bg."
+      },
+      {
+        "name": "chip-split-bg",
+        "value": "#0a1d25",
+        "usage": "Fill of the blue operation chip (Split)."
+      },
+      {
+        "name": "chip-split-fg",
+        "value": "#1f6dcc",
+        "usage": "Text of the blue chip. Source value: 3.4:1 on chip-split-bg — below 4.5, kept exact; lighten to #4a8fe6 if legibility matters more than fidelity."
+      },
+      {
+        "name": "chip-boolean-bg",
+        "value": "#0f260c",
+        "usage": "Fill of the green operation chip (Boolean)."
+      },
+      {
+        "name": "chip-boolean-fg",
+        "value": "#6ecd62",
+        "usage": "Text of the green chip; 8.5:1 on chip-boolean-bg."
+      },
+      {
+        "name": "badge-pro-bg",
+        "value": "#302b00",
+        "usage": "Fill of the account badge (Pro User)."
+      },
+      {
+        "name": "badge-pro-fg",
+        "value": "#e6f098",
+        "usage": "Text of the account badge."
+      },
+      {
+        "name": "badge-pro-border",
+        "value": "#e9e073",
+        "usage": "1px outline of the account badge."
+      },
+      {
+        "name": "selection-highlight",
+        "value": "#f1f05c",
+        "usage": "Viewport highlight of selected edges/faces and the transform gizmo pivot."
+      },
+      {
+        "name": "axis-x",
+        "value": "#e0303a",
+        "usage": "X axis: unit text in the coordinate readout, X gizmo handle. Brightened from the antialiased mockup sample (#9f1828)."
+      },
+      {
+        "name": "axis-y",
+        "value": "#64be62",
+        "usage": "Y axis: unit text, Y gizmo handle."
+      },
+      {
+        "name": "axis-z",
+        "value": "#3d8bdb",
+        "usage": "Z axis: unit text, Z gizmo handle. Brightened from the mockup sample (#316595)."
+      },
+      {
+        "name": "gizmo-x",
+        "value": "#cc1111",
+        "usage": "Red face of the view cube orb (top right of the viewport)."
+      },
+      {
+        "name": "gizmo-y",
+        "value": "#99ff77",
+        "usage": "Green face of the view cube orb."
+      },
+      {
+        "name": "gizmo-z",
+        "value": "#2255aa",
+        "usage": "Blue face of the view cube orb."
+      }
+    ]
+  },
+  "type": {
+    "fonts": [],
+    "families": {
+      "sans": "\"Montserrat\", system-ui, sans-serif"
+    },
+    "groups": [
+      {
+        "name": "UI",
+        "family": "sans",
+        "styles": [
+          {
+            "name": "heading",
+            "fontSize": "13px",
+            "lineHeight": "18px",
+            "fontWeight": 600,
+            "usage": "Panel titles (Location, Rotation, Scale), user name, file name.",
+            "sample": "Location"
+          },
+          {
+            "name": "label",
+            "fontSize": "13px",
+            "lineHeight": "18px",
+            "fontWeight": 500,
+            "usage": "Section headers (Solids, Curve), context-menu items, tab labels.",
+            "sample": "Difference"
+          },
+          {
+            "name": "body",
+            "fontSize": "12px",
+            "lineHeight": "16px",
+            "fontWeight": 400,
+            "usage": "Outliner rows, button labels, command placeholder.",
+            "sample": "Upper part"
+          },
+          {
+            "name": "value",
+            "fontSize": "11px",
+            "lineHeight": "14px",
+            "fontWeight": 500,
+            "usage": "Numeric field values, chips, snap toggles.",
+            "sample": "9896 cm"
+          },
+          {
+            "name": "kbd",
+            "fontSize": "10px",
+            "lineHeight": "12px",
+            "fontWeight": 600,
+            "usage": "Keyboard shortcut badges.",
+            "sample": "Shift + Q"
+          },
+          {
+            "name": "axis",
+            "fontSize": "15px",
+            "lineHeight": "18px",
+            "fontWeight": 500,
+            "usage": "The X / Y / Z letters of the coordinate readout and vector fields.",
+            "sample": "X  Y  Z"
+          }
+        ]
+      }
+    ]
+  },
+  "spacing": {
+    "tokens": [
+      {
+        "name": "space-1",
+        "value": "4px",
+        "usage": "Gap between icon and its label inside a chip; badge padding."
+      },
+      {
+        "name": "space-2",
+        "value": "8px",
+        "usage": "Gap between toolbar buttons, between field and lock icon, toolbar padding."
+      },
+      {
+        "name": "space-3",
+        "value": "12px",
+        "usage": "Panel inner padding; gap between stacked boxes in a panel."
+      },
+      {
+        "name": "space-4",
+        "value": "16px",
+        "usage": "Padding of the context menu; gap between panel sections (Location → Rotation)."
+      },
+      {
+        "name": "space-6",
+        "value": "24px",
+        "usage": "Inset of floating panels from the window edge."
+      }
+    ]
+  },
+  "radius": {
+    "tokens": [
+      {
+        "name": "radius-xs",
+        "value": "4px",
+        "usage": "Chips, keyboard badges, snap toggles, coordinate chips."
+      },
+      {
+        "name": "radius-sm",
+        "value": "6px",
+        "usage": "Numeric inputs, icon buttons, segmented-control segments."
+      },
+      {
+        "name": "radius-md",
+        "value": "10px",
+        "usage": "Section header boxes, search field, command bar, segmented container."
+      },
+      {
+        "name": "radius-lg",
+        "value": "14px",
+        "usage": "Floating panels, top bar, tool dock, context menu."
+      },
+      {
+        "name": "radius-full",
+        "value": "999px",
+        "usage": "Avatar, view-cube orb, toggle pill."
+      }
+    ]
+  },
+  "size": {
+    "tokens": [
+      {
+        "name": "size-panel-width",
+        "value": "250px",
+        "usage": "Width of the left outliner and right properties panel."
+      },
+      {
+        "name": "size-row",
+        "value": "24px",
+        "usage": "Outliner row height."
+      },
+      {
+        "name": "size-field",
+        "value": "26px",
+        "usage": "Numeric input height."
+      },
+      {
+        "name": "size-control",
+        "value": "32px",
+        "usage": "Icon buttons in the top bar, search field, segmented control."
+      },
+      {
+        "name": "size-header",
+        "value": "40px",
+        "usage": "Section header boxes and the account header."
+      },
+      {
+        "name": "size-toolbar",
+        "value": "48px",
+        "usage": "Top bar height."
+      },
+      {
+        "name": "size-dock",
+        "value": "56px",
+        "usage": "Bottom tool dock height; tool buttons inside are 40px."
+      },
+      {
+        "name": "size-icon",
+        "value": "16px",
+        "usage": "Icons in rows, fields and menus."
+      },
+      {
+        "name": "size-icon-tool",
+        "value": "22px",
+        "usage": "Icons in the tool dock and top-right mode switcher."
+      },
+      {
+        "name": "stroke-icon",
+        "value": "1.5px",
+        "usage": "Stroke width of all line icons."
+      },
+      {
+        "name": "border-width",
+        "value": "1px",
+        "usage": "Every outline in the UI."
+      }
+    ]
+  }
+}

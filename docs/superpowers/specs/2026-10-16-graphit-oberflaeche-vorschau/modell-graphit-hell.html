@@ -1,0 +1,80 @@
+<h2>Helle Variante von Graphit (mein Entwurf)</h2>
+<p class="subtitle">Graphit gibt es nur dunkel. Ich habe die gleichen Regeln auf Hell übertragen: graue Flächen, nur ein Blau für „aktiv“, Farben nur mit Bedeutung, Linien statt Schatten.</p>
+
+<style>
+  .gh{position:relative;width:100%;aspect-ratio:16/9;background:#e8e9ec;border-radius:10px;overflow:hidden;font-family:Montserrat,"Segoe UI",system-ui,sans-serif;color:#5f5f66;font-size:12px;
+      background-image:linear-gradient(#d8d9de 1px,transparent 1px),linear-gradient(90deg,#d8d9de 1px,transparent 1px);background-size:44px 44px;background-position:center}
+  .gh .p{position:absolute;background:#ffffff;border:1px solid #d4d4d8;border-radius:14px;padding:10px}
+  .gh .row{height:24px;display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:6px;white-space:nowrap}
+  .gh .row.on{background:#dcdce0;color:#151515}
+  .gh .row .i{width:12px;height:12px;border:1.5px solid #5f5f66;border-radius:3px;flex:none}
+  .gh .row.on .i{border-color:#151515}
+  .gh .hd{height:28px;display:flex;align-items:center;padding:0 8px;background:#f4f4f6;border-radius:10px;margin:6px 0 4px;color:#151515;font-weight:600;font-size:12px;justify-content:space-between}
+  .gh .tabs{display:flex;gap:4px}
+  .gh .tab{padding:5px 12px;border-radius:8px;color:#5f5f66}
+  .gh .tab.on{background:#dcdce0;color:#151515}
+  .gh .menu{display:flex;gap:2px;margin-right:12px}
+  .gh .menu span{padding:5px 9px;border-radius:7px}
+  .gh .div{width:1px;height:20px;background:#d4d4d8;margin:0 8px}
+  .gh .ibtn{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center}
+  .gh .ibtn i{display:block;width:14px;height:14px;border:1.5px solid #5f5f66;border-radius:4px}
+  .gh .ibtn.on{background:#dcdce0}.gh .ibtn.on i{border-color:#151515}
+  .gh .field{background:#eeeef1;border-radius:6px;height:26px;display:flex;align-items:center;justify-content:center;color:#151515;font-weight:500;flex:1}
+  .gh .lab{color:#151515;font-weight:500;margin:10px 0 6px}
+  .gh .seg{display:flex;background:#eeeef1;border-radius:8px;padding:3px;margin-bottom:8px}
+  .gh .seg span{flex:1;text-align:center;padding:5px;border-radius:6px}
+  .gh .seg .on{background:#ffffff;color:#151515;box-shadow:0 0 0 1px #d4d4d8}
+  .gh .chip{padding:4px 10px;border-radius:4px;font-weight:500}
+  .gh .box{position:absolute;left:41%;top:34%;width:19%;height:26%;border:2px solid #d9a400;background:rgba(0,0,0,.05);transform:skewY(-6deg)}
+  .gh .box2{position:absolute;left:41%;top:26%;width:19%;height:8%;border:1px solid #888;border-bottom:none;background:rgba(0,0,0,.07);transform:skewX(-35deg) translateX(20px)}
+  .gh .axisx{position:absolute;left:0;right:0;top:78%;height:2px;background:#5aa65e}
+</style>
+
+<div class="gh">
+  <div class="axisx"></div><div class="box2"></div><div class="box"></div>
+
+  <div class="p" style="left:50%;top:16px;transform:translateX(-50%);padding:6px;display:flex;align-items:center">
+    <div class="menu"><span>Datei</span><span>Erzeugen</span><span>Zeichnung</span><span>Bearbeiten</span><span>Ansicht</span></div>
+    <div class="div"></div>
+    <div class="tabs"><div class="tab on">Teil · v1</div><div class="tab">Unbenannt 1 ●</div><div class="tab">+</div></div>
+  </div>
+
+  <div class="p" style="left:16px;top:16px;width:210px;bottom:64px;overflow:hidden">
+    <div class="hd">Projekte <span>▾</span></div>
+    <div class="row">Meine Teile</div>
+    <div class="hd">Feature-Baum <span>▾</span></div>
+    <div class="row on"><span class="i"></span>Quader 1</div>
+    <div class="row"><span class="i"></span>Skizze 1</div>
+    <div class="row"><span class="i"></span>Extrusion 1</div>
+    <div class="row"><span class="i"></span>Verrunden 1</div>
+    <div class="row" style="color:#7a7a82;border-top:1px solid #d4d4d8;border-radius:0;margin-top:4px;height:20px">Berechnung endet hier</div>
+    <div class="hd">Zeichnungen <span>▾</span></div>
+    <div class="row"><span class="i"></span>Zeichnung 1</div>
+    <div class="hd">Maße <span>▾</span></div>
+    <div class="row"><span class="i"></span>40,0</div>
+  </div>
+
+  <div class="p" style="right:16px;top:16px;width:226px;padding:6px;display:flex;gap:4px;justify-content:center">
+    <div class="ibtn on"><i></i></div><div class="ibtn"><i></i></div><div class="ibtn on"><i></i></div><div class="ibtn"><i></i></div>
+  </div>
+
+  <div class="p" style="right:16px;top:76px;width:226px;bottom:64px;overflow:hidden">
+    <div class="seg"><span class="on">Eigenschaften</span><span>Versionen</span></div>
+    <div class="lab">Quader 1</div>
+    <div style="display:flex;gap:6px;margin-bottom:6px"><div class="field">40,0</div><div class="field">30,0</div><div class="field">12,0</div></div>
+    <div class="lab">Lage</div>
+    <div style="display:flex;gap:6px;margin-bottom:6px"><div class="field">0,0</div><div class="field">0,0</div><div class="field">0,0</div></div>
+    <div class="lab">Volumen</div>
+    <div style="color:#151515">14 400 mm³</div>
+  </div>
+
+  <div class="p" style="left:50%;bottom:16px;transform:translateX(-50%);padding:8px;display:flex;align-items:center;gap:6px">
+    <span class="chip" style="background:#fbeed9;color:#8a5a13">Vereinigen</span>
+    <span class="chip" style="background:#dbe9fb;color:#1456b0">Abziehen</span>
+    <span class="chip" style="background:#def3da;color:#2d7a22">Schneiden</span>
+    <div class="div"></div>
+    <div class="ibtn"><i></i></div><div class="ibtn"><i></i></div><div class="ibtn on"><i></i></div><div class="ibtn"><i></i></div><div class="ibtn"><i></i></div>
+  </div>
+
+  <div class="p" style="left:16px;bottom:16px;padding:6px 12px;color:#151515">1 Körper</div>
+</div>
