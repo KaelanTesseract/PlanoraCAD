@@ -7,6 +7,7 @@ pub mod browser;
 pub mod cards;
 pub mod create_dialog;
 pub mod dimension_state;
+pub mod dimension_tool;
 pub mod dock;
 pub mod drawing_browser;
 pub mod drawing_dialog;

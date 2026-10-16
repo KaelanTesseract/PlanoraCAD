@@ -148,6 +148,8 @@ pub struct AppState {
     pub drawing_ui: crate::drawing_state::DrawingUi,
     /// Aufgelöste Maße der geöffneten Zeichnung mit Zwischenspeicher und letzten Lagen.
     pub dimension_ui: crate::dimension_state::DimensionUi,
+    /// Werkzeug „Maß“ des Zeichnungsbereichs (Untermodus, gewählte Bezüge, Vorschau).
+    pub dimension_tool: crate::dimension_tool::DimensionTool,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -257,6 +259,7 @@ impl AppState {
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
             drawing_ui: crate::drawing_state::DrawingUi::default(),
             dimension_ui: crate::dimension_state::DimensionUi::default(),
+            dimension_tool: crate::dimension_tool::DimensionTool::default(),
         };
         state.rebuild_scene();
         state

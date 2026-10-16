@@ -463,8 +463,21 @@ fn mark_outside(m: &Mark, size: (f64, f64)) -> bool {
     }
 }
 
-/// Bezug aus der Herkunft eines Vorschlags (Körperindex in den exakten Körpern).
-fn geo_ref(solids: &[&Solid], o: CandidateOrigin, tol: &Tolerance) -> Option<GeoRef> {
+/// Nächste freie Gruppennummer der Zeichnung (größte vorhandene + 1, erste: 1); `None`, wenn
+/// keine mehr frei ist. Vorschlag und Werkzeug „Maß“ vergeben Gruppen so.
+pub fn next_group(d: &Drawing) -> Option<u64> {
+    d.dimensions
+        .iter()
+        .filter_map(|m| m.chain.map(|c| c.group))
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+}
+
+/// Bezug aus der Herkunft eines Vorschlags bzw. einer angeklickten Linie (Körperindex in den
+/// exakten Körpern). Vorschlag und Werkzeug „Maß“ bilden Bezüge nur hiermit, damit gleiche
+/// Maße gleiche Schlüssel haben.
+pub(crate) fn geo_ref(solids: &[&Solid], o: CandidateOrigin, tol: &Tolerance) -> Option<GeoRef> {
     let edge = |body: usize, edge: usize| {
         let s = solids.get(body)?;
         let id = Id::<Edge>::from_index(edge);
@@ -615,13 +628,7 @@ pub fn suggest_for(
         return SuggestOutcome::NothingNew;
     }
 
-    let mut next_group = d
-        .dimensions
-        .iter()
-        .filter_map(|m| m.chain.map(|c| c.group))
-        .max()
-        .unwrap_or(0)
-        .checked_add(1);
+    let mut next_group = next_group(&d);
     // Gruppe des Vorschlags → (Nummer in der Zeichnung, Abstand, nächste Stufe).
     let mut groups: HashMap<u64, (u64, f64, u32)> = HashMap::new();
     let mut count = d.dimensions.len();

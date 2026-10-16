@@ -15,6 +15,10 @@
 
 use crate::browser::ERROR_COLOR;
 use crate::dimension_state::{SuggestOutcome, marks_in, notes_in, resolve_in, suggest_for};
+use crate::dimension_tool::{
+    END_PX, Hit, ISOMETRIC_TIP, MISSED, READ_ONLY_TIP, TOOL, TOOL_TIP, ToolError, ToolMode,
+    with_tool,
+};
 use crate::drawing_state::{
     ViewResult, WorkArea, default_distance, estimate_view_size, suggest_scale,
 };
@@ -33,6 +37,7 @@ use planora_drawing::annotate::{
 use planora_drawing::dimension::{DimId, DimSpec};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::sheet::{DimMarks, SheetModel, build_sheet_with, view_transform};
+use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{
     Anchor, Drawing, DrawingId, Placement, Scale, ViewId, ViewKind, ViewLines, ViewSpec,
     Visibility, align_dir, view_extent,
@@ -133,6 +138,8 @@ pub struct DrawingLayout {
     pub lines_drawn: usize,
     /// Gezeichnete Markierungen (Maße, Mittellinien; je Markierung einmal).
     pub marks_drawn: usize,
+    /// Gezeichnete Markierungen der Vorschau des Werkzeugs „Maß“.
+    pub preview_drawn: usize,
     pub views: Vec<DrawnView>,
 }
 
@@ -621,6 +628,21 @@ enum Action {
     Centerlines(bool),
     Suggest,
     Delete,
+    /// Werkzeug „Maß“ ein- oder ausschalten.
+    ToolToggle,
+    /// Untermodus des Werkzeugs wählen (schaltet es ein).
+    Tool(ToolMode),
+}
+
+/// Kann das Werkzeug „Maß“ benutzt werden? Sonst die Erklärung (alte Version, nur Isometrie).
+fn tool_blocked(drawing: &Drawing, editable: bool) -> Option<&'static str> {
+    if !editable {
+        Some(READ_ONLY_TIP)
+    } else if !drawing.views.iter().any(|v| v.kind.is_normal()) {
+        Some(ISOMETRIC_TIP)
+    } else {
+        None
+    }
 }
 
 /// Zeichnungsbereich (bearbeitbar).
@@ -639,6 +661,10 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     let Some(drawing) = state.document.drawing(id).cloned() else {
         return;
     };
+    // Gesperrtes Werkzeug ist aus (alte Version, Zeichnung nur mit Isometrie).
+    if tool_blocked(&drawing, editable).is_some() && state.dimension_tool.is_active() {
+        state.dimension_tool.set_mode(ToolMode::Off);
+    }
     let area = ui.available_rect_before_wrap();
     let (toolbar, action) = toolbar(ui, state, &drawing, editable);
     match action {
@@ -666,6 +692,8 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
         Some(Action::Centerlines(c)) => set_selected(state, id, |v| v.centerlines = c),
         Some(Action::Suggest) => suggest_dimensions(state, id),
         Some(Action::Delete) => delete_selected(state),
+        Some(Action::ToolToggle) => state.dimension_tool.toggle(),
+        Some(Action::Tool(m)) => state.dimension_tool.set_mode(m),
         None => {}
     }
     let hint_top = (area.bottom() - HINT_HEIGHT).max(toolbar.bottom());
@@ -685,7 +713,17 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
         state.drawing_ui.dim_message = None;
         state.drawing_ui.dim_message_key = None;
     }
-    let message = state.drawing_ui.dim_message.clone();
+    // Eine Ablehnung des Werkzeugs „Maß“ geht der Meldung vor (rot); bei eingeschaltetem
+    // Werkzeug steht an Stelle des Hinweises der nächste Schritt.
+    let rejected = state.dimension_tool.message().map(str::to_owned);
+    let message = rejected
+        .clone()
+        .or_else(|| state.drawing_ui.dim_message.clone());
+    let hint_text = state
+        .dimension_tool
+        .hint()
+        .or(note)
+        .unwrap_or_else(|| HINT.to_string());
     ui.scope_builder(UiBuilder::new().max_rect(hint), |ui| {
         ui.set_min_size(hint.size());
         ui.horizontal_centered(|ui| {
@@ -707,14 +745,16 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
                 let w = (0.5 * ui.available_width()).max(40.0);
                 ui.scope(|ui| {
                     ui.set_max_width(w);
-                    ui.add(egui::Label::new(m.as_str()).truncate());
+                    let text = if rejected.is_some() {
+                        egui::RichText::new(m.as_str()).color(ERROR_COLOR)
+                    } else {
+                        egui::RichText::new(m.as_str())
+                    };
+                    ui.add(egui::Label::new(text).truncate());
                 });
                 ui.separator();
             }
-            ui.add(
-                egui::Label::new(egui::RichText::new(note.as_deref().unwrap_or(HINT)).weak())
-                    .truncate(),
-            );
+            ui.add(egui::Label::new(egui::RichText::new(hint_text).weak()).truncate());
         });
     });
     if let Some((layout, pending)) = views {
@@ -791,6 +831,32 @@ fn toolbar(
                     if ui.button(SUGGEST).on_hover_text(tip).clicked() {
                         action = Some(Action::Suggest);
                     }
+                });
+                // Werkzeug „Maß“: Schalter und Untermodus (immer da, damit die Leiste gleich
+                // breit bleibt; gesperrt mit Erklärung).
+                let blocked = tool_blocked(drawing, editable);
+                ui.add_enabled_ui(blocked.is_none(), |ui| {
+                    let tool = &state.dimension_tool;
+                    let why = blocked.unwrap_or(TOOL_TIP);
+                    if ui
+                        .selectable_label(tool.is_active(), TOOL)
+                        .on_hover_text(TOOL_TIP)
+                        .on_disabled_hover_text(why)
+                        .clicked()
+                    {
+                        action = Some(Action::ToolToggle);
+                    }
+                    egui::ComboBox::from_id_salt("planora-dimension-tool")
+                        .selected_text(tool.choice().label())
+                        .show_ui(ui, |ui| {
+                            for m in ToolMode::CHOICES {
+                                if ui.selectable_label(tool.choice() == m, m.label()).clicked() {
+                                    action = Some(Action::Tool(m));
+                                }
+                            }
+                        })
+                        .response
+                        .on_disabled_hover_text(why);
                 });
                 if let Some(v) = &selected {
                     ui.separator();
@@ -922,6 +988,66 @@ pub fn suggest_dimensions(state: &mut AppState, id: DrawingId) {
     state.drawing_ui.dim_message_key = Some(message_key(state));
 }
 
+/// Klick mit eingeschaltetem Werkzeug „Maß“ an der Blattstelle `at`: sind genug Bezüge gewählt,
+/// setzt er das Maß (bei Kette und Bezugsmaßen nur ein Klick ins Leere oder ein Doppelklick),
+/// sonst wählt er die getroffene Linie `found` als Bezug.
+fn tool_click(
+    state: &mut AppState,
+    id: DrawingId,
+    found: Option<(ViewId, StrokeOrigin)>,
+    at: DVec2,
+    k: f64,
+    double: bool,
+) {
+    let tool = &state.dimension_tool;
+    if tool.is_ready() && (!tool.collects_more() || found.is_none() || double) {
+        tool_finish(state, id, at);
+    } else if double {
+        // Zweiter Klick eines Doppelklicks, der schon gesetzt hat: nichts Neues beginnen.
+    } else if let Some((view, origin)) = found {
+        let hit = Hit {
+            origin,
+            at,
+            px_per_mm: k,
+        };
+        with_tool(state, |t, st| t.click(st, id, view, &hit));
+    } else {
+        state.dimension_tool.set_message(Some(MISSED.into()));
+    }
+}
+
+/// Esc mit eingeschaltetem Werkzeug „Maß“: Kette und Bezugsmaße mit genug Punkten werden an der
+/// letzten Zeigerlage gesetzt; sonst verfallen die gewählten Bezüge; ohne Bezüge geht das
+/// Werkzeug aus.
+fn tool_escape(state: &mut AppState, id: DrawingId) {
+    let tool = &state.dimension_tool;
+    if tool.collects_more()
+        && tool.is_ready()
+        && let Some(p) = tool.last_pointer()
+    {
+        tool_finish(state, id, p);
+    } else if tool.pending().is_empty() {
+        state.dimension_tool.set_mode(ToolMode::Off);
+    } else {
+        state.dimension_tool.cancel();
+    }
+}
+
+/// Setzt die Maße des Werkzeugs an `at`; die Meldung steht danach in der Hinweiszeile.
+fn tool_finish(state: &mut AppState, id: DrawingId, at: DVec2) {
+    match with_tool(state, |t, st| t.finish(st, id, at)) {
+        Ok(ids) => {
+            state.drawing_ui.dim_message = Some(match ids.len() {
+                1 => "1 Maß wurde gesetzt.".into(),
+                n => format!("{n} Maße wurden gesetzt."),
+            });
+            state.drawing_ui.dim_message_key = Some(message_key(state));
+        }
+        // Die Ablehnung steht im Werkzeug (Hinweiszeile); es fehlen noch Bezüge: nichts.
+        Err(ToolError::Rejected(_) | ToolError::NotReady) => {}
+    }
+}
+
 /// Stand, zu dem eine Meldung des Vorschlags gehört: Änderungszähler des Dokuments, gewählte
 /// Ansicht und gewähltes Maß.
 fn message_key(state: &AppState) -> (u64, Option<ViewId>, Option<DimId>) {
@@ -1012,6 +1138,8 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
 struct Poly {
     view: ViewId,
     vis: Visibility,
+    /// Herkunft der Blattlinie (für das Werkzeug „Maß“).
+    origin: StrokeOrigin,
     points: Vec<DVec2>,
 }
 
@@ -1049,6 +1177,9 @@ fn canvas_ui(
     };
     // Maße liegen über den Linien und werden zuerst getroffen.
     let hit_dim = |pos: Pos2| dim_hit(&ctx, &dim_marks, |_| true, &to_screen0, k0, pos);
+    // Mit eingeschaltetem Werkzeug „Maß“ wählen Klicks Bezüge statt Ansichten und Maße, und
+    // Ziehen verschiebt nichts (nur das Blatt).
+    let tool_on = editable && state.dimension_tool.is_active();
 
     // Zoom um den Zeiger (Mausrad, Zwei-Finger-Geste).
     if response.hovered()
@@ -1074,7 +1205,7 @@ fn canvas_ui(
                     origin,
                     start: state.drawing_ui.pan,
                 })
-            } else if response.dragged_by(PointerButton::Primary) {
+            } else if response.dragged_by(PointerButton::Primary) && !tool_on {
                 if let Some((i, on_text)) = hit_dim(origin) {
                     let dm = &dim_marks[i];
                     state.drawing_ui.selected_dim = Some(dm.id);
@@ -1159,7 +1290,12 @@ fn canvas_ui(
     if response.clicked()
         && let Some(pos) = response.interact_pointer_pos()
     {
-        if let Some((i, _)) = hit_dim(pos) {
+        if tool_on {
+            let at = screen_to_sheet(canvas, sheet_mm, zoom0, pan0, pos);
+            let polys = polylines_cached(&ctx, &sheet, lines_gen, k0);
+            let found = tool_hit(&sheet, &polys, &to_screen0, pos);
+            tool_click(state, id, found, at, k0, response.double_clicked());
+        } else if let Some((i, _)) = hit_dim(pos) {
             state.drawing_ui.selected_dim = Some(dim_marks[i].id);
             state.drawing_ui.selected_view = None;
         } else {
@@ -1168,8 +1304,12 @@ fn canvas_ui(
         }
     }
     if !viewport::typing(&ctx) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        state.drawing_ui.selected_view = None;
-        state.drawing_ui.selected_dim = None;
+        if tool_on {
+            tool_escape(state, id);
+        } else {
+            state.drawing_ui.selected_view = None;
+            state.drawing_ui.selected_dim = None;
+        }
     }
     // Tooltip mit dem Grund über einem Maß, das seinen Bezug verloren hat.
     if response.hovered()
@@ -1270,6 +1410,17 @@ fn canvas_ui(
     for m in selected {
         paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k);
         marks_drawn += 1;
+    }
+    // Vorschau des Werkzeugs „Maß“ am Zeiger (dieselben Markierungen wie das gesetzte Maß).
+    let mut preview_drawn = 0;
+    if tool_on && let Some(hp) = response.hover_pos() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        let p = screen_to_sheet(canvas, sheet_mm, zoom, pan, hp);
+        let preview = with_tool(state, |t, st| t.hover(st, id, p)).unwrap_or_default();
+        for m in &preview {
+            paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k);
+            preview_drawn += 1;
+        }
     }
 
     let font = FontId::proportional(SHEET_FONT);
@@ -1377,6 +1528,7 @@ fn canvas_ui(
         px_per_mm: k as f32,
         lines_drawn: sheet.views.iter().map(|v| v.lines.len()).sum(),
         marks_drawn,
+        preview_drawn,
         views: drawn,
     };
     Some((layout, pending))
@@ -1723,7 +1875,7 @@ fn cross_axis(u: DVec2) -> DVec2 {
 }
 
 /// Winkel in Grad auf `[−180, 180)`.
-fn normalize_deg(a: f64) -> f64 {
+pub(crate) fn normalize_deg(a: f64) -> f64 {
     (a + 180.0).rem_euclid(360.0) - 180.0
 }
 
@@ -1861,6 +2013,7 @@ fn polylines(sheet: &SheetModel, k: f64) -> Vec<Poly> {
                 out.push(Poly {
                     view: v.id,
                     vis: l.vis,
+                    origin: l.origin.clone(),
                     points,
                 });
             }
@@ -1899,6 +2052,44 @@ fn hit_test(
         .rev()
         .find(|v| Rect::from_two_pos(to_screen(v.min), to_screen(v.max)).contains(pos))
         .map(|v| v.id)
+}
+
+/// Linie unter `pos` für das Werkzeug „Maß“: die nächste Linie im Abstand bis [`PICK_PX`],
+/// sonst die Kreiskante, deren Mitte bis [`END_PX`] entfernt ist. Liefert Ansicht und Herkunft.
+fn tool_hit(
+    sheet: &SheetModel,
+    polys: &[Poly],
+    to_screen: &dyn Fn(DVec2) -> Pos2,
+    pos: Pos2,
+) -> Option<(ViewId, StrokeOrigin)> {
+    let mut best: Option<(f32, &Poly)> = None;
+    for p in polys {
+        let pts: Vec<Pos2> = p.points.iter().map(|q| to_screen(*q)).collect();
+        for w in pts.windows(2) {
+            if !Rect::from_two_pos(w[0], w[1]).expand(PICK_PX).contains(pos) {
+                continue;
+            }
+            let dist = screen_seg_dist(pos, w[0], w[1]);
+            if dist <= PICK_PX && best.is_none_or(|(b, _)| dist < b) {
+                best = Some((dist, p));
+            }
+        }
+    }
+    if let Some((_, p)) = best {
+        return Some((p.view, p.origin.clone()));
+    }
+    let mut center: Option<(f32, ViewId, &StrokeOrigin)> = None;
+    for v in &sheet.views {
+        for l in &v.lines {
+            if let (Out2d::Arc { c, .. }, StrokeOrigin::Edge { .. }) = (&l.curve, &l.origin) {
+                let d = (to_screen(*c) - pos).length();
+                if d <= END_PX as f32 && center.is_none_or(|(b, _, _)| d < b) {
+                    center = Some((d, v.id, &l.origin));
+                }
+            }
+        }
+    }
+    center.map(|(_, v, o)| (v, o.clone()))
 }
 
 fn screen_seg_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
