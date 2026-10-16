@@ -27,6 +27,7 @@ pub mod projects_panel;
 pub mod prompts;
 pub mod properties;
 pub mod shell;
+pub mod shell_panels;
 pub mod sketch_panel;
 pub mod sketch_state;
 pub mod sketch_view;

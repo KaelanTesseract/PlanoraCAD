@@ -10,6 +10,7 @@ use crate::file_chooser::default_dir;
 use crate::icons::{self, Icon};
 use crate::import_dialog::ImportDialog;
 use crate::projects_panel::ProjectsUi;
+use crate::shell::ShellState;
 use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
@@ -107,10 +108,12 @@ impl egui_tiles::Behavior<Pane> for Behavior<'_> {
 }
 
 pub struct PlanoraApp {
-    ws: Workspace,
+    pub(crate) ws: Workspace,
     dock: Dock,
-    projects_ui: ProjectsUi,
-    versions_ui: VersionsUi,
+    /// Sichtbarkeit und Reiter der schwebenden Felder (`shell_panels`).
+    pub(crate) shell: ShellState,
+    pub(crate) projects_ui: ProjectsUi,
+    pub(crate) versions_ui: VersionsUi,
     applied_dark: Option<bool>,
     /// `ViewportCommand::Close` wurde nach freigegebenem Beenden schon geschickt.
     close_sent: bool,
@@ -134,14 +137,37 @@ impl PlanoraApp {
         // zuerst nach einem Projektordner.
         let library = planora_project::library::Library::open(&root).ok();
         let ws = Workspace::new(library, config);
+        Self::with_workspace(ws)
+    }
+
+    fn with_workspace(ws: Workspace) -> Self {
         Self {
             ws,
             dock: Dock::new(),
+            shell: ShellState::default(),
             projects_ui: ProjectsUi::default(),
             versions_ui: VersionsUi::default(),
             applied_dark: None,
             close_sent: false,
         }
+    }
+
+    /// App ohne Fenster und Renderer für die Oberflächentests.
+    #[doc(hidden)]
+    pub fn for_tests(ws: Workspace) -> Self {
+        Self::with_workspace(ws)
+    }
+
+    /// Arbeitsbereich (für Tests).
+    #[doc(hidden)]
+    pub fn ws_mut(&mut self) -> &mut Workspace {
+        &mut self.ws
+    }
+
+    /// Zustand der schwebenden Felder (für Tests).
+    #[doc(hidden)]
+    pub fn shell_mut(&mut self) -> &mut ShellState {
+        &mut self.shell
     }
 
     /// Öffnen (Strg+O): blendet das Projekt-Panel ein; dort wird das Dokument gewählt. Der Baum
@@ -329,11 +355,40 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
 /// Menüleiste. Liefert `true`, wenn „Datei → Öffnen …“ gewählt wurde.
 #[doc(hidden)]
 pub fn menu_bar(ui: &mut egui::Ui, ws: &mut Workspace, dock: &mut Dock) -> bool {
+    menu_bar_with(ui, ws, |ui| dock_toggles(ui, dock)).0
+}
+
+/// Menüleiste der schwebenden Felder: wie [`menu_bar`], „Ansicht“ blendet Projekte und
+/// Versionen über den [`ShellState`] ein und aus. Liefert `true`, wenn „Datei → Öffnen …“
+/// gewählt wurde.
+#[doc(hidden)]
+pub fn menu_bar_shell(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> bool {
+    menu_bar_shell_measured(ui, ws, shell).0
+}
+
+/// Wie [`menu_bar_shell`], dazu die Breite, die die Menüknöpfe selbst brauchen (die Leiste füllt
+/// sonst die ganze verfügbare Breite).
+pub(crate) fn menu_bar_shell_measured(
+    ui: &mut egui::Ui,
+    ws: &mut Workspace,
+    shell: &mut ShellState,
+) -> (bool, f32) {
+    menu_bar_with(ui, ws, |ui| shell_toggles(ui, shell))
+}
+
+/// Gemeinsame Menüleiste; `toggles` zeichnet die Ein-/Ausblend-Einträge am Ende von „Ansicht“.
+fn menu_bar_with(
+    ui: &mut egui::Ui,
+    ws: &mut Workspace,
+    toggles: impl FnOnce(&mut egui::Ui),
+) -> (bool, f32) {
     let read_only = ws.active_tab().read_only;
     let mut open_projects = false;
+    let mut width = 0.0;
     egui::MenuBar::new()
         .config(egui::containers::menu::MenuConfig::new().style(theme::menu_style))
         .ui(ui, |ui| {
+            let start = ui.cursor().left();
             ui.menu_button("Datei", |ui| open_projects = file_menu(ui, ws));
             ui.add_enabled_ui(!read_only, |ui| {
                 ui.menu_button("Erzeugen", |ui| create_menu(ui, ws));
@@ -346,9 +401,51 @@ pub fn menu_bar(ui: &mut egui::Ui, ws: &mut Workspace, dock: &mut Dock) -> bool 
             ui.add_enabled_ui(!read_only, |ui| {
                 ui.menu_button("Bearbeiten", |ui| edit_menu(ui, ws));
             });
-            ui.menu_button("Ansicht", |ui| view_menu(ui, ws, dock));
+            ui.menu_button("Ansicht", |ui| view_menu(ui, ws, toggles));
+            // Der Zeiger steht hinter dem letzten Knopf und einem Abstand.
+            width = ui.cursor().left() - start - ui.spacing().item_spacing.x;
         });
-    open_projects
+    (open_projects, width)
+}
+
+/// „Ansicht“: Projekte und Versionen im alten Docking-Layout.
+fn dock_toggles(ui: &mut egui::Ui, dock: &mut Dock) {
+    for (icon, label, pane) in [
+        (Icon::PanelProjects, "Projekte", Pane::Projects),
+        (Icon::PanelVersions, "Versionen", Pane::Versions),
+    ] {
+        let mut visible = dock.is_visible(pane);
+        if ui
+            .checkbox(&mut visible, (icons::atom(icon), label))
+            .changed()
+        {
+            dock.set_visible(pane, visible);
+        }
+    }
+}
+
+/// „Ansicht“: Projekte und Versionen in den schwebenden Feldern.
+fn shell_toggles(ui: &mut egui::Ui, shell: &mut ShellState) {
+    let mut projects = shell.projects_visible;
+    if ui
+        .checkbox(
+            &mut projects,
+            (icons::atom(Icon::PanelProjects), "Projekte"),
+        )
+        .changed()
+    {
+        shell.projects_visible = projects;
+    }
+    let mut versions = shell.versions_visible;
+    if ui
+        .checkbox(
+            &mut versions,
+            (icons::atom(Icon::PanelVersions), "Versionen"),
+        )
+        .changed()
+    {
+        shell.set_versions_visible(versions);
+    }
 }
 
 fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
@@ -479,7 +576,7 @@ fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
 }
 
-fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, dock: &mut Dock) {
+fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, toggles: impl FnOnce(&mut egui::Ui)) {
     let state = &mut ws.active_tab_mut().state;
     for face in ViewFace::ALL {
         if entry(ui, true, icons::button(Icon::ViewFace, face.label())).clicked() {
@@ -508,18 +605,7 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, dock: &mut Dock) {
         ui.close();
     }
     ui.separator();
-    for (icon, label, pane) in [
-        (Icon::PanelProjects, "Projekte", Pane::Projects),
-        (Icon::PanelVersions, "Versionen", Pane::Versions),
-    ] {
-        let mut visible = dock.is_visible(pane);
-        if ui
-            .checkbox(&mut visible, (icons::atom(icon), label))
-            .changed()
-        {
-            dock.set_visible(pane, visible);
-        }
-    }
+    toggles(ui);
 }
 
 /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).

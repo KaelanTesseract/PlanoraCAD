@@ -395,6 +395,17 @@ pub fn window<'a>(ctx: &egui::Context, title: impl Into<String>) -> egui::Window
     .order(egui::Order::Foreground)
 }
 
+/// Schwebendes Feld an fester Stelle `pos`: `Order::Middle` (Dialoge aus [`window`] liegen
+/// darüber), nicht verschiebbar, ohne Einblenden. Das Feld nimmt Zeigereingaben an, damit Klicks,
+/// Ziehen und Mausrad auf ihm den 3D-Bereich darunter nicht erreichen.
+pub fn field_area(id: egui::Id, pos: egui::Pos2) -> egui::Area {
+    egui::Area::new(id)
+        .order(egui::Order::Middle)
+        .movable(false)
+        .fixed_pos(pos)
+        .fade_in(false)
+}
+
 /// Abschnittskopf über die ganze Breite: Fläche aus [`section_frame`], Titel als Überschrift in
 /// `text_primary`. `height` ist [`HEADER_H`] (Kopf eines Bereichs) oder [`SUB_HEADER_H`].
 pub fn section_header(ui: &mut egui::Ui, title: &str, height: f32) -> egui::Response {
