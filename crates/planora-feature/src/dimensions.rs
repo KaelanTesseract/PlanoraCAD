@@ -137,7 +137,8 @@ fn validate_spec(m: &DimSpec) -> Result<(), String> {
 /// Prüft die Maße einer Zeichnung (Teil von [`crate::validate_drawing`]): Kennungen eindeutig,
 /// größer als null und kleiner als der Maßzähler; Ansicht vorhanden und keine Isometrie;
 /// Bezugszahl, Zahlen und Texte (siehe `validate_spec`); Maße einer Gruppe mit gleicher Art,
-/// Ansicht und Kettenart (Kette oder Bezugsmaße), Reihenfolge in der Gruppe eindeutig; höchstens [`MAX_DIMENSIONS`] Maße.
+/// Ansicht und Kettenart (Kette oder Bezugsmaße), Reihenfolge in der Gruppe eindeutig und kleiner als
+/// [`MAX_DIMENSIONS`]; höchstens [`MAX_DIMENSIONS`] Maße.
 pub(crate) fn validate_dimensions(d: &Drawing) -> Result<(), String> {
     if d.next_dim == 0 || d.next_dim == u64::MAX {
         return Err("Der Maßzähler der Zeichnung ist ungültig".into());
@@ -176,6 +177,12 @@ pub(crate) fn validate_dimensions(d: &Drawing) -> Result<(), String> {
                     "Die Maße einer Kette müssen dieselbe Art haben und in derselben Ansicht liegen"
                         .into(),
                 );
+            }
+            if c.order as usize >= MAX_DIMENSIONS {
+                return Err(format!(
+                    "Die Stelle in einer Maßkette ist zu groß (höchstens {})",
+                    MAX_DIMENSIONS - 1
+                ));
             }
             if !orders.insert((c.group, c.order)) {
                 return Err("Eine Stelle in einer Maßkette kommt doppelt vor".into());

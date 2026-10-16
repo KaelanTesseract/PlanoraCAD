@@ -716,6 +716,18 @@ fn hostile_dimension_files() {
             "Die Maße einer Kette mischen Kettenmaße und Bezugsmaße",
         ),
         (
+            // Stelle in der Kette über der Grenze (gestapelte Maßlinien lägen sonst beliebig
+            // weit außerhalb).
+            edited(&good, |v| dim(v, 1)["kette"]["reihenfolge"] = json!(2000)),
+            "Die Stelle in der Maßkette ist zu groß (höchstens 1999)",
+        ),
+        (
+            edited(&good, |v| {
+                dim(v, 1)["kette"]["reihenfolge"] = json!(u32::MAX)
+            }),
+            "Die Stelle in der Maßkette ist zu groß",
+        ),
+        (
             edited(&good, |v| {
                 v["zeichnungen"][0]["ansichten"][0]["mittellinien"] = json!("ja")
             }),
@@ -758,6 +770,7 @@ fn hostile_dimension_files() {
         dim(v, 0)["bezuege"][0]["a"]["hinweis"][0] = json!(1.0e9);
         dim(v, 0)["stellen"] = json!(3);
         dim(v, 1)["toleranz"]["wert"] = json!(1000.0);
+        dim(v, 1)["kette"]["reihenfolge"] = json!(1999);
     });
     load(&ok).unwrap();
     load(&edited(&good, |v| many(v, 2000))).unwrap();

@@ -1094,6 +1094,16 @@ fn dimension_from(
             "Der eigene Maßtext ist zu lang (höchstens {MAX_DIM_TEXT_CHARS} Zeichen)"
         )));
     }
+    // Eine Stelle in einer Kette ist höchstens so groß wie die Zahl der Maße einer Zeichnung
+    // (gestapelte Bezugsmaße liegen sonst unbegrenzt weit draußen).
+    if let Some(k) = &d.kette
+        && k.reihenfolge as usize >= MAX_DIMENSIONS
+    {
+        return Err(bad(format!(
+            "Die Stelle in der Maßkette ist zu groß (höchstens {})",
+            MAX_DIMENSIONS - 1
+        )));
+    }
     let chain = match &d.kette {
         None => None,
         Some(k) => Some(ChainSpec {

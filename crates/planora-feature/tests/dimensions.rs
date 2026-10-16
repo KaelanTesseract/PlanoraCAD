@@ -5,6 +5,7 @@ use planora_drawing::dimension::{
     ChainMode, ChainSpec, DimError, DimId, DimKind, DimSpec, EndSel, GeoRef, GeoRefData, TagData,
     Tolerance as DimTolerance,
 };
+use planora_drawing::limits::MAX_DIMENSIONS;
 use planora_drawing::{
     Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind,
 };
@@ -325,6 +326,16 @@ fn validation_refuses_mixed_groups() {
     let mut same_order = horizontal(front);
     same_order.chain = chain(0);
     refused(&mut d, id, same_order, "doppelt");
+    // Stelle über der Grenze (MAX_DIMENSIONS − 1).
+    for order in [MAX_DIMENSIONS as u32, u32::MAX] {
+        let mut far = horizontal(front);
+        far.chain = chain(order);
+        refused(&mut d, id, far, "Die Stelle in einer Maßkette ist zu groß");
+    }
+    let mut last = horizontal(front);
+    last.chain = chain(MAX_DIMENSIONS as u32 - 1);
+    let last = d.add_dimension(id, last).unwrap();
+    d.delete_dimension(id, last).unwrap();
     // Passend: nächste Stelle; eine andere Gruppe darf eine andere Art haben.
     let mut next = horizontal(front);
     next.chain = chain(1);
