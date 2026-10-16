@@ -3,7 +3,9 @@
 //! schmaler Hinweis unter dem oberen Feld. Jedes Feld ist ein `egui::Area` an der Stelle aus
 //! [`shell::layout_in_mode`]; die Inhalte zeichnen die bisherigen Bereichsfunktionen. Im
 //! Skizzenmodus (Etappe C) entfallen Baum, Eigenschaften und Befehlsfeld; Leiste, Skizzenfeld und
-//! Fuß zeichnet `sketch_panel::show` an den hier berechneten Rechtecken.
+//! Fuß zeichnet `sketch_panel::show` an den hier berechneten Rechtecken. Im Zeichnungsmodus bleibt
+//! der Baum links; Werkzeugfeld, Ansichtsfeld (statt Eigenschaften) und Hinweisfeld (statt des
+//! Befehlsfelds) zeichnet `drawing_view::show_with` an den hier berechneten Rechtecken.
 //!
 //! Breiten und Höhen kommen aus der Geometrie (keine Rückkopplung über die Feldgröße). Status und
 //! Hinweis werden vorab gesetzt (der Hinweis bis zu zwei Zeilen, der Status bis zu drei und er
@@ -66,6 +68,21 @@ pub(crate) fn sketch_foot_id() -> egui::Id {
     egui::Id::new("planora-field-sketch-foot")
 }
 
+/// Werkzeugfeld der Zeichnung (gezeichnet von [`crate::drawing_view::show_with`]).
+pub(crate) fn drawing_tool_id() -> egui::Id {
+    egui::Id::new("planora-field-drawing-tool")
+}
+
+/// Ansichtsfeld der Zeichnung rechts (gezeichnet von [`crate::drawing_view::show_with`]).
+pub(crate) fn drawing_view_id() -> egui::Id {
+    egui::Id::new("planora-field-drawing-view")
+}
+
+/// Hinweisfeld der Zeichnung unten (gezeichnet von [`crate::drawing_view::show_with`]).
+pub(crate) fn drawing_hint_id() -> egui::Id {
+    egui::Id::new("planora-field-drawing-hint")
+}
+
 /// Gemerkte Wunschbreite des Fußfelds (Hinweis, Status, „Skizze beenden“, Rand).
 pub(crate) fn sketch_foot_width_key() -> egui::Id {
     sketch_foot_id().with("wanted")
@@ -94,6 +111,9 @@ pub fn mode_of(state: &AppState) -> ShellMode {
 fn top_width_key() -> egui::Id {
     top_id().with("wanted")
 }
+
+/// Mindestbreite des Hinweisfelds der Zeichnung (außen); ein langer Status bricht dann um.
+const DRAWING_HINT_MIN_W: f32 = 2.0 * shell::MIN_FIELD_W;
 
 /// Platz, den die Tab-Leiste neben dem Menü mindestens bekommt (etwa ein Tab).
 const MIN_TABS_W: f32 = 120.0;
@@ -153,8 +173,8 @@ const MAX_ROWS: usize = 2;
 /// Höchstzahl der Zeilen im Status: bei schmalem Platz (Befehlsfeld daneben) bis zu drei.
 const STATUS_ROWS: usize = 3;
 
-/// Bricht `text` (Textstil `Body`) bei `max_width` um, höchstens [`MAX_ROWS`] Zeilen.
-fn wrapped(
+/// Bricht `text` (Textstil `Body`) bei `max_width` um, höchstens `rows` Zeilen.
+pub(crate) fn wrapped(
     ctx: &egui::Context,
     text: &str,
     color: egui::Color32,
@@ -343,6 +363,9 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
         // Das Feld bleibt immer da: mindestens die drei Chips mit Trennstrich; der Status nimmt
         // den Rest links davon (bis zu drei Zeilen, sonst gekürzt mit vollem Text beim Überfahren).
         let bottom_w = match stored(ctx, wanted_key) {
+            // Das Hinweisfeld der Zeichnung nimmt die ganze Breite, die der Status ihm lässt,
+            // mindestens aber [`DRAWING_HINT_MIN_W`].
+            _ if mode == ShellMode::Drawing => bottom_cap.max(DRAWING_HINT_MIN_W),
             Some(wanted) => wanted
                 .min(bottom_cap)
                 .max(stored(ctx, min_key).unwrap_or(0.0)),
@@ -362,9 +385,12 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
     };
     let (rects, _, _) = layout(app);
     top_field(ctx, &rects, app);
-    // Im Skizzenmodus zeichnet `sketch_panel::show` Leiste, Skizzenfeld und Fuß an `rects`.
+    // Im Skizzenmodus zeichnet `sketch_panel::show` Leiste, Skizzenfeld und Fuß an `rects`, im
+    // Zeichnungsmodus `drawing_view::show_with` Werkzeug-, Ansichts- und Hinweisfeld.
     if rects.strip.is_none() {
         left_field(ctx, &rects, app);
+    }
+    if rects.strip.is_none() && rects.tool.is_none() {
         right_field(ctx, &rects, app);
         bottom_field(ctx, &rects, app);
     } else {
@@ -413,6 +439,9 @@ pub fn field_rects(ctx: &egui::Context) -> Vec<(&'static str, egui::Rect)> {
         ("Leiste", sketch_strip_id()),
         ("Skizze", sketch_side_id()),
         ("Fuß", sketch_foot_id()),
+        ("Werkzeugfeld", drawing_tool_id()),
+        ("Ansichtsfeld", drawing_view_id()),
+        ("Hinweisfeld", drawing_hint_id()),
     ]
     .into_iter()
     .filter(|(_, id)| {

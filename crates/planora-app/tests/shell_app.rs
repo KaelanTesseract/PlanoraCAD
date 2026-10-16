@@ -556,6 +556,8 @@ fn app_with_drawing() -> PlanoraApp {
 
 #[test]
 fn drawing_area_stays_inside_the_free_rect() {
+    // Etappe C: das Blatt wird über das ganze Fenster gemalt, eingepasst wird es in die freie
+    // Fläche; Werkzeug-, Ansichts- und Hinweisfeld liegen außerhalb der freien Fläche.
     for size in [BIG, MID, SMALL] {
         let c = context();
         let mut app = app_with_drawing();
@@ -567,26 +569,48 @@ fn drawing_area_stays_inside_the_free_rect() {
         let r = rects(&mut app, size);
         let layout = drawing_view::last_layout(&c).expect("Zeichnung gezeichnet");
         let placed = fields(&c);
-        assert_eq!(placed.len(), 5, "{placed:?}");
-        assert!(
-            r.free.expand(0.5).contains_rect(layout.area),
-            "{size:?}: Zeichnung {:?} nicht in der freien Fläche {:?}",
-            layout.area,
-            r.free
+        let mut names: Vec<&str> = placed.iter().map(|(n, _)| *n).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            [
+                "Ansichtsfeld",
+                "Hinweisfeld",
+                "Status",
+                "Werkzeugfeld",
+                "links",
+                "oben"
+            ],
+            "{placed:?}"
+        );
+        let window = Rect::from_min_size(Pos2::ZERO, size);
+        assert_eq!(
+            layout.paint, window,
+            "{size:?}: Blatt über das ganze Fenster"
+        );
+        assert_eq!(
+            layout.canvas, r.free,
+            "{size:?}: Einpassen in die freie Fläche"
         );
         for (name, field) in placed {
-            let overlap = layout.area.intersect(field);
+            let overlap = r.free.intersect(field);
             assert!(
                 overlap.width() <= 0.5 || overlap.height() <= 0.5,
-                "{size:?}: Zeichnung überdeckt das Feld {name}: {overlap:?}"
+                "{size:?}: Feld {name} liegt in der freien Fläche: {overlap:?}"
             );
         }
-        // Hintergrund über das ganze Fenster, darauf das Blatt.
-        let window = Rect::from_min_size(Pos2::ZERO, size);
+        // Umgebung des Blatts über das ganze Fenster (kein 3D-Hintergrund darunter).
+        let surround = theme::drawing_surround(true);
+        assert!(
+            shot.fills
+                .iter()
+                .any(|(rr, f)| *f == surround && *rr == window),
+            "{size:?}: Umgebung der Zeichnung über das ganze Fenster"
+        );
         let bg = theme::viewport_background(true);
         assert!(
-            shot.fills.iter().any(|(rr, f)| *f == bg && *rr == window),
-            "{size:?}: Hintergrund der Zeichnung über das ganze Fenster"
+            !shot.fills.iter().any(|(rr, f)| *f == bg && *rr == window),
+            "{size:?}: kein 3D-Hintergrund mehr unter der Zeichnung"
         );
     }
 }

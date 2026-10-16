@@ -34,6 +34,8 @@ pub const STRIP_BUTTON: f32 = 36.0;
 pub const STRIP_SPACING: f32 = 4.0;
 /// Rand der Leiste: 1 px Strich und Innenabstand, so dass ein Knopf (36) in 44 passt.
 pub const STRIP_PAD: f32 = (STRIP_W - STRIP_BUTTON) / 2.0;
+/// Höhe des Werkzeugfelds der Zeichnung: zwei feste Zeilen (Ansichten und Blatt, Maße).
+pub const TOOL_H: f32 = 76.0;
 /// Anzahl der Werkzeuge in der Leiste.
 pub const STRIP_TOOLS: usize = 9;
 /// Höhe der Leiste mit allen Werkzeugen: 9 × 36, 8 Abstände, oben und unten der Rand.
@@ -46,7 +48,8 @@ pub const STRIP_H: f32 = STRIP_TOOLS as f32 * STRIP_BUTTON
 pub enum ShellMode {
     /// 3D-Modell: Baum links, Eigenschaften rechts, Befehlsfeld unten.
     Model,
-    /// Zeichnung (bis Aufgabe 4 wie das Modell).
+    /// Zeichnung: Baum links wie im Modell, Werkzeugfeld unter dem oberen Feld, Ansichtsfeld
+    /// rechts, Hinweisfeld unten.
     Drawing,
     /// Skizze: Werkzeugleiste links, Skizzenfeld rechts, Fußfeld unten.
     Sketch,
@@ -115,12 +118,18 @@ pub struct ShellRects {
     pub free: Rect,
     /// Werkzeugleiste links (nur im Skizzenmodus; dort ist `left` leer).
     pub strip: Option<Rect>,
-    /// Werkzeugfeld der Zeichnung (Aufgabe 4; bis dahin immer `None`).
+    /// Werkzeugfeld der Zeichnung (nur im Zeichnungsmodus).
     pub tool: Option<Rect>,
 }
 
-/// Wie [`layout_with_top_min`] für den Modus `mode`. Modell und (bis Aufgabe 4) Zeichnung haben
-/// dieselbe Geometrie. Im Skizzenmodus entfällt die linke Spalte: an ihrer Stelle steht die
+/// Wie [`layout_with_top_min`] für den Modus `mode`.
+///
+/// Zeichnung: linke und rechte Spalte, oberes Feld, Status und Hinweis wie im Modell; das
+/// Werkzeugfeld ([`TOOL_H`] hoch, so breit wie zwischen den Spalten Platz ist) steht mittig direkt
+/// unter dem oberen Feld (bzw. unter dem Hinweis einer alten Version), die freie Fläche beginnt
+/// erst darunter. Das untere Feld ist dort das Hinweisfeld (gleiche Regeln wie das Befehlsfeld).
+///
+/// Im Skizzenmodus entfällt die linke Spalte: an ihrer Stelle steht die
 /// Werkzeugleiste ([`STRIP_W`] breit, senkrecht mittig zur freien Fläche, höchstens so hoch wie
 /// sie), die freie Fläche beginnt links schon nach Leiste und Abstand. Rechte Spalte (Skizzenfeld),
 /// unteres Feld (Fußfeld), Status und Hinweis liegen wie im Modell. `left` ist dann ein leeres
@@ -135,8 +144,24 @@ pub fn layout_in_mode(
     read_only: bool,
 ) -> ShellRects {
     let mut r = layout_with_top_min(content, state, top, bottom_width, status_width, read_only);
-    if mode != ShellMode::Sketch {
-        return r;
+    match mode {
+        ShellMode::Model => return r,
+        ShellMode::Drawing => {
+            let above = r.banner.map_or(r.top.bottom(), |b| b.bottom());
+            // So breit wie zwischen den Spalten Platz ist (wie der Hinweis), mindestens 120.
+            let avail = content.width() - 2.0 * (r.left.width() + SHELL_INSET + GAP);
+            let w = avail
+                .max(MIN_FIELD_W)
+                .min(content.width() - 2.0 * SHELL_INSET);
+            let tool = Rect::from_min_size(
+                pos2(content.center().x - w / 2.0, above + GAP),
+                vec2(w, TOOL_H),
+            );
+            r.free.min.y = r.free.min.y.max(tool.bottom() + GAP);
+            r.tool = Some(tool);
+            return r;
+        }
+        ShellMode::Sketch => {}
     }
     let left = content.left() + SHELL_INSET;
     r.free.min.x = left + STRIP_W + GAP;

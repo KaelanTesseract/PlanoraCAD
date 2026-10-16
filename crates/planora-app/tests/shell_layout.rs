@@ -2,8 +2,8 @@
 
 use egui::{Rect, pos2, vec2};
 use planora_app::shell::{
-    GAP, RightTab, SHELL_INSET, STRIP_H, STRIP_W, ShellMode, ShellRects, ShellState, layout,
-    layout_in_mode, layout_with_top_min,
+    BANNER_H, BOTTOM_H, GAP, RightTab, SHELL_INSET, STRIP_H, STRIP_W, ShellMode, ShellRects,
+    ShellState, TOOL_H, TOP_H, layout, layout_in_mode, layout_with_top_min,
 };
 use planora_app::viewport::cube_rect;
 
@@ -344,7 +344,7 @@ fn sketch_mode_rects_do_not_overlap_at_five_sizes() {
         let content = window(w, h);
         for read_only in [false, true] {
             let r = sketch_rects(w, h, read_only);
-            assert!(r.tool.is_none(), "Werkzeugfeld erst in Aufgabe 4");
+            assert!(r.tool.is_none(), "Werkzeugfeld nur in der Zeichnung");
             let all = sketch_named(&r);
             for (name, rect) in &all {
                 assert!(
@@ -412,17 +412,6 @@ fn sketch_free_rect_margins() {
     assert_eq!(r.top, model.top);
     assert!(model.strip.is_none() && model.tool.is_none());
     assert_eq!(model.free.left(), 278.0);
-    // Die Zeichnung hat bis Aufgabe 4 die Geometrie des Modells.
-    let drawing = layout_in_mode(
-        window(1400.0, 900.0),
-        ShellMode::Drawing,
-        &ShellState::default(),
-        (600.0, 431.0),
-        360.0,
-        200.0,
-        false,
-    );
-    assert_eq!(drawing.free, model.free);
 }
 
 // (c)
@@ -445,4 +434,128 @@ fn strip_height_is_limited_to_free_height() {
             assert!(strip.top() >= r.free.top() - 0.01 && strip.bottom() <= r.free.bottom() + 0.01);
         }
     }
+}
+
+// ---- Zeichnungsmodus (Etappe C, Aufgabe 4) ----------------------------------------------------
+
+fn drawing_rects(w: f32, h: f32, read_only: bool) -> ShellRects {
+    layout_in_mode(
+        window(w, h),
+        ShellMode::Drawing,
+        &ShellState::default(),
+        (600.0, 431.0),
+        f32::INFINITY,
+        200.0,
+        read_only,
+    )
+}
+
+/// Alle Felder des Zeichnungsmodus mit Namen und die freie Fläche.
+fn drawing_named(r: &ShellRects) -> Vec<(&'static str, Rect)> {
+    let mut v = vec![
+        ("top", r.top),
+        ("left", r.left),
+        ("tool", r.tool.expect("Werkzeugfeld im Zeichnungsmodus")),
+        ("right", r.right),
+        ("bottom", r.bottom),
+        ("status", r.status),
+        ("free", r.free),
+    ];
+    if let Some(b) = r.banner {
+        v.push(("banner", b));
+    }
+    v
+}
+
+// (a)
+#[test]
+fn drawing_mode_rects_do_not_overlap_at_five_sizes() {
+    for (w, h) in [
+        (800.0, 600.0),
+        (1100.0, 700.0),
+        (1400.0, 900.0),
+        (1920.0, 1080.0),
+        (2560.0, 1440.0),
+    ] {
+        let content = window(w, h);
+        for read_only in [false, true] {
+            let r = drawing_rects(w, h, read_only);
+            assert!(r.strip.is_none(), "keine Skizzenleiste in der Zeichnung");
+            let all = drawing_named(&r);
+            for (name, rect) in &all {
+                assert!(
+                    content.contains_rect(*rect),
+                    "{name} liegt bei {w}x{h} außerhalb: {rect:?}"
+                );
+                assert!(rect.width() > 0.0 && rect.height() > 0.0, "{name} leer");
+            }
+            for i in 0..all.len() {
+                for j in (i + 1)..all.len() {
+                    assert!(
+                        !overlaps(all[i].1, all[j].1),
+                        "{} und {} überlappen bei {w}x{h} (schreibgeschützt {read_only}): {:?} / {:?}",
+                        all[i].0,
+                        all[j].0,
+                        all[i].1,
+                        all[j].1
+                    );
+                }
+            }
+            // Werkzeugfeld: mittig, direkt unter dem oberen Feld (bzw. dem Hinweis), zwei Zeilen
+            // hoch, so breit wie zwischen den Spalten Platz ist.
+            let tool = r.tool.unwrap();
+            assert_eq!(tool.height(), TOOL_H);
+            assert!((tool.center().x - w / 2.0).abs() < 0.01);
+            let above = r.banner.map_or(r.top.bottom(), |b| b.bottom());
+            assert_eq!(tool.top(), above + GAP, "{w}x{h}");
+            assert!(tool.left() >= r.left.right() + GAP - 0.01);
+            assert!(tool.right() <= r.right.left() - GAP + 0.01);
+            assert_eq!(r.free.top(), tool.bottom() + GAP);
+            // Hinweisfeld unten so hoch wie das Befehlsfeld.
+            assert_eq!(r.bottom.height(), BOTTOM_H);
+        }
+    }
+}
+
+// (b)
+#[test]
+fn drawing_free_rect_margins() {
+    let r = drawing_rects(1400.0, 900.0, false);
+    assert_eq!(r.free.left(), 278.0);
+    assert_eq!(r.free.right(), 1400.0 - 278.0);
+    assert_eq!(r.free.top(), 16.0 + 48.0 + 12.0 + 76.0 + 12.0);
+    assert_eq!(r.free.top(), 164.0);
+    assert_eq!(r.free.bottom(), 900.0 - 84.0);
+    assert_eq!(
+        r.right.width(),
+        250.0,
+        "Ansichtsfeld so breit wie die Spalte"
+    );
+    // Linke Spalte, oberes Feld und rechte Spalte wie im Modell.
+    let model = layout_in_mode(
+        window(1400.0, 900.0),
+        ShellMode::Model,
+        &ShellState::default(),
+        (600.0, 431.0),
+        f32::INFINITY,
+        200.0,
+        false,
+    );
+    assert_eq!(r.left, model.left);
+    assert_eq!(r.right, model.right);
+    assert_eq!(r.top, model.top);
+    assert_eq!(r.bottom, model.bottom);
+    assert_eq!(r.status, model.status);
+    let tool = r.tool.unwrap();
+    assert_eq!(
+        tool,
+        Rect::from_min_max(pos2(278.0, 76.0), pos2(1122.0, 152.0))
+    );
+    // Schreibgeschützt: der Hinweis steht unter dem oberen Feld, das Werkzeugfeld darunter.
+    let ro = drawing_rects(1400.0, 900.0, true);
+    let banner = ro.banner.unwrap();
+    assert_eq!(banner.top(), SHELL_INSET + TOP_H + GAP);
+    assert_eq!(ro.tool.unwrap().top(), banner.bottom() + GAP);
+    assert_eq!(ro.free.top(), 164.0 + BANNER_H + GAP);
+    assert_eq!(ro.free.bottom(), 900.0 - 84.0);
 }

@@ -22,8 +22,11 @@ use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, Vie
 use planora_feature::geo_ref_for_edge;
 use planora_math::{DVec3, Tolerance};
 
-const W: f32 = 1200.0;
-const H: f32 = 800.0;
+// Etappe C: das Blatt wird in die freie Fläche zwischen den Feldern eingepasst; bei 1600 × 1000
+// ist der Maßstab auf dem Bildschirm (etwa 3,35 px/mm) ähnlich wie früher bei 1200 × 800 über die
+// ganze Breite, so dass die von Hand gewählten Pixelabstände der Tests weiter passen.
+const W: f32 = 1600.0;
+const H: f32 = 1000.0;
 
 const A4_QUER: Sheet = Sheet {
     paper: Paper::A4,
@@ -918,8 +921,23 @@ fn double_click_on_the_sheet_dimension_opens_the_dialog() {
     );
     let dlg = st.dimension_dialog.as_ref().expect("Fenster offen");
     assert_eq!((dlg.drawing, dlg.dim, dlg.read_only), (d, w, false));
-    // In einer alten Version öffnet es sich nur zum Ansehen.
+    // In einer alten Version öffnet es sich nur zum Ansehen. Dort steht unter dem oberen Feld
+    // der Hinweis, die freie Fläche (und mit ihr das Blatt) beginnt tiefer: Text neu suchen.
     st.dimension_dialog = None;
+    frame(&mut st, vec![], false);
+    let texts = frame(&mut st, vec![], false);
+    let p = texts
+        .iter()
+        .find(|t| t.text == "10,0")
+        .expect("Maßtext auf dem Blatt")
+        .rect
+        .center();
+    let btn = |pressed| Event::PointerButton {
+        pos: p,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
     time.set(time.get() + 1.0);
     frame(&mut st, vec![Event::PointerMoved(p)], false);
     frame(

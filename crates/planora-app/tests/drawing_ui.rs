@@ -675,11 +675,14 @@ fn drawing_area_fills_the_whole_width() {
     h.idle(&mut st);
     h.idle(&mut st);
     let l = h.layout();
-    assert_eq!(l.area.width(), W, "{:?}", l.area);
-    assert_eq!(l.toolbar.width(), W, "{:?}", l.toolbar);
-    assert_eq!(l.canvas.width(), W, "{:?}", l.canvas);
-    assert_eq!(l.hint.width(), W, "{:?}", l.hint);
-    assert_eq!(l.area.height(), H);
+    // Das Blatt wird über das ganze Fenster gemalt (Etappe C); eingepasst wird es in die freie
+    // Fläche zwischen Werkzeugfeld (oben, so breit wie sie) und Hinweisfeld (unten).
+    let window = Rect::from_min_size(Pos2::ZERO, vec2(W, H));
+    assert_eq!(l.area, window, "{:?}", l.area);
+    assert_eq!(l.paint, window, "{:?}", l.paint);
+    assert!(window.contains_rect(l.canvas), "{:?}", l.canvas);
+    assert_eq!(l.toolbar.width(), l.canvas.width(), "{:?}", l.toolbar);
+    assert!(l.hint.width() <= l.canvas.width() + 0.5, "{:?}", l.hint);
     assert!(l.toolbar.bottom() <= l.canvas.top() + 0.5);
     assert!(l.canvas.bottom() <= l.hint.top() + 0.5);
 }
@@ -1162,6 +1165,12 @@ fn pending_views_show_progress_and_resolve_through_the_frame_tick() {
     let mut st = box_state();
     let (d, front) = with_front(&mut st);
     let mut h = Harness::new();
+    // Ein Bild mit einer anderen Zeichnung vorweg: dort entstehen die schwebenden Felder (ihr
+    // erster, unsichtbarer Größen-Durchgang wird verworfen und das Bild wiederholt). Sonst liefe
+    // das erste Bild hier zweimal, und die schnelle Rechnung wäre womöglich schon fertig.
+    let mut warm = box_state();
+    with_front(&mut warm);
+    h.idle(&mut warm);
     let first = h.idle(&mut st);
     assert!(first.text.contains("wird berechnet …"), "{}", first.text);
     let pending = h.layout();
@@ -1321,7 +1330,8 @@ fn dark_theme_keeps_the_paper_white() {
             && (r.max - paper.max).length() < 0.5),
         "weißes Blatt {paper:?} fehlt: {rects:?}"
     );
-    let canvas = h.layout().canvas;
+    // Das Umfeld füllt die ganze Malfläche (Etappe C: das Fenster).
+    let canvas = h.layout().paint;
     let surround = rects
         .iter()
         .find(|(r, _)| (r.min - canvas.min).length() < 0.5 && (r.max - canvas.max).length() < 0.5)

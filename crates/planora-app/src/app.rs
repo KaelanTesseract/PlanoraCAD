@@ -679,20 +679,14 @@ impl eframe::App for PlanoraApp {
         // offener Rückfrage gesperrt, Baum und Eigenschaften in alten Versionen.
         let free = shell_panels::show_fields(&ctx, self);
         // Darunter der Arbeitsbereich über das ganze Fenster: das Modell mit der Bildmitte in der
-        // freien Fläche, die Zeichnung nur in der freien Fläche (sie liegt nie unter einem Feld).
+        // freien Fläche, ebenso das Blatt der Zeichnung (über das ganze Fenster gemalt, in die
+        // freie Fläche eingepasst; Werkzeug-, Ansichts- und Hinweisfeld zeichnet `show_with`).
         let enabled = !self.ws.active_tab().read_only;
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let state = &mut self.ws.active_tab_mut().state;
             match state.drawing_ui.area {
                 WorkArea::Model => viewport::show_in(ui, state, Some(free)),
-                WorkArea::Drawing(_) => {
-                    let all = ui.max_rect();
-                    ui.painter()
-                        .rect_filled(all, 0.0, theme::viewport_background(state.dark));
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(free), |ui| {
-                        drawing_view::show_with(ui, state, enabled);
-                    });
-                }
+                WorkArea::Drawing(_) => drawing_view::show_with(ui, state, enabled),
             }
         });
 
