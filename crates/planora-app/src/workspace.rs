@@ -173,7 +173,7 @@ pub struct Workspace {
     pub prompt: Option<Prompt>,
     pub quit: bool,
     /// Zählt Änderungen an der Bibliothek auf der Festplatte, die über den Arbeitsbereich laufen
-    /// (Speichern unter, Wurzelwechsel); das Projekt-Panel liest danach den Baum neu.
+    /// (Speichern unter, Wurzelwechsel); das Feld Projekte liest danach den Baum neu.
     pub library_revision: u64,
     pub autosave_interval: Duration,
     /// Zuletzt benutzter Ordner der Dateiauswahl beim Exportieren und Importieren (nicht
@@ -231,6 +231,8 @@ impl Workspace {
         state.dark = dark;
         state.rebuild_scene();
         state.frame_all();
+        // Die frische Kamera kennt das freie Rechteck noch nicht.
+        state.fit_pending = true;
         self.tabs.push(DocTab::new(
             id,
             format!("Unbenannt {}", self.untitled),

@@ -118,6 +118,10 @@ pub struct AppState {
     pub sketch_draft: Option<SketchFeature>,
     /// Kamera vor dem Öffnen des Skizzen-Modus.
     saved_camera: Option<OrbitCamera>,
+    /// Die Ansicht wurde ohne bekanntes freies Rechteck eingepasst (neuer Tab, geladener Stand)
+    /// und wird einmal nachgeholt, sobald die 3D-Ansicht das freie Rechteck kennt
+    /// ([`crate::viewport::show_in`]).
+    pub fit_pending: bool,
     /// Offener Dialogwunsch aus dem Browser (siehe [`SketchRequest`]).
     pub sketch_request: Option<SketchRequest>,
     /// Zuletzt berechnete Profile (für die Dialoge, die jedes Bild neu zeichnen).
@@ -248,6 +252,7 @@ impl AppState {
             sketch_session: None,
             sketch_draft: None,
             saved_camera: None,
+            fit_pending: false,
             sketch_request: None,
             profile_cache: ProfileCache::default(),
             pending_delete: None,
@@ -413,6 +418,8 @@ impl AppState {
         s.rebuild_name_counters();
         s.refresh();
         s.frame_all();
+        // Die frische Kamera kennt das freie Rechteck noch nicht.
+        s.fit_pending = true;
         Ok(s)
     }
 
@@ -1407,8 +1414,11 @@ impl AppState {
 
     fn restore_camera(&mut self) {
         if let Some(mut cam) = self.saved_camera.take() {
-            // Das Seitenverhältnis gehört zum aktuellen Fenster.
+            // Seitenverhältnis und freies Rechteck gehören zum aktuellen Fenster.
             cam.aspect = self.camera.aspect;
+            cam.ndc_offset = self.camera.ndc_offset;
+            cam.visible_aspect = self.camera.visible_aspect;
+            cam.visible_height_fraction = self.camera.visible_height_fraction;
             self.camera = cam;
         }
         self.rebuild_scene();

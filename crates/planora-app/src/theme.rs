@@ -326,7 +326,60 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         s.interact_size = vec2(CONTROL, ROW_H);
         s.window_margin = Margin::same(SPACE_3 as i8);
         s.menu_margin = Margin::same(SPACE_4 as i8);
+        s.scroll = scroll_style();
     });
+}
+
+/// Rollbalken: schwebend über dem Inhalt (belegen keinen Platz), in Ruhe unsichtbar. Über der
+/// Fläche erscheint ein schmaler, halb deckender Griff ohne Spur, über dem Griff wird er etwas
+/// breiter. Die Farben setzt [`scroll_area`] aus der Palette ([`scroll_handle_colors`]).
+pub fn scroll_style() -> egui::style::ScrollStyle {
+    egui::style::ScrollStyle {
+        floating: true,
+        bar_width: 8.0,
+        floating_width: 6.0,
+        floating_allocated_width: 0.0,
+        handle_min_length: 24.0,
+        bar_inner_margin: SPACE_1,
+        bar_outer_margin: 2.0,
+        foreground_color: true,
+        dormant_background_opacity: 0.0,
+        active_background_opacity: 0.0,
+        interact_background_opacity: 0.0,
+        dormant_handle_opacity: 0.0,
+        active_handle_opacity: 0.6,
+        interact_handle_opacity: 1.0,
+        ..egui::style::ScrollStyle::floating()
+    }
+}
+
+/// Farben des Rollbalken-Griffs `(in Ruhe über der Fläche, beim Überfahren oder Ziehen)`.
+pub fn scroll_handle_colors(dark: bool) -> (Color32, Color32) {
+    let p = palette(dark);
+    (p.text_tertiary, p.text_secondary)
+}
+
+/// Zeigt `area` mit Griff in den Farben aus [`scroll_handle_colors`] (egui nimmt die Schriftfarbe
+/// der Knöpfe, beim Überfahren wäre das text_primary, also ein weißer Balken im dunklen Thema).
+/// Der Inhalt behält den Stil des Aufrufers.
+pub fn scroll_area<R>(
+    ui: &mut egui::Ui,
+    area: egui::ScrollArea,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::scroll_area::ScrollAreaOutput<R> {
+    let saved = ui.style().clone();
+    let (rest, hover) = scroll_handle_colors(ui.visuals().dark_mode);
+    let w = &mut ui.style_mut().visuals.widgets;
+    w.inactive.fg_stroke.color = rest;
+    w.hovered.fg_stroke.color = hover;
+    w.active.fg_stroke.color = hover;
+    let content_style = saved.clone();
+    let out = area.show(ui, |ui| {
+        ui.set_style(content_style);
+        add_contents(ui)
+    });
+    ui.set_style(saved);
+    out
 }
 
 /// Rahmen schwebender Felder, Leisten und Menüs: bg_panel, 1 px Rand, Rundung 14, kein Schatten.
@@ -355,6 +408,18 @@ pub fn inset_frame(dark: bool) -> egui::Frame {
         .inner_margin(Margin::symmetric(SPACE_2 as i8, SPACE_1 as i8))
 }
 
+/// Fläche eines Chips: beim Überfahren ein Stück, beim Drücken stärker zur Schriftfarbe `ink`
+/// hin gemischt (beide aus den Chip-Farben der Palette).
+pub fn chip_fill(fill: Color32, ink: Color32, hovered: bool, pressed: bool) -> Color32 {
+    if pressed {
+        fill.lerp_to_gamma(ink, 0.3)
+    } else if hovered {
+        fill.lerp_to_gamma(ink, 0.15)
+    } else {
+        fill
+    }
+}
+
 /// Tastaturfokus: zeichnet 2 px in Akzentfarbe außen um ein Element, das gerade den Fokus hat.
 /// Nach dem Element aufrufen, z. B. `theme::focus_ring(ui, &ui.text_edit_singleline(..))`.
 pub fn focus_ring(ui: &egui::Ui, response: &egui::Response) {
@@ -380,7 +445,10 @@ pub fn entry(ui: &mut egui::Ui, enabled: bool, widget: impl egui::Widget) -> egu
 }
 
 /// Fenster im Graphit-Rahmen ([`panel_frame`]); der Titel steht als Überschrift in
-/// `text_primary`. Die Fenster-Id hängt wie bei `egui::Window::new` am Titeltext.
+/// `text_primary`. Die Fenster-Id hängt wie bei `egui::Window::new` am Titeltext. Fenster liegen
+/// in `Order::Foreground` und damit immer über den schwebenden Feldern (`Order::Middle`); ein
+/// Klick auf ein Feld hebt es nicht über einen Dialog. Aufklapplisten und Menüs sind ebenfalls
+/// `Foreground` und erscheinen beim Öffnen über dem Dialog.
 pub fn window<'a>(ctx: &egui::Context, title: impl Into<String>) -> egui::Window<'a> {
     let dark = ctx.global_style().visuals.dark_mode;
     egui::Window::new(
@@ -389,6 +457,18 @@ pub fn window<'a>(ctx: &egui::Context, title: impl Into<String>) -> egui::Window
             .color(palette(dark).text_primary),
     )
     .frame(panel_frame(dark))
+    .order(egui::Order::Foreground)
+}
+
+/// Schwebendes Feld an fester Stelle `pos`: `Order::Middle` (Dialoge aus [`window`] liegen
+/// darüber), nicht verschiebbar, ohne Einblenden. Das Feld nimmt Zeigereingaben an, damit Klicks,
+/// Ziehen und Mausrad auf ihm den 3D-Bereich darunter nicht erreichen.
+pub fn field_area(id: egui::Id, pos: egui::Pos2) -> egui::Area {
+    egui::Area::new(id)
+        .order(egui::Order::Middle)
+        .movable(false)
+        .fixed_pos(pos)
+        .fade_in(false)
 }
 
 /// Abschnittskopf über die ganze Breite: Fläche aus [`section_frame`], Titel als Überschrift in

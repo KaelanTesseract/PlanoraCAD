@@ -219,3 +219,60 @@ fn a_loaded_name_with_a_huge_number_does_not_break_naming() {
         "{names:?}"
     );
 }
+
+#[test]
+fn restore_camera_keeps_the_visible_rect() {
+    let mut s = AppState::new();
+    add_cube(&mut s, 20.0);
+    s.camera.set_visible(
+        Vec2::new(1000.0, 600.0),
+        (Vec2::new(250.0, 80.0), Vec2::new(500.0, 400.0)),
+    );
+    let i = s
+        .add_sketch(planora_feature::SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(i).unwrap();
+    // Während der Skizze ändert sich das freie Rechteck (anderes Feld-Layout).
+    s.camera.set_visible(
+        Vec2::new(1200.0, 700.0),
+        (Vec2::new(300.0, 90.0), Vec2::new(600.0, 450.0)),
+    );
+    let during = s.camera;
+    s.close_sketch();
+    assert_eq!(s.camera.ndc_offset, during.ndc_offset);
+    assert_eq!(s.camera.visible_aspect, during.visible_aspect);
+    assert_eq!(
+        s.camera.visible_height_fraction,
+        during.visible_height_fraction
+    );
+    assert_eq!(s.camera.aspect, during.aspect);
+}
+
+#[test]
+fn frame_all_uses_the_visible_rect() {
+    let mut s = AppState::new();
+    let b = add_cube(&mut s, 100.0);
+    let full = Vec2::new(1000.0, 600.0);
+    let (vis_min, vis_size) = (Vec2::new(250.0, 80.0), Vec2::new(500.0, 400.0));
+    s.camera.set_visible(full, (vis_min, vis_size));
+    s.frame_all();
+    let (min, max) = s.bodies[b].bounds;
+    for i in 0..8 {
+        let corner = glam::Vec3::new(
+            if i & 1 == 0 { min.x } else { max.x } as f32,
+            if i & 2 == 0 { min.y } else { max.y } as f32,
+            if i & 4 == 0 { min.z } else { max.z } as f32,
+        );
+        let px = s.camera.project(corner, full).unwrap();
+        let inside = px.cmpge(vis_min).all() && px.cmple(vis_min + vis_size).all();
+        assert!(
+            inside,
+            "Ecke {corner:?} bei {px:?} außerhalb des freien Rechtecks"
+        );
+    }
+    // Die Mitte des Körpers liegt in der Mitte des freien Rechtecks.
+    let centre = ((min + max) * 0.5).as_vec3();
+    let px = s.camera.project(centre, full).unwrap();
+    let want = vis_min + vis_size * 0.5;
+    assert!((px - want).length() < 2.0, "{px:?} statt {want:?}");
+}

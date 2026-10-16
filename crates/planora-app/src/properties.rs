@@ -16,6 +16,13 @@ use planora_render::Pick;
 /// prüft nach der Lage noch einmal und kann deshalb ein anderes Ergebnis zeigen.
 const CLOSED_AT_IMPORT_LABEL: &str = "Geschlossen beim Einlesen";
 
+/// Bezeichnung der Zahlenfelder für die Lage (die Einheit steht hier, nicht in jedem Feld, damit
+/// die Zahlen in ein Drittel der Feldbreite passen).
+pub const POSITION_LABEL: &str = "Position x / y / z in mm";
+
+/// Bezeichnung der Zahlenfelder für die Drehung eines Netz-Körpers.
+pub const ROTATION_LABEL: &str = "Drehung x / y / z in Grad";
+
 /// Vorsatz der Warnung aus dem Bericht beim Einlesen.
 const AT_IMPORT_PREFIX: &str = "Beim Einlesen: ";
 
@@ -35,6 +42,11 @@ const MESH_BODY_HINT: &str = concat!(
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     theme::section_header(ui, "Eigenschaften", theme::HEADER_H);
     ui.add_space(theme::SPACE_1);
+    show_content(ui, state);
+}
+
+/// Wie [`show`], ohne den Abschnittskopf (den zeigt dann der Aufrufer, z. B. als Umschalter).
+pub fn show_content(ui: &mut egui::Ui, state: &mut AppState) {
     if let Some(index) = state.selected_body.filter(|&i| i < state.bodies.len()) {
         body(ui, state, index);
     } else if let Some(id) = state
@@ -66,6 +78,106 @@ fn name_field(ui: &mut egui::Ui, id: Option<FeatureId>, current: &str) -> Option
         ui.data_mut(|d| d.remove::<String>(key));
     }
     renamed
+}
+
+/// Zeile „Bezeichnung – Wert“ in der Breite des Felds. Passt beides nebeneinander, steht der Wert
+/// rechtsbündig neben der Bezeichnung; sonst steht er darunter und bricht um. So wird kein Wert
+/// abgeschnitten, auch nicht bei langen Zahlen oder Namen (Hand-Prüfung Haltepunkt 2).
+fn row(ui: &mut egui::Ui, label: &str, value: impl Into<egui::WidgetText>) {
+    let value: egui::WidgetText = value.into();
+    let fits = {
+        let width = |text: egui::WidgetText| {
+            text.into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Body,
+            )
+            .size()
+            .x
+        };
+        width(label.into()) + theme::SPACE_2 + width(value.clone()) <= ui.available_width()
+    };
+    if fits {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(value);
+            });
+        });
+    } else {
+        ui.label(label);
+        ui.add(egui::Label::new(value).wrap());
+        ui.add_space(theme::SPACE_1);
+    }
+}
+
+/// Zeile mit Bezeichnung links und einem schmalen Element (z. B. Zahlenfeld) rechtsbündig.
+fn widget_row<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add)
+            .inner
+    })
+    .inner
+}
+
+/// Drei Zahlenfelder x, y, z unter der Bezeichnung `label`, nebeneinander in der Breite des
+/// Felds. Passt eine Zahl nicht in ihr Drittel, stehen die drei Felder im nächsten Bild
+/// untereinander (mit x, y, z davor), damit keine Zahl abgeschnitten wird; während des Ziehens
+/// bleibt die Anordnung. `key` unterscheidet die Gruppen. Liefert, ob gerade gezogen wird.
+fn xyz_fields(
+    ui: &mut egui::Ui,
+    key: &'static str,
+    label: &str,
+    values: [&mut f64; 3],
+    speed: f64,
+) -> bool {
+    ui.label(label);
+    let stacked_key = egui::Id::new(("planora-xyz-stacked", key));
+    let stacked = ui
+        .data(|d| d.get_temp::<bool>(stacked_key))
+        .unwrap_or(false);
+    let gap = theme::SPACE_1;
+    let w = ((ui.available_width() - 2.0 * gap) / 3.0).floor();
+    let mut dragging = false;
+    let mut too_wide = false;
+    // Feste Id je Achse: der Zustand eines Felds (Ziehen, Eingabe) hängt nicht an der Anordnung.
+    let mut one = |ui: &mut egui::Ui, axis: usize, v: &mut f64| {
+        let r = ui
+            .scope_builder(
+                egui::UiBuilder::new().id(egui::Id::new(("planora-xyz", key, axis))),
+                |ui| {
+                    ui.spacing_mut().interact_size.x = w;
+                    ui.spacing_mut().button_padding.x = theme::SPACE_1;
+                    theme::field(ui, egui::DragValue::new(v).speed(speed))
+                },
+            )
+            .inner;
+        dragging |= r.dragged();
+        too_wide |= r.rect.width() > w + 0.5;
+    };
+    if stacked {
+        for (axis, (name, v)) in ["x", "y", "z"].into_iter().zip(values).enumerate() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                ui.weak(name);
+                one(ui, axis, v);
+            });
+        }
+    } else {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for (axis, v) in values.into_iter().enumerate() {
+                one(ui, axis, v);
+            }
+        });
+    }
+    if !dragging && too_wide != stacked {
+        ui.data_mut(|d| d.insert_temp(stacked_key, too_wide));
+        crate::shell_panels::discard(ui.ctx(), "Eigenschaften: Zahlenfelder neu angeordnet");
+    }
+    dragging
 }
 
 fn mm(v: f64) -> String {
@@ -239,31 +351,21 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
     ui.label("Name");
     let renamed = name_field(ui, Some(id), &name);
     ui.add_space(6.0);
-    egui::Grid::new("feature_props")
-        .num_columns(2)
-        .show(ui, |ui| {
-            ui.label("Art");
-            ui.label(theme::value(label));
-            ui.end_row();
-            ui.label("Status");
-            match &status {
-                FeatureStatus::Ok => ui.label(theme::value("berechnet")),
-                FeatureStatus::Error(e) => {
-                    ui.colored_label(error_color(ui.visuals().dark_mode), format!("Fehler: {e}"))
-                }
-                FeatureStatus::Skipped(why) => ui.weak(format!("übersprungen: {why}")),
-                FeatureStatus::Suppressed => ui.weak("unterdrückt"),
-                FeatureStatus::NotComputed => {
-                    ui.weak("nicht berechnet (hinter dem Rückrollmarker)")
-                }
-            };
-            ui.end_row();
-            for (k, v) in &rows {
-                ui.label(*k);
-                ui.label(theme::value(v));
-                ui.end_row();
-            }
-        });
+    row(ui, "Art", theme::value(label));
+    let weak = |text: String| egui::RichText::new(text).weak();
+    let status_text = match &status {
+        FeatureStatus::Ok => theme::value("berechnet"),
+        FeatureStatus::Error(e) => {
+            egui::RichText::new(format!("Fehler: {e}")).color(error_color(ui.visuals().dark_mode))
+        }
+        FeatureStatus::Skipped(why) => weak(format!("übersprungen: {why}")),
+        FeatureStatus::Suppressed => weak("unterdrückt".into()),
+        FeatureStatus::NotComputed => weak("nicht berechnet (hinter dem Rückrollmarker)".into()),
+    };
+    row(ui, "Status", status_text);
+    for (k, v) in &rows {
+        row(ui, k, theme::value(v));
+    }
     ui.add_space(8.0);
     let edit = ui
         .button(if sketch {
@@ -288,14 +390,18 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
     }
 }
 
-/// Zeilen „Volumen“ und „Oberfläche“ des Eigenschaften-Rasters.
+/// Zeilen „Volumen“ und „Oberfläche“.
 fn mass_rows(ui: &mut egui::Ui, mass: &planora_mesh::MassProperties) {
-    ui.label("Volumen");
-    ui.label(theme::value(format!("≈ {:.2} mm³", mass.volume)));
-    ui.end_row();
-    ui.label("Oberfläche");
-    ui.label(theme::value(format!("≈ {:.2} mm²", mass.surface_area)));
-    ui.end_row();
+    row(
+        ui,
+        "Volumen",
+        theme::value(format!("≈ {:.2} mm³", mass.volume)),
+    );
+    row(
+        ui,
+        "Oberfläche",
+        theme::value(format!("≈ {:.2} mm²", mass.surface_area)),
+    );
 }
 
 /// Maße des gewählten Körpers sowie Angaben zur gewählten Fläche oder Kante. Gelöscht wird
@@ -306,7 +412,7 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         return;
     }
     let mut moved: Option<DVec3> = None;
-    let mut dragging = false;
+    let dragging;
     let renamed;
     {
         let body = &state.bodies[index];
@@ -316,38 +422,39 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         ui.add_space(6.0);
         let (min, max) = body.bounds;
         let size = max - min;
-        egui::Grid::new("body_props").num_columns(2).show(ui, |ui| {
-            mass_rows(ui, &body.mass);
-            ui.label("Schwerpunkt");
-            ui.label(theme::value(format!(
+        mass_rows(ui, &body.mass);
+        row(
+            ui,
+            "Schwerpunkt",
+            theme::value(format!(
                 "{:.2} / {:.2} / {:.2} mm",
                 body.mass.centroid.x, body.mass.centroid.y, body.mass.centroid.z
-            )));
-            ui.end_row();
-            ui.label("Abmessungen");
-            ui.label(theme::value(format!(
-                "{:.2} × {:.2} × {:.2} mm",
-                size.x, size.y, size.z
-            )));
-            ui.end_row();
-            ui.label("Position (x/y/z)");
-            // Lage der unteren Ecke der Hülle; Änderungen verschieben den Körper.
-            let mut position = min;
-            ui.horizontal(|ui| {
-                for value in [&mut position.x, &mut position.y, &mut position.z] {
-                    let r = theme::field(ui, egui::DragValue::new(value).speed(0.5).suffix(" mm"));
-                    dragging |= r.dragged();
-                }
-            });
-            if position != min {
-                moved = Some(position - min);
-            }
-            ui.end_row();
-            ui.label("Flächen / Kanten");
-            let (faces, edges) = state.kernel.counts(&body.solid);
-            ui.label(theme::value(format!("{faces} / {edges}")));
-            ui.end_row();
-        });
+            )),
+        );
+        row(
+            ui,
+            "Abmessungen",
+            theme::value(format!("{:.2} × {:.2} × {:.2} mm", size.x, size.y, size.z)),
+        );
+        let (faces, edges) = state.kernel.counts(&body.solid);
+        row(
+            ui,
+            "Flächen / Kanten",
+            theme::value(format!("{faces} / {edges}")),
+        );
+        ui.add_space(theme::SPACE_1);
+        // Lage der unteren Ecke der Hülle; Änderungen verschieben den Körper.
+        let mut position = min;
+        dragging = xyz_fields(
+            ui,
+            "body-position",
+            POSITION_LABEL,
+            [&mut position.x, &mut position.y, &mut position.z],
+            0.5,
+        );
+        if position != min {
+            moved = Some(position - min);
+        }
     }
 
     ui.separator();
@@ -425,47 +532,43 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         renamed = name_field(ui, state.naming_feature(index), &body.name);
         ui.add_space(6.0);
         let size = body.bounds.1 - body.bounds.0;
-        egui::Grid::new("mesh_props").num_columns(2).show(ui, |ui| {
-            ui.label("Art");
-            ui.label(theme::value("Netz-Körper"));
-            ui.end_row();
-            mass_rows(ui, &body.mass);
-            ui.label("Abmessungen");
-            ui.label(theme::value(format!(
-                "{:.2} × {:.2} × {:.2} mm",
-                size.x, size.y, size.z
-            )));
-            ui.end_row();
-            ui.label("Position (x/y/z)");
-            ui.horizontal(|ui| {
-                for v in [&mut offset.x, &mut offset.y, &mut offset.z] {
-                    theme::field(ui, egui::DragValue::new(v).speed(0.5).suffix(" mm"));
-                }
-            });
-            ui.end_row();
-            ui.label("Drehung (x/y/z)");
-            ui.horizontal(|ui| {
-                for v in [&mut degrees.x, &mut degrees.y, &mut degrees.z] {
-                    theme::field(ui, egui::DragValue::new(v).speed(1.0).suffix(" °"));
-                }
-            });
-            ui.end_row();
-            ui.label("Maßstab");
+        row(ui, "Art", theme::value("Netz-Körper"));
+        mass_rows(ui, &body.mass);
+        row(
+            ui,
+            "Abmessungen",
+            theme::value(format!("{:.2} × {:.2} × {:.2} mm", size.x, size.y, size.z)),
+        );
+        if let Some(r) = body.mesh_report {
+            row(ui, "Dreiecke", theme::value(r.triangles.to_string()));
+            row(
+                ui,
+                CLOSED_AT_IMPORT_LABEL,
+                theme::value(if r.closed { "ja" } else { "nein" }),
+            );
+        }
+        ui.add_space(theme::SPACE_1);
+        xyz_fields(
+            ui,
+            "mesh-position",
+            POSITION_LABEL,
+            [&mut offset.x, &mut offset.y, &mut offset.z],
+            0.5,
+        );
+        xyz_fields(
+            ui,
+            "mesh-rotation",
+            ROTATION_LABEL,
+            [&mut degrees.x, &mut degrees.y, &mut degrees.z],
+            1.0,
+        );
+        widget_row(ui, "Maßstab", |ui| {
             theme::field(
                 ui,
                 egui::DragValue::new(&mut scale)
                     .speed(0.01)
                     .range(MIN_MESH_SCALE..=MAX_MESH_SCALE),
-            );
-            ui.end_row();
-            if let Some(r) = body.mesh_report {
-                ui.label("Dreiecke");
-                ui.label(theme::value(r.triangles.to_string()));
-                ui.end_row();
-                ui.label(CLOSED_AT_IMPORT_LABEL);
-                ui.label(theme::value(if r.closed { "ja" } else { "nein" }));
-                ui.end_row();
-            }
+            )
         });
         if let Some(r) = body.mesh_report
             && !r.closed

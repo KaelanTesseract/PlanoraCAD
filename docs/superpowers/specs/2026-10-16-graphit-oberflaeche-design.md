@@ -184,3 +184,42 @@ Vieles davon wäre `pub(crate)`; es ist `pub`, weil Tests und mehrere Module es 
 - Die Layout-Tests der meisten Testgeräte setzen nur die Schrift, nicht das Theme; Überlauf durch die neuen Abstände ist daher nur durch den Näherungstest `no_text_is_clipped_at_1400px` (Summe der Textbreiten) und die Handliste abgedeckt.
 
 **Bewusst offen gelassen** (Einzelheiten in `offene-punkte.md`): Symbolwahl für Symmetrisch, Muster, Kante projizieren, Deckungsgleich, Kegel, Kugel, Drehen, Ansicht, „zum Ende springen“ nur ungefähr; Browser-Kontextmenüs ohne Symbole; Dialog-Checkboxen unverändert; Fokusring am Menürand evtl. beschnitten.
+
+## 11. Festlegungen der Umsetzung Etappe B
+
+Stand: 2026-10-16, Zweig `feature/graphit-etappe-b`. Plan: `plans/2026-10-16-graphit-etappe-b.md`. Hier steht, was bei der Umsetzung entschieden wurde oder anders kam.
+
+**Festlegungen B1–B8** (Entwurfsverfasser, der Nutzer kann sie kippen)
+- **B1** Rand 16 px (`SHELL_INSET`), Abstand zwischen Feldern 12 px (`SPACE_3`). Graphit nennt 24 px Rand; 16 spart Platz, die Vorschauen nutzen 16.
+- **B2** Die freie Fläche wird deterministisch aus Konstanten berechnet (kein Messen der Feldgrößen, keine Rückkopplung): links und rechts je `SHELL_INSET + PANEL_WIDTH + SPACE_3`, wenn dort ein Feld sichtbar ist, oben `SHELL_INSET + TOP_H + SPACE_3`, unten `SHELL_INSET + DOCK_H + SPACE_3`.
+- **B3** Positionen aus `ctx.content_rect()` und diesen Konstanten (`fixed_pos`), Höhen der Seitenfelder aus der freien Fläche. Felder mit unbekannter Breite laufen mit `fade_in(false)` und verwerfen den ersten Größen-Durchgang (`request_discard`, wie `prompts::window`).
+- **B4** Felder `Order::Middle` und `movable(false)`; `theme::window` (alle Dialoge und das Skizzenfenster) `Order::Foreground`.
+- **B5** Zeiger-Routing über `response.hovered()`, `hover_pos()` und `ui.rect_contains_pointer`; `ctx.is_pointer_over_egui()` wird nicht benutzt (taugt mit Area-Feldern nicht).
+- **B6** Der Modusschalter oben rechts der Vorschau entfällt (es gibt keine Modi dafür, F8: nichts erfinden). Das Befehlsfeld unten ist nur eine Abkürzung zu vorhandenen Menüaktionen.
+- **B7** Der Hinweis „Alte Version vN – schreibgeschützt …“ steht als eigenes Feld unter dem oberen Feld (Farbe `warning`).
+- **B8** Die Zeichnungsansicht bleibt in Etappe B im freien Rechteck mit ihrer alten Werkzeugleiste (Umbau in Etappe C) auf einem Hintergrund `theme::viewport_background` über das ganze Fenster. Das Skizzenfenster bleibt ein verschiebbares Fenster (300 px), Startposition rechts neben dem linken Feld.
+
+**Entscheidungen (Rulings)**
+- **Kamera.** `ray()` rechnet die Inverse in f64, weil 1e-4 mm mit f32 nicht erreichbar ist (1,6e-4 mm ohne, 1,1e-3 mm mit Versatz); `view_proj` und `project` bleiben ohne Versatz bitgleich. Der Versatz ist ein NDC-Versatz in `projection()`, Standard 0 (F3). `set_visible` wird pro Bild nach `set_viewport` aufgerufen; `restore_camera` übernimmt Versatz, `visible_aspect` und Anteil der aktuellen Kamera.
+- **Menü.** `menu_bar_shell` wurde zunächst neben dem alten `menu_bar` angelegt und in Aufgabe 6 zu `menu_bar` umbenannt (der Plan hatte die Signaturänderung erst dort vorgesehen).
+- **Befehlsfeld.** Wirkt im Skizzenmodus wie das Menü (die Skizze wird beendet, der Dialog öffnet sich) und wird nicht gesperrt. Es verschwindet nie (Mindestbreite etwa 250 px). Das Meldungsfeld bekommt den Rest der Breite und umbricht in bis zu 3 Zeilen (`STATUS_ROWS`). Chips wählen die Operation im Booleschen Dialog vor.
+- **Hinweisfeld.** Volle Breite zwischen den Spalten, bis zu zwei Zeilen, `BANNER_H` 40; bei schreibgeschützter Ansicht hebt es die Oberkante der freien Fläche um `BANNER_H + SPACE_3` an (auch Zeichnung und Skizze, F2).
+- **Mindestfenstergröße** 800 × 600 (`with_min_inner_size`); darunter überlappen Felder (bekannte Grenze, unter etwa 640 px Breite).
+- **Kein Tastatur-Zoom** der Oberfläche (`PlanoraApp::setup_context` schaltet `zoom_with_keyboard` ab), weil die Felder in Punkten auf 800 × 600 ausgelegt sind; sonst hebelt Strg und Plus die Mindestgröße aus.
+- **Oberes Feld und Spalten (`shell::layout_with_top_min`).** Das obere Feld meldet seine Mindestbreite (Menü, Trennstrich, 120 px Tabs, Rand, rund 431 px). Passt sie nicht zwischen die Seitenspalten (unter etwa 990 px Breite, also auch bei 800 × 600), steht das obere Feld mittig über den Spalten, und die Spalten beginnen darunter (`GAP` unter dem oberen Feld). Sonst gilt die Breite zwischen den Spalten wie bisher. `shell::layout` ist derselbe Aufruf mit Mindestbreite 0.
+- **Seitenfelder.** `shell_panels::side_column` zeichnet den Inhalt in einer Fläche fester Breite (`PANEL_WIDTH` minus Rahmen), die nicht ins Feld zurückwirkt; die Felder sind immer genau 250 px breit. Eigenschaften stehen in Zeilen „Bezeichnung – Wert“ (Wert rechtsbündig daneben, sonst darunter und umbrochen). Lage und Drehung: `properties::POSITION_LABEL` („Position x / y / z in mm“) und `properties::ROTATION_LABEL` („Drehung x / y / z in Grad“) mit drei Zahlenfeldern, die sich die Breite teilen; die Position steht beim Körper nach „Flächen / Kanten“.
+- **Rollbalken.** `theme::scroll_style` (schwebend, in Ruhe unsichtbar, 6 px, beim Griff 8 px), `theme::scroll_area` (färbt den Griff) und `theme::scroll_handle_colors` (Farben je Thema) für alle Rollbereiche der Felder.
+- **Einpassen.** Geladene Stände und neue Tabs werden einmal in die freie Fläche eingepasst (`AppState::fit_pending`, gesetzt in `from_snapshot` und `Workspace::new_tab`, nachgeholt im ersten Modellbild ohne Skizze).
+- **Schreibschutz** wie vorher (Baum und Eigenschaften gesperrt, Projekte und Versionen nicht, Zeichnung `editable = !read_only`).
+- **Texte.** „Projekt-Panel“ in den Aufforderungen heißt jetzt „Feld Projekte“.
+
+**Abweichungen vom Plan**
+- Innenbreite eines Seitenfelds = Außenbreite − `frame.total_margin()` (Innenrand und 1-px-Strich), damit die Außenbreite genau 250 ist.
+- Das Meldungsfeld ist nicht auf 250 px begrenzt, sondern reicht bis zum Befehlsfeld; die Breite wird aus der Textbreite gerechnet, nicht gemessen.
+- Das Befehlsfeld lässt dem Meldungsfeld Platz für bis zu 3 Zeilen und wird dafür schmaler (siehe oben); der Plan ging von einem Befehlsfeld fester Breite aus.
+- Die Überschriften Eigenschaften und Versionen stehen mit Umschalter nur einmal (`properties::show_content`, `versions_panel::show_with_header`).
+- Die Tab-Leiste rollt zum aktiven Tab (`tabs::show_revealing`), sonst bliebe er bei vielen Tabs unsichtbar.
+
+**Öffentliche Schnittstelle (mehr als im Plan)**: `#[doc(hidden)] pub` Testhaken `PlanoraApp::{for_tests, ws_mut, shell_mut}`, `shell_panels::{last_layout, field_rects, bottom_buttons, discard}`; `theme::{field_area, chip_fill, scroll_style, scroll_area, scroll_handle_colors}`, `viewport::{show_in, cube_rect}`, `properties::{POSITION_LABEL, ROTATION_LABEL}`, `PlanoraApp::setup_context`. Aufräumen in Etappe D.
+
+**Bewusst offen gelassen** (Einzelheiten in `offene-punkte.md`, Teilprojekt 13 Etappe B): Fenster unter 640 px, Platzierung des Skizzenfensters (es liegt bei Breiten unter etwa 1000 px über dem Navigationswürfel; Etappe C), Verrunden und Fase mit gleichem Symbol, `layout()` ohne `ShellState`, linke Spalte mit fester Meldungshöhe, erstes Einpassen bei Skizze vor dem ersten Modellbild.

@@ -915,15 +915,39 @@ pub fn source_button(
     dark: bool,
     selected: bool,
 ) -> egui::Response {
+    source_button_impl(ui, source, text, true, dark, selected)
+}
+
+/// Knopf nur mit Symbol (16 px); `label` benennt ihn für Bildschirmleser und gehört als
+/// Hinweistext an die Antwort (`on_hover_text`).
+pub fn source_icon_button(
+    ui: &mut egui::Ui,
+    source: IconSource,
+    label: &str,
+    dark: bool,
+) -> egui::Response {
+    source_button_impl(ui, source, label, false, dark, false)
+}
+
+fn source_button_impl(
+    ui: &mut egui::Ui,
+    source: IconSource,
+    text: &str,
+    show_text: bool,
+    dark: bool,
+    selected: bool,
+) -> egui::Response {
     let pad = ui.spacing().button_padding;
-    let galley = egui::WidgetText::from(egui::RichText::new(text)).into_galley(
-        ui,
-        Some(egui::TextWrapMode::Extend),
-        f32::INFINITY,
-        egui::TextStyle::Button,
-    );
+    let galley = egui::WidgetText::from(egui::RichText::new(if show_text { text } else { "" }))
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Button,
+        );
+    let gap = if show_text { LABEL_GAP } else { 0.0 };
     let size = vec2(
-        pad.x * 2.0 + LABEL_ICON_SIZE + LABEL_GAP + galley.size().x,
+        pad.x * 2.0 + LABEL_ICON_SIZE + gap + galley.size().x,
         (LABEL_ICON_SIZE.max(galley.size().y) + pad.y * 2.0).max(ui.spacing().interact_size.y),
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());

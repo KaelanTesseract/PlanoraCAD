@@ -29,6 +29,12 @@ fn icon_button(ui: &mut egui::Ui, icon: Icon) -> egui::Response {
 /// „Neu“ legt einen neuen Tab an. Geänderte Tabs tragen „●“ hinter dem Namen. Aktiver Tab:
 /// Fläche `bg_active`, Text `text_primary`; inaktive Tabs `text_secondary` ohne Fläche.
 pub fn show(ui: &mut egui::Ui, ws: &mut Workspace) {
+    show_revealing(ui, ws, false);
+}
+
+/// Wie [`show`]; mit `reveal_active` rollt eine umgebende ScrollArea den aktiven Tab (mit seinem
+/// Schließen-Symbol) in den sichtbaren Bereich.
+pub fn show_revealing(ui: &mut egui::Ui, ws: &mut Workspace, reveal_active: bool) {
     let mut activate = None;
     let mut close = None;
     let mut add = false;
@@ -36,13 +42,15 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace) {
         theme::frameless(ui.style_mut());
         ui.spacing_mut().item_spacing.x = theme::SPACE_1;
         for (i, t) in ws.tabs.iter().enumerate() {
-            if tab_label(ui, i == ws.active, &t.title(), t.is_dirty()).clicked() {
+            let head = tab_label(ui, i == ws.active, &t.title(), t.is_dirty());
+            if head.clicked() {
                 activate = Some(i);
             }
-            if icon_button(ui, Icon::Close)
-                .on_hover_text("Schließen (Strg+W)")
-                .clicked()
-            {
+            let close_button = icon_button(ui, Icon::Close).on_hover_text("Schließen (Strg+W)");
+            if reveal_active && i == ws.active {
+                ui.scroll_to_rect(head.rect.union(close_button.rect), None);
+            }
+            if close_button.clicked() {
                 close = Some(i);
             }
             ui.add_space(theme::SPACE_2);

@@ -28,7 +28,6 @@ planora-drawing.workspace = true
 glam.workspace = true
 eframe.workspace = true
 egui.workspace = true
-egui_tiles.workspace = true
 winit.workspace = true
 
 [dev-dependencies]

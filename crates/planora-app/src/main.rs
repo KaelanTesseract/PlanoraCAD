@@ -7,7 +7,9 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("PlanoraCAD")
-            .with_inner_size([1400.0, 900.0]),
+            .with_inner_size([1400.0, 900.0])
+            // Darunter überlappen sich die schwebenden Felder.
+            .with_min_inner_size([800.0, 600.0]),
         renderer: eframe::Renderer::Wgpu,
         multisampling: MSAA_SAMPLES as u16,
         depth_buffer: 32,
