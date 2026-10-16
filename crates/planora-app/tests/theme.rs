@@ -126,6 +126,37 @@ fn apply_sets_both_visuals_and_paper_constants_stay() {
         assert_eq!(w.inactive.fg_stroke.color, p.text_secondary);
         assert_eq!(w.hovered.fg_stroke.color, p.text_primary);
         assert_eq!(w.active.fg_stroke.color, p.text_primary);
+        // Ruhe mit sichtbarem Rand (Knopf, Zahlenfeld, Auswahlliste, Textfeld), Hover hebt den
+        // Rand zu text_tertiary an.
+        assert_eq!(w.inactive.bg_stroke, Stroke::new(1.0, p.border_subtle));
+        assert_eq!(w.hovered.bg_stroke, Stroke::new(1.0, p.text_tertiary));
+        // Kästchen, Optionsfelder, Schieberspur nutzen bg_fill: nicht durchsichtig.
+        assert_eq!(w.inactive.bg_fill, p.bg_field);
+        assert_eq!(w.hovered.bg_fill, p.bg_field);
+        assert_eq!(w.active.bg_fill, p.bg_active);
+        assert_eq!(w.open, w.active);
+        assert_eq!(w.noninteractive.fg_stroke.color, p.text_secondary);
+        assert_eq!(
+            w.noninteractive.bg_stroke,
+            Stroke::new(1.0, p.border_subtle)
+        );
+        // Textfeld/Zahlenfeld in Ruhe: Fläche oder Rand heben sich vom Fensterhintergrund
+        // (panel_fill) und von schwebenden Feldern (bg_panel) ab.
+        for (what, bg) in [("panel_fill", v.panel_fill), ("bg_panel", p.bg_panel)] {
+            let fill = theme::contrast_ratio(v.extreme_bg_color, bg);
+            let outline = theme::contrast_ratio(w.inactive.bg_stroke.color, bg);
+            assert!(
+                fill.max(outline) >= 1.2,
+                "{} Textfeld auf {what}: Fläche {fill:.2}, Rand {outline:.2}",
+                name(dark)
+            );
+            let button = theme::contrast_ratio(w.inactive.bg_stroke.color, bg);
+            assert!(
+                button >= 1.2,
+                "{} Knopfrand auf {what}: {button:.2}",
+                name(dark)
+            );
+        }
     }
     assert_eq!(
         ctx.style_of(Theme::Light).visuals.panel_fill,
@@ -192,10 +223,12 @@ fn frames_use_one_pixel_border_and_no_shadow() {
         let s = theme::section_frame(dark);
         assert_eq!(s.fill, p.bg_section);
         assert_eq!(s.corner_radius, CornerRadius::same(theme::RADIUS_MD));
+        assert_eq!(s.stroke, Stroke::NONE);
         assert_eq!(s.shadow, Shadow::NONE);
         let i = theme::inset_frame(dark);
         assert_eq!(i.fill, p.bg_inset);
         assert_eq!(i.corner_radius, CornerRadius::same(theme::RADIUS_SM));
+        assert_eq!(i.stroke, Stroke::NONE);
         assert_eq!(i.shadow, Shadow::NONE);
     }
     let ctx = egui::Context::default();
@@ -244,4 +277,69 @@ fn size_tokens_match_graphit() {
         ],
         [250.0, 24.0, 26.0, 32.0, 40.0, 48.0, 56.0]
     );
+}
+
+#[test]
+fn hover_and_active_fills_stand_out_from_window_and_panels() {
+    let mut failures = Vec::new();
+    for dark in BOTH {
+        let p = theme::palette(dark);
+        for (fill_name, fill) in [("bg_field", p.bg_field), ("bg_active", p.bg_active)] {
+            for (bg_name, bg) in [("bg_viewport", p.bg_viewport), ("bg_panel", p.bg_panel)] {
+                let r = theme::contrast_ratio(fill, bg);
+                if r < 1.1 {
+                    failures.push(format!("{} {fill_name} auf {bg_name}: {r:.3}", name(dark)));
+                }
+            }
+        }
+        // Hover und Aktiv bleiben unterscheidbar.
+        assert_ne!(p.bg_field, p.bg_active, "{}", name(dark));
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Zeichnet ein Textfeld, optional mit Fokus, und gibt die Rahmen in Akzentfarbe zurück.
+fn focus_ring_strokes(dark: bool, focus: bool) -> (egui::Rect, Vec<(egui::Rect, Stroke)>) {
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts::definitions());
+    theme::apply(&ctx, dark);
+    let mut text = String::from("12");
+    let mut field = egui::Rect::NOTHING;
+    let mut out = None;
+    for frame in 0..3 {
+        let mut o = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let r = ui.text_edit_singleline(&mut text);
+            if frame == 0 && focus {
+                r.request_focus();
+            }
+            theme::focus_ring(ui, &r);
+            field = r.rect;
+        });
+        o.textures_delta.clear();
+        out = Some(o);
+    }
+    let accent = theme::accent(dark);
+    let rings = out
+        .unwrap()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Rect(r) if r.stroke.color == accent => Some((r.rect, r.stroke)),
+            _ => None,
+        })
+        .collect();
+    (field, rings)
+}
+
+#[test]
+fn focus_ring_is_two_pixels_of_accent_around_a_focused_widget() {
+    for dark in BOTH {
+        let (field, rings) = focus_ring_strokes(dark, true);
+        assert_eq!(rings.len(), 1, "{} {rings:?}", name(dark));
+        let (rect, stroke) = rings[0];
+        assert_eq!(stroke, Stroke::new(2.0, theme::accent(dark)));
+        assert!(rect.contains_rect(field), "Ring außen um das Feld");
+        let (_, none) = focus_ring_strokes(dark, false);
+        assert!(none.is_empty(), "ohne Fokus kein Ring: {none:?}");
+    }
 }

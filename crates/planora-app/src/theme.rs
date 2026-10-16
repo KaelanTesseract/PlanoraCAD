@@ -103,9 +103,11 @@ const LIGHT: Palette = Palette {
     bg_viewport: rgb(0xe8e9ec),
     bg_panel: rgb(0xffffff),
     bg_section: rgb(0xf4f4f6),
-    bg_field: rgb(0xe9e9ed),
+    // Hover-Fläche und Aktiv-Fläche müssen sich vom Fensterhintergrund #e8e9ec abheben
+    // (≥ 1,1 : 1): beide etwas dunkler als in der Vorschau (dort aktiv #dcdce0).
+    bg_field: rgb(0xdadbdf),
     bg_inset: rgb(0xeeeef1),
-    bg_active: rgb(0xdcdce0),
+    bg_active: rgb(0xcfd0d5),
     border_subtle: rgb(0xd4d4d8),
     viewport_grid: rgb(0xd8d9de),
     ground_axis: rgb(0x5aa65e),
@@ -219,15 +221,17 @@ fn visuals(dark: bool) -> Visuals {
     w.noninteractive.weak_bg_fill = p.bg_panel;
     w.noninteractive.bg_stroke = Stroke::new(1.0, p.border_subtle);
     w.noninteractive.fg_stroke = Stroke::new(1.0, p.text_secondary);
-    // Ruhe: Knöpfe durchsichtig (`weak_bg_fill`); Kästchen, Optionsfelder und Schieberspur
-    // (`bg_fill`) behalten die Spur-Fläche bg_field, sonst wären sie unsichtbar.
+    // Ruhe: Knöpfe ohne Fläche (`weak_bg_fill`), aber mit 1-px-Rand, damit Knöpfe, Zahlenfelder,
+    // Auswahllisten und Textfelder sichtbar bleiben (Symbolknöpfe der Leisten schalten den
+    // Rahmen selbst ab). Kästchen, Optionsfelder und Schieberspur (`bg_fill`) behalten die
+    // Spur-Fläche bg_field. Hover: Rand border_subtle → text_tertiary (Graphit-Zustandstabelle).
     w.inactive.weak_bg_fill = Color32::TRANSPARENT;
     w.inactive.bg_fill = p.bg_field;
-    w.inactive.bg_stroke = Stroke::NONE;
+    w.inactive.bg_stroke = Stroke::new(1.0, p.border_subtle);
     w.inactive.fg_stroke = Stroke::new(1.5, p.text_secondary);
     w.hovered.weak_bg_fill = p.bg_field;
     w.hovered.bg_fill = p.bg_field;
-    w.hovered.bg_stroke = Stroke::NONE;
+    w.hovered.bg_stroke = Stroke::new(1.0, p.text_tertiary);
     w.hovered.fg_stroke = Stroke::new(1.5, p.text_primary);
     w.active.weak_bg_fill = p.bg_active;
     w.active.bg_fill = p.bg_active;
@@ -310,6 +314,22 @@ pub fn inset_frame(dark: bool) -> egui::Frame {
         .fill(palette(dark).bg_inset)
         .corner_radius(CornerRadius::same(RADIUS_SM))
         .inner_margin(Margin::symmetric(SPACE_2 as i8, SPACE_1 as i8))
+}
+
+/// Tastaturfokus: zeichnet 2 px in Akzentfarbe außen um ein Element, das gerade den Fokus hat.
+/// Nach dem Element aufrufen, z. B. `theme::focus_ring(ui, &ui.text_edit_singleline(..))`.
+pub fn focus_ring(ui: &egui::Ui, response: &egui::Response) {
+    if !response.has_focus() {
+        return;
+    }
+    let dark = ui.visuals().dark_mode;
+    let radius = ui.visuals().widgets.inactive.corner_radius;
+    ui.painter().rect_stroke(
+        response.rect.expand(1.0),
+        radius,
+        Stroke::new(2.0, accent(dark)),
+        egui::StrokeKind::Outside,
+    );
 }
 
 /// Akzentfarbe (Modus eingeschaltet, Tastaturfokus, aktive Auswahl); in beiden Themen gleich.
