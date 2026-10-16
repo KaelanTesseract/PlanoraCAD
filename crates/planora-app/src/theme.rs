@@ -380,7 +380,10 @@ pub fn entry(ui: &mut egui::Ui, enabled: bool, widget: impl egui::Widget) -> egu
 }
 
 /// Fenster im Graphit-Rahmen ([`panel_frame`]); der Titel steht als Überschrift in
-/// `text_primary`. Die Fenster-Id hängt wie bei `egui::Window::new` am Titeltext.
+/// `text_primary`. Die Fenster-Id hängt wie bei `egui::Window::new` am Titeltext. Fenster liegen
+/// in `Order::Foreground` und damit immer über den schwebenden Feldern (`Order::Middle`); ein
+/// Klick auf ein Feld hebt es nicht über einen Dialog. Aufklapplisten und Menüs sind ebenfalls
+/// `Foreground` und erscheinen beim Öffnen über dem Dialog.
 pub fn window<'a>(ctx: &egui::Context, title: impl Into<String>) -> egui::Window<'a> {
     let dark = ctx.global_style().visuals.dark_mode;
     egui::Window::new(
@@ -389,6 +392,7 @@ pub fn window<'a>(ctx: &egui::Context, title: impl Into<String>) -> egui::Window
             .color(palette(dark).text_primary),
     )
     .frame(panel_frame(dark))
+    .order(egui::Order::Foreground)
 }
 
 /// Abschnittskopf über die ganze Breite: Fläche aus [`section_frame`], Titel als Überschrift in

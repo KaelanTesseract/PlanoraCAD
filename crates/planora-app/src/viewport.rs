@@ -34,11 +34,30 @@ pub fn render_palette(dark: bool) -> Palette {
     }
 }
 
-fn cube_rect(viewport: Rect) -> Rect {
+/// Navigationswürfel rechts oben im freien Rechteck `free` (Rand 12 px).
+pub fn cube_rect(free: Rect) -> Rect {
     Rect::from_min_size(
-        pos2(viewport.right() - CUBE_SIZE - 12.0, viewport.top() + 12.0),
+        pos2(free.right() - CUBE_SIZE - 12.0, free.top() + 12.0),
         vec2(CUBE_SIZE, CUBE_SIZE),
     )
+}
+
+/// Kamera auf das ganze Fenster `rect` einstellen, die Bildmitte ins freie Rechteck `free`
+/// legen. Reihenfolge wichtig: erst `set_viewport`, dann `set_visible`, denn `set_viewport`
+/// setzt bei Versatz 0 das sichtbare Seitenverhältnis zurück. Nach jedem fremden
+/// `set_viewport` (Skizzen-Overlay) erneut aufrufen. `free` = `None`: kein Versatz.
+fn fit_camera(state: &mut AppState, rect: Rect, free: Option<Rect>) {
+    state.camera.set_viewport(rect.width(), rect.height());
+    match free {
+        Some(f) => state.camera.set_visible(
+            Vec2::new(rect.width(), rect.height()),
+            (
+                Vec2::new(f.min.x - rect.min.x, f.min.y - rect.min.y),
+                Vec2::new(f.width(), f.height()),
+            ),
+        ),
+        None => state.camera.clear_visible(),
+    }
 }
 
 fn keyboard_focus_id() -> egui::Id {
@@ -62,9 +81,21 @@ pub fn typing(ctx: &egui::Context) -> bool {
             .unwrap_or(false)
 }
 
+/// 3D-Ansicht im ganzen verfügbaren Bereich ohne freies Rechteck (siehe [`show_in`]).
+pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
+    show_in(ui, state, None);
+}
+
 /// 3D-Ansicht: Navigation, Auswahl, Zeichnen und Navigationswürfel. Im Skizzen-Modus übernimmt
 /// [`sketch_view::show_overlay`] die Eingaben (Orbit gesperrt, Verschieben und Zoomen bleiben).
-pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
+///
+/// Die Ansicht füllt den ganzen verfügbaren Bereich (unter den schwebenden Feldern); `free` ist
+/// das freie Rechteck zwischen den Feldern in Bildschirmkoordinaten. Dort liegen die Bildmitte
+/// der Kamera und der Würfel. Auswahl, Hover, Orbit, Zoom und Verschieben gelten im ganzen
+/// Bereich; über einem Feld meldet egui die Ansicht nicht als „hovered“, ein dort begonnenes
+/// Ziehen oder ein Klick erreicht sie also nicht. Ein in der Ansicht begonnenes Ziehen läuft
+/// über Felder weiter.
+pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     let sketching = state.sketch_session.is_some();
     let sense = if sketching {
         Sense::hover()
@@ -77,7 +108,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     }
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, theme::viewport_background(state.dark));
-    state.camera.set_viewport(rect.width(), rect.height());
+    // Freies Rechteck auf den Bereich begrenzen; leer oder zu klein zählt als „kein Feld“.
+    let free = free
+        .map(|f| f.intersect(rect))
+        .filter(|f| f.width() >= 1.0 && f.height() >= 1.0);
+    fit_camera(state, rect, free);
     // Platz für die 3D-Szene; sie wird am Ende mit der endgültigen Kamera eingesetzt, damit die
     // Skizze darüber liegt.
     let scene_slot = painter.add(Shape::Noop);
@@ -85,9 +120,12 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     // der endgültigen Kamera gefüllt.
     let sketches_slot = painter.add(Shape::Noop);
 
-    let cube = cube_rect(rect);
+    let cube = cube_rect(free.unwrap_or(rect));
     if sketching {
+        // Das Overlay rechnet im ganzen Bereich (Auswahl und Fangen mit der vollen Größe) und
+        // ruft selbst `set_viewport`; danach das freie Rechteck erneut setzen.
         sketch_view::show_overlay(ui, rect, state);
+        fit_camera(state, rect, free);
     } else {
         // Navigation
         let pan = response.dragged_by(PointerButton::Middle)
