@@ -465,11 +465,13 @@ fn side_contents(
         }
     });
     sections(ui, se, sk, panel);
-    // Kurz, damit der Schalter in die Feldbreite 250 passt; die Erklärung steht im Hinweistext.
-    ui.add(theme::Toggle::new(&mut se.auto_constrain, AUTO_AXIS))
-        .on_hover_text(
-            "Fast waagerechte oder senkrechte Linien bekommen beim Zeichnen von selbst die              passende Abhängigkeit.",
-        );
+    // In einer Zeile wäre die Beschriftung breiter als das Feld (250): zweizeilig; die Erklärung
+    // steht im Hinweistext.
+    ui.add(theme::Toggle::new(
+        &mut se.auto_constrain,
+        auto_axis_label(),
+    ))
+    .on_hover_text(AUTO_AXIS_HINT);
     ui.separator();
 
     // Liste der Abhängigkeiten
@@ -809,8 +811,19 @@ fn constraint_list(
     );
 }
 
+/// Beschriftung des Schalters [`AUTO_AXIS`] in zwei Zeilen („erkennen“ in der zweiten).
+pub fn auto_axis_label() -> String {
+    AUTO_AXIS.replacen(
+        ' ', "
+", 1,
+    )
+}
+
+/// Erklärung zum Schalter [`AUTO_AXIS`] (Hinweistext).
+pub const AUTO_AXIS_HINT: &str = "Fast waagerechte oder senkrechte Linien bekommen beim Zeichnen von selbst die passende Abhängigkeit.";
+
 /// Schalter für automatisch waagerechte/senkrechte Linien.
-pub const AUTO_AXIS: &str = "Automatisch ausrichten";
+pub const AUTO_AXIS: &str = "Waagerecht/senkrecht erkennen";
 
 /// Beschreibung des Löschknopfs einer Zeile der Liste.
 const DELETE_ROW: &str = "Abhängigkeit löschen";

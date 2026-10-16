@@ -448,11 +448,17 @@ fn no_text_is_clipped_at_1400px() {
         "Abhängigkeiten",
         "Abstand Punkt–Linie …",
         "Konstruktion umschalten",
-        sketch_panel::AUTO_AXIS,
         "Skizze beenden",
     ] {
         s.text(must);
     }
+    // Der Schalter „Waagerecht/senkrecht erkennen“ steht in zwei Zeilen.
+    assert_eq!(sketch_panel::AUTO_AXIS, "Waagerecht/senkrecht erkennen");
+    s.text(&sketch_panel::auto_axis_label());
+    assert!(
+        !sketch_panel::AUTO_AXIS_HINT.contains("  "),
+        "Leerzeichen-Kolonne im Hinweistext"
+    );
     nothing_clipped(&s, "Skizzenfelder");
     // Die Symbole der Leiste liegen ganz im Fenster (ihr Name steht im Hinweistext, siehe
     // tests/sketch_fields.rs).

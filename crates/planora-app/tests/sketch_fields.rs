@@ -849,3 +849,224 @@ fn painted_sketch_fields_do_not_overlap_at_five_sizes() {
         }
     }
 }
+
+// Fix-Runde 1: Ränder der Felder --------------------------------------------------------------
+
+/// Vier Punkte `d` px innerhalb (`d` > 0) bzw. außerhalb (`d` < 0) der Kanten von `r`, je mittig.
+fn edge_points(r: Rect, d: f32) -> [(&'static str, Pos2); 4] {
+    let c = r.center();
+    [
+        ("links", pos2(r.left() + d, c.y)),
+        ("rechts", pos2(r.right() - d, c.y)),
+        ("oben", pos2(c.x, r.top() + d)),
+        ("unten", pos2(c.x, r.bottom() - d)),
+    ]
+}
+
+/// Ziehen mit der linken Taste von `from` 40 px in Richtung `toward`.
+fn drag_from(c: &egui::Context, app: &mut PlanoraApp, size: Vec2, from: Pos2, toward: Pos2) {
+    drag_with(c, app, size, PointerButton::Primary, from, toward);
+}
+
+/// Ziehen mit `which` von `from` 40 px in Richtung `toward`.
+fn drag_with(
+    c: &egui::Context,
+    app: &mut PlanoraApp,
+    size: Vec2,
+    which: PointerButton,
+    from: Pos2,
+    toward: Pos2,
+) {
+    let press = |p: Pos2, pressed: bool| Event::PointerButton {
+        pos: p,
+        button: which,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    let step = (toward - from).normalized() * 10.0;
+    frame(c, app, size, vec![moved(from)]);
+    frame(c, app, size, vec![moved(from), press(from, true)]);
+    for i in 1..=4 {
+        frame(c, app, size, vec![moved(from + step * i as f32)]);
+    }
+    frame(c, app, size, vec![press(from + step * 4.0, false)]);
+    frame(c, app, size, vec![]);
+}
+
+/// Kamera (Abstand, Ziel, Drehung) für den Vergleich.
+fn cam(app: &mut PlanoraApp) -> (f32, glam::Vec3, f32, f32) {
+    let c = state(app).camera;
+    (c.distance, c.target, c.yaw, c.pitch)
+}
+
+#[test]
+fn edges_of_the_sketch_field_do_not_leak_to_the_sketch() {
+    let c = context();
+    let mut app = sketching(0);
+    let p = {
+        let (se, sk) = state(&mut app).session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Select);
+        sk.add_point(0.0, 0.0).unwrap()
+    };
+    settle(&c, &mut app, SIZE);
+    let side = field(&c, "Skizze");
+    let before = cam(&mut app);
+    let xy = |app: &mut PlanoraApp| state(app).session_sketch().unwrap().point_xy(p).unwrap();
+    let start = xy(&mut app);
+    for (edge, q) in edge_points(side, 2.0) {
+        frame(&c, &mut app, SIZE, vec![moved(q), wheel(120.0)]);
+        for _ in 0..10 {
+            frame(&c, &mut app, SIZE, vec![]);
+        }
+        assert_eq!(
+            cam(&mut app),
+            before,
+            "Mausrad 2 px innen am Rand {edge} zoomt"
+        );
+        // Umschalt + Ziehen verschöbe die Skizze, mittlere Taste ebenso; hier: Ziehen mit der
+        // linken Taste darf weder verschieben noch einen Punkt bewegen.
+        drag_from(&c, &mut app, SIZE, q, side.center());
+        assert_eq!(cam(&mut app), before, "Ziehen am Rand {edge} verschiebt");
+        // Mittlere Taste verschiebt die Skizze sonst.
+        drag_with(&c, &mut app, SIZE, PointerButton::Middle, q, side.center());
+        assert_eq!(
+            cam(&mut app),
+            before,
+            "mittleres Ziehen am Rand {edge} verschiebt"
+        );
+        assert_eq!(
+            xy(&mut app),
+            start,
+            "Ziehen am Rand {edge} bewegt einen Punkt"
+        );
+        assert!(
+            state(&mut app)
+                .sketch_session
+                .as_ref()
+                .unwrap()
+                .cursor
+                .is_none(),
+            "Rand {edge}: die Skizze verfolgt den Zeiger (Vorschau, Fangen)"
+        );
+    }
+    // Gegenprobe 2 px außerhalb der linken Kante (in der freien Fläche): Mausrad zoomt, Klick
+    // mit dem Punktwerkzeug setzt einen Punkt (kein toter Streifen neben dem Feld).
+    {
+        let (se, sk) = state(&mut app).session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Point);
+    }
+    let q = pos2(side.left() - 2.0, side.center().y);
+    let d = state(&mut app).camera.distance;
+    frame(&c, &mut app, SIZE, vec![moved(q), wheel(120.0)]);
+    frame(&c, &mut app, SIZE, vec![]);
+    assert_ne!(state(&mut app).camera.distance, d, "2 px außen zoomt");
+    let t = state(&mut app).camera.target;
+    drag_with(
+        &c,
+        &mut app,
+        SIZE,
+        PointerButton::Middle,
+        q,
+        q - vec2(100.0, 0.0),
+    );
+    assert_ne!(
+        state(&mut app).camera.target,
+        t,
+        "mittleres Ziehen 2 px außen verschiebt"
+    );
+    let n = state(&mut app).session_sketch().unwrap().points().count();
+    click(&c, &mut app, SIZE, q);
+    assert_eq!(
+        state(&mut app).session_sketch().unwrap().points().count(),
+        n + 1,
+        "2 px außen setzt einen Punkt"
+    );
+}
+
+#[test]
+fn edges_of_a_model_field_do_not_leak_to_the_viewport() {
+    let c = context();
+    let mut app = PlanoraApp::for_tests(library_ws());
+    state(&mut app).create_box(DVec3::splat(100.0)).unwrap();
+    settle(&c, &mut app, SIZE);
+    let right = field(&c, "rechts");
+    let before = cam(&mut app);
+    for (edge, q) in edge_points(right, 2.0) {
+        frame(&c, &mut app, SIZE, vec![moved(q), wheel(120.0)]);
+        for _ in 0..10 {
+            frame(&c, &mut app, SIZE, vec![]);
+        }
+        assert_eq!(
+            cam(&mut app),
+            before,
+            "Mausrad 2 px innen am Rand {edge} zoomt"
+        );
+        drag_from(&c, &mut app, SIZE, q, right.center());
+        assert_eq!(cam(&mut app), before, "Ziehen am Rand {edge} dreht");
+    }
+    // Gegenprobe 2 px außerhalb der linken Kante: Mausrad zoomt, Ziehen dreht.
+    let q = pos2(right.left() - 2.0, right.center().y);
+    frame(&c, &mut app, SIZE, vec![moved(q), wheel(120.0)]);
+    frame(&c, &mut app, SIZE, vec![]);
+    let zoomed = cam(&mut app);
+    assert_ne!(zoomed.0, before.0, "2 px außen zoomt");
+    drag_from(&c, &mut app, SIZE, q, q - vec2(100.0, 0.0));
+    let after = cam(&mut app);
+    assert!(
+        (after.2, after.3) != (zoomed.2, zoomed.3),
+        "Ziehen 2 px außen dreht"
+    );
+}
+
+#[test]
+fn foot_shows_warning_and_error_colours() {
+    let p = theme::palette(true);
+    for (what, want_text, want) in [
+        ("überzählig", "überzählig", p.warning),
+        ("Widerspruch", "", p.error),
+    ] {
+        let c = context();
+        let mut app = sketching(0);
+        let line = with_selected_line(&mut app);
+        {
+            let (se, sk) = state(&mut app).session_sketch_mut().unwrap();
+            let (a, b) = match sk.curve(line).unwrap().kind {
+                planora_sketch::model::CurveKind::Line { a, b } => (a, b),
+                _ => unreachable!(),
+            };
+            if what == "überzählig" {
+                // Zweimal waagerecht: die zweite Abhängigkeit ist überzählig.
+                sk.add_constraint(K::Horizontal(
+                    planora_sketch::constraint::LineOrPoints::Points(a, b),
+                ))
+                .unwrap();
+                sk.add_constraint(K::Horizontal(
+                    planora_sketch::constraint::LineOrPoints::Points(a, b),
+                ))
+                .unwrap();
+            } else {
+                // Waagerecht und senkrecht bei Länge 20: nicht erfüllbar.
+                sk.add_constraint(K::Horizontal(
+                    planora_sketch::constraint::LineOrPoints::Points(a, b),
+                ))
+                .unwrap();
+                sk.add_constraint(K::Vertical(
+                    planora_sketch::constraint::LineOrPoints::Points(a, b),
+                ))
+                .unwrap();
+                sk.add_constraint(K::Distance(a, b, 20.0)).unwrap();
+            }
+            se.last_report = Some(sk.clone().solve());
+        }
+        let (text, _) = {
+            let s = state(&mut app);
+            let se = s.sketch_session.as_ref().unwrap();
+            se.status(s.session_sketch().unwrap())
+        };
+        assert!(text.contains(want_text), "{what}: {text}");
+        let shot = settle(&c, &mut app, SIZE);
+        let foot = field(&c, "Fuß");
+        let t = shot.find_in(foot, &text);
+        assert_eq!(t.color, want, "{what}: Farbe von „{text}“");
+    }
+}

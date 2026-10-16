@@ -283,6 +283,13 @@ pub(crate) fn side_column<R>(
 
 /// Ein Feld: Area an `pos` mit Rahmen `frame`. Der erste, unsichtbare Größen-Durchgang eines
 /// neuen Felds wird verworfen, damit es schon im ersten Bild sichtbar an seiner Stelle steht.
+///
+/// Rand: egui sucht Widgets in einem Kreis (`interact_radius`) um den Zeiger und lässt die
+/// Ebenen darunter mitzählen, solange kein Widget der oberen Ebene den ganzen Kreis abdeckt.
+/// Knapp innerhalb des Feldrands galt so der 3D-Bereich (bzw. die Skizze) darunter noch als
+/// „hovered“: Mausrad, Ziehen und Vorschau gingen durch. Ein unsichtbares Widget (nur Hover)
+/// über dem Feld, um `interact_radius` vergrößert, deckt den Kreis ab, sobald der Zeiger im Feld
+/// ist. Knapp außerhalb deckt es ihn nicht ab: dort bleibt der Bereich darunter erreichbar.
 pub(crate) fn field<R>(
     ctx: &egui::Context,
     id: egui::Id,
@@ -295,7 +302,14 @@ pub(crate) fn field<R>(
             if ui.is_sizing_pass() {
                 discard(ui.ctx(), "Feld: erste Größenbestimmung");
             }
-            frame.show(ui, add_contents).inner
+            let shown = frame.show(ui, add_contents);
+            let radius = ui.style().interaction.interact_radius;
+            ui.interact(
+                shown.response.rect.expand(radius),
+                id.with("rand"),
+                egui::Sense::hover(),
+            );
+            shown.inner
         })
         .inner
 }
