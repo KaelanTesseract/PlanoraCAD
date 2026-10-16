@@ -32,17 +32,15 @@ pub enum Icon {
     Box,
     /// Phosphor `cylinder`.
     Cylinder,
-    /// Phosphor `globe-simple`.
+    /// Phosphor `sphere`.
     Sphere,
-    /// Phosphor `traffic-cone`.
-    Cone,
     /// Phosphor `pencil-simple-line`.
     SketchOnPlane,
     /// Phosphor `bounding-box`.
     SketchOnFace,
     /// Phosphor `arrow-line-up`.
     Extrude,
-    /// Phosphor `arrow-clockwise`.
+    /// Phosphor `arrow-arc-right`.
     Revolve,
     /// Phosphor `union`.
     Union,
@@ -147,7 +145,6 @@ pub const ALL: &[Icon] = &[
     Icon::Box,
     Icon::Cylinder,
     Icon::Sphere,
-    Icon::Cone,
     Icon::SketchOnPlane,
     Icon::SketchOnFace,
     Icon::Extrude,
@@ -210,12 +207,11 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Quit, '\u{e42a}', "sign-out"),
     (Icon::Box, '\u{e1da}', "cube"),
     (Icon::Cylinder, '\u{e8fc}', "cylinder"),
-    (Icon::Sphere, '\u{e28e}', "globe-simple"),
-    (Icon::Cone, '\u{e9a8}', "traffic-cone"),
+    (Icon::Sphere, '\u{ee66}', "sphere"),
     (Icon::SketchOnPlane, '\u{ebc6}', "pencil-simple-line"),
     (Icon::SketchOnFace, '\u{e6ce}', "bounding-box"),
     (Icon::Extrude, '\u{e066}', "arrow-line-up"),
-    (Icon::Revolve, '\u{e036}', "arrow-clockwise"),
+    (Icon::Revolve, '\u{e016}', "arrow-arc-right"),
     (Icon::Union, '\u{edbe}', "union"),
     (Icon::Subtract, '\u{ebd6}', "subtract"),
     (Icon::Intersect, '\u{e2d2}', "intersect"),
@@ -767,4 +763,139 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Einheitlicher Zugriff: Symbolschrift oder gezeichnet
+// ---------------------------------------------------------------------------------------------
+
+/// Woher ein Symbol kommt: aus der Symbolschrift oder von einer Zeichenfunktion.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IconSource {
+    Font(Icon),
+    Hand(HandIcon),
+    Feature(FeatureIcon),
+    Body(BodyKind),
+    Dimension(planora_drawing::dimension::DimKind),
+}
+
+/// Symbol zu einer Körperart (Menü „Erzeugen“, Feature-Baum): wo Phosphor ein passendes Symbol
+/// hat, die Schrift; sonst (Kegel, Netz, Kombination, ...) das Symbol des Feature-Baums.
+pub fn body_icon(kind: BodyKind) -> IconSource {
+    match kind {
+        BodyKind::Box => IconSource::Font(Icon::Box),
+        BodyKind::Cylinder => IconSource::Font(Icon::Cylinder),
+        BodyKind::Sphere => IconSource::Font(Icon::Sphere),
+        BodyKind::Extrusion => IconSource::Font(Icon::Extrude),
+        BodyKind::Revolution => IconSource::Font(Icon::Revolve),
+        BodyKind::Combined => IconSource::Font(Icon::Union),
+        BodyKind::Cone | BodyKind::Mesh => IconSource::Body(kind),
+    }
+}
+
+/// Symbol eines Skizzenwerkzeugs (`sketch_panel::TOOLS`).
+pub fn sketch_tool_icon(tool: crate::sketch_state::Tool) -> IconSource {
+    use crate::sketch_state::Tool as T;
+    match tool {
+        T::Select => IconSource::Font(Icon::ToolSelect),
+        T::Point => IconSource::Font(Icon::ToolPoint),
+        T::Line => IconSource::Font(Icon::ToolLine),
+        T::Rectangle => IconSource::Font(Icon::ToolRectangle),
+        T::Circle => IconSource::Font(Icon::ToolCircle),
+        T::Arc => IconSource::Hand(HandIcon::Arc),
+        T::Ellipse => IconSource::Hand(HandIcon::Ellipse),
+        T::Spline => IconSource::Font(Icon::ToolSpline),
+        T::ProjectEdge => IconSource::Font(Icon::ToolProjectEdge),
+    }
+}
+
+/// Symbol einer Abhängigkeit (`sketch_panel::ACTIONS`).
+pub fn sketch_action_icon(action: crate::sketch_state::ConstraintAction) -> IconSource {
+    use crate::sketch_state::ConstraintAction as A;
+    use planora_drawing::dimension::DimKind;
+    match action {
+        A::Coincident => IconSource::Font(Icon::Coincident),
+        A::Horizontal => IconSource::Font(Icon::Horizontal),
+        A::Vertical => IconSource::Font(Icon::Vertical),
+        A::Parallel => IconSource::Hand(HandIcon::Parallel),
+        A::Perpendicular => IconSource::Hand(HandIcon::Perpendicular),
+        A::Tangent => IconSource::Hand(HandIcon::Tangent),
+        A::Equal => IconSource::Font(Icon::Equal),
+        A::Fixed => IconSource::Font(Icon::Fixed),
+        A::Midpoint => IconSource::Hand(HandIcon::Midpoint),
+        A::Symmetric => IconSource::Font(Icon::Symmetric),
+        A::PointOnCurve => IconSource::Hand(HandIcon::PointOnCurve),
+        A::Distance => IconSource::Font(Icon::Distance),
+        A::DistancePointLine => IconSource::Hand(HandIcon::DistancePointLine),
+        A::Radius => IconSource::Dimension(DimKind::Radius),
+        A::Diameter => IconSource::Dimension(DimKind::Diameter),
+        A::Angle => IconSource::Font(Icon::Angle),
+    }
+}
+
+/// Zeichnet ein Symbol beliebiger Herkunft in `rect` (Symbolschrift: Glyph mittig).
+pub fn paint_source(painter: &Painter, rect: Rect, source: IconSource, color: Color32) {
+    match source {
+        IconSource::Font(icon) => {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                glyph(icon),
+                egui::FontId::new(rect.height().min(rect.width()), fonts::icons()),
+                color,
+            );
+        }
+        IconSource::Hand(h) => paint_hand_icon(painter, rect, h, color),
+        IconSource::Feature(f) => paint_feature_icon(painter, rect, f, color),
+        IconSource::Body(k) => paint_body_icon(painter, rect, k, color),
+        IconSource::Dimension(k) => paint_dimension_icon(k)(painter, rect, color),
+    }
+}
+
+/// Knopf mit Symbol (16 px) + 8 px Abstand + Text, für Symbole jeder Herkunft (Menüpunkte,
+/// Leistenschalter). `selected` zeichnet den Knopf als aktiv (`bg_active`, `text_primary`).
+pub fn source_button(
+    ui: &mut egui::Ui,
+    source: IconSource,
+    text: &str,
+    dark: bool,
+    selected: bool,
+) -> egui::Response {
+    let pad = ui.spacing().button_padding;
+    let galley = egui::WidgetText::from(egui::RichText::new(text)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
+    let size = vec2(
+        pad.x * 2.0 + LABEL_ICON_SIZE + LABEL_GAP + galley.size().x,
+        (LABEL_ICON_SIZE.max(galley.size().y) + pad.y * 2.0).max(ui.spacing().interact_size.y),
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let p = theme::palette(dark);
+        let visuals = ui.style().interact_selectable(&response, selected);
+        let active = selected || response.hovered();
+        if selected || response.hovered() {
+            ui.painter()
+                .rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
+        }
+        let color = if active {
+            p.text_primary
+        } else {
+            p.text_secondary
+        };
+        let icon_rect = Rect::from_center_size(
+            pos2(rect.left() + pad.x + LABEL_ICON_SIZE / 2.0, rect.center().y),
+            vec2(LABEL_ICON_SIZE, LABEL_ICON_SIZE),
+        );
+        paint_source(ui.painter(), icon_rect, source, color);
+        let text_pos = pos2(
+            rect.left() + pad.x + LABEL_ICON_SIZE + LABEL_GAP,
+            rect.center().y - galley.size().y / 2.0,
+        );
+        ui.painter().galley(text_pos, galley, color);
+    }
+    response
 }

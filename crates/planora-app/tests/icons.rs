@@ -252,3 +252,59 @@ fn every_hand_drawn_icon_draws_with_the_theme_width() {
         assert!(w.iter().all(|w| *w == 1.5 || *w == 1.0), "{name}: {w:?}");
     }
 }
+
+#[test]
+fn every_sketch_tool_and_action_has_an_icon_source() {
+    use icons::IconSource;
+    use planora_app::sketch_panel::{ACTIONS, TOOLS};
+    assert_eq!(TOOLS.len(), 9);
+    assert_eq!(ACTIONS.len(), 16);
+    let mut sources = Vec::new();
+    for (tool, ..) in TOOLS {
+        sources.push((format!("{tool:?}"), icons::sketch_tool_icon(tool)));
+    }
+    for action in ACTIONS {
+        sources.push((format!("{action:?}"), icons::sketch_action_icon(action)));
+    }
+    for (i, (name, src)) in sources.iter().enumerate() {
+        for (other, o) in &sources[..i] {
+            assert_ne!(src, o, "{name} und {other} haben dasselbe Symbol");
+        }
+    }
+    for (name, src) in sources {
+        match src {
+            IconSource::Font(i) => assert!(ALL.contains(&i), "{name}: {i:?} nicht in ALL"),
+            IconSource::Hand(h) => assert!(HAND_DRAWN.contains(&h), "{name}: {h:?}"),
+            IconSource::Feature(_) | IconSource::Body(_) | IconSource::Dimension(_) => {}
+        }
+    }
+    // Kegel: wie im Feature-Baum gezeichnet
+    assert_eq!(
+        icons::body_icon(BodyKind::Cone),
+        IconSource::Body(BodyKind::Cone)
+    );
+    assert_eq!(icons::body_icon(BodyKind::Box), IconSource::Font(Icon::Box));
+}
+
+#[test]
+fn source_button_draws_font_and_hand_icons() {
+    use icons::IconSource;
+    for src in [
+        IconSource::Font(Icon::New),
+        IconSource::Hand(icons::HandIcon::Arc),
+        IconSource::Body(BodyKind::Cone),
+        IconSource::Dimension(DimKind::Radius),
+    ] {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts::definitions());
+        let mut width = 0.0;
+        let mut o = ctx.run_ui(egui::RawInput::default(), |ui| {
+            width = icons::source_button(ui, src, "Text", true, false)
+                .rect
+                .width();
+        });
+        o.textures_delta.clear();
+        assert!(width > 16.0 + 8.0, "{src:?}: {width}");
+        assert!(!o.shapes.is_empty());
+    }
+}

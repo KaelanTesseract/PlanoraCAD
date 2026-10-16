@@ -10,7 +10,8 @@ use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::model::{CurveKind, Sketch};
 
-const TOOLS: [(Tool, &str, &str); 9] = [
+/// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis.
+pub const TOOLS: [(Tool, &str, &str); 9] = [
     (
         Tool::Select,
         "Auswahl",
@@ -54,7 +55,8 @@ const TOOLS: [(Tool, &str, &str); 9] = [
     ),
 ];
 
-const ACTIONS: [ConstraintAction; 16] = {
+/// Abhängigkeiten, die die Skizzenleiste anbietet.
+pub const ACTIONS: [ConstraintAction; 16] = {
     use ConstraintAction::*;
     [
         Coincident,
