@@ -34,7 +34,10 @@ fn contrast_of_every_text_pair_is_at_least_4_5_in_both_themes() {
                 failures.push(format!("{} {what}: {r:.2} < {min}", name(dark)));
             }
         };
+        // bg_viewport ist zugleich panel_fill: Menü-, Tab- und Statusleiste und die Bereiche
+        // von egui_tiles stehen darauf.
         let surfaces = [
+            ("bg_viewport", p.bg_viewport),
             ("bg_panel", p.bg_panel),
             ("bg_section", p.bg_section),
             ("bg_field", p.bg_field),
@@ -60,17 +63,34 @@ fn contrast_of_every_text_pair_is_at_least_4_5_in_both_themes() {
         ] {
             check(chip, text, fill, 4.5);
         }
-        check("error auf bg_panel", p.error, p.bg_panel, 4.5);
-        check("warning auf bg_panel", p.warning, p.bg_panel, 4.5);
-        check("ok auf bg_panel", p.ok, p.bg_panel, 4.5);
-        check("marker auf bg_panel", p.marker, p.bg_panel, 4.5);
+        for (s, bg) in [
+            ("bg_viewport", p.bg_viewport),
+            ("bg_panel", p.bg_panel),
+            ("bg_section", p.bg_section),
+        ] {
+            for (what, fg) in [
+                ("error", p.error),
+                ("warning", p.warning),
+                ("ok", p.ok),
+                ("marker", p.marker),
+            ] {
+                check(&format!("{what} auf {s}"), fg, bg, 4.5);
+            }
+        }
     }
-    // text_tertiary (nur ab 13 px medium) im hellen Thema mindestens 4,3 auf bg_section; der
-    // dunkle Graphit-Wert #7d7d7d liegt mit 4,2 knapp darunter und ist ausgenommen.
+    // text_tertiary (schwacher Text, Hinweise) im hellen Thema mindestens 4,5 auf Fenster, Feld
+    // und Abschnitt. Der dunkle Graphit-Wert #7d7d7d (4,7 auf bg_viewport, 4,3 auf bg_panel,
+    // 4,2 auf bg_section) ist ausgenommen.
     let p = theme::palette(false);
-    let r = theme::contrast_ratio(p.text_tertiary, p.bg_section);
-    if r < 4.3 {
-        failures.push(format!("hell text_tertiary auf bg_section: {r:.2} < 4.3"));
+    for (s, bg) in [
+        ("bg_viewport", p.bg_viewport),
+        ("bg_panel", p.bg_panel),
+        ("bg_section", p.bg_section),
+    ] {
+        let r = theme::contrast_ratio(p.text_tertiary, bg);
+        if r < 4.5 {
+            failures.push(format!("hell text_tertiary auf {s}: {r:.2} < 4.5"));
+        }
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
@@ -354,6 +374,35 @@ fn over(top: Color32, bottom: Color32) -> Color32 {
         mix(top.g(), bottom.g()),
         mix(top.b(), bottom.b()),
     )
+}
+
+#[test]
+fn disabled_text_stays_readable_and_animations_take_120_ms() {
+    let ctx = egui::Context::default();
+    theme::apply(&ctx, true);
+    let mut failures = Vec::new();
+    for t in [Theme::Dark, Theme::Light] {
+        let style = ctx.style_of(t);
+        assert_eq!(style.animation_time, 0.12, "{t:?}");
+        let v = &style.visuals;
+        let p = theme::palette(t == Theme::Dark);
+        // egui zeichnet Gesperrtes mit der Deckkraft `disabled_alpha` (gamma_multiply).
+        let faded = v.disable(p.text_secondary);
+        for (s, bg) in [
+            ("bg_viewport", p.bg_viewport),
+            ("bg_panel", p.bg_panel),
+            ("bg_section", p.bg_section),
+            ("bg_inset", p.bg_inset),
+        ] {
+            let r = theme::contrast_ratio(over(faded, bg), bg);
+            if r < 3.0 {
+                failures.push(format!("{t:?} gesperrter Nebentext auf {s}: {r:.2} < 3"));
+            }
+        }
+        // Gesperrt bleibt erkennbar blasser als in Ruhe.
+        assert!(v.disabled_alpha < 0.9, "{t:?}: {}", v.disabled_alpha);
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 #[test]

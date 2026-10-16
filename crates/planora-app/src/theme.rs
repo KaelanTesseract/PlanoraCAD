@@ -113,8 +113,9 @@ const LIGHT: Palette = Palette {
     ground_axis: rgb(0x5aa65e),
     text_primary: rgb(0x151515),
     text_secondary: rgb(0x5f5f66),
-    // Vorschau #7a7a82 hätte auf bg_section nur 3,9 : 1; dunkler für 4,6 : 1.
-    text_tertiary: rgb(0x6e6e76),
+    // Vorschau #7a7a82 hätte auf bg_section nur 3,9 : 1; #6e6e76 auf dem Fensterhintergrund
+    // bg_viewport (Menü-, Tab- und Statusleiste) nur 4,2 : 1. #66666e erreicht dort 4,7 : 1.
+    text_tertiary: rgb(0x66666e),
     text_muted: rgb(0x7a7a82),
     accent: rgb(0x006dfd),
     on_accent: rgb(0xffffff),
@@ -127,9 +128,11 @@ const LIGHT: Palette = Palette {
     chip_split: (rgb(0xdbe9fb), rgb(0x1456b0)),
     chip_boolean: (rgb(0xdef3da), rgb(0x2d7a22)),
     error: rgb(0xc62828),
-    warning: rgb(0x9a5b00),
-    ok: rgb(0x2d7a22),
-    marker: rgb(0x1f6fe0),
+    // Warnung, Erfolg und Markierung stehen auch auf dem Fensterhintergrund bg_viewport #e8e9ec
+    // (Menü-, Tab- und Statusleiste): dunkler als im Entwurf, damit es dort 4,5 : 1 sind.
+    warning: rgb(0x8c5200),
+    ok: rgb(0x2a7020),
+    marker: rgb(0x1a5cc4),
 };
 
 /// Palette des gewünschten Themas.
@@ -191,6 +194,12 @@ pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
+/// Deckkraft gesperrter Elemente (`Visuals::disabled_alpha`).
+pub const DISABLED_ALPHA: f32 = 0.75;
+
+/// Dauer der Übergänge (Aufklappen, Hover-Wechsel), 120 ms.
+pub const ANIMATION_TIME: f32 = 0.12;
+
 fn visuals(dark: bool) -> Visuals {
     let p = palette(dark);
     let mut v = if dark {
@@ -221,6 +230,9 @@ fn visuals(dark: bool) -> Visuals {
     v.selection.bg_fill = p.bg_active;
     v.selection.stroke = Stroke::new(1.0, p.text_primary);
     v.text_cursor.stroke.color = p.accent;
+    // Gesperrte Elemente blasser, aber lesbar: Nebentext erreicht so in beiden Themen 3 : 1 auf
+    // Fenster, Feld, Abschnitt und Eingabe (egui-Vorgabe 0,5 ergäbe nur etwa 2 : 1).
+    v.disabled_alpha = DISABLED_ALPHA;
 
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.bg_panel;
@@ -307,6 +319,7 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     });
     ctx.all_styles_mut(|style| {
         style.text_styles = text_styles();
+        style.animation_time = ANIMATION_TIME;
         let s = &mut style.spacing;
         s.item_spacing = vec2(SPACE_2, SPACE_1);
         s.button_padding = vec2(SPACE_2, SPACE_1);
