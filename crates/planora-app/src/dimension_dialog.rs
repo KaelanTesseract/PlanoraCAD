@@ -180,36 +180,57 @@ impl DimensionDialog {
     #[allow(clippy::type_complexity)]
     pub fn build(&self) -> Result<(u8, Tolerance, Option<String>), Vec<String>> {
         let mut errors = Vec::new();
-        let mut number = |label: &str, text: &str| match parse_number(text) {
+        let number = |errors: &mut Vec<String>, label: &str, text: &str| match parse_number(text) {
             Ok(v) => v,
             Err(e) => {
                 errors.push(format!("{label}: {e}"));
                 0.0
             }
         };
+        // Leerzeichen am Rand zählen nicht: ein Text nur aus Leerzeichen ist „kein Text“.
+        let fit = self.fit.trim();
         let tolerance = match self.kind {
             ToleranceKind::None => Tolerance::None,
-            ToleranceKind::Symmetric => Tolerance::Symmetric(number("Abweichung", &self.symmetric)),
-            ToleranceKind::Limits => Tolerance::Limits {
-                upper: number("Oben", &self.upper),
-                lower: number("Unten", &self.lower),
-            },
-            ToleranceKind::LimitSizes => Tolerance::LimitSizes {
-                upper: number("Obere Abweichung", &self.upper),
-                lower: number("Untere Abweichung", &self.lower),
-            },
-            ToleranceKind::Fit => Tolerance::Fit(self.fit.clone()),
+            ToleranceKind::Symmetric => {
+                let ok = errors.len();
+                let v = number(&mut errors, "Abweichung", &self.symmetric);
+                if errors.len() == ok && v < 0.0 {
+                    errors.push("Abweichung: Die Abweichung darf nicht negativ sein.".into());
+                }
+                Tolerance::Symmetric(v)
+            }
+            ToleranceKind::Limits | ToleranceKind::LimitSizes => {
+                let (up, low) = if self.kind == ToleranceKind::Limits {
+                    ("Oben", "Unten")
+                } else {
+                    ("Obere Abweichung", "Untere Abweichung")
+                };
+                let ok = errors.len();
+                let upper = number(&mut errors, up, &self.upper);
+                let lower = number(&mut errors, low, &self.lower);
+                if errors.len() == ok && upper < lower {
+                    errors.push(format!(
+                        "{up}: Die obere Abweichung darf nicht kleiner als die untere sein."
+                    ));
+                }
+                if self.kind == ToleranceKind::Limits {
+                    Tolerance::Limits { upper, lower }
+                } else {
+                    Tolerance::LimitSizes { upper, lower }
+                }
+            }
+            ToleranceKind::Fit => Tolerance::Fit(fit.to_string()),
         };
         if self.kind == ToleranceKind::Fit {
-            if self.fit.trim().is_empty() {
+            if fit.is_empty() {
                 errors.push("Passung: Bitte eine Passung eingeben.".into());
-            } else if self.fit.chars().count() > MAX_FIT_CHARS {
+            } else if fit.chars().count() > MAX_FIT_CHARS {
                 errors.push(format!(
                     "Passung: Der Text darf höchstens {MAX_FIT_CHARS} Zeichen haben."
                 ));
             }
         }
-        if self.text.chars().count() > MAX_DIM_TEXT_CHARS {
+        if self.text.trim().chars().count() > MAX_DIM_TEXT_CHARS {
             errors.push(format!(
                 "Maßtext: Der Text darf höchstens {MAX_DIM_TEXT_CHARS} Zeichen haben."
             ));
@@ -222,7 +243,8 @@ impl DimensionDialog {
         if !errors.is_empty() {
             return Err(errors);
         }
-        let text = (!self.text.is_empty()).then(|| self.text.clone());
+        let text = self.text.trim();
+        let text = (!text.is_empty()).then(|| text.to_string());
         Ok((self.decimals, tolerance, text))
     }
 

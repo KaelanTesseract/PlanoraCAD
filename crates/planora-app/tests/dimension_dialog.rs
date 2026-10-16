@@ -405,6 +405,14 @@ fn invalid_numbers_block_apply_with_red_text() {
         ("inf", "Abweichung: „inf“ ist keine Zahl."),
         ("1e999", "Abweichung: „1e999“ ist keine Zahl."),
         ("0,1,2", "Abweichung: „0,1,2“ ist keine Zahl."),
+        (
+            "-0,1",
+            "Abweichung: Die Abweichung darf nicht negativ sein.",
+        ),
+        (
+            "\u{2212}1000",
+            "Abweichung: Die Abweichung darf nicht negativ sein.",
+        ),
     ] {
         h.dlg.symmetric = input.into();
         let shot = h.idle(&mut st);
@@ -420,8 +428,8 @@ fn invalid_numbers_block_apply_with_red_text() {
         assert!(h.dlg.apply(&mut st).is_err());
         assert_eq!(st.document.edit_count(), e0);
     }
-    // Die Grenzen selbst gehen: 1000 und −1000.
-    for ok in ["1000", "-1000", "0", "0.5", "+0,5", "  0,5  "] {
+    // Die Grenzen selbst gehen: 1000 und 0 (eine symmetrische Abweichung ist nie negativ).
+    for ok in ["1000", "0", "-0", "0.5", "+0,5", "  0,5  "] {
         h.dlg.symmetric = ok.into();
         h.idle(&mut st);
         assert!(h.enabled("Übernehmen"), "„{ok}“ muss gehen");
@@ -443,11 +451,37 @@ fn invalid_numbers_block_apply_with_red_text() {
         shot.text
     );
     assert!(!h.enabled("Übernehmen"));
+    // Obere Abweichung kleiner als die untere: abgelehnt (gleich geht), in beiden Arten.
+    for (kind, label) in [
+        (ToleranceKind::Limits, "Oben"),
+        (ToleranceKind::LimitSizes, "Obere Abweichung"),
+    ] {
+        h.dlg.kind = kind;
+        h.dlg.upper = "\u{2212}0,2".into();
+        h.dlg.lower = "-0,1".into();
+        let shot = h.idle(&mut st);
+        let want = format!("{label}: Die obere Abweichung darf nicht kleiner als die untere sein.");
+        let t = shot
+            .find(&want)
+            .unwrap_or_else(|| panic!("„{want}“ fehlt:\n{}", shot.text));
+        assert_eq!(t.color, ERROR_COLOR, "rot");
+        assert!(!h.enabled("Übernehmen"));
+        assert!(h.dlg.apply(&mut st).is_err());
+        assert_eq!(st.document.edit_count(), e0);
+        h.dlg.upper = "-0,1".into();
+        h.idle(&mut st);
+        assert!(h.enabled("Übernehmen"), "gleich groß geht");
+    }
     // Passung: leer, 51 Zeichen zu lang, 50 gehen.
     h.dlg.kind = ToleranceKind::Fit;
-    h.dlg.fit = String::new();
-    let shot = h.idle(&mut st);
-    assert!(shot.find("Passung: Bitte eine Passung eingeben.").is_some());
+    for empty in ["", "   ", "\t "] {
+        h.dlg.fit = empty.into();
+        let shot = h.idle(&mut st);
+        assert!(
+            shot.find("Passung: Bitte eine Passung eingeben.").is_some(),
+            "nur Leerzeichen zählt als keine Passung: „{empty}“"
+        );
+    }
     h.dlg.fit = "H".repeat(51);
     let shot = h.idle(&mut st);
     let t = shot
@@ -532,6 +566,25 @@ fn override_text_with_placeholder() {
     h.click(&mut st, "Übernehmen");
     assert_eq!(spec_of(&st, d, w).text_override, None);
     assert_eq!(text_of(&mut st, d, w), "10,0");
+    // Nur Leerzeichen ist kein eigener Text; Leerzeichen am Rand fallen weg, auch bei der
+    // Passung.
+    let mut dlg = dialog(&st, d, w, false);
+    dlg.text = "   ".into();
+    dlg.apply(&mut st).unwrap();
+    assert_eq!(spec_of(&st, d, w).text_override, None);
+    assert_eq!(text_of(&mut st, d, w), "10,0");
+    dlg.text = "  Breite <>  ".into();
+    dlg.kind = ToleranceKind::Fit;
+    dlg.fit = " H7 ".into();
+    dlg.apply(&mut st).unwrap();
+    assert_eq!(
+        spec_of(&st, d, w).text_override,
+        Some("Breite <>".to_string())
+    );
+    assert_eq!(spec_of(&st, d, w).tolerance, DimTolerance::Fit("H7".into()));
+    dlg.kind = ToleranceKind::None;
+    dlg.text = String::new();
+    dlg.apply(&mut st).unwrap();
 
     // Nachkommastellen wirken auch im eigenen Text: 3 Stellen → „<>“ wird „10,000“.
     let mut dlg = dialog(&st, d, w, false);
