@@ -153,7 +153,7 @@ Stand: 2026-10-16. Die Abschnitte 1 bis 9 sind der Entwurf; bei Planung und Umse
 
 - **P1 Geometrie-Typ `Geo3`:** `planora-feature` löst `GeoRefData` zu `Geo3` auf: `Point(DVec3)`, `Line { a, b }` (Strecke mit Enden), `Circle { center, normal, radius }`, `Axis { origin, dir, radius, t0, t1 }` für Zylinderflächen (**berichtigt:** mit dem gezeichneten Bereich `t0 ≤ t1` entlang der normierten Richtung; Enden `origin + t0·dir` und `origin + t1·dir`; gefüllt aus den Randkanten der Fläche mit `centerline::axial_range`), `Sphere { center, radius }`. `planora-drawing` kennt nur diese Typen, nicht die Körper. Die Messung bekommt `&[Geo3]` plus `Basis` und liefert Wert und Anker.
 - **P2 Verweisdaten:** `GeoRefData` hat dieselben Felder wie `EdgeRef`/`FaceRef` (Marke: `origin`, `role`, `hint`), aber ohne Abhängigkeit zu `planora-feature`; Umwandlung dort verlustfrei in beide Richtungen.
-- **P3 Vorgaben:** `decimals = 1`; neue Normansichten `centerlines = true`, Isometrie `false`; Führungslinie bei Ø/R 45°; `offset` Vorgabe `DEFAULT_OFFSET` (10 mm), bei weiteren Maßen derselben Ansicht und Richtung `DEFAULT_OFFSET + n·DIM_STEP` (n zählt alle vorhandenen Maße der Ansicht und Richtung; eine Bezugsmaßgruppe mit k Gliedern belegt k Stufen).
+- **P3 Vorgaben:** `decimals = 1`; neue Normansichten `centerlines = true`, Isometrie `false`; Führungslinie bei Ø/R 45°; `offset` Vorgabe `DEFAULT_OFFSET` (10 mm), bei weiteren Maßen derselben Ansicht und Richtung `DEFAULT_OFFSET + n·DIM_STEP`, bei vorgeschlagenen Maßen zusätzlich um den Überstand des sichtbaren Umrisses über die Bezugskanten hinaus nach außen verschoben (n zählt alle vorhandenen Maße der Ansicht und Richtung; eine Bezugsmaßgruppe mit k Gliedern belegt k Stufen).
 - **P4 Messrichtungen:** `Horizontal` entlang `ex`, `Vertical` entlang `ey`, `Aligned` zwischen zwei Punkten (euklidisch im Bild). Kante, Eckpunkt, Mitte und Achse liefern ihre Lage quer zur Messrichtung; steht eine Kante nicht quer: `NotAcross`.
 - **P5 Ø/R-Darstellung:** Kreis oder Bogen mit Blick in Achsrichtung: Führungslinie aus dem Kreis; Kreis von der Seite oder Zylinderfläche quer: lineares Maß mit „Ø“; Radius nur bei Kreis/Bogen mit Blick in Achsrichtung und bei Kugel; schräg gesehene Kreise: Fehler.
 - **P6 Ketten und Bezugsmaße:** `ChainSpec { group, mode, order }`; alle Maße einer Gruppe haben dieselbe Messrichtung und denselben Modus. `Chain`: gemeinsame Maßlinie; `Baseline`: gestapelte Maßlinien `offset + order·DIM_STEP`.
@@ -216,7 +216,7 @@ Stand: 2026-10-16. Die Abschnitte 1 bis 9 sind der Entwurf; bei Planung und Umse
 | P1 | `Axis { origin, dir, radius }` | zusätzlich `t0`, `t1` |
 | §4 Texte | DXF-Minus `\U+2212` | Minus als `-`; `%` als `%%%`, `\` als `\U+005C`, Latin-1 als `\U+XXXX` |
 | §2 Speichern | Format 5 nur bei Maßen oder Mittellinien | zusätzlich: Format 4 speichert `next_dim` nicht |
-| P3 Abstand | `DEFAULT_OFFSET + n·DIM_STEP` | n zählt alle Maße der Ansicht und Richtung, Gruppen belegen je Glied eine Stufe |
+| P3 Abstand | `DEFAULT_OFFSET + n·DIM_STEP` (+ Überstand des Umrisses beim Vorschlag) | n zählt alle Maße der Ansicht und Richtung, Gruppen belegen je Glied eine Stufe |
 | P12 Wortlaut | „Maße außerhalb: n“ | „Maße außerhalb des Blatts: n“ |
 
 ### 10.4 Nachbesserung nach der Gesamtprüfung (2026-10-16)
