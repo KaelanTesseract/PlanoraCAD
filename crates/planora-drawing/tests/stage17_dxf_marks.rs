@@ -798,6 +798,48 @@ fn text_code_conversion() {
     }
 }
 
+/// Eigene Texte mit `%` und `\` bilden keine Kürzel: „50%%c“ bleibt „50%%c“ (kein Ø), „\U+00D8“
+/// bleibt die Zeichenfolge selbst; beide Zeichen stehen als Unicode-Kürzel in der Datei. Texte
+/// ohne diese Zeichen bleiben wie vorher (siehe `text_code_conversion` und die goldenen Dateien).
+#[test]
+fn percent_and_backslash_in_own_text_are_masked() {
+    let cases = [
+        ("50%", "50\\U+0025", "50%"),
+        ("50%%c", "50\\U+0025\\U+0025c", "50%%c"),
+        ("%%d%%p", "\\U+0025\\U+0025d\\U+0025\\U+0025p", "%%d%%p"),
+        ("a\\U+00D8", "a\\U+005CU+00D8", "a\\U+00D8"),
+        ("C:\\x", "C:\\U+005Cx", "C:\\x"),
+        ("Ø5 %", "%%c5 \\U+0025", "Ø5 %"),
+    ];
+    for (input, raw, decoded) in cases {
+        let sheet = manual_sheet(
+            Paper::A3,
+            vec![(
+                "T",
+                vec![text_mark(
+                    v(10.0, 10.0),
+                    0.0,
+                    TextAnchor::Start,
+                    input,
+                    MarkKind::Dimension,
+                )],
+            )],
+        );
+        let text = dxf_of(&sheet);
+        assert!(text.is_ascii());
+        let d = dxf_read::read(&text).unwrap();
+        let t = &texts_of(&d, "T", "MASSE")[0];
+        assert_eq!(t.raw, raw, "{input:?}");
+        assert_eq!(t.text, decoded, "{input:?}");
+    }
+    // Die Länge zählt in der Schreibweise der Datei: 36 · 7 = 252 ≤ 255 passt, 37 · 7 = 259
+    // nicht.
+    assert!(planora_drawing::dxf::dxf_text_fits(&"%".repeat(36)));
+    assert!(!planora_drawing::dxf::dxf_text_fits(&"%".repeat(37)));
+    assert!(planora_drawing::dxf::dxf_text_fits(&"a".repeat(255)));
+    assert!(!planora_drawing::dxf::dxf_text_fits(&"a".repeat(256)));
+}
+
 // ---------------------------------------------------------------------------------------------
 // (f) Verlorene Maße auf einer roten Ebene
 // ---------------------------------------------------------------------------------------------

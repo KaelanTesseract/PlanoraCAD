@@ -17,6 +17,7 @@ use planora_drawing::{Basis, DrawBody, Drawing, DrawingId, ViewId, ViewKind, mea
 use planora_kernel::Solid;
 use planora_math::{DVec3, Tolerance};
 use std::collections::{HashMap, HashSet};
+use std::convert::Infallible;
 
 /// Höchstzahl der Nachkommastellen eines Maßes.
 pub const MAX_DECIMALS: u8 = 3;
@@ -247,32 +248,47 @@ impl Document {
         let d = self
             .drawing(drawing)
             .ok_or_else(|| bad("Die Zeichnung gibt es nicht"))?;
-        let tol = Tolerance::default();
-        let bodies: Vec<DrawBody> = solids
-            .iter()
-            .map(|s| DrawBody {
-                name: String::new(),
-                solid: s,
-            })
-            .collect();
-        let extent = extent_of(&bodies);
-        let mut out = ResolvedDims::default();
-        for m in &d.dimensions {
-            // Die Prüfung der Zeichnung stellt sicher, dass die Ansicht existiert.
-            let Some(view) = d.view(m.view) else {
-                continue;
-            };
-            let result = m
-                .refs
-                .iter()
-                .map(|r| resolve_geo(solids, r, &tol))
-                .collect::<Result<Vec<Geo3>, _>>()
-                .and_then(|geos| measure(m.kind, &geos, &Basis::of(view.kind), view.kind, extent));
-            out.by_view
-                .entry(m.view)
-                .or_default()
-                .push((m.clone(), result));
+        match resolve_drawing_dimensions(d, solids, || Ok::<(), Infallible>(())) {
+            Ok(out) => Ok(out),
+            Err(never) => match never {},
         }
-        Ok(out)
     }
+}
+
+/// Wie [`Document::resolve_dimensions`], aber für eine Zeichnung ohne Dokument (etwa eine Kopie
+/// im Arbeitsthread des Exports). `check` wird vor jedem Maß gerufen; liefert es einen Fehler
+/// (z. B. „Abgebrochen“), endet die Auflösung mit diesem Fehler.
+pub fn resolve_drawing_dimensions<E>(
+    d: &Drawing,
+    solids: &[&Solid],
+    mut check: impl FnMut() -> Result<(), E>,
+) -> Result<ResolvedDims, E> {
+    let tol = Tolerance::default();
+    let bodies: Vec<DrawBody> = solids
+        .iter()
+        .map(|s| DrawBody {
+            name: String::new(),
+            solid: s,
+        })
+        .collect();
+    let extent = extent_of(&bodies);
+    let mut out = ResolvedDims::default();
+    for m in &d.dimensions {
+        check()?;
+        // Die Prüfung der Zeichnung stellt sicher, dass die Ansicht existiert.
+        let Some(view) = d.view(m.view) else {
+            continue;
+        };
+        let result = m
+            .refs
+            .iter()
+            .map(|r| resolve_geo(solids, r, &tol))
+            .collect::<Result<Vec<Geo3>, _>>()
+            .and_then(|geos| measure(m.kind, &geos, &Basis::of(view.kind), view.kind, extent));
+        out.by_view
+            .entry(m.view)
+            .or_default()
+            .push((m.clone(), result));
+    }
+    Ok(out)
 }

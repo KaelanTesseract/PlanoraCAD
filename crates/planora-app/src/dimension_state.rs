@@ -362,10 +362,7 @@ fn notes_of(resolved: &ResolvedDims, marks: &[DimMarks], size: (f64, f64)) -> Di
         .flatten()
         .filter(|(_, r)| r.is_err())
         .count();
-    let outside = marks
-        .iter()
-        .filter(|dm| dm.marks.iter().any(|m| mark_outside(m, size)))
-        .count();
+    let outside = count_outside(marks, size);
     let mut texts = Vec::new();
     match lost {
         0 => {}
@@ -382,6 +379,15 @@ fn notes_of(resolved: &ResolvedDims, marks: &[DimMarks], size: (f64, f64)) -> Di
         outside,
         texts,
     }
+}
+
+/// Zahl der Maße, von deren Markierungen ein Punkt außerhalb des Blatts `(0, 0)…size` liegt
+/// (Texte mit geschätzter Breite und Höhe; nicht endliche Punkte zählen als außerhalb).
+pub fn count_outside(marks: &[DimMarks], size: (f64, f64)) -> usize {
+    marks
+        .iter()
+        .filter(|dm| dm.marks.iter().any(|m| mark_outside(m, size)))
+        .count()
 }
 
 /// Löst die Maße der Zeichnung mit dem Zwischenspeicher `state.dimension_ui` auf (siehe

@@ -272,6 +272,9 @@ fn svg_and_dxf_files_are_written_and_readable() {
                 visible,
                 hidden,
                 skipped_meshes: vec![],
+                dimensions: 0,
+                outside: 0,
+                centerlines: CenterlineUse::Yes,
             }
         );
         d.begin_save(dir.clone(), &s);
