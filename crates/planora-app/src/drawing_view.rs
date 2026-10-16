@@ -848,7 +848,9 @@ fn toolbar(
                     let r = ui
                         .menu_button((icons::atom(Icon::AddView), "Ansicht hinzufügen"), |ui| {
                             for k in ViewKind::ALL {
-                                if ui.add(icons::button(Icon::ViewFace, k.label())).clicked() {
+                                if theme::entry(ui, true, icons::button(Icon::ViewFace, k.label()))
+                                    .clicked()
+                                {
                                     action = Some(Action::Add(k));
                                     ui.close();
                                 }

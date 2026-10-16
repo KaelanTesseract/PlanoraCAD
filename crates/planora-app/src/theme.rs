@@ -371,6 +371,14 @@ pub fn focus_ring(ui: &egui::Ui, response: &egui::Response) {
     );
 }
 
+/// Menüeintrag oder randloser Knopf (gesperrt, wenn nicht `enabled`) mit sichtbarem
+/// Tastaturfokus: ohne Rand zeigt sich der Fokus nur als [`focus_ring`].
+pub fn entry(ui: &mut egui::Ui, enabled: bool, widget: impl egui::Widget) -> egui::Response {
+    let response = ui.add_enabled(enabled, widget);
+    focus_ring(ui, &response);
+    response
+}
+
 /// Fenster im Graphit-Rahmen ([`panel_frame`]); der Titel steht als Überschrift in
 /// `text_primary`. Die Fenster-Id hängt wie bei `egui::Window::new` am Titeltext.
 pub fn window<'a>(ctx: &egui::Context, title: impl Into<String>) -> egui::Window<'a> {

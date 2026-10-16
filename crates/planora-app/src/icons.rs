@@ -326,7 +326,7 @@ pub fn source_entry(
     enabled: bool,
 ) -> egui::Response {
     if let IconSource::Font(icon) = source {
-        return ui.add_enabled(enabled, button(icon, label));
+        return theme::entry(ui, enabled, button(icon, label));
     }
     let id = egui::Id::new(("planora-icon", label));
     // Gesperrt zeichnet der Maler blass, auch das Symbol.

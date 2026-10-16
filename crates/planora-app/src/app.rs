@@ -243,9 +243,7 @@ fn open_import(ws: &mut Workspace) {
 /// Menüeintrag (gesperrt, wenn nicht `enabled`) mit sichtbarem Tastaturfokus: die Einträge haben
 /// keinen Rand, der Fokus zeigt sich als 2-px-Ring in Akzentfarbe.
 fn entry(ui: &mut egui::Ui, enabled: bool, widget: impl egui::Widget) -> egui::Response {
-    let response = ui.add_enabled(enabled, widget);
-    theme::focus_ring(ui, &response);
-    response
+    theme::entry(ui, enabled, widget)
 }
 
 /// Menüeintrag: Symbol, Beschriftung und rechtsbündig das Tastenkürzel (`kbd`-Schrift, schwach),

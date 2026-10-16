@@ -651,6 +651,37 @@ fn focused_borderless_buttons_show_the_focus_ring() {
         assert!(rings.is_empty(), "ohne Fokus kein Ring: {rings:?}");
         let (_, rings) = after_tabs(&c, 1, &mut menu);
         one_ring(&rings, dark, s.text("Neu").rect, "Menüeintrag");
+
+        // Menü „Zeichnung“: „Neue Zeichnung …“, dann „Zum 3D-Modell“.
+        let c = context(Some(dark));
+        let mut st = AppState::new();
+        let mut dialog = None;
+        let mut menu = |ui: &mut egui::Ui| {
+            theme::menu_style(ui.style_mut());
+            planora_app::drawing_dialog::drawing_menu(ui, &mut st, &mut dialog, false);
+        };
+        let (s, rings) = after_tabs(&c, 0, &mut menu);
+        assert!(rings.is_empty(), "ohne Fokus kein Ring: {rings:?}");
+        let (_, rings) = after_tabs(&c, 1, &mut menu);
+        one_ring(
+            &rings,
+            dark,
+            s.text("Neue Zeichnung …").rect,
+            "Neue Zeichnung",
+        );
+        let (_, rings) = after_tabs(&c, 1, &mut menu);
+        one_ring(&rings, dark, s.text("Zum 3D-Modell").rect, "Zum 3D-Modell");
+
+        // Menüeintrag mit Schriftsymbol über `icons::source_entry` (Menü „Erzeugen“).
+        let c = context(Some(dark));
+        let mut menu = |ui: &mut egui::Ui| {
+            theme::menu_style(ui.style_mut());
+            icons::source_entry(ui, icons::IconSource::Font(Icon::Box), "Quader", true);
+        };
+        let (s, rings) = after_tabs(&c, 0, &mut menu);
+        assert!(rings.is_empty(), "ohne Fokus kein Ring: {rings:?}");
+        let (_, rings) = after_tabs(&c, 1, &mut menu);
+        one_ring(&rings, dark, s.text("Quader").rect, "Schriftsymbol-Eintrag");
     }
 }
 

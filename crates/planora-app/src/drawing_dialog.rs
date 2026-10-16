@@ -260,13 +260,14 @@ pub fn drawing_menu(
 ) {
     let blocked = drawing_menu_blocked(state);
     let free = blocked.is_none();
-    if ui
-        .add_enabled(
-            free && !read_only,
-            icons::button(Icon::NewDrawing, "Neue Zeichnung …"),
-        )
-        .on_disabled_hover_text(blocked.unwrap_or(READ_ONLY))
-        .clicked()
+    // Randlose Menüeinträge: der Tastaturfokus zeigt sich über `theme::entry` als Ring.
+    if theme::entry(
+        ui,
+        free && !read_only,
+        icons::button(Icon::NewDrawing, "Neue Zeichnung …"),
+    )
+    .on_disabled_hover_text(blocked.unwrap_or(READ_ONLY))
+    .clicked()
     {
         *dialog = Some(NewDrawingDialog::new(state));
         ui.close();
@@ -279,13 +280,13 @@ pub fn drawing_menu(
         .map(|d| (d.id, shorten_for_display(&d.name)))
         .collect();
     for (id, name) in list {
-        if ui
-            .add_enabled(
-                free,
-                icons::button(Icon::OpenDrawing, format!("Öffnen: {name}")),
-            )
-            .on_disabled_hover_text(SKETCH_BLOCKED)
-            .clicked()
+        if theme::entry(
+            ui,
+            free,
+            icons::button(Icon::OpenDrawing, format!("Öffnen: {name}")),
+        )
+        .on_disabled_hover_text(SKETCH_BLOCKED)
+        .clicked()
         {
             // Die zuletzt offene Zeichnung behält Auswahl, Zoom und Verschiebung.
             state.drawing_ui.show_drawing(id);
@@ -293,8 +294,7 @@ pub fn drawing_menu(
             ui.close();
         }
     }
-    if ui
-        .add_enabled(free, icons::button(Icon::ToModel, "Zum 3D-Modell"))
+    if theme::entry(ui, free, icons::button(Icon::ToModel, "Zum 3D-Modell"))
         .on_disabled_hover_text(SKETCH_BLOCKED)
         .clicked()
     {
