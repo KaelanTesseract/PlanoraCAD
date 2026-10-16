@@ -348,7 +348,7 @@ fn chips_open_the_boolean_dialog_with_the_operation() {
 }
 
 #[test]
-fn bottom_field_is_disabled_in_read_only_tabs_and_while_sketching() {
+fn bottom_field_is_disabled_in_read_only_tabs_and_during_a_prompt() {
     let blocked = |mut app: PlanoraApp, what: &str| {
         let c = context(true);
         for label in ALL_LABELS {
@@ -362,16 +362,6 @@ fn bottom_field_is_disabled_in_read_only_tabs_and_while_sketching() {
     };
     // Schreibgeschützter Tab (alte Version).
     blocked(PlanoraApp::for_tests(read_only_ws()), "schreibgeschützt");
-    // Skizzenmodus.
-    let mut app = app_with(2, false);
-    {
-        let state = &mut app.ws_mut().active_tab_mut().state;
-        let id = state
-            .add_sketch(SketchPlane::Standard(StandardPlane::XY))
-            .unwrap();
-        state.open_sketch(id).unwrap();
-    }
-    blocked(app, "Skizzenmodus");
     // Offene Rückfrage.
     let mut app = app_with(2, true);
     let tab = app.ws_mut().active_tab().id;
@@ -468,18 +458,8 @@ fn a_blocked_button_explains_why_on_hover() {
     assert!(
         texts
             .iter()
-            .any(|t| t.text == "In einer alten Version lässt sich nichts hinzufügen.")
+            .any(|t| t.text == "In einer alten Version lässt sich nichts ändern.")
     );
-    let c = context(true);
-    let mut app = app_with(2, false);
-    let state = &mut app.ws_mut().active_tab_mut().state;
-    let id = state
-        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
-        .unwrap();
-    state.open_sketch(id).unwrap();
-    let p = pos_of(&c, &mut app, SIZE, "Quader …");
-    let texts = hover_texts(&c, &mut app, p);
-    assert!(texts.iter().any(|t| t.text == "Zuerst die Skizze beenden."));
 }
 
 // ---- Lage, Status und Zeigerrouting mit dem echten Befehlsfeld --------------------------------
@@ -535,78 +515,125 @@ fn fields_of(shot: &Shot, dark: bool, size: Vec2) -> Fields {
     }
 }
 
-/// Der Text im Statusfeld bei `size`: ungekürzt, höchstens zwei Zeilen; das Befehlsfeld (falls
-/// gezeigt) steht daneben, ohne Status, freie Fläche oder andere Felder zu überdecken. Dazu, ob
-/// das Befehlsfeld gezeigt wird.
-fn status_at(app: &mut PlanoraApp, size: Vec2) -> (Seen, bool) {
+/// Was das Statusfeld bei `size` zeigt, samt Lage des Befehlsfelds und der Knopflagen.
+struct StatusView {
+    seen: Seen,
+    status: Rect,
+    bottom: Rect,
+}
+
+/// Status und Befehlsfeld bei `size`: das Befehlsfeld steht immer da, nichts überdeckt die freie
+/// Fläche oder ein anderes Feld.
+fn status_at(app: &mut PlanoraApp, size: Vec2) -> StatusView {
     let c = context(true);
     let (shot, free) = settle(&c, app, size);
     let f = fields_of(&shot, true, size);
+    let bottom = f.bottom.expect("Befehlsfeld fehlt");
     let t = shot.texts_in(f.status);
     assert_eq!(t.len(), 1, "{t:?}");
     let seen = t[0].clone();
-    assert!(!seen.elided, "{size:?}: gekürzt: {}", seen.text);
-    assert!(seen.rows <= 2, "{size:?}: {} Zeilen", seen.rows);
+    assert!(seen.rows <= 3, "{size:?}: {} Zeilen", seen.rows);
     assert!(f.status.contains_rect(seen.rect));
-    for other in [f.left, f.right, f.top, free] {
+    for other in [f.left, f.right, f.top, free, bottom] {
         assert!(!overlaps(f.status, other), "{:?} / {other:?}", f.status);
     }
-    if let Some(bottom) = f.bottom {
-        for other in [f.status, f.left, f.right, f.top, free] {
-            assert!(!overlaps(bottom, other), "{bottom:?} / {other:?}");
-        }
-        assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(bottom));
-    } else {
-        assert!(shell_panels::bottom_buttons(&c).is_empty());
+    for other in [f.left, f.right, f.top, free] {
+        assert!(!overlaps(bottom, other), "{bottom:?} / {other:?}");
     }
-    (seen, f.bottom.is_some())
+    assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(bottom));
+    StatusView {
+        seen,
+        status: f.status,
+        bottom,
+    }
 }
 
-/// Text, Farbe und ob das Befehlsfeld steht, bei 1400 × 900 und 1100 × 700.
-fn status(app: &mut PlanoraApp) -> (String, Color32, bool, bool) {
-    let (a, big) = status_at(app, vec2(1400.0, 900.0));
-    let (b, small) = status_at(app, vec2(1100.0, 700.0));
-    assert_eq!((&a.text, a.color), (&b.text, b.color));
-    (a.text, a.color, big, small)
-}
+/// Mindestbreite des Befehlsfelds: die drei Chips mit Trennstrich und Rand.
+const MIN_BOTTOM: f32 = 250.0;
 
 #[test]
 fn status_stays_readable_with_the_real_bottom_field() {
     let p = theme::palette(true);
+    let big = vec2(1400.0, 900.0);
+    let small = vec2(1100.0, 700.0);
     let mut app = app_with(1, false);
-    // Normaler Status: das Befehlsfeld steht in beiden Größen.
-    assert_eq!(
-        status(&mut app),
-        ("1 Körper".into(), p.text_secondary, true, true)
-    );
+    for size in [big, small] {
+        let v = status_at(&mut app, size);
+        assert_eq!(
+            (v.seen.text.as_str(), v.seen.color),
+            ("1 Körper", p.text_secondary)
+        );
+        assert!(!v.seen.elided && v.seen.rows == 1);
+        assert!(v.bottom.width() >= MIN_BOTTOM, "{size:?}: {:?}", v.bottom);
+    }
 
-    // Skizzenhinweis mit allen Tasten.
+    // Skizzenhinweis mit allen Tasten: bei 1400 und 1100 ganz zu lesen.
     let state = &mut app.ws_mut().active_tab_mut().state;
     let id = state
         .add_sketch(SketchPlane::Standard(StandardPlane::XY))
         .unwrap();
     state.open_sketch(id).unwrap();
-    let (text, color, big, small) = status(&mut app);
-    assert!(big && small, "Befehlsfeld bleibt neben dem Skizzenhinweis");
-    assert_eq!(
-        text,
-        "Skizzen-Modus: Skizze 1 – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere \
-         Maustaste oder Umschalt + Ziehen verschiebt"
-    );
-    assert_eq!(color, p.text_secondary);
+    let hint = "Skizzen-Modus: Skizze 1 – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt";
+    for size in [big, small] {
+        let v = status_at(&mut app, size);
+        assert_eq!(v.seen.text, hint, "{size:?}");
+        assert!(!v.seen.elided, "{size:?}: Hinweis gekürzt");
+        assert!(v.bottom.width() >= MIN_BOTTOM, "{size:?}: {:?}", v.bottom);
+    }
 
     // Lange Fehlermeldung (mehr als 150 Zeichen).
-    let long = "Erzeugen fehlgeschlagen: Die Fläche liegt nicht in einer Ebene, deshalb lässt \
-                sich darauf keine Skizze anlegen. Bitte zuerst eine ebene Fläche des Körpers \
-                wählen.";
+    let long = "Erzeugen fehlgeschlagen: Die Fläche liegt nicht in einer Ebene, deshalb lässt sich darauf keine Skizze anlegen. Bitte zuerst eine ebene Fläche des Körpers wählen.";
     app.ws_mut().active_tab_mut().state.message = Some(long.into());
-    // Eine lange Meldung geht vor: bei 1100 px bleibt für das Befehlsfeld kein Platz (es weicht),
-    // bei 1400 px steht es schmaler daneben.
-    assert_eq!(status(&mut app), (long.into(), p.error, true, false));
-    // Ohne die Meldung ist das Feld wieder da.
-    app.ws_mut().active_tab_mut().state.message = None;
-    let (_, _, big, small) = status(&mut app);
-    assert!(big && small);
+    let v = status_at(&mut app, big);
+    assert_eq!((v.seen.text.as_str(), v.seen.color), (long, p.error));
+    assert!(!v.seen.elided, "1400: Meldung ganz sichtbar");
+    assert!(v.bottom.width() >= MIN_BOTTOM);
+    // Bei 1100 px bleibt neben dem Befehlsfeld weniger Platz: die Meldung bricht in drei
+    // Zeilen um und ist trotzdem ganz zu lesen (das Feld steht auch dann mit Mindestbreite da).
+    let v = status_at(&mut app, small);
+    assert_eq!(v.seen.text, long);
+    assert!(!v.seen.elided, "1100: Meldung ganz sichtbar");
+    assert_eq!(v.seen.rows, 3);
+    assert!(v.bottom.width() >= MIN_BOTTOM, "{:?}", v.bottom);
+    // Eine noch längere Meldung endet mit „…“ und zeigt sich beim Überfahren ganz.
+    let huge = "Sehr lange Meldung. ".repeat(40);
+    app.ws_mut().active_tab_mut().state.message = Some(huge.clone());
+    let v = status_at(&mut app, small);
+    assert!(v.seen.elided && v.seen.rows == 3);
+    assert!(v.bottom.width() >= MIN_BOTTOM);
+    let c = context(true);
+    settle(&c, &mut app, small);
+    let hover = v.status.center();
+    let shot = (0..4)
+        .map(|_| run(&c, &mut app, small, vec![moved(hover)], false).0)
+        .last()
+        .unwrap();
+    assert!(
+        shot.texts.iter().any(|t| t.text == huge && !t.elided),
+        "voller Text beim Überfahren"
+    );
+}
+
+/// Bei 800 × 600 steht das Befehlsfeld mit der ganzen verfügbaren Breite zwischen den Spalten
+/// (die Lage der oberen Leiste ist dort die bekannte Grenze von Aufgabe 2).
+#[test]
+fn the_bottom_field_is_present_at_800x600() {
+    let size = vec2(800.0, 600.0);
+    let c = context(true);
+    let mut app = app_with(2, false);
+    let (shot, free) = settle(&c, &mut app, size);
+    let bottom = shot
+        .fields(true)
+        .into_iter()
+        .find(|r| {
+            (r.bottom() - (size.y - SHELL_INSET)).abs() < 0.5 && r.height() == shell::BOTTOM_H
+        })
+        .expect("Befehlsfeld bei 800 x 600");
+    assert!(
+        bottom.width() >= MIN_BOTTOM.min(size.x - 2.0 * (theme::PANEL_WIDTH + 28.0)),
+        "{bottom:?}"
+    );
+    assert!(!overlaps(bottom, free), "{bottom:?} / {free:?}");
 }
 
 #[test]
@@ -677,4 +704,205 @@ fn clicks_on_a_real_bottom_button_do_not_reach_the_viewport() {
     click(&c, &mut app, size, edge, true);
     assert_eq!(app.ws_mut().active_tab_mut().state.selection, None);
     assert_eq!(cam(&mut app), before);
+}
+
+// ---- Fix-Runde 1 ------------------------------------------------------------------------------
+
+fn sketching_app() -> PlanoraApp {
+    let mut app = app_with(2, false);
+    let state = &mut app.ws_mut().active_tab_mut().state;
+    let id = state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    state.open_sketch(id).unwrap();
+    app
+}
+
+/// Im Skizzenmodus wirkt ein Klick im Feld wie der Menüeintrag: gleicher Dialog, Skizze beendet.
+#[test]
+fn in_sketch_mode_the_field_acts_like_the_menu() {
+    let cases = [
+        ("Quader …", "Erzeugen", "Quader …"),
+        ("Skizze extrudieren …", "Erzeugen", "Skizze extrudieren …"),
+        ("Vereinigen", "Bearbeiten", "Vereinigen …"),
+        ("Fase …", "Bearbeiten", "Fase …"),
+    ];
+    for (field_label, menu, entry) in cases {
+        let c = context(true);
+        let mut via_field = sketching_app();
+        press(&c, &mut via_field, SIZE, field_label);
+        let c = context(true);
+        let mut via_menu = sketching_app();
+        menu_entry(&c, &mut via_menu, SIZE, menu, entry);
+        let (a, b) = (dialogs(&mut via_field), dialogs(&mut via_menu));
+        assert_eq!(a, b, "{field_label}");
+        assert_ne!(a, NONE, "{field_label}: Dialog geöffnet");
+        let open =
+            |app: &mut PlanoraApp| app.ws_mut().active_tab_mut().state.sketch_session.is_some();
+        assert_eq!(
+            open(&mut via_field),
+            open(&mut via_menu),
+            "{field_label}: Skizze"
+        );
+        assert!(!open(&mut via_field), "{field_label}: Skizze beendet");
+    }
+}
+
+/// Fläche des Chips `label` im letzten Bild.
+fn chip_fill_at(shot: &Shot, rect: Rect) -> Color32 {
+    let near = |a: Rect, b: Rect| {
+        (a.min - b.min).abs().max_elem() < 0.6 && (a.max - b.max).abs().max_elem() < 0.6
+    };
+    shot.fills
+        .iter()
+        .find(|f| near(f.rect, rect))
+        .unwrap_or_else(|| panic!("keine Fläche in {rect:?}"))
+        .fill
+}
+
+#[test]
+fn chips_show_hover_and_pressed_feedback_from_the_palette() {
+    for dark in [true, false] {
+        let c = context(dark);
+        let mut app = app_with(2, false);
+        app.ws_mut().active_tab_mut().state.dark = dark;
+        let p = theme::palette(dark);
+        let (rest, _) = settle(&c, &mut app, SIZE);
+        let rect = shell_panels::bottom_buttons(&c)
+            .into_iter()
+            .find(|(l, _)| l == "Abziehen")
+            .unwrap()
+            .1;
+        let (fill, ink) = p.chip_split;
+        assert_eq!(chip_fill_at(&rest, rect), fill, "Ruhe");
+        let at = rect.center();
+        let (hover, _) = run(&c, &mut app, SIZE, vec![moved(at)], false);
+        let hovered = chip_fill_at(&hover, rect);
+        assert_eq!(hovered, theme::chip_fill(fill, ink, true, false));
+        assert_ne!(hovered, fill, "Überfahren ändert die Fläche");
+        let (down, _) = run(&c, &mut app, SIZE, vec![moved(at), button(at, true)], false);
+        let pressed = chip_fill_at(&down, rect);
+        assert_eq!(pressed, theme::chip_fill(fill, ink, true, true));
+        assert!(
+            pressed != hovered && pressed != fill,
+            "Drücken ist ein dritter Zustand"
+        );
+    }
+}
+
+/// Bei 1100 × 700 sind alle Knöpfe sichtbar; bei 800 × 600 lassen sich die hinteren per Mausrad
+/// in die Sicht rollen.
+#[test]
+fn every_button_is_reachable_at_narrow_widths() {
+    let size = vec2(1100.0, 700.0);
+    let c = context(true);
+    let mut app = app_with(2, true);
+    let (shot, _) = settle(&c, &mut app, size);
+    let bottom = fields_of(&shot, true, size).bottom.expect("Befehlsfeld");
+    for (label, r) in shell_panels::bottom_buttons(&c) {
+        assert!(
+            bottom.contains_rect(r),
+            "1100: {label}: {r:?} in {bottom:?}"
+        );
+    }
+
+    let size = vec2(800.0, 600.0);
+    let c = context(true);
+    let mut app = app_with(2, true);
+    let (shot, _) = settle(&c, &mut app, size);
+    let bottom = shot
+        .fields(true)
+        .into_iter()
+        .find(|r| r.height() == shell::BOTTOM_H && r.bottom() > size.y - 20.0 && r.left() > 100.0)
+        .expect("Befehlsfeld");
+    let last = |c: &egui::Context| {
+        shell_panels::bottom_buttons(c)
+            .into_iter()
+            .find(|(l, _)| l == "Fase …")
+            .unwrap()
+            .1
+    };
+    assert!(
+        !bottom.contains_rect(last(&c)),
+        "800: Fase zunächst verdeckt"
+    );
+    let at = bottom.center();
+    run(&c, &mut app, size, vec![moved(at)], false);
+    for _ in 0..30 {
+        run(
+            &c,
+            &mut app,
+            size,
+            vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(-40.0, 0.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            }],
+            false,
+        );
+    }
+    for _ in 0..10 {
+        run(&c, &mut app, size, vec![], false);
+    }
+    assert!(
+        bottom.contains_rect(last(&c)),
+        "800: Fase nach dem Rollen {:?}",
+        last(&c)
+    );
+}
+
+/// Gegenprobe zum Routing: dieselbe Klick- und Ziehgeste in der freien Mitte wählt und dreht, auf
+/// dem Befehlsfeld nicht (der vom ersten Klick geöffnete Dialog wird vor dem Ziehen geschlossen).
+#[test]
+fn drag_from_a_button_does_not_rotate_but_the_same_drag_in_free_does() {
+    let size = vec2(1400.0, 900.0);
+    let c = context(true);
+    let mut app = app_with(1, false);
+    run(&c, &mut app, size, vec![], true);
+    {
+        let state = &mut app.ws_mut().active_tab_mut().state;
+        state.frame_all();
+        state.camera.distance *= 0.25;
+    }
+    for _ in 0..3 {
+        run(&c, &mut app, size, vec![], true);
+    }
+    let cam = |app: &mut PlanoraApp| {
+        let s = &app.ws_mut().active_tab_mut().state;
+        (s.camera.yaw, s.camera.pitch)
+    };
+    let drag = |c: &egui::Context, app: &mut PlanoraApp, from: Pos2| {
+        let to = from + vec2(80.0, 30.0);
+        let mut events = vec![vec![moved(from)], vec![moved(from), button(from, true)]];
+        for i in 1..=6 {
+            events.push(vec![moved(from + (to - from) * (i as f32 / 6.0))]);
+        }
+        events.push(vec![button(to, false)]);
+        for e in events {
+            run(c, app, size, e, true);
+        }
+    };
+    let before = cam(&mut app);
+    // Klick auf einen Knopf öffnet den Dialog; er wird geschlossen, bevor gezogen wird.
+    let p = pos_of(&c, &mut app, size, "Kegel …");
+    click(&c, &mut app, size, p, true);
+    assert!(app.ws_mut().active_tab_mut().dialog.is_some());
+    app.ws_mut().active_tab_mut().dialog = None;
+    for _ in 0..3 {
+        run(&c, &mut app, size, vec![], true);
+    }
+    let from = pos_of(&c, &mut app, size, "Kegel …");
+    drag(&c, &mut app, from);
+    assert_eq!(cam(&mut app), before, "Ziehen vom Knopf dreht nicht");
+    // Positive Kontrolle: in der freien Mitte wählt der Klick und das Ziehen dreht.
+    let (_, free) = run(&c, &mut app, size, vec![], true);
+    let mid = free.center();
+    click(&c, &mut app, size, mid, true);
+    assert!(
+        app.ws_mut().active_tab_mut().state.selection.is_some(),
+        "Klick in free wählt"
+    );
+    drag(&c, &mut app, mid);
+    assert_ne!(cam(&mut app), before, "Ziehen in free dreht");
 }

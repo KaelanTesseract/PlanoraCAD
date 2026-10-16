@@ -524,7 +524,7 @@ fn status_at(app: &mut PlanoraApp, size: Vec2) -> Seen {
     assert_eq!(t.len(), 1, "{t:?}");
     let seen = t[0].clone();
     assert!(!seen.elided, "{size:?}: gekürzt: {}", seen.text);
-    assert!(seen.rows <= 2, "{size:?}: {} Zeilen", seen.rows);
+    assert!(seen.rows <= 3, "{size:?}: {} Zeilen", seen.rows);
     assert!(
         f.status.contains_rect(seen.rect),
         "{seen:?} in {:?}",
@@ -597,7 +597,7 @@ fn status_field_shows_message_with_error_colour_and_counts_bodies() {
     assert!(long.chars().count() >= 150, "{}", long.chars().count());
     app.ws_mut().active_tab_mut().state.message = Some(long.into());
     assert_eq!(status(&mut app), (long.into(), p.error));
-    assert_eq!(status_at(&mut app, vec2(1100.0, 700.0)).rows, 2);
+    assert_eq!(status_at(&mut app, vec2(1100.0, 700.0)).rows, 3);
 }
 
 #[test]
@@ -611,7 +611,7 @@ fn status_beyond_two_lines_is_shortened_and_stays_clear_of_the_free_rect() {
     let f = fields_of(&shot, true, size);
     let seen = shot.texts_in(f.status)[0].clone();
     assert!(seen.elided, "gekürzt");
-    assert_eq!(seen.rows, 2);
+    assert_eq!(seen.rows, 3);
     assert!(!overlaps(f.status, free));
     assert!(!overlaps(f.status, f.left));
 }

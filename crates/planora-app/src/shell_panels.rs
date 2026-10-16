@@ -10,8 +10,8 @@
 //! und sofort wiederholt (wie bei `prompts::window`), damit kein Feld ein Bild lang falsch steht.
 //!
 //! Das Befehlsfeld unten lässt dem Status die Breite, die dessen Text in zwei Zeilen braucht:
-//! Es wird bei langen Meldungen schmaler (der Inhalt rollt) und entfällt, solange weniger als
-//! [`BOTTOM_MIN_W`] bleiben.
+//! Es wird bei langen Meldungen schmaler (der Inhalt rollt), aber nie unter die drei Chips mit
+//! Trennstrich. Reicht der Rest dem Status nicht, bricht er in bis zu drei Zeilen um.
 
 use egui::{Vec2, vec2};
 
@@ -63,6 +63,11 @@ fn bottom_width_key() -> egui::Id {
     bottom_id().with("wanted")
 }
 
+/// Gemerkte Mindestbreite des Befehlsfelds (drei Chips, Trennstrich, Rand).
+fn bottom_min_key() -> egui::Id {
+    bottom_id().with("min")
+}
+
 fn stored(ctx: &egui::Context, key: egui::Id) -> Option<f32> {
     ctx.data(|d| d.get_temp::<f32>(key))
 }
@@ -95,12 +100,16 @@ fn revealed_key() -> egui::Id {
 /// Höchstzahl der Zeilen in Status und Hinweis; erst darüber endet der Text mit „…“.
 const MAX_ROWS: usize = 2;
 
+/// Höchstzahl der Zeilen im Status: bei schmalem Platz (Befehlsfeld daneben) bis zu drei.
+const STATUS_ROWS: usize = 3;
+
 /// Bricht `text` (Textstil `Body`) bei `max_width` um, höchstens [`MAX_ROWS`] Zeilen.
 fn wrapped(
     ctx: &egui::Context,
     text: &str,
     color: egui::Color32,
     max_width: f32,
+    rows: usize,
 ) -> std::sync::Arc<egui::Galley> {
     let font = egui::TextStyle::Body.resolve(&ctx.global_style());
     let mut job = egui::text::LayoutJob::single_section(
@@ -109,7 +118,7 @@ fn wrapped(
     );
     job.wrap = egui::text::TextWrapping {
         max_width,
-        max_rows: MAX_ROWS,
+        max_rows: rows,
         break_anywhere: false,
         overflow_character: Some('…'),
     };
@@ -118,10 +127,16 @@ fn wrapped(
 
 /// Breite von `text` in einer Zeile (Textstil `Body`).
 fn natural_width(ctx: &egui::Context, text: &str) -> f32 {
-    wrapped(ctx, text, egui::Color32::PLACEHOLDER, f32::INFINITY)
-        .size()
-        .x
-        .ceil()
+    wrapped(
+        ctx,
+        text,
+        egui::Color32::PLACEHOLDER,
+        f32::INFINITY,
+        MAX_ROWS,
+    )
+    .size()
+    .x
+    .ceil()
 }
 
 /// Schmalste Breite, in der `text` ohne Kürzung in höchstens [`MAX_ROWS`] Zeilen passt.
@@ -130,7 +145,7 @@ fn two_row_width(ctx: &egui::Context, text: &str) -> f32 {
     let (mut lo, mut hi) = (0.0_f32, full);
     for _ in 0..12 {
         let mid = (lo + hi) / 2.0;
-        if wrapped(ctx, text, egui::Color32::PLACEHOLDER, mid).elided {
+        if wrapped(ctx, text, egui::Color32::PLACEHOLDER, mid, MAX_ROWS).elided {
             lo = mid;
         } else {
             hi = mid;
@@ -139,25 +154,22 @@ fn two_row_width(ctx: &egui::Context, text: &str) -> f32 {
     hi.ceil()
 }
 
-/// Schmalste Breite, in der das Befehlsfeld noch gezeigt wird (zwei Chips und der Rand).
-const BOTTOM_MIN_W: f32 = 120.0;
-
 /// Feld mit Text in bis zu zwei Zeilen: mindestens `min_h` hoch, sonst so hoch wie der Text.
-/// `grow_up`: die Unterkante von `rect` bleibt fest (Status), sonst die Oberkante (Hinweis).
+/// `(grow_up, rows)`: höchstens `rows` Zeilen; `grow_up`: die Unterkante von `rect` bleibt fest (Status), sonst die Oberkante (Hinweis).
 /// Wird der Text gekürzt, zeigt er sich beim Überfahren ganz.
 fn text_field(
     ctx: &egui::Context,
     id: egui::Id,
     rect: egui::Rect,
     min_h: f32,
-    grow_up: bool,
+    (grow_up, rows): (bool, usize),
     dark: bool,
     (text, color): (String, egui::Color32),
 ) {
     let frame = bar_frame(dark, min_h);
     let margin = frame.total_margin().sum();
     let inner_w = (rect.width() - margin.x).max(0.0);
-    let galley = wrapped(ctx, &text, color, inner_w);
+    let galley = wrapped(ctx, &text, color, inner_w, rows);
     let h = min_h.max(galley.size().y + margin.y);
     let y = if grow_up {
         rect.bottom() - h
@@ -232,10 +244,12 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
         // (Meldungen und Hinweise bleiben ganz lesbar); reicht der Platz nicht, rollt das Feld.
         let status_need = two_row_width(ctx, &status.0) + margin;
         let bottom_cap = content.width() - 2.0 * (shell::SHELL_INSET + shell::GAP + status_need);
-        // Reicht der Platz auch dafür nicht, entfällt das Feld, solange die Meldung steht.
+        // Das Feld bleibt immer da: mindestens die drei Chips mit Trennstrich; der Status nimmt
+        // den Rest links davon (bis zu drei Zeilen, sonst gekürzt mit vollem Text beim Überfahren).
         let bottom_w = match stored(ctx, bottom_width_key()) {
-            Some(_) if bottom_cap < BOTTOM_MIN_W => 0.0,
-            Some(wanted) => wanted.min(bottom_cap),
+            Some(wanted) => wanted
+                .min(bottom_cap)
+                .max(stored(ctx, bottom_min_key()).unwrap_or(0.0)),
             None => 0.0,
         };
         let rects = shell::layout(
@@ -261,7 +275,7 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
         status_id(),
         rects.status,
         shell::STATUS_H,
-        true,
+        (true, STATUS_ROWS),
         dark,
         status,
     );
@@ -420,15 +434,13 @@ enum Command {
     Blend(bool),
 }
 
-/// Warum das Befehlsfeld gerade ganz gesperrt ist (wie das Menü, dazu der Skizzen-Modus).
+/// Warum das Befehlsfeld gerade ganz gesperrt ist (wie das Menü).
 fn bottom_lock(ws: &crate::workspace::Workspace) -> Option<&'static str> {
     let tab = ws.active_tab();
     if ws.prompt.is_some() {
         Some("Zuerst die offene Rückfrage beantworten.")
     } else if tab.read_only {
-        Some("In einer alten Version lässt sich nichts hinzufügen.")
-    } else if tab.state.sketch_session.is_some() {
-        Some("Zuerst die Skizze beenden.")
+        Some("In einer alten Version lässt sich nichts ändern.")
     } else {
         None
     }
@@ -446,18 +458,38 @@ pub fn bottom_buttons(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
         .unwrap_or_default()
 }
 
-/// Chip in den Farben `(Fläche, Schrift)` aus der Palette.
+/// Chip in den Farben `(Fläche, Schrift)` aus der Palette; beim Überfahren und Drücken wird die
+/// Fläche zur Schriftfarbe hin heller bzw. kräftiger ([`theme::chip_fill`]).
 fn chip(
     ui: &mut egui::Ui,
     label: &str,
     (fill, ink): (egui::Color32, egui::Color32),
 ) -> egui::Response {
-    let button = egui::Button::new(egui::RichText::new(label).color(ink))
-        .fill(fill)
-        .stroke(egui::Stroke::NONE)
-        .corner_radius(egui::CornerRadius::same(theme::RADIUS_MD))
-        .min_size(vec2(0.0, theme::ROW_H));
-    let response = ui.add(button);
+    let enabled = ui.is_enabled();
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        egui::TextStyle::Button.resolve(ui.style()),
+        ink,
+    );
+    let size = vec2(galley.size().x + 2.0 * theme::SPACE_2, theme::ROW_H);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    if ui.is_rect_visible(rect) {
+        let fade = |c: egui::Color32| if enabled { c } else { c.gamma_multiply(0.45) };
+        let shown = theme::chip_fill(
+            fill,
+            ink,
+            enabled && response.hovered(),
+            enabled && response.is_pointer_button_down_on(),
+        );
+        ui.painter().rect_filled(
+            rect,
+            egui::CornerRadius::same(theme::RADIUS_MD),
+            fade(shown),
+        );
+        let pos = rect.center() - galley.size() / 2.0;
+        ui.painter().galley(pos, galley, fade(ink));
+    }
     theme::focus_ring(ui, &response);
     response
 }
@@ -472,14 +504,9 @@ fn explain(response: egui::Response, label: &str, reason: &'static str) -> egui:
 
 /// Unteres Befehlsfeld: Abkürzungen zu Menüaktionen (Boolesche Operationen als Chips, dann die
 /// Erzeugen- und Bearbeiten-Aktionen als Symbolknöpfe). Jeder Knopf ruft dieselbe Funktion wie
-/// der Menüeintrag und ist wie das Menü gesperrt (alte Version, offene Rückfrage), dazu im
-/// Skizzen-Modus. Zu schmal für alle Knöpfe, rollt der Inhalt waagerecht.
+/// der Menüeintrag und ist wie das Menü gesperrt (alte Version, offene Rückfrage); im Skizzen-Modus
+/// beendet er die Skizze wie das Menü. Zu schmal für alle Knöpfe, rollt der Inhalt waagerecht.
 fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
-    // Breite 0 bei bekannter Wunschbreite: das Feld weicht einer langen Meldung im Status.
-    if rects.bottom.width() < 1.0 && stored(ctx, bottom_width_key()).is_some() {
-        ctx.data_mut(|d| d.insert_temp(buttons_key(), Vec::<(String, egui::Rect)>::new()));
-        return;
-    }
     let dark = app.ws.active_tab().state.dark;
     let p = theme::palette(dark);
     let frame = bar_frame(dark, shell::BOTTOM_H);
@@ -490,6 +517,7 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let blend_blocked = app.ws.active_tab().state.blend_blocked();
     let mut command = None;
     let mut seen: Vec<(String, egui::Rect)> = Vec::new();
+    let mut chips_end = 0.0;
     field(ctx, bottom_id(), rects.bottom.min, frame, |ui| {
         ui.set_width(inner.x);
         ui.set_height(inner.y);
@@ -500,6 +528,10 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
             .show(ui, |ui| {
                 ui.set_max_width(TABS_UNWRAPPED);
                 ui.set_height(inner.y);
+                // Eng gesetzt, damit alle Knöpfe schon bei 1100 px Fensterbreite sichtbar sind.
+                ui.spacing_mut().item_spacing.x = theme::SPACE_1;
+                ui.spacing_mut().button_padding.x = theme::SPACE_1;
+                let start = ui.cursor().left();
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     for (label, op, colors) in [
                         ("Vereinigen", BoolOp::Union, p.chip_bridge),
@@ -520,6 +552,7 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                         seen.push((label.to_owned(), r.rect));
                     }
                     ui.separator();
+                    chips_end = ui.cursor().left() - start;
                     let blend = icons::IconSource::Feature(icons::FeatureIcon::Blend);
                     let mut items: Vec<(&str, icons::IconSource, Command, Option<&'static str>)> =
                         CreateKind::ALL
@@ -552,6 +585,7 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                     }
                 });
             });
+        remember_width(ui, bottom_min_key(), chips_end + margin);
         remember_width(ui, bottom_width_key(), scroll.content_size.x + margin);
     });
     ctx.data_mut(|d| d.insert_temp(buttons_key(), seen));
@@ -607,7 +641,7 @@ fn banner_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
         banner_id(),
         rect,
         shell::BANNER_LINE_H,
-        false,
+        (false, MAX_ROWS),
         dark,
         (text, color),
     );

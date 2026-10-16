@@ -355,6 +355,18 @@ pub fn inset_frame(dark: bool) -> egui::Frame {
         .inner_margin(Margin::symmetric(SPACE_2 as i8, SPACE_1 as i8))
 }
 
+/// Fläche eines Chips: beim Überfahren ein Stück, beim Drücken stärker zur Schriftfarbe `ink`
+/// hin gemischt (beide aus den Chip-Farben der Palette).
+pub fn chip_fill(fill: Color32, ink: Color32, hovered: bool, pressed: bool) -> Color32 {
+    if pressed {
+        fill.lerp_to_gamma(ink, 0.3)
+    } else if hovered {
+        fill.lerp_to_gamma(ink, 0.15)
+    } else {
+        fill
+    }
+}
+
 /// Tastaturfokus: zeichnet 2 px in Akzentfarbe außen um ein Element, das gerade den Fokus hat.
 /// Nach dem Element aufrufen, z. B. `theme::focus_ring(ui, &ui.text_edit_singleline(..))`.
 pub fn focus_ring(ui: &egui::Ui, response: &egui::Response) {
