@@ -1,9 +1,357 @@
 use crate::state::BodyKind;
+use crate::{fonts, theme};
 use egui::{Color32, Painter, Pos2, Rect, Stroke, pos2, vec2};
+
+// ---------------------------------------------------------------------------------------------
+// Symbole aus der Symbolschrift (Phosphor Light, MIT)
+// ---------------------------------------------------------------------------------------------
+
+/// Ein Symbol je Menüpunkt und Leistenschalter. Die Zuordnung zu Phosphor-Namen steht in
+/// `TABLE`; die Codepunkte stammen aus `assets/fonts/Phosphor-Light-style.css`, und der Test
+/// `glyphs_match_the_phosphor_stylesheet` prüft sie dagegen. Aktionen ohne passendes
+/// Phosphor-Symbol stehen unter `HandIcon` bzw. bei den gezeichneten Funktionen weiter unten.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
+pub enum Icon {
+    /// Phosphor `file-plus`.
+    New,
+    /// Phosphor `folder-open`.
+    Open,
+    /// Phosphor `floppy-disk`.
+    Save,
+    /// Phosphor `floppy-disk-back`.
+    SaveAs,
+    /// Phosphor `x`.
+    Close,
+    /// Phosphor `export`.
+    Export,
+    /// Phosphor `download-simple`.
+    Import,
+    /// Phosphor `sign-out`.
+    Quit,
+    /// Phosphor `cube`.
+    Box,
+    /// Phosphor `cylinder`.
+    Cylinder,
+    /// Phosphor `globe-simple`.
+    Sphere,
+    /// Phosphor `traffic-cone`.
+    Cone,
+    /// Phosphor `pencil-simple-line`.
+    SketchOnPlane,
+    /// Phosphor `bounding-box`.
+    SketchOnFace,
+    /// Phosphor `arrow-line-up`.
+    Extrude,
+    /// Phosphor `arrow-clockwise`.
+    Revolve,
+    /// Phosphor `union`.
+    Union,
+    /// Phosphor `subtract`.
+    Subtract,
+    /// Phosphor `intersect`.
+    Intersect,
+    /// Phosphor `arrows-out-cardinal`.
+    Move,
+    /// Phosphor `skip-forward`.
+    ToTimelineEnd,
+    /// Phosphor `cube-focus`.
+    ViewFace,
+    /// Phosphor `cube-transparent`.
+    ViewIso,
+    /// Phosphor `corners-out`.
+    FitAll,
+    /// Phosphor `moon`.
+    ThemeDark,
+    /// Phosphor `sun`.
+    ThemeLight,
+    /// Phosphor `folder-simple`.
+    PanelProjects,
+    /// Phosphor `clock-counter-clockwise`.
+    PanelVersions,
+    /// Phosphor `eye`.
+    Visible,
+    /// Phosphor `eye-slash`.
+    Hidden,
+    /// Phosphor `pencil-ruler`.
+    NewDrawing,
+    /// Phosphor `file-text`.
+    OpenDrawing,
+    /// Phosphor `arrow-u-up-left`.
+    ToModel,
+    /// Phosphor `plus-square`.
+    AddView,
+    /// Phosphor `magic-wand`.
+    SuggestDimensions,
+    /// Phosphor `ruler`.
+    DimensionTool,
+    /// Phosphor `frame-corners`.
+    FitSheet,
+    /// Phosphor `magnifying-glass-plus`.
+    ZoomIn,
+    /// Phosphor `magnifying-glass-minus`.
+    ZoomOut,
+    /// Phosphor `trash`.
+    Delete,
+    /// Phosphor `cursor`.
+    ToolSelect,
+    /// Phosphor `dot`.
+    ToolPoint,
+    /// Phosphor `line-segment`.
+    ToolLine,
+    /// Phosphor `rectangle`.
+    ToolRectangle,
+    /// Phosphor `circle`.
+    ToolCircle,
+    /// Phosphor `bezier-curve`.
+    ToolSpline,
+    /// Phosphor `copy-simple`.
+    ToolProjectEdge,
+    /// Phosphor `crosshair-simple`.
+    Coincident,
+    /// Phosphor `arrows-horizontal`.
+    Horizontal,
+    /// Phosphor `arrows-vertical`.
+    Vertical,
+    /// Phosphor `equals`.
+    Equal,
+    /// Phosphor `lock-simple`.
+    Fixed,
+    /// Phosphor `align-center-vertical-simple`.
+    Symmetric,
+    /// Phosphor `arrows-left-right`.
+    Distance,
+    /// Phosphor `angle`.
+    Angle,
+    /// Phosphor `circle-dashed`.
+    ToggleConstruction,
+    /// Phosphor `flip-horizontal`.
+    Mirror,
+    /// Phosphor `dots-nine`.
+    Pattern,
+    /// Phosphor `check-circle`.
+    EndSketch,
+    /// Phosphor `plus`.
+    NewTab,
+}
+
+/// Alle Einträge von [`Icon`].
+pub const ALL: &[Icon] = &[
+    Icon::New,
+    Icon::Open,
+    Icon::Save,
+    Icon::SaveAs,
+    Icon::Close,
+    Icon::Export,
+    Icon::Import,
+    Icon::Quit,
+    Icon::Box,
+    Icon::Cylinder,
+    Icon::Sphere,
+    Icon::Cone,
+    Icon::SketchOnPlane,
+    Icon::SketchOnFace,
+    Icon::Extrude,
+    Icon::Revolve,
+    Icon::Union,
+    Icon::Subtract,
+    Icon::Intersect,
+    Icon::Move,
+    Icon::ToTimelineEnd,
+    Icon::ViewFace,
+    Icon::ViewIso,
+    Icon::FitAll,
+    Icon::ThemeDark,
+    Icon::ThemeLight,
+    Icon::PanelProjects,
+    Icon::PanelVersions,
+    Icon::Visible,
+    Icon::Hidden,
+    Icon::NewDrawing,
+    Icon::OpenDrawing,
+    Icon::ToModel,
+    Icon::AddView,
+    Icon::SuggestDimensions,
+    Icon::DimensionTool,
+    Icon::FitSheet,
+    Icon::ZoomIn,
+    Icon::ZoomOut,
+    Icon::Delete,
+    Icon::ToolSelect,
+    Icon::ToolPoint,
+    Icon::ToolLine,
+    Icon::ToolRectangle,
+    Icon::ToolCircle,
+    Icon::ToolSpline,
+    Icon::ToolProjectEdge,
+    Icon::Coincident,
+    Icon::Horizontal,
+    Icon::Vertical,
+    Icon::Equal,
+    Icon::Fixed,
+    Icon::Symmetric,
+    Icon::Distance,
+    Icon::Angle,
+    Icon::ToggleConstruction,
+    Icon::Mirror,
+    Icon::Pattern,
+    Icon::EndSketch,
+    Icon::NewTab,
+];
+
+/// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
+const TABLE: &[(Icon, char, &str)] = &[
+    (Icon::New, '\u{e236}', "file-plus"),
+    (Icon::Open, '\u{e256}', "folder-open"),
+    (Icon::Save, '\u{e248}', "floppy-disk"),
+    (Icon::SaveAs, '\u{eaf4}', "floppy-disk-back"),
+    (Icon::Close, '\u{e4f6}', "x"),
+    (Icon::Export, '\u{eaf0}', "export"),
+    (Icon::Import, '\u{e20c}', "download-simple"),
+    (Icon::Quit, '\u{e42a}', "sign-out"),
+    (Icon::Box, '\u{e1da}', "cube"),
+    (Icon::Cylinder, '\u{e8fc}', "cylinder"),
+    (Icon::Sphere, '\u{e28e}', "globe-simple"),
+    (Icon::Cone, '\u{e9a8}', "traffic-cone"),
+    (Icon::SketchOnPlane, '\u{ebc6}', "pencil-simple-line"),
+    (Icon::SketchOnFace, '\u{e6ce}', "bounding-box"),
+    (Icon::Extrude, '\u{e066}', "arrow-line-up"),
+    (Icon::Revolve, '\u{e036}', "arrow-clockwise"),
+    (Icon::Union, '\u{edbe}', "union"),
+    (Icon::Subtract, '\u{ebd6}', "subtract"),
+    (Icon::Intersect, '\u{e2d2}', "intersect"),
+    (Icon::Move, '\u{e0a4}', "arrows-out-cardinal"),
+    (Icon::ToTimelineEnd, '\u{e5a6}', "skip-forward"),
+    (Icon::ViewFace, '\u{ed0a}', "cube-focus"),
+    (Icon::ViewIso, '\u{ec7c}', "cube-transparent"),
+    (Icon::FitAll, '\u{e1d0}', "corners-out"),
+    (Icon::ThemeDark, '\u{e330}', "moon"),
+    (Icon::ThemeLight, '\u{e472}', "sun"),
+    (Icon::PanelProjects, '\u{e25a}', "folder-simple"),
+    (Icon::PanelVersions, '\u{e1a0}', "clock-counter-clockwise"),
+    (Icon::Visible, '\u{e220}', "eye"),
+    (Icon::Hidden, '\u{e224}', "eye-slash"),
+    (Icon::NewDrawing, '\u{e906}', "pencil-ruler"),
+    (Icon::OpenDrawing, '\u{e23a}', "file-text"),
+    (Icon::ToModel, '\u{e08a}', "arrow-u-up-left"),
+    (Icon::AddView, '\u{ed4a}', "plus-square"),
+    (Icon::SuggestDimensions, '\u{e6b6}', "magic-wand"),
+    (Icon::DimensionTool, '\u{e6b8}', "ruler"),
+    (Icon::FitSheet, '\u{e626}', "frame-corners"),
+    (Icon::ZoomIn, '\u{e310}', "magnifying-glass-plus"),
+    (Icon::ZoomOut, '\u{e30e}', "magnifying-glass-minus"),
+    (Icon::Delete, '\u{e4a6}', "trash"),
+    (Icon::ToolSelect, '\u{e1dc}', "cursor"),
+    (Icon::ToolPoint, '\u{ecde}', "dot"),
+    (Icon::ToolLine, '\u{e6d2}', "line-segment"),
+    (Icon::ToolRectangle, '\u{e3f0}', "rectangle"),
+    (Icon::ToolCircle, '\u{e18a}', "circle"),
+    (Icon::ToolSpline, '\u{eb00}', "bezier-curve"),
+    (Icon::ToolProjectEdge, '\u{e1cc}', "copy-simple"),
+    (Icon::Coincident, '\u{e1d8}', "crosshair-simple"),
+    (Icon::Horizontal, '\u{eb06}', "arrows-horizontal"),
+    (Icon::Vertical, '\u{eb04}', "arrows-vertical"),
+    (Icon::Equal, '\u{e21c}', "equals"),
+    (Icon::Fixed, '\u{e308}', "lock-simple"),
+    (Icon::Symmetric, '\u{eb10}', "align-center-vertical-simple"),
+    (Icon::Distance, '\u{e0a0}', "arrows-left-right"),
+    (Icon::Angle, '\u{e7bc}', "angle"),
+    (Icon::ToggleConstruction, '\u{e602}', "circle-dashed"),
+    (Icon::Mirror, '\u{ed6a}', "flip-horizontal"),
+    (Icon::Pattern, '\u{e1fc}', "dots-nine"),
+    (Icon::EndSketch, '\u{e184}', "check-circle"),
+    (Icon::NewTab, '\u{e3d4}', "plus"),
+];
+
+fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {
+    TABLE
+        .iter()
+        .find(|(i, ..)| *i == icon)
+        .expect("jedes Symbol steht in TABLE")
+}
+
+/// Codepunkt des Symbols in der Symbolschrift (`fonts::icons()`).
+pub fn glyph(icon: Icon) -> char {
+    entry(icon).1
+}
+
+/// Name des Symbols bei Phosphor (z. B. `file-plus`).
+pub fn phosphor_name(icon: Icon) -> &'static str {
+    entry(icon).2
+}
+
+/// Das Symbol als Text in der Symbolfamilie.
+pub fn text(icon: Icon, size: f32, color: Color32) -> egui::RichText {
+    egui::RichText::new(glyph(icon).to_string())
+        .family(fonts::icons())
+        .size(size)
+        .color(color)
+}
+
+/// Größe des Symbols in Beschriftungen.
+pub const LABEL_ICON_SIZE: f32 = 16.0;
+/// Abstand zwischen Symbol und Text in Beschriftungen.
+pub const LABEL_GAP: f32 = 8.0;
+
+/// Symbol (16 px) + 8 px Abstand + Text, für Menüpunkte und Knöpfe. Das Symbol hat die Farbe
+/// `Color32::PLACEHOLDER`: egui setzt dafür die Textfarbe des Knopfs ein, im Ruhezustand also
+/// `text_secondary` des Themes (siehe `theme::apply`), beim Überfahren `text_primary`. So
+/// stimmt die Farbe in beiden Themes, ohne dass der Aufrufer sie kennen muss.
+pub fn label(icon: Icon, label: &str) -> egui::WidgetText {
+    label_colored(icon, label, Color32::PLACEHOLDER)
+}
+
+/// Wie [`label`], mit fester Symbolfarbe (z. B. `theme::palette(dark).text_secondary`).
+pub fn label_colored(icon: Icon, label: &str, color: Color32) -> egui::WidgetText {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &glyph(icon).to_string(),
+        0.0,
+        egui::TextFormat::simple(egui::FontId::new(LABEL_ICON_SIZE, fonts::icons()), color),
+    );
+    job.append(
+        label,
+        LABEL_GAP,
+        egui::TextFormat::simple(
+            egui::FontId::new(12.0, fonts::medium()),
+            Color32::PLACEHOLDER,
+        ),
+    );
+    job.into()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Gezeichnete Symbole
+// ---------------------------------------------------------------------------------------------
+
+/// Strichbreite aller gezeichneten Symbole.
+pub const STROKE_WIDTH: f32 = 1.5;
+
+/// Strichfarbe der gezeichneten Symbole: `text_secondary` in Ruhe, `text_primary` wenn aktiv.
+pub fn stroke_color(dark: bool, active: bool) -> Color32 {
+    let p = theme::palette(dark);
+    if active {
+        p.text_primary
+    } else {
+        p.text_secondary
+    }
+}
+
+/// Strich der gezeichneten Symbole in Themenfarbe.
+pub fn stroke(dark: bool, active: bool) -> Stroke {
+    Stroke::new(STROKE_WIDTH, stroke_color(dark, active))
+}
+
+/// Linie mit runden Enden (egui kennt keine Linienkappen: an beiden Enden ein kleiner Kreis).
+fn seg(painter: &Painter, points: [Pos2; 2], stroke: Stroke) {
+    painter.line_segment(points, stroke);
+    for p in points {
+        painter.circle_filled(p, stroke.width / 2.0, stroke.color);
+    }
+}
 
 /// Zeichnet ein kleines Körpersymbol in `rect`.
 pub fn paint_body_icon(painter: &Painter, rect: Rect, kind: BodyKind, color: Color32) {
-    let stroke = Stroke::new(1.5, color);
+    let stroke = Stroke::new(STROKE_WIDTH, color);
     let c = rect.center();
     let r = rect.width().min(rect.height()) * 0.38;
     match kind {
@@ -12,11 +360,24 @@ pub fn paint_body_icon(painter: &Painter, rect: Rect, kind: BodyKind, color: Col
                 Rect::from_center_size(c + vec2(-r * 0.15, r * 0.15), vec2(r * 1.4, r * 1.4));
             let off = vec2(r * 0.4, -r * 0.4);
             painter.rect_stroke(front, 1.0, stroke, egui::StrokeKind::Inside);
-            painter.line_segment([front.left_top(), front.left_top() + off], stroke);
-            painter.line_segment([front.right_top(), front.right_top() + off], stroke);
-            painter.line_segment([front.right_bottom(), front.right_bottom() + off], stroke);
-            painter.line_segment([front.left_top() + off, front.right_top() + off], stroke);
-            painter.line_segment(
+            seg(painter, [front.left_top(), front.left_top() + off], stroke);
+            seg(
+                painter,
+                [front.right_top(), front.right_top() + off],
+                stroke,
+            );
+            seg(
+                painter,
+                [front.right_bottom(), front.right_bottom() + off],
+                stroke,
+            );
+            seg(
+                painter,
+                [front.left_top() + off, front.right_top() + off],
+                stroke,
+            );
+            seg(
+                painter,
                 [front.right_top() + off, front.right_bottom() + off],
                 stroke,
             );
@@ -28,8 +389,16 @@ pub fn paint_body_icon(painter: &Painter, rect: Rect, kind: BodyKind, color: Col
             let ry = r * 0.3;
             painter.add(egui::Shape::ellipse_stroke(top, vec2(rx, ry), stroke));
             painter.add(egui::Shape::ellipse_stroke(bottom, vec2(rx, ry), stroke));
-            painter.line_segment([pos2(c.x - rx, top.y), pos2(c.x - rx, bottom.y)], stroke);
-            painter.line_segment([pos2(c.x + rx, top.y), pos2(c.x + rx, bottom.y)], stroke);
+            seg(
+                painter,
+                [pos2(c.x - rx, top.y), pos2(c.x - rx, bottom.y)],
+                stroke,
+            );
+            seg(
+                painter,
+                [pos2(c.x + rx, top.y), pos2(c.x + rx, bottom.y)],
+                stroke,
+            );
         }
         BodyKind::Sphere | BodyKind::Revolution => {
             painter.circle_stroke(c, r, stroke);
@@ -39,8 +408,8 @@ pub fn paint_body_icon(painter: &Painter, rect: Rect, kind: BodyKind, color: Col
             let apex: Pos2 = c + vec2(0.0, -r);
             let base_y = c.y + r * 0.7;
             let rx = r * 0.85;
-            painter.line_segment([apex, pos2(c.x - rx, base_y)], stroke);
-            painter.line_segment([apex, pos2(c.x + rx, base_y)], stroke);
+            seg(painter, [apex, pos2(c.x - rx, base_y)], stroke);
+            seg(painter, [apex, pos2(c.x + rx, base_y)], stroke);
             painter.add(egui::Shape::ellipse_stroke(
                 pos2(c.x, base_y),
                 vec2(rx, r * 0.28),
@@ -110,19 +479,19 @@ pub fn paint_feature_icon(painter: &Painter, rect: Rect, icon: FeatureIcon, colo
 
 /// Verschieben: ein Pfeil nach rechts oben mit Spitze.
 fn paint_move_icon(painter: &Painter, rect: Rect, color: Color32) {
-    let stroke = Stroke::new(1.5, color);
+    let stroke = Stroke::new(STROKE_WIDTH, color);
     let c = rect.center();
     let r = rect.width().min(rect.height()) * 0.38;
     let from = c + vec2(-r, r);
     let to = c + vec2(r, -r);
-    painter.line_segment([from, to], stroke);
-    painter.line_segment([to, to + vec2(-r * 0.7, 0.0)], stroke);
-    painter.line_segment([to, to + vec2(0.0, r * 0.7)], stroke);
+    seg(painter, [from, to], stroke);
+    seg(painter, [to, to + vec2(-r * 0.7, 0.0)], stroke);
+    seg(painter, [to, to + vec2(0.0, r * 0.7)], stroke);
 }
 
 /// Rundung bzw. Fase: Winkel mit abgerundeter Ecke.
 fn paint_blend_icon(painter: &Painter, rect: Rect, color: Color32) {
-    let stroke = Stroke::new(1.5, color);
+    let stroke = Stroke::new(STROKE_WIDTH, color);
     let c = rect.center();
     let r = rect.width().min(rect.height()) * 0.38;
     let corner = c + vec2(-r, r);
@@ -139,7 +508,7 @@ fn paint_blend_icon(painter: &Painter, rect: Rect, color: Color32) {
 
 /// Zeichnet das Skizzensymbol in `rect`: ein Rechteck mit Eckpunkten und ein Kreis.
 pub fn paint_sketch_icon(painter: &Painter, rect: Rect, color: Color32) {
-    let stroke = Stroke::new(1.5, color);
+    let stroke = Stroke::new(STROKE_WIDTH, color);
     let c = rect.center();
     let r = rect.width().min(rect.height()) * 0.38;
     let frame = Rect::from_center_size(c + vec2(-r * 0.2, r * 0.2), vec2(r * 1.4, r * 1.1));
@@ -161,7 +530,7 @@ pub fn paint_sketch_icon(painter: &Painter, rect: Rect, color: Color32) {
 
 /// Zeichnungssymbol: ein Blatt mit Innenrahmen und Schriftfeld.
 pub fn paint_drawing_icon(painter: &Painter, rect: Rect, color: Color32) {
-    let stroke = Stroke::new(1.5, color);
+    let stroke = Stroke::new(STROKE_WIDTH, color);
     let thin = Stroke::new(1.0, color);
     let c = rect.center();
     let r = rect.width().min(rect.height()) * 0.38;
@@ -178,19 +547,21 @@ pub fn paint_drawing_icon(painter: &Painter, rect: Rect, color: Color32) {
 
 /// Ansichtssymbol: ein kleines Rechteck mit Mittellinien.
 pub fn paint_view_icon(painter: &Painter, rect: Rect, color: Color32) {
-    let stroke = Stroke::new(1.5, color);
+    let stroke = Stroke::new(STROKE_WIDTH, color);
     let c = rect.center();
     let r = rect.width().min(rect.height()) * 0.3;
     let frame = Rect::from_center_size(c, vec2(r * 2.0, r * 1.6));
     painter.rect_stroke(frame, 1.0, stroke, egui::StrokeKind::Middle);
-    painter.line_segment(
+    seg(
+        painter,
         [
             pos2(c.x, frame.top() - 2.0),
             pos2(c.x, frame.bottom() + 2.0),
         ],
         Stroke::new(1.0, color),
     );
-    painter.line_segment(
+    seg(
+        painter,
         [
             pos2(frame.left() - 2.0, c.y),
             pos2(frame.right() + 2.0, c.y),
@@ -207,47 +578,59 @@ pub fn paint_dimension_icon(
 ) -> impl FnOnce(&Painter, Rect, Color32) {
     use planora_drawing::dimension::DimKind;
     move |painter, rect, color| {
-        let stroke = Stroke::new(1.5, color);
+        let stroke = Stroke::new(STROKE_WIDTH, color);
         let thin = Stroke::new(1.0, color);
         let c = rect.center();
         let r = rect.width().min(rect.height()) * 0.36;
         // Maßlinie von `a` nach `b` mit kleinen Pfeilspitzen an beiden Enden.
         let dim_line = |a: Pos2, b: Pos2| {
-            painter.line_segment([a, b], stroke);
+            seg(painter, [a, b], stroke);
             let d = (b - a).normalized();
             let n = vec2(-d.y, d.x) * 2.5;
             for (tip, back) in [(a, d), (b, -d)] {
                 let base = tip + back * 4.0;
-                painter.line_segment([tip, base + n], stroke);
-                painter.line_segment([tip, base - n], stroke);
+                seg(painter, [tip, base + n], stroke);
+                seg(painter, [tip, base - n], stroke);
             }
         };
         match kind {
             DimKind::Horizontal => {
                 dim_line(c + vec2(-r, 0.0), c + vec2(r, 0.0));
-                painter.line_segment([c + vec2(-r, -r * 0.8), c + vec2(-r, r * 0.8)], thin);
-                painter.line_segment([c + vec2(r, -r * 0.8), c + vec2(r, r * 0.8)], thin);
+                seg(
+                    painter,
+                    [c + vec2(-r, -r * 0.8), c + vec2(-r, r * 0.8)],
+                    thin,
+                );
+                seg(painter, [c + vec2(r, -r * 0.8), c + vec2(r, r * 0.8)], thin);
             }
             DimKind::Vertical => {
                 dim_line(c + vec2(0.0, -r), c + vec2(0.0, r));
-                painter.line_segment([c + vec2(-r * 0.8, -r), c + vec2(r * 0.8, -r)], thin);
-                painter.line_segment([c + vec2(-r * 0.8, r), c + vec2(r * 0.8, r)], thin);
+                seg(
+                    painter,
+                    [c + vec2(-r * 0.8, -r), c + vec2(r * 0.8, -r)],
+                    thin,
+                );
+                seg(painter, [c + vec2(-r * 0.8, r), c + vec2(r * 0.8, r)], thin);
             }
             DimKind::Aligned => {
                 dim_line(c + vec2(-r, r * 0.7), c + vec2(r, -r * 0.7));
             }
             DimKind::Diameter => {
                 painter.circle_stroke(c, r, stroke);
-                painter.line_segment([c + vec2(-r, r) * 1.15, c + vec2(r, -r) * 1.15], thin);
+                seg(
+                    painter,
+                    [c + vec2(-r, r) * 1.15, c + vec2(r, -r) * 1.15],
+                    thin,
+                );
             }
             DimKind::Radius => {
                 painter.circle_stroke(c, r, thin);
-                painter.line_segment([c, c + vec2(r, -r) * 0.99], stroke);
+                seg(painter, [c, c + vec2(r, -r) * 0.99], stroke);
             }
             DimKind::Angle => {
                 let o = c + vec2(-r, r * 0.8);
-                painter.line_segment([o, o + vec2(r * 2.0, 0.0)], stroke);
-                painter.line_segment([o, o + vec2(r * 1.6, -r * 1.4)], stroke);
+                seg(painter, [o, o + vec2(r * 2.0, 0.0)], stroke);
+                seg(painter, [o, o + vec2(r * 1.6, -r * 1.4)], stroke);
                 let pts: Vec<Pos2> = (0..=6_i32)
                     .map(|i| {
                         let t = -0.72 * (i as f32) / 6.0;
@@ -256,6 +639,132 @@ pub fn paint_dimension_icon(
                     .collect();
                 painter.add(egui::Shape::line(pts, thin));
             }
+        }
+    }
+}
+
+/// Gezeichnete Symbole für Aktionen, zu denen Phosphor kein passendes Symbol hat (geprüft in
+/// `Phosphor-Light-style.css`: es gibt weder Bogen, Ellipse, Parallel, Senkrecht, Tangente,
+/// Mittelpunkt noch Punkt-auf-Kurve oder Punkt-Linie-Abstand). Radius, Durchmesser und Winkel
+/// zeichnet weiter [`paint_dimension_icon`], Rundung und Fase [`FeatureIcon::Blend`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HandIcon {
+    Arc,
+    Ellipse,
+    Parallel,
+    Perpendicular,
+    Tangent,
+    Midpoint,
+    PointOnCurve,
+    DistancePointLine,
+}
+
+/// Alle gezeichneten Symbole aus [`HandIcon`].
+pub const HAND_DRAWN: &[HandIcon] = &[
+    HandIcon::Arc,
+    HandIcon::Ellipse,
+    HandIcon::Parallel,
+    HandIcon::Perpendicular,
+    HandIcon::Tangent,
+    HandIcon::Midpoint,
+    HandIcon::PointOnCurve,
+    HandIcon::DistancePointLine,
+];
+
+/// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
+pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Color32) {
+    let stroke = Stroke::new(STROKE_WIDTH, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.38;
+    let arc = |center: Pos2, radius: f32, from: f32, to: f32| {
+        let pts: Vec<Pos2> = (0..=12_i32)
+            .map(|i| {
+                let a = from + (to - from) * (i as f32) / 12.0;
+                center + vec2(a.cos(), -a.sin()) * radius
+            })
+            .collect();
+        painter.add(egui::Shape::line(pts, stroke));
+    };
+    match icon {
+        HandIcon::Arc => arc(
+            c + vec2(0.0, r * 0.4),
+            r * 1.1,
+            0.4,
+            std::f32::consts::PI - 0.4,
+        ),
+        HandIcon::Ellipse => {
+            painter.add(egui::Shape::ellipse_stroke(
+                c,
+                vec2(r * 1.1, r * 0.65),
+                stroke,
+            ));
+        }
+        HandIcon::Parallel => {
+            seg(
+                painter,
+                [c + vec2(-r, r * 0.9), c + vec2(r * 0.3, -r * 0.9)],
+                stroke,
+            );
+            seg(
+                painter,
+                [c + vec2(-r * 0.2, r * 0.9), c + vec2(r * 1.1, -r * 0.9)],
+                stroke,
+            );
+        }
+        HandIcon::Perpendicular => {
+            seg(painter, [c + vec2(-r, r), c + vec2(r, r)], stroke);
+            seg(painter, [c + vec2(0.0, r), c + vec2(0.0, -r)], stroke);
+            let m = r * 0.4;
+            let corner = c + vec2(0.0, r);
+            seg(
+                painter,
+                [corner + vec2(m, -m), corner + vec2(m, 0.0)],
+                stroke,
+            );
+            seg(
+                painter,
+                [corner + vec2(m, -m), corner + vec2(0.0, -m)],
+                stroke,
+            );
+        }
+        HandIcon::Tangent => {
+            painter.circle_stroke(c + vec2(0.0, -r * 0.2), r * 0.7, stroke);
+            seg(
+                painter,
+                [c + vec2(-r, r * 0.5), c + vec2(r, r * 0.5)],
+                stroke,
+            );
+        }
+        HandIcon::Midpoint => {
+            seg(painter, [c + vec2(-r, 0.0), c + vec2(r, 0.0)], stroke);
+            painter.circle_filled(c, 2.2, color);
+            seg(
+                painter,
+                [c + vec2(0.0, -r * 0.5), c + vec2(0.0, r * 0.5)],
+                stroke,
+            );
+        }
+        HandIcon::PointOnCurve => {
+            arc(
+                c + vec2(0.0, r * 0.6),
+                r * 1.3,
+                0.5,
+                std::f32::consts::PI - 0.5,
+            );
+            painter.circle_filled(c + vec2(0.0, r * 0.6 - r * 1.3), 2.2, color);
+        }
+        HandIcon::DistancePointLine => {
+            seg(
+                painter,
+                [c + vec2(-r, r * 0.8), c + vec2(r, r * 0.8)],
+                stroke,
+            );
+            painter.circle_filled(c + vec2(0.0, -r * 0.8), 2.2, color);
+            seg(
+                painter,
+                [c + vec2(0.0, -r * 0.5), c + vec2(0.0, r * 0.8)],
+                stroke,
+            );
         }
     }
 }
