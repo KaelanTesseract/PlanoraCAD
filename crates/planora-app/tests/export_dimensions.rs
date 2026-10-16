@@ -491,15 +491,18 @@ fn lost_dimension_blocks_writing_with_its_text() {
     assert_eq!(ready(&d, &s).0, 1);
     s.delete_feature(second).unwrap();
     s.selected_body = None;
-    // Der Grund kommt aus der eigenen Auflösung des Tests.
+    // Der Grund kommt aus der eigenen Auflösung des Tests: Laiensprache, keine inneren Nummern.
     let reason = match &own_dims(&s, id).by_view[&front][0].1 {
-        Err(e) => e.to_string(),
-        Ok(m) => panic!("verloren erwartet: {m:?}"),
+        Err(DimError::Lost(why)) => why.clone(),
+        other => panic!("verloren erwartet: {other:?}"),
     };
-    assert!(reason.contains("nicht mehr vorhanden"), "{reason}");
+    assert_eq!(
+        reason,
+        "Die Kante, an der das Maß hing, gibt es nicht mehr."
+    );
     let reason = reason.trim_end_matches('.');
     let msg = format!(
-        "Das Maß „Waagerecht“ in der Ansicht „Vorne“ hat seinen Bezug verloren: {reason}. Bitte ändern oder löschen."
+        "Das Maß „Waagerecht“ in der Ansicht „Vorne“ hat seinen Bezug verloren: {reason}. Bitte das Maß löschen und neu setzen."
     );
     let dir = temp_dir("verloren");
     for format in [SVG, DXF] {
@@ -531,7 +534,7 @@ fn lost_dimension_blocks_writing_with_its_text() {
     assert_eq!(
         d.status(&s),
         ExportStatus::Failed(format!(
-            "Das Maß „Breite ? mm“ in der Ansicht „Vorne“ hat seinen Bezug verloren: {reason}. Bitte ändern oder löschen."
+            "Das Maß „Breite ? mm“ in der Ansicht „Vorne“ hat seinen Bezug verloren: {reason}. Bitte das Maß löschen und neu setzen."
         ))
     );
     // Gelöscht → wieder schreibbar.
@@ -572,8 +575,8 @@ fn with_several_lost_dimensions_the_first_in_drawing_order_is_named() {
     s.delete_feature(second).unwrap();
     s.selected_body = None;
     let reason = match &own_dims(&s, id).by_view[&front][0].1 {
-        Err(e) => e.to_string(),
-        Ok(m) => panic!("verloren erwartet: {m:?}"),
+        Err(DimError::Lost(why)) => why.clone(),
+        other => panic!("verloren erwartet: {other:?}"),
     };
     let reason = reason.trim_end_matches('.');
     // Genannt wird das erste Maß der ersten Ansicht der Zeichnung (nicht das zuerst angelegte).
@@ -581,7 +584,7 @@ fn with_several_lost_dimensions_the_first_in_drawing_order_is_named() {
     assert_eq!(
         d.status(&s),
         ExportStatus::Failed(format!(
-            "Das Maß „Vorne-Maß“ in der Ansicht „Vorne“ hat seinen Bezug verloren: {reason}. Bitte ändern oder löschen."
+            "Das Maß „Vorne-Maß“ in der Ansicht „Vorne“ hat seinen Bezug verloren: {reason}. Bitte das Maß löschen und neu setzen."
         ))
     );
 }
@@ -607,12 +610,12 @@ fn a_dimension_that_cannot_be_measured_any_more_has_its_own_sentence() {
         other => panic!("nicht quer erwartet: {other:?}"),
     };
     let msg = format!(
-        "Das Maß „Waagerecht“ in der Ansicht „Vorne“ hat sich verändert und lässt sich nicht mehr messen: {}. Bitte ändern oder löschen.",
+        "Das Maß „Waagerecht“ in der Ansicht „Vorne“ hat sich verändert und lässt sich nicht mehr messen: {}. Bitte das Maß löschen und neu setzen.",
         reason.trim_end_matches('.')
     );
     assert_eq!(
         msg,
-        "Das Maß „Waagerecht“ in der Ansicht „Vorne“ hat sich verändert und lässt sich nicht mehr messen: Die Kante steht nicht quer zum Maß. Bitte ändern oder löschen."
+        "Das Maß „Waagerecht“ in der Ansicht „Vorne“ hat sich verändert und lässt sich nicht mehr messen: Die Kante steht nicht quer zum Maß. Bitte das Maß löschen und neu setzen."
     );
     let dir = temp_dir("nicht-quer");
     for format in [SVG, DXF] {

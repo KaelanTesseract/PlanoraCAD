@@ -353,7 +353,10 @@ fn resolve_after_deleting_the_feature_is_lost() {
         GeoRef::Center(e),
     ] {
         match resolve_geo(&all_solids(&d), &r, &tol()) {
-            Err(DimError::Lost(why)) => assert!(why.contains("nicht mehr vorhanden"), "{why}"),
+            // Laiensprache: keine Feature-Nummer, keine Rollennamen.
+            Err(DimError::Lost(why)) => {
+                assert_eq!(why, "Die Kante, an der das Maß hing, gibt es nicht mehr.")
+            }
             other => panic!("Lost erwartet: {other:?}"),
         }
     }
@@ -367,6 +370,19 @@ fn resolve_after_deleting_the_feature_is_lost() {
         resolve_geo(&[], &face, &tol()),
         Err(DimError::Lost(_))
     ));
+    // Eine Fläche, deren Feature gelöscht ist: ebenso ohne innere Nummern.
+    let face = GeoRef::Face(GeoRefData::Face(TagData {
+        origin: 7,
+        role: "Mantel".into(),
+        hint: DVec3::ZERO,
+    }));
+    match resolve_geo(&all_solids(&d), &face, &tol()) {
+        Err(DimError::Lost(why)) => {
+            assert_eq!(why, "Die Fläche, an der das Maß hing, gibt es nicht mehr.");
+            assert!(!why.contains('7') && !why.contains("Mantel"), "{why}");
+        }
+        other => panic!("Lost erwartet: {other:?}"),
+    }
 }
 
 #[test]

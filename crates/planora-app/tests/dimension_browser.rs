@@ -456,7 +456,7 @@ fn lost_row_is_red_with_reason() {
         text = h.idle(&mut st).text;
     }
     assert!(
-        text.contains("nicht mehr vorhanden"),
+        text.contains("an der das Maß hing, gibt es nicht mehr"),
         "Grund fehlt:\n{text}"
     );
     // Das Maß selbst lässt sich wählen und löschen.

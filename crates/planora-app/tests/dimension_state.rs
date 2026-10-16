@@ -263,7 +263,10 @@ fn deleted_reference_becomes_lost_with_reason_and_keeps_last_anchor() {
     let (_, res) = entry(&after, id);
     match res {
         Err(DimError::Lost(reason)) => {
-            assert!(reason.contains("nicht mehr vorhanden"), "Grund: {reason}")
+            assert!(
+                reason.contains("an der das Maß hing, gibt es nicht mehr"),
+                "Grund: {reason}"
+            )
         }
         other => panic!("verloren erwartet: {other:?}"),
     }

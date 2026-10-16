@@ -363,17 +363,25 @@ pub fn dimension_label(spec: &DimSpec) -> String {
 /// Meldung bei einem Maß ohne Messwert (Festlegung P13): Ist der Bezug verloren
 /// ([`DimError::Lost`]), „… hat seinen Bezug verloren: …“; sonst (Bezug vorhanden, aber z. B.
 /// nicht mehr quer zum Maß) „… hat sich verändert und lässt sich nicht mehr messen: …“.
+///
+/// Der Grund ist bei `Lost` der Satz aus der Auflösung selbst (ohne den Vorsatz „Der Bezug
+/// wurde nicht gefunden“). Am Ende steht, was hilft: Das Fenster „Maß bearbeiten“ kann den
+/// Bezug nicht neu verknüpfen, also bleibt nur Löschen und neu Setzen ([`LOST_ADVICE`]).
 pub fn lost_dimension_text(label: &str, view: &str, error: &DimError) -> String {
-    let text = error.to_string();
+    let text = match error {
+        DimError::Lost(inner) => inner.clone(),
+        e => e.to_string(),
+    };
     let reason = text.trim_end().trim_end_matches('.');
     let what = match error {
         DimError::Lost(_) => "hat seinen Bezug verloren",
         _ => "hat sich verändert und lässt sich nicht mehr messen",
     };
-    format!(
-        "Das Maß „{label}“ in der Ansicht „{view}“ {what}: {reason}. Bitte ändern oder löschen."
-    )
+    format!("Das Maß „{label}“ in der Ansicht „{view}“ {what}: {reason}. {LOST_ADVICE}")
 }
+
+/// Schlusssatz der Meldung bei einem Maß ohne Messwert (Festlegung P13).
+pub const LOST_ADVICE: &str = "Bitte das Maß löschen und neu setzen.";
 
 /// Das erste Maß (Ansichten in der Reihenfolge der Zeichnung) ohne Messwert als Meldung.
 fn first_lost(

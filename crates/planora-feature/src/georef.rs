@@ -23,6 +23,10 @@ const NO_CENTER: &str = "Nur Kreise und Bögen haben eine Mitte.";
 const NO_RANGE: &str = "Der Bereich der Zylinderfläche lässt sich nicht bestimmen.";
 const MISMATCH: &str = "Der Bezug passt nicht zu seiner Art.";
 const BROKEN: &str = "Der Bezug ist im Modell beschädigt.";
+/// Grund, wenn die Fläche eines Bezugs fehlt (ohne innere Nummern oder Rollennamen).
+pub const FACE_GONE: &str = "Die Fläche, an der das Maß hing, gibt es nicht mehr.";
+/// Grund, wenn die Kante eines Bezugs fehlt (ohne innere Nummern oder Rollennamen).
+pub const EDGE_GONE: &str = "Die Kante, an der das Maß hing, gibt es nicht mehr.";
 
 fn lost(text: &str) -> DimError {
     DimError::Lost(text.into())
@@ -160,15 +164,7 @@ fn find_edge<'a>(
 ) -> Result<(&'a Solid, &'a Edge), DimError> {
     let r = to_edge_ref(d).ok_or_else(|| lost(MISMATCH))?;
     let candidates = edge_candidates_cached(solids, &r, cache);
-    let (body, edge) = pick(&candidates, r.hint, tol)?.ok_or_else(|| {
-        lost(
-            &FeatureError::EdgeNotFound {
-                a: r.a.role.clone(),
-                b: r.b.role.clone(),
-            }
-            .to_string(),
-        )
-    })?;
+    let (body, edge) = pick(&candidates, r.hint, tol)?.ok_or_else(|| lost(EDGE_GONE))?;
     let solid = solids[body];
     let e = solid.edges.get(edge).ok_or_else(|| lost(BROKEN))?;
     Ok((solid, e))
@@ -241,15 +237,7 @@ pub fn resolve_geo_cached<'a>(
         GeoRef::Face(d) => {
             let fr = to_face_ref(d).ok_or_else(|| lost(MISMATCH))?;
             let candidates = face_candidates_cached(solids, &fr, tol, cache);
-            let (body, face) = pick(&candidates, fr.hint, tol)?.ok_or_else(|| {
-                lost(
-                    &FeatureError::FaceNotFound {
-                        origin: fr.origin,
-                        role: fr.role.clone(),
-                    }
-                    .to_string(),
-                )
-            })?;
+            let (body, face) = pick(&candidates, fr.hint, tol)?.ok_or_else(|| lost(FACE_GONE))?;
             let solid = solids[body];
             let f = solid.faces.get(face).ok_or_else(|| lost(BROKEN))?;
             match &f.surface {

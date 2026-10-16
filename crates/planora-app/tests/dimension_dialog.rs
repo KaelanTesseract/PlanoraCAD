@@ -662,7 +662,11 @@ fn lost_dimension_shows_the_reason_and_the_last_value_is_not_shown() {
         .find(|t| t.text.starts_with("Das Maß hat seinen Bezug verloren: "))
         .unwrap_or_else(|| panic!("Grund fehlt:\n{}", shot.text));
     assert_eq!(red.color, ERROR_COLOR);
-    assert!(red.text.contains("nicht mehr vorhanden"), "{}", red.text);
+    assert!(
+        red.text.contains("an der das Maß hing, gibt es nicht mehr"),
+        "{}",
+        red.text
+    );
     // Nachkommastellen und Toleranz lassen sich trotzdem ändern.
     h.dlg.decimals = 1;
     h.dlg.kind = ToleranceKind::Symmetric;

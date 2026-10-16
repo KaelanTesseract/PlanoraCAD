@@ -699,7 +699,7 @@ fn lost_dimension_is_red_and_has_a_tooltip_with_the_reason() {
         "Tooltip fehlt:\n{text}"
     );
     assert!(
-        text.contains("nicht mehr vorhanden"),
+        text.contains("an der das Maß hing, gibt es nicht mehr"),
         "Grund fehlt:\n{text}"
     );
     // Über leerem Papier kein Tooltip.
