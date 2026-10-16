@@ -1,4 +1,4 @@
-use crate::viewcube::{ISO_VIEW, ViewFace};
+use crate::viewcube::{CubeRegion, ISO_VIEW, ViewFace};
 use glam::{Mat4, Vec2, Vec3};
 
 /// Ab diesem Betrag der z-Komponente gilt eine Blickrichtung in `look_along` als senkrecht; die
@@ -214,5 +214,21 @@ impl OrbitCamera {
 
     pub fn set_iso_view(&mut self) {
         (self.yaw, self.pitch) = ISO_VIEW;
+    }
+
+    /// Startansicht des Würfels (Home-Knopf): die isometrische Standardansicht. Das Einpassen
+    /// übernimmt der Aufrufer.
+    pub fn home(&mut self) {
+        self.set_iso_view();
+    }
+
+    /// Blickt auf einen Bereich des Navigationswürfels: Flächen wie `set_view`, Kanten und Ecken
+    /// entlang ihrer Normalen (Kante 45° zwischen den Seiten, Ecke im Isometrie-Winkel).
+    pub fn set_view_region(&mut self, region: CubeRegion) {
+        match region {
+            CubeRegion::Face(face) => self.set_view(face),
+            // Kanten und Ecken sind nie senkrecht (|z| ≤ 1/√2), der Aufwärts-Hinweis wirkt nicht.
+            _ => self.look_along(region.normal(), Vec3::Z),
+        }
     }
 }
