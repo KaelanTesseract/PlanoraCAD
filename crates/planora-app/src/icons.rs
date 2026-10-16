@@ -130,6 +130,8 @@ pub enum Icon {
     EndSketch,
     /// Phosphor `plus`.
     NewTab,
+    /// Phosphor `house-simple`.
+    Home,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -193,6 +195,7 @@ pub const ALL: &[Icon] = &[
     Icon::Pattern,
     Icon::EndSketch,
     Icon::NewTab,
+    Icon::Home,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -256,6 +259,7 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Pattern, '\u{e1fc}', "dots-nine"),
     (Icon::EndSketch, '\u{e184}', "check-circle"),
     (Icon::NewTab, '\u{e3d4}', "plus"),
+    (Icon::Home, '\u{e2c6}', "house-simple"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {

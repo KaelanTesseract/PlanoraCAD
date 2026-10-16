@@ -147,8 +147,8 @@ fn cube_sits_in_the_free_rect_corner() {
     assert_eq!(
         cube,
         Rect::from_min_size(
-            pos2(FREE.right() - 96.0 - 12.0, FREE.top() + 12.0),
-            vec2(96.0, 96.0)
+            pos2(FREE.right() - 84.0 - 12.0, FREE.top() + 12.0),
+            vec2(84.0, 84.0)
         )
     );
     // `show_in` legt den Würfel dorthin: ein Klick auf seine untere Fläche dreht die Ansicht
