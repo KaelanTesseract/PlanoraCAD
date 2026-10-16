@@ -326,18 +326,33 @@ fn held_step_writer(
     while !p.is_cancelled() && std::time::Instant::now() < until {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
-    write_step_bodies(path, prepared, p)
+    let r = write_step_bodies(path, prepared, p);
+    HELD_DONE.lock().unwrap().push(path.to_path_buf());
+    r
+}
+
+/// Ziele, deren angehaltenes Schreiben ([`held_step_writer`]) zu Ende ist (auch abgebrochen).
+static HELD_DONE: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+fn held_write_finished(path: &std::path::Path) -> bool {
+    HELD_DONE.lock().unwrap().iter().any(|p| p == path)
+}
+
+/// Drei Quader, nichts gewählt (für Tests, deren Schreiben über [`held_step_writer`] läuft).
+fn small_state() -> AppState {
+    let mut s = AppState::new();
+    for _ in 0..3 {
+        s.create_box(DVec3::splat(3.0)).unwrap();
+    }
+    s.selected_body = None;
+    s
 }
 
 #[test]
 fn the_window_stays_open_with_a_hint_while_step_is_written() {
     // Das Schreiben wartet auf den Abbruch; früher entschieden 300 Quader und die Dauer der
     // ersten Bilder, ob es beim Zeichnen noch lief (unzuverlässig).
-    let mut s = AppState::new();
-    for _ in 0..3 {
-        s.create_box(DVec3::splat(3.0)).unwrap();
-    }
-    s.selected_body = None;
+    let mut s = small_state();
     let dir = temp_dir("hinweis");
     let path = dir.join("k.step");
     let mut d = step_dialog(&s);
@@ -366,16 +381,16 @@ fn the_window_stays_open_with_a_hint_while_step_is_written() {
 
 #[test]
 fn cancelling_while_writing_says_so_and_keeps_the_old_file() {
-    let mut s = AppState::new();
-    for _ in 0..200 {
-        s.create_box(DVec3::splat(3.0)).unwrap();
-    }
-    s.selected_body = None;
+    // Das Schreiben wartet auf den Abbruch (früher 200 Quader: ein Wettlauf zwischen Schreiben
+    // und Abbrechen).
+    let s = small_state();
     let dir = temp_dir("abbruch-fenster");
     let path = dir.join("alt.step");
     fs::write(&path, "alt").unwrap();
     let mut d = step_dialog(&s);
+    d.set_step_writer(held_step_writer);
     d.write_to(path.clone(), &s);
+    assert!(d.is_writing_step());
     d.cancel_write();
     d.tick(&s, true);
     assert_eq!(d.write_state(), WriteState::Failed("Abgebrochen".into()));
@@ -397,11 +412,13 @@ fn temp_files(dir: &std::path::Path) -> usize {
         .count()
 }
 
-/// Öffnet im aktiven Tab ein STEP-Schreiben mit `boxes` Quadern und holt es nie ab.
+/// Öffnet im aktiven Tab ein STEP-Schreiben mit `boxes` Quadern und holt es nie ab. Mit `hold`
+/// wartet das Schreiben auf den Abbruch ([`held_step_writer`]).
 fn start_writing_in_active_tab(
     w: &mut planora_app::workspace::Workspace,
     boxes: usize,
     to: &std::path::Path,
+    hold: bool,
 ) {
     let tab = w.active_tab_mut();
     for _ in 0..boxes {
@@ -409,8 +426,19 @@ fn start_writing_in_active_tab(
     }
     tab.state.selected_body = None;
     let mut d = step_dialog(&tab.state);
+    if hold {
+        d.set_step_writer(held_step_writer);
+    }
     d.write_to(to.to_path_buf(), &tab.state);
     tab.export_dialog = Some(d);
+}
+
+/// Wartet (höchstens 30 s), bis `done` stimmt.
+fn wait_until(mut done: impl FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    while !done() && start.elapsed() < std::time::Duration::from_secs(30) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -420,9 +448,12 @@ fn closing_tabs_and_quitting_work_with_an_unfetched_step_write_in_a_background_t
     let mut w = Workspace::new(None, Config::default());
     let dir = temp_dir("tab");
     let target = dir.join("t.step");
-    start_writing_in_active_tab(&mut w, 1, &target);
-    // Das Schreiben ist längst fertig, wurde aber nie abgeholt (Hintergrund-Tab ohne `tick`).
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    start_writing_in_active_tab(&mut w, 1, &target, false);
+    // Das Schreiben ist fertig, wurde aber nie abgeholt (Hintergrund-Tab ohne `tick`). Warten,
+    // bis die Datei da ist, statt einer festen Pause (1,5 s reichten auf einem belasteten
+    // Rechner nicht sicher).
+    wait_until(|| target.exists() && temp_files(&dir) == 0);
+    assert!(target.exists(), "das Schreiben endet");
     w.new_tab();
     // Der erste Tab ist geändert: es gibt die gewohnte Rückfrage, keine Sperre.
     assert!(!w.request_quit());
@@ -442,19 +473,22 @@ fn closing_a_tab_during_a_running_step_write_cancels_it_and_leaves_no_helper_fil
     let dir = temp_dir("tab-laeuft");
     let target = dir.join("alt.step");
     fs::write(&target, "alt").unwrap();
-    start_writing_in_active_tab(&mut w, 300, &target);
+    // Das Schreiben wartet auf den Abbruch und läuft deshalb sicher noch (früher 300 Quader:
+    // dann war nur „vermutlich noch nicht fertig“).
+    start_writing_in_active_tab(&mut w, 3, &target, true);
+    assert!(w.tabs[0].export_dialog.as_ref().unwrap().is_writing_step());
     assert!(!w.request_close(0));
     w.discard_and_continue();
     assert_eq!(w.tabs.len(), 1, "der Tab ist weg, ein frischer ersetzt ihn");
     assert!(w.tabs[0].export_dialog.is_none());
-    // Der abgebrochene Arbeitsthread räumt auf: keine Hilfsdatei, die Zieldatei ist ganz.
-    let start = std::time::Instant::now();
-    while temp_files(&dir) > 0 && start.elapsed().as_secs() < 10 {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    // Der abgebrochene Arbeitsthread räumt auf: keine Hilfsdatei, die alte Datei bleibt.
+    wait_until(|| held_write_finished(&target));
+    assert!(
+        held_write_finished(&target),
+        "das Schreiben endet nach dem Abbruch"
+    );
     assert_eq!(temp_files(&dir), 0);
-    let text = fs::read_to_string(&target).unwrap();
-    assert!(text == "alt" || text.starts_with("ISO-10303-21;"));
+    assert_eq!(fs::read_to_string(&target).unwrap(), "alt");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -483,7 +517,7 @@ fn an_empty_body_name_becomes_a_numbered_body_in_messages() {
     assert_eq!(p.skipped_meshes, vec!["Körper 2".to_string()]);
 }
 
-/// Viele Quader, damit Vernetzen und Schreiben beim Zeichnen sicher noch laufen.
+/// Viele Quader (eine längere Vernetzung; der Test darunter hängt nicht an ihrer Dauer).
 fn big_state() -> AppState {
     let mut s = AppState::new();
     for _ in 0..300 {
@@ -510,12 +544,15 @@ fn draw_frames(d: &mut ExportDialog, s: &mut AppState, n: usize) -> String {
 
 #[test]
 fn the_cancel_button_belongs_to_the_running_write_not_to_the_chosen_format() {
-    let mut s = big_state();
+    // Das Schreiben wartet auf den Abbruch; mit 300 Quadern und echtem Schreiber entschied die
+    // Dauer der ersten Bilder, ob es beim Zeichnen noch lief.
+    let mut s = small_state();
     let dir = temp_dir("abbrechen-format");
     let mut d = ExportDialog::new(&s);
     d.tick(&s, true);
     d.format = ExportFormat::Step;
     d.tick(&s, true);
+    d.set_step_writer(held_step_writer);
     d.write_to(dir.join("k.step"), &s);
     d.format = ExportFormat::Mesh(Format::Stl);
     let text = draw_frames(&mut d, &mut s, 2);
@@ -524,6 +561,8 @@ fn the_cancel_button_belongs_to_the_running_write_not_to_the_chosen_format() {
     assert!(text.contains("Abbrechen"), "{text}");
     d.cancel_write();
     d.tick(&s, true);
+    d.format = ExportFormat::Step;
+    assert_eq!(d.write_state(), WriteState::Failed("Abgebrochen".into()));
     let _ = fs::remove_dir_all(&dir);
 }
 
