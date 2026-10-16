@@ -2,8 +2,9 @@
 //! Betriebssystems): Ordner wechseln oder eintippen, Datei wählen oder Namen eingeben, Ersetzen
 //! einer vorhandenen Datei erst nach einem zweiten Klick.
 
-use crate::browser::ERROR_COLOR;
-use crate::mesh_body::WARNING_COLOR;
+use crate::browser::error_color;
+use crate::mesh_body::warning_color;
+use crate::theme;
 use std::path::{Path, PathBuf};
 
 /// Höchstzahl der gezeigten Einträge eines Ordners (große Ordner bleiben bedienbar).
@@ -255,8 +256,10 @@ impl FileChooser {
             if ui.button("Ordner höher").clicked() {
                 self.up();
             }
-            let edit =
-                ui.add(egui::TextEdit::singleline(&mut self.dir_text).desired_width(f32::INFINITY));
+            let edit = theme::text_field(
+                ui,
+                egui::TextEdit::singleline(&mut self.dir_text).desired_width(f32::INFINITY),
+            );
             if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 self.go_to_text();
             }
@@ -303,17 +306,19 @@ impl FileChooser {
         }
         ui.horizontal(|ui| {
             ui.label("Dateiname");
-            let edit = ui
-                .add(egui::TextEdit::singleline(&mut self.file_name).desired_width(f32::INFINITY));
+            let edit = theme::text_field(
+                ui,
+                egui::TextEdit::singleline(&mut self.file_name).desired_width(f32::INFINITY),
+            );
             if edit.changed() {
                 self.confirm = None;
             }
         });
         if let Some(e) = &self.error {
-            ui.colored_label(ERROR_COLOR, e);
+            ui.colored_label(error_color(ui.visuals().dark_mode), e);
         }
         if self.asks_to_replace() {
-            ui.colored_label(WARNING_COLOR, REPLACE_HINT);
+            ui.colored_label(warning_color(ui.visuals().dark_mode), REPLACE_HINT);
         }
         ui.horizontal(|ui| {
             let label = match self.mode {

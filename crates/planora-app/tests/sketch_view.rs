@@ -1,5 +1,7 @@
 use glam::{Vec2, Vec3};
-use planora_app::sketch_view::{pick_radius_units, screen_to_sketch, sketch_to_screen};
+use planora_app::sketch_view::{
+    overlay_text, pick_radius_units, screen_to_sketch, sketch_to_screen,
+};
 use planora_math::{DVec2, Frame};
 use planora_render::OrbitCamera;
 
@@ -59,6 +61,21 @@ fn a_parallel_ray_misses_the_plane() {
         Vec2::new(800.0, 600.0),
         Vec2::new(400.0, 300.0),
     );
+}
+
+#[test]
+fn a_diameter_is_labelled_with_the_diameter_sign() {
+    use planora_math::Tolerance;
+    use planora_sketch::constraint::ConstraintKind;
+    use planora_sketch::model::Sketch;
+    let ctx = egui::Context::default();
+    ctx.set_fonts(planora_app::fonts::definitions());
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let center = sk.add_point(0.0, 0.0).unwrap();
+    let circle = sk.add_circle(center, 5.0).unwrap();
+    let kind = ConstraintKind::Diameter(circle, 10.0);
+    assert_eq!(overlay_text(&ctx, &sk, &kind, false), "Ø 10,00 mm");
+    assert_eq!(overlay_text(&ctx, &sk, &kind, true), "(Ø 10,00 mm)");
 }
 
 #[test]

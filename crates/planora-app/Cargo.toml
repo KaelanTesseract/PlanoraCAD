@@ -31,5 +31,9 @@ egui.workspace = true
 egui_tiles.workspace = true
 winit.workspace = true
 
+[dev-dependencies]
+# Zeichentabellen der Schriftdateien lesen (Zeichentest in tests/fonts.rs); skrifa zieht egui ohnehin.
+skrifa = "0.44"
+
 [lints]
 workspace = true

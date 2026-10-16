@@ -15,7 +15,7 @@
 //! Bezug verloren, wird nichts geschrieben (Festlegung P13); Maße außerhalb des Blatts werden
 //! geschrieben und in der Karte gezählt (P12).
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::dimension_dialog::kind_label;
 use crate::dimension_state::count_outside;
@@ -24,8 +24,9 @@ use crate::drawing_state::{ComputeFn, WorkArea};
 use crate::drawing_view::view_names;
 use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
-use crate::mesh_body::{WARNING_COLOR, report_text};
+use crate::mesh_body::{report_text, warning_color};
 use crate::state::{AppState, BodyKind};
+use crate::theme;
 use planora_drawing::annotate::{Mark, ResolvedDims};
 use planora_drawing::dimension::{DimError, DimSpec};
 use planora_drawing::dxf::dxf_text_fits;
@@ -86,7 +87,7 @@ const WATCH: Duration = Duration::from_millis(5);
 /// Fenster über die ganze Breite (Rand DIALOG_MARGIN), unter Menü und Tab-Leiste.
 pub(crate) fn wide_window(title: &'static str, ctx: &egui::Context) -> egui::Window<'static> {
     let width = (ctx.content_rect().width() - 2.0 * DIALOG_MARGIN).max(MIN_WIDTH);
-    egui::Window::new(title)
+    theme::window(ctx, title)
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_TOP, [0.0, DIALOG_TOP])
@@ -875,6 +876,8 @@ type DrawResult = Result<Arc<DrawingPrepared>, String>;
 type DrawWriteJob = Job<Result<u64, String>>;
 /// Das Schreiben einer Zeichnung (austauschbar nur für Tests).
 pub type WriteFn = fn(&Path, &SheetModel, DrawingFormat, &Progress) -> Result<u64, DrawError>;
+/// Das Schreiben einer STEP-Datei (austauschbar nur für Tests).
+pub type StepWriteFn = fn(&Path, &StepPrepared, &Progress) -> Result<u64, StepError>;
 
 /// Stand zur Zeit des Öffnens der Dateiauswahl.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -904,6 +907,7 @@ pub struct ExportDialog {
     compute: ComputeFn,
     resolve: ResolveFn,
     writer: WriteFn,
+    step_writer: StepWriteFn,
     written: Option<Result<(PathBuf, u64), String>>,
     /// Format, mit dem zuletzt geschrieben wurde; die Meldung gehört nur zu diesem Format.
     write_format: ExportFormat,
@@ -943,6 +947,7 @@ impl ExportDialog {
             compute: compute_view,
             resolve: resolve_dimensions_in_worker,
             writer: export_drawing_file,
+            step_writer: write_step_bodies,
             written: None,
             write_format: ExportFormat::Mesh(Format::Stl),
             written_format: None,
@@ -1012,6 +1017,13 @@ impl ExportDialog {
     #[doc(hidden)]
     pub fn set_writer(&mut self, f: WriteFn) {
         self.writer = f;
+    }
+
+    /// Ersetzt das Schreiben einer STEP-Datei (nur für Tests: Schreiben, das bis zum Abbrechen
+    /// läuft).
+    #[doc(hidden)]
+    pub fn set_step_writer(&mut self, f: StepWriteFn) {
+        self.step_writer = f;
     }
 
     /// Die gewählte Zeichnung; gibt es sie nicht (mehr), die Vorgabe.
@@ -1456,11 +1468,10 @@ impl ExportDialog {
                     return;
                 }
                 let (prepared, target) = (Arc::clone(prepared), path.clone());
+                let writer = self.step_writer;
                 self.written = None;
-                self.step_writing = Some((
-                    path,
-                    Job::spawn(move |p| write_step_bodies(&target, &prepared, p)),
-                ));
+                self.step_writing =
+                    Some((path, Job::spawn(move |p| writer(&target, &prepared, p))));
             }
             ExportFormat::Mesh(format) => {
                 let Some((k, Ok(prepared))) = &self.prepared else {
@@ -1661,7 +1672,7 @@ impl ExportDialog {
                         });
                     }
                     ExportStatus::Failed(m) => {
-                        ui.colored_label(ERROR_COLOR, m);
+                        ui.colored_label(error_color(ui.visuals().dark_mode), m);
                         if ui.button("Neu berechnen").clicked() {
                             recompute = true;
                         }
@@ -1679,8 +1690,14 @@ impl ExportDialog {
                         if report.closed {
                             ui.label(report_text(report));
                         } else {
-                            ui.colored_label(WARNING_COLOR, report_text(report));
-                            ui.colored_label(WARNING_COLOR, NOT_CLOSED_WARNING);
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                report_text(report),
+                            );
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                NOT_CLOSED_WARNING,
+                            );
                         }
                     }
                     ExportStatus::StepReady {
@@ -1690,7 +1707,7 @@ impl ExportDialog {
                         skipped_meshes,
                     } => {
                         if *bodies == 0 {
-                            ui.colored_label(WARNING_COLOR, STEP_NOTHING);
+                            ui.colored_label(warning_color(ui.visuals().dark_mode), STEP_NOTHING);
                         } else {
                             ui.label(format!(
                                 "{} Körper, {} Flächen",
@@ -1699,10 +1716,13 @@ impl ExportDialog {
                             ));
                         }
                         for r in rejected {
-                            ui.colored_label(WARNING_COLOR, r);
+                            ui.colored_label(warning_color(ui.visuals().dark_mode), r);
                         }
                         if !skipped_meshes.is_empty() {
-                            ui.colored_label(WARNING_COLOR, skipped_text(skipped_meshes));
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                skipped_text(skipped_meshes),
+                            );
                         }
                     }
                     ExportStatus::DrawingReady {
@@ -1712,14 +1732,20 @@ impl ExportDialog {
                     } => {
                         ui.label("Alle Ansichten sind berechnet.");
                         if *outside > 0 {
-                            ui.colored_label(WARNING_COLOR, outside_text(*outside));
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                outside_text(*outside),
+                            );
                         }
                         if !skipped_meshes.is_empty() {
-                            ui.colored_label(WARNING_COLOR, drawing_skipped_text(skipped_meshes));
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                drawing_skipped_text(skipped_meshes),
+                            );
                         }
                     }
                     ExportStatus::Unavailable(m) => {
-                        ui.colored_label(WARNING_COLOR, m);
+                        ui.colored_label(warning_color(ui.visuals().dark_mode), m);
                     }
                 }
                 match &write_state {
@@ -1736,7 +1762,7 @@ impl ExportDialog {
                             }
                         });
                         if denied {
-                            ui.colored_label(WARNING_COLOR, WRITING_HINT);
+                            ui.colored_label(warning_color(ui.visuals().dark_mode), WRITING_HINT);
                         }
                     }
                     WriteState::Done(path, n) => {
@@ -1746,11 +1772,17 @@ impl ExportDialog {
                             mb_text(*n)
                         ));
                         if !shortened.is_empty() {
-                            ui.colored_label(WARNING_COLOR, shortened_text(&shortened));
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                shortened_text(&shortened),
+                            );
                         }
                     }
                     WriteState::Failed(m) => {
-                        ui.colored_label(ERROR_COLOR, format!("Nicht geschrieben: {m}"));
+                        ui.colored_label(
+                            error_color(ui.visuals().dark_mode),
+                            format!("Nicht geschrieben: {m}"),
+                        );
                     }
                 }
                 ui.separator();

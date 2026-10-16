@@ -4,7 +4,8 @@
 //! Fehler landen als `Prompt::Notice`, nie als Panik. Gespeicherte Versionen werden nur über
 //! den beschreibbaren Tab des Dokuments geändert (er hält die Sperre).
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
+use crate::theme;
 use crate::workspace::{Prompt, Workspace};
 use planora_project::docstore::DocumentInfo;
 use planora_project::library::NodePath;
@@ -282,12 +283,15 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi) {
             return;
         }
         Some(Err(())) => {
-            ui.colored_label(ERROR_COLOR, "Die Versionen lassen sich nicht lesen.");
+            ui.colored_label(
+                error_color(ui.visuals().dark_mode),
+                "Die Versionen lassen sich nicht lesen.",
+            );
             return;
         }
         Some(Ok(info)) => info,
     };
-    ui.strong("Versionen");
+    theme::section_header(ui, "Versionen", theme::HEADER_H);
     let (read_only, dirty, based_on) = {
         let t = ws.active_tab();
         (t.read_only, t.is_dirty(), t.based_on)
@@ -398,12 +402,12 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
     if let Some(mut p) = st.comment_edit.take() {
         let mut keep = true;
         let mut apply = false;
-        egui::Window::new("Kommentar ändern")
+        theme::window(ctx, "Kommentar ändern")
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.label(format!("Kommentar zu v{}", p.what.0));
-                ui.add(egui::TextEdit::singleline(&mut p.what.1));
+                theme::text_field(ui, egui::TextEdit::singleline(&mut p.what.1));
                 ui.horizontal(|ui| {
                     if ui.button("Übernehmen").clicked() {
                         apply = true;
@@ -430,7 +434,7 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
             }
         };
         let mut answer = None;
-        egui::Window::new("Löschen")
+        theme::window(ctx, "Löschen")
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {

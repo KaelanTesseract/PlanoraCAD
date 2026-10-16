@@ -3,6 +3,16 @@
 /// Höhenunterschied in Punkten, ab dem die gemerkte Kartenhöhe neu gesetzt wird (darunter Rundung).
 const HEIGHT_SLACK: f32 = 0.5;
 
+/// Rahmen einer Karte: Abschnittsfläche, 1 px Rand, Rundung 10, Innenabstand 12, kein Schatten.
+fn card_frame(dark: bool) -> egui::Frame {
+    let p = crate::theme::palette(dark);
+    egui::Frame::new()
+        .fill(p.bg_section)
+        .stroke(egui::Stroke::new(1.0, p.border_subtle))
+        .corner_radius(crate::theme::RADIUS_MD)
+        .inner_margin(crate::theme::SPACE_3)
+}
+
 /// Zeichnet `cards` nebeneinander in gleich breiten Spalten über die volle Breite. Alle Karten
 /// bekommen die Höhe der höchsten; sie wird aus dem vorigen Bild gemerkt, nach einer Änderung
 /// gleicht das nächste Bild sie an. Liefert die Rechtecke der Karten.
@@ -20,7 +30,7 @@ pub fn card_row(
     let mut tallest = 0.0f32;
     ui.columns(cards.len(), |columns| {
         for (column, card) in columns.iter_mut().zip(cards.iter_mut()) {
-            let inner = egui::Frame::group(column.style()).show(column, |ui| {
+            let inner = card_frame(column.visuals().dark_mode).show(column, |ui| {
                 ui.set_width(ui.available_width());
                 (*card)(ui);
                 let natural = ui.min_rect().height();

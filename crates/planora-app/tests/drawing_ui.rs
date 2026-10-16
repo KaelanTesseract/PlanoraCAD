@@ -13,7 +13,7 @@ use planora_app::drawing_state::*;
 use planora_app::drawing_view::{self, DrawnState};
 use planora_app::state::*;
 use planora_app::testing::collect_texts;
-use planora_app::{fonts, theme};
+use planora_app::{fonts, icons, theme};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::sheet::build_sheet;
 use planora_drawing::{
@@ -257,6 +257,16 @@ fn button(pos: Pos2, button: PointerButton, pressed: bool) -> Event {
         pressed,
         modifiers: Modifiers::NONE,
     }
+}
+
+/// Text des Symbols „Verkleinern“ der Werkzeugleiste.
+fn zoom_out() -> String {
+    icons::glyph(icons::Icon::ZoomOut).to_string()
+}
+
+/// Text des Symbols „Vergrößern“ der Werkzeugleiste.
+fn zoom_in() -> String {
+    icons::glyph(icons::Icon::ZoomIn).to_string()
 }
 
 /// Zustand mit einem Quader 100 × 60 × 40 mm.
@@ -890,7 +900,7 @@ fn panning_and_wheel_zoom_change_only_the_sheet_view() {
     assert_eq!(st.document.drawing(d).unwrap(), &before);
 
     // Lupe −/+ und „Blatt einpassen“.
-    h.click_text(&mut st, "−");
+    h.click_text(&mut st, &zoom_out());
     assert!(h.layout().zoom < l3.zoom);
     h.click_text(&mut st, "Blatt einpassen");
     let l4 = h.layout();
@@ -906,7 +916,7 @@ fn panning_and_wheel_zoom_change_only_the_sheet_view() {
     );
     let fill = (paper.width() / l4.canvas.width()).max(paper.height() / l4.canvas.height());
     assert!(fill > 0.9, "{fill}");
-    h.click_text(&mut st, "+");
+    h.click_text(&mut st, &zoom_in());
     assert!(h.layout().zoom > 1.0);
 }
 
@@ -1107,7 +1117,7 @@ fn failed_view_shows_its_text_and_other_views_still_draw() {
         .filter(|t| t.text.contains(&msg))
         .collect();
     assert_eq!(seen.len(), 1, "{}", shot.text);
-    assert_eq!(seen[0].color, ERROR_COLOR);
+    assert_eq!(seen[0].color, theme::SHEET_LOST);
     assert!(
         frame.contains_rect(seen[0].rect),
         "{:?} in {frame:?}",
@@ -1555,7 +1565,7 @@ fn model_camera_is_unchanged_by_switching() {
         vec2(5.0, 5.0),
         PointerButton::Primary,
     );
-    h.click_text(&mut st, "+");
+    h.click_text(&mut st, &zoom_in());
     h.click_text(&mut st, "3D-Modell");
     assert_eq!(st.drawing_ui.area, WorkArea::Model);
     assert_eq!(st.camera, cam);
@@ -1885,7 +1895,7 @@ fn curves_are_flattened_once_per_model_and_zoom_and_never_on_an_unchanged_frame(
         "Treffersuche ohne neues Zerlegen"
     );
     // Ein anderer Zoom zerlegt genau einmal je Linie neu.
-    h.click_text(&mut st, "+");
+    h.click_text(&mut st, &zoom_in());
     let after_zoom = drawing_view::flatten_calls() - c1;
     assert!(
         after_zoom > 0 && after_zoom <= lines,

@@ -1,9 +1,10 @@
 //! Fenster „Verrunden“ bzw. „Fase“ (Menü „Bearbeiten“, Spec §6): Kante im Fenster anklicken,
 //! Maße eintragen, Art wählen, „Erzeugen“. Zahlen nehmen Komma und Punkt an.
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::sketch_view::{format_number, parse_number};
 use crate::state::{AppState, MAX_COORD_MM};
+use crate::theme;
 use planora_feature::BlendArt;
 use planora_kernel::blend::topo::{edge_uses, face_name};
 use planora_kernel::blend::{MAX_RADIUS_POINTS, min_blend_size_request};
@@ -479,7 +480,7 @@ impl BlendDialog {
         }
         let mut open = true;
         let (mut run, mut cancel) = (false, false);
-        egui::Window::new(self.title())
+        theme::window(ctx, self.title())
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
@@ -517,9 +518,15 @@ impl BlendDialog {
                         .show(ui, |ui| {
                             for (k, (p, r)) in self.points.iter_mut().enumerate() {
                                 ui.label(format!("Punkt {}", k + 1));
-                                ui.add(egui::TextEdit::singleline(p).desired_width(60.0));
+                                theme::text_field(
+                                    ui,
+                                    egui::TextEdit::singleline(p).desired_width(60.0),
+                                );
                                 ui.label("%");
-                                ui.add(egui::TextEdit::singleline(r).desired_width(60.0));
+                                theme::text_field(
+                                    ui,
+                                    egui::TextEdit::singleline(r).desired_width(60.0),
+                                );
                                 if ui.button("Entfernen").clicked() {
                                     remove = Some(k);
                                 }
@@ -538,12 +545,16 @@ impl BlendDialog {
                         .num_columns(3)
                         .show(ui, |ui| {
                             ui.label(l1);
-                            ui.add(egui::TextEdit::singleline(&mut self.first).desired_width(90.0));
+                            theme::text_field(
+                                ui,
+                                egui::TextEdit::singleline(&mut self.first).desired_width(90.0),
+                            );
                             ui.label("mm");
                             ui.end_row();
                             if let Some(l2) = l2 {
                                 ui.label(l2);
-                                ui.add(
+                                theme::text_field(
+                                    ui,
                                     egui::TextEdit::singleline(&mut self.second)
                                         .desired_width(90.0),
                                 );
@@ -574,7 +585,7 @@ impl BlendDialog {
                     "Tangentenkette (glatt anschließende Kanten mitnehmen)",
                 );
                 if let Some(e) = &self.error {
-                    ui.colored_label(ERROR_COLOR, e);
+                    ui.colored_label(error_color(ui.visuals().dark_mode), e);
                 }
                 ui.horizontal(|ui| {
                     if ui.button("Erzeugen").clicked() {

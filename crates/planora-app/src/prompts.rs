@@ -2,6 +2,7 @@
 //! [`Workspace`] auf; Eingabefelder bleiben erhalten, indem der Prompt geklont, bearbeitet und
 //! zurückgeschrieben wird.
 
+use crate::theme;
 use crate::workspace::{After, Prompt, SaveOutcome, Workspace};
 use planora_project::docstore::LockMode;
 use planora_project::library::{NodeKind, NodePath, TreeNode};
@@ -35,7 +36,7 @@ pub fn show(ctx: &egui::Context, ws: &mut Workspace) {
 
 /// Mittiges, festes Fenster für eine Rückfrage.
 fn window(ctx: &egui::Context, key: &str, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
-    egui::Window::new(title)
+    theme::window(ctx, title)
         .id(egui::Id::new(("planora_prompt", key)))
         .collapsible(false)
         .resizable(false)
@@ -102,12 +103,12 @@ fn save_comment(
             );
             ui.horizontal(|ui| {
                 ui.label("Zweig:");
-                ui.text_edit_singleline(b);
+                theme::text_field(ui, egui::TextEdit::singleline(b));
             });
         }
         ui.horizontal(|ui| {
             ui.label("Kommentar:");
-            ui.text_edit_singleline(&mut comment);
+            theme::text_field(ui, egui::TextEdit::singleline(&mut comment));
         });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -229,10 +230,10 @@ fn save_as(
             .num_columns(2)
             .show(ui, |ui| {
                 ui.label("Name:");
-                ui.text_edit_singleline(&mut name);
+                theme::text_field(ui, egui::TextEdit::singleline(&mut name));
                 ui.end_row();
                 ui.label("Kommentar:");
-                ui.text_edit_singleline(&mut comment);
+                theme::text_field(ui, egui::TextEdit::singleline(&mut comment));
                 ui.end_row();
             });
         ui.add_space(6.0);

@@ -1,10 +1,12 @@
 //! Fenster „Neue Zeichnung“ und Menü „Zeichnung“ (Teilprojekt 11, Aufgabe 15).
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::drawing_state::{WorkArea, suggest_scale};
 use crate::export_dialog::{shorten_for_display, wide_window};
+use crate::icons::{self, Icon};
 use crate::state::AppState;
+use crate::theme;
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewKind};
 use planora_feature::Document;
 
@@ -157,7 +159,7 @@ impl NewDrawingDialog {
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
                             ui.label("Name");
-                            ui.text_edit_singleline(&mut name);
+                            theme::text_field(ui, egui::TextEdit::singleline(&mut name));
                             ui.end_row();
                             ui.label("Papier");
                             egui::ComboBox::from_id_salt("planora-new-drawing-paper")
@@ -210,7 +212,7 @@ impl NewDrawingDialog {
                 cards = card_row(ui, "new-drawing", row);
                 ui.add_space(8.0);
                 if let Some(e) = error {
-                    ui.colored_label(ERROR_COLOR, e);
+                    ui.colored_label(error_color(ui.visuals().dark_mode), e);
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
@@ -258,10 +260,14 @@ pub fn drawing_menu(
 ) {
     let blocked = drawing_menu_blocked(state);
     let free = blocked.is_none();
-    if ui
-        .add_enabled(free && !read_only, egui::Button::new("Neue Zeichnung …"))
-        .on_disabled_hover_text(blocked.unwrap_or(READ_ONLY))
-        .clicked()
+    // Randlose Menüeinträge: der Tastaturfokus zeigt sich über `theme::entry` als Ring.
+    if theme::entry(
+        ui,
+        free && !read_only,
+        icons::button(Icon::NewDrawing, "Neue Zeichnung …"),
+    )
+    .on_disabled_hover_text(blocked.unwrap_or(READ_ONLY))
+    .clicked()
     {
         *dialog = Some(NewDrawingDialog::new(state));
         ui.close();
@@ -274,10 +280,13 @@ pub fn drawing_menu(
         .map(|d| (d.id, shorten_for_display(&d.name)))
         .collect();
     for (id, name) in list {
-        if ui
-            .add_enabled(free, egui::Button::new(format!("Öffnen: {name}")))
-            .on_disabled_hover_text(SKETCH_BLOCKED)
-            .clicked()
+        if theme::entry(
+            ui,
+            free,
+            icons::button(Icon::OpenDrawing, format!("Öffnen: {name}")),
+        )
+        .on_disabled_hover_text(SKETCH_BLOCKED)
+        .clicked()
         {
             // Die zuletzt offene Zeichnung behält Auswahl, Zoom und Verschiebung.
             state.drawing_ui.show_drawing(id);
@@ -285,8 +294,7 @@ pub fn drawing_menu(
             ui.close();
         }
     }
-    if ui
-        .add_enabled(free, egui::Button::new("Zum 3D-Modell"))
+    if theme::entry(ui, free, icons::button(Icon::ToModel, "Zum 3D-Modell"))
         .on_disabled_hover_text(SKETCH_BLOCKED)
         .clicked()
     {

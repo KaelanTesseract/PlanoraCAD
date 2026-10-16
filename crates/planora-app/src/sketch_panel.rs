@@ -1,16 +1,19 @@
 //! Schwebendes Fenster „Skizze“: Werkzeuge, Abhängigkeiten, Bearbeiten, Liste der
 //! Abhängigkeiten und Statuszeile. Es wird nur gezeichnet und an [`SketchSession`] weitergereicht.
 
+use crate::icons::{self, Icon, IconSource};
 use crate::sketch_state::{ConstraintAction, Item, Severity, SketchSession, Tool};
 use crate::sketch_view::{constraint_name, format_number, is_angle, parse_number, shown_value};
 use crate::state::AppState;
-use egui::{Color32, RichText};
+use crate::theme;
+use egui::RichText;
 use planora_feature::FeatureId;
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::model::{CurveKind, Sketch};
 
-const TOOLS: [(Tool, &str, &str); 9] = [
+/// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis.
+pub const TOOLS: [(Tool, &str, &str); 9] = [
     (
         Tool::Select,
         "Auswahl",
@@ -54,7 +57,8 @@ const TOOLS: [(Tool, &str, &str); 9] = [
     ),
 ];
 
-const ACTIONS: [ConstraintAction; 16] = {
+/// Abhängigkeiten, die die Skizzenleiste anbietet.
+pub const ACTIONS: [ConstraintAction; 16] = {
     use ConstraintAction::*;
     [
         Coincident,
@@ -76,11 +80,8 @@ const ACTIONS: [ConstraintAction; 16] = {
     ]
 };
 
-const ERROR: Color32 = Color32::from_rgb(230, 90, 90);
-const WARNING: Color32 = Color32::from_rgb(230, 160, 60);
-const OK: Color32 = Color32::from_rgb(90, 190, 110);
-
-/// Breite des Fensters „Skizze“.
+/// Breite des Fensters „Skizze“. Bleibt 300 statt der Graphit-Feldbreite 250: das Zahlenfeld
+/// eines Maßes (Name, Feld, Einheit, „OK“, „Abbrechen“) passt in 250 nicht in eine Zeile.
 const PANEL_WIDTH: f32 = 300.0;
 /// Höhe der Abhängigkeitsliste, ab der sie rollt.
 const LIST_HEIGHT: f32 = 180.0;
@@ -196,7 +197,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     }
     let mut panel = load_panel(ctx, index);
     let mut close = false;
-    egui::Window::new("Skizze")
+    theme::window(ctx, "Skizze")
         .id(panel_id().with("window"))
         .default_pos(egui::pos2(330.0, 90.0))
         // Feste Breite: Das Zahlenfeld oder die Liste sollen die Schaltflächen nicht umbrechen.
@@ -231,14 +232,17 @@ fn contents(
         panel.editor = None;
         panel.error = None;
     }
+    let dark = ui.visuals().dark_mode;
     ui.strong(&sk.name);
     ui.add_space(2.0);
 
     // Werkzeuge
-    ui.weak("Werkzeuge");
+    theme::section_header(ui, "Werkzeuge", theme::SUB_HEADER_H);
     ui.horizontal_wrapped(|ui| {
         for (tool, label, _) in TOOLS {
-            if ui.selectable_label(se.tool == tool, label).clicked() && se.tool != tool {
+            let selected = se.tool == tool;
+            let source = icons::sketch_tool_icon(tool);
+            if icons::source_button(ui, source, label, dark, selected).clicked() && !selected {
                 se.set_tool(sk, tool);
             }
         }
@@ -249,7 +253,7 @@ fn contents(
     ui.separator();
 
     // Abhängigkeiten
-    ui.weak("Abhängigkeiten");
+    theme::section_header(ui, "Abhängigkeiten", theme::SUB_HEADER_H);
     let available = se.available_actions(sk);
     ui.horizontal_wrapped(|ui| {
         for action in ACTIONS {
@@ -259,8 +263,7 @@ fn contents(
             } else {
                 action.label().to_string()
             };
-            if ui
-                .add_enabled(enabled, egui::Button::new(label).small())
+            if tool_button(ui, icons::sketch_action_icon(action), &label, enabled)
                 .on_disabled_hover_text("Passt nicht zur aktuellen Auswahl.")
                 .clicked()
             {
@@ -275,12 +278,12 @@ fn contents(
     });
     value_editor(ui, se, sk, panel);
     if let Some(m) = panel.error.as_ref().or(se.message.as_ref()) {
-        ui.colored_label(ERROR, m);
+        ui.colored_label(theme::palette(ui.visuals().dark_mode).error, m);
     }
     ui.separator();
 
     // Bearbeiten
-    ui.weak("Bearbeiten");
+    theme::section_header(ui, "Bearbeiten", theme::SUB_HEADER_H);
     let curves = se
         .selection
         .iter()
@@ -288,69 +291,90 @@ fn contents(
         .count();
     let axis = mirror_axis(se, sk);
     ui.horizontal_wrapped(|ui| {
-        if ui
-            .add_enabled(
-                curves > 0,
-                egui::Button::new("Konstruktion umschalten").small(),
-            )
-            .on_disabled_hover_text("Zuerst Kurven auswählen.")
-            .clicked()
+        if tool_button(
+            ui,
+            IconSource::Font(Icon::ToggleConstruction),
+            "Konstruktion umschalten",
+            curves > 0,
+        )
+        .on_disabled_hover_text("Zuerst Kurven auswählen.")
+        .clicked()
         {
             se.toggle_construction(sk);
         }
-        if ui
-            .add_enabled(
-                axis.is_some() && curves >= 2,
-                egui::Button::new("Spiegeln …").small(),
-            )
-            .on_disabled_hover_text(
-                "Kurven und zuletzt die Linie auswählen, an der gespiegelt wird.",
-            )
-            .clicked()
+        if tool_button(
+            ui,
+            IconSource::Font(Icon::Mirror),
+            "Spiegeln …",
+            axis.is_some() && curves >= 2,
+        )
+        .on_disabled_hover_text("Kurven und zuletzt die Linie auswählen, an der gespiegelt wird.")
+        .clicked()
         {
             panel.section = Some(Section::Mirror);
         }
-        if ui
-            .add_enabled(curves > 0, egui::Button::new("Muster …").small())
+        if tool_button(ui, IconSource::Font(Icon::Pattern), "Muster …", curves > 0)
             .on_disabled_hover_text("Zuerst Kurven auswählen.")
             .clicked()
         {
             panel.section = Some(Section::Pattern);
         }
-        if ui
-            .add_enabled(
-                !se.selection.is_empty(),
-                egui::Button::new("Löschen").small(),
-            )
-            .on_disabled_hover_text("Es ist nichts ausgewählt.")
-            .clicked()
+        if tool_button(
+            ui,
+            IconSource::Font(Icon::Delete),
+            "Löschen",
+            !se.selection.is_empty(),
+        )
+        .on_disabled_hover_text("Es ist nichts ausgewählt.")
+        .clicked()
         {
             se.delete_selection(sk);
         }
     });
     sections(ui, se, sk, panel);
-    ui.checkbox(&mut se.auto_constrain, "Automatisch waagerecht/senkrecht");
+    ui.add(theme::Toggle::new(
+        &mut se.auto_constrain,
+        "Automatisch waagerecht/senkrecht",
+    ));
     ui.separator();
 
     // Liste der Abhängigkeiten
-    ui.weak("Abhängigkeiten der Skizze");
+    theme::section_header(ui, "Abhängigkeiten der Skizze", theme::SUB_HEADER_H);
     constraint_list(ui, se, sk, panel);
     ui.separator();
 
     let close = ui
-        .button(RichText::new("Skizze beenden").strong())
+        .add(icons::button(
+            Icon::EndSketch,
+            RichText::new("Skizze beenden").strong(),
+        ))
         .clicked();
 
     // Statuszeile
     let (text, severity) = se.status(sk);
+    let p = theme::palette(ui.visuals().dark_mode);
     let color = match severity {
-        Severity::Info if se.last_report.as_ref().is_some_and(|r| r.dof == 0) => OK,
-        Severity::Info => ui.visuals().text_color(),
-        Severity::Warning => WARNING,
-        Severity::Error => ERROR,
+        Severity::Info if se.last_report.as_ref().is_some_and(|r| r.dof == 0) => p.ok,
+        Severity::Info => p.text_secondary,
+        Severity::Warning => p.warning,
+        Severity::Error => p.error,
     };
     ui.colored_label(color, text);
     close
+}
+
+/// Leistenknopf mit Symbol (Schrift oder gezeichnet) und Text, ohne Rand; gesperrt blass.
+fn tool_button(
+    ui: &mut egui::Ui,
+    source: IconSource,
+    label: &str,
+    enabled: bool,
+) -> egui::Response {
+    let dark = ui.visuals().dark_mode;
+    // `add_enabled` statt `add_enabled_ui`: ohne eigenen Bereich bricht die Zeile richtig um.
+    ui.add_enabled(enabled, |ui: &mut egui::Ui| {
+        icons::source_button(ui, source, label, dark, false)
+    })
 }
 
 /// Vorgabetext des Zahlenfelds (Winkel in Grad).
@@ -394,7 +418,10 @@ fn value_editor(
     let (mut ok, mut cancel) = (false, false);
     ui.horizontal(|ui| {
         ui.label(format!("{title}:"));
-        let r = ui.add(egui::TextEdit::singleline(&mut editor.text).desired_width(70.0));
+        let r = theme::text_field(
+            ui,
+            egui::TextEdit::singleline(&mut editor.text).desired_width(70.0),
+        );
         if editor.focus {
             r.request_focus();
             editor.focus = false;
@@ -456,14 +483,23 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
         Some(Section::Pattern) => {
             ui.horizontal(|ui| {
                 ui.label("Versatz x");
-                ui.add(egui::TextEdit::singleline(&mut panel.pattern_dx).desired_width(50.0));
+                theme::text_field(
+                    ui,
+                    egui::TextEdit::singleline(&mut panel.pattern_dx).desired_width(50.0),
+                );
                 ui.label("y");
-                ui.add(egui::TextEdit::singleline(&mut panel.pattern_dy).desired_width(50.0));
+                theme::text_field(
+                    ui,
+                    egui::TextEdit::singleline(&mut panel.pattern_dy).desired_width(50.0),
+                );
                 ui.label("mm");
             });
             ui.horizontal(|ui| {
                 ui.label("Anzahl Kopien");
-                ui.add(egui::TextEdit::singleline(&mut panel.pattern_count).desired_width(40.0));
+                theme::text_field(
+                    ui,
+                    egui::TextEdit::singleline(&mut panel.pattern_count).desired_width(40.0),
+                );
                 if ui.small_button("Erzeugen").clicked() {
                     let dx = parse_number(&panel.pattern_dx);
                     let dy = parse_number(&panel.pattern_dy);
@@ -519,7 +555,7 @@ fn constraint_list(
                 let selected = se.selection.contains(&item);
                 let mut text = RichText::new(constraint_name(sk, &kind, driven));
                 if bad.contains(&id) {
-                    text = text.color(ERROR);
+                    text = text.color(theme::palette(ui.visuals().dark_mode).error);
                 }
                 ui.horizontal(|ui| {
                     let r = ui.selectable_label(selected, text);

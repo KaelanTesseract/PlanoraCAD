@@ -5,12 +5,13 @@
 //! Schrift und Einrückung, volle Breite. Die Zustandsfunktionen (`request_*`, `apply_*`) sind
 //! ohne Oberfläche testbar.
 
-use crate::browser::{ERROR_COLOR, body_indent, row};
+use crate::browser::{body_indent, error_color, row};
 use crate::drawing_dialog::{DUPLICATE_NAME, EMPTY_NAME, SKETCH_BLOCKED, paper_label};
 use crate::drawing_state::WorkArea;
 use crate::drawing_view::view_names;
 use crate::icons::{paint_drawing_icon, paint_view_icon};
 use crate::state::AppState;
+use crate::theme;
 use planora_drawing::{Drawing, DrawingId, Projection, ViewId};
 
 /// Text bei fehlenden Zeichnungen.
@@ -347,8 +348,8 @@ fn rows_of(state: &AppState) -> Vec<DrawingRow> {
 /// Abschnitt „Zeichnungen“ unter dem Feature-Baum samt Fenstern „Umbenennen“ und Rückfrage.
 /// `read_only` (alte Version): Wählen und Öffnen gehen, Ändern ist gesperrt.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
-    ui.heading("Zeichnungen");
-    ui.add_space(4.0);
+    theme::section_header(ui, "Zeichnungen", theme::SUB_HEADER_H);
+    ui.add_space(theme::SPACE_1);
     let rows = rows_of(state);
     if rows.is_empty() {
         ui.weak(EMPTY_TEXT);
@@ -485,18 +486,18 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
     let error = rename_error(state, id, &name);
     let (mut apply, mut cancel) = (false, false);
     let mut open = true;
-    egui::Window::new("Umbenennen")
+    theme::window(ctx, "Umbenennen")
         .id(egui::Id::new("planora-rename-drawing"))
         .collapsible(false)
         .resizable(false)
         .open(&mut open)
         .show(ctx, |ui| {
-            let r = ui.text_edit_singleline(&mut name);
+            let r = theme::text_field(ui, egui::TextEdit::singleline(&mut name));
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 apply = true;
             }
             if let Some(e) = error {
-                ui.colored_label(ERROR_COLOR, e);
+                ui.colored_label(error_color(ui.visuals().dark_mode), e);
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -529,7 +530,7 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     };
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
-    egui::Window::new("Rückfrage")
+    theme::window(ctx, "Rückfrage")
         .id(egui::Id::new("planora-delete-drawing"))
         .collapsible(false)
         .resizable(false)
@@ -540,7 +541,9 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
-                    .button(egui::RichText::new("Löschen").color(ERROR_COLOR))
+                    .button(
+                        egui::RichText::new("Löschen").color(error_color(ui.visuals().dark_mode)),
+                    )
                     .clicked()
                 {
                     confirm = true;

@@ -1511,7 +1511,7 @@ fn dark_theme_keeps_marks_black_on_white_paper() {
     assert_eq!(st.drawing_ui.selected_dim, Some(w));
     let shot = h.idle(&mut st);
     assert_eq!(shot.text("10,0").color, theme::SHEET_SELECTED);
-    assert_eq!(theme::SHEET_SELECTED, theme::accent(false));
+    assert_eq!(theme::SHEET_SELECTED, Color32::from_rgb(0x1f, 0x6f, 0xe0));
 }
 
 // ---------------------------------------------------------------------------------------------

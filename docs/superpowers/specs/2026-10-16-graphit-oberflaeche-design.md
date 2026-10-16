@@ -142,3 +142,45 @@ Diese Punkte entscheidet der Entwurfsverfasser (nicht der Nutzer); der Nutzer ka
 **F7 – Hell und Dunkel bleibt je Dokument-Tab** (wie heute, `state.dark`). Beim Tab-Wechsel wechselt das ganze Programm mit (die schwebenden Felder gehören zum aktiven Tab).
 
 **F8 – Offene Gestaltung der Felder-Inhalte.** Genauer Inhalt des unteren Befehlsfelds (Chips und Werkzeug-Symbole) folgt den heutigen Menüs Erzeugen und Bearbeiten, wobei jeder Eintrag erreichbar bleibt (das Menü bleibt vollständig); das untere Feld ist eine Abkürzung, kein Ersatz. Der Modusschalter oben rechts bleibt in Etappe B leer oder zeigt nur, was es heute schon gibt (Anzeige-Modi); neue Modi werden nicht erfunden.
+
+## 10. Festlegungen der Umsetzung Etappe A
+
+Stand: 2026-10-16, Zweig `feature/graphit-etappe-a`. Plan: `plans/2026-10-16-graphit-etappe-a.md`. Hier steht, was bei der Umsetzung anders wurde oder entschieden werden musste.
+
+**Entscheidungen (Rulings)**
+- **Kontrast Nebentext auf aktivem Grund.** Graphit selbst führt `text-secondary #939393` auf `bg-active #333333` mit etwa 3,9 : 1. Der Kontrasttest verlangt deshalb `text_primary` auf allen Flächen mit 4,5 : 1, `text_secondary` auf Panel, Abschnitt, Feld und Eingabe mit 4,5 : 1, auf `bg_active` nur 3,0 : 1. Aktive Elemente zeigen ihre Beschriftung in `text_primary`.
+- **Schrift.** Montserrat Regular, Medium und SemiBold (OFL 1.1) liegen mit Lizenztext in `crates/planora-app/assets/fonts/`, ebenso Phosphor Light (MIT) mit `style.css` als Quelle der Codepunkte. Roboto bleibt als zweite Schrift jeder Familie (Absicherung; Montserrat hat alle erlaubten Zeichen schon selbst). `skrifa` 0.44 ist Dev-Abhängigkeit des Glyphentests (steht über `epaint` schon im `Cargo.lock`; die Glyphenprüfung von egui 0.36.2 war unzuverlässig).
+- **Symbol-Codepunkte** stehen als `\u{..}`-Escapes im Quelltext (der Wächtertest gegen Nicht-ASCII-Zeichen bleibt gültig).
+- **Skizzenfenster bleibt 300 px breit** (F5 erlaubte 250 px nur, wenn der Inhalt passt; er passt nicht).
+- **Zeichnungsleiste** bricht im Bereich um 640 px Breite schon seit vorher auf mehr als zwei Zeilen um. Das bleibt; es ist ein Layout-Thema für Etappe C.
+- **Schalter ohne Rand.** Werkzeug- und Symbolschalter, Tabs und Menüknöpfe sind randlos; den Tastaturfokus zeigt `theme::focus_ring` (2 px Akzent).
+
+**Abweichungen in der hellen Palette** (Kontrast unter 4,5 : 1 bzw. Unterscheidbarkeit, Spec §4 war ein Entwurf)
+- `bg_active` hell `#cfd0d5` statt `#dcdce0` (Hover und Aktiv müssen sich unterscheiden), `bg_field` hell `#dadbdf`.
+- `text_tertiary` hell `#66666e`; Achsenfarben und Fehlerrot (`#c62828`) hell dunkler als im Entwurf.
+- Warnung `#8c5200`, Erfolg `#2a7020`, Markierung `#1a5cc4` hell dunkler: der Kontrasttest prüft auch `bg_viewport` `#e8e9ec` (zugleich `panel_fill`; Menü-, Tab- und Statusleiste stehen darauf) und verlangt dort 4,5 : 1. Der dunkle Graphit-Wert `text_tertiary` `#7d7d7d` bleibt davon ausgenommen (4,2 bis 4,7 : 1).
+- `disabled_alpha` 0,75 statt 0,5: gesperrter Nebentext mindestens 3 : 1 auf Fenster, Feld, Abschnitt und Eingabe in beiden Themen.
+- Skizzen-Auswahl hell `#a86a00` statt `#d9a400`, `axis_y` hell `#36903a`.
+- `ground_axis` hell bleibt unter 3 : 1 (2,45 : 1; es ist eine Linie, kein Text).
+- `drawing_surround` hell nutzt `bg_active` (geliehene Bedeutung).
+
+**Rundungen der Umsetzung**
+- `SHEET_SELECTED` bleibt `#1f6fe0` (Papier), nur das Programm-`accent` wechselt auf `#006dfd`.
+- Fehlertext und Rahmen einer fehlgeschlagenen Ansicht auf dem weißen Blatt nutzen in beiden Themen `SHEET_LOST` (Test `drawing_ui`).
+- Die 3D-Szene nimmt Raster, Achsen und Auswahl aus der Palette (`viewport::render_palette`); Flächen, Kanten und Hover bleiben bei `planora_render` (Etappe B).
+- `animation_time` 120 ms.
+- Plain-Labels sind grau (`text_secondary`), Werte und Titel stark; Hyperlinks haben `text_primary`.
+- Buttons sind im Ruhezustand ohne Fläche, mit 1 px `border_subtle` an Dialogknöpfen; Hover `text_tertiary`.
+
+**Öffentliche Schnittstelle (mehr als im Plan)**
+- `theme`: `window`, `section_header`, `SUB_HEADER_H`, `value`, `field`, `Toggle`, `menu_style`, `frameless`, `heading_font`, `label_font`, `value_font`, `kbd_font`, `text_field`, `text_field_enabled`, `focus_ring`, `entry`, `DISABLED_ALPHA`, `ANIMATION_TIME`.
+- `viewport::render_palette`, `sketch_view::overlay_text` (für Tests).
+- `icons`: `atom`, `button`, `selectable`, `source_entry`, `IconSource`, `sketch_tool_icon`, `sketch_action_icon`, `source_button`, `label`, `label_colored`, `stroke_color`; 59 Phosphor-Symbole (`Icon`) und 8 selbst gezeichnete (`HandIcon`).
+- `app`: `file_menu`, `menu_bar` (`doc(hidden)`).
+Vieles davon wäre `pub(crate)`; es ist `pub`, weil Tests und mehrere Module es brauchen. Aufräumen in Etappe D.
+
+**Wächtertests**
+- `no_raw_text_edits` (alle Einzeilen-Textfelder über `theme::text_field`) und der Test gegen hartkodierte Farben prüfen nur `src/*.rs` der obersten Ebene (es gibt dort keine Unterordner). Mehrzeilige Textfelder prüft keiner (es gibt keine). Der Selbsttest des Farb-Scanners deckt nicht alle Konstruktoren ab.
+- Die Layout-Tests der meisten Testgeräte setzen nur die Schrift, nicht das Theme; Überlauf durch die neuen Abstände ist daher nur durch den Näherungstest `no_text_is_clipped_at_1400px` (Summe der Textbreiten) und die Handliste abgedeckt.
+
+**Bewusst offen gelassen** (Einzelheiten in `offene-punkte.md`): Symbolwahl für Symmetrisch, Muster, Kante projizieren, Deckungsgleich, Kegel, Kugel, Drehen, Ansicht, „zum Ende springen“ nur ungefähr; Browser-Kontextmenüs ohne Symbole; Dialog-Checkboxen unverändert; Fokusring am Menürand evtl. beschnitten.

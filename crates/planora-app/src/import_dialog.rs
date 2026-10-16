@@ -4,13 +4,14 @@
 //! gehört zu dem Dokumentstand, bei dem die Datei gewählt wurde; hat sich das Dokument seither
 //! geändert, wird nichts übernommen.
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::export_dialog::{LOST, PROGRESS_WIDTH, REPAINT, file_name, group_digits, wide_window};
 use crate::file_chooser::{ChooserAction, FileChooser};
 use crate::jobs::{Job, Poll};
-use crate::mesh_body::{WARNING_COLOR, report_text};
+use crate::mesh_body::{report_text, warning_color};
 use crate::state::AppState;
+use crate::theme;
 use planora_exchange::{ExchangeError, ExchangeMesh, MeshReport, check_mesh, import_file};
 use planora_feature::FeatureId;
 use std::path::{Path, PathBuf};
@@ -234,7 +235,7 @@ impl ImportDialog {
                     });
                 }
                 if let Some(e) = &self.error {
-                    ui.colored_label(ERROR_COLOR, e);
+                    ui.colored_label(error_color(ui.visuals().dark_mode), e);
                 }
                 if let Some(l) = &self.loaded {
                     ui.separator();
@@ -249,13 +250,19 @@ impl ImportDialog {
                         if l.report.closed {
                             ui.label(report_text(&l.report));
                         } else {
-                            ui.colored_label(WARNING_COLOR, report_text(&l.report));
-                            ui.colored_label(WARNING_COLOR, OPEN_MESH_HINT);
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                report_text(&l.report),
+                            );
+                            ui.colored_label(warning_color(ui.visuals().dark_mode), OPEN_MESH_HINT);
                         }
                     };
                     let mut name_card = |ui: &mut egui::Ui| {
                         ui.strong("Name");
-                        ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY));
+                        theme::text_field(
+                            ui,
+                            egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY),
+                        );
                         ui.add_space(4.0);
                         ui.strong("Einheit der Datei");
                         ui.horizontal_wrapped(|ui| {

@@ -4,6 +4,7 @@
 
 use crate::sketch_state::{Item, SketchSession, Snap, Tool};
 use crate::state::AppState;
+use crate::theme::{lighten as lighter, sketch_colors as colors};
 use crate::viewport;
 use egui::{Color32, FontId, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
@@ -216,7 +217,12 @@ fn symbol(ctx: &egui::Context, preferred: &'static str, fallback: &'static str) 
 }
 
 /// Beschriftung einer Abhängigkeit in der Ansicht: Symbol bzw. Maß mit Einheit.
-fn overlay_text(ctx: &egui::Context, sk: &Sketch, kind: &ConstraintKind, driven: bool) -> String {
+pub fn overlay_text(
+    ctx: &egui::Context,
+    sk: &Sketch,
+    kind: &ConstraintKind,
+    driven: bool,
+) -> String {
     use ConstraintKind as K;
     let plain = match kind {
         K::Coincident(..) | K::ArcRadius(..) => return String::new(),
@@ -240,7 +246,9 @@ fn overlay_text(ctx: &egui::Context, sk: &Sketch, kind: &ConstraintKind, driven:
     };
     let text = match kind {
         K::Radius(..) => format!("R {}", format_length(v)),
-        K::Diameter(..) => format!("{} {}", symbol(ctx, "Ø", "D"), format_length(v)),
+        // Ø ohne Ersatz: Montserrat hat das Zeichen (tests/fonts.rs prüft das), und die
+        // Glyphenabfrage von egui meldete es fälschlich als fehlend.
+        K::Diameter(..) => format!("Ø {}", format_length(v)),
         K::EllipseMajor(..) => format!("a {}", format_length(v)),
         K::EllipseMinor(..) => format!("b {}", format_length(v)),
         _ => value_text(kind, v),
@@ -301,61 +309,6 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         | K::EllipseAngle(c, _) => vec![curve_anchor(sk, *c)],
     };
     found.into_iter().flatten().collect()
-}
-
-// ---- Farben ---------------------------------------------------------------------------------
-
-struct Colors {
-    free: Color32,
-    determined: Color32,
-    selected: Color32,
-    construction: Color32,
-    /// Kurven fertiger Skizzen in der 3D-Ansicht.
-    finished: Color32,
-    error: Color32,
-    text: Color32,
-    label_bg: Color32,
-    preview: Color32,
-    axis_x: Color32,
-    axis_y: Color32,
-}
-
-fn colors(dark: bool) -> Colors {
-    if dark {
-        Colors {
-            free: Color32::from_rgb(0x4c, 0x9a, 0xff),
-            determined: Color32::from_rgb(0x4c, 0xc9, 0x6a),
-            selected: Color32::from_rgb(0xff, 0x9a, 0x2e),
-            construction: Color32::from_rgb(0x8a, 0x92, 0xa3),
-            finished: Color32::from_rgb(0x7f, 0xb4, 0xff),
-            error: Color32::from_rgb(0xf0, 0x5a, 0x5a),
-            text: Color32::from_rgb(0xe6, 0xe9, 0xf0),
-            label_bg: Color32::from_rgba_unmultiplied(0x15, 0x17, 0x1b, 0xd8),
-            preview: Color32::from_rgb(0xa8, 0xcc, 0xff),
-            axis_x: Color32::from_rgb(0xe0, 0x50, 0x50),
-            axis_y: Color32::from_rgb(0x50, 0xc0, 0x60),
-        }
-    } else {
-        Colors {
-            free: Color32::from_rgb(0x1f, 0x6f, 0xe0),
-            determined: Color32::from_rgb(0x1a, 0x93, 0x3a),
-            selected: Color32::from_rgb(0xe0, 0x72, 0x00),
-            construction: Color32::from_rgb(0x80, 0x87, 0x96),
-            finished: Color32::from_rgb(0x2a, 0x5f, 0xb8),
-            error: Color32::from_rgb(0xd0, 0x30, 0x30),
-            text: Color32::from_rgb(0x1e, 0x22, 0x2c),
-            label_bg: Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0xe0),
-            preview: Color32::from_rgb(0x4a, 0x8a, 0xe8),
-            axis_x: Color32::from_rgb(0xd0, 0x30, 0x30),
-            axis_y: Color32::from_rgb(0x20, 0x99, 0x40),
-        }
-    }
-}
-
-/// Heller (für die Hervorhebung unter dem Mauszeiger).
-fn lighter(c: Color32) -> Color32 {
-    let mix = |v: u8| v.saturating_add(((255 - u16::from(v)) * 2 / 5) as u8);
-    Color32::from_rgba_unmultiplied(mix(c.r()), mix(c.g()), mix(c.b()), c.a())
 }
 
 // ---- Overlay ----------------------------------------------------------------------------------

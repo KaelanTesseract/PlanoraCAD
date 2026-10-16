@@ -7,7 +7,7 @@
 //! Text auf dem Blatt ([`planora_drawing::annotate::dimension_text`]). Ein Maß ohne Bezug zeigt
 //! nie einen Wert, sondern ein rotes `?` mit dem Grund als Hinweistext.
 
-use crate::browser::{ERROR_COLOR, body_indent, row};
+use crate::browser::{body_indent, error_color, row};
 use crate::dimension_dialog;
 use crate::dimension_state::resolve_in;
 use crate::drawing_browser::{READ_ONLY_HINT, open_drawing, select_drawing};
@@ -15,6 +15,7 @@ use crate::drawing_state::WorkArea;
 use crate::drawing_view::view_names;
 use crate::icons::{paint_dimension_icon, paint_view_icon};
 use crate::state::AppState;
+use crate::theme;
 use planora_drawing::DrawingId;
 use planora_drawing::annotate::dimension_text;
 use planora_drawing::dimension::{DimError, DimId, DimKind, DimSpec, Measured};
@@ -201,9 +202,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
 }
 
 fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bool) {
-    ui.add_space(10.0);
-    ui.heading("Maße");
-    ui.add_space(4.0);
+    ui.add_space(theme::SPACE_3);
+    theme::section_header(ui, "Maße", theme::SUB_HEADER_H);
+    ui.add_space(theme::SPACE_1);
     let groups = groups_of(state, id);
     if groups.is_empty() {
         ui.weak(EMPTY_TEXT);
@@ -224,7 +225,10 @@ fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bo
         for r in &g.rows {
             let dim = r.id;
             let selected = state.drawing_ui.selected_dim == Some(dim);
-            let color = r.lost.is_some().then_some(ERROR_COLOR);
+            let color = r
+                .lost
+                .is_some()
+                .then_some(error_color(ui.visuals().dark_mode));
             let resp = row(
                 ui,
                 body_indent(),
@@ -307,7 +311,7 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     }
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
-    egui::Window::new("Rückfrage")
+    theme::window(ctx, "Rückfrage")
         .id(egui::Id::new("planora-delete-dimension"))
         .collapsible(false)
         .resizable(false)
@@ -318,7 +322,9 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
-                    .button(egui::RichText::new("Löschen").color(ERROR_COLOR))
+                    .button(
+                        egui::RichText::new("Löschen").color(error_color(ui.visuals().dark_mode)),
+                    )
                     .clicked()
                 {
                     confirm = true;

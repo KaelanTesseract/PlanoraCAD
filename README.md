@@ -244,6 +244,19 @@ Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 6 �
 
 Lizenz: GPL-3.0-only (siehe `LICENSE`).
 
+## Neues Aussehen (Graphit)
+
+Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, dünne Ränder, Farbe nur dort, wo sie etwas bedeutet (eingeschalteter Modus, gewählte Teile, Tastaturfokus).
+
+- Hell oder Dunkel: Du kannst für jedes Dokument zwischen hellem und dunklem Aussehen wählen. Das Papier der Zeichnung bleibt in beiden Fällen weiß.
+- Neue Schrift: Montserrat in drei Stärken, überall im Programm.
+- Neue Symbole: einheitliche Linien-Symbole in den Menüs und Werkzeugleisten, dazu passend gezeichnete Symbole für die Skizzenwerkzeuge.
+- Einheitliche Abstände, Ränder und Rundungen in allen Fenstern.
+
+**Noch nicht fertig:** Der Aufbau des Fensters ist wie vorher. Die Felder, die frei über dem Bild schweben, kommen in späteren Etappen (zuerst Modell, dann Zeichnung und Skizze, zuletzt die Dialoge). Bis dahin kann es sein, dass einzelne Leisten, zum Beispiel die Zeichnungsleiste in einem schmalen Fenster, auf mehrere Zeilen umbrechen.
+
+Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 13“.
+
 ## Bauen
 
     cargo run -p planora-app --release
@@ -258,4 +271,4 @@ Unter Linux werden zusätzlich die System-Bibliotheken aus `.github/workflows/ci
     cargo deny check
 
 ## Drittanbieter
-- Schrift: Roboto 2.138, Apache-2.0 (siehe `crates/planora-app/assets/fonts/`).
+- Schrift: Montserrat, OFL 1.1; Symbolschrift Phosphor, MIT; Ersatzschrift Roboto 2.138, Apache-2.0 (siehe `crates/planora-app/assets/fonts/`).

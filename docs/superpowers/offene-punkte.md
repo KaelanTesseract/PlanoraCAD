@@ -598,6 +598,82 @@ Stand: 2026-10-16. Zeichnungen bekommen Maße (waagerecht, senkrecht, schräg, D
 - `cargo fmt --all --check` und `cargo clippy --workspace --all-targets -- -D warnings` sind sauber; `cargo deny check` meldet advisories, bans, licenses und sources ok (nur Hinweise auf doppelte Versionen). Keine neue externe Abhängigkeit.
 - Geschützte Pfade (`crates/planora-kernel`, `crates/planora-mesh`, `crates/planora-step`, `crates/planora-exchange`) sind bitgleich zu `945fa67` (`git diff --stat 945fa67 -- …` ist leer).
 
+## Teilprojekt 13 – Graphit-Oberfläche, Etappe A (Farben, Schrift, Symbole)
+Stand: 2026-10-16. Das ganze Programm hat das neue Aussehen „Graphit“ in Hell und Dunkel, die Schrift Montserrat und einheitliche Symbole. Der Aufbau des Fensters ist unverändert (egui_tiles, Menüleiste, Tab-Leiste, Statuszeile, Zeichnungsleiste, Fenster „Skizze“). Das ist Etappe A von vieren (B Modell-Layout, C Zeichnung und Skizze, D Dialoge). Spec: `specs/2026-10-16-graphit-oberflaeche-design.md` (Abschnitt 10 „Festlegungen der Umsetzung Etappe A“). Plan: `plans/2026-10-16-graphit-etappe-a.md`. Zweig `feature/graphit-etappe-a`.
+
+**Was geliefert wurde**
+- Schriften: Montserrat (Regular, Medium, SemiBold; OFL 1.1) mit Roboto als Absicherung, Symbolschrift Phosphor Light (MIT), Lizenztexte und Prüfsummen in `assets/fonts/`. Test: jedes erlaubte Zeichen (Umlaute, ß, „“ – − · × ° ± ² ³ … Ø) ist in der Schrift vorhanden.
+- Zentrales Theme (`theme.rs`): Palette in Hell und Dunkel, Abstände, Rundungen, Größen, Textstile, Feldrahmen und Zeilen-/Feld-Helfer, Fokusring; Kontrasttest für beide Themen.
+- Symbole (`icons.rs`): 59 Symbole aus Phosphor Light (`Icon`) und 8 selbst gezeichnete (`HandIcon`: Bogen, Ellipse und Abhängigkeiten ohne Entsprechung in Phosphor); dazu die schon vorher gezeichneten Körper-, Feature-, Zeichnungs- und Maß-Symbole. Symbole in Menüs und Werkzeugzeilen.
+- Farben aus Skizze, Würfel, Fehler und Warnung laufen über das Theme; ein Wächtertest verbietet neue hartkodierte Farben. Das Papier bleibt weiß mit schwarzen Maßen.
+- Alle bestehenden Fenster, Leisten und Panels nutzen die neuen Helfer; ein Wächtertest verlangt `theme::text_field` für Einzeilen-Textfelder.
+
+**Entscheidungen**
+- Nebentext auf aktivem Grund darf 3,0 : 1 haben (Graphit selbst führt 3,9 : 1); alle anderen Paarungen 4,5 : 1.
+- Dev-Abhängigkeit `skrifa` 0.44 für den Glyphentest (im `Cargo.lock` schon über `epaint`; `cargo deny` grün).
+- Skizzenfenster bleibt 300 px breit.
+- Werkzeug-/Symbolschalter, Tabs und Menüknöpfe sind randlos; Tastaturfokus als 2-px-Akzentring (Menüeinträge über `theme::entry`, auch im Menü „Zeichnung“ und bei Einträgen mit Schriftsymbol).
+- Selbst gezeichnete Knöpfe (`icons::source_button`) und Abschnittsköpfe (`theme::section_header`) melden Art, Text und Zustand an Bildschirmleser (`widget_info`).
+- Übergänge dauern 120 ms (`animation_time`).
+- Durchmesser in der Skizze mit „Ø“ (vorher wegen der unzuverlässigen Glyphenabfrage von egui immer „D“).
+- Ausführlich: Spec Abschnitt 10.
+
+**Grenzen und offene Punkte**
+
+*Kontrast*
+- Nebentext (`text_secondary`) auf `bg_active`: nur 3,0 : 1 geprüft (dunkel etwa 3,9 : 1).
+- Helle Palette weicht vom Entwurf ab: `bg_active` `#cfd0d5` statt `#dcdce0`, `bg_field` `#dadbdf`, `text_tertiary` `#66666e`, dunklere Achsenfarben und Fehlerrot `#c62828`, Skizzen-Auswahl `#a86a00` statt `#d9a400`, `axis_y` `#36903a`. Warnung `#8c5200`, Erfolg `#2a7020` und Markierung `#1a5cc4` sind dunkler, weil sie auch auf dem Fensterhintergrund `bg_viewport` `#e8e9ec` (Menü-, Tab- und Statusleiste, z. B. der Nur-Lese-Hinweis) 4,5 : 1 erreichen müssen. Die helle Vorschau sieht daher leicht anders aus.
+- Der Kontrasttest prüft Text auf allen Flächen einschließlich `bg_viewport`. Ausgenommen bleibt der dunkle Graphit-Wert `text_tertiary` `#7d7d7d` (4,7 : 1 auf `bg_viewport`, 4,3 auf `bg_panel`, 4,2 auf `bg_section`); hell `#66666e` hat 4,7 / 5,7 / 5,2.
+- Gesperrte Elemente: `disabled_alpha` 0,75 (egui-Vorgabe 0,5). Gesperrter Nebentext erreicht damit mindestens 3 : 1 auf Fenster, Feld, Abschnitt und Eingabe (hell 3,2 auf `bg_viewport`, auf `bg_field` und `bg_active` darunter; dort steht kein gesperrter Text).
+- Helle Bodenachse (`ground_axis`) hat nur 2,45 : 1 (Linie, kein Text). Helle Achsen sind schwach.
+- Skizzenfarben sind teilweise leicht zu verwechseln.
+- `drawing_surround` hell borgt `bg_active`; `PAPER_SHADOW` ist auf dunklem Umfeld kaum sichtbar.
+- 3D-Szene: Raster (`viewport_grid`), Achsen und Auswahl (`selection`, gewählte Kanten hell `#a86a00`) kommen aus dem Theme (`viewport::render_palette`); Flächen-, Kanten- und Hover-Farben sind weiter die alten Werte aus `planora_render` (Etappe B). `ground_axis` wird nicht genutzt (die Szene hat nur die Achsen X, Y, Z).
+- Hyperlinks sind `text_primary`; Plain-Labels grau, Werte und Titel stark.
+
+*Layout*
+- Zeichnungsleiste im Viewport-Bereich bricht schon ab etwa 640 px Breite auf mehr als zwei Zeilen um (war vorher schon so). Etappe C.
+- Das Fenster „Skizze“ bleibt 300 px breit und ist durch die 12-px-Abschnittsköpfe etwa 48 px höher als vorher.
+- Felder (26 px) machen die Zeilen der Eigenschaftentabelle etwas höher.
+- Fokusring am Menürand kann dort beschnitten sein.
+- Dialog-Checkboxen sind unverändert; Browser-Kontextmenüs haben keine Symbole.
+- Der Knopf „Maß“ ändert sich beim Überfahren nicht sichtbar.
+
+*Symbole*
+- Ungefähre Wahl: Symmetrisch, Muster, Kante projizieren, Deckungsgleich, Kegel, Kugel, Drehen, „zum Ende springen“. ViewFace ist für alle Ansichten gleich.
+- Winkel (Phosphor) sieht etwas anders aus als Radius und Durchmesser (gezeichnet). Die gezeichneten Symbole haben 1,0-px-Feinlinien.
+- `icons::label()` setzt 12 px fest (gegen `TextStyle::Button` noch nicht abgeglichen).
+
+*Öffentliche Schnittstelle*
+- Mehr `pub` als nötig: `theme::{window, section_header, SUB_HEADER_H, value, field, Toggle, menu_style, frameless, heading_font, label_font, value_font, kbd_font, text_field, text_field_enabled, focus_ring, entry, DISABLED_ALPHA, ANIMATION_TIME}`, `viewport::render_palette`, `sketch_view::overlay_text`, `icons::{atom, button, selectable, source_entry, source_button, …}`, `app::{file_menu, menu_bar}` (`doc(hidden)`). Vieles könnte `pub(crate)` sein. Aufräumen in Etappe D.
+
+*Umfang der Prüfungen*
+- Wächtertests (hartkodierte Farben, rohe Textfelder) scannen nur `src/*.rs` der obersten Ebene; mehrzeilige Textfelder prüft keiner. Der Selbsttest des Farb-Scanners deckt nicht alle Konstruktoren ab.
+- Die meisten Testgeräte setzen nur die Schrift, nicht das Theme. Überlauf durch Abstände und Montserrat ist nur durch den Näherungstest `no_text_is_clipped_at_1400px` (Summe der Textbreiten) abgedeckt. Die Handliste unten ist deshalb wichtig.
+- `ALLOWED` im Glyphentest ist handgepflegt; Roboto als Ersatzschrift wird nie gebraucht (Montserrat hat alle Zeichen).
+- Zwischencommits der Aufgabe 5 wurden nicht einzeln kompiliert.
+
+*Test mit Zeitabhängigkeit (behoben)*
+- `export_step::the_window_stays_open_with_a_hint_while_step_is_written` (300 Quader, Abbrechen während des Schreibens) schlug seit dieser Etappe oft fehl (`Done` statt `Abgebrochen`): das Schreiben war fertig, bevor der Test abbrach. Gemessen (Debug): das Schreiben der 300 Quader dauert auf beiden Ständen rund 90–115 ms; das erste Bild des Fensters in einem frischen egui-Kontext dauerte vor Etappe A rund 43 ms, jetzt rund 95 ms (das zweite Bild 2,5 bzw. 4,8 ms). Die Mehrzeit ist das einmalige Rastern der Schriftzeichen im neuen Kontext (Montserrat in drei Schnitten und mehreren Größen); `theme::apply` läuft weiterhin nur bei einem Wechsel von Hell/Dunkel. Das Programm ist nicht betroffen (der Zeichensatz-Zwischenspeicher bleibt über die Bilder erhalten), nur das Rennen im Test kippte. Behoben, indem der Test über den neuen Testhaken `ExportDialog::set_step_writer` einen Schreiber einsetzt, der bis zum Abbrechen wartet und dann den echten `write_step_bodies` aufruft (der „Abgebrochen“ meldet und keine Datei hinterlässt); der Test braucht dafür nur noch 3 Quader. Die ganze Datei lief danach 12 von 12 Mal durch. Nach der Abschlussprüfung ebenso gehärtet: `the_cancel_button_belongs_to_the_running_write_not_to_the_chosen_format` (300 Quader gegen zwei Bilder), `cancelling_while_writing_says_so_and_keeps_the_old_file` (200 Quader, Abbruch gleich nach dem Start) und `closing_a_tab_during_a_running_step_write_…` (300 Quader; jetzt angehalten, die alte Datei muss genau erhalten bleiben) über den angehaltenen Schreiber; `closing_tabs_and_quitting_…` wartet auf die fertige Datei statt 1,5 s fest. Die übrigen Tests mit Arbeitsthreads (Zeichnungsansichten, Maß-Auflösung, Zeichnungs-Export) halten ihre Rechnung schon über Testhaken an oder warten mit Zeitgrenze auf ein Ergebnis.
+
+**Handliste für den Nutzer** (`cargo run -p planora-app --release`, jeweils in Hell und Dunkel; Hell/Dunkel je Dokument-Tab umschalten)
+1. Modell: Menüs (alle Einträge mit Symbol, nichts abgeschnitten), Tab-Leiste, Baum, Eigenschaften, Statuszeile; gewählte Teile, Würfel, Achsen gut lesbar?
+2. Skizze: Fenster „Skizze“ (Werkzeug- und Abhängigkeitssymbole erkennbar, gezeichnete Symbole passen zu den anderen), Skizzenfarben, Auswahl.
+3. Zeichnung: Leiste (bricht sie schmal um, ohne Teile zu verlieren?), Papier bleibt weiß mit schwarzen Maßen auch im dunklen Programm, Maße, rote verlorene Maße.
+4. Dialoge: Export, Rundung/Fase, Boolesche Operationen, Extrudieren/Drehen, Maß bearbeiten, Speichern; Texte nicht abgeschnitten.
+5. Zustände: Hover, Tastaturfokus (Tab-Taste; 2-px-Ring sichtbar auch auf Menüs und Tabs), gesperrte Elemente lesbar, Schalter und Auswahlfelder.
+6. Montserrat: Breiten (lange Namen im Baum, Zahlen in Feldern, Umlaute, ß, „“, Ø, °, ±) ohne Kästchen und ohne Abschneiden.
+7. Hell: Hover und Aktiv unterscheidbar, Nebentexte lesbar.
+Beanstandungen sammeln; sie werden als Nachbesserung oder in Etappe B behoben.
+
+**Zahlen (Stand 2026-10-16, Gesamtreihe)**
+- `cargo test --workspace -j 2 --no-fail-fast`: 2087 bestanden, 0 fehlgeschlagen, 33 ignoriert, rund 14 Minuten (Debug). Der erste Lauf ohne `--no-fail-fast` brach am zeitabhängigen Test oben ab (Binärdatei `export_step`: 22 bestanden, 1 fehlgeschlagen), die Tests danach liefen dort nicht mehr (inzwischen behoben, siehe oben). `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` und `cargo deny check` sind grün; die geschützten Pfade (Kernel, Netz, STEP, Austausch) sind gegenüber 945fa67 unverändert.
+
+**Folgearbeit**
+- Etappe B: schwebendes Layout der Modell-Ansicht (oberes Feld, Baumfeld, rechte Felder, unteres Befehlsfeld, Meldungsfeld), sichtbare Mitte, Eingabe-Routing, Ersatz von egui_tiles; hier auch der Fokusring am Menürand.
+- Etappe C: Zeichnung und Skizze als Felder, Zeichnungsleiste ohne Umbruch, Skizzenfeld rechts; Wächtertests auf Unterordner ausdehnen.
+- Etappe D: Dialoge im neuen Rahmen mit neuer Breitenregel, Checkboxen, Kontextmenü-Symbole, Aufräumen der `pub`-Fläche und der toten Konstanten; Symbolwahl nach dem Handtest nachziehen.
+
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).
 - `eframe` mit Standard-Features baut auch den `glow`-Renderer mit.
