@@ -212,6 +212,18 @@ fn drawable_view<'a>(
     Some((lines, xf))
 }
 
+/// Abbildung der Ansicht `view` aufs Blatt, wenn sie gezeichnet wird (dieselbe wie in
+/// [`build_sheet_with`]); sonst `None`. Für die Oberfläche (Ziehen von Ø/R-Führungslinien um
+/// die Kreismitte).
+pub fn view_transform(
+    drawing: &Drawing,
+    view: ViewId,
+    results: &BTreeMap<ViewId, &ViewLines>,
+) -> Option<SheetTransform> {
+    let spec = drawing.view(view)?;
+    drawable_view(drawing, spec, results).map(|(_, xf)| xf)
+}
+
 /// Markierungen eines einzelnen Maßes auf dem Blatt (für Auswahl und Hinweise der Oberfläche).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DimMarks {

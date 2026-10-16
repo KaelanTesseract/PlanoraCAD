@@ -82,6 +82,14 @@ pub const SHEET_INK: Color32 = Color32::from_rgb(0x14, 0x16, 0x1a);
 pub const SHEET_FRAME: Color32 = Color32::from_rgb(0x50, 0x55, 0x60);
 /// Rahmen und Text einer Ansicht, die noch berechnet wird.
 pub const SHEET_PENDING: Color32 = Color32::from_rgb(0x8a, 0x90, 0x9c);
+/// Maße und Mittellinien auf dem Papier: schwarz wie die Linien der Ansichten, auch im dunklen
+/// Thema.
+pub const SHEET_DIM: Color32 = SHEET_INK;
+/// Maße, die ihren Bezug verloren haben (rot auf dem weißen Papier).
+pub const SHEET_LOST: Color32 = Color32::from_rgb(0xd0, 0x1c, 0x1c);
+/// Gewähltes Maß auf dem Papier: die Akzentfarbe des hellen Themas, weil das Papier in beiden
+/// Themen weiß ist (die hellere Akzentfarbe des dunklen Themas wäre auf Weiß schwach).
+pub const SHEET_SELECTED: Color32 = Color32::from_rgb(0x1f, 0x6f, 0xe0);
 /// Schatten unter dem Papier.
 pub const PAPER_SHADOW: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 70);
 

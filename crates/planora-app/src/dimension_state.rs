@@ -17,7 +17,7 @@ use planora_drawing::dimension::{
     ChainSpec, DimId, DimKind, DimSpec, Geo3, GeoRef, Tolerance as DimTolerance,
 };
 use planora_drawing::limits::MAX_DIMENSIONS;
-use planora_drawing::sheet::dimension_marks;
+use planora_drawing::sheet::{DimMarks, dimension_marks};
 use planora_drawing::stroke::extent_of;
 use planora_drawing::{
     Anchor, Basis, Candidate, CandidateOrigin, DrawBody, DrawError, Drawing, DrawingId, ViewId,
@@ -115,10 +115,24 @@ struct Cached {
     dims: Arc<ResolvedDims>,
 }
 
+/// Zwischenspeicher der Markierungen je Maß und der Hinweise: gilt für genau ein
+/// `Arc<ResolvedDims>` (festgehalten, damit die Adresse eindeutig bleibt) und dieselben fertigen
+/// Ansichtsergebnisse (Adressen der `Arc<ViewLines>`).
+struct MarksCached {
+    drawing: DrawingId,
+    dims: Arc<ResolvedDims>,
+    results: Vec<(ViewId, usize)>,
+    marks: Arc<Vec<DimMarks>>,
+    notes: DimNotes,
+}
+
 /// Aufgelöste Maße mit Zwischenspeicher und den letzten bekannten Lagen.
 #[derive(Default)]
 pub struct DimensionUi {
     cache: Option<Cached>,
+    marks_cache: Option<MarksCached>,
+    /// Zahl der Neuberechnungen der Markierungen je Maß (für Tests).
+    mark_builds: u64,
     /// Letzte erfolgreiche Lage je Maß und Zeichnung; verlorene Maße erscheinen dort rot.
     last_known: BTreeMap<DrawingId, BTreeMap<DimId, Anchor>>,
     /// Zahl der echten Auflösungen gegen die Körper (für Tests).
@@ -256,40 +270,117 @@ impl DimensionUi {
     /// die ganz oder teilweise außerhalb des Blatts liegen (Lage wie im Blattmodell mit den
     /// fertigen Ansichten aus `state.drawing_ui`), dazu die Sätze für die Hinweiszeile.
     pub fn notes(&self, state: &AppState, drawing: DrawingId, resolved: &ResolvedDims) -> DimNotes {
-        let lost = resolved
-            .by_view
-            .values()
-            .flatten()
-            .filter(|(_, r)| r.is_err())
-            .count();
-        let outside = state.document.drawing(drawing).map_or(0, |d| {
-            let owned = state
-                .drawing_ui
-                .results_for(d, state.document.model_edit_count());
-            let results: BTreeMap<ViewId, &ViewLines> =
-                owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
-            let size = d.sheet.size_mm();
-            dimension_marks(d, &results, resolved)
-                .iter()
-                .filter(|dm| dm.marks.iter().any(|m| mark_outside(m, size)))
-                .count()
+        let (marks, size) = build_marks(state, drawing, resolved);
+        notes_of(resolved, &marks, size)
+    }
+
+    /// Zahl der Neuberechnungen in [`DimensionUi::marks`] bisher (für Tests).
+    pub fn mark_builds(&self) -> u64 {
+        self.mark_builds
+    }
+
+    /// Die Markierungen jedes Maßes ([`dimension_marks`]) zu `dims` mit den fertigen Ansichten
+    /// aus `state.drawing_ui`, zwischengespeichert: solange `dims` dasselbe `Arc` ist und sich
+    /// die Ergebnisse der Ansichten nicht geändert haben, wird nichts neu gerechnet (auch die
+    /// Hinweise aus [`DimensionUi::cached_notes`] nicht).
+    pub fn marks(
+        &mut self,
+        state: &AppState,
+        drawing: DrawingId,
+        dims: &Arc<ResolvedDims>,
+    ) -> Arc<Vec<DimMarks>> {
+        self.ensure_marks(state, drawing, dims).marks.clone()
+    }
+
+    /// Wie [`DimensionUi::notes`], aber aus demselben Zwischenspeicher wie
+    /// [`DimensionUi::marks`] (für jedes Bild der Oberfläche).
+    pub fn cached_notes(
+        &mut self,
+        state: &AppState,
+        drawing: DrawingId,
+        dims: &Arc<ResolvedDims>,
+    ) -> DimNotes {
+        self.ensure_marks(state, drawing, dims).notes.clone()
+    }
+
+    fn ensure_marks(
+        &mut self,
+        state: &AppState,
+        drawing: DrawingId,
+        dims: &Arc<ResolvedDims>,
+    ) -> &MarksCached {
+        let results: Vec<(ViewId, usize)> =
+            state.document.drawing(drawing).map_or_else(Vec::new, |d| {
+                state
+                    .drawing_ui
+                    .results_for(d, state.document.model_edit_count())
+                    .iter()
+                    .map(|(k, v)| (*k, Arc::as_ptr(v) as usize))
+                    .collect()
+            });
+        let hit = self.marks_cache.as_ref().is_some_and(|c| {
+            c.drawing == drawing && Arc::ptr_eq(&c.dims, dims) && c.results == results
         });
-        let mut texts = Vec::new();
-        match lost {
-            0 => {}
-            1 => texts.push("1 Maß hat seinen Bezug verloren.".into()),
-            n => texts.push(format!("{n} Maße haben ihren Bezug verloren.")),
+        if !hit {
+            self.mark_builds += 1;
+            let (marks, size) = build_marks(state, drawing, dims);
+            let notes = notes_of(dims, &marks, size);
+            self.marks_cache = Some(MarksCached {
+                drawing,
+                dims: Arc::clone(dims),
+                results,
+                marks: Arc::new(marks),
+                notes,
+            });
         }
-        match outside {
-            0 => {}
-            1 => texts.push("1 Maß liegt außerhalb des Blatts.".into()),
-            n => texts.push(format!("{n} Maße liegen außerhalb des Blatts.")),
-        }
-        DimNotes {
-            lost,
-            outside,
-            texts,
-        }
+        self.marks_cache.as_ref().expect("eben gesetzt")
+    }
+}
+
+/// Markierungen je Maß und Blattgröße der Zeichnung (leer ohne Zeichnung).
+fn build_marks(
+    state: &AppState,
+    drawing: DrawingId,
+    resolved: &ResolvedDims,
+) -> (Vec<DimMarks>, (f64, f64)) {
+    let Some(d) = state.document.drawing(drawing) else {
+        return (Vec::new(), (0.0, 0.0));
+    };
+    let owned = state
+        .drawing_ui
+        .results_for(d, state.document.model_edit_count());
+    let results: BTreeMap<ViewId, &ViewLines> =
+        owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
+    (dimension_marks(d, &results, resolved), d.sheet.size_mm())
+}
+
+/// Hinweise aus den Messergebnissen und den Markierungen je Maß.
+fn notes_of(resolved: &ResolvedDims, marks: &[DimMarks], size: (f64, f64)) -> DimNotes {
+    let lost = resolved
+        .by_view
+        .values()
+        .flatten()
+        .filter(|(_, r)| r.is_err())
+        .count();
+    let outside = marks
+        .iter()
+        .filter(|dm| dm.marks.iter().any(|m| mark_outside(m, size)))
+        .count();
+    let mut texts = Vec::new();
+    match lost {
+        0 => {}
+        1 => texts.push("1 Maß hat seinen Bezug verloren.".into()),
+        n => texts.push(format!("{n} Maße haben ihren Bezug verloren.")),
+    }
+    match outside {
+        0 => {}
+        1 => texts.push("1 Maß liegt außerhalb des Blatts.".into()),
+        n => texts.push(format!("{n} Maße liegen außerhalb des Blatts.")),
+    }
+    DimNotes {
+        lost,
+        outside,
+        texts,
     }
 }
 
@@ -300,6 +391,26 @@ pub fn resolve_in(state: &mut AppState, drawing: DrawingId) -> Arc<ResolvedDims>
     let dims = ui.resolve(state, drawing);
     state.dimension_ui = ui;
     dims
+}
+
+/// [`DimensionUi::marks`] mit dem Zwischenspeicher `state.dimension_ui`.
+pub fn marks_in(
+    state: &mut AppState,
+    drawing: DrawingId,
+    dims: &Arc<ResolvedDims>,
+) -> Arc<Vec<DimMarks>> {
+    let mut ui = std::mem::take(&mut state.dimension_ui);
+    let marks = ui.marks(state, drawing, dims);
+    state.dimension_ui = ui;
+    marks
+}
+
+/// [`DimensionUi::cached_notes`] mit dem Zwischenspeicher `state.dimension_ui`.
+pub fn notes_in(state: &mut AppState, drawing: DrawingId, dims: &Arc<ResolvedDims>) -> DimNotes {
+    let mut ui = std::mem::take(&mut state.dimension_ui);
+    let notes = ui.cached_notes(state, drawing, dims);
+    state.dimension_ui = ui;
+    notes
 }
 
 /// Liegt ein Punkt der Markierung außerhalb des Blatts `(0, 0)…size` (oder ist er nicht
