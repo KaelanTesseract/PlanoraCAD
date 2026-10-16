@@ -183,8 +183,41 @@ fn free_rect_clears_all_fields_at_common_sizes() {
 
 #[test]
 fn read_only_raises_the_free_top_by_banner_and_gap_at_1400x900() {
+    // Platz für zwei Zeilen Hinweis: 16 + 48 + 12 + 40 + 12.
     let r = rects(1400.0, 900.0, &ShellState::default(), true);
-    assert_eq!(r.free.top(), 116.0);
+    assert_eq!(r.free.top(), 128.0);
     assert_eq!(r.free.left(), 278.0);
     assert_eq!(r.free.bottom(), 900.0 - 84.0);
+}
+
+#[test]
+fn banner_spans_between_the_columns_and_status_grows_to_the_bottom_field() {
+    let r = rects(1400.0, 900.0, &ShellState::default(), true);
+    let b = r.banner.unwrap();
+    assert_eq!((b.left(), b.right()), (278.0, 1400.0 - 278.0));
+    assert_eq!(b.height(), 40.0);
+    // Unteres Feld 520 breit mittig (440..960): Status höchstens bis 440 − 12.
+    let wide = layout(
+        window(1400.0, 900.0),
+        &ShellState::default(),
+        600.0,
+        520.0,
+        2000.0,
+        false,
+    );
+    assert_eq!(wide.bottom.left(), 440.0);
+    assert_eq!(wide.status.left(), 16.0);
+    assert_eq!(wide.status.right(), 428.0);
+    // Ein kurzer Text bleibt schmal.
+    let short = layout(
+        window(1400.0, 900.0),
+        &ShellState::default(),
+        600.0,
+        520.0,
+        90.0,
+        false,
+    );
+    assert_eq!(short.status.width(), 90.0);
+    // Auch zwei Zeilen Status (bis 56 hoch) enden unter der freien Fläche.
+    assert!(wide.status.bottom() - 56.0 >= wide.free.bottom());
 }

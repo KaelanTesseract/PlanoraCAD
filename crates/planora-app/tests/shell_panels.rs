@@ -64,6 +64,9 @@ struct Seen {
     text: String,
     rect: Rect,
     color: Color32,
+    /// Mit „…“ gekürzt.
+    elided: bool,
+    rows: usize,
 }
 
 /// Eine Fläche mit Rand.
@@ -98,6 +101,8 @@ fn walk(shape: &Shape, s: &mut Shot) {
                 text: t.galley.text().to_string(),
                 rect: Rect::from_min_size(t.pos, t.galley.size()),
                 color,
+                elided: t.galley.elided,
+                rows: t.galley.rows.len(),
             });
         }
         Shape::Rect(r) => s.fills.push(Fill {
@@ -463,11 +468,14 @@ fn read_only_ws() -> Workspace {
 fn read_only_banner_text_and_colour() {
     let text = "Alte Version v1 – schreibgeschützt. Im Bereich „Versionen“ lässt sie sich \
                 wiederherstellen oder abzweigen.";
-    for dark in [true, false] {
+    for (dark, size, rows) in [
+        (true, vec2(1400.0, 900.0), 1),
+        (false, vec2(1400.0, 900.0), 1),
+        (true, vec2(1100.0, 700.0), 2),
+    ] {
         let c = context(dark);
         let mut app = PlanoraApp::for_tests(read_only_ws());
         app.ws_mut().set_dark(dark);
-        let size = vec2(1400.0, 900.0);
         let (shot, free) = settle(&c, &mut app, size);
         let f = fields_of(&shot, dark, size);
         let all = shot.fields(dark);
@@ -476,10 +484,29 @@ fn read_only_banner_text_and_colour() {
             .iter()
             .find(|r| near(r.top(), f.top.bottom() + shell::GAP))
             .expect("Hinweisfeld unter dem oberen Feld");
-        assert!(near(banner.height(), shell::BANNER_H), "{banner:?}");
+        // Ganze Breite zwischen den Spalten.
+        assert!(
+            near(banner.left(), f.left.right() + shell::GAP),
+            "{banner:?}"
+        );
+        assert!(
+            near(banner.right(), f.right.left() - shell::GAP),
+            "{banner:?}"
+        );
+        if rows == 1 {
+            assert!(near(banner.height(), shell::BANNER_LINE_H), "{banner:?}");
+        }
+        assert!(banner.height() <= shell::BANNER_H + 0.5, "{banner:?}");
+        // Der ganze Text ist zu sehen (ungekürzt), bei 1100 px in zwei Zeilen.
         let seen = shot.find(banner, text);
+        assert!(!seen.elided, "{size:?}: Hinweis gekürzt");
+        assert_eq!(seen.rows, rows, "{size:?}");
+        assert!(banner.contains_rect(seen.rect), "{seen:?} in {banner:?}");
         assert_eq!(seen.color, theme::palette(dark).warning);
         assert!(!overlaps(banner, free), "{banner:?} über {free:?}");
+        for other in [f.left, f.right, f.top] {
+            assert!(!overlaps(banner, other));
+        }
         // Bei ausgeblendeten Versionen bleibt der Hinweis (Versionen über das Menü Ansicht).
         app.shell_mut().set_versions_visible(false);
         let (shot, _) = settle(&c, &mut app, size);
@@ -487,23 +514,44 @@ fn read_only_banner_text_and_colour() {
     }
 }
 
-/// Text und Farbe im Statusfeld.
-fn status(app: &mut PlanoraApp) -> (String, Color32) {
+/// Der Text im Statusfeld bei `size`. Er ist ungekürzt, hat höchstens zwei Zeilen und das Feld
+/// überdeckt weder die freie Fläche noch die anderen Felder.
+fn status_at(app: &mut PlanoraApp, size: Vec2) -> Seen {
     let c = context(true);
-    let size = vec2(1400.0, 900.0);
-    let (shot, _) = settle(&c, app, size);
+    let (shot, free) = settle(&c, app, size);
     let f = fields_of(&shot, true, size);
     let t = shot.texts_in(f.status);
     assert_eq!(t.len(), 1, "{t:?}");
-    (t[0].text.clone(), t[0].color)
+    let seen = t[0].clone();
+    assert!(!seen.elided, "{size:?}: gekürzt: {}", seen.text);
+    assert!(seen.rows <= 2, "{size:?}: {} Zeilen", seen.rows);
+    assert!(
+        f.status.contains_rect(seen.rect),
+        "{seen:?} in {:?}",
+        f.status
+    );
+    assert!(!overlaps(f.status, free), "{:?} über {free:?}", f.status);
+    for other in [f.left, f.right, f.top] {
+        assert!(!overlaps(f.status, other), "{:?} / {other:?}", f.status);
+    }
+    seen
+}
+
+/// Text und Farbe im Statusfeld bei 1400 × 900 und 1100 × 700 (an beiden gleich).
+fn status(app: &mut PlanoraApp) -> (String, Color32) {
+    let a = status_at(app, vec2(1400.0, 900.0));
+    let b = status_at(app, vec2(1100.0, 700.0));
+    assert_eq!((&a.text, a.color), (&b.text, b.color));
+    (a.text, a.color)
 }
 
 #[test]
 fn status_field_shows_message_with_error_colour_and_counts_bodies() {
     let p = theme::palette(true);
-    // Körperzahl.
+    // Körperzahl: eine Zeile, Feld 32 hoch.
     let mut app = app_with_box();
     assert_eq!(status(&mut app), ("1 Körper".into(), p.text_secondary));
+    assert_eq!(status_at(&mut app, vec2(1400.0, 900.0)).rows, 1);
 
     // Fehler im Baum.
     let state = &mut app.ws_mut().active_tab_mut().state;
@@ -529,13 +577,43 @@ fn status_field_shows_message_with_error_colour_and_counts_bodies() {
         .add_sketch(SketchPlane::Standard(StandardPlane::XY))
         .unwrap();
     state.open_sketch(id).unwrap();
+    // Der ganze Hinweis mit allen Tasten ist zu lesen.
     let (text, color) = status(&mut app);
-    assert!(text.starts_with("Skizzen-Modus: "), "{text}");
+    assert_eq!(
+        text,
+        "Skizzen-Modus: Skizze 1 – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere \
+         Maustaste oder Umschalt + Ziehen verschiebt"
+    );
     assert_eq!(color, p.text_secondary);
 
     // Eine Meldung geht allem vor, in der Fehlerfarbe.
     app.ws_mut().active_tab_mut().state.message = Some("Etwas ging schief".into());
     assert_eq!(status(&mut app), ("Etwas ging schief".into(), p.error));
+
+    // Auch eine lange Meldung (150 Zeichen) ist ganz zu lesen, in höchstens zwei Zeilen.
+    let long = "Erzeugen fehlgeschlagen: Die Fläche liegt nicht in einer Ebene, deshalb lässt \
+                sich darauf keine Skizze anlegen. Bitte zuerst eine ebene Fläche des Körpers \
+                wählen.";
+    assert!(long.chars().count() >= 150, "{}", long.chars().count());
+    app.ws_mut().active_tab_mut().state.message = Some(long.into());
+    assert_eq!(status(&mut app), (long.into(), p.error));
+    assert_eq!(status_at(&mut app, vec2(1100.0, 700.0)).rows, 2);
+}
+
+#[test]
+fn status_beyond_two_lines_is_shortened_and_stays_clear_of_the_free_rect() {
+    let mut app = app_with_box();
+    let huge = "Sehr lange Meldung. ".repeat(40);
+    app.ws_mut().active_tab_mut().state.message = Some(huge.clone());
+    let c = context(true);
+    let size = vec2(1100.0, 700.0);
+    let (shot, free) = settle(&c, &mut app, size);
+    let f = fields_of(&shot, true, size);
+    let seen = shot.texts_in(f.status)[0].clone();
+    assert!(seen.elided, "gekürzt");
+    assert_eq!(seen.rows, 2);
+    assert!(!overlaps(f.status, free));
+    assert!(!overlaps(f.status, f.left));
 }
 
 #[test]
@@ -742,4 +820,189 @@ fn mouse_wheel_on_a_real_field_does_not_zoom() {
         after < before,
         "Mausrad in der Mitte zoomt: {before} → {after}"
     );
+}
+
+// ---- Fix-Runde 1 ---------------------------------------------------------------------------------
+
+fn count_in(shot: &Shot, r: Rect, exact: &str) -> usize {
+    shot.texts_in(r).iter().filter(|t| t.text == exact).count()
+}
+
+#[test]
+fn the_switch_replaces_the_headings_of_properties_and_versions() {
+    let c = context(true);
+    // Gespeichertes Dokument: der Versionsbereich zeigt die Liste (sonst nur einen Satz).
+    let mut w = library_ws();
+    let p = w.library.as_ref().unwrap().create_project("P").unwrap();
+    w.save_as(&p, "Teil", "Anfang").unwrap();
+    let mut app = PlanoraApp::for_tests(w);
+    let size = vec2(1400.0, 900.0);
+    let (shot, _) = settle(&c, &mut app, size);
+    let right = fields_of(&shot, true, size).right;
+    assert_eq!(
+        count_in(&shot, right, "Eigenschaften"),
+        1,
+        "nur im Umschalter"
+    );
+    app.shell_mut().right_tab = shell::RightTab::Versions;
+    let (shot, _) = settle(&c, &mut app, size);
+    let right = fields_of(&shot, true, size).right;
+    assert!(
+        shot.texts_in(right)
+            .iter()
+            .any(|t| t.text.contains("Anfang")),
+        "Versionsliste"
+    );
+    assert_eq!(count_in(&shot, right, "Versionen"), 1, "nur im Umschalter");
+    // Ohne Umschalter behält der Inhalt seinen Kopf.
+    app.shell_mut().set_versions_visible(false);
+    let (shot, _) = settle(&c, &mut app, size);
+    let right = fields_of(&shot, true, size).right;
+    assert_eq!(
+        count_in(&shot, right, "Eigenschaften"),
+        1,
+        "Kopf ohne Umschalter"
+    );
+}
+
+#[test]
+fn a_denied_discard_still_asks_for_a_new_frame() {
+    let c = context(true);
+    // Nur ein Durchgang je Bild: jedes Verwerfen wird abgelehnt.
+    c.options_mut(|o| o.max_passes = std::num::NonZeroUsize::new(1).unwrap());
+    let mut app = app_with_box();
+    let size = vec2(1400.0, 900.0);
+    let repaint = |c: &egui::Context, app: &mut PlanoraApp| {
+        let out = c.run_ui(input(size, vec![]), |ui| {
+            shell_panels::show_fields(ui.ctx(), app);
+        });
+        let delay = out.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        out.drop_without_applying_deltas();
+        delay
+    };
+    for _ in 0..5 {
+        repaint(&c, &mut app);
+    }
+    assert!(
+        repaint(&c, &mut app) > std::time::Duration::ZERO,
+        "Ruhe ohne Änderung"
+    );
+    // Ein längerer Tabname ändert die Breite des oberen Felds (ohne Rollen der Tab-Leiste): das
+    // Bild muss sofort wiederholt werden.
+    app.ws_mut().active_tab_mut().name = "Ein deutlich längerer Name".into();
+    assert_eq!(repaint(&c, &mut app), std::time::Duration::ZERO);
+
+    // Unmittelbar: ein abgelehntes Verwerfen fordert selbst ein neues Bild an.
+    let delay = |discard: bool| {
+        let out = c.run_ui(input(size, vec![]), |ui| {
+            if discard {
+                shell_panels::discard(ui.ctx(), "Test");
+            }
+        });
+        let d = out.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        out.drop_without_applying_deltas();
+        d
+    };
+    for _ in 0..3 {
+        delay(false);
+    }
+    assert!(delay(false) > std::time::Duration::ZERO);
+    assert_eq!(delay(true), std::time::Duration::ZERO);
+}
+
+#[test]
+fn the_active_tab_is_scrolled_into_view() {
+    let c = context(true);
+    let mut app = app_with_box();
+    for _ in 0..25 {
+        app.ws_mut().new_tab();
+    }
+    let size = vec2(1100.0, 700.0);
+    let head = |shot: &Shot, title: &str| {
+        shot.texts
+            .iter()
+            .find(|t| t.text == title || t.text == format!("{title} ●"))
+            .map(|t| t.rect)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Tab „{title}“ fehlt: {:?}",
+                    shot.texts
+                        .iter()
+                        .map(|t| (&t.text, t.rect.left()))
+                        .collect::<Vec<_>>()
+                )
+            })
+    };
+    let last = app.ws_mut().active_tab().title();
+    let mut shot = settle(&c, &mut app, size).0;
+    for _ in 0..30 {
+        shot = run(&c, &mut app, size, vec![], false).0;
+    }
+    let top = fields_of(&shot, true, size).top;
+    assert!(
+        top.contains_rect(head(&shot, &last)),
+        "neuer Tab sichtbar: {top:?}"
+    );
+    // Zurück zum ersten Tab: die Leiste rollt nach links.
+    let first = app.ws_mut().tabs[0].title();
+    app.ws_mut().activate(0);
+    for _ in 0..30 {
+        shot = run(&c, &mut app, size, vec![], false).0;
+    }
+    assert!(
+        top.contains_rect(head(&shot, &first)),
+        "erster Tab sichtbar"
+    );
+    // Außerhalb des sichtbaren Bereichs wird der letzte Tab gar nicht gezeichnet.
+    assert!(
+        !shot
+            .texts
+            .iter()
+            .any(|t| t.text.starts_with(&last) && top.contains_rect(t.rect)),
+        "letzter Tab weggerollt"
+    );
+}
+
+#[test]
+fn tabs_can_be_activated_added_and_closed_in_the_top_field() {
+    let c = context(true);
+    // Unveränderte Tabs: Schließen braucht keine Rückfrage.
+    let mut app = PlanoraApp::for_tests(library_ws());
+    app.ws_mut().new_tab();
+    let size = vec2(1400.0, 900.0);
+    let glyph = |icon| planora_app::icons::glyph(icon).to_string();
+    let (shot, _) = settle(&c, &mut app, size);
+    let top = fields_of(&shot, true, size).top;
+    let first = app.ws_mut().tabs[0].title();
+    assert_eq!(app.ws_mut().active, 1);
+    // Klick auf den ersten Tab aktiviert ihn.
+    click(
+        &c,
+        &mut app,
+        size,
+        shot.find(top, &first).rect.center(),
+        false,
+    );
+    assert_eq!(app.ws_mut().active, 0);
+    // „+“ legt einen neuen an.
+    let (shot, _) = settle(&c, &mut app, size);
+    let plus = shot
+        .find(top, &glyph(planora_app::icons::Icon::NewTab))
+        .rect
+        .center();
+    click(&c, &mut app, size, plus, false);
+    assert_eq!(app.ws_mut().tabs.len(), 3);
+    // „×“ hinter dem ersten Tab schließt ihn.
+    let (shot, _) = settle(&c, &mut app, size);
+    let top = fields_of(&shot, true, size).top;
+    let close = shot
+        .texts_in(top)
+        .into_iter()
+        .filter(|t| t.text == glyph(planora_app::icons::Icon::Close))
+        .map(|t| t.rect)
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
+        .expect("Schließen-Symbol");
+    click(&c, &mut app, size, close.center(), false);
+    assert_eq!(app.ws_mut().tabs.len(), 2);
+    assert!(app.ws_mut().tabs.iter().all(|t| t.title() != first));
 }

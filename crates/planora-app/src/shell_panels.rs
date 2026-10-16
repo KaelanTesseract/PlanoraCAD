@@ -3,11 +3,11 @@
 //! schmaler Hinweis unter dem oberen Feld. Jedes Feld ist ein `egui::Area` an der Stelle aus
 //! [`shell::layout`]; die Inhalte zeichnen die bisherigen Bereichsfunktionen.
 //!
-//! Breiten und Höhen kommen aus der Geometrie (keine Rückkopplung über die Feldgröße). Nur das
-//! obere Feld und die Statuszeile messen ihre Wunschbreite; sie wird für das nächste Bild gemerkt.
-//! Ändert sie sich, oder läuft gerade der unsichtbare erste Größen-Durchgang eines Felds, wird der
-//! Durchgang verworfen und sofort wiederholt (wie bei `prompts::window`), damit kein Feld ein Bild
-//! lang falsch steht.
+//! Breiten und Höhen kommen aus der Geometrie (keine Rückkopplung über die Feldgröße). Status und
+//! Hinweis werden vorab gesetzt (bis zu zwei Zeilen, der Status wächst nach oben). Nur das obere
+//! Feld misst seine Wunschbreite; sie wird für das nächste Bild gemerkt. Ändert sie sich, oder
+//! läuft gerade der unsichtbare erste Größen-Durchgang eines Felds, wird der Durchgang verworfen
+//! und sofort wiederholt (wie bei `prompts::window`), damit kein Feld ein Bild lang falsch steht.
 
 use egui::{Vec2, vec2};
 
@@ -49,11 +49,6 @@ fn menu_width_key() -> egui::Id {
     top_id().with("menu")
 }
 
-/// Gemerkte Wunschbreite der Statuszeile (außen).
-fn status_width_key() -> egui::Id {
-    status_id().with("wanted")
-}
-
 /// Gemerkte Wunschbreite des unteren Befehlsfelds (Aufgabe 5).
 fn bottom_width_key() -> egui::Id {
     egui::Id::new("planora-field-bottom").with("wanted")
@@ -63,14 +58,100 @@ fn stored(ctx: &egui::Context, key: egui::Id) -> Option<f32> {
     ctx.data(|d| d.get_temp::<f32>(key))
 }
 
+/// Verwirft den Durchgang. Lehnt egui das ab (höchstens `max_passes` Durchgänge je Bild), wird
+/// wenigstens sofort ein neues Bild angefordert, damit kein veraltetes Bild stehen bleibt.
+#[doc(hidden)]
+pub fn discard(ctx: &egui::Context, reason: &'static str) {
+    ctx.request_discard(reason);
+    if !ctx.will_discard() {
+        ctx.request_repaint();
+    }
+}
+
 /// Merkt sich eine gemessene Breite; weicht sie von der zuletzt gemerkten ab, wird der Durchgang
 /// verworfen und mit der neuen Breite wiederholt.
 fn remember_width(ui: &egui::Ui, key: egui::Id, width: f32) {
     let old = stored(ui.ctx(), key);
     ui.ctx().data_mut(|d| d.insert_temp(key, width));
     if old.is_some_and(|o| (o - width).abs() > 0.5) {
-        ui.ctx().request_discard("Feld: Breite geändert");
+        discard(ui.ctx(), "Feld: Breite geändert");
     }
+}
+
+/// Aktiver Tab und Tabzahl, zu denen die Tab-Leiste zuletzt gerollt wurde.
+fn revealed_key() -> egui::Id {
+    top_id().with("revealed")
+}
+
+/// Höchstzahl der Zeilen in Status und Hinweis; erst darüber endet der Text mit „…“.
+const MAX_ROWS: usize = 2;
+
+/// Bricht `text` (Textstil `Body`) bei `max_width` um, höchstens [`MAX_ROWS`] Zeilen.
+fn wrapped(
+    ctx: &egui::Context,
+    text: &str,
+    color: egui::Color32,
+    max_width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let font = egui::TextStyle::Body.resolve(&ctx.global_style());
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_owned(),
+        egui::TextFormat::simple(font, color),
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_width,
+        max_rows: MAX_ROWS,
+        break_anywhere: false,
+        overflow_character: Some('…'),
+    };
+    ctx.fonts_mut(|f| f.layout_job(job))
+}
+
+/// Breite von `text` in einer Zeile (Textstil `Body`).
+fn natural_width(ctx: &egui::Context, text: &str) -> f32 {
+    wrapped(ctx, text, egui::Color32::PLACEHOLDER, f32::INFINITY)
+        .size()
+        .x
+        .ceil()
+}
+
+/// Feld mit Text in bis zu zwei Zeilen: mindestens `min_h` hoch, sonst so hoch wie der Text.
+/// `grow_up`: die Unterkante von `rect` bleibt fest (Status), sonst die Oberkante (Hinweis).
+/// Wird der Text gekürzt, zeigt er sich beim Überfahren ganz.
+fn text_field(
+    ctx: &egui::Context,
+    id: egui::Id,
+    rect: egui::Rect,
+    min_h: f32,
+    grow_up: bool,
+    dark: bool,
+    (text, color): (String, egui::Color32),
+) {
+    let frame = bar_frame(dark, min_h);
+    let margin = frame.total_margin().sum();
+    let inner_w = (rect.width() - margin.x).max(0.0);
+    let galley = wrapped(ctx, &text, color, inner_w);
+    let h = min_h.max(galley.size().y + margin.y);
+    let y = if grow_up {
+        rect.bottom() - h
+    } else {
+        rect.top()
+    };
+    field(ctx, id, egui::pos2(rect.left(), y), frame, |ui| {
+        ui.set_width(inner_w);
+        ui.set_height(h - margin.y);
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            let (r, response) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+            let enabled = ui.is_enabled();
+            response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, &text));
+            let elided = galley.elided;
+            ui.painter().galley(r.min, galley, color);
+            if elided {
+                response.on_hover_text(text);
+            }
+        });
+    });
 }
 
 /// Innenmaß eines Felds mit Rahmen `frame` und Außenmaß `outer` (Rand und Strich abgezogen).
@@ -98,7 +179,7 @@ fn field<R>(
     theme::field_area(id, pos)
         .show(ctx, |ui| {
             if ui.is_sizing_pass() {
-                ui.ctx().request_discard("Feld: erste Größenbestimmung");
+                discard(ui.ctx(), "Feld: erste Größenbestimmung");
             }
             frame.show(ui, add_contents).inner
         })
@@ -109,17 +190,45 @@ fn field<R>(
 /// Viewport-Aufruf des Aufrufers.
 pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
     let content = ctx.content_rect();
-    let read_only = app.ws.active_tab().read_only;
-    // Vor der ersten Messung: oben so breit wie möglich, Status so breit wie die Spalte.
+    // Vor der ersten Messung: oben so breit wie möglich.
     let top_w = stored(ctx, top_width_key()).unwrap_or(content.width());
-    let status_w = stored(ctx, status_width_key()).unwrap_or(theme::PANEL_WIDTH);
     let bottom_w = stored(ctx, bottom_width_key()).unwrap_or(0.0);
-    let rects = shell::layout(content, &app.shell, top_w, bottom_w, status_w, read_only);
+    let layout = |app: &PlanoraApp| {
+        // Der Status ist so breit wie sein Text in einer Zeile (die Geometrie begrenzt ihn).
+        let tab = app.ws.active_tab();
+        let status = status_line(&tab.state, tab.state.dark);
+        let margin = bar_frame(tab.state.dark, shell::STATUS_H)
+            .total_margin()
+            .sum()
+            .x;
+        let status_w = natural_width(ctx, &status.0) + margin;
+        let rects = shell::layout(
+            content,
+            &app.shell,
+            top_w,
+            bottom_w,
+            status_w,
+            tab.read_only,
+        );
+        (rects, status, tab.state.dark)
+    };
+    let (rects, _, _) = layout(app);
     top_field(ctx, &rects, app);
     left_field(ctx, &rects, app);
     right_field(ctx, &rects, app);
     bottom_field(ctx, &rects, app);
-    status_field(ctx, &rects, app);
+    // Die Felder können den Tab gewechselt oder eine Meldung gesetzt haben: Status und Hinweis
+    // zeigen schon den neuen Stand.
+    let (rects, status, dark) = layout(app);
+    text_field(
+        ctx,
+        status_id(),
+        rects.status,
+        shell::STATUS_H,
+        true,
+        dark,
+        status,
+    );
     banner_field(ctx, &rects, app);
     rects.free
 }
@@ -133,6 +242,10 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let margin = frame.total_margin().sum().x;
     let no_prompt = app.ws.prompt.is_none();
     let menu_w = stored(ctx, menu_width_key()).unwrap_or(inner.x);
+    // Den aktiven Tab nur dann ins Bild rollen, wenn er oder die Tabzahl gewechselt hat (sonst
+    // ließe sich die Leiste nicht frei rollen).
+    let shown = (app.ws.active_tab().id, app.ws.tabs.len());
+    let reveal = ctx.data(|d| d.get_temp::<(u64, usize)>(revealed_key())) != Some(shown);
     field(ctx, top_id(), rects.top.min, frame, |ui| {
         ui.set_width(inner.x);
         ui.set_height(inner.y);
@@ -155,7 +268,9 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 .auto_shrink([true, true])
                 .show(ui, |ui| {
                     ui.set_max_width(TABS_UNWRAPPED);
-                    ui.add_enabled_ui(no_prompt, |ui| tabs::show(ui, &mut app.ws));
+                    ui.add_enabled_ui(no_prompt, |ui| {
+                        tabs::show_revealing(ui, &mut app.ws, reveal)
+                    });
                 });
             // Wunschbreite: Menüknöpfe, Trennstrich mit Abständen, alle Tabs, Rand.
             let gap = tabs.inner_rect.left() - menu.response.rect.right();
@@ -165,6 +280,10 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 top_width_key(),
                 menu_natural + gap + tabs.content_size.x + margin,
             );
+            // Erst als erledigt merken, wenn dieser Durchgang gilt (sonst rollt der nächste).
+            if !ui.ctx().will_discard() {
+                ui.ctx().data_mut(|d| d.insert_temp(revealed_key(), shown));
+            }
         });
     });
 }
@@ -208,7 +327,9 @@ fn right_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     field(ctx, right_id(), rects.right.min, frame, |ui| {
         ui.set_width(inner.x);
         ui.set_max_height(inner.y);
-        if app.shell.versions_visible {
+        // Mit Umschalter steht der Name des Bereichs dort; ohne ihn zeigt der Inhalt seinen Kopf.
+        let switch = app.shell.versions_visible;
+        if switch {
             let mut tab = app.shell.effective_right_tab();
             ui.horizontal(|ui| {
                 theme::frameless(ui.style_mut());
@@ -234,10 +355,21 @@ fn right_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
             .show(ui, |ui| match tab {
                 RightTab::Properties => {
                     let state = &mut app.ws.active_tab_mut().state;
-                    ui.add_enabled_ui(enabled, |ui| properties::show(ui, state));
+                    ui.add_enabled_ui(enabled, |ui| {
+                        if switch {
+                            properties::show_content(ui, state);
+                        } else {
+                            properties::show(ui, state);
+                        }
+                    });
                 }
                 RightTab::Versions => {
-                    versions_panel::show(ui, &mut app.ws, &mut app.versions_ui);
+                    versions_panel::show_with_header(
+                        ui,
+                        &mut app.ws,
+                        &mut app.versions_ui,
+                        !switch,
+                    );
                 }
             });
     });
@@ -272,41 +404,8 @@ fn status_line(state: &AppState, dark: bool) -> (String, egui::Color32) {
     }
 }
 
-/// Einzeiliger Text, senkrecht mittig; zu lange Texte enden mit „…“ und zeigen sich ganz beim
-/// Überfahren.
-fn one_line(ui: &mut egui::Ui, text: egui::RichText) {
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.add(egui::Label::new(text).truncate());
-    });
-}
-
-/// Statuszeile links unten; ihre Breite folgt dem Text (höchstens die Spaltenbreite).
-fn status_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
-    let state = &app.ws.active_tab().state;
-    let dark = state.dark;
-    let (text, color) = status_line(state, dark);
-    let frame = bar_frame(dark, shell::STATUS_H);
-    let inner = inner_size(&frame, rects.status.size());
-    let margin = frame.total_margin().sum().x;
-    field(ctx, status_id(), rects.status.min, frame, |ui| {
-        ui.set_width(inner.x);
-        ui.set_height(inner.y);
-        let text = egui::RichText::new(text).color(color);
-        let natural = egui::WidgetText::from(text.clone())
-            .into_galley(
-                ui,
-                Some(egui::TextWrapMode::Extend),
-                f32::INFINITY,
-                egui::TextStyle::Body,
-            )
-            .size()
-            .x;
-        remember_width(ui, status_width_key(), natural.ceil() + margin);
-        one_line(ui, text);
-    });
-}
-
-/// Hinweis unter dem oberen Feld, nur in schreibgeschützten Ansichten alter Versionen.
+/// Hinweis unter dem oberen Feld, nur in schreibgeschützten Ansichten alter Versionen; über die
+/// ganze Breite zwischen den Spalten, bei schmalen Fenstern zweizeilig.
 fn banner_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let tab = app.ws.active_tab();
     let Some(rect) = rects.banner.filter(|_| tab.read_only) else {
@@ -314,17 +413,17 @@ fn banner_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     };
     let dark = tab.state.dark;
     let n = tab.based_on.unwrap_or_default();
-    let frame = bar_frame(dark, shell::BANNER_H);
-    let inner = inner_size(&frame, rect.size());
-    field(ctx, banner_id(), rect.min, frame, |ui| {
-        ui.set_width(inner.x);
-        ui.set_height(inner.y);
-        one_line(
-            ui,
-            egui::RichText::new(format!(
-                "Alte Version v{n} – schreibgeschützt. Im Bereich „Versionen“ lässt sie sich wiederherstellen oder abzweigen."
-            ))
-            .color(theme::palette(dark).warning),
-        );
-    });
+    let text = format!(
+        "Alte Version v{n} – schreibgeschützt. Im Bereich „Versionen“ lässt sie sich wiederherstellen oder abzweigen."
+    );
+    let color = theme::palette(dark).warning;
+    text_field(
+        ctx,
+        banner_id(),
+        rect,
+        shell::BANNER_LINE_H,
+        false,
+        dark,
+        (text, color),
+    );
 }

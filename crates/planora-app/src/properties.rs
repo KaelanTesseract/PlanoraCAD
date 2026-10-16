@@ -35,6 +35,11 @@ const MESH_BODY_HINT: &str = concat!(
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     theme::section_header(ui, "Eigenschaften", theme::HEADER_H);
     ui.add_space(theme::SPACE_1);
+    show_content(ui, state);
+}
+
+/// Wie [`show`], ohne den Abschnittskopf (den zeigt dann der Aufrufer, z. B. als Umschalter).
+pub fn show_content(ui: &mut egui::Ui, state: &mut AppState) {
     if let Some(index) = state.selected_body.filter(|&i| i < state.bodies.len()) {
         body(ui, state, index);
     } else if let Some(id) = state

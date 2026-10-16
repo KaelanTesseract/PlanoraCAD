@@ -271,12 +271,18 @@ fn current_info(ws: &Workspace, st: &mut VersionsUi) -> Option<Result<DocumentIn
 
 /// Zeichnet das Panel; solange eine Rückfrage offen ist, ist es gesperrt.
 pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi) {
-    drop_stale(ws, st);
-    let enabled = ws.prompt.is_none();
-    ui.add_enabled_ui(enabled, |ui| show_enabled(ui, ws, st));
+    show_with_header(ui, ws, st, true);
 }
 
-fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi) {
+/// Wie [`show`]; ohne `header` fehlt der Abschnittskopf „Versionen“ (den zeigt dann der
+/// Aufrufer, z. B. als Umschalter).
+pub fn show_with_header(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi, header: bool) {
+    drop_stale(ws, st);
+    let enabled = ws.prompt.is_none();
+    ui.add_enabled_ui(enabled, |ui| show_enabled(ui, ws, st, header));
+}
+
+fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi, header: bool) {
     let info = match current_info(ws, st) {
         None => {
             ui.weak("Dieses Dokument ist noch nicht gespeichert.");
@@ -291,7 +297,9 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi) {
         }
         Some(Ok(info)) => info,
     };
-    theme::section_header(ui, "Versionen", theme::HEADER_H);
+    if header {
+        theme::section_header(ui, "Versionen", theme::HEADER_H);
+    }
     let (read_only, dirty, based_on) = {
         let t = ws.active_tab();
         (t.read_only, t.is_dirty(), t.based_on)

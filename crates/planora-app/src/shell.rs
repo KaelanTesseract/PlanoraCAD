@@ -12,10 +12,14 @@ pub const TOP_H: f32 = theme::TOOLBAR_H;
 pub const BOTTOM_H: f32 = theme::DOCK_H;
 /// Abstand zwischen zwei Feldern.
 pub const GAP: f32 = theme::SPACE_3;
-/// Höhe des Statusfeldes unten links.
+/// Höhe des Statusfeldes unten links (eine Zeile; bei langem Text wächst es auf zwei Zeilen nach
+/// oben, bleibt dabei unter der freien Fläche).
 pub const STATUS_H: f32 = 32.0;
-/// Höhe des schmalen Hinweisfeldes unter dem oberen Feld.
-pub const BANNER_H: f32 = 28.0;
+/// Platz für das Hinweisfeld unter dem oberen Feld: bis zu zwei Zeilen. Eine Zeile braucht nur
+/// [`BANNER_LINE_H`].
+pub const BANNER_H: f32 = 40.0;
+/// Höhe des Hinweisfeldes mit einer Zeile.
+pub const BANNER_LINE_H: f32 = 28.0;
 /// Untergrenze der verfügbaren Breite für das obere und untere Feld (schmale Fenster).
 pub const MIN_FIELD_W: f32 = 120.0;
 /// Mindestkante der freien Fläche.
@@ -152,12 +156,15 @@ pub fn layout(
         ),
         vec2(mid_w(bottom_width), BOTTOM_H),
     );
+    // Status: so breit wie sein Text, höchstens bis GAP vor dem unteren Feld. Er liegt unter der
+    // freien Fläche und unter der linken Spalte, breiter verdeckt er also nichts.
+    let status_left = content.left() + SHELL_INSET;
     let status = Rect::from_min_size(
-        pos2(
-            content.left() + SHELL_INSET,
-            content.bottom() - SHELL_INSET - STATUS_H,
+        pos2(status_left, content.bottom() - SHELL_INSET - STATUS_H),
+        vec2(
+            status_width.min(bottom.left() - GAP - status_left).max(0.0),
+            STATUS_H,
         ),
-        vec2(status_width.min(side_w), STATUS_H),
     );
 
     let col_top = content.top() + SHELL_INSET;
@@ -173,11 +180,13 @@ pub fn layout(
         pos2(content.right() - SHELL_INSET, right_bottom),
     );
 
-    // Hinweis: gleiche Breite wie das obere Feld, damit er die Spalten nie berührt.
+    // Hinweis: die ganze Breite zwischen den Spalten (mittig wie das obere Feld), damit der Text
+    // möglichst in eine Zeile passt; er berührt die Spalten nie.
     let banner = read_only.then(|| {
+        let w = mid_w(f32::INFINITY);
         Rect::from_min_size(
-            pos2(top.left(), top.bottom() + GAP),
-            vec2(top.width(), BANNER_H),
+            pos2(content.center().x - w / 2.0, top.bottom() + GAP),
+            vec2(w, BANNER_H),
         )
     });
 
