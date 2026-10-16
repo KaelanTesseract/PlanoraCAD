@@ -585,9 +585,9 @@ fn add_height(st: &mut AppState, d: DrawingId, view: ViewId, body: usize, offset
         .unwrap()
 }
 
-#[test]
-fn hint_field_shows_dimension_hints_and_messages() {
-    // Zwei Quader; ein Maß am zweiten (danach gelöscht: Bezug verloren), eins weit außerhalb.
+/// Zwei Quader; ein Maß am zweiten (danach gelöscht: Bezug verloren), eins weit außerhalb des
+/// Blatts; Zeichnungsbereich ohne Shell in der Größe `size`.
+fn lost_and_outside(size: Vec2) -> (AppState, Bare) {
     let mut st = AppState::new();
     st.create_box(DVec3::new(10.0, 20.0, 30.0)).unwrap();
     let b = st.create_box(DVec3::new(10.0, 20.0, 30.0)).unwrap();
@@ -608,11 +608,18 @@ fn hint_field_shows_dimension_hints_and_messages() {
     add_width(&mut st, d, front, 1, 10.0);
     st.drawing_ui.open(d);
     compute(&mut st);
-    let mut h = Bare::new(HARNESS, true);
+    let mut h = Bare::new(size, true);
     h.settle(&mut st);
     st.delete_feature(b).unwrap();
     compute(&mut st);
     add_height(&mut st, d, front, 0, 5000.0);
+    h.settle(&mut st);
+    (st, h)
+}
+
+#[test]
+fn hint_field_shows_dimension_hints_and_messages() {
+    let (mut st, mut h) = lost_and_outside(HARNESS);
     let shot = h.settle(&mut st);
     let hint = field(&h.c, "Hinweisfeld");
     assert_eq!(h.layout().hint, hint);
@@ -656,7 +663,7 @@ fn hint_field_shows_dimension_hints_and_messages() {
     let mut rows: Vec<f32> = Vec::new();
     for t in shot.texts.iter().filter(|t| hint.contains(t.rect.center())) {
         assert!(
-            hint.expand(0.5).contains_rect(t.rect) || t.clip.expand(0.5).contains_rect(t.rect),
+            hint.expand(0.5).contains_rect(t.rect),
             "„{}“ ragt hinaus",
             t.text
         );
@@ -796,4 +803,134 @@ fn read_only_locks_like_before() {
     h.frame(&mut st, vec![moved(p)]);
     let shot = h.frame(&mut st, vec![moved(p)]);
     assert!(shot.contains(READ_ONLY_TIP), "Grund am gesperrten Werkzeug");
+}
+
+/// Ein Maßhinweis und eine Meldung im Hinweisfeld schmaler Fenster: alles bleibt im Feld (zu
+/// lange Texte enden mit „…“), der ganze Text steht beim Überfahren da.
+#[test]
+fn narrow_hint_field_keeps_notes_inside() {
+    for size in [vec2(800.0, 600.0), MID] {
+        let (mut st, mut h) = lost_and_outside(size);
+        st.drawing_ui.dim_message = Some("3 Maße wurden hinzugefügt.".into());
+        st.drawing_ui.dim_message_key = Some((
+            st.document.edit_count(),
+            st.drawing_ui.selected_view,
+            st.drawing_ui.selected_dim,
+        ));
+        let shot = h.settle(&mut st);
+        let hint = field(&h.c, "Hinweisfeld");
+        let lost = "1 Maß hat seinen Bezug verloren.";
+        let outside = "1 Maß liegt außerhalb des Blatts.";
+        for must in [lost, outside, "3 Maße wurden hinzugefügt."] {
+            shot.find_in(hint, must);
+        }
+        for t in shot.texts.iter().filter(|t| t.rect.intersects(hint)) {
+            assert!(
+                hint.expand(0.5).contains_rect(t.rect),
+                "{size:?}: „{}“ ragt aus dem Hinweisfeld {hint:?}: {:?}",
+                t.text,
+                t.rect
+            );
+        }
+        // Beim Überfahren steht der ganze Text da (auch wenn er gekürzt ist).
+        let p = shot.find_in(hint, lost).rect.center();
+        h.frame(&mut st, vec![moved(p)]);
+        h.frame(&mut st, vec![moved(p)]);
+        let shot = h.frame(&mut st, vec![moved(p)]);
+        let seen = shot.texts.iter().filter(|t| t.text == lost).count();
+        if size.x < 1000.0 {
+            assert!(seen >= 2, "{size:?}: ganzer Text beim Überfahren fehlt");
+        }
+    }
+}
+
+/// Werkzeugfeld bei 800 × 600: zu schmal für beide Zeilen; ein schmaler Rollbalken ist schon in
+/// Ruhe zu sehen, und jeder Text lässt sich durch Rollen ganz ins Feld holen.
+#[test]
+fn tool_field_texts_are_reachable_by_scrolling_at_800x600() {
+    let size = vec2(800.0, 600.0);
+    let c = context();
+    let mut app = app_with_drawing();
+    let shot = app_settle(&c, &mut app, size);
+    let tool = field(&c, "Werkzeugfeld");
+    let zoom_out = icons::glyph(icons::Icon::ZoomOut).to_string();
+    let zoom_in = icons::glyph(icons::Icon::ZoomIn).to_string();
+    let wanted = [
+        "3D-Modell",
+        "Zeichnung: Blatt 1",
+        "Ansicht hinzufügen",
+        "Blatt einpassen",
+        zoom_out.as_str(),
+        zoom_in.as_str(),
+        drawing_view::SUGGEST,
+        TOOL,
+        "Waagerecht",
+    ];
+    let visible = |shot: &Shot, text: &str| {
+        shot.texts.iter().any(|t| {
+            t.text == text && tool.contains_rect(t.rect) && t.clip.expand(0.5).contains_rect(t.rect)
+        })
+    };
+    assert!(
+        wanted.iter().any(|w| !visible(&shot, w)),
+        "bei 800 px passt sonst schon alles"
+    );
+    // Rollbalken in Ruhe sichtbar: ein schmaler Griff im unteren Rand des Felds.
+    let band = Rect::from_min_max(pos2(tool.left(), tool.bottom() - 12.0), tool.max);
+    assert!(
+        shot.fills.iter().any(|(r, f)| band.contains_rect(*r)
+            && r.height() <= 8.0
+            && r.width() >= 20.0
+            && f.a() > 0),
+        "kein Rollbalken zu sehen"
+    );
+    let mut found: Vec<&str> = wanted
+        .iter()
+        .copied()
+        .filter(|w| visible(&shot, w))
+        .collect();
+    let p = tool.center();
+    app_frame(&c, &mut app, size, vec![moved(p)]);
+    for _ in 0..40 {
+        let ev = Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(-40.0, 0.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        };
+        app_frame(&c, &mut app, size, vec![moved(p), ev]);
+        let shot = app_frame(&c, &mut app, size, vec![]);
+        for w in wanted {
+            if !found.contains(&w) && visible(&shot, w) {
+                found.push(w);
+            }
+        }
+    }
+    for w in wanted {
+        assert!(found.contains(&w), "„{w}“ ist nie ganz zu sehen: {found:?}");
+    }
+    // Das Rollen hat das Blatt nicht verschoben oder gezoomt.
+    assert_eq!(app_state(&mut app).drawing_ui.zoom, 1.0);
+    assert_eq!(app_state(&mut app).drawing_ui.pan, Vec2::ZERO);
+}
+
+/// Bleibt für das Blatt keine Fläche (sehr niedriges Fenster), wird wenigstens seine Umgebung
+/// über das Fenster gemalt.
+#[test]
+fn too_small_window_still_paints_the_surround() {
+    let size = vec2(800.0, 120.0);
+    let (mut st, _, _) = drawing_state();
+    let mut h = Bare::new(size, true);
+    let shot = h.settle(&mut st);
+    let window = Rect::from_min_size(Pos2::ZERO, size);
+    assert!(
+        bare_rects(size, false).free.height() < 2.0,
+        "Testvoraussetzung: keine freie Fläche"
+    );
+    assert!(
+        shot.fills
+            .iter()
+            .any(|(r, f)| *f == theme::drawing_surround(true) && *r == window),
+        "Umgebung fehlt"
+    );
 }
