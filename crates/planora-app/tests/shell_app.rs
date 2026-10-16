@@ -10,7 +10,7 @@ use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use glam::Vec3;
 use planora_app::app::PlanoraApp;
 use planora_app::drawing_state::WorkArea;
-use planora_app::shell::{self, SHELL_INSET, ShellRects, ShellState};
+use planora_app::shell::{self, ShellRects, ShellState};
 use planora_app::sketch_state::Tool;
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
@@ -172,14 +172,17 @@ fn field(c: &egui::Context, name: &str) -> Rect {
         .1
 }
 
-/// Geometrie, wie sie aus Fenster und Schreibschutz folgt (die freie Fläche hängt nicht von den
-/// gemessenen Breiten ab; die Breiten oben, unten und des Status sind hier 0).
+/// Geometrie, wie sie aus Fenster, Modus (Skizze: Leiste statt linker Spalte) und Schreibschutz
+/// folgt (die freie Fläche hängt nicht von den gemessenen Breiten ab; die Breiten oben, unten und
+/// des Status sind hier 0).
 fn rects(app: &mut PlanoraApp, size: Vec2) -> ShellRects {
     let read_only = app.ws_mut().active_tab().read_only;
-    shell::layout(
+    let mode = shell_panels::mode_of(&app.ws_mut().active_tab().state);
+    shell::layout_in_mode(
         Rect::from_min_size(Pos2::ZERO, size),
+        mode,
         &ShellState::default(),
-        0.0,
+        (0.0, 0.0),
         0.0,
         0.0,
         read_only,
@@ -687,37 +690,6 @@ fn all_menu_entries_still_present_and_shortcuts_work() {
 }
 
 #[test]
-fn sketch_window_starts_right_of_the_left_field() {
-    let c = context();
-    let mut app = app_with_box();
-    let s = state(&mut app);
-    let id = s
-        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
-        .unwrap();
-    s.open_sketch(id).unwrap();
-    let shot = settle(&c, &mut app, BIG);
-    let placed: Vec<Rect> = fields(&c).into_iter().map(|(_, r)| r).collect();
-    let title = shot.find_outside("Skizze", &placed);
-    let layer = c.layer_id_at(title.center()).unwrap();
-    assert_eq!(layer.order, egui::Order::Foreground);
-    let window = c.memory(|m| m.area_rect(layer.id)).unwrap();
-    let want = pos2(SHELL_INSET + theme::PANEL_WIDTH + theme::SPACE_6, 90.0);
-    assert!(
-        (window.min.x - want.x).abs() < 0.5,
-        "{:?} statt {want:?}",
-        window.min
-    );
-    // Oben bei 90, außer egui schiebt das hohe Fenster zurück ins Fenster (Unterkante am Rand).
-    assert!(
-        (window.min.y - want.y).abs() < 0.5 || (window.bottom() - BIG.y).abs() < 0.5,
-        "{window:?}"
-    );
-    let (left, top) = (field(&c, "links"), field(&c, "oben"));
-    assert!(window.left() > left.right(), "rechts neben dem linken Feld");
-    assert!(window.top() > top.bottom(), "unter dem oberen Feld");
-}
-
-#[test]
 fn new_tab_open_document_frame_all_centres_in_the_free_rect() {
     let c = context();
     // Alles einpassen.
@@ -828,8 +800,9 @@ fn sketch_mode_with_a_centred_free_rect_keeps_its_visible_aspect() {
     assert_eq!(s.camera.ndc_offset, glam::Vec2::ZERO);
 }
 
-/// Skizzen-Modus in der App: Klick und Mausrad auf einem Feld setzen keinen Punkt und zoomen
-/// nicht; in der freien Fläche schon.
+/// Skizzen-Modus in der App: Klick und Mausrad auf einem Feld (Leiste, Skizzenfeld, Fuß, oben,
+/// Status) setzen keinen Punkt und zoomen nicht; in der freien Fläche schon. Ausführlich (auch
+/// 800 × 600) in tests/sketch_fields.rs.
 #[test]
 fn sketch_mode_clicks_and_wheel_on_a_field_do_not_reach_the_sketch() {
     let c = context();
@@ -846,11 +819,11 @@ fn sketch_mode_clicks_and_wheel_on_a_field_do_not_reach_the_sketch() {
     let points = |app: &mut PlanoraApp| state(app).session_sketch().unwrap().points().count();
 
     for (name, p) in [
-        ("links", field(&c, "links").center()),
-        ("rechts", field(&c, "rechts").center()),
+        ("Leiste", field(&c, "Leiste").center()),
+        ("Skizze", field(&c, "Skizze").center()),
         ("oben", field(&c, "oben").left_center() + vec2(6.0, 0.0)),
         ("Status", field(&c, "Status").center()),
-        ("unten", field(&c, "unten").right_center() - vec2(6.0, 0.0)),
+        ("Fuß", field(&c, "Fuß").left_center() + vec2(6.0, 0.0)),
     ] {
         assert_eq!(
             c.layer_id_at(p).unwrap().order,
@@ -869,7 +842,7 @@ fn sketch_mode_clicks_and_wheel_on_a_field_do_not_reach_the_sketch() {
         );
     }
 
-    // Gegenprobe in der freien Fläche (rechts unten, abseits des Skizzenfensters).
+    // Gegenprobe in der freien Fläche (rechts unten, abseits des Würfels).
     let p = pos2(r.free.right() - 60.0, r.free.bottom() - 60.0);
     assert!(c.layer_id_at(p).unwrap().order == egui::Order::Background);
     let d = state(&mut app).camera.distance;

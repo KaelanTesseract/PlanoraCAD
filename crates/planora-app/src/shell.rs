@@ -26,6 +26,31 @@ pub const MIN_FIELD_W: f32 = 120.0;
 pub const MIN_FREE: f32 = 200.0;
 /// Schmalste Seitenspalte, wenn das Fenster zu klein wird.
 pub const MIN_SIDE_W: f32 = 160.0;
+/// Breite der senkrechten Werkzeugleiste im Skizzenmodus.
+pub const STRIP_W: f32 = 44.0;
+/// Größe eines Werkzeugknopfs der Leiste (quadratisch).
+pub const STRIP_BUTTON: f32 = 36.0;
+/// Abstand zwischen zwei Werkzeugknöpfen der Leiste.
+pub const STRIP_SPACING: f32 = 4.0;
+/// Rand der Leiste: 1 px Strich und Innenabstand, so dass ein Knopf (36) in 44 passt.
+pub const STRIP_PAD: f32 = (STRIP_W - STRIP_BUTTON) / 2.0;
+/// Anzahl der Werkzeuge in der Leiste.
+pub const STRIP_TOOLS: usize = 9;
+/// Höhe der Leiste mit allen Werkzeugen: 9 × 36, 8 Abstände, oben und unten der Rand.
+pub const STRIP_H: f32 = STRIP_TOOLS as f32 * STRIP_BUTTON
+    + (STRIP_TOOLS as f32 - 1.0) * STRIP_SPACING
+    + 2.0 * STRIP_PAD;
+
+/// Was die Oberfläche gerade zeigt; bestimmt, welche Felder es gibt.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShellMode {
+    /// 3D-Modell: Baum links, Eigenschaften rechts, Befehlsfeld unten.
+    Model,
+    /// Zeichnung (bis Aufgabe 4 wie das Modell).
+    Drawing,
+    /// Skizze: Werkzeugleiste links, Skizzenfeld rechts, Fußfeld unten.
+    Sketch,
+}
 
 /// Reiter im rechten Feld.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -88,6 +113,48 @@ pub struct ShellRects {
     pub status: Rect,
     pub banner: Option<Rect>,
     pub free: Rect,
+    /// Werkzeugleiste links (nur im Skizzenmodus; dort ist `left` leer).
+    pub strip: Option<Rect>,
+    /// Werkzeugfeld der Zeichnung (Aufgabe 4; bis dahin immer `None`).
+    pub tool: Option<Rect>,
+}
+
+/// Wie [`layout_with_top_min`] für den Modus `mode`. Modell und (bis Aufgabe 4) Zeichnung haben
+/// dieselbe Geometrie. Im Skizzenmodus entfällt die linke Spalte: an ihrer Stelle steht die
+/// Werkzeugleiste ([`STRIP_W`] breit, senkrecht mittig zur freien Fläche, höchstens so hoch wie
+/// sie), die freie Fläche beginnt links schon nach Leiste und Abstand. Rechte Spalte (Skizzenfeld),
+/// unteres Feld (Fußfeld), Status und Hinweis liegen wie im Modell. `left` ist dann ein leeres
+/// Rechteck an der Ecke der Leiste.
+pub fn layout_in_mode(
+    content: Rect,
+    mode: ShellMode,
+    state: &ShellState,
+    top: (f32, f32),
+    bottom_width: f32,
+    status_width: f32,
+    read_only: bool,
+) -> ShellRects {
+    let mut r = layout_with_top_min(content, state, top, bottom_width, status_width, read_only);
+    if mode != ShellMode::Sketch {
+        return r;
+    }
+    let left = content.left() + SHELL_INSET;
+    r.free.min.x = left + STRIP_W + GAP;
+    // Das Fußfeld darf breiter sein als zwischen den Spalten: links steht nur die schmale Leiste,
+    // und die rechte Spalte endet über ihm. So passen Zustand und „Skizze beenden“ auch in
+    // schmalen Fenstern; der Status weicht wie im Modell bis GAP vor dem Fuß zurück.
+    let avail = content.width() - 2.0 * (SHELL_INSET + STRIP_W + GAP);
+    let foot_w = bottom_width
+        .min(avail.max(MIN_FIELD_W))
+        .min(content.width() - 2.0 * SHELL_INSET);
+    r.bottom = Rect::from_center_size(r.bottom.center(), vec2(foot_w, BOTTOM_H));
+    let status_right = (r.bottom.left() - GAP).max(r.status.left());
+    r.status.max.x = r.status.max.x.min(status_right);
+    let h = STRIP_H.min(r.free.height());
+    let strip = Rect::from_min_size(pos2(left, r.free.center().y - h / 2.0), vec2(STRIP_W, h));
+    r.left = Rect::from_min_size(strip.min, vec2(0.0, 0.0));
+    r.strip = Some(strip);
+    r
 }
 
 /// Berechnet die Geometrie deterministisch aus Konstanten (kein Messen, keine Rückkopplung).
@@ -231,5 +298,7 @@ pub fn layout_with_top_min(
         status,
         banner,
         free,
+        strip: None,
+        tool: None,
     }
 }

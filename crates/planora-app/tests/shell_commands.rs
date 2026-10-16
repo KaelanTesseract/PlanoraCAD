@@ -12,7 +12,7 @@ use planora_app::app::PlanoraApp;
 use planora_app::shell::{self, SHELL_INSET};
 use planora_app::state::StandardPlane;
 use planora_app::workspace::{After, Prompt, Workspace};
-use planora_app::{fonts, shell_panels, theme, versions_panel, viewport};
+use planora_app::{fonts, shell_panels, sketch_panel, theme, versions_panel, viewport};
 use planora_feature::SketchPlane;
 use planora_kernel::BoolOp;
 use planora_math::DVec3;
@@ -190,6 +190,8 @@ fn run(
         if with_viewport {
             viewport::show_in(ui, &mut app.ws_mut().active_tab_mut().state, Some(free));
         }
+        // Im Skizzenmodus: Leiste, Skizzenfeld und Fuß wie in der App.
+        sketch_panel::show(ui.ctx(), &mut app.ws_mut().active_tab_mut().state);
     });
     let shot = Shot::of(&out.shapes);
     out.drop_without_applying_deltas();
@@ -492,8 +494,10 @@ fn fields_of(shot: &Shot, dark: bool, size: Vec2) -> Fields {
         top: pick("oberes Feld", &|r| {
             near(r.top(), SHELL_INSET) && near(r.center().x, w / 2.0)
         }),
+        // Im Skizzenmodus steht links die Werkzeugleiste.
         left: pick("linkes Feld", &|r| {
-            near(r.left(), SHELL_INSET) && near(r.top(), SHELL_INSET)
+            near(r.left(), SHELL_INSET)
+                && (near(r.top(), SHELL_INSET) || near(r.width(), shell::STRIP_W))
         }),
         right: pick("rechtes Feld", &|r| {
             near(r.right(), w - SHELL_INSET) && near(r.top(), SHELL_INSET)
@@ -529,7 +533,13 @@ fn status_at(app: &mut PlanoraApp, size: Vec2) -> StatusView {
     let c = context(true);
     let (shot, free) = settle(&c, app, size);
     let f = fields_of(&shot, true, size);
-    let bottom = f.bottom.expect("Befehlsfeld fehlt");
+    let bottom = f.bottom.unwrap_or_else(|| {
+        panic!(
+            "Befehlsfeld fehlt: {:?} {:?}",
+            shot.fields(true),
+            shell_panels::last_layout(&c).map(|l| l.bottom)
+        )
+    });
     let t = shot.texts_in(f.status);
     assert_eq!(t.len(), 1, "{t:?}");
     let seen = t[0].clone();
@@ -568,7 +578,8 @@ fn status_stays_readable_with_the_real_bottom_field() {
         assert!(v.bottom.width() >= MIN_BOTTOM, "{size:?}: {:?}", v.bottom);
     }
 
-    // Skizzenhinweis mit allen Tasten: bei 1400 und 1100 ganz zu lesen.
+    // Skizzenhinweis mit allen Tasten: bei 1400 und 1100 ganz zu lesen; unten steht dann das
+    // Fußfeld der Skizze statt des Befehlsfelds.
     let state = &mut app.ws_mut().active_tab_mut().state;
     let id = state
         .add_sketch(SketchPlane::Standard(StandardPlane::XY))
@@ -709,45 +720,9 @@ fn clicks_on_a_real_bottom_button_do_not_reach_the_viewport() {
 
 // ---- Fix-Runde 1 ------------------------------------------------------------------------------
 
-fn sketching_app() -> PlanoraApp {
-    let mut app = app_with(2, false);
-    let state = &mut app.ws_mut().active_tab_mut().state;
-    let id = state
-        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
-        .unwrap();
-    state.open_sketch(id).unwrap();
-    app
-}
-
-/// Im Skizzenmodus wirkt ein Klick im Feld wie der Menüeintrag: gleicher Dialog, Skizze beendet.
-#[test]
-fn in_sketch_mode_the_field_acts_like_the_menu() {
-    let cases = [
-        ("Quader …", "Erzeugen", "Quader …"),
-        ("Skizze extrudieren …", "Erzeugen", "Skizze extrudieren …"),
-        ("Vereinigen", "Bearbeiten", "Vereinigen …"),
-        ("Fase …", "Bearbeiten", "Fase …"),
-    ];
-    for (field_label, menu, entry) in cases {
-        let c = context(true);
-        let mut via_field = sketching_app();
-        press(&c, &mut via_field, SIZE, field_label);
-        let c = context(true);
-        let mut via_menu = sketching_app();
-        menu_entry(&c, &mut via_menu, SIZE, menu, entry);
-        let (a, b) = (dialogs(&mut via_field), dialogs(&mut via_menu));
-        assert_eq!(a, b, "{field_label}");
-        assert_ne!(a, NONE, "{field_label}: Dialog geöffnet");
-        let open =
-            |app: &mut PlanoraApp| app.ws_mut().active_tab_mut().state.sketch_session.is_some();
-        assert_eq!(
-            open(&mut via_field),
-            open(&mut via_menu),
-            "{field_label}: Skizze"
-        );
-        assert!(!open(&mut via_field), "{field_label}: Skizze beendet");
-    }
-}
+// Im Skizzenmodus gibt es das Befehlsfeld nicht mehr (Etappe C, Aufgabe 3); dass das Menü dort
+// die Skizze beendet und die Dialoge öffnet, prüft tests/sketch_fields.rs
+// (`menu_still_ends_the_sketch_and_opens_dialogs`).
 
 /// Fläche des Chips `label` im letzten Bild.
 fn chip_fill_at(shot: &Shot, rect: Rect) -> Color32 {

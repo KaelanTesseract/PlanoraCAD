@@ -436,16 +436,31 @@ fn no_text_is_clipped_at_1400px() {
     }
     nothing_clipped(&s, "Zeichnungsleiste");
 
-    // Fenster „Skizze“: alle Texte im Fenster sichtbar.
+    // Skizzenfelder (Leiste, Feld, Fuß): alle Texte sichtbar, keiner abgeschnitten; die
+    // Werkzeugnamen stehen als Hinweistext an den Symbolen der Leiste.
     let mut st = AppState::new();
     let i = st
         .add_sketch(SketchPlane::Standard(StandardPlane::XY))
         .unwrap();
     st.open_sketch(i).unwrap();
     let s = settle(&c, |ctx| sketch_panel::show(ctx, &mut st));
-    s.text("Körperkante kopieren");
-    s.text("Skizze beenden");
-    nothing_clipped(&s, "Fenster „Skizze“");
+    for must in [
+        "Abhängigkeiten",
+        "Abstand Punkt–Linie …",
+        "Konstruktion umschalten",
+        sketch_panel::AUTO_AXIS,
+        "Skizze beenden",
+    ] {
+        s.text(must);
+    }
+    nothing_clipped(&s, "Skizzenfelder");
+    // Die Symbole der Leiste liegen ganz im Fenster (ihr Name steht im Hinweistext, siehe
+    // tests/sketch_fields.rs).
+    let buttons = sketch_panel::strip_buttons(&c);
+    assert!(buttons.iter().any(|(l, _)| *l == "Körperkante kopieren"));
+    for (label, r) in buttons {
+        assert!(r.left() >= 0.0 && r.bottom() <= HEIGHT, "{label} {r:?}");
+    }
 
     // Eigenschaften in Bereichsbreite (24 % von 1400 px).
     let mut st = AppState::new();

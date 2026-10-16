@@ -673,7 +673,9 @@ impl eframe::App for PlanoraApp {
         }
 
         // Zuerst die schwebenden Felder (Menü und Tabs, Baum, Eigenschaften | Versionen, Befehle,
-        // Status, Hinweis); sie liefern die freie Fläche zwischen sich. Menü und Tabs sind bei
+        // Status, Hinweis); sie liefern die freie Fläche zwischen sich. Der Modus folgt aus dem
+        // Tab (`shell_panels::mode_of`): mit offener Skizze ohne Baum, Eigenschaften und Befehle,
+        // deren Stelle die Skizzenfelder von `sketch_panel::show` (weiter unten) einnehmen. Menü und Tabs sind bei
         // offener Rückfrage gesperrt, Baum und Eigenschaften in alten Versionen.
         let free = shell_panels::show_fields(&ctx, self);
         // Darunter der Arbeitsbereich über das ganze Fenster: das Modell mit der Bildmitte in der

@@ -1,7 +1,12 @@
-//! Schwebendes Fenster „Skizze“: Werkzeuge, Abhängigkeiten, Bearbeiten, Liste der
-//! Abhängigkeiten und Statuszeile. Es wird nur gezeichnet und an [`SketchSession`] weitergereicht.
+//! Skizzenmodus (Graphit, Etappe C): drei schwebende Felder statt des früheren Fensters
+//! „Skizze“. Links die Werkzeugleiste (Symbole, Name und Hinweis beim Überfahren), rechts das
+//! Skizzenfeld (Abhängigkeiten, Maßeingabe, Bearbeiten, Liste der Abhängigkeiten), unten das
+//! Fußfeld (Hinweis zum Werkzeug, Zustand der Skizze, „Skizze beenden“). Es wird nur gezeichnet
+//! und an [`SketchSession`] weitergereicht.
 
 use crate::icons::{self, Icon, IconSource};
+use crate::shell::{self, ShellMode, ShellRects, ShellState};
+use crate::shell_panels;
 use crate::sketch_state::{ConstraintAction, Item, Severity, SketchSession, Tool};
 use crate::sketch_view::{constraint_name, format_number, is_angle, parse_number, shown_value};
 use crate::state::AppState;
@@ -80,9 +85,12 @@ pub const ACTIONS: [ConstraintAction; 16] = {
     ]
 };
 
-/// Breite des Fensters „Skizze“. Bleibt 300 statt der Graphit-Feldbreite 250: das Zahlenfeld
-/// eines Maßes (Name, Feld, Einheit, „OK“, „Abbrechen“) passt in 250 nicht in eine Zeile.
-const PANEL_WIDTH: f32 = 300.0;
+/// Größe der Symbole in der Werkzeugleiste.
+const STRIP_ICON: f32 = 20.0;
+/// Schmalster Platz, in dem der Werkzeughinweis im Fuß noch gezeigt wird.
+const MIN_HINT_W: f32 = 60.0;
+/// Breite des Zahlenfelds der Maßeingabe (Text; Einheit daneben, OK/Abbrechen darunter).
+const VALUE_WIDTH: f32 = 120.0;
 /// Höhe der Abhängigkeitsliste, ab der sie rollt.
 const LIST_HEIGHT: f32 = 180.0;
 
@@ -101,6 +109,8 @@ struct Editor {
     /// Eingabe in Grad (intern Radiant).
     angle: bool,
     focus: bool,
+    /// Feld noch ins Bild rollen (kleine Fenster: das Skizzenfeld rollt).
+    reveal: bool,
     /// Auswahl beim Öffnen; ändert sie sich, gehört das Feld nicht mehr dazu und schließt.
     selection: Vec<Item>,
 }
@@ -111,7 +121,7 @@ enum Section {
     Pattern,
 }
 
-/// Zustand des Fensters zwischen den Frames (im egui-Speicher).
+/// Zustand der Skizzenfelder zwischen den Frames (im egui-Speicher).
 #[derive(Clone, Debug)]
 struct PanelState {
     sketch: FeatureId,
@@ -153,6 +163,7 @@ fn new_editor(se: &SketchSession, sk: &Sketch, action: ConstraintAction) -> Edit
         text: editor_text(value, angle),
         angle,
         focus: true,
+        reveal: true,
         selection: se.selection.clone(),
     }
 }
@@ -164,7 +175,7 @@ fn load_panel(ctx: &egui::Context, index: FeatureId) -> PanelState {
 }
 
 /// Öffnet das Zahlenfeld für das Maß `action` der aktuellen Auswahl, wie die Schaltfläche im
-/// Fenster (auch für Tests ohne Mausklick).
+/// Skizzenfeld (auch für Tests ohne Mausklick).
 pub fn open_dimension_editor(ctx: &egui::Context, state: &AppState, action: ConstraintAction) {
     let Some(se) = state.sketch_session.as_ref() else {
         return;
@@ -187,46 +198,51 @@ pub fn dimension_editor_open(ctx: &egui::Context) -> bool {
         .is_some_and(|p| p.editor.is_some())
 }
 
-/// Zeigt das Fenster „Skizze“, solange der Skizzen-Modus offen ist.
+fn strip_buttons_key() -> egui::Id {
+    shell_panels::sketch_strip_id().with("buttons")
+}
+
+/// Name und Lage der Werkzeugknöpfe der Leiste im letzten Bild (für Tests).
+#[doc(hidden)]
+pub fn strip_buttons(ctx: &egui::Context) -> Vec<(&'static str, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<(&'static str, egui::Rect)>>(strip_buttons_key()))
+        .unwrap_or_default()
+}
+
+/// Rechtecke der Skizzenfelder: aus dem Layout der Shell in diesem Bild (die App zeichnet die
+/// Felder vorher), sonst – ohne Shell, z. B. in Tests – aus [`shell::layout_in_mode`] über das
+/// ganze Fenster.
+fn sketch_rects(ctx: &egui::Context) -> ShellRects {
+    if let Some(r) = shell_panels::last_layout(ctx).filter(|r| r.strip.is_some()) {
+        return r;
+    }
+    let content = ctx.content_rect();
+    let foot = shell_panels::stored(ctx, shell_panels::sketch_foot_width_key()).unwrap_or(0.0);
+    shell::layout_in_mode(
+        content,
+        ShellMode::Sketch,
+        &ShellState::default(),
+        (content.width(), 0.0),
+        foot,
+        0.0,
+        false,
+    )
+}
+
+/// Zeigt die Skizzenfelder (Leiste, Skizzenfeld, Fuß), solange der Skizzen-Modus offen ist.
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let Some(index) = state.open_sketch_id() else {
         return;
     };
-    if state.session_sketch().is_none() {
+    let rects = sketch_rects(ctx);
+    let Some(strip) = rects.strip else {
         return;
-    }
+    };
+    let dark = state.dark;
     let mut panel = load_panel(ctx, index);
-    let mut close = false;
-    theme::window(ctx, "Skizze")
-        .id(panel_id().with("window"))
-        // Startposition rechts neben dem linken Feld.
-        .default_pos(egui::pos2(
-            crate::shell::SHELL_INSET + theme::PANEL_WIDTH + theme::SPACE_6,
-            90.0,
-        ))
-        // Feste Breite: Das Zahlenfeld oder die Liste sollen die Schaltflächen nicht umbrechen.
-        .min_width(PANEL_WIDTH)
-        .max_width(PANEL_WIDTH)
-        .resizable(false)
-        .show(ctx, |ui| {
-            let Some((se, sk)) = state.session_sketch_mut() else {
-                return;
-            };
-            close = contents(ui, se, sk, &mut panel);
-        });
-    ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
-    if close {
-        state.close_sketch();
-    }
-}
-
-/// Inhalt des Fensters; `true`, wenn „Skizze beenden“ gedrückt wurde.
-fn contents(
-    ui: &mut egui::Ui,
-    se: &mut SketchSession,
-    sk: &mut Sketch,
-    panel: &mut PanelState,
-) -> bool {
+    let Some((se, sk)) = state.session_sketch_mut() else {
+        return;
+    };
     // Das Zahlenfeld gehört zur Auswahl, mit der es geöffnet wurde.
     if panel
         .editor
@@ -236,25 +252,138 @@ fn contents(
         panel.editor = None;
         panel.error = None;
     }
-    let dark = ui.visuals().dark_mode;
+    strip_field(ctx, strip, dark, se, sk);
+    side_field(ctx, rects.right, dark, se, sk, &mut panel);
+    let close = foot_field(ctx, rects.bottom, dark, se, sk);
+    ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
+    if close {
+        state.close_sketch();
+    }
+}
+
+/// Werkzeugleiste: die neun Werkzeuge als Symbolknöpfe untereinander. Name und Hinweis stehen im
+/// Hinweistext und (für Bildschirmleser) in der Knopfbeschreibung.
+fn strip_field(
+    ctx: &egui::Context,
+    rect: egui::Rect,
+    dark: bool,
+    se: &mut SketchSession,
+    sk: &mut Sketch,
+) {
+    let frame = theme::panel_frame(dark).inner_margin(egui::Margin::same(
+        (shell::STRIP_PAD - theme::panel_frame(dark).stroke.width) as i8,
+    ));
+    let inner = shell_panels::inner_size(&frame, rect.size());
+    let mut seen: Vec<(&'static str, egui::Rect)> = Vec::new();
+    shell_panels::field(
+        ctx,
+        shell_panels::sketch_strip_id(),
+        rect.min,
+        frame,
+        |ui| {
+            ui.set_width(inner.x);
+            ui.set_height(inner.y);
+            // Reicht die Höhe nicht (sehr niedrige Fenster), rollt die Leiste.
+            egui::ScrollArea::vertical()
+                .id_salt("planora-field-sketch-strip-scroll")
+                .max_height(inner.y)
+                .auto_shrink([false, true])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = shell::STRIP_SPACING;
+                    for (tool, label, hint) in TOOLS {
+                        let selected = se.tool == tool;
+                        let r =
+                            strip_button(ui, icons::sketch_tool_icon(tool), label, selected, dark)
+                                .on_hover_ui(|ui| {
+                                    ui.strong(label);
+                                    ui.label(hint);
+                                });
+                        if r.clicked() && !selected {
+                            se.set_tool(sk, tool);
+                        }
+                        seen.push((label, r.rect));
+                    }
+                });
+        },
+    );
+    ctx.data_mut(|d| d.insert_temp(strip_buttons_key(), seen));
+}
+
+/// Knopf der Werkzeugleiste: 36 × 36, nur Symbol; gewählt mit neutraler Fläche `bg_active`,
+/// beim Überfahren `bg_field`.
+fn strip_button(
+    ui: &mut egui::Ui,
+    source: IconSource,
+    label: &str,
+    selected: bool,
+    dark: bool,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::Vec2::splat(shell::STRIP_BUTTON), egui::Sense::click());
+    let enabled = ui.is_enabled();
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, label)
+    });
+    if ui.is_rect_visible(rect) {
+        let p = theme::palette(dark);
+        let hovered = response.hovered();
+        let fill = if selected {
+            Some(p.bg_active)
+        } else if hovered {
+            Some(p.bg_field)
+        } else {
+            None
+        };
+        if let Some(fill) = fill {
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::same(theme::RADIUS_SM), fill);
+        }
+        let color = if selected || hovered {
+            p.text_primary
+        } else {
+            p.text_secondary
+        };
+        let icon = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(STRIP_ICON));
+        icons::paint_source(ui.painter(), icon, source, color);
+    }
+    theme::focus_ring(ui, &response);
+    response
+}
+
+/// Skizzenfeld rechts (Spaltenbreite 250): Inhalt in einer senkrechten ScrollArea, höchstens so
+/// hoch wie die Spalte.
+fn side_field(
+    ctx: &egui::Context,
+    rect: egui::Rect,
+    dark: bool,
+    se: &mut SketchSession,
+    sk: &mut Sketch,
+    panel: &mut PanelState,
+) {
+    let frame = theme::panel_frame(dark);
+    let inner = shell_panels::inner_size(&frame, rect.size());
+    let margin = f32::from(frame.inner_margin.left);
+    shell_panels::field(ctx, shell_panels::sketch_side_id(), rect.min, frame, |ui| {
+        shell_panels::side_column(ui, inner, margin, |ui| {
+            let area = egui::ScrollArea::vertical()
+                .id_salt("planora-field-sketch-side-scroll")
+                .max_height(inner.y)
+                .auto_shrink([false, true]);
+            theme::scroll_area(ui, area, |ui| side_contents(ui, se, sk, panel));
+        });
+    });
+}
+
+/// Inhalt des Skizzenfelds: Name, Abhängigkeiten mit Maßeingabe, Bearbeiten, Liste.
+fn side_contents(
+    ui: &mut egui::Ui,
+    se: &mut SketchSession,
+    sk: &mut Sketch,
+    panel: &mut PanelState,
+) {
     ui.strong(&sk.name);
     ui.add_space(2.0);
-
-    // Werkzeuge
-    theme::section_header(ui, "Werkzeuge", theme::SUB_HEADER_H);
-    ui.horizontal_wrapped(|ui| {
-        for (tool, label, _) in TOOLS {
-            let selected = se.tool == tool;
-            let source = icons::sketch_tool_icon(tool);
-            if icons::source_button(ui, source, label, dark, selected).clicked() && !selected {
-                se.set_tool(sk, tool);
-            }
-        }
-    });
-    if let Some((_, _, hint)) = TOOLS.iter().find(|(t, ..)| *t == se.tool) {
-        ui.label(RichText::new(*hint).small().weak());
-    }
-    ui.separator();
 
     // Abhängigkeiten
     theme::section_header(ui, "Abhängigkeiten", theme::SUB_HEADER_H);
@@ -336,34 +465,75 @@ fn contents(
         }
     });
     sections(ui, se, sk, panel);
-    ui.add(theme::Toggle::new(
-        &mut se.auto_constrain,
-        "Automatisch waagerecht/senkrecht",
-    ));
+    // Kurz, damit der Schalter in die Feldbreite 250 passt; die Erklärung steht im Hinweistext.
+    ui.add(theme::Toggle::new(&mut se.auto_constrain, AUTO_AXIS))
+        .on_hover_text(
+            "Fast waagerechte oder senkrechte Linien bekommen beim Zeichnen von selbst die              passende Abhängigkeit.",
+        );
     ui.separator();
 
     // Liste der Abhängigkeiten
     theme::section_header(ui, "Abhängigkeiten der Skizze", theme::SUB_HEADER_H);
     constraint_list(ui, se, sk, panel);
-    ui.separator();
+}
 
-    let close = ui
-        .add(icons::button(
-            Icon::EndSketch,
-            RichText::new("Skizze beenden").strong(),
-        ))
-        .clicked();
-
-    // Statuszeile
+/// Fußfeld: rechts „Skizze beenden“, davor der Zustand der Skizze (Farbe nach Schweregrad und
+/// Freiheitsgraden), links der Hinweis zum Werkzeug (gekürzt, ganz beim Überfahren). `true`, wenn
+/// „Skizze beenden“ gedrückt wurde. Merkt sich Wunsch- und Mindestbreite für die Geometrie.
+fn foot_field(
+    ctx: &egui::Context,
+    rect: egui::Rect,
+    dark: bool,
+    se: &mut SketchSession,
+    sk: &mut Sketch,
+) -> bool {
+    let frame = shell_panels::bar_frame(dark, shell::BOTTOM_H);
+    let inner = shell_panels::inner_size(&frame, rect.size());
+    let margin = frame.total_margin().sum().x;
+    let p = theme::palette(dark);
     let (text, severity) = se.status(sk);
-    let p = theme::palette(ui.visuals().dark_mode);
     let color = match severity {
         Severity::Info if se.last_report.as_ref().is_some_and(|r| r.dof == 0) => p.ok,
         Severity::Info => p.text_secondary,
         Severity::Warning => p.warning,
         Severity::Error => p.error,
     };
-    ui.colored_label(color, text);
+    let hint = TOOLS
+        .iter()
+        .find(|(t, ..)| *t == se.tool)
+        .map_or("", |(_, _, h)| *h);
+    let mut close = false;
+    shell_panels::field(ctx, shell_panels::sketch_foot_id(), rect.min, frame, |ui| {
+        ui.set_width(inner.x);
+        ui.set_height(inner.y);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let right = ui.cursor().right();
+            let end = ui.add(icons::button(
+                Icon::EndSketch,
+                RichText::new("Skizze beenden").strong(),
+            ));
+            close = end.clicked();
+            let gap = ui.spacing().item_spacing.x;
+            let sep = ui.separator().rect.width() + gap;
+            let status = ui.colored_label(color, &text);
+            let fixed = right - status.rect.left();
+            let galley = ui.painter().layout_no_wrap(
+                hint.to_owned(),
+                egui::TextStyle::Body.resolve(ui.style()),
+                p.text_secondary,
+            );
+            // Der Hinweis nimmt den Rest (gekürzt, ganz beim Überfahren); ist kaum Platz, entfällt
+            // er (er steht auch im Hinweistext der Leiste).
+            if ui.available_width() - sep > MIN_HINT_W {
+                ui.separator();
+                ui.add(egui::Label::new(RichText::new(hint).color(p.text_secondary)).truncate());
+            }
+            // Wunsch: alles in einer Zeile; mindestens: Zustand und Knopf.
+            let wanted = fixed + gap + sep + galley.size().x + margin;
+            shell_panels::remember_width(ui, shell_panels::sketch_foot_min_key(), fixed + margin);
+            shell_panels::remember_width(ui, shell_panels::sketch_foot_width_key(), wanted.ceil());
+        });
+    });
     close
 }
 
@@ -420,11 +590,13 @@ fn value_editor(
     };
     let unit = if editor.angle { "°" } else { "mm" };
     let (mut ok, mut cancel) = (false, false);
+    // Untereinander, damit es in die Feldbreite 250 passt: Name, Zahl mit Einheit, Knöpfe.
+    let top = ui.cursor().top();
+    ui.label(format!("{title}:"));
     ui.horizontal(|ui| {
-        ui.label(format!("{title}:"));
         let r = theme::text_field(
             ui,
-            egui::TextEdit::singleline(&mut editor.text).desired_width(70.0),
+            egui::TextEdit::singleline(&mut editor.text).desired_width(VALUE_WIDTH),
         );
         if editor.focus {
             r.request_focus();
@@ -434,6 +606,8 @@ fn value_editor(
             ok = true;
         }
         ui.label(unit);
+    });
+    ui.horizontal(|ui| {
         if ui.small_button("OK").clicked() {
             ok = true;
         }
@@ -441,6 +615,15 @@ fn value_editor(
             cancel = true;
         }
     });
+    // Frisch geöffnet: Name, Zahl und Knöpfe ins Bild rollen (in kleinen Fenstern liegt das
+    // Zahlenfeld sonst unter dem sichtbaren Teil des Skizzenfelds).
+    if editor.reveal {
+        let block = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
+        ui.scroll_to_rect(block, None);
+        if !ui.ctx().will_discard() {
+            editor.reveal = false;
+        }
+    }
     if cancel {
         panel.editor = None;
         panel.error = None;
@@ -485,25 +668,25 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
             });
         }
         Some(Section::Pattern) => {
-            ui.horizontal(|ui| {
-                ui.label("Versatz x");
-                theme::text_field(
-                    ui,
-                    egui::TextEdit::singleline(&mut panel.pattern_dx).desired_width(50.0),
-                );
-                ui.label("y");
-                theme::text_field(
-                    ui,
-                    egui::TextEdit::singleline(&mut panel.pattern_dy).desired_width(50.0),
-                );
-                ui.label("mm");
-            });
+            // Je Wert eine Zeile, damit alles in die Feldbreite 250 passt.
+            for (label, text) in [
+                ("Versatz x", &mut panel.pattern_dx),
+                ("Versatz y", &mut panel.pattern_dy),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    theme::text_field(ui, egui::TextEdit::singleline(text).desired_width(50.0));
+                    ui.label("mm");
+                });
+            }
             ui.horizontal(|ui| {
                 ui.label("Anzahl Kopien");
                 theme::text_field(
                     ui,
                     egui::TextEdit::singleline(&mut panel.pattern_count).desired_width(40.0),
                 );
+            });
+            ui.horizontal(|ui| {
                 if ui.small_button("Erzeugen").clicked() {
                     let dx = parse_number(&panel.pattern_dx);
                     let dy = parse_number(&panel.pattern_dy);
@@ -529,7 +712,7 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
 }
 
 /// Liste der Abhängigkeiten: Klick wählt, Doppelklick ändert ein Maß, „anzeigend“ schaltet ein
-/// Maß auf nur anzeigend, „Löschen“ entfernt die Abhängigkeit.
+/// Maß auf nur anzeigend, das Löschsymbol entfernt die Abhängigkeit.
 fn constraint_list(
     ui: &mut egui::Ui,
     se: &mut SketchSession,
@@ -563,47 +746,71 @@ fn constraint_list(
                 if bad.contains(&id) {
                     text = text.color(theme::palette(ui.visuals().dark_mode).error);
                 }
+                let mut delete = false;
+                let mut name = None;
                 ui.horizontal(|ui| {
-                    let r = ui.selectable_label(selected, text);
-                    if r.clicked() {
-                        if shift {
-                            if selected {
-                                se.selection.retain(|i| *i != item);
-                            } else {
-                                se.selection.push(item);
-                            }
-                        } else {
-                            se.selection = vec![item];
-                        }
-                    }
-                    if kind.is_dimension() {
-                        if r.double_clicked() {
-                            let angle = is_angle(&kind);
-                            let value = shown_value(sk, &kind, driven).unwrap_or(0.0);
-                            panel.error = None;
-                            panel.editor = Some(Editor {
-                                target: EditTarget::Existing(id),
-                                text: editor_text(value, angle),
-                                angle,
-                                focus: true,
-                                selection: se.selection.clone(),
-                            });
-                        }
-                        let mut d = driven;
-                        if ui
-                            .checkbox(&mut d, "anzeigend")
-                            .on_hover_text("Nur anzeigendes Maß (bestimmt nichts)")
-                            .changed()
-                        {
-                            let _ = se.set_driven(sk, id, d);
-                        }
-                    }
-                    if ui.small_button("Löschen").clicked() {
-                        se.selection = vec![item];
-                        se.delete_selection(sk);
-                    }
+                    // Löschen als Symbol rechts, damit der Name die Feldbreite behält.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let dark = ui.visuals().dark_mode;
+                        delete = icons::source_icon_button(
+                            ui,
+                            IconSource::Font(Icon::Delete),
+                            DELETE_ROW,
+                            dark,
+                        )
+                        .on_hover_text(DELETE_ROW)
+                        .clicked();
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            name = Some(ui.selectable_label(selected, text));
+                        });
+                    });
                 });
+                let r = name.expect("Zeile gezeichnet");
+                if r.clicked() {
+                    if shift {
+                        if selected {
+                            se.selection.retain(|i| *i != item);
+                        } else {
+                            se.selection.push(item);
+                        }
+                    } else {
+                        se.selection = vec![item];
+                    }
+                }
+                if kind.is_dimension() {
+                    if r.double_clicked() {
+                        let angle = is_angle(&kind);
+                        let value = shown_value(sk, &kind, driven).unwrap_or(0.0);
+                        panel.error = None;
+                        panel.editor = Some(Editor {
+                            target: EditTarget::Existing(id),
+                            text: editor_text(value, angle),
+                            angle,
+                            focus: true,
+                            reveal: true,
+                            selection: se.selection.clone(),
+                        });
+                    }
+                    let mut d = driven;
+                    if ui
+                        .checkbox(&mut d, "anzeigend")
+                        .on_hover_text("Nur anzeigendes Maß (bestimmt nichts)")
+                        .changed()
+                    {
+                        let _ = se.set_driven(sk, id, d);
+                    }
+                }
+                if delete {
+                    se.selection = vec![item];
+                    se.delete_selection(sk);
+                }
             }
         },
     );
 }
+
+/// Schalter für automatisch waagerechte/senkrechte Linien.
+pub const AUTO_AXIS: &str = "Automatisch ausrichten";
+
+/// Beschreibung des Löschknopfs einer Zeile der Liste.
+const DELETE_ROW: &str = "Abhängigkeit löschen";

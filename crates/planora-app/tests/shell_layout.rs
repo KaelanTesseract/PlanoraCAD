@@ -2,7 +2,8 @@
 
 use egui::{Rect, pos2, vec2};
 use planora_app::shell::{
-    GAP, RightTab, SHELL_INSET, ShellRects, ShellState, layout, layout_with_top_min,
+    GAP, RightTab, SHELL_INSET, STRIP_H, STRIP_W, ShellMode, ShellRects, ShellState, layout,
+    layout_in_mode, layout_with_top_min,
 };
 use planora_app::viewport::cube_rect;
 
@@ -297,5 +298,151 @@ fn top_field_over_the_columns_when_its_minimum_does_not_fit() {
             }
         }
         w += 25.0;
+    }
+}
+
+// ---- Skizzenmodus (Etappe C, Aufgabe 3) -------------------------------------------------------
+
+fn sketch_rects(w: f32, h: f32, read_only: bool) -> ShellRects {
+    layout_in_mode(
+        window(w, h),
+        ShellMode::Sketch,
+        &ShellState::default(),
+        (600.0, 431.0),
+        360.0,
+        200.0,
+        read_only,
+    )
+}
+
+/// Alle Felder des Skizzenmodus mit Namen (ohne das leere linke Rechteck).
+fn sketch_named(r: &ShellRects) -> Vec<(&'static str, Rect)> {
+    let mut v = vec![
+        ("top", r.top),
+        ("strip", r.strip.expect("Leiste im Skizzenmodus")),
+        ("right", r.right),
+        ("bottom", r.bottom),
+        ("status", r.status),
+        ("free", r.free),
+    ];
+    if let Some(b) = r.banner {
+        v.push(("banner", b));
+    }
+    v
+}
+
+// (a)
+#[test]
+fn sketch_mode_rects_do_not_overlap_at_five_sizes() {
+    for (w, h) in [
+        (800.0, 600.0),
+        (1100.0, 700.0),
+        (1400.0, 900.0),
+        (1920.0, 1080.0),
+        (2560.0, 1440.0),
+    ] {
+        let content = window(w, h);
+        for read_only in [false, true] {
+            let r = sketch_rects(w, h, read_only);
+            assert!(r.tool.is_none(), "Werkzeugfeld erst in Aufgabe 4");
+            let all = sketch_named(&r);
+            for (name, rect) in &all {
+                assert!(
+                    content.contains_rect(*rect),
+                    "{name} liegt bei {w}x{h} außerhalb: {rect:?}"
+                );
+                assert!(rect.width() > 0.0 && rect.height() > 0.0, "{name} leer");
+            }
+            for i in 0..all.len() {
+                for j in (i + 1)..all.len() {
+                    assert!(
+                        !overlaps(all[i].1, all[j].1),
+                        "{} und {} überlappen bei {w}x{h} (schreibgeschützt {read_only}): {:?} / {:?}",
+                        all[i].0,
+                        all[j].0,
+                        all[i].1,
+                        all[j].1
+                    );
+                }
+            }
+            // Die Leiste steht links am Rand und senkrecht mittig zur freien Fläche.
+            let strip = r.strip.unwrap();
+            assert_eq!(strip.left(), SHELL_INSET);
+            assert_eq!(strip.width(), STRIP_W);
+            assert!((strip.center().y - r.free.center().y).abs() < 0.01);
+            // Der Würfel liegt in der freien Fläche und damit unter keinem Feld.
+            let cube = cube_rect(r.free);
+            for (name, rect) in all.iter().filter(|(n, _)| *n != "free") {
+                assert!(
+                    !overlaps(cube, *rect),
+                    "Würfel liegt bei {w}x{h} unter {name}"
+                );
+            }
+        }
+    }
+}
+
+// (b)
+#[test]
+fn sketch_free_rect_margins() {
+    let r = sketch_rects(1400.0, 900.0, false);
+    assert_eq!(r.free.left(), 16.0 + 44.0 + 12.0);
+    assert_eq!(r.free.left(), 72.0);
+    assert_eq!(r.free.right(), 1400.0 - 278.0);
+    assert_eq!(r.free.top(), 76.0);
+    assert_eq!(r.free.bottom(), 900.0 - 84.0);
+    assert_eq!(
+        r.right.width(),
+        250.0,
+        "Skizzenfeld so breit wie die Spalte"
+    );
+    // Unten und Status wie im Modell.
+    let model = layout_in_mode(
+        window(1400.0, 900.0),
+        ShellMode::Model,
+        &ShellState::default(),
+        (600.0, 431.0),
+        360.0,
+        200.0,
+        false,
+    );
+    assert_eq!(r.bottom, model.bottom);
+    assert_eq!(r.status, model.status);
+    assert_eq!(r.right, model.right);
+    assert_eq!(r.top, model.top);
+    assert!(model.strip.is_none() && model.tool.is_none());
+    assert_eq!(model.free.left(), 278.0);
+    // Die Zeichnung hat bis Aufgabe 4 die Geometrie des Modells.
+    let drawing = layout_in_mode(
+        window(1400.0, 900.0),
+        ShellMode::Drawing,
+        &ShellState::default(),
+        (600.0, 431.0),
+        360.0,
+        200.0,
+        false,
+    );
+    assert_eq!(drawing.free, model.free);
+}
+
+// (c)
+#[test]
+fn strip_height_is_limited_to_free_height() {
+    // Genug Platz: 9 Knöpfe zu 36, 8 Abstände zu 4, Rand 2 × 4.
+    assert_eq!(STRIP_H, 9.0 * 36.0 + 8.0 * 4.0 + 8.0);
+    let r = sketch_rects(1400.0, 900.0, false);
+    assert_eq!(r.strip.unwrap().height(), STRIP_H);
+    // Niedrige Fenster: höchstens so hoch wie die freie Fläche.
+    for h in [300.0, 400.0, 480.0, 520.0] {
+        for read_only in [false, true] {
+            let r = sketch_rects(800.0, h, read_only);
+            let strip = r.strip.unwrap();
+            assert!(
+                strip.height() <= r.free.height() + 0.01,
+                "{h}: Leiste {strip:?} höher als die freie Fläche {:?}",
+                r.free
+            );
+            assert!(strip.top() >= r.free.top() - 0.01 && strip.bottom() <= r.free.bottom() + 0.01);
+        }
     }
 }

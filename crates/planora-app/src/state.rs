@@ -848,7 +848,7 @@ impl AppState {
     pub fn end_sketch_for(&mut self, target: Option<FeatureId>) -> Result<(), String> {
         if target.is_some() && target == self.open_sketch_id() {
             return self.fail(
-                "Zuerst die Skizze beenden („Skizze beenden“ im Skizzenfenster), dann erneut \
+                "Zuerst die Skizze beenden (Knopf „Skizze beenden“ unten), dann erneut \
                  versuchen"
                     .into(),
             );
