@@ -33,6 +33,8 @@ fn named(r: &ShellRects) -> Vec<(&'static str, Rect)> {
 #[test]
 fn no_fields_overlap_at_common_sizes() {
     for (w, h) in [
+        (640.0, 480.0),
+        (700.0, 500.0),
         (800.0, 600.0),
         (1100.0, 700.0),
         (1400.0, 900.0),
@@ -92,7 +94,6 @@ fn free_rect_never_smaller_than_200_square() {
                 "{name} liegt bei {w}x{h} außerhalb: {rect:?}"
             );
         }
-        assert!(r.left.width() >= 160.0 || w < 400.0);
     }
 }
 
@@ -137,4 +138,53 @@ fn right_tab_falls_back_when_versions_hidden() {
     assert_eq!(state.effective_right_tab(), RightTab::Versions);
     state.set_versions_visible(false);
     assert_eq!(state.effective_right_tab(), RightTab::Properties);
+}
+
+#[test]
+fn small_windows_have_documented_geometry() {
+    // 400x400: Seitenspalten 160, freie Fläche 200 breit mittig, Höhe 400-76-84 = 240.
+    let r = rects(400.0, 400.0, &ShellState::default(), false);
+    assert_eq!(r.left.width(), 160.0);
+    assert_eq!(r.right.width(), 160.0);
+    assert_eq!(
+        r.free,
+        Rect::from_min_max(pos2(100.0, 76.0), pos2(300.0, 316.0))
+    );
+    // 640x480: Spalten (640-200-48)/2 = 196, freie Fläche mittig 220..420.
+    let r = rects(640.0, 480.0, &ShellState::default(), false);
+    assert_eq!(r.left.width(), 196.0);
+    assert_eq!(r.free.left(), 220.0);
+    assert_eq!(r.free.right(), 420.0);
+    assert_eq!(r.free.top(), 76.0);
+    assert_eq!(r.free.bottom(), 480.0 - 84.0);
+}
+
+#[test]
+fn free_rect_clears_all_fields_at_common_sizes() {
+    for (w, h) in [
+        (800.0, 600.0),
+        (1100.0, 700.0),
+        (1400.0, 900.0),
+        (1920.0, 1080.0),
+        (2560.0, 1440.0),
+    ] {
+        for read_only in [false, true] {
+            let r = rects(w, h, &ShellState::default(), read_only);
+            for (name, rect) in named(&r) {
+                assert!(
+                    !overlaps(r.free, rect),
+                    "free überlappt {name} bei {w}x{h} (read_only={read_only}): {:?} / {rect:?}",
+                    r.free
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn read_only_raises_the_free_top_by_banner_and_gap_at_1400x900() {
+    let r = rects(1400.0, 900.0, &ShellState::default(), true);
+    assert_eq!(r.free.top(), 116.0);
+    assert_eq!(r.free.left(), 278.0);
+    assert_eq!(r.free.bottom(), 900.0 - 84.0);
 }

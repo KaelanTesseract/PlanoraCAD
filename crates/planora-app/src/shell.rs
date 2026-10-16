@@ -16,8 +16,8 @@ pub const GAP: f32 = theme::SPACE_3;
 pub const STATUS_H: f32 = 32.0;
 /// Höhe des schmalen Hinweisfeldes unter dem oberen Feld.
 pub const BANNER_H: f32 = 28.0;
-/// Mindestbreite des oberen und unteren Feldes.
-pub const MIN_FIELD_W: f32 = 240.0;
+/// Untergrenze der verfügbaren Breite für das obere und untere Feld (schmale Fenster).
+pub const MIN_FIELD_W: f32 = 120.0;
 /// Mindestkante der freien Fläche.
 pub const MIN_FREE: f32 = 200.0;
 /// Schmalste Seitenspalte, wenn das Fenster zu klein wird.
@@ -98,7 +98,9 @@ pub fn layout(
     // Die Seitenspalten sind immer vorhanden (Baum links, Eigenschaften rechts); die
     // Umschalter für Projekte und Versionen ändern nur ihren Inhalt, nicht die Geometrie.
     let normal_free_w = content.width() - 2.0 * (SHELL_INSET + theme::PANEL_WIDTH + GAP);
-    let normal_free_h = content.height() - (2.0 * SHELL_INSET + TOP_H + BOTTOM_H + 2.0 * GAP);
+    let banner_extra = if read_only { BANNER_H + GAP } else { 0.0 };
+    let normal_free_h =
+        content.height() - (2.0 * SHELL_INSET + TOP_H + BOTTOM_H + 2.0 * GAP + banner_extra);
     // Zu kleines Fenster: Seitenspalten schmaler, damit die freie Fläche 200 breit bleibt.
     let side_w = if normal_free_w < MIN_FREE {
         MIN_SIDE_W.max((content.width() - MIN_FREE - 4.0 * GAP) / 2.0)
@@ -110,7 +112,7 @@ pub fn layout(
     let mut free = Rect::from_min_max(
         pos2(
             content.left() + SHELL_INSET + side_w + GAP,
-            content.top() + SHELL_INSET + TOP_H + GAP,
+            content.top() + SHELL_INSET + TOP_H + GAP + banner_extra,
         ),
         pos2(
             content.right() - (SHELL_INSET + side_w + GAP),
@@ -130,11 +132,11 @@ pub fn layout(
         );
     }
 
-    // Mittlere Felder: höchstens so breit, wie zwischen den Spalten Platz ist (mindestens 240,
+    // Mittlere Felder: höchstens so breit, wie zwischen den Spalten Platz ist (mindestens 120,
     // aber nie breiter als das Fenster abzüglich der Außenränder).
     let avail = content.width() - 2.0 * (side_w + SHELL_INSET + GAP);
     let max_w = content.width() - 2.0 * SHELL_INSET;
-    let mid_w = |wanted: f32| wanted.min(avail).max(MIN_FIELD_W).min(max_w);
+    let mid_w = |wanted: f32| wanted.min(avail.max(MIN_FIELD_W)).min(max_w);
 
     let top = Rect::from_center_size(
         pos2(
