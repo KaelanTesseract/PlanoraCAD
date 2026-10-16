@@ -217,7 +217,12 @@ fn symbol(ctx: &egui::Context, preferred: &'static str, fallback: &'static str) 
 }
 
 /// Beschriftung einer Abhängigkeit in der Ansicht: Symbol bzw. Maß mit Einheit.
-fn overlay_text(ctx: &egui::Context, sk: &Sketch, kind: &ConstraintKind, driven: bool) -> String {
+pub fn overlay_text(
+    ctx: &egui::Context,
+    sk: &Sketch,
+    kind: &ConstraintKind,
+    driven: bool,
+) -> String {
     use ConstraintKind as K;
     let plain = match kind {
         K::Coincident(..) | K::ArcRadius(..) => return String::new(),
@@ -241,7 +246,9 @@ fn overlay_text(ctx: &egui::Context, sk: &Sketch, kind: &ConstraintKind, driven:
     };
     let text = match kind {
         K::Radius(..) => format!("R {}", format_length(v)),
-        K::Diameter(..) => format!("{} {}", symbol(ctx, "Ø", "D"), format_length(v)),
+        // Ø ohne Ersatz: Montserrat hat das Zeichen (tests/fonts.rs prüft das), und die
+        // Glyphenabfrage von egui meldete es fälschlich als fehlend.
+        K::Diameter(..) => format!("Ø {}", format_length(v)),
         K::EllipseMajor(..) => format!("a {}", format_length(v)),
         K::EllipseMinor(..) => format!("b {}", format_length(v)),
         _ => value_text(kind, v),
