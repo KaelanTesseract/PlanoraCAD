@@ -419,6 +419,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     ui.add_enabled_ui(!read_only, |ui| feature_tree(ui, state));
     ui.add_space(10.0);
     crate::drawing_browser::show(ui, state, read_only);
+    crate::dimension_browser::show(ui, state, read_only);
 }
 
 fn feature_tree(ui: &mut egui::Ui, state: &mut AppState) {

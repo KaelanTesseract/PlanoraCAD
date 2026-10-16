@@ -648,6 +648,7 @@ impl eframe::App for PlanoraApp {
             }
             tab.import_dialog = None;
             tab.drawing_dialog = None;
+            tab.state.dimension_dialog = None;
         }
         sketch_panel::show(&ctx, &mut tab.state);
         if let Some(mut dialog) = tab.dialog.take()
@@ -679,6 +680,12 @@ impl eframe::App for PlanoraApp {
             && dialog.show(&ctx, &mut tab.state)
         {
             tab.drawing_dialog = Some(dialog);
+        }
+        if let Some(mut dialog) = tab.state.dimension_dialog.take()
+            && dialog.show(&ctx, &mut tab.state)
+            && tab.state.dimension_dialog.is_none()
+        {
+            tab.state.dimension_dialog = Some(dialog);
         }
         if let Some(mut dialog) = tab.import_dialog.take()
             && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)

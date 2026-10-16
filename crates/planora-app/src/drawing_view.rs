@@ -1313,8 +1313,13 @@ fn canvas_ui(
             let found = tool_hit(&sheet, &polys, &to_screen0, pos);
             tool_click(state, id, found, at, k0, response.double_clicked());
         } else if let Some((i, _)) = hit_dim(pos) {
-            state.drawing_ui.selected_dim = Some(dim_marks[i].id);
+            let dim = dim_marks[i].id;
+            state.drawing_ui.selected_dim = Some(dim);
             state.drawing_ui.selected_view = None;
+            // Doppelklick auf ein Maß öffnet „Maß bearbeiten“ (in einer alten Version nur zum Ansehen).
+            if response.double_clicked() {
+                crate::dimension_dialog::open(state, id, dim, !editable);
+            }
         } else {
             state.drawing_ui.selected_view = hit(pos);
             state.drawing_ui.selected_dim = None;

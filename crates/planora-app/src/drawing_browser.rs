@@ -49,7 +49,7 @@ pub fn drawing_detail(d: &Drawing) -> String {
 
 /// Öffnet die Zeichnung im Arbeitsbereich (Auswahl, Zoom und Verschiebung bleiben, wenn es die
 /// zuletzt offene war). Im Skizzen-Modus geht es nicht: die Meldung sagt warum.
-fn open_drawing(state: &mut AppState, id: DrawingId) -> bool {
+pub(crate) fn open_drawing(state: &mut AppState, id: DrawingId) -> bool {
     if state.sketch_session.is_some() {
         state.message = Some(SKETCH_BLOCKED.into());
         return false;
@@ -61,7 +61,7 @@ fn open_drawing(state: &mut AppState, id: DrawingId) -> bool {
 
 /// Wählt die Zeichnung im Browser; Feature, Körper und 3D-Auswahl sind danach nicht mehr
 /// hervorgehoben.
-fn select_drawing(state: &mut AppState, id: DrawingId) {
+pub(crate) fn select_drawing(state: &mut AppState, id: DrawingId) {
     state.drawing_ui.selected_drawing = Some(id);
     state.selected_feature = None;
     state.selected_body = None;
