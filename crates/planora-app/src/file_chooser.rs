@@ -306,8 +306,10 @@ impl FileChooser {
         }
         ui.horizontal(|ui| {
             ui.label("Dateiname");
-            let edit = ui
-                .add(egui::TextEdit::singleline(&mut self.file_name).desired_width(f32::INFINITY));
+            let edit = theme::text_field(
+                ui,
+                egui::TextEdit::singleline(&mut self.file_name).desired_width(f32::INFINITY),
+            );
             if edit.changed() {
                 self.confirm = None;
             }

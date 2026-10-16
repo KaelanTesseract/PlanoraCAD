@@ -361,11 +361,11 @@ impl DimensionDialog {
                             note("Nachkommastellen", &r.inner);
                             ui.end_row();
                             ui.label("Maßtext");
-                            let r = ui.add_enabled(
+                            let r = theme::text_field_enabled(
+                                ui,
                                 !read_only,
                                 egui::TextEdit::singleline(&mut text).desired_width(220.0),
                             );
-                            theme::focus_ring(ui, &r);
                             note("Maßtext", &r);
                             ui.end_row();
                         });
@@ -399,11 +399,11 @@ impl DimensionDialog {
                             ui.end_row();
                             let field = |ui: &mut egui::Ui, label: &str, value: &mut String| {
                                 ui.label(label);
-                                let r = ui.add_enabled(
+                                let r = theme::text_field_enabled(
+                                    ui,
                                     !read_only,
                                     egui::TextEdit::singleline(value).desired_width(120.0),
                                 );
-                                theme::focus_ring(ui, &r);
                                 note(label, &r);
                                 ui.end_row();
                             };

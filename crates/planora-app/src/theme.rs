@@ -422,8 +422,18 @@ pub fn value(text: impl Into<String>) -> egui::RichText {
 /// Einzeiliges Textfeld im Graphit-Stil: mindestens 26 px hoch, Text senkrecht mittig, sonst
 /// wie [`field`].
 pub fn text_field(ui: &mut egui::Ui, edit: egui::TextEdit<'_>) -> egui::Response {
-    field(
+    text_field_enabled(ui, true, edit)
+}
+
+/// Wie [`text_field`], gesperrt (nur lesbar, blass), wenn `enabled` falsch ist.
+pub fn text_field_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    edit: egui::TextEdit<'_>,
+) -> egui::Response {
+    field_enabled(
         ui,
+        enabled,
         edit.min_size(vec2(0.0, FIELD_H))
             .vertical_align(egui::Align::Center),
     )
@@ -433,6 +443,10 @@ pub fn text_field(ui: &mut egui::Ui, edit: egui::TextEdit<'_>) -> egui::Response
 /// Fläche `bg_inset`, 2-px-Fokusring in Akzentfarbe. Textfelder über [`text_field`], das die
 /// Höhe von 26 px am Feld selbst setzt (egui misst Textfelder nicht an `interact_size`).
 pub fn field(ui: &mut egui::Ui, widget: impl egui::Widget) -> egui::Response {
+    field_enabled(ui, true, widget)
+}
+
+fn field_enabled(ui: &mut egui::Ui, enabled: bool, widget: impl egui::Widget) -> egui::Response {
     let dark = ui.visuals().dark_mode;
     let inset = palette(dark).bg_inset;
     // Stil nur für dieses Feld ändern, ohne eigenen Bereich (der bräche in umbrechenden Zeilen
@@ -442,7 +456,7 @@ pub fn field(ui: &mut egui::Ui, widget: impl egui::Widget) -> egui::Response {
     s.spacing.interact_size.y = FIELD_H;
     s.visuals.widgets.inactive.weak_bg_fill = inset;
     s.visuals.extreme_bg_color = inset;
-    let response = ui.add(widget);
+    let response = ui.add_enabled(enabled, widget);
     ui.set_style(saved);
     focus_ring(ui, &response);
     response
