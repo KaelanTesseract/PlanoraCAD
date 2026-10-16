@@ -1,7 +1,6 @@
 use crate::blend_dialog::BlendDialog;
 use crate::boolean_dialog::BooleanDialog;
 use crate::create_dialog::CreateDialog;
-use crate::dock::{Dock, Pane};
 use crate::drawing_dialog::drawing_menu;
 use crate::drawing_state::WorkArea;
 use crate::export_dialog::ExportDialog;
@@ -14,11 +13,7 @@ use crate::shell::ShellState;
 use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
-use crate::{
-    browser, drawing_view, fonts, projects_panel, prompts, properties, sketch_panel, tabs, theme,
-    versions_panel, viewport,
-};
-use egui_tiles::{SimplificationOptions, TileId, Tiles, UiResponse};
+use crate::{browser, drawing_view, fonts, prompts, shell_panels, sketch_panel, theme, viewport};
 use planora_feature::SketchPlane;
 use planora_kernel::BoolOp;
 use planora_render::gpu::GpuScene;
@@ -29,87 +24,8 @@ use std::time::{Duration, Instant};
 /// Wie oft die App ohne Eingaben neu zeichnet, damit die Autosicherung auch im Leerlauf läuft.
 const AUTOSAVE_REPAINT: Duration = Duration::from_secs(30);
 
-struct Behavior<'a> {
-    ws: &'a mut Workspace,
-    projects_ui: &'a mut ProjectsUi,
-    versions_ui: &'a mut VersionsUi,
-}
-
-/// Rollbarer Bereich mit Innenabstand für die Panels.
-fn scrolled(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            egui::Frame::NONE
-                .inner_margin(egui::Margin::same(8))
-                .show(ui, add_contents);
-        });
-}
-
-impl egui_tiles::Behavior<Pane> for Behavior<'_> {
-    fn tab_title_for_pane(&mut self, pane: &Pane) -> egui::WidgetText {
-        match pane {
-            Pane::Projects => "Projekte",
-            Pane::Browser => "Browser",
-            Pane::Viewport => match self.ws.active_tab().state.drawing_ui.area {
-                WorkArea::Model => "3D-Ansicht",
-                WorkArea::Drawing(_) => "Zeichnung",
-            },
-            Pane::Properties => "Eigenschaften",
-            Pane::Versions => "Versionen",
-        }
-        .into()
-    }
-
-    fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut Pane) -> UiResponse {
-        // Schreibgeschützte Ansicht einer alten Version: Browser und Eigenschaften sind gesperrt.
-        let enabled = !self.ws.active_tab().read_only;
-        match pane {
-            // Der Viewport füllt den Platz selbst aus und braucht keine Rollbalken.
-            // Im Zeichnungsbereich zeigt dasselbe Pane das Blatt; Kamera und Auswahl des
-            // 3D-Modells bleiben dabei unberührt.
-            Pane::Viewport => {
-                let state = &mut self.ws.active_tab_mut().state;
-                match state.drawing_ui.area {
-                    WorkArea::Drawing(_) => drawing_view::show_with(ui, state, enabled),
-                    WorkArea::Model => viewport::show(ui, state),
-                }
-            }
-            Pane::Browser => scrolled(ui, |ui| {
-                let state = &mut self.ws.active_tab_mut().state;
-                browser::show_with(ui, state, !enabled);
-            }),
-            Pane::Properties => scrolled(ui, |ui| {
-                let state = &mut self.ws.active_tab_mut().state;
-                ui.add_enabled_ui(enabled, |ui| properties::show(ui, state));
-            }),
-            Pane::Projects => scrolled(ui, |ui| {
-                projects_panel::show(ui, self.ws, self.projects_ui);
-            }),
-            Pane::Versions => scrolled(ui, |ui| {
-                versions_panel::show(ui, self.ws, self.versions_ui);
-            }),
-        }
-        UiResponse::None
-    }
-
-    fn is_tab_closable(&self, _tiles: &Tiles<Pane>, _tile_id: TileId) -> bool {
-        false
-    }
-
-    fn simplification_options(&self) -> SimplificationOptions {
-        // Jeder Bereich behält seine eigene Titelleiste, auch wenn er allein steht.
-        SimplificationOptions {
-            all_panes_must_have_tabs: true,
-            prune_single_child_tabs: false,
-            ..Default::default()
-        }
-    }
-}
-
 pub struct PlanoraApp {
     pub(crate) ws: Workspace,
-    dock: Dock,
     /// Sichtbarkeit und Reiter der schwebenden Felder (`shell_panels`).
     pub(crate) shell: ShellState,
     pub(crate) projects_ui: ProjectsUi,
@@ -143,7 +59,6 @@ impl PlanoraApp {
     fn with_workspace(ws: Workspace) -> Self {
         Self {
             ws,
-            dock: Dock::new(),
             shell: ShellState::default(),
             projects_ui: ProjectsUi::default(),
             versions_ui: VersionsUi::default(),
@@ -170,17 +85,11 @@ impl PlanoraApp {
         &mut self.shell
     }
 
-    /// Öffnen (Strg+O): blendet das Projekt-Panel ein; dort wird das Dokument gewählt. Der Baum
-    /// wird dabei neu gelesen, damit er aktuell ist.
-    fn show_projects(&mut self) {
-        self.dock.set_visible(Pane::Projects, true);
+    /// Öffnen (Strg+O): blendet die Projekte im linken Feld ein; dort wird das Dokument gewählt.
+    /// Der Baum wird dabei neu gelesen, damit er aktuell ist.
+    pub(crate) fn show_projects(&mut self) {
+        self.shell.show_projects();
         self.projects_ui.invalidate();
-    }
-
-    fn menu(&mut self, ui: &mut egui::Ui) {
-        if menu_bar(ui, &mut self.ws, &mut self.dock) {
-            self.show_projects();
-        }
     }
 
     /// Tastenkürzel Strg+N/O/S/W und Strg+Umschalt+E. Nur ohne aktives Eingabefeld, ohne offene
@@ -289,8 +198,8 @@ fn shortcut_button(
     )
 }
 
-/// Menü „Datei“. Liefert `true`, wenn „Öffnen …“ gewählt wurde (der Aufrufer blendet dann das
-/// Projekt-Panel ein).
+/// Menü „Datei“. Liefert `true`, wenn „Öffnen …“ gewählt wurde (der Aufrufer blendet dann die
+/// Projekte im linken Feld ein).
 #[doc(hidden)]
 pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
     let read_only = ws.active_tab().read_only;
@@ -352,35 +261,19 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
     open_projects
 }
 
-/// Menüleiste. Liefert `true`, wenn „Datei → Öffnen …“ gewählt wurde.
+/// Menüleiste im oberen Feld; „Ansicht“ blendet Projekte und Versionen über den [`ShellState`]
+/// ein und aus. Liefert `true`, wenn „Datei → Öffnen …“ gewählt wurde.
 #[doc(hidden)]
-pub fn menu_bar(ui: &mut egui::Ui, ws: &mut Workspace, dock: &mut Dock) -> bool {
-    menu_bar_with(ui, ws, |ui| dock_toggles(ui, dock)).0
+pub fn menu_bar(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> bool {
+    menu_bar_measured(ui, ws, shell).0
 }
 
-/// Menüleiste der schwebenden Felder: wie [`menu_bar`], „Ansicht“ blendet Projekte und
-/// Versionen über den [`ShellState`] ein und aus. Liefert `true`, wenn „Datei → Öffnen …“
-/// gewählt wurde.
-#[doc(hidden)]
-pub fn menu_bar_shell(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> bool {
-    menu_bar_shell_measured(ui, ws, shell).0
-}
-
-/// Wie [`menu_bar_shell`], dazu die Breite, die die Menüknöpfe selbst brauchen (die Leiste füllt
-/// sonst die ganze verfügbare Breite).
-pub(crate) fn menu_bar_shell_measured(
+/// Wie [`menu_bar`], dazu die Breite, die die Menüknöpfe selbst brauchen (die Leiste füllt sonst
+/// die ganze verfügbare Breite).
+pub(crate) fn menu_bar_measured(
     ui: &mut egui::Ui,
     ws: &mut Workspace,
     shell: &mut ShellState,
-) -> (bool, f32) {
-    menu_bar_with(ui, ws, |ui| shell_toggles(ui, shell))
-}
-
-/// Gemeinsame Menüleiste; `toggles` zeichnet die Ein-/Ausblend-Einträge am Ende von „Ansicht“.
-fn menu_bar_with(
-    ui: &mut egui::Ui,
-    ws: &mut Workspace,
-    toggles: impl FnOnce(&mut egui::Ui),
 ) -> (bool, f32) {
     let read_only = ws.active_tab().read_only;
     let mut open_projects = false;
@@ -401,27 +294,11 @@ fn menu_bar_with(
             ui.add_enabled_ui(!read_only, |ui| {
                 ui.menu_button("Bearbeiten", |ui| edit_menu(ui, ws));
             });
-            ui.menu_button("Ansicht", |ui| view_menu(ui, ws, toggles));
+            ui.menu_button("Ansicht", |ui| view_menu(ui, ws, shell));
             // Der Zeiger steht hinter dem letzten Knopf und einem Abstand.
             width = ui.cursor().left() - start - ui.spacing().item_spacing.x;
         });
     (open_projects, width)
-}
-
-/// „Ansicht“: Projekte und Versionen im alten Docking-Layout.
-fn dock_toggles(ui: &mut egui::Ui, dock: &mut Dock) {
-    for (icon, label, pane) in [
-        (Icon::PanelProjects, "Projekte", Pane::Projects),
-        (Icon::PanelVersions, "Versionen", Pane::Versions),
-    ] {
-        let mut visible = dock.is_visible(pane);
-        if ui
-            .checkbox(&mut visible, (icons::atom(icon), label))
-            .changed()
-        {
-            dock.set_visible(pane, visible);
-        }
-    }
 }
 
 /// „Ansicht“: Projekte und Versionen in den schwebenden Feldern.
@@ -643,7 +520,7 @@ fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
 }
 
-fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, toggles: impl FnOnce(&mut egui::Ui)) {
+fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) {
     let state = &mut ws.active_tab_mut().state;
     for face in ViewFace::ALL {
         if entry(ui, true, icons::button(Icon::ViewFace, face.label())).clicked() {
@@ -672,7 +549,7 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, toggles: impl FnOnce(&mut eg
         ui.close();
     }
     ui.separator();
-    toggles(ui);
+    shell_toggles(ui, shell);
 }
 
 /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
@@ -786,60 +663,29 @@ impl eframe::App for PlanoraApp {
             state.drawing_ui.area = WorkArea::Model;
         }
 
-        // Solange eine Rückfrage offen ist, sind Menü und Tab-Leiste gesperrt (sonst könnte
-        // z. B. „Speichern“ die Rückfrage beim Beenden ersetzen).
-        let no_prompt = self.ws.prompt.is_none();
-        egui::Panel::top("menu").show(ui, |ui| {
-            ui.add_enabled_ui(no_prompt, |ui| self.menu(ui));
-        });
-        egui::Panel::top("tabs").show(ui, |ui| {
-            ui.add_enabled_ui(no_prompt, |ui| tabs::show(ui, &mut self.ws));
-            let tab = self.ws.active_tab();
-            if tab.read_only {
-                let n = tab.based_on.unwrap_or_default();
-                let p = theme::palette(dark);
-                ui.label(egui::RichText::new(format!(
-                    "Alte Version v{n} – schreibgeschützt. Im Bereich „Versionen“ lässt sie sich wiederherstellen oder abzweigen."
-                )).color(p.warning));
+        // Zuerst die schwebenden Felder (Menü und Tabs, Baum, Eigenschaften | Versionen, Befehle,
+        // Status, Hinweis); sie liefern die freie Fläche zwischen sich. Menü und Tabs sind bei
+        // offener Rückfrage gesperrt, Baum und Eigenschaften in alten Versionen.
+        let free = shell_panels::show_fields(&ctx, self);
+        // Darunter der Arbeitsbereich über das ganze Fenster: das Modell mit der Bildmitte in der
+        // freien Fläche, die Zeichnung nur in der freien Fläche (sie liegt nie unter einem Feld).
+        let enabled = !self.ws.active_tab().read_only;
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            let state = &mut self.ws.active_tab_mut().state;
+            match state.drawing_ui.area {
+                WorkArea::Model => viewport::show_in(ui, state, Some(free)),
+                WorkArea::Drawing(_) => {
+                    let all = ui.max_rect();
+                    ui.painter()
+                        .rect_filled(all, 0.0, theme::viewport_background(state.dark));
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(free), |ui| {
+                        drawing_view::show_with(ui, state, enabled);
+                    });
+                }
             }
         });
-        let tab = self.ws.active_tab();
-        egui::Panel::bottom("status").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let state = &tab.state;
-                let sketch = state.session_sketch();
-                let p = theme::palette(dark);
-                // Statuszeile: Hinweise in text_secondary, Fehler in der Fehlerfarbe.
-                let quiet = |text: String| egui::RichText::new(text).color(p.text_secondary);
-                // Vorrang: letzte Meldung, Skizzen-Modus, erstes Feature mit Fehler, Körperzahl (mit
-                // Hinweis bei ungenauem Netz).
-                match (&state.message, sketch, browser::status_text(state)) {
-                    (Some(m), _, _) => ui.colored_label(p.error, m),
-                    (None, Some(sk), _) => ui.label(quiet(format!(
-                        "Skizzen-Modus: {} – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt",
-                        sk.name
-                    ))),
-                    (None, None, Some(e)) => ui.colored_label(p.error, e),
-                    (None, None, None) => match state.mesh_note() {
-                        Some(note) => ui.colored_label(
-                            p.warning,
-                            format!("{} Körper – {note}", state.bodies.len()),
-                        ),
-                        None => ui.label(quiet(format!("{} Körper", state.bodies.len()))),
-                    },
-                };
-            });
-        });
-        egui::CentralPanel::default().show(ui, |ui| {
-            let mut behavior = Behavior {
-                ws: &mut self.ws,
-                projects_ui: &mut self.projects_ui,
-                versions_ui: &mut self.versions_ui,
-            };
-            self.dock.tree.ui(&mut behavior, ui);
-        });
 
-        // Das Projekt-Panel kann den aktiven Tab gewechselt haben (Dokument geöffnet). Der
+        // Das Feld Projekte kann den aktiven Tab gewechselt haben (Dokument geöffnet). Der
         // Ordner der Dateiauswahl wird für die Fenster kurz herausgenommen.
         let mut exchange_dir = self.ws.exchange_dir.take();
         let tab = self.ws.active_tab_mut();

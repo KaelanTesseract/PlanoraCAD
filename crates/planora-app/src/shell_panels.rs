@@ -280,7 +280,41 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
         status,
     );
     banner_field(ctx, &rects, app);
+    ctx.data_mut(|d| d.insert_temp(layout_key(), rects));
     rects.free
+}
+
+fn layout_key() -> egui::Id {
+    egui::Id::new("planora-field-layout")
+}
+
+/// Geometrie der Felder aus dem letzten Bild (für Tests).
+#[doc(hidden)]
+pub fn last_layout(ctx: &egui::Context) -> Option<ShellRects> {
+    ctx.data(|d| d.get_temp(layout_key()))
+}
+
+/// Tatsächlich belegte Rechtecke der sichtbaren Felder im letzten Bild, je mit Namen (für
+/// Tests; die Seitenfelder sind so hoch wie ihr Inhalt, höchstens wie die Spalte).
+#[doc(hidden)]
+pub fn field_rects(ctx: &egui::Context) -> Vec<(&'static str, egui::Rect)> {
+    [
+        ("oben", top_id()),
+        ("links", left_id()),
+        ("rechts", right_id()),
+        ("unten", bottom_id()),
+        ("Status", status_id()),
+        ("Hinweis", banner_id()),
+    ]
+    .into_iter()
+    .filter(|(_, id)| {
+        ctx.memory(|m| {
+            m.areas()
+                .is_visible(&egui::LayerId::new(egui::Order::Middle, *id))
+        })
+    })
+    .filter_map(|(name, id)| ctx.memory(|m| m.area_rect(id)).map(|r| (name, r)))
+    .collect()
 }
 
 /// Menü + Trennstrich + Tabs (Tabs in waagerechter ScrollArea). Solange eine Rückfrage offen ist,
@@ -302,15 +336,14 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
         ui.horizontal_centered(|ui| {
             let menu = ui.allocate_ui(vec2(menu_w.min(ui.available_width()), inner.y), |ui| {
                 ui.add_enabled_ui(no_prompt, |ui| {
-                    app::menu_bar_shell_measured(ui, &mut app.ws, &mut app.shell)
+                    app::menu_bar_measured(ui, &mut app.ws, &mut app.shell)
                 })
                 .inner
             });
             let (open_projects, menu_natural) = menu.inner;
             if open_projects {
                 // „Öffnen …“: Projekte einblenden und den Baum neu lesen.
-                app.shell.show_projects();
-                app.projects_ui.invalidate();
+                app.show_projects();
             }
             ui.separator();
             let tabs = egui::ScrollArea::horizontal()

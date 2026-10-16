@@ -199,7 +199,11 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let mut close = false;
     theme::window(ctx, "Skizze")
         .id(panel_id().with("window"))
-        .default_pos(egui::pos2(330.0, 90.0))
+        // Startposition rechts neben dem linken Feld.
+        .default_pos(egui::pos2(
+            crate::shell::SHELL_INSET + theme::PANEL_WIDTH + theme::SPACE_6,
+            90.0,
+        ))
         // Feste Breite: Das Zahlenfeld oder die Liste sollen die Schaltflächen nicht umbrechen.
         .min_width(PANEL_WIDTH)
         .max_width(PANEL_WIDTH)

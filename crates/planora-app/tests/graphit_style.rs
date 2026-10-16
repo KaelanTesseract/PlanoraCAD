@@ -8,9 +8,10 @@ use egui::{Color32, FontFamily, Pos2, Rect, vec2};
 use planora_app::create_dialog::CreateDialog;
 use planora_app::export_dialog::ExportDialog;
 use planora_app::icons::{self, Icon};
+use planora_app::shell::ShellState;
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::{Prompt, Workspace};
-use planora_app::{app, browser, dock, drawing_view, fonts, prompts, properties, sketch_panel};
+use planora_app::{app, browser, drawing_view, fonts, prompts, properties, sketch_panel};
 use planora_app::{tabs, theme};
 use planora_drawing::{Paper, Placement, Projection, Scale, Sheet, ViewKind};
 use planora_feature::SketchPlane;
@@ -368,10 +369,10 @@ fn no_text_is_clipped_at_1400px() {
     let c = context(Some(true));
     // Menüleiste: eine Zeile, alles innerhalb der Breite.
     let mut ws = workspace();
-    let mut dock = dock::Dock::new();
+    let mut shell = ShellState::default();
     let s = shot(&c, WIDTH, |ui| {
         egui::Panel::top("menu").show(ui, |ui| {
-            app::menu_bar(ui, &mut ws, &mut dock);
+            app::menu_bar(ui, &mut ws, &mut shell);
         });
     });
     let first = s.text("Datei").clone();
@@ -719,10 +720,10 @@ fn the_refactored_menus_and_tab_buttons_still_act() {
     click(&c, neu, |ui| app::file_menu(ui, &mut ws));
     assert_eq!(ws.tabs.len(), 2, "Neu legt einen Tab an");
 
-    // „Datei → Öffnen …“ in der Menüleiste meldet: Projekt-Panel öffnen.
+    // „Datei → Öffnen …“ in der Menüleiste meldet: Projekte einblenden.
     let c = context(Some(true));
-    let mut dock = dock::Dock::new();
-    let mut bar = |ui: &mut egui::Ui| app::menu_bar(ui, &mut ws, &mut dock);
+    let mut shell = ShellState::default();
+    let mut bar = |ui: &mut egui::Ui| app::menu_bar(ui, &mut ws, &mut shell);
     let (s, _) = shot_with(&c, vec![], |ui| {
         bar(ui);
     });
@@ -732,7 +733,7 @@ fn the_refactored_menus_and_tab_buttons_still_act() {
     });
     assert!(
         click(&c, s.text("Öffnen …").rect.center(), &mut bar),
-        "Öffnen … öffnet das Projekt-Panel"
+        "Öffnen … blendet die Projekte ein"
     );
 
     // Symbole der Tab-Leiste: „Schließen“ am zweiten Tab, „Neu“ am Ende.

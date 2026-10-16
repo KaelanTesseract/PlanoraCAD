@@ -10,7 +10,6 @@ pub mod dimension_browser;
 pub mod dimension_dialog;
 pub mod dimension_state;
 pub mod dimension_tool;
-pub mod dock;
 pub mod drawing_browser;
 pub mod drawing_dialog;
 pub mod drawing_state;

@@ -34,8 +34,8 @@ fn contrast_of_every_text_pair_is_at_least_4_5_in_both_themes() {
                 failures.push(format!("{} {what}: {r:.2} < {min}", name(dark)));
             }
         };
-        // bg_viewport ist zugleich panel_fill: Menü-, Tab- und Statusleiste und die Bereiche
-        // von egui_tiles stehen darauf.
+        // bg_viewport ist zugleich panel_fill: der 3D-Bereich und der Hintergrund der Zeichnung
+        // stehen darauf.
         let surfaces = [
             ("bg_viewport", p.bg_viewport),
             ("bg_panel", p.bg_panel),
