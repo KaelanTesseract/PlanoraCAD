@@ -660,6 +660,53 @@ fn read_only_tab_disables_every_input() {
     ] {
         assert!(labels.iter().any(|x| x == l), "„{l}“ fehlt: {labels:?}");
     }
+    // Tippen in jedes Feld ändert nichts (die Felder sind wirklich gesperrt).
+    h.dlg.symmetric = "0,1".into();
+    h.dlg.upper = "0,2".into();
+    h.dlg.lower = "0,3".into();
+    h.dlg.fit = "H7".into();
+    h.dlg.text = "Text".into();
+    let snapshot = (
+        h.dlg.symmetric.clone(),
+        h.dlg.upper.clone(),
+        h.dlg.lower.clone(),
+        h.dlg.fit.clone(),
+        h.dlg.text.clone(),
+    );
+    for k in ToleranceKind::ALL {
+        h.dlg.kind = k;
+        let shot = h.idle(&mut st);
+        for t in ["0,1", "0,2", "0,3", "H7", "Text"] {
+            if let Some(f) = shot.find(t) {
+                let p = f.rect.center();
+                h.click_at(&mut st, p);
+                h.frame(
+                    &mut st,
+                    vec![Event::Key {
+                        key: Key::A,
+                        physical_key: Some(Key::A),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::COMMAND,
+                    }],
+                );
+                h.frame(&mut st, vec![Event::Text("zz".into())]);
+                h.idle(&mut st);
+            }
+        }
+        assert_eq!(h.dlg.kind, k);
+    }
+    assert_eq!(
+        snapshot,
+        (
+            h.dlg.symmetric.clone(),
+            h.dlg.upper.clone(),
+            h.dlg.lower.clone(),
+            h.dlg.fit.clone(),
+            h.dlg.text.clone()
+        ),
+        "gesperrte Felder lassen sich nicht ändern"
+    );
     // Weder die Knöpfe noch der Zustand ändern das Dokument.
     h.click(&mut st, "Maß löschen");
     h.click(&mut st, "Übernehmen");
@@ -825,4 +872,28 @@ fn double_click_on_the_sheet_dimension_opens_the_dialog() {
     );
     let dlg = st.dimension_dialog.as_ref().expect("Fenster offen");
     assert!(dlg.read_only);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Veraltete Fenster
+
+#[test]
+fn stale_dialog_closes_without_panic() {
+    // Maß auf anderem Weg gelöscht.
+    let (mut st, d, _, w) = state();
+    let mut h = Harness::new(dialog(&st, d, w, false));
+    h.idle(&mut st);
+    st.document.delete_dimension(d, w).unwrap();
+    assert!(!h.dlg.show(&h.ctx.clone(), &mut st));
+    // Zeichnung gelöscht, während das Fenster offen ist.
+    let (mut st, d, _, w) = state();
+    let mut h = Harness::new(dialog(&st, d, w, false));
+    h.idle(&mut st);
+    st.document.delete_drawing(d).unwrap();
+    h.idle(&mut st);
+    assert!(!h.open, "Fenster geschlossen");
+    assert!(!h.dlg.show(&h.ctx.clone(), &mut st));
+    // Übernehmen und Löschen auf ein fehlendes Maß geben eine Meldung statt eines Absturzes.
+    assert!(h.dlg.apply(&mut st).is_err());
+    assert!(planora_app::dimension_browser::request_delete_dimension(&mut st, d, w).is_err());
 }

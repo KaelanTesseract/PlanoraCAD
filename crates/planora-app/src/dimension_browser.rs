@@ -248,7 +248,10 @@ fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bo
                 action = Some(Action::Select(dim));
             }
             resp.context_menu(|ui| {
-                if ui.button("Bearbeiten").clicked() {
+                if ui
+                    .button(if read_only { "Ansehen" } else { "Bearbeiten" })
+                    .clicked()
+                {
                     action = Some(Action::Edit(dim));
                     ui.close();
                 }
@@ -292,6 +295,16 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     let Some(plan) = state.pending_delete_dimension.clone() else {
         return;
     };
+    // Gibt es Zeichnung oder Maß nicht mehr, ist die Rückfrage hinfällig.
+    if state
+        .document
+        .drawing(plan.drawing)
+        .and_then(|d| d.dimension(plan.dim))
+        .is_none()
+    {
+        state.pending_delete_dimension = None;
+        return;
+    }
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
     egui::Window::new("Rückfrage")

@@ -289,7 +289,9 @@ impl DimensionDialog {
         let errors = self.errors();
         let read_only = self.read_only;
         let inputs: RefCell<Vec<(String, bool)>> = RefCell::new(Vec::new());
-        let note = |label: &str| inputs.borrow_mut().push((label.to_string(), !read_only));
+        let note = |label: &str, r: &egui::Response| {
+            inputs.borrow_mut().push((label.to_string(), r.enabled()));
+        };
         let (mut decimals, mut kind) = (self.decimals, self.kind);
         let (mut symmetric, mut upper, mut lower) = (
             self.symmetric.clone(),
@@ -323,23 +325,24 @@ impl DimensionDialog {
                             }
                             ui.end_row();
                             ui.label("Nachkommastellen");
-                            note("Nachkommastellen");
-                            ui.add_enabled_ui(!read_only, |ui| {
+                            let r = ui.add_enabled_ui(!read_only, |ui| {
                                 egui::ComboBox::from_id_salt("planora-dimension-decimals")
                                     .selected_text(decimals.to_string())
                                     .show_ui(ui, |ui| {
                                         for n in 0..=MAX_DECIMALS {
                                             ui.selectable_value(&mut decimals, n, n.to_string());
                                         }
-                                    });
+                                    })
+                                    .response
                             });
+                            note("Nachkommastellen", &r.inner);
                             ui.end_row();
                             ui.label("Maßtext");
-                            note("Maßtext");
-                            ui.add_enabled(
+                            let r = ui.add_enabled(
                                 !read_only,
                                 egui::TextEdit::singleline(&mut text).desired_width(220.0),
                             );
+                            note("Maßtext", &r);
                             ui.end_row();
                         });
                     ui.weak(PLACEHOLDER_HINT);
@@ -355,24 +358,25 @@ impl DimensionDialog {
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
                             ui.label("Art");
-                            note("Toleranzart");
-                            ui.add_enabled_ui(!read_only, |ui| {
+                            let r = ui.add_enabled_ui(!read_only, |ui| {
                                 egui::ComboBox::from_id_salt("planora-dimension-tolerance-kind")
                                     .selected_text(kind.label())
                                     .show_ui(ui, |ui| {
                                         for k in ToleranceKind::ALL {
                                             ui.selectable_value(&mut kind, k, k.label());
                                         }
-                                    });
+                                    })
+                                    .response
                             });
+                            note("Toleranzart", &r.inner);
                             ui.end_row();
                             let field = |ui: &mut egui::Ui, label: &str, value: &mut String| {
                                 ui.label(label);
-                                note(label);
-                                ui.add_enabled(
+                                let r = ui.add_enabled(
                                     !read_only,
                                     egui::TextEdit::singleline(value).desired_width(120.0),
                                 );
+                                note(label, &r);
                                 ui.end_row();
                             };
                             match kind {
@@ -409,11 +413,9 @@ impl DimensionDialog {
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
-                    inputs.borrow_mut().push(("Übernehmen".into(), apply_ok));
-                    if ui
-                        .add_enabled(apply_ok, egui::Button::new("Übernehmen"))
-                        .clicked()
-                    {
+                    let r = ui.add_enabled(apply_ok, egui::Button::new("Übernehmen"));
+                    note("Übernehmen", &r);
+                    if r.clicked() {
                         apply = true;
                     }
                     if ui
@@ -422,16 +424,12 @@ impl DimensionDialog {
                     {
                         close = true;
                     }
-                    note("Maß löschen");
-                    if ui
-                        .add_enabled(
-                            !read_only,
-                            egui::Button::new(
-                                egui::RichText::new("Maß löschen").color(ERROR_COLOR),
-                            ),
-                        )
-                        .clicked()
-                    {
+                    let r = ui.add_enabled(
+                        !read_only,
+                        egui::Button::new(egui::RichText::new("Maß löschen").color(ERROR_COLOR)),
+                    );
+                    note("Maß löschen", &r);
+                    if r.clicked() {
                         delete = true;
                     }
                 });

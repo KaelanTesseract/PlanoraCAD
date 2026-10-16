@@ -524,7 +524,12 @@ fn click_selects_double_click_edits_context_menu_deletes() {
     let dlg = st.dimension_dialog.as_ref().expect("zum Ansehen offen");
     assert!(dlg.read_only);
     st.dimension_dialog = None;
-    h.menu(&mut st, "Ø10,0", "Löschen");
+    let shot = h.open_menu(&mut st, "Ø10,0");
+    assert!(shot.find("Ansehen").is_some(), "{}", shot.text);
+    assert!(shot.find("Bearbeiten").is_none(), "{}", shot.text);
+    let p = shot.pos_of("Löschen");
+    h.click_at(&mut st, p, PointerButton::Primary);
+    h.idle(&mut st);
     assert_eq!(st.document.drawing(f.drawing).unwrap(), &before);
     assert!(st.pending_delete_dimension.is_none());
 }
@@ -773,4 +778,19 @@ fn save_and_load_keep_dimensions_through_workspace() {
     expected[5] = ViewKind::Top.label().to_string();
     assert_eq!(h.tail(8), expected);
     assert!(!tab.is_dirty());
+}
+
+#[test]
+fn pending_question_is_dropped_when_its_target_disappears() {
+    let (mut st, d, ids, mut h) = chain_state();
+    h.menu(&mut st, "10,00", "Löschen");
+    assert!(st.pending_delete_dimension.is_some());
+    st.document.delete_dimension(d, ids[1]).unwrap();
+    h.idle(&mut st);
+    assert!(st.pending_delete_dimension.is_none());
+    h.menu(&mut st, "10,0", "Löschen");
+    assert!(st.pending_delete_dimension.is_some());
+    st.document.delete_drawing(d).unwrap();
+    h.idle(&mut st);
+    assert!(st.pending_delete_dimension.is_none());
 }
