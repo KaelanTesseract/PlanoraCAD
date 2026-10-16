@@ -10,6 +10,9 @@ use planora_app::drawing_state::WorkArea;
 use planora_app::state::AppState;
 use planora_app::workspace::*;
 use planora_app::{browser, fonts, tabs, testing::collect_texts};
+use planora_drawing::dimension::{
+    DimId, DimKind, DimSpec, GeoRef, GeoRefData, TagData, Tolerance as DimTolerance,
+};
 use planora_drawing::{
     DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewLines,
 };
@@ -522,6 +525,103 @@ fn delete_view_names_dependents_in_the_prompt() {
     h.menu(&mut st, "Vorne", "Löschen");
     assert!(st.pending_delete_drawing.is_none());
     assert!(st.document.drawing(d1).unwrap().views.is_empty());
+}
+
+/// Ein Ø-Maß an einer (beliebigen) Fläche in der Ansicht `view`; für das Löschen genügt es,
+/// dass das Maß zur Ansicht gehört.
+fn add_dim(st: &mut AppState, d: DrawingId, view: ViewId) -> DimId {
+    let spec = DimSpec {
+        id: DimId(0),
+        view,
+        kind: DimKind::Diameter,
+        refs: vec![GeoRef::Face(GeoRefData::Face(TagData {
+            origin: 1,
+            role: "Mantel".into(),
+            hint: DVec3::ZERO,
+        }))],
+        offset: 10.0,
+        angle: 45.0,
+        text_shift: (0.0, 0.0),
+        tolerance: DimTolerance::None,
+        decimals: 1,
+        text_override: None,
+        chain: None,
+        suggested: false,
+    };
+    st.document.add_dimension(d, spec).unwrap()
+}
+
+#[test]
+fn deleting_a_view_with_dimensions_always_asks_and_counts_them() {
+    let mut st = box_state();
+    let (d1, _, [front, top, front2]) = two_drawings(&mut st);
+    let a = add_dim(&mut st, d1, front2);
+    let b = add_dim(&mut st, d1, front2);
+    let on_top = add_dim(&mut st, d1, top);
+    let on_front = add_dim(&mut st, d1, front);
+    let mut h = Harness::new();
+    // „Vorne 2“ hat keine abgeleiteten Ansichten, aber zwei Maße: erst fragen.
+    h.menu(&mut st, "Vorne 2", "Löschen");
+    let dims = |st: &AppState| st.document.drawing(d1).unwrap().dimensions.len();
+    assert!(
+        st.document.drawing(d1).unwrap().view(front2).is_some(),
+        "erst fragen"
+    );
+    assert_eq!(dims(&st), 4);
+    let shot = h.idle(&mut st);
+    assert!(
+        shot.find("Die Ansicht „Vorne 2“ wird gelöscht, und 2 Maße werden mit gelöscht.")
+            .is_some(),
+        "{}",
+        shot.text
+    );
+    h.click(&mut st, "Abbrechen");
+    assert!(st.document.drawing(d1).unwrap().view(front2).is_some());
+    assert_eq!(dims(&st), 4, "Abbrechen lässt die Maße");
+    h.menu(&mut st, "Vorne 2", "Löschen");
+    h.click(&mut st, "Löschen");
+    let d = st.document.drawing(d1).unwrap();
+    assert!(d.view(front2).is_none());
+    assert!(d.dimension(a).is_none() && d.dimension(b).is_none());
+    assert!(d.dimension(on_top).is_some() && d.dimension(on_front).is_some());
+    // Abgeleitete Ansicht mit einem Maß, die Ansicht selbst mit einem: beide zählen.
+    drawing_browser::request_delete_view(&mut st, d1, front);
+    let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
+    assert_eq!(
+        plan.text,
+        "Die Ansicht „Vorne“ hat abgeleitete Ansichten: Oben. Sie werden mit gelöscht, und 2 \
+         Maße werden mit gelöscht."
+    );
+    // Ein Maß kommt dazu, bevor bestätigt wird: nichts wird gelöscht, die Frage nennt die
+    // neue Zahl.
+    add_dim(&mut st, d1, top);
+    assert!(drawing_browser::apply_delete(&mut st, &plan).is_err());
+    let plan = st.pending_delete_drawing.clone().expect("neue Rückfrage");
+    assert!(
+        plan.text.ends_with("und 3 Maße werden mit gelöscht."),
+        "{}",
+        plan.text
+    );
+    drawing_browser::apply_delete(&mut st, &plan).unwrap();
+    let d = st.document.drawing(d1).unwrap();
+    assert!(d.views.is_empty() && d.dimensions.is_empty());
+    // Genau ein Maß: Einzahl.
+    let v = st
+        .document
+        .add_view(
+            d1,
+            ViewKind::Front,
+            s(1, 1),
+            Placement::Free { x: 1.0, y: 1.0 },
+            None,
+        )
+        .unwrap();
+    add_dim(&mut st, d1, v);
+    drawing_browser::request_delete_view(&mut st, d1, v);
+    assert_eq!(
+        st.pending_delete_drawing.as_ref().unwrap().text,
+        "Die Ansicht „Vorne“ wird gelöscht, und 1 Maß wird mit gelöscht."
+    );
 }
 
 #[test]

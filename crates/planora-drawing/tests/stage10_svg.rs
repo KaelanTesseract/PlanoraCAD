@@ -88,9 +88,14 @@ fn manual(sheet: Sheet, views: Vec<(&str, Vec<(Visibility, Out2d)>)>) -> SheetMo
                 name: name.to_string(),
                 lines: lines
                     .into_iter()
-                    .map(|(vis, curve)| SheetLine { vis, curve })
+                    .map(|(vis, curve)| SheetLine {
+                        vis,
+                        curve,
+                        origin: planora_drawing::stroke::StrokeOrigin::Edge { body: 0, edge: 0 },
+                    })
                     .collect(),
                 extent_mm: (0.0, 0.0),
+                marks: Vec::new(),
             })
             .collect(),
     }
@@ -146,6 +151,8 @@ fn solid_model(solid: &Solid, kind: ViewKind, show_hidden: bool) -> SheetModel {
         None,
     );
     d.views[0].show_hidden = show_hidden;
+    // Diese Tests prüfen die Linien; Mittellinien-Marken (Vorgabe an) prüft Stufe 16.
+    d.views[0].centerlines = false;
     let res: BTreeMap<ViewId, &ViewLines> = BTreeMap::from([(id, &vl)]);
     build_sheet(&d, &res)
 }
@@ -176,6 +183,7 @@ fn hand_model(
         strokes,
         pieces,
         bbox,
+        centerlines: Vec::new(),
         dropped_splits: 0,
     };
     let mut d = Drawing::new(

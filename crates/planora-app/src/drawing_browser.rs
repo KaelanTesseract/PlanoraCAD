@@ -49,7 +49,7 @@ pub fn drawing_detail(d: &Drawing) -> String {
 
 /// Öffnet die Zeichnung im Arbeitsbereich (Auswahl, Zoom und Verschiebung bleiben, wenn es die
 /// zuletzt offene war). Im Skizzen-Modus geht es nicht: die Meldung sagt warum.
-fn open_drawing(state: &mut AppState, id: DrawingId) -> bool {
+pub(crate) fn open_drawing(state: &mut AppState, id: DrawingId) -> bool {
     if state.sketch_session.is_some() {
         state.message = Some(SKETCH_BLOCKED.into());
         return false;
@@ -61,7 +61,7 @@ fn open_drawing(state: &mut AppState, id: DrawingId) -> bool {
 
 /// Wählt die Zeichnung im Browser; Feature, Körper und 3D-Auswahl sind danach nicht mehr
 /// hervorgehoben.
-fn select_drawing(state: &mut AppState, id: DrawingId) {
+pub(crate) fn select_drawing(state: &mut AppState, id: DrawingId) {
     state.drawing_ui.selected_drawing = Some(id);
     state.selected_feature = None;
     state.selected_body = None;
@@ -111,7 +111,8 @@ pub fn request_delete_drawing(state: &mut AppState, id: DrawingId) {
 }
 
 /// Plant das Löschen einer Ansicht; `None`, wenn es sie nicht gibt. Der Text nennt die
-/// abgeleiteten Ansichten, die mitgelöscht werden; `needs_confirmation` ist dann wahr.
+/// abgeleiteten Ansichten und die Zahl der Maße, die mitgelöscht werden; die Rückfrage
+/// (`needs_confirmation`) ist nötig, sobald etwas mitgelöscht wird.
 fn plan_delete_view(
     state: &AppState,
     drawing: DrawingId,
@@ -126,14 +127,27 @@ fn plan_delete_view(
         .skip(1)
         .filter_map(|v| names.get(v).map(String::as_str))
         .collect();
+    let dims = d
+        .dimensions
+        .iter()
+        .filter(|m| removed.contains(&m.view))
+        .count();
     let name = names.get(&view).cloned().unwrap_or_default();
-    let text = if dependents.is_empty() {
-        format!("Die Ansicht „{name}“ wird gelöscht.")
-    } else {
-        format!(
+    let text = match (dependents.is_empty(), dims) {
+        (true, 0) => format!("Die Ansicht „{name}“ wird gelöscht."),
+        (true, n) => format!(
+            "Die Ansicht „{name}“ wird gelöscht, und {}.",
+            dims_go_along(n)
+        ),
+        (false, 0) => format!(
             "Die Ansicht „{name}“ hat abgeleitete Ansichten: {}. Sie werden mit gelöscht.",
             dependents.join(", ")
-        )
+        ),
+        (false, n) => format!(
+            "Die Ansicht „{name}“ hat abgeleitete Ansichten: {}. Sie werden mit gelöscht, und {}.",
+            dependents.join(", "),
+            dims_go_along(n)
+        ),
     };
     Some((
         DrawingDeletePlan {
@@ -141,12 +155,22 @@ fn plan_delete_view(
             view: Some(view),
             text,
         },
-        !dependents.is_empty(),
+        !dependents.is_empty() || dims > 0,
     ))
 }
 
-/// „Löschen“ bei einer Ansicht: ohne abgeleitete Ansichten sofort, sonst mit Rückfrage, die
-/// sie nennt.
+/// „1 Maß wird mit gelöscht“ bzw. „n Maße werden mit gelöscht“.
+fn dims_go_along(n: usize) -> String {
+    if n == 1 {
+        "1 Maß wird mit gelöscht".into()
+    } else {
+        format!("{n} Maße werden mit gelöscht")
+    }
+}
+
+/// „Löschen“ bei einer Ansicht (Browser und Werkzeugleiste des Zeichnungsbereichs): ohne
+/// abgeleitete Ansichten und ohne Maße sofort, sonst mit Rückfrage, die nennt, was mitgelöscht
+/// wird.
 pub fn request_delete_view(state: &mut AppState, drawing: DrawingId, view: ViewId) {
     let Some((plan, confirm)) = plan_delete_view(state, drawing, view) else {
         return;
@@ -497,7 +521,8 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
     }
 }
 
-/// Rückfrage vor dem Löschen einer Zeichnung oder einer Ansicht mit abgeleiteten Ansichten.
+/// Rückfrage vor dem Löschen einer Zeichnung oder einer Ansicht mit abgeleiteten Ansichten oder
+/// Maßen.
 fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     let Some(plan) = state.pending_delete_drawing.clone() else {
         return;

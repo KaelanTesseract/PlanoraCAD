@@ -1,4 +1,4 @@
-//! Dateiformat 4: Zeichnungen in der Versionsdatei. Rundreise, kleinste passende Version, alte
+//! Dateiformat 4 (seit Teilprojekt 12 mit Mittellinien Format 5): Zeichnungen in der Versionsdatei. Rundreise, kleinste passende Version, alte
 //! Dateien Byte für Byte, feindliche Dateien mit benannten Fehlern (Teilprojekt 11, Task 13).
 
 use planora_drawing::{
@@ -38,6 +38,7 @@ fn scale(num: u32, den: u32) -> Scale {
 
 /// Zwei Zeichnungen (eine gelöschte dazwischen, also Lücke in den Kennungen), Ansichten aller
 /// Arten, freie und ausgerichtete Lage, verdeckte Kanten an und aus, eine gelöschte Ansicht.
+/// Normansichten zeigen nach Vorgabe Mittellinien; die Datei hat deshalb Format 5.
 fn drawing_document() -> Document {
     let mut d = box_document();
     let a = d
@@ -317,14 +318,15 @@ fn positions_roundtrip_bit_exact() {
 // ---- (b) Formatnummer --------------------------------------------------------------------
 
 #[test]
-fn format_is_4_only_with_drawings() {
-    assert_eq!(FORMAT_VERSION, 4);
+fn format_4_with_drawings_and_5_with_centerlines() {
+    // Seit Teilprojekt 12 ist Format 5 gültig; Ansichten mit Mittellinien brauchen es.
+    assert_eq!(FORMAT_VERSION, 5);
     let plain = box_document();
     assert_eq!(required_format(&plain.snapshot()), 1);
     let mut d = drawing_document();
-    assert_eq!(required_format(&d.snapshot()), 4);
+    assert_eq!(required_format(&d.snapshot()), 5);
     let text = encode_version(&d.snapshot()).unwrap();
-    assert!(text.contains("\"format\": 4"), "{text}");
+    assert!(text.contains("\"format\": 5"), "{text}");
     // Eine leere Zeichnung reicht für Format 4.
     let mut e = box_document();
     e.add_drawing(
@@ -418,9 +420,9 @@ fn old_files_with_unknown_fields_stay_readable() {
 #[test]
 fn format_3_file_with_drawings_is_refused() {
     let good = good();
-    assert!(good.contains("\"format\": 4"));
+    assert!(good.contains("\"format\": 5"));
     for older in ["\"format\": 1", "\"format\": 2", "\"format\": 3"] {
-        let msg = corrupt_msg(bad(&good.replacen("\"format\": 4", older, 1)));
+        let msg = corrupt_msg(bad(&good.replacen("\"format\": 5", older, 1)));
         assert!(msg.contains("Dateiformat 4"), "{msg}");
     }
     // Nur der Zähler, aber Format 3: ebenso beschädigt.
@@ -735,18 +737,19 @@ fn missing_counters_are_derived_from_the_ids() {
 // ---- (f) Neuere Formate ------------------------------------------------------------------
 
 #[test]
-fn format_5_is_refused_with_clear_text() {
+fn format_6_is_refused_with_clear_text() {
+    // Seit Teilprojekt 12 ist Format 5 gültig; „zu neu“ ist jetzt 6.
     let good = good();
-    let e = bad(&good.replacen("\"format\": 4", "\"format\": 5", 1));
-    assert!(matches!(e, ProjectError::TooNew { found: 5, .. }), "{e:?}");
+    let e = bad(&good.replacen("\"format\": 5", "\"format\": 6", 1));
+    assert!(matches!(e, ProjectError::TooNew { found: 6, .. }), "{e:?}");
     let msg = e.to_string();
     assert!(
-        msg.contains("neueren Programmversion") && msg.contains("Format 5"),
+        msg.contains("neueren Programmversion") && msg.contains("Format 6"),
         "{msg}"
     );
     // Auch eine Datei, deren übrige Struktur unbekannt ist.
-    let e = bad("{\"format\": 5, \"zeichnungen\": \"ganz anders\"}");
-    assert!(matches!(e, ProjectError::TooNew { found: 5, .. }), "{e:?}");
+    let e = bad("{\"format\": 6, \"zeichnungen\": \"ganz anders\"}");
+    assert!(matches!(e, ProjectError::TooNew { found: 6, .. }), "{e:?}");
 }
 
 // ---- Versionsspeicher und Autosave ------------------------------------------------------

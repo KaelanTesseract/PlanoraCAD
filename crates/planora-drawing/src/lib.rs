@@ -2,7 +2,10 @@
 //! Dieses Paket enthält das Datenmodell, die Ansichtsbasis, das Blattlayout und die Berechnung
 //! der Linien einer Ansicht mit ihrer Sichtbarkeit.
 
+pub mod annotate;
 pub mod basis;
+pub mod centerline;
+pub mod dimension;
 pub mod dxf;
 pub mod error;
 pub mod file;
@@ -15,10 +18,13 @@ pub mod raycast;
 pub mod sheet;
 pub mod silhouette;
 pub mod stroke;
+pub mod suggest;
 pub mod svg;
 pub mod visibility;
 
 pub use basis::Basis;
+pub use centerline::{CenterLine, CenterSource, centerlines};
+pub use dimension::{Anchor, Measured, measure};
 pub use dxf::{dxf_string, write_dxf};
 pub use error::DrawError;
 pub use file::{DrawingFormat, drawing_to_bytes, export_drawing_file};
@@ -26,6 +32,7 @@ pub use layout::{GAP_MM, align_dir, view_extent};
 pub use model::{
     Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewSpec,
 };
+pub use suggest::{Candidate, CandidateOrigin, dimension_key, suggest};
 pub use svg::{svg_string, write_svg};
 
 use limits::{MAX_PIECES, MAX_STROKES, geom_tol};
@@ -66,6 +73,9 @@ pub struct ViewLines {
     pub pieces: Vec<Piece>,
     /// Hüllbox aller Stücke (sichtbar und verdeckt) in Ansichtskoordinaten, mm, ungeskaliert.
     pub bbox: ((f64, f64), (f64, f64)),
+    /// Mittellinien und Achsenkreuze der Ansicht (Ansichtskoordinaten, mm, ungeskaliert, ohne
+    /// Überstand); immer berechnet, in `bbox` nicht enthalten.
+    pub centerlines: Vec<CenterLine>,
     /// Teilstellen, die entfielen, weil sie ein zum Punkt entartetes Teilstück abgegrenzt
     /// hätten (Kennzahl für Prüfungen; sollte 0 sein).
     pub dropped_splits: usize,
@@ -270,7 +280,9 @@ pub fn compute_view_unmerged(
     )?;
 
     let bbox = pieces_bbox(&strokes, &pieces, &basis);
+    let centerlines = centerline::centerlines(bodies, &basis, extent, progress)?;
     Ok(ViewLines {
+        centerlines,
         dropped_splits,
         kind,
         basis,

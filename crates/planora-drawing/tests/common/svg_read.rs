@@ -5,7 +5,10 @@
 //! und rechnet alles auf **Blattkoordinaten** (y nach oben) zurück: erst die Matrizen der
 //! Gruppen (Benutzer- → Bildschirmkoordinaten), dann `y_blatt = Höhe − y_bild`. Bögen werden nach
 //! den Implementierungshinweisen der SVG-Spezifikation (F.6.5/F.6.6, Endpunkt- zu
-//! Mittelpunktsform) umgerechnet.
+//! Mittelpunktsform) umgerechnet. Texte (`<text>`) werden mit der vollständigen Matrix der
+//! umgebenden Elemente gelesen (`matrix`, `translate`, `scale`, `rotate`, auch hintereinander);
+//! der Leser liefert ihre Lage, die Richtung der Textachse und die Richtung „oben“ der Schrift
+//! in Blattkoordinaten.
 #![allow(dead_code)]
 
 use std::collections::HashSet;
@@ -211,6 +214,28 @@ impl ReadPath {
     }
 }
 
+/// Ein gelesener `<text>` in Blattkoordinaten (y nach oben).
+#[derive(Clone, Debug)]
+pub struct ReadText {
+    pub group: String,
+    /// Ankerpunkt auf dem Blatt.
+    pub pos: P,
+    /// Richtung der Grundlinie (Einheitsvektor, Schreibrichtung) auf dem Blatt.
+    pub axis: P,
+    /// Richtung „oben“ der Buchstaben (Einheitsvektor) auf dem Blatt.
+    pub up: P,
+    /// Rechtshändig: `axis × up > 0` (Schrift ist nicht gespiegelt).
+    pub upright: bool,
+    /// Winkel der Schreibrichtung in Grad, gegen den Uhrzeigersinn auf dem Blatt, in (−180, 180].
+    pub angle_deg: f64,
+    pub font_size: f64,
+    pub anchor: String,
+    pub fill: String,
+    pub font_family: String,
+    /// Textinhalt, entmaskiert.
+    pub text: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct ReadRect {
     pub x: f64,
@@ -228,6 +253,7 @@ pub struct ReadSvg {
     pub viewbox: [f64; 4],
     pub rect: Option<ReadRect>,
     pub paths: Vec<ReadPath>,
+    pub texts: Vec<ReadText>,
     /// Kennungen aller Gruppen mit `id` (entmaskiert) in Reihenfolge.
     pub group_ids: Vec<String>,
     /// Zahl der Elemente mit `transform`-Attribut.
@@ -238,6 +264,10 @@ impl ReadSvg {
     /// Alle Pfade einer Gruppe.
     pub fn paths_of<'a>(&'a self, group: &'a str) -> impl Iterator<Item = &'a ReadPath> {
         self.paths.iter().filter(move |p| p.group == group)
+    }
+
+    pub fn texts_of<'a>(&'a self, group: &'a str) -> impl Iterator<Item = &'a ReadText> {
+        self.texts.iter().filter(move |t| t.group == group)
     }
 
     pub fn visible<'a>(&'a self, group: &'a str) -> Vec<&'a ReadPath> {
@@ -258,6 +288,8 @@ struct Tag {
     attrs: Vec<(String, String)>,
     open: bool,
     close: bool,
+    /// Zeichen hinter dem Tag bis zum nächsten `<` (roh, noch nicht entmaskiert).
+    after: String,
 }
 
 fn unescape(v: &str) -> String {
@@ -297,13 +329,16 @@ fn unescape(v: &str) -> String {
 fn tags(svg: &str) -> Vec<Tag> {
     let b: Vec<char> = svg.chars().collect();
     let mut i = 0;
-    let mut out = Vec::new();
+    let mut out: Vec<Tag> = Vec::new();
     while i < b.len() {
         if b[i] != '<' {
             assert!(
                 !b[i].is_control() || b[i].is_whitespace(),
                 "Steuerzeichen im Text"
             );
+            if let Some(last) = out.last_mut() {
+                last.after.push(b[i]);
+            }
             i += 1;
             continue;
         }
@@ -370,6 +405,7 @@ fn tags(svg: &str) -> Vec<Tag> {
             attrs,
             open: !close,
             close: close || empty,
+            after: String::new(),
         });
     }
     out
@@ -417,19 +453,40 @@ fn apply_lin(m: Aff, p: P) -> P {
     (m[0] * p.0 + m[2] * p.1, m[1] * p.0 + m[3] * p.1)
 }
 
+/// Liest eine Liste von `matrix(…)`, `translate(…)`, `scale(…)`, `rotate(…)` (Grad); die Liste
+/// gilt von links nach rechts verschachtelt: `translate(…) scale(…)` wendet erst `scale` an.
 fn parse_transform(s: &str) -> Aff {
-    let s = s.trim();
-    let inner = s
-        .strip_prefix("matrix(")
-        .and_then(|r| r.strip_suffix(')'))
-        .unwrap_or_else(|| panic!("nur matrix(…) wird gelesen: {s:?}"));
-    let v: Vec<f64> = inner
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|t| !t.is_empty())
-        .map(fnum)
-        .collect();
-    assert_eq!(v.len(), 6, "matrix braucht sechs Zahlen");
-    [v[0], v[1], v[2], v[3], v[4], v[5]]
+    let mut rest = s.trim();
+    let mut total = ID;
+    while !rest.is_empty() {
+        let open = rest
+            .find('(')
+            .unwrap_or_else(|| panic!("Transformation ohne '(': {rest:?}"));
+        let close = rest
+            .find(')')
+            .unwrap_or_else(|| panic!("Transformation ohne ')': {rest:?}"));
+        let name = rest[..open].trim();
+        let v: Vec<f64> = rest[open + 1..close]
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|t| !t.is_empty())
+            .map(fnum)
+            .collect();
+        let m: Aff = match (name, v.len()) {
+            ("matrix", 6) => [v[0], v[1], v[2], v[3], v[4], v[5]],
+            ("translate", 1) => [1.0, 0.0, 0.0, 1.0, v[0], 0.0],
+            ("translate", 2) => [1.0, 0.0, 0.0, 1.0, v[0], v[1]],
+            ("scale", 1) => [v[0], 0.0, 0.0, v[0], 0.0, 0.0],
+            ("scale", 2) => [v[0], 0.0, 0.0, v[1], 0.0, 0.0],
+            ("rotate", 1) => {
+                let (s, c) = v[0].to_radians().sin_cos();
+                [c, s, -s, c, 0.0, 0.0]
+            }
+            _ => panic!("Transformation nicht lesbar: {name}({v:?})"),
+        };
+        total = compose(total, m);
+        rest = rest[close + 1..].trim_start();
+    }
+    total
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -667,6 +724,7 @@ pub fn read(svg: &str) -> ReadSvg {
         viewbox: [vb[0], vb[1], vb[2], vb[3]],
         rect: None,
         paths: Vec::new(),
+        texts: Vec::new(),
         group_ids: Vec::new(),
         transform_count: 0,
     };
@@ -715,6 +773,30 @@ pub fn read(svg: &str) -> ReadSvg {
                         linecap: attr(t, "stroke-linecap").unwrap_or("").to_string(),
                         subpaths,
                         segments,
+                    });
+                }
+                "text" => {
+                    let full = compose(to_sheet, m);
+                    let pos = apply(full, (0.0, 0.0));
+                    let unit = |v: P| {
+                        let l = (v.0 * v.0 + v.1 * v.1).sqrt();
+                        (v.0 / l, v.1 / l)
+                    };
+                    let axis = unit(apply_lin(full, (1.0, 0.0)));
+                    // Schrift wächst gegen die Bildschirm-y-Richtung: lokal (0, −1).
+                    let up = unit(apply_lin(full, (0.0, -1.0)));
+                    res.texts.push(ReadText {
+                        group,
+                        pos,
+                        axis,
+                        up,
+                        upright: axis.0 * up.1 - axis.1 * up.0 > 0.0,
+                        angle_deg: axis.1.atan2(axis.0).to_degrees(),
+                        font_size: fnum(attr(t, "font-size").expect("font-size fehlt")),
+                        anchor: attr(t, "text-anchor").unwrap_or("start").to_string(),
+                        fill: attr(t, "fill").unwrap_or("").to_string(),
+                        font_family: attr(t, "font-family").unwrap_or("").to_string(),
+                        text: unescape(&t.after),
                     });
                 }
                 "rect" => {

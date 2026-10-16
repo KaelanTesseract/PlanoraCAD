@@ -8,9 +8,17 @@
 //! gewählten Zeichnung werden im eigenen Arbeitsthread des Fensters berechnet (nicht über den
 //! Zwischenspeicher des Zeichnungsbereichs, Festlegung F11); geschrieben wird nur, wenn alle
 //! Ansichten berechnet sind.
+//!
+//! Maße und Mittellinien (Teilprojekt 12, Aufgabe 14): Nach den Ansichten löst derselbe
+//! Arbeitsthread die Maße der Zeichnung gegen seine Kopien der exakten Körper auf (nicht über den
+//! Zwischenspeicher der Oberfläche) und baut das Blatt mit `build_sheet_with`. Hat ein Maß seinen
+//! Bezug verloren, wird nichts geschrieben (Festlegung P13); Maße außerhalb des Blatts werden
+//! geschrieben und in der Karte gezählt (P12).
 
 use crate::browser::ERROR_COLOR;
 use crate::cards::card_row;
+use crate::dimension_dialog::kind_label;
+use crate::dimension_state::count_outside;
 use crate::drawing_dialog::paper_label;
 use crate::drawing_state::{ComputeFn, WorkArea};
 use crate::drawing_view::view_names;
@@ -18,7 +26,10 @@ use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{WARNING_COLOR, report_text};
 use crate::state::{AppState, BodyKind};
-use planora_drawing::sheet::{SheetModel, build_sheet};
+use planora_drawing::annotate::{Mark, ResolvedDims};
+use planora_drawing::dimension::{DimError, DimSpec};
+use planora_drawing::dxf::dxf_text_fits;
+use planora_drawing::sheet::{SheetModel, build_sheet_with, dimension_marks};
 use planora_drawing::{
     DrawBody, DrawError, Drawing, DrawingFormat, DrawingId, Sheet, ViewId, ViewKind, ViewLines,
     Visibility, compute_view, export_drawing_file,
@@ -27,7 +38,7 @@ use planora_exchange::{
     ExchangeError, ExchangeMesh, ExportBody, Format, MeshReport, MeshTransform, PlacedSource,
     Progress, SolidSource, check_mesh, collect_body, export_file,
 };
-use planora_feature::BodyRef;
+use planora_feature::{BodyRef, resolve_drawing_dimensions};
 use planora_kernel::Solid;
 use planora_mesh::{TessellationOptions, tessellate};
 use planora_step::{
@@ -251,13 +262,17 @@ pub enum ExportStatus {
         skipped_meshes: Vec<String>,
     },
     /// Zeichnung: alle Ansichten berechnet; Zahl der Ansichten, Blatt, Linien (verdeckte nur bei
-    /// Ansichten, die sie zeigen) und ausgelassene Netz-Körper.
+    /// Ansichten, die sie zeigen), ausgelassene Netz-Körper, Zahl der Maße und der Maße außerhalb
+    /// des Blatts, Mittellinien.
     DrawingReady {
         views: usize,
         sheet: String,
         visible: usize,
         hidden: usize,
         skipped_meshes: Vec<String>,
+        dimensions: usize,
+        outside: usize,
+        centerlines: CenterlineUse,
     },
     Failed(String),
     /// Es gibt nichts zu berechnen (keine Zeichnung, keine exakten Körper, keine Ansicht).
@@ -275,6 +290,143 @@ pub struct DrawingPrepared {
     pub hidden: usize,
     /// Netz-Körper, die die Zeichnung nicht enthält.
     pub skipped_meshes: Vec<String>,
+    /// Zahl der Maße auf dem Blatt.
+    pub dimensions: usize,
+    /// Zahl der Maße, die ganz oder teilweise außerhalb des Blatts liegen (P12).
+    pub outside: usize,
+    pub centerlines: CenterlineUse,
+}
+
+/// Mittellinien der Normansichten einer Zeichnung (die isometrische Ansicht hat nie welche).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CenterlineUse {
+    /// Alle Normansichten zeigen Mittellinien.
+    Yes,
+    /// Keine Ansicht zeigt Mittellinien.
+    No,
+    /// Manche Normansichten zeigen sie, andere nicht.
+    Partly,
+}
+
+impl CenterlineUse {
+    /// „ja“, „nein“ oder „teilweise“.
+    pub fn label(self) -> &'static str {
+        match self {
+            CenterlineUse::Yes => "ja",
+            CenterlineUse::No => "nein",
+            CenterlineUse::Partly => "teilweise",
+        }
+    }
+}
+
+/// Zeigen die Normansichten der Zeichnung Mittellinien (Schalter der Ansicht)?
+pub fn centerline_use(d: &Drawing) -> CenterlineUse {
+    let flags: Vec<bool> = d
+        .views
+        .iter()
+        .filter(|v| v.kind.is_normal())
+        .map(|v| v.centerlines)
+        .collect();
+    if !flags.is_empty() && flags.iter().all(|c| *c) {
+        CenterlineUse::Yes
+    } else if flags.iter().any(|c| *c) {
+        CenterlineUse::Partly
+    } else {
+        CenterlineUse::No
+    }
+}
+
+/// Das Auflösen der Maße einer Zeichnung im Arbeitsthread (austauschbar nur für Tests).
+pub type ResolveFn = fn(&Drawing, &[&Solid], &Progress) -> Result<ResolvedDims, DrawError>;
+
+/// Löst die Maße der Zeichnung gegen die Körper `solids` auf (Kopien im Arbeitsthread); bricht
+/// zwischen den Maßen ab, wenn gewünscht.
+pub fn resolve_dimensions_in_worker(
+    drawing: &Drawing,
+    solids: &[&Solid],
+    progress: &Progress,
+) -> Result<ResolvedDims, DrawError> {
+    resolve_drawing_dimensions(drawing, solids, || {
+        progress.check().map_err(|_| DrawError::Cancelled)
+    })
+}
+
+/// Name eines Maßes in Meldungen: der eigene Text (der Platzhalter für den Wert `<>` als `?`,
+/// gekürzt), sonst die Art („Waagerecht“, „Durchmesser“ …).
+pub fn dimension_label(spec: &DimSpec) -> String {
+    match spec.text_override.as_deref().map(str::trim) {
+        Some(t) if !t.is_empty() => shorten_for_display(&t.replace("<>", "?")),
+        _ => kind_label(spec.kind).to_string(),
+    }
+}
+
+/// Meldung bei einem Maß ohne Messwert (Festlegung P13): Ist der Bezug verloren
+/// ([`DimError::Lost`]), „… hat seinen Bezug verloren: …“; sonst (Bezug vorhanden, aber z. B.
+/// nicht mehr quer zum Maß) „… hat sich verändert und lässt sich nicht mehr messen: …“.
+///
+/// Der Grund ist bei `Lost` der Satz aus der Auflösung selbst (ohne den Vorsatz „Der Bezug
+/// wurde nicht gefunden“). Am Ende steht, was hilft: Das Fenster „Maß bearbeiten“ kann den
+/// Bezug nicht neu verknüpfen, also bleibt nur Löschen und neu Setzen ([`LOST_ADVICE`]).
+pub fn lost_dimension_text(label: &str, view: &str, error: &DimError) -> String {
+    let text = match error {
+        DimError::Lost(inner) => inner.clone(),
+        e => e.to_string(),
+    };
+    let reason = text.trim_end().trim_end_matches('.');
+    let what = match error {
+        DimError::Lost(_) => "hat seinen Bezug verloren",
+        _ => "hat sich verändert und lässt sich nicht mehr messen",
+    };
+    format!("Das Maß „{label}“ in der Ansicht „{view}“ {what}: {reason}. {LOST_ADVICE}")
+}
+
+/// Schlusssatz der Meldung bei einem Maß ohne Messwert (Festlegung P13).
+pub const LOST_ADVICE: &str = "Bitte das Maß löschen und neu setzen.";
+
+/// Das erste Maß (Ansichten in der Reihenfolge der Zeichnung) ohne Messwert als Meldung.
+fn first_lost(
+    drawing: &Drawing,
+    dims: &ResolvedDims,
+    names: &BTreeMap<ViewId, String>,
+) -> Option<String> {
+    drawing.views.iter().find_map(|v| {
+        dims.by_view.get(&v.id)?.iter().find_map(|(spec, r)| {
+            let e = r.as_ref().err()?;
+            let name = names
+                .get(&v.id)
+                .cloned()
+                .unwrap_or_else(|| v.kind.label().to_string());
+            Some(lost_dimension_text(&dimension_label(spec), &name, e))
+        })
+    })
+}
+
+/// Hinweis auf Maße außerhalb des Blatts (sie werden trotzdem geschrieben).
+pub fn outside_text(n: usize) -> String {
+    if n == 1 {
+        "1 Maß liegt außerhalb des Blatts und wird trotzdem geschrieben.".into()
+    } else {
+        format!("{n} Maße liegen außerhalb des Blatts und werden trotzdem geschrieben.")
+    }
+}
+
+/// Passen alle Texte des Blatts in ein DXF-`TEXT`? Sonst die Meldung (statt eines Fehlers erst
+/// beim Schreiben).
+pub fn dxf_texts_fit(model: &SheetModel) -> Result<(), String> {
+    for v in &model.views {
+        for m in &v.marks {
+            if let Mark::Text { text, .. } = m
+                && !dxf_text_fits(text)
+            {
+                return Err(format!(
+                    "Ein Maßtext in der Ansicht „{}“ ist für DXF zu lang: „{}“. Bitte den eigenen Text kürzen.",
+                    v.name,
+                    shorten_for_display(text)
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Blatt für die Anzeige, z. B. „A3 quer“.
@@ -316,13 +468,35 @@ fn compute_watched(
     })
 }
 
-/// Berechnet die Ansichten der Zeichnung (jede Ansichtsart einmal, Fortschritt je Art) und baut
-/// das Blatt (läuft im Arbeitsthread). Scheitert eine Ansicht, gibt es kein Blatt, sondern die
-/// Meldung „Die Ansicht „Name“ lässt sich nicht berechnen: …“ (Name wie im Browser).
+/// Berechnet die Ansichten der Zeichnung (jede Ansichtsart einmal, Fortschritt je Art), löst die
+/// Maße auf und baut das Blatt (läuft im Arbeitsthread). Scheitert eine Ansicht, gibt es kein
+/// Blatt, sondern die Meldung „Die Ansicht „Name“ lässt sich nicht berechnen: …“ (Name wie im
+/// Browser); siehe [`prepare_drawing_with`].
 pub fn prepare_drawing(
     drawing: &Drawing,
     solids: &[(String, Solid)],
     compute: ComputeFn,
+    progress: &Progress,
+) -> Result<DrawingPrepared, String> {
+    prepare_drawing_with(
+        drawing,
+        solids,
+        compute,
+        resolve_dimensions_in_worker,
+        progress,
+    )
+}
+
+/// Wie [`prepare_drawing`] mit eigener Auflösung der Maße `resolve`. Nach den Ansichten werden
+/// die Maße gegen `solids` (die Kopien des Arbeitsthreads) aufgelöst; hat eines seinen Bezug
+/// verloren, gibt es kein Blatt, sondern die Meldung „Das Maß „…“ in der Ansicht „…“ hat seinen
+/// Bezug verloren: …“ (P13). Das Blatt entsteht mit `build_sheet_with`; ohne Maße ist es
+/// dasselbe wie mit `build_sheet`.
+pub fn prepare_drawing_with(
+    drawing: &Drawing,
+    solids: &[(String, Solid)],
+    compute: ComputeFn,
+    resolve: ResolveFn,
     progress: &Progress,
 ) -> Result<DrawingPrepared, String> {
     let cancelled = || ExchangeError::Cancelled.to_string();
@@ -332,7 +506,8 @@ pub fn prepare_drawing(
             kinds.push(v.kind);
         }
     }
-    progress.set_total(kinds.len() as u64);
+    let with_dims = !drawing.dimensions.is_empty();
+    progress.set_total(kinds.len() as u64 + u64::from(with_dims));
     let names = view_names(drawing);
     let mut lines: Vec<(ViewKind, ViewLines)> = Vec::with_capacity(kinds.len());
     for kind in kinds {
@@ -366,7 +541,23 @@ pub fn prepare_drawing(
                 .map(|(_, l)| (v.id, l))
         })
         .collect();
-    let model = build_sheet(drawing, &map);
+    let dims = if with_dims {
+        progress.check().map_err(|_| cancelled())?;
+        let refs: Vec<&Solid> = solids.iter().map(|(_, s)| s).collect();
+        let dims = match resolve(drawing, &refs, progress) {
+            Ok(d) => d,
+            Err(DrawError::Cancelled) => return Err(cancelled()),
+            Err(e) => return Err(e.to_string()),
+        };
+        if let Some(m) = first_lost(drawing, &dims, &names) {
+            return Err(m);
+        }
+        progress.advance(1);
+        dims
+    } else {
+        ResolvedDims::default()
+    };
+    let model = build_sheet_with(drawing, &map, &dims);
     // `build_sheet` lässt Ansichten weg, die sich nicht anordnen lassen; das Dokument prüft Lage,
     // Maßstab und Eltern, also kommt das nur bei einer beschädigten Zeichnung vor. Nie still
     // weniger Ansichten schreiben.
@@ -381,12 +572,19 @@ pub fn prepare_drawing(
             .filter(|l| l.vis == vis)
             .count()
     };
+    let outside = count_outside(
+        &dimension_marks(drawing, &map, &dims),
+        drawing.sheet.size_mm(),
+    );
     Ok(DrawingPrepared {
         views: model.views.len(),
         sheet: sheet_label(drawing.sheet),
         visible: count(Visibility::Visible),
         hidden: count(Visibility::Hidden),
         skipped_meshes: Vec::new(),
+        dimensions: dims.by_view.values().map(Vec::len).sum(),
+        outside,
+        centerlines: centerline_use(drawing),
         model: Arc::new(model),
     })
 }
@@ -704,6 +902,7 @@ pub struct ExportDialog {
     step_writing: Option<(PathBuf, StepWriteJob)>,
     drawing_writing: Option<(PathBuf, DrawWriteJob)>,
     compute: ComputeFn,
+    resolve: ResolveFn,
     writer: WriteFn,
     written: Option<Result<(PathBuf, u64), String>>,
     /// Format, mit dem zuletzt geschrieben wurde; die Meldung gehört nur zu diesem Format.
@@ -742,6 +941,7 @@ impl ExportDialog {
             step_writing: None,
             drawing_writing: None,
             compute: compute_view,
+            resolve: resolve_dimensions_in_worker,
             writer: export_drawing_file,
             written: None,
             write_format: ExportFormat::Mesh(Format::Stl),
@@ -800,6 +1000,12 @@ impl ExportDialog {
     #[doc(hidden)]
     pub fn set_compute(&mut self, f: ComputeFn) {
         self.compute = f;
+    }
+
+    /// Ersetzt das Auflösen der Maße im Arbeitsthread (nur für Tests: Zähler, lange Rechnungen).
+    #[doc(hidden)]
+    pub fn set_resolve(&mut self, f: ResolveFn) {
+        self.resolve = f;
     }
 
     /// Ersetzt das Schreiben einer Zeichnung (nur für Tests: langes Schreiben).
@@ -871,15 +1077,17 @@ impl ExportDialog {
                 && let Some(drawing) = self.current_drawing(state).cloned()
             {
                 let (solids, meshes) = drawing_bodies(state);
-                let compute = self.compute;
+                let (compute, resolve, format) = (self.compute, self.resolve, key.2);
                 // Ein alter Auftrag wird dabei fallengelassen und bricht ab.
                 self.drawing_job = Some((
                     key,
                     Job::spawn(move |p| {
-                        prepare_drawing(&drawing, &solids, compute, p).map(|mut r| {
-                            r.skipped_meshes = meshes;
-                            r
-                        })
+                        let mut r = prepare_drawing_with(&drawing, &solids, compute, resolve, p)?;
+                        if format == DrawingFormat::Dxf {
+                            dxf_texts_fit(&r.model)?;
+                        }
+                        r.skipped_meshes = meshes;
+                        Ok(r)
                     }),
                 ));
             }
@@ -915,6 +1123,9 @@ impl ExportDialog {
                 visible: p.visible,
                 hidden: p.hidden,
                 skipped_meshes: p.skipped_meshes.clone(),
+                dimensions: p.dimensions,
+                outside: p.outside,
+                centerlines: p.centerlines,
             },
             Some((k, Err(m))) if Some(*k) == key => ExportStatus::Failed(m.clone()),
             _ => ExportStatus::Computing(0.0),
@@ -1336,6 +1547,25 @@ impl ExportDialog {
                 ),
                 _ => "Linien: …".to_string(),
             });
+            // Maße und Mittellinien: aus der Zeichnung, nach der Berechnung aus dem Ergebnis.
+            let (dims, centerlines) = match &status {
+                ExportStatus::DrawingReady {
+                    dimensions,
+                    centerlines,
+                    ..
+                } => (*dimensions, *centerlines),
+                _ => (d.dimensions.len(), centerline_use(d)),
+            };
+            drawing_info.push(format!("Maße: {}", group_digits(dims as u64)));
+            if let ExportStatus::DrawingReady { outside, .. } = &status
+                && *outside > 0
+            {
+                drawing_info.push(format!(
+                    "Maße außerhalb des Blatts: {}",
+                    group_digits(*outside as u64)
+                ));
+            }
+            drawing_info.push(format!("Mittellinien: {}", centerlines.label()));
         }
         let writing_file = self.is_writing_file();
         let (mut open, mut close, mut cancel, mut recompute, mut begin, mut drop_chooser) =
@@ -1475,8 +1705,15 @@ impl ExportDialog {
                             ui.colored_label(WARNING_COLOR, skipped_text(skipped_meshes));
                         }
                     }
-                    ExportStatus::DrawingReady { skipped_meshes, .. } => {
+                    ExportStatus::DrawingReady {
+                        skipped_meshes,
+                        outside,
+                        ..
+                    } => {
                         ui.label("Alle Ansichten sind berechnet.");
+                        if *outside > 0 {
+                            ui.colored_label(WARNING_COLOR, outside_text(*outside));
+                        }
                         if !skipped_meshes.is_empty() {
                             ui.colored_label(WARNING_COLOR, drawing_skipped_text(skipped_meshes));
                         }

@@ -501,6 +501,103 @@ Stand: 2026-10-15. Aus den exakten Körpern eines Dokuments entstehen technische
 - `cargo fmt --all --check` und `cargo clippy --workspace --all-targets -- -D warnings` sind sauber; `cargo deny check` meldet advisories, bans, licenses und sources ok (nur Hinweise auf doppelte Versionen). Keine neue externe Abhängigkeit (nur der Schalter `float_roundtrip` von `serde_json`).
 - Geschützte Pfade (`crates/planora-kernel`, `crates/planora-mesh`, `crates/planora-step`, `crates/planora-exchange`) sind bitgleich zu `945fa67` (`git diff --stat 945fa67 -- …` ist leer).
 
+## Teilprojekt 12 – Maße und Mittellinien
+Stand: 2026-10-16. Zeichnungen bekommen Maße (waagerecht, senkrecht, schräg, Durchmesser, Radius, Winkel, Maßketten und Bezugsmaße, Toleranzen) und Mittellinien. Maße hängen an der Modellgeometrie und rechnen sich nach Änderungen neu; ein Knopf schlägt die Grundmaße vor; SVG und DXF enthalten alles als einfache Linien, Pfeile und Texte. Das ist Teil 3b von vieren; Schriftfeld, Texte und Stückliste (3c) und Schnittansichten (3d) folgen. Spec: `specs/2026-10-15-masse-mittellinien-design.md` (der Abschnitt „Festlegungen der Umsetzung“ am Ende listet, was bei der Umsetzung anders wurde). Plan: `plans/2026-10-15-masse-mittellinien.md`.
+
+**Entscheidungen mit dem Nutzer (2026-10-15):** Aufteilung des Rests von Teil 3 in Maße und Mittellinien, Blatt, Schnitte (M1); Maße von Hand und automatisch (M2); Maßarten linear, Durchmesser, Radius, Winkel, Ketten und Bezugsmaße, Toleranzen (M3); Maße hängen an der Modellgeometrie, gehen sie verloren, werden sie rot (M4); Maße nur in Normansichten (M5); Ausgabe als Linien, Pfeile und Text, keine echten DXF-Maße (M6); Mittellinien aus dem Modell berechnet und je Ansicht abschaltbar (M7); feste Darstellung nach DIN/ISO 129 in Blatt-Millimetern (M8); Passung nur als Text (M9); keine neue externe Abhängigkeit (M10). Bei der Planung kamen die Festlegungen P1 bis P13 dazu (Rechenwege, Dateiformat 5, Sperre des Exports bei verlorenen Maßen u. a.); sie stehen mit den Entscheidungen der Umsetzung in der Spec.
+
+**Was geliefert wurde**
+- `planora-drawing`: Maße und ihre Messung (alle Maßarten, wahrer Wert in Normansichten, benannter Fehler sonst), Mittellinien aus Kreisen, Zylindern, Kugeln und Ringen, Darstellung als Markierungen (Maßlinien, Hilfslinien, Pfeile, Text, Toleranztexte, Ketten, Bezugsmaße, rote verlorene Maße), Ausgabe in SVG und DXF (Ebenen `MASSE` und `MITTEL`, Linientyp `CENTER`), Vorschlag der Grundmaße. Ausgaben ohne Maße und ohne Mittellinien sind Byte für Byte wie vorher.
+- `planora-feature`: Maße im Dokument (anlegen, ändern, löschen, geprüft), stabile Verweise auf Kanten und Flächen, Auflösen gegen die Körper.
+- `planora-project`: Dateiformat 5 (nur wenn es Maße gibt oder eine Ansicht Mittellinien hat; Format 1 bis 4 laden unverändert).
+- `planora-app`: Mittellinien-Schalter und „Maße vorschlagen“, Werkzeug „Maß“ mit Vorschau, Maße anklicken und ziehen, Fenster „Maß bearbeiten“, Browser-Abschnitt „Maße“, Export mit Maßen (Karte mit Zahl der Maße und Mittellinien-Stand, Sperre bei verlorenen Maßen, Zähler „außerhalb des Blatts“).
+- Alle Texte deutsch in Laiensprache; Zeichnungen lassen sich auch in alten, schreibgeschützten Versionen ansehen (Maße dann ohne Ändern).
+
+**Handtest (Stand 2026-10-16)**
+- Die Proben erzeugt `cargo test --release -p planora-drawing --test hand_samples_dims -- --ignored` (Ordner `D:\Testumgebung\zeichnung-proben-masse`, abweichend über `PLANORA_SAMPLES_DIR`): `Quader_Masse`, `Zylinder_Masse`, `Bohrung_Masse`, `Winkel_Masse`, `Rundung_Masse`, `Kette_Bezug`, `Toleranzen` je als SVG und DXF in zwei Fassungen (`<Name>` mit den Maßen des Vorschlags, `<Name>_Hand` mit von Hand gesetzten Maßen) und `Verloren` (rote Maße, vom Programm normalerweise nicht exportierbar; hier ohne Sperre geschrieben). `ERWARTUNG.txt` nennt je Maß den Wert aus der Formel (beim Schreiben gegen die Messung geprüft) und den erwarteten Text auf dem Blatt, dazu die Prüfliste.
+- Unabhängige Prüfung mit ezdxf (außerhalb des Repos): alle 15 DXF-Proben lesen sich ohne Fehler (`readfile OK`, Audit 0 Fehler, 0 Korrekturen). SVG von Hand angesehen: `Bohrung_Masse_Hand` im Browser zeigt Maßlinien mit Pfeilen, Texte, die Mittellinie und die gestrichelten verdeckten Kanten.
+- **Handtest Fusion 360 (vom Nutzer, 2026-10-16):** `Bohrung_Masse.dxf` lässt sich fehlerfrei einfügen; Linien, Pfeile und Mittellinien kommen an, die Maßlinien als gewöhnliche Linien. Die Maßzahlen erscheinen nicht: Fusion 360 liest DXF-`TEXT` und `MTEXT` beim Einfügen in eine Skizze grundsätzlich nicht (bekannte Einschränkung von Fusion, kein Fehler der Datei). Entscheidung des Nutzers: Das DXF bleibt so; das Einlesen in Fusion ist ein Sonderfall, der aktuell nicht gebraucht wird. Mittellinien und Hilfslinien teilen dort die Skizzenflächen in Teilflächen. Nicht umgesetzt (nur falls es später gebraucht wird): Schalter „Zahlen als Linien“ (Strichschrift) und Schalter „DXF ohne Maße und Mittellinien“. Weiter ungeprüft: einzelnes Prozentzeichen (`%%%`), Rückstrich (`\U+005C`), Latin-1-Zeichen als `\U+XXXX`, `Ø`/`°`/`±` über `%%c`/`%%d`/`%%p`, roter Farbwert des verlorenen Maßes, Linientyp `CENTER`. Inkscape: Das SVG der Probe `Bohrung_Masse` sah richtig aus (Nutzer-Screenshot).
+
+**Was nicht geht oder anders ist**
+
+*Messung und Bezüge*
+- **Nur Normansichten.** Die Art einer Ansicht lässt sich in der Oberfläche nicht ändern (man legt eine neue an); eine Isometrie mit Maßen, etwa aus einer veränderten Datei, lehnt die Dokumentprüfung mit Meldung ab.
+- **Winkel** nur, wenn beide Kanten parallel zur Bildebene liegen (sonst wäre der Winkel verzerrt, Meldung statt Wert). Ein schräges Maß zwischen Punkten misst den Abstand im Bild (übliche Zeichnungsregel). Bei einem schräg stehenden Kreis oder einer Kante, die nicht quer zur Messrichtung steht, gibt es einen benannten Fehler.
+- **Radius** nur an Kreis oder Bogen mit Blick in Achsrichtung und an Kugeln; ein Zylinder von der Seite gibt Durchmesser, kein Radius.
+- **Nicht bemaßbar:** Ellipsen, Splines und Freiformflächen, ebene Flächen („Dieser Kantentyp lässt sich nicht bemaßen“ bzw. „Diese Fläche …“). Maße an Freiformflächen gehen nur über Kanten und Mittellinien.
+- **Gleichstand** (Abstand der Kandidaten höchstens 1e-6 mm) gilt als mehrdeutig: das Maß wird rot mit Grund, nie ein geratener Wert.
+- Die Toleranz für „Länge null“ kennt die Koordinatengröße nicht: bei weit vom Ursprung liegenden, gedrehten Körpern kann sie zu streng oder zu locker sein. Die Ansichtsbasis wird nur auf Endlichkeit geprüft.
+- **Verlorene Maße** behalten den Schlüssel aus der letzten Auflösung, in der sich ihre Bezüge noch auflösen ließen; „Maße vorschlagen“ setzt daneben dasselbe Maß nicht noch einmal. Nur ein Maß, das in dieser Sitzung nie aufgelöst wurde (schon verloren aus einer Datei geladen), hat keinen Schlüssel und kann ein zweites Mal vorgeschlagen werden. Der Schlüssel beschreibt die Geometrie von damals (wie die letzte Lage). Die letzte bekannte Lage eines roten Maßes bleibt auch nach geänderten Bezügen an der alten Stelle. Ohne letzte Lage steht nur ein rotes „?“ in der Ansichtsmitte; Ziehen daran bleibt ohne Wirkung.
+- Ein schräges Maß kippt die Seite seiner Maßlinie bei minimaler Neigung (genau waagerecht und senkrecht sind unberührt).
+
+*Vorschlag*
+- Nur Grundmaße (Gesamtmaße, Ø/R, Bohrungsmitten als Bezugsmaße), keine vollständige Fertigungsbemaßung; Gewinde und Fasen als Winkel mal Länge folgen.
+- Der Umriss eines Zylinders oder einer Kugel am Rand zählt nicht als Bezug eines Gesamtmaßes. Bögen über 180° und Kugelkappen bekommen Ø statt R.
+- Gleiche Bezugsebene mit gleichem Wert verschmilzt zu einem Maß (dokumentiert). Die Eckpunktsuche nutzt ein Raster nur für Enden nahe am Extrem (leicht anderes Toleranzband als die alte Suche).
+- Der Abstand nach der Regel „10 mm plus n mal 7 mm“ zählt alle Maße derselben Ansicht und Richtung; von Hand versetzte Maße können Lücken oder Überlappungen lassen.
+- Die Zufallsreihe der Prüfung ist schwach (200 Körper aus Teilprojekt 11).
+
+*Mittellinien*
+- Keine Mittellinien, wenn die Blickrichtung keine Weltachse ist (Isometrie). Überlappende kollineare Achsenlinien werden verbunden, konzentrische Kreuze zu einem.
+- Verdeckte Bohrungen bekommen auch Mittellinien (bewusst akzeptiert). Gerundete Teile können mit Mittellinien der Ausrundungen überladen wirken (Produktfrage).
+- Ein Torus-Kreuz überragt bei Ausrundungs-Tori (Hohlkehle) die größte Kreislinie. Der Achsbereich am Freiformrand wird nur an 65 Stellen abgetastet (nie zu lang).
+- Die Randbegrenzung der Mittellinien aus der Spec (§3.4) ist **nicht** umgesetzt: sie stehen 3 mm über die Kanten hinaus, werden aber nicht am Ansichtsrand gekürzt.
+
+*Darstellung und Ausgabe*
+- Die **Textbreite ist nur geschätzt** (0,6 mal Texthöhe je Zeichen, P7); eine andere Schrift kann breiter sein, dann sitzen Texte dichter an Pfeilen. Bei zu langem Text ohne Maßlinie darunter bleibt der Text neben den innen liegenden Pfeilen.
+- Der Text eines großen Ø (ab 25 mm auf dem Blatt) überdeckt bei 45°/135° eine Mittellinie. Der obere Toleranztext liegt 1,89 mm über dem Haupttext. Der Text eines roten Maßes kann weit über das Blatt ragen.
+- Maße außerhalb des Blatts werden gezeichnet und in der Oberfläche und im Export gezählt, nicht gekürzt; auch lange rote Texte zählen als außerhalb.
+- SVG: ein Bogen mit Radius null oder Ende vor Anfang wird still übersprungen; die Positionsgrenze `MAX_POS_MM` wird im SVG-Schreiber nicht geprüft; Text ohne `xml:space`.
+- DXF: Latin-1-Zeichen werden als `\U+XXXX` geschrieben (reines ASCII), `%` als `%%%`, `\` als `\U+005C`, `^` als `^ `, Steuerzeichen als Leerzeichen. Ein Text über 255 Zeichen in dieser Schreibweise (`%` zählt dreifach) lässt den DXF-Export mit Meldung scheitern, SVG geht dann trotzdem. Ein leerer Text wird als leeres `TEXT` geschrieben; die Texthöhe wird im Schreiber nicht auf größer null geprüft. Die Pfeil-Dreiecke stehen in `svg.rs` und `dxf.rs` doppelt, `write_tables` hat acht Argumente.
+
+*Dokument und Datei*
+- Format 5 wird nur geschrieben, wenn es Maße gibt oder eine Ansicht Mittellinien hat; ältere Programmversionen melden dann „zu neu“. Format-4-Dateien laden mit ausgeschalteten Mittellinien (alte Zeichnungen bleiben unverändert).
+- Format 4 speichert den Zähler der nächsten Maßnummer nicht: löscht man alle Maße (bei ausgeschalteten Mittellinien), beginnen die Nummern nach dem Laden wieder bei 1.
+- Verweis-Hinweispunkte sind auf `2·MAX_COORD_MM` begrenzt (wie die übrigen Modellverweise), Rollennamen auf 64 Zeichen; größere Werte lehnen Anlegen und Laden mit klarer Meldung ab.
+
+*Oberfläche*
+- Die Maße werden nach einer Modelländerung im Oberflächenfaden aufgelöst (billig, bei 2000 Maßen aber spürbar); beim Ziehen werden die Markierungen je Bild neu berechnet, die Vorschau des Werkzeugs je Bild ohne Zwischenspeicher.
+- Die Werkzeugleiste des Zeichnungsbereichs hat immer zwei Zeilen (die Zeichenfläche liegt etwa 20 Pixel tiefer als vorher), damit die Fläche beim Wählen einer Ansicht nicht springt.
+- Werkzeug: Ein Klick auf den Umriss eines Zylinders misst in linearen Maßen bis zur Achse (Hinweis erscheint). Die Richtung einer Kette folgt automatisch dem größeren Wert; bei fast diagonalen Punkten kann sie kippen. Esc setzt eine Kette, sonst bricht es ab; Doppelklick wirkt nur bei Ketten. Scheitert eine Kette in der Mitte, bleiben die schon gesetzten Maße. Ein Maß wird nahe Ecken vor den Ansichtskanten getroffen; der Abstand 0 zählt als positiv; der kleinste Abstand beim Ziehen ist 1 mm (die Seite wechselt man derzeit nicht; ein Eingabefeld für den Abstand folgt). Zieht man die Maßlinie eines Glieds einer Kette oder von Bezugsmaßen, wandert die ganze Gruppe um dasselbe Stück mit (Text und Führungslinien ziehen weiter einzeln). Das Ziehen schreibt je Bild eine Änderung, das Rückgängigmachen einer Kette sind n Schritte (es gibt noch kein Rückgängig).
+- Die Meldung von „Maße vorschlagen“ verschwindet auch bei anderen Änderungen der Zeichnung. Bei noch nicht berechneter Ansicht fehlt ein eigener Hinweis.
+- Fenster „Maß bearbeiten“: Eigener Text und Passung werden am Rand gekürzt, nur Leerzeichen gilt als „kein Text“; eine obere Abweichung kleiner als die untere und eine negative symmetrische Abweichung lehnt das Fenster rot ab (die Dokumentprüfung und der Dateileser prüfen das nicht, ältere oder veränderte Dateien laden also weiter). Zeilen zweier Maße mit gleichem Text unterscheiden sich nur durch Lage und Tooltip; Gruppenzeilen im Browser haben keine Wirkung; die Symbole sind von Hand gezeichnet und nicht im Bild geprüft; die Anzeige im Hauptfenster (`app.rs`) hat keinen Test.
+- Export: Genannt wird nur das erste verlorene Maß. Der Satz endet mit „Bitte das Maß löschen und neu setzen.“, weil das Fenster „Maß bearbeiten“ keinen Bezug neu verknüpfen kann (früher „Bitte ändern oder löschen.“). Das DXF-Ergebnis kann scheitern (Textlänge), während SVG gelingt.
+- Kleinkram im Code: Testfelder im Produktionszustand (`inputs`, `last_rect`, `last_cards`), doppelte Ergebnissuche im Maß-Fenster, ein Doku-Kommentar von `drawing_document` über dem falschen Helfer (`tests/drawings_format.rs`), tote `body`-Logik in `stage12_types.rs`, `ref_count` doppelt (freie Funktion und Methode), die Doku von `parallel()` nennt ein nicht vorhandenes `same_sense`.
+
+**Nachbesserung nach der Gesamtprüfung (2026-10-16)**
+- **Ansicht löschen mit Maßen:** Früher verschwanden die Maße einer gelöschten Ansicht (und ihrer abgeleiteten Ansichten) ohne Nachfrage, über „Ansicht löschen“ in der Werkzeugleiste sogar ganz ohne Rückfrage. Jetzt fragt das Programm immer, sobald Maße mitgelöscht werden („… und 3 Maße werden mit gelöscht.“); Werkzeugleiste und Browser gehen denselben Weg.
+- **Aufwand der Bezüge:** Ein Bezug auf eine Kante speichert den Prüfpunkt beider Nachbarflächen. Der Prüfpunkt einer großen Fläche mit vielen Bohrungen ist teuer (Release-Build: 0,13 s bei 100 Bohrungen, 0,49 s bei 400), und er wurde für jede Kante neu berechnet. Jetzt merkt ein Zwischenspeicher (`RefCache` in `planora-feature`) Prüfpunkte, Kantenverwendungen und Achsbereiche je Durchgang (ein Vorschlag, ein Klick, eine Auflösung aller Maße); die Ergebnisse sind gleich (Vergleichstest), gezählt wird über einen Zähler je Thread. Gemessen (Release, Draufsicht einer Platte): „Maße vorschlagen“ bei 100 Bohrungen **18,7 s vorher, 0,41 s jetzt** (122 Maße), bei 400 Bohrungen 1,6 s (442 Maße; vorher nicht gemessen, nach der Rechnung mehrere Minuten). **Bleibt:** Ein Klick des Werkzeugs auf eine Kante der großen Fläche rechnet ihren Prüfpunkt einmal (0,13 s bzw. 0,49 s je Klick); eine Zylinderfläche aufzulösen kostet etwa 2,8 ms (Prüfpunkt plus Achsbereich), je Durchgang einmal.
+- Schalter „Mittellinien“ in der Isometrie gesperrt, mit Erklärung am Schalter.
+- Fenster „Maß bearbeiten“: Leerzeichen-Texte, obere/untere und negative Abweichung (siehe oben).
+- Verlorene Maße: Gründe in Laiensprache („Die Fläche, an der das Maß hing, gibt es nicht mehr.“ statt Feature-Nummer und Rollenname), kein doppelter Vorschlag neben einem roten Maß, Exporttext „Bitte das Maß löschen und neu setzen.“
+- Ziehen eines Glieds einer Kette oder von Bezugsmaßen verschiebt die ganze Gruppe.
+- Rundungen: Die Führungslinie von R (und kleinem Ø) endet immer auf dem gezeichneten Bogen; liegt der eingestellte Winkel nicht auf dem Bogen, geht sie durch die Bogenmitte, Werkzeug und Ziehen halten sie am nächsten Bogenende. Ein großes Ø, das von Hand durch die Mitte auf einem Teilbogen gezeichnet wird, behält den eingestellten Winkel (seine Enden liegen dann nicht beide auf dem Bogen). Von Hand dicht am Umriss gesetzte senkrechte Maße können mit dem Text den Umriss berühren.
+- Vorgeschlagene Maßlinien liegen 10 mm neben dem ganzen sichtbaren Umriss der Ansicht (nicht nur bei Rundungen, auch bei T- oder U-Profilen, deren äußerste Kanten kürzer sind als der Umriss). Liegen mehrere deckungsgleiche Kreiskanten auf demselben Kreis und ergeben zusammen einen Vollkreis, gilt der Bogen als voll und der Pfeil bleibt nicht auf dem Bogen gehalten (selten).
+- Die Stelle eines Maßes in einer Kette ist auf höchstens 1999 begrenzt (Dateileser und Dokumentprüfung); größere Werte lehnt das Laden mit Meldung ab.
+
+**Wie geprüft wurde:** Alle Stufen mit eigenen Formelmodellen (Werte aus den Eingabemaßen, nicht aus der Bibliothek), eigenen Lesern für SVG und DXF, einem Rücklesetest der Dateien, Prüfung feindlicher Dateien (NaN, riesige Zahlen, doppelte oder fremde Kennungen, Listen über der Grenze), einer Zufallsreihe und einem Mutationsbeweis für jeden Regressionstest (in den Aufgabenberichten). Die Proben prüfen beim Schreiben jeden Sollwert aus der Formel gegen die Messung.
+
+**Folge-Aufgaben nach Priorität**
+- *Hoch*
+  1. Handtest in Inkscape und anderen Programmen für DXF-Text; für Fusion 360 gilt: Text wird nicht gelesen (bewusst hingenommen).
+  2. Maße nach Modelländerungen im Hintergrund auflösen statt im Oberflächenfaden; Zwischenspeicher für Marken und Vorschau beim Ziehen. Prüfpunkte großer Flächen über mehrere Klicks des Werkzeugs hinweg merken (heute je Klick neu, siehe Nachbesserung).
+- *Mittel*
+  3. Mittellinien an den Ansichtsrand begrenzen (Spec §3.4); Überladung durch Ausrundungsachsen prüfen.
+  4. Rückgängig/Wiederholen für Maße, auch als ein Schritt je Ziehen und je Kette.
+  5. Textbreite aus der echten Schrift messen statt zu schätzen.
+  6. Passungstabellen nach ISO 286, echte DXF-Maße, Maße an Ellipsen, Splines und Freiformflächen.
+  7. Richtung einer Kette wählbar; Seite der Maßlinie beim Ziehen wechseln; Bezug eines roten Maßes im Fenster „Maß bearbeiten“ neu wählen.
+  8. Vorschlag erweitern (Fasen als Winkel mal Länge, Gewinde, Randfälle bei Zylinder- und Kugelumriss).
+- *Niedrig*
+  9. Kosmetik: Text eines großen Ø bei 45°/135°, Toleranztext-Abstand, lange rote Texte kürzen, leeren DXF-Text und Texthöhe prüfen, Pfeilgeometrie in `svg.rs`/`dxf.rs` zusammenführen, `write_tables` aufräumen, Testfelder aus dem Produktionszustand, Doku-Kommentare und tote Logik.
+  10. 3c (Schriftfeld, Texte, Stückliste) und 3d (Schnittansichten) als eigene Teilprojekte.
+
+**Laufzeiten und Testreihen**
+- Teststand am Ende von Teilprojekt 12: **2034 bestanden, 0 fehlgeschlagen, 33 ignoriert (nach der Nachbesserung der Gesamtprüfung)** (`cargo test --workspace -j 2`, Debug, 2026-10-16). Gesamtlaufzeit 15 Minuten 41 Sekunden (941 s) einschließlich Übersetzung. Zum Vergleich Ende von Teilprojekt 11: 1759 bestanden, 32 ignoriert, 214 Testprogramme; das sind 275 Tests mehr, ein ignorierter mehr (`write_dimension_samples_for_the_hand_test`). Der Aufruf mit `-j 2` bleibt nötig (paralleler Vollbau scheiterte sporadisch an Speicher).
+- Neu in Aufgabe 15: `hand_samples_dims` (ein schneller Test schreibt zwei Proben in den Temp-Ordner, der ausgeschaltete Test schreibt alle acht Proben in je zwei Fassungen und prüft dabei jeden Formelwert gegen die Messung; im Debug-Build unter einer Sekunde).
+- `cargo fmt --all --check` und `cargo clippy --workspace --all-targets -- -D warnings` sind sauber; `cargo deny check` meldet advisories, bans, licenses und sources ok (nur Hinweise auf doppelte Versionen). Keine neue externe Abhängigkeit.
+- Geschützte Pfade (`crates/planora-kernel`, `crates/planora-mesh`, `crates/planora-step`, `crates/planora-exchange`) sind bitgleich zu `945fa67` (`git diff --stat 945fa67 -- …` ist leer).
+
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).
 - `eframe` mit Standard-Features baut auch den `glow`-Renderer mit.

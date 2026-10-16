@@ -12,7 +12,11 @@
 //!   (330/340) zeigt auf ein vorhandenes Handle;
 //! * jede Ebene und jede Linienart, die ein Objekt oder eine Ebene nennt, steht in den Tabellen,
 //!   jedes `INSERT` nennt einen vorhandenen Block, jeder Block hat seinen Blockeintrag;
-//! * jedes Objekt hat die Gruppen, die sein Typ braucht.
+//! * jedes Objekt hat die Gruppen, die sein Typ braucht; `TEXT` (zwei Marken `AcDbText`, Höhe > 0,
+//!   Drehung in `[0, 360)`, Ausrichtung 72 ∈ {0, 1, 2}, 73 = 0, Textstil vorhanden) und `SOLID`
+//!   (`AcDbTrace`, genau vier Ecken 10…13, Dicke 0) sind lesbar;
+//! * jede Linienart: Zahl der Elemente (73) = Zahl der Gruppen 49 und 74, Gesamtlänge (40) = Summe
+//!   der Beträge; `CENTER` und `HIDDEN` nur mit Muster.
 //!
 //! Dazu die Auswertung der Objekte (Punkte, Längen, Abstand zu einem Punkt); Splines mit dem
 //! Verfahren von de Boor in homogenen Koordinaten.
@@ -531,6 +535,8 @@ fn entity_marker(kind: &str) -> Option<&'static str> {
         "SPLINE" => "AcDbSpline",
         "LWPOLYLINE" => "AcDbPolyline",
         "INSERT" => "AcDbBlockReference",
+        "TEXT" => "AcDbText",
+        "SOLID" => "AcDbTrace",
         _ => return None,
     })
 }
@@ -733,6 +739,48 @@ pub fn validate(d: &Dxf) -> Result<(), String> {
             return Err(format!("Ebene {}: Farbe fehlt", r.name()));
         }
     }
+    // Linienarten: Muster vollständig, CENTER und HIDDEN nur mit Muster.
+    for r in &d.table("LTYPE").unwrap().records {
+        let count = |code: i32| r.groups.iter().filter(|g| g.code == code).count();
+        let n = r
+            .num(73)
+            .ok_or(format!("Linienart {}: 73 fehlt", r.name()))? as usize;
+        if r.num(72) != Some(65.0) {
+            return Err(format!("Linienart {}: 72 nicht 65", r.name()));
+        }
+        if count(49) != n || count(74) != n || count(73) != 1 || count(40) != 1 {
+            return Err(format!(
+                "Linienart {}: {n} Elemente, aber {} Längen und {} Arten",
+                r.name(),
+                count(49),
+                count(74)
+            ));
+        }
+        let sum: f64 = r
+            .groups
+            .iter()
+            .filter(|g| g.code == 49)
+            .map(|g| g.num().abs())
+            .sum();
+        let total = r.num(40).unwrap();
+        if (sum - total).abs() > 1e-9 {
+            return Err(format!(
+                "Linienart {}: Gesamtlänge {total} statt {sum}",
+                r.name()
+            ));
+        }
+        let name = r.name().to_uppercase();
+        if (name == "CENTER" || name == "HIDDEN") && n < 2 {
+            return Err(format!("Linienart {name} ohne Muster"));
+        }
+    }
+    let styles: BTreeSet<String> = d
+        .table("STYLE")
+        .unwrap()
+        .records
+        .iter()
+        .map(|r| r.name().to_uppercase())
+        .collect();
     // Blockeinträge und Blöcke.
     let br_table = d.table("BLOCK_RECORD").unwrap();
     let mut br_by_name: BTreeMap<String, String> = BTreeMap::new();
@@ -925,6 +973,8 @@ pub fn validate(d: &Dxf) -> Result<(), String> {
         let spec = entity_marker(&e.kind).ok_or(format!("{ctx}: Objektart {}", e.kind))?;
         let want: Vec<&str> = if e.kind == "ARC" {
             vec!["AcDbEntity", "AcDbCircle", "AcDbArc"]
+        } else if e.kind == "TEXT" {
+            vec!["AcDbEntity", "AcDbText", "AcDbText"]
         } else {
             vec!["AcDbEntity", spec]
         };
@@ -941,6 +991,12 @@ pub fn validate(d: &Dxf) -> Result<(), String> {
                 "{ctx} {}: Linienart {} unbekannt",
                 e.kind, lt.value
             ));
+        }
+        if e.kind == "TEXT" {
+            let st = find(&e.groups, 7).ok_or(format!("{ctx}: TEXT ohne Textstil"))?;
+            if !styles.contains(&st.value.to_uppercase()) {
+                return Err(format!("{ctx}: TEXT mit unbekanntem Stil {}", st.value));
+            }
         }
         if e.kind == "INSERT" {
             let n = decode_text(&find(&e.groups, 2).ok_or("INSERT ohne Namen")?.value);
@@ -1006,6 +1062,21 @@ pub enum Geom {
     Insert {
         name: String,
         at: P,
+    },
+    /// Text: Einfügepunkt (10), Ausrichtepunkt (11), Höhe, Drehung in Grad, Ausrichtung (72),
+    /// Inhalt entschlüsselt (`%%c` → Ø usw., siehe [`decode_dxf_text`]) und roh.
+    Text {
+        pos: P,
+        align_pt: P,
+        height: f64,
+        rotation: f64,
+        halign: i64,
+        text: String,
+        raw: String,
+    },
+    /// Gefüllte Fläche: die vier Ecken in Dateireihenfolge (10, 11, 12, 13).
+    Solid {
+        pts: [P; 4],
     },
 }
 
@@ -1171,6 +1242,56 @@ impl ReadEntity {
                 name: decode_text(self.get(2).ok_or("INSERT ohne Namen")?),
                 at: pt(10, 20, 30)?,
             },
+            "TEXT" => {
+                let height = self.one(40)?;
+                let rotation = self.one(50)?;
+                let halign = self.one(72)? as i64;
+                let valign = self.one(73)? as i64;
+                if height <= 0.0 {
+                    return Err(format!("TEXT {}: Höhe {height}", self.handle));
+                }
+                if !(0.0..360.0).contains(&rotation) {
+                    return Err(format!("TEXT {}: Drehung {rotation}", self.handle));
+                }
+                if !(0..=2).contains(&halign) || valign != 0 {
+                    return Err(format!(
+                        "TEXT {}: Ausrichtung {halign}/{valign}",
+                        self.handle
+                    ));
+                }
+                let texts: Vec<&Group> = self.groups.iter().filter(|g| g.code == 1).collect();
+                if texts.len() != 1 {
+                    return Err(format!("TEXT {}: {} Textgruppen", self.handle, texts.len()));
+                }
+                let raw = texts[0].value.clone();
+                if raw.chars().count() > 255 {
+                    return Err(format!("TEXT {}: Text länger als 255", self.handle));
+                }
+                Geom::Text {
+                    pos: pt(10, 20, 30)?,
+                    align_pt: pt(11, 21, 31)?,
+                    height,
+                    rotation,
+                    halign,
+                    text: decode_dxf_text(&raw),
+                    raw,
+                }
+            }
+            "SOLID" => {
+                if let Some(t) = self.get(39)
+                    && t.trim().parse::<f64>() != Ok(0.0)
+                {
+                    return Err(format!("SOLID {}: Dicke {t}", self.handle));
+                }
+                Geom::Solid {
+                    pts: [
+                        pt(10, 20, 30)?,
+                        pt(11, 21, 31)?,
+                        pt(12, 22, 32)?,
+                        pt(13, 23, 33)?,
+                    ],
+                }
+            }
             other => return Err(format!("Objektart {other}")),
         })
     }
@@ -1269,7 +1390,8 @@ impl Geom {
                 ..
             } => (knots[*degree], knots[ctrl.len()]),
             Geom::Poly { pts, .. } => (0.0, (pts.len() - 1) as f64),
-            Geom::Insert { .. } => (0.0, 0.0),
+            Geom::Insert { .. } | Geom::Text { .. } => (0.0, 0.0),
+            Geom::Solid { .. } => (0.0, 4.0),
         }
     }
 
@@ -1308,6 +1430,15 @@ impl Geom {
                 )
             }
             Geom::Insert { at, .. } => *at,
+            Geom::Text { pos, .. } => *pos,
+            Geom::Solid { .. } => {
+                // Umriss in der Zeichenfolge 1, 2, 4, 3.
+                let o = self.solid_outline();
+                let i = (t.floor() as usize).min(3);
+                let f = t - i as f64;
+                let (a, b) = (o[i], o[(i + 1) % 4]);
+                (a.0 + f * (b.0 - a.0), a.1 + f * (b.1 - a.1))
+            }
         }
     }
 
@@ -1355,7 +1486,11 @@ impl Geom {
                 }
                 l
             }
-            Geom::Insert { .. } => 0.0,
+            Geom::Insert { .. } | Geom::Text { .. } => 0.0,
+            Geom::Solid { .. } => {
+                let o = self.solid_outline();
+                (0..4).map(|i| dist(o[i], o[(i + 1) % 4])).sum()
+            }
         }
     }
 
@@ -1407,6 +1542,57 @@ impl Geom {
                 best
             }
             Geom::Insert { at, .. } => dist(p, *at),
+            Geom::Text { pos, .. } => dist(p, *pos),
+            Geom::Solid { .. } => {
+                let o = self.solid_outline();
+                (0..4)
+                    .map(|i| {
+                        Geom::Line {
+                            a: o[i],
+                            b: o[(i + 1) % 4],
+                        }
+                        .distance_to(p)
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            }
         }
     }
+
+    /// Umriss eines `SOLID` in der Zeichenfolge der DXF-Referenz: Ecken 1, 2, 4, 3.
+    pub fn solid_outline(&self) -> [P; 4] {
+        match self {
+            Geom::Solid { pts } => [pts[0], pts[1], pts[3], pts[2]],
+            _ => panic!("kein SOLID"),
+        }
+    }
+}
+
+/// Entschlüsselt den Inhalt eines `TEXT` in der Reihenfolge der CAD-Programme: erst
+/// `\U+XXXX` (beim Laden, siehe [`decode_text`]) und `^ ` → `^`, dann beim Anzeigen die Kürzel
+/// von links nach rechts: `%%%` → `%`, `%%c` → Ø, `%%d` → °, `%%p` → ± (groß oder klein); andere
+/// `%%x` bleiben stehen.
+pub fn decode_dxf_text(s: &str) -> String {
+    let t = decode_text(s).replace("^ ", "^");
+    let c: Vec<char> = t.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == '%' && i + 2 < c.len() && c[i + 1] == '%' {
+            let sym = match c[i + 2] {
+                '%' => Some('%'),
+                'c' | 'C' => Some('\u{d8}'),
+                'd' | 'D' => Some('\u{b0}'),
+                'p' | 'P' => Some('\u{b1}'),
+                _ => None,
+            };
+            if let Some(ch) = sym {
+                out.push(ch);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(c[i]);
+        i += 1;
+    }
+    out
 }

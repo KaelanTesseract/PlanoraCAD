@@ -146,6 +146,14 @@ pub struct AppState {
     pub display_triangles: usize,
     /// Zeichnungsbereich: geöffnete Zeichnung, Auswahl, Blattansicht und Hintergrundberechnung.
     pub drawing_ui: crate::drawing_state::DrawingUi,
+    /// Aufgelöste Maße der geöffneten Zeichnung mit Zwischenspeicher und letzten Lagen.
+    pub dimension_ui: crate::dimension_state::DimensionUi,
+    /// Werkzeug „Maß“ des Zeichnungsbereichs (Untermodus, gewählte Bezüge, Vorschau).
+    pub dimension_tool: crate::dimension_tool::DimensionTool,
+    /// Offenes Fenster „Maß bearbeiten“.
+    pub dimension_dialog: Option<crate::dimension_dialog::DimensionDialog>,
+    /// Offene Rückfrage „Maß löschen“ (Kettenglieder) aus dem Abschnitt „Maße“.
+    pub pending_delete_dimension: Option<crate::dimension_browser::DimDeletePlan>,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -254,6 +262,10 @@ impl AppState {
             mesh_reports: BTreeMap::new(),
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
             drawing_ui: crate::drawing_state::DrawingUi::default(),
+            dimension_ui: crate::dimension_state::DimensionUi::default(),
+            dimension_tool: crate::dimension_tool::DimensionTool::default(),
+            dimension_dialog: None,
+            pending_delete_dimension: None,
         };
         state.rebuild_scene();
         state

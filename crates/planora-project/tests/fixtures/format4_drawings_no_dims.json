@@ -1,0 +1,140 @@
+{
+  "format": 4,
+  "marker": 1,
+  "naechste_id": 2,
+  "features": [
+    {
+      "id": 1,
+      "name": "Quader 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "quader",
+        "groesse": [
+          30.0,
+          20.0,
+          10.0
+        ],
+        "ursprung": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    }
+  ],
+  "zeichnungen": [
+    {
+      "id": 1,
+      "name": "Blatt 1",
+      "blatt": {
+        "papier": "A3",
+        "quer": true
+      },
+      "projektion": "erst",
+      "naechste_ansicht": 8,
+      "ansichten": [
+        {
+          "id": 1,
+          "art": "vorne",
+          "massstab": [
+            1,
+            2
+          ],
+          "lage": {
+            "typ": "frei",
+            "x": 120.5,
+            "y": 150.25
+          },
+          "verdeckt_zeigen": true,
+          "eltern": null
+        },
+        {
+          "id": 2,
+          "art": "hinten",
+          "massstab": [
+            1,
+            2
+          ],
+          "lage": {
+            "typ": "ausgerichtet",
+            "abstand": 20.0
+          },
+          "verdeckt_zeigen": true,
+          "eltern": 1
+        },
+        {
+          "id": 3,
+          "art": "links",
+          "massstab": [
+            1,
+            2
+          ],
+          "lage": {
+            "typ": "ausgerichtet",
+            "abstand": 21.0
+          },
+          "verdeckt_zeigen": true,
+          "eltern": 1
+        },
+        {
+          "id": 4,
+          "art": "rechts",
+          "massstab": [
+            1,
+            2
+          ],
+          "lage": {
+            "typ": "ausgerichtet",
+            "abstand": 22.0
+          },
+          "verdeckt_zeigen": true,
+          "eltern": 1
+        },
+        {
+          "id": 5,
+          "art": "oben",
+          "massstab": [
+            1,
+            2
+          ],
+          "lage": {
+            "typ": "ausgerichtet",
+            "abstand": 23.0
+          },
+          "verdeckt_zeigen": true,
+          "eltern": 1
+        },
+        {
+          "id": 6,
+          "art": "unten",
+          "massstab": [
+            1,
+            2
+          ],
+          "lage": {
+            "typ": "ausgerichtet",
+            "abstand": 24.0
+          },
+          "verdeckt_zeigen": true,
+          "eltern": 1
+        },
+        {
+          "id": 7,
+          "art": "iso",
+          "massstab": [
+            1,
+            1
+          ],
+          "lage": {
+            "typ": "frei",
+            "x": 330.0,
+            "y": 220.0
+          },
+          "verdeckt_zeigen": false,
+          "eltern": null
+        }
+      ]
+    }
+  ],
+  "naechste_zeichnung": 2
+}

@@ -61,8 +61,44 @@
 //! Steuerzeichen werden zu `_`, Zeichen außerhalb der Grundebene des Unicodes ebenfalls; die
 //! übrigen Zeichen außerhalb von ASCII stehen als `\U+XXXX` in der Datei; höchstens 255 Zeichen; doppelte Namen (ohne Rücksicht auf
 //! Groß-/Kleinschreibung, wie in DXF) bekommen ` 2`, ` 3`, …; leere Namen heißen `Ansicht`.
+//!
+//! # Maße und Mittellinien
+//!
+//! Die Markierungen einer Ansicht (`SheetView.marks`) stehen hinter ihren Linien im Block der
+//! Ansicht. Ebenen und Linienart kommen **nur** hinzu, wenn Markierungen dieser Art vorkommen;
+//! ein Blatt ohne Markierungen ergibt Byte für Byte die Datei von vorher (gleiche Zähler,
+//! gleiche Handles). Neue Einträge hängen hinten an ihre Tabelle an und bekommen Handles in
+//! Schreibreihenfolge wie alle anderen.
+//!
+//! * Ebenen (je Farbe, Linienart, Linienstärke, Verweis 390 auf den Plotstil-Platzhalter wie
+//!   die alten Ebenen): `MASSE` (Maße; 7, `CONTINUOUS`, 25), `MITTEL` (Mittellinien; 7,
+//!   `CENTER`, 25), `MASSE_FEHLT` (Maße mit verlorenem Bezug; 1 = rot, `CONTINUOUS`, 25).
+//! * Linienart `CENTER` (nur mit `MITTEL`): Strich 12, Lücke 3, Strich 2, Lücke 3 mm
+//!   (`72 65`, `73 4`, `40 20`, je Element `49` Länge und `74 0`).
+//! * `Mark::Line` → `LINE`. `Mark::Arc` → `ARC` wie die Bögen der Linien (Grad, normalisiert,
+//!   voller Umlauf als `CIRCLE`; Radius ≤ 0 wird ausgelassen).
+//! * `Mark::Arrow` → `SOLID` (`100 AcDbTrace`): DXF füllt die Ecken in der Reihenfolge 1, 2, 4,
+//!   3; das Dreieck hat deshalb Ecke 1 = Spitze, Ecken 2 und 3 am Fuß, Ecke 4 = Ecke 3. Dicke
+//!   `39 0`.
+//! * `Mark::Text` → `TEXT`: `100 AcDbText`, Einfügepunkt 10/20/30, Höhe 40, Text 1, Drehung 50
+//!   in Grad (`[0, 360)`), Stil `7 STANDARD`, waagerechte Ausrichtung 72 (0 Anfang, 1 Mitte,
+//!   2 Ende) mit Ausrichtepunkt 11/21/31 = Einfügepunkt, dann `100 AcDbText` und `73 0`
+//!   (Grundlinie). Zeichen: `Ø` → `%%c`, `°` → `%%d`, `±` → `%%p`, `−` (U+2212) → `-`, `^` →
+//!   `^ ` (sonst ein Steuerzeichen-Kürzel), `%` → `%%%` und `\` → `\U+005C` (eigene Texte
+//!   bilden so keine Kürzel wie `%%c` oder `\U+…`; `\U+0025` hilft bei `%` nicht, weil
+//!   CAD-Programme `\U+…` beim Laden, `%%…` erst beim Anzeigen auflösen), Steuerzeichen →
+//!   Leerzeichen, übrige Zeichen außerhalb
+//!   von ASCII → `\U+XXXX`, außerhalb der Grundebene → `?`. Höchstens 255 Zeichen in der Datei;
+//!   ein längerer Text ist der Fehler `Unsupported("Der Maßtext ist zu lang.")`, und es wird
+//!   nichts geschrieben. Nicht endliche Zahlen sind wie überall `NonFinite`.
+//!
+//! Handtest in Fusion 360 (nach jeder Änderung am Aufbau): Datei mit Maßen, verlorenem Maß und
+//! Mittellinien öffnen; prüfen, dass die Datei ohne Meldung geladen wird, die Ebenen `MASSE`,
+//! `MITTEL`, `MASSE_FEHLT` erscheinen, Texte (auch `%%c`, `%%d`, `%%p`) richtig und an der
+//! richtigen Stelle stehen, Pfeile gefüllte Dreiecke sind und die Mittellinien strichpunktiert.
 
 use crate::Visibility;
+use crate::annotate::{ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, Mark, MarkKind, TextAnchor};
 use crate::error::DrawError;
 use crate::out2d::Out2d;
 use crate::sheet::SheetModel;
@@ -72,6 +108,11 @@ use std::io::Write;
 
 const LAYER_VISIBLE: &str = "SICHTBAR";
 const LAYER_HIDDEN: &str = "VERDECKT";
+const LAYER_DIM: &str = "MASSE";
+const LAYER_CENTER: &str = "MITTEL";
+const LAYER_LOST: &str = "MASSE_FEHLT";
+/// Höchstlänge eines Maßtexts in der Datei (Zeichen, nach der Verschlüsselung).
+const MAX_TEXT_LEN: usize = 255;
 /// Nachkommastellen aller Zahlen der Datei.
 const DECIMALS: usize = 9;
 /// Höchstlänge eines Namens in der Datei (Zeichen, nach der Verschlüsselung).
@@ -124,6 +165,7 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
     let (dict_plot, placeholder) = (hs.next(), hs.next());
     t.plot_placeholder = placeholder;
 
+    let used = UsedKinds::of(model);
     let mut tables = Out::new();
     write_tables(
         &mut tables,
@@ -133,6 +175,7 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
         &names,
         [br_model, br_paper],
         &br_views,
+        used,
     )?;
 
     let mut blocks = Out::new();
@@ -468,6 +511,45 @@ fn header(w: f64, h: f64, handseed: u64) -> Result<String, DrawError> {
     Ok(o.s)
 }
 
+/// Welche Arten von Markierungen auf dem Blatt vorkommen (bestimmt Ebenen und Linienart).
+#[derive(Clone, Copy, Debug, Default)]
+struct UsedKinds {
+    dim: bool,
+    center: bool,
+    lost: bool,
+}
+
+impl UsedKinds {
+    fn of(model: &SheetModel) -> UsedKinds {
+        let mut u = UsedKinds::default();
+        for m in model.views.iter().flat_map(|v| &v.marks) {
+            match mark_kind(m) {
+                MarkKind::Dimension => u.dim = true,
+                MarkKind::CenterLine => u.center = true,
+                MarkKind::Lost => u.lost = true,
+            }
+        }
+        u
+    }
+}
+
+fn mark_kind(m: &Mark) -> MarkKind {
+    match m {
+        Mark::Line { kind, .. }
+        | Mark::Arrow { kind, .. }
+        | Mark::Arc { kind, .. }
+        | Mark::Text { kind, .. } => *kind,
+    }
+}
+
+fn mark_layer(kind: MarkKind) -> &'static str {
+    match kind {
+        MarkKind::Dimension => LAYER_DIM,
+        MarkKind::CenterLine => LAYER_CENTER,
+        MarkKind::Lost => LAYER_LOST,
+    }
+}
+
 struct TableHandles {
     vport: u64,
     ltype: u64,
@@ -482,6 +564,7 @@ struct TableHandles {
     plot_placeholder: u64,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_tables(
     o: &mut Out,
     hs: &mut Handles,
@@ -490,6 +573,7 @@ fn write_tables(
     names: &[String],
     [br_model, br_paper]: [u64; 2],
     br_views: &[u64],
+    used: UsedKinds,
 ) -> Result<(), DrawError> {
     // VPORT: eine aktive Ansicht, die das ganze Blatt zeigt.
     o.table_head("VPORT", t.vport, 1);
@@ -535,8 +619,9 @@ fn write_tables(
     }
     o.end_table();
 
-    // LTYPE: ByBlock, ByLayer, CONTINUOUS, HIDDEN (Strich 3 mm, Lücke 1 mm).
-    o.table_head("LTYPE", t.ltype, 4);
+    // LTYPE: ByBlock, ByLayer, CONTINUOUS, HIDDEN (Strich 3 mm, Lücke 1 mm), CENTER nur mit
+    // Mittellinien.
+    o.table_head("LTYPE", t.ltype, 4 + usize::from(used.center));
     for (name, desc) in [
         ("ByBlock", ""),
         ("ByLayer", ""),
@@ -561,19 +646,44 @@ fn write_tables(
     o.int(74, 0);
     o.num(49, -1.0)?;
     o.int(74, 0);
+    if used.center {
+        // Strichpunkt: Strich, Lücke, kurzer Strich, Lücke (Lücken negativ).
+        o.record_head("LTYPE", hs.next(), t.ltype, "AcDbLinetypeTableRecord");
+        o.text(2, "CENTER");
+        o.int(70, 0);
+        o.text(3, "Center ____ _ ____ _ ____ _ ____");
+        o.int(72, 65);
+        o.int(73, CENTER_PATTERN.len() as i64);
+        o.num(40, CENTER_PATTERN.iter().sum())?;
+        for (i, len) in CENTER_PATTERN.iter().enumerate() {
+            o.num(49, if i % 2 == 0 { *len } else { -*len })?;
+            o.int(74, 0);
+        }
+    }
     o.end_table();
 
-    // LAYER: 0, SICHTBAR (0,5 mm), VERDECKT (0,25 mm, gestrichelt).
-    o.table_head("LAYER", t.layer, 3);
-    for (name, ltype, weight) in [
-        ("0", "CONTINUOUS", -3),
-        (LAYER_VISIBLE, "CONTINUOUS", 50),
-        (LAYER_HIDDEN, "HIDDEN", 25),
+    // LAYER: 0, SICHTBAR (0,5 mm), VERDECKT (0,25 mm, gestrichelt); dahinter die Ebenen der
+    // Markierungen, die vorkommen.
+    let mut layers = vec![
+        ("0", "CONTINUOUS", 7, -3),
+        (LAYER_VISIBLE, "CONTINUOUS", 7, 50),
+        (LAYER_HIDDEN, "HIDDEN", 7, 25),
+    ];
+    for (on, layer) in [
+        (used.dim, (LAYER_DIM, "CONTINUOUS", 7, 25)),
+        (used.center, (LAYER_CENTER, "CENTER", 7, 25)),
+        (used.lost, (LAYER_LOST, "CONTINUOUS", 1, 25)),
     ] {
+        if on {
+            layers.push(layer);
+        }
+    }
+    o.table_head("LAYER", t.layer, layers.len());
+    for (name, ltype, color, weight) in layers {
         o.record_head("LAYER", hs.next(), t.layer, "AcDbLayerTableRecord");
         o.text(2, name);
         o.int(70, 0);
-        o.int(62, 7);
+        o.int(62, color);
         o.text(6, ltype);
         o.int(370, weight);
         o.text(390, &hex(t.plot_placeholder));
@@ -680,6 +790,9 @@ fn write_blocks(
                 Visibility::Hidden => LAYER_HIDDEN,
             };
             write_curve(o, hs, br, layer, &line.curve)?;
+        }
+        for m in &view.marks {
+            write_mark(o, hs, br, m)?;
         }
         block_end(o, hs.next(), br, false);
     }
@@ -892,4 +1005,118 @@ fn write_curve(
             Ok(())
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Markierungen (Maße, Mittellinien)
+// ---------------------------------------------------------------------------------------------
+
+/// Eine Markierung als Objekt im Block `owner` (siehe Modulkommentar).
+fn write_mark(o: &mut Out, hs: &mut Handles, owner: u64, m: &Mark) -> Result<(), DrawError> {
+    let layer = mark_layer(mark_kind(m));
+    match m {
+        Mark::Line { a, b, .. } => write_curve(o, hs, owner, layer, &Out2d::Line { a: *a, b: *b }),
+        Mark::Arc {
+            center,
+            r,
+            start,
+            end,
+            ..
+        } => {
+            let arc = Out2d::Arc {
+                c: *center,
+                r: *r,
+                start: *start,
+                end: *end,
+            };
+            if !arc.is_finite() {
+                return Err(DrawError::NonFinite);
+            }
+            if *r <= 0.0 {
+                return Ok(());
+            }
+            write_curve(o, hs, owner, layer, &arc)
+        }
+        Mark::Arrow { tip, dir, .. } => {
+            if !(tip.is_finite() && dir.is_finite()) {
+                return Err(DrawError::NonFinite);
+            }
+            let base = *tip + *dir * ARROW_LEN;
+            let perp = DVec2::new(-dir.y, dir.x) * ARROW_HALF_W;
+            let (p, q) = (base + perp, base - perp);
+            // DXF füllt 1, 2, 4, 3: Dreieck mit gleicher dritter und vierter Ecke.
+            o.entity_head("SOLID", hs.next(), owner, layer);
+            o.text(100, "AcDbTrace");
+            o.point(10, *tip)?;
+            o.point(11, p)?;
+            o.point(12, q)?;
+            o.point(13, q)?;
+            o.num(39, 0.0)
+        }
+        Mark::Text {
+            pos,
+            height,
+            angle,
+            anchor,
+            text,
+            ..
+        } => {
+            if !(pos.is_finite() && height.is_finite() && angle.is_finite()) {
+                return Err(DrawError::NonFinite);
+            }
+            let encoded = encode_text(text);
+            if encoded.len() > MAX_TEXT_LEN {
+                return Err(DrawError::Unsupported("Der Maßtext ist zu lang.".into()));
+            }
+            let align = match anchor {
+                TextAnchor::Start => 0,
+                TextAnchor::Middle => 1,
+                TextAnchor::End => 2,
+            };
+            o.entity_head("TEXT", hs.next(), owner, layer);
+            o.text(100, "AcDbText");
+            o.point(10, *pos)?;
+            o.num(40, *height)?;
+            o.text(1, &encoded);
+            o.text(50, &degrees(*angle)?);
+            o.text(7, "STANDARD");
+            o.int(72, align);
+            o.point(11, *pos)?;
+            o.text(100, "AcDbText");
+            o.int(73, 0);
+            Ok(())
+        }
+    }
+}
+
+/// Passt der Text eines Maßes in ein `TEXT` der Datei (höchstens 255 Zeichen in der
+/// Schreibweise der Datei)? Sonst scheitert das Schreiben mit
+/// `Unsupported("Der Maßtext ist zu lang.")`; so lässt es sich vorher prüfen.
+pub fn dxf_text_fits(text: &str) -> bool {
+    encode_text(text).len() <= MAX_TEXT_LEN
+}
+
+/// Inhalt eines `TEXT` in der Schreibweise der Datei (nur ASCII, siehe Modulkommentar).
+fn encode_text(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\u{d8}' => o.push_str("%%c"),
+            '\u{b0}' => o.push_str("%%d"),
+            '\u{b1}' => o.push_str("%%p"),
+            '\u{2212}' => o.push('-'),
+            '^' => o.push_str("^ "),
+            // Eigene Texte dürfen keine Kürzel bilden. `%` steht als `%%%` (das Kürzel für ein
+            // einzelnes Prozentzeichen): CAD-Programme lösen `\U+…` schon beim Laden auf, `%%…`
+            // erst beim Anzeigen; ein `\U+0025` würde also vor einem `%%c` wieder zu `%` und mit
+            // ihm ein Kürzel bilden. `\` steht als `\U+005C` (sonst wie in `\U+…`).
+            '%' => o.push_str("%%%"),
+            '\\' => o.push_str("\\U+005C"),
+            c if c.is_control() => o.push(' '),
+            c if c.is_ascii() => o.push(c),
+            c if (c as u32) <= 0xFFFF => o.push_str(&format!("\\U+{:04X}", c as u32)),
+            _ => o.push('?'),
+        }
+    }
+    o
 }

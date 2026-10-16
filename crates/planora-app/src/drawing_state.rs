@@ -10,6 +10,7 @@
 use crate::export_dialog::shorten_for_display;
 use crate::jobs::{Job, Poll};
 use crate::state::{Body, BodyKind};
+use planora_drawing::dimension::DimId;
 use planora_drawing::{
     Basis, DrawBody, DrawError, Drawing, DrawingId, Projection, Scale, Sheet, ViewId, ViewKind,
     ViewLines, compute_view,
@@ -90,6 +91,13 @@ struct Entry {
 pub struct DrawingUi {
     pub area: WorkArea,
     pub selected_view: Option<ViewId>,
+    /// Im Zeichnungsbereich gewähltes Maß (schließt eine gewählte Ansicht aus).
+    pub selected_dim: Option<DimId>,
+    /// Letzte Meldung zu den Maßen (etwa nach „Maße vorschlagen“) für die Hinweiszeile.
+    pub dim_message: Option<String>,
+    /// Stand zur Meldung (Änderungszähler, gewählte Ansicht, gewähltes Maß); weicht der
+    /// aktuelle Stand ab, verfällt die Meldung.
+    pub dim_message_key: Option<(u64, Option<ViewId>, Option<DimId>)>,
     /// Im Browser gewählte Zeichnung (unabhängig davon, ob sie geöffnet ist).
     pub selected_drawing: Option<DrawingId>,
     pub zoom: f32,
@@ -108,6 +116,9 @@ impl Default for DrawingUi {
         DrawingUi {
             area: WorkArea::Model,
             selected_view: None,
+            selected_dim: None,
+            dim_message: None,
+            dim_message_key: None,
             selected_drawing: None,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
@@ -169,6 +180,9 @@ impl DrawingUi {
 
     fn reset_sheet_view(&mut self) {
         self.selected_view = None;
+        self.selected_dim = None;
+        self.dim_message = None;
+        self.dim_message_key = None;
         self.zoom = 1.0;
         self.pan = egui::Vec2::ZERO;
     }
@@ -209,6 +223,7 @@ impl DrawingUi {
         let Some(drawing) = document.drawing(id) else {
             self.area = WorkArea::Model;
             self.selected_view = None;
+            self.selected_dim = None;
             // Die Zeichnung gibt es nicht mehr: eine neue mit derselben Kennung (anderes
             // Dokument) beginnt frisch.
             self.last_drawing = None;
@@ -223,6 +238,12 @@ impl DrawingUi {
             .is_some_and(|v| drawing.view(v).is_none())
         {
             self.selected_view = None;
+        }
+        if self
+            .selected_dim
+            .is_some_and(|m| drawing.dimension(m).is_none())
+        {
+            self.selected_dim = None;
         }
         let mut needed: Vec<ViewKind> = Vec::new();
         for v in &drawing.views {

@@ -1,4 +1,4 @@
-//! Die Typen der Versionsdatei (Format 1 bis 4). Unabhängig von den internen Strukturen.
+//! Die Typen der Versionsdatei (Format 1 bis 5). Unabhängig von den internen Strukturen.
 //! Absichtlich ohne `deny_unknown_fields`: unbekannte Felder in bekannten Versionen werden
 //! ignoriert.
 
@@ -83,6 +83,19 @@ fn de_views<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<AnsichtDto>, D
     de_bounded(d, MAX_FILE_VIEWS, "Ansichten")
 }
 
+/// Höchstzahl der Maße je Zeichnung, die beim Lesen überhaupt angenommen wird.
+pub const MAX_FILE_DIMENSIONS: usize = planora_drawing::limits::MAX_DIMENSIONS;
+/// Höchstzahl der Bezüge je Maß, die beim Lesen überhaupt angenommen wird.
+pub const MAX_FILE_DIM_REFS: usize = 4;
+
+fn de_dims<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<MassDto>, D::Error> {
+    de_bounded(d, MAX_FILE_DIMENSIONS, "Maße")
+}
+
+fn de_refs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<BezugDto>, D::Error> {
+    de_bounded(d, MAX_FILE_DIM_REFS, "Bezüge")
+}
+
 /// Eine Zeichnung (ab Format 4).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ZeichnungDto {
@@ -96,6 +109,17 @@ pub struct ZeichnungDto {
     pub naechste_ansicht: u64,
     #[serde(deserialize_with = "de_views")]
     pub ansichten: Vec<AnsichtDto>,
+    /// Maße (ab Format 5). Fehlt das Feld oder ist die Liste leer, bleibt die Zeichnung Byte
+    /// für Byte wie in Format 4. Schon beim Lesen begrenzt.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "de_dims"
+    )]
+    pub masse: Vec<MassDto>,
+    /// Nächste Maßkennung (ab Format 5); 0 oder fehlend heißt „aus den Kennungen ableiten“.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub naechstes_mass: u64,
 }
 
 /// Blatt: Papier `"A4"` bis `"A0"`, quer oder hoch.
@@ -115,6 +139,79 @@ pub struct AnsichtDto {
     pub lage: LageDto,
     pub verdeckt_zeigen: bool,
     pub eltern: Option<u64>,
+    /// Mittellinien zeigen (ab Format 5). Fehlt das Feld, gilt „aus“; in Format 1 bis 4 wird
+    /// es nicht geschrieben (alte Dateien Byte für Byte).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mittellinien: Option<bool>,
+}
+
+/// Ein Maß (ab Format 5). `art`: `"waagerecht"`, `"senkrecht"`, `"schraeg"`,
+/// `"durchmesser"`, `"radius"`, `"winkel"`; `abstand` und `textversatz` in Blatt-mm, `winkel`
+/// (Führungslinie bei Ø/R) in Grad; `stellen`: Nachkommastellen; `text`: eigener Text statt
+/// des Werts.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct MassDto {
+    pub id: u64,
+    pub ansicht: u64,
+    pub art: String,
+    #[serde(deserialize_with = "de_refs")]
+    pub bezuege: Vec<BezugDto>,
+    pub abstand: f64,
+    pub winkel: f64,
+    pub textversatz: [f64; 2],
+    pub toleranz: ToleranzDto,
+    pub stellen: u8,
+    pub text: Option<String>,
+    pub kette: Option<KetteDto>,
+    pub vorgeschlagen: bool,
+}
+
+/// Bezug eines Maßes: Kante (zwei Flächenmarken `a`, `b` und Hinweispunkt), Kantenende
+/// (dazu `ende`: `"anfang"` oder `"ende"`), Mitte eines Kreises oder Bogens (Kante) oder
+/// Fläche (eine Marke).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum BezugDto {
+    Kante {
+        a: FaceRefDto,
+        b: FaceRefDto,
+        hinweis: V3,
+    },
+    Kantenende {
+        a: FaceRefDto,
+        b: FaceRefDto,
+        hinweis: V3,
+        ende: String,
+    },
+    Mitte {
+        a: FaceRefDto,
+        b: FaceRefDto,
+        hinweis: V3,
+    },
+    Flaeche {
+        marke: FaceRefDto,
+    },
+}
+
+/// Toleranz eines Maßes in mm. `abmasse` und `grenzmasse` tragen beide die **Abweichungen**
+/// vom Nennmaß (`oben`, `unten`); `grenzmasse` zeigt daraus Höchst- und Mindestmaß.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum ToleranzDto {
+    Keine,
+    Symmetrisch { wert: f64 },
+    Abmasse { oben: f64, unten: f64 },
+    Grenzmasse { oben: f64, unten: f64 },
+    Passung { text: String },
+}
+
+/// Zugehörigkeit zu einer Maßkette: Gruppe, `modus` `"kette"` (gemeinsame Maßlinie) oder
+/// `"bezug"` (gestapelte Maßlinien) und Stelle in der Gruppe.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct KetteDto {
+    pub gruppe: u64,
+    pub modus: String,
+    pub reihenfolge: u32,
 }
 
 /// Lage einer Ansicht in mm (eigenes Objekt mit Schlüssel `typ` wie die übrigen Arten).

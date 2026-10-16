@@ -28,7 +28,7 @@ fn name_key(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
-/// Prüft eine einzelne Zeichnung (Name, Ansichten, Verweise, Zahlen).
+/// Prüft eine einzelne Zeichnung (Name, Ansichten, Verweise, Zahlen, Maße).
 pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
     if d.name.trim().is_empty() {
         return Err("Die Zeichnung braucht einen Namen".into());
@@ -98,7 +98,7 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
         }
         seen.push(v.id);
     }
-    Ok(())
+    crate::dimensions::validate_dimensions(d)
 }
 
 impl Document {

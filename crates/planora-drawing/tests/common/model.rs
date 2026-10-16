@@ -1851,3 +1851,76 @@ pub fn slanted_slot(base: &Solid, at: DVec3, r: f64, s: f64, beta_deg: f64) -> S
     let slab = translated(&slab, at);
     boolean_op(base, &slab, planora_kernel::BoolOp::Difference)
 }
+
+/// Zylinder (Radius `r`, Höhe `h`, Achse Z, Boden im Ursprung) mit einer Sackbohrung auf
+/// derselben Achse von oben (Radius `hole_r`, Tiefe `depth`): Drehkörper des Schnitts
+/// `(0,0) → (r,0) → (r,h) → (hole_r,h) → (hole_r,h − depth) → (0,h − depth)`. Kreiskanten: Boden
+/// (r, z = 0), Deckelrand (r, z = h), Bohrungsrand (hole_r, z = h), Bohrungsgrund
+/// (hole_r, z = h − depth) – alle konzentrisch.
+pub fn cylinder_with_blind_hole(r: f64, h: f64, hole_r: f64, depth: f64) -> Solid {
+    let chain = ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![
+            Segment::Line {
+                to: DVec2::new(r, 0.0),
+            },
+            Segment::Line {
+                to: DVec2::new(r, h),
+            },
+            Segment::Line {
+                to: DVec2::new(hole_r, h),
+            },
+            Segment::Line {
+                to: DVec2::new(hole_r, h - depth),
+            },
+            Segment::Line {
+                to: DVec2::new(0.0, h - depth),
+            },
+        ],
+    };
+    let s = revolve(&chain, &Frame::WORLD, &tol()).unwrap();
+    validate(&s).expect("Zylinder mit Sackbohrung ist gültig");
+    s
+}
+
+/// Zylinder aus [`cylinder_solid`], dessen Kreiskanten und Zylinderfläche kaputte Zahlen tragen:
+/// Kantenradien `edge_r`, Flächenradius `face_r` (etwa 0 oder NaN). Nicht geprüft (absichtlich
+/// ungültig) – nur für die Mittellinien, die daran nicht abstürzen dürfen.
+pub fn cylinder_with_bad_numbers(edge_r: f64, face_r: f64) -> Solid {
+    let mut s = cylinder_solid(5.0, 12.0);
+    let ids: Vec<Id<Edge>> = s.edges.iter().map(|(id, _)| id).collect();
+    for id in ids {
+        if let Curve::Circle { radius, .. } = &mut s.edges[id].curve {
+            *radius = edge_r;
+        }
+    }
+    let ids: Vec<Id<Face>> = s.faces.iter().map(|(id, _)| id).collect();
+    for id in ids {
+        if let Surface::Cylinder { radius, .. } = &mut s.faces[id].surface {
+            *radius = face_r;
+        }
+    }
+    s
+}
+
+/// Mittellinien-Sollgeometrie eines Grundkörpers der Prüfreihe aus seinen Erzeugungsdaten:
+/// Achsen (Punkt, Weltachse 0/1/2, Höhenbereich `[0, h]` ab `base`) der Zylinder und Kegel und
+/// Mittelpunkte der Kugeln. Eigene Rechnung, ohne Code aus `planora-drawing`.
+pub enum PrimCenter {
+    Axis { base: DVec3, axis: usize, h: f64 },
+    Point { c: DVec3 },
+}
+
+/// Sollgeometrie aller Grundkörper eines Formelmodells (Quader liefern nichts).
+pub fn prim_centers(csg: &Csg) -> Vec<PrimCenter> {
+    csg.parts
+        .iter()
+        .filter_map(|(p, _)| match *p {
+            Prim::Box { .. } => None,
+            Prim::Cylinder { axis, base, h, .. } | Prim::Cone { axis, base, h, .. } => {
+                Some(PrimCenter::Axis { base, axis, h })
+            }
+            Prim::Sphere { c, .. } => Some(PrimCenter::Point { c }),
+        })
+        .collect()
+}

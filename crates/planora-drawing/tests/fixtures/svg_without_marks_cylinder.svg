@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="420mm" height="297mm" viewBox="0 0 420 297">
+<rect x="10" y="10" width="400" height="277" fill="none" stroke="#000" stroke-width="0.5"/>
+<g transform="matrix(1 0 0 -1 0 297)">
+<g id="Vorne">
+<path d="M 92 194 L 108 194 M 92 206 L 108 206 M 92 194 L 92 206 M 108 194 L 108 206" stroke="#000" stroke-width="0.5" fill="none" stroke-linecap="round"/>
+</g>
+<g id="Isometrisch">
+<path d="M 284 140.202041 A 16 9.237604 0 0 1 300 130.964437 A 16 9.237604 0 0 1 316 140.202041 M 311.313708 153.265986 A 16 9.237604 0 0 1 311.313708 166.329932 A 16 9.237604 0 0 1 288.686292 166.329932 A 16 9.237604 0 0 1 288.686292 153.265986 A 16 9.237604 0 0 1 311.313708 153.265986 M 284 140.202041 L 284 159.797959 M 316 140.202041 L 316 159.797959" stroke="#000" stroke-width="0.5" fill="none" stroke-linecap="round"/>
+</g>
+</g>
+</svg>

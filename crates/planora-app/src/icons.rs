@@ -198,3 +198,64 @@ pub fn paint_view_icon(painter: &Painter, rect: Rect, color: Color32) {
         Stroke::new(1.0, color),
     );
 }
+
+/// Symbol einer Maßart für die Zeilen im Abschnitt „Maße“: Maßlinie mit Pfeilspitzen
+/// (waagerecht, senkrecht, schräg), Kreis mit Strich (Durchmesser), Kreisbogen mit Strecke
+/// (Radius), zwei Strahlen mit Bogen (Winkel).
+pub fn paint_dimension_icon(
+    kind: planora_drawing::dimension::DimKind,
+) -> impl FnOnce(&Painter, Rect, Color32) {
+    use planora_drawing::dimension::DimKind;
+    move |painter, rect, color| {
+        let stroke = Stroke::new(1.5, color);
+        let thin = Stroke::new(1.0, color);
+        let c = rect.center();
+        let r = rect.width().min(rect.height()) * 0.36;
+        // Maßlinie von `a` nach `b` mit kleinen Pfeilspitzen an beiden Enden.
+        let dim_line = |a: Pos2, b: Pos2| {
+            painter.line_segment([a, b], stroke);
+            let d = (b - a).normalized();
+            let n = vec2(-d.y, d.x) * 2.5;
+            for (tip, back) in [(a, d), (b, -d)] {
+                let base = tip + back * 4.0;
+                painter.line_segment([tip, base + n], stroke);
+                painter.line_segment([tip, base - n], stroke);
+            }
+        };
+        match kind {
+            DimKind::Horizontal => {
+                dim_line(c + vec2(-r, 0.0), c + vec2(r, 0.0));
+                painter.line_segment([c + vec2(-r, -r * 0.8), c + vec2(-r, r * 0.8)], thin);
+                painter.line_segment([c + vec2(r, -r * 0.8), c + vec2(r, r * 0.8)], thin);
+            }
+            DimKind::Vertical => {
+                dim_line(c + vec2(0.0, -r), c + vec2(0.0, r));
+                painter.line_segment([c + vec2(-r * 0.8, -r), c + vec2(r * 0.8, -r)], thin);
+                painter.line_segment([c + vec2(-r * 0.8, r), c + vec2(r * 0.8, r)], thin);
+            }
+            DimKind::Aligned => {
+                dim_line(c + vec2(-r, r * 0.7), c + vec2(r, -r * 0.7));
+            }
+            DimKind::Diameter => {
+                painter.circle_stroke(c, r, stroke);
+                painter.line_segment([c + vec2(-r, r) * 1.15, c + vec2(r, -r) * 1.15], thin);
+            }
+            DimKind::Radius => {
+                painter.circle_stroke(c, r, thin);
+                painter.line_segment([c, c + vec2(r, -r) * 0.99], stroke);
+            }
+            DimKind::Angle => {
+                let o = c + vec2(-r, r * 0.8);
+                painter.line_segment([o, o + vec2(r * 2.0, 0.0)], stroke);
+                painter.line_segment([o, o + vec2(r * 1.6, -r * 1.4)], stroke);
+                let pts: Vec<Pos2> = (0..=6_i32)
+                    .map(|i| {
+                        let t = -0.72 * (i as f32) / 6.0;
+                        o + vec2(t.cos(), t.sin()) * r
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(pts, thin));
+            }
+        }
+    }
+}
