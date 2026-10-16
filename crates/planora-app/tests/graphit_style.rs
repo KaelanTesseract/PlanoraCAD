@@ -1,0 +1,510 @@
+//! Graphit-Stil in Menüs, Tab-Leiste, Browser, Fenstern und Leisten (Etappe A, Aufgabe 5):
+//! Symbole und getrennte Tastenkürzel im Menü, 24 px hohe Zeilen mit neutraler Auswahl, der
+//! Graphit-Rahmen der Fenster, nichts abgeschnitten bei 1400 px und beide Themen ohne Reste
+//! alter Farben.
+
+use egui::epaint::{ClippedShape, Shape};
+use egui::{Color32, FontFamily, Pos2, Rect, vec2};
+use planora_app::create_dialog::CreateDialog;
+use planora_app::export_dialog::ExportDialog;
+use planora_app::icons::{self, Icon};
+use planora_app::state::{AppState, StandardPlane};
+use planora_app::workspace::{Prompt, Workspace};
+use planora_app::{app, browser, dock, drawing_view, fonts, prompts, properties, sketch_panel};
+use planora_app::{tabs, theme};
+use planora_drawing::{Paper, Placement, Projection, Scale, Sheet, ViewKind};
+use planora_feature::SketchPlane;
+use planora_math::DVec3;
+use planora_project::config::Config;
+use planora_project::fsutil::new_id;
+use planora_project::library::Library;
+
+/// Fensterbreite der Prüfung auf Abschneiden.
+const WIDTH: f32 = 1400.0;
+const HEIGHT: f32 = 900.0;
+
+/// Alte Flächenfarben vor Graphit (dürfen nirgends mehr vorkommen).
+const OLD_COLORS: [Color32; 2] = [
+    Color32::from_rgb(0x1e, 0x21, 0x27),
+    Color32::from_rgb(0x25, 0x28, 0x30),
+];
+
+/// Kontext mit Schriften; mit `Some(dark)` auch mit dem Graphit-Theme.
+fn context(theme_dark: Option<bool>) -> egui::Context {
+    let c = egui::Context::default();
+    c.set_fonts(fonts::definitions());
+    if let Some(dark) = theme_dark {
+        theme::apply(&c, dark);
+    }
+    c
+}
+
+fn input(width: f32) -> egui::RawInput {
+    // Jedes Bild eine Sekunde später: Einblendungen neuer Fenster sind dann abgeschlossen.
+    thread_local!(static TIME: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) });
+    let time = TIME.with(|t| {
+        t.set(t.get() + 1.0);
+        t.get()
+    });
+    egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, HEIGHT))),
+        time: Some(time),
+        ..Default::default()
+    }
+}
+
+fn workspace() -> Workspace {
+    let root = std::env::temp_dir().join(format!("planora-graphit-{}", new_id()));
+    Workspace::new(Some(Library::open(&root).unwrap()), Config::default())
+}
+
+/// Ein gezeichneter Text: Inhalt, Lage, Farbe (Platzhalter aufgelöst), Familie, Ausschnitt.
+#[derive(Debug, Clone)]
+struct Seen {
+    text: String,
+    rect: Rect,
+    color: Color32,
+    family: FontFamily,
+    clip: Rect,
+}
+
+/// Eine gefüllte Fläche mit Rand.
+#[derive(Debug, Clone, Copy)]
+struct Fill {
+    rect: Rect,
+    fill: Color32,
+    stroke: egui::Stroke,
+    radius: egui::CornerRadius,
+}
+
+fn walk(shape: &Shape, clip: Rect, texts: &mut Vec<Seen>, fills: &mut Vec<Fill>) {
+    match shape {
+        Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, texts, fills)),
+        Shape::Text(t) => {
+            let section = t.galley.job.sections.first();
+            let mut color = section.map_or(t.fallback_color, |s| s.format.color);
+            if color == Color32::PLACEHOLDER {
+                color = t.fallback_color;
+            }
+            if let Some(c) = t.override_text_color {
+                color = c;
+            }
+            texts.push(Seen {
+                text: t.galley.text().to_string(),
+                rect: Rect::from_min_size(t.pos, t.galley.size()),
+                color,
+                family: section.map_or(FontFamily::Proportional, |s| {
+                    s.format.font_id.family.clone()
+                }),
+                clip,
+            });
+        }
+        Shape::Rect(r) => fills.push(Fill {
+            rect: r.rect,
+            fill: r.fill,
+            stroke: r.stroke,
+            radius: r.corner_radius,
+        }),
+        _ => {}
+    }
+}
+
+struct Shot {
+    texts: Vec<Seen>,
+    fills: Vec<Fill>,
+}
+
+impl Shot {
+    fn of(shapes: &[ClippedShape]) -> Shot {
+        let (mut texts, mut fills) = (Vec::new(), Vec::new());
+        for c in shapes {
+            walk(&c.shape, c.clip_rect, &mut texts, &mut fills);
+        }
+        Shot { texts, fills }
+    }
+
+    fn text(&self, exact: &str) -> &Seen {
+        self.texts
+            .iter()
+            .find(|t| t.text == exact)
+            .unwrap_or_else(|| panic!("„{exact}“ fehlt in {:#?}", self.names()))
+    }
+
+    fn names(&self) -> Vec<&str> {
+        self.texts.iter().map(|t| t.text.as_str()).collect()
+    }
+}
+
+fn shot(c: &egui::Context, width: f32, f: impl FnMut(&mut egui::Ui)) -> Shot {
+    let out = c.run_ui(input(width), f);
+    let s = Shot::of(&out.shapes);
+    out.drop_without_applying_deltas();
+    s
+}
+
+/// Zwei Texte stehen in derselben Zeile.
+fn same_row(a: &Seen, b: &Seen) -> bool {
+    (a.rect.center().y - b.rect.center().y).abs() < 4.0
+}
+
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn menu_entries_have_icons_and_separate_shortcuts() {
+    let c = context(Some(true));
+    let mut ws = workspace();
+    // Wie im Menü: Einträge untereinander über die ganze Menübreite.
+    let s = shot(&c, WIDTH, |ui| {
+        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+            ui.set_width(280.0);
+            theme::menu_style(ui.style_mut());
+            app::file_menu(ui, &mut ws);
+        });
+    });
+    let neu = s.text("Neu");
+    let glyph = icons::glyph(Icon::New).to_string();
+    let icon = s
+        .texts
+        .iter()
+        .find(|t| t.text == glyph)
+        .unwrap_or_else(|| panic!("Symbol „Neu“ fehlt: {:#?}", s.names()));
+    assert_eq!(icon.family, fonts::icons(), "Symbol in der Symbolschrift");
+    assert!(same_row(icon, neu) && icon.rect.right() <= neu.rect.left());
+    let short = s.text("Strg+N");
+    assert!(same_row(short, neu), "{short:?} / {neu:?}");
+    assert!(short.rect.left() > neu.rect.right() + 20.0, "Kürzel rechts");
+    // Keine aufgefüllte Spalte aus Leerzeichen, kein Kürzel im Beschriftungstext.
+    for t in &s.texts {
+        assert!(
+            !t.text.contains("  "),
+            "Leerzeichen-Kolonne in {:?}",
+            t.text
+        );
+        assert!(
+            t.text == "Strg+N" || t.text.starts_with("Strg+") || !t.text.contains("Strg"),
+            "Kürzel im Text: {:?}",
+            t.text
+        );
+    }
+    // Alle Kürzel rechtsbündig.
+    let rights: Vec<f32> = ["Strg+N", "Strg+O", "Strg+S", "Strg+Umschalt+E", "Strg+W"]
+        .iter()
+        .map(|k| s.text(k).rect.right())
+        .collect();
+    for r in &rights {
+        assert!((r - rights[0]).abs() < 1.0, "{rights:?}");
+    }
+    // Jeder Eintrag hat ein Symbol links in seiner Zeile.
+    for label in [
+        "Öffnen …",
+        "Speichern",
+        "Speichern unter …",
+        "Exportieren …",
+        "Netz importieren …",
+        "Schließen",
+        "Beenden",
+    ] {
+        let l = s.text(label);
+        assert!(
+            s.texts
+                .iter()
+                .any(|t| t.family == fonts::icons() && same_row(t, l)),
+            "kein Symbol bei „{label}“"
+        );
+    }
+}
+
+#[test]
+fn browser_rows_are_24_high_and_use_theme_colors() {
+    for dark in [true, false] {
+        let c = context(Some(dark));
+        let p = theme::palette(dark);
+        let mut st = AppState::new();
+        st.create_box(DVec3::splat(10.0)).unwrap();
+        let id = st.document.features()[0].id;
+        st.selected_feature = Some(id);
+        let s = shot(&c, WIDTH, |ui| browser::show(ui, &mut st));
+        let rows = browser::row_rects(&c);
+        assert!(rows.len() >= 2, "Feature- und Körperzeile: {rows:?}");
+        for (name, r) in &rows {
+            assert_eq!(r.height(), theme::ROW_H, "Zeile {name}");
+        }
+        let selected = rows[0].1;
+        let fill = s
+            .fills
+            .iter()
+            .find(|f| f.rect.intersects(selected) && f.fill != Color32::TRANSPARENT)
+            .unwrap_or_else(|| panic!("gewählte Zeile ohne Fläche: {:?}", s.fills));
+        assert_eq!(fill.fill, p.bg_active, "neutral gewählt (dunkel: {dark})");
+        assert!(
+            s.fills.iter().all(|f| f.fill != p.accent),
+            "kein Akzent in den Zeilen"
+        );
+        // Gewählte Zeile in text_primary, die Körperzeile in Ruhe text_secondary.
+        let names: Vec<&Seen> = s.texts.iter().filter(|t| t.text == rows[0].0).collect();
+        assert_eq!(names[0].color, p.text_primary, "gewählte Zeile");
+        let body = s.texts.iter().find(|t| t.text == rows[1].0).unwrap();
+        let body = if names.len() > 1 { names[1] } else { body };
+        assert_eq!(body.color, p.text_secondary, "Zeile in Ruhe");
+        // Kopf „Feature-Baum“ auf Abschnittsfläche in text_primary.
+        let head = s.text("Feature-Baum");
+        assert_eq!(head.color, p.text_primary);
+        assert!(
+            s.fills.iter().any(|f| f.fill == p.bg_section
+                && f.rect.contains_rect(head.rect)
+                && (f.rect.height() - theme::HEADER_H).abs() < 0.5),
+            "Kopf ohne Abschnittsfläche"
+        );
+    }
+}
+
+/// Zeigt `f` drei Bilder lang (neue Fenster messen sich im ersten Bild unsichtbar aus).
+fn settle(c: &egui::Context, mut f: impl FnMut(&egui::Context)) -> Shot {
+    let mut last = None;
+    for _ in 0..3 {
+        last = Some(shot(c, WIDTH, |ui| f(ui.ctx())));
+    }
+    last.unwrap()
+}
+
+/// Die Fensterfläche: bg_panel, 1 px border_subtle, Rundung 14.
+fn has_panel_frame(s: &Shot, dark: bool, what: &str) {
+    let p = theme::palette(dark);
+    assert!(
+        s.fills.iter().any(|f| f.fill == p.bg_panel
+            && f.stroke == egui::Stroke::new(1.0, p.border_subtle)
+            && f.radius == egui::CornerRadius::same(theme::RADIUS_LG)),
+        "{what} (dunkel: {dark}) ohne Graphit-Rahmen: {:?}",
+        s.fills
+    );
+}
+
+#[test]
+fn dialog_windows_use_the_panel_frame() {
+    for dark in [true, false] {
+        // Ohne `theme::apply`: die Fenster setzen den Rahmen selbst.
+        let c = context(None);
+        c.set_visuals(if dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
+        let mut st = AppState::new();
+        st.create_box(DVec3::splat(10.0)).unwrap();
+        let mut create = CreateDialog::Box {
+            x: 1.0,
+            y: 2.0,
+            z: 3.0,
+        };
+        let s = settle(&c, |ctx| {
+            create.show(ctx, &mut st);
+        });
+        has_panel_frame(&s, dark, "Quader erzeugen");
+
+        let mut export = ExportDialog::new(&st);
+        let mut dir = None;
+        let s = settle(&c, |ctx| {
+            export.show(ctx, &mut st, &mut dir);
+        });
+        has_panel_frame(&s, dark, "Exportieren");
+
+        let mut ws = workspace();
+        ws.prompt = Some(Prompt::Notice("Etwas ist schiefgegangen".into()));
+        let s = settle(&c, |ctx| prompts::show(ctx, &mut ws));
+        has_panel_frame(&s, dark, "Hinweis");
+        // Titel als Überschrift in text_primary.
+        assert_eq!(s.text("Hinweis").color, theme::palette(dark).text_primary);
+    }
+}
+
+/// Zustand mit Quader und einer Zeichnung mit gewählter Vorderansicht.
+fn drawing_state() -> AppState {
+    let mut st = AppState::new();
+    st.create_box(DVec3::new(100.0, 60.0, 40.0)).unwrap();
+    let sheet = Sheet {
+        paper: Paper::A4,
+        landscape: true,
+    };
+    let d = st
+        .document
+        .add_drawing("Blatt 1", sheet, Projection::First)
+        .unwrap();
+    let front = st
+        .document
+        .add_view(
+            d,
+            ViewKind::Front,
+            Scale { num: 1, den: 1 },
+            Placement::Free { x: 148.5, y: 105.0 },
+            None,
+        )
+        .unwrap();
+    st.drawing_ui.open(d);
+    st.drawing_ui.tick(&st.bodies, &st.document, true);
+    st.drawing_ui.selected_view = Some(front);
+    st
+}
+
+/// Kein Text ragt aus seinem Ausschnitt (sonst wäre er abgeschnitten).
+fn nothing_clipped(s: &Shot, what: &str) {
+    for t in &s.texts {
+        assert!(
+            t.clip.expand(0.5).contains_rect(t.rect),
+            "{what}: „{}“ abgeschnitten ({:?} außerhalb {:?})",
+            t.text,
+            t.rect,
+            t.clip
+        );
+    }
+}
+
+#[test]
+fn no_text_is_clipped_at_1400px() {
+    let c = context(Some(true));
+    // Menüleiste: eine Zeile, alles innerhalb der Breite.
+    let mut ws = workspace();
+    let mut dock = dock::Dock::new();
+    let s = shot(&c, WIDTH, |ui| {
+        egui::Panel::top("menu").show(ui, |ui| {
+            app::menu_bar(ui, &mut ws, &mut dock);
+        });
+    });
+    let first = s.text("Datei").clone();
+    for m in ["Datei", "Erzeugen", "Zeichnung", "Bearbeiten", "Ansicht"] {
+        let t = s.text(m);
+        assert!(same_row(t, &first) && t.rect.right() < WIDTH, "Menü {m}");
+    }
+    nothing_clipped(&s, "Menüleiste");
+
+    // Tab-Leiste mit fünf Tabs (einer geändert): eine Zeile.
+    ws.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(4.0))
+        .unwrap();
+    for _ in 0..4 {
+        ws.new_tab();
+    }
+    let s = shot(&c, WIDTH, |ui| {
+        egui::Panel::top("tabs").show(ui, |ui| tabs::show(ui, &mut ws));
+    });
+    let first = s.text("Unbenannt 1 ●").clone();
+    for n in 2..=5 {
+        let t = s.text(&format!("Unbenannt {n}"));
+        assert!(same_row(t, &first) && t.rect.right() < WIDTH, "Tab {n}");
+    }
+    nothing_clipped(&s, "Tab-Leiste");
+
+    // Zeichnungsleiste mit gewählter Ansicht: genau zwei Zeilen, nichts abgeschnitten.
+    let mut st = drawing_state();
+    let mut s = shot(&c, WIDTH, |ui| drawing_view::show(ui, &mut st));
+    for _ in 0..2 {
+        s = shot(&c, WIDTH, |ui| drawing_view::show(ui, &mut st));
+    }
+    let bar = drawing_view::last_layout(&c).unwrap().toolbar;
+    let mut rows: Vec<f32> = Vec::new();
+    for t in s.texts.iter().filter(|t| bar.contains(t.rect.center())) {
+        assert!(
+            bar.expand(0.5).contains_rect(t.rect) && t.rect.right() <= WIDTH,
+            "„{}“ ragt aus der Leiste {bar:?}: {:?}",
+            t.text,
+            t.rect
+        );
+        let y = t.rect.center().y;
+        if !rows.iter().any(|r| (r - y).abs() < 6.0) {
+            rows.push(y);
+        }
+    }
+    assert_eq!(rows.len(), 2, "zwei Zeilen: {rows:?}");
+    for must in [
+        "3D-Modell",
+        "Blatt einpassen",
+        drawing_view::SUGGEST,
+        "Verdeckte Kanten zeigen",
+        drawing_view::CENTERLINES,
+        "Ansicht löschen",
+    ] {
+        assert!(
+            bar.contains_rect(s.text(must).rect),
+            "„{must}“ in der Leiste"
+        );
+    }
+    nothing_clipped(&s, "Zeichnungsleiste");
+
+    // Fenster „Skizze“: alle Texte im Fenster sichtbar.
+    let mut st = AppState::new();
+    let i = st
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    st.open_sketch(i).unwrap();
+    let s = settle(&c, |ctx| sketch_panel::show(ctx, &mut st));
+    s.text("Körperkante kopieren");
+    s.text("Skizze beenden");
+    nothing_clipped(&s, "Fenster „Skizze“");
+
+    // Eigenschaften in Bereichsbreite (24 % von 1400 px).
+    let mut st = AppState::new();
+    st.create_box(DVec3::splat(10.0)).unwrap();
+    st.selected_body = Some(0);
+    let s = shot(&c, WIDTH, |ui| {
+        ui.set_max_width(0.24 * WIDTH);
+        properties::show(ui, &mut st);
+    });
+    s.text("Position (x/y/z)");
+    nothing_clipped(&s, "Eigenschaften");
+}
+
+#[test]
+fn dark_and_light_both_render_the_panels() {
+    for dark in [true, false] {
+        let c = context(Some(dark));
+        let p = theme::palette(dark);
+        let other = theme::palette(!dark);
+        let mut st = AppState::new();
+        st.create_box(DVec3::splat(10.0)).unwrap();
+        st.selected_body = Some(0);
+        let mut dialog = CreateDialog::Sphere { radius: 5.0 };
+        let mut s = None;
+        for _ in 0..3 {
+            s = Some(shot(&c, WIDTH, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.columns(2, |cols| {
+                        browser::show(&mut cols[0], &mut st);
+                        properties::show(&mut cols[1], &mut st);
+                    });
+                });
+                dialog.show(ui.ctx(), &mut st);
+            }));
+        }
+        let s = s.unwrap();
+        let colors: Vec<Color32> = s.texts.iter().map(|t| t.color).collect();
+        assert!(
+            colors.contains(&p.text_primary),
+            "text_primary (dunkel: {dark})"
+        );
+        assert!(
+            colors.contains(&p.text_secondary),
+            "text_secondary (dunkel: {dark})"
+        );
+        for t in &s.texts {
+            assert!(
+                t.color != other.text_primary && t.color != other.text_secondary,
+                "„{}“ in der Farbe des anderen Themas (dunkel: {dark})",
+                t.text
+            );
+        }
+        // Werte in text_primary, Bezeichnungen in text_secondary.
+        assert_eq!(s.text("Volumen").color, p.text_secondary);
+        assert_eq!(s.text("Eigenschaften").color, p.text_primary);
+        let all: Vec<Color32> = s
+            .fills
+            .iter()
+            .flat_map(|f| [f.fill, f.stroke.color])
+            .chain(colors)
+            .collect();
+        for old in OLD_COLORS {
+            assert!(!all.contains(&old), "alte Farbe {old:?} (dunkel: {dark})");
+        }
+        // Fenster und Felder des Themas.
+        has_panel_frame(&s, dark, "Kugel erzeugen");
+    }
+}
