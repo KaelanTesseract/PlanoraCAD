@@ -4,8 +4,9 @@
 //! [`shell::layout`]; die Inhalte zeichnen die bisherigen Bereichsfunktionen.
 //!
 //! Breiten und Höhen kommen aus der Geometrie (keine Rückkopplung über die Feldgröße). Status und
-//! Hinweis werden vorab gesetzt (bis zu zwei Zeilen, der Status wächst nach oben). Nur das obere
-//! Feld misst seine Wunschbreite; sie wird für das nächste Bild gemerkt. Ändert sie sich, oder
+//! Hinweis werden vorab gesetzt (der Hinweis bis zu zwei Zeilen, der Status bis zu drei und er
+//! wächst nach oben). Das obere und das untere Feld messen ihre Wunschbreite und ihre
+//! Mindestbreite; beide werden für das nächste Bild gemerkt. Ändert sich eine Breite, oder
 //! läuft gerade der unsichtbare erste Größen-Durchgang eines Felds, wird der Durchgang verworfen
 //! und sofort wiederholt (wie bei `prompts::window`), damit kein Feld ein Bild lang falsch steht.
 //!

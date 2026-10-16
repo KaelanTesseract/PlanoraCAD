@@ -256,7 +256,7 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 **Neuer Aufbau des Fensters (Modell-Ansicht):** Die Felder schweben jetzt frei über dem 3D-Bereich, der das ganze Fenster füllt.
 
 - Oben in der Mitte: Menü und Tabs.
-- Links: die Felder Projekte und Baum.
+- Links: ein Feld mit deinen Projekten und darunter der Baum mit den Arbeitsschritten.
 - Rechts: Eigenschaften und Versionen. Ein Umschalter im Feld wechselt zwischen beiden.
 - Unten: das Befehlsfeld mit Abkürzungen zu den Menüeinträgen, daneben Meldungen.
 - Die Felder lassen sich nicht verschieben oder andocken. Projekte und Versionen blendest du im Menü Ansicht ein oder aus.
