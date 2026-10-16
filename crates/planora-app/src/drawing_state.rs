@@ -95,6 +95,9 @@ pub struct DrawingUi {
     pub selected_dim: Option<DimId>,
     /// Letzte Meldung zu den Maßen (etwa nach „Maße vorschlagen“) für die Hinweiszeile.
     pub dim_message: Option<String>,
+    /// Stand zur Meldung (Änderungszähler, gewählte Ansicht, gewähltes Maß); weicht der
+    /// aktuelle Stand ab, verfällt die Meldung.
+    pub dim_message_key: Option<(u64, Option<ViewId>, Option<DimId>)>,
     /// Im Browser gewählte Zeichnung (unabhängig davon, ob sie geöffnet ist).
     pub selected_drawing: Option<DrawingId>,
     pub zoom: f32,
@@ -115,6 +118,7 @@ impl Default for DrawingUi {
             selected_view: None,
             selected_dim: None,
             dim_message: None,
+            dim_message_key: None,
             selected_drawing: None,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
@@ -178,6 +182,7 @@ impl DrawingUi {
         self.selected_view = None;
         self.selected_dim = None;
         self.dim_message = None;
+        self.dim_message_key = None;
         self.zoom = 1.0;
         self.pan = egui::Vec2::ZERO;
     }

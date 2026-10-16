@@ -79,6 +79,9 @@ const MIN_TEXT_PX: f64 = 1.0;
 /// Größte Schriftgröße der Maßtexte (Pixel); bei stärkerer Vergrößerung bleibt der Text so
 /// groß (die Schrift wird nicht beliebig groß gerastert).
 const MAX_TEXT_PX: f64 = 400.0;
+/// Kleinster Betrag des Abstands einer Maßlinie beim Ziehen (Blatt-mm, auf der Seite, auf der
+/// das Ziehen begann).
+pub const MIN_DRAG_OFFSET_MM: f64 = 1.0;
 /// Kleinster Radius eines Winkelmaßes beim Ziehen (Blatt-mm).
 const MIN_ANGLE_RADIUS_MM: f64 = 1.0;
 /// Hinweis, wenn es zu den Körpern nichts zu sagen gibt.
@@ -677,17 +680,20 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     let note = state.drawing_ui.note(&state.bodies);
     let dims = resolve_in(state, id);
     let notes = notes_in(state, id, &dims);
+    // Die Meldung des Vorschlags gilt nur, bis sich das Dokument oder die Auswahl ändert.
+    if state.drawing_ui.dim_message_key != Some(message_key(state)) {
+        state.drawing_ui.dim_message = None;
+        state.drawing_ui.dim_message_key = None;
+    }
     let message = state.drawing_ui.dim_message.clone();
     ui.scope_builder(UiBuilder::new().max_rect(hint), |ui| {
         ui.set_min_size(hint.size());
         ui.horizontal_centered(|ui| {
             ui.add_space(8.0);
-            if let Some(m) = &message {
-                ui.label(m);
-                ui.separator();
-            }
+            // Zuerst die Hinweise zu den Maßen (die verlorenen rot), dann die Meldung (höchstens
+            // die halbe Zeile), zuletzt der bisherige Hinweis; zu lange Texte enden mit „…“
+            // (ganzer Text im Tooltip), nichts wird aus der Zeile geschoben.
             for (i, t) in notes.texts.iter().enumerate() {
-                // Der erste Satz nennt die verlorenen Maße (rot), sonst die außerhalb des Blatts.
                 if i == 0 && notes.lost > 0 {
                     ui.colored_label(ERROR_COLOR, t);
                 } else {
@@ -697,7 +703,18 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
             if !notes.texts.is_empty() {
                 ui.separator();
             }
-            ui.weak(note.as_deref().unwrap_or(HINT));
+            if let Some(m) = &message {
+                let w = (0.5 * ui.available_width()).max(40.0);
+                ui.scope(|ui| {
+                    ui.set_max_width(w);
+                    ui.add(egui::Label::new(m.as_str()).truncate());
+                });
+                ui.separator();
+            }
+            ui.add(
+                egui::Label::new(egui::RichText::new(note.as_deref().unwrap_or(HINT)).weak())
+                    .truncate(),
+            );
         });
     });
     if let Some((layout, pending)) = views {
@@ -902,6 +919,17 @@ pub fn suggest_dimensions(state: &mut AppState, id: DrawingId) {
         }
     }
     state.drawing_ui.dim_message = Some(text);
+    state.drawing_ui.dim_message_key = Some(message_key(state));
+}
+
+/// Stand, zu dem eine Meldung des Vorschlags gehört: Änderungszähler des Dokuments, gewählte
+/// Ansicht und gewähltes Maß.
+fn message_key(state: &AppState) -> (u64, Option<ViewId>, Option<DimId>) {
+    (
+        state.document.edit_count(),
+        state.drawing_ui.selected_view,
+        state.drawing_ui.selected_dim,
+    )
 }
 
 /// Fügt der geöffneten Zeichnung eine Ansicht der Art `kind` hinzu.
@@ -1518,7 +1546,8 @@ fn text_geo(
     if !(size.is_finite() && size >= MIN_TEXT_PX) || text.is_empty() {
         return None;
     }
-    let size = size.min(MAX_TEXT_PX) as f32;
+    // Halbe Pixel: beim Zoomen entsteht nicht in jedem Bild eine neue Schriftgröße.
+    let size = ((size.min(MAX_TEXT_PX) * 2.0).round() / 2.0).max(MIN_TEXT_PX) as f32;
     let galley = ctx.fonts_mut(|f| {
         f.layout(
             text.clone(),
@@ -1786,7 +1815,17 @@ fn apply_dim_drag(spec: &mut DimSpec, part: DimPart, dm: DVec2) {
         return;
     }
     match part {
-        DimPart::Offset { w, offset } => spec.offset = offset + dm.dot(w),
+        DimPart::Offset { w, offset } => {
+            // Die Seite bleibt beim Ziehen dieselbe: über die Körperkante hinaus springt die
+            // Maßlinie nicht auf die andere Seite (Bezugslage wechselt im Layout mit dem
+            // Vorzeichen), sie bleibt knapp neben der Kante stehen.
+            let next = offset + dm.dot(w);
+            spec.offset = if offset < 0.0 {
+                next.min(-MIN_DRAG_OFFSET_MM)
+            } else {
+                next.max(MIN_DRAG_OFFSET_MM)
+            };
+        }
         DimPart::Text { shift } => spec.text_shift = (shift.0 + dm.x, shift.1 + dm.y),
         DimPart::Leader { center, r, knee } => {
             let v = knee + dm - center;

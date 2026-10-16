@@ -11,7 +11,7 @@
 //! Höhenmaß mit Abstand 10 → Maßlinie x = 115 von y 85 bis 115 (positiv = rechts).
 
 use egui::epaint::Shape;
-use egui::{Color32, Event, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
+use egui::{Color32, Event, Modifiers, PointerButton, Pos2, Rect, vec2};
 use planora_app::browser::ERROR_COLOR;
 use planora_app::dimension_state::*;
 use planora_app::drawing_view;
@@ -434,7 +434,8 @@ fn marks_are_painted_with_expected_screen_positions() {
     // Die Grundlinie liegt in der unteren Hälfte der Textzeile (über der Unterlänge).
     assert!(anchor.y > t.rect.center().y, "{:?} vs {anchor:?}", t.rect);
     assert!(
-        (f64::from(t.size) - 3.5 * k).abs() < 1e-3,
+        // Auf halbe Pixel gerundet.
+        (f64::from(t.size) - 3.5 * k).abs() <= 0.25 + 1e-6 && (t.size * 2.0).fract() == 0.0,
         "{} vs {}",
         t.size,
         3.5 * k
@@ -445,10 +446,10 @@ fn marks_are_painted_with_expected_screen_positions() {
 }
 
 #[test]
-fn vertical_text_is_rotated_and_arcs_follow_the_zoom() {
+fn vertical_text_is_rotated() {
     // Senkrechtes Maß: Text um 90° gedreht (Bildschirm: −π/2 im Uhrzeigersinn), Linie x 115.
     let (mut st, d, front, _, mut h) = box_with_width();
-    let v = add_height(&mut st, d, front, 0, 10.0);
+    add_height(&mut st, d, front, 0, 10.0);
     let shot = h.idle(&mut st);
     let segs = shot.segments();
     let (a, b) = (screen(&h, (115.0, 85.0)), screen(&h, (115.0, 115.0)));
@@ -464,7 +465,6 @@ fn vertical_text_is_rotated_and_arcs_follow_the_zoom() {
         "{}",
         t.angle
     );
-    let _ = v;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -744,13 +744,110 @@ fn notes_line_shows_lost_and_outside_counts_in_german() {
         h.idle(&mut st);
     }
     assert_eq!(st.dimension_ui.mark_builds(), builds);
-    // Zurück aufs Blatt: der Hinweis verschwindet; Mehrzahl mit zwei verlorenen Maßen.
+    // Zurück aufs Blatt: der Hinweis verschwindet.
     st.document
         .update_dimension(d, far, |m| m.offset = 10.0)
         .unwrap();
     let shot = h.idle(&mut st);
     assert!(!shot.text.contains("außerhalb"), "{}", shot.text);
     assert!(st.dimension_ui.mark_builds() > builds);
+}
+
+#[test]
+fn notes_line_uses_the_plural_for_two_lost_and_two_outside() {
+    // Zwei Maße am zweiten Quader (danach gelöscht), zwei weit außerhalb am ersten.
+    let mut st = AppState::new();
+    st.create_box(BOX).unwrap();
+    let b = st.create_box(BOX).unwrap();
+    let d = new_drawing(&mut st);
+    let front = add_view(&mut st, d, ViewKind::Front, 120.0, 100.0);
+    add_width(&mut st, d, front, 1, 10.0);
+    add_height(&mut st, d, front, 1, 10.0);
+    add_width(&mut st, d, front, 0, 5000.0);
+    add_height(&mut st, d, front, 0, 5000.0);
+    st.drawing_ui.open(d);
+    compute(&mut st);
+    st.delete_feature(b).unwrap();
+    compute(&mut st);
+    let mut h = Harness::new();
+    h.idle(&mut st);
+    let shot = h.idle(&mut st);
+    for t in [
+        "2 Maße haben ihren Bezug verloren.",
+        "2 Maße liegen außerhalb des Blatts.",
+    ] {
+        assert!(shot.text.contains(t), "„{t}“ fehlt:\n{}", shot.text);
+    }
+    assert!(!shot.text.contains("1 Maß"), "{}", shot.text);
+}
+
+#[test]
+fn hint_line_keeps_the_lost_count_first_and_nothing_leaves_the_line() {
+    // Verlorenes Maß, Maß außerhalb und eine lange Meldung: alles bleibt in der Zeile, der
+    // Satz über verlorene Maße steht vorn, der bisherige Hinweis ist (gekürzt) noch da.
+    let (mut st, d, front, _, mut h) = lost_state();
+    add_height(&mut st, d, front, 0, 5000.0);
+    h.idle(&mut st);
+    st.drawing_ui.dim_message = Some("Eine sehr lange Meldung. ".repeat(20));
+    st.drawing_ui.dim_message_key = Some((
+        st.document.edit_count(),
+        st.drawing_ui.selected_view,
+        st.drawing_ui.selected_dim,
+    ));
+    let shot = h.idle(&mut st);
+    let hint = h.layout().hint;
+    let in_line: Vec<&_> = shot
+        .texts
+        .iter()
+        .filter(|t| hint.contains(t.rect.center()))
+        .collect();
+    let lost = shot.text("1 Maß hat seinen Bezug verloren.");
+    assert!(
+        in_line.iter().all(|t| t.rect.left() >= lost.rect.left()),
+        "verlorene Maße zuerst"
+    );
+    assert!(
+        in_line.iter().all(|t| t.rect.right() <= hint.right() + 0.5),
+        "nichts ragt hinaus: {:?}",
+        in_line
+            .iter()
+            .map(|t| (&t.text, t.rect))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        in_line
+            .iter()
+            .any(|t| t.text.starts_with("Eine sehr lange")),
+        "Meldung fehlt"
+    );
+    assert!(
+        in_line.iter().any(|t| t.text.starts_with("Klicken wählt")),
+        "bisheriger Hinweis fehlt: {}",
+        shot.text
+    );
+}
+
+#[test]
+fn the_suggest_message_disappears_after_the_next_change() {
+    let (mut st, d, _, _, mut h) = front_and_top(None);
+    h.click_text(&mut st, drawing_view::SUGGEST);
+    assert!(h.idle(&mut st).text.contains("3 Maße wurden hinzugefügt."));
+    // Eine Auswahl (hier: ein Maß) lässt die Meldung verfallen.
+    h.click(&mut st, screen(&h, (100.0, 125.0)));
+    assert!(st.drawing_ui.selected_dim.is_some());
+    let shot = h.idle(&mut st);
+    assert!(!shot.text.contains("hinzugefügt"), "{}", shot.text);
+    assert_eq!(st.drawing_ui.dim_message, None);
+    // Ebenso eine Änderung am Dokument.
+    h.click(&mut st, screen(&h, (250.0, 30.0)));
+    h.click_text(&mut st, drawing_view::SUGGEST);
+    assert!(st.drawing_ui.dim_message.is_some());
+    let w = st.document.drawing(d).unwrap().dimensions[0].id;
+    st.document
+        .update_dimension(d, w, |m| m.offset = 12.0)
+        .unwrap();
+    h.idle(&mut st);
+    assert_eq!(st.drawing_ui.dim_message, None);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1293,7 +1390,6 @@ fn switching_drawings_clears_the_dimension_selection_and_message() {
     st.drawing_ui.open(other);
     assert_eq!(st.drawing_ui.selected_dim, None);
     assert_eq!(st.drawing_ui.dim_message, None);
-    let _ = pos2(0.0, 0.0);
 }
 
 #[test]
@@ -1311,4 +1407,168 @@ fn selecting_a_view_keeps_the_canvas_in_place() {
         shot.text
     );
     assert_eq!(h.layout().canvas, before);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix-Runde 1: Seite beim Ziehen, Drehen, Winkelbogen
+
+#[test]
+fn dragging_past_the_part_edge_keeps_the_line_on_its_side() {
+    let (mut st, d, front, w, mut h) = box_with_width();
+    let v = add_height(&mut st, d, front, 0, 10.0);
+    h.idle(&mut st);
+    let k = h.k();
+    // Waagerecht 15 mm nach unten von Abstand 10: die Linie bliebe sonst 5 mm unter der
+    // Oberkante (Seitenwechsel). Sie bleibt über der Oberkante y 115 stehen.
+    let by = vec2(0.0, (15.0 * k) as f32);
+    h.drag(&mut st, screen(&h, (100.0, 125.0)).round(), by);
+    let off = dim(&st, d, w).offset;
+    assert_eq!(off, drawing_view::MIN_DRAG_OFFSET_MM);
+    let sheet = drawing_view::last_sheet(&h.ctx).unwrap();
+    let line_y = sheet.views[0]
+        .marks
+        .iter()
+        .filter_map(|m| match m {
+            Mark::Line { a, b, .. } if near(a.y, b.y) && near((a.x - b.x).abs(), 10.0) => Some(a.y),
+            _ => None,
+        })
+        .fold(f64::NAN, f64::max);
+    assert!((line_y - 116.0).abs() < 1e-9, "Linie bei y {line_y}");
+    // Senkrecht 15 mm nach links von Abstand 10: bleibt rechts der Kante x 105.
+    let by = vec2(-(15.0 * k) as f32, 0.0);
+    h.drag(&mut st, screen(&h, (115.0, 100.0)).round(), by);
+    assert_eq!(dim(&st, d, v).offset, drawing_view::MIN_DRAG_OFFSET_MM);
+    // Ein Maß mit negativem Abstand bleibt beim Ziehen nach oben auf der negativen Seite.
+    st.document
+        .update_dimension(d, w, |m| m.offset = -10.0)
+        .unwrap();
+    h.idle(&mut st);
+    h.drag(
+        &mut st,
+        screen(&h, (100.0, 75.0)).round(),
+        vec2(0.0, -(20.0 * k) as f32),
+    );
+    assert_eq!(dim(&st, d, w).offset, -drawing_view::MIN_DRAG_OFFSET_MM);
+}
+
+#[test]
+fn rotating_a_large_diameter_line_changes_only_the_angle() {
+    // Zylinder r 15 (Ø30 ≥ 25 auf dem Blatt): Maßlinie durch die Mitte (100, 120) unter 45°.
+    let mut st = AppState::new();
+    st.create_cylinder(15.0, 12.0).unwrap();
+    let d = new_drawing(&mut st);
+    let top = add_view(&mut st, d, ViewKind::Top, 100.0, 120.0);
+    st.drawing_ui.open(d);
+    compute(&mut st);
+    let out = suggest_for(&mut st, d, Some(top));
+    assert_eq!(out, SuggestOutcome::Added(1), "{}", out.message());
+    let id = st.document.drawing(d).unwrap().dimensions[0].id;
+    let before = dim(&st, d, id);
+    assert_eq!(before.angle, 45.0);
+    let mut h = Harness::new();
+    h.idle(&mut st);
+    h.idle(&mut st);
+    let k = h.k();
+    // Griff auf der Linie gegenüber dem Text: c − u·10 (Winkel 225°). Zeiger nach c + (−10, 0)
+    // (Winkel 180°): Drehung −45° → Winkel 0.
+    let c = DVec2::new(100.0, 120.0);
+    let u = DVec2::new(1.0, 1.0).normalize();
+    let grab = c - u * 10.0;
+    let target = c + DVec2::new(-10.0, 0.0);
+    let dm = target - grab;
+    h.drag(
+        &mut st,
+        screen(&h, (grab.x, grab.y)),
+        vec2((dm.x * k) as f32, (-dm.y * k) as f32),
+    );
+    let after = dim(&st, d, id);
+    assert!(after.angle.abs() < 1e-3, "{}", after.angle);
+    assert_eq!(
+        DimSpec {
+            angle: before.angle,
+            ..after
+        },
+        before,
+        "nur der Winkel ändert sich"
+    );
+    // Die Linie liegt jetzt waagerecht durch die Mitte: Pfeilspitzen bei x 85 und 115.
+    let shot = h.idle(&mut st);
+    for x in [85.0, 115.0] {
+        let tip = screen(&h, (x, 120.0));
+        assert!(
+            shot.polygons().iter().any(|(p, _)| close(p[0], tip, 0.05)),
+            "Spitze bei {tip:?}"
+        );
+    }
+}
+
+/// Linke senkrechte und untere waagerechte Vorderkante (Winkel 90° an der Ecke unten links).
+fn add_corner_angle(st: &mut AppState, d: DrawingId, view: ViewId, offset: f64) -> DimId {
+    let (lo, _) = st.bodies[0].bounds;
+    let refs = vec![
+        GeoRef::Edge(edge_where(st, 0, |p| near(p.x, lo.x) && near(p.y, lo.y))),
+        GeoRef::Edge(edge_where(st, 0, |p| near(p.z, lo.z) && near(p.y, lo.y))),
+    ];
+    st.document
+        .add_dimension(d, spec(view, DimKind::Angle, refs, offset))
+        .unwrap()
+}
+
+#[test]
+fn angle_arc_is_painted_within_a_pixel_and_radial_drag_changes_the_radius() {
+    // Quader 10 × 20 × 30, Vorderansicht (100, 100): Ecke unten links (95, 85). Winkelmaß mit
+    // Radius 10 → Bogen von 0 bis π/2 um die Ecke.
+    let (mut st, d, front, _, mut h) = box_with_width();
+    let a = add_corner_angle(&mut st, d, front, 10.0);
+    h.idle(&mut st);
+    let shot = h.idle(&mut st);
+    let k = h.k();
+    let vertex = DVec2::new(95.0, 85.0);
+    let sheet = drawing_view::last_sheet(&h.ctx).unwrap();
+    let arc = sheet.views[0]
+        .marks
+        .iter()
+        .find_map(|m| match m {
+            Mark::Arc {
+                center,
+                r,
+                start,
+                end,
+                ..
+            } => Some((*center, *r, *start, *end)),
+            _ => None,
+        })
+        .expect("Bogen");
+    assert!(
+        (arc.0 - vertex).length() < 1e-9 && near(arc.1, 10.0),
+        "{arc:?}"
+    );
+    assert!(near(arc.3 - arc.2, std::f64::consts::FRAC_PI_2), "{arc:?}");
+    // Gezeichnet als Polylinie: Ecken auf dem Kreis, Sehnenmitten höchstens 1 px innen.
+    let vc = screen(&h, (vertex.x, vertex.y));
+    let r_px = (10.0 * k) as f32;
+    let poly = shot
+        .paths()
+        .into_iter()
+        .find(|(pts, c, _)| {
+            *c == theme::SHEET_DIM
+                && pts.len() >= 4
+                && pts.iter().all(|p| ((*p - vc).length() - r_px).abs() < 0.05)
+        })
+        .expect("Bogen als Polylinie");
+    for w in poly.0.windows(2) {
+        let mid = w[0] + (w[1] - w[0]) * 0.5;
+        assert!(r_px - (mid - vc).length() <= 1.0, "Abweichung");
+    }
+    // Ziehen am Bogen (Mitte unter 45°) um 5 mm nach außen → Radius 15.
+    let grab = vertex + DVec2::new(1.0, 1.0).normalize() * 10.0;
+    let out = DVec2::new(1.0, 1.0).normalize() * 5.0;
+    h.drag(
+        &mut st,
+        screen(&h, (grab.x, grab.y)),
+        vec2((out.x * k) as f32, (-out.y * k) as f32),
+    );
+    let after = dim(&st, d, a);
+    assert!((after.offset - 15.0).abs() < 1e-3, "{}", after.offset);
+    assert_eq!(after.text_shift, (0.0, 0.0));
 }
