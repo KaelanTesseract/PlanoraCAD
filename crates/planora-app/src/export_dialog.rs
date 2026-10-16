@@ -27,7 +27,7 @@ use crate::jobs::{Job, Poll};
 use crate::mesh_body::{WARNING_COLOR, report_text};
 use crate::state::{AppState, BodyKind};
 use planora_drawing::annotate::{Mark, ResolvedDims};
-use planora_drawing::dimension::DimSpec;
+use planora_drawing::dimension::{DimError, DimSpec};
 use planora_drawing::dxf::dxf_text_fits;
 use planora_drawing::sheet::{SheetModel, build_sheet_with, dimension_marks};
 use planora_drawing::{
@@ -360,11 +360,18 @@ pub fn dimension_label(spec: &DimSpec) -> String {
     }
 }
 
-/// Meldung bei einem Maß mit verlorenem Bezug (Festlegung P13).
-pub fn lost_dimension_text(label: &str, view: &str, reason: &str) -> String {
-    let reason = reason.trim_end().trim_end_matches('.');
+/// Meldung bei einem Maß ohne Messwert (Festlegung P13): Ist der Bezug verloren
+/// ([`DimError::Lost`]), „… hat seinen Bezug verloren: …“; sonst (Bezug vorhanden, aber z. B.
+/// nicht mehr quer zum Maß) „… hat sich verändert und lässt sich nicht mehr messen: …“.
+pub fn lost_dimension_text(label: &str, view: &str, error: &DimError) -> String {
+    let text = error.to_string();
+    let reason = text.trim_end().trim_end_matches('.');
+    let what = match error {
+        DimError::Lost(_) => "hat seinen Bezug verloren",
+        _ => "hat sich verändert und lässt sich nicht mehr messen",
+    };
     format!(
-        "Das Maß „{label}“ in der Ansicht „{view}“ hat seinen Bezug verloren: {reason}. Bitte ändern oder löschen."
+        "Das Maß „{label}“ in der Ansicht „{view}“ {what}: {reason}. Bitte ändern oder löschen."
     )
 }
 
@@ -381,11 +388,7 @@ fn first_lost(
                 .get(&v.id)
                 .cloned()
                 .unwrap_or_else(|| v.kind.label().to_string());
-            Some(lost_dimension_text(
-                &dimension_label(spec),
-                &name,
-                &e.to_string(),
-            ))
+            Some(lost_dimension_text(&dimension_label(spec), &name, e))
         })
     })
 }

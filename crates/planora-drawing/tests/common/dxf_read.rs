@@ -1567,16 +1567,32 @@ impl Geom {
     }
 }
 
-/// Entschlüsselt den Inhalt eines `TEXT`: `%%c` → Ø, `%%d` → °, `%%p` → ±, `^ ` → `^`, dazu
-/// `\U+XXXX` (siehe [`decode_text`]).
+/// Entschlüsselt den Inhalt eines `TEXT` in der Reihenfolge der CAD-Programme: erst
+/// `\U+XXXX` (beim Laden, siehe [`decode_text`]) und `^ ` → `^`, dann beim Anzeigen die Kürzel
+/// von links nach rechts: `%%%` → `%`, `%%c` → Ø, `%%d` → °, `%%p` → ± (groß oder klein); andere
+/// `%%x` bleiben stehen.
 pub fn decode_dxf_text(s: &str) -> String {
-    let t = s
-        .replace("%%c", "\u{d8}")
-        .replace("%%C", "\u{d8}")
-        .replace("%%d", "\u{b0}")
-        .replace("%%D", "\u{b0}")
-        .replace("%%p", "\u{b1}")
-        .replace("%%P", "\u{b1}")
-        .replace("^ ", "^");
-    decode_text(&t)
+    let t = decode_text(s).replace("^ ", "^");
+    let c: Vec<char> = t.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == '%' && i + 2 < c.len() && c[i + 1] == '%' {
+            let sym = match c[i + 2] {
+                '%' => Some('%'),
+                'c' | 'C' => Some('\u{d8}'),
+                'd' | 'D' => Some('\u{b0}'),
+                'p' | 'P' => Some('\u{b1}'),
+                _ => None,
+            };
+            if let Some(ch) = sym {
+                out.push(ch);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(c[i]);
+        i += 1;
+    }
+    out
 }

@@ -799,17 +799,22 @@ fn text_code_conversion() {
 }
 
 /// Eigene Texte mit `%` und `\` bilden keine Kürzel: „50%%c“ bleibt „50%%c“ (kein Ø), „\U+00D8“
-/// bleibt die Zeichenfolge selbst; beide Zeichen stehen als Unicode-Kürzel in der Datei. Texte
-/// ohne diese Zeichen bleiben wie vorher (siehe `text_code_conversion` und die goldenen Dateien).
+/// bleibt die Zeichenfolge selbst. `%` steht als `%%%` in der Datei (nicht als `\U+0025`: das
+/// lösen CAD-Programme schon beim Laden auf, die `%%`-Kürzel erst beim Anzeigen; der Leser
+/// entschlüsselt in dieser Reihenfolge), `\` als `\U+005C`. Texte ohne diese Zeichen bleiben wie
+/// vorher (siehe `text_code_conversion` und die goldenen Dateien).
 #[test]
 fn percent_and_backslash_in_own_text_are_masked() {
     let cases = [
-        ("50%", "50\\U+0025", "50%"),
-        ("50%%c", "50\\U+0025\\U+0025c", "50%%c"),
-        ("%%d%%p", "\\U+0025\\U+0025d\\U+0025\\U+0025p", "%%d%%p"),
+        ("50%", "50%%%", "50%"),
+        ("50%%c", "50%%%%%%c", "50%%c"),
+        ("5%Ø", "5%%%%%c", "5%Ø"),
+        ("%%d%%p", "%%%%%%d%%%%%%p", "%%d%%p"),
+        ("%%%", "%%%%%%%%%", "%%%"),
         ("a\\U+00D8", "a\\U+005CU+00D8", "a\\U+00D8"),
         ("C:\\x", "C:\\U+005Cx", "C:\\x"),
-        ("Ø5 %", "%%c5 \\U+0025", "Ø5 %"),
+        ("Ø5 %", "%%c5 %%%", "Ø5 %"),
+        ("\\%%c", "\\U+005C%%%%%%c", "\\%%c"),
     ];
     for (input, raw, decoded) in cases {
         let sheet = manual_sheet(
@@ -832,10 +837,12 @@ fn percent_and_backslash_in_own_text_are_masked() {
         assert_eq!(t.raw, raw, "{input:?}");
         assert_eq!(t.text, decoded, "{input:?}");
     }
-    // Die Länge zählt in der Schreibweise der Datei: 36 · 7 = 252 ≤ 255 passt, 37 · 7 = 259
-    // nicht.
-    assert!(planora_drawing::dxf::dxf_text_fits(&"%".repeat(36)));
-    assert!(!planora_drawing::dxf::dxf_text_fits(&"%".repeat(37)));
+    // Die Länge zählt in der Schreibweise der Datei: 85 · 3 = 255 passt, 86 · 3 = 258 nicht;
+    // `\` braucht 7 Zeichen: 36 · 7 = 252 passt, 37 · 7 = 259 nicht.
+    assert!(planora_drawing::dxf::dxf_text_fits(&"%".repeat(85)));
+    assert!(!planora_drawing::dxf::dxf_text_fits(&"%".repeat(86)));
+    assert!(planora_drawing::dxf::dxf_text_fits(&"\\".repeat(36)));
+    assert!(!planora_drawing::dxf::dxf_text_fits(&"\\".repeat(37)));
     assert!(planora_drawing::dxf::dxf_text_fits(&"a".repeat(255)));
     assert!(!planora_drawing::dxf::dxf_text_fits(&"a".repeat(256)));
 }

@@ -22,7 +22,7 @@ use planora_app::state::*;
 use planora_app::testing::collect_texts;
 use planora_drawing::annotate::ResolvedDims;
 use planora_drawing::dimension::{
-    DimId, DimKind, DimSpec, GeoRef, GeoRefData, Tolerance as DimTolerance,
+    DimError, DimId, DimKind, DimSpec, GeoRef, GeoRefData, Tolerance as DimTolerance,
 };
 use planora_drawing::sheet::{SheetModel, build_sheet, build_sheet_with};
 use planora_drawing::{
@@ -542,6 +542,95 @@ fn lost_dimension_blocks_writing_with_its_text() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn with_several_lost_dimensions_the_first_in_drawing_order_is_named() {
+    let mut s = AppState::new();
+    s.create_box(BOX).unwrap();
+    let second = s.create_box(DVec3::new(30.0, 30.0, 30.0)).unwrap();
+    s.selected_body = None;
+    let id = add_drawing(&mut s, "Blatt 1");
+    let views: Vec<ViewId> = s
+        .document
+        .drawing(id)
+        .unwrap()
+        .views
+        .iter()
+        .map(|v| v.id)
+        .collect();
+    let (front, top) = (views[0], views[1]);
+    // Zuerst ein Maß in „Oben“ angelegt, dann zwei in „Vorne“.
+    for (view, text, offset) in [
+        (top, "Oben-Maß", 10.0),
+        (front, "Vorne-Maß", 10.0),
+        (front, "Zweites", 30.0),
+    ] {
+        let mut spec = width_spec(&s, 1, view);
+        spec.text_override = Some(text.into());
+        spec.offset = offset;
+        s.document.add_dimension(id, spec).unwrap();
+    }
+    s.delete_feature(second).unwrap();
+    s.selected_body = None;
+    let reason = match &own_dims(&s, id).by_view[&front][0].1 {
+        Err(e) => e.to_string(),
+        Ok(m) => panic!("verloren erwartet: {m:?}"),
+    };
+    let reason = reason.trim_end_matches('.');
+    // Genannt wird das erste Maß der ersten Ansicht der Zeichnung (nicht das zuerst angelegte).
+    let d = dialog(&s, SVG);
+    assert_eq!(
+        d.status(&s),
+        ExportStatus::Failed(format!(
+            "Das Maß „Vorne-Maß“ in der Ansicht „Vorne“ hat seinen Bezug verloren: {reason}. Bitte ändern oder löschen."
+        ))
+    );
+}
+
+#[test]
+fn a_dimension_that_cannot_be_measured_any_more_has_its_own_sentence() {
+    let mut s = AppState::new();
+    s.create_box(BOX).unwrap();
+    s.selected_body = None;
+    let id = add_drawing(&mut s, "Blatt 1");
+    let front = s.document.drawing(id).unwrap().views[0].id;
+    // Waagerechtes Maß zwischen den beiden waagerechten Vorderkanten: die Kanten stehen nicht
+    // quer zum Maß (Bezug vorhanden, aber nicht messbar).
+    let (lo, hi) = s.bodies[0].bounds;
+    let mut spec = width_spec(&s, 0, front);
+    spec.refs = vec![
+        GeoRef::Edge(edge_where(&s, 0, |p| near(p.z, lo.z) && near(p.y, lo.y))),
+        GeoRef::Edge(edge_where(&s, 0, |p| near(p.z, hi.z) && near(p.y, lo.y))),
+    ];
+    s.document.add_dimension(id, spec).unwrap();
+    let reason = match &own_dims(&s, id).by_view[&front][0].1 {
+        Err(e @ DimError::NotAcross) => e.to_string(),
+        other => panic!("nicht quer erwartet: {other:?}"),
+    };
+    let msg = format!(
+        "Das Maß „Waagerecht“ in der Ansicht „Vorne“ hat sich verändert und lässt sich nicht mehr messen: {}. Bitte ändern oder löschen.",
+        reason.trim_end_matches('.')
+    );
+    assert_eq!(
+        msg,
+        "Das Maß „Waagerecht“ in der Ansicht „Vorne“ hat sich verändert und lässt sich nicht mehr messen: Die Kante steht nicht quer zum Maß. Bitte ändern oder löschen."
+    );
+    let dir = temp_dir("nicht-quer");
+    for format in [SVG, DXF] {
+        let mut d = dialog(&s, format);
+        assert_eq!(
+            d.status(&s),
+            ExportStatus::Failed(msg.clone()),
+            "{format:?}"
+        );
+        let path = dir.join(format!("q.{}", format.extension()));
+        d.write_to(path.clone(), &s);
+        d.tick(&s, true);
+        assert_eq!(d.write_state(), WriteState::Failed(msg.clone()));
+        assert!(!path.exists());
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // (d) ------------------------------------------------------------------------------------------
 
 #[test]
@@ -673,8 +762,22 @@ fn card_shows_counts_and_stays_full_width_equal_height() {
     assert!(text.contains("Mittellinien: ja"), "{text}");
     assert!(text.contains("Ansichten: 4"), "{text}");
     assert_full_width_equal_heights(&d);
-    // Viele Maße: Tausendertrenner wie bei den Linien.
-    assert_eq!(group_digits(1234), "1 234");
+    // Ein weiteres Maß zählt mit, die isometrische Ansicht ändert die Zahl nicht.
+    let width = dim_of(&s, id, ViewKind::Front, DimKind::Horizontal);
+    let mut extra = s
+        .document
+        .drawing(id)
+        .unwrap()
+        .dimension(width)
+        .unwrap()
+        .clone();
+    extra.offset += 20.0;
+    extra.chain = None;
+    s.document.add_dimension(id, extra).unwrap();
+    let text = draw(&mut d, &mut s);
+    assert!(text.contains(&format!("Maße: {}", n + 1)), "{text}");
+    assert_eq!(ready(&d, &s).0, n + 1);
+    assert_full_width_equal_heights(&d);
 }
 
 // (f) ------------------------------------------------------------------------------------------
@@ -735,7 +838,7 @@ fn stale_dimension_edit_prepares_again() {
 fn hostile_text_is_escaped_in_both_formats() {
     let (mut s, id) = box_with_dims();
     let width = dim_of(&s, id, ViewKind::Front, DimKind::Horizontal);
-    let hostile = r#"a<&"'>b 50%%c \U+00D8 ^J"#;
+    let hostile = r#"a<&"'>b 50%%c 5%Ø \U+00D8 ^J"#;
     s.document
         .update_dimension(id, width, |m| m.text_override = Some(hostile.into()))
         .unwrap();
@@ -760,9 +863,10 @@ fn hostile_text_is_escaped_in_both_formats() {
         .iter()
         .find(|t| t.0.starts_with("a<&"))
         .unwrap_or_else(|| panic!("{texts:?}"));
-    // Kein Kürzel aus dem eigenen Text: „%%c“ bleibt „%%c“, „\U+00D8“ bleibt die Zeichenfolge.
+    // Kein Kürzel aus dem eigenen Text: „%%c“ bleibt „%%c“, „5%Ø“ zeigt „5%Ø“, „\U+00D8“ bleibt
+    // die Zeichenfolge (Leser entschlüsselt wie CAD-Programme: erst `\U+`, dann `%%`).
     assert_eq!(decoded, hostile);
-    assert_eq!(raw, r#"a<&"'>b 50\U+0025\U+0025c \U+005CU+00D8 ^ J"#);
+    assert_eq!(raw, r#"a<&"'>b 50%%%%%%c 5%%%%%c \U+005CU+00D8 ^ J"#);
     let _ = fs::remove_dir_all(&dir);
 }
 

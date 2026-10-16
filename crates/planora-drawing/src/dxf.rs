@@ -84,8 +84,10 @@
 //!   in Grad (`[0, 360)`), Stil `7 STANDARD`, waagerechte Ausrichtung 72 (0 Anfang, 1 Mitte,
 //!   2 Ende) mit Ausrichtepunkt 11/21/31 = Einfügepunkt, dann `100 AcDbText` und `73 0`
 //!   (Grundlinie). Zeichen: `Ø` → `%%c`, `°` → `%%d`, `±` → `%%p`, `−` (U+2212) → `-`, `^` →
-//!   `^ ` (sonst ein Steuerzeichen-Kürzel), `%` → `\U+0025` und `\` → `\U+005C` (eigene Texte
-//!   bilden so keine Kürzel wie `%%c` oder `\U+…`), Steuerzeichen → Leerzeichen, übrige Zeichen außerhalb
+//!   `^ ` (sonst ein Steuerzeichen-Kürzel), `%` → `%%%` und `\` → `\U+005C` (eigene Texte
+//!   bilden so keine Kürzel wie `%%c` oder `\U+…`; `\U+0025` hilft bei `%` nicht, weil
+//!   CAD-Programme `\U+…` beim Laden, `%%…` erst beim Anzeigen auflösen), Steuerzeichen →
+//!   Leerzeichen, übrige Zeichen außerhalb
 //!   von ASCII → `\U+XXXX`, außerhalb der Grundebene → `?`. Höchstens 255 Zeichen in der Datei;
 //!   ein längerer Text ist der Fehler `Unsupported("Der Maßtext ist zu lang.")`, und es wird
 //!   nichts geschrieben. Nicht endliche Zahlen sind wie überall `NonFinite`.
@@ -1104,9 +1106,11 @@ fn encode_text(s: &str) -> String {
             '\u{b1}' => o.push_str("%%p"),
             '\u{2212}' => o.push('-'),
             '^' => o.push_str("^ "),
-            // Eigene Texte dürfen keine Kürzel bilden: `%` (wie in `%%c`) und `\` (wie in
-            // `\U+…`) stehen selbst als Unicode-Kürzel.
-            '%' => o.push_str("\\U+0025"),
+            // Eigene Texte dürfen keine Kürzel bilden. `%` steht als `%%%` (das Kürzel für ein
+            // einzelnes Prozentzeichen): CAD-Programme lösen `\U+…` schon beim Laden auf, `%%…`
+            // erst beim Anzeigen; ein `\U+0025` würde also vor einem `%%c` wieder zu `%` und mit
+            // ihm ein Kürzel bilden. `\` steht als `\U+005C` (sonst wie in `\U+…`).
+            '%' => o.push_str("%%%"),
             '\\' => o.push_str("\\U+005C"),
             c if c.is_control() => o.push(' '),
             c if c.is_ascii() => o.push(c),
