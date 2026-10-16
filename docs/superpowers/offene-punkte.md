@@ -10,7 +10,7 @@ Stand: 2026-10-10 (Teilprojekt 5 siehe eigener Abschnitt weiter unten). Teilproj
 - **`ttf-parser 0.25.1`** (RUSTSEC-2026-0192, „unmaintained“, keine Sicherheitslücke) wird nur auf dem Linux/Wayland-Pfad gezogen (winit 0.30 → sctk-adwaita 0.10 → ab_glyph) und ist in `deny.toml` begründet ignoriert. Erneut prüfen, sobald winit 0.31 stabil und übernommen ist (nutzt sctk-adwaita ≥ 0.12, das `skrifa` verwenden kann); dann den Eintrag entfernen.
 
 ## Bekannte Grenzen
-- Roboto 2.138 enthält die Zeichen U+23F4 ⏴ / U+23F5 ⏵ (von `egui_tiles` für die Überlauf-Pfeile der Tab-Leiste und von `egui` für Untermenü-Pfeile genutzt) und U+2192 → nicht. Heute ohne Folgen (keine Untermenüs, ein Tab je Container), würde aber als leere Kästchen erscheinen. Lösung bei Bedarf: Pfeile als Formen zeichnen oder eine Ersatzschrift ergänzen.
+- Roboto 2.138 enthält die Zeichen U+23F4 ⏴ / U+23F5 ⏵ (von `egui` für Untermenü-Pfeile und Überlauf-Pfeile genutzt; `egui_tiles` ist seit Etappe B entfernt) und U+2192 → nicht. Heute ohne Folgen (keine Untermenüs, die Tab-Leiste rollt ohne Pfeile), würde aber als leere Kästchen erscheinen. Lösung bei Bedarf: Pfeile als Formen zeichnen oder eine Ersatzschrift ergänzen.
 
 ## Aus der Liste „Vor Teilprojekt 3“ noch offen
 Erledigt mit Teilprojekt 3: beliebig berandete gekrümmte Flächen (beschnittene Flächen samt Vernetzung); exakte Prädikate (`orient2d`) gibt es bisher nur für die Windungszahl (Punkt-in-Fläche). Weiterhin offen:
@@ -194,7 +194,7 @@ Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen m
 - Schlägt „Speichern unter“ fehl, geht der eingetragene Name im Hinweis verloren (neu eintippen). Ein Dialog, der unveränderte Werte übernimmt, markiert das Dokument trotzdem als geändert (der Änderungszähler steigt auch bei einer Änderung ohne Wirkung).
 - Das Versionen-Panel liest für reine Ansichten alter Versionen die Datei einmal und merkt sich das Ergebnis; Änderungen eines anderen Programms am Dokument werden dort erst nach einer Aktion oder einem Tabwechsel sichtbar. Der Zwischenspeicher kann bei ungewöhnlicher Reihenfolge (Panel nicht gezeichnet, ungespeicherter Tab aktiv) kurz veraltet sein. Eine Ansicht, deren Ausgangsversion gelöscht wird, wird nicht nachgeführt.
 - Im Versionen-Panel zeigen Menüeinträge auf einer Ansicht ohne beschreibbaren Tab einen Hinweis, statt zu wirken; mehrere Menüeinträge sind dann ausgegraut.
-- Die Anordnung der Panels wird nicht gespeichert; bei jedem Start gilt die Standardanordnung (Projekte, Browser, 3D-Ansicht, Eigenschaften und Versionen als Tabs). Wird der rechte Tab-Container später entfernt, könnten Kennungen im Dock veralten.
+- Das Ein-/Ausblenden von Projekten und Versionen sowie der gewählte Reiter rechts (Eigenschaften oder Versionen) wird nicht gespeichert; bei jedem Start sind beide Felder sichtbar (seit Etappe B feste schwebende Felder statt Dock).
 - Schreibgeschützte Tabs sperren nur die Oberfläche (Browser, Eigenschaften, Menüs „Erzeugen“/„Bearbeiten“); nicht jede Zustandsmethode in `AppState` prüft den Schreibschutz.
 - Die Wahl eines Zweigs im Versionen-Panel öffnet seine Spitze als Ansicht; der Arbeitsstand des bearbeitbaren Tabs bleibt unberührt.
 
@@ -599,7 +599,7 @@ Stand: 2026-10-16. Zeichnungen bekommen Maße (waagerecht, senkrecht, schräg, D
 - Geschützte Pfade (`crates/planora-kernel`, `crates/planora-mesh`, `crates/planora-step`, `crates/planora-exchange`) sind bitgleich zu `945fa67` (`git diff --stat 945fa67 -- …` ist leer).
 
 ## Teilprojekt 13 – Graphit-Oberfläche, Etappe A (Farben, Schrift, Symbole)
-Stand: 2026-10-16. Das ganze Programm hat das neue Aussehen „Graphit“ in Hell und Dunkel, die Schrift Montserrat und einheitliche Symbole. Der Aufbau des Fensters ist unverändert (egui_tiles, Menüleiste, Tab-Leiste, Statuszeile, Zeichnungsleiste, Fenster „Skizze“). Das ist Etappe A von vieren (B Modell-Layout, C Zeichnung und Skizze, D Dialoge). Spec: `specs/2026-10-16-graphit-oberflaeche-design.md` (Abschnitt 10 „Festlegungen der Umsetzung Etappe A“). Plan: `plans/2026-10-16-graphit-etappe-a.md`. Zweig `feature/graphit-etappe-a`.
+Stand: 2026-10-16. Das ganze Programm hat das neue Aussehen „Graphit“ in Hell und Dunkel, die Schrift Montserrat und einheitliche Symbole. Der Aufbau des Fensters war in dieser Etappe unverändert (egui_tiles, Menüleiste, Tab-Leiste, Statuszeile, Zeichnungsleiste, Fenster „Skizze“); Etappe B hat ihn ersetzt (siehe unten). Das ist Etappe A von vieren (B Modell-Layout, C Zeichnung und Skizze, D Dialoge). Spec: `specs/2026-10-16-graphit-oberflaeche-design.md` (Abschnitt 10 „Festlegungen der Umsetzung Etappe A“). Plan: `plans/2026-10-16-graphit-etappe-a.md`. Zweig `feature/graphit-etappe-a`.
 
 **Was geliefert wurde**
 - Schriften: Montserrat (Regular, Medium, SemiBold; OFL 1.1) mit Roboto als Absicherung, Symbolschrift Phosphor Light (MIT), Lizenztexte und Prüfsummen in `assets/fonts/`. Test: jedes erlaubte Zeichen (Umlaute, ß, „“ – − · × ° ± ² ³ … Ø) ist in der Schrift vorhanden.
@@ -670,9 +670,99 @@ Beanstandungen sammeln; sie werden als Nachbesserung oder in Etappe B behoben.
 - `cargo test --workspace -j 2 --no-fail-fast`: 2087 bestanden, 0 fehlgeschlagen, 33 ignoriert, rund 14 Minuten (Debug). Der erste Lauf ohne `--no-fail-fast` brach am zeitabhängigen Test oben ab (Binärdatei `export_step`: 22 bestanden, 1 fehlgeschlagen), die Tests danach liefen dort nicht mehr (inzwischen behoben, siehe oben). `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` und `cargo deny check` sind grün; die geschützten Pfade (Kernel, Netz, STEP, Austausch) sind gegenüber 945fa67 unverändert.
 
 **Folgearbeit**
-- Etappe B: schwebendes Layout der Modell-Ansicht (oberes Feld, Baumfeld, rechte Felder, unteres Befehlsfeld, Meldungsfeld), sichtbare Mitte, Eingabe-Routing, Ersatz von egui_tiles; hier auch der Fokusring am Menürand.
+- Etappe B (erledigt, siehe nächster Abschnitt): schwebendes Layout der Modell-Ansicht (oberes Feld, Baumfeld, rechte Felder, unteres Befehlsfeld, Meldungsfeld), sichtbare Mitte, Eingabe-Routing, Ersatz von egui_tiles. Der Fokusring am Menürand ist weiter nicht von Hand geprüft (Handliste B, Punkt 4).
 - Etappe C: Zeichnung und Skizze als Felder, Zeichnungsleiste ohne Umbruch, Skizzenfeld rechts; Wächtertests auf Unterordner ausdehnen.
 - Etappe D: Dialoge im neuen Rahmen mit neuer Breitenregel, Checkboxen, Kontextmenü-Symbole, Aufräumen der `pub`-Fläche und der toten Konstanten; Symbolwahl nach dem Handtest nachziehen.
+
+## Teilprojekt 13 – Graphit-Oberfläche, Etappe B (schwebendes Layout)
+Stand: 2026-10-16. Die Modell-Ansicht hat den neuen Aufbau: Der 3D-Bereich füllt das ganze Fenster, darüber schweben feste Felder (oben Menü und Tabs, links Projekte und Baum, rechts Eigenschaften oder Versionen, unten das Befehlsfeld, unten links die Meldungen); bei einer alten Version kommt ein schmales Hinweisfeld unter dem oberen Feld dazu. Das ist Etappe B von vieren (C Zeichnung und Skizze, D Dialoge). Spec: `specs/2026-10-16-graphit-oberflaeche-design.md` (Abschnitt 11 „Festlegungen der Umsetzung Etappe B“). Plan: `plans/2026-10-16-graphit-etappe-b.md`. Zweig `feature/graphit-etappe-b`.
+
+**Was geliefert wurde**
+- Kamera mit sichtbarem Bereich (`OrbitCamera::set_visible`/`clear_visible`): Der Mittelpunkt des Bildes wird in die Mitte der freien Fläche verschoben (Versatz der Bildmitte), ohne die Kamera-Mathematik umzubauen. Auswahl-Strahlen, Würfel, Skizzenblick und `restore_camera` folgen dem Versatz; ohne Versatz verhält sich alles wie vorher.
+- Geometrie (`shell.rs`): `ShellState`, `ShellRects`, `layout()` rechnen die Lage aller Felder und die freie Fläche rein aus Fenstergröße und Konstanten, ohne Messen der Feldgrößen.
+- 3D-Bereich im Vollbild (`viewport::show_in`) mit freier Fläche: Würfel rechts oben in der freien Fläche, Zeigerrouting über die Ebene unter dem Zeiger (nicht `is_pointer_over_egui`).
+- Felder (`shell_panels.rs`): Area-Felder mit Rahmen aus `theme::panel_frame`, nicht verschiebbar; Menü und Tabs oben (Tab-Leiste rollt waagerecht und zeigt den aktiven Tab), Projekte und Baum links, Umschalter Eigenschaften | Versionen rechts, Meldungsfeld, Hinweisfeld für alte Versionen.
+- Befehlsfeld: Chips Vereinigen, Abziehen, Schneiden (wählen die Operation im Booleschen Dialog vor), sechs Erzeugen-Symbole, Verrunden und Fase. Gemeinsame Funktionen mit dem Menü (`CreateKind`, `do_create`, `open_boolean`, `open_blend`), also genau eine Umsetzung; Hover-Hinweise nennen die Menübeschriftung.
+- Verdrahtung: `egui_tiles` und `dock.rs` sind entfernt (samt Abhängigkeit, Lizenzvermerk und `Cargo.lock`-Block); Zeichnung läuft im freien Rechteck auf einem Hintergrund über das ganze Fenster; Dialoge liegen über den Feldern (`theme::window` mit `Order::Foreground`); Mindestfenstergröße 800 × 600.
+- Einmaliges Nach-Einpassen (`fit_pending`): geladene Stände (Dokument öffnen, Version öffnen, Autosicherung, Wiederherstellen) und neue Tabs werden einmal in die freie Fläche eingepasst; ein Zoom des Nutzers bleibt danach stehen.
+- Texte: „Im Feld Projekte …“ statt „Projekt-Panel“ in den Aufforderungen.
+
+**Entscheidungen B1–B8** (Entwurfsverfasser, der Nutzer kann sie kippen; Wortlaut in der Spec, Abschnitt 11)
+- B1 Rand 16 px, Abstand zwischen Feldern 12 px (Graphit nennt 24 px Rand).
+- B2 Die freie Fläche kommt deterministisch aus Konstanten, nicht aus gemessenen Feldgrößen (keine Rückkopplung).
+- B3 Positionen aus `ctx.content_rect()` und Konstanten (`fixed_pos`); Felder mit unbekannter Breite verwerfen den ersten Größen-Durchgang.
+- B4 Felder `Order::Middle` und nicht verschiebbar; Dialoge und Skizzenfenster `Order::Foreground`.
+- B5 Zeiger-Routing über `response.hovered()`, `hover_pos()` und `rect_contains_pointer`, nie `is_pointer_over_egui`.
+- B6 Der Modusschalter oben rechts entfällt (es gibt keine Modi dafür); das Befehlsfeld ist nur eine Abkürzung zu vorhandenen Menüaktionen.
+- B7 Der Hinweis „Alte Version vN – schreibgeschützt …“ steht als eigenes Feld unter dem oberen Feld (Farbe `warning`).
+- B8 Die Zeichnungsansicht bleibt mit ihrer alten Werkzeugleiste im freien Rechteck; das Skizzenfenster bleibt ein verschiebbares Fenster (300 px), Startposition rechts neben dem linken Feld (x = 290).
+
+**Entscheidungen der Umsetzung (Rulings)**
+- `ray()` rechnet die Inverse in f64: Die Genauigkeit 1e-4 mm aus der Aufgabe ist mit f32 nicht erreichbar (schon ohne Versatz 1,6e-4 mm, mit Versatz 1,1e-3 mm). Strahlen sind damit ohne Versatz nicht mehr bitgleich, nur genauer; `view_proj` und `project` bleiben ohne Versatz bitgleich. Rückfall bei Bedarf: f32 mit Toleranz 2e-3 mm.
+- Das Befehlsfeld verhält sich im Skizzenmodus wie das Menü (die Skizze wird beendet, dann öffnet sich der Dialog); es wird dort nicht gesperrt. Es verschwindet nie (Mindestbreite etwa 250 px, gemessen aus drei Chips, Trennstrich und Rand); bei wenig Platz rollt es waagerecht.
+- Das Meldungsfeld wächst bis zu 3 Zeilen (`STATUS_ROWS`) und ist so breit wie der Platz links vom Befehlsfeld; längerer Text wird mit „…“ gekürzt, der volle Text steht beim Überfahren.
+- Das Hinweisfeld hebt die Oberkante der freien Fläche um `BANNER_H` (40) + Abstand (12) an, auch bei einzeiligem Hinweis; der Hinweis ist so breit wie der Platz zwischen den Spalten (bis zu zwei Zeilen).
+- Mindestfenstergröße 800 × 600 (`with_min_inner_size`).
+- `fit_pending`: Nach dem Laden und bei neuen Tabs passt das erste Bild der 3D-Ansicht einmal in die freie Fläche ein. Im Skizzenmodus und in der Zeichnung bleibt die Marke stehen und wird nachgeholt.
+- Schreibschutz wie vorher: Baum und Eigenschaften gesperrt, Projekte und Versionen nicht; Zeichnung `editable = !read_only`.
+- Meldungs- und Hinweisfeld werden nach den anderen Feldern mit frischem Stand angeordnet (Tabwechsel, neue Meldung ohne Zwischenbild).
+
+**Grenzen und offene Punkte**
+
+*Kleine Fenster*
+- Unter etwa 640 px Breite überlappen das obere und das untere Feld die Seitenspalten; unter etwa 360 px Höhe überlappen Felder ebenfalls. Seit der Mindestfenstergröße 800 × 600 betrifft das nur ein Fenster, das von außen kleiner gezogen wird.
+- Bei 800 × 600 ist das obere Feld nicht zentriert (es füllt den Platz zwischen den Spalten); das Befehlsfeld rollt waagerecht.
+- Die linke Spalte klemmt ihre Unterkante mit einer festen Meldungshöhe (`STATUS_H` 32). Das Meldungsfeld mit drei Zeilen reicht bei 800 × 600 bis etwa 3 px unter die freie Fläche; ein Überlappen mit der linken Spalte ist dort nicht getestet. Die Garantie gilt nur, solange das Meldungsfeld höchstens 68 px hoch ist.
+- `shell::layout()` ignoriert `ShellState`: Die Seitenspalten sind immer vorhanden, auch wenn Projekte oder Versionen ausgeblendet sind (nur der Inhalt ändert sich). Bei ausgeblendetem Feld ist die freie Fläche daher nicht größer.
+- Das Hinweisfeld ist 40 px hoch, auch wenn der Hinweis nur eine Zeile braucht (12 px mehr als nötig).
+
+*Skizzenfenster*
+- Das Fenster „Skizze“ ist bei 1400 × 900 so hoch, dass egui es nach oben schiebt (Oberkante 81 statt 90, Unterkante am Fensterrand); es überdeckt dann Meldungs- und Befehlsfeld, bleibt aber vorn und verschiebbar. Lage und Höhe regelt Etappe C oder D.
+- Wird eine Skizze unmittelbar nach dem Laden geöffnet, bevor die 3D-Ansicht je ein Bild gezeichnet hat, passt `open_sketch` noch mit der Kamera ohne freie Fläche ein: Die Mitte stimmt, die Größe kann bei kleinen Fenstern etwas über die freie Fläche hinausragen. In der App kommt das praktisch nicht vor.
+- Der Fall „die Skizze bleibt offen, weil der Entwurf ungültig ist“ beim Klick im Befehlsfeld ist nicht getestet.
+- Im Skizzenmodus ist das zweite `fit_camera` nach dem Skizzen-Overlay nur durch einen Test des Seitenverhältnisses bei symmetrischer freier Fläche abgedeckt; ein Zeigerrouting-Test im Skizzenmodus deckt Klick und Mausrad auf den Feldern ab.
+
+*Befehlsfeld und Symbole*
+- Verrunden und Fase teilen sich dasselbe Symbol; unterschieden werden sie nur über den Hover-Hinweis.
+- Es gibt keinen Menüeintrag „Verschieben“, deshalb auch keinen Knopf im Befehlsfeld.
+- Chip-Farben kommen aus der Palette (`theme::chip_fill`) in Hell und Dunkel; ob sie auf der echten Oberfläche gut unterscheidbar sind, zeigt die Handliste.
+
+*Kamera und Einpassen*
+- Die Erkennung „kein sichtbarer Bereich“ in `frame_bounds` (Versatz 0 und Anteil 1) ist geraten: Wer `visible_aspect` ohne Versatz und Anteil setzt, wird dort ignoriert (latent, im Programm nicht erreichbar).
+- `set_viewport` überschreibt `visible_aspect` bei Versatz 0; Aufrufer mit freier Fläche müssen `set_visible` nach `set_viewport` aufrufen (die App tut das pro Bild).
+- Ein Kameratest (Test (e), ungültiger sichtbarer Bereich) kann nicht scheitern.
+- Das Nach-Einpassen feuert beim ersten Modellbild mit einer freien Fläche von mindestens 1 × 1 px; bei der Mindestfenstergröße ist das unkritisch.
+
+*Texte, Felder, Schnittstelle*
+- „Panel“ steht noch in älteren Abschnitten dieser Datei und in einzelnen Hover- und Fehlertexten; die Oberfläche selbst sagt „Feld“.
+- Der Fokusring am Menürand (offen aus Etappe A) ist nicht von Hand geprüft.
+- Neue `#[doc(hidden)] pub`-Testhaken: `PlanoraApp::{for_tests, ws_mut, shell_mut}`, `shell_panels::{last_layout, field_rects, bottom_buttons, discard}`; `shell_toggles` doppelt. Aufräumen in Etappe D zusammen mit den übrigen `pub`-Flächen.
+- Die Tests treiben das echte `eframe::App::ui` mit `Frame::_new_kittest()`; sie sehen kein echtes Rendering (Zeichnen des 3D-Bereichs unter den Feldern, Flackern beim Fensterziehen, Mindestgröße im echten Fenster). Deshalb die Handliste.
+- Die Zeitabhängigkeit aus Etappe A (das erste Bild in einem frischen egui-Kontext ist langsamer) bleibt ein Risiko für Tests mit Arbeitsthreads.
+
+**Handliste für den Nutzer** (`cargo run -p planora-app --release`, im Modell-Tab; jeweils in Hell und Dunkel)
+1. Fenstergrößen: 800 × 600 (Mindestgröße, kleiner ziehen geht nicht), 1100 × 700, ein großes Fenster. Felder bleiben im Fenster, überlappen einander nicht, springen beim Ändern der Größe nicht und flackern nicht; links und rechts rollen die Felder, wenn der Inhalt höher ist.
+2. Hell und Dunkel (je Dokument-Tab umschalten): Rahmen, Chips im Befehlsfeld, Hinweisfeld, Meldungsfeld gut lesbar.
+3. Alle Menüs (Datei, Erzeugen, Bearbeiten, Ansicht, Zeichnung): öffnen sich unter dem oberen Feld, nichts abgeschnitten, alle Einträge und Tastenkürzel wie vorher.
+4. Fokusring am Menürand mit der Tab-Taste.
+5. Tabs: neuer Tab, Tab wechseln, Tab schließen; viele Tabs (zum Beispiel 20): die Leiste rollt, der aktive Tab kommt ins Bild.
+6. Ansicht: Projekte und Versionen ein- und ausblenden; Umschalter Eigenschaften | Versionen rechts; Strg+O blendet Projekte ein.
+7. Das Modell dreht, wählt und zoomt nicht, wenn die Maus über einem Feld ist (Klick, Ziehen, Mausrad); ein im 3D-Bereich begonnenes Ziehen läuft über Felder weiter.
+8. Dialoge (Export, Rundung/Fase, Boolesche Operationen, Speichern) liegen über den Feldern und gehen nicht hinter ein Feld, wenn man auf ein Feld klickt.
+9. „Alles einpassen“ zentriert das Modell in der Mitte zwischen den Feldern; ebenso nach neuem Tab, Dokument öffnen und Version öffnen.
+10. Dokument öffnen aus dem Feld Projekte; Skizze öffnen und schließen (die Ansicht kommt zurück, wie sie war); das Skizzenfenster erscheint rechts neben dem linken Feld und lässt sich verschieben.
+11. Zeichnung: Ansicht „Zeichnung“ wählen; das Blatt liegt im freien Bereich zwischen den Feldern, die Zeichnungsleiste ist wie vorher.
+12. Befehlsfeld: Chips Vereinigen, Abziehen und Schneiden öffnen den Booleschen Dialog mit der gewählten Operation; die Erzeugen-Symbole, Verrunden und Fase öffnen die gleichen Dialoge wie das Menü; Hover-Hinweise; bei 800 × 600 rollt das Feld waagerecht.
+13. Schreibgeschützte alte Version öffnen: Hinweis unter dem oberen Feld, Baum und Eigenschaften gesperrt, freie Fläche rutscht nach unten.
+14. Lange Fehlermeldung: Das Meldungsfeld zeigt bis zu drei Zeilen, überdeckt nichts, voller Text beim Überfahren.
+Beanstandungen sammeln; sie werden als Nachbesserung oder in Etappe C und D behoben.
+
+**Zahlen (Stand 2026-10-16, Gesamtreihe)**
+- `cargo test --workspace -j 2 --no-fail-fast`: 2163 bestanden, 0 fehlgeschlagen, 33 ignoriert, rund 16 Minuten (Debug), kein sporadischer Fehler. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` und `cargo deny check` sind grün; die geschützten Pfade (Kernel, Netz, STEP, Austausch) sind gegenüber 945fa67 unverändert.
+
+**Folgearbeit**
+- Etappe C: Zeichnung und Skizze als Felder, Zeichnungsleiste ohne Umbruch, Skizzenfeld rechts statt Fenster (damit entfällt die Platzierung des Skizzenfensters); `layout()` mit `ShellState`; Wächtertests auf Unterordner ausdehnen.
+- Etappe D: Dialoge im neuen Rahmen mit neuer Breitenregel, Checkboxen, Kontextmenü-Symbole, Aufräumen der `pub`-Fläche (auch der Testhaken oben) und der toten Konstanten, eigenes Fase-Symbol; Symbolwahl nach dem Handtest nachziehen.
 
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).

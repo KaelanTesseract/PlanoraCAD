@@ -253,7 +253,18 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 - Neue Symbole: einheitliche Linien-Symbole in den Menüs und Werkzeugleisten, dazu passend gezeichnete Symbole für die Skizzenwerkzeuge.
 - Einheitliche Abstände, Ränder und Rundungen in allen Fenstern.
 
-**Noch nicht fertig:** Der Aufbau des Fensters ist wie vorher. Die Felder, die frei über dem Bild schweben, kommen in späteren Etappen (zuerst Modell, dann Zeichnung und Skizze, zuletzt die Dialoge). Bis dahin kann es sein, dass einzelne Leisten, zum Beispiel die Zeichnungsleiste in einem schmalen Fenster, auf mehrere Zeilen umbrechen.
+**Neuer Aufbau des Fensters (Modell-Ansicht):** Die Felder schweben jetzt frei über dem 3D-Bereich, der das ganze Fenster füllt.
+
+- Oben in der Mitte: Menü und Tabs.
+- Links: die Felder Projekte und Baum.
+- Rechts: Eigenschaften und Versionen. Ein Umschalter im Feld wechselt zwischen beiden.
+- Unten: das Befehlsfeld mit Abkürzungen zu den Menüeinträgen, daneben Meldungen.
+- Die Felder lassen sich nicht verschieben oder andocken. Projekte und Versionen blendest du im Menü Ansicht ein oder aus.
+- Klicken, Ziehen und das Mausrad auf einem Feld bewegen das Modell nicht. Dialoge liegen immer über den Feldern.
+- „Alles einpassen“ zentriert das Modell in dem Bereich, der zwischen den Feldern frei bleibt.
+- Das Fenster ist mindestens 800 × 600 groß. Kleiner lässt es sich nicht ziehen.
+
+**Noch nicht neu:** Die Leiste der Zeichnung, das Fenster „Skizze“ und die Dialoge sehen noch aus wie vorher. Sie folgen in den nächsten Etappen (Zeichnung und Skizze in Etappe C, die Dialoge in Etappe D). Bis dahin kann die Zeichnungsleiste in einem schmalen Fenster auf mehrere Zeilen umbrechen, und das Fenster „Skizze“ kann Teile der unteren Felder überdecken.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 13“.
 
