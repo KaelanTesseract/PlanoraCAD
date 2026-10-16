@@ -550,10 +550,12 @@ fn constraint_list(
         .map(|r| r.conflicting.iter().chain(&r.redundant).copied().collect())
         .unwrap_or_default();
     let shift = ui.input(|i| i.modifiers.shift);
-    egui::ScrollArea::vertical()
-        .max_height(LIST_HEIGHT)
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
+    theme::scroll_area(
+        ui,
+        egui::ScrollArea::vertical()
+            .max_height(LIST_HEIGHT)
+            .auto_shrink([false, true]),
+        |ui| {
             for (id, kind, driven) in rows {
                 let item = Item::Constraint(id);
                 let selected = se.selection.contains(&item);
@@ -602,5 +604,6 @@ fn constraint_list(
                     }
                 });
             }
-        });
+        },
+    );
 }

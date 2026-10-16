@@ -326,7 +326,60 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         s.interact_size = vec2(CONTROL, ROW_H);
         s.window_margin = Margin::same(SPACE_3 as i8);
         s.menu_margin = Margin::same(SPACE_4 as i8);
+        s.scroll = scroll_style();
     });
+}
+
+/// Rollbalken: schwebend über dem Inhalt (belegen keinen Platz), in Ruhe unsichtbar. Über der
+/// Fläche erscheint ein schmaler, halb deckender Griff ohne Spur, über dem Griff wird er etwas
+/// breiter. Die Farben setzt [`scroll_area`] aus der Palette ([`scroll_handle_colors`]).
+pub fn scroll_style() -> egui::style::ScrollStyle {
+    egui::style::ScrollStyle {
+        floating: true,
+        bar_width: 8.0,
+        floating_width: 6.0,
+        floating_allocated_width: 0.0,
+        handle_min_length: 24.0,
+        bar_inner_margin: SPACE_1,
+        bar_outer_margin: 2.0,
+        foreground_color: true,
+        dormant_background_opacity: 0.0,
+        active_background_opacity: 0.0,
+        interact_background_opacity: 0.0,
+        dormant_handle_opacity: 0.0,
+        active_handle_opacity: 0.6,
+        interact_handle_opacity: 1.0,
+        ..egui::style::ScrollStyle::floating()
+    }
+}
+
+/// Farben des Rollbalken-Griffs `(in Ruhe über der Fläche, beim Überfahren oder Ziehen)`.
+pub fn scroll_handle_colors(dark: bool) -> (Color32, Color32) {
+    let p = palette(dark);
+    (p.text_tertiary, p.text_secondary)
+}
+
+/// Zeigt `area` mit Griff in den Farben aus [`scroll_handle_colors`] (egui nimmt die Schriftfarbe
+/// der Knöpfe, beim Überfahren wäre das text_primary, also ein weißer Balken im dunklen Thema).
+/// Der Inhalt behält den Stil des Aufrufers.
+pub fn scroll_area<R>(
+    ui: &mut egui::Ui,
+    area: egui::ScrollArea,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::scroll_area::ScrollAreaOutput<R> {
+    let saved = ui.style().clone();
+    let (rest, hover) = scroll_handle_colors(ui.visuals().dark_mode);
+    let w = &mut ui.style_mut().visuals.widgets;
+    w.inactive.fg_stroke.color = rest;
+    w.hovered.fg_stroke.color = hover;
+    w.active.fg_stroke.color = hover;
+    let content_style = saved.clone();
+    let out = area.show(ui, |ui| {
+        ui.set_style(content_style);
+        add_contents(ui)
+    });
+    ui.set_style(saved);
+    out
 }
 
 /// Rahmen schwebender Felder, Leisten und Menüs: bg_panel, 1 px Rand, Rundung 14, kein Schatten.

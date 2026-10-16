@@ -1006,3 +1006,73 @@ fn tabs_can_be_activated_added_and_closed_in_the_top_field() {
     assert_eq!(app.ws_mut().tabs.len(), 2);
     assert!(app.ws_mut().tabs.iter().all(|t| t.title() != first));
 }
+
+/// Sichtbare, schmale waagerechte Flächen im oberen Feld (der Griff des Rollbalkens).
+fn tab_bar_handles(shot: &Shot, top: Rect) -> Vec<Fill> {
+    let bar = theme::scroll_style().bar_width;
+    shot.fills
+        .iter()
+        .filter(|f| {
+            f.fill.a() > 0
+                && f.rect.height() <= bar + 0.5
+                && f.rect.width() >= 16.0
+                && top.contains_rect(f.rect)
+        })
+        .copied()
+        .collect()
+}
+
+#[test]
+fn the_tab_bar_scroll_bar_is_thin_hidden_at_rest_and_below_the_tab_names() {
+    for dark in [true, false] {
+        let c = context(dark);
+        let mut app = app_with_box();
+        app.ws_mut().set_dark(dark);
+        for _ in 0..12 {
+            app.ws_mut().new_tab();
+        }
+        let size = vec2(1100.0, 700.0);
+        let mut shot = settle(&c, &mut app, size).0;
+        for _ in 0..20 {
+            shot = run(&c, &mut app, size, vec![], false).0;
+        }
+        let top = fields_of(&shot, dark, size).top;
+        // In Ruhe: kein Balken.
+        let rest = tab_bar_handles(&shot, top);
+        assert!(
+            rest.is_empty(),
+            "dunkel {dark}: in Ruhe unsichtbar: {rest:?}"
+        );
+        // Zeiger über den Tabs: ein schmaler Griff in der Palettenfarbe, unter den Namen.
+        let tab = shot
+            .texts
+            .iter()
+            .find(|t| t.text.starts_with("Unbenannt") && top.contains_rect(t.rect))
+            .expect("ein Tab")
+            .rect;
+        for _ in 0..30 {
+            shot = run(&c, &mut app, size, vec![moved(tab.center())], false).0;
+        }
+        let handles = tab_bar_handles(&shot, top);
+        assert_eq!(handles.len(), 1, "dunkel {dark}: {handles:?}");
+        let h = handles[0];
+        let s = theme::scroll_style();
+        assert!(h.rect.height() <= s.floating_width + 0.5, "schmal: {h:?}");
+        let (rest_colour, _) = theme::scroll_handle_colors(dark);
+        assert_eq!(h.fill, rest_colour.gamma_multiply(s.active_handle_opacity));
+        for t in shot.texts.iter().filter(|t| top.contains_rect(t.rect)) {
+            assert!(
+                !overlaps(t.rect, h.rect),
+                "dunkel {dark}: Balken {:?} über „{}“ {:?}",
+                h.rect,
+                t.text,
+                t.rect
+            );
+        }
+        // Das Feld bleibt so hoch wie vorher.
+        assert!(near(
+            fields_of(&shot, dark, size).top.height(),
+            shell::TOP_H
+        ));
+    }
+}

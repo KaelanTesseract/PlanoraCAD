@@ -455,7 +455,7 @@ fn no_text_is_clipped_at_1400px() {
         ui.set_max_width(0.24 * WIDTH);
         properties::show(ui, &mut st);
     });
-    s.text("Position (x/y/z)");
+    s.text(properties::POSITION_LABEL);
     nothing_clipped(&s, "Eigenschaften");
 }
 

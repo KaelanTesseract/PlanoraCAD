@@ -53,6 +53,14 @@ fn top_width_key() -> egui::Id {
     top_id().with("wanted")
 }
 
+/// Platz, den die Tab-Leiste neben dem Menü mindestens bekommt (etwa ein Tab).
+const MIN_TABS_W: f32 = 120.0;
+
+/// Gemerkte Mindestbreite des oberen Felds: Menü, Trennstrich, [`MIN_TABS_W`], Rand.
+fn top_min_key() -> egui::Id {
+    top_id().with("min")
+}
+
 /// Gemerkte Breite der Menüknöpfe im oberen Feld.
 fn menu_width_key() -> egui::Id {
     top_id().with("menu")
@@ -206,6 +214,31 @@ fn bar_frame(dark: bool, height: f32) -> egui::Frame {
     frame.inner_margin(egui::Margin::symmetric(theme::SPACE_3 as i8, v as i8))
 }
 
+/// Inhalt eines Seitenfelds in genau `inner.x` Breite und höchstens `inner.y` Höhe. Ein Feld ist
+/// so groß wie sein Inhalt; wäre ein Inhalt breiter (egui bricht z. B. Zeilen in waagerechten
+/// Reihen nicht um), wüchse das Feld über seine Spalte und deckte den Navigationswürfel ab.
+/// Deshalb belegt der Inhalt eine eigene Fläche, deren Größe nicht in das Feld zurückwirkt, und
+/// wird am Innenrand des Rahmens (`margin`) abgeschnitten. Die Inhalte selbst sind so gesetzt,
+/// dass sie in die Breite passen (Hand-Prüfung Haltepunkt 2).
+fn side_column<R>(
+    ui: &mut egui::Ui,
+    inner: Vec2,
+    margin: f32,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let rect = egui::Rect::from_min_size(ui.cursor().min, inner);
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    child.set_clip_rect(rect.expand(margin).intersect(ui.clip_rect()));
+    let r = add_contents(&mut child);
+    let height = child.min_rect().height().min(inner.y);
+    ui.advance_cursor_after_rect(egui::Rect::from_min_size(rect.min, vec2(inner.x, height)));
+    r
+}
+
 /// Ein Feld: Area an `pos` mit Rahmen `frame`. Der erste, unsichtbare Größen-Durchgang eines
 /// neuen Felds wird verworfen, damit es schon im ersten Bild sichtbar an seiner Stelle steht.
 fn field<R>(
@@ -252,10 +285,11 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
                 .max(stored(ctx, bottom_min_key()).unwrap_or(0.0)),
             None => 0.0,
         };
-        let rects = shell::layout(
+        let top_min = stored(ctx, top_min_key()).unwrap_or(0.0);
+        let rects = shell::layout_with_top_min(
             content,
             &app.shell,
-            top_w,
+            (top_w, top_min),
             bottom_w,
             status_w,
             tab.read_only,
@@ -331,6 +365,8 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     // ließe sich die Leiste nicht frei rollen).
     let shown = (app.ws.active_tab().id, app.ws.tabs.len());
     let reveal = ctx.data(|d| d.get_temp::<(u64, usize)>(revealed_key())) != Some(shown);
+    // Platz unter den Tabs für den Rollbalken: der untere Innenrand des Felds.
+    let below_tabs = f32::from(frame.inner_margin.bottom);
     field(ctx, top_id(), rects.top.min, frame, |ui| {
         ui.set_width(inner.x);
         ui.set_height(inner.y);
@@ -347,18 +383,42 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 app.show_projects();
             }
             ui.separator();
-            let tabs = egui::ScrollArea::horizontal()
+            // Die Tab-Leiste reicht bis in den unteren Rand des Felds: ihr schwebender Rollbalken
+            // liegt dort, unter den Namen der Tabs statt über ihnen. Das Feld selbst wird dadurch
+            // nicht höher (eigene Fläche, belegt wird nur die Zeilenhöhe).
+            let row = ui.max_rect();
+            let area_rect = egui::Rect::from_min_max(
+                egui::pos2(ui.cursor().left(), row.top()),
+                egui::pos2(row.right(), row.bottom() + below_tabs),
+            );
+            let mut strip = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(area_rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Min)),
+            );
+            let area = egui::ScrollArea::horizontal()
                 .id_salt("planora-field-tabs")
-                .auto_shrink([true, true])
-                .show(ui, |ui| {
-                    ui.set_max_width(TABS_UNWRAPPED);
-                    ui.add_enabled_ui(no_prompt, |ui| {
-                        tabs::show_revealing(ui, &mut app.ws, reveal)
+                .auto_shrink([true, true]);
+            let tabs = theme::scroll_area(&mut strip, area, |ui| {
+                ui.set_max_width(TABS_UNWRAPPED);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.horizontal(|ui| {
+                        ui.add_enabled_ui(no_prompt, |ui| {
+                            tabs::show_revealing(ui, &mut app.ws, reveal)
+                        });
                     });
+                    ui.add_space(below_tabs);
                 });
+            });
+            ui.advance_cursor_after_rect(egui::Rect::from_min_size(
+                area_rect.min,
+                vec2(tabs.inner_rect.width(), row.height()),
+            ));
             // Wunschbreite: Menüknöpfe, Trennstrich mit Abständen, alle Tabs, Rand.
             let gap = tabs.inner_rect.left() - menu.response.rect.right();
             remember_width(ui, menu_width_key(), menu_natural);
+            remember_width(ui, top_min_key(), menu_natural + gap + MIN_TABS_W + margin);
             remember_width(
                 ui,
                 top_width_key(),
@@ -379,16 +439,16 @@ fn left_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let frame = theme::panel_frame(dark);
     let inner = inner_size(&frame, rects.left.size());
     let read_only = app.ws.active_tab().read_only;
+    let margin = f32::from(frame.inner_margin.left);
     field(ctx, left_id(), rects.left.min, frame, |ui| {
         // Feste Breite und Höchsthöhe aus der Geometrie, nicht aus der Feldgröße des letzten
         // Bildes (das gäbe eine Rückkopplung).
-        ui.set_width(inner.x);
-        ui.set_max_height(inner.y);
-        egui::ScrollArea::vertical()
-            .id_salt("planora-field-left-scroll")
-            .max_height(inner.y)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
+        side_column(ui, inner, margin, |ui| {
+            let area = egui::ScrollArea::vertical()
+                .id_salt("planora-field-left-scroll")
+                .max_height(inner.y)
+                .auto_shrink([false, true]);
+            theme::scroll_area(ui, area, |ui| {
                 if app.shell.projects_visible {
                     theme::section_header(ui, "Projekte", theme::HEADER_H);
                     ui.add_space(theme::SPACE_1);
@@ -398,6 +458,7 @@ fn left_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 let state = &mut app.ws.active_tab_mut().state;
                 browser::show_with(ui, state, read_only);
             });
+        });
     });
 }
 
@@ -408,54 +469,53 @@ fn right_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let frame = theme::panel_frame(dark);
     let inner = inner_size(&frame, rects.right.size());
     let enabled = !app.ws.active_tab().read_only;
+    let margin = f32::from(frame.inner_margin.left);
     field(ctx, right_id(), rects.right.min, frame, |ui| {
-        ui.set_width(inner.x);
-        ui.set_max_height(inner.y);
-        // Mit Umschalter steht der Name des Bereichs dort; ohne ihn zeigt der Inhalt seinen Kopf.
-        let switch = app.shell.versions_visible;
-        if switch {
-            let mut tab = app.shell.effective_right_tab();
-            ui.horizontal(|ui| {
-                theme::frameless(ui.style_mut());
-                for (which, label) in [
-                    (RightTab::Properties, "Eigenschaften"),
-                    (RightTab::Versions, "Versionen"),
-                ] {
-                    let r = ui.selectable_label(tab == which, label);
-                    theme::focus_ring(ui, &r);
-                    if r.clicked() {
-                        tab = which;
-                    }
+        side_column(ui, inner, margin, |ui| right_contents(ui, app, enabled));
+    });
+}
+
+/// Inhalt des rechten Felds (siehe [`right_field`]).
+fn right_contents(ui: &mut egui::Ui, app: &mut PlanoraApp, enabled: bool) {
+    // Mit Umschalter steht der Name des Bereichs dort; ohne ihn zeigt der Inhalt seinen Kopf.
+    let switch = app.shell.versions_visible;
+    if switch {
+        let mut tab = app.shell.effective_right_tab();
+        ui.horizontal(|ui| {
+            theme::frameless(ui.style_mut());
+            for (which, label) in [
+                (RightTab::Properties, "Eigenschaften"),
+                (RightTab::Versions, "Versionen"),
+            ] {
+                let r = ui.selectable_label(tab == which, label);
+                theme::focus_ring(ui, &r);
+                if r.clicked() {
+                    tab = which;
+                }
+            }
+        });
+        app.shell.right_tab = tab;
+        ui.add_space(theme::SPACE_2);
+    }
+    let tab = app.shell.effective_right_tab();
+    let area = egui::ScrollArea::vertical()
+        .id_salt(("planora-field-right-scroll", tab == RightTab::Versions))
+        .max_height(ui.available_height())
+        .auto_shrink([false, true]);
+    theme::scroll_area(ui, area, |ui| match tab {
+        RightTab::Properties => {
+            let state = &mut app.ws.active_tab_mut().state;
+            ui.add_enabled_ui(enabled, |ui| {
+                if switch {
+                    properties::show_content(ui, state);
+                } else {
+                    properties::show(ui, state);
                 }
             });
-            app.shell.right_tab = tab;
-            ui.add_space(theme::SPACE_2);
         }
-        let tab = app.shell.effective_right_tab();
-        egui::ScrollArea::vertical()
-            .id_salt(("planora-field-right-scroll", tab == RightTab::Versions))
-            .max_height(ui.available_height())
-            .auto_shrink([false, true])
-            .show(ui, |ui| match tab {
-                RightTab::Properties => {
-                    let state = &mut app.ws.active_tab_mut().state;
-                    ui.add_enabled_ui(enabled, |ui| {
-                        if switch {
-                            properties::show_content(ui, state);
-                        } else {
-                            properties::show(ui, state);
-                        }
-                    });
-                }
-                RightTab::Versions => {
-                    versions_panel::show_with_header(
-                        ui,
-                        &mut app.ws,
-                        &mut app.versions_ui,
-                        !switch,
-                    );
-                }
-            });
+        RightTab::Versions => {
+            versions_panel::show_with_header(ui, &mut app.ws, &mut app.versions_ui, !switch);
+        }
     });
 }
 

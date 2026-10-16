@@ -93,8 +93,30 @@ pub struct ShellRects {
 /// Berechnet die Geometrie deterministisch aus Konstanten (kein Messen, keine Rückkopplung).
 pub fn layout(
     content: Rect,
-    _state: &ShellState,
+    state: &ShellState,
     top_width: f32,
+    bottom_width: f32,
+    status_width: f32,
+    read_only: bool,
+) -> ShellRects {
+    layout_with_top_min(
+        content,
+        state,
+        (top_width, 0.0),
+        bottom_width,
+        status_width,
+        read_only,
+    )
+}
+
+/// Wie [`layout`]; `(top_width, top_min)`: Wunschbreite des oberen Felds und die Breite, die es
+/// mindestens braucht (Menü und ein Tab). Passt `top_min` nicht zwischen die Seitenspalten
+/// (schmale Fenster), wird das obere Feld so breit wie nötig und die Seitenspalten beginnen erst
+/// darunter. So überdeckt das obere Feld nie eine Spalte (Hand-Prüfung Haltepunkt 2).
+pub fn layout_with_top_min(
+    content: Rect,
+    _state: &ShellState,
+    (top_width, top_min): (f32, f32),
     bottom_width: f32,
     status_width: f32,
     read_only: bool,
@@ -142,12 +164,19 @@ pub fn layout(
     let max_w = content.width() - 2.0 * SHELL_INSET;
     let mid_w = |wanted: f32| wanted.min(avail.max(MIN_FIELD_W)).min(max_w);
 
+    // Braucht das obere Feld mehr Platz als zwischen den Spalten ist, steht es über ihnen.
+    let top_over_columns = top_min > avail.max(MIN_FIELD_W);
+    let top_w = if top_over_columns {
+        top_width.max(top_min).min(max_w)
+    } else {
+        mid_w(top_width)
+    };
     let top = Rect::from_center_size(
         pos2(
             content.center().x,
             content.top() + SHELL_INSET + TOP_H / 2.0,
         ),
-        vec2(mid_w(top_width), TOP_H),
+        vec2(top_w, TOP_H),
     );
     let bottom = Rect::from_center_size(
         pos2(
@@ -167,7 +196,11 @@ pub fn layout(
         ),
     );
 
-    let col_top = content.top() + SHELL_INSET;
+    let col_top = if top_over_columns {
+        top.bottom() + GAP
+    } else {
+        content.top() + SHELL_INSET
+    };
     // Das linke Feld endet mit der freien Fläche, auf jeden Fall um GAP über dem Status.
     let left_bottom = free.bottom().min(status.top() - GAP).max(col_top);
     let right_bottom = free.bottom().max(col_top);

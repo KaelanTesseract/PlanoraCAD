@@ -214,15 +214,15 @@ fn save_as(
             Some(Ok(nodes)) => {
                 ui.label("Ziel (Projekt oder Ordner):");
                 egui::Frame::group(ui.style()).show(ui, |ui| {
-                    egui::ScrollArea::vertical()
+                    let area = egui::ScrollArea::vertical()
                         .max_height(220.0)
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            if nodes.iter().all(|n| n.kind == NodeKind::Document) {
-                                ui.weak("Noch kein Projekt vorhanden. Zuerst im Feld Projekte ein Projekt anlegen.");
-                            }
-                            container_tree(ui, nodes, &mut parent);
-                        });
+                        .auto_shrink([false, true]);
+                    theme::scroll_area(ui, area, |ui| {
+                        if nodes.iter().all(|n| n.kind == NodeKind::Document) {
+                            ui.weak("Noch kein Projekt vorhanden. Zuerst im Feld Projekte ein Projekt anlegen.");
+                        }
+                        container_tree(ui, nodes, &mut parent);
+                    });
                 });
             }
         }

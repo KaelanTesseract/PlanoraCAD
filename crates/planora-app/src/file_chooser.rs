@@ -265,10 +265,12 @@ impl FileChooser {
             }
         });
         let (mut enter, mut pick, mut double) = (None, None, None);
-        egui::ScrollArea::vertical()
-            .max_height(LIST_HEIGHT)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
+        theme::scroll_area(
+            ui,
+            egui::ScrollArea::vertical()
+                .max_height(LIST_HEIGHT)
+                .auto_shrink([false, true]),
+            |ui| {
                 for e in &self.entries {
                     let text = if e.is_dir {
                         format!("{}  (Ordner, Doppelklick zum Öffnen)", e.name)
@@ -297,7 +299,8 @@ impl FileChooser {
                         "Es werden nur die ersten {MAX_ENTRIES} Einträge gezeigt."
                     ));
                 }
-            });
+            },
+        );
         if let Some(n) = enter {
             self.enter(&n);
         }

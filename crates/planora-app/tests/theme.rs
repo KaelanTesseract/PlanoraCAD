@@ -582,3 +582,155 @@ fn status_colors_come_from_the_palette() {
         theme::palette(true).warning
     );
 }
+
+// ---- Rollbalken (Hand-Prüfung Haltepunkt 2) ----------------------------------------------------
+
+#[test]
+fn scroll_bars_float_thin_and_stay_hidden_at_rest() {
+    for dark in BOTH {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx, dark);
+        for t in [Theme::Dark, Theme::Light] {
+            let s = ctx.style_of(t).spacing.scroll;
+            let what = format!("{} / {t:?}", name(dark));
+            assert!(s.floating, "{what}: schwebend, belegt keinen Platz");
+            assert_eq!(s.floating_allocated_width, 0.0, "{what}");
+            assert_eq!(s.allocated_width(), 0.0, "{what}");
+            assert!(
+                s.bar_width <= 8.0,
+                "{what}: höchstens 8 px breit: {}",
+                s.bar_width
+            );
+            assert!(
+                (4.0..=s.bar_width).contains(&s.floating_width),
+                "{what}: schmal in Ruhe ({}), breiter beim Überfahren ({})",
+                s.floating_width,
+                s.bar_width
+            );
+            assert!(s.foreground_color, "{what}: Griff in der Schriftfarbe");
+            assert_eq!(s.dormant_handle_opacity, 0.0, "{what}: in Ruhe unsichtbar");
+            assert_eq!(s.dormant_background_opacity, 0.0, "{what}");
+            assert_eq!(s.active_background_opacity, 0.0, "{what}: keine Spur");
+            assert_eq!(s.interact_background_opacity, 0.0, "{what}: keine Spur");
+            assert!(
+                s.active_handle_opacity > 0.0 && s.active_handle_opacity < 1.0,
+                "{what}: zart beim Überfahren der Fläche: {}",
+                s.active_handle_opacity
+            );
+            assert!(s.interact_handle_opacity <= 1.0, "{what}");
+            assert!(s.handle_min_length >= 16.0, "{what}");
+        }
+    }
+}
+
+#[test]
+fn scroll_handle_colours_come_from_the_palette() {
+    for dark in BOTH {
+        let p = theme::palette(dark);
+        assert_eq!(
+            theme::scroll_handle_colors(dark),
+            (p.text_tertiary, p.text_secondary),
+            "{}",
+            name(dark)
+        );
+    }
+}
+
+/// Zeichnet eine rollende Liste über `theme::scroll_area` mit dem Zeiger an `pointer` und liefert
+/// die schmalen, sichtbaren Rechtecke am rechten Rand (Griff) und den Bereich.
+fn scroll_handles(
+    dark: bool,
+    pointer: impl Fn(egui::Rect) -> egui::Pos2,
+) -> Vec<(egui::Rect, Color32)> {
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts::definitions());
+    theme::apply(&ctx, dark);
+    let mut area = egui::Rect::NOTHING;
+    let mut found = Vec::new();
+    for frame in 0..40 {
+        let pos = (frame > 0).then(|| pointer(area));
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 300.0),
+            )),
+            time: Some(f64::from(frame) / 60.0),
+            events: pos.map(egui::Event::PointerMoved).into_iter().collect(),
+            ..Default::default()
+        };
+        let out = ctx.run_ui(input, |ui| {
+            let r = theme::scroll_area(
+                ui,
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .auto_shrink([false, true]),
+                |ui| {
+                    for i in 0..30 {
+                        ui.label(format!("Zeile {i}"));
+                    }
+                },
+            );
+            area = r.inner_rect;
+        });
+        let bar = ctx.global_style().spacing.scroll.bar_width;
+        found = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r)
+                    if r.fill.a() > 0
+                        && r.rect.width() <= bar + 0.5
+                        && r.rect.height() >= 16.0
+                        && r.rect.right() > area.right() - bar - 4.0 =>
+                {
+                    Some((r.rect, r.fill))
+                }
+                _ => None,
+            })
+            .collect();
+        out.drop_without_applying_deltas();
+    }
+    found
+}
+
+#[test]
+fn the_scroll_handle_is_hidden_at_rest_and_subtle_when_hovered() {
+    for dark in BOTH {
+        let p = theme::palette(dark);
+        let s = theme::scroll_style();
+        // In Ruhe (Zeiger weit weg): kein Griff.
+        let rest = scroll_handles(dark, |_| egui::pos2(390.0, 290.0));
+        assert!(
+            rest.is_empty(),
+            "{}: in Ruhe unsichtbar: {rest:?}",
+            name(dark)
+        );
+        // Zeiger über der Liste: ein schmaler Griff in text_tertiary, halb deckend.
+        let over_area = scroll_handles(dark, |a| a.center());
+        assert_eq!(over_area.len(), 1, "{}: {over_area:?}", name(dark));
+        let (handle, fill) = over_area[0];
+        assert!(handle.width() <= s.floating_width + 0.5, "{handle:?}");
+        assert_eq!(
+            fill,
+            p.text_tertiary.gamma_multiply(s.active_handle_opacity),
+            "{}",
+            name(dark)
+        );
+        // Zeiger auf dem Griff: breiter, in text_secondary, nie die helle Schriftfarbe.
+        let on_handle = scroll_handles(dark, |a| egui::pos2(a.right() - 4.0, a.top() + 8.0));
+        assert_eq!(on_handle.len(), 1, "{}: {on_handle:?}", name(dark));
+        let (wide, fill) = on_handle[0];
+        assert!(
+            wide.width() > handle.width(),
+            "{wide:?} breiter als {handle:?}"
+        );
+        assert!(wide.width() <= s.bar_width + 0.5, "{wide:?}");
+        assert_eq!(
+            fill,
+            p.text_secondary.gamma_multiply(s.interact_handle_opacity),
+            "{}",
+            name(dark)
+        );
+        assert_ne!(fill, p.text_primary, "kein weißer Balken");
+    }
+}
