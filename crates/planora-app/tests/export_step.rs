@@ -315,17 +315,33 @@ fn closing_is_refused_while_step_is_written_and_the_file_is_finished() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Hält das STEP-Schreiben an, bis abgebrochen wird, und schreibt dann mit dem echten
+/// Schreiber weiter (der den Abbruch meldet). Ohne Abbruch nach 30 s ebenfalls echt.
+fn held_step_writer(
+    path: &std::path::Path,
+    prepared: &StepPrepared,
+    p: &Progress,
+) -> Result<u64, planora_step::StepError> {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !p.is_cancelled() && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    write_step_bodies(path, prepared, p)
+}
+
 #[test]
 fn the_window_stays_open_with_a_hint_while_step_is_written() {
-    // Viele Körper, damit der Arbeitsthread beim Zeichnen sicher noch läuft.
+    // Das Schreiben wartet auf den Abbruch; früher entschieden 300 Quader und die Dauer der
+    // ersten Bilder, ob es beim Zeichnen noch lief (unzuverlässig).
     let mut s = AppState::new();
-    for _ in 0..300 {
+    for _ in 0..3 {
         s.create_box(DVec3::splat(3.0)).unwrap();
     }
     s.selected_body = None;
     let dir = temp_dir("hinweis");
     let path = dir.join("k.step");
     let mut d = step_dialog(&s);
+    d.set_step_writer(held_step_writer);
     d.write_to(path.clone(), &s);
     assert!(!d.request_close());
     let ctx = context();

@@ -648,8 +648,8 @@ Stand: 2026-10-16. Das ganze Programm hat das neue Aussehen „Graphit“ in Hel
 - `ALLOWED` im Glyphentest ist handgepflegt; Roboto als Ersatzschrift wird nie gebraucht (Montserrat hat alle Zeichen).
 - Zwischencommits der Aufgabe 5 wurden nicht einzeln kompiliert.
 
-*Test mit Zeitabhängigkeit*
-- `export_step::the_window_stays_open_with_a_hint_while_step_is_written` (300 Quader, Abbrechen während des Schreibens) schlägt seit dieser Etappe oft fehl (`Done` statt `Abgebrochen`): das Schreiben ist fertig, bevor der Test abbricht. Auf dem Stand vor Etappe A (868d2c9) lief er 8 von 8 Mal durch; auf dem Zweig einzeln aufgerufen 0 von 8 Mal, als ganze Datei etwa jedes dritte Mal; im vollständigen Lauf mit `--no-fail-fast` war er grün, im ersten vollständigen Lauf rot. Wahrscheinliche Ursache: die zwei Bildaufbauten vor dem Abbrechen dauern mit Montserrat und dem neuen Theme länger. Das Programm ist nicht betroffen, der Test ist zu knapp bemessen (mehr Körper oder Abbrechen vor dem ersten Bild).
+*Test mit Zeitabhängigkeit (behoben)*
+- `export_step::the_window_stays_open_with_a_hint_while_step_is_written` (300 Quader, Abbrechen während des Schreibens) schlug seit dieser Etappe oft fehl (`Done` statt `Abgebrochen`): das Schreiben war fertig, bevor der Test abbrach. Gemessen (Debug): das Schreiben der 300 Quader dauert auf beiden Ständen rund 90–115 ms; das erste Bild des Fensters in einem frischen egui-Kontext dauerte vor Etappe A rund 43 ms, jetzt rund 95 ms (das zweite Bild 2,5 bzw. 4,8 ms). Die Mehrzeit ist das einmalige Rastern der Schriftzeichen im neuen Kontext (Montserrat in drei Schnitten und mehreren Größen); `theme::apply` läuft weiterhin nur bei einem Wechsel von Hell/Dunkel. Das Programm ist nicht betroffen (der Zeichensatz-Zwischenspeicher bleibt über die Bilder erhalten), nur das Rennen im Test kippte. Behoben, indem der Test über den neuen Testhaken `ExportDialog::set_step_writer` einen Schreiber einsetzt, der bis zum Abbrechen wartet und dann den echten `write_step_bodies` aufruft (der „Abgebrochen“ meldet und keine Datei hinterlässt); der Test braucht dafür nur noch 3 Quader. Die ganze Datei lief danach 12 von 12 Mal durch.
 
 **Handliste für den Nutzer** (`cargo run -p planora-app --release`, jeweils in Hell und Dunkel; Hell/Dunkel je Dokument-Tab umschalten)
 1. Modell: Menüs (alle Einträge mit Symbol, nichts abgeschnitten), Tab-Leiste, Baum, Eigenschaften, Statuszeile; gewählte Teile, Würfel, Achsen gut lesbar?
@@ -662,7 +662,7 @@ Stand: 2026-10-16. Das ganze Programm hat das neue Aussehen „Graphit“ in Hel
 Beanstandungen sammeln; sie werden als Nachbesserung oder in Etappe B behoben.
 
 **Zahlen (Stand 2026-10-16, Gesamtreihe)**
-- `cargo test --workspace -j 2 --no-fail-fast`: 2087 bestanden, 0 fehlgeschlagen, 33 ignoriert, rund 14 Minuten (Debug). Der erste Lauf ohne `--no-fail-fast` brach am zeitabhängigen Test oben ab (Binärdatei `export_step`: 22 bestanden, 1 fehlgeschlagen), die Tests danach liefen dort nicht mehr. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` und `cargo deny check` sind grün; die geschützten Pfade (Kernel, Netz, STEP, Austausch) sind gegenüber 945fa67 unverändert.
+- `cargo test --workspace -j 2 --no-fail-fast`: 2087 bestanden, 0 fehlgeschlagen, 33 ignoriert, rund 14 Minuten (Debug). Der erste Lauf ohne `--no-fail-fast` brach am zeitabhängigen Test oben ab (Binärdatei `export_step`: 22 bestanden, 1 fehlgeschlagen), die Tests danach liefen dort nicht mehr (inzwischen behoben, siehe oben). `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` und `cargo deny check` sind grün; die geschützten Pfade (Kernel, Netz, STEP, Austausch) sind gegenüber 945fa67 unverändert.
 
 **Folgearbeit**
 - Etappe B: schwebendes Layout der Modell-Ansicht (oberes Feld, Baumfeld, rechte Felder, unteres Befehlsfeld, Meldungsfeld), sichtbare Mitte, Eingabe-Routing, Ersatz von egui_tiles; hier auch der Fokusring am Menürand.

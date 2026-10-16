@@ -876,6 +876,8 @@ type DrawResult = Result<Arc<DrawingPrepared>, String>;
 type DrawWriteJob = Job<Result<u64, String>>;
 /// Das Schreiben einer Zeichnung (austauschbar nur für Tests).
 pub type WriteFn = fn(&Path, &SheetModel, DrawingFormat, &Progress) -> Result<u64, DrawError>;
+/// Das Schreiben einer STEP-Datei (austauschbar nur für Tests).
+pub type StepWriteFn = fn(&Path, &StepPrepared, &Progress) -> Result<u64, StepError>;
 
 /// Stand zur Zeit des Öffnens der Dateiauswahl.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -905,6 +907,7 @@ pub struct ExportDialog {
     compute: ComputeFn,
     resolve: ResolveFn,
     writer: WriteFn,
+    step_writer: StepWriteFn,
     written: Option<Result<(PathBuf, u64), String>>,
     /// Format, mit dem zuletzt geschrieben wurde; die Meldung gehört nur zu diesem Format.
     write_format: ExportFormat,
@@ -944,6 +947,7 @@ impl ExportDialog {
             compute: compute_view,
             resolve: resolve_dimensions_in_worker,
             writer: export_drawing_file,
+            step_writer: write_step_bodies,
             written: None,
             write_format: ExportFormat::Mesh(Format::Stl),
             written_format: None,
@@ -1013,6 +1017,13 @@ impl ExportDialog {
     #[doc(hidden)]
     pub fn set_writer(&mut self, f: WriteFn) {
         self.writer = f;
+    }
+
+    /// Ersetzt das Schreiben einer STEP-Datei (nur für Tests: Schreiben, das bis zum Abbrechen
+    /// läuft).
+    #[doc(hidden)]
+    pub fn set_step_writer(&mut self, f: StepWriteFn) {
+        self.step_writer = f;
     }
 
     /// Die gewählte Zeichnung; gibt es sie nicht (mehr), die Vorgabe.
@@ -1457,11 +1468,10 @@ impl ExportDialog {
                     return;
                 }
                 let (prepared, target) = (Arc::clone(prepared), path.clone());
+                let writer = self.step_writer;
                 self.written = None;
-                self.step_writing = Some((
-                    path,
-                    Job::spawn(move |p| write_step_bodies(&target, &prepared, p)),
-                ));
+                self.step_writing =
+                    Some((path, Job::spawn(move |p| writer(&target, &prepared, p))));
             }
             ExportFormat::Mesh(format) => {
                 let Some((k, Ok(prepared))) = &self.prepared else {
