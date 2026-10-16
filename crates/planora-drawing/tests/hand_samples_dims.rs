@@ -148,8 +148,12 @@ struct Sample {
     /// `strict`, als Pflicht).
     suggest_values: Vec<f64>,
     strict: bool,
-    /// Wo es sich lohnt, auf etwas Besonderes zu achten.
+    /// Worauf man in beiden Zeichnungen der Probe achten soll (leer: nichts Gemeinsames).
     focus: &'static str,
+    /// Worauf man nur in der Zeichnung mit den von Hand gesetzten Maßen achten soll.
+    focus_hand: &'static str,
+    /// Worauf man nur in der Zeichnung mit dem Vorschlag achten soll (leer ohne Vorschlag).
+    focus_suggest: &'static str,
 }
 
 fn p(x: f64, y: f64, z: f64) -> DVec3 {
@@ -297,7 +301,9 @@ fn sample(name: &str) -> Sample {
                 lost: vec![],
                 suggest_values: vec![10.0, 20.0, 30.0],
                 strict: true,
-                focus: "Einfache Quaderkanten: Maßlinien mit Pfeilen innen, Text oberhalb bzw. senkrecht lesbar. Keine Mittellinien (keine runden Teile).",
+                focus: "Einfache Quaderkanten: Maßlinien mit Pfeilen innen, Text oberhalb bzw. senkrecht von unten nach oben lesbar. Keine Mittellinien (keine runden Teile).",
+                focus_hand: "Zusätzlich ein schräges Maß über die Ecken vorne (31,6), parallel zur Diagonale.",
+                focus_suggest: "Nur drei Maße: Breite und Höhe vorne, Tiefe oben (die Breite oben wäre dieselbe und fehlt deshalb).",
             }
         }
         "Zylinder_Masse" => {
@@ -355,6 +361,8 @@ fn sample(name: &str) -> Sample {
                 suggest_values: vec![10.0, 12.0],
                 strict: true,
                 focus: "Mittellinien: von der Seite eine Linie in der Achse (strichpunktiert, steht oben und unten 3 mm über), von oben ein Kreuz.",
+                focus_hand: "Ø von der Seite als Maßlinie quer zur Achse (vorne und links); von oben Ø und R mit Führungslinie, das R unter 225° (nach links unten), Pfeilspitzen auf dem Kreis.",
+                focus_suggest: "Nur zwei Maße: Höhe vorne und Ø oben mit Führungslinie unter 45°.",
             }
         }
         "Bohrung_Masse" => {
@@ -421,7 +429,9 @@ fn sample(name: &str) -> Sample {
                 lost: vec![],
                 suggest_values: vec![10.0, 20.0, 15.0, 40.0, 30.0, 12.0],
                 strict: true,
-                focus: "Mittellinienkreuz in der Bohrung von oben; von vorne und links die verdeckte Bohrung mit einer Mittellinie. Die Bezugsmaße stehen gestapelt (7 mm Abstand) und gehen von derselben Kante aus.",
+                focus: "Mittellinienkreuz in der Bohrung von oben; von vorne und links die verdeckte Bohrung mit einer Mittellinie.",
+                focus_hand: "Oben zwei Gruppen Bezugsmaße (waagerecht 20 und 40, senkrecht 15 und 30): gestapelt mit 7 mm Abstand, jede Gruppe geht von derselben Kante aus.",
+                focus_suggest: "Oben Ø10 mit Führungslinie, die Bohrungsmitte von links (20) und von unten (15) und die Gesamttiefe (30); Maße derselben Richtung stehen 7 mm gestaffelt. Vorne Breite und Dicke.",
             }
         }
         "Winkel_Masse" => Sample {
@@ -499,7 +509,9 @@ fn sample(name: &str) -> Sample {
             lost: vec![],
             suggest_values: vec![40.0, 20.0, 10.0],
             strict: false,
-            focus: "Winkelmaße: 90° mit Bogen zwischen den Schenkeln, 45° für die Schräge (Bogen im Winkelraum, Pfeile auf den Schenkeln, Gradzeichen im Text).",
+            focus: "Keine runden Teile, also keine Mittellinien.",
+            focus_hand: "Winkelmaße: 90° mit Bogen zwischen den Schenkeln, 45° für die Schräge (Bogen im Winkelraum, Pfeile auf den Schenkeln, Gradzeichen im Text).",
+            focus_suggest: "Keine Winkelmaße (der Vorschlag setzt nie Winkel): nur Breite und Dicke vorne und die Höhe des Grundrisses oben.",
         },
         "Rundung_Masse" => {
             let (a, b, c, r) = (30.0, 20.0, 15.0, 4.0);
@@ -520,23 +532,25 @@ fn sample(name: &str) -> Sample {
                         Radius,
                         vec![arc_z(a - r, b - r, c, r, 0.0, 90.0)],
                         4.0,
-                        "Rundung rechts oben (R, Führungslinie unter 30°)",
+                        "Rundung rechts oben (R, Führungslinie unter 60°)",
                     )
-                    .ang(30.0),
+                    .ang(60.0),
                     hd(
                         Top,
                         Horizontal,
                         vec![ln((0., r, c), (0., b - r, c)), ln((a, r, c), (a, b - r, c))],
                         30.0,
-                        "Gesamtbreite",
-                    ),
+                        "Gesamtbreite (Abstand 18 mm = 10 mm neben dem Umriss: die Bezugskante endet 4 mm · 2 vor der Rundung)",
+                    )
+                    .off(18.0),
                     hd(
                         Top,
                         Vertical,
                         vec![ln((r, 0., c), (a - r, 0., c)), ln((r, b, c), (a - r, b, c))],
                         20.0,
-                        "Gesamttiefe",
-                    ),
+                        "Gesamttiefe (Abstand 18 mm = 10 mm neben dem Umriss: die Bezugskante endet 4 mm · 2 vor der Rundung)",
+                    )
+                    .off(18.0),
                     hd(
                         Front,
                         Vertical,
@@ -545,8 +559,9 @@ fn sample(name: &str) -> Sample {
                             ln((r, 0., c), (a - r, 0., c)),
                         ],
                         15.0,
-                        "Höhe",
-                    ),
+                        "Höhe (Abstand 18 mm = 10 mm neben dem Umriss: die Bezugskante endet 4 mm · 2 vor der Rundung)",
+                    )
+                    .off(18.0),
                     hd(
                         Front,
                         Horizontal,
@@ -559,7 +574,9 @@ fn sample(name: &str) -> Sample {
                 lost: vec![],
                 suggest_values: vec![30.0, 20.0, 15.0, 4.0],
                 strict: false,
-                focus: "R mit Führungslinie schräg aus dem Viertelkreis (Pfeil auf dem Bogen); Mittellinien der vier Rundungen von oben.",
+                focus: "Mittellinien der vier Rundungen von oben. Jede R-Pfeilspitze sitzt genau auf ihrem Viertelkreis, die Führungslinie zeigt von der Rundungsmitte nach außen. Die Maßlinien der Gesamtmaße liegen 10 mm neben dem Umriss (nicht neben dem Ende der geraden Kante), der Text der senkrechten Maße (20,0 oben, 15,0 vorne) steht frei zwischen Umriss und Maßlinie.",
+                focus_hand: "Zwei R: links unten durch die Bogenmitte (225°; der gewünschte Winkel 45° liegt nicht auf diesem Viertelkreis), rechts oben unter 60° (liegt auf dem Bogen, bleibt). Dazu vorne der Abstand der Rundungsachsen (22).",
+                focus_suggest: "Vier R4, eine je Ecke: oben rechts unter 45°, oben links 135°, unten links 225°, unten rechts 315° (je durch die Bogenmitte, wo 45° nicht auf dem Bogen liegt).",
             }
         }
         "Kette_Bezug" => {
@@ -661,7 +678,9 @@ fn sample(name: &str) -> Sample {
                 lost: vec![],
                 suggest_values: vec![40.0, 30.0, 20.0],
                 strict: false,
-                focus: "Die Maßkette (oben, 10 / 20 / 10) liegt auf einer gemeinsamen Maßlinie, die Texte zwischen den Pfeilen. Die Bezugsmaße stehen gestapelt, jedes von derselben Kante aus.",
+                focus: "",
+                focus_hand: "Die Maßkette (oben, 10 / 20 / 10) liegt auf einer gemeinsamen Maßlinie, die Texte zwischen den Pfeilen. Die Bezugsmaße (oben senkrecht 10 / 20 / 30, vorne senkrecht 12 / 20 und waagerecht 10 / 30 / 40) stehen gestapelt, jedes von derselben Kante aus.",
+                focus_suggest: "Keine Maßketten und keine Bezugsmaße (der Vorschlag setzt nur Gesamtmaße, Ø/R und Bohrungsmitten): Breite 40 und Höhe 20 vorne, Tiefe 30 oben.",
             }
         }
         "Toleranzen" => {
@@ -745,7 +764,9 @@ fn sample(name: &str) -> Sample {
                 lost: vec![],
                 suggest_values: vec![],
                 strict: false,
-                focus: "Die Toleranztexte: ±, gestapelte Zeilen, Grenzmaße ohne Nennmaß, Passung als Text. In der DXF-Datei: ±-Code, Umlaut als \\U+00F6, einzelnes Prozentzeichen als %%%, Rückstrich als \\U+005C.",
+                focus: "",
+                focus_hand: "Die Toleranztexte: ±, gestapelte Zeilen, Grenzmaße ohne Nennmaß, Passung als Text. In der DXF-Datei: ±-Code, Umlaut als \\U+00F6, einzelnes Prozentzeichen als %%%, Rückstrich als \\U+005C.",
+                focus_suggest: "Ohne Toleranzen (der Vorschlag setzt nie Toleranzen oder eigene Texte): dieselben Maße wie bei Bohrung_Masse.",
             }
         }
         "Verloren" => {
@@ -786,7 +807,9 @@ fn sample(name: &str) -> Sample {
                 ],
                 suggest_values: vec![],
                 strict: false,
-                focus: "Rote Maße: In Vorne steht ein rotes Maß an der letzten bekannten Stelle mit dem Grund als Text; in Oben nur ein rotes Fragezeichen. Das zweite Maß in Vorne (30) ist in dieser Probe NICHT gezeichnet, es dient nur als Lagevorlage. Das Programm sperrt den Export solcher Zeichnungen; diese Dateien sind mit der Sperre umgangen geschrieben.",
+                focus: "",
+                focus_hand: "Rote Maße: In Vorne steht ein rotes Maß an der letzten bekannten Stelle mit dem Grund als Text; in Oben nur ein rotes Fragezeichen. Das zweite Maß in Vorne (30) ist in dieser Probe NICHT gezeichnet, es dient nur als Lagevorlage. Das Programm sperrt den Export solcher Zeichnungen; diese Dateien sind mit der Sperre umgangen geschrieben.",
+                focus_suggest: "",
             }
         }
         other => panic!("unbekannte Probe {other}"),
@@ -959,7 +982,8 @@ fn view_of(drawing: &Drawing, k: ViewKind) -> &ViewSpec {
 }
 
 /// Die Maße, die „Maße vorschlagen“ setzen würde (Abstände wie im Programm: erste Stufe 10 mm,
-/// jede weitere Stufe 7 mm mehr; Bezugsmaße einer Gruppe teilen die erste Stufe).
+/// jede weitere Stufe 7 mm mehr, jeweils ab dem Umriss der Ansicht (`Candidate::clear`);
+/// Bezugsmaße einer Gruppe teilen die erste Stufe).
 fn suggested_dims(
     s: &Sample,
     drawing: &Drawing,
@@ -990,9 +1014,12 @@ fn suggested_dims(
         let m = measure(c.kind, &c.geos, &basis, vk, extent)
             .unwrap_or_else(|e| panic!("{}: Vorschlag nicht messbar: {e}", s.name));
         let h = is_horizontal(&m.anchor);
+        // Wie im Programm: dazu der Überstand des Umrisses über die Bezüge (mal Maßstab).
+        let out = c.clear * drawing.view(c.view).unwrap().scale.factor();
         let level = |stack: &HashMap<(ViewId, bool), usize>| {
             DEFAULT_OFFSET
                 + DIM_STEP * h.map_or(0, |h| stack.get(&(c.view, h)).copied().unwrap_or(0)) as f64
+                + out
         };
         let (offset, chain) = match c.chain {
             Some(ch) => {
@@ -1078,7 +1105,14 @@ fn write_sample(s: &Sample, dir: &Path) -> String {
         scale.label()
     )
     .unwrap();
-    writeln!(text, "  Worauf man achten soll: {}", s.focus).unwrap();
+    if !s.focus.is_empty() {
+        writeln!(
+            text,
+            "  Worauf man achten soll (beide Zeichnungen): {}",
+            s.focus
+        )
+        .unwrap();
+    }
 
     // Handgesetzte Maße: Messung gegen den Sollwert aus der Formel prüfen.
     let mut hand_entries: Entries = BTreeMap::new();
@@ -1170,6 +1204,9 @@ fn write_sample(s: &Sample, dir: &Path) -> String {
             .or_default()
             .push((spec, Err(DimError::Lost(l.reason.into()))));
     }
+    if !s.focus_hand.is_empty() {
+        writeln!(text, "    Nur in {}: {}", hand_stem(s), s.focus_hand).unwrap();
+    }
     // Lagevorlagen (nur zum Messen) verwerfen, damit ihr Maß nicht doppelt gezeichnet wird.
     let hand = resolved(hand_entries, last_known);
     let model = build_sheet_with(&drawing, &results, &hand);
@@ -1237,6 +1274,9 @@ fn write_sample(s: &Sample, dir: &Path) -> String {
                 .unwrap();
             }
         }
+        if !s.focus_suggest.is_empty() {
+            writeln!(text, "    Nur in {}: {}", s.name, s.focus_suggest).unwrap();
+        }
         if s.strict {
             assert!(
                 missing.is_empty(),
@@ -1255,11 +1295,17 @@ WAS MAN ANSEHEN SOLL
 Zu jeder Probe gibt es zwei Zeichnungen: <Name> (die Maße, die \"Maße vorschlagen\" setzt) und
 <Name>_Hand (von Hand gesetzte Maße, mit allen Maßarten). Die Zahlen oben sind aus den
 Körpermaßen gerechnet; auf dem Blatt muss dasselbe stehen. Die Gegenprobe \"Verloren\" gibt es nur
-einmal (ohne Zusatz _Hand).
+einmal (ohne Zusatz _Hand). Bei jeder Probe gilt \"Worauf man achten soll (beide Zeichnungen)\"
+für beide Dateien, die Zeilen \"Nur in <Name>_Hand\" bzw. \"Nur in <Name>\" nur für diese eine
+Datei. Der Vorschlag setzt nur Gesamtmaße, Ø/R und Bohrungsmitten (als Bezugsmaße); Maßketten,
+Winkel, schräge Maße, Toleranzen und eigene Texte gibt es nur in den _Hand-Dateien.
 
 Im Browser oder in Inkscape (SVG-Dateien)
-- Maßlinien mit Pfeilen: die Pfeilspitzen sitzen genau auf den Hilfslinien (bzw. auf dem Bogen
-  beim Radius), die Hilfslinien beginnen 1 mm vor dem Körper und stehen 2 mm über die Maßlinie.
+- Maßlinien mit Pfeilen: die Pfeilspitzen sitzen genau auf den Hilfslinien, die Hilfslinien
+  beginnen 1 mm vor dem Körper und stehen 2 mm über die Maßlinie.
+- R und Ø mit Führungslinie: die Pfeilspitze sitzt immer auf der gezeichneten Kreislinie, auch
+  bei Viertel- und Halbkreisen (dann zeigt die Führungslinie von der Mitte durch den Bogen nach
+  außen, nie in den Körper).
 - Text aufrecht lesbar (waagerecht von links nach rechts, senkrechte Maße von unten nach
   oben gelesen), nicht auf dem Kopf und nicht gespiegelt.
 - Zahlen mit deutschem Komma (10,0), Zeichen richtig: Ø, °, ±, Minus als langer Strich.

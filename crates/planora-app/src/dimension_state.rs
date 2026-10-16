@@ -567,7 +567,11 @@ fn direction_of_kind(kind: DimKind) -> Option<bool> {
 /// in Bezüge des Modells umgewandelt und nur gesetzt, wenn diese Bezüge wieder genau zu ihm
 /// führen. Abstand der Maßlinie nach P3: `DEFAULT_OFFSET + n·DIM_STEP`, `n` = Zahl der Maße
 /// derselben Ansicht und Richtung (Bezugsmaße einer Gruppe teilen den Abstand ihrer ersten
-/// Stufe und zählen je Stufe). Bezugsmaß-Gruppen bekommen in der Zeichnung neue Nummern. Jedes
+/// Stufe und zählen je Stufe), dazu der Überstand des Umrisses über die Bezüge
+/// (`Candidate::clear` mal Maßstab; eine Gruppe nimmt ihn wie den Abstand von ihrem ersten
+/// Glied – die Bohrungsmitten einer Gruppe hängen alle an derselben Bezugskante): Die Maßlinie
+/// liegt so ab dem Umriss der Ansicht, nicht ab dem Ende einer Bezugskante, die vor einer
+/// Rundung endet. Bezugsmaß-Gruppen bekommen in der Zeichnung neue Nummern. Jedes
 /// Maß wird einzeln über `Document::add_dimension` geprüft; scheitert eines, wird es
 /// ausgelassen und sein Grund gemeldet ([`SuggestOutcome::Partly`]).
 pub fn suggest_for(
@@ -730,7 +734,8 @@ pub fn suggest_for(
 }
 
 /// Maß aus einem Vorschlag: Bezüge aus der Herkunft (nur, wenn sie wieder zum selben Schlüssel
-/// führen), Abstand nach P3, Gruppe mit Nummer der Zeichnung. Zählt Stufen und Gruppen weiter.
+/// führen), Abstand nach P3 zuzüglich `c.clear` (Modell-mm) mal Maßstab der Ansicht, Gruppe mit
+/// Nummer der Zeichnung. Zählt Stufen und Gruppen weiter.
 #[allow(clippy::too_many_arguments)]
 fn candidate_spec<'a>(
     c: &Candidate,
@@ -757,8 +762,13 @@ fn candidate_spec<'a>(
     }
     let measured = measure(c.kind, &geos, &basis, view.kind, extent).ok()?;
     let dir = direction(&measured.anchor);
+    let out = if c.clear.is_finite() {
+        c.clear.max(0.0) * view.scale.factor()
+    } else {
+        0.0
+    };
     let level = |stack: &HashMap<(ViewId, bool), usize>, h: bool| {
-        DEFAULT_OFFSET + DIM_STEP * stack.get(&(c.view, h)).copied().unwrap_or(0) as f64
+        DEFAULT_OFFSET + DIM_STEP * stack.get(&(c.view, h)).copied().unwrap_or(0) as f64 + out
     };
     let (offset, chain) = match (c.chain, dir) {
         (Some(ch), Some(h)) => {

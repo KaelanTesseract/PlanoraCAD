@@ -884,3 +884,48 @@ fn random_series_no_panic_values_match_formulas_150_200() {
     let n = series(150..200);
     assert!(n.overall > 20 && n.round > 10 && n.baseline > 2, "{n:?}");
 }
+
+/// Handtest „Rundung_Masse“: Beim Quader 30 × 20 × 15 mit vier senkrechten Rundungen R4 enden
+/// die Bezugskanten der Gesamtmaße 4 mm vor dem Umriss (Draufsicht: Unter- und Oberkante bei
+/// x 4…26, Umriss bis x 30; Seitenkanten bei y 4…16, Umriss bis y 20; Vorderansicht: Kanten der
+/// Vorderfläche bei x 4…26, Umriss bis 30). Der Überstand `clear` ist dort 4, beim einfachen
+/// Quader und bei Ø/R null.
+#[test]
+fn overall_dimensions_know_how_far_the_outline_sticks_out() {
+    let r = rounded_box(30.0, 20.0, 15.0, 4.0);
+    let sheet = Sheet::new(&[&r], &[ViewKind::Front, ViewKind::Top]);
+    let cs = sheet.suggest(&[&r], &[]);
+    let mut seen = Vec::new();
+    for c in &cs {
+        let want = match (sheet.kind_of(c), c.kind) {
+            (ViewKind::Top, DimKind::Vertical) => 4.0,
+            (ViewKind::Top, DimKind::Horizontal) => 4.0,
+            (ViewKind::Front, DimKind::Vertical) => 4.0,
+            // Breite in Vorne: Bezüge sind die Nahtkanten der Rundungen (x 0 und 30, z 0…15),
+            // sie reichen bis zum oberen Umriss.
+            (ViewKind::Front, DimKind::Horizontal) => 0.0,
+            (_, DimKind::Radius | DimKind::Diameter) => 0.0,
+            other => panic!("unerwarteter Vorschlag {other:?}"),
+        };
+        assert!(
+            (c.clear - want).abs() < TOL,
+            "{c:?}: {} statt {want}",
+            c.clear
+        );
+        seen.push((sheet.kind_of(c), c.kind));
+    }
+    assert!(
+        seen.contains(&(ViewKind::Top, DimKind::Vertical)),
+        "{seen:?}"
+    );
+    assert!(
+        seen.contains(&(ViewKind::Front, DimKind::Vertical)),
+        "{seen:?}"
+    );
+    // Einfacher Quader: kein Überstand.
+    let b = box_solid(10.0, 20.0, 30.0);
+    let sheet = Sheet::new(&[&b], &[ViewKind::Front, ViewKind::Top]);
+    for c in sheet.suggest(&[&b], &[]) {
+        assert_eq!(c.clear, 0.0, "{c:?}");
+    }
+}

@@ -34,6 +34,11 @@
 //! eine Bohrungsmitte, die genau so weit vom Rand liegt wie die Gesamtbreite, oder zwei Kanten in
 //! derselben Ebene.
 //!
+//! **Abstand vom Umriss:** Jeder waagerechte und senkrechte Vorschlag nennt in
+//! [`Candidate::clear`], wie weit die sichtbaren Linien oben bzw. rechts über seine Bezüge
+//! hinausragen (etwa um den Radius, wenn die Bezugskanten vor einer Rundung enden); die
+//! Oberfläche legt die Maßlinie um so viel weiter nach außen.
+//!
 //! Jeder Vorschlag wird vor der Ausgabe mit [`measure`] gemessen; was dort scheitert (etwa die
 //! Länge null), wird nicht vorgeschlagen. Reihenfolge der Ausgabe: nach Ansicht (Reihenfolge in
 //! `views`), darin Breite, Höhe, Ø, R, Bohrungsmitten waagerecht, senkrecht; innerhalb einer Art
@@ -80,6 +85,15 @@ pub struct Candidate {
     /// Stabiler Schlüssel des Maßes (siehe [`dimension_key`]).
     pub key: String,
     pub chain: Option<ChainSpec>,
+    /// Nur waagerechte und senkrechte Maße (sonst 0): wie weit (Modell-mm, in der Ansicht
+    /// ungeskaliert) die sichtbaren Linien auf der positiven Seite (oben bzw. rechts, dort legt
+    /// die Oberfläche vorgeschlagene Maße hin) über die Bezugslage hinausragen – die größte
+    /// Querlage der Spannenenden beider Bezüge, ab der das Layout den Abstand misst. Etwa bei
+    /// einem gerundeten Quader: Die Bezugskanten enden vor der Rundung, der Umriss liegt um den
+    /// Radius weiter außen. Die Oberfläche addiert ihn (mal Maßstab) zum Abstand, damit die
+    /// Maßlinie (und der Text, der bei senkrechten Maßen zum Körper hin steht) frei vom Umriss
+    /// liegt. Nie negativ.
+    pub clear: f64,
 }
 
 /// Herkunft eines Bezugs: Körperindex (in `bodies`) und Kanten- bzw. Flächenindex (in
@@ -355,19 +369,46 @@ fn vertex(solid: &Solid, id: Id<Vertex>) -> Option<DVec3> {
         .filter(|p| p.is_finite())
 }
 
-/// Eine Ansicht beim Vorschlagen: Körper, Lage in der Ansichtsliste, Ansicht, Linien, Toleranz.
+/// Eine Ansicht beim Vorschlagen: Körper, Lage in der Ansichtsliste, Ansicht, Linien, Toleranz
+/// und Hüllbox der sichtbaren Linien (`None` ohne sichtbare Linien).
 struct ViewCtx<'v, 'b> {
     bodies: &'v [DrawBody<'b>],
     pos: usize,
     spec: &'v ViewSpec,
     lines: &'v ViewLines,
     tol: f64,
+    visible_box: Option<(DVec2, DVec2)>,
 }
 
 impl ViewCtx<'_, '_> {
     /// Abstand, bis zu dem eine Lage als äußerste Lage gilt (und Punkte als gleich).
     fn near(&self) -> f64 {
         (EXTREME_REL * self.lines.extent).max(self.tol)
+    }
+
+    /// Überstand der sichtbaren Linien über die Bezugslage (siehe [`Candidate::clear`]).
+    fn clear(&self, kind: DimKind, m: &Measured) -> f64 {
+        let (Some((_, hi)), Anchor::Linear { a_span, b_span, .. }) = (self.visible_box, &m.anchor)
+        else {
+            return 0.0;
+        };
+        // Querachse: waagerecht nach oben, senkrecht nach rechts (wie im Layout).
+        let w = match kind {
+            DimKind::Horizontal => DVec2::Y,
+            DimKind::Vertical => DVec2::X,
+            _ => return 0.0,
+        };
+        let base = [a_span.0, a_span.1, b_span.0, b_span.1]
+            .iter()
+            .map(|p| p.dot(w))
+            .fold(f64::NEG_INFINITY, f64::max);
+        let c = hi.dot(w) - base;
+        // Unterschiede in der Größe der Rechentoleranz zählen nicht.
+        if c.is_finite() && c > self.near() {
+            c
+        } else {
+            0.0
+        }
     }
 
     /// Misst den Vorschlag und legt ihn ab (scheitert die Messung, entfällt er).
@@ -390,6 +431,7 @@ impl ViewCtx<'_, '_> {
         let Some(key) = key_from(kind, &geos, basis, &m) else {
             return;
         };
+        let clear = self.clear(kind, &m);
         out.push(Proposal {
             rank: (
                 u8::from(!as_circle),
@@ -403,6 +445,7 @@ impl ViewCtx<'_, '_> {
                 origins,
                 key,
                 chain: None,
+                clear,
             },
             cat,
             view_pos: self.pos,
@@ -424,12 +467,13 @@ fn view_proposals(
     if !(extent.is_finite() && extent >= 0.0) {
         return;
     }
-    let ctx = ViewCtx {
+    let mut ctx = ViewCtx {
         bodies,
         pos,
         spec,
         lines,
         tol: geom_tol(extent),
+        visible_box: None,
     };
     // Sichtbare Striche, Hüllbox und Enden der sichtbaren Stücke.
     let mut visible = vec![false; lines.strokes.len()];
@@ -454,6 +498,9 @@ fn view_proposals(
         hi = hi.max(b);
         ends.push(s.point2(basis, p.t0));
         ends.push(s.point2(basis, p.t1));
+    }
+    if lo.is_finite() && hi.is_finite() {
+        ctx.visible_box = Some((lo, hi));
     }
     let refs = if lo.is_finite() && hi.is_finite() {
         extreme_refs(&ctx, &visible, &ends, (lo, hi))

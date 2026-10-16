@@ -920,3 +920,77 @@ fn drawing_area_uses_the_sheet_with_marks() {
     assert!(!expected.is_empty());
     assert_eq!(got, expected);
 }
+
+/// Handtest „Rundung_Masse“: Quader 30 × 20 × 15 mit vier senkrechten Rundungen R4,
+/// Draufsicht 1:1 in (100, 100) → Blatt = Modell + (85, 90), Umriss x 85…115, y 90…110. Die
+/// Bezugskanten der Gesamtmaße enden 4 mm vor dem Umriss (Unter-/Oberkante x 89…111,
+/// Seitenkanten y 94…106). Vorgeschlagen wird der Abstand 10 + 4 = 14, damit die Maßlinien wie
+/// beim einfachen Quader 10 mm neben dem Umriss liegen: Breite bei y = 106 + 14 = 120, Tiefe
+/// bei x = 111 + 14 = 125. Der Text der senkrechten Tiefe steht links der Maßlinie (x 120,5 …
+/// 124) und damit frei vom Umriss bei x = 115.
+#[test]
+fn suggested_lines_keep_ten_mm_from_a_rounded_outline() {
+    use planora_feature::BlendArt;
+    let mut st = AppState::new();
+    st.create_box(DVec3::new(30.0, 20.0, 15.0)).unwrap();
+    let solid = &st.bodies[0].solid;
+    let vertical: Vec<_> = solid
+        .edges
+        .iter()
+        .filter(|(_, e)| {
+            let a = solid.vertices.get(e.start).unwrap().point;
+            let b = solid.vertices.get(e.end).unwrap().point;
+            (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9
+        })
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(vertical.len(), 4);
+    st.add_blend(0, &vertical, BlendArt::Rundung { radius: 4.0 }, true)
+        .unwrap();
+    let d = new_drawing(&mut st);
+    let top = add_view(&mut st, d, ViewKind::Top, 100.0, 100.0);
+    open_and_compute(&mut st, d);
+    let out = suggest_for(&mut st, d, None);
+    assert_eq!(out, SuggestOutcome::Added(6), "{}", out.message());
+    let dims = dims_of(&st, d);
+    for m in &dims {
+        match m.kind {
+            DimKind::Horizontal | DimKind::Vertical => {
+                assert_eq!(m.offset, 14.0, "{m:?}")
+            }
+            DimKind::Radius => assert_eq!((m.offset, m.angle), (10.0, 45.0)),
+            k => panic!("unerwartet {k:?}"),
+        }
+    }
+    let resolved = resolve_in(&mut st, d);
+    let marks = sheet_marks(&st, d, top, &resolved);
+    let has = |a: (f64, f64), b: (f64, f64)| {
+        marks.iter().any(|m| match m {
+            Mark::Line { a: p, b: q, .. } => {
+                let (p, q) = ((p.x, p.y), (q.x, q.y));
+                let same = |x: (f64, f64), y: (f64, f64)| {
+                    (x.0 - y.0).abs() < 1e-9 && (x.1 - y.1).abs() < 1e-9
+                };
+                (same(p, a) && same(q, b)) || (same(p, b) && same(q, a))
+            }
+            _ => false,
+        })
+    };
+    assert!(has((85.0, 120.0), (115.0, 120.0)), "Breite: {marks:?}");
+    assert!(has((125.0, 90.0), (125.0, 110.0)), "Tiefe: {marks:?}");
+    // Die Texte liegen außerhalb des Umrisses: Grundlinie 1 mm vor der Maßlinie.
+    let mut found = 0;
+    for m in &marks {
+        if let Mark::Text { pos, text, .. } = m {
+            if text == "20,0" {
+                assert!((pos.x - 124.0).abs() < 1e-9, "{pos:?}");
+                found += 1;
+            }
+            if text == "30,0" {
+                assert!((pos.y - 121.0).abs() < 1e-9, "{pos:?}");
+                found += 1;
+            }
+        }
+    }
+    assert_eq!(found, 2, "{marks:?}");
+}
