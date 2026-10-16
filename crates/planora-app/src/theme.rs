@@ -398,6 +398,9 @@ pub fn section_header(ui: &mut egui::Ui, title: &str, height: f32) -> egui::Resp
     let frame = section_frame(dark);
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::hover());
+    // Selbst gezeichnet: die Überschrift für Bildschirmleser als Beschriftung melden.
+    let enabled = ui.is_enabled();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, title));
     if ui.is_rect_visible(rect) {
         ui.painter()
             .rect_filled(rect, frame.corner_radius, frame.fill);

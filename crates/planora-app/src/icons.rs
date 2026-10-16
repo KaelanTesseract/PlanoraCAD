@@ -927,6 +927,11 @@ pub fn source_button(
         (LABEL_ICON_SIZE.max(galley.size().y) + pad.y * 2.0).max(ui.spacing().interact_size.y),
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    // Selbst gezeichnet: Art, Beschriftung und Zustand für Bildschirmleser selbst melden.
+    let enabled = ui.is_enabled();
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, text)
+    });
     if ui.is_rect_visible(rect) {
         let p = theme::palette(dark);
         let visuals = ui.style().interact_selectable(&response, selected);

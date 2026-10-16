@@ -377,6 +377,45 @@ fn over(top: Color32, bottom: Color32) -> Color32 {
 }
 
 #[test]
+fn custom_painted_widgets_tell_screen_readers_what_they_are() {
+    use egui::accesskit::{Role, Toggled};
+    use planora_app::icons::{self, Icon, IconSource};
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts::definitions());
+    theme::apply(&ctx, true);
+    ctx.enable_accesskit();
+    let mut update = None;
+    for _ in 0..2 {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            theme::section_header(ui, "Eigenschaften", theme::HEADER_H);
+            let line = IconSource::Font(Icon::ToolLine);
+            icons::source_button(ui, line, "Linie", true, true);
+            icons::source_button(ui, IconSource::Font(Icon::ToolCircle), "Kreis", true, false);
+        });
+        out.textures_delta.clear();
+        update = out.platform_output.accesskit_update.take();
+    }
+    let update = update.expect("AccessKit-Baum");
+    let node = |text: &str| {
+        update
+            .nodes
+            .iter()
+            .map(|(_, n)| n)
+            .find(|n| n.label() == Some(text) || n.value() == Some(text))
+            .unwrap_or_else(|| panic!("kein Knoten „{text}“"))
+            .clone()
+    };
+    let header = node("Eigenschaften");
+    assert_eq!(header.role(), Role::Label);
+    let line = node("Linie");
+    assert_eq!(line.role(), Role::Button);
+    assert_eq!(line.toggled(), Some(Toggled::True), "gewählt");
+    let circle = node("Kreis");
+    assert_eq!(circle.role(), Role::Button);
+    assert_eq!(circle.toggled(), Some(Toggled::False));
+}
+
+#[test]
 fn disabled_text_stays_readable_and_animations_take_120_ms() {
     let ctx = egui::Context::default();
     theme::apply(&ctx, true);
