@@ -1,11 +1,38 @@
 use crate::state::AppState;
 use crate::{sketch_view, theme};
-use egui::{Align2, FontId, PointerButton, Rect, Sense, Shape, Stroke, pos2, vec2};
+use egui::{Align2, Color32, FontId, PointerButton, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::Vec2;
 use planora_render::gpu::ViewportCallback;
-use planora_render::{Pick, ViewFace, cube_faces, cube_hit_test};
+use planora_render::{Palette, Pick, ViewFace, cube_faces, cube_hit_test};
 
 const CUBE_SIZE: f32 = 96.0;
+
+/// Farben der 3D-Szene im Graphit-Theme: Bodenraster (`viewport_grid`), Achsen und Auswahl aus
+/// der Palette, damit sie zum Hintergrund `bg_viewport` passen. Auswahl der Flächen in
+/// `selection`, gewählte Kanten wie die Skizzen-Auswahl (hell ein dunkleres Bernstein, das auf
+/// dem hellen Grund als Linie lesbar bleibt). Flächen, Kanten und Hover behält
+/// `planora_render`.
+pub fn render_palette(dark: bool) -> Palette {
+    let p = theme::palette(dark);
+    let rgba = |c: Color32| {
+        let f = |v: u8| f32::from(v) / 255.0;
+        [f(c.r()), f(c.g()), f(c.b()), 1.0]
+    };
+    let base = if dark {
+        Palette::dark()
+    } else {
+        Palette::light()
+    };
+    Palette {
+        face_selected: rgba(p.selection),
+        edge_selected: rgba(theme::sketch_colors(dark).selected),
+        grid: rgba(p.viewport_grid),
+        axis_x: rgba(p.axis_x),
+        axis_y: rgba(p.axis_y),
+        axis_z: rgba(p.axis_z),
+        ..base
+    }
+}
 
 fn cube_rect(viewport: Rect) -> Rect {
     Rect::from_min_size(

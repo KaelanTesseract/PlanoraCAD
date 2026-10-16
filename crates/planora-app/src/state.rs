@@ -271,12 +271,9 @@ impl AppState {
         state
     }
 
+    /// Farben der 3D-Szene im aktuellen Thema (Raster, Achsen, Auswahl aus dem Graphit-Theme).
     pub fn palette(&self) -> Palette {
-        if self.dark {
-            Palette::dark()
-        } else {
-            Palette::light()
-        }
+        crate::viewport::render_palette(self.dark)
     }
 
     /// Palette der Szene: im Skizzen-Modus gedämpft.

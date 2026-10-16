@@ -511,6 +511,37 @@ fn sketch_colors_are_legible_on_the_viewport_in_both_themes() {
 }
 
 #[test]
+fn the_3d_scene_takes_grid_axes_and_selection_from_the_theme() {
+    let rgba = |c: Color32| {
+        let f = |v: u8| f32::from(v) / 255.0;
+        [f(c.r()), f(c.g()), f(c.b()), 1.0]
+    };
+    for dark in BOTH {
+        let p = theme::palette(dark);
+        let r = planora_app::viewport::render_palette(dark);
+        assert_eq!(r.grid, rgba(p.viewport_grid), "{}", name(dark));
+        assert_eq!(r.axis_x, rgba(p.axis_x), "{}", name(dark));
+        assert_eq!(r.axis_y, rgba(p.axis_y), "{}", name(dark));
+        assert_eq!(r.axis_z, rgba(p.axis_z), "{}", name(dark));
+        assert_eq!(r.face_selected, rgba(p.selection), "{}", name(dark));
+        assert_eq!(
+            r.edge_selected,
+            rgba(theme::sketch_colors(dark).selected),
+            "{}",
+            name(dark)
+        );
+        // Die App zeichnet die Szene mit diesen Farben.
+        let mut st = planora_app::state::AppState::new();
+        st.dark = dark;
+        assert_eq!(st.palette(), r, "{}", name(dark));
+    }
+    // Dunkel: Auswahl genau das Graphit-Gelb #f1f05c.
+    let r = planora_app::viewport::render_palette(true);
+    assert_eq!(r.face_selected, rgba(Color32::from_rgb(0xf1, 0xf0, 0x5c)));
+    assert_eq!(r.edge_selected, r.face_selected);
+}
+
+#[test]
 fn gizmo_colors_are_legible_in_both_themes() {
     let mut failures = Vec::new();
     for dark in BOTH {
