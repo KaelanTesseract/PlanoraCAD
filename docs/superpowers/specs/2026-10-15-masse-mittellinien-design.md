@@ -218,3 +218,13 @@ Stand: 2026-10-16. Die Abschnitte 1 bis 9 sind der Entwurf; bei Planung und Umse
 | §2 Speichern | Format 5 nur bei Maßen oder Mittellinien | zusätzlich: Format 4 speichert `next_dim` nicht |
 | P3 Abstand | `DEFAULT_OFFSET + n·DIM_STEP` | n zählt alle Maße der Ansicht und Richtung, Gruppen belegen je Glied eine Stufe |
 | P12 Wortlaut | „Maße außerhalb: n“ | „Maße außerhalb des Blatts: n“ |
+
+### 10.4 Nachbesserung nach der Gesamtprüfung (2026-10-16)
+
+- **Ansicht löschen:** Werden mit einer Ansicht (und ihren abgeleiteten) Maße gelöscht, fragt die Oberfläche immer nach und nennt ihre Zahl („… und n Maße werden mit gelöscht.“); „Ansicht löschen“ in der Werkzeugleiste geht denselben Weg wie „Löschen“ im Browser. `Drawing::remove_view` löscht die Maße weiterhin mit.
+- **Zwischenspeicher der Verweise:** `planora_feature::RefCache` merkt Prüfpunkte der Flächen, Kantenverwendungen und Achsbereiche je Durchgang (Vorschlag, Klick des Werkzeugs, Auflösung aller Maße). `EdgeRef::from_edge`, `resolve_geo` usw. haben `_cached`-Fassungen mit **gleichem Ergebnis**; die alten Funktionen rufen sie mit einem frischen Speicher.
+- **Verlorene Maße im Vorschlag:** `resolve_drawing_dimensions_keyed` liefert zu jedem Maß mit auflösbaren Bezügen den Schlüssel; die Oberfläche merkt ihn (`DimensionUi::last_key`), der Vorschlag zählt ihn für ein später verlorenes Maß als vorhanden. Ein Maß, das in der Sitzung nie aufgelöst wurde, hat keinen Schlüssel (bekannte Grenze). Damit gilt der Satz in 10.2 „verlorene Maße haben keinen Schlüssel“ nur noch für solche Maße.
+- **Gründe verlorener Maße** ohne innere Nummern: „Die Fläche, an der das Maß hing, gibt es nicht mehr.“ bzw. „Die Kante, an der das Maß hing, gibt es nicht mehr.“ Der Exporttext (P13) nimmt bei `Lost` diesen Satz ohne den Vorsatz „Der Bezug wurde nicht gefunden“ und endet mit „Bitte das Maß löschen und neu setzen.“ (das Fenster „Maß bearbeiten“ kann keinen Bezug neu verknüpfen); Sperre und übrige Bedeutung von P13 bleiben.
+- **Ketten und Bezugsmaße ziehen:** Die Maßlinie eines Glieds zu ziehen ändert den Abstand aller Glieder der Gruppe um dasselbe Stück (ein Schritt).
+- **Grenzen:** `ChainSpec.order` < `MAX_DIMENSIONS` im Dateileser und in `validate_dimensions`. Im Fenster „Maß bearbeiten“ werden eigener Text und Passung gekürzt (nur Leerzeichen = kein Text), obere < untere Abweichung und negative symmetrische Abweichung abgelehnt (nur in der Oberfläche).
+- **Mittellinien-Schalter** in der Isometrie gesperrt, mit Erklärung.

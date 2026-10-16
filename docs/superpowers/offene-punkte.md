@@ -521,13 +521,13 @@ Stand: 2026-10-16. Zeichnungen bekommen Maße (waagerecht, senkrecht, schräg, D
 **Was nicht geht oder anders ist**
 
 *Messung und Bezüge*
-- **Nur Normansichten.** Das Umschalten einer Ansicht auf Isometrie, während sie Maße hat, wird verweigert; die Oberfläche erklärt das bisher nur knapp.
+- **Nur Normansichten.** Die Art einer Ansicht lässt sich in der Oberfläche nicht ändern (man legt eine neue an); eine Isometrie mit Maßen, etwa aus einer veränderten Datei, lehnt die Dokumentprüfung mit Meldung ab.
 - **Winkel** nur, wenn beide Kanten parallel zur Bildebene liegen (sonst wäre der Winkel verzerrt, Meldung statt Wert). Ein schräges Maß zwischen Punkten misst den Abstand im Bild (übliche Zeichnungsregel). Bei einem schräg stehenden Kreis oder einer Kante, die nicht quer zur Messrichtung steht, gibt es einen benannten Fehler.
 - **Radius** nur an Kreis oder Bogen mit Blick in Achsrichtung und an Kugeln; ein Zylinder von der Seite gibt Durchmesser, kein Radius.
 - **Nicht bemaßbar:** Ellipsen, Splines und Freiformflächen, ebene Flächen („Dieser Kantentyp lässt sich nicht bemaßen“ bzw. „Diese Fläche …“). Maße an Freiformflächen gehen nur über Kanten und Mittellinien.
 - **Gleichstand** (Abstand der Kandidaten höchstens 1e-6 mm) gilt als mehrdeutig: das Maß wird rot mit Grund, nie ein geratener Wert.
 - Die Toleranz für „Länge null“ kennt die Koordinatengröße nicht: bei weit vom Ursprung liegenden, gedrehten Körpern kann sie zu streng oder zu locker sein. Die Ansichtsbasis wird nur auf Endlichkeit geprüft.
-- **Verlorene Maße** haben keinen Schlüssel; „Maße vorschlagen“ kann daneben dasselbe Maß ein zweites Mal setzen. Die letzte bekannte Lage eines roten Maßes bleibt auch nach geänderten Bezügen an der alten Stelle. Ohne letzte Lage steht nur ein rotes „?“ in der Ansichtsmitte; Ziehen daran bleibt ohne Wirkung.
+- **Verlorene Maße** behalten den Schlüssel aus der letzten Auflösung, in der sich ihre Bezüge noch auflösen ließen; „Maße vorschlagen“ setzt daneben dasselbe Maß nicht noch einmal. Nur ein Maß, das in dieser Sitzung nie aufgelöst wurde (schon verloren aus einer Datei geladen), hat keinen Schlüssel und kann ein zweites Mal vorgeschlagen werden. Der Schlüssel beschreibt die Geometrie von damals (wie die letzte Lage). Die letzte bekannte Lage eines roten Maßes bleibt auch nach geänderten Bezügen an der alten Stelle. Ohne letzte Lage steht nur ein rotes „?“ in der Ansichtsmitte; Ziehen daran bleibt ohne Wirkung.
 - Ein schräges Maß kippt die Seite seiner Maßlinie bei minimaler Neigung (genau waagerecht und senkrecht sind unberührt).
 
 *Vorschlag*
@@ -558,30 +558,36 @@ Stand: 2026-10-16. Zeichnungen bekommen Maße (waagerecht, senkrecht, schräg, D
 *Oberfläche*
 - Die Maße werden nach einer Modelländerung im Oberflächenfaden aufgelöst (billig, bei 2000 Maßen aber spürbar); beim Ziehen werden die Markierungen je Bild neu berechnet, die Vorschau des Werkzeugs je Bild ohne Zwischenspeicher.
 - Die Werkzeugleiste des Zeichnungsbereichs hat immer zwei Zeilen (die Zeichenfläche liegt etwa 20 Pixel tiefer als vorher), damit die Fläche beim Wählen einer Ansicht nicht springt.
-- Werkzeug: Ein Klick auf den Umriss eines Zylinders misst in linearen Maßen bis zur Achse (Hinweis erscheint). Die Richtung einer Kette folgt automatisch dem größeren Wert; bei fast diagonalen Punkten kann sie kippen. Esc setzt eine Kette, sonst bricht es ab; Doppelklick wirkt nur bei Ketten. Scheitert eine Kette in der Mitte, bleiben die schon gesetzten Maße. Ein Maß wird nahe Ecken vor den Ansichtskanten getroffen; der Abstand 0 zählt als positiv; der kleinste Abstand beim Ziehen ist 1 mm (die Seite wechselt man im Fenster). Gruppenmaße lassen sich nur einzeln ziehen. Das Ziehen schreibt je Bild eine Änderung, das Rückgängigmachen einer Kette sind n Schritte (es gibt noch kein Rückgängig).
+- Werkzeug: Ein Klick auf den Umriss eines Zylinders misst in linearen Maßen bis zur Achse (Hinweis erscheint). Die Richtung einer Kette folgt automatisch dem größeren Wert; bei fast diagonalen Punkten kann sie kippen. Esc setzt eine Kette, sonst bricht es ab; Doppelklick wirkt nur bei Ketten. Scheitert eine Kette in der Mitte, bleiben die schon gesetzten Maße. Ein Maß wird nahe Ecken vor den Ansichtskanten getroffen; der Abstand 0 zählt als positiv; der kleinste Abstand beim Ziehen ist 1 mm (die Seite wechselt man im Fenster). Zieht man die Maßlinie eines Glieds einer Kette oder von Bezugsmaßen, wandert die ganze Gruppe um dasselbe Stück mit (Text und Führungslinien ziehen weiter einzeln). Das Ziehen schreibt je Bild eine Änderung, das Rückgängigmachen einer Kette sind n Schritte (es gibt noch kein Rückgängig).
 - Die Meldung von „Maße vorschlagen“ verschwindet auch bei anderen Änderungen der Zeichnung. Bei noch nicht berechneter Ansicht fehlt ein eigener Hinweis.
-- Fenster „Maß bearbeiten“: Obere kleiner als untere Abweichung wird angenommen; Passungstext wird nicht gekürzt; Zeilen zweier Maße mit gleichem Text unterscheiden sich nur durch Lage und Tooltip; Gruppenzeilen im Browser haben keine Wirkung; die Symbole sind von Hand gezeichnet und nicht im Bild geprüft; die Anzeige im Hauptfenster (`app.rs`) hat keinen Test.
-- Export: Genannt wird nur das erste verlorene Maß. Das DXF-Ergebnis kann scheitern (Textlänge), während SVG gelingt.
+- Fenster „Maß bearbeiten“: Eigener Text und Passung werden am Rand gekürzt, nur Leerzeichen gilt als „kein Text“; eine obere Abweichung kleiner als die untere und eine negative symmetrische Abweichung lehnt das Fenster rot ab (die Dokumentprüfung und der Dateileser prüfen das nicht, ältere oder veränderte Dateien laden also weiter). Zeilen zweier Maße mit gleichem Text unterscheiden sich nur durch Lage und Tooltip; Gruppenzeilen im Browser haben keine Wirkung; die Symbole sind von Hand gezeichnet und nicht im Bild geprüft; die Anzeige im Hauptfenster (`app.rs`) hat keinen Test.
+- Export: Genannt wird nur das erste verlorene Maß. Der Satz endet mit „Bitte das Maß löschen und neu setzen.“, weil das Fenster „Maß bearbeiten“ keinen Bezug neu verknüpfen kann (früher „Bitte ändern oder löschen.“). Das DXF-Ergebnis kann scheitern (Textlänge), während SVG gelingt.
 - Kleinkram im Code: Testfelder im Produktionszustand (`inputs`, `last_rect`, `last_cards`), doppelte Ergebnissuche im Maß-Fenster, ein Doku-Kommentar von `drawing_document` über dem falschen Helfer (`tests/drawings_format.rs`), tote `body`-Logik in `stage12_types.rs`, `ref_count` doppelt (freie Funktion und Methode), die Doku von `parallel()` nennt ein nicht vorhandenes `same_sense`.
 
+**Nachbesserung nach der Gesamtprüfung (2026-10-16)**
+- **Ansicht löschen mit Maßen:** Früher verschwanden die Maße einer gelöschten Ansicht (und ihrer abgeleiteten Ansichten) ohne Nachfrage, über „Ansicht löschen“ in der Werkzeugleiste sogar ganz ohne Rückfrage. Jetzt fragt das Programm immer, sobald Maße mitgelöscht werden („… und 3 Maße werden mit gelöscht.“); Werkzeugleiste und Browser gehen denselben Weg.
+- **Aufwand der Bezüge:** Ein Bezug auf eine Kante speichert den Prüfpunkt beider Nachbarflächen. Der Prüfpunkt einer großen Fläche mit vielen Bohrungen ist teuer (Release-Build: 0,13 s bei 100 Bohrungen, 0,49 s bei 400), und er wurde für jede Kante neu berechnet. Jetzt merkt ein Zwischenspeicher (`RefCache` in `planora-feature`) Prüfpunkte, Kantenverwendungen und Achsbereiche je Durchgang (ein Vorschlag, ein Klick, eine Auflösung aller Maße); die Ergebnisse sind gleich (Vergleichstest), gezählt wird über einen Zähler je Thread. Gemessen (Release, Draufsicht einer Platte): „Maße vorschlagen“ bei 100 Bohrungen **18,7 s vorher, 0,41 s jetzt** (122 Maße), bei 400 Bohrungen 1,6 s (442 Maße; vorher nicht gemessen, nach der Rechnung mehrere Minuten). **Bleibt:** Ein Klick des Werkzeugs auf eine Kante der großen Fläche rechnet ihren Prüfpunkt einmal (0,13 s bzw. 0,49 s je Klick); eine Zylinderfläche aufzulösen kostet etwa 2,8 ms (Prüfpunkt plus Achsbereich), je Durchgang einmal.
+- Schalter „Mittellinien“ in der Isometrie gesperrt, mit Erklärung am Schalter.
+- Fenster „Maß bearbeiten“: Leerzeichen-Texte, obere/untere und negative Abweichung (siehe oben).
+- Verlorene Maße: Gründe in Laiensprache („Die Fläche, an der das Maß hing, gibt es nicht mehr.“ statt Feature-Nummer und Rollenname), kein doppelter Vorschlag neben einem roten Maß, Exporttext „Bitte das Maß löschen und neu setzen.“
+- Ziehen eines Glieds einer Kette oder von Bezugsmaßen verschiebt die ganze Gruppe.
+- Die Stelle eines Maßes in einer Kette ist auf höchstens 1999 begrenzt (Dateileser und Dokumentprüfung); größere Werte lehnt das Laden mit Meldung ab.
 **Wie geprüft wurde:** Alle Stufen mit eigenen Formelmodellen (Werte aus den Eingabemaßen, nicht aus der Bibliothek), eigenen Lesern für SVG und DXF, einem Rücklesetest der Dateien, Prüfung feindlicher Dateien (NaN, riesige Zahlen, doppelte oder fremde Kennungen, Listen über der Grenze), einer Zufallsreihe und einem Mutationsbeweis für jeden Regressionstest (in den Aufgabenberichten). Die Proben prüfen beim Schreiben jeden Sollwert aus der Formel gegen die Messung.
 
 **Folge-Aufgaben nach Priorität**
 - *Hoch*
   1. Handtest in Fusion 360 (und Inkscape): DXF-`TEXT`/`SOLID`, Prozent und Rückstrich, Sonderzeichen, Linientyp; bei Ablehnung Gegenproben mit ezdxf und gezielte Korrektur.
-  2. „Maße vorschlagen“ soll neben einem roten (verlorenen) Maß nicht dasselbe Maß ein zweites Mal setzen (Schlüssel aus der letzten bekannten Lage).
-  3. Maße nach Modelländerungen im Hintergrund auflösen statt im Oberflächenfaden; Zwischenspeicher für Marken und Vorschau beim Ziehen.
-  4. Beim Umschalten einer Ansicht auf Isometrie mit vorhandenen Maßen klar erklären und anbieten, die Maße zu löschen.
+  2. Maße nach Modelländerungen im Hintergrund auflösen statt im Oberflächenfaden; Zwischenspeicher für Marken und Vorschau beim Ziehen. Prüfpunkte großer Flächen über mehrere Klicks des Werkzeugs hinweg merken (heute je Klick neu, siehe Nachbesserung).
 - *Mittel*
-  5. Mittellinien an den Ansichtsrand begrenzen (Spec §3.4); Überladung durch Ausrundungsachsen prüfen.
-  6. Rückgängig/Wiederholen für Maße, auch als ein Schritt je Ziehen und je Kette.
-  7. Textbreite aus der echten Schrift messen statt zu schätzen.
-  8. Passungstabellen nach ISO 286, echte DXF-Maße, Maße an Ellipsen, Splines und Freiformflächen.
-  9. Gruppenmaße gemeinsam ziehen; Richtung einer Kette wählbar; Seite der Maßlinie beim Ziehen wechseln.
-  10. Vorschlag erweitern (Fasen als Winkel mal Länge, Gewinde, Randfälle bei Zylinder- und Kugelumriss).
+  3. Mittellinien an den Ansichtsrand begrenzen (Spec §3.4); Überladung durch Ausrundungsachsen prüfen.
+  4. Rückgängig/Wiederholen für Maße, auch als ein Schritt je Ziehen und je Kette.
+  5. Textbreite aus der echten Schrift messen statt zu schätzen.
+  6. Passungstabellen nach ISO 286, echte DXF-Maße, Maße an Ellipsen, Splines und Freiformflächen.
+  7. Richtung einer Kette wählbar; Seite der Maßlinie beim Ziehen wechseln; Bezug eines roten Maßes im Fenster „Maß bearbeiten“ neu wählen.
+  8. Vorschlag erweitern (Fasen als Winkel mal Länge, Gewinde, Randfälle bei Zylinder- und Kugelumriss).
 - *Niedrig*
-  11. Kosmetik: Text eines großen Ø bei 45°/135°, Toleranztext-Abstand, lange rote Texte kürzen, leeren DXF-Text und Texthöhe prüfen, Pfeilgeometrie in `svg.rs`/`dxf.rs` zusammenführen, `write_tables` aufräumen, Testfelder aus dem Produktionszustand, Doku-Kommentare und tote Logik.
-  12. 3c (Schriftfeld, Texte, Stückliste) und 3d (Schnittansichten) als eigene Teilprojekte.
+  9. Kosmetik: Text eines großen Ø bei 45°/135°, Toleranztext-Abstand, lange rote Texte kürzen, leeren DXF-Text und Texthöhe prüfen, Pfeilgeometrie in `svg.rs`/`dxf.rs` zusammenführen, `write_tables` aufräumen, Testfelder aus dem Produktionszustand, Doku-Kommentare und tote Logik.
+  10. 3c (Schriftfeld, Texte, Stückliste) und 3d (Schnittansichten) als eigene Teilprojekte.
 
 **Laufzeiten und Testreihen**
 - Teststand am Ende von Teilprojekt 12: **2024 bestanden, 0 fehlgeschlagen, 33 ignoriert in 232 Testprogrammen und Doku-Läufen** (`cargo test --workspace -j 2`, Debug, 2026-10-16). Gesamtlaufzeit 15 Minuten 41 Sekunden (941 s) einschließlich Übersetzung. Zum Vergleich Ende von Teilprojekt 11: 1759 bestanden, 32 ignoriert, 214 Testprogramme; das sind 265 Tests mehr, ein ignorierter mehr (`write_dimension_samples_for_the_hand_test`). Der Aufruf mit `-j 2` bleibt nötig (paralleler Vollbau scheiterte sporadisch an Speicher).
