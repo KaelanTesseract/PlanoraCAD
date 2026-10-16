@@ -16,8 +16,8 @@
 use crate::browser::ERROR_COLOR;
 use crate::dimension_state::{SuggestOutcome, marks_in, notes_in, resolve_in, suggest_for};
 use crate::dimension_tool::{
-    END_PX, Hit, ISOMETRIC_TIP, MISSED, READ_ONLY_TIP, TOOL, TOOL_TIP, ToolError, ToolMode,
-    with_tool,
+    END_PX, Hit, ISOMETRIC_TIP, MISSED, NO_VIEWS_TIP, READ_ONLY_TIP, TOOL, TOOL_TIP, ToolError,
+    ToolMode, with_tool,
 };
 use crate::drawing_state::{
     ViewResult, WorkArea, default_distance, estimate_view_size, suggest_scale,
@@ -634,10 +634,13 @@ enum Action {
     Tool(ToolMode),
 }
 
-/// Kann das Werkzeug „Maß“ benutzt werden? Sonst die Erklärung (alte Version, nur Isometrie).
-fn tool_blocked(drawing: &Drawing, editable: bool) -> Option<&'static str> {
+/// Kann das Werkzeug „Maß“ benutzt werden? Sonst die Erklärung (alte Version, keine Ansicht,
+/// nur Isometrie).
+pub fn tool_blocked(drawing: &Drawing, editable: bool) -> Option<&'static str> {
     if !editable {
         Some(READ_ONLY_TIP)
+    } else if drawing.views.is_empty() {
+        Some(NO_VIEWS_TIP)
     } else if !drawing.views.iter().any(|v| v.kind.is_normal()) {
         Some(ISOMETRIC_TIP)
     } else {
@@ -718,6 +721,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     let rejected = state.dimension_tool.message().map(str::to_owned);
     let message = rejected
         .clone()
+        .or_else(|| state.dimension_tool.notice().map(str::to_owned))
         .or_else(|| state.drawing_ui.dim_message.clone());
     let hint_text = state
         .dimension_tool
@@ -1000,8 +1004,14 @@ fn tool_click(
     double: bool,
 ) {
     let tool = &state.dimension_tool;
+    // Ein Doppelklick beendet nur Kette und Bezugsmaße; sonst zählt sein zweiter Klick nicht
+    // (das Maß wird nicht vorzeitig gesetzt).
+    if double && !tool.collects_more() {
+        return;
+    }
     if tool.is_ready() && (!tool.collects_more() || found.is_none() || double) {
-        tool_finish(state, id, at);
+        // Eine Ablehnung steht danach im Werkzeug (Hinweiszeile).
+        tool_finish(state, id, at).ok();
     } else if double {
         // Zweiter Klick eines Doppelklicks, der schon gesetzt hat: nichts Neues beginnen.
     } else if let Some((view, origin)) = found {
@@ -1025,7 +1035,13 @@ fn tool_escape(state: &mut AppState, id: DrawingId) {
         && tool.is_ready()
         && let Some(p) = tool.last_pointer()
     {
-        tool_finish(state, id, p);
+        // Esc bleibt nie hängen: lässt sich nichts setzen, verfallen die Bezüge, und der Grund
+        // bleibt in der Hinweiszeile.
+        if tool_finish(state, id, p).is_err() {
+            let reason = state.dimension_tool.message().map(str::to_owned);
+            state.dimension_tool.cancel();
+            state.dimension_tool.set_message(reason);
+        }
     } else if tool.pending().is_empty() {
         state.dimension_tool.set_mode(ToolMode::Off);
     } else {
@@ -1034,7 +1050,7 @@ fn tool_escape(state: &mut AppState, id: DrawingId) {
 }
 
 /// Setzt die Maße des Werkzeugs an `at`; die Meldung steht danach in der Hinweiszeile.
-fn tool_finish(state: &mut AppState, id: DrawingId, at: DVec2) {
+fn tool_finish(state: &mut AppState, id: DrawingId, at: DVec2) -> Result<(), ToolError> {
     match with_tool(state, |t, st| t.finish(st, id, at)) {
         Ok(ids) => {
             state.drawing_ui.dim_message = Some(match ids.len() {
@@ -1042,9 +1058,10 @@ fn tool_finish(state: &mut AppState, id: DrawingId, at: DVec2) {
                 n => format!("{n} Maße wurden gesetzt."),
             });
             state.drawing_ui.dim_message_key = Some(message_key(state));
+            Ok(())
         }
-        // Die Ablehnung steht im Werkzeug (Hinweiszeile); es fehlen noch Bezüge: nichts.
-        Err(ToolError::Rejected(_) | ToolError::NotReady) => {}
+        // Die Ablehnung steht im Werkzeug (Hinweiszeile).
+        Err(e) => Err(e),
     }
 }
 

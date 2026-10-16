@@ -12,7 +12,7 @@
 //!   waagerechte Kante y 95 (x 95…115), oberste Kante y 115 (x 85…95).
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
-use planora_app::dimension_state::{SuggestOutcome, marks_in, resolve_in, suggest_for};
+use planora_app::dimension_state::{SuggestOutcome, full_text, marks_in, resolve_in, suggest_for};
 use planora_app::dimension_tool::*;
 use planora_app::drawing_view;
 use planora_app::fonts;
@@ -121,7 +121,12 @@ impl Harness {
 
     fn frame(&mut self, st: &mut AppState, events: Vec<Event>) -> Shot {
         // Mehr als die Doppelklick-Zeit zwischen den Bildern: jeder Klick zählt einzeln.
-        self.time += 0.2;
+        self.frame_dt(st, events, 0.2)
+    }
+
+    /// Ein Bild `dt` Sekunden nach dem vorigen.
+    fn frame_dt(&mut self, st: &mut AppState, events: Vec<Event>, dt: f64) -> Shot {
+        self.time += dt;
         let what = self.what;
         let out = self.ctx.run_ui(raw(events, self.time), |ui| match what {
             What::Area => drawing_view::show(ui, st),
@@ -195,6 +200,18 @@ impl Harness {
     fn click_at(&mut self, st: &mut AppState, p: (f64, f64)) -> DVec2 {
         let pos = screen(self, p);
         self.click(st, pos);
+        sheet_of(self, pos)
+    }
+
+    /// Doppelklick auf den Blattpunkt `p` (mm): zwei Klicks im Abstand von 0,02 s.
+    fn double_click_at(&mut self, st: &mut AppState, p: (f64, f64)) -> DVec2 {
+        let pos = screen(self, p);
+        // Lange genug nach dem letzten Klick, damit egui keinen Dreifachklick zählt.
+        self.frame_dt(st, vec![Event::PointerMoved(pos)], 1.0);
+        for pressed in [true, false, true, false] {
+            self.frame_dt(st, vec![button(pos, pressed)], 0.02);
+        }
+        self.idle(st);
         sheet_of(self, pos)
     }
 
@@ -922,7 +939,18 @@ fn rejections_are_german_and_leave_the_document_unchanged() {
     texts.push(NOT_DIMENSIONABLE.into());
 
     // Auch Hinweise und Erklärungen des Werkzeugs.
-    texts.extend([TOOL_TIP, READ_ONLY_TIP, ISOMETRIC_TIP, ANGLE_LINES].map(String::from));
+    texts.extend(
+        [
+            TOOL_TIP,
+            READ_ONLY_TIP,
+            ISOMETRIC_TIP,
+            NO_VIEWS_TIP,
+            ANGLE_LINES,
+            SILHOUETTE_NOTE,
+        ]
+        .map(String::from),
+    );
+    texts.push(incomplete_text(1, 2));
     for mode in ToolMode::CHOICES {
         let mut tool = DimensionTool::default();
         tool.set_mode(mode);
@@ -1158,6 +1186,54 @@ fn every_created_dimension_resolves_to_the_value_of_the_formula_after_model_edit
         let v = value(&mut st, d, *id);
         assert!(near(v, want), "{v} vs {want}");
     }
+
+    // Winkel (linke Kante, Unterkante) und Kette (linke, rechte Kante) folgen ebenso.
+    resize_box(&mut st, f, BOX);
+    st.dimension_tool.set_mode(ToolMode::Angle);
+    h.click_at(&mut st, (95.0, 100.0));
+    h.click_at(&mut st, (100.0, 85.0));
+    h.click_at(&mut st, (110.0, 95.0));
+    let angle = dims(&st, d).last().unwrap().id;
+    st.dimension_tool.set_mode(ToolMode::Chain);
+    h.click_at(&mut st, (95.0, 100.0));
+    h.click_at(&mut st, (105.0, 100.0));
+    h.click_at(&mut st, (100.0, 128.0));
+    let chain = dims(&st, d).last().unwrap().clone();
+    assert!(chain.chain.is_some());
+    assert!(near(value(&mut st, d, angle), 90.0));
+    assert!(near(value(&mut st, d, chain.id), BOX.x));
+    resize_box(&mut st, f, bigger);
+    assert!(near(value(&mut st, d, angle), 90.0));
+    assert!(near(value(&mut st, d, chain.id), bigger.x));
+
+    // Ø und R am Zylinder: Radius 5 → 8.
+    let mut st = AppState::new();
+    let f = st.create_cylinder(5.0, 12.0).unwrap();
+    let d = new_drawing(&mut st);
+    add_view(&mut st, d, ViewKind::Top, 100.0, 100.0);
+    let mut h = open(&mut st, d);
+    let mut round = Vec::new();
+    for (mode, place) in [
+        (ToolMode::Diameter, (115.0, 112.0)),
+        (ToolMode::Radius, (86.0, 88.0)),
+    ] {
+        st.dimension_tool.set_mode(mode);
+        h.click_at(&mut st, on_circle());
+        h.click_at(&mut st, place);
+        round.push(dims(&st, d).last().unwrap().id);
+    }
+    assert!(near(value(&mut st, d, round[0]), 10.0));
+    assert!(near(value(&mut st, d, round[1]), 5.0));
+    st.document
+        .update(f, |k| {
+            if let FeatureKind::Cylinder { radius, .. } = k {
+                *radius = 8.0;
+            }
+        })
+        .unwrap();
+    st.refresh();
+    assert!(near(value(&mut st, d, round[0]), 16.0));
+    assert!(near(value(&mut st, d, round[1]), 8.0));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1212,4 +1288,157 @@ fn suggest_does_not_repeat_a_hand_made_dimension() {
     let all = dims(&st, d);
     assert_eq!(all.len(), 2);
     assert_eq!(all[1].kind, DimKind::Vertical);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix-Runde 1
+
+#[test]
+fn escape_never_gets_stuck_at_the_dimension_limit() {
+    let (mut st, d, top, mut h) = l_profile();
+    // Ein Maß von Hand, dann so viele Kopien, dass nur noch ein Maß Platz hat.
+    st.dimension_tool
+        .set_mode(ToolMode::Linear(LinearDir::Horizontal));
+    h.click_at(&mut st, (85.0, 100.0));
+    h.click_at(&mut st, (115.0, 90.0));
+    h.click_at(&mut st, (100.0, 125.0));
+    let one = dims(&st, d)[0].clone();
+    while dims(&st, d).len() < planora_drawing::limits::MAX_DIMENSIONS - 1 {
+        st.document.add_dimension(d, one.clone()).unwrap();
+    }
+    h.idle(&mut st);
+    let e0 = st.document.edit_count();
+    // Kette mit drei Punkten = zwei Maße: passt nicht mehr. Esc räumt trotzdem auf.
+    st.dimension_tool.set_mode(ToolMode::Chain);
+    h.click_at(&mut st, (85.0, 100.0));
+    h.click_at(&mut st, (95.0, 105.0));
+    h.click_at(&mut st, (115.0, 90.0));
+    h.hover_at(&mut st, (100.0, 140.0));
+    let shot = h.key(&mut st, Key::Escape);
+    assert!(st.dimension_tool.pending().is_empty());
+    assert!(!st.dimension_tool.is_ready());
+    assert_eq!(st.dimension_tool.view(), None);
+    assert_eq!(st.dimension_tool.message(), Some(full_text().as_str()));
+    assert!(shot.text.contains(&full_text()), "{}", shot.text);
+    assert_eq!(st.document.edit_count(), e0);
+    assert_eq!(
+        dims(&st, d).len(),
+        planora_drawing::limits::MAX_DIMENSIONS - 1
+    );
+    // Ein zweites Esc schaltet das Werkzeug aus.
+    h.key(&mut st, Key::Escape);
+    assert_eq!(st.dimension_tool.mode, ToolMode::Off);
+    let _ = top;
+}
+
+#[test]
+fn double_click_finishes_only_chains() {
+    let (mut st, _, d, _, mut h) = box_front();
+    // Waagerecht: der Doppelklick wählt die zweite Kante, setzt aber nicht vorzeitig.
+    st.dimension_tool
+        .set_mode(ToolMode::Linear(LinearDir::Horizontal));
+    h.click_at(&mut st, (95.0, 100.0));
+    h.double_click_at(&mut st, (105.0, 100.0));
+    assert!(
+        st.dimension_tool.is_ready(),
+        "{:?} {:?} {:?}",
+        st.dimension_tool.pending(),
+        st.dimension_tool.message(),
+        dims(&st, d)
+    );
+    assert!(dims(&st, d).is_empty());
+    let p = h.click_at(&mut st, (100.0, 128.0));
+    assert_eq!(dims(&st, d).len(), 1);
+    assert!(near(dims(&st, d)[0].offset, p.y - 115.0));
+    // Kette: der Doppelklick auf den letzten Punkt nimmt ihn auf und setzt die Kette.
+    st.dimension_tool.set_mode(ToolMode::Chain);
+    h.click_at(&mut st, (95.0, 100.0));
+    h.double_click_at(&mut st, (105.0, 100.0));
+    let all = dims(&st, d);
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert!(all[1].chain.is_some());
+    assert!(near(value(&mut st, d, all[1].id), BOX.x));
+    assert!(st.dimension_tool.pending().is_empty());
+}
+
+#[test]
+fn chain_is_placed_by_a_click_in_empty_space() {
+    let (mut st, _, d, _, mut h) = box_front();
+    st.dimension_tool.set_mode(ToolMode::Chain);
+    h.click_at(&mut st, (95.0, 100.0));
+    h.click_at(&mut st, (105.0, 100.0));
+    assert!(dims(&st, d).is_empty());
+    let p = h.click_at(&mut st, (100.0, 130.0));
+    let all = dims(&st, d);
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].chain.unwrap().mode, ChainMode::Chain);
+    assert!(near(all[0].offset, p.y - 115.0));
+    assert!(near(value(&mut st, d, all[0].id), BOX.x));
+}
+
+#[test]
+fn silhouette_in_a_linear_dimension_measures_to_the_axis_and_says_so() {
+    // Quader x 0…10 und Zylinder r 5 mit Achse bei x 25 daneben; Vorderansicht in (100, 100),
+    // Hüllbox-Mitte (15, 15): Blatt = Modell + 85. Quader links x 85, Zylinderumriss x 105.
+    let mut st = AppState::new();
+    st.create_box(BOX).unwrap();
+    st.create_cylinder(5.0, 12.0).unwrap();
+    let d = new_drawing(&mut st);
+    add_view(&mut st, d, ViewKind::Front, 100.0, 100.0);
+    let mut h = open(&mut st, d);
+    st.dimension_tool
+        .set_mode(ToolMode::Linear(LinearDir::Horizontal));
+    h.click_at(&mut st, (85.0, 100.0));
+    assert_eq!(st.dimension_tool.notice(), None);
+    h.click_at(&mut st, (105.0, 91.0));
+    assert!(
+        matches!(st.dimension_tool.pending()[1], GeoRef::Face(_)),
+        "{:?}",
+        st.dimension_tool.pending()
+    );
+    assert_eq!(st.dimension_tool.notice(), Some(SILHOUETTE_NOTE));
+    let shot = h.idle(&mut st);
+    assert!(shot.text.contains(SILHOUETTE_NOTE), "{}", shot.text);
+    h.click_at(&mut st, (100.0, 125.0));
+    let all = dims(&st, d);
+    assert_eq!(all.len(), 1);
+    // Von der linken Quaderkante (x 0) bis zur Zylinderachse (x 25).
+    assert!(near(value(&mut st, d, all[0].id), 25.0));
+    assert_eq!(st.dimension_tool.notice(), None);
+    // Als Durchmesser kein Hinweis (dort ist der Umriss gemeint).
+    st.dimension_tool.set_mode(ToolMode::Diameter);
+    h.click_at(&mut st, (105.0, 91.0));
+    assert!(st.dimension_tool.is_ready());
+    assert_eq!(st.dimension_tool.notice(), None);
+}
+
+#[test]
+fn tool_lock_texts_and_sentences() {
+    let mut st = AppState::new();
+    st.create_box(BOX).unwrap();
+    let d = new_drawing(&mut st);
+    let drawing = |st: &AppState| st.document.drawing(d).unwrap().clone();
+    assert_eq!(
+        drawing_view::tool_blocked(&drawing(&st), true),
+        Some(NO_VIEWS_TIP)
+    );
+    add_view(&mut st, d, ViewKind::Isometric, 140.0, 100.0);
+    assert_eq!(
+        drawing_view::tool_blocked(&drawing(&st), true),
+        Some(ISOMETRIC_TIP)
+    );
+    add_view(&mut st, d, ViewKind::Front, 60.0, 100.0);
+    assert_eq!(drawing_view::tool_blocked(&drawing(&st), true), None);
+    assert_eq!(
+        drawing_view::tool_blocked(&drawing(&st), false),
+        Some(READ_ONLY_TIP)
+    );
+    // Durchgereichte Texte enden mit einem Satzzeichen.
+    assert_eq!(sentence("Das Maß gibt es nicht"), "Das Maß gibt es nicht.");
+    assert_eq!(sentence("Schon ein Satz."), "Schon ein Satz.");
+    assert_eq!(sentence("Wirklich?"), "Wirklich?");
+    assert_eq!(
+        incomplete_text(1, 2),
+        "Die Maße sind unvollständig: nur 1 von 2 Maßen wurden gesetzt."
+    );
 }

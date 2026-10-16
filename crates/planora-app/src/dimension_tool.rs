@@ -56,6 +56,10 @@ pub const NOT_DIMENSIONABLE: &str = "Der Bezug lässt sich nicht bemaßen.";
 pub const NO_ISOMETRIC: &str = "In der Isometrie gibt es keine Maße.";
 /// Ablehnung beim Winkelmaß mit einer gebogenen Kante.
 pub const ANGLE_LINES: &str = "Ein Winkelmaß braucht zwei gerade Kanten.";
+/// Hinweis nach dem Klick auf den Umriss eines Zylinders in einem linearen Maß.
+pub const SILHOUETTE_NOTE: &str = "Gemessen wird bis zur Mitte des Zylinders.";
+/// Erklärung, wenn die Zeichnung noch keine Ansicht hat.
+pub const NO_VIEWS_TIP: &str = "Zuerst eine Ansicht anlegen.";
 /// Hinweis bei einem Klick neben die Linien.
 pub const MISSED: &str = "Bitte eine Linie der Ansicht anklicken.";
 /// Beschriftung des Schalters.
@@ -199,6 +203,8 @@ pub struct DimensionTool {
     group: Option<u64>,
     pointer: Option<DVec2>,
     message: Option<String>,
+    /// Hinweis zum zuletzt gewählten Bezug (keine Ablehnung).
+    notice: Option<String>,
 }
 
 /// Alles, was zum Messen in einer Ansicht gebraucht wird.
@@ -327,6 +333,21 @@ impl<'a> Ctx<'a> {
     }
 }
 
+/// Ein Text als ganzer Satz: endet er nicht mit einem Satzzeichen, kommt ein Punkt dazu.
+pub fn sentence(text: &str) -> String {
+    let t = text.trim_end();
+    if t.is_empty() || t.ends_with(['.', '!', '?']) {
+        t.to_string()
+    } else {
+        format!("{t}.")
+    }
+}
+
+/// Meldung, wenn eine Kette oder Bezugsmaße nur zum Teil gesetzt werden konnten.
+pub fn incomplete_text(set: usize, total: usize) -> String {
+    format!("Die Maße sind unvollständig: nur {set} von {total} Maßen wurden gesetzt.")
+}
+
 /// Fehler einer Messung als Satz für die Oberfläche (ohne Hinweise auf die Herkunft).
 fn dim_text(e: &DimError) -> String {
     match e {
@@ -427,6 +448,12 @@ impl DimensionTool {
         self.view = None;
         self.drawing = None;
         self.message = None;
+        self.notice = None;
+    }
+
+    /// Hinweis zum zuletzt gewählten Bezug (etwa: Zylinderumriss misst bis zur Mitte).
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
     }
 
     /// Hinweis zum nächsten Schritt; `None`, wenn das Werkzeug aus ist.
@@ -463,8 +490,21 @@ impl DimensionTool {
         hit: &Hit,
     ) -> ToolOutcome {
         let out = self.click_inner(state, drawing, view, hit);
+        let out = match out {
+            ToolOutcome::Rejected(t) => ToolOutcome::Rejected(sentence(&t)),
+            o => o,
+        };
         self.message = match &out {
             ToolOutcome::Rejected(t) => Some(t.clone()),
+            _ => None,
+        };
+        // Umriss eines Zylinders in einem linearen Maß: gemessen wird bis zur Achse.
+        self.notice = match (&out, self.pending.last()) {
+            (ToolOutcome::NeedMore(_) | ToolOutcome::Ready, Some(GeoRef::Face(_)))
+                if !self.mode.whole_edges() =>
+            {
+                Some(SILHOUETTE_NOTE.into())
+            }
             _ => None,
         };
         out
@@ -601,12 +641,16 @@ impl DimensionTool {
         drawing: DrawingId,
         pointer: DVec2,
     ) -> Result<Vec<DimId>, ToolError> {
-        let r = self.finish_inner(state, drawing, pointer);
+        let r = match self.finish_inner(state, drawing, pointer) {
+            Err(ToolError::Rejected(t)) => Err(ToolError::Rejected(sentence(&t))),
+            r => r,
+        };
         self.message = match &r {
             Err(ToolError::Rejected(t)) => Some(t.clone()),
+            Ok((ids, total)) if ids.len() < *total => Some(incomplete_text(ids.len(), *total)),
             _ => None,
         };
-        r
+        r.map(|(ids, _)| ids)
     }
 
     fn finish_inner(
@@ -614,7 +658,7 @@ impl DimensionTool {
         state: &mut AppState,
         drawing: DrawingId,
         pointer: DVec2,
-    ) -> Result<Vec<DimId>, ToolError> {
+    ) -> Result<(Vec<DimId>, usize), ToolError> {
         if !pointer.is_finite() {
             return Err(ToolError::NotReady);
         }
@@ -636,7 +680,8 @@ impl DimensionTool {
         } else {
             None
         };
-        let mut ids = Vec::with_capacity(specs.len());
+        let total = specs.len();
+        let mut ids = Vec::with_capacity(total);
         for mut s in specs {
             if let (Some(c), Some(g)) = (s.chain.as_mut(), group) {
                 c.group = g;
@@ -657,7 +702,7 @@ impl DimensionTool {
         let mode = self.mode;
         self.cancel();
         self.mode = mode;
-        Ok(ids)
+        Ok((ids, total))
     }
 
     /// Die Maße, die ein Klick an `pointer` setzen würde, mit ihren Messungen.
