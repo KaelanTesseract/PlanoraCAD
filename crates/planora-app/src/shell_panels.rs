@@ -294,8 +294,9 @@ pub fn last_layout(ctx: &egui::Context) -> Option<ShellRects> {
     ctx.data(|d| d.get_temp(layout_key()))
 }
 
-/// Tatsächlich belegte Rechtecke der sichtbaren Felder im letzten Bild, je mit Namen (für
-/// Tests; die Seitenfelder sind so hoch wie ihr Inhalt, höchstens wie die Spalte).
+/// Tatsächlich belegte Rechtecke der sichtbaren Felder, je mit Namen (für Tests). Gelesen wird
+/// der Stand, den egui am Ende des vorigen Bildes gespeichert hat; nach einem Bild also die
+/// Felder dieses Bildes. Die Seitenfelder sind so hoch wie ihr Inhalt, höchstens wie die Spalte.
 #[doc(hidden)]
 pub fn field_rects(ctx: &egui::Context) -> Vec<(&'static str, egui::Rect)> {
     [

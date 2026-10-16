@@ -286,6 +286,158 @@ fn assert_inside_free(app: &mut PlanoraApp, size: Vec2, what: &str) {
     }
 }
 
+/// Würfel ±`half` um den Ursprung liegt ganz in der freien Fläche.
+fn assert_cube_inside_free(app: &mut PlanoraApp, size: Vec2, half: f32, what: &str) {
+    let free = rects(app, size).free;
+    let cam = state(app).camera;
+    for i in 0..8 {
+        let corner = Vec3::new(
+            if i & 1 == 0 { -half } else { half },
+            if i & 2 == 0 { -half } else { half },
+            if i & 4 == 0 { -half } else { half },
+        );
+        let px = cam
+            .project(corner, glam::Vec2::new(size.x, size.y))
+            .unwrap();
+        assert!(
+            free.expand(0.5).contains(pos2(px.x, px.y)),
+            "{what} {size:?}: Ecke bei {px:?} außerhalb der freien Fläche {free:?}"
+        );
+    }
+}
+
+/// Die Körper füllen die freie Fläche gut aus (nicht bloß winzig in der Mitte): die Hülle der
+/// Ecken reicht in einer Richtung über mindestens die Hälfte.
+fn assert_fills_free(app: &mut PlanoraApp, size: Vec2, what: &str) {
+    let free = rects(app, size).free;
+    let corners = corners_px(app, size);
+    let hull = corners.iter().fold(Rect::NOTHING, |r, p| {
+        r.union(Rect::from_min_size(*p, Vec2::ZERO))
+    });
+    assert!(
+        hull.width() >= 0.5 * free.width() || hull.height() >= 0.5 * free.height(),
+        "{what} {size:?}: Körper {hull:?} füllt die freie Fläche {free:?} kaum"
+    );
+}
+
+/// Gespeichertes Dokument mit einem Quader `dims`, geschlossen; liefert Arbeitsbereich und Pfad.
+fn saved_document(dims: DVec3) -> (Workspace, planora_project::library::NodePath) {
+    let mut w = library_ws();
+    let p = w.library.as_ref().unwrap().create_project("P").unwrap();
+    w.active_tab_mut().state.create_box(dims).unwrap();
+    w.save_as(&p, "Teil", "Anfang").unwrap();
+    let path = w.active_tab().path.clone().unwrap();
+    w.close_tab(0);
+    (w, path)
+}
+
+/// Ein geöffnetes Dokument (Weg über den gespeicherten Stand) wird in die freie Fläche
+/// eingepasst, bei jeder Fenstergröße; die Ansicht wird danach nicht noch einmal eingepasst.
+#[test]
+fn opened_documents_fit_inside_the_free_rect_at_all_sizes() {
+    for size in [SMALL, MID, BIG] {
+        for dims in [
+            DVec3::new(300.0, 40.0, 200.0),
+            DVec3::new(1000.0, 20.0, 20.0),
+        ] {
+            let c = context();
+            let (w, path) = saved_document(dims);
+            let mut app = PlanoraApp::for_tests(w);
+            settle(&c, &mut app, size);
+            app.ws_mut()
+                .open_document(&path, LockMode::Acquire)
+                .unwrap();
+            assert!(state(&mut app).fit_pending, "geladen, noch nicht gezeigt");
+            settle(&c, &mut app, size);
+            let what = format!("Dokument {dims:?}");
+            assert!(!state(&mut app).fit_pending, "{what}: einmal nachgeholt");
+            assert_centred(&mut app, size, &what);
+            assert_inside_free(&mut app, size, &what);
+            assert_fills_free(&mut app, size, &what);
+            // Danach bleibt eine Änderung der Ansicht durch den Nutzer stehen.
+            state(&mut app).camera.zoom(-30.0);
+            let d = state(&mut app).camera.distance;
+            settle(&c, &mut app, size);
+            assert_eq!(
+                state(&mut app).camera.distance,
+                d,
+                "{what}: kein zweites Einpassen"
+            );
+        }
+    }
+}
+
+/// Neuer Tab (Strg+N): die Standardansicht (±25 mm) liegt bei jeder Fenstergröße in der freien
+/// Fläche, ohne dass von Hand eingepasst wird.
+#[test]
+fn new_tab_view_fits_the_free_rect_at_all_sizes() {
+    for size in [SMALL, MID, BIG] {
+        let c = context();
+        let mut app = app_with_box();
+        settle(&c, &mut app, size);
+        press(&c, &mut app, size, Key::N, Modifiers::COMMAND);
+        settle(&c, &mut app, size);
+        assert_centred(&mut app, size, "neuer Tab");
+        assert_cube_inside_free(&mut app, size, 25.0, "neuer Tab");
+    }
+}
+
+/// Wird ein geladener Tab zuerst als Zeichnung oder in einer Skizze gezeigt, wartet das
+/// Einpassen, bis die 3D-Ansicht ohne Skizze läuft.
+#[test]
+fn the_pending_fit_waits_for_the_model_view() {
+    let c = context();
+    let (w, path) = saved_document(DVec3::new(1000.0, 20.0, 20.0));
+    let mut app = PlanoraApp::for_tests(w);
+    settle(&c, &mut app, SMALL);
+    app.ws_mut()
+        .open_document(&path, LockMode::Acquire)
+        .unwrap();
+    let s = state(&mut app);
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    settle(&c, &mut app, SMALL);
+    assert!(
+        state(&mut app).fit_pending,
+        "in der Skizze nicht nachgeholt"
+    );
+    assert_centred(&mut app, SMALL, "Skizze");
+    state(&mut app).close_sketch();
+    settle(&c, &mut app, SMALL);
+    assert!(!state(&mut app).fit_pending);
+    assert_centred(&mut app, SMALL, "nach der Skizze");
+    assert_inside_free(&mut app, SMALL, "nach der Skizze");
+
+    // Zuerst als Zeichnung gezeigt.
+    let (w, path) = saved_document(DVec3::new(1000.0, 20.0, 20.0));
+    let mut app = PlanoraApp::for_tests(w);
+    settle(&c, &mut app, SMALL);
+    app.ws_mut()
+        .open_document(&path, LockMode::Acquire)
+        .unwrap();
+    let s = state(&mut app);
+    let sheet = Sheet {
+        paper: Paper::A4,
+        landscape: true,
+    };
+    let d = s
+        .document
+        .add_drawing("Blatt 1", sheet, Projection::First)
+        .unwrap();
+    s.drawing_ui.open(d);
+    settle(&c, &mut app, SMALL);
+    assert!(
+        state(&mut app).fit_pending,
+        "in der Zeichnung nicht nachgeholt"
+    );
+    state(&mut app).drawing_ui.area = WorkArea::Model;
+    settle(&c, &mut app, SMALL);
+    assert!(!state(&mut app).fit_pending);
+    assert_inside_free(&mut app, SMALL, "nach der Zeichnung");
+}
+
 #[test]
 fn free_rect_is_what_the_viewport_gets() {
     let c = context();
@@ -333,46 +485,29 @@ fn view_menu_toggles_projects_and_versions_fields() {
     );
 
     let fields = [r.left, r.right];
-    // Ansicht → Projekte
-    let shot = click(
-        &c,
-        &mut app,
-        BIG,
-        shot.find_outside("Ansicht", &fields).center(),
-    );
-    let shot = click(
-        &c,
-        &mut app,
-        BIG,
-        shot.find_outside("Projekte", &fields).center(),
-    );
-    assert!(!app.shell_mut().projects_visible);
-    let shot = if shot
-        .all("Versionen")
-        .iter()
-        .any(|t| !r.right.intersects(*t))
-    {
-        shot
-    } else {
-        // Menü hat sich geschlossen: erneut öffnen.
-        let s = settle(&c, &mut app, BIG);
-        click(
+    // Menüs schließen bei einem Klick in ihnen (egui `PopupCloseBehavior::CloseOnClick`, die
+    // Menüleiste ändert das nicht): jeder Umschalter braucht „Ansicht“ erneut.
+    let menu_open = |shot: &Shot| !shot.all("Isometrisch").is_empty();
+    for (entry, what) in [("Projekte", "Projekte"), ("Versionen", "Versionen")] {
+        let shot = settle(&c, &mut app, BIG);
+        assert!(!menu_open(&shot), "Menü ist zu");
+        let shot = click(
             &c,
             &mut app,
             BIG,
-            s.find_outside("Ansicht", &fields).center(),
-        )
-    };
-    let shot = click(
-        &c,
-        &mut app,
-        BIG,
-        shot.find_outside("Versionen", &fields).center(),
-    );
+            shot.find_outside("Ansicht", &fields).center(),
+        );
+        assert!(menu_open(&shot), "Ansicht ist offen");
+        let shot = click(
+            &c,
+            &mut app,
+            BIG,
+            shot.find_outside(entry, &fields).center(),
+        );
+        assert!(!menu_open(&shot), "Klick auf {what} schließt das Menü");
+    }
+    assert!(!app.shell_mut().projects_visible);
     assert!(!app.shell_mut().versions_visible);
-    let _ = shot;
-    // Menü schließen und neu zeichnen.
-    frame(&c, &mut app, BIG, vec![key(Key::Escape, Modifiers::NONE)]);
     let shot = settle(&c, &mut app, BIG);
     assert!(!shot.has_in("Projekte", r.left), "Projekte ausgeblendet");
     assert!(!shot.has_in("Versionen", r.right), "Versionen ausgeblendet");
@@ -594,16 +729,17 @@ fn new_tab_open_document_frame_all_centres_in_the_free_rect() {
     assert_centred(&mut app, BIG, "Alles einpassen");
     assert_inside_free(&mut app, BIG, "Alles einpassen");
 
-    // Neuer Tab (Strg+N), dann ein Körper und Alles einpassen.
+    // Neuer Tab (Strg+N): die Standardansicht (Würfel ±25 mm um den Ursprung) liegt ohne
+    // Zutun in der freien Fläche; der erste Körper wird beim Anlegen selbst eingepasst.
     press(&c, &mut app, BIG, Key::N, Modifiers::COMMAND);
     settle(&c, &mut app, BIG);
     assert_centred(&mut app, BIG, "neuer Tab");
+    assert_cube_inside_free(&mut app, BIG, 25.0, "neuer Tab");
     state(&mut app)
         .create_box(DVec3::new(300.0, 20.0, 20.0))
         .unwrap();
-    state(&mut app).frame_all();
     settle(&c, &mut app, BIG);
-    assert_inside_free(&mut app, BIG, "neuer Tab, eingepasst");
+    assert_inside_free(&mut app, BIG, "neuer Tab, erster Körper");
 
     // Dokument öffnen: gespeichert, geschlossen, wieder geöffnet.
     let mut w = library_ws();

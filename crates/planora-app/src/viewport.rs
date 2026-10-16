@@ -113,6 +113,12 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         .map(|f| f.intersect(rect))
         .filter(|f| f.width() >= 1.0 && f.height() >= 1.0);
     fit_camera(state, rect, free);
+    // Neuer Tab oder geladener Stand: einmal in das jetzt bekannte freie Rechteck einpassen. Im
+    // Skizzen-Modus bleibt die Skizzenansicht; nachgeholt wird dann nach dem Beenden.
+    if state.fit_pending && free.is_some() && !sketching {
+        state.frame_all();
+        state.fit_pending = false;
+    }
     // Platz für die 3D-Szene; sie wird am Ende mit der endgültigen Kamera eingesetzt, damit die
     // Skizze darüber liegt.
     let scene_slot = painter.add(Shape::Noop);
