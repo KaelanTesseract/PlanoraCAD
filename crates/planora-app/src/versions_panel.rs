@@ -4,7 +4,7 @@
 //! Fehler landen als `Prompt::Notice`, nie als Panik. Gespeicherte Versionen werden nur über
 //! den beschreibbaren Tab des Dokuments geändert (er hält die Sperre).
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::workspace::{Prompt, Workspace};
 use planora_project::docstore::DocumentInfo;
 use planora_project::library::NodePath;
@@ -282,7 +282,10 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi) {
             return;
         }
         Some(Err(())) => {
-            ui.colored_label(ERROR_COLOR, "Die Versionen lassen sich nicht lesen.");
+            ui.colored_label(
+                error_color(ui.visuals().dark_mode),
+                "Die Versionen lassen sich nicht lesen.",
+            );
             return;
         }
         Some(Ok(info)) => info,

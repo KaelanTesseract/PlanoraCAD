@@ -5,7 +5,7 @@
 //! Schrift und Einrückung, volle Breite. Die Zustandsfunktionen (`request_*`, `apply_*`) sind
 //! ohne Oberfläche testbar.
 
-use crate::browser::{ERROR_COLOR, body_indent, row};
+use crate::browser::{body_indent, error_color, row};
 use crate::drawing_dialog::{DUPLICATE_NAME, EMPTY_NAME, SKETCH_BLOCKED, paper_label};
 use crate::drawing_state::WorkArea;
 use crate::drawing_view::view_names;
@@ -496,7 +496,7 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
                 apply = true;
             }
             if let Some(e) = error {
-                ui.colored_label(ERROR_COLOR, e);
+                ui.colored_label(error_color(ui.visuals().dark_mode), e);
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -540,7 +540,9 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
-                    .button(egui::RichText::new("Löschen").color(ERROR_COLOR))
+                    .button(
+                        egui::RichText::new("Löschen").color(error_color(ui.visuals().dark_mode)),
+                    )
                     .clicked()
                 {
                     confirm = true;

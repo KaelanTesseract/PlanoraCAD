@@ -96,7 +96,7 @@ impl BooleanDialog {
                 ui.radio_value(&mut self.op, BoolOp::Intersection, "Schneiden");
                 ui.add_space(4.0);
                 if let Some(e) = self.error() {
-                    ui.colored_label(egui::Color32::from_rgb(230, 90, 90), e);
+                    ui.colored_label(crate::browser::error_color(ui.visuals().dark_mode), e);
                     ui.add_space(4.0);
                 }
                 let can_run = self.can_run();

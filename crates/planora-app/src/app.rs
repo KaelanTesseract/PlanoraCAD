@@ -601,12 +601,12 @@ impl eframe::App for PlanoraApp {
                 // Vorrang: letzte Meldung, Skizzen-Modus, erstes Feature mit Fehler, Körperzahl (mit
                 // Hinweis bei ungenauem Netz).
                 match (&state.message, sketch, browser::status_text(state)) {
-                    (Some(m), _, _) => ui.colored_label(browser::ERROR_COLOR, m),
+                    (Some(m), _, _) => ui.colored_label(browser::error_color(ui.visuals().dark_mode), m),
                     (None, Some(sk), _) => ui.weak(format!(
                         "Skizzen-Modus: {} – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt",
                         sk.name
                     )),
-                    (None, None, Some(e)) => ui.colored_label(browser::ERROR_COLOR, e),
+                    (None, None, Some(e)) => ui.colored_label(browser::error_color(ui.visuals().dark_mode), e),
                     (None, None, None) => match state.mesh_note() {
                         Some(note) => ui.weak(format!("{} Körper – {note}", state.bodies.len())),
                         None => ui.weak(format!("{} Körper", state.bodies.len())),

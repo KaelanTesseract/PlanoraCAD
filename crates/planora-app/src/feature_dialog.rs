@@ -5,7 +5,7 @@ use crate::blend_dialog::{
     ArtChoice, TOO_MANY_POINTS, check_min_sizes, insert_point, min_size_for, min_text,
     set_first_face,
 };
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::create_dialog::axis_candidates;
 use crate::sketch_view::{format_number, parse_number};
 use crate::state::{AppState, MAX_COORD_MM};
@@ -464,7 +464,7 @@ impl FeatureDialog {
                 }
                 if let Some(e) = &self.error {
                     ui.add_space(4.0);
-                    ui.colored_label(ERROR_COLOR, e);
+                    ui.colored_label(error_color(ui.visuals().dark_mode), e);
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {

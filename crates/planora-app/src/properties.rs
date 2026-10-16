@@ -1,5 +1,5 @@
-use crate::browser::ERROR_COLOR;
-use crate::mesh_body::{WARNING_COLOR, euler_degrees, report_text, rotation_from_degrees};
+use crate::browser::error_color;
+use crate::mesh_body::{euler_degrees, report_text, rotation_from_degrees, warning_color};
 use crate::sketch_view::format_number;
 use crate::state::AppState;
 use planora_exchange::MeshTransform;
@@ -247,7 +247,9 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
             ui.label("Status");
             match &status {
                 FeatureStatus::Ok => ui.label("berechnet"),
-                FeatureStatus::Error(e) => ui.colored_label(ERROR_COLOR, format!("Fehler: {e}")),
+                FeatureStatus::Error(e) => {
+                    ui.colored_label(error_color(ui.visuals().dark_mode), format!("Fehler: {e}"))
+                }
                 FeatureStatus::Skipped(why) => ui.weak(format!("übersprungen: {why}")),
                 FeatureStatus::Suppressed => ui.weak("unterdrückt"),
                 FeatureStatus::NotComputed => {
@@ -457,7 +459,7 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         if let Some(r) = body.mesh_report
             && !r.closed
         {
-            ui.colored_label(WARNING_COLOR, import_warning(&r));
+            ui.colored_label(warning_color(ui.visuals().dark_mode), import_warning(&r));
         }
         ui.add_space(4.0);
         ui.weak(MESH_BODY_HINT);

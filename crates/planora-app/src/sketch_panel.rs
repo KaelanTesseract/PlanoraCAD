@@ -4,7 +4,8 @@
 use crate::sketch_state::{ConstraintAction, Item, Severity, SketchSession, Tool};
 use crate::sketch_view::{constraint_name, format_number, is_angle, parse_number, shown_value};
 use crate::state::AppState;
-use egui::{Color32, RichText};
+use crate::theme;
+use egui::RichText;
 use planora_feature::FeatureId;
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
@@ -77,10 +78,6 @@ pub const ACTIONS: [ConstraintAction; 16] = {
         Angle,
     ]
 };
-
-const ERROR: Color32 = Color32::from_rgb(230, 90, 90);
-const WARNING: Color32 = Color32::from_rgb(230, 160, 60);
-const OK: Color32 = Color32::from_rgb(90, 190, 110);
 
 /// Breite des Fensters „Skizze“.
 const PANEL_WIDTH: f32 = 300.0;
@@ -277,7 +274,7 @@ fn contents(
     });
     value_editor(ui, se, sk, panel);
     if let Some(m) = panel.error.as_ref().or(se.message.as_ref()) {
-        ui.colored_label(ERROR, m);
+        ui.colored_label(theme::palette(ui.visuals().dark_mode).error, m);
     }
     ui.separator();
 
@@ -345,11 +342,12 @@ fn contents(
 
     // Statuszeile
     let (text, severity) = se.status(sk);
+    let p = theme::palette(ui.visuals().dark_mode);
     let color = match severity {
-        Severity::Info if se.last_report.as_ref().is_some_and(|r| r.dof == 0) => OK,
+        Severity::Info if se.last_report.as_ref().is_some_and(|r| r.dof == 0) => p.ok,
         Severity::Info => ui.visuals().text_color(),
-        Severity::Warning => WARNING,
-        Severity::Error => ERROR,
+        Severity::Warning => p.warning,
+        Severity::Error => p.error,
     };
     ui.colored_label(color, text);
     close
@@ -521,7 +519,7 @@ fn constraint_list(
                 let selected = se.selection.contains(&item);
                 let mut text = RichText::new(constraint_name(sk, &kind, driven));
                 if bad.contains(&id) {
-                    text = text.color(ERROR);
+                    text = text.color(theme::palette(ui.visuals().dark_mode).error);
                 }
                 ui.horizontal(|ui| {
                     let r = ui.selectable_label(selected, text);

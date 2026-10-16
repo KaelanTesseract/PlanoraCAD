@@ -16,7 +16,12 @@ pub const DISPLAY_TRIANGLES: usize = 5_000_000;
 pub const PREVIEW_NOTE: &str = "Hinweis: Das Netz ist sehr groß; die Ansicht zeigt nur einen Teil der Dreiecke. Gespeichert und exportiert wird es vollständig.";
 
 /// Farbe für Warnungen (nicht geschlossenes Netz).
-pub const WARNING_COLOR: egui::Color32 = egui::Color32::from_rgb(220, 150, 40);
+pub const WARNING_COLOR: egui::Color32 = crate::theme::DARK.warning;
+
+/// Warnfarbe des Themas.
+pub fn warning_color(dark: bool) -> egui::Color32 {
+    crate::theme::palette(dark).warning
+}
 
 /// Netz für die Ansicht: Punkte nach der Lage `t`, Normalen mit harten Kanten (30°), eine
 /// Fläche über das ganze Netz, keine Kantenlinien. Über `max_triangles` Dreiecken nur jedes

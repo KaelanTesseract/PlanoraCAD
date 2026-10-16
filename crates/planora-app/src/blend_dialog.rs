@@ -1,7 +1,7 @@
 //! Fenster „Verrunden“ bzw. „Fase“ (Menü „Bearbeiten“, Spec §6): Kante im Fenster anklicken,
 //! Maße eintragen, Art wählen, „Erzeugen“. Zahlen nehmen Komma und Punkt an.
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::sketch_view::{format_number, parse_number};
 use crate::state::{AppState, MAX_COORD_MM};
 use planora_feature::BlendArt;
@@ -574,7 +574,7 @@ impl BlendDialog {
                     "Tangentenkette (glatt anschließende Kanten mitnehmen)",
                 );
                 if let Some(e) = &self.error {
-                    ui.colored_label(ERROR_COLOR, e);
+                    ui.colored_label(error_color(ui.visuals().dark_mode), e);
                 }
                 ui.horizontal(|ui| {
                     if ui.button("Erzeugen").clicked() {

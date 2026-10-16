@@ -1,6 +1,6 @@
 //! Fenster „Neue Zeichnung“ und Menü „Zeichnung“ (Teilprojekt 11, Aufgabe 15).
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::drawing_state::{WorkArea, suggest_scale};
 use crate::export_dialog::{shorten_for_display, wide_window};
@@ -210,7 +210,7 @@ impl NewDrawingDialog {
                 cards = card_row(ui, "new-drawing", row);
                 ui.add_space(8.0);
                 if let Some(e) = error {
-                    ui.colored_label(ERROR_COLOR, e);
+                    ui.colored_label(error_color(ui.visuals().dark_mode), e);
                 }
                 ui.separator();
                 ui.horizontal(|ui| {

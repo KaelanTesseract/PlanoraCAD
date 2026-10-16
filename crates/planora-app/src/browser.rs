@@ -5,6 +5,7 @@
 
 use crate::icons::{FeatureIcon, paint_body_icon, paint_feature_icon};
 use crate::state::{AppState, BodyKind, SketchRequest};
+use crate::theme;
 use egui::{Color32, Sense, vec2};
 use planora_feature::{FeatureId, FeatureKind, FeatureStatus, SketchPlane};
 
@@ -12,16 +13,19 @@ const ROW_HEIGHT: f32 = 28.0;
 /// Einrückung der Körperzeilen unter ihrem Feature.
 const BODY_INDENT: f32 = 22.0;
 const MARKER_HEIGHT: f32 = 20.0;
-/// Rot für Fehler (wie in der Statuszeile und im Skizzenfenster).
-pub const ERROR_COLOR: Color32 = Color32::from_rgb(230, 90, 90);
+/// Rot für Fehler im dunklen Thema (Wert aus der Palette); die Oberfläche nutzt `error_color`.
+pub const ERROR_COLOR: Color32 = theme::DARK.error;
+
+/// Fehlerfarbe des Themas.
+pub fn error_color(dark: bool) -> Color32 {
+    theme::palette(dark).error
+}
 /// Text der Rückroll-Linie.
 const MARKER_TEXT: &str = "Berechnung endet hier";
 /// Kurze Statustexte rechts in den Zeilen.
 const STATUS_WORDS: [&str; 4] = ["Fehler", "übersprungen", "unterdrückt", "nicht berechnet"];
 /// Schriftgröße der Statustexte und der Rückroll-Linie.
 const SMALL_FONT: f32 = 12.0;
-/// Farbe der Rückroll-Linie.
-const MARKER_COLOR: Color32 = Color32::from_rgb(90, 150, 230);
 
 // ---- Zustandsfunktionen -----------------------------------------------------------------------
 
@@ -266,10 +270,15 @@ struct RowData {
 fn status_view(
     status: &FeatureStatus,
     weak: Color32,
+    dark: bool,
 ) -> (Option<&'static str>, Option<Color32>, Option<String>) {
     match status {
         FeatureStatus::Ok => (None, None, None),
-        FeatureStatus::Error(e) => (Some(STATUS_WORDS[0]), Some(ERROR_COLOR), Some(e.clone())),
+        FeatureStatus::Error(e) => (
+            Some(STATUS_WORDS[0]),
+            Some(error_color(dark)),
+            Some(e.clone()),
+        ),
         FeatureStatus::Skipped(why) => (Some(STATUS_WORDS[1]), Some(weak), Some(why.clone())),
         FeatureStatus::Suppressed => (
             Some(STATUS_WORDS[2]),
@@ -377,6 +386,7 @@ pub(crate) fn row(
 
 /// Trennlinie des Rückrollmarkers.
 fn marker_line(ui: &mut egui::Ui) {
+    let marker = theme::palette(ui.visuals().dark_mode).marker;
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), MARKER_HEIGHT), Sense::hover());
     let y = rect.center().y;
@@ -385,9 +395,9 @@ fn marker_line(ui: &mut egui::Ui) {
         egui::Align2::LEFT_CENTER,
         MARKER_TEXT,
         egui::FontId::proportional(SMALL_FONT),
-        MARKER_COLOR,
+        marker,
     );
-    let stroke = egui::Stroke::new(2.0, MARKER_COLOR);
+    let stroke = egui::Stroke::new(2.0, marker);
     ui.painter().line_segment(
         [egui::pos2(rect.min.x, y), egui::pos2(rect.min.x + 4.0, y)],
         stroke,
@@ -472,7 +482,7 @@ fn feature_tree(ui: &mut egui::Ui, state: &mut AppState) {
         } else {
             r.name.clone()
         };
-        let (status, color, reason) = status_view(&r.status, weak);
+        let (status, color, reason) = status_view(&r.status, weak, ui.visuals().dark_mode);
         let icon = r.icon;
         let mut resp = row(
             ui,
@@ -683,7 +693,9 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
-                    .button(egui::RichText::new("Löschen").color(ERROR_COLOR))
+                    .button(
+                        egui::RichText::new("Löschen").color(error_color(ui.visuals().dark_mode)),
+                    )
                     .clicked()
                 {
                     confirm = true;

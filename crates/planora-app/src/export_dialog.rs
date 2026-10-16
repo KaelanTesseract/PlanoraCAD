@@ -15,7 +15,7 @@
 //! Bezug verloren, wird nichts geschrieben (Festlegung P13); Maße außerhalb des Blatts werden
 //! geschrieben und in der Karte gezählt (P12).
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::dimension_dialog::kind_label;
 use crate::dimension_state::count_outside;
@@ -24,7 +24,7 @@ use crate::drawing_state::{ComputeFn, WorkArea};
 use crate::drawing_view::view_names;
 use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
-use crate::mesh_body::{WARNING_COLOR, report_text};
+use crate::mesh_body::{report_text, warning_color};
 use crate::state::{AppState, BodyKind};
 use planora_drawing::annotate::{Mark, ResolvedDims};
 use planora_drawing::dimension::{DimError, DimSpec};
@@ -1661,7 +1661,7 @@ impl ExportDialog {
                         });
                     }
                     ExportStatus::Failed(m) => {
-                        ui.colored_label(ERROR_COLOR, m);
+                        ui.colored_label(error_color(ui.visuals().dark_mode), m);
                         if ui.button("Neu berechnen").clicked() {
                             recompute = true;
                         }
@@ -1679,8 +1679,14 @@ impl ExportDialog {
                         if report.closed {
                             ui.label(report_text(report));
                         } else {
-                            ui.colored_label(WARNING_COLOR, report_text(report));
-                            ui.colored_label(WARNING_COLOR, NOT_CLOSED_WARNING);
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                report_text(report),
+                            );
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                NOT_CLOSED_WARNING,
+                            );
                         }
                     }
                     ExportStatus::StepReady {
@@ -1690,7 +1696,7 @@ impl ExportDialog {
                         skipped_meshes,
                     } => {
                         if *bodies == 0 {
-                            ui.colored_label(WARNING_COLOR, STEP_NOTHING);
+                            ui.colored_label(warning_color(ui.visuals().dark_mode), STEP_NOTHING);
                         } else {
                             ui.label(format!(
                                 "{} Körper, {} Flächen",
@@ -1699,10 +1705,13 @@ impl ExportDialog {
                             ));
                         }
                         for r in rejected {
-                            ui.colored_label(WARNING_COLOR, r);
+                            ui.colored_label(warning_color(ui.visuals().dark_mode), r);
                         }
                         if !skipped_meshes.is_empty() {
-                            ui.colored_label(WARNING_COLOR, skipped_text(skipped_meshes));
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                skipped_text(skipped_meshes),
+                            );
                         }
                     }
                     ExportStatus::DrawingReady {
@@ -1712,14 +1721,20 @@ impl ExportDialog {
                     } => {
                         ui.label("Alle Ansichten sind berechnet.");
                         if *outside > 0 {
-                            ui.colored_label(WARNING_COLOR, outside_text(*outside));
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                outside_text(*outside),
+                            );
                         }
                         if !skipped_meshes.is_empty() {
-                            ui.colored_label(WARNING_COLOR, drawing_skipped_text(skipped_meshes));
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                drawing_skipped_text(skipped_meshes),
+                            );
                         }
                     }
                     ExportStatus::Unavailable(m) => {
-                        ui.colored_label(WARNING_COLOR, m);
+                        ui.colored_label(warning_color(ui.visuals().dark_mode), m);
                     }
                 }
                 match &write_state {
@@ -1736,7 +1751,7 @@ impl ExportDialog {
                             }
                         });
                         if denied {
-                            ui.colored_label(WARNING_COLOR, WRITING_HINT);
+                            ui.colored_label(warning_color(ui.visuals().dark_mode), WRITING_HINT);
                         }
                     }
                     WriteState::Done(path, n) => {
@@ -1746,11 +1761,17 @@ impl ExportDialog {
                             mb_text(*n)
                         ));
                         if !shortened.is_empty() {
-                            ui.colored_label(WARNING_COLOR, shortened_text(&shortened));
+                            ui.colored_label(
+                                warning_color(ui.visuals().dark_mode),
+                                shortened_text(&shortened),
+                            );
                         }
                     }
                     WriteState::Failed(m) => {
-                        ui.colored_label(ERROR_COLOR, format!("Nicht geschrieben: {m}"));
+                        ui.colored_label(
+                            error_color(ui.visuals().dark_mode),
+                            format!("Nicht geschrieben: {m}"),
+                        );
                     }
                 }
                 ui.separator();

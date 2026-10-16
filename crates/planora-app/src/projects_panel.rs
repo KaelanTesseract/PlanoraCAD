@@ -4,7 +4,7 @@
 //! Fehler landen als `Prompt::Notice`, nie als Panik. Pfade kommen nur aus dem Baum der
 //! Bibliothek und werden von ihr geprüft.
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::workspace::{Prompt, Workspace};
 use planora_project::ProjectError;
 use planora_project::config::Config;
@@ -308,7 +308,7 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut ProjectsUi) {
         }
         Some(Err(e)) => {
             ui.colored_label(
-                ERROR_COLOR,
+                error_color(ui.visuals().dark_mode),
                 format!("Der Projektordner lässt sich nicht lesen: {e}"),
             );
         }

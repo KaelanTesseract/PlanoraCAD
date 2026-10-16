@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use crate::{sketch_view, theme};
-use egui::{Align2, Color32, FontId, PointerButton, Rect, Sense, Shape, Stroke, pos2, vec2};
+use egui::{Align2, FontId, PointerButton, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::Vec2;
 use planora_render::gpu::ViewportCallback;
 use planora_render::{Pick, ViewFace, cube_faces, cube_hit_test};
@@ -143,32 +143,18 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     let faces = cube_faces(&state.camera);
 
     // Würfel zeichnen
-    let (fill, hover_fill, line, text) = if state.dark {
-        (
-            Color32::from_rgba_unmultiplied(70, 76, 90, 235),
-            Color32::from_rgba_unmultiplied(76, 154, 255, 235),
-            Color32::from_rgb(150, 158, 175),
-            Color32::from_rgb(235, 238, 245),
-        )
-    } else {
-        (
-            Color32::from_rgba_unmultiplied(225, 229, 238, 240),
-            Color32::from_rgba_unmultiplied(31, 111, 224, 240),
-            Color32::from_rgb(90, 98, 115),
-            Color32::from_rgb(30, 34, 44),
-        )
-    };
+    let gizmo = theme::gizmo_colors(state.dark);
     for f in &faces {
         let points: Vec<_> = f.corners.iter().map(|c| to_screen(*c)).collect();
         let color = if cube_hover == Some(f.face) {
-            hover_fill
+            gizmo.hover_fill
         } else {
-            fill
+            gizmo.fill
         };
         painter.add(Shape::convex_polygon(
             points.clone(),
             color,
-            Stroke::new(1.0, line),
+            Stroke::new(1.0, gizmo.line),
         ));
         let center = points.iter().fold(pos2(0.0, 0.0), |a, p| {
             pos2(a.x + p.x / 4.0, a.y + p.y / 4.0)
@@ -178,7 +164,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             Align2::CENTER_CENTER,
             f.face.label(),
             FontId::proportional(11.0),
-            text,
+            if cube_hover == Some(f.face) {
+                gizmo.hover_text
+            } else {
+                gizmo.text
+            },
         );
     }
 }

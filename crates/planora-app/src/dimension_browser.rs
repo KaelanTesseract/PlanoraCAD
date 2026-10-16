@@ -7,7 +7,7 @@
 //! Text auf dem Blatt ([`planora_drawing::annotate::dimension_text`]). Ein Maß ohne Bezug zeigt
 //! nie einen Wert, sondern ein rotes `?` mit dem Grund als Hinweistext.
 
-use crate::browser::{ERROR_COLOR, body_indent, row};
+use crate::browser::{body_indent, error_color, row};
 use crate::dimension_dialog;
 use crate::dimension_state::resolve_in;
 use crate::drawing_browser::{READ_ONLY_HINT, open_drawing, select_drawing};
@@ -224,7 +224,10 @@ fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bo
         for r in &g.rows {
             let dim = r.id;
             let selected = state.drawing_ui.selected_dim == Some(dim);
-            let color = r.lost.is_some().then_some(ERROR_COLOR);
+            let color = r
+                .lost
+                .is_some()
+                .then_some(error_color(ui.visuals().dark_mode));
             let resp = row(
                 ui,
                 body_indent(),
@@ -318,7 +321,9 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
-                    .button(egui::RichText::new("Löschen").color(ERROR_COLOR))
+                    .button(
+                        egui::RichText::new("Löschen").color(error_color(ui.visuals().dark_mode)),
+                    )
                     .clicked()
                 {
                     confirm = true;

@@ -343,3 +343,123 @@ fn focus_ring_is_two_pixels_of_accent_around_a_focused_widget() {
         assert!(none.is_empty(), "ohne Fokus kein Ring: {none:?}");
     }
 }
+
+/// `top` (mit Alpha, in egui vormultipliziert gespeichert) über `bottom` gelegt, im Gamma-Raum
+/// wie egui.
+fn over(top: Color32, bottom: Color32) -> Color32 {
+    let a = f32::from(top.a()) / 255.0;
+    let mix = |t: u8, b: u8| (f32::from(t) + f32::from(b) * (1.0 - a)).round().min(255.0) as u8;
+    Color32::from_rgb(
+        mix(top.r(), bottom.r()),
+        mix(top.g(), bottom.g()),
+        mix(top.b(), bottom.b()),
+    )
+}
+
+#[test]
+fn viewport_and_surround_follow_the_palette() {
+    for dark in BOTH {
+        let p = theme::palette(dark);
+        assert_eq!(
+            theme::viewport_background(dark),
+            p.bg_viewport,
+            "{}",
+            name(dark)
+        );
+        let surround = theme::drawing_surround(dark);
+        assert_ne!(surround, theme::PAPER, "{}", name(dark));
+        let r = theme::contrast_ratio(surround, theme::PAPER);
+        assert!(
+            r >= 1.2,
+            "{}: Blatt hebt sich nur mit {r:.2} ab",
+            name(dark)
+        );
+    }
+    assert_ne!(
+        theme::drawing_surround(true),
+        theme::drawing_surround(false)
+    );
+}
+
+#[test]
+fn sketch_colors_are_legible_on_the_viewport_in_both_themes() {
+    let mut failures = Vec::new();
+    for dark in BOTH {
+        let p = theme::palette(dark);
+        let c = theme::sketch_colors(dark);
+        let bg = theme::viewport_background(dark);
+        for (what, color) in [
+            ("free", c.free),
+            ("determined", c.determined),
+            ("selected", c.selected),
+            ("construction", c.construction),
+            ("finished", c.finished),
+            ("error", c.error),
+            ("preview", c.preview),
+            ("axis_x", c.axis_x),
+            ("axis_y", c.axis_y),
+        ] {
+            let r = theme::contrast_ratio(color, bg);
+            if r < 3.0 {
+                failures.push(format!("{} {what}: {r:.2} < 3", name(dark)));
+            }
+        }
+        let label = over(c.label_bg, bg);
+        let r = theme::contrast_ratio(c.text, label);
+        if r < 4.5 {
+            failures.push(format!("{} Beschriftung: {r:.2} < 4.5", name(dark)));
+        }
+        // Graphit-Bezug: Auswahl und Achsen im Dunkeln direkt aus der Palette.
+        if dark {
+            assert_eq!(c.selected, p.selection);
+            assert_eq!(c.axis_x, p.axis_x);
+            assert_eq!(c.axis_y, p.axis_y);
+            assert_eq!(c.error, p.error);
+        }
+        assert_ne!(c.free, c.selected, "{}", name(dark));
+        assert_ne!(c.free, c.determined, "{}", name(dark));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn gizmo_colors_are_legible_in_both_themes() {
+    let mut failures = Vec::new();
+    for dark in BOTH {
+        let g = theme::gizmo_colors(dark);
+        let bg = theme::viewport_background(dark);
+        let face = over(g.fill, bg);
+        let hover = over(g.hover_fill, bg);
+        for (what, fg, face_bg, min) in [
+            ("Text auf Fläche", g.text, face, 4.5),
+            ("Text auf Hover", g.hover_text, hover, 4.5),
+            ("Linie auf Fläche", g.line, face, 1.5),
+            ("Fläche auf Viewport", face, bg, 1.15),
+        ] {
+            let r = theme::contrast_ratio(fg, face_bg);
+            if r < min {
+                failures.push(format!("{} {what}: {r:.2} < {min}", name(dark)));
+            }
+        }
+        assert_ne!(g.fill, g.hover_fill, "{}", name(dark));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn status_colors_come_from_the_palette() {
+    for dark in BOTH {
+        let p = theme::palette(dark);
+        assert_eq!(planora_app::browser::error_color(dark), p.error);
+        assert_eq!(planora_app::mesh_body::warning_color(dark), p.warning);
+    }
+    // Die Konstanten bleiben der Dunkelwert.
+    assert_eq!(
+        planora_app::browser::ERROR_COLOR,
+        theme::palette(true).error
+    );
+    assert_eq!(
+        planora_app::mesh_body::WARNING_COLOR,
+        theme::palette(true).warning
+    );
+}

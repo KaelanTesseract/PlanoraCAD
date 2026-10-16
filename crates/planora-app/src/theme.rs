@@ -69,7 +69,7 @@ const fn rgb(hex: u32) -> Color32 {
     Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
-const DARK: Palette = Palette {
+pub(crate) const DARK: Palette = Palette {
     bg_viewport: rgb(0x0e0e0e),
     bg_panel: rgb(0x181818),
     bg_section: rgb(0x1a1a1a),
@@ -120,7 +120,8 @@ const LIGHT: Palette = Palette {
     on_accent: rgb(0xffffff),
     selection: rgb(0xd9a400),
     axis_x: rgb(0xc8202a),
-    axis_y: rgb(0x3f9a3d),
+    // Etwas dunkler als der erste Entwurf, damit Linien auf dem hellen Viewport 3 : 1 erreichen.
+    axis_y: rgb(0x36903a),
     axis_z: rgb(0x2a72c0),
     chip_bridge: (rgb(0xfbeed9), rgb(0x8a5a13)),
     chip_split: (rgb(0xdbe9fb), rgb(0x1456b0)),
@@ -353,23 +354,120 @@ pub const SHEET_LOST: Color32 = Color32::from_rgb(0xd0, 0x1c, 0x1c);
 /// Gewähltes Maß auf dem Papier: ein kräftiges Blau, das auf Weiß gut lesbar ist (das Papier ist
 /// in beiden Themen weiß).
 pub const SHEET_SELECTED: Color32 = Color32::from_rgb(0x1f, 0x6f, 0xe0);
+/// Leerer Fortschrittsbalken einer Ansicht auf dem Papier.
+pub const SHEET_PROGRESS_TRACK: Color32 = Color32::from_gray(225);
 /// Schatten unter dem Papier.
 pub const PAPER_SHADOW: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 70);
 
-/// Umfeld des Blatts im Zeichnungsbereich.
+/// Umfeld des Blatts im Zeichnungsbereich: ein ruhiges Neutral, von dem sich das weiße Papier
+/// abhebt.
 pub fn drawing_surround(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(0x2a, 0x2d, 0x34)
-    } else {
-        Color32::from_rgb(0xd9, 0xdc, 0xe3)
-    }
+    let p = palette(dark);
+    if dark { p.bg_section } else { p.bg_active }
 }
 
 /// Hintergrundfarbe des 3D-Viewports.
 pub fn viewport_background(dark: bool) -> Color32 {
+    palette(dark).bg_viewport
+}
+
+/// Farben der Skizzen-Ansicht (Entwurf und fertige Skizzen in der 3D-Ansicht).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SketchColors {
+    /// Frei bewegliche Geometrie.
+    pub free: Color32,
+    /// Voll bestimmte Geometrie.
+    pub determined: Color32,
+    /// Gewählte Geometrie.
+    pub selected: Color32,
+    /// Hilfsgeometrie.
+    pub construction: Color32,
+    /// Kurven fertiger Skizzen in der 3D-Ansicht.
+    pub finished: Color32,
+    /// Widersprüchliche oder fehlerhafte Geometrie.
+    pub error: Color32,
+    /// Maßtext.
+    pub text: Color32,
+    /// Fläche hinter dem Maßtext (halbtransparent).
+    pub label_bg: Color32,
+    /// Vorschau beim Zeichnen.
+    pub preview: Color32,
+    /// X-Achse der Skizze.
+    pub axis_x: Color32,
+    /// Y-Achse der Skizze.
+    pub axis_y: Color32,
+}
+
+/// Skizzenfarben des Themas. Linien erreichen auf dem Viewport mindestens 3 : 1. Dunkel: Auswahl,
+/// Achsen und Fehler stammen aus der Palette. Hell: das Auswahlgelb der Palette (#d9a400) ist auf
+/// dem hellen Viewport zu schwach und wird für Linien zu einem dunkleren Bernstein.
+pub fn sketch_colors(dark: bool) -> SketchColors {
+    let p = palette(dark);
     if dark {
-        Color32::from_rgb(0x12, 0x14, 0x18)
+        SketchColors {
+            free: rgb(0x4c9aff),
+            determined: p.ok,
+            selected: p.selection,
+            construction: p.text_secondary,
+            finished: rgb(0x7fb4ff),
+            error: p.error,
+            text: p.text_primary,
+            label_bg: with_alpha(p.bg_panel, 0xd8),
+            preview: rgb(0xa8ccff),
+            axis_x: p.axis_x,
+            axis_y: p.axis_y,
+        }
     } else {
-        Color32::from_rgb(0xf8, 0xf9, 0xfb)
+        SketchColors {
+            free: p.accent,
+            determined: p.ok,
+            selected: rgb(0xa86a00),
+            construction: p.text_tertiary,
+            finished: p.chip_split.1,
+            error: p.error,
+            text: p.text_primary,
+            label_bg: with_alpha(p.bg_panel, 0xe0),
+            preview: p.axis_z,
+            axis_x: p.axis_x,
+            axis_y: p.axis_y,
+        }
     }
+}
+
+/// Farben des Navigationswürfels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GizmoColors {
+    /// Fläche.
+    pub fill: Color32,
+    /// Fläche unter dem Mauszeiger.
+    pub hover_fill: Color32,
+    /// Kanten.
+    pub line: Color32,
+    /// Beschriftung.
+    pub text: Color32,
+    /// Beschriftung der Fläche unter dem Mauszeiger.
+    pub hover_text: Color32,
+}
+
+/// Farben des Navigationswürfels: neutrale Flächen, der Akzent zeigt die Fläche unter der Maus.
+pub fn gizmo_colors(dark: bool) -> GizmoColors {
+    let p = palette(dark);
+    GizmoColors {
+        fill: with_alpha(if dark { p.bg_field } else { p.bg_panel }, 0xeb),
+        hover_fill: p.accent,
+        line: p.text_tertiary,
+        text: p.text_primary,
+        hover_text: p.on_accent,
+    }
+}
+
+/// Dieselbe Farbe mit anderem Alpha (nicht vormultipliziert).
+fn with_alpha(c: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
+}
+
+/// Heller (für die Hervorhebung unter dem Mauszeiger).
+pub fn lighten(c: Color32) -> Color32 {
+    let mix = |v: u8| v.saturating_add(((255 - u16::from(v)) * 2 / 5) as u8);
+    Color32::from_rgba_unmultiplied(mix(c.r()), mix(c.g()), mix(c.b()), c.a())
 }

@@ -7,7 +7,7 @@
 //! Dokument ([`planora_feature::MAX_DECIMALS`] usw.). „Grenzmaße“ meinen wie im Blatt
 //! Abweichungen vom Nennmaß; „Passung“ ist nur Text.
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::dimension_browser::{lost_reason, request_delete_dimension};
 use crate::dimension_state::resolve_in;
@@ -342,7 +342,7 @@ impl DimensionDialog {
                                     ui.label(v);
                                 }
                                 Err(_) => {
-                                    ui.colored_label(ERROR_COLOR, "?");
+                                    ui.colored_label(error_color(ui.visuals().dark_mode), "?");
                                 }
                             }
                             ui.end_row();
@@ -370,7 +370,10 @@ impl DimensionDialog {
                     ui.weak(PLACEHOLDER_HINT);
                     if let Err(reason) = &value {
                         ui.add_space(4.0);
-                        ui.colored_label(ERROR_COLOR, format!("{LOST_PREFIX}: {reason}"));
+                        ui.colored_label(
+                            error_color(ui.visuals().dark_mode),
+                            format!("{LOST_PREFIX}: {reason}"),
+                        );
                     }
                 };
                 let mut tolerance_card = |ui: &mut egui::Ui| {
@@ -428,7 +431,7 @@ impl DimensionDialog {
                 cards = card_row(ui, "dimension-edit", row);
                 ui.add_space(8.0);
                 for e in &errors {
-                    ui.colored_label(ERROR_COLOR, e);
+                    ui.colored_label(error_color(ui.visuals().dark_mode), e);
                 }
                 if read_only {
                     ui.weak(READ_ONLY_HINT);
@@ -448,7 +451,10 @@ impl DimensionDialog {
                     }
                     let r = ui.add_enabled(
                         !read_only,
-                        egui::Button::new(egui::RichText::new("Maß löschen").color(ERROR_COLOR)),
+                        egui::Button::new(
+                            egui::RichText::new("Maß löschen")
+                                .color(error_color(ui.visuals().dark_mode)),
+                        ),
                     );
                     note("Maß löschen", &r);
                     if r.clicked() {

@@ -13,7 +13,7 @@
 //! und `offset` (Abstand vom Kreis); Ø-Linie durch die Mitte → `angle` dreht mit; Bogen eines
 //! Winkelmaßes → Radius (`|offset|`) wächst mit der Bewegung vom Scheitel weg.
 
-use crate::browser::ERROR_COLOR;
+use crate::browser::error_color;
 use crate::dimension_state::{SuggestOutcome, marks_in, notes_in, resolve_in, suggest_for};
 use crate::dimension_tool::{
     END_PX, Hit, ISOMETRIC_TIP, MISSED, NO_VIEWS_TIP, READ_ONLY_TIP, TOOL, TOOL_TIP, ToolError,
@@ -749,7 +749,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
             // (ganzer Text im Tooltip), nichts wird aus der Zeile geschoben.
             for (i, t) in notes.texts.iter().enumerate() {
                 if i == 0 && notes.lost > 0 {
-                    ui.colored_label(ERROR_COLOR, t);
+                    ui.colored_label(error_color(state.dark), t);
                 } else {
                     ui.label(t);
                 }
@@ -762,7 +762,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
                 ui.scope(|ui| {
                     ui.set_max_width(w);
                     let text = if rejected.is_some() {
-                        egui::RichText::new(m.as_str()).color(ERROR_COLOR)
+                        egui::RichText::new(m.as_str()).color(error_color(state.dark))
                     } else {
                         egui::RichText::new(m.as_str())
                     };
@@ -1521,22 +1521,27 @@ fn canvas_ui(
                     Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width().max(0.0), bar_h));
                 let fill =
                     Rect::from_min_size(outer.min, vec2(outer.width() * f.clamp(0.0, 1.0), bar_h));
-                painter.rect_filled(outer, 3.0, Color32::from_gray(225));
+                painter.rect_filled(outer, 3.0, theme::SHEET_PROGRESS_TRACK);
                 painter.rect_filled(fill, 3.0, accent);
                 bar = Some((outer, fill));
             }
             DrawnState::Failed(m) => {
-                painter.rect_stroke(rect, 2.0, Stroke::new(1.0, ERROR_COLOR), StrokeKind::Inside);
+                painter.rect_stroke(
+                    rect,
+                    2.0,
+                    Stroke::new(1.0, error_color(state.dark)),
+                    StrokeKind::Inside,
+                );
                 // Der Text bleibt im Rahmen, auch wenn er zu klein ist.
                 let painter = painter.with_clip_rect(rect.intersect(canvas));
                 let inner = rect.shrink(6.0);
                 let galley = painter.layout(
                     format!("{}: {m}", v.name),
                     font.clone(),
-                    ERROR_COLOR,
+                    error_color(state.dark),
                     inner.width().max(1.0),
                 );
-                painter.galley(inner.min, galley, ERROR_COLOR);
+                painter.galley(inner.min, galley, error_color(state.dark));
             }
         }
         if state.drawing_ui.selected_view == Some(v.id) {

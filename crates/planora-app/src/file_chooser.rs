@@ -2,8 +2,8 @@
 //! Betriebssystems): Ordner wechseln oder eintippen, Datei wählen oder Namen eingeben, Ersetzen
 //! einer vorhandenen Datei erst nach einem zweiten Klick.
 
-use crate::browser::ERROR_COLOR;
-use crate::mesh_body::WARNING_COLOR;
+use crate::browser::error_color;
+use crate::mesh_body::warning_color;
 use std::path::{Path, PathBuf};
 
 /// Höchstzahl der gezeigten Einträge eines Ordners (große Ordner bleiben bedienbar).
@@ -310,10 +310,10 @@ impl FileChooser {
             }
         });
         if let Some(e) = &self.error {
-            ui.colored_label(ERROR_COLOR, e);
+            ui.colored_label(error_color(ui.visuals().dark_mode), e);
         }
         if self.asks_to_replace() {
-            ui.colored_label(WARNING_COLOR, REPLACE_HINT);
+            ui.colored_label(warning_color(ui.visuals().dark_mode), REPLACE_HINT);
         }
         ui.horizontal(|ui| {
             let label = match self.mode {
