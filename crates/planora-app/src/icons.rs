@@ -296,6 +296,59 @@ pub fn label(icon: Icon, label: &str) -> egui::WidgetText {
     label_colored(icon, label, Color32::PLACEHOLDER)
 }
 
+/// Das Symbol als eigener Baustein eines Knopfs (16 px, Farbe folgt dem Knopftext). Anders als
+/// [`label`] bleiben Symbol und Text getrennte Texte; der Abstand dazwischen ist der
+/// Elementabstand (`item_spacing.x` = 8 px = [`LABEL_GAP`]).
+pub fn atom(icon: Icon) -> egui::RichText {
+    text(icon, LABEL_ICON_SIZE, Color32::PLACEHOLDER)
+}
+
+/// Knopf mit Symbol und Text (Menüeinträge, Leistenschalter).
+pub fn button<'a>(icon: Icon, label: impl Into<egui::WidgetText>) -> egui::Button<'a> {
+    egui::Button::new((atom(icon), label.into()))
+}
+
+/// Wählbarer Knopf mit Symbol und Text (Werkzeug, Tab, Schalter einer Leiste).
+pub fn selectable<'a>(
+    selected: bool,
+    icon: Icon,
+    label: impl Into<egui::WidgetText>,
+) -> egui::Button<'a> {
+    egui::Button::selectable(selected, (atom(icon), label.into()))
+}
+
+/// Menüeintrag mit Symbol beliebiger Herkunft: Schriftsymbole als Text, gezeichnete Symbole in
+/// einem 16-px-Feld vor dem Text (gleiche Lage wie bei [`button`]).
+pub fn source_entry(
+    ui: &mut egui::Ui,
+    source: IconSource,
+    label: &str,
+    enabled: bool,
+) -> egui::Response {
+    if let IconSource::Font(icon) = source {
+        return ui.add_enabled(enabled, button(icon, label));
+    }
+    let id = egui::Id::new(("planora-icon", label));
+    // Gesperrt zeichnet der Maler blass, auch das Symbol.
+    ui.add_enabled(enabled, |ui: &mut egui::Ui| {
+        let result = egui::Button::new((
+            egui::Atom::custom(id, vec2(LABEL_ICON_SIZE, LABEL_ICON_SIZE)),
+            label,
+        ))
+        .atom_ui(ui);
+        if let Some(rect) = result.rect(id) {
+            let active = result.response.hovered();
+            paint_source(
+                ui.painter(),
+                rect,
+                source,
+                stroke_color(ui.visuals().dark_mode, active),
+            );
+        }
+        result.response
+    })
+}
+
 /// Wie [`label`], mit fester Symbolfarbe (z. B. `theme::palette(dark).text_secondary`).
 pub fn label_colored(icon: Icon, label: &str, color: Color32) -> egui::WidgetText {
     let mut job = egui::text::LayoutJob::default();
@@ -876,8 +929,10 @@ pub fn source_button(
     if ui.is_rect_visible(rect) {
         let p = theme::palette(dark);
         let visuals = ui.style().interact_selectable(&response, selected);
-        let active = selected || response.hovered();
-        if selected || response.hovered() {
+        // Gesperrte Knöpfe bekommen beim Überfahren keine Fläche (nur den Hinweis).
+        let hovered = response.hovered() && ui.is_enabled();
+        let active = selected || hovered;
+        if active {
             ui.painter()
                 .rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
         }

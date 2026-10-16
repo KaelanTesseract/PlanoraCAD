@@ -167,6 +167,8 @@ pub const FIELD_H: f32 = 26.0;
 pub const CONTROL: f32 = 32.0;
 /// Höhe eines Abschnittskopfs.
 pub const HEADER_H: f32 = 40.0;
+/// Höhe eines Unterabschnittskopfs (Abschnitt innerhalb eines Bereichs).
+pub const SUB_HEADER_H: f32 = 28.0;
 /// Höhe der oberen Leiste.
 pub const TOOLBAR_H: f32 = 48.0;
 /// Höhe des unteren Werkzeugfelds.
@@ -212,6 +214,9 @@ fn visuals(dark: bool) -> Visuals {
     v.warn_fg_color = p.warning;
     // Verweise in normaler Textfarbe (die Akzentfarbe hätte als Text zu wenig Kontrast).
     v.hyperlink_color = p.text_primary;
+    // Schwache Texte (Hinweise) in text_tertiary statt halb durchsichtig (das unterschritte den
+    // Kontrast auf den Flächen).
+    v.weak_text_color = Some(p.text_tertiary);
     // Neutrale Auswahl, kein Blau.
     v.selection.bg_fill = p.bg_active;
     v.selection.stroke = Stroke::new(1.0, p.text_primary);
@@ -252,10 +257,30 @@ fn visuals(dark: bool) -> Visuals {
     v
 }
 
+/// Schrift `heading` (13 px halbfett): Abschnittsköpfe, Fenstertitel.
+pub fn heading_font() -> FontId {
+    FontId::new(13.0, fonts::semibold())
+}
+
+/// Schrift `label` (13 px mittel): Zeilen im Browser und in den Bereichen.
+pub fn label_font() -> FontId {
+    FontId::new(13.0, fonts::medium())
+}
+
+/// Schrift `value` (11 px mittel): Werte, Statuswörter, Zusätze.
+pub fn value_font() -> FontId {
+    FontId::new(11.0, fonts::medium())
+}
+
+/// Schrift `kbd` (10 px halbfett): Tastenkürzel.
+pub fn kbd_font() -> FontId {
+    FontId::new(10.0, fonts::semibold())
+}
+
 fn text_styles() -> std::collections::BTreeMap<TextStyle, FontId> {
     let named = |n: &str| TextStyle::Name(n.into());
     [
-        (TextStyle::Heading, FontId::new(13.0, fonts::semibold())),
+        (TextStyle::Heading, heading_font()),
         (TextStyle::Body, FontId::new(12.0, FontFamily::Proportional)),
         (TextStyle::Button, FontId::new(12.0, fonts::medium())),
         (TextStyle::Small, FontId::new(10.0, fonts::semibold())),
@@ -263,9 +288,9 @@ fn text_styles() -> std::collections::BTreeMap<TextStyle, FontId> {
             TextStyle::Monospace,
             FontId::new(11.0, FontFamily::Monospace),
         ),
-        (named("label"), FontId::new(13.0, fonts::medium())),
-        (named("value"), FontId::new(11.0, fonts::medium())),
-        (named("kbd"), FontId::new(10.0, fonts::semibold())),
+        (named("label"), label_font()),
+        (named("value"), value_font()),
+        (named("kbd"), kbd_font()),
         (named("axis"), FontId::new(15.0, fonts::medium())),
     ]
     .into()
@@ -331,6 +356,160 @@ pub fn focus_ring(ui: &egui::Ui, response: &egui::Response) {
         Stroke::new(2.0, accent(dark)),
         egui::StrokeKind::Outside,
     );
+}
+
+/// Fenster im Graphit-Rahmen ([`panel_frame`]); der Titel steht als Überschrift in
+/// `text_primary`. Die Fenster-Id hängt wie bei `egui::Window::new` am Titeltext.
+pub fn window<'a>(ctx: &egui::Context, title: impl Into<String>) -> egui::Window<'a> {
+    let dark = ctx.global_style().visuals.dark_mode;
+    egui::Window::new(
+        egui::RichText::new(title)
+            .font(heading_font())
+            .color(palette(dark).text_primary),
+    )
+    .frame(panel_frame(dark))
+}
+
+/// Abschnittskopf über die ganze Breite: Fläche aus [`section_frame`], Titel als Überschrift in
+/// `text_primary`. `height` ist [`HEADER_H`] (Kopf eines Bereichs) oder [`SUB_HEADER_H`].
+pub fn section_header(ui: &mut egui::Ui, title: &str, height: f32) -> egui::Response {
+    let dark = ui.visuals().dark_mode;
+    let frame = section_frame(dark);
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter()
+            .rect_filled(rect, frame.corner_radius, frame.fill);
+        let galley = ui.painter().layout_no_wrap(
+            title.to_owned(),
+            heading_font(),
+            palette(dark).text_primary,
+        );
+        let pos = egui::pos2(
+            rect.left() + f32::from(frame.inner_margin.left),
+            rect.center().y - galley.size().y / 2.0,
+        );
+        ui.painter()
+            .with_clip_rect(rect.intersect(ui.clip_rect()))
+            .galley(pos, galley, palette(dark).text_primary);
+    }
+    response
+}
+
+/// Stil der Menüeinträge: ohne Rand und Fläche in Ruhe, `bg_field` beim Überfahren (egui-Menüstil),
+/// aber mit Graphit-Innenabstand 8/4 statt 2/0.
+pub fn menu_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.button_padding = vec2(SPACE_2, SPACE_1);
+}
+
+/// Stil für Symbol- und Leistenknöpfe (Tab-Leiste, Werkzeugleisten): wie [`menu_style`] ohne Rand
+/// in Ruhe und beim Überfahren; Abstände bleiben.
+pub fn frameless(style: &mut egui::Style) {
+    let w = &mut style.visuals.widgets;
+    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    w.inactive.bg_stroke = Stroke::NONE;
+    w.hovered.bg_stroke = Stroke::NONE;
+    w.active.bg_stroke = Stroke::NONE;
+    w.open.bg_stroke = Stroke::NONE;
+}
+
+/// Wert (Zahl, Name, Ergebnis) im Textstil `value` und in `text_primary`.
+pub fn value(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text).font(value_font()).strong()
+}
+
+/// Zahlen- oder Textfeld im Graphit-Stil: 26 px hoch, vertiefte Fläche `bg_inset`, Wert
+/// mittig (Zahlenfelder), 2-px-Fokusring in Akzentfarbe.
+pub fn field(ui: &mut egui::Ui, widget: impl egui::Widget) -> egui::Response {
+    let dark = ui.visuals().dark_mode;
+    let inset = palette(dark).bg_inset;
+    let response = ui
+        .scope(|ui| {
+            let s = ui.style_mut();
+            s.spacing.interact_size.y = FIELD_H;
+            s.visuals.widgets.inactive.weak_bg_fill = inset;
+            s.visuals.extreme_bg_color = inset;
+            ui.add(widget)
+        })
+        .inner;
+    focus_ring(ui, &response);
+    response
+}
+
+/// Schalter (Umschalter) statt Kästchen: Spur `bg_field`, bei „an“ Akzent mit weißem Knopf.
+pub struct Toggle<'a> {
+    on: &'a mut bool,
+    label: egui::WidgetText,
+}
+
+impl<'a> Toggle<'a> {
+    /// Schalter für `on` mit Beschriftung rechts daneben.
+    pub fn new(on: &'a mut bool, label: impl Into<egui::WidgetText>) -> Self {
+        Toggle {
+            on,
+            label: label.into(),
+        }
+    }
+}
+
+/// Breite und Höhe der Schalterspur.
+const TOGGLE_TRACK: egui::Vec2 = vec2(28.0, 16.0);
+
+impl egui::Widget for Toggle<'_> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let Toggle { on, label } = self;
+        let gap = ui.spacing().item_spacing.x;
+        let galley = label.into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Button,
+        );
+        let size = vec2(
+            TOGGLE_TRACK.x + gap + galley.size().x,
+            galley.size().y.max(ui.spacing().interact_size.y),
+        );
+        let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
+        if response.clicked() {
+            *on = !*on;
+            response.mark_changed();
+        }
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::Checkbox,
+                ui.is_enabled(),
+                *on,
+                galley.text(),
+            )
+        });
+        if ui.is_rect_visible(rect) {
+            let p = palette(ui.visuals().dark_mode);
+            let visuals = ui.style().interact(&response);
+            let track = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.center().y - TOGGLE_TRACK.y / 2.0),
+                TOGGLE_TRACK,
+            );
+            let radius = TOGGLE_TRACK.y / 2.0;
+            let (fill, stroke, knob, knob_x) = if *on {
+                (p.accent, Stroke::NONE, p.on_accent, track.right() - radius)
+            } else {
+                (
+                    p.bg_field,
+                    Stroke::new(1.0, p.border_subtle),
+                    visuals.text_color(),
+                    track.left() + radius,
+                )
+            };
+            let painter = ui.painter();
+            painter.rect(track, radius, fill, stroke, egui::StrokeKind::Inside);
+            painter.circle_filled(egui::pos2(knob_x, track.center().y), radius - 3.0, knob);
+            let text_pos = egui::pos2(track.right() + gap, rect.center().y - galley.size().y / 2.0);
+            painter.galley(text_pos, galley, visuals.text_color());
+        }
+        focus_ring(ui, &response);
+        response
+    }
 }
 
 /// Akzentfarbe (Modus eingeschaltet, Tastaturfokus, aktive Auswahl); in beiden Themen gleich.
