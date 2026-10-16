@@ -15,7 +15,15 @@ pub struct OrbitCamera {
     /// Höhenwinkel (0 = waagerecht, positiv = von oben).
     pub pitch: f32,
     pub fov_y: f32,
+    /// Seitenverhältnis des ganzen Fensters.
     pub aspect: f32,
+    /// Verschiebung der Bildmitte nach der Perspektive (normierte Gerätekoordinaten, x nach
+    /// rechts, y nach oben): Das Ziel erscheint in der Mitte des freien Rechtecks.
+    pub ndc_offset: Vec2,
+    /// Seitenverhältnis des freien Rechtecks (ohne Felder gleich `aspect`).
+    pub visible_aspect: f32,
+    /// Höhe des freien Rechtecks im Verhältnis zur Fensterhöhe (ohne Felder 1).
+    pub visible_height_fraction: f32,
 }
 
 impl Default for OrbitCamera {
@@ -27,6 +35,9 @@ impl Default for OrbitCamera {
             pitch: 0.5,
             fov_y: 45.0_f32.to_radians(),
             aspect: 1.0,
+            ndc_offset: Vec2::ZERO,
+            visible_aspect: 1.0,
+            visible_height_fraction: 1.0,
         }
     }
 }
@@ -53,7 +64,12 @@ impl OrbitCamera {
 
     pub fn projection(&self) -> Mat4 {
         let (near, far) = self.near_far();
-        glam::camera::rh::proj::directx::perspective(self.fov_y, self.aspect, near, far)
+        let proj = glam::camera::rh::proj::directx::perspective(self.fov_y, self.aspect, near, far);
+        if self.ndc_offset == Vec2::ZERO {
+            // Ohne Versatz bitgleich zur bisherigen Projektion.
+            return proj;
+        }
+        Mat4::from_translation(self.ndc_offset.extend(0.0)) * proj
     }
 
     pub fn view_proj(&self) -> Mat4 {
@@ -61,10 +77,38 @@ impl OrbitCamera {
     }
 
     /// Setzt das Seitenverhältnis. Zu kleine (oder nicht endliche) Größen werden ignoriert.
+    /// Ohne Versatz folgt das sichtbare Seitenverhältnis dem Fenster.
     pub fn set_viewport(&mut self, width: f32, height: f32) {
         if width >= 1.0 && height >= 1.0 && width.is_finite() && height.is_finite() {
             self.aspect = width / height;
+            if self.ndc_offset == Vec2::ZERO {
+                self.visible_aspect = self.aspect;
+            }
         }
+    }
+
+    /// `full`: Größe des ganzen Fensters in Pixeln; `visible`: freies Rechteck (Ecke oben links
+    /// und Größe in Pixeln, Ursprung oben links des Fensters). Setzt `aspect`, `ndc_offset`,
+    /// `visible_aspect` und `visible_height_fraction`. Zu kleine (oder nicht endliche) Größen
+    /// werden ignoriert.
+    pub fn set_visible(&mut self, full: Vec2, visible: (Vec2, Vec2)) {
+        let (min, size) = visible;
+        let ok = |v: Vec2| v.is_finite() && v.x >= 1.0 && v.y >= 1.0;
+        if !ok(full) || !ok(size) || !min.is_finite() {
+            return;
+        }
+        let centre = min + size * 0.5;
+        self.aspect = full.x / full.y;
+        self.ndc_offset = Vec2::new(centre.x / full.x * 2.0 - 1.0, 1.0 - centre.y / full.y * 2.0);
+        self.visible_aspect = size.x / size.y;
+        self.visible_height_fraction = size.y / full.y;
+    }
+
+    /// Kein freies Rechteck: Versatz 0, sichtbares Seitenverhältnis gleich dem des Fensters.
+    pub fn clear_visible(&mut self) {
+        self.ndc_offset = Vec2::ZERO;
+        self.visible_aspect = self.aspect;
+        self.visible_height_fraction = 1.0;
     }
 
     pub fn orbit(&mut self, dx: f32, dy: f32) {
@@ -89,10 +133,11 @@ impl OrbitCamera {
 
     /// Strahl durch einen Punkt in normierten Gerätekoordinaten (x, y in [-1, 1], y nach oben).
     pub fn ray(&self, ndc: Vec2) -> (Vec3, Vec3) {
-        let inv = self.view_proj().inverse();
-        let near = inv.project_point3(Vec3::new(ndc.x, ndc.y, 0.0));
-        let far = inv.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
-        (near, (far - near).normalize())
+        // Inverse in f64: in f32 liegt der Strahl sonst bis etwa 1e-3 mm neben dem Punkt.
+        let inv = self.view_proj().as_dmat4().inverse();
+        let near = inv.project_point3(glam::DVec3::new(ndc.x as f64, ndc.y as f64, 0.0));
+        let far = inv.project_point3(glam::DVec3::new(ndc.x as f64, ndc.y as f64, 1.0));
+        (near.as_vec3(), (far - near).normalize().as_vec3())
     }
 
     /// Bildschirmposition in Pixeln (Ursprung oben links) oder `None` hinter der Kamera.
@@ -108,12 +153,21 @@ impl OrbitCamera {
         ))
     }
 
-    /// Richtet die Kamera so aus, dass der Quader `min..max` ins Bild passt.
+    /// Richtet die Kamera so aus, dass der Quader `min..max` ins freie Rechteck passt.
     pub fn frame_bounds(&mut self, min: Vec3, max: Vec3) {
         self.target = (min + max) * 0.5;
         let radius = ((max - min).length() * 0.5).max(1e-3);
-        let half = (self.fov_y * 0.5)
-            .min((self.fov_y * self.aspect).atan() * 0.5)
+        // Öffnungswinkel und Seitenverhältnis des freien Rechtecks. Ohne freies Rechteck genau
+        // `fov_y` und `aspect` (auch wenn eine Kamera per Strukturliteral nur `aspect` setzt).
+        let (fov_vis, aspect_vis) =
+            if self.ndc_offset == Vec2::ZERO && self.visible_height_fraction == 1.0 {
+                (self.fov_y, self.aspect)
+            } else {
+                let fov = 2.0 * ((self.fov_y * 0.5).tan() * self.visible_height_fraction).atan();
+                (fov, self.visible_aspect)
+            };
+        let half = (fov_vis * 0.5)
+            .min((fov_vis * aspect_vis).atan() * 0.5)
             .max(0.05);
         self.distance = (radius / half.sin() * 1.15).clamp(0.01, 1.0e6);
     }

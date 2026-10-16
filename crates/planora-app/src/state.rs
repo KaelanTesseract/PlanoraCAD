@@ -1407,8 +1407,11 @@ impl AppState {
 
     fn restore_camera(&mut self) {
         if let Some(mut cam) = self.saved_camera.take() {
-            // Das Seitenverhältnis gehört zum aktuellen Fenster.
+            // Seitenverhältnis und freies Rechteck gehören zum aktuellen Fenster.
             cam.aspect = self.camera.aspect;
+            cam.ndc_offset = self.camera.ndc_offset;
+            cam.visible_aspect = self.camera.visible_aspect;
+            cam.visible_height_fraction = self.camera.visible_height_fraction;
             self.camera = cam;
         }
         self.rebuild_scene();
