@@ -14,7 +14,9 @@ use planora_drawing::dimension::{
 };
 use planora_drawing::limits::MAX_DIMENSIONS;
 use planora_drawing::stroke::extent_of;
-use planora_drawing::{Basis, DrawBody, Drawing, DrawingId, ViewId, ViewKind, measure};
+use planora_drawing::{
+    Basis, DrawBody, Drawing, DrawingId, ViewId, ViewKind, dimension_key, measure,
+};
 use planora_kernel::Solid;
 use planora_math::{DVec3, Tolerance};
 use std::collections::{HashMap, HashSet};
@@ -269,8 +271,21 @@ impl Document {
 pub fn resolve_drawing_dimensions<E>(
     d: &Drawing,
     solids: &[&Solid],
-    mut check: impl FnMut() -> Result<(), E>,
+    check: impl FnMut() -> Result<(), E>,
 ) -> Result<ResolvedDims, E> {
+    resolve_drawing_dimensions_keyed(d, solids, check).map(|(dims, _)| dims)
+}
+
+/// Wie [`resolve_drawing_dimensions`], dazu der geometrische Schlüssel
+/// ([`planora_drawing::dimension_key`]) jedes Maßes, dessen Bezüge sich auflösen ließen und das
+/// einen Schlüssel hat (auch wenn die Messung danach scheitert). Die Oberfläche merkt sich die
+/// Schlüssel, damit ein Maß, das später seinen Bezug verliert, nicht doppelt vorgeschlagen wird.
+#[allow(clippy::type_complexity)]
+pub fn resolve_drawing_dimensions_keyed<E>(
+    d: &Drawing,
+    solids: &[&Solid],
+    mut check: impl FnMut() -> Result<(), E>,
+) -> Result<(ResolvedDims, HashMap<DimId, String>), E> {
     let tol = Tolerance::default();
     let bodies: Vec<DrawBody> = solids
         .iter()
@@ -284,22 +299,29 @@ pub fn resolve_drawing_dimensions<E>(
     // einmal berechnet (gleiches Ergebnis wie ohne Speicher).
     let cache = RefCache::new();
     let mut out = ResolvedDims::default();
+    let mut keys = HashMap::new();
     for m in &d.dimensions {
         check()?;
         // Die Prüfung der Zeichnung stellt sicher, dass die Ansicht existiert.
         let Some(view) = d.view(m.view) else {
             continue;
         };
+        let basis = Basis::of(view.kind);
         let result = m
             .refs
             .iter()
             .map(|r| resolve_geo_cached(solids, r, &tol, &cache))
             .collect::<Result<Vec<Geo3>, _>>()
-            .and_then(|geos| measure(m.kind, &geos, &Basis::of(view.kind), view.kind, extent));
+            .and_then(|geos| {
+                if let Some(k) = dimension_key(m.kind, &geos, &basis, view.kind, extent) {
+                    keys.insert(m.id, k);
+                }
+                measure(m.kind, &geos, &basis, view.kind, extent)
+            });
         out.by_view
             .entry(m.view)
             .or_default()
             .push((m.clone(), result));
     }
-    Ok(out)
+    Ok((out, keys))
 }

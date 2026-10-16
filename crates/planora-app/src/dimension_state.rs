@@ -24,11 +24,13 @@ use planora_drawing::{
     ViewKind, ViewLines, ViewSpec, dimension_key, measure, suggest,
 };
 use planora_feature::{
-    RefCache, geo_ref_for_edge_cached, geo_ref_for_face_cached, resolve_geo_cached,
+    RefCache, geo_ref_for_edge_cached, geo_ref_for_face_cached, resolve_drawing_dimensions_keyed,
+    resolve_geo_cached,
 };
 use planora_kernel::{Edge, Face, Id, Solid};
 use planora_math::{DVec2, Tolerance};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::convert::Infallible;
 use std::sync::Arc;
 
 /// Meldung, solange die Ansichten für den Vorschlag noch nicht fertig sind.
@@ -137,6 +139,10 @@ pub struct DimensionUi {
     mark_builds: u64,
     /// Letzte erfolgreiche Lage je Maß und Zeichnung; verlorene Maße erscheinen dort rot.
     last_known: BTreeMap<DrawingId, BTreeMap<DimId, Anchor>>,
+    /// Letzter geometrischer Schlüssel (`dimension_key`) je Maß und Zeichnung, solange sich die
+    /// Bezüge noch auflösen ließen. Verliert ein Maß seinen Bezug, erkennt der Vorschlag es
+    /// darüber weiter und schlägt dasselbe Maß nicht noch einmal vor.
+    last_keys: BTreeMap<DrawingId, BTreeMap<DimId, String>>,
     /// Zahl der echten Auflösungen gegen die Körper (für Tests).
     resolutions: u64,
 }
@@ -200,6 +206,7 @@ impl DimensionUi {
         }
         let Some(d) = state.document.drawing(drawing) else {
             self.last_known.remove(&drawing);
+            self.last_keys.remove(&drawing);
             return self.store(drawing, model, edit, Vec::new(), ResolvedDims::default());
         };
         let views: Vec<(ViewId, ViewKind)> = d.views.iter().map(|v| (v.id, v.kind)).collect();
@@ -208,6 +215,9 @@ impl DimensionUi {
             .as_ref()
             .filter(|c| c.drawing == drawing && c.model == model && c.views == views)
             .and_then(|c| reuse(&c.dims, d));
+        let ids: HashSet<DimId> = d.dimensions.iter().map(|m| m.id).collect();
+        let keys = self.last_keys.entry(drawing).or_default();
+        keys.retain(|id, _| ids.contains(id));
         let mut dims = match reused {
             Some(r) => r,
             None => {
@@ -216,13 +226,15 @@ impl DimensionUi {
                     .into_iter()
                     .map(|b| &b.solid)
                     .collect();
-                state
-                    .document
-                    .resolve_dimensions(drawing, &solids)
-                    .unwrap_or_default()
+                match resolve_drawing_dimensions_keyed(d, &solids, || Ok::<(), Infallible>(())) {
+                    Ok((dims, new_keys)) => {
+                        keys.extend(new_keys);
+                        dims
+                    }
+                    Err(never) => match never {},
+                }
             }
         };
-        let ids: HashSet<DimId> = d.dimensions.iter().map(|m| m.id).collect();
         let known = self.last_known.entry(drawing).or_default();
         known.retain(|id, _| ids.contains(id));
         for (s, r) in dims.by_view.values().flatten() {
@@ -266,6 +278,16 @@ impl DimensionUi {
             .as_ref()
             .filter(|c| c.drawing == drawing && c.model == model && c.edit == doc_edit)
             .map(|c| Arc::clone(&c.dims))
+    }
+
+    /// Letzter bekannter geometrischer Schlüssel des Maßes (aus der letzten Auflösung, in der
+    /// sich seine Bezüge auflösen ließen); `None`, wenn es keinen gab.
+    pub fn last_key(&self, drawing: DrawingId, dim: DimId) -> Option<&str> {
+        self.last_keys.get(&drawing)?.get(&dim).map(String::as_str)
+    }
+
+    fn remember_key(&mut self, drawing: DrawingId, dim: DimId, key: String) {
+        self.last_keys.entry(drawing).or_default().insert(dim, key);
     }
 
     /// Hinweise zu den Maßen `resolved` der Zeichnung: Zahl der verlorenen Maße und der Maße,
@@ -538,8 +560,10 @@ fn direction_of_kind(kind: DimKind) -> Option<bool> {
 ///
 /// Grundlage sind die **berechneten** Ansichten (`DrawingUi::result`); rechnet eine noch, gibt
 /// es nichts ([`VIEWS_PENDING`]). Vorhandene Maße werden über ihren Schlüssel
-/// (`dimension_key`) erkannt und nicht noch einmal vorgeschlagen; Maße mit verlorenem Bezug
-/// haben keinen Schlüssel und können deshalb erneut vorgeschlagen werden. Jeder Vorschlag wird
+/// (`dimension_key`) erkannt und nicht noch einmal vorgeschlagen; für Maße mit verlorenem Bezug
+/// gilt ihr zuletzt bekannter Schlüssel ([`DimensionUi::last_key`]). Nur ein Maß, das in dieser
+/// Sitzung nie aufgelöst wurde (etwa schon verloren aus einer Datei geladen), hat keinen und kann
+/// erneut vorgeschlagen werden. Jeder Vorschlag wird
 /// in Bezüge des Modells umgewandelt und nur gesetzt, wenn diese Bezüge wieder genau zu ihm
 /// führen. Abstand der Maßlinie nach P3: `DEFAULT_OFFSET + n·DIM_STEP`, `n` = Zahl der Maße
 /// derselben Ansicht und Richtung (Bezugsmaße einer Gruppe teilen den Abstand ihrer ersten
@@ -616,6 +640,7 @@ pub fn suggest_for(
 
     // Vorhandene Maße: Schlüssel (gegen Doppelungen) und Zahl je Ansicht und Richtung (P3).
     let mut existing: Vec<(ViewId, DimKind, String)> = Vec::new();
+    let mut remember: Vec<(DimId, String)> = Vec::new();
     let mut stack: HashMap<(ViewId, bool), usize> = HashMap::new();
     for m in &d.dimensions {
         let Some(v) = d.view(m.view) else {
@@ -633,9 +658,23 @@ pub fn suggest_for(
         if let Some(h) = dir {
             *stack.entry((m.view, h)).or_insert(0) += 1;
         }
-        if let Some(key) = geos.and_then(|g| dimension_key(m.kind, &g, &basis, v.kind, extent)) {
-            existing.push((m.view, m.kind, key));
+        match geos.and_then(|g| dimension_key(m.kind, &g, &basis, v.kind, extent)) {
+            Some(key) => {
+                remember.push((m.id, key.clone()));
+                existing.push((m.view, m.kind, key));
+            }
+            // Bezug verloren: der zuletzt bekannte Schlüssel verhindert, dass dasselbe Maß
+            // noch einmal vorgeschlagen wird (das rote bleibt, bis es gelöscht wird).
+            None => {
+                if let Some(key) = state.dimension_ui.last_key(drawing, m.id) {
+                    existing.push((m.view, m.kind, key.to_string()));
+                }
+            }
         }
+    }
+
+    for (id, key) in remember {
+        state.dimension_ui.remember_key(drawing, id, key);
     }
 
     let pairs: Vec<(ViewSpec, &ViewLines)> =
@@ -671,7 +710,8 @@ pub fn suggest_for(
             continue;
         };
         match state.document.add_dimension(drawing, spec) {
-            Ok(_) => {
+            Ok(id) => {
+                state.dimension_ui.remember_key(drawing, id, c.key.clone());
                 added += 1;
                 count += 1;
                 (stack, groups, next_group) = (st, gr, ng);

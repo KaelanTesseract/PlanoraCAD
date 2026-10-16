@@ -522,6 +522,45 @@ fn suggest_stacks_by_direction_and_gives_drawing_unique_groups() {
     );
 }
 
+#[test]
+fn lost_dimensions_are_not_suggested_again() {
+    // Quader vorne und oben: drei Grundmaße. Dann wird der Quader gelöscht und gleich groß an
+    // derselben Stelle neu angelegt: die Geometrie ist dieselbe, die Bezüge (andere Feature-
+    // Marken) sind verloren. Der Vorschlag darf die drei Maße nicht doppelt setzen.
+    let (mut st, f, d, _) = box_drawing();
+    add_view(&mut st, d, ViewKind::Top, 100.0, 200.0);
+    open_and_compute(&mut st, d);
+    assert_eq!(suggest_for(&mut st, d, None), SuggestOutcome::Added(3));
+    // Die Oberfläche löst in jedem Bild auf (hier einmal).
+    resolve_in(&mut st, d);
+    let origin = bounds(&st, 0).0;
+    st.delete_feature(f).unwrap();
+    st.add_feature(None, FeatureKind::Box { size: BOX, origin })
+        .unwrap();
+    compute(&mut st);
+    let r = resolve_in(&mut st, d);
+    let lost = r
+        .by_view
+        .values()
+        .flatten()
+        .filter(|(_, res)| matches!(res, Err(DimError::Lost(_))))
+        .count();
+    assert_eq!(lost, 3, "alle drei Bezüge verloren");
+    let edits = st.document.edit_count();
+    assert_eq!(suggest_for(&mut st, d, None), SuggestOutcome::NothingNew);
+    assert_eq!(dims_of(&st, d).len(), 3, "keine Doppelungen");
+    assert_eq!(st.document.edit_count(), edits);
+    // Gelöscht → wieder frei: das verlorene Breitenmaß weg, der Vorschlag setzt es neu.
+    let width = dims_of(&st, d)
+        .into_iter()
+        .find(|m| m.kind == DimKind::Horizontal)
+        .unwrap()
+        .id;
+    st.document.delete_dimension(d, width).unwrap();
+    resolve_in(&mut st, d);
+    assert_eq!(suggest_for(&mut st, d, None), SuggestOutcome::Added(1));
+}
+
 // (f)
 #[test]
 fn suggest_waits_for_views() {
