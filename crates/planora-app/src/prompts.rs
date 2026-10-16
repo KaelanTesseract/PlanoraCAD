@@ -103,12 +103,12 @@ fn save_comment(
             );
             ui.horizontal(|ui| {
                 ui.label("Zweig:");
-                theme::field(ui, egui::TextEdit::singleline(b));
+                theme::text_field(ui, egui::TextEdit::singleline(b));
             });
         }
         ui.horizontal(|ui| {
             ui.label("Kommentar:");
-            theme::field(ui, egui::TextEdit::singleline(&mut comment));
+            theme::text_field(ui, egui::TextEdit::singleline(&mut comment));
         });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -230,10 +230,10 @@ fn save_as(
             .num_columns(2)
             .show(ui, |ui| {
                 ui.label("Name:");
-                theme::field(ui, egui::TextEdit::singleline(&mut name));
+                theme::text_field(ui, egui::TextEdit::singleline(&mut name));
                 ui.end_row();
                 ui.label("Kommentar:");
-                theme::field(ui, egui::TextEdit::singleline(&mut comment));
+                theme::text_field(ui, egui::TextEdit::singleline(&mut comment));
                 ui.end_row();
             });
         ui.add_space(6.0);

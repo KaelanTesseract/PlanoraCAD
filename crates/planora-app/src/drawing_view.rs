@@ -796,6 +796,7 @@ fn flat(button: egui::Button<'_>) -> impl egui::Widget + '_ {
         theme::frameless(ui.style_mut());
         let response = ui.add(button);
         ui.set_style(saved);
+        theme::focus_ring(ui, &response);
         response
     }
 }
@@ -855,6 +856,7 @@ fn toolbar(
                         })
                         .response;
                     ui.set_style(saved);
+                    theme::focus_ring(ui, &r);
                     r
                 });
                 if ui
@@ -877,9 +879,10 @@ fn toolbar(
                 {
                     action = Some(Action::Zoom(ZOOM_STEP));
                 }
-                // Zweite Zeile: Maße und die Einstellungen der gewählten Ansicht. Die Leiste hat
-                // so immer zwei Zeilen; das Wählen einer Ansicht ändert die Höhe der Blattfläche
-                // nicht (sonst verschöbe sich das Blatt mitten im Ziehen).
+                // Zweite Zeile: Maße und die Einstellungen der gewählten Ansicht; sie beginnt immer
+                // neu. Ab etwa 1100 px Breite hat die Leiste so zwei Zeilen und das Wählen einer
+                // Ansicht ändert die Höhe der Blattfläche nicht; schmaler bricht sie weiter um
+                // (dann kann die gewählte Ansicht die Leiste höher machen).
                 ui.end_row();
                 let tip = if selected.is_some() {
                     "Setzt die wichtigsten Maße in die gewählte Ansicht."

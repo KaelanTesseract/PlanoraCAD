@@ -258,7 +258,7 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut ProjectsUi) {
         let mut done = false;
         let mut create = false;
         ui.horizontal(|ui| {
-            let r = theme::field(
+            let r = theme::text_field(
                 ui,
                 egui::TextEdit::singleline(name).hint_text("Projektname"),
             );
@@ -355,7 +355,7 @@ fn root_field(
 ) -> RootField {
     let mut out = RootField::Open;
     ui.horizontal_wrapped(|ui| {
-        theme::field(
+        theme::text_field(
             ui,
             egui::TextEdit::singleline(text).hint_text("Projektordner"),
         );
@@ -489,7 +489,7 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) {
         let (mut ok, mut cancel) = (false, false);
         dialog_window(ctx, "Neuer Ordner", "folder").show(ctx, |ui| {
             ui.label(format!("In „{}“:", label(&parent)));
-            theme::field(ui, egui::TextEdit::singleline(&mut name));
+            theme::text_field(ui, egui::TextEdit::singleline(&mut name));
             ui.horizontal(|ui| {
                 ok = ui.button("Anlegen").clicked();
                 cancel = ui.button("Abbrechen").clicked();
@@ -508,7 +508,7 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) {
         let (mut ok, mut cancel) = (false, false);
         dialog_window(ctx, "Umbenennen", "rename").show(ctx, |ui| {
             ui.label(format!("Neuer Name für „{}“:", label(&path)));
-            theme::field(ui, egui::TextEdit::singleline(&mut name));
+            theme::text_field(ui, egui::TextEdit::singleline(&mut name));
             ui.horizontal(|ui| {
                 ok = ui.button("Umbenennen").clicked();
                 cancel = ui.button("Abbrechen").clicked();

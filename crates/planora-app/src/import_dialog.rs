@@ -259,7 +259,7 @@ impl ImportDialog {
                     };
                     let mut name_card = |ui: &mut egui::Ui| {
                         ui.strong("Name");
-                        theme::field(
+                        theme::text_field(
                             ui,
                             egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY),
                         );

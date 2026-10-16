@@ -518,9 +518,15 @@ impl BlendDialog {
                         .show(ui, |ui| {
                             for (k, (p, r)) in self.points.iter_mut().enumerate() {
                                 ui.label(format!("Punkt {}", k + 1));
-                                theme::field(ui, egui::TextEdit::singleline(p).desired_width(60.0));
+                                theme::text_field(
+                                    ui,
+                                    egui::TextEdit::singleline(p).desired_width(60.0),
+                                );
                                 ui.label("%");
-                                theme::field(ui, egui::TextEdit::singleline(r).desired_width(60.0));
+                                theme::text_field(
+                                    ui,
+                                    egui::TextEdit::singleline(r).desired_width(60.0),
+                                );
                                 if ui.button("Entfernen").clicked() {
                                     remove = Some(k);
                                 }
@@ -539,7 +545,7 @@ impl BlendDialog {
                         .num_columns(3)
                         .show(ui, |ui| {
                             ui.label(l1);
-                            theme::field(
+                            theme::text_field(
                                 ui,
                                 egui::TextEdit::singleline(&mut self.first).desired_width(90.0),
                             );
@@ -547,7 +553,7 @@ impl BlendDialog {
                             ui.end_row();
                             if let Some(l2) = l2 {
                                 ui.label(l2);
-                                theme::field(
+                                theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(&mut self.second)
                                         .desired_width(90.0),

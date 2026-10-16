@@ -159,7 +159,7 @@ impl NewDrawingDialog {
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
                             ui.label("Name");
-                            theme::field(ui, egui::TextEdit::singleline(&mut name));
+                            theme::text_field(ui, egui::TextEdit::singleline(&mut name));
                             ui.end_row();
                             ui.label("Papier");
                             egui::ComboBox::from_id_salt("planora-new-drawing-paper")

@@ -345,6 +345,7 @@ pub fn source_entry(
                 stroke_color(ui.visuals().dark_mode, active),
             );
         }
+        theme::focus_ring(ui, &result.response);
         result.response
     })
 }
@@ -952,5 +953,7 @@ pub fn source_button(
         );
         ui.painter().galley(text_pos, galley, color);
     }
+    // Ohne Rand: der Tastaturfokus zeigt sich als Ring.
+    theme::focus_ring(ui, &response);
     response
 }

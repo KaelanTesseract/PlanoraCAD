@@ -240,6 +240,14 @@ fn open_import(ws: &mut Workspace) {
     tab.import_dialog = Some(ImportDialog::new(dir));
 }
 
+/// Menüeintrag (gesperrt, wenn nicht `enabled`) mit sichtbarem Tastaturfokus: die Einträge haben
+/// keinen Rand, der Fokus zeigt sich als 2-px-Ring in Akzentfarbe.
+fn entry(ui: &mut egui::Ui, enabled: bool, widget: impl egui::Widget) -> egui::Response {
+    let response = ui.add_enabled(enabled, widget);
+    theme::focus_ring(ui, &response);
+    response
+}
+
 /// Menüeintrag: Symbol, Beschriftung und rechtsbündig das Tastenkürzel (`kbd`-Schrift, schwach),
 /// jedes ein eigener Text; die Beschriftung wird nicht mit Leerzeichen aufgefüllt.
 fn shortcut_button(
@@ -249,7 +257,8 @@ fn shortcut_button(
     label: &str,
     shortcut: &str,
 ) -> egui::Response {
-    ui.add_enabled(
+    entry(
+        ui,
         enabled,
         icons::button(icon, label)
             .shortcut_text(egui::RichText::new(shortcut).font(theme::kbd_font())),
@@ -275,9 +284,12 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
         begin_save(ws, false);
         ui.close();
     }
-    if ui
-        .add_enabled(!read_only, icons::button(Icon::SaveAs, "Speichern unter …"))
-        .clicked()
+    if entry(
+        ui,
+        !read_only,
+        icons::button(Icon::SaveAs, "Speichern unter …"),
+    )
+    .clicked()
     {
         begin_save(ws, true);
         ui.close();
@@ -291,13 +303,13 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
         open_export(ws);
         ui.close();
     }
-    if ui
-        .add_enabled(
-            !read_only,
-            icons::button(Icon::Import, "Netz importieren …"),
-        )
-        .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
-        .clicked()
+    if entry(
+        ui,
+        !read_only,
+        icons::button(Icon::Import, "Netz importieren …"),
+    )
+    .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
+    .clicked()
     {
         open_import(ws);
         ui.close();
@@ -308,7 +320,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
         ws.request_close(i);
         ui.close();
     }
-    if ui.add(icons::button(Icon::Quit, "Beenden")).clicked() {
+    if entry(ui, true, icons::button(Icon::Quit, "Beenden")).clicked() {
         // Ist Beenden freigegeben, schickt `handle_close_request` im nächsten Bild `Close`.
         ws.request_quit();
         ui.close();
@@ -401,8 +413,7 @@ fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         (Icon::Extrude, "Skizze extrudieren …", false),
         (Icon::Revolve, "Skizze drehen …", true),
     ] {
-        if ui
-            .add_enabled(target.is_some(), icons::button(icon, label))
+        if entry(ui, target.is_some(), icons::button(icon, label))
             .on_disabled_hover_text("Zuerst eine Skizze anlegen.")
             .clicked()
             && let Some(i) = target
@@ -428,8 +439,7 @@ fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         (Icon::Subtract, "Abziehen …", BoolOp::Difference),
         (Icon::Intersect, "Schneiden …", BoolOp::Intersection),
     ] {
-        if ui
-            .add_enabled(boolean.is_none(), icons::button(icon, label))
+        if entry(ui, boolean.is_none(), icons::button(icon, label))
             .on_disabled_hover_text(boolean.unwrap_or_default())
             .clicked()
         {
@@ -458,13 +468,13 @@ fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
     ui.separator();
     let rolled_back = tab.state.document.marker() < tab.state.document.features().len();
-    if ui
-        .add_enabled(
-            rolled_back,
-            icons::button(Icon::ToTimelineEnd, "Zum Ende der Zeitleiste"),
-        )
-        .on_disabled_hover_text("Es wird bereits die ganze Zeitleiste berechnet.")
-        .clicked()
+    if entry(
+        ui,
+        rolled_back,
+        icons::button(Icon::ToTimelineEnd, "Zum Ende der Zeitleiste"),
+    )
+    .on_disabled_hover_text("Es wird bereits die ganze Zeitleiste berechnet.")
+    .clicked()
     {
         let _ = browser::roll_to_end(&mut tab.state);
         ui.close();
@@ -474,26 +484,17 @@ fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
 fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, dock: &mut Dock) {
     let state = &mut ws.active_tab_mut().state;
     for face in ViewFace::ALL {
-        if ui
-            .add(icons::button(Icon::ViewFace, face.label()))
-            .clicked()
-        {
+        if entry(ui, true, icons::button(Icon::ViewFace, face.label())).clicked() {
             state.camera.set_view(face);
             ui.close();
         }
     }
-    if ui
-        .add(icons::button(Icon::ViewIso, "Isometrisch"))
-        .clicked()
-    {
+    if entry(ui, true, icons::button(Icon::ViewIso, "Isometrisch")).clicked() {
         state.camera.set_iso_view();
         ui.close();
     }
     ui.separator();
-    if ui
-        .add(icons::button(Icon::FitAll, "Alles einpassen"))
-        .clicked()
-    {
+    if entry(ui, true, icons::button(Icon::FitAll, "Alles einpassen")).clicked() {
         state.frame_all();
         ui.close();
     }
@@ -504,7 +505,7 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, dock: &mut Dock) {
     } else {
         (Icon::ThemeDark, "Dunkles Design")
     };
-    if ui.add(icons::button(icon, label)).clicked() {
+    if entry(ui, true, icons::button(icon, label)).clicked() {
         ws.set_dark(!dark);
         ui.close();
     }
@@ -531,7 +532,7 @@ fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         ("Skizze auf XZ-Ebene", StandardPlane::XZ),
         ("Skizze auf YZ-Ebene", StandardPlane::YZ),
     ] {
-        if ui.add(icons::button(Icon::SketchOnPlane, label)).clicked() {
+        if entry(ui, true, icons::button(Icon::SketchOnPlane, label)).clicked() {
             if let Ok(id) = state.add_sketch(SketchPlane::Standard(plane)) {
                 let _ = state.open_sketch(id);
             }
@@ -547,13 +548,13 @@ fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         _ => None,
     };
     let blocked = state.sketch_on_face_blocked();
-    if ui
-        .add_enabled(
-            blocked.is_none(),
-            icons::button(Icon::SketchOnFace, "Skizze auf gewählter Fläche"),
-        )
-        .on_disabled_hover_text(blocked.unwrap_or_default())
-        .clicked()
+    if entry(
+        ui,
+        blocked.is_none(),
+        icons::button(Icon::SketchOnFace, "Skizze auf gewählter Fläche"),
+    )
+    .on_disabled_hover_text(blocked.unwrap_or_default())
+    .clicked()
         && let Some((body, face)) = face
     {
         if let Ok(id) = state.new_sketch_on_face(body, face) {

@@ -39,11 +39,16 @@ fn context(theme_dark: Option<bool>) -> egui::Context {
     c
 }
 
+thread_local! {
+    static TIME: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+    /// Zeit je Bild; Klicks brauchen kurze Abstände (sonst gälte der Druck als langes Halten).
+    static STEP: std::cell::Cell<f64> = const { std::cell::Cell::new(1.0) };
+}
+
 fn input(width: f32) -> egui::RawInput {
     // Jedes Bild eine Sekunde später: Einblendungen neuer Fenster sind dann abgeschlossen.
-    thread_local!(static TIME: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) });
     let time = TIME.with(|t| {
-        t.set(t.get() + 1.0);
+        t.set(t.get() + STEP.with(|s| s.get()));
         t.get()
     });
     egui::RawInput {
@@ -507,4 +512,226 @@ fn dark_and_light_both_render_the_panels() {
         // Fenster und Felder des Themas.
         has_panel_frame(&s, dark, "Kugel erzeugen");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tastaturfokus auf randlosen Knöpfen und Klicks auf die umgebauten Menüs
+
+fn key_tab() -> egui::Event {
+    egui::Event::Key {
+        key: egui::Key::Tab,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+/// Bild mit Ereignissen.
+fn shot_with(
+    c: &egui::Context,
+    events: Vec<egui::Event>,
+    f: impl FnMut(&mut egui::Ui),
+) -> (Shot, Vec<(Rect, egui::Stroke)>) {
+    let mut raw = input(WIDTH);
+    raw.events = events;
+    let out = c.run_ui(raw, f);
+    let s = Shot::of(&out.shapes);
+    out.drop_without_applying_deltas();
+    let accent = theme::accent(c.global_style().visuals.dark_mode);
+    let rings = s
+        .fills
+        .iter()
+        .filter(|f| f.stroke.color == accent && f.stroke.width > 0.0)
+        .map(|f| (f.rect, f.stroke))
+        .collect();
+    (s, rings)
+}
+
+/// `tabs`-mal Tab drücken, dann zwei ruhige Bilder; liefert das letzte Bild und seine
+/// Akzent-Ringe.
+fn after_tabs(
+    c: &egui::Context,
+    tabs: usize,
+    mut f: impl FnMut(&mut egui::Ui),
+) -> (Shot, Vec<(Rect, egui::Stroke)>) {
+    for _ in 0..tabs {
+        shot_with(c, vec![key_tab()], &mut f);
+    }
+    shot_with(c, vec![], &mut f);
+    shot_with(c, vec![], &mut f)
+}
+
+/// Genau ein 2-px-Ring in Akzentfarbe, außen um `around`.
+fn one_ring(rings: &[(Rect, egui::Stroke)], dark: bool, around: Rect, what: &str) {
+    assert_eq!(rings.len(), 1, "{what} (dunkel: {dark}): {rings:?}");
+    assert_eq!(
+        rings[0].1,
+        egui::Stroke::new(2.0, theme::accent(dark)),
+        "{what}"
+    );
+    assert!(
+        rings[0].0.contains_rect(around),
+        "{what}: Ring {:?} um {around:?}",
+        rings[0].0
+    );
+}
+
+#[test]
+fn focused_borderless_buttons_show_the_focus_ring() {
+    for dark in [true, false] {
+        // Symbolknopf (Skizzenwerkzeug): mit Fokus ein Ring, ohne keiner.
+        for focus in [true, false] {
+            let c = context(Some(dark));
+            let mut first = true;
+            let mut button = Rect::NOTHING;
+            let (_, rings) = after_tabs(&c, 0, |ui| {
+                let r = icons::source_button(
+                    ui,
+                    icons::IconSource::Font(Icon::ToolLine),
+                    "Linie",
+                    dark,
+                    false,
+                );
+                if first && focus {
+                    r.request_focus();
+                }
+                first = false;
+                button = r.rect;
+            });
+            if focus {
+                one_ring(&rings, dark, button, "Symbolknopf");
+            } else {
+                assert!(rings.is_empty(), "ohne Fokus kein Ring: {rings:?}");
+            }
+        }
+
+        // Tab-Leiste: erster Tab-Druck fokussiert den Tab-Kopf, der zweite „Schließen“.
+        let c = context(Some(dark));
+        let mut ws = workspace();
+        let (s, rings) = after_tabs(&c, 0, |ui| tabs::show(ui, &mut ws));
+        assert!(rings.is_empty(), "ohne Fokus kein Ring: {rings:?}");
+        let head = s.text("Unbenannt 1").rect;
+        let (_, rings) = after_tabs(&c, 1, |ui| tabs::show(ui, &mut ws));
+        one_ring(&rings, dark, head, "Tab-Kopf");
+        let (s, rings) = after_tabs(&c, 1, |ui| tabs::show(ui, &mut ws));
+        let close = s
+            .texts
+            .iter()
+            .find(|t| t.text == icons::glyph(Icon::Close).to_string())
+            .unwrap()
+            .rect;
+        one_ring(&rings, dark, close, "Schließen");
+        // Geänderter Tab (gezeichneter Punkt) ebenso.
+        let c = context(Some(dark));
+        ws.active_tab_mut()
+            .state
+            .create_box(DVec3::splat(4.0))
+            .unwrap();
+        let (s, rings) = after_tabs(&c, 1, |ui| tabs::show(ui, &mut ws));
+        one_ring(&rings, dark, s.text("Unbenannt 1 ●").rect, "geänderter Tab");
+
+        // Zeichnungsleiste: der erste Knopf „3D-Modell“.
+        let c = context(Some(dark));
+        let mut st = drawing_state();
+        st.drawing_ui.selected_view = None;
+        let (s, rings) = after_tabs(&c, 0, |ui| drawing_view::show(ui, &mut st));
+        assert!(rings.is_empty(), "ohne Fokus kein Ring: {rings:?}");
+        let (_, rings) = after_tabs(&c, 1, |ui| drawing_view::show(ui, &mut st));
+        one_ring(&rings, dark, s.text("3D-Modell").rect, "Leistenknopf");
+
+        // Menüeintrag „Neu“.
+        let c = context(Some(dark));
+        let mut ws = workspace();
+        let mut menu = |ui: &mut egui::Ui| {
+            theme::menu_style(ui.style_mut());
+            app::file_menu(ui, &mut ws);
+        };
+        let (s, rings) = after_tabs(&c, 0, &mut menu);
+        assert!(rings.is_empty(), "ohne Fokus kein Ring: {rings:?}");
+        let (_, rings) = after_tabs(&c, 1, &mut menu);
+        one_ring(&rings, dark, s.text("Neu").rect, "Menüeintrag");
+    }
+}
+
+/// Klick an `p` (Bewegen, Drücken, Loslassen, Nachbild); `f` liefert, ob etwas ausgelöst wurde.
+fn click(c: &egui::Context, p: Pos2, mut f: impl FnMut(&mut egui::Ui) -> bool) -> bool {
+    let press = |pressed| egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let mut any = false;
+    STEP.with(|s| s.set(0.05));
+    for events in [
+        vec![egui::Event::PointerMoved(p)],
+        vec![press(true)],
+        vec![press(false)],
+        vec![],
+    ] {
+        shot_with(c, events, |ui| any |= f(ui));
+    }
+    STEP.with(|s| s.set(1.0));
+    any
+}
+
+#[test]
+fn the_refactored_menus_and_tab_buttons_still_act() {
+    let c = context(Some(true));
+    // „Neu“ im Menü „Datei“ legt einen Tab an.
+    let mut ws = workspace();
+    let (s, _) = shot_with(&c, vec![], |ui| {
+        app::file_menu(ui, &mut ws);
+    });
+    let neu = s.text("Neu").rect.center();
+    click(&c, neu, |ui| app::file_menu(ui, &mut ws));
+    assert_eq!(ws.tabs.len(), 2, "Neu legt einen Tab an");
+
+    // „Datei → Öffnen …“ in der Menüleiste meldet: Projekt-Panel öffnen.
+    let c = context(Some(true));
+    let mut dock = dock::Dock::new();
+    let mut bar = |ui: &mut egui::Ui| app::menu_bar(ui, &mut ws, &mut dock);
+    let (s, _) = shot_with(&c, vec![], |ui| {
+        bar(ui);
+    });
+    assert!(!click(&c, s.text("Datei").rect.center(), &mut bar));
+    let (s, _) = shot_with(&c, vec![], |ui| {
+        bar(ui);
+    });
+    assert!(
+        click(&c, s.text("Öffnen …").rect.center(), &mut bar),
+        "Öffnen … öffnet das Projekt-Panel"
+    );
+
+    // Symbole der Tab-Leiste: „Schließen“ am zweiten Tab, „Neu“ am Ende.
+    let c = context(Some(true));
+    let (s, _) = shot_with(&c, vec![], |ui| tabs::show(ui, &mut ws));
+    let close = icons::glyph(Icon::Close).to_string();
+    let second = s.texts.iter().filter(|t| t.text == close).nth(1).unwrap();
+    click(&c, second.rect.center(), |ui| {
+        tabs::show(ui, &mut ws);
+        false
+    });
+    assert_eq!(ws.tabs.len(), 1, "Schließen schließt den unveränderten Tab");
+    let (s, _) = shot_with(&c, vec![], |ui| tabs::show(ui, &mut ws));
+    let plus = icons::glyph(Icon::NewTab).to_string();
+    click(&c, s.text(&plus).rect.center(), |ui| {
+        tabs::show(ui, &mut ws);
+        false
+    });
+    assert_eq!(ws.tabs.len(), 2, "Neu legt einen Tab an");
+}
+
+#[test]
+fn text_and_number_fields_are_26_high() {
+    let c = context(Some(true));
+    let (mut text, mut number) = (String::from("Name"), 12.5_f64);
+    let (mut a, mut b) = (Rect::NOTHING, Rect::NOTHING);
+    shot(&c, WIDTH, |ui| {
+        a = theme::text_field(ui, egui::TextEdit::singleline(&mut text)).rect;
+        b = theme::field(ui, egui::DragValue::new(&mut number)).rect;
+    });
+    assert_eq!(a.height(), theme::FIELD_H, "Textfeld {a:?}");
+    assert_eq!(b.height(), theme::FIELD_H, "Zahlenfeld {b:?}");
 }

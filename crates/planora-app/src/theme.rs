@@ -419,8 +419,19 @@ pub fn value(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).font(value_font()).strong()
 }
 
-/// Zahlen- oder Textfeld im Graphit-Stil: 26 px hoch, vertiefte Fläche `bg_inset`, Wert
-/// mittig (Zahlenfelder), 2-px-Fokusring in Akzentfarbe.
+/// Einzeiliges Textfeld im Graphit-Stil: mindestens 26 px hoch, Text senkrecht mittig, sonst
+/// wie [`field`].
+pub fn text_field(ui: &mut egui::Ui, edit: egui::TextEdit<'_>) -> egui::Response {
+    field(
+        ui,
+        edit.min_size(vec2(0.0, FIELD_H))
+            .vertical_align(egui::Align::Center),
+    )
+}
+
+/// Feld im Graphit-Stil: Zahlenfelder (`DragValue`) 26 px hoch mit mittigem Wert, vertiefte
+/// Fläche `bg_inset`, 2-px-Fokusring in Akzentfarbe. Textfelder über [`text_field`], das die
+/// Höhe von 26 px am Feld selbst setzt (egui misst Textfelder nicht an `interact_size`).
 pub fn field(ui: &mut egui::Ui, widget: impl egui::Widget) -> egui::Response {
     let dark = ui.visuals().dark_mode;
     let inset = palette(dark).bg_inset;

@@ -15,11 +15,14 @@ const ICON_SIZE: f32 = 14.0;
 
 /// Symbolknopf ohne Rand (Fläche nur beim Überfahren).
 fn icon_button(ui: &mut egui::Ui, icon: Icon) -> egui::Response {
-    ui.add(egui::Button::new(icons::text(
+    let response = ui.add(egui::Button::new(icons::text(
         icon,
         ICON_SIZE,
         egui::Color32::PLACEHOLDER,
-    )))
+    )));
+    // Ohne Rand: der Tastaturfokus zeigt sich als Ring.
+    theme::focus_ring(ui, &response);
+    response
 }
 
 /// Tab-Leiste: Klick aktiviert, das Symbol „Schließen“ schließt (mit Rückfrage bei Änderungen),
@@ -67,7 +70,9 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace) {
 /// gefüllter Kreis an seiner Stelle gezeichnet.
 fn tab_label(ui: &mut egui::Ui, selected: bool, title: &str, dirty: bool) -> egui::Response {
     if !dirty {
-        return ui.selectable_label(selected, title);
+        let response = ui.selectable_label(selected, title);
+        theme::focus_ring(ui, &response);
+        return response;
     }
     let font = egui::TextStyle::Button.resolve(ui.style());
     let mut job = egui::text::LayoutJob::default();
@@ -107,5 +112,6 @@ fn tab_label(ui: &mut egui::Ui, selected: bool, title: &str, dirty: bool) -> egu
     );
     ui.painter()
         .circle_filled(center, font.size * DIRTY_MARK_RADIUS, visuals.text_color());
+    theme::focus_ring(ui, &response);
     response
 }

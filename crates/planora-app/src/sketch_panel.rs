@@ -418,7 +418,7 @@ fn value_editor(
     let (mut ok, mut cancel) = (false, false);
     ui.horizontal(|ui| {
         ui.label(format!("{title}:"));
-        let r = theme::field(
+        let r = theme::text_field(
             ui,
             egui::TextEdit::singleline(&mut editor.text).desired_width(70.0),
         );
@@ -483,12 +483,12 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
         Some(Section::Pattern) => {
             ui.horizontal(|ui| {
                 ui.label("Versatz x");
-                theme::field(
+                theme::text_field(
                     ui,
                     egui::TextEdit::singleline(&mut panel.pattern_dx).desired_width(50.0),
                 );
                 ui.label("y");
-                theme::field(
+                theme::text_field(
                     ui,
                     egui::TextEdit::singleline(&mut panel.pattern_dy).desired_width(50.0),
                 );
@@ -496,7 +496,7 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
             });
             ui.horizontal(|ui| {
                 ui.label("Anzahl Kopien");
-                theme::field(
+                theme::text_field(
                     ui,
                     egui::TextEdit::singleline(&mut panel.pattern_count).desired_width(40.0),
                 );

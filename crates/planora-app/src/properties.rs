@@ -55,7 +55,7 @@ fn name_field(ui: &mut egui::Ui, id: Option<FeatureId>, current: &str) -> Option
     let mut name = ui
         .data(|d| d.get_temp::<String>(key))
         .unwrap_or_else(|| current.to_string());
-    let response = theme::field(ui, egui::TextEdit::singleline(&mut name));
+    let response = theme::text_field(ui, egui::TextEdit::singleline(&mut name));
     let mut renamed = None;
     if response.changed() {
         if !name.trim().is_empty() && name != current {

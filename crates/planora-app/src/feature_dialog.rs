@@ -445,7 +445,7 @@ impl FeatureDialog {
                         .show(ui, |ui| {
                             for (k, (label, text)) in self.numbers.iter_mut().enumerate() {
                                 ui.label(label.as_str());
-                                theme::field(
+                                theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(text).desired_width(90.0),
                                 );

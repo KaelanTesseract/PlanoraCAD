@@ -256,7 +256,7 @@ impl FileChooser {
             if ui.button("Ordner höher").clicked() {
                 self.up();
             }
-            let edit = theme::field(
+            let edit = theme::text_field(
                 ui,
                 egui::TextEdit::singleline(&mut self.dir_text).desired_width(f32::INFINITY),
             );

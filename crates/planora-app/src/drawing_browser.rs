@@ -492,7 +492,7 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
         .resizable(false)
         .open(&mut open)
         .show(ctx, |ui| {
-            let r = theme::field(ui, egui::TextEdit::singleline(&mut name));
+            let r = theme::text_field(ui, egui::TextEdit::singleline(&mut name));
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 apply = true;
             }

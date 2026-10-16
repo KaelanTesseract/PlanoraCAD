@@ -407,7 +407,7 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.label(format!("Kommentar zu v{}", p.what.0));
-                theme::field(ui, egui::TextEdit::singleline(&mut p.what.1));
+                theme::text_field(ui, egui::TextEdit::singleline(&mut p.what.1));
                 ui.horizontal(|ui| {
                     if ui.button("Übernehmen").clicked() {
                         apply = true;
