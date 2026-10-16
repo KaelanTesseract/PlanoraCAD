@@ -7,9 +7,10 @@ use crate::drawing_state::WorkArea;
 use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
 use crate::file_chooser::default_dir;
+use crate::icons::{self, Icon};
 use crate::import_dialog::ImportDialog;
 use crate::projects_panel::ProjectsUi;
-use crate::state::{AppState, SketchRequest, StandardPlane};
+use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
 use crate::{
@@ -150,322 +151,9 @@ impl PlanoraApp {
         self.projects_ui.invalidate();
     }
 
-    /// Strg+S / Speichern: fragt nach Kommentar (Dialog), Ort oder Zweig.
-    fn begin_save(&mut self, as_new: bool) {
-        let tab = self.ws.active_tab();
-        if tab.read_only {
-            return;
-        }
-        let (id, has_store, name) = (tab.id, tab.store.is_some(), tab.name.clone());
-        self.ws.prompt = Some(if as_new || !has_store {
-            Prompt::SaveAs {
-                tab: id,
-                then: None,
-                parent: Vec::new(),
-                name,
-                comment: String::new(),
-            }
-        } else {
-            Prompt::SaveComment {
-                tab: id,
-                then: None,
-                comment: String::new(),
-                branch: None,
-            }
-        });
-    }
-
-    /// Datei → Exportieren … (Strg+Umschalt+E): öffnet das Fenster, wenn es Körper gibt; eine
-    /// offene Skizze wird vorher beendet. Auch in schreibgeschützten Ansichten möglich.
-    fn open_export(&mut self) {
-        let tab = self.ws.active_tab_mut();
-        if tab.state.bodies.is_empty() || tab.state.try_close_sketch().is_err() {
-            return;
-        }
-        tab.export_dialog = Some(ExportDialog::new(&tab.state));
-    }
-
-    /// Datei → Netz importieren …: öffnet das Fenster im zuletzt benutzten Ordner; eine offene
-    /// Skizze wird vorher beendet. Nicht in schreibgeschützten Ansichten.
-    fn open_import(&mut self) {
-        let dir = self.ws.exchange_dir.clone().unwrap_or_else(default_dir);
-        let tab = self.ws.active_tab_mut();
-        if tab.read_only || tab.state.try_close_sketch().is_err() {
-            return;
-        }
-        tab.import_dialog = Some(ImportDialog::new(dir));
-    }
-
-    fn file_menu(&mut self, ui: &mut egui::Ui) {
-        let read_only = self.ws.active_tab().read_only;
-        if ui.button("Neu              Strg+N").clicked() {
-            self.ws.new_tab();
-            ui.close();
-        }
-        if ui.button("Öffnen …         Strg+O").clicked() {
-            self.show_projects();
-            ui.close();
-        }
-        ui.separator();
-        if ui
-            .add_enabled(!read_only, egui::Button::new("Speichern       Strg+S"))
-            .clicked()
-        {
-            self.begin_save(false);
-            ui.close();
-        }
-        if ui
-            .add_enabled(!read_only, egui::Button::new("Speichern unter …"))
-            .clicked()
-        {
-            self.begin_save(true);
-            ui.close();
-        }
-        ui.separator();
-        let any = !self.ws.active_tab().state.bodies.is_empty();
-        if ui
-            .add_enabled(any, egui::Button::new("Exportieren …   Strg+Umschalt+E"))
-            .on_disabled_hover_text("Es gibt noch keinen Körper.")
-            .clicked()
-        {
-            self.open_export();
-            ui.close();
-        }
-        if ui
-            .add_enabled(!read_only, egui::Button::new("Netz importieren …"))
-            .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
-            .clicked()
-        {
-            self.open_import();
-            ui.close();
-        }
-        ui.separator();
-        if ui.button("Schließen        Strg+W").clicked() {
-            let i = self.ws.active;
-            self.ws.request_close(i);
-            ui.close();
-        }
-        if ui.button("Beenden").clicked() {
-            // Ist Beenden freigegeben, schickt `handle_close_request` im nächsten Bild `Close`.
-            self.ws.request_quit();
-            ui.close();
-        }
-    }
-
     fn menu(&mut self, ui: &mut egui::Ui) {
-        let read_only = self.ws.active_tab().read_only;
-        egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("Datei", |ui| self.file_menu(ui));
-            ui.add_enabled_ui(!read_only, |ui| {
-                ui.menu_button("Erzeugen", |ui| self.create_menu(ui));
-            });
-            // Zeichnungen lassen sich auch in alten Versionen öffnen, aber nicht anlegen.
-            ui.menu_button("Zeichnung", |ui| {
-                let tab = self.ws.active_tab_mut();
-                drawing_menu(ui, &mut tab.state, &mut tab.drawing_dialog, read_only);
-            });
-            ui.add_enabled_ui(!read_only, |ui| {
-                ui.menu_button("Bearbeiten", |ui| self.edit_menu(ui));
-            });
-            ui.menu_button("Ansicht", |ui| self.view_menu(ui));
-        });
-    }
-
-    fn create_menu(&mut self, ui: &mut egui::Ui) {
-        // Körper entstehen außerhalb des Skizzen-Modus: eine offene Skizze wird vorher beendet.
-        // Wird der Entwurf abgelehnt, bleibt die Skizze offen und der Dialog entfällt.
-        let tab = self.ws.active_tab_mut();
-        let mut open = |dialog: CreateDialog, ui: &mut egui::Ui| {
-            if tab.state.try_close_sketch().is_ok() {
-                tab.dialog = Some(dialog);
-            }
-            ui.close();
-        };
-        if ui.button("Quader …").clicked() {
-            open(
-                CreateDialog::Box {
-                    x: 40.0,
-                    y: 30.0,
-                    z: 20.0,
-                },
-                ui,
-            );
-        }
-        if ui.button("Zylinder …").clicked() {
-            open(
-                CreateDialog::Cylinder {
-                    radius: 15.0,
-                    height: 30.0,
-                },
-                ui,
-            );
-        }
-        if ui.button("Kugel …").clicked() {
-            open(CreateDialog::Sphere { radius: 20.0 }, ui);
-        }
-        if ui.button("Kegel …").clicked() {
-            open(
-                CreateDialog::Cone {
-                    radius: 20.0,
-                    height: 40.0,
-                },
-                ui,
-            );
-        }
-        ui.separator();
-        self.sketch_menu(ui);
-        ui.separator();
-        // Körper aus Skizzen: die gewählte (sonst die geöffnete, sonst die letzte) Skizze.
-        let tab = self.ws.active_tab_mut();
-        let sketches = tab.state.sketch_features();
-        let target = tab
-            .state
-            .selected_feature
-            .or(tab.state.open_sketch_id())
-            .filter(|id| sketches.iter().any(|(s, _)| s == id))
-            .or(sketches.last().map(|(id, _)| *id));
-        for (label, revolve) in [("Skizze extrudieren …", false), ("Skizze drehen …", true)] {
-            if ui
-                .add_enabled(target.is_some(), egui::Button::new(label))
-                .on_disabled_hover_text("Zuerst eine Skizze anlegen.")
-                .clicked()
-                && let Some(i) = target
-            {
-                if tab.state.try_close_sketch().is_ok() {
-                    tab.dialog = Some(if revolve {
-                        CreateDialog::revolve_sketch(&tab.state, i)
-                    } else {
-                        CreateDialog::extrude_sketch(i)
-                    });
-                }
-                ui.close();
-            }
-        }
-    }
-
-    fn edit_menu(&mut self, ui: &mut egui::Ui) {
-        let tab = self.ws.active_tab_mut();
-        // Boolesche Operationen brauchen zwei gewöhnliche Körper; Netz-Körper sind gesperrt.
-        let boolean = tab.state.boolean_blocked();
-        for (label, op) in [
-            ("Vereinigen …", BoolOp::Union),
-            ("Abziehen …", BoolOp::Difference),
-            ("Schneiden …", BoolOp::Intersection),
-        ] {
-            if ui
-                .add_enabled(boolean.is_none(), egui::Button::new(label))
-                .on_disabled_hover_text(boolean.unwrap_or_default())
-                .clicked()
-            {
-                if tab.state.try_close_sketch().is_ok() {
-                    tab.boolean_dialog = Some(BooleanDialog::with_op(&tab.state, op));
-                }
-                ui.close();
-            }
-        }
-        ui.separator();
-        let blend = tab.state.blend_blocked();
-        for (label, dialog) in [
-            ("Verrunden …", BlendDialog::fillet()),
-            ("Fase …", BlendDialog::chamfer()),
-        ] {
-            if ui
-                .add_enabled(blend.is_none(), egui::Button::new(label))
-                .on_disabled_hover_text(blend.unwrap_or_default())
-                .clicked()
-            {
-                if tab.state.try_close_sketch().is_ok() {
-                    tab.blend_dialog = Some(dialog);
-                }
-                ui.close();
-            }
-        }
-        ui.separator();
-        let rolled_back = tab.state.document.marker() < tab.state.document.features().len();
-        if ui
-            .add_enabled(rolled_back, egui::Button::new("Zum Ende der Zeitleiste"))
-            .on_disabled_hover_text("Es wird bereits die ganze Zeitleiste berechnet.")
-            .clicked()
-        {
-            let _ = browser::roll_to_end(&mut tab.state);
-            ui.close();
-        }
-    }
-
-    fn view_menu(&mut self, ui: &mut egui::Ui) {
-        let state = &mut self.ws.active_tab_mut().state;
-        for face in ViewFace::ALL {
-            if ui.button(face.label()).clicked() {
-                state.camera.set_view(face);
-                ui.close();
-            }
-        }
-        if ui.button("Isometrisch").clicked() {
-            state.camera.set_iso_view();
-            ui.close();
-        }
-        ui.separator();
-        if ui.button("Alles einpassen").clicked() {
-            state.frame_all();
-            ui.close();
-        }
-        ui.separator();
-        let dark = state.dark;
-        let label = if dark {
-            "Helles Design"
-        } else {
-            "Dunkles Design"
-        };
-        if ui.button(label).clicked() {
-            self.ws.set_dark(!dark);
-            ui.close();
-        }
-        ui.separator();
-        for (label, pane) in [("Projekte", Pane::Projects), ("Versionen", Pane::Versions)] {
-            let mut visible = self.dock.is_visible(pane);
-            if ui.checkbox(&mut visible, label).changed() {
-                self.dock.set_visible(pane, visible);
-            }
-        }
-    }
-
-    /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
-    fn sketch_menu(&mut self, ui: &mut egui::Ui) {
-        let state = &mut self.ws.active_tab_mut().state;
-        for (label, plane) in [
-            ("Skizze auf XY-Ebene", StandardPlane::XY),
-            ("Skizze auf XZ-Ebene", StandardPlane::XZ),
-            ("Skizze auf YZ-Ebene", StandardPlane::YZ),
-        ] {
-            if ui.button(label).clicked() {
-                if let Ok(id) = state.add_sketch(SketchPlane::Standard(plane)) {
-                    let _ = state.open_sketch(id);
-                }
-                ui.close();
-            }
-        }
-        let face = match state.selection {
-            Some(Pick::Face(FaceRef { body, face })) => state
-                .bodies
-                .get(body)
-                .and_then(|b| plane_of_face(&b.solid, face))
-                .map(|_| (body, face)),
-            _ => None,
-        };
-        let blocked = state.sketch_on_face_blocked();
-        if ui
-            .add_enabled(
-                blocked.is_none(),
-                egui::Button::new("Skizze auf gewählter Fläche"),
-            )
-            .on_disabled_hover_text(blocked.unwrap_or_default())
-            .clicked()
-            && let Some((body, face)) = face
-        {
-            if let Ok(id) = state.new_sketch_on_face(body, face) {
-                let _ = state.open_sketch(id);
-            }
-            ui.close();
+        if menu_bar(ui, &mut self.ws, &mut self.dock) {
+            self.show_projects();
         }
     }
 
@@ -488,7 +176,7 @@ impl PlanoraApp {
             self.show_projects();
         }
         if pressed(egui::Key::S) {
-            self.begin_save(false);
+            begin_save(&mut self.ws, false);
         }
         if pressed(egui::Key::W) {
             let i = self.ws.active;
@@ -501,8 +189,377 @@ impl PlanoraApp {
             ))
         });
         if export {
-            self.open_export();
+            open_export(&mut self.ws);
         }
+    }
+}
+
+/// Strg+S / Speichern: fragt nach Kommentar (Dialog), Ort oder Zweig.
+fn begin_save(ws: &mut Workspace, as_new: bool) {
+    let tab = ws.active_tab();
+    if tab.read_only {
+        return;
+    }
+    let (id, has_store, name) = (tab.id, tab.store.is_some(), tab.name.clone());
+    ws.prompt = Some(if as_new || !has_store {
+        Prompt::SaveAs {
+            tab: id,
+            then: None,
+            parent: Vec::new(),
+            name,
+            comment: String::new(),
+        }
+    } else {
+        Prompt::SaveComment {
+            tab: id,
+            then: None,
+            comment: String::new(),
+            branch: None,
+        }
+    });
+}
+
+/// Datei → Exportieren … (Strg+Umschalt+E): öffnet das Fenster, wenn es Körper gibt; eine
+/// offene Skizze wird vorher beendet. Auch in schreibgeschützten Ansichten möglich.
+fn open_export(ws: &mut Workspace) {
+    let tab = ws.active_tab_mut();
+    if tab.state.bodies.is_empty() || tab.state.try_close_sketch().is_err() {
+        return;
+    }
+    tab.export_dialog = Some(ExportDialog::new(&tab.state));
+}
+
+/// Datei → Netz importieren …: öffnet das Fenster im zuletzt benutzten Ordner; eine offene
+/// Skizze wird vorher beendet. Nicht in schreibgeschützten Ansichten.
+fn open_import(ws: &mut Workspace) {
+    let dir = ws.exchange_dir.clone().unwrap_or_else(default_dir);
+    let tab = ws.active_tab_mut();
+    if tab.read_only || tab.state.try_close_sketch().is_err() {
+        return;
+    }
+    tab.import_dialog = Some(ImportDialog::new(dir));
+}
+
+/// Menüeintrag: Symbol, Beschriftung und rechtsbündig das Tastenkürzel (`kbd`-Schrift, schwach),
+/// jedes ein eigener Text; die Beschriftung wird nicht mit Leerzeichen aufgefüllt.
+fn shortcut_button(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    icon: Icon,
+    label: &str,
+    shortcut: &str,
+) -> egui::Response {
+    ui.add_enabled(
+        enabled,
+        icons::button(icon, label)
+            .shortcut_text(egui::RichText::new(shortcut).font(theme::kbd_font())),
+    )
+}
+
+/// Menü „Datei“. Liefert `true`, wenn „Öffnen …“ gewählt wurde (der Aufrufer blendet dann das
+/// Projekt-Panel ein).
+#[doc(hidden)]
+pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
+    let read_only = ws.active_tab().read_only;
+    let mut open_projects = false;
+    if shortcut_button(ui, true, Icon::New, "Neu", "Strg+N").clicked() {
+        ws.new_tab();
+        ui.close();
+    }
+    if shortcut_button(ui, true, Icon::Open, "Öffnen …", "Strg+O").clicked() {
+        open_projects = true;
+        ui.close();
+    }
+    ui.separator();
+    if shortcut_button(ui, !read_only, Icon::Save, "Speichern", "Strg+S").clicked() {
+        begin_save(ws, false);
+        ui.close();
+    }
+    if ui
+        .add_enabled(!read_only, icons::button(Icon::SaveAs, "Speichern unter …"))
+        .clicked()
+    {
+        begin_save(ws, true);
+        ui.close();
+    }
+    ui.separator();
+    let any = !ws.active_tab().state.bodies.is_empty();
+    if shortcut_button(ui, any, Icon::Export, "Exportieren …", "Strg+Umschalt+E")
+        .on_disabled_hover_text("Es gibt noch keinen Körper.")
+        .clicked()
+    {
+        open_export(ws);
+        ui.close();
+    }
+    if ui
+        .add_enabled(
+            !read_only,
+            icons::button(Icon::Import, "Netz importieren …"),
+        )
+        .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
+        .clicked()
+    {
+        open_import(ws);
+        ui.close();
+    }
+    ui.separator();
+    if shortcut_button(ui, true, Icon::Close, "Schließen", "Strg+W").clicked() {
+        let i = ws.active;
+        ws.request_close(i);
+        ui.close();
+    }
+    if ui.add(icons::button(Icon::Quit, "Beenden")).clicked() {
+        // Ist Beenden freigegeben, schickt `handle_close_request` im nächsten Bild `Close`.
+        ws.request_quit();
+        ui.close();
+    }
+    open_projects
+}
+
+/// Menüleiste. Liefert `true`, wenn „Datei → Öffnen …“ gewählt wurde.
+#[doc(hidden)]
+pub fn menu_bar(ui: &mut egui::Ui, ws: &mut Workspace, dock: &mut Dock) -> bool {
+    let read_only = ws.active_tab().read_only;
+    let mut open_projects = false;
+    egui::MenuBar::new()
+        .config(egui::containers::menu::MenuConfig::new().style(theme::menu_style))
+        .ui(ui, |ui| {
+            ui.menu_button("Datei", |ui| open_projects = file_menu(ui, ws));
+            ui.add_enabled_ui(!read_only, |ui| {
+                ui.menu_button("Erzeugen", |ui| create_menu(ui, ws));
+            });
+            // Zeichnungen lassen sich auch in alten Versionen öffnen, aber nicht anlegen.
+            ui.menu_button("Zeichnung", |ui| {
+                let tab = ws.active_tab_mut();
+                drawing_menu(ui, &mut tab.state, &mut tab.drawing_dialog, read_only);
+            });
+            ui.add_enabled_ui(!read_only, |ui| {
+                ui.menu_button("Bearbeiten", |ui| edit_menu(ui, ws));
+            });
+            ui.menu_button("Ansicht", |ui| view_menu(ui, ws, dock));
+        });
+    open_projects
+}
+
+fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+    // Körper entstehen außerhalb des Skizzen-Modus: eine offene Skizze wird vorher beendet.
+    // Wird der Entwurf abgelehnt, bleibt die Skizze offen und der Dialog entfällt.
+    let tab = ws.active_tab_mut();
+    let mut open = |dialog: CreateDialog, ui: &mut egui::Ui| {
+        if tab.state.try_close_sketch().is_ok() {
+            tab.dialog = Some(dialog);
+        }
+        ui.close();
+    };
+    let body = |ui: &mut egui::Ui, kind: BodyKind, label: &str| {
+        icons::source_entry(ui, icons::body_icon(kind), label, true).clicked()
+    };
+    if body(ui, BodyKind::Box, "Quader …") {
+        open(
+            CreateDialog::Box {
+                x: 40.0,
+                y: 30.0,
+                z: 20.0,
+            },
+            ui,
+        );
+    }
+    if body(ui, BodyKind::Cylinder, "Zylinder …") {
+        open(
+            CreateDialog::Cylinder {
+                radius: 15.0,
+                height: 30.0,
+            },
+            ui,
+        );
+    }
+    if body(ui, BodyKind::Sphere, "Kugel …") {
+        open(CreateDialog::Sphere { radius: 20.0 }, ui);
+    }
+    if body(ui, BodyKind::Cone, "Kegel …") {
+        open(
+            CreateDialog::Cone {
+                radius: 20.0,
+                height: 40.0,
+            },
+            ui,
+        );
+    }
+    ui.separator();
+    sketch_menu(ui, ws);
+    ui.separator();
+    // Körper aus Skizzen: die gewählte (sonst die geöffnete, sonst die letzte) Skizze.
+    let tab = ws.active_tab_mut();
+    let sketches = tab.state.sketch_features();
+    let target = tab
+        .state
+        .selected_feature
+        .or(tab.state.open_sketch_id())
+        .filter(|id| sketches.iter().any(|(s, _)| s == id))
+        .or(sketches.last().map(|(id, _)| *id));
+    for (icon, label, revolve) in [
+        (Icon::Extrude, "Skizze extrudieren …", false),
+        (Icon::Revolve, "Skizze drehen …", true),
+    ] {
+        if ui
+            .add_enabled(target.is_some(), icons::button(icon, label))
+            .on_disabled_hover_text("Zuerst eine Skizze anlegen.")
+            .clicked()
+            && let Some(i) = target
+        {
+            if tab.state.try_close_sketch().is_ok() {
+                tab.dialog = Some(if revolve {
+                    CreateDialog::revolve_sketch(&tab.state, i)
+                } else {
+                    CreateDialog::extrude_sketch(i)
+                });
+            }
+            ui.close();
+        }
+    }
+}
+
+fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+    let tab = ws.active_tab_mut();
+    // Boolesche Operationen brauchen zwei gewöhnliche Körper; Netz-Körper sind gesperrt.
+    let boolean = tab.state.boolean_blocked();
+    for (icon, label, op) in [
+        (Icon::Union, "Vereinigen …", BoolOp::Union),
+        (Icon::Subtract, "Abziehen …", BoolOp::Difference),
+        (Icon::Intersect, "Schneiden …", BoolOp::Intersection),
+    ] {
+        if ui
+            .add_enabled(boolean.is_none(), icons::button(icon, label))
+            .on_disabled_hover_text(boolean.unwrap_or_default())
+            .clicked()
+        {
+            if tab.state.try_close_sketch().is_ok() {
+                tab.boolean_dialog = Some(BooleanDialog::with_op(&tab.state, op));
+            }
+            ui.close();
+        }
+    }
+    ui.separator();
+    let blend = tab.state.blend_blocked();
+    for (label, dialog) in [
+        ("Verrunden …", BlendDialog::fillet()),
+        ("Fase …", BlendDialog::chamfer()),
+    ] {
+        let source = icons::IconSource::Feature(icons::FeatureIcon::Blend);
+        if icons::source_entry(ui, source, label, blend.is_none())
+            .on_disabled_hover_text(blend.unwrap_or_default())
+            .clicked()
+        {
+            if tab.state.try_close_sketch().is_ok() {
+                tab.blend_dialog = Some(dialog);
+            }
+            ui.close();
+        }
+    }
+    ui.separator();
+    let rolled_back = tab.state.document.marker() < tab.state.document.features().len();
+    if ui
+        .add_enabled(
+            rolled_back,
+            icons::button(Icon::ToTimelineEnd, "Zum Ende der Zeitleiste"),
+        )
+        .on_disabled_hover_text("Es wird bereits die ganze Zeitleiste berechnet.")
+        .clicked()
+    {
+        let _ = browser::roll_to_end(&mut tab.state);
+        ui.close();
+    }
+}
+
+fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, dock: &mut Dock) {
+    let state = &mut ws.active_tab_mut().state;
+    for face in ViewFace::ALL {
+        if ui
+            .add(icons::button(Icon::ViewFace, face.label()))
+            .clicked()
+        {
+            state.camera.set_view(face);
+            ui.close();
+        }
+    }
+    if ui
+        .add(icons::button(Icon::ViewIso, "Isometrisch"))
+        .clicked()
+    {
+        state.camera.set_iso_view();
+        ui.close();
+    }
+    ui.separator();
+    if ui
+        .add(icons::button(Icon::FitAll, "Alles einpassen"))
+        .clicked()
+    {
+        state.frame_all();
+        ui.close();
+    }
+    ui.separator();
+    let dark = state.dark;
+    let (icon, label) = if dark {
+        (Icon::ThemeLight, "Helles Design")
+    } else {
+        (Icon::ThemeDark, "Dunkles Design")
+    };
+    if ui.add(icons::button(icon, label)).clicked() {
+        ws.set_dark(!dark);
+        ui.close();
+    }
+    ui.separator();
+    for (icon, label, pane) in [
+        (Icon::PanelProjects, "Projekte", Pane::Projects),
+        (Icon::PanelVersions, "Versionen", Pane::Versions),
+    ] {
+        let mut visible = dock.is_visible(pane);
+        if ui
+            .checkbox(&mut visible, (icons::atom(icon), label))
+            .changed()
+        {
+            dock.set_visible(pane, visible);
+        }
+    }
+}
+
+/// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
+fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+    let state = &mut ws.active_tab_mut().state;
+    for (label, plane) in [
+        ("Skizze auf XY-Ebene", StandardPlane::XY),
+        ("Skizze auf XZ-Ebene", StandardPlane::XZ),
+        ("Skizze auf YZ-Ebene", StandardPlane::YZ),
+    ] {
+        if ui.add(icons::button(Icon::SketchOnPlane, label)).clicked() {
+            if let Ok(id) = state.add_sketch(SketchPlane::Standard(plane)) {
+                let _ = state.open_sketch(id);
+            }
+            ui.close();
+        }
+    }
+    let face = match state.selection {
+        Some(Pick::Face(FaceRef { body, face })) => state
+            .bodies
+            .get(body)
+            .and_then(|b| plane_of_face(&b.solid, face))
+            .map(|_| (body, face)),
+        _ => None,
+    };
+    let blocked = state.sketch_on_face_blocked();
+    if ui
+        .add_enabled(
+            blocked.is_none(),
+            icons::button(Icon::SketchOnFace, "Skizze auf gewählter Fläche"),
+        )
+        .on_disabled_hover_text(blocked.unwrap_or_default())
+        .clicked()
+        && let Some((body, face)) = face
+    {
+        if let Ok(id) = state.new_sketch_on_face(body, face) {
+            let _ = state.open_sketch(id);
+        }
+        ui.close();
     }
 }
 
@@ -588,9 +645,10 @@ impl eframe::App for PlanoraApp {
             let tab = self.ws.active_tab();
             if tab.read_only {
                 let n = tab.based_on.unwrap_or_default();
-                ui.weak(format!(
+                let p = theme::palette(dark);
+                ui.label(egui::RichText::new(format!(
                     "Alte Version v{n} – schreibgeschützt. Im Bereich „Versionen“ lässt sie sich wiederherstellen oder abzweigen."
-                ));
+                )).color(p.warning));
             }
         });
         let tab = self.ws.active_tab();
@@ -598,18 +656,24 @@ impl eframe::App for PlanoraApp {
             ui.horizontal(|ui| {
                 let state = &tab.state;
                 let sketch = state.session_sketch();
+                let p = theme::palette(dark);
+                // Statuszeile: Hinweise in text_secondary, Fehler in der Fehlerfarbe.
+                let quiet = |text: String| egui::RichText::new(text).color(p.text_secondary);
                 // Vorrang: letzte Meldung, Skizzen-Modus, erstes Feature mit Fehler, Körperzahl (mit
                 // Hinweis bei ungenauem Netz).
                 match (&state.message, sketch, browser::status_text(state)) {
-                    (Some(m), _, _) => ui.colored_label(browser::error_color(ui.visuals().dark_mode), m),
-                    (None, Some(sk), _) => ui.weak(format!(
+                    (Some(m), _, _) => ui.colored_label(p.error, m),
+                    (None, Some(sk), _) => ui.label(quiet(format!(
                         "Skizzen-Modus: {} – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt",
                         sk.name
-                    )),
-                    (None, None, Some(e)) => ui.colored_label(browser::error_color(ui.visuals().dark_mode), e),
+                    ))),
+                    (None, None, Some(e)) => ui.colored_label(p.error, e),
                     (None, None, None) => match state.mesh_note() {
-                        Some(note) => ui.weak(format!("{} Körper – {note}", state.bodies.len())),
-                        None => ui.weak(format!("{} Körper", state.bodies.len())),
+                        Some(note) => ui.colored_label(
+                            p.warning,
+                            format!("{} Körper – {note}", state.bodies.len()),
+                        ),
+                        None => ui.label(quiet(format!("{} Körper", state.bodies.len()))),
                     },
                 };
             });

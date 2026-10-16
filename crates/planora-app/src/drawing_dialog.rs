@@ -4,7 +4,9 @@ use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::drawing_state::{WorkArea, suggest_scale};
 use crate::export_dialog::{shorten_for_display, wide_window};
+use crate::icons::{self, Icon};
 use crate::state::AppState;
+use crate::theme;
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewKind};
 use planora_feature::Document;
 
@@ -157,7 +159,7 @@ impl NewDrawingDialog {
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
                             ui.label("Name");
-                            ui.text_edit_singleline(&mut name);
+                            theme::field(ui, egui::TextEdit::singleline(&mut name));
                             ui.end_row();
                             ui.label("Papier");
                             egui::ComboBox::from_id_salt("planora-new-drawing-paper")
@@ -259,7 +261,10 @@ pub fn drawing_menu(
     let blocked = drawing_menu_blocked(state);
     let free = blocked.is_none();
     if ui
-        .add_enabled(free && !read_only, egui::Button::new("Neue Zeichnung …"))
+        .add_enabled(
+            free && !read_only,
+            icons::button(Icon::NewDrawing, "Neue Zeichnung …"),
+        )
         .on_disabled_hover_text(blocked.unwrap_or(READ_ONLY))
         .clicked()
     {
@@ -275,7 +280,10 @@ pub fn drawing_menu(
         .collect();
     for (id, name) in list {
         if ui
-            .add_enabled(free, egui::Button::new(format!("Öffnen: {name}")))
+            .add_enabled(
+                free,
+                icons::button(Icon::OpenDrawing, format!("Öffnen: {name}")),
+            )
             .on_disabled_hover_text(SKETCH_BLOCKED)
             .clicked()
         {
@@ -286,7 +294,7 @@ pub fn drawing_menu(
         }
     }
     if ui
-        .add_enabled(free, egui::Button::new("Zum 3D-Modell"))
+        .add_enabled(free, icons::button(Icon::ToModel, "Zum 3D-Modell"))
         .on_disabled_hover_text(SKETCH_BLOCKED)
         .clicked()
     {
