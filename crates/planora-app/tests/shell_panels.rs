@@ -277,7 +277,7 @@ fn fields_draw_inside_the_window_at_1400x900_and_1100x700() {
         let (shot, free) = settle(&c, &mut app, size);
         let content = Rect::from_min_size(Pos2::ZERO, size);
         let all = shot.fields(true);
-        assert_eq!(all.len(), 4, "{size:?}: vier Felder: {all:?}");
+        assert_eq!(all.len(), 5, "{size:?}: fünf Felder: {all:?}");
         let f = fields_of(&shot, true, size);
         assert!(near(f.left.width(), theme::PANEL_WIDTH), "{:?}", f.left);
         assert!(near(f.right.width(), theme::PANEL_WIDTH), "{:?}", f.right);
@@ -479,7 +479,7 @@ fn read_only_banner_text_and_colour() {
         let (shot, free) = settle(&c, &mut app, size);
         let f = fields_of(&shot, dark, size);
         let all = shot.fields(dark);
-        assert_eq!(all.len(), 5, "mit Hinweisfeld: {all:?}");
+        assert_eq!(all.len(), 6, "mit Hinweisfeld: {all:?}");
         let banner = *all
             .iter()
             .find(|r| near(r.top(), f.top.bottom() + shell::GAP))
@@ -629,7 +629,7 @@ fn first_frame_has_no_jump() {
         let (first, _) = run(&c, &mut app, size, vec![], false);
         let (second, _) = run(&c, &mut app, size, vec![], false);
         let (a, b) = (first.fields(true), second.fields(true));
-        assert_eq!(a.len(), if read_only { 5 } else { 4 }, "erstes Bild: {a:?}");
+        assert_eq!(a.len(), if read_only { 6 } else { 5 }, "erstes Bild: {a:?}");
         assert_eq!(a, b, "erstes und zweites Bild gleich");
         // Auch die Texte stehen schon im ersten Bild an ihrem Platz.
         let datei = |s: &Shot| s.texts.iter().find(|t| t.text == "Datei").map(|t| t.rect);
@@ -707,7 +707,7 @@ fn dark_and_light_frames() {
         app.ws_mut().set_dark(dark);
         let size = vec2(1400.0, 900.0);
         let (shot, _) = settle(&c, &mut app, size);
-        assert_eq!(shot.fields(dark).len(), 4, "dunkel {dark}");
+        assert_eq!(shot.fields(dark).len(), 5, "dunkel {dark}");
         // Das andere Thema kommt nicht vor.
         assert!(shot.fields(!dark).is_empty());
         assert!(shot.fills.iter().all(|f| f.blur == 0.0), "kein Schatten");

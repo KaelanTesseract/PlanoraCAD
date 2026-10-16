@@ -448,87 +448,160 @@ fn shell_toggles(ui: &mut egui::Ui, shell: &mut ShellState) {
     }
 }
 
-fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
-    // Körper entstehen außerhalb des Skizzen-Modus: eine offene Skizze wird vorher beendet.
-    // Wird der Entwurf abgelehnt, bleibt die Skizze offen und der Dialog entfällt.
-    let tab = ws.active_tab_mut();
-    let mut open = |dialog: CreateDialog, ui: &mut egui::Ui| {
-        if tab.state.try_close_sketch().is_ok() {
-            tab.dialog = Some(dialog);
+/// Körper, die sich über „Erzeugen“ (Menü und Befehlsfeld) anlegen lassen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreateKind {
+    Box,
+    Cylinder,
+    Sphere,
+    Cone,
+    Extrusion,
+    Revolution,
+}
+
+impl CreateKind {
+    pub const ALL: [CreateKind; 6] = [
+        CreateKind::Box,
+        CreateKind::Cylinder,
+        CreateKind::Sphere,
+        CreateKind::Cone,
+        CreateKind::Extrusion,
+        CreateKind::Revolution,
+    ];
+
+    /// Beschriftung im Menü (und Hinweistext im Befehlsfeld).
+    pub fn label(self) -> &'static str {
+        match self {
+            CreateKind::Box => "Quader …",
+            CreateKind::Cylinder => "Zylinder …",
+            CreateKind::Sphere => "Kugel …",
+            CreateKind::Cone => "Kegel …",
+            CreateKind::Extrusion => "Skizze extrudieren …",
+            CreateKind::Revolution => "Skizze drehen …",
         }
-        ui.close();
+    }
+
+    /// Symbol (wie im Menü).
+    pub fn icon(self) -> icons::IconSource {
+        icons::body_icon(match self {
+            CreateKind::Box => BodyKind::Box,
+            CreateKind::Cylinder => BodyKind::Cylinder,
+            CreateKind::Sphere => BodyKind::Sphere,
+            CreateKind::Cone => BodyKind::Cone,
+            CreateKind::Extrusion => BodyKind::Extrusion,
+            CreateKind::Revolution => BodyKind::Revolution,
+        })
+    }
+}
+
+/// Die Skizze für „Extrudieren“ und „Drehen“: die gewählte, sonst die geöffnete, sonst die letzte.
+fn sketch_target(state: &AppState) -> Option<planora_feature::FeatureId> {
+    let sketches = state.sketch_features();
+    state
+        .selected_feature
+        .or(state.open_sketch_id())
+        .filter(|id| sketches.iter().any(|(s, _)| s == id))
+        .or(sketches.last().map(|(id, _)| *id))
+}
+
+/// Grund, warum `kind` gerade nicht geht (Menü und Befehlsfeld); `None`: erlaubt.
+pub fn create_blocked(ws: &Workspace, kind: CreateKind) -> Option<&'static str> {
+    match kind {
+        CreateKind::Extrusion | CreateKind::Revolution
+            if sketch_target(&ws.active_tab().state).is_none() =>
+        {
+            Some("Zuerst eine Skizze anlegen.")
+        }
+        _ => None,
+    }
+}
+
+/// Öffnet den Erzeugen-Dialog zu `kind` im aktiven Tab. Körper entstehen außerhalb des
+/// Skizzen-Modus: eine offene Skizze wird vorher beendet. Wird der Entwurf abgelehnt, bleibt die
+/// Skizze offen und der Dialog entfällt.
+pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
+    let tab = ws.active_tab_mut();
+    let dialog = match kind {
+        CreateKind::Box => CreateDialog::Box {
+            x: 40.0,
+            y: 30.0,
+            z: 20.0,
+        },
+        CreateKind::Cylinder => CreateDialog::Cylinder {
+            radius: 15.0,
+            height: 30.0,
+        },
+        CreateKind::Sphere => CreateDialog::Sphere { radius: 20.0 },
+        CreateKind::Cone => CreateDialog::Cone {
+            radius: 20.0,
+            height: 40.0,
+        },
+        CreateKind::Extrusion | CreateKind::Revolution => {
+            let Some(i) = sketch_target(&tab.state) else {
+                return;
+            };
+            if tab.state.try_close_sketch().is_err() {
+                return;
+            }
+            tab.dialog = Some(if kind == CreateKind::Revolution {
+                CreateDialog::revolve_sketch(&tab.state, i)
+            } else {
+                CreateDialog::extrude_sketch(i)
+            });
+            return;
+        }
     };
-    let body = |ui: &mut egui::Ui, kind: BodyKind, label: &str| {
-        icons::source_entry(ui, icons::body_icon(kind), label, true).clicked()
-    };
-    if body(ui, BodyKind::Box, "Quader …") {
-        open(
-            CreateDialog::Box {
-                x: 40.0,
-                y: 30.0,
-                z: 20.0,
-            },
-            ui,
-        );
+    if tab.state.try_close_sketch().is_ok() {
+        tab.dialog = Some(dialog);
     }
-    if body(ui, BodyKind::Cylinder, "Zylinder …") {
-        open(
-            CreateDialog::Cylinder {
-                radius: 15.0,
-                height: 30.0,
-            },
-            ui,
-        );
+}
+
+/// Öffnet den Dialog „Boolesche Operation“ mit vorgewählter Operation (Menü und Chips).
+pub fn open_boolean(ws: &mut Workspace, op: BoolOp) {
+    let tab = ws.active_tab_mut();
+    if tab.state.try_close_sketch().is_ok() {
+        tab.boolean_dialog = Some(BooleanDialog::with_op(&tab.state, op));
     }
-    if body(ui, BodyKind::Sphere, "Kugel …") {
-        open(CreateDialog::Sphere { radius: 20.0 }, ui);
+}
+
+/// Öffnet den Dialog Verrunden (`chamfer == false`) oder Fase.
+pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
+    let tab = ws.active_tab_mut();
+    if tab.state.try_close_sketch().is_ok() {
+        tab.blend_dialog = Some(if chamfer {
+            BlendDialog::chamfer()
+        } else {
+            BlendDialog::fillet()
+        });
     }
-    if body(ui, BodyKind::Cone, "Kegel …") {
-        open(
-            CreateDialog::Cone {
-                radius: 20.0,
-                height: 40.0,
-            },
-            ui,
-        );
+}
+
+fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+    for kind in &CreateKind::ALL[..4] {
+        if icons::source_entry(ui, kind.icon(), kind.label(), true).clicked() {
+            do_create(ws, *kind);
+            ui.close();
+        }
     }
     ui.separator();
     sketch_menu(ui, ws);
     ui.separator();
     // Körper aus Skizzen: die gewählte (sonst die geöffnete, sonst die letzte) Skizze.
-    let tab = ws.active_tab_mut();
-    let sketches = tab.state.sketch_features();
-    let target = tab
-        .state
-        .selected_feature
-        .or(tab.state.open_sketch_id())
-        .filter(|id| sketches.iter().any(|(s, _)| s == id))
-        .or(sketches.last().map(|(id, _)| *id));
-    for (icon, label, revolve) in [
-        (Icon::Extrude, "Skizze extrudieren …", false),
-        (Icon::Revolve, "Skizze drehen …", true),
-    ] {
-        if entry(ui, target.is_some(), icons::button(icon, label))
-            .on_disabled_hover_text("Zuerst eine Skizze anlegen.")
+    for kind in &CreateKind::ALL[4..] {
+        let blocked = create_blocked(ws, *kind);
+        if icons::source_entry(ui, kind.icon(), kind.label(), blocked.is_none())
+            .on_disabled_hover_text(blocked.unwrap_or_default())
             .clicked()
-            && let Some(i) = target
         {
-            if tab.state.try_close_sketch().is_ok() {
-                tab.dialog = Some(if revolve {
-                    CreateDialog::revolve_sketch(&tab.state, i)
-                } else {
-                    CreateDialog::extrude_sketch(i)
-                });
-            }
+            do_create(ws, *kind);
             ui.close();
         }
     }
 }
 
 fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
-    let tab = ws.active_tab_mut();
     // Boolesche Operationen brauchen zwei gewöhnliche Körper; Netz-Körper sind gesperrt.
-    let boolean = tab.state.boolean_blocked();
+    let boolean = ws.active_tab().state.boolean_blocked();
     for (icon, label, op) in [
         (Icon::Union, "Vereinigen …", BoolOp::Union),
         (Icon::Subtract, "Abziehen …", BoolOp::Difference),
@@ -538,30 +611,24 @@ fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
             .on_disabled_hover_text(boolean.unwrap_or_default())
             .clicked()
         {
-            if tab.state.try_close_sketch().is_ok() {
-                tab.boolean_dialog = Some(BooleanDialog::with_op(&tab.state, op));
-            }
+            open_boolean(ws, op);
             ui.close();
         }
     }
     ui.separator();
-    let blend = tab.state.blend_blocked();
-    for (label, dialog) in [
-        ("Verrunden …", BlendDialog::fillet()),
-        ("Fase …", BlendDialog::chamfer()),
-    ] {
+    let blend = ws.active_tab().state.blend_blocked();
+    for (label, chamfer) in [("Verrunden …", false), ("Fase …", true)] {
         let source = icons::IconSource::Feature(icons::FeatureIcon::Blend);
         if icons::source_entry(ui, source, label, blend.is_none())
             .on_disabled_hover_text(blend.unwrap_or_default())
             .clicked()
         {
-            if tab.state.try_close_sketch().is_ok() {
-                tab.blend_dialog = Some(dialog);
-            }
+            open_blend(ws, chamfer);
             ui.close();
         }
     }
     ui.separator();
+    let tab = ws.active_tab_mut();
     let rolled_back = tab.state.document.marker() < tab.state.document.features().len();
     if entry(
         ui,

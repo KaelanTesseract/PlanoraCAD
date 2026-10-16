@@ -8,13 +8,18 @@
 //! Feld misst seine Wunschbreite; sie wird für das nächste Bild gemerkt. Ändert sie sich, oder
 //! läuft gerade der unsichtbare erste Größen-Durchgang eines Felds, wird der Durchgang verworfen
 //! und sofort wiederholt (wie bei `prompts::window`), damit kein Feld ein Bild lang falsch steht.
+//!
+//! Das Befehlsfeld unten lässt dem Status die Breite, die dessen Text in zwei Zeilen braucht:
+//! Es wird bei langen Meldungen schmaler (der Inhalt rollt) und entfällt, solange weniger als
+//! [`BOTTOM_MIN_W`] bleiben.
 
 use egui::{Vec2, vec2};
 
-use crate::app::{self, PlanoraApp};
+use crate::app::{self, CreateKind, PlanoraApp};
 use crate::shell::{self, RightTab, ShellRects};
 use crate::state::AppState;
-use crate::{browser, projects_panel, properties, tabs, theme, versions_panel};
+use crate::{browser, icons, projects_panel, properties, tabs, theme, versions_panel};
+use planora_kernel::BoolOp;
 
 /// Breite, bis zu der die Tab-Leiste nicht umbricht (sie rollt waagerecht statt dessen).
 const TABS_UNWRAPPED: f32 = 100_000.0;
@@ -35,6 +40,10 @@ fn status_id() -> egui::Id {
     egui::Id::new("planora-field-status")
 }
 
+fn bottom_id() -> egui::Id {
+    egui::Id::new("planora-field-bottom")
+}
+
 fn banner_id() -> egui::Id {
     egui::Id::new("planora-field-banner")
 }
@@ -51,7 +60,7 @@ fn menu_width_key() -> egui::Id {
 
 /// Gemerkte Wunschbreite des unteren Befehlsfelds (Aufgabe 5).
 fn bottom_width_key() -> egui::Id {
-    egui::Id::new("planora-field-bottom").with("wanted")
+    bottom_id().with("wanted")
 }
 
 fn stored(ctx: &egui::Context, key: egui::Id) -> Option<f32> {
@@ -114,6 +123,24 @@ fn natural_width(ctx: &egui::Context, text: &str) -> f32 {
         .x
         .ceil()
 }
+
+/// Schmalste Breite, in der `text` ohne Kürzung in höchstens [`MAX_ROWS`] Zeilen passt.
+fn two_row_width(ctx: &egui::Context, text: &str) -> f32 {
+    let full = natural_width(ctx, text);
+    let (mut lo, mut hi) = (0.0_f32, full);
+    for _ in 0..12 {
+        let mid = (lo + hi) / 2.0;
+        if wrapped(ctx, text, egui::Color32::PLACEHOLDER, mid).elided {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi.ceil()
+}
+
+/// Schmalste Breite, in der das Befehlsfeld noch gezeigt wird (zwei Chips und der Rand).
+const BOTTOM_MIN_W: f32 = 120.0;
 
 /// Feld mit Text in bis zu zwei Zeilen: mindestens `min_h` hoch, sonst so hoch wie der Text.
 /// `grow_up`: die Unterkante von `rect` bleibt fest (Status), sonst die Oberkante (Hinweis).
@@ -192,7 +219,6 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
     let content = ctx.content_rect();
     // Vor der ersten Messung: oben so breit wie möglich.
     let top_w = stored(ctx, top_width_key()).unwrap_or(content.width());
-    let bottom_w = stored(ctx, bottom_width_key()).unwrap_or(0.0);
     let layout = |app: &PlanoraApp| {
         // Der Status ist so breit wie sein Text in einer Zeile (die Geometrie begrenzt ihn).
         let tab = app.ws.active_tab();
@@ -202,6 +228,16 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
             .sum()
             .x;
         let status_w = natural_width(ctx, &status.0) + margin;
+        // Das Befehlsfeld lässt dem Status die Breite, die sein Text in zwei Zeilen braucht
+        // (Meldungen und Hinweise bleiben ganz lesbar); reicht der Platz nicht, rollt das Feld.
+        let status_need = two_row_width(ctx, &status.0) + margin;
+        let bottom_cap = content.width() - 2.0 * (shell::SHELL_INSET + shell::GAP + status_need);
+        // Reicht der Platz auch dafür nicht, entfällt das Feld, solange die Meldung steht.
+        let bottom_w = match stored(ctx, bottom_width_key()) {
+            Some(_) if bottom_cap < BOTTOM_MIN_W => 0.0,
+            Some(wanted) => wanted.min(bottom_cap),
+            None => 0.0,
+        };
         let rects = shell::layout(
             content,
             &app.shell,
@@ -375,8 +411,157 @@ fn right_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     });
 }
 
-/// Unteres Befehlsfeld: das Rechteck ist in der Geometrie reserviert; Aufgabe 5 füllt es.
-fn bottom_field(_ctx: &egui::Context, _rects: &ShellRects, _app: &mut PlanoraApp) {}
+/// Was ein Knopf des Befehlsfelds auslöst; dieselben Funktionen wie im Menü.
+#[derive(Clone, Copy)]
+enum Command {
+    Boolean(BoolOp),
+    Create(CreateKind),
+    /// `true`: Fase, sonst Verrunden.
+    Blend(bool),
+}
+
+/// Warum das Befehlsfeld gerade ganz gesperrt ist (wie das Menü, dazu der Skizzen-Modus).
+fn bottom_lock(ws: &crate::workspace::Workspace) -> Option<&'static str> {
+    let tab = ws.active_tab();
+    if ws.prompt.is_some() {
+        Some("Zuerst die offene Rückfrage beantworten.")
+    } else if tab.read_only {
+        Some("In einer alten Version lässt sich nichts hinzufügen.")
+    } else if tab.state.sketch_session.is_some() {
+        Some("Zuerst die Skizze beenden.")
+    } else {
+        None
+    }
+}
+
+fn buttons_key() -> egui::Id {
+    bottom_id().with("buttons")
+}
+
+/// Beschriftung und Lage aller Knöpfe des Befehlsfelds im letzten Bild (für Tests). Beschriftung
+/// wie im Menü, bei den Chips der Name ohne „ …“.
+#[doc(hidden)]
+pub fn bottom_buttons(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<(String, egui::Rect)>>(buttons_key()))
+        .unwrap_or_default()
+}
+
+/// Chip in den Farben `(Fläche, Schrift)` aus der Palette.
+fn chip(
+    ui: &mut egui::Ui,
+    label: &str,
+    (fill, ink): (egui::Color32, egui::Color32),
+) -> egui::Response {
+    let button = egui::Button::new(egui::RichText::new(label).color(ink))
+        .fill(fill)
+        .stroke(egui::Stroke::NONE)
+        .corner_radius(egui::CornerRadius::same(theme::RADIUS_MD))
+        .min_size(vec2(0.0, theme::ROW_H));
+    let response = ui.add(button);
+    theme::focus_ring(ui, &response);
+    response
+}
+
+/// Gesperrter Knopf: Beschriftung und Grund beim Überfahren.
+fn explain(response: egui::Response, label: &str, reason: &'static str) -> egui::Response {
+    response.on_disabled_hover_ui(|ui| {
+        ui.strong(label);
+        ui.label(reason);
+    })
+}
+
+/// Unteres Befehlsfeld: Abkürzungen zu Menüaktionen (Boolesche Operationen als Chips, dann die
+/// Erzeugen- und Bearbeiten-Aktionen als Symbolknöpfe). Jeder Knopf ruft dieselbe Funktion wie
+/// der Menüeintrag und ist wie das Menü gesperrt (alte Version, offene Rückfrage), dazu im
+/// Skizzen-Modus. Zu schmal für alle Knöpfe, rollt der Inhalt waagerecht.
+fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
+    // Breite 0 bei bekannter Wunschbreite: das Feld weicht einer langen Meldung im Status.
+    if rects.bottom.width() < 1.0 && stored(ctx, bottom_width_key()).is_some() {
+        ctx.data_mut(|d| d.insert_temp(buttons_key(), Vec::<(String, egui::Rect)>::new()));
+        return;
+    }
+    let dark = app.ws.active_tab().state.dark;
+    let p = theme::palette(dark);
+    let frame = bar_frame(dark, shell::BOTTOM_H);
+    let inner = inner_size(&frame, rects.bottom.size());
+    let margin = frame.total_margin().sum().x;
+    let lock = bottom_lock(&app.ws);
+    let boolean_blocked = app.ws.active_tab().state.boolean_blocked();
+    let blend_blocked = app.ws.active_tab().state.blend_blocked();
+    let mut command = None;
+    let mut seen: Vec<(String, egui::Rect)> = Vec::new();
+    field(ctx, bottom_id(), rects.bottom.min, frame, |ui| {
+        ui.set_width(inner.x);
+        ui.set_height(inner.y);
+        let scroll = egui::ScrollArea::horizontal()
+            .id_salt("planora-field-bottom-scroll")
+            .auto_shrink([true, false])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(ui, |ui| {
+                ui.set_max_width(TABS_UNWRAPPED);
+                ui.set_height(inner.y);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    for (label, op, colors) in [
+                        ("Vereinigen", BoolOp::Union, p.chip_bridge),
+                        ("Abziehen", BoolOp::Difference, p.chip_split),
+                        ("Schneiden", BoolOp::Intersection, p.chip_boolean),
+                    ] {
+                        let reason = lock.or(boolean_blocked);
+                        let r = ui
+                            .add_enabled_ui(reason.is_none(), |ui| chip(ui, label, colors))
+                            .inner;
+                        let r = match reason {
+                            Some(why) => explain(r, label, why),
+                            None => r.on_hover_text(format!("{label} …")),
+                        };
+                        if r.clicked() {
+                            command = Some(Command::Boolean(op));
+                        }
+                        seen.push((label.to_owned(), r.rect));
+                    }
+                    ui.separator();
+                    let blend = icons::IconSource::Feature(icons::FeatureIcon::Blend);
+                    let mut items: Vec<(&str, icons::IconSource, Command, Option<&'static str>)> =
+                        CreateKind::ALL
+                            .iter()
+                            .map(|k| {
+                                let own = app::create_blocked(&app.ws, *k);
+                                (k.label(), k.icon(), Command::Create(*k), own)
+                            })
+                            .collect();
+                    items.push(("Verrunden …", blend, Command::Blend(false), blend_blocked));
+                    items.push(("Fase …", blend, Command::Blend(true), blend_blocked));
+                    for (i, (label, source, cmd, own)) in items.into_iter().enumerate() {
+                        if i == CreateKind::ALL.len() {
+                            ui.separator();
+                        }
+                        let reason = lock.or(own);
+                        let r = ui
+                            .add_enabled_ui(reason.is_none(), |ui| {
+                                icons::source_icon_button(ui, source, label, dark)
+                            })
+                            .inner;
+                        let r = match reason {
+                            Some(why) => explain(r, label, why),
+                            None => r.on_hover_text(label),
+                        };
+                        if r.clicked() {
+                            command = Some(cmd);
+                        }
+                        seen.push((label.to_owned(), r.rect));
+                    }
+                });
+            });
+        remember_width(ui, bottom_width_key(), scroll.content_size.x + margin);
+    });
+    ctx.data_mut(|d| d.insert_temp(buttons_key(), seen));
+    match command {
+        Some(Command::Boolean(op)) => app::open_boolean(&mut app.ws, op),
+        Some(Command::Create(kind)) => app::do_create(&mut app.ws, kind),
+        Some(Command::Blend(chamfer)) => app::open_blend(&mut app.ws, chamfer),
+        None => {}
+    }
+}
 
 /// Text und Farbe der Statuszeile. Vorrang: letzte Meldung (Fehlerfarbe), Skizzen-Modus
 /// (text_secondary), erstes Feature mit Fehler (Fehlerfarbe), Körperzahl (mit Hinweis bei
