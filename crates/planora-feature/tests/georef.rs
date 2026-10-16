@@ -182,6 +182,7 @@ fn resolve_line_circle_axis_sphere_point() {
             center,
             normal,
             radius,
+            arc: None,
         } => {
             assert!(near(center, top), "{center}");
             assert!((normal.normalize().z.abs() - 1.0).abs() <= EPS, "{normal}");
@@ -562,4 +563,69 @@ fn unsupported_kinds_are_named() {
         resolve_geo(&solids, &GeoRef::Edge(face_data), &tol()),
         Err(DimError::Lost(_))
     ));
+}
+
+/// Kreiskanten einer Rundung (Würfel 10, Kante Deckel/Wand 1, r 2) sind Viertelkreise: Die
+/// Auflösung liefert den Bogen (Anfang, Mitte, Ende auf dem Kreis, die Mitte je 45° von den
+/// Enden), genau wie der Maßvorschlag (`circle_edge_arc`). Volle Kreise haben keinen Bogen
+/// (siehe `resolve_line_circle_axis_sphere_point`).
+#[test]
+fn fillet_arc_edges_resolve_with_their_arc() {
+    use planora_drawing::suggest::circle_edge_arc;
+    use planora_kernel::blend::topo::{edge_uses, face_name};
+    let mut d = Document::new();
+    let b = d
+        .add_feature("Quader 1", bx(DVec3::splat(10.0), DVec3::ZERO))
+        .unwrap();
+    let body_ref = BodyRef {
+        feature: b,
+        index: 0,
+    };
+    let s = d.body(body_ref).unwrap();
+    let e = s
+        .edges
+        .iter()
+        .map(|(id, _)| id)
+        .find(|&id| {
+            let n: Vec<String> = edge_uses(s, id)
+                .iter()
+                .map(|u| face_name(s, u.face))
+                .collect();
+            n.len() == 2 && n.contains(&"Deckel".into()) && n.contains(&"Wand 1".into())
+        })
+        .unwrap();
+    let r = EdgeRef::from_edge(s, e, &tol()).unwrap();
+    d.add_feature(
+        "Rundung 1",
+        FeatureKind::Verrunden {
+            body: body_ref,
+            edges: vec![r],
+            art: BlendArt::Rundung { radius: 2.0 },
+            tangentenkette: true,
+        },
+    )
+    .unwrap();
+    let solids = all_solids(&d);
+    let s = solids[0];
+    let mut arcs = 0;
+    for (id, e) in s.edges.iter() {
+        let Curve::Circle { frame, radius } = &e.curve else {
+            continue;
+        };
+        assert!((radius - 2.0).abs() < EPS);
+        let data = geo_ref_for_edge(s, id, &tol()).unwrap();
+        let g = resolve_geo(&solids, &GeoRef::Edge(data), &tol()).unwrap();
+        let Geo3::Circle { arc: Some(arc), .. } = g else {
+            panic!("Bogen erwartet: {g:?}");
+        };
+        assert_eq!(Some(arc), circle_edge_arc(s, e));
+        for p in [arc.start, arc.mid, arc.end] {
+            assert!(((p - frame.origin).length() - 2.0).abs() < EPS);
+        }
+        let ang = |p: DVec3| (p - frame.origin).angle_between(arc.mid - frame.origin);
+        assert!((ang(arc.start) - std::f64::consts::FRAC_PI_4).abs() < 1e-9);
+        assert!((ang(arc.end) - std::f64::consts::FRAC_PI_4).abs() < 1e-9);
+        arcs += 1;
+    }
+    assert_eq!(arcs, 2, "je ein Viertelkreis an beiden Enden der Rundung");
 }

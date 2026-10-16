@@ -65,7 +65,7 @@ fn assert_span(got: Span, want: ((f64, f64), (f64, f64))) {
 #[track_caller]
 fn round(m: &Measured) -> (DVec2, f64) {
     match m.anchor {
-        Anchor::Round { center, radius } => (center, radius),
+        Anchor::Round { center, radius, .. } => (center, radius),
         ref other => panic!("kein Kreismaß: {other:?}"),
     }
 }
@@ -342,6 +342,7 @@ fn diameter_of_a_circle_seen_along_its_axis_is_a_round_anchor() {
         center: DVec3::new(3.0, 4.0, 12.0),
         normal: DVec3::NEG_Z,
         radius: 5.0,
+        arc: None,
     };
     assert_pt(
         round(&ok(
@@ -487,6 +488,7 @@ fn oblique_circle_is_refused() {
         center: DVec3::ZERO,
         normal: DVec3::new(0.0, 1.0, 1.0).normalize(),
         radius: 5.0,
+        arc: None,
     };
     for kind in [DimKind::Diameter, DimKind::Radius] {
         assert_eq!(
@@ -982,11 +984,13 @@ fn non_finite_inputs_are_invalid() {
             center: DVec3::ZERO,
             normal: DVec3::new(0.0, 0.0, nan),
             radius: 5.0,
+            arc: None,
         },
         Geo3::Circle {
             center: DVec3::ZERO,
             normal: DVec3::Z,
             radius: nan,
+            arc: None,
         },
         Geo3::Axis {
             origin: DVec3::ZERO,
@@ -1053,11 +1057,13 @@ fn non_finite_inputs_are_invalid() {
             center: DVec3::ZERO,
             normal: DVec3::Z,
             radius: 0.0,
+            arc: None,
         },
         Geo3::Circle {
             center: DVec3::ZERO,
             normal: DVec3::ZERO,
             radius: 5.0,
+            arc: None,
         },
         Geo3::Axis {
             origin: DVec3::ZERO,

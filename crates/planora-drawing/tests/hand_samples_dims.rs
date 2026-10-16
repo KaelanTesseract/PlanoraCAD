@@ -172,6 +172,26 @@ fn circle_z(x: f64, y: f64, z: f64, r: f64) -> Geo3 {
         center: p(x, y, z),
         normal: DVec3::Z,
         radius: r,
+        arc: None,
+    }
+}
+
+/// Bogen um `(x, y, z)` (Normale z) von `a` bis `b` Grad, wie ihn das Programm aus einer
+/// Rundungskante auflöst (Anfang, Mitte, Ende).
+fn arc_z(x: f64, y: f64, z: f64, r: f64, a: f64, b: f64) -> Geo3 {
+    let at = |deg: f64| {
+        let t = f64::to_radians(deg);
+        p(x + r * t.cos(), y + r * t.sin(), z)
+    };
+    Geo3::Circle {
+        center: p(x, y, z),
+        normal: DVec3::Z,
+        radius: r,
+        arc: Some(planora_drawing::dimension::Arc3 {
+            start: at(a),
+            mid: at(0.5 * (a + b)),
+            end: at(b),
+        }),
     }
 }
 
@@ -491,16 +511,16 @@ fn sample(name: &str) -> Sample {
                     hd(
                         Top,
                         Radius,
-                        vec![circle_z(r, r, c, r)],
+                        vec![arc_z(r, r, c, r, 180.0, 270.0)],
                         4.0,
-                        "Rundung links unten (R)",
+                        "Rundung links unten (R; 45° liegt nicht auf dem Viertelkreis, die Führungslinie geht durch seine Mitte bei 225°)",
                     ),
                     hd(
                         Top,
                         Radius,
-                        vec![circle_z(a - r, b - r, c, r)],
+                        vec![arc_z(a - r, b - r, c, r, 0.0, 90.0)],
                         4.0,
-                        "Rundung rechts oben (R)",
+                        "Rundung rechts oben (R, Führungslinie unter 30°)",
                     )
                     .ang(30.0),
                     hd(

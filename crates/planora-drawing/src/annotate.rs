@@ -27,12 +27,15 @@
 //!   (`Breite > L − 2·ARROW_LEN`), steht er hinter dem zweiten Ende bei
 //!   `ARROW_LEN + TEXT_AFTER` (`Start`). `text_shift` verschiebt ihn zuletzt.
 //!
-//! **Ø/R** (`Anchor::Round`): Richtung `u = (cos θ, sin θ)`, `θ = spec.angle` Grad. Pfeilspitze
+//! **Ø/R** (`Anchor::Round`): Richtung `u = (cos θ, sin θ)`, `θ = spec.angle` Grad; bei einem
+//! Bogen (`arc`) nur, wenn `θ` auf dem Bogen liegt, sonst `θ` = Winkel der Bogenmitte
+//! ([`leader_angle`]) – die Spitze sitzt immer auf der gezeichneten Linie. Pfeilspitze
 //! auf dem Kreis bei `center + u·r`, Führungslinie bis `center + u·(r + offset)`, Schulter
 //! `SHOULDER` waagerecht zur Seite von `u.x` (bei `u.x = 0` nach rechts), Text dahinter mit
 //! `TEXT_GAP` Abstand, mittig zur Schulter (`Start` rechts, `End` links), waagerecht. Ø mit
 //! `2r ≥ LARGE_DIAMETER` auf dem Blatt: stattdessen Maßlinie durch die Mitte von
-//! `center − u·r` bis `center + u·r` mit zwei Pfeilen innen, Text mittig über der Linie.
+//! `center − u·r` bis `center + u·r` mit zwei Pfeilen innen, Text mittig über der Linie (mit
+//! `θ = spec.angle`, auch bei einem Bogen).
 //!
 //! **Winkel** (`Anchor::Angle`): Bogen um den Scheitel mit Radius `|offset|` (null →
 //! `DEFAULT_OFFSET`) zwischen `d1` und `d2` in der kürzeren Richtung (gegen den Uhrzeigersinn,
@@ -42,7 +45,7 @@
 
 use crate::centerline::CenterLine;
 use crate::dimension::{
-    ACROSS_TOL, Anchor, ChainMode, DimError, DimId, DimKind, DimSpec, Measured, Tolerance,
+    ACROSS_TOL, Anchor, ArcSpan, ChainMode, DimError, DimId, DimKind, DimSpec, Measured, Tolerance,
 };
 use crate::model::ViewId;
 use crate::sheet::SheetTransform;
@@ -433,13 +436,17 @@ fn layout_with_text(
                 base,
             )
         }
-        Anchor::Round { center, radius } => {
+        Anchor::Round {
+            center,
+            radius,
+            arc,
+        } => {
             let large = m.prefix == Some('Ø');
             round(
                 &ctx,
                 xf.apply(*center),
                 radius * xf.scale,
-                spec.angle,
+                (spec.angle, arc.as_ref()),
                 large,
             )
         }
@@ -627,14 +634,51 @@ fn linear(
     out
 }
 
-fn round(ctx: &Ctx, c: DVec2, r: f64, angle_deg: f64, diameter: bool) -> Vec<Mark> {
+/// Winkel (Radiant) der Ø/R-Führungslinie zum gewünschten Winkel `angle_deg` (Grad): dieser
+/// selbst, wenn er auf dem Bogen `arc` liegt (oder bei einem vollen Kreis), sonst die
+/// Bogenmitte – so trifft die Pfeilspitze immer die gezeichnete Linie.
+pub fn leader_angle(arc: Option<&ArcSpan>, angle_deg: f64) -> f64 {
+    let th = angle_deg.to_radians();
+    match arc {
+        Some(a) if !a.contains(th) => a.mid(),
+        _ => th,
+    }
+}
+
+/// Gewünschter Winkel (Grad) für eine Führungslinie, die der Nutzer auf `angle_deg` zieht oder
+/// setzt: auf dem Bogen `arc` (oder bei einem vollen Kreis) unverändert, sonst das nähere
+/// Bogenende in Grad in `[0, 360)`.
+pub fn clamp_leader_deg(arc: Option<&ArcSpan>, angle_deg: f64) -> f64 {
+    match arc {
+        Some(a) if angle_deg.is_finite() && !a.contains(angle_deg.to_radians()) => a
+            .clamp(angle_deg.to_radians())
+            .to_degrees()
+            .rem_euclid(360.0),
+        _ => angle_deg,
+    }
+}
+
+fn round(
+    ctx: &Ctx,
+    c: DVec2,
+    r: f64,
+    (angle_deg, arc): (f64, Option<&ArcSpan>),
+    diameter: bool,
+) -> Vec<Mark> {
     if !(r.is_finite() && r > 0.0 && angle_deg.is_finite()) {
         return Vec::new();
     }
-    let th = angle_deg.to_radians();
+    let large = diameter && 2.0 * r >= LARGE_DIAMETER;
+    // Die Ø-Linie durch die Mitte bleibt beim gewünschten Winkel; die Führungslinie trifft den
+    // Bogen.
+    let th = if large {
+        angle_deg.to_radians()
+    } else {
+        leader_angle(arc, angle_deg)
+    };
     let u = DVec2::new(th.cos(), th.sin());
     let mut out = Vec::new();
-    if diameter && 2.0 * r >= LARGE_DIAMETER {
+    if large {
         let (p1, p2) = (c - u * r, c + u * r);
         out.push(ctx.line(p1, p2));
         out.push(ctx.arrow(p2, -u));

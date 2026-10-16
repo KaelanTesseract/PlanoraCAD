@@ -16,7 +16,9 @@
 //! die äußersten Querlagen aller Bezüge (bei Kette und Bezugsmaßen der ganzen Gruppe). Liegt der
 //! Zeiger auf der positiven Hälfte, ist `offset = Zeiger − größte Querlage` (mindestens
 //! [`MIN_DRAG_OFFSET_MM`]), sonst `Zeiger − kleinste Querlage` (höchstens −1 mm). Ø/R mit
-//! Führungslinie: Winkel und Abstand vom Kreis aus der Zeigerlage um die Mitte. Winkel: Radius =
+//! Führungslinie: Winkel und Abstand vom Kreis aus der Zeigerlage um die Mitte; an einem Bogen
+//! wird der Winkel auf den Bogen geklemmt (`clamp_leader_deg`, wie beim Ziehen), damit die
+//! Pfeilspitze den Bogen trifft. Winkel: Radius =
 //! Abstand des Zeigers vom Scheitel.
 //!
 //! **Vorschau = Ergebnis:** die Vorschau entsteht mit derselben Messung und demselben Layout
@@ -30,7 +32,9 @@
 use crate::dimension_state::{NO_DRAWING, NO_VIEW, VIEWS_PENDING, full_text, geo_ref, next_group};
 use crate::drawing_view::{MIN_DRAG_OFFSET_MM, normalize_deg};
 use crate::state::{AppState, BodyKind};
-use planora_drawing::annotate::{DEFAULT_OFFSET, Mark, ResolvedDims, group_base};
+use planora_drawing::annotate::{
+    DEFAULT_OFFSET, LARGE_DIAMETER, Mark, ResolvedDims, clamp_leader_deg, group_base,
+};
 use planora_drawing::dimension::{
     ChainMode, ChainSpec, DimError, DimId, DimKind, DimSpec, EndSel, Geo3, GeoRef,
     Tolerance as DimTolerance,
@@ -820,14 +824,22 @@ fn placement(
             };
             (offset, DEFAULT_ANGLE)
         }
-        Anchor::Round { center, radius } => {
+        Anchor::Round {
+            center,
+            radius,
+            arc,
+        } => {
             let c = ctx.xf.apply(*center);
             let v = pointer - c;
             let len = v.length();
+            // Die Ø-Linie durch die Mitte (großer Ø) dreht frei; eine Führungslinie bleibt auf
+            // dem Bogen.
+            let line = first.prefix == Some('Ø') && 2.0 * radius * ctx.xf.scale >= LARGE_DIAMETER;
+            let arc = if line { None } else { arc.as_ref() };
             if len.is_finite() && len > 1e-9 {
                 (
                     len - radius * ctx.xf.scale,
-                    normalize_deg(v.y.atan2(v.x).to_degrees()),
+                    normalize_deg(clamp_leader_deg(arc, v.y.atan2(v.x).to_degrees())),
                 )
             } else {
                 (DEFAULT_OFFSET, DEFAULT_ANGLE)

@@ -144,11 +144,13 @@ pub fn cylinder_circles(r: f64, h: f64) -> (Geo3, Geo3) {
             center: DVec3::ZERO,
             normal: DVec3::Z,
             radius: r,
+            arc: None,
         },
         Geo3::Circle {
             center: DVec3::new(0.0, 0.0, h),
             normal: DVec3::Z,
             radius: r,
+            arc: None,
         },
     )
 }
@@ -239,7 +241,8 @@ impl DimRng {
 /// Eigene Auflösung einer Vorschlagsherkunft nach den Regeln der Aufgabe 8, von Hand aus den
 /// Daten des Körpers (ohne Code aus `planora-drawing`): Kante mit Gerade → `Line` zwischen
 /// Anfangs- und Endpunkt (Eckpunkte), Kante mit Kreis → `Circle` (Rahmenursprung, Rahmen-z,
-/// Radius); Kantenende → `Point` (Eckpunkt); Mitte → `Point` (Kreismitte); Zylinderfläche →
+/// Radius; Bogen aus den Punkten bei `t0`, `(t0 + t1)/2`, `t1`, außer die Kreiskanten mit
+/// gleicher Mitte und gleichem Radius ergeben zusammen mindestens 2π − 1e-6); Kantenende → `Point` (Eckpunkt); Mitte → `Point` (Kreismitte); Zylinderfläche →
 /// `Axis` (Rahmenursprung, normierte Rahmen-z, Radius, Bereich der Randkanten längs der Achse,
 /// abgetastet mit 4096 Schritten je Kante); Kugelfläche → `Sphere`. Sonst `None`.
 pub fn resolve_origin(
@@ -261,11 +264,36 @@ pub fn resolve_origin(
                     a: s.vertices[e.start].point,
                     b: s.vertices[e.end].point,
                 }),
-                Curve::Circle { frame, radius } => Some(Geo3::Circle {
-                    center: frame.origin,
-                    normal: frame.z,
-                    radius: *radius,
-                }),
+                Curve::Circle { frame, radius } => {
+                    let turn: f64 = s
+                        .edges
+                        .iter()
+                        .filter_map(|(_, o)| match &o.curve {
+                            Curve::Circle {
+                                frame: f,
+                                radius: r,
+                            } if f.origin.distance(frame.origin) < 1e-9
+                                && (r - radius).abs() < 1e-9 =>
+                            {
+                                Some((o.t1 - o.t0).abs())
+                            }
+                            _ => None,
+                        })
+                        .sum();
+                    let arc = (turn < std::f64::consts::TAU - 1e-6).then(|| {
+                        planora_drawing::dimension::Arc3 {
+                            start: e.curve.point(e.t0),
+                            mid: e.curve.point(0.5 * (e.t0 + e.t1)),
+                            end: e.curve.point(e.t1),
+                        }
+                    });
+                    Some(Geo3::Circle {
+                        center: frame.origin,
+                        normal: frame.z,
+                        radius: *radius,
+                        arc,
+                    })
+                }
                 _ => None,
             }
         }
@@ -329,13 +357,26 @@ pub fn geo_near(a: &Geo3, b: &Geo3, tol: f64) -> bool {
                 center: c1,
                 normal: n1,
                 radius: r1,
+                arc: a1,
             },
             Geo3::Circle {
                 center: c2,
                 normal: n2,
                 radius: r2,
+                arc: a2,
             },
-        ) => p(*c1, *c2) && p(n1.normalize(), n2.normalize()) && f(*r1, *r2),
+        ) => {
+            let arcs = match (a1, a2) {
+                (None, None) => true,
+                (Some(x), Some(y)) => {
+                    p(x.mid, y.mid)
+                        && ((p(x.start, y.start) && p(x.end, y.end))
+                            || (p(x.start, y.end) && p(x.end, y.start)))
+                }
+                _ => false,
+            };
+            p(*c1, *c2) && p(n1.normalize(), n2.normalize()) && f(*r1, *r2) && arcs
+        }
         (
             Geo3::Axis {
                 origin: o1,

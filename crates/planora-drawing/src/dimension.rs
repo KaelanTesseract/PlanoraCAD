@@ -6,6 +6,7 @@ use crate::basis::Basis;
 use crate::limits::geom_tol;
 use crate::model::{ViewId, ViewKind};
 use planora_math::{DVec2, DVec3};
+use std::f64::consts::TAU;
 
 /// Kennung eines Maßes innerhalb einer Zeichnung (nie wiederverwendet).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -109,6 +110,16 @@ pub struct DimSpec {
     pub chain: Option<ChainSpec>,
     pub suggested: bool,
 }
+/// Bogen einer Kreiskante im Raum: Anfangs-, Mittel- und Endpunkt (auf dem Kreis). Die
+/// Reihenfolge von Anfang und Ende ist gleichgültig; der Mittelpunkt legt fest, welcher der
+/// beiden Bögen zwischen ihnen gemeint ist.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Arc3 {
+    pub start: DVec3,
+    pub mid: DVec3,
+    pub end: DVec3,
+}
+
 /// Aufgelöste Modellgeometrie eines Bezugs.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Geo3 {
@@ -117,10 +128,13 @@ pub enum Geo3 {
         a: DVec3,
         b: DVec3,
     },
+    /// Kreis oder Bogen: `arc` ist `None` für einen vollen Kreis, sonst der Bogen der Kante
+    /// (wird beim Auflösen aus dem Parameterbereich der Kante bestimmt, nie gespeichert).
     Circle {
         center: DVec3,
         normal: DVec3,
         radius: f64,
+        arc: Option<Arc3>,
     },
     /// Zylinderfläche: Achse durch `origin` mit der Richtung `dir` (wird normiert), Radius und
     /// der gezeichnete Bereich der Fläche entlang der Achse als Parameter `t0 ≤ t1` entlang der
@@ -178,10 +192,79 @@ pub enum Anchor {
         a_span: (DVec2, DVec2),
         b_span: (DVec2, DVec2),
     },
-    /// Kreis mit Blick in Achsrichtung (oder Kugel): Mittelpunkt und Radius.
-    Round { center: DVec2, radius: f64 },
+    /// Kreis mit Blick in Achsrichtung (oder Kugel): Mittelpunkt, Radius und – bei einem Bogen –
+    /// dessen Lage im Bild (`None`: voller Kreis).
+    Round {
+        center: DVec2,
+        radius: f64,
+        arc: Option<ArcSpan>,
+    },
     /// Winkel zwischen zwei Geraden: Scheitel und zwei Einheitsrichtungen vom Scheitel weg.
     Angle { vertex: DVec2, d1: DVec2, d2: DVec2 },
+}
+
+/// Ein Winkel liegt auf einem Bogen ([`ArcSpan::contains`]), wenn er höchstens so weit
+/// (Radiant) außerhalb liegt.
+pub const ARC_ANGLE_TOL: f64 = 1e-9;
+
+/// Lage eines Bogens im Bild (und auf dem Blatt, das nicht dreht): Anfangswinkel `start` in
+/// `[0, 2π)` und Überstrich `sweep` in `(0, 2π)` gegen den Uhrzeigersinn (Radiant).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArcSpan {
+    pub start: f64,
+    pub sweep: f64,
+}
+
+impl ArcSpan {
+    /// Bogen durch die Bildpunkte `a` (Anfang oder Ende), `m` (dazwischen) und `b` um `c`;
+    /// `None`, wenn ein Punkt auf der Mitte liegt, eine Zahl nicht endlich ist oder die Punkte
+    /// (fast) den vollen Kreis umfassen.
+    pub fn through(c: DVec2, a: DVec2, m: DVec2, b: DVec2) -> Option<ArcSpan> {
+        let ang = |p: DVec2| {
+            let v = p - c;
+            (v.length() > 0.0 && v.is_finite()).then(|| v.y.atan2(v.x).rem_euclid(TAU))
+        };
+        let (a0, am, a1) = (ang(a)?, ang(m)?, ang(b)?);
+        let ccw = (a1 - a0).rem_euclid(TAU);
+        let (start, sweep) = if (am - a0).rem_euclid(TAU) <= ccw {
+            (a0, ccw)
+        } else {
+            (a1, TAU - ccw)
+        };
+        let ok = start.is_finite() && sweep > ARC_ANGLE_TOL && sweep < TAU - ARC_ANGLE_TOL;
+        ok.then_some(ArcSpan { start, sweep })
+    }
+
+    /// Liegt der Winkel `t` (Radiant, beliebig) auf dem Bogen (bis auf [`ARC_ANGLE_TOL`])?
+    pub fn contains(&self, t: f64) -> bool {
+        let d = (t - self.start).rem_euclid(TAU);
+        d <= self.sweep + ARC_ANGLE_TOL || d >= TAU - ARC_ANGLE_TOL
+    }
+
+    /// Winkel der Bogenmitte (Radiant).
+    pub fn mid(&self) -> f64 {
+        self.start + 0.5 * self.sweep
+    }
+
+    /// Endwinkel `start + sweep` (Radiant).
+    pub fn end(&self) -> f64 {
+        self.start + self.sweep
+    }
+
+    /// `t` selbst, wenn er auf dem Bogen liegt, sonst das nähere Bogenende (Radiant; bei
+    /// gleichem Abstand der Anfang).
+    pub fn clamp(&self, t: f64) -> f64 {
+        if self.contains(t) {
+            return t;
+        }
+        let d = (t - self.start).rem_euclid(TAU);
+        // Außerhalb: d ∈ (sweep, 2π). Abstand zum Ende d − sweep, zum Anfang 2π − d.
+        if d - self.sweep < TAU - d {
+            self.end()
+        } else {
+            self.start
+        }
+    }
 }
 
 /// Gemessener Wert (Modell-mm, Winkel in Grad), Anker und Vorsatzzeichen (`'Ø'` oder `'R'`).
@@ -239,7 +322,13 @@ fn geo_is_finite(g: &Geo3) -> bool {
             center,
             normal,
             radius,
-        } => center.is_finite() && normal.is_finite() && radius.is_finite(),
+            arc,
+        } => {
+            center.is_finite()
+                && normal.is_finite()
+                && radius.is_finite()
+                && arc.is_none_or(|a| a.start.is_finite() && a.mid.is_finite() && a.end.is_finite())
+        }
         Geo3::Axis {
             origin,
             dir,
@@ -276,7 +365,15 @@ fn anchor_is_finite(a: &Anchor) -> bool {
                 && span_is_finite(a_span)
                 && span_is_finite(b_span)
         }
-        Anchor::Round { center, radius } => center.is_finite() && radius.is_finite(),
+        Anchor::Round {
+            center,
+            radius,
+            arc,
+        } => {
+            center.is_finite()
+                && radius.is_finite()
+                && arc.is_none_or(|a| a.start.is_finite() && a.sweep.is_finite())
+        }
         Anchor::Angle { vertex, d1, d2 } => vertex.is_finite() && d1.is_finite() && d2.is_finite(),
     }
 }
@@ -353,8 +450,9 @@ fn axis_ends(
 ///   der Überlappung, sonst an den einander nächsten Enden. Wert `|(b − a)·n|` (Abstand der
 ///   Geraden), `dir = ±n` von a nach b; Spannen = die Bildenden der Kanten. Alles andere →
 ///   `Invalid`.
-/// - **Diameter/Radius:** `Circle` mit `|n·d| ≥ 1 − VIEW_TOL` → `Round` (Mitte im Bild, `r`),
-///   Wert `2r`/`r`, Vorsatz `'Ø'`/`'R'`; mit `|n·d| ≤ VIEW_TOL` (von der Seite) → Ø als
+/// - **Diameter/Radius:** `Circle` mit `|n·d| ≥ 1 − VIEW_TOL` → `Round` (Mitte im Bild, `r`,
+///   bei einem Bogen dessen Lage im Bild aus den Bildern seiner drei Punkte, [`ArcSpan::through`];
+///   sonst und bei Zylinder und Kugel `arc = None`), Wert `2r`/`r`, Vorsatz `'Ø'`/`'R'`; mit `|n·d| ≤ VIEW_TOL` (von der Seite) → Ø als
 ///   `Linear` quer über die Bildstrecke (`a = c − r·t`, `b = c + r·t`, `t` Einheitsrichtung der
 ///   Strecke, Spannen je zweimal der Punkt), Radius →
 ///   `Invalid("Der Radius ist nur mit Blick auf den Kreis möglich.")`; `Axis` mit
@@ -670,10 +768,14 @@ fn across_axis_diameter(c0: DVec2, c1: DVec2, q: DVec2, r: f64) -> Measured {
     }
 }
 
-fn round_anchor(center: DVec2, r: f64, radius_kind: bool) -> Measured {
+fn round_anchor(center: DVec2, r: f64, arc: Option<ArcSpan>, radius_kind: bool) -> Measured {
     Measured {
         value: if radius_kind { r } else { 2.0 * r },
-        anchor: Anchor::Round { center, radius: r },
+        anchor: Anchor::Round {
+            center,
+            radius: r,
+            arc,
+        },
         prefix: Some(if radius_kind { 'R' } else { 'Ø' }),
     }
 }
@@ -692,13 +794,20 @@ fn round(g: &Geo3, basis: &Basis, radius_kind: bool) -> Result<Measured, DimErro
             center,
             normal,
             radius,
+            arc,
         } => {
             let r = positive(*radius)?;
             let n = unit3(*normal)?;
             let c = basis.project(*center);
             let cos = n.dot(d).abs();
             if cos >= 1.0 - VIEW_TOL {
-                Ok(round_anchor(c, r, radius_kind))
+                // Bogen im Bild aus den Bildern seiner drei Punkte (die Mitte wird im Raum
+                // abgezogen: genauer bei großen Koordinaten).
+                let span = arc.and_then(|a| {
+                    let q = |p: DVec3| basis.project(p - *center);
+                    ArcSpan::through(DVec2::ZERO, q(a.start), q(a.mid), q(a.end))
+                });
+                Ok(round_anchor(c, r, span, radius_kind))
             } else if cos <= VIEW_TOL {
                 if radius_kind {
                     return Err(invalid(RADIUS_SIDE));
@@ -736,12 +845,12 @@ fn round(g: &Geo3, basis: &Basis, radius_kind: bool) -> Result<Measured, DimErro
                 }
                 Ok(across_axis_diameter(s.a, s.b, q, r))
             } else {
-                Ok(round_anchor((s.a + s.b) * 0.5, r, false))
+                Ok(round_anchor((s.a + s.b) * 0.5, r, None, false))
             }
         }
         Geo3::Sphere { center, radius } => {
             let r = positive(*radius)?;
-            Ok(round_anchor(basis.project(*center), r, radius_kind))
+            Ok(round_anchor(basis.project(*center), r, None, radius_kind))
         }
         Geo3::Point(_) | Geo3::Line { .. } => Err(invalid(ROUND_REFS)),
     }

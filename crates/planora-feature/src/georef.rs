@@ -4,7 +4,8 @@
 //!
 //! Die Auflösungsregeln stimmen mit denen des Maßvorschlags (`planora_drawing::suggest`)
 //! überein, damit Schlüssel vorhandener und vorgeschlagener Maße zusammenpassen: Kante mit
-//! Gerade → `Line` zwischen ihren Eckpunkten, Kreiskante → `Circle` aus dem Kreisrahmen,
+//! Gerade → `Line` zwischen ihren Eckpunkten, Kreiskante → `Circle` aus dem Kreisrahmen mit dem
+//! Bogen der Kante ([`circle_edge_arc`], bei einem vollen Kreis keiner),
 //! Zylinderfläche → `Axis` mit der normierten Achsrichtung und dem Bereich der Randkanten
 //! ([`axial_range`]), Kugelfläche → `Sphere`.
 
@@ -14,6 +15,7 @@ use crate::refs::{
 };
 use planora_drawing::centerline::axial_range;
 use planora_drawing::dimension::{DimError, EndSel, Geo3, GeoRef, GeoRefData, TagData};
+use planora_drawing::suggest::circle_edge_arc;
 use planora_kernel::{Curve, Edge, Face, Id, Solid, Surface};
 use planora_math::{DVec3, Tolerance};
 
@@ -183,7 +185,9 @@ fn vertex(solid: &Solid, v: Id<planora_kernel::Vertex>) -> Result<DVec3, DimErro
 /// Abstand zum Hinweispunkt, siehe Modulbeschreibung) → `Ambiguous`.
 ///
 /// Regeln: `Edge` mit gerader Kurve → `Line` zwischen Anfangs- und Endpunkt der Kante, mit
-/// Kreis (voll oder Bogen) → `Circle { Mitte, Normale des Kreisrahmens, Radius }`, Ellipse und
+/// Kreis (voll oder Bogen) → `Circle { Mitte, Normale des Kreisrahmens, Radius, Bogen }` (Bogen
+/// nach [`circle_edge_arc`]: Anfang, Mitte und Ende der Kante; `None` bei vollem Kreis, auch aus
+/// mehreren Kanten), Ellipse und
 /// Freiformkurve → `Lost`; `EdgeEnd` → `Point` (Anfangs- bzw. Endpunkt; ein Vollkreis hat nur
 /// den Anfangspunkt); `Center` → `Point(Mitte)` nur für Kreise und Bögen; `Face` mit
 /// Zylinderfläche → `Axis` (Ursprung und normierte Achse des Rahmens, Radius, Bereich der
@@ -214,6 +218,7 @@ pub fn resolve_geo_cached<'a>(
                     center: frame.origin,
                     normal: frame.z,
                     radius: *radius,
+                    arc: circle_edge_arc(solid, e),
                 }),
                 _ => Err(lost(EDGE_KIND)),
             }

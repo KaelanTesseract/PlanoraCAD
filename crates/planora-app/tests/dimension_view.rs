@@ -1036,6 +1036,102 @@ fn leader_drag_changes_angle_and_offset() {
     );
 }
 
+#[test]
+fn leader_drag_on_a_fillet_arc_keeps_the_tip_on_the_arc() {
+    use planora_drawing::out2d::Out2d;
+    use planora_feature::BlendArt;
+    use planora_kernel::blend::topo::{edge_uses, face_name};
+    // Würfel 10 mit Rundung r 3 an der Kante Deckel/Wand 1; Ansichten 1:1. Der Viertelkreis
+    // (r 3 auf dem Blatt) wird aus dem Blatt gelesen: Mitte c, Anfang/Ende a0 < a1.
+    let mut st = AppState::new();
+    st.create_box(DVec3::splat(10.0)).unwrap();
+    let solid = &st.bodies[0].solid;
+    let (e, _) = solid
+        .edges
+        .iter()
+        .find(|(id, _)| {
+            let n: Vec<String> = edge_uses(solid, *id)
+                .iter()
+                .map(|u| face_name(solid, u.face))
+                .collect();
+            n.len() == 2 && n.contains(&"Deckel".to_string()) && n.contains(&"Wand 1".to_string())
+        })
+        .unwrap();
+    st.add_blend(0, &[e], BlendArt::Rundung { radius: 3.0 }, true)
+        .unwrap();
+    let d = new_drawing(&mut st);
+    add_view(&mut st, d, ViewKind::Front, 70.0, 100.0);
+    add_view(&mut st, d, ViewKind::Right, 160.0, 100.0);
+    st.drawing_ui.open(d);
+    compute(&mut st);
+    let mut h = Harness::new();
+    h.idle(&mut st);
+    h.idle(&mut st);
+    let sheet = drawing_view::last_sheet(&h.ctx).unwrap();
+    let (view, c, a0, a1) = sheet
+        .views
+        .iter()
+        .find_map(|v| {
+            v.lines.iter().find_map(|l| match l.curve {
+                Out2d::Arc { c, r, start, end } if (r - 3.0).abs() < 1e-9 && end - start < 6.0 => {
+                    Some((v.id, c, start, end))
+                }
+                _ => None,
+            })
+        })
+        .expect("Bogen der Rundung");
+    let out = suggest_for(&mut st, d, Some(view));
+    assert!(matches!(out, SuggestOutcome::Added(_)), "{}", out.message());
+    let r_dim = st
+        .document
+        .drawing(d)
+        .unwrap()
+        .dimensions
+        .iter()
+        .find(|m| m.kind == DimKind::Radius)
+        .expect("R vorgeschlagen")
+        .clone();
+    assert_eq!((r_dim.angle, r_dim.offset), (45.0, 10.0));
+    h.idle(&mut st);
+    h.idle(&mut st);
+    let dir = |t: f64| DVec2::new(t.cos(), t.sin());
+    // Gezeichnet: 45°, wenn das auf dem Bogen liegt, sonst die Bogenmitte.
+    let q = 45f64.to_radians();
+    let on_arc = |t: f64| {
+        let d = (t - a0).rem_euclid(std::f64::consts::TAU);
+        d <= a1 - a0 + 1e-9
+    };
+    let drawn = if on_arc(q) { q } else { 0.5 * (a0 + a1) };
+    // Griff in der Mitte der Führungslinie, Knick bei r + 10.
+    let grab = c + dir(drawn) * 8.0;
+    let knee = c + dir(drawn) * 13.0;
+    // Ziel des Knicks: 60° hinter dem Bogenende, Abstand 3 + 15 → geklemmt auf das Ende.
+    let target = c + dir(a1 + 60f64.to_radians()) * 18.0;
+    let k = h.k();
+    let dm = target - knee;
+    let by = vec2((dm.x * k) as f32, (-dm.y * k) as f32);
+    h.drag(&mut st, screen(&h, (grab.x, grab.y)), by);
+    let after = dim(&st, d, r_dim.id);
+    let want = a1.to_degrees();
+    let diff = (after.angle - want).rem_euclid(360.0);
+    assert!(
+        diff < 1e-3 || diff > 360.0 - 1e-3,
+        "{} vs {want}",
+        after.angle
+    );
+    assert!((after.offset - 15.0).abs() < 1e-3, "{}", after.offset);
+    // Die Pfeilspitze sitzt am Bogenende auf dem Bogen.
+    let shot = h.idle(&mut st);
+    let tip = c + dir(a1) * 3.0;
+    let tip = screen(&h, (tip.x, tip.y));
+    assert!(
+        shot.polygons()
+            .iter()
+            .any(|(pts, _)| pts.iter().any(|p| close(*p, tip, 0.05))),
+        "Pfeil bei {tip:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // (h)
 

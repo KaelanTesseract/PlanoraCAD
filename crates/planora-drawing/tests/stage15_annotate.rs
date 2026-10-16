@@ -460,7 +460,11 @@ fn spans_aligned_witness_lines_start_at_the_nearer_end() {
 fn round(center: DVec2, r: f64, prefix: char) -> Measured {
     meas(
         if prefix == 'Ø' { 2.0 * r } else { r },
-        Anchor::Round { center, radius: r },
+        Anchor::Round {
+            center,
+            radius: r,
+            arc: None,
+        },
         Some(prefix),
     )
 }
@@ -920,6 +924,7 @@ fn lost_dimension_is_red_with_a_question_mark_and_reason() {
         Some(&Anchor::Round {
             center: v(100.0, 100.0),
             radius: 10.0,
+            arc: None,
         }),
         &id_xf(),
         "weg",
@@ -1101,6 +1106,7 @@ fn scale_independence() {
             Box::new(|k| Anchor::Round {
                 center: v(3.0, 4.0) * k,
                 radius: 5.0 * k,
+                arc: None,
             }),
         ),
         (
@@ -1108,6 +1114,7 @@ fn scale_independence() {
             Box::new(|k| Anchor::Round {
                 center: v(3.0, 4.0) * k,
                 radius: 20.0 * k,
+                arc: None,
             }),
         ),
         (

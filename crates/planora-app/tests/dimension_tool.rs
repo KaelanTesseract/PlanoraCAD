@@ -704,6 +704,84 @@ fn radius_of_a_fillet_arc() {
     assert!(shot.text.contains("R2,0"), "{}", shot.text);
 }
 
+/// Bogen der Rundung r 2 an der Kante Deckel/Wand 1 im Maßstab 2:1 (r 4 auf dem Blatt):
+/// Zustand, Zeichnung, Ansicht, Mitte, Anfang und Ende des Bogens (Radiant, gegen den
+/// Uhrzeigersinn) und das Fenster.
+fn fillet_arc_drawing() -> (AppState, DrawingId, ViewId, DVec2, f64, f64, Harness) {
+    let mut st = AppState::new();
+    st.create_box(DVec3::splat(10.0)).unwrap();
+    let e = edge_between(&st.bodies[0].solid, "Deckel", "Wand 1");
+    st.add_blend(0, &[e], BlendArt::Rundung { radius: 2.0 }, true)
+        .unwrap();
+    let d = new_drawing(&mut st);
+    let two = Scale { num: 2, den: 1 };
+    add_view_scaled(&mut st, d, ViewKind::Front, 70.0, 100.0, two);
+    add_view_scaled(&mut st, d, ViewKind::Right, 160.0, 100.0, two);
+    let h = open(&mut st, d);
+    let sheet = drawing_view::last_sheet(&h.ctx).unwrap();
+    let (view, c, start, end) = sheet
+        .views
+        .iter()
+        .find_map(|v| {
+            v.lines.iter().find_map(|l| match l.curve {
+                Out2d::Arc { c, r, start, end } if (r - 4.0).abs() < 1e-9 && end - start < 6.0 => {
+                    Some((v.id, c, start, end))
+                }
+                _ => None,
+            })
+        })
+        .expect("Bogen der Rundung");
+    // Ein Viertelkreis.
+    assert!((end - start - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    (st, d, view, c, start, end, h)
+}
+
+/// Die Pfeilspitze der Führungslinie in den Markierungen.
+fn leader_tip(marks: &[Mark]) -> DVec2 {
+    let tips: Vec<DVec2> = marks
+        .iter()
+        .filter_map(|m| match m {
+            Mark::Arrow { tip, .. } => Some(*tip),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tips.len(), 1, "{marks:?}");
+    tips[0]
+}
+
+#[test]
+fn radius_placed_beside_the_arc_keeps_its_tip_on_the_arc() {
+    // Der Zeiger steht 120° hinter der Bogenmitte, also 75° hinter dem Bogenende: Der Winkel
+    // wird auf das nähere Ende (Mitte + 45°) geklemmt, die Spitze sitzt dort auf dem Bogen.
+    let (mut st, d, view, c, start, end, mut h) = fillet_arc_drawing();
+    let mid = 0.5 * (start + end);
+    let dir = |t: f64| DVec2::new(t.cos(), t.sin());
+    st.dimension_tool.set_mode(ToolMode::Radius);
+    let on = c + dir(mid) * 4.0;
+    h.click_at(&mut st, (on.x, on.y));
+    assert!(st.dimension_tool.is_ready());
+    let p = c + dir(mid + 120f64.to_radians()) * 14.0;
+    let preview = with_tool(&mut st, |t, s| t.hover(s, d, p)).expect("Vorschau");
+    assert!(
+        leader_tip(&preview).distance(c + dir(end) * 4.0) < 1e-6,
+        "Vorschau: {preview:?}"
+    );
+    // Vorschau = Ergebnis.
+    preview_equals_final(&mut st, d, p);
+    let s = dims(&st, d)[0].clone();
+    assert_eq!((s.kind, s.view), (DimKind::Radius, view));
+    let want = end.to_degrees();
+    let diff = (s.angle - want).rem_euclid(360.0);
+    assert!(diff < 1e-6 || diff > 360.0 - 1e-6, "{} vs {want}", s.angle);
+    // Abstand: Zeigerabstand − r, wie bisher.
+    assert!(near(s.offset, 10.0), "{}", s.offset);
+    let dims_now = resolve_in(&mut st, d);
+    let all = marks_in(&mut st, d, &dims_now);
+    let tip = leader_tip(&all.iter().find(|dm| dm.id == s.id).unwrap().marks);
+    assert!(tip.distance(c + dir(end) * 4.0) < 1e-6, "{tip:?}");
+    h.idle(&mut st);
+}
+
 // ---------------------------------------------------------------------------------------------
 // (g)
 

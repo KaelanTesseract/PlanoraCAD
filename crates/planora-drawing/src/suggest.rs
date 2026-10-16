@@ -13,8 +13,10 @@
 //!   Gesamtmaß nur dessen Ø noch einmal: es entfällt.
 //! - **Ø/R:** Kreiskanten mit Blick in Achsrichtung werden nach Mitte (im Raum) und Radius
 //!   zusammengefasst; ist eine davon sichtbar und ergeben sie zusammen einen vollen Kreis → Ø,
-//!   sonst (Bogen, etwa eine Rundung) → R. Jede sichtbare Kugel → Ø. Jede Zylinderfläche, deren
-//!   Achse quer zur Blickrichtung steht und deren beide Umrisslinien sichtbar sind → Ø quer.
+//!   sonst (Bogen, etwa eine Rundung) → R; der Bezug trägt den Bogen der Kante
+//!   ([`circle_edge_arc`]), damit die Führungslinie den Bogen trifft. Jede sichtbare Kugel → Ø.
+//!   Jede Zylinderfläche, deren Achse quer zur Blickrichtung steht und deren beide Umrisslinien
+//!   sichtbar sind → Ø quer.
 //! - **Bohrungsmitten:** je vollem Kreis ein waagerechtes Maß von der linken und ein senkrechtes
 //!   von der unteren Bezugskante der Gesamtmaße zum Mittelpunkt, nur wenn diese Bezugskante eine
 //!   Kante ist (kein Eckpunkt). Die Maße einer Ansicht und Richtung bilden eine Gruppe
@@ -40,7 +42,8 @@
 use crate::basis::Basis;
 use crate::centerline::axial_range;
 use crate::dimension::{
-    ACROSS_TOL, Anchor, ChainMode, ChainSpec, DimKind, EndSel, Geo3, Measured, VIEW_TOL, measure,
+    ACROSS_TOL, Anchor, Arc3, ChainMode, ChainSpec, DimKind, EndSel, Geo3, Measured, VIEW_TOL,
+    measure,
 };
 use crate::limits::geom_tol;
 use crate::model::{ViewId, ViewKind, ViewSpec};
@@ -253,10 +256,12 @@ fn key_from(kind: DimKind, geos: &[Geo3], basis: &Basis, m: &Measured) -> Option
         DimKind::Diameter | DimKind::Radius => {
             let tag = if kind == DimKind::Diameter { "D" } else { "R" };
             match geos.first()? {
+                // Der Bogen gehört nicht zum Schlüssel: alle Bögen eines Kreises sind ein Maß.
                 Geo3::Circle {
                     center,
                     normal,
                     radius,
+                    ..
                 } => axis_key(tag, *center, *normal, *radius),
                 Geo3::Axis {
                     origin,
@@ -502,7 +507,7 @@ fn view_proposals(
         let StrokeOrigin::Edge { body, edge } = s.origin else {
             continue;
         };
-        let Some((_, e)) = edge_of(bodies, body, edge) else {
+        let Some((solid, e)) = edge_of(bodies, body, edge) else {
             continue;
         };
         let Curve::Circle { frame, radius } = &e.curve else {
@@ -520,6 +525,7 @@ fn view_proposals(
                 center: frame.origin,
                 normal: frame.z,
                 radius: *radius,
+                arc: circle_edge_arc(solid, e),
             },
             body,
             edge,
@@ -534,6 +540,7 @@ fn view_proposals(
                 center: frame.origin,
                 normal: frame.z,
                 radius: *radius,
+                arc: circle_edge_arc(solid, e),
             };
             (r.body, r.edge, r.center) = (body, edge, frame.origin);
             r.visible = true;
@@ -672,6 +679,46 @@ fn view_proposals(
     }
 }
 
+/// Bogen einer Kreiskante `e` von `solid` für Maße (siehe [`Arc3`]): Anfangs-, Mittel- und
+/// Endpunkt aus dem Parameterbereich `t0…t1` der Kante. `None`, wenn die Kante kein Kreis ist
+/// oder wenn die Kreiskanten des Körpers mit derselben Mitte, Achse und demselben Radius (bis
+/// auf [`KEY_STEP`]) zusammen den vollen Umlauf ergeben (bis auf `FULL_TURN_TOL`): ein voller
+/// Kreis, auch wenn er aus mehreren Kanten besteht (dieselbe Regel wie Ø/R im Vorschlag).
+/// `planora-feature` löst Kreiskanten mit derselben Funktion auf, damit Vorschlag und gesetztes
+/// Maß denselben Bogen haben.
+pub fn circle_edge_arc(solid: &Solid, e: &Edge) -> Option<Arc3> {
+    let Curve::Circle { frame, radius } = &e.curve else {
+        return None;
+    };
+    let n = frame.z.normalize_or_zero();
+    let same = |o: &Edge| match &o.curve {
+        Curve::Circle {
+            frame: f,
+            radius: r,
+        } => {
+            f.origin.distance(frame.origin) <= KEY_STEP
+                && (r - radius).abs() <= KEY_STEP
+                && f.z.normalize_or_zero().dot(n).abs() >= 1.0 - VIEW_TOL
+        }
+        _ => false,
+    };
+    let turn: f64 = solid
+        .edges
+        .iter()
+        .filter(|(_, o)| same(o))
+        .map(|(_, o)| (o.t1 - o.t0).abs())
+        .sum();
+    if turn.is_nan() || turn >= std::f64::consts::TAU - FULL_TURN_TOL {
+        return None;
+    }
+    let p = |t: f64| e.curve.point(t);
+    Some(Arc3 {
+        start: p(e.t0),
+        mid: p(0.5 * (e.t0 + e.t1)),
+        end: p(e.t1),
+    })
+}
+
 /// Volle Kreise der Ansicht (jede Lage): Kreiskanten der Striche, zusammengefasst nach Mitte,
 /// Achse und Radius, deren Winkel zusammen einen vollen Kreis ergeben; je Kreis
 /// `(Mitte, Einheitsnormale, Radius)`.
@@ -797,6 +844,7 @@ fn extreme_refs(
                             center: frame.origin,
                             normal: frame.z,
                             radius: *radius,
+                            arc: circle_edge_arc(solid, e),
                         },
                         origin,
                         edge: true,

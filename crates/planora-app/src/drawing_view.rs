@@ -32,9 +32,9 @@ use egui::{
 };
 use planora_drawing::annotate::{
     ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, CENTER_W, DEFAULT_OFFSET, DIM_LINE_W, Mark, MarkKind,
-    ResolvedDims, TextAnchor,
+    ResolvedDims, TextAnchor, clamp_leader_deg, leader_angle,
 };
-use planora_drawing::dimension::{DimId, DimSpec};
+use planora_drawing::dimension::{ArcSpan, DimId, DimSpec};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::sheet::{DimMarks, SheetModel, build_sheet_with, view_transform};
 use planora_drawing::stroke::StrokeOrigin;
@@ -588,8 +588,14 @@ enum DimPart {
     Offset { w: DVec2, offset: f64 },
     /// Text: `text_shift` wächst um die Bewegung.
     Text { shift: (f64, f64) },
-    /// Ø/R-Führungslinie: der Knick folgt der Bewegung; Kreis mit Mitte und Radius auf dem Blatt.
-    Leader { center: DVec2, r: f64, knee: DVec2 },
+    /// Ø/R-Führungslinie: der Knick folgt der Bewegung; Kreis mit Mitte und Radius auf dem Blatt,
+    /// bei einem Bogen dessen Lage (der Winkel bleibt auf dem Bogen).
+    Leader {
+        center: DVec2,
+        r: f64,
+        knee: DVec2,
+        arc: Option<ArcSpan>,
+    },
     /// Ø-Maßlinie durch die Mitte: dreht um die Mitte mit dem Zeiger (Griff bei `from`).
     Rotate {
         center: DVec2,
@@ -1960,7 +1966,11 @@ fn dim_part(
                 offset: spec.offset,
             })
         }
-        Anchor::Round { center, radius } => {
+        Anchor::Round {
+            center,
+            radius,
+            arc,
+        } => {
             let owned = state.drawing_ui.results_for(drawing, model);
             let refs: BTreeMap<ViewId, &ViewLines> =
                 owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
@@ -1975,12 +1985,14 @@ fn dim_part(
                 });
             }
             let r = radius * xf.scale;
-            let th = spec.angle.to_radians();
+            // Der Knick, wie er gezeichnet ist (an einem Bogen ggf. in der Bogenmitte).
+            let th = leader_angle(arc.as_ref(), spec.angle);
             let u = DVec2::new(th.cos(), th.sin());
             Some(DimPart::Leader {
                 center: c,
                 r,
                 knee: c + u * (r + spec.offset),
+                arc,
             })
         }
         Anchor::Angle { .. } => {
@@ -2059,11 +2071,19 @@ fn apply_dim_drag(spec: &mut DimSpec, part: DimPart, dm: DVec2) {
             };
         }
         DimPart::Text { shift } => spec.text_shift = (shift.0 + dm.x, shift.1 + dm.y),
-        DimPart::Leader { center, r, knee } => {
+        DimPart::Leader {
+            center,
+            r,
+            knee,
+            arc,
+        } => {
             let v = knee + dm - center;
             let len = v.length();
             if len.is_finite() && len > 1e-9 {
-                spec.angle = normalize_deg(v.y.atan2(v.x).to_degrees());
+                // An einem Bogen bleibt die Spitze auf dem Bogen (Winkel auf sein näheres Ende
+                // geklemmt).
+                let deg = clamp_leader_deg(arc.as_ref(), v.y.atan2(v.x).to_degrees());
+                spec.angle = normalize_deg(deg);
                 spec.offset = len - r;
             }
         }
