@@ -4,6 +4,7 @@
 
 use crate::browser::error_color;
 use crate::mesh_body::warning_color;
+use crate::theme;
 use std::path::{Path, PathBuf};
 
 /// Höchstzahl der gezeigten Einträge eines Ordners (große Ordner bleiben bedienbar).
@@ -255,8 +256,10 @@ impl FileChooser {
             if ui.button("Ordner höher").clicked() {
                 self.up();
             }
-            let edit =
-                ui.add(egui::TextEdit::singleline(&mut self.dir_text).desired_width(f32::INFINITY));
+            let edit = theme::field(
+                ui,
+                egui::TextEdit::singleline(&mut self.dir_text).desired_width(f32::INFINITY),
+            );
             if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 self.go_to_text();
             }

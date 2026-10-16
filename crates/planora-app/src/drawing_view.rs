@@ -23,6 +23,7 @@ use crate::drawing_state::{
     ViewResult, WorkArea, default_distance, estimate_view_size, suggest_scale,
 };
 use crate::export_dialog::{REPAINT, shorten_for_display};
+use crate::icons::{self, Icon};
 use crate::state::AppState;
 use crate::{theme, viewport};
 use egui::epaint::TextShape;
@@ -787,6 +788,23 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     }
 }
 
+/// Leistenknopf ohne Rand (Fläche nur beim Überfahren). Der Stil gilt nur für diesen Knopf;
+/// ein eigener Bereich entfällt, damit die Leiste richtig umbricht.
+fn flat(button: egui::Button<'_>) -> impl egui::Widget + '_ {
+    move |ui: &mut egui::Ui| {
+        let saved = ui.style().clone();
+        theme::frameless(ui.style_mut());
+        let response = ui.add(button);
+        ui.set_style(saved);
+        response
+    }
+}
+
+/// Symbolknopf ohne Text (Vergrößern, Verkleinern); der Hinweis steht im Tooltip.
+fn icon_only<'a>(icon: Icon) -> egui::Button<'a> {
+    egui::Button::new(icons::atom(icon))
+}
+
 /// Werkzeugleiste über die ganze Breite; liefert ihr Rechteck und die gewählte Aktion.
 fn toolbar(
     ui: &mut egui::Ui,
@@ -801,67 +819,109 @@ fn toolbar(
         .and_then(|v| drawing.view(v))
         .cloned();
     let names = view_names(drawing);
+    let p = theme::palette(state.dark);
     let response = egui::Frame::NONE
         .inner_margin(egui::Margin::symmetric(8, 6))
-        .fill(ui.visuals().panel_fill)
+        .fill(p.bg_panel)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
-                if ui.selectable_label(false, "3D-Modell").clicked() {
+                // Gesperrte Teile über `add_enabled` je Element, nicht über einen eigenen
+                // Bereich (`add_enabled_ui`): ein Bereich bricht sein erstes Element nicht in die
+                // nächste Zeile um und ragte bei schmaler Leiste hinaus.
+                if ui
+                    .add(flat(icons::selectable(false, Icon::ToModel, "3D-Modell")))
+                    .clicked()
+                {
                     action = Some(Action::ToModel);
                 }
-                let _ = ui.selectable_label(
+                let _ = ui.add(flat(icons::selectable(
                     true,
+                    Icon::OpenDrawing,
                     format!("Zeichnung: {}", shorten_for_display(&drawing.name)),
-                );
+                )));
                 ui.separator();
-                ui.add_enabled_ui(editable, |ui| {
-                    ui.menu_button("Ansicht hinzufügen", |ui| {
-                        for k in ViewKind::ALL {
-                            if ui.button(k.label()).clicked() {
-                                action = Some(Action::Add(k));
-                                ui.close();
+                ui.add_enabled(editable, |ui: &mut egui::Ui| {
+                    let saved = ui.style().clone();
+                    theme::frameless(ui.style_mut());
+                    let r = ui
+                        .menu_button((icons::atom(Icon::AddView), "Ansicht hinzufügen"), |ui| {
+                            for k in ViewKind::ALL {
+                                if ui.add(icons::button(Icon::ViewFace, k.label())).clicked() {
+                                    action = Some(Action::Add(k));
+                                    ui.close();
+                                }
                             }
-                        }
-                    });
+                        })
+                        .response;
+                    ui.set_style(saved);
+                    r
                 });
-                if ui.button("Blatt einpassen").clicked() {
+                if ui
+                    .add(flat(icons::button(Icon::FitSheet, "Blatt einpassen")))
+                    .clicked()
+                {
                     action = Some(Action::Fit);
                 }
-                if ui.button("−").on_hover_text("Verkleinern").clicked() {
+                if ui
+                    .add(flat(icon_only(Icon::ZoomOut)))
+                    .on_hover_text("Verkleinern")
+                    .clicked()
+                {
                     action = Some(Action::Zoom(1.0 / ZOOM_STEP));
                 }
-                if ui.button("+").on_hover_text("Vergrößern").clicked() {
+                if ui
+                    .add(flat(icon_only(Icon::ZoomIn)))
+                    .on_hover_text("Vergrößern")
+                    .clicked()
+                {
                     action = Some(Action::Zoom(ZOOM_STEP));
                 }
                 // Zweite Zeile: Maße und die Einstellungen der gewählten Ansicht. Die Leiste hat
                 // so immer zwei Zeilen; das Wählen einer Ansicht ändert die Höhe der Blattfläche
                 // nicht (sonst verschöbe sich das Blatt mitten im Ziehen).
                 ui.end_row();
-                ui.add_enabled_ui(editable, |ui| {
-                    let tip = if selected.is_some() {
-                        "Setzt die wichtigsten Maße in die gewählte Ansicht."
-                    } else {
-                        "Setzt die wichtigsten Maße in alle Ansichten."
-                    };
-                    if ui.button(SUGGEST).on_hover_text(tip).clicked() {
-                        action = Some(Action::Suggest);
-                    }
-                });
+                let tip = if selected.is_some() {
+                    "Setzt die wichtigsten Maße in die gewählte Ansicht."
+                } else {
+                    "Setzt die wichtigsten Maße in alle Ansichten."
+                };
+                if ui
+                    .add_enabled(
+                        editable,
+                        flat(icons::button(Icon::SuggestDimensions, SUGGEST)),
+                    )
+                    .on_hover_text(tip)
+                    .clicked()
+                {
+                    action = Some(Action::Suggest);
+                }
                 // Werkzeug „Maß“: Schalter und Untermodus (immer da, damit die Leiste gleich
-                // breit bleibt; gesperrt mit Erklärung).
+                // breit bleibt; gesperrt mit Erklärung). Eingeschaltet trägt der Schalter den
+                // Akzent (Modus an).
                 let blocked = tool_blocked(drawing, editable);
-                ui.add_enabled_ui(blocked.is_none(), |ui| {
-                    let tool = &state.dimension_tool;
-                    let why = blocked.unwrap_or(TOOL_TIP);
-                    if ui
-                        .selectable_label(tool.is_active(), TOOL)
-                        .on_hover_text(TOOL_TIP)
-                        .on_disabled_hover_text(why)
-                        .clicked()
-                    {
-                        action = Some(Action::ToolToggle);
-                    }
+                let free = blocked.is_none();
+                let tool = &state.dimension_tool;
+                let why = blocked.unwrap_or(TOOL_TIP);
+                let button = if tool.is_active() {
+                    egui::Button::new((
+                        icons::text(Icon::DimensionTool, icons::LABEL_ICON_SIZE, p.on_accent),
+                        egui::RichText::new(TOOL).color(p.on_accent),
+                    ))
+                    .fill(p.accent)
+                    .selected(true)
+                } else {
+                    icons::button(Icon::DimensionTool, TOOL)
+                };
+                if ui
+                    .add_enabled(free, flat(button))
+                    .on_hover_text(TOOL_TIP)
+                    .on_disabled_hover_text(why)
+                    .clicked()
+                {
+                    action = Some(Action::ToolToggle);
+                }
+                ui.add_enabled(free, |ui: &mut egui::Ui| {
                     egui::ComboBox::from_id_salt("planora-dimension-tool")
                         .selected_text(tool.choice().label())
                         .show_ui(ui, |ui| {
@@ -872,13 +932,13 @@ fn toolbar(
                             }
                         })
                         .response
-                        .on_disabled_hover_text(why);
-                });
+                })
+                .on_disabled_hover_text(why);
                 if let Some(v) = &selected {
                     ui.separator();
                     ui.strong(names.get(&v.id).cloned().unwrap_or_default());
-                    ui.add_enabled_ui(editable, |ui| {
-                        ui.label("Maßstab");
+                    ui.add_enabled(editable, egui::Label::new("Maßstab"));
+                    ui.add_enabled(editable, |ui: &mut egui::Ui| {
                         egui::ComboBox::from_id_salt("planora-drawing-scale")
                             .selected_text(v.scale.label())
                             .show_ui(ui, |ui| {
@@ -887,31 +947,41 @@ fn toolbar(
                                         action = Some(Action::Scale(s));
                                     }
                                 }
-                            });
-                        let mut hidden = v.show_hidden;
-                        if ui
-                            .checkbox(&mut hidden, "Verdeckte Kanten zeigen")
-                            .changed()
-                        {
-                            action = Some(Action::Hidden(hidden));
-                        }
-                        // Mittellinien gibt es nur in Normansichten (Blick entlang einer
-                        // Weltachse); in der Isometrie bleibt der Schalter gesperrt.
-                        let mut centerlines = v.centerlines;
-                        if ui
-                            .add_enabled(
-                                v.kind.is_normal(),
-                                egui::Checkbox::new(&mut centerlines, CENTERLINES),
-                            )
-                            .on_disabled_hover_text(NO_ISO_CENTERLINES)
-                            .changed()
-                        {
-                            action = Some(Action::Centerlines(centerlines));
-                        }
-                        if ui.button("Ansicht löschen").clicked() {
-                            action = Some(Action::Delete);
-                        }
+                            })
+                            .response
                     });
+                    let mut hidden = v.show_hidden;
+                    if ui
+                        .add_enabled(
+                            editable,
+                            theme::Toggle::new(&mut hidden, "Verdeckte Kanten zeigen"),
+                        )
+                        .changed()
+                    {
+                        action = Some(Action::Hidden(hidden));
+                    }
+                    // Mittellinien gibt es nur in Normansichten (Blick entlang einer
+                    // Weltachse); in der Isometrie bleibt der Schalter gesperrt.
+                    let mut centerlines = v.centerlines;
+                    if ui
+                        .add_enabled(
+                            editable && v.kind.is_normal(),
+                            theme::Toggle::new(&mut centerlines, CENTERLINES),
+                        )
+                        .on_disabled_hover_text(NO_ISO_CENTERLINES)
+                        .changed()
+                    {
+                        action = Some(Action::Centerlines(centerlines));
+                    }
+                    if ui
+                        .add_enabled(
+                            editable,
+                            flat(icons::button(Icon::Delete, "Ansicht löschen")),
+                        )
+                        .clicked()
+                    {
+                        action = Some(Action::Delete);
+                    }
                 }
             });
         });
@@ -1529,19 +1599,20 @@ fn canvas_ui(
                 painter.rect_stroke(
                     rect,
                     2.0,
-                    Stroke::new(1.0, error_color(state.dark)),
+                    Stroke::new(1.0, theme::SHEET_LOST),
                     StrokeKind::Inside,
                 );
-                // Der Text bleibt im Rahmen, auch wenn er zu klein ist.
+                // Der Text bleibt im Rahmen, auch wenn er zu klein ist. Rot des Papiers (das Blatt
+                // ist in beiden Themen weiß).
                 let painter = painter.with_clip_rect(rect.intersect(canvas));
                 let inner = rect.shrink(6.0);
                 let galley = painter.layout(
                     format!("{}: {m}", v.name),
                     font.clone(),
-                    error_color(state.dark),
+                    theme::SHEET_LOST,
                     inner.width().max(1.0),
                 );
-                painter.galley(inner.min, galley, error_color(state.dark));
+                painter.galley(inner.min, galley, theme::SHEET_LOST);
             }
         }
         if state.drawing_ui.selected_view == Some(v.id) {

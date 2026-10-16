@@ -1,5 +1,6 @@
 use crate::sketch_view::{format_length, format_number};
 use crate::state::AppState;
+use crate::theme;
 use planora_feature::FeatureId;
 use planora_math::DVec3;
 use planora_sketch::model::{CurveId, CurveKind, Sketch};
@@ -193,7 +194,8 @@ impl CreateDialog {
     fn drag(ui: &mut egui::Ui, label: &str, value: &mut f64) {
         ui.horizontal(|ui| {
             ui.label(label);
-            ui.add(
+            theme::field(
+                ui,
                 egui::DragValue::new(value)
                     .speed(0.5)
                     .range(0.001..=100_000.0)
@@ -207,7 +209,7 @@ impl CreateDialog {
         let mut open = true;
         let mut create = false;
         let mut cancel = false;
-        egui::Window::new(self.title())
+        theme::window(ctx, self.title())
             .collapsible(false)
             .resizable(false)
             .open(&mut open)

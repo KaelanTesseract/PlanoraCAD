@@ -11,6 +11,7 @@ use crate::file_chooser::{ChooserAction, FileChooser};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
 use crate::state::AppState;
+use crate::theme;
 use planora_exchange::{ExchangeError, ExchangeMesh, MeshReport, check_mesh, import_file};
 use planora_feature::FeatureId;
 use std::path::{Path, PathBuf};
@@ -258,7 +259,10 @@ impl ImportDialog {
                     };
                     let mut name_card = |ui: &mut egui::Ui| {
                         ui.strong("Name");
-                        ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY));
+                        theme::field(
+                            ui,
+                            egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY),
+                        );
                         ui.add_space(4.0);
                         ui.strong("Einheit der Datei");
                         ui.horizontal_wrapped(|ui| {

@@ -14,6 +14,7 @@ use crate::dimension_state::resolve_in;
 use crate::drawing_browser::READ_ONLY_HINT;
 use crate::export_dialog::wide_window;
 use crate::state::AppState;
+use crate::theme;
 use planora_drawing::DrawingId;
 use planora_drawing::annotate::dimension_text;
 use planora_drawing::dimension::{DimId, DimKind, DimSpec, Tolerance};
@@ -364,6 +365,7 @@ impl DimensionDialog {
                                 !read_only,
                                 egui::TextEdit::singleline(&mut text).desired_width(220.0),
                             );
+                            theme::focus_ring(ui, &r);
                             note("Maßtext", &r);
                             ui.end_row();
                         });
@@ -401,6 +403,7 @@ impl DimensionDialog {
                                     !read_only,
                                     egui::TextEdit::singleline(value).desired_width(120.0),
                                 );
+                                theme::focus_ring(ui, &r);
                                 note(label, &r);
                                 ui.end_row();
                             };

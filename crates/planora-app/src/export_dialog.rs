@@ -26,6 +26,7 @@ use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
 use crate::state::{AppState, BodyKind};
+use crate::theme;
 use planora_drawing::annotate::{Mark, ResolvedDims};
 use planora_drawing::dimension::{DimError, DimSpec};
 use planora_drawing::dxf::dxf_text_fits;
@@ -86,7 +87,7 @@ const WATCH: Duration = Duration::from_millis(5);
 /// Fenster über die ganze Breite (Rand DIALOG_MARGIN), unter Menü und Tab-Leiste.
 pub(crate) fn wide_window(title: &'static str, ctx: &egui::Context) -> egui::Window<'static> {
     let width = (ctx.content_rect().width() - 2.0 * DIALOG_MARGIN).max(MIN_WIDTH);
-    egui::Window::new(title)
+    theme::window(ctx, title)
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_TOP, [0.0, DIALOG_TOP])

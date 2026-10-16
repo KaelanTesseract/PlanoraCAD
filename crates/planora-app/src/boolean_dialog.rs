@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use crate::theme;
 use planora_kernel::boolean::BoolOp;
 
 /// Offener Dialog „Boolesche Operation“: Körper A, Körper B und die Operation.
@@ -72,7 +73,7 @@ impl BooleanDialog {
     pub fn show(&mut self, ctx: &egui::Context, state: &mut AppState) -> bool {
         let mut open = true;
         let (mut run, mut cancel) = (false, false);
-        egui::Window::new("Boolesche Operation")
+        theme::window(ctx, "Boolesche Operation")
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
