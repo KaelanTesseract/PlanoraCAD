@@ -504,7 +504,7 @@ fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     ui.separator();
     let blend = ws.active_tab().state.blend_blocked();
     for (label, chamfer) in [("Verrunden …", false), ("Fase …", true)] {
-        let source = icons::IconSource::Feature(icons::FeatureIcon::Blend);
+        let source = icons::IconSource::Feature(icons::FeatureIcon::for_blend(chamfer));
         if icons::source_entry(ui, source, label, blend.is_none())
             .on_disabled_hover_text(blend.unwrap_or_default())
             .clicked()

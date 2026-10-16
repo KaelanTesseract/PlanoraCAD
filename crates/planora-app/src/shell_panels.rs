@@ -750,7 +750,8 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                     }
                     ui.separator();
                     chips_end = ui.cursor().left() - start;
-                    let blend = icons::IconSource::Feature(icons::FeatureIcon::Blend);
+                    let blend = icons::IconSource::Feature(icons::FeatureIcon::for_blend(false));
+                    let chamfer = icons::IconSource::Feature(icons::FeatureIcon::for_blend(true));
                     let mut items: Vec<(&str, icons::IconSource, Command, Option<&'static str>)> =
                         CreateKind::ALL
                             .iter()
@@ -760,7 +761,7 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                             })
                             .collect();
                     items.push(("Verrunden …", blend, Command::Blend(false), blend_blocked));
-                    items.push(("Fase …", blend, Command::Blend(true), blend_blocked));
+                    items.push(("Fase …", chamfer, Command::Blend(true), blend_blocked));
                     for (i, (label, source, cmd, own)) in items.into_iter().enumerate() {
                         if i == CreateKind::ALL.len() {
                             ui.separator();

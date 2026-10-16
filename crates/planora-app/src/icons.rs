@@ -499,9 +499,19 @@ pub enum FeatureIcon {
     Body(BodyKind),
     Move,
     Blend,
+    Chamfer,
 }
 
 impl FeatureIcon {
+    /// Symbol für Verrunden (`chamfer == false`) oder Fase (Menü, Befehlsfeld, Baumzeile).
+    pub fn for_blend(chamfer: bool) -> FeatureIcon {
+        if chamfer {
+            FeatureIcon::Chamfer
+        } else {
+            FeatureIcon::Blend
+        }
+    }
+
     /// Symbol zur Art eines Features.
     pub fn of(kind: &planora_feature::FeatureKind) -> FeatureIcon {
         use planora_feature::FeatureKind as K;
@@ -515,7 +525,7 @@ impl FeatureIcon {
             K::Revolve { .. } => FeatureIcon::Body(BodyKind::Revolution),
             K::Boolean { .. } => FeatureIcon::Body(BodyKind::Combined),
             K::Move { .. } => FeatureIcon::Move,
-            K::Verrunden { .. } => FeatureIcon::Blend,
+            K::Verrunden { art, .. } => FeatureIcon::for_blend(art.is_chamfer()),
             K::MeshBody { .. } => FeatureIcon::Body(BodyKind::Mesh),
         }
     }
@@ -528,6 +538,7 @@ pub fn paint_feature_icon(painter: &Painter, rect: Rect, icon: FeatureIcon, colo
         FeatureIcon::Body(kind) => paint_body_icon(painter, rect, kind, color),
         FeatureIcon::Move => paint_move_icon(painter, rect, color),
         FeatureIcon::Blend => paint_blend_icon(painter, rect, color),
+        FeatureIcon::Chamfer => paint_chamfer_icon(painter, rect, color),
     }
 }
 
@@ -557,6 +568,22 @@ fn paint_blend_icon(painter: &Painter, rect: Rect, color: Color32) {
     }
     pts.push(corner + vec2(bend, 0.0));
     pts.push(c + vec2(r, r));
+    painter.add(egui::Shape::line(pts, stroke));
+}
+
+/// Fase: Winkel mit gerade abgeschrägter Ecke.
+fn paint_chamfer_icon(painter: &Painter, rect: Rect, color: Color32) {
+    let stroke = Stroke::new(STROKE_WIDTH, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.38;
+    let corner = c + vec2(-r, r);
+    let bend = r * 0.9;
+    let pts: Vec<Pos2> = vec![
+        c + vec2(-r, -r),
+        corner + vec2(0.0, -bend),
+        corner + vec2(bend, 0.0),
+        c + vec2(r, r),
+    ];
     painter.add(egui::Shape::line(pts, stroke));
 }
 
