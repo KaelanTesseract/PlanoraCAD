@@ -157,20 +157,25 @@ Stand: 2026-10-16, Zweig `feature/graphit-etappe-a`. Plan: `plans/2026-10-16-gra
 
 **Abweichungen in der hellen Palette** (Kontrast unter 4,5 : 1 bzw. Unterscheidbarkeit, Spec §4 war ein Entwurf)
 - `bg_active` hell `#cfd0d5` statt `#dcdce0` (Hover und Aktiv müssen sich unterscheiden), `bg_field` hell `#dadbdf`.
-- `text_tertiary` hell `#6e6e76`; Achsenfarben und Fehlerrot (`#c62828`) hell dunkler als im Entwurf.
+- `text_tertiary` hell `#66666e`; Achsenfarben und Fehlerrot (`#c62828`) hell dunkler als im Entwurf.
+- Warnung `#8c5200`, Erfolg `#2a7020`, Markierung `#1a5cc4` hell dunkler: der Kontrasttest prüft auch `bg_viewport` `#e8e9ec` (zugleich `panel_fill`; Menü-, Tab- und Statusleiste stehen darauf) und verlangt dort 4,5 : 1. Der dunkle Graphit-Wert `text_tertiary` `#7d7d7d` bleibt davon ausgenommen (4,2 bis 4,7 : 1).
+- `disabled_alpha` 0,75 statt 0,5: gesperrter Nebentext mindestens 3 : 1 auf Fenster, Feld, Abschnitt und Eingabe in beiden Themen.
 - Skizzen-Auswahl hell `#a86a00` statt `#d9a400`, `axis_y` hell `#36903a`.
 - `ground_axis` hell bleibt unter 3 : 1 (2,45 : 1; es ist eine Linie, kein Text).
 - `drawing_surround` hell nutzt `bg_active` (geliehene Bedeutung).
 
 **Rundungen der Umsetzung**
 - `SHEET_SELECTED` bleibt `#1f6fe0` (Papier), nur das Programm-`accent` wechselt auf `#006dfd`.
-- Fehlerrot auf dem weißen Blatt im dunklen Programm läuft über `browser::ERROR_COLOR`; ein Test hängt daran. Besser wäre `SHEET_LOST` (offen, siehe `offene-punkte.md`).
+- Fehlertext und Rahmen einer fehlgeschlagenen Ansicht auf dem weißen Blatt nutzen in beiden Themen `SHEET_LOST` (Test `drawing_ui`).
+- Die 3D-Szene nimmt Raster, Achsen und Auswahl aus der Palette (`viewport::render_palette`); Flächen, Kanten und Hover bleiben bei `planora_render` (Etappe B).
+- `animation_time` 120 ms.
 - Plain-Labels sind grau (`text_secondary`), Werte und Titel stark; Hyperlinks haben `text_primary`.
 - Buttons sind im Ruhezustand ohne Fläche, mit 1 px `border_subtle` an Dialogknöpfen; Hover `text_tertiary`.
 
 **Öffentliche Schnittstelle (mehr als im Plan)**
-- `theme`: `window`, `section_header`, `SUB_HEADER_H`, `value`, `field`, `Toggle`, `menu_style`, `frameless`, `heading_font`, `label_font`, `value_font`, `kbd_font`, `text_field`, `text_field_enabled`, `focus_ring`.
-- `icons`: `atom`, `button`, `selectable`, `source_entry`, `IconSource`, `sketch_tool_icon`, `sketch_action_icon`, `source_button`, `label`, `label_colored`, `stroke_color`; 58 Symbole, 8 davon (`HandIcon`) selbst gezeichnet.
+- `theme`: `window`, `section_header`, `SUB_HEADER_H`, `value`, `field`, `Toggle`, `menu_style`, `frameless`, `heading_font`, `label_font`, `value_font`, `kbd_font`, `text_field`, `text_field_enabled`, `focus_ring`, `entry`, `DISABLED_ALPHA`, `ANIMATION_TIME`.
+- `viewport::render_palette`, `sketch_view::overlay_text` (für Tests).
+- `icons`: `atom`, `button`, `selectable`, `source_entry`, `IconSource`, `sketch_tool_icon`, `sketch_action_icon`, `source_button`, `label`, `label_colored`, `stroke_color`; 59 Phosphor-Symbole (`Icon`) und 8 selbst gezeichnete (`HandIcon`).
 - `app`: `file_menu`, `menu_bar` (`doc(hidden)`).
 Vieles davon wäre `pub(crate)`; es ist `pub`, weil Tests und mehrere Module es brauchen. Aufräumen in Etappe D.
 
