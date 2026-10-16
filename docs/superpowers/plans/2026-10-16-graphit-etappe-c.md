@@ -153,3 +153,12 @@ In `sketch_panel.rs`: `pub fn show(ctx: &egui::Context, state: &mut AppState)` z
 **Typkonsistenz:** `CubeRegion`, `cube_pieces`, `pieces_hit_test`, `current_region`, `face_text_frame`, `set_view_region`, `home` (Aufgabe 1) werden in 2 benutzt; `ShellMode`, `layout_in_mode`, `STRIP_W`, `ShellRects.strip/tool`, `TOOL_H` (3, 4) in `shell_panels.rs`/`sketch_panel.rs`/`drawing_view.rs`; `CubeColors`/`cube_colors` (2) ersetzt `GizmoColors`.
 **Proportion:** Der Plan beschreibt Entscheidungen und Tests.
 **Bekannte Risiken:** Aufgabe 2 (Text auf Flächen abbilden: Galley-Netz-Transformation oder Strichschrift als Rückfall; Hervorhebungslogik mit 2°-Toleranz), Aufgaben 3 und 4 (viele lagenabhängige Tests, Harness ohne Shell, Eingaberouting unter neuen Feldern, 800×600), Aufgabe 4 (Blatt-Vollbild mit getrenntem Einpass-Rechteck). Der Controller setzt für 1, 2, 3, 4 opus, für 5, 6 sonnet; Prüfung durch opus bei 1–4.
+
+
+## Abweichungen bei der Umsetzung (Stand Aufgabe 6)
+
+- Aufgabe 4: Die Zeilen des Werkzeugfelds sind anders gruppiert als beschrieben (Zeile 1: 3D-Modell, Zeichnung, Ansicht hinzufügen; Zeile 2: Blatt einpassen, Zoom, Maße vorschlagen, Maß, Modus), weil die alte erste Zeile bei 1100 × 700 nicht passte; die Zeilen rollen seitlich mit sichtbarem Balken. Schreibgeschützt hebt sich `free.top` um 52 statt 40. Die Maßtests laufen in 1600 × 1000 statt 1200 × 800.
+- Aufgabe 3: Das Fußfeld darf breiter sein als der Platz zwischen den Spalten; der Schalter heißt „Waagerecht/senkrecht erkennen“ (zweizeilig); Löschen in der Liste ist ein Symbolknopf; für alle Felder gibt es ein Feldrand-Hover-Widget.
+- Aufgabe 1: `current_region` behandelt `|pitch| ≥ MAX_PITCH − 1e-4` als genau senkrecht.
+- Aufgabe 5: `FeatureIcon::Chamfer`; der Menü- und Befehlsfeld-Test prüft zusätzlich per Quelltext-Suche (brüchig, zum Aufräumen vorgemerkt).
+- Aufgabe 6: Die Dokumentation steht in `README.md`, `offene-punkte.md` (Teilprojekt 13 Etappe C) und der Spec (Abschnitt 12).

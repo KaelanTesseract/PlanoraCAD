@@ -223,3 +223,50 @@ Stand: 2026-10-16, Zweig `feature/graphit-etappe-b`. Plan: `plans/2026-10-16-gra
 **Öffentliche Schnittstelle (mehr als im Plan)**: `#[doc(hidden)] pub` Testhaken `PlanoraApp::{for_tests, ws_mut, shell_mut}`, `shell_panels::{last_layout, field_rects, bottom_buttons, discard}`; `theme::{field_area, chip_fill, scroll_style, scroll_area, scroll_handle_colors}`, `viewport::{show_in, cube_rect}`, `properties::{POSITION_LABEL, ROTATION_LABEL}`, `PlanoraApp::setup_context`. Aufräumen in Etappe D.
 
 **Bewusst offen gelassen** (Einzelheiten in `offene-punkte.md`, Teilprojekt 13 Etappe B): Fenster unter 640 px, Platzierung des Skizzenfensters (es liegt bei Breiten unter etwa 1000 px über dem Navigationswürfel; Etappe C), Verrunden und Fase mit gleichem Symbol, `layout()` ohne `ShellState`, linke Spalte mit fester Meldungshöhe, erstes Einpassen bei Skizze vor dem ersten Modellbild.
+
+## 12. Festlegungen der Umsetzung Etappe C
+
+Stand: 2026-10-16, Zweig `feature/graphit-etappe-c`. Plan: `plans/2026-10-16-graphit-etappe-c.md`. Hier steht, was bei der Umsetzung entschieden wurde oder anders kam. Einzelheiten und Grenzen: `offene-punkte.md`, Teilprojekt 13 Etappe C.
+
+**Festlegungen C1–C10** (Entwurfsverfasser, der Nutzer kann sie kippen; C1 ist eine Nutzer-Entscheidung)
+- **C1 (Nutzer)** Navigationswürfel: 26 anklickbare Bereiche (6 Flächen, 12 Kanten, 8 Ecken), Home-Knopf, aktuelle Ansicht blau hervorgehoben (nur wenn die Blickrichtung auf höchstens 2° zu einem der 26 Bereiche passt, sonst nichts), Graphit-Achsenfarben leicht getönt (Rechts/Links = X, Vorne/Hinten = Y, Oben/Unten = Z), Größe 84 px, Beschriftung auf der Fläche (verzerrt und mitgedreht), Name der aktuellen Ansicht klein unter dem Würfel.
+- **C2** Home = Isometrisch und „Alles einpassen“.
+- **C3** Klick auf eine Fläche = Ansicht auf diese Fläche (`set_view`); Kante = Blick entlang der Kantennormalen (45° zwischen den beiden Flächen); Ecke = Blick auf die Ecke (Isometrie-Winkel, Pitch ±35,264°, Yaw 45° + k·90°).
+- **C4** Beschriftungsausrichtung: Seitenflächen „oben“ = +Z; Oben-Fläche „oben“ = +Y (nach hinten); Unten-Fläche „oben“ = −Y; „rechts“ = oben × Normale (nie gespiegelt).
+- **C5** Skizzenmodus: linke senkrechte Werkzeugleiste (9 Symbole, vertikal mittig, 44 px) ersetzt das linke Feld; das rechte Feld ersetzt Eigenschaften/Versionen; das Fußfeld ersetzt das Befehlsfeld; das Menü Erzeugen/Bearbeiten bleibt vollständig und beendet die Skizze wie bisher.
+- **C6** Zeichnungsmodus: Werkzeugfeld (`TOOL_H` 76) mittig unter dem oberen Feld (verschiebt `free.top`); linke Spalte unverändert; rechtes Feld „Ansicht „Name““ ersetzt Eigenschaften/Versionen; Hinweisfeld ersetzt das Befehlsfeld; das Statusfeld bleibt unten links.
+- **C7** `drawing_view::show_with` und `sketch_panel::show` zeichnen die Modusfelder selbst; liegt kein Shell-Layout im `ctx`, rechnen sie die Rechtecke mit `shell::layout_in_mode` aus `ctx.content_rect()`.
+- **C8** Das Befehlsfeld erscheint nur im Modus Modell.
+- **C9** Das Skizzenfenster entfällt vollständig (erledigt „Skizzenfenster überdeckt Würfel/Status“ aus Etappe B).
+- **C10** Fase bekommt ein eigenes Symbol (gerade Schräge); Verrunden behält `Blend`.
+
+**Navigationswürfel, Tatsachen**
+- 26 Bereiche: `CubeRegion::{Face, Edge, Corner}`, `all_regions`, `cube_pieces` (nur endliche, nach hinten sortierte, nach vorn gerichtete Stücke), `pieces_hit_test`. Namen deutsch („Vorne“, „Oben-Rechts“, „Oben-Vorne-Rechts“).
+- Home = `OrbitCamera::home()` (Isometrisch) plus `frame_all`; die Isometrie ist die Ecke Oben-Vorne-Rechts.
+- Hervorhebung: `current_region(camera, 2.0)`; nahe den Polen gilt `|pitch| ≥ MAX_PITCH − 1e-4` als genau senkrecht (die Kamera stoppt 0,573° davor).
+- Beschriftungsausrichtung nach C4 (`face_text_frame`); der Text wird als Galley-Netz auf die Fläche abgebildet und nur bei `facing ≥ 0,3` gemalt.
+- Die Kamera-Mathematik ist nicht umgebaut; `planora-render` hat nur Zusätze (`ViewFace`, `cube_faces`, `cube_hit_test`, `set_view` und ihre Tests bleiben).
+
+**Entscheidungen (Rulings)**
+- Home links neben dem Würfel (oben bündig, 2 px Überlapp), Hover-Farbe `cube_hover_fill`, Hover der aktuellen Ansicht `highlight_hover`; Würfel und Home mit `Sense::click_and_drag`.
+- Das Fußfeld der Skizze darf breiter sein als der Platz zwischen den Spalten (Status schrumpft), sonst überläuft er bei 800 × 600.
+- Schalter „Waagerecht/senkrecht erkennen“ (vorher „Automatisch waagerecht/senkrecht“) zweizeilig, Hover-Text `AUTO_AXIS_HINT`.
+- Löschen in der Abhängigkeitsliste als Symbolknopf; Maßeingabe gestapelt; Zahlenfeld mit Fokus, Esc/Enter/Entf wirken nicht auf die Skizze, solange es Fokus hat.
+- Feldrand-Hover-Widget in `shell_panels::field` für alle Felder (Mausrad am Feldrand erreicht die Fläche darunter nicht mehr).
+- Zeichnung: `DrawingLayout.canvas` = `free` (Einpassen, Zentrieren), `paint` = Fenster (Blatt, Umgebung, Eingabe). Werkzeugfeld: Zeile 1 „3D-Modell“, „Zeichnung“, Trenner, „Ansicht hinzufügen“, „Blatt einpassen“, −, +, Trenner, „Maße vorschlagen“, „Maß“, Modus; seitlich rollbar. Schreibgeschützt: `free.top` +52 (Hinweisfeld + Abstand).
+- Hinweisfeld höchstens zwei Zeilen; Maßhinweise werden gekürzt und zeigen beim Überfahren den vollen Text.
+- Test-Fenster der Maßtests 1600 × 1000 (vorher 1200 × 800), weil das Einpassen jetzt die kleinere freie Fläche nutzt.
+
+**Abweichungen vom Plan**
+- Werkzeugfeld-Zeilen anders gruppiert als im Brief (die alte erste Zeile passte bei 1100 × 700 nicht).
+- Schreibgeschützte Zeichnung: +52 statt +40.
+- Fußfeld in der Skizze breiter als „zwischen den Spalten“.
+- Schalter umbenannt und zweizeilig; Löschen als Symbolknopf; „anzeigend“ in zweiter Zeile.
+- Feldrand-Hover-Widget für alle Felder (nicht nur die neuen); im Plan nicht vorgesehen.
+- Das Werkzeugfeld rollt seitlich mit sichtbarem Balken bei Überlauf (Nachbesserung nach der Prüfung).
+- Fase-Test prüft zusätzlich den Quelltext (brüchig, siehe `offene-punkte.md`).
+
+**Patent- und Namenshinweis zum Würfel**
+Der Navigationswürfel ist eine eigene Gestaltung unter dem Namen „Navigationswürfel“; die Marke „ViewCube“ wird nicht verwendet; zum Autodesk-Patent US 7,782,319 (angemeldet 2007) wurde keine Prüfung der Ansprüche vorgenommen; vor einer kommerziellen Nutzung Rechtsberatung einholen.
+
+**Bewusst offen gelassen** (Einzelheiten in `offene-punkte.md`): Beschriftungsgröße, Hover-Kontrast der aktuellen Ansicht (3,8 : 1), Kontrast von Kanten und Ecken im Dunkeln, Werkzeugfeld in voller Breite, Ein-Bild-Wechsel zwischen den Modi, doppelter langer Skizzenhinweis. Etappe D: Dialoge, Aufräumen der `pub`-Fläche.
