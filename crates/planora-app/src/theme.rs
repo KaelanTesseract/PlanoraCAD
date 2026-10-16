@@ -424,15 +424,15 @@ pub fn value(text: impl Into<String>) -> egui::RichText {
 pub fn field(ui: &mut egui::Ui, widget: impl egui::Widget) -> egui::Response {
     let dark = ui.visuals().dark_mode;
     let inset = palette(dark).bg_inset;
-    let response = ui
-        .scope(|ui| {
-            let s = ui.style_mut();
-            s.spacing.interact_size.y = FIELD_H;
-            s.visuals.widgets.inactive.weak_bg_fill = inset;
-            s.visuals.extreme_bg_color = inset;
-            ui.add(widget)
-        })
-        .inner;
+    // Stil nur für dieses Feld ändern, ohne eigenen Bereich (der bräche in umbrechenden Zeilen
+    // nicht um).
+    let saved = ui.style().clone();
+    let s = ui.style_mut();
+    s.spacing.interact_size.y = FIELD_H;
+    s.visuals.widgets.inactive.weak_bg_fill = inset;
+    s.visuals.extreme_bg_color = inset;
+    let response = ui.add(widget);
+    ui.set_style(saved);
     focus_ring(ui, &response);
     response
 }
