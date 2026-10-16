@@ -12,8 +12,8 @@ pub const TOP_H: f32 = theme::TOOLBAR_H;
 pub const BOTTOM_H: f32 = theme::DOCK_H;
 /// Abstand zwischen zwei Feldern.
 pub const GAP: f32 = theme::SPACE_3;
-/// Höhe des Statusfeldes unten links (eine Zeile; bei langem Text wächst es auf zwei Zeilen nach
-/// oben, bleibt dabei unter der freien Fläche).
+/// Höhe des Statusfeldes unten links (eine Zeile; bei langem Text wächst es auf bis zu drei Zeilen
+/// (`STATUS_ROWS`) nach oben, bleibt dabei unter der freien Fläche).
 pub const STATUS_H: f32 = 32.0;
 /// Platz für das Hinweisfeld unter dem oberen Feld: bis zu zwei Zeilen. Eine Zeile braucht nur
 /// [`BANNER_LINE_H`].
@@ -129,7 +129,7 @@ pub fn layout_with_top_min(
         content.height() - (2.0 * SHELL_INSET + TOP_H + BOTTOM_H + 2.0 * GAP + banner_extra);
     // Zu kleines Fenster: Seitenspalten schmaler, damit die freie Fläche 200 breit bleibt.
     let side_w = if normal_free_w < MIN_FREE {
-        MIN_SIDE_W.max((content.width() - MIN_FREE - 4.0 * GAP) / 2.0)
+        MIN_SIDE_W.max((content.width() - MIN_FREE - 2.0 * (SHELL_INSET + GAP)) / 2.0)
     } else {
         theme::PANEL_WIDTH
     };

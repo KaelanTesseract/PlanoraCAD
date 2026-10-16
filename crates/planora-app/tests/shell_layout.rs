@@ -1,7 +1,10 @@
 //! Geometrie und Zustand der schwebenden Felder (reine Funktionen, ohne egui-Bild).
 
 use egui::{Rect, pos2, vec2};
-use planora_app::shell::{GAP, RightTab, SHELL_INSET, ShellRects, ShellState, layout};
+use planora_app::shell::{
+    GAP, RightTab, SHELL_INSET, ShellRects, ShellState, layout, layout_with_top_min,
+};
+use planora_app::viewport::cube_rect;
 
 fn window(w: f32, h: f32) -> Rect {
     Rect::from_min_size(pos2(0.0, 0.0), vec2(w, h))
@@ -150,9 +153,9 @@ fn small_windows_have_documented_geometry() {
         r.free,
         Rect::from_min_max(pos2(100.0, 76.0), pos2(300.0, 316.0))
     );
-    // 640x480: Spalten (640-200-48)/2 = 196, freie Fläche mittig 220..420.
+    // 640x480: Spalten (640-200-2*(16+12))/2 = 192, freie Fläche 220..420 (Abstand 12 zu den Spalten).
     let r = rects(640.0, 480.0, &ShellState::default(), false);
-    assert_eq!(r.left.width(), 196.0);
+    assert_eq!(r.left.width(), 192.0);
     assert_eq!(r.free.left(), 220.0);
     assert_eq!(r.free.right(), 420.0);
     assert_eq!(r.free.top(), 76.0);
@@ -220,4 +223,79 @@ fn banner_spans_between_the_columns_and_status_grows_to_the_bottom_field() {
     assert_eq!(short.status.width(), 90.0);
     // Auch zwei Zeilen Status (bis 56 hoch) enden unter der freien Fläche.
     assert!(wide.status.bottom() - 56.0 >= wide.free.bottom());
+}
+
+/// Wie `rects`, aber mit der Mindestbreite des oberen Felds (Menü und ein Tab, etwa 431 px).
+fn rects_with_top_min(w: f32, h: f32, read_only: bool) -> ShellRects {
+    layout_with_top_min(
+        window(w, h),
+        &ShellState::default(),
+        (600.0, 431.0),
+        520.0,
+        200.0,
+        read_only,
+    )
+}
+
+#[test]
+fn top_field_over_the_columns_when_its_minimum_does_not_fit() {
+    let h = 600.0;
+    let mut w = 800.0;
+    while w <= 1000.0 {
+        let content = window(w, h);
+        for read_only in [false, true] {
+            let r = rects_with_top_min(w, h, read_only);
+            let all = named(&r);
+            for (name, rect) in &all {
+                assert!(
+                    content.contains_rect(*rect),
+                    "{name} liegt bei {w}x{h} außerhalb: {rect:?}"
+                );
+            }
+            assert!(
+                content.contains_rect(r.free),
+                "freie Fläche bei {w} außerhalb"
+            );
+            for i in 0..all.len() {
+                for j in (i + 1)..all.len() {
+                    assert!(
+                        !overlaps(all[i].1, all[j].1),
+                        "{} und {} überlappen bei {w}x{h} (schreibgeschützt {read_only}): {:?} / {:?}",
+                        all[i].0,
+                        all[j].0,
+                        all[i].1,
+                        all[j].1
+                    );
+                }
+            }
+            assert!(!overlaps(r.top, r.left), "oben/links bei {w}");
+            assert!(!overlaps(r.top, r.right), "oben/rechts bei {w}");
+            assert!(
+                r.top.width() >= 431.0 - 0.01,
+                "oberes Feld zu schmal bei {w}"
+            );
+            if let Some(b) = r.banner {
+                assert!(b.left() >= r.left.right(), "Hinweis berührt links bei {w}");
+                assert!(
+                    b.right() <= r.right.left(),
+                    "Hinweis berührt rechts bei {w}"
+                );
+                assert!(
+                    r.free.top() >= b.bottom() + GAP - 0.01,
+                    "freie Fläche beginnt bei {w} zu nah am Hinweis: {} / {}",
+                    r.free.top(),
+                    b.bottom()
+                );
+            }
+            // Der Würfel liegt in der freien Fläche und damit unter keinem Feld.
+            let cube = cube_rect(r.free);
+            for (name, rect) in &all {
+                assert!(
+                    !overlaps(cube, *rect),
+                    "Würfel liegt bei {w}x{h} unter {name}: {cube:?} / {rect:?}"
+                );
+            }
+        }
+        w += 25.0;
+    }
 }

@@ -3,6 +3,8 @@
 //! Fläche) bzw. die Zeichnung in der freien Fläche, darüber die Dialoge. Ohne Fenster: Rohereignisse
 //! je Bild gegen einen egui-Kontext, `eframe::App::ui` mit einem leeren Testrahmen.
 
+mod common;
+
 use eframe::App as _;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use glam::Vec3;
@@ -18,7 +20,6 @@ use planora_feature::SketchPlane;
 use planora_math::DVec3;
 use planora_project::config::Config;
 use planora_project::docstore::LockMode;
-use planora_project::fsutil::new_id;
 use planora_project::library::Library;
 
 const BIG: Vec2 = vec2(1400.0, 900.0);
@@ -51,7 +52,7 @@ fn input(size: Vec2, events: Vec<Event>) -> egui::RawInput {
 }
 
 fn library_ws() -> Workspace {
-    let root = std::env::temp_dir().join(format!("planora-shell-app-{}", new_id()));
+    let root = common::temp_root("planora-shell-app");
     Workspace::new(Some(Library::open(&root).unwrap()), Config::default())
 }
 
@@ -885,4 +886,30 @@ fn sketch_mode_clicks_and_wheel_on_a_field_do_not_reach_the_sketch() {
         1,
         "Klick in der freien Fläche setzt einen Punkt"
     );
+}
+
+#[test]
+fn keyboard_zoom_is_off_after_setup() {
+    let ctx = context();
+    PlanoraApp::setup_context(&ctx);
+    assert!(!ctx.options(|o| o.zoom_with_keyboard));
+    // Strg und Plus ändert den Zoom nicht (die Felder sind in Punkten auf 800 x 600 ausgelegt).
+    let mods = Modifiers::COMMAND;
+    for key in [Key::Plus, Key::Equals, Key::Minus] {
+        let out = ctx.run_ui(
+            input(
+                SMALL,
+                vec![Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: mods,
+                }],
+            ),
+            |_| {},
+        );
+        out.drop_without_applying_deltas();
+    }
+    assert_eq!(ctx.zoom_factor(), 1.0);
 }

@@ -42,6 +42,7 @@ impl PlanoraApp {
             .as_ref()
             .expect("PlanoraCAD benötigt den wgpu-Renderer");
         cc.egui_ctx.set_fonts(fonts::definitions());
+        Self::setup_context(&cc.egui_ctx);
         GpuScene::install(render_state);
 
         let config = planora_project::config::Config::load();
@@ -54,6 +55,14 @@ impl PlanoraApp {
         let library = planora_project::library::Library::open(&root).ok();
         let ws = Workspace::new(library, config);
         Self::with_workspace(ws)
+    }
+
+    /// Einstellungen des egui-Kontexts, die nicht vom Aussehen abhängen. Kein Tastatur-Zoom
+    /// (Strg und Plus oder Minus): Die Felder sind in Punkten auf die Mindestgröße 800 × 600
+    /// ausgelegt, ein Zoom ließe sie dort nicht mehr hineinpassen.
+    #[doc(hidden)]
+    pub fn setup_context(ctx: &egui::Context) {
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
     }
 
     fn with_workspace(ws: Workspace) -> Self {
