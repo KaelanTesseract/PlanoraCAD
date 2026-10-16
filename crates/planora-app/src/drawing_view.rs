@@ -1301,10 +1301,16 @@ fn canvas_ui(
                 let delta = pos - origin;
                 let dm = DVec2::new(f64::from(delta.x) / k0, -f64::from(delta.y) / k0);
                 if let Some(cur) = drawing.dimension(dim) {
-                    let mut next = cur.clone();
-                    apply_dim_drag(&mut next, part, dm);
-                    if next != *cur {
-                        let r = state.document.update_dimension(id, dim, |s| *s = next);
+                    let changed = dragged_group(&drawing, cur, part, dm);
+                    if !changed.is_empty() {
+                        // Ein Schritt für die ganze Gruppe (Kette oder Bezugsmaße).
+                        let r = state.document.update_drawing(id, |d| {
+                            for next in changed {
+                                if let Some(m) = d.dimensions.iter_mut().find(|m| m.id == next.id) {
+                                    *m = next;
+                                }
+                            }
+                        });
                         if let Err(e) = r {
                             state.message = Some(e.to_string());
                         }
@@ -1992,6 +1998,46 @@ fn dim_part(
             (dir != DVec2::ZERO).then_some(DimPart::Radial { dir, radius, sign })
         }
     }
+}
+
+/// Die durch das Ziehen geänderten Maße. Wird die Maßlinie eines Glieds einer Kette oder von
+/// Bezugsmaßen gezogen, wandert die ganze Gruppe mit (gleiche Verschiebung für jedes Glied, je
+/// Glied auf seiner Seite begrenzt): die gemeinsame Maßlinie bzw. die Stufen bleiben erhalten.
+/// Text, Führungslinie und Winkel ziehen nur das eine Maß.
+fn dragged_group(drawing: &Drawing, cur: &DimSpec, part: DimPart, dm: DVec2) -> Vec<DimSpec> {
+    // `part` hält den Abstand vom Beginn des Ziehens, `dm` die ganze Bewegung seither; das
+    // gezogene Maß bekommt seinen Abstand daraus, die übrigen Glieder dieselbe Änderung
+    // gegenüber ihrem jetzigen Abstand.
+    let mut lead = cur.clone();
+    apply_dim_drag(&mut lead, part, dm);
+    let delta = lead.offset - cur.offset;
+    let group = match (part, cur.chain) {
+        (DimPart::Offset { .. }, Some(c)) if delta != 0.0 => Some(c.group),
+        _ => None,
+    };
+    let mut out: Vec<DimSpec> = Vec::new();
+    if lead != *cur {
+        out.push(lead);
+    }
+    let Some(group) = group else {
+        return out;
+    };
+    for m in &drawing.dimensions {
+        if m.id == cur.id || !m.chain.is_some_and(|c| c.group == group) {
+            continue;
+        }
+        let o = m.offset + delta;
+        let mut next = m.clone();
+        next.offset = if m.offset < 0.0 {
+            o.min(-MIN_DRAG_OFFSET_MM)
+        } else {
+            o.max(MIN_DRAG_OFFSET_MM)
+        };
+        if next != *m {
+            out.push(next);
+        }
+    }
+    out
 }
 
 /// Wendet eine Bewegung `dm` (Blatt-mm, y nach oben) des gezogenen Teils auf das Maß an.

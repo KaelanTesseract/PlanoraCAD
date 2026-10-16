@@ -1040,6 +1040,52 @@ fn leader_drag_changes_angle_and_offset() {
 // (h)
 
 #[test]
+fn dragging_one_member_moves_the_whole_group() {
+    use planora_drawing::dimension::{ChainMode, ChainSpec};
+    // Sollwert: dasselbe Ziehen an einem einzelnen Maß.
+    let want = {
+        let (mut st, d, _, w, mut h) = box_with_width();
+        h.drag(&mut st, screen(&h, (100.0, 125.0)), vec2(0.0, -20.0));
+        dim(&st, d, w).offset
+    };
+    assert_ne!(want, 10.0);
+    for mode in [ChainMode::Chain, ChainMode::Baseline] {
+        let (mut st, d, front, w, mut h) = box_with_width();
+        let w2 = add_width(&mut st, d, front, 0, 10.0);
+        let other = add_height(&mut st, d, front, 0, 10.0);
+        st.document
+            .update_drawing(d, |dr| {
+                for (order, id) in [w, w2].into_iter().enumerate() {
+                    let m = dr.dimensions.iter_mut().find(|m| m.id == id).unwrap();
+                    m.chain = Some(ChainSpec {
+                        group: 1,
+                        mode,
+                        order: order as u32,
+                    });
+                }
+            })
+            .unwrap();
+        h.idle(&mut st);
+        h.idle(&mut st);
+        // Gezogen wird das zweite Glied: Kette auf derselben Linie (y 125), Bezugsmaß eine
+        // Stufe höher (125 + 7).
+        let y = match mode {
+            ChainMode::Chain => 125.0,
+            ChainMode::Baseline => 132.0,
+        };
+        h.drag(&mut st, screen(&h, (100.0, y)), vec2(0.0, -20.0));
+        let (a, b) = (dim(&st, d, w).offset, dim(&st, d, w2).offset);
+        assert_eq!(a, want, "{mode:?}: gezogen wie ein einzelnes Maß");
+        assert_eq!(a, b, "{mode:?}: gemeinsamer Abstand bleibt");
+        assert_eq!(
+            dim(&st, d, other).offset,
+            10.0,
+            "{mode:?}: anderes Maß bleibt"
+        );
+    }
+}
+
+#[test]
 fn centerline_switch_is_locked_with_a_reason_in_the_isometric_view() {
     let (mut st, d, _, _, mut h) = box_with_width();
     let iso = add_view(&mut st, d, ViewKind::Isometric, 220.0, 100.0);
