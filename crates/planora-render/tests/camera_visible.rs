@@ -38,6 +38,16 @@ fn set_visible_sets_the_fields() {
     assert!((c.aspect - FULL.x / FULL.y).abs() < 1e-6);
     assert!((c.visible_aspect - VIS_SIZE.x / VIS_SIZE.y).abs() < 1e-6);
     assert!((c.visible_height_fraction - VIS_SIZE.y / FULL.y).abs() < 1e-6);
+    // Mitte (500, 280): waagerecht mittig, 20 px über der Fenstermitte (y nach oben).
+    assert!((c.ndc_offset - Vec2::new(0.0, 20.0 / 300.0)).length() < 1e-6);
+    // Nach rechts versetztes Rechteck: Mitte (550, 280).
+    let mut r = cam();
+    r.set_visible(FULL, (Vec2::new(300.0, 80.0), VIS_SIZE));
+    assert!(
+        (r.ndc_offset - Vec2::new(0.1, 20.0 / 300.0)).length() < 1e-6,
+        "{:?}",
+        r.ndc_offset
+    );
     let mut d = c;
     d.clear_visible();
     assert_eq!(d.ndc_offset, Vec2::ZERO);
@@ -52,6 +62,14 @@ fn target_projects_to_the_centre_of_the_visible_rect() {
     assert!(
         (px - Vec2::new(500.0, 280.0)).length() < 1e-3,
         "{px:?} statt (500, 280)"
+    );
+    // Waagerecht unsymmetrisch: prüft das Vorzeichen in x.
+    let mut r = cam();
+    r.set_visible(FULL, (Vec2::new(300.0, 80.0), VIS_SIZE));
+    let px = r.project(r.target, FULL).unwrap();
+    assert!(
+        (px - Vec2::new(550.0, 280.0)).length() < 1e-3,
+        "{px:?} statt (550, 280)"
     );
 }
 

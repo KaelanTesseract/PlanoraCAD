@@ -77,7 +77,9 @@ impl OrbitCamera {
     }
 
     /// Setzt das Seitenverhältnis. Zu kleine (oder nicht endliche) Größen werden ignoriert.
-    /// Ohne Versatz folgt das sichtbare Seitenverhältnis dem Fenster.
+    /// Ohne Versatz folgt das sichtbare Seitenverhältnis dem Fenster. Das gilt auch für ein
+    /// mittig liegendes, kleineres freies Rechteck (Versatz 0): Aufrufer mit freiem Rechteck
+    /// rufen daher in jedem Bild `set_visible` nach `set_viewport` auf (oder nur `set_visible`).
     pub fn set_viewport(&mut self, width: f32, height: f32) {
         if width >= 1.0 && height >= 1.0 && width.is_finite() && height.is_finite() {
             self.aspect = width / height;
@@ -157,8 +159,11 @@ impl OrbitCamera {
     pub fn frame_bounds(&mut self, min: Vec3, max: Vec3) {
         self.target = (min + max) * 0.5;
         let radius = ((max - min).length() * 0.5).max(1e-3);
-        // Öffnungswinkel und Seitenverhältnis des freien Rechtecks. Ohne freies Rechteck genau
-        // `fov_y` und `aspect` (auch wenn eine Kamera per Strukturliteral nur `aspect` setzt).
+        // Öffnungswinkel und Seitenverhältnis des freien Rechtecks. „Kein freies Rechteck“
+        // heißt Versatz 0 und Anteil 1: Dann gelten genau `fov_y` und `aspect`, und
+        // `visible_aspect` wird nicht beachtet. Grund: Kameras aus Strukturliteralen
+        // (`aspect: 1.5, ..OrbitCamera::default()`) setzen nur `aspect`, `visible_aspect`
+        // bliebe dort auf dem Standardwert 1 stehen und würde das Einpassen verändern.
         let (fov_vis, aspect_vis) =
             if self.ndc_offset == Vec2::ZERO && self.visible_height_fraction == 1.0 {
                 (self.fov_y, self.aspect)

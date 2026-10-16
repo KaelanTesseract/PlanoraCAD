@@ -270,4 +270,9 @@ fn frame_all_uses_the_visible_rect() {
             "Ecke {corner:?} bei {px:?} außerhalb des freien Rechtecks"
         );
     }
+    // Die Mitte des Körpers liegt in der Mitte des freien Rechtecks.
+    let centre = ((min + max) * 0.5).as_vec3();
+    let px = s.camera.project(centre, full).unwrap();
+    let want = vis_min + vis_size * 0.5;
+    assert!((px - want).length() < 2.0, "{px:?} statt {want:?}");
 }
