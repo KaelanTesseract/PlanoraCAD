@@ -1,5 +1,7 @@
 //! Tab-Leiste über der 3D-Ansicht.
 
+use crate::icons::{self, Icon};
+use crate::theme;
 use crate::workspace::Workspace;
 
 /// Kennzeichen geänderter Tabs hinter dem Namen.
@@ -8,28 +10,41 @@ const DIRTY_MARK: char = '●';
 /// Radius des gezeichneten Kennzeichens im Verhältnis zur Schriftgröße.
 const DIRTY_MARK_RADIUS: f32 = 0.22;
 
-/// Tab-Leiste: Klick aktiviert, „×“ schließt (mit Rückfrage bei Änderungen), „+“ legt einen
-/// neuen Tab an. Geänderte Tabs tragen „●“ hinter dem Namen.
+/// Größe der Symbole „Schließen“ und „Neu“.
+const ICON_SIZE: f32 = 14.0;
+
+/// Symbolknopf ohne Rand (Fläche nur beim Überfahren).
+fn icon_button(ui: &mut egui::Ui, icon: Icon) -> egui::Response {
+    ui.add(egui::Button::new(icons::text(
+        icon,
+        ICON_SIZE,
+        egui::Color32::PLACEHOLDER,
+    )))
+}
+
+/// Tab-Leiste: Klick aktiviert, das Symbol „Schließen“ schließt (mit Rückfrage bei Änderungen),
+/// „Neu“ legt einen neuen Tab an. Geänderte Tabs tragen „●“ hinter dem Namen. Aktiver Tab:
+/// Fläche `bg_active`, Text `text_primary`; inaktive Tabs `text_secondary` ohne Fläche.
 pub fn show(ui: &mut egui::Ui, ws: &mut Workspace) {
     let mut activate = None;
     let mut close = None;
     let mut add = false;
     ui.horizontal_wrapped(|ui| {
+        theme::frameless(ui.style_mut());
+        ui.spacing_mut().item_spacing.x = theme::SPACE_1;
         for (i, t) in ws.tabs.iter().enumerate() {
             if tab_label(ui, i == ws.active, &t.title(), t.is_dirty()).clicked() {
                 activate = Some(i);
             }
-            if ui
-                .small_button("×")
+            if icon_button(ui, Icon::Close)
                 .on_hover_text("Schließen (Strg+W)")
                 .clicked()
             {
                 close = Some(i);
             }
-            ui.add_space(6.0);
+            ui.add_space(theme::SPACE_2);
         }
-        if ui
-            .small_button("+")
+        if icon_button(ui, Icon::NewTab)
             .on_hover_text("Neues Dokument (Strg+N)")
             .clicked()
         {
@@ -47,7 +62,7 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
 }
 
-/// Wählbarer Tab-Kopf „Name ●“. Die Oberflächenschrift (Roboto) hat kein Zeichen „●“; der Text
+/// Wählbarer Tab-Kopf „Name ●“. Auf das Zeichen „●“ der Schrift ist kein Verlass; der Text
 /// enthält es trotzdem (für Bildschirmleser und Tests), es wird aber unsichtbar gesetzt und als
 /// gefüllter Kreis an seiner Stelle gezeichnet.
 fn tab_label(ui: &mut egui::Ui, selected: bool, title: &str, dirty: bool) -> egui::Response {

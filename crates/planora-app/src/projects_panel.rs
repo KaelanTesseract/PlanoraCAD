@@ -5,6 +5,7 @@
 //! Bibliothek und werden von ihr geprüft.
 
 use crate::browser::error_color;
+use crate::theme;
 use crate::workspace::{Prompt, Workspace};
 use planora_project::ProjectError;
 use planora_project::config::Config;
@@ -257,7 +258,10 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut ProjectsUi) {
         let mut done = false;
         let mut create = false;
         ui.horizontal(|ui| {
-            let r = ui.add(egui::TextEdit::singleline(name).hint_text("Projektname"));
+            let r = theme::field(
+                ui,
+                egui::TextEdit::singleline(name).hint_text("Projektname"),
+            );
             if ui.button("Anlegen").clicked()
                 || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
             {
@@ -351,7 +355,10 @@ fn root_field(
 ) -> RootField {
     let mut out = RootField::Open;
     ui.horizontal_wrapped(|ui| {
-        ui.add(egui::TextEdit::singleline(text).hint_text("Projektordner"));
+        theme::field(
+            ui,
+            egui::TextEdit::singleline(text).hint_text("Projektordner"),
+        );
         if ui.button("Übernehmen").clicked() {
             let t = text.trim();
             if t.is_empty() {
@@ -466,8 +473,8 @@ fn label(path: &NodePath) -> String {
     path.join(" / ")
 }
 
-fn dialog_window(title: &str, key: &str) -> egui::Window<'static> {
-    egui::Window::new(title.to_string())
+fn dialog_window(ctx: &egui::Context, title: &str, key: &str) -> egui::Window<'static> {
+    theme::window(ctx, title)
         .id(egui::Id::new(("planora_projects_dialog", key.to_string())))
         .collapsible(false)
         .resizable(false)
@@ -480,9 +487,9 @@ fn dialog_window(title: &str, key: &str) -> egui::Window<'static> {
 fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) {
     if let Some((parent, mut name)) = st.new_folder.take() {
         let (mut ok, mut cancel) = (false, false);
-        dialog_window("Neuer Ordner", "folder").show(ctx, |ui| {
+        dialog_window(ctx, "Neuer Ordner", "folder").show(ctx, |ui| {
             ui.label(format!("In „{}“:", label(&parent)));
-            ui.text_edit_singleline(&mut name);
+            theme::field(ui, egui::TextEdit::singleline(&mut name));
             ui.horizontal(|ui| {
                 ok = ui.button("Anlegen").clicked();
                 cancel = ui.button("Abbrechen").clicked();
@@ -499,9 +506,9 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) {
     }
     if let Some((path, mut name)) = st.rename.take() {
         let (mut ok, mut cancel) = (false, false);
-        dialog_window("Umbenennen", "rename").show(ctx, |ui| {
+        dialog_window(ctx, "Umbenennen", "rename").show(ctx, |ui| {
             ui.label(format!("Neuer Name für „{}“:", label(&path)));
-            ui.text_edit_singleline(&mut name);
+            theme::field(ui, egui::TextEdit::singleline(&mut name));
             ui.horizontal(|ui| {
                 ok = ui.button("Umbenennen").clicked();
                 cancel = ui.button("Abbrechen").clicked();
@@ -518,7 +525,7 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) {
             containers(nodes, &path, &mut targets);
         }
         let (mut ok, mut cancel) = (false, false);
-        dialog_window("Verschieben", "move").show(ctx, |ui| {
+        dialog_window(ctx, "Verschieben", "move").show(ctx, |ui| {
             ui.label(format!("„{}“ verschieben nach:", label(&path)));
             egui::ComboBox::from_id_salt("planora_projects_move_target")
                 .selected_text(
@@ -550,7 +557,7 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) {
     }
     if let Some(path) = st.confirm_delete.take() {
         let (mut ok, mut cancel) = (false, false);
-        dialog_window("Löschen", "delete").show(ctx, |ui| {
+        dialog_window(ctx, "Löschen", "delete").show(ctx, |ui| {
             ui.label(format!("„{}“ in den Papierkorb verschieben?", label(&path)));
             ui.horizontal(|ui| {
                 ok = ui.button("In den Papierkorb").clicked();

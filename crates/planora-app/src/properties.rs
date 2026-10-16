@@ -2,6 +2,7 @@ use crate::browser::error_color;
 use crate::mesh_body::{euler_degrees, report_text, rotation_from_degrees, warning_color};
 use crate::sketch_view::format_number;
 use crate::state::AppState;
+use crate::theme;
 use planora_exchange::MeshTransform;
 use planora_feature::{
     BlendArt, FeatureId, FeatureKind, FeatureStatus, MAX_MESH_SCALE, MIN_MESH_SCALE, SketchPlane,
@@ -32,8 +33,8 @@ const MESH_BODY_HINT: &str = concat!(
 /// Eigenschaften: für einen gewählten Körper Maße, Fläche/Kante und Position; für ein
 /// gewähltes Feature Art, Name, Status und Parameter.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
-    ui.heading("Eigenschaften");
-    ui.add_space(4.0);
+    theme::section_header(ui, "Eigenschaften", theme::HEADER_H);
+    ui.add_space(theme::SPACE_1);
     if let Some(index) = state.selected_body.filter(|&i| i < state.bodies.len()) {
         body(ui, state, index);
     } else if let Some(id) = state
@@ -54,7 +55,7 @@ fn name_field(ui: &mut egui::Ui, id: Option<FeatureId>, current: &str) -> Option
     let mut name = ui
         .data(|d| d.get_temp::<String>(key))
         .unwrap_or_else(|| current.to_string());
-    let response = ui.text_edit_singleline(&mut name);
+    let response = theme::field(ui, egui::TextEdit::singleline(&mut name));
     let mut renamed = None;
     if response.changed() {
         if !name.trim().is_empty() && name != current {
@@ -242,11 +243,11 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
         .num_columns(2)
         .show(ui, |ui| {
             ui.label("Art");
-            ui.label(label);
+            ui.label(theme::value(label));
             ui.end_row();
             ui.label("Status");
             match &status {
-                FeatureStatus::Ok => ui.label("berechnet"),
+                FeatureStatus::Ok => ui.label(theme::value("berechnet")),
                 FeatureStatus::Error(e) => {
                     ui.colored_label(error_color(ui.visuals().dark_mode), format!("Fehler: {e}"))
                 }
@@ -259,7 +260,7 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
             ui.end_row();
             for (k, v) in &rows {
                 ui.label(*k);
-                ui.label(v);
+                ui.label(theme::value(v));
                 ui.end_row();
             }
         });
@@ -290,10 +291,10 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
 /// Zeilen „Volumen“ und „Oberfläche“ des Eigenschaften-Rasters.
 fn mass_rows(ui: &mut egui::Ui, mass: &planora_mesh::MassProperties) {
     ui.label("Volumen");
-    ui.label(format!("≈ {:.2} mm³", mass.volume));
+    ui.label(theme::value(format!("≈ {:.2} mm³", mass.volume)));
     ui.end_row();
     ui.label("Oberfläche");
-    ui.label(format!("≈ {:.2} mm²", mass.surface_area));
+    ui.label(theme::value(format!("≈ {:.2} mm²", mass.surface_area)));
     ui.end_row();
 }
 
@@ -318,20 +319,23 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         egui::Grid::new("body_props").num_columns(2).show(ui, |ui| {
             mass_rows(ui, &body.mass);
             ui.label("Schwerpunkt");
-            ui.label(format!(
+            ui.label(theme::value(format!(
                 "{:.2} / {:.2} / {:.2} mm",
                 body.mass.centroid.x, body.mass.centroid.y, body.mass.centroid.z
-            ));
+            )));
             ui.end_row();
             ui.label("Abmessungen");
-            ui.label(format!("{:.2} × {:.2} × {:.2} mm", size.x, size.y, size.z));
+            ui.label(theme::value(format!(
+                "{:.2} × {:.2} × {:.2} mm",
+                size.x, size.y, size.z
+            )));
             ui.end_row();
             ui.label("Position (x/y/z)");
             // Lage der unteren Ecke der Hülle; Änderungen verschieben den Körper.
             let mut position = min;
             ui.horizontal(|ui| {
                 for value in [&mut position.x, &mut position.y, &mut position.z] {
-                    let r = ui.add(egui::DragValue::new(value).speed(0.5).suffix(" mm"));
+                    let r = theme::field(ui, egui::DragValue::new(value).speed(0.5).suffix(" mm"));
                     dragging |= r.dragged();
                 }
             });
@@ -341,7 +345,7 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
             ui.end_row();
             ui.label("Flächen / Kanten");
             let (faces, edges) = state.kernel.counts(&body.solid);
-            ui.label(format!("{faces} / {edges}"));
+            ui.label(theme::value(format!("{faces} / {edges}")));
             ui.end_row();
         });
     }
@@ -351,7 +355,10 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         Some(Pick::Face(f)) if f.body == index => {
             match state.kernel.face_kind(&state.bodies[index].solid, f.face) {
                 Some(kind) => {
-                    ui.label(format!("Ausgewählte Fläche: {}", kind.label()));
+                    ui.label(theme::value(format!(
+                        "Ausgewählte Fläche: {}",
+                        kind.label()
+                    )));
                 }
                 None => {
                     ui.weak("Klicke im Viewport eine Fläche oder Kante an.");
@@ -369,11 +376,11 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
                         .map_or(0.0, |line| {
                             line.points.windows(2).map(|w| w[0].distance(w[1])).sum()
                         });
-                    ui.label(format!(
+                    ui.label(theme::value(format!(
                         "Ausgewählte Kante: {}, Länge ≈ {:.2} mm",
                         kind.label(),
                         length
-                    ));
+                    )));
                 }
                 None => {
                     ui.weak("Klicke im Viewport eine Fläche oder Kante an.");
@@ -420,28 +427,32 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         let size = body.bounds.1 - body.bounds.0;
         egui::Grid::new("mesh_props").num_columns(2).show(ui, |ui| {
             ui.label("Art");
-            ui.label("Netz-Körper");
+            ui.label(theme::value("Netz-Körper"));
             ui.end_row();
             mass_rows(ui, &body.mass);
             ui.label("Abmessungen");
-            ui.label(format!("{:.2} × {:.2} × {:.2} mm", size.x, size.y, size.z));
+            ui.label(theme::value(format!(
+                "{:.2} × {:.2} × {:.2} mm",
+                size.x, size.y, size.z
+            )));
             ui.end_row();
             ui.label("Position (x/y/z)");
             ui.horizontal(|ui| {
                 for v in [&mut offset.x, &mut offset.y, &mut offset.z] {
-                    ui.add(egui::DragValue::new(v).speed(0.5).suffix(" mm"));
+                    theme::field(ui, egui::DragValue::new(v).speed(0.5).suffix(" mm"));
                 }
             });
             ui.end_row();
             ui.label("Drehung (x/y/z)");
             ui.horizontal(|ui| {
                 for v in [&mut degrees.x, &mut degrees.y, &mut degrees.z] {
-                    ui.add(egui::DragValue::new(v).speed(1.0).suffix(" °"));
+                    theme::field(ui, egui::DragValue::new(v).speed(1.0).suffix(" °"));
                 }
             });
             ui.end_row();
             ui.label("Maßstab");
-            ui.add(
+            theme::field(
+                ui,
                 egui::DragValue::new(&mut scale)
                     .speed(0.01)
                     .range(MIN_MESH_SCALE..=MAX_MESH_SCALE),
@@ -449,10 +460,10 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
             ui.end_row();
             if let Some(r) = body.mesh_report {
                 ui.label("Dreiecke");
-                ui.label(r.triangles.to_string());
+                ui.label(theme::value(r.triangles.to_string()));
                 ui.end_row();
                 ui.label(CLOSED_AT_IMPORT_LABEL);
-                ui.label(if r.closed { "ja" } else { "nein" });
+                ui.label(theme::value(if r.closed { "ja" } else { "nein" }));
                 ui.end_row();
             }
         });

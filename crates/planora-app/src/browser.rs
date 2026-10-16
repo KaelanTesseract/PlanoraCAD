@@ -9,10 +9,13 @@ use crate::theme;
 use egui::{Color32, Sense, vec2};
 use planora_feature::{FeatureId, FeatureKind, FeatureStatus, SketchPlane};
 
-const ROW_HEIGHT: f32 = 28.0;
+/// Zeilenhöhe (Graphit: 24).
+const ROW_HEIGHT: f32 = theme::ROW_H;
 /// Einrückung der Körperzeilen unter ihrem Feature.
 const BODY_INDENT: f32 = 22.0;
 const MARKER_HEIGHT: f32 = 20.0;
+/// Größe der Zeilensymbole.
+const ICON_SIZE: f32 = 16.0;
 /// Rot für Fehler im dunklen Thema (Wert aus der Palette); die Oberfläche nutzt `error_color`.
 pub const ERROR_COLOR: Color32 = theme::DARK.error;
 
@@ -24,8 +27,6 @@ pub fn error_color(dark: bool) -> Color32 {
 const MARKER_TEXT: &str = "Berechnung endet hier";
 /// Kurze Statustexte rechts in den Zeilen.
 const STATUS_WORDS: [&str; 4] = ["Fehler", "übersprungen", "unterdrückt", "nicht berechnet"];
-/// Schriftgröße der Statustexte und der Rückroll-Linie.
-const SMALL_FONT: f32 = 12.0;
 
 // ---- Zustandsfunktionen -----------------------------------------------------------------------
 
@@ -337,15 +338,27 @@ pub(crate) fn row(
             .push((name.to_string(), full));
     });
     let rect = egui::Rect::from_min_max(full.min + vec2(indent, 0.0), full.max);
+    // Graphit: in Ruhe ohne Fläche und in text_secondary; überfahren bg_field, gewählt bg_active
+    // (neutral, kein Akzent), beide mit text_primary.
+    let dark = ui.visuals().dark_mode;
+    let p = theme::palette(dark);
+    let hovered = response.hovered() && ui.is_enabled();
     if selected {
         ui.painter()
-            .rect_filled(rect, 6.0, ui.visuals().selection.bg_fill);
-    } else if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, 6.0, ui.visuals().widgets.hovered.weak_bg_fill);
+            .rect_filled(rect, theme::RADIUS_SM, p.bg_active);
+    } else if hovered {
+        ui.painter().rect_filled(rect, theme::RADIUS_SM, p.bg_field);
     }
-    let color = color.unwrap_or_else(|| ui.visuals().text_color());
-    let icon_rect = egui::Rect::from_min_size(rect.min + vec2(4.0, 2.0), vec2(24.0, 24.0));
+    let active = selected || hovered;
+    // Text und gezeichnetes Symbol in derselben Farbe (Symbolfarbe wie bei allen Handsymbolen).
+    let color = color.unwrap_or(crate::icons::stroke_color(dark, active));
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(
+            rect.min.x + theme::SPACE_2 + ICON_SIZE / 2.0,
+            rect.center().y,
+        ),
+        vec2(ICON_SIZE, ICON_SIZE),
+    );
     paint_icon(ui.painter(), icon_rect, color);
     // Lange Namen werden vor der Statusspalte abgeschnitten.
     let name_clip = egui::Rect::from_min_max(
@@ -356,10 +369,10 @@ pub(crate) fn row(
         ),
     );
     let name_rect = ui.painter().with_clip_rect(name_clip).text(
-        rect.min + vec2(36.0, ROW_HEIGHT / 2.0),
+        egui::pos2(icon_rect.right() + theme::SPACE_2, rect.center().y),
         egui::Align2::LEFT_CENTER,
         name,
-        egui::FontId::proportional(14.0),
+        theme::label_font(),
         color,
     );
     // Kleiner, schwacher Zusatz hinter dem Namen (Blatt und Projektion, Maßstab).
@@ -368,16 +381,16 @@ pub(crate) fn row(
             egui::pos2(name_rect.right() + 8.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             detail,
-            egui::FontId::proportional(SMALL_FONT),
+            theme::value_font(),
             ui.visuals().weak_text_color(),
         );
     }
     if let Some((text, c)) = status {
         ui.painter().text(
-            egui::pos2(rect.max.x - 6.0, rect.center().y),
+            egui::pos2(rect.max.x - theme::SPACE_2, rect.center().y),
             egui::Align2::RIGHT_CENTER,
             text,
-            egui::FontId::proportional(SMALL_FONT),
+            theme::value_font(),
             c,
         );
     }
@@ -394,7 +407,7 @@ fn marker_line(ui: &mut egui::Ui) {
         egui::pos2(rect.min.x + 8.0, y),
         egui::Align2::LEFT_CENTER,
         MARKER_TEXT,
-        egui::FontId::proportional(SMALL_FONT),
+        theme::value_font(),
         marker,
     );
     let stroke = egui::Stroke::new(2.0, marker);
@@ -427,14 +440,14 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     ui.ctx()
         .data_mut(|d| d.insert_temp(rows_id(), Vec::<(String, egui::Rect)>::new()));
     ui.add_enabled_ui(!read_only, |ui| feature_tree(ui, state));
-    ui.add_space(10.0);
+    ui.add_space(theme::SPACE_3);
     crate::drawing_browser::show(ui, state, read_only);
     crate::dimension_browser::show(ui, state, read_only);
 }
 
 fn feature_tree(ui: &mut egui::Ui, state: &mut AppState) {
-    ui.heading("Feature-Baum");
-    ui.add_space(4.0);
+    theme::section_header(ui, "Feature-Baum", theme::HEADER_H);
+    ui.add_space(theme::SPACE_1);
     let rows: Vec<RowData> = state
         .document
         .features()
@@ -465,7 +478,7 @@ fn feature_tree(ui: &mut egui::Ui, state: &mut AppState) {
         .chain([&MARKER_TEXT])
         .map(|t| {
             ui.painter()
-                .layout_no_wrap(t.to_string(), egui::FontId::proportional(SMALL_FONT), weak)
+                .layout_no_wrap(t.to_string(), theme::value_font(), weak)
                 .size()
                 .x
         })
@@ -650,12 +663,12 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
     };
     let (mut apply, mut cancel) = (false, false);
     let mut open = true;
-    egui::Window::new("Umbenennen")
+    theme::window(ctx, "Umbenennen")
         .collapsible(false)
         .resizable(false)
         .open(&mut open)
         .show(ctx, |ui| {
-            let r = ui.text_edit_singleline(name);
+            let r = theme::field(ui, egui::TextEdit::singleline(name));
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 apply = true;
             }
@@ -683,7 +696,7 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     };
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
-    egui::Window::new("Rückfrage")
+    theme::window(ctx, "Rückfrage")
         .collapsible(false)
         .resizable(false)
         .open(&mut open)

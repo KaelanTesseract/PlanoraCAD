@@ -673,7 +673,7 @@ fn rows_use_full_width_and_equal_heights() {
     for (n, r) in &rows {
         assert_eq!(
             r.height(),
-            28.0,
+            planora_app::theme::ROW_H,
             "Zeile {n}: gleiche Höhe wie die Feature-Zeilen"
         );
         assert_eq!(r.width(), width, "Zeile {n}: gleiche Breite");
