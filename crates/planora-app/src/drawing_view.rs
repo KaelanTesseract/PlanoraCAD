@@ -93,6 +93,8 @@ const MIN_ANGLE_RADIUS_MM: f64 = 1.0;
 pub const HINT: &str = "Klicken wählt eine Ansicht oder ein Maß, Ziehen verschiebt es. Mausrad vergrößert, mittlere Maustaste oder Umschalt + Ziehen verschiebt das Blatt.";
 /// Beschriftung des Schalters für die Mittellinien der gewählten Ansicht.
 pub const CENTERLINES: &str = "Mittellinien";
+/// Erklärung am gesperrten Schalter „Mittellinien“ einer isometrischen Ansicht.
+pub const NO_ISO_CENTERLINES: &str = "In der Isometrie gibt es keine Mittellinien; sie erscheinen nur in den geraden Ansichten (vorne, oben, seitlich).";
 /// Beschriftung des Knopfs für den Maßvorschlag.
 pub const SUGGEST: &str = "Maße vorschlagen";
 /// Satzanfang des Tooltips eines Maßes, das seinen Bezug verloren hat.
@@ -692,7 +694,11 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
         }
         Some(Action::Scale(s)) => set_selected(state, id, |v| v.scale = s),
         Some(Action::Hidden(h)) => set_selected(state, id, |v| v.show_hidden = h),
-        Some(Action::Centerlines(c)) => set_selected(state, id, |v| v.centerlines = c),
+        Some(Action::Centerlines(c)) => set_selected(state, id, |v| {
+            if v.kind.is_normal() {
+                v.centerlines = c;
+            }
+        }),
         Some(Action::Suggest) => suggest_dimensions(state, id),
         Some(Action::Delete) => delete_selected(state),
         Some(Action::ToolToggle) => state.dimension_tool.toggle(),
@@ -883,8 +889,17 @@ fn toolbar(
                         {
                             action = Some(Action::Hidden(hidden));
                         }
+                        // Mittellinien gibt es nur in Normansichten (Blick entlang einer
+                        // Weltachse); in der Isometrie bleibt der Schalter gesperrt.
                         let mut centerlines = v.centerlines;
-                        if ui.checkbox(&mut centerlines, CENTERLINES).changed() {
+                        if ui
+                            .add_enabled(
+                                v.kind.is_normal(),
+                                egui::Checkbox::new(&mut centerlines, CENTERLINES),
+                            )
+                            .on_disabled_hover_text(NO_ISO_CENTERLINES)
+                            .changed()
+                        {
                             action = Some(Action::Centerlines(centerlines));
                         }
                         if ui.button("Ansicht löschen").clicked() {

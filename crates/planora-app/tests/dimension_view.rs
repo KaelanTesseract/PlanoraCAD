@@ -1040,6 +1040,39 @@ fn leader_drag_changes_angle_and_offset() {
 // (h)
 
 #[test]
+fn centerline_switch_is_locked_with_a_reason_in_the_isometric_view() {
+    let (mut st, d, _, _, mut h) = box_with_width();
+    let iso = add_view(&mut st, d, ViewKind::Isometric, 220.0, 100.0);
+    compute(&mut st);
+    st.drawing_ui.selected_view = Some(iso);
+    let edits = st.document.edit_count();
+    h.click_text(&mut st, drawing_view::CENTERLINES);
+    assert!(
+        !st.document
+            .drawing(d)
+            .unwrap()
+            .view(iso)
+            .unwrap()
+            .centerlines
+    );
+    assert_eq!(st.document.edit_count(), edits, "gesperrt: keine Änderung");
+    // Der Grund steht am gesperrten Schalter.
+    let p = h
+        .idle(&mut st)
+        .pos_of(drawing_view::CENTERLINES)
+        .expect("Schalter sichtbar");
+    h.frame(&mut st, vec![Event::PointerMoved(p)]);
+    let mut text = String::new();
+    for _ in 0..30 {
+        text = h.idle(&mut st).text;
+    }
+    assert!(
+        text.contains(drawing_view::NO_ISO_CENTERLINES),
+        "Erklärung fehlt:\n{text}"
+    );
+}
+
+#[test]
 fn read_only_tab_can_select_but_not_drag_or_toggle_or_suggest() {
     let (mut st, d, front, w, _) = box_with_width();
     let mut h = Harness::read_only();
