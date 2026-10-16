@@ -957,6 +957,19 @@ fn selecting_by_click_on_a_line_and_deleting_removes_children() {
     assert!(dashed >= 8, "gestrichelter Rahmen fehlt ({dashed})");
 
     h.click_text(&mut st, "Ansicht löschen");
+    // Derselbe Weg wie im Browser: abgeleitete Ansichten werden erst genannt (die Rückfrage
+    // zeigt der Browser), bestätigt wird über den Löschplan.
+    assert_eq!(
+        st.document.drawing(d).unwrap().views.len(),
+        4,
+        "erst fragen"
+    );
+    let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
+    assert_eq!(
+        plan.text,
+        "Die Ansicht „Vorne“ hat abgeleitete Ansichten: Oben, Links. Sie werden mit gelöscht."
+    );
+    planora_app::drawing_browser::apply_delete(&mut st, &plan).unwrap();
     let views: Vec<ViewId> = st
         .document
         .drawing(d)
@@ -973,6 +986,54 @@ fn selecting_by_click_on_a_line_and_deleting_removes_children() {
         shot.pos_of("Ansicht löschen").is_none(),
         "ohne Wahl kein Löschen"
     );
+}
+
+#[test]
+fn toolbar_delete_of_a_view_with_dimensions_asks_first() {
+    use planora_drawing::dimension::{
+        DimKind, DimSpec, GeoRef, GeoRefData, TagData, Tolerance as DimTolerance,
+    };
+    let mut st = box_state();
+    let (d, front) = with_front(&mut st);
+    for _ in 0..2 {
+        let spec = DimSpec {
+            id: planora_drawing::dimension::DimId(0),
+            view: front,
+            kind: DimKind::Diameter,
+            refs: vec![GeoRef::Face(GeoRefData::Face(TagData {
+                origin: 1,
+                role: "Mantel".into(),
+                hint: DVec3::ZERO,
+            }))],
+            offset: 10.0,
+            angle: 45.0,
+            text_shift: (0.0, 0.0),
+            tolerance: DimTolerance::None,
+            decimals: 1,
+            text_override: None,
+            chain: None,
+            suggested: false,
+        };
+        st.document.add_dimension(d, spec).unwrap();
+    }
+    block(&mut st);
+    let mut h = Harness::new();
+    h.idle(&mut st);
+    st.drawing_ui.selected_view = Some(front);
+    h.click_text(&mut st, "Ansicht löschen");
+    let dr = st.document.drawing(d).unwrap();
+    assert!(dr.view(front).is_some(), "nicht still gelöscht");
+    assert_eq!(dr.dimensions.len(), 2, "Maße bleiben bis zur Bestätigung");
+    assert_eq!(st.drawing_ui.selected_view, Some(front), "Auswahl bleibt");
+    let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
+    assert_eq!(
+        plan.text,
+        "Die Ansicht „Vorne“ wird gelöscht, und 2 Maße werden mit gelöscht."
+    );
+    planora_app::drawing_browser::apply_delete(&mut st, &plan).unwrap();
+    let dr = st.document.drawing(d).unwrap();
+    assert!(dr.views.is_empty() && dr.dimensions.is_empty());
+    assert_eq!(st.drawing_ui.selected_view, None);
 }
 
 #[test]

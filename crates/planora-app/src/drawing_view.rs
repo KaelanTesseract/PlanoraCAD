@@ -915,20 +915,17 @@ fn set_selected(
     }
 }
 
-/// Löscht die gewählte Ansicht samt allen von ihr abgeleiteten (ohne Rückfrage).
+/// „Ansicht löschen“ der Werkzeugleiste: derselbe Weg wie „Löschen“ im Browser
+/// ([`crate::drawing_browser::request_delete_view`]). Werden abgeleitete Ansichten oder Maße
+/// mitgelöscht, kommt erst die Rückfrage, die sie nennt; sonst wird sofort gelöscht. Die Auswahl
+/// verfällt, sobald die Ansicht wirklich gelöscht ist.
 pub fn delete_selected(state: &mut AppState) {
     let (WorkArea::Drawing(id), Some(sel)) =
         (state.drawing_ui.area, state.drawing_ui.selected_view)
     else {
         return;
     };
-    let r = state.document.update_drawing(id, |d| {
-        d.remove_view(sel);
-    });
-    if let Err(e) = r {
-        state.message = Some(e.to_string());
-    }
-    state.drawing_ui.selected_view = None;
+    crate::drawing_browser::request_delete_view(state, id, sel);
 }
 
 /// „Maße vorschlagen“: Grundmaße der gewählten Ansicht (sonst aller Ansichten) über
