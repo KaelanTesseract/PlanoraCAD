@@ -29,7 +29,7 @@ Alle Maße sind Vorgaben nach Praxis und DIN/ISO 5457 und gelten für alle Papie
 - **Koordinatenraster:** Randteilung am Rahmen innen, Feldlänge 50 mm, gerade Anzahl Felder, vom Blattmittelpunkt nach außen geteilt. Spalten mit Zahlen 1, 2, … von links nach rechts, Zeilen mit Buchstaben A, B, … von oben nach unten. Beschriftung außerhalb des Rahmens an allen vier Seiten, Schrifthöhe 3,5 mm.
 - **Schriftfeld:** unten rechts, bündig mit dem Rahmen, **180 mm breit**, Höhe so, dass alle Felder (Abschnitt 4) Platz haben (Vorschlag 56 mm, Zeilenraster 7 mm bis 16 mm). Außenlinie 0,7 mm, Innenlinien 0,25 mm. Beschriftung der Felder klein (2,2 mm), Inhalt 3,5 mm, Titel 5 mm.
 - **Änderungstabelle:** oben rechts im Rahmen, bündig, 176 mm breit, Kopfzeile oben, neueste Änderung zuunterst, bis zu **6 Zeilen** sichtbar (die neuesten); ältere stehen im Fenster. Spalten: Rev., Änderung, Datum, Name.
-- **Hinweisfeld:** links neben dem Schriftfeld, gleiche Unterkante, 110 mm breit, Hinweiszeilen von oben nach unten, Schrift 3,3 mm. (Der Platz über dem Schriftfeld bleibt für die Stückliste aus 3c-2 frei.)
+- **Hinweisfeld:** Hinweiszeilen von oben nach unten, Schrift 3,3 mm. Ist die Rahmenbreite mindestens 310 mm (A3 quer und größer), steht es **links neben dem Schriftfeld**, gleiche Unterkante, 110 mm breit, 10 mm Abstand. Sonst (A4 quer und hoch, A3 hoch und größer hoch) steht es **direkt über dem Schriftfeld**, 180 mm breit, Höhe nach Zeilenzahl. Der Platz über dem Schriftfeld (bzw. über dem Hinweisfeld) bleibt für die Stückliste aus 3c-2 frei; sie wächst von dort nach oben. Alle Papiergrößen A4 bis A0 in beiden Ausrichtungen bleiben unterstützt, auch für Altdateien.
 - **Freier Bereich für Ansichten:** der Rahmen minus Schriftfeld, Änderungstabelle und Hinweisfeld. Die automatische Anordnung neuer und abgeleiteter Ansichten (`layout.rs`) bleibt in diesem Bereich. Manuell platzierte Ansichten sind nicht eingeschränkt (Verantwortung des Nutzers; keine Warnung).
 
 ## 4. Felder und Vorbelegung
@@ -50,7 +50,7 @@ Jedes Feld ist entweder **automatisch** (das Programm berechnet es) oder ein **e
 | Änderungsstand | Buchstabe der letzten Änderung, leer ohne Änderungen | berechnet |
 | Blatt / Anzahl | Platz des Blatts in der Reihenfolge der Zeichnungen des Dokuments / Anzahl | berechnet |
 | Format | Papiergröße, z. B. „A3“ | Blatt |
-| Maßstab | Maßstab der Ansicht, die am meisten Linien hat; bei mehreren gleich großen der erste; „verschieden“, wenn Ansichten unterschiedliche Maßstäbe haben | berechnet |
+| Maßstab | Maßstab der Ansicht, die am meisten Linien hat; bei Gleichstand die erste. Weicht ein anderer ab, bleibt das Feld bei diesem Hauptmaßstab (der Maßstab der abweichenden Ansicht steht an dieser Ansicht, soweit sie ihn schon zeigt) | berechnet |
 | Projektion | Symbol für Projektionsmethode 1 oder 3 aus `Drawing.projection` | berechnet |
 | Ersteller | Windows-Benutzername des angemeldeten Nutzers beim Anlegen des Projekts (änderbar; **Entscheidung des Entwurfs**) | Projektangabe |
 | Geprüft von / Freigabe | leer | Projektangabe |
@@ -60,7 +60,7 @@ Jedes Feld ist entweder **automatisch** (das Programm berechnet es) oder ein **e
 
 Vorbelegte **Hinweiszeilen:** „Allgemeintoleranzen ISO 2768-m“, „Kanten gebrochen 0,3 mm“, „Oberflächen Ra 3,2 (soweit nicht anders angegeben)“. Bis zu 6 Zeilen, jede änderbar, löschbar, neue anfügbar.
 
-**Änderungen:** Zeilen mit Buchstabe (automatisch A, B, C … ohne I, O, Q; änderbar), Beschreibung (Text), Datum (heute, änderbar), Name (Ersteller, änderbar). Anfügen, Ändern, Löschen im Fenster; die letzte bestimmt den Änderungsstand im Schriftfeld. Höchstens 26 Zeilen.
+**Änderungen:** Zeilen mit Buchstabe (automatisch A, B, C … ohne I, O und Q, also 23 Buchstaben; änderbar), Beschreibung (Text), Datum (heute, änderbar), Name (Ersteller, änderbar). Anfügen, Ändern, Löschen im Fenster; die letzte bestimmt den Änderungsstand im Schriftfeld. Höchstens 23 Zeilen (danach Meldung „höchstens 23 Änderungen“).
 
 **Grenzen:** jedes Textfeld höchstens 80 Zeichen (Titel 60, Hinweiszeile 100, Änderungsbeschreibung 120); Text, der in sein Feld nicht passt, wird auf die Feldbreite verkleinert (bis 60 % der Schrifthöhe) und danach mit „…“ gekürzt; im Fenster zeigt eine Warnung beim Feld, wenn gekürzt wird.
 
@@ -81,17 +81,17 @@ Vorbelegte **Hinweiszeilen:** „Allgemeintoleranzen ISO 2768-m“, „Kanten ge
 
 ## 7. Datenmodell und Datei
 
-- Neue Daten: projektweite Angaben im Dokument, blattweite Felder und Änderungen in der Zeichnung. Felder sind „automatisch“ oder „eigener Text“.
-- **Dateiformat 6, nur wenn mindestens ein Blattfeld oder eine Projektangabe vom Vorgabewert abweicht** (wie bei den früheren Erweiterungen); sonst bleibt die Datei Format 5. Format-6-Dateien kennen alle früheren Daten; ältere Programmstände verweigern sie mit einer benannten Meldung.
-- Alte Dokumente (Format ≤ 5) öffnen unverändert: Blatt zeigt die Vorbelegung (Ersteller aus dem Benutzernamen des Anwenders, nicht aus der Datei).
-- Das Ausgabedatum wird beim Anlegen gespeichert, nicht bei jedem Öffnen neu gesetzt.
+- Neue Daten: projektweite Angaben (einmal je Dokument) und je Zeichnung ein Blattangaben-Satz (Felder, Änderungen). Felder sind „automatisch“ oder „eigener Text“.
+- **Gespeichert wird immer, was fest sein muss:** Beim Anlegen einer Zeichnung entsteht ihr Blattangaben-Satz mit dem Ausgabedatum von heute; beim ersten Anlegen einer Zeichnung (oder beim ersten Öffnen des Fensters) im Dokument entstehen die projektweiten Angaben mit dem Windows-Benutzernamen als Ersteller. Dadurch drifft nichts zwischen Rechnern oder beim erneuten Öffnen.
+- **Dateiformat 6, sobald das Dokument einen Blattangaben-Satz oder projektweite Angaben enthält** (also jede Datei mit einer neu angelegten Zeichnung); ohne diese Daten bleibt die Datei Format 5. Ältere Programmstände verweigern Format 6 mit einer benannten Meldung (wie bei den früheren Formaterweiterungen).
+- **Alte Zeichnungen (Format ≤ 5) ohne Satz:** das Blatt zeigt die Vorbelegung, Ausgabedatum und projektweite Angaben stehen auf „–“ (leer), bis der Nutzer das Fenster öffnet und sie ausfüllt; erst dann wird gespeichert. Es wird nichts beim bloßen Öffnen verändert.
 - Reihenfolge und Anzahl der Blätter ergeben sich aus der Zeichnungsliste des Dokuments (wie im Browser). Umordnen der Blätter ist kein Teil von 3c-1 (die Reihenfolge ist die Anlegereihenfolge, wie heute).
 
 ## 8. Qualität und Prüfung
 
 - Alle Maße aus Abschnitt 3 sind als Konstanten benannt und durch Tests mit den genannten Zahlen belegt (Rahmenkoordinaten für A4 hoch, A4 quer, A3, A0; Zentriermarken; Rasterteilung; Schriftfeldlage).
 - Textlauf: Test mit Längstexten in jedem Feld (kein Überlauf über die Feldlinie), mit Sonderzeichen (ä ö ü ß Ø ° ±), mit leeren Feldern.
-- Projektionssymbol, Maßstab-Auswahl, Blatt n/N, Änderungsbuchstaben (ohne I, O, Q; nach Z Fehlermeldung „höchstens 26 Änderungen“), Vorbelegung und Zurücksetzen.
+- Projektionssymbol, Maßstab-Auswahl, Blatt n/N, Änderungsbuchstaben (ohne I, O, Q; nach dem 23. Buchstaben (Z) Fehlermeldung „höchstens 23 Änderungen“), Vorbelegung und Zurücksetzen.
 - Speichern/Laden und Format 5/6 (leer und gefüllt), alter Stand öffnet; Ausgabe mit und ohne Rahmen (SVG und DXF), DXF-Prüfung von Blatttexten.
 - Anzeige in der Zeichnungsansicht bei 800×600 und großem Fenster; Eingabe im Dialog ohne Tastenkürzel-Konflikte (`viewport::typing`).
 - Geschützte Pfade (Kernel, Netz-Quelltext, STEP, Austausch) bleiben unverändert.
@@ -100,7 +100,11 @@ Vorbelegte **Hinweiszeilen:** „Allgemeintoleranzen ISO 2768-m“, „Kanten ge
 ## 9. Offene Annahmen (vom Entwurf getroffen, vom Nutzer überstimmbar)
 
 - Projektweite Angaben liegen im Dokument, nicht im Projektordner.
-- Ersteller wird aus dem Windows-Benutzernamen vorbelegt.
+- Ersteller wird aus dem Windows-Benutzernamen vorbelegt und dann im Dokument gespeichert (einmal je Dokument, nicht je Blatt).
+- Jede neu angelegte Zeichnung macht die Datei zu Format 6.
+- Hinweisfeld neben dem Schriftfeld nur ab 310 mm Rahmenbreite, sonst darüber.
+- Maßstabsfeld zeigt immer den Hauptmaßstab, nie „verschieden“.
+- Änderungsbuchstaben: 23 (ohne I, O, Q).
 - Ohne „Blattrahmen“ auch kein dünner Innenrahmen mehr in der Ausgabe.
 - Hinweisfeld links neben dem Schriftfeld; Platz über dem Schriftfeld für die Stückliste (3c-2).
 - Änderungstabelle oben rechts, bis 6 Zeilen sichtbar.
