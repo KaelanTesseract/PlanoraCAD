@@ -2,6 +2,7 @@
 //! [`Workspace`] auf; Eingabefelder bleiben erhalten, indem der Prompt geklont, bearbeitet und
 //! zurückgeschrieben wird.
 
+use crate::dialog::{Dialog, DialogSize};
 use crate::theme;
 use crate::workspace::{After, Prompt, SaveOutcome, Workspace};
 use planora_project::docstore::LockMode;
@@ -36,23 +37,10 @@ pub fn show(ctx: &egui::Context, ws: &mut Workspace) {
 
 /// Mittiges, festes Fenster für eine Rückfrage.
 fn window(ctx: &egui::Context, key: &str, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
-    theme::window(ctx, title)
+    Dialog::new(title, DialogSize::Prompt)
         .id(egui::Id::new(("planora_prompt", key)))
-        .collapsible(false)
-        .resizable(false)
-        .fade_in(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            // egui zeigt ein neues Fenster im ersten Durchgang unsichtbar, um seine Größe zu
-            // bestimmen. Damit die Rückfrage nicht ein Bild zu spät (oder flackernd) erscheint,
-            // wird dieser Durchgang verworfen und sofort wiederholt (wie bei `egui::Grid`).
-            if ui.is_sizing_pass() {
-                ui.ctx()
-                    .request_discard("Rückfragefenster: erste Größenbestimmung");
-            }
-            ui.set_max_width(460.0);
-            add_contents(ui);
-        });
+        .fixed()
+        .show(ctx, add_contents);
 }
 
 fn tab_name(ws: &Workspace, tab: u64) -> String {

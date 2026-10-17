@@ -88,6 +88,18 @@ impl PlanoraApp {
         &mut self.ws
     }
 
+    /// Arbeitsbereich und die Zustände der Felder Projekte und Versionen (für Tests).
+    #[doc(hidden)]
+    pub fn panels_mut(
+        &mut self,
+    ) -> (
+        &mut Workspace,
+        &mut crate::projects_panel::ProjectsUi,
+        &mut VersionsUi,
+    ) {
+        (&mut self.ws, &mut self.projects_ui, &mut self.versions_ui)
+    }
+
     /// Zustand der schwebenden Felder (für Tests).
     #[doc(hidden)]
     pub fn shell_mut(&mut self) -> &mut ShellState {

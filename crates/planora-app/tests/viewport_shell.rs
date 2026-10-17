@@ -4,6 +4,7 @@
 
 use egui::{Event, Modifiers, PointerButton, Rect, pos2, vec2};
 use glam::Vec2;
+use planora_app::dialog::{Dialog, DialogSize};
 use planora_app::state::AppState;
 use planora_app::{fonts, theme, viewport};
 use planora_math::DVec3;
@@ -147,8 +148,8 @@ fn cube_sits_in_the_free_rect_corner() {
     assert_eq!(
         cube,
         Rect::from_min_size(
-            pos2(FREE.right() - 84.0 - 12.0, FREE.top() + 12.0),
-            vec2(84.0, 84.0)
+            pos2(FREE.right() - 100.0 - 12.0, FREE.top() + 12.0),
+            vec2(100.0, 100.0)
         )
     );
     // `show_in` legt den Würfel dorthin: ein Klick auf seine untere Fläche dreht die Ansicht
@@ -248,13 +249,13 @@ fn mouse_wheel_over_a_field_does_not_zoom() {
 #[test]
 fn dialogs_stay_above_fields() {
     let ctx = context();
-    let field = Rect::from_min_size(pos2(100.0, 100.0), vec2(300.0, 200.0));
-    let probe = pos2(250.0, 180.0);
+    let field = Rect::from_min_size(pos2(300.0, 200.0), vec2(300.0, 200.0));
+    let probe = pos2(400.0, 300.0);
     let mut window_layer = None;
     let mut frames = vec![vec![], vec![]];
     // Klick auf einen freien Teil des Feldes (außerhalb des Dialogs) hebt das Feld an.
-    frames.push(vec![moved(110.0, 280.0), button(110.0, 280.0, true)]);
-    frames.push(vec![button(110.0, 280.0, false)]);
+    frames.push(vec![moved(320.0, 220.0), button(320.0, 220.0, true)]);
+    frames.push(vec![button(320.0, 220.0, false)]);
     frames.push(vec![]);
     for (i, events) in frames.into_iter().enumerate() {
         ctx.run_ui(input(events), |ui| {
@@ -266,12 +267,9 @@ fn dialogs_stay_above_fields() {
                     ui.set_min_size(field.size());
                     let _ = ui.label("Feld");
                 });
-            let shown = theme::window(ui.ctx(), "Dialog")
-                .fixed_pos(pos2(200.0, 150.0))
-                .resizable(false)
-                .show(ui.ctx(), |ui| {
-                    ui.label("Ein Dialog über dem Feld");
-                });
+            let shown = Dialog::new("Dialog", DialogSize::Normal).show(ui.ctx(), |ui| {
+                ui.label("Ein Dialog über dem Feld");
+            });
             window_layer = shown.map(|r| r.response.layer_id);
         })
         .drop_without_applying_deltas();
@@ -294,18 +292,16 @@ fn combo_dialog(
     let mut combo = None;
     let mut layer = None;
     ctx.run_ui(input(events), |ui| {
-        let shown = theme::window(ui.ctx(), "Dialog")
-            .fixed_pos(pos2(200.0, 150.0))
-            .show(ui.ctx(), |ui| {
-                let r = egui::ComboBox::from_id_salt("test-combo")
-                    .selected_text(format!("Wert {choice}"))
-                    .show_ui(ui, |ui| {
-                        for v in 0..5 {
-                            ui.selectable_value(choice, v, format!("Wert {v}"));
-                        }
-                    });
-                combo = Some(r.response.rect);
-            });
+        let shown = Dialog::new("Dialog", DialogSize::Normal).show(ui.ctx(), |ui| {
+            let r = egui::ComboBox::from_id_salt("test-combo")
+                .selected_text(format!("Wert {choice}"))
+                .show_ui(ui, |ui| {
+                    for v in 0..5 {
+                        ui.selectable_value(choice, v, format!("Wert {v}"));
+                    }
+                });
+            combo = Some(r.response.rect);
+        });
         layer = shown.map(|r| r.response.layer_id);
     })
     .drop_without_applying_deltas();

@@ -615,26 +615,34 @@ fn drawing_area_stays_inside_the_free_rect() {
     }
 }
 
-#[test]
-fn dialogs_open_above_fields() {
-    let c = context();
-    let mut app = app_with_box();
-    settle(&c, &mut app, MID);
-    press(
-        &c,
-        &mut app,
-        MID,
-        Key::E,
-        Modifiers::COMMAND | Modifiers::SHIFT,
-    );
-    let shot = settle(&c, &mut app, MID);
+/// Öffnet den Export-Dialog bei Fenstergröße `size` und liefert Ebene und Rechteck des Dialogs.
+fn open_export(c: &egui::Context, app: &mut PlanoraApp, size: Vec2) -> (egui::LayerId, Rect) {
+    press(c, app, size, Key::E, Modifiers::COMMAND | Modifiers::SHIFT);
+    let shot = settle(c, app, size);
     assert!(app.ws_mut().active_tab().export_dialog.is_some());
-    let placed = fields(&c);
-    let title = shot.find_outside("Exportieren", &[field(&c, "oben")]);
+    let title = shot.find_outside("Exportieren", &[field(c, "oben")]);
     let dialog = c.layer_id_at(title.center()).expect("Ebene des Dialogs");
     assert_eq!(dialog.order, egui::Order::Foreground);
     let dialog_rect = c.memory(|m| m.area_rect(dialog.id)).unwrap();
-    // Der Dialog (über die ganze Breite) liegt über beiden Seitenfeldern.
+    assert!(
+        (dialog_rect.width() - 720.0).abs() <= 1.0,
+        "720 breit: {dialog_rect:?}"
+    );
+    assert!(
+        (dialog_rect.center().x - size.x / 2.0).abs() <= 1.0,
+        "mittig: {dialog_rect:?}"
+    );
+    (dialog, dialog_rect)
+}
+
+#[test]
+fn dialogs_open_above_fields() {
+    // 800 × 600: der 720-px-Dialog liegt über beiden Seitenfeldern.
+    let c = context();
+    let mut app = app_with_box();
+    settle(&c, &mut app, SMALL);
+    let (dialog, dialog_rect) = open_export(&c, &mut app, SMALL);
+    let placed = fields(&c);
     for name in ["links", "rechts"] {
         let overlap = dialog_rect.intersect(field(&c, name));
         assert!(
@@ -657,8 +665,8 @@ fn dialogs_open_above_fields() {
         .find(|(_, p)| !dialog_rect.contains(*p))
         .expect("ein Feld ragt unter dem Dialog hervor");
     assert_eq!(c.layer_id_at(outside.1).unwrap().order, egui::Order::Middle);
-    click(&c, &mut app, MID, outside.1);
-    frame(&c, &mut app, MID, vec![]);
+    click(&c, &mut app, SMALL, outside.1);
+    frame(&c, &mut app, SMALL, vec![]);
     assert!(
         app.ws_mut().active_tab().export_dialog.is_some(),
         "Dialog bleibt offen"
@@ -672,6 +680,19 @@ fn dialogs_open_above_fields() {
             outside.0
         );
     }
+
+    // 1400 × 900: mittig zwischen den Spalten, über dem 3D-Bereich, im Vordergrund.
+    let c = context();
+    let mut app = app_with_box();
+    settle(&c, &mut app, BIG);
+    let (dialog, dialog_rect) = open_export(&c, &mut app, BIG);
+    let (left, right) = (field(&c, "links"), field(&c, "rechts"));
+    assert!(
+        left.right() <= dialog_rect.left() + 0.5 && dialog_rect.right() <= right.left() + 0.5,
+        "zwischen den Spalten: {dialog_rect:?}, {left:?}, {right:?}"
+    );
+    assert_eq!(c.layer_id_at(dialog_rect.center()), Some(dialog));
+    assert_eq!(dialog.order, egui::Order::Foreground);
 }
 
 #[test]
@@ -909,4 +930,120 @@ fn keyboard_zoom_is_off_after_setup() {
         out.drop_without_applying_deltas();
     }
     assert_eq!(ctx.zoom_factor(), 1.0);
+}
+
+/// Namen der Felder, die im letzten Bild sichtbar waren.
+fn field_names(c: &egui::Context) -> Vec<&'static str> {
+    fields(c).into_iter().map(|(n, _)| n).collect()
+}
+
+/// Klick an `p`; liefert die Namen der Felder im Bild, in dem der Klick wirkt (Loslassen).
+fn click_first_frame(
+    c: &egui::Context,
+    app: &mut PlanoraApp,
+    size: Vec2,
+    p: Pos2,
+) -> Vec<&'static str> {
+    frame(c, app, size, vec![moved(p)]);
+    frame(c, app, size, vec![moved(p), button(p, true)]);
+    frame(c, app, size, vec![button(p, false)]);
+    field_names(c)
+}
+
+/// Moduswechsel durch Klick (Skizze per Doppelklick im Baum, Zeichnung per Menü): schon im ersten
+/// Bild nach dem Klick steht keine Ebene des alten Modus mehr und die Felder des neuen Modus
+/// liegen an ihren Rechtecken.
+#[test]
+fn no_field_of_the_old_mode_in_the_first_frame() {
+    let size = BIG;
+    let c = context();
+    let mut app = PlanoraApp::for_tests(library_ws());
+    let s = state(&mut app);
+    s.create_box(DVec3::new(100.0, 60.0, 40.0)).unwrap();
+    let sketch = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    let sheet = Sheet {
+        paper: Paper::A4,
+        landscape: true,
+    };
+    s.document
+        .add_drawing("Blatt 1", sheet, Projection::First)
+        .unwrap();
+    let rows = |app: &mut PlanoraApp, shot: &Shot, name: &str| -> Pos2 {
+        let _ = app;
+        shot.all(name)
+            .first()
+            .unwrap_or_else(|| panic!("„{name}“ fehlt"))
+            .center()
+    };
+
+    // Beide Modi einmal besucht, damit ihre gemerkten Breiten nicht schon ein Bild verwerfen.
+    state(&mut app).open_sketch(sketch).unwrap();
+    settle(&c, &mut app, size);
+    state(&mut app).close_sketch();
+    let d = state(&mut app).document.drawings()[0].id;
+    state(&mut app).drawing_ui.open(d);
+    settle(&c, &mut app, size);
+    state(&mut app).drawing_ui.area = WorkArea::Model;
+
+    // Modell -> Skizze: Doppelklick auf die Skizze im Baum.
+    let shot = settle(&c, &mut app, size);
+    assert!(field_names(&c).contains(&"links"));
+    let p = rows(&mut app, &shot, "Skizze 1");
+    frame(&c, &mut app, size, vec![moved(p), button(p, true)]);
+    frame(&c, &mut app, size, vec![button(p, false)]);
+    frame(&c, &mut app, size, vec![moved(p), button(p, true)]);
+    frame(&c, &mut app, size, vec![button(p, false)]);
+    assert_eq!(state(&mut app).open_sketch_id(), Some(sketch));
+    let names = field_names(&c);
+    assert!(
+        !names.contains(&"links"),
+        "alte Spalte im ersten Bild: {names:?}"
+    );
+    assert!(!names.contains(&"Werkzeugfeld"), "{names:?}");
+    let r = rects(&mut app, size);
+    assert_eq!(field(&c, "Leiste"), r.strip.unwrap());
+    assert!(
+        names.contains(&"Skizze") && names.contains(&"Fuß"),
+        "{names:?}"
+    );
+
+    // Skizze -> Modell.
+    state(&mut app).close_sketch();
+    settle(&c, &mut app, size);
+
+    // Modell -> Zeichnung: Menü „Zeichnung“, Eintrag „Öffnen: Blatt 1“.
+    let shot = settle(&c, &mut app, size);
+    let top = field(&c, "oben");
+    let menu = *shot
+        .all("Zeichnung")
+        .iter()
+        .find(|t| top.contains_rect(**t))
+        .expect("Menü Zeichnung");
+    click(&c, &mut app, size, menu.center());
+    let shot = frame(&c, &mut app, size, vec![]);
+    let entry = shot.find_outside("Öffnen: Blatt 1", &[]).center();
+    let names = click_first_frame(&c, &mut app, size, entry);
+    assert!(
+        matches!(state(&mut app).drawing_ui.area, WorkArea::Drawing(_)),
+        "Zeichnung nicht geöffnet"
+    );
+    assert!(
+        !names.contains(&"rechts") && !names.contains(&"unten"),
+        "Felder des Modells im ersten Bild der Zeichnung: {names:?}"
+    );
+    assert!(names.contains(&"Werkzeugfeld"), "{names:?}");
+    assert!(
+        !names.contains(&"Leiste") && !names.contains(&"Skizze"),
+        "{names:?}"
+    );
+    let r = rects(&mut app, size);
+    let tool = field(&c, "Werkzeugfeld");
+    assert!(
+        (tool.center().x - r.tool.unwrap().center().x).abs() <= 1.0,
+        "{tool:?} {:?}",
+        r.tool
+    );
+    assert_eq!(tool.top(), r.tool.unwrap().top());
 }

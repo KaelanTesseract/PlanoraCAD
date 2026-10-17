@@ -5,6 +5,7 @@
 //! den beschreibbaren Tab des Dokuments geändert (er hält die Sperre).
 
 use crate::browser::error_color;
+use crate::dialog::{Dialog, DialogSize};
 use crate::theme;
 use crate::workspace::{Prompt, Workspace};
 use planora_project::docstore::DocumentInfo;
@@ -410,14 +411,14 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
     if let Some(mut p) = st.comment_edit.take() {
         let mut keep = true;
         let mut apply = false;
-        theme::window(ctx, "Kommentar ändern")
-            .collapsible(false)
-            .resizable(false)
+        Dialog::new("Kommentar ändern", DialogSize::Prompt)
+            .fixed()
             .show(ctx, |ui| {
                 ui.label(format!("Kommentar zu v{}", p.what.0));
-                theme::text_field(ui, egui::TextEdit::singleline(&mut p.what.1));
+                let r = theme::text_field(ui, egui::TextEdit::singleline(&mut p.what.1));
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 ui.horizontal(|ui| {
-                    if ui.button("Übernehmen").clicked() {
+                    if ui.button("Übernehmen").clicked() || enter {
                         apply = true;
                         keep = false;
                     }
@@ -442,9 +443,8 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
             }
         };
         let mut answer = None;
-        theme::window(ctx, "Löschen")
-            .collapsible(false)
-            .resizable(false)
+        Dialog::new("Löschen", DialogSize::Prompt)
+            .fixed()
             .show(ctx, |ui| {
                 ui.label(question);
                 ui.horizontal(|ui| {

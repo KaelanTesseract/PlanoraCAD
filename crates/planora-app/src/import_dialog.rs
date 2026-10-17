@@ -6,7 +6,8 @@
 
 use crate::browser::error_color;
 use crate::cards::card_row;
-use crate::export_dialog::{LOST, PROGRESS_WIDTH, REPAINT, file_name, group_digits, wide_window};
+use crate::dialog::{Dialog, DialogSize};
+use crate::export_dialog::{LOST, PROGRESS_WIDTH, REPAINT, file_name, group_digits};
 use crate::file_chooser::{ChooserAction, FileChooser};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
@@ -213,7 +214,7 @@ impl ImportDialog {
         let mut cards = Vec::new();
         let (mut name, mut unit) = (self.name.clone(), self.unit);
         let loading = self.is_loading().then(|| self.progress());
-        let response = wide_window("Netz importieren", ctx)
+        let response = Dialog::new("Netz importieren", DialogSize::Wide)
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.strong("Datei wählen (STL oder OBJ)");

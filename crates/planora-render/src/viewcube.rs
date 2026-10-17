@@ -74,17 +74,19 @@ impl ViewFace {
 }
 
 /// Sichtbare Seite des Navigationswürfels in Einheitskoordinaten (x rechts, y oben, Würfel ±1).
+#[cfg(test)]
 #[derive(Clone, Debug)]
-pub struct CubeFace {
-    pub face: ViewFace,
-    pub corners: [Vec2; 4],
+struct CubeFace {
+    face: ViewFace,
+    corners: [Vec2; 4],
     /// Größer = näher an der Kamera.
-    pub depth: f32,
+    depth: f32,
 }
 
 /// Projiziert den Würfel orthografisch mit der Drehung der Kamera und liefert die sichtbaren
 /// Seiten, die am weitesten hinten liegende zuerst.
-pub fn cube_faces(camera: &OrbitCamera) -> Vec<CubeFace> {
+#[cfg(test)]
+fn cube_faces(camera: &OrbitCamera) -> Vec<CubeFace> {
     let view = camera.view();
     let to_view = |v: Vec3| view.transform_vector3(v);
     let mut faces: Vec<CubeFace> = ViewFace::ALL
@@ -117,10 +119,6 @@ pub fn cube_faces(camera: &OrbitCamera) -> Vec<CubeFace> {
     faces
 }
 
-fn point_in_quad(corners: &[Vec2; 4], p: Vec2) -> bool {
-    point_in_convex(corners, p)
-}
-
 /// Liegt `p` im konvexen Vieleck `corners` (Umlaufsinn egal, Rand zählt mit)?
 fn point_in_convex(corners: &[Vec2], p: Vec2) -> bool {
     let n = corners.len();
@@ -142,11 +140,12 @@ fn point_in_convex(corners: &[Vec2], p: Vec2) -> bool {
 }
 
 /// Welche (vorderste) Seite liegt unter dem Punkt `p` (Einheitskoordinaten)?
-pub fn cube_hit_test(faces: &[CubeFace], p: Vec2) -> Option<ViewFace> {
+#[cfg(test)]
+fn cube_hit_test(faces: &[CubeFace], p: Vec2) -> Option<ViewFace> {
     faces
         .iter()
         .rev()
-        .find(|f| point_in_quad(&f.corners, p))
+        .find(|f| point_in_convex(&f.corners, p))
         .map(|f| f.face)
 }
 
@@ -155,7 +154,7 @@ pub fn cube_hit_test(faces: &[CubeFace], p: Vec2) -> Option<ViewFace> {
 pub const INSET: f32 = 0.6;
 
 /// Anzahl der anklickbaren Bereiche: 6 Flächen, 12 Kanten, 8 Ecken.
-pub const REGION_COUNT: usize = 26;
+pub(crate) const REGION_COUNT: usize = 26;
 
 /// Anklickbarer Bereich des Navigationswürfels.
 ///
@@ -209,12 +208,33 @@ pub fn all_regions() -> [CubeRegion; REGION_COUNT] {
 }
 
 impl CubeRegion {
-    /// Außennormale des Bereichs (Kanten und Ecken: gemittelte Seitennormalen), Länge 1.
+    /// Ist der Bereich einer der 26 gültigen? Kanten tragen zwei verschiedene Achsen in der
+    /// Reihenfolge Z vor Y vor X; Ecken je eine Seite pro Achse (`x` ∈ {Links, Rechts},
+    /// `y` ∈ {Vorne, Hinten}, `z` ∈ {Oben, Unten}).
+    pub fn is_valid(self) -> bool {
+        let rank = |f: ViewFace| match f {
+            ViewFace::Top | ViewFace::Bottom => 0,
+            ViewFace::Front | ViewFace::Back => 1,
+            ViewFace::Left | ViewFace::Right => 2,
+        };
+        match self {
+            CubeRegion::Face(_) => true,
+            CubeRegion::Edge { a, b } => rank(a) < rank(b),
+            CubeRegion::Corner { x, y, z } => {
+                X_FACES.contains(&x) && Y_FACES.contains(&y) && Z_FACES.contains(&z)
+            }
+        }
+    }
+
+    /// Außennormale des Bereichs (Kanten und Ecken: gemittelte Seitennormalen), Länge 1. Ein
+    /// ungültiger Bereich (z. B. Kante Oben-Unten) liefert den Nullvektor statt NaN.
     pub fn normal(self) -> Vec3 {
         match self {
             CubeRegion::Face(f) => f.normal(),
-            CubeRegion::Edge { a, b } => (a.normal() + b.normal()).normalize(),
-            CubeRegion::Corner { x, y, z } => (x.normal() + y.normal() + z.normal()).normalize(),
+            CubeRegion::Edge { a, b } => (a.normal() + b.normal()).normalize_or_zero(),
+            CubeRegion::Corner { x, y, z } => {
+                (x.normal() + y.normal() + z.normal()).normalize_or_zero()
+            }
         }
     }
 
@@ -275,16 +295,12 @@ pub struct CubePiece {
     pub depth: f32,
 }
 
-/// Projiziert den abgeschrägten Würfel orthografisch wie `cube_faces` und liefert die der Kamera
-/// zugewandten Bereiche, den am weitesten hinten liegenden zuerst.
-pub fn cube_pieces(camera: &OrbitCamera) -> Vec<CubePiece> {
-    // Gleiche Schwelle wie bei `cube_faces`.
-    cube_pieces_visible(camera, 0.02)
-}
-
-/// Wie [`cube_pieces`], aber nur Bereiche, die stärker als `min_facing` zur Kamera zeigen
-/// (`depth > min_facing`). Fast flach gesehene Bereiche erscheinen im Bild nur als schmale
-/// Streifen; wer sie nicht malen will, lässt sie hier weg und testet Klicks gegen dieselbe Liste.
+/// Projiziert den abgeschrägten Würfel orthografisch und liefert die Bereiche, die stärker als
+/// `min_facing` zur Kamera zeigen (`depth > min_facing`), den am weitesten hinten liegenden
+/// zuerst. Fast flach gesehene Bereiche erscheinen im Bild nur als schmale Streifen; wer sie nicht
+/// malen will, lässt sie hier weg und testet Klicks gegen dieselbe Liste. Bei einer nicht
+/// endlichen Kamera (NaN) können Bereiche mit nicht endlichen Zahlen darunter sein; der Aufrufer
+/// filtert sie.
 pub fn cube_pieces_visible(camera: &OrbitCamera, min_facing: f32) -> Vec<CubePiece> {
     let view = camera.view();
     let to_view = |v: Vec3| view.transform_vector3(v);
@@ -329,6 +345,9 @@ pub fn pieces_hit_test(pieces: &[CubePiece], p: Vec2) -> Option<CubeRegion> {
 /// Am Höhenwinkel-Anschlag (`±MAX_PITCH`) gilt die Kamera als genau senkrecht: Weiter kann sie
 /// nicht kippen, die Draufsicht ist dort also erreicht.
 pub fn current_region(camera: &OrbitCamera, tolerance_deg: f32) -> Option<CubeRegion> {
+    if !(camera.yaw.is_finite() && camera.pitch.is_finite() && camera.distance.is_finite()) {
+        return None;
+    }
     let at_pole = camera.pitch.abs() >= OrbitCamera::MAX_PITCH - 1e-4;
     let dir = if at_pole {
         Vec3::Z * camera.pitch.signum()
@@ -359,4 +378,73 @@ pub fn face_text_frame(face: ViewFace) -> (Vec3, Vec3) {
         _ => Vec3::Z,
     };
     (up.cross(face.normal()), up)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn visible(cam: &OrbitCamera) -> Vec<ViewFace> {
+        let mut v: Vec<_> = cube_faces(cam).iter().map(|f| f.face).collect();
+        v.sort_by_key(|f| format!("{f:?}"));
+        v
+    }
+
+    #[test]
+    fn front_view_shows_only_the_front_face() {
+        let mut cam = OrbitCamera::default();
+        cam.set_view(ViewFace::Front);
+        assert_eq!(visible(&cam), vec![ViewFace::Front]);
+    }
+
+    #[test]
+    fn top_view_shows_only_the_top_face() {
+        let mut cam = OrbitCamera::default();
+        cam.set_view(ViewFace::Top);
+        assert_eq!(visible(&cam), vec![ViewFace::Top]);
+    }
+
+    #[test]
+    fn isometric_view_shows_three_faces() {
+        let mut cam = OrbitCamera::default();
+        cam.set_iso_view();
+        assert_eq!(
+            visible(&cam),
+            vec![ViewFace::Front, ViewFace::Right, ViewFace::Top]
+        );
+    }
+
+    #[test]
+    fn clicking_the_center_of_the_front_face_selects_it() {
+        let mut cam = OrbitCamera::default();
+        cam.set_view(ViewFace::Front);
+        let faces = cube_faces(&cam);
+        assert_eq!(cube_hit_test(&faces, Vec2::ZERO), Some(ViewFace::Front));
+        assert_eq!(cube_hit_test(&faces, Vec2::new(5.0, 5.0)), None);
+    }
+
+    #[test]
+    fn every_standard_view_looks_at_the_expected_side() {
+        // Die Kamera steht auf der Seite der Fläche, die sie ansieht.
+        let expectations = [
+            (ViewFace::Front, Vec3::NEG_Y),
+            (ViewFace::Back, Vec3::Y),
+            (ViewFace::Right, Vec3::X),
+            (ViewFace::Left, Vec3::NEG_X),
+            (ViewFace::Top, Vec3::Z),
+            (ViewFace::Bottom, Vec3::NEG_Z),
+        ];
+        for (face, side) in expectations {
+            let mut cam = OrbitCamera::default();
+            cam.set_view(face);
+            let dir = (cam.eye() - cam.target).normalize();
+            assert!(dir.dot(side) > 0.99, "{face:?}: {dir:?}");
+        }
+    }
+
+    #[test]
+    fn region_count_matches_all_regions() {
+        assert_eq!(REGION_COUNT, 26);
+        assert_eq!(all_regions().len(), REGION_COUNT);
+    }
 }

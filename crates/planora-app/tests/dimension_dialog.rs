@@ -5,6 +5,8 @@
 //! Vorderansicht 1:1 mit Mitte (100, 100). Das Breitenmaß misst 10 mm; mit einer Nachkommastelle
 //! steht dort „10,0“. Toleranz 0,2 / −0,1 an 10 mm: Höchstmaß 10,2, Mindestmaß 9,9.
 
+mod common;
+
 use egui::epaint::Shape;
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
 use planora_app::browser::ERROR_COLOR;
@@ -971,4 +973,50 @@ fn stale_dialog_closes_without_panic() {
     // Übernehmen und Löschen auf ein fehlendes Maß geben eine Meldung statt eines Absturzes.
     assert!(h.dlg.apply(&mut st).is_err());
     assert!(planora_app::dimension_browser::request_delete_dimension(&mut st, d, w).is_err());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Etappe D, Aufgabe 2: Dialog-Rahmen (720 px, mittig, Karten nebeneinander)
+
+#[test]
+fn the_window_is_centred_720_wide_with_equal_cards_and_plain_texts() {
+    let (mut st, d, _, w) = state();
+    let mut h = Harness::new(dialog(&st, d, w, false));
+    for _ in 0..3 {
+        h.idle(&mut st);
+    }
+    let shot = h.idle(&mut st);
+    let rect = h.dlg.last_rect.unwrap();
+    assert!(
+        (rect.width() - 720.0).abs() <= 1.0 && (rect.center().x - W / 2.0).abs() <= 1.0,
+        "720 breit und mittig: {rect:?}"
+    );
+    assert!(h.dlg.last_cards.len() >= 2);
+    assert!(
+        h.dlg
+            .last_cards
+            .windows(2)
+            .all(|p| (p[0].height() - p[1].height()).abs() < 0.5),
+        "{:?}",
+        h.dlg.last_cards
+    );
+    for word in ["Maß bearbeiten", "Maß", "Nachkommastellen", "Maßtext"] {
+        assert!(shot.text.contains(word), "„{word}“ fehlt:\n{}", shot.text);
+    }
+}
+
+#[test]
+fn cards_stay_side_by_side_and_inside_at_800x600() {
+    let (mut st, d, _, w) = state();
+    let mut dlg = dialog(&st, d, w, false);
+    let mut screen = common::Screen::new(800.0, 600.0);
+    let seen = screen.settle(8, &mut |ctx| {
+        assert!(dlg.show(ctx, &mut st));
+    });
+    let rect = dlg.last_rect.unwrap();
+    assert!(
+        Rect::from_min_size(Pos2::ZERO, screen.size).contains_rect(rect),
+        "{rect:?}"
+    );
+    common::assert_cards_inside(rect, &dlg.last_cards, &seen);
 }

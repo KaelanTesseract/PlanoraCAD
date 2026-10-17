@@ -276,8 +276,12 @@ impl OrbitCamera {
     }
 
     /// Blickt auf einen Bereich des Navigationswürfels: Flächen wie `set_view`, Kanten und Ecken
-    /// entlang ihrer Normalen (Kante 45° zwischen den Seiten, Ecke im Isometrie-Winkel).
+    /// entlang ihrer Normalen (Kante 45° zwischen den Seiten, Ecke im Isometrie-Winkel). Ein
+    /// ungültiger Bereich (`CubeRegion::is_valid`) lässt die Kamera unverändert.
     pub fn set_view_region(&mut self, region: CubeRegion) {
+        if !region.is_valid() {
+            return;
+        }
         match region {
             CubeRegion::Face(face) => self.set_view(face),
             // Kanten und Ecken sind nie senkrecht (|z| ≤ 1/√2), der Aufwärts-Hinweis wirkt nicht.

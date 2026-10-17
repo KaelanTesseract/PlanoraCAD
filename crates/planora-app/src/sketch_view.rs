@@ -428,8 +428,9 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
 }
 
 /// Zeichnet die Skizze über die 3D-Ansicht in `rect` und verarbeitet die Eingaben des
-/// Skizzen-Modus. Orbit ist gesperrt; Verschieben (mittlere Maustaste oder Umschalt + Ziehen) und
-/// Zoomen (Mausrad) bleiben.
+/// Skizzen-Modus. In der Skizzenfläche selbst wird nicht gedreht; Verschieben (mittlere Maustaste
+/// oder Umschalt + Ziehen) und Zoomen (Mausrad) gelten dort. Gedreht wird durch Ziehen am
+/// Navigationswürfel (siehe `viewport::show_in`).
 ///
 /// Gibt zurück, ob der Zeiger über der Skizzenfläche steht; das Mausrad-Zoomen macht der Aufrufer
 /// (`viewport::show`) erst nach Würfel und Home-Knopf, damit es auch über ihnen wirkt.
@@ -442,6 +443,9 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
         ui.id().with("planora-sketch-overlay"),
         Sense::click_and_drag(),
     );
+    // Die Zeichenfläche nimmt den Fokus an (Tab, Pfeile), liest aber keinen Text: ihr Fokus
+    // sperrt Esc, Entf und Eingabe der Skizze nicht.
+    viewport::focus_is_not_typing(ui.ctx(), response.id);
     state.camera.set_viewport(rect.width(), rect.height());
     handle_input(ui, &response, rect, state);
     draw(ui, rect, state, response.hover_pos());

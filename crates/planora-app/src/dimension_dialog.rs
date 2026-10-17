@@ -9,10 +9,10 @@
 
 use crate::browser::error_color;
 use crate::cards::card_row;
+use crate::dialog::{Dialog, DialogSize};
 use crate::dimension_browser::{lost_reason, request_delete_dimension};
 use crate::dimension_state::resolve_in;
 use crate::drawing_browser::READ_ONLY_HINT;
-use crate::export_dialog::wide_window;
 use crate::state::AppState;
 use crate::theme;
 use planora_drawing::DrawingId;
@@ -325,7 +325,7 @@ impl DimensionDialog {
         let (mut open, mut close, mut apply, mut delete) = (true, false, false, false);
         let mut cards = Vec::new();
         let apply_ok = !read_only && errors.is_empty();
-        let response = wide_window("Maß bearbeiten", ctx)
+        let response = Dialog::new("Maß bearbeiten", DialogSize::Wide)
             .open(&mut open)
             .show(ctx, |ui| {
                 let mut measure_card = |ui: &mut egui::Ui| {

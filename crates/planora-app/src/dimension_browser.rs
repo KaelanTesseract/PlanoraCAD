@@ -8,6 +8,7 @@
 //! nie einen Wert, sondern ein rotes `?` mit dem Grund als Hinweistext.
 
 use crate::browser::{body_indent, error_color, row};
+use crate::dialog::{Dialog, DialogSize};
 use crate::dimension_dialog;
 use crate::dimension_state::resolve_in;
 use crate::drawing_browser::{READ_ONLY_HINT, open_drawing, select_drawing};
@@ -311,13 +312,10 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     }
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
-    theme::window(ctx, "Rückfrage")
+    Dialog::new("Rückfrage", DialogSize::Prompt)
         .id(egui::Id::new("planora-delete-dimension"))
-        .collapsible(false)
-        .resizable(false)
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.set_max_width(360.0);
             ui.label(&plan.text);
             ui.add_space(6.0);
             ui.horizontal(|ui| {

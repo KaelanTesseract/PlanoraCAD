@@ -2,6 +2,7 @@
 //! Maße eintragen, Art wählen, „Erzeugen“. Zahlen nehmen Komma und Punkt an.
 
 use crate::browser::error_color;
+use crate::dialog::{Dialog, DialogSize};
 use crate::sketch_view::{format_number, parse_number};
 use crate::state::{AppState, MAX_COORD_MM};
 use crate::theme;
@@ -480,9 +481,7 @@ impl BlendDialog {
         }
         let mut open = true;
         let (mut run, mut cancel) = (false, false);
-        theme::window(ctx, self.title())
-            .collapsible(false)
-            .resizable(false)
+        Dialog::new(self.title(), DialogSize::Normal)
             .open(&mut open)
             .show(ctx, |ui| {
                 match self.chosen_edges(state) {

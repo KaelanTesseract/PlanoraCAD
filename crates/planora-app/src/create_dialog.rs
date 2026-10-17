@@ -1,3 +1,4 @@
+use crate::dialog::{Dialog, DialogSize};
 use crate::sketch_view::{format_length, format_number};
 use crate::state::AppState;
 use crate::theme;
@@ -209,9 +210,7 @@ impl CreateDialog {
         let mut open = true;
         let mut create = false;
         let mut cancel = false;
-        theme::window(ctx, self.title())
-            .collapsible(false)
-            .resizable(false)
+        Dialog::new(self.title(), DialogSize::Normal)
             .open(&mut open)
             .show(ctx, |ui| {
                 match self {

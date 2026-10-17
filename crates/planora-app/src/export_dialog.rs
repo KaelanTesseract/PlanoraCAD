@@ -17,6 +17,7 @@
 
 use crate::browser::error_color;
 use crate::cards::card_row;
+use crate::dialog::{Dialog, DialogSize};
 use crate::dimension_dialog::kind_label;
 use crate::dimension_state::count_outside;
 use crate::drawing_dialog::paper_label;
@@ -26,7 +27,6 @@ use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
 use crate::state::{AppState, BodyKind};
-use crate::theme;
 use planora_drawing::annotate::{Mark, ResolvedDims};
 use planora_drawing::dimension::{DimError, DimSpec};
 use planora_drawing::dxf::dxf_text_fits;
@@ -50,12 +50,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Abstand des Fensters zum linken und rechten Rand; sonst reicht es über die ganze Breite.
-pub const DIALOG_MARGIN: f32 = 16.0;
-/// Abstand des Fensters zum oberen Rand (unter Menü und Tab-Leiste).
-pub const DIALOG_TOP: f32 = 60.0;
-/// Kleinste Breite bei sehr schmalen Fenstern.
-pub(crate) const MIN_WIDTH: f32 = 320.0;
 /// Breite des Fortschrittsbalkens.
 pub(crate) const PROGRESS_WIDTH: f32 = 280.0;
 /// So oft wird neu gezeichnet, solange ein Arbeitsthread läuft.
@@ -83,17 +77,6 @@ pub const NO_DRAWING: &str =
     "Es gibt noch keine Zeichnung. Über „Zeichnung“ im Menü lässt sich eine anlegen.";
 /// So oft schaut der Arbeitsthread nach, ob die Berechnung einer Ansicht abgebrochen werden soll.
 const WATCH: Duration = Duration::from_millis(5);
-
-/// Fenster über die ganze Breite (Rand DIALOG_MARGIN), unter Menü und Tab-Leiste.
-pub(crate) fn wide_window(title: &'static str, ctx: &egui::Context) -> egui::Window<'static> {
-    let width = (ctx.content_rect().width() - 2.0 * DIALOG_MARGIN).max(MIN_WIDTH);
-    theme::window(ctx, title)
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_TOP, [0.0, DIALOG_TOP])
-        .min_width(width)
-        .max_width(width)
-}
 
 /// Sehnentoleranz „Grob“ in Millimetern (Spec E5).
 const CHORD_COARSE: f64 = 0.1;
@@ -1585,7 +1568,7 @@ impl ExportDialog {
         let mut chosen: Option<PathBuf> = None;
         let mut cards = Vec::new();
         let chooser = &mut self.chooser;
-        let response = wide_window("Exportieren", ctx)
+        let response = Dialog::new("Exportieren", DialogSize::Wide)
             .open(&mut open)
             .show(ctx, |ui| {
                 let mut format_card = |ui: &mut egui::Ui| {

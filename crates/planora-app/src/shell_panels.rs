@@ -23,7 +23,7 @@ use egui::{Vec2, vec2};
 use crate::app::{self, CreateKind, PlanoraApp};
 use crate::shell::{self, RightTab, ShellMode, ShellRects};
 use crate::state::AppState;
-use crate::{browser, icons, projects_panel, properties, tabs, theme, versions_panel};
+use crate::{browser, icons, projects_panel, properties, tabs, theme, versions_panel, viewport};
 use planora_kernel::BoolOp;
 
 /// Breite, bis zu der die Tab-Leiste nicht umbricht (sie rollt waagerecht statt dessen).
@@ -43,6 +43,11 @@ fn right_id() -> egui::Id {
 
 fn status_id() -> egui::Id {
     egui::Id::new("planora-field-status")
+}
+
+/// Kennung des Texts der Statuszeile (Tab-Halt für die Bedienhilfe).
+pub fn status_text_id() -> egui::Id {
+    status_id().with("text")
 }
 
 fn bottom_id() -> egui::Id {
@@ -82,6 +87,14 @@ pub(crate) fn drawing_view_id() -> egui::Id {
 pub(crate) fn drawing_hint_id() -> egui::Id {
     egui::Id::new("planora-field-drawing-hint")
 }
+
+/// Gemerkte Wunschbreite des Werkzeugfelds der Zeichnung (beide Zeilen ohne Rollen, mit Rand).
+pub(crate) fn drawing_tool_width_key() -> egui::Id {
+    drawing_tool_id().with("wanted")
+}
+
+/// Hinweis zu den Tasten im Skizzenmodus; steht nur beim Überfahren der Statuszeile da.
+pub const SKETCH_KEYS_HINT: &str = "Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt";
 
 /// Gemerkte Wunschbreite des Fußfelds (Hinweis, Status, „Skizze beenden“, Rand).
 pub(crate) fn sketch_foot_width_key() -> egui::Id {
@@ -234,7 +247,7 @@ fn text_field(
     min_h: f32,
     (grow_up, rows): (bool, usize),
     dark: bool,
-    (text, color): (String, egui::Color32),
+    (text, color, hover): (String, egui::Color32, Option<&'static str>),
 ) {
     let frame = bar_frame(dark, min_h);
     let margin = frame.total_margin().sum();
@@ -250,14 +263,36 @@ fn text_field(
         ui.set_width(inner_w);
         ui.set_height(h - margin.y);
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            let (r, response) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+            let (r, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+            // Ziel für Hover und Bedienhilfe ist das ganze Feld samt Rand, nicht nur die Textzeile.
+            let whole = ui
+                .max_rect()
+                .expand2(egui::vec2(margin.x / 2.0, margin.y / 2.0));
+            // Für die Statuszeile ist das `status_text_id()`.
+            let response = ui.interact(
+                whole,
+                id.with("text"),
+                egui::Sense::focusable_noninteractive(),
+            );
+            // Tab-Halt nur zum Vorlesen: der Fokus hier sperrt keine Tasten der Ansicht und ist
+            // als Fokusrahmen sichtbar.
+            viewport::focus_is_not_typing(ctx, response.id);
+            theme::focus_ring(ui, &response);
             let enabled = ui.is_enabled();
-            response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, &text));
+            // Der Tastenhinweis steht auch im Namen für die Bedienhilfe, der sichtbare Text bleibt kurz.
+            let label = match hover {
+                Some(h) => format!("{text}. {h}"),
+                None => text.clone(),
+            };
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, &label)
+            });
             let elided = galley.elided;
             ui.painter().galley(r.min, galley, color);
             if elided {
                 response.on_hover_text(text);
+            } else if let Some(h) = hover {
+                response.on_hover_text(h);
             }
         });
     });
@@ -381,6 +416,12 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
             status_w,
             tab.read_only,
         );
+        let mut rects = rects;
+        // Das Werkzeugfeld der Zeichnung ist so breit wie sein Inhalt (mittig, höchstens so breit
+        // wie zwischen den Spalten).
+        if let (Some(tool), Some(wanted)) = (rects.tool, stored(ctx, drawing_tool_width_key())) {
+            rects.tool = Some(shell::fit_tool(tool, wanted));
+        }
         (rects, status, tab.state.dark)
     };
     let (rects, _, _) = layout(app);
@@ -405,6 +446,9 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
         discard(ctx, "Moduswechsel");
     }
     let (rects, status, dark) = layout(app);
+    let hover = (mode_of(&app.ws.active_tab().state) == ShellMode::Sketch
+        && app.ws.active_tab().state.message.is_none())
+    .then_some(SKETCH_KEYS_HINT);
     text_field(
         ctx,
         status_id(),
@@ -412,7 +456,7 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
         shell::STATUS_H,
         (true, STATUS_ROWS),
         dark,
-        status,
+        (status.0, status.1, hover),
     );
     banner_field(ctx, &rects, app);
     ctx.data_mut(|d| d.insert_temp(layout_key(), rects));
@@ -427,6 +471,12 @@ fn layout_key() -> egui::Id {
 #[doc(hidden)]
 pub fn last_layout(ctx: &egui::Context) -> Option<ShellRects> {
     ctx.data(|d| d.get_temp(layout_key()))
+}
+
+/// Gemerkte Wunschbreite des Werkzeugfelds der Zeichnung (für Tests).
+#[doc(hidden)]
+pub fn drawing_tool_wanted(ctx: &egui::Context) -> Option<f32> {
+    stored(ctx, drawing_tool_width_key())
 }
 
 /// Tatsächlich belegte Rechtecke der sichtbaren Felder, je mit Namen (für Tests). Gelesen wird
@@ -810,13 +860,7 @@ fn status_line(state: &AppState, dark: bool) -> (String, egui::Color32) {
         browser::status_text(state),
     ) {
         (Some(m), _, _) => (m.clone(), p.error),
-        (None, Some(sk), _) => (
-            format!(
-                "Skizzen-Modus: {} – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt",
-                sk.name
-            ),
-            p.text_secondary,
-        ),
+        (None, Some(sk), _) => (format!("Skizzen-Modus: {}", sk.name), p.text_secondary),
         (None, None, Some(e)) => (e, p.error),
         (None, None, None) => match state.mesh_note() {
             Some(note) => (format!("{} Körper – {note}", state.bodies.len()), p.warning),
@@ -845,6 +889,6 @@ fn banner_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
         shell::BANNER_LINE_H,
         (false, MAX_ROWS),
         dark,
-        (text, color),
+        (text, color, None),
     );
 }

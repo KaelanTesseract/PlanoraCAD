@@ -3,6 +3,7 @@
 //! je Zeile. Die Zustandsfunktionen (Löschen mit Folgen, Unterdrücken, Zurückrollen) sind
 //! ohne Oberfläche testbar.
 
+use crate::dialog::{Dialog, DialogSize};
 use crate::icons::{FeatureIcon, paint_body_icon, paint_feature_icon};
 use crate::state::{AppState, BodyKind, SketchRequest};
 use crate::theme;
@@ -663,9 +664,7 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
     };
     let (mut apply, mut cancel) = (false, false);
     let mut open = true;
-    theme::window(ctx, "Umbenennen")
-        .collapsible(false)
-        .resizable(false)
+    Dialog::new("Umbenennen", DialogSize::Prompt)
         .open(&mut open)
         .show(ctx, |ui| {
             let r = theme::text_field(ui, egui::TextEdit::singleline(name));
@@ -696,12 +695,9 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     };
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
-    theme::window(ctx, "Rückfrage")
-        .collapsible(false)
-        .resizable(false)
+    Dialog::new("Rückfrage", DialogSize::Prompt)
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.set_max_width(360.0);
             ui.label(plan.text());
             ui.add_space(6.0);
             ui.horizontal(|ui| {

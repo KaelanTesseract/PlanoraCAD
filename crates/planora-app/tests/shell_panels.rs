@@ -10,9 +10,12 @@ use egui::epaint::{ClippedShape, Shape};
 use egui::{Color32, Event, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::shell::{self, SHELL_INSET};
+use planora_app::sketch_state::Tool;
 use planora_app::state::StandardPlane;
 use planora_app::workspace::Workspace;
-use planora_app::{fonts, shell_panels, sketch_panel, theme, versions_panel, viewport};
+use planora_app::{
+    fonts, shell_panels, sketch_panel, sketch_view, theme, versions_panel, viewport,
+};
 use planora_feature::SketchPlane;
 use planora_math::DVec3;
 use planora_project::config::Config;
@@ -582,13 +585,9 @@ fn status_field_shows_message_with_error_colour_and_counts_bodies() {
         .add_sketch(SketchPlane::Standard(StandardPlane::XY))
         .unwrap();
     state.open_sketch(id).unwrap();
-    // Der ganze Hinweis mit allen Tasten ist zu lesen.
+    // Kurz; die Tasten stehen im Hover der Statuszeile.
     let (text, color) = status(&mut app);
-    assert_eq!(
-        text,
-        "Skizzen-Modus: Skizze 1 – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere \
-         Maustaste oder Umschalt + Ziehen verschiebt"
-    );
+    assert_eq!(text, "Skizzen-Modus: Skizze 1");
     assert_eq!(color, p.text_secondary);
 
     // Eine Meldung geht allem vor, in der Fehlerfarbe.
@@ -1080,4 +1079,186 @@ fn the_tab_bar_scroll_bar_is_thin_hidden_at_rest_and_below_the_tab_names() {
             shell::TOP_H
         ));
     }
+}
+
+/// Im Skizzenmodus ist der Status kurz; die Tasten stehen im Hover der Statuszeile und sonst
+/// nirgends im Bild (der Hinweis steht höchstens einmal sichtbar).
+#[test]
+fn sketch_status_is_short_and_keys_are_in_the_hover() {
+    let c = context(true);
+    c.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+    let mut app = PlanoraApp::for_tests(library_ws());
+    let state = &mut app.ws_mut().active_tab_mut().state;
+    let id = state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    state.open_sketch(id).unwrap();
+    let size = vec2(1400.0, 900.0);
+    let (shot, _) = settle(&c, &mut app, size);
+    let status = shell_panels::field_rects(&c)
+        .into_iter()
+        .find(|(n, _)| *n == "Status")
+        .unwrap()
+        .1;
+    assert!(shot.has_in(status, "Skizzen-Modus: Skizze 1"));
+    let count = |shot: &Shot| {
+        shot.texts
+            .iter()
+            .filter(|t| t.text.contains("Esc bricht ab"))
+            .count()
+    };
+    assert_eq!(count(&shot), 0, "ohne Hover steht der Hinweis nicht da");
+
+    // Hover auf den Text der Statuszeile.
+    let p = shot.find(status, "Skizzen-Modus: Skizze 1").rect.center();
+    run(&c, &mut app, size, vec![moved(p)], false);
+    let (shot, _) = run(&c, &mut app, size, vec![moved(p)], false);
+    assert!(
+        shot.texts
+            .iter()
+            .any(|t| t.text == shell_panels::SKETCH_KEYS_HINT),
+        "Hover zeigt den Tastenhinweis"
+    );
+    assert_eq!(count(&shot), 1, "genau einmal sichtbar");
+
+    // Hover auf den Rand des Felds (links neben dem Text) zeigt ihn ebenfalls, einmal.
+    let c2 = context(true);
+    c2.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+    let mut app2 = PlanoraApp::for_tests(library_ws());
+    let state = &mut app2.ws_mut().active_tab_mut().state;
+    let id = state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    state.open_sketch(id).unwrap();
+    let (_, _) = settle(&c2, &mut app2, size);
+    let edge = pos2(status.left() + 3.0, status.center().y);
+    run(&c2, &mut app2, size, vec![moved(edge)], false);
+    let (shot, _) = run(&c2, &mut app2, size, vec![moved(edge)], false);
+    assert_eq!(count(&shot), 1, "Hover am Feldrand zeigt den Hinweis");
+}
+
+/// Ein Bild wie in der App: Felder, Skizzenansicht in der freien Fläche, Tastenfokus merken.
+fn sketch_frame(c: &egui::Context, app: &mut PlanoraApp, size: Vec2, events: Vec<Event>) -> Shot {
+    let out = c.run_ui(input(size, events), |ui| {
+        let free = shell_panels::show_fields(ui.ctx(), app);
+        sketch_view::show_overlay(ui, free, &mut app.ws_mut().active_tab_mut().state);
+        viewport::remember_keyboard_focus(ui.ctx());
+    });
+    let shot = Shot::of(&out.shapes);
+    out.drop_without_applying_deltas();
+    shot
+}
+
+/// Offene Punkte des laufenden Skizzenwerkzeugs.
+fn pending(app: &mut PlanoraApp) -> usize {
+    app.ws_mut()
+        .active_tab()
+        .state
+        .sketch_session
+        .as_ref()
+        .unwrap()
+        .pending
+        .len()
+}
+
+/// Abschluss-Nachbesserung 4: hat die Statuszeile den Tastaturfokus (Tab), zeigt sie den
+/// Fokusrahmen, und Esc bricht das laufende Skizzenwerkzeug trotzdem ab.
+#[test]
+fn focused_status_field_shows_a_ring_and_keeps_escape_working() {
+    for dark in [false, true] {
+        let c = context(dark);
+        let mut app = PlanoraApp::for_tests(library_ws());
+        let state = &mut app.ws_mut().active_tab_mut().state;
+        let id = state
+            .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+            .unwrap();
+        state.open_sketch(id).unwrap();
+        {
+            let (se, sk) = state.session_sketch_mut().unwrap();
+            let a = sk.add_point(-10.0, -10.0).unwrap();
+            se.set_tool(sk, Tool::Line);
+            se.pending = vec![a];
+        }
+        let size = vec2(1400.0, 900.0);
+        for _ in 0..3 {
+            sketch_frame(&c, &mut app, size, vec![]);
+        }
+        let status = shell_panels::field_rects(&c)
+            .into_iter()
+            .find(|(n, _)| *n == "Status")
+            .unwrap()
+            .1;
+        let ring = |shot: &Shot| {
+            shot.fills.iter().any(|f| {
+                f.stroke.color == theme::accent(dark)
+                    && f.rect.expand(2.0).contains_rect(status)
+                    && status.expand(4.0).contains_rect(f.rect)
+            })
+        };
+        let shot = sketch_frame(&c, &mut app, size, vec![]);
+        assert!(!ring(&shot), "dark={dark}: Fokusrahmen ohne Fokus");
+
+        let sid = shell_panels::status_text_id();
+        c.memory_mut(|m| m.request_focus(sid));
+        let shot = sketch_frame(&c, &mut app, size, vec![]);
+        assert_eq!(c.memory(|m| m.focused()), Some(sid), "dark={dark}");
+        assert!(ring(&shot), "dark={dark}: kein Fokusrahmen um {status:?}");
+        assert!(
+            !viewport::typing(&c),
+            "dark={dark}: Fokus auf der Statuszeile gilt als Eingabe"
+        );
+        assert_eq!(pending(&mut app), 1);
+        sketch_frame(
+            &c,
+            &mut app,
+            size,
+            vec![Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        sketch_frame(&c, &mut app, size, vec![]);
+        assert_eq!(
+            pending(&mut app),
+            0,
+            "dark={dark}: Esc bricht bei fokussierter Statuszeile nicht ab"
+        );
+    }
+}
+
+/// Der Tastenhinweis steht im Namen der Statuszeile für Bildschirmleser.
+#[test]
+fn sketch_status_label_for_screen_readers_contains_the_hint() {
+    let c = context(true);
+    c.enable_accesskit();
+    let mut app = PlanoraApp::for_tests(library_ws());
+    let state = &mut app.ws_mut().active_tab_mut().state;
+    let id = state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    state.open_sketch(id).unwrap();
+    let size = vec2(1400.0, 900.0);
+    let mut labels = Vec::new();
+    for _ in 0..3 {
+        let mut out = c.run_ui(input(size, vec![]), |ui| {
+            shell_panels::show_fields(ui.ctx(), &mut app);
+        });
+        if let Some(u) = out.platform_output.accesskit_update.take() {
+            for (_, n) in &u.nodes {
+                // Beschriftungen von Textzeilen (Role::Label) meldet egui als Wert.
+                for l in [n.label(), n.value()].into_iter().flatten() {
+                    labels.push(l.to_string());
+                }
+            }
+        }
+        out.drop_without_applying_deltas();
+    }
+    let want = format!(
+        "Skizzen-Modus: Skizze 1. {}",
+        shell_panels::SKETCH_KEYS_HINT
+    );
+    assert!(labels.contains(&want), "{labels:?}");
 }

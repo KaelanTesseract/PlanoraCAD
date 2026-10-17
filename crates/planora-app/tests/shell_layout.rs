@@ -559,3 +559,15 @@ fn drawing_free_rect_margins() {
     assert_eq!(ro.free.top(), 164.0 + BANNER_H + GAP);
     assert_eq!(ro.free.bottom(), 900.0 - 84.0);
 }
+
+#[test]
+fn fit_tool_is_centred_and_capped() {
+    let tool = Rect::from_min_size(pos2(100.0, 80.0), vec2(1000.0, TOOL_H));
+    let a = planora_app::shell::fit_tool(tool, 600.0);
+    assert_eq!((a.width(), a.height()), (600.0, TOOL_H));
+    assert_eq!((a.center(), a.top()), (tool.center(), tool.top()));
+    assert_eq!(planora_app::shell::fit_tool(tool, 2000.0), tool);
+    let c = planora_app::shell::fit_tool(tool, 50.0);
+    assert_eq!(c.width(), planora_app::shell::MIN_FIELD_W);
+    assert_eq!(c.center(), tool.center());
+}

@@ -6,6 +6,7 @@
 //! ohne Oberfläche testbar.
 
 use crate::browser::{body_indent, error_color, row};
+use crate::dialog::{Dialog, DialogSize};
 use crate::drawing_dialog::{DUPLICATE_NAME, EMPTY_NAME, SKETCH_BLOCKED, paper_label};
 use crate::drawing_state::WorkArea;
 use crate::drawing_view::view_names;
@@ -486,10 +487,8 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
     let error = rename_error(state, id, &name);
     let (mut apply, mut cancel) = (false, false);
     let mut open = true;
-    theme::window(ctx, "Umbenennen")
+    Dialog::new("Umbenennen", DialogSize::Prompt)
         .id(egui::Id::new("planora-rename-drawing"))
-        .collapsible(false)
-        .resizable(false)
         .open(&mut open)
         .show(ctx, |ui| {
             let r = theme::text_field(ui, egui::TextEdit::singleline(&mut name));
@@ -530,13 +529,10 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     };
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
-    theme::window(ctx, "Rückfrage")
+    Dialog::new("Rückfrage", DialogSize::Prompt)
         .id(egui::Id::new("planora-delete-drawing"))
-        .collapsible(false)
-        .resizable(false)
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.set_max_width(360.0);
             ui.label(&plan.text);
             ui.add_space(6.0);
             ui.horizontal(|ui| {

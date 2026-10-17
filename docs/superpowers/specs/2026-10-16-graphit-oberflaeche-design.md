@@ -229,7 +229,7 @@ Stand: 2026-10-16, Zweig `feature/graphit-etappe-b`. Plan: `plans/2026-10-16-gra
 Stand: 2026-10-16, Zweig `feature/graphit-etappe-c`. Plan: `plans/2026-10-16-graphit-etappe-c.md`. Hier steht, was bei der Umsetzung entschieden wurde oder anders kam. Einzelheiten und Grenzen: `offene-punkte.md`, Teilprojekt 13 Etappe C.
 
 **Festlegungen C1–C10** (Entwurfsverfasser, der Nutzer kann sie kippen; C1 ist eine Nutzer-Entscheidung)
-- **C1 (Nutzer)** Navigationswürfel: 26 anklickbare Bereiche (6 Flächen, 12 Kanten, 8 Ecken), Home-Knopf, aktuelle Ansicht blau hervorgehoben (nur wenn die Blickrichtung auf höchstens 2° zu einem der 26 Bereiche passt, sonst nichts), Graphit-Achsenfarben leicht getönt (Rechts/Links = X, Vorne/Hinten = Y, Oben/Unten = Z), Größe 84 px, Beschriftung auf der Fläche (verzerrt und mitgedreht), Name der aktuellen Ansicht klein unter dem Würfel.
+- **C1 (Nutzer)** Navigationswürfel: 26 anklickbare Bereiche (6 Flächen, 12 Kanten, 8 Ecken), Home-Knopf, aktuelle Ansicht blau hervorgehoben (nur wenn die Blickrichtung auf höchstens 2° zu einem der 26 Bereiche passt, sonst nichts), Graphit-Achsenfarben leicht getönt (Rechts/Links = X, Vorne/Hinten = Y, Oben/Unten = Z), Größe 100 px (in Etappe D von 84 auf 100 geändert, siehe D5), Beschriftung auf der Fläche (verzerrt und mitgedreht), Name der aktuellen Ansicht klein unter dem Würfel.
 - **C2** Home = Isometrisch und „Alles einpassen“.
 - **C3** Klick auf eine Fläche = Ansicht auf diese Fläche (`set_view`); Kante = Blick entlang der Kantennormalen (45° zwischen den beiden Flächen); Ecke = Blick auf die Ecke (Isometrie-Winkel, Pitch ±35,264°, Yaw 45° + k·90°).
 - **C4** Beschriftungsausrichtung: Seitenflächen „oben“ = +Z; Oben-Fläche „oben“ = +Y (nach hinten); Unten-Fläche „oben“ = −Y; „rechts“ = oben × Normale (nie gespiegelt).
@@ -244,7 +244,7 @@ Stand: 2026-10-16, Zweig `feature/graphit-etappe-c`. Plan: `plans/2026-10-16-gra
 - 26 Bereiche: `CubeRegion::{Face, Edge, Corner}`, `all_regions`, `cube_pieces` (nach hinten sortierte Stücke) und `cube_pieces_visible(camera, min_facing)`; den Filter auf endliche Werte und auf deutlich zugewandte Stücke macht `viewport::visible_pieces`, `pieces_hit_test`. Namen deutsch („Vorne“, „Oben-Rechts“, „Oben-Vorne-Rechts“).
 - Home = `OrbitCamera::home()` (Isometrisch) plus `frame_all`; die Isometrie ist die Ecke Oben-Vorne-Rechts.
 - Hervorhebung: `current_region(camera, 2.0)`; nahe den Polen gilt `|pitch| ≥ MAX_PITCH − 1e-4` als genau senkrecht (die Kamera stoppt 0,573° davor).
-- Beschriftungsausrichtung nach C4 (`face_text_frame`); der Text wird als Galley-Netz auf die Fläche abgebildet. Stücke erscheinen ab `facing` 0,15 (`PIECE_MIN_FACING`) und blenden bis 0,3 ein; die Beschriftung blendet zwischen 0,3 (`LABEL_MIN_FACING`) und 0,5 (`LABEL_FULL_FACING`) ein.
+- Beschriftungsausrichtung nach C4 (`face_text_frame`); der Text wird als Galley-Netz auf die Fläche abgebildet. Stücke erscheinen ab `facing` 0,15 (`PIECE_MIN_FACING`) und blenden bis 0,3 ein; die Beschriftung blendet zwischen 0,3 (`LABEL_MIN_FACING`) und 0,5 (`LABEL_FULL_FACING`) ein (seit Etappe D 0,5–0,7, siehe D5).
 - Zum Einpassen kamen `OrbitCamera::frame_points` (Punkte in die freie Fläche einpassen) und `AppState::refit_sketch_view` (neue Skizze mittig und herangezoomt nachpassen) hinzu.
 - Die Kamera-Mathematik ist nicht umgebaut; `planora-render` hat nur Zusätze (`ViewFace`, `cube_faces`, `cube_hit_test`, `set_view` und ihre Tests bleiben).
 
@@ -271,3 +271,30 @@ Stand: 2026-10-16, Zweig `feature/graphit-etappe-c`. Plan: `plans/2026-10-16-gra
 Der Navigationswürfel ist eine eigene Gestaltung unter dem Namen „Navigationswürfel“; die Marke „ViewCube“ wird nicht verwendet; zum Autodesk-Patent US 7,782,319 (angemeldet 2007) wurde keine Prüfung der Ansprüche vorgenommen; vor einer kommerziellen Nutzung Rechtsberatung einholen.
 
 **Bewusst offen gelassen** (Einzelheiten in `offene-punkte.md`): Beschriftungsgröße, Hover-Kontrast der aktuellen Ansicht (3,8 : 1), Kontrast von Kanten und Ecken im Dunkeln, Werkzeugfeld in voller Breite, Ein-Bild-Wechsel zwischen den Modi, doppelter langer Skizzenhinweis. Etappe D: Dialoge, Aufräumen der `pub`-Fläche.
+
+## 13. Festlegungen der Umsetzung Etappe D
+
+Stand: 2026-10-17, Zweig `feature/graphit-etappe-d`. Plan: `plans/2026-10-17-graphit-etappe-d.md`. Hier steht, was bei der Umsetzung entschieden wurde oder anders kam. Einzelheiten und Grenzen: `offene-punkte.md`, Teilprojekt 13 Etappe D.
+
+**Festlegungen D1–D8** (Entwurfsverfasser, der Nutzer kann sie kippen; D1 und D5 sind Nutzer-Entscheidungen)
+- **D1 (Nutzer)** Alle Dialoge schmaler und mittig; die bisher breiten (Exportieren, Netz importieren, Neue Zeichnung, Maß bearbeiten) bis etwa 720 px; Rückfragen mittig und schmal; `wide_window`, `DIALOG_TOP`, `DIALOG_MARGIN` und tote Konstanten entfallen.
+- **D2** Feste Breiten je Klasse statt „nach Inhalt“: `Prompt` 440 (Rückfragen, Umbenennen, Neuer Ordner, Verschieben, Kommentar ändern, Löschen), `Normal` 480 (Körper anlegen, Extrudieren/Drehen, Boolesche Operation, Feature bearbeiten, Rundung/Fase), `Wide` 720 (die vier bisher breiten). Bei schmalerem Fenster höchstens Fensterbreite − 32.
+- **D3** Mitte = Mitte des Fensters (`ctx.content_rect()`, nicht der freien Fläche). Rückfragen sind fest verankert. Alle anderen Dialoge öffnen mittig, lassen sich verschieben und bleiben im Fenster (`constrain_to`), damit man beim Rundungsdialog Kanten im Modell neben dem Dialog anklicken kann.
+- **D4** Eigene Kopfzeile statt egui-Titelleiste: Titel links in der Überschriftschrift, rechts das Schließen-Symbol als randloser Symbolknopf (Tooltip und Beschriftung „Schließen“, Fokusring). Das Symbol haben genau die Dialoge, die zuvor das egui-Kreuz hatten.
+- **D5 (Nutzer)** Würfel von 84 auf 100 px (ändert C1); Beschriftung ab Zuwendung 0,5, voll ab 0,7, Füllung 0,95 der Flächenbreite; Mindestschrift 9 pt. Ziehen auf dem Würfel dreht die Ansicht (Modell und Skizze); Umschalt + Ziehen nicht; Mausrad über dem Würfel zoomt.
+- **D6** Der Skizzenstatus zeigt nur „Skizzen-Modus: Name“; der Tastenhinweis steht beim Überfahren des ganzen Statusfelds und in dessen Beschriftung für Bildschirmleser.
+- **D7** Werkzeugfeld der Zeichnung so breit wie sein Inhalt (gemerkte Wunschbreite, gerade aufgerundet), höchstens so breit wie der Platz zwischen den Spalten, mittig; die freie Fläche ändert sich dadurch nicht.
+- **D8** Ändert sich der Modus (Modell, Zeichnung, Skizze) während eines Bilds, wird das Bild verworfen und wiederholt.
+
+**Rulings und Abweichungen**
+- Die Breite- und Höhengrenzen des egui-Fensters gelten für die Außengröße; die Klassenbreite wird deshalb nicht um den Rahmen verkleinert (der Plan sah das anders vor).
+- Eigene Schließbehandlung statt des egui-`open`.
+- Höhe nach Inhalt (Abschluss-Nachbesserung): kein Rollbereich des egui-Fensters, sondern ein eigener unter der Kopfzeile, höchstens bis zur freien Fensterhöhe; ein Dialog ist so hoch wie sein Inhalt und scrollt nur, wenn der Inhalt höher als das Fenster ist. Die Kopfzeile scrollt nicht mit, ihr Titel ist nicht markierbar (Ziehen am Titel verschiebt). Ein wieder geöffneter Dialog verwirft sein erstes Bild, damit er mit der neuen Höhe mittig steht; ebenso ein offener Dialog, dessen Größe sich ändert.
+- Die Statuszeile ist ein Tab-Halt für die Bedienhilfe mit Fokusrahmen; ihr Fokus sperrt die Tasten der Ansicht nicht (`viewport::focus_is_not_typing`), ebenso der Fokus auf der Zeichenfläche der Skizze und der 3D-Ansicht.
+- Enter übernimmt zusätzlich in Neuer Ordner, Projekte umbenennen und Kommentar ändern (Test (f) des Plans verlangte es); Kosten, falls unerwünscht: drei Handler und zwei Testprüfungen entfernen.
+- Die Ziehschwelle am Würfel ist 4 px; Tooltip und Hervorhebung ruhen während des Ziehens.
+- Die Mindestschrift 9 pt hat Vorrang vor der Flächenbreite; das längste Wort ist dort 32 px breit bei 31,9 px erlaubt.
+- Das Werkzeugfeld ist bei 1100 × 700 schmaler als in Etappe C (Plan: „unverändert“).
+- Der Würfel bietet nach außen nur noch `CUBE_SIZE`, `cube_rect`, `home_rect`, `show_in`, `show`, `render_palette` und den versteckten Testhaken `region_point`; die übrigen Teile sind `pub(crate)` oder nur im Test vorhanden. `CubeRegion::is_valid` ist neu.
+
+**Verbleibende `pub`-Fläche** (nicht aufgeräumt, nicht Teil des Plans): `app::{CreateKind, create_blocked, do_create, open_boolean, open_blend}`, `viewport::show`, `shell::layout`, `tabs::show`, `versions_panel::show`, `theme`, `icons` und die Testhaken in `shell_panels` und `PlanoraApp`.

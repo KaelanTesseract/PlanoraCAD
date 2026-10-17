@@ -536,7 +536,9 @@ fn foot_field(
             // Wunsch: alles in einer Zeile; mindestens: Zustand und Knopf.
             let wanted = fixed + gap + sep + galley.size().x + margin;
             shell_panels::remember_width(ui, shell_panels::sketch_foot_min_key(), fixed + margin);
-            shell_panels::remember_width(ui, shell_panels::sketch_foot_width_key(), wanted.ceil());
+            // Auf gerade Breite aufgerundet: so liegt das mittige Feld auf ganzen Pixeln.
+            let even = (wanted / 2.0).ceil() * 2.0;
+            shell_panels::remember_width(ui, shell_panels::sketch_foot_width_key(), even);
         });
     });
     close
