@@ -519,12 +519,13 @@ pub fn block_origin(
 ///
 /// Die Isometrie kommt in das leere Viertel des Blocks – Erstwinkel rechts unten (Seitenansicht
 /// rechts, Draufsicht unten), Drittwinkel links oben –, mit [`GAP_MM`] Abstand zu den Kanten der
-/// Grundansicht. Der Maßstab ist der größte der Reihe, der nicht größer als `base_scale` ist und
-/// bei dem die Isometrie (ungeskalierte Ausdehnung `iso_size`) ganz in dieses Viertel des freien
-/// Bereichs passt. Passt sie in keinem, bleibt es beim Maßstab der Grundansicht, und sie sitzt
-/// bündig in der Ecke des freien Bereichs auf der Seite des leeren Viertels; dann kann sie den
-/// Block überdecken (nach bestem Wissen). Liefert die Projektionsart für `base` keine Seite,
-/// gilt rechts oben.
+/// Grundansicht. Maßstab: der der Grundansicht (`base_scale`), wenn die Isometrie
+/// (ungeskalierte Ausdehnung `iso_size`) damit ganz in dieses Viertel des freien Bereichs passt,
+/// sonst die nächstkleinere Stufe der Reihe, wenn sie damit passt (höchstens eine Stufe kleiner,
+/// damit sie nicht winzig wird). Passt sie auch so nicht, bleibt es beim Maßstab der Grundansicht,
+/// und sie sitzt bündig in der Ecke des freien Bereichs auf der Seite des leeren Viertels; dann
+/// kann sie den Block überdecken (nach bestem Wissen). Liefert die Projektionsart für `base`
+/// keine Seite, gilt rechts oben.
 pub fn iso_placement(
     projection: Projection,
     base: ViewKind,
@@ -570,10 +571,14 @@ pub fn iso_placement(
         let f = s.factor();
         iso_size.0 * f <= room.0 && iso_size.1 * f <= room.1
     };
-    let scale = Scale::SERIES
+    let one_step_smaller = Scale::SERIES
         .into_iter()
-        .filter(|s| s.factor() <= base_scale.factor() && fits(*s))
-        .max_by(|a, b| a.factor().total_cmp(&b.factor()))
+        .filter(|s| s.factor() < base_scale.factor())
+        .max_by(|a, b| a.factor().total_cmp(&b.factor()));
+    let scale = [Some(base_scale), one_step_smaller]
+        .into_iter()
+        .flatten()
+        .find(|s| fits(*s))
         .unwrap_or(base_scale);
     let size = (iso_size.0 * scale.factor(), iso_size.1 * scale.factor());
     let want = (corner.0 + dx * size.0 / 2.0, corner.1 + dy * size.1 / 2.0);

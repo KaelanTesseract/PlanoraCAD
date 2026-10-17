@@ -1536,9 +1536,9 @@ fn message_key(state: &AppState) -> (u64, Option<ViewId>, Option<DimId>) {
 /// sonst frei (leere Zeichnung: so, dass der Block aus drei Ansichten in der Mitte des freien
 /// Bereichs liegt, sonst links oben). Isometrisch: im leeren Viertel des Blocks um die
 /// Grundansicht ([`iso_placement`]: Erstwinkel rechts unten, Drittwinkel links oben) im Maßstab
-/// der Grundansicht oder, wenn sie dort sonst nicht hineinpasst, der nächstkleineren passenden
-/// Stufe; ohne frei liegende Grundansicht rechts oben (0,75 · Breite, 0,75 · Höhe des freien
-/// Bereichs) im Maßstab der Grundansicht. Freie Ansichten bleiben mit ihrer
+/// der Grundansicht oder, wenn sie dort sonst nicht hineinpasst, eine Stufe kleiner; ohne frei
+/// liegende Grundansicht rechts oben (0,75 · Breite, 0,75 · Höhe des freien Bereichs) im
+/// Maßstab der Grundansicht. Freie Ansichten bleiben mit ihrer
 /// geschätzten Ausdehnung im freien Bereich, soweit sie hineinpassen; sonst sitzen sie dort
 /// bündig an der rechten bzw. oberen Kante.
 pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> {

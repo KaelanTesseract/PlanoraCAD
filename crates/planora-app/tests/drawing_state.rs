@@ -743,7 +743,23 @@ fn isometric_goes_into_the_empty_quadrant_of_the_block() {
         (c.0 - 190.0).abs() < 1e-9 && (c.1 - 42.5).abs() < 1e-9,
         "{c:?}"
     );
-    // Drittwinkel: links oben ab (30, 140), Platz 30 × 60: erst 1:5 (16 × 14) passt.
+    // Drittwinkel, Grundansicht um (150, 100): links oben ab (80, 140), Platz 80 × 60: 1:2.
+    let (c, scale) = iso_placement(
+        Projection::Third,
+        ViewKind::Front,
+        (150.0, 100.0),
+        (100.0, 40.0),
+        (80.0, 70.0),
+        s(1, 1),
+        free_area,
+    );
+    assert_eq!(scale, s(1, 2));
+    assert!(
+        (c.0 - 60.0).abs() < 1e-9 && (c.1 - 157.5).abs() < 1e-9,
+        "{c:?}"
+    );
+    // Drittwinkel um (100, 100): Platz 30 × 60, erst 1:5 (16 × 14) passte; höchstens eine Stufe
+    // kleiner, also nach bestem Wissen 1:1 bündig in der Ecke links oben.
     let (c, scale) = iso_placement(
         Projection::Third,
         ViewKind::Front,
@@ -753,9 +769,9 @@ fn isometric_goes_into_the_empty_quadrant_of_the_block() {
         s(1, 1),
         free_area,
     );
-    assert_eq!(scale, s(1, 5));
+    assert_eq!(scale, s(1, 1));
     assert!(
-        (c.0 - 22.0).abs() < 1e-9 && (c.1 - 147.0).abs() < 1e-9,
+        (c.0 - 40.0).abs() < 1e-9 && (c.1 - 165.0).abs() < 1e-9,
         "{c:?}"
     );
     // Nie größer als die Grundansicht: Platz für 2:1, Grundansicht 1:2 → 1:2.

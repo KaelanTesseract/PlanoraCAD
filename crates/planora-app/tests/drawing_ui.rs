@@ -495,9 +495,9 @@ fn new_drawing_dialog_creates_a_drawing_with_suggested_scale() {
     assert!(d.landscape, "Querformat ist Vorgabe");
     assert_eq!(d.projection, Projection::First);
     assert_eq!(d.base, ViewKind::Front);
-    // A4 quer, freier Bereich 267 × 105: 1:2 passt (50+30+20 = 100, 20+30+20 = 70), 1:1 nicht
-    // (40+60+20 = 120 > 105 in der Höhe).
-    assert_eq!(d.scale, s(1, 2));
+    // A4 quer (Blattzubehör mal 0,707), freier Bereich 275,79 × 151,31: 1:1 passt
+    // (100+60+20 = 180, 40+60+20 = 120), 2:1 nicht (80+120+20 = 220 > 151,31 in der Höhe).
+    assert_eq!(d.scale, s(1, 1));
     let mut h = Harness::new();
     let shot = dialog_shot(&mut h, &mut d, &mut st);
     for word in [
@@ -507,7 +507,7 @@ fn new_drawing_dialog_creates_a_drawing_with_suggested_scale() {
         "Dritter Winkel (USA)",
         "Anlegen",
         "Abbrechen",
-        "1:2",
+        "1:1",
     ] {
         assert!(shot.text.contains(word), "„{word}“ fehlt:\n{}", shot.text);
     }
@@ -522,21 +522,24 @@ fn new_drawing_dialog_creates_a_drawing_with_suggested_scale() {
     assert_eq!(dr.views.len(), 1);
     let v = &dr.views[0];
     assert_eq!(v.kind, ViewKind::Front);
-    assert_eq!(v.scale, s(1, 2));
+    assert_eq!(v.scale, s(1, 1));
     assert_eq!(v.parent, None);
-    // Block aus drei Ansichten mittig im freien Bereich (Mitte 153,5 | 140,5): die Grundansicht
-    // sitzt um (20 + 60·0,5)/2 = 25 mm links und oberhalb davon (Erstwinkel).
-    assert_eq!(v.placement, Placement::Free { x: 128.5, y: 165.5 });
+    // Block aus drei Ansichten mittig im freien Bereich (Mitte 152,04 | 122,33): die
+    // Grundansicht sitzt um (20 + 60)/2 = 40 mm links und oberhalb davon (Erstwinkel).
+    let Placement::Free { x, y } = v.placement else {
+        panic!("frei");
+    };
+    assert!((x - 112.035_714_285_714).abs() < 1e-9 && (y - 162.325).abs() < 1e-9);
     assert_eq!(st.drawing_ui.area, WorkArea::Drawing(dr.id));
     // Der nächste Vorschlag nimmt die kleinste freie Zahl.
     assert_eq!(NewDrawingDialog::new(&st).name, "Zeichnung 2");
     st.document.rename_drawing(dr.id, "Zeichnung 2").unwrap();
     assert_eq!(NewDrawingDialog::new(&st).name, "Zeichnung 1");
 
-    // Großer Quader 1000 × 600 × 400: 1:20 (1:10 wäre 100+20 > 105 hoch).
+    // Großer Quader 1000 × 600 × 400: 1:10 (100+20 ≤ 151,31 hoch; 1:5 wäre 200+20 zu hoch).
     let mut big = AppState::new();
     big.create_box(DVec3::new(1000.0, 600.0, 400.0)).unwrap();
-    assert_eq!(NewDrawingDialog::new(&big).scale, s(1, 20));
+    assert_eq!(NewDrawingDialog::new(&big).scale, s(1, 10));
 }
 
 #[test]
@@ -731,9 +734,10 @@ fn adding_a_top_view_sits_below_front_in_first_angle() {
         Placement::Aligned { distance: 100.0 }
     );
 
-    // Isometrisch: möglichst bei (0,75·B, 0,75·H) des freien Bereichs 20…287 × 88…193, mit der
-    // Ausdehnung 113,1 × 98,0 (1:1) darin: x = 220,25 passt, y = 166,75 würde oben um 22,7
-    // herausragen und wird auf 193 − 98,0/2 = 144,01 gesetzt.
+    // Isometrisch: ins leere Viertel rechts unten neben „Vorne“ (Erstwinkel), ab (218,5, 65).
+    // Der freie Bereich (14,14…289,93 × 46,67…197,98) lässt dort nur 71,4 × 18,3 mm; die
+    // Isometrie (113,1 × 98,0 bei 1:1, 56,6 × 49,0 bei 1:2) passt weder in 1:1 noch eine Stufe
+    // kleiner. Nach bestem Wissen: 1:1, bündig in der Ecke rechts unten des freien Bereichs.
     let iso = drawing_view::add_view(&mut st, ViewKind::Isometric).unwrap();
     let v = st.document.drawing(d).unwrap().view(iso).unwrap().clone();
     assert_eq!(v.parent, None);
@@ -741,9 +745,12 @@ fn adding_a_top_view_sits_below_front_in_first_angle() {
     let Placement::Free { x, y } = v.placement else {
         panic!("frei");
     };
-    let (_, ih) = estimate_view_size(&st.bodies, ViewKind::Isometric);
-    assert!((x - 220.25).abs() < 1e-9 && (y - (193.0 - ih / 2.0)).abs() < 1e-9);
-    assert!((y - 144.0102).abs() < 1e-3, "{y}");
+    let (iw, ih) = estimate_view_size(&st.bodies, ViewKind::Isometric);
+    assert!(
+        (x - (289.928_571_428_571 - iw / 2.0)).abs() < 1e-9
+            && (y - (46.671_428_571_429 + ih / 2.0)).abs() < 1e-9,
+        "({x}, {y})"
+    );
 
     // Gewählte Normansicht ist die Ausgangsansicht; gleiche Art zweimal erlaubt.
     st.drawing_ui.selected_view = Some(top);
@@ -1314,10 +1321,16 @@ fn an_empty_document_or_a_missing_drawing_does_not_panic() {
     );
     assert_eq!(h.layout().lines_drawn, 0);
     // Ansicht hinzufügen ohne Körper und ohne Grundansicht: frei in der Mitte des freien
-    // Bereichs, 1:1.
+    // Bereichs (A4 quer, Blattzubehör mal 0,707: 14,14…289,93 × 46,67…197,98), 1:1.
     let v = drawing_view::add_view(&mut st, ViewKind::Top).unwrap();
     let spec = st.document.drawing(d).unwrap().view(v).unwrap().clone();
-    assert_eq!(spec.placement, Placement::Free { x: 153.5, y: 140.5 });
+    let Placement::Free { x, y } = spec.placement else {
+        panic!("frei");
+    };
+    assert!(
+        (x - 152.035_714_285_714).abs() < 1e-9 && (y - 122.325).abs() < 1e-9,
+        "({x}, {y})"
+    );
     assert_eq!(spec.parent, None);
     assert_eq!(spec.scale, s(1, 1));
     h.idle(&mut st);
