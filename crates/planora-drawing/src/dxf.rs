@@ -98,8 +98,8 @@
 //! Ebenen nach Strichstärke: `BLATTRAHMEN` (7, `CONTINUOUS`, 70: Rahmen und Außenlinie des
 //! Schriftfelds), `BLATT_MITTE` (50: Zentriermarken, Projektionssymbol) und `BLATT` (25: übrige
 //! Linien und alle Texte). Die Ebenen werden nur angelegt, wenn es einen Rahmen gibt; ohne Rahmen
-//! enthält die Datei weder diese Ebenen noch eine `LWPOLYLINE`. Texte des Blatts, die in der Datei
-//! länger als 255 Zeichen würden, werden gekürzt statt abgelehnt.
+//! enthält die Datei weder diese Ebenen noch eine `LWPOLYLINE`. Zu lange Texte (mehr als 255 Zeichen
+//! in der Datei) werden wie Maßtexte abgelehnt, nie still gekürzt; vorher prüft [`dxf_text_fits`].
 //!
 //! Handtest in Fusion 360 (nach jeder Änderung am Aufbau): Datei mit Maßen, verlorenem Maß und
 //! Mittellinien öffnen; prüfen, dass die Datei ohne Meldung geladen wird, die Ebenen `MASSE`,
@@ -1062,17 +1062,12 @@ fn write_mark(o: &mut Out, hs: &mut Handles, owner: u64, m: &Mark) -> Result<(),
             angle,
             anchor,
             text,
-            kind,
+            ..
         } => {
             if !(pos.is_finite() && height.is_finite() && angle.is_finite()) {
                 return Err(DrawError::NonFinite);
             }
-            let mut encoded = encode_text(text);
-            if matches!(kind, MarkKind::Sheet(_)) {
-                // Blatttexte werden gekürzt statt abgelehnt (ein langer Titel mit Umlauten
-                // darf die Ausgabe nicht verhindern).
-                encoded = encode_text_limited(text);
-            }
+            let encoded = encode_text(text);
             if encoded.len() > MAX_TEXT_LEN {
                 return Err(DrawError::Unsupported("Der Maßtext ist zu lang.".into()));
             }
@@ -1125,21 +1120,6 @@ fn encode_text(s: &str) -> String {
             c if (c as u32) <= 0xFFFF => o.push_str(&format!("\\U+{:04X}", c as u32)),
             _ => o.push('?'),
         }
-    }
-    o
-}
-
-/// Wie [`encode_text`], aber so früh abgebrochen, dass das Ergebnis höchstens `MAX_TEXT_LEN`
-/// Zeichen lang ist (ein Kürzel wird nie zerrissen).
-fn encode_text_limited(s: &str) -> String {
-    let mut o = String::new();
-    let mut buf = [0u8; 4];
-    for c in s.chars() {
-        let piece = encode_text(c.encode_utf8(&mut buf));
-        if o.len() + piece.len() > MAX_TEXT_LEN {
-            break;
-        }
-        o.push_str(&piece);
     }
     o
 }

@@ -85,7 +85,7 @@ fn sheet_of(paper: Paper, landscape: bool) -> Sheet {
     Sheet { paper, landscape }
 }
 
-/// Blattmodell von Hand: Ansichten mit Namen und Linien (sichtbar/verdeckt), Rahmen 10 mm.
+/// Blattmodell von Hand: Ansichten mit Namen und Linien (sichtbar/verdeckt), ohne Blattrahmen.
 fn manual(sheet: Sheet, views: Vec<(&str, Vec<(Visibility, Out2d)>)>) -> SheetModel {
     SheetModel {
         sheet,

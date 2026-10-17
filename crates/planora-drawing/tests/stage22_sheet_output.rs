@@ -7,7 +7,7 @@ use common::dxf_read::{self, Geom};
 use common::svg_marks::{box_sheet, cylinder_sheet, manual_sheet};
 use common::svg_read;
 use planora_drawing::annotate::{Mark, MarkKind, TextAnchor};
-use planora_drawing::dxf::dxf_char_ok;
+use planora_drawing::dxf::{dxf_char_ok, dxf_text_fits};
 use planora_drawing::sheet_frame::*;
 use planora_drawing::sheet_info::TitleTexts;
 use planora_drawing::sheet_marks::{
@@ -220,7 +220,7 @@ fn longest_texts_stay_in_their_cells() {
                 );
                 checked += 1;
             }
-            // 17 Feldnamen, 16 Inhalte (ohne Projektion; alle Felder haben Text), 4 Kopfzeilen und
+            // 17 Feldnamen, 17 Inhalte (ohne Projektion; alle Felder haben Text), 4 Kopfzeilen und
             // 6 × 4 Änderungstexte, 6 Hinweise.
             assert_eq!(checked, 17 + 17 + 4 + 24 + 6, "{sheet:?} {pattern}");
             // Inhalte stehen unter dem Feldnamen ihrer Zelle.
@@ -428,8 +428,28 @@ fn frame_marks_contents() {
             _ => None,
         })
         .unwrap();
-    assert!(first_arc_x > t0.x + PROJECTION_X0 + 2.0 * SYMBOL_H);
-    assert!(third_arc_x < t0.x + PROJECTION_X0 + 2.0 * SYMBOL_H);
+    // Genaue Lage: Methode 1 Kegelstumpf bei x0 und Kreise bei x0 + 14; Methode 3 Kreise bei
+    // x0 + 3,5 und Kegelstumpf bei x0 + 10,5 (gleiche Richtung: links 3,5 hoch, rechts 7 hoch).
+    let x0 = t0.x + PROJECTION_X0;
+    assert!((first_arc_x - (x0 + 14.0)).abs() < 1e-9);
+    assert!((third_arc_x - (x0 + 3.5)).abs() < 1e-9);
+    let sides = |f: &SheetFrame| -> Vec<(f64, f64)> {
+        let mut s: Vec<(f64, f64)> = lines_of(f, SheetPen::Medium)
+            .into_iter()
+            .filter(|(a, b)| (a.x - b.x).abs() < 1e-9 && a.x > x0 - 1.0 && a.x < x0 + 30.0)
+            .map(|(a, b)| (a.x, (a.y - b.y).abs()))
+            .collect();
+        s.sort_by(|p, q| p.0.total_cmp(&q.0));
+        s
+    };
+    let (s1, s3) = (sides(&frame), sides(&third));
+    assert_eq!(s1.len(), 2);
+    assert_eq!(s3.len(), 2);
+    assert!((s1[0].0 - x0).abs() < 1e-9 && (s1[1].0 - (x0 + 7.0)).abs() < 1e-9);
+    assert!((s3[0].0 - (x0 + 10.5)).abs() < 1e-9 && (s3[1].0 - (x0 + 17.5)).abs() < 1e-9);
+    for s in [&s1, &s3] {
+        assert!((s[0].1 - 3.5).abs() < 1e-9 && (s[1].1 - 7.0).abs() < 1e-9);
+    }
     assert_ne!(frame, third);
     // Sonst gleich: ohne Symbol dieselben Texte.
     assert_eq!(texts_of(&frame), texts_of(&third));
@@ -606,14 +626,30 @@ fn framed_output_is_on_the_paper() {
 }
 
 #[test]
-fn long_sheet_texts_do_not_fail_the_dxf() {
-    // Ein Titel aus lauter Umlauten (je 7 Zeichen in der Datei) wird eingepasst, nicht abgelehnt.
+fn long_sheet_texts_are_checked_upfront_not_cut() {
+    // Ein Titel aus lauter Umlauten (je 7 Zeichen in der Datei) ist zu lang für die Datei: die
+    // Vorabprüfung lehnt ihn ab, und der Schreiber kürzt nicht still, sondern scheitert wie bei
+    // Maßtexten.
+    let title = "Ä".repeat(60);
+    assert!(!dxf_text_fits(&title));
+    assert!(dxf_text_fits(&"Ä".repeat(36)));
     let mut m = box_sheet(false);
     let layout = sheet_layout(m.sheet, 0, 0);
-    let texts = texts_with(&[(TitleField::Title, &"Ä".repeat(60))]);
+    let texts = texts_with(&[(TitleField::Title, &title)]);
     m.frame = Some(sheet_frame(&layout, &texts, Projection::First));
-    let dxf = dxf_string(&m).expect("DXF");
-    dxf_read::read(&dxf).unwrap();
+    assert!(matches!(
+        dxf_string(&m),
+        Err(DrawError::Unsupported(s)) if s == "Der Maßtext ist zu lang."
+    ));
+    // Passt der Text, steht er vollständig in der Datei.
+    let texts = texts_with(&[(TitleField::Title, &"Ä".repeat(36))]);
+    m.frame = Some(sheet_frame(&layout, &texts, Projection::First));
+    let d = dxf_read::read(&dxf_string(&m).unwrap()).unwrap();
+    assert!(
+        d.entities
+            .iter()
+            .any(|e| e.kind == "TEXT" && e.get(1) == Some(&r"\U+00C4".repeat(36)[..]))
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -669,5 +705,50 @@ fn nan_in_frame_is_rejected() {
         let (mut s, mut d) = (Vec::new(), Vec::new());
         assert!(write_svg(&m, &mut s).is_err() && s.is_empty());
         assert!(write_dxf(&m, &mut d).is_err() && d.is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Maskierung und Rasterbeschriftung
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn frame_texts_are_escaped_in_svg() {
+    let mut m = box_sheet(false);
+    let layout = sheet_layout(m.sheet, 0, 0);
+    let texts = texts_with(&[(TitleField::Owner, "A&B <x> \"q\"")]);
+    m.frame = Some(sheet_frame(&layout, &texts, Projection::First));
+    let svg = svg_string(&m).unwrap();
+    assert!(
+        svg.contains(">A&amp;B &lt;x&gt; &quot;q&quot;</text>"),
+        "{svg}"
+    );
+    let r = svg_read::read(&svg);
+    assert!(r.texts_of("Blattrahmen").any(|t| t.text == "A&B <x> \"q\""));
+}
+
+#[test]
+fn grid_labels_stay_in_the_margin_band() {
+    for sheet in [
+        sh(Paper::A4, false),
+        sh(Paper::A3, true),
+        sh(Paper::A0, false),
+    ] {
+        let layout = sheet_layout(sheet, 0, 0);
+        let frame = sheet_frame(&layout, &texts_with(&[]), Projection::First);
+        let (w, h) = sheet.size_mm();
+        let (f0, f1) = layout.frame;
+        let mut n = 0;
+        for (pos, th, anchor, s) in texts_of(&frame) {
+            if anchor != TextAnchor::Middle {
+                continue;
+            }
+            let b = text_box(pos, th, anchor, &s);
+            assert!(inside(b, (v(0.0, 0.0), v(w, h))), "{s}");
+            let outside_frame = b.1.x <= f0.x || b.0.x >= f1.x || b.1.y <= f0.y || b.0.y >= f1.y;
+            assert!(outside_frame, "{sheet:?} {s}: {b:?} berührt den Rahmen");
+            n += 1;
+        }
+        assert_eq!(n, layout.grid_labels.len());
     }
 }
