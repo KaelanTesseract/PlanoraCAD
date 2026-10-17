@@ -48,11 +48,12 @@ const NOTES_FULL: &str = "Es sind höchstens 6 Hinweiszeilen möglich.";
 const FIELD_W: f32 = 280.0;
 /// Breite einer Hinweiszeile.
 const NOTE_W: f32 = 440.0;
-/// Breiten der Spalten der Änderungstabelle.
-const REV_LETTER_W: f32 = 56.0;
-const REV_TEXT_W: f32 = 190.0;
-const REV_DATE_W: f32 = 92.0;
-const REV_NAME_W: f32 = 110.0;
+/// Breiten der Spalten der Änderungstabelle; die Beschreibung nimmt den Rest der Zeile, aber
+/// mindestens [`REV_TEXT_MIN_W`]. Das Datum hat Platz für „JJJJ-MM-TT“.
+const REV_LETTER_W: f32 = 50.0;
+const REV_TEXT_MIN_W: f32 = 280.0;
+const REV_DATE_W: f32 = 110.0;
+const REV_NAME_W: f32 = 140.0;
 
 /// Bezeichnung eines Felds des Schriftfelds in der Oberfläche und in Meldungen.
 pub fn title_field_name(field: TitleField) -> &'static str {
@@ -228,9 +229,12 @@ impl SheetInfoDialog {
                 // ---- Projekt ----
                 theme::section_header(ui, "Projekt", theme::SUB_HEADER_H);
                 ui.add_space(theme::SPACE_1);
+                // Eine Bezeichnungsspalte für alle Abschnitte: die Felder beginnen überall gleich.
+                let label_w = label_column_width(ui);
                 egui::Grid::new("planora-sheet-project")
                     .num_columns(2)
                     .spacing([12.0, 8.0])
+                    .min_col_width(label_w)
                     .show(ui, |ui| {
                         let rows: [(&str, &mut FieldValue, TitleField); 5] = [
                             ("Eigentümer", &mut project.owner, TitleField::Owner),
@@ -288,6 +292,7 @@ impl SheetInfoDialog {
                 egui::Grid::new("planora-sheet-own")
                     .num_columns(2)
                     .spacing([12.0, 8.0])
+                    .min_col_width(label_w)
                     .show(ui, |ui| {
                         let rows: [(&str, &mut FieldValue, TitleField, usize); 11] = [
                             (
@@ -386,85 +391,111 @@ impl SheetInfoDialog {
                 if sheet.revisions.is_empty() {
                     ui.weak("Noch keine Änderungen.");
                 } else {
-                    egui::Grid::new("planora-sheet-revisions")
-                        .num_columns(5)
-                        .spacing([8.0, 8.0])
-                        .show(ui, |ui| {
-                            for h in ["Buchstabe", "Beschreibung", "Datum", "Name"] {
+                    // Feste Spaltenbreiten (Kopf und Zeilen in derselben Breite, also bündig):
+                    // Buchstabe, Datum und Name fest, die Beschreibung nimmt den Rest.
+                    let gap = ui.spacing().item_spacing.x;
+                    let delete_w = text_width(ui, "Löschen", egui::TextStyle::Button)
+                        + 2.0 * ui.spacing().button_padding.x;
+                    // Die Spalte des Buchstabens ist mindestens so breit wie ihr Kopf.
+                    let letter_w =
+                        REV_LETTER_W.max(text_width(ui, "Buchstabe", egui::TextStyle::Body));
+                    let text_w = (ui.available_width()
+                        - letter_w
+                        - REV_DATE_W
+                        - REV_NAME_W
+                        - delete_w
+                        - 4.0 * gap)
+                        .max(REV_TEXT_MIN_W);
+                    let widths = [letter_w, text_w, REV_DATE_W, REV_NAME_W];
+                    ui.horizontal(|ui| {
+                        for (h, w) in ["Buchstabe", "Beschreibung", "Datum", "Name"]
+                            .into_iter()
+                            .zip(widths)
+                        {
+                            cell(ui, w, |ui| {
                                 ui.weak(h);
-                            }
-                            ui.label("");
-                            ui.end_row();
-                            for (i, r) in sheet.revisions.iter_mut().enumerate() {
-                                let auto_letter =
-                                    revision_letter(i).map(String::from).unwrap_or_default();
-                                let mut letter = match &r.letter {
-                                    FieldValue::Text(t) => t.clone(),
-                                    FieldValue::Auto => String::new(),
-                                };
-                                // Die Länge steht bei den Zellen der Tabelle im Hinweis am
-                                // Feld (neben jeder Zelle wäre die Zeile zu breit).
+                            });
+                        }
+                    });
+                    for (i, r) in sheet.revisions.iter_mut().enumerate() {
+                        let auto_letter = revision_letter(i).map(String::from).unwrap_or_default();
+                        let mut letter = match &r.letter {
+                            FieldValue::Text(t) => t.clone(),
+                            FieldValue::Auto => String::new(),
+                        };
+                        // Gekürzt wird nur, was im Blatt steht (die letzten sechs).
+                        let shown = actual.revisions.get(i).filter(|_| i >= first_visible);
+                        let cut_row = shown.is_some_and(|row| {
+                            row.iter()
+                                .enumerate()
+                                .any(|(c, text)| revision_cell_is_cut(c, text, &layout))
+                        });
+                        ui.horizontal(|ui| {
+                            // Die Länge steht bei den Zellen der Tabelle im Hinweis am Feld
+                            // (neben jeder Zelle wäre die Zeile zu breit).
+                            cell(ui, widths[0], |ui| {
                                 theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(&mut letter)
                                         .id_salt(("planora-rev-letter", i))
                                         .hint_text(auto_letter)
-                                        .desired_width(REV_LETTER_W)
+                                        .desired_width(widths[0])
                                         .char_limit(MAX_FIELD_CHARS),
                                 )
                                 .on_hover_text(length_label(&letter, MAX_FIELD_CHARS));
-                                r.letter = FieldValue::from_input(&letter);
-                                // Gekürzt wird nur, was im Blatt steht (die letzten sechs).
-                                let shown = actual.revisions.get(i).filter(|_| i >= first_visible);
-                                let cut_row = shown.is_some_and(|row| {
-                                    row.iter()
-                                        .enumerate()
-                                        .any(|(c, text)| revision_cell_is_cut(c, text, &layout))
-                                });
+                            });
+                            cell(ui, widths[1], |ui| {
                                 theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(&mut r.description)
                                         .id_salt(("planora-rev-text", i))
-                                        .desired_width(REV_TEXT_W)
+                                        .desired_width(widths[1])
                                         .char_limit(MAX_REVISION_CHARS),
                                 )
                                 .on_hover_text(length_label(&r.description, MAX_REVISION_CHARS));
+                            });
+                            cell(ui, widths[2], |ui| {
                                 theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(&mut r.date)
                                         .id_salt(("planora-rev-date", i))
-                                        .desired_width(REV_DATE_W)
+                                        .desired_width(widths[2])
                                         .char_limit(MAX_FIELD_CHARS),
                                 )
                                 .on_hover_text(length_label(&r.date, MAX_FIELD_CHARS));
+                            });
+                            cell(ui, widths[3], |ui| {
                                 theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(&mut r.name)
                                         .id_salt(("planora-rev-name", i))
-                                        .desired_width(REV_NAME_W)
+                                        .desired_width(widths[3])
                                         .char_limit(MAX_FIELD_CHARS),
                                 )
                                 .on_hover_text(length_label(&r.name, MAX_FIELD_CHARS));
-                                if ui.button("Löschen").clicked() {
-                                    delete_rev = Some(i);
-                                }
-                                ui.end_row();
-                                if cut_row {
-                                    ui.label("");
-                                    ui.scope(|ui| {
-                                        ui.set_max_width(REV_TEXT_W);
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(CUT_WARNING)
-                                                    .color(warning_color(dark)),
-                                            )
-                                            .wrap(),
-                                        );
-                                    });
-                                    ui.end_row();
-                                }
+                            });
+                            if ui.button("Löschen").clicked() {
+                                delete_rev = Some(i);
                             }
                         });
+                        r.letter = FieldValue::from_input(&letter);
+                        if cut_row {
+                            // Unter der Beschreibung dieser Zeile.
+                            ui.horizontal(|ui| {
+                                ui.add_space(widths[0] + gap);
+                                ui.scope(|ui| {
+                                    ui.set_max_width(widths[1]);
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(CUT_WARNING)
+                                                .color(warning_color(dark)),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
+                            });
+                        }
+                    }
                 }
                 ui.add_space(theme::SPACE_1);
                 if ui
@@ -512,6 +543,56 @@ impl SheetInfoDialog {
         open && !close
     }
 }
+
+/// Zelle fester Breite `w` (Spalte der Änderungstabelle), Inhalt links und senkrecht mittig.
+fn cell(ui: &mut egui::Ui, w: f32, add: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(w, ui.spacing().interact_size.y),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_min_width(w);
+            ui.set_max_width(w);
+            add(ui);
+        },
+    );
+}
+
+/// Breite eines Texts in der Schrift `style` (ohne Umbruch).
+fn text_width(ui: &egui::Ui, text: &str, style: egui::TextStyle) -> f32 {
+    egui::WidgetText::from(text)
+        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, style)
+        .size()
+        .x
+}
+
+/// Gemeinsame Breite der Bezeichnungsspalte aller Abschnitte: die längste Bezeichnung.
+fn label_column_width(ui: &egui::Ui) -> f32 {
+    LABELS
+        .iter()
+        .map(|l| text_width(ui, l, egui::TextStyle::Body))
+        .fold(0.0, f32::max)
+}
+
+/// Alle Bezeichnungen der Felder in „Projekt“ und „Dieses Blatt“.
+const LABELS: [&str; 17] = [
+    "Eigentümer",
+    "Erstellt",
+    "Geprüft",
+    "Freigabe",
+    "Werkstoff",
+    "Allgemeintoleranz",
+    "Zeichnungsnummer",
+    "Titel",
+    "Zusatztitel",
+    "Dokumentart",
+    "Dokumentstatus",
+    "Ausgabedatum",
+    "Änderungsstand",
+    "Blatt",
+    "Format",
+    "Maßstab",
+    "Gewicht",
+];
 
 /// Länge eines Eintrags als „n/max“ (Zeichen).
 fn length_label(text: &str, max: usize) -> String {

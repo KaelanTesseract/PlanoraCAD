@@ -1030,3 +1030,108 @@ fn the_sheet_cache_is_only_used_for_its_own_drawing() {
     assert_ne!(tab2.instance, h.st().instance);
     assert!(drawing_view::last_sheet_for(&c, &tab2, d2).is_none());
 }
+
+/// Kleinste Fläche des Bildes, die den Punkt `p` enthält (das Textfeld um einen Text).
+fn field_around(shot: &Shot, p: Pos2) -> Rect {
+    shot.fills
+        .iter()
+        .map(|(r, _)| *r)
+        .filter(|r| r.contains(p) && r.width() > 10.0)
+        .min_by(|a, b| a.area().total_cmp(&b.area()))
+        .expect("Feld um den Text")
+}
+
+#[test]
+fn revision_columns_are_wide_enough_and_labels_share_one_column() {
+    for size in [SMALL, BIG] {
+        let (mut h, _, _) = H::new(size, false, false);
+        // Texte des Blatts hinter dem Fenster (etwa „Eigentümer“ im Schriftfeld) nicht mitzählen.
+        h.capture_base();
+        h.open_from_toolbar();
+        let s = Stamp::now();
+        h.dialog().add_revision(&s, "Dennis Guse");
+        h.dialog().sheet.revisions[0].description = "Bohrung ergänzt".into();
+        let date = h.dialog().sheet.revisions[0].date.clone();
+        assert_eq!(date.chars().count(), 10, "Testvoraussetzung: JJJJ-MM-TT");
+
+        // Änderungen: Datum und Name ganz zu sehen, Beschreibung mindestens 280 px breit,
+        // Spaltenköpfe bündig mit den Feldern.
+        h.scroll_to("Bohrung ergänzt");
+        let shot = h.settle();
+        let rect = h.dialog_rect().unwrap();
+        let find = |t: &str| {
+            shot.dlg(t, rect)
+                .first()
+                .unwrap_or_else(|| panic!("{size:?}: „{t}“ nicht ganz zu sehen"))
+                .rect
+        };
+        let text = find("Bohrung ergänzt");
+        // In der Zeile der Änderung (das Ausgabedatum weiter oben trägt dasselbe Datum).
+        let in_row = |t: &str| {
+            shot.dlg(t, rect)
+                .into_iter()
+                .find(|x| (x.rect.center().y - text.center().y).abs() < 6.0)
+                .unwrap_or_else(|| panic!("{size:?}: „{t}“ in der Zeile nicht ganz zu sehen"))
+                .rect
+        };
+        let (date_r, name_r) = (in_row(&date), in_row("Dennis Guse"));
+        let text_f = field_around(&shot, text.left_center() + egui::vec2(1.0, 0.0));
+        let date_f = field_around(&shot, date_r.left_center() + egui::vec2(1.0, 0.0));
+        let name_f = field_around(&shot, name_r.left_center() + egui::vec2(1.0, 0.0));
+        assert!(
+            text_f.width() >= 280.0 - 0.5,
+            "{size:?}: Beschreibung {text_f:?}"
+        );
+        assert!(
+            (date_f.width() - 110.0).abs() < 1.0,
+            "{size:?}: Datum {date_f:?}"
+        );
+        assert!(
+            (name_f.width() - 140.0).abs() < 1.0,
+            "{size:?}: Name {name_f:?}"
+        );
+        assert!(rect.contains_rect(name_f), "{size:?}: Zeile im Fenster");
+        let del = in_row("Löschen");
+        assert!(
+            del.left() > name_f.right() && rect.contains_rect(del),
+            "{size:?}"
+        );
+        for (head, f) in [
+            ("Beschreibung", text_f),
+            ("Datum", date_f),
+            ("Name", name_f),
+        ] {
+            let hr = find(head);
+            assert!(
+                (hr.left() - f.left()).abs() < 1.0,
+                "{size:?}: Kopf {head} {hr:?} {f:?}"
+            );
+        }
+
+        // Bezeichnungsspalte: Felder in „Projekt“ und „Dieses Blatt“ beginnen gleich weit links.
+        let left_of_field = |h: &mut H, label: &str| -> f32 {
+            let l = h.scroll_to(label);
+            let shot = h.settle();
+            let dialog = h.dialog_rect().unwrap();
+            shot.fills
+                .iter()
+                .map(|(r, _)| *r)
+                .filter(|r| dialog.contains_rect(*r))
+                .filter(|r| {
+                    r.left() > l.right() && r.top() <= l.center().y && r.bottom() >= l.center().y
+                })
+                // Die Textfelder der Angaben sind 280 px breit und 26 px hoch.
+                .filter(|r| (r.width() - 280.0).abs() < 1.0 && (r.height() - 26.0).abs() < 1.0)
+                .map(|r| r.left())
+                .fold(f32::INFINITY, f32::min)
+        };
+        let project = left_of_field(&mut h, "Eigentümer");
+        let own = left_of_field(&mut h, "Zeichnungsnummer");
+        let tol = left_of_field(&mut h, "Allgemeintoleranz");
+        assert!(project.is_finite(), "{size:?}");
+        assert!(
+            (project - own).abs() < 0.5 && (tol - own).abs() < 0.5,
+            "{size:?}: {project} {own} {tol}"
+        );
+    }
+}
