@@ -60,7 +60,7 @@ fn scale_factor_per_paper() {
             assert_eq!(sheet_layout(sh(p, landscape), 0, 0).scale, f);
         }
     }
-    assert!((sheet_scale(sh(Paper::A4, true)) - 0.7071).abs() < 1e-4);
+    assert!((sheet_scale(sh(Paper::A4, true)) - 0.707_14).abs() < 1e-5);
     assert!((sheet_scale(sh(Paper::A0, true)) - 2.8310).abs() < 1e-4);
 }
 
@@ -327,7 +327,7 @@ fn title_block_and_tables() {
     }
     assert_eq!(TitleField::Title.max_chars(), 60);
     assert_eq!(TitleField::Owner.max_chars(), 80);
-    assert_eq!(TitleField::Revision.label(), "Änderung");
+    assert_eq!(TitleField::Revision.label(), "Index");
     assert_eq!(Paper::A4.label(), "A4");
     assert_eq!(Paper::A0.label(), "A0");
 }

@@ -622,6 +622,18 @@ fn edit_apply_and_reset() {
     ] {
         assert!(!shot.dlg(auto, rect).is_empty(), "Hinweis „{auto}“");
     }
+    // Die Länge steht auch an leeren Feldern („0/80“, Titel „0/60“) und an den Hinweiszeilen
+    // („n/100“).
+    assert!(!shot.dlg("0/80", rect).is_empty(), "Länge leerer Felder");
+    assert!(
+        !shot.dlg("0/60", rect).is_empty(),
+        "Länge des leeren Titels"
+    );
+    let texts: Vec<String> = h.texts_in_dialog().into_iter().map(|t| t.text).collect();
+    assert!(
+        texts.iter().any(|t| t.ends_with("/100")),
+        "Länge der Hinweiszeilen: {texts:?}"
+    );
     h.type_into_hinted("Blatt 1", "Lager");
     h.type_into_hinted("in Arbeit", "freigegeben");
     let texts: Vec<String> = h.texts_in_dialog().into_iter().map(|t| t.text).collect();
@@ -703,13 +715,20 @@ fn cancel_changes_nothing() {
     assert!(h.st().document.project_info().is_none());
     assert_eq!(edit_count(&mut h), before);
 
-    // „Übernehmen“ ohne Eingabe setzt beide Sätze; das Ausgabedatum ist der Tag des Übernehmens.
+    // „Übernehmen“ ohne Eingabe setzt beide Sätze; das Ausgabedatum ist der Tag des Übernehmens
+    // (Tag vor oder nach dem Klick: um Mitternacht darf der Test nicht scheitern).
     h.open_from_toolbar();
+    let day_before = Stamp::now().date;
     h.click_text("Übernehmen");
+    let day_after = Stamp::now().date;
     assert!(!h.is_open());
-    let today = Stamp::now().date;
     let info = h.st().document.drawing(d).unwrap().info.clone().unwrap();
-    assert_eq!(info.created, today);
+    assert!(
+        info.created == day_before || info.created == day_after,
+        "{}",
+        info.created
+    );
+    let today = info.created.clone();
     assert_eq!(info.title, FieldValue::Auto);
     assert!(h.st().document.project_info().is_some());
     assert!(edit_count(&mut h) > before);
@@ -725,17 +744,19 @@ fn cancel_changes_nothing() {
 fn revisions_in_the_dialog() {
     let (mut h, d, _) = H::new(TALL, false, false);
     h.open_from_toolbar();
+    let day_before = Stamp::now().date;
     for _ in 0..3 {
         h.click_text("Änderung hinzufügen");
     }
+    let day_after = Stamp::now().date;
     assert_eq!(h.dialog().sheet.revisions.len(), 3);
-    let today = Stamp::now().date;
     let creator = {
         let p = h.dialog().project.clone();
         p.creator.resolve(&p.login).to_string()
     };
     for r in &h.dialog().sheet.revisions.clone() {
-        assert_eq!(r.date, today);
+        // Tag des Klicks (um Mitternacht der vorige oder der neue).
+        assert!(r.date == day_before || r.date == day_after, "{}", r.date);
         assert_eq!(r.name, creator);
         assert_eq!(r.letter, FieldValue::Auto);
     }
@@ -995,6 +1016,17 @@ fn the_sheet_cache_is_only_used_for_its_own_drawing() {
         .document
         .add_drawing_stamped("Blatt 2", A4_QUER, Projection::First, &stamp())
         .unwrap();
-    assert!(drawing_view::last_sheet_for(&h.c, d).is_some());
-    assert!(drawing_view::last_sheet_for(&h.c, other).is_none());
+    let c = h.c.clone();
+    let st = h.st();
+    assert!(drawing_view::last_sheet_for(&c, st, d).is_some());
+    assert!(drawing_view::last_sheet_for(&c, st, other).is_none());
+    // Ein anderes Tab mit einer Zeichnung derselben Kennung bekommt das Blatt nicht.
+    let mut tab2 = AppState::new();
+    let d2 = tab2
+        .document
+        .add_drawing_stamped("Blatt 1", A4_QUER, Projection::First, &stamp())
+        .unwrap();
+    assert_eq!(d2, d, "Testvoraussetzung: gleiche Kennung");
+    assert_ne!(tab2.instance, h.st().instance);
+    assert!(drawing_view::last_sheet_for(&c, &tab2, d2).is_none());
 }

@@ -523,6 +523,8 @@ fn placeholder(size: (f64, f64)) -> (f64, f64) {
 
 #[derive(Clone)]
 struct SheetCache {
+    /// Zustand (Tab), dessen Zeichnung hier liegt ([`AppState::instance`]).
+    instance: u64,
     drawing: Drawing,
     model: u64,
     ptrs: Vec<usize>,
@@ -625,11 +627,16 @@ pub fn last_sheet(ctx: &egui::Context) -> Option<Arc<SheetModel>> {
         .map(|c| c.sheet)
 }
 
-/// Wie [`last_sheet`], aber nur, wenn das zuletzt gezeichnete Blatt das der Zeichnung `id` ist
-/// (der Zwischenspeicher gilt für das ganze Programm, nicht je Zeichnung oder Tab).
-pub fn last_sheet_for(ctx: &egui::Context, id: DrawingId) -> Option<Arc<SheetModel>> {
+/// Wie [`last_sheet`], aber nur, wenn das zuletzt gezeichnete Blatt das der Zeichnung `id` im
+/// Dokument von `state` ist (der Zwischenspeicher gilt für das ganze Programm, nicht je
+/// Zeichnung oder Tab; Zeichnungen verschiedener Tabs können dieselbe Kennung haben).
+pub fn last_sheet_for(
+    ctx: &egui::Context,
+    state: &AppState,
+    id: DrawingId,
+) -> Option<Arc<SheetModel>> {
     ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()))
-        .filter(|c| c.drawing.id == id)
+        .filter(|c| c.instance == state.instance && c.drawing.id == id)
         .map(|c| c.sheet)
 }
 
@@ -649,7 +656,7 @@ fn sheet_model(
     let context = sheet_context(state, drawing.id);
     let same_base = cached
         .as_ref()
-        .filter(|c| c.model == model && c.ptrs == ptrs);
+        .filter(|c| c.instance == state.instance && c.model == model && c.ptrs == ptrs);
     if let Some(c) = same_base
         && Arc::ptr_eq(&c.dims, dims)
         && c.drawing == *drawing
@@ -675,6 +682,7 @@ fn sheet_model(
         d.insert_temp(
             sheet_cache_id(),
             SheetCache {
+                instance: state.instance,
                 drawing: drawing.clone(),
                 model,
                 ptrs,

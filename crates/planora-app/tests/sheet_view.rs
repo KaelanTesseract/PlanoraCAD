@@ -259,11 +259,17 @@ fn frame_is_shown_at_800x600_and_large() {
 fn new_drawing_is_stamped_and_centred() {
     let mut st = box_state();
     let dialog = NewDrawingDialog::new(&st);
+    // Tag vor oder nach dem Anlegen (um Mitternacht darf der Test nicht scheitern).
+    let before = Stamp::now();
     let id = dialog.create(&mut st).unwrap();
     let today = Stamp::now();
     let dr = st.document.drawing(id).unwrap();
     let info = dr.info.as_ref().expect("Blattangaben");
-    assert_eq!(info.created, today.date);
+    assert!(
+        info.created == before.date || info.created == today.date,
+        "{}",
+        info.created
+    );
     let project = st.document.project_info().expect("Projektangaben");
     assert_eq!(project.login, today.user);
     assert_eq!(project.creator, FieldValue::Auto);

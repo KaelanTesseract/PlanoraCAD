@@ -166,6 +166,9 @@ pub struct AppState {
     /// Name des Dokuments für die Zeichnungsnummer im Schriftfeld („Werkstück-01“); die App setzt
     /// ihn in jedem Bild aus dem Namen des Tabs.
     pub document_name: String,
+    /// Kennung dieses Zustands (jedes Tab hat einen eigenen; eindeutig im Programm). Trennt die
+    /// programmweiten Zwischenspeicher der Zeichnungsansicht nach Dokumenten.
+    pub instance: u64,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -248,6 +251,9 @@ struct SketchFit {
     stable: u8,
 }
 
+/// Nächste Kennung für [`AppState::instance`].
+static NEXT_INSTANCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
@@ -297,6 +303,7 @@ impl AppState {
             sheet_dialog: None,
             pending_delete_dimension: None,
             document_name: "Unbenannt".to_string(),
+            instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
         state.rebuild_scene();
         state

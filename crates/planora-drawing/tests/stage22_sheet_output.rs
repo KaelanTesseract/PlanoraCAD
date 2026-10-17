@@ -373,6 +373,10 @@ fn frame_marks_contents() {
     assert_eq!(status_label.len(), 1);
     assert!((status_label[0].1 - 2.2).abs() < 1e-12);
     assert_eq!(find("in Arbeit").len(), 1);
+    // Die Zelle des Änderungsstands heißt im Schriftfeld „Index“ („Änderung“ steht nur als
+    // Spaltenkopf der Änderungstabelle).
+    assert_eq!(find("Index").len(), 1);
+    assert_eq!(find("Änderung").len(), 1);
     for n in 1..=8 {
         assert_eq!(find(&n.to_string()).len(), 2, "Spalte {n}");
     }

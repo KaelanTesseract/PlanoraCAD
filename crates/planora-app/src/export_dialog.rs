@@ -437,13 +437,15 @@ pub fn dxf_texts_fit(model: &SheetModel) -> Result<(), String> {
 }
 
 /// Lassen sich alle Texte des Blattrahmens als DXF ausgeben? Sonst die Meldung mit dem Feld
-/// (nichts wird still gekürzt oder ersetzt): zuerst Zeichen, die die Datei nicht darstellt, dann
-/// zu lange Texte.
+/// (nichts wird still gekürzt oder ersetzt): zuerst Zeichen, die die Datei nicht darstellt (als
+/// Zeichennummer „U+1F600“, weil die Schrift ein solches Zeichen oft nur als leeres Kästchen
+/// zeigt), dann zu lange Texte.
 pub fn dxf_sheet_texts_ok(texts: &TitleTexts) -> Result<(), String> {
     let check = |name: &str, text: &str| -> Result<(), String> {
         if let Some(c) = text.chars().find(|c| !dxf_char_ok(*c)) {
             return Err(format!(
-                "Das Zeichen „{c}“ im Feld „{name}“ lässt sich als DXF nicht ausgeben. Bitte ändern."
+                "Das Zeichen U+{:04X} im Feld „{name}“ lässt sich als DXF nicht ausgeben. Bitte ändern.",
+                c as u32
             ));
         }
         if !dxf_text_fits(text) {

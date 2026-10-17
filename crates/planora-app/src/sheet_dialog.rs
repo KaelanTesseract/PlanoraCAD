@@ -188,7 +188,7 @@ impl SheetInfoDialog {
         let sheet_ctx = drawing_view::context_or_single(state, self.drawing);
         // Maßstab der Hauptansicht aus dem zuletzt gezeichneten Blatt dieser Zeichnung (sonst der
         // der ersten Ansicht).
-        let model = drawing_view::last_sheet_for(ctx, self.drawing).unwrap_or_else(|| {
+        let model = drawing_view::last_sheet_for(ctx, state, self.drawing).unwrap_or_else(|| {
             std::sync::Arc::new(SheetModel {
                 sheet: drawing.sheet,
                 frame: None,
@@ -411,6 +411,8 @@ impl SheetInfoDialog {
                                     FieldValue::Text(t) => t.clone(),
                                     FieldValue::Auto => String::new(),
                                 };
+                                // Die Länge steht bei den Zellen der Tabelle im Hinweis am
+                                // Feld (neben jeder Zelle wäre die Zeile zu breit).
                                 theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(&mut letter)
@@ -418,7 +420,8 @@ impl SheetInfoDialog {
                                         .hint_text(auto_letter)
                                         .desired_width(REV_LETTER_W)
                                         .char_limit(MAX_FIELD_CHARS),
-                                );
+                                )
+                                .on_hover_text(length_label(&letter, MAX_FIELD_CHARS));
                                 r.letter = FieldValue::from_input(&letter);
                                 // Gekürzt wird nur, was im Blatt steht (die letzten sechs).
                                 let shown = actual.revisions.get(i).filter(|_| i >= first_visible);
@@ -433,21 +436,24 @@ impl SheetInfoDialog {
                                         .id_salt(("planora-rev-text", i))
                                         .desired_width(REV_TEXT_W)
                                         .char_limit(MAX_REVISION_CHARS),
-                                );
+                                )
+                                .on_hover_text(length_label(&r.description, MAX_REVISION_CHARS));
                                 theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(&mut r.date)
                                         .id_salt(("planora-rev-date", i))
                                         .desired_width(REV_DATE_W)
                                         .char_limit(MAX_FIELD_CHARS),
-                                );
+                                )
+                                .on_hover_text(length_label(&r.date, MAX_FIELD_CHARS));
                                 theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(&mut r.name)
                                         .id_salt(("planora-rev-name", i))
                                         .desired_width(REV_NAME_W)
                                         .char_limit(MAX_FIELD_CHARS),
-                                );
+                                )
+                                .on_hover_text(length_label(&r.name, MAX_FIELD_CHARS));
                                 if ui.button("Löschen").clicked() {
                                     delete_rev = Some(i);
                                 }
@@ -516,6 +522,11 @@ impl SheetInfoDialog {
     }
 }
 
+/// Länge eines Eintrags als „n/max“ (Zeichen).
+fn length_label(text: &str, max: usize) -> String {
+    format!("{}/{max}", text.chars().count())
+}
+
 /// Eine Zeile des Fensters: Bezeichnung, Textfeld (mit dem automatischen Wert als Hinweistext),
 /// Länge „n/max“, „Zurücksetzen“ bei eigenem Text und darunter die Warnung des Felds.
 fn field_row(
@@ -543,10 +554,7 @@ fn field_row(
                     .desired_width(FIELD_W)
                     .char_limit(max),
             );
-            let n = text.chars().count();
-            if n > 0 {
-                ui.weak(format!("{n}/{max}"));
-            }
+            ui.weak(length_label(&text, max));
             if ui
                 .add_visible(custom, egui::Button::new("Zurücksetzen"))
                 .clicked()
@@ -587,6 +595,7 @@ fn lines_editor(
                         .desired_width(NOTE_W)
                         .char_limit(MAX_NOTE_CHARS),
                 );
+                ui.weak(length_label(line, MAX_NOTE_CHARS));
                 if ui.button("Zeile löschen").clicked() {
                     delete = Some(i);
                 }

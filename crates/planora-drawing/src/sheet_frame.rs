@@ -137,7 +137,7 @@ impl TitleField {
             TitleField::DocType => "Dokumentart",
             TitleField::Status => "Dokumentstatus",
             TitleField::Issued => "Ausgabedatum",
-            TitleField::Revision => "Änderung",
+            TitleField::Revision => "Index",
             TitleField::SheetOf => "Blatt",
             TitleField::Format => "Format",
             TitleField::Scale => "Maßstab",
@@ -192,7 +192,7 @@ const fn cell(x0: f64, x1: f64, y0: f64, y1: f64, label: &'static str) -> TitleC
 /// Die 17 Zellen des Schriftfelds (mit der Projektion), Zeilen von unten.
 pub const TITLE_CELLS: [TitleCell; 17] = [
     cell(0.0, 100.0, 0.0, 10.0, "Zeichnungsnummer"),
-    cell(100.0, 125.0, 0.0, 10.0, "Änderung"),
+    cell(100.0, 125.0, 0.0, 10.0, "Index"),
     cell(125.0, 155.0, 0.0, 10.0, "Blatt"),
     cell(155.0, 180.0, 0.0, 10.0, "Sprache"),
     cell(0.0, 180.0, 10.0, 28.0, "Titel"),

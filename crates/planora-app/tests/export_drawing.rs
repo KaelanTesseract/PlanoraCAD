@@ -947,7 +947,7 @@ fn frame_switch_controls_the_output() {
     };
     assert_eq!(
         m,
-        "Das Zeichen „😀“ im Feld „Titel“ lässt sich als DXF nicht ausgeben. Bitte ändern."
+        "Das Zeichen U+1F600 im Feld „Titel“ lässt sich als DXF nicht ausgeben. Bitte ändern."
     );
     let ui = draw(&mut d, &mut s);
     assert!(ui.contains(&m), "Meldung im Fenster: {ui}");
@@ -1002,7 +1002,7 @@ fn dxf_sheet_texts_report_the_field() {
     assert_eq!(
         dxf_sheet_texts_ok(&t),
         Err(
-            "Das Zeichen „😀“ im Feld „Hinweis 2“ lässt sich als DXF nicht ausgeben. Bitte ändern."
+            "Das Zeichen U+1F600 im Feld „Hinweis 2“ lässt sich als DXF nicht ausgeben. Bitte ändern."
                 .into()
         )
     );
@@ -1105,7 +1105,7 @@ fn dxf_frame_texts_get_room_for_cad_fonts() {
     let heights = dxf_text_heights(&dxf, owner);
     assert_eq!(heights.len(), 1, "Eigentümer vollständig in der DXF-Datei");
     let h = heights[0];
-    assert!(h < 3.5 && h >= 2.1, "{h}");
+    assert!((2.1..3.5).contains(&h), "{h}");
     let width = planora_drawing::sheet_marks::sheet_text_width(owner, h);
     assert!(width * 1.45 <= 78.0 + 1e-6, "{width}");
     let _ = fs::remove_dir_all(&dir);
