@@ -27,6 +27,8 @@ pub struct Palette {
     pub border_subtle: Color32,
     /// Gitterlinien des 3D-Bodens.
     pub viewport_grid: Color32,
+    /// Jede fünfte Gitterlinie des 3D-Bodens.
+    pub viewport_grid_major: Color32,
     /// Bodenachse durch den Ursprung.
     pub ground_axis: Color32,
     /// Werte, Titel, Menüeinträge, aktive Symbole.
@@ -78,6 +80,7 @@ pub(crate) const DARK: Palette = Palette {
     bg_active: rgb(0x333333),
     border_subtle: rgb(0x383838),
     viewport_grid: rgb(0x333333),
+    viewport_grid_major: rgb(0x4d4d4d),
     ground_axis: rgb(0x38733b),
     text_primary: rgb(0xffffff),
     text_secondary: rgb(0x939393),
@@ -110,6 +113,7 @@ const LIGHT: Palette = Palette {
     bg_active: rgb(0xcfd0d5),
     border_subtle: rgb(0xd4d4d8),
     viewport_grid: rgb(0xd8d9de),
+    viewport_grid_major: rgb(0xb4b6bd),
     ground_axis: rgb(0x5aa65e),
     text_primary: rgb(0x151515),
     text_secondary: rgb(0x5f5f66),

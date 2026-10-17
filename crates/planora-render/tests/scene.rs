@@ -13,7 +13,7 @@ fn box_mesh() -> Mesh {
 #[test]
 fn scene_copies_all_vertices_and_indices() {
     let mesh = box_mesh();
-    let scene = build_scene(&[&mesh], &Highlight::default(), &Palette::dark(), 0.0);
+    let scene = build_scene(&[&mesh], &Highlight::default(), &Palette::dark());
     assert_eq!(scene.face_vertices.len(), mesh.positions.len());
     assert_eq!(scene.face_indices, mesh.indices);
     let expected_line_vertices: usize = mesh
@@ -33,7 +33,7 @@ fn selected_face_gets_selected_color_and_others_stay_base() {
         hover: None,
         selected: Some(Pick::Face(FaceRef { body: 0, face })),
     };
-    let scene = build_scene(&[&mesh], &hl, &palette, 0.0);
+    let scene = build_scene(&[&mesh], &hl, &palette);
     let color_of = |range: &FaceRange| {
         let i = mesh.indices[range.first_index as usize] as usize;
         scene.face_vertices[i].color
@@ -51,7 +51,7 @@ fn hovered_edge_gets_hover_color() {
         hover: Some(Pick::Edge(EdgeRef { body: 0, edge })),
         selected: None,
     };
-    let scene = build_scene(&[&mesh], &hl, &palette, 0.0);
+    let scene = build_scene(&[&mesh], &hl, &palette);
     assert_eq!(scene.line_vertices[0].color, palette.edge_hover);
     let other = (mesh.edge_lines[0].points.len() - 1) * 2;
     assert_eq!(scene.line_vertices[other].color, palette.edge_base);
@@ -66,7 +66,7 @@ fn highlight_only_applies_to_its_own_body() {
         hover: None,
         selected: Some(Pick::Face(FaceRef { body: 1, face })),
     };
-    let scene = build_scene(&[&mesh, &mesh], &hl, &palette, 0.0);
+    let scene = build_scene(&[&mesh, &mesh], &hl, &palette);
     let n = mesh.positions.len();
     let first = mesh.indices[mesh.face_ranges[0].first_index as usize] as usize;
     assert_eq!(scene.face_vertices[first].color, palette.face_base);
@@ -80,11 +80,8 @@ fn highlight_only_applies_to_its_own_body() {
 }
 
 #[test]
-fn grid_adds_lines_and_empty_scene_is_fine() {
-    let empty = build_scene(&[], &Highlight::default(), &Palette::dark(), 100.0);
+fn empty_scene_has_no_geometry_and_no_grid() {
+    let empty = build_scene(&[], &Highlight::default(), &Palette::dark());
     assert!(empty.face_vertices.is_empty());
-    assert!(!empty.line_vertices.is_empty());
-    assert_eq!(empty.line_vertices.len() % 2, 0);
-    let none = build_scene(&[], &Highlight::default(), &Palette::dark(), 0.0);
-    assert!(none.line_vertices.is_empty());
+    assert!(empty.line_vertices.is_empty());
 }

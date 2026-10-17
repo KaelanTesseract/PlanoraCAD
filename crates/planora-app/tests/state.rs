@@ -31,8 +31,8 @@ fn new_state_is_empty_and_framing_it_does_not_panic() {
             .is_none()
     );
     assert!(
-        !s.scene.line_vertices.is_empty(),
-        "das Raster ist auch ohne Körper sichtbar"
+        s.scene.line_vertices.is_empty(),
+        "Raster und Achsen kommen je Bild aus der Kamera, nicht aus der Szene"
     );
     assert!(s.scene.face_vertices.is_empty());
 }

@@ -21,7 +21,7 @@ fn marked_edges_get_the_selected_colour() {
         Pick::Edge(EdgeRef { body: 0, edge: e0 }),
         Pick::Edge(EdgeRef { body: 0, edge: e1 }),
     ];
-    let scene = build_scene_marked(&[&mesh], &Highlight::default(), &marked, &palette, 0.0);
+    let scene = build_scene_marked(&[&mesh], &Highlight::default(), &marked, &palette);
     let first = |i: usize| -> usize {
         mesh.edge_lines[..i]
             .iter()
@@ -32,8 +32,8 @@ fn marked_edges_get_the_selected_colour() {
     assert_eq!(scene.line_vertices[first(1)].color, palette.edge_selected);
     assert_eq!(scene.line_vertices[first(2)].color, palette.edge_base);
     // Ohne Markierung gleich wie bisher.
-    let plain = build_scene(&[&mesh], &Highlight::default(), &palette, 0.0);
-    let unmarked = build_scene_marked(&[&mesh], &Highlight::default(), &[], &palette, 0.0);
+    let plain = build_scene(&[&mesh], &Highlight::default(), &palette);
+    let unmarked = build_scene_marked(&[&mesh], &Highlight::default(), &[], &palette);
     let colours = |s: &SceneData| s.line_vertices.iter().map(|v| v.color).collect::<Vec<_>>();
     assert_eq!(colours(&plain), colours(&unmarked));
 }

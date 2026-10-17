@@ -19,6 +19,7 @@ struct Uniforms {
 pub struct GpuScene {
     face_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    grid_pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     face_vertex_buffer: Option<wgpu::Buffer>,
@@ -26,6 +27,10 @@ pub struct GpuScene {
     face_index_count: u32,
     line_vertex_buffer: Option<wgpu::Buffer>,
     line_vertex_count: u32,
+    /// Raster und Achsen: ändern sich mit der Kamera, daher je Bild beschrieben.
+    grid_vertex_buffer: Option<wgpu::Buffer>,
+    grid_capacity: u32,
+    grid_vertex_count: u32,
     uploaded_version: Option<u64>,
 }
 
@@ -130,44 +135,55 @@ impl GpuScene {
             cache: None,
         });
 
-        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("planora-lines"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_line"),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<LineVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_line"),
-                targets: &[Some(target_format.into())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample,
-            multiview_mask: None,
-            cache: None,
-        });
+        // Kantenlinien der Körper (deckend) und Raster (mit Alphamischung, blendet aus).
+        let make_line_pipeline = |label: &'static str, blend: Option<wgpu::BlendState>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_line"),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<LineVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_line"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: target_format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::LineList,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample,
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let line_pipeline = make_line_pipeline("planora-lines", None);
+        let grid_pipeline =
+            make_line_pipeline("planora-grid", Some(wgpu::BlendState::ALPHA_BLENDING));
 
         Self {
             face_pipeline,
             line_pipeline,
+            grid_pipeline,
             uniform_buffer,
             bind_group,
             face_vertex_buffer: None,
@@ -175,6 +191,9 @@ impl GpuScene {
             face_index_count: 0,
             line_vertex_buffer: None,
             line_vertex_count: 0,
+            grid_vertex_buffer: None,
+            grid_capacity: 0,
+            grid_vertex_count: 0,
             uploaded_version: None,
         }
     }
@@ -259,6 +278,36 @@ impl GpuScene {
             self.upload(device, &cb.scene);
             self.uploaded_version = Some(cb.scene_version);
         }
+        self.upload_grid(device, queue, &cb.grid);
+    }
+
+    /// Schreibt Raster und Achsen dieses Bildes; der Puffer wächst bei Bedarf (Zweierpotenz).
+    fn upload_grid(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, grid: &[LineVertex]) {
+        self.grid_vertex_count = 0;
+        let Ok(count) = u32::try_from(grid.len()) else {
+            return;
+        };
+        if count == 0 {
+            return;
+        }
+        if self.grid_vertex_buffer.is_none() || count > self.grid_capacity {
+            let capacity = count.next_power_of_two().max(1024);
+            let bytes = u64::from(capacity) * std::mem::size_of::<LineVertex>() as u64;
+            if bytes > device.limits().max_buffer_size {
+                return;
+            }
+            self.grid_vertex_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("planora-grid-vertices"),
+                size: bytes,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.grid_capacity = capacity;
+        }
+        if let Some(buffer) = &self.grid_vertex_buffer {
+            queue.write_buffer(buffer, 0, bytemuck::cast_slice(grid));
+            self.grid_vertex_count = count;
+        }
     }
 
     fn paint(&self, render_pass: &mut wgpu::RenderPass<'_>) {
@@ -268,6 +317,12 @@ impl GpuScene {
             render_pass.set_vertex_buffer(0, vb.slice(..));
             render_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed(0..self.face_index_count, 0, 0..1);
+        }
+        // Raster vor den Kanten, damit es sie nicht überdeckt.
+        if let (Some(gvb), true) = (&self.grid_vertex_buffer, self.grid_vertex_count > 0) {
+            render_pass.set_pipeline(&self.grid_pipeline);
+            render_pass.set_vertex_buffer(0, gvb.slice(..));
+            render_pass.draw(0..self.grid_vertex_count, 0..1);
         }
         if let Some(lvb) = &self.line_vertex_buffer {
             render_pass.set_pipeline(&self.line_pipeline);
@@ -289,6 +344,8 @@ pub struct ViewportCallback {
     pub scene: Arc<SceneData>,
     /// Erhöht sich, wenn sich `scene` geändert hat; steuert das Neuladen der Puffer.
     pub scene_version: u64,
+    /// Raster und Achsen (Linienliste) für dieses Bild, aus der Kamera berechnet.
+    pub grid: Vec<LineVertex>,
 }
 
 impl egui_wgpu::CallbackTrait for ViewportCallback {

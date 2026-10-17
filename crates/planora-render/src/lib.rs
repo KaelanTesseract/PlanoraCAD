@@ -2,11 +2,13 @@
 
 mod camera;
 pub mod gpu;
+mod grid;
 mod pick;
 mod scene;
 mod viewcube;
 
 pub use camera::OrbitCamera;
+pub use grid::{grid_lines, grid_radius, grid_step};
 pub use pick::{EdgeHit, FaceHit, pick_edge, pick_face};
 pub use scene::{
     EdgeRef, FaceRef, FaceVertex, Highlight, LineVertex, Palette, Pick, SceneData, build_scene,
