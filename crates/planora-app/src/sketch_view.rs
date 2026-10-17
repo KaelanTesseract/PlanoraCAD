@@ -430,9 +430,12 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
 /// Zeichnet die Skizze über die 3D-Ansicht in `rect` und verarbeitet die Eingaben des
 /// Skizzen-Modus. Orbit ist gesperrt; Verschieben (mittlere Maustaste oder Umschalt + Ziehen) und
 /// Zoomen (Mausrad) bleiben.
-pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) {
+///
+/// Gibt zurück, ob der Zeiger über der Skizzenfläche steht; das Mausrad-Zoomen macht der Aufrufer
+/// (`viewport::show`) erst nach Würfel und Home-Knopf, damit es auch über ihnen wirkt.
+pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool {
     if state.session_sketch().is_none() || rect.width() < 2.0 || rect.height() < 2.0 {
-        return;
+        return false;
     }
     let response = ui.interact(
         rect,
@@ -442,6 +445,7 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) {
     state.camera.set_viewport(rect.width(), rect.height());
     handle_input(ui, &response, rect, state);
     draw(ui, rect, state, response.hover_pos());
+    response.hovered()
 }
 
 fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mut AppState) {
@@ -467,12 +471,6 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     if pan {
         let d = response.drag_motion();
         state.camera.pan(d.x, d.y, rect.height());
-    }
-    if response.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta().y);
-        if scroll != 0.0 {
-            state.camera.zoom(scroll);
-        }
     }
 
     let map = Mapper {

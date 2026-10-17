@@ -723,6 +723,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     match tool_action.or(view_action) {
         Some(Action::ToModel) => {
             state.drawing_ui.area = WorkArea::Model;
+            ctx.request_repaint();
             return;
         }
         Some(Action::Add(kind)) => {

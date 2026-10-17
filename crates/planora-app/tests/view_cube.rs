@@ -616,6 +616,46 @@ fn cube_does_not_orbit_or_select() {
     assert!(s.selection.is_some(), "Klick daneben wählt");
 }
 
+// (h2) ----------------------------------------------------------------------------------------
+
+#[test]
+fn wheel_over_cube_and_home_zooms_without_orbit() {
+    let ctx = context();
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(100.0)).unwrap();
+    frame(&ctx, &mut s, vec![]);
+    s.frame_all();
+    frame(&ctx, &mut s, vec![]);
+    let c = cube();
+    for (what, p) in [
+        ("Würfel", c.center()),
+        ("Home", viewport::home_rect(c).center()),
+    ] {
+        let (yaw, pitch, dist) = (s.camera.yaw, s.camera.pitch, s.camera.distance);
+        frame(&ctx, &mut s, vec![moved(p)]);
+        frame(
+            &ctx,
+            &mut s,
+            vec![
+                moved(p),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, 40.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+        frame(&ctx, &mut s, vec![]);
+        assert_ne!(s.camera.distance, dist, "{what}: Mausrad zoomt");
+        assert_eq!(
+            (s.camera.yaw, s.camera.pitch),
+            (yaw, pitch),
+            "{what}: kein Orbit"
+        );
+    }
+}
+
 // (i) ------------------------------------------------------------------------------------------
 
 #[test]
@@ -634,6 +674,12 @@ fn colours_in_both_themes() {
                 4.5,
             ),
             ("Name auf Viewport", c.text, bg, 4.5),
+            (
+                "Text auf Hervorhebung (Hover)",
+                c.text_on_highlight,
+                c.highlight_hover,
+                4.5,
+            ),
         ];
         for face in &c.face {
             checks.push(("Text auf Fläche", c.text, *face, 4.5));

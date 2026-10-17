@@ -369,3 +369,44 @@ fn a_face_that_no_longer_resolves_falls_back_to_the_bodies() {
         .collect();
     assert_framed("ohne Fläche", s, free, &corners);
 }
+
+#[test]
+fn wheel_over_the_cube_zooms_in_sketch_mode_without_orbit() {
+    let c = context();
+    let mut app = app_with_box(&c);
+    let top = face_along(state(&mut app), 0, DVec3::Z);
+    sketch_on_face(&mut app, 0, top);
+    settle(&c, &mut app);
+    let p = planora_app::viewport::cube_rect(free(&c)).center();
+    let (yaw, pitch, dist) = {
+        let k = state(&mut app).camera;
+        (k.yaw, k.pitch, k.distance)
+    };
+    let mut f = eframe::Frame::_new_kittest();
+    for events in [
+        vec![egui::Event::PointerMoved(p)],
+        vec![
+            egui::Event::PointerMoved(p),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, 40.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+        vec![],
+    ] {
+        c.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
+                events,
+                ..Default::default()
+            },
+            |ui| app.ui(ui, &mut f),
+        )
+        .drop_without_applying_deltas();
+    }
+    let k = state(&mut app).camera;
+    assert_ne!(k.distance, dist, "Mausrad zoomt über dem Würfel");
+    assert_eq!((k.yaw, k.pitch), (yaw, pitch));
+}

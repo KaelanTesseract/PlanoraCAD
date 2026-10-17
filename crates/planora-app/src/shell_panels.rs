@@ -384,6 +384,7 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
         (rects, status, tab.state.dark)
     };
     let (rects, _, _) = layout(app);
+    let mode_before = mode_of(&app.ws.active_tab().state);
     top_field(ctx, &rects, app);
     // Im Skizzenmodus zeichnet `sketch_panel::show` Leiste, Skizzenfeld und Fuß an `rects`, im
     // Zeichnungsmodus `drawing_view::show_with` Werkzeug-, Ansichts- und Hinweisfeld.
@@ -399,6 +400,10 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
     }
     // Die Felder können den Tab gewechselt oder eine Meldung gesetzt haben: Status und Hinweis
     // zeigen schon den neuen Stand.
+    // Wechselte dabei der Modus, stimmen die Felder dieses Durchgangs nicht mehr: verwerfen.
+    if mode_of(&app.ws.active_tab().state) != mode_before {
+        discard(ctx, "Moduswechsel");
+    }
     let (rects, status, dark) = layout(app);
     text_field(
         ctx,
@@ -750,8 +755,6 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                     }
                     ui.separator();
                     chips_end = ui.cursor().left() - start;
-                    let blend = icons::IconSource::Feature(icons::FeatureIcon::for_blend(false));
-                    let chamfer = icons::IconSource::Feature(icons::FeatureIcon::for_blend(true));
                     let mut items: Vec<(&str, icons::IconSource, Command, Option<&'static str>)> =
                         CreateKind::ALL
                             .iter()
@@ -760,8 +763,9 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                                 (k.label(), k.icon(), Command::Create(*k), own)
                             })
                             .collect();
-                    items.push(("Verrunden …", blend, Command::Blend(false), blend_blocked));
-                    items.push(("Fase …", chamfer, Command::Blend(true), blend_blocked));
+                    for (label, source, chamfer) in icons::blend_entries() {
+                        items.push((label, source, Command::Blend(chamfer), blend_blocked));
+                    }
                     for (i, (label, source, cmd, own)) in items.into_iter().enumerate() {
                         if i == CreateKind::ALL.len() {
                             ui.separator();

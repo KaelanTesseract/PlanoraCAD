@@ -426,10 +426,11 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     let sketches_slot = painter.add(Shape::Noop);
 
     let cube = cube_rect(free.unwrap_or(rect));
+    let mut over_view = response.hovered();
     if sketching {
         // Das Overlay rechnet im ganzen Bereich (Auswahl und Fangen mit der vollen Größe) und
         // ruft selbst `set_viewport`; danach das freie Rechteck erneut setzen.
-        sketch_view::show_overlay(ui, rect, state);
+        over_view |= sketch_view::show_overlay(ui, rect, state);
         fit_camera(state, rect, free);
     } else {
         // Navigation
@@ -441,12 +442,6 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         } else if response.dragged_by(PointerButton::Primary) {
             let d = response.drag_motion();
             state.camera.orbit(d.x, d.y);
-        }
-        if response.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta().y);
-            if scroll != 0.0 {
-                state.camera.zoom(scroll);
-            }
         }
     }
 
@@ -483,6 +478,13 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         state.frame_all();
     }
     let home_hovered = home_response.hovered();
+    // Mausrad-Zoom (Modell und Skizze) auch über Würfel und Home-Knopf.
+    if over_view || cube_hover.is_some() || home_hovered {
+        let scroll = ui.input(|i| i.smooth_scroll_delta().y);
+        if scroll != 0.0 {
+            state.camera.zoom(scroll);
+        }
+    }
     home_response.on_hover_text("Home: Grundansicht (Isometrisch)");
 
     if !sketching {

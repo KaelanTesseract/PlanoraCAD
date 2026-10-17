@@ -17,6 +17,8 @@ use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::model::{CurveKind, Sketch};
 
+const _: () = assert!(TOOLS.len() == crate::shell::STRIP_TOOLS);
+
 /// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis.
 pub const TOOLS: [(Tool, &str, &str); 9] = [
     (
@@ -258,6 +260,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
     if close {
         state.close_sketch();
+        ctx.request_repaint();
     }
 }
 

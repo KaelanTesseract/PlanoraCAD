@@ -531,6 +531,17 @@ impl FeatureIcon {
     }
 }
 
+/// Einträge Verrunden und Fase für Menü und Befehlsfeld: Beschriftung, Symbol, `chamfer`.
+pub fn blend_entries() -> [(&'static str, IconSource, bool); 2] {
+    [("Verrunden …", false), ("Fase …", true)].map(|(label, chamfer)| {
+        (
+            label,
+            IconSource::Feature(FeatureIcon::for_blend(chamfer)),
+            chamfer,
+        )
+    })
+}
+
 /// Zeichnet das Symbol eines Features in `rect`.
 pub fn paint_feature_icon(painter: &Painter, rect: Rect, icon: FeatureIcon, color: Color32) {
     match icon {
@@ -554,7 +565,7 @@ fn paint_move_icon(painter: &Painter, rect: Rect, color: Color32) {
     seg(painter, [to, to + vec2(0.0, r * 0.7)], stroke);
 }
 
-/// Rundung bzw. Fase: Winkel mit abgerundeter Ecke.
+/// Verrunden: Winkel mit abgerundeter Ecke (die Fase hat ein eigenes Symbol).
 fn paint_blend_icon(painter: &Painter, rect: Rect, color: Color32) {
     let stroke = Stroke::new(STROKE_WIDTH, color);
     let c = rect.center();
@@ -727,7 +738,7 @@ pub fn paint_dimension_icon(
 /// Gezeichnete Symbole für Aktionen, zu denen Phosphor kein passendes Symbol hat (geprüft in
 /// `Phosphor-Light-style.css`: es gibt weder Bogen, Ellipse, Parallel, Senkrecht, Tangente,
 /// Mittelpunkt noch Punkt-auf-Kurve oder Punkt-Linie-Abstand). Radius, Durchmesser und Winkel
-/// zeichnet weiter [`paint_dimension_icon`], Rundung und Fase [`FeatureIcon::Blend`].
+/// zeichnet weiter [`paint_dimension_icon`], Verrunden [`FeatureIcon::Blend`], Fase [`FeatureIcon::Chamfer`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HandIcon {
     Arc,

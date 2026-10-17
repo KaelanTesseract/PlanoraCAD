@@ -241,10 +241,11 @@ Stand: 2026-10-16, Zweig `feature/graphit-etappe-c`. Plan: `plans/2026-10-16-gra
 - **C10** Fase bekommt ein eigenes Symbol (gerade Schräge); Verrunden behält `Blend`.
 
 **Navigationswürfel, Tatsachen**
-- 26 Bereiche: `CubeRegion::{Face, Edge, Corner}`, `all_regions`, `cube_pieces` (nur endliche, nach hinten sortierte, nach vorn gerichtete Stücke), `pieces_hit_test`. Namen deutsch („Vorne“, „Oben-Rechts“, „Oben-Vorne-Rechts“).
+- 26 Bereiche: `CubeRegion::{Face, Edge, Corner}`, `all_regions`, `cube_pieces` (nach hinten sortierte Stücke) und `cube_pieces_visible(camera, min_facing)`; den Filter auf endliche Werte und auf deutlich zugewandte Stücke macht `viewport::visible_pieces`, `pieces_hit_test`. Namen deutsch („Vorne“, „Oben-Rechts“, „Oben-Vorne-Rechts“).
 - Home = `OrbitCamera::home()` (Isometrisch) plus `frame_all`; die Isometrie ist die Ecke Oben-Vorne-Rechts.
 - Hervorhebung: `current_region(camera, 2.0)`; nahe den Polen gilt `|pitch| ≥ MAX_PITCH − 1e-4` als genau senkrecht (die Kamera stoppt 0,573° davor).
-- Beschriftungsausrichtung nach C4 (`face_text_frame`); der Text wird als Galley-Netz auf die Fläche abgebildet und nur bei `facing ≥ 0,3` gemalt.
+- Beschriftungsausrichtung nach C4 (`face_text_frame`); der Text wird als Galley-Netz auf die Fläche abgebildet. Stücke erscheinen ab `facing` 0,15 (`PIECE_MIN_FACING`) und blenden bis 0,3 ein; die Beschriftung blendet zwischen 0,3 (`LABEL_MIN_FACING`) und 0,5 (`LABEL_FULL_FACING`) ein.
+- Zum Einpassen kamen `OrbitCamera::frame_points` (Punkte in die freie Fläche einpassen) und `AppState::refit_sketch_view` (neue Skizze mittig und herangezoomt nachpassen) hinzu.
 - Die Kamera-Mathematik ist nicht umgebaut; `planora-render` hat nur Zusätze (`ViewFace`, `cube_faces`, `cube_hit_test`, `set_view` und ihre Tests bleiben).
 
 **Entscheidungen (Rulings)**
@@ -253,7 +254,7 @@ Stand: 2026-10-16, Zweig `feature/graphit-etappe-c`. Plan: `plans/2026-10-16-gra
 - Schalter „Waagerecht/senkrecht erkennen“ (vorher „Automatisch waagerecht/senkrecht“) zweizeilig, Hover-Text `AUTO_AXIS_HINT`.
 - Löschen in der Abhängigkeitsliste als Symbolknopf; Maßeingabe gestapelt; Zahlenfeld mit Fokus, Esc/Enter/Entf wirken nicht auf die Skizze, solange es Fokus hat.
 - Feldrand-Hover-Widget in `shell_panels::field` für alle Felder (Mausrad am Feldrand erreicht die Fläche darunter nicht mehr).
-- Zeichnung: `DrawingLayout.canvas` = `free` (Einpassen, Zentrieren), `paint` = Fenster (Blatt, Umgebung, Eingabe). Werkzeugfeld: Zeile 1 „3D-Modell“, „Zeichnung“, Trenner, „Ansicht hinzufügen“, „Blatt einpassen“, −, +, Trenner, „Maße vorschlagen“, „Maß“, Modus; seitlich rollbar. Schreibgeschützt: `free.top` +52 (Hinweisfeld + Abstand).
+- Zeichnung: `DrawingLayout.canvas` = `free` (Einpassen, Zentrieren), `paint` = Fenster (Blatt, Umgebung, Eingabe). Werkzeugfeld: Zeile 1 „3D-Modell“, „Zeichnung“, Trenner, „Ansicht hinzufügen“; Zeile 2 „Blatt einpassen“, −, +, Trenner, „Maße vorschlagen“, „Maß“, Modus; seitlich rollbar. Schreibgeschützt: `free.top` +52 (Hinweisfeld + Abstand).
 - Hinweisfeld höchstens zwei Zeilen; Maßhinweise werden gekürzt und zeigen beim Überfahren den vollen Text.
 - Test-Fenster der Maßtests 1600 × 1000 (vorher 1200 × 800), weil das Einpassen jetzt die kleinere freie Fläche nutzt.
 

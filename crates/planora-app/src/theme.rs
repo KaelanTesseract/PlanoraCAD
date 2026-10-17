@@ -774,6 +774,12 @@ fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
 }
 
+/// Dunkelt `c` um den Anteil `t` ab (alle Kanäle skaliert).
+fn darken(c: Color32, t: f32) -> Color32 {
+    let m = |x: u8| (f32::from(x) * (1.0 - t)).round() as u8;
+    Color32::from_rgb(m(c.r()), m(c.g()), m(c.b()))
+}
+
 /// Farben des Navigationswürfels: Flächen = `bg_field` mit 28 % Achsenfarbe, Kanten
 /// `bg_section`, Ecken `bg_inset`, aktuelle Ansicht in der Akzentfarbe. Hell genauso; die
 /// Kontraste prüft der Test `colours_in_both_themes` (tests/view_cube.rs).
@@ -786,8 +792,8 @@ pub fn cube_colors(dark: bool) -> CubeColors {
         corner: p.bg_inset,
         line: p.text_tertiary,
         highlight: p.accent,
-        // Etwas heller als der Akzent (Weiß darauf noch über 3,5 : 1, nur beim Überfahren).
-        highlight_hover: mix(p.accent, palette(false).bg_panel, 0.12),
+        // Etwas dunkler als der Akzent: Weiß darauf bleibt über 4,5 : 1 (nur beim Überfahren).
+        highlight_hover: darken(p.accent, 0.12),
         text: p.text_primary,
         text_on_highlight: p.on_accent,
         home_fill: p.bg_field,

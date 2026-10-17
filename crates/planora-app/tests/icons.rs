@@ -346,7 +346,7 @@ fn chamfer_icon_uses_theme_stroke_and_differs_from_blend() {
 }
 
 #[test]
-fn menu_and_command_field_use_chamfer_for_fase() {
+fn blend_entries_use_chamfer_for_fase() {
     assert_eq!(
         icons::FeatureIcon::for_blend(true),
         icons::FeatureIcon::Chamfer
@@ -355,13 +355,17 @@ fn menu_and_command_field_use_chamfer_for_fase() {
         icons::FeatureIcon::for_blend(false),
         icons::FeatureIcon::Blend
     );
-    // Beide Stellen müssen die Auswahl über `for_blend` treffen, nicht fest `Blend`.
-    let root = env!("CARGO_MANIFEST_DIR");
-    for file in ["src/app.rs", "src/shell_panels.rs"] {
-        let src = std::fs::read_to_string(format!("{root}/{file}")).unwrap();
-        assert!(src.contains("FeatureIcon::for_blend("), "{file}");
-        assert!(!src.contains("FeatureIcon::Blend)"), "{file}");
+    // Menü und Befehlsfeld beziehen beide Einträge aus `blend_entries`.
+    let entries = icons::blend_entries();
+    assert_eq!(entries[0].0, "Verrunden …");
+    assert_eq!(entries[1].0, "Fase …");
+    for (_, source, chamfer) in entries {
+        assert_eq!(
+            source,
+            icons::IconSource::Feature(icons::FeatureIcon::for_blend(chamfer))
+        );
     }
+    assert!(!entries[0].2 && entries[1].2);
 }
 
 #[test]
