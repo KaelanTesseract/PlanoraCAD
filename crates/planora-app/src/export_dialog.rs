@@ -22,15 +22,22 @@ use crate::dimension_dialog::kind_label;
 use crate::dimension_state::count_outside;
 use crate::drawing_dialog::paper_label;
 use crate::drawing_state::{ComputeFn, WorkArea};
-use crate::drawing_view::view_names;
+use crate::drawing_view::{sheet_context, view_names};
 use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
+use crate::sheet_dialog::title_field_name;
 use crate::state::{AppState, BodyKind};
+use crate::theme;
 use planora_drawing::annotate::{Mark, ResolvedDims};
 use planora_drawing::dimension::{DimError, DimSpec};
-use planora_drawing::dxf::dxf_text_fits;
+use planora_drawing::dxf::{dxf_char_ok, dxf_text_fits};
 use planora_drawing::sheet::{SheetModel, build_sheet_with, dimension_marks};
+use planora_drawing::sheet_frame::sheet_layout;
+use planora_drawing::sheet_info::{
+    ProjectInfo, SheetContext, TitleTexts, main_scale, resolve_texts,
+};
+use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::{
     DrawBody, DrawError, Drawing, DrawingFormat, DrawingId, Sheet, ViewId, ViewKind, ViewLines,
     Visibility, compute_view, export_drawing_file,
@@ -72,6 +79,8 @@ pub const WRITING_HINT: &str = "Das Schreiben läuft noch. Bitte warten oder ers
 const MAX_SHOWN_NAME: usize = 40;
 /// Meldung, wenn bei STEP kein Körper übrig bleibt.
 pub const STEP_NOTHING: &str = "Es gibt keinen Körper, der sich als STEP-Datei ausgeben lässt.";
+/// Schalter in der Karte „Zeichnung“: Rahmen, Schriftfeld und Tabellen des Blatts mit ausgeben.
+pub const FRAME_SWITCH: &str = "Blattrahmen mit ausgeben";
 /// Hinweis bei den Zeichnungsformaten, wenn das Dokument keine Zeichnung hat.
 pub const NO_DRAWING: &str =
     "Es gibt noch keine Zeichnung. Über „Zeichnung“ im Menü lässt sich eine anlegen.";
@@ -279,6 +288,8 @@ pub struct DrawingPrepared {
     /// Zahl der Maße, die ganz oder teilweise außerhalb des Blatts liegen (P12).
     pub outside: usize,
     pub centerlines: CenterlineUse,
+    /// Die Texte des Blattrahmens (nur mit Blattrahmen).
+    pub texts: Option<TitleTexts>,
 }
 
 /// Mittellinien der Normansichten einer Zeichnung (die isometrische Ansicht hat nie welche).
@@ -410,6 +421,50 @@ pub fn dxf_texts_fit(model: &SheetModel) -> Result<(), String> {
             }
         }
     }
+    if let Some(frame) = &model.frame {
+        for m in &frame.marks {
+            if let Mark::Text { text, .. } = m
+                && !dxf_text_fits(text)
+            {
+                return Err(
+                    "Ein Text im Blattrahmen ist für DXF zu lang. Bitte die Angaben kürzen."
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Lassen sich alle Texte des Blattrahmens als DXF ausgeben? Sonst die Meldung mit dem Feld
+/// (nichts wird still gekürzt oder ersetzt): zuerst Zeichen, die die Datei nicht darstellt, dann
+/// zu lange Texte.
+pub fn dxf_sheet_texts_ok(texts: &TitleTexts) -> Result<(), String> {
+    let check = |name: &str, text: &str| -> Result<(), String> {
+        if let Some(c) = text.chars().find(|c| !dxf_char_ok(*c)) {
+            return Err(format!(
+                "Das Zeichen „{c}“ im Feld „{name}“ lässt sich als DXF nicht ausgeben. Bitte ändern."
+            ));
+        }
+        if !dxf_text_fits(text) {
+            return Err(format!(
+                "Der Text im Feld „{name}“ ist für DXF zu lang. Bitte kürzen."
+            ));
+        }
+        Ok(())
+    };
+    for (field, text) in &texts.fields {
+        check(title_field_name(*field), text)?;
+    }
+    for row in texts.visible_revisions() {
+        let name = format!("Änderung {}", row[0]);
+        for cell in row {
+            check(&name, cell)?;
+        }
+    }
+    for (i, note) in texts.notes.iter().enumerate() {
+        check(&format!("Hinweis {}", i + 1), note)?;
+    }
     Ok(())
 }
 
@@ -483,6 +538,29 @@ pub fn prepare_drawing_with(
     resolve: ResolveFn,
     progress: &Progress,
 ) -> Result<DrawingPrepared, String> {
+    prepare_drawing_framed(drawing, solids, compute, resolve, None, progress)
+}
+
+/// Angaben für den Blattrahmen (Rahmen, Schriftfeld, Tabellen) einer ausgegebenen Zeichnung.
+#[derive(Clone, Debug)]
+pub struct FrameInput {
+    /// Projektangaben des Dokuments, falls schon vorhanden.
+    pub project: Option<ProjectInfo>,
+    /// Stellung des Blatts im Dokument und Name des Dokuments (für die automatischen Werte).
+    pub ctx: SheetContext,
+}
+
+/// Wie [`prepare_drawing_with`]; mit `frame` entsteht zu dem Blatt auch der Blattrahmen: die
+/// Texte aus den Blattangaben und dem Maßstab der Hauptansicht, die Geometrie nach deren
+/// Zeilenzahlen. Ohne `frame` bleibt `model.frame` leer.
+pub fn prepare_drawing_framed(
+    drawing: &Drawing,
+    solids: &[(String, Solid)],
+    compute: ComputeFn,
+    resolve: ResolveFn,
+    frame: Option<&FrameInput>,
+    progress: &Progress,
+) -> Result<DrawingPrepared, String> {
     let cancelled = || ExchangeError::Cancelled.to_string();
     let mut kinds: Vec<ViewKind> = Vec::new();
     for v in &drawing.views {
@@ -541,13 +619,28 @@ pub fn prepare_drawing_with(
     } else {
         ResolvedDims::default()
     };
-    let model = build_sheet_with(drawing, &map, &dims);
+    let mut model = build_sheet_with(drawing, &map, &dims);
     // `build_sheet` lässt Ansichten weg, die sich nicht anordnen lassen; das Dokument prüft Lage,
     // Maßstab und Eltern, also kommt das nur bei einer beschädigten Zeichnung vor. Nie still
     // weniger Ansichten schreiben.
     if model.views.len() < drawing.views.len() {
         return Err(VIEWS_NOT_PLACEABLE.to_string());
     }
+    let texts = frame.map(|f| {
+        let texts = resolve_texts(
+            drawing,
+            f.project.as_ref(),
+            &f.ctx,
+            main_scale(drawing, &model),
+        );
+        let layout = sheet_layout(
+            drawing.sheet,
+            texts.visible_revisions().len(),
+            texts.notes.len(),
+        );
+        model.frame = Some(sheet_frame(&layout, &texts, drawing.projection));
+        texts
+    });
     let count = |vis| {
         model
             .views
@@ -569,6 +662,7 @@ pub fn prepare_drawing_with(
         dimensions: dims.by_view.values().map(Vec::len).sum(),
         outside,
         centerlines: centerline_use(drawing),
+        texts,
         model: Arc::new(model),
     })
 }
@@ -852,8 +946,9 @@ type StepResult = Result<Arc<StepPrepared>, String>;
 type WriteJob = Job<Result<u64, ExchangeError>>;
 type StepWriteJob = Job<Result<u64, StepError>>;
 /// Stand, zu dem ein Zeichnungsergebnis gehört: Zeichnung, Änderungszahl des Dokuments (alle
-/// Änderungen, auch an der Zeichnung), Format.
-type DrawKey = (DrawingId, u64, DrawingFormat);
+/// Änderungen, auch an der Zeichnung), Format, Schalter „Blattrahmen“ und Prüfsumme des
+/// Dokumentnamens (er steckt in der Zeichnungsnummer).
+type DrawKey = (DrawingId, u64, DrawingFormat, bool, u64);
 type DrawJob = Job<Result<DrawingPrepared, String>>;
 type DrawResult = Result<Arc<DrawingPrepared>, String>;
 type DrawWriteJob = Job<Result<u64, String>>;
@@ -875,6 +970,8 @@ pub struct ExportDialog {
     pub scope: Scope,
     /// Gewählte Zeichnung (Zeichnungsformate); Vorgabe die geöffnete, sonst die erste.
     pub drawing: Option<DrawingId>,
+    /// Zeichnungsformate: Blattrahmen (Rahmen, Schriftfeld, Tabellen) mit ausgeben; Vorgabe an.
+    pub with_frame: bool,
     prepared: Option<(Key, PrepResult)>,
     job: Option<(Key, PrepJob)>,
     step_prepared: Option<(Key, StepResult)>,
@@ -916,6 +1013,7 @@ impl ExportDialog {
                 Scope::Visible
             },
             drawing: default_drawing(state),
+            with_frame: true,
             prepared: None,
             job: None,
             step_prepared: None,
@@ -1020,7 +1118,15 @@ impl ExportDialog {
     fn drawing_key(&self, state: &AppState) -> Option<DrawKey> {
         let f = self.format.drawing_format()?;
         let d = self.current_drawing(state)?;
-        Some((d.id, state.document.edit_count(), f))
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(&state.document_name, &mut hasher);
+        Some((
+            d.id,
+            state.document.edit_count(),
+            f,
+            self.with_frame,
+            std::hash::Hasher::finish(&hasher),
+        ))
     }
 
     /// Warum sich keine Zeichnung berechnen lässt: keine Zeichnung, keine exakten Körper (wie
@@ -1073,12 +1179,30 @@ impl ExportDialog {
             {
                 let (solids, meshes) = drawing_bodies(state);
                 let (compute, resolve, format) = (self.compute, self.resolve, key.2);
+                let frame = self.with_frame.then(|| FrameInput {
+                    project: state.document.project_info().cloned(),
+                    ctx: sheet_context(state, drawing.id).unwrap_or_else(|| SheetContext {
+                        doc_name: state.document_name.clone(),
+                        index: 1,
+                        count: 1,
+                    }),
+                });
                 // Ein alter Auftrag wird dabei fallengelassen und bricht ab.
                 self.drawing_job = Some((
                     key,
                     Job::spawn(move |p| {
-                        let mut r = prepare_drawing_with(&drawing, &solids, compute, resolve, p)?;
+                        let mut r = prepare_drawing_framed(
+                            &drawing,
+                            &solids,
+                            compute,
+                            resolve,
+                            frame.as_ref(),
+                            p,
+                        )?;
                         if format == DrawingFormat::Dxf {
+                            if let Some(texts) = &r.texts {
+                                dxf_sheet_texts_ok(texts)?;
+                            }
                             dxf_texts_fit(&r.model)?;
                         }
                         r.skipped_meshes = meshes;
@@ -1513,6 +1637,7 @@ impl ExportDialog {
         let has_selection = Self::has_selection(state);
         let before = self.format;
         let (mut format, mut quality, mut scope) = (self.format, self.quality, self.scope);
+        let mut with_frame = self.with_frame;
         // Karte „Zeichnung“: Auswahl und Angaben (Linien erst, wenn alles berechnet ist).
         let drawing_list: Vec<(DrawingId, String)> = state
             .document
@@ -1623,6 +1748,8 @@ impl ExportDialog {
                     for line in &drawing_info {
                         ui.label(line);
                     }
+                    ui.add_space(4.0);
+                    ui.add(theme::Toggle::new(&mut with_frame, FRAME_SWITCH));
                 };
                 cards = if before.is_drawing() {
                     let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
@@ -1805,6 +1932,8 @@ impl ExportDialog {
         self.last_rect = response.map(|r| r.response.rect);
         self.last_cards = cards;
         (self.format, self.quality, self.scope) = (format, quality, scope);
+        let toggled = with_frame != self.with_frame;
+        self.with_frame = with_frame;
         let other_drawing = picked != picked_before;
         if other_drawing {
             self.drawing = picked;
@@ -1816,7 +1945,7 @@ impl ExportDialog {
             self.chooser = None;
             self.chooser_key = None;
         }
-        if self.format != before || stale_chooser || other_drawing {
+        if self.format != before || stale_chooser || other_drawing || toggled {
             // Die Meldung „Fertig“ gehörte zum alten Format oder Stand.
             self.written = None;
         }

@@ -26,6 +26,7 @@ pub mod mesh_body;
 pub mod projects_panel;
 pub mod prompts;
 pub mod properties;
+pub mod sheet_dialog;
 pub mod shell;
 pub mod shell_panels;
 pub mod sketch_panel;

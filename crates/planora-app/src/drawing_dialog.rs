@@ -286,6 +286,30 @@ pub fn drawing_menu(
         *dialog = Some(NewDrawingDialog::new(state));
         ui.close();
     }
+    // Blattangaben der geöffneten Zeichnung.
+    let shown = match state.drawing_ui.area {
+        WorkArea::Drawing(id) if state.document.drawing(id).is_some() => Some(id),
+        _ => None,
+    };
+    let why = if let Some(b) = blocked {
+        b
+    } else if read_only {
+        crate::drawing_browser::READ_ONLY_HINT
+    } else {
+        crate::sheet_dialog::NO_DRAWING_OPEN
+    };
+    if theme::entry(
+        ui,
+        free && !read_only && shown.is_some(),
+        icons::button(Icon::SheetInfo, crate::sheet_dialog::MENU_ENTRY),
+    )
+    .on_disabled_hover_text(why)
+    .clicked()
+        && let Some(id) = shown
+    {
+        crate::sheet_dialog::open(state, id);
+        ui.close();
+    }
     ui.separator();
     let list: Vec<(DrawingId, String)> = state
         .document

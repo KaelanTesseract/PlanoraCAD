@@ -11,7 +11,9 @@ use planora_app::export_dialog::*;
 use planora_app::fonts;
 use planora_app::state::*;
 use planora_app::testing::collect_texts;
+use planora_drawing::dxf::dxf_text_fits;
 use planora_drawing::sheet::{SheetModel, build_sheet};
+use planora_drawing::sheet_info::{FieldValue, SheetInfo, Stamp};
 use planora_drawing::{
     DrawBody, DrawError, DrawingFormat, DrawingId, Paper, Placement, Projection, Scale, Sheet,
     ViewId, ViewKind, ViewLines, Visibility, compute_view, dxf_string, svg_string,
@@ -175,6 +177,8 @@ fn add_drawing(s: &mut AppState, name: &str) -> DrawingId {
 
 fn dialog(s: &AppState, format: ExportFormat) -> ExportDialog {
     let mut d = ExportDialog::new(s);
+    // Diese Tests vergleichen mit dem Blatt ohne Rahmen; den Schalter prüft `frame_switch_*`.
+    d.with_frame = false;
     d.format = format;
     d.tick(s, true);
     d
@@ -845,4 +849,203 @@ fn switching_formats_keeps_the_other_results() {
     ));
     let text = draw(&mut d, &mut s);
     assert!(!text.contains("Ansichten:"), "{text}");
+}
+
+// Blattrahmen (Zeichnungsblatt, Aufgabe 6) ------------------------------------------------------
+
+/// Setzt den Titel des Blatts; alle anderen Angaben bleiben automatisch.
+fn set_title(s: &mut AppState, id: DrawingId, title: &str) {
+    let mut info = SheetInfo::new(&Stamp {
+        date: "2026-10-17".into(),
+        user: "dennis".into(),
+    });
+    info.title = FieldValue::Text(title.to_string());
+    s.document.set_sheet_info(id, info).unwrap();
+}
+
+/// Eine Änderung mit der Beschreibung `text`; alle anderen Angaben bleiben automatisch.
+fn set_revision_text(s: &mut AppState, id: DrawingId, text: &str) {
+    let mut info = SheetInfo::new(&Stamp {
+        date: "2026-10-17".into(),
+        user: "dennis".into(),
+    });
+    info.add_revision("2026-10-17", "dennis").unwrap();
+    info.revisions[0].description = text.to_string();
+    s.document.set_sheet_info(id, info).unwrap();
+}
+
+/// Schreibt mit dem Fenster nach `path` und liefert den Inhalt.
+fn written(d: &mut ExportDialog, s: &AppState, path: &Path) -> String {
+    d.tick(s, true);
+    d.write_to(path.to_path_buf(), s);
+    d.tick(s, true);
+    done(d);
+    fs::read_to_string(path).unwrap()
+}
+
+fn framed_dialog(s: &AppState, format: ExportFormat) -> ExportDialog {
+    let mut d = ExportDialog::new(s);
+    assert!(d.with_frame, "Vorgabe: Blattrahmen an");
+    d.format = format;
+    d.tick(s, true);
+    d
+}
+
+#[test]
+fn frame_switch_controls_the_output() {
+    let mut s = box_state();
+    let id = add_drawing(&mut s, "Blatt 1");
+    let dir = temp_dir("rahmen");
+
+    // Der Schalter steht nur in der Karte der Zeichnungsformate.
+    let mut d = ExportDialog::new(&s);
+    for format in [ExportFormat::Mesh(Format::Stl), ExportFormat::Step] {
+        d.format = format;
+        let ui = draw(&mut d, &mut s);
+        assert!(!ui.contains(FRAME_SWITCH), "{format:?}: {ui}");
+    }
+    for format in [SVG, DXF] {
+        d.format = format;
+        let ui = draw(&mut d, &mut s);
+        assert!(ui.contains(FRAME_SWITCH), "{format:?}: {ui}");
+    }
+
+    // An: Rahmen und Schriftfeld in beiden Formaten.
+    let mut d = framed_dialog(&s, SVG);
+    let svg = written(&mut d, &s, &dir.join("an.svg"));
+    assert!(svg.contains("id=\"Blattrahmen\""), "SVG ohne Rahmen");
+    assert!(svg.contains("1 von 1"), "SVG ohne Blattangabe");
+    let mut d = framed_dialog(&s, DXF);
+    let dxf = written(&mut d, &s, &dir.join("an.dxf"));
+    assert!(dxf.contains("BLATTRAHMEN"), "DXF ohne Ebene");
+
+    // Aus: weder noch; Umschalten rechnet neu (anderer Schlüssel).
+    let mut d = framed_dialog(&s, SVG);
+    assert!(matches!(d.status(&s), ExportStatus::DrawingReady { .. }));
+    d.with_frame = false;
+    assert!(
+        matches!(d.status(&s), ExportStatus::Computing(_)),
+        "Umschalten startet eine neue Berechnung"
+    );
+    let svg = written(&mut d, &s, &dir.join("aus.svg"));
+    assert!(!svg.contains("id=\"Blattrahmen\"") && !svg.contains("1 von 1"));
+    let mut d = framed_dialog(&s, DXF);
+    d.with_frame = false;
+    let dxf = written(&mut d, &s, &dir.join("aus.dxf"));
+    assert!(!dxf.contains("BLATTRAHMEN"));
+    // Wieder an: wieder neu und mit Rahmen.
+    d.with_frame = true;
+    assert!(matches!(d.status(&s), ExportStatus::Computing(_)));
+    let dxf = written(&mut d, &s, &dir.join("wieder.dxf"));
+    assert!(dxf.contains("BLATTRAHMEN"));
+
+    // Ein Zeichen außerhalb der Grundebene: DXF meldet das Feld, SVG wird geschrieben.
+    set_title(&mut s, id, "😀");
+    let mut d = framed_dialog(&s, DXF);
+    let ExportStatus::Failed(m) = d.status(&s) else {
+        panic!("{:?}", d.status(&s));
+    };
+    assert_eq!(
+        m,
+        "Das Zeichen „😀“ im Feld „Titel“ lässt sich als DXF nicht ausgeben. Bitte ändern."
+    );
+    let ui = draw(&mut d, &mut s);
+    assert!(ui.contains(&m), "Meldung im Fenster: {ui}");
+    let mut d = framed_dialog(&s, SVG);
+    let svg = written(&mut d, &s, &dir.join("emoji.svg"));
+    assert!(svg.contains("😀"));
+    // Ohne Rahmen gibt es das Feld nicht, also auch keine Meldung.
+    let mut d = ExportDialog::new(&s);
+    d.with_frame = false;
+    d.format = DXF;
+    d.tick(&s, true);
+    assert!(matches!(d.status(&s), ExportStatus::DrawingReady { .. }));
+
+    // Lange Texte: Ä steht in der Datei als sieben Zeichen („\U+00C4“).
+    let long_title = "Ä".repeat(60);
+    assert!(!dxf_text_fits(&long_title), "Testvoraussetzung");
+    set_title(&mut s, id, &long_title);
+    let d = framed_dialog(&s, DXF);
+    assert_eq!(
+        d.status(&s),
+        ExportStatus::Failed("Der Text im Feld „Titel“ ist für DXF zu lang. Bitte kürzen.".into())
+    );
+    let long_text = "Ä".repeat(120);
+    assert!(!dxf_text_fits(&long_text), "Testvoraussetzung");
+    set_revision_text(&mut s, id, &long_text);
+    let d = framed_dialog(&s, DXF);
+    assert_eq!(
+        d.status(&s),
+        ExportStatus::Failed(
+            "Der Text im Feld „Änderung A“ ist für DXF zu lang. Bitte kürzen.".into()
+        )
+    );
+    // Ein Text, der passt (30 × Ä), geht durch.
+    assert!(dxf_text_fits(&"Ä".repeat(30)), "Testvoraussetzung");
+    set_revision_text(&mut s, id, &"Ä".repeat(30));
+    let mut d = framed_dialog(&s, DXF);
+    let dxf = written(&mut d, &s, &dir.join("passt.dxf"));
+    assert!(dxf.contains("BLATTRAHMEN"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dxf_sheet_texts_report_the_field() {
+    use planora_drawing::TitleField;
+    use planora_drawing::sheet_info::TitleTexts;
+    let mut t = TitleTexts {
+        fields: BTreeMap::new(),
+        revisions: Vec::new(),
+        notes: vec!["gut".into(), "x😀".into()],
+    };
+    t.fields.insert(TitleField::Owner, "Eigentümer GmbH".into());
+    assert_eq!(
+        dxf_sheet_texts_ok(&t),
+        Err(
+            "Das Zeichen „😀“ im Feld „Hinweis 2“ lässt sich als DXF nicht ausgeben. Bitte ändern."
+                .into()
+        )
+    );
+    t.notes = vec!["Ä".repeat(60)];
+    assert_eq!(
+        dxf_sheet_texts_ok(&t),
+        Err("Der Text im Feld „Hinweis 1“ ist für DXF zu lang. Bitte kürzen.".into())
+    );
+    t.notes = vec!["Kanten gebrochen 0,3 mm".into()];
+    t.revisions = vec![[
+        "B".into(),
+        "Ä".repeat(60),
+        "2026-10-17".into(),
+        "dennis".into(),
+    ]];
+    assert_eq!(
+        dxf_sheet_texts_ok(&t),
+        Err("Der Text im Feld „Änderung B“ ist für DXF zu lang. Bitte kürzen.".into())
+    );
+    t.revisions.clear();
+    assert_eq!(dxf_sheet_texts_ok(&t), Ok(()));
+}
+
+#[test]
+fn export_uses_current_auto_values() {
+    let mut s = box_state();
+    add_drawing(&mut s, "Blatt 1");
+    let dir = temp_dir("automatisch");
+    s.document_name = "Alt".into();
+    let mut d = framed_dialog(&s, SVG);
+    assert!(matches!(d.status(&s), ExportStatus::DrawingReady { .. }));
+    // Der Name des Dokuments ändert sich bei offenem Fenster (Tab umbenannt).
+    s.document_name = "Neu".into();
+    assert!(
+        matches!(d.status(&s), ExportStatus::Computing(_)),
+        "der alte Stand gilt nicht mehr"
+    );
+    let svg = written(&mut d, &s, &dir.join("neu.svg"));
+    assert!(svg.contains("Neu-01"), "neue Nummer fehlt");
+    assert!(!svg.contains("Alt-01"), "alte Nummer steht noch da");
+    // Ein Stand mit altem Namen wird nicht mehr geschrieben.
+    s.document_name = "Dritter".into();
+    d.write_to(dir.join("dritter.svg"), &s);
+    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    let _ = fs::remove_dir_all(&dir);
 }

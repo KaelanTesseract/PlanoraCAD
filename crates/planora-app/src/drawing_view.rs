@@ -730,6 +730,8 @@ enum Action {
     ToModel,
     Add(ViewKind),
     Fit,
+    /// Fenster „Blattangaben“ öffnen.
+    SheetInfo,
     Zoom(f32),
     Scale(Scale),
     Hidden(bool),
@@ -822,6 +824,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
             state.drawing_ui.zoom = 1.0;
             state.drawing_ui.pan = egui::Vec2::ZERO;
         }
+        Some(Action::SheetInfo) => crate::sheet_dialog::open(state, id),
         Some(Action::Zoom(f)) => {
             let z = (state.drawing_ui.zoom * f).clamp(MIN_ZOOM, MAX_ZOOM);
             let f = z / state.drawing_ui.zoom;
@@ -1026,6 +1029,17 @@ fn tool_field(
                         .clicked()
                     {
                         action = Some(Action::Fit);
+                    }
+                    if ui
+                        .add_enabled(
+                            editable,
+                            flat(icons::button(Icon::SheetInfo, crate::sheet_dialog::BUTTON)),
+                        )
+                        .on_hover_text(crate::sheet_dialog::BUTTON_TIP)
+                        .on_disabled_hover_text(crate::drawing_browser::READ_ONLY_HINT)
+                        .clicked()
+                    {
+                        action = Some(Action::SheetInfo);
                     }
                     if ui
                         .add(flat(icon_only(Icon::ZoomOut)))

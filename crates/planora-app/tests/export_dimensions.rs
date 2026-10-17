@@ -171,6 +171,8 @@ fn box_with_dims() -> (AppState, DrawingId) {
 
 fn dialog(s: &AppState, format: ExportFormat) -> ExportDialog {
     let mut d = ExportDialog::new(s);
+    // Diese Tests vergleichen mit dem Blatt ohne Rahmen; den Schalter prüft `frame_switch_*`.
+    d.with_frame = false;
     d.format = format;
     d.tick(s, true);
     d
@@ -954,6 +956,7 @@ fn dimensions_resolved_in_the_worker_not_from_the_drawing_cache() {
     s.refresh();
     s.selected_body = None;
     let mut d = ExportDialog::new(&s);
+    d.with_frame = false;
     d.set_resolve(counting);
     d.format = SVG;
     d.tick(&s, true);

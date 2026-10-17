@@ -16,7 +16,7 @@ use planora_app::drawing_view::{self, FIT_MARGIN_PX};
 use planora_app::shell::{self, ShellMode, ShellState};
 use planora_app::state::AppState;
 use planora_app::workspace::Workspace;
-use planora_app::{fonts, icons, shell_panels, theme};
+use planora_app::{fonts, icons, sheet_dialog, shell_panels, theme};
 use planora_drawing::dimension::{
     DimId, DimKind, DimSpec, GeoRef, GeoRefData, Tolerance as DimTolerance,
 };
@@ -432,6 +432,7 @@ fn tool_field_has_all_toolbar_texts_in_two_rows() {
             "Zeichnung: Blatt 1",
             "Ansicht hinzufügen",
             "Blatt einpassen",
+            sheet_dialog::BUTTON,
             zoom_out.as_str(),
             zoom_in.as_str(),
             drawing_view::SUGGEST,
@@ -860,6 +861,7 @@ fn tool_field_texts_are_reachable_by_scrolling_at_800x600() {
         "Zeichnung: Blatt 1",
         "Ansicht hinzufügen",
         "Blatt einpassen",
+        sheet_dialog::BUTTON,
         zoom_out.as_str(),
         zoom_in.as_str(),
         drawing_view::SUGGEST,
@@ -992,9 +994,14 @@ fn tool_field_is_content_wide_on_large_windows() {
         // Die freie Fläche bleibt wie vorher.
         assert_eq!(shell_panels::last_layout(&c).unwrap().free, old_free(size));
     }
-    // Mittlere und kleine Fenster: nie breiter als bisher (zwischen den Spalten); bei 1100 × 700
-    // reicht der Inhalt schon in weniger Breite, bei 800 × 600 rollt das Feld in voller Breite.
-    for (size, full) in [(vec2(1100.0, 700.0), false), (vec2(800.0, 600.0), true)] {
+    // Mittlere und kleine Fenster: nie breiter als bisher (zwischen den Spalten). Mit dem Knopf
+    // „Blattangaben“ reicht der Inhalt erst ab etwa 1280 px in weniger Breite; bei 1100 × 700 und
+    // 800 × 600 rollt das Feld in voller Breite.
+    for (size, full) in [
+        (vec2(1280.0, 720.0), false),
+        (vec2(1100.0, 700.0), true),
+        (vec2(800.0, 600.0), true),
+    ] {
         let c = context();
         let mut app = app_with_drawing();
         app_settle(&c, &mut app, size);
@@ -1011,7 +1018,7 @@ fn tool_field_is_content_wide_on_large_windows() {
             );
         }
         assert_eq!(shell_panels::last_layout(&c).unwrap().free, old_free(size));
-        // Bei 1100 × 700 reicht der Inhalt ohne Rollbalken.
+        // Bei 1280 × 720 reicht der Inhalt ohne Rollbalken.
         if !full {
             let band = Rect::from_min_max(pos2(tool.left(), tool.bottom() - 12.0), tool.max);
             let shot = app_settle(&c, &mut app, size);
