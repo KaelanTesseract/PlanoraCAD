@@ -485,3 +485,10 @@ fn update_drawing_rejects_invalid_sheet_info() {
     assert_eq!(d.drawing(id).unwrap(), &before);
     assert_eq!(d.edit_count(), edits);
 }
+
+#[test]
+fn a_drawing_without_info_is_valid() {
+    let d = Drawing::new(DrawingId(1), "Z".into(), A4, Projection::First);
+    assert!(d.info.is_none());
+    assert!(planora_feature::validate_drawing(&d).is_ok());
+}

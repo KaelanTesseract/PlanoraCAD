@@ -306,9 +306,12 @@ impl TitleTexts {
 /// Ansicht mit den meisten Linien (Gleichstand: die erste); ist keine berechnet, die erste
 /// Ansicht der Zeichnung; ohne Ansichten `None`.
 pub fn main_scale(d: &Drawing, model: &SheetModel) -> Option<Scale> {
+    // Die Reihenfolge der Zeichnung (nicht die der Blattliste) entscheidet beim Gleichstand.
     let mut best: Option<(usize, Scale)> = None;
-    for v in &model.views {
-        let Some(spec) = d.view(v.id) else { continue };
+    for spec in &d.views {
+        let Some(v) = model.views.iter().find(|v| v.id == spec.id) else {
+            continue;
+        };
         if best.is_none_or(|(n, _)| v.lines.len() > n) {
             best = Some((v.lines.len(), spec.scale));
         }

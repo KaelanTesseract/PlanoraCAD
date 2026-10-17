@@ -338,3 +338,190 @@ fn validation_limits() {
     p.checked = FieldValue::Text("a\nb".into());
     assert!(validate_project_info(&p).is_err());
 }
+
+#[test]
+fn every_sheet_field_as_text_is_used() {
+    let mut d = drawing();
+    {
+        let i = info(&mut d);
+        i.number = FieldValue::Text("N1".into());
+        i.title = FieldValue::Text("T1".into());
+        i.subtitle = FieldValue::Text("S1".into());
+        i.doc_type = FieldValue::Text("D1".into());
+        i.status = FieldValue::Text("St1".into());
+        i.issued = FieldValue::Text("I1".into());
+        i.revision = FieldValue::Text("R1".into());
+        i.sheet_of = FieldValue::Text("B1".into());
+        i.format = FieldValue::Text("F1".into());
+        i.scale = FieldValue::Text("M1".into());
+        i.weight = FieldValue::Text("W1".into());
+        i.add_revision("d", "n").unwrap();
+    }
+    let mut p = ProjectInfo::new(&stamp());
+    p.tolerance = FieldValue::Text("TOL".into());
+    let t = texts(&d, Some(&p));
+    let want = [
+        (TitleField::Number, "N1"),
+        (TitleField::Title, "T1"),
+        (TitleField::Subtitle, "S1"),
+        (TitleField::DocType, "D1"),
+        (TitleField::Status, "St1"),
+        (TitleField::Issued, "I1"),
+        (TitleField::Revision, "R1"),
+        (TitleField::SheetOf, "B1"),
+        (TitleField::Format, "F1"),
+        (TitleField::Scale, "M1"),
+        (TitleField::Weight, "W1"),
+        (TitleField::Creator, "dennis"),
+        (TitleField::Material, "–"),
+        (TitleField::Language, "de"),
+    ];
+    for (f, v) in want {
+        assert_eq!(t.get(f), v, "{f:?}");
+    }
+    assert_eq!(t.notes[0], "Allgemeintoleranzen TOL");
+}
+
+#[test]
+fn project_fields_land_in_their_own_field() {
+    let d = drawing();
+    let mut p = ProjectInfo::new(&stamp());
+    p.owner = FieldValue::Text("Eig".into());
+    p.creator = FieldValue::Text("Ers".into());
+    p.checked = FieldValue::Text("Prü".into());
+    p.approved = FieldValue::Text("Fre".into());
+    p.material = FieldValue::Text("Wer".into());
+    let t = texts(&d, Some(&p));
+    assert_eq!(t.get(TitleField::Owner), "Eig");
+    assert_eq!(t.get(TitleField::Creator), "Ers");
+    assert_eq!(t.get(TitleField::Checked), "Prü");
+    assert_eq!(t.get(TitleField::Approved), "Fre");
+    assert_eq!(t.get(TitleField::Material), "Wer");
+}
+
+#[test]
+fn revision_rows_keep_their_column_order() {
+    let mut d = drawing();
+    for k in 0..3 {
+        info(&mut d)
+            .add_revision(&format!("date{k}"), &format!("name{k}"))
+            .unwrap();
+        info(&mut d).revisions[k].description = format!("desc{k}");
+    }
+    info(&mut d).revisions[1].letter = FieldValue::Text("X1".into());
+    let t = texts(&d, None);
+    let row = |l: &str, k: usize| {
+        [
+            l.to_string(),
+            format!("desc{k}"),
+            format!("date{k}"),
+            format!("name{k}"),
+        ]
+    };
+    assert_eq!(t.revisions, vec![row("A", 0), row("X1", 1), row("C", 2)]);
+}
+
+#[test]
+fn every_limited_field_has_its_exact_boundary() {
+    let ok = || SheetInfo::new(&stamp());
+    let fv = |n: usize| FieldValue::Text("x".repeat(n));
+    let x = |n: usize| "x".repeat(n);
+    type Set = fn(&mut SheetInfo, FieldValue);
+    let sets: Vec<(&str, usize, Set)> = vec![
+        ("number", 80, |i, v| i.number = v),
+        ("title", 60, |i, v| i.title = v),
+        ("subtitle", 80, |i, v| i.subtitle = v),
+        ("doc_type", 80, |i, v| i.doc_type = v),
+        ("status", 80, |i, v| i.status = v),
+        ("issued", 80, |i, v| i.issued = v),
+        ("revision", 80, |i, v| i.revision = v),
+        ("sheet_of", 80, |i, v| i.sheet_of = v),
+        ("format", 80, |i, v| i.format = v),
+        ("scale", 80, |i, v| i.scale = v),
+        ("weight", 80, |i, v| i.weight = v),
+    ];
+    for (name, max, set) in sets {
+        let mut i = ok();
+        set(&mut i, fv(max));
+        assert!(validate_sheet_info(&i).is_ok(), "{name} {max}");
+        set(&mut i, fv(max + 1));
+        assert!(validate_sheet_info(&i).is_err(), "{name} {}", max + 1);
+    }
+    let mut i = ok();
+    i.created = x(80);
+    assert!(validate_sheet_info(&i).is_ok());
+    i.created = x(81);
+    assert!(validate_sheet_info(&i).is_err());
+    // Änderung: Buchstabe, Datum, Name.
+    for field in 0..3 {
+        let mut i = ok();
+        i.add_revision("d", "n").unwrap();
+        let set = |i: &mut SheetInfo, n: usize| {
+            let r = &mut i.revisions[0];
+            match field {
+                0 => r.letter = fv(n),
+                1 => r.date = x(n),
+                _ => r.name = x(n),
+            }
+        };
+        set(&mut i, 80);
+        assert!(validate_sheet_info(&i).is_ok(), "rev {field}");
+        set(&mut i, 81);
+        assert!(validate_sheet_info(&i).is_err(), "rev {field}");
+    }
+    // Projekt.
+    type PSet = fn(&mut ProjectInfo, FieldValue);
+    let psets: Vec<PSet> = vec![
+        |p, v| p.owner = v,
+        |p, v| p.creator = v,
+        |p, v| p.checked = v,
+        |p, v| p.approved = v,
+        |p, v| p.material = v,
+        |p, v| p.tolerance = v,
+    ];
+    for (k, set) in psets.into_iter().enumerate() {
+        let mut p = ProjectInfo::new(&stamp());
+        set(&mut p, fv(80));
+        assert!(validate_project_info(&p).is_ok(), "project {k}");
+        set(&mut p, fv(81));
+        assert!(validate_project_info(&p).is_err(), "project {k}");
+    }
+    let mut p = ProjectInfo::new(&stamp());
+    p.login = x(80);
+    assert!(validate_project_info(&p).is_ok());
+    p.login = x(81);
+    assert!(validate_project_info(&p).is_err());
+    let mut p = ProjectInfo::new(&stamp());
+    p.notes = NotesValue::Lines(vec![x(100)]);
+    assert!(validate_project_info(&p).is_ok());
+    p.notes = NotesValue::Lines(vec![x(101)]);
+    assert!(validate_project_info(&p).is_err());
+}
+
+#[test]
+fn main_scale_follows_drawing_order_not_model_order() {
+    let mut d = drawing();
+    let free = Placement::Free { x: 0.0, y: 0.0 };
+    let a = d.add_view(ViewKind::Front, HALF, free, None);
+    let b = d.add_view(ViewKind::Top, Scale { num: 1, den: 5 }, free, None);
+    // Gleichstand, Blattliste umgekehrt: die erste Ansicht der Zeichnung gewinnt.
+    let m = model(&d, vec![sheet_view(b.0, 10), sheet_view(a.0, 10)]);
+    assert_eq!(main_scale(&d, &m), Some(HALF));
+    // Nur die zweite Ansicht berechnet.
+    let m = model(&d, vec![sheet_view(b.0, 3)]);
+    assert_eq!(main_scale(&d, &m), Some(Scale { num: 1, den: 5 }));
+}
+
+#[test]
+fn a_new_drawing_has_no_info() {
+    let d = Drawing::new(
+        DrawingId(1),
+        "Z".into(),
+        Sheet {
+            paper: Paper::A4,
+            landscape: false,
+        },
+        Projection::First,
+    );
+    assert!(d.info.is_none());
+}
