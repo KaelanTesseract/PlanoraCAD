@@ -24,7 +24,7 @@ use crate::dimension_tool::{
 };
 use crate::drawing_state::{
     FreeArea, ViewResult, WorkArea, block_origin, default_distance, estimate_view_size,
-    keep_in_free, suggest_scale_in,
+    iso_placement, keep_in_free, suggest_scale_in,
 };
 use crate::export_dialog::{REPAINT, shorten_for_display};
 use crate::icons::{self, Icon};
@@ -1526,8 +1526,11 @@ fn message_key(state: &AppState) -> (u64, Option<ViewId>, Option<DimId>) {
 /// Normansicht: abgeleitet von der gewählten Normansicht (sonst von der Grundansicht) mit
 /// deren Maßstab und dem Vorgabeabstand, wenn die Ausrichtungsregel eine Richtung liefert;
 /// sonst frei (leere Zeichnung: so, dass der Block aus drei Ansichten in der Mitte des freien
-/// Bereichs liegt, sonst links oben). Isometrisch: frei rechts oben (0,75 · Breite, 0,75 · Höhe
-/// des freien Bereichs) mit dem Maßstab der Grundansicht. Freie Ansichten bleiben mit ihrer
+/// Bereichs liegt, sonst links oben). Isometrisch: im leeren Viertel des Blocks um die
+/// Grundansicht ([`iso_placement`]: Erstwinkel rechts unten, Drittwinkel links oben) im Maßstab
+/// der Grundansicht oder, wenn sie dort sonst nicht hineinpasst, der nächstkleineren passenden
+/// Stufe; ohne frei liegende Grundansicht rechts oben (0,75 · Breite, 0,75 · Höhe des freien
+/// Bereichs) im Maßstab der Grundansicht. Freie Ansichten bleiben mit ihrer
 /// geschätzten Ausdehnung im freien Bereich, soweit sie hineinpassen; sonst sitzen sie dort
 /// bündig an der rechten bzw. oberen Kante.
 pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> {
@@ -1564,7 +1567,28 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
         Placement::Free { x, y }
     };
     let (placement, parent, scale) = if !kind.is_normal() {
-        (at(0.75, 0.75, base_scale), None, base_scale)
+        // Ins leere Viertel des Blocks um die frei liegende Grundansicht (wenn nötig kleiner);
+        // ohne sie rechts oben im Maßstab der Grundansicht.
+        match base {
+            Some(b) if b.kind.is_normal() => match b.placement {
+                Placement::Free { x, y } => {
+                    let (bw, bh) = estimate_view_size(&state.bodies, b.kind);
+                    let bf = b.scale.factor();
+                    let ((x, y), scale) = iso_placement(
+                        d.projection,
+                        b.kind,
+                        (x, y),
+                        (bw * bf, bh * bf),
+                        estimate_view_size(&state.bodies, kind),
+                        base_scale,
+                        free,
+                    );
+                    (Placement::Free { x, y }, None, scale)
+                }
+                Placement::Aligned { .. } => (at(0.75, 0.75, base_scale), None, base_scale),
+            },
+            _ => (at(0.75, 0.75, base_scale), None, base_scale),
+        }
     } else {
         let selected = state
             .drawing_ui

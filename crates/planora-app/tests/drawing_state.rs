@@ -722,3 +722,67 @@ fn suggest_scale_without_exact_bodies_is_one_to_one() {
         s(1, 1)
     );
 }
+
+#[test]
+fn isometric_goes_into_the_empty_quadrant_of_the_block() {
+    let free_area = ((0.0, 0.0), (300.0, 200.0));
+    // Erstwinkel: Grundansicht 100 × 40 um (100, 100); leeres Viertel rechts unten ab
+    // (170, 60), Platz 130 × 60. Die Isometrie 80 × 70 passt in 1:1 nicht (70 > 60), in 1:2
+    // (40 × 35) schon: bündig an der Ecke, 20 mm von der Grundansicht.
+    let (c, scale) = iso_placement(
+        Projection::First,
+        ViewKind::Front,
+        (100.0, 100.0),
+        (100.0, 40.0),
+        (80.0, 70.0),
+        s(1, 1),
+        free_area,
+    );
+    assert_eq!(scale, s(1, 2));
+    assert!(
+        (c.0 - 190.0).abs() < 1e-9 && (c.1 - 42.5).abs() < 1e-9,
+        "{c:?}"
+    );
+    // Drittwinkel: links oben ab (30, 140), Platz 30 × 60: erst 1:5 (16 × 14) passt.
+    let (c, scale) = iso_placement(
+        Projection::Third,
+        ViewKind::Front,
+        (100.0, 100.0),
+        (100.0, 40.0),
+        (80.0, 70.0),
+        s(1, 1),
+        free_area,
+    );
+    assert_eq!(scale, s(1, 5));
+    assert!(
+        (c.0 - 22.0).abs() < 1e-9 && (c.1 - 147.0).abs() < 1e-9,
+        "{c:?}"
+    );
+    // Nie größer als die Grundansicht: Platz für 2:1, Grundansicht 1:2 → 1:2.
+    let (_, scale) = iso_placement(
+        Projection::First,
+        ViewKind::Front,
+        (50.0, 150.0),
+        (20.0, 10.0),
+        (20.0, 20.0),
+        s(1, 2),
+        free_area,
+    );
+    assert_eq!(scale, s(1, 2));
+    // Kein Platz rechts neben der Grundansicht (der freie Bereich endet bei x = 160): nach
+    // bestem Wissen im Maßstab der Grundansicht bündig in der Ecke rechts unten.
+    let (c, scale) = iso_placement(
+        Projection::First,
+        ViewKind::Front,
+        (100.0, 100.0),
+        (100.0, 40.0),
+        (80.0, 70.0),
+        s(1, 1),
+        ((0.0, 0.0), (160.0, 130.0)),
+    );
+    assert_eq!(scale, s(1, 1));
+    assert!(
+        (c.0 - 120.0).abs() < 1e-9 && (c.1 - 35.0).abs() < 1e-9,
+        "{c:?}"
+    );
+}

@@ -506,33 +506,58 @@ fn arrange(
     )
 }
 
+fn overlaps(a: Span, b: Span) -> bool {
+    let e = 1e-9;
+    a.0.0 < b.1.0 - e && b.0.0 < a.1.0 - e && a.0.1 < b.1.1 - e && b.0.1 < a.1.1 - e
+}
+
 #[test]
 fn three_view_block_and_isometric_stay_in_the_free_area() {
-    let probe = DVec3::new(100.0, 60.0, 40.0);
-    let cases = [
-        (probe, Paper::A4, true, Projection::First),
-        (probe, Paper::A4, true, Projection::Third),
-        (probe, Paper::A4, false, Projection::First),
-        (probe, Paper::A0, true, Projection::First),
-        (
-            DVec3::new(40.0, 30.0, 20.0),
-            Paper::A3,
-            true,
-            Projection::Third,
-        ),
-    ];
+    let mut cases = Vec::new();
+    for body in [DVec3::new(100.0, 60.0, 40.0), DVec3::new(40.0, 30.0, 20.0)] {
+        for (paper, landscape) in [
+            (Paper::A4, true),
+            (Paper::A4, false),
+            (Paper::A3, true),
+            (Paper::A3, false),
+            (Paper::A0, true),
+        ] {
+            for projection in [Projection::First, Projection::Third] {
+                cases.push((body, paper, landscape, projection));
+            }
+        }
+    }
     for (body, paper, landscape, projection) in cases {
+        let ctx = format!("{body:?} {paper:?} {landscape} {projection:?}");
         let (block, iso, (lo, hi)) = arrange(body, paper, landscape, projection);
         for b in &block {
             assert!(
                 inside(*b, lo, hi),
-                "{paper:?} {landscape} {projection:?}: Block {b:?} ragt aus {lo:?}…{hi:?}"
+                "{ctx}: Block {b:?} ragt aus {lo:?}…{hi:?}"
             );
         }
         assert!(
             inside(iso, lo, hi),
-            "{paper:?} {landscape} {projection:?}: Isometrie {iso:?} ragt aus {lo:?}…{hi:?}"
+            "{ctx}: Isometrie {iso:?} ragt aus {lo:?}…{hi:?}"
         );
+        // Die Isometrie liegt im leeren Viertel des Blocks und überdeckt keine Ansicht.
+        let front = block[0];
+        let in_quadrant = match projection {
+            // Erstwinkel: rechts unten (Seitenansicht rechts, Draufsicht unten).
+            Projection::First => iso.0.0 >= front.1.0 - 1e-9 && iso.1.1 <= front.0.1 + 1e-9,
+            // Drittwinkel: links oben.
+            Projection::Third => iso.1.0 <= front.0.0 + 1e-9 && iso.0.1 >= front.1.1 - 1e-9,
+        };
+        assert!(
+            in_quadrant,
+            "{ctx}: Isometrie {iso:?} nicht im leeren Viertel {block:?}"
+        );
+        for (b, name) in block.iter().zip(["Vorne", "Links", "Oben"]) {
+            assert!(
+                !overlaps(iso, *b),
+                "{ctx}: Isometrie {iso:?} überdeckt {name} {b:?}"
+            );
+        }
     }
 
     // Ein Teil, das das Blatt fast ausfüllt: der Block passt (Maßstabsvorschlag), die Isometrie

@@ -514,6 +514,87 @@ pub fn block_origin(
     (cx - dx * shift, cy - dy * shift)
 }
 
+/// Lage und Maßstab der isometrischen Ansicht neben dem Block aus Grundansicht `base` (Mitte
+/// `centre`, Ausdehnung `base_size` in mm auf dem Blatt), Seitenansicht und Draufsicht.
+///
+/// Die Isometrie kommt in das leere Viertel des Blocks – Erstwinkel rechts unten (Seitenansicht
+/// rechts, Draufsicht unten), Drittwinkel links oben –, mit [`GAP_MM`] Abstand zu den Kanten der
+/// Grundansicht. Der Maßstab ist der größte der Reihe, der nicht größer als `base_scale` ist und
+/// bei dem die Isometrie (ungeskalierte Ausdehnung `iso_size`) ganz in dieses Viertel des freien
+/// Bereichs passt. Passt sie in keinem, bleibt es beim Maßstab der Grundansicht, und sie sitzt
+/// bündig in der Ecke des freien Bereichs auf der Seite des leeren Viertels; dann kann sie den
+/// Block überdecken (nach bestem Wissen). Liefert die Projektionsart für `base` keine Seite,
+/// gilt rechts oben.
+pub fn iso_placement(
+    projection: Projection,
+    base: ViewKind,
+    centre: (f64, f64),
+    base_size: (f64, f64),
+    iso_size: (f64, f64),
+    base_scale: Scale,
+    free: FreeArea,
+) -> ((f64, f64), Scale) {
+    let sides = [
+        ViewKind::Left,
+        ViewKind::Right,
+        ViewKind::Front,
+        ViewKind::Back,
+    ];
+    let tops = [
+        ViewKind::Top,
+        ViewKind::Bottom,
+        ViewKind::Front,
+        ViewKind::Back,
+    ];
+    let or_one = |d: f64| if d == 0.0 { 1.0 } else { d.signum() };
+    let dx = or_one(neighbour_dir(projection, base, sides, true));
+    let dy = or_one(neighbour_dir(projection, base, tops, false));
+    // Ecke des leeren Viertels an der Grundansicht und seine Größe im freien Bereich.
+    let corner = (
+        centre.0 + dx * (base_size.0 / 2.0 + GAP_MM),
+        centre.1 + dy * (base_size.1 / 2.0 + GAP_MM),
+    );
+    let room = (
+        if dx > 0.0 {
+            free.1.0 - corner.0
+        } else {
+            corner.0 - free.0.0
+        },
+        if dy > 0.0 {
+            free.1.1 - corner.1
+        } else {
+            corner.1 - free.0.1
+        },
+    );
+    let fits = |s: Scale| {
+        let f = s.factor();
+        iso_size.0 * f <= room.0 && iso_size.1 * f <= room.1
+    };
+    let scale = Scale::SERIES
+        .into_iter()
+        .filter(|s| s.factor() <= base_scale.factor() && fits(*s))
+        .max_by(|a, b| a.factor().total_cmp(&b.factor()))
+        .unwrap_or(base_scale);
+    let size = (iso_size.0 * scale.factor(), iso_size.1 * scale.factor());
+    let want = (corner.0 + dx * size.0 / 2.0, corner.1 + dy * size.1 / 2.0);
+    let axis = |w: f64, len: f64, lo: f64, hi: f64, dir: f64| {
+        if len <= hi - lo {
+            w.clamp(lo + len / 2.0, hi - len / 2.0)
+        } else if dir > 0.0 {
+            hi - len / 2.0
+        } else {
+            lo + len / 2.0
+        }
+    };
+    (
+        (
+            axis(want.0, size.0, free.0.0, free.1.0, dx),
+            axis(want.1, size.1, free.0.1, free.1.1, dy),
+        ),
+        scale,
+    )
+}
+
 /// Mitte einer Ansicht der Ausdehnung `size`, die möglichst bei `want` liegt, aber im freien
 /// Bereich bleibt. Passt die Ausdehnung auf einer Achse nicht hinein, sitzt die Ansicht dort
 /// bündig an der rechten bzw. oberen Kante (sie ragt dann nach links bzw. unten hinaus).
