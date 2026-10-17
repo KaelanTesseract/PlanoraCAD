@@ -445,6 +445,59 @@ fn reopened_dialog_is_centred_in_the_first_frame() {
     }
 }
 
+/// Nachbesserung (Re-Review 1): ändert sich die Höhe des Inhalts bei offenem Dialog, steht er
+/// schon im ersten Bild danach mittig und im Fenster (kein Sprung über ein Bild), wachsend und
+/// schrumpfend, fest und verschiebbar (unverschoben).
+#[test]
+fn content_height_change_is_centred_in_the_first_frame() {
+    for fixed in [false, true] {
+        for (from, to) in [(40.0, 300.0), (300.0, 40.0), (40.0, 1500.0), (1500.0, 40.0)] {
+            let what = format!("fixed={fixed} {from}->{to}");
+            let mut hn = Harness::new(false, 1400.0, 900.0, DialogSize::Normal);
+            hn.fixed = fixed;
+            hn.closable = true;
+            let mut c = Content::new(from);
+            hn.run(vec![], &mut c);
+            hn.run(vec![], &mut c);
+            c.gap = to;
+            let first = hn.run(vec![], &mut c);
+            let a = hn.area().unwrap();
+            let settled = hn.run(vec![], &mut c);
+            // Gemalt: Titel und Schließen-Symbol stehen schon im ersten Bild an ihrer Stelle.
+            assert_eq!(
+                pos_of(&first, TITLE),
+                pos_of(&settled, TITLE),
+                "{what}: Titel springt"
+            );
+            assert_eq!(
+                pos_of(&first, &close_glyph()),
+                pos_of(&settled, &close_glyph()),
+                "{what}: Schließen-Symbol springt"
+            );
+            let title = pos_of(&first, TITLE);
+            assert!(
+                title.y > a.top() && title.y < a.top() + 40.0,
+                "{what}: Titel {title:?} nicht oben in {a:?}"
+            );
+            let centre = hn.content_rect().center();
+            assert!(
+                max_abs(a.center() - centre) <= 1.0,
+                "{what}: nicht mittig: {a:?}"
+            );
+            // Der gemalte Rahmen liegt im Fenster (Inhalt schneidet der Rollbereich ab).
+            let panel = theme::palette(false).bg_panel;
+            let frames: Vec<_> = first.fills.iter().filter(|f| f.1 == panel).collect();
+            assert!(!frames.is_empty(), "{what}: kein Rahmen gemalt");
+            for (r, ..) in frames {
+                assert!(
+                    hn.content_rect().expand(1.0).contains_rect(*r),
+                    "{what}: Fläche {r:?} außerhalb des Fensters"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn tall_content_scrolls_and_stays_inside() {
     let mut hn = Harness::new(false, 800.0, 600.0, DialogSize::Normal);

@@ -222,6 +222,70 @@ fn export_dialog_with_chooser_fits_at_800x600() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Nachbesserung (Re-Review 3): in einem niedrigen Fenster (800 × 480) rollt Exportieren mit
+/// Dateiwahl; Titel und Schließen-Symbol bleiben dabei stehen, „Speichern“ ist nach dem Rollen
+/// erreichbar.
+#[test]
+fn export_dialog_with_chooser_scrolls_in_a_low_window() {
+    let dir = temp_dir("rollen");
+    let mut s = export_state();
+    let mut d = export_dialog(&s, ExportFormat::Mesh(Format::Stl));
+    d.begin_save(dir.clone(), &s);
+    let mut screen = Screen::new(800.0, 480.0);
+    let seen = screen.settle(8, &mut show_export(&mut d, &mut s));
+    let rect = d.last_rect.unwrap();
+    // Größte Höhe 480 − 32: der Dialog füllt sie, weil der Inhalt nicht passt.
+    assert!((rect.height() - 448.0).abs() <= 1.0, "{rect:?}");
+    assert!(window(&screen).contains_rect(rect), "{rect:?}");
+    let close = planora_app::icons::glyph(planora_app::icons::Icon::Close).to_string();
+    let title_before = find(&seen, "Exportieren").expect("Titel").rect;
+    let close_before = find(&seen, &close).expect("Schließen-Symbol").rect;
+    let hidden = find(&seen, "Speichern")
+        .is_none_or(|t| !t.clip.contains_rect(t.rect) || !rect.contains_rect(t.rect));
+    assert!(hidden, "„Speichern“ schon ohne Rollen sichtbar");
+    let mut f = show_export(&mut d, &mut s);
+    for _ in 0..3 {
+        screen.wheel(rect.center() + egui::vec2(0.0, 40.0), -400.0, &mut f);
+    }
+    let seen = screen.settle(3, &mut f);
+    assert_eq!(
+        find(&seen, "Exportieren")
+            .expect("Titel nach dem Rollen")
+            .rect,
+        title_before,
+        "Titel rollt mit"
+    );
+    assert_eq!(
+        find(&seen, &close)
+            .expect("Schließen-Symbol nach dem Rollen")
+            .rect,
+        close_before,
+        "Schließen-Symbol rollt mit"
+    );
+    let button = find(&seen, "Speichern").expect("„Speichern“ nach dem Rollen");
+    assert!(
+        button.clip.contains_rect(button.rect) && rect.contains_rect(button.rect),
+        "{:?} in {:?}",
+        button.rect,
+        button.clip
+    );
+    screen.click(button.rect.center(), &mut f);
+    drop(f);
+    for _ in 0..200 {
+        if !matches!(d.write_state(), WriteState::Idle | WriteState::Writing) {
+            break;
+        }
+        d.tick(&s, true);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        matches!(d.write_state(), WriteState::Done(..)),
+        "Klick auf „Speichern“ nach dem Rollen: {:?}",
+        d.write_state()
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn growing_status_keeps_the_dialog_in_place() {
     let dir = temp_dir("wachsen");

@@ -544,6 +544,8 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         Sense::click_and_drag()
     };
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), sense);
+    // Die Ansicht kann den Fokus haben (Tab), liest aber keinen Text.
+    focus_is_not_typing(ui.ctx(), response.id);
     if rect.width() < 2.0 || rect.height() < 2.0 {
         return;
     }

@@ -448,6 +448,40 @@ fn escape_cancels_the_running_tool() {
     assert!(s.sketch_session.as_ref().unwrap().pending.is_empty());
 }
 
+/// Nachbesserung (Re-Review 2): hat die Zeichenfläche selbst den Tastaturfokus (Tab oder Pfeile
+/// von der Statuszeile aus), bricht Esc das laufende Werkzeug trotzdem ab.
+#[test]
+fn escape_cancels_while_the_overlay_has_focus() {
+    let mut s = with_line_and_pending();
+    let ctx = context();
+    for (i, events) in [vec![], vec![], vec![key(egui::Key::Escape)], vec![]]
+        .into_iter()
+        .enumerate()
+    {
+        ctx.run_ui(input(events, false), |ui| {
+            // Gleiche Kennung wie in `show_overlay` (gleiches `ui`).
+            let id = ui.id().with("planora-sketch-overlay");
+            if i == 1 {
+                ui.memory_mut(|m| m.request_focus(id));
+            }
+            sketch_view::show_overlay(ui, SCREEN, &mut s);
+            if i == 1 {
+                assert_eq!(ui.memory(|m| m.focused()), Some(id), "Fläche hat den Fokus");
+                assert!(
+                    !viewport::typing(ui.ctx()),
+                    "Fokus der Fläche gilt als Eingabe"
+                );
+            }
+            viewport::remember_keyboard_focus(ui.ctx());
+        })
+        .drop_without_applying_deltas();
+    }
+    assert!(
+        s.sketch_session.as_ref().unwrap().pending.is_empty(),
+        "Esc bei fokussierter Zeichenfläche bricht nicht ab"
+    );
+}
+
 #[test]
 fn enter_finishes_a_spline() {
     let mut s = empty_sketch();

@@ -289,8 +289,8 @@ Stand: 2026-10-17, Zweig `feature/graphit-etappe-d`. Plan: `plans/2026-10-17-gra
 **Rulings und Abweichungen**
 - Die Breite- und Höhengrenzen des egui-Fensters gelten für die Außengröße; die Klassenbreite wird deshalb nicht um den Rahmen verkleinert (der Plan sah das anders vor).
 - Eigene Schließbehandlung statt des egui-`open`.
-- Höhe nach Inhalt (Abschluss-Nachbesserung): kein Rollbereich des egui-Fensters, sondern ein eigener unter der Kopfzeile, höchstens bis zur freien Fensterhöhe; ein Dialog ist so hoch wie sein Inhalt und scrollt nur, wenn der Inhalt höher als das Fenster ist. Die Kopfzeile scrollt nicht mit, ihr Titel ist nicht markierbar (Ziehen am Titel verschiebt). Ein wieder geöffneter Dialog verwirft sein erstes Bild, damit er mit der neuen Höhe mittig steht.
-- Die Statuszeile ist ein Tab-Halt für die Bedienhilfe mit Fokusrahmen; ihr Fokus sperrt die Tasten der Ansicht nicht (`viewport::focus_is_not_typing`).
+- Höhe nach Inhalt (Abschluss-Nachbesserung): kein Rollbereich des egui-Fensters, sondern ein eigener unter der Kopfzeile, höchstens bis zur freien Fensterhöhe; ein Dialog ist so hoch wie sein Inhalt und scrollt nur, wenn der Inhalt höher als das Fenster ist. Die Kopfzeile scrollt nicht mit, ihr Titel ist nicht markierbar (Ziehen am Titel verschiebt). Ein wieder geöffneter Dialog verwirft sein erstes Bild, damit er mit der neuen Höhe mittig steht; ebenso ein offener Dialog, dessen Größe sich ändert.
+- Die Statuszeile ist ein Tab-Halt für die Bedienhilfe mit Fokusrahmen; ihr Fokus sperrt die Tasten der Ansicht nicht (`viewport::focus_is_not_typing`), ebenso der Fokus auf der Zeichenfläche der Skizze und der 3D-Ansicht.
 - Enter übernimmt zusätzlich in Neuer Ordner, Projekte umbenennen und Kommentar ändern (Test (f) des Plans verlangte es); Kosten, falls unerwünscht: drei Handler und zwei Testprüfungen entfernen.
 - Die Ziehschwelle am Würfel ist 4 px; Tooltip und Hervorhebung ruhen während des Ziehens.
 - Die Mindestschrift 9 pt hat Vorrang vor der Flächenbreite; das längste Wort ist dort 32 px breit bei 31,9 px erlaubt.

@@ -114,6 +114,10 @@ impl<'a> Dialog<'a> {
         if reopened {
             ctx.request_discard("Dialog: wieder geöffnet");
         }
+        // Größe vor diesem Durchgang: egui stellt das Fenster mit der Größe des vorigen Bilds
+        // hin. Ändert sich die Höhe des Inhalts, stünde der Dialog ein Bild lang versetzt (ein
+        // fester ragte beim Wachsen sogar aus dem Fenster).
+        let before = ctx.memory(|m| m.area_rect(id)).map(|r| r.size());
         // Höhe: so hoch wie der Inhalt. Die Fläche für den Inhalt ist stets die größte Höhe
         // (min = max), gezeichnet wird aber nur, was der Inhalt belegt. Erst wenn er nicht
         // passt, scrollt er (unter der Kopfzeile, die stehen bleibt).
@@ -156,6 +160,14 @@ impl<'a> Dialog<'a> {
                 .inner;
             (close, r)
         });
+        // Größe geändert: dieses Bild verwerfen und mit der neuen Größe wiederholen (egui
+        // begrenzt das auf `max_passes`, eine Schleife ist ausgeschlossen).
+        if let (Some(before), Some(response)) = (before, closed.as_ref())
+            && !reopened
+            && (response.response.rect.size() - before).abs().max_elem() > 0.5
+        {
+            ctx.request_discard("Dialog: Höhe geändert");
+        }
         closed.map(|response| {
             let inner = response.inner.map(|(close, r)| {
                 if close && let Some(open) = open {

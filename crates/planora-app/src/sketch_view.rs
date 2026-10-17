@@ -443,6 +443,9 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
         ui.id().with("planora-sketch-overlay"),
         Sense::click_and_drag(),
     );
+    // Die Zeichenfläche nimmt den Fokus an (Tab, Pfeile), liest aber keinen Text: ihr Fokus
+    // sperrt Esc, Entf und Eingabe der Skizze nicht.
+    viewport::focus_is_not_typing(ui.ctx(), response.id);
     state.camera.set_viewport(rect.width(), rect.height());
     handle_input(ui, &response, rect, state);
     draw(ui, rect, state, response.hover_pos());
