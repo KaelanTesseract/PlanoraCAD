@@ -8,7 +8,7 @@ use egui::{
 use glam::{Vec2, Vec3};
 use planora_render::gpu::ViewportCallback;
 use planora_render::{
-    CubePiece, CubeRegion, INSET, OrbitCamera, Palette, Pick, ViewFace, cube_pieces,
+    CubePiece, CubeRegion, INSET, OrbitCamera, Palette, Pick, ViewFace, cube_pieces_visible,
     current_region, face_text_frame, pieces_hit_test,
 };
 
@@ -27,6 +27,16 @@ const NAME_H: f32 = 16.0;
 pub const CUBE_SCALE: f32 = CUBE_SIZE * 0.28;
 /// Beschriftet wird nur eine Fläche, die mindestens so stark zur Kamera zeigt.
 pub const LABEL_MIN_FACING: f32 = 0.3;
+/// Ab hier ist die Beschriftung voll deckend; darunter blendet sie bis `LABEL_MIN_FACING` aus.
+pub const LABEL_FULL_FACING: f32 = 0.5;
+/// Bereiche des Würfels, die höchstens so stark zur Kamera zeigen, werden weder gemalt noch
+/// angeklickt: Fast flach gesehen wären sie nur ein 1–2 px schmaler Streifen, dessen Umriss beim
+/// Drehen als Linie aufblitzt. Bei 0,15 ist der schmalste Bereich (Eckendreieck) noch etwa
+/// 1,7 px breit.
+pub const PIECE_MIN_FACING: f32 = 0.15;
+/// Ab hier ist ein Bereich voll deckend; darunter blenden Füllung und Umriss bis
+/// `PIECE_MIN_FACING` aus, damit beim Drehen nichts schlagartig erscheint oder verschwindet.
+pub const PIECE_FULL_FACING: f32 = 0.3;
 /// Das längste Wort nimmt höchstens diesen Anteil der Flächenbreite ein.
 const LABEL_FILL: f32 = 0.85;
 /// Abweichung in Grad, bis zu der eine Blickrichtung als Ansicht eines Bereichs gilt.
@@ -137,12 +147,47 @@ pub fn face_label_transform(camera: &OrbitCamera, face: ViewFace, cube: Rect) ->
     }
 }
 
-/// Sichtbare Bereiche mit endlichen Zahlen (eine ungültige Kamera liefert NaN-Stücke).
-fn visible_pieces(camera: &OrbitCamera) -> Vec<CubePiece> {
-    cube_pieces(camera)
+/// Gemalte und anklickbare Bereiche: deutlich zugewandt (`PIECE_MIN_FACING`) und mit endlichen
+/// Zahlen (eine ungültige Kamera liefert NaN-Stücke). Malen und Klicken nutzen dieselbe Liste,
+/// ein nicht gemalter Bereich lässt sich also auch nicht treffen.
+pub fn visible_pieces(camera: &OrbitCamera) -> Vec<CubePiece> {
+    cube_pieces_visible(camera, PIECE_MIN_FACING)
         .into_iter()
         .filter(|p| p.depth.is_finite() && p.corners.iter().all(|c| c.is_finite()))
         .collect()
+}
+
+/// Anklickbare Bereiche: die gemalten ([`visible_pieces`]), die mindestens halb deckend zu sehen
+/// sind (`piece_opacity` ≥ 0,5). Ein gerade erst einblendender, kaum sichtbarer Bereich am Rand
+/// fängt also keinen Klick und kein Hover.
+pub fn clickable_pieces(camera: &OrbitCamera) -> Vec<CubePiece> {
+    visible_pieces(camera)
+        .into_iter()
+        .filter(|p| piece_opacity(p.depth) >= 0.5)
+        .collect()
+}
+
+/// Bereich des Würfels unter dem Bildschirmpunkt `p` (Würfelfeld `cube`), aus derselben Liste
+/// wie Hover und Klick in der Ansicht ([`clickable_pieces`]).
+pub fn cube_region_at(camera: &OrbitCamera, cube: Rect, p: Pos2) -> Option<CubeRegion> {
+    pieces_hit_test(&clickable_pieces(camera), screen_to_cube(cube, p))
+}
+
+/// Weicher Übergang 0 → 1 für `x` von `lo` bis `hi` (Smoothstep, außerhalb geklemmt).
+fn fade(x: f32, lo: f32, hi: f32) -> f32 {
+    let t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Deckkraft eines Bereichs, der `facing` zur Kamera zeigt (0 an der Schwelle, 1 ab
+/// `PIECE_FULL_FACING`).
+pub fn piece_opacity(facing: f32) -> f32 {
+    fade(facing, PIECE_MIN_FACING, PIECE_FULL_FACING)
+}
+
+/// Deckkraft der Beschriftung einer Fläche, die `facing` zur Kamera zeigt.
+pub fn label_opacity(facing: f32) -> f32 {
+    fade(facing, LABEL_MIN_FACING, LABEL_FULL_FACING)
 }
 
 /// Schrift der Flächenbeschriftung und ihr Maßstab (Würfeleinheiten je Schriftpunkt): Das
@@ -222,7 +267,7 @@ fn paint_cube(
 ) {
     let colors = theme::cube_colors(dark);
     let pieces = visible_pieces(camera);
-    let hovered = hover.and_then(|p| pieces_hit_test(&pieces, screen_to_cube(cube, p)));
+    let hovered = hover.and_then(|p| cube_region_at(camera, cube, p));
     let current = current_region(camera, REGION_TOLERANCE_DEG);
     for piece in &pieces {
         let is_hovered = hovered == Some(piece.region);
@@ -238,10 +283,12 @@ fn paint_cube(
             .iter()
             .map(|c| cube_to_screen(cube, *c))
             .collect();
+        // Flach gesehene Bereiche blenden mit Füllung und Umriss ein und aus (kein Aufblitzen).
+        let opacity = piece_opacity(piece.depth);
         painter.add(Shape::convex_polygon(
             points,
-            fill,
-            Stroke::new(1.0, colors.line),
+            fill.gamma_multiply(opacity),
+            Stroke::new(1.0, colors.line.gamma_multiply(opacity)),
         ));
         if let CubeRegion::Face(face) = piece.region {
             let frame = face_label_transform(camera, face, cube);
@@ -255,7 +302,7 @@ fn paint_cube(
                     painter,
                     &frame,
                     face.label(),
-                    color,
+                    color.gamma_multiply(label_opacity(frame.facing)),
                 )));
             }
         }
@@ -406,8 +453,8 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         Sense::click_and_drag(),
     );
     let cube_hover = cube_response.hover_pos();
-    let pieces = visible_pieces(&state.camera);
-    let region_at = |p: Pos2| pieces_hit_test(&pieces, screen_to_cube(cube, p));
+    let camera = state.camera;
+    let region_at = |p: Pos2| cube_region_at(&camera, cube, p);
     let hovered_region = cube_hover.and_then(region_at);
     if cube_response.clicked()
         && let Some(region) = cube_response

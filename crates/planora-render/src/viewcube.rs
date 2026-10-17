@@ -278,14 +278,21 @@ pub struct CubePiece {
 /// Projiziert den abgeschrägten Würfel orthografisch wie `cube_faces` und liefert die der Kamera
 /// zugewandten Bereiche, den am weitesten hinten liegenden zuerst.
 pub fn cube_pieces(camera: &OrbitCamera) -> Vec<CubePiece> {
+    // Gleiche Schwelle wie bei `cube_faces`.
+    cube_pieces_visible(camera, 0.02)
+}
+
+/// Wie [`cube_pieces`], aber nur Bereiche, die stärker als `min_facing` zur Kamera zeigen
+/// (`depth > min_facing`). Fast flach gesehene Bereiche erscheinen im Bild nur als schmale
+/// Streifen; wer sie nicht malen will, lässt sie hier weg und testet Klicks gegen dieselbe Liste.
+pub fn cube_pieces_visible(camera: &OrbitCamera, min_facing: f32) -> Vec<CubePiece> {
     let view = camera.view();
     let to_view = |v: Vec3| view.transform_vector3(v);
     let mut pieces: Vec<CubePiece> = all_regions()
         .iter()
         .filter_map(|&region| {
             let facing = to_view(region.normal()).z;
-            // Gleiche Schwelle wie bei `cube_faces`.
-            if facing <= 0.02 {
+            if facing <= min_facing {
                 return None;
             }
             let corners = region

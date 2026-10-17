@@ -245,3 +245,36 @@ fn pieces_are_sorted_back_to_front_and_back_faces_culled() {
         "die Ecke zur Kamera liegt vorne"
     );
 }
+
+#[test]
+fn cube_pieces_visible_filters_by_facing_and_matches_cube_pieces() {
+    for (yaw, pitch) in [(-0.8_f32, 0.5_f32), (0.3, -1.2), (2.0, 0.05), (-2.9, 1.4)] {
+        let cam = OrbitCamera {
+            yaw,
+            pitch,
+            ..OrbitCamera::default()
+        };
+        let all = cube_pieces(&cam);
+        let same = cube_pieces_visible(&cam, 0.02);
+        assert_eq!(all.len(), same.len());
+        for (a, b) in all.iter().zip(&same) {
+            assert_eq!(a.region, b.region);
+            assert_eq!(a.corners, b.corners);
+            assert_eq!(a.depth, b.depth);
+        }
+        for min in [0.1_f32, 0.15, 0.4] {
+            let some = cube_pieces_visible(&cam, min);
+            let want: Vec<CubeRegion> = all
+                .iter()
+                .filter(|p| p.depth > min)
+                .map(|p| p.region)
+                .collect();
+            let got: Vec<CubeRegion> = some.iter().map(|p| p.region).collect();
+            assert_eq!(got, want, "yaw {yaw}, pitch {pitch}, min {min}");
+            assert!(
+                some.windows(2).all(|w| w[0].depth <= w[1].depth),
+                "hinten zuerst"
+            );
+        }
+    }
+}
