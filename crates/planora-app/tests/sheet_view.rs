@@ -273,8 +273,9 @@ fn new_drawing_is_stamped_and_centred() {
     let project = st.document.project_info().expect("Projektangaben");
     assert_eq!(project.login, today.user);
     assert_eq!(project.creator, FieldValue::Auto);
-    // Die Grundansicht allein liegt in der Mitte des freien Bereichs (A4 quer, Blattzubehör mal
-    // 0,707: 14,14…289,93 × 46,67…197,98, Mitte 152,04 | 122,33); 100 × 60 × 40 gibt 1:1.
+    // Die Grundansicht allein liegt in der Mitte des freien Bereichs für die Anordnung (A4 quer,
+    // Blattzubehör mal 0,707, Platz für Kopf und 3 Änderungszeilen: 14,14…289,93 × 46,67…183,13,
+    // Mitte 152,04 | 114,9); 100 × 60 × 40 gibt 1:1.
     assert_eq!(dr.sheet, A4_QUER);
     assert_eq!(dr.views.len(), 1);
     assert_eq!(dr.views[0].scale, s(1, 1));
@@ -282,7 +283,7 @@ fn new_drawing_is_stamped_and_centred() {
         panic!("frei");
     };
     assert!((x - 152.035_714_285_714).abs() < 1e-9, "{x}");
-    assert!((y - 122.325).abs() < 1e-9, "{y}");
+    assert!((y - 114.9).abs() < 1e-9, "{y}");
     assert_eq!(st.drawing_ui.area, WorkArea::Drawing(id));
     // Mit Blattangaben braucht die Datei das Format 6.
     assert_eq!(planora_project::required_format(&st.document.snapshot()), 6);
@@ -348,7 +349,7 @@ fn views_are_added_in_the_free_area() {
         let two = stamped(&mut st, "Blatt 2", sheet);
         let (lo, hi) = {
             let d = st.document.drawing(one).unwrap();
-            drawing_view::layout_of(&st, d).free
+            drawing_view::placement_layout(&st, d).free
         };
         st.drawing_ui.open(one);
         let front = drawing_view::add_view(&mut st, ViewKind::Front).unwrap();
@@ -395,24 +396,25 @@ fn views_are_added_in_the_free_area() {
         }
     }
 
-    // Maßstab im freien Bereich: A4 quer, Quader 100 × 60 × 40: 1:1 (freier Bereich
-    // 275,79 × 151,31; der Block braucht 180 × 120).
+    // Maßstab im freien Bereich für die Anordnung (Platz für Kopf und 3 Änderungszeilen):
+    // A4 quer, Quader 100 × 60 × 40: 1:1 (freier Bereich 275,79 × 136,46; der Block braucht
+    // 180 × 120).
     let st = box_state();
-    let (lo, hi) = sheet_layout(A4_QUER, 0, 3).free;
+    let (lo, hi) = sheet_layout(A4_QUER, 3, 3).free;
     let (fw, fh) = (hi.x - lo.x, hi.y - lo.y);
-    assert!((fw - 275.785_714_285_714).abs() < 1e-9 && (fh - 151.307_142_857_143).abs() < 1e-9);
+    assert!((fw - 275.785_714_285_714).abs() < 1e-9 && (fh - 136.457_142_857_143).abs() < 1e-9);
     assert_eq!(
         suggest_scale_in(&st.bodies, (fw, fh), ViewKind::Front),
         s(1, 1)
     );
-    // Auf A3 quer (freier Bereich 390 × 214) ebenso 1:1, 2:1 passt nicht (340 + 20 > 214).
-    let (lo, hi) = sheet_layout(a3, 0, 3).free;
+    // Auf A3 quer (freier Bereich 390 × 193) ebenso 1:1, 2:1 passt nicht (200 + 20 > 193).
+    let (lo, hi) = sheet_layout(a3, 3, 3).free;
     assert_eq!(
         suggest_scale_in(&st.bodies, (hi.x - lo.x, hi.y - lo.y), ViewKind::Front),
         s(1, 1)
     );
-    // Sechs Änderungen und sechs Hinweiszeilen auf A4 hoch: weiter eine Stufe der Reihe.
-    let (lo, hi) = sheet_layout(hoch, 6, 6).free;
+    // Drei Änderungen und sechs Hinweiszeilen auf A4 hoch: weiter eine Stufe der Reihe.
+    let (lo, hi) = sheet_layout(hoch, 3, 6).free;
     let scale = suggest_scale_in(&st.bodies, (hi.x - lo.x, hi.y - lo.y), ViewKind::Front);
     assert!(Scale::SERIES.contains(&scale), "{scale:?}");
 }
@@ -513,7 +515,7 @@ fn arrange(
     let Placement::Free { x, y } = spec.placement else {
         panic!("frei");
     };
-    let free = drawing_view::layout_of(&st, st.document.drawing(id).unwrap()).free;
+    let free = drawing_view::placement_layout(&st, st.document.drawing(id).unwrap()).free;
     (
         block,
         span(&st, ViewKind::Isometric, spec.scale, (x, y)),
@@ -645,15 +647,16 @@ fn failed_creation_rolls_back_the_project_info_it_created() {
 
 #[test]
 fn suggestion_uses_the_note_lines_of_the_project() {
-    // A4 hoch, Hinweise über dem Schriftfeld: freier Bereich 188,79 × 222,75 mit drei, 188,79 ×
-    // 210,02 mit sechs Zeilen. Quader 50 × 100 × 96 (Grundansicht 50 × 96, Tiefe 100): Höhe
-    // 196·f + 20 ≤ 222,75 (drei Zeilen) → 1:1; > 210,02 (sechs Zeilen) → 1:2.
+    // A4 hoch, Hinweise über dem Schriftfeld, Platz für Kopf und 3 Änderungszeilen: freier
+    // Bereich 188,79 × 207,90 mit drei, 188,79 × 195,17 mit sechs Hinweiszeilen. Quader
+    // 50 × 100 × 80 (Grundansicht 50 × 80, Tiefe 100): Höhe 180·f + 20 ≤ 207,90 (drei Zeilen)
+    // → 1:1; > 195,17 (sechs Zeilen) → 1:2.
     let hoch = Sheet {
         paper: Paper::A4,
         landscape: false,
     };
     let mut st = AppState::new();
-    st.create_box(DVec3::new(50.0, 100.0, 96.0)).unwrap();
+    st.create_box(DVec3::new(50.0, 100.0, 80.0)).unwrap();
     let mut dialog = NewDrawingDialog::new(&st);
     dialog.paper = Paper::A4;
     dialog.landscape = false;
@@ -663,9 +666,9 @@ fn suggestion_uses_the_note_lines_of_the_project() {
         (1..=6).map(|i| format!("Hinweis {i}")).collect(),
     );
     st.document.set_project_info(project).unwrap();
-    let (lo, hi) = sheet_layout(hoch, 0, 6).free;
+    let (lo, hi) = sheet_layout(hoch, 3, 6).free;
     assert!(
-        (hi.y - lo.y - 210.021_428_571_429).abs() < 1e-9,
+        (hi.y - lo.y - 195.171_428_571_429).abs() < 1e-9,
         "{}",
         hi.y - lo.y
     );
@@ -715,7 +718,8 @@ fn a_single_base_view_is_centred_until_more_views_follow() {
             dialog.scale = dialog.suggestion(&st);
             let id = dialog.create(&mut st).unwrap();
             let free_of = |st: &AppState| {
-                let (lo, hi) = drawing_view::layout_of(st, st.document.drawing(id).unwrap()).free;
+                let (lo, hi) =
+                    drawing_view::placement_layout(st, st.document.drawing(id).unwrap()).free;
                 ((lo.x, lo.y), (hi.x, hi.y))
             };
             let free = free_of(&st);
@@ -796,5 +800,70 @@ fn a_moved_base_view_stays_where_the_user_put_it() {
             moved,
             "{kind:?}"
         );
+    }
+}
+
+#[test]
+fn a_full_revision_table_never_covers_automatically_placed_views() {
+    // Handtest: die später gefüllte Änderungstabelle lag über der Ansicht „Links“. Die
+    // Anordnung hält jetzt immer Platz für Kopf und 3 Zeilen frei.
+    let to_span = |b: (DVec2, DVec2)| ((b.0.x, b.0.y), (b.1.x, b.1.y));
+    for body in [DVec3::new(100.0, 60.0, 40.0), DVec3::new(40.0, 30.0, 20.0)] {
+        for (paper, landscape) in [
+            (Paper::A4, true),
+            (Paper::A4, false),
+            (Paper::A3, true),
+            (Paper::A0, true),
+        ] {
+            for projection in [Projection::First, Projection::Third] {
+                let ctx = format!("{body:?} {paper:?} {landscape} {projection:?}");
+                let mut st = AppState::new();
+                st.create_box(body).unwrap();
+                let mut dialog = NewDrawingDialog::new(&st);
+                dialog.paper = paper;
+                dialog.landscape = landscape;
+                dialog.projection = projection;
+                dialog.scale = dialog.suggestion(&st);
+                let id = dialog.create(&mut st).unwrap();
+                for kind in [ViewKind::Left, ViewKind::Top, ViewKind::Isometric] {
+                    drawing_view::add_view(&mut st, kind).unwrap();
+                }
+                // Danach fünf Änderungen: auf dem Blatt stehen die letzten drei.
+                let mut info = st.document.drawing(id).unwrap().info.clone().unwrap();
+                for _ in 0..5 {
+                    info.add_revision("2026-10-17", "dennis").unwrap();
+                }
+                st.document.set_sheet_info(id, info).unwrap();
+                let d = st.document.drawing(id).unwrap().clone();
+                let drawn = drawing_view::layout_of(&st, &d);
+                let table = to_span(drawn.revisions);
+                assert!(
+                    (drawn.revisions.1.y - drawn.revisions.0.y - 4.0 * 7.0 * drawn.scale).abs()
+                        < 1e-9,
+                    "{ctx}: Kopf und 3 Zeilen"
+                );
+                let base = d.views[0].clone();
+                let Placement::Free { x: bx, y: by } = base.placement else {
+                    panic!("frei");
+                };
+                for v in &d.views {
+                    let c = match v.placement {
+                        Placement::Free { x, y } => (x, y),
+                        Placement::Aligned { distance } => {
+                            let (dx, dy) =
+                                planora_drawing::align_dir(projection, base.kind, v.kind).unwrap();
+                            (bx + dx * distance, by + dy * distance)
+                        }
+                    };
+                    let sp = span(&st, v.kind, v.scale, c);
+                    assert!(
+                        !overlaps(sp, table),
+                        "{ctx}: {:?} {sp:?} unter der Tabelle {table:?}",
+                        v.kind
+                    );
+                    assert!(!overlaps(sp, to_span(drawn.title)), "{ctx}: {:?}", v.kind);
+                }
+            }
+        }
     }
 }

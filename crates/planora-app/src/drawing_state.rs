@@ -11,7 +11,7 @@ use crate::export_dialog::shorten_for_display;
 use crate::jobs::{Job, Poll};
 use crate::state::{Body, BodyKind};
 use planora_drawing::dimension::DimId;
-use planora_drawing::sheet_frame::sheet_layout;
+use planora_drawing::sheet_frame::{REV_VISIBLE, sheet_layout};
 use planora_drawing::{
     Basis, DrawBody, DrawError, Drawing, DrawingId, Projection, Scale, Sheet, ViewId, ViewKind,
     ViewLines, compute_view,
@@ -439,8 +439,8 @@ pub fn suggest_scale_in(bodies: &[Body], free: (f64, f64), base: ViewKind) -> Sc
         .unwrap_or(smallest)
 }
 
-/// Wie [`suggest_scale_in`] für das Blatt einer neuen Zeichnung (ohne Änderungen, mit den drei
-/// Hinweiszeilen der Vorgabe).
+/// Wie [`suggest_scale_in`] für das Blatt einer neuen Zeichnung (mit Platz für die volle
+/// Änderungstabelle und den drei Hinweiszeilen der Vorgabe).
 pub fn suggest_scale(
     bodies: &[Body],
     sheet: Sheet,
@@ -449,7 +449,7 @@ pub fn suggest_scale(
 ) -> Scale {
     // Erst- und Drittwinkel vertauschen nur die Seiten, nicht die Summen.
     let _ = projection;
-    let (lo, hi) = sheet_layout(sheet, 0, 3).free;
+    let (lo, hi) = sheet_layout(sheet, REV_VISIBLE, 3).free;
     suggest_scale_in(bodies, (hi.x - lo.x, hi.y - lo.y), base)
 }
 

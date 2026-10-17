@@ -524,12 +524,13 @@ fn new_drawing_dialog_creates_a_drawing_with_suggested_scale() {
     assert_eq!(v.kind, ViewKind::Front);
     assert_eq!(v.scale, s(1, 1));
     assert_eq!(v.parent, None);
-    // Die Grundansicht allein liegt in der Mitte des freien Bereichs (152,04 | 122,33); erst mit
+    // Die Grundansicht allein liegt in der Mitte des freien Bereichs für die Anordnung (mit Platz
+    // für Kopf und 3 Änderungszeilen: 152,04 | 114,9); erst mit
     // der nächsten Ansicht rückt sie, damit der Block aus drei Ansichten mittig liegt.
     let Placement::Free { x, y } = v.placement else {
         panic!("frei");
     };
-    assert!((x - 152.035_714_285_714).abs() < 1e-9 && (y - 122.325).abs() < 1e-9);
+    assert!((x - 152.035_714_285_714).abs() < 1e-9 && (y - 114.9).abs() < 1e-9);
     assert_eq!(st.drawing_ui.area, WorkArea::Drawing(dr.id));
     // Der nächste Vorschlag nimmt die kleinste freie Zahl.
     assert_eq!(NewDrawingDialog::new(&st).name, "Zeichnung 2");
@@ -1321,14 +1322,15 @@ fn an_empty_document_or_a_missing_drawing_does_not_panic() {
     );
     assert_eq!(h.layout().lines_drawn, 0);
     // Ansicht hinzufügen ohne Körper und ohne Grundansicht: frei in der Mitte des freien
-    // Bereichs (A4 quer, Blattzubehör mal 0,707: 14,14…289,93 × 46,67…197,98), 1:1.
+    // Bereichs für die Anordnung (A4 quer, Blattzubehör mal 0,707, Platz für Kopf und
+    // 3 Änderungszeilen: 14,14…289,93 × 46,67…183,13), 1:1.
     let v = drawing_view::add_view(&mut st, ViewKind::Top).unwrap();
     let spec = st.document.drawing(d).unwrap().view(v).unwrap().clone();
     let Placement::Free { x, y } = spec.placement else {
         panic!("frei");
     };
     assert!(
-        (x - 152.035_714_285_714).abs() < 1e-9 && (y - 122.325).abs() < 1e-9,
+        (x - 152.035_714_285_714).abs() < 1e-9 && (y - 114.9).abs() < 1e-9,
         "({x}, {y})"
     );
     assert_eq!(spec.parent, None);

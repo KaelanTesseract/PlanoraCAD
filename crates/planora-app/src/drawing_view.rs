@@ -43,7 +43,7 @@ use planora_drawing::annotate::{
 use planora_drawing::dimension::{ArcSpan, DimId, DimSpec};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::sheet::{DimMarks, SheetModel, build_sheet_with, view_transform};
-use planora_drawing::sheet_frame::{SheetLayout, sheet_layout};
+use planora_drawing::sheet_frame::{REV_VISIBLE, SheetLayout, sheet_layout};
 use planora_drawing::sheet_info::{
     ProjectInfo, SheetContext, TitleTexts, main_scale, resolve_texts,
 };
@@ -608,8 +608,23 @@ pub fn layout_of(state: &AppState, drawing: &Drawing) -> SheetLayout {
     layout_from_texts(drawing, &texts)
 }
 
-/// Die Blattgeometrie einer neuen Zeichnung auf `sheet`: mit den Hinweiszeilen der Projektangaben
-/// (sind noch keine gesetzt, die der Vorgabe) und ohne Änderungen.
+/// Blattgeometrie für die automatische Anordnung von Ansichten und den Maßstabsvorschlag: wie
+/// [`layout_of`], aber die Änderungstabelle immer mit Kopf und allen [`REV_VISIBLE`] Zeilen, so
+/// dass eine später gefüllte Tabelle keine automatisch gelegte Ansicht überdeckt. Gezeichnet wird
+/// die Tabelle mit den tatsächlichen Zeilen ([`layout_of`]).
+pub fn placement_layout(state: &AppState, drawing: &Drawing) -> SheetLayout {
+    let texts = resolve_texts(
+        drawing,
+        state.document.project_info(),
+        &context_or_single(state, drawing.id),
+        None,
+    );
+    sheet_layout(drawing.sheet, REV_VISIBLE, texts.notes.len())
+}
+
+/// Die Blattgeometrie für die Anordnung in einer neuen Zeichnung auf `sheet`: mit den
+/// Hinweiszeilen der Projektangaben (sind noch keine gesetzt, die der Vorgabe) und Platz für
+/// die volle Änderungstabelle (wie [`placement_layout`]).
 pub fn new_sheet_layout(state: &AppState, sheet: Sheet, projection: Projection) -> SheetLayout {
     let blank = Drawing::new(DrawingId(0), String::new(), sheet, projection);
     let ctx = SheetContext {
@@ -618,7 +633,7 @@ pub fn new_sheet_layout(state: &AppState, sheet: Sheet, projection: Projection) 
         count: 1,
     };
     let texts = resolve_texts(&blank, state.document.project_info(), &ctx, None);
-    layout_from_texts(&blank, &texts)
+    sheet_layout(sheet, REV_VISIBLE, texts.notes.len())
 }
 
 /// Zuletzt im Zeichnungsbereich gezeichnetes Blattmodell (mit Mittellinien und Maßen).
@@ -1548,7 +1563,7 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
         return Err(NO_DRAWING.into());
     };
     let mut d = state.document.drawing(id).ok_or(NO_DRAWING)?.clone();
-    let (lo, hi) = layout_of(state, &d).free;
+    let (lo, hi) = placement_layout(state, &d).free;
     let free: FreeArea = ((lo.x, lo.y), (hi.x, hi.y));
     let (free_w, free_h) = (hi.x - lo.x, hi.y - lo.y);
     // Steht nur die Grundansicht noch an ihrer automatischen Stelle (Mitte des freien Bereichs),

@@ -128,7 +128,7 @@ impl NewDrawingDialog {
         let free = state
             .document
             .drawing(id)
-            .map(|d| drawing_view::layout_of(state, d).free)
+            .map(|d| drawing_view::placement_layout(state, d).free)
             .ok_or("Die Zeichnung fehlt.")?;
         // Die Grundansicht allein liegt in der Mitte des freien Bereichs; mit der ersten
         // weiteren Ansicht rückt sie so, dass der Block mittig liegt (`drawing_view::add_view`).
