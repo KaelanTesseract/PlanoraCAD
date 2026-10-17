@@ -3,14 +3,15 @@
 //! [`SheetLayout`](crate::sheet_frame::SheetLayout), die Texte [`TitleTexts`]; hier entstehen
 //! daraus [`Mark`]s in Blattkoordinaten (mm, y nach oben), die SVG und DXF wie alle anderen
 //! Markierungen ausgeben. Alle Markierungen tragen [`MarkKind::Sheet`] mit der Linienstärke;
-//! Texte haben die Stärke `Thin` und den Winkel 0.
+//! Texte haben die Stärke `Thin` und den Winkel 0. Alle Längen und Schrifthöhen sind die A3-Werte
+//! mal [`SheetLayout::scale`]; die Strichbreiten dazu stehen in [`SheetFrame::scale`].
 
 use crate::annotate::{Mark, MarkKind, TextAnchor};
 use crate::model::Projection;
 use crate::sheet_frame::{
     GRID_TEXT_H, LABEL_H, NOTE_LINES_MAX, NOTES_LINE_MM, NOTES_PAD_MM, NOTES_TEXT_H,
-    PROJECTION_CENTRE_Y, PROJECTION_X0, REV_COLUMNS, REV_ROW_H, REV_VISIBLE, SheetLayout, SheetPen,
-    TITLE_CELLS, TITLE_SLOTS, TitleField, VALUE_H, projection_symbol,
+    PROJECTION_CENTRE_Y, PROJECTION_X0, REV_ROW_H, REV_VISIBLE, SheetLayout, SheetPen, TitleField,
+    VALUE_H, projection_symbol,
 };
 use crate::sheet_info::TitleTexts;
 use planora_math::{DVec2, TAU};
@@ -19,6 +20,9 @@ use planora_math::{DVec2, TAU};
 #[derive(Clone, Debug, PartialEq)]
 pub struct SheetFrame {
     pub marks: Vec<Mark>,
+    /// Faktor des Blattzubehörs ([`SheetLayout::scale`]); die Ausgabe zeichnet jede Linienart
+    /// mit [`SheetPen::width_at`] dieses Faktors.
+    pub scale: f64,
 }
 
 /// Ein eingepasster Text.
@@ -98,28 +102,36 @@ pub fn fit_text(text: &str, height: f64, width: f64) -> Fitted {
     }
 }
 
-/// Wird der Eintrag dieses Felds im Schriftfeld gekürzt (für die Warnung im Fenster)?
-pub fn field_is_cut(field: TitleField, text: &str) -> bool {
-    TITLE_SLOTS
+/// Wird der Eintrag dieses Felds im Schriftfeld des Blatts `layout` gekürzt (für die Warnung im
+/// Fenster)? Dieselbe Regel wie beim Zeichnen, mit den Zellbreiten des Blatts.
+pub fn field_is_cut(field: TitleField, text: &str, layout: &SheetLayout) -> bool {
+    layout
+        .title_slots()
         .iter()
         .find(|s| s.field == field)
         .is_some_and(|s| fit_text(text, s.height, s.width).cut)
 }
 
 /// Wird der Eintrag in Spalte `col` (0 Buchstabe, 1 Beschreibung, 2 Datum, 3 Name) der
-/// Änderungstabelle gekürzt? Dieselbe Regel wie beim Zeichnen.
-pub fn revision_cell_is_cut(col: usize, text: &str) -> bool {
-    REV_COLUMNS
+/// Änderungstabelle des Blatts `layout` gekürzt? Dieselbe Regel wie beim Zeichnen.
+pub fn revision_cell_is_cut(col: usize, text: &str, layout: &SheetLayout) -> bool {
+    layout
+        .rev_columns()
         .get(col)
-        .is_some_and(|w| fit_text(text, VALUE_H, w - 2.0).cut)
+        .is_some_and(|w| fit_text(text, layout.mm(VALUE_H), w - layout.mm(2.0)).cut)
 }
 
 /// Wird die Hinweiszeile `text` im Hinweisfeld des Blatts `layout` gekürzt? Ohne Hinweisfeld
 /// gibt es nichts zu kürzen.
 pub fn note_is_cut(text: &str, layout: &SheetLayout) -> bool {
-    layout
-        .notes
-        .is_some_and(|(lo, hi)| fit_text(text, NOTES_TEXT_H, hi.x - lo.x - 2.0 * NOTES_PAD_MM).cut)
+    layout.notes.is_some_and(|(lo, hi)| {
+        fit_text(
+            text,
+            layout.mm(NOTES_TEXT_H),
+            hi.x - lo.x - layout.mm(2.0 * NOTES_PAD_MM),
+        )
+        .cut
+    })
 }
 
 fn line(a: DVec2, b: DVec2, pen: SheetPen) -> Mark {
@@ -152,9 +164,10 @@ fn text(marks: &mut Vec<Mark>, pos: DVec2, height: f64, anchor: TextAnchor, text
     });
 }
 
-/// Eingepasster Text bei `pos` (Anfang auf der Grundlinie).
-fn fitted_text(marks: &mut Vec<Mark>, pos: DVec2, height: f64, width: f64, s: &str) {
-    let f = fit_text(s, height, width);
+/// Eingepasster Text bei `pos` (Anfang auf der Grundlinie); `widen` ist der Zuschlag auf die
+/// geschätzte Breite (1 für SVG und Anzeige).
+fn fitted_text(marks: &mut Vec<Mark>, pos: DVec2, height: f64, width: f64, widen: f64, s: &str) {
+    let f = fit_text(s, height, width / widen);
     text(marks, pos, f.height, TextAnchor::Start, &f.text);
 }
 
@@ -206,8 +219,18 @@ fn cell_dividers(cells: &[(f64, f64, f64, f64)], lo: DVec2, hi: DVec2) -> Vec<(D
 /// Rasterbeschriftung, Schriftfeld (Außenlinie `Heavy`, Zelltrennlinien `Thin`, Feldnamen und
 /// Inhalte), Projektionssymbol (`Medium`), Änderungstabelle und Hinweisfeld.
 pub fn sheet_frame(layout: &SheetLayout, texts: &TitleTexts, projection: Projection) -> SheetFrame {
+    build_frame(layout, texts, projection, 1.0)
+}
+
+fn build_frame(
+    layout: &SheetLayout,
+    texts: &TitleTexts,
+    projection: Projection,
+    widen: f64,
+) -> SheetFrame {
     let mut m: Vec<Mark> = Vec::new();
     let p = DVec2::new;
+    let s = |a3_mm: f64| layout.mm(a3_mm);
 
     // Rahmen und Zentriermarken.
     rect(&mut m, layout.frame.0, layout.frame.1, SheetPen::Heavy);
@@ -222,8 +245,8 @@ pub fn sheet_frame(layout: &SheetLayout, texts: &TitleTexts, projection: Project
     for (c, label) in &layout.grid_labels {
         text(
             &mut m,
-            p(c.x, c.y - GRID_TEXT_H / 2.0),
-            GRID_TEXT_H,
+            p(c.x, c.y - s(GRID_TEXT_H / 2.0)),
+            s(GRID_TEXT_H),
             TextAnchor::Middle,
             label,
         );
@@ -232,35 +255,41 @@ pub fn sheet_frame(layout: &SheetLayout, texts: &TitleTexts, projection: Project
     // Schriftfeld.
     let (t0, t1) = layout.title;
     rect(&mut m, t0, t1, SheetPen::Heavy);
-    let abs: Vec<(f64, f64, f64, f64)> = TITLE_CELLS
+    let cells = layout.title_cells();
+    let abs: Vec<(f64, f64, f64, f64)> = cells
         .iter()
         .map(|c| (t0.x + c.x0, t0.x + c.x1, t0.y + c.y0, t0.y + c.y1))
         .collect();
     for (a, b) in cell_dividers(&abs, t0, t1) {
         m.push(line(a, b, SheetPen::Thin));
     }
-    for c in &TITLE_CELLS {
+    for c in &cells {
         text(
             &mut m,
-            p(t0.x + c.x0 + 1.0, t0.y + c.y1 - 1.0 - LABEL_H),
-            LABEL_H,
+            p(t0.x + c.x0 + s(1.0), t0.y + c.y1 - s(1.0) - s(LABEL_H)),
+            s(LABEL_H),
             TextAnchor::Start,
             c.label,
         );
     }
-    for s in &TITLE_SLOTS {
+    for slot in &layout.title_slots() {
         fitted_text(
             &mut m,
-            p(t0.x + s.x0, t0.y + s.baseline),
-            s.height,
-            s.width,
-            texts.get(s.field),
+            p(t0.x + slot.x0, t0.y + slot.baseline),
+            slot.height,
+            slot.width,
+            widen,
+            texts.get(slot.field),
         );
     }
 
     // Projektionssymbol.
-    let (symbol_lines, circles) =
-        projection_symbol(projection, t0.y + PROJECTION_CENTRE_Y, t0.x + PROJECTION_X0);
+    let (symbol_lines, circles) = projection_symbol(
+        projection,
+        t0.y + s(PROJECTION_CENTRE_Y),
+        t0.x + s(PROJECTION_X0),
+        layout.scale,
+    );
     for (a, b) in symbol_lines {
         m.push(line(a, b, SheetPen::Medium));
     }
@@ -274,25 +303,31 @@ pub fn sheet_frame(layout: &SheetLayout, texts: &TitleTexts, projection: Project
         });
     }
 
-    revision_table(&mut m, layout, texts);
-    notes_box(&mut m, layout, texts);
-    SheetFrame { marks: m }
+    revision_table(&mut m, layout, texts, widen);
+    notes_box(&mut m, layout, texts, widen);
+    SheetFrame {
+        marks: m,
+        scale: layout.scale,
+    }
 }
 
 /// Änderungstabelle: Kopfzeile oben, darunter die sichtbaren Änderungen, die neueste unten.
-fn revision_table(m: &mut Vec<Mark>, layout: &SheetLayout, texts: &TitleTexts) {
+fn revision_table(m: &mut Vec<Mark>, layout: &SheetLayout, texts: &TitleTexts, widen: f64) {
     let (lo, hi) = layout.revisions;
     let p = DVec2::new;
-    let rows = (((hi.y - lo.y) / REV_ROW_H).round() as usize)
+    let s = |a3_mm: f64| layout.mm(a3_mm);
+    let row_h = s(REV_ROW_H);
+    let rows = (((hi.y - lo.y) / row_h).round() as usize)
         .saturating_sub(1)
         .min(REV_VISIBLE);
     rect(m, lo, hi, SheetPen::Thin);
     for k in 1..=rows {
-        let y = hi.y - REV_ROW_H * k as f64;
+        let y = hi.y - row_h * k as f64;
         m.push(line(p(lo.x, y), p(hi.x, y), SheetPen::Thin));
     }
+    let columns = layout.rev_columns();
     let mut xs = vec![lo.x];
-    for w in REV_COLUMNS {
+    for w in columns {
         xs.push(xs[xs.len() - 1] + w);
     }
     for &x in &xs[1..xs.len() - 1] {
@@ -301,35 +336,44 @@ fn revision_table(m: &mut Vec<Mark>, layout: &SheetLayout, texts: &TitleTexts) {
     let shown = texts.visible_revisions();
     let head = ["Rev.", "Änderung", "Datum", "Name"];
     for k in 0..=rows {
-        let baseline = hi.y - REV_ROW_H * (k + 1) as f64 + (REV_ROW_H - VALUE_H) / 2.0;
-        for (i, col) in REV_COLUMNS.iter().enumerate() {
-            let s = if k == 0 {
+        let baseline = hi.y - row_h * (k + 1) as f64 + s((REV_ROW_H - VALUE_H) / 2.0);
+        for (i, col) in columns.iter().enumerate() {
+            let t = if k == 0 {
                 head[i]
             } else {
                 shown.get(k - 1).map_or("", |r| r[i].as_str())
             };
-            fitted_text(m, p(xs[i] + 1.0, baseline), VALUE_H, col - 2.0, s);
+            fitted_text(
+                m,
+                p(xs[i] + s(1.0), baseline),
+                s(VALUE_H),
+                col - s(2.0),
+                widen,
+                t,
+            );
         }
     }
 }
 
 /// Hinweisfeld: Umriss und die Zeilen von oben nach unten.
-fn notes_box(m: &mut Vec<Mark>, layout: &SheetLayout, texts: &TitleTexts) {
+fn notes_box(m: &mut Vec<Mark>, layout: &SheetLayout, texts: &TitleTexts, widen: f64) {
     let Some((lo, hi)) = layout.notes else {
         return;
     };
-    let rows =
-        (((hi.y - lo.y - 2.0 * NOTES_PAD_MM) / NOTES_LINE_MM).round() as usize).min(NOTE_LINES_MAX);
+    let s = |a3_mm: f64| layout.mm(a3_mm);
+    let (pad, line_h) = (s(NOTES_PAD_MM), s(NOTES_LINE_MM));
+    let rows = (((hi.y - lo.y - 2.0 * pad) / line_h).round() as usize).min(NOTE_LINES_MAX);
     rect(m, lo, hi, SheetPen::Thin);
-    for (i, s) in texts.notes.iter().take(rows).enumerate() {
-        let baseline = hi.y - NOTES_PAD_MM - (i + 1) as f64 * NOTES_LINE_MM
-            + (NOTES_LINE_MM - NOTES_TEXT_H) / 2.0;
+    for (i, t) in texts.notes.iter().take(rows).enumerate() {
+        let baseline =
+            hi.y - pad - (i + 1) as f64 * line_h + s((NOTES_LINE_MM - NOTES_TEXT_H) / 2.0);
         fitted_text(
             m,
-            DVec2::new(lo.x + NOTES_PAD_MM, baseline),
-            NOTES_TEXT_H,
-            hi.x - lo.x - 2.0 * NOTES_PAD_MM,
-            s,
+            DVec2::new(lo.x + pad, baseline),
+            s(NOTES_TEXT_H),
+            hi.x - lo.x - 2.0 * pad,
+            widen,
+            t,
         );
     }
 }

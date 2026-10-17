@@ -7,7 +7,7 @@ use common::dxf_read::{self, Geom};
 use common::svg_marks::{box_sheet, cylinder_sheet, manual_sheet};
 use common::svg_read;
 use planora_drawing::annotate::{Mark, MarkKind, TextAnchor};
-use planora_drawing::dxf::{dxf_char_ok, dxf_text_fits};
+use planora_drawing::dxf::{dxf_char_ok, dxf_lineweight, dxf_text_fits};
 use planora_drawing::sheet_frame::*;
 use planora_drawing::sheet_info::TitleTexts;
 use planora_drawing::sheet_marks::{
@@ -118,10 +118,23 @@ fn fit_rules() {
     assert!((sheet_text_width("A9", 10.0) - 14.4).abs() < 1e-12);
     assert!((sheet_text_width("ae", 10.0) - 12.0).abs() < 1e-12);
     // Warnung im Fenster: gekürzt nur, wenn es nicht ohne Kürzen passt.
-    assert!(!field_is_cut(TitleField::Title, "Halter"));
+    let a3 = sheet_layout(sh(Paper::A3, true), 0, 0);
+    assert!(!field_is_cut(TitleField::Title, "Halter", &a3));
     // Zahl: 98 mm Platz, 80 × „W“ passen auch in 2,1 mm Höhe nicht; 30 × „W“ nur verkleinert.
-    assert!(field_is_cut(TitleField::Number, &"W".repeat(80)));
-    assert!(!field_is_cut(TitleField::Number, &"W".repeat(30)));
+    assert!(field_is_cut(TitleField::Number, &"W".repeat(80), &a3));
+    assert!(!field_is_cut(TitleField::Number, &"W".repeat(30), &a3));
+    // Auf A4 sind Zelle und Schrift im selben Maß kleiner: dieselbe Entscheidung, mit der
+    // Zellbreite des A4-Blatts (98 · 0,707 = 69,3 mm).
+    let a4 = sheet_layout(sh(Paper::A4, true), 0, 0);
+    let number = a4
+        .title_slots()
+        .into_iter()
+        .find(|s| s.field == TitleField::Number)
+        .unwrap();
+    assert!((number.width - 98.0 * a4.scale).abs() < 1e-12);
+    assert!((number.height - 3.5 * a4.scale).abs() < 1e-12);
+    assert!(field_is_cut(TitleField::Number, &"W".repeat(80), &a4));
+    assert!(!field_is_cut(TitleField::Number, &"W".repeat(30), &a4));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -182,23 +195,29 @@ fn longest_texts_stay_in_their_cells() {
             let layout = sheet_layout(sheet, 23, 6);
             let frame = sheet_frame(&layout, &texts, Projection::First);
             let (t0, _) = layout.title;
+            let row_h = layout.mm(REV_ROW_H);
             // Alle Zellen als Rechtecke: Schriftfeld, Änderungstabelle (Spalte × Zeile), Hinweisfeld.
-            let mut cells: Vec<(DVec2, DVec2)> = TITLE_CELLS
+            let mut cells: Vec<(DVec2, DVec2)> = layout
+                .title_cells()
                 .iter()
                 .map(|c| (v(t0.x + c.x0, t0.y + c.y0), v(t0.x + c.x1, t0.y + c.y1)))
                 .collect();
             let (r0, r1) = layout.revisions;
             let mut x = r0.x;
-            for w in REV_COLUMNS {
+            for w in layout.rev_columns() {
                 for k in 0..=REV_VISIBLE {
-                    let top = r1.y - REV_ROW_H * k as f64;
-                    cells.push((v(x, top - REV_ROW_H), v(x + w, top)));
+                    let top = r1.y - row_h * k as f64;
+                    cells.push((v(x, top - row_h), v(x + w, top)));
                 }
                 x += w;
             }
             cells.push(layout.notes.expect("Hinweisfeld"));
+            // Kleinste erlaubte Schrift: drei Fünftel der skalierten Sollhöhe (Feldnamen 2,2,
+            // Rasterbeschriftung 3,5 werden nie verkleinert).
+            let min_h = 0.6 * layout.mm(LABEL_H.min(VALUE_H).min(NOTES_TEXT_H)) - 1e-12;
             let mut checked = 0;
             for (pos, h, anchor, s) in texts_of(&frame) {
+                assert!(h >= min_h, "{sheet:?} {pattern}: {s:?} Höhe {h}");
                 if anchor == TextAnchor::Middle {
                     // Rasterbeschriftung: im Rand des Blatts.
                     let b = text_box(pos, h, anchor, &s);
@@ -223,8 +242,10 @@ fn longest_texts_stay_in_their_cells() {
             // 17 Feldnamen, 17 Inhalte (ohne Projektion; alle Felder haben Text), 4 Kopfzeilen und
             // 6 × 4 Änderungstexte, 6 Hinweise.
             assert_eq!(checked, 17 + 17 + 4 + 24 + 6, "{sheet:?} {pattern}");
-            // Inhalte stehen unter dem Feldnamen ihrer Zelle.
-            for s in &TITLE_SLOTS {
+            // Inhalte stehen unter dem Feldnamen ihrer Zelle und sind nie kleiner als drei
+            // Fünftel ihrer skalierten Sollhöhe.
+            let title_cells = layout.title_cells();
+            for s in &layout.title_slots() {
                 let (_, h, _, _) = texts_of(&frame)
                     .into_iter()
                     .find(|(p, _, a, _)| {
@@ -233,7 +254,8 @@ fn longest_texts_stay_in_their_cells() {
                             && (p.y - (t0.y + s.baseline)).abs() < 1e-9
                     })
                     .expect("Inhalt");
-                let cell = TITLE_CELLS
+                assert!(h >= 0.6 * s.height - 1e-12, "{:?} {h}", s.field);
+                let cell = title_cells
                     .iter()
                     .find(|c| {
                         s.x0 >= c.x0
@@ -242,7 +264,7 @@ fn longest_texts_stay_in_their_cells() {
                             && s.baseline < c.y1
                     })
                     .unwrap();
-                let label_baseline = cell.y1 - 1.0 - LABEL_H;
+                let label_baseline = cell.y1 - layout.mm(1.0) - layout.mm(LABEL_H);
                 assert!(s.baseline + h <= label_baseline + 1e-9, "{:?}", s.field);
             }
         }
@@ -453,6 +475,156 @@ fn frame_marks_contents() {
     assert_ne!(frame, third);
     // Sonst gleich: ohne Symbol dieselben Texte.
     assert_eq!(texts_of(&frame), texts_of(&third));
+}
+
+#[test]
+fn a4_frame_is_a_shrunk_a3_frame() {
+    // Dieselben Texte auf A3 quer und A4 quer: jede Markierung des A4-Rahmens ist die des
+    // A3-Rahmens, verkleinert um den Faktor (bis auf die Lage zum Blattrand, die Papiergrößen
+    // sind nicht genau √2).
+    let a3 = sheet_layout(sh(Paper::A3, true), 2, 3);
+    let a4 = sheet_layout(sh(Paper::A4, true), 2, 3);
+    let (f3, f4) = (
+        sheet_frame(&a3, &a3_texts(), Projection::First),
+        sheet_frame(&a4, &a3_texts(), Projection::First),
+    );
+    assert_eq!(f3.scale, 1.0);
+    assert_eq!(f4.scale, a4.scale);
+    assert_eq!(f3.marks.len(), f4.marks.len());
+    let k = a4.scale;
+    // A3 quer 420 × 297 mal 0,7071 = 297 × 210,02: auf A4 höchstens 0,02 mm verschoben.
+    let close = |a: DVec2, b: DVec2| (a - b * k).length() < 0.03;
+    for (m3, m4) in f3.marks.iter().zip(&f4.marks) {
+        match (m3, m4) {
+            (
+                Mark::Line { a, b, kind },
+                Mark::Line {
+                    a: a4p,
+                    b: b4p,
+                    kind: k4,
+                },
+            ) => {
+                assert_eq!(kind, k4);
+                assert!(close(*a4p, *a) && close(*b4p, *b), "{m3:?} {m4:?}");
+            }
+            (
+                Mark::Text {
+                    pos, height, text, ..
+                },
+                Mark::Text {
+                    pos: p4,
+                    height: h4,
+                    text: t4,
+                    ..
+                },
+            ) => {
+                assert_eq!(text, t4);
+                assert!((h4 - height * k).abs() < 1e-9, "{text}");
+                assert!(close(*p4, *pos), "{text}");
+            }
+            (
+                Mark::Arc { center, r, .. },
+                Mark::Arc {
+                    center: c4, r: r4, ..
+                },
+            ) => {
+                assert!((r4 - r * k).abs() < 1e-9 && close(*c4, *center));
+            }
+            _ => panic!("{m3:?} / {m4:?}"),
+        }
+    }
+    // Wertetexte auf A4: 3,5 · 0,7071 = 2,475 mm, Feldnamen 2,2 · 0,7071 = 1,556 mm.
+    let texts = texts_of(&f4);
+    let h_of = |s: &str| texts.iter().find(|t| t.3 == s).unwrap().1;
+    assert!((h_of("2 von 3") - 2.475).abs() < 1e-12);
+    assert!((h_of("Blatt") - 1.555_714_285_714).abs() < 1e-9);
+    assert!((h_of("Halter") - 5.0 * k).abs() < 1e-12);
+}
+
+#[test]
+fn a4_output_scales_frame_and_pens() {
+    let mut m = manual_sheet(Paper::A4, Vec::new());
+    m.sheet = sh(Paper::A4, true);
+    let layout = sheet_layout(m.sheet, 2, 3);
+    m.frame = Some(sheet_frame(&layout, &a3_texts(), Projection::First));
+    let svg = svg_string(&m).unwrap();
+    assert!(svg.contains("width=\"297mm\"") && svg.contains("height=\"210mm\""));
+    // Strichbreiten 0,7 · 0,7071, 0,5 · 0,7071 und 0,18 (nie dünner).
+    let frame_at = svg.find("<g id=\"Blattrahmen\">").expect("Gruppe");
+    let group = &svg[frame_at..];
+    for w in ["0.495", "0.353571", "0.18"] {
+        assert!(group.contains(&format!("stroke-width=\"{w}\"")), "{w}");
+    }
+    for w in ["0.7", "0.5", "0.25"] {
+        assert!(!group.contains(&format!("stroke-width=\"{w}\"")), "{w}");
+    }
+    // Rahmen des A4-Blatts: 14,14 / 7,07 vom Rand.
+    let r = svg_read::read(&svg);
+    let mut xs: Vec<f64> = Vec::new();
+    for p in r.paths_of("Blattrahmen") {
+        for s in &p.segments {
+            let (lo, hi) = s.bbox();
+            assert!(lo.0 >= 0.0 && lo.1 >= 0.0 && hi.0 <= 297.0 && hi.1 <= 210.0);
+            xs.push(lo.0);
+        }
+    }
+    assert!(xs.iter().any(|x| (x - 14.142857).abs() < 1e-6));
+    let t = r
+        .texts_of("Blattrahmen")
+        .find(|t| t.text == "2 von 3")
+        .unwrap();
+    assert!((t.pos.0 - (layout.title.0.x + 125.0 * layout.scale + layout.mm(1.0))).abs() < 1e-5);
+
+    // DXF: Ebenenstärken 50, 35, 18 (nächste Stärken, die DXF kennt).
+    let dxf = dxf_string(&m).unwrap();
+    let d = dxf_read::read(&dxf).unwrap();
+    let layers = d.table("LAYER").unwrap();
+    let weight = |name: &str| -> String {
+        layers
+            .records
+            .iter()
+            .find(|r| r.name() == name)
+            .unwrap()
+            .get(370)
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(weight("BLATTRAHMEN"), "50");
+    assert_eq!(weight("BLATT_MITTE"), "35");
+    assert_eq!(weight("BLATT"), "18");
+    for e in &d.entities {
+        if let Ok(Geom::Line { a, b }) = e.geom() {
+            for p in [a, b] {
+                assert!((0.0..=297.0).contains(&p.0) && (0.0..=210.0).contains(&p.1));
+            }
+        }
+    }
+    // Größere Formate: dickere Linien.
+    for (paper, ws) in [
+        (Paper::A2, ["100", "70", "35"]),
+        (Paper::A1, ["140", "100", "50"]),
+        (Paper::A0, ["200", "140", "70"]),
+    ] {
+        let mut m = manual_sheet(paper, Vec::new());
+        let layout = sheet_layout(m.sheet, 0, 0);
+        m.frame = Some(sheet_frame(&layout, &texts_with(&[]), Projection::First));
+        let d = dxf_read::read(&dxf_string(&m).unwrap()).unwrap();
+        let layers = d.table("LAYER").unwrap();
+        for (name, w) in ["BLATTRAHMEN", "BLATT_MITTE", "BLATT"].iter().zip(ws) {
+            let got = layers
+                .records
+                .iter()
+                .find(|r| r.name() == *name)
+                .unwrap()
+                .get(370)
+                .unwrap()
+                .to_string();
+            assert_eq!(got, w, "{paper:?} {name}");
+        }
+    }
+    assert_eq!(dxf_lineweight(0.495), 50);
+    assert_eq!(dxf_lineweight(0.18), 18);
+    assert_eq!(dxf_lineweight(1.98), 200);
 }
 
 // ---------------------------------------------------------------------------------------------

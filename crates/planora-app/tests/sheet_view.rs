@@ -220,10 +220,18 @@ fn frame_is_shown_at_800x600_and_large() {
                         && (r.max - paper_rect.max).length() < 0.5),
                     "Papier fehlt in {info}"
                 );
-                // Rahmenlinie links (Breite 0,7 mm, mindestens 1 px) in der Tintenfarbe.
-                let a = hn.screen(DVec2::new(20.0, 10.0));
-                let b = hn.screen(DVec2::new(20.0, sh - 10.0));
-                let want = (0.7 * hn.k()).max(1.0) as f32;
+                // Rahmenlinie links (Breite 0,7 mm mal Faktor des Blatts, mindestens 1 px) in der
+                // Tintenfarbe; auf A4 0,495 mm bei x = 14,14, auf A0 1,98 mm bei x = 56,62.
+                let (f0, f1) = layout.frame;
+                let a = hn.screen(DVec2::new(f0.x, f0.y));
+                let b = hn.screen(DVec2::new(f0.x, f1.y));
+                let pen = layout.pen_width(planora_drawing::SheetPen::Heavy);
+                let expected_pen = match paper {
+                    Paper::A4 => 0.495,
+                    _ => 0.7 * 1189.0 / 420.0,
+                };
+                assert!((pen - expected_pen).abs() < 1e-9, "{pen}");
+                let want = (pen * hn.k()).max(1.0) as f32;
                 assert!(
                     shot.segments()
                         .iter()
@@ -259,16 +267,18 @@ fn new_drawing_is_stamped_and_centred() {
     let project = st.document.project_info().expect("Projektangaben");
     assert_eq!(project.login, today.user);
     assert_eq!(project.creator, FieldValue::Auto);
-    // Der Block aus drei Ansichten liegt mittig im freien Bereich (20…287 × 88…193, Mitte
-    // 153,5 | 140,5); 100 × 60 × 40 gibt 1:2, die Grundansicht sitzt um (20 + 60·0,5)/2 = 25 mm
-    // links und oberhalb der Mitte (Erstwinkel).
+    // Der Block aus drei Ansichten liegt mittig im freien Bereich (A4 quer, Blattzubehör mal
+    // 0,707: 14,14…289,93 × 46,67…197,98, Mitte 152,04 | 122,33); 100 × 60 × 40 gibt 1:1
+    // (Block 180 × 120), die Grundansicht sitzt um (20 + 60)/2 = 40 mm links und oberhalb der
+    // Mitte (Erstwinkel).
     assert_eq!(dr.sheet, A4_QUER);
     assert_eq!(dr.views.len(), 1);
-    assert_eq!(dr.views[0].scale, s(1, 2));
-    assert_eq!(
-        dr.views[0].placement,
-        Placement::Free { x: 128.5, y: 165.5 }
-    );
+    assert_eq!(dr.views[0].scale, s(1, 1));
+    let Placement::Free { x, y } = dr.views[0].placement else {
+        panic!("frei");
+    };
+    assert!((x - 112.035_714_285_714).abs() < 1e-9, "{x}");
+    assert!((y - 162.325).abs() < 1e-9, "{y}");
     assert_eq!(st.drawing_ui.area, WorkArea::Drawing(id));
     // Mit Blattangaben braucht die Datei das Format 6.
     assert_eq!(planora_project::required_format(&st.document.snapshot()), 6);
@@ -381,13 +391,21 @@ fn views_are_added_in_the_free_area() {
         }
     }
 
-    // Maßstab im freien Bereich: A4 quer, Quader 100 × 60 × 40: 1:2 (freier Bereich 267 × 105).
+    // Maßstab im freien Bereich: A4 quer, Quader 100 × 60 × 40: 1:1 (freier Bereich
+    // 275,79 × 151,31; der Block braucht 180 × 120).
     let st = box_state();
     let (lo, hi) = sheet_layout(A4_QUER, 0, 3).free;
-    assert_eq!((hi.x - lo.x, hi.y - lo.y), (267.0, 105.0));
+    let (fw, fh) = (hi.x - lo.x, hi.y - lo.y);
+    assert!((fw - 275.785_714_285_714).abs() < 1e-9 && (fh - 151.307_142_857_143).abs() < 1e-9);
     assert_eq!(
-        suggest_scale_in(&st.bodies, (267.0, 105.0), ViewKind::Front),
-        s(1, 2)
+        suggest_scale_in(&st.bodies, (fw, fh), ViewKind::Front),
+        s(1, 1)
+    );
+    // Auf A3 quer (freier Bereich 390 × 214) ebenso 1:1, 2:1 passt nicht (340 + 20 > 214).
+    let (lo, hi) = sheet_layout(a3, 0, 3).free;
+    assert_eq!(
+        suggest_scale_in(&st.bodies, (hi.x - lo.x, hi.y - lo.y), ViewKind::Front),
+        s(1, 1)
     );
     // Sechs Änderungen und sechs Hinweiszeilen auf A4 hoch: weiter eine Stufe der Reihe.
     let (lo, hi) = sheet_layout(hoch, 6, 6).free;
@@ -564,19 +582,36 @@ fn failed_creation_rolls_back_the_project_info_it_created() {
 
 #[test]
 fn suggestion_uses_the_note_lines_of_the_project() {
-    // Quader 100 × 100 × 50: Höhe 150·f + 20 ≤ 105 (drei Zeilen) → 1:2; ≤ 87 (sechs Zeilen,
-    // freier Bereich 267 × 87) → 1:5.
+    // A4 hoch, Hinweise über dem Schriftfeld: freier Bereich 188,79 × 222,75 mit drei, 188,79 ×
+    // 210,02 mit sechs Zeilen. Quader 50 × 100 × 96 (Grundansicht 50 × 96, Tiefe 100): Höhe
+    // 196·f + 20 ≤ 222,75 (drei Zeilen) → 1:1; > 210,02 (sechs Zeilen) → 1:2.
+    let hoch = Sheet {
+        paper: Paper::A4,
+        landscape: false,
+    };
     let mut st = AppState::new();
-    st.create_box(DVec3::new(100.0, 100.0, 50.0)).unwrap();
-    let dialog = NewDrawingDialog::new(&st);
-    assert_eq!(dialog.suggestion(&st), s(1, 2));
+    st.create_box(DVec3::new(50.0, 100.0, 96.0)).unwrap();
+    let mut dialog = NewDrawingDialog::new(&st);
+    dialog.paper = Paper::A4;
+    dialog.landscape = false;
+    assert_eq!(dialog.suggestion(&st), s(1, 1));
     let mut project = planora_drawing::sheet_info::ProjectInfo::new(&stamp());
     project.notes = planora_drawing::sheet_info::NotesValue::Lines(
         (1..=6).map(|i| format!("Hinweis {i}")).collect(),
     );
     st.document.set_project_info(project).unwrap();
-    let (lo, hi) = sheet_layout(A4_QUER, 0, 6).free;
+    let (lo, hi) = sheet_layout(hoch, 0, 6).free;
+    assert!(
+        (hi.y - lo.y - 210.021_428_571_429).abs() < 1e-9,
+        "{}",
+        hi.y - lo.y
+    );
     let want = suggest_scale_in(&st.bodies, (hi.x - lo.x, hi.y - lo.y), ViewKind::Front);
     assert_eq!(dialog.suggestion(&st), want);
-    assert_eq!(want, s(1, 5));
+    assert_eq!(want, s(1, 2));
+    // A4 quer: die Hinweise stehen neben dem Schriftfeld und nehmen der Ansicht keinen Platz.
+    assert_eq!(
+        sheet_layout(A4_QUER, 0, 6).free,
+        sheet_layout(A4_QUER, 0, 3).free
+    );
 }

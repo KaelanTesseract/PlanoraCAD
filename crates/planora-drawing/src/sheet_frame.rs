@@ -1,9 +1,21 @@
 //! Blattgeometrie nach ISO 5457 und ISO 7200: Rahmen, Zentriermarken, Bezugsraster, Schriftfeld,
 //! Änderungstabelle, Hinweisfeld, freier Bereich und Projektionssymbol. Reine Geometrie in
 //! Blattkoordinaten (mm, Ursprung links unten, y nach oben); keine Zeichenausgabe.
+//!
+//! Skalierung: Alle Längen unten (Ränder, Raster, Schriftfeld, Tabellen, Schrifthöhen, Symbol)
+//! sind die Werte für A3 (Bezugsgröße). Auf anderen Formaten wächst oder schrumpft das ganze
+//! Blattzubehör mit dem Faktor [`sheet_scale`] = lange Blattseite / 420 mm, wie ein A3-Blatt,
+//! das vergrößert oder verkleinert gedruckt wird. Der Faktor steht in [`SheetLayout::scale`];
+//! [`sheet_layout`] und die Hilfen von [`SheetLayout`] wenden ihn an. Linienstärken wachsen mit,
+//! werden aber nie dünner als [`MIN_PEN_MM`].
 
 use crate::model::{Projection, Sheet};
 use planora_math::DVec2;
+
+/// Lange Blattseite des Bezugsformats A3; dort ist der Faktor 1.
+pub const REFERENCE_LONG_SIDE_MM: f64 = 420.0;
+/// Dünnste Linie des Blattzubehörs (kleinste Stufe der ISO-Linienreihe).
+pub const MIN_PEN_MM: f64 = 0.18;
 
 /// Heftrand links.
 pub const FILING_MARGIN_MM: f64 = 20.0;
@@ -50,7 +62,7 @@ pub enum SheetPen {
 }
 
 impl SheetPen {
-    /// Strichbreite in Millimetern.
+    /// Strichbreite in Millimetern auf A3 (Faktor 1).
     pub fn width_mm(self) -> f64 {
         match self {
             SheetPen::Heavy => 0.7,
@@ -58,6 +70,18 @@ impl SheetPen {
             SheetPen::Thin => 0.25,
         }
     }
+
+    /// Strichbreite bei dem Faktor `scale`, nie unter [`MIN_PEN_MM`].
+    pub fn width_at(self, scale: f64) -> f64 {
+        (self.width_mm() * scale).max(MIN_PEN_MM)
+    }
+}
+
+/// Faktor des Blattzubehörs: lange Blattseite / 420 mm (A4 0,707, A3 1, A2 1,414, A1 2,002,
+/// A0 2,831), für hoch und quer gleich, ohne Grenzen.
+pub fn sheet_scale(sheet: Sheet) -> f64 {
+    let (w, h) = sheet.size_mm();
+    w.max(h) / REFERENCE_LONG_SIDE_MM
 }
 
 /// Felder des Schriftfelds, die Text tragen.
@@ -235,6 +259,47 @@ pub struct SheetLayout {
     pub revisions: Box2,
     pub notes: Option<Box2>,
     pub free: Box2,
+    /// Faktor des Blattzubehörs ([`sheet_scale`]).
+    pub scale: f64,
+}
+
+impl SheetLayout {
+    /// Eine A3-Länge auf diesem Blatt.
+    pub fn mm(&self, a3_mm: f64) -> f64 {
+        a3_mm * self.scale
+    }
+
+    /// Strichbreite einer Linienart auf diesem Blatt.
+    pub fn pen_width(&self, pen: SheetPen) -> f64 {
+        pen.width_at(self.scale)
+    }
+
+    /// Die Zellen des Schriftfelds auf diesem Blatt (relativ zu dessen linker unterer Ecke).
+    pub fn title_cells(&self) -> [TitleCell; 17] {
+        TITLE_CELLS.map(|c| TitleCell {
+            x0: self.mm(c.x0),
+            x1: self.mm(c.x1),
+            y0: self.mm(c.y0),
+            y1: self.mm(c.y1),
+            label: c.label,
+        })
+    }
+
+    /// Die Inhaltsplätze des Schriftfelds auf diesem Blatt.
+    pub fn title_slots(&self) -> [TextSlot; 17] {
+        TITLE_SLOTS.map(|s| TextSlot {
+            field: s.field,
+            x0: self.mm(s.x0),
+            width: self.mm(s.width),
+            baseline: self.mm(s.baseline),
+            height: self.mm(s.height),
+        })
+    }
+
+    /// Spaltenbreiten der Änderungstabelle auf diesem Blatt.
+    pub fn rev_columns(&self) -> [f64; 4] {
+        REV_COLUMNS.map(|w| self.mm(w))
+    }
 }
 
 fn b(x0: f64, y0: f64, x1: f64, y1: f64) -> Box2 {
@@ -256,36 +321,39 @@ pub fn grid_letter(i: usize) -> Option<char> {
 }
 
 /// Rasterlinien einer Kante: Grenzen der Felder (ohne die Mitte als Teilstrich) von `lo` bis `hi`.
-fn grid_bounds(lo: f64, hi: f64, centre: f64, n: usize) -> (Vec<f64>, Vec<f64>) {
+fn grid_bounds(lo: f64, hi: f64, centre: f64, n: usize, field: f64) -> (Vec<f64>, Vec<f64>) {
     let half = (n / 2) as i64;
     let mut ticks = Vec::new();
     for k in -(half - 1)..half {
         if k != 0 {
-            ticks.push(centre + k as f64 * GRID_FIELD_MM);
+            ticks.push(centre + k as f64 * field);
         }
     }
     let mut bounds = vec![lo];
-    bounds.extend((-(half - 1)..half).map(|k| centre + k as f64 * GRID_FIELD_MM));
+    bounds.extend((-(half - 1)..half).map(|k| centre + k as f64 * field));
     bounds.push(hi);
     (ticks, bounds)
 }
 
-/// Berechnet die Blattgeometrie. `revision_rows` und `note_lines` werden auf je 6 begrenzt.
+/// Berechnet die Blattgeometrie. `revision_rows` und `note_lines` werden auf je 6 begrenzt. Alle
+/// Längen sind die A3-Werte mal [`sheet_scale`].
 pub fn sheet_layout(sheet: Sheet, revision_rows: usize, note_lines: usize) -> SheetLayout {
     let (w, h) = sheet.size_mm();
+    let f = sheet_scale(sheet);
+    let s = |a3_mm: f64| a3_mm * f;
     let rev_rows = revision_rows.min(REV_VISIBLE);
     let n_lines = note_lines.min(NOTE_LINES_MAX);
     let (fx0, fy0, fx1, fy1) = (
-        FILING_MARGIN_MM,
-        EDGE_MARGIN_MM,
-        w - EDGE_MARGIN_MM,
-        h - EDGE_MARGIN_MM,
+        s(FILING_MARGIN_MM),
+        s(EDGE_MARGIN_MM),
+        w - s(EDGE_MARGIN_MM),
+        h - s(EDGE_MARGIN_MM),
     );
     let frame = b(fx0, fy0, fx1, fy1);
     let (cx, cy) = (w / 2.0, h / 2.0);
     let (lr, tb) = (
-        FILING_MARGIN_MM + CENTRE_MARK_INSET_MM,
-        EDGE_MARGIN_MM + CENTRE_MARK_INSET_MM,
+        s(FILING_MARGIN_MM + CENTRE_MARK_INSET_MM),
+        s(EDGE_MARGIN_MM + CENTRE_MARK_INSET_MM),
     );
     let p = DVec2::new;
     let centre_marks = [
@@ -295,26 +363,30 @@ pub fn sheet_layout(sheet: Sheet, revision_rows: usize, note_lines: usize) -> Sh
         (p(cx, h), p(cx, h - tb)),
     ];
 
-    // Bezugsraster.
-    let (nx, ny) = (grid_count(w), grid_count(h));
-    let (xt, xb) = grid_bounds(fx0, fx1, cx, nx);
-    let (yt, yb) = grid_bounds(fy0, fy1, cy, ny);
+    // Bezugsraster: Felderzahl wie auf dem entsprechend vergrößerten A3-Blatt (gerade Zahl),
+    // Feldlänge 50 mm mal Faktor.
+    let (nx, ny) = (grid_count(w / f), grid_count(h / f));
+    let field = s(GRID_FIELD_MM);
+    let (xt, xb) = grid_bounds(fx0, fx1, cx, nx, field);
+    let (yt, yb) = grid_bounds(fy0, fy1, cy, ny, field);
+    let tick = s(GRID_TICK_MM);
     let mut grid_ticks = Vec::new();
     for &x in &xt {
-        grid_ticks.push((p(x, fy1), p(x, fy1 + GRID_TICK_MM)));
-        grid_ticks.push((p(x, fy0), p(x, fy0 - GRID_TICK_MM)));
+        grid_ticks.push((p(x, fy1), p(x, fy1 + tick)));
+        grid_ticks.push((p(x, fy0), p(x, fy0 - tick)));
     }
     for &y in &yt {
-        grid_ticks.push((p(fx0, y), p(fx0 - GRID_TICK_MM, y)));
-        grid_ticks.push((p(fx1, y), p(fx1 + GRID_TICK_MM, y)));
+        grid_ticks.push((p(fx0, y), p(fx0 - tick, y)));
+        grid_ticks.push((p(fx1, y), p(fx1 + tick, y)));
     }
+    // Beschriftung mitten in den Rändern.
     let mut grid_labels = Vec::new();
-    for y in [h - 5.0, 5.0] {
+    for y in [h - s(EDGE_MARGIN_MM / 2.0), s(EDGE_MARGIN_MM / 2.0)] {
         for (i, win) in xb.windows(2).enumerate() {
             grid_labels.push((p((win[0] + win[1]) / 2.0, y), (i + 1).to_string()));
         }
     }
-    for x in [10.0, w - 5.0] {
+    for x in [s(FILING_MARGIN_MM / 2.0), w - s(EDGE_MARGIN_MM / 2.0)] {
         for (j, win) in yb.windows(2).enumerate() {
             let from_top = ny - 1 - j;
             if let Some(c) = grid_letter(from_top) {
@@ -324,15 +396,15 @@ pub fn sheet_layout(sheet: Sheet, revision_rows: usize, note_lines: usize) -> Sh
     }
 
     // Schriftfeld, Änderungstabelle, Hinweisfeld.
-    let title = b(fx1 - TITLE_W, fy0, fx1, fy0 + TITLE_H);
-    let rev_h = REV_ROW_H * (1.0 + rev_rows as f64);
-    let revisions = b(fx1 - REV_W, fy1 - rev_h, fx1, fy1);
-    let notes_side = fx1 - fx0 >= NOTES_SIDE_MIN_FRAME_W;
+    let title = b(fx1 - s(TITLE_W), fy0, fx1, fy0 + s(TITLE_H));
+    let rev_h = s(REV_ROW_H) * (1.0 + rev_rows as f64);
+    let revisions = b(fx1 - s(REV_W), fy1 - rev_h, fx1, fy1);
+    let notes_side = fx1 - fx0 >= s(NOTES_SIDE_MIN_FRAME_W);
     let notes = (n_lines > 0).then(|| {
-        let nh = 2.0 * NOTES_PAD_MM + n_lines as f64 * NOTES_LINE_MM;
+        let nh = s(2.0 * NOTES_PAD_MM) + n_lines as f64 * s(NOTES_LINE_MM);
         if notes_side {
-            let x1 = title.0.x - NOTES_GAP_MM;
-            b(x1 - NOTES_SIDE_W, fy0, x1, fy0 + nh)
+            let x1 = title.0.x - s(NOTES_GAP_MM);
+            b(x1 - s(NOTES_SIDE_W), fy0, x1, fy0 + nh)
         } else {
             b(title.0.x, title.1.y, title.1.x, title.1.y + nh)
         }
@@ -365,27 +437,30 @@ pub fn sheet_layout(sheet: Sheet, revision_rows: usize, note_lines: usize) -> Sh
         revisions,
         notes,
         free,
+        scale: f,
     }
 }
 
-/// Projektionssymbol (ISO 5456-2) mit der Höhe [`SYMBOL_H`]: die vier Strecken des Kegelstumpf-
-/// Trapezes (Länge 7, linke Seite 3,5 hoch, rechte 7) und zwei Kreise (Mitte, Radius) Ø 7 und
-/// Ø 3,5. Erstwinkel: Trapez links, Kreise rechts; Dritter Winkel: Kreise links, Trapez rechts.
-/// `x0` ist die linke Kante des Symbols, `centre_y` seine Mittellinie.
+/// Projektionssymbol (ISO 5456-2) mit der Höhe `SYMBOL_H · scale`: die vier Strecken des
+/// Kegelstumpf-Trapezes (auf A3 Länge 7, linke Seite 3,5 hoch, rechte 7) und zwei Kreise (Mitte,
+/// Radius) Ø 7 und Ø 3,5. Erstwinkel: Trapez links, Kreise rechts; Dritter Winkel: Kreise links,
+/// Trapez rechts. `x0` ist die linke Kante des Symbols, `centre_y` seine Mittellinie.
 #[allow(clippy::type_complexity)]
 pub fn projection_symbol(
     projection: Projection,
     centre_y: f64,
     x0: f64,
+    scale: f64,
 ) -> (Vec<(DVec2, DVec2)>, [(DVec2, f64); 2]) {
-    let len = 2.0 * SYMBOL_H;
-    let gap = SYMBOL_H;
+    let sh = SYMBOL_H * scale;
+    let len = 2.0 * sh;
+    let gap = sh;
     let (tx, cxm) = match projection {
-        Projection::First => (x0, x0 + len + gap + SYMBOL_H),
-        Projection::Third => (x0 + 2.0 * SYMBOL_H + gap, x0 + SYMBOL_H),
+        Projection::First => (x0, x0 + len + gap + sh),
+        Projection::Third => (x0 + 2.0 * sh + gap, x0 + sh),
     };
     let p = DVec2::new;
-    let (hl, hr) = (SYMBOL_H / 2.0, SYMBOL_H);
+    let (hl, hr) = (sh / 2.0, sh);
     let (a, bb, c, d) = (
         p(tx, centre_y - hl),
         p(tx, centre_y + hl),
@@ -394,5 +469,5 @@ pub fn projection_symbol(
     );
     let lines = vec![(a, bb), (bb, c), (c, d), (d, a)];
     let m = p(cxm, centre_y);
-    (lines, [(m, SYMBOL_H), (m, SYMBOL_H / 2.0)])
+    (lines, [(m, sh), (m, sh / 2.0)])
 }

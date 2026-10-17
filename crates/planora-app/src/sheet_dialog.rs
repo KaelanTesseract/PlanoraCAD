@@ -197,7 +197,7 @@ impl SheetInfoDialog {
         });
         let main = main_scale(&drawing, &model);
         let (auto, actual) = self.texts(&drawing, &sheet_ctx, main);
-        // Blattgeometrie dieses Entwurfs: Breite des Hinweisfelds für die Warnungen.
+        // Blattgeometrie dieses Entwurfs: Zellbreiten und Hinweisfeld für die Warnungen.
         let layout = drawing_view::layout_from_texts(&drawing, &actual);
         let note_cut = |s: &str| note_is_cut(s, &layout);
         let first_visible = actual
@@ -231,7 +231,7 @@ impl SheetInfoDialog {
                     if f == TitleField::Owner && actual.get(f).trim().is_empty() {
                         return Some((OWNER_MISSING, true));
                     }
-                    field_is_cut(f, actual.get(f)).then_some((CUT_WARNING, false))
+                    field_is_cut(f, actual.get(f), &layout).then_some((CUT_WARNING, false))
                 };
 
                 // ---- Projekt ----
@@ -425,7 +425,7 @@ impl SheetInfoDialog {
                                 let cut_row = shown.is_some_and(|row| {
                                     row.iter()
                                         .enumerate()
-                                        .any(|(c, text)| revision_cell_is_cut(c, text))
+                                        .any(|(c, text)| revision_cell_is_cut(c, text, &layout))
                                 });
                                 theme::text_field(
                                     ui,

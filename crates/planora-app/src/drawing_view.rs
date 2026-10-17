@@ -1835,7 +1835,7 @@ fn canvas_ui(
     // Blattrahmen, Schriftfeld und Tabellen: schwarz auf dem Papier, unter den Ansichtslinien.
     if let Some(frame) = &sheet.frame {
         for m in &frame.marks {
-            paint_mark(&painter, m, theme::SHEET_INK, &to_screen, k);
+            paint_mark(&painter, m, theme::SHEET_INK, &to_screen, k, frame.scale);
         }
     }
     let visible = Stroke::new((VISIBLE_MM * k).max(1.0) as f32, theme::SHEET_INK);
@@ -1876,12 +1876,12 @@ fn canvas_ui(
                 MarkKind::Lost => theme::SHEET_LOST,
                 MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Sheet(_) => theme::SHEET_DIM,
             };
-            paint_mark(&painter, m, color, &to_screen, k);
+            paint_mark(&painter, m, color, &to_screen, k, 1.0);
             marks_drawn += 1;
         }
     }
     for m in selected {
-        paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k);
+        paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, 1.0);
         marks_drawn += 1;
     }
     // Vorschau des Werkzeugs „Maß“ am Zeiger (dieselben Markierungen wie das gesetzte Maß).
@@ -1891,7 +1891,7 @@ fn canvas_ui(
         let p = screen_to_sheet(canvas, sheet_mm, zoom, pan, hp);
         let preview = with_tool(state, |t, st| t.hover(st, id, p)).unwrap_or_default();
         for m in &preview {
-            paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k);
+            paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, 1.0);
             preview_drawn += 1;
         }
     }
@@ -2218,11 +2218,11 @@ fn text_geo(
 }
 
 /// Strichbreite einer Markierung in Blatt-mm: Mittellinien [`CENTER_W`], Blattrahmen die Breite
-/// ihres Stifts, sonst [`DIM_LINE_W`].
-fn line_width_mm(kind: MarkKind) -> f64 {
+/// ihres Stifts beim Faktor `sheet_scale` des Blatts, sonst [`DIM_LINE_W`].
+fn line_width_mm(kind: MarkKind, sheet_scale: f64) -> f64 {
     match kind {
         MarkKind::CenterLine => CENTER_W,
-        MarkKind::Sheet(pen) => pen.width_mm(),
+        MarkKind::Sheet(pen) => pen.width_at(sheet_scale),
         _ => DIM_LINE_W,
     }
 }
@@ -2235,10 +2235,11 @@ fn paint_mark(
     color: Color32,
     to_screen: &dyn Fn(DVec2) -> Pos2,
     k: f64,
+    sheet_scale: f64,
 ) {
     match m {
         Mark::Line { a, b, kind } => {
-            let w = line_width_mm(*kind);
+            let w = line_width_mm(*kind, sheet_scale);
             let stroke = Stroke::new((w * k).max(1.0) as f32, color);
             if *kind == MarkKind::CenterLine {
                 for d in dash_pattern(&[*a, *b], &CENTER_PATTERN) {
@@ -2262,7 +2263,10 @@ fn paint_mark(
             end,
             kind,
         } => {
-            let stroke = Stroke::new((line_width_mm(*kind) * k).max(1.0) as f32, color);
+            let stroke = Stroke::new(
+                (line_width_mm(*kind, sheet_scale) * k).max(1.0) as f32,
+                color,
+            );
             let pts = arc_points(*center, *r, *start, *end, k);
             painter.add(Shape::line(
                 pts.into_iter().map(to_screen).collect(),

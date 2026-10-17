@@ -95,11 +95,14 @@
 //! # Blattrahmen
 //!
 //! Die Markierungen des Blattrahmens stehen direkt im Modellraum vor den `INSERT`s, mit den
-//! Ebenen nach Strichstärke: `BLATTRAHMEN` (7, `CONTINUOUS`, 70: Rahmen und Außenlinie des
-//! Schriftfelds), `BLATT_MITTE` (50: Zentriermarken, Projektionssymbol) und `BLATT` (25: übrige
-//! Linien und alle Texte). Die Ebenen werden nur angelegt, wenn es einen Rahmen gibt; ohne Rahmen
-//! enthält die Datei weder diese Ebenen noch eine `LWPOLYLINE`. Zu lange Texte (mehr als 255 Zeichen
-//! in der Datei) werden wie Maßtexte abgelehnt, nie still gekürzt; vorher prüft [`dxf_text_fits`].
+//! Ebenen nach Strichstärke: `BLATTRAHMEN` (7, `CONTINUOUS`, auf A3 70: Rahmen und Außenlinie des
+//! Schriftfelds), `BLATT_MITTE` (auf A3 50: Zentriermarken, Projektionssymbol) und `BLATT` (auf A3
+//! 25: übrige Linien und alle Texte). Auf anderen Formaten ist es die mit `SheetFrame.scale`
+//! skalierte Stärke (nie unter 0,18 mm), gerundet auf die nächste Stärke, die DXF kennt
+//! ([`dxf_lineweight`]; A4: 50/35/18). Die Ebenen werden nur angelegt, wenn es einen Rahmen
+//! gibt; ohne Rahmen enthält die Datei weder diese Ebenen noch eine `LWPOLYLINE`. Zu lange Texte
+//! (mehr als 255 Zeichen in der Datei) werden wie Maßtexte abgelehnt, nie still gekürzt; vorher
+//! prüft [`dxf_text_fits`].
 //!
 //! Handtest in Fusion 360 (nach jeder Änderung am Aufbau): Datei mit Maßen, verlorenem Maß und
 //! Mittellinien öffnen; prüfen, dass die Datei ohne Meldung geladen wird, die Ebenen `MASSE`,
@@ -535,12 +538,15 @@ struct UsedKinds {
     lost: bool,
     /// Blattrahmen (die drei Ebenen `BLATTRAHMEN`, `BLATT_MITTE`, `BLATT`).
     sheet: bool,
+    /// Faktor des Blattzubehörs (bestimmt die Linienstärken der drei Blattebenen).
+    sheet_scale: f64,
 }
 
 impl UsedKinds {
     fn of(model: &SheetModel) -> UsedKinds {
         let mut u = UsedKinds {
             sheet: model.frame.is_some(),
+            sheet_scale: model.frame.as_ref().map_or(1.0, |f| f.scale),
             ..UsedKinds::default()
         };
         for m in model.views.iter().flat_map(|v| &v.marks) {
@@ -553,6 +559,31 @@ impl UsedKinds {
         }
         u
     }
+}
+
+/// Die Linienstärken, die DXF kennt (Gruppe 370, Hundertstel Millimeter).
+const DXF_LINEWEIGHTS: [i64; 24] = [
+    0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200,
+    211,
+];
+
+/// Nächste DXF-Linienstärke zu `mm` (bei Gleichstand die dünnere).
+pub fn dxf_lineweight(mm: f64) -> i64 {
+    let want = mm * 100.0;
+    DXF_LINEWEIGHTS
+        .iter()
+        .copied()
+        .min_by(|a, b| {
+            ((*a as f64) - want)
+                .abs()
+                .total_cmp(&((*b as f64) - want).abs())
+        })
+        .unwrap_or(25)
+}
+
+/// Linienstärke einer Blattebene beim Faktor des Blattrahmens.
+fn sheet_weight(pen: SheetPen, used: UsedKinds) -> i64 {
+    dxf_lineweight(pen.width_at(used.sheet_scale))
 }
 
 fn mark_kind(m: &Mark) -> MarkKind {
@@ -698,9 +729,33 @@ fn write_tables(
         (used.dim, (LAYER_DIM, "CONTINUOUS", 7, 25)),
         (used.center, (LAYER_CENTER, "CENTER", 7, 25)),
         (used.lost, (LAYER_LOST, "CONTINUOUS", 1, 25)),
-        (used.sheet, (LAYER_FRAME, "CONTINUOUS", 7, 70)),
-        (used.sheet, (LAYER_CENTRE, "CONTINUOUS", 7, 50)),
-        (used.sheet, (LAYER_SHEET, "CONTINUOUS", 7, 25)),
+        (
+            used.sheet,
+            (
+                LAYER_FRAME,
+                "CONTINUOUS",
+                7,
+                sheet_weight(SheetPen::Heavy, used),
+            ),
+        ),
+        (
+            used.sheet,
+            (
+                LAYER_CENTRE,
+                "CONTINUOUS",
+                7,
+                sheet_weight(SheetPen::Medium, used),
+            ),
+        ),
+        (
+            used.sheet,
+            (
+                LAYER_SHEET,
+                "CONTINUOUS",
+                7,
+                sheet_weight(SheetPen::Thin, used),
+            ),
+        ),
     ] {
         if on {
             layers.push(layer);
