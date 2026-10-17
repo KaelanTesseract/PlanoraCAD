@@ -646,3 +646,21 @@ fn suggestion_uses_the_note_lines_of_the_project() {
         sheet_layout(A4_QUER, 0, 3).free
     );
 }
+
+#[test]
+fn title_block_scale_is_the_scale_of_the_base_view() {
+    // Handtest: Hauptansichten 2:1, Isometrie 1:1 mit mehr Linien – das Schriftfeld zeigt 2:1.
+    let mut st = box_state();
+    let d = stamped(&mut st, "Blatt 1", A4_QUER);
+    for (kind, scale) in [(ViewKind::Front, s(2, 1)), (ViewKind::Isometric, s(1, 1))] {
+        st.document
+            .add_view(d, kind, scale, Placement::Free { x: 100.0, y: 100.0 }, None)
+            .unwrap();
+    }
+    let drawing = st.document.drawing(d).unwrap().clone();
+    let texts = drawing_view::sheet_texts(&st, &drawing);
+    assert_eq!(
+        texts.get(planora_drawing::sheet_frame::TitleField::Scale),
+        "2:1"
+    );
+}

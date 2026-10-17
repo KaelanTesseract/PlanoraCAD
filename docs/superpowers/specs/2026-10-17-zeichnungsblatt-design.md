@@ -53,7 +53,7 @@ Jedes Feld ist entweder **automatisch** (das Programm berechnet es) oder ein **e
 | Änderungsstand | Buchstabe der letzten Änderung, leer ohne Änderungen | berechnet |
 | Blatt / Anzahl | Platz des Blatts in der Reihenfolge der Zeichnungen des Dokuments / Anzahl | berechnet |
 | Format | Papiergröße, z. B. „A3“ | Blatt |
-| Maßstab | Maßstab der Ansicht, die am meisten Linien hat; bei Gleichstand die erste. Weicht ein anderer ab, bleibt das Feld bei diesem Hauptmaßstab (der Maßstab der abweichenden Ansicht steht an dieser Ansicht, soweit sie ihn schon zeigt) | berechnet |
+| Maßstab | Maßstab der ersten Ansicht der Zeichnung (Grundansicht, Reihenfolge der Zeichnung); ohne Ansichten „–“. (Geändert nach dem Handtest: vorher die Ansicht mit den meisten Linien, das war oft die Isometrie mit eigenem Maßstab.) Weicht ein anderer ab, bleibt das Feld bei diesem Hauptmaßstab (der Maßstab der abweichenden Ansicht steht an dieser Ansicht, soweit sie ihn schon zeigt) | berechnet |
 | Projektion | Symbol für Projektionsmethode 1 oder 3 aus `Drawing.projection` | berechnet |
 | Ersteller | Windows-Benutzername des angemeldeten Nutzers beim Anlegen des Projekts (änderbar; **Entscheidung des Entwurfs**) | Projektangabe |
 | Geprüft von / Freigabe | leer | Projektangabe |

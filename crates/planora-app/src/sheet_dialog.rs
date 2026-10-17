@@ -14,7 +14,6 @@ use crate::icons::{self, Icon};
 use crate::mesh_body::warning_color;
 use crate::state::AppState;
 use crate::theme;
-use planora_drawing::sheet::SheetModel;
 use planora_drawing::sheet_frame::TitleField;
 use planora_drawing::sheet_info::{
     DEFAULT_TOLERANCE, FieldValue, MAX_FIELD_CHARS, MAX_NOTE_CHARS, MAX_NOTES, MAX_REVISION_CHARS,
@@ -186,16 +185,8 @@ impl SheetInfoDialog {
         };
         let stamp = Stamp::now();
         let sheet_ctx = drawing_view::context_or_single(state, self.drawing);
-        // Maßstab der Hauptansicht aus dem zuletzt gezeichneten Blatt dieser Zeichnung (sonst der
-        // der ersten Ansicht).
-        let model = drawing_view::last_sheet_for(ctx, state, self.drawing).unwrap_or_else(|| {
-            std::sync::Arc::new(SheetModel {
-                sheet: drawing.sheet,
-                frame: None,
-                views: Vec::new(),
-            })
-        });
-        let main = main_scale(&drawing, &model);
+        // Maßstab der ersten Ansicht (Grundansicht).
+        let main = main_scale(&drawing);
         let (auto, actual) = self.texts(&drawing, &sheet_ctx, main);
         // Blattgeometrie dieses Entwurfs: Zellbreiten und Hinweisfeld für die Warnungen.
         let layout = drawing_view::layout_from_texts(&drawing, &actual);

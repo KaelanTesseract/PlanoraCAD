@@ -1,13 +1,9 @@
 //! Blattangaben: Vorbelegung, Änderungsbuchstaben, Auflösung zu Texten, Grenzen.
 
+use planora_drawing::ViewKind;
 use planora_drawing::model::{Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet};
-use planora_drawing::out2d::Out2d;
-use planora_drawing::sheet::{SheetLine, SheetModel, SheetView};
 use planora_drawing::sheet_frame::TitleField;
 use planora_drawing::sheet_info::*;
-use planora_drawing::stroke::StrokeOrigin;
-use planora_drawing::{ViewId, ViewKind, Visibility};
-use planora_math::DVec2;
 
 fn stamp() -> Stamp {
     Stamp {
@@ -219,50 +215,20 @@ fn notes_rules() {
     assert!(texts(&d, Some(&p)).notes.is_empty());
 }
 
-fn sheet_view(id: u64, lines: usize) -> SheetView {
-    let line = SheetLine {
-        vis: Visibility::Visible,
-        curve: Out2d::Line {
-            a: DVec2::ZERO,
-            b: DVec2::X,
-        },
-        origin: StrokeOrigin::Edge { body: 0, edge: 0 },
-    };
-    SheetView {
-        id: ViewId(id),
-        name: format!("V{id}"),
-        lines: vec![line; lines],
-        extent_mm: (1.0, 1.0),
-        marks: vec![],
-    }
-}
-
-fn model(d: &Drawing, views: Vec<SheetView>) -> SheetModel {
-    SheetModel {
-        sheet: d.sheet,
-        frame: None,
-        views,
-    }
-}
-
 #[test]
 fn main_scale_rule() {
+    // Maßstab im Schriftfeld = der der ersten Ansicht der Zeichnung (Grundansicht), auch wenn
+    // eine andere Ansicht (etwa die Isometrie) mehr Linien hat.
     let mut d = drawing();
     let free = Placement::Free { x: 0.0, y: 0.0 };
-    let a = d.add_view(ViewKind::Front, HALF, free, None);
-    let b = d.add_view(ViewKind::Top, Scale { num: 1, den: 5 }, free, None);
-    // Mehr Linien gewinnen.
-    let m = model(&d, vec![sheet_view(a.0, 10), sheet_view(b.0, 30)]);
-    assert_eq!(main_scale(&d, &m), Some(Scale { num: 1, den: 5 }));
-    // Gleichstand: die erste.
-    let m = model(&d, vec![sheet_view(a.0, 10), sheet_view(b.0, 10)]);
-    assert_eq!(main_scale(&d, &m), Some(HALF));
-    // Keine berechnet: erste Ansicht der Zeichnung.
-    let m = model(&d, vec![]);
-    assert_eq!(main_scale(&d, &m), Some(HALF));
-    // Leer.
+    d.add_view(ViewKind::Front, HALF, free, None);
+    d.add_view(ViewKind::Isometric, Scale { num: 1, den: 5 }, free, None);
+    assert_eq!(main_scale(&d), Some(HALF));
+    // Leer: kein Maßstab (im Feld ein Strich).
     let e = drawing();
-    assert_eq!(main_scale(&e, &model(&e, vec![])), None);
+    assert_eq!(main_scale(&e), None);
+    let texts = resolve_texts(&e, None, &ctx(), main_scale(&e));
+    assert_eq!(texts.get(TitleField::Scale), "–");
 }
 
 fn long(n: usize) -> String {
@@ -499,17 +465,14 @@ fn every_limited_field_has_its_exact_boundary() {
 }
 
 #[test]
-fn main_scale_follows_drawing_order_not_model_order() {
+fn main_scale_follows_drawing_order() {
+    // Die Reihenfolge der Zeichnung entscheidet: steht 1:5 vorn, gilt 1:5.
     let mut d = drawing();
     let free = Placement::Free { x: 0.0, y: 0.0 };
-    let a = d.add_view(ViewKind::Front, HALF, free, None);
-    let b = d.add_view(ViewKind::Top, Scale { num: 1, den: 5 }, free, None);
-    // Gleichstand, Blattliste umgekehrt: die erste Ansicht der Zeichnung gewinnt.
-    let m = model(&d, vec![sheet_view(b.0, 10), sheet_view(a.0, 10)]);
-    assert_eq!(main_scale(&d, &m), Some(HALF));
-    // Nur die zweite Ansicht berechnet.
-    let m = model(&d, vec![sheet_view(b.0, 3)]);
-    assert_eq!(main_scale(&d, &m), Some(Scale { num: 1, den: 5 }));
+    d.add_view(ViewKind::Top, Scale { num: 1, den: 5 }, free, None);
+    d.add_view(ViewKind::Front, HALF, free, None);
+    d.add_view(ViewKind::Isometric, Scale { num: 2, den: 1 }, free, None);
+    assert_eq!(main_scale(&d), Some(Scale { num: 1, den: 5 }));
 }
 
 #[test]

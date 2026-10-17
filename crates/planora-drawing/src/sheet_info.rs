@@ -2,7 +2,6 @@
 //! Buchstaben, Grenzen und die Auflösung zu den Texten, die auf das Blatt kommen.
 
 use crate::model::{Drawing, Scale};
-use crate::sheet::SheetModel;
 use crate::sheet_frame::{REV_VISIBLE, TitleField};
 use std::collections::BTreeMap;
 
@@ -315,21 +314,11 @@ impl TitleTexts {
     }
 }
 
-/// Ansicht mit den meisten Linien (Gleichstand: die erste); ist keine berechnet, die erste
-/// Ansicht der Zeichnung; ohne Ansichten `None`.
-pub fn main_scale(d: &Drawing, model: &SheetModel) -> Option<Scale> {
-    // Die Reihenfolge der Zeichnung (nicht die der Blattliste) entscheidet beim Gleichstand.
-    let mut best: Option<(usize, Scale)> = None;
-    for spec in &d.views {
-        let Some(v) = model.views.iter().find(|v| v.id == spec.id) else {
-            continue;
-        };
-        if best.is_none_or(|(n, _)| v.lines.len() > n) {
-            best = Some((v.lines.len(), spec.scale));
-        }
-    }
-    best.map(|(_, s)| s)
-        .or_else(|| d.views.first().map(|v| v.scale))
+/// Maßstab für das Schriftfeld: der der ersten Ansicht der Zeichnung (Grundansicht, Reihenfolge
+/// der Zeichnung); ohne Ansichten `None` (im Feld ein Strich). Die Zahl der Linien zählt nicht:
+/// sonst gewönne oft die isometrische Ansicht, die einen eigenen Maßstab haben kann.
+pub fn main_scale(d: &Drawing) -> Option<Scale> {
+    d.views.first().map(|v| v.scale)
 }
 
 /// Löst Blattangaben, Projektangaben und Vorgaben zu den Texten des Schriftfelds auf.

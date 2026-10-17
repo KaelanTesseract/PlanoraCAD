@@ -206,12 +206,7 @@ fn write_all(dir: &PathBuf) {
                     index: 1,
                     count: 3,
                 };
-                let texts = resolve_texts(
-                    &b.drawing,
-                    Some(&project),
-                    &ctx,
-                    main_scale(&b.drawing, &model),
-                );
+                let texts = resolve_texts(&b.drawing, Some(&project), &ctx, main_scale(&b.drawing));
                 let layout = sheet_layout(
                     b.drawing.sheet,
                     texts.visible_revisions().len(),

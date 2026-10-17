@@ -632,12 +632,7 @@ pub fn prepare_drawing_framed(
         return Err(VIEWS_NOT_PLACEABLE.to_string());
     }
     let texts = frame.map(|f| {
-        let texts = resolve_texts(
-            drawing,
-            f.project.as_ref(),
-            &f.ctx,
-            main_scale(drawing, &model),
-        );
+        let texts = resolve_texts(drawing, f.project.as_ref(), &f.ctx, main_scale(drawing));
         let layout = sheet_layout(
             drawing.sheet,
             texts.visible_revisions().len(),

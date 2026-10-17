@@ -577,13 +577,13 @@ pub fn context_or_single(state: &AppState, id: DrawingId) -> SheetContext {
     })
 }
 
-/// Die Texte des Schriftfelds der Zeichnung mit dem Maßstab der Hauptansicht aus `model`.
-pub fn sheet_texts(state: &AppState, drawing: &Drawing, model: &SheetModel) -> TitleTexts {
+/// Die Texte des Schriftfelds der Zeichnung (Maßstab: der der ersten Ansicht).
+pub fn sheet_texts(state: &AppState, drawing: &Drawing) -> TitleTexts {
     resolve_texts(
         drawing,
         state.document.project_info(),
         &context_or_single(state, drawing.id),
-        main_scale(drawing, model),
+        main_scale(drawing),
     )
 }
 
@@ -671,7 +671,7 @@ fn sheet_model(
     };
     let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
     let mut built = build_sheet_with(drawing, &refs, dims);
-    let texts = sheet_texts(state, drawing, &built);
+    let texts = sheet_texts(state, drawing);
     built.frame = Some(sheet_frame(
         &layout_from_texts(drawing, &texts),
         &texts,
