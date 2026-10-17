@@ -98,6 +98,9 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
         }
         seen.push(v.id);
     }
+    if let Some(info) = &d.info {
+        planora_drawing::sheet_info::validate_sheet_info(info)?;
+    }
     crate::dimensions::validate_dimensions(d)
 }
 

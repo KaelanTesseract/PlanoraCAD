@@ -1272,6 +1272,7 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
         next_view,
         dimensions,
         next_dim,
+        info: None,
     })
 }
 

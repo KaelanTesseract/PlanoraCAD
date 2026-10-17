@@ -187,6 +187,8 @@ pub struct Drawing {
     pub next_view: u64,
     pub dimensions: Vec<DimSpec>,
     pub next_dim: u64,
+    /// Blattangaben des Schriftfelds; `None` bei Zeichnungen aus älteren Dateien.
+    pub info: Option<crate::sheet_info::SheetInfo>,
 }
 
 impl Drawing {
@@ -201,6 +203,7 @@ impl Drawing {
             next_view: 1,
             dimensions: Vec::new(),
             next_dim: 1,
+            info: None,
         }
     }
 

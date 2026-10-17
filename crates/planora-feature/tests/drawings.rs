@@ -465,3 +465,23 @@ fn old_snapshot_without_drawings_loads() {
         DrawingId(1)
     );
 }
+
+#[test]
+fn update_drawing_rejects_invalid_sheet_info() {
+    use planora_drawing::sheet_info::{FieldValue, SheetInfo, Stamp};
+    let (mut d, id) = doc_with_drawing();
+    let stamp = Stamp {
+        date: "2026-10-17".into(),
+        user: "dennis".into(),
+    };
+    d.update_drawing(id, |dr| dr.info = Some(SheetInfo::new(&stamp)))
+        .unwrap();
+    let before = d.drawing(id).unwrap().clone();
+    let edits = d.edit_count();
+    let m = invalid(d.update_drawing(id, |dr| {
+        dr.info.as_mut().unwrap().title = FieldValue::Text("x".repeat(61));
+    }));
+    assert!(m.contains("zu lang"), "{m}");
+    assert_eq!(d.drawing(id).unwrap(), &before);
+    assert_eq!(d.edit_count(), edits);
+}
