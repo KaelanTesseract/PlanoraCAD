@@ -462,10 +462,17 @@ fn opening_frames_curves_and_tiny_sketches_sensibly() {
     assert!((s.camera.target - glam::Vec3::new(3.0, 4.0, 0.0)).length() < 1e-4);
     s.close_sketch();
 
+    // Leere Skizze ohne Körper: eingepasst auf ±25 mm um den Ursprung der Ebene (Handprüfung
+    // Etappe C, Haltepunkt 3; vorher blieb der Abstand der vorigen Ansicht stehen).
     let k = new_sketch(&mut s, StandardPlane::XY);
-    let d = s.camera.distance;
+    s.camera.distance = 5000.0;
     s.open_sketch(k).unwrap();
-    assert_eq!(s.camera.distance, d, "leere Skizze: Abstand bleibt");
+    assert!(
+        s.camera.distance > 5.0 && s.camera.distance < 1000.0,
+        "leere Skizze: {}",
+        s.camera.distance
+    );
+    assert!(s.camera.target.length() < 1e-3, "{:?}", s.camera.target);
 }
 
 #[test]

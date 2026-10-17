@@ -118,6 +118,9 @@ pub struct AppState {
     pub sketch_draft: Option<SketchFeature>,
     /// Kamera vor dem Öffnen des Skizzen-Modus.
     saved_camera: Option<OrbitCamera>,
+    /// Einpassen beim Öffnen einer Skizze, das die 3D-Ansicht mit dem freien Rechteck des
+    /// Skizzenmodus nachholt ([`AppState::refit_sketch_view`]).
+    sketch_fit: Option<SketchFit>,
     /// Die Ansicht wurde ohne bekanntes freies Rechteck eingepasst (neuer Tab, geladener Stand)
     /// und wird einmal nachgeholt, sobald die 3D-Ansicht das freie Rechteck kennt
     /// ([`crate::viewport::show_in`]).
@@ -224,6 +227,22 @@ const PICK_EDGE_PX: f32 = 6.0;
 const BODY_GAP_MM: f64 = 10.0;
 /// Mindestgröße des Bereichs, auf den die Ansicht beim Öffnen einer Skizze eingepasst wird.
 const MIN_SKETCH_VIEW_MM: f64 = 10.0;
+/// Halbe Kantenlänge des Bereichs um den Ursprung der Ebene, den eine leere Skizze ohne Fläche
+/// und ohne Körper zeigt (wie `frame_all` ohne Körper: ±25 mm).
+const EMPTY_SKETCH_HALF_MM: f64 = 25.0;
+/// So viele Bilder in Folge mit unverändertem freiem Rechteck beendet das Nachholen des
+/// Einpassens beim Öffnen einer Skizze.
+const SKETCH_FIT_STABLE_FRAMES: u8 = 3;
+
+/// Einpassen beim Öffnen einer Skizze: die Punkte, auf die eingepasst wird, und die Kamera nach
+/// dem letzten Einpassen. Die 3D-Ansicht passt nach, solange sich das freie Rechteck ändert
+/// (beim Öffnen gilt noch das des Modellmodus) und der Benutzer die Ansicht nicht bewegt hat.
+#[derive(Clone, Debug)]
+struct SketchFit {
+    points: Vec<Vec3>,
+    fitted: OrbitCamera,
+    stable: u8,
+}
 
 impl Default for AppState {
     fn default() -> Self {
@@ -252,6 +271,7 @@ impl AppState {
             sketch_session: None,
             sketch_draft: None,
             saved_camera: None,
+            sketch_fit: None,
             fit_pending: false,
             sketch_request: None,
             profile_cache: ProfileCache::default(),
@@ -1285,7 +1305,7 @@ impl AppState {
         }
         draft.sketch.name = f.name.clone();
         let frame = *draft.sketch.frame();
-        let extent = draft.sketch.extent();
+        let view_points = self.sketch_view_points(&draft.plane, &frame, draft.sketch.extent());
         let mut session = SketchSession::new(id);
         session.last_report = Some(draft.sketch.clone().solve());
         if !switching {
@@ -1294,32 +1314,155 @@ impl AppState {
         self.sketch_session = Some(session);
         self.sketch_draft = Some(draft);
         self.selected_feature = Some(id);
-        match extent {
-            Some((lo, hi)) => {
-                // Sehr kleine Skizzen (ein Punkt, eine winzige Kurve) mit Mindestgröße einpassen.
-                let (lo, hi) = if (hi - lo).max_element() < MIN_SKETCH_VIEW_MM {
-                    let c = (lo + hi) * 0.5;
-                    let half = DVec2::splat(MIN_SKETCH_VIEW_MM * 0.5);
-                    (c - half, c + half)
-                } else {
-                    (lo, hi)
-                };
-                let corners = [
-                    frame.point_2d(lo),
-                    frame.point_2d(hi),
-                    frame.point_2d(DVec2::new(lo.x, hi.y)),
-                    frame.point_2d(DVec2::new(hi.x, lo.y)),
-                ];
-                let (min, max) = corners
-                    .iter()
-                    .fold((corners[0], corners[0]), |(a, b), &p| (a.min(p), b.max(p)));
-                self.camera.frame_bounds(to_vec3(min), to_vec3(max));
-            }
-            None => self.camera.target = to_vec3(frame.origin),
-        }
+        // Senkrecht auf die Ebene blicken, dann mittig in das freie Rechteck einpassen. Die
+        // Kamera kennt hier noch das freie Rechteck des vorigen Bildes (Modellmodus); die
+        // 3D-Ansicht passt mit dem des Skizzenmodus nach (`refit_sketch_view`).
         self.camera.look_along(to_vec3(frame.z), to_vec3(frame.y));
+        self.camera.frame_points(&view_points);
+        self.sketch_fit = Some(SketchFit {
+            points: view_points,
+            fitted: self.camera,
+            stable: 0,
+        });
         self.rebuild_scene();
         Ok(())
+    }
+
+    /// Punkte, auf die die Ansicht beim Öffnen einer Skizze eingepasst wird (alle in der
+    /// Skizzenebene `frame`):
+    /// - Skizze mit Geometrie: ihre Hülle (`extent`), mindestens `MIN_SKETCH_VIEW_MM` groß;
+    /// - leere Skizze auf einer Fläche: der Umriss der Fläche, in die Ebene gelegt;
+    /// - sonst (Grundebene, oder die Fläche ist nicht mehr zu finden): die Hüllen aller Körper,
+    ///   in die Ebene gelegt; ohne Körper ±25 mm um den Ursprung der Ebene.
+    fn sketch_view_points(
+        &self,
+        plane: &SketchPlane,
+        frame: &Frame,
+        extent: Option<(DVec2, DVec2)>,
+    ) -> Vec<Vec3> {
+        // Rechteck `lo..hi` der Ebene, sehr kleine (ein Punkt, eine winzige Kurve) mit
+        // Mindestgröße um ihre Mitte.
+        let rect = |lo: DVec2, hi: DVec2| -> Vec<Vec3> {
+            let (lo, hi) = if (hi - lo).max_element() < MIN_SKETCH_VIEW_MM {
+                let c = (lo + hi) * 0.5;
+                let half = DVec2::splat(MIN_SKETCH_VIEW_MM * 0.5);
+                (c - half, c + half)
+            } else {
+                (lo, hi)
+            };
+            [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)]
+                .iter()
+                .map(|&p| to_vec3(frame.point_2d(p)))
+                .collect()
+        };
+        let in_plane = |p: DVec3| {
+            let l = frame.to_local(p);
+            DVec2::new(l.x, l.y)
+        };
+        let hull = |pts: &[DVec2]| {
+            pts.iter()
+                .fold((pts[0], pts[0]), |(a, b), &p| (a.min(p), b.max(p)))
+        };
+        if let Some((lo, hi)) = extent {
+            return rect(lo, hi);
+        }
+        if let SketchPlane::OnFace(r) = plane
+            && let Some(outline) = self.face_outline(r)
+        {
+            let pts: Vec<DVec2> = outline.into_iter().map(in_plane).collect();
+            if !pts.is_empty() && pts.iter().all(|p| p.is_finite()) {
+                let (lo, hi) = hull(&pts);
+                if (hi - lo).max_element() < MIN_SKETCH_VIEW_MM {
+                    return rect(lo, hi);
+                }
+                return pts
+                    .into_iter()
+                    .map(|p| to_vec3(frame.point_2d(p)))
+                    .collect();
+            }
+        }
+        let corners: Vec<DVec2> = self
+            .bodies
+            .iter()
+            .flat_map(|b| {
+                let (lo, hi) = b.bounds;
+                (0..8).map(move |i| {
+                    DVec3::new(
+                        if i & 1 == 0 { lo.x } else { hi.x },
+                        if i & 2 == 0 { lo.y } else { hi.y },
+                        if i & 4 == 0 { lo.z } else { hi.z },
+                    )
+                })
+            })
+            .map(in_plane)
+            .filter(|p| p.is_finite())
+            .collect();
+        if corners.is_empty() {
+            let half = DVec2::splat(EMPTY_SKETCH_HALF_MM);
+            return rect(-half, half);
+        }
+        let (lo, hi) = hull(&corners);
+        rect(lo, hi)
+    }
+
+    /// Eckpunkte des Anzeigenetzes der Fläche, auf die `r` verweist (unter den sichtbaren
+    /// Körpern); `None`, wenn sie sich nicht finden lässt.
+    fn face_outline(&self, r: &planora_feature::FaceRef) -> Option<Vec<DVec3>> {
+        let solids: Vec<&Solid> = self.bodies.iter().map(|b| &b.solid).collect();
+        let found = planora_feature::resolve_face(&solids, r, &self.kernel.tolerance).ok()?;
+        let mesh = &self.bodies.get(found.body)?.mesh;
+        let range = mesh.face_ranges.iter().find(|fr| fr.face == found.face)?;
+        let first = range.first_index as usize;
+        let indices = mesh
+            .indices
+            .get(first..first + range.index_count as usize)?;
+        let pts: Vec<DVec3> = indices
+            .iter()
+            .filter_map(|&i| mesh.positions.get(i as usize).copied())
+            .collect();
+        (!pts.is_empty()).then_some(pts)
+    }
+
+    /// Holt das Einpassen beim Öffnen einer Skizze mit dem freien Rechteck nach, das die
+    /// 3D-Ansicht gerade gesetzt hat (jedes Bild im Skizzenmodus nach `set_visible`). Beim
+    /// Öffnen aus einem Menü kennt die Kamera nur das freie Rechteck des Modellmodus; das des
+    /// Skizzenmodus steht erst im nächsten Bild fest. Nachgepasst wird, solange sich das freie
+    /// Rechteck ändert; es endet, sobald es `SKETCH_FIT_STABLE_FRAMES` Bilder gleich bleibt oder
+    /// der Benutzer die Ansicht bewegt (Verschieben, Zoomen, Würfel).
+    pub fn refit_sketch_view(&mut self) {
+        if self.sketch_session.is_none() {
+            self.sketch_fit = None;
+            return;
+        }
+        let Some(fit) = self.sketch_fit.as_mut() else {
+            return;
+        };
+        let (cam, was) = (self.camera, fit.fitted);
+        if (cam.target, cam.distance, cam.yaw, cam.pitch)
+            != (was.target, was.distance, was.yaw, was.pitch)
+        {
+            // Vom Benutzer bewegt: seine Ansicht bleibt.
+            self.sketch_fit = None;
+            return;
+        }
+        let rect = |c: &OrbitCamera| {
+            (
+                c.aspect,
+                c.ndc_offset,
+                c.visible_aspect,
+                c.visible_height_fraction,
+            )
+        };
+        if rect(&cam) == rect(&was) {
+            fit.stable += 1;
+            if fit.stable >= SKETCH_FIT_STABLE_FRAMES {
+                self.sketch_fit = None;
+            }
+            return;
+        }
+        self.camera.frame_points(&fit.points);
+        fit.fitted = self.camera;
+        fit.stable = 0;
     }
 
     /// Skizze der offenen Sitzung (der Entwurf).
@@ -1413,6 +1556,7 @@ impl AppState {
     }
 
     fn restore_camera(&mut self) {
+        self.sketch_fit = None;
         if let Some(mut cam) = self.saved_camera.take() {
             // Seitenverhältnis und freies Rechteck gehören zum aktuellen Fenster.
             cam.aspect = self.camera.aspect;

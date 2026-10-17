@@ -413,6 +413,11 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         state.frame_all();
         state.fit_pending = false;
     }
+    // Gerade geöffnete Skizze: mit dem jetzt bekannten freien Rechteck des Skizzenmodus
+    // nachpassen (endet von selbst, siehe `refit_sketch_view`).
+    if sketching {
+        state.refit_sketch_view();
+    }
     // Platz für die 3D-Szene; sie wird am Ende mit der endgültigen Kamera eingesetzt, damit die
     // Skizze darüber liegt.
     let scene_slot = painter.add(Shape::Noop);

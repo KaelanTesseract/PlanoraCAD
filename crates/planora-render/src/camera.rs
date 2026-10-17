@@ -177,6 +177,59 @@ impl OrbitCamera {
         self.distance = (radius / half.sin() * 1.15).clamp(0.01, 1.0e6);
     }
 
+    /// Halbe Öffnung des freien Rechtecks als Tangens `(waagerecht, senkrecht)`; ohne freies
+    /// Rechteck die des ganzen Fensters (wie in [`OrbitCamera::frame_bounds`]).
+    fn visible_tangents(&self) -> (f32, f32) {
+        let tan_v = (self.fov_y * 0.5).tan();
+        if self.ndc_offset == Vec2::ZERO && self.visible_height_fraction == 1.0 {
+            (tan_v * self.aspect, tan_v)
+        } else {
+            let tan_v = tan_v * self.visible_height_fraction;
+            (tan_v * self.visible_aspect, tan_v)
+        }
+    }
+
+    /// Richtet die Kamera bei unveränderter Blickrichtung so aus, dass alle `points` ins freie
+    /// Rechteck passen: Das Ziel kommt in die Mitte ihrer Hülle (quer zur Blickrichtung), der
+    /// Abstand ist der kleinste, bei dem jeder Punkt mit dem Rand von `frame_bounds` (15 %)
+    /// hineinpasst. Anders als `frame_bounds` (Kugel um den Quader) füllt eine ebene Fläche, auf
+    /// die man senkrecht blickt, so die Breite oder Höhe des freien Rechtecks bis auf den Rand.
+    /// Ohne endliche Punkte bleibt die Kamera unverändert.
+    pub fn frame_points(&mut self, points: &[Vec3]) {
+        let pts: Vec<Vec3> = points.iter().copied().filter(|p| p.is_finite()).collect();
+        if pts.is_empty() {
+            return;
+        }
+        let inv = self.view().inverse();
+        let right = inv.x_axis.truncate();
+        let up = inv.y_axis.truncate();
+        let back = inv.z_axis.truncate();
+        let local: Vec<Vec3> = pts
+            .iter()
+            .map(|p| Vec3::new(p.dot(right), p.dot(up), p.dot(back)))
+            .collect();
+        let (lo, hi) = local
+            .iter()
+            .fold((local[0], local[0]), |(a, b), &p| (a.min(p), b.max(p)));
+        let c = (lo + hi) * 0.5;
+        let (tan_h, tan_v) = self.visible_tangents();
+        let (tan_h, tan_v) = (tan_h.max(1e-3), tan_v.max(1e-3));
+        let margin = 1.15;
+        // Ein Punkt im Abstand `dz` vor der Zielebene liegt `distance - dz` vor dem Auge.
+        let mut distance = 1e-3_f32;
+        for p in &local {
+            let d = p - c;
+            distance = distance
+                .max(d.z + margin * d.x.abs() / tan_h)
+                .max(d.z + margin * d.y.abs() / tan_v);
+        }
+        // Mindestens doppelt so weit weg wie der vorderste Punkt vor der Zielebene (sonst läge
+        // er bei sehr flachen Hüllen dicht am oder hinter dem Auge).
+        distance = distance.max((hi.z - c.z) * 2.0);
+        self.target = right * c.x + up * c.y + back * c.z;
+        self.distance = distance.clamp(0.01, 1.0e6);
+    }
+
     /// Richtung zur Lichtquelle (leicht versetzt vom Betrachter, damit Flächen Tiefe bekommen).
     pub fn light_dir(&self) -> Vec3 {
         let inv = self.view().inverse();
