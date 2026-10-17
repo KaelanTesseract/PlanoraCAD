@@ -5,6 +5,11 @@
 //! Markierungen ausgeben. Alle Markierungen tragen [`MarkKind::Sheet`] mit der Linienstärke;
 //! Texte haben die Stärke `Thin` und den Winkel 0. Alle Längen und Schrifthöhen sind die A3-Werte
 //! mal [`SheetLayout::scale`]; die Strichbreiten dazu stehen in [`SheetFrame::scale`].
+//!
+//! DXF: Die Höhe eines DXF-Texts ist die Großbuchstabenhöhe, die Schriften der CAD-Programme
+//! laufen damit 1,1- bis 1,7-mal breiter als die Schätzung. Für DXF passt [`sheet_frame_dxf`]
+//! die Texte deshalb mit [`DXF_TEXT_WIDTH_FACTOR`] auf die geschätzte Breite ein (dieselbe Regel:
+//! erst kleiner bis drei Fünftel, dann hinten gekürzt mit „…“).
 
 use crate::annotate::{Mark, MarkKind, TextAnchor};
 use crate::model::Projection;
@@ -24,6 +29,9 @@ pub struct SheetFrame {
     /// mit [`SheetPen::width_at`] dieses Faktors.
     pub scale: f64,
 }
+
+/// Zuschlag auf die geschätzte Textbreite für DXF (siehe Moduldoku).
+pub const DXF_TEXT_WIDTH_FACTOR: f64 = 1.45;
 
 /// Ein eingepasster Text.
 #[derive(Clone, Debug, PartialEq)]
@@ -165,7 +173,7 @@ fn text(marks: &mut Vec<Mark>, pos: DVec2, height: f64, anchor: TextAnchor, text
 }
 
 /// Eingepasster Text bei `pos` (Anfang auf der Grundlinie); `widen` ist der Zuschlag auf die
-/// geschätzte Breite (1 für SVG und Anzeige).
+/// geschätzte Breite (1 für SVG und Anzeige, [`DXF_TEXT_WIDTH_FACTOR`] für DXF).
 fn fitted_text(marks: &mut Vec<Mark>, pos: DVec2, height: f64, width: f64, widen: f64, s: &str) {
     let f = fit_text(s, height, width / widen);
     text(marks, pos, f.height, TextAnchor::Start, &f.text);
@@ -220,6 +228,15 @@ fn cell_dividers(cells: &[(f64, f64, f64, f64)], lo: DVec2, hi: DVec2) -> Vec<(D
 /// Inhalte), Projektionssymbol (`Medium`), Änderungstabelle und Hinweisfeld.
 pub fn sheet_frame(layout: &SheetLayout, texts: &TitleTexts, projection: Projection) -> SheetFrame {
     build_frame(layout, texts, projection, 1.0)
+}
+
+/// Wie [`sheet_frame`], die Texte aber mit [`DXF_TEXT_WIDTH_FACTOR`] eingepasst (für DXF).
+pub fn sheet_frame_dxf(
+    layout: &SheetLayout,
+    texts: &TitleTexts,
+    projection: Projection,
+) -> SheetFrame {
+    build_frame(layout, texts, projection, DXF_TEXT_WIDTH_FACTOR)
 }
 
 fn build_frame(

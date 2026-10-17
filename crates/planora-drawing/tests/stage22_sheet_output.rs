@@ -924,3 +924,138 @@ fn grid_labels_stay_in_the_margin_band() {
         assert_eq!(n, layout.grid_labels.len());
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// DXF: Breitenzuschlag für CAD-Schriften
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn dxf_frame_fits_texts_with_the_width_factor() {
+    use planora_drawing::sheet_marks::{DXF_TEXT_WIDTH_FACTOR, sheet_frame_dxf};
+    assert_eq!(DXF_TEXT_WIDTH_FACTOR, 1.45);
+    // 33 Zeichen Eigentümer: in SVG passt der Name in 3,5 mm in die Zelle (78 mm Platz auf A3),
+    // in DXF erst kleiner, aber vollständig und nicht unter 2,1 mm.
+    let owner = "Mustermann Maschinenbau GmbH & Co";
+    assert_eq!(owner.chars().count(), 33);
+    let texts = texts_with(&[(TitleField::Owner, owner)]);
+    for sheet in [
+        sh(Paper::A3, true),
+        sh(Paper::A4, true),
+        sh(Paper::A0, false),
+    ] {
+        let layout = sheet_layout(sheet, 0, 0);
+        let slot = layout
+            .title_slots()
+            .into_iter()
+            .find(|s| s.field == TitleField::Owner)
+            .unwrap();
+        let find = |f: &SheetFrame| {
+            texts_of(f)
+                .into_iter()
+                .find(|t| t.3.starts_with("Muster"))
+                .unwrap()
+        };
+        let svg = find(&sheet_frame(&layout, &texts, Projection::First));
+        assert_eq!(svg.3, owner);
+        assert!((svg.1 - slot.height).abs() < 1e-12, "SVG unverändert");
+        let dxf = find(&sheet_frame_dxf(&layout, &texts, Projection::First));
+        assert_eq!(dxf.3, owner, "{sheet:?}: nicht gekürzt");
+        assert!(
+            dxf.1 < slot.height && dxf.1 >= 0.6 * slot.height,
+            "{sheet:?}: {}",
+            dxf.1
+        );
+        assert!(
+            sheet_text_width(owner, dxf.1) * DXF_TEXT_WIDTH_FACTOR <= slot.width + 1e-9,
+            "{sheet:?}"
+        );
+        assert_eq!(dxf.0, svg.0, "gleiche Stelle");
+    }
+    // Was auch mit dem Zuschlag in drei Fünfteln der Höhe nicht passt, wird wie in SVG hinten
+    // gekürzt („…“), nie weggelassen; die DXF-Fassung ist dann kürzer.
+    let long = "W".repeat(40);
+    let texts = texts_with(&[(TitleField::Owner, &long)]);
+    let layout = sheet_layout(sh(Paper::A3, true), 0, 0);
+    let pick = |f: &SheetFrame| {
+        texts_of(f)
+            .into_iter()
+            .find(|t| t.3.starts_with("WW"))
+            .unwrap()
+    };
+    let (svg, dxf) = (
+        pick(&sheet_frame(&layout, &texts, Projection::First)),
+        pick(&sheet_frame_dxf(&layout, &texts, Projection::First)),
+    );
+    assert!(svg.3.ends_with('…') && dxf.3.ends_with('…'));
+    assert!(dxf.3.chars().count() < svg.3.chars().count());
+    assert!(sheet_text_width(&dxf.3, dxf.1) * DXF_TEXT_WIDTH_FACTOR <= 78.0 + 1e-9);
+}
+
+#[test]
+fn every_dxf_frame_text_stays_in_its_cell_with_the_width_factor() {
+    use planora_drawing::sheet_marks::{DXF_TEXT_WIDTH_FACTOR, sheet_frame_dxf};
+    let mut fields = BTreeMap::new();
+    for f in TitleField::ALL {
+        fields.insert(f, cycle("Wm", f.max_chars()));
+    }
+    let texts = TitleTexts {
+        fields,
+        revisions: (0..6)
+            .map(|_| {
+                [
+                    cycle("Wm", 120),
+                    cycle("Wm", 120),
+                    cycle("Wm", 120),
+                    cycle("Wm", 120),
+                ]
+            })
+            .collect(),
+        notes: (0..6).map(|_| cycle("Wm", 100)).collect(),
+    };
+    for sheet in [
+        sh(Paper::A4, true),
+        sh(Paper::A3, true),
+        sh(Paper::A0, false),
+    ] {
+        let layout = sheet_layout(sheet, 6, 6);
+        let frame = sheet_frame_dxf(&layout, &texts, Projection::First);
+        let (t0, _) = layout.title;
+        let mut cells: Vec<(DVec2, DVec2)> = layout
+            .title_cells()
+            .iter()
+            .map(|c| (v(t0.x + c.x0, t0.y + c.y0), v(t0.x + c.x1, t0.y + c.y1)))
+            .collect();
+        let (r0, r1) = layout.revisions;
+        let row_h = layout.mm(REV_ROW_H);
+        let mut x = r0.x;
+        for w in layout.rev_columns() {
+            for k in 0..=REV_VISIBLE {
+                let top = r1.y - row_h * k as f64;
+                cells.push((v(x, top - row_h), v(x + w, top)));
+            }
+            x += w;
+        }
+        cells.push(layout.notes.unwrap());
+        let mut n = 0;
+        for (pos, h, anchor, s) in texts_of(&frame) {
+            if anchor != TextAnchor::Start || !s.starts_with("Wm") {
+                continue;
+            }
+            n += 1;
+            let probe = v(pos.x + 0.01, pos.y + 0.01);
+            let cell = cells
+                .iter()
+                .find(|c| {
+                    probe.x >= c.0.x && probe.x <= c.1.x && probe.y >= c.0.y && probe.y <= c.1.y
+                })
+                .unwrap();
+            let right = pos.x + sheet_text_width(&s, h) * DXF_TEXT_WIDTH_FACTOR;
+            assert!(
+                right <= cell.1.x + 1e-9,
+                "{sheet:?}: {s:?} ragt über {cell:?}"
+            );
+        }
+        // 17 Felder, 6 × 4 Änderungstexte, 6 Hinweise.
+        assert_eq!(n, 17 + 24 + 6, "{sheet:?}");
+    }
+}

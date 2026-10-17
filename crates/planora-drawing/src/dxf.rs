@@ -102,7 +102,8 @@
 //! ([`dxf_lineweight`]; A4: 50/35/18). Die Ebenen werden nur angelegt, wenn es einen Rahmen
 //! gibt; ohne Rahmen enthält die Datei weder diese Ebenen noch eine `LWPOLYLINE`. Zu lange Texte
 //! (mehr als 255 Zeichen in der Datei) werden wie Maßtexte abgelehnt, nie still gekürzt; vorher
-//! prüft [`dxf_text_fits`].
+//! prüft [`dxf_text_fits`]. Die Texte des Rahmens für DXF passt
+//! [`sheet_frame_dxf`](crate::sheet_marks::sheet_frame_dxf) mit einem Breitenzuschlag ein.
 //!
 //! Handtest in Fusion 360 (nach jeder Änderung am Aufbau): Datei mit Maßen, verlorenem Maß und
 //! Mittellinien öffnen; prüfen, dass die Datei ohne Meldung geladen wird, die Ebenen `MASSE`,

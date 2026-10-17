@@ -37,7 +37,7 @@ use planora_drawing::sheet_frame::sheet_layout;
 use planora_drawing::sheet_info::{
     ProjectInfo, SheetContext, TitleTexts, main_scale, resolve_texts,
 };
-use planora_drawing::sheet_marks::sheet_frame;
+use planora_drawing::sheet_marks::{sheet_frame, sheet_frame_dxf};
 use planora_drawing::{
     DrawBody, DrawError, Drawing, DrawingFormat, DrawingId, Sheet, ViewId, ViewKind, ViewLines,
     Visibility, compute_view, export_drawing_file,
@@ -548,6 +548,9 @@ pub struct FrameInput {
     pub project: Option<ProjectInfo>,
     /// Stellung des Blatts im Dokument und Name des Dokuments (für die automatischen Werte).
     pub ctx: SheetContext,
+    /// Für DXF: die Texte mit dem Breitenzuschlag für CAD-Schriften einpassen
+    /// ([`sheet_frame_dxf`]).
+    pub dxf: bool,
 }
 
 /// Wie [`prepare_drawing_with`]; mit `frame` entsteht zu dem Blatt auch der Blattrahmen: die
@@ -638,7 +641,11 @@ pub fn prepare_drawing_framed(
             texts.visible_revisions().len(),
             texts.notes.len(),
         );
-        model.frame = Some(sheet_frame(&layout, &texts, drawing.projection));
+        model.frame = Some(if f.dxf {
+            sheet_frame_dxf(&layout, &texts, drawing.projection)
+        } else {
+            sheet_frame(&layout, &texts, drawing.projection)
+        });
         texts
     });
     let count = |vis| {
@@ -1182,6 +1189,7 @@ impl ExportDialog {
                 let frame = self.with_frame.then(|| FrameInput {
                     project: state.document.project_info().cloned(),
                     ctx: context_or_single(state, drawing.id),
+                    dxf: format == DrawingFormat::Dxf,
                 });
                 // Ein alter Auftrag wird dabei fallengelassen und bricht ab.
                 self.drawing_job = Some((

@@ -1049,3 +1049,64 @@ fn export_uses_current_auto_values() {
     assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Höhen (Gruppe 40) der TEXT-Objekte einer DXF-Datei mit dem Inhalt `text` (Gruppe 1).
+fn dxf_text_heights(dxf: &str, text: &str) -> Vec<f64> {
+    let lines: Vec<&str> = dxf.lines().map(str::trim).collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 1 < lines.len() {
+        if lines[i] == "0" && lines[i + 1] == "TEXT" {
+            let (mut h, mut t) = (None, None);
+            let mut j = i + 2;
+            while j + 1 < lines.len() && lines[j] != "0" {
+                match lines[j] {
+                    "40" => h = lines[j + 1].parse::<f64>().ok(),
+                    "1" => t = Some(lines[j + 1]),
+                    _ => {}
+                }
+                j += 2;
+            }
+            if t == Some(text) {
+                out.extend(h);
+            }
+            i = j;
+        } else {
+            i += 2;
+        }
+    }
+    out
+}
+
+#[test]
+fn dxf_frame_texts_get_room_for_cad_fonts() {
+    // 33 Zeichen Eigentümer auf A3: in SVG in voller Höhe 3,5 mm, in DXF wegen der breiteren
+    // CAD-Schriften kleiner (mit Zuschlag 1,45 auf die geschätzte Breite), aber vollständig.
+    let owner = "Mustermann Maschinenbau GmbH Nord";
+    assert_eq!(owner.chars().count(), 33);
+    let mut s = box_state();
+    add_drawing(&mut s, "Blatt 1");
+    let mut project = planora_drawing::sheet_info::ProjectInfo::new(&Stamp {
+        date: "2026-10-17".into(),
+        user: "dennis".into(),
+    });
+    project.owner = FieldValue::Text(owner.to_string());
+    s.document.set_project_info(project).unwrap();
+    let dir = temp_dir("cad-schrift");
+    let mut d = framed_dialog(&s, SVG);
+    let svg = written(&mut d, &s, &dir.join("e.svg"));
+    let at = svg
+        .find(&format!(">{owner}</text>"))
+        .expect("Eigentümer im SVG");
+    let element = &svg[svg[..at].rfind("<text").unwrap()..at];
+    assert!(element.contains("font-size=\"3.5\""), "{element}");
+    let mut d = framed_dialog(&s, DXF);
+    let dxf = written(&mut d, &s, &dir.join("e.dxf"));
+    let heights = dxf_text_heights(&dxf, owner);
+    assert_eq!(heights.len(), 1, "Eigentümer vollständig in der DXF-Datei");
+    let h = heights[0];
+    assert!(h < 3.5 && h >= 2.1, "{h}");
+    let width = planora_drawing::sheet_marks::sheet_text_width(owner, h);
+    assert!(width * 1.45 <= 78.0 + 1e-6, "{width}");
+    let _ = fs::remove_dir_all(&dir);
+}
