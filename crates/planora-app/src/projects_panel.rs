@@ -5,6 +5,7 @@
 //! Bibliothek und werden von ihr geprüft.
 
 use crate::browser::error_color;
+use crate::dialog::{Dialog, DialogSize};
 use crate::theme;
 use crate::workspace::{Prompt, Workspace};
 use planora_project::ProjectError;
@@ -473,25 +474,60 @@ fn label(path: &NodePath) -> String {
     path.join(" / ")
 }
 
-fn dialog_window(ctx: &egui::Context, title: &str, key: &str) -> egui::Window<'static> {
-    theme::window(ctx, title)
+fn dialog_window(title: &str, key: &str) -> Dialog<'static> {
+    Dialog::new(title, DialogSize::Prompt)
         .id(egui::Id::new(("planora_projects_dialog", key.to_string())))
-        .collapsible(false)
-        .resizable(false)
-        .fade_in(false)
-        .fade_out(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .fixed()
+}
+
+/// Öffnet das Fenster „Neuer Ordner“ in `parent` mit dem Namen `name` (für Tests).
+#[doc(hidden)]
+pub fn request_new_folder(st: &mut ProjectsUi, parent: NodePath, name: &str) {
+    st.new_folder = Some((parent, name.to_string()));
+}
+
+/// Öffnet das Fenster „Umbenennen“ für `path` (für Tests).
+#[doc(hidden)]
+pub fn request_rename(st: &mut ProjectsUi, path: NodePath, name: &str) {
+    st.rename = Some((path, name.to_string()));
+}
+
+/// Öffnet das Fenster „Verschieben“ für `path` (für Tests).
+#[doc(hidden)]
+pub fn request_move(st: &mut ProjectsUi, path: NodePath) {
+    st.moving = Some((path, None));
+}
+
+/// Öffnet die Rückfrage „Löschen“ für `path` (für Tests).
+#[doc(hidden)]
+pub fn request_delete(st: &mut ProjectsUi, path: NodePath) {
+    st.confirm_delete = Some(path);
+}
+
+/// Ob eines der vier Fenster offen ist (für Tests).
+#[doc(hidden)]
+pub fn dialog_open(st: &ProjectsUi) -> bool {
+    st.new_folder.is_some()
+        || st.rename.is_some()
+        || st.moving.is_some()
+        || st.confirm_delete.is_some()
+}
+
+/// Textfeld eines Fensters; `true`, wenn darin Enter gedrückt wurde.
+fn name_field(ui: &mut egui::Ui, name: &mut String) -> bool {
+    let r = theme::text_field(ui, egui::TextEdit::singleline(name));
+    r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
 }
 
 /// Fenster „Neuer Ordner“, „Umbenennen“, „Verschieben“ und „Löschen“.
 fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) {
     if let Some((parent, mut name)) = st.new_folder.take() {
         let (mut ok, mut cancel) = (false, false);
-        dialog_window(ctx, "Neuer Ordner", "folder").show(ctx, |ui| {
+        dialog_window("Neuer Ordner", "folder").show(ctx, |ui| {
             ui.label(format!("In „{}“:", label(&parent)));
-            theme::text_field(ui, egui::TextEdit::singleline(&mut name));
+            let enter = name_field(ui, &mut name);
             ui.horizontal(|ui| {
-                ok = ui.button("Anlegen").clicked();
+                ok = ui.button("Anlegen").clicked() || enter;
                 cancel = ui.button("Abbrechen").clicked();
             });
         });
@@ -506,11 +542,11 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) {
     }
     if let Some((path, mut name)) = st.rename.take() {
         let (mut ok, mut cancel) = (false, false);
-        dialog_window(ctx, "Umbenennen", "rename").show(ctx, |ui| {
+        dialog_window("Umbenennen", "rename").show(ctx, |ui| {
             ui.label(format!("Neuer Name für „{}“:", label(&path)));
-            theme::text_field(ui, egui::TextEdit::singleline(&mut name));
+            let enter = name_field(ui, &mut name);
             ui.horizontal(|ui| {
-                ok = ui.button("Umbenennen").clicked();
+                ok = ui.button("Umbenennen").clicked() || enter;
                 cancel = ui.button("Abbrechen").clicked();
             });
         });
@@ -525,7 +561,7 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) {
             containers(nodes, &path, &mut targets);
         }
         let (mut ok, mut cancel) = (false, false);
-        dialog_window(ctx, "Verschieben", "move").show(ctx, |ui| {
+        dialog_window("Verschieben", "move").show(ctx, |ui| {
             ui.label(format!("„{}“ verschieben nach:", label(&path)));
             egui::ComboBox::from_id_salt("planora_projects_move_target")
                 .selected_text(
@@ -557,7 +593,7 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi) {
     }
     if let Some(path) = st.confirm_delete.take() {
         let (mut ok, mut cancel) = (false, false);
-        dialog_window(ctx, "Löschen", "delete").show(ctx, |ui| {
+        dialog_window("Löschen", "delete").show(ctx, |ui| {
             ui.label(format!("„{}“ in den Papierkorb verschieben?", label(&path)));
             ui.horizontal(|ui| {
                 ok = ui.button("In den Papierkorb").clicked();

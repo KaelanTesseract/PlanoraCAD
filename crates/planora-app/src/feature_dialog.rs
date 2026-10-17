@@ -7,6 +7,7 @@ use crate::blend_dialog::{
 };
 use crate::browser::error_color;
 use crate::create_dialog::axis_candidates;
+use crate::dialog::{Dialog, DialogSize};
 use crate::sketch_view::{format_number, parse_number};
 use crate::state::{AppState, MAX_COORD_MM};
 use crate::theme;
@@ -422,10 +423,8 @@ impl FeatureDialog {
     pub fn show(&mut self, ctx: &egui::Context, state: &mut AppState) -> bool {
         let mut open = true;
         let (mut apply, mut cancel) = (false, false);
-        theme::window(ctx, format!("„{}“ bearbeiten", self.name))
+        Dialog::new(format!("„{}“ bearbeiten", self.name), DialogSize::Normal)
             .id(egui::Id::new(("feature_dialog", self.id)))
-            .collapsible(false)
-            .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.weak(self.kind.label());

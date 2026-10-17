@@ -679,8 +679,8 @@ fn no_sketch_window_remains() {
     // Im Quelltext gibt es das Fenster nicht mehr.
     let src = include_str!("../src/sketch_panel.rs");
     assert!(
-        !src.contains("theme::window"),
-        "sketch_panel ruft theme::window"
+        !src.contains("theme::window") && !src.contains("Dialog::new"),
+        "sketch_panel ruft theme::window oder baut einen Dialog"
     );
     assert!(
         !src.contains("egui::Window"),
