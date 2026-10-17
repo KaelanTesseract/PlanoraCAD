@@ -29,7 +29,7 @@ Alle Maße sind Vorgaben nach Praxis und DIN/ISO 5457 und gelten für alle Papie
 - **Koordinatenraster:** Randteilung am Rahmen innen, Feldlänge 50 mm, gerade Anzahl Felder, vom Blattmittelpunkt nach außen geteilt. Spalten mit Zahlen 1, 2, … von links nach rechts, Zeilen mit Buchstaben A, B, … von oben nach unten. Beschriftung außerhalb des Rahmens an allen vier Seiten, Schrifthöhe 3,5 mm.
 - **Schriftfeld:** unten rechts, bündig mit dem Rahmen, **180 mm breit**, Höhe so, dass alle Felder (Abschnitt 4) Platz haben (Vorschlag 56 mm, Zeilenraster 7 mm bis 16 mm). Außenlinie 0,7 mm, Innenlinien 0,25 mm. Beschriftung der Felder klein (2,2 mm), Inhalt 3,5 mm, Titel 5 mm.
 - **Änderungstabelle:** oben rechts im Rahmen, bündig, 176 mm breit, Kopfzeile oben, neueste Änderung zuunterst, bis zu **6 Zeilen** sichtbar (die neuesten); ältere stehen im Fenster. Spalten: Rev., Änderung, Datum, Name.
-- **Hinweisfeld:** Hinweiszeilen von oben nach unten, Schrift 3,3 mm. Ist die Rahmenbreite mindestens 310 mm (A3 quer und größer), steht es **links neben dem Schriftfeld**, gleiche Unterkante, 110 mm breit, 10 mm Abstand. Sonst (A4 quer und hoch, A3 hoch und größer hoch) steht es **direkt über dem Schriftfeld**, 180 mm breit, Höhe nach Zeilenzahl. Der Platz über dem Schriftfeld (bzw. über dem Hinweisfeld) bleibt für die Stückliste aus 3c-2 frei; sie wächst von dort nach oben. Alle Papiergrößen A4 bis A0 in beiden Ausrichtungen bleiben unterstützt, auch für Altdateien.
+- **Hinweisfeld:** Hinweiszeilen von oben nach unten, Schrift 3,3 mm. Ist die Rahmenbreite mindestens 310 mm (A3 quer und größer), steht es **links neben dem Schriftfeld**, gleiche Unterkante, 110 mm breit, 10 mm Abstand. Sonst (Rahmenbreite unter 310 mm, also A4 quer und hoch sowie A3 hoch; A2 hoch und größer hoch haben mindestens 390 mm und bekommen das Hinweisfeld daneben) steht es **direkt über dem Schriftfeld**, 180 mm breit, Höhe nach Zeilenzahl. Der Platz über dem Schriftfeld (bzw. über dem Hinweisfeld) bleibt für die Stückliste aus 3c-2 frei; sie wächst von dort nach oben. Alle Papiergrößen A4 bis A0 in beiden Ausrichtungen bleiben unterstützt, auch für Altdateien.
 - **Freier Bereich für Ansichten:** der Rahmen minus Schriftfeld, Änderungstabelle und Hinweisfeld. Die automatische Anordnung neuer und abgeleiteter Ansichten (`layout.rs`) bleibt in diesem Bereich. Manuell platzierte Ansichten sind nicht eingeschränkt (Verantwortung des Nutzers; keine Warnung).
 
 ## 4. Felder und Vorbelegung
@@ -46,6 +46,7 @@ Jedes Feld ist entweder **automatisch** (das Programm berechnet es) oder ein **e
 | Titel | Name der Zeichnung | Blatt |
 | Zusatztitel | leer | Blatt |
 | Dokumentart | „Fertigungszeichnung“ | Blatt |
+| Dokumentstatus | „in Arbeit“ (Vorgabe, änderbar; Entscheidung des Entwurfs, weil Zusammenfassungen von ISO 7200 es als Pflichtfeld nennen) | Blatt |
 | Ausgabedatum | heutiges Datum beim Anlegen des Blatts, danach fest (änderbar) | Blatt |
 | Änderungsstand | Buchstabe der letzten Änderung, leer ohne Änderungen | berechnet |
 | Blatt / Anzahl | Platz des Blatts in der Reihenfolge der Zeichnungen des Dokuments / Anzahl | berechnet |
