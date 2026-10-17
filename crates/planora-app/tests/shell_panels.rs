@@ -582,13 +582,9 @@ fn status_field_shows_message_with_error_colour_and_counts_bodies() {
         .add_sketch(SketchPlane::Standard(StandardPlane::XY))
         .unwrap();
     state.open_sketch(id).unwrap();
-    // Der ganze Hinweis mit allen Tasten ist zu lesen.
+    // Kurz; die Tasten stehen im Hover der Statuszeile.
     let (text, color) = status(&mut app);
-    assert_eq!(
-        text,
-        "Skizzen-Modus: Skizze 1 – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere \
-         Maustaste oder Umschalt + Ziehen verschiebt"
-    );
+    assert_eq!(text, "Skizzen-Modus: Skizze 1");
     assert_eq!(color, p.text_secondary);
 
     // Eine Meldung geht allem vor, in der Fehlerfarbe.
@@ -1080,4 +1076,45 @@ fn the_tab_bar_scroll_bar_is_thin_hidden_at_rest_and_below_the_tab_names() {
             shell::TOP_H
         ));
     }
+}
+
+/// Im Skizzenmodus ist der Status kurz; die Tasten stehen im Hover der Statuszeile und sonst
+/// nirgends im Bild (der Hinweis steht höchstens einmal sichtbar).
+#[test]
+fn sketch_status_is_short_and_keys_are_in_the_hover() {
+    let c = context(true);
+    c.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+    let mut app = PlanoraApp::for_tests(library_ws());
+    let state = &mut app.ws_mut().active_tab_mut().state;
+    let id = state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    state.open_sketch(id).unwrap();
+    let size = vec2(1400.0, 900.0);
+    let (shot, _) = settle(&c, &mut app, size);
+    let status = shell_panels::field_rects(&c)
+        .into_iter()
+        .find(|(n, _)| *n == "Status")
+        .unwrap()
+        .1;
+    assert!(shot.has_in(status, "Skizzen-Modus: Skizze 1"));
+    let count = |shot: &Shot| {
+        shot.texts
+            .iter()
+            .filter(|t| t.text.contains("Esc bricht ab"))
+            .count()
+    };
+    assert_eq!(count(&shot), 0, "ohne Hover steht der Hinweis nicht da");
+
+    // Hover auf den Text der Statuszeile.
+    let p = shot.find(status, "Skizzen-Modus: Skizze 1").rect.center();
+    run(&c, &mut app, size, vec![moved(p)], false);
+    let (shot, _) = run(&c, &mut app, size, vec![moved(p)], false);
+    assert!(
+        shot.texts
+            .iter()
+            .any(|t| t.text == shell_panels::SKETCH_KEYS_HINT),
+        "Hover zeigt den Tastenhinweis"
+    );
+    assert!(count(&shot) <= 1, "höchstens einmal sichtbar");
 }

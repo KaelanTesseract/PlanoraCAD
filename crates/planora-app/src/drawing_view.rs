@@ -855,6 +855,7 @@ fn tool_field(
     let p = theme::palette(dark);
     let frame = tool_frame(dark);
     let inner = shell_panels::inner_size(&frame, rect.size());
+    let margin_x = frame.total_margin().sum().x;
     let mut action = None;
     let selected = state
         .drawing_ui
@@ -885,7 +886,7 @@ fn tool_field(
                 .id_salt("planora-field-drawing-tool-scroll")
                 .auto_shrink([false, false])
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded);
-            theme::scroll_area(&mut child, area, |ui| {
+            let scroll = theme::scroll_area(&mut child, area, |ui| {
                 ui.spacing_mut().item_spacing.y = theme::SPACE_1;
                 // Eng gesetzt (wie das Befehlsfeld), damit beide Zeilen schon bei 1100 px
                 // Fensterbreite ganz sichtbar sind.
@@ -1010,6 +1011,16 @@ fn tool_field(
                 });
                 ui.add_space(below);
             });
+            // Wunschbreite: beide Zeilen ohne Rollen, mit Rand; die Shell passt das Feld an.
+            let key = shell_panels::drawing_tool_width_key();
+            let first = shell_panels::stored(ui.ctx(), key).is_none();
+            // Auf gerade Breite aufgerundet: so liegt das mittige Feld auf ganzen Pixeln.
+            let wanted = ((scroll.content_size.x + margin_x) / 2.0).ceil() * 2.0;
+            shell_panels::remember_width(ui, key, wanted);
+            if first {
+                // Noch keine Breite gemerkt: das Feld stand in voller Breite, also wiederholen.
+                shell_panels::discard(ui.ctx(), "Werkzeugfeld: erste Breite");
+            }
             ui.advance_cursor_after_rect(Rect::from_min_size(area_rect.min, inner));
         },
     );

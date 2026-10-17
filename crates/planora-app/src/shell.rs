@@ -182,6 +182,13 @@ pub fn layout_in_mode(
     r
 }
 
+/// Werkzeugfeld der Zeichnung nach seinem Inhalt: Breite `wanted`, mindestens [`MIN_FIELD_W`],
+/// höchstens die des Rechtecks `tool`; gleiche Mitte, gleiche Höhe.
+pub fn fit_tool(tool: Rect, wanted: f32) -> Rect {
+    let w = wanted.clamp(MIN_FIELD_W, tool.width().max(MIN_FIELD_W));
+    Rect::from_center_size(tool.center(), vec2(w, tool.height()))
+}
+
 /// Berechnet die Geometrie deterministisch aus Konstanten (kein Messen, keine Rückkopplung).
 pub fn layout(
     content: Rect,

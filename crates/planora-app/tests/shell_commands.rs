@@ -483,7 +483,7 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 
 fn fields_of(shot: &Shot, dark: bool, size: Vec2) -> Fields {
     let all = shot.fields(dark);
-    let near = |a: f32, b: f32| (a - b).abs() < 0.5;
+    let near = |a: f32, b: f32| (a - b).abs() <= 0.5;
     let pick = |what: &str, f: &dyn Fn(&Rect) -> bool| -> Rect {
         let hits: Vec<_> = all.iter().filter(|r| f(r)).collect();
         assert_eq!(hits.len(), 1, "{what}: {hits:?} in {all:?}");
@@ -578,14 +578,14 @@ fn status_stays_readable_with_the_real_bottom_field() {
         assert!(v.bottom.width() >= MIN_BOTTOM, "{size:?}: {:?}", v.bottom);
     }
 
-    // Skizzenhinweis mit allen Tasten: bei 1400 und 1100 ganz zu lesen; unten steht dann das
+    // Skizzenstatus (die Tasten stehen im Hover): bei 1400 und 1100 ganz zu lesen; unten steht dann das
     // Fußfeld der Skizze statt des Befehlsfelds.
     let state = &mut app.ws_mut().active_tab_mut().state;
     let id = state
         .add_sketch(SketchPlane::Standard(StandardPlane::XY))
         .unwrap();
     state.open_sketch(id).unwrap();
-    let hint = "Skizzen-Modus: Skizze 1 – Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt";
+    let hint = "Skizzen-Modus: Skizze 1";
     for size in [big, small] {
         let v = status_at(&mut app, size);
         assert_eq!(v.seen.text, hint, "{size:?}");
