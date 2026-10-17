@@ -63,7 +63,7 @@ fn frame_rectangles() {
 fn centre_marks_a4_landscape() {
     let l = sheet_layout(sh(Paper::A4, true), 0, 0);
     near(seg(l.centre_marks[0]), [0.0, 105.0, 25.0, 105.0]);
-    near(seg(l.centre_marks[1]), [297.0, 105.0, 272.0, 105.0]);
+    near(seg(l.centre_marks[1]), [297.0, 105.0, 282.0, 105.0]);
     near(seg(l.centre_marks[2]), [148.5, 0.0, 148.5, 15.0]);
     near(seg(l.centre_marks[3]), [148.5, 210.0, 148.5, 195.0]);
 }
@@ -166,6 +166,11 @@ fn title_block_and_tables() {
                     && s.baseline + s.height <= c.y1
             })
             .unwrap_or_else(|| panic!("{:?} in keiner Zelle", s.field));
+        if s.field != TitleField::Subtitle {
+            assert_eq!(c.label, s.field.label());
+        } else {
+            assert_eq!(c.label, "Titel");
+        }
         // unter dem Feldnamen (Grundlinie y1 - 1 - LABEL_H)
         assert!(
             s.baseline + s.height <= c.y1 - 1.0 - LABEL_H + 1e-9,
@@ -173,6 +178,12 @@ fn title_block_and_tables() {
             s.field
         );
     }
+    let slot = |f| TITLE_SLOTS.iter().find(|s| s.field == f).unwrap();
+    let (ti, su) = (slot(TitleField::Title), slot(TitleField::Subtitle));
+    assert!(
+        su.baseline + su.height <= ti.baseline,
+        "Titel und Zusatztitel überlappen"
+    );
     for f in TitleField::ALL {
         assert_eq!(TITLE_SLOTS.iter().filter(|s| s.field == f).count(), 1);
     }
@@ -259,8 +270,8 @@ fn projection_symbol_sides() {
         assert!((h_at(tmax) - 7.0).abs() < 1e-9);
         assert!((tmax - tmin - 7.0).abs() < 1e-9);
         match proj {
-            Projection::First => assert!(tmax < cx - 3.5),
-            Projection::Third => assert!(cx + 3.5 < tmin),
+            Projection::First => assert!((cx - 3.5 - tmax - 3.5).abs() < 1e-9),
+            Projection::Third => assert!((tmin - (cx + 3.5) - 3.5).abs() < 1e-9),
         }
         let lo = tmin.min(cx - 3.5);
         let hi = tmax.max(cx + 3.5);
@@ -269,5 +280,44 @@ fn projection_symbol_sides() {
             assert!(p.y >= 47.0 && p.y <= 56.0);
         }
         assert!(circles[0].0.y - 3.5 >= 47.0 && circles[0].0.y + 3.5 <= 56.0);
+    }
+}
+
+#[test]
+fn centre_marks_reach_five_mm_past_the_frame_on_every_side() {
+    for p in PAPERS {
+        for landscape in [false, true] {
+            let sheet = sh(p, landscape);
+            let (w, h) = sheet.size_mm();
+            let l = sheet_layout(sheet, 0, 0);
+            let (f0, f1) = l.frame;
+            let m = &l.centre_marks;
+            let ctx = format!("{p:?} {landscape}");
+            // links, rechts, unten, oben: Start am Blattrand, Ende 5 mm hinter dem Rahmen
+            assert_eq!(
+                (m[0].0.x, m[0].1.x),
+                (0.0, f0.x + CENTRE_MARK_INSET_MM),
+                "{ctx}"
+            );
+            assert_eq!(
+                (m[1].0.x, m[1].1.x),
+                (w, f1.x - CENTRE_MARK_INSET_MM),
+                "{ctx}"
+            );
+            assert_eq!(
+                (m[2].0.y, m[2].1.y),
+                (0.0, f0.y + CENTRE_MARK_INSET_MM),
+                "{ctx}"
+            );
+            assert_eq!(
+                (m[3].0.y, m[3].1.y),
+                (h, f1.y - CENTRE_MARK_INSET_MM),
+                "{ctx}"
+            );
+            assert_eq!(m[0].0.y, h / 2.0);
+            assert_eq!(m[1].0.y, h / 2.0);
+            assert_eq!(m[2].0.x, w / 2.0);
+            assert_eq!(m[3].0.x, w / 2.0);
+        }
     }
 }

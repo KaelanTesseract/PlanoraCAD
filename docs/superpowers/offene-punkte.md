@@ -998,11 +998,13 @@ Die Normtexte (ISO 5457, 7200, 5456-2, 3098) sind kostenpflichtig; geprüft wurd
 |---|---|---|---|
 | Rand links 20 mm, sonst 10 mm | 20 mm Heftrand, 10 mm sonst | Sekundärquelle (Blog), Normtext nicht gesehen | nein (unbestätigt) |
 | Rahmen 0,7 mm | 0,7 mm | Auszug ISO 5457:1999 (Suchergebnis) | nein |
-| Zentriermarken 0,5 mm | Auszug nennt 0,7 mm für Zentriermarken | Auszug ISO 5457:1999 (Suchergebnis) | ja, zu klären |
-| Zentriermarken reichen 5 mm hinter den Rahmen | Auszug: vom Blattrand bis 10 mm hinter den Rahmen | Auszug ISO 5457:1999 (Suchergebnis) | ja, zu klären |
+| Zentriermarken 0,5 mm | Auszug nennt 0,7 mm für Zentriermarken | Auszug ISO 5457:1999 (Suchergebnis) | zu klären, Entwurfswerte unverändert |
+| Zentriermarken reichen 5 mm hinter den Rahmen | Auszug: vom Blattrand bis 10 mm hinter den Rahmen | Auszug ISO 5457:1999 (Suchergebnis) | zu klären, Entwurfswerte unverändert |
 | Rasterfeld 50 mm, Felderzahl 2·round(Kante/100), Buchstaben ohne I/O | nicht auffindbar | – | offen |
+| Teilstriche 5 mm, 0,25 mm, Beschriftung mittig im Rand (3,5 hoch) | nicht auffindbar; Spec-Wort „Randteilung am Rahmen innen“ mehrdeutig, Teilstriche werden vom Rahmen nach außen gezeichnet | – | offen |
 | Schriftfeld 180 mm breit, Feldhöhen 2,2 / 3,5 / 5 | nicht auffindbar | – | offen |
 | Projektionssymbol (F7): Maße, Lage je Methode | nicht auffindbar; Quellen widersprechen sich bei der Lage der Kreise | Suchergebnisse | offen |
 | Schriftreihe 2,5 / 3,5 / 5 (Spec nennt 2,2 und 3,3) | nicht auffindbar | – | offen |
 
-Weitere Auffälligkeit der Vorgabe: Die rechte Zentriermarke (A4 quer `(297,105)–(272,105)`) ist 25 mm lang wie die linke, reicht also 15 mm hinter den rechten Rahmen (Rahmen bei 287); ebenso oben 15 mm. Umgesetzt wie vorgegeben.
+
+Fehler und Korrektur (Aufgabe 1): Die rechte Zentriermarke war zunächst 25 mm lang (A4 quer `(297,105)–(272,105)`, 15 mm hinter dem Rahmen bei 287), weil der Heftrand statt des 10-mm-Rands verwendet wurde; der Wert stammte aus einem Fehler der Aufgabenvorgabe. Richtig nach Spec: Marken laufen vom Blattrand bis 5 mm hinter den Rahmen, rechts also `297 → 282`. Behoben; oben (15 mm vom Rand) war richtig.

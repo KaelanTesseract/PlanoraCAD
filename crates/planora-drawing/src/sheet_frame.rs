@@ -26,6 +26,8 @@ pub const REV_ROW_H: f64 = 7.0;
 pub const REV_VISIBLE: usize = 6;
 /// Spaltenbreiten der Änderungstabelle: Rev., Änderung, Datum, Name.
 pub const REV_COLUMNS: [f64; 4] = [12.0, 104.0, 30.0, 30.0];
+/// Höchste Zahl sichtbarer Hinweiszeilen.
+pub const NOTE_LINES_MAX: usize = 6;
 pub const NOTES_TEXT_H: f64 = 3.3;
 pub const NOTES_LINE_MM: f64 = 6.0;
 pub const NOTES_PAD_MM: f64 = 2.0;
@@ -272,7 +274,7 @@ fn grid_bounds(lo: f64, hi: f64, centre: f64, n: usize) -> (Vec<f64>, Vec<f64>) 
 pub fn sheet_layout(sheet: Sheet, revision_rows: usize, note_lines: usize) -> SheetLayout {
     let (w, h) = sheet.size_mm();
     let rev_rows = revision_rows.min(REV_VISIBLE);
-    let n_lines = note_lines.min(6);
+    let n_lines = note_lines.min(NOTE_LINES_MAX);
     let (fx0, fy0, fx1, fy1) = (
         FILING_MARGIN_MM,
         EDGE_MARGIN_MM,
@@ -288,7 +290,7 @@ pub fn sheet_layout(sheet: Sheet, revision_rows: usize, note_lines: usize) -> Sh
     let p = DVec2::new;
     let centre_marks = [
         (p(0.0, cy), p(lr, cy)),
-        (p(w, cy), p(w - lr, cy)),
+        (p(w, cy), p(w - tb, cy)),
         (p(cx, 0.0), p(cx, tb)),
         (p(cx, h), p(cx, h - tb)),
     ];
