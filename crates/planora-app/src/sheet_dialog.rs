@@ -39,6 +39,8 @@ pub const NO_DRAWING_OPEN: &str = "Dafür zuerst eine Zeichnung öffnen.";
 pub const OWNER_MISSING: &str = "Bitte den Eigentümer eintragen. Er gehört auf jede Zeichnung.";
 /// Warnung bei einem Eintrag, der nicht ganz ins Feld des Schriftfelds passt.
 pub const CUT_WARNING: &str = "Passt nicht ganz ins Feld und wird auf dem Blatt gekürzt.";
+/// Hinweis im Abschnitt „Änderungen“: nur die letzten drei stehen auf dem Blatt.
+pub const REVISIONS_ON_SHEET: &str = "Auf dem Blatt stehen die letzten 3 Änderungen.";
 /// Meldung, wenn es die Zeichnung nicht mehr gibt.
 const GONE: &str = "Die Zeichnung gibt es nicht mehr.";
 /// Hinweis am gesperrten Knopf „Zeile hinzufügen“.
@@ -387,6 +389,8 @@ impl SheetInfoDialog {
                 // ---- Änderungen ----
                 ui.add_space(theme::SPACE_3);
                 theme::section_header(ui, "Änderungen", theme::SUB_HEADER_H);
+                ui.add_space(theme::SPACE_1);
+                ui.weak(REVISIONS_ON_SHEET);
                 ui.add_space(theme::SPACE_1);
                 if sheet.revisions.is_empty() {
                     ui.weak("Noch keine Änderungen.");

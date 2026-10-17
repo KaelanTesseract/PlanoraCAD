@@ -308,7 +308,7 @@ impl TitleTexts {
         self.fields.get(&f).map(String::as_str).unwrap_or("")
     }
 
-    /// Die letzten sechs Änderungen, neueste zuletzt.
+    /// Die letzten drei Änderungen (`REV_VISIBLE`), neueste zuletzt.
     pub fn visible_revisions(&self) -> &[[String; 4]] {
         &self.revisions[self.revisions.len().saturating_sub(REV_VISIBLE)..]
     }

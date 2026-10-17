@@ -35,7 +35,7 @@ pub const VALUE_H: f64 = 3.5;
 pub const TITLE_TEXT_H: f64 = 5.0;
 pub const REV_W: f64 = 176.0;
 pub const REV_ROW_H: f64 = 7.0;
-pub const REV_VISIBLE: usize = 6;
+pub const REV_VISIBLE: usize = 3;
 /// Spaltenbreiten der Änderungstabelle: Rev., Änderung, Datum, Name.
 pub const REV_COLUMNS: [f64; 4] = [12.0, 104.0, 30.0, 30.0];
 /// Höchste Zahl sichtbarer Hinweiszeilen.

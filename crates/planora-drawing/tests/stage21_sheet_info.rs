@@ -185,13 +185,14 @@ fn revisions_and_state() {
     assert_eq!(t.get(TitleField::Revision), "Z");
     assert_eq!(t.revisions.len(), 23);
     let vis = t.visible_revisions();
-    assert_eq!(vis.len(), 6);
-    assert_eq!(vis[5][0], "Z");
-    assert_eq!(vis[0][0], "U");
+    // Auf dem Blatt stehen die letzten drei.
+    assert_eq!(vis.len(), 3);
+    assert_eq!(vis[2][0], "Z");
+    assert_eq!(vis[0][0], "X");
     // Eigener Buchstabe an der letzten Änderung.
     info(&mut d).revisions[22].letter = FieldValue::Text("X1".into());
     assert_eq!(texts(&d, None).get(TitleField::Revision), "X1");
-    // Weniger als sechs: alle.
+    // Weniger als drei: alle.
     let mut few = drawing();
     info(&mut few).add_revision("d", "n").unwrap();
     assert_eq!(texts(&few, None).visible_revisions().len(), 1);

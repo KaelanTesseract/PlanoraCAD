@@ -215,7 +215,7 @@ fn title_block_and_tables() {
     near(bx(l.revisions), [111.0, 403.0, 287.0, 410.0]);
     near(bx(l.notes.unwrap()), [107.0, 66.0, 287.0, 88.0]);
     let l = sheet_layout(sh(Paper::A3, false), 9, 0);
-    assert!((l.revisions.0.y - 361.0).abs() < 1e-9);
+    assert!((l.revisions.0.y - 382.0).abs() < 1e-9);
     assert!(l.notes.is_none());
     let l = sheet_layout(sh(Paper::A3, true), 0, 3);
     near(bx(l.title), [230.0, 10.0, 410.0, 66.0]);
@@ -233,7 +233,7 @@ fn title_block_and_tables() {
         [75.642857, 46.671429, 202.928571, 62.228571],
     );
     let l = sheet_layout(sh(Paper::A4, false), 9, 0);
-    assert!((l.revisions.0.y - (289.928571 - 7.0 * 7.0 * F4)).abs() < 1e-6);
+    assert!((l.revisions.0.y - (289.928571 - 4.0 * 7.0 * F4)).abs() < 1e-6);
     // A4 quer: Rahmenbreite 275,8 ≥ 310 · 0,707, Hinweise daneben wie auf A3 quer.
     let l = sheet_layout(sh(Paper::A4, true), 0, 3);
     near6(bx(l.title), [162.642857, 7.071429, 289.928571, 46.671429]);

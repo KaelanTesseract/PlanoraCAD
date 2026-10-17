@@ -11,7 +11,8 @@ use planora_app::drawing_browser::READ_ONLY_HINT;
 use planora_app::drawing_dialog::SKETCH_BLOCKED;
 use planora_app::drawing_state::WorkArea;
 use planora_app::sheet_dialog::{
-    BUTTON, CUT_WARNING, MENU_ENTRY, NO_DRAWING_OPEN, OWNER_MISSING, SheetInfoDialog,
+    BUTTON, CUT_WARNING, MENU_ENTRY, NO_DRAWING_OPEN, OWNER_MISSING, REVISIONS_ON_SHEET,
+    SheetInfoDialog,
 };
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
@@ -986,6 +987,21 @@ fn notes_and_revision_cells_warn_when_cut() {
     assert_eq!(count(&mut h), 1, "Projekt-Hinweis");
     h.dialog().sheet.notes = NotesValue::Lines(vec!["kurz".into(), "W".repeat(100)]);
     assert_eq!(count(&mut h), 2, "auch die eigene Zeile des Blatts");
+    h.dialog().project.notes = NotesValue::Auto;
+    h.dialog().sheet.notes = NotesValue::Auto;
+    assert_eq!(count(&mut h), 0);
+    // Fünf Änderungen mit langer Beschreibung: auf dem Blatt stehen nur die letzten drei, nur
+    // sie bekommen die Warnung; der Hinweis steht im Abschnitt.
+    for _ in 0..4 {
+        h.dialog().add_revision(&s, "dennis");
+    }
+    for r in &mut h.dialog().sheet.revisions {
+        r.description = "W".repeat(100);
+    }
+    assert_eq!(count(&mut h), 3, "nur die sichtbaren drei");
+    let shot = h.settle();
+    let rect = h.dialog_rect().unwrap();
+    assert_eq!(shot.dlg(REVISIONS_ON_SHEET, rect).len(), 1);
 }
 
 #[test]

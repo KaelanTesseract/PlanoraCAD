@@ -240,8 +240,8 @@ fn longest_texts_stay_in_their_cells() {
                 checked += 1;
             }
             // 17 Feldnamen, 17 Inhalte (ohne Projektion; alle Felder haben Text), 4 Kopfzeilen und
-            // 6 × 4 Änderungstexte, 6 Hinweise.
-            assert_eq!(checked, 17 + 17 + 4 + 24 + 6, "{sheet:?} {pattern}");
+            // 3 × 4 Änderungstexte (die letzten drei), 6 Hinweise.
+            assert_eq!(checked, 17 + 17 + 4 + 12 + 6, "{sheet:?} {pattern}");
             // Inhalte stehen unter dem Feldnamen ihrer Zelle und sind nie kleiner als drei
             // Fünftel ihrer skalierten Sollhöhe.
             let title_cells = layout.title_cells();
@@ -1059,7 +1059,7 @@ fn every_dxf_frame_text_stays_in_its_cell_with_the_width_factor() {
                 "{sheet:?}: {s:?} ragt über {cell:?}"
             );
         }
-        // 17 Felder, 6 × 4 Änderungstexte, 6 Hinweise.
-        assert_eq!(n, 17 + 24 + 6, "{sheet:?}");
+        // 17 Felder, 3 × 4 Änderungstexte (die letzten drei), 6 Hinweise.
+        assert_eq!(n, 17 + 12 + 6, "{sheet:?}");
     }
 }
