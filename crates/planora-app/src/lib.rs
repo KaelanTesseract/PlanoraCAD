@@ -6,6 +6,7 @@ pub mod boolean_dialog;
 pub mod browser;
 pub mod cards;
 pub mod create_dialog;
+pub mod dialog;
 pub mod dimension_browser;
 pub mod dimension_dialog;
 pub mod dimension_state;
