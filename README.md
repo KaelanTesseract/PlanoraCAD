@@ -166,10 +166,12 @@ Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 11 �
 Jede Zeichnung bekommt ein vollständiges Blatt, wie man es von technischen Zeichnungen kennt. Das Programm legt alles selbst an; du musst nur noch eintragen, was nur du weißt.
 
 **Was auf dem Blatt steht**
-- Ein Rahmen mit breitem Heftrand links (20 mm) und schmalem Rand sonst (10 mm), Markierungen in der Mitte jeder Kante und ein Raster aus Zahlen und Buchstaben am Rand, damit man sich auf dem Blatt verständigen kann („Feld C 4“).
+- Ein Rahmen mit breitem Heftrand links (20 mm auf A3) und schmalem Rand sonst (10 mm), Markierungen in der Mitte jeder Kante und ein Raster aus Zahlen und Buchstaben am Rand, damit man sich auf dem Blatt verständigen kann („Feld C 4“).
 - Unten rechts das Schriftfeld: Zeichnungsnummer, Titel, Eigentümer, Ersteller, Datum, Werkstoff, Maßstab, Format, Blatt „1 von 3“ und das Zeichen für die Projektionsmethode (Erstwinkel oder Dritter Winkel).
-- Oben rechts eine Tabelle für Änderungen (die sechs neuesten sind zu sehen, im Fenster stehen alle) und ein Feld mit Hinweisen, zum Beispiel zu Toleranzen und Oberflächen. Auf großen Blättern steht es links neben dem Schriftfeld, auf kleinen darüber.
-- Neue Ansichten legen sich in den freien Bereich des Blatts und nicht auf Schriftfeld oder Tabelle.
+- Oben rechts eine Tabelle für Änderungen (die sechs neuesten sind zu sehen, im Fenster stehen alle) und ein Feld mit Hinweisen, zum Beispiel zu Toleranzen und Oberflächen. Im Querformat steht es links neben dem Schriftfeld, im Hochformat darüber.
+- Neue Ansichten legen sich in den freien Bereich des Blatts und nicht auf Schriftfeld oder Tabelle. Die isometrische Ansicht kommt in die freie Ecke neben den drei Hauptansichten; ist dort zu wenig Platz, wird sie eine Maßstabsstufe kleiner gezeichnet als die Hauptansichten (zum Beispiel 1:2 statt 1:1).
+
+**Gleiches Aussehen auf jeder Papiergröße:** Das Blatt ist für A3 gemacht. Auf den anderen Größen wird alles im selben Verhältnis kleiner oder größer, so als würde man ein A3-Blatt verkleinert auf A4 oder vergrößert auf A0 drucken: Ränder, Raster, Schriftfeld, Tabellen, Schrift und Linien. Die Maße oben (20 mm, 10 mm …) gelten also für A3. Auf A4 ist das Schriftfeld deshalb nur etwa 13 cm breit und die Schrift recht klein (Inhalte gut 2,5 mm, Feldnamen etwa 1,6 mm). Linien werden dabei nie dünner als 0,18 mm. Üblich ist sonst ein gleich großes Schriftfeld auf allen Größen; hier wurde bewusst anders entschieden, damit eine A4-Zeichnung nicht vom Schriftfeld erdrückt wird.
 
 **Was automatisch ausgefüllt wird:** Zeichnungsnummer (Dokumentname und laufende Nummer), Titel (Name der Zeichnung), Datum von heute, Ersteller (dein Windows-Benutzername), Blattnummer und Blattzahl, Format, Maßstab (der Maßstab der Ansicht mit den meisten Linien), Dokumentart „Fertigungszeichnung“, Status „in Arbeit“, die Buchstaben der Änderungen und drei übliche Hinweiszeilen.
 
@@ -183,12 +185,13 @@ Jede Zeichnung bekommt ein vollständiges Blatt, wie man es von technischen Zeic
 
 **Grenzen**
 - Das Datum ist der Tag nach Weltzeit (UTC). Kurz nach Mitternacht kann es deshalb der Vortag sein; es lässt sich ändern.
-- Wie breit ein Text auf dem Blatt wird, schätzt das Programm vorsichtig. Echte Schriften in anderen Programmen können etwas breiter laufen. Sehr breite Zeichen (zum Beispiel chinesische) werden unterschätzt.
-- In DXF-Dateien sind nur Zeichen aus dem üblichen Zeichensatz erlaubt; sonst nennt das Programm das Feld und bricht den DXF-Export ab. SVG nimmt alles. Fusion 360 zeigt Texte aus DXF-Dateien nicht an (bekannt von den Maßen).
+- Wie breit ein Text auf dem Blatt wird, schätzt das Programm vorsichtig. Echte Schriften in anderen Programmen können etwas breiter laufen. Sehr breite Zeichen (zum Beispiel chinesische) werden unterschätzt. CAD-Programme schreiben Texte aus DXF-Dateien meist breiter; dort lässt das Programm deshalb mehr Luft, und ein langer Text kann in der DXF-Datei etwas kleiner oder früher gekürzt sein als im SVG.
+- In DXF-Dateien sind nur Zeichen aus dem üblichen Zeichensatz erlaubt; sonst nennt das Programm das Feld und die Nummer des Zeichens (zum Beispiel „U+1F600“ für ein Gesicht) und bricht den DXF-Export ab. SVG nimmt alles. Fusion 360 zeigt Texte aus DXF-Dateien nicht an (bekannt von den Maßen).
+- Auf A4 ist die Schrift im Schriftfeld klein (siehe oben); gedruckt ist sie lesbar, liegt aber unter dem, was für technische Zeichnungen sonst üblich ist.
 - Zentriermarken und Raster folgen den Entwurfswerten (Marken 0,5 mm stark und 5 mm in den Rahmen hinein); ein öffentlich zugänglicher Auszug der Norm nennt 0,7 mm und 10 mm. Die Normtexte sind kostenpflichtig und lagen nicht vor, die Zahlen sind deshalb nicht endgültig bestätigt.
 - Das Projektionszeichen liegt in der DXF-Datei zusammen mit den Zentriermarken auf der Ebene „BLATT_MITTE“.
 - Alte Zeichnungen können Ansichten haben, die nun mit Schriftfeld oder Tabelle zusammenstoßen; das Programm verschiebt sie nicht von selbst.
-- Die isometrische Ansicht bleibt bei Teilen, die fast das ganze Blatt füllen, nicht immer im freien Bereich.
+- Die isometrische Ansicht bleibt bei Teilen, die fast das ganze Blatt füllen, nicht immer im freien Bereich und kann dann die anderen Ansichten berühren.
 - Auf sehr kleiner Darstellung (A0 in einem kleinen Fenster) sind die Blatttexte nie kleiner als ein Bildpunkt und deshalb nur ein Strich.
 - Das Werkzeugfeld der Zeichnung ist durch den neuen Knopf breiter; in sehr kleinen Fenstern rollt es.
 - Es wird kein Platz für eine Stückliste freigehalten, und die Reihenfolge der Blätter ist die Reihenfolge, in der sie angelegt wurden (kein Umordnen).

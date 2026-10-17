@@ -20,7 +20,7 @@ use planora_drawing::sheet_info::{
     FieldValue, NotesValue, ProjectInfo, Revision, SheetContext, SheetInfo, Stamp, main_scale,
     resolve_texts,
 };
-use planora_drawing::sheet_marks::sheet_frame;
+use planora_drawing::sheet_marks::{sheet_frame, sheet_frame_dxf};
 use planora_drawing::{DrawBody, ViewKind, ViewLines, compute_view, dxf_string, svg_string};
 use planora_exchange::Progress;
 use planora_math::DVec3;
@@ -235,6 +235,8 @@ fn write_all(dir: &PathBuf) {
                     svg_string(&model).unwrap(),
                 )
                 .unwrap();
+                // DXF wie der Export: Texte mit dem Breitenzuschlag für CAD-Schriften.
+                model.frame = Some(sheet_frame_dxf(&layout, &texts, b.drawing.projection));
                 match dxf_string(&model) {
                     Ok(s) => std::fs::write(dir.join(format!("{base}_Rahmen.dxf")), s).unwrap(),
                     Err(e) => panic!("{base}: DXF mit Rahmen scheitert: {e}"),
