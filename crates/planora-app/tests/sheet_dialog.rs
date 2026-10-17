@@ -1102,8 +1102,9 @@ fn revision_columns_are_wide_enough_and_labels_share_one_column() {
             (date_f.width() - 110.0).abs() < 1.0,
             "{size:?}: Datum {date_f:?}"
         );
+        // Name 140 px, bei knappem Platz bis 120 (Rollbalken rechts).
         assert!(
-            (name_f.width() - 140.0).abs() < 1.0,
+            (120.0 - 0.5..=140.0 + 0.5).contains(&name_f.width()),
             "{size:?}: Name {name_f:?}"
         );
         assert!(rect.contains_rect(name_f), "{size:?}: Zeile im Fenster");
@@ -1111,6 +1112,24 @@ fn revision_columns_are_wide_enough_and_labels_share_one_column() {
         assert!(
             del.left() > name_f.right() && rect.contains_rect(del),
             "{size:?}"
+        );
+        // Der Knopf „Löschen“ steht ganz links vom Rollbalken des Fensters (mit Abstand).
+        let button = field_around(&shot, del.center());
+        let bar = shot
+            .fills
+            .iter()
+            .map(|(r, _)| *r)
+            .filter(|r| {
+                r.width() <= 14.0
+                    && r.height() > 60.0
+                    && r.left() > rect.center().x
+                    && rect.contains_rect(*r)
+            })
+            .min_by(|a, b| a.left().total_cmp(&b.left()))
+            .unwrap_or_else(|| panic!("{size:?}: Rollbalken"));
+        assert!(
+            button.right() + bar.width() <= bar.left() + 0.5,
+            "{size:?}: Löschen {button:?} am Rollbalken {bar:?}"
         );
         for (head, f) in [
             ("Beschreibung", text_f),

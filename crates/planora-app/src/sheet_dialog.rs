@@ -56,6 +56,8 @@ const REV_LETTER_W: f32 = 50.0;
 const REV_TEXT_MIN_W: f32 = 280.0;
 const REV_DATE_W: f32 = 110.0;
 const REV_NAME_W: f32 = 140.0;
+/// Schmalste Spalte des Namens, wenn der Platz für Beschreibung und Rollbalken knapp wird.
+const REV_NAME_MIN_W: f32 = 120.0;
 
 /// Bezeichnung eines Felds des Schriftfelds in der Oberfläche und in Meldungen.
 pub fn title_field_name(field: TitleField) -> &'static str {
@@ -403,14 +405,17 @@ impl SheetInfoDialog {
                     // Die Spalte des Buchstabens ist mindestens so breit wie ihr Kopf.
                     let letter_w =
                         REV_LETTER_W.max(text_width(ui, "Buchstabe", egui::TextStyle::Body));
-                    let text_w = (ui.available_width()
-                        - letter_w
-                        - REV_DATE_W
-                        - REV_NAME_W
-                        - delete_w
-                        - 4.0 * gap)
-                        .max(REV_TEXT_MIN_W);
-                    let widths = [letter_w, text_w, REV_DATE_W, REV_NAME_W];
+                    // Rechts bleibt Platz für den Rollbalken des Fensters, damit „Löschen“ ihn
+                    // nicht berührt; reicht es dann nicht für die Beschreibung, wird die Spalte
+                    // des Namens schmaler (bis REV_NAME_MIN_W).
+                    let scroll = &ui.spacing().scroll;
+                    let gutter =
+                        scroll.bar_width + scroll.bar_inner_margin + scroll.bar_outer_margin + gap;
+                    let row = ui.available_width() - gutter;
+                    let fixed = letter_w + REV_DATE_W + delete_w + 4.0 * gap;
+                    let name_w = (row - fixed - REV_TEXT_MIN_W).clamp(REV_NAME_MIN_W, REV_NAME_W);
+                    let text_w = (row - fixed - name_w).max(REV_TEXT_MIN_W);
+                    let widths = [letter_w, text_w, REV_DATE_W, name_w];
                     ui.horizontal(|ui| {
                         for (h, w) in ["Buchstabe", "Beschreibung", "Datum", "Name"]
                             .into_iter()
