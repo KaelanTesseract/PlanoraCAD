@@ -41,6 +41,7 @@ fn snapshot_with(drawings: Vec<Drawing>, next_drawing: u64) -> Snapshot {
         meshes: Default::default(),
         drawings,
         next_drawing,
+        project_info: None,
     }
 }
 

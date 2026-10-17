@@ -1,4 +1,4 @@
-//! Die Typen der Versionsdatei (Format 1 bis 5). Unabhängig von den internen Strukturen.
+//! Die Typen der Versionsdatei (Format 1 bis 6). Unabhängig von den internen Strukturen.
 //! Absichtlich ohne `deny_unknown_fields`: unbekannte Felder in bekannten Versionen werden
 //! ignoriert.
 
@@ -26,6 +26,109 @@ pub struct VersionFile {
     /// Nächste Zeichnungskennung; 0 oder fehlend heißt „aus den Kennungen ableiten“.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub naechste_zeichnung: u64,
+    /// Projektangaben für das Schriftfeld (ab Format 6). Fehlt das Feld, bleibt die Datei Byte
+    /// für Byte wie in Format 1 bis 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projektangaben: Option<ProjektangabenDto>,
+}
+
+/// Höchstzahl der Hinweiszeilen beim Lesen; eine mehr, damit die Prüfung danach mit dem Namen
+/// der Zeichnung melden kann.
+const MAX_FILE_NOTES: usize = planora_drawing::sheet_info::MAX_NOTES + 1;
+/// Höchstzahl der Änderungen beim Lesen (eine mehr, aus demselben Grund).
+const MAX_FILE_REVISIONS: usize = planora_drawing::sheet_info::MAX_REVISIONS + 1;
+
+fn de_notes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
+    struct Lines(Vec<String>);
+    impl<'de> Deserialize<'de> for Lines {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            de_bounded(d, MAX_FILE_NOTES, "Hinweise").map(Lines)
+        }
+    }
+    Ok(Option::<Lines>::deserialize(d)?.map(|l| l.0))
+}
+
+fn de_revisions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<AenderungDto>, D::Error> {
+    de_bounded(d, MAX_FILE_REVISIONS, "Änderungen")
+}
+
+/// Projektangaben (ab Format 6). `None` bei einem Eintrag heißt automatisch.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ProjektangabenDto {
+    #[serde(default)]
+    pub anmeldename: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eigentuemer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ersteller: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geprueft: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freigabe: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub werkstoff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allgemeintoleranz: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_notes"
+    )]
+    pub hinweise: Option<Vec<String>>,
+}
+
+/// Blattangaben einer Zeichnung (ab Format 6). `None` bei einem Eintrag heißt automatisch.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct BlattangabenDto {
+    #[serde(default)]
+    pub angelegt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nummer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zusatztitel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dokumentart: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dokumentstatus: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ausgabedatum: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aenderungsstand: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blatt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub massstab: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gewicht: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_notes"
+    )]
+    pub hinweise: Option<Vec<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "de_revisions"
+    )]
+    pub aenderungen: Vec<AenderungDto>,
+}
+
+/// Eine Zeile der Änderungstabelle; fehlender Buchstabe heißt automatisch.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AenderungDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buchstabe: Option<String>,
+    #[serde(default)]
+    pub beschreibung: String,
+    #[serde(default)]
+    pub datum: String,
+    #[serde(default)]
+    pub name: String,
 }
 
 fn is_zero(x: &u64) -> bool {
@@ -120,6 +223,10 @@ pub struct ZeichnungDto {
     /// Nächste Maßkennung (ab Format 5); 0 oder fehlend heißt „aus den Kennungen ableiten“.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub naechstes_mass: u64,
+    /// Blattangaben (ab Format 6). Fehlt das Feld, bleibt die Zeichnung Byte für Byte wie in
+    /// Format 4 und 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blattangaben: Option<BlattangabenDto>,
 }
 
 /// Blatt: Papier `"A4"` bis `"A0"`, quer oder hoch.
