@@ -216,7 +216,6 @@ fn edge_key(solid: &Solid, edge: Id<Edge>) -> Option<[u64; EDGE_KEY_LEN]> {
     ])
 }
 
-const GRID_HALF_EXTENT: f32 = 500.0;
 /// Größter Betrag einer Koordinate oder eines Maßes in mm (wie
 /// [`planora_feature::MAX_COORD_MM`], dort für jede Berechnung geprüft): Darüber ist der
 /// Abstand benachbarter `f64`-Werte größer als die Toleranz.
@@ -1012,7 +1011,6 @@ impl AppState {
             &highlight,
             &marked,
             &self.scene_palette(),
-            GRID_HALF_EXTENT,
         ));
         self.scene_version = next_scene_version();
     }

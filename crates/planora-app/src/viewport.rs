@@ -9,7 +9,7 @@ use glam::{Vec2, Vec3};
 use planora_render::gpu::ViewportCallback;
 use planora_render::{
     CubePiece, CubeRegion, INSET, OrbitCamera, Palette, Pick, ViewFace, cube_pieces_visible,
-    current_region, face_text_frame, pieces_hit_test,
+    current_region, face_text_frame, grid_lines, pieces_hit_test,
 };
 
 /// Kantenlänge des Würfelfelds (Variante C in Größe B).
@@ -62,6 +62,7 @@ pub fn render_palette(dark: bool) -> Palette {
         face_selected: rgba(p.selection),
         edge_selected: rgba(theme::sketch_colors(dark).selected),
         grid: rgba(p.viewport_grid),
+        grid_major: rgba(p.viewport_grid_major),
         axis_x: rgba(p.axis_x),
         axis_y: rgba(p.axis_y),
         axis_z: rgba(p.axis_z),
@@ -524,6 +525,9 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 light_dir: cam.light_dir().to_array(),
                 scene: state.scene.clone(),
                 scene_version: state.scene_version,
+                // Raster und Achsen folgen der Kamera: je Bild neu, ohne die Szene anzufassen.
+                // Im Skizzen-Modus unverändert (die gedämpfte Palette lässt beide unberührt).
+                grid: grid_lines(cam.target, cam.distance, &state.palette()),
             },
         ),
     );

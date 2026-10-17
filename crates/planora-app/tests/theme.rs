@@ -520,6 +520,7 @@ fn the_3d_scene_takes_grid_axes_and_selection_from_the_theme() {
         let p = theme::palette(dark);
         let r = planora_app::viewport::render_palette(dark);
         assert_eq!(r.grid, rgba(p.viewport_grid), "{}", name(dark));
+        assert_eq!(r.grid_major, rgba(p.viewport_grid_major), "{}", name(dark));
         assert_eq!(r.axis_x, rgba(p.axis_x), "{}", name(dark));
         assert_eq!(r.axis_y, rgba(p.axis_y), "{}", name(dark));
         assert_eq!(r.axis_z, rgba(p.axis_z), "{}", name(dark));

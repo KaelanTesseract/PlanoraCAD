@@ -36,6 +36,8 @@ pub struct Palette {
     pub edge_hover: [f32; 4],
     pub edge_selected: [f32; 4],
     pub grid: [f32; 4],
+    /// Jede fünfte Rasterlinie (kräftiger als `grid`).
+    pub grid_major: [f32; 4],
     pub axis_x: [f32; 4],
     pub axis_y: [f32; 4],
     pub axis_z: [f32; 4],
@@ -51,6 +53,7 @@ impl Palette {
             edge_hover: [0.30, 0.80, 1.0, 1.0],
             edge_selected: [1.0, 0.55, 0.10, 1.0],
             grid: [0.24, 0.26, 0.30, 1.0],
+            grid_major: [0.40, 0.43, 0.49, 1.0],
             axis_x: [0.85, 0.28, 0.28, 1.0],
             axis_y: [0.35, 0.75, 0.35, 1.0],
             axis_z: [0.30, 0.50, 0.95, 1.0],
@@ -66,6 +69,7 @@ impl Palette {
             edge_hover: [0.10, 0.50, 0.85, 1.0],
             edge_selected: [0.90, 0.45, 0.05, 1.0],
             grid: [0.78, 0.80, 0.84, 1.0],
+            grid_major: [0.60, 0.63, 0.69, 1.0],
             axis_x: [0.80, 0.20, 0.20, 1.0],
             axis_y: [0.25, 0.65, 0.25, 1.0],
             axis_z: [0.20, 0.40, 0.90, 1.0],
@@ -124,14 +128,10 @@ fn p3(p: planora_math::DVec3) -> [f32; 3] {
     [p.x as f32, p.y as f32, p.z as f32]
 }
 
-/// Baut die Szene aus allen Körpern. `grid_half_extent == 0.0` lässt Raster und Achsen weg.
-pub fn build_scene(
-    meshes: &[&Mesh],
-    highlight: &Highlight,
-    palette: &Palette,
-    grid_half_extent: f32,
-) -> SceneData {
-    build_scene_marked(meshes, highlight, &[], palette, grid_half_extent)
+/// Baut die Szene aus allen Körpern. Raster und Achsen gehören nicht dazu: sie folgen der
+/// Kamera und kommen je Bild aus [`crate::grid_lines`].
+pub fn build_scene(meshes: &[&Mesh], highlight: &Highlight, palette: &Palette) -> SceneData {
+    build_scene_marked(meshes, highlight, &[], palette)
 }
 
 /// Wie [`build_scene`]; `marked` (Mehrfachauswahl) bekommen die Farbe der Auswahl.
@@ -140,7 +140,6 @@ pub fn build_scene_marked(
     highlight: &Highlight,
     marked: &[Pick],
     palette: &Palette,
-    grid_half_extent: f32,
 ) -> SceneData {
     let mut scene = SceneData::default();
 
@@ -213,28 +212,5 @@ pub fn build_scene_marked(
         }
     }
 
-    if grid_half_extent > 0.0 {
-        add_grid(&mut scene, palette, grid_half_extent);
-    }
     scene
-}
-
-fn add_grid(scene: &mut SceneData, palette: &Palette, half: f32) {
-    let step = 10.0_f32;
-    let n = (half / step).floor() as i32;
-    let line = |scene: &mut SceneData, a: [f32; 3], b: [f32; 3], color: [f32; 4]| {
-        scene.line_vertices.push(LineVertex { position: a, color });
-        scene.line_vertices.push(LineVertex { position: b, color });
-    };
-    for i in -n..=n {
-        if i == 0 {
-            continue;
-        }
-        let t = i as f32 * step;
-        line(scene, [-half, t, 0.0], [half, t, 0.0], palette.grid);
-        line(scene, [t, -half, 0.0], [t, half, 0.0], palette.grid);
-    }
-    line(scene, [-half, 0.0, 0.0], [half, 0.0, 0.0], palette.axis_x);
-    line(scene, [0.0, -half, 0.0], [0.0, half, 0.0], palette.axis_y);
-    line(scene, [0.0, 0.0, 0.0], [0.0, 0.0, half], palette.axis_z);
 }
