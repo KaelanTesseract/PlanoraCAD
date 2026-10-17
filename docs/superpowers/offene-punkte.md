@@ -988,3 +988,21 @@ Beanstandungen sammeln; sie werden in einer Korrekturrunde behoben.
 - Auswahl: CPU-Raycast läuft bei jeder Mausbewegung über alle Dreiecke (später Hüllkörper/Raumindex).
 - Hover-Änderung baut die ganze Szene neu und lädt sie hoch (später nur Farben aktualisieren).
 - Browser: lange Namen werden abgeschnitten; Klick im Browser setzt keine Flächenauswahl.
+
+## Teilprojekt 3c-1 – Zeichnungsblatt
+
+### Normprüfung
+Die Normtexte (ISO 5457, 7200, 5456-2, 3098) sind kostenpflichtig; geprüft wurden nur öffentlich auffindbare Zusammenfassungen (Stand 2026-10-17). Die Zahlen der Spec blieben unverändert. „offen“ heißt: öffentlich nicht bestätigt, nicht widerlegt.
+
+| Spec-Wert | gefundener Wert | Quelle | Abweichung |
+|---|---|---|---|
+| Rand links 20 mm, sonst 10 mm | 20 mm Heftrand, 10 mm sonst | Sekundärquelle (Blog), Normtext nicht gesehen | nein (unbestätigt) |
+| Rahmen 0,7 mm | 0,7 mm | Auszug ISO 5457:1999 (Suchergebnis) | nein |
+| Zentriermarken 0,5 mm | Auszug nennt 0,7 mm für Zentriermarken | Auszug ISO 5457:1999 (Suchergebnis) | ja, zu klären |
+| Zentriermarken reichen 5 mm hinter den Rahmen | Auszug: vom Blattrand bis 10 mm hinter den Rahmen | Auszug ISO 5457:1999 (Suchergebnis) | ja, zu klären |
+| Rasterfeld 50 mm, Felderzahl 2·round(Kante/100), Buchstaben ohne I/O | nicht auffindbar | – | offen |
+| Schriftfeld 180 mm breit, Feldhöhen 2,2 / 3,5 / 5 | nicht auffindbar | – | offen |
+| Projektionssymbol (F7): Maße, Lage je Methode | nicht auffindbar; Quellen widersprechen sich bei der Lage der Kreise | Suchergebnisse | offen |
+| Schriftreihe 2,5 / 3,5 / 5 (Spec nennt 2,2 und 3,3) | nicht auffindbar | – | offen |
+
+Weitere Auffälligkeit der Vorgabe: Die rechte Zentriermarke (A4 quer `(297,105)–(272,105)`) ist 25 mm lang wie die linke, reicht also 15 mm hinter den rechten Rahmen (Rahmen bei 287); ebenso oben 15 mm. Umgesetzt wie vorgegeben.

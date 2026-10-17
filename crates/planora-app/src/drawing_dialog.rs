@@ -25,13 +25,7 @@ pub const PAPERS: [Paper; 5] = [Paper::A4, Paper::A3, Paper::A2, Paper::A1, Pape
 
 /// Name einer Papiergröße.
 pub fn paper_label(p: Paper) -> &'static str {
-    match p {
-        Paper::A4 => "A4",
-        Paper::A3 => "A3",
-        Paper::A2 => "A2",
-        Paper::A1 => "A1",
-        Paper::A0 => "A0",
-    }
+    p.label()
 }
 
 /// Name einer Projektionsart.

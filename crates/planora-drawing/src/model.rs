@@ -31,6 +31,17 @@ impl Paper {
             Paper::A0 => (841.0, 1189.0),
         }
     }
+
+    /// Kurzname des Formats („A4“ bis „A0“).
+    pub fn label(self) -> &'static str {
+        match self {
+            Paper::A4 => "A4",
+            Paper::A3 => "A3",
+            Paper::A2 => "A2",
+            Paper::A1 => "A1",
+            Paper::A0 => "A0",
+        }
+    }
 }
 
 /// Projektionsart: Erstwinkel (Europa) oder Dritter Winkel (USA).

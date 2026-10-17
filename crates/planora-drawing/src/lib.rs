@@ -16,6 +16,7 @@ pub mod model;
 pub mod out2d;
 pub mod raycast;
 pub mod sheet;
+pub mod sheet_frame;
 pub mod silhouette;
 pub mod stroke;
 pub mod suggest;
@@ -32,6 +33,7 @@ pub use layout::{GAP_MM, align_dir, view_extent};
 pub use model::{
     Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewSpec,
 };
+pub use sheet_frame::{SheetLayout, SheetPen, TitleField, sheet_layout};
 pub use suggest::{Candidate, CandidateOrigin, dimension_key, suggest};
 pub use svg::{svg_string, write_svg};
 
