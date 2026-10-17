@@ -567,7 +567,7 @@ pub fn sheet_context(state: &AppState, id: DrawingId) -> Option<SheetContext> {
 }
 
 /// Stellung für eine Zeichnung, die (noch) nicht im Dokument steht: einziges Blatt.
-fn context_or_single(state: &AppState, id: DrawingId) -> SheetContext {
+pub fn context_or_single(state: &AppState, id: DrawingId) -> SheetContext {
     sheet_context(state, id).unwrap_or_else(|| SheetContext {
         doc_name: state.document_name.clone(),
         index: 1,
@@ -622,6 +622,14 @@ pub fn new_sheet_layout(state: &AppState, sheet: Sheet, projection: Projection) 
 /// Zuletzt im Zeichnungsbereich gezeichnetes Blattmodell (mit Mittellinien und Maßen).
 pub fn last_sheet(ctx: &egui::Context) -> Option<Arc<SheetModel>> {
     ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()))
+        .map(|c| c.sheet)
+}
+
+/// Wie [`last_sheet`], aber nur, wenn das zuletzt gezeichnete Blatt das der Zeichnung `id` ist
+/// (der Zwischenspeicher gilt für das ganze Programm, nicht je Zeichnung oder Tab).
+pub fn last_sheet_for(ctx: &egui::Context, id: DrawingId) -> Option<Arc<SheetModel>> {
+    ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()))
+        .filter(|c| c.drawing.id == id)
         .map(|c| c.sheet)
 }
 
@@ -1019,17 +1027,7 @@ fn tool_field(
                         theme::focus_ring(ui, &r);
                         r
                     });
-                });
-                // Zweite Zeile: Blatt einpassen und Zoom, dann die Maße (die Einstellungen der
-                // gewählten Ansicht stehen im Ansichtsfeld rechts; das Feld bleibt so immer gleich
-                // hoch).
-                tool_row(ui, |ui| {
-                    if ui
-                        .add(flat(icons::button(Icon::FitSheet, "Blatt einpassen")))
-                        .clicked()
-                    {
-                        action = Some(Action::Fit);
-                    }
+                    // Am Ende der ersten Zeile, damit die zweite nicht breiter wird.
                     if ui
                         .add_enabled(
                             editable,
@@ -1040,6 +1038,17 @@ fn tool_field(
                         .clicked()
                     {
                         action = Some(Action::SheetInfo);
+                    }
+                });
+                // Zweite Zeile: Blatt einpassen und Zoom, dann die Maße (die Einstellungen der
+                // gewählten Ansicht stehen im Ansichtsfeld rechts; das Feld bleibt so immer gleich
+                // hoch).
+                tool_row(ui, |ui| {
+                    if ui
+                        .add(flat(icons::button(Icon::FitSheet, "Blatt einpassen")))
+                        .clicked()
+                    {
+                        action = Some(Action::Fit);
                     }
                     if ui
                         .add(flat(icon_only(Icon::ZoomOut)))

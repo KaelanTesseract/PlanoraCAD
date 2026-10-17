@@ -106,6 +106,22 @@ pub fn field_is_cut(field: TitleField, text: &str) -> bool {
         .is_some_and(|s| fit_text(text, s.height, s.width).cut)
 }
 
+/// Wird der Eintrag in Spalte `col` (0 Buchstabe, 1 Beschreibung, 2 Datum, 3 Name) der
+/// Änderungstabelle gekürzt? Dieselbe Regel wie beim Zeichnen.
+pub fn revision_cell_is_cut(col: usize, text: &str) -> bool {
+    REV_COLUMNS
+        .get(col)
+        .is_some_and(|w| fit_text(text, VALUE_H, w - 2.0).cut)
+}
+
+/// Wird die Hinweiszeile `text` im Hinweisfeld des Blatts `layout` gekürzt? Ohne Hinweisfeld
+/// gibt es nichts zu kürzen.
+pub fn note_is_cut(text: &str, layout: &SheetLayout) -> bool {
+    layout
+        .notes
+        .is_some_and(|(lo, hi)| fit_text(text, NOTES_TEXT_H, hi.x - lo.x - 2.0 * NOTES_PAD_MM).cut)
+}
+
 fn line(a: DVec2, b: DVec2, pen: SheetPen) -> Mark {
     Mark::Line {
         a,

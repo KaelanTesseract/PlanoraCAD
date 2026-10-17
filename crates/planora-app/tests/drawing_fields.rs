@@ -994,14 +994,9 @@ fn tool_field_is_content_wide_on_large_windows() {
         // Die freie Fläche bleibt wie vorher.
         assert_eq!(shell_panels::last_layout(&c).unwrap().free, old_free(size));
     }
-    // Mittlere und kleine Fenster: nie breiter als bisher (zwischen den Spalten). Mit dem Knopf
-    // „Blattangaben“ reicht der Inhalt erst ab etwa 1280 px in weniger Breite; bei 1100 × 700 und
-    // 800 × 600 rollt das Feld in voller Breite.
-    for (size, full) in [
-        (vec2(1280.0, 720.0), false),
-        (vec2(1100.0, 700.0), true),
-        (vec2(800.0, 600.0), true),
-    ] {
+    // Mittlere und kleine Fenster: nie breiter als bisher (zwischen den Spalten); bei 1100 × 700
+    // reicht der Inhalt schon in weniger Breite, bei 800 × 600 rollt das Feld in voller Breite.
+    for (size, full) in [(vec2(1100.0, 700.0), false), (vec2(800.0, 600.0), true)] {
         let c = context();
         let mut app = app_with_drawing();
         app_settle(&c, &mut app, size);
@@ -1018,7 +1013,7 @@ fn tool_field_is_content_wide_on_large_windows() {
             );
         }
         assert_eq!(shell_panels::last_layout(&c).unwrap().free, old_free(size));
-        // Bei 1280 × 720 reicht der Inhalt ohne Rollbalken.
+        // Bei 1100 × 700 reicht der Inhalt ohne Rollbalken.
         if !full {
             let band = Rect::from_min_max(pos2(tool.left(), tool.bottom() - 12.0), tool.max);
             let shot = app_settle(&c, &mut app, size);

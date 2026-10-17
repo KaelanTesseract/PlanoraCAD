@@ -22,7 +22,7 @@ use crate::dimension_dialog::kind_label;
 use crate::dimension_state::count_outside;
 use crate::drawing_dialog::paper_label;
 use crate::drawing_state::{ComputeFn, WorkArea};
-use crate::drawing_view::{sheet_context, view_names};
+use crate::drawing_view::{context_or_single, view_names};
 use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
@@ -1181,11 +1181,7 @@ impl ExportDialog {
                 let (compute, resolve, format) = (self.compute, self.resolve, key.2);
                 let frame = self.with_frame.then(|| FrameInput {
                     project: state.document.project_info().cloned(),
-                    ctx: sheet_context(state, drawing.id).unwrap_or_else(|| SheetContext {
-                        doc_name: state.document_name.clone(),
-                        index: 1,
-                        count: 1,
-                    }),
+                    ctx: context_or_single(state, drawing.id),
                 });
                 // Ein alter Auftrag wird dabei fallengelassen und bricht ab.
                 self.drawing_job = Some((

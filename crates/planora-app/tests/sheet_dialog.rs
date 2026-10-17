@@ -18,7 +18,8 @@ use planora_app::workspace::Workspace;
 use planora_app::{drawing_view, fonts, icons, shell_panels, theme, viewport};
 use planora_drawing::sheet_frame::TitleField;
 use planora_drawing::sheet_info::{
-    FieldValue, NotesValue, Stamp, TOO_MANY_REVISIONS, resolve_texts,
+    DEFAULT_TOLERANCE, FieldValue, NotesValue, Stamp, TOO_MANY_REVISIONS, default_notes,
+    resolve_texts,
 };
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind};
 use planora_feature::SketchPlane;
@@ -317,6 +318,12 @@ impl H {
         panic!("„{text}“ im Werkzeugfeld nie ganz zu sehen");
     }
 
+    /// Öffnet noch einmal über die Funktion (das Fenster ist schon offen).
+    fn open_from_toolbar_again(&mut self) {
+        let id = self.dialog().drawing;
+        planora_app::sheet_dialog::open(self.st(), id);
+    }
+
     /// Klick auf den Knopf „Blattangaben“ im Werkzeugfeld.
     fn open_from_toolbar(&mut self) {
         self.capture_base();
@@ -475,14 +482,23 @@ fn opens_from_toolbar_and_menu() {
         let fit = shot
             .texts
             .iter()
-            .find(|t| t.text == "Blatt einpassen" && tool.contains(t.rect.center()))
-            .expect("Blatt einpassen")
+            .find(|t| t.text == "Ansicht hinzufügen" && tool.contains(t.rect.center()))
+            .expect("Ansicht hinzufügen")
             .rect;
         let info = shot.visible_in(BUTTON, tool)[0].rect;
         assert!(
             info.left() > fit.right() && (info.center().y - fit.center().y).abs() < 6.0,
-            "{size:?}: Knopf rechts neben „Blatt einpassen“: {fit:?} {info:?}"
+            "{size:?}: Knopf am Ende der ersten Zeile, rechts von „Ansicht hinzufügen“: {fit:?} {info:?}"
         );
+        // „Blatt einpassen“ steht in der zweiten Zeile (beim Rollen nach rechts evtl. nicht mehr
+        // im Feld zu sehen).
+        if let Some(sheet_fit) = shot
+            .texts
+            .iter()
+            .find(|t| t.text == "Blatt einpassen" && tool.contains(t.rect.center()))
+        {
+            assert!(sheet_fit.rect.center().y > info.center().y + 10.0);
+        }
         // Zwischen den beiden Knöpfen steht nichts anderes.
         assert!(
             !shot.texts.iter().any(|t| tool.contains_rect(t.rect)
@@ -782,12 +798,10 @@ fn revisions_in_the_dialog() {
     let shot = h.settle();
     let rect = h.dialog_rect().unwrap();
     let del = shot.dlg("Löschen", rect);
-    if let Some(t) = del.first() {
-        let p = t.rect.center();
-        h.click(p);
-        assert_eq!(h.dialog().sheet.revisions.len(), 22);
-        assert_eq!(h.dialog().message, None);
-    }
+    let p = del.first().expect("Löschen sichtbar").rect.center();
+    h.click(p);
+    assert_eq!(h.dialog().sheet.revisions.len(), 22);
+    assert_eq!(h.dialog().message, None);
 }
 
 // (e) ------------------------------------------------------------------------------------------
@@ -856,14 +870,13 @@ fn typing_does_not_trigger_shortcuts() {
 
 #[test]
 fn dialog_texts_are_plain() {
-    // Eigene Angaben, damit nur die Texte des Fensters selbst geprüft werden (die Vorgabe der
-    // Toleranz steht als Hinweistext auch auf dem Blatt).
+    // Die Vorgaben stehen auch auf dem Blatt: genau diese Texte (Allgemeintoleranz und die
+    // Vorgabe-Hinweiszeilen) dürfen „ISO“ enthalten, sonst nichts.
+    let allowed: Vec<String> = std::iter::once(DEFAULT_TOLERANCE.to_string())
+        .chain(default_notes(DEFAULT_TOLERANCE))
+        .collect();
     for dark in [false, true] {
         let (mut h, d, _) = H::new(TALL, dark, false);
-        let mut p = h.st().document.project_info().cloned().expect("Projekt");
-        p.tolerance = FieldValue::Text("mittel".into());
-        p.notes = NotesValue::Lines(vec!["Kanten gebrochen".into()]);
-        h.st().document.set_project_info(p).unwrap();
         h.open_from_toolbar();
         let s = Stamp::now();
         h.dialog().add_revision(&s, "dennis");
@@ -899,7 +912,13 @@ fn dialog_texts_are_plain() {
         ] {
             assert!(all.iter().any(|t| t == must), "„{must}“ fehlt: {all:?}");
         }
-        for t in &all {
+        for must in &allowed {
+            assert!(
+                all.contains(must),
+                "Vorgabe „{must}“ steht im Fenster: {all:?}"
+            );
+        }
+        for t in all.iter().filter(|t| !allowed.contains(t)) {
             for banned in [
                 "Spec",
                 "ISO",
@@ -914,4 +933,68 @@ fn dialog_texts_are_plain() {
         }
         let _ = d;
     }
+}
+
+// Weitere Fälle ---------------------------------------------------------------------------------
+
+#[test]
+fn notes_and_revision_cells_warn_when_cut() {
+    let (mut h, _, _) = H::new(TALL, false, false);
+    h.open_from_toolbar();
+    let s = Stamp::now();
+    h.dialog().add_revision(&s, "dennis");
+    h.dialog().project.owner = FieldValue::Text("Firma".into());
+    let count = |h: &mut H| {
+        let shot = h.settle();
+        let rect = h.dialog_rect().unwrap();
+        shot.dlg(CUT_WARNING, rect).len()
+    };
+    assert_eq!(count(&mut h), 0, "ohne lange Texte keine Warnung");
+    // Beschreibung mit 100 Zeichen: die Spalte der Tabelle ist 102 mm breit.
+    h.dialog().sheet.revisions[0].description = "W".repeat(100);
+    assert_eq!(count(&mut h), 1, "Beschreibung");
+    h.dialog().sheet.revisions[0].description = "kurz".into();
+    assert_eq!(count(&mut h), 0);
+    // Buchstabe in der schmalen Spalte (10 mm).
+    h.dialog().sheet.revisions[0].letter = FieldValue::Text("WWWWWW".into());
+    assert_eq!(count(&mut h), 1, "Buchstabe");
+    h.dialog().sheet.revisions[0].letter = FieldValue::Auto;
+    assert_eq!(count(&mut h), 0);
+    // Lange Hinweiszeile (Projekt) und eigene Zeile des Blatts.
+    h.dialog().project.notes = NotesValue::Lines(vec!["W".repeat(100), "kurz".into()]);
+    assert_eq!(count(&mut h), 1, "Projekt-Hinweis");
+    h.dialog().sheet.notes = NotesValue::Lines(vec!["kurz".into(), "W".repeat(100)]);
+    assert_eq!(count(&mut h), 2, "auch die eigene Zeile des Blatts");
+}
+
+#[test]
+fn opening_again_keeps_the_edits_of_the_same_drawing() {
+    let (mut h, d, _) = H::new(TALL, false, false);
+    h.open_from_toolbar();
+    h.dialog().sheet.title = FieldValue::Text("Lager".into());
+    h.open_from_toolbar_again();
+    assert_eq!(h.dialog().sheet.title, FieldValue::Text("Lager".into()));
+    // Eine andere Zeichnung ersetzt das Fenster.
+    let other = h
+        .st()
+        .document
+        .add_drawing_stamped("Blatt 2", A4_QUER, Projection::First, &stamp())
+        .unwrap();
+    planora_app::sheet_dialog::open(h.st(), other);
+    assert_eq!(h.dialog().drawing, other);
+    planora_app::sheet_dialog::open(h.st(), d);
+    assert_eq!(h.dialog().sheet.title, FieldValue::Auto);
+}
+
+#[test]
+fn the_sheet_cache_is_only_used_for_its_own_drawing() {
+    let (mut h, d, _) = H::new(BIG, false, false);
+    h.settle();
+    let other = h
+        .st()
+        .document
+        .add_drawing_stamped("Blatt 2", A4_QUER, Projection::First, &stamp())
+        .unwrap();
+    assert!(drawing_view::last_sheet_for(&h.c, d).is_some());
+    assert!(drawing_view::last_sheet_for(&h.c, other).is_none());
 }

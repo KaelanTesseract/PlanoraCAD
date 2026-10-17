@@ -22,7 +22,7 @@ use planora_drawing::sheet_info::{
     TitleTexts, default_notes, main_scale, resolve_texts, revision_letter, validate_project_info,
     validate_sheet_info,
 };
-use planora_drawing::sheet_marks::field_is_cut;
+use planora_drawing::sheet_marks::{field_is_cut, note_is_cut, revision_cell_is_cut};
 use planora_drawing::{Drawing, DrawingId};
 
 /// Titel des Fensters.
@@ -95,6 +95,10 @@ pub struct SheetInfoDialog {
 /// passiert nichts. Das Dokument bleibt dabei unberührt.
 pub fn open(state: &mut AppState, id: DrawingId) {
     if state.document.drawing(id).is_none() {
+        return;
+    }
+    // Ist es für dieselbe Zeichnung schon offen, bleibt es (die Eingaben gehen nicht verloren).
+    if state.sheet_dialog.as_ref().is_some_and(|d| d.drawing == id) {
         return;
     }
     state.sheet_dialog = Some(SheetInfoDialog::new(state, id, &Stamp::now()));
@@ -181,13 +185,10 @@ impl SheetInfoDialog {
             return false;
         };
         let stamp = Stamp::now();
-        let sheet_ctx = drawing_view::sheet_context(state, self.drawing).unwrap_or(SheetContext {
-            doc_name: state.document_name.clone(),
-            index: 1,
-            count: 1,
-        });
-        // Maßstab der Hauptansicht aus dem zuletzt gezeichneten Blatt (sonst der erste Ansicht).
-        let model = drawing_view::last_sheet(ctx).unwrap_or_else(|| {
+        let sheet_ctx = drawing_view::context_or_single(state, self.drawing);
+        // Maßstab der Hauptansicht aus dem zuletzt gezeichneten Blatt dieser Zeichnung (sonst der
+        // der ersten Ansicht).
+        let model = drawing_view::last_sheet_for(ctx, self.drawing).unwrap_or_else(|| {
             std::sync::Arc::new(SheetModel {
                 sheet: drawing.sheet,
                 frame: None,
@@ -196,6 +197,13 @@ impl SheetInfoDialog {
         });
         let main = main_scale(&drawing, &model);
         let (auto, actual) = self.texts(&drawing, &sheet_ctx, main);
+        // Blattgeometrie dieses Entwurfs: Breite des Hinweisfelds für die Warnungen.
+        let layout = drawing_view::layout_from_texts(&drawing, &actual);
+        let note_cut = |s: &str| note_is_cut(s, &layout);
+        let first_visible = actual
+            .revisions
+            .len()
+            .saturating_sub(planora_drawing::sheet_frame::REV_VISIBLE);
         let creator = self
             .project
             .creator
@@ -268,7 +276,7 @@ impl SheetInfoDialog {
                     NotesValue::Auto => default_notes(&tolerance),
                 };
                 let mut lines = effective.clone();
-                lines_editor(ui, "project-note", &mut lines);
+                lines_editor(ui, dark, "project-note", &mut lines, &note_cut);
                 if lines != effective {
                     project.notes = NotesValue::Lines(lines);
                 }
@@ -377,7 +385,7 @@ impl SheetInfoDialog {
                     };
                 }
                 if let NotesValue::Lines(lines) = &mut sheet.notes {
-                    lines_editor(ui, "sheet-note", lines);
+                    lines_editor(ui, dark, "sheet-note", lines, &note_cut);
                 }
 
                 // ---- Änderungen ----
@@ -412,6 +420,13 @@ impl SheetInfoDialog {
                                         .char_limit(MAX_FIELD_CHARS),
                                 );
                                 r.letter = FieldValue::from_input(&letter);
+                                // Gekürzt wird nur, was im Blatt steht (die letzten sechs).
+                                let shown = actual.revisions.get(i).filter(|_| i >= first_visible);
+                                let cut_row = shown.is_some_and(|row| {
+                                    row.iter()
+                                        .enumerate()
+                                        .any(|(c, text)| revision_cell_is_cut(c, text))
+                                });
                                 theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(&mut r.description)
@@ -437,6 +452,20 @@ impl SheetInfoDialog {
                                     delete_rev = Some(i);
                                 }
                                 ui.end_row();
+                                if cut_row {
+                                    ui.label("");
+                                    ui.scope(|ui| {
+                                        ui.set_max_width(REV_TEXT_W);
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(CUT_WARNING)
+                                                    .color(warning_color(dark)),
+                                            )
+                                            .wrap(),
+                                        );
+                                    });
+                                    ui.end_row();
+                                }
                             }
                         });
                 }
@@ -540,19 +569,30 @@ fn field_row(
 
 /// Hinweiszeilen: je Zeile ein Textfeld mit „Zeile löschen“, darunter „Zeile hinzufügen“ (bis
 /// sechs Zeilen).
-fn lines_editor(ui: &mut egui::Ui, id: &str, lines: &mut Vec<String>) {
+fn lines_editor(
+    ui: &mut egui::Ui,
+    dark: bool,
+    id: &str,
+    lines: &mut Vec<String>,
+    is_cut: &dyn Fn(&str) -> bool,
+) {
     let mut delete = None;
     for (i, line) in lines.iter_mut().enumerate() {
-        ui.horizontal(|ui| {
-            theme::text_field(
-                ui,
-                egui::TextEdit::singleline(line)
-                    .id_salt(("planora-sheet-note", id, i))
-                    .desired_width(NOTE_W)
-                    .char_limit(MAX_NOTE_CHARS),
-            );
-            if ui.button("Zeile löschen").clicked() {
-                delete = Some(i);
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                theme::text_field(
+                    ui,
+                    egui::TextEdit::singleline(line)
+                        .id_salt(("planora-sheet-note", id, i))
+                        .desired_width(NOTE_W)
+                        .char_limit(MAX_NOTE_CHARS),
+                );
+                if ui.button("Zeile löschen").clicked() {
+                    delete = Some(i);
+                }
+            });
+            if is_cut(line) {
+                ui.colored_label(warning_color(dark), CUT_WARNING);
             }
         });
     }
