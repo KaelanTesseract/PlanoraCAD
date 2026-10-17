@@ -291,9 +291,9 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 **Dialoge:** Alle Fenster, die sich öffnen (zum Beispiel Exportieren, Verrunden, Boolesche Operation, Umbenennen und die Rückfragen), sehen jetzt gleich aus und erscheinen in der Mitte des Fensters.
 
 - Es gibt drei Breiten: schmal für Rückfragen und Umbenennen, mittel für Körper anlegen, Verrunden und Boolesche Operation, breit für Exportieren, Netz importieren, Neue Zeichnung und Maß bearbeiten.
-- Oben steht der Titel, rechts ein kleines Kreuz zum Schließen (bei Rückfragen gibt es das Kreuz nicht, dort schließt du mit den Knöpfen).
-- Die meisten Dialoge lassen sich verschieben, zum Beispiel beim Verrunden, damit du Kanten neben dem Dialog anklicken kannst. Rückfragen bleiben in der Mitte.
-- Ist ein Dialog höher als das Fenster, lässt er sich innen nach unten rollen. Auch bei 800 × 600 bleibt er ganz im Fenster.
+- Oben steht der Titel, rechts ein kleines Kreuz zum Schließen. Kein Kreuz haben die Fragen beim Speichern und Öffnen (zum Beispiel „Änderungen speichern?“, „Speichern unter“, „Dokument gesperrt“), die Fenster im Projekt-Bereich (zum Beispiel „Neuer Ordner“, „Umbenennen“) und im Bereich „Versionen“ („Kommentar ändern“, „Löschen“). Dort schließt du mit den Knöpfen.
+- Die meisten Dialoge lassen sich verschieben, zum Beispiel beim Verrunden, damit du Kanten neben dem Dialog anklicken kannst. Auch am Titel kannst du sie greifen. Die eben genannten Fenster ohne Kreuz bleiben fest in der Mitte. Die Rückfrage beim Löschen im Feature-Baum, in der Maßliste und in der Zeichnungsliste hat dagegen ein Kreuz und lässt sich verschieben.
+- Ein Dialog ist so hoch wie sein Inhalt. Erst wenn der Inhalt nicht ins Fenster passt, lässt er sich innen nach unten rollen; der Titel mit dem Kreuz bleibt dabei oben stehen. Auch bei 800 × 600 bleibt er ganz im Fenster.
 - In „Neuer Ordner“, „Umbenennen“ und „Kommentar ändern“ übernimmt die Eingabetaste jetzt die Eingabe.
 
 **Navigationswürfel, Ergänzungen:** Der Würfel ist jetzt etwas größer (100 Punkte), und die Beschriftung ist besser lesbar.

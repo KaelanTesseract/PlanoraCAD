@@ -244,7 +244,7 @@ Stand: 2026-10-16, Zweig `feature/graphit-etappe-c`. Plan: `plans/2026-10-16-gra
 - 26 Bereiche: `CubeRegion::{Face, Edge, Corner}`, `all_regions`, `cube_pieces` (nach hinten sortierte Stücke) und `cube_pieces_visible(camera, min_facing)`; den Filter auf endliche Werte und auf deutlich zugewandte Stücke macht `viewport::visible_pieces`, `pieces_hit_test`. Namen deutsch („Vorne“, „Oben-Rechts“, „Oben-Vorne-Rechts“).
 - Home = `OrbitCamera::home()` (Isometrisch) plus `frame_all`; die Isometrie ist die Ecke Oben-Vorne-Rechts.
 - Hervorhebung: `current_region(camera, 2.0)`; nahe den Polen gilt `|pitch| ≥ MAX_PITCH − 1e-4` als genau senkrecht (die Kamera stoppt 0,573° davor).
-- Beschriftungsausrichtung nach C4 (`face_text_frame`); der Text wird als Galley-Netz auf die Fläche abgebildet. Stücke erscheinen ab `facing` 0,15 (`PIECE_MIN_FACING`) und blenden bis 0,3 ein; die Beschriftung blendet zwischen 0,3 (`LABEL_MIN_FACING`) und 0,5 (`LABEL_FULL_FACING`) ein.
+- Beschriftungsausrichtung nach C4 (`face_text_frame`); der Text wird als Galley-Netz auf die Fläche abgebildet. Stücke erscheinen ab `facing` 0,15 (`PIECE_MIN_FACING`) und blenden bis 0,3 ein; die Beschriftung blendet zwischen 0,3 (`LABEL_MIN_FACING`) und 0,5 (`LABEL_FULL_FACING`) ein (seit Etappe D 0,5–0,7, siehe D5).
 - Zum Einpassen kamen `OrbitCamera::frame_points` (Punkte in die freie Fläche einpassen) und `AppState::refit_sketch_view` (neue Skizze mittig und herangezoomt nachpassen) hinzu.
 - Die Kamera-Mathematik ist nicht umgebaut; `planora-render` hat nur Zusätze (`ViewFace`, `cube_faces`, `cube_hit_test`, `set_view` und ihre Tests bleiben).
 
@@ -289,6 +289,8 @@ Stand: 2026-10-17, Zweig `feature/graphit-etappe-d`. Plan: `plans/2026-10-17-gra
 **Rulings und Abweichungen**
 - Die Breite- und Höhengrenzen des egui-Fensters gelten für die Außengröße; die Klassenbreite wird deshalb nicht um den Rahmen verkleinert (der Plan sah das anders vor).
 - Eigene Schließbehandlung statt des egui-`open`.
+- Höhe nach Inhalt (Abschluss-Nachbesserung): kein Rollbereich des egui-Fensters, sondern ein eigener unter der Kopfzeile, höchstens bis zur freien Fensterhöhe; ein Dialog ist so hoch wie sein Inhalt und scrollt nur, wenn der Inhalt höher als das Fenster ist. Die Kopfzeile scrollt nicht mit, ihr Titel ist nicht markierbar (Ziehen am Titel verschiebt). Ein wieder geöffneter Dialog verwirft sein erstes Bild, damit er mit der neuen Höhe mittig steht.
+- Die Statuszeile ist ein Tab-Halt für die Bedienhilfe mit Fokusrahmen; ihr Fokus sperrt die Tasten der Ansicht nicht (`viewport::focus_is_not_typing`).
 - Enter übernimmt zusätzlich in Neuer Ordner, Projekte umbenennen und Kommentar ändern (Test (f) des Plans verlangte es); Kosten, falls unerwünscht: drei Handler und zwei Testprüfungen entfernen.
 - Die Ziehschwelle am Würfel ist 4 px; Tooltip und Hervorhebung ruhen während des Ziehens.
 - Die Mindestschrift 9 pt hat Vorrang vor der Flächenbreite; das längste Wort ist dort 32 px breit bei 31,9 px erlaubt.

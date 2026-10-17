@@ -23,7 +23,7 @@ use egui::{Vec2, vec2};
 use crate::app::{self, CreateKind, PlanoraApp};
 use crate::shell::{self, RightTab, ShellMode, ShellRects};
 use crate::state::AppState;
-use crate::{browser, icons, projects_panel, properties, tabs, theme, versions_panel};
+use crate::{browser, icons, projects_panel, properties, tabs, theme, versions_panel, viewport};
 use planora_kernel::BoolOp;
 
 /// Breite, bis zu der die Tab-Leiste nicht umbricht (sie rollt waagerecht statt dessen).
@@ -43,6 +43,11 @@ fn right_id() -> egui::Id {
 
 fn status_id() -> egui::Id {
     egui::Id::new("planora-field-status")
+}
+
+/// Kennung des Texts der Statuszeile (Tab-Halt für die Bedienhilfe).
+pub fn status_text_id() -> egui::Id {
+    status_id().with("text")
 }
 
 fn bottom_id() -> egui::Id {
@@ -263,11 +268,16 @@ fn text_field(
             let whole = ui
                 .max_rect()
                 .expand2(egui::vec2(margin.x / 2.0, margin.y / 2.0));
+            // Für die Statuszeile ist das `status_text_id()`.
             let response = ui.interact(
                 whole,
                 id.with("text"),
                 egui::Sense::focusable_noninteractive(),
             );
+            // Tab-Halt nur zum Vorlesen: der Fokus hier sperrt keine Tasten der Ansicht und ist
+            // als Fokusrahmen sichtbar.
+            viewport::focus_is_not_typing(ctx, response.id);
+            theme::focus_ring(ui, &response);
             let enabled = ui.is_enabled();
             // Der Tastenhinweis steht auch im Namen für die Bedienhilfe, der sichtbare Text bleibt kurz.
             let label = match hover {

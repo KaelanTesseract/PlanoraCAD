@@ -476,10 +476,38 @@ fn keyboard_focus_id() -> egui::Id {
     egui::Id::new("planora-keyboard-focus-last-frame")
 }
 
+fn not_typing_ids_key() -> egui::Id {
+    egui::Id::new("planora-focus-not-typing")
+}
+
+/// Meldet ein Widget, das den Tastaturfokus annimmt (Tab-Halt, z. B. die Statuszeile für die
+/// Bedienhilfe), aber keine Eingabe liest: hat es den Fokus, bleiben Esc, Entf und Eingabe für
+/// die Ansicht frei.
+pub fn focus_is_not_typing(ctx: &egui::Context, id: egui::Id) {
+    ctx.data_mut(|d| {
+        let ids = d.get_temp_mut_or_default::<Vec<egui::Id>>(not_typing_ids_key());
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    });
+}
+
+/// Hat ein Widget den Fokus, das Tasten liest (alles außer den mit [`focus_is_not_typing`]
+/// gemeldeten)?
+fn keyboard_taken(ctx: &egui::Context) -> bool {
+    let Some(focused) = ctx.memory(|m| m.focused()) else {
+        return false;
+    };
+    !ctx.data(|d| {
+        d.get_temp::<Vec<egui::Id>>(not_typing_ids_key())
+            .is_some_and(|ids| ids.contains(&focused))
+    })
+}
+
 /// Merkt sich am Ende eines Frames, ob ein Eingabefeld die Tastatur hatte. Wird von der App nach
 /// dem Aufbau aller Bereiche aufgerufen.
 pub fn remember_keyboard_focus(ctx: &egui::Context) {
-    let focused = ctx.egui_wants_keyboard_input();
+    let focused = keyboard_taken(ctx);
     ctx.data_mut(|d| d.insert_temp(keyboard_focus_id(), focused));
 }
 
@@ -487,7 +515,7 @@ pub fn remember_keyboard_focus(ctx: &egui::Context) {
 /// der Ansicht gesperrt. egui nimmt bei Escape den Fokus schon zu Beginn des Frames weg; deshalb
 /// zählt auch, ob im vorigen Frame ein Eingabefeld (z. B. der Name) die Tastatur hatte.
 pub fn typing(ctx: &egui::Context) -> bool {
-    ctx.egui_wants_keyboard_input()
+    keyboard_taken(ctx)
         || ctx
             .data(|d| d.get_temp::<bool>(keyboard_focus_id()))
             .unwrap_or(false)

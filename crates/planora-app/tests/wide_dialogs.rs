@@ -171,8 +171,12 @@ fn cards_stay_side_by_side_and_inside_at_800x600() {
     assert_cards_inside(rect, &d.last_cards, &seen);
 }
 
+/// Seit der Abschluss-Nachbesserung ist ein Dialog so hoch wie sein Inhalt (vorher fest 420 px
+/// mit Rollen): Exportieren mit Dateiwahl passt bei 800 × 600 ganz ins Fenster, „Speichern“ ist
+/// ohne Blättern sichtbar und schreibt die Datei. Das Rollen zu hoher Dialoge prüft
+/// `dialog_frame::tall_content_scrolls_and_stays_inside`.
 #[test]
-fn export_dialog_scrolls_at_800x600() {
+fn export_dialog_with_chooser_fits_at_800x600() {
     let dir = temp_dir("scroll");
     let mut s = export_state();
     let mut d = export_dialog(&s, ExportFormat::Mesh(Format::Stl));
@@ -182,24 +186,17 @@ fn export_dialog_scrolls_at_800x600() {
     let mut screen = Screen::new(800.0, 600.0);
     let seen = screen.settle(8, &mut show_export(&mut d, &mut s));
     let rect = d.last_rect.unwrap();
-    assert!(rect.height() <= 568.0 + 0.5, "{rect:?}");
+    assert!(
+        rect.height() < 568.0 - 1.0,
+        "füllt die ganze Höhe: {rect:?}"
+    );
     assert!(window(&screen).contains_rect(rect), "{rect:?}");
-    // Der untere Teil (Knopf „Speichern“ der Dateiwahl) ist erst nach dem Blättern sichtbar.
-    // Die Dateiwahl ist gezeichnet (ihre Überschrift steht im Bild), ihr Knopf „Speichern“ aber
-    // nicht ganz sichtbar: gar nicht gezeichnet (außerhalb des Blattbereichs) oder abgeschnitten.
     assert!(
         find(&seen, "Speichern unter").is_some(),
         "Dateiwahl ist nicht gezeichnet"
     );
-    let hidden = find(&seen, "Speichern")
-        .is_none_or(|t| !t.clip.contains_rect(t.rect) || !rect.contains_rect(t.rect));
-    assert!(hidden, "Der Dialog ist bei 800 × 600 zu hoch fürs Fenster");
+    let button = find(&seen, "Speichern").expect("„Speichern“ ohne Blättern");
     let mut f = show_export(&mut d, &mut s);
-    for _ in 0..3 {
-        screen.wheel(rect.center() - egui::vec2(0.0, 40.0), -400.0, &mut f);
-    }
-    let seen = screen.settle(3, &mut f);
-    let button = find(&seen, "Speichern").expect("„Speichern“ nach dem Blättern");
     assert!(
         button.clip.contains_rect(button.rect) && rect.contains_rect(button.rect),
         "{:?} in {:?}",

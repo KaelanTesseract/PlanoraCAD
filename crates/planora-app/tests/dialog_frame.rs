@@ -20,6 +20,8 @@ struct Content {
     field: String,
     /// Kennung des Textfelds (gesetzt beim Zeichnen).
     field_id: Option<egui::Id>,
+    /// Vom Inhalt belegte Fläche (gesetzt beim Zeichnen).
+    inner: Option<Rect>,
 }
 
 impl Content {
@@ -30,6 +32,7 @@ impl Content {
             focus_field: false,
             field: String::new(),
             field_id: None,
+            inner: None,
         }
     }
 }
@@ -135,6 +138,7 @@ impl Harness {
                         r.request_focus();
                     }
                 }
+                c.inner = Some(ui.min_rect());
             });
         });
         self.open = open;
@@ -342,14 +346,117 @@ fn first_frame_is_final() {
     }
 }
 
+/// Abschluss-Nachbesserung 1: ein kurzer Dialog ist so hoch wie sein Inhalt (Kopfzeile, Inhalt,
+/// Rand), nicht fest 420 px hoch.
+#[test]
+fn short_content_hugs_the_dialog() {
+    let edge = theme::SPACE_3 + 1.0; // Innenrand und Strich
+    for (w, h) in [(800.0, 600.0), (1400.0, 900.0)] {
+        for kind in [DialogSize::Prompt, DialogSize::Normal, DialogSize::Wide] {
+            for fixed in [false, true] {
+                let what = format!("{kind:?} {w}x{h} fixed={fixed}");
+                let mut hn = Harness::new(false, w, h, kind);
+                hn.fixed = fixed;
+                hn.closable = true;
+                let mut c = Content::new(40.0);
+                hn.run(vec![], &mut c);
+                let f = hn.run(vec![], &mut c);
+                let a = hn.area().unwrap();
+                let inner = c.inner.unwrap();
+                assert!(
+                    (a.bottom() - (inner.bottom() + edge)).abs() <= 2.0,
+                    "{what}: Unterkante {} statt Inhalt {} + Rand",
+                    a.bottom(),
+                    inner.bottom()
+                );
+                // Über dem Inhalt nur Rand und Kopfzeile.
+                let title = pos_of(&f, TITLE);
+                assert!(
+                    a.top() < title.y && title.y < inner.top(),
+                    "{what}: Titel {title:?} nicht über dem Inhalt {inner:?}"
+                );
+                assert!(
+                    inner.top() - a.top() < 70.0,
+                    "{what}: Kopf zu hoch: {a:?} / {inner:?}"
+                );
+                assert!(a.height() < 200.0, "{what}: zu hoch: {a:?}");
+                let centre = hn.content_rect().center();
+                assert!(
+                    max_abs(a.center() - centre) <= 1.0,
+                    "{what}: nicht mittig: {a:?}"
+                );
+                // 100 px mehr Inhalt: 100 px höher.
+                let before = a.height();
+                c.gap = 140.0;
+                hn.run(vec![], &mut c);
+                hn.run(vec![], &mut c);
+                let a = hn.area().unwrap();
+                assert!(
+                    (a.height() - before - 100.0).abs() <= 2.0,
+                    "{what}: {before} -> {}",
+                    a.height()
+                );
+                assert!(
+                    max_abs(a.center() - centre) <= 1.0,
+                    "{what}: nach dem Wachsen nicht mittig: {a:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Abschluss-Nachbesserung 7: ein wieder geöffneter Dialog mit anderer Höhe steht schon im
+/// ersten Bild mittig.
+#[test]
+fn reopened_dialog_is_centred_in_the_first_frame() {
+    for fixed in [false, true] {
+        let mut hn = Harness::new(false, 1000.0, 800.0, DialogSize::Prompt);
+        hn.fixed = fixed;
+        hn.closable = true;
+        let mut c = Content::new(40.0);
+        hn.run(vec![], &mut c);
+        hn.run(vec![], &mut c);
+        let small = hn.area().unwrap();
+        hn.open = false;
+        hn.run(vec![], &mut c);
+        hn.run(vec![], &mut c);
+        c.gap = 400.0;
+        hn.open = true;
+        let f = hn.run(vec![], &mut c);
+        assert!(has(&f, TITLE), "fixed={fixed}: nicht gemalt");
+        let a = hn.area().unwrap();
+        assert!(
+            a.height() > small.height() + 300.0,
+            "fixed={fixed}: Höhe {} (vorher {})",
+            a.height(),
+            small.height()
+        );
+        let centre = hn.content_rect().center();
+        assert!(
+            max_abs(a.center() - centre) <= 1.0,
+            "fixed={fixed}: im ersten Bild nicht mittig: {a:?}"
+        );
+        // Auch gemalt mittig: der Titel steht im Rahmen oben.
+        let title = pos_of(&f, TITLE);
+        assert!(
+            title.y > a.top() && title.y < a.top() + 40.0,
+            "fixed={fixed}: Titel {title:?} / {a:?}"
+        );
+    }
+}
+
 #[test]
 fn tall_content_scrolls_and_stays_inside() {
     let mut hn = Harness::new(false, 800.0, 600.0, DialogSize::Normal);
+    hn.closable = true;
     let mut c = Content::new(1500.0);
     hn.run(vec![], &mut c);
     let f = hn.run(vec![], &mut c);
     let a = hn.area().unwrap();
-    assert!(a.height() <= 568.0 + 1.0, "zu hoch: {a:?}");
+    // So hoch wie möglich (568 bei 800 × 600), nicht höher.
+    assert!((a.height() - 568.0).abs() <= 1.0, "Höhe: {a:?}");
+    let title_before = pos_of(&f, TITLE);
+    let close_before = pos_of(&f, &close_glyph());
     assert!(
         hn.content_rect().contains_rect(a),
         "nicht im Fenster: {a:?}"
@@ -374,8 +481,15 @@ fn tall_content_scrolls_and_stays_inside() {
     let f = hn.run(vec![], &mut c);
     let p = pos_of(&f, "Ende");
     assert!(a.contains(p), "Knopf nicht im Dialog: {p:?} / {a:?}");
+    // Die Kopfzeile scrollt nicht mit.
+    assert_eq!(pos_of(&f, TITLE), title_before, "Titel weggescrollt");
+    let g = pos_of(&f, &close_glyph());
+    assert_eq!(g, close_before, "Schließen-Symbol weggescrollt");
     hn.click(p, &mut c);
     assert!(c.clicked, "Knopf am Ende nicht klickbar");
+    // Das Schließen-Symbol bleibt nach dem Scrollen bedienbar.
+    hn.click(g, &mut c);
+    assert!(!hn.open, "Schließen nach dem Scrollen wirkungslos");
 
     // Wächst der Inhalt, bleibt die Mitte stehen.
     let mut hn = Harness::new(false, 1000.0, 800.0, DialogSize::Normal);
@@ -397,7 +511,11 @@ fn tall_content_scrolls_and_stays_inside() {
 /// Zieht an einer freien Stelle des Dialogs (linker Innenrand) um `delta`; liefert die Fläche danach.
 fn drag(hn: &mut Harness, c: &mut Content, delta: egui::Vec2) -> Rect {
     let a = hn.area().unwrap();
-    let start = Pos2::new(a.left() + 6.0, a.center().y);
+    drag_from(hn, c, Pos2::new(a.left() + 6.0, a.center().y), delta)
+}
+
+/// Zieht ab `start` um `delta`; liefert die Fläche danach.
+fn drag_from(hn: &mut Harness, c: &mut Content, start: Pos2, delta: egui::Vec2) -> Rect {
     let btn = |pos, pressed| Event::PointerButton {
         pos,
         button: PointerButton::Primary,
@@ -450,6 +568,32 @@ fn normal_dialog_moves_fixed_one_does_not() {
     let start = hn.area().unwrap();
     let after = drag(&mut hn, &mut c, vec2(60.0, 40.0));
     assert_eq!(start, after, "fester Dialog bewegt sich");
+}
+
+/// Abschluss-Nachbesserung 3: Ziehen am Titeltext verschiebt einen normalen Dialog (der Titel
+/// ist nicht markierbar); ein fester bleibt stehen.
+#[test]
+fn dragging_the_title_moves_a_normal_dialog() {
+    for fixed in [false, true] {
+        let mut hn = Harness::new(false, 1000.0, 800.0, DialogSize::Normal);
+        hn.fixed = fixed;
+        hn.closable = true;
+        let mut c = Content::new(40.0);
+        hn.run(vec![], &mut c);
+        let f = hn.run(vec![], &mut c);
+        let start = hn.area().unwrap();
+        let title = pos_of(&f, TITLE);
+        let moved = drag_from(&mut hn, &mut c, title, vec2(60.0, 40.0));
+        let want = if fixed {
+            egui::Vec2::ZERO
+        } else {
+            vec2(60.0, 40.0)
+        };
+        assert!(
+            max_abs(moved.center() - start.center() - want) <= 2.0,
+            "fixed={fixed}: von {start:?} nach {moved:?}"
+        );
+    }
 }
 
 #[test]

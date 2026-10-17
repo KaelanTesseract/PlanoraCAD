@@ -244,6 +244,55 @@ fn the_window_is_centred_720_wide_with_equal_cards_and_plain_texts() {
     assert_eq!(s.document.features().len(), 1, "Zeichnen ändert nichts");
 }
 
+/// Abschluss-Nachbesserung 1: mit offener Dateiauswahl passt der Dialog bei 1400 × 900 ganz ins
+/// Fenster; er ist so hoch wie sein Inhalt und scrollt nicht.
+#[test]
+fn the_window_with_the_chooser_fits_without_scrolling() {
+    let mut s = box_state();
+    let dir = temp_dir("passt");
+    let mut d = ExportDialog::new(&s);
+    d.tick(&s, true);
+    d.begin_save(dir.clone(), &s);
+    assert!(d.chooser().is_some());
+    let ctx = context();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+    let mut last_dir = None;
+    let mut heights = Vec::new();
+    let mut text = String::new();
+    for _ in 0..3 {
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |ui| {
+                assert!(d.show(ui.ctx(), &mut s, &mut last_dir));
+            },
+        );
+        text = collect_texts(&out);
+        out.drop_without_applying_deltas();
+        heights.push(d.last_rect.unwrap().height());
+    }
+    let rect = d.last_rect.unwrap();
+    // Größte Höhe: 900 − 2 × 16. Darunter heißt: der Inhalt passt, nichts scrollt.
+    let max = 900.0 - 32.0;
+    assert!(
+        rect.height() < max - 1.0,
+        "Dialog füllt die ganze Höhe (scrollt): {rect:?}"
+    );
+    // Die Knöpfe am Ende der Dateiauswahl sind ohne Scrollen zu sehen.
+    assert!(text.contains("Abbrechen"), "„Abbrechen“ fehlt:\n{text}");
+    assert!(
+        (rect.center().y - 450.0).abs() <= 1.0,
+        "nicht mittig: {rect:?}"
+    );
+    assert!(
+        heights.windows(2).all(|w| (w[0] - w[1]).abs() < 0.5),
+        "Höhe springt: {heights:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn the_window_warns_about_open_meshes_and_still_exports() {
     let mut s = AppState::new();

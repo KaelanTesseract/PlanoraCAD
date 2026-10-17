@@ -890,9 +890,9 @@ Beanstandungen sammeln; sie werden nachgebessert oder in Etappe D behoben.
 Stand: 2026-10-17. Alle Dialoge und Rückfragen haben den neuen Rahmen, der Würfel ist aufgeräumt, und die Reste aus Etappe C sind erledigt. Das ist Etappe D von vieren und der Abschluss von Teilprojekt 13. Spec: `specs/2026-10-16-graphit-oberflaeche-design.md` (Abschnitt 13 „Festlegungen der Umsetzung Etappe D“). Plan: `plans/2026-10-17-graphit-etappe-d.md`. Zweig `feature/graphit-etappe-d`.
 
 **Was geliefert wurde**
-- Neues Modul `dialog.rs` (`Dialog`, `DialogSize`): jedes Dialogfenster entsteht an dieser einen Stelle. Mitte des Fensters, feste Breite je Klasse (Rückfrage 440, Normal 480, Breit 720 px), Graphit-Rahmen, eigene Kopfzeile mit Titel und Schließen-Symbol, verworfener erster Größen-Durchgang, senkrechtes Rollen bei hohem Inhalt, Begrenzung auf das Fenster abzüglich 16 px Rand.
+- Neues Modul `dialog.rs` (`Dialog`, `DialogSize`): jedes Dialogfenster entsteht an dieser einen Stelle. Mitte des Fensters, feste Breite je Klasse (Rückfrage 440, Normal 480, Breit 720 px), Graphit-Rahmen, eigene Kopfzeile mit Titel und Schließen-Symbol, verworfener erster Größen-Durchgang, Höhe nach Inhalt, senkrechtes Rollen nur bei Inhalt höher als das Fenster (die Kopfzeile rollt nicht mit), Begrenzung auf das Fenster abzüglich 16 px Rand.
 - Alle Dialoge nutzen den Rahmen: Körper anlegen, Extrudieren/Drehen, Boolesche Operation, Feature bearbeiten, Rundung/Fase (Normal); Exportieren, Netz importieren, Neue Zeichnung, Maß bearbeiten (Breit); Umbenennen und Löschen in Baum, Zeichnungen und Maßen, Projekte und Versionen, alle Rückfragen (Prompt). `theme::window`, `export_dialog::wide_window`, `DIALOG_TOP`, `DIALOG_MARGIN` und `MIN_WIDTH` sind entfernt. Der Wächtertest `no_raw_windows` verhindert neue rohe Fenster.
-- Verschieben: Alle Dialoge außer den festen Rückfragen (Projekte, Versionen, Änderungen speichern und so weiter) lassen sich an ihrer freien Fläche verschieben und bleiben im Fenster. Ein Schließen-Symbol haben genau die Dialoge, die bisher das Kreuz hatten.
+- Verschieben: Alle Dialoge außer den festen Rückfragen (Projekte, Versionen, Änderungen speichern und so weiter) lassen sich an ihrer freien Fläche und am Titel verschieben und bleiben im Fenster. Ein Schließen-Symbol haben genau die Dialoge, die bisher das Kreuz hatten; dazu gehört die „Rückfrage“ beim Löschen in Baum, Maß- und Zeichnungsliste (verschiebbar, mit Kreuz).
 - Karten nebeneinander bleiben gleich hoch, auch in 720 px und bei 800 × 600.
 - Würfel (`planora-render`, `planora-app/viewport.rs`): Interna sind nicht mehr öffentlich (`cube_faces`, `cube_hit_test`, `CubeFace` nur noch im Test); `CubeRegion::is_valid`; NaN-Kamera und ungültige Bereiche werden abgefangen; Würfel 100 px; Beschriftung ab Zuwendung 0,5, voll ab 0,7, Füllung 0,95, Mindestschrift 9 pt, Schriftgröße je Bildschirmmaßstab gemerkt; wächst der Schrift-Atlas, wird das Bild verworfen.
 - Ziehen auf dem Würfel dreht die Ansicht (Modell und Skizze); Umschalt + Ziehen dreht nicht (dort verschiebt die Ansicht). Ein Klick ohne Ziehen wählt weiter den Bereich; das Mausrad über dem Würfel zoomt.
@@ -914,7 +914,9 @@ Stand: 2026-10-17. Alle Dialoge und Rückfragen haben den neuen Rahmen, der Wür
 **Entscheidungen der Umsetzung (Rulings)**
 - Die Grenzen des egui-Fensters gelten für die Außengröße (mit Rahmen); `show()` übergibt die Klassenbreite deshalb unverändert.
 - Eigene Schließbehandlung statt des egui-Kreuzes; `Dialog` liefert nichts mehr, wenn `*open` falsch ist. Das Schließen-Symbol meldet sich zusätzlich als „Schließen“ für Bildschirmleser (zweite `widget_info`, im Code erklärt).
-- Breite Dialoge: „Exportieren …“ mit Dateiwahl ist bei 800 × 600 erreichbar, weil der Dialog rollt; die Höhe bleibt höchstens 568 px.
+- Breite Dialoge: Die Höhe bleibt höchstens 568 px bei 800 × 600. „Exportieren …“ mit Dateiwahl war dort nur durch Rollen erreichbar; seit die Höhe dem Inhalt folgt (etwa 475 px), passt er bei 800 × 600 und 1400 × 900 ganz und rollt nicht.
+- Höhe nach Inhalt (Abschluss-Nachbesserung): Der Rollbereich ist ein eigener unter der Kopfzeile (nicht der des egui-Fensters, der jeden Dialog auf 420 px streckte). Die Kopfzeile hat eine feste Zeilenhöhe, sonst misst egui sie im ersten Durchgang niedriger und der Dialog stünde ein Bild lang versetzt. Ein wieder geöffneter Dialog verwirft sein erstes Bild, damit er mit der neuen Höhe mittig steht. Der Titel ist nicht markierbar, damit Ziehen am Titel den Dialog verschiebt.
+- Die Statuszeile ist ein Tab-Halt für die Bedienhilfe; mit Fokus zeigt sie den Fokusrahmen, und Esc, Entf und Eingabe wirken weiter auf Skizze und Ansicht (`viewport::focus_is_not_typing`).
 - Die Schwelle zum Ziehen am Würfel ist 4 px (egui hat 6); der Würfel prüft selbst gegen Druckpunkt und Zeiger. Während des Ziehens gibt es keine Hervorhebung und keinen Tooltip.
 - Bei 9 pt ist das längste Wort (Montserrat Medium, Maßstab 1) 32 px breit, erlaubt wären 31,9 px. Die Mindestschrift hat Vorrang; der Test erlaubt dort 0,5 px Rundung.
 - Das Statusfeld ist als Ganzes Hover-Ziel (nicht nur der Text) und hat die Beschriftung „Skizzen-Modus: Name. Hinweis“; egui meldet Beschriftungen als Wert, nicht als Label.
@@ -930,6 +932,7 @@ Stand: 2026-10-17. Alle Dialoge und Rückfragen haben den neuen Rahmen, der Wür
 
 *Dialoge*
 - Dialoge schließen nicht mit Esc (wie bisher). Die Rückfragen lassen sich nur über ihre Knöpfe beenden.
+- Seit die Höhe dem Inhalt folgt, steht ein fester Dialog nur dann schon im ersten Bild genau mittig, wenn egui seinen Inhalt im ersten, messenden Durchgang gleich hoch misst wie danach (für die Kopfzeile ist das gesichert; beobachtet wurde, dass egui eine waagerechte Reihe mit nur Text darin dort niedriger misst). Sonst rückt er im zweiten Bild um die halbe Differenz zurecht. Nicht für jeden Dialog einzeln getestet.
 - Die Checkboxen in Dialogen und die Symbole im Kontextmenü sind nicht im Graphit-Stil überarbeitet (stand in der Folgearbeit von Etappe A); sie waren nicht Teil dieses Plans.
 - Die Dialogtests prüfen vor allem Lage, Größe, Ebene und Bedienbarkeit; die Wirkung jedes einzelnen Dialogs prüfen sie nicht, nur bei Neuer Ordner und Kommentar ändern ist sie ergänzt. Der Wächter `no_raw_windows` ist eine Textsuche und deshalb nur eine Faustregel.
 
@@ -961,9 +964,9 @@ Stand: 2026-10-17. Alle Dialoge und Rückfragen haben den neuen Rahmen, der Wür
 3. Umbenennen und Löschen im Baum, bei Zeichnungen und bei Maßen; im Projektfeld Neuer Ordner, Umbenennen, Verschieben, Löschen; bei Versionen Kommentar ändern und Löschen.
 4. Rückfragen: Änderungen speichern, Kommentar, Speichern unter, Sperre übernehmen, Autosicherung, Hinweis. Sie liegen mittig, sind schmal und lassen sich nicht verschieben.
 5. Karten (Exportieren, Netz importieren, Neue Zeichnung) stehen nebeneinander und sind gleich hoch.
-6. Texte sind nicht abgeschnitten; bei 800 × 600 rollt ein hoher Dialog (zum Beispiel Exportieren mit Dateiwahl), und der Aktionsknopf ist erreichbar.
+6. Texte sind nicht abgeschnitten; Exportieren mit Dateiwahl passt bei 800 × 600 ganz ins Fenster, der Aktionsknopf ist ohne Rollen erreichbar. Nur ein Dialog, der höher als das Fenster ist, rollt (Titel und Kreuz bleiben oben).
 7. Schließen-Symbol oben rechts schließt den Dialog; der Fokusring ist mit der Tabulatortaste sichtbar.
-8. Dialog verschieben: an der freien Fläche ziehen; er bleibt im Fenster.
+8. Dialog verschieben: an der freien Fläche oder am Titel ziehen; er bleibt im Fenster. Kurze Rückfragen sind niedrig (keine leere Fläche unter den Knöpfen).
 9. Rundung: Dialog öffnen, Kanten im Modell neben dem Dialog anklicken (oder den Dialog beiseite ziehen).
 10. Enter in Neuer Ordner, Umbenennen und Kommentar ändern übernimmt.
 11. Würfel: Beschriftung lesbar und nicht spiegelverkehrt; Ziehen auf dem Würfel dreht, Umschalt + Ziehen dreht nicht, Klick wählt den Bereich, Mausrad über dem Würfel zoomt; keine Hervorhebung während des Ziehens.
