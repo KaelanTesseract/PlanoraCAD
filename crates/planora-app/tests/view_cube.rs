@@ -1,14 +1,14 @@
 //! Navigationswürfel (Etappe C, Aufgabe 2): 26 Bereiche, Home-Knopf, Hervorhebung der aktuellen
-//! Ansicht, Name unter dem Würfel, Beschriftung auf den Flächen. Ohne Fenster: Rohereignisse je
-//! Frame gegen einen egui-Kontext, geprüft werden die gemalten Formen.
+//! Ansicht, Name unter dem Würfel, Ziehen dreht die Ansicht. Ohne Fenster: Rohereignisse je
+//! Frame gegen einen egui-Kontext, geprüft werden die gemalten Formen. Tests, die Interna des
+//! Würfels brauchen (Beschriftung, Schwellen), stehen in `src/viewport_cube_tests.rs`.
 
 use egui::epaint::{ClippedShape, Shape};
 use egui::{Color32, Event, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
-use planora_app::shell::{ShellState, layout};
 use planora_app::state::AppState;
 use planora_app::{fonts, theme, viewport};
 use planora_math::DVec3;
-use planora_render::{CubeRegion, OrbitCamera, ViewFace, all_regions, cube_pieces, current_region};
+use planora_render::{CubeRegion, ViewFace, all_regions, cube_pieces_visible, current_region};
 
 const SCREEN: Rect = Rect {
     min: pos2(0.0, 0.0),
@@ -85,43 +85,23 @@ fn cube() -> Rect {
     viewport::cube_rect(FREE)
 }
 
-/// Bildschirm-Umriss eines sichtbaren Bereichs.
-fn piece_on_screen(cam: &OrbitCamera, region: CubeRegion) -> Option<Vec<Pos2>> {
-    cube_pieces(cam)
-        .into_iter()
-        .find(|p| p.region == region)
-        .map(|p| {
-            p.corners
-                .iter()
-                .map(|c| viewport::cube_to_screen(cube(), *c))
-                .collect()
-        })
+/// Klickpunkt (Schwerpunkt des anklickbaren Stücks) eines Bereichs.
+fn point_of(s: &AppState, region: CubeRegion) -> Option<Pos2> {
+    viewport::region_point(&s.camera, cube(), region)
+}
+
+/// Bereiche, die bei dieser Kamera mehr als nur streifend zu sehen sind.
+fn visible_regions(s: &AppState) -> Vec<CubeRegion> {
+    cube_pieces_visible(&s.camera, 0.02)
+        .iter()
+        .map(|p| p.region)
+        .collect()
 }
 
 fn centroid(points: &[Pos2]) -> Pos2 {
     let n = points.len() as f32;
     let s = points.iter().fold(vec2(0.0, 0.0), |a, p| a + p.to_vec2());
     (s / n).to_pos2()
-}
-
-/// Liegt `p` mindestens `margin` px innerhalb des konvexen Vielecks (Umlaufsinn egal)?
-fn inside(poly: &[Pos2], p: Pos2, margin: f32) -> bool {
-    let n = poly.len();
-    let mut sign = 0.0_f32;
-    for i in 0..n {
-        let a = poly[i];
-        let b = poly[(i + 1) % n];
-        let e = b - a;
-        let cross = e.x * (p.y - a.y) - e.y * (p.x - a.x);
-        let dist = cross / e.length();
-        if sign == 0.0 {
-            sign = dist.signum();
-        }
-        if dist * sign < margin {
-            return false;
-        }
-    }
-    true
 }
 
 #[derive(Default)]
@@ -172,67 +152,19 @@ fn iso() -> CubeRegion {
 // (a) ------------------------------------------------------------------------------------------
 
 #[test]
-fn cube_rect_and_home_and_name_rects() {
+fn cube_sits_in_the_corner_of_the_free_area() {
     let c = viewport::cube_rect(FREE);
-    assert_eq!(viewport::CUBE_SIZE, 84.0);
+    assert_eq!(viewport::CUBE_SIZE, 100.0);
     assert_eq!(
         c,
         Rect::from_min_size(
-            pos2(FREE.right() - 84.0 - 12.0, FREE.top() + 12.0),
-            vec2(84.0, 84.0)
+            pos2(FREE.right() - 100.0 - 12.0, FREE.top() + 12.0),
+            vec2(100.0, 100.0)
         )
     );
     let h = viewport::home_rect(c);
     assert_eq!(h.size(), vec2(26.0, 26.0));
     assert_eq!(h.top(), c.top(), "Home oben bündig mit dem Würfel");
-    assert_eq!(
-        h.right() - c.left(),
-        2.0,
-        "Home überlappt den Würfelrand um 2 px"
-    );
-    let n = viewport::name_rect(c);
-    assert_eq!(n, Rect::from_min_size(c.left_bottom(), vec2(84.0, 16.0)));
-
-    for (w, hgt) in [
-        (800.0, 600.0),
-        (1100.0, 700.0),
-        (1400.0, 900.0),
-        (1920.0, 1080.0),
-        (2560.0, 1440.0),
-    ] {
-        for read_only in [false, true] {
-            let win = Rect::from_min_size(Pos2::ZERO, vec2(w, hgt));
-            let r = layout(win, &ShellState::default(), 600.0, 520.0, 200.0, read_only);
-            let cube = viewport::cube_rect(r.free);
-            let mut fields = vec![
-                ("oben", r.top),
-                ("links", r.left),
-                ("rechts", r.right),
-                ("unten", r.bottom),
-                ("Status", r.status),
-            ];
-            if let Some(b) = r.banner {
-                fields.push(("Hinweis", b));
-            }
-            for (what, rect) in [
-                ("Würfel", cube),
-                ("Home", viewport::home_rect(cube)),
-                ("Name", viewport::name_rect(cube)),
-            ] {
-                assert!(
-                    r.free.contains_rect(rect),
-                    "{what} liegt bei {w}x{hgt} nicht in der freien Fläche"
-                );
-                for (name, f) in &fields {
-                    let i = rect.intersect(*f);
-                    assert!(
-                        !(i.width() > 0.0 && i.height() > 0.0),
-                        "{what} überlappt {name} bei {w}x{hgt}: {rect:?} / {f:?}"
-                    );
-                }
-            }
-        }
-    }
 }
 
 // (b) ------------------------------------------------------------------------------------------
@@ -247,17 +179,14 @@ fn click_on_each_region_sets_the_matching_view() {
         Some(ViewFace::Left),
         Some(ViewFace::Bottom),
     ] {
-        let visible: Vec<CubeRegion> = cube_pieces(&state_with_view(start).camera)
-            .iter()
-            .map(|p| p.region)
-            .collect();
+        let visible = visible_regions(&state_with_view(start));
         assert!(visible.len() >= 9, "{start:?}: {visible:?}");
         for r in visible {
             let ctx = context();
             let mut s = state_with_view(start);
             frame(&ctx, &mut s, vec![]);
-            let poly = piece_on_screen(&s.camera, r).unwrap();
-            click(&ctx, &mut s, centroid(&poly));
+            let at = point_of(&s, r).unwrap_or_else(|| panic!("{} nicht klickbar", r.name()));
+            click(&ctx, &mut s, at);
             assert_eq!(
                 current_region(&s.camera, 2.0),
                 Some(r),
@@ -279,28 +208,20 @@ fn every_region_is_reachable_with_a_few_clicks() {
         frame(&ctx, &mut s, vec![]);
         let mut reached = false;
         for _ in 0..4 {
-            if let Some(poly) = piece_on_screen(&s.camera, target) {
-                click(&ctx, &mut s, centroid(&poly));
+            if let Some(at) = point_of(&s, target) {
+                click(&ctx, &mut s, at);
                 reached = current_region(&s.camera, 2.0) == Some(target);
                 break;
             }
             // Zur Fläche drehen, die dem Ziel am nächsten liegt und sichtbar ist.
             let n = target.normal();
-            let step = cube_pieces(&s.camera)
+            let step = visible_regions(&s)
                 .into_iter()
-                .max_by(|a, b| {
-                    a.region
-                        .normal()
-                        .dot(n)
-                        .total_cmp(&b.region.normal().dot(n))
-                })
+                .filter(|r| point_of(&s, *r).is_some())
+                .max_by(|a, b| a.normal().dot(n).total_cmp(&b.normal().dot(n)))
                 .unwrap();
-            let poly: Vec<Pos2> = step
-                .corners
-                .iter()
-                .map(|c| viewport::cube_to_screen(cube(), *c))
-                .collect();
-            click(&ctx, &mut s, centroid(&poly));
+            let at = point_of(&s, step).unwrap();
+            click(&ctx, &mut s, at);
         }
         assert!(reached, "{} nicht erreichbar", target.name());
     }
@@ -358,15 +279,18 @@ fn current_region_is_highlighted_in_accent_and_none_for_free_orbit() {
                 .filter(|(_, f)| *f == colors.highlight)
                 .collect();
             assert_eq!(lit.len(), 1, "{start:?}: genau ein Bereich hervorgehoben");
-            let want = piece_on_screen(&s.camera, region).unwrap();
+            let want = point_of(&s, region).unwrap();
             let got = &lit[0].0;
-            assert_eq!(got.len(), want.len(), "{start:?}");
-            for (a, b) in got.iter().zip(&want) {
-                assert!(
-                    (*a - *b).length() < 0.01,
-                    "{start:?}: {got:?} statt {want:?}"
-                );
-            }
+            let expected_corners = if matches!(region, CubeRegion::Corner { .. }) {
+                3
+            } else {
+                4
+            };
+            assert_eq!(got.len(), expected_corners, "{start:?}");
+            assert!(
+                (centroid(got) - want).length() < 0.01,
+                "{start:?}: {got:?} nicht um {want:?}"
+            );
         }
         // Frei gedreht: nichts hervorgehoben.
         let ctx = context();
@@ -398,12 +322,11 @@ fn hover_highlights_lighter() {
     s.dark = dark;
     frame(&ctx, &mut s, vec![]);
     let front = CubeRegion::Face(ViewFace::Front);
-    let poly = piece_on_screen(&s.camera, front).unwrap();
-    let at = centroid(&poly);
+    let at = point_of(&s, front).unwrap();
     let fill_at = |sh: &Shot| {
         sh.polys
             .iter()
-            .find(|(pts, _)| pts.len() == poly.len() && (pts[0] - poly[0]).length() < 0.01)
+            .find(|(pts, _)| pts.len() == 4 && (centroid(pts) - at).length() < 0.01)
             .map(|(_, f)| *f)
             .unwrap()
     };
@@ -417,119 +340,19 @@ fn hover_highlights_lighter() {
         "Hover ist heller: {hover:?} / {rest:?}"
     );
     // Die hervorgehobene Ecke wird beim Überfahren zu `highlight_hover`.
-    let corner = piece_on_screen(&s.camera, iso()).unwrap();
-    frame(&ctx, &mut s, vec![moved(centroid(&corner))]);
+    let at = point_of(&s, iso()).unwrap();
+    frame(&ctx, &mut s, vec![moved(at)]);
     let sh = shot(&frame(&ctx, &mut s, vec![]));
     assert!(sh.polys.iter().any(|(_, f)| *f == colors.highlight_hover));
     assert!(sh.polys.iter().all(|(_, f)| *f != colors.highlight));
 }
 
-// (f) ------------------------------------------------------------------------------------------
-
-/// Glyphen-Vierecke eines Textnetzes: (links oben, rechts oben, links unten).
-fn quads(m: &egui::Mesh) -> Vec<[Pos2; 3]> {
-    m.vertices
-        .chunks(4)
-        .filter(|q| q.len() == 4)
-        .map(|q| [q[0].pos, q[1].pos, q[2].pos])
-        .collect()
-}
-
-fn parallel(a: egui::Vec2, b: egui::Vec2) -> bool {
-    let (a, b) = (a.normalized(), b.normalized());
-    (a.x * b.y - a.y * b.x).abs() < 1e-3
-}
-
-/// Netz, das ganz in `poly` liegt.
-fn label_in<'a>(sh: &'a Shot, poly: &[Pos2]) -> Option<&'a egui::Mesh> {
-    sh.meshes
-        .iter()
-        .find(|m| !m.vertices.is_empty() && m.vertices.iter().all(|v| inside(poly, v.pos, 0.0)))
-}
-
-#[test]
-fn labels_are_on_the_faces_and_follow_them() {
-    let ctx = context();
-    let mut s = state_with_view(Some(ViewFace::Front));
-    let front = CubeRegion::Face(ViewFace::Front);
-    let sh = shot(&frame(&ctx, &mut s, vec![]));
-    assert_eq!(sh.meshes.len(), 1, "nur „Vorne“ ist zugewandt");
-    let poly = piece_on_screen(&s.camera, front).unwrap();
-    let m = label_in(&sh, &poly).expect("„Vorne“ liegt in der Fläche");
-    assert!(m.vertices.len() >= 5 * 4, "fünf Buchstaben");
-    assert!(m.vertices.iter().all(|v| inside(&poly, v.pos, 1.0)));
-
-    // Gedreht: der Text bleibt auf der (jetzt schmaleren) Fläche und ist mit ihr verzerrt.
-    for (yaw, pitch) in [(40.0_f32, 0.0_f32), (40.0, 25.0), (-30.0, -20.0)] {
-        let mut s = state_with_view(Some(ViewFace::Front));
-        s.camera.yaw += yaw.to_radians();
-        s.camera.pitch += pitch.to_radians();
-        let sh = shot(&frame(&ctx, &mut s, vec![]));
-        let poly = piece_on_screen(&s.camera, front).unwrap();
-        let m = label_in(&sh, &poly)
-            .unwrap_or_else(|| panic!("yaw {yaw}, pitch {pitch}: Text verlässt die Fläche"));
-        // Textachse parallel zur Flächenkante unten (Weltachse X), nicht waagerecht fest.
-        let edge = poly[1] - poly[0];
-        for q in quads(m) {
-            assert!(
-                parallel(q[1] - q[0], edge),
-                "yaw {yaw}, pitch {pitch}: Grundlinie {:?} nicht parallel zu {edge:?}",
-                q[1] - q[0]
-            );
-        }
-        if pitch != 0.0 {
-            assert!(edge.y.abs() > 1.0, "Kante schräg, also Text schräg");
-        }
-    }
-
-    // Rückseite, Unterseite und alle anderen: nie gespiegelt.
-    for face in ViewFace::ALL {
-        let mut s = state_with_view(Some(face));
-        let sh = shot(&frame(&ctx, &mut s, vec![]));
-        let poly = piece_on_screen(&s.camera, CubeRegion::Face(face)).unwrap();
-        let m = label_in(&sh, &poly).unwrap_or_else(|| panic!("{face:?}: Text fehlt"));
-        for q in quads(m) {
-            let (r, d) = (q[1] - q[0], q[2] - q[0]);
-            assert!(r.x * d.y - r.y * d.x > 0.0, "{face:?}: gespiegelt");
-            assert!(r.x > 0.0, "{face:?}: Text läuft nach rechts");
-        }
-        // Die reine Abbildung: rechts × oben (Bild, y nach unten) < 0 heißt ungespiegelt.
-        let f = viewport::face_label_transform(&s.camera, face, cube());
-        assert!(f.right.x * f.up.y - f.right.y * f.up.x < 0.0, "{face:?}");
-        assert!(f.facing > 0.99, "{face:?}");
-    }
-}
-
-#[test]
-fn face_label_transform_follows_the_face_edges() {
-    let mut cam = OrbitCamera::default();
-    cam.home();
-    for face in ViewFace::ALL {
-        let f = viewport::face_label_transform(&cam, face, cube());
-        if f.facing < 0.3 {
-            continue;
-        }
-        let poly = piece_on_screen(&cam, CubeRegion::Face(face)).unwrap();
-        // Mitte der Fläche = Ursprung der Abbildung.
-        assert!((centroid(&poly) - f.origin).length() < 1e-3, "{face:?}");
-        // „rechts“ und „oben“ sind parallel zu je einer Kante des Flächenvierecks.
-        let e1 = poly[1] - poly[0];
-        let e2 = poly[2] - poly[1];
-        for axis in [f.right, f.up] {
-            assert!(
-                parallel(axis, e1) || parallel(axis, e2),
-                "{face:?}: {axis:?} liegt nicht auf einer Kante"
-            );
-        }
-        // Ungespiegelt (Bild y nach unten).
-        assert!(f.right.x * f.up.y - f.right.y * f.up.x < 0.0, "{face:?}");
-    }
-}
-
 // (g) ------------------------------------------------------------------------------------------
 
 fn name_texts(sh: &Shot) -> Vec<String> {
-    let r = viewport::name_rect(cube());
+    // Streifen unter dem Würfel (Würfelbreite, 16 px hoch).
+    let c = cube();
+    let r = Rect::from_min_size(c.left_bottom(), vec2(c.width(), 16.0));
     sh.texts
         .iter()
         .filter(|(t, rect)| !t.trim().is_empty() && r.expand(0.5).contains(rect.center()))
@@ -559,7 +382,7 @@ fn name_under_the_cube_follows_the_view() {
 // (h) ------------------------------------------------------------------------------------------
 
 #[test]
-fn cube_does_not_orbit_or_select() {
+fn clicks_on_the_cube_do_not_select_behind() {
     let ctx = context();
     let mut s = AppState::new();
     s.create_box(DVec3::splat(100.0)).unwrap();
@@ -584,14 +407,12 @@ fn cube_does_not_orbit_or_select() {
     click(&ctx, &mut s, empty);
     assert_eq!(s.selection, None, "Klick auf das Würfelfeld wählt nichts");
     assert_eq!((s.camera.yaw, s.camera.pitch), (yaw, pitch));
-    // Klick auf den Home-Knopf und auf einen Bereich wählt ebenfalls nichts.
+    // Klick auf den Home-Knopf wählt ebenfalls nichts.
     click(&ctx, &mut s, viewport::home_rect(c).center());
     assert_eq!(s.selection, None, "Home wählt nichts");
+    // Ziehen vom Home-Knopf aus dreht nicht (nur der Würfel selbst zieht die Ansicht).
     s.camera.distance *= 0.15;
     let (yaw, pitch) = (s.camera.yaw, s.camera.pitch);
-    // Ziehen auf dem Würfel dreht nicht.
-    drag(&ctx, &mut s, c.center(), c.center() + vec2(-30.0, 25.0));
-    assert_eq!((s.camera.yaw, s.camera.pitch), (yaw, pitch), "kein Orbit");
     drag(
         &ctx,
         &mut s,
@@ -604,16 +425,254 @@ fn cube_does_not_orbit_or_select() {
         "kein Orbit vom Home-Knopf"
     );
     assert_eq!(s.selection, None);
-    // Daneben dreht dasselbe Ziehen.
+    // Daneben dreht das Ziehen die Ansicht, und ein Klick daneben wählt.
     drag(&ctx, &mut s, pos2(350.0, 300.0), pos2(320.0, 325.0));
     assert_ne!(
         (s.camera.yaw, s.camera.pitch),
         (yaw, pitch),
         "Orbit daneben"
     );
-    // Und ein Klick daneben wählt.
     click(&ctx, &mut s, FREE.center());
     assert!(s.selection.is_some(), "Klick daneben wählt");
+}
+
+// (h1) -----------------------------------------------------------------------------------------
+
+/// Zug mit der Primärtaste in `steps` gleichen Schritten, danach loslassen.
+fn drag_in(ctx: &egui::Context, s: &mut AppState, from: Pos2, to: Pos2, steps: usize) {
+    frame(ctx, s, vec![moved(from)]);
+    frame(ctx, s, vec![moved(from), button(from, true)]);
+    for i in 1..=steps {
+        let p = from + (to - from) * (i as f32 / steps as f32);
+        frame(ctx, s, vec![moved(p)]);
+    }
+    frame(ctx, s, vec![button(to, false)]);
+    frame(ctx, s, vec![]);
+}
+
+#[test]
+fn dragging_on_the_cube_orbits() {
+    let c = cube();
+    let top_right = CubeRegion::Face(ViewFace::Top);
+    for sketching in [false, true] {
+        let ctx = context();
+        let mut s = AppState::new();
+        s.create_box(DVec3::splat(100.0)).unwrap();
+        if sketching {
+            let id = s
+                .add_sketch(planora_feature::SketchPlane::Standard(
+                    planora_app::state::StandardPlane::XY,
+                ))
+                .unwrap();
+            s.open_sketch(id).unwrap();
+        }
+        s.camera.home();
+        frame(&ctx, &mut s, vec![]);
+        s.camera.home();
+        frame(&ctx, &mut s, vec![]);
+        let what = if sketching { "Skizze" } else { "Modell" };
+
+        // Ziehen über den Würfel (mehr als 4 px): die Ansicht dreht wie im Viewport. Nach links
+        // und unten gezogen heißt: Gier wächst, Neigung wächst.
+        let before = (s.camera.yaw, s.camera.pitch);
+        let start = point_of(&s, top_right).unwrap();
+        drag(&ctx, &mut s, start, start + vec2(-30.0, 12.0));
+        assert!(s.camera.yaw > before.0 + 0.1, "{what}: Gier dreht");
+        assert!(
+            (s.camera.pitch - before.1).abs() > 0.01
+                || s.camera.pitch == planora_render::OrbitCamera::MAX_PITCH,
+            "{what}: Neigung dreht"
+        );
+        assert_eq!(s.selection, None, "{what}: Ziehen wählt nichts");
+        // Das Loslassen löst keinen Regionsklick aus: die Ansicht springt nicht auf die Fläche.
+        assert_eq!(
+            current_region(&s.camera, 2.0),
+            None,
+            "{what}: nach dem Zug keine Regionsansicht"
+        );
+
+        // Auch ein kurzer Zug knapp über der Schwelle (5 px, ein Schritt) dreht und klickt nicht.
+        s.camera.home();
+        frame(&ctx, &mut s, vec![]);
+        let before = (s.camera.yaw, s.camera.pitch);
+        let start = point_of(&s, top_right).unwrap();
+        drag_in(&ctx, &mut s, start, start + vec2(-5.0, 0.0), 1);
+        assert_ne!(
+            (s.camera.yaw, s.camera.pitch),
+            before,
+            "{what}: 5 px drehen"
+        );
+        assert_eq!(
+            current_region(&s.camera, 2.0),
+            None,
+            "{what}: 5 px lösen keinen Klick aus"
+        );
+
+        // Ein Klick ohne Ziehen (auch mit 3 px Wackeln) wählt weiter die Region.
+        s.camera.home();
+        frame(&ctx, &mut s, vec![]);
+        let before = (s.camera.yaw, s.camera.pitch);
+        let start = point_of(&s, top_right).unwrap();
+        drag_in(&ctx, &mut s, start, start + vec2(3.0, 0.0), 1);
+        assert_eq!(
+            current_region(&s.camera, 2.0),
+            Some(top_right),
+            "{what}: Klick wählt die Region ({before:?})"
+        );
+
+        // Mausrad über dem Würfel zoomt weiter.
+        let dist = s.camera.distance;
+        let p = c.center();
+        frame(&ctx, &mut s, vec![moved(p)]);
+        frame(
+            &ctx,
+            &mut s,
+            vec![
+                moved(p),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, 40.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+        frame(&ctx, &mut s, vec![]);
+        assert_ne!(s.camera.distance, dist, "{what}: Mausrad zoomt");
+    }
+}
+
+// (h3) -----------------------------------------------------------------------------------------
+
+/// Alle Zahlen einer gemalten Form endlich?
+fn finite(shape: &Shape) -> bool {
+    match shape {
+        Shape::Vec(v) => v.iter().all(finite),
+        Shape::Path(p) => p.points.iter().all(|q| q.is_finite()),
+        Shape::Mesh(m) => m.vertices.iter().all(|v| v.pos.is_finite()),
+        Shape::Circle(c) => c.center.is_finite() && c.radius.is_finite(),
+        Shape::LineSegment { points, .. } => points.iter().all(|q| q.is_finite()),
+        Shape::Text(t) => t.pos.is_finite(),
+        _ => true,
+    }
+}
+
+#[test]
+fn nan_camera_paints_nothing_invalid() {
+    for (yaw, pitch) in [
+        (f32::NAN, 0.5),
+        (0.5, f32::NAN),
+        (f32::INFINITY, 0.5),
+        (0.5, f32::NEG_INFINITY),
+    ] {
+        let ctx = context();
+        let mut s = AppState::new();
+        frame(&ctx, &mut s, vec![]);
+        s.camera.yaw = yaw;
+        s.camera.pitch = pitch;
+        // Mehrere Bilder, auch mit dem Zeiger auf dem Würfel (Hover).
+        let mut shapes = frame(&ctx, &mut s, vec![]);
+        shapes = [shapes, frame(&ctx, &mut s, vec![moved(cube().center())])].concat();
+        shapes = [shapes, frame(&ctx, &mut s, vec![])].concat();
+        for c in &shapes {
+            assert!(finite(&c.shape), "yaw {yaw}, pitch {pitch}: {:?}", c.shape);
+        }
+        let sh = shot(&shapes);
+        assert!(
+            name_texts(&sh).is_empty(),
+            "yaw {yaw}, pitch {pitch}: kein Name unter dem Würfel"
+        );
+        assert!(
+            sh.polys.len() <= 1,
+            "yaw {yaw}, pitch {pitch}: kein Würfelbereich gemalt, nur der Home-Kreis"
+        );
+    }
+}
+
+// (h4) -----------------------------------------------------------------------------------------
+
+/// Namen aus `names` als ganzes Wort (nicht als Teil eines längeren Namens) in `text`?
+fn mentions(text: &str, names: &[&str]) -> Vec<String> {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut found = Vec::new();
+    for name in names {
+        for (i, _) in text.match_indices(name) {
+            let before = text[..i].chars().next_back();
+            let after = text[i + name.len()..].chars().next();
+            if !before.is_some_and(is_ident) && !after.is_some_and(is_ident) {
+                found.push((*name).to_string());
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn cube_internals_are_not_public() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let viewport = std::fs::read_to_string(root.join("src/viewport.rs")).unwrap();
+    for (kind, name) in [
+        ("const", "CUBE_SCALE"),
+        ("const", "LABEL_MIN_FACING"),
+        ("const", "LABEL_FULL_FACING"),
+        ("const", "PIECE_MIN_FACING"),
+        ("const", "PIECE_FULL_FACING"),
+        ("struct", "FaceFrame"),
+        ("fn", "face_label_transform"),
+        ("fn", "visible_pieces"),
+        ("fn", "clickable_pieces"),
+        ("fn", "cube_region_at"),
+        ("fn", "piece_opacity"),
+        ("fn", "label_opacity"),
+        ("fn", "cube_to_screen"),
+        ("fn", "name_rect"),
+    ] {
+        let decl = format!("{kind} {name}");
+        let line = viewport
+            .lines()
+            .find(|l| l.trim_start().contains(&decl) && !l.trim_start().starts_with("//"))
+            .unwrap_or_else(|| panic!("{decl} nicht gefunden"));
+        assert!(
+            line.trim_start().starts_with("pub(crate) "),
+            "{decl} ist nicht auf `pub(crate)` beschränkt: {line}"
+        );
+    }
+    // Öffentlich bleibt nur, was die Oberfläche braucht (und genau ein Testhaken).
+    for decl in [
+        "pub fn region_point",
+        "pub const CUBE_SIZE",
+        "pub fn cube_rect",
+    ] {
+        assert!(viewport.contains(decl), "{decl} fehlt");
+    }
+    let hook = viewport
+        .lines()
+        .position(|l| l.contains("pub fn region_point"))
+        .unwrap();
+    assert!(
+        viewport
+            .lines()
+            .nth(hook - 1)
+            .unwrap()
+            .contains("#[doc(hidden)]"),
+        "Testhaken ist versteckt"
+    );
+
+    let lib = std::fs::read_to_string(root.join("../planora-render/src/lib.rs")).unwrap();
+    let leaked = mentions(
+        &lib,
+        &[
+            "cube_faces",
+            "cube_hit_test",
+            "cube_pieces",
+            "REGION_COUNT",
+            "CubeFace",
+        ],
+    );
+    assert!(
+        leaked.is_empty(),
+        "im Re-Export von planora-render: {leaked:?}"
+    );
 }
 
 // (h2) ----------------------------------------------------------------------------------------

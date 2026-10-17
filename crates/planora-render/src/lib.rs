@@ -15,7 +15,6 @@ pub use scene::{
     build_scene_marked,
 };
 pub use viewcube::{
-    CubeFace, CubePiece, CubeRegion, INSET, ISO_VIEW, REGION_COUNT, ViewFace, all_regions,
-    cube_faces, cube_hit_test, cube_pieces, cube_pieces_visible, current_region, face_text_frame,
-    pieces_hit_test,
+    CubePiece, CubeRegion, INSET, ISO_VIEW, ViewFace, all_regions, cube_pieces_visible,
+    current_region, face_text_frame, pieces_hit_test,
 };

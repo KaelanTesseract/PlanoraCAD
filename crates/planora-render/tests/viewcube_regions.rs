@@ -8,7 +8,7 @@ fn iso() -> OrbitCamera {
     cam
 }
 
-/// Bildpunkt eines Würfelpunkts in Würfeleinheiten (orthografisch, wie `cube_pieces`).
+/// Bildpunkt eines Würfelpunkts in Würfeleinheiten (orthografisch, wie `cube_pieces_visible`).
 fn screen(cam: &OrbitCamera, p: Vec3) -> Vec2 {
     let v = cam.view().transform_vector3(p);
     Vec2::new(v.x, v.y)
@@ -17,7 +17,7 @@ fn screen(cam: &OrbitCamera, p: Vec3) -> Vec2 {
 #[test]
 fn there_are_26_regions_with_unit_normals() {
     let regions = all_regions();
-    assert_eq!(REGION_COUNT, 26);
+    assert_eq!(all_regions().len(), 26);
     assert_eq!(regions.len(), 26);
     let faces = regions
         .iter()
@@ -79,7 +79,7 @@ fn front_view_shows_only_the_front_face_and_the_four_edge_strips_and_corners_see
         current_region(&cam, 2.0),
         Some(CubeRegion::Face(ViewFace::Front))
     );
-    let pieces = cube_pieces(&cam);
+    let pieces = cube_pieces_visible(&cam, 0.02);
     assert_eq!(pieces.len(), 9, "Fläche, 4 Kanten, 4 Ecken");
     let front = pieces.last().unwrap();
     assert!(front.region.normal().dot(Vec3::NEG_Y) > 0.999);
@@ -111,7 +111,7 @@ fn free_orbit_has_no_current_region() {
 #[test]
 fn hit_test_returns_face_edge_and_corner_pieces() {
     let cam = iso();
-    let pieces = cube_pieces(&cam);
+    let pieces = cube_pieces_visible(&cam, 0.02);
     let tfr = CubeRegion::Corner {
         x: ViewFace::Right,
         y: ViewFace::Front,
@@ -211,7 +211,7 @@ fn text_frames_are_right_handed_and_never_mirrored() {
 
 #[test]
 fn pieces_are_sorted_back_to_front_and_back_faces_culled() {
-    let pieces = cube_pieces(&iso());
+    let pieces = cube_pieces_visible(&iso(), 0.02);
     assert!(pieces.windows(2).all(|w| w[0].depth <= w[1].depth));
     let regions: HashSet<_> = pieces.iter().map(|p| p.region).collect();
     assert_eq!(regions.len(), pieces.len());
@@ -247,21 +247,14 @@ fn pieces_are_sorted_back_to_front_and_back_faces_culled() {
 }
 
 #[test]
-fn cube_pieces_visible_filters_by_facing_and_matches_cube_pieces() {
+fn cube_pieces_visible_filters_by_facing() {
     for (yaw, pitch) in [(-0.8_f32, 0.5_f32), (0.3, -1.2), (2.0, 0.05), (-2.9, 1.4)] {
         let cam = OrbitCamera {
             yaw,
             pitch,
             ..OrbitCamera::default()
         };
-        let all = cube_pieces(&cam);
-        let same = cube_pieces_visible(&cam, 0.02);
-        assert_eq!(all.len(), same.len());
-        for (a, b) in all.iter().zip(&same) {
-            assert_eq!(a.region, b.region);
-            assert_eq!(a.corners, b.corners);
-            assert_eq!(a.depth, b.depth);
-        }
+        let all = cube_pieces_visible(&cam, 0.02);
         for min in [0.1_f32, 0.15, 0.4] {
             let some = cube_pieces_visible(&cam, min);
             let want: Vec<CubeRegion> = all
@@ -276,5 +269,72 @@ fn cube_pieces_visible_filters_by_facing_and_matches_cube_pieces() {
                 "hinten zuerst"
             );
         }
+    }
+}
+
+#[test]
+fn invalid_regions_are_detected_and_ignored() {
+    use ViewFace::*;
+    for r in all_regions() {
+        assert!(r.is_valid(), "{}", r.name());
+    }
+    let invalid = [
+        CubeRegion::Edge { a: Top, b: Bottom },
+        CubeRegion::Edge { a: Front, b: Front },
+        // Falsche Reihenfolge: Z kommt vor Y.
+        CubeRegion::Edge { a: Front, b: Top },
+        CubeRegion::Edge { a: Right, b: Front },
+        CubeRegion::Corner {
+            x: Top,
+            y: Front,
+            z: Top,
+        },
+        CubeRegion::Corner {
+            x: Right,
+            y: Left,
+            z: Top,
+        },
+        CubeRegion::Corner {
+            x: Right,
+            y: Front,
+            z: Back,
+        },
+    ];
+    for r in invalid {
+        assert!(!r.is_valid(), "{r:?}");
+        assert!(r.normal().is_finite(), "{r:?}: {:?}", r.normal());
+        let mut cam = OrbitCamera {
+            yaw: 0.3,
+            pitch: -0.2,
+            distance: 7.0,
+            ..OrbitCamera::default()
+        };
+        let before = (cam.yaw, cam.pitch, cam.distance);
+        cam.set_view_region(r);
+        assert_eq!((cam.yaw, cam.pitch, cam.distance), before, "{r:?}");
+    }
+}
+
+#[test]
+fn nan_camera_has_no_current_region_and_no_pieces_panic() {
+    let broken = [
+        (f32::NAN, 0.2, 5.0),
+        (0.3, f32::NAN, 5.0),
+        (0.3, 0.2, f32::NAN),
+        (f32::INFINITY, 0.2, 5.0),
+        (0.3, f32::NEG_INFINITY, 5.0),
+        (0.3, 0.2, f32::INFINITY),
+    ];
+    for (yaw, pitch, distance) in broken {
+        let cam = OrbitCamera {
+            yaw,
+            pitch,
+            distance,
+            ..OrbitCamera::default()
+        };
+        assert_eq!(current_region(&cam, 2.0), None, "{yaw} {pitch} {distance}");
+        let pieces = cube_pieces_visible(&cam, 0.02);
+        let hit = pieces_hit_test(&pieces, Vec2::ZERO);
+        let _ = hit;
     }
 }

@@ -12,8 +12,8 @@ use planora_render::{
     current_region, face_text_frame, grid_lines, pieces_hit_test,
 };
 
-/// Kantenlänge des Würfelfelds (Variante C in Größe B).
-pub const CUBE_SIZE: f32 = 84.0;
+/// Kantenlänge des Würfelfelds.
+pub const CUBE_SIZE: f32 = 100.0;
 /// Abstand des Würfelfelds zum Rand der freien Fläche (rechts und oben).
 const CUBE_MARGIN: f32 = 12.0;
 /// Durchmesser des runden Home-Knopfs.
@@ -23,22 +23,28 @@ const HOME_OVERLAP: f32 = 2.0;
 /// Höhe des Streifens mit dem Namen der Ansicht unter dem Würfel.
 const NAME_H: f32 = 16.0;
 /// Bildpunkte je Würfeleinheit (Würfel ±1). Die äußerste Ecke liegt höchstens √3 Einheiten von
-/// der Mitte entfernt, also 41 px: der Würfel bleibt im 84-px-Feld.
-pub const CUBE_SCALE: f32 = CUBE_SIZE * 0.28;
+/// der Mitte entfernt, also etwa 48,5 px: der Würfel bleibt im 100-px-Feld.
+pub(crate) const CUBE_SCALE: f32 = CUBE_SIZE * 0.28;
 /// Beschriftet wird nur eine Fläche, die mindestens so stark zur Kamera zeigt.
-pub const LABEL_MIN_FACING: f32 = 0.3;
+pub(crate) const LABEL_MIN_FACING: f32 = 0.5;
 /// Ab hier ist die Beschriftung voll deckend; darunter blendet sie bis `LABEL_MIN_FACING` aus.
-pub const LABEL_FULL_FACING: f32 = 0.5;
+pub(crate) const LABEL_FULL_FACING: f32 = 0.7;
 /// Bereiche des Würfels, die höchstens so stark zur Kamera zeigen, werden weder gemalt noch
 /// angeklickt: Fast flach gesehen wären sie nur ein 1–2 px schmaler Streifen, dessen Umriss beim
 /// Drehen als Linie aufblitzt. Bei 0,15 ist der schmalste Bereich (Eckendreieck) noch etwa
 /// 1,7 px breit.
-pub const PIECE_MIN_FACING: f32 = 0.15;
+pub(crate) const PIECE_MIN_FACING: f32 = 0.15;
 /// Ab hier ist ein Bereich voll deckend; darunter blenden Füllung und Umriss bis
 /// `PIECE_MIN_FACING` aus, damit beim Drehen nichts schlagartig erscheint oder verschwindet.
-pub const PIECE_FULL_FACING: f32 = 0.3;
+pub(crate) const PIECE_FULL_FACING: f32 = 0.3;
 /// Das längste Wort nimmt höchstens diesen Anteil der Flächenbreite ein.
-const LABEL_FILL: f32 = 0.85;
+const LABEL_FILL: f32 = 0.95;
+/// Kleinste Schriftgröße der Flächenbeschriftung (Punkt).
+const LABEL_MIN_SIZE: f32 = 9.0;
+/// Größte Schriftgröße der Flächenbeschriftung (Punkt).
+const LABEL_MAX_SIZE: f32 = 20.0;
+/// Bewegung in Bildpunkten, ab der ein Zug auf dem Würfel die Ansicht dreht (darunter ein Klick).
+const CUBE_DRAG_THRESHOLD: f32 = 4.0;
 /// Abweichung in Grad, bis zu der eine Blickrichtung als Ansicht eines Bereichs gilt.
 const REGION_TOLERANCE_DEG: f32 = 2.0;
 
@@ -70,7 +76,7 @@ pub fn render_palette(dark: bool) -> Palette {
     }
 }
 
-/// Navigationswürfel rechts oben im freien Rechteck `free` (Rand 12 px, 84 × 84).
+/// Navigationswürfel rechts oben im freien Rechteck `free` (Rand 12 px, 100 × 100).
 pub fn cube_rect(free: Rect) -> Rect {
     Rect::from_min_size(
         pos2(
@@ -89,13 +95,13 @@ pub fn home_rect(cube: Rect) -> Rect {
     )
 }
 
-/// Streifen unter dem Würfel (84 × 16) für den Namen der aktuellen Ansicht.
-pub fn name_rect(cube: Rect) -> Rect {
+/// Streifen unter dem Würfel (100 × 16) für den Namen der aktuellen Ansicht.
+pub(crate) fn name_rect(cube: Rect) -> Rect {
     Rect::from_min_size(cube.left_bottom(), vec2(cube.width(), NAME_H))
 }
 
 /// Würfeleinheiten (x rechts, y oben, Mitte 0) → Bildschirm im Würfelfeld `cube`.
-pub fn cube_to_screen(cube: Rect, p: Vec2) -> Pos2 {
+pub(crate) fn cube_to_screen(cube: Rect, p: Vec2) -> Pos2 {
     let c = cube.center();
     pos2(c.x + p.x * CUBE_SCALE, c.y - p.y * CUBE_SCALE)
 }
@@ -110,20 +116,20 @@ fn screen_to_cube(cube: Rect, p: Pos2) -> Vec2 {
 /// einheiten, `u` entlang der Leserichtung „rechts“, `v` entlang „oben“, Mitte der Fläche 0)
 /// liegt bei `origin + right·u + up·v`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FaceFrame {
+pub(crate) struct FaceFrame {
     /// Mitte der Fläche auf dem Bildschirm.
-    pub origin: Pos2,
+    pub(crate) origin: Pos2,
     /// Bild von „rechts“ (eine Würfeleinheit), Bildschirm-y nach unten.
-    pub right: egui::Vec2,
+    pub(crate) right: egui::Vec2,
     /// Bild von „oben“ (eine Würfeleinheit), Bildschirm-y nach unten.
-    pub up: egui::Vec2,
+    pub(crate) up: egui::Vec2,
     /// Wie stark die Fläche zur Kamera zeigt (1 = frontal, ≤ 0 = abgewandt).
-    pub facing: f32,
+    pub(crate) facing: f32,
 }
 
 impl FaceFrame {
     /// Bildschirmpunkt zum Flächenpunkt `(u, v)`.
-    pub fn apply(&self, u: f32, v: f32) -> Pos2 {
+    pub(crate) fn apply(&self, u: f32, v: f32) -> Pos2 {
         self.origin + self.right * u + self.up * v
     }
 }
@@ -131,7 +137,7 @@ impl FaceFrame {
 /// Abbildung der Fläche `face` auf den Bildschirm: Leserichtungen aus `face_text_frame`, dieselbe
 /// orthografische Projektion wie `cube_pieces`. Die Schrift liegt damit auf der Fläche, wird mit
 /// ihr gedreht und verkürzt und ist nie gespiegelt (`rechts × oben` = Normale).
-pub fn face_label_transform(camera: &OrbitCamera, face: ViewFace, cube: Rect) -> FaceFrame {
+pub(crate) fn face_label_transform(camera: &OrbitCamera, face: ViewFace, cube: Rect) -> FaceFrame {
     let view = camera.view();
     let to_view = |v: Vec3| view.transform_vector3(v);
     let dir = |v: Vec3| {
@@ -151,7 +157,7 @@ pub fn face_label_transform(camera: &OrbitCamera, face: ViewFace, cube: Rect) ->
 /// Gemalte und anklickbare Bereiche: deutlich zugewandt (`PIECE_MIN_FACING`) und mit endlichen
 /// Zahlen (eine ungültige Kamera liefert NaN-Stücke). Malen und Klicken nutzen dieselbe Liste,
 /// ein nicht gemalter Bereich lässt sich also auch nicht treffen.
-pub fn visible_pieces(camera: &OrbitCamera) -> Vec<CubePiece> {
+pub(crate) fn visible_pieces(camera: &OrbitCamera) -> Vec<CubePiece> {
     cube_pieces_visible(camera, PIECE_MIN_FACING)
         .into_iter()
         .filter(|p| p.depth.is_finite() && p.corners.iter().all(|c| c.is_finite()))
@@ -161,7 +167,7 @@ pub fn visible_pieces(camera: &OrbitCamera) -> Vec<CubePiece> {
 /// Anklickbare Bereiche: die gemalten ([`visible_pieces`]), die mindestens halb deckend zu sehen
 /// sind (`piece_opacity` ≥ 0,5). Ein gerade erst einblendender, kaum sichtbarer Bereich am Rand
 /// fängt also keinen Klick und kein Hover.
-pub fn clickable_pieces(camera: &OrbitCamera) -> Vec<CubePiece> {
+pub(crate) fn clickable_pieces(camera: &OrbitCamera) -> Vec<CubePiece> {
     visible_pieces(camera)
         .into_iter()
         .filter(|p| piece_opacity(p.depth) >= 0.5)
@@ -170,7 +176,7 @@ pub fn clickable_pieces(camera: &OrbitCamera) -> Vec<CubePiece> {
 
 /// Bereich des Würfels unter dem Bildschirmpunkt `p` (Würfelfeld `cube`), aus derselben Liste
 /// wie Hover und Klick in der Ansicht ([`clickable_pieces`]).
-pub fn cube_region_at(camera: &OrbitCamera, cube: Rect, p: Pos2) -> Option<CubeRegion> {
+pub(crate) fn cube_region_at(camera: &OrbitCamera, cube: Rect, p: Pos2) -> Option<CubeRegion> {
     pieces_hit_test(&clickable_pieces(camera), screen_to_cube(cube, p))
 }
 
@@ -182,20 +188,44 @@ fn fade(x: f32, lo: f32, hi: f32) -> f32 {
 
 /// Deckkraft eines Bereichs, der `facing` zur Kamera zeigt (0 an der Schwelle, 1 ab
 /// `PIECE_FULL_FACING`).
-pub fn piece_opacity(facing: f32) -> f32 {
+pub(crate) fn piece_opacity(facing: f32) -> f32 {
     fade(facing, PIECE_MIN_FACING, PIECE_FULL_FACING)
 }
 
 /// Deckkraft der Beschriftung einer Fläche, die `facing` zur Kamera zeigt.
-pub fn label_opacity(facing: f32) -> f32 {
+pub(crate) fn label_opacity(facing: f32) -> f32 {
     fade(facing, LABEL_MIN_FACING, LABEL_FULL_FACING)
 }
 
-/// Schrift der Flächenbeschriftung und ihr Maßstab (Würfeleinheiten je Schriftpunkt): Das
-/// längste der sechs Wörter nimmt `LABEL_FILL` der Flächenbreite ein; die Schriftgröße ist so
-/// gewählt, dass das in der Vorderansicht etwa einem Bildpunkt je Schriftpunkt entspricht.
-fn label_font(painter: &egui::Painter) -> (FontId, f32) {
-    let widest = |font: &FontId| {
+/// Schrift der Flächenbeschriftung, ihr Maßstab und die Größen, für die sie gerechnet wurde.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LabelFont {
+    /// `pixels_per_point` (Bitmuster) und Größe des Schriftatlas, für die gerechnet wurde.
+    key: (u32, [usize; 2]),
+    pub(crate) font: FontId,
+    /// Würfeleinheiten je Schriftpunkt.
+    pub(crate) k: f32,
+}
+
+fn label_font_id() -> egui::Id {
+    egui::Id::new("planora-cube-label-font")
+}
+
+/// Schrift der Flächenbeschriftung und ihr Maßstab (Würfeleinheiten je Schriftpunkt): So groß,
+/// dass das längste der sechs Wörter höchstens `LABEL_FILL` der Flächenbreite einnimmt (nie unter
+/// `LABEL_MIN_SIZE`). Das Ergebnis wird je (`pixels_per_point`, Größe des Schriftatlas) in den
+/// Kontextdaten gemerkt; die Breitenmessung läuft also nicht in jedem Bild.
+pub(crate) fn label_font(painter: &egui::Painter) -> LabelFont {
+    let ctx = painter.ctx();
+    let ppp = ctx.pixels_per_point().to_bits();
+    let atlas = || painter.fonts(|f| f.font_image_size());
+    if let Some(cached) = ctx.data(|d| d.get_temp::<LabelFont>(label_font_id()))
+        && cached.key == (ppp, atlas())
+    {
+        return cached;
+    }
+    let widest = |size: f32| {
+        let font = FontId::new(size, fonts::medium());
         ViewFace::ALL
             .iter()
             .map(|f| {
@@ -207,22 +237,50 @@ fn label_font(painter: &egui::Painter) -> (FontId, f32) {
             .fold(1.0_f32, f32::max)
     };
     let face_width = LABEL_FILL * 2.0 * INSET;
-    let probe = FontId::new(12.0, fonts::medium());
-    let size = (12.0 * face_width * CUBE_SCALE / widest(&probe) * 2.0).floor() / 2.0;
-    let font = FontId::new(size.max(4.0), fonts::medium());
-    let k = face_width / widest(&font);
-    (font, k)
+    let limit = face_width * CUBE_SCALE;
+    // Schätzung aus einer Probe, dann in halben Punkten nachstellen (die Breite ist wegen des
+    // Pixelrasters der Schrift nicht ganz linear in der Größe).
+    let mut size =
+        ((12.0 * limit / widest(12.0) * 2.0).floor() / 2.0).clamp(LABEL_MIN_SIZE, LABEL_MAX_SIZE);
+    while size > LABEL_MIN_SIZE && widest(size) > limit {
+        size -= 0.5;
+    }
+    while size + 0.5 <= LABEL_MAX_SIZE && widest(size + 0.5) <= limit {
+        size += 0.5;
+    }
+    let k = face_width / widest(size);
+    // Der Atlas kann beim Messen gewachsen sein; der Schlüssel gilt für den Stand danach.
+    let result = LabelFont {
+        key: (ppp, atlas()),
+        font: FontId::new(size, fonts::medium()),
+        k,
+    };
+    ctx.data_mut(|d| d.insert_temp(label_font_id(), result.clone()));
+    result
 }
 
 /// Beschriftung `text` als Netz auf der Fläche: Die Glyphen-Netze der egui-Textanordnung werden
 /// Eckpunkt für Eckpunkt durch die Flächenabbildung `frame` gelegt (Textmitte = Flächenmitte).
-fn face_label_mesh(painter: &egui::Painter, frame: &FaceFrame, text: &str, color: Color32) -> Mesh {
-    let (font, k) = label_font(painter);
-    let galley = painter.layout_no_wrap(text.to_string(), font, color);
+/// Wächst dabei der Schriftatlas über den Stand von `label` hinaus, sind die Texturkoordinaten
+/// schon gemalter Beschriftungen veraltet: Das Bild wird verworfen und neu aufgebaut.
+fn face_label_mesh(
+    painter: &egui::Painter,
+    frame: &FaceFrame,
+    text: &str,
+    color: Color32,
+    label: &LabelFont,
+) -> Mesh {
+    let galley = painter.layout_no_wrap(text.to_string(), label.font.clone(), color);
+    let k = label.k;
     let center = galley.mesh_bounds.center();
     // Die Netze tragen Texel-Koordinaten; die Zeichenfläche erwartet 0…1.
-    let [w, h] = painter.fonts(|f| f.font_image_size());
-    let uv_scale = vec2(1.0 / w.max(1) as f32, 1.0 / h.max(1) as f32);
+    let size = painter.fonts(|f| f.font_image_size());
+    if size != label.key.1 {
+        painter
+            .ctx()
+            .request_discard("Würfelbeschriftung: Schriftatlas gewachsen");
+    }
+    let uv_scale = vec2(1.0 / size[0].max(1) as f32, 1.0 / size[1].max(1) as f32);
     let mut mesh = Mesh::default();
     for row in &galley.rows {
         let visuals = &row.visuals;
@@ -268,6 +326,11 @@ fn paint_cube(
 ) {
     let colors = theme::cube_colors(dark);
     let pieces = visible_pieces(camera);
+    // Schrift und Maßstab der Beschriftung einmal je Bild (gemerkt, siehe `label_font`).
+    let label = pieces
+        .iter()
+        .any(|p| matches!(p.region, CubeRegion::Face(_)))
+        .then(|| label_font(painter));
     let hovered = hover.and_then(|p| cube_region_at(camera, cube, p));
     let current = current_region(camera, REGION_TOLERANCE_DEG);
     for piece in &pieces {
@@ -293,7 +356,9 @@ fn paint_cube(
         ));
         if let CubeRegion::Face(face) = piece.region {
             let frame = face_label_transform(camera, face, cube);
-            if frame.facing >= LABEL_MIN_FACING {
+            if frame.facing >= LABEL_MIN_FACING
+                && let Some(label) = &label
+            {
                 let color = if is_current {
                     colors.text_on_highlight
                 } else {
@@ -304,6 +369,7 @@ fn paint_cube(
                     &frame,
                     face.label(),
                     color.gamma_multiply(label_opacity(frame.facing)),
+                    label,
                 )));
             }
         }
@@ -335,6 +401,49 @@ fn paint_cube(
         FontId::new(16.0, fonts::icons()),
         colors.text,
     );
+}
+
+fn cube_drag_id() -> egui::Id {
+    egui::Id::new("planora-view-cube-dragged")
+}
+
+/// Hat die Primärtaste auf dem Würfel gedrückt gehalten und der Zeiger sich dabei mehr als
+/// `CUBE_DRAG_THRESHOLD` vom Druckpunkt entfernt? Das Ergebnis bleibt bis zum Loslassen wahr (auch
+/// wenn der Zeiger zurückkehrt) und ist im Bild des Loslassens noch wahr, damit der Zug nicht als
+/// Klick zählt; danach wird es zurückgesetzt. Die Schwelle ist kleiner als die von egui (6 px),
+/// deshalb wird sie hier selbst geprüft statt über `Response::dragged`.
+fn cube_drag_active(ui: &egui::Ui, response: &egui::Response) -> bool {
+    let ctx = ui.ctx();
+    let mut active = ctx
+        .data(|d| d.get_temp::<bool>(cube_drag_id()))
+        .unwrap_or(false);
+    let held = ui.input(|i| i.pointer.primary_down());
+    if held && response.is_pointer_button_down_on() && !active {
+        active = ui.input(|i| {
+            matches!(
+                (i.pointer.press_origin(), i.pointer.latest_pos()),
+                (Some(a), Some(b)) if (b - a).length() > CUBE_DRAG_THRESHOLD
+            )
+        });
+    }
+    ctx.data_mut(|d| d.insert_temp(cube_drag_id(), active && held));
+    active
+}
+
+/// Bildschirmpunkt in der Mitte des anklickbaren Stücks `region` im Würfelfeld `cube`; `None`,
+/// wenn das Stück nicht zu sehen ist. Nur als Testhaken für Klicktests der Integrationstests.
+#[doc(hidden)]
+pub fn region_point(camera: &OrbitCamera, cube: Rect, region: CubeRegion) -> Option<Pos2> {
+    let piece = clickable_pieces(camera)
+        .into_iter()
+        .find(|p| p.region == region)?;
+    let n = piece.corners.len() as f32;
+    let sum = piece
+        .corners
+        .iter()
+        .map(|c| cube_to_screen(cube, *c).to_vec2())
+        .fold(egui::Vec2::ZERO, |a, b| a + b);
+    Some((sum / n).to_pos2())
 }
 
 /// Kamera auf das ganze Fenster `rect` einstellen, die Bildmitte ins freie Rechteck `free`
@@ -447,17 +556,25 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     }
 
     // Navigationswürfel und Home-Knopf: eigene Schaltflächen über der Ansicht (auch im
-    // Skizzen-Modus). Sie nehmen Klicks und Ziehen auf, damit beides weder dreht noch wählt.
+    // Skizzen-Modus). Sie nehmen Klicks auf, damit nichts dahinter gewählt wird. Ein Ziehen mit
+    // der Primärtaste (mehr als `CUBE_DRAG_THRESHOLD`) dreht die Ansicht wie in der Ansicht selbst
+    // (Modell und Skizze) und löst beim Loslassen keinen Regionsklick aus.
     let cube_response = ui.interact(
         cube,
         ui.id().with("planora-view-cube"),
         Sense::click_and_drag(),
     );
+    let cube_dragging = cube_drag_active(ui, &cube_response);
+    if cube_dragging && cube_response.is_pointer_button_down_on() {
+        let d = ui.input(|i| i.pointer.delta());
+        state.camera.orbit(d.x, d.y);
+    }
     let cube_hover = cube_response.hover_pos();
     let camera = state.camera;
     let region_at = |p: Pos2| cube_region_at(&camera, cube, p);
     let hovered_region = cube_hover.and_then(region_at);
     if cube_response.clicked()
+        && !cube_dragging
         && let Some(region) = cube_response
             .interact_pointer_pos()
             .and_then(region_at)
@@ -465,7 +582,9 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     {
         state.camera.set_view_region(region);
     }
-    if let Some(region) = hovered_region {
+    if let Some(region) = hovered_region
+        && !cube_dragging
+    {
         cube_response.on_hover_text(format!("Ansicht: {}", region.name()));
     }
     let home_response = ui.interact(
@@ -546,3 +665,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         home_hovered,
     );
 }
+
+#[cfg(test)]
+#[path = "viewport_cube_tests.rs"]
+mod cube_tests;
