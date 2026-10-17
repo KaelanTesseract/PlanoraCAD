@@ -30,8 +30,11 @@ use planora_exchange::Progress;
 use planora_feature::geo_ref_for_edge;
 use planora_math::{DVec2, DVec3, Tolerance};
 
-const W: f32 = 1200.0;
-const H: f32 = 800.0;
+// Etappe C: das Blatt wird in die freie Fläche zwischen den Feldern eingepasst; bei 1600 × 1000
+// ist der Maßstab auf dem Bildschirm (etwa 3,35 px/mm) ähnlich wie früher bei 1200 × 800 über die
+// ganze Breite, so dass die von Hand gewählten Pixelabstände der Tests weiter passen.
+const W: f32 = 1600.0;
+const H: f32 = 1000.0;
 
 const A4_QUER: Sheet = Sheet {
     paper: Paper::A4,

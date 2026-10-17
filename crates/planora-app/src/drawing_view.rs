@@ -1,10 +1,13 @@
 //! Zeichnungsbereich (Teilprojekt 11, Aufgabe 15; Maße und Mittellinien Teilprojekt 12,
-//! Aufgabe 11): Werkzeugleiste, Blatt mit den Linien der Ansichten und ihren Markierungen
-//! (Maße, Mittellinien), Auswahl, Verschieben der Ansichten und Ziehen der Maße, Zoom und
-//! Verschieben des Blatts sowie die Hinweiszeile.
+//! Aufgabe 11; schwebende Felder Graphit Etappe C, Aufgabe 4): Werkzeugfeld, Ansichtsfeld,
+//! Blatt mit den Linien der Ansichten und ihren Markierungen (Maße, Mittellinien), Auswahl,
+//! Verschieben der Ansichten und Ziehen der Maße, Zoom und Verschieben des Blatts sowie das
+//! Hinweisfeld.
 //!
 //! Blattkoordinaten in Millimetern, y nach oben, Ursprung unten links. Auf dem Bildschirm liegt
-//! die Blattmitte in der Mitte des Bereichs plus `pan`; `zoom = 1` heißt „Blatt eingepasst“.
+//! die Blattmitte in der Mitte der freien Fläche (`DrawingLayout::canvas`) plus `pan`;
+//! `zoom = 1` heißt „Blatt in die freie Fläche eingepasst“. Gemalt wird das Blatt über das ganze
+//! Fenster (`DrawingLayout::paint`), auch unter den Feldern.
 //!
 //! **Ziehen eines Maßes** (nur bearbeitbar; Änderung über `Document::update_dimension`, der
 //! Modellstand bleibt): Maßlinie eines linearen Maßes → `offset` um die Bewegung quer zur
@@ -24,8 +27,9 @@ use crate::drawing_state::{
 };
 use crate::export_dialog::{REPAINT, shorten_for_display};
 use crate::icons::{self, Icon};
+use crate::shell::{self, ShellMode, ShellRects, ShellState};
 use crate::state::AppState;
-use crate::{theme, viewport};
+use crate::{shell_panels, theme, viewport};
 use egui::epaint::TextShape;
 use egui::{
     Color32, FontId, Galley, PointerButton, Pos2, Rect, Sense, Shape, Stroke, StrokeKind,
@@ -72,8 +76,6 @@ const WHEEL_RATE: f32 = 0.0015;
 const FLATTEN_TOL_PX: f64 = 0.9;
 /// Höchstzahl der Stücke einer Kurve.
 const MAX_SEGMENTS: usize = 4096;
-/// Höhe der Hinweiszeile.
-const HINT_HEIGHT: f32 = 24.0;
 /// Rand des Auswahlrahmens um die Ansicht (Blatt-mm).
 const SELECT_PAD_MM: f64 = 3.0;
 /// Kleinste Seitenlänge des Platzhalters einer Ansicht ohne Linien (Blatt-mm).
@@ -96,6 +98,8 @@ pub const HINT: &str = "Klicken wählt eine Ansicht oder ein Maß, Ziehen versch
 pub const CENTERLINES: &str = "Mittellinien";
 /// Erklärung am gesperrten Schalter „Mittellinien“ einer isometrischen Ansicht.
 pub const NO_ISO_CENTERLINES: &str = "In der Isometrie gibt es keine Mittellinien; sie erscheinen nur in den geraden Ansichten (vorne, oben, seitlich).";
+/// Hinweis im Ansichtsfeld, solange keine Ansicht gewählt ist.
+pub const NO_VIEW_SELECTED: &str = "Eine Ansicht auswählen.";
 /// Beschriftung des Knopfs für den Maßvorschlag.
 pub const SUGGEST: &str = "Maße vorschlagen";
 /// Satzanfang des Tooltips eines Maßes, das seinen Bezug verloren hat.
@@ -129,9 +133,17 @@ pub struct DrawnView {
 /// Aufteilung und Kennzahlen des zuletzt gezeichneten Zeichnungsbereichs (für Tests).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DrawingLayout {
+    /// Ganzer Bereich (in der App: das Fenster).
     pub area: Rect,
+    /// Werkzeugfeld.
     pub toolbar: Rect,
+    /// Fläche, in die das Blatt eingepasst und in der es zentriert wird (die freie Fläche
+    /// zwischen den Feldern); alle Umrechnungen Blatt ↔ Bildschirm beziehen sich auf sie.
     pub canvas: Rect,
+    /// Fläche, auf die das Blatt gemalt wird und die Eingaben annimmt (das ganze Fenster; die
+    /// Felder liegen darüber).
+    pub paint: Rect,
+    /// Hinweisfeld.
     pub hint: Rect,
     pub sheet_mm: (f64, f64),
     pub zoom: f32,
@@ -662,9 +674,33 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     show_with(ui, state, true);
 }
 
+/// Rechtecke der Zeichnungsfelder: aus dem Layout der Shell in diesem Bild (die App zeichnet die
+/// Felder vorher), sonst – ohne Shell, z. B. in Tests – aus [`shell::layout_in_mode`] über das
+/// ganze Fenster (schreibgeschützt mit dem Platz für den Hinweis unter dem oberen Feld).
+fn drawing_rects(ctx: &egui::Context, editable: bool) -> ShellRects {
+    if let Some(r) = shell_panels::last_layout(ctx).filter(|r| r.tool.is_some()) {
+        return r;
+    }
+    let content = ctx.content_rect();
+    shell::layout_in_mode(
+        content,
+        ShellMode::Drawing,
+        &ShellState::default(),
+        (content.width(), 0.0),
+        f32::INFINITY,
+        0.0,
+        !editable,
+    )
+}
+
 /// Zeichnungsbereich; `editable = false` (alte Version) sperrt Hinzufügen, Löschen, Maßstab
 /// und Verschieben der Ansichten. Ruft in jedem Bild `tick` und fordert ein Neuzeichnen an,
 /// solange eine Ansicht berechnet wird.
+///
+/// Das Blatt wird über die ganze Fläche von `ui` (in der App: das Fenster) gemalt und nimmt dort
+/// Eingaben an; eingepasst und zentriert wird es in der freien Fläche zwischen den Feldern. Die
+/// Felder der Zeichnung – Werkzeugfeld, Ansichtsfeld und Hinweisfeld – zeichnet diese Funktion
+/// selbst als schwebende Felder an den Rechtecken der Shell (ohne Shell: eigene Rechnung).
 pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     state.drawing_ui.tick(&state.bodies, &state.document, false);
     let WorkArea::Drawing(id) = state.drawing_ui.area else {
@@ -677,11 +713,17 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     if tool_blocked(&drawing, editable).is_some() && state.dimension_tool.is_active() {
         state.dimension_tool.set_mode(ToolMode::Off);
     }
-    let area = ui.available_rect_before_wrap();
-    let (toolbar, action) = toolbar(ui, state, &drawing, editable);
-    match action {
+    let ctx = ui.ctx().clone();
+    let paint = ui.max_rect();
+    let rects = drawing_rects(&ctx, editable);
+    let canvas = rects.free;
+    let tool_rect = rects.tool.unwrap_or(canvas);
+    let tool_action = tool_field(&ctx, tool_rect, state, &drawing, editable);
+    let view_action = view_field(&ctx, rects.right, state, &drawing, editable);
+    match tool_action.or(view_action) {
         Some(Action::ToModel) => {
             state.drawing_ui.area = WorkArea::Model;
+            ctx.request_repaint();
             return;
         }
         Some(Action::Add(kind)) => {
@@ -712,14 +754,13 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
         Some(Action::Tool(m)) => state.dimension_tool.set_mode(m),
         None => {}
     }
-    let hint_top = (area.bottom() - HINT_HEIGHT).max(toolbar.bottom());
-    let hint = Rect::from_min_max(pos2(area.left(), hint_top), area.right_bottom());
-    let canvas = Rect::from_min_max(
-        pos2(area.left(), toolbar.bottom()),
-        pos2(area.right(), hint_top),
-    );
-    let response = ui.allocate_rect(canvas, Sense::click_and_drag());
-    let views = canvas_ui(ui, state, id, canvas, &response, editable);
+    let response = ui.allocate_rect(paint, Sense::click_and_drag());
+    let views = canvas_ui(ui, state, id, (paint, canvas), &response, editable);
+    if views.is_none() {
+        // Keine Blattfläche (Fenster zu klein): wenigstens die Umgebung des Blatts malen.
+        ui.painter()
+            .rect_filled(paint, 0.0, theme::drawing_surround(state.dark));
+    }
 
     let note = state.drawing_ui.note(&state.bodies);
     let dims = resolve_in(state, id);
@@ -741,55 +782,28 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
         .hint()
         .or(note)
         .unwrap_or_else(|| HINT.to_string());
-    ui.scope_builder(UiBuilder::new().max_rect(hint), |ui| {
-        ui.set_min_size(hint.size());
-        ui.horizontal_centered(|ui| {
-            ui.add_space(8.0);
-            // Zuerst die Hinweise zu den Maßen (die verlorenen rot), dann die Meldung (höchstens
-            // die halbe Zeile), zuletzt der bisherige Hinweis; zu lange Texte enden mit „…“
-            // (ganzer Text im Tooltip), nichts wird aus der Zeile geschoben.
-            for (i, t) in notes.texts.iter().enumerate() {
-                if i == 0 && notes.lost > 0 {
-                    ui.colored_label(error_color(state.dark), t);
-                } else {
-                    ui.label(t);
-                }
-            }
-            if !notes.texts.is_empty() {
-                ui.separator();
-            }
-            if let Some(m) = &message {
-                let w = (0.5 * ui.available_width()).max(40.0);
-                ui.scope(|ui| {
-                    ui.set_max_width(w);
-                    let text = if rejected.is_some() {
-                        egui::RichText::new(m.as_str()).color(error_color(state.dark))
-                    } else {
-                        egui::RichText::new(m.as_str())
-                    };
-                    ui.add(egui::Label::new(text).truncate());
-                });
-                ui.separator();
-            }
-            ui.add(egui::Label::new(egui::RichText::new(hint_text).weak()).truncate());
-        });
-    });
+    let lines = HintLines {
+        notes: &notes.texts,
+        lost: notes.lost > 0,
+        message: message.map(|m| (m, rejected.is_some())),
+        hint: hint_text,
+    };
+    hint_field(&ctx, rects.bottom, state.dark, lines);
     if let Some((layout, pending)) = views {
         if pending {
-            ui.ctx().request_repaint_after(REPAINT);
+            ctx.request_repaint_after(REPAINT);
         }
         let layout = DrawingLayout {
-            area,
-            toolbar,
-            hint,
+            area: paint,
+            toolbar: tool_rect,
+            hint: rects.bottom,
             ..layout
         };
-        ui.ctx().data_mut(|d| d.insert_temp(layout_id(), layout));
+        ctx.data_mut(|d| d.insert_temp(layout_id(), layout));
     }
 }
 
-/// Leistenknopf ohne Rand (Fläche nur beim Überfahren). Der Stil gilt nur für diesen Knopf;
-/// ein eigener Bereich entfällt, damit die Leiste richtig umbricht.
+/// Leistenknopf ohne Rand (Fläche nur beim Überfahren). Der Stil gilt nur für diesen Knopf.
 fn flat(button: egui::Button<'_>) -> impl egui::Widget + '_ {
     move |ui: &mut egui::Ui| {
         let saved = ui.style().clone();
@@ -806,154 +820,257 @@ fn icon_only<'a>(icon: Icon) -> egui::Button<'a> {
     egui::Button::new(icons::atom(icon))
 }
 
-/// Werkzeugleiste über die ganze Breite; liefert ihr Rechteck und die gewählte Aktion.
-fn toolbar(
-    ui: &mut egui::Ui,
+/// Rahmen des Werkzeugfelds: wie [`theme::panel_frame`], oben und unten so viel Rand, dass genau
+/// zwei Zeilen ([`theme::ROW_H`] mit Zeilenabstand) in [`shell::TOOL_H`] passen.
+fn tool_frame(dark: bool) -> egui::Frame {
+    let frame = theme::panel_frame(dark);
+    let v = ((shell::TOOL_H - 2.0 * frame.stroke.width - 2.0 * theme::ROW_H - theme::SPACE_1)
+        / 2.0)
+        .max(0.0);
+    frame.inner_margin(egui::Margin::symmetric(theme::SPACE_3 as i8, v as i8))
+}
+
+/// Eine Zeile des Werkzeugfelds: genau [`theme::ROW_H`] hoch, links beginnend, mittig.
+fn tool_row<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    // `horizontal` wächst in der Rollfläche nach rechts (ein fest breiter Bereich schnitte den
+    // Rest ab, statt ihn rollbar zu machen); seine Höhe ist die Zeilenhöhe `interact_size.y`.
+    ui.horizontal(|ui| {
+        ui.set_min_height(theme::ROW_H);
+        add_contents(ui)
+    })
+    .inner
+}
+
+/// Werkzeugfeld unter dem oberen Feld: zwei feste Zeilen (Modell, Zeichnung und Ansichten; Blatt,
+/// Zoom und Maße). Ist das
+/// Feld zu schmal (kleine Fenster), rollt sein Inhalt waagerecht. Liefert die gewählte Aktion.
+fn tool_field(
+    ctx: &egui::Context,
+    rect: Rect,
     state: &AppState,
     drawing: &Drawing,
     editable: bool,
-) -> (Rect, Option<Action>) {
+) -> Option<Action> {
+    let dark = state.dark;
+    let p = theme::palette(dark);
+    let frame = tool_frame(dark);
+    let inner = shell_panels::inner_size(&frame, rect.size());
     let mut action = None;
+    let selected = state
+        .drawing_ui
+        .selected_view
+        .is_some_and(|v| drawing.view(v).is_some());
+    shell_panels::field(
+        ctx,
+        shell_panels::drawing_tool_id(),
+        rect.min,
+        frame,
+        |ui| {
+            ui.set_width(inner.x);
+            ui.set_height(inner.y);
+            // Die Rollfläche reicht bis in den unteren Rand des Felds: ihr schmaler, schwebender
+            // Rollbalken liegt dort, unter der zweiten Zeile (das Feld wird nicht höher). Passt
+            // nicht alles hinein (kleine Fenster), ist er auch in Ruhe zu sehen.
+            // Rand unten abzüglich Strich und 2 px, damit der Balken im Feld bleibt.
+            let below = (f32::from(frame.inner_margin.bottom) - frame.stroke.width - 2.0).max(0.0);
+            let area_rect = Rect::from_min_size(ui.cursor().min, inner + vec2(0.0, below));
+            let mut child = ui.new_child(
+                UiBuilder::new()
+                    .max_rect(area_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            child.spacing_mut().scroll.dormant_handle_opacity =
+                child.spacing().scroll.active_handle_opacity;
+            let area = egui::ScrollArea::horizontal()
+                .id_salt("planora-field-drawing-tool-scroll")
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded);
+            theme::scroll_area(&mut child, area, |ui| {
+                ui.spacing_mut().item_spacing.y = theme::SPACE_1;
+                // Eng gesetzt (wie das Befehlsfeld), damit beide Zeilen schon bei 1100 px
+                // Fensterbreite ganz sichtbar sind.
+                ui.spacing_mut().item_spacing.x = theme::SPACE_1;
+                ui.spacing_mut().button_padding.x = theme::SPACE_1;
+                // Erste Zeile: zurück zum Modell, Name der Zeichnung, Ansicht hinzufügen.
+                tool_row(ui, |ui| {
+                    if ui
+                        .add(flat(icons::selectable(false, Icon::ToModel, "3D-Modell")))
+                        .clicked()
+                    {
+                        action = Some(Action::ToModel);
+                    }
+                    let _ = ui.add(flat(icons::selectable(
+                        true,
+                        Icon::OpenDrawing,
+                        format!("Zeichnung: {}", shorten_for_display(&drawing.name)),
+                    )));
+                    ui.separator();
+                    ui.add_enabled(editable, |ui: &mut egui::Ui| {
+                        let saved = ui.style().clone();
+                        theme::frameless(ui.style_mut());
+                        let r = ui
+                            .menu_button((icons::atom(Icon::AddView), "Ansicht hinzufügen"), |ui| {
+                                for k in ViewKind::ALL {
+                                    if theme::entry(
+                                        ui,
+                                        true,
+                                        icons::button(Icon::ViewFace, k.label()),
+                                    )
+                                    .clicked()
+                                    {
+                                        action = Some(Action::Add(k));
+                                        ui.close();
+                                    }
+                                }
+                            })
+                            .response;
+                        ui.set_style(saved);
+                        theme::focus_ring(ui, &r);
+                        r
+                    });
+                });
+                // Zweite Zeile: Blatt einpassen und Zoom, dann die Maße (die Einstellungen der
+                // gewählten Ansicht stehen im Ansichtsfeld rechts; das Feld bleibt so immer gleich
+                // hoch).
+                tool_row(ui, |ui| {
+                    if ui
+                        .add(flat(icons::button(Icon::FitSheet, "Blatt einpassen")))
+                        .clicked()
+                    {
+                        action = Some(Action::Fit);
+                    }
+                    if ui
+                        .add(flat(icon_only(Icon::ZoomOut)))
+                        .on_hover_text("Verkleinern")
+                        .clicked()
+                    {
+                        action = Some(Action::Zoom(1.0 / ZOOM_STEP));
+                    }
+                    if ui
+                        .add(flat(icon_only(Icon::ZoomIn)))
+                        .on_hover_text("Vergrößern")
+                        .clicked()
+                    {
+                        action = Some(Action::Zoom(ZOOM_STEP));
+                    }
+                    ui.separator();
+                    let tip = if selected {
+                        "Setzt die wichtigsten Maße in die gewählte Ansicht."
+                    } else {
+                        "Setzt die wichtigsten Maße in alle Ansichten."
+                    };
+                    if ui
+                        .add_enabled(
+                            editable,
+                            flat(icons::button(Icon::SuggestDimensions, SUGGEST)),
+                        )
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        action = Some(Action::Suggest);
+                    }
+                    // Werkzeug „Maß“: Schalter und Untermodus (immer da, gesperrt mit Erklärung).
+                    // Eingeschaltet trägt der Schalter den Akzent (Modus an).
+                    let blocked = tool_blocked(drawing, editable);
+                    let free = blocked.is_none();
+                    let tool = &state.dimension_tool;
+                    let why = blocked.unwrap_or(TOOL_TIP);
+                    let button = if tool.is_active() {
+                        egui::Button::new((
+                            icons::text(Icon::DimensionTool, icons::LABEL_ICON_SIZE, p.on_accent),
+                            egui::RichText::new(TOOL).color(p.on_accent),
+                        ))
+                        .fill(p.accent)
+                        .selected(true)
+                    } else {
+                        icons::button(Icon::DimensionTool, TOOL)
+                    };
+                    if ui
+                        .add_enabled(free, flat(button))
+                        .on_hover_text(TOOL_TIP)
+                        .on_disabled_hover_text(why)
+                        .clicked()
+                    {
+                        action = Some(Action::ToolToggle);
+                    }
+                    ui.add_enabled(free, |ui: &mut egui::Ui| {
+                        egui::ComboBox::from_id_salt("planora-dimension-tool")
+                            .selected_text(tool.choice().label())
+                            .show_ui(ui, |ui| {
+                                for m in ToolMode::CHOICES {
+                                    if ui.selectable_label(tool.choice() == m, m.label()).clicked()
+                                    {
+                                        action = Some(Action::Tool(m));
+                                    }
+                                }
+                            })
+                            .response
+                    })
+                    .on_disabled_hover_text(why);
+                });
+                ui.add_space(below);
+            });
+            ui.advance_cursor_after_rect(Rect::from_min_size(area_rect.min, inner));
+        },
+    );
+    action
+}
+
+/// Ansichtsfeld rechts (Spaltenbreite 250): Name der gewählten Ansicht, Maßstab, Schalter für
+/// verdeckte Kanten und Mittellinien, „Ansicht löschen“; ohne gewählte Ansicht ein Hinweis.
+/// Liefert die gewählte Aktion.
+fn view_field(
+    ctx: &egui::Context,
+    rect: Rect,
+    state: &AppState,
+    drawing: &Drawing,
+    editable: bool,
+) -> Option<Action> {
+    let frame = theme::panel_frame(state.dark);
+    let inner = shell_panels::inner_size(&frame, rect.size());
+    let margin = f32::from(frame.inner_margin.left);
     let selected = state
         .drawing_ui
         .selected_view
         .and_then(|v| drawing.view(v))
         .cloned();
     let names = view_names(drawing);
-    let p = theme::palette(state.dark);
-    let response = egui::Frame::NONE
-        .inner_margin(egui::Margin::symmetric(8, 6))
-        .fill(p.bg_panel)
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                // Gesperrte Teile über `add_enabled` je Element, nicht über einen eigenen
-                // Bereich (`add_enabled_ui`): ein Bereich bricht sein erstes Element nicht in die
-                // nächste Zeile um und ragte bei schmaler Leiste hinaus.
-                if ui
-                    .add(flat(icons::selectable(false, Icon::ToModel, "3D-Modell")))
-                    .clicked()
-                {
-                    action = Some(Action::ToModel);
-                }
-                let _ = ui.add(flat(icons::selectable(
-                    true,
-                    Icon::OpenDrawing,
-                    format!("Zeichnung: {}", shorten_for_display(&drawing.name)),
-                )));
-                ui.separator();
-                ui.add_enabled(editable, |ui: &mut egui::Ui| {
-                    let saved = ui.style().clone();
-                    theme::frameless(ui.style_mut());
-                    let r = ui
-                        .menu_button((icons::atom(Icon::AddView), "Ansicht hinzufügen"), |ui| {
-                            for k in ViewKind::ALL {
-                                if theme::entry(ui, true, icons::button(Icon::ViewFace, k.label()))
-                                    .clicked()
-                                {
-                                    action = Some(Action::Add(k));
-                                    ui.close();
-                                }
-                            }
-                        })
-                        .response;
-                    ui.set_style(saved);
-                    theme::focus_ring(ui, &r);
-                    r
-                });
-                if ui
-                    .add(flat(icons::button(Icon::FitSheet, "Blatt einpassen")))
-                    .clicked()
-                {
-                    action = Some(Action::Fit);
-                }
-                if ui
-                    .add(flat(icon_only(Icon::ZoomOut)))
-                    .on_hover_text("Verkleinern")
-                    .clicked()
-                {
-                    action = Some(Action::Zoom(1.0 / ZOOM_STEP));
-                }
-                if ui
-                    .add(flat(icon_only(Icon::ZoomIn)))
-                    .on_hover_text("Vergrößern")
-                    .clicked()
-                {
-                    action = Some(Action::Zoom(ZOOM_STEP));
-                }
-                // Zweite Zeile: Maße und die Einstellungen der gewählten Ansicht; sie beginnt immer
-                // neu. Ab etwa 1100 px Breite hat die Leiste so zwei Zeilen und das Wählen einer
-                // Ansicht ändert die Höhe der Blattfläche nicht; schmaler bricht sie weiter um
-                // (dann kann die gewählte Ansicht die Leiste höher machen).
-                ui.end_row();
-                let tip = if selected.is_some() {
-                    "Setzt die wichtigsten Maße in die gewählte Ansicht."
-                } else {
-                    "Setzt die wichtigsten Maße in alle Ansichten."
-                };
-                if ui
-                    .add_enabled(
-                        editable,
-                        flat(icons::button(Icon::SuggestDimensions, SUGGEST)),
-                    )
-                    .on_hover_text(tip)
-                    .clicked()
-                {
-                    action = Some(Action::Suggest);
-                }
-                // Werkzeug „Maß“: Schalter und Untermodus (immer da, damit die Leiste gleich
-                // breit bleibt; gesperrt mit Erklärung). Eingeschaltet trägt der Schalter den
-                // Akzent (Modus an).
-                let blocked = tool_blocked(drawing, editable);
-                let free = blocked.is_none();
-                let tool = &state.dimension_tool;
-                let why = blocked.unwrap_or(TOOL_TIP);
-                let button = if tool.is_active() {
-                    egui::Button::new((
-                        icons::text(Icon::DimensionTool, icons::LABEL_ICON_SIZE, p.on_accent),
-                        egui::RichText::new(TOOL).color(p.on_accent),
-                    ))
-                    .fill(p.accent)
-                    .selected(true)
-                } else {
-                    icons::button(Icon::DimensionTool, TOOL)
-                };
-                if ui
-                    .add_enabled(free, flat(button))
-                    .on_hover_text(TOOL_TIP)
-                    .on_disabled_hover_text(why)
-                    .clicked()
-                {
-                    action = Some(Action::ToolToggle);
-                }
-                ui.add_enabled(free, |ui: &mut egui::Ui| {
-                    egui::ComboBox::from_id_salt("planora-dimension-tool")
-                        .selected_text(tool.choice().label())
-                        .show_ui(ui, |ui| {
-                            for m in ToolMode::CHOICES {
-                                if ui.selectable_label(tool.choice() == m, m.label()).clicked() {
-                                    action = Some(Action::Tool(m));
-                                }
-                            }
-                        })
-                        .response
-                })
-                .on_disabled_hover_text(why);
-                if let Some(v) = &selected {
-                    ui.separator();
-                    ui.strong(names.get(&v.id).cloned().unwrap_or_default());
-                    ui.add_enabled(editable, egui::Label::new("Maßstab"));
-                    ui.add_enabled(editable, |ui: &mut egui::Ui| {
-                        egui::ComboBox::from_id_salt("planora-drawing-scale")
-                            .selected_text(v.scale.label())
-                            .show_ui(ui, |ui| {
-                                for s in Scale::SERIES {
-                                    if ui.selectable_label(s == v.scale, s.label()).clicked() {
-                                        action = Some(Action::Scale(s));
+    let mut action = None;
+    shell_panels::field(
+        ctx,
+        shell_panels::drawing_view_id(),
+        rect.min,
+        frame,
+        |ui| {
+            shell_panels::side_column(ui, inner, margin, |ui| {
+                let area = egui::ScrollArea::vertical()
+                    .id_salt("planora-field-drawing-view-scroll")
+                    .max_height(inner.y)
+                    .auto_shrink([false, true]);
+                theme::scroll_area(ui, area, |ui| {
+                    let Some(v) = &selected else {
+                        theme::section_header(ui, "Ansicht", theme::HEADER_H);
+                        ui.add_space(theme::SPACE_1);
+                        ui.weak(NO_VIEW_SELECTED);
+                        return;
+                    };
+                    let name = names.get(&v.id).cloned().unwrap_or_default();
+                    theme::section_header(ui, &format!("Ansicht „{name}“"), theme::HEADER_H);
+                    ui.add_space(theme::SPACE_1);
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(editable, egui::Label::new("Maßstab"));
+                        ui.add_enabled(editable, |ui: &mut egui::Ui| {
+                            egui::ComboBox::from_id_salt("planora-drawing-scale")
+                                .selected_text(v.scale.label())
+                                .show_ui(ui, |ui| {
+                                    for s in Scale::SERIES {
+                                        if ui.selectable_label(s == v.scale, s.label()).clicked() {
+                                            action = Some(Action::Scale(s));
+                                        }
                                     }
-                                }
-                            })
-                            .response
+                                })
+                                .response
+                        });
                     });
                     let mut hidden = v.show_hidden;
                     if ui
@@ -965,8 +1082,8 @@ fn toolbar(
                     {
                         action = Some(Action::Hidden(hidden));
                     }
-                    // Mittellinien gibt es nur in Normansichten (Blick entlang einer
-                    // Weltachse); in der Isometrie bleibt der Schalter gesperrt.
+                    // Mittellinien gibt es nur in Normansichten (Blick entlang einer Weltachse); in
+                    // der Isometrie bleibt der Schalter gesperrt.
                     let mut centerlines = v.centerlines;
                     if ui
                         .add_enabled(
@@ -978,6 +1095,7 @@ fn toolbar(
                     {
                         action = Some(Action::Centerlines(centerlines));
                     }
+                    ui.add_space(theme::SPACE_1);
                     if ui
                         .add_enabled(
                             editable,
@@ -987,10 +1105,124 @@ fn toolbar(
                     {
                         action = Some(Action::Delete);
                     }
+                });
+            });
+        },
+    );
+    action
+}
+
+/// Inhalt des Hinweisfelds.
+struct HintLines<'a> {
+    /// Hinweise zu den Maßen (verlorene, außerhalb des Blatts).
+    notes: &'a [String],
+    /// Der erste Hinweis betrifft verlorene Maße (rot).
+    lost: bool,
+    /// Meldung und ob sie eine Ablehnung ist (rot).
+    message: Option<(String, bool)>,
+    /// Hinweis zur Bedienung (oder des Werkzeugs „Maß“).
+    hint: String,
+}
+
+/// Rand des Hinweisfelds oben und unten: zwei Textzeilen passen in [`shell::BOTTOM_H`].
+const HINT_MARGIN_V: f32 = theme::SPACE_2;
+
+/// Hinweisfeld unten (statt des Befehlsfelds): höchstens zwei Zeilen. Mit Hinweisen zu den Maßen
+/// oder einer Meldung stehen diese in der ersten Zeile (die verlorenen Maße zuerst und rot, die
+/// Meldung höchstens die halbe Zeile) und der Bedienhinweis in der zweiten; sonst bricht der
+/// Bedienhinweis in bis zu zwei Zeilen um. Zu lange Texte enden mit „…“ (ganz beim Überfahren).
+fn hint_field(ctx: &egui::Context, rect: Rect, dark: bool, lines: HintLines<'_>) {
+    let frame = theme::panel_frame(dark).inner_margin(egui::Margin::symmetric(
+        theme::SPACE_3 as i8,
+        HINT_MARGIN_V as i8,
+    ));
+    let inner = shell_panels::inner_size(&frame, rect.size());
+    let error = error_color(dark);
+    shell_panels::field(
+        ctx,
+        shell_panels::drawing_hint_id(),
+        rect.min,
+        frame,
+        |ui| {
+            ui.set_width(inner.x);
+            ui.set_height(inner.y);
+            let gap = theme::SPACE_1;
+            let row_h = ((inner.y - gap) / 2.0).max(0.0);
+            let weak = ui.visuals().weak_text_color();
+            let row = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
+                ui.allocate_ui_with_layout(
+                    vec2(inner.x, row_h),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| add(ui),
+                );
+            };
+            ui.spacing_mut().item_spacing.y = gap;
+            if lines.notes.is_empty() && lines.message.is_none() {
+                // Nur der Bedienhinweis: in bis zu zwei Zeilen, mittig in der Höhe.
+                let galley = shell_panels::wrapped(ui.ctx(), &lines.hint, weak, inner.x, 2);
+                let size = vec2(inner.x, galley.size().y);
+                ui.add_space(((inner.y - size.y) / 2.0).max(0.0));
+                let (r, response) = ui.allocate_exact_size(size, Sense::hover());
+                let enabled = ui.is_enabled();
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, &lines.hint)
+                });
+                let elided = galley.elided;
+                ui.painter().galley(r.min, galley, weak);
+                if elided {
+                    response.on_hover_text(lines.hint);
+                }
+                return;
+            }
+            row(ui, &mut |ui| {
+                // Die Maßhinweise teilen sich die Zeile (mit Meldung höchstens die halbe); zu lange
+                // enden mit „…“ und zeigen sich beim Überfahren ganz.
+                let share = if lines.message.is_some() { 0.5 } else { 1.0 };
+                let gap = ui.spacing().item_spacing.x;
+                let mut budget = share * ui.available_width();
+                for (i, t) in lines.notes.iter().enumerate() {
+                    let w = budget / (lines.notes.len() - i) as f32;
+                    let text = if i == 0 && lines.lost {
+                        egui::RichText::new(t.as_str()).color(error)
+                    } else {
+                        egui::RichText::new(t.as_str())
+                    };
+                    let used = ui
+                        .scope(|ui| {
+                            ui.set_max_width(w.max(0.0));
+                            ui.add(egui::Label::new(text).truncate()).rect.width()
+                        })
+                        .inner;
+                    budget -= used + gap;
+                }
+                if let Some((m, rejected)) = &lines.message {
+                    if !lines.notes.is_empty() {
+                        ui.separator();
+                    }
+                    // Die Meldung nimmt höchstens die halbe Zeile, wenn auch Maßhinweise dastehen.
+                    let w = if lines.notes.is_empty() {
+                        ui.available_width()
+                    } else {
+                        (0.5 * ui.available_width()).max(40.0)
+                    };
+                    ui.scope(|ui| {
+                        ui.set_max_width(w);
+                        let text = if *rejected {
+                            egui::RichText::new(m.as_str()).color(error)
+                        } else {
+                            egui::RichText::new(m.as_str())
+                        };
+                        ui.add(egui::Label::new(text).truncate());
+                    });
                 }
             });
-        });
-    (response.response.rect, action)
+            row(ui, &mut |ui| {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(lines.hint.as_str()).weak()).truncate(),
+                );
+            });
+        },
+    );
 }
 
 fn set_selected(
@@ -1253,13 +1485,14 @@ struct Poly {
     points: Vec<DVec2>,
 }
 
-/// Blattfläche: Eingaben und Zeichnen. Liefert die Aufteilung (ohne Werkzeugleiste und
-/// Hinweis) und ob noch etwas berechnet wird.
+/// Blattfläche: Eingaben und Zeichnen auf `paint` (mit `response` darüber), Einpassen und
+/// Umrechnen in `canvas`. Liefert die Aufteilung (ohne Werkzeug- und Hinweisfeld) und ob noch
+/// etwas berechnet wird.
 fn canvas_ui(
     ui: &mut egui::Ui,
     state: &mut AppState,
     id: DrawingId,
-    canvas: Rect,
+    (paint, canvas): (Rect, Rect),
     response: &egui::Response,
     editable: bool,
 ) -> Option<(DrawingLayout, bool)> {
@@ -1464,8 +1697,8 @@ fn canvas_ui(
     let placed = place_views(state, &drawing, &sheet, model);
     let polys = polylines_cached(&ctx, &sheet, lines_gen, k);
     let to_screen = |p: DVec2| sheet_to_screen(canvas, sheet_mm, zoom, pan, p);
-    let painter = ui.painter_at(canvas);
-    painter.rect_filled(canvas, 0.0, theme::drawing_surround(state.dark));
+    let painter = ui.painter_at(paint);
+    painter.rect_filled(paint, 0.0, theme::drawing_surround(state.dark));
     let paper = Rect::from_two_pos(
         to_screen(DVec2::ZERO),
         to_screen(DVec2::new(sheet_mm.0, sheet_mm.1)),
@@ -1562,7 +1795,7 @@ fn canvas_ui(
                     StrokeKind::Inside,
                 );
                 // Texte und Balken bleiben im Rahmen, auch wenn er zu klein ist.
-                let painter = painter.with_clip_rect(rect.intersect(canvas));
+                let painter = painter.with_clip_rect(rect.intersect(paint));
                 let inner = rect.shrink(6.0);
                 let name = painter.layout(
                     v.name.clone(),
@@ -1609,7 +1842,7 @@ fn canvas_ui(
                 );
                 // Der Text bleibt im Rahmen, auch wenn er zu klein ist. Rot des Papiers (das Blatt
                 // ist in beiden Themen weiß).
-                let painter = painter.with_clip_rect(rect.intersect(canvas));
+                let painter = painter.with_clip_rect(rect.intersect(paint));
                 let inner = rect.shrink(6.0);
                 let galley = painter.layout(
                     format!("{}: {m}", v.name),
@@ -1645,9 +1878,10 @@ fn canvas_ui(
         });
     }
     let layout = DrawingLayout {
-        area: canvas,
+        area: paint,
         toolbar: canvas,
         canvas,
+        paint,
         hint: canvas,
         sheet_mm,
         zoom,

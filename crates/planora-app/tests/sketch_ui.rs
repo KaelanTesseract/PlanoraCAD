@@ -149,22 +149,32 @@ fn every_tool_and_a_selection_can_be_drawn() {
 #[test]
 fn texts_in_the_panel_are_german() {
     let ctx = context();
+    ctx.enable_accesskit();
     let mut s = populated();
     let mut seen = String::new();
-    // Ein neues Fenster wird im ersten Frame nur vermessen (unsichtbar); geprüft wird der letzte.
+    // Ein neues Feld wird im ersten Frame nur vermessen (unsichtbar); geprüft wird der letzte.
+    // Die Werkzeugleiste zeigt Symbole; ihre Namen stehen in der Knopfbeschreibung (für
+    // Bildschirmleser) und im Hinweistext beim Überfahren.
     for frame in 0..3 {
-        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             sketch_panel::show(ui.ctx(), &mut s);
         });
         if frame == 2 {
             seen.push_str(&planora_app::testing::collect_texts(&out));
+            let update = out.platform_output.accesskit_update.take().unwrap();
+            for (_, node) in &update.nodes {
+                if let Some(label) = node.label() {
+                    seen.push_str(label);
+                    seen.push('\n');
+                }
+            }
         }
         out.drop_without_applying_deltas();
     }
-    for must in ["Linie", "Kreis", "Skizze beenden"] {
+    for must in ["Linie", "Kreis", "Skizze beenden", "Abhängigkeiten"] {
         assert!(
-            seen.contains(must),
-            "„{must}“ fehlt in der Werkzeugleiste:\n{seen}"
+            seen.lines().any(|l| l == must),
+            "„{must}“ fehlt in den Skizzenfeldern:\n{seen}"
         );
     }
 }

@@ -12,4 +12,8 @@ pub use scene::{
     EdgeRef, FaceRef, FaceVertex, Highlight, LineVertex, Palette, Pick, SceneData, build_scene,
     build_scene_marked,
 };
-pub use viewcube::{CubeFace, ISO_VIEW, ViewFace, cube_faces, cube_hit_test};
+pub use viewcube::{
+    CubeFace, CubePiece, CubeRegion, INSET, ISO_VIEW, REGION_COUNT, ViewFace, all_regions,
+    cube_faces, cube_hit_test, cube_pieces, cube_pieces_visible, current_region, face_text_frame,
+    pieces_hit_test,
+};

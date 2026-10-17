@@ -157,3 +157,58 @@ fn pan_scale_is_unchanged_by_the_offset() {
     offset.pan(30.0, -12.0, FULL.y);
     assert!((plain.target - offset.target).length() < 1e-5);
 }
+
+#[test]
+fn frame_points_fills_the_visible_rect_and_keeps_the_view_direction() {
+    // Ein ebenes Rechteck 80 × 30, senkrecht von vorne (Blick entlang +y) und schräg gesehen.
+    let rect = [
+        Vec3::new(40.0, 7.0, -3.0),
+        Vec3::new(120.0, 7.0, -3.0),
+        Vec3::new(120.0, 7.0, 27.0),
+        Vec3::new(40.0, 7.0, 27.0),
+    ];
+    for (yaw, pitch, plain) in [
+        (-std::f32::consts::FRAC_PI_2, 0.0_f32, true),
+        (-1.2, 0.3, false),
+    ] {
+        for visible in [true, false] {
+            let mut c = OrbitCamera {
+                yaw,
+                pitch,
+                ..cam()
+            };
+            if visible {
+                c.set_visible(FULL, (VIS_MIN, VIS_SIZE));
+            } else {
+                c.set_viewport(FULL.x, FULL.y);
+            }
+            c.frame_points(&rect);
+            assert_eq!((c.yaw, c.pitch), (yaw, pitch), "Blickrichtung bleibt");
+            let (min, size) = if visible {
+                (VIS_MIN, VIS_SIZE)
+            } else {
+                (Vec2::ZERO, FULL)
+            };
+            let pts: Vec<Vec2> = rect.iter().map(|p| c.project(*p, FULL).unwrap()).collect();
+            let lo = pts.iter().fold(pts[0], |a, p| a.min(*p));
+            let hi = pts.iter().fold(pts[0], |a, p| a.max(*p));
+            assert!(lo.x >= min.x - 0.5 && lo.y >= min.y - 0.5, "{lo:?}");
+            assert!(
+                hi.x <= min.x + size.x + 0.5 && hi.y <= min.y + size.y + 0.5,
+                "{hi:?}"
+            );
+            let centre = (lo + hi) * 0.5;
+            if plain {
+                assert!((centre - (min + size * 0.5)).length() < 0.5, "{centre:?}");
+                // Rand 15 %: Die begrenzende Richtung ist zu 1/1,15 gefüllt.
+                let fill = ((hi.x - lo.x) / size.x).max((hi.y - lo.y) / size.y);
+                assert!((fill - 1.0 / 1.15).abs() < 1e-3, "{fill}");
+            }
+        }
+    }
+    // Ohne Punkte (oder nur ungültige) bleibt die Kamera, wie sie ist.
+    let mut c = cam();
+    c.frame_points(&[]);
+    c.frame_points(&[Vec3::NAN]);
+    assert_eq!(c, cam());
+}

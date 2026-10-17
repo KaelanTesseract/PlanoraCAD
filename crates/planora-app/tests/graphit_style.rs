@@ -400,7 +400,8 @@ fn no_text_is_clipped_at_1400px() {
     }
     nothing_clipped(&s, "Tab-Leiste");
 
-    // Zeichnungsleiste mit gewählter Ansicht: genau zwei Zeilen, nichts abgeschnitten.
+    // Zeichnungsfelder mit gewählter Ansicht: das Werkzeugfeld hat genau zwei Zeilen, die
+    // Einstellungen der Ansicht stehen im Ansichtsfeld rechts; nichts abgeschnitten.
     let mut st = drawing_state();
     let mut s = shot(&c, WIDTH, |ui| drawing_view::show(ui, &mut st));
     for _ in 0..2 {
@@ -411,7 +412,7 @@ fn no_text_is_clipped_at_1400px() {
     for t in s.texts.iter().filter(|t| bar.contains(t.rect.center())) {
         assert!(
             bar.expand(0.5).contains_rect(t.rect) && t.rect.right() <= WIDTH,
-            "„{}“ ragt aus der Leiste {bar:?}: {:?}",
+            "„{}“ ragt aus dem Werkzeugfeld {bar:?}: {:?}",
             t.text,
             t.rect
         );
@@ -421,31 +422,61 @@ fn no_text_is_clipped_at_1400px() {
         }
     }
     assert_eq!(rows.len(), 2, "zwei Zeilen: {rows:?}");
+    for must in ["3D-Modell", "Blatt einpassen", drawing_view::SUGGEST] {
+        assert!(
+            bar.contains_rect(s.text(must).rect),
+            "„{must}“ im Werkzeugfeld"
+        );
+    }
+    let side = planora_app::shell_panels::field_rects(&c)
+        .into_iter()
+        .find(|(n, _)| *n == "Ansichtsfeld")
+        .expect("Ansichtsfeld")
+        .1;
     for must in [
-        "3D-Modell",
-        "Blatt einpassen",
-        drawing_view::SUGGEST,
+        "Ansicht „Vorne“",
         "Verdeckte Kanten zeigen",
         drawing_view::CENTERLINES,
         "Ansicht löschen",
     ] {
         assert!(
-            bar.contains_rect(s.text(must).rect),
-            "„{must}“ in der Leiste"
+            side.contains_rect(s.text(must).rect),
+            "„{must}“ im Ansichtsfeld"
         );
     }
-    nothing_clipped(&s, "Zeichnungsleiste");
+    nothing_clipped(&s, "Zeichnungsfelder");
 
-    // Fenster „Skizze“: alle Texte im Fenster sichtbar.
+    // Skizzenfelder (Leiste, Feld, Fuß): alle Texte sichtbar, keiner abgeschnitten; die
+    // Werkzeugnamen stehen als Hinweistext an den Symbolen der Leiste.
     let mut st = AppState::new();
     let i = st
         .add_sketch(SketchPlane::Standard(StandardPlane::XY))
         .unwrap();
     st.open_sketch(i).unwrap();
     let s = settle(&c, |ctx| sketch_panel::show(ctx, &mut st));
-    s.text("Körperkante kopieren");
-    s.text("Skizze beenden");
-    nothing_clipped(&s, "Fenster „Skizze“");
+    for must in [
+        "Abhängigkeiten",
+        "Abstand Punkt–Linie …",
+        "Konstruktion umschalten",
+        "Skizze beenden",
+    ] {
+        s.text(must);
+    }
+    // Der Schalter „Waagerecht/senkrecht erkennen“ steht in zwei Zeilen.
+    assert_eq!(sketch_panel::AUTO_AXIS, "Waagerecht/senkrecht erkennen");
+    s.text(&sketch_panel::auto_axis_label());
+    assert!(
+        !sketch_panel::AUTO_AXIS_HINT.contains("  "),
+        "Leerzeichen-Kolonne im Hinweistext"
+    );
+    nothing_clipped(&s, "Skizzenfelder");
+    // Die Symbole der Leiste liegen ganz im Fenster (ihr Name steht im Hinweistext, siehe
+    // tests/sketch_fields.rs).
+    let buttons = sketch_panel::strip_buttons(&c);
+    assert!(buttons.iter().any(|(l, _)| *l == "Körperkante kopieren"));
+    for (label, r) in buttons {
+        assert!(r.left() >= 0.0 && r.bottom() <= HEIGHT, "{label} {r:?}");
+    }
 
     // Eigenschaften in Bereichsbreite (24 % von 1400 px).
     let mut st = AppState::new();

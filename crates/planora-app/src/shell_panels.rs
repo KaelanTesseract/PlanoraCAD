@@ -1,7 +1,11 @@
 //! Schwebende Felder (Graphit, Etappe B): oben Menü und Tabs, links Projekte und Feature-Baum,
 //! rechts Eigenschaften oder Versionen, links unten die Statuszeile und bei alten Versionen ein
 //! schmaler Hinweis unter dem oberen Feld. Jedes Feld ist ein `egui::Area` an der Stelle aus
-//! [`shell::layout`]; die Inhalte zeichnen die bisherigen Bereichsfunktionen.
+//! [`shell::layout_in_mode`]; die Inhalte zeichnen die bisherigen Bereichsfunktionen. Im
+//! Skizzenmodus (Etappe C) entfallen Baum, Eigenschaften und Befehlsfeld; Leiste, Skizzenfeld und
+//! Fuß zeichnet `sketch_panel::show` an den hier berechneten Rechtecken. Im Zeichnungsmodus bleibt
+//! der Baum links; Werkzeugfeld, Ansichtsfeld (statt Eigenschaften) und Hinweisfeld (statt des
+//! Befehlsfelds) zeichnet `drawing_view::show_with` an den hier berechneten Rechtecken.
 //!
 //! Breiten und Höhen kommen aus der Geometrie (keine Rückkopplung über die Feldgröße). Status und
 //! Hinweis werden vorab gesetzt (der Hinweis bis zu zwei Zeilen, der Status bis zu drei und er
@@ -17,7 +21,7 @@
 use egui::{Vec2, vec2};
 
 use crate::app::{self, CreateKind, PlanoraApp};
-use crate::shell::{self, RightTab, ShellRects};
+use crate::shell::{self, RightTab, ShellMode, ShellRects};
 use crate::state::AppState;
 use crate::{browser, icons, projects_panel, properties, tabs, theme, versions_panel};
 use planora_kernel::BoolOp;
@@ -49,10 +53,67 @@ fn banner_id() -> egui::Id {
     egui::Id::new("planora-field-banner")
 }
 
+/// Werkzeugleiste des Skizzenmodus (gezeichnet von [`crate::sketch_panel::show`]).
+pub(crate) fn sketch_strip_id() -> egui::Id {
+    egui::Id::new("planora-field-sketch-strip")
+}
+
+/// Skizzenfeld rechts (gezeichnet von [`crate::sketch_panel::show`]).
+pub(crate) fn sketch_side_id() -> egui::Id {
+    egui::Id::new("planora-field-sketch-side")
+}
+
+/// Fußfeld des Skizzenmodus (gezeichnet von [`crate::sketch_panel::show`]).
+pub(crate) fn sketch_foot_id() -> egui::Id {
+    egui::Id::new("planora-field-sketch-foot")
+}
+
+/// Werkzeugfeld der Zeichnung (gezeichnet von [`crate::drawing_view::show_with`]).
+pub(crate) fn drawing_tool_id() -> egui::Id {
+    egui::Id::new("planora-field-drawing-tool")
+}
+
+/// Ansichtsfeld der Zeichnung rechts (gezeichnet von [`crate::drawing_view::show_with`]).
+pub(crate) fn drawing_view_id() -> egui::Id {
+    egui::Id::new("planora-field-drawing-view")
+}
+
+/// Hinweisfeld der Zeichnung unten (gezeichnet von [`crate::drawing_view::show_with`]).
+pub(crate) fn drawing_hint_id() -> egui::Id {
+    egui::Id::new("planora-field-drawing-hint")
+}
+
+/// Gemerkte Wunschbreite des Fußfelds (Hinweis, Status, „Skizze beenden“, Rand).
+pub(crate) fn sketch_foot_width_key() -> egui::Id {
+    sketch_foot_id().with("wanted")
+}
+
+/// Gemerkte Mindestbreite des Fußfelds (Status, „Skizze beenden“, Rand; der Hinweis kürzt sich).
+pub(crate) fn sketch_foot_min_key() -> egui::Id {
+    sketch_foot_id().with("min")
+}
+
+/// Modus der Oberfläche für den Zustand eines Tabs: offene Skizze, sonst Zeichnung oder Modell.
+pub fn mode_of(state: &AppState) -> ShellMode {
+    if state.sketch_session.is_some() {
+        ShellMode::Sketch
+    } else if matches!(
+        state.drawing_ui.area,
+        crate::drawing_state::WorkArea::Drawing(_)
+    ) {
+        ShellMode::Drawing
+    } else {
+        ShellMode::Model
+    }
+}
+
 /// Gemerkte Wunschbreite des oberen Felds (außen).
 fn top_width_key() -> egui::Id {
     top_id().with("wanted")
 }
+
+/// Mindestbreite des Hinweisfelds der Zeichnung (außen); ein langer Status bricht dann um.
+const DRAWING_HINT_MIN_W: f32 = 2.0 * shell::MIN_FIELD_W;
 
 /// Platz, den die Tab-Leiste neben dem Menü mindestens bekommt (etwa ein Tab).
 const MIN_TABS_W: f32 = 120.0;
@@ -77,7 +138,7 @@ fn bottom_min_key() -> egui::Id {
     bottom_id().with("min")
 }
 
-fn stored(ctx: &egui::Context, key: egui::Id) -> Option<f32> {
+pub(crate) fn stored(ctx: &egui::Context, key: egui::Id) -> Option<f32> {
     ctx.data(|d| d.get_temp::<f32>(key))
 }
 
@@ -93,7 +154,7 @@ pub fn discard(ctx: &egui::Context, reason: &'static str) {
 
 /// Merkt sich eine gemessene Breite; weicht sie von der zuletzt gemerkten ab, wird der Durchgang
 /// verworfen und mit der neuen Breite wiederholt.
-fn remember_width(ui: &egui::Ui, key: egui::Id, width: f32) {
+pub(crate) fn remember_width(ui: &egui::Ui, key: egui::Id, width: f32) {
     let old = stored(ui.ctx(), key);
     ui.ctx().data_mut(|d| d.insert_temp(key, width));
     if old.is_some_and(|o| (o - width).abs() > 0.5) {
@@ -112,8 +173,8 @@ const MAX_ROWS: usize = 2;
 /// Höchstzahl der Zeilen im Status: bei schmalem Platz (Befehlsfeld daneben) bis zu drei.
 const STATUS_ROWS: usize = 3;
 
-/// Bricht `text` (Textstil `Body`) bei `max_width` um, höchstens [`MAX_ROWS`] Zeilen.
-fn wrapped(
+/// Bricht `text` (Textstil `Body`) bei `max_width` um, höchstens `rows` Zeilen.
+pub(crate) fn wrapped(
     ctx: &egui::Context,
     text: &str,
     color: egui::Color32,
@@ -203,13 +264,13 @@ fn text_field(
 }
 
 /// Innenmaß eines Felds mit Rahmen `frame` und Außenmaß `outer` (Rand und Strich abgezogen).
-fn inner_size(frame: &egui::Frame, outer: Vec2) -> Vec2 {
+pub(crate) fn inner_size(frame: &egui::Frame, outer: Vec2) -> Vec2 {
     (outer - frame.total_margin().sum()).max(Vec2::ZERO)
 }
 
 /// Rahmen einer einzeiligen Leiste der Höhe `height`: wie [`theme::panel_frame`], der Rand oben
 /// und unten so, dass genau eine Zeile ([`theme::ROW_H`]) hineinpasst.
-fn bar_frame(dark: bool, height: f32) -> egui::Frame {
+pub(crate) fn bar_frame(dark: bool, height: f32) -> egui::Frame {
     let frame = theme::panel_frame(dark);
     let v = ((height - 2.0 * frame.stroke.width - theme::ROW_H) / 2.0).max(0.0);
     frame.inner_margin(egui::Margin::symmetric(theme::SPACE_3 as i8, v as i8))
@@ -221,7 +282,7 @@ fn bar_frame(dark: bool, height: f32) -> egui::Frame {
 /// Deshalb belegt der Inhalt eine eigene Fläche, deren Größe nicht in das Feld zurückwirkt, und
 /// wird am Innenrand des Rahmens (`margin`) abgeschnitten. Die Inhalte selbst sind so gesetzt,
 /// dass sie in die Breite passen (Hand-Prüfung Haltepunkt 2).
-fn side_column<R>(
+pub(crate) fn side_column<R>(
     ui: &mut egui::Ui,
     inner: Vec2,
     margin: f32,
@@ -242,7 +303,14 @@ fn side_column<R>(
 
 /// Ein Feld: Area an `pos` mit Rahmen `frame`. Der erste, unsichtbare Größen-Durchgang eines
 /// neuen Felds wird verworfen, damit es schon im ersten Bild sichtbar an seiner Stelle steht.
-fn field<R>(
+///
+/// Rand: egui sucht Widgets in einem Kreis (`interact_radius`) um den Zeiger und lässt die
+/// Ebenen darunter mitzählen, solange kein Widget der oberen Ebene den ganzen Kreis abdeckt.
+/// Knapp innerhalb des Feldrands galt so der 3D-Bereich (bzw. die Skizze) darunter noch als
+/// „hovered“: Mausrad, Ziehen und Vorschau gingen durch. Ein unsichtbares Widget (nur Hover)
+/// über dem Feld, um `interact_radius` vergrößert, deckt den Kreis ab, sobald der Zeiger im Feld
+/// ist. Knapp außerhalb deckt es ihn nicht ab: dort bleibt der Bereich darunter erreichbar.
+pub(crate) fn field<R>(
     ctx: &egui::Context,
     id: egui::Id,
     pos: egui::Pos2,
@@ -254,7 +322,14 @@ fn field<R>(
             if ui.is_sizing_pass() {
                 discard(ui.ctx(), "Feld: erste Größenbestimmung");
             }
-            frame.show(ui, add_contents).inner
+            let shown = frame.show(ui, add_contents);
+            let radius = ui.style().interaction.interact_radius;
+            ui.interact(
+                shown.response.rect.expand(radius),
+                id.with("rand"),
+                egui::Sense::hover(),
+            );
+            shown.inner
         })
         .inner
 }
@@ -278,17 +353,28 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
         // (Meldungen und Hinweise bleiben ganz lesbar); reicht der Platz nicht, rollt das Feld.
         let status_need = two_row_width(ctx, &status.0) + margin;
         let bottom_cap = content.width() - 2.0 * (shell::SHELL_INSET + shell::GAP + status_need);
+        // Im Skizzenmodus steht unten das Fußfeld statt des Befehlsfelds (gleiche Regeln).
+        let mode = mode_of(&tab.state);
+        let (wanted_key, min_key) = if mode == ShellMode::Sketch {
+            (sketch_foot_width_key(), sketch_foot_min_key())
+        } else {
+            (bottom_width_key(), bottom_min_key())
+        };
         // Das Feld bleibt immer da: mindestens die drei Chips mit Trennstrich; der Status nimmt
         // den Rest links davon (bis zu drei Zeilen, sonst gekürzt mit vollem Text beim Überfahren).
-        let bottom_w = match stored(ctx, bottom_width_key()) {
+        let bottom_w = match stored(ctx, wanted_key) {
+            // Das Hinweisfeld der Zeichnung nimmt die ganze Breite, die der Status ihm lässt,
+            // mindestens aber [`DRAWING_HINT_MIN_W`].
+            _ if mode == ShellMode::Drawing => bottom_cap.max(DRAWING_HINT_MIN_W),
             Some(wanted) => wanted
                 .min(bottom_cap)
-                .max(stored(ctx, bottom_min_key()).unwrap_or(0.0)),
+                .max(stored(ctx, min_key).unwrap_or(0.0)),
             None => 0.0,
         };
         let top_min = stored(ctx, top_min_key()).unwrap_or(0.0);
-        let rects = shell::layout_with_top_min(
+        let rects = shell::layout_in_mode(
             content,
+            mode,
             &app.shell,
             (top_w, top_min),
             bottom_w,
@@ -298,12 +384,26 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
         (rects, status, tab.state.dark)
     };
     let (rects, _, _) = layout(app);
+    let mode_before = mode_of(&app.ws.active_tab().state);
     top_field(ctx, &rects, app);
-    left_field(ctx, &rects, app);
-    right_field(ctx, &rects, app);
-    bottom_field(ctx, &rects, app);
+    // Im Skizzenmodus zeichnet `sketch_panel::show` Leiste, Skizzenfeld und Fuß an `rects`, im
+    // Zeichnungsmodus `drawing_view::show_with` Werkzeug-, Ansichts- und Hinweisfeld.
+    if rects.strip.is_none() {
+        left_field(ctx, &rects, app);
+    }
+    if rects.strip.is_none() && rects.tool.is_none() {
+        right_field(ctx, &rects, app);
+        bottom_field(ctx, &rects, app);
+    } else {
+        // Kein Befehlsfeld: auch keine Knopflagen aus einem früheren Bild melden.
+        ctx.data_mut(|d| d.remove::<Vec<(String, egui::Rect)>>(buttons_key()));
+    }
     // Die Felder können den Tab gewechselt oder eine Meldung gesetzt haben: Status und Hinweis
     // zeigen schon den neuen Stand.
+    // Wechselte dabei der Modus, stimmen die Felder dieses Durchgangs nicht mehr: verwerfen.
+    if mode_of(&app.ws.active_tab().state) != mode_before {
+        discard(ctx, "Moduswechsel");
+    }
     let (rects, status, dark) = layout(app);
     text_field(
         ctx,
@@ -341,6 +441,12 @@ pub fn field_rects(ctx: &egui::Context) -> Vec<(&'static str, egui::Rect)> {
         ("unten", bottom_id()),
         ("Status", status_id()),
         ("Hinweis", banner_id()),
+        ("Leiste", sketch_strip_id()),
+        ("Skizze", sketch_side_id()),
+        ("Fuß", sketch_foot_id()),
+        ("Werkzeugfeld", drawing_tool_id()),
+        ("Ansichtsfeld", drawing_view_id()),
+        ("Hinweisfeld", drawing_hint_id()),
     ]
     .into_iter()
     .filter(|(_, id)| {
@@ -599,8 +705,9 @@ fn explain(response: egui::Response, label: &str, reason: &'static str) -> egui:
 
 /// Unteres Befehlsfeld: Abkürzungen zu Menüaktionen (Boolesche Operationen als Chips, dann die
 /// Erzeugen- und Bearbeiten-Aktionen als Symbolknöpfe). Jeder Knopf ruft dieselbe Funktion wie
-/// der Menüeintrag und ist wie das Menü gesperrt (alte Version, offene Rückfrage); im Skizzen-Modus
-/// beendet er die Skizze wie das Menü. Zu schmal für alle Knöpfe, rollt der Inhalt waagerecht.
+/// der Menüeintrag und ist wie das Menü gesperrt (alte Version, offene Rückfrage). Im Skizzen-Modus
+/// gibt es das Feld nicht (dort steht das Fußfeld der Skizze). Zu schmal für alle Knöpfe, rollt
+/// der Inhalt waagerecht.
 fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let dark = app.ws.active_tab().state.dark;
     let p = theme::palette(dark);
@@ -648,7 +755,6 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                     }
                     ui.separator();
                     chips_end = ui.cursor().left() - start;
-                    let blend = icons::IconSource::Feature(icons::FeatureIcon::Blend);
                     let mut items: Vec<(&str, icons::IconSource, Command, Option<&'static str>)> =
                         CreateKind::ALL
                             .iter()
@@ -657,8 +763,9 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                                 (k.label(), k.icon(), Command::Create(*k), own)
                             })
                             .collect();
-                    items.push(("Verrunden …", blend, Command::Blend(false), blend_blocked));
-                    items.push(("Fase …", blend, Command::Blend(true), blend_blocked));
+                    for (label, source, chamfer) in icons::blend_entries() {
+                        items.push((label, source, Command::Blend(chamfer), blend_blocked));
+                    }
                     for (i, (label, source, cmd, own)) in items.into_iter().enumerate() {
                         if i == CreateKind::ALL.len() {
                             ui.separator();

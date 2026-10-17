@@ -101,7 +101,7 @@ Stand: 2026-10-10 (nach der Abschlusswelle). Bewusst offen gelassen; Fehlerfäll
 - Die Dialoge „Skizze extrudieren/drehen“ und „Boolesche Operation“ merken sich Skizze bzw. Körper als Listenplatz; wird währenddessen gelöscht, zeigen sie auf einen anderen Eintrag. Eine Drehachse, die nicht (mehr) zur gewählten Skizze gehört, wird mit Meldung abgelehnt.
 - Fertige Skizzen werden in der 3D-Ansicht jedes Bild neu in Linien zerlegt; Linienstücke mit einem Endpunkt hinter der Kamera fallen weg (kein Abschneiden an der Nahebene).
 - Körper entstehen nur außerhalb des Skizzen-Modus (die offene Skizze wird vorher beendet).
-- Hinweise erscheinen in der Statuszeile und im Skizzenfenster ebenfalls rot (keine Unterscheidung Hinweis/Fehler).
+- Hinweise erscheinen in der Statuszeile und im Fußfeld der Skizze (bis Etappe B: im Skizzenfenster) ebenfalls rot (keine Unterscheidung Hinweis/Fehler).
 - Esc schließt das Zahlenfeld für Maße nicht (es schließt bei neuer Auswahl oder mit Eingabe).
 - Roboto enthält `∥` und `⟂` nicht; angezeigt werden `||` und „Lot“. Beschriftungen an derselben Stelle können sich bei dichten Skizzen überlappen.
 - Ein Klick auf den Navigationswürfel im Skizzen-Modus kippt die Kamera (auch Ziehen am Würfel ist im Skizzen-Modus nicht gesperrt); danach ist die Sicht nicht mehr senkrecht, bis die Skizze neu geöffnet wird. Mit großer Skizze erscheint die z-Achse des Gitters in der Draufsicht als schräge Linie.
@@ -557,7 +557,7 @@ Stand: 2026-10-16. Zeichnungen bekommen Maße (waagerecht, senkrecht, schräg, D
 
 *Oberfläche*
 - Die Maße werden nach einer Modelländerung im Oberflächenfaden aufgelöst (billig, bei 2000 Maßen aber spürbar); beim Ziehen werden die Markierungen je Bild neu berechnet, die Vorschau des Werkzeugs je Bild ohne Zwischenspeicher.
-- Die Werkzeugleiste des Zeichnungsbereichs hat immer zwei Zeilen (die Zeichenfläche liegt etwa 20 Pixel tiefer als vorher), damit die Fläche beim Wählen einer Ansicht nicht springt.
+- Das Werkzeugfeld des Zeichnungsbereichs (früher: Werkzeugleiste) hat immer zwei Zeilen, damit die Fläche beim Wählen einer Ansicht nicht springt. Seit Etappe C schwebt es als Feld über dem Blatt; die Zeilen sind anders gruppiert (siehe „Teilprojekt 13 – Etappe C“).
 - Werkzeug: Ein Klick auf den Umriss eines Zylinders misst in linearen Maßen bis zur Achse (Hinweis erscheint). Die Richtung einer Kette folgt automatisch dem größeren Wert; bei fast diagonalen Punkten kann sie kippen. Esc setzt eine Kette, sonst bricht es ab; Doppelklick wirkt nur bei Ketten. Scheitert eine Kette in der Mitte, bleiben die schon gesetzten Maße. Ein Maß wird nahe Ecken vor den Ansichtskanten getroffen; der Abstand 0 zählt als positiv; der kleinste Abstand beim Ziehen ist 1 mm (die Seite wechselt man derzeit nicht; ein Eingabefeld für den Abstand folgt). Zieht man die Maßlinie eines Glieds einer Kette oder von Bezugsmaßen, wandert die ganze Gruppe um dasselbe Stück mit (Text und Führungslinien ziehen weiter einzeln). Das Ziehen schreibt je Bild eine Änderung, das Rückgängigmachen einer Kette sind n Schritte (es gibt noch kein Rückgängig).
 - Die Meldung von „Maße vorschlagen“ verschwindet auch bei anderen Änderungen der Zeichnung. Bei noch nicht berechneter Ansicht fehlt ein eigener Hinweis.
 - Fenster „Maß bearbeiten“: Eigener Text und Passung werden am Rand gekürzt, nur Leerzeichen gilt als „kein Text“; eine obere Abweichung kleiner als die untere und eine negative symmetrische Abweichung lehnt das Fenster rot ab (die Dokumentprüfung und der Dateileser prüfen das nicht, ältere oder veränderte Dateien laden also weiter). Zeilen zweier Maße mit gleichem Text unterscheiden sich nur durch Lage und Tooltip; Gruppenzeilen im Browser haben keine Wirkung; die Symbole sind von Hand gezeichnet und nicht im Bild geprüft; die Anzeige im Hauptfenster (`app.rs`) hat keinen Test.
@@ -717,14 +717,14 @@ Stand: 2026-10-16. Die Modell-Ansicht hat den neuen Aufbau: Der 3D-Bereich füll
 - `shell::layout()` ignoriert `ShellState`: Die Seitenspalten sind immer vorhanden, auch wenn Projekte oder Versionen ausgeblendet sind (nur der Inhalt ändert sich). Bei ausgeblendetem Feld ist die freie Fläche daher nicht größer.
 - Das Hinweisfeld ist 40 px hoch, auch wenn der Hinweis nur eine Zeile braucht (12 px mehr als nötig).
 
-*Skizzenfenster*
+*Skizzenfenster* (seit Etappe C überholt: das Fenster „Skizze“ gibt es nicht mehr)
 - Das Fenster „Skizze“ ist bei 1400 × 900 so hoch, dass egui es nach oben schiebt (Oberkante 81 statt 90, Unterkante am Fensterrand); es überdeckt dann Meldungs- und Befehlsfeld, bleibt aber vorn und verschiebbar. Lage und Höhe regelt Etappe C oder D.
 - Wird eine Skizze unmittelbar nach dem Laden geöffnet, bevor die 3D-Ansicht je ein Bild gezeichnet hat, passt `open_sketch` noch mit der Kamera ohne freie Fläche ein: Die Mitte stimmt, die Größe kann bei kleinen Fenstern etwas über die freie Fläche hinausragen. In der App kommt das praktisch nicht vor.
 - Der Fall „die Skizze bleibt offen, weil der Entwurf ungültig ist“ beim Klick im Befehlsfeld ist nicht getestet.
 - Im Skizzenmodus ist das zweite `fit_camera` nach dem Skizzen-Overlay nur durch einen Test des Seitenverhältnisses bei symmetrischer freier Fläche abgedeckt; ein Zeigerrouting-Test im Skizzenmodus deckt Klick und Mausrad auf den Feldern ab.
 
 *Befehlsfeld und Symbole*
-- Verrunden und Fase teilen sich dasselbe Symbol; unterschieden werden sie nur über den Hover-Hinweis.
+- Verrunden und Fase teilten sich dasselbe Symbol (seit Etappe C hat die Fase ein eigenes).
 - Es gibt keinen Menüeintrag „Verschieben“, deshalb auch keinen Knopf im Befehlsfeld.
 - Chip-Farben kommen aus der Palette (`theme::chip_fill`) in Hell und Dunkel; ob sie auf der echten Oberfläche gut unterscheidbar sind, zeigt die Handliste.
 
@@ -751,8 +751,8 @@ Stand: 2026-10-16. Die Modell-Ansicht hat den neuen Aufbau: Der 3D-Bereich füll
 7. Das Modell dreht, wählt und zoomt nicht, wenn die Maus über einem Feld ist (Klick, Ziehen, Mausrad); ein im 3D-Bereich begonnenes Ziehen läuft über Felder weiter.
 8. Dialoge (Export, Rundung/Fase, Boolesche Operationen, Speichern) liegen über den Feldern und gehen nicht hinter ein Feld, wenn man auf ein Feld klickt.
 9. „Alles einpassen“ zentriert das Modell in der Mitte zwischen den Feldern; ebenso nach neuem Tab, Dokument öffnen und Version öffnen.
-10. Dokument öffnen aus dem Feld Projekte; Skizze öffnen und schließen (die Ansicht kommt zurück, wie sie war); das Skizzenfenster erscheint rechts neben dem linken Feld und lässt sich verschieben.
-11. Zeichnung: Ansicht „Zeichnung“ wählen; das Blatt liegt im freien Bereich zwischen den Feldern, die Zeichnungsleiste ist wie vorher.
+10. Dokument öffnen aus dem Feld Projekte; Skizze öffnen und schließen (die Ansicht kommt zurück, wie sie war); das Skizzenfenster erscheint rechts neben dem linken Feld und lässt sich verschieben (seit Etappe C: Leiste links, Feld rechts, Fuß unten).
+11. Zeichnung: Ansicht „Zeichnung“ wählen; das Blatt liegt im freien Bereich zwischen den Feldern, die Zeichnungsleiste ist wie vorher (seit Etappe C: Werkzeugfeld, Ansichtsfeld, Hinweisfeld).
 12. Befehlsfeld: Chips Vereinigen, Abziehen und Schneiden öffnen den Booleschen Dialog mit der gewählten Operation; die Erzeugen-Symbole, Verrunden und Fase öffnen die gleichen Dialoge wie das Menü; Hover-Hinweise; bei 800 × 600 rollt das Feld waagerecht.
 13. Schreibgeschützte alte Version öffnen: Hinweis unter dem oberen Feld, Baum und Eigenschaften gesperrt, freie Fläche rutscht nach unten.
 14. Lange Fehlermeldung: Das Meldungsfeld zeigt bis zu drei Zeilen, überdeckt nichts, voller Text beim Überfahren.
@@ -771,9 +771,120 @@ Beanstandungen sammeln; sie werden als Nachbesserung oder in Etappe C und D beho
 - Befund 4 (offen, Etappe C): Bei Fensterbreiten unter etwa 1000 px liegt die Startposition des Skizzenfensters (x = 290, Breite 300) über dem Navigationswürfel (bei 800 × 600 der Würfel bei x 414 bis 510, y 88 bis 184). Das Skizzenfenster wird in Etappe C ohnehin zum Feld umgebaut.
 - Befund 5 (offen, Etappe D): Öffentliche Fläche aufräumen: `app::{CreateKind, create_blocked, do_create, open_boolean, open_blend}` könnten `pub(crate)` sein; `viewport::show`, `shell::layout`, `tabs::show` und `versions_panel::show` werden nur noch von Tests benutzt.
 
-**Folgearbeit**
+**Folgearbeit** (Etappe C ist umgesetzt, siehe den Abschnitt „Etappe C“ unten)
 - Etappe C: Zeichnung und Skizze als Felder, Zeichnungsleiste ohne Umbruch, Skizzenfeld rechts statt Fenster (damit entfällt die Platzierung des Skizzenfensters); `layout()` mit `ShellState`; Wächtertests auf Unterordner ausdehnen; Gestaltung des Navigationswürfels (vom Nutzer nach Haltepunkt 2 zurückgestellt; Wunsch des Nutzers: das Aussehen des Würfels wird überarbeitet); Skizzenfenster nicht mehr über dem Würfel (Befund 4).
 - Etappe D: Dialoge im neuen Rahmen mit neuer Breitenregel, Checkboxen, Kontextmenü-Symbole, Aufräumen der `pub`-Fläche (auch der Testhaken oben und Befund 5) und der toten Konstanten, eigenes Fase-Symbol; Symbolwahl nach dem Handtest nachziehen.
+
+## Teilprojekt 13 – Graphit-Oberfläche, Etappe C (Zeichnung, Skizze, Würfel)
+Stand: 2026-10-16. Zeichnung und Skizze haben den neuen Aufbau mit schwebenden Feldern, der Navigationswürfel ist neu gestaltet, und die Fase hat ein eigenes Symbol. Das ist Etappe C von vieren (D: Dialoge). Spec: `specs/2026-10-16-graphit-oberflaeche-design.md` (Abschnitt 12 „Festlegungen der Umsetzung Etappe C“). Plan: `plans/2026-10-16-graphit-etappe-c.md`. Zweig `feature/graphit-etappe-c`.
+
+**Was geliefert wurde**
+- Navigationswürfel (`planora-render/viewcube.rs`, `planora-app/viewport.rs`): 26 anklickbare Bereiche (6 Flächen, 12 Kanten, 8 Ecken), Home-Knopf, Hervorhebung der aktuellen Ansicht in der Akzentfarbe, Name der Ansicht unter dem Würfel, Beschriftung auf den Flächen (verzerrt und mitgedreht). Neu in der Kamera: `home()` und `set_view_region(region)`; die Kamera-Mathematik selbst ist unverändert. Alte Funktionen (`ViewFace`, `cube_faces`, `cube_hit_test`, `set_view`) und ihre Tests bleiben.
+- Skizzenmodus: Das Fenster „Skizze“ entfällt. Links eine Leiste mit den 9 Werkzeugen als Symbole (44 px breit, senkrecht mittig), rechts ein Feld (Abhängigkeiten, Maßeingabe, Bearbeiten, Spiegeln/Muster, Liste), unten ein Fußfeld (Skizzenstatus, Werkzeughinweis, „Skizze beenden“). Das Menü Erzeugen/Bearbeiten ist unverändert und beendet die Skizze wie bisher.
+- Zeichnungsmodus: Das Blatt füllt das ganze Fenster; Werkzeugfeld oben in der Mitte (zwei feste Zeilen), Ansichtsfeld rechts (Maßstab, Verdeckte Kanten, Mittellinien, Ansicht löschen), Hinweisfeld unten (Maßhinweise, Meldungen, Werkzeughinweis). Linke Spalte und Statusfeld wie im Modell.
+- Felder: Jedes Feld hat am Rand ein unsichtbares Hover-Widget, damit das Mausrad am Feldrand nicht mehr zur Skizze oder zum Blatt durchgreift (`shell_panels::field`, gilt auch für die Felder aus Etappe B).
+- Fase-Symbol: `FeatureIcon::Chamfer` (gerade Schräge, handgezeichnet) in Menü, Befehlsfeld und Baum; Verrunden behält `Blend`.
+- Geometrie: `shell::ShellMode`, `layout_in_mode`, `STRIP_W`, `TOOL_H`; `ShellRects` kennt `strip` und `tool`; `DrawingLayout.paint` (volles Malrechteck) neben `canvas` (Einpass-Rechteck).
+
+**Entscheidungen C1–C10** (Entwurfsverfasser; C1 mit Entscheidung des Nutzers; Wortlaut in der Spec, Abschnitt 12)
+- C1 (Nutzer) Würfel: 26 Bereiche, Home, Hervorhebung nur bei Blick auf höchstens 2° zu einem Bereich, Achsenfarben leicht getönt, Größe 84 px, Beschriftung auf der Fläche, Name unter dem Würfel.
+- C2 Home = Isometrisch und „Alles einpassen“.
+- C3 Klick: Fläche = Ansicht auf diese Fläche; Kante = Blick entlang der Kantennormalen; Ecke = Blick auf die Ecke im Isometrie-Winkel.
+- C4 Beschriftungsausrichtung: Seitenflächen „oben“ = +Z, Oben-Fläche „oben“ = +Y, Unten-Fläche „oben“ = −Y, „rechts“ = oben × Normale (nie gespiegelt).
+- C5 Skizzenmodus: Leiste links ersetzt das linke Feld, Feld rechts ersetzt Eigenschaften/Versionen, Fußfeld ersetzt das Befehlsfeld.
+- C6 Zeichnungsmodus: Werkzeugfeld (`TOOL_H` 76) unter dem oberen Feld, Ansichtsfeld ersetzt Eigenschaften/Versionen, Hinweisfeld ersetzt das Befehlsfeld.
+- C7 `drawing_view::show_with` und `sketch_panel::show` zeichnen ihre Felder selbst; ohne Shell im `ctx` rechnen sie das Layout aus `ctx.content_rect()`.
+- C8 Das Befehlsfeld gibt es nur im Modell; in Skizze und Zeichnung erreichen Befehle den Nutzer über das Menü.
+- C9 Das Skizzenfenster entfällt (damit erledigt sich „Skizzenfenster überdeckt Würfel/Status“ aus Etappe B).
+- C10 Fase bekommt ein eigenes Symbol.
+
+**Entscheidungen der Umsetzung (Rulings)**
+- `current_region` behandelt `|pitch| ≥ MAX_PITCH − 1e-4` als genau senkrecht. Die Kamera stoppt 0,573° vor dem Pol, und ohne dieses Einrasten wäre der Rundlauf Oben/Unten (Klick, dann `current_region`) nicht möglich. `Edge{a, b}` muss die Reihenfolge Z, Y, X einhalten (es gibt keinen normalisierenden Konstruktor).
+- Würfel Variante C in Größe B (84 px). Isometrie = Ecke Oben-Vorne-Rechts; die drei Nachbarecken sind dort als schräge Dreiecke sichtbar, ihre Kanten nicht (geometrisch richtig).
+- Home-Knopf links neben dem Würfel, oben bündig, 2 px Überlapp mit dem Würfelfeld (damit er in der freien Fläche bleibt). Würfel und Home nehmen `Sense::click_and_drag`, damit ein Zug auf dem Würfel nicht dreht.
+- Beschriftung als egui-Galley-Netz, das mit den Achsen der Fläche abgebildet wird (kein Rückfall auf Strichschrift nötig). Beschriftung ab `facing` 0,3 (`LABEL_MIN_FACING`), voll deckend ab 0,5; Stücke selbst ab 0,15, voll ab 0,3. Das längste Wort füllt 85 % der Flächenbreite (Schrift etwa 7–8 px).
+- Hover-Farben: normale Bereiche `cube_hover_fill`, aktuelle Ansicht `highlight_hover` (Akzent 12 % zu Weiß).
+- Das Fußfeld im Skizzenmodus darf breiter sein als der Platz zwischen den Spalten (Obergrenze `Fensterbreite − 2·(Rand + 44 + Abstand)`); der Status schrumpft. Sonst überlief bei 800 × 600 der Status den Knopf „Skizze beenden“.
+- Der Schalter heißt „Waagerecht/senkrecht erkennen“ und steht zweizeilig (einzeilig 201 px, im Feld bleiben 188 px). Der Nutzer prüft die Beschriftung am Bildschirm; Hover-Text `AUTO_AXIS_HINT`.
+- Löschen in der Abhängigkeitsliste ist ein Symbolknopf (Tooltip und `widget_info` „Abhängigkeit löschen“); „anzeigend“ steht bei Maßen in einer zweiten Zeile. Die Maßeingabe stapelt (Zahlenfeld, darunter OK/Abbrechen) und rollt sich selbst ins Bild.
+- Feldrand-Hover-Widget für alle Felder (um `interact_radius` vergrößertes, unsichtbares Widget in `shell_panels::field`); kein toter Streifen, außerhalb des Felds bleibt die Fläche darunter erreichbar. Mausrad über Würfel und Home-Knopf zoomt (Modell und Skizze; Zoom läuft nach den Würfel-Knöpfen, `viewport::show_in`).
+- Zeichnung: `DrawingLayout.canvas` = `free` (Einpass- und Zentrierrechteck), `paint` = volles Fenster (Blatt, Umgebung, Schatten, Eingabefläche). Werkzeugfeld mit zwei festen Zeilen: Zeile 1 „3D-Modell“, „Zeichnung“, |, „Ansicht hinzufügen“; Zeile 2 „Blatt einpassen“, −, +, |, „Maße vorschlagen“, „Maß“, Modus. Die Gruppierung weicht vom Brief ab, weil die alte Zeile 1 bei 1100 × 700 (518 px Innenbreite) nicht passte. Die Zeilen wachsen seitlich in einer Rollfläche mit sichtbarem dünnen Balken bei Überlauf.
+- Schreibgeschützt hebt die Oberkante der freien Fläche um 52 (Hinweisfeld 40 + Abstand 12) an, nicht um 40; das Werkzeugfeld liegt unter dem Hinweis.
+- Hinweisfeld höchstens 2 Zeilen: Maßhinweise teilen sich Zeile 1 (mit Meldung: halbe Zeile), werden mit „…“ gekürzt und zeigen den vollen Text beim Überfahren.
+- Fehlt der Platz für ein Blatt (zu kleines Fenster), wird die Umgebung trotzdem über das Fenster gemalt.
+- Test-Fenster der Maßtests (`dimension_view`, `dimension_dialog`) 1600 × 1000 statt 1200 × 800: Die Einpassfläche ist kleiner geworden (2,0 statt 3,1 px/mm bei 1200), das hätte handgewählte Pixel-Züge gebrochen.
+- Fase: `FeatureIcon::for_blend(chamfer)` als gemeinsame Auswahl; die Baumzeile entscheidet über `BlendArt::is_chamfer`.
+- Geschützte Pfade (Kernel, Netz-Quelltext, STEP, Austausch) unverändert gegenüber 945fa67; `planora-render` nur mit Zusätzen.
+
+**Grenzen und offene Punkte**
+
+*Würfel*
+- Patent: Gestaltung und Verhalten des Würfels (26 Bereiche, Home) ähneln dem ViewCube von Autodesk; vor einer Veröffentlichung auf Patent- und Markenrechte prüfen (siehe cad-project-license-check).
+- Beschriftungslesbarkeit: Die Schrift auf den Flächen ist klein (etwa 7,5 pt) und weich, weil die Netzpunkte nicht auf Pixel gerundet sind. Vorschlag, falls es am Bildschirm zu klein ist: `LABEL_MIN_FACING` von 0,3 auf 0,5 und eine Mindesthöhe der Kappe von etwa 5 px, sonst `LABEL_FILL` 0,95. Der Nutzer entscheidet am Bildschirm.
+- Hover-Farbe der aktuellen Ansicht: behoben, der Akzent wird beim Überfahren abgedunkelt (`darken`); der Kontrast steht im Test `colours_in_both_themes`.
+- Kanten und Ecken sind im Dunkeln kaum vom Viewport zu unterscheiden; einige Kommentare im Code zum hellen Thema stimmen nicht.
+- Eckennamen wie „Oben-Vorne-Rechts“ sind in 10 px etwas breiter als der 84-px-Streifen und ragen leicht über (bleiben in der freien Fläche).
+- Beim Wachsen des Schrift-Atlas kann die Beschriftung ein Bild lang falsch aussehen (UV wird beim Bauen normalisiert); die Beschriftung rechnet pro Bild 36 Galleys (Cache denkbar).
+- Ein Aufruf mit NaN-Kamera liefert 26 NaN-Stücke (die App malt nur endliche); ungültige `CubeRegion` (zum Beispiel `Edge{Top, Bottom}`) lassen sich bauen.
+- `cube_faces` und `cube_hit_test` sind nur noch Test-Schnittstelle.
+- Tooltips des Würfels und die Facing-Schwelle 0,3 sind nicht getestet.
+
+*Zeichnung*
+- Das Werkzeugfeld füllt immer die volle Breite zwischen den Spalten; ab etwa 1400 px ist es rechts leer. Bei 800 × 600 ist es 244 px breit, beide Zeilen rollen seitlich (Balken sichtbar). Ob ein senkrechtes Mausrad die waagerechte Rollfläche bewegt, hängt von egui ab und ist nicht getestet.
+- Die Zeilengruppierung des Werkzeugfelds weicht vom Brief ab (siehe oben); der Nutzer entscheidet.
+- Eine Meldung bei gefülltem Notizanteil bekommt nur etwa ein Viertel der Zeile.
+- Test (g) der Zeichnungsfelder deckt den Primär-Zug nicht ab.
+- Bei Zoom über 1 kann Papier unter einem Feld liegen; „Blatt einpassen“ legt es immer in die freie Fläche.
+
+*Skizze*
+- Der lange Hinweis „Skizzen-Modus: … Esc bricht ab …“ steht doppelt (im Statusfeld und im Fuß); bei 800 × 600 hat das Statusfeld drei Zeilen und kürzt.
+- Eine nie gelöste Skizze zeigt „Vollständig bestimmt“ grau statt grün (wie vorher).
+- Wird die Skizze mitten im Bild geöffnet (zum Beispiel per Doppelklick im Baum), rechnet `sketch_panel::show` ein Bild lang ein eigenes Layout; das linke Modell-Feld kann dabei ein Bild lang noch gezeichnet sein.
+- Das Barrierefreiheits-Label des zweizeiligen Schalters enthält den Zeilenumbruch.
+- Modell-Feld-Randtest ohne Mittelklick-Fall; der Fehlerfall-Test `want_text ""` ist trivial.
+- Ein Klick auf den Würfel im Skizzenmodus kippt die Kamera weiterhin (bekannt aus Teilprojekt 4); Würfel und Home sind im Skizzenmodus getestet (fügen keine Punkte hinzu).
+
+*Allgemein*
+- Ein-Frame-Modus-Wechsel: Beim Wechsel zwischen Modell, Zeichnung und Skizze zeichnen die Felder des neuen Modus ein Bild lang mit vorläufigem Layout (neue Felder verwerfen ihren ersten Größen-Durchgang).
+- Die Tests treiben das echte `eframe::App::ui` und sehen kein echtes Rendering. Das Aussehen (Würfel, Leiste, Felder, Schriftgrößen) ist deshalb nur durch die Handliste abgedeckt. Die Zeitabhängigkeit (das erste egui-Bild ist langsam) bleibt ein Risiko für Tests mit Arbeitsthreads.
+- Fase-Test: Der Menü- und Befehlsfeld-Test prüft zusätzlich per Quelltext-Suche, dass kein `Blend`-Literal mehr vorkommt; das ist brüchig und sollte über eine gemeinsame Funktion laufen. Veraltete Doc-Kommentare in `icons.rs` (um Zeile 730) und bei `paint_blend_icon`; Farbassertion im Chamfer-Test und ein Rest-Kommentar bei `painted_paths`.
+- `layout()` ignoriert weiter `ShellState` (Seitenspalten immer vorhanden).
+- Offene Punkte aus Etappe B zu kleinen Fenstern (unter 640 px Breite) gelten weiter.
+
+**Handliste für den Nutzer** (`cargo run -p planora-app --release`; jeweils in Hell und Dunkel, in den Fenstergrößen 800 × 600, 1100 × 700 und einem großen Fenster)
+1. Fenstergrößen und Themen: Felder bleiben im Fenster, überlappen einander nicht, nichts ist abgeschnitten, nichts flackert beim Größenändern. Hell/Dunkel je Dokument-Tab umschalten.
+2. Würfel, Flächen: jede der 6 Flächen anklicken; die Ansicht stimmt, die Fläche ist blau, der Name steht unter dem Würfel.
+3. Würfel, Kanten und Ecken: einige Kanten und Ecken anklicken (auch die verdeckten Bereiche über mehrere Klicks erreichen); Home: Isometrisch, alles im Bild.
+4. Hervorhebung: nach Klick auf einen Bereich ist er blau; beim freien Drehen mit der Maus verschwindet die Hervorhebung, und der Name unter dem Würfel verschwindet auch; beim Ausrichten nahe an einem Bereich (innerhalb 2°) kommt sie wieder.
+5. Beschriftung: Der Text auf der Fläche dreht sich mit, steht nie spiegelverkehrt und ist lesbar (Größe ok?). Hover über den Bereichen: Farbe gut, Tooltip „Ansicht: …“, auch auf der blauen Fläche.
+6. Home-Knopf und Würfel: Klick und Ziehen auf dem Würfel drehen das Modell nicht; Mausrad über dem Würfel zoomt.
+7. Zeichnung, Werkzeugfeld: alle Texte lesbar und vollständig, auch bei 800 × 600 (seitlich rollen); Umschalter 3D-Modell/Zeichnung, Ansicht hinzufügen, Blatt einpassen, Zoom − und +, Maße vorschlagen, Maß mit Modus.
+8. Zeichnung, Ansichtsfeld: Ansicht wählen, Maßstab ändern, Verdeckte Kanten, Mittellinien (in der Isometrie gesperrt), Ansicht löschen; ohne gewählte Ansicht der Hinweis „Eine Ansicht auswählen.“
+9. Zeichnung, Hinweisfeld und Blatt: Hinweise zum Werkzeug, Maßhinweise, Meldungen; das weiße Blatt füllt das Fenster und läuft unter die Felder; „Blatt einpassen“ und Zoom zentrieren in der freien Fläche; Maßwerkzeug, Maßvorschlag; Ansicht anklicken und ziehen.
+10. Zeichnung, schreibgeschützt (alte Version öffnen): Hinweis oben, Werkzeugfeld darunter, Maße nicht änderbar.
+11. Skizze, Leiste und Feld: Skizze öffnen (Erzeugen → Skizze auf XY-Ebene); alle 9 Werkzeuge anklicken (Name im Tooltip), Abhängigkeiten setzen, Liste mit Symbolknopf zum Löschen, „anzeigend“.
+12. Skizze, Maßeingabe, Spiegeln und Muster: Maß eingeben (das Zahlenfeld hat Fokus, Esc/Enter/Entf wirken nicht auf die Skizze), OK und Abbrechen darunter; Spiegeln und Muster benutzen; der Schalter „Waagerecht/senkrecht erkennen“ (zweizeilig, Beschriftung ok?).
+13. Skizze, Fuß: Status in Farbe (Warnung, Fehler), Werkzeughinweis, „Skizze beenden“ (die Ansicht kommt zurück); der lange Hinweis doppelt?
+14. Eingabe über Feldern: Klick, Ziehen und Mausrad auf Feldern (auch ganz am Rand, innen) bewegen weder Modell noch Blatt noch Skizze; ein im Bereich begonnenes Ziehen läuft über Felder weiter.
+15. Dialoge über Feldern: Export-, Rundungs-, Boolescher Dialog und Rückfragen liegen über allen Feldern, in allen drei Modi.
+16. Fase-Symbol: im Menü „Bearbeiten“, im Befehlsfeld und im Baum (gerade Schräge, vom Verrunden unterscheidbar).
+Beanstandungen sammeln; sie werden nachgebessert oder in Etappe D behoben.
+
+**Zahlen (Stand 2026-10-16, Gesamtreihe)**
+- `cargo test --workspace -j 2`: 2220 bestanden, 0 fehlgeschlagen, 33 ignoriert, rund 15 Minuten (Debug), kein sporadischer Fehler.
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` und `cargo deny check` sind grün; die geschützten Pfade (Kernel, Netz, STEP, Austausch) sind gegenüber 945fa67 unverändert.
+
+**Handprüfung des Nutzers (Haltepunkt 3, 2026-10-17)**
+- Befund 1, Würfel: „komische Linien, die beim Bewegen der Kamera aufblitzen“. Ursache (per Test nachgestellt): Bereiche, die fast flach zur Kamera stehen, wurden schon ab einer Zuwendung von 0,02 gemalt, also als 0,3–1,5 px schmale Streifen mit 1-px-Umriss am Würfelrand; beim Drehen tauchten sie schlagartig auf und verschwanden wieder (Prüflauf alle 3° Gier/Neigung von −85° bis 85°: 5700 solche Streifen; Prüflauf in 1°-Schritten: 468 Sprünge von unsichtbar auf voll deckend, auch bei der Beschriftung an der Schwelle 0,3). Behoben: gemalt wird ein Bereich erst ab 0,15 (`viewport::PIECE_MIN_FACING`, der schmalste ist dann etwa 1,7 px breit), Füllung und Umriss blenden bis 0,3 weich ein (`PIECE_FULL_FACING`), die Beschriftung von 0,3 bis 0,5 (`LABEL_FULL_FACING`). Hover und Klick nutzen dieselbe Liste (`clickable_pieces`): anklickbar ist nur, was mindestens halb deckend zu sehen ist. Neu in `planora-render`: `cube_pieces_visible(camera, min_facing)`; `cube_pieces` bleibt bei 0,02. In allen Würfelansichten (Flächen, Kanten, Ecken, Isometrie) sind alle sichtbaren Bereiche voll deckend, Farben und Hervorhebung dort unverändert. Tests: `tests/view_cube_artefacts.rs`.
+- Befund 2, Skizze auf einer gewählten Fläche: erschien klein und nicht mittig. Ursache: Eine leere Skizze setzte nur das Ziel auf den Ursprung der Skizzenebene (bei einer Fläche oft eine Ecke) und behielt den Abstand; eine Skizze mit Geometrie wurde über die Kugel um die Hülle eingepasst (füllte nur etwa 48 %), und zwar mit dem freien Rechteck des Modellmodus. Behoben: `open_sketch` blickt senkrecht auf die Ebene und passt mit `OrbitCamera::frame_points` (neu, ebene Einpassung mit 15 % Rand) ein: leere Skizze auf einer Fläche → der Umriss der Fläche (Punkte des Anzeigenetzes, in die Ebene gelegt); leere Skizze auf einer Grundebene (oder Fläche nicht mehr auffindbar) → die Hüllen aller Körper, in die Ebene gelegt, ohne Körper ±25 mm um den Ursprung der Ebene; Skizze mit Geometrie → ihre Hülle (mindestens 10 mm). Die 3D-Ansicht passt in den folgenden Bildern mit dem freien Rechteck des Skizzenmodus nach (`AppState::refit_sketch_view`), bis es drei Bilder gleich bleibt oder der Nutzer verschiebt, zoomt oder den Würfel benutzt. Tests: `tests/sketch_framing.rs`.
+- Nicht am Bildschirm geprüft (keine Sicht auf die laufende App): wie das Ein- und Ausblenden der Würfelbereiche aussieht, und ob die Skizzenansicht auch beim Öffnen per Doppelklick im Baum sofort richtig sitzt (der Weg ist derselbe; getestet ist der Ablauf wie beim Menü: Anlegen und Öffnen vor der 3D-Ansicht des nächsten Bildes, nicht der Klick auf den Menüeintrag selbst).
+
+**Folgearbeit (Etappe D und Aufräumen)**
+- Dialoge im neuen Rahmen und mittig schwebend (neue Breitenregel, Checkboxen, Kontextmenü-Symbole).
+- `pub`-Fläche aufräumen (Testhaken aus Etappe B und C, `app::{CreateKind, create_blocked, do_create, open_boolean, open_blend}`, `viewport::show`, `shell::layout`, `tabs::show`, `versions_panel::show`, `cube_faces`/`cube_hit_test`) und tote Konstanten.
+- Hover-Kontrast der aktuellen Würfelansicht (abdunkeln) und Kontrast der Kanten/Ecken im Dunkeln; Beschriftungsgröße nach dem Handtest.
+- Test-Aufräumen: Fase-Test ohne Quelltext-Suche, veraltete Doc-Kommentare, Tests der Zeichnungsfelder um den Primär-Zug und Mittelklick ergänzen.
+- Nach dem Handtest: Vorschlag des Nutzers zum Raster der Hauptansicht besprechen.
 
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).

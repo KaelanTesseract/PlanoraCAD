@@ -130,6 +130,8 @@ pub enum Icon {
     EndSketch,
     /// Phosphor `plus`.
     NewTab,
+    /// Phosphor `house-simple`.
+    Home,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -193,6 +195,7 @@ pub const ALL: &[Icon] = &[
     Icon::Pattern,
     Icon::EndSketch,
     Icon::NewTab,
+    Icon::Home,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -256,6 +259,7 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Pattern, '\u{e1fc}', "dots-nine"),
     (Icon::EndSketch, '\u{e184}', "check-circle"),
     (Icon::NewTab, '\u{e3d4}', "plus"),
+    (Icon::Home, '\u{e2c6}', "house-simple"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {
@@ -495,9 +499,19 @@ pub enum FeatureIcon {
     Body(BodyKind),
     Move,
     Blend,
+    Chamfer,
 }
 
 impl FeatureIcon {
+    /// Symbol für Verrunden (`chamfer == false`) oder Fase (Menü, Befehlsfeld, Baumzeile).
+    pub fn for_blend(chamfer: bool) -> FeatureIcon {
+        if chamfer {
+            FeatureIcon::Chamfer
+        } else {
+            FeatureIcon::Blend
+        }
+    }
+
     /// Symbol zur Art eines Features.
     pub fn of(kind: &planora_feature::FeatureKind) -> FeatureIcon {
         use planora_feature::FeatureKind as K;
@@ -511,10 +525,21 @@ impl FeatureIcon {
             K::Revolve { .. } => FeatureIcon::Body(BodyKind::Revolution),
             K::Boolean { .. } => FeatureIcon::Body(BodyKind::Combined),
             K::Move { .. } => FeatureIcon::Move,
-            K::Verrunden { .. } => FeatureIcon::Blend,
+            K::Verrunden { art, .. } => FeatureIcon::for_blend(art.is_chamfer()),
             K::MeshBody { .. } => FeatureIcon::Body(BodyKind::Mesh),
         }
     }
+}
+
+/// Einträge Verrunden und Fase für Menü und Befehlsfeld: Beschriftung, Symbol, `chamfer`.
+pub fn blend_entries() -> [(&'static str, IconSource, bool); 2] {
+    [("Verrunden …", false), ("Fase …", true)].map(|(label, chamfer)| {
+        (
+            label,
+            IconSource::Feature(FeatureIcon::for_blend(chamfer)),
+            chamfer,
+        )
+    })
 }
 
 /// Zeichnet das Symbol eines Features in `rect`.
@@ -524,6 +549,7 @@ pub fn paint_feature_icon(painter: &Painter, rect: Rect, icon: FeatureIcon, colo
         FeatureIcon::Body(kind) => paint_body_icon(painter, rect, kind, color),
         FeatureIcon::Move => paint_move_icon(painter, rect, color),
         FeatureIcon::Blend => paint_blend_icon(painter, rect, color),
+        FeatureIcon::Chamfer => paint_chamfer_icon(painter, rect, color),
     }
 }
 
@@ -539,7 +565,7 @@ fn paint_move_icon(painter: &Painter, rect: Rect, color: Color32) {
     seg(painter, [to, to + vec2(0.0, r * 0.7)], stroke);
 }
 
-/// Rundung bzw. Fase: Winkel mit abgerundeter Ecke.
+/// Verrunden: Winkel mit abgerundeter Ecke (die Fase hat ein eigenes Symbol).
 fn paint_blend_icon(painter: &Painter, rect: Rect, color: Color32) {
     let stroke = Stroke::new(STROKE_WIDTH, color);
     let c = rect.center();
@@ -553,6 +579,22 @@ fn paint_blend_icon(painter: &Painter, rect: Rect, color: Color32) {
     }
     pts.push(corner + vec2(bend, 0.0));
     pts.push(c + vec2(r, r));
+    painter.add(egui::Shape::line(pts, stroke));
+}
+
+/// Fase: Winkel mit gerade abgeschrägter Ecke.
+fn paint_chamfer_icon(painter: &Painter, rect: Rect, color: Color32) {
+    let stroke = Stroke::new(STROKE_WIDTH, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.38;
+    let corner = c + vec2(-r, r);
+    let bend = r * 0.9;
+    let pts: Vec<Pos2> = vec![
+        c + vec2(-r, -r),
+        corner + vec2(0.0, -bend),
+        corner + vec2(bend, 0.0),
+        c + vec2(r, r),
+    ];
     painter.add(egui::Shape::line(pts, stroke));
 }
 
@@ -696,7 +738,7 @@ pub fn paint_dimension_icon(
 /// Gezeichnete Symbole für Aktionen, zu denen Phosphor kein passendes Symbol hat (geprüft in
 /// `Phosphor-Light-style.css`: es gibt weder Bogen, Ellipse, Parallel, Senkrecht, Tangente,
 /// Mittelpunkt noch Punkt-auf-Kurve oder Punkt-Linie-Abstand). Radius, Durchmesser und Winkel
-/// zeichnet weiter [`paint_dimension_icon`], Rundung und Fase [`FeatureIcon::Blend`].
+/// zeichnet weiter [`paint_dimension_icon`], Verrunden [`FeatureIcon::Blend`], Fase [`FeatureIcon::Chamfer`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HandIcon {
     Arc,

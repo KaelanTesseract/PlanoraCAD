@@ -10,7 +10,7 @@ Bekannte Grenzen: Bei Körpern aus einfachen Flächen werden Schnitte, die Raumk
 
 ## Skizzen
 
-Über „Erzeugen → Skizze auf XY-/XZ-/YZ-Ebene“ oder „Skizze auf gewählter Fläche“ (ebene Fläche eines Körpers) entsteht eine Skizze. Im Skizzen-Modus schaut die Kamera senkrecht auf die Ebene; ein Fenster „Skizze“ enthält Werkzeuge, Abhängigkeiten und deren Liste.
+Über „Erzeugen → Skizze auf XY-/XZ-/YZ-Ebene“ oder „Skizze auf gewählter Fläche“ (ebene Fläche eines Körpers) entsteht eine Skizze. Im Skizzen-Modus schaut die Kamera senkrecht auf die Ebene; eine neue Skizze öffnet sich mittig und herangezoomt auf der Fläche oder Ebene; die Werkzeuge stehen in einer Leiste links, Abhängigkeiten und deren Liste in einem Feld rechts (siehe „Neues Aussehen“).
 
 **Was geht**
 - Zeichnen: Punkt, Linie, Rechteck, Kreis, Bogen, Ellipse, Spline; Konstruktionsgeometrie über „Konstruktion umschalten“; Spiegeln und lineares Muster.
@@ -146,7 +146,7 @@ Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Ze
 - Blatt von A4 bis A0, hoch oder quer, mit Rahmen 10 mm vom Rand. Jede Ansicht hat ihren eigenen Maßstab (1:1, 1:2, 1:5, 1:10, 1:20, 1:50, 1:100, 2:1, 5:1, 10:1). Beim Anlegen schlägt das Programm den größten Maßstab vor, bei dem die drei Hauptansichten aufs Blatt passen.
 - Sichtbare Kanten sind durchgezogen, verdeckte gestrichelt. Das Zeigen der verdeckten Kanten lässt sich je Ansicht ausschalten (Vorgabe: an für die Normansichten, aus für Isometrisch).
 - Kreise bleiben Kreise, Bögen bleiben Bögen, Freiformlinien bleiben glatte Kurven; es werden keine Streckenzüge daraus. Nur die Umrisse von Ringen (Torus) und Freiformflächen sind angenähert (auf 0,0001 mm genau).
-- Im Fenster: Umschalter zwischen 3D-Modell und Zeichnung, Zoomen mit dem Mausrad, Verschieben mit der mittleren Maustaste, Ansichten anklicken und ziehen. Im Browser stehen die Zeichnungen mit ihren Ansichten. Die Berechnung läuft im Hintergrund mit Fortschrittsbalken; scheitert eine Ansicht, steht der Grund an ihr, und die Zeichnung bleibt erhalten.
+- Im Fenster: Umschalter zwischen 3D-Modell und Zeichnung (im Werkzeugfeld oben), Zoomen mit dem Mausrad, Verschieben mit der mittleren Maustaste, Ansichten anklicken und ziehen. Im Browser stehen die Zeichnungen mit ihren Ansichten. Die Berechnung läuft im Hintergrund mit Fortschrittsbalken; scheitert eine Ansicht, steht der Grund an ihr, und die Zeichnung bleibt erhalten.
 - Gespeichert wird nur die Beschreibung (Blatt, Ansichten, Maßstab, Lage), nicht die berechneten Linien. Ein Dokument mit Zeichnung bekommt das Dateiformat 4 (mit Maßen oder Mittellinien das Dateiformat 5); ältere Programmversionen melden dann „zu neu“. Dokumente ohne Zeichnung bleiben unverändert.
 
 **Grenzen**
@@ -166,7 +166,7 @@ Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 11 �
 In einer Zeichnung lassen sich Maße setzen und Mittellinien zeigen. Die Maße hängen am Körper: Ändert man den Körper, ändert sich das Maß mit. Alles kommt in die SVG- und DXF-Dateien.
 
 **Was geht**
-- Mittellinien: Bohrungen, Zylinder, Kugeln und Ringe bekommen strichpunktierte Mittellinien. In den Normansichten sind sie von Anfang an an, je Ansicht lassen sie sich ausschalten (zweite Zeile der Werkzeugleiste, wenn eine Ansicht gewählt ist). In der Isometrie gibt es keine Mittellinien; der Schalter ist dort gesperrt.
+- Mittellinien: Bohrungen, Zylinder, Kugeln und Ringe bekommen strichpunktierte Mittellinien. In den Normansichten sind sie von Anfang an an, je Ansicht lassen sie sich ausschalten (im Feld „Ansicht“ rechts, wenn eine Ansicht gewählt ist). In der Isometrie gibt es keine Mittellinien; der Schalter ist dort gesperrt.
 - „Maße vorschlagen“: Ein Knopf setzt die wichtigsten Maße selbst: Breite, Höhe und Tiefe, Durchmesser und Radien sowie den Abstand der Bohrungsmitten von der Kante. Jedes Maß kommt nur einmal aufs Blatt, ein zweiter Druck setzt nichts doppelt. Danach lässt sich alles ändern.
 - Werkzeug „Maß“: Man wählt die Art (waagerecht, senkrecht, schräg, Durchmesser, Radius, Winkel, Maßkette oder Bezugsmaße), klickt die Linien an und klickt dann dorthin, wo die Maßlinie stehen soll. Mit der Esc-Taste bricht man ab. Gesetzte Maße lassen sich anklicken und ziehen (bei einer Maßkette oder Bezugsmaßen wandert die ganze Gruppe mit); ein Doppelklick öffnet das Fenster „Maß bearbeiten“. Im Browser steht unter der Zeichnung der Abschnitt „Maße“.
 - Wer eine Ansicht löscht, an der Maße hängen, wird vorher gefragt; die Frage nennt die Zahl der Maße.
@@ -264,7 +264,31 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 - „Alles einpassen“ zentriert das Modell in dem Bereich, der zwischen den Feldern frei bleibt.
 - Das Fenster ist mindestens 800 × 600 groß. Kleiner lässt es sich nicht ziehen.
 
-**Noch nicht neu:** Die Leiste der Zeichnung, das Fenster „Skizze“ und die Dialoge sehen noch aus wie vorher. Sie folgen in den nächsten Etappen (Zeichnung und Skizze in Etappe C, die Dialoge in Etappe D). Bis dahin kann die Zeichnungsleiste in einem schmalen Fenster auf mehrere Zeilen umbrechen, und das Fenster „Skizze“ kann Teile der unteren Felder überdecken.
+**Navigationswürfel:** Der Würfel oben rechts im 3D-Bereich ist neu gestaltet.
+
+- Er hat 26 Bereiche zum Anklicken: die 6 Flächen, die 12 Kanten und die 8 Ecken. Eine Fläche zeigt dir das Modell genau von dort, eine Kante von schräg zwischen zwei Flächen, eine Ecke von schräg in die Ecke.
+- Der Knopf mit dem Haus („Home“) links neben dem Würfel stellt die Ansicht „Isometrisch“ ein und passt dann alles ins Bild ein.
+- Die Ansicht, in die du gerade schaust, ist am Würfel blau hervorgehoben. Drehst du das Modell frei, ist nichts hervorgehoben.
+- Unter dem Würfel steht der Name der Ansicht, zum Beispiel „Vorne“ oder „Oben-Rechts“.
+- Die Beschriftung steht auf den Flächen und dreht sich mit dem Würfel mit.
+
+**Zeichnungsansicht:** Auch hier schweben jetzt Felder über dem Blatt, und das Blatt füllt das ganze Fenster.
+
+- Das Werkzeugfeld (Umschalter, Ansicht hinzufügen, Blatt einpassen, Zoom, Maße) steht oben in der Mitte unter dem Menü, in zwei festen Zeilen. In einem schmalen Fenster lässt es sich seitlich rollen.
+- Rechts steht das Feld der gewählten Ansicht (Maßstab, verdeckte Kanten, Mittellinien, Ansicht löschen). Ist keine Ansicht gewählt, steht dort „Eine Ansicht auswählen.“
+- Unten steht das Hinweisfeld mit den Hinweisen zu Maßen, Meldungen und dem Hinweis zum gewählten Werkzeug.
+- „Blatt einpassen“ legt das Blatt in den Bereich, der zwischen den Feldern frei bleibt.
+
+**Skizze:** Das Fenster „Skizze“ gibt es nicht mehr.
+
+- Links steht eine Leiste mit den Skizzenwerkzeugen, nur als Symbole. Der Name erscheint, wenn du mit der Maus darüber bleibst.
+- Rechts steht das Feld mit Abhängigkeiten, Maßeingabe, Bearbeiten (Spiegeln, Muster) und der Liste.
+- Unten steht das Fußfeld mit dem Stand der Skizze, einem Hinweis zum Werkzeug und dem Knopf „Skizze beenden“.
+- Der Schalter „Automatisch waagerecht/senkrecht“ heißt jetzt „Waagerecht/senkrecht erkennen“ und steht in zwei Zeilen.
+
+**Fase:** Die Fase hat ein eigenes Symbol (eine gerade Schräge). Das Symbol für Verrunden ist unverändert.
+
+**Noch nicht neu:** Die Dialoge (zum Beispiel Export, Verrunden, Boolesche Operationen) sehen noch aus wie vorher. Sie folgen in der nächsten Etappe (Etappe D).
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 13“.
 

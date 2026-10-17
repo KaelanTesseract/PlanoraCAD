@@ -744,29 +744,68 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
 
 /// Farben des Navigationswürfels.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GizmoColors {
-    /// Fläche.
-    pub fill: Color32,
-    /// Fläche unter dem Mauszeiger.
-    pub hover_fill: Color32,
-    /// Kanten.
+pub struct CubeColors {
+    /// Flächen, leicht in der Achsenfarbe getönt: `[X (Rechts/Links), Y (Vorne/Hinten),
+    /// Z (Oben/Unten)]`.
+    pub face: [Color32; 3],
+    /// Kantenstreifen (neutral, dunkler als die Flächen).
+    pub edge: Color32,
+    /// Eckendreiecke (neutral, am dunkelsten).
+    pub corner: Color32,
+    /// Umrisslinien aller Bereiche.
     pub line: Color32,
-    /// Beschriftung.
+    /// Bereich der aktuellen Ansicht.
+    pub highlight: Color32,
+    /// Bereich der aktuellen Ansicht unter dem Mauszeiger.
+    pub highlight_hover: Color32,
+    /// Beschriftung auf den Flächen und Name der Ansicht.
     pub text: Color32,
-    /// Beschriftung der Fläche unter dem Mauszeiger.
-    pub hover_text: Color32,
+    /// Beschriftung auf der hervorgehobenen Fläche.
+    pub text_on_highlight: Color32,
+    /// Home-Knopf in Ruhe.
+    pub home_fill: Color32,
+    /// Home-Knopf unter dem Mauszeiger.
+    pub home_hover: Color32,
 }
 
-/// Farben des Navigationswürfels: neutrale Flächen, der Akzent zeigt die Fläche unter der Maus.
-pub fn gizmo_colors(dark: bool) -> GizmoColors {
+/// Mischt `a` und `b` im sRGB-Raum: `t` = 0 ergibt `a`, `t` = 1 ergibt `b` (deckend).
+fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+    Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
+}
+
+/// Dunkelt `c` um den Anteil `t` ab (alle Kanäle skaliert).
+fn darken(c: Color32, t: f32) -> Color32 {
+    let m = |x: u8| (f32::from(x) * (1.0 - t)).round() as u8;
+    Color32::from_rgb(m(c.r()), m(c.g()), m(c.b()))
+}
+
+/// Farben des Navigationswürfels: Flächen = `bg_field` mit 28 % Achsenfarbe, Kanten
+/// `bg_section`, Ecken `bg_inset`, aktuelle Ansicht in der Akzentfarbe. Hell genauso; die
+/// Kontraste prüft der Test `colours_in_both_themes` (tests/view_cube.rs).
+pub fn cube_colors(dark: bool) -> CubeColors {
     let p = palette(dark);
-    GizmoColors {
-        fill: with_alpha(if dark { p.bg_field } else { p.bg_panel }, 0xeb),
-        hover_fill: p.accent,
+    let tint = |axis: Color32| mix(p.bg_field, axis, 0.28);
+    CubeColors {
+        face: [tint(p.axis_x), tint(p.axis_y), tint(p.axis_z)],
+        edge: p.bg_section,
+        corner: p.bg_inset,
         line: p.text_tertiary,
+        highlight: p.accent,
+        // Etwas dunkler als der Akzent: Weiß darauf bleibt über 4,5 : 1 (nur beim Überfahren).
+        highlight_hover: darken(p.accent, 0.12),
         text: p.text_primary,
-        hover_text: p.on_accent,
+        text_on_highlight: p.on_accent,
+        home_fill: p.bg_field,
+        home_hover: p.bg_active,
     }
+}
+
+/// Füllung eines Würfelbereichs unter dem Mauszeiger: heller als `fill`, die Beschriftung
+/// (`CubeColors::text`) bleibt lesbar (dunkel 15 % zu Weiß, hell 45 % zu Weiß).
+pub fn cube_hover_fill(dark: bool, fill: Color32) -> Color32 {
+    let white = palette(false).bg_panel;
+    mix(fill, white, if dark { 0.15 } else { 0.45 })
 }
 
 /// Dieselbe Farbe mit anderem Alpha (nicht vormultipliziert).

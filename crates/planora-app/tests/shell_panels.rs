@@ -12,7 +12,7 @@ use planora_app::app::PlanoraApp;
 use planora_app::shell::{self, SHELL_INSET};
 use planora_app::state::StandardPlane;
 use planora_app::workspace::Workspace;
-use planora_app::{fonts, shell_panels, theme, versions_panel, viewport};
+use planora_app::{fonts, shell_panels, sketch_panel, theme, versions_panel, viewport};
 use planora_feature::SketchPlane;
 use planora_math::DVec3;
 use planora_project::config::Config;
@@ -179,6 +179,8 @@ fn run(
         if with_viewport {
             viewport::show_in(ui, &mut app.ws_mut().active_tab_mut().state, Some(free));
         }
+        // Im Skizzenmodus: Leiste, Skizzenfeld und Fuß wie in der App.
+        sketch_panel::show(ui.ctx(), &mut app.ws_mut().active_tab_mut().state);
     });
     let shot = Shot::of(&out.shapes);
     out.drop_without_applying_deltas();
@@ -251,8 +253,10 @@ fn fields_of(shot: &Shot, dark: bool, size: Vec2) -> Fields {
         top: pick("oberes Feld", &|r| {
             near(r.top(), SHELL_INSET) && near(r.center().x, w / 2.0)
         }),
+        // Im Skizzenmodus steht links die Werkzeugleiste.
         left: pick("linkes Feld", &|r| {
-            near(r.left(), SHELL_INSET) && near(r.top(), SHELL_INSET)
+            near(r.left(), SHELL_INSET)
+                && (near(r.top(), SHELL_INSET) || near(r.width(), shell::STRIP_W))
         }),
         right: pick("rechtes Feld", &|r| {
             near(r.right(), w - SHELL_INSET) && near(r.top(), SHELL_INSET)

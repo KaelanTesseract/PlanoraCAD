@@ -542,30 +542,6 @@ fn the_3d_scene_takes_grid_axes_and_selection_from_the_theme() {
 }
 
 #[test]
-fn gizmo_colors_are_legible_in_both_themes() {
-    let mut failures = Vec::new();
-    for dark in BOTH {
-        let g = theme::gizmo_colors(dark);
-        let bg = theme::viewport_background(dark);
-        let face = over(g.fill, bg);
-        let hover = over(g.hover_fill, bg);
-        for (what, fg, face_bg, min) in [
-            ("Text auf Fläche", g.text, face, 4.5),
-            ("Text auf Hover", g.hover_text, hover, 4.5),
-            ("Linie auf Fläche", g.line, face, 1.5),
-            ("Fläche auf Viewport", face, bg, 1.15),
-        ] {
-            let r = theme::contrast_ratio(fg, face_bg);
-            if r < min {
-                failures.push(format!("{} {what}: {r:.2} < {min}", name(dark)));
-            }
-        }
-        assert_ne!(g.fill, g.hover_fill, "{}", name(dark));
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-#[test]
 fn status_colors_come_from_the_palette() {
     for dark in BOTH {
         let p = theme::palette(dark);

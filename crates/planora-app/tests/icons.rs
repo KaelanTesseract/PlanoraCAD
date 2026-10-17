@@ -216,6 +216,7 @@ fn every_hand_drawn_icon_draws_with_the_theme_width() {
         icons::FeatureIcon::Sketch,
         icons::FeatureIcon::Move,
         icons::FeatureIcon::Blend,
+        icons::FeatureIcon::Chamfer,
     ] {
         all.push((
             format!("{fi:?}"),
@@ -307,4 +308,84 @@ fn source_button_draws_font_and_hand_icons() {
         assert!(width > 16.0 + 8.0, "{src:?}: {width}");
         assert!(!o.shapes.is_empty());
     }
+}
+
+/// Gemalte Linienzüge (Punkte, Breite) eines Feature-Symbols; `arc` = Anzahl der Zwischenpunkte.
+fn painted_paths(icon: icons::FeatureIcon) -> Vec<(Vec<egui::Pos2>, f32)> {
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts::definitions());
+    let color = icons::stroke_color(false, true);
+    let mut o = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(16.0, 16.0));
+        icons::paint_feature_icon(ui.painter(), rect, icon, color);
+    });
+    o.textures_delta.clear();
+    let mut out = Vec::new();
+    for c in &o.shapes {
+        if let Shape::Path(p) = &c.shape {
+            out.push((p.points.clone(), p.stroke.width));
+        }
+    }
+    out
+}
+
+#[test]
+fn chamfer_icon_uses_theme_stroke_and_differs_from_blend() {
+    let chamfer = painted_paths(icons::FeatureIcon::Chamfer);
+    let blend = painted_paths(icons::FeatureIcon::Blend);
+    assert_eq!(chamfer.len(), 1);
+    assert_eq!(blend.len(), 1);
+    assert_eq!(chamfer[0].1, 1.5);
+    // Fase: Winkel mit gerader Schräge (4 Punkte), Verrunden: Bogen aus vielen Punkten.
+    assert_eq!(chamfer[0].0.len(), 4);
+    assert!(blend[0].0.len() > 4);
+    // Die Schräge ist gerade und diagonal.
+    let (a, b) = (chamfer[0].0[1], chamfer[0].0[2]);
+    assert!((b.x - a.x).abs() > 1.0 && (b.y - a.y).abs() > 1.0);
+    assert!(((b.x - a.x).abs() - (b.y - a.y).abs()).abs() < 1e-3);
+}
+
+#[test]
+fn blend_entries_use_chamfer_for_fase() {
+    assert_eq!(
+        icons::FeatureIcon::for_blend(true),
+        icons::FeatureIcon::Chamfer
+    );
+    assert_eq!(
+        icons::FeatureIcon::for_blend(false),
+        icons::FeatureIcon::Blend
+    );
+    // Menü und Befehlsfeld beziehen beide Einträge aus `blend_entries`.
+    let entries = icons::blend_entries();
+    assert_eq!(entries[0].0, "Verrunden …");
+    assert_eq!(entries[1].0, "Fase …");
+    for (_, source, chamfer) in entries {
+        assert_eq!(
+            source,
+            icons::IconSource::Feature(icons::FeatureIcon::for_blend(chamfer))
+        );
+    }
+    assert!(!entries[0].2 && entries[1].2);
+}
+
+#[test]
+fn tree_row_icon_for_chamfer_feature() {
+    use planora_feature::{BlendArt, BodyRef, FeatureId, FeatureKind};
+    let kind = |art| FeatureKind::Verrunden {
+        body: BodyRef {
+            feature: FeatureId(1),
+            index: 0,
+        },
+        edges: Vec::new(),
+        art,
+        tangentenkette: true,
+    };
+    assert_eq!(
+        icons::FeatureIcon::of(&kind(BlendArt::FaseGleich { abstand: 1.0 })),
+        icons::FeatureIcon::Chamfer
+    );
+    assert_eq!(
+        icons::FeatureIcon::of(&kind(BlendArt::Rundung { radius: 1.0 })),
+        icons::FeatureIcon::Blend
+    );
 }

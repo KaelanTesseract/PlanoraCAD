@@ -503,8 +503,7 @@ fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
     ui.separator();
     let blend = ws.active_tab().state.blend_blocked();
-    for (label, chamfer) in [("Verrunden …", false), ("Fase …", true)] {
-        let source = icons::IconSource::Feature(icons::FeatureIcon::Blend);
+    for (label, source, chamfer) in icons::blend_entries() {
         if icons::source_entry(ui, source, label, blend.is_none())
             .on_disabled_hover_text(blend.unwrap_or_default())
             .clicked()
@@ -673,24 +672,20 @@ impl eframe::App for PlanoraApp {
         }
 
         // Zuerst die schwebenden Felder (Menü und Tabs, Baum, Eigenschaften | Versionen, Befehle,
-        // Status, Hinweis); sie liefern die freie Fläche zwischen sich. Menü und Tabs sind bei
+        // Status, Hinweis); sie liefern die freie Fläche zwischen sich. Der Modus folgt aus dem
+        // Tab (`shell_panels::mode_of`): mit offener Skizze ohne Baum, Eigenschaften und Befehle,
+        // deren Stelle die Skizzenfelder von `sketch_panel::show` (weiter unten) einnehmen. Menü und Tabs sind bei
         // offener Rückfrage gesperrt, Baum und Eigenschaften in alten Versionen.
         let free = shell_panels::show_fields(&ctx, self);
         // Darunter der Arbeitsbereich über das ganze Fenster: das Modell mit der Bildmitte in der
-        // freien Fläche, die Zeichnung nur in der freien Fläche (sie liegt nie unter einem Feld).
+        // freien Fläche, ebenso das Blatt der Zeichnung (über das ganze Fenster gemalt, in die
+        // freie Fläche eingepasst; Werkzeug-, Ansichts- und Hinweisfeld zeichnet `show_with`).
         let enabled = !self.ws.active_tab().read_only;
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let state = &mut self.ws.active_tab_mut().state;
             match state.drawing_ui.area {
                 WorkArea::Model => viewport::show_in(ui, state, Some(free)),
-                WorkArea::Drawing(_) => {
-                    let all = ui.max_rect();
-                    ui.painter()
-                        .rect_filled(all, 0.0, theme::viewport_background(state.dark));
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(free), |ui| {
-                        drawing_view::show_with(ui, state, enabled);
-                    });
-                }
+                WorkArea::Drawing(_) => drawing_view::show_with(ui, state, enabled),
             }
         });
 
