@@ -29,8 +29,8 @@
 //! * `BLOCKS`: zuerst die Pflichtblöcke `*Model_Space` und `*Paper_Space` (letzterer mit `67 1`),
 //!   dann je Ansicht ein Block. `BLOCK` und `ENDBLK` tragen Handle, Besitzer (der Blockeintrag),
 //!   `100 AcDbEntity`, Ebene `0`, `100 AcDbBlockBegin` bzw. `AcDbBlockEnd`.
-//! * `ENTITIES`: Innenrahmen als geschlossene `LWPOLYLINE` auf `SICHTBAR`, danach je Ansicht ein
-//!   `INSERT` bei (0, 0, 0) (Ebene `0`). Jedes Objekt: Handle (5), Besitzer (330 = Blockeintrag
+//! * `ENTITIES`: der Blattrahmen (`SheetModel.frame`, falls vorhanden; siehe unten), danach je
+//!   Ansicht ein `INSERT` bei (0, 0, 0) (Ebene `0`). Jedes Objekt: Handle (5), Besitzer (330 = Blockeintrag
 //!   des Blocks, in dem es steht; im Modellraum `*Model_Space`), `100 AcDbEntity`, Ebene (8),
 //!   Untertypmarke (`AcDbLine`, `AcDbCircle`, `AcDbCircle` + `AcDbArc`, `AcDbEllipse`,
 //!   `AcDbSpline`, `AcDbPolyline`, `AcDbBlockReference`).
@@ -92,6 +92,15 @@
 //!   ein längerer Text ist der Fehler `Unsupported("Der Maßtext ist zu lang.")`, und es wird
 //!   nichts geschrieben. Nicht endliche Zahlen sind wie überall `NonFinite`.
 //!
+//! # Blattrahmen
+//!
+//! Die Markierungen des Blattrahmens stehen direkt im Modellraum vor den `INSERT`s, mit den
+//! Ebenen nach Strichstärke: `BLATTRAHMEN` (7, `CONTINUOUS`, 70: Rahmen und Außenlinie des
+//! Schriftfelds), `BLATT_MITTE` (50: Zentriermarken, Projektionssymbol) und `BLATT` (25: übrige
+//! Linien und alle Texte). Die Ebenen werden nur angelegt, wenn es einen Rahmen gibt; ohne Rahmen
+//! enthält die Datei weder diese Ebenen noch eine `LWPOLYLINE`. Texte des Blatts, die in der Datei
+//! länger als 255 Zeichen würden, werden gekürzt statt abgelehnt.
+//!
 //! Handtest in Fusion 360 (nach jeder Änderung am Aufbau): Datei mit Maßen, verlorenem Maß und
 //! Mittellinien öffnen; prüfen, dass die Datei ohne Meldung geladen wird, die Ebenen `MASSE`,
 //! `MITTEL`, `MASSE_FEHLT` erscheinen, Texte (auch `%%c`, `%%d`, `%%p`) richtig und an der
@@ -102,6 +111,7 @@ use crate::annotate::{ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, Mark, MarkKind, T
 use crate::error::DrawError;
 use crate::out2d::Out2d;
 use crate::sheet::SheetModel;
+use crate::sheet_frame::SheetPen;
 use planora_math::{DVec2, PI, TAU};
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -111,6 +121,9 @@ const LAYER_HIDDEN: &str = "VERDECKT";
 const LAYER_DIM: &str = "MASSE";
 const LAYER_CENTER: &str = "MITTEL";
 const LAYER_LOST: &str = "MASSE_FEHLT";
+const LAYER_FRAME: &str = "BLATTRAHMEN";
+const LAYER_CENTRE: &str = "BLATT_MITTE";
+const LAYER_SHEET: &str = "BLATT";
 /// Höchstlänge eines Maßtexts in der Datei (Zeichen, nach der Verschlüsselung).
 const MAX_TEXT_LEN: usize = 255;
 /// Nachkommastellen aller Zahlen der Datei.
@@ -130,8 +143,7 @@ pub fn write_dxf(model: &SheetModel, out: &mut dyn Write) -> Result<(), DrawErro
 /// Das Blattmodell als DXF-Text.
 pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
     let (w, h) = model.sheet.size_mm();
-    let (lo, hi) = model.frame;
-    if !(w.is_finite() && h.is_finite() && lo.is_finite() && hi.is_finite()) {
+    if !(w.is_finite() && h.is_finite()) {
         return Err(DrawError::NonFinite);
     }
     // Blocknamen, eindeutig (ohne Rücksicht auf Groß-/Kleinschreibung).
@@ -190,7 +202,11 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
     )?;
 
     let mut entities = Out::new();
-    write_border(&mut entities, &mut hs, br_model, lo, hi)?;
+    if let Some(frame) = &model.frame {
+        for m in &frame.marks {
+            write_mark(&mut entities, &mut hs, br_model, m)?;
+        }
+    }
     for name in &names {
         entities.entity_head("INSERT", hs.next(), br_model, "0");
         entities.text(100, "AcDbBlockReference");
@@ -517,16 +533,22 @@ struct UsedKinds {
     dim: bool,
     center: bool,
     lost: bool,
+    /// Blattrahmen (die drei Ebenen `BLATTRAHMEN`, `BLATT_MITTE`, `BLATT`).
+    sheet: bool,
 }
 
 impl UsedKinds {
     fn of(model: &SheetModel) -> UsedKinds {
-        let mut u = UsedKinds::default();
+        let mut u = UsedKinds {
+            sheet: model.frame.is_some(),
+            ..UsedKinds::default()
+        };
         for m in model.views.iter().flat_map(|v| &v.marks) {
             match mark_kind(m) {
                 MarkKind::Dimension => u.dim = true,
                 MarkKind::CenterLine => u.center = true,
                 MarkKind::Lost => u.lost = true,
+                MarkKind::Sheet(_) => u.sheet = true,
             }
         }
         u
@@ -547,6 +569,9 @@ fn mark_layer(kind: MarkKind) -> &'static str {
         MarkKind::Dimension => LAYER_DIM,
         MarkKind::CenterLine => LAYER_CENTER,
         MarkKind::Lost => LAYER_LOST,
+        MarkKind::Sheet(SheetPen::Heavy) => LAYER_FRAME,
+        MarkKind::Sheet(SheetPen::Medium) => LAYER_CENTRE,
+        MarkKind::Sheet(SheetPen::Thin) => LAYER_SHEET,
     }
 }
 
@@ -673,6 +698,9 @@ fn write_tables(
         (used.dim, (LAYER_DIM, "CONTINUOUS", 7, 25)),
         (used.center, (LAYER_CENTER, "CENTER", 7, 25)),
         (used.lost, (LAYER_LOST, "CONTINUOUS", 1, 25)),
+        (used.sheet, (LAYER_FRAME, "CONTINUOUS", 7, 70)),
+        (used.sheet, (LAYER_CENTRE, "CONTINUOUS", 7, 50)),
+        (used.sheet, (LAYER_SHEET, "CONTINUOUS", 7, 25)),
     ] {
         if on {
             layers.push(layer);
@@ -833,31 +861,6 @@ fn block_end(o: &mut Out, handle: u64, record: u64, paper: bool) {
     }
     o.text(8, "0");
     o.text(100, "AcDbBlockEnd");
-}
-
-/// Innenrahmen als geschlossene Polylinie auf `SICHTBAR` im Modellraum.
-fn write_border(
-    o: &mut Out,
-    hs: &mut Handles,
-    owner: u64,
-    lo: DVec2,
-    hi: DVec2,
-) -> Result<(), DrawError> {
-    o.entity_head("LWPOLYLINE", hs.next(), owner, LAYER_VISIBLE);
-    o.text(100, "AcDbPolyline");
-    o.int(90, 4);
-    o.int(70, 1);
-    o.num(43, 0.0)?;
-    for p in [
-        DVec2::new(lo.x, lo.y),
-        DVec2::new(hi.x, lo.y),
-        DVec2::new(hi.x, hi.y),
-        DVec2::new(lo.x, hi.y),
-    ] {
-        o.num(10, p.x)?;
-        o.num(20, p.y)?;
-    }
-    Ok(())
 }
 
 fn write_curve(
@@ -1059,12 +1062,17 @@ fn write_mark(o: &mut Out, hs: &mut Handles, owner: u64, m: &Mark) -> Result<(),
             angle,
             anchor,
             text,
-            ..
+            kind,
         } => {
             if !(pos.is_finite() && height.is_finite() && angle.is_finite()) {
                 return Err(DrawError::NonFinite);
             }
-            let encoded = encode_text(text);
+            let mut encoded = encode_text(text);
+            if matches!(kind, MarkKind::Sheet(_)) {
+                // Blatttexte werden gekürzt statt abgelehnt (ein langer Titel mit Umlauten
+                // darf die Ausgabe nicht verhindern).
+                encoded = encode_text_limited(text);
+            }
             if encoded.len() > MAX_TEXT_LEN {
                 return Err(DrawError::Unsupported("Der Maßtext ist zu lang.".into()));
             }
@@ -1119,4 +1127,25 @@ fn encode_text(s: &str) -> String {
         }
     }
     o
+}
+
+/// Wie [`encode_text`], aber so früh abgebrochen, dass das Ergebnis höchstens `MAX_TEXT_LEN`
+/// Zeichen lang ist (ein Kürzel wird nie zerrissen).
+fn encode_text_limited(s: &str) -> String {
+    let mut o = String::new();
+    let mut buf = [0u8; 4];
+    for c in s.chars() {
+        let piece = encode_text(c.encode_utf8(&mut buf));
+        if o.len() + piece.len() > MAX_TEXT_LEN {
+            break;
+        }
+        o.push_str(&piece);
+    }
+    o
+}
+
+/// Kann das Zeichen in einem Text der DXF-Datei stehen: in der Grundebene des Unicodes und kein
+/// Steuerzeichen? (Andere Zeichen werden in der Datei durch `?` bzw. ein Leerzeichen ersetzt.)
+pub fn dxf_char_ok(c: char) -> bool {
+    (c as u32) <= 0xFFFF && !c.is_control()
 }

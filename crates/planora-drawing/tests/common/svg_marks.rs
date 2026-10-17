@@ -9,7 +9,7 @@ use planora_drawing::model::{Drawing, DrawingId, Paper, Placement, Projection, S
 use planora_drawing::sheet::{SheetModel, SheetView, build_sheet_with};
 use planora_drawing::{DrawBody, ViewId, ViewKind, ViewLines, compute_view};
 use planora_exchange::Progress;
-use planora_math::{DVec2, DVec3};
+use planora_math::DVec3;
 use std::collections::BTreeMap;
 
 /// Nummer bei A3 quer.
@@ -101,10 +101,9 @@ pub fn manual_sheet(paper: Paper, views: Vec<(&str, Vec<Mark>)>) -> SheetModel {
         paper,
         landscape: true,
     };
-    let (w, h) = sheet.size_mm();
     SheetModel {
         sheet,
-        frame: (DVec2::new(10.0, 10.0), DVec2::new(w - 10.0, h - 10.0)),
+        frame: None,
         views: views
             .into_iter()
             .enumerate()

@@ -55,7 +55,7 @@ fn model_with(a: f64) -> SheetModel {
             paper: Paper::A3,
             landscape: true,
         },
-        frame: (DVec2::new(10.0, 10.0), DVec2::new(410.0, 287.0)),
+        frame: None,
         views: vec![SheetView {
             id: ViewId(1),
             name: "Vorne".into(),

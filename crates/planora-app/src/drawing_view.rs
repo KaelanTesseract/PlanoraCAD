@@ -1722,14 +1722,6 @@ fn canvas_ui(
         Stroke::new(1.0, theme::SHEET_FRAME),
         StrokeKind::Outside,
     );
-    let (f0, f1) = sheet.frame;
-    painter.rect_stroke(
-        Rect::from_two_pos(to_screen(f0), to_screen(f1)),
-        0.0,
-        Stroke::new((VISIBLE_MM * k).max(1.0) as f32, theme::SHEET_FRAME),
-        StrokeKind::Middle,
-    );
-
     let visible = Stroke::new((VISIBLE_MM * k).max(1.0) as f32, theme::SHEET_INK);
     let hidden = Stroke::new((HIDDEN_MM * k).max(1.0) as f32, theme::SHEET_INK);
     for p in polys.iter() {
@@ -1766,7 +1758,7 @@ fn canvas_ui(
             }
             let color = match mark_kind(m) {
                 MarkKind::Lost => theme::SHEET_LOST,
-                MarkKind::Dimension | MarkKind::CenterLine => theme::SHEET_DIM,
+                MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Sheet(_) => theme::SHEET_DIM,
             };
             paint_mark(&painter, m, color, &to_screen, k);
             marks_drawn += 1;

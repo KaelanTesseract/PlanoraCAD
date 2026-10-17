@@ -18,6 +18,7 @@ pub mod raycast;
 pub mod sheet;
 pub mod sheet_frame;
 pub mod sheet_info;
+pub mod sheet_marks;
 pub mod silhouette;
 pub mod stroke;
 pub mod suggest;

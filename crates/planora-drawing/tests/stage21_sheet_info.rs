@@ -240,7 +240,7 @@ fn sheet_view(id: u64, lines: usize) -> SheetView {
 fn model(d: &Drawing, views: Vec<SheetView>) -> SheetModel {
     SheetModel {
         sheet: d.sheet,
-        frame: (DVec2::ZERO, DVec2::ONE),
+        frame: None,
         views,
     }
 }

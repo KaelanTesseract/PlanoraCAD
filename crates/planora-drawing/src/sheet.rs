@@ -1,5 +1,5 @@
 //! Blattmodell: die Linien aller berechneten Ansichten in Blattkoordinaten (mm, y nach oben,
-//! Ursprung unten links) mit Maßstab, Lage und Innenrahmen.
+//! Ursprung unten links) mit Maßstab und Lage.
 
 use crate::ViewLines;
 use crate::Visibility;
@@ -12,12 +12,10 @@ use crate::layout::{align_dir, view_extent};
 use crate::model::ViewSpec;
 use crate::model::{Drawing, Placement, Sheet, ViewId, ViewKind};
 use crate::out2d::{Out2d, piece_to_outs};
+use crate::sheet_marks::SheetFrame;
 use crate::stroke::StrokeOrigin;
 use planora_math::DVec2;
 use std::collections::BTreeMap;
-
-/// Rand zwischen Blattkante und Innenrahmen in mm.
-pub const FRAME_MARGIN_MM: f64 = 10.0;
 
 /// Abbildung von Ansichtskoordinaten auf das Blatt: `Blatt = scale·(p − bbox_center) + (tx, ty)`.
 #[derive(Clone, Copy, Debug)]
@@ -61,8 +59,9 @@ pub struct SheetView {
 #[derive(Clone, Debug)]
 pub struct SheetModel {
     pub sheet: Sheet,
-    /// Innenrahmen `(min, max)`, 10 mm vom Blattrand.
-    pub frame: (DVec2, DVec2),
+    /// Blattrahmen mit Schriftfeld und Tabellen; `None`: nur der Inhalt (Rahmen schaltet der
+    /// Aufrufer zu).
+    pub frame: Option<SheetFrame>,
     pub views: Vec<SheetView>,
 }
 
@@ -135,8 +134,6 @@ pub fn build_sheet_with(
     results: &BTreeMap<ViewId, &ViewLines>,
     dims: &ResolvedDims,
 ) -> SheetModel {
-    let (w, h) = drawing.sheet.size_mm();
-    let m = FRAME_MARGIN_MM;
     let mut counts: BTreeMap<u8, usize> = BTreeMap::new();
     let mut views = Vec::new();
     for spec in &drawing.views {
@@ -185,7 +182,7 @@ pub fn build_sheet_with(
     }
     SheetModel {
         sheet: drawing.sheet,
-        frame: (DVec2::new(m, m), DVec2::new(w - m, h - m)),
+        frame: None,
         views,
     }
 }
