@@ -787,7 +787,7 @@ Stand: 2026-10-16. Zeichnung und Skizze haben den neuen Aufbau mit schwebenden F
 - Geometrie: `shell::ShellMode`, `layout_in_mode`, `STRIP_W`, `TOOL_H`; `ShellRects` kennt `strip` und `tool`; `DrawingLayout.paint` (volles Malrechteck) neben `canvas` (Einpass-Rechteck).
 
 **Entscheidungen C1–C10** (Entwurfsverfasser; C1 mit Entscheidung des Nutzers; Wortlaut in der Spec, Abschnitt 12)
-- C1 (Nutzer) Würfel: 26 Bereiche, Home, Hervorhebung nur bei Blick auf höchstens 2° zu einem Bereich, Achsenfarben leicht getönt, Größe 84 px, Beschriftung auf der Fläche, Name unter dem Würfel.
+- C1 (Nutzer) Würfel: 26 Bereiche, Home, Hervorhebung nur bei Blick auf höchstens 2° zu einem Bereich, Achsenfarben leicht getönt, Größe 100 px (ursprünglich 84, in Etappe D geändert, D5), Beschriftung auf der Fläche, Name unter dem Würfel.
 - C2 Home = Isometrisch und „Alles einpassen“.
 - C3 Klick: Fläche = Ansicht auf diese Fläche; Kante = Blick entlang der Kantennormalen; Ecke = Blick auf die Ecke im Isometrie-Winkel.
 - C4 Beschriftungsausrichtung: Seitenflächen „oben“ = +Z, Oben-Fläche „oben“ = +Y, Unten-Fläche „oben“ = −Y, „rechts“ = oben × Normale (nie gespiegelt).
@@ -800,9 +800,9 @@ Stand: 2026-10-16. Zeichnung und Skizze haben den neuen Aufbau mit schwebenden F
 
 **Entscheidungen der Umsetzung (Rulings)**
 - `current_region` behandelt `|pitch| ≥ MAX_PITCH − 1e-4` als genau senkrecht. Die Kamera stoppt 0,573° vor dem Pol, und ohne dieses Einrasten wäre der Rundlauf Oben/Unten (Klick, dann `current_region`) nicht möglich. `Edge{a, b}` muss die Reihenfolge Z, Y, X einhalten (es gibt keinen normalisierenden Konstruktor).
-- Würfel Variante C in Größe B (84 px). Isometrie = Ecke Oben-Vorne-Rechts; die drei Nachbarecken sind dort als schräge Dreiecke sichtbar, ihre Kanten nicht (geometrisch richtig).
+- Würfel Variante C in Größe B (zuerst 84 px, seit Etappe D 100 px). Isometrie = Ecke Oben-Vorne-Rechts; die drei Nachbarecken sind dort als schräge Dreiecke sichtbar, ihre Kanten nicht (geometrisch richtig).
 - Home-Knopf links neben dem Würfel, oben bündig, 2 px Überlapp mit dem Würfelfeld (damit er in der freien Fläche bleibt). Würfel und Home nehmen `Sense::click_and_drag`, damit ein Zug auf dem Würfel nicht dreht.
-- Beschriftung als egui-Galley-Netz, das mit den Achsen der Fläche abgebildet wird (kein Rückfall auf Strichschrift nötig). Beschriftung ab `facing` 0,3 (`LABEL_MIN_FACING`), voll deckend ab 0,5; Stücke selbst ab 0,15, voll ab 0,3. Das längste Wort füllt 85 % der Flächenbreite (Schrift etwa 7–8 px).
+- Beschriftung als egui-Galley-Netz, das mit den Achsen der Fläche abgebildet wird (kein Rückfall auf Strichschrift nötig). Beschriftung ab `facing` 0,3 (`LABEL_MIN_FACING`), voll deckend ab 0,5; Stücke selbst ab 0,15, voll ab 0,3. Das längste Wort füllt 85 % der Flächenbreite (Schrift etwa 7–8 px). (Etappe D: Schwellen jetzt 0,5/0,7, Füllung 0,95, Mindestschrift 9 pt.)
 - Hover-Farben: normale Bereiche `cube_hover_fill`, aktuelle Ansicht `highlight_hover` (Akzent 12 % zu Weiß).
 - Das Fußfeld im Skizzenmodus darf breiter sein als der Platz zwischen den Spalten (Obergrenze `Fensterbreite − 2·(Rand + 44 + Abstand)`); der Status schrumpft. Sonst überlief bei 800 × 600 der Status den Knopf „Skizze beenden“.
 - Der Schalter heißt „Waagerecht/senkrecht erkennen“ und steht zweizeilig (einzeilig 201 px, im Feld bleiben 188 px). Der Nutzer prüft die Beschriftung am Bildschirm; Hover-Text `AUTO_AXIS_HINT`.
@@ -820,24 +820,24 @@ Stand: 2026-10-16. Zeichnung und Skizze haben den neuen Aufbau mit schwebenden F
 
 *Würfel*
 - Patent: Gestaltung und Verhalten des Würfels (26 Bereiche, Home) ähneln dem ViewCube von Autodesk; vor einer Veröffentlichung auf Patent- und Markenrechte prüfen (siehe cad-project-license-check).
-- Beschriftungslesbarkeit: Die Schrift auf den Flächen ist klein (etwa 7,5 pt) und weich, weil die Netzpunkte nicht auf Pixel gerundet sind. Vorschlag, falls es am Bildschirm zu klein ist: `LABEL_MIN_FACING` von 0,3 auf 0,5 und eine Mindesthöhe der Kappe von etwa 5 px, sonst `LABEL_FILL` 0,95. Der Nutzer entscheidet am Bildschirm.
+- Beschriftungslesbarkeit: Die Schrift auf den Flächen ist klein (etwa 7,5 pt) und weich, weil die Netzpunkte nicht auf Pixel gerundet sind. Vorschlag, falls es am Bildschirm zu klein ist: `LABEL_MIN_FACING` von 0,3 auf 0,5 und eine Mindesthöhe der Kappe von etwa 5 px, sonst `LABEL_FILL` 0,95. Der Nutzer entscheidet am Bildschirm. **Geändert in Etappe D (D5):** Schwellen 0,5/0,7, Füllung 0,95, Mindestschrift 9 pt, Würfel 100 px.
 - Hover-Farbe der aktuellen Ansicht: behoben, der Akzent wird beim Überfahren abgedunkelt (`darken`); der Kontrast steht im Test `colours_in_both_themes`.
 - Kanten und Ecken sind im Dunkeln kaum vom Viewport zu unterscheiden; einige Kommentare im Code zum hellen Thema stimmen nicht.
-- Eckennamen wie „Oben-Vorne-Rechts“ sind in 10 px etwas breiter als der 84-px-Streifen und ragen leicht über (bleiben in der freien Fläche).
-- Beim Wachsen des Schrift-Atlas kann die Beschriftung ein Bild lang falsch aussehen (UV wird beim Bauen normalisiert); die Beschriftung rechnet pro Bild 36 Galleys (Cache denkbar).
-- Ein Aufruf mit NaN-Kamera liefert 26 NaN-Stücke (die App malt nur endliche); ungültige `CubeRegion` (zum Beispiel `Edge{Top, Bottom}`) lassen sich bauen.
-- `cube_faces` und `cube_hit_test` sind nur noch Test-Schnittstelle.
+- Eckennamen wie „Oben-Vorne-Rechts“ sind in 10 px etwas breiter als der Streifen (damals 84 px) und ragen leicht über (bleiben in der freien Fläche). (Etappe D: der Streifen ist jetzt 100 px breit; ob das reicht, zeigt die Handprüfung.)
+- Beim Wachsen des Schrift-Atlas kann die Beschriftung ein Bild lang falsch aussehen (UV wird beim Bauen normalisiert); die Beschriftung rechnet pro Bild 36 Galleys (Cache denkbar). **Erledigt in Etappe D:** Das Wachsen des Atlas verwirft das Bild; die Schriftgröße wird je Bildschirmmaßstab gemerkt.
+- Ein Aufruf mit NaN-Kamera liefert 26 NaN-Stücke (die App malt nur endliche); ungültige `CubeRegion` (zum Beispiel `Edge{Top, Bottom}`) lassen sich bauen. **Erledigt in Etappe D:** NaN-Kamera und ungültige Bereiche werden abgefangen (`CubeRegion::is_valid`).
+- `cube_faces` und `cube_hit_test` sind nur noch Test-Schnittstelle. **Erledigt in Etappe D:** nur noch `#[cfg(test)]` und privat.
 - Tooltips des Würfels und die Facing-Schwelle 0,3 sind nicht getestet.
 
 *Zeichnung*
-- Das Werkzeugfeld füllt immer die volle Breite zwischen den Spalten; ab etwa 1400 px ist es rechts leer. Bei 800 × 600 ist es 244 px breit, beide Zeilen rollen seitlich (Balken sichtbar). Ob ein senkrechtes Mausrad die waagerechte Rollfläche bewegt, hängt von egui ab und ist nicht getestet.
+- Das Werkzeugfeld füllt immer die volle Breite zwischen den Spalten; ab etwa 1400 px ist es rechts leer. Bei 800 × 600 ist es 244 px breit, beide Zeilen rollen seitlich (Balken sichtbar). Ob ein senkrechtes Mausrad die waagerechte Rollfläche bewegt, hängt von egui ab und ist nicht getestet. **Erledigt in Etappe D (D7):** Das Werkzeugfeld ist so breit wie sein Inhalt und mittig.
 - Die Zeilengruppierung des Werkzeugfelds weicht vom Brief ab (siehe oben); der Nutzer entscheidet.
 - Eine Meldung bei gefülltem Notizanteil bekommt nur etwa ein Viertel der Zeile.
 - Test (g) der Zeichnungsfelder deckt den Primär-Zug nicht ab.
 - Bei Zoom über 1 kann Papier unter einem Feld liegen; „Blatt einpassen“ legt es immer in die freie Fläche.
 
 *Skizze*
-- Der lange Hinweis „Skizzen-Modus: … Esc bricht ab …“ steht doppelt (im Statusfeld und im Fuß); bei 800 × 600 hat das Statusfeld drei Zeilen und kürzt.
+- Der lange Hinweis „Skizzen-Modus: … Esc bricht ab …“ steht doppelt (im Statusfeld und im Fuß); bei 800 × 600 hat das Statusfeld drei Zeilen und kürzt. **Erledigt in Etappe D (D6):** Der Status ist kurz, der Tastenhinweis steht beim Überfahren.
 - Eine nie gelöste Skizze zeigt „Vollständig bestimmt“ grau statt grün (wie vorher).
 - Wird die Skizze mitten im Bild geöffnet (zum Beispiel per Doppelklick im Baum), rechnet `sketch_panel::show` ein Bild lang ein eigenes Layout; das linke Modell-Feld kann dabei ein Bild lang noch gezeichnet sein.
 - Das Barrierefreiheits-Label des zweizeiligen Schalters enthält den Zeilenumbruch.
@@ -845,7 +845,7 @@ Stand: 2026-10-16. Zeichnung und Skizze haben den neuen Aufbau mit schwebenden F
 - Ein Klick auf den Würfel im Skizzenmodus kippt die Kamera weiterhin (bekannt aus Teilprojekt 4); Würfel und Home sind im Skizzenmodus getestet (fügen keine Punkte hinzu).
 
 *Allgemein*
-- Ein-Frame-Modus-Wechsel: Beim Wechsel zwischen Modell, Zeichnung und Skizze zeichnen die Felder des neuen Modus ein Bild lang mit vorläufigem Layout (neue Felder verwerfen ihren ersten Größen-Durchgang).
+- Ein-Frame-Modus-Wechsel: Beim Wechsel zwischen Modell, Zeichnung und Skizze zeichnen die Felder des neuen Modus ein Bild lang mit vorläufigem Layout (neue Felder verwerfen ihren ersten Größen-Durchgang). **Erledigt in Etappe D (D8):** Der Moduswechsel verwirft das Bild.
 - Die Tests treiben das echte `eframe::App::ui` und sehen kein echtes Rendering. Das Aussehen (Würfel, Leiste, Felder, Schriftgrößen) ist deshalb nur durch die Handliste abgedeckt. Die Zeitabhängigkeit (das erste egui-Bild ist langsam) bleibt ein Risiko für Tests mit Arbeitsthreads.
 - Fase-Test: Der Menü- und Befehlsfeld-Test prüft zusätzlich per Quelltext-Suche, dass kein `Blend`-Literal mehr vorkommt; das ist brüchig und sollte über eine gemeinsame Funktion laufen. Veraltete Doc-Kommentare in `icons.rs` (um Zeile 730) und bei `paint_blend_icon`; Farbassertion im Chamfer-Test und ein Rest-Kommentar bei `painted_paths`.
 - `layout()` ignoriert weiter `ShellState` (Seitenspalten immer vorhanden).
@@ -880,11 +880,102 @@ Beanstandungen sammeln; sie werden nachgebessert oder in Etappe D behoben.
 - Nicht am Bildschirm geprüft (keine Sicht auf die laufende App): wie das Ein- und Ausblenden der Würfelbereiche aussieht, und ob die Skizzenansicht auch beim Öffnen per Doppelklick im Baum sofort richtig sitzt (der Weg ist derselbe; getestet ist der Ablauf wie beim Menü: Anlegen und Öffnen vor der 3D-Ansicht des nächsten Bildes, nicht der Klick auf den Menüeintrag selbst).
 
 **Folgearbeit (Etappe D und Aufräumen)**
-- Dialoge im neuen Rahmen und mittig schwebend (neue Breitenregel, Checkboxen, Kontextmenü-Symbole).
+- Dialoge im neuen Rahmen und mittig schwebend (neue Breitenregel). **Erledigt in Etappe D**; Checkboxen und Kontextmenü-Symbole sind es nicht (siehe Etappe D, Grenzen).
 - `pub`-Fläche aufräumen (Testhaken aus Etappe B und C, `app::{CreateKind, create_blocked, do_create, open_boolean, open_blend}`, `viewport::show`, `shell::layout`, `tabs::show`, `versions_panel::show`, `cube_faces`/`cube_hit_test`) und tote Konstanten.
 - Hover-Kontrast der aktuellen Würfelansicht (abdunkeln) und Kontrast der Kanten/Ecken im Dunkeln; Beschriftungsgröße nach dem Handtest.
 - Test-Aufräumen: Fase-Test ohne Quelltext-Suche, veraltete Doc-Kommentare, Tests der Zeichnungsfelder um den Primär-Zug und Mittelklick ergänzen.
 - Nach dem Handtest: Vorschlag des Nutzers zum Raster der Hauptansicht besprechen.
+
+## Teilprojekt 13 – Graphit-Oberfläche, Etappe D (Dialoge, Abschluss)
+Stand: 2026-10-17. Alle Dialoge und Rückfragen haben den neuen Rahmen, der Würfel ist aufgeräumt, und die Reste aus Etappe C sind erledigt. Das ist Etappe D von vieren und der Abschluss von Teilprojekt 13. Spec: `specs/2026-10-16-graphit-oberflaeche-design.md` (Abschnitt 13 „Festlegungen der Umsetzung Etappe D“). Plan: `plans/2026-10-17-graphit-etappe-d.md`. Zweig `feature/graphit-etappe-d`.
+
+**Was geliefert wurde**
+- Neues Modul `dialog.rs` (`Dialog`, `DialogSize`): jedes Dialogfenster entsteht an dieser einen Stelle. Mitte des Fensters, feste Breite je Klasse (Rückfrage 440, Normal 480, Breit 720 px), Graphit-Rahmen, eigene Kopfzeile mit Titel und Schließen-Symbol, verworfener erster Größen-Durchgang, senkrechtes Rollen bei hohem Inhalt, Begrenzung auf das Fenster abzüglich 16 px Rand.
+- Alle Dialoge nutzen den Rahmen: Körper anlegen, Extrudieren/Drehen, Boolesche Operation, Feature bearbeiten, Rundung/Fase (Normal); Exportieren, Netz importieren, Neue Zeichnung, Maß bearbeiten (Breit); Umbenennen und Löschen in Baum, Zeichnungen und Maßen, Projekte und Versionen, alle Rückfragen (Prompt). `theme::window`, `export_dialog::wide_window`, `DIALOG_TOP`, `DIALOG_MARGIN` und `MIN_WIDTH` sind entfernt. Der Wächtertest `no_raw_windows` verhindert neue rohe Fenster.
+- Verschieben: Alle Dialoge außer den festen Rückfragen (Projekte, Versionen, Änderungen speichern und so weiter) lassen sich an ihrer freien Fläche verschieben und bleiben im Fenster. Ein Schließen-Symbol haben genau die Dialoge, die bisher das Kreuz hatten.
+- Karten nebeneinander bleiben gleich hoch, auch in 720 px und bei 800 × 600.
+- Würfel (`planora-render`, `planora-app/viewport.rs`): Interna sind nicht mehr öffentlich (`cube_faces`, `cube_hit_test`, `CubeFace` nur noch im Test); `CubeRegion::is_valid`; NaN-Kamera und ungültige Bereiche werden abgefangen; Würfel 100 px; Beschriftung ab Zuwendung 0,5, voll ab 0,7, Füllung 0,95, Mindestschrift 9 pt, Schriftgröße je Bildschirmmaßstab gemerkt; wächst der Schrift-Atlas, wird das Bild verworfen.
+- Ziehen auf dem Würfel dreht die Ansicht (Modell und Skizze); Umschalt + Ziehen dreht nicht (dort verschiebt die Ansicht). Ein Klick ohne Ziehen wählt weiter den Bereich; das Mausrad über dem Würfel zoomt.
+- Skizzenstatus kurz („Skizzen-Modus: Name“); der Tastenhinweis erscheint beim Überfahren des Statusfelds und steht in der Beschriftung für Bildschirmleser.
+- Werkzeugfeld der Zeichnung so breit wie sein Inhalt und mittig (`shell::fit_tool`).
+- Moduswechsel (Modell, Zeichnung, Skizze) ohne Zwischenbild: Das Bild wird verworfen und wiederholt.
+- Enter übernimmt jetzt auch in Neuer Ordner, Projekte umbenennen und Kommentar ändern (vorher nur im Baum und bei Zeichnungen).
+
+**Entscheidungen D1–D8** (Wortlaut in der Spec, Abschnitt 13; D5 mit Entscheidung des Nutzers)
+- D1 (Nutzer) Alle Dialoge schmaler und mittig; breite bis 720 px; Rückfragen mittig und schmal.
+- D2 Feste Breiten je Klasse: Prompt 440, Normal 480, Wide 720, höchstens Fensterbreite − 32.
+- D3 Mitte des Fensters; verschiebbar außer festen Rückfragen (wegen der Kantenwahl bei Rundung/Fase).
+- D4 Eigene Kopfzeile mit Schließen-Symbol statt egui-Titelleiste.
+- D5 (Nutzer) Würfel 100 px (ändert C1), Beschriftungsschwellen 0,5/0,7/0,95, Mindestschrift 9 pt.
+- D6 Skizzenstatus kurz, Tastenhinweis beim Überfahren.
+- D7 Werkzeugfeld der Zeichnung nach Inhalt.
+- D8 Moduswechsel verwirft das Bild. Wurde nicht gestrichen: Ohne diesen Schritt blitzt das Feld des alten Modus ein Bild lang auf.
+
+**Entscheidungen der Umsetzung (Rulings)**
+- Die Grenzen des egui-Fensters gelten für die Außengröße (mit Rahmen); `show()` übergibt die Klassenbreite deshalb unverändert.
+- Eigene Schließbehandlung statt des egui-Kreuzes; `Dialog` liefert nichts mehr, wenn `*open` falsch ist. Das Schließen-Symbol meldet sich zusätzlich als „Schließen“ für Bildschirmleser (zweite `widget_info`, im Code erklärt).
+- Breite Dialoge: „Exportieren …“ mit Dateiwahl ist bei 800 × 600 erreichbar, weil der Dialog rollt; die Höhe bleibt höchstens 568 px.
+- Die Schwelle zum Ziehen am Würfel ist 4 px (egui hat 6); der Würfel prüft selbst gegen Druckpunkt und Zeiger. Während des Ziehens gibt es keine Hervorhebung und keinen Tooltip.
+- Bei 9 pt ist das längste Wort (Montserrat Medium, Maßstab 1) 32 px breit, erlaubt wären 31,9 px. Die Mindestschrift hat Vorrang; der Test erlaubt dort 0,5 px Rundung.
+- Das Statusfeld ist als Ganzes Hover-Ziel (nicht nur der Text) und hat die Beschriftung „Skizzen-Modus: Name. Hinweis“; egui meldet Beschriftungen als Wert, nicht als Label.
+- Das Werkzeugfeld bei 1100 × 700 ist schmaler als vorher (Inhalt 520 px statt 544 verfügbar): Es ist immer so breit wie der Inhalt, höchstens so breit wie der Platz zwischen den Spalten. Bei 800 × 600 bleibt es voll breit und rollt. Die Breite ist gerade aufgerundet, damit das mittige Feld auf ganzen Bildpunkten sitzt; ebenso beim Fußfeld der Skizze (Toleranz im Test `near` bleibt < 0,5).
+- Beim ersten Messen merkt sich das Werkzeugfeld seine Breite und verwirft das Bild einmal; ohne diesen Schritt wäre es ein Bild lang voll breit.
+- Neue Testhaken (`doc(hidden)`): `PlanoraApp::panels_mut`, `projects_panel::request_*` und `dialog_open`, `shell_panels::drawing_tool_wanted`, `viewport::region_point`.
+- Tests wurden zum Teil nach der Umsetzung geschrieben; die Mutationsbeweise (Fehler absichtlich einbauen, Test muss rot werden) stehen in den Aufgabenberichten unter `.superpowers/sdd/2026-10-17-graphit-etappe-d/`.
+- Geschützte Pfade (Kernel, Netz-Quelltext, STEP, Austausch) unverändert gegenüber 945fa67; keine Änderung an Cargo-Abhängigkeiten.
+
+**Tote Konstanten (Aufgabe 6, Schritt 1):** Alle 136 `pub const` und `pub(crate) const` in `crates/planora-app/src` geprüft (Fundstellen je Name per Suche): keine kommt nur in ihrer Definition vor, es musste nichts mehr entfernt werden. Schon vorher entfernt: `DIALOG_MARGIN`, `DIALOG_TOP`, `MIN_WIDTH` (Aufgabe 2) und `theme::window` (Aufgabe 3).
+
+**Grenzen und offene Punkte**
+
+*Dialoge*
+- Dialoge schließen nicht mit Esc (wie bisher). Die Rückfragen lassen sich nur über ihre Knöpfe beenden.
+- Die Checkboxen in Dialogen und die Symbole im Kontextmenü sind nicht im Graphit-Stil überarbeitet (stand in der Folgearbeit von Etappe A); sie waren nicht Teil dieses Plans.
+- Die Dialogtests prüfen vor allem Lage, Größe, Ebene und Bedienbarkeit; die Wirkung jedes einzelnen Dialogs prüfen sie nicht, nur bei Neuer Ordner und Kommentar ändern ist sie ergänzt. Der Wächter `no_raw_windows` ist eine Textsuche und deshalb nur eine Faustregel.
+
+*Würfel*
+- Die Beschriftung ist bei 9 pt lesbar, aber klein; ob sie am Bildschirm reicht, entscheidet die Handprüfung. Das längste Wort ist an der Mindestschrift etwa 0,1 px breiter, als die Fläche erlaubt.
+- Der Zwischenspeicher der Schriftgröße richtet sich nach Bildschirmmaßstab und Atlasgröße, nicht nach einem späteren Schriftwechsel (Schriften werden zur Laufzeit nicht gewechselt).
+- Wächst der Atlas mitten im Bild, wird das Bild verworfen und wiederholt (nicht am Bildschirm gesehen).
+- Ein NaN-Ziel der Kamera ist nicht abgefangen; Gier, Neigung und Abstand sind es.
+- Zum Würfelziehen sind nicht alle Sonderfälle getestet (zum Beispiel Loslassen außerhalb des Fensters); das Zurücksetzen des Merkers nach übersprungenen Bildern ist nur im ersten Bild beobachtbar (egui-Trefferliste).
+- Kanten und Ecken im Dunkeln und die Tooltips sind weiter nicht gesondert getestet (Handprüfung).
+- Das Patent- und Markenrecht des Würfels ist vor einer Veröffentlichung zu prüfen (siehe Etappe C).
+
+*Zeichnung und Skizze*
+- Bei 1100 × 700 ist das Werkzeugfeld schmaler als in Etappe C; das ist gewollt (D7), der Nutzer kann es am Bildschirm beanstanden.
+- Ob ein senkrechtes Mausrad das seitlich rollende Werkzeugfeld bewegt, hängt von egui ab und ist nicht getestet.
+- Die Zeilengruppierung des Werkzeugfelds weicht weiter vom ersten Brief ab (Etappe C).
+- Der Tastenhinweis der Skizze steht nur beim Überfahren und in der Beschriftung des Statusfelds, nicht dauerhaft sichtbar.
+
+*Allgemein*
+- Die Tests treiben das echte `eframe::App::ui`, sehen aber kein echtes Rendering. Das Aussehen (Rahmen, Schließen-Symbol, Schriftgrößen, Verschieben) ist nur durch die Handliste abgedeckt.
+- Verbleibende öffentliche Fläche (nicht aufgeräumt, weil nicht Teil dieses Plans): `app::{CreateKind, create_blocked, do_create, open_boolean, open_blend}`, `viewport::show`, `shell::layout`, `tabs::show`, `versions_panel::show`, die Module `theme` und `icons` sowie die Testhaken in `shell_panels` und `PlanoraApp` (jetzt mit den neuen aus der Liste oben). Offene Frage an den Nutzer: aufräumen (eigene Aufgabe) oder so lassen.
+- Fase-Test ohne Quelltextsuche: nicht umgesetzt (Etappe C, Aufräumen).
+- Offene Punkte aus Etappe B zu Fensterbreiten unter 640 px gelten weiter.
+- Die Zeitabhängigkeit der Tests mit Arbeitsthreads (das erste egui-Bild ist langsam) bleibt ein Risiko.
+
+**Handliste für den Nutzer** (`cargo run -p planora-app --release`; jeweils in Hell und Dunkel, in den Fenstergrößen 800 × 600, 1100 × 700 und einem großen Fenster)
+1. Alle Dialoge öffnen und prüfen (mittig, Breite, nichts abgeschnitten, nichts flackert): Körper anlegen (Quader, Zylinder, Kegel, Kugel, Torus), Extrudieren, Drehen, Boolesche Operation, Feature bearbeiten, Rundung, Fase.
+2. Exportieren in allen Formaten, Netz importieren, Neue Zeichnung, Maß bearbeiten.
+3. Umbenennen und Löschen im Baum, bei Zeichnungen und bei Maßen; im Projektfeld Neuer Ordner, Umbenennen, Verschieben, Löschen; bei Versionen Kommentar ändern und Löschen.
+4. Rückfragen: Änderungen speichern, Kommentar, Speichern unter, Sperre übernehmen, Autosicherung, Hinweis. Sie liegen mittig, sind schmal und lassen sich nicht verschieben.
+5. Karten (Exportieren, Netz importieren, Neue Zeichnung) stehen nebeneinander und sind gleich hoch.
+6. Texte sind nicht abgeschnitten; bei 800 × 600 rollt ein hoher Dialog (zum Beispiel Exportieren mit Dateiwahl), und der Aktionsknopf ist erreichbar.
+7. Schließen-Symbol oben rechts schließt den Dialog; der Fokusring ist mit der Tabulatortaste sichtbar.
+8. Dialog verschieben: an der freien Fläche ziehen; er bleibt im Fenster.
+9. Rundung: Dialog öffnen, Kanten im Modell neben dem Dialog anklicken (oder den Dialog beiseite ziehen).
+10. Enter in Neuer Ordner, Umbenennen und Kommentar ändern übernimmt.
+11. Würfel: Beschriftung lesbar und nicht spiegelverkehrt; Ziehen auf dem Würfel dreht, Umschalt + Ziehen dreht nicht, Klick wählt den Bereich, Mausrad über dem Würfel zoomt; keine Hervorhebung während des Ziehens.
+12. Skizzenstatus ist kurz („Skizzen-Modus: Name“); der Tastenhinweis erscheint beim Überfahren des Statusfelds.
+13. Zeichnung im großen Fenster: Werkzeugfeld schmal und mittig; bei 800 × 600 volle Breite und rollbar.
+14. Moduswechsel (Modell, Zeichnung, Skizze, auch per Doppelklick im Baum): Es blitzen keine Felder des alten Modus auf.
+Beanstandungen sammeln; sie werden in einer Korrekturrunde behoben.
+
+**Zahlen (Stand 2026-10-17)**
+- `cargo test --workspace -j 2 --no-fail-fast` (Debug): 2294 bestanden, 0 fehlgeschlagen, 33 ignoriert in 255 Testprogrammen (Etappe C: 2220 bestanden, 33 ignoriert).
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` und `cargo deny check` (advisories, bans, licenses, sources ok) sind grün; die geschützten Pfade (Kernel, Netz-Quelltext, STEP, Austausch) sind gegenüber 945fa67 unverändert.
+- Umfang der Etappe gegenüber dem Plan-Stand (ef00f60 bis 314d2cf): 51 Dateien, +4417/−975 Zeilen.
 
 ## Aufräumen / Qualität
 - `rust-version = "1.88"` ist für die GUI-Crates ungenau (egui 0.36 braucht 1.95).

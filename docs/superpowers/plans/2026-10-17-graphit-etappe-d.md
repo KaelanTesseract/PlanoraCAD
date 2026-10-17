@@ -169,3 +169,13 @@ pub const CLOSE_LABEL: &str = "Schließen";
 **Typkonsistenz:** `dialog::{Dialog, DialogSize, limits, CLOSE_LABEL}` (1) in 2 und 3; `CubeRegion::is_valid`, `region_point` (4); `SKETCH_KEYS_HINT`, `shell::fit_tool` (5).
 **Proportion:** Entscheidungen und Tests, keine Rümpfe.
 **Bekannte Risiken:** egui-`Window` mit `title_bar(false)` und `pivot` beim Wachsen des Inhalts (Aufgabe 1 (f)); viele Dialogtests mit festen Lagen (Aufgabe 3); verschobene Würfeltests ohne Verlust (Aufgabe 4). Empfehlung Controller: opus für 1, 3, 4; sonnet für 2, 5, 6.
+
+
+## Abweichungen bei der Umsetzung
+
+- Aufgabe 1: Die Grenzen des egui-Fensters gelten für die Außengröße; `show()` übergibt `limits()` unverändert statt um den Rahmen verkleinert. Eigene Schließbehandlung statt egui-`open`.
+- Aufgabe 3: Enter übernimmt jetzt auch in Neuer Ordner, Projekte umbenennen und Kommentar ändern (Test (f) verlangte es; Ruling: bleibt). Neue Testhaken `PlanoraApp::panels_mut`, `projects_panel::request_*`/`dialog_open`.
+- Aufgabe 4: Würfel 100 px; das Ziehen auf dem Würfel dreht die Ansicht (Nutzerentscheidung, Plan D5 angepasst); Umschalt + Ziehen und Hervorhebung beim Ziehen später in der Korrekturrunde. Mindestschrift 9 pt hat Vorrang vor der Flächenbreite (32 px bei 31,9 erlaubt).
+- Aufgabe 5: Das Werkzeugfeld ist bei 1100 × 700 schmaler als vorher (Plan: unverändert). D8 blieb bestehen: Ohne den Moduswechsel-Verwurf blitzt das alte Feld auf. Der Tastenhinweis der Skizze steht beim Überfahren des Statusfelds und in dessen Beschriftung (Review-Ergebnis I1).
+- Korrekturrunde (Commit 314d2cf, 12 Punkte): Statusfeld als Ganzes Hover-Ziel, Fußbreite gerade, Testschärfe, veraltete Kommentare, Umschalt + Ziehen, Hover beim Ziehen, Rest-Merker, Tests der breiten Dialoge und der Rückfragen.
+- Aufgabe 6: Keine toten Konstanten gefunden (136 geprüft). Die verbleibende `pub`-Fläche aus Etappe A/B wurde nicht aufgeräumt (stand auch nicht im Plan).

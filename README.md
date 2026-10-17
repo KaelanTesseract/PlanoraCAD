@@ -288,9 +288,25 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 
 **Fase:** Die Fase hat ein eigenes Symbol (eine gerade Schräge). Das Symbol für Verrunden ist unverändert.
 
-**Noch nicht neu:** Die Dialoge (zum Beispiel Export, Verrunden, Boolesche Operationen) sehen noch aus wie vorher. Sie folgen in der nächsten Etappe (Etappe D).
+**Dialoge:** Alle Fenster, die sich öffnen (zum Beispiel Exportieren, Verrunden, Boolesche Operation, Umbenennen und die Rückfragen), sehen jetzt gleich aus und erscheinen in der Mitte des Fensters.
 
-Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 13“.
+- Es gibt drei Breiten: schmal für Rückfragen und Umbenennen, mittel für Körper anlegen, Verrunden und Boolesche Operation, breit für Exportieren, Netz importieren, Neue Zeichnung und Maß bearbeiten.
+- Oben steht der Titel, rechts ein kleines Kreuz zum Schließen (bei Rückfragen gibt es das Kreuz nicht, dort schließt du mit den Knöpfen).
+- Die meisten Dialoge lassen sich verschieben, zum Beispiel beim Verrunden, damit du Kanten neben dem Dialog anklicken kannst. Rückfragen bleiben in der Mitte.
+- Ist ein Dialog höher als das Fenster, lässt er sich innen nach unten rollen. Auch bei 800 × 600 bleibt er ganz im Fenster.
+- In „Neuer Ordner“, „Umbenennen“ und „Kommentar ändern“ übernimmt die Eingabetaste jetzt die Eingabe.
+
+**Navigationswürfel, Ergänzungen:** Der Würfel ist jetzt etwas größer (100 Punkte), und die Beschriftung ist besser lesbar.
+
+- Du kannst auf dem Würfel mit gedrückter Maustaste ziehen, um das Modell zu drehen. Mit gedrückter Umschalttaste dreht das nicht. Ein einfacher Klick wählt wie bisher einen Bereich, das Mausrad über dem Würfel zoomt.
+
+**Kleinere Verbesserungen:**
+
+- Beim Skizzieren steht unten nur noch „Skizzen-Modus: Name“. Die Tastenhinweise erscheinen, wenn du mit der Maus über das Feld fährst.
+- Das Werkzeugfeld der Zeichnung ist so breit wie sein Inhalt und steht in der Mitte.
+- Beim Wechsel zwischen Modell, Zeichnung und Skizze blitzen keine Felder des vorherigen Modus mehr auf.
+
+Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 13“ (Etappen A bis D).
 
 ## Bauen
 
