@@ -453,6 +453,84 @@ pub fn suggest_scale(
     suggest_scale_in(bodies, (hi.x - lo.x, hi.y - lo.y), base)
 }
 
+/// Der freie Bereich des Blatts als (links unten, rechts oben).
+pub type FreeArea = ((f64, f64), (f64, f64));
+
+/// Einheitsrichtung zur ersten Nachbaransicht der Grundansicht `base` unter den Arten `kinds`,
+/// die rein waagerecht (`horizontal`) oder rein senkrecht liegt.
+fn neighbour_dir(
+    projection: Projection,
+    base: ViewKind,
+    kinds: [ViewKind; 4],
+    horizontal: bool,
+) -> f64 {
+    kinds
+        .into_iter()
+        .filter(|k| *k != base)
+        .filter_map(|k| align_dir(projection, base, k))
+        .find_map(|(dx, dy)| {
+            if horizontal && dx != 0.0 && dy == 0.0 {
+                Some(dx)
+            } else if !horizontal && dy != 0.0 && dx == 0.0 {
+                Some(dy)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0.0)
+}
+
+/// Mitte der Grundansicht `base` im Maßstab `scale`, so dass der ganze Block aus Grundansicht,
+/// Seitenansicht (waagerecht daneben) und Draufsicht (senkrecht daneben) samt [`GAP_MM`]
+/// dazwischen in der Mitte des freien Bereichs liegt. Die Seiten folgen der Projektionsart
+/// (Erstwinkel: Seitenansicht rechts, Draufsicht unten; Drittwinkel umgekehrt). Ohne exakte
+/// Körper gibt es nichts zu messen: die Mitte des freien Bereichs.
+pub fn block_origin(
+    bodies: &[Body],
+    free: FreeArea,
+    projection: Projection,
+    base: ViewKind,
+    scale: Scale,
+) -> (f64, f64) {
+    let (cx, cy) = ((free.0.0 + free.1.0) / 2.0, (free.0.1 + free.1.1) / 2.0);
+    let Some(b) = exact_bounds(bodies) else {
+        return (cx, cy);
+    };
+    let shift = (GAP_MM + extent_along(b, Basis::of(base).d) * scale.factor()) / 2.0;
+    let sides = [
+        ViewKind::Left,
+        ViewKind::Right,
+        ViewKind::Front,
+        ViewKind::Back,
+    ];
+    let tops = [
+        ViewKind::Top,
+        ViewKind::Bottom,
+        ViewKind::Front,
+        ViewKind::Back,
+    ];
+    let dx = neighbour_dir(projection, base, sides, true);
+    let dy = neighbour_dir(projection, base, tops, false);
+    (cx - dx * shift, cy - dy * shift)
+}
+
+/// Mitte einer Ansicht der Ausdehnung `size`, die möglichst bei `want` liegt, aber im freien
+/// Bereich bleibt. Passt die Ausdehnung auf einer Achse nicht hinein, sitzt die Ansicht dort
+/// bündig an der rechten bzw. oberen Kante (sie ragt dann nach links bzw. unten hinaus).
+pub fn keep_in_free(want: (f64, f64), size: (f64, f64), free: FreeArea) -> (f64, f64) {
+    let axis = |w: f64, len: f64, lo: f64, hi: f64| {
+        if len <= hi - lo {
+            w.clamp(lo + len / 2.0, hi - len / 2.0)
+        } else {
+            hi - len / 2.0
+        }
+    };
+    (
+        axis(want.0, size.0, free.0.0, free.1.0),
+        axis(want.1, size.1, free.0.1, free.1.1),
+    )
+}
+
 /// Vorgabeabstand der Mitten einer abgeleiteten Ansicht `child` von ihrer Ausgangsansicht
 /// `parent`: halbe Ausdehnung der Ausgangsansicht entlang der Ausrichtungsachse (mit ihrem
 /// Maßstab), [`GAP_MM`] und halbe Ausdehnung der neuen Ansicht (mit ihrem Maßstab).

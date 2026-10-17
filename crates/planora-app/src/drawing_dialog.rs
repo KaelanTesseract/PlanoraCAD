@@ -3,7 +3,7 @@
 use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::dialog::{Dialog, DialogSize};
-use crate::drawing_state::{WorkArea, suggest_scale};
+use crate::drawing_state::{WorkArea, block_origin, suggest_scale_in};
 use crate::drawing_view;
 use crate::export_dialog::shorten_for_display;
 use crate::icons::{self, Icon};
@@ -95,9 +95,11 @@ impl NewDrawingDialog {
         }
     }
 
-    /// Maßstabsvorschlag für Blatt, Projektion und Grundansicht.
+    /// Maßstabsvorschlag für Blatt, Projektion und Grundansicht (im freien Bereich eines neuen
+    /// Blatts mit den Hinweiszeilen der Projektangaben).
     pub fn suggestion(&self, state: &AppState) -> Scale {
-        suggest_scale(&state.bodies, self.sheet(), self.projection, self.base)
+        let (lo, hi) = drawing_view::new_sheet_layout(state, self.sheet(), self.projection).free;
+        suggest_scale_in(&state.bodies, (hi.x - lo.x, hi.y - lo.y), self.base)
     }
 
     /// Warum sich (noch) nichts anlegen lässt.
@@ -118,24 +120,34 @@ impl NewDrawingDialog {
             return Err(e.into());
         }
         let sheet = self.sheet();
+        let had_project = state.document.project_info().is_some();
         let id = state
             .document
             .add_drawing_stamped(&self.name, sheet, self.projection, &Stamp::now())
             .map_err(|e| e.to_string())?;
-        let (lo, hi) = state
+        let free = state
             .document
             .drawing(id)
             .map(|d| drawing_view::layout_of(state, d).free)
             .ok_or("Die Zeichnung fehlt.")?;
-        let placement = Placement::Free {
-            x: (lo.x + hi.x) / 2.0,
-            y: (lo.y + hi.y) / 2.0,
-        };
+        // Der ganze Block aus drei Ansichten liegt in der Mitte des freien Bereichs.
+        let (x, y) = block_origin(
+            &state.bodies,
+            ((free.0.x, free.0.y), (free.1.x, free.1.y)),
+            self.projection,
+            self.base,
+            self.scale,
+        );
+        let placement = Placement::Free { x, y };
         if let Err(e) = state
             .document
             .add_view(id, self.base, self.scale, placement, None)
         {
+            // Alles zurück, auch die Projektangaben, die das Anlegen miterzeugt hat.
             let _ = state.document.delete_drawing(id);
+            if !had_project {
+                state.document.clear_project_info();
+            }
             return Err(e.to_string());
         }
         state.drawing_ui.open(id);

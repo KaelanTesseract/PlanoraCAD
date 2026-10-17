@@ -23,7 +23,8 @@ use crate::dimension_tool::{
     ToolMode, with_tool,
 };
 use crate::drawing_state::{
-    ViewResult, WorkArea, default_distance, estimate_view_size, suggest_scale_in,
+    FreeArea, ViewResult, WorkArea, block_origin, default_distance, estimate_view_size,
+    keep_in_free, suggest_scale_in,
 };
 use crate::export_dialog::{REPAINT, shorten_for_display};
 use crate::icons::{self, Icon};
@@ -49,8 +50,8 @@ use planora_drawing::sheet_info::{
 use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{
-    Anchor, Drawing, DrawingId, Placement, Scale, ViewId, ViewKind, ViewLines, ViewSpec,
-    Visibility, align_dir, view_extent,
+    Anchor, Drawing, DrawingId, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewLines,
+    ViewSpec, Visibility, align_dir, view_extent,
 };
 use planora_math::DVec2;
 use std::collections::BTreeMap;
@@ -584,8 +585,17 @@ pub fn sheet_texts(state: &AppState, drawing: &Drawing, model: &SheetModel) -> T
     )
 }
 
-/// Die Blattgeometrie der Zeichnung; die Zeilenzahlen von Änderungstabelle und Hinweisfeld
-/// folgen den Texten (der Maßstab beeinflusst sie nicht).
+/// Die Blattgeometrie zu den Texten: die Zeilenzahlen von Änderungstabelle und Hinweisfeld
+/// folgen ihnen (der Maßstab beeinflusst sie nicht).
+pub fn layout_from_texts(drawing: &Drawing, texts: &TitleTexts) -> SheetLayout {
+    sheet_layout(
+        drawing.sheet,
+        texts.visible_revisions().len(),
+        texts.notes.len(),
+    )
+}
+
+/// Die Blattgeometrie der Zeichnung.
 pub fn layout_of(state: &AppState, drawing: &Drawing) -> SheetLayout {
     let texts = resolve_texts(
         drawing,
@@ -593,11 +603,20 @@ pub fn layout_of(state: &AppState, drawing: &Drawing) -> SheetLayout {
         &context_or_single(state, drawing.id),
         None,
     );
-    sheet_layout(
-        drawing.sheet,
-        texts.visible_revisions().len(),
-        texts.notes.len(),
-    )
+    layout_from_texts(drawing, &texts)
+}
+
+/// Die Blattgeometrie einer neuen Zeichnung auf `sheet`: mit den Hinweiszeilen der Projektangaben
+/// (sind noch keine gesetzt, die der Vorgabe) und ohne Änderungen.
+pub fn new_sheet_layout(state: &AppState, sheet: Sheet, projection: Projection) -> SheetLayout {
+    let blank = Drawing::new(DrawingId(0), String::new(), sheet, projection);
+    let ctx = SheetContext {
+        doc_name: state.document_name.clone(),
+        index: 1,
+        count: 1,
+    };
+    let texts = resolve_texts(&blank, state.document.project_info(), &ctx, None);
+    layout_from_texts(&blank, &texts)
 }
 
 /// Zuletzt im Zeichnungsbereich gezeichnetes Blattmodell (mit Mittellinien und Maßen).
@@ -639,7 +658,7 @@ fn sheet_model(
     let mut built = build_sheet_with(drawing, &refs, dims);
     let texts = sheet_texts(state, drawing, &built);
     built.frame = Some(sheet_frame(
-        &layout_of(state, drawing),
+        &layout_from_texts(drawing, &texts),
         &texts,
         drawing.projection,
     ));
@@ -1483,19 +1502,19 @@ fn message_key(state: &AppState) -> (u64, Option<ViewId>, Option<DimId>) {
 ///
 /// Normansicht: abgeleitet von der gewählten Normansicht (sonst von der Grundansicht) mit
 /// deren Maßstab und dem Vorgabeabstand, wenn die Ausrichtungsregel eine Richtung liefert;
-/// sonst frei (leere Zeichnung: Mitte des freien Bereichs, sonst links oben). Isometrisch: frei
-/// rechts oben (0,75 · Breite, 0,75 · Höhe des freien Bereichs) mit dem Maßstab der Grundansicht.
+/// sonst frei (leere Zeichnung: so, dass der Block aus drei Ansichten in der Mitte des freien
+/// Bereichs liegt, sonst links oben). Isometrisch: frei rechts oben (0,75 · Breite, 0,75 · Höhe
+/// des freien Bereichs) mit dem Maßstab der Grundansicht. Freie Ansichten bleiben mit ihrer
+/// geschätzten Ausdehnung im freien Bereich, soweit sie hineinpassen; sonst sitzen sie dort
+/// bündig an der rechten bzw. oberen Kante.
 pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> {
     let WorkArea::Drawing(id) = state.drawing_ui.area else {
         return Err(NO_DRAWING.into());
     };
     let d = state.document.drawing(id).ok_or(NO_DRAWING)?.clone();
     let (lo, hi) = layout_of(state, &d).free;
+    let free: FreeArea = ((lo.x, lo.y), (hi.x, hi.y));
     let (free_w, free_h) = (hi.x - lo.x, hi.y - lo.y);
-    let at = |fx: f64, fy: f64| Placement::Free {
-        x: lo.x + fx * free_w,
-        y: lo.y + fy * free_h,
-    };
     let base = d
         .views
         .iter()
@@ -1509,8 +1528,20 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
         };
         suggest_scale_in(&state.bodies, (free_w, free_h), k)
     });
+    // Freie Ansicht möglichst bei `fx`/`fy` des freien Bereichs, aber mit ihrer geschätzten
+    // Ausdehnung darin.
+    let at = |fx: f64, fy: f64, scale: Scale| {
+        let (ew, eh) = estimate_view_size(&state.bodies, kind);
+        let f = scale.factor();
+        let (x, y) = keep_in_free(
+            (lo.x + fx * free_w, lo.y + fy * free_h),
+            (ew * f, eh * f),
+            free,
+        );
+        Placement::Free { x, y }
+    };
     let (placement, parent, scale) = if !kind.is_normal() {
-        (at(0.75, 0.75), None, base_scale)
+        (at(0.75, 0.75, base_scale), None, base_scale)
     } else {
         let selected = state
             .drawing_ui
@@ -1528,8 +1559,12 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
                 Some(p.id),
                 p.scale,
             ),
-            None if d.views.is_empty() => (at(0.5, 0.5), None, base_scale),
-            None => (at(0.25, 0.75), None, base_scale),
+            None if d.views.is_empty() => {
+                // Der ganze Block aus drei Ansichten liegt in der Mitte des freien Bereichs.
+                let (x, y) = block_origin(&state.bodies, free, d.projection, kind, base_scale);
+                (Placement::Free { x, y }, None, base_scale)
+            }
+            None => (at(0.25, 0.75, base_scale), None, base_scale),
         }
     };
     state

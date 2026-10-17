@@ -201,6 +201,14 @@ impl Document {
         self.project_info.as_ref()
     }
 
+    /// Entfernt die Projektangaben wieder (etwa wenn das Anlegen einer Zeichnung scheitert, das
+    /// sie miterzeugt hat). Der Änderungszähler steigt nur, wenn es welche gab.
+    pub fn clear_project_info(&mut self) {
+        if self.project_info.take().is_some() {
+            self.drawing_edits += 1;
+        }
+    }
+
     /// Setzt die Projektangaben (mit Prüfung). Der Änderungszähler steigt nur bei einer Änderung.
     pub fn set_project_info(&mut self, p: ProjectInfo) -> Result<(), FeatureError> {
         validate_project_info(&p).map_err(bad)?;

@@ -524,7 +524,9 @@ fn new_drawing_dialog_creates_a_drawing_with_suggested_scale() {
     assert_eq!(v.kind, ViewKind::Front);
     assert_eq!(v.scale, s(1, 2));
     assert_eq!(v.parent, None);
-    assert_eq!(v.placement, Placement::Free { x: 153.5, y: 140.5 });
+    // Block aus drei Ansichten mittig im freien Bereich (Mitte 153,5 | 140,5): die Grundansicht
+    // sitzt um (20 + 60·0,5)/2 = 25 mm links und oberhalb davon (Erstwinkel).
+    assert_eq!(v.placement, Placement::Free { x: 128.5, y: 165.5 });
     assert_eq!(st.drawing_ui.area, WorkArea::Drawing(dr.id));
     // Der nächste Vorschlag nimmt die kleinste freie Zahl.
     assert_eq!(NewDrawingDialog::new(&st).name, "Zeichnung 2");
@@ -729,19 +731,19 @@ fn adding_a_top_view_sits_below_front_in_first_angle() {
         Placement::Aligned { distance: 100.0 }
     );
 
-    // Isometrisch: frei rechts oben (0,75·B, 0,75·H des freien Bereichs 20…287 × 88…193),
-    // Maßstab der Grundansicht.
+    // Isometrisch: möglichst bei (0,75·B, 0,75·H) des freien Bereichs 20…287 × 88…193, mit der
+    // Ausdehnung 113,1 × 98,0 (1:1) darin: x = 220,25 passt, y = 166,75 würde oben um 22,7
+    // herausragen und wird auf 193 − 98,0/2 = 144,01 gesetzt.
     let iso = drawing_view::add_view(&mut st, ViewKind::Isometric).unwrap();
     let v = st.document.drawing(d).unwrap().view(iso).unwrap().clone();
     assert_eq!(v.parent, None);
     assert_eq!(v.scale, s(1, 1));
-    assert_eq!(
-        v.placement,
-        Placement::Free {
-            x: 220.25,
-            y: 166.75
-        }
-    );
+    let Placement::Free { x, y } = v.placement else {
+        panic!("frei");
+    };
+    let (_, ih) = estimate_view_size(&st.bodies, ViewKind::Isometric);
+    assert!((x - 220.25).abs() < 1e-9 && (y - (193.0 - ih / 2.0)).abs() < 1e-9);
+    assert!((y - 144.0102).abs() < 1e-3, "{y}");
 
     // Gewählte Normansicht ist die Ausgangsansicht; gleiche Art zweimal erlaubt.
     st.drawing_ui.selected_view = Some(top);

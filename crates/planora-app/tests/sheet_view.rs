@@ -8,7 +8,9 @@
 use egui::epaint::Shape;
 use egui::{Color32, Event, Pos2, Rect, vec2};
 use planora_app::drawing_dialog::NewDrawingDialog;
-use planora_app::drawing_state::{WorkArea, estimate_view_size, suggest_scale_in};
+use planora_app::drawing_state::{
+    WorkArea, block_origin, estimate_view_size, keep_in_free, suggest_scale_in,
+};
 use planora_app::drawing_view;
 use planora_app::state::*;
 use planora_app::testing::collect_texts;
@@ -47,6 +49,17 @@ impl Shot {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Gibt es einen Text `exact`, dessen Mitte höchstens `tol` Pixel von `p` entfernt liegt?
+    fn text_near(&self, exact: &str, p: Pos2, tol: f32) -> bool {
+        self.flat.iter().any(|s| match s {
+            Shape::Text(t) => {
+                t.galley.text() == exact
+                    && (Rect::from_min_size(t.pos, t.galley.size()).center() - p).length() <= tol
+            }
+            _ => false,
+        })
     }
 
     fn rect_fills(&self) -> Vec<(Rect, Color32)> {
@@ -183,8 +196,19 @@ fn frame_is_shown_at_800x600_and_large() {
                     hn.k(),
                     shot.text
                 );
-                for want in ["Fertigungszeichnung", "1 von 1", label, "1", "A"] {
+                for want in ["Fertigungszeichnung", "1 von 1", label] {
                     assert!(shot.has_line(want), "„{want}“ fehlt in {info}");
+                }
+                // Rasterbeschriftung (1, 2, … und A, B, …) an ihren Stellen am Rand.
+                let layout = drawing_view::layout_of(&st, st.document.drawing(d).unwrap());
+                assert!(layout.grid_labels.iter().any(|(_, t)| t == "1"));
+                assert!(layout.grid_labels.iter().any(|(_, t)| t == "A"));
+                let tol = (4.0 * hn.k() + 2.0) as f32;
+                for (c, text) in &layout.grid_labels {
+                    assert!(
+                        shot.text_near(text, hn.screen(*c), tol),
+                        "Rasterzeichen „{text}“ bei {c:?} fehlt in {info}"
+                    );
                 }
                 // Papier: weiß in beiden Themes, in der Größe des Blatts.
                 let (sw, sh) = sheet.size_mm();
@@ -235,12 +259,15 @@ fn new_drawing_is_stamped_and_centred() {
     let project = st.document.project_info().expect("Projektangaben");
     assert_eq!(project.login, today.user);
     assert_eq!(project.creator, FieldValue::Auto);
-    // Grundansicht in der Mitte des freien Bereichs (20…287 × 88…193).
+    // Der Block aus drei Ansichten liegt mittig im freien Bereich (20…287 × 88…193, Mitte
+    // 153,5 | 140,5); 100 × 60 × 40 gibt 1:2, die Grundansicht sitzt um (20 + 60·0,5)/2 = 25 mm
+    // links und oberhalb der Mitte (Erstwinkel).
     assert_eq!(dr.sheet, A4_QUER);
     assert_eq!(dr.views.len(), 1);
+    assert_eq!(dr.views[0].scale, s(1, 2));
     assert_eq!(
         dr.views[0].placement,
-        Placement::Free { x: 153.5, y: 140.5 }
+        Placement::Free { x: 128.5, y: 165.5 }
     );
     assert_eq!(st.drawing_ui.area, WorkArea::Drawing(id));
     // Mit Blattangaben braucht die Datei das Format 6.
@@ -299,9 +326,8 @@ fn views_are_added_in_the_free_area() {
     };
     for sheet in [hoch, A4_QUER, a3] {
         // Zwei Zeichnungen je Blatt: Grundansicht allein (Mitte); Isometrie (rechts oben) und
-        // danach eine Normansicht ohne Grundansicht (links oben). Ein Teil von 40 × 30 × 20:
-        // füllt ein Teil das Blatt fast ganz, ragt die Isometrie bei 0,75 über den Rand (der
-        // Maßstab richtet sich nach der Grundansicht).
+        // danach eine Normansicht ohne Grundansicht (links oben). Ein Teil von 40 × 30 × 20; das
+        // Verhalten bei einem Teil, das das Blatt fast füllt, prüft der Test unten.
         let mut st = AppState::new();
         st.create_box(DVec3::new(40.0, 30.0, 20.0)).unwrap();
         let one = stamped(&mut st, "Blatt 1", sheet);
@@ -324,22 +350,26 @@ fn views_are_added_in_the_free_area() {
             let Placement::Free { x, y } = spec.placement else {
                 panic!("{:?} sollte frei liegen", spec.kind);
             };
-            let want = (lo.x + fx * (hi.x - lo.x), lo.y + fy * (hi.y - lo.y));
+            let (ew, eh) = estimate_view_size(&st.bodies, spec.kind);
+            let f = spec.scale.factor();
+            let free = ((lo.x, lo.y), (hi.x, hi.y));
+            let want = if spec.kind == ViewKind::Front {
+                // Block aus drei Ansichten mittig.
+                block_origin(&st.bodies, free, Projection::First, spec.kind, spec.scale)
+            } else {
+                keep_in_free(
+                    (lo.x + fx * (hi.x - lo.x), lo.y + fy * (hi.y - lo.y)),
+                    (ew * f, eh * f),
+                    free,
+                )
+            };
             assert!(
                 (x - want.0).abs() < 1e-9 && (y - want.1).abs() < 1e-9,
                 "{:?} auf {sheet:?}: ({x}, {y}) statt {want:?}",
                 spec.kind
             );
-            // Mit der geschätzten Ausdehnung im freien Bereich. Die Isometrie sitzt fest bei
-            // 0,75 und kann bei einem Teil, das den freien Bereich ausfüllt, über den Rand
-            // ragen; ihre Mitte liegt aber immer darin.
-            let (ew, eh) = estimate_view_size(&st.bodies, spec.kind);
-            let f = spec.scale.factor();
-            let (hw, hh) = if spec.kind == ViewKind::Isometric {
-                (0.0, 0.0)
-            } else {
-                (ew * f / 2.0, eh * f / 2.0)
-            };
+            // Mit der ganzen geschätzten Ausdehnung im freien Bereich.
+            let (hw, hh) = (ew * f / 2.0, eh * f / 2.0);
             assert!(
                 x - hw >= lo.x - 1e-9
                     && x + hw <= hi.x + 1e-9
@@ -387,4 +417,166 @@ fn old_drawing_shows_defaults_without_changes() {
     assert_eq!(st.document.edit_count(), edits);
     assert!(st.document.drawing(id).unwrap().info.is_none());
     assert!(st.document.project_info().is_none());
+}
+
+// ---------------------------------------------------------------------------------------------
+// (d2) Block aus drei Ansichten und Isometrie im freien Bereich
+
+type Span = ((f64, f64), (f64, f64));
+
+/// Linke untere und rechte obere Ecke einer Ansicht der Art `kind` bei Mitte `c`.
+fn span(st: &AppState, kind: ViewKind, scale: Scale, c: (f64, f64)) -> Span {
+    let (w, h) = estimate_view_size(&st.bodies, kind);
+    let f = scale.factor();
+    (
+        (c.0 - w * f / 2.0, c.1 - h * f / 2.0),
+        (c.0 + w * f / 2.0, c.1 + h * f / 2.0),
+    )
+}
+
+fn inside(a: Span, lo: DVec2, hi: DVec2) -> bool {
+    let e = 1e-9;
+    a.0.0 >= lo.x - e && a.0.1 >= lo.y - e && a.1.0 <= hi.x + e && a.1.1 <= hi.y + e
+}
+
+/// Legt eine Zeichnung über das Fenster an, fügt Seiten- und Draufsicht sowie die Isometrie
+/// hinzu und gibt Block (Vorne, Links, Oben), Isometrie und freien Bereich zurück.
+fn arrange(
+    body: DVec3,
+    paper: Paper,
+    landscape: bool,
+    projection: Projection,
+) -> (Vec<Span>, Span, (DVec2, DVec2)) {
+    let mut st = AppState::new();
+    st.create_box(body).unwrap();
+    let mut dialog = NewDrawingDialog::new(&st);
+    dialog.paper = paper;
+    dialog.landscape = landscape;
+    dialog.projection = projection;
+    dialog.scale = dialog.suggestion(&st);
+    let id = dialog.create(&mut st).unwrap();
+    let base = st.document.drawing(id).unwrap().views[0].clone();
+    let Placement::Free { x, y } = base.placement else {
+        panic!("frei");
+    };
+    st.drawing_ui.selected_view = Some(base.id);
+    let mut block = vec![span(&st, ViewKind::Front, base.scale, (x, y))];
+    for kind in [ViewKind::Left, ViewKind::Top] {
+        let v = drawing_view::add_view(&mut st, kind).unwrap();
+        let spec = st.document.drawing(id).unwrap().view(v).unwrap().clone();
+        let Placement::Aligned { distance } = spec.placement else {
+            panic!("abgeleitet");
+        };
+        let (dx, dy) = planora_drawing::align_dir(projection, ViewKind::Front, kind).unwrap();
+        block.push(span(
+            &st,
+            kind,
+            spec.scale,
+            (x + dx * distance, y + dy * distance),
+        ));
+    }
+    let iso = drawing_view::add_view(&mut st, ViewKind::Isometric).unwrap();
+    let spec = st.document.drawing(id).unwrap().view(iso).unwrap().clone();
+    let Placement::Free { x, y } = spec.placement else {
+        panic!("frei");
+    };
+    let free = drawing_view::layout_of(&st, st.document.drawing(id).unwrap()).free;
+    (
+        block,
+        span(&st, ViewKind::Isometric, spec.scale, (x, y)),
+        free,
+    )
+}
+
+#[test]
+fn three_view_block_and_isometric_stay_in_the_free_area() {
+    let probe = DVec3::new(100.0, 60.0, 40.0);
+    let cases = [
+        (probe, Paper::A4, true, Projection::First),
+        (probe, Paper::A4, true, Projection::Third),
+        (probe, Paper::A4, false, Projection::First),
+        (probe, Paper::A0, true, Projection::First),
+        (
+            DVec3::new(40.0, 30.0, 20.0),
+            Paper::A3,
+            true,
+            Projection::Third,
+        ),
+    ];
+    for (body, paper, landscape, projection) in cases {
+        let (block, iso, (lo, hi)) = arrange(body, paper, landscape, projection);
+        for b in &block {
+            assert!(
+                inside(*b, lo, hi),
+                "{paper:?} {landscape} {projection:?}: Block {b:?} ragt aus {lo:?}…{hi:?}"
+            );
+        }
+        assert!(
+            inside(iso, lo, hi),
+            "{paper:?} {landscape} {projection:?}: Isometrie {iso:?} ragt aus {lo:?}…{hi:?}"
+        );
+    }
+
+    // Ein Teil, das das Blatt fast ausfüllt: der Block passt (Maßstabsvorschlag), die Isometrie
+    // nur nach bestem Wissen – was nicht hineinpasst, sitzt bündig an der rechten bzw. oberen
+    // Kante des freien Bereichs.
+    let (block, iso, (lo, hi)) = arrange(
+        DVec3::new(150.0, 100.0, 80.0),
+        Paper::A4,
+        true,
+        Projection::First,
+    );
+    for b in &block {
+        assert!(inside(*b, lo, hi), "Block {b:?} ragt aus {lo:?}…{hi:?}");
+    }
+    let x_ok = iso.0.0 >= lo.x - 1e-9 && iso.1.0 <= hi.x + 1e-9;
+    let y_ok = iso.0.1 >= lo.y - 1e-9 && iso.1.1 <= hi.y + 1e-9;
+    assert!(x_ok || (iso.1.0 - hi.x).abs() < 1e-9, "{iso:?}");
+    assert!(y_ok || (iso.1.1 - hi.y).abs() < 1e-9, "{iso:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Anlegen scheitert; Maßstabsvorschlag mit den Hinweiszeilen der Projektangaben
+
+#[test]
+fn failed_creation_rolls_back_the_project_info_it_created() {
+    let mut st = box_state();
+    let mut dialog = NewDrawingDialog::new(&st);
+    dialog.scale = Scale { num: 0, den: 1 };
+    assert!(dialog.create(&mut st).is_err());
+    assert!(st.document.drawings().is_empty());
+    assert!(
+        st.document.project_info().is_none(),
+        "Projektangaben blieben"
+    );
+
+    // Gab es die Projektangaben schon, bleiben sie.
+    let id = stamped(&mut st, "Blatt 1", A4_QUER);
+    st.document.delete_drawing(id).unwrap();
+    let before = st.document.project_info().cloned();
+    assert!(before.is_some());
+    let mut dialog = NewDrawingDialog::new(&st);
+    dialog.scale = Scale { num: 0, den: 1 };
+    assert!(dialog.create(&mut st).is_err());
+    assert_eq!(st.document.project_info().cloned(), before);
+    assert!(st.document.drawings().is_empty());
+}
+
+#[test]
+fn suggestion_uses_the_note_lines_of_the_project() {
+    // Quader 100 × 100 × 50: Höhe 150·f + 20 ≤ 105 (drei Zeilen) → 1:2; ≤ 87 (sechs Zeilen,
+    // freier Bereich 267 × 87) → 1:5.
+    let mut st = AppState::new();
+    st.create_box(DVec3::new(100.0, 100.0, 50.0)).unwrap();
+    let dialog = NewDrawingDialog::new(&st);
+    assert_eq!(dialog.suggestion(&st), s(1, 2));
+    let mut project = planora_drawing::sheet_info::ProjectInfo::new(&stamp());
+    project.notes = planora_drawing::sheet_info::NotesValue::Lines(
+        (1..=6).map(|i| format!("Hinweis {i}")).collect(),
+    );
+    st.document.set_project_info(project).unwrap();
+    let (lo, hi) = sheet_layout(A4_QUER, 0, 6).free;
+    let want = suggest_scale_in(&st.bodies, (hi.x - lo.x, hi.y - lo.y), ViewKind::Front);
+    assert_eq!(dialog.suggestion(&st), want);
+    assert_eq!(want, s(1, 5));
 }
