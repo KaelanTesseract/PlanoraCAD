@@ -115,14 +115,14 @@ Vorbelegte **Hinweiszeilen:** „Allgemeintoleranzen ISO 2768-m“, „Kanten ge
 
 ## 10. Festlegungen der Umsetzung
 
-Stand 2026-10-17. Der Plan (`docs/superpowers/plans/2026-10-17-zeichnungsblatt.md`) hat Lücken der Spec mit den Festlegungen F1 bis F15 geschlossen; der Nutzer hat F9 (Hinweisfeld nach der 310-mm-Regel), F7 (Projektionssymbol) und F15 (Dokumentstatus) entschieden. Die Zahlen aus §3 und §4 blieben unverändert.
+Stand 2026-10-17. Der Plan (`docs/superpowers/plans/2026-10-17-zeichnungsblatt.md`) hat Lücken der Spec mit den Festlegungen F1 bis F15 geschlossen; der Nutzer hat F9 (Hinweisfeld nach der 310-mm-Regel), F7 (Projektionssymbol) und F15 (Dokumentstatus) entschieden. Die Zahlen aus §3 und §4 gelten für den Bezug A3; für andere Formate skalieren sie (Absatz „Skalierung“ in §3).
 
 **F1 bis F15**
 - **F1** Ein Feld ist „automatisch“, solange es leer ist; „Zurücksetzen“ leert es. Gespeichert: automatisch oder eigener Text (in der Datei: fehlt oder `null` heißt automatisch).
 - **F2** Datum = Kalendertag in UTC, Schreibweise `JJJJ-MM-TT`; eigene Rechnung, keine Abhängigkeit für Ortszeit.
 - **F3** `Document::add_drawing` bleibt unverändert (Zeichnung ohne Satz, wie aus Format ≤ 5); neu `add_drawing_stamped` für die App (Satz mit Datum von heute, Projektangaben mit Windows-Anmeldename, falls noch keine da sind).
 - **F4** Alte Zeichnungen bekommen Satz und Projektangaben erst mit „Übernehmen“; Öffnen und „Abbrechen“ ändern nichts.
-- **F5** Raster: Felderzahl je Kante `2 · round(Kante / 100)` (A4 6 × 4 bis A0 24 × 16), Teilung 50 mm von der Blattmitte nach außen, Teilstriche 0,25 mm vom Rahmen 5 mm nach außen, Beschriftung mittig im Rand, Zeilenbuchstaben ohne I und O.
+- **F5** Raster: Felderzahl je Kante `2 · round(Kante / 100)` (Bezug A3: 8 × 6; die Teilung 50 mm skaliert mit dem Format, die Zahl der Felder bleibt wegen der Skalierung auf allen Formaten 8 × 6), Teilung 50 mm von der Blattmitte nach außen, Teilstriche 0,25 mm vom Rahmen 5 mm nach außen, Beschriftung mittig im Rand, Zeilenbuchstaben ohne I und O.
 - **F6** Schriftfeld mit 17 Zellen in fünf Zeilen (Höhe 56 mm): Zeichnungsnummer, Änderungsstand, Blatt, Sprache; Titel mit Zusatztitel; Eigentümer, Dokumentart, Dokumentstatus; Ersteller, Geprüft, Freigabe, Ausgabedatum; Werkstoff, Gewicht, Maßstab, Format, Projektion. Feldname klein links oben, Inhalt darunter.
 - **F7** Projektionssymbol (h = 3,5): Kegelstumpf (Trapez, 7 lang, 3,5 und 7 hoch) und zwei Kreise Ø 7 und Ø 3,5, Abstand 3,5. Methode 1: Kegelstumpf links, Kreise rechts; Methode 3: Kreise links, Kegelstumpf rechts. Linien 0,5 mm.
 - **F8** Freier Bereich = die größere zweier Rechtecke (volle Rahmenbreite zwischen Schriftfeld-Stapel und Änderungstabelle, oder volle Rahmenhöhe links vom linkesten Hindernis).
