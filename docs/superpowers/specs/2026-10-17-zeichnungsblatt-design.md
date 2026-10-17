@@ -110,3 +110,36 @@ Vorbelegte **Hinweiszeilen:** „Allgemeintoleranzen ISO 2768-m“, „Kanten ge
 - Hinweisfeld links neben dem Schriftfeld; Platz über dem Schriftfeld für die Stückliste (3c-2).
 - Änderungstabelle oben rechts, bis 6 Zeilen sichtbar.
 - Kein automatisches Gewicht.
+
+## 10. Festlegungen der Umsetzung
+
+Stand 2026-10-17. Der Plan (`docs/superpowers/plans/2026-10-17-zeichnungsblatt.md`) hat Lücken der Spec mit den Festlegungen F1 bis F15 geschlossen; der Nutzer hat F9 (Hinweisfeld nach der 310-mm-Regel), F7 (Projektionssymbol) und F15 (Dokumentstatus) entschieden. Die Zahlen aus §3 und §4 blieben unverändert.
+
+**F1 bis F15**
+- **F1** Ein Feld ist „automatisch“, solange es leer ist; „Zurücksetzen“ leert es. Gespeichert: automatisch oder eigener Text (in der Datei: fehlt oder `null` heißt automatisch).
+- **F2** Datum = Kalendertag in UTC, Schreibweise `JJJJ-MM-TT`; eigene Rechnung, keine Abhängigkeit für Ortszeit.
+- **F3** `Document::add_drawing` bleibt unverändert (Zeichnung ohne Satz, wie aus Format ≤ 5); neu `add_drawing_stamped` für die App (Satz mit Datum von heute, Projektangaben mit Windows-Anmeldename, falls noch keine da sind).
+- **F4** Alte Zeichnungen bekommen Satz und Projektangaben erst mit „Übernehmen“; Öffnen und „Abbrechen“ ändern nichts.
+- **F5** Raster: Felderzahl je Kante `2 · round(Kante / 100)` (A4 6 × 4 bis A0 24 × 16), Teilung 50 mm von der Blattmitte nach außen, Teilstriche 0,25 mm vom Rahmen 5 mm nach außen, Beschriftung mittig im Rand, Zeilenbuchstaben ohne I und O.
+- **F6** Schriftfeld mit 17 Zellen in fünf Zeilen (Höhe 56 mm): Zeichnungsnummer, Änderungsstand, Blatt, Sprache; Titel mit Zusatztitel; Eigentümer, Dokumentart, Dokumentstatus; Ersteller, Geprüft, Freigabe, Ausgabedatum; Werkstoff, Gewicht, Maßstab, Format, Projektion. Feldname klein links oben, Inhalt darunter.
+- **F7** Projektionssymbol (h = 3,5): Kegelstumpf (Trapez, 7 lang, 3,5 und 7 hoch) und zwei Kreise Ø 7 und Ø 3,5, Abstand 3,5. Methode 1: Kegelstumpf links, Kreise rechts; Methode 3: Kreise links, Kegelstumpf rechts. Linien 0,5 mm.
+- **F8** Freier Bereich = die größere zweier Rechtecke (volle Rahmenbreite zwischen Schriftfeld-Stapel und Änderungstabelle, oder volle Rahmenhöhe links vom linkesten Hindernis).
+- **F9** Hinweisfeld ab 310 mm Rahmenbreite neben dem Schriftfeld, sonst darüber; Höhe `2 · 2 + n · 6` mm, ohne Zeilen kein Feld.
+- **F10** Änderungstabelle: Zeilen 7 mm, Spalten 12 | 104 | 30 | 30, Schrift 3,5 mm, höchstens 6 Zeilen sichtbar; Tabelle und Hinweisfeld mit Linien 0,25 mm.
+- **F11** Textbreite zum Einpassen konservativ geschätzt: breite Zeichen 0,95·h, schmale 0,3·h, übrige Großbuchstaben und Ziffern 0,72·h, Rest 0,6·h.
+- **F12** Vorbelegte Hinweiszeilen: „Allgemeintoleranzen ISO 2768-m“, „Kanten gebrochen 0,3 mm“, „Oberflächen Ra 3,2 (soweit nicht anders angegeben)“; je Blatt automatisch = die des Projekts, oder eigene Zeilen.
+- **F13** Ausgabe: SVG-Gruppe `Blattrahmen` als erste Gruppe; DXF-Objekte im Modellbereich vor den Ansichten, Ebenen `BLATTRAHMEN`, `BLATT_MITTE`, `BLATT`, nur wenn der Rahmen ausgegeben wird.
+- **F14** Das Fenster „Blattangaben“ arbeitet auf einer Kopie; „Übernehmen“ schreibt, „Abbrechen“ und Schließen verwerfen; in alten (schreibgeschützten) Ständen gesperrt.
+- **F15** Dokumentstatus (ISO 7200): je Blatt, automatisch „in Arbeit“, eigene Zelle im Schriftfeld, im Fenster unter „Dieses Blatt“.
+
+**Abweichungen von diesem Entwurf bei der Umsetzung**
+- **§5 Knopf:** „Blattangaben“ steht am Ende der ersten Zeile des Werkzeugfelds, nicht neben „Blatt einpassen“; sonst rollt das Werkzeugfeld schon bei 1100 × 700. Bei 800 × 600 rollt es wie vorher.
+- **§3 Zentriermarken:** 0,5 mm und 5 mm hinter dem Rahmen wie im Entwurf; ein öffentlich zugänglicher Auszug der Norm nennt 0,7 mm und 10 mm, ungeprüft (siehe `offene-punkte.md`, Normprüfung). Die rechte Marke lief zunächst wegen eines Fehlers der Aufgabenvorgabe 15 mm hinter den Rahmen und ist berichtigt.
+- **§3 Projektionssymbol und Ebenen:** In der DXF-Datei liegt das Symbol auf der Ebene `BLATT_MITTE` (Zuordnung nach Strichstärke), nicht auf `BLATT`.
+- **§3 Schriftfeldhöhe:** die Zellenhöhen folgen F6 (nicht der Notiz „7 bis 16 mm“).
+- **§4 Schrift:** Reihen 2,2 / 3,5 / 5 wie im Entwurf; ISO 3098 nennt 2,5 / 3,5 / 5 (ungeprüft).
+- **§4 Grenzen:** Einpassen verkleinert bis 60 % und kürzt danach mit „…“; die Warnung im Fenster gilt auch für Zellen der Änderungstabelle (je Zeile eine Meldung) und für Hinweiszeilen. Blatttexte unter einem Bildpunkt werden in der Ansicht auf einen Bildpunkt angehoben.
+- **§4 Felder:** Ein leeres Feld bedeutet „automatisch“ und lässt sich nicht auf „leer“ erzwingen.
+- **§6 DXF:** Ein Blatttext über 255 Zeichen in der Datei und ein nicht darstellbares Zeichen lehnen nur den DXF-Export ab, mit Feldname (kein stilles Kürzen). SVG nimmt alles.
+- **§7 Datei:** Format 6 sobald Projekt- oder Blattangaben vorhanden sind; ein Dokument mit nur Projektangaben bleibt nach dem Löschen der letzten Zeichnung Format 6. Ein Format-6-Dokument ohne beide Datensätze lädt nachsichtig.
+- **§3 freier Bereich:** Der Dreiansichtenblock liegt mittig im freien Bereich; die isometrische Ansicht bleibt bei fast blattfüllenden Teilen nicht immer darin. Alte Zeichnungen werden nicht verschoben. Für die Stückliste wird kein Platz freigehalten.

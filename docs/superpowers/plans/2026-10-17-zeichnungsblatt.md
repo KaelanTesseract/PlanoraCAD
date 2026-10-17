@@ -314,4 +314,11 @@ Fenster: drei Abschnitte in `theme::section_frame` mit Überschrift „Projekt�
 
 ## Abweichungen bei der Umsetzung
 
-(wird bei der Umsetzung gefüllt)
+Die vollständige Liste steht in der Spec §10 und in `docs/superpowers/offene-punkte.md` (Abschnitt „Teilprojekt 3c-1 – Zeichnungsblatt“). Kurzfassung:
+
+- Aufgabe 1: Die rechte Zentriermarke war nach der Aufgabenvorgabe 25 mm lang (A4 quer 297 → 272); richtig nach Spec ist 297 → 282. Berichtigt. Die Normzahlen für Zentriermarken (0,7 mm, 10 mm) bleiben ungeprüft, die Spec-Zahlen gelten.
+- Aufgabe 4: Das Projektionssymbol liegt im DXF auf der Ebene `BLATT_MITTE` (Ebene nach Strichstärke), nicht auf `BLATT`. Ein DXF-Blatttext über 255 Zeichen scheitert mit Meldung (kein stilles Kürzen).
+- Aufgabe 5: Blatttexte unter einem Bildpunkt werden auf einen Bildpunkt angehoben. Die isometrische Ansicht ist bei fast blattfüllenden Teilen nur bestmöglich im freien Bereich. Alte Zeichnungen werden nicht verschoben.
+- Aufgabe 6: Der Knopf „Blattangaben“ steht am Ende der ersten Zeile des Werkzeugfelds (Spec §5 sagt „neben Blatt einpassen“). Ein leeres Feld bedeutet „automatisch“. Die Kürzungswarnung gilt je Zeile der Änderungstabelle und je Hinweiszeile. „ISO 2768-m“ als Vorgabetext ist Blattinhalt.
+- Aufgabe 3: Ein Dokument mit nur Projektangaben bleibt nach dem Löschen der letzten Zeichnung im Format 6; ein Format-6-Dokument ohne beide Datensätze lädt nachsichtig.
+- Aufgabe 7: Die Proben erzeugt der ignorierte Test `hand_samples_sheet.rs` (80 Dateien).
