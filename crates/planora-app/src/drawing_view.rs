@@ -1533,8 +1533,10 @@ fn message_key(state: &AppState) -> (u64, Option<ViewId>, Option<DimId>) {
 ///
 /// Normansicht: abgeleitet von der gewählten Normansicht (sonst von der Grundansicht) mit
 /// deren Maßstab und dem Vorgabeabstand, wenn die Ausrichtungsregel eine Richtung liefert;
-/// sonst frei (leere Zeichnung: so, dass der Block aus drei Ansichten in der Mitte des freien
-/// Bereichs liegt, sonst links oben). Isometrisch: im leeren Viertel des Blocks um die
+/// sonst frei (leere Zeichnung: in der Mitte des freien Bereichs, sonst links oben). Steht die
+/// Grundansicht allein noch an ihrer automatischen Stelle in der Mitte, rückt sie mit der ersten
+/// weiteren Ansicht so, dass der Block aus drei Ansichten mittig liegt (im selben Schritt; eine
+/// vom Benutzer verschobene Grundansicht bleibt). Isometrisch: im leeren Viertel des Blocks um die
 /// Grundansicht ([`iso_placement`]: Erstwinkel rechts unten, Drittwinkel links oben) im Maßstab
 /// der Grundansicht oder, wenn sie dort sonst nicht hineinpasst, eine Stufe kleiner; ohne frei
 /// liegende Grundansicht rechts oben (0,75 · Breite, 0,75 · Höhe des freien Bereichs) im
@@ -1545,10 +1547,19 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
     let WorkArea::Drawing(id) = state.drawing_ui.area else {
         return Err(NO_DRAWING.into());
     };
-    let d = state.document.drawing(id).ok_or(NO_DRAWING)?.clone();
+    let mut d = state.document.drawing(id).ok_or(NO_DRAWING)?.clone();
     let (lo, hi) = layout_of(state, &d).free;
     let free: FreeArea = ((lo.x, lo.y), (hi.x, hi.y));
     let (free_w, free_h) = (hi.x - lo.x, hi.y - lo.y);
+    // Steht nur die Grundansicht noch an ihrer automatischen Stelle (Mitte des freien Bereichs),
+    // rückt sie mit der ersten weiteren Ansicht so, dass der Block aus drei Ansichten mittig
+    // liegt; hat der Benutzer sie verschoben, bleibt sie, wo sie ist.
+    let recentred = recentre_single_base(state, &d, free);
+    if let Some((vid, x, y)) = recentred
+        && let Some(v) = d.views.iter_mut().find(|v| v.id == vid)
+    {
+        v.placement = Placement::Free { x, y };
+    }
     let base = d
         .views
         .iter()
@@ -1615,17 +1626,60 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
                 p.scale,
             ),
             None if d.views.is_empty() => {
-                // Der ganze Block aus drei Ansichten liegt in der Mitte des freien Bereichs.
-                let (x, y) = block_origin(&state.bodies, free, d.projection, kind, base_scale);
+                // Die erste Ansicht allein liegt in der Mitte des freien Bereichs.
+                let (x, y) = free_centre(free);
                 (Placement::Free { x, y }, None, base_scale)
             }
             None => (at(0.25, 0.75, base_scale), None, base_scale),
         }
     };
+    // Grundansicht verschieben und neue Ansicht anlegen in einem Schritt.
+    let mut new_id = None;
     state
         .document
-        .add_view(id, kind, scale, placement, parent)
-        .map_err(|e| e.to_string())
+        .update_drawing(id, |dr| {
+            if let Some((vid, x, y)) = recentred
+                && let Some(v) = dr.views.iter_mut().find(|v| v.id == vid)
+            {
+                v.placement = Placement::Free { x, y };
+            }
+            new_id = Some(dr.add_view(kind, scale, placement, parent));
+        })
+        .map_err(|e| e.to_string())?;
+    new_id.ok_or_else(|| NO_DRAWING.to_string())
+}
+
+/// Mitte des freien Bereichs.
+pub fn free_centre(free: FreeArea) -> (f64, f64) {
+    ((free.0.0 + free.1.0) / 2.0, (free.0.1 + free.1.1) / 2.0)
+}
+
+/// Abstand (mm), bis zu dem die Grundansicht noch als „an ihrer automatischen Stelle“ gilt.
+const AUTO_PLACE_TOL_MM: f64 = 0.01;
+
+/// Hat die Zeichnung genau eine Ansicht, eine frei liegende Normansicht in der Mitte des freien
+/// Bereichs (so legt sie das Programm an), dann die neue Mitte für sie, bei der der Block aus
+/// drei Ansichten mittig liegt ([`block_origin`]); sonst `None`.
+fn recentre_single_base(
+    state: &AppState,
+    d: &Drawing,
+    free: FreeArea,
+) -> Option<(ViewId, f64, f64)> {
+    let [v] = d.views.as_slice() else {
+        return None;
+    };
+    let Placement::Free { x, y } = v.placement else {
+        return None;
+    };
+    if v.parent.is_some() || !v.kind.is_normal() {
+        return None;
+    }
+    let (cx, cy) = free_centre(free);
+    if (x - cx).abs() > AUTO_PLACE_TOL_MM || (y - cy).abs() > AUTO_PLACE_TOL_MM {
+        return None;
+    }
+    let (bx, by) = block_origin(&state.bodies, free, d.projection, v.kind, v.scale);
+    Some((v.id, bx, by))
 }
 
 /// Linienzug einer Blattlinie (mm) mit Ansicht und Sichtbarkeit.

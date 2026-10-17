@@ -3,7 +3,7 @@
 use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::dialog::{Dialog, DialogSize};
-use crate::drawing_state::{WorkArea, block_origin, suggest_scale_in};
+use crate::drawing_state::{WorkArea, suggest_scale_in};
 use crate::drawing_view;
 use crate::export_dialog::shorten_for_display;
 use crate::icons::{self, Icon};
@@ -130,14 +130,9 @@ impl NewDrawingDialog {
             .drawing(id)
             .map(|d| drawing_view::layout_of(state, d).free)
             .ok_or("Die Zeichnung fehlt.")?;
-        // Der ganze Block aus drei Ansichten liegt in der Mitte des freien Bereichs.
-        let (x, y) = block_origin(
-            &state.bodies,
-            ((free.0.x, free.0.y), (free.1.x, free.1.y)),
-            self.projection,
-            self.base,
-            self.scale,
-        );
+        // Die Grundansicht allein liegt in der Mitte des freien Bereichs; mit der ersten
+        // weiteren Ansicht rückt sie so, dass der Block mittig liegt (`drawing_view::add_view`).
+        let (x, y) = drawing_view::free_centre(((free.0.x, free.0.y), (free.1.x, free.1.y)));
         let placement = Placement::Free { x, y };
         if let Err(e) = state
             .document

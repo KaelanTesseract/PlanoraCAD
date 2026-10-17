@@ -273,18 +273,16 @@ fn new_drawing_is_stamped_and_centred() {
     let project = st.document.project_info().expect("Projektangaben");
     assert_eq!(project.login, today.user);
     assert_eq!(project.creator, FieldValue::Auto);
-    // Der Block aus drei Ansichten liegt mittig im freien Bereich (A4 quer, Blattzubehör mal
-    // 0,707: 14,14…289,93 × 46,67…197,98, Mitte 152,04 | 122,33); 100 × 60 × 40 gibt 1:1
-    // (Block 180 × 120), die Grundansicht sitzt um (20 + 60)/2 = 40 mm links und oberhalb der
-    // Mitte (Erstwinkel).
+    // Die Grundansicht allein liegt in der Mitte des freien Bereichs (A4 quer, Blattzubehör mal
+    // 0,707: 14,14…289,93 × 46,67…197,98, Mitte 152,04 | 122,33); 100 × 60 × 40 gibt 1:1.
     assert_eq!(dr.sheet, A4_QUER);
     assert_eq!(dr.views.len(), 1);
     assert_eq!(dr.views[0].scale, s(1, 1));
     let Placement::Free { x, y } = dr.views[0].placement else {
         panic!("frei");
     };
-    assert!((x - 112.035_714_285_714).abs() < 1e-9, "{x}");
-    assert!((y - 162.325).abs() < 1e-9, "{y}");
+    assert!((x - 152.035_714_285_714).abs() < 1e-9, "{x}");
+    assert!((y - 122.325).abs() < 1e-9, "{y}");
     assert_eq!(st.drawing_ui.area, WorkArea::Drawing(id));
     // Mit Blattangaben braucht die Datei das Format 6.
     assert_eq!(planora_project::required_format(&st.document.snapshot()), 6);
@@ -370,8 +368,8 @@ fn views_are_added_in_the_free_area() {
             let f = spec.scale.factor();
             let free = ((lo.x, lo.y), (hi.x, hi.y));
             let want = if spec.kind == ViewKind::Front {
-                // Block aus drei Ansichten mittig.
-                block_origin(&st.bodies, free, Projection::First, spec.kind, spec.scale)
+                // Allein: Mitte des freien Bereichs.
+                ((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0)
             } else {
                 keep_in_free(
                     (lo.x + fx * (hi.x - lo.x), lo.y + fy * (hi.y - lo.y)),
@@ -480,13 +478,25 @@ fn arrange(
     dialog.scale = dialog.suggestion(&st);
     let id = dialog.create(&mut st).unwrap();
     let base = st.document.drawing(id).unwrap().views[0].clone();
+    st.drawing_ui.selected_view = Some(base.id);
+    let mut children = Vec::new();
+    for kind in [ViewKind::Left, ViewKind::Top] {
+        children.push((kind, drawing_view::add_view(&mut st, kind).unwrap()));
+    }
+    let iso = drawing_view::add_view(&mut st, ViewKind::Isometric).unwrap();
+    // Die Grundansicht ist mit der ersten weiteren Ansicht gerückt: ihre Lage jetzt.
+    let base = st
+        .document
+        .drawing(id)
+        .unwrap()
+        .view(base.id)
+        .unwrap()
+        .clone();
     let Placement::Free { x, y } = base.placement else {
         panic!("frei");
     };
-    st.drawing_ui.selected_view = Some(base.id);
     let mut block = vec![span(&st, ViewKind::Front, base.scale, (x, y))];
-    for kind in [ViewKind::Left, ViewKind::Top] {
-        let v = drawing_view::add_view(&mut st, kind).unwrap();
+    for (kind, v) in children {
         let spec = st.document.drawing(id).unwrap().view(v).unwrap().clone();
         let Placement::Aligned { distance } = spec.placement else {
             panic!("abgeleitet");
@@ -499,7 +509,6 @@ fn arrange(
             (x + dx * distance, y + dy * distance),
         ));
     }
-    let iso = drawing_view::add_view(&mut st, ViewKind::Isometric).unwrap();
     let spec = st.document.drawing(id).unwrap().view(iso).unwrap().clone();
     let Placement::Free { x, y } = spec.placement else {
         panic!("frei");
@@ -545,6 +554,29 @@ fn three_view_block_and_isometric_stay_in_the_free_area() {
         assert!(
             inside(iso, lo, hi),
             "{ctx}: Isometrie {iso:?} ragt aus {lo:?}…{hi:?}"
+        );
+        // Der Block aus drei Ansichten liegt mittig im freien Bereich (die Grundansicht ist mit
+        // der ersten weiteren Ansicht dorthin gerückt).
+        let (bx0, by0, bx1, by1) = block.iter().fold(
+            (
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            |a, b| {
+                (
+                    a.0.min(b.0.0),
+                    a.1.min(b.0.1),
+                    a.2.max(b.1.0),
+                    a.3.max(b.1.1),
+                )
+            },
+        );
+        assert!(
+            ((bx0 + bx1) / 2.0 - (lo.x + hi.x) / 2.0).abs() < 1e-6
+                && ((by0 + by1) / 2.0 - (lo.y + hi.y) / 2.0).abs() < 1e-6,
+            "{ctx}: Block nicht mittig"
         );
         // Die Isometrie liegt im leeren Viertel des Blocks und überdeckt keine Ansicht.
         let front = block[0];
@@ -663,4 +695,106 @@ fn title_block_scale_is_the_scale_of_the_base_view() {
         texts.get(planora_drawing::sheet_frame::TitleField::Scale),
         "2:1"
     );
+}
+
+#[test]
+fn a_single_base_view_is_centred_until_more_views_follow() {
+    for (paper, landscape) in [
+        (Paper::A4, true),
+        (Paper::A4, false),
+        (Paper::A3, true),
+        (Paper::A0, true),
+    ] {
+        for projection in [Projection::First, Projection::Third] {
+            let ctx = format!("{paper:?} {landscape} {projection:?}");
+            let mut st = box_state();
+            let mut dialog = NewDrawingDialog::new(&st);
+            dialog.paper = paper;
+            dialog.landscape = landscape;
+            dialog.projection = projection;
+            dialog.scale = dialog.suggestion(&st);
+            let id = dialog.create(&mut st).unwrap();
+            let free_of = |st: &AppState| {
+                let (lo, hi) = drawing_view::layout_of(st, st.document.drawing(id).unwrap()).free;
+                ((lo.x, lo.y), (hi.x, hi.y))
+            };
+            let free = free_of(&st);
+            let base = st.document.drawing(id).unwrap().views[0].clone();
+            // Der Maßstabsvorschlag bleibt der für den ganzen Block.
+            let size = (free.1.0 - free.0.0, free.1.1 - free.0.1);
+            assert_eq!(
+                base.scale,
+                suggest_scale_in(&st.bodies, size, ViewKind::Front),
+                "{ctx}: Vorschlag unverändert"
+            );
+            let centre = ((free.0.0 + free.1.0) / 2.0, (free.0.1 + free.1.1) / 2.0);
+            assert_eq!(
+                base.placement,
+                Placement::Free {
+                    x: centre.0,
+                    y: centre.1
+                },
+                "{ctx}: allein in der Mitte"
+            );
+            // Erste weitere Ansicht: die Grundansicht rückt an den Ursprung des Blocks.
+            let edits = st.document.edit_count();
+            drawing_view::add_view(&mut st, ViewKind::Left).unwrap();
+            assert_eq!(st.document.edit_count(), edits + 1, "{ctx}: ein Schritt");
+            let (bx, by) = block_origin(&st.bodies, free, projection, ViewKind::Front, base.scale);
+            assert_eq!(
+                st.document
+                    .drawing(id)
+                    .unwrap()
+                    .view(base.id)
+                    .unwrap()
+                    .placement,
+                Placement::Free { x: bx, y: by },
+                "{ctx}: Block mittig"
+            );
+            // Weitere Ansichten bewegen sie nicht mehr.
+            drawing_view::add_view(&mut st, ViewKind::Top).unwrap();
+            assert_eq!(
+                st.document
+                    .drawing(id)
+                    .unwrap()
+                    .view(base.id)
+                    .unwrap()
+                    .placement,
+                Placement::Free { x: bx, y: by },
+                "{ctx}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_moved_base_view_stays_where_the_user_put_it() {
+    let mut st = box_state();
+    let id = NewDrawingDialog::new(&st).create(&mut st).unwrap();
+    let base = st.document.drawing(id).unwrap().views[0].clone();
+    let Placement::Free { x, y } = base.placement else {
+        panic!("frei");
+    };
+    let moved = Placement::Free {
+        x: x - 30.0,
+        y: y + 5.0,
+    };
+    st.document
+        .update_drawing(id, |d| {
+            d.views[0].placement = moved;
+        })
+        .unwrap();
+    for kind in [ViewKind::Left, ViewKind::Top, ViewKind::Isometric] {
+        drawing_view::add_view(&mut st, kind).unwrap();
+        assert_eq!(
+            st.document
+                .drawing(id)
+                .unwrap()
+                .view(base.id)
+                .unwrap()
+                .placement,
+            moved,
+            "{kind:?}"
+        );
+    }
 }

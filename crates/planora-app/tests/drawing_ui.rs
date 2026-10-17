@@ -524,12 +524,12 @@ fn new_drawing_dialog_creates_a_drawing_with_suggested_scale() {
     assert_eq!(v.kind, ViewKind::Front);
     assert_eq!(v.scale, s(1, 1));
     assert_eq!(v.parent, None);
-    // Block aus drei Ansichten mittig im freien Bereich (Mitte 152,04 | 122,33): die
-    // Grundansicht sitzt um (20 + 60)/2 = 40 mm links und oberhalb davon (Erstwinkel).
+    // Die Grundansicht allein liegt in der Mitte des freien Bereichs (152,04 | 122,33); erst mit
+    // der nächsten Ansicht rückt sie, damit der Block aus drei Ansichten mittig liegt.
     let Placement::Free { x, y } = v.placement else {
         panic!("frei");
     };
-    assert!((x - 112.035_714_285_714).abs() < 1e-9 && (y - 162.325).abs() < 1e-9);
+    assert!((x - 152.035_714_285_714).abs() < 1e-9 && (y - 122.325).abs() < 1e-9);
     assert_eq!(st.drawing_ui.area, WorkArea::Drawing(dr.id));
     // Der nächste Vorschlag nimmt die kleinste freie Zahl.
     assert_eq!(NewDrawingDialog::new(&st).name, "Zeichnung 2");
