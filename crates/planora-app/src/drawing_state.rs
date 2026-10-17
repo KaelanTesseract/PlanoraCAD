@@ -11,6 +11,7 @@ use crate::export_dialog::shorten_for_display;
 use crate::jobs::{Job, Poll};
 use crate::state::{Body, BodyKind};
 use planora_drawing::dimension::DimId;
+use planora_drawing::sheet_frame::sheet_layout;
 use planora_drawing::{
     Basis, DrawBody, DrawError, Drawing, DrawingId, Projection, Scale, Sheet, ViewId, ViewKind,
     ViewLines, compute_view,
@@ -30,9 +31,6 @@ const _: () = assert!(MAX_CACHED >= ViewKind::ALL.len());
 
 /// Meldung, wenn ein Arbeitsthread ohne Ergebnis endet (Absturz).
 pub const LOST_TEXT: &str = "Die Berechnung wurde unerwartet beendet.";
-
-/// Rand des Blatts bis zum Innenrahmen in Millimetern (je Seite).
-pub const FRAME_MARGIN_MM: f64 = 10.0;
 
 /// Geöffneter Arbeitsbereich.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -410,24 +408,13 @@ pub fn estimate_view_size(bodies: &[Body], kind: ViewKind) -> (f64, f64) {
 }
 
 /// Größte Stufe der Maßstabsreihe, bei der Grundansicht, Seitenansicht und Draufsicht samt
-/// [`GAP_MM`] dazwischen in den Innenrahmen (Blatt abzüglich [`FRAME_MARGIN_MM`] je Seite)
-/// passen. Die Seitenansicht liegt waagerecht neben der Grundansicht (Breite = Tiefe der
-/// Grundansicht), die Draufsicht senkrecht (Höhe = Tiefe); für Erst- und Drittwinkel ergeben
-/// sich dieselben Summen. Passt keine Stufe: die kleinste (1:100). Ohne exakte Körper gibt es
-/// nichts zu messen: 1:1.
-pub fn suggest_scale(
-    bodies: &[Body],
-    sheet: Sheet,
-    projection: Projection,
-    base: ViewKind,
-) -> Scale {
-    // Erst- und Drittwinkel vertauschen nur die Seiten, nicht die Summen.
-    let _ = projection;
-    let (sheet_w, sheet_h) = sheet.size_mm();
-    let (inner_w, inner_h) = (
-        sheet_w - 2.0 * FRAME_MARGIN_MM,
-        sheet_h - 2.0 * FRAME_MARGIN_MM,
-    );
+/// [`GAP_MM`] dazwischen in den freien Bereich des Blatts (`free`: Breite und Höhe in mm) passen.
+/// Die Seitenansicht liegt waagerecht neben der Grundansicht (Breite = Tiefe der Grundansicht),
+/// die Draufsicht senkrecht (Höhe = Tiefe); für Erst- und Drittwinkel ergeben sich dieselben
+/// Summen. Passt keine Stufe: die kleinste (1:100). Ohne exakte Körper gibt es nichts zu
+/// messen: 1:1.
+pub fn suggest_scale_in(bodies: &[Body], free: (f64, f64), base: ViewKind) -> Scale {
+    let (free_w, free_h) = free;
     let basis = Basis::of(base);
     let (ex, ey, ed) = match exact_bounds(bodies) {
         Some(b) => (
@@ -439,7 +426,7 @@ pub fn suggest_scale(
     };
     let fits = |s: Scale| {
         let f = s.factor();
-        f * (ex + ed) + GAP_MM <= inner_w && f * (ey + ed) + GAP_MM <= inner_h
+        f * (ex + ed) + GAP_MM <= free_w && f * (ey + ed) + GAP_MM <= free_h
     };
     let smallest = Scale::SERIES
         .into_iter()
@@ -450,6 +437,20 @@ pub fn suggest_scale(
         .filter(|s| fits(*s))
         .max_by(|a, b| a.factor().total_cmp(&b.factor()))
         .unwrap_or(smallest)
+}
+
+/// Wie [`suggest_scale_in`] für das Blatt einer neuen Zeichnung (ohne Änderungen, mit den drei
+/// Hinweiszeilen der Vorgabe).
+pub fn suggest_scale(
+    bodies: &[Body],
+    sheet: Sheet,
+    projection: Projection,
+    base: ViewKind,
+) -> Scale {
+    // Erst- und Drittwinkel vertauschen nur die Seiten, nicht die Summen.
+    let _ = projection;
+    let (lo, hi) = sheet_layout(sheet, 0, 3).free;
+    suggest_scale_in(bodies, (hi.x - lo.x, hi.y - lo.y), base)
 }
 
 /// Vorgabeabstand der Mitten einer abgeleiteten Ansicht `child` von ihrer Ausgangsansicht

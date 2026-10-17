@@ -161,6 +161,9 @@ pub struct AppState {
     pub dimension_dialog: Option<crate::dimension_dialog::DimensionDialog>,
     /// Offene Rückfrage „Maß löschen“ (Kettenglieder) aus dem Abschnitt „Maße“.
     pub pending_delete_dimension: Option<crate::dimension_browser::DimDeletePlan>,
+    /// Name des Dokuments für die Zeichnungsnummer im Schriftfeld („Werkstück-01“); die App setzt
+    /// ihn in jedem Bild aus dem Namen des Tabs.
+    pub document_name: String,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -290,6 +293,7 @@ impl AppState {
             dimension_tool: crate::dimension_tool::DimensionTool::default(),
             dimension_dialog: None,
             pending_delete_dimension: None,
+            document_name: "Unbenannt".to_string(),
         };
         state.rebuild_scene();
         state

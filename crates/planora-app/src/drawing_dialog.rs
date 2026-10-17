@@ -4,10 +4,12 @@ use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::dialog::{Dialog, DialogSize};
 use crate::drawing_state::{WorkArea, suggest_scale};
+use crate::drawing_view;
 use crate::export_dialog::shorten_for_display;
 use crate::icons::{self, Icon};
 use crate::state::AppState;
 use crate::theme;
+use planora_drawing::sheet_info::Stamp;
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewKind};
 use planora_feature::Document;
 
@@ -109,20 +111,25 @@ impl NewDrawingDialog {
         }
     }
 
-    /// Legt die Zeichnung mit der Grundansicht in der Blattmitte an und öffnet sie.
+    /// Legt die Zeichnung (mit Datum und Benutzer von heute) mit der Grundansicht in der Mitte
+    /// des freien Bereichs an und öffnet sie.
     pub fn create(&self, state: &mut AppState) -> Result<DrawingId, String> {
         if let Some(e) = self.error(state) {
             return Err(e.into());
         }
         let sheet = self.sheet();
-        let (w, h) = sheet.size_mm();
         let id = state
             .document
-            .add_drawing(&self.name, sheet, self.projection)
+            .add_drawing_stamped(&self.name, sheet, self.projection, &Stamp::now())
             .map_err(|e| e.to_string())?;
+        let (lo, hi) = state
+            .document
+            .drawing(id)
+            .map(|d| drawing_view::layout_of(state, d).free)
+            .ok_or("Die Zeichnung fehlt.")?;
         let placement = Placement::Free {
-            x: w / 2.0,
-            y: h / 2.0,
+            x: (lo.x + hi.x) / 2.0,
+            y: (lo.y + hi.y) / 2.0,
         };
         if let Err(e) = state
             .document

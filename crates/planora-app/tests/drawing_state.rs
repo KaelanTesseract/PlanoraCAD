@@ -454,34 +454,36 @@ fn kinds_no_longer_needed_are_cancelled() {
 // (h)
 #[test]
 fn suggest_scale_fits_the_three_views() {
-    // Quader x = 100, y = 60, z = 40 auf A4 quer (297 × 210, Innenrahmen 277 × 190), Erstwinkel:
-    // Vorne 100 × 40, Links 60 × 40, Oben 100 × 60.
-    // Breite: 100·f + 20 + 60·f ≤ 277 → f ≤ 1,606; Höhe: 40·f + 20 + 60·f ≤ 190 → f ≤ 1,7.
-    // Größte Reihenstufe: 1:1 (2:1 gäbe 340 > 277).
+    // Quader x = 100, y = 60, z = 40 auf A4 quer (297 × 210, freier Bereich 267 × 105 neben und
+    // über dem Schriftfeld), Erstwinkel: Vorne 100 × 40, Links 60 × 40, Oben 100 × 60.
+    // Breite: 100·f + 20 + 60·f ≤ 267 → f ≤ 1,6; Höhe: 40·f + 20 + 60·f ≤ 105 → f ≤ 0,85.
+    // Größte Reihenstufe: 1:2 (1:1 gäbe 120 > 105).
     let (st, _) = box_state(DVec3::new(100.0, 60.0, 40.0));
     for p in [Projection::First, Projection::Third] {
         assert_eq!(
             suggest_scale(&st.bodies, A4_QUER, p, ViewKind::Front),
-            s(1, 1)
+            s(1, 2)
         );
     }
-    let fits = |f: f64| 160.0 * f + 20.0 <= 277.0 && 100.0 * f + 20.0 <= 190.0;
-    assert!(fits(1.0) && !fits(2.0), "Gegenprobe");
+    let fits = |f: f64| 160.0 * f + 20.0 <= 267.0 && 100.0 * f + 20.0 <= 105.0;
+    assert!(fits(0.5) && !fits(1.0), "Gegenprobe");
 
-    // Zehnfach: 1600·f + 20 ≤ 277 → f ≤ 0,1606 → 1:10 (1:5 gäbe 340 > 277).
+    // Zehnfach: Breite 1600·f + 20 ≤ 267 → f ≤ 0,154; Höhe 1000·f + 20 ≤ 105 → f ≤ 0,085 →
+    // 1:20 (1:10 gäbe 120 > 105).
     let (big, _) = box_state(DVec3::new(1000.0, 600.0, 400.0));
     assert_eq!(
         suggest_scale(&big.bodies, A4_QUER, Projection::First, ViewKind::Front),
-        s(1, 10)
+        s(1, 20)
     );
-    // Ein Zehntel: 16·f + 20 ≤ 277 → f ≤ 16,06 → 10:1 (die größte Stufe).
+    // Ein Zehntel: Breite 16·f + 20 ≤ 267 → f ≤ 15,4; Höhe 10·f + 20 ≤ 105 → f ≤ 8,5 → 5:1
+    // (10:1 gäbe 120 > 105).
     let (small, _) = box_state(DVec3::new(10.0, 6.0, 4.0));
     assert_eq!(
         suggest_scale(&small.bodies, A4_QUER, Projection::First, ViewKind::Front),
-        s(10, 1)
+        s(5, 1)
     );
-    // A4 hoch (Innenrahmen 190 × 277), Quader 300 × 60 × 40: Breite 360·f + 20 ≤ 190 →
-    // f ≤ 0,472; 1:2 gäbe 200 > 190, also 1:5 (92 ≤ 190).
+    // A4 hoch (freier Bereich 180 × 192), Quader 300 × 60 × 40: Breite 360·f + 20 ≤ 180 →
+    // f ≤ 0,444; 1:2 gäbe 200 > 180, also 1:5 (92 ≤ 180).
     let (wide, _) = box_state(DVec3::new(300.0, 60.0, 40.0));
     let hoch = Sheet {
         paper: Paper::A4,
