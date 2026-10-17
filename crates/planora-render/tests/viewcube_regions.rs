@@ -334,7 +334,7 @@ fn nan_camera_has_no_current_region_and_no_pieces_panic() {
         };
         assert_eq!(current_region(&cam, 2.0), None, "{yaw} {pitch} {distance}");
         let pieces = cube_pieces_visible(&cam, 0.02);
-        let hit = pieces_hit_test(&pieces, Vec2::ZERO);
-        let _ = hit;
+        // Darf bei ungültiger Kamera nicht abstürzen; das Ergebnis ist hier gleichgültig.
+        pieces_hit_test(&pieces, Vec2::ZERO);
     }
 }

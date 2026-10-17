@@ -108,6 +108,21 @@ fn check_export(format: ExportFormat, state: fn() -> AppState) {
     assert!(window(&screen).contains_rect(rect), "{rect:?}");
     assert!(rect.width() <= 720.0 + 1.0, "{rect:?}");
     assert_cards_inside(rect, &d.last_cards, &seen);
+    // Der Knopf „Exportieren …“ liegt ohne Dateiwahl sichtbar im Fenster und lässt sich klicken.
+    let button = find(&seen, "Exportieren …").expect("Knopf „Exportieren …“");
+    assert!(
+        button.clip.contains_rect(button.rect) && rect.contains_rect(button.rect),
+        "{:?} in {:?}",
+        button.rect,
+        button.clip
+    );
+    let mut f = show_export(&mut d, &mut s);
+    screen.click(button.rect.center(), &mut f);
+    drop(f);
+    assert!(
+        d.chooser().is_some(),
+        "Klick öffnet die Dateiwahl ({format:?})"
+    );
 }
 
 #[test]
@@ -170,7 +185,14 @@ fn export_dialog_scrolls_at_800x600() {
     assert!(rect.height() <= 568.0 + 0.5, "{rect:?}");
     assert!(window(&screen).contains_rect(rect), "{rect:?}");
     // Der untere Teil (Knopf „Speichern“ der Dateiwahl) ist erst nach dem Blättern sichtbar.
-    let hidden = find(&seen, "Speichern").is_none_or(|t| !t.clip.contains_rect(t.rect));
+    // Die Dateiwahl ist gezeichnet (ihre Überschrift steht im Bild), ihr Knopf „Speichern“ aber
+    // nicht ganz sichtbar: gar nicht gezeichnet (außerhalb des Blattbereichs) oder abgeschnitten.
+    assert!(
+        find(&seen, "Speichern unter").is_some(),
+        "Dateiwahl ist nicht gezeichnet"
+    );
+    let hidden = find(&seen, "Speichern")
+        .is_none_or(|t| !t.clip.contains_rect(t.rect) || !rect.contains_rect(t.rect));
     assert!(hidden, "Der Dialog ist bei 800 × 600 zu hoch fürs Fenster");
     let mut f = show_export(&mut d, &mut s);
     for _ in 0..3 {
@@ -186,10 +208,20 @@ fn export_dialog_scrolls_at_800x600() {
     );
     screen.click(button.rect.center(), &mut f);
     drop(f);
+    for _ in 0..200 {
+        if !matches!(d.write_state(), WriteState::Idle | WriteState::Writing) {
+            break;
+        }
+        d.tick(&s, true);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let file = dir.join("Körper.stl");
     assert!(
-        dir.join("Körper.stl").exists() || d.write_state() != WriteState::Idle,
-        "Klick auf „Speichern“ startet das Schreiben"
+        matches!(d.write_state(), WriteState::Done(p, _) if *p == file),
+        "Klick auf „Speichern“ schreibt {file:?}: {:?}",
+        d.write_state()
     );
+    assert!(file.exists(), "Datei geschrieben");
     let _ = fs::remove_dir_all(&dir);
 }
 

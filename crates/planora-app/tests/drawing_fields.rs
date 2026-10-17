@@ -952,6 +952,13 @@ fn tool_field_is_content_wide_on_large_windows() {
         assert!((tool.center().x - size.x / 2.0).abs() <= 1.0, "{size:?}");
         assert_eq!(tool.height(), old.height());
         assert_eq!(Some(tool), shell_panels::last_layout(&c).unwrap().tool);
+        // Die Breite ist die gemerkte Inhaltsbreite.
+        let wanted = shell_panels::drawing_tool_wanted(&c).expect("gemerkte Breite");
+        assert!(
+            (tool.width() - wanted).abs() <= 2.0,
+            "{size:?}: Feld {} gegen Inhalt {wanted}",
+            tool.width()
+        );
         // Inhaltsbreite: von links bis zum rechtesten Text plus gleicher Rand (± 2).
         let inside: Vec<&Seen> = shot
             .texts
@@ -1004,7 +1011,69 @@ fn tool_field_is_content_wide_on_large_windows() {
             );
         }
         assert_eq!(shell_panels::last_layout(&c).unwrap().free, old_free(size));
+        // Bei 1100 × 700 reicht der Inhalt ohne Rollbalken.
+        if !full {
+            let band = Rect::from_min_max(pos2(tool.left(), tool.bottom() - 12.0), tool.max);
+            let shot = app_settle(&c, &mut app, size);
+            assert!(
+                !shot.fills.iter().any(|(r, f)| band.contains_rect(*r)
+                    && r.height() <= 8.0
+                    && r.width() >= 20.0
+                    && f.a() > 0),
+                "{size:?}: Rollbalken sichtbar"
+            );
+        }
     }
+}
+
+/// Im Nur-Lesen-Modus (Hinweisband oben) bleibt das Werkzeugfeld mittig und so breit wie sein
+/// Inhalt.
+#[test]
+fn tool_field_stays_centred_in_read_only_banner_mode() {
+    let size = vec2(1920.0, 1080.0);
+    let c = context();
+    let mut app = app_with_drawing();
+    app.ws_mut().active_tab_mut().read_only = true;
+    app_settle(&c, &mut app, size);
+    let tool = field(&c, "Werkzeugfeld");
+    let old = bare_rects(size, true).tool.unwrap();
+    assert!(names(&c).contains(&"Hinweis"), "Hinweisband fehlt");
+    assert!(tool.width() < old.width() - 100.0, "{tool:?} {old:?}");
+    assert!((tool.center().x - size.x / 2.0).abs() <= 1.0);
+    assert_eq!(tool.height(), old.height());
+    assert_eq!(tool.top(), old.top());
+    let wanted = shell_panels::drawing_tool_wanted(&c).expect("gemerkte Breite");
+    assert!((tool.width() - wanted).abs() <= 2.0);
+}
+
+/// Wählt man eine Ansicht aus oder ab, passt sich das Feld seinem Inhalt an und bleibt dabei
+/// mittig; die Breite entspricht stets der gemerkten Inhaltsbreite.
+#[test]
+fn tool_field_follows_its_content_when_a_view_is_selected() {
+    let size = vec2(1920.0, 1080.0);
+    let c = context();
+    let (st, _, front) = drawing_state();
+    let mut app = PlanoraApp::for_tests(library_ws());
+    app.ws_mut().active_tab_mut().state = st;
+    app_state(&mut app).drawing_ui.selected_view = None;
+    app_settle(&c, &mut app, size);
+    let none = field(&c, "Werkzeugfeld");
+    let wanted_none = shell_panels::drawing_tool_wanted(&c).unwrap();
+    app_state(&mut app).drawing_ui.selected_view = Some(front);
+    app_settle(&c, &mut app, size);
+    let some = field(&c, "Werkzeugfeld");
+    let wanted_some = shell_panels::drawing_tool_wanted(&c).unwrap();
+    for (r, w) in [(none, wanted_none), (some, wanted_some)] {
+        assert!((r.width() - w).abs() <= 2.0, "{r:?} gegen {w}");
+        assert!((r.center().x - size.x / 2.0).abs() <= 1.0);
+    }
+    app_state(&mut app).drawing_ui.selected_view = None;
+    app_settle(&c, &mut app, size);
+    let back = field(&c, "Werkzeugfeld");
+    assert!(
+        (back.width() - none.width()).abs() <= 2.0,
+        "{back:?} {none:?}"
+    );
 }
 
 fn old_free(size: Vec2) -> Rect {

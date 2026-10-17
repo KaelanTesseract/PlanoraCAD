@@ -542,6 +542,101 @@ fn dragging_on_the_cube_orbits() {
     }
 }
 
+/// Ein Frame mit gehaltener Umschalttaste.
+fn frame_shift(ctx: &egui::Context, s: &mut AppState, events: Vec<Event>) -> Vec<ClippedShape> {
+    let mut all = vec![Event::ModifiersChanged(Modifiers::SHIFT)];
+    all.extend(events);
+    let out = ctx.run_ui(input(all), |ui| {
+        viewport::show_in(ui, s, Some(FREE));
+        viewport::remember_keyboard_focus(ui.ctx());
+    });
+    let shapes = out.shapes.clone();
+    out.drop_without_applying_deltas();
+    shapes
+}
+
+fn shift_button(p: Pos2, pressed: bool) -> Event {
+    Event::PointerButton {
+        pos: p,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::SHIFT,
+    }
+}
+
+#[test]
+fn shift_drag_on_the_cube_does_not_orbit_or_click() {
+    let ctx = context();
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(100.0)).unwrap();
+    s.camera.home();
+    frame(&ctx, &mut s, vec![]);
+    s.camera.home();
+    frame(&ctx, &mut s, vec![]);
+    let before = (s.camera.yaw, s.camera.pitch);
+    let start = point_of(&s, CubeRegion::Face(ViewFace::Top)).unwrap();
+    let to = start + vec2(-30.0, 12.0);
+    frame_shift(&ctx, &mut s, vec![moved(start)]);
+    frame_shift(&ctx, &mut s, vec![moved(start), shift_button(start, true)]);
+    for i in 1..=6 {
+        let p = start + (to - start) * (i as f32 / 6.0);
+        frame_shift(&ctx, &mut s, vec![moved(p)]);
+    }
+    frame_shift(&ctx, &mut s, vec![shift_button(to, false)]);
+    frame_shift(&ctx, &mut s, vec![]);
+    assert_eq!(
+        (s.camera.yaw, s.camera.pitch),
+        before,
+        "Umschalt + Ziehen am Würfel dreht nicht"
+    );
+}
+
+/// Während des Drehens am Würfel hebt kein Stück unter dem Zeiger hervor.
+#[test]
+fn no_hover_highlight_while_dragging_the_cube() {
+    let colors = theme::cube_colors(true);
+    let ctx = context();
+    let mut s = state_with_view(None);
+    s.dark = true;
+    frame(&ctx, &mut s, vec![]);
+    let start = point_of(&s, iso()).unwrap();
+    // Ohne Ziehen hebt der Zeiger hervor (Gegenprobe).
+    frame(&ctx, &mut s, vec![moved(start)]);
+    let sh = shot(&frame(&ctx, &mut s, vec![]));
+    assert!(sh.polys.iter().any(|(_, f)| *f == colors.highlight_hover));
+    frame(&ctx, &mut s, vec![moved(start), button(start, true)]);
+    for i in 1..=4 {
+        let p = start + vec2(1.5 * i as f32, 0.0);
+        let sh = shot(&frame(&ctx, &mut s, vec![moved(p)]));
+        if i >= 3 {
+            assert!(
+                sh.polys.iter().all(|(_, f)| *f != colors.highlight_hover),
+                "Schritt {i}: Hervorhebung während des Ziehens"
+            );
+        }
+    }
+}
+
+/// Ein Rest des Zug-Merkers (z. B. nach übersprungenen Bildern, in denen das Loslassen nicht
+/// gesehen wurde) gilt nicht: ohne Druck auf dem Würfel ist nichts gezogen, der Würfel hebt
+/// sofort hervor.
+#[test]
+fn stale_drag_flag_is_ignored_without_a_pressed_pointer() {
+    let colors = theme::cube_colors(true);
+    let ctx = context();
+    let mut s = state_with_view(None);
+    s.dark = true;
+    frame(&ctx, &mut s, vec![]);
+    frame(&ctx, &mut s, vec![]);
+    let at = point_of(&s, iso()).unwrap();
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("planora-view-cube-dragged"), true));
+    let sh = shot(&frame(&ctx, &mut s, vec![moved(at)]));
+    assert!(
+        sh.polys.iter().any(|(_, f)| *f == colors.highlight_hover),
+        "Hervorhebung im ersten Bild trotz Rest des Zug-Merkers"
+    );
+}
+
 // (h3) -----------------------------------------------------------------------------------------
 
 /// Alle Zahlen einer gemalten Form endlich?

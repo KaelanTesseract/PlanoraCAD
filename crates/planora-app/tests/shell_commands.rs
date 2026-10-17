@@ -483,7 +483,7 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 
 fn fields_of(shot: &Shot, dark: bool, size: Vec2) -> Fields {
     let all = shot.fields(dark);
-    let near = |a: f32, b: f32| (a - b).abs() <= 0.5;
+    let near = |a: f32, b: f32| (a - b).abs() < 0.5;
     let pick = |what: &str, f: &dyn Fn(&Rect) -> bool| -> Rect {
         let hits: Vec<_> = all.iter().filter(|r| f(r)).collect();
         assert_eq!(hits.len(), 1, "{what}: {hits:?} in {all:?}");

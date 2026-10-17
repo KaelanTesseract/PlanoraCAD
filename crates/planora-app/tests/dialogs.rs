@@ -256,6 +256,21 @@ impl Rig {
         self.settle(2)
     }
 
+    /// Markiert den ganzen Inhalt des fokussierten Textfelds und tippt `text`.
+    fn replace_text(&mut self, text: &str) -> Shot {
+        let key = |pressed| Event::Key {
+            key: Key::A,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        };
+        self.frame(vec![key(true)]);
+        self.frame(vec![key(false)]);
+        self.frame(vec![Event::Text(text.into())]);
+        self.settle(2)
+    }
+
     fn area(&self, id: Id) -> Option<Rect> {
         self.ctx.memory(|m| m.area_rect(id))
     }
@@ -828,22 +843,50 @@ fn keyboard_like_before() {
     rig.press(Key::Enter);
     assert!(rig.state().rename_drawing_draft.is_none());
 
-    // Neuer Ordner (Projekte).
+    // Neuer Ordner (Projekte): Enter legt den Ordner mit dem getippten Namen an.
     let case = case_named("Neuer Ordner");
     let (mut rig, shot, _) = opened(&case, BIG, true);
     rig.click(last_text_pos(&shot, "Ordner 1"));
+    rig.replace_text("Werkzeuge");
     rig.press(Key::Enter);
     assert!(!(case.is_open)(&mut rig), "Neuer Ordner: Enter übernimmt");
+    let tree = rig.app.ws_mut().library.as_ref().unwrap().tree().unwrap();
+    let project = tree.iter().find(|n| n.name == "P").expect("Projekt P");
+    assert!(
+        project.children.iter().any(|n| n.name == "Werkzeuge"),
+        "Ordner „Werkzeuge“ angelegt: {:?}",
+        project.children.iter().map(|n| &n.name).collect::<Vec<_>>()
+    );
+    assert!(
+        project.children.iter().all(|n| n.name != "Ordner 1"),
+        "der Vorschlag wurde ersetzt"
+    );
 
-    // Kommentar ändern (Versionen).
+    // Kommentar ändern (Versionen): Enter setzt den getippten Kommentar.
     let case = case_named("Kommentar ändern");
     let (mut rig, shot, _) = opened(&case, BIG, true);
     rig.click(last_text_pos(&shot, "Stand 2"));
+    rig.replace_text("Fertig geprüft");
     rig.press(Key::Enter);
     assert!(
         !(case.is_open)(&mut rig),
         "Kommentar ändern: Enter übernimmt"
     );
+    let comment = rig
+        .app
+        .ws_mut()
+        .active_tab()
+        .store
+        .as_ref()
+        .unwrap()
+        .info()
+        .versions
+        .iter()
+        .find(|v| v.number == 2)
+        .unwrap()
+        .comment
+        .clone();
+    assert_eq!(comment, "Fertig geprüft");
 
     // Rückfrage „Änderungen speichern?“: weder Schließen-Symbol noch Escape schließen sie.
     let case = case_named("Änderungen speichern");
@@ -884,6 +927,7 @@ fn dialogs_in_all_modes_above_fields() {
             ids.push(Id::new("Quader erzeugen"));
         }
         rig.settle(6);
+        let ids_all = ids.clone();
         for id in ids {
             let rect = rig
                 .area(id)
@@ -902,6 +946,15 @@ fn dialogs_in_all_modes_above_fields() {
                 assert!(
                     top.is_some_and(|l| l.order == egui::Order::Foreground),
                     "{mode}: an {p:?} liegt {top:?}"
+                );
+                // Und zwar an allen Ecken die Ebene eines der beiden Dialoge selbst.
+                let own: Vec<egui::LayerId> = ids_all
+                    .iter()
+                    .map(|i| egui::LayerId::new(egui::Order::Foreground, *i))
+                    .collect();
+                assert!(
+                    top.is_some_and(|l| own.contains(&l)),
+                    "{mode}: an {p:?} liegt {top:?}, nicht eine Dialogebene {own:?}"
                 );
             }
         }

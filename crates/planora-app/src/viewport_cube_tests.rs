@@ -133,7 +133,7 @@ mod artefacts {
         if best.is_finite() { best } else { 0.0 }
     }
 
-    /// Ordnet die gemalten Vielecke ihren Bereichen zu (Umriss aus `cube_pieces`, alle der Kamera
+    /// Ordnet die gemalten Vielecke ihren Bereichen zu (Umriss aus `cube_pieces_visible`, alle der Kamera
     /// zugewandten Bereiche). Ein Vieleck ohne Bereich ist ein Fehler.
     fn by_region(cam: &OrbitCamera, shot: &Shot) -> HashMap<CubeRegion, Painted> {
         let pieces = cube_pieces_visible(cam, 0.02);

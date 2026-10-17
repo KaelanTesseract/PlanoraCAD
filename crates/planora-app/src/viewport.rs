@@ -135,7 +135,7 @@ impl FaceFrame {
 }
 
 /// Abbildung der Fläche `face` auf den Bildschirm: Leserichtungen aus `face_text_frame`, dieselbe
-/// orthografische Projektion wie `cube_pieces`. Die Schrift liegt damit auf der Fläche, wird mit
+/// orthografische Projektion wie die Würfelstücke (`visible_pieces`). Die Schrift liegt damit auf der Fläche, wird mit
 /// ihr gedreht und verkürzt und ist nie gespiegelt (`rechts × oben` = Normale).
 pub(crate) fn face_label_transform(camera: &OrbitCamera, face: ViewFace, cube: Rect) -> FaceFrame {
     let view = camera.view();
@@ -417,6 +417,14 @@ fn cube_drag_active(ui: &egui::Ui, response: &egui::Response) -> bool {
     let mut active = ctx
         .data(|d| d.get_temp::<bool>(cube_drag_id()))
         .unwrap_or(false);
+    // Ein Rest aus einem früheren Zug (z. B. nach übersprungenen Bildern) gilt nicht: ohne Druck
+    // auf dem Würfel (und ohne Loslassen in diesem Bild) ist nichts mehr gezogen.
+    // Ein neuer Druck beginnt immer frisch.
+    let (pressed, released) =
+        ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released()));
+    if pressed || (!response.is_pointer_button_down_on() && !released) {
+        active = false;
+    }
     let held = ui.input(|i| i.pointer.primary_down());
     if held && response.is_pointer_button_down_on() && !active {
         active = ui.input(|i| {
@@ -491,7 +499,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 }
 
 /// 3D-Ansicht: Navigation, Auswahl, Zeichnen und Navigationswürfel. Im Skizzen-Modus übernimmt
-/// [`sketch_view::show_overlay`] die Eingaben (Orbit gesperrt, Verschieben und Zoomen bleiben).
+/// [`sketch_view::show_overlay`] die Eingaben in der Ansicht (Verschieben und Zoomen; gedreht wird
+/// durch Ziehen am Navigationswürfel).
 ///
 /// Die Ansicht füllt den ganzen verfügbaren Bereich (unter den schwebenden Feldern); `free` ist
 /// das freie Rechteck zwischen den Feldern in Bildschirmkoordinaten. Dort liegen die Bildmitte
@@ -565,7 +574,9 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         Sense::click_and_drag(),
     );
     let cube_dragging = cube_drag_active(ui, &cube_response);
-    if cube_dragging && cube_response.is_pointer_button_down_on() {
+    // Mit Umschalt verschiebt die Ansicht (wie im Viewport), der Würfel dreht dann nicht.
+    let shift = ui.input(|i| i.modifiers.shift);
+    if cube_dragging && !shift && cube_response.is_pointer_button_down_on() {
         let d = ui.input(|i| i.pointer.delta());
         state.camera.orbit(d.x, d.y);
     }
@@ -661,7 +672,8 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         &state.camera,
         state.dark,
         cube,
-        cube_hover,
+        // Während des Drehens am Würfel keine Hervorhebung unter dem Zeiger.
+        cube_hover.filter(|_| !cube_dragging),
         home_hovered,
     );
 }

@@ -161,6 +161,9 @@ fn header(ui: &mut egui::Ui, title: &str, closable: bool) -> bool {
                         egui::Color32::PLACEHOLDER,
                     )))
                     .on_hover_text(CLOSE_LABEL);
+                // Der Knopf trägt nur ein Symbol aus der Symbolschrift; sein eigener Name wäre ein
+                // unlesbares Zeichen. Diese zweite Angabe ersetzt ihn durch „Schließen“ für
+                // Bildschirmleser.
                 response.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::WidgetType::Button, true, CLOSE_LABEL)
                 });

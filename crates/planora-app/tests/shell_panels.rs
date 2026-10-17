@@ -1116,5 +1116,54 @@ fn sketch_status_is_short_and_keys_are_in_the_hover() {
             .any(|t| t.text == shell_panels::SKETCH_KEYS_HINT),
         "Hover zeigt den Tastenhinweis"
     );
-    assert!(count(&shot) <= 1, "höchstens einmal sichtbar");
+    assert_eq!(count(&shot), 1, "genau einmal sichtbar");
+
+    // Hover auf den Rand des Felds (links neben dem Text) zeigt ihn ebenfalls, einmal.
+    let c2 = context(true);
+    c2.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+    let mut app2 = PlanoraApp::for_tests(library_ws());
+    let state = &mut app2.ws_mut().active_tab_mut().state;
+    let id = state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    state.open_sketch(id).unwrap();
+    let (_, _) = settle(&c2, &mut app2, size);
+    let edge = pos2(status.left() + 3.0, status.center().y);
+    run(&c2, &mut app2, size, vec![moved(edge)], false);
+    let (shot, _) = run(&c2, &mut app2, size, vec![moved(edge)], false);
+    assert_eq!(count(&shot), 1, "Hover am Feldrand zeigt den Hinweis");
+}
+
+/// Der Tastenhinweis steht im Namen der Statuszeile für Bildschirmleser.
+#[test]
+fn sketch_status_label_for_screen_readers_contains_the_hint() {
+    let c = context(true);
+    c.enable_accesskit();
+    let mut app = PlanoraApp::for_tests(library_ws());
+    let state = &mut app.ws_mut().active_tab_mut().state;
+    let id = state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    state.open_sketch(id).unwrap();
+    let size = vec2(1400.0, 900.0);
+    let mut labels = Vec::new();
+    for _ in 0..3 {
+        let mut out = c.run_ui(input(size, vec![]), |ui| {
+            shell_panels::show_fields(ui.ctx(), &mut app);
+        });
+        if let Some(u) = out.platform_output.accesskit_update.take() {
+            for (_, n) in &u.nodes {
+                // Beschriftungen von Textzeilen (Role::Label) meldet egui als Wert.
+                for l in [n.label(), n.value()].into_iter().flatten() {
+                    labels.push(l.to_string());
+                }
+            }
+        }
+        out.drop_without_applying_deltas();
+    }
+    let want = format!(
+        "Skizzen-Modus: Skizze 1. {}",
+        shell_panels::SKETCH_KEYS_HINT
+    );
+    assert!(labels.contains(&want), "{labels:?}");
 }

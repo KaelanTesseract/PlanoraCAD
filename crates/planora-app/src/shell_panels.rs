@@ -258,10 +258,25 @@ fn text_field(
         ui.set_width(inner_w);
         ui.set_height(h - margin.y);
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            let (r, response) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+            let (r, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+            // Ziel für Hover und Bedienhilfe ist das ganze Feld samt Rand, nicht nur die Textzeile.
+            let whole = ui
+                .max_rect()
+                .expand2(egui::vec2(margin.x / 2.0, margin.y / 2.0));
+            let response = ui.interact(
+                whole,
+                id.with("text"),
+                egui::Sense::focusable_noninteractive(),
+            );
             let enabled = ui.is_enabled();
-            response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, &text));
+            // Der Tastenhinweis steht auch im Namen für die Bedienhilfe, der sichtbare Text bleibt kurz.
+            let label = match hover {
+                Some(h) => format!("{text}. {h}"),
+                None => text.clone(),
+            };
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, &label)
+            });
             let elided = galley.elided;
             ui.painter().galley(r.min, galley, color);
             if elided {
@@ -446,6 +461,12 @@ fn layout_key() -> egui::Id {
 #[doc(hidden)]
 pub fn last_layout(ctx: &egui::Context) -> Option<ShellRects> {
     ctx.data(|d| d.get_temp(layout_key()))
+}
+
+/// Gemerkte Wunschbreite des Werkzeugfelds der Zeichnung (für Tests).
+#[doc(hidden)]
+pub fn drawing_tool_wanted(ctx: &egui::Context) -> Option<f32> {
+    stored(ctx, drawing_tool_width_key())
 }
 
 /// Tatsächlich belegte Rechtecke der sichtbaren Felder, je mit Namen (für Tests). Gelesen wird

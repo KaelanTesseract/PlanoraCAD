@@ -18,6 +18,8 @@ struct Content {
     clicked: bool,
     focus_field: bool,
     field: String,
+    /// Kennung des Textfelds (gesetzt beim Zeichnen).
+    field_id: Option<egui::Id>,
 }
 
 impl Content {
@@ -27,6 +29,7 @@ impl Content {
             clicked: false,
             focus_field: false,
             field: String::new(),
+            field_id: None,
         }
     }
 }
@@ -127,6 +130,7 @@ impl Harness {
                 }
                 if c.focus_field {
                     let r = theme::text_field(ui, egui::TextEdit::singleline(&mut c.field));
+                    c.field_id = Some(r.id);
                     if first {
                         r.request_focus();
                     }
@@ -465,6 +469,10 @@ fn close_icon_does_not_take_focus_on_open() {
     hn.run(vec![], &mut c);
     let focused = hn.ctx.memory(|m| m.focused());
     assert!(focused.is_some(), "Textfeld hat den Fokus nicht");
+    assert_eq!(
+        focused, c.field_id,
+        "den Fokus hat das Textfeld, nicht der Kopf"
+    );
     // Weitere Bilder ändern daran nichts.
     hn.run(vec![], &mut c);
     assert_eq!(hn.ctx.memory(|m| m.focused()), focused);
@@ -480,8 +488,17 @@ fn wide_window_is_gone() {
                 walk(&path, hits);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 let source = std::fs::read_to_string(&path).unwrap();
-                for word in ["wide_window", "DIALOG_TOP", "DIALOG_MARGIN"] {
-                    if source.contains(word) {
+                for word in ["wide_window", "DIALOG_TOP", "DIALOG_MARGIN", "MIN_WIDTH"] {
+                    // Als ganzes Wort (MIN_WIDTH_PX u. ä. zählt nicht).
+                    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+                    let whole = source.match_indices(word).any(|(i, _)| {
+                        !source[..i].chars().next_back().is_some_and(is_ident)
+                            && !source[i + word.len()..]
+                                .chars()
+                                .next()
+                                .is_some_and(is_ident)
+                    });
+                    if whole {
                         hits.push(format!("{word} in {}", path.display()));
                     }
                 }
