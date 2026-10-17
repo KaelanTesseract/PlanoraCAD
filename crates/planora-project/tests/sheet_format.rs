@@ -100,23 +100,21 @@ fn format_6_only_with_sheet_data() {
     assert_eq!(required_format(&f5.snapshot()), 5);
 }
 
+/// Eingefrorene Dateien aus den Formaten 4 und 5 (von Hand nach den Regeln dieser Formate
+/// gebaut, nicht vom heutigen Programm erzeugt): Lesen und wieder Schreiben ändert kein Byte.
 #[test]
 fn old_files_stay_byte_identical() {
-    let d4 = plain_doc();
-    let t4 = encode_version(&d4.snapshot()).unwrap();
-    assert!(t4.contains("\"format\": 4"));
-
-    let mut d5 = plain_doc();
-    let id = d5.drawings()[0].id;
-    d5.update_drawing(id, |dr| dr.views[0].centerlines = true)
-        .unwrap();
-    let t5 = encode_version(&d5.snapshot()).unwrap();
-    assert!(t5.contains("\"format\": 5"));
-
-    for t in [t4, t5] {
+    const FIXTURE_4: &str = include_str!("fixtures/format4_drawings_no_dims.json");
+    const FIXTURE_5: &str = include_str!("fixtures/format5_drawings_centerlines.json");
+    assert!(FIXTURE_4.contains("\"format\": 4") && FIXTURE_5.contains("\"format\": 5"));
+    for t in [FIXTURE_4, FIXTURE_5] {
         assert!(!t.contains("projektangaben") && !t.contains("blattangaben"));
-        let s = decode_version(&t, "x.json").unwrap();
+        let s = decode_version(t, "x.json").unwrap();
+        assert!(s.project_info.is_none() && s.drawings.iter().all(|d| d.info.is_none()));
         assert_eq!(encode_version(&s).unwrap(), t);
+        // auch nach dem Umweg über ein Dokument
+        let d = Document::from_snapshot(s, 0.05).unwrap();
+        assert_eq!(encode_version(&d.snapshot()).unwrap(), t);
     }
 }
 
@@ -247,6 +245,35 @@ fn rejects_bad_sheet_data() {
     let m = msg(bad(&t));
     assert!(m.contains("Zeichnung „Blatt A“") && m.contains("23"), "{m}");
 
+    // 25 Änderungen und 8 Hinweise: gleiche Meldung mit dem richtigen Höchstwert
+    let t = edited(|v| {
+        let a = v["zeichnungen"][0]["blattangaben"]["aenderungen"]
+            .as_array_mut()
+            .unwrap();
+        let first = a[0].clone();
+        a.extend(std::iter::repeat_n(first, 2));
+    });
+    let m = msg(bad(&t));
+    assert!(m.contains("Zeichnung „Blatt A“") && m.contains("23"), "{m}");
+    let t = edited(|v| {
+        v["zeichnungen"][0]["blattangaben"]["hinweise"] =
+            Value::Array((0..8).map(|k| format!("h{k}").into()).collect());
+    });
+    let m = msg(bad(&t));
+    assert!(
+        m.contains("Zeichnung „Blatt A“") && m.contains("höchstens 6"),
+        "{m}"
+    );
+    let t = edited(|v| {
+        v["projektangaben"]["hinweise"] =
+            Value::Array((0..8).map(|k| format!("h{k}").into()).collect());
+    });
+    let m = msg(bad(&t));
+    assert!(
+        m.contains("Projektangaben") && m.contains("höchstens 6"),
+        "{m}"
+    );
+
     // 7 Hinweise
     let t = edited(|v| {
         v["zeichnungen"][0]["blattangaben"]["hinweise"] =
@@ -294,7 +321,8 @@ fn huge_lists_are_cut_off_while_reading() {
                 .collect(),
         );
     });
-    assert!(matches!(bad(&t), ProjectError::Corrupt { .. }));
+    let m = msg(bad(&t));
+    assert!(m.contains("Zeichnung „Blatt A“") && m.contains("23"), "{m}");
 }
 
 #[test]

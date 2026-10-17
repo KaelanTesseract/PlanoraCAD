@@ -111,13 +111,25 @@ impl Stamp {
             .unwrap_or(0);
         let user = ["USERNAME", "USER"]
             .iter()
-            .find_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()))
+            .find_map(|k| {
+                std::env::var(k)
+                    .ok()
+                    .map(|v| clean_user(&v))
+                    .filter(|v| !v.is_empty())
+            })
             .unwrap_or_default();
         Stamp {
             date: utc_date(secs),
             user,
         }
     }
+}
+
+/// Macht einen Benutzernamen für das Schriftfeld brauchbar: ohne Steuerzeichen, ohne Leerraum an
+/// den Enden und höchstens [`MAX_FIELD_CHARS`] Zeichen lang.
+pub fn clean_user(raw: &str) -> String {
+    let no_ctrl: String = raw.chars().filter(|c| !c.is_control()).collect();
+    no_ctrl.trim().chars().take(MAX_FIELD_CHARS).collect()
 }
 
 /// Datum „JJJJ-MM-TT“ (UTC) zu Sekunden seit 1970.

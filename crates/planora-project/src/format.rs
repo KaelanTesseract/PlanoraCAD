@@ -38,18 +38,53 @@ const MAX_FILE_NOTES: usize = planora_drawing::sheet_info::MAX_NOTES + 1;
 /// Höchstzahl der Änderungen beim Lesen (eine mehr, aus demselben Grund).
 const MAX_FILE_REVISIONS: usize = planora_drawing::sheet_info::MAX_REVISIONS + 1;
 
+/// Wie `de_bounded`, nimmt aber nur die ersten `max` Einträge an und überliest den Rest, ohne ihn
+/// zu speichern. Die Prüfung danach meldet die zu lange Liste mit dem richtigen Höchstwert und
+/// dem Namen der Zeichnung.
+fn de_capped<'de, D, T>(d: D, max: usize) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct Capped<T> {
+        max: usize,
+        marker: std::marker::PhantomData<T>,
+    }
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Capped<T> {
+        type Value = Vec<T>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "eine Liste")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
+            let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(self.max));
+            while out.len() < self.max {
+                match seq.next_element()? {
+                    Some(x) => out.push(x),
+                    None => return Ok(out),
+                }
+            }
+            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+            Ok(out)
+        }
+    }
+    d.deserialize_seq(Capped {
+        max,
+        marker: std::marker::PhantomData,
+    })
+}
+
 fn de_notes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
     struct Lines(Vec<String>);
     impl<'de> Deserialize<'de> for Lines {
         fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-            de_bounded(d, MAX_FILE_NOTES, "Hinweise").map(Lines)
+            de_capped(d, MAX_FILE_NOTES).map(Lines)
         }
     }
     Ok(Option::<Lines>::deserialize(d)?.map(|l| l.0))
 }
 
 fn de_revisions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<AenderungDto>, D::Error> {
-    de_bounded(d, MAX_FILE_REVISIONS, "Änderungen")
+    de_capped(d, MAX_FILE_REVISIONS)
 }
 
 /// Projektangaben (ab Format 6). `None` bei einem Eintrag heißt automatisch.

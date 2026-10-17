@@ -850,7 +850,7 @@ fn centerlines_default_is_false_for_old_files() {
 // ---- (g) Neuere Formate ------------------------------------------------------------------
 
 #[test]
-fn newer_format_6_is_refused_with_the_clear_text() {
+fn newer_format_7_is_refused_with_the_clear_text() {
     let good = good();
     let e = bad(&good.replacen("\"format\": 5", "\"format\": 7", 1));
     assert!(matches!(e, ProjectError::TooNew { found: 7, .. }), "{e:?}");

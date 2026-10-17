@@ -319,7 +319,7 @@ fn positions_roundtrip_bit_exact() {
 
 #[test]
 fn format_4_with_drawings_and_5_with_centerlines() {
-    // Seit Teilprojekt 12 ist Format 6 gültig; Ansichten mit Mittellinien brauchen es.
+    // Format 6 gilt seit Teilprojekt 3c-1 (Blattangaben); Mittellinien brauchen Format 5.
     assert_eq!(FORMAT_VERSION, 6);
     let plain = box_document();
     assert_eq!(required_format(&plain.snapshot()), 1);
@@ -737,8 +737,8 @@ fn missing_counters_are_derived_from_the_ids() {
 // ---- (f) Neuere Formate ------------------------------------------------------------------
 
 #[test]
-fn format_6_is_refused_with_clear_text() {
-    // Seit Teilprojekt 12 ist Format 6 gültig; „zu neu“ ist jetzt 7.
+fn format_7_is_refused_with_clear_text() {
+    // Seit Teilprojekt 3c-1 (Blattangaben) ist Format 6 gültig; „zu neu“ ist jetzt 7.
     let good = good();
     let e = bad(&good.replacen("\"format\": 5", "\"format\": 7", 1));
     assert!(matches!(e, ProjectError::TooNew { found: 7, .. }), "{e:?}");

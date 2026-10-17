@@ -525,3 +525,17 @@ fn a_new_drawing_has_no_info() {
     );
     assert!(d.info.is_none());
 }
+
+#[test]
+fn clean_user_strips_control_characters_and_shortens() {
+    assert_eq!(clean_user("  dennis\u{1}\n "), "dennis");
+    let long = "ä".repeat(200);
+    assert_eq!(clean_user(&long).chars().count(), MAX_FIELD_CHARS);
+    let p = ProjectInfo::new(&Stamp {
+        date: "2026-10-17".into(),
+        user: clean_user(&format!("a\u{7}{long}")),
+    });
+    assert!(validate_project_info(&p).is_ok());
+    // Stamp::now liefert immer etwas, das die Prüfung besteht.
+    assert!(validate_project_info(&ProjectInfo::new(&Stamp::now())).is_ok());
+}
