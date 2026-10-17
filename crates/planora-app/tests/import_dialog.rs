@@ -1,7 +1,7 @@
 //! Fenster „Netz importieren“: lesen im Arbeitsthread, Bericht, Name, Einheit, Abbrechen,
 //! Fehler, volle Breite (Teilprojekt 9, Task 17).
 
-use planora_app::export_dialog::{DIALOG_MARGIN, ExportDialog, ExportStatus};
+use planora_app::export_dialog::{ExportDialog, ExportStatus};
 use planora_app::fonts;
 use planora_app::import_dialog::*;
 use planora_app::state::*;
@@ -150,7 +150,7 @@ fn an_open_mesh_is_imported_with_a_warning() {
 }
 
 #[test]
-fn the_window_spans_the_width_and_shows_equal_cards() {
+fn the_window_is_centred_720_wide_with_equal_cards_and_plain_texts() {
     let dir = temp_dir("fenster");
     let path = write_stl(&dir, "Teil.stl", cube());
     let mut s = AppState::new();
@@ -165,8 +165,8 @@ fn the_window_spans_the_width_and_shows_equal_cards() {
     let text = draw(&mut d, &mut s);
     let rect = d.last_rect.unwrap();
     assert!(
-        rect.width() >= 1200.0 - 2.0 * DIALOG_MARGIN - 1.0 && rect.width() <= 1200.0,
-        "{rect:?}"
+        (rect.width() - 720.0).abs() <= 1.0 && (rect.center().x - 600.0).abs() <= 1.0,
+        "720 breit und mittig: {rect:?}"
     );
     assert_eq!(d.last_cards.len(), 2);
     assert!((d.last_cards[0].height() - d.last_cards[1].height()).abs() < 0.5);

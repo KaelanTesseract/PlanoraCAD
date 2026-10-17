@@ -692,11 +692,11 @@ fn outside_dimension_is_written_and_counted() {
 
 // (e) ------------------------------------------------------------------------------------------
 
-fn assert_full_width_equal_heights(d: &ExportDialog) {
+fn assert_centred_equal_heights(d: &ExportDialog) {
     let rect = d.last_rect.unwrap();
     assert!(
-        rect.width() >= 1200.0 - 2.0 * DIALOG_MARGIN - 1.0,
-        "{rect:?}"
+        (rect.width() - 720.0).abs() <= 1.0 && (rect.center().x - 600.0).abs() <= 1.0,
+        "720 breit und mittig: {rect:?}"
     );
     assert_eq!(d.last_cards.len(), 2);
     assert!(
@@ -712,7 +712,7 @@ fn assert_full_width_equal_heights(d: &ExportDialog) {
 }
 
 #[test]
-fn card_shows_counts_and_stays_full_width_equal_height() {
+fn card_shows_counts_and_stays_centred_720_equal_height() {
     let (mut s, id) = box_with_dims();
     let n = s.document.drawing(id).unwrap().dimensions.len();
     let mut d = dialog(&s, SVG);
@@ -726,7 +726,7 @@ fn card_shows_counts_and_stays_full_width_equal_height() {
         assert!(text.contains(word), "„{word}“ fehlt:\n{text}");
     }
     assert!(!text.contains("außerhalb"), "{text}");
-    assert_full_width_equal_heights(&d);
+    assert_centred_equal_heights(&d);
     // Eine Normansicht ohne Mittellinien → „teilweise“; alle aus → „nein“.
     s.document
         .update_drawing(id, |dr| dr.views[1].centerlines = false)
@@ -734,7 +734,7 @@ fn card_shows_counts_and_stays_full_width_equal_height() {
     let text = draw(&mut d, &mut s);
     assert!(text.contains("Mittellinien: teilweise"), "{text}");
     assert_eq!(ready(&d, &s).2, CenterlineUse::Partly);
-    assert_full_width_equal_heights(&d);
+    assert_centred_equal_heights(&d);
     s.document
         .update_drawing(id, |dr| {
             for v in &mut dr.views {
@@ -764,7 +764,7 @@ fn card_shows_counts_and_stays_full_width_equal_height() {
     let text = draw(&mut d, &mut s);
     assert!(text.contains("Mittellinien: ja"), "{text}");
     assert!(text.contains("Ansichten: 4"), "{text}");
-    assert_full_width_equal_heights(&d);
+    assert_centred_equal_heights(&d);
     // Ein weiteres Maß zählt mit, die isometrische Ansicht ändert die Zahl nicht.
     let width = dim_of(&s, id, ViewKind::Front, DimKind::Horizontal);
     let mut extra = s
@@ -780,7 +780,7 @@ fn card_shows_counts_and_stays_full_width_equal_height() {
     let text = draw(&mut d, &mut s);
     assert!(text.contains(&format!("Maße: {}", n + 1)), "{text}");
     assert_eq!(ready(&d, &s).0, n + 1);
-    assert_full_width_equal_heights(&d);
+    assert_centred_equal_heights(&d);
 }
 
 // (f) ------------------------------------------------------------------------------------------

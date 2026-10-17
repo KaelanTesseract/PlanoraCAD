@@ -615,26 +615,34 @@ fn drawing_area_stays_inside_the_free_rect() {
     }
 }
 
-#[test]
-fn dialogs_open_above_fields() {
-    let c = context();
-    let mut app = app_with_box();
-    settle(&c, &mut app, MID);
-    press(
-        &c,
-        &mut app,
-        MID,
-        Key::E,
-        Modifiers::COMMAND | Modifiers::SHIFT,
-    );
-    let shot = settle(&c, &mut app, MID);
+/// Öffnet den Export-Dialog bei Fenstergröße `size` und liefert Ebene und Rechteck des Dialogs.
+fn open_export(c: &egui::Context, app: &mut PlanoraApp, size: Vec2) -> (egui::LayerId, Rect) {
+    press(c, app, size, Key::E, Modifiers::COMMAND | Modifiers::SHIFT);
+    let shot = settle(c, app, size);
     assert!(app.ws_mut().active_tab().export_dialog.is_some());
-    let placed = fields(&c);
-    let title = shot.find_outside("Exportieren", &[field(&c, "oben")]);
+    let title = shot.find_outside("Exportieren", &[field(c, "oben")]);
     let dialog = c.layer_id_at(title.center()).expect("Ebene des Dialogs");
     assert_eq!(dialog.order, egui::Order::Foreground);
     let dialog_rect = c.memory(|m| m.area_rect(dialog.id)).unwrap();
-    // Der Dialog (über die ganze Breite) liegt über beiden Seitenfeldern.
+    assert!(
+        (dialog_rect.width() - 720.0).abs() <= 1.0,
+        "720 breit: {dialog_rect:?}"
+    );
+    assert!(
+        (dialog_rect.center().x - size.x / 2.0).abs() <= 1.0,
+        "mittig: {dialog_rect:?}"
+    );
+    (dialog, dialog_rect)
+}
+
+#[test]
+fn dialogs_open_above_fields() {
+    // 800 × 600: der 720-px-Dialog liegt über beiden Seitenfeldern.
+    let c = context();
+    let mut app = app_with_box();
+    settle(&c, &mut app, SMALL);
+    let (dialog, dialog_rect) = open_export(&c, &mut app, SMALL);
+    let placed = fields(&c);
     for name in ["links", "rechts"] {
         let overlap = dialog_rect.intersect(field(&c, name));
         assert!(
@@ -657,8 +665,8 @@ fn dialogs_open_above_fields() {
         .find(|(_, p)| !dialog_rect.contains(*p))
         .expect("ein Feld ragt unter dem Dialog hervor");
     assert_eq!(c.layer_id_at(outside.1).unwrap().order, egui::Order::Middle);
-    click(&c, &mut app, MID, outside.1);
-    frame(&c, &mut app, MID, vec![]);
+    click(&c, &mut app, SMALL, outside.1);
+    frame(&c, &mut app, SMALL, vec![]);
     assert!(
         app.ws_mut().active_tab().export_dialog.is_some(),
         "Dialog bleibt offen"
@@ -672,6 +680,19 @@ fn dialogs_open_above_fields() {
             outside.0
         );
     }
+
+    // 1400 × 900: mittig zwischen den Spalten, über dem 3D-Bereich, im Vordergrund.
+    let c = context();
+    let mut app = app_with_box();
+    settle(&c, &mut app, BIG);
+    let (dialog, dialog_rect) = open_export(&c, &mut app, BIG);
+    let (left, right) = (field(&c, "links"), field(&c, "rechts"));
+    assert!(
+        left.right() <= dialog_rect.left() + 0.5 && dialog_rect.right() <= right.left() + 0.5,
+        "zwischen den Spalten: {dialog_rect:?}, {left:?}, {right:?}"
+    );
+    assert_eq!(c.layer_id_at(dialog_rect.center()), Some(dialog));
+    assert_eq!(dialog.order, egui::Order::Foreground);
 }
 
 #[test]

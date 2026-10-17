@@ -2,8 +2,9 @@
 
 use crate::browser::error_color;
 use crate::cards::card_row;
+use crate::dialog::{Dialog, DialogSize};
 use crate::drawing_state::{WorkArea, suggest_scale};
-use crate::export_dialog::{shorten_for_display, wide_window};
+use crate::export_dialog::shorten_for_display;
 use crate::icons::{self, Icon};
 use crate::state::AppState;
 use crate::theme;
@@ -149,7 +150,7 @@ impl NewDrawingDialog {
         let (mut name, mut paper, mut landscape) = (self.name.clone(), self.paper, self.landscape);
         let (mut projection, mut base) = (self.projection, self.base);
         let (mut scale, mut scale_chosen) = (self.scale, self.scale_chosen);
-        let response = wide_window("Neue Zeichnung", ctx)
+        let response = Dialog::new("Neue Zeichnung", DialogSize::Wide)
             .open(&mut open)
             .show(ctx, |ui| {
                 let mut sheet_card = |ui: &mut egui::Ui| {

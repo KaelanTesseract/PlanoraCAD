@@ -573,7 +573,7 @@ fn empty_and_duplicate_names_block_creation_with_a_clear_text() {
 }
 
 #[test]
-fn the_new_drawing_window_spans_the_width_with_equal_cards() {
+fn the_window_is_centred_720_wide_with_equal_cards_and_plain_texts() {
     let mut st = box_state();
     let mut d = NewDrawingDialog::new(&st);
     let mut h = Harness::new();
@@ -581,7 +581,10 @@ fn the_new_drawing_window_spans_the_width_with_equal_cards() {
         dialog_frame(&mut h, &mut d, &mut st, vec![]);
     }
     let r = d.last_rect.unwrap();
-    assert!(r.width() >= W - 2.0 * 16.0 - 1.0, "{r:?}");
+    assert!(
+        (r.width() - 720.0).abs() <= 1.0 && (r.center().x - W / 2.0).abs() <= 1.0,
+        "720 breit und mittig: {r:?}"
+    );
     assert!(d.last_cards.len() >= 2);
     assert!(
         d.last_cards

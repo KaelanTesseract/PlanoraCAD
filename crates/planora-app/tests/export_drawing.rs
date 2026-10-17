@@ -691,7 +691,7 @@ fn mesh_bodies_are_named_and_skipped() {
 // (h) ------------------------------------------------------------------------------------------
 
 #[test]
-fn cards_use_full_width_and_equal_heights() {
+fn cards_stay_centred_720_with_equal_heights() {
     let mut s = box_state();
     let a = add_drawing(&mut s, "Blatt A");
     let b = add_drawing(&mut s, "Blatt B");
@@ -730,8 +730,8 @@ fn cards_use_full_width_and_equal_heights() {
     }
     let rect = d.last_rect.unwrap();
     assert!(
-        rect.width() >= 1200.0 - 2.0 * DIALOG_MARGIN - 1.0,
-        "{rect:?}"
+        (rect.width() - 720.0).abs() <= 1.0 && (rect.center().x - 600.0).abs() <= 1.0,
+        "720 breit und mittig: {rect:?}"
     );
     assert_eq!(d.last_cards.len(), 2);
     assert!(

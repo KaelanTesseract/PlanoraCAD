@@ -205,15 +205,15 @@ fn prepare_reports_the_bodies_one_by_one() {
 }
 
 #[test]
-fn the_window_spans_the_full_width_with_equal_cards_and_plain_texts() {
+fn the_window_is_centred_720_wide_with_equal_cards_and_plain_texts() {
     let mut s = box_state();
     let mut d = ExportDialog::new(&s);
     d.tick(&s, true);
     let text = draw(&mut d, &mut s);
     let rect = d.last_rect.unwrap();
     assert!(
-        rect.width() >= 1200.0 - 2.0 * DIALOG_MARGIN - 1.0 && rect.width() <= 1200.0,
-        "{rect:?}"
+        (rect.width() - 720.0).abs() <= 1.0 && (rect.center().x - 600.0).abs() <= 1.0,
+        "720 breit und mittig: {rect:?}"
     );
     assert_eq!(d.last_cards.len(), 3);
     assert!(

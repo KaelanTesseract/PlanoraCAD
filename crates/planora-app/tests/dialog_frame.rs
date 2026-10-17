@@ -469,3 +469,29 @@ fn close_icon_does_not_take_focus_on_open() {
     hn.run(vec![], &mut c);
     assert_eq!(hn.ctx.memory(|m| m.focused()), focused);
 }
+
+/// Aufgabe 2: die alte Fensterhilfe für volle Breite ist ganz entfernt.
+#[test]
+fn wide_window_is_gone() {
+    fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, hits);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                for word in ["wide_window", "DIALOG_TOP", "DIALOG_MARGIN"] {
+                    if source.contains(word) {
+                        hits.push(format!("{word} in {}", path.display()));
+                    }
+                }
+            }
+        }
+    }
+    let mut hits = Vec::new();
+    walk(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut hits,
+    );
+    assert!(hits.is_empty(), "{hits:?}");
+}
