@@ -57,15 +57,15 @@ struct Group {
     rows: Vec<BalloonRow>,
 }
 
-fn groups_of(state: &AppState, drawing: DrawingId) -> Vec<Group> {
+fn groups_of(ctx: &egui::Context, state: &AppState, drawing: DrawingId) -> Vec<Group> {
     let Some(d) = state.document.drawing(drawing) else {
         return Vec::new();
     };
     if d.balloons.is_empty() {
         return Vec::new();
     }
-    let numbers = state.document.balloon_numbers(drawing);
-    let cells = state.document.parts_cells();
+    let numbers = balloon_tool::numbers_cached(ctx, state, drawing);
+    let cells = crate::drawing_view::cached_cells(ctx, state);
     let names = view_names(d);
     d.views
         .iter()
@@ -112,7 +112,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     ui.add_space(theme::SPACE_3);
     theme::section_header(ui, SECTION, theme::SUB_HEADER_H);
     ui.add_space(theme::SPACE_1);
-    let groups = groups_of(state, id);
+    let groups = groups_of(ui.ctx(), state, id);
     if groups.is_empty() {
         ui.weak(EMPTY_TEXT);
     }

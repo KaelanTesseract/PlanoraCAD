@@ -1444,3 +1444,86 @@ fn texts_are_plain_sentences() {
         "Tooltip mit Name und Erklärung"
     );
 }
+
+/// Messung (kein Prüfwert): Zeit je Bild der ganzen App mit 45 Körpern und 200 Kreisen, in Ruhe
+/// und beim Ziehen eines Kreises. `cargo test -p planora-app --test balloon_tool -- --ignored
+/// --nocapture frame_cost`.
+#[test]
+#[ignore]
+fn frame_cost() {
+    for count in [0usize, 200] {
+        frame_cost_with(count);
+    }
+}
+
+fn frame_cost_with(count: usize) {
+    let mut st = AppState::new();
+    for i in 0..45 {
+        st.document
+            .add_feature(
+                format!("Teil {}", i + 1),
+                FeatureKind::Box {
+                    size: DVec3::new(10.0, 10.0, 10.0),
+                    origin: DVec3::new(i as f64 * 20.0, 0.0, 0.0),
+                },
+            )
+            .unwrap();
+    }
+    st.refresh();
+    let d = new_drawing(
+        &mut st,
+        Sheet {
+            paper: Paper::A3,
+            landscape: true,
+        },
+    );
+    let front = st
+        .document
+        .add_view(
+            d,
+            ViewKind::Front,
+            Scale { num: 1, den: 5 },
+            Placement::Free { x: 210.0, y: 150.0 },
+            None,
+        )
+        .unwrap();
+    let keys: Vec<BodyKey> = st
+        .bodies
+        .iter()
+        .map(|b| st.document.body_key(b.source))
+        .collect();
+    for i in 0..count {
+        let u = (i % 20) as f64 / 19.0;
+        let v = (i / 20) as f64 / 9.0;
+        st.document
+            .add_balloon(d, front, keys[i % keys.len()], (u, v), (8.0, 12.0))
+            .unwrap();
+    }
+    st.drawing_ui.open(d);
+    let mut a = App::new(BIG, st);
+    let time = |a: &mut App, events: &dyn Fn(usize) -> Vec<Event>| {
+        for i in 0..5 {
+            a.frame(events(i));
+        }
+        let t = std::time::Instant::now();
+        for i in 0..20 {
+            a.frame(events(5 + i));
+        }
+        t.elapsed().as_secs_f64() * 1000.0 / 20.0
+    };
+    let rest = time(&mut a, &|_| vec![]);
+    if count == 0 {
+        println!("45 Körper, keine Kreise: Ruhe {rest:.1} ms");
+        return;
+    }
+    let l = drawing_view::last_layout(&a.c).unwrap();
+    let bm = l.balloons[0].clone();
+    let c = drawing_view::sheet_to_screen(l.canvas, l.sheet_mm, l.zoom, l.pan, bm.centre);
+    a.frame(vec![Event::PointerMoved(c)]);
+    a.frame(vec![button(c, true)]);
+    let drag = time(&mut a, &|i| {
+        vec![Event::PointerMoved(c + vec2(i as f32, 0.5 * i as f32))]
+    });
+    a.frame(vec![button(c + vec2(30.0, 15.0), false)]);
+    println!("45 Körper, 200 Kreise: Ruhe {rest:.1} ms, Ziehen {drag:.1} ms");
+}

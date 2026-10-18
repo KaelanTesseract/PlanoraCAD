@@ -20,7 +20,9 @@ use crate::drawing_state::WorkArea;
 use crate::drawing_view::PICK_PX;
 use crate::state::{AppState, BodyKind};
 use egui::Pos2;
-use planora_drawing::balloon::{BalloonMarks, DEFAULT_BALLOON_OFFSET, anchor_of, balloon_marks};
+use planora_drawing::balloon::{
+    BalloonMarks, DEFAULT_BALLOON_OFFSET, anchor_of, balloon_marks, layout_balloon,
+};
 use planora_drawing::parts::MAX_BALLOONS;
 use planora_drawing::sheet::view_transform;
 use planora_drawing::sheet_frame::sheet_scale;
@@ -28,6 +30,7 @@ use planora_drawing::{BalloonId, BodyKey, Drawing, DrawingId, DrawingKind, ViewI
 use planora_feature::{FeatureError, TOO_MANY_BALLOONS};
 use planora_math::DVec2;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// Beschriftung des Schalters.
 pub const TOOL: &str = "Position";
@@ -222,39 +225,86 @@ pub fn balloon_hit(
     best.map(|(_, id)| id)
 }
 
-/// Die Kreise der Zeichnung auf dem Blatt mit den Nummern aus der Stückliste; `moved` ersetzt
-/// den Versatz eines Kreises (beim Ziehen, bevor das Dokument geändert wird).
+/// Nummern der Kreise je Zeichnung, je Stand des Dokuments einmal gerechnet (die Stückliste
+/// hängt an Körpern, Namen und eigenen Texten; jede Änderung erhöht den Änderungszähler).
+#[derive(Clone)]
+struct NumbersCache {
+    instance: u64,
+    edit: u64,
+    drawing: DrawingId,
+    numbers: Arc<Numbers>,
+}
+
+/// Nummer je Kreis (`None`: verloren).
+pub type Numbers = BTreeMap<BalloonId, Option<u32>>;
+
+/// Wie [`planora_feature::Document::balloon_numbers`], aus dem Zwischenspeicher von `ctx`.
+pub fn numbers_cached(ctx: &egui::Context, state: &AppState, drawing: DrawingId) -> Arc<Numbers> {
+    let id = egui::Id::new("planora-balloon-numbers");
+    let edit = state.document.edit_count();
+    if let Some(c) = ctx
+        .data(|d| d.get_temp::<NumbersCache>(id))
+        .filter(|c| c.instance == state.instance && c.edit == edit && c.drawing == drawing)
+    {
+        return c.numbers;
+    }
+    let has = state
+        .document
+        .drawing(drawing)
+        .is_some_and(|d| !d.balloons.is_empty());
+    let numbers = Arc::new(if has {
+        state.document.balloon_numbers(drawing)
+    } else {
+        Numbers::new()
+    });
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            id,
+            NumbersCache {
+                instance: state.instance,
+                edit,
+                drawing,
+                numbers: Arc::clone(&numbers),
+            },
+        )
+    });
+    numbers
+}
+
+/// Die Kreise der Zeichnung auf dem Blatt mit den Nummern `numbers`.
 pub fn balloon_list(
-    state: &AppState,
     drawing: &Drawing,
     results: &BTreeMap<ViewId, &ViewLines>,
-    moved: Option<(BalloonId, (f64, f64))>,
+    numbers: &Numbers,
 ) -> Vec<BalloonMarks> {
     if drawing.balloons.is_empty() {
         return Vec::new();
     }
-    let numbers = state.document.balloon_numbers(drawing.id);
-    match moved {
-        Some((id, offset)) => {
-            let mut d = drawing.clone();
-            if let Some(b) = d.balloons.iter_mut().find(|b| b.id == id) {
-                b.offset = offset;
-            }
-            balloon_marks(&d, results, &numbers)
-        }
-        None => balloon_marks(drawing, results, &numbers),
-    }
+    balloon_marks(drawing, results, numbers)
 }
 
-/// Zahl der verlorenen Kreise der Zeichnung (Teil gibt es nicht mehr).
-pub fn lost_count(state: &AppState, drawing: &Drawing) -> usize {
-    if drawing.balloons.is_empty() {
-        return 0;
+/// `list` mit dem Kreis `id` am Versatz `offset` (beim Ziehen, bevor das Dokument geändert wird);
+/// der Anker bleibt, die übrigen Kreise auch.
+pub fn with_moved(
+    mut list: Vec<BalloonMarks>,
+    drawing: &Drawing,
+    numbers: &Numbers,
+    (id, offset): (BalloonId, (f64, f64)),
+) -> Vec<BalloonMarks> {
+    let (Some(bm), Some(b)) = (list.iter_mut().find(|x| x.id == id), drawing.balloon(id)) else {
+        return list;
+    };
+    let at = bm.centre - DVec2::new(b.offset.0, b.offset.1);
+    let number = numbers.get(&id).copied().flatten();
+    let marks = layout_balloon(at, offset, number, sheet_scale(drawing.sheet));
+    if !marks.is_empty() {
+        bm.centre = at + DVec2::new(offset.0, offset.1);
+        bm.marks = marks;
     }
-    state
-        .document
-        .balloon_numbers(drawing.id)
-        .values()
-        .filter(|n| n.is_none())
-        .count()
+    list
+}
+
+/// Zahl der verlorenen Kreise (Teil gibt es nicht mehr).
+pub fn lost_count(numbers: &Numbers) -> usize {
+    numbers.values().filter(|n| n.is_none()).count()
 }

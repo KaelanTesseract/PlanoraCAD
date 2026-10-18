@@ -549,7 +549,7 @@ struct SheetCache {
     /// nicht an der Zeichnung).
     parts: Vec<PartsCells>,
     /// Nummernkreise mit Nummern (die Nummern folgen der Stückliste, nicht der Zeichnung).
-    balloons: Vec<BalloonMarks>,
+    balloons: Arc<Vec<BalloonMarks>>,
     /// Stand der Linien: bleibt gleich, solange sich nur Maße oder Mittellinien ändern (die
     /// Linienzüge werden dann nicht neu zerlegt).
     lines_gen: u64,
@@ -674,7 +674,7 @@ struct CellsCache {
 }
 
 /// Alle Zeilen der Stückliste des Dokuments, je Stand des Dokuments einmal gerechnet.
-fn cached_cells(ctx: &egui::Context, state: &AppState) -> Arc<Vec<PartsCells>> {
+pub(crate) fn cached_cells(ctx: &egui::Context, state: &AppState) -> Arc<Vec<PartsCells>> {
     let id = egui::Id::new("planora-parts-cells");
     let edit = state.document.edit_count();
     if let Some(c) = ctx
@@ -790,7 +790,7 @@ fn sheet_model(
     drawing: &Drawing,
     model: u64,
     dims: &Arc<ResolvedDims>,
-    balloons: &[BalloonMarks],
+    balloons: &Arc<Vec<BalloonMarks>>,
 ) -> (Arc<SheetModel>, u64) {
     let owned = state.drawing_ui.results_for(drawing, model);
     let ptrs: Vec<usize> = owned.values().map(|a| Arc::as_ptr(a) as usize).collect();
@@ -812,7 +812,7 @@ fn sheet_model(
         && c.project == project
         && c.context == context
         && c.parts == texts.parts
-        && c.balloons == balloons
+        && (Arc::ptr_eq(&c.balloons, balloons) || c.balloons == *balloons)
     {
         return (Arc::clone(&c.sheet), c.lines_gen);
     }
@@ -847,12 +847,63 @@ fn sheet_model(
                 project,
                 context,
                 parts,
-                balloons: balloons.to_vec(),
+                balloons: Arc::clone(balloons),
                 lines_gen,
             },
         )
     });
     (sheet, lines_gen)
+}
+
+/// Zwischengespeicherte Nummernkreise der offenen Zeichnung: gültig, solange Dokument
+/// (Änderungszähler), Modellstand und Ansichtsergebnisse gleich sind.
+#[derive(Clone)]
+struct BalloonsCache {
+    instance: u64,
+    edit: u64,
+    model: u64,
+    drawing: DrawingId,
+    ptrs: Vec<usize>,
+    list: Arc<Vec<BalloonMarks>>,
+}
+
+/// Die Nummernkreise der Zeichnung auf dem Blatt (mit Nummern), je Stand einmal gerechnet.
+fn balloons_cached(
+    ctx: &egui::Context,
+    state: &AppState,
+    drawing: &Drawing,
+    model: u64,
+) -> Arc<Vec<BalloonMarks>> {
+    let id = egui::Id::new("planora-drawing-balloons");
+    let owned = state.drawing_ui.results_for(drawing, model);
+    let ptrs: Vec<usize> = owned.values().map(|a| Arc::as_ptr(a) as usize).collect();
+    let edit = state.document.edit_count();
+    if let Some(c) = ctx.data(|d| d.get_temp::<BalloonsCache>(id)).filter(|c| {
+        c.instance == state.instance
+            && c.edit == edit
+            && c.model == model
+            && c.drawing == drawing.id
+            && c.ptrs == ptrs
+    }) {
+        return c.list;
+    }
+    let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
+    let numbers = balloon_tool::numbers_cached(ctx, state, drawing.id);
+    let list = Arc::new(balloon_tool::balloon_list(drawing, &refs, &numbers));
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            id,
+            BalloonsCache {
+                instance: state.instance,
+                edit,
+                model,
+                drawing: drawing.id,
+                ptrs,
+                list: Arc::clone(&list),
+            },
+        )
+    });
+    list
 }
 
 /// Gezogener Teil eines Maßes mit den Werten zu Beginn des Ziehens (Blatt-mm).
@@ -1061,7 +1112,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     let dims = resolve_in(state, id);
     let mut notes = notes_in(state, id, &dims);
     // Verlorene Positionsnummern zuerst (rot), dann die Hinweise zu den Maßen.
-    let lost_balloons = balloon_tool::lost_count(state, &drawing);
+    let lost_balloons = balloon_tool::lost_count(&balloon_tool::numbers_cached(&ctx, state, id));
     let mut red = usize::from(notes.lost > 0);
     if lost_balloons > 0 {
         notes
@@ -2033,12 +2084,7 @@ fn canvas_ui(
     // --- Eingaben (mit dem Stand vor diesem Bild) ---
     let k0 = f64::from(fit_px_per_mm(canvas, sheet_mm) * state.drawing_ui.zoom);
     let dims = resolve_in(state, id);
-    let balloons0 = {
-        let owned = state.drawing_ui.results_for(&drawing, model);
-        let refs: BTreeMap<ViewId, &ViewLines> =
-            owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
-        balloon_tool::balloon_list(state, &drawing, &refs, None)
-    };
+    let balloons0 = balloons_cached(&ctx, state, &drawing, model);
     let (sheet, lines_gen) = sheet_model(&ctx, state, &drawing, model, &dims, &balloons0);
     let dim_marks = marks_in(state, id, &dims);
     let placed = place_views(state, &drawing, &sheet, model);
@@ -2307,16 +2353,13 @@ fn canvas_ui(
     let (zoom, pan) = (state.drawing_ui.zoom, state.drawing_ui.pan);
     let k = f64::from(fit_px_per_mm(canvas, sheet_mm) * zoom);
     let dims = resolve_in(state, id);
-    let (balloons, live_balloons) = {
-        let owned = state.drawing_ui.results_for(&drawing, model);
-        let refs: BTreeMap<ViewId, &ViewLines> =
-            owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
-        let doc = balloon_tool::balloon_list(state, &drawing, &refs, None);
-        let shown = match live {
-            Some(m) => balloon_tool::balloon_list(state, &drawing, &refs, Some(m)),
-            None => doc.clone(),
-        };
-        (doc, shown)
+    let balloons = balloons_cached(&ctx, state, &drawing, model);
+    let live_balloons = match live {
+        Some(m) => {
+            let numbers = balloon_tool::numbers_cached(&ctx, state, id);
+            balloon_tool::with_moved(balloons.to_vec(), &drawing, &numbers, m)
+        }
+        None => balloons.to_vec(),
     };
     let (sheet, lines_gen) = sheet_model(&ctx, state, &drawing, model, &dims, &balloons);
     let dim_marks = marks_in(state, id, &dims);
