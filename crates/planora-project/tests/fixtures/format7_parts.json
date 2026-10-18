@@ -1,0 +1,144 @@
+{
+  "format": 7,
+  "marker": 1,
+  "naechste_id": 2,
+  "features": [
+    {
+      "id": 1,
+      "name": "Quader 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "quader",
+        "groesse": [
+          30.0,
+          20.0,
+          10.0
+        ],
+        "ursprung": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    }
+  ],
+  "zeichnungen": [
+    {
+      "id": 1,
+      "name": "Blatt",
+      "blatt": {
+        "papier": "A4",
+        "quer": false
+      },
+      "projektion": "erst",
+      "naechste_ansicht": 2,
+      "ansichten": [
+        {
+          "id": 1,
+          "art": "vorne",
+          "massstab": [
+            1,
+            1
+          ],
+          "lage": {
+            "typ": "frei",
+            "x": 0.0,
+            "y": 0.0
+          },
+          "verdeckt_zeigen": true,
+          "eltern": null,
+          "mittellinien": true
+        }
+      ],
+      "naechstes_mass": 1,
+      "blattangaben": {
+        "angelegt": "2026-10-17",
+        "stueckliste": true
+      },
+      "positionen": [
+        {
+          "id": 1,
+          "ansicht": 1,
+          "koerper": [
+            1,
+            0
+          ],
+          "anker": [
+            0.25,
+            0.75
+          ],
+          "versatz": [
+            10.0,
+            -12.5
+          ]
+        },
+        {
+          "id": 3,
+          "ansicht": 1,
+          "koerper": [
+            1,
+            0
+          ],
+          "anker": [
+            1.0,
+            0.0
+          ],
+          "versatz": [
+            -3.0,
+            4.0
+          ]
+        }
+      ],
+      "naechste_position": 4
+    },
+    {
+      "id": 2,
+      "name": "Blatt B",
+      "blatt": {
+        "papier": "A4",
+        "quer": false
+      },
+      "projektion": "dritt",
+      "naechste_ansicht": 1,
+      "ansichten": [],
+      "naechstes_mass": 1
+    },
+    {
+      "id": 10,
+      "name": "Stückliste",
+      "blatt": {
+        "papier": "A4",
+        "quer": false
+      },
+      "projektion": "erst",
+      "naechste_ansicht": 1,
+      "ansichten": [],
+      "naechstes_mass": 1,
+      "blattangaben": {
+        "angelegt": "2026-10-17"
+      },
+      "stuecklistenseite": 1
+    }
+  ],
+  "naechste_zeichnung": 20,
+  "projektangaben": {
+    "anmeldename": "dennis"
+  },
+  "stueckliste": [
+    {
+      "koerper": [
+        1,
+        0
+      ],
+      "benennung": "Welle ä",
+      "bemerkung": "Bem. ±"
+    },
+    {
+      "koerper": [
+        9,
+        1
+      ],
+      "benennung": "Verloren"
+    }
+  ]
+}

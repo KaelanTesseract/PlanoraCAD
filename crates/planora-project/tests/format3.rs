@@ -136,7 +136,7 @@ fn the_smallest_fitting_version_is_written() {
     assert_eq!(required_format(&d.snapshot()), 1);
     let mut m = mesh_document();
     assert_eq!(required_format(&m.snapshot()), 3);
-    assert_eq!(FORMAT_VERSION, 7); // seit Teilprojekt 3c-1 (Blattangaben)
+    assert_eq!(FORMAT_VERSION, 7); // seit Teilprojekt 3c-2 (Stückliste)
     // Netz-Körper gelöscht: wieder Format 1, keine Netzdaten mehr
     let ids: Vec<FeatureId> = m
         .features()

@@ -280,7 +280,7 @@ fn mutate_doc(p: &std::path::Path, f: impl FnOnce(&mut serde_json::Value)) {
 
 #[test]
 fn newer_files_with_changed_structure_report_too_new() {
-    // Seit Teilprojekt 3c-1 (Blattangaben) ist Format 6 gültig; „zu neu“ ist jetzt 7.
+    // Seit Teilprojekt 3c-2 (Stückliste) ist Format 7 gültig; „zu neu“ ist jetzt 8.
     let p = dir();
     let st = DocStore::create(&p, &snap(1), "").unwrap();
     st.write_autosave(Some(1), &snap(2)).unwrap();

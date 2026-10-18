@@ -120,7 +120,7 @@ fn de_notes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<String>
 /// Höchstzahl der Nummernkreise beim Lesen (eine mehr, aus demselben Grund).
 const MAX_FILE_POSITIONS: usize = planora_drawing::parts::MAX_BALLOONS + 1;
 /// Höchstzahl der Zeilentexte beim Lesen; mehr bricht das Lesen ab.
-pub const MAX_FILE_OVERRIDES: usize = planora_drawing::parts::MAX_OVERRIDES;
+const MAX_FILE_OVERRIDES: usize = planora_drawing::parts::MAX_OVERRIDES;
 
 fn de_positions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<PositionDto>, D::Error> {
     de_capped(d, MAX_FILE_POSITIONS)

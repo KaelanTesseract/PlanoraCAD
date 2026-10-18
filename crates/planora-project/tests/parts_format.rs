@@ -330,21 +330,34 @@ fn balloon_json(id: u64) -> Value {
 
 #[test]
 fn rejects_bad_parts_data() {
-    // Format 6 mit Positionen, Stückliste, Seite, Schalter
-    let cases: [fn(&mut Value); 5] = [
-        |v| v["zeichnungen"][0]["positionen"] = json!([balloon_json(1)]),
-        |v| v["zeichnungen"][0]["naechste_position"] = 5.into(),
-        |v| v["zeichnungen"][1]["stuecklistenseite"] = 1.into(),
-        |v| v["stueckliste"] = json!([{"koerper": [1, 0], "benennung": "a"}]),
-        |v| v["zeichnungen"][0]["blattangaben"]["stueckliste"] = true.into(),
+    // Format 6 mit genau einem Stücklisten-Feld: jedes allein wird abgelehnt (Basis: die
+    // eingefrorene Format-6-Datei, ohne jedes andere Stücklisten-Feld).
+    let base: Value =
+        serde_json::from_str(include_str!("fixtures/format6_sheet_info.json")).unwrap();
+    type Edit = fn(&mut Value);
+    let cases: [(&str, Edit); 5] = [
+        ("stuecklistenseite", |v| {
+            v["zeichnungen"][0]["stuecklistenseite"] = 1.into()
+        }),
+        ("positionen", |v| {
+            v["zeichnungen"][0]["positionen"] = json!([balloon_json(1)])
+        }),
+        ("naechste_position", |v| {
+            v["zeichnungen"][0]["naechste_position"] = 5.into()
+        }),
+        ("stueckliste", |v| {
+            v["stueckliste"] = json!([{"koerper": [1, 0], "benennung": "a"}])
+        }),
+        ("schalter", |v| {
+            v["zeichnungen"][0]["blattangaben"]["stueckliste"] = true.into()
+        }),
     ];
-    for f in cases {
-        let t = edited(|v| {
-            v["format"] = 6.into();
-            f(v);
-        });
-        let m = msg(bad(&t));
-        assert!(m.contains("erst ab Dateiformat 7"), "{m}");
+    assert!(decode_version(&base.to_string(), "x.json").is_ok());
+    for (name, f) in cases {
+        let mut v = base.clone();
+        f(&mut v);
+        let m = msg(bad(&serde_json::to_string_pretty(&v).unwrap()));
+        assert!(m.contains("erst ab Dateiformat 7"), "{name}: {m}");
     }
 
     // Format 8 ist zu neu, Format 7 nicht
@@ -434,6 +447,12 @@ fn rejects_bad_parts_data() {
     assert!(matches!(bad(&t), ProjectError::Corrupt { .. }));
     let t = edited(|v| v["zeichnungen"][0]["positionen"][0]["ansicht"] = 77.into());
     assert!(msg(bad(&t)).contains("Zeichnung „Blatt“"));
+    let t = edited(|v| v["zeichnungen"][0]["positionen"][0]["ansicht"] = 0.into());
+    let m = msg(bad(&t));
+    assert!(
+        m.contains("Zeichnung „Blatt“") && m.contains("Positionsnummer"),
+        "{m}"
+    );
 
     // Eintrag ganz ohne eigene Texte
     let t = edited(|v| v["stueckliste"] = json!([{"koerper": [3, 0]}]));
@@ -576,4 +595,58 @@ fn store_restore_and_autosave_carry_parts_data() {
         "alte Version bleibt ohne Stücklistendaten"
     );
     let _ = std::fs::remove_dir_all(&p);
+}
+
+/// Alle Kreise gelöscht, sonst nichts mit Format 7: der Zähler wird nicht geschrieben, die Datei
+/// bleibt Format 4 und lässt sich wieder lesen.
+#[test]
+fn deleted_balloons_do_not_force_format_7() {
+    let (mut d, id, v) = plain();
+    d.add_balloon(id, v, key(1, 0), (0.5, 0.5), (10.0, 10.0))
+        .unwrap();
+    d.update_drawing(id, |dr| dr.balloons.clear()).unwrap();
+    assert!(d.drawings()[0].next_balloon > 1);
+    let s = d.snapshot();
+    assert_eq!(required_format(&s), 4);
+    let t = encode_version(&s).unwrap();
+    assert!(t.contains("\"format\": 4") && !t.contains("naechste_position"));
+    let back = decode_version(&t, "x.json").unwrap();
+    assert_eq!(back.drawings[0].next_balloon, 1);
+}
+
+/// Überschreibungen allein, ohne jede Zeichnung: gehen nicht verloren, Format 7.
+#[test]
+fn overrides_without_drawings_round_trip() {
+    let mut d = with_box();
+    d.set_parts_override(key(1, 0), ov("Welle ä")).unwrap();
+    d.set_parts_override(key(5, 2), ov("Weg")).unwrap();
+    assert!(d.drawings().is_empty());
+    let t = encode_version(&d.snapshot()).unwrap();
+    assert!(t.contains("\"format\": 7") && t.contains("stueckliste"));
+    let back = decode_version(&t, "x.json").unwrap();
+    assert_eq!(&back.parts_overrides, d.parts_overrides());
+    assert_eq!(back.parts_overrides.len(), 2);
+}
+
+/// Eingefrorene Format-7-Datei (mit dem fertigen Schreiber erzeugt): Überschreibungen, ein
+/// Stücklistenblatt, Kreise mit Lücke und Zähler, Schalter, dazu eine Zeichnung ohne Kreise.
+/// Lesen und Wiederschreiben ändert kein Byte.
+#[test]
+fn format_7_file_stays_byte_identical() {
+    const F7: &str = include_str!("fixtures/format7_parts.json");
+    assert!(F7.contains("\"format\": 7"));
+    for k in [
+        "\"stueckliste\": [",
+        "\"stuecklistenseite\": 1",
+        "\"positionen\": [",
+        "\"naechste_position\": 4",
+        "\"stueckliste\": true",
+    ] {
+        assert!(F7.contains(k), "{k}");
+    }
+    let s = decode_version(F7, "x.json").unwrap();
+    assert_eq!(s.parts_overrides.len(), 2);
+    assert_eq!(encode_version(&s).unwrap(), F7);
+    let d = Document::from_snapshot(s, 0.05).unwrap();
+    assert_eq!(encode_version(&d.snapshot()).unwrap(), F7);
 }

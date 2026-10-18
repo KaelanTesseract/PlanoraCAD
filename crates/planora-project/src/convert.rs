@@ -9,7 +9,7 @@ use planora_drawing::dimension::{
     Tolerance as DimTolerance, ref_count,
 };
 use planora_drawing::limits::MAX_DIMENSIONS;
-use planora_drawing::parts::{MAX_BALLOONS, MAX_OVERRIDES, validate_override};
+use planora_drawing::parts::{MAX_BALLOONS, validate_override};
 use planora_drawing::sheet_info::{
     FieldValue, NotesValue, ProjectInfo, Revision, SheetInfo, validate_project_info,
     validate_sheet_info,
@@ -1328,10 +1328,7 @@ fn overrides_from(
     list: &[StuecklisteZeileDto],
 ) -> Result<BTreeMap<BodyKey, RowOverride>> {
     let bad = |m: String| ProjectError::corrupt(origin, format!("Stückliste: {m}"));
-    check_len(origin, "Stückliste", list.len())?;
-    if list.len() > MAX_OVERRIDES {
-        return Err(bad(format!("höchstens {MAX_OVERRIDES} Einträge")));
-    }
+    // Die Länge ist beim Lesen schon auf MAX_OVERRIDES begrenzt (`de_overrides`).
     let mut out = BTreeMap::new();
     for z in list {
         let key = body_key_from(z.koerper).ok_or_else(|| bad("Der Körper ist ungültig".into()))?;
