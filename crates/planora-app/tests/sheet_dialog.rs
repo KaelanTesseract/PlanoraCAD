@@ -491,12 +491,13 @@ fn opens_from_toolbar_and_menu() {
             info.left() > fit.right() && (info.center().y - fit.center().y).abs() < 6.0,
             "{size:?}: Knopf am Ende der ersten Zeile, rechts von „Ansicht hinzufügen“: {fit:?} {info:?}"
         );
+        let fit_glyph = icons::glyph(icons::Icon::FitSheet).to_string();
         // „Blatt einpassen“ steht in der zweiten Zeile (beim Rollen nach rechts evtl. nicht mehr
         // im Feld zu sehen).
         if let Some(sheet_fit) = shot
             .texts
             .iter()
-            .find(|t| t.text == "Blatt einpassen" && tool.contains(t.rect.center()))
+            .find(|t| t.text == fit_glyph && tool.contains(t.rect.center()))
         {
             assert!(sheet_fit.rect.center().y > info.center().y + 10.0);
         }

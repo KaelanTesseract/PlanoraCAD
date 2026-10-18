@@ -316,11 +316,6 @@ impl Harness {
     }
 }
 
-/// Zeichen des Symbolknopfs „Position“.
-fn glyph() -> String {
-    icons::glyph(icons::Icon::PositionTool).to_string()
-}
-
 fn button(pos: Pos2, pressed: bool) -> Event {
     Event::PointerButton {
         pos,
@@ -505,7 +500,7 @@ fn click_sets_balloon_on_every_line_kind() {
             .unwrap();
         let mut h = open(&mut st, d, size);
         if size == BIG {
-            h.click_text(&mut st, &glyph());
+            h.click_text(&mut st, TOOL);
         } else {
             // Bei 800 × 600 rollt das Werkzeugfeld; der Knopf liegt rechts außerhalb.
             st.balloon_tool.set_active(true);
@@ -653,7 +648,7 @@ fn balloon_hit_reaches_pick_px_outside_the_circle() {
 #[test]
 fn select_delete_escape() {
     let (mut st, _, d, _, mut h) = box_front(BIG);
-    h.click_text(&mut st, &glyph());
+    h.click_text(&mut st, TOOL);
     let b = place_by_click(&mut st, &mut h, d, DVec2::new(95.0, 100.0));
     // Mit Werkzeug: Klick auf den Kreis wählt ihn und setzt keinen neuen.
     h.click_at(&mut st, DVec2::new(30.0, 30.0));
@@ -896,13 +891,13 @@ fn typing_in_the_sheet_dialog_does_not_reach_the_balloon() {
 #[test]
 fn exclusive_tools() {
     let (mut st, _, _, _, mut h) = box_front(BIG);
-    h.click_text(&mut st, &glyph());
+    h.click_text(&mut st, TOOL);
     assert!(st.balloon_tool.is_active());
     assert_eq!(st.dimension_tool.mode, ToolMode::Off);
     h.click_text(&mut st, dimension_tool::TOOL);
     assert!(st.dimension_tool.is_active());
     assert!(!st.balloon_tool.is_active(), "Maß an → Position aus");
-    h.click_text(&mut st, &glyph());
+    h.click_text(&mut st, TOOL);
     assert!(st.balloon_tool.is_active());
     assert!(!st.dimension_tool.is_active(), "Position an → Maß aus");
     // Eine Maßart wählen schaltet „Maß“ ein und „Position“ aus.
@@ -1133,50 +1128,85 @@ fn cube_mesh() -> planora_exchange::ExchangeMesh {
 
 // (h) -----------------------------------------------------------------------------------------
 
+/// Rollbalken in Ruhe im unteren Rand des Werkzeugfelds?
+fn scrollbar_in(shot: &Shot, tool: Rect) -> bool {
+    let band = Rect::from_min_max(pos2(tool.left(), tool.bottom() - 12.0), tool.max);
+    shot.fills
+        .iter()
+        .any(|(r, f)| band.contains_rect(*r) && r.height() <= 8.0 && r.width() >= 20.0 && f.a() > 0)
+}
+
+fn tool_field(c: &egui::Context) -> Rect {
+    shell_panels::field_rects(c)
+        .into_iter()
+        .find(|(n, _)| *n == "Werkzeugfeld")
+        .expect("Werkzeugfeld")
+        .1
+}
+
 #[test]
 fn toolbar_fits_1100x700() {
+    let fit = icons::glyph(icons::Icon::FitSheet).to_string();
     for size in [MID, BIG] {
-        let (st, _, _, _, _) = box_front(BIG);
-        let mut a = App::new(size, st);
-        let shot = a.settle();
-        let tool = shell_panels::field_rects(&a.c)
-            .into_iter()
-            .find(|(n, _)| *n == "Werkzeugfeld")
-            .expect("Werkzeugfeld")
-            .1;
-        let inside = |t: &str| {
-            shot.texts
-                .iter()
-                .find(|s| s.text == t && tool.contains(s.rect.center()))
-                .unwrap_or_else(|| panic!("{size:?}: „{t}“ fehlt im Werkzeugfeld"))
-                .clone()
-        };
-        let pos = inside(&glyph());
-        let dim = inside(dimension_tool::TOOL);
-        let combo = inside(ToolMode::Linear(dimension_tool::LinearDir::Horizontal).label());
-        assert!(tool.contains_rect(pos.rect), "{size:?}: ragt heraus");
-        assert!(
-            pos.clip.expand(0.5).contains_rect(pos.rect),
-            "{size:?}: abgeschnitten"
-        );
-        assert!(
-            (pos.rect.center().y - dim.rect.center().y).abs() < 6.0,
-            "{size:?}: Zeile 2"
-        );
-        assert!(
-            pos.rect.left() > combo.rect.right(),
-            "{size:?}: rechts vom Auswahlfeld"
-        );
-        // Kein Rollbalken in Ruhe.
-        let band = Rect::from_min_max(pos2(tool.left(), tool.bottom() - 12.0), tool.max);
-        assert!(
-            !shot.fills.iter().any(|(r, f)| band.contains_rect(*r)
-                && r.height() <= 8.0
-                && r.width() >= 20.0
-                && f.a() > 0),
-            "{size:?}: Rollbalken sichtbar"
-        );
+        let mut width = None;
+        for mode in ToolMode::CHOICES {
+            let (mut st, _, _, _, _) = box_front(BIG);
+            // Zuletzt gewählte Maßart (das Auswahlfeld zeigt sie), Werkzeug aus.
+            st.dimension_tool.set_mode(mode);
+            st.dimension_tool.set_mode(ToolMode::Off);
+            let mut a = App::new(size, st);
+            let shot = a.settle();
+            let tool = tool_field(&a.c);
+            let inside = |t: &str| {
+                shot.texts
+                    .iter()
+                    .find(|s| s.text == t && tool.contains(s.rect.center()))
+                    .unwrap_or_else(|| panic!("{size:?} {mode:?}: „{t}“ fehlt im Werkzeugfeld"))
+                    .clone()
+            };
+            // Nichts ragt heraus oder ist abgeschnitten.
+            for t in shot.texts.iter().filter(|t| tool.contains(t.rect.center())) {
+                assert!(
+                    tool.contains_rect(t.rect) && t.clip.expand(0.5).contains_rect(t.rect),
+                    "{size:?} {mode:?}: „{}“ abgeschnitten",
+                    t.text
+                );
+            }
+            let pos = inside(TOOL);
+            let dim = inside(dimension_tool::TOOL);
+            let combo = inside(mode.label());
+            // „Blatt einpassen“ als Symbol neben den Lupen in Zeile 2.
+            let fit_r = inside(&fit);
+            assert!((fit_r.rect.center().y - dim.rect.center().y).abs() < 6.0);
+            assert!(!shot.has("Blatt einpassen"), "nur noch als Symbol");
+            assert!(
+                (pos.rect.center().y - dim.rect.center().y).abs() < 6.0,
+                "{size:?} {mode:?}: Zeile 2"
+            );
+            assert!(
+                pos.rect.left() > combo.rect.right(),
+                "{size:?} {mode:?}: rechts vom Auswahlfeld"
+            );
+            assert!(
+                !scrollbar_in(&shot, tool),
+                "{size:?} {mode:?}: Rollbalken sichtbar"
+            );
+            // Die Zeile ist bei jeder Maßart gleich breit (Auswahlfeld fester Breite).
+            let right = pos.rect.right();
+            match width {
+                None => width = Some(right),
+                Some(w) => assert!((w - right).abs() < 0.5, "{size:?} {mode:?}: {w} vs {right}"),
+            }
+        }
     }
+    // 800 × 600: zu schmal, das Feld rollt (Balken in Ruhe sichtbar).
+    let (st, _, _, _, _) = box_front(BIG);
+    let mut a = App::new(SMALL, st);
+    let shot = a.settle();
+    assert!(
+        scrollbar_in(&shot, tool_field(&a.c)),
+        "kein Rollbalken bei 800 × 600"
+    );
 }
 
 // (i) -----------------------------------------------------------------------------------------
@@ -1197,7 +1227,7 @@ fn blocked_states() {
     let drawing = st.document.drawing(d).unwrap().clone();
     assert_eq!(balloon_tool::blocked(&drawing, false), Some(READ_ONLY_TIP));
     let e0 = st.document.edit_count();
-    h.click_text(&mut st, &glyph());
+    h.click_text(&mut st, TOOL);
     assert!(!st.balloon_tool.is_active());
     st.balloon_tool.set_active(true);
     h.idle(&mut st);
@@ -1218,7 +1248,7 @@ fn blocked_states() {
     let mut h = open(&mut st, d, BIG);
     let drawing = st.document.drawing(d).unwrap().clone();
     assert_eq!(balloon_tool::blocked(&drawing, true), Some(NO_VIEWS_TIP));
-    h.click_text(&mut st, &glyph());
+    h.click_text(&mut st, TOOL);
     assert!(!st.balloon_tool.is_active());
 
     // Stücklistenblatt.
@@ -1230,7 +1260,7 @@ fn blocked_states() {
     let mut h = open(&mut st, p, BIG);
     let drawing = st.document.drawing(p).unwrap().clone();
     assert_eq!(balloon_tool::blocked(&drawing, true), Some(PARTS_SHEET_TIP));
-    h.click_text(&mut st, &glyph());
+    h.click_text(&mut st, TOOL);
     assert!(!st.balloon_tool.is_active());
     st.balloon_tool.set_active(true);
     h.idle(&mut st);
@@ -1248,7 +1278,7 @@ fn blocked_states() {
     let mut h = open(&mut st, d, BIG);
     let drawing = st.document.drawing(d).unwrap().clone();
     assert_eq!(balloon_tool::blocked(&drawing, true), None);
-    h.click_text(&mut st, &glyph());
+    h.click_text(&mut st, TOOL);
     assert!(st.balloon_tool.is_active());
     let p = h.line_mid(iso, "Kante", |l| l.vis == Visibility::Visible);
     let b = place_by_click(&mut st, &mut h, d, p);
@@ -1362,7 +1392,7 @@ fn texts_are_plain_sentences() {
     // Tooltip am Schalter.
     let (mut st, _, _, _, mut h) = box_front(BIG);
     let shot = h.idle(&mut st);
-    let p = shot.find(&glyph()).rect.center();
+    let p = shot.find(TOOL).rect.center();
     let shot = h.hover(&mut st, p);
     assert!(
         shot.has(TOOL) && shot.has(TOOL_TIP),

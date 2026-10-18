@@ -101,8 +101,8 @@ const MAX_TEXT_PX: f64 = 400.0;
 /// Kleinster Betrag des Abstands einer Maßlinie beim Ziehen (Blatt-mm, auf der Seite, auf der
 /// das Ziehen begann).
 pub const MIN_DRAG_OFFSET_MM: f64 = 1.0;
-/// Waagerechter Rand des Symbolknopfs „Position“ im Werkzeugfeld (Pixel).
-const POSITION_PAD_X: f32 = theme::SPACE_1 / 2.0;
+/// Name (Tooltip) des Symbolknopfs „Blatt einpassen“.
+pub const FIT_SHEET: &str = "Blatt einpassen";
 /// Kleinster Radius eines Winkelmaßes beim Ziehen (Blatt-mm).
 const MIN_ANGLE_RADIUS_MM: f64 = 1.0;
 /// Hinweis, wenn es zu den Körpern nichts zu sagen gibt.
@@ -1268,10 +1268,13 @@ fn tool_field(
                 // gewählten Ansicht stehen im Ansichtsfeld rechts; das Feld bleibt so immer gleich
                 // hoch).
                 tool_row(ui, |ui| {
-                    if ui
-                        .add(flat(icons::button(Icon::FitSheet, "Blatt einpassen")))
-                        .clicked()
-                    {
+                    // Symbolknopf (wie die Lupen), damit die Zeile mit dem Werkzeug „Position“
+                    // bei 1100 × 700 ins Feld passt; der Name steht im Tooltip.
+                    let fit = ui.add(flat(icon_only(Icon::FitSheet)));
+                    fit.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, FIT_SHEET)
+                    });
+                    if fit.on_hover_text(FIT_SHEET).clicked() {
                         action = Some(Action::Fit);
                     }
                     if ui
@@ -1329,7 +1332,11 @@ fn tool_field(
                         action = Some(Action::ToolToggle);
                     }
                     ui.add_enabled(free, |ui: &mut egui::Ui| {
+                        // Feste Breite für die längste Maßart: die Zeile ändert ihre Breite nicht
+                        // mit der Wahl.
+                        let width = mode_combo_width(ui);
                         egui::ComboBox::from_id_salt("planora-dimension-tool")
+                            .width(width)
                             .selected_text(tool.choice().label())
                             .show_ui(ui, |ui| {
                                 for m in ToolMode::CHOICES {
@@ -1342,44 +1349,22 @@ fn tool_field(
                             .response
                     })
                     .on_disabled_hover_text(why);
-                    // Werkzeug „Position“ direkt nach dem Maß-Werkzeug, als Symbolknopf (mit Text
-                    // passte die zweite Zeile bei 1100 × 700 nicht mehr ins Feld, in der ersten
-                    // ebenso wenig); der Name steht im Tooltip. Eingeschaltet mit Akzent.
+                    // Werkzeug „Position“ direkt nach dem Maß-Werkzeug (eingeschaltet mit Akzent).
                     let balloon_why = balloon_tool::blocked(drawing, editable);
-                    let balloon_on = state.balloon_tool.is_active();
-                    let button = if balloon_on {
-                        egui::Button::new(icons::text(
-                            Icon::PositionTool,
-                            icons::LABEL_ICON_SIZE,
-                            p.on_accent,
+                    let button = if state.balloon_tool.is_active() {
+                        egui::Button::new((
+                            icons::text(Icon::PositionTool, icons::LABEL_ICON_SIZE, p.on_accent),
+                            egui::RichText::new(balloon_tool::TOOL).color(p.on_accent),
                         ))
                         .fill(p.accent)
                         .selected(true)
                     } else {
-                        icon_only(Icon::PositionTool)
+                        icons::button(Icon::PositionTool, balloon_tool::TOOL)
                     };
-                    let r = ui.scope(|ui| {
-                        // Schmaler Rand: so passt der Knopf noch in die Zeile.
-                        ui.spacing_mut().button_padding.x = POSITION_PAD_X;
-                        ui.add_enabled(balloon_why.is_none(), flat(button))
-                    });
-                    let r = r.inner;
-                    let enabled = balloon_why.is_none();
-                    r.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            enabled,
-                            balloon_tool::TOOL,
-                        )
-                    });
-                    let tip = |ui: &mut egui::Ui, text: &str| {
-                        ui.strong(balloon_tool::TOOL);
-                        ui.label(text);
-                    };
-                    if r.on_hover_ui(|ui| tip(ui, balloon_tool::TOOL_TIP))
-                        .on_disabled_hover_ui(|ui| {
-                            tip(ui, balloon_why.unwrap_or(balloon_tool::TOOL_TIP));
-                        })
+                    if ui
+                        .add_enabled(balloon_why.is_none(), flat(button))
+                        .on_hover_text(balloon_tool::TOOL_TIP)
+                        .on_disabled_hover_text(balloon_why.unwrap_or(balloon_tool::TOOL_TIP))
                         .clicked()
                     {
                         action = Some(Action::BalloonTool);
@@ -1401,6 +1386,24 @@ fn tool_field(
         },
     );
     action
+}
+
+/// Breite des Auswahlfelds der Maßarten: die längste Bezeichnung mit Pfeil und Rand (so bleibt
+/// das Feld bei jeder Wahl gleich breit).
+pub fn mode_combo_width(ui: &egui::Ui) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let widest = ui.fonts_mut(|f| {
+        ToolMode::CHOICES
+            .iter()
+            .map(|m| {
+                f.layout_no_wrap(m.label().to_string(), font.clone(), Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max)
+    });
+    let s = ui.spacing();
+    (widest + s.icon_spacing + s.icon_width + 2.0 * s.button_padding.x).ceil()
 }
 
 /// Ansichtsfeld rechts (Spaltenbreite 250): Name der gewählten Ansicht, Maßstab, Schalter für

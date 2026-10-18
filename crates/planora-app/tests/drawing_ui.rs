@@ -627,12 +627,13 @@ fn drawing_area_shows_all_texts_in_german() {
     h.idle(&mut st);
     let shot = h.idle(&mut st);
     let mut all = shot.text.clone();
+    let fit = icons::glyph(icons::Icon::FitSheet).to_string();
     let too_complex = DrawError::TooComplex(5).to_string();
     for word in [
         "3D-Modell",
         "Zeichnung: Blatt 1",
         "Ansicht hinzufügen",
-        "Blatt einpassen",
+        fit.as_str(),
         "Verdeckte Kanten zeigen",
         "Ansicht löschen",
         "1:1",
@@ -928,7 +929,7 @@ fn panning_and_wheel_zoom_change_only_the_sheet_view() {
     // Lupe −/+ und „Blatt einpassen“.
     h.click_text(&mut st, &zoom_out());
     assert!(h.layout().zoom < l3.zoom);
-    h.click_text(&mut st, "Blatt einpassen");
+    h.click_text(&mut st, &icons::glyph(icons::Icon::FitSheet).to_string());
     let l4 = h.layout();
     assert_eq!((l4.zoom, l4.pan), (1.0, egui::Vec2::ZERO));
     // Eingepasst: das ganze Blatt liegt im Bereich und füllt ihn in einer Richtung fast aus.

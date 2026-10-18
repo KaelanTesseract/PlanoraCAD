@@ -422,7 +422,8 @@ fn no_text_is_clipped_at_1400px() {
         }
     }
     assert_eq!(rows.len(), 2, "zwei Zeilen: {rows:?}");
-    for must in ["3D-Modell", "Blatt einpassen", drawing_view::SUGGEST] {
+    let fit = planora_app::icons::glyph(icons::Icon::FitSheet).to_string();
+    for must in ["3D-Modell", fit.as_str(), drawing_view::SUGGEST] {
         assert!(
             bar.contains_rect(s.text(must).rect),
             "„{must}“ im Werkzeugfeld"
