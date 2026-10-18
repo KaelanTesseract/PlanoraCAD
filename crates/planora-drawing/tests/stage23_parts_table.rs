@@ -7,9 +7,11 @@ use planora_drawing::model::DrawingKind;
 use planora_drawing::parts::*;
 use planora_drawing::sheet_frame::*;
 use planora_drawing::sheet_info::{
-    FieldValue, ProjectInfo, SheetContext, SheetInfo, Stamp, resolve_texts,
+    FieldValue, ProjectInfo, SheetContext, SheetInfo, Stamp, TitleTexts, resolve_texts,
 };
-use planora_drawing::sheet_marks::{parts_cell_is_cut, parts_table_marks, sheet_text_width};
+use planora_drawing::sheet_marks::{
+    parts_cell_is_cut, parts_table_marks, sheet_frame, sheet_text_width,
+};
 use planora_drawing::{Drawing, DrawingId, Paper, Projection, Sheet, SheetPen, TitleField};
 use planora_math::DVec2;
 use std::collections::BTreeMap;
@@ -103,29 +105,42 @@ fn resolve_defaults_and_overrides() {
     assert!(RowOverride::default().is_auto());
     assert!(!ov[&k(1, 0)].is_auto());
 
-    let name = |s: String| RowOverride {
-        name: FieldValue::Text(s),
-        ..RowOverride::default()
+    // Jede Spalte mit eigener Grenze: genau die Grenze geht, eins mehr nicht (in Zeichen,
+    // nicht Bytes); Steuerzeichen nie.
+    let one = |col: usize, t: String| {
+        let mut o = RowOverride::default();
+        let v = FieldValue::Text(t);
+        match col {
+            0 => o.name = v,
+            1 => o.qty = v,
+            2 => o.material = v,
+            _ => o.note = v,
+        }
+        o
     };
-    assert!(validate_override(&name("Ä".repeat(61))).is_err());
-    assert!(validate_override(&name("Ä".repeat(60))).is_ok());
-    let note = |s: String| RowOverride {
-        note: FieldValue::Text(s),
-        ..RowOverride::default()
-    };
-    assert!(validate_override(&note("x".repeat(81))).is_err());
-    assert!(validate_override(&note("x".repeat(80))).is_ok());
-    assert!(validate_override(&name("a\nb".into())).is_err());
-    let qty = RowOverride {
-        qty: FieldValue::Text("x".repeat(61)),
-        ..RowOverride::default()
-    };
-    assert!(validate_override(&qty).is_err());
-    let mat = RowOverride {
-        material: FieldValue::Text("x".repeat(61)),
-        ..RowOverride::default()
-    };
-    assert!(validate_override(&mat).is_err());
+    let limits = [
+        MAX_PARTS_NAME_CHARS,
+        MAX_PARTS_QTY_CHARS,
+        MAX_PARTS_MATERIAL_CHARS,
+        MAX_PARTS_NOTE_CHARS,
+    ];
+    assert_eq!(limits, [60, 60, 60, 80]);
+    for (col, max) in limits.into_iter().enumerate() {
+        assert!(
+            validate_override(&one(col, "Ä".repeat(max))).is_ok(),
+            "{col}"
+        );
+        assert!(
+            validate_override(&one(col, "Ä".repeat(max + 1))).is_err(),
+            "{col}"
+        );
+        for ctrl in ["a\nb", "a\tb", "\u{7}"] {
+            assert!(
+                validate_override(&one(col, ctrl.into())).is_err(),
+                "{col} {ctrl:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -227,6 +242,34 @@ fn nothing_overlaps_and_free_never_empty() {
                             l.free
                         );
                         assert!(inside(l.free, l.frame), "{ctx}");
+                    }
+                }
+            }
+            // Stücklistenblatt: kein Hinweisfeld, Änderungstabelle immer reserviert, Tabelle
+            // zwischen Schriftfeld und Änderungstabelle über die volle Breite; der freie
+            // Bereich ist die Tabelle selbst (keine Ansichten auf diesem Blatt).
+            for rev in 0..=3 {
+                for notes in 0..=6 {
+                    let s = sh(paper, landscape);
+                    let l = sheet_layout_with(s, rev, notes, PartsSpace::ListPage);
+                    let ctx = format!("Liste {paper:?} quer={landscape} rev={rev} notes={notes}");
+                    let t = l.parts.expect("Tabelle");
+                    assert_eq!(l.notes, None, "{ctx}");
+                    assert_eq!(
+                        l.revisions,
+                        sheet_layout(s, REV_VISIBLE, 0).revisions,
+                        "{ctx}"
+                    );
+                    assert_eq!(l.free, t, "{ctx}");
+                    assert!(t.1.x - t.0.x > 0.0 && t.1.y - t.0.y > 0.0, "{ctx}");
+                    assert!((t.0.x - l.frame.0.x).abs() < 1e-9, "{ctx}");
+                    assert!((t.1.x - l.frame.1.x).abs() < 1e-9, "{ctx}");
+                    let boxes = [t, l.title, l.revisions];
+                    for (i, a) in boxes.iter().enumerate() {
+                        assert!(inside(*a, l.frame), "{ctx}: {a:?} außerhalb");
+                        for b in &boxes[i + 1..] {
+                            assert!(!overlaps(*a, *b), "{ctx}: {a:?} / {b:?}");
+                        }
                     }
                 }
             }
@@ -446,4 +489,231 @@ fn doc_type_of_parts_sheet() {
     assert_eq!(t.get(TitleField::DocType), "Fertigungszeichnung");
     assert_eq!(parts_sheet_name(1), "Stückliste");
     assert_eq!(parts_sheet_name(3), "Stückliste (3)");
+}
+
+#[test]
+fn table_marks_scale_with_paper() {
+    let rows = vec![
+        cells(["1", "Bolzen", "2", "–", ""]),
+        cells(["2", "Platte", "1", "–", ""]),
+        cells(["3", "Mutter", "4", "–", ""]),
+    ];
+    // (Blatt, f, x „Pos.“, Grundlinie Kopf, Höhe, Grundlinie Pos. 1, x „Benennung“)
+    let cases = [
+        (
+            sh(Paper::A4, false),
+            0.707_142_857_142_857_2,
+            76.35,
+            47.908_928_571_428_57,
+            2.475,
+            52.858_928_571_428_57,
+            84.835_714_285_714_26,
+        ),
+        (
+            sh(Paper::A0, true),
+            2.830_952_380_952_381,
+            653.95,
+            191.797_023_809_523_84,
+            9.908_333_333_333_333,
+            211.613_690_476_190_5,
+            687.921_428_571_428_5,
+        ),
+    ];
+    for (s, f, x_pos, base_head, h, base_1, x_name) in cases {
+        let l = sheet_layout_with(s, 0, 0, PartsSpace::OnSheet { rows: 3 });
+        assert!((l.scale - f).abs() < 1e-12);
+        let ts = texts(&parts_table_marks(&l, &rows, 1.0));
+        let get = |t: &str| ts.iter().find(|x| x.2 == t).cloned().expect(t);
+        let (p, ht, _) = get("Pos.");
+        assert!((p.x - x_pos).abs() < 1e-9, "{s:?} x {}", p.x);
+        assert!((p.y - base_head).abs() < 1e-9, "{s:?} y {}", p.y);
+        assert!((ht - h).abs() < 1e-9, "{s:?} h {ht}");
+        let (p, ht, _) = get("1");
+        assert!((p.x - x_pos).abs() < 1e-9);
+        assert!((p.y - base_1).abs() < 1e-9, "{s:?} y1 {}", p.y);
+        assert!((ht - h).abs() < 1e-9);
+        let (p, _, _) = get("Benennung");
+        assert!((p.x - x_name).abs() < 1e-9, "{s:?} xn {}", p.x);
+        assert!((p.y - base_head).abs() < 1e-9);
+    }
+}
+
+fn numbered(n: usize) -> Vec<PartsCells> {
+    (1..=n)
+        .map(|i| {
+            [
+                i.to_string(),
+                "Teil".into(),
+                "1".into(),
+                "–".into(),
+                String::new(),
+            ]
+        })
+        .collect()
+}
+
+#[track_caller]
+fn assert_marks_inside(marks: &[Mark], bounds: Box2) {
+    for m in marks {
+        match m {
+            Mark::Line { a, b, .. } => {
+                assert!(
+                    inside((*a, *a), bounds) && inside((*b, *b), bounds),
+                    "{a:?} {b:?} / {bounds:?}"
+                )
+            }
+            Mark::Text {
+                pos, height, text, ..
+            } => {
+                let hi = DVec2::new(pos.x + sheet_text_width(text, *height), pos.y + height);
+                assert!(inside((*pos, hi), bounds), "{text} / {bounds:?}");
+            }
+            _ => panic!("unerwartete Markierung {m:?}"),
+        }
+    }
+}
+
+#[test]
+fn rows_beyond_capacity_are_not_drawn() {
+    // Zeichnungsblatt: höchstens 10 Zeilen.
+    let l = sheet_layout_with(sh(Paper::A3, true), 0, 0, PartsSpace::OnSheet { rows: 10 });
+    let marks = parts_table_marks(&l, &numbered(12), 1.0);
+    let ts = texts(&marks);
+    let pos: Vec<&str> = ts
+        .iter()
+        .filter(|t| (t.0.x - 231.0).abs() < 1e-9)
+        .map(|t| t.2.as_str())
+        .collect();
+    let want: Vec<String> = std::iter::once("Pos.".to_string())
+        .chain((1..=10).map(|i| i.to_string()))
+        .collect();
+    assert_eq!(pos, want);
+    assert_marks_inside(&marks, l.parts.unwrap());
+    // Stücklistenblatt: höchstens so viele, wie hineinpassen.
+    for s in [sh(Paper::A3, false), sh(Paper::A4, true)] {
+        let l = sheet_layout_with(s, 0, 0, PartsSpace::ListPage);
+        let cap = parts_rows_per_page(s);
+        let marks = parts_table_marks(&l, &numbered(cap + 6), 1.0);
+        let x_pos = l.parts.unwrap().0.x + l.mm(1.0);
+        let n_pos = texts(&marks)
+            .iter()
+            .filter(|t| (t.0.x - x_pos).abs() < 1e-9)
+            .count();
+        assert_eq!(n_pos, cap + 1, "{s:?}");
+        assert_marks_inside(&marks, l.parts.unwrap());
+    }
+}
+
+/// Waagerechte Linien (y, x0, x1) und senkrechte (x, y0, y1), sortiert.
+#[allow(clippy::type_complexity)]
+fn split_lines(marks: &[Mark]) -> (Vec<(f64, f64, f64)>, Vec<(f64, f64, f64)>) {
+    let mut hz = Vec::new();
+    let mut vt = Vec::new();
+    for (a, b, _) in lines(marks) {
+        if (a.y - b.y).abs() < 1e-12 {
+            hz.push((a.y, a.x.min(b.x), a.x.max(b.x)));
+        } else {
+            assert!((a.x - b.x).abs() < 1e-12);
+            vt.push((a.x, a.y.min(b.y), a.y.max(b.y)));
+        }
+    }
+    hz.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    vt.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    (hz, vt)
+}
+
+/// Prüft genau: waagerechte Linien bei `ys` (aufsteigend) über die volle Breite, senkrechte bei
+/// `xs` vom untersten bis zum obersten `ys`.
+#[track_caller]
+fn assert_grid(marks: &[Mark], x0: f64, x1: f64, ys: &[f64], xs: &[f64]) {
+    let (hz, vt) = split_lines(marks);
+    assert_eq!(hz.len(), ys.len(), "{hz:?}");
+    for (h, y) in hz.iter().zip(ys) {
+        assert!(
+            (h.0 - y).abs() < 1e-9 && (h.1 - x0).abs() < 1e-9 && (h.2 - x1).abs() < 1e-9,
+            "{h:?} / {y}"
+        );
+    }
+    let (y0, y1) = (ys[0], ys[ys.len() - 1]);
+    assert_eq!(vt.len(), xs.len(), "{vt:?}");
+    for (v, x) in vt.iter().zip(xs) {
+        assert!(
+            (v.0 - x).abs() < 1e-9 && (v.1 - y0).abs() < 1e-9 && (v.2 - y1).abs() < 1e-9,
+            "{v:?} / {x}"
+        );
+    }
+}
+
+#[test]
+fn only_header_and_filled_rows_are_drawn() {
+    // Stücklistenblatt A3 hoch: Tabelle (20,66)–(287,382), Kopf oben.
+    let l = sheet_layout_with(sh(Paper::A3, false), 0, 0, PartsSpace::ListPage);
+    let mut xs = vec![20.0];
+    for w in l.parts_columns() {
+        xs.push(xs[xs.len() - 1] + w);
+    }
+    for n in [0usize, 3, 44] {
+        let marks = parts_table_marks(&l, &numbered(n), 1.0);
+        let ys: Vec<f64> = (0..=n + 1).rev().map(|k| 382.0 - 7.0 * k as f64).collect();
+        assert_grid(&marks, 20.0, 287.0, &ys, &xs);
+    }
+    // Zeichnungsblatt mit Platz für 10, aber 3 Zeilen: Umriss nur um Kopf und 3 Zeilen.
+    let l = sheet_layout_with(sh(Paper::A3, true), 0, 0, PartsSpace::OnSheet { rows: 10 });
+    let xs = [230.0, 242.0, 320.0, 335.0, 380.0, 410.0];
+    let marks = parts_table_marks(&l, &numbered(3), 1.0);
+    assert_grid(&marks, 230.0, 410.0, &[66.0, 73.0, 80.0, 87.0, 94.0], &xs);
+    let marks = parts_table_marks(&l, &[], 1.0);
+    assert_grid(&marks, 230.0, 410.0, &[66.0, 73.0], &xs);
+}
+
+#[test]
+fn sheet_frame_contains_the_table() {
+    let with_parts = TitleTexts {
+        fields: BTreeMap::new(),
+        revisions: Vec::new(),
+        notes: Vec::new(),
+        parts: numbered(3),
+    };
+    let l = sheet_layout_with(sh(Paper::A3, true), 0, 0, PartsSpace::OnSheet { rows: 3 });
+    let frame = sheet_frame(&l, &with_parts, Projection::First);
+    let table = parts_table_marks(&l, &with_parts.parts, 1.0);
+    assert!(!table.is_empty());
+    for m in &table {
+        assert!(frame.marks.contains(m), "{m:?}");
+    }
+    let l = sheet_layout(sh(Paper::A3, true), 0, 0);
+    let frame = sheet_frame(&l, &with_parts, Projection::First);
+    assert!(
+        !frame
+            .marks
+            .iter()
+            // „Werkstoff“ steht auch im Schriftfeld; nur Texte, die allein die Tabelle hat.
+            .any(|m| matches!(m, Mark::Text { text, .. }
+                if ["Pos.", "Benennung", "Menge", "Bemerkung", "Teil"].contains(&text.as_str())))
+    );
+}
+
+#[test]
+fn page_count_is_capped_at_200_rows() {
+    assert_eq!(pages_needed(200, 25), 8);
+    assert_eq!(pages_needed(201, 25), 8);
+    assert_eq!(pages_needed(1000, 25), 8);
+    assert_eq!(pages_needed(200, 1), 200);
+    assert_eq!(pages_needed(201, 1), 200);
+}
+
+#[test]
+fn cut_check_keeps_the_cell_margin() {
+    // Spalte Pos. auf A3: 12 breit, Text darf 10 (12 − 2·1). 6 × „W“ in kleinster Höhe 2,1:
+    // 11,97 – passt in 12, nicht in 10.
+    let l = sheet_layout_with(sh(Paper::A3, true), 0, 0, PartsSpace::OnSheet { rows: 3 });
+    assert!(parts_cell_is_cut(0, "WWWWWW", &l));
+    assert!(!parts_cell_is_cut(0, "WWWWW", &l));
+}
+
+#[test]
+fn list_page_free_area_is_the_table() {
+    let l = sheet_layout_with(sh(Paper::A3, false), 2, 4, PartsSpace::ListPage);
+    assert_box(l.free, bx(20.0, 66.0, 287.0, 382.0), 1e-9);
+    assert_eq!(Some(l.free), l.parts);
 }

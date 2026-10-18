@@ -1065,3 +1065,8 @@ Proben liegen in `D:\Testumgebung\zeichnung-proben\blatt` (Dateinamen `<Größe>
 10. **Projektionssymbol:** Methode 1 (Kegelstumpf links, Kreise rechts) und Methode 3 (Kreise links, Kegelstumpf rechts) im Schriftfeld ansehen und mit der Norm vergleichen.
 11. **Zentriermarken und Raster:** Marken (auf A3 0,5 mm, 5 mm hinter dem Rahmen, auf anderen Formaten mal Faktor) gegen die Norm ansehen; Raster auf jedem Format 8 × 6 Felder (hoch 6 × 8).
 12. **Werkzeugfeld:** bei 1100 × 700 kein Rollbalken, bei 800 × 600 rollt es.
+
+## Teilprojekt 3c-2 – Stückliste und Positionsnummern
+
+### Grenzen
+- **Freier Bereich auf Stücklistenblättern:** Auf Stücklistenblättern stehen keine Ansichten; `SheetLayout.free` ist dort die Tabellenfläche (`free == parts`) und darf nicht für die Anordnung oder den Maßstabsvorschlag benutzt werden. Die 3c-1-Regel (F8) ergäbe auf diesen Blättern einen leeren Bereich.

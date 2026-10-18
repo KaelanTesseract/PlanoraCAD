@@ -330,7 +330,8 @@ impl SheetLayout {
     pub fn parts_columns(&self) -> [f64; 5] {
         match (self.parts_space, self.parts) {
             (PartsSpace::ListPage, Some((lo, hi))) => {
-                PARTS_COLUMNS.map(|w| w * (hi.x - lo.x) / TITLE_W)
+                let total: f64 = PARTS_COLUMNS.iter().sum();
+                PARTS_COLUMNS.map(|w| w * (hi.x - lo.x) / total)
             }
             _ => PARTS_COLUMNS.map(|w| self.mm(w)),
         }
