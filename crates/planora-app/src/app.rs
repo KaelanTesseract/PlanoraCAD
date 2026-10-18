@@ -716,6 +716,11 @@ impl eframe::App for PlanoraApp {
             tab.feature_dialog = FeatureDialog::new(&tab.state, id);
         }
         drop_dialogs_in_sketch_mode(&tab.state, &mut tab.dialog, &mut tab.boolean_dialog);
+        // In einer alten Version lässt sich nichts ändern: das Fenster „Blattangaben“ (mit dem
+        // Knopf für das Stücklistenblatt) gibt es dort nicht.
+        if tab.read_only {
+            tab.state.sheet_dialog = None;
+        }
         if tab.state.sketch_session.is_some() {
             tab.feature_dialog = None;
             tab.blend_dialog = None;

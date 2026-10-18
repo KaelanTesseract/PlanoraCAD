@@ -1,8 +1,9 @@
-//! Fenster „Blattangaben“ (Zeichnungsblatt, Aufgabe 6): die Angaben des Schriftfelds in drei
-//! Abschnitten – „Projekt“ (gelten für alle Blätter), „Dieses Blatt“ und „Änderungen“. Das Fenster
-//! arbeitet auf Kopien; erst „Übernehmen“ schreibt ins Dokument (ein Schritt), „Abbrechen“ und das
-//! Schließen-Symbol verwerfen. Fehlen einer alten Zeichnung die Angaben, bekommt sie Satz und
-//! Projektangaben erst mit „Übernehmen“.
+//! Fenster „Blattangaben“ (Zeichnungsblatt, Aufgabe 6): die Angaben des Schriftfelds in vier
+//! Abschnitten – „Projekt“ (gelten für alle Blätter), „Dieses Blatt“, „Änderungen“ und
+//! „Stückliste“ ([`crate::parts_section`]). Das Fenster arbeitet auf Kopien; erst „Übernehmen“
+//! schreibt ins Dokument, „Abbrechen“ und das Schließen-Symbol verwerfen. Fehlen einer alten
+//! Zeichnung die Angaben, bekommt sie Satz und Projektangaben erst mit „Übernehmen“. Ein
+//! Stücklistenblatt hat kein Hinweisfeld: dort fehlt der Schalter für eigene Hinweise.
 //!
 //! Jedes Feld ist „automatisch“, solange es leer ist: Der automatische Wert steht als Hinweistext
 //! im leeren Feld, „Zurücksetzen“ leert ein eigenes Feld wieder.
@@ -12,17 +13,20 @@ use crate::dialog::{Dialog, DialogSize};
 use crate::drawing_view;
 use crate::icons::{self, Icon};
 use crate::mesh_body::warning_color;
+use crate::parts_section::{self, PartsDraft};
 use crate::state::AppState;
 use crate::theme;
+use planora_drawing::parts::{MAX_OVERRIDES, resolve_parts, validate_override};
 use planora_drawing::sheet_frame::TitleField;
 use planora_drawing::sheet_info::{
-    DEFAULT_TOLERANCE, FieldValue, MAX_FIELD_CHARS, MAX_NOTE_CHARS, MAX_NOTES, MAX_REVISION_CHARS,
-    MAX_TITLE_CHARS, NotesValue, ProjectInfo, SheetContext, SheetInfo, Stamp, TOO_MANY_REVISIONS,
-    TitleTexts, default_notes, main_scale, resolve_texts, revision_letter, validate_project_info,
-    validate_sheet_info,
+    DASH, DEFAULT_TOLERANCE, FieldValue, MAX_FIELD_CHARS, MAX_NOTE_CHARS, MAX_NOTES,
+    MAX_REVISION_CHARS, MAX_TITLE_CHARS, NotesValue, ProjectInfo, SheetContext, SheetInfo, Stamp,
+    TOO_MANY_REVISIONS, TitleTexts, default_notes, main_scale, resolve_texts, revision_letter,
+    validate_project_info, validate_sheet_info,
 };
 use planora_drawing::sheet_marks::{field_is_cut, note_is_cut, revision_cell_is_cut};
-use planora_drawing::{Drawing, DrawingId};
+use planora_drawing::{Drawing, DrawingId, DrawingKind};
+use std::collections::BTreeMap;
 
 /// Titel des Fensters.
 pub const TITLE: &str = "Blattangaben";
@@ -90,6 +94,8 @@ pub struct SheetInfoDialog {
     pub project: ProjectInfo,
     /// Kopie der Blattangaben (bei fehlenden mit den Vorgaben).
     pub sheet: SheetInfo,
+    /// Kopie der eigenen Texte der Stückliste und Papierwahl für das Stücklistenblatt.
+    pub parts: PartsDraft,
     /// Meldung (zu viele Änderungen, Fehler beim Übernehmen).
     pub message: Option<String>,
     pub last_rect: Option<egui::Rect>,
@@ -125,15 +131,26 @@ impl SheetInfoDialog {
             drawing: id,
             project,
             sheet,
+            parts: PartsDraft::new(state),
             message: None,
             last_rect: None,
         }
     }
 
-    /// Schreibt Projekt- und Blattangaben ins Dokument. Gleiche Werte ändern nichts.
+    /// Schreibt Projekt- und Blattangaben ins Dokument, danach die geänderten eigenen Texte der
+    /// Stückliste (je Zeile). Gleiche Werte ändern nichts. Alles wird vorher geprüft, damit ein
+    /// Fehler nichts halb schreibt.
     pub fn apply(&self, state: &mut AppState) -> Result<(), String> {
         validate_project_info(&self.project)?;
         validate_sheet_info(&self.sheet)?;
+        for o in self.parts.overrides.values() {
+            validate_override(o).map_err(|e| format!("Stückliste: {e}"))?;
+        }
+        if self.parts.overrides.len() > MAX_OVERRIDES {
+            return Err(format!(
+                "Die Stückliste darf höchstens {MAX_OVERRIDES} eigene Zeilentexte haben"
+            ));
+        }
         if state.document.drawing(self.drawing).is_none() {
             return Err(GONE.into());
         }
@@ -144,7 +161,18 @@ impl SheetInfoDialog {
         state
             .document
             .set_sheet_info(self.drawing, self.sheet.clone())
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        // Erst die entfernten Einträge, dann die übrigen: so wird die Grenze nie kurz
+        // überschritten.
+        let mut changes = self.parts.changes(state.document.parts_overrides());
+        changes.sort_by_key(|(_, o)| !o.is_auto());
+        for (key, o) in changes {
+            state
+                .document
+                .set_parts_override(key, o)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     /// Hängt eine Änderung mit dem Datum von heute und dem Namen `creator` an; ab der 24. gibt
@@ -193,8 +221,21 @@ impl SheetInfoDialog {
         // Maßstab der ersten Ansicht (Grundansicht).
         let main = main_scale(&drawing);
         let (auto, actual) = self.texts(&drawing, &sheet_ctx, main);
-        // Blattgeometrie dieses Entwurfs: Zellbreiten und Hinweisfeld für die Warnungen.
-        let layout = drawing_view::layout_from_texts(&drawing, &actual);
+        // Blattgeometrie dieses Entwurfs (mit seinem Schalter der Stückliste): Zellbreiten,
+        // Hinweisfeld und Stückliste für die Warnungen.
+        let mut own_drawing = drawing.clone();
+        own_drawing.info = Some(self.sheet.clone());
+        let parts_space = drawing_view::parts_space(state, &own_drawing, false);
+        let layout = drawing_view::layout_from_texts(&drawing, &actual, parts_space);
+        let parts_rows = state.document.parts_rows();
+        let parts_auto = resolve_parts(
+            &parts_rows,
+            &BTreeMap::new(),
+            self.project.material.resolve(DASH),
+        );
+        let has_sheets = !state.document.parts_sheets().is_empty();
+        let kind = drawing.kind;
+        let parts_sheet = matches!(kind, DrawingKind::PartsList { .. });
         let note_cut = |s: &str| note_is_cut(s, &layout);
         let first_visible = actual
             .revisions
@@ -211,10 +252,12 @@ impl SheetInfoDialog {
             .resolve(DEFAULT_TOLERANCE)
             .to_string();
         let (mut open, mut close, mut apply, mut add_rev) = (true, false, false, false);
+        let mut parts_button = false;
         let mut delete_rev: Option<usize> = None;
         let Self {
             project,
             sheet,
+            parts,
             message,
             last_rect,
             ..
@@ -370,22 +413,25 @@ impl SheetInfoDialog {
                             field_row(ui, dark, label, value, auto.get(f), max, warn(f));
                         }
                     });
-                ui.add_space(theme::SPACE_2);
-                let was_own = matches!(sheet.notes, NotesValue::Lines(_));
-                let mut own = was_own;
-                ui.add(theme::Toggle::new(
-                    &mut own,
-                    "Eigene Hinweise für dieses Blatt",
-                ));
-                if own != was_own {
-                    sheet.notes = if own {
-                        NotesValue::Lines(project_notes.clone())
-                    } else {
-                        NotesValue::Auto
-                    };
-                }
-                if let NotesValue::Lines(lines) = &mut sheet.notes {
-                    lines_editor(ui, dark, "sheet-note", lines, &note_cut);
+                // Ein Stücklistenblatt hat kein Hinweisfeld.
+                if !parts_sheet {
+                    ui.add_space(theme::SPACE_2);
+                    let was_own = matches!(sheet.notes, NotesValue::Lines(_));
+                    let mut own = was_own;
+                    ui.add(theme::Toggle::new(
+                        &mut own,
+                        "Eigene Hinweise für dieses Blatt",
+                    ));
+                    if own != was_own {
+                        sheet.notes = if own {
+                            NotesValue::Lines(project_notes.clone())
+                        } else {
+                            NotesValue::Auto
+                        };
+                    }
+                    if let NotesValue::Lines(lines) = &mut sheet.notes {
+                        lines_editor(ui, dark, "sheet-note", lines, &note_cut);
+                    }
                 }
 
                 // ---- Änderungen ----
@@ -518,6 +564,20 @@ impl SheetInfoDialog {
                     ui.colored_label(error_color(dark), TOO_MANY_REVISIONS);
                 }
 
+                // ---- Stückliste ----
+                ui.add_space(theme::SPACE_3);
+                parts_button = parts_section::show_section(
+                    ui,
+                    dark,
+                    kind,
+                    sheet,
+                    parts,
+                    &parts_rows,
+                    &parts_auto,
+                    &layout,
+                    has_sheets,
+                );
+
                 // ---- Knöpfe ----
                 ui.add_space(theme::SPACE_2);
                 if let Some(m) = message.as_deref().filter(|_| !too_many) {
@@ -542,6 +602,13 @@ impl SheetInfoDialog {
         }
         if add_rev {
             self.add_revision(&stamp, &creator);
+        }
+        if parts_button {
+            // Handelt sofort; das Fenster bleibt für sein Blatt offen.
+            match parts_section::create_or_open(state, self.parts.sheet()) {
+                Ok(_) => self.message = None,
+                Err(e) => self.message = Some(e),
+            }
         }
         if apply {
             match self.apply(state) {
@@ -575,9 +642,10 @@ fn text_width(ui: &egui::Ui, text: &str, style: egui::TextStyle) -> f32 {
 }
 
 /// Gemeinsame Breite der Bezeichnungsspalte aller Abschnitte: die längste Bezeichnung.
-fn label_column_width(ui: &egui::Ui) -> f32 {
+pub(crate) fn label_column_width(ui: &egui::Ui) -> f32 {
     LABELS
         .iter()
+        .chain(parts_section::LABELS.iter())
         .map(|l| text_width(ui, l, egui::TextStyle::Body))
         .fold(0.0, f32::max)
 }
@@ -619,6 +687,31 @@ fn field_row(
     max: usize,
     warn: Option<(&'static str, bool)>,
 ) {
+    field_row_with(
+        ui,
+        dark,
+        ("planora-sheet-field", label),
+        label,
+        value,
+        auto,
+        max,
+        warn,
+    );
+}
+
+/// Wie [`field_row`] mit eigener Kennung des Textfelds `id` (für gleich benannte Felder, etwa
+/// die Spalten mehrerer Stücklistenzeilen).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn field_row_with(
+    ui: &mut egui::Ui,
+    dark: bool,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    value: &mut FieldValue,
+    auto: &str,
+    max: usize,
+    warn: Option<(&'static str, bool)>,
+) {
     ui.label(label);
     let mut text = match value {
         FieldValue::Text(t) => t.clone(),
@@ -630,7 +723,7 @@ fn field_row(
             theme::text_field(
                 ui,
                 egui::TextEdit::singleline(&mut text)
-                    .id_salt(("planora-sheet-field", label))
+                    .id_salt(id)
                     .hint_text(auto)
                     .desired_width(FIELD_W)
                     .char_limit(max),

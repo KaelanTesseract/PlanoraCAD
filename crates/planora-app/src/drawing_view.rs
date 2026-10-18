@@ -42,16 +42,19 @@ use planora_drawing::annotate::{
 };
 use planora_drawing::dimension::{ArcSpan, DimId, DimSpec};
 use planora_drawing::out2d::Out2d;
+use planora_drawing::parts::{PARTS_ON_SHEET, page_rows};
 use planora_drawing::sheet::{DimMarks, SheetModel, build_sheet_with, view_transform};
-use planora_drawing::sheet_frame::{REV_VISIBLE, SheetLayout, sheet_layout, sheet_scale};
+use planora_drawing::sheet_frame::{
+    PartsSpace, REV_VISIBLE, SheetLayout, parts_rows_per_page, sheet_layout_with, sheet_scale,
+};
 use planora_drawing::sheet_info::{
     ProjectInfo, SheetContext, TitleTexts, main_scale, resolve_texts,
 };
 use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{
-    Anchor, Drawing, DrawingId, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewLines,
-    ViewSpec, Visibility, align_dir, view_extent,
+    Anchor, Drawing, DrawingId, DrawingKind, PartsCells, Placement, Projection, Scale, Sheet,
+    ViewId, ViewKind, ViewLines, ViewSpec, Visibility, align_dir, view_extent,
 };
 use planora_math::DVec2;
 use std::collections::BTreeMap;
@@ -114,6 +117,8 @@ pub const LOST_TIP: &str = "Das Maß hat seinen Bezug verloren.";
 pub const PARENT_MISSING: &str = "Die Ausgangsansicht lässt sich nicht zeichnen.";
 /// Meldung ohne geöffnete Zeichnung.
 const NO_DRAWING: &str = "Es ist keine Zeichnung geöffnet.";
+/// Hinweis am gesperrten „Ansicht hinzufügen“ eines Stücklistenblatts.
+pub const NO_VIEWS_ON_PARTS_SHEET: &str = "Auf dem Stücklistenblatt gibt es keine Ansichten.";
 
 /// Was an der Stelle einer Ansicht zu sehen ist.
 #[derive(Clone, Debug, PartialEq)]
@@ -534,6 +539,9 @@ struct SheetCache {
     /// Angaben, die in die Texte des Schriftfelds eingehen.
     project: Option<ProjectInfo>,
     context: Option<SheetContext>,
+    /// Zeilen der Stückliste auf diesem Blatt (sie hängen an Körpern, Namen und eigenen Texten,
+    /// nicht an der Zeichnung).
+    parts: Vec<PartsCells>,
     /// Stand der Linien: bleibt gleich, solange sich nur Maße oder Mittellinien ändern (die
     /// Linienzüge werden dann nicht neu zerlegt).
     lines_gen: u64,
@@ -577,27 +585,76 @@ pub fn context_or_single(state: &AppState, id: DrawingId) -> SheetContext {
     })
 }
 
-/// Die Texte des Schriftfelds der Zeichnung (Maßstab: der der ersten Ansicht).
+/// Platz der Stückliste auf dem Blatt der Zeichnung: auf einem Stücklistenblatt die ganze
+/// Tabelle ([`PartsSpace::ListPage`]); auf einer Zeichnung mit Ansichten und eingeschaltetem
+/// Schalter „Stückliste auf diesem Blatt“ die Tabelle über dem Schriftfeld mit den tatsächlichen
+/// Zeilen (`placement = false`, so wird gezeichnet) bzw. immer mit [`PARTS_ON_SHEET`] Zeilen
+/// (`placement = true`, für Anordnung und Maßstabsvorschlag: eine später längere Liste überdeckt
+/// keine automatisch gelegte Ansicht); sonst keine.
+///
+/// Der Schalter eines Stücklistenblatts zählt nicht (eine Datei kann ihn gesetzt haben; das
+/// Blatt ist ohnehin ganz Stückliste).
+pub fn parts_space(state: &AppState, drawing: &Drawing, placement: bool) -> PartsSpace {
+    match drawing.kind {
+        DrawingKind::PartsList { .. } => PartsSpace::ListPage,
+        DrawingKind::Views if drawing.info.as_ref().is_some_and(|i| i.parts_list) => {
+            let rows = if placement {
+                PARTS_ON_SHEET
+            } else {
+                state.document.parts_rows().len()
+            };
+            PartsSpace::OnSheet { rows }
+        }
+        DrawingKind::Views => PartsSpace::None,
+    }
+}
+
+/// Die Zeilen der Stückliste, die auf dem Blatt der Zeichnung stehen: auf dem Zeichnungsblatt
+/// die ersten [`PARTS_ON_SHEET`], auf einem Stücklistenblatt die seiner Seite, sonst keine.
+fn parts_on(state: &AppState, drawing: &Drawing) -> Vec<PartsCells> {
+    match parts_space(state, drawing, false) {
+        PartsSpace::None => Vec::new(),
+        PartsSpace::OnSheet { .. } => {
+            let mut cells = state.document.parts_cells();
+            cells.truncate(PARTS_ON_SHEET);
+            cells
+        }
+        PartsSpace::ListPage => {
+            let page = match drawing.kind {
+                DrawingKind::PartsList { page } => page,
+                DrawingKind::Views => 1,
+            };
+            let cells = state.document.parts_cells();
+            page_rows(&cells, page, parts_rows_per_page(drawing.sheet)).to_vec()
+        }
+    }
+}
+
+/// Die Texte des Schriftfelds der Zeichnung (Maßstab: der der ersten Ansicht) mit den Zeilen der
+/// Stückliste dieses Blatts.
 pub fn sheet_texts(state: &AppState, drawing: &Drawing) -> TitleTexts {
-    resolve_texts(
+    let mut texts = resolve_texts(
         drawing,
         state.document.project_info(),
         &context_or_single(state, drawing.id),
         main_scale(drawing),
-    )
+    );
+    texts.parts = parts_on(state, drawing);
+    texts
 }
 
 /// Die Blattgeometrie zu den Texten: die Zeilenzahlen von Änderungstabelle und Hinweisfeld
-/// folgen ihnen (der Maßstab beeinflusst sie nicht).
-pub fn layout_from_texts(drawing: &Drawing, texts: &TitleTexts) -> SheetLayout {
-    sheet_layout(
+/// folgen ihnen (der Maßstab beeinflusst sie nicht), der Platz der Stückliste `parts`.
+pub fn layout_from_texts(drawing: &Drawing, texts: &TitleTexts, parts: PartsSpace) -> SheetLayout {
+    sheet_layout_with(
         drawing.sheet,
         texts.visible_revisions().len(),
         texts.notes.len(),
+        parts,
     )
 }
 
-/// Die Blattgeometrie der Zeichnung.
+/// Die Blattgeometrie der Zeichnung (so wird sie gezeichnet).
 pub fn layout_of(state: &AppState, drawing: &Drawing) -> SheetLayout {
     let texts = resolve_texts(
         drawing,
@@ -605,13 +662,14 @@ pub fn layout_of(state: &AppState, drawing: &Drawing) -> SheetLayout {
         &context_or_single(state, drawing.id),
         None,
     );
-    layout_from_texts(drawing, &texts)
+    layout_from_texts(drawing, &texts, parts_space(state, drawing, false))
 }
 
 /// Blattgeometrie für die automatische Anordnung von Ansichten und den Maßstabsvorschlag: wie
-/// [`layout_of`], aber die Änderungstabelle immer mit Kopf und allen [`REV_VISIBLE`] Zeilen, so
-/// dass eine später gefüllte Tabelle keine automatisch gelegte Ansicht überdeckt. Gezeichnet wird
-/// die Tabelle mit den tatsächlichen Zeilen ([`layout_of`]).
+/// [`layout_of`], aber die Änderungstabelle immer mit Kopf und allen [`REV_VISIBLE`] Zeilen und
+/// eine Stückliste auf dem Blatt immer mit [`PARTS_ON_SHEET`] Zeilen, so dass später gefüllte
+/// Tabellen keine automatisch gelegte Ansicht überdecken. Gezeichnet werden die Tabellen mit den
+/// tatsächlichen Zeilen ([`layout_of`]).
 pub fn placement_layout(state: &AppState, drawing: &Drawing) -> SheetLayout {
     let texts = resolve_texts(
         drawing,
@@ -619,12 +677,18 @@ pub fn placement_layout(state: &AppState, drawing: &Drawing) -> SheetLayout {
         &context_or_single(state, drawing.id),
         None,
     );
-    sheet_layout(drawing.sheet, REV_VISIBLE, texts.notes.len())
+    sheet_layout_with(
+        drawing.sheet,
+        REV_VISIBLE,
+        texts.notes.len(),
+        parts_space(state, drawing, true),
+    )
 }
 
 /// Die Blattgeometrie für die Anordnung in einer neuen Zeichnung auf `sheet`: mit den
-/// Hinweiszeilen der Projektangaben (sind noch keine gesetzt, die der Vorgabe) und Platz für
-/// die volle Änderungstabelle (wie [`placement_layout`]).
+/// Hinweiszeilen der Projektangaben (sind noch keine gesetzt, die der Vorgabe), Platz für die
+/// volle Änderungstabelle und – wenn die neue Zeichnung die Stückliste bekommt (mehr als ein
+/// Körper) – für die volle Stückliste (wie [`placement_layout`]).
 pub fn new_sheet_layout(state: &AppState, sheet: Sheet, projection: Projection) -> SheetLayout {
     let blank = Drawing::new(DrawingId(0), String::new(), sheet, projection);
     let ctx = SheetContext {
@@ -633,7 +697,15 @@ pub fn new_sheet_layout(state: &AppState, sheet: Sheet, projection: Projection) 
         count: 1,
     };
     let texts = resolve_texts(&blank, state.document.project_info(), &ctx, None);
-    sheet_layout(sheet, REV_VISIBLE, texts.notes.len())
+    // Dieselbe Vorgabe wie beim Anlegen (`Document::add_drawing_stamped`).
+    let parts = if state.document.visible_bodies().len() > 1 {
+        PartsSpace::OnSheet {
+            rows: PARTS_ON_SHEET,
+        }
+    } else {
+        PartsSpace::None
+    };
+    sheet_layout_with(sheet, REV_VISIBLE, texts.notes.len(), parts)
 }
 
 /// Zuletzt im Zeichnungsbereich gezeichnetes Blattmodell (mit Mittellinien und Maßen).
@@ -669,6 +741,7 @@ fn sheet_model(
     let cached = ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()));
     let project = state.document.project_info().cloned();
     let context = sheet_context(state, drawing.id);
+    let texts = sheet_texts(state, drawing);
     let same_base = cached
         .as_ref()
         .filter(|c| c.instance == state.instance && c.model == model && c.ptrs == ptrs);
@@ -677,6 +750,7 @@ fn sheet_model(
         && c.drawing == *drawing
         && c.project == project
         && c.context == context
+        && c.parts == texts.parts
     {
         return (Arc::clone(&c.sheet), c.lines_gen);
     }
@@ -686,12 +760,12 @@ fn sheet_model(
     };
     let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
     let mut built = build_sheet_with(drawing, &refs, dims);
-    let texts = sheet_texts(state, drawing);
     built.frame = Some(sheet_frame(
-        &layout_from_texts(drawing, &texts),
+        &layout_from_texts(drawing, &texts, parts_space(state, drawing, false)),
         &texts,
         drawing.projection,
     ));
+    let parts = texts.parts;
     let sheet = Arc::new(built);
     ctx.data_mut(|d| {
         d.insert_temp(
@@ -705,6 +779,7 @@ fn sheet_model(
                 sheet: Arc::clone(&sheet),
                 project,
                 context,
+                parts,
                 lines_gen,
             },
         )
@@ -1027,7 +1102,14 @@ fn tool_field(
                         format!("Zeichnung: {}", shorten_for_display(&drawing.name)),
                     )));
                     ui.separator();
-                    ui.add_enabled(editable, |ui: &mut egui::Ui| {
+                    // Auf einem Stücklistenblatt gibt es keine Ansichten.
+                    let parts_sheet = matches!(drawing.kind, DrawingKind::PartsList { .. });
+                    let add_why = if parts_sheet {
+                        NO_VIEWS_ON_PARTS_SHEET
+                    } else {
+                        crate::drawing_browser::READ_ONLY_HINT
+                    };
+                    ui.add_enabled(editable && !parts_sheet, |ui: &mut egui::Ui| {
                         let saved = ui.style().clone();
                         theme::frameless(ui.style_mut());
                         let r = ui
@@ -1049,7 +1131,8 @@ fn tool_field(
                         ui.set_style(saved);
                         theme::focus_ring(ui, &r);
                         r
-                    });
+                    })
+                    .on_disabled_hover_text(add_why);
                     // Am Ende der ersten Zeile, damit die zweite nicht breiter wird.
                     if ui
                         .add_enabled(
@@ -1563,6 +1646,9 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
         return Err(NO_DRAWING.into());
     };
     let mut d = state.document.drawing(id).ok_or(NO_DRAWING)?.clone();
+    if matches!(d.kind, DrawingKind::PartsList { .. }) {
+        return Err(NO_VIEWS_ON_PARTS_SHEET.into());
+    }
     let (lo, hi) = placement_layout(state, &d).free;
     let free: FreeArea = ((lo.x, lo.y), (hi.x, hi.y));
     let (free_w, free_h) = (hi.x - lo.x, hi.y - lo.y);
