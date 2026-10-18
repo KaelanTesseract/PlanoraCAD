@@ -428,3 +428,98 @@ fn suppress_and_restore() {
     assert_eq!(d.row_of(key(a)), Some(1));
     assert_eq!(d.parts_cells()[0][1], "Grundplatte");
 }
+
+#[test]
+fn moved_and_filleted_body_keeps_row_name_while_visible() {
+    let mut d = Document::new();
+    let a = cube(&mut d, "Platte");
+    let moved = d
+        .add_feature(
+            "Verschieben",
+            FeatureKind::Move {
+                body: body(a),
+                delta: DVec3::new(5.0, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    assert_eq!(d.parts_rows(), vec![row(1, "Platte", 1, vec![key(a)])]);
+    let edge = edge_ref(&d, body(moved), "Deckel", "Wand 1");
+    d.add_feature(
+        "Rundung",
+        FeatureKind::Verrunden {
+            body: body(moved),
+            edges: vec![edge],
+            art: BlendArt::Rundung { radius: 1.0 },
+            tangentenkette: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(d.parts_rows(), vec![row(1, "Platte", 1, vec![key(a)])]);
+}
+
+#[test]
+fn pos_is_the_running_row_number_after_a_merged_row() {
+    let mut d = Document::new();
+    let b1 = cube(&mut d, "Bolzen");
+    let b2 = cube(&mut d, "Bolzen");
+    let p = cube(&mut d, "Platte");
+    assert_eq!(
+        d.parts_rows(),
+        vec![
+            row(1, "Bolzen", 2, vec![key(b1), key(b2)]),
+            row(2, "Platte", 1, vec![key(p)]),
+        ]
+    );
+    assert_eq!(d.row_of(key(p)), Some(2));
+    assert_eq!(d.parts_cells()[1][0], "2");
+}
+
+#[test]
+fn merged_row_shows_the_override_of_its_first_body() {
+    let mut d = Document::new();
+    let b1 = cube(&mut d, "Bolzen");
+    let b2 = cube(&mut d, "Bolzen");
+    d.set_parts_override(key(b1), name_override("Erster"))
+        .unwrap();
+    d.set_parts_override(key(b2), name_override("Zweiter"))
+        .unwrap();
+    let cells = d.parts_cells();
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0][1], "Erster");
+    // Nur am zweiten Körper: die Zeile zeigt ihn nicht.
+    d.set_parts_override(key(b1), RowOverride::default())
+        .unwrap();
+    assert_eq!(d.parts_cells()[0][1], "Bolzen");
+}
+
+#[test]
+fn grouping_is_by_exact_name() {
+    let mut d = Document::new();
+    cube(&mut d, "Bolzen");
+    cube(&mut d, "bolzen");
+    cube(&mut d, "Bolzen ");
+    let rows = d.parts_rows();
+    let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["Bolzen", "bolzen", "Bolzen "]);
+    assert!(rows.iter().all(|r| r.qty == 1));
+}
+
+#[test]
+fn snapshot_override_limit_boundary() {
+    let snap = Document::new().snapshot();
+    let fill = |n: u64| {
+        let mut s = snap.clone();
+        for i in 0..n {
+            s.parts_overrides.insert(
+                BodyKey {
+                    feature: 100 + i,
+                    index: 0,
+                },
+                name_override("A"),
+            );
+        }
+        s
+    };
+    assert!(Document::from_snapshot(fill(1000), 0.05).is_ok());
+    assert!(Document::from_snapshot(fill(1001), 0.05).is_err());
+}
