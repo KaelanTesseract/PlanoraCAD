@@ -500,3 +500,225 @@ fn parts_sheets_are_listed_by_page_not_by_position() {
     let second = loaded.parts_sheets()[1];
     assert_eq!(loaded.drawing(second).unwrap().sheet, A3_QUER);
 }
+
+fn parts_list_flag(d: &Document, id: DrawingId) -> bool {
+    d.drawing(id).unwrap().info.as_ref().unwrap().parts_list
+}
+
+#[test]
+fn reserved_follow_up_names_block_creation() {
+    // Jeder Seitenname (2)..(8) verhindert das Anlegen; (9) ist frei.
+    for k in 2..=8u32 {
+        let mut d = Document::new();
+        cubes(&mut d, 30);
+        let name = format!("stückliste ({k})");
+        d.add_drawing(&name, A4_QUER, Projection::First).unwrap();
+        let c = d.edit_count();
+        let e = d.add_parts_sheets(A4_QUER, &stamp()).unwrap_err();
+        assert_eq!(msg(e), PARTS_PAGE_NAME_TAKEN, "{name}");
+        assert_eq!(d.edit_count(), c);
+        assert_eq!(d.drawings().len(), 1);
+        assert!(d.project_info().is_none());
+    }
+    let mut d = Document::new();
+    cubes(&mut d, 30);
+    d.add_drawing("Stückliste (9)", A4_QUER, Projection::First)
+        .unwrap();
+    d.add_parts_sheets(A4_QUER, &stamp()).unwrap();
+    assert_eq!(pages(&d), [1, 2]);
+
+    // Mit vorhandenen Stücklistenblättern sind alle Seitennamen (2)..(8) vergeben, (9) nicht.
+    let (mut d, _) = doc_with(3, A4_QUER);
+    for k in 2..=8u32 {
+        assert!(
+            d.add_drawing(&format!("Stückliste ({k})"), A4_QUER, Projection::First)
+                .is_err(),
+            "{k}"
+        );
+    }
+    d.add_drawing("Stückliste (9)", A4_QUER, Projection::First)
+        .unwrap();
+
+    // Nach dem Löschen von Seite 1 gilt dieselbe Prüfung beim erneuten Anlegen.
+    let (mut d, _) = doc_with(3, A4_QUER);
+    d.delete_drawing(d.parts_sheets()[0]).unwrap();
+    let user = d
+        .add_drawing("Stückliste (2)", A4_QUER, Projection::First)
+        .unwrap();
+    assert!(d.add_parts_sheets(A4_QUER, &stamp()).is_err());
+    // Die Zeichnung selbst bleibt änderbar, auch mit dem Namen.
+    d.update_drawing(user, |x| x.sheet = A3_QUER).unwrap();
+    assert_eq!(d.drawing(user).unwrap().sheet, A3_QUER);
+}
+
+#[test]
+fn drawing_with_a_reserved_name_from_a_file_stays_editable() {
+    let (d, _) = doc_with(3, A4_QUER);
+    let mut s = d.snapshot();
+    let id = DrawingId(s.next_drawing);
+    s.next_drawing += 1;
+    s.drawings.push(planora_drawing::Drawing::new(
+        id,
+        "Stückliste (2)".into(),
+        A4_QUER,
+        Projection::First,
+    ));
+    let mut loaded = Document::from_snapshot(s, 0.05).unwrap();
+    loaded.update_drawing(id, |x| x.sheet = A3_QUER).unwrap();
+    // Umbenennen auf einen anderen freien Namen geht, auf einen anderen Seitennamen nicht.
+    assert!(loaded.rename_drawing(id, "Stückliste (3)").is_err());
+    loaded.rename_drawing(id, "Frei").unwrap();
+}
+
+#[test]
+fn follow_up_edit_that_is_reverted_does_not_count() {
+    let (mut d, _) = doc_with(27, A4_QUER);
+    let second = d.parts_sheets()[1];
+    let c = d.edit_count();
+    d.update_drawing(second, |x| x.sheet = A4_HOCH).unwrap();
+    d.update_drawing(second, |x| x.projection = Projection::Third)
+        .unwrap();
+    assert_eq!(d.edit_count(), c);
+    assert_eq!(d.drawing(second).unwrap().sheet, A4_QUER);
+    assert_eq!(d.drawing(second).unwrap().projection, Projection::First);
+}
+
+#[test]
+fn page_one_projection_reaches_follow_ups() {
+    let (mut d, _) = doc_with(27, A4_QUER);
+    let first = d.parts_sheets()[0];
+    d.update_drawing(first, |x| x.projection = Projection::Third)
+        .unwrap();
+    let second = d.parts_sheets()[1];
+    assert_eq!(d.drawing(second).unwrap().projection, Projection::Third);
+}
+
+#[test]
+fn duplicate_page_numbers_in_a_file_are_rejected() {
+    let (d, _) = doc_with(27, A4_QUER);
+    // Seite 2 doppelt, mit passendem Namen für Seite 3 geht nicht; doppelt mit eigenem Namen auch nicht.
+    let mut s = d.snapshot();
+    let mut extra = s
+        .drawings
+        .iter()
+        .find(|x| x.kind == (DrawingKind::PartsList { page: 2 }))
+        .unwrap()
+        .clone();
+    extra.id = DrawingId(s.next_drawing);
+    s.next_drawing += 1;
+    s.drawings.push(extra.clone());
+    assert!(Document::from_snapshot(s, 0.05).is_err());
+    // Zweimal Seite 1 mit verschiedenen Namen.
+    let mut s = d.snapshot();
+    extra.kind = DrawingKind::PartsList { page: 1 };
+    extra.name = "Stückliste".into();
+    s.drawings
+        .retain(|x| x.kind != DrawingKind::PartsList { page: 2 });
+    s.drawings.push(extra);
+    assert!(Document::from_snapshot(s, 0.05).is_err());
+}
+
+#[test]
+fn page_count_changes_by_paper_count_exactly_one_edit() {
+    // 30 Zeilen: A4 hoch (44) = 1 Blatt, A4 quer (26) = 2 Blätter.
+    let (mut d, _) = doc_with(30, A4_HOCH);
+    assert_eq!(pages(&d), [1]);
+    let first = d.parts_sheets()[0];
+    let c = d.edit_count();
+    d.update_drawing(first, |x| x.sheet = A4_QUER).unwrap();
+    assert_eq!(pages(&d), [1, 2]);
+    assert_eq!(d.edit_count(), c + 1);
+    d.update_drawing(first, |x| x.sheet = A4_HOCH).unwrap();
+    assert_eq!(pages(&d), [1]);
+    assert_eq!(d.edit_count(), c + 2);
+    // Anlegen mit mehr Zeilen als ein Blatt fasst: genau eine Änderung.
+    let mut d = Document::new();
+    cubes(&mut d, 60);
+    let c = d.edit_count();
+    d.add_parts_sheets(A4_QUER, &stamp()).unwrap();
+    assert_eq!(pages(&d), [1, 2, 3]);
+    assert_eq!(d.edit_count(), c + 1);
+}
+
+fn fill_drawings(d: &mut Document, total: usize) {
+    let mut i = 0;
+    while d.drawings().len() < total {
+        i += 1;
+        d.add_drawing(&format!("Blatt {i}"), A4_QUER, Projection::First)
+            .unwrap();
+    }
+}
+
+#[test]
+fn drawing_limit_is_never_exceeded() {
+    // Sync: 998 + Seite 1 = 999; Seite 2 passt (1000), Seite 3 nicht mehr.
+    let mut d = Document::new();
+    cubes(&mut d, 26);
+    d.add_parts_sheets(A4_QUER, &stamp()).unwrap();
+    fill_drawings(&mut d, MAX_DRAWINGS - 1);
+    cube(&mut d, "Teil 27");
+    assert_eq!(d.drawings().len(), MAX_DRAWINGS);
+    for i in 28..=53 {
+        cube(&mut d, &format!("Teil {i}"));
+    }
+    assert_eq!(d.drawings().len(), MAX_DRAWINGS);
+    assert_eq!(pages(&d), [1, 2]);
+    // Die Datei bleibt ladbar.
+    let loaded = Document::from_snapshot(d.snapshot(), 0.05).unwrap();
+    assert_eq!(loaded.drawings().len(), MAX_DRAWINGS);
+
+    // Anlegen: bei vollem Dokument abgelehnt, bei 999 mit vielen Zeilen nicht über 1000.
+    let mut d = Document::new();
+    cubes(&mut d, 60);
+    fill_drawings(&mut d, MAX_DRAWINGS);
+    let c = d.edit_count();
+    assert!(d.add_parts_sheets(A4_QUER, &stamp()).is_err());
+    assert_eq!(d.edit_count(), c);
+    let mut d = Document::new();
+    cubes(&mut d, 60);
+    fill_drawings(&mut d, MAX_DRAWINGS - 1);
+    d.add_parts_sheets(A4_QUER, &stamp()).unwrap();
+    assert_eq!(d.drawings().len(), MAX_DRAWINGS);
+    assert_eq!(pages(&d), [1]);
+    assert!(Document::from_snapshot(d.snapshot(), 0.05).is_ok());
+}
+
+#[test]
+fn same_named_bodies_are_one_row_but_switch_is_on() {
+    let mut d = Document::new();
+    cube(&mut d, "Gleich");
+    cube(&mut d, "Gleich");
+    assert_eq!(d.parts_rows().len(), 1);
+    assert_eq!(d.visible_bodies().len(), 2);
+    let x = d
+        .add_drawing_stamped("X", A4_HOCH, Projection::First, &stamp())
+        .unwrap();
+    assert!(parts_list_flag(&d, x));
+}
+
+#[test]
+fn parts_sheets_are_sorted_by_page_with_crafted_ids() {
+    let (d, _) = doc_with(27, A4_QUER);
+    let mut s = d.snapshot();
+    let ids: Vec<DrawingId> = s.drawings.iter().map(|x| x.id).collect();
+    // Seite 1 bekommt die größere Kennung als Seite 2.
+    s.drawings[0].id = ids[1];
+    s.drawings[1].id = ids[0];
+    assert_eq!(s.drawings[0].kind, DrawingKind::PartsList { page: 1 });
+    let loaded = Document::from_snapshot(s, 0.05).unwrap();
+    assert_eq!(pages(&loaded), [1, 2]);
+    assert_eq!(loaded.parts_sheets(), vec![ids[1], ids[0]]);
+}
+
+#[test]
+fn paper_change_without_page_change_counts_one_edit() {
+    let (mut d, _) = doc_with(27, A4_QUER);
+    let first = d.parts_sheets()[0];
+    let c = d.edit_count();
+    d.update_drawing(first, |x| x.sheet = A3_QUER).unwrap();
+    assert_eq!(pages(&d), [1, 2]);
+    assert_eq!(d.edit_count(), c + 1);
+    // Dasselbe nochmal ändert nichts und zählt nicht.
+    d.update_drawing(first, |x| x.sheet = A3_QUER).unwrap();
+    assert_eq!(d.edit_count(), c + 1);
+}

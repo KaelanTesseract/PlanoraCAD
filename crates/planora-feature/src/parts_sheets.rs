@@ -13,6 +13,7 @@ use planora_drawing::{Drawing, DrawingId, DrawingKind, Projection, Sheet};
 pub const PARTS_SHEET_EXISTS: &str = "Es gibt schon ein Stücklistenblatt.";
 pub const PARTS_NAME_TAKEN: &str = "Es gibt schon eine Zeichnung mit dem Namen „Stückliste“.";
 pub const FOLLOW_PAGE_DELETE: &str = "Ein Folgeblatt der Stückliste lässt sich nicht einzeln löschen. Es verschwindet von selbst, wenn die Zeilen auf weniger Blätter passen.";
+pub const PARTS_PAGE_NAME_TAKEN: &str = "Es gibt schon eine Zeichnung mit einem Namen wie „Stückliste (2)“. Bitte benenne sie zuerst um, damit die Folgeblätter der Stückliste Platz haben.";
 pub const PARTS_SHEET_RENAME: &str = "Stücklistenblätter lassen sich nicht umbenennen.";
 
 /// So viele Seitennamen („Stückliste (2)“ …) sind für Stücklistenblätter reserviert, solange es
@@ -63,6 +64,9 @@ impl Document {
         let name = parts_sheet_name(1);
         if self.name_taken(&name, None) {
             return Err(bad(PARTS_NAME_TAKEN));
+        }
+        if (2..=RESERVED_PAGES).any(|p| self.name_taken(&parts_sheet_name(p), None)) {
+            return Err(bad(PARTS_PAGE_NAME_TAKEN));
         }
         let project = match self.project_info {
             Some(_) => None,

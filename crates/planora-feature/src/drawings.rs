@@ -141,8 +141,13 @@ impl Document {
 
     pub(crate) fn check_drawing(&self, d: &Drawing) -> Result<(), FeatureError> {
         validate_drawing(d).map_err(bad)?;
+        // Die Vorbehaltsnamen gelten nur, wenn der Name sich ändert: eine Zeichnung, die ihn
+        // schon trug, bleibt änderbar.
+        let renamed = self
+            .drawing(d.id)
+            .is_none_or(|old| name_key(&old.name) != name_key(&d.name));
         if self.name_taken(&d.name, Some(d.id))
-            || (page_of(d).is_none() && self.reserved_for_parts(&d.name))
+            || (renamed && page_of(d).is_none() && self.reserved_for_parts(&d.name))
         {
             return Err(bad("Eine Zeichnung mit diesem Namen gibt es schon"));
         }
@@ -294,9 +299,18 @@ impl Document {
         self.check_drawing(&copy)?;
         if copy != self.drawings[idx] {
             let parts = page_of(&copy).is_some();
+            let before = if parts {
+                self.drawings.clone()
+            } else {
+                Vec::new()
+            };
             self.drawings[idx] = copy;
             if parts {
                 self.sync_parts_sheets_inner();
+                // Gleicht der Abgleich die Änderung wieder aus (Folgeblatt), bleibt alles wie es war.
+                if self.drawings == before {
+                    return Ok(());
+                }
             }
             self.drawing_edits += 1;
         }

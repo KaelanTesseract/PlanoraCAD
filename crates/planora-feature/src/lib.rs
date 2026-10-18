@@ -33,7 +33,8 @@ pub use model::{
     SketchPlane, StandardPlane,
 };
 pub use parts_sheets::{
-    FOLLOW_PAGE_DELETE, PARTS_NAME_TAKEN, PARTS_SHEET_EXISTS, PARTS_SHEET_RENAME,
+    FOLLOW_PAGE_DELETE, PARTS_NAME_TAKEN, PARTS_PAGE_NAME_TAKEN, PARTS_SHEET_EXISTS,
+    PARTS_SHEET_RENAME,
 };
 pub use recompute::{RecomputeReport, VisibleBody};
 pub use refs::{
