@@ -10,6 +10,9 @@
 //! Ansichten berechnet sind. Als achtes Format kommt „Zeichnung als PDF“ dazu (Teilprojekt 3c-3):
 //! gleiche Berechnung wie bei SVG, vor dem Schreiben prüft der Auftrag, ob alle Zeichen in der
 //! PDF darstellbar sind (P13), und die Datei bekommt Dokumenteigenschaften ([`pdf_meta`], P11).
+//! Bei PDF lässt sich statt des gewählten Blatts „Alle Blätter“ wählen: Ein Auftrag rechnet alle
+//! Zeichnungen in Dokumentreihenfolge ([`prepare_all_sheets`]); kann ein Blatt nicht ausgegeben
+//! werden, ist die ganze PDF gesperrt und die Meldung nennt das erste solche Blatt (F2).
 //!
 //! Maße und Mittellinien (Teilprojekt 12, Aufgabe 14): Nach den Ansichten löst derselbe
 //! Arbeitsthread die Maße der Zeichnung gegen seine Kopien der exakten Körper auf (nicht über den
@@ -36,7 +39,7 @@ use planora_drawing::balloon::{add_balloon_marks, balloon_marks};
 use planora_drawing::dimension::{DimError, DimSpec};
 use planora_drawing::dxf::{dxf_char_ok, dxf_text_fits};
 use planora_drawing::parts::PARTS_HEAD;
-use planora_drawing::pdf::{PdfMeta, pdf_date};
+use planora_drawing::pdf::{MAX_PAGES, PdfMeta, pdf_date};
 use planora_drawing::pdf_font::pdf_char_ok;
 use planora_drawing::sheet::{SheetModel, build_sheet_with, dimension_marks};
 use planora_drawing::sheet_frame::{PartsSpace, sheet_layout_with};
@@ -64,6 +67,7 @@ use planora_step::{
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 
 /// Breite des Fortschrittsbalkens.
@@ -326,9 +330,15 @@ impl CenterlineUse {
 
 /// Zeigen die Normansichten der Zeichnung Mittellinien (Schalter der Ansicht)?
 pub fn centerline_use(d: &Drawing) -> CenterlineUse {
-    let flags: Vec<bool> = d
-        .views
+    centerline_use_all(std::slice::from_ref(d))
+}
+
+/// Wie [`centerline_use`] über die Normansichten aller Zeichnungen `drawings` (Blätter ohne
+/// Normansicht zählen nicht).
+pub fn centerline_use_all(drawings: &[Drawing]) -> CenterlineUse {
+    let flags: Vec<bool> = drawings
         .iter()
+        .flat_map(|d| &d.views)
         .filter(|v| v.kind.is_normal())
         .map(|v| v.centerlines)
         .collect();
@@ -563,7 +573,7 @@ pub fn pdf_meta(
         PdfPages::All => state.document_name.clone(),
     };
     let author = doc.project_info().and_then(|p| match &p.creator {
-        FieldValue::Text(t) if !t.trim().is_empty() => Some(t.clone()),
+        FieldValue::Text(t) if !t.trim().is_empty() => Some(t.trim().to_string()),
         _ => None,
     });
     let valid = |s: &str| pdf_date(s).is_some();
@@ -583,6 +593,135 @@ pub fn pdf_meta(
         author,
         date: Some(date),
     }
+}
+
+/// Wahl in der Karte „Zeichnung“ bei PDF: nur das gewählte Blatt.
+pub const PDF_SELECTED: &str = "Gewähltes Blatt";
+/// Wahl in der Karte „Zeichnung“ bei PDF: alle Blätter des Dokuments.
+pub const PDF_ALL: &str = "Alle Blätter";
+/// Hinweis an der gesperrten Zeichnungsauswahl bei „Alle Blätter“.
+pub const PDF_ALL_HINT: &str =
+    "Bei „Alle Blätter“ kommen alle Zeichnungen der Reihe nach in die PDF.";
+
+/// Text im Fortschrittsbalken, solange bei „Alle Blätter“ das Blatt `n` von `total` berechnet
+/// wird.
+pub fn sheet_progress_text(n: usize, total: usize) -> String {
+    format!("Blatt {n} von {total} wird berechnet …")
+}
+
+/// Meldung `msg` zu dem Blatt `sheet` (bei „Alle Blätter“).
+pub fn in_sheet(sheet: &str, msg: &str) -> String {
+    format!("Im Blatt „{sheet}“: {msg}")
+}
+
+/// Meldung, wenn das Dokument mehr Blätter hat, als eine PDF enthalten kann.
+pub fn too_many_pages_text(n: usize) -> String {
+    format!(
+        "Eine PDF kann höchstens {MAX_PAGES} Blätter enthalten, das Dokument hat {n}. Bitte einzelne Blätter ausgeben."
+    )
+}
+
+/// „1 Blatt“ bzw. „{n} Blätter“.
+pub fn pages_label(n: usize) -> String {
+    if n == 1 {
+        "1 Blatt".to_string()
+    } else {
+        format!("{n} Blätter")
+    }
+}
+
+/// Ein Blatt für die Berechnung aller Blätter: Kopie der Zeichnung, ihr Blattrahmen (mit der
+/// Stellung im Dokument) und ihre Stückliste.
+#[derive(Clone, Debug)]
+pub struct SheetJob {
+    pub drawing: Drawing,
+    pub frame: Option<FrameInput>,
+    pub parts: PartsInput,
+}
+
+/// So fein ist der Fortschritt eines Blatts bei „Alle Blätter“ unterteilt.
+const SHEET_STEPS: u64 = 1000;
+
+/// Prüft ein fertiges Blatt auf Zeichen, die sich in einer PDF nicht ausgeben lassen (P13):
+/// erst die Felder des Rahmens, dann die Texte der Ansichten.
+fn pdf_texts_ok(r: &DrawingPrepared) -> Result<(), String> {
+    if let Some(texts) = &r.texts {
+        pdf_sheet_texts_ok(texts)?;
+    }
+    pdf_model_texts_ok(&r.model)
+}
+
+/// Berechnet alle Blätter für eine PDF nacheinander in der gegebenen Reihenfolge (P12, F2; läuft
+/// im Arbeitsthread). Vor jedem Blatt steht dessen Nummer (ab 1) in `counter`; der Fortschritt
+/// `progress` wächst über alle Blätter (das laufende Blatt anteilig). Jedes Blatt wird wie beim
+/// gewählten Blatt berechnet und auf Zeichen geprüft. Der erste Fehler in Blattreihenfolge
+/// beendet alles mit „Im Blatt „Name“: …“; nie wird ein Blatt ausgelassen. Abbrechen ergibt
+/// „Abgebrochen“.
+///
+/// Grenze: Jedes Blatt wird von Grund auf neu gerechnet (kein Zwischenspeicher zwischen den
+/// Blättern und zum Zeichnungsbereich); dieselbe Ansichtsart derselben Körper auf mehreren
+/// Blättern kostet also jedes Mal die volle Rechenzeit, und jede Änderung am Dokument rechnet
+/// alle Blätter neu.
+pub fn prepare_all_sheets(
+    sheets: &[SheetJob],
+    solids: &[(String, Solid)],
+    compute: ComputeFn,
+    resolve: ResolveFn,
+    counter: &AtomicUsize,
+    progress: &Progress,
+) -> Result<Vec<DrawingPrepared>, String> {
+    let cancelled = ExchangeError::Cancelled.to_string();
+    progress.set_total(sheets.len().max(1) as u64 * SHEET_STEPS);
+    let mut shown = 0u64;
+    let mut out = Vec::with_capacity(sheets.len());
+    for (i, sheet) in sheets.iter().enumerate() {
+        progress.check().map_err(|_| cancelled.clone())?;
+        counter.store(i + 1, AtomicOrdering::SeqCst);
+        // Eigener Fortschritt je Blatt; Abbrechen wird weitergereicht, der Anteil fließt in den
+        // Fortschritt aller Blätter ein.
+        let inner = Progress::new();
+        let result = std::thread::scope(|scope| {
+            let handle = scope.spawn(|| -> Result<DrawingPrepared, String> {
+                let r = prepare_drawing_parts(
+                    &sheet.drawing,
+                    solids,
+                    compute,
+                    resolve,
+                    sheet.frame.as_ref(),
+                    &sheet.parts,
+                    &inner,
+                )?;
+                pdf_texts_ok(&r)?;
+                Ok(r)
+            });
+            while !handle.is_finished() {
+                if progress.is_cancelled() {
+                    inner.cancel();
+                }
+                let at = ((i as f64 + f64::from(inner.fraction())) * SHEET_STEPS as f64) as u64;
+                if at > shown {
+                    progress.advance(at - shown);
+                    shown = at;
+                }
+                std::thread::sleep(WATCH);
+            }
+            handle.join().ok()
+        });
+        let name = shorten_for_display(&sheet.drawing.name);
+        match result {
+            Some(Ok(r)) => out.push(r),
+            _ if progress.is_cancelled() => return Err(cancelled),
+            Some(Err(m)) if m == cancelled => return Err(cancelled),
+            Some(Err(m)) => return Err(in_sheet(&name, &m)),
+            None => return Err(in_sheet(&name, LOST)),
+        }
+        let at = (i as u64 + 1) * SHEET_STEPS;
+        if at > shown {
+            progress.advance(at - shown);
+            shown = at;
+        }
+    }
+    Ok(out)
 }
 
 /// Blatt für die Anzeige, z. B. „A3 quer“.
@@ -1199,12 +1338,32 @@ type StepJob = Job<Result<StepPrepared, String>>;
 type StepResult = Result<Arc<StepPrepared>, String>;
 type WriteJob = Job<Result<u64, ExchangeError>>;
 type StepWriteJob = Job<Result<u64, StepError>>;
-/// Stand, zu dem ein Zeichnungsergebnis gehört: Zeichnung, Änderungszahl des Dokuments (alle
-/// Änderungen, auch an der Zeichnung), Format, Schalter „Blattrahmen“ und Prüfsumme des
-/// Dokumentnamens (er steckt in der Zeichnungsnummer).
-type DrawKey = (DrawingId, u64, DrawingFormat, bool, u64);
-type DrawJob = Job<Result<DrawingPrepared, String>>;
-type DrawResult = Result<Arc<DrawingPrepared>, String>;
+/// Was ein Zeichnungsergebnis enthält: eine Zeichnung oder (nur PDF) alle Blätter.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DrawTarget {
+    One(DrawingId),
+    All,
+}
+
+/// Stand, zu dem ein Zeichnungsergebnis gehört: Zeichnung bzw. alle Blätter, Änderungszahl des
+/// Dokuments (alle Änderungen, auch an jeder Zeichnung, an Projekt- und Blattangaben), Format,
+/// Schalter „Blattrahmen“ und Prüfsumme des Dokumentnamens (er steckt in der Zeichnungsnummer
+/// und im Titel der PDF aller Blätter).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DrawKey {
+    target: DrawTarget,
+    edits: u64,
+    format: DrawingFormat,
+    frame: bool,
+    doc_name: u64,
+}
+
+/// Ergebnis: die Blätter in Dokumentreihenfolge (beim gewählten Blatt genau eines).
+type DrawJob = Job<Result<Vec<DrawingPrepared>, String>>;
+type DrawResult = Result<Arc<Vec<DrawingPrepared>>, String>;
+/// Laufende Berechnung: Stand, Auftrag und bei „Alle Blätter“ Zähler des Blatts und Zahl der
+/// Blätter.
+type DrawRun = (DrawKey, DrawJob, Option<(Arc<AtomicUsize>, usize)>);
 type DrawWriteJob = Job<Result<u64, String>>;
 /// Das Schreiben einer Zeichnung (austauschbar nur für Tests).
 pub type WriteFn = fn(&Path, &SheetModel, DrawingFormat, &Progress) -> Result<u64, DrawError>;
@@ -1229,6 +1388,8 @@ pub struct ExportDialog {
     pub drawing: Option<DrawingId>,
     /// Zeichnungsformate: Blattrahmen (Rahmen, Schriftfeld, Tabellen) mit ausgeben; Vorgabe an.
     pub with_frame: bool,
+    /// PDF: das gewählte Blatt oder alle Blätter; Vorgabe das gewählte.
+    pub pdf_pages: PdfPages,
     prepared: Option<(Key, PrepResult)>,
     job: Option<(Key, PrepJob)>,
     step_prepared: Option<(Key, StepResult)>,
@@ -1236,7 +1397,7 @@ pub struct ExportDialog {
     /// Ergebnisse der Zeichnungsformate, höchstens eines je Format (ein Wechsel des Formats
     /// lässt das Ergebnis des anderen stehen).
     drawing_prepared: Vec<(DrawKey, DrawResult)>,
-    drawing_job: Option<(DrawKey, DrawJob)>,
+    drawing_job: Option<DrawRun>,
     chooser: Option<FileChooser>,
     /// Schlüssel und Format zur Zeit des Öffnens der Dateiauswahl; ändern sie sich, schließt sie.
     chooser_key: Option<ChooserKey>,
@@ -1274,6 +1435,7 @@ impl ExportDialog {
             },
             drawing: default_drawing(state),
             with_frame: true,
+            pdf_pages: PdfPages::default(),
             prepared: None,
             job: None,
             step_prepared: None,
@@ -1381,23 +1543,34 @@ impl ExportDialog {
             .or_else(|| default_drawing(state).and_then(|id| state.document.drawing(id)))
     }
 
-    /// Schlüssel des Zeichnungsergebnisses; `None` bei anderen Formaten oder ohne Zeichnung.
+    /// Gilt die Wahl „Alle Blätter“ (nur bei PDF)?
+    fn all_sheets(&self) -> bool {
+        self.format == ExportFormat::Drawing(DrawingFormat::Pdf) && self.pdf_pages == PdfPages::All
+    }
+
+    /// Schlüssel des Zeichnungsergebnisses; `None` bei anderen Formaten oder ohne Zeichnung. Bei
+    /// „Alle Blätter“ zählt die gewählte Zeichnung nicht (eine andere Wahl rechnet nicht neu).
     fn drawing_key(&self, state: &AppState) -> Option<DrawKey> {
-        let f = self.format.drawing_format()?;
+        let format = self.format.drawing_format()?;
         let d = self.current_drawing(state)?;
         let mut hasher = std::hash::DefaultHasher::new();
         std::hash::Hash::hash(&state.document_name, &mut hasher);
-        Some((
-            d.id,
-            state.document.edit_count(),
-            f,
-            self.with_frame,
-            std::hash::Hasher::finish(&hasher),
-        ))
+        Some(DrawKey {
+            target: if self.all_sheets() {
+                DrawTarget::All
+            } else {
+                DrawTarget::One(d.id)
+            },
+            edits: state.document.edit_count(),
+            format,
+            frame: self.with_frame,
+            doc_name: std::hash::Hasher::finish(&hasher),
+        })
     }
 
     /// Warum sich keine Zeichnung berechnen lässt: keine Zeichnung, keine exakten Körper (wie
-    /// im Zeichnungsbereich) oder keine Ansicht.
+    /// im Zeichnungsbereich) oder keine Ansicht. Bei „Alle Blätter“ auch zu viele Blätter
+    /// ([`too_many_pages_text`]) und die erste Ansichtenzeichnung ohne Ansicht.
     fn drawing_block(&self, state: &AppState) -> Option<String> {
         let Some(d) = self.current_drawing(state) else {
             return Some(NO_DRAWING.to_string());
@@ -1408,13 +1581,22 @@ impl ExportDialog {
         if state.bodies.iter().all(|b| b.kind == BodyKind::Mesh) {
             return Some(DrawError::MeshBodiesOnly.to_string());
         }
-        if d.views.is_empty() && matches!(d.kind, DrawingKind::Views) {
-            return Some(format!(
-                "Die Zeichnung „{}“ hat noch keine Ansicht.",
-                shorten_for_display(&d.name)
-            ));
+        let no_view = |d: &Drawing| {
+            (d.views.is_empty() && matches!(d.kind, DrawingKind::Views)).then(|| {
+                format!(
+                    "Die Zeichnung „{}“ hat noch keine Ansicht.",
+                    shorten_for_display(&d.name)
+                )
+            })
+        };
+        if self.all_sheets() {
+            let all = state.document.drawings();
+            if all.len() > MAX_PAGES {
+                return Some(too_many_pages_text(all.len()));
+            }
+            return all.iter().find_map(no_view);
         }
-        None
+        no_view(d)
     }
 
     fn chooser_key_now(&self, state: &AppState) -> ChooserKey {
@@ -1425,8 +1607,89 @@ impl ExportDialog {
         }
     }
 
-    /// Startet die Berechnung der Zeichnung, wenn sich Zeichnung, Dokument oder Format geändert
-    /// haben, und holt ein fertiges Ergebnis ab.
+    /// Auftrag für die gewählte Zeichnung (SVG, DXF, PDF mit gewähltem Blatt).
+    fn spawn_one(&self, state: &AppState, key: DrawKey) -> Option<DrawRun> {
+        let drawing = self.current_drawing(state)?.clone();
+        let (solids, meshes) = drawing_bodies(state);
+        let (compute, resolve, format) = (self.compute, self.resolve, key.format);
+        let frame = self.with_frame.then(|| FrameInput {
+            project: state.document.project_info().cloned(),
+            ctx: context_or_single(state, drawing.id),
+            dxf: format == DrawingFormat::Dxf,
+        });
+        let parts = PartsInput {
+            dxf: format == DrawingFormat::Dxf,
+            ..parts_input(state, &drawing)
+        };
+        let is_list = matches!(drawing.kind, DrawingKind::PartsList { .. });
+        let job = Job::spawn(move |p| {
+            let mut r = prepare_drawing_parts(
+                &drawing,
+                &solids,
+                compute,
+                resolve,
+                frame.as_ref(),
+                &parts,
+                p,
+            )?;
+            if format == DrawingFormat::Dxf {
+                if let Some(texts) = &r.texts {
+                    dxf_sheet_texts_ok(texts)?;
+                }
+                dxf_texts_fit(&r.model)?;
+            }
+            if format == DrawingFormat::Pdf {
+                pdf_texts_ok(&r)?;
+            }
+            // Ein Stücklistenblatt hat keine Ansichten, die Netz-Körper auslassen.
+            if !is_list {
+                r.skipped_meshes = meshes;
+            }
+            Ok(vec![r])
+        });
+        Some((key, job, None))
+    }
+
+    /// Auftrag für alle Blätter des Dokuments in Dokumentreihenfolge (P12): je Blatt eigener
+    /// Blattrahmen mit seiner Stellung im Dokument und eigene Stückliste, beides ohne
+    /// DXF-Zuschlag. Der Hinweis auf Netz-Körper steht einmal (am ersten Ansichtenblatt).
+    fn spawn_all(&self, state: &AppState, key: DrawKey) -> DrawRun {
+        let (solids, meshes) = drawing_bodies(state);
+        let project = state.document.project_info().cloned();
+        let sheets: Vec<SheetJob> = state
+            .document
+            .drawings()
+            .iter()
+            .map(|d| SheetJob {
+                drawing: d.clone(),
+                frame: self.with_frame.then(|| FrameInput {
+                    project: project.clone(),
+                    ctx: context_or_single(state, d.id),
+                    dxf: false,
+                }),
+                parts: parts_input(state, d),
+            })
+            .collect();
+        let total = sheets.len();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let shared = Arc::clone(&counter);
+        let (compute, resolve) = (self.compute, self.resolve);
+        let job = Job::spawn(move |p| {
+            let mut r = prepare_all_sheets(&sheets, &solids, compute, resolve, &shared, p)?;
+            if let Some(first) = sheets
+                .iter()
+                .zip(r.iter_mut())
+                .find(|(s, _)| !matches!(s.drawing.kind, DrawingKind::PartsList { .. }))
+            {
+                first.1.skipped_meshes = meshes;
+            }
+            Ok(r)
+        });
+        (key, job, Some((counter, total)))
+    }
+
+    /// Startet die Berechnung der Zeichnung (bzw. aller Blätter), wenn sich Zeichnung, Dokument,
+    /// Format oder Wahl geändert haben, und holt ein fertiges Ergebnis ab.
     fn tick_drawing(&mut self, state: &AppState, block: bool) {
         if self
             .drawing
@@ -1435,60 +1698,23 @@ impl ExportDialog {
             self.drawing = default_drawing(state);
         }
         if let (Some(key), None) = (self.drawing_key(state), self.drawing_block(state)) {
-            let fresh = self.prepared_for(key.2).is_some_and(|(k, _)| *k == key);
-            let running = self.drawing_job.as_ref().is_some_and(|(k, _)| *k == key);
-            if !fresh
-                && !running
-                && let Some(drawing) = self.current_drawing(state).cloned()
-            {
-                let (solids, meshes) = drawing_bodies(state);
-                let (compute, resolve, format) = (self.compute, self.resolve, key.2);
-                let frame = self.with_frame.then(|| FrameInput {
-                    project: state.document.project_info().cloned(),
-                    ctx: context_or_single(state, drawing.id),
-                    dxf: format == DrawingFormat::Dxf,
-                });
-                let parts = PartsInput {
-                    dxf: format == DrawingFormat::Dxf,
-                    ..parts_input(state, &drawing)
-                };
-                let is_list = matches!(drawing.kind, DrawingKind::PartsList { .. });
+            let fresh = self
+                .prepared_for(key.format)
+                .is_some_and(|(k, _)| *k == key);
+            let running = self.drawing_job.as_ref().is_some_and(|(k, ..)| *k == key);
+            if !fresh && !running {
                 // Ein alter Auftrag wird dabei fallengelassen und bricht ab.
-                self.drawing_job = Some((
-                    key,
-                    Job::spawn(move |p| {
-                        let mut r = prepare_drawing_parts(
-                            &drawing,
-                            &solids,
-                            compute,
-                            resolve,
-                            frame.as_ref(),
-                            &parts,
-                            p,
-                        )?;
-                        if format == DrawingFormat::Dxf {
-                            if let Some(texts) = &r.texts {
-                                dxf_sheet_texts_ok(texts)?;
-                            }
-                            dxf_texts_fit(&r.model)?;
-                        }
-                        if format == DrawingFormat::Pdf {
-                            if let Some(texts) = &r.texts {
-                                pdf_sheet_texts_ok(texts)?;
-                            }
-                            pdf_model_texts_ok(&r.model)?;
-                        }
-                        // Ein Stücklistenblatt hat keine Ansichten, die Netz-Körper auslassen.
-                        if !is_list {
-                            r.skipped_meshes = meshes;
-                        }
-                        Ok(r)
-                    }),
-                ));
+                let run = match key.target {
+                    DrawTarget::All => Some(self.spawn_all(state, key)),
+                    DrawTarget::One(_) => self.spawn_one(state, key),
+                };
+                if run.is_some() {
+                    self.drawing_job = run;
+                }
             }
         }
         let finished = match &self.drawing_job {
-            Some((k, job)) => match job.fetch(block) {
+            Some((k, job, _)) => match job.fetch(block) {
                 Poll::Pending => None,
                 Poll::Ready(r) => Some((*k, r.map(Arc::new))),
                 Poll::Lost => Some((*k, Err(LOST.to_string()))),
@@ -1501,27 +1727,54 @@ impl ExportDialog {
         }
     }
 
+    /// Bei „Alle Blätter“, solange gerechnet wird: das laufende Blatt (ab 1) und die Zahl der
+    /// Blätter.
+    pub fn computing_sheet(&self) -> Option<(usize, usize)> {
+        let (_, _, Some((counter, total))) = self.drawing_job.as_ref()? else {
+            return None;
+        };
+        let n = counter
+            .load(AtomicOrdering::SeqCst)
+            .clamp(1, (*total).max(1));
+        Some((n, *total))
+    }
+
     fn drawing_status(&self, state: &AppState) -> ExportStatus {
         if let Some(m) = self.drawing_block(state) {
             return ExportStatus::Unavailable(m);
         }
         let key = self.drawing_key(state);
-        if let Some((k, job)) = &self.drawing_job
+        if let Some((k, job, _)) = &self.drawing_job
             && Some(*k) == key
         {
             return ExportStatus::Computing(job.fraction());
         }
-        match key.and_then(|k| self.prepared_for(k.2)) {
-            Some((k, Ok(p))) if Some(*k) == key => ExportStatus::DrawingReady {
-                views: p.views,
-                sheet: p.sheet.clone(),
-                visible: p.visible,
-                hidden: p.hidden,
-                skipped_meshes: p.skipped_meshes.clone(),
-                dimensions: p.dimensions,
-                outside: p.outside,
-                centerlines: p.centerlines,
-            },
+        match key.and_then(|k| self.prepared_for(k.format)) {
+            Some((k, Ok(list))) if Some(*k) == key => {
+                let all = k.target == DrawTarget::All;
+                let sum = |f: fn(&DrawingPrepared) -> usize| list.iter().map(f).sum::<usize>();
+                ExportStatus::DrawingReady {
+                    views: sum(|p| p.views),
+                    sheet: if all {
+                        pages_label(list.len())
+                    } else {
+                        list.first().map(|p| p.sheet.clone()).unwrap_or_default()
+                    },
+                    visible: sum(|p| p.visible),
+                    hidden: sum(|p| p.hidden),
+                    skipped_meshes: list
+                        .iter()
+                        .flat_map(|p| p.skipped_meshes.iter().cloned())
+                        .collect(),
+                    dimensions: sum(|p| p.dimensions),
+                    outside: sum(|p| p.outside),
+                    centerlines: if all {
+                        centerline_use_all(state.document.drawings())
+                    } else {
+                        list.first().map_or(CenterlineUse::No, |p| p.centerlines)
+                    },
+                }
+            }
             Some((k, Err(m))) if Some(*k) == key => ExportStatus::Failed(m.clone()),
             _ => ExportStatus::Computing(0.0),
         }
@@ -1529,17 +1782,21 @@ impl ExportDialog {
 
     /// Das Ergebnis des Zeichnungsformats `format`, falls es eines gibt.
     fn prepared_for(&self, format: DrawingFormat) -> Option<&(DrawKey, DrawResult)> {
-        self.drawing_prepared.iter().find(|(k, _)| k.2 == format)
+        self.drawing_prepared
+            .iter()
+            .find(|(k, _)| k.format == format)
     }
 
     /// Merkt sich ein Ergebnis und ersetzt das alte desselben Formats.
     fn store_prepared(&mut self, entry: (DrawKey, DrawResult)) {
-        self.drawing_prepared.retain(|(k, _)| k.2 != entry.0.2);
+        self.drawing_prepared
+            .retain(|(k, _)| k.format != entry.0.format);
         self.drawing_prepared.push(entry);
     }
 
-    /// Schreibt die fertige Zeichnung im Arbeitsthread nach `path` (über eine Hilfsdatei); nur
-    /// wenn alle Ansichten berechnet sind und das Ergebnis zum Stand von `state` passt.
+    /// Schreibt die fertige Zeichnung (bzw. bei „Alle Blätter“ alle Blätter in eine PDF) im
+    /// Arbeitsthread nach `path` (über eine Hilfsdatei); nur wenn alles berechnet ist und das
+    /// Ergebnis zum Stand von `state` passt.
     fn write_drawing(&mut self, path: PathBuf, format: DrawingFormat, state: &AppState) {
         if let Some(m) = self.drawing_block(state) {
             self.set_written(Err(m));
@@ -1565,20 +1822,27 @@ impl ExportDialog {
         let target = path.clone();
         self.written = None;
         let job: DrawWriteJob = if format == DrawingFormat::Pdf {
+            let pages = if key.is_some_and(|k| k.target == DrawTarget::All) {
+                PdfPages::All
+            } else {
+                PdfPages::Selected
+            };
             let meta = pdf_meta(
                 state,
-                PdfPages::Selected,
+                pages,
                 self.current_drawing(state).map(|d| d.id),
                 &Stamp::now().date,
             );
             let pdf_writer = self.pdf_writer;
             Job::spawn(move |p| {
-                pdf_writer(&target, &[&*prepared.model], &meta, p).map_err(draw_write_text)
+                let models: Vec<&SheetModel> = prepared.iter().map(|d| &*d.model).collect();
+                pdf_writer(&target, &models, &meta, p).map_err(draw_write_text)
             })
         } else {
             let writer = self.writer;
-            Job::spawn(move |p| {
-                writer(&target, &prepared.model, format, p).map_err(draw_write_text)
+            Job::spawn(move |p| match prepared.first() {
+                Some(d) => writer(&target, &d.model, format, p).map_err(draw_write_text),
+                None => Err(NOT_COMPUTED.to_string()),
             })
         };
         self.drawing_writing = Some((path, job));
@@ -1771,7 +2035,7 @@ impl ExportDialog {
     pub fn cancel(&mut self) {
         // Nur der Auftrag des gewählten Formats; der andere läuft im Hintergrund weiter.
         if self.format.is_drawing() {
-            if let Some((key, _)) = self.drawing_job.take() {
+            if let Some((key, ..)) = self.drawing_job.take() {
                 self.store_prepared((key, Err(ExchangeError::Cancelled.to_string())));
             }
         } else if self.format.is_step() {
@@ -1809,7 +2073,7 @@ impl ExportDialog {
     pub fn recompute(&mut self) {
         if self.format.is_drawing() {
             if let ExportFormat::Drawing(f) = self.format {
-                self.drawing_prepared.retain(|(k, _)| k.2 != f);
+                self.drawing_prepared.retain(|(k, _)| k.format != f);
             }
         } else if self.format.is_step() {
             self.step_prepared = None;
@@ -1819,9 +2083,12 @@ impl ExportDialog {
     }
 
     /// Öffnet die Dateiauswahl im Ordner `dir` mit dem Namen des Körpers (bei mehreren
-    /// „Körper“) bzw. der Zeichnung; Zeichen, die in Dateinamen nicht erlaubt sind, werden „_“.
+    /// „Körper“), der Zeichnung bzw. bei „Alle Blätter“ des Dokuments (P10); Zeichen, die in
+    /// Dateinamen nicht erlaubt sind, werden „_“.
     pub fn begin_save(&mut self, dir: PathBuf, state: &AppState) {
-        let stem = if self.format.is_drawing() {
+        let stem = if self.all_sheets() && !state.document_name.trim().is_empty() {
+            state.document_name.clone()
+        } else if self.format.is_drawing() {
             self.current_drawing(state)
                 .map_or_else(|| "Zeichnung".to_string(), |d| d.name.clone())
         } else {
@@ -1950,8 +2217,50 @@ impl ExportDialog {
         let is_list = current.is_some_and(|d| matches!(d.kind, DrawingKind::PartsList { .. }));
         let mut picked = current.map(|d| d.id);
         let picked_before = picked;
+        let is_pdf = before == ExportFormat::Drawing(DrawingFormat::Pdf);
+        let all = self.all_sheets();
+        let mut pdf_pages = self.pdf_pages;
+        let sheet_no = self.computing_sheet();
         let mut drawing_info: Vec<String> = Vec::new();
-        if let Some(d) = current {
+        if all {
+            // Alle Blätter: Zahl der Blätter und Summen über alle (P9).
+            let drawings = state.document.drawings();
+            drawing_info.push(format!("Blätter: {}", drawings.len()));
+            let (views, dims, centerlines) = match &status {
+                ExportStatus::DrawingReady {
+                    views,
+                    dimensions,
+                    centerlines,
+                    ..
+                } => (*views, *dimensions, *centerlines),
+                _ => (
+                    drawings.iter().map(|d| d.views.len()).sum(),
+                    drawings.iter().map(|d| d.dimensions.len()).sum(),
+                    centerline_use_all(drawings),
+                ),
+            };
+            drawing_info.push(format!("Ansichten: {}", group_digits(views as u64)));
+            drawing_info.push(match &status {
+                ExportStatus::DrawingReady {
+                    visible, hidden, ..
+                } => format!(
+                    "Linien: {} sichtbar, {} verdeckt",
+                    group_digits(*visible as u64),
+                    group_digits(*hidden as u64)
+                ),
+                _ => "Linien: …".to_string(),
+            });
+            drawing_info.push(format!("Maße: {}", group_digits(dims as u64)));
+            if let ExportStatus::DrawingReady { outside, .. } = &status
+                && *outside > 0
+            {
+                drawing_info.push(format!(
+                    "Maße außerhalb des Blatts: {}",
+                    group_digits(*outside as u64)
+                ));
+            }
+            drawing_info.push(format!("Mittellinien: {}", centerlines.label()));
+        } else if let Some(d) = current {
             let views = match &status {
                 ExportStatus::DrawingReady { views, .. } => *views,
                 _ => d.views.len(),
@@ -2035,6 +2344,11 @@ impl ExportDialog {
                 };
                 let mut drawing_card = |ui: &mut egui::Ui| {
                     ui.strong("Zeichnung");
+                    // Nur bei PDF: das gewählte Blatt oder alle Blätter (P9).
+                    if is_pdf {
+                        ui.radio_value(&mut pdf_pages, PdfPages::Selected, PDF_SELECTED);
+                        ui.radio_value(&mut pdf_pages, PdfPages::All, PDF_ALL);
+                    }
                     if drawing_list.is_empty() {
                         ui.weak("Keine Zeichnung vorhanden.");
                     } else {
@@ -2042,14 +2356,21 @@ impl ExportDialog {
                             .iter()
                             .find(|(id, _)| Some(*id) == picked)
                             .map_or("", |(_, n)| n.as_str());
-                        egui::ComboBox::from_id_salt("export-drawing")
-                            .selected_text(shown)
-                            .width(ui.available_width())
-                            .show_ui(ui, |ui| {
-                                for (id, name) in &drawing_list {
-                                    ui.selectable_value(&mut picked, Some(*id), name.as_str());
-                                }
-                            });
+                        ui.add_enabled_ui(!all, |ui| {
+                            egui::ComboBox::from_id_salt("export-drawing")
+                                .selected_text(shown)
+                                .width(ui.available_width())
+                                .show_ui(ui, |ui| {
+                                    for (id, name) in &drawing_list {
+                                        ui.selectable_value(&mut picked, Some(*id), name.as_str());
+                                    }
+                                });
+                        })
+                        .response
+                        .on_disabled_hover_text(PDF_ALL_HINT);
+                        if all {
+                            ui.weak(PDF_ALL_HINT);
+                        }
                     }
                     for line in &drawing_info {
                         ui.label(line);
@@ -2069,7 +2390,10 @@ impl ExportDialog {
                 ui.add_space(8.0);
                 match &status {
                     ExportStatus::Computing(f) => {
-                        let text = computing_text(before, is_list);
+                        let text = match sheet_no {
+                            Some((n, total)) if all => sheet_progress_text(n, total),
+                            _ => computing_text(before, is_list).to_string(),
+                        };
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::ProgressBar::new(*f)
@@ -2140,7 +2464,9 @@ impl ExportDialog {
                         outside,
                         ..
                     } => {
-                        ui.label(if is_list {
+                        ui.label(if all {
+                            "Alle Blätter sind berechnet."
+                        } else if is_list {
                             "Die Stückliste ist berechnet."
                         } else {
                             "Alle Ansichten sind berechnet."
@@ -2242,6 +2568,8 @@ impl ExportDialog {
         if other_drawing {
             self.drawing = picked;
         }
+        let other_pages = pdf_pages != self.pdf_pages;
+        self.pdf_pages = pdf_pages;
         let stale_chooser = self
             .chooser_key
             .is_some_and(|k| k != self.chooser_key_now(state));
@@ -2249,7 +2577,7 @@ impl ExportDialog {
             self.chooser = None;
             self.chooser_key = None;
         }
-        if self.format != before || stale_chooser || other_drawing || toggled {
+        if self.format != before || stale_chooser || other_drawing || toggled || other_pages {
             // Die Meldung „Fertig“ gehörte zum alten Format oder Stand.
             self.written = None;
         }
