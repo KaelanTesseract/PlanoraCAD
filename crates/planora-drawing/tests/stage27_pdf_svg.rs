@@ -10,20 +10,26 @@
 
 mod common;
 
+use common::model::cylinder_solid;
 use common::pdf_read::{self, Item, mm, read, text_width_pt};
-use common::svg_marks::{box_sheet, cylinder_sheet, manual_sheet};
+use common::svg_marks::{box_sheet, cylinder_sheet, drawing, manual_sheet};
 use common::svg_read::{self, ReadPath, ReadText};
-use planora_drawing::annotate::{Mark, MarkKind, TextAnchor};
+use planora_drawing::annotate::{Mark, MarkKind, ResolvedDims, TextAnchor};
 use planora_drawing::balloon::{PositionPen, layout_balloon};
-use planora_drawing::model::{Paper, Projection, Sheet};
+use planora_drawing::model::{Paper, Placement, Projection, Scale, Sheet};
 use planora_drawing::out2d::Out2d;
-use planora_drawing::sheet::{SheetLine, SheetModel, SheetView};
+use planora_drawing::sheet::{SheetLine, SheetModel, SheetView, build_sheet_with};
 use planora_drawing::sheet_frame::{PartsSpace, TitleField, sheet_layout_with, sheet_scale};
 use planora_drawing::sheet_info::TitleTexts;
 use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::stroke::StrokeOrigin;
-use planora_drawing::{PdfMeta, ViewId, Visibility, dxf_string, pdf_bytes, svg_string};
+use planora_drawing::{
+    DrawBody, PdfMeta, ViewId, ViewKind, ViewLines, Visibility, compute_view, dxf_string,
+    pdf_bytes, svg_string,
+};
+use planora_exchange::Progress;
 use planora_math::{DVec2, PI, TAU};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------------------------
@@ -47,10 +53,44 @@ fn golden_meta() -> PdfMeta {
     }
 }
 
-/// Goldenes Blatt 1: `cylinder_sheet(true)` auf A4 quer, ohne Rahmen.
+/// Goldenes Blatt 1: Zylinder (r 8, h 12) auf A4 quer, ohne Rahmen, mit Mittellinien: Vorne,
+/// Oben (Kreise) und Isometrie 2:1 (Ellipsen), alle Ansichten ganz auf dem Blatt.
 fn golden_cylinder() -> SheetModel {
-    let mut m = cylinder_sheet(true);
-    m.sheet = sheet(Paper::A4, true);
+    let solid = cylinder_solid(8.0, 12.0);
+    let bodies = [DrawBody {
+        name: "Z".into(),
+        solid: &solid,
+    }];
+    let mut d = drawing(Paper::A4);
+    let one = Scale { num: 1, den: 1 };
+    let f = d.add_view(
+        ViewKind::Front,
+        one,
+        Placement::Free { x: 70.0, y: 140.0 },
+        None,
+    );
+    let t = d.add_view(
+        ViewKind::Top,
+        one,
+        Placement::Aligned { distance: 40.0 },
+        Some(f),
+    );
+    let i = d.add_view(
+        ViewKind::Isometric,
+        Scale { num: 2, den: 1 },
+        Placement::Free { x: 200.0, y: 105.0 },
+        None,
+    );
+    for w in &mut d.views {
+        w.centerlines = true;
+    }
+    let p = Progress::new();
+    let vf = compute_view(&bodies, ViewKind::Front, &p).unwrap();
+    let vt = compute_view(&bodies, ViewKind::Top, &p).unwrap();
+    let vi = compute_view(&bodies, ViewKind::Isometric, &p).unwrap();
+    let res: BTreeMap<ViewId, &ViewLines> = BTreeMap::from([(f, &vf), (t, &vt), (i, &vi)]);
+    let m = build_sheet_with(&d, &res, &ResolvedDims::default());
+    assert_eq!(m.sheet, sheet(Paper::A4, true));
     assert!(m.frame.is_none());
     m
 }
@@ -790,6 +830,8 @@ fn arcs_follow(what: &str, model: &SheetModel) -> usize {
 fn beziers_follow_the_arcs() {
     // Die Ellipsen der Isometrie: 6 Bogenstücke.
     assert_eq!(arcs_follow("Zylinder", &cylinder_sheet(true)), 6);
+    // Kreis der Draufsicht (4 Stücke) und Ellipsen der Isometrie (6 Stücke).
+    assert_eq!(arcs_follow("Golden 1", &golden_cylinder()), 10);
     assert_eq!(arcs_follow("Golden 2", &golden_box()), 20);
     // Ellipsen und Bögen über 0° hinweg.
     assert_eq!(arcs_follow("Splines", &spline_sheet()), 10);
@@ -864,6 +906,24 @@ fn golden_files() {
         let pdf = read(&stored).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(pdf.pages.len(), 1);
         assert_eq!(pdf.pages[0].media_box, [0.0, 0.0, size[0], size[1]]);
+        // Nichts ragt über den Blattrand (alle Punkte und Steuerpunkte auf der Seite).
+        for item in &pdf.pages[0].items {
+            let (Item::Stroke { subpaths, .. } | Item::Fill { subpaths, .. }) = item else {
+                continue;
+            };
+            for seg in subpaths.iter().flatten() {
+                let pts = match seg {
+                    pdf_read::Seg::Line(a, b) => vec![*a, *b],
+                    pdf_read::Seg::Cubic(a, c1, c2, b) => vec![*a, *c1, *c2, *b],
+                };
+                for (x, y) in pts {
+                    assert!(
+                        (0.0..=size[0]).contains(&x) && (0.0..=size[1]).contains(&y),
+                        "{name}: Punkt ({x}, {y}) außerhalb der Seite"
+                    );
+                }
+            }
+        }
         assert_eq!(pdf_read::utf16_text(&pdf.info["Title"]), "Golden");
         assert_eq!(pdf_read::utf16_text(&pdf.info["Author"]), "Prüfer Ä");
         assert_eq!(
@@ -908,11 +968,19 @@ fn golden_files() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// (d) Goldene SVG- und DXF-Dateien unverändert (Schutz der gemeinsamen `fitted_cubics`)
+// (d) Goldene SVG- und DXF-Dateien unverändert; `svg_splines.svg` (mit dem Stand vor jeder
+// Änderung an `fitted_cubics` erzeugt) enthält rationale und höhergradige Splines und schützt so
+// die gemeinsame kubische Näherung.
 // ---------------------------------------------------------------------------------------------
 
 #[test]
 fn golden_svgs_unchanged() {
+    let splines = svg_string(&spline_sheet()).unwrap();
+    let golden = include_str!("fixtures/svg_splines.svg");
+    assert!(!golden.contains('\r'));
+    // Die Näherung erzeugt viele Kubiken (Grad 5, rational Grad 2 und 3).
+    assert!(golden.matches(" C ").count() > 100);
+    assert!(splines == golden, "SVG der Splines hat sich geändert");
     let b = box_sheet(false);
     let c = cylinder_sheet(false);
     assert_eq!(

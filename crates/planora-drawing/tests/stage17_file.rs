@@ -217,13 +217,17 @@ fn pdf_format_and_file() {
     };
     let want = pdf_bytes(&pages, &meta).unwrap();
     let path = dir.join("drei.pdf");
-    let n = export_pdf_file(&path, &pages, &meta, &Progress::new()).unwrap();
+    let p = Progress::new();
+    let n = export_pdf_file(&path, &pages, &meta, &p).unwrap();
     assert_eq!(n, want.len() as u64);
+    assert_eq!(p.fraction(), 1.0);
     assert_eq!(fs::read(&path).unwrap(), want);
     assert_eq!(temp_files(&dir), 0);
     // Über `export_drawing_file` dieselben Bytes wie `drawing_to_bytes`.
     let one = dir.join("eins.pdf");
-    let n = export_drawing_file(&one, &m, DrawingFormat::Pdf, &Progress::new()).unwrap();
+    let p = Progress::new();
+    let n = export_drawing_file(&one, &m, DrawingFormat::Pdf, &p).unwrap();
+    assert_eq!(p.fraction(), 1.0);
     let bytes = fs::read(&one).unwrap();
     assert_eq!(n, bytes.len() as u64);
     assert_eq!(bytes, drawing_to_bytes(&m, DrawingFormat::Pdf).unwrap());

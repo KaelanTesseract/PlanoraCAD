@@ -472,6 +472,31 @@ fn info_and_identity() {
     assert!(!read(&b).unwrap().info.contains_key("CreationDate"));
     assert_eq!(pdf_date("2026-10-18").as_deref(), Some("D:20261018000000Z"));
     assert_eq!(pdf_date("1999-01-31").as_deref(), Some("D:19990131000000Z"));
+    // Tag passend zum Monat, Schaltjahre (durch 4, nicht durch 100, außer durch 400).
+    for good in [
+        "2026-02-28",
+        "2024-02-29",
+        "2000-02-29",
+        "2026-04-30",
+        "2026-12-31",
+        "2026-03-31",
+        "2026-08-31",
+    ] {
+        assert!(pdf_date(good).is_some(), "{good}");
+    }
+    for bad in [
+        "2026-02-31",
+        "2026-02-29",
+        "1900-02-29",
+        "2100-02-29",
+        "2026-04-31",
+        "2026-06-31",
+        "2026-09-31",
+        "2026-11-31",
+        "2026-02-30",
+    ] {
+        assert_eq!(pdf_date(bad), None, "{bad}");
+    }
     for bad in [
         "2026-1-018",
         "2026/10/18",

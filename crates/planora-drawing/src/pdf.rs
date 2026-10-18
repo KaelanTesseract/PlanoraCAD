@@ -117,7 +117,8 @@ pub fn pdf_num(x: f64) -> Result<String, DrawError> {
     })
 }
 
-/// „JJJJ-MM-TT“ → „D:JJJJMMTT000000Z“ (Monat 1–12, Tag 1–31); sonst `None`.
+/// „JJJJ-MM-TT“ → „D:JJJJMMTT000000Z“ (Monat 1–12, Tag passend zum Monat, 29. Februar nur in
+/// Schaltjahren); sonst `None`.
 pub fn pdf_date(date: &str) -> Option<String> {
     let b = date.as_bytes();
     if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
@@ -127,9 +128,18 @@ pub fn pdf_date(date: &str) -> Option<String> {
     if !(digits(0..4) && digits(5..7) && digits(8..10)) {
         return None;
     }
+    let year: u32 = date[0..4].parse().ok()?;
     let month: u32 = date[5..7].parse().ok()?;
     let day: u32 = date[8..10].parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if !(1..=days).contains(&day) {
         return None;
     }
     Some(format!(
