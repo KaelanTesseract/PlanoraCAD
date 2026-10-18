@@ -34,7 +34,7 @@ pub use centerline::{CenterLine, CenterSource, centerlines};
 pub use dimension::{Anchor, Measured, measure};
 pub use dxf::{dxf_string, write_dxf};
 pub use error::DrawError;
-pub use file::{DrawingFormat, drawing_to_bytes, export_drawing_file};
+pub use file::{DrawingFormat, drawing_to_bytes, export_drawing_file, export_pdf_file};
 pub use layout::{GAP_MM, align_dir, view_extent};
 pub use model::{
     Balloon, BalloonId, Drawing, DrawingId, DrawingKind, Paper, Placement, Projection, Scale,

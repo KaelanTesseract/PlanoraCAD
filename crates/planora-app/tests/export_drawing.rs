@@ -1383,6 +1383,7 @@ fn parts_sheet_exports_its_table() {
                         assert_eq!(out.contains("BLATTRAHMEN"), frame, "{at}");
                         assert!(out.contains("\r\nBLATT\r\n"), "Ebene BLATT {at}");
                     }
+                    DrawingFormat::Pdf => unreachable!("PDF steht nicht in dieser Liste"),
                 }
             }
         }

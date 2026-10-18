@@ -1,4 +1,4 @@
-//! Stufe 17: Schreiben einer Zeichnung in eine Datei (SVG, DXF) über eine Hilfsdatei im
+//! Stufe 17: Schreiben einer Zeichnung in eine Datei (SVG, DXF, PDF) über eine Hilfsdatei im
 //! Zielordner. Eine vorhandene Zieldatei bleibt bei jedem Fehler und beim Abbrechen unverändert,
 //! die Hilfsdatei verschwindet.
 
@@ -7,6 +7,7 @@ use planora_drawing::model::{Paper, Sheet};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::sheet::{SheetLine, SheetModel, SheetView};
 use planora_drawing::{DrawError, ViewId, Visibility, dxf_string, svg_string};
+use planora_drawing::{PdfMeta, export_pdf_file, pdf_bytes};
 use planora_exchange::Progress;
 use planora_math::DVec2;
 use std::fs;
@@ -191,6 +192,78 @@ fn a_read_only_target_stays_and_leaves_no_helper_file() {
         // Unter Unix entscheidet der Ordner; dann ist die Datei vollständig ersetzt.
         assert!(r.is_err() && text == "alt" || r.is_ok() && text.starts_with("<?xml"));
     }
+    assert_eq!(temp_files(&dir), 0);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// (e) PDF: Endung, Name, Inhalt der Datei mit drei Seiten, Hilfsdatei und alte Zieldatei.
+#[test]
+fn pdf_format_and_file() {
+    assert_eq!(DrawingFormat::Pdf.extension(), "pdf");
+    assert_eq!(DrawingFormat::Pdf.label(), "Zeichnung als PDF");
+    let m = model();
+    assert_eq!(
+        drawing_to_bytes(&m, DrawingFormat::Pdf).unwrap(),
+        pdf_bytes(&[&m], &PdfMeta::default()).unwrap()
+    );
+
+    let dir = temp_dir("pdf");
+    let (a, b, c) = (model(), model_with(110.0), model_with(120.0));
+    let pages = [&a, &b, &c];
+    let meta = PdfMeta {
+        title: "Drei".into(),
+        author: Some("Prüfer".into()),
+        date: Some("2026-10-18".into()),
+    };
+    let want = pdf_bytes(&pages, &meta).unwrap();
+    let path = dir.join("drei.pdf");
+    let n = export_pdf_file(&path, &pages, &meta, &Progress::new()).unwrap();
+    assert_eq!(n, want.len() as u64);
+    assert_eq!(fs::read(&path).unwrap(), want);
+    assert_eq!(temp_files(&dir), 0);
+    // Über `export_drawing_file` dieselben Bytes wie `drawing_to_bytes`.
+    let one = dir.join("eins.pdf");
+    let n = export_drawing_file(&one, &m, DrawingFormat::Pdf, &Progress::new()).unwrap();
+    let bytes = fs::read(&one).unwrap();
+    assert_eq!(n, bytes.len() as u64);
+    assert_eq!(bytes, drawing_to_bytes(&m, DrawingFormat::Pdf).unwrap());
+
+    // Vorhandene Zieldatei bleibt bei einem NaN-Blatt und bei abgebrochenem Fortschritt.
+    let old = dir.join("alt.pdf");
+    fs::write(&old, "alt").unwrap();
+    let bad = model_with(f64::NAN);
+    let e = export_pdf_file(&old, &[&a, &bad], &meta, &Progress::new()).unwrap_err();
+    assert!(matches!(e, DrawError::NonFinite), "{e:?}");
+    assert_eq!(fs::read_to_string(&old).unwrap(), "alt");
+    assert_eq!(temp_files(&dir), 0);
+    let e = export_drawing_file(&old, &bad, DrawingFormat::Pdf, &Progress::new()).unwrap_err();
+    assert!(matches!(e, DrawError::NonFinite), "{e:?}");
+    assert_eq!(fs::read_to_string(&old).unwrap(), "alt");
+    let p = Progress::new();
+    p.cancel();
+    let e = export_pdf_file(&old, &pages, &meta, &p).unwrap_err();
+    assert!(matches!(e, DrawError::Cancelled), "{e:?}");
+    assert_eq!(fs::read_to_string(&old).unwrap(), "alt");
+    let e = export_drawing_file(&old, &m, DrawingFormat::Pdf, &p).unwrap_err();
+    assert!(matches!(e, DrawError::Cancelled), "{e:?}");
+    assert_eq!(fs::read_to_string(&old).unwrap(), "alt");
+    assert_eq!(temp_files(&dir), 0);
+    // Ohne Abbruch wird sie ersetzt.
+    export_pdf_file(&old, &pages, &meta, &Progress::new()).unwrap();
+    assert_eq!(fs::read(&old).unwrap(), want);
+
+    // Ziel ist ein Ordner: die Hilfsdatei wird ganz geschrieben, das Umbenennen scheitert, die
+    // Hilfsdatei verschwindet.
+    let target = dir.join("ordner.pdf");
+    fs::create_dir_all(&target).unwrap();
+    let e = export_pdf_file(&target, &pages, &meta, &Progress::new()).unwrap_err();
+    assert!(matches!(e, DrawError::Io(_)), "{e:?}");
+    assert!(target.is_dir());
+    assert_eq!(temp_files(&dir), 0, "Hilfsdatei muss weg sein");
+    // Keine Seiten: Fehler, nichts angelegt.
+    let none = dir.join("leer.pdf");
+    assert!(export_pdf_file(&none, &[], &meta, &Progress::new()).is_err());
+    assert!(!none.exists());
     assert_eq!(temp_files(&dir), 0);
     let _ = fs::remove_dir_all(&dir);
 }
