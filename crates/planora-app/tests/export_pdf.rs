@@ -2555,3 +2555,228 @@ fn author_is_trimmed() {
     assert_eq!(info_text(&pdf, "Author").as_deref(), Some("Erika"));
     let _ = fs::remove_dir_all(&dir);
 }
+
+// Nachbesserung nach der Prüfung von Aufgabe 5 ------------------------------------------------
+
+/// Status-Summen und Fenstertext über alle Blätter: das zweite Blatt trägt verdeckte Linien,
+/// Maße und ein Maß außerhalb des Blatts bei (das erste keines außerhalb).
+#[test]
+fn all_sums_cover_every_sheet() {
+    let (mut s, _) = named_boxes(2);
+    let a = add_drawing(&mut s, "Blatt A");
+    let b = add_small(&mut s, "Blatt B", A4_HOCH);
+    let iso = s
+        .document
+        .add_view(
+            b,
+            ViewKind::Isometric,
+            one(1, 2),
+            Placement::Free { x: 150.0, y: 60.0 },
+            None,
+        )
+        .unwrap();
+    s.document
+        .update_drawing(b, |dr| {
+            dr.views
+                .iter_mut()
+                .find(|v| v.id == iso)
+                .unwrap()
+                .show_hidden = true;
+        })
+        .unwrap();
+    let front = front_of(&s, b);
+    s.document
+        .add_dimension(b, width_dim(&s, 0, front))
+        .unwrap();
+    let mut far = width_dim(&s, 0, front);
+    far.offset = 400.0;
+    s.document.add_dimension(b, far).unwrap();
+    type Sums = (usize, usize, usize, usize, usize);
+    let sums = |st: ExportStatus| -> Sums {
+        match st {
+            ExportStatus::DrawingReady {
+                views,
+                visible,
+                hidden,
+                dimensions,
+                outside,
+                ..
+            } => (views, visible, hidden, dimensions, outside),
+            other => panic!("{other:?}"),
+        }
+    };
+    let sa = sums(dialog(&s, PDF, a).status(&s));
+    let sb = sums(dialog(&s, PDF, b).status(&s));
+    assert_eq!(sa.4, 0, "Blatt A ohne Maß außerhalb");
+    assert!(sb.2 > 0 && sb.3 == 2 && sb.4 >= 1, "Blatt B: {sb:?}");
+    let mut d = all_dialog(&s, false, compute_view);
+    let all = sums(d.status(&s));
+    assert_eq!(
+        all,
+        (
+            sa.0 + sb.0,
+            sa.1 + sb.1,
+            sa.2 + sb.2,
+            sa.3 + sb.3,
+            sa.4 + sb.4
+        )
+    );
+    let ui = draw(&mut d, &mut s);
+    for want in [
+        format!("Ansichten: {}", all.0),
+        format!(
+            "Linien: {} sichtbar, {} verdeckt",
+            group_digits(all.1 as u64),
+            group_digits(all.2 as u64)
+        ),
+        format!("Maße: {}", all.3),
+        format!("Maße außerhalb des Blatts: {}", all.4),
+        outside_text(all.4),
+    ] {
+        assert!(ui.contains(&want), "„{want}“ fehlt:\n{ui}");
+    }
+}
+
+fn panic_right(b: &[DrawBody], k: ViewKind, p: &Progress) -> Result<ViewLines, DrawError> {
+    if k == ViewKind::Right {
+        panic!("Testabsturz in der Ansicht");
+    }
+    first_body(b, k, p)
+}
+
+fn panic_resolve_blatt_2(
+    d: &planora_drawing::Drawing,
+    solids: &[&planora_kernel::Solid],
+    p: &Progress,
+) -> Result<planora_drawing::annotate::ResolvedDims, DrawError> {
+    if d.name == "Blatt 2" {
+        panic!("Testabsturz beim Auflösen");
+    }
+    resolve_dimensions_in_worker(d, solids, p)
+}
+
+/// Stürzt die Rechnung eines Blatts ab, wird nichts ausgelassen: die Meldung nennt das Blatt (F2).
+#[test]
+fn crashing_sheet_is_named_and_never_skipped() {
+    let (mut s, _) = named_boxes(1);
+    let ids: Vec<DrawingId> = (1..=3)
+        .map(|i| add_small(&mut s, &format!("Blatt {i}"), A4_HOCH))
+        .collect();
+    let dir = temp_dir("absturz");
+    // Absturz außerhalb der Ansichtsrechnung (beim Auflösen der Maße von Blatt 2).
+    let front = front_of(&s, ids[1]);
+    let dim = s
+        .document
+        .add_dimension(ids[1], width_dim(&s, 0, front))
+        .unwrap();
+    let mut d = ExportDialog::new(&s);
+    d.set_compute(first_body);
+    d.set_resolve(panic_resolve_blatt_2);
+    d.format = PDF;
+    d.pdf_pages = PdfPages::All;
+    locked(&mut d, &mut s, &in_sheet("Blatt 2", LOST), &dir);
+    s.document.delete_dimension(ids[1], dim).unwrap();
+    // Absturz in einer Ansicht von Blatt 2.
+    let front = front_of(&s, ids[1]);
+    s.document
+        .add_view(
+            ids[1],
+            ViewKind::Right,
+            one(1, 1),
+            Placement::Aligned { distance: 60.0 },
+            Some(front),
+        )
+        .unwrap();
+    let mut d = all_dialog(&s, false, panic_right);
+    locked(&mut d, &mut s, &in_sheet("Blatt 2", LOST), &dir);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Mehrere Ansichtenzeichnungen ohne Ansicht: gemeldet wird die erste.
+#[test]
+fn no_view_lock_names_the_first_such_sheet() {
+    let mut s = box_state();
+    add_small(&mut s, "Blatt 1", A4_HOCH);
+    for name in ["Leer A", "Blatt 3", "Leer B"] {
+        if name.starts_with("Leer") {
+            s.document
+                .add_drawing(name, A4_HOCH, Projection::First)
+                .unwrap();
+        } else {
+            add_small(&mut s, name, A4_HOCH);
+        }
+    }
+    let d = all_dialog(&s, false, compute_view);
+    assert_eq!(
+        d.status(&s),
+        ExportStatus::Unavailable("Die Zeichnung „Leer A“ hat noch keine Ansicht.".into())
+    );
+}
+
+/// Ein Wechsel der Wahl „Gewähltes Blatt“/„Alle Blätter“ im Fenster löscht die Meldung „Fertig“.
+#[test]
+fn page_choice_clears_the_done_message() {
+    use common::{Screen, find};
+    let mut s = box_state();
+    let id = add_drawing(&mut s, "Blatt 1");
+    add_small(&mut s, "Blatt 2", A4_HOCH);
+    let dir = temp_dir("fertig");
+    let mut d = dialog(&s, PDF, id);
+    written(&mut d, &s, &dir.join("f.pdf"));
+    let mut screen = Screen::new(1200.0, 800.0);
+    let mut last = None;
+    let seen = screen.settle(3, &mut |ctx| {
+        assert!(d.show(ctx, &mut s, &mut last));
+    });
+    let done_text = |seen: &[common::Seen]| seen.iter().any(|x| x.text.starts_with("Fertig:"));
+    assert!(done_text(&seen), "Fertig vor dem Wechsel");
+    let all = find(&seen, PDF_ALL).expect("Wahl").rect.center();
+    let seen = {
+        let mut f = |ctx: &egui::Context| {
+            assert!(d.show(ctx, &mut s, &mut last));
+        };
+        screen.click(all, &mut f);
+        screen.settle(2, &mut f)
+    };
+    assert_eq!(d.pdf_pages, PdfPages::All);
+    assert!(!done_text(&seen), "Fertig nach dem Wechsel gelöscht");
+    assert_eq!(d.write_state(), WriteState::Idle);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Regel für den Blattnamen in „Im Blatt …“: wie überall in Meldungen höchstens 40 Zeichen, dann
+/// „…“ (`shorten_for_display`).
+#[test]
+fn long_sheet_name_is_shortened_in_the_message() {
+    let mut s = box_state();
+    add_small(&mut s, "Blatt 1", A4_HOCH);
+    let long = format!("Halter {}", "x".repeat(60));
+    let id = add_small(&mut s, &long, A4_HOCH);
+    set_title(&mut s, id, "Titel 😀");
+    let shown = format!("{}…", long.chars().take(40).collect::<String>());
+    assert_eq!(shorten_for_display(&long), shown);
+    let d = all_dialog(&s, true, compute_view);
+    assert_eq!(
+        d.status(&s),
+        ExportStatus::Failed(in_sheet(&shown, &pdf_char_text('😀', "Titel")))
+    );
+}
+
+/// Stücklistenblätter ohne Rahmen werden bei „Alle Blätter“ ohne DXF-Zuschlag gebaut: lange
+/// Zellen stehen genau wie beim gewählten Blatt in der Datei.
+#[test]
+fn parts_sheets_in_all_have_no_dxf_widening() {
+    let (mut s, f, ids) = getriebe();
+    let long = "Lagerdeckel mit Dichtring und Sicherungsblech links";
+    set_name_override(&mut s, f[0], long);
+    set_name_override(&mut s, f[44], long);
+    let dir = temp_dir("ohne-zuschlag");
+    let mut d = all_dialog(&s, false, first_body);
+    let pdf = read(&written(&mut d, &s, &dir.join("alle.pdf")));
+    assert_eq!(pdf.pages.len(), 4);
+    for (i, id) in ids.iter().enumerate().skip(1).take(2) {
+        let one = selected_pdf(&s, *id, false, first_body, &dir.join(format!("s{i}.pdf")));
+        assert_eq!(pdf.pages[i].ops, one.pages[0].ops, "Seite {i}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
