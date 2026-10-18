@@ -127,6 +127,11 @@ fn top_width_key() -> egui::Id {
     top_id().with("wanted")
 }
 
+/// Gemerkte Wunschbreite des oberen Felds ohne das Programmzeichen (außen).
+fn top_base_key() -> egui::Id {
+    top_id().with("base")
+}
+
 /// Mindestbreite des Hinweisfelds der Zeichnung (außen); ein langer Status bricht dann um.
 const DRAWING_HINT_MIN_W: f32 = 2.0 * shell::MIN_FIELD_W;
 
@@ -532,13 +537,19 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
         ui.horizontal_centered(|ui| {
             // Kleines Programmzeichen links vom Menü; sein Platz (mit Abstand) zählt zur
             // Wunsch- und Mindestbreite des Felds.
-            let lead = match logo::image(ctx, "top-64", logo::ICON_64, logo::SMALL_SIZE) {
-                Some(image) => {
-                    ui.add(image);
-                    logo::SMALL_SIZE + ui.spacing().item_spacing.x
-                }
-                None => 0.0,
+            // Es steht nur da, wenn das ganze Feld damit ohne Rollen zwischen die Spalten passt
+            // (`shell::top_icon_fits`); vor der ersten Messung fehlt es.
+            let lead_w = logo::SMALL_SIZE + ui.spacing().item_spacing.x;
+            let fits = stored(ctx, top_base_key())
+                .is_some_and(|base| shell::top_icon_fits(ctx.content_rect().width(), base, lead_w));
+            let image = if fits {
+                logo::image(ctx, "top-64", logo::ICON_64, logo::SMALL_SIZE)
+            } else {
+                None
             };
+            if let Some(image) = image {
+                ui.add(image);
+            }
             let menu = ui.allocate_ui(vec2(menu_w.min(ui.available_width()), inner.y), |ui| {
                 ui.add_enabled_ui(no_prompt, |ui| {
                     app::menu_bar_measured(ui, &mut app.ws, &mut app.shell)
@@ -586,16 +597,21 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
             // Wunschbreite: Menüknöpfe, Trennstrich mit Abständen, alle Tabs, Rand.
             let gap = tabs.inner_rect.left() - menu.response.rect.right();
             remember_width(ui, menu_width_key(), menu_natural);
+            // Das Zeichen zählt nach der Regel mit, auch wenn es in diesem Durchgang noch fehlt:
+            // so stehen die gemerkten Breiten schon nach dem ersten Durchgang fest (kein Sprung).
+            let base = menu_natural + gap + tabs.content_size.x + margin;
+            let planned = if shell::top_icon_fits(ctx.content_rect().width(), base, lead_w) {
+                lead_w
+            } else {
+                0.0
+            };
             remember_width(
                 ui,
                 top_min_key(),
-                lead + menu_natural + gap + MIN_TABS_W + margin,
+                planned + menu_natural + gap + MIN_TABS_W + margin,
             );
-            remember_width(
-                ui,
-                top_width_key(),
-                lead + menu_natural + gap + tabs.content_size.x + margin,
-            );
+            remember_width(ui, top_base_key(), base);
+            remember_width(ui, top_width_key(), planned + base);
             // Erst als erledigt merken, wenn dieser Durchgang gilt (sonst rollt der nächste).
             if !ui.ctx().will_discard() {
                 ui.ctx().data_mut(|d| d.insert_temp(revealed_key(), shown));

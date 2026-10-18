@@ -44,7 +44,7 @@ fn input(size: Vec2, events: Vec<Event>) -> egui::RawInput {
     }
 }
 
-fn app() -> PlanoraApp {
+fn new_app() -> PlanoraApp {
     let root = common::temp_root("planora-about");
     PlanoraApp::for_tests(Workspace::new(
         Some(Library::open(&root).unwrap()),
@@ -176,7 +176,7 @@ fn unreadable_icon_data_falls_back_without_panic() {
 #[test]
 fn datei_menu_opens_the_about_dialog_and_it_closes() {
     let c = context();
-    let mut app = app();
+    let mut app = new_app();
     let shot = open_about(&c, &mut app, BIG);
     assert!(app.ws_mut().about_open, "Dialog ist offen");
 
@@ -247,7 +247,7 @@ fn about_texts_are_plain_language() {
 #[test]
 fn about_dialog_fits_the_smallest_window() {
     let c = context();
-    let mut app = app();
+    let mut app = new_app();
     open_about(&c, &mut app, SMALL);
     settle(&c, &mut app, SMALL);
     let id = egui::Id::new(about_dialog::TITLE);
@@ -260,48 +260,67 @@ fn about_dialog_fits_the_smallest_window() {
     );
 }
 
+/// Das Zeichen im oberen Feld (falls gezeigt) und das Feld.
+fn top_icon(shot: &Shot, top: Rect) -> Option<Rect> {
+    let small: Vec<Rect> = shot
+        .images
+        .iter()
+        .copied()
+        .filter(|r| top.contains_rect(*r))
+        .collect();
+    assert!(small.len() <= 1, "höchstens ein Zeichen: {small:?}");
+    small.first().copied()
+}
+
+/// Rechter Rand des „Neuer Tab“-Zeichens.
+fn plus_right(shot: &Shot) -> f32 {
+    shot.texts
+        .iter()
+        .find(|t| t.0 == icons::glyph(Icon::NewTab).to_string())
+        .expect("Neuer Tab")
+        .1
+        .right()
+}
+
+/// Alles in der Zeile liegt im Feld, mit dem Rand wie links (kein Rollen nötig).
+fn assert_no_scroll(shot: &Shot, top: Rect, what: &str) {
+    let margin = shot.rect("Datei").unwrap().left() - top.left();
+    let icon = top_icon(shot, top);
+    let margin = icon.map_or(margin, |i| i.left() - top.left());
+    assert!(
+        plus_right(shot) + margin <= top.right() + 0.5,
+        "{what}: „+“ passt nicht: {} in {top:?}",
+        plus_right(shot)
+    );
+}
+
 #[test]
-fn small_icon_sits_left_of_the_menu_inside_the_top_field() {
-    for size in [BIG, MID, SMALL] {
+fn small_icon_is_shown_only_when_the_whole_field_fits() {
+    // Großes Fenster: Zeichen da, links vom Menü, 24 Punkte, nichts rollt.
+    let c = context();
+    let mut app = new_app();
+    let shot = settle(&c, &mut app, BIG);
+    let top = field(&c, "oben");
+    let icon = top_icon(&shot, top).expect("Zeichen im großen Fenster");
+    assert!(
+        (icon.width() - logo::SMALL_SIZE).abs() < 0.5
+            && (icon.height() - logo::SMALL_SIZE).abs() < 0.5,
+        "Größe {icon:?}"
+    );
+    assert_eq!(logo::SMALL_SIZE, 24.0);
+    assert!(icon.right() <= shot.rect("Datei").unwrap().left());
+    assert_no_scroll(&shot, top, "1400x900");
+
+    // Mittleres und kleines Fenster: kein Zeichen, das Feld wie vor dem Logo, „+“ passt.
+    for size in [MID, SMALL] {
         let c = context();
-        let mut app = app();
+        let mut app = new_app();
         let shot = settle(&c, &mut app, size);
         let top = field(&c, "oben");
         let window = Rect::from_min_size(Pos2::ZERO, size);
         assert!(window.contains_rect(top), "{size:?}: oben {top:?}");
-        let small: Vec<Rect> = shot
-            .images
-            .iter()
-            .copied()
-            .filter(|r| top.contains_rect(*r))
-            .collect();
-        assert_eq!(small.len(), 1, "{size:?}: ein Zeichen im Feld: {small:?}");
-        let icon = small[0];
-        assert!(
-            (icon.width() - logo::SMALL_SIZE).abs() < 0.5
-                && (icon.height() - logo::SMALL_SIZE).abs() < 0.5,
-            "{size:?}: Größe {icon:?}"
-        );
-        assert_eq!(logo::SMALL_SIZE, 24.0);
-        let datei = shot.rect("Datei").unwrap();
-        assert!(icon.right() <= datei.left(), "{size:?}: links vom Menü");
-        // Passt die Wunschbreite zwischen die Spalten (großes Fenster), ist das Feld so breit,
-        // dass auch das Zeichen „Neuer Tab“ mit dem Rand wie links hineinpasst (die
-        // Wunschbreite zählt das Zeichen vorn mit). Im engen Fenster rollt die Tab-Leiste.
-        if size == BIG {
-            let plus = shot
-                .texts
-                .iter()
-                .find(|t| t.0 == icons::glyph(Icon::NewTab).to_string())
-                .expect("Neuer Tab")
-                .1;
-            let margin = icon.left() - top.left();
-            assert!(
-                plus.right() + margin <= top.right() + 0.5,
-                "{size:?}: Rand rechts {plus:?} in {top:?}"
-            );
-        }
-        // Menü und Tab bleiben im Feld.
+        assert!(top_icon(&shot, top).is_none(), "{size:?}: kein Zeichen");
+        assert_no_scroll(&shot, top, &format!("{size:?}"));
         for t in ["Datei", "Ansicht", "Unbenannt 1"] {
             let r = shot
                 .rect(t)
@@ -312,11 +331,57 @@ fn small_icon_sits_left_of_the_menu_inside_the_top_field() {
 }
 
 #[test]
+fn icon_rule_is_consistent_around_the_threshold() {
+    // Reine Regel: genau an der Grenze passt es noch, einen Punkt darunter nicht.
+    let lead = logo::SMALL_SIZE + 8.0;
+    let between = planora_app::shell::between_columns(1200.0);
+    assert!(planora_app::shell::top_icon_fits(
+        1200.0,
+        between - lead,
+        lead
+    ));
+    assert!(!planora_app::shell::top_icon_fits(
+        1200.0,
+        between - lead + 1.0,
+        lead
+    ));
+    assert!(planora_app::shell::top_icon_fits(1400.0, 536.0, lead));
+    assert!(!planora_app::shell::top_icon_fits(1100.0, 536.0, lead));
+    assert!(!planora_app::shell::top_icon_fits(800.0, 536.0, lead));
+
+    // Im Fenster: mit einem und mit mehreren Tabs. Ist das Zeichen da, rollt nichts; ist es
+    // nicht da, ist das Feld wie ohne Logo. Mit mehr Tabs liegt die Grenze höher; je Tabzahl
+    // gibt es genau einen Übergang (erst ohne, dann mit Zeichen).
+    for tabs in [1usize, 2, 4] {
+        let mut shown = Vec::new();
+        for w in (800..=1600).step_by(25) {
+            let size = vec2(w as f32, 900.0);
+            let c = context();
+            let mut app = new_app();
+            for _ in 1..tabs {
+                app.ws_mut().new_tab();
+            }
+            let shot = settle(&c, &mut app, size);
+            let top = field(&c, "oben");
+            let icon = top_icon(&shot, top);
+            if icon.is_some() {
+                assert_no_scroll(&shot, top, &format!("{tabs} Tabs, Breite {w}"));
+            }
+            shown.push(icon.is_some());
+        }
+        let changes = shown.windows(2).filter(|p| p[0] != p[1]).count();
+        assert!(!shown[0], "{tabs} Tabs: bei 800 kein Zeichen");
+        assert!(*shown.last().unwrap(), "{tabs} Tabs: bei 1600 ein Zeichen");
+        assert_eq!(changes, 1, "{tabs} Tabs: ein Übergang: {shown:?}");
+    }
+}
+
+#[test]
 fn top_field_keeps_its_width_rules_with_the_icon() {
     // Mit dem Zeichen reicht das Feld bei 800 Punkten Fensterbreite noch für Menü und einen Tab,
     // und es überlappt kein anderes Feld.
     let c = context();
-    let mut app = app();
+    let mut app = new_app();
     settle(&c, &mut app, SMALL);
     let top = field(&c, "oben");
     assert!(
