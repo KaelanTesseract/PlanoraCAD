@@ -159,8 +159,16 @@ pub struct AppState {
     pub dimension_tool: crate::dimension_tool::DimensionTool,
     /// Offenes Fenster „Maß bearbeiten“.
     pub dimension_dialog: Option<crate::dimension_dialog::DimensionDialog>,
+    /// Offenes Fenster „Blattangaben“.
+    pub sheet_dialog: Option<crate::sheet_dialog::SheetInfoDialog>,
     /// Offene Rückfrage „Maß löschen“ (Kettenglieder) aus dem Abschnitt „Maße“.
     pub pending_delete_dimension: Option<crate::dimension_browser::DimDeletePlan>,
+    /// Name des Dokuments für die Zeichnungsnummer im Schriftfeld („Werkstück-01“); die App setzt
+    /// ihn in jedem Bild aus dem Namen des Tabs.
+    pub document_name: String,
+    /// Kennung dieses Zustands (jedes Tab hat einen eigenen; eindeutig im Programm). Trennt die
+    /// programmweiten Zwischenspeicher der Zeichnungsansicht nach Dokumenten.
+    pub instance: u64,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -243,6 +251,9 @@ struct SketchFit {
     stable: u8,
 }
 
+/// Nächste Kennung für [`AppState::instance`].
+static NEXT_INSTANCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
@@ -289,7 +300,10 @@ impl AppState {
             dimension_ui: crate::dimension_state::DimensionUi::default(),
             dimension_tool: crate::dimension_tool::DimensionTool::default(),
             dimension_dialog: None,
+            sheet_dialog: None,
             pending_delete_dimension: None,
+            document_name: "Unbenannt".to_string(),
+            instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
         state.rebuild_scene();
         state

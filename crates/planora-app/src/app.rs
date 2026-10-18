@@ -678,7 +678,11 @@ impl eframe::App for PlanoraApp {
 
         self.shortcuts(&ctx);
         // Im Skizzen-Modus gibt es keinen Zeichnungsbereich: die Skizze braucht die 3D-Ansicht.
-        let state = &mut self.ws.active_tab_mut().state;
+        let tab = self.ws.active_tab_mut();
+        if tab.state.document_name != tab.name {
+            tab.state.document_name.clone_from(&tab.name);
+        }
+        let state = &mut tab.state;
         if state.sketch_session.is_some() {
             state.drawing_ui.area = WorkArea::Model;
         }
@@ -727,6 +731,7 @@ impl eframe::App for PlanoraApp {
             tab.import_dialog = None;
             tab.drawing_dialog = None;
             tab.state.dimension_dialog = None;
+            tab.state.sheet_dialog = None;
         }
         sketch_panel::show(&ctx, &mut tab.state);
         if let Some(mut dialog) = tab.dialog.take()
@@ -764,6 +769,12 @@ impl eframe::App for PlanoraApp {
             && tab.state.dimension_dialog.is_none()
         {
             tab.state.dimension_dialog = Some(dialog);
+        }
+        if let Some(mut dialog) = tab.state.sheet_dialog.take()
+            && dialog.show(&ctx, &mut tab.state)
+            && tab.state.sheet_dialog.is_none()
+        {
+            tab.state.sheet_dialog = Some(dialog);
         }
         if let Some(mut dialog) = tab.import_dialog.take()
             && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)

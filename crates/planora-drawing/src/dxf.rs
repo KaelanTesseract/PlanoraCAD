@@ -29,8 +29,8 @@
 //! * `BLOCKS`: zuerst die Pflichtblöcke `*Model_Space` und `*Paper_Space` (letzterer mit `67 1`),
 //!   dann je Ansicht ein Block. `BLOCK` und `ENDBLK` tragen Handle, Besitzer (der Blockeintrag),
 //!   `100 AcDbEntity`, Ebene `0`, `100 AcDbBlockBegin` bzw. `AcDbBlockEnd`.
-//! * `ENTITIES`: Innenrahmen als geschlossene `LWPOLYLINE` auf `SICHTBAR`, danach je Ansicht ein
-//!   `INSERT` bei (0, 0, 0) (Ebene `0`). Jedes Objekt: Handle (5), Besitzer (330 = Blockeintrag
+//! * `ENTITIES`: der Blattrahmen (`SheetModel.frame`, falls vorhanden; siehe unten), danach je
+//!   Ansicht ein `INSERT` bei (0, 0, 0) (Ebene `0`). Jedes Objekt: Handle (5), Besitzer (330 = Blockeintrag
 //!   des Blocks, in dem es steht; im Modellraum `*Model_Space`), `100 AcDbEntity`, Ebene (8),
 //!   Untertypmarke (`AcDbLine`, `AcDbCircle`, `AcDbCircle` + `AcDbArc`, `AcDbEllipse`,
 //!   `AcDbSpline`, `AcDbPolyline`, `AcDbBlockReference`).
@@ -92,6 +92,19 @@
 //!   ein längerer Text ist der Fehler `Unsupported("Der Maßtext ist zu lang.")`, und es wird
 //!   nichts geschrieben. Nicht endliche Zahlen sind wie überall `NonFinite`.
 //!
+//! # Blattrahmen
+//!
+//! Die Markierungen des Blattrahmens stehen direkt im Modellraum vor den `INSERT`s, mit den
+//! Ebenen nach Strichstärke: `BLATTRAHMEN` (7, `CONTINUOUS`, auf A3 70: Rahmen und Außenlinie des
+//! Schriftfelds), `BLATT_MITTE` (auf A3 50: Zentriermarken, Projektionssymbol) und `BLATT` (auf A3
+//! 25: übrige Linien und alle Texte). Auf anderen Formaten ist es die mit `SheetFrame.scale`
+//! skalierte Stärke (nie unter 0,18 mm), gerundet auf die nächste Stärke, die DXF kennt
+//! ([`dxf_lineweight`]; A4: 50/35/18). Die Ebenen werden nur angelegt, wenn es einen Rahmen
+//! gibt; ohne Rahmen enthält die Datei weder diese Ebenen noch eine `LWPOLYLINE`. Zu lange Texte
+//! (mehr als 255 Zeichen in der Datei) werden wie Maßtexte abgelehnt, nie still gekürzt; vorher
+//! prüft [`dxf_text_fits`]. Die Texte des Rahmens für DXF passt
+//! [`sheet_frame_dxf`](crate::sheet_marks::sheet_frame_dxf) mit einem Breitenzuschlag ein.
+//!
 //! Handtest in Fusion 360 (nach jeder Änderung am Aufbau): Datei mit Maßen, verlorenem Maß und
 //! Mittellinien öffnen; prüfen, dass die Datei ohne Meldung geladen wird, die Ebenen `MASSE`,
 //! `MITTEL`, `MASSE_FEHLT` erscheinen, Texte (auch `%%c`, `%%d`, `%%p`) richtig und an der
@@ -102,6 +115,7 @@ use crate::annotate::{ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, Mark, MarkKind, T
 use crate::error::DrawError;
 use crate::out2d::Out2d;
 use crate::sheet::SheetModel;
+use crate::sheet_frame::SheetPen;
 use planora_math::{DVec2, PI, TAU};
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -111,6 +125,9 @@ const LAYER_HIDDEN: &str = "VERDECKT";
 const LAYER_DIM: &str = "MASSE";
 const LAYER_CENTER: &str = "MITTEL";
 const LAYER_LOST: &str = "MASSE_FEHLT";
+const LAYER_FRAME: &str = "BLATTRAHMEN";
+const LAYER_CENTRE: &str = "BLATT_MITTE";
+const LAYER_SHEET: &str = "BLATT";
 /// Höchstlänge eines Maßtexts in der Datei (Zeichen, nach der Verschlüsselung).
 const MAX_TEXT_LEN: usize = 255;
 /// Nachkommastellen aller Zahlen der Datei.
@@ -130,8 +147,7 @@ pub fn write_dxf(model: &SheetModel, out: &mut dyn Write) -> Result<(), DrawErro
 /// Das Blattmodell als DXF-Text.
 pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
     let (w, h) = model.sheet.size_mm();
-    let (lo, hi) = model.frame;
-    if !(w.is_finite() && h.is_finite() && lo.is_finite() && hi.is_finite()) {
+    if !(w.is_finite() && h.is_finite()) {
         return Err(DrawError::NonFinite);
     }
     // Blocknamen, eindeutig (ohne Rücksicht auf Groß-/Kleinschreibung).
@@ -190,7 +206,11 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
     )?;
 
     let mut entities = Out::new();
-    write_border(&mut entities, &mut hs, br_model, lo, hi)?;
+    if let Some(frame) = &model.frame {
+        for m in &frame.marks {
+            write_mark(&mut entities, &mut hs, br_model, m)?;
+        }
+    }
     for name in &names {
         entities.entity_head("INSERT", hs.next(), br_model, "0");
         entities.text(100, "AcDbBlockReference");
@@ -517,20 +537,54 @@ struct UsedKinds {
     dim: bool,
     center: bool,
     lost: bool,
+    /// Blattrahmen (die drei Ebenen `BLATTRAHMEN`, `BLATT_MITTE`, `BLATT`).
+    sheet: bool,
+    /// Faktor des Blattzubehörs (bestimmt die Linienstärken der drei Blattebenen).
+    sheet_scale: f64,
 }
 
 impl UsedKinds {
     fn of(model: &SheetModel) -> UsedKinds {
-        let mut u = UsedKinds::default();
+        let mut u = UsedKinds {
+            sheet: model.frame.is_some(),
+            sheet_scale: model.frame.as_ref().map_or(1.0, |f| f.scale),
+            ..UsedKinds::default()
+        };
         for m in model.views.iter().flat_map(|v| &v.marks) {
             match mark_kind(m) {
                 MarkKind::Dimension => u.dim = true,
                 MarkKind::CenterLine => u.center = true,
                 MarkKind::Lost => u.lost = true,
+                MarkKind::Sheet(_) => u.sheet = true,
             }
         }
         u
     }
+}
+
+/// Die Linienstärken, die DXF kennt (Gruppe 370, Hundertstel Millimeter).
+const DXF_LINEWEIGHTS: [i64; 24] = [
+    0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200,
+    211,
+];
+
+/// Nächste DXF-Linienstärke zu `mm` (bei Gleichstand die dünnere).
+pub fn dxf_lineweight(mm: f64) -> i64 {
+    let want = mm * 100.0;
+    DXF_LINEWEIGHTS
+        .iter()
+        .copied()
+        .min_by(|a, b| {
+            ((*a as f64) - want)
+                .abs()
+                .total_cmp(&((*b as f64) - want).abs())
+        })
+        .unwrap_or(25)
+}
+
+/// Linienstärke einer Blattebene beim Faktor des Blattrahmens.
+fn sheet_weight(pen: SheetPen, used: UsedKinds) -> i64 {
+    dxf_lineweight(pen.width_at(used.sheet_scale))
 }
 
 fn mark_kind(m: &Mark) -> MarkKind {
@@ -547,6 +601,9 @@ fn mark_layer(kind: MarkKind) -> &'static str {
         MarkKind::Dimension => LAYER_DIM,
         MarkKind::CenterLine => LAYER_CENTER,
         MarkKind::Lost => LAYER_LOST,
+        MarkKind::Sheet(SheetPen::Heavy) => LAYER_FRAME,
+        MarkKind::Sheet(SheetPen::Medium) => LAYER_CENTRE,
+        MarkKind::Sheet(SheetPen::Thin) => LAYER_SHEET,
     }
 }
 
@@ -673,6 +730,33 @@ fn write_tables(
         (used.dim, (LAYER_DIM, "CONTINUOUS", 7, 25)),
         (used.center, (LAYER_CENTER, "CENTER", 7, 25)),
         (used.lost, (LAYER_LOST, "CONTINUOUS", 1, 25)),
+        (
+            used.sheet,
+            (
+                LAYER_FRAME,
+                "CONTINUOUS",
+                7,
+                sheet_weight(SheetPen::Heavy, used),
+            ),
+        ),
+        (
+            used.sheet,
+            (
+                LAYER_CENTRE,
+                "CONTINUOUS",
+                7,
+                sheet_weight(SheetPen::Medium, used),
+            ),
+        ),
+        (
+            used.sheet,
+            (
+                LAYER_SHEET,
+                "CONTINUOUS",
+                7,
+                sheet_weight(SheetPen::Thin, used),
+            ),
+        ),
     ] {
         if on {
             layers.push(layer);
@@ -833,31 +917,6 @@ fn block_end(o: &mut Out, handle: u64, record: u64, paper: bool) {
     }
     o.text(8, "0");
     o.text(100, "AcDbBlockEnd");
-}
-
-/// Innenrahmen als geschlossene Polylinie auf `SICHTBAR` im Modellraum.
-fn write_border(
-    o: &mut Out,
-    hs: &mut Handles,
-    owner: u64,
-    lo: DVec2,
-    hi: DVec2,
-) -> Result<(), DrawError> {
-    o.entity_head("LWPOLYLINE", hs.next(), owner, LAYER_VISIBLE);
-    o.text(100, "AcDbPolyline");
-    o.int(90, 4);
-    o.int(70, 1);
-    o.num(43, 0.0)?;
-    for p in [
-        DVec2::new(lo.x, lo.y),
-        DVec2::new(hi.x, lo.y),
-        DVec2::new(hi.x, hi.y),
-        DVec2::new(lo.x, hi.y),
-    ] {
-        o.num(10, p.x)?;
-        o.num(20, p.y)?;
-    }
-    Ok(())
 }
 
 fn write_curve(
@@ -1119,4 +1178,10 @@ fn encode_text(s: &str) -> String {
         }
     }
     o
+}
+
+/// Kann das Zeichen in einem Text der DXF-Datei stehen: in der Grundebene des Unicodes und kein
+/// Steuerzeichen? (Andere Zeichen werden in der Datei durch `?` bzw. ein Leerzeichen ersetzt.)
+pub fn dxf_char_ok(c: char) -> bool {
+    (c as u32) <= 0xFFFF && !c.is_control()
 }

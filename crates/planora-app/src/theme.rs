@@ -638,7 +638,7 @@ pub fn accent(dark: bool) -> Color32 {
 pub const PAPER: Color32 = Color32::WHITE;
 /// Linien der Ansichten auf dem Papier.
 pub const SHEET_INK: Color32 = Color32::from_rgb(0x14, 0x16, 0x1a);
-/// Innenrahmen und Blattkante.
+/// Blattkante.
 pub const SHEET_FRAME: Color32 = Color32::from_rgb(0x50, 0x55, 0x60);
 /// Rahmen und Text einer Ansicht, die noch berechnet wird.
 pub const SHEET_PENDING: Color32 = Color32::from_rgb(0x8a, 0x90, 0x9c);

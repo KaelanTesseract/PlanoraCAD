@@ -369,6 +369,9 @@ pub struct Document {
     /// Zähler der Änderungen an Zeichnungen (zählt zu [`Document::edit_count`], nicht zu
     /// [`Document::model_edit_count`]).
     pub(crate) drawing_edits: u64,
+    /// Projektangaben für das Schriftfeld (Teilprojekt 3c-1); `None`, bis eine Zeichnung mit
+    /// Datum und Benutzer angelegt wurde.
+    pub(crate) project_info: Option<planora_drawing::sheet_info::ProjectInfo>,
 }
 
 /// Standard-Sehnentoleranz in Millimetern (wie in der App).
@@ -407,6 +410,7 @@ impl Document {
             drawings: Vec::new(),
             next_drawing: 1,
             drawing_edits: 0,
+            project_info: None,
         }
     }
 

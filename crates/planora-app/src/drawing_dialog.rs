@@ -3,11 +3,13 @@
 use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::dialog::{Dialog, DialogSize};
-use crate::drawing_state::{WorkArea, suggest_scale};
+use crate::drawing_state::{WorkArea, suggest_scale_in};
+use crate::drawing_view;
 use crate::export_dialog::shorten_for_display;
 use crate::icons::{self, Icon};
 use crate::state::AppState;
 use crate::theme;
+use planora_drawing::sheet_info::Stamp;
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewKind};
 use planora_feature::Document;
 
@@ -25,13 +27,7 @@ pub const PAPERS: [Paper; 5] = [Paper::A4, Paper::A3, Paper::A2, Paper::A1, Pape
 
 /// Name einer Papiergröße.
 pub fn paper_label(p: Paper) -> &'static str {
-    match p {
-        Paper::A4 => "A4",
-        Paper::A3 => "A3",
-        Paper::A2 => "A2",
-        Paper::A1 => "A1",
-        Paper::A0 => "A0",
-    }
+    p.label()
 }
 
 /// Name einer Projektionsart.
@@ -99,9 +95,11 @@ impl NewDrawingDialog {
         }
     }
 
-    /// Maßstabsvorschlag für Blatt, Projektion und Grundansicht.
+    /// Maßstabsvorschlag für Blatt, Projektion und Grundansicht (im freien Bereich eines neuen
+    /// Blatts mit den Hinweiszeilen der Projektangaben).
     pub fn suggestion(&self, state: &AppState) -> Scale {
-        suggest_scale(&state.bodies, self.sheet(), self.projection, self.base)
+        let (lo, hi) = drawing_view::new_sheet_layout(state, self.sheet(), self.projection).free;
+        suggest_scale_in(&state.bodies, (hi.x - lo.x, hi.y - lo.y), self.base)
     }
 
     /// Warum sich (noch) nichts anlegen lässt.
@@ -115,26 +113,36 @@ impl NewDrawingDialog {
         }
     }
 
-    /// Legt die Zeichnung mit der Grundansicht in der Blattmitte an und öffnet sie.
+    /// Legt die Zeichnung (mit Datum und Benutzer von heute) mit der Grundansicht in der Mitte
+    /// des freien Bereichs an und öffnet sie.
     pub fn create(&self, state: &mut AppState) -> Result<DrawingId, String> {
         if let Some(e) = self.error(state) {
             return Err(e.into());
         }
         let sheet = self.sheet();
-        let (w, h) = sheet.size_mm();
+        let had_project = state.document.project_info().is_some();
         let id = state
             .document
-            .add_drawing(&self.name, sheet, self.projection)
+            .add_drawing_stamped(&self.name, sheet, self.projection, &Stamp::now())
             .map_err(|e| e.to_string())?;
-        let placement = Placement::Free {
-            x: w / 2.0,
-            y: h / 2.0,
-        };
+        let free = state
+            .document
+            .drawing(id)
+            .map(|d| drawing_view::placement_layout(state, d).free)
+            .ok_or("Die Zeichnung fehlt.")?;
+        // Die Grundansicht allein liegt in der Mitte des freien Bereichs; mit der ersten
+        // weiteren Ansicht rückt sie so, dass der Block mittig liegt (`drawing_view::add_view`).
+        let (x, y) = drawing_view::free_centre(((free.0.x, free.0.y), (free.1.x, free.1.y)));
+        let placement = Placement::Free { x, y };
         if let Err(e) = state
             .document
             .add_view(id, self.base, self.scale, placement, None)
         {
+            // Alles zurück, auch die Projektangaben, die das Anlegen miterzeugt hat.
             let _ = state.document.delete_drawing(id);
+            if !had_project {
+                state.document.clear_project_info();
+            }
             return Err(e.to_string());
         }
         state.drawing_ui.open(id);
@@ -271,6 +279,30 @@ pub fn drawing_menu(
     .clicked()
     {
         *dialog = Some(NewDrawingDialog::new(state));
+        ui.close();
+    }
+    // Blattangaben der geöffneten Zeichnung.
+    let shown = match state.drawing_ui.area {
+        WorkArea::Drawing(id) if state.document.drawing(id).is_some() => Some(id),
+        _ => None,
+    };
+    let why = if let Some(b) = blocked {
+        b
+    } else if read_only {
+        crate::drawing_browser::READ_ONLY_HINT
+    } else {
+        crate::sheet_dialog::NO_DRAWING_OPEN
+    };
+    if theme::entry(
+        ui,
+        free && !read_only && shown.is_some(),
+        icons::button(Icon::SheetInfo, crate::sheet_dialog::MENU_ENTRY),
+    )
+    .on_disabled_hover_text(why)
+    .clicked()
+        && let Some(id) = shown
+    {
+        crate::sheet_dialog::open(state, id);
         ui.close();
     }
     ui.separator();

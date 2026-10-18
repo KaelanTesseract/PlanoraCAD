@@ -85,12 +85,11 @@ fn sheet_of(paper: Paper, landscape: bool) -> Sheet {
     Sheet { paper, landscape }
 }
 
-/// Blattmodell von Hand: Ansichten mit Namen und Linien (sichtbar/verdeckt), Rahmen 10 mm.
+/// Blattmodell von Hand: Ansichten mit Namen und Linien (sichtbar/verdeckt), ohne Blattrahmen.
 fn manual(sheet: Sheet, views: Vec<(&str, Vec<(Visibility, Out2d)>)>) -> SheetModel {
-    let (w, h) = sheet.size_mm();
     SheetModel {
         sheet,
-        frame: (DVec2::new(10.0, 10.0), DVec2::new(w - 10.0, h - 10.0)),
+        frame: None,
         views: views
             .into_iter()
             .enumerate()
@@ -792,22 +791,9 @@ fn box_front_roundtrips_to_four_lines() {
             .sum();
         assert_eq!(n, 2, "Ecke {c:?}");
     }
-    // Außerhalb des Blocks: Randlinie (geschlossen, SICHTBAR) und ein INSERT.
-    assert_eq!(d.entities.len(), 2);
-    let border = &d.entities[0];
-    assert_eq!(
-        (border.kind.as_str(), border.layer.as_str()),
-        ("LWPOLYLINE", "SICHTBAR")
-    );
-    let Geom::Poly { closed, pts } = border.geom().unwrap() else {
-        panic!()
-    };
-    assert!(closed);
-    assert_eq!(
-        pts,
-        [(10.0, 10.0), (410.0, 10.0), (410.0, 287.0), (10.0, 287.0)]
-    );
-    assert_eq!(d.entities[1].kind, "INSERT");
+    // Außerhalb des Blocks: nur ein INSERT (der alte Innenrahmen ist weg).
+    assert_eq!(d.entities.len(), 1);
+    assert_eq!(d.entities[0].kind, "INSERT");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1408,15 +1394,16 @@ fn views_are_blocks_with_inserts() {
     assert_eq!(kinds(&ents(&d, "Vorne")), ["LINE", "LINE"]);
     assert!(ents(&d, "Seite").is_empty());
     assert_eq!(kinds(&ents(&d, "Oben")), ["CIRCLE"]);
-    // ENTITIES: Randlinie, dann ein INSERT je Ansicht in der Reihenfolge der Ansichten, bei (0, 0).
+    // ENTITIES: ein INSERT je Ansicht in der Reihenfolge der Ansichten, bei (0, 0).
     assert_eq!(
         d.entities
             .iter()
             .map(|e| e.kind.as_str())
             .collect::<Vec<_>>(),
-        ["LWPOLYLINE", "INSERT", "INSERT", "INSERT"]
+        ["INSERT", "INSERT", "INSERT"]
     );
-    let ins: Vec<(String, P)> = d.entities[1..]
+    let ins: Vec<(String, P)> = d
+        .entities
         .iter()
         .map(|e| match e.geom().unwrap() {
             Geom::Insert { name, at } => (name, at),
@@ -1503,7 +1490,8 @@ fn names_are_sanitized_and_unique() {
     }
     assert!(!s.contains('`'));
     // INSERT nennt denselben Namen wie der Block.
-    let ins: Vec<String> = d.entities[1..]
+    let ins: Vec<String> = d
+        .entities
         .iter()
         .map(|e| match e.geom().unwrap() {
             Geom::Insert { name, .. } => name,
@@ -1599,13 +1587,7 @@ fn non_finite_is_refused() {
     refused(spline(3, vec![], &[], vec![]));
     refused(spline(2, vec![0.0, 1.0], &cp, vec![1.0; 3]));
     refused(spline(2, kn, &cp, vec![1.0, -1.0, 1.0]));
-    // Rahmen und Blattgröße.
-    let mut m = one_view(vec![]);
-    m.frame.1.x = nan;
-    assert!(matches!(dxf_string(&m), Err(DrawError::NonFinite)));
-    let mut m = one_view(vec![]);
-    m.frame.0.y = -inf;
-    assert!(matches!(dxf_string(&m), Err(DrawError::NonFinite)));
+    // (Nicht endliche Zahl im Blattrahmen: `nan_in_frame_is_rejected` in stage22.)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2086,14 +2068,8 @@ fn large_coordinates_on_a0_roundtrip() {
     };
     assert_eq!(ext("$EXTMIN"), [0.0, 0.0, 0.0]);
     assert_eq!(ext("$EXTMAX"), [1189.0, 841.0, 0.0]);
-    // Randlinie des Innenrahmens: 10 mm vom Rand.
-    let Geom::Poly { pts, .. } = d.entities[0].geom().unwrap() else {
-        panic!()
-    };
-    assert_eq!(
-        pts,
-        [(10.0, 10.0), (1179.0, 10.0), (1179.0, 831.0), (10.0, 831.0)]
-    );
+    // Kein Innenrahmen mehr: im Modellraum nur die INSERTs.
+    assert!(d.entities.iter().all(|e| e.kind == "INSERT"));
     let v = ents(&d, "Oben");
     assert_eq!(kinds(&v), ["CIRCLE", "LINE", "ELLIPSE", "SPLINE", "ARC"]);
     // Kreis.
@@ -2183,14 +2159,14 @@ fn write_matches_string_and_reports_io_errors() {
 
 #[test]
 fn empty_sheets_are_valid() {
-    // Kein einziges Blatt-Objekt: Datei bleibt gültig (Randlinie, zwei Raumblöcke).
+    // Kein einziges Blatt-Objekt: Datei bleibt gültig (zwei Raumblöcke, keine Objekte).
     let (_, d) = read_of(&manual(sheet_of(Paper::A4, true), vec![]));
-    assert_eq!(d.entities.len(), 1);
+    assert_eq!(d.entities.len(), 0);
     assert!(d.view_block_names().is_empty());
     // Ansicht ohne Linien: leerer Block mit INSERT.
     let (_, d) = read_of(&manual(sheet_of(Paper::A4, true), vec![("Leer", vec![])]));
     assert_eq!(d.view_block_names(), ["Leer"]);
-    assert_eq!(d.entities.len(), 2);
+    assert_eq!(d.entities.len(), 1);
 }
 
 #[test]

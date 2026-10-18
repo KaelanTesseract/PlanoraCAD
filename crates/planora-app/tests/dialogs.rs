@@ -532,6 +532,19 @@ fn cases() -> Vec<Case> {
             }),
             is_open: Box::new(|r| r.state().pending_delete_dimension.is_some()),
         },
+        // Blattangaben (breit, mit Karten-ähnlichen Abschnitten).
+        Case {
+            name: "Blattangaben",
+            title: "Blattangaben",
+            id: Some(Id::new("Blattangaben")),
+            class: DialogSize::Wide,
+            closable: true,
+            open: Box::new(|r| {
+                let d = r.drawing;
+                planora_app::sheet_dialog::open(r.state(), d);
+            }),
+            is_open: Box::new(|r| r.state().sheet_dialog.is_some()),
+        },
         // Projekte (fest, ohne Schließen-Symbol).
         project_case("Neuer Ordner", "Neuer Ordner", "folder", |r| {
             let p = r.project.clone();
@@ -747,12 +760,18 @@ fn close_glyph() -> String {
     icons::glyph(Icon::Close).to_string()
 }
 
-/// Schließen-Symbole im Dialog (andere Felder haben auch welche).
+/// Schließen-Symbole im Dialog (andere Felder haben auch welche; ein hoher Dialog deckt auch den
+/// Tab mit seinem Symbol: die Kopfzeile hat es oben rechts).
 fn close_icons_in(shot: &Shot, rect: Rect) -> Vec<Rect> {
     let g = close_glyph();
     shot.texts
         .iter()
-        .filter(|t| t.text == g && rect.expand(2.0).contains(t.rect.center()))
+        .filter(|t| {
+            t.text == g
+                && rect.expand(2.0).contains(t.rect.center())
+                && t.rect.center().x > rect.right() - 40.0
+                && t.rect.center().y < rect.top() + 48.0
+        })
         .map(|t| t.rect)
         .collect()
 }

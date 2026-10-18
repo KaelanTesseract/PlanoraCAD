@@ -74,12 +74,11 @@ fn sheet_of(paper: Paper, landscape: bool) -> Sheet {
     Sheet { paper, landscape }
 }
 
-/// Blattmodell von Hand: Ansichten mit Namen und Linien (sichtbar/verdeckt), Rahmen 10 mm.
+/// Blattmodell von Hand: Ansichten mit Namen und Linien (sichtbar/verdeckt), ohne Blattrahmen.
 fn manual(sheet: Sheet, views: Vec<(&str, Vec<(Visibility, Out2d)>)>) -> SheetModel {
-    let (w, h) = sheet.size_mm();
     SheetModel {
         sheet,
-        frame: (DVec2::new(10.0, 10.0), DVec2::new(w - 10.0, h - 10.0)),
+        frame: None,
         views: views
             .into_iter()
             .enumerate()
@@ -408,18 +407,12 @@ fn header_and_size() {
     assert_eq!(r.width_attr, "420mm");
     assert_eq!(r.height_attr, "297mm");
     assert_eq!(r.viewbox, [0.0, 0.0, 420.0, 297.0]);
-    let rect = r.rect.expect("Innenrahmen");
-    assert_eq!(
-        (rect.x, rect.y, rect.width, rect.height),
-        (10.0, 10.0, 400.0, 277.0)
-    );
-    assert_eq!(rect.stroke_width, 0.5);
-    assert_eq!(rect.fill, "none");
-    assert!(s.contains("<rect x=\"10\" y=\"10\" width=\"400\" height=\"277\" fill=\"none\" stroke=\"#000\" stroke-width=\"0.5\"/>"));
+    // Der alte Innenrahmen ist weg: kein Rechteck, nur die Wurzelgruppe.
+    assert!(r.rect.is_none());
+    assert!(!s.contains("<rect"));
     // Hochformat A0: 841 × 1189.
     let s = svg_of(&manual(sheet_of(Paper::A0, false), vec![]));
     assert!(s.contains("width=\"841mm\" height=\"1189mm\" viewBox=\"0 0 841 1189\""));
-    assert!(s.contains("width=\"821\" height=\"1169\""));
     // Kein Pfad, keine Ansicht: nur die Wurzelgruppe.
     assert!(!s.contains("<path"));
 }
@@ -952,12 +945,8 @@ fn y_axis_is_flipped_once() {
     assert!(close(p.segments[0].start(), (20.0, 10.0), 1e-12));
     assert!(close(p.segments[0].end(), (50.0, 10.0), 1e-12));
     assert!(((210.0 - p.segments[0].start().1) - 200.0).abs() < 1e-12);
-    // Der Innenrahmen liegt außerhalb der Gruppe in Rohkoordinaten (symmetrisch: 10, 10).
-    let rect = r.rect.unwrap();
-    assert_eq!(
-        (rect.x, rect.y, rect.width, rect.height),
-        (10.0, 10.0, 277.0, 190.0)
-    );
+    // Ohne Blattrahmen kein Rechteck.
+    assert!(r.rect.is_none());
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1024,10 +1013,7 @@ fn non_finite_is_refused() {
     refused(spline(3, vec![], &[], vec![]));
     refused(spline(2, vec![0.0, 1.0], &cp, vec![1.0; 3]));
     refused(spline(2, kn, &cp, vec![1.0, -1.0, 1.0]));
-    // Rahmen mit nicht endlicher Zahl.
-    let mut m = one_view(vec![]);
-    m.frame.1.x = nan;
-    assert!(matches!(svg_string(&m), Err(DrawError::NonFinite)));
+    // (Nicht endliche Zahl im Blattrahmen: `nan_in_frame_is_rejected` in stage22.)
 }
 
 // ---------------------------------------------------------------------------------------------

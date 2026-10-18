@@ -11,6 +11,7 @@ use crate::export_dialog::shorten_for_display;
 use crate::jobs::{Job, Poll};
 use crate::state::{Body, BodyKind};
 use planora_drawing::dimension::DimId;
+use planora_drawing::sheet_frame::{REV_VISIBLE, sheet_layout};
 use planora_drawing::{
     Basis, DrawBody, DrawError, Drawing, DrawingId, Projection, Scale, Sheet, ViewId, ViewKind,
     ViewLines, compute_view,
@@ -30,9 +31,6 @@ const _: () = assert!(MAX_CACHED >= ViewKind::ALL.len());
 
 /// Meldung, wenn ein Arbeitsthread ohne Ergebnis endet (Absturz).
 pub const LOST_TEXT: &str = "Die Berechnung wurde unerwartet beendet.";
-
-/// Rand des Blatts bis zum Innenrahmen in Millimetern (je Seite).
-pub const FRAME_MARGIN_MM: f64 = 10.0;
 
 /// Geöffneter Arbeitsbereich.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -410,24 +408,13 @@ pub fn estimate_view_size(bodies: &[Body], kind: ViewKind) -> (f64, f64) {
 }
 
 /// Größte Stufe der Maßstabsreihe, bei der Grundansicht, Seitenansicht und Draufsicht samt
-/// [`GAP_MM`] dazwischen in den Innenrahmen (Blatt abzüglich [`FRAME_MARGIN_MM`] je Seite)
-/// passen. Die Seitenansicht liegt waagerecht neben der Grundansicht (Breite = Tiefe der
-/// Grundansicht), die Draufsicht senkrecht (Höhe = Tiefe); für Erst- und Drittwinkel ergeben
-/// sich dieselben Summen. Passt keine Stufe: die kleinste (1:100). Ohne exakte Körper gibt es
-/// nichts zu messen: 1:1.
-pub fn suggest_scale(
-    bodies: &[Body],
-    sheet: Sheet,
-    projection: Projection,
-    base: ViewKind,
-) -> Scale {
-    // Erst- und Drittwinkel vertauschen nur die Seiten, nicht die Summen.
-    let _ = projection;
-    let (sheet_w, sheet_h) = sheet.size_mm();
-    let (inner_w, inner_h) = (
-        sheet_w - 2.0 * FRAME_MARGIN_MM,
-        sheet_h - 2.0 * FRAME_MARGIN_MM,
-    );
+/// [`GAP_MM`] dazwischen in den freien Bereich des Blatts (`free`: Breite und Höhe in mm) passen.
+/// Die Seitenansicht liegt waagerecht neben der Grundansicht (Breite = Tiefe der Grundansicht),
+/// die Draufsicht senkrecht (Höhe = Tiefe); für Erst- und Drittwinkel ergeben sich dieselben
+/// Summen. Passt keine Stufe: die kleinste (1:100). Ohne exakte Körper gibt es nichts zu
+/// messen: 1:1.
+pub fn suggest_scale_in(bodies: &[Body], free: (f64, f64), base: ViewKind) -> Scale {
+    let (free_w, free_h) = free;
     let basis = Basis::of(base);
     let (ex, ey, ed) = match exact_bounds(bodies) {
         Some(b) => (
@@ -439,7 +426,7 @@ pub fn suggest_scale(
     };
     let fits = |s: Scale| {
         let f = s.factor();
-        f * (ex + ed) + GAP_MM <= inner_w && f * (ey + ed) + GAP_MM <= inner_h
+        f * (ex + ed) + GAP_MM <= free_w && f * (ey + ed) + GAP_MM <= free_h
     };
     let smallest = Scale::SERIES
         .into_iter()
@@ -450,6 +437,184 @@ pub fn suggest_scale(
         .filter(|s| fits(*s))
         .max_by(|a, b| a.factor().total_cmp(&b.factor()))
         .unwrap_or(smallest)
+}
+
+/// Wie [`suggest_scale_in`] für das Blatt einer neuen Zeichnung (mit Platz für die volle
+/// Änderungstabelle und den drei Hinweiszeilen der Vorgabe).
+pub fn suggest_scale(
+    bodies: &[Body],
+    sheet: Sheet,
+    projection: Projection,
+    base: ViewKind,
+) -> Scale {
+    // Erst- und Drittwinkel vertauschen nur die Seiten, nicht die Summen.
+    let _ = projection;
+    let (lo, hi) = sheet_layout(sheet, REV_VISIBLE, 3).free;
+    suggest_scale_in(bodies, (hi.x - lo.x, hi.y - lo.y), base)
+}
+
+/// Der freie Bereich des Blatts als (links unten, rechts oben).
+pub type FreeArea = ((f64, f64), (f64, f64));
+
+/// Einheitsrichtung zur ersten Nachbaransicht der Grundansicht `base` unter den Arten `kinds`,
+/// die rein waagerecht (`horizontal`) oder rein senkrecht liegt.
+fn neighbour_dir(
+    projection: Projection,
+    base: ViewKind,
+    kinds: [ViewKind; 4],
+    horizontal: bool,
+) -> f64 {
+    kinds
+        .into_iter()
+        .filter(|k| *k != base)
+        .filter_map(|k| align_dir(projection, base, k))
+        .find_map(|(dx, dy)| {
+            if horizontal && dx != 0.0 && dy == 0.0 {
+                Some(dx)
+            } else if !horizontal && dy != 0.0 && dx == 0.0 {
+                Some(dy)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0.0)
+}
+
+/// Mitte der Grundansicht `base` im Maßstab `scale`, so dass der ganze Block aus Grundansicht,
+/// Seitenansicht (waagerecht daneben) und Draufsicht (senkrecht daneben) samt [`GAP_MM`]
+/// dazwischen in der Mitte des freien Bereichs liegt. Die Seiten folgen der Projektionsart
+/// (Erstwinkel: Seitenansicht rechts, Draufsicht unten; Drittwinkel umgekehrt). Ohne exakte
+/// Körper gibt es nichts zu messen: die Mitte des freien Bereichs.
+pub fn block_origin(
+    bodies: &[Body],
+    free: FreeArea,
+    projection: Projection,
+    base: ViewKind,
+    scale: Scale,
+) -> (f64, f64) {
+    let (cx, cy) = ((free.0.0 + free.1.0) / 2.0, (free.0.1 + free.1.1) / 2.0);
+    let Some(b) = exact_bounds(bodies) else {
+        return (cx, cy);
+    };
+    let shift = (GAP_MM + extent_along(b, Basis::of(base).d) * scale.factor()) / 2.0;
+    let sides = [
+        ViewKind::Left,
+        ViewKind::Right,
+        ViewKind::Front,
+        ViewKind::Back,
+    ];
+    let tops = [
+        ViewKind::Top,
+        ViewKind::Bottom,
+        ViewKind::Front,
+        ViewKind::Back,
+    ];
+    let dx = neighbour_dir(projection, base, sides, true);
+    let dy = neighbour_dir(projection, base, tops, false);
+    (cx - dx * shift, cy - dy * shift)
+}
+
+/// Lage und Maßstab der isometrischen Ansicht neben dem Block aus Grundansicht `base` (Mitte
+/// `centre`, Ausdehnung `base_size` in mm auf dem Blatt), Seitenansicht und Draufsicht.
+///
+/// Die Isometrie kommt in das leere Viertel des Blocks – Erstwinkel rechts unten (Seitenansicht
+/// rechts, Draufsicht unten), Drittwinkel links oben –, mit [`GAP_MM`] Abstand zu den Kanten der
+/// Grundansicht. Maßstab: der der Grundansicht (`base_scale`), wenn die Isometrie
+/// (ungeskalierte Ausdehnung `iso_size`) damit ganz in dieses Viertel des freien Bereichs passt,
+/// sonst die nächstkleinere Stufe der Reihe, wenn sie damit passt (höchstens eine Stufe kleiner,
+/// damit sie nicht winzig wird). Passt sie auch so nicht, bleibt es beim Maßstab der Grundansicht,
+/// und sie sitzt bündig in der Ecke des freien Bereichs auf der Seite des leeren Viertels; dann
+/// kann sie den Block überdecken (nach bestem Wissen). Liefert die Projektionsart für `base`
+/// keine Seite, gilt rechts oben.
+pub fn iso_placement(
+    projection: Projection,
+    base: ViewKind,
+    centre: (f64, f64),
+    base_size: (f64, f64),
+    iso_size: (f64, f64),
+    base_scale: Scale,
+    free: FreeArea,
+) -> ((f64, f64), Scale) {
+    let sides = [
+        ViewKind::Left,
+        ViewKind::Right,
+        ViewKind::Front,
+        ViewKind::Back,
+    ];
+    let tops = [
+        ViewKind::Top,
+        ViewKind::Bottom,
+        ViewKind::Front,
+        ViewKind::Back,
+    ];
+    let or_one = |d: f64| if d == 0.0 { 1.0 } else { d.signum() };
+    let dx = or_one(neighbour_dir(projection, base, sides, true));
+    let dy = or_one(neighbour_dir(projection, base, tops, false));
+    // Ecke des leeren Viertels an der Grundansicht und seine Größe im freien Bereich.
+    let corner = (
+        centre.0 + dx * (base_size.0 / 2.0 + GAP_MM),
+        centre.1 + dy * (base_size.1 / 2.0 + GAP_MM),
+    );
+    let room = (
+        if dx > 0.0 {
+            free.1.0 - corner.0
+        } else {
+            corner.0 - free.0.0
+        },
+        if dy > 0.0 {
+            free.1.1 - corner.1
+        } else {
+            corner.1 - free.0.1
+        },
+    );
+    let fits = |s: Scale| {
+        let f = s.factor();
+        iso_size.0 * f <= room.0 && iso_size.1 * f <= room.1
+    };
+    let one_step_smaller = Scale::SERIES
+        .into_iter()
+        .filter(|s| s.factor() < base_scale.factor())
+        .max_by(|a, b| a.factor().total_cmp(&b.factor()));
+    let scale = [Some(base_scale), one_step_smaller]
+        .into_iter()
+        .flatten()
+        .find(|s| fits(*s))
+        .unwrap_or(base_scale);
+    let size = (iso_size.0 * scale.factor(), iso_size.1 * scale.factor());
+    let want = (corner.0 + dx * size.0 / 2.0, corner.1 + dy * size.1 / 2.0);
+    let axis = |w: f64, len: f64, lo: f64, hi: f64, dir: f64| {
+        if len <= hi - lo {
+            w.clamp(lo + len / 2.0, hi - len / 2.0)
+        } else if dir > 0.0 {
+            hi - len / 2.0
+        } else {
+            lo + len / 2.0
+        }
+    };
+    (
+        (
+            axis(want.0, size.0, free.0.0, free.1.0, dx),
+            axis(want.1, size.1, free.0.1, free.1.1, dy),
+        ),
+        scale,
+    )
+}
+
+/// Mitte einer Ansicht der Ausdehnung `size`, die möglichst bei `want` liegt, aber im freien
+/// Bereich bleibt. Passt die Ausdehnung auf einer Achse nicht hinein, sitzt die Ansicht dort
+/// bündig an der rechten bzw. oberen Kante (sie ragt dann nach links bzw. unten hinaus).
+pub fn keep_in_free(want: (f64, f64), size: (f64, f64), free: FreeArea) -> (f64, f64) {
+    let axis = |w: f64, len: f64, lo: f64, hi: f64| {
+        if len <= hi - lo {
+            w.clamp(lo + len / 2.0, hi - len / 2.0)
+        } else {
+            hi - len / 2.0
+        }
+    };
+    (
+        axis(want.0, size.0, free.0.0, free.1.0),
+        axis(want.1, size.1, free.0.1, free.1.1),
+    )
 }
 
 /// Vorgabeabstand der Mitten einer abgeleiteten Ansicht `child` von ihrer Ausgangsansicht

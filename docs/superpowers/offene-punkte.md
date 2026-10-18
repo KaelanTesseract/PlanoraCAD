@@ -988,3 +988,80 @@ Beanstandungen sammeln; sie werden in einer Korrekturrunde behoben.
 - Auswahl: CPU-Raycast läuft bei jeder Mausbewegung über alle Dreiecke (später Hüllkörper/Raumindex).
 - Hover-Änderung baut die ganze Szene neu und lädt sie hoch (später nur Farben aktualisieren).
 - Browser: lange Namen werden abgeschnitten; Klick im Browser setzt keine Flächenauswahl.
+
+## Teilprojekt 3c-1 – Zeichnungsblatt
+
+### Normprüfung
+Die Normtexte (ISO 5457, 7200, 5456-2, 3098) sind kostenpflichtig; geprüft wurden nur öffentlich auffindbare Zusammenfassungen (Stand 2026-10-17). Die Zahlen der Spec blieben unverändert. „offen“ heißt: öffentlich nicht bestätigt, nicht widerlegt.
+
+| Spec-Wert | gefundener Wert | Quelle | Abweichung |
+|---|---|---|---|
+| Rand links 20 mm, sonst 10 mm | 20 mm Heftrand, 10 mm sonst | Sekundärquelle (Blog), Normtext nicht gesehen | nein (unbestätigt) |
+| Rahmen 0,7 mm | 0,7 mm | Auszug ISO 5457:1999 (Suchergebnis) | nein |
+| Zentriermarken 0,5 mm | Auszug nennt 0,7 mm für Zentriermarken | Auszug ISO 5457:1999 (Suchergebnis) | zu klären, Entwurfswerte unverändert |
+| Zentriermarken reichen 5 mm hinter den Rahmen | Auszug: vom Blattrand bis 10 mm hinter den Rahmen | Auszug ISO 5457:1999 (Suchergebnis) | zu klären, Entwurfswerte unverändert |
+| Rasterfeld 50 mm, Felderzahl 2·round(Kante/100), Buchstaben ohne I/O | nicht auffindbar | – | offen |
+| Teilstriche 5 mm, 0,25 mm, Beschriftung mittig im Rand (3,5 hoch) | nicht auffindbar; Spec-Wort „Randteilung am Rahmen innen“ mehrdeutig, Teilstriche werden vom Rahmen nach außen gezeichnet | – | offen |
+| Schriftfeld 180 mm breit, Feldhöhen 2,2 / 3,5 / 5 | nicht auffindbar | – | offen |
+| Projektionssymbol (F7): Maße, Lage je Methode | nicht auffindbar; Quellen widersprechen sich bei der Lage der Kreise | Suchergebnisse | offen |
+| Schriftreihe 2,5 / 3,5 / 5 (Spec nennt 2,2 und 3,3) | nicht auffindbar | – | offen |
+
+
+Fehler und Korrektur (Aufgabe 1): Die rechte Zentriermarke war zunächst 25 mm lang (A4 quer `(297,105)–(272,105)`, 15 mm hinter dem Rahmen bei 287), weil der Heftrand statt des 10-mm-Rands verwendet wurde; der Wert stammte aus einem Fehler der Aufgabenvorgabe. Richtig nach Spec: Marken laufen vom Blattrand bis 5 mm hinter den Rahmen, rechts also `297 → 282`. Behoben; oben (15 mm vom Rand) war richtig.
+
+### Stand und Geliefertes
+Stand: 2026-10-17 (Zweig `feature/zeichnungsblatt`). Aus dem Blatt mit dünnem Innenrahmen ist ein formal vollständiges Zeichnungsblatt geworden. Bedienung und Grenzen für Anwender: README, Abschnitt „Zeichnungsblatt“. Festlegungen F1 bis F15 und Abweichungen: Spec §10.
+
+- `planora-drawing`: Blattgeometrie nach Konstanten (`sheet_frame.rs`: Rahmen mit Heftrand, Zentriermarken, Raster, Schriftfeld mit 17 Zellen, Änderungstabelle, Hinweisfeld, freier Bereich), Angaben mit Vorbelegung und Auflösung zu Texten (`sheet_info.rs`: automatisch oder eigener Text, Änderungsbuchstaben, Hauptmaßstab, Blatt n/N, Grenzen), Blatt als Markierungen mit Einpassen der Texte (`sheet_marks.rs`, neue `MarkKind::Sheet(SheetPen)`), SVG-Gruppe `Blattrahmen`, DXF-Ebenen `BLATTRAHMEN`, `BLATT_MITTE`, `BLATT`; der alte Innenrahmen entfällt aus der Ausgabe.
+- `planora-feature`: projektweite Angaben und Blattangaben im Dokument (`set_project_info`, `set_sheet_info`, `add_drawing_stamped`), Prüfung beim Ändern und Laden.
+- `planora-project`: Dateiformat 6 (nur mit Projekt- oder Blattangaben; Format 1 bis 5 laden und speichern Byte für Byte wie bisher, eingefrorene Prüfdateien für Format 4 und 5).
+- `planora-app`: Blatt in der Zeichnungsansicht (weißes Papier in Hell und Dunkel), neue Ansichten im freien Bereich (Dreiansichtenblock mittig, Isometrie darin), Fenster „Blattangaben“ (720 px, drei Abschnitte, Hinweis, Zurücksetzen, Länge, Warnung bei Kürzung), Knopf im Werkzeugfeld und Menü „Zeichnung“, Schalter „Blattrahmen mit ausgeben“ im Export.
+- Proben: `cargo test --release -p planora-drawing --test hand_samples_sheet -- --ignored` schreibt 80 Dateien nach `D:\Testumgebung\zeichnung-proben\blatt` (abweichend über `PLANORA_SHEET_SAMPLES_DIR`): A4 hoch, A4 quer, A3 quer, A2 hoch, A0 quer; Methode 1 und 3; „kurz“ (Vorgaben) und „lang“ (Längstexte, Sonderzeichen, 23 Änderungen, 6 Hinweiszeilen); je SVG und DXF mit und ohne Rahmen.
+- Prüfstand 2026-10-17 (nach der Abschlussrunde mit Skalierung): `cargo test --workspace -j 2`: 2387 Tests grün, 34 ausgeschaltet, 0 Fehler (vorher 2374; nach den Funden des Handtests); `cargo fmt --check` und `cargo clippy -D warnings` sauber; `cargo deny check`: Lizenzen, Quellen und Verbote in Ordnung, die Advisories melden drei neue „unmaintained“-Einträge zu `zbus_names`, `zvariant`, `zvariant_derive` (RUSTSEC-2026-0371/0370/0372; über das Fenstersystem hereingeholt, `Cargo.lock` seit dem Basisstand unverändert, nicht Teil von 3c-1); diese drei sind seit 1bbc655 mit Wiedervorlage ignoriert, `cargo deny check` ist damit grün (advisories, bans, licenses, sources ok).
+
+### Festlegungen und Abweichungen (Kurzfassung, Einzelheiten Spec §10)
+- **Skalierung mit dem Format (Entscheidung des Nutzers, 2026-10-17):** Rahmen, Raster, Schriftfeld, Tabellen, Hinweisfeld, Schrifthöhen und Projektionssymbol sind die A3-Werte mal `lange Blattseite / 420` (A4 0,707, A2 1,414, A1 2,002, A0 2,831), hoch und quer gleich. Jedes Format sieht aus wie ein verkleinertes oder vergrößertes A3-Blatt; das Raster hat überall 8 × 6 Felder (hoch 6 × 8), die Hinweisfeld-Regel gilt mit 310 · Faktor (A4 quer: daneben). Linien wachsen mit, nie unter 0,18 mm (A4 0,49 / 0,35 / 0,18; DXF rundet auf die nächste zulässige Stärke, A4 50 / 35 / 18). **Abweichung von der Praxis:** üblich ist ein festes 180-mm-Schriftfeld mit 2,5 / 3,5 / 5 mm Schrift auf allen Formaten; hier ist es auf A4 127 mm breit, Inhalte 2,47 mm und Feldnamen etwa 1,6 mm hoch, auf A0 alles 2,8-mal so groß.
+- **Isometrie im leeren Viertel:** Die isometrische Ansicht kommt in das leere Viertel des Dreiansichtenblocks (Erstwinkel rechts unten, Drittwinkel links oben) und bekommt, wenn sie dort sonst nicht hineinpasst, die nächstkleinere Stufe der Maßstabsreihe (höchstens eine Stufe kleiner als die Grundansicht, damit sie nicht winzig wird). Passt sie auch so nicht (fast blattfüllende Teile, oder die Grundansicht wurde von Hand so gelegt, dass das Viertel schmal ist), sitzt sie im Maßstab der Grundansicht bündig in der Ecke des freien Bereichs und kann den Block überdecken.
+- **DXF-Texte mit Breitenzuschlag:** In DXF ist die Texthöhe die Großbuchstabenhöhe; CAD-Schriften laufen 1,1- bis 1,7-mal breiter als die Schätzung. Die Rahmentexte im DXF werden gegen die 1,45-fache Schätzung eingepasst (kleiner bis drei Fünftel, dann „…“); in DXF kann deshalb ein Text kleiner oder kürzer sein als im SVG. Die Warnung im Fenster richtet sich nach der SVG-Regel.
+- **Grundansicht allein mittig:** Eine neue Zeichnung zeigt ihre Grundansicht in der Mitte des freien Bereichs. Mit der ersten weiteren Ansicht rückt sie (im selben Schritt), damit der Block aus drei Ansichten mittig liegt – nur, wenn sie noch an ihrer automatischen Stelle steht; eine verschobene Grundansicht bleibt.
+- **Änderungstabelle mit 3 Zeilen (Entscheidung des Nutzers nach dem Handtest):** auf dem Blatt die letzten 3 Änderungen (vorher 6); die Kürzungswarnung nur für diese. Die automatische Anordnung und der Maßstabsvorschlag rechnen immer mit Kopf und 3 Zeilen, damit eine später gefüllte Tabelle keine Ansicht überdeckt (vorher: mit der aktuellen Zeilenzahl, im Handtest überdeckte die volle Tabelle die Ansicht „Links“).
+- **Maßstabsfeld:** zeigt den Maßstab der ersten Ansicht der Zeichnung (Grundansicht); vorher den der Ansicht mit den meisten Linien, was im Handtest die Isometrie (1:1) statt der Hauptansichten (2:1) ergab. Ohne Ansichten steht „–“.
+- **Zelle „Index“:** Die Zelle des Änderungsstands heißt im Schriftfeld „Index“; im Fenster heißt sie weiter „Änderungsstand“.
+- Zentriermarken bleiben bei 0,5 mm Stärke und 5 mm hinter dem Rahmen (Spec), obwohl ein öffentlicher Auszug von ISO 5457:1999 0,7 mm und 10 mm nennt; ungeprüft, siehe Normtabelle oben. Die Zahl 25 mm für die rechte Marke in der Aufgabenvorgabe war ein Fehler und ist berichtigt (282 statt 272 bei A4 quer).
+- Das Projektionssymbol liegt in der DXF-Datei, weil die Ebene nach Strichstärke gewählt wird, auf `BLATT_MITTE` zusammen mit den Zentriermarken, nicht auf `BLATT`.
+- Die Textbreite (F11) ist eine vorsichtige Schätzung; breite Zeichen (CJK u. a.) werden unterschätzt.
+- Die isometrische Ansicht ist bei Teilen, die fast das ganze Blatt füllen, „bestmöglich“: sie kann den freien Bereich überragen oder den Block überdecken.
+- Alte Zeichnungen (vor dem Schriftfeld) können mit Schriftfeld oder Tabelle zusammenstoßen; Ansichten werden nicht automatisch verschoben.
+- Blatttexte unter einem Bildpunkt (A0 bei 800 × 600) werden auf einen Bildpunkt angehoben statt weggelassen (nur Blatt-Markierungen).
+- Der Knopf „Blattangaben“ steht am Ende der ersten Zeile des Werkzeugfelds, nicht „neben Blatt einpassen“ (Spec §5): sonst rollt das Werkzeugfeld schon bei 1100 × 700.
+- Ein leeres Feld bedeutet „automatisch“ (F1); ein Feld lässt sich nicht auf „leer“ erzwingen (auch Prüfer und Freigabe nicht).
+- Kürzungswarnung je Zeile der Änderungstabelle (eine Meldung, auch wenn mehrere Zellen betroffen sind) und je Hinweiszeile.
+- Die Vorgabetexte „ISO 2768-m“ (Allgemeintoleranz) sind Blattinhalt (formaler Zeichnungstext) und keine technischen Hinweise der Oberfläche.
+- Eine Zeichnung mit Blattangaben macht das Dokument zum Dateiformat 6; ältere Programme lehnen es mit benannter Meldung ab. Ein Dokument mit nur Projektangaben bleibt nach dem Löschen der letzten Zeichnung im Format 6; ein Format-6-Dokument ohne beide Datensätze lädt nachsichtig.
+- DXF: Ein Blatttext, der in der Datei länger als 255 Zeichen würde, sperrt den DXF-Export schon vor dem Schreiben mit „Der Text im Feld „…“ ist für DXF zu lang. Bitte kürzen.“ (kein stilles Kürzen); ein Zeichen außerhalb des DXF-Zeichensatzes sperrt nur den DXF-Export mit „Das Zeichen U+… im Feld „…“ lässt sich als DXF nicht ausgeben. Bitte ändern.“ (Zeichennummer statt des Zeichens, das die Schrift oft nur als leeres Kästchen zeigt).
+
+### Grenzen (zusätzlich zu den Punkten oben)
+- **Datum in UTC (F2):** kurz nach Mitternacht Ortszeit kann das Ausgabedatum der Vortag sein; änderbar.
+- **Geschätzte Textbreite (F11):** echte Schriften (Inkscape, Browser, andere Schriftart als die Standardschrift) können breiter laufen; konservativ gewählt, von Hand prüfen. Für DXF gilt der Zuschlag 1,45; eine CAD-Schrift, die noch breiter läuft (bis 1,7), kann knapp über ihre Zelle ragen.
+- **Kleine Schrift auf A4:** Mit der Skalierung sind die Inhalte auf A4 2,47 mm hoch, Feldnamen etwa 1,6 mm, Rasterbeschriftung 2,47 mm; gedruckt lesbar, aber unter der üblichen Mindesthöhe von 2,5 mm (ISO 3098, ungeprüft). Eingekürzte Texte werden auf A4 bis 1,5 mm klein.
+- **Fusion 360 zeigt DXF-Texte nicht** (bekannt aus Teilprojekt 12): Schriftfeld und Beschriftung sind dort nur als Linien zu sehen; LibreCAD oder QCAD zeigen die Texte.
+- **Kein Platz für die Stückliste (3c-2) freigehalten:** 3c-2 muss den freien Bereich neu zuschneiden.
+- **Keine Blattreihenfolge:** Blatt n von N folgt der Anlegereihenfolge, kein Umordnen.
+- **Werkzeugfeld:** durch den neuen Knopf breiter; bei 800 × 600 rollt es wie schon vorher.
+- **Normwerte unbestätigt:** Raster, Schriftfeldmaße, Projektionssymbol und Schriftreihe (2,5 / 3,5 / 5 nach ISO 3098; die Spec nennt 2,2 und 3,3) sind Entwurfswerte; die Normtexte zu kaufen ist Sache des Eigners.
+- **Zurückgestellt aus der Prüfung:** Zeilenhöhen des Schriftfelds weichen von der Spec-Notiz „7 bis 16 mm“ ab (F6 gilt); das Spec-Wort „Randteilung am Rahmen innen“ ist mehrdeutig (die Teilstriche gehen vom Rahmen nach außen); die Meldung von `set_project_info` trägt das Präfix „Projektangaben:“.
+
+### Handliste für den Nutzer (Prüfung von Hand, Stand 2026-10-17)
+Proben liegen in `D:\Testumgebung\zeichnung-proben\blatt` (Dateinamen `<Größe>_<M1|M3>_<kurz|lang>_<Rahmen|ohneRahmen>`).
+1. **Papiergrößen ansehen:** Neue Zeichnung in A4 hoch, A4 quer, A3 hoch und quer, A2, A1, A0 anlegen, jeweils bei 800 × 600 und im großen Fenster, Hell und Dunkel: Das Papier bleibt weiß, Rahmen, Raster, Schriftfeld, Tabelle und Hinweisfeld sind ganz zu sehen, nichts überlappt, nichts ragt über das Papier. A4 quer und hoch wirkt wie ein verkleinertes A3: Rahmen und Schriftfeld sind nicht größer als die Zeichnung; A0 wie ein vergrößertes A3.
+2. **Fenster „Blattangaben“:** über den Knopf (Ende der ersten Zeile) und über das Menü öffnen; Felder ausfüllen und „Übernehmen“; ein Feld mit „Zurücksetzen“ zurückstellen; mit „Abbrechen“ und mit dem Kreuz schließen (nichts darf sich ändern); in einem alten, schreibgeschützten Stand ist es gesperrt.
+3. **Änderungen:** 23 Änderungen anlegen (Buchstaben A bis Z ohne I, O, Q); bei der 24. kommt die Meldung „höchstens 23 Änderungen“; auf dem Blatt stehen die drei neuesten, die neueste unten (im Fenster der Hinweis „Auf dem Blatt stehen die letzten 3 Änderungen.“); Ansichten, die vor den Änderungen angelegt wurden, überdecken die volle Tabelle nicht; die Warnung bei zu langem Text erscheint unter der Zeile.
+4. **Hinweise ändern:** Zeilen bearbeiten, hinzufügen (bis 6), löschen; „Eigene Hinweise für dieses Blatt“ und „Hinweise zurücksetzen“ ausprobieren; im Querformat steht das Feld neben dem Schriftfeld, im Hochformat darüber (auf jeder Größe).
+5. **Neue Ansicht:** eine Ansicht hinzufügen; sie landet im freien Bereich und nicht im Schriftfeld. Grundansicht, Seitenansicht, Draufsicht und Isometrie anlegen (Erst- und Drittwinkel): die Isometrie liegt im leeren Viertel neben dem Block und überdeckt keine Ansicht (wenn nötig in kleinerem Maßstab).
+6. **Blatt n/N:** drei Zeichnungen anlegen; die Blattfelder zeigen „1 von 3“ bis „3 von 3“, die Zeichnungsnummern zählen mit; Speichern unter anderem Namen ändert die automatische Nummer, eigene Texte bleiben.
+7. **Alte Datei:** eine Datei aus der Zeit vor dem Schriftfeld öffnen, ansehen, das Fenster öffnen und abbrechen, speichern: Format und Inhalt bleiben alt (Format 4 oder 5). Erst „Übernehmen“ macht die Datei zu Format 6.
+8. **SVG:** eine Probe in Inkscape und im Browser öffnen und auf A3 und A4 drucken: der Rahmen liegt ganz auf dem Blatt, nichts überlappt, Umlaute, Ø, ° und ± stimmen; „lang“-Proben: kein Text ragt über seine Zelle; „ohneRahmen“: nur Ansichten, kein Rahmen.
+9. **DXF:** in Fusion 360 einfügen (Linien und Rahmen; Texte erscheinen dort bekanntlich nicht) und, falls vorhanden, in LibreCAD oder QCAD (Texte, Ebenen `BLATTRAHMEN`, `BLATT_MITTE`, `BLATT`). Die „lang“-Proben in LibreCAD/QCAD: kein Text ragt über seine Zelle.
+10. **Projektionssymbol:** Methode 1 (Kegelstumpf links, Kreise rechts) und Methode 3 (Kreise links, Kegelstumpf rechts) im Schriftfeld ansehen und mit der Norm vergleichen.
+11. **Zentriermarken und Raster:** Marken (auf A3 0,5 mm, 5 mm hinter dem Rahmen, auf anderen Formaten mal Faktor) gegen die Norm ansehen; Raster auf jedem Format 8 × 6 Felder (hoch 6 × 8).
+12. **Werkzeugfeld:** bei 1100 × 700 kein Rollbalken, bei 800 × 600 rollt es.

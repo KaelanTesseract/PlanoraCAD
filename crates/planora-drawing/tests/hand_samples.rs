@@ -22,7 +22,8 @@ use planora_drawing::layout::{GAP_MM, align_dir, view_extent};
 use planora_drawing::model::{
     Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind,
 };
-use planora_drawing::sheet::{FRAME_MARGIN_MM, build_sheet};
+use planora_drawing::sheet::build_sheet;
+use planora_drawing::sheet_frame::EDGE_MARGIN_MM;
 use planora_drawing::{DrawBody, ViewLines, Visibility, compute_view, dxf_string, svg_string};
 use planora_exchange::Progress;
 use planora_kernel::Solid;
@@ -310,7 +311,7 @@ fn arrange(
         |u, r| (u.0.min(r.0), u.1.min(r.1), u.2.max(r.2), u.3.max(r.3)),
     );
     let (w, h) = sheet.size_mm();
-    let m = FRAME_MARGIN_MM + 0.5 * GAP_MM;
+    let m = EDGE_MARGIN_MM + 0.5 * GAP_MM;
     // Gruppe unten links: Rechteck der drei Ansichten an den Rahmen gelegt.
     let (ox, oy) = (m - union.0, m - union.1);
     let group = (union.0 + ox, union.1 + oy, union.2 + ox, union.3 + oy);

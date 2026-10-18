@@ -9,6 +9,10 @@ use planora_drawing::dimension::{
     Tolerance as DimTolerance, ref_count,
 };
 use planora_drawing::limits::MAX_DIMENSIONS;
+use planora_drawing::sheet_info::{
+    FieldValue, NotesValue, ProjectInfo, Revision, SheetInfo, validate_project_info,
+    validate_sheet_info,
+};
 use planora_drawing::{
     Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewSpec,
 };
@@ -29,19 +33,21 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 5 mit Maßen oder eingeschalteten
+/// Kleinste Formatnummer, die den Stand darstellt: 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder eingeschalteten
 /// Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder Fasen, sonst 1
 /// (P7, P12, F7, Teilprojekt 12 P11).
 pub fn required_format(s: &Snapshot) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if s.drawings.iter().any(needs_format_5) {
+    if s.project_info.is_some() || s.drawings.iter().any(|d| d.info.is_some()) {
+        6
+    } else if s.drawings.iter().any(needs_format_5) {
         5
     } else if !s.drawings.is_empty() {
         4
@@ -1172,6 +1178,118 @@ fn dimensions_from(
     Ok((out, next))
 }
 
+fn field_to(v: &FieldValue) -> Option<String> {
+    match v {
+        FieldValue::Auto => None,
+        FieldValue::Text(t) => Some(t.clone()),
+    }
+}
+
+fn field_from(v: &Option<String>) -> FieldValue {
+    v.as_ref()
+        .map_or(FieldValue::Auto, |t| FieldValue::Text(t.clone()))
+}
+
+fn notes_to(n: &NotesValue) -> Option<Vec<String>> {
+    match n {
+        NotesValue::Auto => None,
+        NotesValue::Lines(l) => Some(l.clone()),
+    }
+}
+
+fn notes_from(n: &Option<Vec<String>>) -> NotesValue {
+    n.as_ref()
+        .map_or(NotesValue::Auto, |l| NotesValue::Lines(l.clone()))
+}
+
+fn project_to(p: &ProjectInfo) -> ProjektangabenDto {
+    ProjektangabenDto {
+        anmeldename: p.login.clone(),
+        eigentuemer: field_to(&p.owner),
+        ersteller: field_to(&p.creator),
+        geprueft: field_to(&p.checked),
+        freigabe: field_to(&p.approved),
+        werkstoff: field_to(&p.material),
+        allgemeintoleranz: field_to(&p.tolerance),
+        hinweise: notes_to(&p.notes),
+    }
+}
+
+fn project_from(origin: &str, p: &ProjektangabenDto) -> Result<ProjectInfo> {
+    let info = ProjectInfo {
+        login: p.anmeldename.clone(),
+        owner: field_from(&p.eigentuemer),
+        creator: field_from(&p.ersteller),
+        checked: field_from(&p.geprueft),
+        approved: field_from(&p.freigabe),
+        material: field_from(&p.werkstoff),
+        tolerance: field_from(&p.allgemeintoleranz),
+        notes: notes_from(&p.hinweise),
+    };
+    validate_project_info(&info)
+        .map_err(|e| ProjectError::corrupt(origin, format!("Projektangaben: {e}")))?;
+    Ok(info)
+}
+
+fn sheet_info_to(i: &SheetInfo) -> BlattangabenDto {
+    BlattangabenDto {
+        angelegt: i.created.clone(),
+        nummer: field_to(&i.number),
+        titel: field_to(&i.title),
+        zusatztitel: field_to(&i.subtitle),
+        dokumentart: field_to(&i.doc_type),
+        dokumentstatus: field_to(&i.status),
+        ausgabedatum: field_to(&i.issued),
+        aenderungsstand: field_to(&i.revision),
+        blatt: field_to(&i.sheet_of),
+        format: field_to(&i.format),
+        massstab: field_to(&i.scale),
+        gewicht: field_to(&i.weight),
+        hinweise: notes_to(&i.notes),
+        aenderungen: i
+            .revisions
+            .iter()
+            .map(|r| AenderungDto {
+                buchstabe: field_to(&r.letter),
+                beschreibung: r.description.clone(),
+                datum: r.date.clone(),
+                name: r.name.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn sheet_info_from(origin: &str, name: &str, b: &BlattangabenDto) -> Result<SheetInfo> {
+    let info = SheetInfo {
+        created: b.angelegt.clone(),
+        number: field_from(&b.nummer),
+        title: field_from(&b.titel),
+        subtitle: field_from(&b.zusatztitel),
+        doc_type: field_from(&b.dokumentart),
+        status: field_from(&b.dokumentstatus),
+        issued: field_from(&b.ausgabedatum),
+        revision: field_from(&b.aenderungsstand),
+        sheet_of: field_from(&b.blatt),
+        format: field_from(&b.format),
+        scale: field_from(&b.massstab),
+        weight: field_from(&b.gewicht),
+        notes: notes_from(&b.hinweise),
+        revisions: b
+            .aenderungen
+            .iter()
+            .map(|a| Revision {
+                letter: field_from(&a.buchstabe),
+                description: a.beschreibung.clone(),
+                date: a.datum.clone(),
+                name: a.name.clone(),
+            })
+            .collect(),
+    };
+    validate_sheet_info(&info)
+        .map_err(|e| ProjectError::corrupt(origin, format!("Zeichnung „{name}“: {e}")))?;
+    Ok(info)
+}
+
 fn drawing_to(d: &Drawing, with_marks: bool) -> Result<ZeichnungDto> {
     Ok(ZeichnungDto {
         id: d.id.0,
@@ -1209,6 +1327,7 @@ fn drawing_to(d: &Drawing, with_marks: bool) -> Result<ZeichnungDto> {
         // Bis Format 4 fehlt der Zähler, damit diese Dateien unverändert bleiben; ohne Maße und
         // Mittellinien geht er beim Speichern verloren (Kennungen beginnen dann wieder bei 1).
         naechstes_mass: if with_marks { d.next_dim } else { 0 },
+        blattangaben: d.info.as_ref().map(sheet_info_to),
     })
 }
 
@@ -1272,6 +1391,11 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
         next_view,
         dimensions,
         next_dim,
+        info: d
+            .blattangaben
+            .as_ref()
+            .map(|b| sheet_info_from(origin, &d.name, b))
+            .transpose()?,
     })
 }
 
@@ -1293,6 +1417,12 @@ fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)
         return Err(ProjectError::corrupt(
             origin,
             "Maße und Mittellinien gibt es erst ab Dateiformat 5",
+        ));
+    }
+    if file.format < 6 && file.zeichnungen.iter().any(|z| z.blattangaben.is_some()) {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Blattangaben gibt es erst ab Dateiformat 6",
         ));
     }
     check_len(origin, "Zeichnungen", file.zeichnungen.len())?;
@@ -1355,6 +1485,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         } else {
             s.next_drawing
         },
+        projektangaben: s.project_info.as_ref().map(project_to),
     };
     let text = serde_json::to_string_pretty(&file).map_err(|e| {
         ProjectError::Invalid(format!("Das Dokument lässt sich nicht schreiben: {e}"))
@@ -1413,7 +1544,18 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             "Netz-Körper gibt es erst ab Dateiformat 3",
         ));
     }
+    if file.format < 6 && file.projektangaben.is_some() {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Blattangaben gibt es erst ab Dateiformat 6",
+        ));
+    }
     let (drawings, next_drawing) = drawings_from(origin, &file)?;
+    let project_info = file
+        .projektangaben
+        .as_ref()
+        .map(|p| project_from(origin, p))
+        .transpose()?;
     check_len(origin, "Netze", file.netze.len())?;
     let meshes = meshes_from(origin, &file.netze)?;
     for f in &file.features {
@@ -1443,5 +1585,6 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         meshes,
         drawings,
         next_drawing,
+        project_info,
     })
 }

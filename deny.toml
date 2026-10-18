@@ -5,6 +5,9 @@ all-features = true
 version = 2
 ignore = [
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser: Hinweis auf fehlende Pflege, keine Sicherheitslücke. Wird nur auf dem Linux/Wayland-Pfad gezogen (winit 0.30 -> sctk-adwaita 0.10 -> ab_glyph -> ttf-parser) und unter Windows nicht gebaut. Erneut prüfen, sobald winit 0.31 stabil und übernommen ist (nutzt sctk-adwaita >= 0.12, das skrifa verwenden kann). / Unmaintained notice, not a vulnerability; only on the Linux/Wayland path, not built on Windows." },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: Hinweis auf fehlende Pflege (in zbus 6 aufgegangen), keine Sicherheitslücke. Wird nur über eframe -> accesskit_winit -> accesskit_unix (Linux-Bildschirmleser, AT-SPI) gezogen und unter Windows nicht benutzt; es gibt noch kein sicheres Update, weil accesskit_unix zbus 5 nutzt. Vom Nutzer am 17.10.2026 vorläufig akzeptiert, MUSS bei jedem egui/eframe-Update erneut geprüft werden (Ziel: accesskit_unix mit zbus 6). / Unmaintained notice, Linux accessibility path only; re-check on every egui/eframe update." },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: wie RUSTSEC-2026-0370 (in zbus 6 aufgegangen, nur Linux-AT-SPI-Pfad). Bei jedem egui/eframe-Update erneut prüfen. / Same as RUSTSEC-2026-0370." },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: wie RUSTSEC-2026-0370 (in zbus 6 aufgegangen, nur Linux-AT-SPI-Pfad). Bei jedem egui/eframe-Update erneut prüfen. / Same as RUSTSEC-2026-0370." },
 ]
 
 [licenses]

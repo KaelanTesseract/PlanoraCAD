@@ -329,3 +329,61 @@ fn growing_status_keeps_the_dialog_in_place() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Blattangaben: 720 px breit, mittig, bleibt bei 800 × 600 im Fenster; „Übernehmen“ am Ende ist
+/// durch Rollen erreichbar (Titel und Schließen-Symbol bleiben dabei stehen).
+#[test]
+fn sheet_dialog_stays_inside_and_scrolls_at_800x600() {
+    use planora_app::sheet_dialog::SheetInfoDialog;
+    use planora_drawing::sheet_info::Stamp;
+    let mut s = drawing_state();
+    let id = s.document.drawings()[0].id;
+    let stamp = Stamp {
+        date: "2026-10-17".into(),
+        user: "dennis".into(),
+    };
+    let mut d = SheetInfoDialog::new(&s, id, &stamp);
+    let mut screen = Screen::new(800.0, 600.0);
+    let last = std::cell::Cell::new(None);
+    let mut f = |ctx: &egui::Context| {
+        assert!(d.show(ctx, &mut s));
+        last.set(d.last_rect);
+    };
+    let seen = screen.settle(8, &mut f);
+    let rect = last.get().expect("Dialog gezeichnet");
+    assert!(window(&screen).contains_rect(rect), "{rect:?}");
+    assert!((rect.width() - 720.0).abs() <= 1.0, "{rect:?}");
+    assert!(
+        (rect.center() - pos2(400.0, 300.0)).abs().max_elem() <= 1.0,
+        "mittig {rect:?}"
+    );
+    // Der Inhalt ist höher als das Fenster: „Übernehmen“ ist zuerst nicht zu sehen.
+    let hidden = find(&seen, "Übernehmen")
+        .is_none_or(|t| !t.clip.contains_rect(t.rect) || !rect.contains_rect(t.rect));
+    assert!(hidden, "„Übernehmen“ schon ohne Rollen sichtbar");
+    let close = planora_app::icons::glyph(planora_app::icons::Icon::Close).to_string();
+    let title_before = find(&seen, "Blattangaben").expect("Titel").rect;
+    let close_before = find(&seen, &close).expect("Schließen-Symbol").rect;
+    let mut seen = seen;
+    for _ in 0..60 {
+        if find(&seen, "Übernehmen")
+            .is_some_and(|t| t.clip.contains_rect(t.rect) && rect.contains_rect(t.rect))
+        {
+            break;
+        }
+        screen.wheel(rect.center() + egui::vec2(0.0, 40.0), -300.0, &mut f);
+        seen = screen.settle(3, &mut f);
+    }
+    assert_eq!(
+        find(&seen, "Blattangaben").expect("Titel").rect,
+        title_before
+    );
+    assert_eq!(find(&seen, &close).expect("Symbol").rect, close_before);
+    let button = find(&seen, "Übernehmen").expect("Übernehmen nach dem Rollen");
+    assert!(
+        button.clip.contains_rect(button.rect) && rect.contains_rect(button.rect),
+        "{:?} in {:?}",
+        button.rect,
+        button.clip
+    );
+}

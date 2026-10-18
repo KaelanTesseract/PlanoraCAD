@@ -23,7 +23,8 @@ use crate::dimension_tool::{
     ToolMode, with_tool,
 };
 use crate::drawing_state::{
-    ViewResult, WorkArea, default_distance, estimate_view_size, suggest_scale,
+    FreeArea, ViewResult, WorkArea, block_origin, default_distance, estimate_view_size,
+    iso_placement, keep_in_free, suggest_scale_in,
 };
 use crate::export_dialog::{REPAINT, shorten_for_display};
 use crate::icons::{self, Icon};
@@ -42,10 +43,15 @@ use planora_drawing::annotate::{
 use planora_drawing::dimension::{ArcSpan, DimId, DimSpec};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::sheet::{DimMarks, SheetModel, build_sheet_with, view_transform};
+use planora_drawing::sheet_frame::{REV_VISIBLE, SheetLayout, sheet_layout};
+use planora_drawing::sheet_info::{
+    ProjectInfo, SheetContext, TitleTexts, main_scale, resolve_texts,
+};
+use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{
-    Anchor, Drawing, DrawingId, Placement, Scale, ViewId, ViewKind, ViewLines, ViewSpec,
-    Visibility, align_dir, view_extent,
+    Anchor, Drawing, DrawingId, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewLines,
+    ViewSpec, Visibility, align_dir, view_extent,
 };
 use planora_math::DVec2;
 use std::collections::BTreeMap;
@@ -517,12 +523,17 @@ fn placeholder(size: (f64, f64)) -> (f64, f64) {
 
 #[derive(Clone)]
 struct SheetCache {
+    /// Zustand (Tab), dessen Zeichnung hier liegt ([`AppState::instance`]).
+    instance: u64,
     drawing: Drawing,
     model: u64,
     ptrs: Vec<usize>,
     /// Aufgelöste Maße (festgehalten, damit ihre Adresse eindeutig bleibt).
     dims: Arc<ResolvedDims>,
     sheet: Arc<SheetModel>,
+    /// Angaben, die in die Texte des Schriftfelds eingehen.
+    project: Option<ProjectInfo>,
+    context: Option<SheetContext>,
     /// Stand der Linien: bleibt gleich, solange sich nur Maße oder Mittellinien ändern (die
     /// Linienzüge werden dann nicht neu zerlegt).
     lines_gen: u64,
@@ -545,9 +556,102 @@ fn same_lines(a: &Drawing, b: &Drawing) -> bool {
         })
 }
 
+/// Stellung der Zeichnung `id` im Dokument: Platz (ab 1) und Anzahl der Zeichnungen sowie der
+/// Name des Dokuments.
+pub fn sheet_context(state: &AppState, id: DrawingId) -> Option<SheetContext> {
+    let all = state.document.drawings();
+    let index = all.iter().position(|d| d.id == id)? + 1;
+    Some(SheetContext {
+        doc_name: state.document_name.clone(),
+        index,
+        count: all.len(),
+    })
+}
+
+/// Stellung für eine Zeichnung, die (noch) nicht im Dokument steht: einziges Blatt.
+pub fn context_or_single(state: &AppState, id: DrawingId) -> SheetContext {
+    sheet_context(state, id).unwrap_or_else(|| SheetContext {
+        doc_name: state.document_name.clone(),
+        index: 1,
+        count: 1,
+    })
+}
+
+/// Die Texte des Schriftfelds der Zeichnung (Maßstab: der der ersten Ansicht).
+pub fn sheet_texts(state: &AppState, drawing: &Drawing) -> TitleTexts {
+    resolve_texts(
+        drawing,
+        state.document.project_info(),
+        &context_or_single(state, drawing.id),
+        main_scale(drawing),
+    )
+}
+
+/// Die Blattgeometrie zu den Texten: die Zeilenzahlen von Änderungstabelle und Hinweisfeld
+/// folgen ihnen (der Maßstab beeinflusst sie nicht).
+pub fn layout_from_texts(drawing: &Drawing, texts: &TitleTexts) -> SheetLayout {
+    sheet_layout(
+        drawing.sheet,
+        texts.visible_revisions().len(),
+        texts.notes.len(),
+    )
+}
+
+/// Die Blattgeometrie der Zeichnung.
+pub fn layout_of(state: &AppState, drawing: &Drawing) -> SheetLayout {
+    let texts = resolve_texts(
+        drawing,
+        state.document.project_info(),
+        &context_or_single(state, drawing.id),
+        None,
+    );
+    layout_from_texts(drawing, &texts)
+}
+
+/// Blattgeometrie für die automatische Anordnung von Ansichten und den Maßstabsvorschlag: wie
+/// [`layout_of`], aber die Änderungstabelle immer mit Kopf und allen [`REV_VISIBLE`] Zeilen, so
+/// dass eine später gefüllte Tabelle keine automatisch gelegte Ansicht überdeckt. Gezeichnet wird
+/// die Tabelle mit den tatsächlichen Zeilen ([`layout_of`]).
+pub fn placement_layout(state: &AppState, drawing: &Drawing) -> SheetLayout {
+    let texts = resolve_texts(
+        drawing,
+        state.document.project_info(),
+        &context_or_single(state, drawing.id),
+        None,
+    );
+    sheet_layout(drawing.sheet, REV_VISIBLE, texts.notes.len())
+}
+
+/// Die Blattgeometrie für die Anordnung in einer neuen Zeichnung auf `sheet`: mit den
+/// Hinweiszeilen der Projektangaben (sind noch keine gesetzt, die der Vorgabe) und Platz für
+/// die volle Änderungstabelle (wie [`placement_layout`]).
+pub fn new_sheet_layout(state: &AppState, sheet: Sheet, projection: Projection) -> SheetLayout {
+    let blank = Drawing::new(DrawingId(0), String::new(), sheet, projection);
+    let ctx = SheetContext {
+        doc_name: state.document_name.clone(),
+        index: 1,
+        count: 1,
+    };
+    let texts = resolve_texts(&blank, state.document.project_info(), &ctx, None);
+    sheet_layout(sheet, REV_VISIBLE, texts.notes.len())
+}
+
 /// Zuletzt im Zeichnungsbereich gezeichnetes Blattmodell (mit Mittellinien und Maßen).
 pub fn last_sheet(ctx: &egui::Context) -> Option<Arc<SheetModel>> {
     ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()))
+        .map(|c| c.sheet)
+}
+
+/// Wie [`last_sheet`], aber nur, wenn das zuletzt gezeichnete Blatt das der Zeichnung `id` im
+/// Dokument von `state` ist (der Zwischenspeicher gilt für das ganze Programm, nicht je
+/// Zeichnung oder Tab; Zeichnungen verschiedener Tabs können dieselbe Kennung haben).
+pub fn last_sheet_for(
+    ctx: &egui::Context,
+    state: &AppState,
+    id: DrawingId,
+) -> Option<Arc<SheetModel>> {
+    ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()))
+        .filter(|c| c.instance == state.instance && c.drawing.id == id)
         .map(|c| c.sheet)
 }
 
@@ -563,12 +667,16 @@ fn sheet_model(
     let owned = state.drawing_ui.results_for(drawing, model);
     let ptrs: Vec<usize> = owned.values().map(|a| Arc::as_ptr(a) as usize).collect();
     let cached = ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()));
+    let project = state.document.project_info().cloned();
+    let context = sheet_context(state, drawing.id);
     let same_base = cached
         .as_ref()
-        .filter(|c| c.model == model && c.ptrs == ptrs);
+        .filter(|c| c.instance == state.instance && c.model == model && c.ptrs == ptrs);
     if let Some(c) = same_base
         && Arc::ptr_eq(&c.dims, dims)
         && c.drawing == *drawing
+        && c.project == project
+        && c.context == context
     {
         return (Arc::clone(&c.sheet), c.lines_gen);
     }
@@ -577,16 +685,26 @@ fn sheet_model(
         _ => LINES_GEN.fetch_add(1, Ordering::Relaxed),
     };
     let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
-    let sheet = Arc::new(build_sheet_with(drawing, &refs, dims));
+    let mut built = build_sheet_with(drawing, &refs, dims);
+    let texts = sheet_texts(state, drawing);
+    built.frame = Some(sheet_frame(
+        &layout_from_texts(drawing, &texts),
+        &texts,
+        drawing.projection,
+    ));
+    let sheet = Arc::new(built);
     ctx.data_mut(|d| {
         d.insert_temp(
             sheet_cache_id(),
             SheetCache {
+                instance: state.instance,
                 drawing: drawing.clone(),
                 model,
                 ptrs,
                 dims: Arc::clone(dims),
                 sheet: Arc::clone(&sheet),
+                project,
+                context,
                 lines_gen,
             },
         )
@@ -643,6 +761,8 @@ enum Action {
     ToModel,
     Add(ViewKind),
     Fit,
+    /// Fenster „Blattangaben“ öffnen.
+    SheetInfo,
     Zoom(f32),
     Scale(Scale),
     Hidden(bool),
@@ -735,6 +855,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
             state.drawing_ui.zoom = 1.0;
             state.drawing_ui.pan = egui::Vec2::ZERO;
         }
+        Some(Action::SheetInfo) => crate::sheet_dialog::open(state, id),
         Some(Action::Zoom(f)) => {
             let z = (state.drawing_ui.zoom * f).clamp(MIN_ZOOM, MAX_ZOOM);
             let f = z / state.drawing_ui.zoom;
@@ -929,6 +1050,18 @@ fn tool_field(
                         theme::focus_ring(ui, &r);
                         r
                     });
+                    // Am Ende der ersten Zeile, damit die zweite nicht breiter wird.
+                    if ui
+                        .add_enabled(
+                            editable,
+                            flat(icons::button(Icon::SheetInfo, crate::sheet_dialog::BUTTON)),
+                        )
+                        .on_hover_text(crate::sheet_dialog::BUTTON_TIP)
+                        .on_disabled_hover_text(crate::drawing_browser::READ_ONLY_HINT)
+                        .clicked()
+                    {
+                        action = Some(Action::SheetInfo);
+                    }
                 });
                 // Zweite Zeile: Blatt einpassen und Zoom, dann die Maße (die Einstellungen der
                 // gewählten Ansicht stehen im Ansichtsfeld rechts; das Feld bleibt so immer gleich
@@ -1415,14 +1548,33 @@ fn message_key(state: &AppState) -> (u64, Option<ViewId>, Option<DimId>) {
 ///
 /// Normansicht: abgeleitet von der gewählten Normansicht (sonst von der Grundansicht) mit
 /// deren Maßstab und dem Vorgabeabstand, wenn die Ausrichtungsregel eine Richtung liefert;
-/// sonst frei (leere Zeichnung: Blattmitte, sonst links oben). Isometrisch: frei rechts oben
-/// (0,75 · Breite, 0,75 · Höhe) mit dem Maßstab der Grundansicht.
+/// sonst frei (leere Zeichnung: in der Mitte des freien Bereichs, sonst links oben). Steht die
+/// Grundansicht allein noch an ihrer automatischen Stelle in der Mitte, rückt sie mit der ersten
+/// weiteren Ansicht so, dass der Block aus drei Ansichten mittig liegt (im selben Schritt; eine
+/// vom Benutzer verschobene Grundansicht bleibt). Isometrisch: im leeren Viertel des Blocks um die
+/// Grundansicht ([`iso_placement`]: Erstwinkel rechts unten, Drittwinkel links oben) im Maßstab
+/// der Grundansicht oder, wenn sie dort sonst nicht hineinpasst, eine Stufe kleiner; ohne frei
+/// liegende Grundansicht rechts oben (0,75 · Breite, 0,75 · Höhe des freien Bereichs) im
+/// Maßstab der Grundansicht. Freie Ansichten bleiben mit ihrer
+/// geschätzten Ausdehnung im freien Bereich, soweit sie hineinpassen; sonst sitzen sie dort
+/// bündig an der rechten bzw. oberen Kante.
 pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> {
     let WorkArea::Drawing(id) = state.drawing_ui.area else {
         return Err(NO_DRAWING.into());
     };
-    let d = state.document.drawing(id).ok_or(NO_DRAWING)?.clone();
-    let (w, h) = d.sheet.size_mm();
+    let mut d = state.document.drawing(id).ok_or(NO_DRAWING)?.clone();
+    let (lo, hi) = placement_layout(state, &d).free;
+    let free: FreeArea = ((lo.x, lo.y), (hi.x, hi.y));
+    let (free_w, free_h) = (hi.x - lo.x, hi.y - lo.y);
+    // Steht nur die Grundansicht noch an ihrer automatischen Stelle (Mitte des freien Bereichs),
+    // rückt sie mit der ersten weiteren Ansicht so, dass der Block aus drei Ansichten mittig
+    // liegt; hat der Benutzer sie verschoben, bleibt sie, wo sie ist.
+    let recentred = recentre_single_base(state, &d, free);
+    if let Some((vid, x, y)) = recentred
+        && let Some(v) = d.views.iter_mut().find(|v| v.id == vid)
+    {
+        v.placement = Placement::Free { x, y };
+    }
     let base = d
         .views
         .iter()
@@ -1434,17 +1586,43 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
         } else {
             ViewKind::Front
         };
-        suggest_scale(&state.bodies, d.sheet, d.projection, k)
+        suggest_scale_in(&state.bodies, (free_w, free_h), k)
     });
+    // Freie Ansicht möglichst bei `fx`/`fy` des freien Bereichs, aber mit ihrer geschätzten
+    // Ausdehnung darin.
+    let at = |fx: f64, fy: f64, scale: Scale| {
+        let (ew, eh) = estimate_view_size(&state.bodies, kind);
+        let f = scale.factor();
+        let (x, y) = keep_in_free(
+            (lo.x + fx * free_w, lo.y + fy * free_h),
+            (ew * f, eh * f),
+            free,
+        );
+        Placement::Free { x, y }
+    };
     let (placement, parent, scale) = if !kind.is_normal() {
-        (
-            Placement::Free {
-                x: 0.75 * w,
-                y: 0.75 * h,
+        // Ins leere Viertel des Blocks um die frei liegende Grundansicht (wenn nötig kleiner);
+        // ohne sie rechts oben im Maßstab der Grundansicht.
+        match base {
+            Some(b) if b.kind.is_normal() => match b.placement {
+                Placement::Free { x, y } => {
+                    let (bw, bh) = estimate_view_size(&state.bodies, b.kind);
+                    let bf = b.scale.factor();
+                    let ((x, y), scale) = iso_placement(
+                        d.projection,
+                        b.kind,
+                        (x, y),
+                        (bw * bf, bh * bf),
+                        estimate_view_size(&state.bodies, kind),
+                        base_scale,
+                        free,
+                    );
+                    (Placement::Free { x, y }, None, scale)
+                }
+                Placement::Aligned { .. } => (at(0.75, 0.75, base_scale), None, base_scale),
             },
-            None,
-            base_scale,
-        )
+            _ => (at(0.75, 0.75, base_scale), None, base_scale),
+        }
     } else {
         let selected = state
             .drawing_ui
@@ -1462,28 +1640,61 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
                 Some(p.id),
                 p.scale,
             ),
-            None if d.views.is_empty() => (
-                Placement::Free {
-                    x: 0.5 * w,
-                    y: 0.5 * h,
-                },
-                None,
-                base_scale,
-            ),
-            None => (
-                Placement::Free {
-                    x: 0.25 * w,
-                    y: 0.75 * h,
-                },
-                None,
-                base_scale,
-            ),
+            None if d.views.is_empty() => {
+                // Die erste Ansicht allein liegt in der Mitte des freien Bereichs.
+                let (x, y) = free_centre(free);
+                (Placement::Free { x, y }, None, base_scale)
+            }
+            None => (at(0.25, 0.75, base_scale), None, base_scale),
         }
     };
+    // Grundansicht verschieben und neue Ansicht anlegen in einem Schritt.
+    let mut new_id = None;
     state
         .document
-        .add_view(id, kind, scale, placement, parent)
-        .map_err(|e| e.to_string())
+        .update_drawing(id, |dr| {
+            if let Some((vid, x, y)) = recentred
+                && let Some(v) = dr.views.iter_mut().find(|v| v.id == vid)
+            {
+                v.placement = Placement::Free { x, y };
+            }
+            new_id = Some(dr.add_view(kind, scale, placement, parent));
+        })
+        .map_err(|e| e.to_string())?;
+    new_id.ok_or_else(|| NO_DRAWING.to_string())
+}
+
+/// Mitte des freien Bereichs.
+pub fn free_centre(free: FreeArea) -> (f64, f64) {
+    ((free.0.0 + free.1.0) / 2.0, (free.0.1 + free.1.1) / 2.0)
+}
+
+/// Abstand (mm), bis zu dem die Grundansicht noch als „an ihrer automatischen Stelle“ gilt.
+const AUTO_PLACE_TOL_MM: f64 = 0.01;
+
+/// Hat die Zeichnung genau eine Ansicht, eine frei liegende Normansicht in der Mitte des freien
+/// Bereichs (so legt sie das Programm an), dann die neue Mitte für sie, bei der der Block aus
+/// drei Ansichten mittig liegt ([`block_origin`]); sonst `None`.
+fn recentre_single_base(
+    state: &AppState,
+    d: &Drawing,
+    free: FreeArea,
+) -> Option<(ViewId, f64, f64)> {
+    let [v] = d.views.as_slice() else {
+        return None;
+    };
+    let Placement::Free { x, y } = v.placement else {
+        return None;
+    };
+    if v.parent.is_some() || !v.kind.is_normal() {
+        return None;
+    }
+    let (cx, cy) = free_centre(free);
+    if (x - cx).abs() > AUTO_PLACE_TOL_MM || (y - cy).abs() > AUTO_PLACE_TOL_MM {
+        return None;
+    }
+    let (bx, by) = block_origin(&state.bodies, free, d.projection, v.kind, v.scale);
+    Some((v.id, bx, by))
 }
 
 /// Linienzug einer Blattlinie (mm) mit Ansicht und Sichtbarkeit.
@@ -1722,14 +1933,12 @@ fn canvas_ui(
         Stroke::new(1.0, theme::SHEET_FRAME),
         StrokeKind::Outside,
     );
-    let (f0, f1) = sheet.frame;
-    painter.rect_stroke(
-        Rect::from_two_pos(to_screen(f0), to_screen(f1)),
-        0.0,
-        Stroke::new((VISIBLE_MM * k).max(1.0) as f32, theme::SHEET_FRAME),
-        StrokeKind::Middle,
-    );
-
+    // Blattrahmen, Schriftfeld und Tabellen: schwarz auf dem Papier, unter den Ansichtslinien.
+    if let Some(frame) = &sheet.frame {
+        for m in &frame.marks {
+            paint_mark(&painter, m, theme::SHEET_INK, &to_screen, k, frame.scale);
+        }
+    }
     let visible = Stroke::new((VISIBLE_MM * k).max(1.0) as f32, theme::SHEET_INK);
     let hidden = Stroke::new((HIDDEN_MM * k).max(1.0) as f32, theme::SHEET_INK);
     for p in polys.iter() {
@@ -1766,14 +1975,14 @@ fn canvas_ui(
             }
             let color = match mark_kind(m) {
                 MarkKind::Lost => theme::SHEET_LOST,
-                MarkKind::Dimension | MarkKind::CenterLine => theme::SHEET_DIM,
+                MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Sheet(_) => theme::SHEET_DIM,
             };
-            paint_mark(&painter, m, color, &to_screen, k);
+            paint_mark(&painter, m, color, &to_screen, k, 1.0);
             marks_drawn += 1;
         }
     }
     for m in selected {
-        paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k);
+        paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, 1.0);
         marks_drawn += 1;
     }
     // Vorschau des Werkzeugs „Maß“ am Zeiger (dieselben Markierungen wie das gesetzte Maß).
@@ -1783,7 +1992,7 @@ fn canvas_ui(
         let p = screen_to_sheet(canvas, sheet_mm, zoom, pan, hp);
         let preview = with_tool(state, |t, st| t.hover(st, id, p)).unwrap_or_default();
         for m in &preview {
-            paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k);
+            paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, 1.0);
             preview_drawn += 1;
         }
     }
@@ -2067,6 +2276,13 @@ fn text_geo(
         return None;
     };
     let size = height * k;
+    // Blatttexte (Schriftfeld, Raster) bleiben auch auf einem weit verkleinerten Blatt da – dann
+    // in der kleinsten Größe; alle anderen Texte entfallen unter der Mindestgröße.
+    let size = if matches!(mark_kind(m), MarkKind::Sheet(_)) && size.is_finite() {
+        size.max(MIN_TEXT_PX)
+    } else {
+        size
+    };
     if !(size.is_finite() && size >= MIN_TEXT_PX) || text.is_empty() {
         return None;
     }
@@ -2102,6 +2318,16 @@ fn text_geo(
     })
 }
 
+/// Strichbreite einer Markierung in Blatt-mm: Mittellinien [`CENTER_W`], Blattrahmen die Breite
+/// ihres Stifts beim Faktor `sheet_scale` des Blatts, sonst [`DIM_LINE_W`].
+fn line_width_mm(kind: MarkKind, sheet_scale: f64) -> f64 {
+    match kind {
+        MarkKind::CenterLine => CENTER_W,
+        MarkKind::Sheet(pen) => pen.width_at(sheet_scale),
+        _ => DIM_LINE_W,
+    }
+}
+
 /// Zeichnet eine Markierung: Linien `max(1 px, Breite·k)` (Mittellinien strichpunktiert nach
 /// [`CENTER_PATTERN`]), Pfeile gefüllt, Bögen als Polylinie, Texte als `egui`-Text.
 fn paint_mark(
@@ -2110,14 +2336,11 @@ fn paint_mark(
     color: Color32,
     to_screen: &dyn Fn(DVec2) -> Pos2,
     k: f64,
+    sheet_scale: f64,
 ) {
     match m {
         Mark::Line { a, b, kind } => {
-            let w = if *kind == MarkKind::CenterLine {
-                CENTER_W
-            } else {
-                DIM_LINE_W
-            };
+            let w = line_width_mm(*kind, sheet_scale);
             let stroke = Stroke::new((w * k).max(1.0) as f32, color);
             if *kind == MarkKind::CenterLine {
                 for d in dash_pattern(&[*a, *b], &CENTER_PATTERN) {
@@ -2139,9 +2362,12 @@ fn paint_mark(
             r,
             start,
             end,
-            ..
+            kind,
         } => {
-            let stroke = Stroke::new((DIM_LINE_W * k).max(1.0) as f32, color);
+            let stroke = Stroke::new(
+                (line_width_mm(*kind, sheet_scale) * k).max(1.0) as f32,
+                color,
+            );
             let pts = arc_points(*center, *r, *start, *end, k);
             painter.add(Shape::line(
                 pts.into_iter().map(to_screen).collect(),

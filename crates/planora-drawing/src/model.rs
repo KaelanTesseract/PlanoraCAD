@@ -31,6 +31,17 @@ impl Paper {
             Paper::A0 => (841.0, 1189.0),
         }
     }
+
+    /// Kurzname des Formats („A4“ bis „A0“).
+    pub fn label(self) -> &'static str {
+        match self {
+            Paper::A4 => "A4",
+            Paper::A3 => "A3",
+            Paper::A2 => "A2",
+            Paper::A1 => "A1",
+            Paper::A0 => "A0",
+        }
+    }
 }
 
 /// Projektionsart: Erstwinkel (Europa) oder Dritter Winkel (USA).
@@ -176,6 +187,8 @@ pub struct Drawing {
     pub next_view: u64,
     pub dimensions: Vec<DimSpec>,
     pub next_dim: u64,
+    /// Blattangaben des Schriftfelds; `None` bei Zeichnungen aus älteren Dateien.
+    pub info: Option<crate::sheet_info::SheetInfo>,
 }
 
 impl Drawing {
@@ -190,6 +203,7 @@ impl Drawing {
             next_view: 1,
             dimensions: Vec::new(),
             next_dim: 1,
+            info: None,
         }
     }
 

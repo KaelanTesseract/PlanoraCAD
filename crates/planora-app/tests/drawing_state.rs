@@ -454,10 +454,11 @@ fn kinds_no_longer_needed_are_cancelled() {
 // (h)
 #[test]
 fn suggest_scale_fits_the_three_views() {
-    // Quader x = 100, y = 60, z = 40 auf A4 quer (297 × 210, Innenrahmen 277 × 190), Erstwinkel:
-    // Vorne 100 × 40, Links 60 × 40, Oben 100 × 60.
-    // Breite: 100·f + 20 + 60·f ≤ 277 → f ≤ 1,606; Höhe: 40·f + 20 + 60·f ≤ 190 → f ≤ 1,7.
-    // Größte Reihenstufe: 1:1 (2:1 gäbe 340 > 277).
+    // Quader x = 100, y = 60, z = 40 auf A4 quer (297 × 210; das Blattzubehör ist das von A3
+    // mal 0,707, freier Bereich 275,79 × 151,31 über dem Schriftfeld), Erstwinkel: Vorne
+    // 100 × 40, Links 60 × 40, Oben 100 × 60.
+    // Breite: 100·f + 20 + 60·f ≤ 275,79 → f ≤ 1,6; Höhe: 40·f + 20 + 60·f ≤ 151,31 → f ≤ 1,31.
+    // Größte Reihenstufe: 1:1 (2:1 gäbe 220 > 151,31).
     let (st, _) = box_state(DVec3::new(100.0, 60.0, 40.0));
     for p in [Projection::First, Projection::Third] {
         assert_eq!(
@@ -465,23 +466,25 @@ fn suggest_scale_fits_the_three_views() {
             s(1, 1)
         );
     }
-    let fits = |f: f64| 160.0 * f + 20.0 <= 277.0 && 100.0 * f + 20.0 <= 190.0;
+    let fits = |f: f64| 160.0 * f + 20.0 <= 275.79 && 100.0 * f + 20.0 <= 151.31;
     assert!(fits(1.0) && !fits(2.0), "Gegenprobe");
 
-    // Zehnfach: 1600·f + 20 ≤ 277 → f ≤ 0,1606 → 1:10 (1:5 gäbe 340 > 277).
+    // Zehnfach: Breite 1600·f + 20 ≤ 275,79 → f ≤ 0,160; Höhe 1000·f + 20 ≤ 151,31 →
+    // f ≤ 0,131 → 1:10 (120 ≤ 151,31).
     let (big, _) = box_state(DVec3::new(1000.0, 600.0, 400.0));
     assert_eq!(
         suggest_scale(&big.bodies, A4_QUER, Projection::First, ViewKind::Front),
         s(1, 10)
     );
-    // Ein Zehntel: 16·f + 20 ≤ 277 → f ≤ 16,06 → 10:1 (die größte Stufe).
+    // Ein Zehntel: Breite 16·f + 20 ≤ 275,79 → f ≤ 16,0; Höhe 10·f + 20 ≤ 151,31 → f ≤ 13,1
+    // → 10:1 (120 ≤ 151,31).
     let (small, _) = box_state(DVec3::new(10.0, 6.0, 4.0));
     assert_eq!(
         suggest_scale(&small.bodies, A4_QUER, Projection::First, ViewKind::Front),
         s(10, 1)
     );
-    // A4 hoch (Innenrahmen 190 × 277), Quader 300 × 60 × 40: Breite 360·f + 20 ≤ 190 →
-    // f ≤ 0,472; 1:2 gäbe 200 > 190, also 1:5 (92 ≤ 190).
+    // A4 hoch (freier Bereich 188,79 × 222,75), Quader 300 × 60 × 40: Breite 360·f + 20 ≤
+    // 188,79 → f ≤ 0,469; 1:2 gäbe 200 > 188,79, also 1:5 (92 ≤ 188,79).
     let (wide, _) = box_state(DVec3::new(300.0, 60.0, 40.0));
     let hoch = Sheet {
         paper: Paper::A4,
@@ -717,5 +720,85 @@ fn suggest_scale_without_exact_bodies_is_one_to_one() {
     assert_eq!(
         suggest_scale(&st.bodies, A4_QUER, Projection::Third, ViewKind::Front),
         s(1, 1)
+    );
+}
+
+#[test]
+fn isometric_goes_into_the_empty_quadrant_of_the_block() {
+    let free_area = ((0.0, 0.0), (300.0, 200.0));
+    // Erstwinkel: Grundansicht 100 × 40 um (100, 100); leeres Viertel rechts unten ab
+    // (170, 60), Platz 130 × 60. Die Isometrie 80 × 70 passt in 1:1 nicht (70 > 60), in 1:2
+    // (40 × 35) schon: bündig an der Ecke, 20 mm von der Grundansicht.
+    let (c, scale) = iso_placement(
+        Projection::First,
+        ViewKind::Front,
+        (100.0, 100.0),
+        (100.0, 40.0),
+        (80.0, 70.0),
+        s(1, 1),
+        free_area,
+    );
+    assert_eq!(scale, s(1, 2));
+    assert!(
+        (c.0 - 190.0).abs() < 1e-9 && (c.1 - 42.5).abs() < 1e-9,
+        "{c:?}"
+    );
+    // Drittwinkel, Grundansicht um (150, 100): links oben ab (80, 140), Platz 80 × 60: 1:2.
+    let (c, scale) = iso_placement(
+        Projection::Third,
+        ViewKind::Front,
+        (150.0, 100.0),
+        (100.0, 40.0),
+        (80.0, 70.0),
+        s(1, 1),
+        free_area,
+    );
+    assert_eq!(scale, s(1, 2));
+    assert!(
+        (c.0 - 60.0).abs() < 1e-9 && (c.1 - 157.5).abs() < 1e-9,
+        "{c:?}"
+    );
+    // Drittwinkel um (100, 100): Platz 30 × 60, erst 1:5 (16 × 14) passte; höchstens eine Stufe
+    // kleiner, also nach bestem Wissen 1:1 bündig in der Ecke links oben.
+    let (c, scale) = iso_placement(
+        Projection::Third,
+        ViewKind::Front,
+        (100.0, 100.0),
+        (100.0, 40.0),
+        (80.0, 70.0),
+        s(1, 1),
+        free_area,
+    );
+    assert_eq!(scale, s(1, 1));
+    assert!(
+        (c.0 - 40.0).abs() < 1e-9 && (c.1 - 165.0).abs() < 1e-9,
+        "{c:?}"
+    );
+    // Nie größer als die Grundansicht: Platz für 2:1, Grundansicht 1:2 → 1:2.
+    let (_, scale) = iso_placement(
+        Projection::First,
+        ViewKind::Front,
+        (50.0, 150.0),
+        (20.0, 10.0),
+        (20.0, 20.0),
+        s(1, 2),
+        free_area,
+    );
+    assert_eq!(scale, s(1, 2));
+    // Kein Platz rechts neben der Grundansicht (der freie Bereich endet bei x = 160): nach
+    // bestem Wissen im Maßstab der Grundansicht bündig in der Ecke rechts unten.
+    let (c, scale) = iso_placement(
+        Projection::First,
+        ViewKind::Front,
+        (100.0, 100.0),
+        (100.0, 40.0),
+        (80.0, 70.0),
+        s(1, 1),
+        ((0.0, 0.0), (160.0, 130.0)),
+    );
+    assert_eq!(scale, s(1, 1));
+    assert!(
+        (c.0 - 120.0).abs() < 1e-9 && (c.1 - 35.0).abs() < 1e-9,
+        "{c:?}"
     );
 }

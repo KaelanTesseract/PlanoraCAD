@@ -28,7 +28,8 @@ use planora_drawing::layout::{GAP_MM, align_dir, view_extent};
 use planora_drawing::model::{
     Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewSpec,
 };
-use planora_drawing::sheet::{FRAME_MARGIN_MM, build_sheet_with};
+use planora_drawing::sheet::build_sheet_with;
+use planora_drawing::sheet_frame::EDGE_MARGIN_MM;
 use planora_drawing::stroke::extent_of;
 use planora_drawing::{Basis, DrawBody, ViewLines, compute_view, dxf_string, suggest, svg_string};
 use planora_exchange::Progress;
@@ -862,7 +863,7 @@ fn arrange(sheet: Sheet, lines: &[ViewLines; 4], scale: Scale) -> Option<Drawing
         |u, r| (u.0.min(r.0), u.1.min(r.1), u.2.max(r.2), u.3.max(r.3)),
     );
     let (w, h) = sheet.size_mm();
-    let m = FRAME_MARGIN_MM + 0.5 * GAP_MM;
+    let m = EDGE_MARGIN_MM + 0.5 * GAP_MM;
     let (ox, oy) = (m - union.0, m - union.1);
     let group = (union.0 + ox, union.1 + oy, union.2 + ox, union.3 + oy);
     let (iw, ih) = ext(3);

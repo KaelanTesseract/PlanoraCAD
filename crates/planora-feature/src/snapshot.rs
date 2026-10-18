@@ -3,6 +3,7 @@
 use crate::error::FeatureError;
 use crate::model::{Document, Feature, FeatureId, FeatureKind, FeatureStatus, MeshId};
 use planora_drawing::Drawing;
+use planora_drawing::sheet_info::{ProjectInfo, validate_project_info};
 use planora_exchange::ExchangeMesh;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -26,6 +27,8 @@ pub struct Snapshot {
     pub drawings: Vec<Drawing>,
     /// Nächste Zeichnungskennung (mindestens 1).
     pub next_drawing: u64,
+    /// Projektangaben für das Schriftfeld.
+    pub project_info: Option<ProjectInfo>,
 }
 
 impl Document {
@@ -52,6 +55,7 @@ impl Document {
                 .collect(),
             drawings: self.drawings.clone(),
             next_drawing: self.next_drawing,
+            project_info: self.project_info.clone(),
         }
     }
 
@@ -111,6 +115,10 @@ impl Document {
             doc.check_references(&doc.features[idx].kind, idx)?;
         }
         doc.set_drawings(s.drawings, s.next_drawing)?;
+        if let Some(p) = &s.project_info {
+            validate_project_info(p).map_err(|e| bad(&format!("Projektangaben: {e}")))?;
+        }
+        doc.project_info = s.project_info;
         doc.marker = s.marker;
         doc.next_id = s.next_id;
         doc.recompute();

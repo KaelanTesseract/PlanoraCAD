@@ -16,7 +16,7 @@ use planora_app::drawing_view::{self, FIT_MARGIN_PX};
 use planora_app::shell::{self, ShellMode, ShellState};
 use planora_app::state::AppState;
 use planora_app::workspace::Workspace;
-use planora_app::{fonts, icons, shell_panels, theme};
+use planora_app::{fonts, icons, sheet_dialog, shell_panels, theme};
 use planora_drawing::dimension::{
     DimId, DimKind, DimSpec, GeoRef, GeoRefData, Tolerance as DimTolerance,
 };
@@ -432,6 +432,7 @@ fn tool_field_has_all_toolbar_texts_in_two_rows() {
             "Zeichnung: Blatt 1",
             "Ansicht hinzufügen",
             "Blatt einpassen",
+            sheet_dialog::BUTTON,
             zoom_out.as_str(),
             zoom_in.as_str(),
             drawing_view::SUGGEST,
@@ -860,6 +861,7 @@ fn tool_field_texts_are_reachable_by_scrolling_at_800x600() {
         "Zeichnung: Blatt 1",
         "Ansicht hinzufügen",
         "Blatt einpassen",
+        sheet_dialog::BUTTON,
         zoom_out.as_str(),
         zoom_in.as_str(),
         drawing_view::SUGGEST,

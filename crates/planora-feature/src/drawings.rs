@@ -2,6 +2,7 @@
 
 use crate::error::FeatureError;
 use crate::model::Document;
+use planora_drawing::sheet_info::{ProjectInfo, SheetInfo, Stamp, validate_project_info};
 use planora_drawing::{
     Drawing, DrawingId, Placement, Projection, Scale, Sheet, ViewId, ViewKind, align_dir,
 };
@@ -98,6 +99,9 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
         }
         seen.push(v.id);
     }
+    if let Some(info) = &d.info {
+        planora_drawing::sheet_info::validate_sheet_info(info)?;
+    }
     crate::dimensions::validate_dimensions(d)
 }
 
@@ -134,6 +138,43 @@ impl Document {
         sheet: Sheet,
         projection: Projection,
     ) -> Result<DrawingId, FeatureError> {
+        self.add_drawing_with(name, sheet, projection, None, None)
+    }
+
+    /// Legt eine leere Zeichnung mit Blattangaben an (Datum und Benutzer des Stempels). Gibt es
+    /// noch keine Projektangaben, entstehen sie mit; das zählt zusammen als eine Änderung.
+    pub fn add_drawing_stamped(
+        &mut self,
+        name: &str,
+        sheet: Sheet,
+        projection: Projection,
+        stamp: &Stamp,
+    ) -> Result<DrawingId, FeatureError> {
+        let project = match self.project_info {
+            Some(_) => None,
+            None => {
+                let p = ProjectInfo::new(stamp);
+                validate_project_info(&p).map_err(bad)?;
+                Some(p)
+            }
+        };
+        self.add_drawing_with(
+            name,
+            sheet,
+            projection,
+            Some(SheetInfo::new(stamp)),
+            project,
+        )
+    }
+
+    fn add_drawing_with(
+        &mut self,
+        name: &str,
+        sheet: Sheet,
+        projection: Projection,
+        info: Option<SheetInfo>,
+        project: Option<ProjectInfo>,
+    ) -> Result<DrawingId, FeatureError> {
         if self.drawings.len() >= MAX_DRAWINGS {
             return Err(bad(format!(
                 "Ein Dokument darf höchstens {MAX_DRAWINGS} Zeichnungen haben"
@@ -143,12 +184,44 @@ impl Document {
             return Err(bad("Der Zeichnungszähler ist erschöpft"));
         }
         let id = DrawingId(self.next_drawing);
-        let d = Drawing::new(id, name.trim().to_string(), sheet, projection);
+        let mut d = Drawing::new(id, name.trim().to_string(), sheet, projection);
+        d.info = info;
         self.check_drawing(&d)?;
         self.next_drawing += 1;
         self.drawings.push(d);
+        if project.is_some() {
+            self.project_info = project;
+        }
         self.drawing_edits += 1;
         Ok(id)
+    }
+
+    /// Die Projektangaben für das Schriftfeld, falls schon vorhanden.
+    pub fn project_info(&self) -> Option<&ProjectInfo> {
+        self.project_info.as_ref()
+    }
+
+    /// Entfernt die Projektangaben wieder (etwa wenn das Anlegen einer Zeichnung scheitert, das
+    /// sie miterzeugt hat). Der Änderungszähler steigt nur, wenn es welche gab.
+    pub fn clear_project_info(&mut self) {
+        if self.project_info.take().is_some() {
+            self.drawing_edits += 1;
+        }
+    }
+
+    /// Setzt die Projektangaben (mit Prüfung). Der Änderungszähler steigt nur bei einer Änderung.
+    pub fn set_project_info(&mut self, p: ProjectInfo) -> Result<(), FeatureError> {
+        validate_project_info(&p).map_err(bad)?;
+        if self.project_info.as_ref() != Some(&p) {
+            self.project_info = Some(p);
+            self.drawing_edits += 1;
+        }
+        Ok(())
+    }
+
+    /// Setzt die Blattangaben einer Zeichnung (mit Prüfung).
+    pub fn set_sheet_info(&mut self, id: DrawingId, i: SheetInfo) -> Result<(), FeatureError> {
+        self.update_drawing(id, |d| d.info = Some(i))
     }
 
     /// Benennt eine Zeichnung um.

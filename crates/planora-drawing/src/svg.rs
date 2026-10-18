@@ -11,6 +11,11 @@
 //! Spiegelung der Wurzelgruppe wirkt erst danach auf das fertige Bild (sie vertauscht die
 //! Anzeige-Richtung, nicht die Zahlen).
 //!
+//! Blattrahmen (`SheetModel.frame`): Gruppe `<g id="Blattrahmen">` als erste Gruppe unter der
+//! gespiegelten Wurzelgruppe, vor den Ansichten; Strichbreite und Farbe je Markierung
+//! (`SheetPen::width_at` mit `SheetFrame.scale`, `#000`). Ohne Rahmen entsteht weder die Gruppe
+//! noch ein `<rect>`.
+//!
 //! Markierungen (`SheetView.marks`): Je Ansicht, die Markierungen hat, folgen auf die Liniengruppe
 //! bis zu zwei weitere Gruppen: `„{Ansicht} Maße“` (Maße und verlorene Maße) und
 //! `„{Ansicht} Mittellinien“`. Ansichten ohne Markierungen erzeugen keine zusätzlichen Zeilen. Text
@@ -70,17 +75,17 @@ pub fn svg_string(model: &SheetModel) -> Result<String, DrawError> {
     s.push_str(&format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{wn}mm\" height=\"{hn}mm\" viewBox=\"0 0 {wn} {hn}\">\n"
     ));
-    // Innenrahmen in Blattkoordinaten, hier als Rohkoordinaten (SVG: y nach unten).
-    let (lo, hi) = model.frame;
-    s.push_str(&format!(
-        "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"#000\" stroke-width=\"0.5\"/>\n",
-        num(lo.x)?,
-        num(h - hi.y)?,
-        num(hi.x - lo.x)?,
-        num(hi.y - lo.y)?,
-    ));
     s.push_str(&format!("<g transform=\"matrix(1 0 0 -1 0 {hn})\">\n"));
     let mut used: BTreeSet<String> = BTreeSet::new();
+    if let Some(frame) = &model.frame {
+        // Der Blattrahmen steht als erste Gruppe unter den Ansichten.
+        let id = unique_name(&mut used, FRAME_GROUP);
+        let mut body = String::new();
+        for m in &frame.marks {
+            mark_element(&mut body, m, frame.scale)?;
+        }
+        s.push_str(&format!("<g id=\"{}\">\n{body}</g>\n", escape(&id)));
+    }
     for view in &model.views {
         let name = unique_name(&mut used, &view.name);
         s.push_str(&format!("<g id=\"{}\">\n", escape(&name)));
@@ -114,6 +119,8 @@ pub fn svg_string(model: &SheetModel) -> Result<String, DrawError> {
 // Markierungen
 // ---------------------------------------------------------------------------------------------
 
+/// Kennung der Gruppe des Blattrahmens.
+const FRAME_GROUP: &str = "Blattrahmen";
 /// Farbe der Maße und Mittellinien.
 const MARK_COLOR: &str = "#000";
 /// Farbe verlorener Maße.
@@ -122,7 +129,7 @@ const LOST_COLOR: &str = "#c00";
 fn color(kind: MarkKind) -> &'static str {
     match kind {
         MarkKind::Lost => LOST_COLOR,
-        MarkKind::Dimension | MarkKind::CenterLine => MARK_COLOR,
+        MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Sheet(_) => MARK_COLOR,
     }
 }
 
@@ -155,7 +162,7 @@ fn mark_groups(
     for (suffix, center) in [("Maße", false), ("Mittellinien", true)] {
         let mut body = String::new();
         for m in marks.iter().filter(|m| is_center(m) == center) {
-            mark_element(&mut body, m)?;
+            mark_element(&mut body, m, 1.0)?;
         }
         if body.is_empty() {
             continue;
@@ -172,7 +179,7 @@ fn mark_groups(
 }
 
 /// Ein Strich-Element mit den Darstellungsmerkmalen einer Markierung.
-fn stroke_path(d: &str, kind: MarkKind) -> Result<String, DrawError> {
+fn stroke_path(d: &str, kind: MarkKind, sheet_scale: f64) -> Result<String, DrawError> {
     let (width, dash) = match kind {
         MarkKind::CenterLine => (
             CENTER_W,
@@ -185,6 +192,7 @@ fn stroke_path(d: &str, kind: MarkKind) -> Result<String, DrawError> {
             ),
         ),
         MarkKind::Dimension | MarkKind::Lost => (DIM_LINE_W, String::new()),
+        MarkKind::Sheet(pen) => (pen.width_at(sheet_scale), String::new()),
     };
     Ok(format!(
         "<path d=\"{d}\" stroke=\"{}\" stroke-width=\"{}\"{dash} fill=\"none\" stroke-linecap=\"round\"/>
@@ -194,13 +202,13 @@ fn stroke_path(d: &str, kind: MarkKind) -> Result<String, DrawError> {
     ))
 }
 
-fn mark_element(out: &mut String, m: &Mark) -> Result<(), DrawError> {
+fn mark_element(out: &mut String, m: &Mark, sheet_scale: f64) -> Result<(), DrawError> {
     match m {
         Mark::Line { a, b, kind } => {
             let mut d = String::new();
             move_to(&mut d, *a)?;
             push_cmd(&mut d, 'L', &[b.x, b.y])?;
-            out.push_str(&stroke_path(&d, *kind)?);
+            out.push_str(&stroke_path(&d, *kind, sheet_scale)?);
         }
         Mark::Arrow { tip, dir, kind } => {
             let base = *tip + *dir * ARROW_LEN;
@@ -250,7 +258,7 @@ fn mark_element(out: &mut String, m: &Mark) -> Result<(), DrawError> {
                 sep(&mut d);
                 d.push_str(&format!("A {rr} {rr} 0 0 1 {} {}", num(e.x)?, num(e.y)?));
             }
-            out.push_str(&stroke_path(&d, *kind)?);
+            out.push_str(&stroke_path(&d, *kind, sheet_scale)?);
         }
         Mark::Text {
             pos,

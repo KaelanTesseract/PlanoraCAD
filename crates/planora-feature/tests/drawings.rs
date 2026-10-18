@@ -41,6 +41,7 @@ fn snapshot_with(drawings: Vec<Drawing>, next_drawing: u64) -> Snapshot {
         meshes: Default::default(),
         drawings,
         next_drawing,
+        project_info: None,
     }
 }
 
@@ -464,4 +465,31 @@ fn old_snapshot_without_drawings_loads() {
         d.add_drawing("Erste", A4, Projection::First).unwrap(),
         DrawingId(1)
     );
+}
+
+#[test]
+fn update_drawing_rejects_invalid_sheet_info() {
+    use planora_drawing::sheet_info::{FieldValue, SheetInfo, Stamp};
+    let (mut d, id) = doc_with_drawing();
+    let stamp = Stamp {
+        date: "2026-10-17".into(),
+        user: "dennis".into(),
+    };
+    d.update_drawing(id, |dr| dr.info = Some(SheetInfo::new(&stamp)))
+        .unwrap();
+    let before = d.drawing(id).unwrap().clone();
+    let edits = d.edit_count();
+    let m = invalid(d.update_drawing(id, |dr| {
+        dr.info.as_mut().unwrap().title = FieldValue::Text("x".repeat(61));
+    }));
+    assert!(m.contains("zu lang"), "{m}");
+    assert_eq!(d.drawing(id).unwrap(), &before);
+    assert_eq!(d.edit_count(), edits);
+}
+
+#[test]
+fn a_drawing_without_info_is_valid() {
+    let d = Drawing::new(DrawingId(1), "Z".into(), A4, Projection::First);
+    assert!(d.info.is_none());
+    assert!(planora_feature::validate_drawing(&d).is_ok());
 }

@@ -878,8 +878,8 @@ fn names_frame_and_missing_results() {
     assert_eq!(names, ["Vorne", "Oben", "Vorne 3"]);
     assert_eq!(m.views[2].id, f3);
     let _ = f2;
-    // A4 quer: 297 × 210, Innenrahmen 10 mm.
-    assert_eq!(m.frame, (DVec2::new(10.0, 10.0), DVec2::new(287.0, 200.0)));
+    // Der Blattrahmen kommt erst mit dem Schriftfeld dazu; ohne ihn ist `frame` leer.
+    assert!(m.frame.is_none());
     assert_eq!(m.sheet, d.sheet);
 }
 

@@ -122,6 +122,15 @@ impl Shot {
             .map(|t| t.rect.left_center() + vec2(6.0, 0.0))
     }
 
+    /// Wie `pos_of`, aber nur Texte außerhalb des Blatts `canvas` (die Felder am Rand; auf dem
+    /// Blatt steht im Schriftfeld derselbe Maßstab).
+    fn pos_of_outside(&self, exact: &str, canvas: Rect) -> Option<Pos2> {
+        self.texts
+            .iter()
+            .find(|t| t.text == exact && !canvas.contains(t.rect.center()))
+            .map(|t| t.rect.left_center() + vec2(6.0, 0.0))
+    }
+
     fn flat(&self) -> Vec<&Shape> {
         let mut out = Vec::new();
         for s in &self.shapes {
@@ -486,8 +495,8 @@ fn new_drawing_dialog_creates_a_drawing_with_suggested_scale() {
     assert!(d.landscape, "Querformat ist Vorgabe");
     assert_eq!(d.projection, Projection::First);
     assert_eq!(d.base, ViewKind::Front);
-    // A4 quer, Innenrahmen 277 × 190: 1:1 passt (100+60+20 = 180, 40+60+20 = 120),
-    // 2:1 nicht (340 > 277).
+    // A4 quer (Blattzubehör mal 0,707), freier Bereich 275,79 × 151,31: 1:1 passt
+    // (100+60+20 = 180, 40+60+20 = 120), 2:1 nicht (80+120+20 = 220 > 151,31 in der Höhe).
     assert_eq!(d.scale, s(1, 1));
     let mut h = Harness::new();
     let shot = dialog_shot(&mut h, &mut d, &mut st);
@@ -515,14 +524,20 @@ fn new_drawing_dialog_creates_a_drawing_with_suggested_scale() {
     assert_eq!(v.kind, ViewKind::Front);
     assert_eq!(v.scale, s(1, 1));
     assert_eq!(v.parent, None);
-    assert_eq!(v.placement, Placement::Free { x: 148.5, y: 105.0 });
+    // Die Grundansicht allein liegt in der Mitte des freien Bereichs für die Anordnung (mit Platz
+    // für Kopf und 3 Änderungszeilen: 152,04 | 114,9); erst mit
+    // der nächsten Ansicht rückt sie, damit der Block aus drei Ansichten mittig liegt.
+    let Placement::Free { x, y } = v.placement else {
+        panic!("frei");
+    };
+    assert!((x - 152.035_714_285_714).abs() < 1e-9 && (y - 114.9).abs() < 1e-9);
     assert_eq!(st.drawing_ui.area, WorkArea::Drawing(dr.id));
     // Der nächste Vorschlag nimmt die kleinste freie Zahl.
     assert_eq!(NewDrawingDialog::new(&st).name, "Zeichnung 2");
     st.document.rename_drawing(dr.id, "Zeichnung 2").unwrap();
     assert_eq!(NewDrawingDialog::new(&st).name, "Zeichnung 1");
 
-    // Großer Quader 1000 × 600 × 400: 1:10 (1:5 wäre 200+20 > 190 hoch).
+    // Großer Quader 1000 × 600 × 400: 1:10 (100+20 ≤ 151,31 hoch; 1:5 wäre 200+20 zu hoch).
     let mut big = AppState::new();
     big.create_box(DVec3::new(1000.0, 600.0, 400.0)).unwrap();
     assert_eq!(NewDrawingDialog::new(&big).scale, s(1, 10));
@@ -720,17 +735,22 @@ fn adding_a_top_view_sits_below_front_in_first_angle() {
         Placement::Aligned { distance: 100.0 }
     );
 
-    // Isometrisch: frei rechts oben (0,75·B, 0,75·H), Maßstab der Grundansicht.
+    // Isometrisch: ins leere Viertel rechts unten neben „Vorne“ (Erstwinkel), ab (218,5, 65).
+    // Der freie Bereich (14,14…289,93 × 46,67…197,98) lässt dort nur 71,4 × 18,3 mm; die
+    // Isometrie (113,1 × 98,0 bei 1:1, 56,6 × 49,0 bei 1:2) passt weder in 1:1 noch eine Stufe
+    // kleiner. Nach bestem Wissen: 1:1, bündig in der Ecke rechts unten des freien Bereichs.
     let iso = drawing_view::add_view(&mut st, ViewKind::Isometric).unwrap();
     let v = st.document.drawing(d).unwrap().view(iso).unwrap().clone();
     assert_eq!(v.parent, None);
     assert_eq!(v.scale, s(1, 1));
-    assert_eq!(
-        v.placement,
-        Placement::Free {
-            x: 222.75,
-            y: 157.5
-        }
+    let Placement::Free { x, y } = v.placement else {
+        panic!("frei");
+    };
+    let (iw, ih) = estimate_view_size(&st.bodies, ViewKind::Isometric);
+    assert!(
+        (x - (289.928_571_428_571 - iw / 2.0)).abs() < 1e-9
+            && (y - (46.671_428_571_429 + ih / 2.0)).abs() < 1e-9,
+        "({x}, {y})"
     );
 
     // Gewählte Normansicht ist die Ausgangsansicht; gleiche Art zweimal erlaubt.
@@ -1069,7 +1089,10 @@ fn scale_and_hidden_edges_of_the_selected_view_can_be_changed() {
     let dr = st.document.drawing(d).unwrap();
     assert!(!dr.view(top).unwrap().show_hidden);
     assert!(dr.view(front).unwrap().show_hidden);
-    h.click_text(&mut st, "1:1");
+    let canvas = h.layout().canvas;
+    let shot = h.idle(&mut st);
+    let p = shot.pos_of_outside("1:1", canvas).expect("Maßstabsfeld");
+    h.click(&mut st, p);
     h.click_text(&mut st, "1:2");
     let dr = st.document.drawing(d).unwrap();
     assert_eq!(dr.view(top).unwrap().scale, s(1, 2));
@@ -1298,10 +1321,18 @@ fn an_empty_document_or_a_missing_drawing_does_not_panic() {
         shot.text
     );
     assert_eq!(h.layout().lines_drawn, 0);
-    // Ansicht hinzufügen ohne Körper und ohne Grundansicht: frei in der Blattmitte, 1:1.
+    // Ansicht hinzufügen ohne Körper und ohne Grundansicht: frei in der Mitte des freien
+    // Bereichs für die Anordnung (A4 quer, Blattzubehör mal 0,707, Platz für Kopf und
+    // 3 Änderungszeilen: 14,14…289,93 × 46,67…183,13), 1:1.
     let v = drawing_view::add_view(&mut st, ViewKind::Top).unwrap();
     let spec = st.document.drawing(d).unwrap().view(v).unwrap().clone();
-    assert_eq!(spec.placement, Placement::Free { x: 148.5, y: 105.0 });
+    let Placement::Free { x, y } = spec.placement else {
+        panic!("frei");
+    };
+    assert!(
+        (x - 152.035_714_285_714).abs() < 1e-9 && (y - 114.9).abs() < 1e-9,
+        "({x}, {y})"
+    );
     assert_eq!(spec.parent, None);
     assert_eq!(spec.scale, s(1, 1));
     h.idle(&mut st);
@@ -1348,13 +1379,9 @@ fn dark_theme_keeps_the_paper_white() {
     assert_ne!(theme::drawing_surround(false), surround);
 }
 
-#[test]
-fn visible_lines_are_half_a_millimetre_wide_but_at_least_one_pixel() {
-    let (mut st, _, _, _, mut h) = front_and_top();
-    let shot = h.idle(&mut st);
-    let k = h.layout().px_per_mm;
-    let ink: Vec<f32> = shot
-        .flat()
+/// Breiten der schwarzen Striche im Bild (Linienzüge und Strecken).
+fn ink_widths(shot: &Shot) -> Vec<f32> {
+    shot.flat()
         .iter()
         .filter_map(|s| match s {
             Shape::Path(p) if p.stroke.color == ColorMode::Solid(theme::SHEET_INK) => {
@@ -1365,7 +1392,37 @@ fn visible_lines_are_half_a_millimetre_wide_but_at_least_one_pixel() {
             }
             _ => None,
         })
-        .collect();
+        .collect()
+}
+
+/// Breiten der schwarzen Striche des leeren Blatts (Rahmen und Schriftfeld) im Fenster.
+fn empty_sheet_ink() -> Vec<f32> {
+    let mut st = box_state();
+    let d = st
+        .document
+        .add_drawing("Blatt 1", A4_QUER, Projection::First)
+        .unwrap();
+    st.drawing_ui.open(d);
+    let mut h = Harness::new();
+    h.idle(&mut st);
+    let shot = h.idle(&mut st);
+    ink_widths(&shot)
+}
+
+#[test]
+fn visible_lines_are_half_a_millimetre_wide_but_at_least_one_pixel() {
+    let (mut st, _, _, _, mut h) = front_and_top();
+    let shot = h.idle(&mut st);
+    let k = h.layout().px_per_mm;
+    // Ohne Rahmen und Schriftfeld des leeren Blatts bleiben die Linien der Ansichten.
+    let mut ink = ink_widths(&shot);
+    for w in empty_sheet_ink() {
+        let i = ink
+            .iter()
+            .position(|x| (x - w).abs() < 1e-6)
+            .expect("Rahmenlinie fehlt");
+        ink.remove(i);
+    }
     assert_eq!(ink.len(), 8, "4 Kanten je Ansicht: {ink:?}");
     let want = (0.5 * k).max(1.0);
     assert!(
@@ -1377,16 +1434,7 @@ fn visible_lines_are_half_a_millimetre_wide_but_at_least_one_pixel() {
     let shot = h.idle(&mut st);
     let k = h.layout().px_per_mm;
     assert!(0.5 * k < 1.0);
-    let widths: Vec<f32> = shot
-        .flat()
-        .iter()
-        .filter_map(|s| match s {
-            Shape::Path(p) if p.stroke.color == ColorMode::Solid(theme::SHEET_INK) => {
-                Some(p.stroke.width)
-            }
-            _ => None,
-        })
-        .collect();
+    let widths = ink_widths(&shot);
     assert!(
         !widths.is_empty() && widths.iter().all(|w| *w == 1.0),
         "{widths:?}"

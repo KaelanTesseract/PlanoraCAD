@@ -2,7 +2,7 @@
 
 Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
 
-**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten).
+**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt).
 
 Erste Version: Quader, Zylinder, Kugel, Kegel, Extrusion und Rotation von Skizzen, 3D-Ansicht mit Auswahl, Körper verschieben (Feld „Position“) sowie Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit Flächen aus Ebenen, Zylindern, Kegeln, Kugeln und Tori (Stufe A) und für Körper mit Freiformflächen aus Ellipsen und Splines (siehe „Freiformflächen“).
 
@@ -143,14 +143,14 @@ Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Ze
 
 **Was geht**
 - Ansichten: Vorne, Hinten, Links, Rechts, Oben, Unten und Isometrisch. Die Normansichten legen sich selbst an die richtige Stelle, wahlweise im Erstwinkel (Europa) oder im Dritten Winkel (USA); sie lassen sich nur entlang ihrer Richtung verschieben. Die isometrische Ansicht steht frei auf dem Blatt.
-- Blatt von A4 bis A0, hoch oder quer, mit Rahmen 10 mm vom Rand. Jede Ansicht hat ihren eigenen Maßstab (1:1, 1:2, 1:5, 1:10, 1:20, 1:50, 1:100, 2:1, 5:1, 10:1). Beim Anlegen schlägt das Programm den größten Maßstab vor, bei dem die drei Hauptansichten aufs Blatt passen.
+- Blatt von A4 bis A0, hoch oder quer, mit Rahmen, Schriftfeld und weiteren Angaben (siehe „Zeichnungsblatt“ unten). Jede Ansicht hat ihren eigenen Maßstab (1:1, 1:2, 1:5, 1:10, 1:20, 1:50, 1:100, 2:1, 5:1, 10:1). Beim Anlegen schlägt das Programm den größten Maßstab vor, bei dem die drei Hauptansichten aufs Blatt passen.
 - Sichtbare Kanten sind durchgezogen, verdeckte gestrichelt. Das Zeigen der verdeckten Kanten lässt sich je Ansicht ausschalten (Vorgabe: an für die Normansichten, aus für Isometrisch).
 - Kreise bleiben Kreise, Bögen bleiben Bögen, Freiformlinien bleiben glatte Kurven; es werden keine Streckenzüge daraus. Nur die Umrisse von Ringen (Torus) und Freiformflächen sind angenähert (auf 0,0001 mm genau).
 - Im Fenster: Umschalter zwischen 3D-Modell und Zeichnung (im Werkzeugfeld oben), Zoomen mit dem Mausrad, Verschieben mit der mittleren Maustaste, Ansichten anklicken und ziehen. Im Browser stehen die Zeichnungen mit ihren Ansichten. Die Berechnung läuft im Hintergrund mit Fortschrittsbalken; scheitert eine Ansicht, steht der Grund an ihr, und die Zeichnung bleibt erhalten.
-- Gespeichert wird nur die Beschreibung (Blatt, Ansichten, Maßstab, Lage), nicht die berechneten Linien. Ein Dokument mit Zeichnung bekommt das Dateiformat 4 (mit Maßen oder Mittellinien das Dateiformat 5); ältere Programmversionen melden dann „zu neu“. Dokumente ohne Zeichnung bleiben unverändert.
+- Gespeichert wird nur die Beschreibung (Blatt, Ansichten, Maßstab, Lage), nicht die berechneten Linien. Ein Dokument mit Zeichnung bekommt das Dateiformat 4 (mit Maßen oder Mittellinien das Dateiformat 5, mit Blattangaben das Dateiformat 6, siehe „Zeichnungsblatt“); ältere Programmversionen melden dann „zu neu“. Dokumente ohne Zeichnung bleiben unverändert.
 
 **Grenzen**
-- Nicht dabei: Schriftfeld, Beschriftung, Schnittansichten, Schraffur, Detailansichten, Stücklisten, PDF und das Einlesen von SVG oder DXF. Es gibt nur diese sieben Blickrichtungen. Maße und Mittellinien stehen im nächsten Abschnitt.
+- Nicht dabei: Schnittansichten, Schraffur, Detailansichten, Stücklisten, PDF und das Einlesen von SVG oder DXF. Es gibt nur diese sieben Blickrichtungen. Maße und Mittellinien stehen im nächsten Abschnitt.
 - Netz-Körper (eingelesene Netze) werden nicht gezeichnet; das Programm nennt sie mit Namen.
 - Glatte Übergänge, etwa zwischen einer Rundung und der Fläche daneben, werden nicht als Linie gezeichnet. Der Umriss der Rundung selbst schon.
 - Kann das Programm bei einer Linie nicht sicher sagen, ob sie sichtbar oder verdeckt ist, steht an der Ansicht eine Meldung statt einer Zeichnung; es wird nichts geraten. Bei sehr vielen Flächen meldet es „zu aufwendig“ (höchstens 20 000 Linien je Ansicht).
@@ -160,6 +160,43 @@ Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Ze
 - Das Schreiben der Datei lässt sich abbrechen; die alte Datei bleibt dann unverändert. Unter Windows reservierte Dateinamen (zum Beispiel „CON“) werden im Namensvorschlag nicht abgefangen.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 11 – Zeichnungen (Ansichten)“.
+
+## Zeichnungsblatt
+
+Jede Zeichnung bekommt ein vollständiges Blatt, wie man es von technischen Zeichnungen kennt. Das Programm legt alles selbst an; du musst nur noch eintragen, was nur du weißt.
+
+**Was auf dem Blatt steht**
+- Ein Rahmen mit breitem Heftrand links (20 mm auf A3) und schmalem Rand sonst (10 mm), Markierungen in der Mitte jeder Kante und ein Raster aus Zahlen und Buchstaben am Rand, damit man sich auf dem Blatt verständigen kann („Feld C 4“).
+- Unten rechts das Schriftfeld: Zeichnungsnummer, Titel, Eigentümer, Ersteller, Datum, Werkstoff, Maßstab, Format, Blatt „1 von 3“ und das Zeichen für die Projektionsmethode (Erstwinkel oder Dritter Winkel).
+- Oben rechts eine Tabelle für Änderungen (die drei neuesten sind zu sehen, im Fenster stehen alle; neue Ansichten lassen dafür immer Platz, auch wenn noch keine Änderung eingetragen ist) und ein Feld mit Hinweisen, zum Beispiel zu Toleranzen und Oberflächen. Im Querformat steht es links neben dem Schriftfeld, im Hochformat darüber.
+- Neue Ansichten legen sich in den freien Bereich des Blatts und nicht auf Schriftfeld oder Tabelle. Eine neue Zeichnung zeigt zuerst nur die Grundansicht, mitten im freien Bereich; kommt die nächste Ansicht dazu, rückt sie ein Stück, damit alle drei Hauptansichten zusammen mittig stehen. Hast du sie vorher selbst verschoben, bleibt sie, wo du sie hingelegt hast. Die isometrische Ansicht kommt in die freie Ecke neben den drei Hauptansichten; ist dort zu wenig Platz, wird sie eine Maßstabsstufe kleiner gezeichnet als die Hauptansichten (zum Beispiel 1:2 statt 1:1).
+
+**Gleiches Aussehen auf jeder Papiergröße:** Das Blatt ist für A3 gemacht. Auf den anderen Größen wird alles im selben Verhältnis kleiner oder größer, so als würde man ein A3-Blatt verkleinert auf A4 oder vergrößert auf A0 drucken: Ränder, Raster, Schriftfeld, Tabellen, Schrift und Linien. Die Maße oben (20 mm, 10 mm …) gelten also für A3. Auf A4 ist das Schriftfeld deshalb nur etwa 13 cm breit und die Schrift recht klein (Inhalte gut 2,5 mm, Feldnamen etwa 1,6 mm). Linien werden dabei nie dünner als 0,18 mm. Üblich ist sonst ein gleich großes Schriftfeld auf allen Größen; hier wurde bewusst anders entschieden, damit eine A4-Zeichnung nicht vom Schriftfeld erdrückt wird.
+
+**Was automatisch ausgefüllt wird:** Zeichnungsnummer (Dokumentname und laufende Nummer), Titel (Name der Zeichnung), Datum von heute, Ersteller (dein Windows-Benutzername), Blattnummer und Blattzahl, Format, Maßstab (der Maßstab der ersten Ansicht, also der Grundansicht), Dokumentart „Fertigungszeichnung“, Status „in Arbeit“, die Buchstaben der Änderungen und drei übliche Hinweiszeilen.
+
+**Blattangaben ändern:** Knopf „Blattangaben“ am Ende der ersten Zeile im Werkzeugfeld der Zeichnung, oder Menü „Zeichnung“ → „Blattangaben …“. Im Fenster gibt es drei Abschnitte: „Projekt“ (gilt für alle Blätter), „Dieses Blatt“ und „Änderungen“. Ein leeres Feld bleibt automatisch und zeigt grau, was das Programm einträgt. Schreibst du etwas hinein, gilt dein Text; „Zurücksetzen“ stellt den automatischen Wert wieder her. Mit „Übernehmen“ wird gespeichert, mit „Abbrechen“ oder dem Kreuz bleibt alles, wie es war. Ein Feld lässt sich nicht ganz leer erzwingen, weil „leer“ hier „automatisch“ bedeutet; wer ein Feld sichtbar leer haben will, trägt einen Strich „-“ ein.
+
+**Grenzen der Felder:** Die meisten Felder nehmen 80 Zeichen, der Titel 60, eine Hinweiszeile 100, die Beschreibung einer Änderung 120. Es gibt höchstens 6 Hinweiszeilen und 23 Änderungen (Buchstaben A bis Z ohne I, O und Q). Ist ein Text für sein Feld zu lang, macht das Programm ihn zuerst kleiner und kürzt ihn danach mit „…“. Im Fenster steht dann eine Warnung beim Feld.
+
+**Ausgeben:** Im Fenster „Exportieren“ gibt es den Schalter „Blattrahmen mit ausgeben“ (Vorgabe: an). Ist er aus, kommen nur Ansichten, Maße und Mittellinien heraus, ganz ohne Rahmen.
+
+**Datei und alte Zeichnungen:** Eine Zeichnung mit Blattangaben macht das Dokument zum Dateiformat 6; ältere Programmversionen lehnen es dann ab. Das gilt für jede neu angelegte Zeichnung. Alte Dateien öffnen sich wie vorher und bleiben beim bloßen Ansehen unverändert; erst „Übernehmen“ im Fenster speichert Angaben. Löscht man später die letzte Zeichnung, bleiben die Projektangaben im Dokument und das Format bleibt 6.
+
+**Grenzen**
+- Das Datum ist der Tag nach Weltzeit (UTC). Kurz nach Mitternacht kann es deshalb der Vortag sein; es lässt sich ändern.
+- Wie breit ein Text auf dem Blatt wird, schätzt das Programm vorsichtig. Echte Schriften in anderen Programmen können etwas breiter laufen. Sehr breite Zeichen (zum Beispiel chinesische) werden unterschätzt. CAD-Programme schreiben Texte aus DXF-Dateien meist breiter; dort lässt das Programm deshalb mehr Luft, und ein langer Text kann in der DXF-Datei etwas kleiner oder früher gekürzt sein als im SVG.
+- In DXF-Dateien sind nur Zeichen aus dem üblichen Zeichensatz erlaubt; sonst nennt das Programm das Feld und die Nummer des Zeichens (zum Beispiel „U+1F600“ für ein Gesicht) und bricht den DXF-Export ab. SVG nimmt alles. Fusion 360 zeigt Texte aus DXF-Dateien nicht an (bekannt von den Maßen).
+- Auf A4 ist die Schrift im Schriftfeld klein (siehe oben); gedruckt ist sie lesbar, liegt aber unter dem, was für technische Zeichnungen sonst üblich ist.
+- Zentriermarken und Raster folgen den Entwurfswerten (Marken 0,5 mm stark und 5 mm in den Rahmen hinein); ein öffentlich zugänglicher Auszug der Norm nennt 0,7 mm und 10 mm. Die Normtexte sind kostenpflichtig und lagen nicht vor, die Zahlen sind deshalb nicht endgültig bestätigt.
+- Das Projektionszeichen liegt in der DXF-Datei zusammen mit den Zentriermarken auf der Ebene „BLATT_MITTE“.
+- Alte Zeichnungen können Ansichten haben, die nun mit Schriftfeld oder Tabelle zusammenstoßen; das Programm verschiebt sie nicht von selbst.
+- Die isometrische Ansicht bleibt bei Teilen, die fast das ganze Blatt füllen, nicht immer im freien Bereich und kann dann die anderen Ansichten berühren.
+- Auf sehr kleiner Darstellung (A0 in einem kleinen Fenster) sind die Blatttexte nie kleiner als ein Bildpunkt und deshalb nur ein Strich.
+- Das Werkzeugfeld der Zeichnung ist durch den neuen Knopf breiter; in sehr kleinen Fenstern rollt es.
+- Es wird kein Platz für eine Stückliste freigehalten, und die Reihenfolge der Blätter ist die Reihenfolge, in der sie angelegt wurden (kein Umordnen).
+
+Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 3c-1 – Zeichnungsblatt“.
 
 ## Maße und Mittellinien
 

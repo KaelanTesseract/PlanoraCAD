@@ -49,6 +49,7 @@ use crate::dimension::{
 };
 use crate::model::ViewId;
 use crate::sheet::SheetTransform;
+use crate::sheet_frame::SheetPen;
 use planora_math::DVec2;
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
@@ -132,6 +133,8 @@ pub enum MarkKind {
     CenterLine,
     /// Maß mit verlorenem Bezug (rot).
     Lost,
+    /// Blattrahmen, Schriftfeld und Tabellen in der Linienstärke des Stifts.
+    Sheet(SheetPen),
 }
 
 /// Lage des Ankers im Text (entlang der Grundlinie).

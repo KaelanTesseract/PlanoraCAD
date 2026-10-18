@@ -13,7 +13,7 @@ ANSI_1252
   9
 $HANDSEED
   5
-30
+2F
   9
 $INSBASE
  10
@@ -1005,43 +1005,9 @@ SECTION
   2
 ENTITIES
   0
-LWPOLYLINE
-  5
-2D
-330
-A
-100
-AcDbEntity
-  8
-SICHTBAR
-100
-AcDbPolyline
- 90
-4
- 70
-1
- 43
-0
- 10
-10
- 20
-10
- 10
-410
- 20
-10
- 10
-410
- 20
-287
- 10
-10
- 20
-287
-  0
 INSERT
   5
-2E
+2D
 330
 A
 100
@@ -1061,7 +1027,7 @@ Vorne
   0
 INSERT
   5
-2F
+2E
 330
 A
 100
