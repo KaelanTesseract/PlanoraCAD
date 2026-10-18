@@ -535,8 +535,7 @@ fn spline_path(d: &mut String, pieces: &[Vec<H3>]) -> Result<(), DrawError> {
                 &[pts[1].x, pts[1].y, pts[2].x, pts[2].y, last.x, last.y],
             )?,
             _ => {
-                let dq = hodograph(q);
-                for [c1, c2, e] in adaptive_fit(q, &dq, first, last) {
+                for [c1, c2, e] in fitted_cubics(q, first, last) {
                     push_cmd(d, 'C', &[c1.x, c1.y, c2.x, c2.y, e.x, e.y])?;
                 }
             }
@@ -707,6 +706,14 @@ impl FitPiece {
             dev,
         }
     }
+}
+
+/// Kubische Näherung eines (rationalen oder höhergradigen) Bézier-Stücks in homogenen
+/// Kontrollpunkten `q` mit den kartesischen Endpunkten `first`, `last` (siehe [`adaptive_fit`]).
+/// Gemeinsam für SVG und PDF; liefert je Teil `[Steuerpunkt 1, Steuerpunkt 2, Endpunkt]`.
+pub(crate) fn fitted_cubics(q: &[H3], first: DVec2, last: DVec2) -> Vec<[DVec2; 3]> {
+    let dq = hodograph(q);
+    adaptive_fit(q, &dq, first, last)
 }
 
 /// Kubische Hermite-Näherung eines Bézier-Stücks: zuerst 8 gleiche Teile, dann wird das Teil

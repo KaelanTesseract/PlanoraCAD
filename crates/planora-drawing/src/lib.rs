@@ -16,6 +16,7 @@ pub mod limits;
 pub mod model;
 pub mod out2d;
 pub mod parts;
+pub mod pdf;
 pub mod pdf_font;
 pub mod raycast;
 pub mod sheet;
@@ -40,6 +41,7 @@ pub use model::{
     Sheet, ViewId, ViewKind, ViewSpec,
 };
 pub use parts::{BodyKey, PartsCells, PartsRow, RowOverride};
+pub use pdf::{PdfMeta, pdf_bytes, write_pdf};
 pub use sheet_frame::{
     PartsSpace, SheetLayout, SheetPen, TitleField, sheet_layout, sheet_layout_with,
 };
