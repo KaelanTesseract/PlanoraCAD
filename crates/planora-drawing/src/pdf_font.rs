@@ -23,6 +23,11 @@
 //! AFM files are prominently noted in the modified file(s); and that this paragraph is not
 //! modified. Adobe Systems has no responsibility or obligation to support the use of the AFM
 //! files."
+//! Fundstelle der Bedingungen: Adobe, "Core 14 AFM Files", Download über
+//! partners.adobe.com/public/developer/font/index.html (Datei `MustRead.html` im Archiv).
+//! Verwendete Abschriften zum Abgleich: Apache PDFBox,
+//! `pdfbox/src/main/resources/org/apache/pdfbox/resources/afm/Helvetica.afm` und PDFKit,
+//! `lib/font/data/Helvetica.afm` (beide mit gleichem `MustRead.html`).
 //! Hier ist nur die Breitentabelle (eine Teilmenge der Zahlen, neu angeordnet nach WinAnsi)
 //! enthalten, nicht die AFM-Datei selbst; die Anordnung nach WinAnsi ist eine Änderung im
 //! Sinne dieser Bedingungen.
