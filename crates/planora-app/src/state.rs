@@ -157,6 +157,8 @@ pub struct AppState {
     pub dimension_ui: crate::dimension_state::DimensionUi,
     /// Werkzeug „Maß“ des Zeichnungsbereichs (Untermodus, gewählte Bezüge, Vorschau).
     pub dimension_tool: crate::dimension_tool::DimensionTool,
+    /// Werkzeug „Position“ im Zeichnungsbereich.
+    pub balloon_tool: crate::balloon_tool::BalloonTool,
     /// Offenes Fenster „Maß bearbeiten“.
     pub dimension_dialog: Option<crate::dimension_dialog::DimensionDialog>,
     /// Offenes Fenster „Blattangaben“.
@@ -299,6 +301,7 @@ impl AppState {
             drawing_ui: crate::drawing_state::DrawingUi::default(),
             dimension_ui: crate::dimension_state::DimensionUi::default(),
             dimension_tool: crate::dimension_tool::DimensionTool::default(),
+            balloon_tool: crate::balloon_tool::BalloonTool::default(),
             dimension_dialog: None,
             sheet_dialog: None,
             pending_delete_dimension: None,

@@ -444,6 +444,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     ui.add_space(theme::SPACE_3);
     crate::drawing_browser::show(ui, state, read_only);
     crate::dimension_browser::show(ui, state, read_only);
+    crate::balloon_browser::show(ui, state, read_only);
 }
 
 fn feature_tree(ui: &mut egui::Ui, state: &mut AppState) {

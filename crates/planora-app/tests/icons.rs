@@ -389,3 +389,14 @@ fn tree_row_icon_for_chamfer_feature() {
         icons::FeatureIcon::Blend
     );
 }
+
+/// Werkzeug „Position“ (Stückliste, Aufgabe 7): eigenes Zeichen der Symbolschrift.
+#[test]
+fn position_tool_has_its_own_glyph() {
+    assert!(ALL.contains(&Icon::PositionTool));
+    assert_eq!(
+        icons::phosphor_name(Icon::PositionTool),
+        "number-circle-one"
+    );
+    assert_eq!(icons::glyph(Icon::PositionTool), '\u{e36a}');
+}

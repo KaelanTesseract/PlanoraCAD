@@ -16,6 +16,7 @@
 //! und `offset` (Abstand vom Kreis); Ø-Linie durch die Mitte → `angle` dreht mit; Bogen eines
 //! Winkelmaßes → Radius (`|offset|`) wächst mit der Bewegung vom Scheitel weg.
 
+use crate::balloon_tool;
 use crate::browser::error_color;
 use crate::dimension_state::{SuggestOutcome, marks_in, notes_in, resolve_in, suggest_for};
 use crate::dimension_tool::{
@@ -40,6 +41,7 @@ use planora_drawing::annotate::{
     ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, CENTER_W, DEFAULT_OFFSET, DIM_LINE_W, Mark, MarkKind,
     ResolvedDims, TextAnchor, clamp_leader_deg, leader_angle,
 };
+use planora_drawing::balloon::{BalloonMarks, add_balloon_marks};
 use planora_drawing::dimension::{ArcSpan, DimId, DimSpec};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::parts::{PARTS_ON_SHEET, page_rows};
@@ -53,8 +55,8 @@ use planora_drawing::sheet_info::{
 use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{
-    Anchor, Drawing, DrawingId, DrawingKind, PartsCells, Placement, Projection, Scale, Sheet,
-    ViewId, ViewKind, ViewLines, ViewSpec, Visibility, align_dir, view_extent,
+    Anchor, BalloonId, Drawing, DrawingId, DrawingKind, PartsCells, Placement, Projection, Scale,
+    Sheet, ViewId, ViewKind, ViewLines, ViewSpec, Visibility, align_dir, view_extent,
 };
 use planora_math::DVec2;
 use std::collections::BTreeMap;
@@ -99,6 +101,8 @@ const MAX_TEXT_PX: f64 = 400.0;
 /// Kleinster Betrag des Abstands einer Maßlinie beim Ziehen (Blatt-mm, auf der Seite, auf der
 /// das Ziehen begann).
 pub const MIN_DRAG_OFFSET_MM: f64 = 1.0;
+/// Waagerechter Rand des Symbolknopfs „Position“ im Werkzeugfeld (Pixel).
+const POSITION_PAD_X: f32 = theme::SPACE_1 / 2.0;
 /// Kleinster Radius eines Winkelmaßes beim Ziehen (Blatt-mm).
 const MIN_ANGLE_RADIUS_MM: f64 = 1.0;
 /// Hinweis, wenn es zu den Körpern nichts zu sagen gibt.
@@ -167,6 +171,8 @@ pub struct DrawingLayout {
     /// Gezeichnete Markierungen der Vorschau des Werkzeugs „Maß“.
     pub preview_drawn: usize,
     pub views: Vec<DrawnView>,
+    /// Die Nummernkreise, wie sie gezeichnet sind (beim Ziehen an der neuen Stelle).
+    pub balloons: Vec<BalloonMarks>,
 }
 
 fn layout_id() -> egui::Id {
@@ -542,6 +548,8 @@ struct SheetCache {
     /// Zeilen der Stückliste auf diesem Blatt (sie hängen an Körpern, Namen und eigenen Texten,
     /// nicht an der Zeichnung).
     parts: Vec<PartsCells>,
+    /// Nummernkreise mit Nummern (die Nummern folgen der Stückliste, nicht der Zeichnung).
+    balloons: Vec<BalloonMarks>,
     /// Stand der Linien: bleibt gleich, solange sich nur Maße oder Mittellinien ändern (die
     /// Linienzüge werden dann nicht neu zerlegt).
     lines_gen: u64,
@@ -773,14 +781,16 @@ pub fn last_sheet_for(
         .map(|c| c.sheet)
 }
 
-/// Blattmodell der Zeichnung mit Mittellinien und den Maßen `dims` und der Stand seiner Linien;
-/// aus dem Zwischenspeicher, solange sich Zeichnung, Ergebnisse und Maße nicht geändert haben.
+/// Blattmodell der Zeichnung mit Mittellinien, den Maßen `dims` und den Nummernkreisen
+/// `balloons` und der Stand seiner Linien; aus dem Zwischenspeicher, solange sich Zeichnung,
+/// Ergebnisse, Maße und Kreise nicht geändert haben.
 fn sheet_model(
     ctx: &egui::Context,
     state: &AppState,
     drawing: &Drawing,
     model: u64,
     dims: &Arc<ResolvedDims>,
+    balloons: &[BalloonMarks],
 ) -> (Arc<SheetModel>, u64) {
     let owned = state.drawing_ui.results_for(drawing, model);
     let ptrs: Vec<usize> = owned.values().map(|a| Arc::as_ptr(a) as usize).collect();
@@ -802,6 +812,7 @@ fn sheet_model(
         && c.project == project
         && c.context == context
         && c.parts == texts.parts
+        && c.balloons == balloons
     {
         return (Arc::clone(&c.sheet), c.lines_gen);
     }
@@ -811,6 +822,7 @@ fn sheet_model(
     };
     let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
     let mut built = build_sheet_with(drawing, &refs, dims);
+    add_balloon_marks(&mut built, balloons);
     built.frame = Some(sheet_frame(
         &layout_from_texts(
             drawing,
@@ -835,6 +847,7 @@ fn sheet_model(
                 project,
                 context,
                 parts,
+                balloons: balloons.to_vec(),
                 lines_gen,
             },
         )
@@ -884,6 +897,14 @@ enum Drag {
         id: DimId,
         part: DimPart,
     },
+    /// Nummernkreis: nur der Versatz ändert sich (der Anker `at` bleibt am Teil); ins Dokument
+    /// erst beim Loslassen (eine Änderung je Ziehen).
+    Balloon {
+        origin: Pos2,
+        id: BalloonId,
+        at: DVec2,
+        start: (f64, f64),
+    },
 }
 
 /// Aktion aus der Werkzeugleiste.
@@ -903,6 +924,8 @@ enum Action {
     ToolToggle,
     /// Untermodus des Werkzeugs wählen (schaltet es ein).
     Tool(ToolMode),
+    /// Werkzeug „Position“ ein- oder ausschalten.
+    BalloonTool,
 }
 
 /// Kann das Werkzeug „Maß“ benutzt werden? Sonst die Erklärung (alte Version, keine Ansicht,
@@ -959,9 +982,14 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     let Some(drawing) = state.document.drawing(id).cloned() else {
         return;
     };
-    // Gesperrtes Werkzeug ist aus (alte Version, Zeichnung nur mit Isometrie).
+    // Gesperrtes Werkzeug ist aus (alte Version, Zeichnung nur mit Isometrie, Skizzen-Modus).
     if tool_blocked(&drawing, editable).is_some() && state.dimension_tool.is_active() {
         state.dimension_tool.set_mode(ToolMode::Off);
+    }
+    if (balloon_tool::blocked(&drawing, editable).is_some() || state.sketch_session.is_some())
+        && state.balloon_tool.is_active()
+    {
+        state.balloon_tool.set_active(false);
     }
     let ctx = ui.ctx().clone();
     let paint = ui.max_rect();
@@ -1001,8 +1029,24 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
         }),
         Some(Action::Suggest) => suggest_dimensions(state, id),
         Some(Action::Delete) => delete_selected(state),
-        Some(Action::ToolToggle) => state.dimension_tool.toggle(),
-        Some(Action::Tool(m)) => state.dimension_tool.set_mode(m),
+        // „Maß“ und „Position“ schließen sich aus.
+        Some(Action::ToolToggle) => {
+            state.dimension_tool.toggle();
+            if state.dimension_tool.is_active() {
+                state.balloon_tool.set_active(false);
+            }
+        }
+        Some(Action::Tool(m)) => {
+            state.dimension_tool.set_mode(m);
+            state.balloon_tool.set_active(false);
+        }
+        Some(Action::BalloonTool) => {
+            let on = !state.balloon_tool.is_active();
+            state.balloon_tool.set_active(on);
+            if on {
+                state.dimension_tool.set_mode(ToolMode::Off);
+            }
+        }
         None => {}
     }
     let response = ui.allocate_rect(paint, Sense::click_and_drag());
@@ -1015,7 +1059,16 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
 
     let note = state.drawing_ui.note(&state.bodies);
     let dims = resolve_in(state, id);
-    let notes = notes_in(state, id, &dims);
+    let mut notes = notes_in(state, id, &dims);
+    // Verlorene Positionsnummern zuerst (rot), dann die Hinweise zu den Maßen.
+    let lost_balloons = balloon_tool::lost_count(state, &drawing);
+    let mut red = usize::from(notes.lost > 0);
+    if lost_balloons > 0 {
+        notes
+            .texts
+            .insert(0, balloon_tool::lost_note(lost_balloons));
+        red += 1;
+    }
     // Die Meldung des Vorschlags gilt nur, bis sich das Dokument oder die Auswahl ändert.
     if state.drawing_ui.dim_message_key != Some(message_key(state)) {
         state.drawing_ui.dim_message = None;
@@ -1023,7 +1076,11 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     }
     // Eine Ablehnung des Werkzeugs „Maß“ geht der Meldung vor (rot); bei eingeschaltetem
     // Werkzeug steht an Stelle des Hinweises der nächste Schritt.
-    let rejected = state.dimension_tool.message().map(str::to_owned);
+    let rejected = state
+        .dimension_tool
+        .message()
+        .or(state.balloon_tool.message())
+        .map(str::to_owned);
     let message = rejected
         .clone()
         .or_else(|| state.dimension_tool.notice().map(str::to_owned))
@@ -1031,11 +1088,17 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     let hint_text = state
         .dimension_tool
         .hint()
+        .or_else(|| {
+            state
+                .balloon_tool
+                .is_active()
+                .then(|| balloon_tool::HINT.to_string())
+        })
         .or(note)
         .unwrap_or_else(|| HINT.to_string());
     let lines = HintLines {
         notes: &notes.texts,
-        lost: notes.lost > 0,
+        red,
         message: message.map(|m| (m, rejected.is_some())),
         hint: hint_text,
     };
@@ -1279,6 +1342,48 @@ fn tool_field(
                             .response
                     })
                     .on_disabled_hover_text(why);
+                    // Werkzeug „Position“ direkt nach dem Maß-Werkzeug, als Symbolknopf (mit Text
+                    // passte die zweite Zeile bei 1100 × 700 nicht mehr ins Feld, in der ersten
+                    // ebenso wenig); der Name steht im Tooltip. Eingeschaltet mit Akzent.
+                    let balloon_why = balloon_tool::blocked(drawing, editable);
+                    let balloon_on = state.balloon_tool.is_active();
+                    let button = if balloon_on {
+                        egui::Button::new(icons::text(
+                            Icon::PositionTool,
+                            icons::LABEL_ICON_SIZE,
+                            p.on_accent,
+                        ))
+                        .fill(p.accent)
+                        .selected(true)
+                    } else {
+                        icon_only(Icon::PositionTool)
+                    };
+                    let r = ui.scope(|ui| {
+                        // Schmaler Rand: so passt der Knopf noch in die Zeile.
+                        ui.spacing_mut().button_padding.x = POSITION_PAD_X;
+                        ui.add_enabled(balloon_why.is_none(), flat(button))
+                    });
+                    let r = r.inner;
+                    let enabled = balloon_why.is_none();
+                    r.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            enabled,
+                            balloon_tool::TOOL,
+                        )
+                    });
+                    let tip = |ui: &mut egui::Ui, text: &str| {
+                        ui.strong(balloon_tool::TOOL);
+                        ui.label(text);
+                    };
+                    if r.on_hover_ui(|ui| tip(ui, balloon_tool::TOOL_TIP))
+                        .on_disabled_hover_ui(|ui| {
+                            tip(ui, balloon_why.unwrap_or(balloon_tool::TOOL_TIP));
+                        })
+                        .clicked()
+                    {
+                        action = Some(Action::BalloonTool);
+                    }
                 });
                 ui.add_space(below);
             });
@@ -1398,8 +1503,9 @@ fn view_field(
 struct HintLines<'a> {
     /// Hinweise zu den Maßen (verlorene, außerhalb des Blatts).
     notes: &'a [String],
-    /// Der erste Hinweis betrifft verlorene Maße (rot).
-    lost: bool,
+    /// So viele der ersten Hinweise betreffen Verlorenes (rot): verlorene Positionsnummern und
+    /// verlorene Maße.
+    red: usize,
     /// Meldung und ob sie eine Ablehnung ist (rot).
     message: Option<(String, bool)>,
     /// Hinweis zur Bedienung (oder des Werkzeugs „Maß“).
@@ -1464,7 +1570,7 @@ fn hint_field(ctx: &egui::Context, rect: Rect, dark: bool, lines: HintLines<'_>)
                 let mut budget = share * ui.available_width();
                 for (i, t) in lines.notes.iter().enumerate() {
                     let w = budget / (lines.notes.len() - i) as f32;
-                    let text = if i == 0 && lines.lost {
+                    let text = if i < lines.red {
                         egui::RichText::new(t.as_str()).color(error)
                     } else {
                         egui::RichText::new(t.as_str())
@@ -1672,6 +1778,39 @@ fn tool_finish(state: &mut AppState, id: DrawingId, at: DVec2) -> Result<(), Too
     }
 }
 
+/// Wählt den Nummernkreis `b` (Ansicht und Maß sind dann nicht mehr gewählt).
+fn select_balloon(state: &mut AppState, b: BalloonId) {
+    state.drawing_ui.selected_balloon = Some(b);
+    state.drawing_ui.selected_view = None;
+    state.drawing_ui.selected_dim = None;
+}
+
+/// Klick mit eingeschaltetem Werkzeug „Position“ an der Blattstelle `at`: auf einer Linie eines
+/// Teils (`found`) setzt er einen Kreis und wählt ihn, sonst steht der Grund in der Hinweiszeile.
+fn balloon_click(
+    state: &mut AppState,
+    id: DrawingId,
+    found: Option<(ViewId, StrokeOrigin)>,
+    at: DVec2,
+) {
+    let Some((view, origin)) = found else {
+        state
+            .balloon_tool
+            .set_message(Some(balloon_tool::MISSED.into()));
+        return;
+    };
+    let body = match origin {
+        StrokeOrigin::Edge { body, .. } | StrokeOrigin::Silhouette { body, .. } => body,
+    };
+    match balloon_tool::place(state, id, view, body, at) {
+        Ok(b) => {
+            state.balloon_tool.set_message(None);
+            select_balloon(state, b);
+        }
+        Err(m) => state.balloon_tool.set_message(Some(m)),
+    }
+}
+
 /// Stand, zu dem eine Meldung des Vorschlags gehört: Änderungszähler des Dokuments, gewählte
 /// Ansicht und gewähltes Maß.
 fn message_key(state: &AppState) -> (u64, Option<ViewId>, Option<DimId>) {
@@ -1870,7 +2009,13 @@ fn canvas_ui(
     // --- Eingaben (mit dem Stand vor diesem Bild) ---
     let k0 = f64::from(fit_px_per_mm(canvas, sheet_mm) * state.drawing_ui.zoom);
     let dims = resolve_in(state, id);
-    let (sheet, lines_gen) = sheet_model(&ctx, state, &drawing, model, &dims);
+    let balloons0 = {
+        let owned = state.drawing_ui.results_for(&drawing, model);
+        let refs: BTreeMap<ViewId, &ViewLines> =
+            owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
+        balloon_tool::balloon_list(state, &drawing, &refs, None)
+    };
+    let (sheet, lines_gen) = sheet_model(&ctx, state, &drawing, model, &dims, &balloons0);
     let dim_marks = marks_in(state, id, &dims);
     let placed = place_views(state, &drawing, &sheet, model);
     let (zoom0, pan0) = (state.drawing_ui.zoom, state.drawing_ui.pan);
@@ -1881,11 +2026,15 @@ fn canvas_ui(
         let polys = polylines_cached(&ctx, &sheet, lines_gen, k0);
         hit_test(&placed, &polys, &to_screen0, pos)
     };
-    // Maße liegen über den Linien und werden zuerst getroffen.
+    // Maße liegen über den Linien und werden zuerst getroffen; Nummernkreise noch davor.
     let hit_dim = |pos: Pos2| dim_hit(&ctx, &dim_marks, |_| true, &to_screen0, k0, pos);
+    let hit_balloon = |pos: Pos2| balloon_tool::balloon_hit(&balloons0, &to_screen0, pos);
     // Mit eingeschaltetem Werkzeug „Maß“ wählen Klicks Bezüge statt Ansichten und Maße, und
     // Ziehen verschiebt nichts (nur das Blatt).
     let tool_on = editable && state.dimension_tool.is_active();
+    // Mit eingeschaltetem Werkzeug „Position“ setzt ein Klick auf eine Linie einen Kreis; Kreise
+    // lassen sich weiter wählen und ziehen, Ansichten und Maße nicht.
+    let balloon_on = editable && state.balloon_tool.is_active();
 
     // Zoom um den Zeiger (Mausrad, Zwei-Finger-Geste).
     if response.hovered()
@@ -1912,10 +2061,26 @@ fn canvas_ui(
                     start: state.drawing_ui.pan,
                 })
             } else if response.dragged_by(PointerButton::Primary) && !tool_on {
-                if let Some((i, on_text)) = hit_dim(origin) {
+                if let Some(b) = hit_balloon(origin) {
+                    select_balloon(state, b);
+                    let at = balloons0.iter().find(|x| x.id == b).map(|x| x.centre);
+                    let start = drawing.balloon(b).map(|x| x.offset);
+                    match (editable, at, start) {
+                        (true, Some(c), Some(start)) => Some(Drag::Balloon {
+                            origin,
+                            id: b,
+                            at: c - DVec2::new(start.0, start.1),
+                            start,
+                        }),
+                        _ => None,
+                    }
+                } else if balloon_on {
+                    None
+                } else if let Some((i, on_text)) = hit_dim(origin) {
                     let dm = &dim_marks[i];
                     state.drawing_ui.selected_dim = Some(dm.id);
                     state.drawing_ui.selected_view = None;
+                    state.drawing_ui.selected_balloon = None;
                     let from = screen_to_sheet(canvas, sheet_mm, zoom0, pan0, origin);
                     editable
                         .then(|| dim_part(state, &drawing, model, &dims, dm, on_text, from))
@@ -1929,6 +2094,7 @@ fn canvas_ui(
                     hit(origin).and_then(|view| {
                         state.drawing_ui.selected_view = Some(view);
                         state.drawing_ui.selected_dim = None;
+                        state.drawing_ui.selected_balloon = None;
                         let start = drawing.view(view)?.placement;
                         editable.then_some(Drag::View {
                             origin,
@@ -1944,6 +2110,8 @@ fn canvas_ui(
         }
     }
     let drag: Option<Drag> = ctx.data(|d| d.get_temp(drag_id())).flatten();
+    // Versatz des gezogenen Kreises in diesem Bild (das Dokument ändert sich erst beim Loslassen).
+    let mut live: Option<(BalloonId, (f64, f64))> = None;
     if let Some(drag) = drag
         && (response.dragged() || response.drag_stopped())
         && let Some(pos) = response
@@ -1994,6 +2162,32 @@ fn canvas_ui(
                     }
                 }
             }
+            Drag::Balloon {
+                origin,
+                id: b,
+                at,
+                start,
+            } => {
+                let delta = pos - origin;
+                let moved = (
+                    start.0 + f64::from(delta.x) / k0,
+                    start.1 - f64::from(delta.y) / k0,
+                );
+                let offset = balloon_tool::clamp_offset(at, moved, sheet_mm);
+                if !response.drag_stopped() {
+                    live = Some((b, offset));
+                } else if offset != start {
+                    // Ein Schritt je Ziehen.
+                    let r = state.document.update_drawing(id, |d| {
+                        if let Some(x) = d.balloons.iter_mut().find(|x| x.id == b) {
+                            x.offset = offset;
+                        }
+                    });
+                    if let Err(e) = r {
+                        state.message = Some(e.to_string());
+                    }
+                }
+            }
         }
     }
     if response.drag_stopped() || !response.is_pointer_button_down_on() && !response.dragged() {
@@ -2007,10 +2201,18 @@ fn canvas_ui(
             let polys = polylines_cached(&ctx, &sheet, lines_gen, k0);
             let found = tool_hit(&sheet, &polys, &to_screen0, pos);
             tool_click(state, id, found, at, k0, response.double_clicked());
+        } else if let Some(b) = hit_balloon(pos) {
+            select_balloon(state, b);
+        } else if balloon_on {
+            let at = screen_to_sheet(canvas, sheet_mm, zoom0, pan0, pos);
+            let polys = polylines_cached(&ctx, &sheet, lines_gen, k0);
+            let found = tool_hit(&sheet, &polys, &to_screen0, pos);
+            balloon_click(state, id, found, at);
         } else if let Some((i, _)) = hit_dim(pos) {
             let dim = dim_marks[i].id;
             state.drawing_ui.selected_dim = Some(dim);
             state.drawing_ui.selected_view = None;
+            state.drawing_ui.selected_balloon = None;
             // Doppelklick auf ein Maß öffnet „Maß bearbeiten“ (in einer alten Version nur zum Ansehen).
             if response.double_clicked() {
                 crate::dimension_dialog::open(state, id, dim, !editable);
@@ -2018,23 +2220,47 @@ fn canvas_ui(
         } else {
             state.drawing_ui.selected_view = hit(pos);
             state.drawing_ui.selected_dim = None;
+            state.drawing_ui.selected_balloon = None;
         }
     }
-    if !viewport::typing(&ctx) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // Tasten nicht, solange ein Textfeld die Tastatur hat.
+    let typing = viewport::typing(&ctx);
+    if !typing && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         if tool_on {
             tool_escape(state, id);
+        } else if balloon_on {
+            state.balloon_tool.set_active(false);
         } else {
             state.drawing_ui.selected_view = None;
             state.drawing_ui.selected_dim = None;
+            state.drawing_ui.selected_balloon = None;
         }
     }
-    // Tooltip mit dem Grund über einem Maß, das seinen Bezug verloren hat.
+    // Entf löscht den gewählten Nummernkreis.
+    if editable
+        && !typing
+        && state.drawing_ui.selected_balloon.is_some()
+        && ui.input(|i| i.key_pressed(egui::Key::Delete))
+    {
+        balloon_tool::delete_selected(state);
+    }
+    // Tooltip mit dem Grund über einem Kreis, dessen Teil fehlt, oder einem Maß, das seinen
+    // Bezug verloren hat.
     if response.hovered()
         && !response.dragged()
         && let Some(p) = response.hover_pos()
     {
+        let lost_balloons: Vec<BalloonMarks> = balloons0
+            .iter()
+            .filter(|b| b.marks.iter().any(|m| mark_kind(m) == MarkKind::Lost))
+            .cloned()
+            .collect();
         let lost = |dm: &DimMarks| dm.marks.iter().any(|m| mark_kind(m) == MarkKind::Lost);
-        if let Some((i, _)) = dim_hit(&ctx, &dim_marks, lost, &to_screen0, k0, p) {
+        if balloon_tool::balloon_hit(&lost_balloons, &to_screen0, p).is_some() {
+            response
+                .clone()
+                .on_hover_text_at_pointer(balloon_tool::LOST_TIP);
+        } else if let Some((i, _)) = dim_hit(&ctx, &dim_marks, lost, &to_screen0, k0, p) {
             let reason = dims
                 .by_view
                 .values()
@@ -2055,7 +2281,18 @@ fn canvas_ui(
     let (zoom, pan) = (state.drawing_ui.zoom, state.drawing_ui.pan);
     let k = f64::from(fit_px_per_mm(canvas, sheet_mm) * zoom);
     let dims = resolve_in(state, id);
-    let (sheet, lines_gen) = sheet_model(&ctx, state, &drawing, model, &dims);
+    let (balloons, live_balloons) = {
+        let owned = state.drawing_ui.results_for(&drawing, model);
+        let refs: BTreeMap<ViewId, &ViewLines> =
+            owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
+        let doc = balloon_tool::balloon_list(state, &drawing, &refs, None);
+        let shown = match live {
+            Some(m) => balloon_tool::balloon_list(state, &drawing, &refs, Some(m)),
+            None => doc.clone(),
+        };
+        (doc, shown)
+    };
+    let (sheet, lines_gen) = sheet_model(&ctx, state, &drawing, model, &dims, &balloons);
     let dim_marks = marks_in(state, id, &dims);
     let placed = place_views(state, &drawing, &sheet, model);
     let polys = polylines_cached(&ctx, &sheet, lines_gen, k);
@@ -2101,17 +2338,25 @@ fn canvas_ui(
         }
     }
 
-    // Markierungen: Mittellinien und Maße schwarz, verlorene Maße rot, das gewählte Maß in der
-    // Akzentfarbe (darüber; seine Markierungen fallen in der normalen Farbe weg).
+    // Markierungen: Mittellinien, Maße und Nummernkreise schwarz, verlorene rot, das gewählte
+    // Maß bzw. der gewählte (oder gezogene) Kreis in der Akzentfarbe (darüber; ihre Markierungen
+    // fallen in der normalen Farbe weg).
     let selected: &[Mark] = state
         .drawing_ui
         .selected_dim
         .and_then(|s| dim_marks.iter().find(|dm| dm.id == s))
         .map_or(&[], |dm| dm.marks.as_slice());
+    let accent_balloon = live.map(|(b, _)| b).or(state.drawing_ui.selected_balloon);
+    let skip: Vec<&Mark> = balloons
+        .iter()
+        .filter(|b| Some(b.id) == accent_balloon)
+        .flat_map(|b| b.marks.iter())
+        .collect();
     let mut marks_drawn = 0;
+    let f_sheet = sheet_scale(sheet.sheet);
     for v in &sheet.views {
         for m in &v.marks {
-            if selected.contains(m) {
+            if selected.contains(m) || skip.contains(&m) {
                 continue;
             }
             let color = match mark_kind(m) {
@@ -2121,12 +2366,16 @@ fn canvas_ui(
                 | MarkKind::Sheet(_)
                 | MarkKind::Position(_) => theme::SHEET_DIM,
             };
-            paint_mark(&painter, m, color, &to_screen, k, sheet_scale(sheet.sheet));
+            paint_mark(&painter, m, color, &to_screen, k, f_sheet);
             marks_drawn += 1;
         }
     }
-    for m in selected {
-        paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, 1.0);
+    let accent_marks = live_balloons
+        .iter()
+        .filter(|b| Some(b.id) == accent_balloon)
+        .flat_map(|b| b.marks.iter());
+    for m in selected.iter().chain(accent_marks) {
+        paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, f_sheet);
         marks_drawn += 1;
     }
     // Vorschau des Werkzeugs „Maß“ am Zeiger (dieselben Markierungen wie das gesetzte Maß).
@@ -2255,6 +2504,7 @@ fn canvas_ui(
         marks_drawn,
         preview_drawn,
         views: drawn,
+        balloons: live_balloons,
     };
     Some((layout, pending))
 }
