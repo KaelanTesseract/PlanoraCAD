@@ -351,7 +351,10 @@ impl AppState {
         let mut bodies = Vec::new();
         let mut failed = Vec::new();
         for v in self.document.visible_bodies() {
-            let name = body_name(&self.document, v.body).unwrap_or_else(|| v.name.clone());
+            let name = self
+                .document
+                .body_display_name(v.body)
+                .unwrap_or_else(|| v.name.clone());
             let kind = body_kind(&self.document, v.body);
             match self.make_body(kind, name.clone(), v.body, v.solid.clone()) {
                 Ok(b) => bodies.push(b),
@@ -850,14 +853,16 @@ impl AppState {
     /// Anzeigename des Körpers `r` (auch wenn er gerade nicht sichtbar ist); ohne Feature
     /// „Feature {Id}“.
     pub fn body_ref_name(&self, r: BodyRef) -> String {
-        body_name(&self.document, r).unwrap_or_else(|| format!("Feature {}", r.feature.0))
+        self.document
+            .body_display_name(r)
+            .unwrap_or_else(|| format!("Feature {}", r.feature.0))
     }
 
     /// Das Feature, das den Namen des Körpers `index` trägt: das erzeugende Feature, bei
     /// verschobenen Körpern das Feature, das den Körper ursprünglich erzeugt hat.
     pub fn naming_feature(&self, index: usize) -> Option<FeatureId> {
         let r = self.bodies.get(index)?.source;
-        Some(origin_of(&self.document, r).feature)
+        Some(self.document.naming_origin(r).feature)
     }
 
     /// Benennt ein Feature um (leere Namen sind ungültig) und aktualisiert die Körpernamen.
@@ -865,7 +870,7 @@ impl AppState {
         match self.document.rename(id, name) {
             Ok(()) => {
                 for i in 0..self.bodies.len() {
-                    if let Some(n) = body_name(&self.document, self.bodies[i].source) {
+                    if let Some(n) = self.document.body_display_name(self.bodies[i].source) {
                         self.bodies[i].name = n;
                     }
                 }
@@ -1775,41 +1780,10 @@ fn status_message(status: Option<FeatureStatus>) -> String {
     }
 }
 
-/// Folgt einer Kette von Verschiebungen und Verrundungen bis zu dem Körper, den ein anderes Feature erzeugt hat.
-fn origin_of(doc: &Document, mut r: BodyRef) -> BodyRef {
-    // Verweise zeigen nur nach vorn: spätestens nach so vielen Schritten ist die Kette zu Ende.
-    for _ in 0..doc.features().len() {
-        match doc.feature(r.feature).map(|f| &f.kind) {
-            Some(FeatureKind::Move { body, .. } | FeatureKind::Verrunden { body, .. }) => r = *body,
-            _ => break,
-        }
-    }
-    r
-}
-
-/// Anzeigename eines Körpers: der Name des Features, das ihn ursprünglich erzeugt hat (mit
-/// laufender Nummer, wenn es mehrere Körper erzeugt).
-fn body_name(doc: &Document, r: BodyRef) -> Option<String> {
-    let r = origin_of(doc, r);
-    let f = doc.feature(r.feature)?;
-    let several = r.index > 0
-        || doc
-            .body(BodyRef {
-                feature: r.feature,
-                index: 1,
-            })
-            .is_some();
-    Some(if several {
-        format!("{} {}", f.name, r.index + 1)
-    } else {
-        f.name.clone()
-    })
-}
-
 /// Art eines Körpers aus dem Feature, das ihn erzeugt hat; Verschieben übernimmt die Art des
 /// verschobenen Körpers.
 fn body_kind(doc: &Document, r: BodyRef) -> BodyKind {
-    match doc.feature(origin_of(doc, r).feature).map(|f| &f.kind) {
+    match doc.feature(doc.naming_origin(r).feature).map(|f| &f.kind) {
         Some(FeatureKind::Box { .. }) => BodyKind::Box,
         Some(FeatureKind::Cylinder { .. }) => BodyKind::Cylinder,
         Some(FeatureKind::Sphere { .. }) => BodyKind::Sphere,

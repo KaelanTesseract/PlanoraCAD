@@ -1589,5 +1589,6 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         drawings,
         next_drawing,
         project_info,
+        parts_overrides: std::collections::BTreeMap::new(),
     })
 }

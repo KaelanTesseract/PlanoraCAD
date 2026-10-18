@@ -2,8 +2,8 @@
 
 use crate::error::FeatureError;
 use crate::model::{Document, Feature, FeatureId, FeatureKind, FeatureStatus, MeshId};
-use planora_drawing::Drawing;
 use planora_drawing::sheet_info::{ProjectInfo, validate_project_info};
+use planora_drawing::{BodyKey, Drawing, RowOverride};
 use planora_exchange::ExchangeMesh;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -29,6 +29,8 @@ pub struct Snapshot {
     pub next_drawing: u64,
     /// Projektangaben für das Schriftfeld.
     pub project_info: Option<ProjectInfo>,
+    /// Eigene Texte der Stücklistenzeilen.
+    pub parts_overrides: BTreeMap<BodyKey, RowOverride>,
 }
 
 impl Document {
@@ -56,6 +58,7 @@ impl Document {
             drawings: self.drawings.clone(),
             next_drawing: self.next_drawing,
             project_info: self.project_info.clone(),
+            parts_overrides: self.parts_overrides.clone(),
         }
     }
 
@@ -119,6 +122,8 @@ impl Document {
             validate_project_info(p).map_err(|e| bad(&format!("Projektangaben: {e}")))?;
         }
         doc.project_info = s.project_info;
+        crate::parts::check_overrides(&s.parts_overrides)?;
+        doc.parts_overrides = s.parts_overrides;
         doc.marker = s.marker;
         doc.next_id = s.next_id;
         doc.recompute();

@@ -9,6 +9,7 @@ pub mod georef;
 mod meshes;
 pub mod model;
 mod ops;
+mod parts;
 pub mod recompute;
 pub mod refs;
 mod snapshot;
