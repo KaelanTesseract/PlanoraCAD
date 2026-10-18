@@ -9,7 +9,7 @@
 
 Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
 
-**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern).
+**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern, PDF-Ausgabe).
 
 Erste Version: Quader, Zylinder, Kugel, Kegel, Extrusion und Rotation von Skizzen, 3D-Ansicht mit Auswahl, Körper verschieben (Feld „Position“) sowie Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit Flächen aus Ebenen, Zylindern, Kegeln, Kugeln und Tori (Stufe A) und für Körper mit Freiformflächen aus Ellipsen und Splines (siehe „Freiformflächen“).
 
@@ -146,7 +146,7 @@ Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 10 �
 
 ## Zeichnungen (Ansichten)
 
-Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Zeichnung“ → „Neue Zeichnung …“. Die Zeichnung gehört zum Dokument, wird mit gespeichert und rechnet sich neu, wenn man das Modell ändert. Ausgeben lässt sie sich als SVG (zum Drucken und für Dokumente) oder als DXF (für Laser, Fräse und andere CAD-Programme): „Datei“ → „Exportieren …“, Format „Zeichnung als SVG“ oder „Zeichnung als DXF“.
+Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Zeichnung“ → „Neue Zeichnung …“. Die Zeichnung gehört zum Dokument, wird mit gespeichert und rechnet sich neu, wenn man das Modell ändert. Ausgeben lässt sie sich als SVG (zum Drucken und für Dokumente), als DXF (für Laser, Fräse und andere CAD-Programme) oder als PDF (zum Drucken, Weitergeben und Aufbewahren): „Datei“ → „Exportieren …“, Format „Zeichnung als SVG“, „Zeichnung als DXF“ oder „Zeichnung als PDF“ (siehe „Zeichnung als PDF“).
 
 **Was geht**
 - Ansichten: Vorne, Hinten, Links, Rechts, Oben, Unten und Isometrisch. Die Normansichten legen sich selbst an die richtige Stelle, wahlweise im Erstwinkel (Europa) oder im Dritten Winkel (USA); sie lassen sich nur entlang ihrer Richtung verschieben. Die isometrische Ansicht steht frei auf dem Blatt.
@@ -157,7 +157,7 @@ Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Ze
 - Gespeichert wird nur die Beschreibung (Blatt, Ansichten, Maßstab, Lage), nicht die berechneten Linien. Ein Dokument mit Zeichnung bekommt das Dateiformat 4 (mit Maßen oder Mittellinien das Dateiformat 5, mit Blattangaben das Dateiformat 6, mit Stückliste oder Positionsnummern das Dateiformat 7, siehe „Zeichnungsblatt“ und „Stückliste und Positionsnummern“); ältere Programmversionen melden dann „zu neu“. Dokumente ohne Zeichnung bleiben unverändert.
 
 **Grenzen**
-- Nicht dabei: Schnittansichten, Schraffur, Detailansichten, PDF und das Einlesen von SVG oder DXF. Es gibt nur diese sieben Blickrichtungen. Maße und Mittellinien stehen im nächsten Abschnitt.
+- Nicht dabei: Schnittansichten, Schraffur, Detailansichten und das Einlesen von SVG oder DXF. Es gibt nur diese sieben Blickrichtungen. Maße und Mittellinien stehen im nächsten Abschnitt.
 - Netz-Körper (eingelesene Netze) werden nicht gezeichnet; das Programm nennt sie mit Namen.
 - Glatte Übergänge, etwa zwischen einer Rundung und der Fläche daneben, werden nicht als Linie gezeichnet. Der Umriss der Rundung selbst schon.
 - Kann das Programm bei einer Linie nicht sicher sagen, ob sie sichtbar oder verdeckt ist, steht an der Ansicht eine Meldung statt einer Zeichnung; es wird nichts geraten. Bei sehr vielen Flächen meldet es „zu aufwendig“ (höchstens 20 000 Linien je Ansicht).
@@ -267,6 +267,33 @@ In einer Zeichnung lassen sich Maße setzen und Mittellinien zeigen. Die Maße h
 - Nicht dabei: freie Texte und Schnitte (kommen später). Schriftfeld, Stückliste und Positionsnummern gibt es inzwischen, siehe die Abschnitte davor und danach.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 12 – Maße und Mittellinien“.
+
+## Zeichnung als PDF
+
+Eine Zeichnung lässt sich auch als PDF ausgeben, zum Drucken, Weitergeben und Aufbewahren: „Datei“ → „Exportieren …“, Format „Zeichnung als PDF“. Die PDF zeigt dasselbe wie die SVG-Datei: Ansichten, Maße, Mittellinien, Positionsnummern und, wenn gewünscht, Rahmen, Schriftfeld, Tabellen und Stückliste.
+
+**Gewähltes Blatt oder alle Blätter:** Bei diesem Format erscheint im Fenster eine Wahl. „Gewähltes Blatt“ (Vorgabe) schreibt die Zeichnung, die oben ausgewählt ist, auf eine Seite. „Alle Blätter“ schreibt alle Zeichnungen des Dokuments in einer Datei, eine Seite je Blatt, in der Reihenfolge des Browsers; Stücklistenblätter und ihre Folgeblätter sind dabei. Dann ist die Auswahl der Zeichnung gesperrt, das Fenster nennt die Zahl der Blätter, und beim Rechnen steht „Blatt 2 von 5 wird berechnet …“. Der Dateiname ist der Name der Zeichnung, bei allen Blättern der Name des Dokuments; die Endung „.pdf“ ergänzt das Programm.
+
+**Rahmen:** Der Schalter „Blattrahmen mit ausgeben“ gilt auch hier, für jede Seite. Ohne Rahmen fehlen Rahmen, Schriftfeld und Tabellen; ein Stücklistenblatt gibt dann nur seine Tabelle aus.
+
+**Seitengröße:** Jede Seite hat genau die Größe ihres Blatts (A4 bis A0, hoch oder quer). Ein A2-Blatt kann man im PDF-Betrachter beim Drucken auf A4 verkleinern; alles wird im selben Verhältnis kleiner.
+
+**Wenn etwas nicht ausgegeben werden kann:** Ein verlorenes Maß, eine verlorene Positionsnummer oder ein Zeichen, das die PDF nicht kennt, sperrt den Export, wie bei SVG und DXF. Bei „Alle Blätter“ nennt die Meldung das erste Blatt mit dem Problem. Das Programm lässt nie stillschweigend ein Blatt weg und schreibt nie eine halbe PDF. Eine vorhandene Zieldatei bleibt unverändert, wenn das Schreiben scheitert oder abgebrochen wird.
+
+**Schrift:** Die PDF benutzt die Standardschrift Helvetica und bettet sie nicht ein. Jeder Betrachter nimmt dafür seine eigene, meist Arial oder eine ähnliche Schrift. Die Buchstaben können deshalb von Betrachter zu Betrachter ein wenig anders aussehen; die Breiten stimmen, die Texte bleiben in ihren Zellen. Erlaubt ist der westeuropäische Zeichensatz mit Umlauten, ß, Ø, °, ±, µ, €, typografischen Anführungszeichen und Gedankenstrich. Das Minuszeichen „−“ (zum Beispiel in „−0,1“) schreibt die PDF als gewöhnlichen Strich „-“. Ein Gesichtszeichen (Emoji), chinesische oder kyrillische Buchstaben kann die PDF nicht ausgeben; dann bricht das Programm ab und nennt das Zeichen und das Feld, in dem es steht.
+
+**Dokumenteigenschaften:** Titel ist der Name der Zeichnung (bei allen Blättern der des Dokuments), Programm „PlanoraCAD“, Datum das Ausgabedatum des Blatts oder, wenn keines gültig ist, das heutige Datum (nach Weltzeit). Einen Ersteller trägt die PDF nur ein, wenn du ihn in den Projektangaben selbst eingegeben hast, nie den Windows-Benutzernamen.
+
+**Grenzen**
+- Die Schrift ist nicht eingebettet (siehe oben). Der Zeichensatz ist auf westeuropäische Zeichen begrenzt.
+- Sehr breite Zeichen (zum Beispiel „@“, „—“, „…“ oder lange Folgen von „W“) werden in einer Zelle von Schriftfeld, Stückliste oder Positionskreis waagerecht gestaucht, wenn sie sonst über die Zelle hinausragen. Der Text bleibt derselbe.
+- Höchstens 200 Seiten je PDF und höchstens 14 400 Punkt (etwa 5 m) je Seitenkante; mit A4 bis A0 ist die zweite Grenze nicht erreichbar.
+- Die Dateien sind nicht komprimiert und deshalb größer als nötig (eine A0-Seite mit 12 Stücklistenzeilen etwa 23 KB, sechs gemischte Seiten etwa 100 KB).
+- „Alle Blätter“ rechnet jedes Blatt von Grund auf neu, auch wenn mehrere Blätter dieselben Körper zeigen. Bei vielen Blättern dauert das entsprechend lange.
+- Linienenden und -ecken sind wie in der SVG-Datei; nur sehr spitze Ecken unter etwa 29° innerhalb eines Linienzugs können in der PDF etwas anders abgeschnitten sein.
+- Nicht dabei: eingebettete Schriften, Lesezeichen, Verknüpfungen, Formularfelder, PDF/A, Verschlüsselung, Farben (alles schwarz, verlorene Maße rot) und Drucken aus dem Programm. Die PDF öffnest und druckst du im Betrachter deiner Wahl.
+
+Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 3c-3 – PDF-Ausgabe“.
 
 ## Feature-Baum
 
@@ -407,3 +434,4 @@ Unter Linux werden zusätzlich die System-Bibliotheken aus `.github/workflows/ci
 
 ## Drittanbieter
 - Schrift: Montserrat, OFL 1.1; Symbolschrift Phosphor, MIT; Ersatzschrift Roboto 2.138, Apache-2.0 (siehe `crates/planora-app/assets/fonts/`).
+- PDF-Ausgabe: Die Breiten der Helvetica-Buchstaben stammen aus der Adobe-Datei „Helvetica.afm“ der „Core 14 AFM Files“ (AFM 4.1, Version 002.000). Copyright (c) 1985, 1987, 1989, 1990, 1997 Adobe Systems Incorporated. All Rights Reserved. Helvetica is a trademark of Linotype-Hell AG and/or its subsidiaries. Bedingungen der Sammlung (Datei „MustRead.html“): Die Dateien dürfen für jeden Zweck und ohne Gebühr, mit oder ohne Änderung, genutzt, kopiert und weitergegeben werden, wenn alle Urheberrechtsvermerke erhalten bleiben, die AFM-Dateien nicht ohne diesen Hinweis weitergegeben werden, Änderungen deutlich vermerkt werden und der Hinweis selbst nicht verändert wird; Adobe ist nicht zur Unterstützung verpflichtet. Im Quelltext (`crates/planora-drawing/src/pdf_font.rs`) steht nur die Breitentabelle, neu nach dem westeuropäischen Zeichensatz (WinAnsi) angeordnet (eine vermerkte Änderung); die AFM-Datei selbst ist nicht enthalten, und die Schrift wird nicht in die PDF-Dateien eingebettet.

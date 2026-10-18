@@ -269,4 +269,14 @@ impl ExportDialog { pub fn computing_sheet(&self) -> Option<(usize, usize)> }   
 
 ## Abweichungen bei der Umsetzung
 
-(wird nach der Umsetzung gefüllt)
+Stand 2026-10-19, nach den Aufgaben 1 bis 6. Die Festlegungen P1 bis P14 gelten wie oben, außer:
+
+- **P6 (Aufgabe 2, nach der Prüfung):** Gestaucht wird nur gegen die Zelle, in die ein Text eingepasst wurde, nicht gegen die Schätzung des Blattmodells. Dafür hat `Mark::Text` das Feld `fit_width: Option<f64>` (mm; gesetzt in `sheet_marks::fitted_text` für Schriftfeld, Tabellen und Stückliste und in `balloon::layout_balloon` für die Zahl im Kreis; sonst `None`). SVG und DXF beachten es nicht, ihre Bytes bleiben gleich. Der Faktor `Tz` wird mit der geschriebenen Schriftgröße bestimmt und auf vier Stellen abgerundet (Plan: gerundet), weil der Leser mit den gerundeten Zahlen der Datei rechnet und ein gerundeter Faktor den Text bis etwa 1e-4 mm breiter als die Zelle machen kann. Die im Plan genannten Werte `Tz` 93.5961 und 95.2381 werden 93.5959 und 95.2377.
+- **P3 (Aufgabe 2):** `0 j` statt `1 j` (spitze Ecken wie SVG).
+- **P5 (Aufgabe 2):** Die Spanne von `Mark::Arc` wird auf einen Vollkreis begrenzt. Die Näherung der Splines liegt jetzt als `pub(crate) fn fitted_cubics` in `svg.rs` (Algorithmus und SVG-Bytes unverändert; die Fixtur `svg_splines.svg` hält sie fest).
+- **P14 (Aufgabe 3):** `write_via_temp` hat einen vierten Parameter (Haken `Step::Written(k)` nach jedem Stück und `Step::BeforeRename`), dazu `export_pdf_file_then` und `export_drawing_file_then`. Eine Zeile in `crates/planora-app/tests/export_drawing.rs` (erschöpfendes `match` über `DrawingFormat`) wurde ergänzt.
+- **Golden-Dateien (Aufgabe 3):** Golden 1 ist ein eigenes Blatt (Zylinder auf A4 quer mit Mittellinien und Isometrie, alles ganz auf dem Blatt) und nicht `cylinder_sheet`; `pdf_date` prüft Tag gegen Monat und Schaltjahre.
+- **P9/P12 (Aufgabe 4):** Das Export-Fenster merkt sich ein Ergebnis je Zeichnungsformat statt eines (sonst rechnete jeder Wechsel zwischen SVG, DXF und PDF neu). Die Testerwartung „sieben Formate“ wurde zu „acht“.
+- **P11 (Aufgabe 5):** Der Ersteller wird getrimmt.
+- **P12 (Aufgabe 5):** Der Schlüssel des Ergebnisses (`DrawKey`) ist eine Struktur mit Ziel (`One`/`All`), Änderungszahl, Format, Rahmen und Dokumentname. Jedes Blatt wird in einem eigenen Thread mit eigenem Fortschritt gerechnet. Test (a) der Aufgabe 5 hat Pos. 45 auf Seite 3 statt 4, weil das Stücklistenblatt im Dokument zwischen Halter und Deckel liegt.
+- **Aufgabe 6:** Gate-Zeile im Brief nannte `4840dfe` als Basis; die geschützten Pfade wurden gegen `945fa67` (Stand mit Logo) geprüft, `Cargo.toml`, `Cargo.lock` und `deny.toml` gegen `580af2e`. Die Proben stehen in `crates/planora-drawing/tests/hand_samples_pdf.rs` (siehe `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 3c-3 – PDF-Ausgabe“, dort auch die Handliste).
