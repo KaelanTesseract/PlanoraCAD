@@ -30,6 +30,40 @@ pub struct VersionFile {
     /// für Byte wie in Format 1 bis 5.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projektangaben: Option<ProjektangabenDto>,
+    /// Eigene Texte der Stücklistenzeilen (ab Format 7). Leer heißt: fehlt, damit alte Dateien
+    /// Byte für Byte bleiben. Schon beim Lesen begrenzt.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "de_overrides"
+    )]
+    pub stueckliste: Vec<StuecklisteZeileDto>,
+}
+
+/// Eigene Texte einer Stücklistenzeile (ab Format 7); `koerper` ist `[Feature, Ergebnis-Index]`
+/// des ersten Körpers der Zeile, ein fehlender Text heißt automatisch.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct StuecklisteZeileDto {
+    pub koerper: [u64; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benennung: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub menge: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub werkstoff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bemerkung: Option<String>,
+}
+
+/// Ein Nummernkreis (ab Format 7): Ansicht, Körper, Anker (relativ zur Hüllbox der Ansicht) und
+/// Versatz zur Kreismitte (Blatt-mm).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PositionDto {
+    pub id: u64,
+    pub ansicht: u64,
+    pub koerper: [u64; 2],
+    pub anker: [f64; 2],
+    pub versatz: [f64; 2],
 }
 
 /// Höchstzahl der Hinweiszeilen beim Lesen; eine mehr, damit die Prüfung danach mit dem Namen
@@ -81,6 +115,21 @@ fn de_notes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<String>
         }
     }
     Ok(Option::<Lines>::deserialize(d)?.map(|l| l.0))
+}
+
+/// Höchstzahl der Nummernkreise beim Lesen (eine mehr, aus demselben Grund).
+const MAX_FILE_POSITIONS: usize = planora_drawing::parts::MAX_BALLOONS + 1;
+/// Höchstzahl der Zeilentexte beim Lesen; mehr bricht das Lesen ab.
+pub const MAX_FILE_OVERRIDES: usize = planora_drawing::parts::MAX_OVERRIDES;
+
+fn de_positions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<PositionDto>, D::Error> {
+    de_capped(d, MAX_FILE_POSITIONS)
+}
+
+fn de_overrides<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<StuecklisteZeileDto>, D::Error> {
+    de_bounded(d, MAX_FILE_OVERRIDES, "Stückliste")
 }
 
 fn de_revisions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<AenderungDto>, D::Error> {
@@ -151,6 +200,9 @@ pub struct BlattangabenDto {
         deserialize_with = "de_revisions"
     )]
     pub aenderungen: Vec<AenderungDto>,
+    /// Stückliste auf dem Zeichnungsblatt (ab Format 7); aus heißt: fehlt.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stueckliste: bool,
 }
 
 /// Eine Zeile der Änderungstabelle; fehlender Buchstabe heißt automatisch.
@@ -164,6 +216,10 @@ pub struct AenderungDto {
     pub datum: String,
     #[serde(default)]
     pub name: String,
+}
+
+fn is_false(x: &bool) -> bool {
+    !*x
 }
 
 fn is_zero(x: &u64) -> bool {
@@ -262,6 +318,21 @@ pub struct ZeichnungDto {
     /// Format 4 und 5.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blattangaben: Option<BlattangabenDto>,
+    /// Seitennummer eines Stücklistenblatts (ab Format 7); fehlt bei Ansichtenzeichnungen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stuecklistenseite: Option<u32>,
+    /// Nummernkreise (ab Format 7). Leer heißt: fehlt. Beim Lesen auf eins über dem Höchstwert
+    /// begrenzt, die Prüfung danach meldet mit dem Namen der Zeichnung.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "de_positions"
+    )]
+    pub positionen: Vec<PositionDto>,
+    /// Nächste Kennung eines Nummernkreises (ab Format 7); 0 oder fehlend heißt „aus den
+    /// Kennungen ableiten“.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub naechste_position: u64,
 }
 
 /// Blatt: Papier `"A4"` bis `"A0"`, quer oder hoch.

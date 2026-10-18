@@ -286,22 +286,22 @@ fn newer_files_with_changed_structure_report_too_new() {
     st.write_autosave(Some(1), &snap(2)).unwrap();
     std::fs::write(
         p.join(".autosave.json"),
-        r#"{"format":7,"basiert_auf":{"neu":1}}"#,
+        r#"{"format":8,"basiert_auf":{"neu":1}}"#,
     )
     .unwrap();
     assert!(matches!(
         st.read_autosave(),
-        Err(ProjectError::TooNew { found: 7, .. })
+        Err(ProjectError::TooNew { found: 8, .. })
     ));
     drop(st);
     std::fs::write(
         p.join("dokument.json"),
-        r#"{"format":7,"versionen":{"neu":true}}"#,
+        r#"{"format":8,"versionen":{"neu":true}}"#,
     )
     .unwrap();
     assert!(matches!(
         peek(&p),
-        Err(ProjectError::TooNew { found: 7, .. })
+        Err(ProjectError::TooNew { found: 8, .. })
     ));
     assert!(matches!(
         DocStore::open(&p, LockMode::Acquire),
