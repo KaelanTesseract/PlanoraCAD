@@ -2,7 +2,7 @@
 
 Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
 
-**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt).
+**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern).
 
 Erste Version: Quader, Zylinder, Kugel, Kegel, Extrusion und Rotation von Skizzen, 3D-Ansicht mit Auswahl, Körper verschieben (Feld „Position“) sowie Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit Flächen aus Ebenen, Zylindern, Kegeln, Kugeln und Tori (Stufe A) und für Körper mit Freiformflächen aus Ellipsen und Splines (siehe „Freiformflächen“).
 
@@ -147,10 +147,10 @@ Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Ze
 - Sichtbare Kanten sind durchgezogen, verdeckte gestrichelt. Das Zeigen der verdeckten Kanten lässt sich je Ansicht ausschalten (Vorgabe: an für die Normansichten, aus für Isometrisch).
 - Kreise bleiben Kreise, Bögen bleiben Bögen, Freiformlinien bleiben glatte Kurven; es werden keine Streckenzüge daraus. Nur die Umrisse von Ringen (Torus) und Freiformflächen sind angenähert (auf 0,0001 mm genau).
 - Im Fenster: Umschalter zwischen 3D-Modell und Zeichnung (im Werkzeugfeld oben), Zoomen mit dem Mausrad, Verschieben mit der mittleren Maustaste, Ansichten anklicken und ziehen. Im Browser stehen die Zeichnungen mit ihren Ansichten. Die Berechnung läuft im Hintergrund mit Fortschrittsbalken; scheitert eine Ansicht, steht der Grund an ihr, und die Zeichnung bleibt erhalten.
-- Gespeichert wird nur die Beschreibung (Blatt, Ansichten, Maßstab, Lage), nicht die berechneten Linien. Ein Dokument mit Zeichnung bekommt das Dateiformat 4 (mit Maßen oder Mittellinien das Dateiformat 5, mit Blattangaben das Dateiformat 6, siehe „Zeichnungsblatt“); ältere Programmversionen melden dann „zu neu“. Dokumente ohne Zeichnung bleiben unverändert.
+- Gespeichert wird nur die Beschreibung (Blatt, Ansichten, Maßstab, Lage), nicht die berechneten Linien. Ein Dokument mit Zeichnung bekommt das Dateiformat 4 (mit Maßen oder Mittellinien das Dateiformat 5, mit Blattangaben das Dateiformat 6, mit Stückliste oder Positionsnummern das Dateiformat 7, siehe „Zeichnungsblatt“ und „Stückliste und Positionsnummern“); ältere Programmversionen melden dann „zu neu“. Dokumente ohne Zeichnung bleiben unverändert.
 
 **Grenzen**
-- Nicht dabei: Schnittansichten, Schraffur, Detailansichten, Stücklisten, PDF und das Einlesen von SVG oder DXF. Es gibt nur diese sieben Blickrichtungen. Maße und Mittellinien stehen im nächsten Abschnitt.
+- Nicht dabei: Schnittansichten, Schraffur, Detailansichten, PDF und das Einlesen von SVG oder DXF. Es gibt nur diese sieben Blickrichtungen. Maße und Mittellinien stehen im nächsten Abschnitt.
 - Netz-Körper (eingelesene Netze) werden nicht gezeichnet; das Programm nennt sie mit Namen.
 - Glatte Übergänge, etwa zwischen einer Rundung und der Fläche daneben, werden nicht als Linie gezeichnet. Der Umriss der Rundung selbst schon.
 - Kann das Programm bei einer Linie nicht sicher sagen, ob sie sichtbar oder verdeckt ist, steht an der Ansicht eine Meldung statt einer Zeichnung; es wird nichts geraten. Bei sehr vielen Flächen meldet es „zu aufwendig“ (höchstens 20 000 Linien je Ansicht).
@@ -175,7 +175,7 @@ Jede Zeichnung bekommt ein vollständiges Blatt, wie man es von technischen Zeic
 
 **Was automatisch ausgefüllt wird:** Zeichnungsnummer (Dokumentname und laufende Nummer), Titel (Name der Zeichnung), Datum von heute, Ersteller (dein Windows-Benutzername), Blattnummer und Blattzahl, Format, Maßstab (der Maßstab der ersten Ansicht, also der Grundansicht), Dokumentart „Fertigungszeichnung“, Status „in Arbeit“, die Buchstaben der Änderungen und drei übliche Hinweiszeilen.
 
-**Blattangaben ändern:** Knopf „Blattangaben“ am Ende der ersten Zeile im Werkzeugfeld der Zeichnung, oder Menü „Zeichnung“ → „Blattangaben …“. Im Fenster gibt es drei Abschnitte: „Projekt“ (gilt für alle Blätter), „Dieses Blatt“ und „Änderungen“. Ein leeres Feld bleibt automatisch und zeigt grau, was das Programm einträgt. Schreibst du etwas hinein, gilt dein Text; „Zurücksetzen“ stellt den automatischen Wert wieder her. Mit „Übernehmen“ wird gespeichert, mit „Abbrechen“ oder dem Kreuz bleibt alles, wie es war. Ein Feld lässt sich nicht ganz leer erzwingen, weil „leer“ hier „automatisch“ bedeutet; wer ein Feld sichtbar leer haben will, trägt einen Strich „-“ ein.
+**Blattangaben ändern:** Knopf „Blattangaben“ am Ende der ersten Zeile im Werkzeugfeld der Zeichnung, oder Menü „Zeichnung“ → „Blattangaben …“. Im Fenster gibt es vier Abschnitte: „Projekt“ (gilt für alle Blätter), „Dieses Blatt“, „Änderungen“ und „Stückliste“ (siehe den nächsten Abschnitt). Ein leeres Feld bleibt automatisch und zeigt grau, was das Programm einträgt. Schreibst du etwas hinein, gilt dein Text; „Zurücksetzen“ stellt den automatischen Wert wieder her. Mit „Übernehmen“ wird gespeichert, mit „Abbrechen“ oder dem Kreuz bleibt alles, wie es war. Ein Feld lässt sich nicht ganz leer erzwingen, weil „leer“ hier „automatisch“ bedeutet; wer ein Feld sichtbar leer haben will, trägt einen Strich „-“ ein.
 
 **Grenzen der Felder:** Die meisten Felder nehmen 80 Zeichen, der Titel 60, eine Hinweiszeile 100, die Beschreibung einer Änderung 120. Es gibt höchstens 6 Hinweiszeilen und 23 Änderungen (Buchstaben A bis Z ohne I, O und Q). Ist ein Text für sein Feld zu lang, macht das Programm ihn zuerst kleiner und kürzt ihn danach mit „…“. Im Fenster steht dann eine Warnung beim Feld.
 
@@ -194,9 +194,47 @@ Jede Zeichnung bekommt ein vollständiges Blatt, wie man es von technischen Zeic
 - Die isometrische Ansicht bleibt bei Teilen, die fast das ganze Blatt füllen, nicht immer im freien Bereich und kann dann die anderen Ansichten berühren.
 - Auf sehr kleiner Darstellung (A0 in einem kleinen Fenster) sind die Blatttexte nie kleiner als ein Bildpunkt und deshalb nur ein Strich.
 - Das Werkzeugfeld der Zeichnung ist durch den neuen Knopf breiter; in sehr kleinen Fenstern rollt es.
-- Es wird kein Platz für eine Stückliste freigehalten, und die Reihenfolge der Blätter ist die Reihenfolge, in der sie angelegt wurden (kein Umordnen).
+- Die Reihenfolge der Blätter ist die Reihenfolge, in der sie angelegt wurden (kein Umordnen).
 
 Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 3c-1 – Zeichnungsblatt“.
+
+## Stückliste und Positionsnummern
+
+Eine Zeichnung mit mehreren Teilen bekommt eine Stückliste, und an den Teilen in den Ansichten stehen Nummern, die zur Stückliste passen. Die Stückliste rechnet das Programm aus den Körpern des Projekts selbst; du trägst nur ein, was nur du weißt.
+
+**Die Stückliste**
+- Jeder Körper des Projekts ist eine Zeile. Körper mit gleichem Namen werden zu einer Zeile zusammengefasst; die Menge zählt, wie viele es sind. Unterdrückte Körper stehen nicht in der Liste. Die Spalten heißen „Pos.“, „Benennung“, „Menge“, „Werkstoff“ und „Bemerkung“. Die Benennung ist der Name des Körpers, der Werkstoff die Projektangabe „Werkstoff“ (sonst „–“), die Bemerkung ist leer.
+- Auf dem Zeichnungsblatt steht die Tabelle direkt über dem Schriftfeld, die Kopfzeile unten, Position 1 gleich darüber und weiter nach oben. Es passen 10 Zeilen aufs Blatt; bei mehr Teilen zeigt das Blatt die ersten 10, und das Fenster sagt, dass die übrigen auf das Stücklistenblatt gehören. Der Platz für 10 Zeilen bleibt frei, solange die Stückliste auf dem Blatt eingeschaltet ist, auch wenn es erst drei Teile gibt. Neue Ansichten legen sich also nie darunter.
+- Der Schalter „Stückliste auf diesem Blatt“ steht im Fenster „Blattangaben“. Eine neue Zeichnung hat ihn an, wenn das Projekt mehr als einen Körper hat, sonst aus. Das wird nur beim Anlegen so entschieden; kommen später Körper dazu oder fallen weg, bleibt der Schalter, wie er ist. Du kannst ihn jederzeit selbst umlegen. Alte Zeichnungen haben die Stückliste aus.
+
+**Texte ändern:** Im Fenster „Blattangaben“ gibt es den Abschnitt „Stückliste“ mit einer Zeile je Teil. „Pos.“ ist nur zum Lesen; Benennung, Menge, Werkstoff und Bemerkung kannst du überschreiben. Ein leeres Feld bleibt automatisch und zeigt grau, was das Programm einträgt. Das Kreuz-Symbol am Ende einer Zeile (es erscheint nur, wenn die Zeile eigene Texte hat) stellt die ganze Zeile wieder auf automatisch. Die Texte gelten für das ganze Dokument, nicht nur für ein Blatt, und gehören zum Teil, nicht zur Zeilennummer: Benennst du Teile um oder änderst die Reihenfolge, bleibt ein eigener Text beim richtigen Teil. Benennung, Menge und Werkstoff haben höchstens 60 Zeichen, die Bemerkung 80. Ist ein Text für seine Spalte zu lang, macht das Programm ihn kleiner und kürzt ihn zuletzt mit „…“; unter der Zeile steht dann eine Warnung. Mehr als 1000 eigene Texte nimmt das Dokument nicht an. Wie beim übrigen Fenster gilt: Erst „Übernehmen“ speichert, „Abbrechen“ und das Kreuz verwerfen alles.
+
+**Stücklistenblatt:** Der Knopf „Stücklistenblatt erzeugen“ im selben Abschnitt legt ein eigenes Blatt an, auf dem nur die Stückliste steht: Rahmen, Schriftfeld, eine große Tabelle (Kopfzeile oben, Positionen von oben nach unten). Das Papier wählst du dabei (Vorgabe A4 hoch). Es passen 44 Zeilen auf ein Blatt im Hochformat und 26 im Querformat, auf jedem Papier gleich viele. Sind es mehr Teile, entstehen von selbst Folgeblätter („Stückliste (2)“ und so weiter, insgesamt höchstens 200 Zeilen), und sie verschwinden von selbst, wenn die Teile weniger werden. Das Blatt zählt wie jedes andere bei „Blatt n von N“ mit. Gibt es das Stücklistenblatt schon, heißt der Knopf „Stücklistenblatt öffnen“. Stücklistenblätter lassen sich nicht umbenennen, und Folgeblätter nicht einzeln löschen. Löscht man das erste Blatt, fragt das Programm („Stückliste mit 2 Blättern löschen?“), und alle Blätter verschwinden zusammen. Auf dem Stücklistenblatt gibt es keine Ansichten, keine Maße und keine Positionsnummern; die freie Fläche ist nur die Tabelle.
+
+**Positionsnummern setzen:** Das Werkzeug „Position“ steht im Werkzeugfeld der Zeichnung in der zweiten Zeile, gleich hinter dem Auswahlfeld für die Maße. Du klickst auf eine Linie eines Teils in einer Ansicht (sichtbare oder verdeckte Kante, Umriss, Bogen). Dort endet die Hinweislinie mit einem kleinen Punkt; der Kreis mit der Nummer sitzt ein Stück schräg oberhalb und lässt sich mit der Maus ziehen, die Hinweislinie bleibt am Teil. Auch ohne Werkzeug lässt sich ein Kreis anklicken und ziehen. Ein angeklickter Kreis ist gewählt; die Taste Entf löscht ihn (nicht, solange du in ein Textfeld tippst), Esc hebt die Wahl auf oder beendet das Werkzeug. Die Werkzeuge „Maß“ und „Position“ schließen sich gegenseitig aus. Ein Teil darf mehrere Kreise haben, zum Beispiel einen je Ansicht; höchstens 200 je Zeichnung. Im Browser links steht unter der Zeichnung der Abschnitt „Positionen“ mit allen Kreisen je Ansicht (auswählen, mit der rechten Maustaste löschen).
+
+**Wie die Nummer zum Teil kommt:** Die Nummer im Kreis ist die Position der Zeile in der Stückliste; du kannst sie nicht von Hand ändern, sie folgt der Liste. Kreise von Teilen mit gleichem Namen zeigen dieselbe Nummer. Der Kreis hängt am Teil, nicht an einer einzelnen Kante und nicht an einer Nummer. Verschiebst du das Teil, rundest oder fasst es ab, oder benennst du es um, bleibt der Kreis daran, und die Nummer richtet sich nach der Stückliste. Der Kreis sitzt dabei immer an der gleichen Stelle der Ansicht (bezogen auf deren Größe); er wandert nicht mit einzelnen Kanten, wenn sich das Modell ändert. Bei einer Booleschen Operation gehört das Ergebnis zum Ziel-Körper: Kreise am Ziel bleiben, Kreise am Werkzeug-Körper, der im Ergebnis aufgeht, sind danach verloren.
+
+**Verlorene Positionsnummern:** Gibt es das Teil nicht mehr (gelöscht, unterdrückt oder in eine andere Form eingegangen), bleibt der Kreis sichtbar, wird rot und zeigt „?“. Im Hinweisfeld steht, wie viele Kreise verloren sind. Solange es einen verlorenen Kreis gibt, schreibt das Programm die Zeichnung nicht in eine Datei; die Meldung nennt die Ansicht. Man löscht den Kreis und setzt ihn bei Bedarf neu.
+
+**Ausgeben:** Die Kreise gehören zu den Ansichten und kommen immer in die SVG- und DXF-Datei. Die Tabelle auf dem Zeichnungsblatt gehört zum Blattrahmen (Schalter „Blattrahmen mit ausgeben“ im Export-Fenster); ohne Rahmen fehlt sie dort. Ein Stücklistenblatt ist die Tabelle selbst: ohne Rahmen kommt nur die Tabelle heraus (in der SVG-Datei in derselben Gruppe „Blattrahmen“, in der DXF-Datei auf der Ebene „BLATT“), mit Rahmen die ganze Seite. Im Export-Fenster wählt man jedes Stücklistenblatt wie jede andere Zeichnung einzeln. In DXF-Dateien liegen die Kreise auf den Ebenen „POSITIONEN“ und „POSITIONEN_LINIE“, die Tabelle auf den Blattebenen. Wie bei den Blattangaben gilt für DXF: Ein Zeichen außerhalb des üblichen Zeichensatzes in einer Zelle wird mit Zeile und Spalte gemeldet, und ein Text über 255 Zeichen sperrt den DXF-Export.
+
+**Datei und alte Zeichnungen:** Eigene Texte der Stückliste, ein Stücklistenblatt, der eingeschaltete Schalter und Positionsnummern machen das Dokument zum Dateiformat 7; ältere Programmversionen lehnen es mit einer Meldung ab. Ohne diese Daten bleibt die Datei im bisherigen Format, Byte für Byte, und Öffnen oder Ansehen ändert nichts. Das Öffnen gleicht die Stücklistenblätter nicht mit den Körpern ab; erst die nächste Änderung am Modell tut das.
+
+**Grenzen**
+- Netz-Körper (eingelesene Netze) stehen nicht in der Stückliste und bekommen keinen Kreis, weil sie in Zeichnungen nicht erscheinen.
+- Gleich heißt hier: gleicher Name. Zwei gleich benannte Körper mit verschiedener Form bleiben eine Zeile; wer sie trennen will, benennt sie verschieden.
+- Das Ergebnis einer Booleschen Operation behält den Namen der Operation („Vereinigung 1“), nicht den des Ziel-Körpers („Platte“). Ein eigener Text, den du bei „Platte“ eingetragen hattest, bleibt an der Zeile, die jetzt „Vereinigung 1“ heißt.
+- Höchstens 10 Zeilen auf dem Zeichnungsblatt, 200 Zeilen auf den Stücklistenblättern, 200 Kreise je Zeichnung.
+- Die Kreise sitzen an einer festen Stelle der Ansicht. Ändert sich ein Teil stark, kann der Punkt der Hinweislinie neben der Linie liegen, die du angeklickt hattest; er bleibt aber beim richtigen Teil. Während sich eine Ansicht neu rechnet, verschwinden die Kreise kurz und erscheinen dann wieder.
+- In der isometrischen Ansicht lassen sich Positionsnummern setzen; ihre Lage ist dort, wie die ganze Isometrie, nur bestmöglich.
+- Die Maße der Tabelle (Zeilenhöhe 7 mm, Schrift 3,5 mm, Spalten 12 / 78 / 15 / 45 / 30 mm) und des Kreises (Durchmesser 8 mm, Zahl 3,5 mm, Kreislinie 0,35 mm, Hinweislinie 0,25 mm, Punkt 1 mm) sind auf A3 bezogen und wachsen oder schrumpfen mit dem Papier wie das übrige Blatt, Linien nie unter 0,18 mm. Sie folgen der Praxis und sind nicht aus der Norm belegt (die Normen waren nicht verfügbar). Wer die Norm prüft, sagt, was abweicht.
+- Die Zahl im Kreis wird verkleinert, wenn sie nicht hineinpasst („200“ ist deutlich kleiner als „7“); in DXF mit dem Zuschlag für CAD-Schriften noch etwas mehr.
+- Fusion 360 zeigt DXF-Texte nicht an (Tabelle und Zahlen sind dort nur als Linien zu sehen); LibreCAD oder QCAD zeigen sie.
+- Die Folgeblätter übernehmen Papier und Ausrichtung des ersten Stücklistenblatts; ein eigenes Papier für ein Folgeblatt gibt es nicht.
+- Es gibt eine Stückliste je Dokument, nicht je Blatt. Zeilen von Hand umordnen und alle Kreise automatisch setzen lassen geht nicht.
+
+Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 3c-2 – Stückliste und Positionsnummern“.
 
 ## Maße und Mittellinien
 
@@ -217,7 +255,7 @@ In einer Zeichnung lassen sich Maße setzen und Mittellinien zeigen. Die Maße h
 - Passungen sind nur ein Text; es gibt keine Passungstabellen. In der DXF-Datei sind die Maße einfache Linien, Pfeile und Texte, keine echten CAD-Maße.
 - Wie breit ein Text wird, schätzt das Programm nur. Mit einer anderen Schrift kann er etwas breiter ausfallen.
 - Ob Fusion 360 die Maßtexte und Pfeile der DXF-Dateien richtig anzeigt, ist noch nicht von Hand geprüft.
-- Nicht dabei: Schriftfeld, freie Texte, Stückliste und Schnitte (kommen später).
+- Nicht dabei: freie Texte und Schnitte (kommen später). Schriftfeld, Stückliste und Positionsnummern gibt es inzwischen, siehe die Abschnitte davor und danach.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 12 – Maße und Mittellinien“.
 
@@ -311,7 +349,7 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 
 **Zeichnungsansicht:** Auch hier schweben jetzt Felder über dem Blatt, und das Blatt füllt das ganze Fenster.
 
-- Das Werkzeugfeld (Umschalter, Ansicht hinzufügen, Blatt einpassen, Zoom, Maße) steht oben in der Mitte unter dem Menü, in zwei festen Zeilen. In einem schmalen Fenster lässt es sich seitlich rollen.
+- Das Werkzeugfeld (Umschalter, Ansicht hinzufügen, Blatt einpassen, Zoom, Maße, Position) steht oben in der Mitte unter dem Menü, in zwei festen Zeilen. „Blatt einpassen“ ist dabei nur noch ein Symbol neben den Zoom-Knöpfen (der Name erscheint, wenn du mit der Maus darüber bleibst), damit der Knopf „Position“ in die zweite Zeile passt. In einem schmalen Fenster lässt es sich seitlich rollen.
 - Rechts steht das Feld der gewählten Ansicht (Maßstab, verdeckte Kanten, Mittellinien, Ansicht löschen). Ist keine Ansicht gewählt, steht dort „Eine Ansicht auswählen.“
 - Unten steht das Hinweisfeld mit den Hinweisen zu Maßen, Meldungen und dem Hinweis zum gewählten Werkzeug.
 - „Blatt einpassen“ legt das Blatt in den Bereich, der zwischen den Feldern frei bleibt.
