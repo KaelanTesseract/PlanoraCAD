@@ -1,6 +1,7 @@
 //! Datenmodell einer Zeichnung: Blatt, Ansichten, Maßstab und Lage.
 
 use crate::dimension::{DimId, DimSpec};
+use crate::parts::BodyKey;
 
 /// Kennung einer Zeichnung im Dokument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -176,6 +177,22 @@ pub struct ViewSpec {
     pub centerlines: bool,
 }
 
+/// Kennung eines Nummernkreises (Positionsnummer) innerhalb einer Zeichnung.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BalloonId(pub u64);
+
+/// Ein Nummernkreis: gehört zur Ansicht `view` und zeigt auf den Körper `body`. `anchor` liegt
+/// relativ zur Hüllbox der Ansicht in [0, 1]² (folgt Maßstab und Lage der Ansicht), `offset` ist
+/// der Weg vom Anker zur Kreismitte in Blatt-mm.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Balloon {
+    pub id: BalloonId,
+    pub view: ViewId,
+    pub body: BodyKey,
+    pub anchor: (f64, f64),
+    pub offset: (f64, f64),
+}
+
 /// Art einer Zeichnung: Blatt mit Ansichten oder Stücklistenblatt (ohne Ansichten).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum DrawingKind {
@@ -200,6 +217,9 @@ pub struct Drawing {
     pub info: Option<crate::sheet_info::SheetInfo>,
     /// Zeichnungsblatt oder Stücklistenblatt.
     pub kind: DrawingKind,
+    /// Nummernkreise (Positionsnummern) der Ansichten.
+    pub balloons: Vec<Balloon>,
+    pub next_balloon: u64,
 }
 
 impl Drawing {
@@ -216,6 +236,8 @@ impl Drawing {
             next_dim: 1,
             info: None,
             kind: DrawingKind::Views,
+            balloons: Vec::new(),
+            next_balloon: 1,
         }
     }
 
@@ -257,6 +279,7 @@ impl Drawing {
         self.collect_subtree(id, &mut removed);
         self.views.retain(|v| !removed.contains(&v.id));
         self.dimensions.retain(|m| !removed.contains(&m.view));
+        self.balloons.retain(|b| !removed.contains(&b.view));
         removed
     }
 
@@ -279,6 +302,27 @@ impl Drawing {
         let before = self.dimensions.len();
         self.dimensions.retain(|m| m.id != id);
         self.dimensions.len() != before
+    }
+
+    /// Fügt einen Nummernkreis hinzu; die Kennung in `b.id` wird ersetzt und zurückgegeben.
+    pub fn add_balloon(&mut self, mut b: Balloon) -> BalloonId {
+        let id = BalloonId(self.next_balloon);
+        self.next_balloon += 1;
+        b.id = id;
+        self.balloons.push(b);
+        id
+    }
+
+    /// Sucht einen Nummernkreis.
+    pub fn balloon(&self, id: BalloonId) -> Option<&Balloon> {
+        self.balloons.iter().find(|b| b.id == id)
+    }
+
+    /// Entfernt einen Nummernkreis; `false`, wenn es die Kennung nicht gibt.
+    pub fn remove_balloon(&mut self, id: BalloonId) -> bool {
+        let before = self.balloons.len();
+        self.balloons.retain(|b| b.id != id);
+        self.balloons.len() != before
     }
 
     fn collect_subtree(&self, id: ViewId, out: &mut Vec<ViewId>) {

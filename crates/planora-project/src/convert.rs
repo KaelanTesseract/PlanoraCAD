@@ -1399,6 +1399,8 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
             .map(|b| sheet_info_from(origin, &d.name, b))
             .transpose()?,
         kind: DrawingKind::Views,
+        balloons: Vec::new(),
+        next_balloon: 1,
     })
 }
 

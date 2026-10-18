@@ -43,7 +43,7 @@ use planora_drawing::annotate::{
 use planora_drawing::dimension::{ArcSpan, DimId, DimSpec};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::sheet::{DimMarks, SheetModel, build_sheet_with, view_transform};
-use planora_drawing::sheet_frame::{REV_VISIBLE, SheetLayout, sheet_layout};
+use planora_drawing::sheet_frame::{REV_VISIBLE, SheetLayout, sheet_layout, sheet_scale};
 use planora_drawing::sheet_info::{
     ProjectInfo, SheetContext, TitleTexts, main_scale, resolve_texts,
 };
@@ -1975,9 +1975,12 @@ fn canvas_ui(
             }
             let color = match mark_kind(m) {
                 MarkKind::Lost => theme::SHEET_LOST,
-                MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Sheet(_) => theme::SHEET_DIM,
+                MarkKind::Dimension
+                | MarkKind::CenterLine
+                | MarkKind::Sheet(_)
+                | MarkKind::Position(_) => theme::SHEET_DIM,
             };
-            paint_mark(&painter, m, color, &to_screen, k, 1.0);
+            paint_mark(&painter, m, color, &to_screen, k, sheet_scale(sheet.sheet));
             marks_drawn += 1;
         }
     }
@@ -2324,6 +2327,7 @@ fn line_width_mm(kind: MarkKind, sheet_scale: f64) -> f64 {
     match kind {
         MarkKind::CenterLine => CENTER_W,
         MarkKind::Sheet(pen) => pen.width_at(sheet_scale),
+        MarkKind::Position(pen) => pen.width_at(sheet_scale),
         _ => DIM_LINE_W,
     }
 }

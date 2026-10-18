@@ -72,7 +72,11 @@
 //!
 //! * Ebenen (je Farbe, Linienart, Linienstärke, Verweis 390 auf den Plotstil-Platzhalter wie
 //!   die alten Ebenen): `MASSE` (Maße; 7, `CONTINUOUS`, 25), `MITTEL` (Mittellinien; 7,
-//!   `CENTER`, 25), `MASSE_FEHLT` (Maße mit verlorenem Bezug; 1 = rot, `CONTINUOUS`, 25).
+//!   `CENTER`, 25), `MASSE_FEHLT` (Maße und Nummernkreise mit verlorenem Bezug; 1 = rot,
+//!   `CONTINUOUS`, 25), `POSITIONEN` (Kreis und Zahl der Nummernkreise; 7, `CONTINUOUS`, auf A3
+//!   35) und `POSITIONEN_LINIE` (Hinweislinie und Punkt; 7, `CONTINUOUS`, auf A3 25). Die
+//!   Stärken der beiden Positionsebenen sind wie beim Blattrahmen die mit dem Faktor des Blatts
+//!   skalierten (nie unter 0,18 mm), gerundet nach [`dxf_lineweight`] (A4: 25 und 18).
 //! * Linienart `CENTER` (nur mit `MITTEL`): Strich 12, Lücke 3, Strich 2, Lücke 3 mm
 //!   (`72 65`, `73 4`, `40 20`, je Element `49` Länge und `74 0`).
 //! * `Mark::Line` → `LINE`. `Mark::Arc` → `ARC` wie die Bögen der Linien (Grad, normalisiert,
@@ -112,10 +116,11 @@
 
 use crate::Visibility;
 use crate::annotate::{ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, Mark, MarkKind, TextAnchor};
+use crate::balloon::PositionPen;
 use crate::error::DrawError;
 use crate::out2d::Out2d;
 use crate::sheet::SheetModel;
-use crate::sheet_frame::SheetPen;
+use crate::sheet_frame::{SheetPen, sheet_scale};
 use planora_math::{DVec2, PI, TAU};
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -128,6 +133,8 @@ const LAYER_LOST: &str = "MASSE_FEHLT";
 const LAYER_FRAME: &str = "BLATTRAHMEN";
 const LAYER_CENTRE: &str = "BLATT_MITTE";
 const LAYER_SHEET: &str = "BLATT";
+const LAYER_POSITION: &str = "POSITIONEN";
+const LAYER_POSITION_LINE: &str = "POSITIONEN_LINIE";
 /// Höchstlänge eines Maßtexts in der Datei (Zeichen, nach der Verschlüsselung).
 const MAX_TEXT_LEN: usize = 255;
 /// Nachkommastellen aller Zahlen der Datei.
@@ -541,6 +548,12 @@ struct UsedKinds {
     sheet: bool,
     /// Faktor des Blattzubehörs (bestimmt die Linienstärken der drei Blattebenen).
     sheet_scale: f64,
+    /// Nummernkreise: Kreis und Zahl (`POSITIONEN`), Hinweislinie und Punkt
+    /// (`POSITIONEN_LINIE`).
+    position: bool,
+    position_line: bool,
+    /// Faktor des Blatts (bestimmt die Linienstärken der Ebenen der Nummernkreise).
+    paper_scale: f64,
 }
 
 impl UsedKinds {
@@ -548,6 +561,7 @@ impl UsedKinds {
         let mut u = UsedKinds {
             sheet: model.frame.is_some(),
             sheet_scale: model.frame.as_ref().map_or(1.0, |f| f.scale),
+            paper_scale: sheet_scale(model.sheet),
             ..UsedKinds::default()
         };
         for m in model.views.iter().flat_map(|v| &v.marks) {
@@ -556,6 +570,8 @@ impl UsedKinds {
                 MarkKind::CenterLine => u.center = true,
                 MarkKind::Lost => u.lost = true,
                 MarkKind::Sheet(_) => u.sheet = true,
+                MarkKind::Position(PositionPen::Circle) => u.position = true,
+                MarkKind::Position(PositionPen::Leader) => u.position_line = true,
             }
         }
         u
@@ -604,6 +620,8 @@ fn mark_layer(kind: MarkKind) -> &'static str {
         MarkKind::Sheet(SheetPen::Heavy) => LAYER_FRAME,
         MarkKind::Sheet(SheetPen::Medium) => LAYER_CENTRE,
         MarkKind::Sheet(SheetPen::Thin) => LAYER_SHEET,
+        MarkKind::Position(PositionPen::Circle) => LAYER_POSITION,
+        MarkKind::Position(PositionPen::Leader) => LAYER_POSITION_LINE,
     }
 }
 
@@ -755,6 +773,24 @@ fn write_tables(
                 "CONTINUOUS",
                 7,
                 sheet_weight(SheetPen::Thin, used),
+            ),
+        ),
+        (
+            used.position,
+            (
+                LAYER_POSITION,
+                "CONTINUOUS",
+                7,
+                dxf_lineweight(PositionPen::Circle.width_at(used.paper_scale)),
+            ),
+        ),
+        (
+            used.position_line,
+            (
+                LAYER_POSITION_LINE,
+                "CONTINUOUS",
+                7,
+                dxf_lineweight(PositionPen::Leader.width_at(used.paper_scale)),
             ),
         ),
     ] {

@@ -3,13 +3,14 @@
 use crate::error::FeatureError;
 use crate::model::Document;
 use crate::parts_sheets::{FOLLOW_PAGE_DELETE, PARTS_SHEET_RENAME, page_of};
-use planora_drawing::parts::parts_sheet_name;
+use planora_drawing::model::{Balloon, BalloonId};
+use planora_drawing::parts::{BodyKey, MAX_BALLOONS, parts_sheet_name};
 use planora_drawing::sheet_info::{ProjectInfo, SheetInfo, Stamp, validate_project_info};
 use planora_drawing::{
     Drawing, DrawingId, DrawingKind, Placement, Projection, Scale, Sheet, ViewId, ViewKind,
     align_dir,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// Höchstzahl der Zeichnungen in einem Dokument.
 pub const MAX_DRAWINGS: usize = 1000;
@@ -19,6 +20,8 @@ pub const MAX_VIEWS: usize = 64;
 pub const MAX_NAME_CHARS: usize = 200;
 /// Größter Betrag einer Lageangabe auf dem Blatt in Millimetern.
 pub const MAX_POS_MM: f64 = 1.0e5;
+/// Meldung, wenn eine Zeichnung schon die Höchstzahl an Nummernkreisen hat.
+pub const TOO_MANY_BALLOONS: &str = "Es sind höchstens 200 Positionsnummern je Zeichnung möglich.";
 
 fn bad(m: impl Into<String>) -> FeatureError {
     FeatureError::InvalidInput(m.into())
@@ -48,10 +51,11 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
             if page == 0 {
                 return Err("Ein Stücklistenblatt braucht eine Seitennummer ab 1".into());
             }
-            // Später kommen die Nummernkreise hinzu: auch sie gehören nicht auf ein
-            // Stücklistenblatt.
-            if !d.views.is_empty() || !d.dimensions.is_empty() {
-                return Err("Ein Stücklistenblatt hat keine Ansichten und keine Maße".into());
+            if !d.views.is_empty() || !d.dimensions.is_empty() || !d.balloons.is_empty() {
+                return Err(
+                    "Ein Stücklistenblatt hat keine Ansichten, keine Maße und keine Positionsnummern"
+                        .into(),
+                );
             }
         }
     }
@@ -115,10 +119,42 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
         }
         seen.push(v.id);
     }
+    validate_balloons(d)?;
     if let Some(info) = &d.info {
         planora_drawing::sheet_info::validate_sheet_info(info)?;
     }
     crate::dimensions::validate_dimensions(d)
+}
+
+/// Prüft die Nummernkreise: Anzahl, Kennungen, Ansicht, Anker und Versatz.
+fn validate_balloons(d: &Drawing) -> Result<(), String> {
+    if d.balloons.len() > MAX_BALLOONS {
+        return Err(TOO_MANY_BALLOONS.into());
+    }
+    if d.next_balloon == 0 || d.next_balloon == u64::MAX {
+        return Err("Der Zähler der Positionsnummern ist ungültig".into());
+    }
+    let mut ids = HashSet::with_capacity(d.balloons.len());
+    for b in &d.balloons {
+        if b.id.0 == 0 || b.id.0 >= d.next_balloon {
+            return Err("Eine Positionsnummer hat eine ungültige Kennung".into());
+        }
+        if !ids.insert(b.id) {
+            return Err("Eine Kennung einer Positionsnummer kommt doppelt vor".into());
+        }
+        if d.view(b.view).is_none() {
+            return Err("Eine Positionsnummer gehört zu einer Ansicht, die es nicht gibt".into());
+        }
+        let unit = |x: f64| x.is_finite() && (0.0..=1.0).contains(&x);
+        if !unit(b.anchor.0) || !unit(b.anchor.1) {
+            return Err("Eine Positionsnummer zeigt auf eine Stelle außerhalb der Ansicht".into());
+        }
+        let (dx, dy) = b.offset;
+        if !(dx.is_finite() && dy.is_finite() && dx.hypot(dy) <= MAX_POS_MM) {
+            return Err("Eine Positionsnummer liegt außerhalb des Blatts".into());
+        }
+    }
+    Ok(())
 }
 
 impl Document {
@@ -331,6 +367,60 @@ impl Document {
             new_id = Some(d.add_view(kind, scale, placement, parent));
         })?;
         new_id.ok_or_else(unknown)
+    }
+
+    /// Setzt einen Nummernkreis an den Körper `body` in der Ansicht `view` (Anker auf [0, 1]
+    /// begrenzt, Versatz in Blatt-mm). Zählt als eine Änderung; bei Fehler bleibt das Dokument
+    /// unverändert.
+    pub fn add_balloon(
+        &mut self,
+        drawing: DrawingId,
+        view: ViewId,
+        body: BodyKey,
+        anchor: (f64, f64),
+        offset: (f64, f64),
+    ) -> Result<BalloonId, FeatureError> {
+        let d = self.drawing(drawing).ok_or_else(unknown)?;
+        if d.balloons.len() >= MAX_BALLOONS {
+            return Err(bad(TOO_MANY_BALLOONS));
+        }
+        if d.view(view).is_none() {
+            return Err(bad("Die Ansicht gibt es nicht"));
+        }
+        if !(anchor.0.is_finite() && anchor.1.is_finite()) {
+            return Err(bad("Die Stelle der Positionsnummer ist ungültig"));
+        }
+        let anchor = (anchor.0.clamp(0.0, 1.0), anchor.1.clamp(0.0, 1.0));
+        let mut new_id = None;
+        self.update_drawing(drawing, |d| {
+            new_id = Some(d.add_balloon(Balloon {
+                id: BalloonId(0),
+                view,
+                body,
+                anchor,
+                offset,
+            }));
+        })?;
+        new_id.ok_or_else(unknown)
+    }
+
+    /// Nummer (Pos. der Stücklistenzeile) jedes Nummernkreises der Zeichnung; `None`, wenn es
+    /// den Körper nicht mehr gibt (verloren). Unbekannte Zeichnung: leer.
+    pub fn balloon_numbers(&self, drawing: DrawingId) -> BTreeMap<BalloonId, Option<u32>> {
+        let Some(d) = self.drawing(drawing) else {
+            return BTreeMap::new();
+        };
+        let rows = self.parts_rows();
+        d.balloons
+            .iter()
+            .map(|b| {
+                let pos = rows
+                    .iter()
+                    .find(|r| r.keys.contains(&b.body))
+                    .map(|r| r.pos);
+                (b.id, pos)
+            })
+            .collect()
     }
 
     /// Übernimmt Zeichnungen aus einem Snapshot (mit Prüfung); der Änderungszähler bleibt 0.

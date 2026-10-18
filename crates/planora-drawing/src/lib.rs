@@ -3,6 +3,7 @@
 //! der Linien einer Ansicht mit ihrer Sichtbarkeit.
 
 pub mod annotate;
+pub mod balloon;
 pub mod basis;
 pub mod centerline;
 pub mod dimension;
@@ -34,8 +35,8 @@ pub use error::DrawError;
 pub use file::{DrawingFormat, drawing_to_bytes, export_drawing_file};
 pub use layout::{GAP_MM, align_dir, view_extent};
 pub use model::{
-    Drawing, DrawingId, DrawingKind, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind,
-    ViewSpec,
+    Balloon, BalloonId, Drawing, DrawingId, DrawingKind, Paper, Placement, Projection, Scale,
+    Sheet, ViewId, ViewKind, ViewSpec,
 };
 pub use parts::{BodyKey, PartsCells, PartsRow, RowOverride};
 pub use sheet_frame::{
