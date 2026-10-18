@@ -172,6 +172,8 @@ pub struct Workspace {
     pub config: Config,
     pub prompt: Option<Prompt>,
     pub quit: bool,
+    /// Der Dialog „Über PlanoraCAD“ ist offen.
+    pub about_open: bool,
     /// Zählt Änderungen an der Bibliothek auf der Festplatte, die über den Arbeitsbereich laufen
     /// (Speichern unter, Wurzelwechsel); das Feld Projekte liest danach den Baum neu.
     pub library_revision: u64,
@@ -203,6 +205,7 @@ impl Workspace {
             config,
             prompt: None,
             quit: false,
+            about_open: false,
             library_revision: 0,
             autosave_interval: AUTOSAVE_INTERVAL,
             exchange_dir: None,

@@ -29,6 +29,8 @@ glam.workspace = true
 eframe.workspace = true
 egui.workspace = true
 winit.workspace = true
+# Fenster- und Programmsymbol sowie Logo im Über-Dialog aus PNG lesen (png ist über egui ohnehin im Baum).
+png = "0.18"
 
 [dev-dependencies]
 # Zeichentabellen der Schriftdateien lesen (Zeichentest in tests/fonts.rs); skrifa zieht egui ohnehin.
@@ -36,3 +38,7 @@ skrifa = "0.44"
 
 [lints]
 workspace = true
+
+[build-dependencies]
+# Programmsymbol in die .exe einbetten (nur Windows, siehe build.rs).
+embed-resource = "3"

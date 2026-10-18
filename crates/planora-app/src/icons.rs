@@ -28,6 +28,8 @@ pub enum Icon {
     Import,
     /// Phosphor `sign-out`.
     Quit,
+    /// Phosphor `info`.
+    About,
     /// Phosphor `cube`.
     Box,
     /// Phosphor `cylinder`.
@@ -148,6 +150,7 @@ pub const ALL: &[Icon] = &[
     Icon::Export,
     Icon::Import,
     Icon::Quit,
+    Icon::About,
     Icon::Box,
     Icon::Cylinder,
     Icon::Sphere,
@@ -214,6 +217,7 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Export, '\u{eaf0}', "export"),
     (Icon::Import, '\u{e20c}', "download-simple"),
     (Icon::Quit, '\u{e42a}', "sign-out"),
+    (Icon::About, '\u{e2ce}', "info"),
     (Icon::Box, '\u{e1da}', "cube"),
     (Icon::Cylinder, '\u{e8fc}', "cylinder"),
     (Icon::Sphere, '\u{ee66}', "sphere"),

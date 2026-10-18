@@ -23,7 +23,9 @@ use egui::{Vec2, vec2};
 use crate::app::{self, CreateKind, PlanoraApp};
 use crate::shell::{self, RightTab, ShellMode, ShellRects};
 use crate::state::AppState;
-use crate::{browser, icons, projects_panel, properties, tabs, theme, versions_panel, viewport};
+use crate::{
+    browser, icons, logo, projects_panel, properties, tabs, theme, versions_panel, viewport,
+};
 use planora_kernel::BoolOp;
 
 /// Breite, bis zu der die Tab-Leiste nicht umbricht (sie rollt waagerecht statt dessen).
@@ -528,6 +530,15 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
         ui.set_width(inner.x);
         ui.set_height(inner.y);
         ui.horizontal_centered(|ui| {
+            // Kleines Programmzeichen links vom Menü; sein Platz (mit Abstand) zählt zur
+            // Wunsch- und Mindestbreite des Felds.
+            let lead = match logo::image(ctx, "top-64", logo::ICON_64, logo::SMALL_SIZE) {
+                Some(image) => {
+                    ui.add(image);
+                    logo::SMALL_SIZE + ui.spacing().item_spacing.x
+                }
+                None => 0.0,
+            };
             let menu = ui.allocate_ui(vec2(menu_w.min(ui.available_width()), inner.y), |ui| {
                 ui.add_enabled_ui(no_prompt, |ui| {
                     app::menu_bar_measured(ui, &mut app.ws, &mut app.shell)
@@ -575,11 +586,15 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
             // Wunschbreite: Menüknöpfe, Trennstrich mit Abständen, alle Tabs, Rand.
             let gap = tabs.inner_rect.left() - menu.response.rect.right();
             remember_width(ui, menu_width_key(), menu_natural);
-            remember_width(ui, top_min_key(), menu_natural + gap + MIN_TABS_W + margin);
+            remember_width(
+                ui,
+                top_min_key(),
+                lead + menu_natural + gap + MIN_TABS_W + margin,
+            );
             remember_width(
                 ui,
                 top_width_key(),
-                menu_natural + gap + tabs.content_size.x + margin,
+                lead + menu_natural + gap + tabs.content_size.x + margin,
             );
             // Erst als erledigt merken, wenn dieser Durchgang gilt (sonst rollt der nächste).
             if !ui.ctx().will_discard() {
