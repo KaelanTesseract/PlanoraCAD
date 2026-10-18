@@ -257,6 +257,21 @@ fn row_texts() {
 }
 
 #[test]
+fn no_section_on_a_parts_sheet() {
+    let Fixture { mut st, .. } = fixture();
+    let stamp = planora_drawing::sheet_info::Stamp {
+        date: "2026-10-18".into(),
+        user: "dennis".into(),
+    };
+    let p = st.document.add_parts_sheets(A4_QUER, &stamp).unwrap();
+    st.drawing_ui.open(p);
+    let mut h = Harness::new(false);
+    let shot = h.idle(&mut st);
+    assert!(!shot.has(SECTION));
+    assert!(!shot.has(EMPTY_TEXT));
+}
+
+#[test]
 fn section_lists_and_acts() {
     let Fixture {
         mut st,

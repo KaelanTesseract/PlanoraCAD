@@ -106,8 +106,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     let WorkArea::Drawing(id) = state.drawing_ui.area else {
         return;
     };
-    if state.document.drawing(id).is_none() {
-        return;
+    // Auf einem Stücklistenblatt gibt es keine Positionsnummern (das Werkzeug ist dort gesperrt).
+    match state.document.drawing(id) {
+        Some(d) if !matches!(d.kind, planora_drawing::DrawingKind::PartsList { .. }) => {}
+        _ => return,
     }
     ui.add_space(theme::SPACE_3);
     theme::section_header(ui, SECTION, theme::SUB_HEADER_H);

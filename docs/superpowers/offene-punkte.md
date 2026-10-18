@@ -1113,6 +1113,10 @@ Die Festlegungen stehen im Plan (G1 bis G15) und in der Spec §9 (F1 bis F6); de
 - **Werkzeug-Körper einer Booleschen Operation:** seine Kreise sind danach verloren (F1); das lässt sich nicht automatisch auf das Ziel umhängen („Neu zuweisen“ = löschen und neu setzen).
 - **Stückliste je Dokument, nicht je Blatt:** Zeilentexte gelten für alle Blätter; kein Umordnen von Hand, kein automatisches Setzen aller Kreise (Nicht-Ziele der Spec).
 - **Folgeblätter erben Papier und Ausrichtung** von Seite 1; Seite 1 löschen entfernt alle.
+- **Eigene Blattangaben eines Folgeblatts gehen verloren,** wenn es verschwindet (weniger Zeilen, etwa ein unterdrückter Körper oder verschmolzene Zeilen); es kommt mit neuer Kennung und automatischen Texten wieder.
+- **DXF und gekürzte Tabellentexte:** Der Breitenzuschlag kann einen Tabellentext im DXF mit „…“ kürzen, ohne dass das Fenster warnt (die Warnung folgt der SVG-Regel). Eine sehr lange Benennung aus Umlauten (etwa 30 und mehr Zeichen) sperrt den DXF-Export mit der benannten Meldung.
+- **Kein Umordnen der Körper in der App:** Es gibt keinen Weg, Körper umzuordnen; die Reihenfolge der Zeilen ändert sich nur durch Löschen, Umbenennen oder Neuanlegen von Körpern.
+- **Randfall Export:** Ein Stücklistenblatt lässt sich in einem Dokument ohne feste Körper nicht ausgeben.
 - **Aufwand je Bild:** `parts_rows` ist quadratisch in der Zeilenzahl (bei 200 Zeilen noch unauffällig, siehe Zahlen); Kreise und Nummern sind je (Instanz, Änderungsstand) zwischengespeichert, der Abgleich der Zellen für das Blatt ebenso.
 - **1 Bildpunkt und Isometrie (aus 3c-1, unverändert):** Tabellentexte sind Blattmarkierungen und werden unter einem Bildpunkt auf einen Bildpunkt angehoben; die Zahlen in den Kreisen (Art `Position`) gehören nicht dazu und verschwinden, wenn sie kleiner als ein Bildpunkt würden. Die isometrische Ansicht ist bei fast blattfüllenden Teilen bestmöglich (kann den freien Bereich überragen); dasselbe gilt für „Rechts“ im Erstwinkel, das links vom Block steht und den freien Bereich verlassen kann.
 - **Normwerte der DXF-Strichstärken:** Die Stärken der Ebenen `POSITIONEN` und `POSITIONEN_LINIE` skalieren mit dem Blattfaktor (siehe G12); auf A4 sind es 25 und 18.
@@ -1133,7 +1137,7 @@ Proben liegen in `D:\Testumgebung\zeichnung-proben\stueckliste` (Namen siehe obe
 
 **A. Tabelle auf dem Blatt**
 1. Projekt mit drei Teilen anlegen, zwei davon gleich benannt (zum Beispiel zweimal „Bolzen“, einmal „Platte“). Menü „Zeichnung“ → „Neue Zeichnung …“: Auf dem Blatt steht über dem Schriftfeld die Tabelle mit Kopfzeile unten, Pos. 1 „Platte“ oder „Bolzen“ je nach Reihenfolge, der Bolzen mit Menge 2 in einer Zeile. Die Ansichten liegen nicht unter der Tabelle, auch nicht, wenn man weitere Ansichten hinzufügt.
-2. Ein Teil umbenennen: Die Tabelle folgt (und die Kreise bleiben am Teil). Reihenfolge ändern, Teil verschieben, verrunden: Tabelle und Nummern stimmen. Zwei Teile vereinigen: Die Zeile heißt jetzt wie die Operation („Vereinigung 1“), der Werkzeug-Körper ist aus der Liste verschwunden und seine Kreise sind rot.
+2. Ein Teil umbenennen: Die Tabelle folgt (und die Kreise bleiben am Teil). ein früheres Teil löschen, Teil verschieben, verrunden: Tabelle und Nummern stimmen. Zwei Teile vereinigen: Die Zeile heißt jetzt wie die Operation („Vereinigung 1“), der Werkzeug-Körper ist aus der Liste verschwunden und seine Kreise sind rot.
 3. Eine Zeichnung in einem Projekt mit nur einem Teil: keine Tabelle (Schalter aus). In einer alten Zeichnung (Datei vor diesem Stand) mit mehreren Teilen: keine Tabelle, nichts verändert.
 
 **B. Fenster „Blattangaben“, Abschnitt „Stückliste“**

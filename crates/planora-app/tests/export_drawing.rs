@@ -817,6 +817,12 @@ fn closing_a_tab_while_a_drawing_is_written_leaves_no_helper_file() {
     let mut d = dialog(&tab.state, SVG);
     d.write_to(target.clone(), &tab.state);
     tab.export_dialog = Some(d);
+    // Erst warten, bis die Hilfsdatei wirklich da ist; sonst prüft der Test nichts.
+    let start = std::time::Instant::now();
+    while temp_files(&dir) == 0 && start.elapsed().as_secs() < 10 {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(temp_files(&dir) > 0, "Hilfsdatei nie gesehen");
     assert!(!w.request_close(0));
     w.discard_and_continue();
     assert!(w.tabs[0].export_dialog.is_none());
