@@ -173,6 +173,8 @@ struct Harness {
     time: f64,
     size: Vec2,
     editable: bool,
+    /// Bediennamen der angeklickten Bedienelemente (in der Reihenfolge der Klicks).
+    clicked: Vec<String>,
 }
 
 impl Harness {
@@ -182,6 +184,7 @@ impl Harness {
             time: 0.0,
             size,
             editable: true,
+            clicked: Vec::new(),
         }
     }
 
@@ -205,6 +208,11 @@ impl Harness {
             .ctx
             .run_ui(raw, |ui| drawing_view::show_with(ui, st, editable));
         let shot = Shot::of(&out);
+        for e in &out.platform_output.events {
+            if let egui::output::OutputEvent::Clicked(info) = e {
+                self.clicked.push(info.label.clone().unwrap_or_default());
+            }
+        }
         out.drop_without_applying_deltas();
         shot
     }
@@ -508,6 +516,7 @@ fn click_sets_balloon_on_every_line_kind() {
         assert!(st.balloon_tool.is_active(), "{size:?}");
         let shot = h.idle(&mut st);
         assert!(shot.has(HINT), "{size:?}: Hinweis fehlt");
+        let mut b0 = None;
         for (what, vis) in [
             ("sichtbare Kante", Visibility::Visible),
             ("verdeckte Kante", Visibility::Hidden),
@@ -518,6 +527,7 @@ fn click_sets_balloon_on_every_line_kind() {
                     && matches!(l.curve, Out2d::Line { .. })
             });
             let b = place_by_click(&mut st, &mut h, d, p);
+            b0.get_or_insert(b.id);
             assert_default_balloon(&b, front, key(fl));
             let shot = h.idle(&mut st);
             assert_painted(&h, &shot, b.id, "1");
@@ -531,6 +541,23 @@ fn click_sets_balloon_on_every_line_kind() {
         assert_eq!(st.balloon_tool.message(), Some(MISSED));
         let m = shot.find(MISSED);
         assert_eq!(m.color, error_color(st.dark), "Meldung rot");
+        // Der nächste Treffer nimmt die Meldung weg (bei 800 × 600 läge der Klick schon im
+        // Fangbereich eines Kreises).
+        if size == BIG {
+            let p = h.line_mid(front, "verdeckte Kante", |l| l.vis == Visibility::Hidden);
+            let extra = place_by_click(&mut st, &mut h, d, p);
+            assert_eq!(st.balloon_tool.message(), None);
+            assert!(!h.idle(&mut st).has(MISSED));
+            balloon_tool::delete(&mut st, d, extra.id);
+            // Ebenso ein Klick, der einen Kreis wählt.
+            h.click_at(&mut st, DVec2::new(30.0, 30.0));
+            assert_eq!(st.balloon_tool.message(), Some(MISSED));
+            let b0 = b0.expect("erster Kreis");
+            let c = h.screen(h.balloon(b0).centre);
+            h.click(&mut st, c);
+            assert_eq!(st.drawing_ui.selected_balloon, Some(b0));
+            assert_eq!(st.balloon_tool.message(), None);
+        }
 
         // Umriss und Kreisbogen: Zylinder, Vorder- und Draufsicht.
         let mut st = AppState::new();
@@ -632,6 +659,11 @@ fn balloon_hit_reaches_pick_px_outside_the_circle() {
     assert_eq!(
         balloon_tool::balloon_hit(&list, &to_screen, c + vec2(0.0, -(r + 6.5))),
         None
+    );
+    assert_eq!(
+        balloon_tool::balloon_hit(&list, &to_screen, c + vec2(-(r + 6.2), 0.0)),
+        None,
+        "knapp über PICK_PX"
     );
     // Im Bild: Klick knapp außerhalb wählt den Kreis, weiter weg die Ansicht.
     h.click(&mut st, c + vec2(r + 5.0, 0.0));
@@ -880,6 +912,21 @@ fn delete_key_only_reaches_the_sheet() {
     let c = drawing_view::sheet_to_screen(l.canvas, l.sheet_mm, l.zoom, l.pan, bm.centre);
     a.click(c);
     assert_eq!(a.st().drawing_ui.selected_balloon, Some(b));
+    // Hat ein Bedienelement die Tastatur (Tab), gilt Entf ihm.
+    a.key(Key::Tab);
+    assert!(
+        a.c.memory(|m| m.focused()).is_some(),
+        "Tab gibt einem Knopf den Fokus"
+    );
+    a.key(Key::Delete);
+    assert_eq!(count(&mut a), 1, "Entf bei Fokus auf einem Knopf");
+    a.c.memory_mut(|m| m.stop_text_input());
+    a.c.memory_mut(|m| {
+        if let Some(f) = m.focused() {
+            m.surrender_focus(f);
+        }
+    });
+    a.click(c);
     a.key(Key::Delete);
     assert_eq!(count(&mut a), 0, "Entf im Blatt löscht");
 }
@@ -1035,6 +1082,26 @@ fn lost_balloon_is_shown() {
     // Tooltip über dem Kreis.
     let shot = h.hover(&mut st, c);
     assert!(shot.has(LOST_TIP), "Tooltip fehlt");
+    // Über einem Kreis mit Teil kein solcher Tooltip.
+    let ok = st
+        .document
+        .add_balloon(
+            d,
+            front,
+            key(st.document.features()[0].id),
+            (1.0, 0.0),
+            (15.0, -15.0),
+        )
+        .unwrap();
+    h.idle(&mut st);
+    let c_ok = h.screen(h.balloon(ok).centre);
+    let shot = h.hover(&mut st, c_ok);
+    assert!(!shot.has(LOST_TIP), "Tooltip über einem Kreis mit Teil");
+    st.document
+        .update_drawing(d, |dr| {
+            dr.remove_balloon(ok);
+        })
+        .unwrap();
     // Zwei verlorene Kreise: Mehrzahl.
     assert_eq!(lost_note(1), "1 Positionsnummer hat ihr Teil verloren.");
     assert_eq!(lost_note(2), "2 Positionsnummern haben ihr Teil verloren.");
@@ -1526,4 +1593,256 @@ fn frame_cost_with(count: usize) {
     });
     a.frame(vec![button(c + vec2(30.0, 15.0), false)]);
     println!("45 Körper, 200 Kreise: Ruhe {rest:.1} ms, Ziehen {drag:.1} ms");
+}
+
+// ---- Lücken aus dem Review --------------------------------------------------------------------
+
+fn bm(id: u64, centre: (f64, f64), radius: f64) -> BalloonMarks {
+    BalloonMarks {
+        view: ViewId(1),
+        id: BalloonId(id),
+        centre: DVec2::new(centre.0, centre.1),
+        radius,
+        marks: Vec::new(),
+    }
+}
+
+/// Bei überlappenden Kreisen gewinnt der, in dem der Zeiger am tiefsten liegt.
+#[test]
+fn overlapping_circles_pick_the_closest_edge() {
+    let to_screen = |p: DVec2| pos2((10.0 * p.x) as f32, (10.0 * p.y) as f32);
+    let list = [bm(1, (0.0, 0.0), 2.0), bm(2, (3.0, 0.0), 2.0)];
+    // 0,5 mm neben der Mitte von 2, 2,5 mm von der Mitte von 1 (beide getroffen).
+    assert_eq!(
+        balloon_tool::balloon_hit(&list, &to_screen, pos2(25.0, 0.0)),
+        Some(BalloonId(2))
+    );
+    assert_eq!(
+        balloon_tool::balloon_hit(&list, &to_screen, pos2(5.0, 0.0)),
+        Some(BalloonId(1))
+    );
+    // Außerhalb beider: der nähere Rand.
+    let list = [bm(1, (0.0, 0.0), 1.0), bm(2, (3.0, 0.0), 1.0)];
+    assert_eq!(
+        balloon_tool::balloon_hit(&list, &to_screen, pos2(18.0, 0.0)),
+        Some(BalloonId(2))
+    );
+}
+
+/// Quader-Vorderansicht mit einem waagerechten Maß (Maßlinie bei y ≈ 130) und einem Kreis, dessen
+/// Mitte auf der Maßlinie liegt.
+fn balloon_on_dimension() -> (AppState, DrawingId, ViewId, BalloonId, DVec2, Harness) {
+    let (mut st, f, d, front, mut h) = box_front(BIG);
+    st.dimension_tool
+        .set_mode(ToolMode::Linear(dimension_tool::LinearDir::Horizontal));
+    h.click_at(&mut st, DVec2::new(95.0, 100.0));
+    h.click_at(&mut st, DVec2::new(105.0, 100.0));
+    h.click_at(&mut st, DVec2::new(100.0, 130.0));
+    st.dimension_tool.set_mode(ToolMode::Off);
+    let dims = st.document.drawing(d).unwrap().dimensions.clone();
+    assert_eq!(dims.len(), 1);
+    let y = 115.0 + dims[0].offset;
+    let target = DVec2::new(101.0, y);
+    let b = st
+        .document
+        .add_balloon(d, front, key(f), (0.5, 0.5), (0.0, 0.0))
+        .unwrap();
+    h.idle(&mut st);
+    let at = h.balloon(b).centre;
+    st.document
+        .update_drawing(d, |dr| {
+            dr.balloons[0].offset = (target.x - at.x, target.y - at.y);
+        })
+        .unwrap();
+    st.drawing_ui.selected_balloon = None;
+    st.drawing_ui.selected_dim = None;
+    h.idle(&mut st);
+    assert!(h.balloon(b).centre.distance(target) < 1e-9);
+    (st, d, front, b, target, h)
+}
+
+#[test]
+fn balloon_wins_over_dimension_on_click_and_drag() {
+    let (mut st, d, _, b, target, mut h) = balloon_on_dimension();
+    let dim_before = st.document.drawing(d).unwrap().dimensions.clone();
+    let p = h.screen(target);
+    h.click(&mut st, p);
+    assert_eq!(st.drawing_ui.selected_balloon, Some(b));
+    assert_eq!(st.drawing_ui.selected_dim, None);
+    // Ziehen am selben Punkt verschiebt den Kreis, nicht das Maß.
+    st.drawing_ui.selected_balloon = None;
+    let off0 = st.document.drawing(d).unwrap().balloons[0].offset;
+    h.drag(&mut st, p, vec2(0.0, -30.0), |_, _| {});
+    let dr = st.document.drawing(d).unwrap();
+    assert_eq!(dr.dimensions, dim_before, "Maß unverändert");
+    assert_ne!(dr.balloons[0].offset, off0, "Kreis gezogen");
+    assert_eq!(st.drawing_ui.selected_balloon, Some(b));
+}
+
+/// Mit „Position“ lassen sich Ansichten und Maße nicht ziehen (Kreise schon).
+#[test]
+fn position_tool_does_not_drag_views_or_dimensions() {
+    let (mut st, d, front, _, target, mut h) = balloon_on_dimension();
+    // Kreis aus dem Weg (weit nach links oben).
+    st.document
+        .update_drawing(d, |dr| dr.balloons[0].offset = (-60.0, 60.0))
+        .unwrap();
+    st.balloon_tool.set_active(true);
+    h.idle(&mut st);
+    let before = st.document.drawing(d).unwrap().clone();
+    let e0 = st.document.edit_count();
+    // Auf der Maßlinie und auf der linken Kante der Ansicht.
+    h.drag(&mut st, h.screen(target), vec2(0.0, -40.0), |_, _| {});
+    h.drag(
+        &mut st,
+        h.screen(DVec2::new(95.0, 100.0)),
+        vec2(50.0, 30.0),
+        |_, _| {},
+    );
+    let after = st.document.drawing(d).unwrap();
+    assert_eq!(after.dimensions, before.dimensions);
+    assert_eq!(after.view(front), before.view(front));
+    assert_eq!(st.document.edit_count(), e0);
+    assert!(st.balloon_tool.is_active());
+    // Ohne Werkzeug zieht dieselbe Bewegung die Ansicht.
+    st.balloon_tool.set_active(false);
+    h.idle(&mut st);
+    h.drag(
+        &mut st,
+        h.screen(DVec2::new(95.0, 100.0)),
+        vec2(50.0, 30.0),
+        |_, _| {},
+    );
+    assert_ne!(
+        st.document.drawing(d).unwrap().view(front),
+        before.view(front)
+    );
+}
+
+/// Ein Ziehen, das am Ausgangspunkt endet, ändert nichts (keine Änderung im Dokument).
+#[test]
+fn drag_back_to_start_commits_nothing() {
+    let (mut st, f, d, front, mut h) = box_front(BIG);
+    let b = st
+        .document
+        .add_balloon(d, front, key(f), (0.0, 0.5), (-15.0, 10.0))
+        .unwrap();
+    h.idle(&mut st);
+    let c = h.screen(h.balloon(b).centre);
+    let e0 = st.document.edit_count();
+    h.frame_dt(&mut st, vec![Event::PointerMoved(c)], 1.0);
+    h.frame_dt(&mut st, vec![button(c, true)], 0.02);
+    for by in [vec2(20.0, 0.0), vec2(40.0, 10.0), vec2(0.0, 0.0)] {
+        h.frame_dt(&mut st, vec![Event::PointerMoved(c + by)], 0.02);
+    }
+    h.frame_dt(&mut st, vec![button(c, false)], 0.02);
+    h.idle(&mut st);
+    assert_eq!(st.document.edit_count(), e0);
+    assert_eq!(balloons(&st, d)[0].offset, (-15.0, 10.0));
+}
+
+/// Die Auswahl eines Kreises verfällt beim Wechsel der Zeichnung, wenn die Zeichnung oder der
+/// Kreis verschwindet (Kennungen zählen je Zeichnung: eine alte Auswahl träfe sonst den Kreis
+/// einer anderen Zeichnung).
+#[test]
+fn balloon_selection_is_cleared_when_it_goes_stale() {
+    let (mut st, f, d1, v1, mut h) = box_front(BIG);
+    let b1 = st
+        .document
+        .add_balloon(d1, v1, key(f), (0.0, 0.5), (-15.0, 10.0))
+        .unwrap();
+    let d2 = st
+        .document
+        .add_drawing("Blatt 2", A4_QUER, Projection::First)
+        .unwrap();
+    let v2 = add_view(&mut st, d2, ViewKind::Front, 100.0, 100.0);
+    let b2 = st
+        .document
+        .add_balloon(d2, v2, key(f), (0.0, 0.5), (-15.0, 10.0))
+        .unwrap();
+    assert_eq!(b1, b2, "gleiche Kennung in beiden Zeichnungen");
+    // Wechsel über den Arbeitsbereich (ohne `open`): die Auswahl verfällt, Entf trifft nichts.
+    st.drawing_ui.selected_balloon = Some(b1);
+    st.drawing_ui.area = WorkArea::Drawing(d2);
+    st.drawing_ui.tick(&st.bodies, &st.document, true);
+    assert_eq!(st.drawing_ui.selected_balloon, None);
+    h.idle(&mut st);
+    h.key(&mut st, Key::Delete);
+    assert_eq!(
+        balloons(&st, d2).len(),
+        1,
+        "Kreis der anderen Zeichnung bleibt"
+    );
+    // Wechsel über `open`.
+    st.drawing_ui.selected_balloon = Some(b2);
+    st.drawing_ui.open(d1);
+    assert_eq!(st.drawing_ui.selected_balloon, None);
+    // Kreis gelöscht (etwa im Browser): die Auswahl verfällt beim nächsten Bild.
+    st.drawing_ui.selected_balloon = Some(b1);
+    st.document
+        .update_drawing(d1, |dr| {
+            dr.remove_balloon(b1);
+        })
+        .unwrap();
+    st.drawing_ui.tick(&st.bodies, &st.document, true);
+    assert_eq!(st.drawing_ui.selected_balloon, None);
+    // Zeichnung gelöscht.
+    st.drawing_ui.open(d2);
+    st.drawing_ui.selected_balloon = Some(b2);
+    st.document.delete_drawing(d2).unwrap();
+    st.drawing_ui.tick(&st.bodies, &st.document, true);
+    assert_eq!(st.drawing_ui.selected_balloon, None);
+}
+
+/// Schalter: Bedienname „Position“, gesperrt mit dem Grund im Tooltip; „Blatt einpassen“ als
+/// Symbol mit Bedienname.
+#[test]
+fn tool_button_name_lock_and_reason() {
+    let fit = icons::glyph(icons::Icon::FitSheet).to_string();
+    let (mut st, _, _, _, mut h) = box_front(BIG);
+    h.click_text(&mut st, TOOL);
+    assert!(
+        h.clicked.iter().any(|l| l.contains(TOOL)),
+        "{:?}",
+        h.clicked
+    );
+    st.drawing_ui.zoom = 2.0;
+    h.click_text(&mut st, &fit);
+    assert_eq!(st.drawing_ui.zoom, 1.0);
+    assert!(
+        h.clicked.iter().any(|l| l == drawing_view::FIT_SHEET),
+        "{:?}",
+        h.clicked
+    );
+    let shot = h.idle(&mut st);
+    let shot = h.hover(&mut st, shot.find(&fit).rect.center());
+    assert!(
+        shot.has(drawing_view::FIT_SHEET),
+        "Tooltip „Blatt einpassen“"
+    );
+    // Gesperrt: Tooltip nennt den Grund, nicht die Erklärung.
+    for (editable, parts, why) in [(false, false, READ_ONLY_TIP), (true, true, PARTS_SHEET_TIP)] {
+        let (mut st, _, d, _, _) = box_front(BIG);
+        let d = if parts {
+            let stamp = Stamp {
+                date: "2026-10-18".into(),
+                user: "dennis".into(),
+            };
+            st.document.add_parts_sheets(A4_QUER, &stamp).unwrap()
+        } else {
+            d
+        };
+        let mut h = open(&mut st, d, BIG);
+        h.editable = editable;
+        let shot = h.idle(&mut st);
+        let p = shot.find(TOOL).rect.center();
+        let shot = h.hover(&mut st, p);
+        let shot = (0..5).fold(shot, |_, _| h.hover(&mut st, p));
+        assert!(shot.has(why), "Grund „{why}“ fehlt");
+        assert!(!shot.has(TOOL_TIP), "gesperrt zeigt nicht die Erklärung");
+        let n = h.clicked.len();
+        h.click(&mut st, p);
+        assert_eq!(h.clicked.len(), n, "gesperrter Knopf nimmt keinen Klick an");
+        assert!(!st.balloon_tool.is_active());
+    }
 }

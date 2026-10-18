@@ -51,8 +51,17 @@ fn walk(shape: &Shape, out: &mut Vec<Seen>) {
     }
 }
 
+fn fills(shape: &Shape, out: &mut Vec<(Rect, Color32)>) {
+    match shape {
+        Shape::Rect(r) => out.push((r.rect, r.fill)),
+        Shape::Vec(v) => v.iter().for_each(|s| fills(s, out)),
+        _ => {}
+    }
+}
+
 struct Shot {
     texts: Vec<Seen>,
+    fills: Vec<(Rect, Color32)>,
 }
 
 impl Shot {
@@ -107,11 +116,16 @@ impl Harness {
         };
         let out = self.ctx.run_ui(raw, |ui| browser::show_with(ui, st, ro));
         let mut texts = Vec::new();
+        let mut rects = Vec::new();
         for c in &out.shapes {
             walk(&c.shape, &mut texts);
+            fills(&c.shape, &mut rects);
         }
         out.drop_without_applying_deltas();
-        Shot { texts }
+        Shot {
+            texts,
+            fills: rects,
+        }
     }
 
     fn idle(&mut self, st: &mut AppState) -> Shot {
@@ -278,6 +292,17 @@ fn section_lists_and_acts() {
     h.click(&mut st, "Pos. 2 – Bolzen");
     assert_eq!(st.drawing_ui.selected_balloon, Some(ids[2]));
     assert_eq!(st.drawing_ui.selected_view, None);
+    // Die gewählte Zeile ist hinterlegt, die anderen nicht.
+    let shot = h.idle(&mut st);
+    let active = planora_app::theme::palette(true).bg_active;
+    let marked = |text: &str| {
+        let c = shot.find(text).unwrap().rect.center();
+        shot.fills
+            .iter()
+            .any(|(r, f)| *f == active && r.contains(c))
+    };
+    assert!(marked("Pos. 2 – Bolzen"), "gewählte Zeile hinterlegt");
+    assert!(!marked("Pos. 1 – Platte"));
     assert_eq!(st.drawing_ui.area, WorkArea::Drawing(d));
     // Die eigene Benennung aus der Stückliste erscheint in der Zeile.
     let rk = st.document.parts_rows()[1].keys[0];

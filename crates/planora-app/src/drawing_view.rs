@@ -1832,10 +1832,11 @@ fn tool_finish(state: &mut AppState, id: DrawingId, at: DVec2) -> Result<(), Too
     }
 }
 
-/// Gilt eine Taste dem Blatt (`sheet` ist die Blattfläche)? Nicht, solange ein anderes
-/// Bedienelement die Tastatur hat, ein Fenster oder Menü offen ist (Ebene `Foreground`, im
-/// vorigen oder diesem Bild) oder der letzte Mausdruck nicht auf dem Blatt lag (etwa auf einer
-/// Browserzeile). Muss in jedem Bild aufgerufen werden (merkt sich den letzten Mausdruck).
+/// Gilt eine Taste dem Blatt (`sheet` ist die Blattfläche)? Nicht, solange ein Fenster oder
+/// Menü offen ist (Ebene `Foreground`, im vorigen oder diesem Bild) oder der letzte Mausdruck
+/// nicht auf dem Blatt lag (etwa auf einer Browserzeile). Ein Bedienelement mit Tastaturfokus
+/// sperrt schon [`viewport::typing`] (außer den dafür freigegebenen Tab-Halten). Muss in jedem
+/// Bild aufgerufen werden (merkt sich den letzten Mausdruck).
 fn keys_for_sheet(ctx: &egui::Context, sheet: &egui::Response) -> bool {
     let id = egui::Id::new("planora-drawing-keys-on-sheet");
     if ctx.input(|i| i.pointer.any_pressed()) {
@@ -1843,14 +1844,13 @@ fn keys_for_sheet(ctx: &egui::Context, sheet: &egui::Response) -> bool {
         ctx.data_mut(|d| d.insert_temp(id, on));
     }
     let pressed_on_sheet = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(true);
-    let focus_elsewhere = ctx.memory(|m| m.focused()).is_some_and(|f| f != sheet.id);
     let window_open = ctx.memory(|m| {
         m.areas()
             .visible_layer_ids()
             .iter()
             .any(|l| l.order == egui::Order::Foreground)
     });
-    pressed_on_sheet && !focus_elsewhere && !window_open
+    pressed_on_sheet && !window_open
 }
 
 /// Wählt den Nummernkreis `b` (Ansicht und Maß sind dann nicht mehr gewählt).
@@ -2273,6 +2273,7 @@ fn canvas_ui(
             tool_click(state, id, found, at, k0, response.double_clicked());
         } else if let Some(b) = hit_balloon(pos) {
             select_balloon(state, b);
+            state.balloon_tool.set_message(None);
         } else if balloon_on {
             let at = screen_to_sheet(canvas, sheet_mm, zoom0, pan0, pos);
             let polys = polylines_cached(&ctx, &sheet, lines_gen, k0);
