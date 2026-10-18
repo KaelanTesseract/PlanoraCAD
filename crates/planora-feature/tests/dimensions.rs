@@ -94,6 +94,7 @@ fn snapshot_with(drawings: Vec<Drawing>, next_drawing: u64) -> Snapshot {
         drawings,
         next_drawing,
         project_info: None,
+        parts_overrides: Default::default(),
     }
 }
 

@@ -16,6 +16,7 @@
 //! und `offset` (Abstand vom Kreis); Ø-Linie durch die Mitte → `angle` dreht mit; Bogen eines
 //! Winkelmaßes → Radius (`|offset|`) wächst mit der Bewegung vom Scheitel weg.
 
+use crate::balloon_tool;
 use crate::browser::error_color;
 use crate::dimension_state::{SuggestOutcome, marks_in, notes_in, resolve_in, suggest_for};
 use crate::dimension_tool::{
@@ -40,18 +41,22 @@ use planora_drawing::annotate::{
     ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, CENTER_W, DEFAULT_OFFSET, DIM_LINE_W, Mark, MarkKind,
     ResolvedDims, TextAnchor, clamp_leader_deg, leader_angle,
 };
+use planora_drawing::balloon::{BalloonMarks, add_balloon_marks};
 use planora_drawing::dimension::{ArcSpan, DimId, DimSpec};
 use planora_drawing::out2d::Out2d;
+use planora_drawing::parts::{PARTS_ON_SHEET, page_rows};
 use planora_drawing::sheet::{DimMarks, SheetModel, build_sheet_with, view_transform};
-use planora_drawing::sheet_frame::{REV_VISIBLE, SheetLayout, sheet_layout};
+use planora_drawing::sheet_frame::{
+    PartsSpace, REV_VISIBLE, SheetLayout, parts_rows_per_page, sheet_layout_with, sheet_scale,
+};
 use planora_drawing::sheet_info::{
     ProjectInfo, SheetContext, TitleTexts, main_scale, resolve_texts,
 };
 use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{
-    Anchor, Drawing, DrawingId, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewLines,
-    ViewSpec, Visibility, align_dir, view_extent,
+    Anchor, BalloonId, Drawing, DrawingId, DrawingKind, PartsCells, Placement, Projection, Scale,
+    Sheet, ViewId, ViewKind, ViewLines, ViewSpec, Visibility, align_dir, view_extent,
 };
 use planora_math::DVec2;
 use std::collections::BTreeMap;
@@ -96,6 +101,8 @@ const MAX_TEXT_PX: f64 = 400.0;
 /// Kleinster Betrag des Abstands einer Maßlinie beim Ziehen (Blatt-mm, auf der Seite, auf der
 /// das Ziehen begann).
 pub const MIN_DRAG_OFFSET_MM: f64 = 1.0;
+/// Name (Tooltip) des Symbolknopfs „Blatt einpassen“.
+pub const FIT_SHEET: &str = "Blatt einpassen";
 /// Kleinster Radius eines Winkelmaßes beim Ziehen (Blatt-mm).
 const MIN_ANGLE_RADIUS_MM: f64 = 1.0;
 /// Hinweis, wenn es zu den Körpern nichts zu sagen gibt.
@@ -114,6 +121,8 @@ pub const LOST_TIP: &str = "Das Maß hat seinen Bezug verloren.";
 pub const PARENT_MISSING: &str = "Die Ausgangsansicht lässt sich nicht zeichnen.";
 /// Meldung ohne geöffnete Zeichnung.
 const NO_DRAWING: &str = "Es ist keine Zeichnung geöffnet.";
+/// Hinweis am gesperrten „Ansicht hinzufügen“ eines Stücklistenblatts.
+pub const NO_VIEWS_ON_PARTS_SHEET: &str = "Auf dem Stücklistenblatt gibt es keine Ansichten.";
 
 /// Was an der Stelle einer Ansicht zu sehen ist.
 #[derive(Clone, Debug, PartialEq)]
@@ -162,6 +171,8 @@ pub struct DrawingLayout {
     /// Gezeichnete Markierungen der Vorschau des Werkzeugs „Maß“.
     pub preview_drawn: usize,
     pub views: Vec<DrawnView>,
+    /// Die Nummernkreise, wie sie gezeichnet sind (beim Ziehen an der neuen Stelle).
+    pub balloons: Vec<BalloonMarks>,
 }
 
 fn layout_id() -> egui::Id {
@@ -534,6 +545,11 @@ struct SheetCache {
     /// Angaben, die in die Texte des Schriftfelds eingehen.
     project: Option<ProjectInfo>,
     context: Option<SheetContext>,
+    /// Zeilen der Stückliste auf diesem Blatt (sie hängen an Körpern, Namen und eigenen Texten,
+    /// nicht an der Zeichnung).
+    parts: Vec<PartsCells>,
+    /// Nummernkreise mit Nummern (die Nummern folgen der Stückliste, nicht der Zeichnung).
+    balloons: Arc<Vec<BalloonMarks>>,
     /// Stand der Linien: bleibt gleich, solange sich nur Maße oder Mittellinien ändern (die
     /// Linienzüge werden dann nicht neu zerlegt).
     lines_gen: u64,
@@ -577,27 +593,122 @@ pub fn context_or_single(state: &AppState, id: DrawingId) -> SheetContext {
     })
 }
 
-/// Die Texte des Schriftfelds der Zeichnung (Maßstab: der der ersten Ansicht).
+/// Platz der Stückliste auf dem Blatt der Zeichnung: auf einem Stücklistenblatt die ganze
+/// Tabelle ([`PartsSpace::ListPage`]); auf einer Zeichnung mit Ansichten und eingeschaltetem
+/// Schalter „Stückliste auf diesem Blatt“ die Tabelle über dem Schriftfeld mit den tatsächlichen
+/// Zeilen (`placement = false`, so wird gezeichnet) bzw. immer mit [`PARTS_ON_SHEET`] Zeilen
+/// (`placement = true`, für Anordnung und Maßstabsvorschlag: eine später längere Liste überdeckt
+/// keine automatisch gelegte Ansicht); sonst keine.
+///
+/// Der Schalter eines Stücklistenblatts zählt nicht (eine Datei kann ihn gesetzt haben; das
+/// Blatt ist ohnehin ganz Stückliste).
+pub fn parts_space(state: &AppState, drawing: &Drawing, placement: bool) -> PartsSpace {
+    // Die Zeilen nur zählen, wenn sie gebraucht werden.
+    match parts_space_for(drawing, 0, true) {
+        PartsSpace::OnSheet { .. } if !placement => {
+            parts_space_for(drawing, state.document.parts_rows().len(), false)
+        }
+        space => space,
+    }
+}
+
+/// Wie [`parts_space`] mit der schon bekannten Zahl der Zeilen `rows`.
+pub fn parts_space_for(drawing: &Drawing, rows: usize, placement: bool) -> PartsSpace {
+    match drawing.kind {
+        DrawingKind::PartsList { .. } => PartsSpace::ListPage,
+        DrawingKind::Views if drawing.info.as_ref().is_some_and(|i| i.parts_list) => {
+            let rows = if placement { PARTS_ON_SHEET } else { rows };
+            PartsSpace::OnSheet { rows }
+        }
+        DrawingKind::Views => PartsSpace::None,
+    }
+}
+
+/// Die Zeilen der Stückliste (aus allen Zeilen `cells`), die auf dem Blatt der Zeichnung stehen:
+/// auf dem Zeichnungsblatt die ersten [`PARTS_ON_SHEET`], auf einem Stücklistenblatt die seiner
+/// Seite, sonst keine.
+pub(crate) fn parts_on(drawing: &Drawing, cells: &[PartsCells]) -> Vec<PartsCells> {
+    match parts_space_for(drawing, cells.len(), false) {
+        PartsSpace::None => Vec::new(),
+        PartsSpace::OnSheet { .. } => cells[..cells.len().min(PARTS_ON_SHEET)].to_vec(),
+        PartsSpace::ListPage => {
+            let page = match drawing.kind {
+                DrawingKind::PartsList { page } => page,
+                DrawingKind::Views => 1,
+            };
+            page_rows(cells, page, parts_rows_per_page(drawing.sheet)).to_vec()
+        }
+    }
+}
+
+/// Die Texte des Schriftfelds der Zeichnung (Maßstab: der der ersten Ansicht) mit den Zeilen der
+/// Stückliste dieses Blatts.
 pub fn sheet_texts(state: &AppState, drawing: &Drawing) -> TitleTexts {
-    resolve_texts(
+    let cells = if parts_space_for(drawing, 0, true) == PartsSpace::None {
+        Vec::new()
+    } else {
+        state.document.parts_cells()
+    };
+    sheet_texts_with(state, drawing, &cells)
+}
+
+/// Wie [`sheet_texts`] mit allen Zeilen `cells` der Stückliste.
+fn sheet_texts_with(state: &AppState, drawing: &Drawing, cells: &[PartsCells]) -> TitleTexts {
+    let mut texts = resolve_texts(
         drawing,
         state.document.project_info(),
         &context_or_single(state, drawing.id),
         main_scale(drawing),
-    )
+    );
+    texts.parts = parts_on(drawing, cells);
+    texts
+}
+
+/// Zwischenspeicher der Zeilen der Stückliste: sie hängen nur am Dokument und ändern sich nur
+/// mit seinem Änderungszähler.
+#[derive(Clone)]
+struct CellsCache {
+    instance: u64,
+    edit: u64,
+    cells: Arc<Vec<PartsCells>>,
+}
+
+/// Alle Zeilen der Stückliste des Dokuments, je Stand des Dokuments einmal gerechnet.
+pub(crate) fn cached_cells(ctx: &egui::Context, state: &AppState) -> Arc<Vec<PartsCells>> {
+    let id = egui::Id::new("planora-parts-cells");
+    let edit = state.document.edit_count();
+    if let Some(c) = ctx
+        .data(|d| d.get_temp::<CellsCache>(id))
+        .filter(|c| c.instance == state.instance && c.edit == edit)
+    {
+        return c.cells;
+    }
+    let cells = Arc::new(state.document.parts_cells());
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            id,
+            CellsCache {
+                instance: state.instance,
+                edit,
+                cells: Arc::clone(&cells),
+            },
+        )
+    });
+    cells
 }
 
 /// Die Blattgeometrie zu den Texten: die Zeilenzahlen von Änderungstabelle und Hinweisfeld
-/// folgen ihnen (der Maßstab beeinflusst sie nicht).
-pub fn layout_from_texts(drawing: &Drawing, texts: &TitleTexts) -> SheetLayout {
-    sheet_layout(
+/// folgen ihnen (der Maßstab beeinflusst sie nicht), der Platz der Stückliste `parts`.
+pub fn layout_from_texts(drawing: &Drawing, texts: &TitleTexts, parts: PartsSpace) -> SheetLayout {
+    sheet_layout_with(
         drawing.sheet,
         texts.visible_revisions().len(),
         texts.notes.len(),
+        parts,
     )
 }
 
-/// Die Blattgeometrie der Zeichnung.
+/// Die Blattgeometrie der Zeichnung (so wird sie gezeichnet).
 pub fn layout_of(state: &AppState, drawing: &Drawing) -> SheetLayout {
     let texts = resolve_texts(
         drawing,
@@ -605,13 +716,14 @@ pub fn layout_of(state: &AppState, drawing: &Drawing) -> SheetLayout {
         &context_or_single(state, drawing.id),
         None,
     );
-    layout_from_texts(drawing, &texts)
+    layout_from_texts(drawing, &texts, parts_space(state, drawing, false))
 }
 
 /// Blattgeometrie für die automatische Anordnung von Ansichten und den Maßstabsvorschlag: wie
-/// [`layout_of`], aber die Änderungstabelle immer mit Kopf und allen [`REV_VISIBLE`] Zeilen, so
-/// dass eine später gefüllte Tabelle keine automatisch gelegte Ansicht überdeckt. Gezeichnet wird
-/// die Tabelle mit den tatsächlichen Zeilen ([`layout_of`]).
+/// [`layout_of`], aber die Änderungstabelle immer mit Kopf und allen [`REV_VISIBLE`] Zeilen und
+/// eine Stückliste auf dem Blatt immer mit [`PARTS_ON_SHEET`] Zeilen, so dass später gefüllte
+/// Tabellen keine automatisch gelegte Ansicht überdecken. Gezeichnet werden die Tabellen mit den
+/// tatsächlichen Zeilen ([`layout_of`]).
 pub fn placement_layout(state: &AppState, drawing: &Drawing) -> SheetLayout {
     let texts = resolve_texts(
         drawing,
@@ -619,12 +731,18 @@ pub fn placement_layout(state: &AppState, drawing: &Drawing) -> SheetLayout {
         &context_or_single(state, drawing.id),
         None,
     );
-    sheet_layout(drawing.sheet, REV_VISIBLE, texts.notes.len())
+    sheet_layout_with(
+        drawing.sheet,
+        REV_VISIBLE,
+        texts.notes.len(),
+        parts_space(state, drawing, true),
+    )
 }
 
 /// Die Blattgeometrie für die Anordnung in einer neuen Zeichnung auf `sheet`: mit den
-/// Hinweiszeilen der Projektangaben (sind noch keine gesetzt, die der Vorgabe) und Platz für
-/// die volle Änderungstabelle (wie [`placement_layout`]).
+/// Hinweiszeilen der Projektangaben (sind noch keine gesetzt, die der Vorgabe), Platz für die
+/// volle Änderungstabelle und – wenn die neue Zeichnung die Stückliste bekommt (mehr als ein
+/// Körper) – für die volle Stückliste (wie [`placement_layout`]).
 pub fn new_sheet_layout(state: &AppState, sheet: Sheet, projection: Projection) -> SheetLayout {
     let blank = Drawing::new(DrawingId(0), String::new(), sheet, projection);
     let ctx = SheetContext {
@@ -633,7 +751,15 @@ pub fn new_sheet_layout(state: &AppState, sheet: Sheet, projection: Projection) 
         count: 1,
     };
     let texts = resolve_texts(&blank, state.document.project_info(), &ctx, None);
-    sheet_layout(sheet, REV_VISIBLE, texts.notes.len())
+    // Dieselbe Vorgabe wie beim Anlegen (`Document::add_drawing_stamped`).
+    let parts = if state.document.visible_bodies().len() > 1 {
+        PartsSpace::OnSheet {
+            rows: PARTS_ON_SHEET,
+        }
+    } else {
+        PartsSpace::None
+    };
+    sheet_layout_with(sheet, REV_VISIBLE, texts.notes.len(), parts)
 }
 
 /// Zuletzt im Zeichnungsbereich gezeichnetes Blattmodell (mit Mittellinien und Maßen).
@@ -655,20 +781,28 @@ pub fn last_sheet_for(
         .map(|c| c.sheet)
 }
 
-/// Blattmodell der Zeichnung mit Mittellinien und den Maßen `dims` und der Stand seiner Linien;
-/// aus dem Zwischenspeicher, solange sich Zeichnung, Ergebnisse und Maße nicht geändert haben.
+/// Blattmodell der Zeichnung mit Mittellinien, den Maßen `dims` und den Nummernkreisen
+/// `balloons` und der Stand seiner Linien; aus dem Zwischenspeicher, solange sich Zeichnung,
+/// Ergebnisse, Maße und Kreise nicht geändert haben.
 fn sheet_model(
     ctx: &egui::Context,
     state: &AppState,
     drawing: &Drawing,
     model: u64,
     dims: &Arc<ResolvedDims>,
+    balloons: &Arc<Vec<BalloonMarks>>,
 ) -> (Arc<SheetModel>, u64) {
     let owned = state.drawing_ui.results_for(drawing, model);
     let ptrs: Vec<usize> = owned.values().map(|a| Arc::as_ptr(a) as usize).collect();
     let cached = ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()));
     let project = state.document.project_info().cloned();
     let context = sheet_context(state, drawing.id);
+    let cells = if parts_space_for(drawing, 0, true) == PartsSpace::None {
+        Arc::new(Vec::new())
+    } else {
+        cached_cells(ctx, state)
+    };
+    let texts = sheet_texts_with(state, drawing, &cells);
     let same_base = cached
         .as_ref()
         .filter(|c| c.instance == state.instance && c.model == model && c.ptrs == ptrs);
@@ -677,6 +811,8 @@ fn sheet_model(
         && c.drawing == *drawing
         && c.project == project
         && c.context == context
+        && c.parts == texts.parts
+        && (Arc::ptr_eq(&c.balloons, balloons) || c.balloons == *balloons)
     {
         return (Arc::clone(&c.sheet), c.lines_gen);
     }
@@ -686,12 +822,17 @@ fn sheet_model(
     };
     let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
     let mut built = build_sheet_with(drawing, &refs, dims);
-    let texts = sheet_texts(state, drawing);
+    add_balloon_marks(&mut built, balloons);
     built.frame = Some(sheet_frame(
-        &layout_from_texts(drawing, &texts),
+        &layout_from_texts(
+            drawing,
+            &texts,
+            parts_space_for(drawing, cells.len(), false),
+        ),
         &texts,
         drawing.projection,
     ));
+    let parts = texts.parts;
     let sheet = Arc::new(built);
     ctx.data_mut(|d| {
         d.insert_temp(
@@ -705,11 +846,64 @@ fn sheet_model(
                 sheet: Arc::clone(&sheet),
                 project,
                 context,
+                parts,
+                balloons: Arc::clone(balloons),
                 lines_gen,
             },
         )
     });
     (sheet, lines_gen)
+}
+
+/// Zwischengespeicherte Nummernkreise der offenen Zeichnung: gültig, solange Dokument
+/// (Änderungszähler), Modellstand und Ansichtsergebnisse gleich sind.
+#[derive(Clone)]
+struct BalloonsCache {
+    instance: u64,
+    edit: u64,
+    model: u64,
+    drawing: DrawingId,
+    ptrs: Vec<usize>,
+    list: Arc<Vec<BalloonMarks>>,
+}
+
+/// Die Nummernkreise der Zeichnung auf dem Blatt (mit Nummern), je Stand einmal gerechnet.
+fn balloons_cached(
+    ctx: &egui::Context,
+    state: &AppState,
+    drawing: &Drawing,
+    model: u64,
+) -> Arc<Vec<BalloonMarks>> {
+    let id = egui::Id::new("planora-drawing-balloons");
+    let owned = state.drawing_ui.results_for(drawing, model);
+    let ptrs: Vec<usize> = owned.values().map(|a| Arc::as_ptr(a) as usize).collect();
+    let edit = state.document.edit_count();
+    if let Some(c) = ctx.data(|d| d.get_temp::<BalloonsCache>(id)).filter(|c| {
+        c.instance == state.instance
+            && c.edit == edit
+            && c.model == model
+            && c.drawing == drawing.id
+            && c.ptrs == ptrs
+    }) {
+        return c.list;
+    }
+    let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
+    let numbers = balloon_tool::numbers_cached(ctx, state, drawing.id);
+    let list = Arc::new(balloon_tool::balloon_list(drawing, &refs, &numbers));
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            id,
+            BalloonsCache {
+                instance: state.instance,
+                edit,
+                model,
+                drawing: drawing.id,
+                ptrs,
+                list: Arc::clone(&list),
+            },
+        )
+    });
+    list
 }
 
 /// Gezogener Teil eines Maßes mit den Werten zu Beginn des Ziehens (Blatt-mm).
@@ -754,6 +948,14 @@ enum Drag {
         id: DimId,
         part: DimPart,
     },
+    /// Nummernkreis: nur der Versatz ändert sich (der Anker `at` bleibt am Teil); ins Dokument
+    /// erst beim Loslassen (eine Änderung je Ziehen).
+    Balloon {
+        origin: Pos2,
+        id: BalloonId,
+        at: DVec2,
+        start: (f64, f64),
+    },
 }
 
 /// Aktion aus der Werkzeugleiste.
@@ -773,6 +975,8 @@ enum Action {
     ToolToggle,
     /// Untermodus des Werkzeugs wählen (schaltet es ein).
     Tool(ToolMode),
+    /// Werkzeug „Position“ ein- oder ausschalten.
+    BalloonTool,
 }
 
 /// Kann das Werkzeug „Maß“ benutzt werden? Sonst die Erklärung (alte Version, keine Ansicht,
@@ -829,9 +1033,14 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     let Some(drawing) = state.document.drawing(id).cloned() else {
         return;
     };
-    // Gesperrtes Werkzeug ist aus (alte Version, Zeichnung nur mit Isometrie).
+    // Gesperrtes Werkzeug ist aus (alte Version, Zeichnung nur mit Isometrie, Skizzen-Modus).
     if tool_blocked(&drawing, editable).is_some() && state.dimension_tool.is_active() {
         state.dimension_tool.set_mode(ToolMode::Off);
+    }
+    if (balloon_tool::blocked(&drawing, editable).is_some() || state.sketch_session.is_some())
+        && state.balloon_tool.is_active()
+    {
+        state.balloon_tool.set_active(false);
     }
     let ctx = ui.ctx().clone();
     let paint = ui.max_rect();
@@ -871,8 +1080,24 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
         }),
         Some(Action::Suggest) => suggest_dimensions(state, id),
         Some(Action::Delete) => delete_selected(state),
-        Some(Action::ToolToggle) => state.dimension_tool.toggle(),
-        Some(Action::Tool(m)) => state.dimension_tool.set_mode(m),
+        // „Maß“ und „Position“ schließen sich aus.
+        Some(Action::ToolToggle) => {
+            state.dimension_tool.toggle();
+            if state.dimension_tool.is_active() {
+                state.balloon_tool.set_active(false);
+            }
+        }
+        Some(Action::Tool(m)) => {
+            state.dimension_tool.set_mode(m);
+            state.balloon_tool.set_active(false);
+        }
+        Some(Action::BalloonTool) => {
+            let on = !state.balloon_tool.is_active();
+            state.balloon_tool.set_active(on);
+            if on {
+                state.dimension_tool.set_mode(ToolMode::Off);
+            }
+        }
         None => {}
     }
     let response = ui.allocate_rect(paint, Sense::click_and_drag());
@@ -885,7 +1110,16 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
 
     let note = state.drawing_ui.note(&state.bodies);
     let dims = resolve_in(state, id);
-    let notes = notes_in(state, id, &dims);
+    let mut notes = notes_in(state, id, &dims);
+    // Verlorene Positionsnummern zuerst (rot), dann die Hinweise zu den Maßen.
+    let lost_balloons = balloon_tool::lost_count(&balloon_tool::numbers_cached(&ctx, state, id));
+    let mut red = usize::from(notes.lost > 0);
+    if lost_balloons > 0 {
+        notes
+            .texts
+            .insert(0, balloon_tool::lost_note(lost_balloons));
+        red += 1;
+    }
     // Die Meldung des Vorschlags gilt nur, bis sich das Dokument oder die Auswahl ändert.
     if state.drawing_ui.dim_message_key != Some(message_key(state)) {
         state.drawing_ui.dim_message = None;
@@ -893,7 +1127,11 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     }
     // Eine Ablehnung des Werkzeugs „Maß“ geht der Meldung vor (rot); bei eingeschaltetem
     // Werkzeug steht an Stelle des Hinweises der nächste Schritt.
-    let rejected = state.dimension_tool.message().map(str::to_owned);
+    let rejected = state
+        .dimension_tool
+        .message()
+        .or(state.balloon_tool.message())
+        .map(str::to_owned);
     let message = rejected
         .clone()
         .or_else(|| state.dimension_tool.notice().map(str::to_owned))
@@ -901,11 +1139,17 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     let hint_text = state
         .dimension_tool
         .hint()
+        .or_else(|| {
+            state
+                .balloon_tool
+                .is_active()
+                .then(|| balloon_tool::HINT.to_string())
+        })
         .or(note)
         .unwrap_or_else(|| HINT.to_string());
     let lines = HintLines {
         notes: &notes.texts,
-        lost: notes.lost > 0,
+        red,
         message: message.map(|m| (m, rejected.is_some())),
         hint: hint_text,
     };
@@ -1027,7 +1271,14 @@ fn tool_field(
                         format!("Zeichnung: {}", shorten_for_display(&drawing.name)),
                     )));
                     ui.separator();
-                    ui.add_enabled(editable, |ui: &mut egui::Ui| {
+                    // Auf einem Stücklistenblatt gibt es keine Ansichten.
+                    let parts_sheet = matches!(drawing.kind, DrawingKind::PartsList { .. });
+                    let add_why = if parts_sheet {
+                        NO_VIEWS_ON_PARTS_SHEET
+                    } else {
+                        crate::drawing_browser::READ_ONLY_HINT
+                    };
+                    ui.add_enabled(editable && !parts_sheet, |ui: &mut egui::Ui| {
                         let saved = ui.style().clone();
                         theme::frameless(ui.style_mut());
                         let r = ui
@@ -1049,7 +1300,8 @@ fn tool_field(
                         ui.set_style(saved);
                         theme::focus_ring(ui, &r);
                         r
-                    });
+                    })
+                    .on_disabled_hover_text(add_why);
                     // Am Ende der ersten Zeile, damit die zweite nicht breiter wird.
                     if ui
                         .add_enabled(
@@ -1067,10 +1319,13 @@ fn tool_field(
                 // gewählten Ansicht stehen im Ansichtsfeld rechts; das Feld bleibt so immer gleich
                 // hoch).
                 tool_row(ui, |ui| {
-                    if ui
-                        .add(flat(icons::button(Icon::FitSheet, "Blatt einpassen")))
-                        .clicked()
-                    {
+                    // Symbolknopf (wie die Lupen), damit die Zeile mit dem Werkzeug „Position“
+                    // bei 1100 × 700 ins Feld passt; der Name steht im Tooltip.
+                    let fit = ui.add(flat(icon_only(Icon::FitSheet)));
+                    fit.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, FIT_SHEET)
+                    });
+                    if fit.on_hover_text(FIT_SHEET).clicked() {
                         action = Some(Action::Fit);
                     }
                     if ui
@@ -1128,7 +1383,11 @@ fn tool_field(
                         action = Some(Action::ToolToggle);
                     }
                     ui.add_enabled(free, |ui: &mut egui::Ui| {
+                        // Feste Breite für die längste Maßart: die Zeile ändert ihre Breite nicht
+                        // mit der Wahl.
+                        let width = mode_combo_width(ui);
                         egui::ComboBox::from_id_salt("planora-dimension-tool")
+                            .width(width)
                             .selected_text(tool.choice().label())
                             .show_ui(ui, |ui| {
                                 for m in ToolMode::CHOICES {
@@ -1141,6 +1400,26 @@ fn tool_field(
                             .response
                     })
                     .on_disabled_hover_text(why);
+                    // Werkzeug „Position“ direkt nach dem Maß-Werkzeug (eingeschaltet mit Akzent).
+                    let balloon_why = balloon_tool::blocked(drawing, editable);
+                    let button = if state.balloon_tool.is_active() {
+                        egui::Button::new((
+                            icons::text(Icon::PositionTool, icons::LABEL_ICON_SIZE, p.on_accent),
+                            egui::RichText::new(balloon_tool::TOOL).color(p.on_accent),
+                        ))
+                        .fill(p.accent)
+                        .selected(true)
+                    } else {
+                        icons::button(Icon::PositionTool, balloon_tool::TOOL)
+                    };
+                    if ui
+                        .add_enabled(balloon_why.is_none(), flat(button))
+                        .on_hover_text(balloon_tool::TOOL_TIP)
+                        .on_disabled_hover_text(balloon_why.unwrap_or(balloon_tool::TOOL_TIP))
+                        .clicked()
+                    {
+                        action = Some(Action::BalloonTool);
+                    }
                 });
                 ui.add_space(below);
             });
@@ -1158,6 +1437,24 @@ fn tool_field(
         },
     );
     action
+}
+
+/// Breite des Auswahlfelds der Maßarten: die längste Bezeichnung mit Pfeil und Rand (so bleibt
+/// das Feld bei jeder Wahl gleich breit).
+pub fn mode_combo_width(ui: &egui::Ui) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let widest = ui.fonts_mut(|f| {
+        ToolMode::CHOICES
+            .iter()
+            .map(|m| {
+                f.layout_no_wrap(m.label().to_string(), font.clone(), Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max)
+    });
+    let s = ui.spacing();
+    (widest + s.icon_spacing + s.icon_width + 2.0 * s.button_padding.x).ceil()
 }
 
 /// Ansichtsfeld rechts (Spaltenbreite 250): Name der gewählten Ansicht, Maßstab, Schalter für
@@ -1260,8 +1557,9 @@ fn view_field(
 struct HintLines<'a> {
     /// Hinweise zu den Maßen (verlorene, außerhalb des Blatts).
     notes: &'a [String],
-    /// Der erste Hinweis betrifft verlorene Maße (rot).
-    lost: bool,
+    /// So viele der ersten Hinweise betreffen Verlorenes (rot): verlorene Positionsnummern und
+    /// verlorene Maße.
+    red: usize,
     /// Meldung und ob sie eine Ablehnung ist (rot).
     message: Option<(String, bool)>,
     /// Hinweis zur Bedienung (oder des Werkzeugs „Maß“).
@@ -1326,7 +1624,7 @@ fn hint_field(ctx: &egui::Context, rect: Rect, dark: bool, lines: HintLines<'_>)
                 let mut budget = share * ui.available_width();
                 for (i, t) in lines.notes.iter().enumerate() {
                     let w = budget / (lines.notes.len() - i) as f32;
-                    let text = if i == 0 && lines.lost {
+                    let text = if i < lines.red {
                         egui::RichText::new(t.as_str()).color(error)
                     } else {
                         egui::RichText::new(t.as_str())
@@ -1534,6 +1832,60 @@ fn tool_finish(state: &mut AppState, id: DrawingId, at: DVec2) -> Result<(), Too
     }
 }
 
+/// Gilt eine Taste dem Blatt (`sheet` ist die Blattfläche)? Nicht, solange ein Fenster oder
+/// Menü offen ist (Ebene `Foreground`, im vorigen oder diesem Bild) oder der letzte Mausdruck
+/// nicht auf dem Blatt lag (etwa auf einer Browserzeile). Ein Bedienelement mit Tastaturfokus
+/// sperrt schon [`viewport::typing`] (außer den dafür freigegebenen Tab-Halten). Muss in jedem
+/// Bild aufgerufen werden (merkt sich den letzten Mausdruck).
+fn keys_for_sheet(ctx: &egui::Context, sheet: &egui::Response) -> bool {
+    let id = egui::Id::new("planora-drawing-keys-on-sheet");
+    if ctx.input(|i| i.pointer.any_pressed()) {
+        let on = sheet.hovered();
+        ctx.data_mut(|d| d.insert_temp(id, on));
+    }
+    let pressed_on_sheet = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(true);
+    let window_open = ctx.memory(|m| {
+        m.areas()
+            .visible_layer_ids()
+            .iter()
+            .any(|l| l.order == egui::Order::Foreground)
+    });
+    pressed_on_sheet && !window_open
+}
+
+/// Wählt den Nummernkreis `b` (Ansicht und Maß sind dann nicht mehr gewählt).
+fn select_balloon(state: &mut AppState, b: BalloonId) {
+    state.drawing_ui.selected_balloon = Some(b);
+    state.drawing_ui.selected_view = None;
+    state.drawing_ui.selected_dim = None;
+}
+
+/// Klick mit eingeschaltetem Werkzeug „Position“ an der Blattstelle `at`: auf einer Linie eines
+/// Teils (`found`) setzt er einen Kreis und wählt ihn, sonst steht der Grund in der Hinweiszeile.
+fn balloon_click(
+    state: &mut AppState,
+    id: DrawingId,
+    found: Option<(ViewId, StrokeOrigin)>,
+    at: DVec2,
+) {
+    let Some((view, origin)) = found else {
+        state
+            .balloon_tool
+            .set_message(Some(balloon_tool::MISSED.into()));
+        return;
+    };
+    let body = match origin {
+        StrokeOrigin::Edge { body, .. } | StrokeOrigin::Silhouette { body, .. } => body,
+    };
+    match balloon_tool::place(state, id, view, body, at) {
+        Ok(b) => {
+            state.balloon_tool.set_message(None);
+            select_balloon(state, b);
+        }
+        Err(m) => state.balloon_tool.set_message(Some(m)),
+    }
+}
+
 /// Stand, zu dem eine Meldung des Vorschlags gehört: Änderungszähler des Dokuments, gewählte
 /// Ansicht und gewähltes Maß.
 fn message_key(state: &AppState) -> (u64, Option<ViewId>, Option<DimId>) {
@@ -1563,6 +1915,9 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
         return Err(NO_DRAWING.into());
     };
     let mut d = state.document.drawing(id).ok_or(NO_DRAWING)?.clone();
+    if matches!(d.kind, DrawingKind::PartsList { .. }) {
+        return Err(NO_VIEWS_ON_PARTS_SHEET.into());
+    }
     let (lo, hi) = placement_layout(state, &d).free;
     let free: FreeArea = ((lo.x, lo.y), (hi.x, hi.y));
     let (free_w, free_h) = (hi.x - lo.x, hi.y - lo.y);
@@ -1729,7 +2084,8 @@ fn canvas_ui(
     // --- Eingaben (mit dem Stand vor diesem Bild) ---
     let k0 = f64::from(fit_px_per_mm(canvas, sheet_mm) * state.drawing_ui.zoom);
     let dims = resolve_in(state, id);
-    let (sheet, lines_gen) = sheet_model(&ctx, state, &drawing, model, &dims);
+    let balloons0 = balloons_cached(&ctx, state, &drawing, model);
+    let (sheet, lines_gen) = sheet_model(&ctx, state, &drawing, model, &dims, &balloons0);
     let dim_marks = marks_in(state, id, &dims);
     let placed = place_views(state, &drawing, &sheet, model);
     let (zoom0, pan0) = (state.drawing_ui.zoom, state.drawing_ui.pan);
@@ -1740,11 +2096,15 @@ fn canvas_ui(
         let polys = polylines_cached(&ctx, &sheet, lines_gen, k0);
         hit_test(&placed, &polys, &to_screen0, pos)
     };
-    // Maße liegen über den Linien und werden zuerst getroffen.
+    // Maße liegen über den Linien und werden zuerst getroffen; Nummernkreise noch davor.
     let hit_dim = |pos: Pos2| dim_hit(&ctx, &dim_marks, |_| true, &to_screen0, k0, pos);
+    let hit_balloon = |pos: Pos2| balloon_tool::balloon_hit(&balloons0, &to_screen0, pos);
     // Mit eingeschaltetem Werkzeug „Maß“ wählen Klicks Bezüge statt Ansichten und Maße, und
     // Ziehen verschiebt nichts (nur das Blatt).
     let tool_on = editable && state.dimension_tool.is_active();
+    // Mit eingeschaltetem Werkzeug „Position“ setzt ein Klick auf eine Linie einen Kreis; Kreise
+    // lassen sich weiter wählen und ziehen, Ansichten und Maße nicht.
+    let balloon_on = editable && state.balloon_tool.is_active();
 
     // Zoom um den Zeiger (Mausrad, Zwei-Finger-Geste).
     if response.hovered()
@@ -1771,10 +2131,26 @@ fn canvas_ui(
                     start: state.drawing_ui.pan,
                 })
             } else if response.dragged_by(PointerButton::Primary) && !tool_on {
-                if let Some((i, on_text)) = hit_dim(origin) {
+                if let Some(b) = hit_balloon(origin) {
+                    select_balloon(state, b);
+                    let at = balloons0.iter().find(|x| x.id == b).map(|x| x.centre);
+                    let start = drawing.balloon(b).map(|x| x.offset);
+                    match (editable, at, start) {
+                        (true, Some(c), Some(start)) => Some(Drag::Balloon {
+                            origin,
+                            id: b,
+                            at: c - DVec2::new(start.0, start.1),
+                            start,
+                        }),
+                        _ => None,
+                    }
+                } else if balloon_on {
+                    None
+                } else if let Some((i, on_text)) = hit_dim(origin) {
                     let dm = &dim_marks[i];
                     state.drawing_ui.selected_dim = Some(dm.id);
                     state.drawing_ui.selected_view = None;
+                    state.drawing_ui.selected_balloon = None;
                     let from = screen_to_sheet(canvas, sheet_mm, zoom0, pan0, origin);
                     editable
                         .then(|| dim_part(state, &drawing, model, &dims, dm, on_text, from))
@@ -1788,6 +2164,7 @@ fn canvas_ui(
                     hit(origin).and_then(|view| {
                         state.drawing_ui.selected_view = Some(view);
                         state.drawing_ui.selected_dim = None;
+                        state.drawing_ui.selected_balloon = None;
                         let start = drawing.view(view)?.placement;
                         editable.then_some(Drag::View {
                             origin,
@@ -1803,6 +2180,8 @@ fn canvas_ui(
         }
     }
     let drag: Option<Drag> = ctx.data(|d| d.get_temp(drag_id())).flatten();
+    // Versatz des gezogenen Kreises in diesem Bild (das Dokument ändert sich erst beim Loslassen).
+    let mut live: Option<(BalloonId, (f64, f64))> = None;
     if let Some(drag) = drag
         && (response.dragged() || response.drag_stopped())
         && let Some(pos) = response
@@ -1853,6 +2232,32 @@ fn canvas_ui(
                     }
                 }
             }
+            Drag::Balloon {
+                origin,
+                id: b,
+                at,
+                start,
+            } => {
+                let delta = pos - origin;
+                let moved = (
+                    start.0 + f64::from(delta.x) / k0,
+                    start.1 - f64::from(delta.y) / k0,
+                );
+                let offset = balloon_tool::clamp_offset(at, moved, sheet_mm);
+                if !response.drag_stopped() {
+                    live = Some((b, offset));
+                } else if offset != start {
+                    // Ein Schritt je Ziehen.
+                    let r = state.document.update_drawing(id, |d| {
+                        if let Some(x) = d.balloons.iter_mut().find(|x| x.id == b) {
+                            x.offset = offset;
+                        }
+                    });
+                    if let Err(e) = r {
+                        state.message = Some(e.to_string());
+                    }
+                }
+            }
         }
     }
     if response.drag_stopped() || !response.is_pointer_button_down_on() && !response.dragged() {
@@ -1866,10 +2271,19 @@ fn canvas_ui(
             let polys = polylines_cached(&ctx, &sheet, lines_gen, k0);
             let found = tool_hit(&sheet, &polys, &to_screen0, pos);
             tool_click(state, id, found, at, k0, response.double_clicked());
+        } else if let Some(b) = hit_balloon(pos) {
+            select_balloon(state, b);
+            state.balloon_tool.set_message(None);
+        } else if balloon_on {
+            let at = screen_to_sheet(canvas, sheet_mm, zoom0, pan0, pos);
+            let polys = polylines_cached(&ctx, &sheet, lines_gen, k0);
+            let found = tool_hit(&sheet, &polys, &to_screen0, pos);
+            balloon_click(state, id, found, at);
         } else if let Some((i, _)) = hit_dim(pos) {
             let dim = dim_marks[i].id;
             state.drawing_ui.selected_dim = Some(dim);
             state.drawing_ui.selected_view = None;
+            state.drawing_ui.selected_balloon = None;
             // Doppelklick auf ein Maß öffnet „Maß bearbeiten“ (in einer alten Version nur zum Ansehen).
             if response.double_clicked() {
                 crate::dimension_dialog::open(state, id, dim, !editable);
@@ -1877,23 +2291,49 @@ fn canvas_ui(
         } else {
             state.drawing_ui.selected_view = hit(pos);
             state.drawing_ui.selected_dim = None;
+            state.drawing_ui.selected_balloon = None;
         }
     }
-    if !viewport::typing(&ctx) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // Tasten nicht, solange ein Textfeld die Tastatur hat.
+    let typing = viewport::typing(&ctx);
+    if !typing && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         if tool_on {
             tool_escape(state, id);
+        } else if balloon_on {
+            state.balloon_tool.set_active(false);
         } else {
             state.drawing_ui.selected_view = None;
             state.drawing_ui.selected_dim = None;
+            state.drawing_ui.selected_balloon = None;
         }
     }
-    // Tooltip mit dem Grund über einem Maß, das seinen Bezug verloren hat.
+    // Entf löscht den gewählten Nummernkreis – nur, wenn die Taste dem Blatt gilt.
+    let sheet_keys = keys_for_sheet(&ctx, response);
+    if editable
+        && !typing
+        && sheet_keys
+        && state.drawing_ui.selected_balloon.is_some()
+        && ui.input(|i| i.key_pressed(egui::Key::Delete))
+    {
+        balloon_tool::delete_selected(state);
+    }
+    // Tooltip mit dem Grund über einem Kreis, dessen Teil fehlt, oder einem Maß, das seinen
+    // Bezug verloren hat.
     if response.hovered()
         && !response.dragged()
         && let Some(p) = response.hover_pos()
     {
+        let lost_balloons: Vec<BalloonMarks> = balloons0
+            .iter()
+            .filter(|b| b.marks.iter().any(|m| mark_kind(m) == MarkKind::Lost))
+            .cloned()
+            .collect();
         let lost = |dm: &DimMarks| dm.marks.iter().any(|m| mark_kind(m) == MarkKind::Lost);
-        if let Some((i, _)) = dim_hit(&ctx, &dim_marks, lost, &to_screen0, k0, p) {
+        if balloon_tool::balloon_hit(&lost_balloons, &to_screen0, p).is_some() {
+            response
+                .clone()
+                .on_hover_text_at_pointer(balloon_tool::LOST_TIP);
+        } else if let Some((i, _)) = dim_hit(&ctx, &dim_marks, lost, &to_screen0, k0, p) {
             let reason = dims
                 .by_view
                 .values()
@@ -1914,7 +2354,15 @@ fn canvas_ui(
     let (zoom, pan) = (state.drawing_ui.zoom, state.drawing_ui.pan);
     let k = f64::from(fit_px_per_mm(canvas, sheet_mm) * zoom);
     let dims = resolve_in(state, id);
-    let (sheet, lines_gen) = sheet_model(&ctx, state, &drawing, model, &dims);
+    let balloons = balloons_cached(&ctx, state, &drawing, model);
+    let live_balloons = match live {
+        Some(m) => {
+            let numbers = balloon_tool::numbers_cached(&ctx, state, id);
+            balloon_tool::with_moved(balloons.to_vec(), &drawing, &numbers, m)
+        }
+        None => balloons.to_vec(),
+    };
+    let (sheet, lines_gen) = sheet_model(&ctx, state, &drawing, model, &dims, &balloons);
     let dim_marks = marks_in(state, id, &dims);
     let placed = place_views(state, &drawing, &sheet, model);
     let polys = polylines_cached(&ctx, &sheet, lines_gen, k);
@@ -1960,29 +2408,44 @@ fn canvas_ui(
         }
     }
 
-    // Markierungen: Mittellinien und Maße schwarz, verlorene Maße rot, das gewählte Maß in der
-    // Akzentfarbe (darüber; seine Markierungen fallen in der normalen Farbe weg).
+    // Markierungen: Mittellinien, Maße und Nummernkreise schwarz, verlorene rot, das gewählte
+    // Maß bzw. der gewählte (oder gezogene) Kreis in der Akzentfarbe (darüber; ihre Markierungen
+    // fallen in der normalen Farbe weg).
     let selected: &[Mark] = state
         .drawing_ui
         .selected_dim
         .and_then(|s| dim_marks.iter().find(|dm| dm.id == s))
         .map_or(&[], |dm| dm.marks.as_slice());
+    let accent_balloon = live.map(|(b, _)| b).or(state.drawing_ui.selected_balloon);
+    let skip: Vec<&Mark> = balloons
+        .iter()
+        .filter(|b| Some(b.id) == accent_balloon)
+        .flat_map(|b| b.marks.iter())
+        .collect();
     let mut marks_drawn = 0;
+    let f_sheet = sheet_scale(sheet.sheet);
     for v in &sheet.views {
         for m in &v.marks {
-            if selected.contains(m) {
+            if selected.contains(m) || skip.contains(&m) {
                 continue;
             }
             let color = match mark_kind(m) {
                 MarkKind::Lost => theme::SHEET_LOST,
-                MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Sheet(_) => theme::SHEET_DIM,
+                MarkKind::Dimension
+                | MarkKind::CenterLine
+                | MarkKind::Sheet(_)
+                | MarkKind::Position(_) => theme::SHEET_DIM,
             };
-            paint_mark(&painter, m, color, &to_screen, k, 1.0);
+            paint_mark(&painter, m, color, &to_screen, k, f_sheet);
             marks_drawn += 1;
         }
     }
-    for m in selected {
-        paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, 1.0);
+    let accent_marks = live_balloons
+        .iter()
+        .filter(|b| Some(b.id) == accent_balloon)
+        .flat_map(|b| b.marks.iter());
+    for m in selected.iter().chain(accent_marks) {
+        paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, f_sheet);
         marks_drawn += 1;
     }
     // Vorschau des Werkzeugs „Maß“ am Zeiger (dieselben Markierungen wie das gesetzte Maß).
@@ -2111,6 +2574,7 @@ fn canvas_ui(
         marks_drawn,
         preview_drawn,
         views: drawn,
+        balloons: live_balloons,
     };
     Some((layout, pending))
 }
@@ -2324,6 +2788,7 @@ fn line_width_mm(kind: MarkKind, sheet_scale: f64) -> f64 {
     match kind {
         MarkKind::CenterLine => CENTER_W,
         MarkKind::Sheet(pen) => pen.width_at(sheet_scale),
+        MarkKind::Position(pen) => pen.width_at(sheet_scale),
         _ => DIM_LINE_W,
     }
 }

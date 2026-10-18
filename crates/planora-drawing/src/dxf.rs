@@ -72,7 +72,13 @@
 //!
 //! * Ebenen (je Farbe, Linienart, Linienstärke, Verweis 390 auf den Plotstil-Platzhalter wie
 //!   die alten Ebenen): `MASSE` (Maße; 7, `CONTINUOUS`, 25), `MITTEL` (Mittellinien; 7,
-//!   `CENTER`, 25), `MASSE_FEHLT` (Maße mit verlorenem Bezug; 1 = rot, `CONTINUOUS`, 25).
+//!   `CENTER`, 25), `MASSE_FEHLT` (Maße und Nummernkreise mit verlorenem Bezug; 1 = rot,
+//!   `CONTINUOUS`, 25), `POSITIONEN` (Kreis und Zahl der Nummernkreise; 7, `CONTINUOUS`, auf A3
+//!   35) und `POSITIONEN_LINIE` (Hinweislinie und Punkt; 7, `CONTINUOUS`, auf A3 25). Die
+//!   Stärken der beiden Positionsebenen sind wie beim Blattrahmen die mit dem Faktor des Blatts
+//!   skalierten (nie unter 0,18 mm), gerundet nach [`dxf_lineweight`] (A4: 25 und 18). Die
+//!   Zahl eines Nummernkreises passt [`balloon_text_dxf`] mit dem Breitenzuschlag
+//!   [`DXF_TEXT_WIDTH_FACTOR`](crate::sheet_marks::DXF_TEXT_WIDTH_FACTOR) in den Kreis ein.
 //! * Linienart `CENTER` (nur mit `MITTEL`): Strich 12, Lücke 3, Strich 2, Lücke 3 mm
 //!   (`72 65`, `73 4`, `40 20`, je Element `49` Länge und `74 0`).
 //! * `Mark::Line` → `LINE`. `Mark::Arc` → `ARC` wie die Bögen der Linien (Grad, normalisiert,
@@ -100,7 +106,9 @@
 //! 25: übrige Linien und alle Texte). Auf anderen Formaten ist es die mit `SheetFrame.scale`
 //! skalierte Stärke (nie unter 0,18 mm), gerundet auf die nächste Stärke, die DXF kennt
 //! ([`dxf_lineweight`]; A4: 50/35/18). Die Ebenen werden nur angelegt, wenn es einen Rahmen
-//! gibt; ohne Rahmen enthält die Datei weder diese Ebenen noch eine `LWPOLYLINE`. Zu lange Texte
+//! gibt, und jede nur, wenn eine Markierung der Strichstärke vorkommt (ein ganzer Rahmen
+//! nutzt alle drei, eine Stückliste allein nur `BLATT`); ohne Rahmen enthält die Datei weder diese
+//! Ebenen noch eine `LWPOLYLINE`. Zu lange Texte
 //! (mehr als 255 Zeichen in der Datei) werden wie Maßtexte abgelehnt, nie still gekürzt; vorher
 //! prüft [`dxf_text_fits`]. Die Texte des Rahmens für DXF passt
 //! [`sheet_frame_dxf`](crate::sheet_marks::sheet_frame_dxf) mit einem Breitenzuschlag ein.
@@ -112,10 +120,11 @@
 
 use crate::Visibility;
 use crate::annotate::{ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, Mark, MarkKind, TextAnchor};
+use crate::balloon::{PositionPen, balloon_text_dxf};
 use crate::error::DrawError;
 use crate::out2d::Out2d;
 use crate::sheet::SheetModel;
-use crate::sheet_frame::SheetPen;
+use crate::sheet_frame::{SheetPen, sheet_scale};
 use planora_math::{DVec2, PI, TAU};
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -128,6 +137,8 @@ const LAYER_LOST: &str = "MASSE_FEHLT";
 const LAYER_FRAME: &str = "BLATTRAHMEN";
 const LAYER_CENTRE: &str = "BLATT_MITTE";
 const LAYER_SHEET: &str = "BLATT";
+const LAYER_POSITION: &str = "POSITIONEN";
+const LAYER_POSITION_LINE: &str = "POSITIONEN_LINIE";
 /// Höchstlänge eines Maßtexts in der Datei (Zeichen, nach der Verschlüsselung).
 const MAX_TEXT_LEN: usize = 255;
 /// Nachkommastellen aller Zahlen der Datei.
@@ -537,25 +548,49 @@ struct UsedKinds {
     dim: bool,
     center: bool,
     lost: bool,
-    /// Blattrahmen (die drei Ebenen `BLATTRAHMEN`, `BLATT_MITTE`, `BLATT`).
-    sheet: bool,
+    /// Blattzubehör je Linienart (Ebenen `BLATTRAHMEN`, `BLATT_MITTE`, `BLATT`); ein ganzer
+    /// Blattrahmen nutzt alle drei, eine Stückliste allein nur `BLATT`.
+    sheet_heavy: bool,
+    sheet_medium: bool,
+    sheet_thin: bool,
     /// Faktor des Blattzubehörs (bestimmt die Linienstärken der drei Blattebenen).
     sheet_scale: f64,
+    /// Nummernkreise: Kreis und Zahl (`POSITIONEN`), Hinweislinie und Punkt
+    /// (`POSITIONEN_LINIE`).
+    position: bool,
+    position_line: bool,
+    /// Faktor des Blatts (bestimmt die Linienstärken der Ebenen der Nummernkreise).
+    paper_scale: f64,
 }
 
 impl UsedKinds {
+    /// Merkt die Blattebene einer Markierung der Art `kind` (andere Arten: nichts).
+    fn use_sheet_pen(&mut self, kind: MarkKind) {
+        match kind {
+            MarkKind::Sheet(SheetPen::Heavy) => self.sheet_heavy = true,
+            MarkKind::Sheet(SheetPen::Medium) => self.sheet_medium = true,
+            MarkKind::Sheet(SheetPen::Thin) => self.sheet_thin = true,
+            _ => {}
+        }
+    }
+
     fn of(model: &SheetModel) -> UsedKinds {
         let mut u = UsedKinds {
-            sheet: model.frame.is_some(),
             sheet_scale: model.frame.as_ref().map_or(1.0, |f| f.scale),
+            paper_scale: sheet_scale(model.sheet),
             ..UsedKinds::default()
         };
+        for m in model.frame.iter().flat_map(|f| &f.marks) {
+            u.use_sheet_pen(mark_kind(m));
+        }
         for m in model.views.iter().flat_map(|v| &v.marks) {
             match mark_kind(m) {
                 MarkKind::Dimension => u.dim = true,
                 MarkKind::CenterLine => u.center = true,
                 MarkKind::Lost => u.lost = true,
-                MarkKind::Sheet(_) => u.sheet = true,
+                k @ MarkKind::Sheet(_) => u.use_sheet_pen(k),
+                MarkKind::Position(PositionPen::Circle) => u.position = true,
+                MarkKind::Position(PositionPen::Leader) => u.position_line = true,
             }
         }
         u
@@ -604,6 +639,8 @@ fn mark_layer(kind: MarkKind) -> &'static str {
         MarkKind::Sheet(SheetPen::Heavy) => LAYER_FRAME,
         MarkKind::Sheet(SheetPen::Medium) => LAYER_CENTRE,
         MarkKind::Sheet(SheetPen::Thin) => LAYER_SHEET,
+        MarkKind::Position(PositionPen::Circle) => LAYER_POSITION,
+        MarkKind::Position(PositionPen::Leader) => LAYER_POSITION_LINE,
     }
 }
 
@@ -731,7 +768,7 @@ fn write_tables(
         (used.center, (LAYER_CENTER, "CENTER", 7, 25)),
         (used.lost, (LAYER_LOST, "CONTINUOUS", 1, 25)),
         (
-            used.sheet,
+            used.sheet_heavy,
             (
                 LAYER_FRAME,
                 "CONTINUOUS",
@@ -740,7 +777,7 @@ fn write_tables(
             ),
         ),
         (
-            used.sheet,
+            used.sheet_medium,
             (
                 LAYER_CENTRE,
                 "CONTINUOUS",
@@ -749,12 +786,30 @@ fn write_tables(
             ),
         ),
         (
-            used.sheet,
+            used.sheet_thin,
             (
                 LAYER_SHEET,
                 "CONTINUOUS",
                 7,
                 sheet_weight(SheetPen::Thin, used),
+            ),
+        ),
+        (
+            used.position,
+            (
+                LAYER_POSITION,
+                "CONTINUOUS",
+                7,
+                dxf_lineweight(PositionPen::Circle.width_at(used.paper_scale)),
+            ),
+        ),
+        (
+            used.position_line,
+            (
+                LAYER_POSITION_LINE,
+                "CONTINUOUS",
+                7,
+                dxf_lineweight(PositionPen::Leader.width_at(used.paper_scale)),
             ),
         ),
     ] {
@@ -875,8 +930,9 @@ fn write_blocks(
             };
             write_curve(o, hs, br, layer, &line.curve)?;
         }
+        let paper = sheet_scale(model.sheet);
         for m in &view.marks {
-            write_mark(o, hs, br, m)?;
+            write_mark(o, hs, br, &balloon_text_dxf(m, paper))?;
         }
         block_end(o, hs.next(), br, false);
     }

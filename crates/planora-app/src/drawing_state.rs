@@ -13,8 +13,8 @@ use crate::state::{Body, BodyKind};
 use planora_drawing::dimension::DimId;
 use planora_drawing::sheet_frame::{REV_VISIBLE, sheet_layout};
 use planora_drawing::{
-    Basis, DrawBody, DrawError, Drawing, DrawingId, Projection, Scale, Sheet, ViewId, ViewKind,
-    ViewLines, compute_view,
+    BalloonId, Basis, DrawBody, DrawError, Drawing, DrawingId, Projection, Scale, Sheet, ViewId,
+    ViewKind, ViewLines, compute_view,
 };
 use planora_drawing::{GAP_MM, align_dir};
 use planora_exchange::Progress;
@@ -91,6 +91,8 @@ pub struct DrawingUi {
     pub selected_view: Option<ViewId>,
     /// Im Zeichnungsbereich gewähltes Maß (schließt eine gewählte Ansicht aus).
     pub selected_dim: Option<DimId>,
+    /// Im Zeichnungsbereich gewählter Nummernkreis (schließt Ansicht und Maß aus).
+    pub selected_balloon: Option<BalloonId>,
     /// Letzte Meldung zu den Maßen (etwa nach „Maße vorschlagen“) für die Hinweiszeile.
     pub dim_message: Option<String>,
     /// Stand zur Meldung (Änderungszähler, gewählte Ansicht, gewähltes Maß); weicht der
@@ -115,6 +117,7 @@ impl Default for DrawingUi {
             area: WorkArea::Model,
             selected_view: None,
             selected_dim: None,
+            selected_balloon: None,
             dim_message: None,
             dim_message_key: None,
             selected_drawing: None,
@@ -179,6 +182,7 @@ impl DrawingUi {
     fn reset_sheet_view(&mut self) {
         self.selected_view = None;
         self.selected_dim = None;
+        self.selected_balloon = None;
         self.dim_message = None;
         self.dim_message_key = None;
         self.zoom = 1.0;
@@ -222,6 +226,7 @@ impl DrawingUi {
             self.area = WorkArea::Model;
             self.selected_view = None;
             self.selected_dim = None;
+            self.selected_balloon = None;
             // Die Zeichnung gibt es nicht mehr: eine neue mit derselben Kennung (anderes
             // Dokument) beginnt frisch.
             self.last_drawing = None;
@@ -242,6 +247,12 @@ impl DrawingUi {
             .is_some_and(|m| drawing.dimension(m).is_none())
         {
             self.selected_dim = None;
+        }
+        if self
+            .selected_balloon
+            .is_some_and(|b| drawing.balloon(b).is_none())
+        {
+            self.selected_balloon = None;
         }
         let mut needed: Vec<ViewKind> = Vec::new();
         for v in &drawing.views {

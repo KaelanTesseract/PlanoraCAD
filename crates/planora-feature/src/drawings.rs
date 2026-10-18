@@ -2,11 +2,15 @@
 
 use crate::error::FeatureError;
 use crate::model::Document;
+use crate::parts_sheets::{FOLLOW_PAGE_DELETE, PARTS_SHEET_RENAME, page_of};
+use planora_drawing::model::{Balloon, BalloonId};
+use planora_drawing::parts::{BodyKey, MAX_BALLOONS, parts_sheet_name};
 use planora_drawing::sheet_info::{ProjectInfo, SheetInfo, Stamp, validate_project_info};
 use planora_drawing::{
-    Drawing, DrawingId, Placement, Projection, Scale, Sheet, ViewId, ViewKind, align_dir,
+    Drawing, DrawingId, DrawingKind, Placement, Projection, Scale, Sheet, ViewId, ViewKind,
+    align_dir,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// Höchstzahl der Zeichnungen in einem Dokument.
 pub const MAX_DRAWINGS: usize = 1000;
@@ -16,6 +20,8 @@ pub const MAX_VIEWS: usize = 64;
 pub const MAX_NAME_CHARS: usize = 200;
 /// Größter Betrag einer Lageangabe auf dem Blatt in Millimetern.
 pub const MAX_POS_MM: f64 = 1.0e5;
+/// Meldung, wenn eine Zeichnung schon die Höchstzahl an Nummernkreisen hat.
+pub const TOO_MANY_BALLOONS: &str = "Es sind höchstens 200 Positionsnummern je Zeichnung möglich.";
 
 fn bad(m: impl Into<String>) -> FeatureError {
     FeatureError::InvalidInput(m.into())
@@ -38,6 +44,20 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
         return Err(format!(
             "Der Name der Zeichnung ist zu lang (höchstens {MAX_NAME_CHARS} Zeichen)"
         ));
+    }
+    match d.kind {
+        DrawingKind::Views => {}
+        DrawingKind::PartsList { page } => {
+            if page == 0 {
+                return Err("Ein Stücklistenblatt braucht eine Seitennummer ab 1".into());
+            }
+            if !d.views.is_empty() || !d.dimensions.is_empty() || !d.balloons.is_empty() {
+                return Err(
+                    "Ein Stücklistenblatt hat keine Ansichten, keine Maße und keine Positionsnummern"
+                        .into(),
+                );
+            }
+        }
     }
     if d.views.len() > MAX_VIEWS {
         return Err(format!(
@@ -99,10 +119,42 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
         }
         seen.push(v.id);
     }
+    validate_balloons(d)?;
     if let Some(info) = &d.info {
         planora_drawing::sheet_info::validate_sheet_info(info)?;
     }
     crate::dimensions::validate_dimensions(d)
+}
+
+/// Prüft die Nummernkreise: Anzahl, Kennungen, Ansicht, Anker und Versatz.
+fn validate_balloons(d: &Drawing) -> Result<(), String> {
+    if d.balloons.len() > MAX_BALLOONS {
+        return Err(TOO_MANY_BALLOONS.into());
+    }
+    if d.next_balloon == 0 || d.next_balloon == u64::MAX {
+        return Err("Der Zähler der Positionsnummern ist ungültig".into());
+    }
+    let mut ids = HashSet::with_capacity(d.balloons.len());
+    for b in &d.balloons {
+        if b.id.0 == 0 || b.id.0 >= d.next_balloon {
+            return Err("Eine Positionsnummer hat eine ungültige Kennung".into());
+        }
+        if !ids.insert(b.id) {
+            return Err("Eine Kennung einer Positionsnummer kommt doppelt vor".into());
+        }
+        if d.view(b.view).is_none() {
+            return Err("Eine Positionsnummer gehört zu einer Ansicht, die es nicht gibt".into());
+        }
+        let unit = |x: f64| x.is_finite() && (0.0..=1.0).contains(&x);
+        if !unit(b.anchor.0) || !unit(b.anchor.1) {
+            return Err("Eine Positionsnummer zeigt auf eine Stelle außerhalb der Ansicht".into());
+        }
+        let (dx, dy) = b.offset;
+        if !(dx.is_finite() && dy.is_finite() && dx.hypot(dy) <= MAX_POS_MM) {
+            return Err("Eine Positionsnummer liegt außerhalb des Blatts".into());
+        }
+    }
+    Ok(())
 }
 
 impl Document {
@@ -116,16 +168,23 @@ impl Document {
         self.drawings.iter().find(|d| d.id == id)
     }
 
-    fn name_taken(&self, name: &str, except: Option<DrawingId>) -> bool {
+    pub(crate) fn name_taken(&self, name: &str, except: Option<DrawingId>) -> bool {
         let key = name_key(name);
         self.drawings
             .iter()
             .any(|d| Some(d.id) != except && name_key(&d.name) == key)
     }
 
-    fn check_drawing(&self, d: &Drawing) -> Result<(), FeatureError> {
+    pub(crate) fn check_drawing(&self, d: &Drawing) -> Result<(), FeatureError> {
         validate_drawing(d).map_err(bad)?;
-        if self.name_taken(&d.name, Some(d.id)) {
+        // Die Vorbehaltsnamen gelten nur, wenn der Name sich ändert: eine Zeichnung, die ihn
+        // schon trug, bleibt änderbar.
+        let renamed = self
+            .drawing(d.id)
+            .is_none_or(|old| name_key(&old.name) != name_key(&d.name));
+        if self.name_taken(&d.name, Some(d.id))
+            || (renamed && page_of(d).is_none() && self.reserved_for_parts(&d.name))
+        {
             return Err(bad("Eine Zeichnung mit diesem Namen gibt es schon"));
         }
         Ok(())
@@ -158,13 +217,10 @@ impl Document {
                 Some(p)
             }
         };
-        self.add_drawing_with(
-            name,
-            sheet,
-            projection,
-            Some(SheetInfo::new(stamp)),
-            project,
-        )
+        // F4: Die Vorgabe des Schalters wird einmal beim Anlegen festgelegt.
+        let mut info = SheetInfo::new(stamp);
+        info.parts_list = self.visible_bodies().len() > 1;
+        self.add_drawing_with(name, sheet, projection, Some(info), project)
     }
 
     fn add_drawing_with(
@@ -226,6 +282,9 @@ impl Document {
 
     /// Benennt eine Zeichnung um.
     pub fn rename_drawing(&mut self, id: DrawingId, name: &str) -> Result<(), FeatureError> {
+        if self.drawing(id).is_some_and(|d| page_of(d).is_some()) {
+            return Err(bad(PARTS_SHEET_RENAME));
+        }
         let name = name.trim().to_string();
         self.update_drawing(id, |d| d.name = name)
     }
@@ -237,7 +296,14 @@ impl Document {
             .iter()
             .position(|d| d.id == id)
             .ok_or_else(unknown)?;
-        self.drawings.remove(idx);
+        match page_of(&self.drawings[idx]) {
+            Some(page) if page > 1 => return Err(bad(FOLLOW_PAGE_DELETE)),
+            // Seite 1 nimmt alle Folgeblätter mit.
+            Some(_) => self.drawings.retain(|d| page_of(d).is_none()),
+            None => {
+                self.drawings.remove(idx);
+            }
+        }
         self.drawing_edits += 1;
         Ok(())
     }
@@ -259,9 +325,29 @@ impl Document {
         if copy.id != id {
             return Err(bad("Die Kennung einer Zeichnung lässt sich nicht ändern"));
         }
+        let old = &self.drawings[idx];
+        if copy.kind != old.kind {
+            return Err(bad("Die Art einer Zeichnung lässt sich nicht ändern"));
+        }
+        if page_of(old).is_some() && copy.name != old.name {
+            return Err(bad(PARTS_SHEET_RENAME));
+        }
         self.check_drawing(&copy)?;
         if copy != self.drawings[idx] {
+            let parts = page_of(&copy).is_some();
+            let before = if parts {
+                self.drawings.clone()
+            } else {
+                Vec::new()
+            };
             self.drawings[idx] = copy;
+            if parts {
+                self.sync_parts_sheets_inner();
+                // Gleicht der Abgleich die Änderung wieder aus (Folgeblatt), bleibt alles wie es war.
+                if self.drawings == before {
+                    return Ok(());
+                }
+            }
             self.drawing_edits += 1;
         }
         Ok(())
@@ -281,6 +367,60 @@ impl Document {
             new_id = Some(d.add_view(kind, scale, placement, parent));
         })?;
         new_id.ok_or_else(unknown)
+    }
+
+    /// Setzt einen Nummernkreis an den Körper `body` in der Ansicht `view` (Anker auf [0, 1]
+    /// begrenzt, Versatz in Blatt-mm). Zählt als eine Änderung; bei Fehler bleibt das Dokument
+    /// unverändert.
+    pub fn add_balloon(
+        &mut self,
+        drawing: DrawingId,
+        view: ViewId,
+        body: BodyKey,
+        anchor: (f64, f64),
+        offset: (f64, f64),
+    ) -> Result<BalloonId, FeatureError> {
+        let d = self.drawing(drawing).ok_or_else(unknown)?;
+        if d.balloons.len() >= MAX_BALLOONS {
+            return Err(bad(TOO_MANY_BALLOONS));
+        }
+        if d.view(view).is_none() {
+            return Err(bad("Die Ansicht gibt es nicht"));
+        }
+        if !(anchor.0.is_finite() && anchor.1.is_finite()) {
+            return Err(bad("Die Stelle der Positionsnummer ist ungültig"));
+        }
+        let anchor = (anchor.0.clamp(0.0, 1.0), anchor.1.clamp(0.0, 1.0));
+        let mut new_id = None;
+        self.update_drawing(drawing, |d| {
+            new_id = Some(d.add_balloon(Balloon {
+                id: BalloonId(0),
+                view,
+                body,
+                anchor,
+                offset,
+            }));
+        })?;
+        new_id.ok_or_else(unknown)
+    }
+
+    /// Nummer (Pos. der Stücklistenzeile) jedes Nummernkreises der Zeichnung; `None`, wenn es
+    /// den Körper nicht mehr gibt (verloren). Unbekannte Zeichnung: leer.
+    pub fn balloon_numbers(&self, drawing: DrawingId) -> BTreeMap<BalloonId, Option<u32>> {
+        let Some(d) = self.drawing(drawing) else {
+            return BTreeMap::new();
+        };
+        let rows = self.parts_rows();
+        d.balloons
+            .iter()
+            .map(|b| {
+                let pos = rows
+                    .iter()
+                    .find(|r| r.keys.contains(&b.body))
+                    .map(|r| r.pos);
+                (b.id, pos)
+            })
+            .collect()
     }
 
     /// Übernimmt Zeichnungen aus einem Snapshot (mit Prüfung); der Änderungszähler bleibt 0.
@@ -310,6 +450,18 @@ impl Document {
             if !names.insert(name_key(&d.name)) {
                 return Err(bad("Ein Zeichnungsname kommt doppelt vor"));
             }
+        }
+        let mut pages: Vec<u32> = drawings.iter().filter_map(page_of).collect();
+        pages.sort_unstable();
+        if pages.iter().enumerate().any(|(i, p)| *p != i as u32 + 1) {
+            return Err(bad(
+                "Die Stücklistenblätter müssen die Seiten 1, 2, 3 … ohne Lücke haben",
+            ));
+        }
+        if drawings.iter().any(|d| {
+            page_of(d).is_some_and(|p| name_key(&d.name) != name_key(&parts_sheet_name(p)))
+        }) {
+            return Err(bad("Ein Stücklistenblatt hat einen falschen Namen"));
         }
         self.drawings = drawings;
         self.next_drawing = next_drawing;

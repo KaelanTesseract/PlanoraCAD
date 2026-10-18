@@ -1,5 +1,5 @@
 //! Der Blattrahmen als Markierungen: Rahmen, Zentriermarken, Bezugsraster, Schriftfeld mit
-//! Inhalten, Projektionssymbol, Änderungstabelle und Hinweisfeld. Die Geometrie liefert
+//! Inhalten, Projektionssymbol, Änderungstabelle, Hinweisfeld und Stückliste. Die Geometrie liefert
 //! [`SheetLayout`](crate::sheet_frame::SheetLayout), die Texte [`TitleTexts`]; hier entstehen
 //! daraus [`Mark`]s in Blattkoordinaten (mm, y nach oben), die SVG und DXF wie alle anderen
 //! Markierungen ausgeben. Alle Markierungen tragen [`MarkKind::Sheet`] mit der Linienstärke;
@@ -13,10 +13,11 @@
 
 use crate::annotate::{Mark, MarkKind, TextAnchor};
 use crate::model::Projection;
+use crate::parts::{PARTS_HEAD, PartsCells};
 use crate::sheet_frame::{
-    GRID_TEXT_H, LABEL_H, NOTE_LINES_MAX, NOTES_LINE_MM, NOTES_PAD_MM, NOTES_TEXT_H,
-    PROJECTION_CENTRE_Y, PROJECTION_X0, REV_ROW_H, REV_VISIBLE, SheetLayout, SheetPen, TitleField,
-    VALUE_H, projection_symbol,
+    GRID_TEXT_H, LABEL_H, NOTE_LINES_MAX, NOTES_LINE_MM, NOTES_PAD_MM, NOTES_TEXT_H, PARTS_ROW_H,
+    PROJECTION_CENTRE_Y, PROJECTION_X0, PartsSpace, REV_ROW_H, REV_VISIBLE, SheetLayout, SheetPen,
+    TitleField, VALUE_H, projection_symbol,
 };
 use crate::sheet_info::TitleTexts;
 use planora_math::{DVec2, TAU};
@@ -140,6 +141,15 @@ pub fn note_is_cut(text: &str, layout: &SheetLayout) -> bool {
         )
         .cut
     })
+}
+
+/// Wird der Eintrag in Spalte `col` (0 Pos., 1 Benennung, 2 Menge, 3 Werkstoff, 4 Bemerkung)
+/// der Stückliste des Blatts `layout` gekürzt? Dieselbe Regel wie beim Zeichnen.
+pub fn parts_cell_is_cut(col: usize, text: &str, layout: &SheetLayout) -> bool {
+    layout
+        .parts_columns()
+        .get(col)
+        .is_some_and(|w| fit_text(text, layout.mm(VALUE_H), w - layout.mm(2.0)).cut)
 }
 
 fn line(a: DVec2, b: DVec2, pen: SheetPen) -> Mark {
@@ -322,6 +332,7 @@ fn build_frame(
 
     revision_table(&mut m, layout, texts, widen);
     notes_box(&mut m, layout, texts, widen);
+    m.extend(parts_table_marks(layout, &texts.parts, widen));
     SheetFrame {
         marks: m,
         scale: layout.scale,
@@ -393,4 +404,71 @@ fn notes_box(m: &mut Vec<Mark>, layout: &SheetLayout, texts: &TitleTexts, widen:
             t,
         );
     }
+}
+
+/// Die Stückliste als Markierungen (alle `Thin`): Umriss, Zeilen- und Spaltentrennlinien, Kopf
+/// und die Zeilen. Gezeichnet werden der Kopf und so viele Zeilen von `rows`, wie in
+/// [`SheetLayout::parts`] passen. Auf dem Zeichnungsblatt liegt der Kopf unten an der Tabelle und
+/// Pos. 1 direkt darüber; auf dem Stücklistenblatt liegt der Kopf oben, die Zeilen folgen nach
+/// unten. Ohne Tabelle im Blatt nichts. `widen` wie bei den übrigen Texten.
+pub fn parts_table_marks(layout: &SheetLayout, rows: &[PartsCells], widen: f64) -> Vec<Mark> {
+    let Some((lo, hi)) = layout.parts else {
+        return Vec::new();
+    };
+    let mut m = Vec::new();
+    let p = DVec2::new;
+    let s = |a3_mm: f64| layout.mm(a3_mm);
+    let row_h = s(PARTS_ROW_H);
+    let capacity = (((hi.y - lo.y) / row_h + 1e-9).floor() as usize).saturating_sub(1);
+    let n = rows.len().min(capacity);
+    let top_down = layout.parts_space == PartsSpace::ListPage;
+    // Unterkante der Zeile `k` (0 = Kopf).
+    let row_bottom = |k: usize| {
+        if top_down {
+            hi.y - row_h * (k + 1) as f64
+        } else {
+            lo.y + row_h * k as f64
+        }
+    };
+    let (y0, y1) = if top_down {
+        (row_bottom(n), hi.y)
+    } else {
+        (lo.y, row_bottom(n) + row_h)
+    };
+    rect(&mut m, p(lo.x, y0), p(hi.x, y1), SheetPen::Thin);
+    for k in 1..=n {
+        let y = if top_down {
+            row_bottom(k) + row_h
+        } else {
+            row_bottom(k)
+        };
+        m.push(line(p(lo.x, y), p(hi.x, y), SheetPen::Thin));
+    }
+    let columns = layout.parts_columns();
+    let mut xs = vec![lo.x];
+    for w in columns {
+        xs.push(xs[xs.len() - 1] + w);
+    }
+    for &x in &xs[1..xs.len() - 1] {
+        m.push(line(p(x, y0), p(x, y1), SheetPen::Thin));
+    }
+    for k in 0..=n {
+        let baseline = row_bottom(k) + s((PARTS_ROW_H - VALUE_H) / 2.0);
+        for (i, col) in columns.iter().enumerate() {
+            let t = if k == 0 {
+                PARTS_HEAD[i]
+            } else {
+                rows[k - 1][i].as_str()
+            };
+            fitted_text(
+                &mut m,
+                p(xs[i] + s(1.0), baseline),
+                s(VALUE_H),
+                col - s(2.0),
+                widen,
+                t,
+            );
+        }
+    }
+    m
 }

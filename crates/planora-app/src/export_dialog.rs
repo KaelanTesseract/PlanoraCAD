@@ -22,7 +22,7 @@ use crate::dimension_dialog::kind_label;
 use crate::dimension_state::count_outside;
 use crate::drawing_dialog::paper_label;
 use crate::drawing_state::{ComputeFn, WorkArea};
-use crate::drawing_view::{context_or_single, view_names};
+use crate::drawing_view::{context_or_single, parts_on, parts_space_for, view_names};
 use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
@@ -30,17 +30,21 @@ use crate::sheet_dialog::title_field_name;
 use crate::state::{AppState, BodyKind};
 use crate::theme;
 use planora_drawing::annotate::{Mark, ResolvedDims};
+use planora_drawing::balloon::{add_balloon_marks, balloon_marks};
 use planora_drawing::dimension::{DimError, DimSpec};
 use planora_drawing::dxf::{dxf_char_ok, dxf_text_fits};
+use planora_drawing::parts::PARTS_HEAD;
 use planora_drawing::sheet::{SheetModel, build_sheet_with, dimension_marks};
-use planora_drawing::sheet_frame::sheet_layout;
+use planora_drawing::sheet_frame::{PartsSpace, sheet_layout_with};
 use planora_drawing::sheet_info::{
     ProjectInfo, SheetContext, TitleTexts, main_scale, resolve_texts,
 };
-use planora_drawing::sheet_marks::{sheet_frame, sheet_frame_dxf};
+use planora_drawing::sheet_marks::{
+    DXF_TEXT_WIDTH_FACTOR, SheetFrame, parts_table_marks, sheet_frame, sheet_frame_dxf,
+};
 use planora_drawing::{
-    DrawBody, DrawError, Drawing, DrawingFormat, DrawingId, Sheet, ViewId, ViewKind, ViewLines,
-    Visibility, compute_view, export_drawing_file,
+    BalloonId, DrawBody, DrawError, Drawing, DrawingFormat, DrawingId, DrawingKind, PartsCells,
+    Sheet, ViewId, ViewKind, ViewLines, Visibility, compute_view, export_drawing_file,
 };
 use planora_exchange::{
     ExchangeError, ExchangeMesh, ExportBody, Format, MeshReport, MeshTransform, PlacedSource,
@@ -467,6 +471,11 @@ pub fn dxf_sheet_texts_ok(texts: &TitleTexts) -> Result<(), String> {
     for (i, note) in texts.notes.iter().enumerate() {
         check(&format!("Hinweis {}", i + 1), note)?;
     }
+    for row in &texts.parts {
+        for (cell, head) in row.iter().zip(PARTS_HEAD).skip(1) {
+            check(&format!("Stückliste, Pos. {}, {head}", row[0]), cell)?;
+        }
+    }
     Ok(())
 }
 
@@ -558,12 +567,100 @@ pub struct FrameInput {
 /// Wie [`prepare_drawing_with`]; mit `frame` entsteht zu dem Blatt auch der Blattrahmen: die
 /// Texte aus den Blattangaben und dem Maßstab der Hauptansicht, die Geometrie nach deren
 /// Zeilenzahlen. Ohne `frame` bleibt `model.frame` leer.
+///
+/// Diese Funktion (und [`prepare_drawing`], [`prepare_drawing_with`]) kennt die Nummern der
+/// Positionskreise nicht: Eine Zeichnung mit Kreisen würde als „Kreis verloren“ abgewiesen, in
+/// Debug-Läufen bricht eine Prüfung vorher ab. Dafür gibt es [`prepare_drawing_parts`] mit
+/// [`parts_input`].
 pub fn prepare_drawing_framed(
     drawing: &Drawing,
     solids: &[(String, Solid)],
     compute: ComputeFn,
     resolve: ResolveFn,
     frame: Option<&FrameInput>,
+    progress: &Progress,
+) -> Result<DrawingPrepared, String> {
+    debug_assert!(
+        drawing.balloons.is_empty(),
+        "Zeichnungen mit Positionsnummern gehören zu prepare_drawing_parts (mit den Nummern)"
+    );
+    prepare_drawing_parts(
+        drawing,
+        solids,
+        compute,
+        resolve,
+        frame,
+        &PartsInput::default(),
+        progress,
+    )
+}
+
+/// Was die Stückliste zur Ausgabe einer Zeichnung beiträgt (Festlegungen G12, G13).
+#[derive(Clone, Debug, Default)]
+pub struct PartsInput {
+    /// Die Zeilen der Stückliste, die auf dieses Blatt gehören (Zeichnungsblatt: die ersten
+    /// zehn, wenn der Schalter des Blatts an ist; Stücklistenblatt: die Zeilen seiner Seite).
+    pub cells: Vec<PartsCells>,
+    /// Nummer je Kreis der Zeichnung; `None` oder fehlend heißt verloren.
+    pub balloons: BTreeMap<BalloonId, Option<u32>>,
+    /// Die Ausgabe ist DXF. Gilt nur für ein Stücklistenblatt ohne Rahmen (Breitenzuschlag der
+    /// Tabellentexte); mit Rahmen entscheidet [`FrameInput::dxf`].
+    pub dxf: bool,
+}
+
+/// Die Stückliste und die Nummern der Kreise für die Ausgabe von `drawing` aus dem Stand von
+/// `state` (`dxf` bleibt `false`).
+pub fn parts_input(state: &AppState, drawing: &Drawing) -> PartsInput {
+    let cells = if parts_space_for(drawing, 0, true) == PartsSpace::None {
+        Vec::new()
+    } else {
+        parts_on(drawing, &state.document.parts_cells())
+    };
+    let balloons = if drawing.balloons.is_empty() {
+        BTreeMap::new()
+    } else {
+        state.document.balloon_numbers(drawing.id)
+    };
+    PartsInput {
+        cells,
+        balloons,
+        dxf: false,
+    }
+}
+
+/// Meldung, wenn ein Nummernkreis seinen Körper verloren hat (Festlegung G13): es wird nichts
+/// geschrieben.
+pub fn lost_balloon_text(view: &str) -> String {
+    format!(
+        "Die Positionsnummer in der Ansicht „{view}“ gehört zu einem Teil, das es nicht mehr gibt. Bitte die Positionsnummer löschen und neu setzen."
+    )
+}
+
+/// Der erste Nummernkreis (in der Reihenfolge der Zeichnung) ohne Nummer als Meldung.
+fn first_lost_balloon(
+    drawing: &Drawing,
+    numbers: &BTreeMap<BalloonId, Option<u32>>,
+    names: &BTreeMap<ViewId, String>,
+) -> Option<String> {
+    drawing
+        .balloons
+        .iter()
+        .find(|b| numbers.get(&b.id).copied().flatten().is_none())
+        .map(|b| lost_balloon_text(&names.get(&b.view).cloned().unwrap_or_default()))
+}
+
+/// Wie [`prepare_drawing_framed`] mit der Stückliste `parts`. Die Nummernkreise stehen immer im
+/// Blatt, auch ohne Rahmen. Ein Zeichnungsblatt bekommt die Tabelle nur mit Rahmen (Schalter
+/// „Blattrahmen mit ausgeben“); ein Stücklistenblatt gibt seine Tabelle immer aus, ohne Rahmen
+/// allein, ohne Rahmen und Schriftfeld. Hat ein Kreis seinen Körper verloren, gibt es kein
+/// Blatt, sondern [`lost_balloon_text`]; ohne Nummern in `parts` gilt jeder Kreis als verloren.
+pub fn prepare_drawing_parts(
+    drawing: &Drawing,
+    solids: &[(String, Solid)],
+    compute: ComputeFn,
+    resolve: ResolveFn,
+    frame: Option<&FrameInput>,
+    parts: &PartsInput,
     progress: &Progress,
 ) -> Result<DrawingPrepared, String> {
     let cancelled = || ExchangeError::Cancelled.to_string();
@@ -574,8 +671,12 @@ pub fn prepare_drawing_framed(
         }
     }
     let with_dims = !drawing.dimensions.is_empty();
-    progress.set_total(kinds.len() as u64 + u64::from(with_dims));
+    let kinds_empty = kinds.is_empty();
+    progress.set_total((kinds.len() as u64 + u64::from(with_dims)).max(1));
     let names = view_names(drawing);
+    if let Some(m) = first_lost_balloon(drawing, &parts.balloons, &names) {
+        return Err(m);
+    }
     let mut lines: Vec<(ViewKind, ViewLines)> = Vec::with_capacity(kinds.len());
     for kind in kinds {
         progress.check().map_err(|_| cancelled())?;
@@ -625,26 +726,55 @@ pub fn prepare_drawing_framed(
         ResolvedDims::default()
     };
     let mut model = build_sheet_with(drawing, &map, &dims);
+    add_balloon_marks(&mut model, &balloon_marks(drawing, &map, &parts.balloons));
     // `build_sheet` lässt Ansichten weg, die sich nicht anordnen lassen; das Dokument prüft Lage,
     // Maßstab und Eltern, also kommt das nur bei einer beschädigten Zeichnung vor. Nie still
     // weniger Ansichten schreiben.
     if model.views.len() < drawing.views.len() {
         return Err(VIEWS_NOT_PLACEABLE.to_string());
     }
-    let texts = frame.map(|f| {
-        let texts = resolve_texts(drawing, f.project.as_ref(), &f.ctx, main_scale(drawing));
-        let layout = sheet_layout(
-            drawing.sheet,
-            texts.visible_revisions().len(),
-            texts.notes.len(),
-        );
-        model.frame = Some(if f.dxf {
-            sheet_frame_dxf(&layout, &texts, drawing.projection)
-        } else {
-            sheet_frame(&layout, &texts, drawing.projection)
-        });
-        texts
-    });
+    if kinds_empty && !with_dims {
+        progress.advance(1);
+    }
+    let space = parts_space_for(drawing, parts.cells.len(), false);
+    let texts = match frame {
+        Some(f) => {
+            let mut texts = resolve_texts(drawing, f.project.as_ref(), &f.ctx, main_scale(drawing));
+            texts.parts = parts.cells.clone();
+            let layout = sheet_layout_with(
+                drawing.sheet,
+                texts.visible_revisions().len(),
+                texts.notes.len(),
+                space,
+            );
+            model.frame = Some(if f.dxf {
+                sheet_frame_dxf(&layout, &texts, drawing.projection)
+            } else {
+                sheet_frame(&layout, &texts, drawing.projection)
+            });
+            Some(texts)
+        }
+        // Ein Stücklistenblatt ohne Rahmen gibt nur seine Tabelle aus.
+        None if matches!(drawing.kind, DrawingKind::PartsList { .. }) => {
+            let layout = sheet_layout_with(drawing.sheet, 0, 0, space);
+            let widen = if parts.dxf {
+                DXF_TEXT_WIDTH_FACTOR
+            } else {
+                1.0
+            };
+            model.frame = Some(SheetFrame {
+                marks: parts_table_marks(&layout, &parts.cells, widen),
+                scale: layout.scale,
+            });
+            Some(TitleTexts {
+                fields: BTreeMap::new(),
+                revisions: Vec::new(),
+                notes: Vec::new(),
+                parts: parts.cells.clone(),
+            })
+        }
+        None => None,
+    };
     let count = |vis| {
         model
             .views
@@ -674,6 +804,20 @@ pub fn prepare_drawing_framed(
 /// Meldung, wenn sich nicht alle Ansichten auf dem Blatt anordnen lassen.
 pub const VIEWS_NOT_PLACEABLE: &str =
     "Die Zeichnung enthält Ansichten, die sich nicht auf dem Blatt anordnen lassen.";
+
+/// Text im Fortschrittsbalken, solange das Ergebnis des Formats `format` berechnet wird;
+/// `is_list` für ein Stücklistenblatt.
+pub fn computing_text(format: ExportFormat, is_list: bool) -> &'static str {
+    if format.is_drawing() && is_list {
+        "Die Stückliste wird berechnet …"
+    } else if format.is_drawing() {
+        "Die Ansichten werden berechnet …"
+    } else if format.is_step() {
+        "Die Körper werden geprüft …"
+    } else {
+        "Das Netz wird berechnet …"
+    }
+}
 
 /// Hinweis auf Netz-Körper, die eine Zeichnung nicht enthält.
 pub fn drawing_skipped_text(names: &[String]) -> String {
@@ -1145,7 +1289,7 @@ impl ExportDialog {
         if state.bodies.iter().all(|b| b.kind == BodyKind::Mesh) {
             return Some(DrawError::MeshBodiesOnly.to_string());
         }
-        if d.views.is_empty() {
+        if d.views.is_empty() && matches!(d.kind, DrawingKind::Views) {
             return Some(format!(
                 "Die Zeichnung „{}“ hat noch keine Ansicht.",
                 shorten_for_display(&d.name)
@@ -1188,16 +1332,22 @@ impl ExportDialog {
                     ctx: context_or_single(state, drawing.id),
                     dxf: format == DrawingFormat::Dxf,
                 });
+                let parts = PartsInput {
+                    dxf: format == DrawingFormat::Dxf,
+                    ..parts_input(state, &drawing)
+                };
+                let is_list = matches!(drawing.kind, DrawingKind::PartsList { .. });
                 // Ein alter Auftrag wird dabei fallengelassen und bricht ab.
                 self.drawing_job = Some((
                     key,
                     Job::spawn(move |p| {
-                        let mut r = prepare_drawing_framed(
+                        let mut r = prepare_drawing_parts(
                             &drawing,
                             &solids,
                             compute,
                             resolve,
                             frame.as_ref(),
+                            &parts,
                             p,
                         )?;
                         if format == DrawingFormat::Dxf {
@@ -1206,7 +1356,10 @@ impl ExportDialog {
                             }
                             dxf_texts_fit(&r.model)?;
                         }
-                        r.skipped_meshes = meshes;
+                        // Ein Stücklistenblatt hat keine Ansichten, die Netz-Körper auslassen.
+                        if !is_list {
+                            r.skipped_meshes = meshes;
+                        }
                         Ok(r)
                     }),
                 ));
@@ -1647,6 +1800,7 @@ impl ExportDialog {
             .map(|d| (d.id, shorten_for_display(&d.name)))
             .collect();
         let current = self.current_drawing(state);
+        let is_list = current.is_some_and(|d| matches!(d.kind, DrawingKind::PartsList { .. }));
         let mut picked = current.map(|d| d.id);
         let picked_before = picked;
         let mut drawing_info: Vec<String> = Vec::new();
@@ -1686,6 +1840,10 @@ impl ExportDialog {
                 ));
             }
             drawing_info.push(format!("Mittellinien: {}", centerlines.label()));
+            if is_list {
+                // Ein Stücklistenblatt hat weder Ansichten noch Maße.
+                drawing_info.retain(|l| l.starts_with("Blatt:"));
+            }
         }
         let writing_file = self.is_writing_file();
         let (mut open, mut close, mut cancel, mut recompute, mut begin, mut drop_chooser) =
@@ -1764,13 +1922,7 @@ impl ExportDialog {
                 ui.add_space(8.0);
                 match &status {
                     ExportStatus::Computing(f) => {
-                        let text = if before.is_drawing() {
-                            "Die Ansichten werden berechnet …"
-                        } else if before.is_step() {
-                            "Die Körper werden geprüft …"
-                        } else {
-                            "Das Netz wird berechnet …"
-                        };
+                        let text = computing_text(before, is_list);
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::ProgressBar::new(*f)
@@ -1841,7 +1993,11 @@ impl ExportDialog {
                         outside,
                         ..
                     } => {
-                        ui.label("Alle Ansichten sind berechnet.");
+                        ui.label(if is_list {
+                            "Die Stückliste ist berechnet."
+                        } else {
+                            "Alle Ansichten sind berechnet."
+                        });
                         if *outside > 0 {
                             ui.colored_label(
                                 warning_color(ui.visuals().dark_mode),

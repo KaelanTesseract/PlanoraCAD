@@ -43,6 +43,7 @@
 //! Pfeile tangential an den Bogenenden (bei zu kurzem Bogen außen), Text an der Bogenmitte
 //! außen, tangential und lesbar (gedreht → eine Texthöhe weiter außen).
 
+use crate::balloon::PositionPen;
 use crate::centerline::CenterLine;
 use crate::dimension::{
     ACROSS_TOL, Anchor, ArcSpan, ChainMode, DimError, DimId, DimKind, DimSpec, Measured, Tolerance,
@@ -135,6 +136,8 @@ pub enum MarkKind {
     Lost,
     /// Blattrahmen, Schriftfeld und Tabellen in der Linienstärke des Stifts.
     Sheet(SheetPen),
+    /// Nummernkreis (Positionsnummer) in der Linienstärke des Stifts.
+    Position(PositionPen),
 }
 
 /// Lage des Ankers im Text (entlang der Grundlinie).

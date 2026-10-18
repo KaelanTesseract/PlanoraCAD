@@ -9,19 +9,21 @@ use planora_drawing::dimension::{
     Tolerance as DimTolerance, ref_count,
 };
 use planora_drawing::limits::MAX_DIMENSIONS;
+use planora_drawing::parts::{MAX_BALLOONS, validate_override};
 use planora_drawing::sheet_info::{
     FieldValue, NotesValue, ProjectInfo, Revision, SheetInfo, validate_project_info,
     validate_sheet_info,
 };
 use planora_drawing::{
-    Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewSpec,
+    Balloon, BalloonId, BodyKey, Drawing, DrawingId, DrawingKind, Paper, Placement, Projection,
+    RowOverride, Scale, Sheet, ViewId, ViewKind, ViewSpec,
 };
 use planora_exchange::{ExchangeMesh, MAX_FILE_BYTES};
 use planora_feature::{
     BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM,
     MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS, MAX_POS_MM, MAX_ROLE_CHARS,
     MAX_TOL_MM, MAX_VIEWS, MeshId, SketchFeature, SketchPlane, Snapshot, SnapshotFeature,
-    StandardPlane,
+    StandardPlane, validate_drawing,
 };
 use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
@@ -33,19 +35,22 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 7;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder eingeschalteten
+/// Kleinste Formatnummer, die den Stand darstellt: 7 mit Stücklisten-Daten (eigene Zeilentexte,
+/// Stücklistenblatt, Nummernkreise oder eingeschalteter Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder eingeschalteten
 /// Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder Fasen, sonst 1
 /// (P7, P12, F7, Teilprojekt 12 P11).
 pub fn required_format(s: &Snapshot) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if s.project_info.is_some() || s.drawings.iter().any(|d| d.info.is_some()) {
+    if !s.parts_overrides.is_empty() || s.drawings.iter().any(has_parts_data) {
+        7
+    } else if s.project_info.is_some() || s.drawings.iter().any(|d| d.info.is_some()) {
         6
     } else if s.drawings.iter().any(needs_format_5) {
         5
@@ -58,6 +63,13 @@ pub fn required_format(s: &Snapshot) -> u32 {
     } else {
         1
     }
+}
+/// Eine Zeichnung braucht Format 7, wenn sie ein Stücklistenblatt ist, Nummernkreise hat oder die
+/// Stückliste auf dem Blatt eingeschaltet ist.
+fn has_parts_data(d: &Drawing) -> bool {
+    matches!(d.kind, DrawingKind::PartsList { .. })
+        || !d.balloons.is_empty()
+        || d.info.as_ref().is_some_and(|i| i.parts_list)
 }
 /// Eine Zeichnung braucht Format 5, wenn sie Maße hat oder eine Ansicht Mittellinien zeigt.
 fn needs_format_5(d: &Drawing) -> bool {
@@ -1256,6 +1268,7 @@ fn sheet_info_to(i: &SheetInfo) -> BlattangabenDto {
                 name: r.name.clone(),
             })
             .collect(),
+        stueckliste: i.parts_list,
     }
 }
 
@@ -1284,13 +1297,59 @@ fn sheet_info_from(origin: &str, name: &str, b: &BlattangabenDto) -> Result<Shee
                 name: a.name.clone(),
             })
             .collect(),
+        parts_list: b.stueckliste,
     };
     validate_sheet_info(&info)
         .map_err(|e| ProjectError::corrupt(origin, format!("Zeichnung „{name}“: {e}")))?;
     Ok(info)
 }
 
-fn drawing_to(d: &Drawing, with_marks: bool) -> Result<ZeichnungDto> {
+fn body_key_from(k: [u64; 2]) -> Option<BodyKey> {
+    Some(BodyKey {
+        feature: k[0],
+        index: u32::try_from(k[1]).ok()?,
+    })
+}
+
+fn overrides_to(o: &BTreeMap<BodyKey, RowOverride>) -> Vec<StuecklisteZeileDto> {
+    o.iter()
+        .map(|(k, v)| StuecklisteZeileDto {
+            koerper: [k.feature, u64::from(k.index)],
+            benennung: field_to(&v.name),
+            menge: field_to(&v.qty),
+            werkstoff: field_to(&v.material),
+            bemerkung: field_to(&v.note),
+        })
+        .collect()
+}
+
+fn overrides_from(
+    origin: &str,
+    list: &[StuecklisteZeileDto],
+) -> Result<BTreeMap<BodyKey, RowOverride>> {
+    let bad = |m: String| ProjectError::corrupt(origin, format!("Stückliste: {m}"));
+    // Die Länge ist beim Lesen schon auf MAX_OVERRIDES begrenzt (`de_overrides`).
+    let mut out = BTreeMap::new();
+    for z in list {
+        let key = body_key_from(z.koerper).ok_or_else(|| bad("Der Körper ist ungültig".into()))?;
+        let o = RowOverride {
+            name: field_from(&z.benennung),
+            qty: field_from(&z.menge),
+            material: field_from(&z.werkstoff),
+            note: field_from(&z.bemerkung),
+        };
+        validate_override(&o).map_err(bad)?;
+        if o.is_auto() {
+            return Err(bad("Ein Eintrag hat keine eigenen Texte".into()));
+        }
+        if out.insert(key, o).is_some() {
+            return Err(bad("Ein Körper kommt doppelt vor".into()));
+        }
+    }
+    Ok(out)
+}
+
+fn drawing_to(d: &Drawing, with_marks: bool, with_parts: bool) -> Result<ZeichnungDto> {
     Ok(ZeichnungDto {
         id: d.id.0,
         name: d.name.clone(),
@@ -1328,6 +1387,28 @@ fn drawing_to(d: &Drawing, with_marks: bool) -> Result<ZeichnungDto> {
         // Mittellinien geht er beim Speichern verloren (Kennungen beginnen dann wieder bei 1).
         naechstes_mass: if with_marks { d.next_dim } else { 0 },
         blattangaben: d.info.as_ref().map(sheet_info_to),
+        stuecklistenseite: match d.kind {
+            DrawingKind::PartsList { page } => Some(page),
+            DrawingKind::Views => None,
+        },
+        positionen: d
+            .balloons
+            .iter()
+            .map(|b| PositionDto {
+                id: b.id.0,
+                ansicht: b.view.0,
+                koerper: [b.body.feature, u64::from(b.body.index)],
+                anker: [b.anchor.0, b.anchor.1],
+                versatz: [b.offset.0, b.offset.1],
+            })
+            .collect(),
+        // Der Zähler bleibt auch ohne Kreise erhalten (gelöschte Kennungen werden nicht
+        // wiederverwendet), aber nur in Dateien, die ohnehin Format 7 haben.
+        naechste_position: if with_parts && (!d.balloons.is_empty() || d.next_balloon > 1) {
+            d.next_balloon
+        } else {
+            0
+        },
     })
 }
 
@@ -1379,7 +1460,29 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
     }
     let kinds: HashMap<ViewId, ViewKind> = views.iter().map(|v| (v.id, v.kind)).collect();
     let (dimensions, next_dim) = dimensions_from(origin, d, &kinds)?;
-    Ok(Drawing {
+    if d.positionen.len() > MAX_BALLOONS {
+        return Err(ctx(format!(
+            "Positionsnummern: höchstens {MAX_BALLOONS} Einträge"
+        )));
+    }
+    let next_balloon = counter(
+        origin,
+        &format!("Zeichnung „{}“, Positionsnummer", d.name),
+        d.naechste_position,
+        d.positionen.iter().map(|b| b.id),
+    )?;
+    let mut balloons = Vec::with_capacity(d.positionen.len());
+    for b in &d.positionen {
+        balloons.push(Balloon {
+            id: BalloonId(b.id),
+            view: ViewId(b.ansicht),
+            body: body_key_from(b.koerper)
+                .ok_or_else(|| ctx("Positionsnummer: Der Körper ist ungültig".into()))?,
+            anchor: (b.anker[0], b.anker[1]),
+            offset: (b.versatz[0], b.versatz[1]),
+        });
+    }
+    let drawing = Drawing {
         id: DrawingId(d.id),
         name: d.name.clone(),
         sheet: Sheet {
@@ -1396,7 +1499,20 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
             .as_ref()
             .map(|b| sheet_info_from(origin, &d.name, b))
             .transpose()?,
-    })
+        kind: match d.stuecklistenseite {
+            Some(page) => DrawingKind::PartsList { page },
+            None => DrawingKind::Views,
+        },
+        balloons,
+        next_balloon,
+    };
+    // Stücklistenblätter und Nummernkreise prüft dieselbe Regel wie beim Anlegen im Dokument;
+    // die Meldung nennt die Zeichnung.
+    if drawing.balloons.is_empty() && drawing.kind == DrawingKind::Views {
+        return Ok(drawing);
+    }
+    validate_drawing(&drawing).map_err(ctx)?;
+    Ok(drawing)
 }
 
 /// Liest die Zeichnungen und den Zeichnungszähler. Weitere Prüfungen (doppelte Kennungen und
@@ -1477,7 +1593,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         zeichnungen: s
             .drawings
             .iter()
-            .map(|d| drawing_to(d, format >= 5))
+            .map(|d| drawing_to(d, format >= 5, format >= 7))
             .collect::<Result<Vec<_>>>()?,
         // Ohne Zeichnungen fehlt der Zähler, damit alte Dateien unverändert bleiben (F7).
         naechste_zeichnung: if s.drawings.is_empty() {
@@ -1486,6 +1602,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
             s.next_drawing
         },
         projektangaben: s.project_info.as_ref().map(project_to),
+        stueckliste: overrides_to(&s.parts_overrides),
     };
     let text = serde_json::to_string_pretty(&file).map_err(|e| {
         ProjectError::Invalid(format!("Das Dokument lässt sich nicht schreiben: {e}"))
@@ -1550,6 +1667,19 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             "Blattangaben gibt es erst ab Dateiformat 6",
         ));
     }
+    let has_parts = |z: &ZeichnungDto| {
+        z.stuecklistenseite.is_some()
+            || !z.positionen.is_empty()
+            || z.naechste_position != 0
+            || z.blattangaben.as_ref().is_some_and(|b| b.stueckliste)
+    };
+    if file.format < 7 && (!file.stueckliste.is_empty() || file.zeichnungen.iter().any(has_parts)) {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Stücklisten und Positionsnummern gibt es erst ab Dateiformat 7",
+        ));
+    }
+    let parts_overrides = overrides_from(origin, &file.stueckliste)?;
     let (drawings, next_drawing) = drawings_from(origin, &file)?;
     let project_info = file
         .projektangaben
@@ -1586,5 +1716,6 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         drawings,
         next_drawing,
         project_info,
+        parts_overrides,
     })
 }

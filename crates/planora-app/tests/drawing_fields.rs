@@ -381,7 +381,10 @@ fn sheet_paints_over_the_whole_window_and_fits_into_free() {
         app_state(&mut app).drawing_ui.pan = vec2(-200.0, 120.0);
         let shot = app_settle(&c, &mut app, size);
         let tool = field(&c, "Werkzeugfeld");
-        let p = shot.find_in(tool, "Blatt einpassen").rect.center();
+        let p = shot
+            .find_in(tool, &icons::glyph(icons::Icon::FitSheet).to_string())
+            .rect
+            .center();
         app_click(&c, &mut app, size, p);
         let shot = app_settle(&c, &mut app, size);
         let l = drawing_view::last_layout(&c).unwrap();
@@ -426,12 +429,13 @@ fn tool_field_has_all_toolbar_texts_in_two_rows() {
         assert_eq!(Some(tool), shell_panels::last_layout(&c).unwrap().tool);
         let zoom_out = icons::glyph(icons::Icon::ZoomOut).to_string();
         let zoom_in = icons::glyph(icons::Icon::ZoomIn).to_string();
+        let fit = icons::glyph(icons::Icon::FitSheet).to_string();
         let mut rows: Vec<f32> = Vec::new();
         for must in [
             "3D-Modell",
             "Zeichnung: Blatt 1",
             "Ansicht hinzufügen",
-            "Blatt einpassen",
+            fit.as_str(),
             sheet_dialog::BUTTON,
             zoom_out.as_str(),
             zoom_in.as_str(),
@@ -856,11 +860,12 @@ fn tool_field_texts_are_reachable_by_scrolling_at_800x600() {
     let tool = field(&c, "Werkzeugfeld");
     let zoom_out = icons::glyph(icons::Icon::ZoomOut).to_string();
     let zoom_in = icons::glyph(icons::Icon::ZoomIn).to_string();
+    let fit = icons::glyph(icons::Icon::FitSheet).to_string();
     let wanted = [
         "3D-Modell",
         "Zeichnung: Blatt 1",
         "Ansicht hinzufügen",
-        "Blatt einpassen",
+        fit.as_str(),
         sheet_dialog::BUTTON,
         zoom_out.as_str(),
         zoom_in.as_str(),

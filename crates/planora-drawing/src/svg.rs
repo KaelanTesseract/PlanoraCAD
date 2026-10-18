@@ -41,6 +41,7 @@ use crate::annotate::{
 use crate::error::DrawError;
 use crate::out2d::{Out2d, bezier_pieces};
 use crate::sheet::SheetModel;
+use crate::sheet_frame::sheet_scale;
 use planora_math::{DVec2, PI, TAU};
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -109,7 +110,13 @@ pub fn svg_string(model: &SheetModel) -> Result<String, DrawError> {
             ));
         }
         s.push_str("</g>\n");
-        mark_groups(&mut s, &mut used, &name, &view.marks)?;
+        mark_groups(
+            &mut s,
+            &mut used,
+            &name,
+            &view.marks,
+            sheet_scale(model.sheet),
+        )?;
     }
     s.push_str("</g>\n</svg>\n");
     Ok(s)
@@ -129,40 +136,53 @@ const LOST_COLOR: &str = "#c00";
 fn color(kind: MarkKind) -> &'static str {
     match kind {
         MarkKind::Lost => LOST_COLOR,
-        MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Sheet(_) => MARK_COLOR,
+        MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Sheet(_) | MarkKind::Position(_) => {
+            MARK_COLOR
+        }
     }
 }
 
-/// Schreibt die Gruppen `„{name} Maße“` und `„{name} Mittellinien“` (nur wenn es Markierungen
-/// dieser Art gibt); die Kennungen sind unter allen Gruppen eindeutig.
+/// Gruppe einer Markierung innerhalb ihrer Ansicht.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MarkGroup {
+    Dims,
+    Centre,
+    Positions,
+}
+
+fn mark_group(m: &Mark) -> MarkGroup {
+    let kind = match m {
+        Mark::Line { kind, .. }
+        | Mark::Arrow { kind, .. }
+        | Mark::Arc { kind, .. }
+        | Mark::Text { kind, .. } => *kind,
+    };
+    match kind {
+        MarkKind::CenterLine => MarkGroup::Centre,
+        MarkKind::Position(_) => MarkGroup::Positions,
+        _ => MarkGroup::Dims,
+    }
+}
+
+/// Schreibt die Gruppen `„{name} Maße“`, `„{name} Mittellinien“` und `„{name} Positionen“`
+/// (nur wenn es Markierungen dieser Art gibt; verlorene Kreise stehen wie verlorene Maße bei den
+/// Maßen); die Kennungen sind unter allen Gruppen eindeutig. `sheet_scale` ist der Faktor des
+/// Blatts (Strichbreite der Nummernkreise).
 fn mark_groups(
     s: &mut String,
     used: &mut BTreeSet<String>,
     name: &str,
     marks: &[Mark],
+    sheet_scale: f64,
 ) -> Result<(), DrawError> {
-    let is_center = |m: &Mark| {
-        matches!(
-            m,
-            Mark::Line {
-                kind: MarkKind::CenterLine,
-                ..
-            } | Mark::Arrow {
-                kind: MarkKind::CenterLine,
-                ..
-            } | Mark::Arc {
-                kind: MarkKind::CenterLine,
-                ..
-            } | Mark::Text {
-                kind: MarkKind::CenterLine,
-                ..
-            }
-        )
-    };
-    for (suffix, center) in [("Maße", false), ("Mittellinien", true)] {
+    for (suffix, group) in [
+        ("Maße", MarkGroup::Dims),
+        ("Mittellinien", MarkGroup::Centre),
+        ("Positionen", MarkGroup::Positions),
+    ] {
         let mut body = String::new();
-        for m in marks.iter().filter(|m| is_center(m) == center) {
-            mark_element(&mut body, m, 1.0)?;
+        for m in marks.iter().filter(|m| mark_group(m) == group) {
+            mark_element(&mut body, m, sheet_scale)?;
         }
         if body.is_empty() {
             continue;
@@ -193,6 +213,7 @@ fn stroke_path(d: &str, kind: MarkKind, sheet_scale: f64) -> Result<String, Draw
         ),
         MarkKind::Dimension | MarkKind::Lost => (DIM_LINE_W, String::new()),
         MarkKind::Sheet(pen) => (pen.width_at(sheet_scale), String::new()),
+        MarkKind::Position(pen) => (pen.width_at(sheet_scale), String::new()),
     };
     Ok(format!(
         "<path d=\"{d}\" stroke=\"{}\" stroke-width=\"{}\"{dash} fill=\"none\" stroke-linecap=\"round\"/>

@@ -1,6 +1,10 @@
 //! Abschnitt „Zeichnungen“ im Browser (Teilprojekt 11, Aufgabe 16): je Zeichnung eine Zeile,
 //! darunter eingerückt ihre Ansichten; Wählen, Öffnen, Umbenennen und Löschen mit Rückfrage.
 //!
+//! Stücklistenblätter stehen wie jede Zeichnung in der Liste; umbenennen lassen sie sich nicht,
+//! ein Folgeblatt auch nicht einzeln löschen. Seite 1 löschen nimmt alle Blätter der Stückliste
+//! mit (Rückfrage nennt die Zahl).
+//!
 //! Die Zeilen nutzen dieselbe Hilfe wie die Feature-Zeilen (`browser::row`): gleiche Höhe,
 //! Schrift und Einrückung, volle Breite. Die Zustandsfunktionen (`request_*`, `apply_*`) sind
 //! ohne Oberfläche testbar.
@@ -13,7 +17,8 @@ use crate::drawing_view::view_names;
 use crate::icons::{paint_drawing_icon, paint_view_icon};
 use crate::state::AppState;
 use crate::theme;
-use planora_drawing::{Drawing, DrawingId, Projection, ViewId};
+use planora_drawing::{Drawing, DrawingId, DrawingKind, Projection, ViewId};
+use planora_feature::{FOLLOW_PAGE_DELETE, PARTS_SHEET_RENAME};
 
 /// Text bei fehlenden Zeichnungen.
 pub const EMPTY_TEXT: &str =
@@ -89,7 +94,27 @@ fn forget(state: &mut AppState, id: DrawingId) {
     }
 }
 
-fn delete_text_drawing(d: &Drawing) -> String {
+/// Seite eines Stücklistenblatts (ab 1), sonst `None`.
+fn parts_page(d: &Drawing) -> Option<u32> {
+    match d.kind {
+        DrawingKind::PartsList { page } => Some(page),
+        DrawingKind::Views => None,
+    }
+}
+
+/// Rückfrage vor dem Löschen der Stückliste mit `pages` Blättern.
+pub fn parts_delete_text(pages: usize) -> String {
+    if pages <= 1 {
+        "Stückliste löschen?".to_string()
+    } else {
+        format!("Stückliste mit {pages} Blättern löschen?")
+    }
+}
+
+fn delete_text_drawing(state: &AppState, d: &Drawing) -> String {
+    if parts_page(d).is_some() {
+        return parts_delete_text(state.document.parts_sheets().len());
+    }
     match d.views.len() {
         0 => format!("Zeichnung „{}“ löschen?", d.name),
         1 => format!("Zeichnung „{}“ mit 1 Ansicht löschen?", d.name),
@@ -103,10 +128,14 @@ pub fn request_delete_drawing(state: &mut AppState, id: DrawingId) {
     let Some(d) = state.document.drawing(id) else {
         return;
     };
+    if parts_page(d).is_some_and(|p| p > 1) {
+        state.message = Some(FOLLOW_PAGE_DELETE.into());
+        return;
+    }
     let plan = DrawingDeletePlan {
         drawing: id,
         view: None,
-        text: delete_text_drawing(d),
+        text: delete_text_drawing(state, d),
     };
     state.message = None;
     state.pending_delete_drawing = Some(plan);
@@ -197,11 +226,17 @@ pub fn apply_delete(state: &mut AppState, plan: &DrawingDeletePlan) -> Result<()
     }
     match plan.view {
         None => {
+            let before: Vec<DrawingId> = state.document.drawings().iter().map(|d| d.id).collect();
             state
                 .document
                 .delete_drawing(id)
                 .map_err(|e| e.to_string())?;
-            forget(state, id);
+            // Seite 1 der Stückliste nimmt ihre Folgeblätter mit: alle Verschwundenen aufräumen.
+            for gone in before {
+                if state.document.drawing(gone).is_none() {
+                    forget(state, gone);
+                }
+            }
             Ok(())
         }
         Some(view) => {
@@ -235,6 +270,10 @@ pub fn apply_delete(state: &mut AppState, plan: &DrawingDeletePlan) -> Result<()
 /// Öffnet das Fenster „Umbenennen“ für eine Zeichnung.
 pub fn request_rename(state: &mut AppState, id: DrawingId) {
     if let Some(d) = state.document.drawing(id) {
+        if parts_page(d).is_some() {
+            state.message = Some(PARTS_SHEET_RENAME.into());
+            return;
+        }
         state.rename_drawing_draft = Some((id, d.name.clone()));
     }
 }
@@ -317,6 +356,8 @@ struct DrawingRow {
     id: DrawingId,
     name: String,
     detail: String,
+    /// Seite eines Stücklistenblatts.
+    parts_page: Option<u32>,
     views: Vec<ViewRow>,
 }
 
@@ -331,6 +372,7 @@ fn rows_of(state: &AppState) -> Vec<DrawingRow> {
                 id: d.id,
                 name: d.name.clone(),
                 detail: drawing_detail(d),
+                parts_page: parts_page(d),
                 views: d
                     .views
                     .iter()
@@ -384,18 +426,32 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
                 action = Some(Action::Open(id));
                 ui.close();
             }
+            let rename_why = if read_only {
+                READ_ONLY_HINT
+            } else {
+                PARTS_SHEET_RENAME
+            };
             if ui
-                .add_enabled(!read_only, egui::Button::new("Umbenennen"))
-                .on_disabled_hover_text(READ_ONLY_HINT)
+                .add_enabled(
+                    !read_only && r.parts_page.is_none(),
+                    egui::Button::new("Umbenennen"),
+                )
+                .on_disabled_hover_text(rename_why)
                 .clicked()
             {
                 action = Some(Action::Rename(id));
                 ui.close();
             }
             ui.separator();
+            let follow = r.parts_page.is_some_and(|p| p > 1);
+            let delete_why = if read_only {
+                READ_ONLY_HINT
+            } else {
+                FOLLOW_PAGE_DELETE
+            };
             if ui
-                .add_enabled(!read_only, egui::Button::new("Löschen"))
-                .on_disabled_hover_text(READ_ONLY_HINT)
+                .add_enabled(!read_only && !follow, egui::Button::new("Löschen"))
+                .on_disabled_hover_text(delete_why)
                 .clicked()
             {
                 action = Some(Action::DeleteDrawing(id));

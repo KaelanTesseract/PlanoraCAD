@@ -9,6 +9,8 @@ pub mod georef;
 mod meshes;
 pub mod model;
 mod ops;
+mod parts;
+mod parts_sheets;
 pub mod recompute;
 pub mod refs;
 mod snapshot;
@@ -18,7 +20,9 @@ pub use dimensions::{
     MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_FIT_CHARS, MAX_HINT_MM, MAX_ROLE_CHARS, MAX_TOL_MM,
     resolve_drawing_dimensions, resolve_drawing_dimensions_keyed,
 };
-pub use drawings::{MAX_DRAWINGS, MAX_NAME_CHARS, MAX_POS_MM, MAX_VIEWS, validate_drawing};
+pub use drawings::{
+    MAX_DRAWINGS, MAX_NAME_CHARS, MAX_POS_MM, MAX_VIEWS, TOO_MANY_BALLOONS, validate_drawing,
+};
 pub use error::FeatureError;
 pub use georef::{
     from_edge_ref, from_face_ref, geo_ref_for_edge, geo_ref_for_edge_cached, geo_ref_for_face,
@@ -29,6 +33,10 @@ pub use model::{
     BlendArt, BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus,
     MAX_MESH_SCALE, MESH_LOCKED, MIN_MESH_SCALE, MeshId, ROTATION_NORM_TOL, SketchFeature,
     SketchPlane, StandardPlane,
+};
+pub use parts_sheets::{
+    FOLLOW_PAGE_DELETE, PARTS_NAME_TAKEN, PARTS_PAGE_NAME_TAKEN, PARTS_SHEET_EXISTS,
+    PARTS_SHEET_RENAME,
 };
 pub use recompute::{RecomputeReport, VisibleBody};
 pub use refs::{

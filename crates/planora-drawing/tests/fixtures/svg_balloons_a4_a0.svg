@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="297mm" height="210mm" viewBox="0 0 297 210">
+<g transform="matrix(1 0 0 -1 0 210)">
+<g id="Vorne">
+</g>
+<g id="Vorne Positionen">
+<path d="M 82.828571 100 A 2.828571 2.828571 0 0 1 80 102.828571 A 2.828571 2.828571 0 0 1 77.171429 100 A 2.828571 2.828571 0 0 1 80 97.171429 A 2.828571 2.828571 0 0 1 82.828571 100" stroke="#000" stroke-width="0.2475" fill="none" stroke-linecap="round"/>
+<path d="M 60 100 L 77.171429 100" stroke="#000" stroke-width="0.18" fill="none" stroke-linecap="round"/>
+<path d="M 60.353571 100 A 0.353571 0.353571 0 0 1 60 100.353571 A 0.353571 0.353571 0 0 1 59.646429 100 A 0.353571 0.353571 0 0 1 60 99.646429 A 0.353571 0.353571 0 0 1 60.353571 100" stroke="#000" stroke-width="0.18" fill="none" stroke-linecap="round"/>
+<text transform="translate(80 98.7625) scale(1 -1) rotate(0)" font-family="sans-serif" font-size="2.475" text-anchor="middle" fill="#000">7</text>
+<path d="M 112.828571 100 A 2.828571 2.828571 0 0 1 110 102.828571 A 2.828571 2.828571 0 0 1 107.171429 100 A 2.828571 2.828571 0 0 1 110 97.171429 A 2.828571 2.828571 0 0 1 112.828571 100" stroke="#000" stroke-width="0.2475" fill="none" stroke-linecap="round"/>
+<path d="M 90 100 L 107.171429 100" stroke="#000" stroke-width="0.18" fill="none" stroke-linecap="round"/>
+<path d="M 90.353571 100 A 0.353571 0.353571 0 0 1 90 100.353571 A 0.353571 0.353571 0 0 1 89.646429 100 A 0.353571 0.353571 0 0 1 90 99.646429 A 0.353571 0.353571 0 0 1 90.353571 100" stroke="#000" stroke-width="0.18" fill="none" stroke-linecap="round"/>
+<text transform="translate(110 98.7625) scale(1 -1) rotate(0)" font-family="sans-serif" font-size="2.475" text-anchor="middle" fill="#000">88</text>
+<path d="M 142.828571 100 A 2.828571 2.828571 0 0 1 140 102.828571 A 2.828571 2.828571 0 0 1 137.171429 100 A 2.828571 2.828571 0 0 1 140 97.171429 A 2.828571 2.828571 0 0 1 142.828571 100" stroke="#000" stroke-width="0.2475" fill="none" stroke-linecap="round"/>
+<path d="M 120 100 L 137.171429 100" stroke="#000" stroke-width="0.18" fill="none" stroke-linecap="round"/>
+<path d="M 120.353571 100 A 0.353571 0.353571 0 0 1 120 100.353571 A 0.353571 0.353571 0 0 1 119.646429 100 A 0.353571 0.353571 0 0 1 120 99.646429 A 0.353571 0.353571 0 0 1 120.353571 100" stroke="#000" stroke-width="0.18" fill="none" stroke-linecap="round"/>
+<text transform="translate(140 98.952381) scale(1 -1) rotate(0)" font-family="sans-serif" font-size="2.095238" text-anchor="middle" fill="#000">200</text>
+</g>
+</g>
+</svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="841mm" height="1189mm" viewBox="0 0 841 1189">
+<g transform="matrix(1 0 0 -1 0 1189)">
+<g id="Vorne">
+</g>
+<g id="Vorne Positionen">
+<path d="M 91.32381 100 A 11.32381 11.32381 0 0 1 80 111.32381 A 11.32381 11.32381 0 0 1 68.67619 100 A 11.32381 11.32381 0 0 1 80 88.67619 A 11.32381 11.32381 0 0 1 91.32381 100" stroke="#000" stroke-width="0.990833" fill="none" stroke-linecap="round"/>
+<path d="M 60 100 L 68.67619 100" stroke="#000" stroke-width="0.707738" fill="none" stroke-linecap="round"/>
+<path d="M 61.415476 100 A 1.415476 1.415476 0 0 1 60 101.415476 A 1.415476 1.415476 0 0 1 58.584524 100 A 1.415476 1.415476 0 0 1 60 98.584524 A 1.415476 1.415476 0 0 1 61.415476 100" stroke="#000" stroke-width="0.707738" fill="none" stroke-linecap="round"/>
+<text transform="translate(80 95.045833) scale(1 -1) rotate(0)" font-family="sans-serif" font-size="9.908333" text-anchor="middle" fill="#000">7</text>
+<path d="M 121.32381 100 A 11.32381 11.32381 0 0 1 110 111.32381 A 11.32381 11.32381 0 0 1 98.67619 100 A 11.32381 11.32381 0 0 1 110 88.67619 A 11.32381 11.32381 0 0 1 121.32381 100" stroke="#000" stroke-width="0.990833" fill="none" stroke-linecap="round"/>
+<path d="M 90 100 L 98.67619 100" stroke="#000" stroke-width="0.707738" fill="none" stroke-linecap="round"/>
+<path d="M 91.415476 100 A 1.415476 1.415476 0 0 1 90 101.415476 A 1.415476 1.415476 0 0 1 88.584524 100 A 1.415476 1.415476 0 0 1 90 98.584524 A 1.415476 1.415476 0 0 1 91.415476 100" stroke="#000" stroke-width="0.707738" fill="none" stroke-linecap="round"/>
+<text transform="translate(110 95.045833) scale(1 -1) rotate(0)" font-family="sans-serif" font-size="9.908333" text-anchor="middle" fill="#000">88</text>
+<path d="M 151.32381 100 A 11.32381 11.32381 0 0 1 140 111.32381 A 11.32381 11.32381 0 0 1 128.67619 100 A 11.32381 11.32381 0 0 1 140 88.67619 A 11.32381 11.32381 0 0 1 151.32381 100" stroke="#000" stroke-width="0.990833" fill="none" stroke-linecap="round"/>
+<path d="M 120 100 L 128.67619 100" stroke="#000" stroke-width="0.707738" fill="none" stroke-linecap="round"/>
+<path d="M 121.415476 100 A 1.415476 1.415476 0 0 1 120 101.415476 A 1.415476 1.415476 0 0 1 118.584524 100 A 1.415476 1.415476 0 0 1 120 98.584524 A 1.415476 1.415476 0 0 1 121.415476 100" stroke="#000" stroke-width="0.707738" fill="none" stroke-linecap="round"/>
+<text transform="translate(140 95.805996) scale(1 -1) rotate(0)" font-family="sans-serif" font-size="8.388007" text-anchor="middle" fill="#000">200</text>
+</g>
+</g>
+</svg>

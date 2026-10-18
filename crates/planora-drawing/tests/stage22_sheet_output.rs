@@ -30,6 +30,7 @@ fn v(x: f64, y: f64) -> DVec2 {
 
 fn texts_with(fields: &[(TitleField, &str)]) -> TitleTexts {
     TitleTexts {
+        parts: Vec::new(),
         fields: fields.iter().map(|(f, s)| (*f, s.to_string())).collect(),
         revisions: Vec::new(),
         notes: Vec::new(),
@@ -178,6 +179,7 @@ fn longest_texts_stay_in_their_cells() {
             fields.insert(f, cycle(pattern, f.max_chars()));
         }
         let texts = TitleTexts {
+            parts: Vec::new(),
             fields,
             revisions: (0..23)
                 .map(|_| {
@@ -277,6 +279,7 @@ fn longest_texts_stay_in_their_cells() {
 
 fn a3_texts() -> TitleTexts {
     TitleTexts {
+        parts: Vec::new(),
         fields: [
             (TitleField::Title, "Halter"),
             (TitleField::SheetOf, "2 von 3"),
@@ -1003,6 +1006,7 @@ fn every_dxf_frame_text_stays_in_its_cell_with_the_width_factor() {
         fields.insert(f, cycle("Wm", f.max_chars()));
     }
     let texts = TitleTexts {
+        parts: Vec::new(),
         fields,
         revisions: (0..6)
             .map(|_| {

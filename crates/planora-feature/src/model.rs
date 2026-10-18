@@ -372,6 +372,9 @@ pub struct Document {
     /// Projektangaben für das Schriftfeld (Teilprojekt 3c-1); `None`, bis eine Zeichnung mit
     /// Datum und Benutzer angelegt wurde.
     pub(crate) project_info: Option<planora_drawing::sheet_info::ProjectInfo>,
+    /// Eigene Texte der Stücklistenzeilen, nach Körperkennung (Teilprojekt 3c-2); zählt wie die
+    /// Zeichnungen zu [`Document::edit_count`], nicht zu [`Document::model_edit_count`].
+    pub(crate) parts_overrides: BTreeMap<planora_drawing::BodyKey, planora_drawing::RowOverride>,
 }
 
 /// Standard-Sehnentoleranz in Millimetern (wie in der App).
@@ -411,6 +414,7 @@ impl Document {
             next_drawing: 1,
             drawing_edits: 0,
             project_info: None,
+            parts_overrides: BTreeMap::new(),
         }
     }
 

@@ -1,6 +1,8 @@
 //! PlanoraCAD – Anwendungslogik und Oberfläche.
 
 pub mod app;
+pub mod balloon_browser;
+pub mod balloon_tool;
 pub mod blend_dialog;
 pub mod boolean_dialog;
 pub mod browser;
@@ -23,6 +25,7 @@ pub mod icons;
 pub mod import_dialog;
 pub mod jobs;
 pub mod mesh_body;
+pub mod parts_section;
 pub mod projects_panel;
 pub mod prompts;
 pub mod properties;

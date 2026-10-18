@@ -1,7 +1,8 @@
 //! Blattangaben des Schriftfelds: Eingabefelder mit Vorbelegung („automatisch“), Änderungen mit
 //! Buchstaben, Grenzen und die Auflösung zu den Texten, die auf das Blatt kommen.
 
-use crate::model::{Drawing, Scale};
+use crate::model::{Drawing, DrawingKind, Scale};
+use crate::parts::{PARTS_DOC_TYPE, PartsCells};
 use crate::sheet_frame::{REV_VISIBLE, TitleField};
 use std::collections::BTreeMap;
 
@@ -92,6 +93,8 @@ pub struct SheetInfo {
     pub weight: FieldValue,
     pub notes: NotesValue,
     pub revisions: Vec<Revision>,
+    /// Stückliste auf diesem Zeichnungsblatt zeigen (Vorgabe aus).
+    pub parts_list: bool,
 }
 
 /// Datum und Benutzer beim Anlegen.
@@ -186,6 +189,7 @@ impl SheetInfo {
             weight: FieldValue::Auto,
             notes: NotesValue::Auto,
             revisions: Vec::new(),
+            parts_list: false,
         }
     }
 
@@ -213,7 +217,7 @@ pub fn default_notes(tolerance: &str) -> Vec<String> {
     ]
 }
 
-fn check_text(what: &str, s: &str, max: usize) -> Result<(), String> {
+pub(crate) fn check_text(what: &str, s: &str, max: usize) -> Result<(), String> {
     if s.chars().any(char::is_control) {
         return Err(format!("{what}: Steuerzeichen sind nicht erlaubt."));
     }
@@ -223,7 +227,7 @@ fn check_text(what: &str, s: &str, max: usize) -> Result<(), String> {
     Ok(())
 }
 
-fn check_value(what: &str, v: &FieldValue, max: usize) -> Result<(), String> {
+pub(crate) fn check_value(what: &str, v: &FieldValue, max: usize) -> Result<(), String> {
     match v {
         FieldValue::Auto => Ok(()),
         FieldValue::Text(t) => check_text(what, t, max),
@@ -301,6 +305,8 @@ pub struct TitleTexts {
     pub fields: BTreeMap<TitleField, String>,
     pub revisions: Vec<[String; 4]>,
     pub notes: Vec<String>,
+    /// Zelltexte der Stückliste (bei [`resolve_texts`] leer; der Aufrufer füllt sie).
+    pub parts: Vec<PartsCells>,
 }
 
 impl TitleTexts {
@@ -334,6 +340,10 @@ pub fn resolve_texts(
     };
     let auto_number = format!("{}-{:02}", ctx.doc_name, ctx.index);
     let auto_sheet = format!("{} von {}", ctx.index, ctx.count);
+    let auto_doc_type = match d.kind {
+        DrawingKind::PartsList { .. } => PARTS_DOC_TYPE,
+        DrawingKind::Views => DEFAULT_DOC_TYPE,
+    };
     let auto_scale = main.map_or_else(|| DASH.to_string(), |s| s.label());
     let issued_auto = info.map_or(DASH, |i| i.created.as_str());
     // Projektfelder: ohne Projekt ein Strich.
@@ -351,7 +361,7 @@ pub fn resolve_texts(
     fields.insert(TitleField::Subtitle, pick(info.map(|i| &i.subtitle), ""));
     fields.insert(
         TitleField::DocType,
-        pick(info.map(|i| &i.doc_type), DEFAULT_DOC_TYPE),
+        pick(info.map(|i| &i.doc_type), auto_doc_type),
     );
     fields.insert(
         TitleField::Status,
@@ -417,5 +427,6 @@ pub fn resolve_texts(
         fields,
         revisions: rows,
         notes,
+        parts: Vec::new(),
     }
 }

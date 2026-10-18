@@ -134,6 +134,8 @@ pub enum Icon {
     Home,
     /// Phosphor `note-pencil`.
     SheetInfo,
+    /// Phosphor `number-circle-one`.
+    PositionTool,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -199,6 +201,7 @@ pub const ALL: &[Icon] = &[
     Icon::NewTab,
     Icon::Home,
     Icon::SheetInfo,
+    Icon::PositionTool,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -264,6 +267,7 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::NewTab, '\u{e3d4}', "plus"),
     (Icon::Home, '\u{e2c6}', "house-simple"),
     (Icon::SheetInfo, '\u{e34c}', "note-pencil"),
+    (Icon::PositionTool, '\u{e36a}', "number-circle-one"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {
@@ -664,6 +668,20 @@ pub fn paint_view_icon(painter: &Painter, rect: Rect, color: Color32) {
         ],
         Stroke::new(1.0, color),
     );
+}
+
+/// Symbol einer Positionsnummer für die Zeilen im Abschnitt „Positionen“: Kreis mit
+/// Hinweislinie und Punkt.
+pub fn paint_balloon_icon(painter: &Painter, rect: Rect, color: Color32) {
+    let stroke = Stroke::new(STROKE_WIDTH, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.22;
+    let centre = c + vec2(r * 0.6, -r * 0.6);
+    painter.circle_stroke(centre, r, stroke);
+    let dot = c + vec2(-r * 1.5, r * 1.5);
+    let dir = (centre - dot).normalized();
+    seg(painter, [dot, centre - dir * r], Stroke::new(1.0, color));
+    painter.circle_filled(dot, 1.5, color);
 }
 
 /// Symbol einer Maßart für die Zeilen im Abschnitt „Maße“: Maßlinie mit Pfeilspitzen
