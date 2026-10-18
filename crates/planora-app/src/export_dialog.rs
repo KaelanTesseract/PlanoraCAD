@@ -567,6 +567,11 @@ pub struct FrameInput {
 /// Wie [`prepare_drawing_with`]; mit `frame` entsteht zu dem Blatt auch der Blattrahmen: die
 /// Texte aus den Blattangaben und dem Maßstab der Hauptansicht, die Geometrie nach deren
 /// Zeilenzahlen. Ohne `frame` bleibt `model.frame` leer.
+///
+/// Diese Funktion (und [`prepare_drawing`], [`prepare_drawing_with`]) kennt die Nummern der
+/// Positionskreise nicht: Eine Zeichnung mit Kreisen würde als „Kreis verloren“ abgewiesen, in
+/// Debug-Läufen bricht eine Prüfung vorher ab. Dafür gibt es [`prepare_drawing_parts`] mit
+/// [`parts_input`].
 pub fn prepare_drawing_framed(
     drawing: &Drawing,
     solids: &[(String, Solid)],
@@ -575,6 +580,10 @@ pub fn prepare_drawing_framed(
     frame: Option<&FrameInput>,
     progress: &Progress,
 ) -> Result<DrawingPrepared, String> {
+    debug_assert!(
+        drawing.balloons.is_empty(),
+        "Zeichnungen mit Positionsnummern gehören zu prepare_drawing_parts (mit den Nummern)"
+    );
     prepare_drawing_parts(
         drawing,
         solids,
@@ -623,7 +632,7 @@ pub fn parts_input(state: &AppState, drawing: &Drawing) -> PartsInput {
 /// geschrieben.
 pub fn lost_balloon_text(view: &str) -> String {
     format!(
-        "Eine Positionsnummer in der Ansicht „{view}“ hat ihren Körper verloren. Bitte die Positionsnummer löschen und neu setzen."
+        "Die Positionsnummer in der Ansicht „{view}“ gehört zu einem Teil, das es nicht mehr gibt. Bitte die Positionsnummer löschen und neu setzen."
     )
 }
 
@@ -795,6 +804,20 @@ pub fn prepare_drawing_parts(
 /// Meldung, wenn sich nicht alle Ansichten auf dem Blatt anordnen lassen.
 pub const VIEWS_NOT_PLACEABLE: &str =
     "Die Zeichnung enthält Ansichten, die sich nicht auf dem Blatt anordnen lassen.";
+
+/// Text im Fortschrittsbalken, solange das Ergebnis des Formats `format` berechnet wird;
+/// `is_list` für ein Stücklistenblatt.
+pub fn computing_text(format: ExportFormat, is_list: bool) -> &'static str {
+    if format.is_drawing() && is_list {
+        "Die Stückliste wird berechnet …"
+    } else if format.is_drawing() {
+        "Die Ansichten werden berechnet …"
+    } else if format.is_step() {
+        "Die Körper werden geprüft …"
+    } else {
+        "Das Netz wird berechnet …"
+    }
+}
 
 /// Hinweis auf Netz-Körper, die eine Zeichnung nicht enthält.
 pub fn drawing_skipped_text(names: &[String]) -> String {
@@ -1899,15 +1922,7 @@ impl ExportDialog {
                 ui.add_space(8.0);
                 match &status {
                     ExportStatus::Computing(f) => {
-                        let text = if before.is_drawing() && is_list {
-                            "Die Stückliste wird berechnet …"
-                        } else if before.is_drawing() {
-                            "Die Ansichten werden berechnet …"
-                        } else if before.is_step() {
-                            "Die Körper werden geprüft …"
-                        } else {
-                            "Das Netz wird berechnet …"
-                        };
+                        let text = computing_text(before, is_list);
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::ProgressBar::new(*f)

@@ -825,7 +825,16 @@ fn closing_a_tab_while_a_drawing_is_written_leaves_no_helper_file() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(temp_files(&dir), 0);
-    let text = fs::read_to_string(&target).unwrap();
+    // Die Zieldatei ist alt oder fertig; beim Ersetzen kann ein Lesen kurz scheitern.
+    let mut text = fs::read_to_string(&target);
+    for _ in 0..100 {
+        if text.is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        text = fs::read_to_string(&target);
+    }
+    let text = text.unwrap();
     assert!(text == "alt" || text.starts_with("<?xml"));
     let _ = fs::remove_dir_all(&dir);
 }
@@ -1369,8 +1378,8 @@ fn parts_sheet_exports_its_table() {
 
 #[test]
 fn lost_balloon_blocks_export() {
-    let lost = lost_balloon_text("Vorne");
-    assert!(lost.contains("„Vorne“"));
+    let lost = "Die Positionsnummer in der Ansicht „Vorne“ gehört zu einem Teil, das es nicht mehr gibt. Bitte die Positionsnummer löschen und neu setzen.".to_string();
+    assert_eq!(lost_balloon_text("Vorne"), lost);
     let dir = temp_dir("verloren");
     for format in [SVG, DXF] {
         for frame in [false, true] {
@@ -1681,4 +1690,196 @@ fn dxf_table_texts_get_room_for_cad_fonts_with_and_without_frame() {
     assert!(heights[0] < svg_h - 0.1, "{heights:?} {svg_h}");
     assert!((heights[0] - heights[1]).abs() < 1e-9, "{heights:?}");
     let _ = fs::remove_dir_all(&dir);
+}
+
+// Nachbesserung nach Review ------------------------------------------------------------------
+
+#[test]
+fn first_lost_balloon_in_drawing_order_names_its_view() {
+    let (mut s, f) = named_boxes(2);
+    let id = add_drawing(&mut s, "Blatt 1");
+    let views = s.document.drawing(id).unwrap().views.clone();
+    let front = views[0].id;
+    let top = views[1].id;
+    let names = planora_app::drawing_view::view_names(s.document.drawing(id).unwrap());
+    assert_eq!(names[&front], "Vorne");
+    assert_ne!(names[&top], "Vorne");
+    // Reihenfolge: heil (Vorne), verloren (Oben), verloren (Vorne).
+    for (view, k) in [(front, 0), (top, 1), (front, 1)] {
+        s.document
+            .add_balloon(id, view, body_key(f[k]), (0.5, 0.5), (-15.0, 10.0))
+            .unwrap();
+    }
+    s.delete_body(1).unwrap();
+    for format in [SVG, DXF] {
+        let d = dialog_with(&s, format, false, id);
+        let want = format!(
+            "Die Positionsnummer in der Ansicht „{}“ gehört zu einem Teil, das es nicht mehr gibt. Bitte die Positionsnummer löschen und neu setzen.",
+            names[&top]
+        );
+        assert_eq!(d.status(&s), ExportStatus::Failed(want), "{format:?}");
+    }
+}
+
+#[test]
+fn dxf_cell_message_uses_the_pos_text_of_page_two() {
+    let (mut s, f) = named_boxes(45);
+    let first = add_drawing(&mut s, "Blatt 1");
+    s.drawing_ui.open(first);
+    let p1 = planora_app::parts_section::create_or_open(&mut s, A4_HOCH).unwrap();
+    let p2 = s.document.parts_sheets()[1];
+    set_name_override(&mut s, f[44], "😀");
+    for frame in [false, true] {
+        let d = dialog_with(&s, DXF, frame, p2);
+        assert_eq!(
+            d.status(&s),
+            ExportStatus::Failed(
+                "Das Zeichen U+1F600 im Feld „Stückliste, Pos. 45, Benennung“ lässt sich als DXF nicht ausgeben. Bitte ändern."
+                    .into()
+            ),
+            "{frame}"
+        );
+        // Blatt 1 enthält die Zeile nicht und geht durch.
+        let d = dialog_with(&s, DXF, frame, p1);
+        assert!(matches!(d.status(&s), ExportStatus::DrawingReady { .. }));
+    }
+}
+
+#[test]
+fn dxf_cell_check_reports_characters_before_length() {
+    let (mut s, f) = named_boxes(2);
+    let id = add_drawing(&mut s, "Blatt 1");
+    s.drawing_ui.open(id);
+    let p1 = planora_app::parts_section::create_or_open(&mut s, A4_HOCH).unwrap();
+    let both = format!("😀{}", "Ä".repeat(55));
+    assert!(!dxf_text_fits(&both), "Testvoraussetzung");
+    set_name_override(&mut s, f[0], &both);
+    let d = dialog_with(&s, DXF, false, p1);
+    assert_eq!(
+        d.status(&s),
+        ExportStatus::Failed(
+            "Das Zeichen U+1F600 im Feld „Stückliste, Pos. 1, Benennung“ lässt sich als DXF nicht ausgeben. Bitte ändern."
+                .into()
+        )
+    );
+}
+
+#[test]
+fn parts_sheet_texts_in_the_export_window() {
+    let (mut s, _) = named_boxes(2);
+    s.import_mesh("Würfel", Arc::new(cube()), 1.0).unwrap();
+    s.selected_body = None;
+    let first = add_drawing(&mut s, "Blatt 1");
+    s.drawing_ui.open(first);
+    let p1 = planora_app::parts_section::create_or_open(&mut s, A4_HOCH).unwrap();
+    // Fertig: eigener Satz, nur die Blattangabe, keine Meldung zu Netz-Körpern.
+    let mut d = dialog_with(&s, SVG, true, p1);
+    let ui = draw(&mut d, &mut s);
+    assert!(ui.contains("Die Stückliste ist berechnet."), "{ui}");
+    assert!(!ui.contains("Alle Ansichten sind berechnet."), "{ui}");
+    assert!(ui.contains("Blatt: A4 hoch"), "{ui}");
+    for gone in [
+        "Ansichten:",
+        "Linien:",
+        "Maße:",
+        "Mittellinien:",
+        "Netz-Körper",
+    ] {
+        assert!(!ui.contains(gone), "{gone}: {ui}");
+    }
+    // Das Zeichnungsblatt zeigt dagegen alles.
+    let mut d = dialog_with(&s, SVG, true, first);
+    let ui = draw(&mut d, &mut s);
+    assert!(ui.contains("Alle Ansichten sind berechnet."), "{ui}");
+    for shown in [
+        "Ansichten:",
+        "Linien:",
+        "Maße:",
+        "Mittellinien:",
+        "Netz-Körper",
+    ] {
+        assert!(ui.contains(shown), "{shown}: {ui}");
+    }
+    // Während der Berechnung (der Text hängt nur von Format und Blattart ab).
+    assert_eq!(computing_text(SVG, true), "Die Stückliste wird berechnet …");
+    assert_eq!(computing_text(DXF, true), "Die Stückliste wird berechnet …");
+    assert_eq!(
+        computing_text(SVG, false),
+        "Die Ansichten werden berechnet …"
+    );
+    assert_eq!(
+        computing_text(ExportFormat::Step, false),
+        "Die Körper werden geprüft …"
+    );
+    assert_eq!(
+        computing_text(ExportFormat::Mesh(Format::Stl), false),
+        "Das Netz wird berechnet …"
+    );
+}
+
+#[test]
+fn export_table_geometry_equals_the_screen() {
+    use planora_app::drawing_view::{layout_of, sheet_context, sheet_texts};
+    use planora_drawing::sheet_marks::sheet_frame;
+    for sheet in [A4_HOCH, A3_QUER] {
+        let (mut s, _) = named_boxes(2);
+        let id = s
+            .document
+            .add_drawing("Blatt 1", sheet, Projection::First)
+            .unwrap();
+        s.document
+            .add_view(
+                id,
+                ViewKind::Front,
+                one(1, 2),
+                Placement::Free { x: 60.0, y: 150.0 },
+                None,
+            )
+            .unwrap();
+        set_parts_switch(&mut s, id, true);
+        let drawing = s.document.drawing(id).unwrap().clone();
+        let texts = sheet_texts(&s, &drawing);
+        assert!(!texts.notes.is_empty(), "Hinweisfeld ist da");
+        assert_eq!(texts.parts.len(), 2);
+        let screen = sheet_frame(&layout_of(&s, &drawing), &texts, drawing.projection);
+        let frame = FrameInput {
+            project: s.document.project_info().cloned(),
+            ctx: sheet_context(&s, id).unwrap(),
+            dxf: false,
+        };
+        let solids: Vec<(String, planora_kernel::Solid)> = s
+            .bodies
+            .iter()
+            .map(|b| (b.name.clone(), b.solid.clone()))
+            .collect();
+        let out = prepare_drawing_parts(
+            &drawing,
+            &solids,
+            compute_view,
+            resolve_dimensions_in_worker,
+            Some(&frame),
+            &parts_input(&s, &drawing),
+            &Progress::new(),
+        )
+        .unwrap();
+        let exported = out.model.frame.as_ref().unwrap();
+        assert_eq!(exported.marks.len(), screen.marks.len(), "{sheet:?}");
+        assert!(exported.marks == screen.marks, "{sheet:?}");
+        assert_eq!(exported.scale, screen.scale);
+    }
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "prepare_drawing_parts")]
+fn plain_prepare_refuses_drawings_with_balloons() {
+    let (mut s, f) = named_boxes(1);
+    let id = add_drawing(&mut s, "Blatt 1");
+    let front = front_of(&s, id);
+    s.document
+        .add_balloon(id, front, body_key(f[0]), (0.5, 0.5), (-15.0, 10.0))
+        .unwrap();
+    let drawing = s.document.drawing(id).unwrap().clone();
+    let solids = vec![("Teil 1".to_string(), s.bodies[0].solid.clone())];
+    let _ = prepare_drawing(&drawing, &solids, compute_view, &Progress::new());
 }
