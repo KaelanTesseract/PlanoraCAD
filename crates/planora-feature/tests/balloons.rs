@@ -238,6 +238,10 @@ fn validate_rules() {
     }
     // Versatz endlich, Betrag höchstens MAX_POS_MM (0,6/0,8 ergibt genau 1; etwas mehr nicht).
     assert!(check(&|x| x.balloons[0].offset = (MAX_POS_MM * 0.6, MAX_POS_MM * 0.81)).is_err());
+    // Schräg: der Betrag zählt, nicht die einzelnen Richtungen (0,75·√2 > 1, 0,7·√2 < 1).
+    assert!(check(&|x| x.balloons[0].offset = (MAX_POS_MM * 0.75, MAX_POS_MM * 0.75)).is_err());
+    assert!(check(&|x| x.balloons[0].offset = (-MAX_POS_MM * 0.75, MAX_POS_MM * 0.75)).is_err());
+    assert!(check(&|x| x.balloons[0].offset = (MAX_POS_MM * 0.7, -MAX_POS_MM * 0.7)).is_ok());
     assert!(check(&|x| x.balloons[0].offset = (f64::NAN, 0.0)).is_err());
     assert!(check(&|x| x.balloons[0].offset = (0.0, f64::NEG_INFINITY)).is_err());
     // Ansicht vorhanden.
@@ -298,6 +302,48 @@ fn validate_rules() {
         e.contains("Stücklistenblatt") && e.contains("Positionsnummern"),
         "{e}"
     );
+}
+
+// F5: drei gleichnamige Körper in einer Zeile; der Kreis am mittleren Körper trägt die
+// Nummer der Zeile (nicht nur der erste oder letzte Körper zählt).
+#[test]
+fn middle_body_of_a_row_has_the_row_number() {
+    let mut d = Document::new();
+    let platte = cube_at(&mut d, "Platte", 0.0);
+    let b1 = cube_at(&mut d, "Bolzen", 20.0);
+    let b2 = cube_at(&mut d, "Bolzen", 40.0);
+    let b3 = cube_at(&mut d, "Bolzen", 60.0);
+    let (dr, view) = with_view(&mut d);
+    let add = |d: &mut Document, k: BodyKey| {
+        d.add_balloon(dr, view, k, (0.5, 0.5), (10.0, 10.0))
+            .unwrap()
+    };
+    let mid = add(&mut d, key(b2));
+    let first = add(&mut d, key(b1));
+    let last = add(&mut d, key(b3));
+    let p = add(&mut d, key(platte));
+    assert_eq!(
+        d.balloon_numbers(dr),
+        BTreeMap::from([
+            (mid, Some(2)),
+            (first, Some(2)),
+            (last, Some(2)),
+            (p, Some(1))
+        ])
+    );
+    // Durch Umbenennen entstanden: „Stift“ wird zu „Platte“ und liegt dann in der Mitte.
+    let mut d = Document::new();
+    let a = cube_at(&mut d, "Platte", 0.0);
+    let s = cube_at(&mut d, "Stift", 20.0);
+    let c = cube_at(&mut d, "Platte", 40.0);
+    let (dr, view) = with_view(&mut d);
+    let bs = d
+        .add_balloon(dr, view, key(s), (0.5, 0.5), (10.0, 10.0))
+        .unwrap();
+    assert_eq!(d.balloon_numbers(dr)[&bs], Some(2));
+    d.rename(s, "Platte").unwrap();
+    assert_eq!(d.parts_rows()[0].keys, vec![key(a), key(s), key(c)]);
+    assert_eq!(d.balloon_numbers(dr)[&bs], Some(1));
 }
 
 #[test]

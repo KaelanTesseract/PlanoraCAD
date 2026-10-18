@@ -479,6 +479,40 @@ fn follows_view_scale() {
     };
     let list = balloon_marks(&case.drawing, &case.results(), &numbers);
     assert!((list[0].radius - 4.0 * 297.0 / 420.0).abs() < 1e-12);
+    // Mitte und Radius in `BalloonMarks` sind die des gezeichneten Kreises; der Versatz ist
+    // Blatt-mm und wird nicht mit dem Faktor des Papiers multipliziert.
+    let expected = v(100.0, 80.0) - half + v(10.0, 10.0);
+    assert!(
+        close(list[0].centre, expected, 1e-9),
+        "{:?}",
+        list[0].centre
+    );
+    let drawn: Vec<_> = circles(&list[0].marks)
+        .into_iter()
+        .filter(|(_, _, k)| *k == CIRCLE)
+        .collect();
+    assert_eq!(drawn.len(), 1);
+    assert!(close(drawn[0].0, list[0].centre, 1e-12));
+    assert!((drawn[0].1 - list[0].radius).abs() < 1e-12);
+    // Ebenso auf A0 mit schraegem Versatz.
+    case.drawing.sheet = Sheet {
+        paper: Paper::A0,
+        landscape: false,
+    };
+    case.drawing.balloons[0].offset = (-25.0, 7.5);
+    let list = balloon_marks(&case.drawing, &case.results(), &numbers);
+    let drawn: Vec<_> = circles(&list[0].marks)
+        .into_iter()
+        .filter(|(_, _, k)| *k == CIRCLE)
+        .collect();
+    assert!(close(
+        list[0].centre,
+        v(100.0, 80.0) - half + v(-25.0, 7.5),
+        1e-9
+    ));
+    assert!(close(drawn[0].0, list[0].centre, 1e-12));
+    assert!((drawn[0].1 - list[0].radius).abs() < 1e-12);
+    assert!((list[0].radius - 4.0 * 1189.0 / 420.0).abs() < 1e-12);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -666,6 +700,113 @@ fn line_weights_follow_the_paper() {
             .map(str::trim),
         Some("18")
     );
+}
+
+/// Alle Papiere, hoch und quer.
+fn all_sheets() -> Vec<Sheet> {
+    let mut out = Vec::new();
+    for paper in [Paper::A4, Paper::A3, Paper::A2, Paper::A1, Paper::A0] {
+        for landscape in [false, true] {
+            out.push(Sheet { paper, landscape });
+        }
+    }
+    out
+}
+
+/// Blatt mit je einem Nummernkreis je Nummer (Mitte bei (80 + 30·i, 100)).
+fn numbers_sheet(sheet: Sheet, numbers: &[u32]) -> SheetModel {
+    let f = sheet_scale(sheet);
+    let marks: Vec<Mark> = numbers
+        .iter()
+        .enumerate()
+        .flat_map(|(i, n)| {
+            layout_balloon(v(60.0 + 30.0 * i as f64, 100.0), (20.0, 0.0), Some(*n), f)
+        })
+        .collect();
+    let mut m = manual_sheet(sheet.paper, vec![("Vorne", marks)]);
+    m.sheet = sheet;
+    m
+}
+
+// Die Zahl in DXF: CAD-Schriften laufen bis 1,45-mal breiter; die Zahl muss auch dann in
+// 0,8 · Ø passen, ohne gekürzt zu werden, und bleibt senkrecht mittig.
+#[test]
+fn dxf_numbers_fit_the_circle() {
+    let numbers = [7, 88, 200, 888, 111];
+    for sheet in all_sheets() {
+        let f = sheet_scale(sheet);
+        let model = numbers_sheet(sheet, &numbers);
+        let d = dxf_read::read(&dxf_string(&model).unwrap()).unwrap();
+        let texts: Vec<_> = block_entities(&d, "Vorne")
+            .iter()
+            .filter(|e| e.kind == "TEXT")
+            .collect();
+        assert_eq!(texts.len(), numbers.len());
+        for (i, (e, n)) in texts.iter().zip(numbers).enumerate() {
+            let text = e.get(1).unwrap();
+            assert_eq!(text, n.to_string(), "nie gekürzt");
+            let h: f64 = e.get(40).unwrap().trim().parse().unwrap();
+            let w = sheet_text_width(text, h) * 1.45;
+            assert!(
+                w <= 0.8 * 8.0 * f + 1e-8,
+                "{sheet:?} {n}: {w} > {}",
+                0.8 * 8.0 * f
+            );
+            assert!(h <= 3.5 * f + 1e-9);
+            // Grundlinie: Kreismitte − h/2.
+            let y: f64 = e.get(20).unwrap().trim().parse().unwrap();
+            assert!((y + h / 2.0 - 100.0).abs() < 1e-8, "{sheet:?} {n}: {y} {h}");
+            let x: f64 = e.get(10).unwrap().trim().parse().unwrap();
+            assert!((x - (80.0 + 30.0 * i as f64)).abs() < 1e-8);
+        }
+        // Eine Ziffer passt ohne Verkleinerung (0,72 · 3,5 · 1,45 = 3,65 ≤ 6,4).
+        let h0: f64 = texts[0].get(40).unwrap().trim().parse().unwrap();
+        assert!((h0 - 3.5 * f).abs() < 1e-8);
+    }
+    // „200“ auf A4 und A0 von Hand: Höhe = 0,8 · 8 · f / (3 · 0,72 · 1,45).
+    for (paper, f) in [(Paper::A4, 297.0 / 420.0), (Paper::A0, 1189.0 / 420.0)] {
+        let sheet = Sheet {
+            paper,
+            landscape: true,
+        };
+        let model = numbers_sheet(sheet, &[200]);
+        let d = dxf_read::read(&dxf_string(&model).unwrap()).unwrap();
+        let t = block_entities(&d, "Vorne")
+            .iter()
+            .find(|e| e.kind == "TEXT")
+            .unwrap();
+        let h: f64 = t.get(40).unwrap().trim().parse().unwrap();
+        let want = 6.4 * f / (3.0 * 0.72 * 1.45);
+        assert!((h - want).abs() < 1e-8, "{paper:?} {h} {want}");
+        // SVG behält die Schätzung ohne Zuschlag: 6,4 · f / (3 · 0,72), größer als in DXF.
+        let r = svg_read::read(&svg_string(&model).unwrap());
+        let s = r.texts_of("Vorne Positionen").next().unwrap();
+        assert!(
+            (s.font_size - 6.4 * f / (3.0 * 0.72)).abs() < 1e-5,
+            "{}",
+            s.font_size
+        );
+    }
+}
+
+// Die SVG-Ausgabe der Nummernkreise ist dieselbe wie vor der DXF-Einpassung (Fixtur mit dem
+// Stand 1a97731 erzeugt).
+#[test]
+fn svg_numbers_unchanged() {
+    let mut all = String::new();
+    for sheet in [
+        Sheet {
+            paper: Paper::A4,
+            landscape: true,
+        },
+        Sheet {
+            paper: Paper::A0,
+            landscape: false,
+        },
+    ] {
+        all.push_str(&svg_string(&numbers_sheet(sheet, &[7, 88, 200])).unwrap());
+    }
+    assert_eq!(all, include_str!("fixtures/svg_balloons_a4_a0.svg"));
 }
 
 #[test]

@@ -76,7 +76,9 @@
 //!   `CONTINUOUS`, 25), `POSITIONEN` (Kreis und Zahl der Nummernkreise; 7, `CONTINUOUS`, auf A3
 //!   35) und `POSITIONEN_LINIE` (Hinweislinie und Punkt; 7, `CONTINUOUS`, auf A3 25). Die
 //!   Stärken der beiden Positionsebenen sind wie beim Blattrahmen die mit dem Faktor des Blatts
-//!   skalierten (nie unter 0,18 mm), gerundet nach [`dxf_lineweight`] (A4: 25 und 18).
+//!   skalierten (nie unter 0,18 mm), gerundet nach [`dxf_lineweight`] (A4: 25 und 18). Die
+//!   Zahl eines Nummernkreises passt [`balloon_text_dxf`] mit dem Breitenzuschlag
+//!   [`DXF_TEXT_WIDTH_FACTOR`](crate::sheet_marks::DXF_TEXT_WIDTH_FACTOR) in den Kreis ein.
 //! * Linienart `CENTER` (nur mit `MITTEL`): Strich 12, Lücke 3, Strich 2, Lücke 3 mm
 //!   (`72 65`, `73 4`, `40 20`, je Element `49` Länge und `74 0`).
 //! * `Mark::Line` → `LINE`. `Mark::Arc` → `ARC` wie die Bögen der Linien (Grad, normalisiert,
@@ -116,7 +118,7 @@
 
 use crate::Visibility;
 use crate::annotate::{ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, Mark, MarkKind, TextAnchor};
-use crate::balloon::PositionPen;
+use crate::balloon::{PositionPen, balloon_text_dxf};
 use crate::error::DrawError;
 use crate::out2d::Out2d;
 use crate::sheet::SheetModel;
@@ -911,8 +913,9 @@ fn write_blocks(
             };
             write_curve(o, hs, br, layer, &line.curve)?;
         }
+        let paper = sheet_scale(model.sheet);
         for m in &view.marks {
-            write_mark(o, hs, br, m)?;
+            write_mark(o, hs, br, &balloon_text_dxf(m, paper))?;
         }
         block_end(o, hs.next(), br, false);
     }

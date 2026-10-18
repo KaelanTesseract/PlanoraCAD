@@ -19,7 +19,7 @@ use crate::annotate::{Mark, MarkKind, TextAnchor};
 use crate::model::{BalloonId, Drawing, ViewId};
 use crate::sheet::{SheetModel, SheetTransform, view_transform};
 use crate::sheet_frame::{MIN_PEN_MM, sheet_scale};
-use crate::sheet_marks::fit_text;
+use crate::sheet_marks::{DXF_TEXT_WIDTH_FACTOR, fit_text, sheet_text_width};
 use planora_math::{DVec2, TAU};
 use std::collections::BTreeMap;
 
@@ -133,6 +133,39 @@ pub fn layout_balloon(at: DVec2, offset: (f64, f64), number: Option<u32>, scale:
         kind: circle,
     });
     marks
+}
+
+/// Die Zahl eines Nummernkreises für DXF: CAD-Schriften laufen bis zu
+/// [`DXF_TEXT_WIDTH_FACTOR`]-mal breiter als die Schätzung, deshalb wird ein Text der Art
+/// `Position(Circle)` so weit verkleinert, dass `Schätzung · Zuschlag ≤ 0,8 · Ø · scale` gilt
+/// (ohne Untergrenze, nie gekürzt), und bleibt dabei senkrecht mittig. Alle anderen
+/// Markierungen bleiben unverändert. `scale` ist der Faktor des Blatts.
+pub fn balloon_text_dxf(m: &Mark, scale: f64) -> Mark {
+    let Mark::Text {
+        pos,
+        height,
+        text,
+        kind: MarkKind::Position(PositionPen::Circle),
+        ..
+    } = m
+    else {
+        return m.clone();
+    };
+    let unit = sheet_text_width(text, 1.0) * DXF_TEXT_WIDTH_FACTOR;
+    let room = TEXT_FIT * BALLOON_D * scale;
+    if !(unit > 0.0 && room.is_finite() && unit * height > room) {
+        return m.clone();
+    }
+    let h = room / unit;
+    let mut out = m.clone();
+    if let Mark::Text {
+        pos: p, height: hh, ..
+    } = &mut out
+    {
+        *p = DVec2::new(pos.x, pos.y + 0.5 * (height - h));
+        *hh = h;
+    }
+    out
 }
 
 /// Die Markierungen eines Nummernkreises auf dem Blatt (für Auswahl und Ziehen der Oberfläche).
