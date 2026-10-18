@@ -13,7 +13,10 @@ use crate::shell::ShellState;
 use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
-use crate::{browser, drawing_view, fonts, prompts, shell_panels, sketch_panel, theme, viewport};
+use crate::{
+    about_dialog, browser, drawing_view, fonts, prompts, shell_panels, sketch_panel, theme,
+    viewport,
+};
 use planora_feature::SketchPlane;
 use planora_kernel::BoolOp;
 use planora_render::gpu::GpuScene;
@@ -272,6 +275,10 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
     if shortcut_button(ui, true, Icon::Close, "Schließen", "Strg+W").clicked() {
         let i = ws.active;
         ws.request_close(i);
+        ui.close();
+    }
+    if entry(ui, true, icons::button(Icon::About, about_dialog::TITLE)).clicked() {
+        ws.about_open = true;
         ui.close();
     }
     if entry(ui, true, icons::button(Icon::Quit, "Beenden")).clicked() {
@@ -793,6 +800,7 @@ impl eframe::App for PlanoraApp {
 
         self.ws.exchange_dir = exchange_dir;
         self.ws.refresh_prompts();
+        about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
 
         viewport::remember_keyboard_focus(&ctx);

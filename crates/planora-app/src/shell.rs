@@ -122,6 +122,29 @@ pub struct ShellRects {
     pub tool: Option<Rect>,
 }
 
+/// Breite der Seitenspalten bei Fensterbreite `content_width`. Zu kleines Fenster: die Spalten
+/// werden schmaler, damit die freie Fläche [`MIN_FREE`] breit bleibt.
+fn side_width(content_width: f32) -> f32 {
+    let normal_free_w = content_width - 2.0 * (SHELL_INSET + theme::PANEL_WIDTH + GAP);
+    if normal_free_w < MIN_FREE {
+        MIN_SIDE_W.max((content_width - MIN_FREE - 2.0 * (SHELL_INSET + GAP)) / 2.0)
+    } else {
+        theme::PANEL_WIDTH
+    }
+}
+
+/// Platz für das obere Feld zwischen den Seitenspalten bei Fensterbreite `content_width`.
+pub fn between_columns(content_width: f32) -> f32 {
+    content_width - 2.0 * (side_width(content_width) + SHELL_INSET + GAP)
+}
+
+/// Zeigt das obere Feld das kleine Programmzeichen? Nur wenn das ganze Feld samt Zeichen
+/// (`lead` = Zeichen und Abstand) ohne Rollen zwischen die Seitenspalten passt; `base_wanted` ist
+/// die Wunschbreite des Felds ohne Zeichen. Sonst bleibt das Feld wie ohne Zeichen.
+pub fn top_icon_fits(content_width: f32, base_wanted: f32, lead: f32) -> bool {
+    base_wanted + lead <= between_columns(content_width)
+}
+
 /// Wie [`layout_with_top_min`] für den Modus `mode`.
 ///
 /// Zeichnung: linke und rechte Spalte, oberes Feld, Status und Hinweis wie im Modell; das
@@ -222,16 +245,12 @@ pub fn layout_with_top_min(
 ) -> ShellRects {
     // Die Seitenspalten sind immer vorhanden (Baum links, Eigenschaften rechts); die
     // Umschalter für Projekte und Versionen ändern nur ihren Inhalt, nicht die Geometrie.
-    let normal_free_w = content.width() - 2.0 * (SHELL_INSET + theme::PANEL_WIDTH + GAP);
     let banner_extra = if read_only { BANNER_H + GAP } else { 0.0 };
     let normal_free_h =
         content.height() - (2.0 * SHELL_INSET + TOP_H + BOTTOM_H + 2.0 * GAP + banner_extra);
     // Zu kleines Fenster: Seitenspalten schmaler, damit die freie Fläche 200 breit bleibt.
-    let side_w = if normal_free_w < MIN_FREE {
-        MIN_SIDE_W.max((content.width() - MIN_FREE - 2.0 * (SHELL_INSET + GAP)) / 2.0)
-    } else {
-        theme::PANEL_WIDTH
-    };
+    let normal_free_w = content.width() - 2.0 * (SHELL_INSET + theme::PANEL_WIDTH + GAP);
+    let side_w = side_width(content.width());
 
     // Freie Fläche aus den Rändern; unter 200 wird sie mittig im Fenster auf 200 gesetzt.
     let mut free = Rect::from_min_max(
@@ -259,7 +278,7 @@ pub fn layout_with_top_min(
 
     // Mittlere Felder: höchstens so breit, wie zwischen den Spalten Platz ist (mindestens 120,
     // aber nie breiter als das Fenster abzüglich der Außenränder).
-    let avail = content.width() - 2.0 * (side_w + SHELL_INSET + GAP);
+    let avail = between_columns(content.width());
     let max_w = content.width() - 2.0 * SHELL_INSET;
     let mid_w = |wanted: f32| wanted.min(avail.max(MIN_FIELD_W)).min(max_w);
 

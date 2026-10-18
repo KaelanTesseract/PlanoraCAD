@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/planoracad-logo-fuer-dunkel.png">
+    <img src="assets/logo/planoracad-logo-fuer-hell.png" alt="PlanoraCAD" width="280">
+  </picture>
+</p>
+
 # PlanoraCAD
 
 Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
@@ -332,7 +339,7 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 
 **Neuer Aufbau des Fensters (Modell-Ansicht):** Die Felder schweben jetzt frei über dem 3D-Bereich, der das ganze Fenster füllt.
 
-- Oben in der Mitte: Menü und Tabs.
+- Oben in der Mitte: das kleine Programmzeichen, das Menü und die Tabs. Unter „Datei“ → „Über PlanoraCAD“ stehen Version, Lizenz und die Herkunft der mitgelieferten Schriften und Symbole.
 - Links: ein Feld mit deinen Projekten und darunter der Baum mit den Arbeitsschritten.
 - Rechts: Eigenschaften und Versionen. Ein Umschalter im Feld wechselt zwischen beiden.
 - Unten: das Befehlsfeld mit Abkürzungen zu den Menüeinträgen, daneben Meldungen.
