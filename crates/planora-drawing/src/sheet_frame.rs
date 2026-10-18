@@ -10,6 +10,7 @@
 //! werden aber nie dünner als [`MIN_PEN_MM`].
 
 use crate::model::{Projection, Sheet};
+use crate::parts::PARTS_ON_SHEET;
 use planora_math::DVec2;
 
 /// Lange Blattseite des Bezugsformats A3; dort ist der Faktor 1.
@@ -47,6 +48,12 @@ pub const NOTES_SIDE_W: f64 = 110.0;
 pub const NOTES_GAP_MM: f64 = 10.0;
 /// Ab dieser Rahmenbreite steht das Hinweisfeld neben dem Schriftfeld.
 pub const NOTES_SIDE_MIN_FRAME_W: f64 = 310.0;
+/// Zeilenhöhe der Stückliste (wie die Änderungstabelle).
+pub const PARTS_ROW_H: f64 = REV_ROW_H;
+/// Spaltenbreiten der Stückliste auf dem Zeichnungsblatt (Summe = Schriftfeldbreite): Pos.,
+/// Benennung, Menge, Werkstoff, Bemerkung. Auf dem Stücklistenblatt dieselben Anteile auf die
+/// volle Rahmenbreite gestreckt.
+pub const PARTS_COLUMNS: [f64; 5] = [12.0, 78.0, 15.0, 45.0, 30.0];
 pub const SYMBOL_H: f64 = 3.5;
 /// Lage des Projektionssymbols in der Schriftfeldzelle „Projektion“ (relativ zur linken unteren
 /// Ecke des Schriftfelds): linke Kante und Mittellinie.
@@ -244,6 +251,19 @@ pub const TITLE_SLOTS: [TextSlot; 17] = [
 /// Rechteck als (links unten, rechts oben).
 pub type Box2 = (DVec2, DVec2);
 
+/// Platz für die Stückliste auf einem Blatt.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PartsSpace {
+    /// Keine Stückliste.
+    None,
+    /// Tabelle direkt über dem Schriftfeld mit `rows` Zeilen (höchstens
+    /// [`PARTS_ON_SHEET`]) und Kopf; Kopfzeile unten, Pos. 1 direkt darüber.
+    OnSheet { rows: usize },
+    /// Stücklistenblatt: Tabelle über die ganze Rahmenbreite vom Schriftfeld bis unter die
+    /// Änderungstabelle; Kopf oben, Zeilen nach unten; kein Hinweisfeld.
+    ListPage,
+}
+
 /// Alle Blattgeometrie für ein Blatt.
 #[derive(Clone, Debug)]
 pub struct SheetLayout {
@@ -259,6 +279,10 @@ pub struct SheetLayout {
     pub revisions: Box2,
     pub notes: Option<Box2>,
     pub free: Box2,
+    /// Platz der Stückliste (`None` ohne Stückliste).
+    pub parts: Option<Box2>,
+    /// Wofür [`SheetLayout::parts`] berechnet wurde.
+    pub parts_space: PartsSpace,
     /// Faktor des Blattzubehörs ([`sheet_scale`]).
     pub scale: f64,
 }
@@ -300,6 +324,17 @@ impl SheetLayout {
     pub fn rev_columns(&self) -> [f64; 4] {
         REV_COLUMNS.map(|w| self.mm(w))
     }
+
+    /// Spaltenbreiten der Stückliste auf diesem Blatt: auf dem Zeichnungsblatt die A3-Werte mal
+    /// Faktor, auf dem Stücklistenblatt dieselben Anteile auf die Tabellenbreite gestreckt.
+    pub fn parts_columns(&self) -> [f64; 5] {
+        match (self.parts_space, self.parts) {
+            (PartsSpace::ListPage, Some((lo, hi))) => {
+                PARTS_COLUMNS.map(|w| w * (hi.x - lo.x) / TITLE_W)
+            }
+            _ => PARTS_COLUMNS.map(|w| self.mm(w)),
+        }
+    }
 }
 
 fn b(x0: f64, y0: f64, x1: f64, y1: f64) -> Box2 {
@@ -335,14 +370,40 @@ fn grid_bounds(lo: f64, hi: f64, centre: f64, n: usize, field: f64) -> (Vec<f64>
     (ticks, bounds)
 }
 
-/// Berechnet die Blattgeometrie. `revision_rows` und `note_lines` werden auf je 6 begrenzt. Alle
-/// Längen sind die A3-Werte mal [`sheet_scale`].
+/// Berechnet die Blattgeometrie ohne Stückliste. `revision_rows` wird auf [`REV_VISIBLE`],
+/// `note_lines` auf [`NOTE_LINES_MAX`] begrenzt. Alle Längen sind die A3-Werte mal
+/// [`sheet_scale`].
 pub fn sheet_layout(sheet: Sheet, revision_rows: usize, note_lines: usize) -> SheetLayout {
+    sheet_layout_with(sheet, revision_rows, note_lines, PartsSpace::None)
+}
+
+/// Wie [`sheet_layout`], dazu der Platz der Stückliste nach `parts`:
+/// - [`PartsSpace::OnSheet`]: Tabelle über dem Schriftfeld, gleich breit; ein Hinweisfeld über
+///   dem Schriftfeld rückt über die Tabelle, eines daneben bleibt; der freie Bereich hält die
+///   Tabelle frei.
+/// - [`PartsSpace::ListPage`]: kein Hinweisfeld, Änderungstabelle immer mit [`REV_VISIBLE`]
+///   Zeilen reserviert, Tabelle über die ganze Rahmenbreite zwischen Schriftfeld und
+///   Änderungstabelle; der freie Bereich ist die Tabelle (das Blatt hat keine Ansichten).
+pub fn sheet_layout_with(
+    sheet: Sheet,
+    revision_rows: usize,
+    note_lines: usize,
+    parts: PartsSpace,
+) -> SheetLayout {
     let (w, h) = sheet.size_mm();
     let f = sheet_scale(sheet);
     let s = |a3_mm: f64| a3_mm * f;
-    let rev_rows = revision_rows.min(REV_VISIBLE);
-    let n_lines = note_lines.min(NOTE_LINES_MAX);
+    let list_page = parts == PartsSpace::ListPage;
+    let rev_rows = if list_page {
+        REV_VISIBLE
+    } else {
+        revision_rows.min(REV_VISIBLE)
+    };
+    let n_lines = if list_page {
+        0
+    } else {
+        note_lines.min(NOTE_LINES_MAX)
+    };
     let (fx0, fy0, fx1, fy1) = (
         s(FILING_MARGIN_MM),
         s(EDGE_MARGIN_MM),
@@ -399,6 +460,16 @@ pub fn sheet_layout(sheet: Sheet, revision_rows: usize, note_lines: usize) -> Sh
     let title = b(fx1 - s(TITLE_W), fy0, fx1, fy0 + s(TITLE_H));
     let rev_h = s(REV_ROW_H) * (1.0 + rev_rows as f64);
     let revisions = b(fx1 - s(REV_W), fy1 - rev_h, fx1, fy1);
+    let parts_box = match parts {
+        PartsSpace::None => None,
+        PartsSpace::OnSheet { rows } => {
+            let ph = s(PARTS_ROW_H) * (1.0 + rows.min(PARTS_ON_SHEET) as f64);
+            Some(b(title.0.x, title.1.y, title.1.x, title.1.y + ph))
+        }
+        PartsSpace::ListPage => Some(b(fx0, title.1.y, fx1, revisions.0.y)),
+    };
+    // Oberkante des Stapels über dem Schriftfeld (Schriftfeld bzw. Tabelle).
+    let base_top = parts_box.map_or(title.1.y, |p| p.1.y);
     let notes_side = fx1 - fx0 >= s(NOTES_SIDE_MIN_FRAME_W);
     let notes = (n_lines > 0).then(|| {
         let nh = s(2.0 * NOTES_PAD_MM) + n_lines as f64 * s(NOTES_LINE_MM);
@@ -406,25 +477,28 @@ pub fn sheet_layout(sheet: Sheet, revision_rows: usize, note_lines: usize) -> Sh
             let x1 = title.0.x - s(NOTES_GAP_MM);
             b(x1 - s(NOTES_SIDE_W), fy0, x1, fy0 + nh)
         } else {
-            b(title.0.x, title.1.y, title.1.x, title.1.y + nh)
+            b(title.0.x, base_top, title.1.x, base_top + nh)
         }
     });
 
     // Freier Bereich: größere zweier Kandidaten, bei Gleichstand der erste.
     let stack_top = match notes {
         Some(n) if !notes_side => n.1.y,
-        _ => title.1.y,
+        _ => base_top,
     };
     let cand_a = b(fx0, stack_top, fx1, revisions.0.y);
     let mut left = title.0.x.min(revisions.0.x);
     if let Some(n) = notes {
         left = left.min(n.0.x);
     }
+    if let Some(p) = parts_box {
+        left = left.min(p.0.x);
+    }
     let cand_b = b(fx0, fy0, left, fy1);
-    let free = if area(cand_b) > area(cand_a) {
-        cand_b
-    } else {
-        cand_a
+    let free = match parts_box {
+        Some(p) if list_page => p,
+        _ if area(cand_b) > area(cand_a) => cand_b,
+        _ => cand_a,
     };
 
     SheetLayout {
@@ -437,8 +511,18 @@ pub fn sheet_layout(sheet: Sheet, revision_rows: usize, note_lines: usize) -> Sh
         revisions,
         notes,
         free,
+        parts: parts_box,
+        parts_space: parts,
         scale: f,
     }
+}
+
+/// Zeilen der Stückliste je Stücklistenblatt (ohne Kopf): so viele ganze Zeilen, wie in die
+/// Tabellenhöhe passen, weniger eine für den Kopf (hoch 44, quer 26 auf jedem Papier).
+pub fn parts_rows_per_page(sheet: Sheet) -> usize {
+    let l = sheet_layout_with(sheet, 0, 0, PartsSpace::ListPage);
+    let (lo, hi) = l.parts.expect("Stücklistenblatt hat eine Tabelle");
+    (((hi.y - lo.y) / l.mm(PARTS_ROW_H) + 1e-9).floor() as usize).saturating_sub(1)
 }
 
 /// Projektionssymbol (ISO 5456-2) mit der Höhe `SYMBOL_H · scale`: die vier Strecken des

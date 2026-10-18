@@ -143,6 +143,7 @@ fn full_info() -> SheetInfo {
                 name: "dg".into(),
             })
             .collect(),
+        parts_list: false,
     }
 }
 

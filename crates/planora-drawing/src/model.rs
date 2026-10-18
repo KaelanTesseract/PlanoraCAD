@@ -176,6 +176,15 @@ pub struct ViewSpec {
     pub centerlines: bool,
 }
 
+/// Art einer Zeichnung: Blatt mit Ansichten oder Stücklistenblatt (ohne Ansichten).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DrawingKind {
+    #[default]
+    Views,
+    /// Stücklistenblatt; `page` ab 1.
+    PartsList { page: u32 },
+}
+
 /// Eine Zeichnung: Blatt, Projektionsart und Ansichten.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Drawing {
@@ -189,6 +198,8 @@ pub struct Drawing {
     pub next_dim: u64,
     /// Blattangaben des Schriftfelds; `None` bei Zeichnungen aus älteren Dateien.
     pub info: Option<crate::sheet_info::SheetInfo>,
+    /// Zeichnungsblatt oder Stücklistenblatt.
+    pub kind: DrawingKind,
 }
 
 impl Drawing {
@@ -204,6 +215,7 @@ impl Drawing {
             dimensions: Vec::new(),
             next_dim: 1,
             info: None,
+            kind: DrawingKind::Views,
         }
     }
 

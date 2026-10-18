@@ -14,6 +14,7 @@ pub mod layout;
 pub mod limits;
 pub mod model;
 pub mod out2d;
+pub mod parts;
 pub mod raycast;
 pub mod sheet;
 pub mod sheet_frame;
@@ -33,9 +34,13 @@ pub use error::DrawError;
 pub use file::{DrawingFormat, drawing_to_bytes, export_drawing_file};
 pub use layout::{GAP_MM, align_dir, view_extent};
 pub use model::{
-    Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewSpec,
+    Drawing, DrawingId, DrawingKind, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind,
+    ViewSpec,
 };
-pub use sheet_frame::{SheetLayout, SheetPen, TitleField, sheet_layout};
+pub use parts::{BodyKey, PartsCells, PartsRow, RowOverride};
+pub use sheet_frame::{
+    PartsSpace, SheetLayout, SheetPen, TitleField, sheet_layout, sheet_layout_with,
+};
 pub use suggest::{Candidate, CandidateOrigin, dimension_key, suggest};
 pub use svg::{svg_string, write_svg};
 

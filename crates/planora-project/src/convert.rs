@@ -14,7 +14,8 @@ use planora_drawing::sheet_info::{
     validate_sheet_info,
 };
 use planora_drawing::{
-    Drawing, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind, ViewSpec,
+    Drawing, DrawingId, DrawingKind, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind,
+    ViewSpec,
 };
 use planora_exchange::{ExchangeMesh, MAX_FILE_BYTES};
 use planora_feature::{
@@ -1284,6 +1285,7 @@ fn sheet_info_from(origin: &str, name: &str, b: &BlattangabenDto) -> Result<Shee
                 name: a.name.clone(),
             })
             .collect(),
+        parts_list: false,
     };
     validate_sheet_info(&info)
         .map_err(|e| ProjectError::corrupt(origin, format!("Zeichnung „{name}“: {e}")))?;
@@ -1396,6 +1398,7 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
             .as_ref()
             .map(|b| sheet_info_from(origin, &d.name, b))
             .transpose()?,
+        kind: DrawingKind::Views,
     })
 }
 

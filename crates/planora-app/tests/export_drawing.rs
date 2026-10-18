@@ -997,6 +997,7 @@ fn dxf_sheet_texts_report_the_field() {
         fields: BTreeMap::new(),
         revisions: Vec::new(),
         notes: vec!["gut".into(), "x😀".into()],
+        parts: Vec::new(),
     };
     t.fields.insert(TitleField::Owner, "Eigentümer GmbH".into());
     assert_eq!(
