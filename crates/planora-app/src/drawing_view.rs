@@ -627,7 +627,7 @@ pub fn parts_space_for(drawing: &Drawing, rows: usize, placement: bool) -> Parts
 /// Die Zeilen der Stückliste (aus allen Zeilen `cells`), die auf dem Blatt der Zeichnung stehen:
 /// auf dem Zeichnungsblatt die ersten [`PARTS_ON_SHEET`], auf einem Stücklistenblatt die seiner
 /// Seite, sonst keine.
-fn parts_on(drawing: &Drawing, cells: &[PartsCells]) -> Vec<PartsCells> {
+pub(crate) fn parts_on(drawing: &Drawing, cells: &[PartsCells]) -> Vec<PartsCells> {
     match parts_space_for(drawing, cells.len(), false) {
         PartsSpace::None => Vec::new(),
         PartsSpace::OnSheet { .. } => cells[..cells.len().min(PARTS_ON_SHEET)].to_vec(),

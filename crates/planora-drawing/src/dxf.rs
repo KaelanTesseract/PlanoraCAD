@@ -106,7 +106,9 @@
 //! 25: übrige Linien und alle Texte). Auf anderen Formaten ist es die mit `SheetFrame.scale`
 //! skalierte Stärke (nie unter 0,18 mm), gerundet auf die nächste Stärke, die DXF kennt
 //! ([`dxf_lineweight`]; A4: 50/35/18). Die Ebenen werden nur angelegt, wenn es einen Rahmen
-//! gibt; ohne Rahmen enthält die Datei weder diese Ebenen noch eine `LWPOLYLINE`. Zu lange Texte
+//! gibt, und jede nur, wenn eine Markierung der Strichstärke vorkommt (ein ganzer Rahmen
+//! nutzt alle drei, eine Stückliste allein nur `BLATT`); ohne Rahmen enthält die Datei weder diese
+//! Ebenen noch eine `LWPOLYLINE`. Zu lange Texte
 //! (mehr als 255 Zeichen in der Datei) werden wie Maßtexte abgelehnt, nie still gekürzt; vorher
 //! prüft [`dxf_text_fits`]. Die Texte des Rahmens für DXF passt
 //! [`sheet_frame_dxf`](crate::sheet_marks::sheet_frame_dxf) mit einem Breitenzuschlag ein.
@@ -546,8 +548,11 @@ struct UsedKinds {
     dim: bool,
     center: bool,
     lost: bool,
-    /// Blattrahmen (die drei Ebenen `BLATTRAHMEN`, `BLATT_MITTE`, `BLATT`).
-    sheet: bool,
+    /// Blattzubehör je Linienart (Ebenen `BLATTRAHMEN`, `BLATT_MITTE`, `BLATT`); ein ganzer
+    /// Blattrahmen nutzt alle drei, eine Stückliste allein nur `BLATT`.
+    sheet_heavy: bool,
+    sheet_medium: bool,
+    sheet_thin: bool,
     /// Faktor des Blattzubehörs (bestimmt die Linienstärken der drei Blattebenen).
     sheet_scale: f64,
     /// Nummernkreise: Kreis und Zahl (`POSITIONEN`), Hinweislinie und Punkt
@@ -559,19 +564,31 @@ struct UsedKinds {
 }
 
 impl UsedKinds {
+    /// Merkt die Blattebene einer Markierung der Art `kind` (andere Arten: nichts).
+    fn use_sheet_pen(&mut self, kind: MarkKind) {
+        match kind {
+            MarkKind::Sheet(SheetPen::Heavy) => self.sheet_heavy = true,
+            MarkKind::Sheet(SheetPen::Medium) => self.sheet_medium = true,
+            MarkKind::Sheet(SheetPen::Thin) => self.sheet_thin = true,
+            _ => {}
+        }
+    }
+
     fn of(model: &SheetModel) -> UsedKinds {
         let mut u = UsedKinds {
-            sheet: model.frame.is_some(),
             sheet_scale: model.frame.as_ref().map_or(1.0, |f| f.scale),
             paper_scale: sheet_scale(model.sheet),
             ..UsedKinds::default()
         };
+        for m in model.frame.iter().flat_map(|f| &f.marks) {
+            u.use_sheet_pen(mark_kind(m));
+        }
         for m in model.views.iter().flat_map(|v| &v.marks) {
             match mark_kind(m) {
                 MarkKind::Dimension => u.dim = true,
                 MarkKind::CenterLine => u.center = true,
                 MarkKind::Lost => u.lost = true,
-                MarkKind::Sheet(_) => u.sheet = true,
+                k @ MarkKind::Sheet(_) => u.use_sheet_pen(k),
                 MarkKind::Position(PositionPen::Circle) => u.position = true,
                 MarkKind::Position(PositionPen::Leader) => u.position_line = true,
             }
@@ -751,7 +768,7 @@ fn write_tables(
         (used.center, (LAYER_CENTER, "CENTER", 7, 25)),
         (used.lost, (LAYER_LOST, "CONTINUOUS", 1, 25)),
         (
-            used.sheet,
+            used.sheet_heavy,
             (
                 LAYER_FRAME,
                 "CONTINUOUS",
@@ -760,7 +777,7 @@ fn write_tables(
             ),
         ),
         (
-            used.sheet,
+            used.sheet_medium,
             (
                 LAYER_CENTRE,
                 "CONTINUOUS",
@@ -769,7 +786,7 @@ fn write_tables(
             ),
         ),
         (
-            used.sheet,
+            used.sheet_thin,
             (
                 LAYER_SHEET,
                 "CONTINUOUS",
