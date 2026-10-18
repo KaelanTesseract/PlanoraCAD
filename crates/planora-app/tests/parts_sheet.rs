@@ -6,7 +6,7 @@
 mod common;
 
 use eframe::App as _;
-use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
+use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::drawing_browser;
 use planora_app::drawing_dialog::{NewDrawingDialog, SKETCH_BLOCKED};
@@ -18,7 +18,7 @@ use planora_app::parts_section::{
 use planora_app::sheet_dialog::{CUT_WARNING, SheetInfoDialog};
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
-use planora_app::{browser, fonts, theme, viewport};
+use planora_app::{browser, fonts, icons, theme, viewport};
 use planora_drawing::parts::PARTS_HEAD;
 use planora_drawing::sheet_frame::{PartsSpace, REV_VISIBLE, TitleField, sheet_layout_with};
 use planora_drawing::sheet_info::{FieldValue, Stamp, resolve_texts};
@@ -325,6 +325,27 @@ impl H {
         None
     }
 
+    /// Rollt, bis ein Fenstertext mit dem Anfang `prefix` zu sehen ist (auch teils verdeckt).
+    fn scroll_to_prefix(&mut self, prefix: &str) {
+        self.settle();
+        for _ in 0..3 {
+            self.wheel(4000.0);
+        }
+        for _ in 0..80 {
+            let shot = self.settle();
+            let rect = self.dialog_rect().expect("Fenster offen");
+            if shot
+                .dialog
+                .iter()
+                .any(|t| t.text.starts_with(prefix) && rect.contains(t.rect.left_center()))
+            {
+                return;
+            }
+            self.wheel(-150.0);
+        }
+        panic!("„{prefix}…“ nie zu sehen");
+    }
+
     fn click_text(&mut self, text: &str) {
         let r = self.scroll_to(text);
         self.click(r.center());
@@ -395,6 +416,48 @@ impl H {
 
     fn edits(&mut self) -> u64 {
         self.st().document.edit_count()
+    }
+
+    /// Texte beim Überfahren des Fenstertexts `text` (etwa ein Feld): die Hinweise dazu.
+    fn hover_texts(&mut self, text: &str) -> Vec<String> {
+        // Erst die Tastatur vom Feld nehmen (ein Feld im Bearbeiten zeigt keinen Hinweis).
+        let head = self.scroll_to(SECTION);
+        self.click(head.center());
+        let probe = text.chars().take(4).collect::<String>();
+        self.scroll_to_prefix(&probe);
+        let shot = self.settle();
+        let r = shot
+            .dialog
+            .iter()
+            .find(|t| t.text == text || t.text.starts_with(text))
+            .unwrap_or_else(|| panic!("„{text}“ nicht im Fenster"))
+            .rect;
+        let p = pos2(r.left() + 8.0, r.center().y);
+        self.hover(p);
+        let mut all = Vec::new();
+        for _ in 0..30 {
+            all.extend(self.frame(vec![]).texts.into_iter().map(|t| t.text));
+        }
+        all
+    }
+
+    /// Das Rücksetz-Symbol in der Zeile mit dem Text `row_text` (sichtbar im Fenster).
+    fn reset_in_row(&mut self, row_text: &str) -> Option<Rect> {
+        let r = self.scroll_to(row_text);
+        let shot = self.settle();
+        let rect = self.dialog_rect().unwrap();
+        let glyph = icons::glyph(icons::Icon::Close).to_string();
+        shot.dlg(&glyph, rect)
+            .into_iter()
+            .find(|t| (t.rect.center().y - r.center().y).abs() < 8.0)
+            .map(|t| t.rect)
+    }
+
+    fn click_reset(&mut self, row_text: &str) {
+        let r = self
+            .reset_in_row(row_text)
+            .unwrap_or_else(|| panic!("Zurücksetzen in der Zeile „{row_text}“"));
+        self.click(r.center());
     }
 }
 
@@ -660,21 +723,27 @@ fn section_edit_apply_reset() {
     let format = required_format(h.st());
     h.open_dialog();
     assert_eq!(h.edits(), before, "Öffnen ändert nichts");
-    // Abschnitt, Schalter, Pos. als Text (ohne Feld).
+    // Abschnitt, Schalter, Pos. als Text (ohne Feld) links in der Zeile.
     h.scroll_to(SECTION);
     h.scroll_to(SWITCH);
-    let pos = h.scroll_to("Pos. 1");
+    let name = h.scroll_to("Quader 1");
     let shot = h.settle();
-    let pos_now = shot
-        .dlg("Pos. 1", h.dialog_rect().unwrap())
-        .first()
-        .map(|s| s.rect)
-        .unwrap_or(pos);
-    assert_eq!(text_fields_at(&shot, pos_now.center()), 0, "Pos. ohne Feld");
-    // Benennung in Zeile 1.
-    h.type_into_hinted("Quader 1", "Grundplatte");
     let rect = h.dialog_rect().unwrap();
-    assert!(!h.settle().dlg("11/60", rect).is_empty(), "Länge 11/60");
+    let pos = shot
+        .dlg("1", rect)
+        .into_iter()
+        .find(|t| (t.rect.center().y - name.center().y).abs() < 6.0 && t.rect.right() < name.left())
+        .expect("Pos. 1 links in der Zeile")
+        .rect;
+    assert_eq!(text_fields_at(&shot, pos.center()), 0, "Pos. ohne Feld");
+    assert!(
+        text_fields_at(&shot, name.center()) >= 1,
+        "Benennung im Feld"
+    );
+    // Benennung in Zeile 1; die Länge steht im Hinweis am Feld.
+    h.type_into_hinted("Quader 1", "Grundplatte");
+    let tip = h.hover_texts("Grundplatte");
+    assert!(tip.contains(&"11/60".to_string()), "Länge 11/60: {tip:?}");
     assert_eq!(h.edits(), before, "Tippen ändert das Dokument nicht");
     let key1 = h.st().document.parts_rows()[0].keys[0];
     assert_eq!(
@@ -700,10 +769,35 @@ fn section_edit_apply_reset() {
     h.st().rename_feature(features[0], "Platte").unwrap();
     assert!(h.table_texts().contains(&"Grundplatte".to_string()));
 
-    // Zurücksetzen und Übernehmen: wieder der Körpername.
+    // Zurücksetzen und Übernehmen: wieder der Körpername. Nur die Zeile mit eigenem Text hat
+    // den Knopf; danach steht im leeren Feld der automatische Wert als Hinweis.
     h.open_dialog();
-    h.click_text("Zurücksetzen");
+    assert!(
+        h.reset_in_row("Quader 2").is_none(),
+        "ohne eigenen Text kein Knopf"
+    );
+    let tip = {
+        let r = h.reset_in_row("Grundplatte").expect("Knopf");
+        h.hover(r.center());
+        let mut all = Vec::new();
+        for _ in 0..30 {
+            all.extend(h.frame(vec![]).texts.into_iter().map(|t| t.text));
+        }
+        all
+    };
+    assert!(tip.contains(&"Zurücksetzen".to_string()), "{tip:?}");
+    h.click_reset("Grundplatte");
     assert!(h.dialog().parts.overrides.is_empty());
+    let rect = h.dialog_rect().unwrap();
+    let shot = h.settle();
+    assert!(
+        !shot.dlg("Platte", rect).is_empty(),
+        "Hinweis: der Körpername"
+    );
+    assert!(
+        shot.dlg("Grundplatte", rect).is_empty(),
+        "nicht der alte eigene Text"
+    );
     h.click_text("Übernehmen");
     assert!(h.st().document.parts_overrides().is_empty());
     let texts = h.table_texts();
@@ -766,11 +860,23 @@ fn limits_and_bad_texts() {
         FieldValue::Text("W".repeat(60)),
         "Benennung höchstens 60 Zeichen"
     );
-    let rect = h.dialog_rect().unwrap();
-    assert!(!h.settle().dlg("60/60", rect).is_empty());
+    let tip = h.hover_texts("WWWW");
+    assert!(tip.contains(&"60/60".to_string()), "{tip:?}");
     // 60 Zeichen passen nicht in die Spalte der Tabelle auf dem Blatt.
+    let rect = h.dialog_rect().unwrap();
     assert_eq!(h.settle().dlg(CUT_WARNING, rect).len(), 1, "gekürzt");
-    assert!(!h.settle().dlg("0/80", rect).is_empty(), "Bemerkung „0/80“");
+    // Die Warnung folgt dem Schalter des Entwurfs: ohne Tabelle auf dem Blatt keine.
+    assert!(
+        h.st().document.drawings()[0]
+            .info
+            .as_ref()
+            .unwrap()
+            .parts_list
+    );
+    h.dialog().sheet.parts_list = false;
+    assert_eq!(h.settle().dlg(CUT_WARNING, rect).len(), 0, "ohne Tabelle");
+    h.dialog().sheet.parts_list = true;
+    assert_eq!(h.settle().dlg(CUT_WARNING, rect).len(), 1);
     // Zu langer Text aus der Kopie (nicht über das Feld): „Übernehmen“ schreibt nichts.
     let before = h.edits();
     h.dialog().sheet.title = FieldValue::Text("Neu".into());
@@ -848,9 +954,14 @@ fn create_and_open_parts_sheet() {
     let mut h = H::new(TALL, false, st);
     h.open_dialog();
     assert!(h.try_scroll_to(OPEN).is_none());
+    h.scroll_to("Papier");
     let before = h.edits();
     h.click_text(CREATE);
     assert_eq!(h.edits(), before + 1, "Anlegen ist ein Schritt");
+    // Die Papierwahl gibt es nur zum Anlegen.
+    h.scroll_to(OPEN);
+    assert!(h.try_scroll_to("Papier").is_none(), "Papierwahl weg");
+    assert!(h.try_scroll_to("quer").is_none());
     let sheets = h.st().document.parts_sheets();
     assert_eq!(sheets.len(), 1);
     let p1 = sheets[0];
@@ -928,6 +1039,12 @@ fn many_parts_fill_follow_pages_and_page_numbers_move() {
     assert_eq!(sheet_of(&st, p1), "2 von 4");
     assert_eq!(sheet_of(&st, p2), "3 von 4");
     assert_eq!(sheet_of(&st, after), "4 von 4");
+    // Bei mehreren Blättern öffnet der Knopf Seite 1.
+    st.drawing_ui.area = WorkArea::Model;
+    let edits = st.document.edit_count();
+    assert_eq!(create_or_open(&mut st, A3_QUER), Ok(p1));
+    assert_eq!(st.drawing_ui.area, WorkArea::Drawing(p1));
+    assert_eq!(st.document.edit_count(), edits);
     let mut h = H::new(BIG, false, st);
     h.st().drawing_ui.open(p2);
     let table = h.table_texts();
@@ -1318,7 +1435,8 @@ fn texts_are_plain() {
             SWITCH,
             TOO_MANY_ON_SHEET,
             OPEN,
-            "Pos. 12",
+            "Pos.",
+            "Quader 12",
             "Benennung",
         ] {
             assert!(all.iter().any(|t| t == must), "„{must}“ fehlt: {all:?}");
@@ -1408,7 +1526,7 @@ fn section_messages_and_row_limit() {
     // 201 Zeilen: Hinweis, nur 200 Zeilen im Abschnitt.
     let t = section_alone(201, true, DrawingKind::Views);
     assert!(has(&t, TOO_MANY_ROWS) && has(&t, TOO_MANY_ON_SHEET));
-    assert!(has(&t, "Pos. 200") && !has(&t, "Pos. 201"));
+    assert!(has(&t, "Teil 200") && !has(&t, "Teil 201"));
     // Genau 200: kein Hinweis zu den Stücklistenblättern.
     let t = section_alone(200, true, DrawingKind::Views);
     assert!(!has(&t, TOO_MANY_ROWS) && has(&t, TOO_MANY_ON_SHEET));
@@ -1446,7 +1564,7 @@ fn messages_without_parts() {
     let mut h = H::new(TALL, false, st);
     h.open_dialog();
     h.scroll_to(NO_PARTS);
-    assert!(h.try_scroll_to("Pos. 1").is_none());
+    assert!(h.try_scroll_to("Pos.").is_none(), "keine Tabelle");
 }
 
 // (i) ------------------------------------------------------------------------------------------
@@ -1463,7 +1581,8 @@ fn fits_small_window() {
         assert!(window.contains_rect(rect), "{rect:?}");
         // Einen eigenen Text, damit „Zurücksetzen“ erscheint.
         h.type_into_hinted("Quader 3", "Bolzen");
-        for t in [SECTION, "Pos. 3", "Bolzen", "Zurücksetzen", CREATE, "quer"] {
+        let glyph = icons::glyph(icons::Icon::Close).to_string();
+        for t in [SECTION, "Quader 2", "Bolzen", CREATE, "quer"] {
             h.scroll_to(t);
             let shot = h.settle();
             let rect = h.dialog_rect().unwrap();
@@ -1483,8 +1602,12 @@ fn fits_small_window() {
                 }
             }
             // „Zurücksetzen“ bleibt links vom Rollbalken (mit Abstand).
-            let resets = shot.dlg("Zurücksetzen", rect);
-            assert!(t != "Zurücksetzen" || !resets.is_empty());
+            let resets: Vec<&Seen> = shot
+                .dlg(&glyph, rect)
+                .into_iter()
+                .filter(|g| g.rect.top() > rect.top() + 40.0)
+                .collect();
+            assert!(t != "Bolzen" || !resets.is_empty(), "Knopf in der Zeile");
             if let Some(reset) = resets.first() {
                 let bar = shot
                     .fills
@@ -1557,4 +1680,260 @@ fn old_drawing_unchanged() {
         drawing_view::parts_space(h.st(), &d, true),
         PartsSpace::None
     );
+}
+
+// Nachbesserung nach Review ---------------------------------------------------------------------
+
+/// Drei Körper, zwei davon „Bolzen“: zwei Zeilen, die zweite mit zwei Körpern.
+fn merged_rows() -> (AppState, DrawingId) {
+    let (mut st, f) = boxes(3);
+    st.rename_feature(f[1], "Bolzen").unwrap();
+    st.rename_feature(f[2], "Bolzen").unwrap();
+    let id = new_drawing(&mut st, A3_QUER);
+    (st, id)
+}
+
+#[test]
+fn merged_row_edits_go_to_its_first_body() {
+    let (st, _) = merged_rows();
+    let rows = st.document.parts_rows();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[1].keys.len(),
+        2,
+        "Testvoraussetzung: zusammengefasste Zeile"
+    );
+    let mut h = H::new(TALL, false, st);
+    h.open_dialog();
+    h.type_into_hinted("Bolzen", "Stift");
+    h.click_text("Übernehmen");
+    let o = h.st().document.parts_overrides().clone();
+    assert_eq!(o.len(), 1);
+    assert_eq!(
+        o.get(&rows[1].keys[0]).map(|o| o.name.clone()),
+        Some(FieldValue::Text("Stift".into()))
+    );
+    assert_eq!(h.st().document.parts_cells()[1][1], "Stift");
+    let t = h.table_texts();
+    assert!(
+        t.contains(&"Stift".to_string()) && !t.contains(&"Bolzen".to_string()),
+        "{t:?}"
+    );
+    // Wieder geöffnet steht der Text in derselben Zeile.
+    h.open_dialog();
+    h.scroll_to("Stift");
+}
+
+#[test]
+fn two_same_named_bodies_still_get_the_table() {
+    // Zwei gleichnamige Körper sind eine Zeile, aber zwei Körper: Schalter an, Platz reserviert.
+    let (mut st, f) = boxes(2);
+    st.rename_feature(f[1], "Quader 1").unwrap();
+    assert_eq!(st.document.parts_rows().len(), 1);
+    assert_eq!(
+        drawing_view::new_sheet_layout(&st, A4_HOCH, Projection::First).parts_space,
+        PartsSpace::OnSheet { rows: 10 }
+    );
+    let id = new_drawing(&mut st, A4_HOCH);
+    assert!(
+        st.document
+            .drawing(id)
+            .unwrap()
+            .info
+            .as_ref()
+            .unwrap()
+            .parts_list
+    );
+}
+
+#[test]
+fn automatic_material_follows_the_draft() {
+    let (mut st, _) = boxes(2);
+    new_drawing(&mut st, A3_QUER);
+    let mut h = H::new(TALL, false, st);
+    h.open_dialog();
+    h.dialog().project.material = FieldValue::Text("Messing".into());
+    h.scroll_to(SECTION);
+    let rect = h.dialog_rect().unwrap();
+    // Hinweis in beiden Zeilen (und im Feld „Werkstoff“ der Projektangaben).
+    let mut seen = 0;
+    for _ in 0..3 {
+        h.scroll_to("Quader 2");
+        let shot = h.settle();
+        let row = shot.dlg("Quader 2", rect)[0].rect;
+        seen = shot
+            .dlg("Messing", rect)
+            .into_iter()
+            .filter(|t| (t.rect.center().y - row.center().y).abs() < 6.0)
+            .count();
+    }
+    assert_eq!(seen, 1, "Werkstoff der Zeile aus dem Entwurf");
+}
+
+/// Höhe einer Zeile: Abstand der Benennungen zweier aufeinanderfolgender Zeilen.
+#[test]
+fn rows_are_compact_and_the_buttons_stay_in_view() {
+    for size in [SMALL, BIG] {
+        let (mut st, _) = boxes(3);
+        new_drawing(&mut st, A3_QUER);
+        let mut h = H::new(size, false, st);
+        h.open_dialog();
+        let a = h.scroll_to("Quader 2");
+        let shot = h.settle();
+        let rect = h.dialog_rect().unwrap();
+        let b = shot
+            .dlg("Quader 3", rect)
+            .first()
+            .map(|t| t.rect)
+            .unwrap_or_else(|| h.scroll_to("Quader 3"));
+        let a = shot
+            .dlg("Quader 2", rect)
+            .first()
+            .map(|t| t.rect)
+            .unwrap_or(a);
+        let dy = b.center().y - a.center().y;
+        assert!((20.0..=36.0).contains(&dy), "{size:?}: Zeilenhöhe {dy}");
+        // Kopf bündig mit den Feldern.
+        for (head, cell) in [("Benennung", "Quader 2"), ("Werkstoff", "–")] {
+            let hr = shot
+                .dlg(head, rect)
+                .into_iter()
+                .max_by(|x, y| x.rect.top().total_cmp(&y.rect.top()));
+            let Some(hr) = hr else { continue };
+            let c = shot
+                .dlg(cell, rect)
+                .into_iter()
+                .find(|t| (t.rect.center().y - a.center().y).abs() < 6.0);
+            if let Some(c) = c {
+                assert!(
+                    (hr.rect.left() - c.rect.left()).abs() < 12.0,
+                    "{size:?}: {head} {hr:?} {c:?}",
+                    hr = hr.rect,
+                    c = c.rect
+                );
+            }
+        }
+    }
+    // 45 Körper: „Übernehmen“ und „Abbrechen“ stehen immer im Fenster (Fußzeile), oben wie unten.
+    for size in [SMALL, BIG] {
+        let (mut st, _) = boxes(45);
+        new_drawing(&mut st, A3_QUER);
+        let mut h = H::new(size, false, st);
+        h.open_dialog();
+        for at_end in [false, true] {
+            if at_end {
+                for _ in 0..30 {
+                    h.wheel(-2000.0);
+                }
+            }
+            let shot = h.settle();
+            let rect = h.dialog_rect().unwrap();
+            for b in ["Übernehmen", "Abbrechen"] {
+                assert!(!shot.dlg(b, rect).is_empty(), "{size:?} {at_end}: {b}");
+            }
+        }
+        // Knopf und Schalter stehen über den Zeilen.
+        let c = h.scroll_to(CREATE);
+        let shot = h.settle();
+        let rect = h.dialog_rect().unwrap();
+        if let Some(q) = shot.dlg("Quader 1", rect).first() {
+            assert!(c.bottom() < q.rect.top(), "{size:?}");
+        }
+        // Übernehmen wirkt.
+        h.type_into_hinted("Quader 45", "Letzter");
+        let before = h.edits();
+        let shot = h.settle();
+        let rect = h.dialog_rect().unwrap();
+        let p = shot.dlg("Übernehmen", rect)[0].rect.center();
+        h.click(p);
+        assert!(!h.is_open());
+        assert_eq!(h.edits(), before + 1);
+    }
+}
+
+#[test]
+fn parts_sheet_display_in_a_small_window() {
+    for dark in [false, true] {
+        let (mut st, _) = boxes(3);
+        new_drawing(&mut st, A3_QUER);
+        let p1 = create_or_open(&mut st, A4_HOCH).unwrap();
+        let mut h = H::new(SMALL, dark, st);
+        assert_eq!(h.st().drawing_ui.area, WorkArea::Drawing(p1));
+        let shot = h.settle();
+        let table = h.table_rect().expect("Tabelle");
+        let sheet = {
+            let l = drawing_view::last_layout(&h.c).unwrap();
+            h.screen_box((DVec2::ZERO, DVec2::new(l.sheet_mm.0, l.sheet_mm.1)))
+        };
+        assert!(
+            sheet.expand(0.5).contains_rect(table),
+            "{table:?} in {sheet:?}"
+        );
+        let inside: Vec<&Seen> = shot
+            .texts
+            .iter()
+            .filter(|t| table.contains(t.rect.center()))
+            .collect();
+        for must in PARTS_HEAD
+            .iter()
+            .copied()
+            .chain(["Quader 1", "Quader 3", "3"])
+        {
+            assert!(inside.iter().any(|t| t.text == must), "„{must}“");
+        }
+        for t in &inside {
+            assert!(
+                table.expand(1.0).contains_rect(t.rect),
+                "„{}“ ragt aus der Tabelle {table:?}: {:?}",
+                t.text,
+                t.rect
+            );
+        }
+    }
+}
+
+/// Bildzeit des Fensters mit vielen Körpern (Messung, kein Grenzwert): `cargo test --test
+/// parts_sheet -- --ignored --nocapture frame_cost`.
+#[test]
+#[ignore]
+fn frame_cost() {
+    for n in [45usize, 200] {
+        let mut st = AppState::new();
+        for i in 0..n {
+            st.document
+                .add_feature(
+                    format!("Teil {}", i + 1),
+                    planora_feature::FeatureKind::Box {
+                        size: DVec3::new(10.0, 10.0, 10.0),
+                        origin: DVec3::new(i as f64 * 20.0, 0.0, 0.0),
+                    },
+                )
+                .unwrap();
+        }
+        st.refresh();
+        let id = st
+            .document
+            .add_drawing_stamped("Blatt 1", A3_QUER, Projection::First, &stamp())
+            .unwrap();
+        st.drawing_ui.open(id);
+        let mut h = H::new(BIG, false, st);
+        let time = |h: &mut H| {
+            for _ in 0..5 {
+                h.frame(vec![]);
+            }
+            let t = std::time::Instant::now();
+            for _ in 0..20 {
+                h.frame(vec![]);
+            }
+            t.elapsed().as_secs_f64() * 1000.0 / 20.0
+        };
+        let sheet = time(&mut h);
+        h.open_dialog();
+        let top = time(&mut h);
+        h.scroll_to("Teil 1");
+        let rows = time(&mut h);
+        println!(
+            "{n} Körper: Blatt {sheet:.1} ms, Fenster oben {top:.1} ms, bei den Zeilen {rows:.1} ms"
+        );
+    }
 }

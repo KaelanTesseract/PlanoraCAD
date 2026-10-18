@@ -330,8 +330,9 @@ fn growing_status_keeps_the_dialog_in_place() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Blattangaben: 720 px breit, mittig, bleibt bei 800 × 600 im Fenster; „Übernehmen“ am Ende ist
-/// durch Rollen erreichbar (Titel und Schließen-Symbol bleiben dabei stehen).
+/// Blattangaben: 720 px breit, mittig, bleibt bei 800 × 600 im Fenster; der Inhalt rollt bis zum
+/// letzten Abschnitt, Titel, Schließen-Symbol und „Übernehmen“ (Fußzeile, seit 3c-2) bleiben dabei
+/// stehen und zu sehen.
 #[test]
 fn sheet_dialog_stays_inside_and_scrolls_at_800x600() {
     use planora_app::sheet_dialog::SheetInfoDialog;
@@ -357,18 +358,23 @@ fn sheet_dialog_stays_inside_and_scrolls_at_800x600() {
         (rect.center() - pos2(400.0, 300.0)).abs().max_elem() <= 1.0,
         "mittig {rect:?}"
     );
-    // Der Inhalt ist höher als das Fenster: „Übernehmen“ ist zuerst nicht zu sehen.
-    let hidden = find(&seen, "Übernehmen")
-        .is_none_or(|t| !t.clip.contains_rect(t.rect) || !rect.contains_rect(t.rect));
-    assert!(hidden, "„Übernehmen“ schon ohne Rollen sichtbar");
+    // Der Inhalt ist höher als das Fenster: der letzte Abschnitt ist zuerst nicht zu sehen,
+    // „Übernehmen“ in der Fußzeile schon.
+    let visible = |seen: &[common::Seen], t: &str| {
+        find(seen, t).is_some_and(|t| t.clip.contains_rect(t.rect) && rect.contains_rect(t.rect))
+    };
+    assert!(
+        !visible(&seen, "Stückliste"),
+        "letzter Abschnitt erst nach dem Rollen"
+    );
+    assert!(visible(&seen, "Übernehmen"), "Übernehmen in der Fußzeile");
+    let apply_before = find(&seen, "Übernehmen").unwrap().rect;
     let close = planora_app::icons::glyph(planora_app::icons::Icon::Close).to_string();
     let title_before = find(&seen, "Blattangaben").expect("Titel").rect;
     let close_before = find(&seen, &close).expect("Schließen-Symbol").rect;
     let mut seen = seen;
     for _ in 0..60 {
-        if find(&seen, "Übernehmen")
-            .is_some_and(|t| t.clip.contains_rect(t.rect) && rect.contains_rect(t.rect))
-        {
+        if visible(&seen, "Stückliste") {
             break;
         }
         screen.wheel(rect.center() + egui::vec2(0.0, 40.0), -300.0, &mut f);
@@ -379,6 +385,10 @@ fn sheet_dialog_stays_inside_and_scrolls_at_800x600() {
         title_before
     );
     assert_eq!(find(&seen, &close).expect("Symbol").rect, close_before);
+    assert!(
+        visible(&seen, "Stückliste"),
+        "letzter Abschnitt nach dem Rollen"
+    );
     let button = find(&seen, "Übernehmen").expect("Übernehmen nach dem Rollen");
     assert!(
         button.clip.contains_rect(button.rect) && rect.contains_rect(button.rect),
@@ -386,4 +396,5 @@ fn sheet_dialog_stays_inside_and_scrolls_at_800x600() {
         button.rect,
         button.clip
     );
+    assert_eq!(button.rect, apply_before, "Fußzeile steht");
 }

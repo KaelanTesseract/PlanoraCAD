@@ -595,37 +595,40 @@ pub fn context_or_single(state: &AppState, id: DrawingId) -> SheetContext {
 /// Der Schalter eines Stücklistenblatts zählt nicht (eine Datei kann ihn gesetzt haben; das
 /// Blatt ist ohnehin ganz Stückliste).
 pub fn parts_space(state: &AppState, drawing: &Drawing, placement: bool) -> PartsSpace {
+    // Die Zeilen nur zählen, wenn sie gebraucht werden.
+    match parts_space_for(drawing, 0, true) {
+        PartsSpace::OnSheet { .. } if !placement => {
+            parts_space_for(drawing, state.document.parts_rows().len(), false)
+        }
+        space => space,
+    }
+}
+
+/// Wie [`parts_space`] mit der schon bekannten Zahl der Zeilen `rows`.
+pub fn parts_space_for(drawing: &Drawing, rows: usize, placement: bool) -> PartsSpace {
     match drawing.kind {
         DrawingKind::PartsList { .. } => PartsSpace::ListPage,
         DrawingKind::Views if drawing.info.as_ref().is_some_and(|i| i.parts_list) => {
-            let rows = if placement {
-                PARTS_ON_SHEET
-            } else {
-                state.document.parts_rows().len()
-            };
+            let rows = if placement { PARTS_ON_SHEET } else { rows };
             PartsSpace::OnSheet { rows }
         }
         DrawingKind::Views => PartsSpace::None,
     }
 }
 
-/// Die Zeilen der Stückliste, die auf dem Blatt der Zeichnung stehen: auf dem Zeichnungsblatt
-/// die ersten [`PARTS_ON_SHEET`], auf einem Stücklistenblatt die seiner Seite, sonst keine.
-fn parts_on(state: &AppState, drawing: &Drawing) -> Vec<PartsCells> {
-    match parts_space(state, drawing, false) {
+/// Die Zeilen der Stückliste (aus allen Zeilen `cells`), die auf dem Blatt der Zeichnung stehen:
+/// auf dem Zeichnungsblatt die ersten [`PARTS_ON_SHEET`], auf einem Stücklistenblatt die seiner
+/// Seite, sonst keine.
+fn parts_on(drawing: &Drawing, cells: &[PartsCells]) -> Vec<PartsCells> {
+    match parts_space_for(drawing, cells.len(), false) {
         PartsSpace::None => Vec::new(),
-        PartsSpace::OnSheet { .. } => {
-            let mut cells = state.document.parts_cells();
-            cells.truncate(PARTS_ON_SHEET);
-            cells
-        }
+        PartsSpace::OnSheet { .. } => cells[..cells.len().min(PARTS_ON_SHEET)].to_vec(),
         PartsSpace::ListPage => {
             let page = match drawing.kind {
                 DrawingKind::PartsList { page } => page,
                 DrawingKind::Views => 1,
             };
-            let cells = state.document.parts_cells();
-            page_rows(&cells, page, parts_rows_per_page(drawing.sheet)).to_vec()
+            page_rows(cells, page, parts_rows_per_page(drawing.sheet)).to_vec()
         }
     }
 }
@@ -633,14 +636,57 @@ fn parts_on(state: &AppState, drawing: &Drawing) -> Vec<PartsCells> {
 /// Die Texte des Schriftfelds der Zeichnung (Maßstab: der der ersten Ansicht) mit den Zeilen der
 /// Stückliste dieses Blatts.
 pub fn sheet_texts(state: &AppState, drawing: &Drawing) -> TitleTexts {
+    let cells = if parts_space_for(drawing, 0, true) == PartsSpace::None {
+        Vec::new()
+    } else {
+        state.document.parts_cells()
+    };
+    sheet_texts_with(state, drawing, &cells)
+}
+
+/// Wie [`sheet_texts`] mit allen Zeilen `cells` der Stückliste.
+fn sheet_texts_with(state: &AppState, drawing: &Drawing, cells: &[PartsCells]) -> TitleTexts {
     let mut texts = resolve_texts(
         drawing,
         state.document.project_info(),
         &context_or_single(state, drawing.id),
         main_scale(drawing),
     );
-    texts.parts = parts_on(state, drawing);
+    texts.parts = parts_on(drawing, cells);
     texts
+}
+
+/// Zwischenspeicher der Zeilen der Stückliste: sie hängen nur am Dokument und ändern sich nur
+/// mit seinem Änderungszähler.
+#[derive(Clone)]
+struct CellsCache {
+    instance: u64,
+    edit: u64,
+    cells: Arc<Vec<PartsCells>>,
+}
+
+/// Alle Zeilen der Stückliste des Dokuments, je Stand des Dokuments einmal gerechnet.
+fn cached_cells(ctx: &egui::Context, state: &AppState) -> Arc<Vec<PartsCells>> {
+    let id = egui::Id::new("planora-parts-cells");
+    let edit = state.document.edit_count();
+    if let Some(c) = ctx
+        .data(|d| d.get_temp::<CellsCache>(id))
+        .filter(|c| c.instance == state.instance && c.edit == edit)
+    {
+        return c.cells;
+    }
+    let cells = Arc::new(state.document.parts_cells());
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            id,
+            CellsCache {
+                instance: state.instance,
+                edit,
+                cells: Arc::clone(&cells),
+            },
+        )
+    });
+    cells
 }
 
 /// Die Blattgeometrie zu den Texten: die Zeilenzahlen von Änderungstabelle und Hinweisfeld
@@ -741,7 +787,12 @@ fn sheet_model(
     let cached = ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()));
     let project = state.document.project_info().cloned();
     let context = sheet_context(state, drawing.id);
-    let texts = sheet_texts(state, drawing);
+    let cells = if parts_space_for(drawing, 0, true) == PartsSpace::None {
+        Arc::new(Vec::new())
+    } else {
+        cached_cells(ctx, state)
+    };
+    let texts = sheet_texts_with(state, drawing, &cells);
     let same_base = cached
         .as_ref()
         .filter(|c| c.instance == state.instance && c.model == model && c.ptrs == ptrs);
@@ -761,7 +812,11 @@ fn sheet_model(
     let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
     let mut built = build_sheet_with(drawing, &refs, dims);
     built.frame = Some(sheet_frame(
-        &layout_from_texts(drawing, &texts, parts_space(state, drawing, false)),
+        &layout_from_texts(
+            drawing,
+            &texts,
+            parts_space_for(drawing, cells.len(), false),
+        ),
         &texts,
         drawing.projection,
     ));
