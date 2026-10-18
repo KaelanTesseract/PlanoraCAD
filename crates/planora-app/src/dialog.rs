@@ -89,6 +89,26 @@ impl<'a> Dialog<'a> {
         ctx: &egui::Context,
         add_contents: impl FnOnce(&mut egui::Ui) -> R,
     ) -> Option<egui::InnerResponse<Option<R>>> {
+        self.show_inner(ctx, add_contents, None::<fn(&mut egui::Ui)>)
+    }
+
+    /// Wie [`Dialog::show`], dazu eine Fußzeile `footer` unter dem rollenden Inhalt (etwa
+    /// „Übernehmen“ und „Abbrechen“): sie bleibt immer zu sehen, nur der Inhalt darüber rollt.
+    pub fn show_with_footer<R>(
+        self,
+        ctx: &egui::Context,
+        add_contents: impl FnOnce(&mut egui::Ui) -> R,
+        footer: impl FnOnce(&mut egui::Ui),
+    ) -> Option<egui::InnerResponse<Option<R>>> {
+        self.show_inner(ctx, add_contents, Some(footer))
+    }
+
+    fn show_inner<R>(
+        self,
+        ctx: &egui::Context,
+        add_contents: impl FnOnce(&mut egui::Ui) -> R,
+        footer: Option<impl FnOnce(&mut egui::Ui)>,
+    ) -> Option<egui::InnerResponse<Option<R>>> {
         let Dialog {
             title,
             id,
@@ -152,12 +172,32 @@ impl<'a> Dialog<'a> {
             let top = ui.min_rect().top();
             let close = header(ui, &title, open.is_some());
             let used = ui.cursor().top() - top;
+            // Höhe der Fußzeile aus dem vorigen Bild (ändert sie sich, wird das Bild unten
+            // verworfen und wiederholt).
+            let footer_id = id.with("dialog_fusszeile");
+            let footer_h = match footer {
+                Some(_) => ui
+                    .ctx()
+                    .data(|d| d.get_temp::<f32>(footer_id))
+                    .unwrap_or(0.0),
+                None => 0.0,
+            };
             let r = egui::ScrollArea::vertical()
                 .id_salt("dialog_inhalt")
                 .auto_shrink([false, true])
-                .max_height((height - frame_h - used).max(0.0))
+                .max_height((height - frame_h - used - footer_h).max(0.0))
                 .show(ui, add_contents)
                 .inner;
+            if let Some(footer) = footer {
+                // Ab der Unterkante des Inhalts: mit dem Abstand zur Fußzeile.
+                let start = ui.min_rect().bottom();
+                footer(ui);
+                let h = ui.min_rect().bottom() - start;
+                if (h - footer_h).abs() > 0.5 {
+                    ui.ctx().data_mut(|d| d.insert_temp(footer_id, h));
+                    ui.ctx().request_discard("Dialog: Fußzeile vermessen");
+                }
+            }
             (close, r)
         });
         // Größe geändert: dieses Bild verwerfen und mit der neuen Größe wiederholen (egui
