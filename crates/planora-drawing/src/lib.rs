@@ -16,6 +16,7 @@ pub mod limits;
 pub mod model;
 pub mod out2d;
 pub mod parts;
+pub mod pdf_font;
 pub mod raycast;
 pub mod sheet;
 pub mod sheet_frame;
