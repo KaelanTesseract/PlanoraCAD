@@ -228,7 +228,7 @@ fn done(d: &ExportDialog) -> (PathBuf, u64) {
 // (j) ------------------------------------------------------------------------------------------
 
 #[test]
-fn format_list_has_seven_entries_in_order() {
+fn format_list_has_eight_entries_in_order() {
     assert_eq!(
         ExportFormat::ALL,
         [
@@ -239,6 +239,7 @@ fn format_list_has_seven_entries_in_order() {
             ExportFormat::Step,
             SVG,
             DXF,
+            ExportFormat::Drawing(DrawingFormat::Pdf),
         ]
     );
     assert_eq!(SVG.extension(), "svg");

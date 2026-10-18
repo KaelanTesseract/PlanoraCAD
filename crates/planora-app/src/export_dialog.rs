@@ -7,7 +7,9 @@
 //! Zeichnungen (Teilprojekt 11, Aufgabe 17) als sechstes und siebtes Format: Die Ansichten der
 //! gewählten Zeichnung werden im eigenen Arbeitsthread des Fensters berechnet (nicht über den
 //! Zwischenspeicher des Zeichnungsbereichs, Festlegung F11); geschrieben wird nur, wenn alle
-//! Ansichten berechnet sind.
+//! Ansichten berechnet sind. Als achtes Format kommt „Zeichnung als PDF“ dazu (Teilprojekt 3c-3):
+//! gleiche Berechnung wie bei SVG, vor dem Schreiben prüft der Auftrag, ob alle Zeichen in der
+//! PDF darstellbar sind (P13), und die Datei bekommt Dokumenteigenschaften ([`pdf_meta`], P11).
 //!
 //! Maße und Mittellinien (Teilprojekt 12, Aufgabe 14): Nach den Ansichten löst derselbe
 //! Arbeitsthread die Maße der Zeichnung gegen seine Kopien der exakten Körper auf (nicht über den
@@ -34,10 +36,12 @@ use planora_drawing::balloon::{add_balloon_marks, balloon_marks};
 use planora_drawing::dimension::{DimError, DimSpec};
 use planora_drawing::dxf::{dxf_char_ok, dxf_text_fits};
 use planora_drawing::parts::PARTS_HEAD;
+use planora_drawing::pdf::{PdfMeta, pdf_date};
+use planora_drawing::pdf_font::pdf_char_ok;
 use planora_drawing::sheet::{SheetModel, build_sheet_with, dimension_marks};
 use planora_drawing::sheet_frame::{PartsSpace, sheet_layout_with};
 use planora_drawing::sheet_info::{
-    ProjectInfo, SheetContext, TitleTexts, main_scale, resolve_texts,
+    FieldValue, ProjectInfo, SheetContext, Stamp, TitleTexts, main_scale, resolve_texts,
 };
 use planora_drawing::sheet_marks::{
     DXF_TEXT_WIDTH_FACTOR, SheetFrame, parts_table_marks, sheet_frame, sheet_frame_dxf,
@@ -45,6 +49,7 @@ use planora_drawing::sheet_marks::{
 use planora_drawing::{
     BalloonId, DrawBody, DrawError, Drawing, DrawingFormat, DrawingId, DrawingKind, PartsCells,
     Sheet, ViewId, ViewKind, ViewLines, Visibility, compute_view, export_drawing_file,
+    export_pdf_file,
 };
 use planora_exchange::{
     ExchangeError, ExchangeMesh, ExportBody, Format, MeshReport, MeshTransform, PlacedSource,
@@ -147,7 +152,7 @@ pub enum ExportFormat {
 }
 
 impl ExportFormat {
-    pub const ALL: [ExportFormat; 7] = [
+    pub const ALL: [ExportFormat; 8] = [
         ExportFormat::Mesh(Format::Stl),
         ExportFormat::Mesh(Format::Obj),
         ExportFormat::Mesh(Format::ThreeMf),
@@ -155,6 +160,7 @@ impl ExportFormat {
         ExportFormat::Step,
         ExportFormat::Drawing(DrawingFormat::Svg),
         ExportFormat::Drawing(DrawingFormat::Dxf),
+        ExportFormat::Drawing(DrawingFormat::Pdf),
     ];
 
     /// Dateiendung ohne Punkt.
@@ -445,7 +451,7 @@ pub fn dxf_texts_fit(model: &SheetModel) -> Result<(), String> {
 /// Zeichennummer „U+1F600“, weil die Schrift ein solches Zeichen oft nur als leeres Kästchen
 /// zeigt), dann zu lange Texte.
 pub fn dxf_sheet_texts_ok(texts: &TitleTexts) -> Result<(), String> {
-    let check = |name: &str, text: &str| -> Result<(), String> {
+    check_sheet_cells(texts, &|name, text| {
         if let Some(c) = text.chars().find(|c| !dxf_char_ok(*c)) {
             return Err(format!(
                 "Das Zeichen U+{:04X} im Feld „{name}“ lässt sich als DXF nicht ausgeben. Bitte ändern.",
@@ -458,7 +464,17 @@ pub fn dxf_sheet_texts_ok(texts: &TitleTexts) -> Result<(), String> {
             ));
         }
         Ok(())
-    };
+    })
+}
+
+/// Geht alle Zellen des Blattrahmens mit ihrem Feldnamen durch (Felder des Schriftfelds, Zeilen
+/// der Änderungstabelle, Hinweise, Zellen der Stückliste mit Position und Spalte); `check(Name,
+/// Text)` meldet das erste Problem. Gemeinsam für DXF und PDF, damit beide dieselben Feldnamen
+/// nennen.
+fn check_sheet_cells(
+    texts: &TitleTexts,
+    check: &dyn Fn(&str, &str) -> Result<(), String>,
+) -> Result<(), String> {
     for (field, text) in &texts.fields {
         check(title_field_name(*field), text)?;
     }
@@ -477,6 +493,96 @@ pub fn dxf_sheet_texts_ok(texts: &TitleTexts) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Meldung zu einem Zeichen im Feld `field`, das sich in einer PDF nicht ausgeben lässt (Spec §4).
+pub fn pdf_char_text(c: char, field: &str) -> String {
+    format!("Das Zeichen „{c}“ im Feld „{field}“ lässt sich in einer PDF nicht ausgeben.")
+}
+
+/// Lassen sich alle Texte des Blattrahmens in einer PDF ausgeben (P13)? Sonst die Meldung mit
+/// dem Feld, genau wie beim DXF benannt; nichts wird gekürzt oder ersetzt. Die Länge ist bei PDF
+/// kein Hindernis (die Texte werden beim Bau des Blatts eingepasst).
+pub fn pdf_sheet_texts_ok(texts: &TitleTexts) -> Result<(), String> {
+    check_sheet_cells(
+        texts,
+        &|name, text| match text.chars().find(|c| !pdf_char_ok(*c)) {
+            Some(c) => Err(pdf_char_text(c, name)),
+            None => Ok(()),
+        },
+    )
+}
+
+/// Lassen sich alle Texte der Ansichten (Maßtexte, Positionsnummern) in einer PDF ausgeben (P13)?
+/// Sonst die Meldung mit dem Zeichen und der Ansicht.
+pub fn pdf_model_texts_ok(model: &SheetModel) -> Result<(), String> {
+    for v in &model.views {
+        for m in &v.marks {
+            if let Mark::Text { text, .. } = m
+                && let Some(c) = text.chars().find(|c| !pdf_char_ok(*c))
+            {
+                return Err(format!(
+                    "Das Zeichen „{c}“ in einem Maßtext der Ansicht „{}“ lässt sich in einer PDF nicht ausgeben.",
+                    v.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Welche Blätter in die PDF kommen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum PdfPages {
+    /// Nur das gewählte Blatt.
+    #[default]
+    Selected,
+    /// Alle Blätter des Dokuments in Dokumentreihenfolge.
+    All,
+}
+
+/// Dokumenteigenschaften der PDF (P10, P11): Titel = Name des gewählten Blatts bzw. des Dokuments
+/// (alle Blätter); Ersteller nur, wenn in den Projektangaben ein eigener Text steht (nicht der
+/// Anmeldename); Datum des ersten Blatts der PDF = eigenes Ausgabedatum, wenn gültig, sonst das
+/// Erstellungsdatum des Blatts, wenn gültig, sonst `today`.
+pub fn pdf_meta(
+    state: &AppState,
+    pages: PdfPages,
+    drawing: Option<DrawingId>,
+    today: &str,
+) -> PdfMeta {
+    let doc = &state.document;
+    let first = match pages {
+        PdfPages::Selected => drawing
+            .and_then(|id| doc.drawing(id))
+            .or_else(|| default_drawing(state).and_then(|id| doc.drawing(id))),
+        PdfPages::All => doc.drawings().first(),
+    };
+    let title = match pages {
+        PdfPages::Selected => first.map(|d| d.name.clone()).unwrap_or_default(),
+        PdfPages::All => state.document_name.clone(),
+    };
+    let author = doc.project_info().and_then(|p| match &p.creator {
+        FieldValue::Text(t) if !t.trim().is_empty() => Some(t.clone()),
+        _ => None,
+    });
+    let valid = |s: &str| pdf_date(s).is_some();
+    let info = first.and_then(|d| d.info.as_ref());
+    let date = info
+        .and_then(|i| match &i.issued {
+            FieldValue::Text(t) if valid(t) => Some(t.clone()),
+            _ => None,
+        })
+        .or_else(|| {
+            info.filter(|i| valid(&i.created))
+                .map(|i| i.created.clone())
+        })
+        .unwrap_or_else(|| today.to_string());
+    PdfMeta {
+        title,
+        author,
+        date: Some(date),
+    }
 }
 
 /// Blatt für die Anzeige, z. B. „A3 quer“.
@@ -1102,6 +1208,9 @@ type DrawResult = Result<Arc<DrawingPrepared>, String>;
 type DrawWriteJob = Job<Result<u64, String>>;
 /// Das Schreiben einer Zeichnung (austauschbar nur für Tests).
 pub type WriteFn = fn(&Path, &SheetModel, DrawingFormat, &Progress) -> Result<u64, DrawError>;
+/// Das Schreiben einer PDF-Datei aus Blättern mit Dokumenteigenschaften (austauschbar nur für
+/// Tests).
+pub type PdfWriteFn = fn(&Path, &[&SheetModel], &PdfMeta, &Progress) -> Result<u64, DrawError>;
 /// Das Schreiben einer STEP-Datei (austauschbar nur für Tests).
 pub type StepWriteFn = fn(&Path, &StepPrepared, &Progress) -> Result<u64, StepError>;
 
@@ -1124,7 +1233,9 @@ pub struct ExportDialog {
     job: Option<(Key, PrepJob)>,
     step_prepared: Option<(Key, StepResult)>,
     step_job: Option<(Key, StepJob)>,
-    drawing_prepared: Option<(DrawKey, DrawResult)>,
+    /// Ergebnisse der Zeichnungsformate, höchstens eines je Format (ein Wechsel des Formats
+    /// lässt das Ergebnis des anderen stehen).
+    drawing_prepared: Vec<(DrawKey, DrawResult)>,
     drawing_job: Option<(DrawKey, DrawJob)>,
     chooser: Option<FileChooser>,
     /// Schlüssel und Format zur Zeit des Öffnens der Dateiauswahl; ändern sie sich, schließt sie.
@@ -1135,6 +1246,7 @@ pub struct ExportDialog {
     compute: ComputeFn,
     resolve: ResolveFn,
     writer: WriteFn,
+    pdf_writer: PdfWriteFn,
     step_writer: StepWriteFn,
     written: Option<Result<(PathBuf, u64), String>>,
     /// Format, mit dem zuletzt geschrieben wurde; die Meldung gehört nur zu diesem Format.
@@ -1166,7 +1278,7 @@ impl ExportDialog {
             job: None,
             step_prepared: None,
             step_job: None,
-            drawing_prepared: None,
+            drawing_prepared: Vec::new(),
             drawing_job: None,
             chooser: None,
             chooser_key: None,
@@ -1176,6 +1288,7 @@ impl ExportDialog {
             compute: compute_view,
             resolve: resolve_dimensions_in_worker,
             writer: export_drawing_file,
+            pdf_writer: export_pdf_file,
             step_writer: write_step_bodies,
             written: None,
             write_format: ExportFormat::Mesh(Format::Stl),
@@ -1248,6 +1361,12 @@ impl ExportDialog {
         self.writer = f;
     }
 
+    /// Ersetzt das Schreiben einer PDF-Datei (nur für Tests: langes Schreiben).
+    #[doc(hidden)]
+    pub fn set_pdf_writer(&mut self, f: PdfWriteFn) {
+        self.pdf_writer = f;
+    }
+
     /// Ersetzt das Schreiben einer STEP-Datei (nur für Tests: Schreiben, das bis zum Abbrechen
     /// läuft).
     #[doc(hidden)]
@@ -1316,10 +1435,7 @@ impl ExportDialog {
             self.drawing = default_drawing(state);
         }
         if let (Some(key), None) = (self.drawing_key(state), self.drawing_block(state)) {
-            let fresh = self
-                .drawing_prepared
-                .as_ref()
-                .is_some_and(|(k, _)| *k == key);
+            let fresh = self.prepared_for(key.2).is_some_and(|(k, _)| *k == key);
             let running = self.drawing_job.as_ref().is_some_and(|(k, _)| *k == key);
             if !fresh
                 && !running
@@ -1356,6 +1472,12 @@ impl ExportDialog {
                             }
                             dxf_texts_fit(&r.model)?;
                         }
+                        if format == DrawingFormat::Pdf {
+                            if let Some(texts) = &r.texts {
+                                pdf_sheet_texts_ok(texts)?;
+                            }
+                            pdf_model_texts_ok(&r.model)?;
+                        }
                         // Ein Stücklistenblatt hat keine Ansichten, die Netz-Körper auslassen.
                         if !is_list {
                             r.skipped_meshes = meshes;
@@ -1374,7 +1496,7 @@ impl ExportDialog {
             None => None,
         };
         if let Some(done) = finished {
-            self.drawing_prepared = Some(done);
+            self.store_prepared(done);
             self.drawing_job = None;
         }
     }
@@ -1389,7 +1511,7 @@ impl ExportDialog {
         {
             return ExportStatus::Computing(job.fraction());
         }
-        match &self.drawing_prepared {
+        match key.and_then(|k| self.prepared_for(k.2)) {
             Some((k, Ok(p))) if Some(*k) == key => ExportStatus::DrawingReady {
                 views: p.views,
                 sheet: p.sheet.clone(),
@@ -1405,6 +1527,17 @@ impl ExportDialog {
         }
     }
 
+    /// Das Ergebnis des Zeichnungsformats `format`, falls es eines gibt.
+    fn prepared_for(&self, format: DrawingFormat) -> Option<&(DrawKey, DrawResult)> {
+        self.drawing_prepared.iter().find(|(k, _)| k.2 == format)
+    }
+
+    /// Merkt sich ein Ergebnis und ersetzt das alte desselben Formats.
+    fn store_prepared(&mut self, entry: (DrawKey, DrawResult)) {
+        self.drawing_prepared.retain(|(k, _)| k.2 != entry.0.2);
+        self.drawing_prepared.push(entry);
+    }
+
     /// Schreibt die fertige Zeichnung im Arbeitsthread nach `path` (über eine Hilfsdatei); nur
     /// wenn alle Ansichten berechnet sind und das Ergebnis zum Stand von `state` passt.
     fn write_drawing(&mut self, path: PathBuf, format: DrawingFormat, state: &AppState) {
@@ -1413,7 +1546,7 @@ impl ExportDialog {
             return;
         }
         let key = self.drawing_key(state);
-        let prepared = match &self.drawing_prepared {
+        let prepared = match self.prepared_for(format) {
             Some((k, _)) if Some(*k) != key => {
                 self.set_written(Err(STALE.to_string()));
                 return;
@@ -1429,14 +1562,26 @@ impl ExportDialog {
                 return;
             }
         };
-        let (writer, target) = (self.writer, path.clone());
+        let target = path.clone();
         self.written = None;
-        self.drawing_writing = Some((
-            path,
+        let job: DrawWriteJob = if format == DrawingFormat::Pdf {
+            let meta = pdf_meta(
+                state,
+                PdfPages::Selected,
+                self.current_drawing(state).map(|d| d.id),
+                &Stamp::now().date,
+            );
+            let pdf_writer = self.pdf_writer;
+            Job::spawn(move |p| {
+                pdf_writer(&target, &[&*prepared.model], &meta, p).map_err(draw_write_text)
+            })
+        } else {
+            let writer = self.writer;
             Job::spawn(move |p| {
                 writer(&target, &prepared.model, format, p).map_err(draw_write_text)
-            }),
-        ));
+            })
+        };
+        self.drawing_writing = Some((path, job));
     }
 
     /// Startet das Vernetzen bzw. die STEP-Prüfung, wenn sich Format, Qualität, Umfang oder
@@ -1627,7 +1772,7 @@ impl ExportDialog {
         // Nur der Auftrag des gewählten Formats; der andere läuft im Hintergrund weiter.
         if self.format.is_drawing() {
             if let Some((key, _)) = self.drawing_job.take() {
-                self.drawing_prepared = Some((key, Err(ExchangeError::Cancelled.to_string())));
+                self.store_prepared((key, Err(ExchangeError::Cancelled.to_string())));
             }
         } else if self.format.is_step() {
             if let Some((key, _)) = self.step_job.take() {
@@ -1663,7 +1808,9 @@ impl ExportDialog {
     /// des anderen Formats bleibt (Wechsel zurück rechnet nicht neu).
     pub fn recompute(&mut self) {
         if self.format.is_drawing() {
-            self.drawing_prepared = None;
+            if let ExportFormat::Drawing(f) = self.format {
+                self.drawing_prepared.retain(|(k, _)| k.2 != f);
+            }
         } else if self.format.is_step() {
             self.step_prepared = None;
         } else {
