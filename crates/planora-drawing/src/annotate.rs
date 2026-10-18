@@ -117,6 +117,10 @@ pub enum Mark {
         kind: MarkKind,
     },
     /// Text: Anker auf der Grundlinie, Höhe, Winkel (Radiant, gegen den Uhrzeigersinn).
+    /// `fit_width`: Breite (mm), in die der Text eingepasst wurde (Zellen des Blattrahmens und der
+    /// Stückliste, Nummernkreise); `None` bei Texten ohne Zelle (Maße, Raster, Beschriftungen).
+    /// Nur die PDF-Ausgabe nutzt sie (Stauchung, falls die Helvetica-Breite die Zelle
+    /// überschreitet); SVG und DXF lassen sie unbeachtet.
     Text {
         pos: DVec2,
         height: f64,
@@ -124,6 +128,7 @@ pub enum Mark {
         anchor: TextAnchor,
         text: String,
         kind: MarkKind,
+        fit_width: Option<f64>,
     },
 }
 
@@ -527,6 +532,7 @@ impl Ctx<'_> {
             anchor,
             text,
             kind: self.kind,
+            fit_width: None,
         }
     }
 }
@@ -804,6 +810,7 @@ pub fn layout_lost_in(
             anchor: TextAnchor::Middle,
             text: "?".into(),
             kind: MarkKind::Lost,
+            fit_width: None,
         }])
     };
     let Some(anchor) = last else {

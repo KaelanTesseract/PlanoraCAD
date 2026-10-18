@@ -81,6 +81,7 @@ fn text_mark(pos: DVec2, angle: f64, anchor: TextAnchor, text: &str, kind: MarkK
         anchor,
         text: text.to_string(),
         kind,
+        fit_width: None,
     }
 }
 
@@ -793,6 +794,7 @@ fn non_finite_marks_refuse_with_nonfinite_error() {
             anchor: TextAnchor::Start,
             text: "x".into(),
             kind: MarkKind::Dimension,
+            fit_width: None,
         },
     ];
     for m in bad {

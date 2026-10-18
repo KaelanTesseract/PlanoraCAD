@@ -74,6 +74,7 @@ fn texts(marks: &[Mark]) -> Vec<(DVec2, f64, f64, TextAnchor, String, MarkKind)>
                 anchor,
                 text,
                 kind,
+                ..
             } => Some((*pos, *height, *angle, *anchor, text.clone(), *kind)),
             _ => None,
         })

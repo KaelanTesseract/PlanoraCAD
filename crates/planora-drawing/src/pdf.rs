@@ -12,7 +12,11 @@
 //!   ohne nachgestellte Nullen, `-0` → `0` ([`pdf_num`]); auch für `MediaBox`, `w`, `d`, `Tf`,
 //!   `Tm`, `Tz`. Eine nicht endliche Zahl → [`DrawError::NonFinite`], nichts geschrieben. Der
 //!   Nullpunkt liegt wie im Blattmodell unten links (keine Spiegelung).
-//! * **P3 Inhaltsstrom:** beginnt mit `1 J`/`1 j` (runde Enden und Ecken wie SVG); Reihenfolge
+//! * **P3 Inhaltsstrom:** beginnt mit `1 J`/`0 j`: runde Linienenden wie SVG
+//!   (`stroke-linecap="round"`) und spitze Ecken wie SVG (ohne `stroke-linejoin` gilt dort
+//!   `miter`). Die Gehrungsgrenze bleibt die PDF-Vorgabe 10 (SVG-Vorgabe 4); sie wirkt nur bei
+//!   Ecken unter etwa 29° innerhalb eines Teilpfads (Spline Grad 1, Polygone), die in den
+//!   Zeichnungen kaum vorkommen. Reihenfolge
 //!   wie SVG: Rahmen, dann je Ansicht sichtbarer Pfad, verdeckter Pfad, Maße (mit verlorenen),
 //!   Mittellinien, Positionen. Strich `{Farbe} RG {w} w [{Muster}] 0 d` + Pfad + `S`; Fläche
 //!   (Pfeil) `{Farbe} rg` + `m l l h f`; Text `{Farbe} rg BT /F1 {Größe} Tf {a b c d e f} Tm
@@ -28,12 +32,18 @@
 //!   Splines: Grad 1 → `l`, Grad 2 → Gradanhebung, Grad 3 → `c`, rational oder höher → die
 //!   kubische Näherung aus `svg.rs` (`fitted_cubics`, gemeinsam genutzt).
 //! * **P6 Texte:** Helvetica (`/F1`), WinAnsi; Größe = Texthöhe in pt; Ursprung = Anker −
-//!   k·W·(cos α, sin α) mit k = 0/½/1 (Anfang/Mitte/Ende) und der Helvetica-Breite W nach der
-//!   Stauchung. Ist die Helvetica-Breite größer als die Schätzung des Blattmodells
-//!   (`sheet_text_width` für Blatt- und Positionstexte, `annotate::text_width` sonst), wird mit
-//!   `Tz` gestaucht und danach `100 Tz` gesetzt. Der Faktor wird mit der geschriebenen
-//!   (gerundeten) Schriftgröße bestimmt und auf vier Stellen **abgerundet**, damit der
-//!   gerenderte Text nie breiter ist als die Schätzung. `−` (U+2212) wird `-`; `( ) \` werden
+//!   k·W·(cos α, sin α) mit k = 0/½/1 (Anfang/Mitte/Ende) und der tatsächlich gezeichneten
+//!   Helvetica-Breite W (nach einer Stauchung). **Stauchung nur gegen die Zelle:** Trägt der
+//!   Text eine Einpassbreite (`Mark::Text::fit_width`, gesetzt von den Zellen des Blattrahmens,
+//!   der Stückliste und den Nummernkreisen) und ist die Helvetica-Breite größer als sie, wird
+//!   mit `Tz = 100 · Zellbreite / Helvetica-Breite` gestaucht und danach `100 Tz` gesetzt;
+//!   Texte ohne Einpassbreite (Maße, Raster, Beschriftungen) werden nie gestaucht. Die
+//!   Schätzungen des Blattmodells (`sheet_text_width` zählt z. B. „1“ mit 0,3·h, Helvetica hat
+//!   0,556·h) sind kein Maßstab: sonst würden kurze Texte wie „1“ oder „1:1“ sichtbar
+//!   schmal. Der Faktor wird mit der geschriebenen (gerundeten) Schriftgröße bestimmt und auf
+//!   vier Stellen **abgerundet** (Abweichung vom Plan, der „gerundet“ sagt: mit Rundung zum
+//!   Nächsten wäre der gezeichnete Text bis zu ~1e-4 mm breiter als die Zelle). `−` (U+2212)
+//!   wird `-`; `( ) \` werden
 //!   maskiert, Bytes ≥ 0x80 als `\ddd` (oktal). Ein Zeichen ohne WinAnsi-Platz →
 //!   `DrawError::Unsupported(pdf_char_message(c))`, nichts geschrieben.
 //! * **P7 Dokumenteigenschaften:** `/Producer` und `/Creator` „PlanoraCAD“, `/Title` und
@@ -46,14 +56,12 @@
 use crate::Visibility;
 use crate::annotate::{
     ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, CENTER_W, DIM_LINE_W, Mark, MarkKind, TextAnchor,
-    text_width,
 };
 use crate::error::DrawError;
 use crate::out2d::{Out2d, bezier_pieces};
 use crate::pdf_font::{pdf_text_width, winansi_byte};
 use crate::sheet::SheetModel;
 use crate::sheet_frame::sheet_scale;
-use crate::sheet_marks::sheet_text_width;
 use crate::svg::fitted_cubics;
 use planora_math::{DVec2, PI, TAU};
 use std::fmt::Write as _;
@@ -246,7 +254,8 @@ fn pt(mm: f64) -> Result<String, DrawError> {
 
 /// Der Inhaltsstrom einer Seite (Zeilen mit `\n` verbunden, ohne Zeilenende am Schluss).
 fn page_content(model: &SheetModel) -> Result<String, DrawError> {
-    let mut lines: Vec<String> = vec!["1 J".into(), "1 j".into()];
+    // Runde Enden, spitze Ecken (wie SVG, siehe P3).
+    let mut lines: Vec<String> = vec!["1 J".into(), "0 j".into()];
     if let Some(frame) = &model.frame {
         for m in &frame.marks {
             mark_element(&mut lines, m, frame.scale)?;
@@ -418,28 +427,25 @@ fn mark_element(lines: &mut Vec<String>, m: &Mark, sheet_scale: f64) -> Result<(
             )?;
             mark_stroke(lines, *kind, sheet_scale, ops)?;
         }
-        Mark::Text {
-            pos,
-            height,
-            angle,
-            anchor,
-            text,
-            kind,
-        } => text_element(lines, *pos, *height, *angle, *anchor, text, *kind)?,
+        Mark::Text { .. } => text_element(lines, m)?,
     }
     Ok(())
 }
 
-/// Ein Text nach P6.
-fn text_element(
-    lines: &mut Vec<String>,
-    pos: DVec2,
-    height: f64,
-    angle: f64,
-    anchor: TextAnchor,
-    text: &str,
-    kind: MarkKind,
-) -> Result<(), DrawError> {
+/// Ein Text nach P6 (`m` ist ein `Mark::Text`).
+fn text_element(lines: &mut Vec<String>, m: &Mark) -> Result<(), DrawError> {
+    let &Mark::Text {
+        pos,
+        height,
+        angle,
+        anchor,
+        ref text,
+        kind,
+        fit_width,
+    } = m
+    else {
+        return Ok(());
+    };
     let mut bytes = Vec::with_capacity(text.len());
     for c in text.chars() {
         bytes.push(winansi_byte(c).ok_or_else(|| DrawError::Unsupported(pdf_char_message(c)))?);
@@ -448,24 +454,24 @@ fn text_element(
     let size: f64 = size_s.parse().map_err(|_| DrawError::NonFinite)?;
     // Breiten in pt mit der geschriebenen Schriftgröße.
     let helv = pdf_text_width(text, size).ok_or(DrawError::NonFinite)?;
-    let estimate = match kind {
-        MarkKind::Sheet(_) | MarkKind::Position(_) => sheet_text_width(text, height),
-        MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Lost => text_width(text, height),
-    } * PT_PER_MM;
-    if !estimate.is_finite() {
-        return Err(DrawError::NonFinite);
-    }
-    let tz = if helv > estimate {
-        // Auf vier Stellen abgerundet: der gerenderte Text ist nie breiter als die Schätzung.
-        let mut t = (100.0 * estimate / helv * 1e4).floor();
-        while t > 0.0 && helv * (t / 1e4) / 100.0 > estimate {
-            t -= 1.0;
+    // Gestaucht wird nur gegen die Zelle, in die der Text eingepasst wurde (P6).
+    let cell = match fit_width {
+        Some(w) if !w.is_finite() => return Err(DrawError::NonFinite),
+        Some(w) => Some(w * PT_PER_MM),
+        None => None,
+    };
+    let tz = match cell {
+        Some(cell) if helv > cell => {
+            // Auf vier Stellen abgerundet: der gezeichnete Text ist nie breiter als die Zelle.
+            let mut t = (100.0 * cell / helv * 1e4).floor();
+            while t > 0.0 && helv * (t / 1e4) / 100.0 > cell {
+                t -= 1.0;
+            }
+            let s = pdf_num(t.max(0.0) / 1e4)?;
+            let v: f64 = s.parse().map_err(|_| DrawError::NonFinite)?;
+            Some((s, v))
         }
-        let s = pdf_num(t / 1e4)?;
-        let v: f64 = s.parse().map_err(|_| DrawError::NonFinite)?;
-        Some((s, v))
-    } else {
-        None
+        _ => None,
     };
     let width = helv * tz.as_ref().map_or(100.0, |t| t.1) / 100.0;
     let k = match anchor {

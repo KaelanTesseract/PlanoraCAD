@@ -169,6 +169,18 @@ fn rect(marks: &mut Vec<Mark>, lo: DVec2, hi: DVec2, pen: SheetPen) {
 }
 
 fn text(marks: &mut Vec<Mark>, pos: DVec2, height: f64, anchor: TextAnchor, text: &str) {
+    text_in(marks, pos, height, anchor, text, None);
+}
+
+/// Wie [`text`], dazu die Breite, in die der Text eingepasst wurde (`fit_width`).
+fn text_in(
+    marks: &mut Vec<Mark>,
+    pos: DVec2,
+    height: f64,
+    anchor: TextAnchor,
+    text: &str,
+    fit_width: Option<f64>,
+) {
     if text.is_empty() {
         return;
     }
@@ -179,14 +191,16 @@ fn text(marks: &mut Vec<Mark>, pos: DVec2, height: f64, anchor: TextAnchor, text
         anchor,
         text: text.to_string(),
         kind: MarkKind::Sheet(SheetPen::Thin),
+        fit_width,
     });
 }
 
 /// Eingepasster Text bei `pos` (Anfang auf der Grundlinie); `widen` ist der Zuschlag auf die
 /// geschätzte Breite (1 für SVG und Anzeige, [`DXF_TEXT_WIDTH_FACTOR`] für DXF).
 fn fitted_text(marks: &mut Vec<Mark>, pos: DVec2, height: f64, width: f64, widen: f64, s: &str) {
-    let f = fit_text(s, height, width / widen);
-    text(marks, pos, f.height, TextAnchor::Start, &f.text);
+    let room = width / widen;
+    let f = fit_text(s, height, room);
+    text_in(marks, pos, f.height, TextAnchor::Start, &f.text, Some(room));
 }
 
 /// Trennlinien eines Rasters aus Zellen: jede innere Kante einmal, aneinanderstoßende Stücke

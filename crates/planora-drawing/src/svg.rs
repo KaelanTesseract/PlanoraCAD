@@ -288,6 +288,7 @@ fn mark_element(out: &mut String, m: &Mark, sheet_scale: f64) -> Result<(), Draw
             anchor,
             text,
             kind,
+            ..
         } => {
             let anchor = match anchor {
                 TextAnchor::Start => "start",

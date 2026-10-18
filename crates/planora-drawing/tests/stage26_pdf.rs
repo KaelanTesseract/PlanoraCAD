@@ -4,12 +4,13 @@
 mod common;
 
 use common::pdf_read::{
-    self, Item, Op, Seg, Value, all_chars, mm, read, text_width_pt, utf16_text,
+    self, Item, Op, Seg, Value, all_chars, mm, read, read_content, text_width_pt, utf16_text,
 };
 use common::svg_marks::manual_sheet;
 use common::svg_read;
+use planora_drawing::Projection;
 use planora_drawing::annotate::{Mark, MarkKind, TextAnchor, text_width};
-use planora_drawing::balloon::PositionPen;
+use planora_drawing::balloon::{PositionPen, layout_balloon};
 use planora_drawing::model::{Paper, Sheet};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::pdf::{
@@ -17,6 +18,9 @@ use planora_drawing::pdf::{
 };
 use planora_drawing::sheet::{SheetLine, SheetModel, SheetView};
 use planora_drawing::sheet_frame::{SheetPen, sheet_scale};
+use planora_drawing::sheet_frame::{TitleField, sheet_layout};
+use planora_drawing::sheet_info::TitleTexts;
+use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::sheet_marks::{SheetFrame, sheet_text_width};
 use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{DrawError, ViewId, Visibility, pdf_bytes, svg_string, write_pdf};
@@ -178,6 +182,20 @@ fn text_mark(pos: DVec2, height: f64, angle: f64, anchor: TextAnchor, text: &str
         anchor,
         text: text.into(),
         kind: MarkKind::Dimension,
+        fit_width: None,
+    }
+}
+
+/// Text beliebiger Art mit optionaler Einpassbreite, Anfang bei (30, 30).
+fn text_of_kind(h: f64, s: &str, kind: MarkKind, fit_width: Option<f64>) -> Mark {
+    Mark::Text {
+        pos: v(30.0, 30.0),
+        height: h,
+        angle: 0.0,
+        anchor: TextAnchor::Start,
+        text: s.into(),
+        kind,
+        fit_width,
     }
 }
 
@@ -218,12 +236,16 @@ fn file_structure_is_exact() {
     assert!(s.contains("6 0 obj\n<< /Length "));
     assert!(s.contains("\nxref\n0 7\n0000000000 65535 f \n"));
     assert!(s.contains("trailer\n<< /Size 7 /Root 1 0 R /Info 4 0 R >>\nstartxref\n"));
-    // Der Inhaltsstrom beginnt mit runden Enden und Ecken.
+    // Der Inhaltsstrom beginnt mit runden Enden (1 J) und spitzen Ecken (0 j) wie SVG
+    // (`stroke-linecap="round"`, ohne `stroke-linejoin` also `miter`).
     let ops = &pdf.pages[0].ops;
     assert_eq!(ops[0].op, "J");
     assert_eq!(num_args(&ops[0]), [1.0]);
     assert_eq!(ops[1].op, "j");
-    assert_eq!(num_args(&ops[1]), [1.0]);
+    assert_eq!(num_args(&ops[1]), [0.0]);
+    let svg = svg_string(&one).unwrap();
+    assert!(svg.contains("stroke-linecap=\"round\""));
+    assert!(!svg.contains("stroke-linejoin"));
 
     // Drei Seiten in Eingabereihenfolge.
     let a4 = empty(Paper::A4, false);
@@ -251,7 +273,7 @@ fn file_structure_is_exact() {
     // Leere Seite: nur die beiden Kopfanweisungen.
     assert_eq!(op_names(&pdf3.pages[0].ops), ["J", "j"]);
     assert!(pdf3.pages[0].items.is_empty());
-    assert!(text_of(&b3).contains("<< /Length 7 >>\nstream\n1 J\n1 j\nendstream\n"));
+    assert!(text_of(&b3).contains("<< /Length 7 >>\nstream\n1 J\n0 j\nendstream\n"));
 
     // Der Leser beißt: ein eingefügtes Byte vor Objekt 3 …
     let at = s.find("3 0 obj\n").unwrap();
@@ -271,6 +293,48 @@ fn file_structure_is_exact() {
     assert!(read(longer.as_bytes()).is_err());
     // Gegenprobe: unverändert gelingt es.
     assert!(read(s.as_bytes()).is_ok());
+
+    // Weitere Strenge des Lesers, jeweils mit gleicher Länge (Versätze bleiben gültig):
+    let same_len = |from: &str, to: &str| {
+        assert_eq!(from.len(), to.len());
+        assert_eq!(s.matches(from).count(), 1, "{from}");
+        let t = s.replacen(from, to, 1);
+        assert!(read(t.as_bytes()).is_ok() == (from == to), "{from} → {to}");
+    };
+    // Gegenprobe der Hilfe selbst.
+    same_len("[0 0 1190.5512", "[0 0 1190.5512");
+    // Nicht-Zahl in der MediaBox (auch wenn vier Zahlen übrig blieben).
+    same_len("[0 0 1190.5512", "[0 0 /Abcdefgh");
+    same_len("[0 0 1190.5512", "[0 /X 0 1190.5");
+    // Hex-String ungerader Länge (eine Ziffer durch Leerraum ersetzt).
+    same_len("/Title <FEFF0042", "/Title <FEFF 042");
+    // Kommentar im Inhaltsstrom.
+    same_len("stream\n1 J\n0 j\n", "stream\n1 J\n%0j\n");
+    // Zwei Anweisungen auf einer Zeile.
+    same_len("stream\n1 J\n0 j\n", "stream\n1 J 0 j\n");
+    // Zahl mit nachgestellter Null (Schreibweise P2).
+    same_len("1.4173 w\n", "1.4170 w\n");
+    // Die Schreibweise P2 für Operanden im Einzelnen.
+    for ok in ["1.2346 w", "0 w", "-3.5 w", "12345678.9 w", "0.0001 w"] {
+        assert!(read_content(ok.as_bytes()).is_ok(), "{ok}");
+    }
+    for bad in [
+        "1.23456 w",
+        "1.50 w",
+        "-0 w",
+        "+1 w",
+        "01 w",
+        "1. w",
+        ".5 w",
+        "1e3 w",
+        "1.2345678 w",
+        "1 w\n",
+        "\n1 w",
+        "1 w % x",
+        "1 w 1 w",
+    ] {
+        assert!(read_content(bad.as_bytes()).is_err(), "{bad:?}");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -485,7 +549,7 @@ fn view_lines_widths_and_dashes() {
     let s = text_of(&b);
     assert!(
         s.contains(
-            "1 J\n1 j\n0 0 0 RG\n1.4173 w\n[] 0 d\n28.3465 28.3465 m\n311.811 28.3465 l\nS\n0 0 0 RG\n0.7087 w\n[8.5039 2.8346] 0 d\n28.3465 56.6929 m\n311.811 56.6929 l\nS\nendstream"
+            "1 J\n0 j\n0 0 0 RG\n1.4173 w\n[] 0 d\n28.3465 28.3465 m\n311.811 28.3465 l\nS\n0 0 0 RG\n0.7087 w\n[8.5039 2.8346] 0 d\n28.3465 56.6929 m\n311.811 56.6929 l\nS\nendstream"
         ),
         "{s}"
     );
@@ -656,21 +720,23 @@ fn anchor_k(a: TextAnchor) -> f64 {
 
 #[test]
 fn text_anchor_and_rotation() {
-    // „Ä“ als Blatttext (Schätzung 0,72·h, breiter als Helvetica: nicht gestaucht), die übrigen
-    // als Maßtexte; „WM@“ ist breiter als die Schätzung und wird gestaucht (Mitte nach der
-    // Stauchung).
+    // Ohne Einpassbreite wird nie gestaucht („WM@“ ist breiter als die Maßschätzung und bleibt
+    // trotzdem 100 %); mit zu kleiner Einpassbreite wird gestaucht, Ende und Mitte gelten dann
+    // für die gestauchte Breite.
     let sheet = MarkKind::Sheet(SheetPen::Thin);
     let dim = MarkKind::Dimension;
+    let pos_circle = MarkKind::Position(PositionPen::Circle);
     let cases = [
-        (v(100.0, 100.0), 0.0, TextAnchor::Middle, "Ä", sheet),
-        (v(50.0, 50.0), 0.5 * PI, TextAnchor::End, "10", dim),
-        (v(20.0, 30.0), 0.0, TextAnchor::Start, "x", dim),
+        (v(100.0, 100.0), 0.0, TextAnchor::Middle, "Ä", sheet, None),
+        (v(50.0, 50.0), 0.5 * PI, TextAnchor::End, "10", dim, None),
+        (v(20.0, 30.0), 0.0, TextAnchor::Start, "x", dim, None),
         (
             v(150.0, 120.0),
             30f64.to_radians(),
             TextAnchor::Middle,
             "Maß 12,5",
             dim,
+            None,
         ),
         (
             v(220.0, 80.0),
@@ -678,19 +744,36 @@ fn text_anchor_and_rotation() {
             TextAnchor::End,
             "Ø 40 H7",
             dim,
+            None,
         ),
-        (v(260.0, 160.0), PI, TextAnchor::Middle, "WM@", dim),
-        (v(200.0, 40.0), 0.7, TextAnchor::End, "@@@", sheet),
+        (v(260.0, 160.0), PI, TextAnchor::Middle, "WM@", dim, None),
+        (
+            v(200.0, 40.0),
+            0.7,
+            TextAnchor::End,
+            "@@@",
+            sheet,
+            Some(5.0),
+        ),
+        (
+            v(240.0, 60.0),
+            -1.2,
+            TextAnchor::Middle,
+            "12345",
+            pos_circle,
+            Some(4.0),
+        ),
     ];
     let marks: Vec<Mark> = cases
         .iter()
-        .map(|&(pos, angle, anchor, t, kind)| Mark::Text {
+        .map(|&(pos, angle, anchor, t, kind, fit_width)| Mark::Text {
             pos,
             height: 3.5,
             angle,
             anchor,
             text: t.into(),
             kind,
+            fit_width,
         })
         .collect();
     let b = bytes_of(&[&marks_sheet(Paper::A3, marks)], &meta());
@@ -708,8 +791,16 @@ fn text_anchor_and_rotation() {
             "0 0 0 rg\nBT\n/F1 9.9213 Tf\n1 0 0 1 280.1558 283.4646 Tm\n(\\304) Tj\nET\n"
         )
     );
-    assert!(tx[5].tz < 100.0 && tx[6].tz < 100.0);
-    for (t, &(p, angle, anc, s, _)) in tx.iter().zip(&cases) {
+    // Positionstexte stehen nach den Maßen (Gruppenfolge), hier ohnehin zuletzt.
+    let tzs: Vec<f64> = tx.iter().map(|t| t.tz).collect();
+    assert_eq!(tzs[..6], [100.0; 6]);
+    assert!(tzs[6] < 100.0 && tzs[7] < 100.0, "{tzs:?}");
+    for (t, &(_, _, _, _, _, fit)) in tx.iter().zip(&cases) {
+        if let Some(w) = fit {
+            assert!(close(mm(text_width_pt(t.text, t.size, t.tz)), w, 1e-5));
+        }
+    }
+    for (t, &(p, angle, anc, s, _, _)) in tx.iter().zip(&cases) {
         assert_eq!(t.text, s);
         assert_eq!(t.rgb, [0.0; 3]);
         let [a, bb, c, d, e, f] = t.matrix;
@@ -730,7 +821,7 @@ fn text_anchor_and_rotation() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// (h) Stauchung: nie breiter als die Schätzung des Blattmodells
+// (h) Stauchung nur gegen die Zelle, nie breiter als die Zelle
 // ---------------------------------------------------------------------------------------------
 
 fn tz_ops_around_tj(ops: &[Op]) -> Vec<Vec<String>> {
@@ -749,33 +840,46 @@ fn tz_ops_around_tj(ops: &[Op]) -> Vec<Vec<String>> {
     out
 }
 
+const SHEET: MarkKind = MarkKind::Sheet(SheetPen::Thin);
+const CIRCLE: MarkKind = MarkKind::Position(PositionPen::Circle);
+
 #[test]
-fn text_compressed_never_wider() {
-    let kind_text = |h: f64, s: &str, kind: MarkKind| Mark::Text {
-        pos: v(30.0, 30.0),
-        height: h,
-        angle: 0.0,
-        anchor: TextAnchor::Start,
-        text: s.into(),
-        kind,
-    };
-    let sheet_text = |h: f64, s: &str| kind_text(h, s, MarkKind::Sheet(SheetPen::Thin));
+fn text_squeezed_only_against_its_cell() {
+    // Kurze Texte, die die Schätzung des Blattmodells unterschätzt („1“ = 0,3·h, Helvetica
+    // 0,556·h): in einer reichlichen Zelle und ohne Zelle nie gestaucht, in jeder Art.
+    let short = ["1", "111", "1:1", "1110", "Il1", "1/1", "M 1:1", "1 von 1"];
+    for kind in [SHEET, CIRCLE, MarkKind::Dimension, MarkKind::Lost] {
+        let mut marks = Vec::new();
+        for s in short {
+            marks.push(text_of_kind(3.5, s, kind, Some(50.0)));
+            marks.push(text_of_kind(3.5, s, kind, None));
+            // Genau so breit wie die Zelle: noch nicht gestaucht.
+            let exact = mm(text_width_pt(s, 9.9213, 100.0));
+            marks.push(text_of_kind(3.5, s, kind, Some(exact + 1e-9)));
+        }
+        let page = page_of(&marks_sheet(Paper::A3, marks));
+        assert!(!page.ops.iter().any(|o| o.op == "Tz"), "{kind:?}");
+        assert!(texts(&page).iter().all(|t| t.tz == 100.0));
+    }
+
+    // Zu breit für die Zelle: gestaucht, so dass er genau hineinpasst (auf 4 Stellen
+    // abgerundet, mit der geschriebenen Schriftgröße), danach `100 Tz`.
     let page = page_of(&marks_sheet(
         Paper::A3,
         vec![
-            sheet_text(10.0, "@@@@"),
-            sheet_text(10.0, "WWW"),
-            text_mark(v(30.0, 30.0), 3.5, 0.0, TextAnchor::Start, "Ø20"),
+            text_of_kind(10.0, "@@@@", SHEET, Some(38.0)),
+            text_of_kind(10.0, "WWW", SHEET, Some(28.5)),
+            text_of_kind(3.5, "Ø20", MarkKind::Dimension, Some(6.3)),
+            text_of_kind(3.5, "Ø20", MarkKind::Dimension, None),
         ],
     ));
-    // Siehe Bericht: der Faktor wird auf vier Stellen abgerundet und mit der geschriebenen
-    // (gerundeten) Schriftgröße bestimmt, damit die gerenderte Breite nie größer wird.
     assert_eq!(
         tz_ops_around_tj(&page.ops),
         [
             vec!["Tz 93.5959".to_string(), "Tj".into(), "Tz 100".into()],
             vec!["Tj".to_string()],
             vec!["Tz 95.2377".to_string(), "Tj".into(), "Tz 100".into()],
+            vec!["Tj".to_string()],
         ]
     );
     let tx = texts(&page);
@@ -783,33 +887,50 @@ fn text_compressed_never_wider() {
     assert_eq!(tx[1].tz, 100.0);
     // Die zuletzt gesetzte Stauchung gilt nicht für den nächsten Text.
     assert_eq!(tx[2].tz, 95.2377);
+    assert_eq!(tx[3].tz, 100.0);
 
-    // Jedes zulässige Zeichen einzeln und als Folge, in beiden Arten.
+    // Verlorene Texte: rot; ohne Zelle nie gestaucht (wie Maßtexte), mit Zelle (verlorener
+    // Nummernkreis „?“) wie alle anderen.
+    let page = page_of(&marks_sheet(
+        Paper::A3,
+        vec![
+            text_of_kind(3.5, "? 100 Grund: Kante fehlt", MarkKind::Lost, None),
+            text_of_kind(3.5, "@@@", MarkKind::Lost, Some(5.0)),
+            text_of_kind(3.5, "@@@", MarkKind::Lost, None),
+        ],
+    ));
+    let tx = texts(&page);
+    assert!(tx.iter().all(|t| t.rgb == [0.8, 0.0, 0.0]));
+    assert_eq!(tx[0].tz, 100.0);
+    assert!(tx[1].tz < 100.0);
+    assert_eq!(tx[2].tz, 100.0);
+
+    // Jedes zulässige Zeichen einzeln und als Folge, in allen Arten: mit Zelle = Schätzung des
+    // Blattmodells nie breiter als die Zelle; gestaucht nur, wo Helvetica breiter ist.
     let mut chars = all_chars();
     chars.push('\u{2212}');
-    // Positionstexte stehen in der Ausgabe nach den Maßen (Gruppenfolge wie SVG).
+    let kinds = [SHEET, MarkKind::Dimension, MarkKind::Lost, CIRCLE];
     let mut marks = Vec::new();
     let mut want = Vec::new();
-    let mut pos_marks = Vec::new();
-    let mut pos_want = Vec::new();
-    for &c in &chars {
-        for s in [c.to_string(), c.to_string().repeat(7)] {
-            marks.push(sheet_text(5.0, &s));
-            want.push(sheet_text_width(&s, 5.0));
-            marks.push(text_mark(v(30.0, 30.0), 5.0, 0.0, TextAnchor::Start, &s));
-            want.push(text_width(&s, 5.0));
-            pos_marks.push(kind_text(5.0, &s, MarkKind::Position(PositionPen::Circle)));
-            pos_want.push(sheet_text_width(&s, 5.0));
+    for kind in kinds {
+        for &c in &chars {
+            for s in [c.to_string(), c.to_string().repeat(7)] {
+                let cell = match kind {
+                    MarkKind::Sheet(_) | MarkKind::Position(_) => sheet_text_width(&s, 5.0),
+                    _ => text_width(&s, 5.0),
+                };
+                marks.push(text_of_kind(5.0, &s, kind, Some(cell)));
+                want.push(cell);
+            }
         }
     }
-    marks.extend(pos_marks);
-    want.extend(pos_want);
     let page = page_of(&marks_sheet(Paper::A3, marks));
     let tx = texts(&page);
     assert_eq!(tx.len(), want.len());
     let mut squeezed = 0;
     for (t, w) in tx.iter().zip(&want) {
         let rendered = mm(text_width_pt(t.text, t.size, t.tz));
+        let full = mm(text_width_pt(t.text, t.size, 100.0));
         assert!(
             rendered <= w + 1e-9,
             "{:?} (Größe {}, tz {}): {rendered} > {w}",
@@ -817,17 +938,86 @@ fn text_compressed_never_wider() {
             t.size,
             t.tz
         );
-        if t.tz < 100.0 {
+        if full > *w {
             squeezed += 1;
             // Gestaucht wird nur so weit wie nötig (Abrundung auf vier Stellen).
-            let full = mm(text_width_pt(t.text, t.size, 100.0));
-            assert!(full > *w);
+            assert!(t.tz < 100.0);
             assert!(rendered >= w - full * 2e-6, "{:?}", t.text);
         } else {
-            assert_eq!(t.tz, 100.0);
+            assert_eq!(t.tz, 100.0, "{:?}", t.text);
         }
     }
     assert!(squeezed > 20, "{squeezed}");
+}
+
+#[test]
+fn fitted_texts_carry_their_cell() {
+    // Nummernkreis: Zelle 0,8 · Ø · Faktor; „1“ passt und bleibt ungestaucht.
+    for scale in [1.0, 297.0 / 420.0] {
+        let marks = layout_balloon(v(100.0, 100.0), (10.0, 10.0), Some(1), scale);
+        let fit: Vec<Option<f64>> = marks
+            .iter()
+            .filter_map(|m| match m {
+                Mark::Text { fit_width, .. } => Some(*fit_width),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fit, [Some(0.8 * 8.0 * scale)]);
+        let page = page_of(&marks_sheet(Paper::A3, marks));
+        assert_eq!(texts(&page)[0].text, "1");
+        assert_eq!(texts(&page)[0].tz, 100.0);
+    }
+    // Blattrahmen: eingepasste Felder tragen ihre Zellbreite, Raster und Beschriftungen keine.
+    let layout = sheet_layout(
+        Sheet {
+            paper: Paper::A3,
+            landscape: true,
+        },
+        0,
+        0,
+    );
+    let texts_in = TitleTexts {
+        parts: Vec::new(),
+        fields: [
+            (TitleField::Title, "Halter 1:1".to_string()),
+            (TitleField::Scale, "1:1".to_string()),
+            (TitleField::SheetOf, "1 von 1".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        revisions: Vec::new(),
+        notes: Vec::new(),
+    };
+    let frame = sheet_frame(&layout, &texts_in, Projection::First);
+    let slots = layout.title_slots();
+    let mut seen = 0;
+    for m in &frame.marks {
+        let Mark::Text {
+            text, fit_width, ..
+        } = m
+        else {
+            continue;
+        };
+        let slot_text = ["Halter 1:1", "1:1", "1 von 1"].contains(&text.as_str());
+        if slot_text {
+            seen += 1;
+            let w = fit_width.expect("Zellbreite");
+            assert!(
+                slots.iter().any(|s| (s.width - w).abs() < 1e-12),
+                "{text}: {w}"
+            );
+        } else if text.chars().all(|c| c.is_ascii_digit()) {
+            // Rasterbeschriftung: ohne Zelle.
+            assert_eq!(*fit_width, None, "{text}");
+        }
+    }
+    assert_eq!(seen, 3);
+    // Im PDF bleibt kein Text dieses Rahmens gestaucht (alles passt reichlich).
+    let mut m = empty(Paper::A3, true);
+    m.frame = Some(frame);
+    let page = page_of(&m);
+    assert!(texts(&page).len() > 10);
+    assert!(!page.ops.iter().any(|o| o.op == "Tz"));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1121,6 +1311,58 @@ fn curves_as_beziers() {
     assert!(n >= 50);
 }
 
+/// Prüft ≥ 50 Punkte je Stück: Abstand zur Mitte `c` (mm) = `r` auf 3e-4·r.
+fn assert_on_circle(segs: &[Seg], c: (f64, f64), r: f64) {
+    assert!(!segs.is_empty());
+    for seg in segs {
+        for k in 0..=50 {
+            let p = seg.point_at(f64::from(k) / 50.0);
+            let d = (mm(p.0) - c.0).hypot(mm(p.1) - c.1);
+            assert!(close(d, r, 3e-4 * r), "{d} statt {r}");
+        }
+    }
+}
+
+#[test]
+fn multi_piece_arcs_stay_on_the_circle() {
+    let c = v(100.0, 100.0);
+    // Linien: Vollkreis, 100°, 181°, 270° über 0° hinweg.
+    for (start, end, pieces) in [
+        (0.0, TAU, 4),
+        (0.0, 100f64.to_radians(), 2),
+        (0.3, 0.3 + 181f64.to_radians(), 3),
+        (-2.0, -2.0 + 1.5 * PI, 3),
+    ] {
+        let segs = all_segs(&one_curve(arc(c, 10.0, start, end)));
+        assert_eq!(segs.len(), pieces);
+        assert_on_circle(&segs, (100.0, 100.0), 10.0);
+    }
+    // Markierungsbögen: Nummernkreis r 5 (0 … 2π), 100°, 181°.
+    let mk = |r: f64, start: f64, end: f64| Mark::Arc {
+        center: c,
+        r,
+        start,
+        end,
+        kind: MarkKind::Position(PositionPen::Circle),
+    };
+    for (r, start, end, pieces) in [
+        (5.0, 0.0, TAU, 4),
+        (5.0, 1.0, 1.0 + 100f64.to_radians(), 2),
+        (8.0, 0.5, 0.5 + 181f64.to_radians(), 3),
+    ] {
+        let segs = all_segs(&page_of(&marks_sheet(Paper::A3, vec![mk(r, start, end)])));
+        assert_eq!(segs.len(), pieces);
+        assert_on_circle(&segs, (100.0, 100.0), r);
+    }
+    // Spanne über 2π wird auf einen Vollkreis begrenzt (wie SVG): vier Stücke, geschlossen.
+    for end in [3.0 * PI, 100.0] {
+        let segs = all_segs(&page_of(&marks_sheet(Paper::A3, vec![mk(5.0, 0.0, end)])));
+        assert_eq!(segs.len(), 4, "{end}");
+        assert_eq!(segs[3].end(), segs[0].start());
+        assert_on_circle(&segs, (100.0, 100.0), 5.0);
+    }
+}
+
 fn st_subpaths(page: &pdf_read::Page) -> usize {
     strokes(page).iter().map(|s| s.subpaths.len()).sum()
 }
@@ -1155,6 +1397,8 @@ fn bad_input_writes_nothing() {
     for bad in [
         text_mark(v(f64::INFINITY, 1.0), 3.5, 0.0, TextAnchor::Start, "x"),
         text_mark(v(1.0, 1.0), 3.5, f64::NAN, TextAnchor::Start, "x"),
+        text_of_kind(3.5, "x", SHEET, Some(f64::NAN)),
+        text_of_kind(3.5, "x", SHEET, Some(f64::INFINITY)),
         Mark::Arrow {
             tip: v(1.0, 1.0),
             dir: v(f64::NAN, 0.0),
@@ -1184,6 +1428,7 @@ fn bad_input_writes_nothing() {
                 anchor: TextAnchor::Start,
                 text: format!("Teil {c}"),
                 kind: MarkKind::Sheet(SheetPen::Thin),
+                fit_width: Some(40.0),
             }],
             scale: 1.0,
         });

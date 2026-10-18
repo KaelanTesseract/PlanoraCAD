@@ -296,17 +296,11 @@ impl<'a> Lex<'a> {
         Lex { b, i }
     }
 
+    /// Überspringt Leerraum. Kommentare (`%`) sind in Objekten und Inhaltsströmen nicht
+    /// erlaubt: `%` bleibt stehen und ist dann ein Fehler in [`Lex::token`].
     fn skip_ws(&mut self) {
-        while self.i < self.b.len() {
-            if is_ws(self.b[self.i]) {
-                self.i += 1;
-            } else if self.b[self.i] == b'%' {
-                while self.i < self.b.len() && self.b[self.i] != b'\n' {
-                    self.i += 1;
-                }
-            } else {
-                break;
-            }
+        while self.i < self.b.len() && is_ws(self.b[self.i]) {
+            self.i += 1;
         }
     }
 
@@ -368,7 +362,7 @@ impl<'a> Lex<'a> {
                     }
                 }
                 if hex.len() % 2 == 1 {
-                    hex.push(b'0');
+                    return Err("Hex-String mit ungerader Länge".into());
                 }
                 let v = hex
                     .chunks(2)
@@ -488,23 +482,31 @@ fn is_uint(t: &str) -> bool {
     !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// Zahl nach PDF-Regeln: Vorzeichen, Ziffern, höchstens ein Punkt; kein Exponent.
+/// Zahl in der Schreibweise P2 des Schreibers (strenger als PDF erlaubt): optional `-`, ganze
+/// Ziffern ohne führende Null (außer „0“), optional `.` mit 1 bis 4 Nachkommastellen ohne
+/// nachgestellte Null; kein `+`, kein Exponent, kein „-0“.
 fn parse_num(t: &str) -> Result<f64, String> {
-    let body = t.strip_prefix(['+', '-']).unwrap_or(t);
-    let digits = body.bytes().filter(u8::is_ascii_digit).count();
-    let dots = body.bytes().filter(|&b| b == b'.').count();
-    if digits == 0 || dots > 1 || digits + dots != body.len() {
-        return Err(format!("keine Zahl: {t}"));
+    let bad = || format!("Zahl nicht in der Schreibweise P2: {t}");
+    let neg = t.starts_with('-');
+    let body = if neg { &t[1..] } else { t };
+    let (int, frac) = match body.split_once('.') {
+        Some((i, f)) => (i, Some(f)),
+        None => (body, None),
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(int) || (int.len() > 1 && int.starts_with('0')) {
+        return Err(bad());
     }
-    // Nach der eigenen Prüfung des Aufbaus genügt die korrekt gerundete Umwandlung der
-    // Standardbibliothek („.5“ und „5.“ ergänzt).
-    let (int, frac) = body.split_once('.').unwrap_or((body, ""));
-    let int = if int.is_empty() { "0" } else { int };
-    let frac = if frac.is_empty() { "0" } else { frac };
-    let v: f64 = format!("{int}.{frac}")
-        .parse()
-        .map_err(|_| format!("keine Zahl: {t}"))?;
-    Ok(if t.starts_with('-') { -v } else { v })
+    if let Some(f) = frac
+        && (!digits(f) || f.len() > 4 || f.ends_with('0'))
+    {
+        return Err(bad());
+    }
+    let v: f64 = body.parse().map_err(|_| bad())?;
+    if neg && v == 0.0 {
+        return Err(bad());
+    }
+    Ok(if neg { -v } else { v })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -685,7 +687,10 @@ pub fn read(bytes: &[u8]) -> Result<Pdf, String> {
         let Value::Arr(mb) = get(pd, "MediaBox")? else {
             return Err("/MediaBox".into());
         };
-        let mb: Vec<f64> = mb.iter().filter_map(Value::num).collect();
+        let mb: Vec<f64> = mb
+            .iter()
+            .map(|x| x.num().ok_or(format!("/MediaBox mit Nicht-Zahl {x:?}")))
+            .collect::<Result<_, _>>()?;
         let media_box: [f64; 4] = mb.try_into().map_err(|_| "/MediaBox mit 4 Zahlen")?;
         let res = get(pd, "Resources")?.dict().ok_or("/Resources")?;
         let fonts = get(res, "Font")?.dict().ok_or("/Font")?;
@@ -754,30 +759,49 @@ fn nums(op: &Op) -> Result<Vec<f64>, String> {
         .collect()
 }
 
+/// Liest einen Inhaltsstrom für sich (für Prüfungen der Strenge des Lesers).
+pub fn read_content(data: &[u8]) -> Result<(Vec<Op>, Vec<Item>), String> {
+    content(data)
+}
+
 fn content(data: &[u8]) -> Result<(Vec<Op>, Vec<Item>), String> {
-    let mut lx = Lex::new(data, 0);
+    // Genau eine Anweisung je Zeile (P3): jede Zeile sind Operanden und am Ende ein Operator.
     let mut ops = Vec::new();
-    let mut args = Vec::new();
-    while !lx.at_end() {
-        match lx.token(false)? {
-            Tok::Val(v) => args.push(v),
-            Tok::Kw(k) => {
-                let Some(&(_, n)) = OPS.iter().find(|(o, _)| *o == k) else {
-                    return Err(format!("unerlaubte Anweisung {k}"));
-                };
-                if args.len() != n {
-                    return Err(format!("{k} mit {} statt {n} Operanden", args.len()));
-                }
-                ops.push(Op {
-                    op: k,
-                    args: std::mem::take(&mut args),
-                });
-            }
-            _ => return Err("unerwartetes Token im Inhalt".into()),
+    for (no, line) in data.split(|&b| b == b'\n').enumerate() {
+        if line.contains(&b'\r') {
+            return Err(format!("Zeile {}: Wagenrücklauf", no + 1));
         }
-    }
-    if !args.is_empty() {
-        return Err("Operanden ohne Anweisung am Ende".into());
+        let mut lx = Lex::new(line, 0);
+        let mut args = Vec::new();
+        let mut on_line = 0;
+        while !lx.at_end() {
+            match lx.token(false)? {
+                Tok::Val(v) => args.push(v),
+                Tok::Kw(k) => {
+                    let Some(&(_, n)) = OPS.iter().find(|(o, _)| *o == k) else {
+                        return Err(format!("unerlaubte Anweisung {k}"));
+                    };
+                    if args.len() != n {
+                        return Err(format!("{k} mit {} statt {n} Operanden", args.len()));
+                    }
+                    ops.push(Op {
+                        op: k,
+                        args: std::mem::take(&mut args),
+                    });
+                    on_line += 1;
+                }
+                _ => return Err("unerwartetes Token im Inhalt".into()),
+            }
+        }
+        if !args.is_empty() {
+            return Err(format!("Zeile {}: Operanden ohne Anweisung", no + 1));
+        }
+        if on_line != 1 {
+            return Err(format!(
+                "Zeile {}: {on_line} Anweisungen statt einer",
+                no + 1
+            ));
+        }
     }
 
     let mut items = Vec::new();

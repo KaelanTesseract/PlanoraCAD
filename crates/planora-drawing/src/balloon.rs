@@ -123,7 +123,8 @@ pub fn layout_balloon(at: DVec2, offset: (f64, f64), number: Option<u32>, scale:
         });
     }
     marks.push(full(at, BALLOON_DOT_R * scale, leader));
-    let fitted = fit_text(&text, BALLOON_TEXT_H * scale, TEXT_FIT * BALLOON_D * scale);
+    let room = TEXT_FIT * BALLOON_D * scale;
+    let fitted = fit_text(&text, BALLOON_TEXT_H * scale, room);
     marks.push(Mark::Text {
         pos: DVec2::new(centre.x, centre.y - 0.5 * fitted.height),
         height: fitted.height,
@@ -131,6 +132,7 @@ pub fn layout_balloon(at: DVec2, offset: (f64, f64), number: Option<u32>, scale:
         anchor: TextAnchor::Middle,
         text: fitted.text,
         kind: circle,
+        fit_width: Some(room),
     });
     marks
 }
