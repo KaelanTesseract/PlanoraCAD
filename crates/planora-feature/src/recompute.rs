@@ -110,6 +110,13 @@ impl Document {
 
     /// Berechnet alle Features vor dem Marker, deren Eingaben sich geändert haben.
     pub fn recompute(&mut self) -> RecomputeReport {
+        let report = self.recompute_features();
+        self.sync_parts_sheets();
+        report
+    }
+
+    /// Wie [`Document::recompute`], ohne die Stücklistenblätter abzugleichen (Laden ändert nichts).
+    pub(crate) fn recompute_features(&mut self) -> RecomputeReport {
         let mut report = RecomputeReport::default();
         for idx in 0..self.features.len() {
             let id = self.features[idx].id;

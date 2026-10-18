@@ -2,9 +2,12 @@
 
 use crate::error::FeatureError;
 use crate::model::Document;
+use crate::parts_sheets::{FOLLOW_PAGE_DELETE, PARTS_SHEET_RENAME, page_of};
+use planora_drawing::parts::parts_sheet_name;
 use planora_drawing::sheet_info::{ProjectInfo, SheetInfo, Stamp, validate_project_info};
 use planora_drawing::{
-    Drawing, DrawingId, Placement, Projection, Scale, Sheet, ViewId, ViewKind, align_dir,
+    Drawing, DrawingId, DrawingKind, Placement, Projection, Scale, Sheet, ViewId, ViewKind,
+    align_dir,
 };
 use std::collections::HashSet;
 
@@ -38,6 +41,19 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
         return Err(format!(
             "Der Name der Zeichnung ist zu lang (höchstens {MAX_NAME_CHARS} Zeichen)"
         ));
+    }
+    match d.kind {
+        DrawingKind::Views => {}
+        DrawingKind::PartsList { page } => {
+            if page == 0 {
+                return Err("Ein Stücklistenblatt braucht eine Seitennummer ab 1".into());
+            }
+            // Später kommen die Nummernkreise hinzu: auch sie gehören nicht auf ein
+            // Stücklistenblatt.
+            if !d.views.is_empty() || !d.dimensions.is_empty() {
+                return Err("Ein Stücklistenblatt hat keine Ansichten und keine Maße".into());
+            }
+        }
     }
     if d.views.len() > MAX_VIEWS {
         return Err(format!(
@@ -116,16 +132,18 @@ impl Document {
         self.drawings.iter().find(|d| d.id == id)
     }
 
-    fn name_taken(&self, name: &str, except: Option<DrawingId>) -> bool {
+    pub(crate) fn name_taken(&self, name: &str, except: Option<DrawingId>) -> bool {
         let key = name_key(name);
         self.drawings
             .iter()
             .any(|d| Some(d.id) != except && name_key(&d.name) == key)
     }
 
-    fn check_drawing(&self, d: &Drawing) -> Result<(), FeatureError> {
+    pub(crate) fn check_drawing(&self, d: &Drawing) -> Result<(), FeatureError> {
         validate_drawing(d).map_err(bad)?;
-        if self.name_taken(&d.name, Some(d.id)) {
+        if self.name_taken(&d.name, Some(d.id))
+            || (page_of(d).is_none() && self.reserved_for_parts(&d.name))
+        {
             return Err(bad("Eine Zeichnung mit diesem Namen gibt es schon"));
         }
         Ok(())
@@ -158,13 +176,10 @@ impl Document {
                 Some(p)
             }
         };
-        self.add_drawing_with(
-            name,
-            sheet,
-            projection,
-            Some(SheetInfo::new(stamp)),
-            project,
-        )
+        // F4: Die Vorgabe des Schalters wird einmal beim Anlegen festgelegt.
+        let mut info = SheetInfo::new(stamp);
+        info.parts_list = self.visible_bodies().len() > 1;
+        self.add_drawing_with(name, sheet, projection, Some(info), project)
     }
 
     fn add_drawing_with(
@@ -226,6 +241,9 @@ impl Document {
 
     /// Benennt eine Zeichnung um.
     pub fn rename_drawing(&mut self, id: DrawingId, name: &str) -> Result<(), FeatureError> {
+        if self.drawing(id).is_some_and(|d| page_of(d).is_some()) {
+            return Err(bad(PARTS_SHEET_RENAME));
+        }
         let name = name.trim().to_string();
         self.update_drawing(id, |d| d.name = name)
     }
@@ -237,7 +255,14 @@ impl Document {
             .iter()
             .position(|d| d.id == id)
             .ok_or_else(unknown)?;
-        self.drawings.remove(idx);
+        match page_of(&self.drawings[idx]) {
+            Some(page) if page > 1 => return Err(bad(FOLLOW_PAGE_DELETE)),
+            // Seite 1 nimmt alle Folgeblätter mit.
+            Some(_) => self.drawings.retain(|d| page_of(d).is_none()),
+            None => {
+                self.drawings.remove(idx);
+            }
+        }
         self.drawing_edits += 1;
         Ok(())
     }
@@ -259,9 +284,20 @@ impl Document {
         if copy.id != id {
             return Err(bad("Die Kennung einer Zeichnung lässt sich nicht ändern"));
         }
+        let old = &self.drawings[idx];
+        if copy.kind != old.kind {
+            return Err(bad("Die Art einer Zeichnung lässt sich nicht ändern"));
+        }
+        if page_of(old).is_some() && copy.name != old.name {
+            return Err(bad(PARTS_SHEET_RENAME));
+        }
         self.check_drawing(&copy)?;
         if copy != self.drawings[idx] {
+            let parts = page_of(&copy).is_some();
             self.drawings[idx] = copy;
+            if parts {
+                self.sync_parts_sheets_inner();
+            }
             self.drawing_edits += 1;
         }
         Ok(())
@@ -310,6 +346,18 @@ impl Document {
             if !names.insert(name_key(&d.name)) {
                 return Err(bad("Ein Zeichnungsname kommt doppelt vor"));
             }
+        }
+        let mut pages: Vec<u32> = drawings.iter().filter_map(page_of).collect();
+        pages.sort_unstable();
+        if pages.iter().enumerate().any(|(i, p)| *p != i as u32 + 1) {
+            return Err(bad(
+                "Die Stücklistenblätter müssen die Seiten 1, 2, 3 … ohne Lücke haben",
+            ));
+        }
+        if drawings.iter().any(|d| {
+            page_of(d).is_some_and(|p| name_key(&d.name) != name_key(&parts_sheet_name(p)))
+        }) {
+            return Err(bad("Ein Stücklistenblatt hat einen falschen Namen"));
         }
         self.drawings = drawings;
         self.next_drawing = next_drawing;

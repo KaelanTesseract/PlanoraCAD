@@ -10,6 +10,7 @@ mod meshes;
 pub mod model;
 mod ops;
 mod parts;
+mod parts_sheets;
 pub mod recompute;
 pub mod refs;
 mod snapshot;
@@ -30,6 +31,9 @@ pub use model::{
     BlendArt, BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus,
     MAX_MESH_SCALE, MESH_LOCKED, MIN_MESH_SCALE, MeshId, ROTATION_NORM_TOL, SketchFeature,
     SketchPlane, StandardPlane,
+};
+pub use parts_sheets::{
+    FOLLOW_PAGE_DELETE, PARTS_NAME_TAKEN, PARTS_SHEET_EXISTS, PARTS_SHEET_RENAME,
 };
 pub use recompute::{RecomputeReport, VisibleBody};
 pub use refs::{

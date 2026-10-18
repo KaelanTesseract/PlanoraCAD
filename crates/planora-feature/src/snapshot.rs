@@ -126,7 +126,7 @@ impl Document {
         doc.parts_overrides = s.parts_overrides;
         doc.marker = s.marker;
         doc.next_id = s.next_id;
-        doc.recompute();
+        doc.recompute_features();
         doc.edits = 0;
         doc.drawing_edits = 0;
         Ok(doc)

@@ -58,6 +58,8 @@ impl Document {
         if self.features[idx].name != name {
             self.features[idx].name = name;
             self.edits += 1;
+            // Gleichnamige Körper fassen die Stückliste zusammen oder teilen sie wieder.
+            self.sync_parts_sheets();
         }
         Ok(())
     }
