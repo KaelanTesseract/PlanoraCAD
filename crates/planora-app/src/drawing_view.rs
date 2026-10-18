@@ -1781,6 +1781,27 @@ fn tool_finish(state: &mut AppState, id: DrawingId, at: DVec2) -> Result<(), Too
     }
 }
 
+/// Gilt eine Taste dem Blatt (`sheet` ist die Blattfläche)? Nicht, solange ein anderes
+/// Bedienelement die Tastatur hat, ein Fenster oder Menü offen ist (Ebene `Foreground`, im
+/// vorigen oder diesem Bild) oder der letzte Mausdruck nicht auf dem Blatt lag (etwa auf einer
+/// Browserzeile). Muss in jedem Bild aufgerufen werden (merkt sich den letzten Mausdruck).
+fn keys_for_sheet(ctx: &egui::Context, sheet: &egui::Response) -> bool {
+    let id = egui::Id::new("planora-drawing-keys-on-sheet");
+    if ctx.input(|i| i.pointer.any_pressed()) {
+        let on = sheet.hovered();
+        ctx.data_mut(|d| d.insert_temp(id, on));
+    }
+    let pressed_on_sheet = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(true);
+    let focus_elsewhere = ctx.memory(|m| m.focused()).is_some_and(|f| f != sheet.id);
+    let window_open = ctx.memory(|m| {
+        m.areas()
+            .visible_layer_ids()
+            .iter()
+            .any(|l| l.order == egui::Order::Foreground)
+    });
+    pressed_on_sheet && !focus_elsewhere && !window_open
+}
+
 /// Wählt den Nummernkreis `b` (Ansicht und Maß sind dann nicht mehr gewählt).
 fn select_balloon(state: &mut AppState, b: BalloonId) {
     state.drawing_ui.selected_balloon = Some(b);
@@ -2239,9 +2260,11 @@ fn canvas_ui(
             state.drawing_ui.selected_balloon = None;
         }
     }
-    // Entf löscht den gewählten Nummernkreis.
+    // Entf löscht den gewählten Nummernkreis – nur, wenn die Taste dem Blatt gilt.
+    let sheet_keys = keys_for_sheet(&ctx, response);
     if editable
         && !typing
+        && sheet_keys
         && state.drawing_ui.selected_balloon.is_some()
         && ui.input(|i| i.key_pressed(egui::Key::Delete))
     {

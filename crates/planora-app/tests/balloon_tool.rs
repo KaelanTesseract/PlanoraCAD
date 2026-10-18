@@ -839,6 +839,51 @@ impl App {
     }
 }
 
+/// Entf wirkt nur auf das Blatt: nicht bei offenem Fenster „Blattangaben“ (ohne Feld mit
+/// Fokus) und nicht, wenn zuletzt eine Browserzeile angeklickt wurde.
+#[test]
+fn delete_key_only_reaches_the_sheet() {
+    let (st, f, d, front, _) = box_front(BIG);
+    let mut st = st;
+    let b = st
+        .document
+        .add_balloon(d, front, key(f), (0.0, 0.5), (-15.0, 10.0))
+        .unwrap();
+    let mut a = App::new(BIG, st);
+    a.settle();
+    let count = |a: &mut App| a.st().document.drawing(d).unwrap().balloons.len();
+    // Fenster offen, kein Feld hat die Tastatur.
+    a.st().drawing_ui.selected_balloon = Some(b);
+    planora_app::sheet_dialog::open(a.st(), d);
+    a.settle();
+    assert!(!viewport::typing(&a.c));
+    a.key(Key::Delete);
+    assert_eq!(count(&mut a), 1, "Entf bei offenem Fenster");
+    a.st().sheet_dialog = None;
+    a.settle();
+    // Klick auf die Zeile im Browser wählt den Kreis; Entf dort löscht ihn nicht.
+    let shot = a.settle();
+    let row = shot
+        .texts
+        .iter()
+        .find(|t| t.text.starts_with("Pos. 1 – "))
+        .expect("Zeile im Browser")
+        .rect
+        .center();
+    a.click(row);
+    assert_eq!(a.st().drawing_ui.selected_balloon, Some(b));
+    a.key(Key::Delete);
+    assert_eq!(count(&mut a), 1, "Entf nach Klick in den Browser");
+    // Klick auf den Kreis im Blatt, dann Entf: gelöscht.
+    let l = drawing_view::last_layout(&a.c).unwrap();
+    let bm = l.balloons.iter().find(|x| x.id == b).unwrap().clone();
+    let c = drawing_view::sheet_to_screen(l.canvas, l.sheet_mm, l.zoom, l.pan, bm.centre);
+    a.click(c);
+    assert_eq!(a.st().drawing_ui.selected_balloon, Some(b));
+    a.key(Key::Delete);
+    assert_eq!(count(&mut a), 0, "Entf im Blatt löscht");
+}
+
 #[test]
 fn typing_in_the_sheet_dialog_does_not_reach_the_balloon() {
     let mut st = AppState::new();
