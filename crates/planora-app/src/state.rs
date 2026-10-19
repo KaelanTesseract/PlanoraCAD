@@ -482,8 +482,9 @@ impl AppState {
     ///
     /// Bei Erfolg: Namenszähler aus den Namen neu; Körper neu ohne Einpassen (Weg
     /// [`RestoreKind::Full`]; bei [`RestoreKind::Annotations`] bleiben Körper und Szene, wie sie
-    /// sind); Auswahl, Hervorhebung, gewählter Körper und gewähltes Feature bleiben, solange es
-    /// ihr Ziel noch gibt; offene Rückfragen, Umbenennen-Felder, Dialogwünsche, Maß- und
+    /// sind); auf dem vollen Weg entfallen Flächen-/Kantenwahl und Hervorhebung, gewählter Körper
+    /// und gewähltes Feature bleiben, solange es sie gibt; auf dem Zeichnungsweg bleiben Auswahl,
+    /// Hervorhebung und gewählter Körper unverändert; offene Rückfragen, Umbenennen-Felder, Dialogwünsche, Maß- und
     /// Blattangaben-Fenster, markierte Kanten, ein laufender Zug und die Werkzeuge des
     /// Zeichnungsbereichs werden geleert, `message` ebenso. Eine offene Skizze (kommt über die
     /// Oberfläche nicht vor, R10) wird verworfen wie beim Löschen ihres Features. Eine geöffnete
@@ -491,6 +492,11 @@ impl AppState {
     /// ([`crate::drawing_state::DrawingUi::forget_missing`]).
     ///
     /// Bei Fehler bleibt alles unverändert (auch `message`; die Meldung setzt der Aufrufer).
+    ///
+    /// Sache des Aufrufers (`DocTab`, Aufgabe 6): Die Fenster des Tabs (`feature_dialog`,
+    /// `blend_dialog`, `boolean_dialog`, …) halten `FeatureId`s und Kanten des alten Dokuments
+    /// und kennen diesen Zustand nicht; nach jedem gelungenen Aufruf muss
+    /// `DocTab::close_dialogs()` sie schließen.
     pub fn restore_document(
         &mut self,
         s: planora_feature::Snapshot,
@@ -525,7 +531,15 @@ impl AppState {
         }
         self.drawing_ui.forget_missing(&self.document);
         match kind {
-            RestoreKind::Full => self.refresh_with(None, false),
+            RestoreKind::Full => {
+                // Ein zurückgeholter Körper kann seine Flächen und Kanten anders nummerieren:
+                // Flächen-/Kantenwahl und Hervorhebung entfallen, damit sie nie auf einer gleich
+                // nummerierten, aber anderen Fläche stehen. Der gewählte Körper bleibt (über
+                // seinen Verweis abgebildet), solange es ihn gibt.
+                self.selection = None;
+                self.hover = None;
+                self.refresh_with(None, false);
+            }
             // Gleiches Modell: Körper und Auswahl gelten weiter; die Szene nur neu, wenn sich
             // ihre Hervorhebung (markierte Kanten) geändert hat.
             RestoreKind::Annotations if had_marks && !left_sketch => self.rebuild_scene(),

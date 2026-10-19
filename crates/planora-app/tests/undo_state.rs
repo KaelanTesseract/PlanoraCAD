@@ -305,17 +305,98 @@ fn transient_ui_is_cleared() {
     // Die Szene trägt keine Markierung und keine Auswahl mehr.
     assert_eq!(scene_text(&st), plain_scene(&st), "Hervorhebung blieb");
 
-    // Auswahl auf einem Körper, den es weiter gibt, bleibt.
+    // Auf dem vollen Weg entfallen Flächen-/Kantenwahl und Hervorhebung auch auf einem Körper,
+    // den es weiter gibt (er kann anders nummeriert sein); gewählter Körper und Feature bleiben.
     cube(&mut st);
     let face = top_face(&st, 0);
     st.set_selection(Some(Pick::Face(FaceRef { body: 0, face })));
     st.set_hover(Some(Pick::Face(FaceRef { body: 0, face })));
     st.selected_feature = Some(q1);
-    st.restore_document(one).unwrap();
-    assert_eq!(st.selection, Some(Pick::Face(FaceRef { body: 0, face })));
-    assert_eq!(st.hover, Some(Pick::Face(FaceRef { body: 0, face })));
+    assert_eq!(st.restore_document(one), Ok(RestoreKind::Full));
+    assert_eq!(st.selection, None);
+    assert_eq!(st.hover, None);
     assert_eq!(st.selected_body, Some(0));
     assert_eq!(st.selected_feature, Some(q1));
+    assert_eq!(scene_text(&st), plain_scene(&st), "Hervorhebung blieb");
+
+    // Der gewählte Körper folgt seinem Verweis auf den neuen Index.
+    let mut st = AppState::new();
+    cube(&mut st);
+    let q2 = cube(&mut st);
+    let both = st.snapshot();
+    st.delete_feature(st.naming_feature(0).unwrap()).unwrap();
+    st.selected_body = Some(0);
+    assert_eq!(st.bodies[0].source.feature, q2);
+    st.restore_document(both).unwrap();
+    assert_eq!(st.selected_body, Some(1));
+    assert_eq!(st.bodies[1].source.feature, q2);
+}
+
+#[test]
+fn drawing_path_keeps_selection_hover_and_body() {
+    let mut st = AppState::new();
+    cube(&mut st);
+    cube(&mut st);
+    let d = new_drawing(&mut st, "Blatt 1");
+    let picture = st.snapshot();
+    add_view(&mut st, d, ViewKind::Front, 100.0, 100.0);
+    let face = top_face(&st, 1);
+    let e = edge_between(&st.bodies[0].solid, "Deckel", "Wand 1");
+    st.set_selection(Some(Pick::Face(FaceRef { body: 1, face })));
+    st.set_hover(Some(Pick::Edge(EdgeRef { body: 0, edge: e })));
+    assert_eq!(st.selected_body, Some(1));
+    let scene = Arc::clone(&st.scene);
+    assert_eq!(st.restore_document(picture), Ok(RestoreKind::Annotations));
+    assert_eq!(st.selection, Some(Pick::Face(FaceRef { body: 1, face })));
+    assert_eq!(st.hover, Some(Pick::Edge(EdgeRef { body: 0, edge: e })));
+    assert_eq!(st.selected_body, Some(1));
+    assert!(Arc::ptr_eq(&scene, &st.scene));
+}
+
+#[test]
+fn reused_drawing_id_starts_fresh() {
+    // Rückgängig „Zeichnung anlegen“: Die nächste neue Zeichnung bekommt dieselbe Kennung und
+    // darf Zoom und Verschiebung der zurückgenommenen nicht erben.
+    let mut st = AppState::new();
+    cube(&mut st);
+    let without = st.snapshot();
+    let d = new_drawing(&mut st, "Blatt 1");
+    st.drawing_ui.open(d);
+    st.drawing_ui.zoom = 3.0;
+    st.drawing_ui.pan = egui::vec2(40.0, -20.0);
+    st.restore_document(without).unwrap();
+    assert_eq!(st.drawing_ui.area, WorkArea::Model);
+    let again = new_drawing(&mut st, "Blatt 2");
+    assert_eq!(again, d, "Kennung wird wiederverwendet");
+    st.drawing_ui.show_drawing(again);
+    assert_eq!(st.drawing_ui.zoom, 1.0);
+    assert_eq!(st.drawing_ui.pan, egui::Vec2::ZERO);
+    // Gegenprobe: ohne Rückgängig behält dieselbe Zeichnung ihre Ansicht.
+    st.drawing_ui.zoom = 2.0;
+    st.drawing_ui.area = WorkArea::Model;
+    st.drawing_ui.show_drawing(again);
+    assert_eq!(st.drawing_ui.zoom, 2.0);
+}
+
+#[test]
+fn tab_dialogs_are_the_callers_duty() {
+    // `restore_document` kennt die Fenster des Tabs nicht: Sie bleiben offen und zeigen auf
+    // Features des alten Dokuments. Aufgabe 6 schließt sie mit `DocTab::close_dialogs()`.
+    let mut ws =
+        planora_app::workspace::Workspace::new(None, planora_project::config::Config::default());
+    let tab = ws.active_tab_mut();
+    let before = tab.state.snapshot();
+    let q = cube(&mut tab.state);
+    cube(&mut tab.state);
+    tab.feature_dialog = planora_app::feature_dialog::FeatureDialog::new(&tab.state, q);
+    tab.blend_dialog = Some(planora_app::blend_dialog::BlendDialog::fillet());
+    tab.boolean_dialog = Some(planora_app::boolean_dialog::BooleanDialog::new(&tab.state));
+    assert!(tab.feature_dialog.is_some());
+    tab.state.restore_document(before).unwrap();
+    assert!(tab.state.document.feature(q).is_none());
+    assert_eq!(tab.feature_dialog.as_ref().map(|f| f.feature()), Some(q));
+    assert!(tab.blend_dialog.is_some());
+    assert!(tab.boolean_dialog.is_some());
 }
 
 #[test]
