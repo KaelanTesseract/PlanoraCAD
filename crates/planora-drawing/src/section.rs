@@ -20,8 +20,11 @@
 //!   (Kreis erst ab Radius/`tol` > 8,7e8, Freiform nur bei extrem welliger Kante).
 
 use crate::basis::Basis;
+use crate::error::DrawError;
 use crate::model::ViewKind;
 use crate::stroke::{Stroke, StrokeOrigin};
+use crate::{DrawBody, ViewLines};
+use planora_exchange::Progress;
 use planora_kernel::boolean::boolean;
 use planora_kernel::primitives::make_box;
 use planora_kernel::{BoolOp, BooleanError, Curve, Face, Id, Loop, Solid};
@@ -369,4 +372,96 @@ pub fn polygon_area(poly: &[DVec2]) -> f64 {
         })
         .sum::<f64>()
         / 2.0
+}
+
+/// Ansichtsrechnung (gleiche Form wie `compute_view`; die App und Tests dürfen eine Ersatzrechnung
+/// einsetzen).
+pub type ViewFn = fn(&[DrawBody], ViewKind, &Progress) -> Result<ViewLines, DrawError>;
+
+/// Die geschnittenen Körper und ihre Schnittflächen.
+#[derive(Clone, Debug)]
+pub struct SectionData {
+    /// `body` = ursprünglicher Index.
+    pub regions: Vec<SectionRegion>,
+    /// Geschnittene bzw. behaltene Körper, Reihenfolge = Körper der Ansicht.
+    pub solids: Vec<Solid>,
+    /// `solids[k]` stammt von `bodies[source[k]]`.
+    pub source: Vec<usize>,
+    /// Die Ebene wurde bei mindestens einem Körper um `SECTION_NUDGE_MM` verschoben.
+    pub nudged: bool,
+}
+
+/// Linien der Schnittansicht mit den Daten der Schnittflächen.
+pub struct SectionLines {
+    pub lines: ViewLines,
+    pub data: SectionData,
+}
+
+/// Schneidet jeden Körper an `plane` (S4) und rechnet die Ansicht `plane.kind` mit `view` aus
+/// den behaltenen Körpern. Fortschritt: ein Schritt je Körper vor der Ansichtsrechnung.
+pub fn compute_section(
+    bodies: &[DrawBody],
+    plane: &SectionPlane,
+    view: ViewFn,
+    progress: &Progress,
+) -> Result<SectionLines, DrawError> {
+    if bodies.is_empty() {
+        return Err(DrawError::NoBodies);
+    }
+    if !plane.offset.is_finite() {
+        return Err(DrawError::NonFinite);
+    }
+    if plane.axis().is_none() {
+        return Err(DrawError::Unsupported(
+            "Ein Schnitt braucht eine der sechs Normansichten.".into(),
+        ));
+    }
+    let tol = Tolerance::default();
+    progress.set_total(bodies.len() as u64);
+    let mut solids = Vec::new();
+    let mut source = Vec::new();
+    let mut regions = Vec::new();
+    let mut nudged = false;
+    for (i, b) in bodies.iter().enumerate() {
+        progress.check()?;
+        let out = cut_body(b.solid, i, plane, &tol)
+            .map_err(|_| DrawError::SectionFailed(b.name.clone()))?;
+        match out {
+            CutOutcome::Kept => {
+                solids.push(b.solid.clone());
+                source.push(i);
+            }
+            CutOutcome::Removed => {}
+            CutOutcome::Cut { solid, nudged: n } => {
+                nudged |= n;
+                regions.extend(section_regions(&solid, i));
+                solids.push(solid);
+                source.push(i);
+            }
+        }
+        progress.advance(1);
+    }
+    progress.check()?;
+    if regions.is_empty() {
+        return Err(DrawError::SectionMisses);
+    }
+    let cut_bodies: Vec<DrawBody> = solids
+        .iter()
+        .zip(&source)
+        .map(|(s, &i)| DrawBody {
+            name: bodies[i].name.clone(),
+            solid: s,
+        })
+        .collect();
+    let lines = view(&cut_bodies, plane.kind, progress)?;
+    drop(cut_bodies);
+    Ok(SectionLines {
+        lines,
+        data: SectionData {
+            regions,
+            solids,
+            source,
+            nudged,
+        },
+    })
 }

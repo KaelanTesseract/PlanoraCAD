@@ -17,6 +17,10 @@ pub enum DrawError {
     /// Sichtprüfungen oder Umrisspunkte zählen.
     #[error("Der Körper ist für diese Ansicht zu aufwendig ({0} Arbeitsschritte).")]
     TooComplex(u64),
+    #[error("Die Schnittebene trifft den Körper nicht.")]
+    SectionMisses,
+    #[error("Bei „{0}“ lässt sich der Schnitt nicht berechnen.")]
+    SectionFailed(String),
     #[error("Ein Wert im Körper ist keine gültige Zahl.")]
     NonFinite,
     #[error("Abgebrochen.")]
@@ -60,6 +64,14 @@ mod tests {
         assert_eq!(
             DrawError::TooComplex(123).to_string(),
             "Der Körper ist für diese Ansicht zu aufwendig (123 Arbeitsschritte)."
+        );
+        assert_eq!(
+            DrawError::SectionMisses.to_string(),
+            "Die Schnittebene trifft den Körper nicht."
+        );
+        assert_eq!(
+            DrawError::SectionFailed("Körper 2".into()).to_string(),
+            "Bei „Körper 2“ lässt sich der Schnitt nicht berechnen."
         );
     }
 }

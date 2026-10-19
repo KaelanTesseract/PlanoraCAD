@@ -46,6 +46,7 @@ pub use model::{
 };
 pub use parts::{BodyKey, PartsCells, PartsRow, RowOverride};
 pub use pdf::{PdfMeta, pdf_bytes, write_pdf};
+pub use section::{SectionData, SectionLines, compute_section};
 pub use sheet_frame::{
     PartsSpace, SheetLayout, SheetPen, TitleField, sheet_layout, sheet_layout_with,
 };
