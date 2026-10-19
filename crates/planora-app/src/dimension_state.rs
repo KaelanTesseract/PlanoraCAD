@@ -612,7 +612,7 @@ pub fn suggest_for(
     let mut ready: Vec<(ViewSpec, Arc<ViewLines>)> = Vec::new();
     let mut failed: Option<String> = None;
     for v in &wanted {
-        match state.drawing_ui.result(v.kind, model) {
+        match state.drawing_ui.result_of(v, model) {
             ViewResult::Pending { .. } => return Unavailable(VIEWS_PENDING.into()),
             ViewResult::Failed(m) => {
                 failed.get_or_insert(m);

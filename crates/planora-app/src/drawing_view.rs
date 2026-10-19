@@ -46,6 +46,7 @@ use planora_drawing::balloon::{BalloonMarks, add_balloon_marks};
 use planora_drawing::dimension::{ArcSpan, DimId, DimSpec};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::parts::{PARTS_ON_SHEET, page_rows};
+use planora_drawing::section_marks::{add_section_marks, section_marks};
 use planora_drawing::sheet::{DimMarks, SheetModel, build_sheet_with, view_transform};
 use planora_drawing::sheet_frame::{
     PartsSpace, REV_VISIBLE, SheetLayout, parts_rows_per_page, sheet_layout_with, sheet_scale,
@@ -57,7 +58,8 @@ use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{
     Anchor, BalloonId, Drawing, DrawingId, DrawingKind, PartsCells, Placement, Projection, Scale,
-    Sheet, ViewId, ViewKind, ViewLines, ViewSpec, Visibility, align_dir, view_extent,
+    SectionData, Sheet, ViewId, ViewKey, ViewKind, ViewLines, ViewSpec, Visibility, align_dir,
+    view_extent,
 };
 use planora_math::DVec2;
 use std::collections::BTreeMap;
@@ -467,7 +469,7 @@ fn place_views(state: &AppState, drawing: &Drawing, sheet: &SheetModel, model: u
     let results: Vec<(ViewId, ViewResult)> = drawing
         .views
         .iter()
-        .map(|v| (v.id, state.drawing_ui.result(v.kind, model)))
+        .map(|v| (v.id, state.drawing_ui.result_of(v, model)))
         .collect();
     let mut out = Vec::new();
     for (v, (_, result)) in drawing.views.iter().zip(&results) {
@@ -542,23 +544,44 @@ struct SheetCache {
     /// Stand der Linien: bleibt gleich, solange sich nur Maße oder Mittellinien ändern (die
     /// Linienzüge werden dann nicht neu zerlegt).
     lines_gen: u64,
+    /// Meldungen zu den Schnittansichten (zu feine Schraffur u. Ä.): sperren die Ausgabe.
+    section_errors: Arc<Vec<String>>,
 }
 
 /// Fortlaufende Nummer der Linienstände (eindeutig im Programm).
 static LINES_GEN: AtomicU64 = AtomicU64::new(1);
 
 /// Haben zwei Stände der Zeichnung dieselben Linien (Blatt, Projektion, Ansichten bis auf den
-/// Schalter der Mittellinien; Maße zählen nicht)?
+/// Schalter der Mittellinien und die Angaben der Schnittansicht; Maße zählen nicht)? Bei einer
+/// Schnittansicht zählt nur der Schlüssel ([`ViewKey::of`]: Art und Lage der Ebene): Schraffur
+/// und Buchstabe ändern keine Kantenlinien.
 fn same_lines(a: &Drawing, b: &Drawing) -> bool {
     a.sheet == b.sheet
         && a.projection == b.projection
         && a.views.len() == b.views.len()
         && a.views.iter().zip(&b.views).all(|(x, y)| {
-            ViewSpec {
-                centerlines: y.centerlines,
-                ..x.clone()
-            } == *y
+            ViewKey::of(x) == ViewKey::of(y)
+                && ViewSpec {
+                    centerlines: y.centerlines,
+                    section: y.section,
+                    ..x.clone()
+                } == *y
         })
+}
+
+/// Zeiger der Ergebnisse einer Zeichnung für den Vergleich im Zwischenspeicher: erst die der
+/// Linien, dann (nach einer Null) die der Schnittdaten. Ein neues Ergebnis hat eine neue
+/// Adresse, ein altes bleibt nie stehen.
+fn result_ptrs(
+    lines: &BTreeMap<ViewId, Arc<ViewLines>>,
+    sections: &BTreeMap<ViewId, Arc<SectionData>>,
+) -> Vec<usize> {
+    lines
+        .values()
+        .map(|a| Arc::as_ptr(a) as usize)
+        .chain(std::iter::once(0))
+        .chain(sections.values().map(|a| Arc::as_ptr(a) as usize))
+        .collect()
 }
 
 /// Stellung der Zeichnung `id` im Dokument: Platz (ab 1) und Anzahl der Zeichnungen sowie der
@@ -782,7 +805,8 @@ fn sheet_model(
     balloons: &Arc<Vec<BalloonMarks>>,
 ) -> (Arc<SheetModel>, u64) {
     let owned = state.drawing_ui.results_for(drawing, model);
-    let ptrs: Vec<usize> = owned.values().map(|a| Arc::as_ptr(a) as usize).collect();
+    let section_data = state.drawing_ui.sections_for(drawing, model);
+    let ptrs = result_ptrs(&owned, &section_data);
     let cached = ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()));
     let project = state.document.project_info().cloned();
     let context = sheet_context(state, drawing.id);
@@ -812,6 +836,10 @@ fn sheet_model(
     let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
     let mut built = build_sheet_with(drawing, &refs, dims);
     add_balloon_marks(&mut built, balloons);
+    let data_refs: BTreeMap<ViewId, &SectionData> =
+        section_data.iter().map(|(k, v)| (*k, v.as_ref())).collect();
+    let (marks, section_errors) = section_marks(drawing, &refs, &data_refs);
+    add_section_marks(&mut built, &marks);
     built.frame = Some(sheet_frame(
         &layout_from_texts(
             drawing,
@@ -838,10 +866,20 @@ fn sheet_model(
                 parts,
                 balloons: Arc::clone(balloons),
                 lines_gen,
+                section_errors: Arc::new(section_errors),
             },
         )
     });
     (sheet, lines_gen)
+}
+
+/// Meldungen zu den Schnittansichten des zuletzt gezeichneten Blatts der Zeichnung `id` (etwa
+/// eine zu feine Schraffur); leer ohne gezeichnetes Blatt dieser Zeichnung.
+pub fn section_errors(ctx: &egui::Context, state: &AppState, id: DrawingId) -> Vec<String> {
+    ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()))
+        .filter(|c| c.instance == state.instance && c.drawing.id == id)
+        .map(|c| c.section_errors.to_vec())
+        .unwrap_or_default()
 }
 
 /// Zwischengespeicherte Nummernkreise der offenen Zeichnung: gültig, solange Dokument
@@ -865,7 +903,7 @@ fn balloons_cached(
 ) -> Arc<Vec<BalloonMarks>> {
     let id = egui::Id::new("planora-drawing-balloons");
     let owned = state.drawing_ui.results_for(drawing, model);
-    let ptrs: Vec<usize> = owned.values().map(|a| Arc::as_ptr(a) as usize).collect();
+    let ptrs = result_ptrs(&owned, &BTreeMap::new());
     let edit = state.document.edit_count();
     if let Some(c) = ctx.data(|d| d.get_temp::<BalloonsCache>(id)).filter(|c| {
         c.instance == state.instance
@@ -1103,6 +1141,12 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     // Verlorene Positionsnummern zuerst (rot), dann die Hinweise zu den Maßen.
     let lost_balloons = balloon_tool::lost_count(&balloon_tool::numbers_cached(&ctx, state, id));
     let mut red = usize::from(notes.lost > 0);
+    // Meldungen zu den Schnittansichten (zu feine Schraffur) vor allem anderen, rot.
+    let section_notes = section_errors(&ctx, state, id);
+    red += section_notes.len();
+    for (i, t) in section_notes.into_iter().enumerate() {
+        notes.texts.insert(i, t);
+    }
     if lost_balloons > 0 {
         notes
             .texts
@@ -1701,7 +1745,7 @@ pub fn suggest_dimensions(state: &mut AppState, id: DrawingId) {
             d.views
                 .iter()
                 .filter(|v| v.kind.is_normal() && only.is_none_or(|o| o == v.id))
-                .filter_map(|v| match state.drawing_ui.result(v.kind, model) {
+                .filter_map(|v| match state.drawing_ui.result_of(v, model) {
                     ViewResult::Failed(m) => {
                         Some((names.get(&v.id).cloned().unwrap_or_default(), m))
                     }
@@ -3218,4 +3262,192 @@ fn screen_seg_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
         0.0
     };
     (p - (a + ab * t)).length()
+}
+
+/// Tests der Malregeln für Schnittmarken und des Linienvergleichs (private Hilfen).
+#[cfg(test)]
+mod section_paint_tests {
+    use super::*;
+    use planora_drawing::annotate::{DIM_LINE_W, SECTION_ARROW_HALF_W, SECTION_ARROW_LEN};
+    use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewKind};
+
+    /// Pixel je Blatt-mm in diesen Tests.
+    const K: f64 = 10.0;
+
+    /// Malt `mark` (1 mm = `K` Pixel) und liefert die flachen Formen.
+    fn paint(mark: &Mark, sheet_scale: f64) -> Vec<Shape> {
+        fn flat(shape: &Shape, out: &mut Vec<Shape>) {
+            match shape {
+                Shape::Vec(v) => v.iter().for_each(|s| flat(s, out)),
+                s => out.push(s.clone()),
+            }
+        }
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 800.0))),
+            ..Default::default()
+        };
+        let out = ctx.run_ui(raw, |ui| {
+            let painter = ui.painter().clone();
+            let to_screen = |p: DVec2| pos2((p.x * K) as f32, (p.y * K) as f32);
+            paint_mark(&painter, mark, theme::SHEET_INK, &to_screen, K, sheet_scale);
+        });
+        let mut shapes = Vec::new();
+        for c in &out.shapes {
+            flat(&c.shape, &mut shapes);
+        }
+        out.drop_without_applying_deltas();
+        shapes
+    }
+
+    fn line(kind: MarkKind) -> Mark {
+        Mark::Line {
+            a: DVec2::new(5.0, 5.0),
+            b: DVec2::new(60.0, 5.0),
+            kind,
+        }
+    }
+
+    fn segment_widths(shapes: &[Shape]) -> Vec<f32> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::LineSegment { stroke, .. } => Some(stroke.width),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn path_widths(shapes: &[Shape]) -> Vec<f32> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Path(p) => Some(p.stroke.width),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn end_pieces_are_drawn_half_a_millimetre_wide_whatever_the_sheet() {
+        for f in [1.0, 2.0, 0.5] {
+            let shapes = paint(&line(MarkKind::SectionLine(SectionPen::End)), f);
+            assert_eq!(segment_widths(&shapes), vec![(SECTION_END_W * K) as f32]);
+            assert!(path_widths(&shapes).is_empty());
+        }
+        // Dicker als die dünnen Linien.
+        const { assert!(SECTION_END_W > DIM_LINE_W) };
+    }
+
+    #[test]
+    fn the_chain_is_dashed_and_thin() {
+        let shapes = paint(&line(MarkKind::SectionLine(SectionPen::Chain)), 1.0);
+        assert!(segment_widths(&shapes).is_empty(), "keine ganze Linie");
+        let widths = path_widths(&shapes);
+        assert!(widths.len() >= 4, "Strichpunkte: {widths:?}");
+        assert!(widths.iter().all(|w| *w == (DIM_LINE_W * K) as f32));
+    }
+
+    #[test]
+    fn hatch_lines_are_whole_thin_lines() {
+        let shapes = paint(&line(MarkKind::Hatch), 1.0);
+        assert_eq!(segment_widths(&shapes), vec![(DIM_LINE_W * K) as f32]);
+        assert!(path_widths(&shapes).is_empty());
+    }
+
+    /// Länge des Pfeils (Abstand der Grundlinie von der Spitze) in Pixeln und halbe Breite.
+    fn arrow_size_px(shapes: &[Shape], tip: DVec2) -> (f32, f32) {
+        let pts = shapes
+            .iter()
+            .find_map(|s| match s {
+                Shape::Path(p) => Some(p.points.clone()),
+                _ => None,
+            })
+            .expect("Pfeil");
+        assert_eq!(pts.len(), 3, "{pts:?}");
+        let tip = pos2((tip.x * K) as f32, (tip.y * K) as f32);
+        let base = pts[1].lerp(pts[2], 0.5);
+        ((base - tip).length(), (pts[1] - pts[2]).length() / 2.0)
+    }
+
+    #[test]
+    fn section_arrows_grow_with_the_sheet_but_dimension_arrows_do_not() {
+        let tip = DVec2::new(20.0, 20.0);
+        let arrow = |kind| Mark::Arrow {
+            tip,
+            dir: DVec2::new(0.0, 1.0),
+            kind,
+        };
+        for f in [1.0, 2.0] {
+            let (len, half) = arrow_size_px(
+                &paint(&arrow(MarkKind::SectionLine(SectionPen::Chain)), f),
+                tip,
+            );
+            let want = (SECTION_ARROW_LEN * f * K) as f32;
+            assert!((len - want).abs() < 0.01, "{len} statt {want}");
+            let want = (SECTION_ARROW_HALF_W * f * K) as f32;
+            assert!((half - want).abs() < 0.01, "{half} statt {want}");
+        }
+        let (len, half) = arrow_size_px(&paint(&arrow(MarkKind::Dimension), 2.0), tip);
+        assert!((len - (ARROW_LEN * K) as f32).abs() < 0.01, "{len}");
+        assert!((half - (ARROW_HALF_W * K) as f32).abs() < 0.01, "{half}");
+    }
+
+    fn drawing_with_section() -> Drawing {
+        let mut d = Drawing::new(
+            DrawingId(1),
+            "Blatt".into(),
+            Sheet {
+                paper: Paper::A3,
+                landscape: true,
+            },
+            Projection::First,
+        );
+        let front = d.add_view(
+            ViewKind::Front,
+            Scale { num: 1, den: 1 },
+            Placement::Free { x: 100.0, y: 200.0 },
+            None,
+        );
+        d.add_section(front, ViewKind::Top, 20.0, 80.0).unwrap();
+        d
+    }
+
+    fn section_mut(d: &mut Drawing) -> &mut planora_drawing::SectionSpec {
+        d.views
+            .iter_mut()
+            .find_map(|v| v.section.as_mut())
+            .expect("Schnitt")
+    }
+
+    #[test]
+    fn only_the_plane_of_a_section_changes_its_lines() {
+        let base = drawing_with_section();
+        assert!(same_lines(&base, &base.clone()));
+        // Schraffur, Abstand und Buchstabe ändern keine Kantenlinien.
+        let mut e = base.clone();
+        section_mut(&mut e).hatch.spacing = 5.0;
+        assert!(same_lines(&base, &e), "Abstand");
+        section_mut(&mut e).hatch.on = false;
+        assert!(same_lines(&base, &e), "Schraffur aus");
+        section_mut(&mut e).letter = 'B';
+        assert!(same_lines(&base, &e), "Buchstabe");
+        // Mittellinien wie bisher.
+        let mut c = base.clone();
+        c.views[0].centerlines = !c.views[0].centerlines;
+        assert!(same_lines(&base, &c), "Mittellinien");
+        // Die Ebene und alles andere ändert sie.
+        let mut o = base.clone();
+        section_mut(&mut o).offset = 25.0;
+        assert!(!same_lines(&base, &o), "Versatz");
+        let mut k = base.clone();
+        k.views[1].kind = ViewKind::Bottom;
+        assert!(!same_lines(&base, &k), "Art");
+        let mut s = base.clone();
+        s.views[0].scale = Scale { num: 1, den: 2 };
+        assert!(!same_lines(&base, &s), "Maßstab");
+        let mut n = base.clone();
+        n.views[1].section = None;
+        assert!(!same_lines(&base, &n), "kein Schnitt mehr");
+    }
 }

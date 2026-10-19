@@ -1251,7 +1251,8 @@ fn encode_text(s: &str) -> String {
             '\u{b0}' => o.push_str("%%d"),
             '\u{b1}' => o.push_str("%%p"),
             '\u{2212}' => o.push('-'),
-            '^' => o.push_str("^ "), // Eigene Texte dürfen keine Kürzel bilden. `%` steht als `%%%` (das Kürzel für ein
+            '^' => o.push_str("^ "),
+            // Eigene Texte dürfen keine Kürzel bilden. `%` steht als `%%%` (das Kürzel für ein
             // einzelnes Prozentzeichen): CAD-Programme lösen `\U+…` schon beim Laden auf, `%%…`
             // erst beim Anzeigen; ein `\U+0025` würde also vor einem `%%c` wieder zu `%` und mit
             // ihm ein Kürzel bilden. `\` steht als `\U+005C` (sonst wie in `\U+…`).

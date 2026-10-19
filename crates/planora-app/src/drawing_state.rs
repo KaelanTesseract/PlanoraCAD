@@ -2,8 +2,9 @@
 //! Ansicht, Zoom und Verschiebung des Blatts sowie die Berechnung der Ansichtslinien im
 //! Hintergrund.
 //!
-//! Ein Ergebnis hängt nur am Modellstand und an der Ansichtsart (Festlegung F8): Schlüssel
-//! `(Document::model_edit_count(), ViewKind)`. Maßstab, Lage und andere Zeichnungsänderungen
+//! Ein Ergebnis hängt nur am Modellstand und am Ansichtsschlüssel (Festlegung F8): Schlüssel
+//! `(Document::model_edit_count(), ViewKey)` – die Ansichtsart oder bei einer Schnittansicht die
+//! Schnittebene (Art und Lage). Maßstab, Lage, Schraffur und andere Zeichnungsänderungen
 //! rechnen nichts neu. Jeder Arbeitsthread bekommt eigene Kopien der exakten Körper; es gibt
 //! keinen geteilten veränderlichen Zustand (Festlegung F11).
 
@@ -13,8 +14,9 @@ use crate::state::{Body, BodyKind};
 use planora_drawing::dimension::DimId;
 use planora_drawing::sheet_frame::{REV_VISIBLE, sheet_layout};
 use planora_drawing::{
-    BalloonId, Basis, DrawBody, DrawError, Drawing, DrawingId, Projection, Scale, Sheet, ViewId,
-    ViewKind, ViewLines, compute_view,
+    BalloonId, Basis, DrawBody, DrawError, Drawing, DrawingId, MAX_SECTIONS, Projection, Scale,
+    SectionData, Sheet, ViewId, ViewKey, ViewKind, ViewLines, ViewSpec, compute_section,
+    compute_view,
 };
 use planora_drawing::{GAP_MM, align_dir};
 use planora_exchange::Progress;
@@ -25,9 +27,9 @@ use planora_step::display_name;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// Höchstzahl der Einträge im Zwischenspeicher: einer je Ansichtsart.
-pub const MAX_CACHED: usize = 7;
-const _: () = assert!(MAX_CACHED >= ViewKind::ALL.len());
+/// Höchstzahl der Einträge im Zwischenspeicher: einer je Ansichtsart und einer je Schnittansicht.
+pub const MAX_CACHED: usize = 7 + MAX_SECTIONS;
+const _: () = assert!(MAX_CACHED >= ViewKind::ALL.len() + MAX_SECTIONS);
 
 /// Meldung, wenn ein Arbeitsthread ohne Ergebnis endet (Absturz).
 pub const LOST_TEXT: &str = "Die Berechnung wurde unerwartet beendet.";
@@ -40,7 +42,7 @@ pub enum WorkArea {
     Drawing(DrawingId),
 }
 
-/// Stand der Linien einer Ansichtsart.
+/// Stand der Linien einer Ansicht.
 #[derive(Clone, Debug)]
 pub enum ViewResult {
     /// Wird berechnet (oder ist noch nicht angefangen: `fraction` 0).
@@ -67,22 +69,43 @@ impl PartialEq for ViewResult {
 /// Die Rechnung einer Ansicht (austauschbar nur für Tests).
 pub type ComputeFn = fn(&[DrawBody], ViewKind, &Progress) -> Result<ViewLines, DrawError>;
 
-type ViewJob = Job<Result<ViewLines, DrawError>>;
+/// Ergebnis eines Auftrags: die Linien und bei einer Schnittansicht die Daten der Schnittflächen.
+type JobResult = Result<(ViewLines, Option<SectionData>), DrawError>;
+
+type ViewJob = Job<JobResult>;
+
+/// Fertiges Ergebnis eines Eintrags.
+struct Done {
+    lines: Arc<ViewLines>,
+    data: Option<Arc<SectionData>>,
+}
 
 enum EntryState {
     Running {
         job: ViewJob,
         progress: Arc<Progress>,
     },
-    Ready(Arc<ViewLines>),
+    Ready(Done),
     Failed(String),
 }
 
 struct Entry {
     /// Modellstand, zu dem das Ergebnis gehört.
     model: u64,
-    kind: ViewKind,
+    key: ViewKey,
     state: EntryState,
+}
+
+/// Gleicher Schlüssel? Die Lage der Schnittebene zählt bitgleich (ein nicht endlicher Wert
+/// bliebe mit `==` ewig „fehlend“ und würde in jedem Bild neu gerechnet).
+fn same_key(a: &ViewKey, b: &ViewKey) -> bool {
+    match (a, b) {
+        (ViewKey::Plain(x), ViewKey::Plain(y)) => x == y,
+        (ViewKey::Section(x), ViewKey::Section(y)) => {
+            x.kind == y.kind && x.offset.to_bits() == y.offset.to_bits()
+        }
+        _ => false,
+    }
 }
 
 /// Zustand des Zeichnungsbereichs.
@@ -102,7 +125,7 @@ pub struct DrawingUi {
     pub selected_drawing: Option<DrawingId>,
     pub zoom: f32,
     pub pan: egui::Vec2,
-    /// Höchstens ein Eintrag je Ansichtsart.
+    /// Höchstens ein Eintrag je Schlüssel.
     cache: Vec<Entry>,
     /// Zeichnung, die beim letzten `tick` (oder `open`) offen war; ein Wechsel setzt Auswahl,
     /// Zoom und Verschiebung zurück (Ansichtskennungen zählen je Zeichnung).
@@ -160,6 +183,12 @@ impl DrawingUi {
         self.spawned
     }
 
+    /// Zahl der Einträge im Zwischenspeicher (für Tests).
+    #[doc(hidden)]
+    pub fn cached(&self) -> usize {
+        self.cache.len()
+    }
+
     /// Öffnet die Zeichnung `id`: Bereich setzen, Auswahl leeren, Zoom und Verschiebung auf
     /// die Vorgaben.
     pub fn open(&mut self, id: DrawingId) {
@@ -198,8 +227,11 @@ impl DrawingUi {
     /// Fortschritt der laufenden Berechnung einer Art (nur für Tests).
     #[doc(hidden)]
     pub fn progress_of(&self, kind: ViewKind) -> Option<Arc<Progress>> {
+        let key = ViewKey::Plain(kind);
         self.cache.iter().find_map(|e| match &e.state {
-            EntryState::Running { progress, .. } if e.kind == kind => Some(Arc::clone(progress)),
+            EntryState::Running { progress, .. } if same_key(&e.key, &key) => {
+                Some(Arc::clone(progress))
+            }
             _ => None,
         })
     }
@@ -254,10 +286,11 @@ impl DrawingUi {
         {
             self.selected_balloon = None;
         }
-        let mut needed: Vec<ViewKind> = Vec::new();
+        let mut needed: Vec<ViewKey> = Vec::new();
         for v in &drawing.views {
-            if !needed.contains(&v.kind) {
-                needed.push(v.kind);
+            let key = ViewKey::of(v);
+            if !needed.iter().any(|k| same_key(k, &key)) {
+                needed.push(key);
             }
         }
         let model = document.model_edit_count();
@@ -265,19 +298,36 @@ impl DrawingUi {
         // Auftrags bricht ab.
         self.cache.retain(|e| {
             e.model == model
-                && (needed.contains(&e.kind) || !matches!(e.state, EntryState::Running { .. }))
+                && (needed.iter().any(|k| same_key(k, &e.key))
+                    || !matches!(e.state, EntryState::Running { .. }))
         });
         // Erst die vorhandenen abholen, dann neue starten: Ein frisch gestarteter Auftrag wird
         // ohne `block` erst im nächsten Bild gefragt.
         for e in &mut self.cache {
             Self::fetch(e, false);
         }
-        for kind in needed {
-            if self.cache.iter().any(|e| e.kind == kind) {
+        for key in &needed {
+            if self.cache.iter().any(|e| same_key(&e.key, key)) {
                 continue;
             }
-            let state = self.start(state_bodies, kind);
-            self.cache.push(Entry { model, kind, state });
+            let state = self.start(state_bodies, *key);
+            self.cache.push(Entry {
+                model,
+                key: *key,
+                state,
+            });
+        }
+        // Nicht mehr gebrauchte fertige Ergebnisse (etwa von früheren Ebenen beim Ziehen einer
+        // Schnittlinie) verdrängen, die ältesten zuerst; gebrauchte bleiben immer.
+        while self.cache.len() > MAX_CACHED {
+            let Some(i) = self
+                .cache
+                .iter()
+                .position(|e| !needed.iter().any(|k| same_key(k, &e.key)))
+            else {
+                break;
+            };
+            self.cache.remove(i);
         }
         if block {
             for e in &mut self.cache {
@@ -286,8 +336,9 @@ impl DrawingUi {
         }
     }
 
-    /// Startet die Berechnung einer Art; ohne exakte Körper steht die Meldung sofort fest.
-    fn start(&mut self, bodies: &[Body], kind: ViewKind) -> EntryState {
+    /// Startet die Berechnung eines Schlüssels (Ansichtsart oder Schnittebene); ohne exakte
+    /// Körper steht die Meldung sofort fest.
+    fn start(&mut self, bodies: &[Body], key: ViewKey) -> EntryState {
         let solids = exact_copies(bodies);
         if solids.is_empty() {
             let e = if bodies.is_empty() {
@@ -307,7 +358,12 @@ impl DrawingUi {
                     solid,
                 })
                 .collect();
-            compute(&refs, kind, p)
+            match key {
+                ViewKey::Plain(kind) => compute(&refs, kind, p).map(|l| (l, None)),
+                ViewKey::Section(plane) => {
+                    compute_section(&refs, &plane, compute, p).map(|s| (s.lines, Some(s.data)))
+                }
+            }
         });
         self.spawned += 1;
         EntryState::Running { job, progress }
@@ -319,27 +375,53 @@ impl DrawingUi {
         };
         e.state = match job.fetch(block) {
             Poll::Pending => return,
-            Poll::Ready(Ok(lines)) => EntryState::Ready(Arc::new(lines)),
+            Poll::Ready(Ok((lines, data))) => EntryState::Ready(Done {
+                lines: Arc::new(lines),
+                data: data.map(Arc::new),
+            }),
             Poll::Ready(Err(err)) => EntryState::Failed(err.to_string()),
             Poll::Lost => EntryState::Failed(LOST_TEXT.into()),
         };
     }
 
-    /// Stand der Linien einer Art zum Modellstand `model` (`Document::model_edit_count`).
-    /// Ein Eintrag eines anderen Stands zählt als fehlend (`Pending` mit 0): alte Linien
-    /// erscheinen nie als aktuell, auch nicht vor dem nächsten `tick`.
-    pub fn result(&self, kind: ViewKind, model: u64) -> ViewResult {
-        let entry = self
-            .cache
+    /// Eintrag zum Schlüssel und Modellstand.
+    fn entry(&self, key: &ViewKey, model: u64) -> Option<&EntryState> {
+        self.cache
             .iter()
-            .find(|e| e.kind == kind && e.model == model);
-        match entry.map(|e| &e.state) {
+            .find(|e| e.model == model && same_key(&e.key, key))
+            .map(|e| &e.state)
+    }
+
+    fn result_for_key(&self, key: &ViewKey, model: u64) -> ViewResult {
+        match self.entry(key, model) {
             None => ViewResult::Pending { fraction: 0.0 },
             Some(EntryState::Running { job, .. }) => ViewResult::Pending {
                 fraction: job.fraction(),
             },
-            Some(EntryState::Ready(lines)) => ViewResult::Ready(Arc::clone(lines)),
+            Some(EntryState::Ready(d)) => ViewResult::Ready(Arc::clone(&d.lines)),
             Some(EntryState::Failed(m)) => ViewResult::Failed(m.clone()),
+        }
+    }
+
+    /// Stand der Linien einer Art (ohne Schnitt) zum Modellstand `model`
+    /// (`Document::model_edit_count`). Ein Eintrag eines anderen Stands zählt als fehlend
+    /// (`Pending` mit 0): alte Linien erscheinen nie als aktuell, auch nicht vor dem nächsten
+    /// `tick`.
+    pub fn result(&self, kind: ViewKind, model: u64) -> ViewResult {
+        self.result_for_key(&ViewKey::Plain(kind), model)
+    }
+
+    /// Stand der Linien einer Ansicht der Zeichnung (Art oder Schnittebene, [`ViewKey::of`]).
+    pub fn result_of(&self, spec: &ViewSpec, model: u64) -> ViewResult {
+        self.result_for_key(&ViewKey::of(spec), model)
+    }
+
+    /// Die geschnittenen Körper und Schnittflächen einer fertigen Schnittansicht; `None` ohne
+    /// Schnitt oder ohne fertiges Ergebnis dieses Stands.
+    pub fn section_of(&self, spec: &ViewSpec, model: u64) -> Option<Arc<SectionData>> {
+        match self.entry(&ViewKey::of(spec), model)? {
+            EntryState::Ready(d) => d.data.clone(),
+            _ => None,
         }
     }
 
@@ -349,10 +431,23 @@ impl DrawingUi {
         drawing
             .views
             .iter()
-            .filter_map(|v| match self.result(v.kind, model) {
+            .filter_map(|v| match self.result_of(v, model) {
                 ViewResult::Ready(lines) => Some((v.id, lines)),
                 _ => None,
             })
+            .collect()
+    }
+
+    /// Fertige Schnittdaten je Schnittansicht der Zeichnung zum Modellstand `model`.
+    pub fn sections_for(
+        &self,
+        drawing: &Drawing,
+        model: u64,
+    ) -> BTreeMap<ViewId, Arc<SectionData>> {
+        drawing
+            .views
+            .iter()
+            .filter_map(|v| self.section_of(v, model).map(|d| (v.id, d)))
             .collect()
     }
 

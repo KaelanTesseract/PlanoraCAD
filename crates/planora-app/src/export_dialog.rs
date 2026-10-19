@@ -41,6 +41,7 @@ use planora_drawing::dxf::{dxf_char_ok, dxf_text_fits};
 use planora_drawing::parts::PARTS_HEAD;
 use planora_drawing::pdf::{MAX_PAGES, PdfMeta, pdf_date};
 use planora_drawing::pdf_font::pdf_char_ok;
+use planora_drawing::section_marks::{add_section_marks, section_marks};
 use planora_drawing::sheet::{SheetModel, build_sheet_with, dimension_marks};
 use planora_drawing::sheet_frame::{PartsSpace, sheet_layout_with};
 use planora_drawing::sheet_info::{
@@ -51,8 +52,8 @@ use planora_drawing::sheet_marks::{
 };
 use planora_drawing::{
     BalloonId, DrawBody, DrawError, Drawing, DrawingFormat, DrawingId, DrawingKind, PartsCells,
-    Sheet, ViewId, ViewKind, ViewLines, Visibility, compute_view, export_drawing_file,
-    export_pdf_file,
+    SectionData, Sheet, ViewId, ViewKey, ViewLines, Visibility, compute_section, compute_view,
+    export_drawing_file, export_pdf_file,
 };
 use planora_exchange::{
     ExchangeError, ExchangeMesh, ExportBody, Format, MeshReport, MeshTransform, PlacedSource,
@@ -737,14 +738,17 @@ pub fn sheet_label(sheet: Sheet) -> String {
     )
 }
 
-/// Berechnet eine Ansichtsart in einem eigenen Thread mit eigenem Fortschritt; ein Abbruch von
-/// `outer` wird weitergereicht. `None`, wenn die Rechnung abstürzt.
+/// Linien einer Ansicht und bei einer Schnittansicht die Daten ihrer Schnittflächen.
+type KeyedLines = (ViewLines, Option<SectionData>);
+
+/// Berechnet eine Ansicht (Art oder Schnittebene) in einem eigenen Thread mit eigenem Fortschritt;
+/// ein Abbruch von `outer` wird weitergereicht. `None`, wenn die Rechnung abstürzt.
 fn compute_watched(
     solids: &[(String, Solid)],
-    kind: ViewKind,
+    key: ViewKey,
     compute: ComputeFn,
     outer: &Progress,
-) -> Option<Result<ViewLines, DrawError>> {
+) -> Option<Result<KeyedLines, DrawError>> {
     let inner = Progress::new();
     std::thread::scope(|scope| {
         let handle = scope.spawn(|| {
@@ -755,7 +759,12 @@ fn compute_watched(
                     solid,
                 })
                 .collect();
-            compute(&refs, kind, &inner)
+            match key {
+                ViewKey::Plain(kind) => compute(&refs, kind, &inner).map(|l| (l, None)),
+                ViewKey::Section(plane) => {
+                    compute_section(&refs, &plane, compute, &inner).map(|s| (s.lines, Some(s.data)))
+                }
+            }
         });
         while !handle.is_finished() {
             if outer.is_cancelled() {
@@ -913,34 +922,45 @@ pub fn prepare_drawing_parts(
     progress: &Progress,
 ) -> Result<DrawingPrepared, String> {
     let cancelled = || ExchangeError::Cancelled.to_string();
-    let mut kinds: Vec<ViewKind> = Vec::new();
-    for v in &drawing.views {
-        if !kinds.contains(&v.kind) {
-            kinds.push(v.kind);
+    // Erst die Normarten wie bisher, dann je Schnittansicht ihre Ebene.
+    let mut keys: Vec<ViewKey> = Vec::new();
+    for v in drawing.views.iter().filter(|v| v.section.is_none()) {
+        let key = ViewKey::of(v);
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    for v in drawing.views.iter().filter(|v| v.section.is_some()) {
+        let key = ViewKey::of(v);
+        if !keys.contains(&key) {
+            keys.push(key);
         }
     }
     let with_dims = !drawing.dimensions.is_empty();
-    let kinds_empty = kinds.is_empty();
-    progress.set_total((kinds.len() as u64 + u64::from(with_dims)).max(1));
+    let kinds_empty = keys.is_empty();
+    progress.set_total((keys.len() as u64 + u64::from(with_dims)).max(1));
     let names = view_names(drawing);
     if let Some(m) = first_lost_balloon(drawing, &parts.balloons, &names) {
         return Err(m);
     }
-    let mut lines: Vec<(ViewKind, ViewLines)> = Vec::with_capacity(kinds.len());
-    for kind in kinds {
+    let mut lines: Vec<(ViewKey, KeyedLines)> = Vec::with_capacity(keys.len());
+    for key in keys {
         progress.check().map_err(|_| cancelled())?;
-        match compute_watched(solids, kind, compute, progress) {
+        match compute_watched(solids, key, compute, progress) {
             None => return Err(LOST.to_string()),
-            Some(Ok(l)) => lines.push((kind, l)),
+            Some(Ok(l)) => lines.push((key, l)),
             Some(Err(DrawError::Cancelled)) => return Err(cancelled()),
             Some(Err(e)) => {
                 let name = drawing
                     .views
                     .iter()
-                    .find(|v| v.kind == kind)
+                    .find(|v| ViewKey::of(v) == key)
                     .and_then(|v| names.get(&v.id))
                     .cloned()
-                    .unwrap_or_else(|| kind.label().to_string());
+                    .unwrap_or_else(|| match key {
+                        ViewKey::Plain(kind) => kind.label().to_string(),
+                        ViewKey::Section(plane) => plane.kind.label().to_string(),
+                    });
                 return Err(format!(
                     "Die Ansicht „{name}“ lässt sich nicht berechnen: {e}"
                 ));
@@ -948,15 +968,19 @@ pub fn prepare_drawing_parts(
         }
         progress.advance(1);
     }
+    let found = |v: &planora_drawing::ViewSpec| {
+        let key = ViewKey::of(v);
+        lines.iter().find(|(k, _)| *k == key).map(|(_, l)| l)
+    };
     let map: BTreeMap<ViewId, &ViewLines> = drawing
         .views
         .iter()
-        .filter_map(|v| {
-            lines
-                .iter()
-                .find(|(k, _)| *k == v.kind)
-                .map(|(_, l)| (v.id, l))
-        })
+        .filter_map(|v| found(v).map(|(l, _)| (v.id, l)))
+        .collect();
+    let section_data: BTreeMap<ViewId, &SectionData> = drawing
+        .views
+        .iter()
+        .filter_map(|v| found(v).and_then(|(_, d)| d.as_ref()).map(|d| (v.id, d)))
         .collect();
     let dims = if with_dims {
         progress.check().map_err(|_| cancelled())?;
@@ -976,6 +1000,12 @@ pub fn prepare_drawing_parts(
     };
     let mut model = build_sheet_with(drawing, &map, &dims);
     add_balloon_marks(&mut model, &balloon_marks(drawing, &map, &parts.balloons));
+    // Schraffur, Schnittlinie und Titel; ein Fehler (zu feine Schraffur) sperrt die Ausgabe.
+    let (marks, section_errors) = section_marks(drawing, &map, &section_data);
+    if let Some(m) = section_errors.into_iter().next() {
+        return Err(m);
+    }
+    add_section_marks(&mut model, &marks);
     // `build_sheet` lässt Ansichten weg, die sich nicht anordnen lassen; das Dokument prüft Lage,
     // Maßstab und Eltern, also kommt das nur bei einer beschädigten Zeichnung vor. Nie still
     // weniger Ansichten schreiben.
