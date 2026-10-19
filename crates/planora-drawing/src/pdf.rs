@@ -97,9 +97,26 @@ pub struct PdfMeta {
     pub date: Option<String>,
 }
 
+/// Zeichen für eine Meldung: sichtbare Zeichen in Anführungszeichen, unsichtbare oder
+/// verwechselbare (Leerzeichen, Steuer-, Format-, Kombinationszeichen, Sonderstriche) als „U+XXXX“.
+pub fn pdf_char_label(c: char) -> String {
+    let u = c as u32;
+    let hidden = c.is_whitespace()
+        || c.is_control()
+        || matches!(u, 0x300..=0x36F | 0x2010..=0x2015 | 0x200B..=0x200F | 0x2028..=0x202F | 0x2060..=0x206F | 0xFEFF);
+    if hidden {
+        format!("U+{u:04X}")
+    } else {
+        format!("„{c}“")
+    }
+}
+
 /// Meldung für ein Zeichen, das eine PDF nicht ausgeben kann.
 pub fn pdf_char_message(c: char) -> String {
-    format!("Das Zeichen „{c}“ lässt sich in einer PDF nicht ausgeben.")
+    format!(
+        "Das Zeichen {} lässt sich in einer PDF nicht ausgeben.",
+        pdf_char_label(c)
+    )
 }
 
 /// Zahl auf vier Nachkommastellen, ohne Exponent und ohne nachgestellte Nullen; `-0` wird

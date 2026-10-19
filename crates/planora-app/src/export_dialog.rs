@@ -507,7 +507,10 @@ fn check_sheet_cells(
 
 /// Meldung zu einem Zeichen im Feld `field`, das sich in einer PDF nicht ausgeben lässt (Spec §4).
 pub fn pdf_char_text(c: char, field: &str) -> String {
-    format!("Das Zeichen „{c}“ im Feld „{field}“ lässt sich in einer PDF nicht ausgeben.")
+    format!(
+        "Das Zeichen {} im Feld „{field}“ lässt sich in einer PDF nicht ausgeben.",
+        planora_drawing::pdf::pdf_char_label(c)
+    )
 }
 
 /// Lassen sich alle Texte des Blattrahmens in einer PDF ausgeben (P13)? Sonst die Meldung mit
@@ -532,7 +535,8 @@ pub fn pdf_model_texts_ok(model: &SheetModel) -> Result<(), String> {
                 && let Some(c) = text.chars().find(|c| !pdf_char_ok(*c))
             {
                 return Err(format!(
-                    "Das Zeichen „{c}“ in einem Maßtext der Ansicht „{}“ lässt sich in einer PDF nicht ausgeben.",
+                    "Das Zeichen {} in einem Maßtext der Ansicht „{}“ lässt sich in einer PDF nicht ausgeben.",
+                    planora_drawing::pdf::pdf_char_label(c),
                     v.name
                 ));
             }

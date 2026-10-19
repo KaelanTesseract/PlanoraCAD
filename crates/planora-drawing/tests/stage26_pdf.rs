@@ -1521,3 +1521,37 @@ fn numbers() {
         assert!(matches!(pdf_num(x), Err(DrawError::NonFinite)));
     }
 }
+
+#[test]
+fn pdf_char_label_names_invisible_and_lookalike_characters() {
+    use planora_drawing::pdf::pdf_char_label;
+    assert_eq!(pdf_char_label('😀'), "„😀“");
+    assert_eq!(pdf_char_label('Ā'), "„Ā“");
+    for (c, code) in [
+        ('\t', "U+0009"),
+        ('\u{2009}', "U+2009"),
+        ('\u{202F}', "U+202F"),
+        ('\u{200B}', "U+200B"),
+        ('\u{0308}', "U+0308"),
+        ('\u{2011}', "U+2011"),
+        ('\u{FEFF}', "U+FEFF"),
+    ] {
+        assert_eq!(pdf_char_label(c), code);
+        assert_eq!(
+            pdf_char_message(c),
+            format!("Das Zeichen {code} lässt sich in einer PDF nicht ausgeben.")
+        );
+    }
+}
+
+#[test]
+fn locked_file_error_gets_a_hint() {
+    let locked = DrawError::Io(std::io::Error::from_raw_os_error(32)).to_string();
+    assert!(
+        locked.starts_with("Die Datei lässt sich nicht schreiben: "),
+        "{locked}"
+    );
+    assert!(locked.ends_with("Bitte dort schließen."), "{locked}");
+    let other = DrawError::Io(std::io::Error::other("x")).to_string();
+    assert_eq!(other, "Die Datei lässt sich nicht schreiben: x");
+}

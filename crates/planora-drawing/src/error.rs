@@ -21,12 +21,21 @@ pub enum DrawError {
     NonFinite,
     #[error("Abgebrochen.")]
     Cancelled,
-    #[error("Die Datei lässt sich nicht schreiben: {0}")]
+    #[error("{}", io_text(.0))]
     Io(#[from] std::io::Error),
     #[error("Der Körper ist fehlerhaft: {0}")]
     InvalidBody(String),
     #[error("Das wird nicht unterstützt: {0}")]
     Unsupported(String),
+}
+
+/// Meldung zu einem Schreibfehler; Windows-Fehler 32/33 (Datei gesperrt) bekommen einen Hinweis.
+fn io_text(e: &std::io::Error) -> String {
+    let mut t = format!("Die Datei lässt sich nicht schreiben: {e}");
+    if matches!(e.raw_os_error(), Some(32 | 33)) {
+        t.push_str(" Ist die Datei in einem anderen Programm geöffnet? Bitte dort schließen.");
+    }
+    t
 }
 
 impl From<ExchangeError> for DrawError {
