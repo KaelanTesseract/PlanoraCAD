@@ -2647,12 +2647,13 @@ fn panic_right(b: &[DrawBody], k: ViewKind, p: &Progress) -> Result<ViewLines, D
 fn panic_resolve_blatt_2(
     d: &planora_drawing::Drawing,
     solids: &[&planora_kernel::Solid],
+    cut: &ViewSolids,
     p: &Progress,
 ) -> Result<planora_drawing::annotate::ResolvedDims, DrawError> {
     if d.name == "Blatt 2" {
         panic!("Testabsturz beim Auflösen");
     }
-    resolve_dimensions_in_worker(d, solids, p)
+    resolve_dimensions_in_worker(d, solids, cut, p)
 }
 
 /// Stürzt die Rechnung eines Blatts ab, wird nichts ausgelassen: die Meldung nennt das Blatt (F2).

@@ -425,6 +425,23 @@ impl DrawingUi {
         }
     }
 
+    /// Die Körper, auf denen Maße und Positionsnummern einer Schnittansicht arbeiten (Spec §9.3):
+    /// die geschnittenen Körper mit ihrer Herkunft (`SectionData::source`), wie
+    /// [`DrawingUi::section_of`]. `None` ohne Schnitt oder solange der Schnitt dieses Stands
+    /// rechnet bzw. gescheitert ist.
+    pub fn view_solids(&self, spec: &ViewSpec, model: u64) -> Option<Arc<SectionData>> {
+        self.section_of(spec, model)
+    }
+
+    /// Wie [`DrawingUi::view_solids`], aber geliehen (für Werkzeuge, die Bezüge auf die Körper
+    /// halten, solange der Zustand geliehen ist).
+    pub(crate) fn section_ref(&self, spec: &ViewSpec, model: u64) -> Option<&SectionData> {
+        match self.entry(&ViewKey::of(spec), model)? {
+            EntryState::Ready(d) => d.data.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Fertige Linien je Ansicht der Zeichnung zum Modellstand `model` (Ansichten ohne
     /// fertiges Ergebnis dieses Stands fehlen).
     pub fn results_for(&self, drawing: &Drawing, model: u64) -> BTreeMap<ViewId, Arc<ViewLines>> {

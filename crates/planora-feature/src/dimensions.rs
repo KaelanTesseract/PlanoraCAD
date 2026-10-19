@@ -19,7 +19,7 @@ use planora_drawing::{
 };
 use planora_kernel::Solid;
 use planora_math::{DVec3, Tolerance};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::Infallible;
 
 /// Höchstzahl der Nachkommastellen eines Maßes.
@@ -280,13 +280,20 @@ pub fn resolve_drawing_dimensions<E>(
 /// ([`planora_drawing::dimension_key`]) jedes Maßes, dessen Bezüge sich auflösen ließen und das
 /// einen Schlüssel hat (auch wenn die Messung danach scheitert). Die Oberfläche merkt sich die
 /// Schlüssel, damit ein Maß, das später seinen Bezug verliert, nicht doppelt vorgeschlagen wird.
+///
+/// Dasselbe wie [`resolve_drawing_dimensions_views`] ohne geschnittene Körper: Maße in
+/// Schnittansichten fehlen im Ergebnis.
 #[allow(clippy::type_complexity)]
 pub fn resolve_drawing_dimensions_keyed<E>(
     d: &Drawing,
     solids: &[&Solid],
-    mut check: impl FnMut() -> Result<(), E>,
+    check: impl FnMut() -> Result<(), E>,
 ) -> Result<(ResolvedDims, HashMap<DimId, String>), E> {
-    let tol = Tolerance::default();
+    resolve_drawing_dimensions_views(d, solids, &BTreeMap::new(), check)
+}
+
+/// Ausdehnung der Körper `solids` (wie die Ansichtsrechnung, siehe [`extent_of`]).
+fn extent_of_solids(solids: &[&Solid]) -> f64 {
     let bodies: Vec<DrawBody> = solids
         .iter()
         .map(|s| DrawBody {
@@ -294,9 +301,27 @@ pub fn resolve_drawing_dimensions_keyed<E>(
             solid: s,
         })
         .collect();
-    let extent = extent_of(&bodies);
+    extent_of(&bodies)
+}
+
+/// Wie [`resolve_drawing_dimensions_keyed`], aber Maße einer Schnittansicht (Spec §9.3) werden
+/// gegen die geschnittenen Körper dieser Ansicht aus `view_solids` aufgelöst, mit deren
+/// Ausdehnung; Maße der übrigen Ansichten gegen `solids`. Fehlt eine Schnittansicht in
+/// `view_solids` (ihr Schnitt ist noch nicht berechnet), fehlen ihre Maße in `by_view`: Sie gelten
+/// weder als aufgelöst noch als verloren.
+#[allow(clippy::type_complexity)]
+pub fn resolve_drawing_dimensions_views<'a, E>(
+    d: &Drawing,
+    solids: &[&'a Solid],
+    view_solids: &BTreeMap<ViewId, Vec<&'a Solid>>,
+    mut check: impl FnMut() -> Result<(), E>,
+) -> Result<(ResolvedDims, HashMap<DimId, String>), E> {
+    let tol = Tolerance::default();
+    let extent = extent_of_solids(solids);
+    // Ausdehnung je Schnittansicht, einmal gerechnet.
+    let mut extents: HashMap<ViewId, f64> = HashMap::new();
     // Ein Speicher für den ganzen Durchgang: Prüfpunkte und Achsbereiche werden je Fläche nur
-    // einmal berechnet (gleiches Ergebnis wie ohne Speicher).
+    // einmal berechnet (gleiches Ergebnis wie ohne Speicher; die Schlüssel sind die Körper).
     let cache = RefCache::new();
     let mut out = ResolvedDims::default();
     let mut keys = HashMap::new();
@@ -306,11 +331,22 @@ pub fn resolve_drawing_dimensions_keyed<E>(
         let Some(view) = d.view(m.view) else {
             continue;
         };
+        let (bodies, extent): (&[&'a Solid], f64) = if view.section.is_some() {
+            let Some(cut) = view_solids.get(&m.view) else {
+                continue;
+            };
+            let e = *extents
+                .entry(m.view)
+                .or_insert_with(|| extent_of_solids(cut));
+            (cut.as_slice(), e)
+        } else {
+            (solids, extent)
+        };
         let basis = Basis::of(view.kind);
         let result = m
             .refs
             .iter()
-            .map(|r| resolve_geo_cached(solids, r, &tol, &cache))
+            .map(|r| resolve_geo_cached(bodies, r, &tol, &cache))
             .collect::<Result<Vec<Geo3>, _>>()
             .and_then(|geos| {
                 if let Some(k) = dimension_key(m.kind, &geos, &basis, view.kind, extent) {

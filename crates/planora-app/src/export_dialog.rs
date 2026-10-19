@@ -59,7 +59,7 @@ use planora_exchange::{
     ExchangeError, ExchangeMesh, ExportBody, Format, MeshReport, MeshTransform, PlacedSource,
     Progress, SolidSource, check_mesh, collect_body, export_file,
 };
-use planora_feature::{BodyRef, resolve_drawing_dimensions};
+use planora_feature::{BodyRef, resolve_drawing_dimensions_views};
 use planora_kernel::Solid;
 use planora_mesh::{TessellationOptions, tessellate};
 use planora_step::{
@@ -352,19 +352,27 @@ pub fn centerline_use_all(drawings: &[Drawing]) -> CenterlineUse {
     }
 }
 
-/// Das Auflösen der Maße einer Zeichnung im Arbeitsthread (austauschbar nur für Tests).
-pub type ResolveFn = fn(&Drawing, &[&Solid], &Progress) -> Result<ResolvedDims, DrawError>;
+/// Die geschnittenen Körper je Schnittansicht (Spec §9.3: Maße einer Schnittansicht hängen an
+/// ihnen).
+pub type ViewSolids<'a> = BTreeMap<ViewId, Vec<&'a Solid>>;
 
-/// Löst die Maße der Zeichnung gegen die Körper `solids` auf (Kopien im Arbeitsthread); bricht
-/// zwischen den Maßen ab, wenn gewünscht.
+/// Das Auflösen der Maße einer Zeichnung im Arbeitsthread (austauschbar nur für Tests).
+pub type ResolveFn =
+    fn(&Drawing, &[&Solid], &ViewSolids<'_>, &Progress) -> Result<ResolvedDims, DrawError>;
+
+/// Löst die Maße der Zeichnung gegen die Körper `solids` auf (Kopien im Arbeitsthread), Maße
+/// einer Schnittansicht gegen deren geschnittene Körper aus `view_solids`; bricht zwischen den
+/// Maßen ab, wenn gewünscht.
 pub fn resolve_dimensions_in_worker(
     drawing: &Drawing,
     solids: &[&Solid],
+    view_solids: &ViewSolids<'_>,
     progress: &Progress,
 ) -> Result<ResolvedDims, DrawError> {
-    resolve_drawing_dimensions(drawing, solids, || {
+    resolve_drawing_dimensions_views(drawing, solids, view_solids, || {
         progress.check().map_err(|_| DrawError::Cancelled)
     })
+    .map(|(dims, _)| dims)
 }
 
 /// Name eines Maßes in Meldungen: der eigene Text (der Platzhalter für den Wert `<>` als `?`,
@@ -985,7 +993,13 @@ pub fn prepare_drawing_parts(
     let dims = if with_dims {
         progress.check().map_err(|_| cancelled())?;
         let refs: Vec<&Solid> = solids.iter().map(|(_, s)| s).collect();
-        let dims = match resolve(drawing, &refs, progress) {
+        // Jede Schnittansicht mit den Körpern ihres eigenen Schnitts (hier berechnet, also immer
+        // vorhanden; ein gescheiterter Schnitt hat die Ausgabe schon gesperrt).
+        let cut: ViewSolids = section_data
+            .iter()
+            .map(|(v, data)| (*v, data.solids.iter().collect()))
+            .collect();
+        let dims = match resolve(drawing, &refs, &cut, progress) {
             Ok(d) => d,
             Err(DrawError::Cancelled) => return Err(cancelled()),
             Err(e) => return Err(e.to_string()),
