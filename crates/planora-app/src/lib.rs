@@ -31,6 +31,7 @@ pub mod parts_section;
 pub mod projects_panel;
 pub mod prompts;
 pub mod properties;
+pub mod section_tool;
 pub mod sheet_dialog;
 pub mod shell;
 pub mod shell_panels;

@@ -11,8 +11,7 @@ use planora_app::drawing_browser::READ_ONLY_HINT;
 use planora_app::drawing_dialog::SKETCH_BLOCKED;
 use planora_app::drawing_state::WorkArea;
 use planora_app::sheet_dialog::{
-    BUTTON, CUT_WARNING, MENU_ENTRY, NO_DRAWING_OPEN, OWNER_MISSING, REVISIONS_ON_SHEET,
-    SheetInfoDialog,
+    CUT_WARNING, MENU_ENTRY, NO_DRAWING_OPEN, OWNER_MISSING, REVISIONS_ON_SHEET, SheetInfoDialog,
 };
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
@@ -329,11 +328,11 @@ impl H {
     fn open_from_toolbar(&mut self) {
         self.capture_base();
         let shot = self
-            .reveal_in_toolbar(BUTTON)
+            .reveal_in_toolbar(&button_glyph())
             .unwrap_or_else(|| self.settle());
         let tool = self.field_rect("Werkzeugfeld");
         let p = shot
-            .visible_in(BUTTON, tool)
+            .visible_in(&button_glyph(), tool)
             .first()
             .expect("Knopf Blattangaben")
             .rect
@@ -471,6 +470,11 @@ fn menu_entry_hint(st: &mut AppState, read_only: bool) -> Vec<String> {
     last.into_iter().map(|t| t.text).collect()
 }
 
+/// Der Knopf „Blattangaben“ im Werkzeugfeld ist nur ein Symbol (der Name steht im Tooltip).
+fn button_glyph() -> String {
+    icons::glyph(icons::Icon::SheetInfo).to_string()
+}
+
 // (a) ------------------------------------------------------------------------------------------
 
 #[test]
@@ -479,14 +483,14 @@ fn opens_from_toolbar_and_menu() {
         let (mut h, _, _) = H::new(size, dark, false);
         let shot = h.settle();
         let tool = h.field_rect("Werkzeugfeld");
-        let shot = h.reveal_in_toolbar(BUTTON).unwrap_or(shot);
+        let shot = h.reveal_in_toolbar(&button_glyph()).unwrap_or(shot);
         let fit = shot
             .texts
             .iter()
             .find(|t| t.text == "Ansicht hinzufügen" && tool.contains(t.rect.center()))
             .expect("Ansicht hinzufügen")
             .rect;
-        let info = shot.visible_in(BUTTON, tool)[0].rect;
+        let info = shot.visible_in(&button_glyph(), tool)[0].rect;
         assert!(
             info.left() > fit.right() && (info.center().y - fit.center().y).abs() < 6.0,
             "{size:?}: Knopf am Ende der ersten Zeile, rechts von „Ansicht hinzufügen“: {fit:?} {info:?}"
@@ -501,10 +505,14 @@ fn opens_from_toolbar_and_menu() {
         {
             assert!(sheet_fit.rect.center().y > info.center().y + 10.0);
         }
-        // Zwischen den beiden Knöpfen steht nichts anderes.
+        // Zwischen den beiden Knöpfen steht nur der Knopf „Schnitt“.
+        let section_glyph = icons::glyph(icons::Icon::SectionTool);
         assert!(
             !shot.texts.iter().any(|t| tool.contains_rect(t.rect)
                 && !t.text.starts_with(icons::glyph(icons::Icon::SheetInfo))
+                && !t.text.starts_with(section_glyph)
+                && t.text != planora_app::section_tool::TOOL
+                && (t.rect.center().y - info.center().y).abs() < 6.0
                 && t.rect.left() > fit.right()
                 && t.rect.right() < info.left()),
             "{size:?}: Text zwischen den Knöpfen"
@@ -553,7 +561,7 @@ fn locked_in_old_versions_and_in_the_sketch_mode() {
     h.app.ws_mut().active_tab_mut().read_only = true;
     let shot = h.settle();
     let tool = h.field_rect("Werkzeugfeld");
-    let p = shot.visible_in(BUTTON, tool)[0].rect.center();
+    let p = shot.visible_in(&button_glyph(), tool)[0].rect.center();
     h.click(p);
     assert!(!h.is_open(), "Knopf gesperrt");
     let tip = h.hover(p);

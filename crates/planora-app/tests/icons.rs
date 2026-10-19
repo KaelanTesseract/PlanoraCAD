@@ -400,3 +400,11 @@ fn position_tool_has_its_own_glyph() {
     );
     assert_eq!(icons::glyph(Icon::PositionTool), '\u{e36a}');
 }
+
+/// Werkzeug „Schnitt“ (Schnittansichten, Aufgabe 9): Schere der Symbolschrift.
+#[test]
+fn section_tool_has_its_own_glyph() {
+    assert!(ALL.contains(&Icon::SectionTool));
+    assert_eq!(icons::phosphor_name(Icon::SectionTool), "scissors");
+    assert_eq!(icons::glyph(Icon::SectionTool), '\u{eae0}');
+}

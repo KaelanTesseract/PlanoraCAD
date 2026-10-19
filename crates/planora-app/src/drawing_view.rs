@@ -29,6 +29,7 @@ use crate::drawing_state::{
 };
 use crate::export_dialog::{REPAINT, shorten_for_display};
 use crate::icons::{self, Icon};
+use crate::section_tool;
 use crate::shell::{self, ShellMode, ShellRects, ShellState};
 use crate::state::AppState;
 use crate::{shell_panels, theme, viewport};
@@ -1004,6 +1005,22 @@ enum Action {
     Tool(ToolMode),
     /// Werkzeug „Position“ ein- oder ausschalten.
     BalloonTool,
+    /// Werkzeug „Schnitt“ ein- oder ausschalten.
+    SectionTool,
+    /// Eingabe im Ansichtsfeld einer Schnittansicht.
+    Section(SectionEdit),
+}
+
+/// Änderung einer Schnittansicht aus ihrem Ansichtsfeld.
+enum SectionEdit {
+    /// Schnittposition (Text aus dem Feld).
+    Offset(String),
+    /// Blickrichtung umdrehen.
+    Flip,
+    /// Schraffur ein oder aus.
+    Hatch(bool),
+    /// Schraffurabstand (Text aus dem Feld).
+    Spacing(String),
 }
 
 /// Kann das Werkzeug „Maß“ benutzt werden? Sonst die Erklärung (alte Version, keine Ansicht,
@@ -1069,6 +1086,17 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     {
         state.balloon_tool.set_active(false);
     }
+    let selected_spec = state
+        .drawing_ui
+        .selected_view
+        .and_then(|v| drawing.view(v))
+        .cloned();
+    if (section_tool::blocked(&drawing, selected_spec.as_ref(), editable).is_some()
+        || state.sketch_session.is_some())
+        && state.section_tool.is_active()
+    {
+        state.section_tool.set_active(false);
+    }
     let ctx = ui.ctx().clone();
     let paint = ui.max_rect();
     let rects = drawing_rects(&ctx, editable);
@@ -1098,7 +1126,13 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
             state.drawing_ui.zoom = z;
             state.drawing_ui.pan *= f;
         }
-        Some(Action::Scale(s)) => set_selected(state, id, |v| v.scale = s),
+        Some(Action::Scale(s)) => {
+            if let Some(sel) = state.drawing_ui.selected_view
+                && let Err(e) = section_tool::set_scale(state, id, sel, s)
+            {
+                state.message = Some(e);
+            }
+        }
         Some(Action::Hidden(h)) => set_selected(state, id, |v| v.show_hidden = h),
         Some(Action::Centerlines(c)) => set_selected(state, id, |v| {
             if v.kind.is_normal() {
@@ -1107,22 +1141,44 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
         }),
         Some(Action::Suggest) => suggest_dimensions(state, id),
         Some(Action::Delete) => delete_selected(state),
-        // „Maß“ und „Position“ schließen sich aus.
+        // „Maß“, „Position“ und „Schnitt“ schließen sich aus.
         Some(Action::ToolToggle) => {
             state.dimension_tool.toggle();
             if state.dimension_tool.is_active() {
                 state.balloon_tool.set_active(false);
+                state.section_tool.set_active(false);
             }
         }
         Some(Action::Tool(m)) => {
             state.dimension_tool.set_mode(m);
             state.balloon_tool.set_active(false);
+            state.section_tool.set_active(false);
         }
         Some(Action::BalloonTool) => {
             let on = !state.balloon_tool.is_active();
             state.balloon_tool.set_active(on);
             if on {
                 state.dimension_tool.set_mode(ToolMode::Off);
+                state.section_tool.set_active(false);
+            }
+        }
+        Some(Action::SectionTool) => {
+            let on = !state.section_tool.is_active();
+            state.section_tool.set_active(on);
+            if on {
+                state.dimension_tool.set_mode(ToolMode::Off);
+                state.balloon_tool.set_active(false);
+            }
+        }
+        Some(Action::Section(edit)) => {
+            if let Some(sel) = state.drawing_ui.selected_view {
+                let r = match edit {
+                    SectionEdit::Offset(t) => section_tool::set_offset_text(state, id, sel, &t),
+                    SectionEdit::Flip => section_tool::flip(state, id, sel),
+                    SectionEdit::Hatch(on) => section_tool::set_hatch(state, id, sel, on),
+                    SectionEdit::Spacing(t) => section_tool::set_spacing_text(state, id, sel, &t),
+                };
+                state.section_tool.set_message(r.err());
             }
         }
         None => {}
@@ -1160,10 +1216,14 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     }
     // Eine Ablehnung des Werkzeugs „Maß“ geht der Meldung vor (rot); bei eingeschaltetem
     // Werkzeug steht an Stelle des Hinweises der nächste Schritt.
+    state
+        .section_tool
+        .expire((state.document.edit_count(), state.drawing_ui.selected_view));
     let rejected = state
         .dimension_tool
         .message()
         .or(state.balloon_tool.message())
+        .or(state.section_tool.message())
         .map(str::to_owned);
     let message = rejected
         .clone()
@@ -1178,6 +1238,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
                 .is_active()
                 .then(|| balloon_tool::HINT.to_string())
         })
+        .or_else(|| state.section_tool.hint().map(str::to_owned))
         .or(note)
         .unwrap_or_else(|| HINT.to_string());
     let lines = HintLines {
@@ -1335,13 +1396,46 @@ fn tool_field(
                         r
                     })
                     .on_disabled_hover_text(add_why);
-                    // Am Ende der ersten Zeile, damit die zweite nicht breiter wird.
+                    // Werkzeug „Schnitt“ direkt nach „Ansicht hinzufügen“ (eingeschaltet mit
+                    // Akzent; gesperrt mit Erklärung).
+                    let selected_spec =
+                        state.drawing_ui.selected_view.and_then(|v| drawing.view(v));
+                    let section_why = section_tool::blocked(drawing, selected_spec, editable);
+                    let button = if state.section_tool.is_active() {
+                        egui::Button::new((
+                            icons::text(Icon::SectionTool, icons::LABEL_ICON_SIZE, p.on_accent),
+                            egui::RichText::new(section_tool::TOOL).color(p.on_accent),
+                        ))
+                        .fill(p.accent)
+                        .selected(true)
+                    } else {
+                        icons::button(Icon::SectionTool, section_tool::TOOL)
+                    };
                     if ui
-                        .add_enabled(
+                        .add_enabled(section_why.is_none(), flat(button))
+                        .on_hover_text(section_tool::TOOL_TIP)
+                        .on_disabled_hover_text(section_why.unwrap_or(section_tool::TOOL_TIP))
+                        .clicked()
+                    {
+                        action = Some(Action::SectionTool);
+                    }
+                    // Am Ende der ersten Zeile, damit die zweite nicht breiter wird. Nur das
+                    // Symbol (wie „Blatt einpassen“), damit die Zeile mit dem Werkzeug „Schnitt“
+                    // bei 1100 × 700 ins Feld passt; der Name steht im Tooltip.
+                    let info = ui.add_enabled(editable, flat(icon_only(Icon::SheetInfo)));
+                    info.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
                             editable,
-                            flat(icons::button(Icon::SheetInfo, crate::sheet_dialog::BUTTON)),
+                            crate::sheet_dialog::BUTTON,
                         )
-                        .on_hover_text(crate::sheet_dialog::BUTTON_TIP)
+                    });
+                    if info
+                        .on_hover_text(format!(
+                            "{}: {}",
+                            crate::sheet_dialog::BUTTON,
+                            crate::sheet_dialog::BUTTON_TIP
+                        ))
                         .on_disabled_hover_text(crate::drawing_browser::READ_ONLY_HINT)
                         .clicked()
                     {
@@ -1529,11 +1623,20 @@ fn view_field(
                         return;
                     };
                     let name = names.get(&v.id).cloned().unwrap_or_default();
-                    theme::section_header(ui, &format!("Ansicht „{name}“"), theme::HEADER_H);
+                    // Eine Schnittansicht heißt im Kopf wie auf dem Blatt („Schnitt A–A“).
+                    let title = if v.section.is_some() {
+                        name.clone()
+                    } else {
+                        format!("Ansicht „{name}“")
+                    };
+                    theme::section_header(ui, &title, theme::HEADER_H);
                     ui.add_space(theme::SPACE_1);
+                    // Der Maßstab einer Schnittansicht folgt ihrer Ausgangsansicht.
+                    let scale_free = editable && v.section.is_none();
                     ui.horizontal(|ui| {
-                        ui.add_enabled(editable, egui::Label::new("Maßstab"));
-                        ui.add_enabled(editable, |ui: &mut egui::Ui| {
+                        ui.add_enabled(scale_free, egui::Label::new("Maßstab"))
+                            .on_disabled_hover_text(section_tool::SCALE_LOCKED_TIP);
+                        ui.add_enabled(scale_free, |ui: &mut egui::Ui| {
                             egui::ComboBox::from_id_salt("planora-drawing-scale")
                                 .selected_text(v.scale.label())
                                 .show_ui(ui, |ui| {
@@ -1544,8 +1647,19 @@ fn view_field(
                                     }
                                 })
                                 .response
-                        });
+                        })
+                        .on_disabled_hover_text(section_tool::SCALE_LOCKED_TIP);
                     });
+                    if let Some(sec) = &v.section {
+                        let model = state.document.model_edit_count();
+                        let nudged = state
+                            .drawing_ui
+                            .section_of(v, model)
+                            .is_some_and(|d| d.nudged);
+                        if let Some(edit) = section_fields(ui, v, sec, editable, nudged) {
+                            action = Some(Action::Section(edit));
+                        }
+                    }
                     let mut hidden = v.show_hidden;
                     if ui
                         .add_enabled(
@@ -1584,6 +1698,97 @@ fn view_field(
         },
     );
     action
+}
+
+/// Zahlenfeld, das den eingegebenen Text liefert, sobald es verlassen wird (Enter oder Klick
+/// daneben) und der Text von der Anzeige `shown` abweicht. Esc verwirft die Eingabe. Solange das
+/// Feld nicht den Fokus hat, zeigt es `shown` (nach einer abgelehnten Eingabe also den alten Wert).
+fn commit_field(
+    ui: &mut egui::Ui,
+    key: &'static str,
+    view: ViewId,
+    shown: &str,
+    enabled: bool,
+) -> Option<String> {
+    let id = egui::Id::new(("planora-section-field", key, view));
+    let editing = ui.memory(|m| m.has_focus(id) || m.had_focus_last_frame(id));
+    let stored: Option<String> = ui.data(|d| d.get_temp(id)).filter(|_| editing);
+    let mut text = stored.clone().unwrap_or_else(|| shown.to_string());
+    let r = theme::text_field_enabled(
+        ui,
+        enabled,
+        egui::TextEdit::singleline(&mut text)
+            .id(id)
+            .desired_width(SECTION_FIELD_W),
+    );
+    if r.lost_focus() || !editing && !r.has_focus() {
+        ui.data_mut(|d| d.remove_temp::<String>(id));
+    } else if r.changed() || (r.has_focus() && stored.is_none()) {
+        ui.data_mut(|d| d.insert_temp(id, text.clone()));
+    }
+    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    (r.lost_focus() && !esc && text.trim() != shown).then_some(text)
+}
+
+/// Breite der Zahlenfelder einer Schnittansicht.
+const SECTION_FIELD_W: f32 = 96.0;
+
+/// Felder einer Schnittansicht im Ansichtsfeld: Schnittposition, Blickrichtung umdrehen,
+/// Schraffur an/aus und ihr Abstand, bei verschobener Ebene der Hinweis.
+fn section_fields(
+    ui: &mut egui::Ui,
+    v: &planora_drawing::ViewSpec,
+    sec: &planora_drawing::SectionSpec,
+    editable: bool,
+    nudged: bool,
+) -> Option<SectionEdit> {
+    let mut edit = None;
+    ui.add_space(theme::SPACE_1);
+    ui.add_enabled(editable, egui::Label::new("Schnittposition (mm)"));
+    if let Some(t) = commit_field(
+        ui,
+        "offset",
+        v.id,
+        &section_tool::field_text(sec.offset),
+        editable,
+    ) {
+        edit = Some(SectionEdit::Offset(t));
+    }
+    ui.add_space(theme::SPACE_1);
+    if ui
+        .add_enabled(
+            editable,
+            flat(icons::button(Icon::Mirror, "Blickrichtung umdrehen")),
+        )
+        .clicked()
+    {
+        edit = Some(SectionEdit::Flip);
+    }
+    let mut hatch = sec.hatch.on;
+    if ui
+        .add_enabled(editable, theme::Toggle::new(&mut hatch, "Schraffur"))
+        .changed()
+    {
+        edit = Some(SectionEdit::Hatch(hatch));
+    }
+    ui.add_enabled(
+        editable && sec.hatch.on,
+        egui::Label::new("Schraffurabstand (mm)"),
+    );
+    if let Some(t) = commit_field(
+        ui,
+        "spacing",
+        v.id,
+        &section_tool::field_text(sec.hatch.spacing),
+        editable && sec.hatch.on,
+    ) {
+        edit = Some(SectionEdit::Spacing(t));
+    }
+    if nudged {
+        ui.add_space(theme::SPACE_1);
+        ui.add(egui::Label::new(egui::RichText::new(section_tool::NUDGED).weak()).wrap());
+    }
+    edit
 }
 
 /// Inhalt des Hinweisfelds.
@@ -2016,7 +2221,7 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
             .drawing_ui
             .selected_view
             .and_then(|s| d.view(s))
-            .filter(|v| v.kind.is_normal());
+            .filter(|v| v.kind.is_normal() && v.section.is_none());
         let parent = selected
             .or(base.filter(|b| b.kind.is_normal()))
             .filter(|p| align_dir(d.projection, p.kind, kind).is_some());
@@ -2138,6 +2343,9 @@ fn canvas_ui(
     // Mit eingeschaltetem Werkzeug „Position“ setzt ein Klick auf eine Linie einen Kreis; Kreise
     // lassen sich weiter wählen und ziehen, Ansichten und Maße nicht.
     let balloon_on = editable && state.balloon_tool.is_active();
+    // Mit eingeschaltetem Werkzeug „Schnitt“ setzen zwei Klicks die Schnittlinie; Ansichten, Maße
+    // und Kreise lassen sich dabei weder wählen noch ziehen.
+    let section_on = editable && state.section_tool.is_active();
 
     // Zoom um den Zeiger (Mausrad, Zwei-Finger-Geste).
     if response.hovered()
@@ -2163,7 +2371,7 @@ fn canvas_ui(
                     origin,
                     start: state.drawing_ui.pan,
                 })
-            } else if response.dragged_by(PointerButton::Primary) && !tool_on {
+            } else if response.dragged_by(PointerButton::Primary) && !tool_on && !section_on {
                 if let Some(b) = hit_balloon(origin) {
                     select_balloon(state, b);
                     let at = balloons0.iter().find(|x| x.id == b).map(|x| x.centre);
@@ -2304,6 +2512,9 @@ fn canvas_ui(
             let polys = polylines_cached(&ctx, &sheet, lines_gen, k0);
             let found = tool_hit(&sheet, &polys, &to_screen0, pos);
             tool_click(state, id, found, at, k0, response.double_clicked());
+        } else if section_on {
+            let at = screen_to_sheet(canvas, sheet_mm, zoom0, pan0, pos);
+            section_tool::click(state, id, at, k0);
         } else if let Some(b) = hit_balloon(pos) {
             select_balloon(state, b);
             state.balloon_tool.set_message(None);
@@ -2322,7 +2533,15 @@ fn canvas_ui(
                 crate::dimension_dialog::open(state, id, dim, !editable);
             }
         } else {
-            state.drawing_ui.selected_view = hit(pos);
+            // Die Schnittlinie wählt ihre Schnittansicht (vor den Linien der Quellansicht).
+            let on_line = drawing.views.iter().any(|v| v.section.is_some()).then(|| {
+                let owned = state.drawing_ui.results_for(&drawing, model);
+                let refs: BTreeMap<ViewId, &ViewLines> =
+                    owned.iter().map(|(k, l)| (*k, l.as_ref())).collect();
+                let lines = section_tool::section_lines(&drawing, &refs);
+                section_tool::section_line_hit(&lines, &to_screen0, pos, PICK_PX)
+            });
+            state.drawing_ui.selected_view = on_line.flatten().or_else(|| hit(pos));
             state.drawing_ui.selected_dim = None;
             state.drawing_ui.selected_balloon = None;
         }
@@ -2334,6 +2553,11 @@ fn canvas_ui(
             tool_escape(state, id);
         } else if balloon_on {
             state.balloon_tool.set_active(false);
+        } else if section_on {
+            // Esc nimmt erst den ersten Klick zurück, dann schaltet es das Werkzeug aus.
+            if !state.section_tool.cancel() {
+                state.section_tool.set_active(false);
+            }
         } else {
             state.drawing_ui.selected_view = None;
             state.drawing_ui.selected_dim = None;
@@ -2491,6 +2715,16 @@ fn canvas_ui(
         let preview = with_tool(state, |t, st| t.hover(st, id, p)).unwrap_or_default();
         for m in &preview {
             paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, 1.0);
+            preview_drawn += 1;
+        }
+    }
+
+    // Vorschau des Werkzeugs „Schnitt“ nach dem ersten Klick: Schnittlinie mit Pfeilen.
+    if section_on && let Some(hp) = response.hover_pos() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        let p = screen_to_sheet(canvas, sheet_mm, zoom, pan, hp);
+        for m in &section_tool::preview(state, id, p, k) {
+            paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, f_sheet);
             preview_drawn += 1;
         }
     }
@@ -3253,7 +3487,7 @@ fn tool_hit(
     center.map(|(_, v, o)| (v, o.clone()))
 }
 
-fn screen_seg_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+pub(crate) fn screen_seg_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let ab = b - a;
     let len2 = ab.length_sq();
     let t = if len2 > 0.0 {

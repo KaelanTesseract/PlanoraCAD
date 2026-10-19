@@ -164,6 +164,40 @@ fn plan_delete_view(
         .filter(|m| removed.contains(&m.view))
         .count();
     let name = names.get(&view).cloned().unwrap_or_default();
+    // Eine Schnittansicht reißt immer ihre Schnittlinie in der Ausgangsansicht mit: stets mit
+    // Rückfrage.
+    if let Some(v) = d.view(view).filter(|v| v.section.is_some()) {
+        let source = v
+            .parent
+            .and_then(|p| names.get(&p))
+            .cloned()
+            .unwrap_or_default();
+        let mut text = format!(
+            "Die Schnittansicht „{name}“ wird gelöscht, mit ihr die Schnittlinie in „{source}“."
+        );
+        let mut extra = Vec::new();
+        if !dependents.is_empty() {
+            extra.push(format!(
+                "Abgeleitete Ansichten ({}) werden mit gelöscht",
+                dependents.join(", ")
+            ));
+        }
+        if dims > 0 {
+            extra.push(dims_go_along(dims));
+        }
+        if !extra.is_empty() {
+            text.pop();
+            text.push_str(&format!(", und {}.", extra.join(", und ")));
+        }
+        return Some((
+            DrawingDeletePlan {
+                drawing,
+                view: Some(view),
+                text,
+            },
+            true,
+        ));
+    }
     let text = match (dependents.is_empty(), dims) {
         (true, 0) => format!("Die Ansicht „{name}“ wird gelöscht."),
         (true, n) => format!(
