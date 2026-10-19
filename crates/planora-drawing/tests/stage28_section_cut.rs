@@ -611,3 +611,153 @@ fn plane_grazing_a_sphere_is_cut() {
         assert!((got - want).abs() < 1e-3, "{kind:?}: {got} statt {want}");
     }
 }
+
+/// Schräge Drehung (0,6 rad um (1, 2, 3)) mit Verschiebung.
+fn skew() -> DMat4 {
+    DMat4::from_translation(DVec3::new(7.0, -3.0, 11.0))
+        * DMat4::from_axis_angle(DVec3::new(1.0, 2.0, 3.0).normalize(), 0.6)
+}
+
+/// Prüft die sichere Box gegen fein abgetastete Punkte der Oberfläche: sie muss alle enthalten
+/// und darf je Achse höchstens 35 % größer sein als ihre Ausdehnung.
+fn check_box(what: &str, s: &Solid, pts: &[DVec3]) {
+    let (lo, hi) = bounds(s);
+    let (mut plo, mut phi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+    for &p in pts {
+        plo = plo.min(p);
+        phi = phi.max(p);
+    }
+    for k in 0..3 {
+        assert!(
+            lo[k] <= plo[k] + 1e-9 && hi[k] >= phi[k] - 1e-9,
+            "{what}: Achse {k} Box {lo:?}…{hi:?}, Punkte {plo:?}…{phi:?}"
+        );
+        let (b, t) = (hi[k] - lo[k], phi[k] - plo[k]);
+        assert!(b <= 1.35 * t, "{what}: Achse {k} zu weit ({b} statt {t})");
+    }
+}
+
+#[test]
+fn safe_bounds_contain_fine_samples_and_stay_tight() {
+    use planora_kernel::profile::{Profile, ProfileLoop, Segment};
+    use planora_math::nurbs::NurbsCurve;
+    use planora_math::{DVec2, Frame};
+    use std::f64::consts::{PI, TAU};
+    let m = skew();
+    let grid = |m: DMat4, nu: usize, nv: usize, f: &dyn Fn(f64, f64) -> DVec3| -> Vec<DVec3> {
+        let mut out = Vec::new();
+        for i in 0..=nu {
+            for j in 0..=nv {
+                out.push(m.transform_point3(f(i as f64 / nu as f64, j as f64 / nv as f64)));
+            }
+        }
+        out
+    };
+
+    // Scheibe mit gerundetem Rand: halber Torus R 40, r 10 (Äußerstes mitten in der Fläche).
+    let puck_chain = ProfileLoop {
+        start: DVec2::new(0.0, -10.0),
+        segments: vec![
+            Segment::Line {
+                to: DVec2::new(40.0, -10.0),
+            },
+            Segment::Arc {
+                center: DVec2::new(40.0, 0.0),
+                sweep: PI,
+            },
+            Segment::Line {
+                to: DVec2::new(0.0, 10.0),
+            },
+        ],
+    };
+    let puck = k()
+        .revolve(&puck_chain, &Frame::WORLD)
+        .unwrap()
+        .transformed(&m)
+        .unwrap();
+    assert!(
+        puck.faces
+            .iter()
+            .any(|(_, f)| matches!(f.surface, planora_kernel::Surface::Torus { .. }))
+    );
+    let pts = grid(m, 720, 180, &|a, b| {
+        let (u, v) = (a * TAU, -PI / 2.0 + b * PI);
+        let rho = 40.0 + 10.0 * v.cos();
+        DVec3::new(rho * u.cos(), rho * u.sin(), 10.0 * v.sin())
+    });
+    check_box("Scheibe", &puck, &pts);
+
+    // Freiform-Kuppel: Profil quadratische Bézierkurve (40, 0) – (40, 30) – (0, 30), gedreht.
+    let arc = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            DVec3::new(40.0, 0.0, 0.0),
+            DVec3::new(40.0, 30.0, 0.0),
+            DVec3::new(0.0, 30.0, 0.0),
+        ],
+        vec![1.0; 3],
+    )
+    .unwrap();
+    let dome_chain = ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![
+            Segment::Line {
+                to: DVec2::new(40.0, 0.0),
+            },
+            Segment::Nurbs {
+                curve: std::sync::Arc::new(arc),
+            },
+        ],
+    };
+    // Nur um x gekippt: die Kontrollbox der Drehfläche (Quadrat um den Kreis) bleibt so unter
+    // 35 % zu weit; das Äußerste in z liegt trotzdem mitten in der Fläche (nicht auf Naht oder Rand).
+    let m_dome = DMat4::from_translation(DVec3::new(-4.0, 2.0, 5.0)) * DMat4::from_rotation_x(0.6);
+    let dome = k()
+        .revolve(&dome_chain, &Frame::WORLD)
+        .unwrap()
+        .transformed(&m_dome)
+        .unwrap();
+    assert!(
+        dome.faces
+            .iter()
+            .any(|(_, f)| matches!(f.surface, planora_kernel::Surface::Nurbs(_)))
+    );
+    let pts = grid(m_dome, 720, 200, &|a, s| {
+        let u = a * TAU;
+        let rho = (1.0 - s) * (1.0 - s) * 40.0 + 2.0 * s * (1.0 - s) * 40.0;
+        let z = 2.0 * s * (1.0 - s) * 30.0 + s * s * 30.0;
+        DVec3::new(rho * u.cos(), rho * u.sin(), z)
+    });
+    check_box("Kuppel", &dome, &pts);
+
+    // Dreiviertelkreis (270°), 10 hoch: mehrere Scheitel liegen mitten auf dem Bogen.
+    let pac = Profile {
+        outer: ProfileLoop {
+            start: DVec2::ZERO,
+            segments: vec![
+                Segment::Line {
+                    to: DVec2::new(30.0, 0.0),
+                },
+                Segment::Arc {
+                    center: DVec2::ZERO,
+                    sweep: 1.5 * PI,
+                },
+                Segment::Line { to: DVec2::ZERO },
+            ],
+        },
+        holes: vec![],
+    };
+    let pac_solid = k()
+        .extrude(&pac, &Frame::WORLD, 10.0)
+        .unwrap()
+        .transformed(&m)
+        .unwrap();
+    let mut pts = grid(m, 2000, 1, &|a, h| {
+        let t = a * 1.5 * PI;
+        DVec3::new(30.0 * t.cos(), 30.0 * t.sin(), 10.0 * h)
+    });
+    pts.push(m.transform_point3(DVec3::ZERO));
+    pts.push(m.transform_point3(DVec3::new(0.0, 0.0, 10.0)));
+    check_box("Dreiviertelkreis", &pac_solid, &pts);
+}

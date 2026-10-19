@@ -498,3 +498,137 @@ fn second_ambiguity_keeps_the_first_message() {
         "genau ein Zweitversuch"
     );
 }
+
+#[test]
+fn sliver_of_a_large_cylinder_keeps_the_first_message() {
+    // Ebene 0,0002 bis 0,001 mm innerhalb des Rands, behalten wird der schmale Rest. Der Schnitt
+    // gelingt, die Ansicht ist unsicher; an der verschobenen Ebene fiele der Zylinder ganz weg.
+    // Dann gilt die erste Meldung, nie „trifft den Körper nicht“.
+    let mut cyl = k().make_cylinder(100.0, 50.0).unwrap();
+    cyl.assign_origin(7);
+    for eps in [0.0002_f64, 0.0005, 0.001] {
+        let p = plane(ViewKind::Front, 100.0 - eps);
+        match run(&[db("Rad", &cyl)], &p) {
+            Ok(r) => {
+                let want = 2.0 * (100.0_f64.powi(2) - (100.0 - eps).powi(2)).sqrt() * 50.0;
+                let got = region_area(&r, 0, ViewKind::Front);
+                assert!((got - want).abs() < 1e-3, "ε {eps}: {got} statt {want}");
+            }
+            Err(DrawError::AmbiguousVisibility(n)) => assert!(n.starts_with("Rad"), "ε {eps}: {n}"),
+            Err(e) => panic!("ε {eps}: {e:?}"),
+        }
+    }
+}
+
+static FIRST_ONLY_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Beim ersten Aufruf unsicher („erste“), danach die echte Ansicht.
+fn ambiguous_first(b: &[DrawBody], kind: ViewKind, p: &Progress) -> Result<ViewLines, DrawError> {
+    if FIRST_ONLY_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+        return Err(DrawError::AmbiguousVisibility("erste".into()));
+    }
+    compute_view(b, kind, p)
+}
+
+static FIRST_ONLY_CALLS_2: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn ambiguous_first_2(b: &[DrawBody], kind: ViewKind, p: &Progress) -> Result<ViewLines, DrawError> {
+    if FIRST_ONLY_CALLS_2.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+        return Err(DrawError::AmbiguousVisibility("erste".into()));
+    }
+    compute_view(b, kind, p)
+}
+
+#[test]
+fn retry_is_refused_when_another_body_would_get_a_cut_face() {
+    // Der Quader „Nachbar“ beginnt 0,0005 mm hinter der Ebene: an der Ebene ganz behalten (ohne
+    // Schnittfläche), an der um 0,001 mm verschobenen Ebene angeschnitten. Der Zweitversuch hätte
+    // dieselben behaltenen Körper, aber eine Schnittfläche mehr (ein schraffierter Hauch) – also
+    // die erste Meldung.
+    let s = boxs(20.0, 10.0, 5.0);
+    let next = moved(&boxs(5.0, 10.0, 5.0), 30.0, 5.0005, 0.0);
+    let e = compute_section(
+        &[db("Block", &s), db("Nachbar", &next)],
+        &plane(ViewKind::Front, 5.0),
+        ambiguous_first,
+        &Progress::new(),
+    )
+    .err()
+    .expect("erste Meldung");
+    assert!(
+        matches!(e, DrawError::AmbiguousVisibility(ref n) if n == "erste"),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn retry_whose_cut_fails_keeps_the_first_message() {
+    // „Rolle“ (Zylinder r 30 mit gerundeter Oberkante) beginnt 0,0005 mm hinter der Ebene: an der
+    // Ebene ganz behalten, an der verschobenen Ebene ginge der Schnitt durch die Rundung (Torus mit
+    // Ebene kann der Kernel nicht). Statt „lässt sich der Schnitt nicht berechnen“ bleibt die
+    // erste Meldung.
+    use planora_kernel::blend::{BlendEdge, BlendKind, BlendRequest};
+    let roll = k().make_cylinder(30.0, 20.0).unwrap();
+    let rim = roll
+        .edges
+        .iter()
+        .find(|(_, e)| {
+            matches!(e.curve, Curve::Circle { .. }) && (e.curve.point(e.t0).z - 20.0).abs() < 1e-9
+        })
+        .map(|(id, _)| id)
+        .unwrap();
+    let req = BlendRequest {
+        edges: vec![BlendEdge {
+            edge: rim,
+            first_face: None,
+        }],
+        kind: BlendKind::Fillet { radius: 5.0 },
+        tangent_chain: false,
+    };
+    let mut roll = k().blend(&roll, &req).unwrap().solid;
+    roll.assign_origin(7);
+    let roll = moved(&roll, 50.0, 35.0005, 0.0);
+    // Ohne Zweitversuch scheitert der Kernel an der verschobenen Ebene wirklich:
+    let shifted = plane(ViewKind::Front, 5.0 + SECTION_NUDGE_MM);
+    assert!(
+        cut_body(&roll, 1, &shifted, &planora_math::Tolerance::default()).is_err(),
+        "Testaufbau: Schnitt durch die Rundung muss scheitern"
+    );
+    let s = boxs(20.0, 10.0, 5.0);
+    let e = compute_section(
+        &[db("Block", &s), db("Rolle", &roll)],
+        &plane(ViewKind::Front, 5.0),
+        ambiguous_first_2,
+        &Progress::new(),
+    )
+    .err()
+    .expect("erste Meldung");
+    assert!(
+        matches!(e, DrawError::AmbiguousVisibility(ref n) if n == "erste"),
+        "{e:?}"
+    );
+}
+
+/// Unsicher und dabei abgebrochen (der Nutzer bricht während der Ansicht ab).
+fn ambiguous_and_cancelled(
+    _: &[DrawBody],
+    _: ViewKind,
+    p: &Progress,
+) -> Result<ViewLines, DrawError> {
+    p.cancel();
+    Err(DrawError::AmbiguousVisibility("erste".into()))
+}
+
+#[test]
+fn cancel_during_the_retry_wins_over_the_first_message() {
+    let s = bored_box();
+    let e = compute_section(
+        &[db("Block", &s)],
+        &plane(ViewKind::Front, 7.0),
+        ambiguous_and_cancelled,
+        &Progress::new(),
+    )
+    .err()
+    .unwrap();
+    assert!(matches!(e, DrawError::Cancelled), "{e:?}");
+}

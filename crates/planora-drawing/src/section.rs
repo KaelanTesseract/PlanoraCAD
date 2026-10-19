@@ -512,7 +512,13 @@ pub fn compute_section(
                 kind: plane.kind,
                 offset: plane.offset + da * SECTION_NUDGE_MM,
             };
-            let mut again = cut_all(bodies, &shifted, progress)?;
+            // Scheitert schon das Schneiden an der verschobenen Ebene (etwa weil ein knapp
+            // gestreifter Körper dort ganz wegfällt), gilt die erste Meldung; nur Abbrechen geht vor.
+            let mut again = match cut_all(bodies, &shifted, progress) {
+                Ok(d) => d,
+                Err(DrawError::Cancelled) => return Err(DrawError::Cancelled),
+                Err(_) => return Err(first),
+            };
             if again.source != data.source || cut_bodies_of(&again) != cut_bodies_of(&data) {
                 return Err(first);
             }
