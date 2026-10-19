@@ -19,6 +19,7 @@ pub mod parts;
 pub mod pdf;
 pub mod pdf_font;
 pub mod raycast;
+pub mod section;
 pub mod sheet;
 pub mod sheet_frame;
 pub mod sheet_info;
