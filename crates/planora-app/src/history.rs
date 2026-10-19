@@ -49,7 +49,7 @@ pub struct History<T> {
     max_bytes: usize,
 }
 
-impl<T: Clone> History<T> {
+impl<T> History<T> {
     /// Neuer Verlauf mit den üblichen Grenzen; der Anfangsstand hat die Nummer 0 und gilt als
     /// gespeichert.
     pub fn new(initial: T, bytes: usize) -> History<T> {
@@ -100,9 +100,6 @@ impl<T: Clone> History<T> {
             if self.undo.pop_front().is_none() {
                 break;
             }
-        }
-        while self.bytes() > self.max_bytes && !self.redo.is_empty() {
-            self.redo.remove(0);
         }
     }
 

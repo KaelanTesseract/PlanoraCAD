@@ -2,10 +2,19 @@
 //! Aufgabe 1): Schritte, Nummern, Grenzen, Gespeichert-Marke, Gesten-Zähler, Größenschätzung.
 
 use planora_app::history::*;
-use planora_drawing::{Paper, Placement, Projection, Scale, Sheet, ViewKind};
+use planora_drawing::dimension::{DimId, DimKind, DimSpec, Tolerance as DimTol};
+use planora_drawing::model::Balloon;
+use planora_drawing::{
+    BalloonId, BodyKey, Paper, Placement, Projection, RowOverride, Scale, Sheet, ViewId, ViewKind,
+};
 use planora_exchange::ExchangeMesh;
-use planora_feature::{Document, FeatureKind, MeshId, Snapshot};
+use planora_feature::{
+    Document, EdgeCopy, EdgeRef, FaceRef, FeatureKind, MeshId, SketchFeature, SketchPlane,
+    Snapshot, SnapshotFeature, StandardPlane,
+};
 use planora_math::DVec3;
+use planora_math::{Frame, Tolerance};
+use planora_sketch::model::Sketch;
 use std::sync::Arc;
 
 const A4_QUER: Sheet = Sheet {
@@ -279,4 +288,207 @@ fn snapshot_bytes_counts_names() {
         snapshot_bytes(&doc.snapshot())
     };
     assert_eq!(make("Langer Name") - make("N"), "Langer Name".len() - 1);
+}
+
+#[test]
+fn unequal_sizes_keep_bytes_constant() {
+    let mut h = History::new(0u32, 5);
+    h.record(1, 7, "A");
+    h.record(2, 9, "B");
+    assert_eq!(h.bytes(), 5 + 7 + 9);
+    h.commit_undo();
+    assert_eq!(h.bytes(), 21);
+    h.commit_undo();
+    assert_eq!(h.bytes(), 21);
+    h.commit_redo();
+    assert_eq!(h.bytes(), 21);
+    h.commit_redo();
+    assert_eq!(h.bytes(), 21);
+    // Über die Grenze: nur die Größen der wirklich entfernten Einträge fallen weg.
+    let mut g = History::with_limits(0u32, 5, 1000, 20);
+    g.record(1, 7, "A");
+    g.record(2, 9, "B");
+    assert_eq!(g.bytes(), 16, "5 fällt heraus, 7 + 9 bleiben");
+    assert_eq!(g.undo_len(), 1);
+}
+
+#[test]
+fn redo_order_after_three_undos() {
+    let mut h = chain(3);
+    for _ in 0..3 {
+        h.commit_undo();
+    }
+    assert_eq!(h.redo_len(), 3);
+    assert_eq!(h.peek_redo(), Some(&1));
+    assert_eq!(h.commit_redo(), Some("X"));
+    assert_eq!(*h.current(), 1);
+    assert_eq!(h.peek_redo(), Some(&2));
+    h.commit_redo();
+    assert_eq!(h.peek_redo(), Some(&3));
+    assert_eq!(h.redo_label(), Some("X"));
+    h.commit_redo();
+    assert_eq!(h.redo_label(), None);
+    // Beschriftungen bleiben je Schritt erhalten.
+    let mut l = History::new(0u32, 1);
+    l.record(1, 1, "A");
+    l.record(2, 1, "B");
+    l.record(3, 1, "C");
+    for _ in 0..3 {
+        l.commit_undo();
+    }
+    assert_eq!(l.redo_label(), Some("A"));
+    l.commit_redo();
+    assert_eq!(l.redo_label(), Some("B"));
+    assert_eq!(l.undo_label(), Some("A"));
+}
+
+#[test]
+fn evicted_saved_stays_dirty() {
+    let mut h = History::with_limits(0u32, 10, 2, MAX_BYTES);
+    assert!(h.is_saved());
+    for i in 1..=3 {
+        h.record(i, 10, "X");
+    }
+    assert_eq!(oldest(&mut h), 1, "Stand 0 ist verdrängt");
+    assert!(!h.is_saved());
+    while h.commit_redo().is_some() {
+        assert!(!h.is_saved());
+    }
+    h.mark_saved();
+    assert!(h.is_saved());
+}
+
+fn base_snapshot() -> Snapshot {
+    Document::new().snapshot()
+}
+
+fn sketch_feature() -> SketchFeature {
+    SketchFeature {
+        sketch: Sketch::new(Frame::WORLD, "Skizze", Tolerance::default()),
+        plane: SketchPlane::Standard(StandardPlane::XY),
+        copies: vec![],
+    }
+}
+
+fn with_sketch(sf: SketchFeature) -> Snapshot {
+    let mut s = base_snapshot();
+    s.features.push(SnapshotFeature {
+        id: planora_feature::FeatureId(1),
+        name: "S".into(),
+        suppressed: false,
+        kind: FeatureKind::Sketch(sf),
+    });
+    s
+}
+
+#[test]
+fn snapshot_bytes_grows_with_sketch_content() {
+    let base = snapshot_bytes(&with_sketch(sketch_feature()));
+
+    let mut sf = sketch_feature();
+    let a = sf.sketch.add_point(0.0, 0.0).unwrap();
+    let with_point = snapshot_bytes(&with_sketch(sf.clone()));
+    // Punkt: mindestens 64 für den Punkt plus 16 für zwei Variablen.
+    assert_eq!(with_point - base, 64 + 2 * 8);
+
+    let b = sf.sketch.add_point(10.0, 0.0).unwrap();
+    let before_line = snapshot_bytes(&with_sketch(sf.clone()));
+    sf.sketch.add_line(a, b).unwrap();
+    let with_line = snapshot_bytes(&with_sketch(sf.clone()));
+    assert_eq!(with_line - before_line, 64, "Kurve zählt 64");
+
+    sf.sketch
+        .add_constraint(planora_sketch::constraint::ConstraintKind::Fixed(
+            a, 0.0, 0.0,
+        ))
+        .unwrap();
+    let with_constraint = snapshot_bytes(&with_sketch(sf.clone()));
+    assert!(with_constraint >= with_line + 64, "Abhängigkeit zählt 64");
+
+    let curve = sf.sketch.curves().next().unwrap().0;
+    sf.copies.push(EdgeCopy {
+        curve,
+        edge: EdgeRef {
+            a: FaceRef {
+                origin: 1,
+                role: String::new(),
+                hint: DVec3::ZERO,
+            },
+            b: FaceRef {
+                origin: 1,
+                role: String::new(),
+                hint: DVec3::ZERO,
+            },
+            hint: DVec3::ZERO,
+        },
+    });
+    let with_copy = snapshot_bytes(&with_sketch(sf));
+    assert_eq!(with_copy - with_constraint, 64, "Kopie zählt 64");
+}
+
+#[test]
+fn snapshot_bytes_counts_drawing_and_parts_content() {
+    let mut doc = Document::new();
+    let d = doc.add_drawing("A", A4_QUER, Projection::First).unwrap();
+    let base_snap = doc.snapshot();
+    let base = snapshot_bytes(&base_snap);
+
+    // Zeichnungsname
+    let mut s = base_snap.clone();
+    s.drawings[0].name = "AAAAAAAAAA".into();
+    assert_eq!(snapshot_bytes(&s), base + 9);
+
+    // Grundwert 1024 für Blattangaben: ein zweites, gleich benanntes Blatt kostet genau
+    // size_of::<Drawing>() + Name + 1024.
+    let mut s = base_snap.clone();
+    let copy = s.drawings[0].clone();
+    s.drawings.push(copy);
+    assert_eq!(
+        snapshot_bytes(&s),
+        base + std::mem::size_of::<planora_drawing::Drawing>() + 1 + 1024
+    );
+
+    // Maße je 256
+    let mut s = base_snap.clone();
+    s.drawings[0].dimensions.push(DimSpec {
+        id: DimId(1),
+        view: ViewId(1),
+        kind: DimKind::Horizontal,
+        refs: vec![],
+        offset: 0.0,
+        angle: 0.0,
+        text_shift: (0.0, 0.0),
+        tolerance: DimTol::None,
+        decimals: 1,
+        text_override: None,
+        chain: None,
+        suggested: false,
+    });
+    assert_eq!(snapshot_bytes(&s), base + 256);
+
+    // Positionsnummern je size_of::<Balloon>()
+    let mut s = base_snap.clone();
+    s.drawings[0].balloons.push(Balloon {
+        id: BalloonId(1),
+        view: ViewId(1),
+        body: BodyKey {
+            feature: 1,
+            index: 0,
+        },
+        anchor: (0.0, 0.0),
+        offset: (0.0, 0.0),
+    });
+    assert_eq!(snapshot_bytes(&s), base + std::mem::size_of::<Balloon>());
+
+    // Stücklistentexte je 256
+    let mut s = base_snap.clone();
+    s.parts_overrides.insert(
+        BodyKey {
+            feature: 1,
+            index: 0,
+        },
+        RowOverride::default(),
+    );
+    assert_eq!(snapshot_bytes(&s), base + 256);
+    let _ = d;
 }
