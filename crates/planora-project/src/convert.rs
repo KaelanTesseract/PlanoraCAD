@@ -15,8 +15,8 @@ use planora_drawing::sheet_info::{
     validate_sheet_info,
 };
 use planora_drawing::{
-    Balloon, BalloonId, BodyKey, Drawing, DrawingId, DrawingKind, Paper, Placement, Projection,
-    RowOverride, Scale, Sheet, ViewId, ViewKind, ViewSpec,
+    Balloon, BalloonId, BodyKey, Drawing, DrawingId, DrawingKind, HatchSpec, Paper, Placement,
+    Projection, RowOverride, Scale, SectionSpec, Sheet, ViewId, ViewKind, ViewSpec,
 };
 use planora_exchange::{ExchangeMesh, MAX_FILE_BYTES};
 use planora_feature::{
@@ -35,20 +35,25 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 7;
+pub const FORMAT_VERSION: u32 = 8;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 7 mit Stücklisten-Daten (eigene Zeilentexte,
+/// Kleinste Formatnummer, die den Stand darstellt: 8 mit Schnittansichten, 7 mit Stücklisten-Daten (eigene Zeilentexte,
 /// Stücklistenblatt, Nummernkreise oder eingeschalteter Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder eingeschalteten
 /// Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder Fasen, sonst 1
 /// (P7, P12, F7, Teilprojekt 12 P11).
 pub fn required_format(s: &Snapshot) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if !s.parts_overrides.is_empty() || s.drawings.iter().any(has_parts_data) {
+    if s.drawings
+        .iter()
+        .any(|d| d.views.iter().any(|v| v.section.is_some()))
+    {
+        8
+    } else if !s.parts_overrides.is_empty() || s.drawings.iter().any(has_parts_data) {
         7
     } else if s.project_info.is_some() || s.drawings.iter().any(|d| d.info.is_some()) {
         6
@@ -1373,6 +1378,12 @@ fn drawing_to(d: &Drawing, with_marks: bool, with_parts: bool) -> Result<Zeichnu
                 verdeckt_zeigen: v.show_hidden,
                 eltern: v.parent.map(|p| p.0),
                 mittellinien: with_marks.then_some(v.centerlines),
+                schnitt: v.section.map(|s| SchnittDto {
+                    versatz: s.offset,
+                    buchstabe: s.letter.to_string(),
+                    schraffur: s.hatch.on,
+                    schraffurabstand: s.hatch.spacing,
+                }),
             })
             .collect(),
         masse: if with_marks {
@@ -1448,6 +1459,25 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
                 distance: p("Abstand", abstand)?,
             },
         };
+        let section = v
+            .schnitt
+            .as_ref()
+            .map(|s| -> Result<SectionSpec> {
+                let what = format!("Zeichnung „{}“ Schnitt", d.name);
+                let mut chars = s.buchstabe.chars();
+                let (Some(letter), None) = (chars.next(), chars.next()) else {
+                    return Err(ctx("Schnitt: Der Buchstabe ist ungültig".into()));
+                };
+                Ok(SectionSpec {
+                    offset: pos(origin, &what, s.versatz)?,
+                    letter,
+                    hatch: HatchSpec {
+                        on: s.schraffur,
+                        spacing: pos(origin, &what, s.schraffurabstand)?,
+                    },
+                })
+            })
+            .transpose()?;
         views.push(ViewSpec {
             id: ViewId(v.id),
             kind,
@@ -1456,6 +1486,7 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
             show_hidden: v.verdeckt_zeigen,
             parent: v.eltern.map(ViewId),
             centerlines: v.mittellinien.unwrap_or(false),
+            section,
         });
     }
     let kinds: HashMap<ViewId, ViewKind> = views.iter().map(|v| (v.id, v.kind)).collect();
@@ -1508,7 +1539,10 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
     };
     // Stücklistenblätter und Nummernkreise prüft dieselbe Regel wie beim Anlegen im Dokument;
     // die Meldung nennt die Zeichnung.
-    if drawing.balloons.is_empty() && drawing.kind == DrawingKind::Views {
+    if drawing.balloons.is_empty()
+        && drawing.kind == DrawingKind::Views
+        && drawing.views.iter().all(|v| v.section.is_none())
+    {
         return Ok(drawing);
     }
     validate_drawing(&drawing).map_err(ctx)?;
@@ -1539,6 +1573,17 @@ fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)
         return Err(ProjectError::corrupt(
             origin,
             "Blattangaben gibt es erst ab Dateiformat 6",
+        ));
+    }
+    if file.format < 8
+        && file
+            .zeichnungen
+            .iter()
+            .any(|z| z.ansichten.iter().any(|v| v.schnitt.is_some()))
+    {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Schnittansichten gibt es erst ab Dateiformat 8",
         ));
     }
     check_len(origin, "Zeichnungen", file.zeichnungen.len())?;

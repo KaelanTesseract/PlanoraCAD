@@ -10,7 +10,7 @@ use crate::annotate::{
 use crate::dimension::{ChainMode, DimId, Measured};
 use crate::layout::{align_dir, view_extent};
 use crate::model::ViewSpec;
-use crate::model::{Drawing, Placement, Sheet, ViewId, ViewKind};
+use crate::model::{Drawing, Placement, Sheet, ViewId};
 use crate::out2d::{Out2d, piece_to_outs};
 use crate::sheet_marks::SheetFrame;
 use crate::stroke::StrokeOrigin;
@@ -134,16 +134,10 @@ pub fn build_sheet_with(
     results: &BTreeMap<ViewId, &ViewLines>,
     dims: &ResolvedDims,
 ) -> SheetModel {
-    let mut counts: BTreeMap<u8, usize> = BTreeMap::new();
+    let names = drawing.view_names();
     let mut views = Vec::new();
     for spec in &drawing.views {
-        let n = counts.entry(kind_index(spec.kind)).or_insert(0);
-        *n += 1;
-        let name = if *n == 1 {
-            spec.kind.label().to_string()
-        } else {
-            format!("{} {}", spec.kind.label(), n)
-        };
+        let name = names.get(&spec.id).cloned().unwrap_or_default();
         let Some((lines, xf)) = drawable_view(drawing, spec, results) else {
             continue;
         };
@@ -334,8 +328,4 @@ fn same_line(a: &Mark, b: &Mark) -> bool {
         ) => k == k2 && ((near(*p, *p2) && near(*q, *q2)) || (near(*p, *q2) && near(*q, *p2))),
         _ => false,
     }
-}
-
-fn kind_index(k: ViewKind) -> u8 {
-    ViewKind::ALL.iter().position(|&x| x == k).unwrap_or(0) as u8
 }

@@ -414,22 +414,10 @@ pub fn dash_pattern(points: &[DVec2], pattern: &[f64]) -> Vec<Vec<DVec2>> {
     out
 }
 
-/// Namen der Ansichten wie auf dem Blatt: Art, bei mehrfach gleicher Art mit Nummer.
+/// Namen der Ansichten wie auf dem Blatt: Art, bei mehrfach gleicher Art mit Nummer, Schnitte
+/// als „Schnitt A–A“ (siehe [`Drawing::view_names`]).
 pub fn view_names(drawing: &Drawing) -> BTreeMap<ViewId, String> {
-    let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut out = BTreeMap::new();
-    for v in &drawing.views {
-        let i = ViewKind::ALL.iter().position(|k| *k == v.kind).unwrap_or(0);
-        let n = counts.entry(i).or_insert(0);
-        *n += 1;
-        let name = if *n == 1 {
-            v.kind.label().to_string()
-        } else {
-            format!("{} {}", v.kind.label(), n)
-        };
-        out.insert(v.id, name);
-    }
-    out
+    drawing.view_names()
 }
 
 /// Mitte einer Ansicht auf dem Blatt (auch wenn noch nichts berechnet ist).

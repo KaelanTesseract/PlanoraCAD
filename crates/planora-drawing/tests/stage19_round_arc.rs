@@ -426,6 +426,7 @@ fn top_spec() -> ViewSpec {
         parent: None,
         show_hidden: true,
         centerlines: true,
+        section: None,
     }
 }
 

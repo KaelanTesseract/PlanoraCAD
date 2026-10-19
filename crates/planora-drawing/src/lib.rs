@@ -39,8 +39,10 @@ pub use error::DrawError;
 pub use file::{DrawingFormat, drawing_to_bytes, export_drawing_file, export_pdf_file};
 pub use layout::{GAP_MM, align_dir, view_extent};
 pub use model::{
-    Balloon, BalloonId, Drawing, DrawingId, DrawingKind, Paper, Placement, Projection, Scale,
-    Sheet, ViewId, ViewKind, ViewSpec,
+    Balloon, BalloonId, Drawing, DrawingId, DrawingKind, HatchSpec, MAX_HATCH_SPACING,
+    MAX_SECTIONS, MIN_HATCH_SHEET_MM, Paper, Placement, Projection, SECTION_LETTERS, Scale,
+    SectionSpec, Sheet, ViewId, ViewKey, ViewKind, ViewSpec, plane_offset_from_view, section_kind,
+    section_line_coord, sections_ok_on,
 };
 pub use parts::{BodyKey, PartsCells, PartsRow, RowOverride};
 pub use pdf::{PdfMeta, pdf_bytes, write_pdf};

@@ -1,7 +1,11 @@
 //! Datenmodell einer Zeichnung: Blatt, Ansichten, Maßstab und Lage.
 
+use crate::basis::Basis;
 use crate::dimension::{DimId, DimSpec};
 use crate::parts::BodyKey;
+use crate::section::SectionPlane;
+use crate::sheet_frame::sheet_scale;
+use std::collections::BTreeMap;
 
 /// Kennung einer Zeichnung im Dokument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -175,6 +179,147 @@ pub struct ViewSpec {
     pub parent: Option<ViewId>,
     /// Mittellinien zeigen (Vorgabe: an für Normansichten, aus für Isometrisch).
     pub centerlines: bool,
+    /// Gesetzt: Schnittansicht (abhängig von ihrer Ausgangsansicht `parent`).
+    pub section: Option<SectionSpec>,
+}
+
+/// Buchstaben für Schnitte (ohne I, O, Q).
+pub const SECTION_LETTERS: &str = "ABCDEFGHJKLMNPRSTUVWXYZ";
+/// Höchstzahl der Schnittansichten je Blatt.
+pub const MAX_SECTIONS: usize = 12;
+/// Kleinster Schraffurabstand auf dem Blatt in Millimetern.
+pub const MIN_HATCH_SHEET_MM: f64 = 0.5;
+/// Größter Schraffurabstand (A3-Millimeter).
+pub const MAX_HATCH_SPACING: f64 = 50.0;
+
+/// Schraffur einer Schnittansicht: an/aus und Linienabstand in A3-Millimetern (wächst mit dem
+/// Blatt, siehe `sheet_scale`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HatchSpec {
+    pub on: bool,
+    pub spacing: f64,
+}
+
+impl Default for HatchSpec {
+    fn default() -> HatchSpec {
+        HatchSpec {
+            on: true,
+            spacing: 3.0,
+        }
+    }
+}
+
+/// Angaben einer Schnittansicht: Lage der Ebene (Weltkoordinate auf der Achse), Buchstabe und
+/// Schraffur. Die Blickrichtung steckt in `ViewSpec.kind`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SectionSpec {
+    pub offset: f64,
+    pub letter: char,
+    pub hatch: HatchSpec,
+}
+
+impl SectionSpec {
+    /// Schnittebene dieser Angabe für die Ansichtsart `kind`.
+    pub fn plane(&self, kind: ViewKind) -> SectionPlane {
+        SectionPlane {
+            kind,
+            offset: self.offset,
+        }
+    }
+}
+
+/// Schlüssel, unter dem die Linien einer Ansicht berechnet und zwischengespeichert werden: die
+/// Ansichtsart oder die Schnittebene. Die Schraffur gehört nicht dazu (sie wirkt erst auf dem
+/// Blatt).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ViewKey {
+    Plain(ViewKind),
+    Section(SectionPlane),
+}
+
+impl ViewKey {
+    /// Schlüssel einer Ansicht.
+    pub fn of(spec: &ViewSpec) -> ViewKey {
+        match &spec.section {
+            Some(sec) => ViewKey::Section(sec.plane(spec.kind)),
+            None => ViewKey::Plain(spec.kind),
+        }
+    }
+}
+
+/// Art der Schnittansicht, wenn man in einer Ansicht `parent` eine waagerechte oder senkrechte
+/// Schnittlinie zieht (Blickrichtung nach unten bzw. nach rechts, umgedreht entgegengesetzt).
+/// `None` für die isometrische Ansicht.
+pub fn section_kind(parent: ViewKind, horizontal: bool, flipped: bool) -> Option<ViewKind> {
+    if !parent.is_normal() {
+        return None;
+    }
+    let pb = Basis::of(parent);
+    let mut v = if horizontal { (0.0, -1.0) } else { (1.0, 0.0) };
+    if flipped {
+        v = (-v.0, -v.1);
+    }
+    let d = pb.ex * v.0 + pb.ey * v.1;
+    ViewKind::ALL
+        .into_iter()
+        .filter(|k| k.is_normal())
+        .find(|k| (Basis::of(*k).d - d).length() < 1e-9)
+}
+
+/// Welche Blattachse der Ausgangsansicht die Schnittachse trägt: (waagerechte Linie?,
+/// Vorzeichen). `None`, wenn die Achse in Blickrichtung der Ausgangsansicht liegt.
+fn line_axis(parent: ViewKind, kind: ViewKind) -> Option<(bool, f64)> {
+    if !parent.is_normal() || !kind.is_normal() {
+        return None;
+    }
+    let pb = Basis::of(parent);
+    let kd = Basis::of(kind).d;
+    let a = (0..3).find(|a| kd[*a].abs() > 0.5)?;
+    if pb.ey[a].abs() > 0.5 {
+        Some((true, pb.ey[a].signum()))
+    } else if pb.ex[a].abs() > 0.5 {
+        Some((false, pb.ex[a].signum()))
+    } else {
+        None
+    }
+}
+
+/// Lage der Schnittlinie in der Ausgangsansicht: (waagerecht?, Ansichtskoordinate). Waagerecht
+/// bei y = `offset · ey[a]`, senkrecht bei x = `offset · ex[a]`. `None`, wenn die Ebene zur
+/// Ausgangsansicht nicht passt.
+pub fn section_line_coord(parent: ViewKind, plane: &SectionPlane) -> Option<(bool, f64)> {
+    let (horizontal, sign) = line_axis(parent, plane.kind)?;
+    plane.axis()?;
+    Some((horizontal, plane.offset * sign + 0.0))
+}
+
+/// Umkehrung von [`section_line_coord`]: Versatz der Ebene aus der Ansichtskoordinate.
+pub fn plane_offset_from_view(parent: ViewKind, kind: ViewKind, coord: f64) -> Option<f64> {
+    let (_, sign) = line_axis(parent, kind)?;
+    Some(coord * sign + 0.0)
+}
+
+/// Prüft den Schraffurabstand aller Schnitte für das Blatt `sheet`: höchstens 50 A3-mm und auf
+/// dem Blatt mindestens 0,5 mm.
+pub fn sections_ok_on(d: &Drawing, sheet: Sheet) -> Result<(), String> {
+    let f = sheet_scale(sheet);
+    let names = d.view_names();
+    for v in &d.views {
+        let Some(sec) = &v.section else { continue };
+        let spacing = sec.hatch.spacing;
+        if spacing > MAX_HATCH_SPACING {
+            return Err(format!(
+                "Der Schraffurabstand ist zu groß (höchstens {MAX_HATCH_SPACING} mm)."
+            ));
+        }
+        if spacing.is_nan() || spacing * f < MIN_HATCH_SHEET_MM {
+            let name = names.get(&v.id).cloned().unwrap_or_default();
+            return Err(format!(
+                "Der Schraffurabstand von „{name}“ wäre auf diesem Blatt kleiner als 0,5 mm."
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Kennung eines Nummernkreises (Positionsnummer) innerhalb einer Zeichnung.
@@ -260,8 +405,84 @@ impl Drawing {
             show_hidden: kind.shows_hidden_by_default(),
             parent,
             centerlines: kind.is_normal(),
+            section: None,
         });
         id
+    }
+
+    /// Erster freier Schnittbuchstabe (freigewordene werden wieder vergeben); `None`, wenn alle
+    /// vergeben sind.
+    pub fn next_letter(&self) -> Option<char> {
+        SECTION_LETTERS.chars().find(|c| {
+            !self
+                .views
+                .iter()
+                .any(|v| v.section.is_some_and(|s| s.letter == *c))
+        })
+    }
+
+    /// Fügt eine Schnittansicht aus `parent` hinzu: Maßstab der Ausgangsansicht, abgeleitet im
+    /// Abstand `distance`, verdeckte Kanten aus, Mittellinien an, Schraffur nach Vorgabe.
+    pub fn add_section(
+        &mut self,
+        parent: ViewId,
+        kind: ViewKind,
+        offset: f64,
+        distance: f64,
+    ) -> Result<ViewId, String> {
+        let source = self
+            .view(parent)
+            .filter(|p| p.kind.is_normal() && p.section.is_none())
+            .ok_or("Ein Schnitt geht nur aus einer geraden Ansicht.")?;
+        let scale = source.scale;
+        if self.views.iter().filter(|v| v.section.is_some()).count() >= MAX_SECTIONS {
+            return Err(format!(
+                "Es sind höchstens {MAX_SECTIONS} Schnitte je Blatt möglich."
+            ));
+        }
+        let letter = self
+            .next_letter()
+            .ok_or("Es sind keine Schnittbuchstaben mehr frei.")?;
+        let id = ViewId(self.next_view);
+        self.next_view += 1;
+        self.views.push(ViewSpec {
+            id,
+            kind,
+            scale,
+            placement: Placement::Aligned { distance },
+            show_hidden: false,
+            parent: Some(parent),
+            centerlines: true,
+            section: Some(SectionSpec {
+                offset,
+                letter,
+                hatch: HatchSpec::default(),
+            }),
+        });
+        Ok(id)
+    }
+
+    /// Namen der Ansichten wie auf dem Blatt: Normansichten mit ihrer Art, bei mehrfach gleicher
+    /// Art mit Nummer („Oben 2“); Schnitte zählen dabei nicht mit und heißen „Schnitt A–A“.
+    pub fn view_names(&self) -> BTreeMap<ViewId, String> {
+        let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut out = BTreeMap::new();
+        for v in &self.views {
+            if let Some(sec) = &v.section {
+                out.insert(v.id, format!("Schnitt {0}\u{2013}{0}", sec.letter));
+                continue;
+            }
+            let i = ViewKind::ALL.iter().position(|k| *k == v.kind).unwrap_or(0);
+            let n = counts.entry(i).or_insert(0);
+            *n += 1;
+            let name = if *n == 1 {
+                v.kind.label().to_string()
+            } else {
+                format!("{} {}", v.kind.label(), n)
+            };
+            out.insert(v.id, name);
+        }
+        out
     }
 
     /// Sucht eine Ansicht.

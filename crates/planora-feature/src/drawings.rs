@@ -3,12 +3,13 @@
 use crate::error::FeatureError;
 use crate::model::Document;
 use crate::parts_sheets::{FOLLOW_PAGE_DELETE, PARTS_SHEET_RENAME, page_of};
+use planora_drawing::basis::Basis;
 use planora_drawing::model::{Balloon, BalloonId};
 use planora_drawing::parts::{BodyKey, MAX_BALLOONS, parts_sheet_name};
 use planora_drawing::sheet_info::{ProjectInfo, SheetInfo, Stamp, validate_project_info};
 use planora_drawing::{
-    Drawing, DrawingId, DrawingKind, Placement, Projection, Scale, Sheet, ViewId, ViewKind,
-    align_dir,
+    Drawing, DrawingId, DrawingKind, MAX_SECTIONS, Placement, Projection, SECTION_LETTERS, Scale,
+    Sheet, ViewId, ViewKind, align_dir, sections_ok_on,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -67,6 +68,11 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
     if d.next_view == 0 || d.next_view == u64::MAX {
         return Err("Der Ansichtszähler der Zeichnung ist ungültig".into());
     }
+    if d.views.iter().filter(|v| v.section.is_some()).count() > MAX_SECTIONS {
+        return Err(format!(
+            "Es sind höchstens {MAX_SECTIONS} Schnitte je Blatt möglich."
+        ));
+    }
     let ok = |x: f64| x.is_finite() && x.abs() <= MAX_POS_MM;
     let in_range = |s: u32| (1..=1000).contains(&s);
     let mut seen: Vec<ViewId> = Vec::with_capacity(d.views.len());
@@ -79,6 +85,14 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
         }
         if !in_range(v.scale.num) || !in_range(v.scale.den) {
             return Err("Der Maßstab muss zwischen 1:1000 und 1000:1 liegen".into());
+        }
+        if v.section.is_some()
+            && !matches!(
+                (v.placement, v.parent),
+                (Placement::Aligned { .. }, Some(_))
+            )
+        {
+            return Err(NOT_STRAIGHT.into());
         }
         match (v.placement, v.parent) {
             (Placement::Free { x, y }, None) => {
@@ -109,6 +123,9 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
                     .iter()
                     .find(|w| w.id == p)
                     .ok_or("Die Ausgangsansicht gibt es nicht")?;
+                if let Some(sec) = &v.section {
+                    validate_section(d, v, sec, parent, &seen)?;
+                }
                 if !parent.kind.is_normal() {
                     return Err("Aus einer isometrischen Ansicht lässt sich nichts ableiten".into());
                 }
@@ -119,11 +136,46 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
         }
         seen.push(v.id);
     }
+    sections_ok_on(d, d.sheet)?;
     validate_balloons(d)?;
     if let Some(info) = &d.info {
         planora_drawing::sheet_info::validate_sheet_info(info)?;
     }
     crate::dimensions::validate_dimensions(d)
+}
+
+const NOT_STRAIGHT: &str = "Ein Schnitt geht nur aus einer geraden Ansicht.";
+
+/// Prüft eine Schnittansicht `v` gegen ihre Ausgangsansicht `parent` und die Buchstaben der
+/// Ansichten davor (`seen`).
+fn validate_section(
+    d: &Drawing,
+    v: &planora_drawing::ViewSpec,
+    sec: &planora_drawing::SectionSpec,
+    parent: &planora_drawing::ViewSpec,
+    seen: &[ViewId],
+) -> Result<(), String> {
+    if !parent.kind.is_normal() || parent.section.is_some() {
+        return Err(NOT_STRAIGHT.into());
+    }
+    if !v.kind.is_normal() || Basis::of(v.kind).d.dot(Basis::of(parent.kind).d).abs() > 1e-9 {
+        return Err("Die Schnittebene passt nicht zur Ausgangsansicht.".into());
+    }
+    if v.scale != parent.scale {
+        return Err("Eine Schnittansicht hat den Maßstab ihrer Ausgangsansicht.".into());
+    }
+    let twice = d
+        .views
+        .iter()
+        .filter(|w| seen.contains(&w.id))
+        .any(|w| w.section.is_some_and(|s| s.letter == sec.letter));
+    if !SECTION_LETTERS.contains(sec.letter) || twice {
+        return Err("Ein Schnittbuchstabe ist ungültig oder doppelt.".into());
+    }
+    if !sec.offset.is_finite() || sec.offset.abs() > MAX_POS_MM {
+        return Err("Die Lage der Schnittebene ist ungültig.".into());
+    }
+    Ok(())
 }
 
 /// Prüft die Nummernkreise: Anzahl, Kennungen, Ansicht, Anker und Versatz.
