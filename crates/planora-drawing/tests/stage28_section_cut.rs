@@ -442,3 +442,172 @@ fn plate_with_two_bores_plane_beside_both_axes() {
         );
     }
 }
+
+// Streifschnitt an großen runden Körpern: Die Ebene liegt nur 0,01 bzw. 0,001 mm innerhalb des
+// äußersten Punkts eines Zylinders r 100. Früher war die Hüllbox aus 64 Stützpunkten je Kante
+// bis etwa 0,12 mm zu klein, der Körper galt als ganz behalten oder ganz entfernt.
+
+/// Breite des Streifens, den eine Ebene `eps` innerhalb des Rands aus einem Kreis `r` schneidet.
+fn graze(r: f64, eps: f64) -> f64 {
+    2.0 * (r * r - (r - eps) * (r - eps)).sqrt()
+}
+
+fn big_tube() -> Solid {
+    let outer = k().make_cylinder(100.0, 50.0).unwrap();
+    let inner = moved(&k().make_cylinder(90.0, 54.0).unwrap(), 0.0, 0.0, -2.0);
+    diff(&outer, &inner)
+}
+
+#[test]
+fn plane_grazing_a_large_cylinder_is_cut() {
+    let mut cyl = k().make_cylinder(100.0, 50.0).unwrap();
+    cyl.assign_origin(7);
+    for s in [cyl, big_tube()] {
+        for eps in [0.01, 0.001] {
+            let want = graze(100.0, eps) * 50.0;
+            // Ebene nahe +y, behalten wird y ≥ Ebene (schmaler Rest des Körpers).
+            cut_matches(
+                &s,
+                &plane(ViewKind::Front, 100.0 - eps),
+                want,
+                &format!("+y ε {eps}"),
+            );
+            // Ebene nahe −y, behalten wird y ≤ Ebene (Blick von hinten).
+            cut_matches(
+                &s,
+                &plane(ViewKind::Back, -100.0 + eps),
+                want,
+                &format!("−y ε {eps}"),
+            );
+            // Gegenrichtung: fast der ganze Körper bleibt, die Schnittfläche ist derselbe Streifen.
+            cut_matches(
+                &s,
+                &plane(ViewKind::Back, 100.0 - eps),
+                want,
+                &format!("+y Rest ε {eps}"),
+            );
+            cut_matches(
+                &s,
+                &plane(ViewKind::Front, -100.0 + eps),
+                want,
+                &format!("−y Rest ε {eps}"),
+            );
+        }
+    }
+}
+
+#[test]
+fn bounds_of_round_bodies_are_exact() {
+    let (lo, hi) = bounds(&big_tube());
+    for (got, want) in [
+        (lo, DVec3::new(-100.0, -100.0, 0.0)),
+        (hi, DVec3::new(100.0, 100.0, 50.0)),
+    ] {
+        assert!(got.distance(want) < 1e-9, "{got:?} statt {want:?}");
+    }
+    // Halbzylinder (Naht gedreht auf +y, behalten x ≥ 0): sein Äußerstes in +x liegt mitten auf
+    // einem Bogen, nicht an einer Ecke.
+    let (lo, hi) = bounds(&half_cylinder());
+    assert!(
+        (hi.x - 100.0).abs() < 1e-9 && lo.x.abs() < 1e-9,
+        "{lo:?} {hi:?}"
+    );
+    // Kugel: ihr Äußerstes liegt nicht auf einer Kante.
+    let ball = moved(&k().make_sphere(30.0).unwrap(), 1.0, 2.0, 3.0);
+    let (lo, hi) = bounds(&ball);
+    assert!(
+        lo.distance(DVec3::new(-29.0, -28.0, -27.0)) < 1e-9,
+        "{lo:?}"
+    );
+    assert!(hi.distance(DVec3::new(31.0, 32.0, 33.0)) < 1e-9, "{hi:?}");
+}
+
+fn half_cylinder() -> Solid {
+    let cyl = k()
+        .make_cylinder(100.0, 50.0)
+        .unwrap()
+        .transformed(&DMat4::from_rotation_z(std::f64::consts::FRAC_PI_2))
+        .unwrap();
+    let left = moved(
+        &k().make_box(DVec3::new(200.0, 300.0, 60.0)).unwrap(),
+        -200.0,
+        -150.0,
+        -5.0,
+    );
+    diff(&cyl, &left)
+}
+
+#[test]
+fn plane_grazing_the_middle_of_an_arc_is_cut() {
+    let s = half_cylinder();
+    for eps in [0.01, 0.001] {
+        let want = graze(100.0, eps) * 50.0;
+        cut_matches(
+            &s,
+            &plane(ViewKind::Left, 100.0 - eps),
+            want,
+            &format!("Links ε {eps}"),
+        );
+        cut_matches(
+            &s,
+            &plane(ViewKind::Right, 100.0 - eps),
+            want,
+            &format!("Rechts ε {eps}"),
+        );
+    }
+}
+
+#[test]
+fn bounds_of_ellipse_bodies_are_exact() {
+    // Zylinder r 10 um 45° gekippt, auf |z| ≤ 20 begrenzt: Deckel und Boden sind Ellipsen mit
+    // großer Halbachse 10·√2 längs y, Mitte bei y = ±20. Äußerstes in y: 20 + 10·√2.
+    let tilted = k()
+        .make_cylinder(10.0, 200.0)
+        .unwrap()
+        .transformed(
+            &(DMat4::from_rotation_x(std::f64::consts::FRAC_PI_4)
+                * DMat4::from_translation(DVec3::new(0.0, 0.0, -100.0))),
+        )
+        .unwrap();
+    let slab = moved(
+        &k().make_box(DVec3::new(100.0, 300.0, 40.0)).unwrap(),
+        -50.0,
+        -150.0,
+        -20.0,
+    );
+    let piece = k().boolean(&tilted, &slab, BoolOp::Intersection).unwrap();
+    assert!(
+        piece
+            .edges
+            .iter()
+            .any(|(_, e)| matches!(e.curve, Curve::Ellipse { .. }))
+    );
+    let (lo, hi) = bounds(&piece);
+    let y = 20.0 + 10.0 * std::f64::consts::SQRT_2;
+    assert!(
+        (hi.y - y).abs() < 1e-9 && (lo.y + y).abs() < 1e-9,
+        "{lo:?} {hi:?}"
+    );
+    assert!(
+        (hi.x - 10.0).abs() < 1e-9 && (lo.x + 10.0).abs() < 1e-9,
+        "{lo:?} {hi:?}"
+    );
+}
+
+#[test]
+fn plane_grazing_a_sphere_is_cut() {
+    let mut ball = k().make_sphere(30.0).unwrap();
+    ball.assign_origin(7);
+    for kind in [
+        ViewKind::Front,
+        ViewKind::Back,
+        ViewKind::Left,
+        ViewKind::Top,
+    ] {
+        let (out, _) = cut(&ball, &plane(kind, 29.0));
+        let r2 = 30.0_f64 * 30.0 - 29.0 * 29.0;
+        let want = std::f64::consts::PI * r2;
+        let got = cut_area(&out);
+        assert!((got - want).abs() < 1e-3, "{kind:?}: {got} statt {want}");
+    }
+}

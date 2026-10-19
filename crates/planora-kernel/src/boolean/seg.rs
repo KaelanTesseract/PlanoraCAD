@@ -182,8 +182,10 @@ impl Seg {
         // Vollkreis oder Vollellipse als ein Stück (Anfang = Ende): Stützstelle 0 und n sind
         // derselbe Punkt, bei Gleichstand gewinnt zufällig eine von beiden. Liegt `p` kurz vor
         // dem Ende, wäre sonst nur am Anfang gesucht und die Naht geliefert worden; deshalb auch
-        // den Abschnitt am anderen Ende prüfen und das kleinere Minimum nehmen. Freiformkurven
-        // bleiben bewusst bei der alten Suche (ihre Ablehnungen hängen daran).
+        // den Abschnitt am anderen Ende prüfen und das kleinere Minimum nehmen. Das alte Ergebnis
+        // bleibt nur bei bitgleichem Abstand; liegt `p` genau auf der Naht, kann wegen Rundung
+        // jetzt f ≈ 1 statt f ≈ 0 herauskommen (derselbe Punkt). Freiformkurven bleiben bewusst
+        // bei der alten Suche (ihre Ablehnungen hängen daran).
         if matches!(self.curve, Curve::Circle { .. } | Curve::Ellipse { .. })
             && (best.0 == 0 || best.0 == n)
             && self.start().distance(self.end()) <= 1e-9

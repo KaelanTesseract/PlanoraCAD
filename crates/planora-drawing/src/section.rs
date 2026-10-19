@@ -13,7 +13,10 @@
 //! - **S3 Ganz vor/hinter, Tangentialfall:** Liegt die Hüllbox ganz auf der behaltenen (oder
 //!   entfernten) Seite, einschließlich Berührung, braucht es keinen Kernel. Liegt eine Ecke näher
 //!   als 1e-4 mm an der Ebene, wird vor dem Schneiden um `SECTION_NUDGE_MM` zur behaltenen Seite
-//!   verschoben. Scheitert `boolean` sonst, folgt ein zweiter Versuch mit Verschiebung.
+//!   verschoben. Scheitert `boolean` sonst, folgt ein zweiter Versuch mit Verschiebung. Meldet
+//!   die Ansicht `AmbiguousVisibility` (Ebene haarscharf neben einer Bohrungsachse), rechnet
+//!   [`compute_section`] einmal mit verschobener Ebene, wenn dieselben Körper Schnittflächen haben.
+//!   „Ganz auf einer Seite“ entscheidet die sichere Hüllbox [`solid_bounds`].
 //! - **Abtastgrenzen der Randschleifen:** Kreis- und Ellipsenkanten höchstens 65 536 Stücke,
 //!   Freiformkanten höchstens 2049 Punkte (Verdopplung ab 64 Stücken, Halt vor 4096). Wird eine
 //!   Grenze erreicht, wird das Vieleck gröber als `tol`, ohne Meldung; praktisch unerreichbar
@@ -27,7 +30,7 @@ use crate::{DrawBody, ViewLines};
 use planora_exchange::Progress;
 use planora_kernel::boolean::boolean;
 use planora_kernel::primitives::make_box;
-use planora_kernel::{BoolOp, BooleanError, Curve, Face, Id, Loop, Solid};
+use planora_kernel::{BoolOp, BooleanError, Curve, Face, Id, Loop, Solid, Surface};
 use planora_math::{DMat4, DVec2, DVec3, Tolerance};
 
 /// Kleinste Herkunftsmarke, die für Schnittflächen reserviert ist.
@@ -36,8 +39,6 @@ pub const SECTION_ORIGIN_MIN: u64 = u64::MAX - 65_535;
 pub const SECTION_NUDGE_MM: f64 = 0.001;
 /// Eine Ecke näher als dieser Abstand an der Ebene löst die Verschiebung aus.
 const NEAR_MM: f64 = 1e-4;
-/// Stützpunkte je Kante für die Hüllbox (wie bei der Ausdehnung der Striche).
-const BOUNDS_SAMPLES: usize = 64;
 
 /// Herkunftsmarke der Schnittflächen des Körpers mit dem Index `body`.
 pub fn section_origin(body: usize) -> u64 {
@@ -74,24 +75,103 @@ pub enum CutOutcome {
     Cut { solid: Solid, nudged: bool },
 }
 
-/// Hüllbox des Körpers aus Ecken und Stützpunkten der Kanten; `None` bei leerem Körper oder
-/// nicht endlichen Werten.
+/// Hüllbox des Körpers, die ihn sicher ganz enthält; `None` bei leerem Körper oder nicht
+/// endlichen Werten.
+///
+/// Sie entscheidet, ob ein Körper ohne Kernel ganz behalten oder ganz entfernt wird. Eine zu
+/// kleine Box (früher: 64 Stützpunkte je Kante, bei Kreisen bis etwa 1,2e-3 · Radius zu klein)
+/// ließe einen knapp angeschnittenen großen Körper still verschwinden oder ungeschnitten. Daher:
+/// Geraden über ihre Enden, Kreis- und Ellipsenbögen genau (Enden und Scheitel im Bereich),
+/// Freiformkanten über ihre Kontrollpunkte (enthalten die Kurve sicher); dazu Kugel, Torus und
+/// Freiformflächen, deren äußerste Punkte im Innern der Fläche liegen können, über eine sichere
+/// Box. Ebene, Zylinder und Kegel erreichen ihr Äußerstes immer am Rand.
 pub fn solid_bounds(solid: &Solid) -> Option<(DVec3, DVec3)> {
     let mut lo = DVec3::splat(f64::INFINITY);
     let mut hi = DVec3::splat(f64::NEG_INFINITY);
+    let mut add = |a: DVec3, b: DVec3| {
+        lo = lo.min(a);
+        hi = hi.max(b);
+    };
     for (_, v) in solid.vertices.iter() {
-        lo = lo.min(v.point);
-        hi = hi.max(v.point);
+        add(v.point, v.point);
     }
     for (_, e) in solid.edges.iter() {
-        for i in 0..BOUNDS_SAMPLES {
-            let t = e.t0 + (e.t1 - e.t0) * i as f64 / (BOUNDS_SAMPLES - 1) as f64;
-            let p = e.curve.point(t);
-            lo = lo.min(p);
-            hi = hi.max(p);
+        let (a, b) = curve_bounds(&e.curve, e.t0, e.t1);
+        add(a, b);
+    }
+    for (_, f) in solid.faces.iter() {
+        if let Some((a, b)) = surface_bounds(&f.surface) {
+            add(a, b);
         }
     }
     (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+}
+
+/// Sichere Box eines Kurvenstücks `t0 … t1` (siehe [`solid_bounds`]).
+fn curve_bounds(curve: &Curve, t0: f64, t1: f64) -> (DVec3, DVec3) {
+    let (p0, p1) = (curve.point(t0), curve.point(t1));
+    let (mut lo, mut hi) = (p0.min(p1), p0.max(p1));
+    let (frame, ax, ay) = match curve {
+        Curve::Line { .. } => return (lo, hi),
+        Curve::Circle { frame, radius } => (frame, *radius, *radius),
+        Curve::Ellipse {
+            frame,
+            major,
+            minor,
+        } => (frame, *major, *minor),
+        Curve::Nurbs(c) => {
+            for p in c.control_points() {
+                lo = lo.min(*p);
+                hi = hi.max(*p);
+            }
+            return (lo, hi);
+        }
+    };
+    // Koordinate k: o + ax·x[k]·cos t + ay·y[k]·sin t = o + A·cos(t − φ); Scheitel bei t = φ + mπ.
+    let (tmin, tmax) = (t0.min(t1), t0.max(t1));
+    for k in 0..3 {
+        let (c, s) = (ax * frame.x[k], ay * frame.y[k]);
+        let amp = c.hypot(s);
+        if tmax - tmin >= std::f64::consts::TAU {
+            lo[k] = lo[k].min(frame.origin[k] - amp);
+            hi[k] = hi[k].max(frame.origin[k] + amp);
+            continue;
+        }
+        let phi = s.atan2(c);
+        let first = ((tmin - phi) / std::f64::consts::PI).ceil() as i64;
+        let last = ((tmax - phi) / std::f64::consts::PI).floor() as i64;
+        for m in first..=last.min(first + 2) {
+            let v = frame.origin[k] + amp * (m as f64 * std::f64::consts::PI).cos();
+            lo[k] = lo[k].min(v);
+            hi[k] = hi[k].max(v);
+        }
+    }
+    (lo, hi)
+}
+
+/// Sichere Box für Flächen, deren äußerste Punkte im Innern liegen können; sonst `None`.
+fn surface_bounds(surface: &Surface) -> Option<(DVec3, DVec3)> {
+    match surface {
+        Surface::Sphere { frame, radius } => {
+            let r = DVec3::splat(radius.abs());
+            Some((frame.origin - r, frame.origin + r))
+        }
+        Surface::Torus {
+            frame,
+            major,
+            minor,
+        } => {
+            // Ausdehnung längs Achse k: Ring R·√(1 − z[k]²) plus Rohr r (für den ganzen Torus genau).
+            let mut ext = DVec3::ZERO;
+            for k in 0..3 {
+                ext[k] =
+                    major.abs() * (1.0 - frame.z[k] * frame.z[k]).max(0.0).sqrt() + minor.abs();
+            }
+            Some((frame.origin - ext, frame.origin + ext))
+        }
+        Surface::Nurbs(d) => Some(d.control_bounds()),
+        Surface::Plane { .. } | Surface::Cylinder { .. } | Surface::Cone { .. } => None,
+    }
 }
 
 /// Flächen mit Herkunft ab `SECTION_ORIGIN_MIN`, aufsteigend nach Id.
@@ -416,8 +496,75 @@ pub fn compute_section(
             "Ein Schnitt braucht eine der sechs Normansichten.".into(),
         ));
     }
-    let tol = Tolerance::default();
     progress.set_total(bodies.len() as u64);
+    let data = cut_all(bodies, plane, progress)?;
+    match view_of(bodies, &data, plane.kind, view, progress) {
+        Ok(lines) => Ok(SectionLines { lines, data }),
+        // Knapp neben einer Bohrungsachse (etwa 5e-5 bis 1e-3 mm) liegen Kante der Schnittfläche
+        // und Umriss der Bohrung so dicht, dass die Ansicht nicht sicher entscheiden kann, was
+        // verdeckt ist. Dann einmal mit der um `SECTION_NUDGE_MM` zur behaltenen Seite
+        // verschobenen Ebene rechnen (wie im Tangentialfall S3). Das gilt nur, wenn dabei
+        // dieselben Körper Schnittflächen haben (sonst fiele ein knapp angeschnittener Körper
+        // still weg); sonst und wenn auch das nicht geht, bleibt die erste Meldung.
+        Err(first @ DrawError::AmbiguousVisibility(_)) => {
+            let (_, da) = plane.axis().expect("oben geprüft");
+            let shifted = SectionPlane {
+                kind: plane.kind,
+                offset: plane.offset + da * SECTION_NUDGE_MM,
+            };
+            let mut again = cut_all(bodies, &shifted, progress)?;
+            if again.source != data.source || cut_bodies_of(&again) != cut_bodies_of(&data) {
+                return Err(first);
+            }
+            match view_of(bodies, &again, plane.kind, view, progress) {
+                Ok(lines) => {
+                    again.nudged = true;
+                    Ok(SectionLines { lines, data: again })
+                }
+                Err(DrawError::AmbiguousVisibility(_)) => Err(first),
+                Err(e) => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Indizes der Körper mit Schnittfläche, aufsteigend ohne Doppelte.
+fn cut_bodies_of(data: &SectionData) -> Vec<usize> {
+    let mut v: Vec<usize> = data.regions.iter().map(|g| g.body).collect();
+    v.dedup();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// Ansicht der geschnittenen bzw. behaltenen Körper.
+fn view_of(
+    bodies: &[DrawBody],
+    data: &SectionData,
+    kind: ViewKind,
+    view: ViewFn,
+    progress: &Progress,
+) -> Result<ViewLines, DrawError> {
+    let cut_bodies: Vec<DrawBody> = data
+        .solids
+        .iter()
+        .zip(&data.source)
+        .map(|(s, &i)| DrawBody {
+            name: bodies[i].name.clone(),
+            solid: s,
+        })
+        .collect();
+    view(&cut_bodies, kind, progress)
+}
+
+/// Schneidet alle Körper an genau dieser Ebene (S4).
+fn cut_all(
+    bodies: &[DrawBody],
+    plane: &SectionPlane,
+    progress: &Progress,
+) -> Result<SectionData, DrawError> {
+    let tol = Tolerance::default();
     let mut solids = Vec::new();
     let mut source = Vec::new();
     let mut regions = Vec::new();
@@ -445,23 +592,10 @@ pub fn compute_section(
     if regions.is_empty() {
         return Err(DrawError::SectionMisses);
     }
-    let cut_bodies: Vec<DrawBody> = solids
-        .iter()
-        .zip(&source)
-        .map(|(s, &i)| DrawBody {
-            name: bodies[i].name.clone(),
-            solid: s,
-        })
-        .collect();
-    let lines = view(&cut_bodies, plane.kind, progress)?;
-    drop(cut_bodies);
-    Ok(SectionLines {
-        lines,
-        data: SectionData {
-            regions,
-            solids,
-            source,
-            nudged,
-        },
+    Ok(SectionData {
+        regions,
+        solids,
+        source,
+        nudged,
     })
 }

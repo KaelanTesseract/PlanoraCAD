@@ -172,23 +172,32 @@ fn plan_delete_view(
             .and_then(|p| names.get(&p))
             .cloned()
             .unwrap_or_default();
-        let mut text = format!(
-            "Die Schnittansicht „{name}“ wird gelöscht, mit ihr die Schnittlinie in „{source}“."
-        );
-        let mut extra = Vec::new();
+        // „Mit ihr verschwindet die Schnittlinie in „Vorne“.“ bzw. „… verschwinden die
+        // Schnittlinie in „Vorne“, die abgeleiteten Ansichten (…) und 2 Maße.“
+        let mut items = vec![format!("die Schnittlinie in „{source}“")];
         if !dependents.is_empty() {
-            extra.push(format!(
-                "abgeleitete Ansichten ({}) werden mit gelöscht",
+            items.push(format!(
+                "die abgeleiteten Ansichten ({})",
                 dependents.join(", ")
             ));
         }
-        if dims > 0 {
-            extra.push(dims_go_along(dims));
+        match dims {
+            0 => {}
+            1 => items.push("1 Maß".into()),
+            n => items.push(format!("{n} Maße")),
         }
-        if !extra.is_empty() {
-            text.pop();
-            text.push_str(&format!(" und {}.", extra.join(" und ")));
-        }
+        let verb = if items.len() == 1 {
+            "verschwindet"
+        } else {
+            "verschwinden"
+        };
+        let last = items.pop().unwrap_or_default();
+        let list = if items.is_empty() {
+            last
+        } else {
+            format!("{} und {last}", items.join(", "))
+        };
+        let text = format!("Die Schnittansicht „{name}“ wird gelöscht. Mit ihr {verb} {list}.");
         return Some((
             DrawingDeletePlan {
                 drawing,

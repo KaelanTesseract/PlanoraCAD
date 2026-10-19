@@ -357,3 +357,144 @@ fn isometric_plane_is_unsupported() {
         .unwrap();
     assert!(matches!(e, DrawError::Unsupported(_)), "{e:?}");
 }
+
+/// Schnittfläche des Körpers `body` aus den Randschleifen (äußere minus innere).
+fn region_area(r: &SectionLines, body: usize, kind: ViewKind) -> f64 {
+    let b = planora_drawing::Basis::of(kind);
+    r.data
+        .regions
+        .iter()
+        .filter(|g| g.body == body)
+        .map(|g| {
+            let mut a: Vec<f64> = g
+                .loops
+                .iter()
+                .map(|l| polygon_area(&loop_polygon(l, &b, 1e-5)).abs())
+                .collect();
+            let outer = a.remove(0);
+            outer - a.iter().sum::<f64>()
+        })
+        .sum()
+}
+
+#[test]
+fn grazed_large_cylinder_in_an_assembly_is_not_lost() {
+    // Zylinder r 100 und ein Quader daneben; die Ebene liegt 0,01 bzw. 0,001 mm innerhalb des
+    // Zylinderrands. Früher verschwand der Zylinder still (Hüllbox zu klein) oder blieb
+    // ungeschnitten, nur der Quader war schraffiert. Jetzt: richtige Fläche oder eine Meldung,
+    // die den Zylinder nennt (bei 0,001 mm liegen Schnittkante und Umriss in der Ansicht fast
+    // aufeinander), nie ein Ergebnis ohne ihn.
+    let mut cyl = k().make_cylinder(100.0, 50.0).unwrap();
+    cyl.assign_origin(7);
+    let block = moved(&boxs(20.0, 100.0, 50.0), 150.0, 50.0, 0.0);
+    for eps in [0.01_f64, 0.001] {
+        let want = 2.0 * (100.0_f64.powi(2) - (100.0 - eps).powi(2)).sqrt() * 50.0;
+        for kind in [ViewKind::Front, ViewKind::Back] {
+            let what = format!("{kind:?} ε {eps}");
+            match run(
+                &[db("Rad", &cyl), db("Klotz", &block)],
+                &plane(kind, 100.0 - eps),
+            ) {
+                Ok(r) => {
+                    assert_eq!(r.data.source, vec![0, 1], "{what}");
+                    let got = region_area(&r, 0, kind);
+                    assert!((got - want).abs() < 1e-3, "{what}: {got} statt {want}");
+                    assert!(
+                        (region_area(&r, 1, kind) - 20.0 * 50.0).abs() < 1e-9,
+                        "{what}"
+                    );
+                }
+                Err(DrawError::AmbiguousVisibility(n)) => {
+                    assert!(eps < 0.005 && n.starts_with("Rad"), "{what}: {n}")
+                }
+                Err(e) => panic!("{what}: {e:?}"),
+            }
+        }
+    }
+}
+
+/// Quader 400 × 300 × 200 mit Bohrung r 75 längs z (Achse x = 200, y = 150).
+fn big_bored_block() -> Solid {
+    let drill = moved(&k().make_cylinder(75.0, 204.0).unwrap(), 200.0, 150.0, -2.0);
+    diff(&boxs(400.0, 300.0, 200.0), &drill)
+}
+
+#[test]
+fn plane_a_hair_beside_a_bore_axis_gives_a_view() {
+    // 5e-5 bis 3e-4 mm neben der Achse: Kante der Schnittfläche und Umriss der Bohrung liegen
+    // in der Ansicht fast aufeinander; die Ansicht war unsicher und meldete einen Fehler. Jetzt
+    // wird einmal um 0,001 mm verschoben (Hinweis wie im Tangentialfall).
+    let s = big_bored_block();
+    for (kind, d) in [
+        (ViewKind::Right, 5e-5),
+        (ViewKind::Right, 1.5e-4),
+        (ViewKind::Right, 3e-4),
+        (ViewKind::Left, -1.5e-4),
+        (ViewKind::Front, -1.5e-4),
+        (ViewKind::Back, 3e-4),
+    ] {
+        let center = if matches!(kind, ViewKind::Left | ViewKind::Right) {
+            200.0
+        } else {
+            150.0
+        };
+        let r = run(&[db("Block", &s)], &plane(kind, center + d))
+            .unwrap_or_else(|e| panic!("{kind:?} d {d}: {e}"));
+        assert!(r.data.nudged, "{kind:?} d {d}");
+        let h = if matches!(kind, ViewKind::Left | ViewKind::Right) {
+            300.0
+        } else {
+            400.0
+        };
+        let (_, da) = plane(kind, 0.0).axis().unwrap();
+        let shifted = d + da * SECTION_NUDGE_MM;
+        let want = (h - 2.0 * (75.0_f64 * 75.0 - shifted * shifted).sqrt()) * 200.0;
+        let got = region_area(&r, 0, kind);
+        assert!(
+            (got - want).abs() < 1e-3,
+            "{kind:?} d {d}: {got} statt {want}"
+        );
+    }
+    // Weiter weg bleibt alles wie bisher: kein Verschieben, Fläche an der eigenen Ebene.
+    for d in [0.3, 2.0] {
+        let r = run(&[db("Block", &s)], &plane(ViewKind::Right, 200.0 + d)).unwrap();
+        assert!(!r.data.nudged, "d {d}");
+        let want = (300.0 - 2.0 * (75.0_f64 * 75.0 - d * d).sqrt()) * 200.0;
+        assert!(
+            (region_area(&r, 0, ViewKind::Right) - want).abs() < 1e-3,
+            "d {d}"
+        );
+    }
+}
+
+static AMBIGUOUS_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Meldet immer Unsicherheit, beim ersten Aufruf mit „erste“, danach mit „zweite“.
+fn always_ambiguous(_: &[DrawBody], _: ViewKind, _: &Progress) -> Result<ViewLines, DrawError> {
+    let n = AMBIGUOUS_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Err(DrawError::AmbiguousVisibility(
+        if n == 0 { "erste" } else { "zweite" }.into(),
+    ))
+}
+
+#[test]
+fn second_ambiguity_keeps_the_first_message() {
+    let s = bored_box();
+    let e = compute_section(
+        &[db("Block", &s)],
+        &plane(ViewKind::Front, 7.0),
+        always_ambiguous,
+        &Progress::new(),
+    )
+    .err()
+    .unwrap();
+    assert!(
+        matches!(e, DrawError::AmbiguousVisibility(ref n) if n == "erste"),
+        "{e:?}"
+    );
+    assert_eq!(
+        AMBIGUOUS_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "genau ein Zweitversuch"
+    );
+}

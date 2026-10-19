@@ -1157,7 +1157,7 @@ fn delete_question_with_dimensions_reads_plainly() {
     let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
     assert_eq!(
         plan.text,
-        "Die Schnittansicht „Schnitt A\u{2013}A“ wird gelöscht, mit ihr die Schnittlinie in „Vorne“ und 2 Maße werden mit gelöscht."
+        "Die Schnittansicht „Schnitt A\u{2013}A“ wird gelöscht. Mit ihr verschwinden die Schnittlinie in „Vorne“ und 2 Maße."
     );
 }
 
@@ -1179,7 +1179,7 @@ fn delete_both_ways() {
     let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
     assert_eq!(
         plan.text,
-        "Die Schnittansicht „Schnitt A\u{2013}A“ wird gelöscht, mit ihr die Schnittlinie in „Vorne“."
+        "Die Schnittansicht „Schnitt A\u{2013}A“ wird gelöscht. Mit ihr verschwindet die Schnittlinie in „Vorne“."
     );
     assert_eq!(st.document.edit_count(), e0, "noch nichts gelöscht");
     assert_eq!(drawing(&st, d).views.len(), 2);
