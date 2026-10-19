@@ -446,6 +446,7 @@ fn check_plate_and_pin(bodies: &[DrawBody]) {
     let xf = view_transform(&fx.d, fx.sec, &fx.results()).unwrap();
     let centre = xf.apply(DVec2::new(0.0, 0.0));
     let (mut plate_n, mut pin_n) = (0, 0);
+    let mut plate_closest = f64::INFINITY;
     for s in &segs {
         let d = s.1 - s.0;
         assert!(near(d.x.abs(), d.y.abs(), 1e-9 * d.length().max(1.0)));
@@ -453,16 +454,22 @@ fn check_plate_and_pin(bodies: &[DrawBody]) {
         if rising {
             // Platte, 45 Grad: kein Stück im Loch.
             plate_n += 1;
-            assert!(dist_to_segment(centre, s.0, s.1) >= 5.0 - 0.01, "{s:?}");
+            let dist = dist_to_segment(centre, s.0, s.1);
+            assert!(dist >= 5.0 - 0.01, "{s:?}");
+            plate_closest = plate_closest.min(dist);
         } else {
             // Bolzen, 135 Grad: nichts außerhalb des Bolzens.
             pin_n += 1;
             for p in [s.0, s.1] {
-                assert!((p - centre).length() <= 5.0 + 0.01, "{p:?}");
+                let r = (p - centre).length();
+                // Das Stück reicht bis an den Rand (Untergrenze), nicht darüber hinaus.
+                assert!((5.0 - 0.01..=5.0 + 0.01).contains(&r), "{p:?}");
             }
         }
     }
     assert!(plate_n > 4 && pin_n > 2, "{plate_n} {pin_n}");
+    // Die Platte reicht bis auf einen Linienabstand an das Loch heran.
+    assert!(plate_closest <= 5.0 + 3.0, "{plate_closest}");
     // Ein Spalt bleibt: jede Platten-Spitze am Loch liegt mindestens 5 - 0,005 entfernt, jede
     // Bolzen-Spitze höchstens 5; die Schar des Bolzens ist die 135-Grad-Schar.
     let n135 = normal(135.0);
@@ -867,4 +874,235 @@ fn polygon_tolerance_is_measured_on_the_sheet() {
         }
     }
     assert!(checked > 20);
+}
+
+#[test]
+fn bad_spacing_gives_a_plain_message() {
+    let t = tube();
+    for bad in [0.0, -3.0, f64::NAN, f64::INFINITY] {
+        let mut fx = tube_section(&t, Paper::A3, S11);
+        fx.set_spacing(bad);
+        let (list, errs) = fx.marks();
+        assert_eq!(
+            errs,
+            vec!["Die Schraffur von „Schnitt A\u{2013}A“ lässt sich nicht berechnen.".to_string()],
+            "{bad}"
+        );
+        let own = of_view(&list, fx.sec);
+        assert!(own.iter().all(|m| kind_of(m) != MarkKind::Hatch));
+        assert_eq!(texts(&own).len(), 1);
+    }
+}
+
+/// Erwartete Schnittlinie, von Hand gerechnet (A3, Maßstab 1:1, Quelle frei bei (150, 200)).
+struct Hand {
+    src: ViewKind,
+    sec: ViewKind,
+    offset: f64,
+    horizontal: bool,
+    /// Blattkoordinate quer zur Linie (y bei waagerecht, x bei senkrecht).
+    fixed: f64,
+    /// Beide Enden entlang der Linie, einschließlich 5 mm Überstand.
+    lo: f64,
+    hi: f64,
+    /// Blickrichtung auf dem Blatt.
+    v: (f64, f64),
+}
+
+fn hand(
+    src: ViewKind,
+    sec: ViewKind,
+    offset: f64,
+    horizontal: bool,
+    (fixed, lo, hi): (f64, f64, f64),
+    v: (f64, f64),
+) -> Hand {
+    Hand {
+        src,
+        sec,
+        offset,
+        horizontal,
+        fixed,
+        lo,
+        hi,
+        v,
+    }
+}
+
+/// Punkt: `along` entlang der Linie, `across` quer dazu.
+fn at(h: &Hand, along: f64, across: f64) -> DVec2 {
+    if h.horizontal {
+        DVec2::new(along, h.fixed + across)
+    } else {
+        DVec2::new(h.fixed + across, along)
+    }
+}
+
+fn norm_seg(a: DVec2, b: DVec2) -> [f64; 4] {
+    if (a.x, a.y) <= (b.x, b.y) {
+        [a.x, a.y, b.x, b.y]
+    } else {
+        [b.x, b.y, a.x, a.y]
+    }
+}
+
+fn sorted_segs(v: Vec<(DVec2, DVec2)>) -> Vec<[f64; 4]> {
+    let mut o: Vec<[f64; 4]> = v.into_iter().map(|(a, b)| norm_seg(a, b)).collect();
+    o.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    o
+}
+
+fn same_segs(have: Vec<(DVec2, DVec2)>, want: Vec<(DVec2, DVec2)>, what: &str) {
+    let (h, w) = (sorted_segs(have), sorted_segs(want));
+    assert_eq!(h.len(), w.len(), "{what}: {h:?} statt {w:?}");
+    for (a, b) in h.iter().zip(&w) {
+        assert!(
+            a.iter().zip(b).all(|(x, y)| near(*x, *y, 1e-9)),
+            "{what}: {a:?} statt {b:?}"
+        );
+    }
+}
+
+fn same_points(mut have: Vec<DVec2>, mut want: Vec<DVec2>, what: &str) {
+    let key = |a: &DVec2, b: &DVec2| (a.x, a.y).partial_cmp(&(b.x, b.y)).unwrap();
+    have.sort_by(key);
+    want.sort_by(key);
+    assert_eq!(have.len(), want.len(), "{what}");
+    for (a, b) in have.iter().zip(&want) {
+        assert!(
+            near(a.x, b.x, 1e-9) && near(a.y, b.y, 1e-9),
+            "{what}: {a:?} statt {b:?}"
+        );
+    }
+}
+
+#[test]
+fn section_line_exact_cases() {
+    let b = boxs(30.0, 20.0, 10.0);
+    // Quader x 0..30, y 0..20, z 0..10. Ansichtsmitten: Vorne (15, 5), Oben (15, 10),
+    // Rechts (10, 5); Blattmitte (150, 200). Zahlen: (quer, von, bis) auf dem Blatt.
+    let cases = [
+        // Vorne, senkrecht bei x = 12: Blatt-x 147, y 195..205, mit Überstand 190..210.
+        hand(
+            ViewKind::Front,
+            ViewKind::Left,
+            12.0,
+            false,
+            (147.0, 190.0, 210.0),
+            (1.0, 0.0),
+        ),
+        hand(
+            ViewKind::Front,
+            ViewKind::Right,
+            12.0,
+            false,
+            (147.0, 190.0, 210.0),
+            (-1.0, 0.0),
+        ),
+        // Oben, waagerecht bei y = 8: Blatt-y 198, x 135..165, mit Überstand 130..170.
+        hand(
+            ViewKind::Top,
+            ViewKind::Front,
+            8.0,
+            true,
+            (198.0, 130.0, 170.0),
+            (0.0, 1.0),
+        ),
+        hand(
+            ViewKind::Top,
+            ViewKind::Back,
+            8.0,
+            true,
+            (198.0, 130.0, 170.0),
+            (0.0, -1.0),
+        ),
+        // Oben, senkrecht bei x = 9: Blatt-x 144, y 190..210, mit Überstand 185..215.
+        hand(
+            ViewKind::Top,
+            ViewKind::Left,
+            9.0,
+            false,
+            (144.0, 185.0, 215.0),
+            (1.0, 0.0),
+        ),
+        hand(
+            ViewKind::Top,
+            ViewKind::Right,
+            9.0,
+            false,
+            (144.0, 185.0, 215.0),
+            (-1.0, 0.0),
+        ),
+        // Rechts (Ansicht y, z), waagerecht bei z = 3: Blatt-y 198, x 140..160, Überstand 135..165.
+        hand(
+            ViewKind::Right,
+            ViewKind::Top,
+            3.0,
+            true,
+            (198.0, 135.0, 165.0),
+            (0.0, -1.0),
+        ),
+        hand(
+            ViewKind::Right,
+            ViewKind::Bottom,
+            3.0,
+            true,
+            (198.0, 135.0, 165.0),
+            (0.0, 1.0),
+        ),
+        // Rechts, senkrecht bei y = 6: Blatt-x 146, y 195..205, mit Überstand 190..210.
+        hand(
+            ViewKind::Right,
+            ViewKind::Front,
+            6.0,
+            false,
+            (146.0, 190.0, 210.0),
+            (1.0, 0.0),
+        ),
+        hand(
+            ViewKind::Right,
+            ViewKind::Back,
+            6.0,
+            false,
+            (146.0, 190.0, 210.0),
+            (-1.0, 0.0),
+        ),
+    ];
+    for h in &cases {
+        let what = format!("{:?} -> {:?}", h.src, h.sec);
+        let fx = fixture(&[db("Q", &b)], Paper::A3, S11, h.src, h.sec, h.offset);
+        let (list, _) = fx.marks();
+        let own = of_view(&list, fx.src);
+        // Vorzeichen der Blickrichtung quer zur Linie.
+        let s = if h.horizontal { h.v.1 } else { h.v.0 };
+        same_segs(
+            pen_lines(&own, SectionPen::End),
+            vec![
+                (at(h, h.lo, 0.0), at(h, h.lo + 8.0, 0.0)),
+                (at(h, h.hi - 8.0, 0.0), at(h, h.hi, 0.0)),
+            ],
+            &what,
+        );
+        same_segs(
+            pen_lines(&own, SectionPen::Chain),
+            vec![
+                (at(h, h.lo + 8.0, 0.0), at(h, h.hi - 8.0, 0.0)),
+                (at(h, h.lo, 0.0), at(h, h.lo, 5.0 * s)),
+                (at(h, h.hi, 0.0), at(h, h.hi, 5.0 * s)),
+            ],
+            &what,
+        );
+        let ar = arrows(&own);
+        for (_, d) in &ar {
+            assert_eq!(*d, DVec2::new(-h.v.0, -h.v.1), "{what}");
+        }
+        let want_tips = vec![at(h, h.lo, 10.0 * s), at(h, h.hi, 10.0 * s)];
+        same_points(ar.iter().map(|a| a.0).collect(), want_tips.clone(), &what);
+        // Buchstaben: Mitte 2,75 hinter der Spitze, Grundlinie 1,75 tiefer.
+        let want_pos = want_tips
+            .iter()
+            .map(|t| DVec2::new(t.x + 2.75 * h.v.0, t.y + 2.75 * h.v.1 - 1.75))
+            .collect();
+        same_points(texts(&own).iter().map(|t| t.pos).collect(), want_pos, &what);
+    }
 }
