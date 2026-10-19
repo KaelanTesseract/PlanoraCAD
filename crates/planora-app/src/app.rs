@@ -803,6 +803,11 @@ impl eframe::App for PlanoraApp {
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
 
+        // Änderungen am Dokument werden Schritte für Rückgängig (R3, R4): erst wenn keine
+        // Maustaste mehr gedrückt ist und kein Eingabefeld die Tastatur hat (auch im vorigen Bild,
+        // daher vor `remember_keyboard_focus`), damit Ziehen und Tippen je ein Schritt sind.
+        let gesture = ctx.input(|i| i.pointer.any_down()) || viewport::typing(&ctx);
+        self.ws.observe_history(gesture);
         viewport::remember_keyboard_focus(&ctx);
         if self.ws.quit && !self.close_sent {
             // Beenden ist freigegeben (Menü oder letzte Rückfrage): `logic` des nächsten Bildes
