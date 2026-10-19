@@ -174,6 +174,20 @@ impl SketchSession {
         self.pending_pos.clear();
     }
 
+    /// Nach Rückgängig/Wiederholen in der Skizze (R10): `sk` ist der zurückgeholte Entwurf.
+    /// Laufendes Werkzeug (offene Punkte und Ecken), Auswahl, Ziehen und Meldung gehören zum
+    /// alten Stand und entfallen; Freiheitsgrade und Färbung kommen aus einem frischen Lösen
+    /// einer Kopie, damit der Entwurf selbst (und sein Stand) unverändert bleibt. Werkzeug und
+    /// Mauszeiger bleiben.
+    pub fn after_history_jump(&mut self, sk: &Sketch) {
+        self.pending.clear();
+        self.pending_pos.clear();
+        self.selection.clear();
+        self.dragging = None;
+        self.message = None;
+        self.last_report = Some(sk.clone().solve());
+    }
+
     /// Fang an der Stelle `at`: Punkte vor Kurven.
     pub fn snap(&self, sk: &Sketch, at: DVec2, radius: f64) -> Snap {
         if let Some(p) = sk.pick_point(at, radius) {

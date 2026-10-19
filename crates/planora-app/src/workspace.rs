@@ -164,9 +164,15 @@ impl DocTab {
     /// neue Bild gleicht dem letzten (etwa „angelegt und wieder entfernt“). Ob sich etwas
     /// geändert hat, entscheidet zuerst der Änderungszähler (in beide Richtungen, ohne Verlass
     /// auf Steigen); nur dann entsteht ein Bild. So bildet auch ein Dokument, dessen Bild nie
-    /// sich selbst gleicht (eine Zahl „keine Zahl“), ohne Änderung keine Schritte. Nur das
-    /// Dokument; die offene Skizze hat ihren eigenen Verlauf (Aufgabe 7).
+    /// sich selbst gleicht (eine Zahl „keine Zahl“), ohne Änderung keine Schritte. Danach die
+    /// offene Skizze in ihrem eigenen Verlauf (R10, [`AppState::observe_sketch`]); das
+    /// Dokument selbst ändert sich während der Skizze kaum (Anlegen im selben Bild, Löschen).
     pub fn observe_history(&mut self, gesture: bool) {
+        self.observe_document(gesture);
+        self.state.observe_sketch(gesture);
+    }
+
+    fn observe_document(&mut self, gesture: bool) {
         if !self
             .tracker
             .observe(self.state.document.edit_count(), gesture)
@@ -207,11 +213,21 @@ impl DocTab {
         }
     }
 
+    /// Ist eine Skizze offen? Dann wirken Rückgängig und Wiederholen nur auf ihren Verlauf
+    /// (R10), der Dokumentverlauf ruht.
+    fn in_sketch(&self) -> bool {
+        self.state.sketch_session.is_some()
+    }
+
     /// Warum Rückgängig gerade nicht geht (`None`: es geht).
     pub fn undo_blocked(&self) -> Option<&'static str> {
         self.history_locked().or_else(|| {
-            (self.history.undo_len() == 0 && self.pending_change().is_none())
-                .then_some(NOTHING_TO_UNDO)
+            let nothing = if self.in_sketch() {
+                self.state.sketch_undo_label().is_none()
+            } else {
+                self.history.undo_len() == 0 && self.pending_change().is_none()
+            };
+            nothing.then_some(NOTHING_TO_UNDO)
         })
     }
 
@@ -219,21 +235,33 @@ impl DocTab {
     /// beim Übernehmen die Wiederholen-Liste; dann gibt es nichts zu wiederholen.
     pub fn redo_blocked(&self) -> Option<&'static str> {
         self.history_locked().or_else(|| {
-            (self.history.redo_len() == 0 || self.pending_change().is_some())
-                .then_some(NOTHING_TO_REDO)
+            let nothing = if self.in_sketch() {
+                self.state.sketch_redo_label().is_none()
+            } else {
+                self.history.redo_len() == 0 || self.pending_change().is_some()
+            };
+            nothing.then_some(NOTHING_TO_REDO)
         })
     }
 
-    /// Name des Schritts, den Rückgängig zurücknähme (eine noch offene Änderung zählt mit).
+    /// Name des Schritts, den Rückgängig zurücknähme (eine noch offene Änderung zählt mit; bei
+    /// offener Skizze der Schritt der Skizze).
     pub fn undo_label(&self) -> Option<&'static str> {
+        if self.in_sketch() {
+            return self.state.sketch_undo_label();
+        }
         match self.pending_change() {
             Some(now) => Some(describe_change(self.history.current(), &now)),
             None => self.history.undo_label(),
         }
     }
 
-    /// Name des Schritts, den Wiederholen herstellte.
+    /// Name des Schritts, den Wiederholen herstellte (bei offener Skizze der Schritt der
+    /// Skizze).
     pub fn redo_label(&self) -> Option<&'static str> {
+        if self.in_sketch() {
+            return self.state.sketch_redo_label();
+        }
         if self.pending_change().is_some() {
             return None;
         }
@@ -243,12 +271,20 @@ impl DocTab {
     /// Nimmt den letzten Schritt zurück. Offene Änderungen werden vorher ein Schritt. Gelingt
     /// das Zurückladen, schließen die Fenster des Tabs (sie gehören zum alten Stand); schlägt es
     /// fehl, bleibt das Dokument, nur dieser Schritt wird verworfen und `state.message` sagt
-    /// [`UNDO_FAILED`] (Spec §6a.8).
+    /// [`UNDO_FAILED`] (Spec §6a.8). Bei offener Skizze nur deren Verlauf (R10); das Dokument
+    /// bleibt dann unberührt, auch wenn die Skizze nichts zurückzunehmen hat.
     pub fn undo(&mut self) -> Result<(), String> {
         if let Some(why) = self.history_locked() {
             return Err(why.into());
         }
         self.observe_history(false);
+        if self.in_sketch() {
+            return if self.state.undo_sketch() {
+                Ok(())
+            } else {
+                Err(NOTHING_TO_UNDO.into())
+            };
+        }
         let Some(target) = self.history.peek_undo().cloned() else {
             return Err(NOTHING_TO_UNDO.into());
         };
@@ -267,12 +303,19 @@ impl DocTab {
     }
 
     /// Stellt den zuletzt zurückgenommenen Schritt wieder her (Gegenstück zu [`DocTab::undo`];
-    /// Meldung bei Fehler [`REDO_FAILED`]).
+    /// Meldung bei Fehler [`REDO_FAILED`]; bei offener Skizze nur deren Verlauf).
     pub fn redo(&mut self) -> Result<(), String> {
         if let Some(why) = self.history_locked() {
             return Err(why.into());
         }
         self.observe_history(false);
+        if self.in_sketch() {
+            return if self.state.redo_sketch() {
+                Ok(())
+            } else {
+                Err(NOTHING_TO_REDO.into())
+            };
+        }
         let Some(target) = self.history.peek_redo().cloned() else {
             return Err(NOTHING_TO_REDO.into());
         };

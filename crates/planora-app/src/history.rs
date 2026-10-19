@@ -17,7 +17,7 @@
 
 use planora_drawing::Drawing;
 use planora_drawing::model::{Balloon, ViewSpec};
-use planora_feature::{FeatureKind, Snapshot, SnapshotFeature};
+use planora_feature::{FeatureKind, SketchFeature, Snapshot, SnapshotFeature};
 use std::collections::VecDeque;
 use std::mem::size_of;
 
@@ -240,16 +240,25 @@ pub fn snapshot_bytes(s: &Snapshot) -> usize {
     for f in &s.features {
         total += size_of::<SnapshotFeature>() + f.name.len();
         if let FeatureKind::Sketch(sf) = &f.kind {
-            total += sf.sketch.variable_count() * 8
-                + (sf.sketch.points().count() + sf.sketch.curves().count()) * 64
-                + sf.sketch.constraints().count() * 64
-                + sf.copies.len() * 64;
+            total += sketch_data_bytes(sf);
         }
     }
     for d in &s.drawings {
         total += drawing_bytes(d);
     }
     total + s.parts_overrides.len() * 256
+}
+
+/// Geschätzte Größe eines Skizzenentwurfs (Eintrag im Skizzenverlauf, R10).
+pub fn sketch_bytes(sf: &SketchFeature) -> usize {
+    size_of::<SketchFeature>() + sf.sketch.name.len() + sketch_data_bytes(sf)
+}
+
+fn sketch_data_bytes(sf: &SketchFeature) -> usize {
+    sf.sketch.variable_count() * 8
+        + (sf.sketch.points().count() + sf.sketch.curves().count()) * 64
+        + sf.sketch.constraints().count() * 64
+        + sf.copies.len() * 64
 }
 
 fn drawing_bytes(d: &Drawing) -> usize {

@@ -1,3 +1,4 @@
+use crate::history::{History, sketch_bytes};
 use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
@@ -15,6 +16,7 @@ use planora_render::{
     EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, SceneData, build_scene_marked,
     pick_edge, pick_face,
 };
+use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::model::{CurveId, Sketch};
 use planora_sketch::{ExtractedProfiles, plane_of_face};
 use std::cell::{Cell, RefCell};
@@ -121,6 +123,11 @@ pub struct AppState {
     /// der berechneten Skizze. Der Skizzen-Modus arbeitet nur hierauf; erst
     /// [`AppState::close_sketch`] schreibt den Entwurf ins Dokument zurück.
     pub sketch_draft: Option<SketchFeature>,
+    /// Verlauf der offenen Skizze (R10): Bilder des Entwurfs, angelegt beim Öffnen, verworfen,
+    /// sobald die Sitzung endet (Beenden, Löschen, Zurückladen des Dokuments). Geändert heißt:
+    /// der Entwurf ist ungleich dem aktuellen Bild (Stand der Skizze, Kopien), siehe
+    /// [`AppState::observe_sketch`].
+    sketch_history: Option<History<SketchFeature>>,
     /// Kamera vor dem Öffnen des Skizzen-Modus.
     saved_camera: Option<OrbitCamera>,
     /// Einpassen beim Öffnen einer Skizze, das die 3D-Ansicht mit dem freien Rechteck des
@@ -210,6 +217,26 @@ impl ProfileCache {
     }
 }
 
+/// R10: Der Schritt bleibt offen, solange ein Werkzeug offene Punkte hat (`pending`) und seit
+/// dem letzten Bild `before` nur Punkte hinzukamen (samt ihrer Bindung an eine Kurve beim
+/// Fangen): Der erste Klick einer Linie, eines Kreises, Bogens, Splines gehört zum Element.
+/// Kam eine Kurve hinzu oder fehlt etwas, ist es ein Schritt (ein Linienzug: je Linie einer).
+fn deferred_by_tool(se: &SketchSession, before: &SketchFeature, after: &SketchFeature) -> bool {
+    if se.pending.is_empty() || before.copies != after.copies {
+        return false;
+    }
+    let (b, a) = (&before.sketch, &after.sketch);
+    let same_curves =
+        a.curves().count() == b.curves().count() && b.curves().all(|(id, _)| a.curve(id).is_some());
+    let points_kept = b.points().all(|(id, _)| a.point_xy(id).is_ok());
+    let constraints_kept = b.constraints().all(|(id, _)| a.constraint(id).is_some());
+    let only_snaps = a
+        .constraints()
+        .filter(|(id, _)| b.constraint(*id).is_none())
+        .all(|(_, c)| matches!(c.kind, ConstraintKind::PointOnCurve(..)));
+    same_curves && points_kept && constraints_kept && only_snaps
+}
+
 /// Länge des Geometrieschlüssels einer Kante (Anfangs- und Endpunkt, Parameterbereich).
 const EDGE_KEY_LEN: usize = 8;
 
@@ -289,6 +316,7 @@ impl AppState {
             selected_feature: None,
             sketch_session: None,
             sketch_draft: None,
+            sketch_history: None,
             saved_camera: None,
             sketch_fit: None,
             fit_pending: false,
@@ -518,8 +546,9 @@ impl AppState {
             .collect();
         let kind = self.document.restore(s).map_err(|e| e.to_string())?;
         self.rebuild_name_counters();
-        // Eine offene Skizze verwerfen: Ihr Entwurf gehört zum alten Dokument.
+        // Eine offene Skizze verwerfen: Ihr Entwurf (samt Verlauf) gehört zum alten Dokument.
         self.sketch_draft = None;
+        self.sketch_history = None;
         let left_sketch = self.sketch_session.take().is_some();
         let had_marks = !self.marked_edges.is_empty();
         self.marked_edges.clear();
@@ -1488,6 +1517,8 @@ impl AppState {
             self.saved_camera = Some(self.camera);
         }
         self.sketch_session = Some(session);
+        // Jede geöffnete Skizze beginnt mit einem eigenen, leeren Verlauf (R10).
+        self.sketch_history = Some(History::new(draft.clone(), sketch_bytes(&draft)));
         self.sketch_draft = Some(draft);
         self.selected_feature = Some(id);
         // Senkrecht auf die Ebene blicken, dann mittig in das freie Rechteck einpassen. Die
@@ -1665,6 +1696,9 @@ impl AppState {
     /// Lehnt das Dokument den Entwurf ab, bleiben Sitzung und Entwurf offen; die Meldung steht
     /// in `message` und im Skizzenfenster.
     fn commit_draft(&mut self) -> Result<(), String> {
+        // Der Skizzenverlauf endet mit der Sitzung; nur wenn das Dokument den Entwurf ablehnt
+        // und die Skizze offen bleibt, bleibt er auch.
+        let history = self.sketch_history.take();
         let (Some(mut se), Some(mut draft)) =
             (self.sketch_session.take(), self.sketch_draft.take())
         else {
@@ -1698,6 +1732,7 @@ impl AppState {
                 se.message = Some(message.clone());
                 self.sketch_session = Some(se);
                 self.sketch_draft = Some(draft);
+                self.sketch_history = history;
                 self.fail(message)
             }
         }
@@ -1716,6 +1751,7 @@ impl AppState {
     pub fn try_close_sketch(&mut self) -> Result<(), String> {
         if self.sketch_session.is_none() {
             self.sketch_draft = None;
+            self.sketch_history = None;
             return Ok(());
         }
         self.commit_draft()?;
@@ -1723,9 +1759,111 @@ impl AppState {
         Ok(())
     }
 
+    // ---- Rückgängig in der offenen Skizze (R10) ------------------------------------------
+
+    /// Verlauf der offenen Skizze (lesen); `None` ohne offene Skizze (er lebt genau so lange
+    /// wie die Sitzung).
+    pub fn sketch_history(&self) -> Option<&History<SketchFeature>> {
+        self.sketch_history.as_ref()
+    }
+
+    /// Eine Änderung am Entwurf, die beim nächsten Beobachten ohne Geste ein Schritt würde:
+    /// Verlauf und Entwurf. Keine, wenn der Entwurf dem letzten Bild gleicht (gleicher Stand der
+    /// Skizze, gleiche Kopien) oder der Schritt aufgeschoben ist ([`deferred_by_tool`]).
+    fn sketch_change(&self) -> Option<(&History<SketchFeature>, &SketchFeature)> {
+        let se = self.sketch_session.as_ref()?;
+        let h = self.sketch_history.as_ref()?;
+        let draft = self.sketch_draft.as_ref()?;
+        if draft == h.current() || deferred_by_tool(se, h.current(), draft) {
+            return None;
+        }
+        Some((h, draft))
+    }
+
+    /// Am Ende eines Bildes bei offener Skizze (R4, R10): Weicht der Entwurf vom letzten Bild ab
+    /// und läuft keine Geste (Maustaste, Eingabefeld), wird er ein Schritt mit dem Namen aus
+    /// dem Vergleich ([`describe_sketch_change`](crate::undo_labels::describe_sketch_change)).
+    /// Ziehen eines Punktes ist so ein Schritt; der erste Klick eines Werkzeugs bleibt offen,
+    /// bis das Element entsteht.
+    pub fn observe_sketch(&mut self, gesture: bool) {
+        if gesture {
+            return;
+        }
+        let Some((h, draft)) = self.sketch_change() else {
+            return;
+        };
+        let label = crate::undo_labels::describe_sketch_change(h.current(), draft);
+        let after = draft.clone();
+        let bytes = sketch_bytes(&after);
+        if let Some(h) = self.sketch_history.as_mut() {
+            h.record(after, bytes, label);
+        }
+    }
+
+    /// Nimmt den letzten Schritt der offenen Skizze zurück (offene Änderungen werden vorher ein
+    /// Schritt). Der Entwurf wird der Klon des Bildes (gleicher Stand); laufendes Werkzeug,
+    /// Auswahl, Ziehen und Meldung entfallen, der Lösungsbericht wird neu bestimmt
+    /// ([`SketchSession::after_history_jump`]). Das Dokument bleibt unberührt. `false`: keine
+    /// Skizze offen oder nichts zurückzunehmen.
+    pub fn undo_sketch(&mut self) -> bool {
+        self.sketch_jump(true)
+    }
+
+    /// Gegenstück zu [`AppState::undo_sketch`].
+    pub fn redo_sketch(&mut self) -> bool {
+        self.sketch_jump(false)
+    }
+
+    fn sketch_jump(&mut self, back: bool) -> bool {
+        self.observe_sketch(false);
+        let AppState {
+            sketch_session: Some(se),
+            sketch_draft: Some(draft),
+            sketch_history: Some(h),
+            ..
+        } = self
+        else {
+            return false;
+        };
+        let target = if back { h.peek_undo() } else { h.peek_redo() };
+        let Some(target) = target.cloned() else {
+            return false;
+        };
+        if back {
+            h.commit_undo();
+        } else {
+            h.commit_redo();
+        }
+        *draft = target;
+        se.after_history_jump(&draft.sketch);
+        true
+    }
+
+    /// Name des Schritts, den Rückgängig in der offenen Skizze zurücknähme (eine noch offene,
+    /// nicht aufgeschobene Änderung zählt mit); `None`: nichts da.
+    pub fn sketch_undo_label(&self) -> Option<&'static str> {
+        match self.sketch_change() {
+            Some((h, draft)) => Some(crate::undo_labels::describe_sketch_change(
+                h.current(),
+                draft,
+            )),
+            None => self.sketch_history()?.undo_label(),
+        }
+    }
+
+    /// Name des Schritts, den Wiederholen in der offenen Skizze herstellte. Eine offene Änderung
+    /// leert beim Übernehmen die Wiederholen-Liste: dann `None`.
+    pub fn sketch_redo_label(&self) -> Option<&'static str> {
+        if self.sketch_change().is_some() {
+            return None;
+        }
+        self.sketch_history()?.redo_label()
+    }
+
     /// Verwirft Sitzung und Entwurf (das Skizzen-Feature gibt es nicht mehr).
     fn discard_sketch(&mut self) {
         self.sketch_draft = None;
+        self.sketch_history = None;
         if self.sketch_session.take().is_some() {
             self.restore_camera();
         }
