@@ -846,13 +846,28 @@ fn resolve_against_cut_solids() {
     assert!(!without.by_view.contains_key(&sec));
     assert!(!keys0.contains_key(&sec_id));
     assert_eq!(value_of(&without, front), fr);
-    // Die alten Einstiege rechnen genauso wie die leere Karte.
-    let (keyed, _) = resolve_drawing_dimensions_keyed(&dr, &solids, || ok(Ok(()))).unwrap();
+    // Die alten Einstiege rechnen genauso wie die leere Karte: Sie lassen die Maße der
+    // Schnittansicht ganz weg (festgehalten, damit niemand sie für Zeichnungen mit Schnitten
+    // nimmt und sich über fehlende Maße wundert).
+    let (keyed, keyed_keys) =
+        resolve_drawing_dimensions_keyed(&dr, &solids, || ok(Ok(()))).unwrap();
     assert_eq!(keyed.by_view, without.by_view);
+    assert!(!keyed.by_view.contains_key(&sec));
+    assert!(!keyed_keys.contains_key(&sec_id));
     let plain = resolve_drawing_dimensions(&dr, &solids, || ok(Ok(()))).unwrap();
     assert_eq!(plain.by_view, without.by_view);
-    assert_eq!(
-        d.resolve_dimensions(id, &solids).unwrap().by_view,
-        without.by_view
+    assert!(!plain.by_view.contains_key(&sec));
+    let doc = d.resolve_dimensions(id, &solids).unwrap();
+    assert_eq!(doc.by_view, without.by_view);
+    assert!(!doc.by_view.contains_key(&sec));
+    // Auch mit den Schnittkörpern unter den Körpern: weggelassen, nicht aufgelöst.
+    let both: Vec<&Solid> = vec![&orig, &cut[0]];
+    let mixed = resolve_drawing_dimensions(&dr, &both, || ok(Ok(()))).unwrap();
+    assert!(!mixed.by_view.contains_key(&sec));
+    assert!(
+        !d.resolve_dimensions(id, &both)
+            .unwrap()
+            .by_view
+            .contains_key(&sec)
     );
 }

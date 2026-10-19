@@ -250,6 +250,10 @@ impl Document {
     /// Bezüge über [`resolve_geo`](crate::resolve_geo), dann [`measure`] mit der Basis der Ansicht und der
     /// Ausdehnung der Körper. Fehler bleiben im Ergebnis des einzelnen Maßes (kein Abbruch);
     /// `last_known` bleibt leer (das führt die Oberfläche).
+    ///
+    /// **Achtung, Schnittansichten:** Maße einer Schnittansicht fehlen im Ergebnis ganz (weder
+    /// aufgelöst noch verloren), weil hier keine geschnittenen Körper bekannt sind. Wer eine Zeichnung
+    /// mit Schnitten auflöst, nimmt [`resolve_drawing_dimensions_views`].
     pub fn resolve_dimensions(
         &self,
         drawing: DrawingId,
@@ -268,6 +272,10 @@ impl Document {
 /// Wie [`Document::resolve_dimensions`], aber für eine Zeichnung ohne Dokument (etwa eine Kopie
 /// im Arbeitsthread des Exports). `check` wird vor jedem Maß gerufen; liefert es einen Fehler
 /// (z. B. „Abgebrochen“), endet die Auflösung mit diesem Fehler.
+///
+/// **Achtung, Schnittansichten:** Maße einer Schnittansicht fehlen im Ergebnis ganz (weder
+/// aufgelöst noch verloren), weil hier keine geschnittenen Körper bekannt sind. Wer eine Zeichnung
+/// mit Schnitten auflöst, nimmt [`resolve_drawing_dimensions_views`].
 pub fn resolve_drawing_dimensions<E>(
     d: &Drawing,
     solids: &[&Solid],
@@ -281,8 +289,11 @@ pub fn resolve_drawing_dimensions<E>(
 /// einen Schlüssel hat (auch wenn die Messung danach scheitert). Die Oberfläche merkt sich die
 /// Schlüssel, damit ein Maß, das später seinen Bezug verliert, nicht doppelt vorgeschlagen wird.
 ///
-/// Dasselbe wie [`resolve_drawing_dimensions_views`] ohne geschnittene Körper: Maße in
-/// Schnittansichten fehlen im Ergebnis.
+/// Dasselbe wie [`resolve_drawing_dimensions_views`] ohne geschnittene Körper.
+///
+/// **Achtung, Schnittansichten:** Maße einer Schnittansicht fehlen im Ergebnis ganz (weder
+/// aufgelöst noch verloren), weil hier keine geschnittenen Körper bekannt sind. Wer eine Zeichnung
+/// mit Schnitten auflöst, nimmt [`resolve_drawing_dimensions_views`].
 #[allow(clippy::type_complexity)]
 pub fn resolve_drawing_dimensions_keyed<E>(
     d: &Drawing,

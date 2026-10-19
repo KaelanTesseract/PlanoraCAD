@@ -694,3 +694,133 @@ fn moved_plane_measures_again() {
     let x = value(&mut st, d, sec, id).unwrap();
     assert!((x - want).abs() <= EPS, "{x} statt {want}");
 }
+
+/// Rohr wie in (c): Oben (frei), Vorne (frei) und Schnitt A–A (Vorne, y = 3); alles gerechnet.
+fn tube_with_section() -> (AppState, DrawingId, ViewId, ViewId, ViewId) {
+    let mut st = AppState::new();
+    add(
+        &mut st,
+        "Außen",
+        FeatureKind::Cylinder {
+            radius: 20.0,
+            height: 40.0,
+            origin: DVec3::ZERO,
+        },
+    );
+    add(
+        &mut st,
+        "Bohrung",
+        FeatureKind::Cylinder {
+            radius: 15.0,
+            height: 60.0,
+            origin: DVec3::new(0.0, 0.0, -10.0),
+        },
+    );
+    st.refresh();
+    st.add_boolean(0, 1, BoolOp::Difference).unwrap();
+    st.refresh();
+    let d = st
+        .document
+        .add_drawing("Blatt 1", A3_QUER, Projection::First)
+        .unwrap();
+    let top = st
+        .document
+        .add_view(
+            d,
+            ViewKind::Top,
+            one(),
+            Placement::Free { x: 120.0, y: 200.0 },
+            None,
+        )
+        .unwrap();
+    let front = st
+        .document
+        .add_view(
+            d,
+            ViewKind::Front,
+            one(),
+            Placement::Free { x: 300.0, y: 200.0 },
+            None,
+        )
+        .unwrap();
+    let mut made = None;
+    st.document
+        .update_drawing(d, |dr| {
+            made = Some(dr.add_section(top, ViewKind::Front, 3.0, 60.0));
+        })
+        .unwrap();
+    let sec = made.unwrap().unwrap();
+    st.drawing_ui.open(d);
+    compute(&mut st);
+    (st, d, top, front, sec)
+}
+
+/// Vorschlag über alle Ansichten in einem Aufruf: Was der Durchgang der Normansichten gesetzt hat,
+/// setzt der Durchgang der Schnittansicht nicht noch einmal (Quader mit Bohrung: Breite 40 und
+/// Höhe 10 sieht man in Vorne wie im Schnitt).
+#[test]
+fn suggest_all_views_sets_no_key_twice() {
+    let (mut st, _) = block_state();
+    let (d, _top, sec) = block_drawing(&mut st);
+    st.document
+        .add_view(
+            d,
+            ViewKind::Front,
+            one(),
+            Placement::Free { x: 300.0, y: 200.0 },
+            None,
+        )
+        .unwrap();
+    compute(&mut st);
+    assert!(matches!(
+        suggest_for(&mut st, d, None),
+        SuggestOutcome::Added(_)
+    ));
+    let dr = st.document.drawing(d).unwrap().clone();
+    let keys: Vec<String> = dr
+        .dimensions
+        .iter()
+        .map(|m| {
+            st.dimension_ui
+                .last_key(d, m.id)
+                .expect("Schlüssel")
+                .to_string()
+        })
+        .collect();
+    let mut unique = keys.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), keys.len(), "doppelter Schlüssel: {keys:?}");
+    assert_eq!(
+        dr.dimensions.iter().filter(|m| m.view == sec).count(),
+        0,
+        "der Schnitt zeigt hier nichts, was die Normansichten nicht schon tragen"
+    );
+    let dims = resolve_in(&mut st, d);
+    assert!(dims.by_view.values().flatten().all(|(_, r)| r.is_ok()));
+}
+
+/// Vorhandene Maße einer Schnittansicht misst der Vorschlag an den geschnittenen Körpern, auch
+/// ohne gemerkte Schlüssel (wie nach dem Laden einer Datei): kein zweites gleiches Maß.
+#[test]
+fn suggest_measures_section_dims_without_remembered_keys() {
+    let (mut st, d, _top, _front, sec) = tube_with_section();
+    let SuggestOutcome::Added(n) = suggest_for(&mut st, d, Some(sec)) else {
+        panic!("Vorschläge erwartet");
+    };
+    assert!(n > 0);
+    // Gedächtnis leeren: kein Rückfall auf den gemerkten Schlüssel.
+    st.dimension_ui = Default::default();
+    assert_eq!(
+        suggest_for(&mut st, d, Some(sec)),
+        SuggestOutcome::NothingNew
+    );
+    let dr = st.document.drawing(d).unwrap();
+    assert_eq!(dr.dimensions.iter().filter(|m| m.view == sec).count(), n);
+    // Der Vorschlag hat sich die Schlüssel aus der Messung an den Schnittkörpern gemerkt.
+    assert!(
+        dr.dimensions
+            .iter()
+            .all(|m| st.dimension_ui.last_key(d, m.id).is_some())
+    );
+}
