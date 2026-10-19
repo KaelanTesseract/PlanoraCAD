@@ -804,8 +804,9 @@ impl eframe::App for PlanoraApp {
         prompts::show(&ctx, &mut self.ws);
 
         // Änderungen am Dokument werden Schritte für Rückgängig (R3, R4): erst wenn keine
-        // Maustaste mehr gedrückt ist und kein Eingabefeld die Tastatur hat (auch im vorigen Bild,
-        // daher vor `remember_keyboard_focus`), damit Ziehen und Tippen je ein Schritt sind.
+        // Maustaste mehr gedrückt ist und kein Eingabefeld die Tastatur hat, damit Ziehen und
+        // Tippen je ein Schritt sind. Vor `remember_keyboard_focus` zählt dabei auch das vorige
+        // Bild; das verschiebt den Schritt nach Enter nur um ein Bild (beides ein Schritt).
         let gesture = ctx.input(|i| i.pointer.any_down()) || viewport::typing(&ctx);
         self.ws.observe_history(gesture);
         viewport::remember_keyboard_focus(&ctx);

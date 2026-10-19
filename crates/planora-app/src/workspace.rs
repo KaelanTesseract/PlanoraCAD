@@ -65,6 +65,10 @@ pub struct DocTab {
     /// Erkennt Änderungen am Dokument je Bild und fasst Gesten zusammen (R4).
     tracker: Tracker,
     autosaved_edits: u64,
+    /// Seit dem letzten Speichern hat dieser Tab eine Autosicherung geschrieben. Ist der Tab
+    /// danach wieder sauber (Rückgängig bis zum gespeicherten Stand), ist sie überholt und wird
+    /// gelöscht ([`DocTab::drop_stale_autosave`]).
+    autosave_written: bool,
     last_autosave: Instant,
 }
 
@@ -93,6 +97,7 @@ impl DocTab {
             history,
             tracker,
             autosaved_edits: edits,
+            autosave_written: false,
             last_autosave: Instant::now(),
         }
     }
@@ -133,6 +138,22 @@ impl DocTab {
     fn mark_clean(&mut self) {
         self.observe_history(false);
         self.history.mark_saved();
+        self.autosaved_edits = self.state.document.edit_count();
+        self.autosave_written = false;
+    }
+
+    /// Löscht eine selbst geschriebene Autosicherung, wenn der Tab wieder sauber ist (etwa nach
+    /// Rückgängig bis zum gespeicherten Stand): Sie hielte einen zurückgenommenen Stand fest und
+    /// würde beim nächsten Öffnen angeboten. Der saubere Stand liegt als Version auf der Platte.
+    /// Fremde oder unlesbare Sicherungen (Angebot offen, `keep_autosave`) bleiben.
+    fn drop_stale_autosave(&mut self) {
+        if !self.autosave_written || self.read_only || !self.owns_autosave() || self.is_dirty() {
+            return;
+        }
+        if let Some(store) = &self.store {
+            store.discard_autosave();
+        }
+        self.autosave_written = false;
         self.autosaved_edits = self.state.document.edit_count();
     }
 
@@ -519,11 +540,13 @@ impl Workspace {
 
     /// Schließt einen Tab ohne Rückfrage; nach dem letzten entsteht ein frischer leerer Tab.
     /// Eine vorhandene `.autosave.json` des Dokuments bleibt liegen (auch beim Verwerfen) und
-    /// wird beim nächsten Öffnen wieder angeboten.
+    /// wird beim nächsten Öffnen wieder angeboten – außer der Tab ist sauber und hat sie selbst
+    /// geschrieben (dann ist sie überholt und wird gelöscht).
     pub fn close_tab(&mut self, i: usize) {
         if i >= self.tabs.len() {
             return;
         }
+        self.tabs[i].drop_stale_autosave();
         self.tabs.remove(i);
         if self.tabs.is_empty() {
             self.new_tab();
@@ -1067,6 +1090,7 @@ impl Workspace {
     pub fn autosave_tick(&mut self, now: Instant) {
         let interval = self.autosave_interval;
         for t in &mut self.tabs {
+            t.drop_stale_autosave();
             if t.read_only
                 || !t.owns_autosave()
                 || !t.is_dirty()
@@ -1083,6 +1107,7 @@ impl Workspace {
                 .is_ok()
             {
                 t.autosaved_edits = t.state.document.edit_count();
+                t.autosave_written = true;
             }
             t.last_autosave = now;
         }

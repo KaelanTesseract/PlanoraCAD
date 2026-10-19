@@ -270,7 +270,11 @@ fn no_step_without_change() {
     );
     observe(&mut w);
     assert_eq!(undo_len(&w), 1);
-    assert!(!tab(&mut w).is_dirty() || undo_len(&w) == 1);
+    assert_eq!(
+        tab(&mut w).undo_label(),
+        Some("Quader anlegen"),
+        "kein offener Schritt"
+    );
 
     // Neue Zeichnung, deren Ansicht nicht gelingt: angelegt und wieder entfernt.
     let edits = st(&mut w).document.edit_count();
@@ -1098,4 +1102,151 @@ fn autosave_and_restore_reset_history() {
     assert_eq!(t.history().redo_len(), 0);
     assert!(!t.is_dirty());
     assert_eq!(tab(&mut w).undo(), Err(NOTHING_TO_UNDO.into()));
+}
+
+// ---- Nachtrag: gewählter Körper, überholte Autosicherung, Grenzen ----------------------------
+
+/// Rückgängig/Wiederholen eines Verschiebens über die echte Oberfläche: Der Körper bleibt
+/// gewählt, das Positionsfeld bleibt sichtbar; wird der Körper selbst zurückgenommen, entfällt
+/// die Wahl.
+#[test]
+fn moved_body_stays_selected_through_undo_and_redo() {
+    let mut rig = app_with_box();
+    let seen = rig.settle();
+    let p = position_x_field(&seen);
+    rig.frame(vec![Event::PointerMoved(p)]);
+    rig.frame(vec![press(p, true)]);
+    for i in 1..=10 {
+        rig.frame(vec![Event::PointerMoved(p + vec2(3.0 * i as f32, 0.0))]);
+    }
+    rig.frame(vec![press(p + vec2(30.0, 0.0), false)]);
+    rig.settle();
+    assert_eq!(rig.undo_len(), 2);
+    let shows_position = |seen: &[Seen]| seen.iter().any(|s| s.text == POSITION_LABEL);
+
+    rig.ws().active_tab_mut().undo().unwrap();
+    let seen = rig.settle();
+    assert_eq!(rig.ws().active_tab().state.selected_body, Some(0));
+    assert!(shows_position(&seen), "Positionsfeld nach Rückgängig");
+    assert_eq!(rig.ws().active_tab().state.bodies[0].bounds.0.x, 0.0);
+
+    rig.ws().active_tab_mut().redo().unwrap();
+    let seen = rig.settle();
+    assert_eq!(rig.ws().active_tab().state.selected_body, Some(0));
+    assert!(shows_position(&seen), "Positionsfeld nach Wiederholen");
+
+    rig.ws().active_tab_mut().undo().unwrap();
+    rig.ws().active_tab_mut().undo().unwrap();
+    let seen = rig.settle();
+    assert_eq!(rig.ws().active_tab().state.selected_body, None);
+    assert!(!shows_position(&seen), "kein Körper, kein Positionsfeld");
+}
+
+/// Auch über Verrunden und Boolesche Operationen hinweg bleibt der Körper gewählt; ein
+/// anderer Körper wird dabei nicht gewählt.
+#[test]
+fn selection_follows_blend_and_boolean() {
+    let mut w = ws();
+    st(&mut w).create_box(DVec3::splat(10.0)).unwrap();
+    st(&mut w).create_box(DVec3::splat(4.0)).unwrap();
+    observe(&mut w);
+    let e = edge_between(&st(&mut w).bodies[0].solid, "Deckel", "Wand 1");
+    st(&mut w)
+        .add_blend(0, &[e], BlendArt::Rundung { radius: 1.0 }, true)
+        .unwrap();
+    observe(&mut w);
+    let chosen = st(&mut w).selected_body.expect("Ergebnis gewählt");
+    let blend_ref = st(&mut w).bodies[chosen].source;
+    tab(&mut w).undo().unwrap();
+    let s = st(&mut w);
+    let i = s.selected_body.expect("bleibt gewählt");
+    assert_eq!(
+        s.bodies[i].source.feature,
+        s.document.features()[0].id,
+        "der erste Quader"
+    );
+    tab(&mut w).redo().unwrap();
+    let i = st(&mut w).selected_body.expect("bleibt gewählt");
+    assert_eq!(st(&mut w).bodies[i].source, blend_ref);
+
+    st(&mut w)
+        .add_boolean(i, 1 - i, planora_kernel::boolean::BoolOp::Union)
+        .unwrap();
+    observe(&mut w);
+    assert_eq!(st(&mut w).bodies.len(), 1);
+    tab(&mut w).undo().unwrap();
+    let i = st(&mut w).selected_body.expect("Ziel bleibt gewählt");
+    assert_eq!(st(&mut w).bodies[i].source, blend_ref);
+    tab(&mut w).redo().unwrap();
+    assert_eq!(st(&mut w).selected_body, Some(0));
+}
+
+fn autosave_file(w: &Workspace, path: &NodePath) -> std::path::PathBuf {
+    w.library
+        .as_ref()
+        .unwrap()
+        .document_dir(path)
+        .unwrap()
+        .join(".autosave.json")
+}
+
+/// Rückgängig bis zum gespeicherten Stand macht eine eigene Autosicherung überflüssig: Sie wird
+/// gelöscht und beim nächsten Öffnen nicht angeboten; wieder geändert, wird neu gesichert.
+#[test]
+fn stale_autosave_is_dropped_when_clean_again() {
+    let mut w = ws();
+    let path = save_as(&mut w, "Teil");
+    let file = autosave_file(&w, &path);
+    w.autosave_interval = Duration::ZERO;
+    st(&mut w).create_box(DVec3::splat(5.0)).unwrap();
+    observe(&mut w);
+    w.autosave_tick(Instant::now());
+    assert!(file.is_file(), "Autosicherung geschrieben");
+    tab(&mut w).undo().unwrap();
+    assert!(!w.active_tab().is_dirty());
+    w.autosave_tick(Instant::now());
+    assert!(!file.exists(), "überholte Autosicherung gelöscht");
+    // wieder geändert: neue Sicherung
+    tab(&mut w).redo().unwrap();
+    assert!(w.active_tab().is_dirty());
+    w.autosave_tick(Instant::now());
+    assert!(file.is_file(), "neue Autosicherung");
+    // Rückgängig und sofort schließen (ohne Bild dazwischen): auch dann gelöscht.
+    tab(&mut w).undo().unwrap();
+    assert!(w.request_close(w.tab_for_path(&path).unwrap()));
+    assert!(!file.exists(), "beim Schließen gelöscht");
+    let r = w.open_document(&path, LockMode::Acquire).unwrap();
+    assert!(!r.autosave_offered, "nichts anzubieten");
+    // Eine fremde Sicherung (Angebot offen) bleibt dagegen.
+    st(&mut w).create_box(DVec3::splat(5.0)).unwrap();
+    w.autosave_tick(Instant::now());
+    w.close_tab(w.tab_for_path(&path).unwrap());
+    assert!(file.is_file());
+    let r = w.open_document(&path, LockMode::Acquire).unwrap();
+    assert!(r.autosave_offered);
+    w.autosave_tick(Instant::now());
+    let i = w.tab_for_path(&path).unwrap();
+    w.close_tab(i);
+    assert!(file.is_file(), "angebotene Sicherung bleibt");
+}
+
+/// Der Verlauf eines Tabs hat die Grenze von 100 Schritten.
+#[test]
+fn tab_history_keeps_100_steps() {
+    let mut w = ws();
+    let id = st(&mut w).create_box(DVec3::splat(5.0)).unwrap();
+    observe(&mut w);
+    for i in 0..101 {
+        st(&mut w).rename_feature(id, &format!("Teil {i}")).unwrap();
+        observe(&mut w);
+    }
+    assert_eq!(undo_len(&w), planora_app::history::MAX_STEPS);
+    assert_eq!(undo_len(&w), 100);
+    while tab(&mut w).undo().is_ok() {}
+    assert_eq!(
+        st(&mut w).document.features()[0].name,
+        "Teil 0",
+        "älteste fallen heraus"
+    );
+    assert!(w.active_tab().history().bytes() <= planora_app::history::MAX_BYTES);
 }

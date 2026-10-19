@@ -483,7 +483,9 @@ impl AppState {
     /// Bei Erfolg: Namenszähler aus den Namen neu; Körper neu ohne Einpassen (Weg
     /// [`RestoreKind::Full`]; bei [`RestoreKind::Annotations`] bleiben Körper und Szene, wie sie
     /// sind); auf dem vollen Weg entfallen Flächen-/Kantenwahl und Hervorhebung, gewählter Körper
-    /// und gewähltes Feature bleiben, solange es sie gibt; auf dem Zeichnungsweg bleiben Auswahl,
+    /// und gewähltes Feature bleiben, solange es sie gibt (der Körper auch über ein
+    /// zurückgenommenes oder wiederholtes Verschieben, Verrunden oder eine Boolesche Operation
+    /// hinweg, siehe `same_body_after`); auf dem Zeichnungsweg bleiben Auswahl,
     /// Hervorhebung und gewählter Körper unverändert; offene Rückfragen, Umbenennen-Felder, Dialogwünsche, Maß- und
     /// Blattangaben-Fenster, markierte Kanten, ein laufender Zug und die Werkzeuge des
     /// Zeichnungsbereichs werden geleert, `message` ebenso. Eine offene Skizze (kommt über die
@@ -501,6 +503,19 @@ impl AppState {
         &mut self,
         s: planora_feature::Snapshot,
     ) -> Result<RestoreKind, String> {
+        // Herkunft der Körper im alten Stand: Ein gewählter Körper bleibt gewählt, solange es
+        // ihn aus Sicht des Nutzers noch gibt (nur ein Verschieben, Verrunden oder eine Boolesche
+        // Operation an ihm wurde zurückgenommen oder wiederholt).
+        let chosen = self
+            .selected_body
+            .and_then(|i| self.bodies.get(i))
+            .map(|b| b.source);
+        let old_inputs: Vec<(FeatureId, BodyRef)> = self
+            .document
+            .features()
+            .iter()
+            .filter_map(|f| carried_body(&f.kind).map(|b| (f.id, b)))
+            .collect();
         let kind = self.document.restore(s).map_err(|e| e.to_string())?;
         self.rebuild_name_counters();
         // Eine offene Skizze verwerfen: Ihr Entwurf gehört zum alten Dokument.
@@ -538,7 +553,8 @@ impl AppState {
                 // seinen Verweis abgebildet), solange es ihn gibt.
                 self.selection = None;
                 self.hover = None;
-                self.refresh_with(None, false);
+                let follow = chosen.map(|from| (from, self.same_body_after(from, &old_inputs)));
+                self.refresh_with(follow, false);
             }
             // Gleiches Modell: Körper und Auswahl gelten weiter; die Szene nur neu, wenn sich
             // ihre Hervorhebung (markierte Kanten) geändert hat.
@@ -550,6 +566,50 @@ impl AppState {
             self.restore_camera();
         }
         Ok(kind)
+    }
+
+    /// Derselbe Körper aus Sicht des Nutzers im zurückgeladenen Stand (der Verweis `from` stammt
+    /// aus dem alten): Ist `from` nicht mehr sichtbar, geht es zurück zum Eingangskörper eines
+    /// fehlenden Verschiebens/Verrundens/einer Booleschen Operation (`old_inputs`, alter Stand)
+    /// bzw. vorwärts zum Ergebnis eines solchen Features im neuen Stand, das ihn fortführt. Ein
+    /// Körper ohne solche Herkunft (etwa ein zurückgenommener Quader) bleibt `from` und
+    /// entfällt dann bei der Abbildung.
+    fn same_body_after(&self, from: BodyRef, old_inputs: &[(FeatureId, BodyRef)]) -> BodyRef {
+        let visible: Vec<BodyRef> = self
+            .document
+            .visible_bodies()
+            .iter()
+            .map(|v| v.body)
+            .chain(self.document.visible_meshes().iter().map(|v| v.body))
+            .collect();
+        let mut r = from;
+        // Jeder Schritt führt zu einem anderen Feature; mehr Schritte als Features gibt es nicht.
+        for _ in 0..=self.document.features().len() + old_inputs.len() {
+            if visible.contains(&r) {
+                break;
+            }
+            let forward = self
+                .document
+                .features()
+                .iter()
+                .find(|f| carried_body(&f.kind) == Some(r));
+            if let Some(f) = forward {
+                r = BodyRef {
+                    feature: f.id,
+                    index: 0,
+                };
+                continue;
+            }
+            let back = old_inputs
+                .iter()
+                .find(|(id, _)| r.index == 0 && *id == r.feature)
+                .filter(|_| self.document.feature(r.feature).is_none());
+            match back {
+                Some((_, input)) => r = *input,
+                None => break,
+            }
+        }
+        r
     }
 
     /// Feature des laufenden Zugs im Eigenschaftenfenster (nur für Tests).
@@ -1901,6 +1961,16 @@ const MESH_LABEL: &str = "Netz-Körper";
 
 /// Hinweis an ausgegrauten Menüpunkten bei gewähltem Netz-Körper (Spec §6).
 pub const MESH_LOCKED_HINT: &str = "Netz-Körper lassen sich nicht bearbeiten.";
+
+/// Der Körper, den ein Feature fortführt (sein Ergebnis ist für den Nutzer „derselbe Körper“):
+/// Verschieben, Verrunden/Fase, bei Booleschen Operationen das Ziel.
+fn carried_body(kind: &FeatureKind) -> Option<BodyRef> {
+    match kind {
+        FeatureKind::Move { body, .. } | FeatureKind::Verrunden { body, .. } => Some(*body),
+        FeatureKind::Boolean { target, .. } => Some(*target),
+        _ => None,
+    }
+}
 
 /// Schreibt die Lage `t` in einen Netz-Körper.
 fn set_transform(kind: &mut FeatureKind, t: MeshTransform) {
