@@ -22,6 +22,7 @@ pub mod export_dialog;
 pub mod feature_dialog;
 pub mod file_chooser;
 pub mod fonts;
+pub mod history;
 pub mod icons;
 pub mod import_dialog;
 pub mod jobs;
