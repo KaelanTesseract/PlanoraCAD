@@ -39,7 +39,8 @@ use egui::{
 };
 use planora_drawing::annotate::{
     ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, CENTER_W, DEFAULT_OFFSET, DIM_LINE_W, Mark, MarkKind,
-    ResolvedDims, TextAnchor, clamp_leader_deg, leader_angle,
+    ResolvedDims, SECTION_END_W, SectionPen, TextAnchor, arrow_size, clamp_leader_deg,
+    leader_angle,
 };
 use planora_drawing::balloon::{BalloonMarks, add_balloon_marks};
 use planora_drawing::dimension::{ArcSpan, DimId, DimSpec};
@@ -2667,9 +2668,9 @@ fn mark_kind(m: &Mark) -> MarkKind {
 }
 
 /// Ecken eines Pfeils auf dem Blatt: Spitze und die beiden Ecken am Ende.
-fn arrow_corners(tip: DVec2, dir: DVec2) -> [DVec2; 3] {
-    let base = tip + dir * ARROW_LEN;
-    let side = dir.perp() * ARROW_HALF_W;
+fn arrow_corners(tip: DVec2, dir: DVec2, size: (f64, f64)) -> [DVec2; 3] {
+    let base = tip + dir * size.0;
+    let side = dir.perp() * size.1;
     [tip, base + side, base - side]
 }
 
@@ -2779,6 +2780,7 @@ fn line_width_mm(kind: MarkKind, sheet_scale: f64) -> f64 {
         MarkKind::CenterLine => CENTER_W,
         MarkKind::Sheet(pen) => pen.width_at(sheet_scale),
         MarkKind::Position(pen) => pen.width_at(sheet_scale),
+        MarkKind::SectionLine(SectionPen::End) => SECTION_END_W,
         _ => DIM_LINE_W,
     }
 }
@@ -2797,7 +2799,10 @@ fn paint_mark(
         Mark::Line { a, b, kind } => {
             let w = line_width_mm(*kind, sheet_scale);
             let stroke = Stroke::new((w * k).max(1.0) as f32, color);
-            if *kind == MarkKind::CenterLine {
+            if matches!(
+                *kind,
+                MarkKind::CenterLine | MarkKind::SectionLine(SectionPen::Chain)
+            ) {
                 for d in dash_pattern(&[*a, *b], &CENTER_PATTERN) {
                     painter.add(Shape::line(
                         d.iter().map(|q| to_screen(*q)).collect(),
@@ -2808,8 +2813,10 @@ fn paint_mark(
                 painter.line_segment([to_screen(*a), to_screen(*b)], stroke);
             }
         }
-        Mark::Arrow { tip, dir, .. } => {
-            let pts = arrow_corners(*tip, *dir).map(to_screen).to_vec();
+        Mark::Arrow { tip, dir, kind } => {
+            let pts = arrow_corners(*tip, *dir, arrow_size(*kind, sheet_scale))
+                .map(to_screen)
+                .to_vec();
             painter.add(Shape::convex_polygon(pts, color, Stroke::NONE));
         }
         Mark::Arc {
@@ -2880,7 +2887,10 @@ fn dim_hit(
                     (screen_seg_dist(pos, to_screen(*a), to_screen(*b)), false)
                 }
                 Mark::Arrow { tip, dir, .. } => (
-                    polygon_dist(pos, &arrow_corners(*tip, *dir).map(to_screen)),
+                    polygon_dist(
+                        pos,
+                        &arrow_corners(*tip, *dir, (ARROW_LEN, ARROW_HALF_W)).map(to_screen),
+                    ),
                     false,
                 ),
                 Mark::Arc {

@@ -18,12 +18,13 @@
 //!   Ecken unter etwa 29° innerhalb eines Teilpfads (Spline Grad 1, Polygone), die in den
 //!   Zeichnungen kaum vorkommen. Reihenfolge
 //!   wie SVG: Rahmen, dann je Ansicht sichtbarer Pfad, verdeckter Pfad, Maße (mit verlorenen),
-//!   Mittellinien, Positionen. Strich `{Farbe} RG {w} w [{Muster}] 0 d` + Pfad + `S`; Fläche
+//!   Mittellinien, Positionen, Schraffur, Schnitt. Strich `{Farbe} RG {w} w [{Muster}] 0 d` + Pfad + `S`; Fläche
 //!   (Pfeil) `{Farbe} rg` + `m l l h f`; Text `{Farbe} rg BT /F1 {Größe} Tf {a b c d e f} Tm
 //!   [{tz} Tz] ({…}) Tj [100 Tz] ET`. Schwarz `0 0 0`, verloren `0.8 0 0` (= SVG `#c00`). Jede
 //!   Anweisung steht auf einer eigenen Zeile.
 //! * **P4 Strichbreiten** wie SVG: sichtbar 0,5 mm, verdeckt 0,25 mm mit Muster 3 1;
-//!   `Dimension`/`Lost` `DIM_LINE_W`; `CenterLine` `CENTER_W` mit `CENTER_PATTERN`; Rahmenmarken
+//!   `Dimension`/`Lost` `DIM_LINE_W`; `CenterLine` `CENTER_W` mit `CENTER_PATTERN`; `Hatch` `DIM_LINE_W`; `SectionLine` Kette
+//!   `DIM_LINE_W` mit `CENTER_PATTERN`, Endstücke `SECTION_END_W`, Pfeile mit `arrow_size`; Rahmenmarken
 //!   `width_at(frame.scale)`; Ansichtsmarken `Sheet`/`Position` `width_at(sheet_scale(Blatt))`.
 //! * **P5 Kurven:** Kreis- und Ellipsenbögen über `Out2d::normalized_range` in
 //!   `n = ceil(Spanne/(π/2) − 1e-9)` Stücke (wie SVG), je Stück eine Kubik mit
@@ -55,7 +56,8 @@
 
 use crate::Visibility;
 use crate::annotate::{
-    ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, CENTER_W, DIM_LINE_W, Mark, MarkKind, TextAnchor,
+    CENTER_PATTERN, CENTER_W, DIM_LINE_W, Mark, MarkKind, SECTION_END_W, SectionPen, TextAnchor,
+    arrow_size,
 };
 use crate::error::DrawError;
 use crate::out2d::{Out2d, bezier_pieces};
@@ -305,7 +307,13 @@ fn page_content(model: &SheetModel) -> Result<String, DrawError> {
         if !hidden.is_empty() {
             stroke(&mut lines, BLACK, HIDDEN_W, &HIDDEN_PATTERN, hidden)?;
         }
-        for group in [MarkGroup::Dims, MarkGroup::Centre, MarkGroup::Positions] {
+        for group in [
+            MarkGroup::Dims,
+            MarkGroup::Centre,
+            MarkGroup::Positions,
+            MarkGroup::Hatch,
+            MarkGroup::Section,
+        ] {
             for m in view.marks.iter().filter(|m| mark_group(m) == group) {
                 mark_element(&mut lines, m, scale)?;
             }
@@ -364,6 +372,8 @@ enum MarkGroup {
     Dims,
     Centre,
     Positions,
+    Hatch,
+    Section,
 }
 
 fn mark_kind(m: &Mark) -> MarkKind {
@@ -379,6 +389,8 @@ fn mark_group(m: &Mark) -> MarkGroup {
     match mark_kind(m) {
         MarkKind::CenterLine => MarkGroup::Centre,
         MarkKind::Position(_) => MarkGroup::Positions,
+        MarkKind::Hatch => MarkGroup::Hatch,
+        MarkKind::SectionLine(_) => MarkGroup::Section,
         _ => MarkGroup::Dims,
     }
 }
@@ -404,9 +416,9 @@ fn mark_stroke(
 ) -> Result<(), DrawError> {
     let (width, dash): (f64, &[f64]) = match kind {
         MarkKind::CenterLine => (CENTER_W, &CENTER_PATTERN),
-        MarkKind::Dimension | MarkKind::Lost | MarkKind::Hatch | MarkKind::SectionLine(_) => {
-            (DIM_LINE_W, &[])
-        }
+        MarkKind::SectionLine(SectionPen::Chain) => (DIM_LINE_W, &CENTER_PATTERN),
+        MarkKind::SectionLine(SectionPen::End) => (SECTION_END_W, &[]),
+        MarkKind::Dimension | MarkKind::Lost | MarkKind::Hatch => (DIM_LINE_W, &[]),
         MarkKind::Sheet(pen) => (pen.width_at(sheet_scale), &[]),
         MarkKind::Position(pen) => (pen.width_at(sheet_scale), &[]),
     };
@@ -422,8 +434,9 @@ fn mark_element(lines: &mut Vec<String>, m: &Mark, sheet_scale: f64) -> Result<(
             mark_stroke(lines, *kind, sheet_scale, ops)?;
         }
         Mark::Arrow { tip, dir, kind } => {
-            let base = *tip + *dir * ARROW_LEN;
-            let perp = DVec2::new(-dir.y, dir.x) * ARROW_HALF_W;
+            let (len, half) = arrow_size(*kind, sheet_scale);
+            let base = *tip + *dir * len;
+            let perp = DVec2::new(-dir.y, dir.x) * half;
             let mut ops = Vec::new();
             move_to(&mut ops, *tip)?;
             line_to(&mut ops, base + perp)?;
