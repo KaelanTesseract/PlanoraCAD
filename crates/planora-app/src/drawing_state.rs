@@ -208,6 +208,57 @@ impl DrawingUi {
         }
     }
 
+    /// Nach dem Austausch des Dokuments (Rückgängig/Wiederholen): Gibt es die geöffnete
+    /// Zeichnung nicht mehr, geht der Bereich zurück zum Modell (wie in [`DrawingUi::tick`]);
+    /// gewählte Zeichnung, Ansicht, Maß und Positionsnummer entfallen, wenn es ihr Ziel nicht
+    /// mehr gibt. Zoom, Verschiebung und der Zwischenspeicher bleiben (veraltete Ergebnisse
+    /// verwirft `tick` über den Modellstand).
+    pub fn forget_missing(&mut self, doc: &Document) {
+        if self
+            .selected_drawing
+            .is_some_and(|d| doc.drawing(d).is_none())
+        {
+            self.selected_drawing = None;
+        }
+        if let WorkArea::Drawing(id) = self.area
+            && doc.drawing(id).is_none()
+        {
+            self.area = WorkArea::Model;
+        }
+        if self.last_drawing.is_some_and(|d| doc.drawing(d).is_none()) {
+            self.last_drawing = None;
+        }
+        // Ansicht, Maß und Positionsnummer gehören zur offenen bzw. zuletzt offenen Zeichnung.
+        let open = match self.area {
+            WorkArea::Drawing(id) => Some(id),
+            WorkArea::Model => self.last_drawing,
+        };
+        let Some(drawing) = open.and_then(|id| doc.drawing(id)) else {
+            self.selected_view = None;
+            self.selected_dim = None;
+            self.selected_balloon = None;
+            return;
+        };
+        if self
+            .selected_view
+            .is_some_and(|v| drawing.view(v).is_none())
+        {
+            self.selected_view = None;
+        }
+        if self
+            .selected_dim
+            .is_some_and(|m| drawing.dimension(m).is_none())
+        {
+            self.selected_dim = None;
+        }
+        if self
+            .selected_balloon
+            .is_some_and(|b| drawing.balloon(b).is_none())
+        {
+            self.selected_balloon = None;
+        }
+    }
+
     fn reset_sheet_view(&mut self) {
         self.selected_view = None;
         self.selected_dim = None;

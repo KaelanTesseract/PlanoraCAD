@@ -3,7 +3,7 @@ use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
 use planora_feature::{
     BlendArt, BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
-    MESH_LOCKED, MeshId, SketchFeature, SketchPlane,
+    MESH_LOCKED, MeshId, RestoreKind, SketchFeature, SketchPlane,
 };
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{AnalyticKernel, Edge, Face, Id, Solid};
@@ -42,6 +42,11 @@ pub use planora_feature::StandardPlane;
 /// Nummern (nur aus fremden oder bösartigen Dateien denkbar) werden ignoriert, damit der Zähler
 /// nicht an `u64::MAX` stößt; neue Namen kollidieren mit ihnen erst nach so vielen Features.
 const MAX_NAME_COUNTER: u64 = 1_000_000;
+
+/// Meldung, wenn sich ein Schritt nicht zurückladen lässt (Rückgängig).
+pub const UNDO_FAILED: &str = "Rückgängig ist nicht möglich.";
+/// Meldung, wenn sich ein Schritt nicht zurückladen lässt (Wiederholen).
+pub const REDO_FAILED: &str = "Wiederholen ist nicht möglich.";
 
 static NEXT_SCENE_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -340,6 +345,12 @@ impl AppState {
     /// Wie [`AppState::refresh`]; Verweise auf den Körper `follow.0` gehen auf `follow.1` über
     /// (z. B. auf das Ergebnis eines neuen Verschiebens).
     fn refresh_following(&mut self, follow: Option<(BodyRef, BodyRef)>) {
+        self.refresh_with(follow, true);
+    }
+
+    /// Wie [`AppState::refresh_following`]; mit `fit == false` wird die Ansicht nie neu
+    /// eingepasst (Rückgängig/Wiederholen, Spec §3).
+    fn refresh_with(&mut self, follow: Option<(BodyRef, BodyRef)>, fit: bool) {
         let old: Vec<BodyRef> = self.bodies.iter().map(|b| b.source).collect();
         // Geometrie der markierten Kanten vor der Neuberechnung: Ändert sich der Körper, können
         // Kanten-Ids umnummeriert sein; eine Markierung darf dann nicht still auf eine andere
@@ -415,7 +426,7 @@ impl AppState {
             self.message = Some(failed.join("; "));
         }
         self.rebuild_scene();
-        if self.bodies.len() != count_before {
+        if fit && self.bodies.len() != count_before {
             self.frame_all();
         }
     }
@@ -463,6 +474,74 @@ impl AppState {
         // Die frische Kamera kennt das freie Rechteck noch nicht.
         s.fit_pending = true;
         Ok(s)
+    }
+
+    /// Ersetzt nur das Dokument durch das Bild `s` (Rückgängig/Wiederholen, Spec §6a.1, R1, R2,
+    /// R9). Kamera, Hell/Dunkel, `instance` und `fit_pending` bleiben; die Ansicht wird nicht neu
+    /// eingepasst.
+    ///
+    /// Bei Erfolg: Namenszähler aus den Namen neu; Körper neu ohne Einpassen (Weg
+    /// [`RestoreKind::Full`]; bei [`RestoreKind::Annotations`] bleiben Körper und Szene, wie sie
+    /// sind); Auswahl, Hervorhebung, gewählter Körper und gewähltes Feature bleiben, solange es
+    /// ihr Ziel noch gibt; offene Rückfragen, Umbenennen-Felder, Dialogwünsche, Maß- und
+    /// Blattangaben-Fenster, markierte Kanten, ein laufender Zug und die Werkzeuge des
+    /// Zeichnungsbereichs werden geleert, `message` ebenso. Eine offene Skizze (kommt über die
+    /// Oberfläche nicht vor, R10) wird verworfen wie beim Löschen ihres Features. Eine geöffnete
+    /// Zeichnung, die es im Bild nicht gibt, schaltet auf das Modell zurück
+    /// ([`crate::drawing_state::DrawingUi::forget_missing`]).
+    ///
+    /// Bei Fehler bleibt alles unverändert (auch `message`; die Meldung setzt der Aufrufer).
+    pub fn restore_document(
+        &mut self,
+        s: planora_feature::Snapshot,
+    ) -> Result<RestoreKind, String> {
+        let kind = self.document.restore(s).map_err(|e| e.to_string())?;
+        self.rebuild_name_counters();
+        // Eine offene Skizze verwerfen: Ihr Entwurf gehört zum alten Dokument.
+        self.sketch_draft = None;
+        let left_sketch = self.sketch_session.take().is_some();
+        let had_marks = !self.marked_edges.is_empty();
+        self.marked_edges.clear();
+        self.edge_picking = false;
+        self.drag_move = None;
+        self.pending_delete = None;
+        self.pending_delete_drawing = None;
+        self.pending_delete_dimension = None;
+        self.rename_draft = None;
+        self.rename_drawing_draft = None;
+        self.edit_request = None;
+        self.sketch_request = None;
+        self.dimension_dialog = None;
+        self.sheet_dialog = None;
+        self.dimension_tool = crate::dimension_tool::DimensionTool::default();
+        self.balloon_tool = crate::balloon_tool::BalloonTool::default();
+        self.section_tool = crate::section_tool::SectionTool::default();
+        self.message = None;
+        if self
+            .selected_feature
+            .is_some_and(|id| self.document.feature(id).is_none())
+        {
+            self.selected_feature = None;
+        }
+        self.drawing_ui.forget_missing(&self.document);
+        match kind {
+            RestoreKind::Full => self.refresh_with(None, false),
+            // Gleiches Modell: Körper und Auswahl gelten weiter; die Szene nur neu, wenn sich
+            // ihre Hervorhebung (markierte Kanten) geändert hat.
+            RestoreKind::Annotations if had_marks && !left_sketch => self.rebuild_scene(),
+            RestoreKind::Annotations => {}
+        }
+        if left_sketch {
+            // Wie beim Verwerfen einer Skizze: die Kamera von vor dem Skizzenmodus.
+            self.restore_camera();
+        }
+        Ok(kind)
+    }
+
+    /// Feature des laufenden Zugs im Eigenschaftenfenster (nur für Tests).
+    #[doc(hidden)]
+    pub fn drag_move(&self) -> Option<FeatureId> {
+        self.drag_move
     }
 
     /// Setzt die Zähler je Bezeichnung aus vorhandenen Namen „Bezeichnung N“ fort, damit neue
