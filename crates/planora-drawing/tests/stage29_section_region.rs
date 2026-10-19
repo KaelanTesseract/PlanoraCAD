@@ -259,3 +259,128 @@ fn polygon_area_is_signed() {
     assert_eq!(polygon_area(&rev), -6.0);
     assert_eq!(polygon_area(&[]), 0.0);
 }
+
+fn ellipse_stroke(a: f64, b: f64) -> Stroke {
+    Stroke {
+        curve: Curve::Ellipse {
+            frame: planora_math::Frame::WORLD,
+            major: a,
+            minor: b,
+        },
+        t0: 0.0,
+        t1: 2.0 * PI,
+        origin: StrokeOrigin::Edge { body: 0, edge: 0 },
+    }
+}
+
+#[test]
+fn ellipse_uses_largest_radius_and_area() {
+    let (a, b, tol) = (10.0, 4.0, 1e-4);
+    let s = ellipse_stroke(a, b);
+    let bas = Basis::of(ViewKind::Top);
+    let poly = loop_polygon(std::slice::from_ref(&s), &bas, tol);
+    // Stückzahl nach dem größten Radius (a), nicht nach b.
+    let want = (2.0 * PI / (2.0 * (1.0 - tol / a).acos())).ceil() as usize;
+    assert_eq!(poly.len(), want);
+    // Alle Punkte liegen auf der Ellipse.
+    for q in &poly {
+        let e = (q.x / a).powi(2) + (q.y / b).powi(2);
+        assert!((e - 1.0).abs() < 1e-12, "{q:?}");
+    }
+    // Dichte Kurvenpunkte liegen höchstens tol vom Vieleck.
+    let n = poly.len();
+    for i in 0..4000 {
+        let t = 2.0 * PI * i as f64 / 4000.0;
+        let q = DVec2::new(a * t.cos(), b * t.sin());
+        let d = (0..n)
+            .map(|j| {
+                let (p0, p1) = (poly[j], poly[(j + 1) % n]);
+                let ab = p1 - p0;
+                let u = ((q - p0).dot(ab) / ab.length_squared()).clamp(0.0, 1.0);
+                (q - (p0 + ab * u)).length()
+            })
+            .fold(f64::INFINITY, f64::min);
+        assert!(d <= tol, "{i}: {d}");
+    }
+    let area = polygon_area(&poly);
+    assert!(area > 0.0 && (area - PI * a * b).abs() < 0.01, "{area}");
+}
+
+#[test]
+fn plate_with_two_bores_has_two_holes() {
+    let plate = boxs(40.0, 20.0, 10.0);
+    let d1 = moved(&k().make_cylinder(3.0, 14.0).unwrap(), 10.0, 10.0, -2.0);
+    let d2 = moved(&k().make_cylinder(2.0, 14.0).unwrap(), 28.0, 10.0, -2.0);
+    let s = diff(&diff(&plate, &d1), &d2);
+    let cut = cut_at(&s, 0, ViewKind::Top, 5.0);
+    let regions = section_regions(&cut, 0);
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].loops.len(), 3);
+    let ps = polys(&regions[0], &Basis::of(ViewKind::Top), 1e-4);
+    let areas: Vec<f64> = ps.iter().map(|p| polygon_area(p)).collect();
+    assert!(
+        areas[0] > 0.0 && areas[1] < 0.0 && areas[2] < 0.0,
+        "{areas:?}"
+    );
+    assert!((areas[0] - 800.0).abs() < 1e-9);
+    // Jedes Loch ist ein Kreis um seine Mitte; die Reihenfolge bleibt die der Flächenschleifen
+    // (Bohrung bei x = 10 zuerst).
+    let mut found = Vec::new();
+    for p in &ps[1..] {
+        let c = p.iter().fold(DVec2::ZERO, |s, q| s + *q) / p.len() as f64;
+        let r = (p[0] - c).length();
+        assert!(p.iter().all(|q| ((*q - c).length() - r).abs() < 1e-9));
+        found.push((c.x.round(), (r * 1e6).round() / 1e6));
+    }
+    assert_eq!(found, vec![(10.0, 3.0), (28.0, 2.0)]);
+    let again = polys(
+        &section_regions(&cut, 0)[0],
+        &Basis::of(ViewKind::Top),
+        1e-4,
+    );
+    assert_eq!(again, ps, "Reihenfolge ist stabil");
+}
+
+#[test]
+fn other_bases_mirror_axes() {
+    // Quader 20 x 10 x 5; Sollecken von Hand aus Basis::of (ex = d x ey).
+    let b = boxs(20.0, 10.0, 5.0);
+    let cases = [
+        // (Art, Versatz, Ecken in Ansichtskoordinaten)
+        (
+            ViewKind::Back,
+            4.0,
+            [(-20.0, 0.0), (0.0, 0.0), (0.0, 5.0), (-20.0, 5.0)],
+        ),
+        (
+            ViewKind::Left,
+            8.0,
+            [(-10.0, 0.0), (0.0, 0.0), (0.0, 5.0), (-10.0, 5.0)],
+        ),
+        (
+            ViewKind::Right,
+            8.0,
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (0.0, 5.0)],
+        ),
+        (
+            ViewKind::Bottom,
+            2.0,
+            [(0.0, -10.0), (20.0, -10.0), (20.0, 0.0), (0.0, 0.0)],
+        ),
+    ];
+    for (kind, off, want) in cases {
+        let cut = cut_at(&b, 0, kind, off);
+        let regions = section_regions(&cut, 0);
+        assert_eq!(regions.len(), 1, "{kind:?}");
+        let p = loop_polygon(&regions[0].loops[0], &Basis::of(kind), 1e-4);
+        assert_eq!(p.len(), 4, "{kind:?}");
+        assert!(polygon_area(&p) > 0.0, "{kind:?}");
+        for w in want {
+            assert!(
+                p.iter()
+                    .any(|q| (q.x - w.0).abs() < 1e-9 && (q.y - w.1).abs() < 1e-9),
+                "{kind:?} fehlt {w:?} in {p:?}"
+            );
+        }
+    }
+}

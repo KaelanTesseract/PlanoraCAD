@@ -14,6 +14,10 @@
 //!   entfernten) Seite, einschließlich Berührung, braucht es keinen Kernel. Liegt eine Ecke näher
 //!   als 1e-4 mm an der Ebene, wird vor dem Schneiden um `SECTION_NUDGE_MM` zur behaltenen Seite
 //!   verschoben. Scheitert `boolean` sonst, folgt ein zweiter Versuch mit Verschiebung.
+//! - **Abtastgrenzen der Randschleifen:** Kreis- und Ellipsenkanten höchstens 65 536 Stücke,
+//!   Freiformkanten höchstens 2049 Punkte (Verdopplung ab 64 Stücken, Halt vor 4096). Wird eine
+//!   Grenze erreicht, wird das Vieleck gröber als `tol`, ohne Meldung; praktisch unerreichbar
+//!   (Kreis erst ab Radius/`tol` > 8,7e8, Freiform nur bei extrem welliger Kante).
 
 use crate::basis::Basis;
 use crate::model::ViewKind;
