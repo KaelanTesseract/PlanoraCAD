@@ -90,8 +90,8 @@ fn step_dialog(s: &AppState) -> ExportDialog {
 
 #[test]
 fn step_is_the_fifth_format_with_its_own_extension() {
-    // Mechanisch angepasst (Teilprojekt 11, Aufgabe 17): zwei Zeichnungsformate dahinter.
-    assert_eq!(ExportFormat::ALL.len(), 7);
+    // Mechanisch angepasst (Teilprojekt 11, Aufgabe 17; 3c-3: PDF): drei Zeichnungsformate dahinter.
+    assert_eq!(ExportFormat::ALL.len(), 8);
     assert_eq!(ExportFormat::ALL[4], ExportFormat::Step);
     assert_eq!(ExportFormat::Step.extension(), "step");
     assert_eq!(ExportFormat::Step.label(), STEP_LABEL);

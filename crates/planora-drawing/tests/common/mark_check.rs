@@ -80,6 +80,7 @@ pub fn texts(marks: &[Mark]) -> Vec<T> {
                 anchor,
                 text,
                 kind,
+                ..
             } => Some(T {
                 pos: *pos,
                 height: *height,

@@ -868,6 +868,7 @@ fn nan_in_frame_is_rejected() {
             anchor: TextAnchor::Start,
             text: "x".into(),
             kind: MarkKind::Sheet(SheetPen::Thin),
+            fit_width: None,
         },
     ];
     for bad in bad_marks {

@@ -16,6 +16,8 @@ pub mod limits;
 pub mod model;
 pub mod out2d;
 pub mod parts;
+pub mod pdf;
+pub mod pdf_font;
 pub mod raycast;
 pub mod sheet;
 pub mod sheet_frame;
@@ -32,13 +34,14 @@ pub use centerline::{CenterLine, CenterSource, centerlines};
 pub use dimension::{Anchor, Measured, measure};
 pub use dxf::{dxf_string, write_dxf};
 pub use error::DrawError;
-pub use file::{DrawingFormat, drawing_to_bytes, export_drawing_file};
+pub use file::{DrawingFormat, drawing_to_bytes, export_drawing_file, export_pdf_file};
 pub use layout::{GAP_MM, align_dir, view_extent};
 pub use model::{
     Balloon, BalloonId, Drawing, DrawingId, DrawingKind, Paper, Placement, Projection, Scale,
     Sheet, ViewId, ViewKind, ViewSpec,
 };
 pub use parts::{BodyKey, PartsCells, PartsRow, RowOverride};
+pub use pdf::{PdfMeta, pdf_bytes, write_pdf};
 pub use sheet_frame::{
     PartsSpace, SheetLayout, SheetPen, TitleField, sheet_layout, sheet_layout_with,
 };
