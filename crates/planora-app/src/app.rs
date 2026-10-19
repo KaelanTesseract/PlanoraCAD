@@ -583,7 +583,45 @@ fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
 }
 
+/// Text des Menüeintrags „Rückgängig“: mit Aktionsnamen „Rückgängig: Quader anlegen“, ohne
+/// Schritt nur „Rückgängig“.
+pub fn undo_menu_text(label: Option<&str>) -> String {
+    match label {
+        Some(l) => format!("Rückgängig: {l}"),
+        None => "Rückgängig".into(),
+    }
+}
+
+/// Text des Menüeintrags „Wiederholen“ (wie [`undo_menu_text`]).
+pub fn redo_menu_text(label: Option<&str>) -> String {
+    match label {
+        Some(l) => format!("Wiederholen: {l}"),
+        None => "Wiederholen".into(),
+    }
+}
+
 fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+    // Rückgängig und Wiederholen: gesperrt mit Hilfetext, wenn es nichts zu tun gibt, in alten
+    // Versionen und während des Exports. Ein offenes Fenster sperrt nicht, es wird geschlossen.
+    let tab = ws.active_tab();
+    let (undo_block, redo_block) = (tab.undo_blocked(), tab.redo_blocked());
+    let undo_text = undo_menu_text(tab.undo_label());
+    let redo_text = redo_menu_text(tab.redo_label());
+    if shortcut_button(ui, undo_block.is_none(), Icon::Undo, &undo_text, "Strg+Z")
+        .on_disabled_hover_text(undo_block.unwrap_or_default())
+        .clicked()
+    {
+        undo_active(ws);
+        ui.close();
+    }
+    if shortcut_button(ui, redo_block.is_none(), Icon::Redo, &redo_text, "Strg+Y")
+        .on_disabled_hover_text(redo_block.unwrap_or_default())
+        .clicked()
+    {
+        redo_active(ws);
+        ui.close();
+    }
+    ui.separator();
     // Boolesche Operationen brauchen zwei gewöhnliche Körper; Netz-Körper sind gesperrt.
     let boolean = ws.active_tab().state.boolean_blocked();
     for (icon, label, op) in [
