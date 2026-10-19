@@ -80,12 +80,13 @@ pub struct SketchFeature {
     pub copies: Vec<EdgeCopy>,
 }
 
-/// Gleich heißt: gleicher Stand der Skizze ([`Sketch::revision`]), gleiche Ebene, gleiche
-/// Kantenkopien. Zwei getrennt gebaute Skizzen mit gleichem Inhalt sind ungleich (vorsichtig:
+/// Gleich heißt: gleicher Stand der Skizze ([`Sketch::revision`]), gleicher Skizzenname (ändert
+/// den Stand nicht, wird aber gespeichert), gleiche Ebene, gleiche Kantenkopien. Zwei getrennt gebaute Skizzen mit gleichem Inhalt sind ungleich (vorsichtig:
 /// höchstens ein überflüssiger Schritt im Verlauf oder eine Neuberechnung mehr).
 impl PartialEq for SketchFeature {
     fn eq(&self, other: &Self) -> bool {
         self.sketch.revision() == other.sketch.revision()
+            && self.sketch.name == other.sketch.name
             && self.plane == other.plane
             && self.copies == other.copies
     }

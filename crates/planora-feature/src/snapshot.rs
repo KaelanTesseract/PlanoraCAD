@@ -142,6 +142,10 @@ impl Document {
     /// [`Document::edit_count`] steigt in beiden Fällen, [`Document::model_edit_count`] nur beim
     /// vollen Weg. Auch Feature-Versionen und Netz-Kennungen werden nicht wiederverwendet.
     ///
+    /// Ein Bild mit einem NaN-Parameter ist nie gleich mit sich selbst und nimmt deshalb immer
+    /// den vollen Weg (sicher, nur langsamer). Der volle Weg verwirft Netze, auf die kein
+    /// Feature verweist (sie stehen nicht im Bild); eine solche `MeshId` gilt danach nicht mehr.
+    ///
     /// Bei Fehler bleibt `self` unverändert.
     pub fn restore(&mut self, s: Snapshot) -> Result<RestoreKind, FeatureError> {
         if self.snapshot().same_model(&s) {

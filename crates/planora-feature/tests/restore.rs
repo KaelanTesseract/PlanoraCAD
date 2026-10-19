@@ -324,6 +324,8 @@ fn counters_keep_rising() {
     assert_eq!(r.doc.restore(b.clone()), Ok(RestoreKind::Full));
     let c1 = counters(&r.doc);
     assert!(c1.0 > c0.0 && c1.1 > c0.1, "{c0:?} → {c1:?}");
+    // R1: voller Weg erhöht beide Teilzähler um 1, `edit_count` also um 2.
+    assert_eq!(c1, (c0.0 + 2, c0.1 + 1), "{c0:?} → {c1:?}");
     assert_eq!(r.doc.restore(a.clone()), Ok(RestoreKind::Full));
     let c2 = counters(&r.doc);
     assert!(c2.0 > c1.0 && c2.1 > c1.1, "{c1:?} → {c2:?}");
@@ -531,6 +533,11 @@ fn sketch_equality_by_revision() {
     let mut plane = a.clone();
     plane.plane = SketchPlane::Standard(StandardPlane::XZ);
     assert_ne!(a, plane);
+    // gleicher Stand, anderer Skizzenname
+    let mut named = a.clone();
+    named.sketch.name = "Umbenannt".into();
+    assert_eq!(named.sketch.revision(), a.sketch.revision());
+    assert_ne!(a, named);
     let mut copies = a.clone();
     copies.copies.push(EdgeCopy {
         curve: a.sketch.curves().next().map(|(id, _)| id).unwrap(),
@@ -549,4 +556,26 @@ fn sketch_equality_by_revision() {
         },
     });
     assert_ne!(a, copies);
+}
+
+#[test]
+fn renamed_sketch_with_same_revision_is_restored() {
+    let mut r = rich();
+    let current = r.doc.snapshot();
+    let mut renamed = current.clone();
+    let id = sketch_id(&renamed);
+    let FeatureKind::Sketch(sf) = kind_of(&mut renamed, id) else {
+        unreachable!()
+    };
+    let revision = sf.sketch.revision();
+    sf.sketch.name = "Umbenannt".into();
+    assert!(!renamed.same_content(&current));
+    assert!(!renamed.same_model(&current));
+    assert_eq!(r.doc.restore(renamed.clone()), Ok(RestoreKind::Full));
+    let FeatureKind::Sketch(sf) = &r.doc.feature(id).unwrap().kind else {
+        unreachable!()
+    };
+    assert_eq!(sf.sketch.name, "Umbenannt");
+    assert_eq!(sf.sketch.revision(), revision);
+    assert!(r.doc.snapshot().same_content(&renamed));
 }
