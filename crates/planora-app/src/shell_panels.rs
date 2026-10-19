@@ -880,11 +880,23 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     }
 }
 
-/// Text und Farbe der Statuszeile. Vorrang: letzte Meldung (Fehlerfarbe), Skizzen-Modus
-/// (text_secondary), erstes Feature mit Fehler (Fehlerfarbe), Körperzahl (mit Hinweis bei
-/// ungenauem Netz in der Warnfarbe, sonst text_secondary).
+/// Text und Farbe der Statuszeile. Vorrang: letzte Meldung (Fehlerfarbe), Hinweis `info`
+/// (text_secondary; im Skizzen-Modus hinter der Zeile „Skizzen-Modus: …“, damit diese sichtbar
+/// bleibt), Skizzen-Modus (text_secondary), erstes Feature mit Fehler (Fehlerfarbe), Körperzahl
+/// (mit Hinweis bei ungenauem Netz in der Warnfarbe, sonst text_secondary).
 fn status_line(state: &AppState, dark: bool) -> (String, egui::Color32) {
     let p = theme::palette(dark);
+    if state.message.is_none()
+        && let Some(info) = &state.info
+    {
+        return match state.session_sketch() {
+            Some(sk) => (
+                format!("Skizzen-Modus: {} · {info}", sk.name),
+                p.text_secondary,
+            ),
+            None => (info.clone(), p.text_secondary),
+        };
+    }
     match (
         &state.message,
         state.session_sketch(),

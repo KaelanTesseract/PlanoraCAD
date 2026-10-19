@@ -162,7 +162,9 @@ impl PlanoraApp {
     /// Felder Projekte und Versionen und solange eine Maustaste gedrückt ist: Mitten im Ziehen
     /// würde das halbe Ziehen sonst ein Schritt und gleich wieder zurückgenommen.
     /// Strg+Umschalt+Z wird vor Strg+Z abgefragt, weil das Kürzel mit Strg allein auch bei
-    /// gedrückter Umschalttaste passt.
+    /// gedrückter Umschalttaste passt. Gehaltene Tasten: jedes Bild mit (Wiederholungs-)Ereignis
+    /// ist ein Schritt, mehrere Ereignisse desselben Kürzels in einem Bild zusammen nur einer
+    /// (`consume_shortcut` verbraucht sie alle).
     fn undo_keys(&mut self, ctx: &egui::Context) {
         if self.ws.about_open
             || self.ws.active_tab().dialog_open()
@@ -191,9 +193,9 @@ impl PlanoraApp {
 }
 
 /// Rückgängig im aktiven Tab (bei offener Skizze in der Skizze). Die Statuszeile nennt danach
-/// den Schritt („Rückgängig: Quader anlegen“) oder sagt, warum es nicht geht (etwa
-/// „Es gibt nichts rückgängig zu machen.“). Schlägt das Zurückladen fehl, steht dort schon die
-/// Meldung von [`crate::workspace::DocTab::undo`].
+/// den Schritt als Hinweis in normaler Farbe (`state.info`, „Rückgängig: Quader anlegen“) oder
+/// sagt als Meldung, warum es nicht geht (etwa „Es gibt nichts rückgängig zu machen.“).
+/// Schlägt das Zurückladen fehl, steht dort die Meldung von [`crate::workspace::DocTab::undo`].
 pub(crate) fn undo_active(ws: &mut Workspace) {
     history_step(ws, true);
 }
@@ -212,6 +214,7 @@ fn history_step(ws: &mut Workspace, undo: bool) {
     };
     if let Some(why) = blocked {
         tab.state.message = Some(why.into());
+        tab.state.info = None;
         return;
     }
     let (label, done, word) = if undo {
@@ -219,8 +222,10 @@ fn history_step(ws: &mut Workspace, undo: bool) {
     } else {
         (tab.redo_label(), tab.redo(), "Wiederholen")
     };
+    tab.state.info = None;
     if done.is_ok() {
-        tab.state.message = Some(match label {
+        tab.state.message = None;
+        tab.state.info = Some(match label {
             Some(l) => format!("{word}: {l}"),
             None => word.into(),
         });

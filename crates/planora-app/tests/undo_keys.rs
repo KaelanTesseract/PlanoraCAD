@@ -21,6 +21,7 @@ use planora_app::drawing_dialog::NewDrawingDialog;
 use planora_app::drawing_state::WorkArea;
 use planora_app::export_dialog::ExportDialog;
 use planora_app::feature_dialog::FeatureDialog;
+use planora_app::history::{History, snapshot_bytes};
 use planora_app::properties::POSITION_LABEL;
 use planora_app::sketch_state::Tool;
 use planora_app::state::*;
@@ -51,6 +52,7 @@ fn ws() -> Workspace {
 struct Seen {
     text: String,
     rect: Rect,
+    color: egui::Color32,
 }
 
 struct Rig {
@@ -131,10 +133,23 @@ impl Rig {
         fn walk(shape: &egui::epaint::Shape, out: &mut Vec<Seen>) {
             match shape {
                 egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
-                egui::epaint::Shape::Text(t) => out.push(Seen {
-                    text: t.galley.text().to_string(),
-                    rect: Rect::from_min_size(t.pos, t.galley.size()),
-                }),
+                egui::epaint::Shape::Text(t) => {
+                    // Farbe wie gemalt: erster Abschnitt, Platzhalter → Rückfallfarbe, Vorgabe
+                    // überschreibt.
+                    let section = t.galley.job.sections.first();
+                    let mut color = section.map_or(t.fallback_color, |x| x.format.color);
+                    if color == egui::Color32::PLACEHOLDER {
+                        color = t.fallback_color;
+                    }
+                    if let Some(c) = t.override_text_color {
+                        color = c;
+                    }
+                    out.push(Seen {
+                        text: t.galley.text().to_string(),
+                        rect: Rect::from_min_size(t.pos, t.galley.size()),
+                        color,
+                    })
+                }
                 _ => {}
             }
         }
@@ -179,6 +194,10 @@ impl Rig {
 
     fn message(&mut self) -> Option<String> {
         self.st().message.clone()
+    }
+
+    fn info(&mut self) -> Option<String> {
+        self.st().info.clone()
     }
 }
 
@@ -321,6 +340,13 @@ fn position_x_text(seen: &[Seen], at: Pos2) -> String {
         .unwrap_or_default()
 }
 
+/// Farbe des einzigen gemalten Textes `text` (die Statuszeile).
+fn status_color(seen: &[Seen], text: &str) -> egui::Color32 {
+    let all: Vec<_> = seen.iter().filter(|s| s.text == text).collect();
+    assert_eq!(all.len(), 1, "„{text}“ genau einmal gemalt: {all:?}");
+    all[0].color
+}
+
 // ---- (a) Strg+Z, Strg+Umschalt+Z, Strg+Y ------------------------------------------------------
 
 #[test]
@@ -335,11 +361,13 @@ fn keys_undo_and_redo() {
         "genau ein Schritt"
     );
     assert!(!rig.left_over, "das Kürzel ist verbraucht");
-    assert_eq!(rig.message().as_deref(), Some("Rückgängig: Kugel anlegen"));
+    assert_eq!(rig.info().as_deref(), Some("Rückgängig: Kugel anlegen"));
+    assert_eq!(rig.message(), None, "keine Fehlermeldung");
     let seen = rig.settle();
-    assert!(
-        seen.iter().any(|s| s.text == "Rückgängig: Kugel anlegen"),
-        "die Statuszeile nennt die Aktion"
+    assert_eq!(
+        status_color(&seen, "Rückgängig: Kugel anlegen"),
+        theme::palette(true).text_secondary,
+        "die Statuszeile nennt die Aktion in normaler Farbe"
     );
     assert_eq!(rig.undo_len(), 1, "Rückgängig ist kein neuer Schritt");
 
@@ -347,7 +375,7 @@ fn keys_undo_and_redo() {
     assert_eq!(rig.bodies(), 2, "Strg+Umschalt+Z: die Kugel ist wieder da");
     assert_eq!((rig.undo_len(), rig.redo_len()), (2, 0));
     assert!(!rig.left_over);
-    assert_eq!(rig.message().as_deref(), Some("Wiederholen: Kugel anlegen"));
+    assert_eq!(rig.info().as_deref(), Some("Wiederholen: Kugel anlegen"));
     rig.settle();
 
     rig.undo_key();
@@ -356,7 +384,7 @@ fn keys_undo_and_redo() {
     assert_eq!(rig.bodies(), 2, "Strg+Y: wieder da");
     assert_eq!((rig.undo_len(), rig.redo_len()), (2, 0));
     assert!(!rig.left_over);
-    assert_eq!(rig.message().as_deref(), Some("Wiederholen: Kugel anlegen"));
+    assert_eq!(rig.info().as_deref(), Some("Wiederholen: Kugel anlegen"));
     rig.settle();
 
     // Zwei Durchgänge eines Bildes: das Kürzel wirkt trotzdem nur einmal.
@@ -387,13 +415,17 @@ fn keys_undo_and_redo() {
     rig.undo_key();
     rig.undo_key();
     assert_eq!(rig.bodies(), 0);
-    assert_eq!(rig.message().as_deref(), Some("Rückgängig: Quader anlegen"));
+    assert_eq!(rig.info().as_deref(), Some("Rückgängig: Quader anlegen"));
     rig.undo_key();
     assert_eq!(rig.bodies(), 0);
     assert_eq!((rig.undo_len(), rig.redo_len()), (0, 2));
     assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_UNDO));
+    assert_eq!(rig.info(), None);
     let seen = rig.settle();
-    assert!(seen.iter().any(|s| s.text == NOTHING_TO_UNDO));
+    assert_eq!(
+        status_color(&seen, NOTHING_TO_UNDO),
+        theme::palette(true).error
+    );
 }
 
 /// Ohne jeden Schritt: beide Kürzel ändern nichts und sagen es.
@@ -479,7 +511,7 @@ fn typing_keeps_ctrl_z_for_the_field() {
     assert!(n >= 1);
     rig.undo_key();
     assert_eq!(rig.undo_len(), n - 1, "Strg+Z wirkt wieder");
-    assert!(rig.message().unwrap().starts_with("Rückgängig: "));
+    assert!(rig.info().unwrap().starts_with("Rückgängig: "));
 }
 
 #[test]
@@ -743,7 +775,7 @@ fn held_mouse_button_blocks_keys() {
     assert_eq!(rig.undo_len(), 2, "das ganze Ziehen ist ein Schritt");
     rig.undo_key();
     assert_eq!(rig.st().bodies[0].bounds.0, before, "zurück vor das Ziehen");
-    assert_eq!(rig.message().as_deref(), Some("Rückgängig: Verschieben"));
+    assert_eq!(rig.info().as_deref(), Some("Rückgängig: Verschieben"));
 }
 
 // ---- (d) Skizze und Zeichnung ------------------------------------------------------------------
@@ -789,14 +821,11 @@ fn keys_in_sketch_mode() {
         doc_steps,
         "Dokumentverlauf ruht"
     );
-    assert_eq!(rig.message().as_deref(), Some("Rückgängig: Linie zeichnen"));
+    assert_eq!(rig.info().as_deref(), Some("Rückgängig: Linie zeichnen"));
     rig.settle();
     rig.press(Key::Y, Modifiers::COMMAND);
     assert_eq!(curves(&mut rig), 2, "Strg+Y stellt sie wieder her");
-    assert_eq!(
-        rig.message().as_deref(),
-        Some("Wiederholen: Linie zeichnen")
-    );
+    assert_eq!(rig.info().as_deref(), Some("Wiederholen: Linie zeichnen"));
     rig.settle();
     rig.undo_key();
     rig.undo_key();
@@ -839,11 +868,11 @@ fn keys_in_drawing_view() {
     assert_eq!(views(&mut rig), 1, "Strg+Z nimmt die Ansicht zurück");
     assert_eq!(rig.undo_len(), steps - 1, "derselbe Verlauf des Tabs");
     assert!(matches!(rig.st().drawing_ui.area, WorkArea::Drawing(x) if x == d));
-    assert!(rig.message().unwrap().starts_with("Rückgängig: "));
+    assert!(rig.info().unwrap().starts_with("Rückgängig: "));
     rig.settle();
     rig.press(Key::Z, SHIFT_COMMAND);
     assert_eq!(views(&mut rig), 2, "Strg+Umschalt+Z stellt sie wieder her");
-    assert!(rig.message().unwrap().starts_with("Wiederholen: "));
+    assert!(rig.info().unwrap().starts_with("Wiederholen: "));
 }
 
 // ---- (e) Andere Kürzel unverändert ---------------------------------------------------------
@@ -893,4 +922,196 @@ fn other_shortcuts_unchanged() {
     assert_eq!(rig.redo_len(), 0);
     rig.undo_key();
     assert_eq!(rig.bodies(), 0);
+}
+
+// ---- Hinweis in der Statuszeile, Fehler, gehaltene Taste ------------------------------------
+
+/// Der Hinweis „Rückgängig: …“ bleibt über Bilder ohne Änderung stehen und endet mit dem
+/// nächsten Schritt oder einer Meldung (die dann in der Fehlerfarbe steht).
+#[test]
+fn info_ends_with_next_step_or_message() {
+    let mut rig = box_and_sphere();
+    rig.undo_key();
+    rig.settle();
+    rig.frame(vec![Event::PointerMoved(Pos2::new(700.0, 450.0))]);
+    assert_eq!(
+        rig.info().as_deref(),
+        Some("Rückgängig: Kugel anlegen"),
+        "bleibt ohne neue Änderung"
+    );
+    // Neue Aktion → neuer Schritt → Hinweis weg.
+    rig.st().create_sphere(1.0).unwrap();
+    let seen = rig.settle();
+    assert_eq!(rig.info(), None, "endet mit dem nächsten Schritt");
+    assert!(!seen.iter().any(|s| s.text.starts_with("Rückgängig")));
+    assert_eq!(
+        status_color(&seen, "2 Körper"),
+        theme::palette(true).text_secondary
+    );
+
+    // Hinweis, dann eine Meldung: die Meldung steht in der Fehlerfarbe, der Hinweis ist weg.
+    rig.undo_key();
+    assert_eq!(rig.info().as_deref(), Some("Rückgängig: Kugel anlegen"));
+    rig.st().message = Some("Etwas ging schief".into());
+    let seen = rig.settle();
+    assert_eq!(rig.info(), None, "endet mit einer Meldung");
+    assert_eq!(
+        status_color(&seen, "Etwas ging schief"),
+        theme::palette(true).error
+    );
+    rig.st().message = None;
+    let seen = rig.settle();
+    assert!(
+        !seen.iter().any(|s| s.text.starts_with("Rückgängig")),
+        "der alte Hinweis kommt nicht wieder"
+    );
+}
+
+/// Im Skizzen-Modus steht der Hinweis hinter der Zeile „Skizzen-Modus: …“; beides bleibt
+/// sichtbar, der Hinweis endet mit dem nächsten Skizzenschritt.
+#[test]
+fn info_keeps_the_sketch_line() {
+    let mut w = ws();
+    let id = w
+        .active_tab_mut()
+        .state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    w.active_tab_mut().state.open_sketch(id).unwrap();
+    w.observe_history(false);
+    let mut rig = Rig::new(w);
+    let name = rig.st().session_sketch().unwrap().name.clone();
+    {
+        let (se, sk) = rig.st().session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Line);
+    }
+    for (x, y) in [(0.0, 0.0), (10.0, 4.0)] {
+        let (se, sk) = rig.st().session_sketch_mut().unwrap();
+        se.click(sk, DVec2::new(x, y), 0.5, false).unwrap();
+        rig.frame(vec![]);
+    }
+    rig.settle();
+    rig.undo_key();
+    let seen = rig.settle();
+    let both = format!("Skizzen-Modus: {name} · Rückgängig: Linie zeichnen");
+    assert_eq!(
+        status_color(&seen, &both),
+        theme::palette(true).text_secondary
+    );
+    // Nächster Skizzenschritt: nur noch die Zeile des Skizzen-Modus.
+    {
+        let (se, sk) = rig.st().session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Point);
+        se.click(sk, DVec2::new(5.0, 5.0), 0.5, false).unwrap();
+    }
+    let seen = rig.settle();
+    assert_eq!(rig.info(), None);
+    assert_eq!(
+        status_color(&seen, &format!("Skizzen-Modus: {name}")),
+        theme::palette(true).text_secondary
+    );
+}
+
+/// Schlägt das Zurückladen über die Taste fehl, steht die Fehlermeldung in der Fehlerfarbe und
+/// kein Erfolgshinweis.
+#[test]
+fn failed_restore_through_keys() {
+    // Rückgängig: das mittlere Bild ist unbrauchbar (Marke hinter dem Ende).
+    let mut w = ws();
+    let s0 = w.active_tab().state.snapshot();
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(10.0))
+        .unwrap();
+    let mut s1 = w.active_tab().state.snapshot();
+    w.active_tab_mut().state.create_sphere(3.0).unwrap();
+    let s2 = w.active_tab().state.snapshot();
+    w.active_tab_mut().state.create_cone(2.0, 3.0).unwrap();
+    let s3 = w.active_tab().state.snapshot();
+    s1.marker = s1.features.len() + 5;
+    let mut h = History::new(s0.clone(), snapshot_bytes(&s0));
+    h.record(s1, 0, "Quader anlegen");
+    h.record(s2, 0, "Kugel anlegen");
+    h.record(s3, 0, "Kegel anlegen");
+    *w.active_tab_mut().history_mut() = h;
+    let mut rig = Rig::new(w);
+    assert_eq!(rig.undo_len(), 3);
+    rig.undo_key();
+    assert_eq!(rig.info().as_deref(), Some("Rückgängig: Kegel anlegen"));
+    rig.settle();
+    rig.undo_key();
+    assert_eq!(rig.message().as_deref(), Some(UNDO_FAILED));
+    assert_eq!(rig.info(), None, "kein Erfolgshinweis");
+    assert_eq!(rig.bodies(), 2, "Dokument unverändert");
+    let seen = rig.settle();
+    assert_eq!(status_color(&seen, UNDO_FAILED), theme::palette(true).error);
+    assert!(!seen.iter().any(|s| s.text.starts_with("Rückgängig:")));
+
+    // Wiederholen: das nächste Bild ist unbrauchbar.
+    let mut scratch = AppState::new();
+    let t0 = scratch.snapshot();
+    scratch.create_box(DVec3::splat(4.0)).unwrap();
+    let mut t1 = scratch.snapshot();
+    t1.marker = t1.features.len() + 5;
+    let mut h = History::new(t0.clone(), snapshot_bytes(&t0));
+    h.record(t1, 0, "Quader anlegen");
+    h.commit_undo();
+    let mut w = ws();
+    *w.active_tab_mut().history_mut() = h;
+    let mut rig = Rig::new(w);
+    assert_eq!(rig.redo_len(), 1);
+    rig.press(Key::Y, Modifiers::COMMAND);
+    assert_eq!(rig.message().as_deref(), Some(REDO_FAILED));
+    assert_eq!(rig.info(), None, "kein Erfolgshinweis");
+    assert_eq!(rig.bodies(), 0);
+    let seen = rig.settle();
+    assert_eq!(status_color(&seen, REDO_FAILED), theme::palette(true).error);
+    assert!(!seen.iter().any(|s| s.text.starts_with("Wiederholen:")));
+}
+
+/// Gehaltene Taste: mehrere Ereignisse (Wiederholungen) in einem Bild sind ein Schritt, jedes
+/// weitere Bild mit einem Ereignis ein weiterer.
+#[test]
+fn held_key_is_one_step_per_frame() {
+    let mut rig = box_and_sphere();
+    rig.st().create_sphere(1.0).unwrap();
+    rig.settle();
+    assert_eq!(rig.undo_len(), 3);
+    let repeat = |k: Key| Event::Key {
+        key: k,
+        physical_key: Some(k),
+        pressed: true,
+        repeat: true,
+        modifiers: Modifiers::COMMAND,
+    };
+    rig.frame(vec![key(Key::Z, Modifiers::COMMAND), repeat(Key::Z)]);
+    assert_eq!(
+        (rig.undo_len(), rig.redo_len()),
+        (2, 1),
+        "ein Schritt im Bild"
+    );
+    assert!(!rig.left_over, "alle Ereignisse verbraucht");
+    rig.frame(vec![repeat(Key::Z), repeat(Key::Z)]);
+    assert_eq!(
+        (rig.undo_len(), rig.redo_len()),
+        (1, 2),
+        "nächstes Bild, nächster Schritt"
+    );
+    rig.frame(vec![repeat(Key::Y), repeat(Key::Y)]);
+    assert_eq!((rig.undo_len(), rig.redo_len()), (2, 1));
+}
+
+/// Stehen Meldung und Hinweis zugleich (im Bild, in dem beide gesetzt wurden), gewinnt die
+/// Meldung in der Fehlerfarbe.
+#[test]
+fn message_wins_over_info() {
+    let mut rig = box_and_sphere();
+    rig.st().info = Some("Rückgängig: Kugel anlegen".into());
+    rig.st().message = Some("Etwas ging schief".into());
+    let seen = rig.frame(vec![]);
+    assert_eq!(
+        status_color(&seen, "Etwas ging schief"),
+        theme::palette(true).error
+    );
+    assert!(!seen.iter().any(|s| s.text.starts_with("Rückgängig")));
 }

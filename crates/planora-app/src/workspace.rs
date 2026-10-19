@@ -167,9 +167,22 @@ impl DocTab {
     /// sich selbst gleicht (eine Zahl „keine Zahl“), ohne Änderung keine Schritte. Danach die
     /// offene Skizze in ihrem eigenen Verlauf (R10, [`AppState::observe_sketch`]); das
     /// Dokument selbst ändert sich während der Skizze kaum (Anlegen im selben Bild, Löschen).
+    ///
+    /// Der Hinweis `state.info` („Rückgängig: …“) endet hier, sobald ein neuer Schritt entsteht
+    /// (im Dokument oder in der Skizze) oder eine Meldung in `state.message` steht.
     pub fn observe_history(&mut self, gesture: bool) {
+        let steps = |t: &DocTab| {
+            (
+                t.history.current_id(),
+                t.state.sketch_history().map(|h| h.current_id()),
+            )
+        };
+        let before = steps(self);
         self.observe_document(gesture);
         self.state.observe_sketch(gesture);
+        if steps(self) != before || self.state.message.is_some() {
+            self.state.info = None;
+        }
     }
 
     fn observe_document(&mut self, gesture: bool) {
