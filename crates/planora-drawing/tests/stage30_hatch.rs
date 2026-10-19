@@ -235,3 +235,47 @@ fn piece_cap() {
     let r = hatch_lines(&[comb], 0.0, 1.0, v(0., 0.5), 12);
     assert!(matches!(r, Err(HatchError::TooMany(n)) if n > 12), "{r:?}");
 }
+
+#[test]
+fn triangle_is_a_polygon() {
+    let t = vec![v(0., 0.), v(10., 0.), v(0., 10.)];
+    let r = run(&[t], 0.0, 3.0, o());
+    let ys: Vec<f64> = r.iter().map(|p| p.0.y).collect();
+    assert_eq!(ys, vec![0.5, 3.5, 6.5, 9.5]);
+    for p in &r {
+        assert!((len(p) - (10.0 - p.0.y)).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn second_polygon_outside_first_k_range() {
+    let r = run(
+        &[rect(0., 0., 1., 1.), rect(0., 20., 1., 21.)],
+        0.0,
+        1.0,
+        o(),
+    );
+    let ys: Vec<f64> = r.iter().map(|p| p.0.y).collect();
+    assert_eq!(ys, vec![0.5, 20.5]);
+}
+
+#[test]
+fn piece_length_threshold() {
+    for w in [1e-5, 1e-7] {
+        let r = run(&[rect(0., 0., w, 10.)], 0.0, 1.0, o());
+        assert_eq!(r.len(), 10, "w={w}");
+        assert!((len(&r[0]) - w).abs() < 1e-15);
+    }
+    assert!(run(&[rect(0., 0., 1e-10, 10.)], 0.0, 1.0, o()).is_empty());
+}
+
+#[test]
+fn piece_cap_exactly_at_max() {
+    // 5 Zeilen, je 2 Stücke = 10 Stücke, Linienzahl 5 liegt unter jeder Grenze
+    let two = [rect(0., 0., 4., 5.), rect(6., 0., 10., 5.)];
+    assert_eq!(hatch_lines(&two, 0.0, 1.0, o(), 10).unwrap().len(), 10);
+    assert_eq!(
+        hatch_lines(&two, 0.0, 1.0, o(), 9),
+        Err(HatchError::TooMany(10))
+    );
+}

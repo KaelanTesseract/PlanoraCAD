@@ -17,7 +17,9 @@ const MIN_PIECE: f64 = 1e-9;
 pub enum HatchError {
     /// Abstand ≤ 0 oder nicht endlich, Winkel oder Koordinaten nicht endlich.
     BadInput,
-    /// Mehr Linien (oder Stücke) als erlaubt; die Zahl ist die ermittelte Anzahl (> `max`).
+    /// Mehr Linien (oder Stücke) als erlaubt. Beim Linienzählen ist die Zahl die genaue
+    /// Linienanzahl; beim Bauen der Stücke nur eine Untergrenze (`max + 1`, es wird früh
+    /// abgebrochen). Die Zahl ist nicht für Benutzer bestimmt und darf nicht angezeigt werden.
     TooMany(usize),
 }
 
