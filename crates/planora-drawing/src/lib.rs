@@ -10,6 +10,7 @@ pub mod dimension;
 pub mod dxf;
 pub mod error;
 pub mod file;
+pub mod hatch;
 pub mod isect;
 pub mod layout;
 pub mod limits;
