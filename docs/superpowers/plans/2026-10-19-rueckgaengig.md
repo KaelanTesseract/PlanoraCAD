@@ -403,7 +403,16 @@ Strg+Umschalt+Z vor Strg+Z abfragen (`consume_shortcut` mit `COMMAND` passt sons
 
 ## Messergebnis Aufgabe 2
 
-(wird in Aufgabe 2 ausgefüllt: Tabelle, Rechner, Build, Entscheidung synchron/Hintergrund)
+Rechner: AMD Ryzen 9 9950X (16 Kerne), 62 GB; Build `cargo test --release -p planora-app --test history_perf -j 2 -- --ignored --nocapture` (Median aus 5 Läufen, Zeiten in ms). Mittleres Modell: 37 Features, 4 Ansichten. Schweres Modell: mittleres Modell + Platte 10 x 10 Bohrungen + Spline-Extrusion + Netz-Körper (200 000 Dreiecke) + 6 Ansichten (2 Schnitte) + 30 Maße.
+
+| Modell | snapshot() | snapshot_bytes | from_snapshot | refresh (mit Netz-Speicher) | refresh (ohne) | davon Netzprüfung | Summe from_snapshot + refresh |
+|---|---|---|---|---|---|---|---|
+| mittel (Release) | 0,0 | 0,00 | 232,3 | 2,5 | 2,7 | 0,0 | 234,8 |
+| schwer (Release) | 0,0 | 0,00 | 250,1 | 39,0 | 42,6 | 0,2 | 289,1 |
+| mittel (Debug) | 0,0 | 0,01 | 925,8 | 36,4 | 37,5 | 0,0 | 962,2 |
+| schwer (Debug) | 0,1 | 0,01 | 970,1 | 238,7 | 458,9 | 2,4 | 1208,8 |
+
+Den größten Teil von `from_snapshot` macht die Neuberechnung der Features (`recompute_features`); die Netzprüfung ist vernachlässigbar. **Entscheidung (Release):** Summe 289 ms <= 1000 ms und `snapshot()` unter 1 ms <= 50 ms, also synchron wie geplant, Aufgaben 3-10 unverändert. Im Debug-Build liegt das schwere Modell mit 1209 ms über der Grenze (Tests laufen dort, kein Bedienweg). Nicht gemessen: Neuberechnung der Ansichten der Zeichnung nach dem Zurückladen (läuft im Hintergrund, nicht Teil der Grenze).
 
 ## Abweichungen bei der Umsetzung
 
