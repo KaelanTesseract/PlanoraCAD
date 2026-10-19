@@ -5,10 +5,34 @@ use crate::model::{Document, Feature, FeatureId, FeatureKind, FeatureStatus, Mes
 use planora_drawing::sheet_info::{ProjectInfo, validate_project_info};
 use planora_drawing::{BodyKey, Drawing, RowOverride};
 use planora_exchange::ExchangeMesh;
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-#[derive(Clone, Debug)]
+thread_local! {
+    static MESH_VALIDATIONS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Zahl der Netzprüfungen (`ExchangeMesh::validate`) beim Bauen aus einem Snapshot
+/// ([`Document::from_snapshot`], [`Document::restore`]) in diesem Thread seit Programmstart.
+/// Nur für Tests, die prüfen, dass schon bekannte Netze nicht erneut geprüft werden (zählt im
+/// aufrufenden Thread, deshalb unabhängig von parallel laufenden Tests).
+#[doc(hidden)]
+pub fn mesh_validations() -> u64 {
+    MESH_VALIDATIONS.with(Cell::get)
+}
+
+/// Wie [`Document::restore`] ein Bild übernommen hat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreKind {
+    /// Nur Zeichnungen, Projektangaben und Stücklistentexte ersetzt; die Körper blieben, wie sie
+    /// waren (keine Neuberechnung, [`Document::model_edit_count`] unverändert).
+    Annotations,
+    /// Ganzes Dokument neu gebaut und berechnet (wie beim Laden).
+    Full,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct SnapshotFeature {
     pub id: FeatureId,
     pub name: String,
@@ -31,6 +55,39 @@ pub struct Snapshot {
     pub project_info: Option<ProjectInfo>,
     /// Eigene Texte der Stücklistenzeilen.
     pub parts_overrides: BTreeMap<BodyKey, RowOverride>,
+}
+
+/// Gleiche Netztabellen: gleiche Kennungen mit jeweils demselben `Arc` (nicht nur gleichem
+/// Inhalt).
+fn same_meshes(
+    a: &BTreeMap<MeshId, Arc<ExchangeMesh>>,
+    b: &BTreeMap<MeshId, Arc<ExchangeMesh>>,
+) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|((ka, ma), (kb, mb))| ka == kb && Arc::ptr_eq(ma, mb))
+}
+
+impl Snapshot {
+    /// Gleicher Inhalt in allen Feldern. Netze gelten nur als gleich, wenn es dieselben `Arc`
+    /// sind; Skizzen nach ihrem Stand (siehe [`crate::SketchFeature`]).
+    pub fn same_content(&self, other: &Snapshot) -> bool {
+        self.same_model(other)
+            && self.drawings == other.drawings
+            && self.next_drawing == other.next_drawing
+            && self.project_info == other.project_info
+            && self.parts_overrides == other.parts_overrides
+    }
+
+    /// Gleiches Modell: Features, Marker, Kennungszähler und Netze gleich; Zeichnungen,
+    /// Projektangaben und Stücklistentexte zählen nicht.
+    pub fn same_model(&self, other: &Snapshot) -> bool {
+        self.features == other.features
+            && self.marker == other.marker
+            && self.next_id == other.next_id
+            && same_meshes(&self.meshes, &other.meshes)
+    }
 }
 
 impl Document {
@@ -66,6 +123,56 @@ impl Document {
     /// Netze und Verweise; ungültige Zahlen führen erst bei der Berechnung zu einem Fehlerstatus
     /// am betroffenen Feature (kein Panic, kein Abbruch des Ladens).
     pub fn from_snapshot(s: Snapshot, chord_tolerance: f64) -> Result<Document, FeatureError> {
+        let mut doc = Document::build(s, chord_tolerance, &BTreeMap::new(), 1)?;
+        doc.edits = 0;
+        doc.drawing_edits = 0;
+        Ok(doc)
+    }
+
+    /// Übernimmt den Zustand eines Bildes (Rückgängig/Wiederholen). Stimmt das Modell mit dem
+    /// Dokument überein ([`Snapshot::same_model`]), werden nur Zeichnungen, Projektangaben und
+    /// Stücklistentexte ersetzt (geprüft wie beim Laden, ohne Neuberechnung,
+    /// [`RestoreKind::Annotations`]); sonst wird wie beim Laden gebaut und gerechnet
+    /// ([`RestoreKind::Full`]), wobei Netze, die als derselbe `Arc` schon im Dokument liegen,
+    /// nicht erneut geprüft werden.
+    ///
+    /// Die Änderungszähler steigen immer weiter (nie zurück auf 0 oder auf einen früheren Wert),
+    /// damit Zwischenspeicher, die an [`Document::edit_count`] oder
+    /// [`Document::model_edit_count`] hängen, nie ein altes Ergebnis zeigen:
+    /// [`Document::edit_count`] steigt in beiden Fällen, [`Document::model_edit_count`] nur beim
+    /// vollen Weg. Auch Feature-Versionen und Netz-Kennungen werden nicht wiederverwendet.
+    ///
+    /// Bei Fehler bleibt `self` unverändert.
+    pub fn restore(&mut self, s: Snapshot) -> Result<RestoreKind, FeatureError> {
+        if self.snapshot().same_model(&s) {
+            if let Some(p) = &s.project_info {
+                validate_project_info(p)
+                    .map_err(|e| FeatureError::InvalidInput(format!("Projektangaben: {e}")))?;
+            }
+            crate::parts::check_overrides(&s.parts_overrides)?;
+            // Als letzte Prüfung: `set_drawings` ändert das Dokument erst, wenn alles stimmt.
+            self.set_drawings(s.drawings, s.next_drawing)?;
+            self.project_info = s.project_info;
+            self.parts_overrides = s.parts_overrides;
+            self.drawing_edits += 1;
+            return Ok(RestoreKind::Annotations);
+        }
+        let mut doc = Document::build(s, self.chord_tolerance, &self.meshes, self.next_version)?;
+        doc.edits = self.edits + 1;
+        doc.drawing_edits = self.drawing_edits + 1;
+        doc.next_mesh = doc.next_mesh.max(self.next_mesh);
+        *self = doc;
+        Ok(RestoreKind::Full)
+    }
+
+    /// Baut und berechnet ein Dokument aus einem Snapshot. Netze, die als derselbe `Arc` in
+    /// `known` liegen, gelten als geprüft; Versionen beginnen bei `first_version`.
+    fn build(
+        s: Snapshot,
+        chord_tolerance: f64,
+        known: &BTreeMap<MeshId, Arc<ExchangeMesh>>,
+        first_version: u64,
+    ) -> Result<Document, FeatureError> {
         let bad = |m: &str| FeatureError::InvalidInput(m.to_string());
         if s.next_id == u64::MAX {
             return Err(bad("Der Kennungszähler ist ungültig"));
@@ -75,6 +182,7 @@ impl Document {
         }
         let mut seen = std::collections::HashSet::with_capacity(s.features.len());
         let mut doc = Document::with_options(chord_tolerance);
+        doc.next_version = first_version.max(1);
         for f in s.features.iter() {
             if f.id.0 == 0 || f.id.0 >= s.next_id {
                 return Err(bad("Ein Feature hat eine ungültige Kennung"));
@@ -90,6 +198,10 @@ impl Document {
             if id.0 == 0 {
                 return Err(bad("Ein Netz hat eine ungültige Kennung"));
             }
+            if known.values().any(|k| Arc::ptr_eq(k, mesh)) {
+                continue;
+            }
+            MESH_VALIDATIONS.with(|c| c.set(c.get() + 1));
             mesh.validate()
                 .map_err(|e| FeatureError::InvalidInput(format!("Netz {}: {e}", id.0)))?;
         }
@@ -127,8 +239,6 @@ impl Document {
         doc.marker = s.marker;
         doc.next_id = s.next_id;
         doc.recompute_features();
-        doc.edits = 0;
-        doc.drawing_edits = 0;
         Ok(doc)
     }
 }
