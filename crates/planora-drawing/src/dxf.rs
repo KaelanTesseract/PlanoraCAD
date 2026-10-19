@@ -585,7 +585,7 @@ impl UsedKinds {
         }
         for m in model.views.iter().flat_map(|v| &v.marks) {
             match mark_kind(m) {
-                MarkKind::Dimension => u.dim = true,
+                MarkKind::Dimension | MarkKind::Hatch | MarkKind::SectionLine(_) => u.dim = true,
                 MarkKind::CenterLine => u.center = true,
                 MarkKind::Lost => u.lost = true,
                 k @ MarkKind::Sheet(_) => u.use_sheet_pen(k),
@@ -633,7 +633,7 @@ fn mark_kind(m: &Mark) -> MarkKind {
 
 fn mark_layer(kind: MarkKind) -> &'static str {
     match kind {
-        MarkKind::Dimension => LAYER_DIM,
+        MarkKind::Dimension | MarkKind::Hatch | MarkKind::SectionLine(_) => LAYER_DIM,
         MarkKind::CenterLine => LAYER_CENTER,
         MarkKind::Lost => LAYER_LOST,
         MarkKind::Sheet(SheetPen::Heavy) => LAYER_FRAME,

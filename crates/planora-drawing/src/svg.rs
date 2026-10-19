@@ -136,9 +136,12 @@ const LOST_COLOR: &str = "#c00";
 fn color(kind: MarkKind) -> &'static str {
     match kind {
         MarkKind::Lost => LOST_COLOR,
-        MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Sheet(_) | MarkKind::Position(_) => {
-            MARK_COLOR
-        }
+        MarkKind::Dimension
+        | MarkKind::CenterLine
+        | MarkKind::Sheet(_)
+        | MarkKind::Position(_)
+        | MarkKind::Hatch
+        | MarkKind::SectionLine(_) => MARK_COLOR,
     }
 }
 
@@ -211,7 +214,9 @@ fn stroke_path(d: &str, kind: MarkKind, sheet_scale: f64) -> Result<String, Draw
                 num(CENTER_PATTERN[3])?
             ),
         ),
-        MarkKind::Dimension | MarkKind::Lost => (DIM_LINE_W, String::new()),
+        MarkKind::Dimension | MarkKind::Lost | MarkKind::Hatch | MarkKind::SectionLine(_) => {
+            (DIM_LINE_W, String::new())
+        }
         MarkKind::Sheet(pen) => (pen.width_at(sheet_scale), String::new()),
         MarkKind::Position(pen) => (pen.width_at(sheet_scale), String::new()),
     };

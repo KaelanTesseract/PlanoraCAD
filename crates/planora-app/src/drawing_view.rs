@@ -2422,7 +2422,9 @@ fn canvas_ui(
                 MarkKind::Dimension
                 | MarkKind::CenterLine
                 | MarkKind::Sheet(_)
-                | MarkKind::Position(_) => theme::SHEET_DIM,
+                | MarkKind::Position(_)
+                | MarkKind::Hatch
+                | MarkKind::SectionLine(_) => theme::SHEET_DIM,
             };
             paint_mark(&painter, m, color, &to_screen, k, f_sheet);
             marks_drawn += 1;

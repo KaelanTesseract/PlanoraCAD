@@ -386,9 +386,12 @@ fn mark_group(m: &Mark) -> MarkGroup {
 fn color(kind: MarkKind) -> &'static str {
     match kind {
         MarkKind::Lost => LOST_RGB,
-        MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Sheet(_) | MarkKind::Position(_) => {
-            BLACK
-        }
+        MarkKind::Dimension
+        | MarkKind::CenterLine
+        | MarkKind::Sheet(_)
+        | MarkKind::Position(_)
+        | MarkKind::Hatch
+        | MarkKind::SectionLine(_) => BLACK,
     }
 }
 
@@ -401,7 +404,9 @@ fn mark_stroke(
 ) -> Result<(), DrawError> {
     let (width, dash): (f64, &[f64]) = match kind {
         MarkKind::CenterLine => (CENTER_W, &CENTER_PATTERN),
-        MarkKind::Dimension | MarkKind::Lost => (DIM_LINE_W, &[]),
+        MarkKind::Dimension | MarkKind::Lost | MarkKind::Hatch | MarkKind::SectionLine(_) => {
+            (DIM_LINE_W, &[])
+        }
         MarkKind::Sheet(pen) => (pen.width_at(sheet_scale), &[]),
         MarkKind::Position(pen) => (pen.width_at(sheet_scale), &[]),
     };

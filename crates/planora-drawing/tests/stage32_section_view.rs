@@ -348,3 +348,12 @@ fn view_gets_the_names_of_the_kept_bodies() {
         o => panic!("{o:?}"),
     }
 }
+
+#[test]
+fn isometric_plane_is_unsupported() {
+    let t = tube();
+    let e = run(&[db("Rohr", &t)], &plane(ViewKind::Isometric, 10.0))
+        .err()
+        .unwrap();
+    assert!(matches!(e, DrawError::Unsupported(_)), "{e:?}");
+}
