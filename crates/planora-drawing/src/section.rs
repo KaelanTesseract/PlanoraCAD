@@ -17,10 +17,11 @@
 
 use crate::basis::Basis;
 use crate::model::ViewKind;
+use crate::stroke::{Stroke, StrokeOrigin};
 use planora_kernel::boolean::boolean;
 use planora_kernel::primitives::make_box;
-use planora_kernel::{BoolOp, BooleanError, Face, Id, Solid};
-use planora_math::{DMat4, DVec3, Tolerance};
+use planora_kernel::{BoolOp, BooleanError, Curve, Face, Id, Loop, Solid};
+use planora_math::{DMat4, DVec2, DVec3, Tolerance};
 
 /// Kleinste Herkunftsmarke, die für Schnittflächen reserviert ist.
 pub const SECTION_ORIGIN_MIN: u64 = u64::MAX - 65_535;
@@ -211,4 +212,157 @@ fn cutter_box(
         .map_err(|e| e.to_string())?;
     b.assign_origin(section_origin(body));
     Ok(b)
+}
+
+/// Abtasttoleranz, wenn der übergebene Wert nicht brauchbar ist.
+const FALLBACK_TOL: f64 = 1e-6;
+/// Höchstzahl der Stücke je Kreis- oder Ellipsenkante (Schutz vor unendlichen Schleifen).
+const MAX_ARC_PIECES: usize = 1 << 16;
+/// Anfangszahl der Stücke einer Freiformkante.
+const FREEFORM_START: usize = 64;
+/// Höchstzahl der Punkte je Freiformkante.
+const FREEFORM_MAX_POINTS: usize = 4096;
+
+/// Eine Schnittfläche eines Körpers mit ihren Randschleifen (äußere zuerst, dann innere).
+#[derive(Clone, Debug)]
+pub struct SectionRegion {
+    pub body: usize,
+    /// Je Schleife die Kanten in Laufrichtung.
+    pub loops: Vec<Vec<Stroke>>,
+}
+
+fn loop_strokes(solid: &Solid, lp: &Loop, body: usize) -> Vec<Stroke> {
+    lp.half_edges
+        .iter()
+        .map(|he| {
+            let e = &solid.edges[he.edge];
+            let (t0, t1) = if he.forward {
+                (e.t0, e.t1)
+            } else {
+                (e.t1, e.t0)
+            };
+            Stroke {
+                curve: e.curve.clone(),
+                t0,
+                t1,
+                origin: StrokeOrigin::Edge {
+                    body,
+                    edge: he.edge.index(),
+                },
+            }
+        })
+        .collect()
+}
+
+/// Eine Region je Schnittfläche des geschnittenen Körpers `cut` (`body` ist sein Index unter
+/// den exakten Körpern).
+pub fn section_regions(cut: &Solid, body: usize) -> Vec<SectionRegion> {
+    cut_faces(cut)
+        .into_iter()
+        .map(|fid| {
+            let face = &cut.faces[fid];
+            let loops = std::iter::once(&face.outer)
+                .chain(face.inner.iter())
+                .map(|l| loop_strokes(cut, l, body))
+                .collect();
+            SectionRegion { body, loops }
+        })
+        .collect()
+}
+
+/// Vieleck einer Schleife in Ansichtskoordinaten, ohne doppelten Schlusspunkt. `tol` (mm) ist
+/// der größte Abstand der Sehnen von der Kurve; ungültige Werte zählen wie 1e-6.
+pub fn loop_polygon(lp: &[Stroke], basis: &Basis, tol: f64) -> Vec<DVec2> {
+    let tol = if tol.is_finite() && tol > 0.0 {
+        tol
+    } else {
+        FALLBACK_TOL
+    };
+    let mut out = Vec::new();
+    for s in lp {
+        let ts = sample_params(s, tol);
+        // Der letzte Punkt ist der erste der nächsten Kante.
+        for &t in &ts[..ts.len() - 1] {
+            out.push(s.point2(basis, t));
+        }
+    }
+    out
+}
+
+/// Parameter der Abtastung einer Kante, einschließlich beider Enden (mindestens 2 Werte).
+fn sample_params(s: &Stroke, tol: f64) -> Vec<f64> {
+    let span = s.t1 - s.t0;
+    let at = |n: usize| -> Vec<f64> {
+        (0..=n)
+            .map(|i| {
+                if i == n {
+                    s.t1
+                } else {
+                    s.t0 + span * i as f64 / n as f64
+                }
+            })
+            .collect()
+    };
+    match &s.curve {
+        Curve::Line { .. } => at(1),
+        Curve::Circle { radius, .. } => at(arc_pieces(span.abs(), radius.abs(), tol)),
+        Curve::Ellipse { major, minor, .. } => {
+            at(arc_pieces(span.abs(), major.abs().max(minor.abs()), tol))
+        }
+        Curve::Nurbs(_) => {
+            let mut n = FREEFORM_START;
+            loop {
+                let ts = at(n);
+                if n * 2 >= FREEFORM_MAX_POINTS || chords_within(s, &ts, tol) {
+                    return ts;
+                }
+                n *= 2;
+            }
+        }
+    }
+}
+
+/// Stückzahl für Kreis und Ellipse nach Sehnenabstand `tol` beim größten Radius.
+fn arc_pieces(span: f64, r_max: f64, tol: f64) -> usize {
+    if !(span.is_finite() && r_max.is_finite()) || r_max <= 0.0 {
+        return 1;
+    }
+    let step = 2.0 * (1.0 - tol / r_max).clamp(-1.0, 1.0).acos();
+    if step.is_nan() || step <= 0.0 {
+        return MAX_ARC_PIECES;
+    }
+    let n = (span / step).ceil();
+    if n.is_finite() {
+        (n as usize).clamp(1, MAX_ARC_PIECES)
+    } else {
+        MAX_ARC_PIECES
+    }
+}
+
+/// Liegt der Kurvenpunkt in der Mitte jedes Stücks höchstens `tol` von dessen Sehne?
+fn chords_within(s: &Stroke, ts: &[f64], tol: f64) -> bool {
+    ts.windows(2).all(|w| {
+        let (a, b) = (s.point(w[0]), s.point(w[1]));
+        let m = s.point(0.5 * (w[0] + w[1]));
+        let ab = b - a;
+        let len2 = ab.length_squared();
+        let u = if len2 > 0.0 {
+            ((m - a).dot(ab) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (m - (a + ab * u)).length() <= tol
+    })
+}
+
+/// Vorzeichenbehaftete Fläche (Gaußsche Trapezformel); gegen den Uhrzeigersinn positiv.
+pub fn polygon_area(poly: &[DVec2]) -> f64 {
+    let n = poly.len();
+    (0..n)
+        .map(|i| {
+            let (p, q) = (poly[i], poly[(i + 1) % n]);
+            p.x * q.y - q.x * p.y
+        })
+        .sum::<f64>()
+        / 2.0
 }
