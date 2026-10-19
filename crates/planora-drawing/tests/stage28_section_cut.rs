@@ -308,3 +308,137 @@ fn plane_tangent_to_a_bore_is_nudged() {
     assert_eq!(cut_faces(&out).len(), 2);
     validate(&out).unwrap();
 }
+
+// Gefahrenzone an der Naht einer Bohrung: Die Naht eines Zylinders liegt in der Ebene durch die
+// Achse; Ebenen knapp daneben (bis etwa 0,065 · r) trafen den Bohrungskreis kurz vor seinem Ende
+// und scheiterten früher im Kernel. Der Kernel sucht dort jetzt an beiden Enden.
+
+/// Versätze der Ebene von der Bohrungsachse.
+const NEAR_AXIS: [f64; 9] = [0.1, -0.1, 0.01, -0.01, 1e-4, 0.0, 0.07, 1.0, -1.0];
+
+/// Schneidet an `p`, prüft Gültigkeit und die Schnittfläche gegen `want` (±1e-3).
+fn cut_matches(s: &Solid, p: &SectionPlane, want: f64, what: &str) {
+    let out = match cut_body(s, 0, p, &tol()) {
+        Ok(CutOutcome::Cut { solid, .. }) => solid,
+        other => panic!("{what}: Schnitt erwartet, bekommen {other:?}"),
+    };
+    validate(&out).unwrap_or_else(|e| panic!("{what}: {e}"));
+    let got = cut_area(&out);
+    assert!(
+        (got - want).abs() < 1e-3,
+        "{what}: Fläche {got}, erwartet {want}"
+    );
+}
+
+/// Breite eines Bohrungsstreifens in der Ebene im Abstand `d` von der Achse.
+fn chord(r: f64, d: f64) -> f64 {
+    2.0 * (r * r - d * d).sqrt()
+}
+
+/// Bohrung längs z durch einen Quader, Achse bei (`x`, `y`), unten 2 mm überstehend.
+fn bore_z(r: f64, x: f64, y: f64, h: f64) -> Solid {
+    moved(&k().make_cylinder(r, h + 4.0).unwrap(), x, y, -2.0)
+}
+
+#[test]
+fn bore_along_z_plane_beside_the_axis() {
+    for r in [4.0, 10.0, 12.0] {
+        let s = diff(&boxs(100.0, 60.0, 40.0), &bore_z(r, 50.0, 30.0, 40.0));
+        for d in NEAR_AXIS {
+            let want = 100.0 * 40.0 - chord(r, d) * 40.0;
+            cut_matches(
+                &s,
+                &plane(ViewKind::Front, 30.0 + d),
+                want,
+                &format!("r {r} d {d}"),
+            );
+        }
+    }
+}
+
+#[test]
+fn bore_along_x_and_y_plane_beside_the_axis() {
+    let block = boxs(100.0, 60.0, 40.0);
+    // Längs x (Achse y = 30, z = 20), Ebene y = 30 + d.
+    let along_x = k()
+        .make_cylinder(10.0, 104.0)
+        .unwrap()
+        .transformed(
+            &(DMat4::from_translation(DVec3::new(-2.0, 30.0, 20.0))
+                * DMat4::from_rotation_y(std::f64::consts::FRAC_PI_2)),
+        )
+        .unwrap();
+    let s = diff(&block, &along_x);
+    for d in NEAR_AXIS {
+        let want = 100.0 * 40.0 - chord(10.0, d) * 100.0;
+        cut_matches(
+            &s,
+            &plane(ViewKind::Front, 30.0 + d),
+            want,
+            &format!("x d {d}"),
+        );
+    }
+    // Längs y (Achse x = 50, z = 20), Ebene z = 20 + d.
+    let along_y = k()
+        .make_cylinder(10.0, 64.0)
+        .unwrap()
+        .transformed(
+            &(DMat4::from_translation(DVec3::new(50.0, -2.0, 20.0))
+                * DMat4::from_rotation_x(-std::f64::consts::FRAC_PI_2)),
+        )
+        .unwrap();
+    let s = diff(&block, &along_y);
+    for d in NEAR_AXIS {
+        let want = 100.0 * 60.0 - chord(10.0, d) * 60.0;
+        cut_matches(
+            &s,
+            &plane(ViewKind::Top, 20.0 + d),
+            want,
+            &format!("y d {d}"),
+        );
+    }
+}
+
+#[test]
+fn large_block_bore_r40_plane_within_1mm_of_the_axis() {
+    // Quader 400 × 300 × 200, Bohrung r 40 längs y (Achse x = 200, z = 100), Ebene z = 100 + d.
+    let along_y = k()
+        .make_cylinder(40.0, 304.0)
+        .unwrap()
+        .transformed(
+            &(DMat4::from_translation(DVec3::new(200.0, -2.0, 100.0))
+                * DMat4::from_rotation_x(-std::f64::consts::FRAC_PI_2)),
+        )
+        .unwrap();
+    let s = diff(&boxs(400.0, 300.0, 200.0), &along_y);
+    for d in [
+        -1.0, -0.5, -0.1, -0.01, -1e-4, 0.0, 1e-4, 0.01, 0.1, 0.5, 1.0,
+    ] {
+        let want = 400.0 * 300.0 - chord(40.0, d) * 300.0;
+        cut_matches(
+            &s,
+            &plane(ViewKind::Top, 100.0 + d),
+            want,
+            &format!("d {d}"),
+        );
+    }
+}
+
+#[test]
+fn plate_with_two_bores_plane_beside_both_axes() {
+    // Platte 100 × 60 × 10, Bohrungen r 6 bei x = 25 und r 10 bei x = 65 (beide y = 30).
+    let plate = boxs(100.0, 60.0, 10.0);
+    let s = diff(
+        &diff(&plate, &bore_z(6.0, 25.0, 30.0, 10.0)),
+        &bore_z(10.0, 65.0, 30.0, 10.0),
+    );
+    for d in NEAR_AXIS {
+        let want = 100.0 * 10.0 - chord(6.0, d) * 10.0 - chord(10.0, d) * 10.0;
+        cut_matches(
+            &s,
+            &plane(ViewKind::Front, 30.0 + d),
+            want,
+            &format!("d {d}"),
+        );
+    }
+}

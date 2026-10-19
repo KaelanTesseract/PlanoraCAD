@@ -394,7 +394,7 @@ fn samples() -> Vec<Sample> {
             cuts: vec![
                 Cut {
                     kind: ViewKind::Top,
-                    offset: 105.0,
+                    offset: 100.0,
                 },
                 Cut {
                     kind: ViewKind::Left,

@@ -111,6 +111,6 @@ Stand 2026-10-19. Die Vorschläge aus §10 wurden vom Nutzer freigegeben (Vollsc
 - §9.3: Maße und Positionsnummern gibt es in Schnittansichten auf den geschnittenen Körpern. Die Schnittmarke hängt am Körperindex, daher werden Maße an Schnittkanten rot, wenn man einen früheren Körper löscht. „Maße vorschlagen“ entfernt Doppelte über die ganze Zeichnung. Eine Positionsnummer behält ihre Nummer, wenn ihr Teil aus dem Schnitt fällt (Lücke dieser Spec).
 - Der Zwischenspeicher der App verdrängt fertige Schnitte ab `MAX_CACHED = 7 + MAX_SECTIONS`.
 - Kreise und Ellipsen (65 536 Stücke) und Freiformkanten (2049 Punkte) haben Obergrenzen, die praktisch nicht erreichbar sind.
-- **Kernel:** Eine Ebene sehr nahe an einer Bohrungsnaht oder auf der Bohrungsachse kann der Kernel in manchen Fällen nicht schneiden (Meldung „… lässt sich der Schnitt nicht berechnen.“); der Kernel blieb unverändert, siehe offene Punkte.
+- **Kernel:** Ebenen durch die Achse einer Bohrung oder knapp daneben scheiterten anfangs im Kernel. Mit Zustimmung des Nutzers wurde dafür eine kleine Korrektur im Kernel gemacht (Suche nach dem nächsten Punkt auf ganzen Kreisen und Ellipsen, `boolean/seg.rs`); seitdem gelingen diese Schnitte. Sonst blieb der Kernel unverändert. Einzelheiten in den offenen Punkten.
 - Die Normen (ISO 128-40, -44, -50, DIN 6) liegen weiterhin nicht vor; alle Werte sind unbelegt.
 - Die Handprüfung der Proben in Inkscape, Fusion (DXF) und zwei PDF-Betrachtern ist offen.
