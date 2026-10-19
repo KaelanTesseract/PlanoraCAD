@@ -813,6 +813,8 @@ fn too_fine_blocks_export() {
 
     let mut dlg = dialog(&st, SVG);
     assert_eq!(dlg.status(&st), ExportStatus::Failed(msg.clone()));
+    // Die Linien sind berechnet (erst die Schraffur sperrt): die Angaben nennen ihre Zahl.
+    let locked_text = dialog_text(&mut dlg, &mut st);
     let dir = temp_dir("zu-fein");
     let path = dir.join("g.svg");
     dlg.write_to(path.clone(), &st);
@@ -828,11 +830,70 @@ fn too_fine_blocks_export() {
     assert!(!hatch_lines(marks_named(&screen.sheet(&st, d), NAME)).is_empty());
     assert!(drawing_view::section_errors(&screen.ctx, &st, d).is_empty());
     let dlg = dialog(&st, SVG);
+    let ExportStatus::DrawingReady {
+        visible, hidden, ..
+    } = dlg.status(&st)
+    else {
+        panic!("{:?}", dlg.status(&st))
+    };
+    // Der Schraffurabstand ändert die Linien nicht: gesperrt standen schon dieselben Zahlen da.
     assert!(
-        matches!(dlg.status(&st), ExportStatus::DrawingReady { .. }),
-        "{:?}",
-        dlg.status(&st)
+        locked_text.contains(&lines_counts_text(visible, hidden)),
+        "{locked_text}"
     );
+    assert!(!locked_text.contains("Linien: …"), "{locked_text}");
+    assert!(!locked_text.contains(LINES_NOT_COMPUTED), "{locked_text}");
+}
+
+/// Zeichnet das Exportfenster dreimal und liefert die Texte des letzten Bildes.
+fn dialog_text(d: &mut ExportDialog, s: &mut AppState) -> String {
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts::definitions());
+    let input = || egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0))),
+        ..Default::default()
+    };
+    let mut dir = None;
+    let mut text = String::new();
+    for _ in 0..3 {
+        let out = ctx.run_ui(input(), |ui| {
+            assert!(d.show(ui.ctx(), s, &mut dir));
+        });
+        text = collect_texts(&out);
+        out.drop_without_applying_deltas();
+    }
+    text
+}
+
+/// Scheitert die Schnittansicht selbst, gibt es keine Linien: „Linien: nicht berechnet“, nie
+/// eine bloße Auslassung. In allen Zeichnungsformaten gleich.
+#[test]
+fn failed_section_says_lines_not_computed() {
+    let (mut st, _) = tube_state(40.0);
+    let (d, _, sec) = tube_drawing(&mut st, 20.0);
+    open(&mut st, d);
+    for format in [SVG, DXF, PDF] {
+        let mut dlg = ExportDialog::new(&st);
+        dlg.with_frame = false;
+        dlg.format = format;
+        dlg.set_compute(fail_top as ComputeFn);
+        dlg.tick(&st, true);
+        assert!(
+            matches!(dlg.status(&st), ExportStatus::Failed(ref m) if m.contains(NAME)),
+            "{format:?}: {:?}",
+            dlg.status(&st)
+        );
+        let text = dialog_text(&mut dlg, &mut st);
+        assert!(text.contains(LINES_NOT_COMPUTED), "{format:?}: {text}");
+        assert!(!text.contains("Linien: …"), "{format:?}: {text}");
+        assert!(!text.contains("sichtbar,"), "{format:?}: {text}");
+    }
+    // Ebene außerhalb des Körpers: ebenso.
+    edit_section(&mut st, d, sec, |s| s.offset = 100.0);
+    let mut dlg = dialog(&st, PDF);
+    assert!(matches!(dlg.status(&st), ExportStatus::Failed(_)));
+    let text = dialog_text(&mut dlg, &mut st);
+    assert!(text.contains(LINES_NOT_COMPUTED), "{text}");
 }
 
 // --- (g) ------------------------------------------------------------------------------------

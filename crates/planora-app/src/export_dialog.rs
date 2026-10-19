@@ -683,19 +683,36 @@ pub fn prepare_all_sheets(
     counter: &AtomicUsize,
     progress: &Progress,
 ) -> Result<Vec<DrawingPrepared>, String> {
+    prepare_all_counted(sheets, solids, compute, resolve, counter, progress).map_err(|f| f.message)
+}
+
+/// Wie [`prepare_all_sheets`]; scheitert erst das letzte Blatt an einer späteren Prüfung, nachdem
+/// seine Linien berechnet sind, trägt der Fehler die Summe der Linien aller Blätter.
+fn prepare_all_counted(
+    sheets: &[SheetJob],
+    solids: &[(String, Solid)],
+    compute: ComputeFn,
+    resolve: ResolveFn,
+    counter: &AtomicUsize,
+    progress: &Progress,
+) -> Result<Vec<DrawingPrepared>, DrawFailed> {
     let cancelled = ExchangeError::Cancelled.to_string();
     progress.set_total(sheets.len().max(1) as u64 * SHEET_STEPS);
     let mut shown = 0u64;
     let mut out = Vec::with_capacity(sheets.len());
     for (i, sheet) in sheets.iter().enumerate() {
-        progress.check().map_err(|_| cancelled.clone())?;
+        progress
+            .check()
+            .map_err(|_| DrawFailed::plain(cancelled.clone()))?;
         counter.store(i + 1, AtomicOrdering::SeqCst);
         // Eigener Fortschritt je Blatt; Abbrechen wird weitergereicht, der Anteil fließt in den
         // Fortschritt aller Blätter ein.
         let inner = Progress::new();
         let result = std::thread::scope(|scope| {
-            let handle = scope.spawn(|| -> Result<DrawingPrepared, String> {
-                let r = prepare_drawing_parts(
+            let handle = scope.spawn(|| -> Result<DrawingPrepared, DrawFailed> {
+                let mut lines = None;
+                let fail = |m: String, lines| DrawFailed { message: m, lines };
+                let r = prepare_counted(
                     &sheet.drawing,
                     solids,
                     compute,
@@ -703,8 +720,10 @@ pub fn prepare_all_sheets(
                     sheet.frame.as_ref(),
                     &sheet.parts,
                     &inner,
-                )?;
-                pdf_texts_ok(&r)?;
+                    &mut lines,
+                )
+                .map_err(|m| fail(m, lines))?;
+                pdf_texts_ok(&r).map_err(|m| fail(m, lines))?;
                 Ok(r)
             });
             while !handle.is_finished() {
@@ -723,10 +742,22 @@ pub fn prepare_all_sheets(
         let name = shorten_for_display(&sheet.drawing.name);
         match result {
             Some(Ok(r)) => out.push(r),
-            _ if progress.is_cancelled() => return Err(cancelled),
-            Some(Err(m)) if m == cancelled => return Err(cancelled),
-            Some(Err(m)) => return Err(in_sheet(&name, &m)),
-            None => return Err(in_sheet(&name, LOST)),
+            _ if progress.is_cancelled() => return Err(DrawFailed::plain(cancelled)),
+            Some(Err(f)) if f.message == cancelled => return Err(DrawFailed::plain(cancelled)),
+            Some(Err(f)) => {
+                // Linien gibt es nur, wenn alle Blätter berechnet sind: hier also nur, wenn das
+                // gescheiterte Blatt das letzte ist.
+                let last = i + 1 == sheets.len();
+                let lines = f.lines.filter(|_| last).map(|(v, h)| {
+                    out.iter()
+                        .fold((v, h), |(v, h), p| (v + p.visible, h + p.hidden))
+                });
+                return Err(DrawFailed {
+                    message: in_sheet(&name, &f.message),
+                    lines,
+                });
+            }
+            None => return Err(DrawFailed::plain(in_sheet(&name, LOST))),
         }
         let at = (i as u64 + 1) * SHEET_STEPS;
         if at > shown {
@@ -929,6 +960,25 @@ pub fn prepare_drawing_parts(
     parts: &PartsInput,
     progress: &Progress,
 ) -> Result<DrawingPrepared, String> {
+    let mut lines = None;
+    prepare_counted(
+        drawing, solids, compute, resolve, frame, parts, progress, &mut lines,
+    )
+}
+
+/// Wie [`prepare_drawing_parts`]; sobald alle Ansichten mit ihren Linien auf dem Blatt stehen,
+/// steht deren Zahl in `lines_out`, auch wenn eine spätere Prüfung die Ausgabe noch sperrt.
+#[allow(clippy::too_many_arguments)]
+fn prepare_counted(
+    drawing: &Drawing,
+    solids: &[(String, Solid)],
+    compute: ComputeFn,
+    resolve: ResolveFn,
+    frame: Option<&FrameInput>,
+    parts: &PartsInput,
+    progress: &Progress,
+    lines_out: &mut Option<LineCounts>,
+) -> Result<DrawingPrepared, String> {
     let cancelled = || ExchangeError::Cancelled.to_string();
     // Erst die Normarten wie bisher, dann je Schnittansicht ihre Ebene.
     let mut keys: Vec<ViewKey> = Vec::new();
@@ -999,12 +1049,22 @@ pub fn prepare_drawing_parts(
             .iter()
             .map(|(v, data)| (*v, data.solids.iter().collect()))
             .collect();
+        // Scheitern die Maße, sind die Linien doch berechnet: ihre Zahl aus dem Blatt ohne Maße
+        // (Maße ändern keine Linie).
+        let mut no_dims = || {
+            let plain = build_sheet_with(drawing, &map, &ResolvedDims::default());
+            *lines_out = sheet_line_counts(drawing, &plain);
+        };
         let dims = match resolve(drawing, &refs, &cut, progress) {
             Ok(d) => d,
             Err(DrawError::Cancelled) => return Err(cancelled()),
-            Err(e) => return Err(e.to_string()),
+            Err(e) => {
+                no_dims();
+                return Err(e.to_string());
+            }
         };
         if let Some(m) = first_lost(drawing, &dims, &names) {
+            no_dims();
             return Err(m);
         }
         progress.advance(1);
@@ -1014,6 +1074,8 @@ pub fn prepare_drawing_parts(
     };
     let mut model = build_sheet_with(drawing, &map, &dims);
     add_balloon_marks(&mut model, &balloon_marks(drawing, &map, &parts.balloons));
+    // Die Linien stehen fest (Schnittmarken und Rahmen ändern sie nicht).
+    *lines_out = sheet_line_counts(drawing, &model);
     // Schraffur, Schnittlinie und Titel; ein Fehler (zu feine Schraffur) sperrt die Ausgabe.
     let (marks, section_errors) = section_marks(drawing, &map, &section_data);
     if let Some(m) = section_errors.into_iter().next() {
@@ -1068,14 +1130,6 @@ pub fn prepare_drawing_parts(
         }
         None => None,
     };
-    let count = |vis| {
-        model
-            .views
-            .iter()
-            .flat_map(|v| &v.lines)
-            .filter(|l| l.vis == vis)
-            .count()
-    };
     let outside = count_outside(
         &dimension_marks(drawing, &map, &dims),
         drawing.sheet.size_mm(),
@@ -1083,8 +1137,8 @@ pub fn prepare_drawing_parts(
     Ok(DrawingPrepared {
         views: model.views.len(),
         sheet: sheet_label(drawing.sheet),
-        visible: count(Visibility::Visible),
-        hidden: count(Visibility::Hidden),
+        visible: line_count(&model, Visibility::Visible),
+        hidden: line_count(&model, Visibility::Hidden),
         skipped_meshes: Vec::new(),
         dimensions: dims.by_view.values().map(Vec::len).sum(),
         outside,
@@ -1094,9 +1148,44 @@ pub fn prepare_drawing_parts(
     })
 }
 
+/// Zahl der Linien des Blatts `model` mit der Sichtbarkeit `vis`.
+fn line_count(model: &SheetModel, vis: Visibility) -> usize {
+    model
+        .views
+        .iter()
+        .flat_map(|v| &v.lines)
+        .filter(|l| l.vis == vis)
+        .count()
+}
+
+/// Sichtbare und verdeckte Linien des Blatts `model`; nur wenn jede Ansicht der Zeichnung
+/// darauf steht (sonst wäre die Zahl unvollständig).
+fn sheet_line_counts(drawing: &Drawing, model: &SheetModel) -> Option<LineCounts> {
+    (model.views.len() >= drawing.views.len()).then(|| {
+        (
+            line_count(model, Visibility::Visible),
+            line_count(model, Visibility::Hidden),
+        )
+    })
+}
+
 /// Meldung, wenn sich nicht alle Ansichten auf dem Blatt anordnen lassen.
 pub const VIEWS_NOT_PLACEABLE: &str =
     "Die Zeichnung enthält Ansichten, die sich nicht auf dem Blatt anordnen lassen.";
+
+/// Zeile „Linien“, solange die Ansichten berechnet werden.
+pub const LINES_COMPUTING: &str = "Linien: werden berechnet …";
+/// Zeile „Linien“, wenn es keine berechneten Linien gibt (etwa eine Ansicht scheiterte).
+pub const LINES_NOT_COMPUTED: &str = "Linien: nicht berechnet";
+
+/// Zeile „Linien“ mit der Zahl der sichtbaren und verdeckten Linien.
+pub fn lines_counts_text(visible: usize, hidden: usize) -> String {
+    format!(
+        "Linien: {} sichtbar, {} verdeckt",
+        group_digits(visible as u64),
+        group_digits(hidden as u64)
+    )
+}
 
 /// Text im Fortschrittsbalken, solange das Ergebnis des Formats `format` berechnet wird;
 /// `is_list` für ein Stücklistenblatt.
@@ -1407,8 +1496,30 @@ struct DrawKey {
 }
 
 /// Ergebnis: die Blätter in Dokumentreihenfolge (beim gewählten Blatt genau eines).
-type DrawJob = Job<Result<Vec<DrawingPrepared>, String>>;
-type DrawResult = Result<Arc<Vec<DrawingPrepared>>, String>;
+type DrawJob = Job<Result<Vec<DrawingPrepared>, DrawFailed>>;
+type DrawResult = Result<Arc<Vec<DrawingPrepared>>, DrawFailed>;
+
+/// Linien einer Zeichnung: sichtbar und verdeckt.
+type LineCounts = (usize, usize);
+
+/// Gescheiterte Berechnung einer Zeichnung: die Meldung und, wenn die Linien aller Blätter
+/// schon berechnet waren (gesperrt hat erst eine spätere Prüfung, etwa ein Zeichen, das eine
+/// PDF nicht ausgeben kann, oder eine zu feine Schraffur), deren Zahl für die Angaben.
+#[derive(Debug)]
+struct DrawFailed {
+    message: String,
+    lines: Option<LineCounts>,
+}
+
+impl DrawFailed {
+    /// Fehler ohne berechnete Linien.
+    fn plain(message: impl Into<String>) -> Self {
+        DrawFailed {
+            message: message.into(),
+            lines: None,
+        }
+    }
+}
 /// Laufende Berechnung: Stand, Auftrag und bei „Alle Blätter“ Zähler des Blatts und Zahl der
 /// Blätter.
 type DrawRun = (DrawKey, DrawJob, Option<(Arc<AtomicUsize>, usize)>);
@@ -1671,7 +1782,8 @@ impl ExportDialog {
         };
         let is_list = matches!(drawing.kind, DrawingKind::PartsList { .. });
         let job = Job::spawn(move |p| {
-            let mut r = prepare_drawing_parts(
+            let mut lines = None;
+            let mut r = prepare_counted(
                 &drawing,
                 &solids,
                 compute,
@@ -1679,15 +1791,20 @@ impl ExportDialog {
                 frame.as_ref(),
                 &parts,
                 p,
-            )?;
+                &mut lines,
+            )
+            .map_err(|message| DrawFailed { message, lines })?;
+            // Die Prüfungen der Texte sperren die Ausgabe, die Linien sind aber berechnet.
+            let checked =
+                |c: Result<(), String>| c.map_err(|message| DrawFailed { message, lines });
             if format == DrawingFormat::Dxf {
                 if let Some(texts) = &r.texts {
-                    dxf_sheet_texts_ok(texts)?;
+                    checked(dxf_sheet_texts_ok(texts))?;
                 }
-                dxf_texts_fit(&r.model)?;
+                checked(dxf_texts_fit(&r.model))?;
             }
             if format == DrawingFormat::Pdf {
-                pdf_texts_ok(&r)?;
+                checked(pdf_texts_ok(&r))?;
             }
             // Ein Stücklistenblatt hat keine Ansichten, die Netz-Körper auslassen.
             if !is_list {
@@ -1723,7 +1840,7 @@ impl ExportDialog {
         let shared = Arc::clone(&counter);
         let (compute, resolve) = (self.compute, self.resolve);
         let job = Job::spawn(move |p| {
-            let mut r = prepare_all_sheets(&sheets, &solids, compute, resolve, &shared, p)?;
+            let mut r = prepare_all_counted(&sheets, &solids, compute, resolve, &shared, p)?;
             if let Some(first) = sheets
                 .iter()
                 .zip(r.iter_mut())
@@ -1765,7 +1882,7 @@ impl ExportDialog {
             Some((k, job, _)) => match job.fetch(block) {
                 Poll::Pending => None,
                 Poll::Ready(r) => Some((*k, r.map(Arc::new))),
-                Poll::Lost => Some((*k, Err(LOST.to_string()))),
+                Poll::Lost => Some((*k, Err(DrawFailed::plain(LOST)))),
             },
             None => None,
         };
@@ -1823,8 +1940,33 @@ impl ExportDialog {
                     },
                 }
             }
-            Some((k, Err(m))) if Some(*k) == key => ExportStatus::Failed(m.clone()),
+            Some((k, Err(f))) if Some(*k) == key => ExportStatus::Failed(f.message.clone()),
             _ => ExportStatus::Computing(0.0),
+        }
+    }
+
+    /// Zeile „Linien“ in den Angaben zur Zeichnung (für alle Zeichnungsformate gleich): die Zahl
+    /// der Linien, sobald sie berechnet ist, auch wenn eine spätere Prüfung die Ausgabe sperrt;
+    /// sonst [`LINES_COMPUTING`] während der Berechnung und [`LINES_NOT_COMPUTED`], wenn es keine
+    /// Linien gibt (gescheiterte Ansicht, Abbruch, nichts zu berechnen).
+    fn lines_text(&self, state: &AppState, status: &ExportStatus) -> String {
+        let counts = match status {
+            ExportStatus::DrawingReady {
+                visible, hidden, ..
+            } => Some((*visible, *hidden)),
+            ExportStatus::Computing(_) => return LINES_COMPUTING.to_string(),
+            ExportStatus::Failed(_) => {
+                let key = self.drawing_key(state);
+                match key.and_then(|k| self.prepared_for(k.format)) {
+                    Some((k, Err(f))) if Some(*k) == key => f.lines,
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        match counts {
+            Some((visible, hidden)) => lines_counts_text(visible, hidden),
+            None => LINES_NOT_COMPUTED.to_string(),
         }
     }
 
@@ -1857,8 +1999,8 @@ impl ExportDialog {
                 return;
             }
             Some((_, Ok(p))) => Arc::clone(p),
-            Some((_, Err(m))) => {
-                let m = m.clone();
+            Some((_, Err(f))) => {
+                let m = f.message.clone();
                 self.set_written(Err(m));
                 return;
             }
@@ -2084,7 +2226,10 @@ impl ExportDialog {
         // Nur der Auftrag des gewählten Formats; der andere läuft im Hintergrund weiter.
         if self.format.is_drawing() {
             if let Some((key, ..)) = self.drawing_job.take() {
-                self.store_prepared((key, Err(ExchangeError::Cancelled.to_string())));
+                self.store_prepared((
+                    key,
+                    Err(DrawFailed::plain(ExchangeError::Cancelled.to_string())),
+                ));
             }
         } else if self.format.is_step() {
             if let Some((key, _)) = self.step_job.take() {
@@ -2269,6 +2414,7 @@ impl ExportDialog {
         let all = self.all_sheets();
         let mut pdf_pages = self.pdf_pages;
         let sheet_no = self.computing_sheet();
+        let lines_line = self.lines_text(state, &status);
         let mut drawing_info: Vec<String> = Vec::new();
         if all {
             // Alle Blätter: Zahl der Blätter und Summen über alle (P9).
@@ -2288,16 +2434,7 @@ impl ExportDialog {
                 ),
             };
             drawing_info.push(format!("Ansichten: {}", group_digits(views as u64)));
-            drawing_info.push(match &status {
-                ExportStatus::DrawingReady {
-                    visible, hidden, ..
-                } => format!(
-                    "Linien: {} sichtbar, {} verdeckt",
-                    group_digits(*visible as u64),
-                    group_digits(*hidden as u64)
-                ),
-                _ => "Linien: …".to_string(),
-            });
+            drawing_info.push(lines_line);
             drawing_info.push(format!("Maße: {}", group_digits(dims as u64)));
             if let ExportStatus::DrawingReady { outside, .. } = &status
                 && *outside > 0
@@ -2315,16 +2452,7 @@ impl ExportDialog {
             };
             drawing_info.push(format!("Ansichten: {views}"));
             drawing_info.push(format!("Blatt: {}", sheet_label(d.sheet)));
-            drawing_info.push(match &status {
-                ExportStatus::DrawingReady {
-                    visible, hidden, ..
-                } => format!(
-                    "Linien: {} sichtbar, {} verdeckt",
-                    group_digits(*visible as u64),
-                    group_digits(*hidden as u64)
-                ),
-                _ => "Linien: …".to_string(),
-            });
+            drawing_info.push(lines_line);
             // Maße und Mittellinien: aus der Zeichnung, nach der Berechnung aus dem Ergebnis.
             let (dims, centerlines) = match &status {
                 ExportStatus::DrawingReady {

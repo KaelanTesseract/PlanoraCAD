@@ -2781,3 +2781,97 @@ fn parts_sheets_in_all_have_no_dxf_widening() {
     }
     let _ = fs::remove_dir_all(&dir);
 }
+
+// Zeile „Linien“ bei gesperrter Ausgabe ---------------------------------------------------------
+
+/// Gesperrte Ausgabe durch ein Zeichen im Titel (PDF: „Ā“, DXF: „😀“): die Linien sind berechnet,
+/// die Angaben nennen ihre Zahl wie bei SVG, nie eine bloße Auslassung „Linien: …“.
+#[test]
+fn locked_export_still_shows_the_line_counts() {
+    let mut s = box_state();
+    let id = add_drawing(&mut s, "Blatt 1");
+    let own = own_sheet(&s, id);
+    let visible = count(&own, Visibility::Visible);
+    assert!(visible > 0, "Testvoraussetzung");
+    let want = lines_counts_text(visible, count(&own, Visibility::Hidden));
+    for (format, title) in [(PDF, "Ā"), (DXF, "😀"), (SVG, "😀")] {
+        set_title(&mut s, id, title);
+        let mut d = dialog_with(&s, format, true, id);
+        let locked = matches!(d.status(&s), ExportStatus::Failed(_));
+        // SVG kann jedes Zeichen ausgeben und ist nicht gesperrt.
+        assert_eq!(locked, format != SVG, "{format:?}: {:?}", d.status(&s));
+        let text = draw(&mut d, &mut s);
+        assert!(text.contains(&want), "{format:?}: {want} fehlt: {text}");
+        assert!(!text.contains("Linien: …"), "{format:?}: {text}");
+        assert!(!text.contains(LINES_NOT_COMPUTED), "{format:?}: {text}");
+    }
+}
+
+/// „Alle Blätter“: scheitert erst das letzte Blatt an einem Zeichen, sind alle Linien berechnet
+/// und die Summe steht da; scheitert ein früheres Blatt, sind die späteren nicht berechnet.
+#[test]
+fn locked_all_sheets_show_counts_only_when_every_sheet_is_computed() {
+    let mut s = box_state();
+    let a = add_drawing(&mut s, "Blatt A");
+    let b = add_drawing(&mut s, "Blatt B");
+    let (sa, sb) = (own_sheet(&s, a), own_sheet(&s, b));
+    let want = lines_counts_text(
+        count(&sa, Visibility::Visible) + count(&sb, Visibility::Visible),
+        count(&sa, Visibility::Hidden) + count(&sb, Visibility::Hidden),
+    );
+    set_title(&mut s, b, "Ā");
+    let mut d = all_dialog(&s, true, compute_view);
+    assert!(
+        matches!(d.status(&s), ExportStatus::Failed(ref m) if m.contains("Blatt B")),
+        "{:?}",
+        d.status(&s)
+    );
+    let text = draw(&mut d, &mut s);
+    assert!(text.contains(&want), "{want} fehlt: {text}");
+    assert!(!text.contains("Linien: …"), "{text}");
+
+    set_title(&mut s, b, "Blatt B");
+    set_title(&mut s, a, "Ā");
+    let mut d = all_dialog(&s, true, compute_view);
+    assert!(
+        matches!(d.status(&s), ExportStatus::Failed(ref m) if m.contains("Blatt A")),
+        "{:?}",
+        d.status(&s)
+    );
+    let text = draw(&mut d, &mut s);
+    assert!(text.contains(LINES_NOT_COMPUTED), "{text}");
+    assert!(!text.contains("sichtbar,"), "{text}");
+    assert!(!text.contains("Linien: …"), "{text}");
+}
+
+/// Langsame Rechnung, damit das erste Bild die Berechnung zeigt.
+fn slow_view(b: &[DrawBody], k: ViewKind, p: &Progress) -> Result<ViewLines, DrawError> {
+    std::thread::sleep(Duration::from_millis(400));
+    compute_view(b, k, p)
+}
+
+/// Während der Berechnung steht ein klarer Satz statt einer bloßen Auslassung da.
+#[test]
+fn while_computing_the_lines_say_so() {
+    let mut s = box_state();
+    let id = add_drawing(&mut s, "Blatt 1");
+    for format in [PDF, DXF, SVG] {
+        let mut d = ExportDialog::new(&s);
+        d.set_compute(slow_view);
+        d.format = format;
+        d.drawing = Some(id);
+        let mut dir = None;
+        let out = context().run_ui(wide(), |ui| {
+            assert!(d.show(ui.ctx(), &mut s, &mut dir));
+        });
+        let text = collect_texts(&out);
+        out.drop_without_applying_deltas();
+        assert!(
+            matches!(d.status(&s), ExportStatus::Computing(_)),
+            "{format:?}: {:?}",
+            d.status(&s)
+        );
+        assert!(text.contains(LINES_COMPUTING), "{format:?}: {text}");
+        assert!(!text.contains("Linien: …"), "{format:?}: {text}");
+    }
+}
