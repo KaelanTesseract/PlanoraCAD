@@ -494,3 +494,189 @@ fn a_drawing_without_info_is_valid() {
     assert!(d.info.is_none());
     assert!(planora_feature::validate_drawing(&d).is_ok());
 }
+
+// ---- Schnittansichten (Teilprojekt 3d, Aufgabe 4) ----------------------------------------
+
+mod sections {
+    use super::*;
+    use planora_drawing::{MAX_SECTIONS, SectionSpec};
+
+    const A3: Sheet = Sheet {
+        paper: Paper::A3,
+        landscape: true,
+    };
+
+    /// Zeichnung mit Vorne (Kennung 1) und einem Schnitt A–A nach Oben (Kennung 2).
+    fn with_section() -> Drawing {
+        let mut d = Drawing::new(DrawingId(1), "Blatt".into(), A3, Projection::First);
+        let front = d.add_view(ViewKind::Front, S11, FREE, None);
+        d.add_section(front, ViewKind::Top, 5.0, 80.0).unwrap();
+        d
+    }
+
+    fn sec(d: &mut Drawing, f: impl FnOnce(&mut SectionSpec)) {
+        f(d.views[1].section.as_mut().unwrap());
+    }
+
+    fn err(d: &Drawing) -> String {
+        validate_drawing(d).unwrap_err()
+    }
+
+    #[test]
+    fn a_valid_section_passes() {
+        let d = with_section();
+        assert_eq!(validate_drawing(&d), Ok(()));
+    }
+
+    #[test]
+    fn source_must_be_a_straight_view_without_section() {
+        let msg = "Ein Schnitt geht nur aus einer geraden Ansicht.";
+        // Quelle isometrisch.
+        let mut d = with_section();
+        d.views[0].kind = ViewKind::Isometric;
+        assert_eq!(err(&d), msg);
+        // Quelle ist selbst ein Schnitt.
+        let mut d = with_section();
+        let s = d.views[1].id;
+        d.add_view(ViewKind::Left, S11, ALIGNED, Some(s));
+        d.views[2].section = Some(SectionSpec {
+            offset: 0.0,
+            letter: 'B',
+            hatch: Default::default(),
+        });
+        assert_eq!(err(&d), msg);
+        // Frei platziert oder ohne Quelle.
+        let mut d = with_section();
+        d.views[1].placement = FREE;
+        assert_eq!(err(&d), msg);
+        let mut d = with_section();
+        d.views[1].parent = None;
+        assert_eq!(err(&d), msg);
+    }
+
+    #[test]
+    fn plane_must_fit_the_source() {
+        let msg = "Die Schnittebene passt nicht zur Ausgangsansicht.";
+        // Hinten blickt entlang derselben Achse wie Vorne.
+        let mut d = with_section();
+        d.views[1].kind = ViewKind::Back;
+        assert_eq!(err(&d), msg);
+        // Isometrisch hat keine Schnittebene.
+        let mut d = with_section();
+        d.views[1].kind = ViewKind::Isometric;
+        assert_eq!(err(&d), msg);
+    }
+
+    #[test]
+    fn scale_follows_the_source() {
+        let mut d = with_section();
+        d.views[1].scale = Scale { num: 2, den: 1 };
+        assert_eq!(
+            err(&d),
+            "Eine Schnittansicht hat den Maßstab ihrer Ausgangsansicht."
+        );
+    }
+
+    #[test]
+    fn letters_must_be_valid_and_unique() {
+        let msg = "Ein Schnittbuchstabe ist ungültig oder doppelt.";
+        for bad in ['I', 'O', 'Q', 'a', '1', ' ', 'Ä'] {
+            let mut d = with_section();
+            sec(&mut d, |s| s.letter = bad);
+            assert_eq!(err(&d), msg, "{bad:?}");
+        }
+        let mut d = with_section();
+        let front = d.views[0].id;
+        d.add_section(front, ViewKind::Left, 0.0, 80.0).unwrap();
+        d.views[2].section.as_mut().unwrap().letter = 'A';
+        assert_eq!(err(&d), msg);
+        d.views[2].section.as_mut().unwrap().letter = 'B';
+        assert_eq!(validate_drawing(&d), Ok(()));
+    }
+
+    #[test]
+    fn at_most_twelve_sections() {
+        let mut d = with_section();
+        let front = d.views[0].id;
+        for i in 1..MAX_SECTIONS {
+            d.add_section(front, ViewKind::Top, i as f64, 80.0).unwrap();
+        }
+        assert_eq!(validate_drawing(&d), Ok(()));
+        let mut extra = d.views[1].clone();
+        extra.id = ViewId(d.next_view);
+        d.next_view += 1;
+        extra.section.as_mut().unwrap().letter = 'Z';
+        d.views.push(extra);
+        assert_eq!(err(&d), "Es sind höchstens 12 Schnitte je Blatt möglich.");
+    }
+
+    #[test]
+    fn offset_must_be_finite_and_in_range() {
+        let msg = "Die Lage der Schnittebene ist ungültig.";
+        for bad in [f64::NAN, f64::INFINITY, 1.0e5 + 1.0, -1.0e5 - 1.0] {
+            let mut d = with_section();
+            sec(&mut d, |s| s.offset = bad);
+            assert_eq!(err(&d), msg, "{bad}");
+        }
+        for ok in [1.0e5, -1.0e5, 0.0] {
+            let mut d = with_section();
+            sec(&mut d, |s| s.offset = ok);
+            assert_eq!(validate_drawing(&d), Ok(()), "{ok}");
+        }
+    }
+
+    #[test]
+    fn hatch_spacing_is_checked_for_the_sheet() {
+        let mut d = with_section();
+        sec(&mut d, |s| s.hatch.spacing = 0.7);
+        assert_eq!(validate_drawing(&d), Ok(()));
+        d.sheet = A4;
+        assert_eq!(
+            err(&d),
+            "Der Schraffurabstand von „Schnitt A\u{2013}A“ wäre auf diesem Blatt kleiner als 0,5 mm."
+        );
+        let mut d = with_section();
+        sec(&mut d, |s| s.hatch.spacing = 50.5);
+        assert_eq!(
+            err(&d),
+            "Der Schraffurabstand ist zu groß (höchstens 50 mm)."
+        );
+    }
+
+    #[test]
+    fn changing_the_sheet_is_refused_and_leaves_the_document_alone() {
+        let mut doc = Document::new();
+        let id = doc.add_drawing("Blatt", A3, Projection::First).unwrap();
+        let front = doc.add_view(id, ViewKind::Front, S11, FREE, None).unwrap();
+        doc.update_drawing(id, |d| {
+            d.add_section(front, ViewKind::Top, 0.0, 80.0).unwrap();
+            d.views[1].section.as_mut().unwrap().hatch.spacing = 0.7;
+        })
+        .unwrap();
+        let before = doc.drawing(id).unwrap().clone();
+        let edits = doc.edit_count();
+        let m = invalid(doc.update_drawing(id, |d| d.sheet = A4));
+        assert!(
+            m.contains("Schnitt A\u{2013}A") && m.contains("0,5 mm"),
+            "{m}"
+        );
+        assert_eq!(doc.drawing(id).unwrap(), &before);
+        assert_eq!(doc.edit_count(), edits);
+        // Auf ein größeres Blatt geht es.
+        doc.update_drawing(id, |d| {
+            d.sheet = Sheet {
+                paper: Paper::A2,
+                landscape: true,
+            }
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn snapshots_with_bad_sections_are_refused_with_the_drawing_name() {
+        let mut d = with_section();
+        sec(&mut d, |s| s.letter = 'I');
+        let e = Document::from_snapshot(snapshot_with(vec![d], 2), 0.1).unwrap_err();
+        assert!(format!("{e:?}").contains("Blatt"), "{e:?}");
+    }
+}

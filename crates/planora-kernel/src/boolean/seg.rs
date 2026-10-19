@@ -178,7 +178,29 @@ impl Seg {
         }
         let lo = best.0.saturating_sub(1) as f64 / n as f64;
         let hi = (best.0 + 1).min(n) as f64 / n as f64;
-        golden_min(lo, hi, |f| (self.at(f) - p).length())
+        let found = golden_min(lo, hi, |f| (self.at(f) - p).length());
+        // Vollkreis oder Vollellipse als ein Stück (Anfang = Ende): Stützstelle 0 und n sind
+        // derselbe Punkt, bei Gleichstand gewinnt zufällig eine von beiden. Liegt `p` kurz vor
+        // dem Ende, wäre sonst nur am Anfang gesucht und die Naht geliefert worden; deshalb auch
+        // den Abschnitt am anderen Ende prüfen und das kleinere Minimum nehmen. Das alte Ergebnis
+        // bleibt nur bei bitgleichem Abstand; liegt `p` genau auf der Naht, kann wegen Rundung
+        // jetzt f ≈ 1 statt f ≈ 0 herauskommen (derselbe Punkt). Freiformkurven bleiben bewusst
+        // bei der alten Suche (ihre Ablehnungen hängen daran).
+        if matches!(self.curve, Curve::Circle { .. } | Curve::Ellipse { .. })
+            && (best.0 == 0 || best.0 == n)
+            && self.start().distance(self.end()) <= 1e-9
+        {
+            let (lo, hi) = if best.0 == 0 {
+                ((n - 1) as f64 / n as f64, 1.0)
+            } else {
+                (0.0, 1.0 / n as f64)
+            };
+            let other = golden_min(lo, hi, |f| (self.at(f) - p).length());
+            if other.1 < found.1 {
+                return other;
+            }
+        }
+        found
     }
 }
 

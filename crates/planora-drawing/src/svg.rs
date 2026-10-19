@@ -24,6 +24,12 @@
 //! `rotate(-Winkel)` dahinter. Pfeile sind gefüllte Dreiecke, Bögen werden wie die Kreisbögen der
 //! Linien in Stücke von höchstens 90° zerlegt.
 //!
+//! Schnittansichten (`MarkKind::Hatch`, `MarkKind::SectionLine`): nach den bisherigen Gruppen
+//! folgen, nur wenn vorhanden, `„{Ansicht} Schraffur“` (dünn wie Maßlinien, ohne Muster) und
+//! `„{Ansicht} Schnitt“` (Schnittlinie, Pfeile, Buchstaben, Titel). Die Kette der Schnittlinie
+//! ist `DIM_LINE_W` mit `CENTER_PATTERN`, die Endstücke haben `SECTION_END_W`, Pfeile die Größe
+//! aus `arrow_size` (5 × 2 mm mal Blattfaktor).
+//!
 //! * Kreisbögen und Ellipsenbögen werden in Stücke von höchstens 90° zerlegt (ein voller Kreis
 //!   besteht aus vier Viertelbögen). Die Mitte eines SVG-Bogens wird beim Lesen aus den
 //!   auf sechs Nachkommastellen gerundeten Endpunkten zurückgerechnet; bei einem Halbkreis ist
@@ -36,7 +42,8 @@
 
 use crate::Visibility;
 use crate::annotate::{
-    ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, CENTER_W, DIM_LINE_W, Mark, MarkKind, TextAnchor,
+    CENTER_PATTERN, CENTER_W, DIM_LINE_W, Mark, MarkKind, SECTION_END_W, SectionPen, TextAnchor,
+    arrow_size,
 };
 use crate::error::DrawError;
 use crate::out2d::{Out2d, bezier_pieces};
@@ -136,9 +143,12 @@ const LOST_COLOR: &str = "#c00";
 fn color(kind: MarkKind) -> &'static str {
     match kind {
         MarkKind::Lost => LOST_COLOR,
-        MarkKind::Dimension | MarkKind::CenterLine | MarkKind::Sheet(_) | MarkKind::Position(_) => {
-            MARK_COLOR
-        }
+        MarkKind::Dimension
+        | MarkKind::CenterLine
+        | MarkKind::Sheet(_)
+        | MarkKind::Position(_)
+        | MarkKind::Hatch
+        | MarkKind::SectionLine(_) => MARK_COLOR,
     }
 }
 
@@ -148,6 +158,8 @@ enum MarkGroup {
     Dims,
     Centre,
     Positions,
+    Hatch,
+    Section,
 }
 
 fn mark_group(m: &Mark) -> MarkGroup {
@@ -160,6 +172,8 @@ fn mark_group(m: &Mark) -> MarkGroup {
     match kind {
         MarkKind::CenterLine => MarkGroup::Centre,
         MarkKind::Position(_) => MarkGroup::Positions,
+        MarkKind::Hatch => MarkGroup::Hatch,
+        MarkKind::SectionLine(_) => MarkGroup::Section,
         _ => MarkGroup::Dims,
     }
 }
@@ -179,6 +193,8 @@ fn mark_groups(
         ("Maße", MarkGroup::Dims),
         ("Mittellinien", MarkGroup::Centre),
         ("Positionen", MarkGroup::Positions),
+        ("Schraffur", MarkGroup::Hatch),
+        ("Schnitt", MarkGroup::Section),
     ] {
         let mut body = String::new();
         for m in marks.iter().filter(|m| mark_group(m) == group) {
@@ -211,7 +227,18 @@ fn stroke_path(d: &str, kind: MarkKind, sheet_scale: f64) -> Result<String, Draw
                 num(CENTER_PATTERN[3])?
             ),
         ),
-        MarkKind::Dimension | MarkKind::Lost => (DIM_LINE_W, String::new()),
+        MarkKind::SectionLine(SectionPen::Chain) => (
+            DIM_LINE_W,
+            format!(
+                " stroke-dasharray=\"{} {} {} {}\"",
+                num(CENTER_PATTERN[0])?,
+                num(CENTER_PATTERN[1])?,
+                num(CENTER_PATTERN[2])?,
+                num(CENTER_PATTERN[3])?
+            ),
+        ),
+        MarkKind::SectionLine(SectionPen::End) => (SECTION_END_W, String::new()),
+        MarkKind::Dimension | MarkKind::Lost | MarkKind::Hatch => (DIM_LINE_W, String::new()),
         MarkKind::Sheet(pen) => (pen.width_at(sheet_scale), String::new()),
         MarkKind::Position(pen) => (pen.width_at(sheet_scale), String::new()),
     };
@@ -232,8 +259,9 @@ fn mark_element(out: &mut String, m: &Mark, sheet_scale: f64) -> Result<(), Draw
             out.push_str(&stroke_path(&d, *kind, sheet_scale)?);
         }
         Mark::Arrow { tip, dir, kind } => {
-            let base = *tip + *dir * ARROW_LEN;
-            let perp = DVec2::new(-dir.y, dir.x) * ARROW_HALF_W;
+            let (len, half) = arrow_size(*kind, sheet_scale);
+            let base = *tip + *dir * len;
+            let perp = DVec2::new(-dir.y, dir.x) * half;
             let (p, q) = (base + perp, base - perp);
             let mut d = String::new();
             move_to(&mut d, *tip)?;

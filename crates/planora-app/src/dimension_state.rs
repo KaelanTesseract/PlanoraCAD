@@ -20,11 +20,11 @@ use planora_drawing::limits::MAX_DIMENSIONS;
 use planora_drawing::sheet::{DimMarks, dimension_marks};
 use planora_drawing::stroke::extent_of;
 use planora_drawing::{
-    Anchor, Basis, Candidate, CandidateOrigin, DrawBody, DrawError, Drawing, DrawingId, ViewId,
-    ViewKind, ViewLines, ViewSpec, dimension_key, measure, suggest,
+    Anchor, Basis, Candidate, CandidateOrigin, DrawBody, DrawError, Drawing, DrawingId,
+    SectionData, ViewId, ViewKind, ViewLines, ViewSpec, dimension_key, measure, suggest,
 };
 use planora_feature::{
-    RefCache, geo_ref_for_edge_cached, geo_ref_for_face_cached, resolve_drawing_dimensions_keyed,
+    RefCache, geo_ref_for_edge_cached, geo_ref_for_face_cached, resolve_drawing_dimensions_views,
     resolve_geo_cached,
 };
 use planora_kernel::{Edge, Face, Id, Solid};
@@ -116,7 +116,22 @@ struct Cached {
     edit: u64,
     /// Ansichten und ihre Arten zu diesem Stand (eine andere Art misst anders).
     views: Vec<(ViewId, ViewKind)>,
+    /// Die fertigen Schnitte, mit denen aufgelöst wurde (festgehalten, damit der Vergleich über
+    /// die Adresse eindeutig bleibt): Wird ein Schnitt fertig oder neu gerechnet, wird neu
+    /// aufgelöst.
+    sections: Sections,
     dims: Arc<ResolvedDims>,
+}
+
+/// Fertige Schnitte je Schnittansicht.
+type Sections = Vec<(ViewId, Arc<SectionData>)>;
+
+/// Dieselben fertigen Schnitte (gleiche Ansichten, dieselben Rechenergebnisse)?
+fn same_sections(a: &[(ViewId, Arc<SectionData>)], b: &[(ViewId, Arc<SectionData>)]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|((va, da), (vb, db))| va == vb && Arc::ptr_eq(da, db))
 }
 
 /// Zwischenspeicher der Markierungen je Maß und der Hinweise: gilt für genau ein
@@ -193,27 +208,56 @@ impl DimensionUi {
         self.resolutions
     }
 
-    /// Löst die Maße der Zeichnung auf (nur wenn Modell- oder Dokumentstand sich geändert
-    /// haben); bei unverändertem Stand dasselbe `Arc`. Gerechnet wird mit den exakten Körpern
-    /// von `state.bodies` (Netz-Körper nicht). Die letzte erfolgreiche Lage jedes Maßes wird
-    /// gemerkt und steht in `last_known` (für verlorene Maße); gelöschte Maße fallen dort weg.
-    /// Gibt es die Zeichnung nicht, ist das Ergebnis leer.
+    /// Löst die Maße der Zeichnung auf (nur wenn Modell- oder Dokumentstand oder die fertigen
+    /// Schnitte sich geändert haben); bei unverändertem Stand dasselbe `Arc`. Gerechnet wird mit
+    /// den exakten Körpern von `state.bodies` (Netz-Körper nicht), Maße einer Schnittansicht mit
+    /// deren geschnittenen Körpern ([`crate::drawing_state::DrawingUi::view_solids`]); solange ein
+    /// Schnitt rechnet, fehlen seine Maße im Ergebnis (sie gelten nicht als verloren). Die letzte
+    /// erfolgreiche Lage jedes Maßes wird gemerkt und steht in `last_known` (für verlorene
+    /// Maße); gelöschte Maße fallen dort weg. Gibt es die Zeichnung nicht, ist das Ergebnis leer.
     pub fn resolve(&mut self, state: &AppState, drawing: DrawingId) -> Arc<ResolvedDims> {
         let model = state.document.model_edit_count();
         let edit = state.document.edit_count();
-        if let Some(c) = self.cached(drawing, model, edit) {
+        let sections: Sections = state
+            .document
+            .drawing(drawing)
+            .map(|d| {
+                state
+                    .drawing_ui
+                    .sections_for(d, model)
+                    .into_iter()
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(c) = self
+            .cache
+            .as_ref()
+            .filter(|c| same_sections(&c.sections, &sections))
+            .and_then(|_| self.cached(drawing, model, edit))
+        {
             return c;
         }
         let Some(d) = state.document.drawing(drawing) else {
             self.last_known.remove(&drawing);
             self.last_keys.remove(&drawing);
-            return self.store(drawing, model, edit, Vec::new(), ResolvedDims::default());
+            return self.store(
+                drawing,
+                model,
+                edit,
+                (Vec::new(), Vec::new()),
+                ResolvedDims::default(),
+            );
         };
         let views: Vec<(ViewId, ViewKind)> = d.views.iter().map(|v| (v.id, v.kind)).collect();
         let reused = self
             .cache
             .as_ref()
-            .filter(|c| c.drawing == drawing && c.model == model && c.views == views)
+            .filter(|c| {
+                c.drawing == drawing
+                    && c.model == model
+                    && c.views == views
+                    && same_sections(&c.sections, &sections)
+            })
             .and_then(|c| reuse(&c.dims, d));
         let ids: HashSet<DimId> = d.dimensions.iter().map(|m| m.id).collect();
         let keys = self.last_keys.entry(drawing).or_default();
@@ -226,7 +270,13 @@ impl DimensionUi {
                     .into_iter()
                     .map(|b| &b.solid)
                     .collect();
-                match resolve_drawing_dimensions_keyed(d, &solids, || Ok::<(), Infallible>(())) {
+                let view_solids: BTreeMap<ViewId, Vec<&Solid>> = sections
+                    .iter()
+                    .map(|(v, data)| (*v, data.solids.iter().collect()))
+                    .collect();
+                match resolve_drawing_dimensions_views(d, &solids, &view_solids, || {
+                    Ok::<(), Infallible>(())
+                }) {
                     Ok((dims, new_keys)) => {
                         keys.extend(new_keys);
                         dims
@@ -243,7 +293,7 @@ impl DimensionUi {
             }
         }
         dims.last_known = known.clone();
-        self.store(drawing, model, edit, views, dims)
+        self.store(drawing, model, edit, (views, sections), dims)
     }
 
     fn store(
@@ -251,7 +301,7 @@ impl DimensionUi {
         drawing: DrawingId,
         model: u64,
         edit: u64,
-        views: Vec<(ViewId, ViewKind)>,
+        (views, sections): (Vec<(ViewId, ViewKind)>, Sections),
         dims: ResolvedDims,
     ) -> Arc<ResolvedDims> {
         let dims = Arc::new(dims);
@@ -260,6 +310,7 @@ impl DimensionUi {
             model,
             edit,
             views,
+            sections,
             dims: Arc::clone(&dims),
         });
         dims
@@ -574,6 +625,10 @@ fn direction_of_kind(kind: DimKind) -> Option<bool> {
 /// Rundung endet. Bezugsmaß-Gruppen bekommen in der Zeichnung neue Nummern. Jedes
 /// Maß wird einzeln über `Document::add_dimension` geprüft; scheitert eines, wird es
 /// ausgelassen und sein Grund gemeldet ([`SuggestOutcome::Partly`]).
+///
+/// Schnittansichten (Spec §9.3) übernehmen keine Maße ihrer Quelle: Ihre Vorschläge entstehen
+/// aus ihren eigenen Linien und den geschnittenen Körpern, Bezüge auf eine Schnittfläche tragen
+/// deren Schnittmarke. Rechnet ein gewählter Schnitt noch, gibt es nichts ([`VIEWS_PENDING`]).
 pub fn suggest_for(
     state: &mut AppState,
     drawing: DrawingId,
@@ -612,7 +667,7 @@ pub fn suggest_for(
     let mut ready: Vec<(ViewSpec, Arc<ViewLines>)> = Vec::new();
     let mut failed: Option<String> = None;
     for v in &wanted {
-        match state.drawing_ui.result(v.kind, model) {
+        match state.drawing_ui.result_of(v, model) {
             ViewResult::Pending { .. } => return Unavailable(VIEWS_PENDING.into()),
             ViewResult::Failed(m) => {
                 failed.get_or_insert(m);
@@ -623,22 +678,38 @@ pub fn suggest_for(
     if ready.is_empty() {
         return Unavailable(failed.unwrap_or_else(|| VIEWS_PENDING.into()));
     }
+    // Die geschnittenen Körper aller fertigen Schnittansichten (auch nicht gewählter: deren
+    // vorhandene Maße zählen gegen Doppelungen und für die Stufen).
+    let sections = state.drawing_ui.sections_for(&d, model);
+    if ready
+        .iter()
+        .any(|(v, _)| v.section.is_some() && !sections.contains_key(&v.id))
+    {
+        return Unavailable(VIEWS_PENDING.into());
+    }
 
     let solids: Vec<&Solid> = exact.iter().map(|b| &b.solid).collect();
-    let draw: Vec<DrawBody> = solids
+    // Körper je Ansicht (Spec §9.3): Normansichten die exakten Körper, Schnittansichten ihre
+    // geschnittenen Körper; dazu die Ausdehnung wie in der Ansichtsrechnung.
+    let plain = ViewBodies::new(solids);
+    let cut: BTreeMap<ViewId, ViewBodies> = sections
         .iter()
-        .map(|s| DrawBody {
-            name: String::new(),
-            solid: s,
-        })
+        .map(|(v, data)| (*v, ViewBodies::new(data.solids.iter().collect())))
         .collect();
-    let extent = extent_of(&draw);
+    let bodies_of = |v: &ViewSpec| -> Option<&ViewBodies> {
+        if v.section.is_some() {
+            cut.get(&v.id)
+        } else {
+            Some(&plain)
+        }
+    };
     let tol = Tolerance::default();
-    // Ein Speicher für den ganzen Vorschlag (Prüfpunkte, Kantenverwendungen, Achsbereiche).
+    // Ein Speicher für den ganzen Vorschlag (Prüfpunkte, Kantenverwendungen, Achsbereiche; die
+    // Schlüssel sind die Körper, also gilt er für alle Ansichten).
     let cache = RefCache::new();
-    let geos_of = |refs: &[GeoRef]| -> Option<Vec<Geo3>> {
+    let geos_in = |b: &ViewBodies, refs: &[GeoRef]| -> Option<Vec<Geo3>> {
         refs.iter()
-            .map(|r| resolve_geo_cached(&solids, r, &tol, &cache).ok())
+            .map(|r| resolve_geo_cached(&b.solids, r, &tol, &cache).ok())
             .collect()
     };
 
@@ -651,7 +722,10 @@ pub fn suggest_for(
             continue;
         };
         let basis = Basis::of(v.kind);
-        let geos = geos_of(&m.refs);
+        // Schnitt noch nicht fertig: wie ein Maß ohne Messung.
+        let vb = bodies_of(v);
+        let geos = vb.and_then(|b| geos_in(b, &m.refs));
+        let extent = vb.map_or(0.0, |b| b.extent);
         let measured = geos
             .as_ref()
             .and_then(|g| measure(m.kind, g, &basis, v.kind, extent).ok());
@@ -681,47 +755,68 @@ pub fn suggest_for(
         state.dimension_ui.remember_key(drawing, id, key);
     }
 
-    let pairs: Vec<(ViewSpec, &ViewLines)> =
-        ready.iter().map(|(s, l)| (s.clone(), l.as_ref())).collect();
-    let candidates = suggest(&draw, &pairs, &existing);
-    if candidates.is_empty() {
-        return SuggestOutcome::NothingNew;
+    // Erst alle Normansichten mit den exakten Körpern, dann jede Schnittansicht für sich mit
+    // ihren geschnittenen Körpern (die Herkunft eines Vorschlags zählt in den Körpern seines
+    // Durchgangs). Übernommen wird nichts: jede Ansicht bekommt Vorschläge aus ihren Linien.
+    let mut passes: Vec<(&ViewBodies, Vec<(ViewSpec, &ViewLines)>)> = Vec::new();
+    let normal: Vec<(ViewSpec, &ViewLines)> = ready
+        .iter()
+        .filter(|(s, _)| s.section.is_none())
+        .map(|(s, l)| (s.clone(), l.as_ref()))
+        .collect();
+    if !normal.is_empty() {
+        passes.push((&plain, normal));
+    }
+    for (s, l) in ready.iter().filter(|(s, _)| s.section.is_some()) {
+        if let Some(b) = cut.get(&s.id) {
+            passes.push((b, vec![(s.clone(), l.as_ref())]));
+        }
     }
 
     let mut next_group = next_group(&d);
-    // Gruppe des Vorschlags → (Nummer in der Zeichnung, Abstand, nächste Stufe).
-    let mut groups: HashMap<u64, (u64, f64, u32)> = HashMap::new();
     let mut count = d.dimensions.len();
     let mut added = 0usize;
+    let mut proposed = 0usize;
     let mut skipped: Vec<String> = Vec::new();
     let mut unbound = false;
-    for (i, c) in candidates.iter().enumerate() {
-        if count >= MAX_DIMENSIONS {
-            let rest = candidates.len() - i;
-            skipped.push(if rest == 1 {
-                format!("{} 1 weiteres Maß wurde nicht gesetzt.", full_text())
-            } else {
-                format!("{} {rest} weitere Maße wurden nicht gesetzt.", full_text())
-            });
-            break;
-        }
-        // Stufen und Gruppen zählen erst weiter, wenn das Maß wirklich gesetzt ist.
-        let (mut st, mut gr, mut ng) = (stack.clone(), groups.clone(), next_group);
-        let Some(spec) = candidate_spec(
-            c, &d, &solids, &tol, &cache, extent, &geos_of, &mut st, &mut gr, &mut ng,
-        ) else {
-            unbound = true;
-            continue;
-        };
-        match state.document.add_dimension(drawing, spec) {
-            Ok(id) => {
-                state.dimension_ui.remember_key(drawing, id, c.key.clone());
-                added += 1;
-                count += 1;
-                (stack, groups, next_group) = (st, gr, ng);
+    'passes: for (vb, pairs) in passes {
+        let candidates = suggest(&vb.draw(), &pairs, &existing);
+        proposed += candidates.len();
+        // Gruppe des Vorschlags → (Nummer in der Zeichnung, Abstand, nächste Stufe).
+        let mut groups: HashMap<u64, (u64, f64, u32)> = HashMap::new();
+        let geos_of = |refs: &[GeoRef]| geos_in(vb, refs);
+        for (i, c) in candidates.iter().enumerate() {
+            if count >= MAX_DIMENSIONS {
+                let rest = candidates.len() - i;
+                skipped.push(if rest == 1 {
+                    format!("{} 1 weiteres Maß wurde nicht gesetzt.", full_text())
+                } else {
+                    format!("{} {rest} weitere Maße wurden nicht gesetzt.", full_text())
+                });
+                break 'passes;
             }
-            Err(e) => skipped.push(format!("Ein Maß wurde ausgelassen: {e}")),
+            // Stufen und Gruppen zählen erst weiter, wenn das Maß wirklich gesetzt ist.
+            let (mut st, mut gr, mut ng) = (stack.clone(), groups.clone(), next_group);
+            let Some(spec) = candidate_spec(
+                c, &d, &vb.solids, &tol, &cache, vb.extent, &geos_of, &mut st, &mut gr, &mut ng,
+            ) else {
+                unbound = true;
+                continue;
+            };
+            match state.document.add_dimension(drawing, spec) {
+                Ok(id) => {
+                    state.dimension_ui.remember_key(drawing, id, c.key.clone());
+                    existing.push((c.view, c.kind, c.key.clone()));
+                    added += 1;
+                    count += 1;
+                    (stack, groups, next_group) = (st, gr, ng);
+                }
+                Err(e) => skipped.push(format!("Ein Maß wurde ausgelassen: {e}")),
+            }
         }
+    }
+    if proposed == 0 {
+        return SuggestOutcome::NothingNew;
     }
     if unbound {
         skipped.insert(0, NOT_BOUND.into());
@@ -730,6 +825,34 @@ pub fn suggest_for(
         SuggestOutcome::Added(added)
     } else {
         SuggestOutcome::Partly { added, skipped }
+    }
+}
+
+/// Die Körper, auf denen die Maße einer Ansicht arbeiten, mit ihrer Ausdehnung.
+struct ViewBodies<'a> {
+    solids: Vec<&'a Solid>,
+    extent: f64,
+}
+
+impl<'a> ViewBodies<'a> {
+    fn new(solids: Vec<&'a Solid>) -> ViewBodies<'a> {
+        let mut b = ViewBodies {
+            solids,
+            extent: 0.0,
+        };
+        b.extent = extent_of(&b.draw());
+        b
+    }
+
+    /// Die Körper als Eingabe der Ansichtsrechnung (ohne Namen).
+    fn draw(&self) -> Vec<DrawBody<'a>> {
+        self.solids
+            .iter()
+            .map(|s| DrawBody {
+                name: String::new(),
+                solid: s,
+            })
+            .collect()
     }
 }
 

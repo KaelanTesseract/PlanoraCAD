@@ -10,6 +10,7 @@ pub mod dimension;
 pub mod dxf;
 pub mod error;
 pub mod file;
+pub mod hatch;
 pub mod isect;
 pub mod layout;
 pub mod limits;
@@ -19,6 +20,8 @@ pub mod parts;
 pub mod pdf;
 pub mod pdf_font;
 pub mod raycast;
+pub mod section;
+pub mod section_marks;
 pub mod sheet;
 pub mod sheet_frame;
 pub mod sheet_info;
@@ -37,11 +40,14 @@ pub use error::DrawError;
 pub use file::{DrawingFormat, drawing_to_bytes, export_drawing_file, export_pdf_file};
 pub use layout::{GAP_MM, align_dir, view_extent};
 pub use model::{
-    Balloon, BalloonId, Drawing, DrawingId, DrawingKind, Paper, Placement, Projection, Scale,
-    Sheet, ViewId, ViewKind, ViewSpec,
+    Balloon, BalloonId, Drawing, DrawingId, DrawingKind, HatchSpec, MAX_HATCH_SPACING,
+    MAX_SECTIONS, MIN_HATCH_SHEET_MM, Paper, Placement, Projection, SECTION_LETTERS, Scale,
+    SectionSpec, Sheet, ViewId, ViewKey, ViewKind, ViewSpec, plane_offset_from_view, section_kind,
+    section_line_coord, sections_ok_on,
 };
 pub use parts::{BodyKey, PartsCells, PartsRow, RowOverride};
 pub use pdf::{PdfMeta, pdf_bytes, write_pdf};
+pub use section::{SectionData, SectionLines, compute_section};
 pub use sheet_frame::{
     PartsSpace, SheetLayout, SheetPen, TitleField, sheet_layout, sheet_layout_with,
 };

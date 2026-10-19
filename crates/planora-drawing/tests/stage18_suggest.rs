@@ -27,6 +27,7 @@ fn spec(id: u64, kind: ViewKind) -> ViewSpec {
         show_hidden: true,
         parent: None,
         centerlines: kind.is_normal(),
+        section: None,
     }
 }
 

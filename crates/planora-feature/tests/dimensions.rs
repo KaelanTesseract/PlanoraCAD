@@ -660,3 +660,214 @@ fn resolve_dimensions_full_pipeline() {
     // Unbekannte Zeichnung.
     invalid(d.resolve_dimensions(DrawingId(42), &[]));
 }
+
+// ---- Maße in Schnittansichten (Teilprojekt 3d, Aufgabe 10) --------------------------------
+
+/// Quader 40 × 20 × 10 (x, y, z) mit durchgehender Bohrung r 5 um die Achse (20, 13, z).
+/// Die Ebene y = 10 (Schnitt „Vorne“, Versatz 10) trifft die Bohrung 3 mm neben der Achse:
+/// halbe Sehne √(5² − 3²) = 4, die Schnittfläche besteht also aus x 0…16 und x 24…40 (z 0…10),
+/// der Abstand der beiden Kanten an der Bohrung ist 8. Keine Ecke liegt auf der Ebene (die Naht
+/// der Bohrung liegt bei y = 13), es gibt also keine Verschiebung um 0,001 mm.
+fn holed_block() -> (Document, FeatureId) {
+    let mut d = Document::new();
+    let block = d
+        .add_feature(
+            "Block",
+            FeatureKind::Box {
+                size: DVec3::new(40.0, 20.0, 10.0),
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    let bore = d
+        .add_feature(
+            "Bohrung",
+            FeatureKind::Cylinder {
+                radius: 5.0,
+                height: 20.0,
+                origin: DVec3::new(20.0, 13.0, -5.0),
+            },
+        )
+        .unwrap();
+    let cut = d
+        .add_feature(
+            "Abzug",
+            FeatureKind::Boolean {
+                target: BodyRef {
+                    feature: block,
+                    index: 0,
+                },
+                tool: BodyRef {
+                    feature: bore,
+                    index: 0,
+                },
+                op: planora_kernel::boolean::BoolOp::Difference,
+            },
+        )
+        .unwrap();
+    assert_eq!(d.visible_bodies().len(), 1);
+    (d, cut)
+}
+
+fn cut_solids(solids: &[&Solid], kind: ViewKind, offset: f64) -> Vec<Solid> {
+    let bodies: Vec<planora_drawing::DrawBody> = solids
+        .iter()
+        .map(|s| planora_drawing::DrawBody {
+            name: "Block".into(),
+            solid: s,
+        })
+        .collect();
+    let plane = planora_drawing::section::SectionPlane { kind, offset };
+    let out = planora_drawing::compute_section(
+        &bodies,
+        &plane,
+        planora_drawing::compute_view,
+        &planora_exchange::Progress::new(),
+    )
+    .unwrap();
+    assert!(!out.data.nudged, "die Ebene liegt auf keiner Ecke");
+    out.data.solids
+}
+
+fn value_of(
+    dims: &planora_drawing::annotate::ResolvedDims,
+    view: ViewId,
+) -> Vec<Result<f64, DimError>> {
+    dims.by_view
+        .get(&view)
+        .map(|l| l.iter().map(|(_, r)| r.clone().map(|m| m.value)).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn resolve_against_cut_solids() {
+    use planora_drawing::section::SECTION_ORIGIN_MIN;
+    use std::collections::BTreeMap;
+    let (mut d, _) = holed_block();
+    let orig = d.visible_bodies()[0].solid.clone();
+    let id = d.add_drawing("Blatt", A4, Projection::First).unwrap();
+    let top = d
+        .add_view(
+            id,
+            ViewKind::Top,
+            S11,
+            Placement::Free { x: 100.0, y: 200.0 },
+            None,
+        )
+        .unwrap();
+    let front = d
+        .add_view(
+            id,
+            ViewKind::Front,
+            S11,
+            Placement::Free { x: 100.0, y: 80.0 },
+            None,
+        )
+        .unwrap();
+    let mut sec = None;
+    d.update_drawing(id, |dr| {
+        sec = Some(dr.add_section(top, ViewKind::Front, 10.0, 40.0).unwrap());
+    })
+    .unwrap();
+    let sec = sec.unwrap();
+    let cut = cut_solids(&[&orig], ViewKind::Front, 10.0);
+    assert_eq!(cut.len(), 1);
+    let tol = Tolerance::default();
+    let v = DVec3::new;
+    let at_bore = |x: f64| {
+        let r = geo_ref_for_edge(
+            &cut[0],
+            line_edge(&cut[0], v(x, 10.0, 0.0), v(x, 10.0, 10.0)),
+            &tol,
+        )
+        .unwrap();
+        let GeoRefData::Edge { a, b, .. } = &r else {
+            panic!("Kantendaten erwartet");
+        };
+        assert!(
+            a.origin >= SECTION_ORIGIN_MIN || b.origin >= SECTION_ORIGIN_MIN,
+            "eine Fläche der Kante ist die Schnittfläche"
+        );
+        GeoRef::Edge(r)
+    };
+    let bore_dim = |view| {
+        spec(
+            view,
+            DimKind::Horizontal,
+            vec![at_bore(16.0), at_bore(24.0)],
+        )
+    };
+    // Breite in Vorne an den Originalkanten (x = 0 und x = 40 vorn bei y = 0).
+    let width = spec(
+        front,
+        DimKind::Horizontal,
+        vec![
+            GeoRef::Edge(
+                geo_ref_for_edge(
+                    &orig,
+                    line_edge(&orig, v(0.0, 0.0, 0.0), v(0.0, 0.0, 10.0)),
+                    &tol,
+                )
+                .unwrap(),
+            ),
+            GeoRef::Edge(
+                geo_ref_for_edge(
+                    &orig,
+                    line_edge(&orig, v(40.0, 0.0, 0.0), v(40.0, 0.0, 10.0)),
+                    &tol,
+                )
+                .unwrap(),
+            ),
+        ],
+    );
+    d.add_dimension(id, bore_dim(sec)).unwrap();
+    d.add_dimension(id, width).unwrap();
+    // Dasselbe Bohrungsmaß in Vorne: dort gibt es keine Schnittfläche.
+    d.add_dimension(id, bore_dim(front)).unwrap();
+    let dr = d.drawing(id).unwrap().clone();
+    let solids: Vec<&Solid> = vec![&orig];
+    let map: BTreeMap<ViewId, Vec<&Solid>> = BTreeMap::from([(sec, vec![&cut[0]])]);
+    let ok = |r: Result<(), std::convert::Infallible>| r;
+    let (with, keys) = resolve_drawing_dimensions_views(&dr, &solids, &map, || ok(Ok(()))).unwrap();
+    let got = value_of(&with, sec);
+    assert_eq!(got.len(), 1);
+    let x = got[0].as_ref().unwrap();
+    assert!((x - 8.0).abs() <= EPS, "{x} statt 8");
+    let fr = value_of(&with, front);
+    assert_eq!(fr.len(), 2);
+    assert!((fr[0].as_ref().unwrap() - 40.0).abs() <= EPS);
+    assert!(matches!(fr[1], Err(DimError::Lost(_))), "{:?}", fr[1]);
+    // Der Schlüssel des Schnittmaßes entsteht aus den geschnittenen Körpern.
+    let sec_id = with.by_view[&sec][0].0.id;
+    assert!(keys.contains_key(&sec_id));
+    // Ohne Eintrag für die Schnittansicht: ihre Maße fehlen (nicht verloren), Vorne unverändert.
+    let (without, keys0) =
+        resolve_drawing_dimensions_views(&dr, &solids, &BTreeMap::new(), || ok(Ok(()))).unwrap();
+    assert!(!without.by_view.contains_key(&sec));
+    assert!(!keys0.contains_key(&sec_id));
+    assert_eq!(value_of(&without, front), fr);
+    // Die alten Einstiege rechnen genauso wie die leere Karte: Sie lassen die Maße der
+    // Schnittansicht ganz weg (festgehalten, damit niemand sie für Zeichnungen mit Schnitten
+    // nimmt und sich über fehlende Maße wundert).
+    let (keyed, keyed_keys) =
+        resolve_drawing_dimensions_keyed(&dr, &solids, || ok(Ok(()))).unwrap();
+    assert_eq!(keyed.by_view, without.by_view);
+    assert!(!keyed.by_view.contains_key(&sec));
+    assert!(!keyed_keys.contains_key(&sec_id));
+    let plain = resolve_drawing_dimensions(&dr, &solids, || ok(Ok(()))).unwrap();
+    assert_eq!(plain.by_view, without.by_view);
+    assert!(!plain.by_view.contains_key(&sec));
+    let doc = d.resolve_dimensions(id, &solids).unwrap();
+    assert_eq!(doc.by_view, without.by_view);
+    assert!(!doc.by_view.contains_key(&sec));
+    // Auch mit den Schnittkörpern unter den Körpern: weggelassen, nicht aufgelöst.
+    let both: Vec<&Solid> = vec![&orig, &cut[0]];
+    let mixed = resolve_drawing_dimensions(&dr, &both, || ok(Ok(()))).unwrap();
+    assert!(!mixed.by_view.contains_key(&sec));
+    assert!(
+        !d.resolve_dimensions(id, &both)
+            .unwrap()
+            .by_view
+            .contains_key(&sec)
+    );
+}

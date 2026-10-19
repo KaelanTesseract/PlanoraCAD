@@ -356,6 +356,19 @@ pub struct AnsichtDto {
     /// es nicht geschrieben (alte Dateien Byte für Byte).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mittellinien: Option<bool>,
+    /// Schnittansicht (ab Format 8); fehlt bei allen anderen Ansichten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schnitt: Option<SchnittDto>,
+}
+
+/// Angaben einer Schnittansicht (ab Format 8): Lage der Ebene in mm (Weltkoordinate),
+/// Buchstabe (genau ein Zeichen), Schraffur an/aus und ihr Abstand in A3-Millimetern.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct SchnittDto {
+    pub versatz: f64,
+    pub buchstabe: String,
+    pub schraffur: bool,
+    pub schraffurabstand: f64,
 }
 
 /// Ein Maß (ab Format 5). `art`: `"waagerecht"`, `"senkrecht"`, `"schraeg"`,

@@ -164,6 +164,49 @@ fn plan_delete_view(
         .filter(|m| removed.contains(&m.view))
         .count();
     let name = names.get(&view).cloned().unwrap_or_default();
+    // Eine Schnittansicht reißt immer ihre Schnittlinie in der Ausgangsansicht mit: stets mit
+    // Rückfrage.
+    if let Some(v) = d.view(view).filter(|v| v.section.is_some()) {
+        let source = v
+            .parent
+            .and_then(|p| names.get(&p))
+            .cloned()
+            .unwrap_or_default();
+        // „Mit ihr verschwindet die Schnittlinie in „Vorne“.“ bzw. „… verschwinden die
+        // Schnittlinie in „Vorne“, die abgeleiteten Ansichten (…) und 2 Maße.“
+        let mut items = vec![format!("die Schnittlinie in „{source}“")];
+        if !dependents.is_empty() {
+            items.push(format!(
+                "die abgeleiteten Ansichten ({})",
+                dependents.join(", ")
+            ));
+        }
+        match dims {
+            0 => {}
+            1 => items.push("1 Maß".into()),
+            n => items.push(format!("{n} Maße")),
+        }
+        let verb = if items.len() == 1 {
+            "verschwindet"
+        } else {
+            "verschwinden"
+        };
+        let last = items.pop().unwrap_or_default();
+        let list = if items.is_empty() {
+            last
+        } else {
+            format!("{} und {last}", items.join(", "))
+        };
+        let text = format!("Die Schnittansicht „{name}“ wird gelöscht. Mit ihr {verb} {list}.");
+        return Some((
+            DrawingDeletePlan {
+                drawing,
+                view: Some(view),
+                text,
+            },
+            true,
+        ));
+    }
     let text = match (dependents.is_empty(), dims) {
         (true, 0) => format!("Die Ansicht „{name}“ wird gelöscht."),
         (true, n) => format!(

@@ -126,8 +126,9 @@ fn feature_text(e: FeatureError) -> String {
     }
 }
 
-/// Setzt einen Nummernkreis an den Körper `body` (Index unter den exakten Körpern) in der Ansicht
-/// `view` mit dem Anker am Blattpunkt `at`. Eine Änderung des Dokuments; bei einem Fehler bleibt
+/// Setzt einen Nummernkreis an den Körper `body` (Index unter den exakten Körpern, in einer
+/// Schnittansicht unter ihren geschnittenen Körpern) in der Ansicht `view` mit dem Anker am
+/// Blattpunkt `at`. Eine Änderung des Dokuments; bei einem Fehler bleibt
 /// es unverändert, und der Grund kommt als Satz zurück.
 pub fn place(
     state: &mut AppState,
@@ -143,15 +144,24 @@ pub fn place(
     if let Some(why) = blocked(d, true) {
         return Err(why.into());
     }
-    if d.view(view).is_none() {
-        return Err(NO_VIEW.into());
-    }
+    let spec = d.view(view).ok_or(NO_VIEW)?;
     if d.balloons.len() >= MAX_BALLOONS {
         return Err(TOO_MANY_BALLOONS.into());
     }
     if !at.is_finite() {
         return Err(MISSED.into());
     }
+    // In einer Schnittansicht zählt die Herkunft der Linie in den geschnittenen Körpern; der
+    // Kreis gehört zum ursprünglichen Körper (`SectionData::source`).
+    let body = if spec.section.is_some() {
+        let data = state
+            .drawing_ui
+            .section_ref(spec, state.document.model_edit_count())
+            .ok_or(VIEWS_PENDING)?;
+        *data.source.get(body).ok_or(MISSED)?
+    } else {
+        body
+    };
     let key = body_key_of_stroke(state, body).ok_or(MISSED)?;
     // Nur Körper, die eine Zeile der Stückliste haben.
     if state.document.row_of(key).is_none() {

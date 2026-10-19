@@ -595,8 +595,11 @@ fn shared_cache_between_drawings() {
         2,
         "fertiges „Oben“ bleibt beim Wechsel erhalten"
     );
-    assert!(MAX_CACHED >= ViewKind::ALL.len());
-    // Alle sieben Arten: jede einmal, alle bleiben (MAX_CACHED = 7).
+    assert_eq!(
+        MAX_CACHED,
+        ViewKind::ALL.len() + planora_drawing::MAX_SECTIONS
+    );
+    // Alle sieben Arten: jede einmal, alle bleiben (MAX_CACHED = 7 + MAX_SECTIONS).
     let c = new_drawing(&mut st, "C");
     for k in ViewKind::ALL {
         add(&mut st, c, k, s(1, 1));

@@ -908,11 +908,16 @@ static COUNTED: AtomicUsize = AtomicUsize::new(0);
 static COUNTED_SOLIDS: AtomicUsize = AtomicUsize::new(0);
 static COUNTED_THREAD: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
 
-fn counting(d: &Drawing, solids: &[&Solid], p: &Progress) -> Result<ResolvedDims, DrawError> {
+fn counting(
+    d: &Drawing,
+    solids: &[&Solid],
+    cut: &ViewSolids,
+    p: &Progress,
+) -> Result<ResolvedDims, DrawError> {
     COUNTED.fetch_add(1, Ordering::SeqCst);
     COUNTED_SOLIDS.store(solids.len(), Ordering::SeqCst);
     *COUNTED_THREAD.lock().unwrap() = Some(std::thread::current().id());
-    resolve_dimensions_in_worker(d, solids, p)
+    resolve_dimensions_in_worker(d, solids, cut, p)
 }
 
 fn cube() -> ExchangeMesh {
@@ -995,7 +1000,12 @@ fn dimensions_resolved_in_the_worker_not_from_the_drawing_cache() {
 static SLOW_ENTERED: AtomicBool = AtomicBool::new(false);
 static SLOW_LEFT: AtomicBool = AtomicBool::new(false);
 
-fn slow_resolve(_: &Drawing, _: &[&Solid], p: &Progress) -> Result<ResolvedDims, DrawError> {
+fn slow_resolve(
+    _: &Drawing,
+    _: &[&Solid],
+    _: &ViewSolids,
+    p: &Progress,
+) -> Result<ResolvedDims, DrawError> {
     SLOW_ENTERED.store(true, Ordering::SeqCst);
     let r = loop {
         if p.check().is_err() {
@@ -1054,9 +1064,14 @@ fn cancel_during_dimension_resolution_leaves_no_file() {
 }
 
 /// Bricht beim ersten Maß ab (wie ein Abbruch von außen während des Auflösens).
-fn cancel_now(d: &Drawing, solids: &[&Solid], p: &Progress) -> Result<ResolvedDims, DrawError> {
+fn cancel_now(
+    d: &Drawing,
+    solids: &[&Solid],
+    cut: &ViewSolids,
+    p: &Progress,
+) -> Result<ResolvedDims, DrawError> {
     p.cancel();
-    resolve_dimensions_in_worker(d, solids, p)
+    resolve_dimensions_in_worker(d, solids, cut, p)
 }
 
 // (j) ------------------------------------------------------------------------------------------

@@ -16,7 +16,7 @@ use planora_app::drawing_view::{self, FIT_MARGIN_PX};
 use planora_app::shell::{self, ShellMode, ShellState};
 use planora_app::state::AppState;
 use planora_app::workspace::Workspace;
-use planora_app::{fonts, icons, sheet_dialog, shell_panels, theme};
+use planora_app::{fonts, icons, shell_panels, theme};
 use planora_drawing::dimension::{
     DimId, DimKind, DimSpec, GeoRef, GeoRefData, Tolerance as DimTolerance,
 };
@@ -430,13 +430,14 @@ fn tool_field_has_all_toolbar_texts_in_two_rows() {
         let zoom_out = icons::glyph(icons::Icon::ZoomOut).to_string();
         let zoom_in = icons::glyph(icons::Icon::ZoomIn).to_string();
         let fit = icons::glyph(icons::Icon::FitSheet).to_string();
+        let sheet = icons::glyph(icons::Icon::SheetInfo).to_string();
         let mut rows: Vec<f32> = Vec::new();
         for must in [
             "3D-Modell",
             "Zeichnung: Blatt 1",
             "Ansicht hinzufügen",
             fit.as_str(),
-            sheet_dialog::BUTTON,
+            sheet.as_str(),
             zoom_out.as_str(),
             zoom_in.as_str(),
             drawing_view::SUGGEST,
@@ -861,12 +862,13 @@ fn tool_field_texts_are_reachable_by_scrolling_at_800x600() {
     let zoom_out = icons::glyph(icons::Icon::ZoomOut).to_string();
     let zoom_in = icons::glyph(icons::Icon::ZoomIn).to_string();
     let fit = icons::glyph(icons::Icon::FitSheet).to_string();
+    let sheet = icons::glyph(icons::Icon::SheetInfo).to_string();
     let wanted = [
         "3D-Modell",
         "Zeichnung: Blatt 1",
         "Ansicht hinzufügen",
         fit.as_str(),
-        sheet_dialog::BUTTON,
+        sheet.as_str(),
         zoom_out.as_str(),
         zoom_in.as_str(),
         drawing_view::SUGGEST,

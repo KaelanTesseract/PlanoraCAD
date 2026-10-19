@@ -81,6 +81,24 @@ pub const CENTER_OVERSHOOT: f64 = 3.0;
 pub const CENTER_W: f64 = 0.25;
 /// Strichpunkt-Muster der Mittellinien (Strich, Lücke, Punktstrich, Lücke).
 pub const CENTER_PATTERN: [f64; 4] = [12.0, 3.0, 2.0, 3.0];
+/// Länge der dicken Endstücke der Schnittlinie (Millimeter des Blatts A3, mal Blattfaktor).
+pub const SECTION_END_MM: f64 = 8.0;
+/// Überstand der Schnittlinie über die Ansicht (A3-Millimeter).
+pub const SECTION_OVERHANG_MM: f64 = 5.0;
+/// Länge des Schafts vom Ende der Schnittlinie bis zum Pfeil (A3-Millimeter).
+pub const SECTION_SHAFT_MM: f64 = 5.0;
+/// Länge eines Pfeils der Schnittlinie (A3-Millimeter).
+pub const SECTION_ARROW_LEN: f64 = 5.0;
+/// Halbe Breite eines Pfeils der Schnittlinie (A3-Millimeter).
+pub const SECTION_ARROW_HALF_W: f64 = 1.0;
+/// Höhe des Titels unter der Schnittansicht (A3-Millimeter).
+pub const SECTION_TITLE_H: f64 = 5.0;
+/// Abstand des Titels unter der Schnittansicht (A3-Millimeter).
+pub const SECTION_TITLE_GAP: f64 = 5.0;
+/// Größte Abweichung des Vielecks einer Schraffurfläche von ihrem Rand auf dem Blatt.
+pub const HATCH_FLAT_TOL: f64 = 0.005;
+/// Strichstärke der Endstücke der Schnittlinie (wie sichtbare Kanten).
+pub const SECTION_END_W: f64 = 0.5;
 /// Höhe des Toleranztextes als Anteil von `DIM_TEXT_H`.
 pub const TOLERANCE_TEXT_FACTOR: f64 = 0.7;
 /// Verlängerung der Maßlinie je Seite bei außen liegenden Pfeilen.
@@ -143,6 +161,19 @@ pub enum MarkKind {
     Sheet(SheetPen),
     /// Nummernkreis (Positionsnummer) in der Linienstärke des Stifts.
     Position(PositionPen),
+    /// Schraffurlinie einer Schnittfläche (dünn wie Maßlinien, durchgezogen).
+    Hatch,
+    /// Schnittlinie, Pfeile, Buchstaben und Titel einer Schnittansicht, je nach Stift.
+    SectionLine(SectionPen),
+}
+
+/// Stift der Schnittlinie: dünne Strichpunktkette oder dicke Endstücke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SectionPen {
+    /// Strichpunktkette, Schäfte, Pfeile, Buchstaben, Titel (dünn).
+    Chain,
+    /// Dicke Endstücke (Stärke [`SECTION_END_W`]).
+    End,
 }
 
 /// Lage des Ankers im Text (entlang der Grundlinie).
@@ -180,6 +211,18 @@ pub struct DimText {
     pub main: String,
     pub stack: Option<(String, String)>,
     pub stack_height: f64,
+}
+
+/// Länge und halbe Breite des Pfeils einer Markierung auf einem Blatt mit dem Faktor
+/// `sheet_scale`: bei der Schnittlinie `(5f, 1f)`, sonst `(ARROW_LEN, ARROW_HALF_W)`.
+pub fn arrow_size(kind: MarkKind, sheet_scale: f64) -> (f64, f64) {
+    match kind {
+        MarkKind::SectionLine(_) => (
+            SECTION_ARROW_LEN * sheet_scale,
+            SECTION_ARROW_HALF_W * sheet_scale,
+        ),
+        _ => (ARROW_LEN, ARROW_HALF_W),
+    }
 }
 
 /// Geschätzte Breite eines Textes: `TEXT_ADVANCE · Höhe · Zeichenzahl`.

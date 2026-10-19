@@ -79,7 +79,11 @@
 //!   skalierten (nie unter 0,18 mm), gerundet nach [`dxf_lineweight`] (A4: 25 und 18). Die
 //!   Zahl eines Nummernkreises passt [`balloon_text_dxf`] mit dem Breitenzuschlag
 //!   [`DXF_TEXT_WIDTH_FACTOR`](crate::sheet_marks::DXF_TEXT_WIDTH_FACTOR) in den Kreis ein.
-//! * Linienart `CENTER` (nur mit `MITTEL`): Strich 12, Lücke 3, Strich 2, Lücke 3 mm
+//! * Schnittansichten: `SCHRAFFUR` (7, `CONTINUOUS`, 25), `SCHNITTLINIE` (Kette, Schäfte, Pfeile,
+//!   Buchstaben, Titel; 7, `CENTER`, 25) und `SCHNITTLINIE_DICK` (Endstücke; 7, `CONTINUOUS`, 50),
+//!   jede nur, wenn sie vorkommt. `CENTER` wird auch angelegt, wenn nur die Schnittlinie sie
+//!   braucht (genau einmal). Das `SOLID` der Schnittpfeile hat die Größe aus `arrow_size`.
+//! * Linienart `CENTER` (mit `MITTEL` oder `SCHNITTLINIE`): Strich 12, Lücke 3, Strich 2, Lücke 3 mm
 //!   (`72 65`, `73 4`, `40 20`, je Element `49` Länge und `74 0`).
 //! * `Mark::Line` → `LINE`. `Mark::Arc` → `ARC` wie die Bögen der Linien (Grad, normalisiert,
 //!   voller Umlauf als `CIRCLE`; Radius ≤ 0 wird ausgelassen).
@@ -119,7 +123,7 @@
 //! richtigen Stelle stehen, Pfeile gefüllte Dreiecke sind und die Mittellinien strichpunktiert.
 
 use crate::Visibility;
-use crate::annotate::{ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, Mark, MarkKind, TextAnchor};
+use crate::annotate::{CENTER_PATTERN, Mark, MarkKind, SectionPen, TextAnchor, arrow_size};
 use crate::balloon::{PositionPen, balloon_text_dxf};
 use crate::error::DrawError;
 use crate::out2d::Out2d;
@@ -139,6 +143,9 @@ const LAYER_CENTRE: &str = "BLATT_MITTE";
 const LAYER_SHEET: &str = "BLATT";
 const LAYER_POSITION: &str = "POSITIONEN";
 const LAYER_POSITION_LINE: &str = "POSITIONEN_LINIE";
+const LAYER_HATCH: &str = "SCHRAFFUR";
+const LAYER_SECTION: &str = "SCHNITTLINIE";
+const LAYER_SECTION_HEAVY: &str = "SCHNITTLINIE_DICK";
 /// Höchstlänge eines Maßtexts in der Datei (Zeichen, nach der Verschlüsselung).
 const MAX_TEXT_LEN: usize = 255;
 /// Nachkommastellen aller Zahlen der Datei.
@@ -219,7 +226,7 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
     let mut entities = Out::new();
     if let Some(frame) = &model.frame {
         for m in &frame.marks {
-            write_mark(&mut entities, &mut hs, br_model, m)?;
+            write_mark(&mut entities, &mut hs, br_model, m, 1.0)?;
         }
     }
     for name in &names {
@@ -559,6 +566,10 @@ struct UsedKinds {
     /// (`POSITIONEN_LINIE`).
     position: bool,
     position_line: bool,
+    /// Schraffur, Strichpunkt-Schnittlinie (mit Pfeilen, Buchstaben, Titel), dicke Endstücke.
+    hatch: bool,
+    section: bool,
+    section_heavy: bool,
     /// Faktor des Blatts (bestimmt die Linienstärken der Ebenen der Nummernkreise).
     paper_scale: f64,
 }
@@ -586,6 +597,9 @@ impl UsedKinds {
         for m in model.views.iter().flat_map(|v| &v.marks) {
             match mark_kind(m) {
                 MarkKind::Dimension => u.dim = true,
+                MarkKind::Hatch => u.hatch = true,
+                MarkKind::SectionLine(SectionPen::Chain) => u.section = true,
+                MarkKind::SectionLine(SectionPen::End) => u.section_heavy = true,
                 MarkKind::CenterLine => u.center = true,
                 MarkKind::Lost => u.lost = true,
                 k @ MarkKind::Sheet(_) => u.use_sheet_pen(k),
@@ -634,6 +648,9 @@ fn mark_kind(m: &Mark) -> MarkKind {
 fn mark_layer(kind: MarkKind) -> &'static str {
     match kind {
         MarkKind::Dimension => LAYER_DIM,
+        MarkKind::Hatch => LAYER_HATCH,
+        MarkKind::SectionLine(SectionPen::Chain) => LAYER_SECTION,
+        MarkKind::SectionLine(SectionPen::End) => LAYER_SECTION_HEAVY,
         MarkKind::CenterLine => LAYER_CENTER,
         MarkKind::Lost => LAYER_LOST,
         MarkKind::Sheet(SheetPen::Heavy) => LAYER_FRAME,
@@ -715,7 +732,8 @@ fn write_tables(
 
     // LTYPE: ByBlock, ByLayer, CONTINUOUS, HIDDEN (Strich 3 mm, Lücke 1 mm), CENTER nur mit
     // Mittellinien.
-    o.table_head("LTYPE", t.ltype, 4 + usize::from(used.center));
+    let center_ltype = used.center || used.section;
+    o.table_head("LTYPE", t.ltype, 4 + usize::from(center_ltype));
     for (name, desc) in [
         ("ByBlock", ""),
         ("ByLayer", ""),
@@ -740,7 +758,7 @@ fn write_tables(
     o.int(74, 0);
     o.num(49, -1.0)?;
     o.int(74, 0);
-    if used.center {
+    if center_ltype {
         // Strichpunkt: Strich, Lücke, kurzer Strich, Lücke (Lücken negativ).
         o.record_head("LTYPE", hs.next(), t.ltype, "AcDbLinetypeTableRecord");
         o.text(2, "CENTER");
@@ -811,6 +829,12 @@ fn write_tables(
                 7,
                 dxf_lineweight(PositionPen::Leader.width_at(used.paper_scale)),
             ),
+        ),
+        (used.hatch, (LAYER_HATCH, "CONTINUOUS", 7, 25)),
+        (used.section, (LAYER_SECTION, "CENTER", 7, 25)),
+        (
+            used.section_heavy,
+            (LAYER_SECTION_HEAVY, "CONTINUOUS", 7, 50),
         ),
     ] {
         if on {
@@ -932,7 +956,7 @@ fn write_blocks(
         }
         let paper = sheet_scale(model.sheet);
         for m in &view.marks {
-            write_mark(o, hs, br, &balloon_text_dxf(m, paper))?;
+            write_mark(o, hs, br, &balloon_text_dxf(m, paper), paper)?;
         }
         block_end(o, hs.next(), br, false);
     }
@@ -1127,7 +1151,13 @@ fn write_curve(
 // ---------------------------------------------------------------------------------------------
 
 /// Eine Markierung als Objekt im Block `owner` (siehe Modulkommentar).
-fn write_mark(o: &mut Out, hs: &mut Handles, owner: u64, m: &Mark) -> Result<(), DrawError> {
+fn write_mark(
+    o: &mut Out,
+    hs: &mut Handles,
+    owner: u64,
+    m: &Mark,
+    paper: f64,
+) -> Result<(), DrawError> {
     let layer = mark_layer(mark_kind(m));
     match m {
         Mark::Line { a, b, .. } => write_curve(o, hs, owner, layer, &Out2d::Line { a: *a, b: *b }),
@@ -1152,12 +1182,13 @@ fn write_mark(o: &mut Out, hs: &mut Handles, owner: u64, m: &Mark) -> Result<(),
             }
             write_curve(o, hs, owner, layer, &arc)
         }
-        Mark::Arrow { tip, dir, .. } => {
+        Mark::Arrow { tip, dir, kind } => {
             if !(tip.is_finite() && dir.is_finite()) {
                 return Err(DrawError::NonFinite);
             }
-            let base = *tip + *dir * ARROW_LEN;
-            let perp = DVec2::new(-dir.y, dir.x) * ARROW_HALF_W;
+            let (len, half) = arrow_size(*kind, paper);
+            let base = *tip + *dir * len;
+            let perp = DVec2::new(-dir.y, dir.x) * half;
             let (p, q) = (base + perp, base - perp);
             // DXF füllt 1, 2, 4, 3: Dreieck mit gleicher dritter und vierter Ecke.
             o.entity_head("SOLID", hs.next(), owner, layer);

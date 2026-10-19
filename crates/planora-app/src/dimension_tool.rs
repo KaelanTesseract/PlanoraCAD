@@ -236,6 +236,7 @@ impl<'a> Ctx<'a> {
         if state.bodies.is_empty() {
             return Err(DrawError::NoBodies.to_string());
         }
+        let model = state.document.model_edit_count();
         let solids: Vec<&Solid> = state
             .bodies
             .iter()
@@ -245,9 +246,18 @@ impl<'a> Ctx<'a> {
         if solids.is_empty() {
             return Err(DrawError::MeshBodiesOnly.to_string());
         }
-        let results = state
-            .drawing_ui
-            .results_for(d, state.document.model_edit_count());
+        // Eine Schnittansicht misst an ihren geschnittenen Körpern (Spec §9.3); die Herkunft
+        // ihrer Linien zählt in diesen Körpern.
+        let solids: Vec<&Solid> = if v.section.is_some() {
+            let data = state
+                .drawing_ui
+                .section_ref(&v, model)
+                .ok_or(VIEWS_PENDING)?;
+            data.solids.iter().collect()
+        } else {
+            solids
+        };
+        let results = state.drawing_ui.results_for(d, model);
         let refs: BTreeMap<ViewId, &ViewLines> =
             results.iter().map(|(k, l)| (*k, l.as_ref())).collect();
         let xf = view_transform(d, view, &refs).ok_or(VIEWS_PENDING)?;

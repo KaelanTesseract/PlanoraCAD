@@ -29,6 +29,7 @@ use crate::drawing_state::{
 };
 use crate::export_dialog::{REPAINT, shorten_for_display};
 use crate::icons::{self, Icon};
+use crate::section_tool;
 use crate::shell::{self, ShellMode, ShellRects, ShellState};
 use crate::state::AppState;
 use crate::{shell_panels, theme, viewport};
@@ -39,12 +40,14 @@ use egui::{
 };
 use planora_drawing::annotate::{
     ARROW_HALF_W, ARROW_LEN, CENTER_PATTERN, CENTER_W, DEFAULT_OFFSET, DIM_LINE_W, Mark, MarkKind,
-    ResolvedDims, TextAnchor, clamp_leader_deg, leader_angle,
+    ResolvedDims, SECTION_END_W, SectionPen, TextAnchor, arrow_size, clamp_leader_deg,
+    leader_angle,
 };
 use planora_drawing::balloon::{BalloonMarks, add_balloon_marks};
 use planora_drawing::dimension::{ArcSpan, DimId, DimSpec};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::parts::{PARTS_ON_SHEET, page_rows};
+use planora_drawing::section_marks::{add_section_marks, section_marks};
 use planora_drawing::sheet::{DimMarks, SheetModel, build_sheet_with, view_transform};
 use planora_drawing::sheet_frame::{
     PartsSpace, REV_VISIBLE, SheetLayout, parts_rows_per_page, sheet_layout_with, sheet_scale,
@@ -56,7 +59,8 @@ use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{
     Anchor, BalloonId, Drawing, DrawingId, DrawingKind, PartsCells, Placement, Projection, Scale,
-    Sheet, ViewId, ViewKind, ViewLines, ViewSpec, Visibility, align_dir, view_extent,
+    SectionData, Sheet, ViewId, ViewKey, ViewKind, ViewLines, ViewSpec, Visibility, align_dir,
+    view_extent,
 };
 use planora_math::DVec2;
 use std::collections::BTreeMap;
@@ -414,22 +418,10 @@ pub fn dash_pattern(points: &[DVec2], pattern: &[f64]) -> Vec<Vec<DVec2>> {
     out
 }
 
-/// Namen der Ansichten wie auf dem Blatt: Art, bei mehrfach gleicher Art mit Nummer.
+/// Namen der Ansichten wie auf dem Blatt: Art, bei mehrfach gleicher Art mit Nummer, Schnitte
+/// als „Schnitt A–A“ (siehe [`Drawing::view_names`]).
 pub fn view_names(drawing: &Drawing) -> BTreeMap<ViewId, String> {
-    let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut out = BTreeMap::new();
-    for v in &drawing.views {
-        let i = ViewKind::ALL.iter().position(|k| *k == v.kind).unwrap_or(0);
-        let n = counts.entry(i).or_insert(0);
-        *n += 1;
-        let name = if *n == 1 {
-            v.kind.label().to_string()
-        } else {
-            format!("{} {}", v.kind.label(), n)
-        };
-        out.insert(v.id, name);
-    }
-    out
+    drawing.view_names()
 }
 
 /// Mitte einer Ansicht auf dem Blatt (auch wenn noch nichts berechnet ist).
@@ -478,7 +470,7 @@ fn place_views(state: &AppState, drawing: &Drawing, sheet: &SheetModel, model: u
     let results: Vec<(ViewId, ViewResult)> = drawing
         .views
         .iter()
-        .map(|v| (v.id, state.drawing_ui.result(v.kind, model)))
+        .map(|v| (v.id, state.drawing_ui.result_of(v, model)))
         .collect();
     let mut out = Vec::new();
     for (v, (_, result)) in drawing.views.iter().zip(&results) {
@@ -553,23 +545,44 @@ struct SheetCache {
     /// Stand der Linien: bleibt gleich, solange sich nur Maße oder Mittellinien ändern (die
     /// Linienzüge werden dann nicht neu zerlegt).
     lines_gen: u64,
+    /// Meldungen zu den Schnittansichten (zu feine Schraffur u. Ä.): sperren die Ausgabe.
+    section_errors: Arc<Vec<String>>,
 }
 
 /// Fortlaufende Nummer der Linienstände (eindeutig im Programm).
 static LINES_GEN: AtomicU64 = AtomicU64::new(1);
 
 /// Haben zwei Stände der Zeichnung dieselben Linien (Blatt, Projektion, Ansichten bis auf den
-/// Schalter der Mittellinien; Maße zählen nicht)?
+/// Schalter der Mittellinien und die Angaben der Schnittansicht; Maße zählen nicht)? Bei einer
+/// Schnittansicht zählt nur der Schlüssel ([`ViewKey::of`]: Art und Lage der Ebene): Schraffur
+/// und Buchstabe ändern keine Kantenlinien.
 fn same_lines(a: &Drawing, b: &Drawing) -> bool {
     a.sheet == b.sheet
         && a.projection == b.projection
         && a.views.len() == b.views.len()
         && a.views.iter().zip(&b.views).all(|(x, y)| {
-            ViewSpec {
-                centerlines: y.centerlines,
-                ..x.clone()
-            } == *y
+            ViewKey::of(x) == ViewKey::of(y)
+                && ViewSpec {
+                    centerlines: y.centerlines,
+                    section: y.section,
+                    ..x.clone()
+                } == *y
         })
+}
+
+/// Zeiger der Ergebnisse einer Zeichnung für den Vergleich im Zwischenspeicher: erst die der
+/// Linien, dann (nach einer Null) die der Schnittdaten. Ein neues Ergebnis hat eine neue
+/// Adresse, ein altes bleibt nie stehen.
+fn result_ptrs(
+    lines: &BTreeMap<ViewId, Arc<ViewLines>>,
+    sections: &BTreeMap<ViewId, Arc<SectionData>>,
+) -> Vec<usize> {
+    lines
+        .values()
+        .map(|a| Arc::as_ptr(a) as usize)
+        .chain(std::iter::once(0))
+        .chain(sections.values().map(|a| Arc::as_ptr(a) as usize))
+        .collect()
 }
 
 /// Stellung der Zeichnung `id` im Dokument: Platz (ab 1) und Anzahl der Zeichnungen sowie der
@@ -793,7 +806,8 @@ fn sheet_model(
     balloons: &Arc<Vec<BalloonMarks>>,
 ) -> (Arc<SheetModel>, u64) {
     let owned = state.drawing_ui.results_for(drawing, model);
-    let ptrs: Vec<usize> = owned.values().map(|a| Arc::as_ptr(a) as usize).collect();
+    let section_data = state.drawing_ui.sections_for(drawing, model);
+    let ptrs = result_ptrs(&owned, &section_data);
     let cached = ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()));
     let project = state.document.project_info().cloned();
     let context = sheet_context(state, drawing.id);
@@ -823,6 +837,10 @@ fn sheet_model(
     let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, v)| (*k, v.as_ref())).collect();
     let mut built = build_sheet_with(drawing, &refs, dims);
     add_balloon_marks(&mut built, balloons);
+    let data_refs: BTreeMap<ViewId, &SectionData> =
+        section_data.iter().map(|(k, v)| (*k, v.as_ref())).collect();
+    let (marks, section_errors) = section_marks(drawing, &refs, &data_refs);
+    add_section_marks(&mut built, &marks);
     built.frame = Some(sheet_frame(
         &layout_from_texts(
             drawing,
@@ -849,10 +867,20 @@ fn sheet_model(
                 parts,
                 balloons: Arc::clone(balloons),
                 lines_gen,
+                section_errors: Arc::new(section_errors),
             },
         )
     });
     (sheet, lines_gen)
+}
+
+/// Meldungen zu den Schnittansichten des zuletzt gezeichneten Blatts der Zeichnung `id` (etwa
+/// eine zu feine Schraffur); leer ohne gezeichnetes Blatt dieser Zeichnung.
+pub fn section_errors(ctx: &egui::Context, state: &AppState, id: DrawingId) -> Vec<String> {
+    ctx.data(|d| d.get_temp::<SheetCache>(sheet_cache_id()))
+        .filter(|c| c.instance == state.instance && c.drawing.id == id)
+        .map(|c| c.section_errors.to_vec())
+        .unwrap_or_default()
 }
 
 /// Zwischengespeicherte Nummernkreise der offenen Zeichnung: gültig, solange Dokument
@@ -876,7 +904,7 @@ fn balloons_cached(
 ) -> Arc<Vec<BalloonMarks>> {
     let id = egui::Id::new("planora-drawing-balloons");
     let owned = state.drawing_ui.results_for(drawing, model);
-    let ptrs: Vec<usize> = owned.values().map(|a| Arc::as_ptr(a) as usize).collect();
+    let ptrs = result_ptrs(&owned, &BTreeMap::new());
     let edit = state.document.edit_count();
     if let Some(c) = ctx.data(|d| d.get_temp::<BalloonsCache>(id)).filter(|c| {
         c.instance == state.instance
@@ -977,6 +1005,22 @@ enum Action {
     Tool(ToolMode),
     /// Werkzeug „Position“ ein- oder ausschalten.
     BalloonTool,
+    /// Werkzeug „Schnitt“ ein- oder ausschalten.
+    SectionTool,
+    /// Eingabe im Ansichtsfeld einer Schnittansicht.
+    Section(SectionEdit),
+}
+
+/// Änderung einer Schnittansicht aus ihrem Ansichtsfeld.
+enum SectionEdit {
+    /// Schnittposition (Text aus dem Feld).
+    Offset(String),
+    /// Blickrichtung umdrehen.
+    Flip,
+    /// Schraffur ein oder aus.
+    Hatch(bool),
+    /// Schraffurabstand (Text aus dem Feld).
+    Spacing(String),
 }
 
 /// Kann das Werkzeug „Maß“ benutzt werden? Sonst die Erklärung (alte Version, keine Ansicht,
@@ -1042,6 +1086,17 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     {
         state.balloon_tool.set_active(false);
     }
+    let selected_spec = state
+        .drawing_ui
+        .selected_view
+        .and_then(|v| drawing.view(v))
+        .cloned();
+    if (section_tool::blocked(&drawing, selected_spec.as_ref(), editable).is_some()
+        || state.sketch_session.is_some())
+        && state.section_tool.is_active()
+    {
+        state.section_tool.set_active(false);
+    }
     let ctx = ui.ctx().clone();
     let paint = ui.max_rect();
     let rects = drawing_rects(&ctx, editable);
@@ -1071,7 +1126,13 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
             state.drawing_ui.zoom = z;
             state.drawing_ui.pan *= f;
         }
-        Some(Action::Scale(s)) => set_selected(state, id, |v| v.scale = s),
+        Some(Action::Scale(s)) => {
+            if let Some(sel) = state.drawing_ui.selected_view
+                && let Err(e) = section_tool::set_scale(state, id, sel, s)
+            {
+                state.message = Some(e);
+            }
+        }
         Some(Action::Hidden(h)) => set_selected(state, id, |v| v.show_hidden = h),
         Some(Action::Centerlines(c)) => set_selected(state, id, |v| {
             if v.kind.is_normal() {
@@ -1080,22 +1141,44 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
         }),
         Some(Action::Suggest) => suggest_dimensions(state, id),
         Some(Action::Delete) => delete_selected(state),
-        // „Maß“ und „Position“ schließen sich aus.
+        // „Maß“, „Position“ und „Schnitt“ schließen sich aus.
         Some(Action::ToolToggle) => {
             state.dimension_tool.toggle();
             if state.dimension_tool.is_active() {
                 state.balloon_tool.set_active(false);
+                state.section_tool.set_active(false);
             }
         }
         Some(Action::Tool(m)) => {
             state.dimension_tool.set_mode(m);
             state.balloon_tool.set_active(false);
+            state.section_tool.set_active(false);
         }
         Some(Action::BalloonTool) => {
             let on = !state.balloon_tool.is_active();
             state.balloon_tool.set_active(on);
             if on {
                 state.dimension_tool.set_mode(ToolMode::Off);
+                state.section_tool.set_active(false);
+            }
+        }
+        Some(Action::SectionTool) => {
+            let on = !state.section_tool.is_active();
+            state.section_tool.set_active(on);
+            if on {
+                state.dimension_tool.set_mode(ToolMode::Off);
+                state.balloon_tool.set_active(false);
+            }
+        }
+        Some(Action::Section(edit)) => {
+            if let Some(sel) = state.drawing_ui.selected_view {
+                let r = match edit {
+                    SectionEdit::Offset(t) => section_tool::set_offset_text(state, id, sel, &t),
+                    SectionEdit::Flip => section_tool::flip(state, id, sel),
+                    SectionEdit::Hatch(on) => section_tool::set_hatch(state, id, sel, on),
+                    SectionEdit::Spacing(t) => section_tool::set_spacing_text(state, id, sel, &t),
+                };
+                state.section_tool.set_message(r.err());
             }
         }
         None => {}
@@ -1114,6 +1197,12 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     // Verlorene Positionsnummern zuerst (rot), dann die Hinweise zu den Maßen.
     let lost_balloons = balloon_tool::lost_count(&balloon_tool::numbers_cached(&ctx, state, id));
     let mut red = usize::from(notes.lost > 0);
+    // Meldungen zu den Schnittansichten (zu feine Schraffur) vor allem anderen, rot.
+    let section_notes = section_errors(&ctx, state, id);
+    red += section_notes.len();
+    for (i, t) in section_notes.into_iter().enumerate() {
+        notes.texts.insert(i, t);
+    }
     if lost_balloons > 0 {
         notes
             .texts
@@ -1127,10 +1216,14 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     }
     // Eine Ablehnung des Werkzeugs „Maß“ geht der Meldung vor (rot); bei eingeschaltetem
     // Werkzeug steht an Stelle des Hinweises der nächste Schritt.
+    state
+        .section_tool
+        .expire((state.document.edit_count(), state.drawing_ui.selected_view));
     let rejected = state
         .dimension_tool
         .message()
         .or(state.balloon_tool.message())
+        .or(state.section_tool.message())
         .map(str::to_owned);
     let message = rejected
         .clone()
@@ -1145,6 +1238,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
                 .is_active()
                 .then(|| balloon_tool::HINT.to_string())
         })
+        .or_else(|| state.section_tool.hint().map(str::to_owned))
         .or(note)
         .unwrap_or_else(|| HINT.to_string());
     let lines = HintLines {
@@ -1302,14 +1396,51 @@ fn tool_field(
                         r
                     })
                     .on_disabled_hover_text(add_why);
-                    // Am Ende der ersten Zeile, damit die zweite nicht breiter wird.
+                    // Werkzeug „Schnitt“ direkt nach „Ansicht hinzufügen“ (eingeschaltet mit
+                    // Akzent; gesperrt mit Erklärung).
+                    let selected_spec =
+                        state.drawing_ui.selected_view.and_then(|v| drawing.view(v));
+                    let section_why = section_tool::blocked(drawing, selected_spec, editable);
+                    let button = if state.section_tool.is_active() {
+                        egui::Button::new((
+                            icons::text(Icon::SectionTool, icons::LABEL_ICON_SIZE, p.on_accent),
+                            egui::RichText::new(section_tool::TOOL).color(p.on_accent),
+                        ))
+                        .fill(p.accent)
+                        .selected(true)
+                    } else {
+                        icons::button(Icon::SectionTool, section_tool::TOOL)
+                    };
                     if ui
-                        .add_enabled(
+                        .add_enabled(section_why.is_none(), flat(button))
+                        .on_hover_text(section_tool::TOOL_TIP)
+                        .on_disabled_hover_text(section_why.unwrap_or(section_tool::TOOL_TIP))
+                        .clicked()
+                    {
+                        action = Some(Action::SectionTool);
+                    }
+                    // Am Ende der ersten Zeile, damit die zweite nicht breiter wird. Nur das
+                    // Symbol (wie „Blatt einpassen“), damit die Zeile mit dem Werkzeug „Schnitt“
+                    // bei 1100 × 700 ins Feld passt; der Name steht im Tooltip.
+                    let info = ui.add_enabled(editable, flat(icon_only(Icon::SheetInfo)));
+                    info.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
                             editable,
-                            flat(icons::button(Icon::SheetInfo, crate::sheet_dialog::BUTTON)),
+                            crate::sheet_dialog::BUTTON,
                         )
-                        .on_hover_text(crate::sheet_dialog::BUTTON_TIP)
-                        .on_disabled_hover_text(crate::drawing_browser::READ_ONLY_HINT)
+                    });
+                    if info
+                        .on_hover_text(format!(
+                            "{}: {}",
+                            crate::sheet_dialog::BUTTON,
+                            crate::sheet_dialog::BUTTON_TIP
+                        ))
+                        .on_disabled_hover_text(format!(
+                            "{}: {}",
+                            crate::sheet_dialog::BUTTON,
+                            crate::drawing_browser::READ_ONLY_HINT
+                        ))
                         .clicked()
                     {
                         action = Some(Action::SheetInfo);
@@ -1496,11 +1627,20 @@ fn view_field(
                         return;
                     };
                     let name = names.get(&v.id).cloned().unwrap_or_default();
-                    theme::section_header(ui, &format!("Ansicht „{name}“"), theme::HEADER_H);
+                    // Eine Schnittansicht heißt im Kopf wie auf dem Blatt („Schnitt A–A“).
+                    let title = if v.section.is_some() {
+                        name.clone()
+                    } else {
+                        format!("Ansicht „{name}“")
+                    };
+                    theme::section_header(ui, &title, theme::HEADER_H);
                     ui.add_space(theme::SPACE_1);
+                    // Der Maßstab einer Schnittansicht folgt ihrer Ausgangsansicht.
+                    let scale_free = editable && v.section.is_none();
                     ui.horizontal(|ui| {
-                        ui.add_enabled(editable, egui::Label::new("Maßstab"));
-                        ui.add_enabled(editable, |ui: &mut egui::Ui| {
+                        ui.add_enabled(scale_free, egui::Label::new("Maßstab"))
+                            .on_disabled_hover_text(section_tool::SCALE_LOCKED_TIP);
+                        ui.add_enabled(scale_free, |ui: &mut egui::Ui| {
                             egui::ComboBox::from_id_salt("planora-drawing-scale")
                                 .selected_text(v.scale.label())
                                 .show_ui(ui, |ui| {
@@ -1511,8 +1651,19 @@ fn view_field(
                                     }
                                 })
                                 .response
-                        });
+                        })
+                        .on_disabled_hover_text(section_tool::SCALE_LOCKED_TIP);
                     });
+                    if let Some(sec) = &v.section {
+                        let model = state.document.model_edit_count();
+                        let nudged = state
+                            .drawing_ui
+                            .section_of(v, model)
+                            .is_some_and(|d| d.nudged);
+                        if let Some(edit) = section_fields(ui, v, sec, editable, nudged) {
+                            action = Some(Action::Section(edit));
+                        }
+                    }
                     let mut hidden = v.show_hidden;
                     if ui
                         .add_enabled(
@@ -1551,6 +1702,97 @@ fn view_field(
         },
     );
     action
+}
+
+/// Zahlenfeld, das den eingegebenen Text liefert, sobald es verlassen wird (Enter oder Klick
+/// daneben) und der Text von der Anzeige `shown` abweicht. Esc verwirft die Eingabe. Solange das
+/// Feld nicht den Fokus hat, zeigt es `shown` (nach einer abgelehnten Eingabe also den alten Wert).
+fn commit_field(
+    ui: &mut egui::Ui,
+    key: &'static str,
+    view: ViewId,
+    shown: &str,
+    enabled: bool,
+) -> Option<String> {
+    let id = egui::Id::new(("planora-section-field", key, view));
+    let editing = ui.memory(|m| m.has_focus(id) || m.had_focus_last_frame(id));
+    let stored: Option<String> = ui.data(|d| d.get_temp(id)).filter(|_| editing);
+    let mut text = stored.clone().unwrap_or_else(|| shown.to_string());
+    let r = theme::text_field_enabled(
+        ui,
+        enabled,
+        egui::TextEdit::singleline(&mut text)
+            .id(id)
+            .desired_width(SECTION_FIELD_W),
+    );
+    if r.lost_focus() || !editing && !r.has_focus() {
+        ui.data_mut(|d| d.remove_temp::<String>(id));
+    } else if r.changed() || (r.has_focus() && stored.is_none()) {
+        ui.data_mut(|d| d.insert_temp(id, text.clone()));
+    }
+    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    (r.lost_focus() && !esc && text.trim() != shown).then_some(text)
+}
+
+/// Breite der Zahlenfelder einer Schnittansicht.
+const SECTION_FIELD_W: f32 = 96.0;
+
+/// Felder einer Schnittansicht im Ansichtsfeld: Schnittposition, Blickrichtung umdrehen,
+/// Schraffur an/aus und ihr Abstand, bei verschobener Ebene der Hinweis.
+fn section_fields(
+    ui: &mut egui::Ui,
+    v: &planora_drawing::ViewSpec,
+    sec: &planora_drawing::SectionSpec,
+    editable: bool,
+    nudged: bool,
+) -> Option<SectionEdit> {
+    let mut edit = None;
+    ui.add_space(theme::SPACE_1);
+    ui.add_enabled(editable, egui::Label::new("Schnittposition (mm)"));
+    if let Some(t) = commit_field(
+        ui,
+        "offset",
+        v.id,
+        &section_tool::field_text(sec.offset),
+        editable,
+    ) {
+        edit = Some(SectionEdit::Offset(t));
+    }
+    ui.add_space(theme::SPACE_1);
+    if ui
+        .add_enabled(
+            editable,
+            flat(icons::button(Icon::Mirror, "Blickrichtung umdrehen")),
+        )
+        .clicked()
+    {
+        edit = Some(SectionEdit::Flip);
+    }
+    let mut hatch = sec.hatch.on;
+    if ui
+        .add_enabled(editable, theme::Toggle::new(&mut hatch, "Schraffur"))
+        .changed()
+    {
+        edit = Some(SectionEdit::Hatch(hatch));
+    }
+    ui.add_enabled(
+        editable && sec.hatch.on,
+        egui::Label::new("Schraffurabstand (mm)"),
+    );
+    if let Some(t) = commit_field(
+        ui,
+        "spacing",
+        v.id,
+        &section_tool::field_text(sec.hatch.spacing),
+        editable && sec.hatch.on,
+    ) {
+        edit = Some(SectionEdit::Spacing(t));
+    }
+    if nudged {
+        ui.add_space(theme::SPACE_1);
+        ui.add(egui::Label::new(egui::RichText::new(section_tool::NUDGED).weak()).wrap());
+    }
+    edit
 }
 
 /// Inhalt des Hinweisfelds.
@@ -1712,7 +1954,7 @@ pub fn suggest_dimensions(state: &mut AppState, id: DrawingId) {
             d.views
                 .iter()
                 .filter(|v| v.kind.is_normal() && only.is_none_or(|o| o == v.id))
-                .filter_map(|v| match state.drawing_ui.result(v.kind, model) {
+                .filter_map(|v| match state.drawing_ui.result_of(v, model) {
                     ViewResult::Failed(m) => {
                         Some((names.get(&v.id).cloned().unwrap_or_default(), m))
                     }
@@ -1983,7 +2225,7 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
             .drawing_ui
             .selected_view
             .and_then(|s| d.view(s))
-            .filter(|v| v.kind.is_normal());
+            .filter(|v| v.kind.is_normal() && v.section.is_none());
         let parent = selected
             .or(base.filter(|b| b.kind.is_normal()))
             .filter(|p| align_dir(d.projection, p.kind, kind).is_some());
@@ -2105,6 +2347,9 @@ fn canvas_ui(
     // Mit eingeschaltetem Werkzeug „Position“ setzt ein Klick auf eine Linie einen Kreis; Kreise
     // lassen sich weiter wählen und ziehen, Ansichten und Maße nicht.
     let balloon_on = editable && state.balloon_tool.is_active();
+    // Mit eingeschaltetem Werkzeug „Schnitt“ setzen zwei Klicks die Schnittlinie; Ansichten, Maße
+    // und Kreise lassen sich dabei weder wählen noch ziehen.
+    let section_on = editable && state.section_tool.is_active();
 
     // Zoom um den Zeiger (Mausrad, Zwei-Finger-Geste).
     if response.hovered()
@@ -2130,7 +2375,7 @@ fn canvas_ui(
                     origin,
                     start: state.drawing_ui.pan,
                 })
-            } else if response.dragged_by(PointerButton::Primary) && !tool_on {
+            } else if response.dragged_by(PointerButton::Primary) && !tool_on && !section_on {
                 if let Some(b) = hit_balloon(origin) {
                     select_balloon(state, b);
                     let at = balloons0.iter().find(|x| x.id == b).map(|x| x.centre);
@@ -2271,6 +2516,9 @@ fn canvas_ui(
             let polys = polylines_cached(&ctx, &sheet, lines_gen, k0);
             let found = tool_hit(&sheet, &polys, &to_screen0, pos);
             tool_click(state, id, found, at, k0, response.double_clicked());
+        } else if section_on {
+            let at = screen_to_sheet(canvas, sheet_mm, zoom0, pan0, pos);
+            section_tool::click(state, id, at, k0);
         } else if let Some(b) = hit_balloon(pos) {
             select_balloon(state, b);
             state.balloon_tool.set_message(None);
@@ -2289,7 +2537,15 @@ fn canvas_ui(
                 crate::dimension_dialog::open(state, id, dim, !editable);
             }
         } else {
-            state.drawing_ui.selected_view = hit(pos);
+            // Die Schnittlinie wählt ihre Schnittansicht (vor den Linien der Quellansicht).
+            let on_line = drawing.views.iter().any(|v| v.section.is_some()).then(|| {
+                let owned = state.drawing_ui.results_for(&drawing, model);
+                let refs: BTreeMap<ViewId, &ViewLines> =
+                    owned.iter().map(|(k, l)| (*k, l.as_ref())).collect();
+                let lines = section_tool::section_lines(&drawing, &refs);
+                section_tool::section_line_hit(&lines, &to_screen0, pos, PICK_PX)
+            });
+            state.drawing_ui.selected_view = on_line.flatten().or_else(|| hit(pos));
             state.drawing_ui.selected_dim = None;
             state.drawing_ui.selected_balloon = None;
         }
@@ -2301,6 +2557,11 @@ fn canvas_ui(
             tool_escape(state, id);
         } else if balloon_on {
             state.balloon_tool.set_active(false);
+        } else if section_on {
+            // Esc nimmt erst den ersten Klick zurück, dann schaltet es das Werkzeug aus.
+            if !state.section_tool.cancel() {
+                state.section_tool.set_active(false);
+            }
         } else {
             state.drawing_ui.selected_view = None;
             state.drawing_ui.selected_dim = None;
@@ -2434,7 +2695,9 @@ fn canvas_ui(
                 MarkKind::Dimension
                 | MarkKind::CenterLine
                 | MarkKind::Sheet(_)
-                | MarkKind::Position(_) => theme::SHEET_DIM,
+                | MarkKind::Position(_)
+                | MarkKind::Hatch
+                | MarkKind::SectionLine(_) => theme::SHEET_DIM,
             };
             paint_mark(&painter, m, color, &to_screen, k, f_sheet);
             marks_drawn += 1;
@@ -2456,6 +2719,16 @@ fn canvas_ui(
         let preview = with_tool(state, |t, st| t.hover(st, id, p)).unwrap_or_default();
         for m in &preview {
             paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, 1.0);
+            preview_drawn += 1;
+        }
+    }
+
+    // Vorschau des Werkzeugs „Schnitt“ nach dem ersten Klick: Schnittlinie mit Pfeilen.
+    if section_on && let Some(hp) = response.hover_pos() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        let p = screen_to_sheet(canvas, sheet_mm, zoom, pan, hp);
+        for m in &section_tool::preview(state, id, p, k) {
+            paint_mark(&painter, m, theme::SHEET_SELECTED, &to_screen, k, f_sheet);
             preview_drawn += 1;
         }
     }
@@ -2677,9 +2950,9 @@ fn mark_kind(m: &Mark) -> MarkKind {
 }
 
 /// Ecken eines Pfeils auf dem Blatt: Spitze und die beiden Ecken am Ende.
-fn arrow_corners(tip: DVec2, dir: DVec2) -> [DVec2; 3] {
-    let base = tip + dir * ARROW_LEN;
-    let side = dir.perp() * ARROW_HALF_W;
+fn arrow_corners(tip: DVec2, dir: DVec2, size: (f64, f64)) -> [DVec2; 3] {
+    let base = tip + dir * size.0;
+    let side = dir.perp() * size.1;
     [tip, base + side, base - side]
 }
 
@@ -2789,6 +3062,7 @@ fn line_width_mm(kind: MarkKind, sheet_scale: f64) -> f64 {
         MarkKind::CenterLine => CENTER_W,
         MarkKind::Sheet(pen) => pen.width_at(sheet_scale),
         MarkKind::Position(pen) => pen.width_at(sheet_scale),
+        MarkKind::SectionLine(SectionPen::End) => SECTION_END_W,
         _ => DIM_LINE_W,
     }
 }
@@ -2807,7 +3081,10 @@ fn paint_mark(
         Mark::Line { a, b, kind } => {
             let w = line_width_mm(*kind, sheet_scale);
             let stroke = Stroke::new((w * k).max(1.0) as f32, color);
-            if *kind == MarkKind::CenterLine {
+            if matches!(
+                *kind,
+                MarkKind::CenterLine | MarkKind::SectionLine(SectionPen::Chain)
+            ) {
                 for d in dash_pattern(&[*a, *b], &CENTER_PATTERN) {
                     painter.add(Shape::line(
                         d.iter().map(|q| to_screen(*q)).collect(),
@@ -2818,8 +3095,10 @@ fn paint_mark(
                 painter.line_segment([to_screen(*a), to_screen(*b)], stroke);
             }
         }
-        Mark::Arrow { tip, dir, .. } => {
-            let pts = arrow_corners(*tip, *dir).map(to_screen).to_vec();
+        Mark::Arrow { tip, dir, kind } => {
+            let pts = arrow_corners(*tip, *dir, arrow_size(*kind, sheet_scale))
+                .map(to_screen)
+                .to_vec();
             painter.add(Shape::convex_polygon(pts, color, Stroke::NONE));
         }
         Mark::Arc {
@@ -2890,7 +3169,10 @@ fn dim_hit(
                     (screen_seg_dist(pos, to_screen(*a), to_screen(*b)), false)
                 }
                 Mark::Arrow { tip, dir, .. } => (
-                    polygon_dist(pos, &arrow_corners(*tip, *dir).map(to_screen)),
+                    polygon_dist(
+                        pos,
+                        &arrow_corners(*tip, *dir, (ARROW_LEN, ARROW_HALF_W)).map(to_screen),
+                    ),
                     false,
                 ),
                 Mark::Arc {
@@ -3209,7 +3491,7 @@ fn tool_hit(
     center.map(|(_, v, o)| (v, o.clone()))
 }
 
-fn screen_seg_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+pub(crate) fn screen_seg_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let ab = b - a;
     let len2 = ab.length_sq();
     let t = if len2 > 0.0 {
@@ -3218,4 +3500,192 @@ fn screen_seg_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
         0.0
     };
     (p - (a + ab * t)).length()
+}
+
+/// Tests der Malregeln für Schnittmarken und des Linienvergleichs (private Hilfen).
+#[cfg(test)]
+mod section_paint_tests {
+    use super::*;
+    use planora_drawing::annotate::{DIM_LINE_W, SECTION_ARROW_HALF_W, SECTION_ARROW_LEN};
+    use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewKind};
+
+    /// Pixel je Blatt-mm in diesen Tests.
+    const K: f64 = 10.0;
+
+    /// Malt `mark` (1 mm = `K` Pixel) und liefert die flachen Formen.
+    fn paint(mark: &Mark, sheet_scale: f64) -> Vec<Shape> {
+        fn flat(shape: &Shape, out: &mut Vec<Shape>) {
+            match shape {
+                Shape::Vec(v) => v.iter().for_each(|s| flat(s, out)),
+                s => out.push(s.clone()),
+            }
+        }
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 800.0))),
+            ..Default::default()
+        };
+        let out = ctx.run_ui(raw, |ui| {
+            let painter = ui.painter().clone();
+            let to_screen = |p: DVec2| pos2((p.x * K) as f32, (p.y * K) as f32);
+            paint_mark(&painter, mark, theme::SHEET_INK, &to_screen, K, sheet_scale);
+        });
+        let mut shapes = Vec::new();
+        for c in &out.shapes {
+            flat(&c.shape, &mut shapes);
+        }
+        out.drop_without_applying_deltas();
+        shapes
+    }
+
+    fn line(kind: MarkKind) -> Mark {
+        Mark::Line {
+            a: DVec2::new(5.0, 5.0),
+            b: DVec2::new(60.0, 5.0),
+            kind,
+        }
+    }
+
+    fn segment_widths(shapes: &[Shape]) -> Vec<f32> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::LineSegment { stroke, .. } => Some(stroke.width),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn path_widths(shapes: &[Shape]) -> Vec<f32> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Path(p) => Some(p.stroke.width),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn end_pieces_are_drawn_half_a_millimetre_wide_whatever_the_sheet() {
+        for f in [1.0, 2.0, 0.5] {
+            let shapes = paint(&line(MarkKind::SectionLine(SectionPen::End)), f);
+            assert_eq!(segment_widths(&shapes), vec![(SECTION_END_W * K) as f32]);
+            assert!(path_widths(&shapes).is_empty());
+        }
+        // Dicker als die dünnen Linien.
+        const { assert!(SECTION_END_W > DIM_LINE_W) };
+    }
+
+    #[test]
+    fn the_chain_is_dashed_and_thin() {
+        let shapes = paint(&line(MarkKind::SectionLine(SectionPen::Chain)), 1.0);
+        assert!(segment_widths(&shapes).is_empty(), "keine ganze Linie");
+        let widths = path_widths(&shapes);
+        assert!(widths.len() >= 4, "Strichpunkte: {widths:?}");
+        assert!(widths.iter().all(|w| *w == (DIM_LINE_W * K) as f32));
+    }
+
+    #[test]
+    fn hatch_lines_are_whole_thin_lines() {
+        let shapes = paint(&line(MarkKind::Hatch), 1.0);
+        assert_eq!(segment_widths(&shapes), vec![(DIM_LINE_W * K) as f32]);
+        assert!(path_widths(&shapes).is_empty());
+    }
+
+    /// Länge des Pfeils (Abstand der Grundlinie von der Spitze) in Pixeln und halbe Breite.
+    fn arrow_size_px(shapes: &[Shape], tip: DVec2) -> (f32, f32) {
+        let pts = shapes
+            .iter()
+            .find_map(|s| match s {
+                Shape::Path(p) => Some(p.points.clone()),
+                _ => None,
+            })
+            .expect("Pfeil");
+        assert_eq!(pts.len(), 3, "{pts:?}");
+        let tip = pos2((tip.x * K) as f32, (tip.y * K) as f32);
+        let base = pts[1].lerp(pts[2], 0.5);
+        ((base - tip).length(), (pts[1] - pts[2]).length() / 2.0)
+    }
+
+    #[test]
+    fn section_arrows_grow_with_the_sheet_but_dimension_arrows_do_not() {
+        let tip = DVec2::new(20.0, 20.0);
+        let arrow = |kind| Mark::Arrow {
+            tip,
+            dir: DVec2::new(0.0, 1.0),
+            kind,
+        };
+        for f in [1.0, 2.0] {
+            let (len, half) = arrow_size_px(
+                &paint(&arrow(MarkKind::SectionLine(SectionPen::Chain)), f),
+                tip,
+            );
+            let want = (SECTION_ARROW_LEN * f * K) as f32;
+            assert!((len - want).abs() < 0.01, "{len} statt {want}");
+            let want = (SECTION_ARROW_HALF_W * f * K) as f32;
+            assert!((half - want).abs() < 0.01, "{half} statt {want}");
+        }
+        let (len, half) = arrow_size_px(&paint(&arrow(MarkKind::Dimension), 2.0), tip);
+        assert!((len - (ARROW_LEN * K) as f32).abs() < 0.01, "{len}");
+        assert!((half - (ARROW_HALF_W * K) as f32).abs() < 0.01, "{half}");
+    }
+
+    fn drawing_with_section() -> Drawing {
+        let mut d = Drawing::new(
+            DrawingId(1),
+            "Blatt".into(),
+            Sheet {
+                paper: Paper::A3,
+                landscape: true,
+            },
+            Projection::First,
+        );
+        let front = d.add_view(
+            ViewKind::Front,
+            Scale { num: 1, den: 1 },
+            Placement::Free { x: 100.0, y: 200.0 },
+            None,
+        );
+        d.add_section(front, ViewKind::Top, 20.0, 80.0).unwrap();
+        d
+    }
+
+    fn section_mut(d: &mut Drawing) -> &mut planora_drawing::SectionSpec {
+        d.views
+            .iter_mut()
+            .find_map(|v| v.section.as_mut())
+            .expect("Schnitt")
+    }
+
+    #[test]
+    fn only_the_plane_of_a_section_changes_its_lines() {
+        let base = drawing_with_section();
+        assert!(same_lines(&base, &base.clone()));
+        // Schraffur, Abstand und Buchstabe ändern keine Kantenlinien.
+        let mut e = base.clone();
+        section_mut(&mut e).hatch.spacing = 5.0;
+        assert!(same_lines(&base, &e), "Abstand");
+        section_mut(&mut e).hatch.on = false;
+        assert!(same_lines(&base, &e), "Schraffur aus");
+        section_mut(&mut e).letter = 'B';
+        assert!(same_lines(&base, &e), "Buchstabe");
+        // Mittellinien wie bisher.
+        let mut c = base.clone();
+        c.views[0].centerlines = !c.views[0].centerlines;
+        assert!(same_lines(&base, &c), "Mittellinien");
+        // Die Ebene und alles andere ändert sie.
+        let mut o = base.clone();
+        section_mut(&mut o).offset = 25.0;
+        assert!(!same_lines(&base, &o), "Versatz");
+        let mut k = base.clone();
+        k.views[1].kind = ViewKind::Bottom;
+        assert!(!same_lines(&base, &k), "Art");
+        let mut s = base.clone();
+        s.views[0].scale = Scale { num: 1, den: 2 };
+        assert!(!same_lines(&base, &s), "Maßstab");
+        let mut n = base.clone();
+        n.views[1].section = None;
+        assert!(!same_lines(&base, &n), "kein Schnitt mehr");
+    }
 }
