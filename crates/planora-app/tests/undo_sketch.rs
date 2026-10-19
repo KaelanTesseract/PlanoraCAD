@@ -196,9 +196,10 @@ fn first_click_belongs_to_the_line() {
     observe(&mut w);
     assert_eq!(draft(&w).points().count(), 1, "der Punkt steht schon");
     assert_eq!(sk_undo_len(&w), 0, "erster Klick: kein Schritt");
-    assert_eq!(w.active_tab().state.sketch_undo_label(), None);
-    assert_eq!(w.active_tab().undo_label(), None);
-    assert_eq!(w.active_tab().undo_blocked(), Some(NOTHING_TO_UNDO));
+    // Rückgängig nähme nur den offenen Punkt zurück (wie Esc); Wiederholen gibt es nicht.
+    assert_eq!(w.active_tab().undo_label(), Some("Punkt setzen"));
+    assert_eq!(w.active_tab().undo_blocked(), None);
+    assert_eq!(w.active_tab().redo_label(), None);
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), 0, "auch nicht im nächsten Bild");
 
@@ -276,9 +277,10 @@ fn first_click_belongs_to_the_line() {
     assert_eq!(w.active_tab().undo_label(), Some("Punkt setzen"));
 }
 
-/// Offener erster Klick und Rückgängig: Der letzte Schritt geht zurück, der offene Punkt mit.
+/// Offener erster Klick und Rückgängig: Zuerst geht nur der offene Punkt weg (wie Esc), der
+/// vorige Schritt bleibt; das nächste Rückgängig nimmt ihn zurück.
 #[test]
-fn undo_with_open_first_click_drops_it() {
+fn undo_with_open_first_click_cancels_it_first() {
     let mut w = ws();
     open_new_sketch(&mut w);
     tool(&mut w, Tool::Point);
@@ -288,20 +290,38 @@ fn undo_with_open_first_click_drops_it() {
     click(&mut w, 10.0, 10.0);
     observe(&mut w);
     assert_eq!(draft(&w).points().count(), 2);
+    assert_eq!(sk_undo_len(&w), 1);
+    tab(&mut w).undo().unwrap();
+    assert_eq!(
+        draft(&w).points().count(),
+        1,
+        "nur der offene Punkt ist weg"
+    );
+    assert_eq!(sk_undo_len(&w), 1, "der vorige Schritt bleibt");
+    assert_eq!(sk_redo_len(&w), 0, "nichts zu wiederholen");
+    let se = st(&mut w).sketch_session.as_ref().unwrap();
+    assert!(se.pending.is_empty());
+    assert_eq!(se.tool, Tool::Line);
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), 1, "kein neuer Schritt");
     assert_eq!(w.active_tab().undo_label(), Some("Punkt setzen"));
     tab(&mut w).undo().unwrap();
-    assert_eq!(draft(&w).points().count(), 0, "Anfang der Skizze");
-    assert!(
-        st(&mut w)
-            .sketch_session
-            .as_ref()
-            .unwrap()
-            .pending
-            .is_empty()
+    assert_eq!(
+        draft(&w).points().count(),
+        0,
+        "zweites Rückgängig: der Schritt"
     );
-    // Wiederholen bringt den Schritt, nicht den offenen Klick.
+    assert_eq!(sk_undo_len(&w), 0);
     tab(&mut w).redo().unwrap();
     assert_eq!(draft(&w).points().count(), 1);
+    // Ohne vorigen Schritt: der offene Punkt allein.
+    tab(&mut w).undo().unwrap();
+    click(&mut w, 5.0, 5.0);
+    observe(&mut w);
+    assert_eq!(tab(&mut w).redo().unwrap_err(), NOTHING_TO_REDO);
+    tab(&mut w).undo().unwrap();
+    assert_eq!(draft(&w).points().count(), 0);
+    assert_eq!(sk_redo_len(&w), 1, "die Wiederholen-Liste bleibt");
 }
 
 // ---- (c) Ziehen ist ein Schritt ---------------------------------------------------------------
@@ -379,20 +399,37 @@ fn jump_clears_session_bits() {
         se.dragging = Some(p);
         se.last_report = None;
     }
+    let cleared = |w: &Workspace| {
+        let s = &w.active_tab().state;
+        let se = s.sketch_session.as_ref().unwrap();
+        assert!(se.pending.is_empty());
+        assert!(se.pending_pos.is_empty());
+        assert!(se.selection.is_empty());
+        assert_eq!(se.message, None);
+        assert_eq!(se.dragging, None);
+        assert_eq!(se.tool, Tool::Ellipse, "das Werkzeug bleibt");
+        let report = se.last_report.as_ref().expect("Bericht neu bestimmt");
+        let fresh = s.session_sketch().unwrap().clone().solve();
+        assert_eq!(report.status, fresh.status);
+        assert_eq!(report.dof, fresh.dof);
+        assert_eq!(report.free_points, fresh.free_points);
+    };
+    // Erst nur der offene Klick der Ellipse (wie Esc).
     assert!(st(&mut w).undo_sketch());
+    cleared(&w);
+    assert_eq!(curves(&w), 8);
+    assert_eq!(sk_undo_len(&w), 2);
+    // Dann der letzte Schritt.
+    {
+        let (se, _) = sess(&mut w);
+        se.selection = vec![Item::Curve(c)];
+        se.message = Some("alt".into());
+        se.dragging = Some(p);
+        se.last_report = None;
+    }
+    assert!(st(&mut w).undo_sketch());
+    cleared(&w);
     let s = &w.active_tab().state;
-    let se = s.sketch_session.as_ref().unwrap();
-    assert!(se.pending.is_empty());
-    assert!(se.pending_pos.is_empty());
-    assert!(se.selection.is_empty());
-    assert_eq!(se.message, None);
-    assert_eq!(se.dragging, None);
-    assert_eq!(se.tool, Tool::Ellipse, "das Werkzeug bleibt");
-    let report = se.last_report.as_ref().expect("Bericht neu bestimmt");
-    let fresh = s.session_sketch().unwrap().clone().solve();
-    assert_eq!(report.status, fresh.status);
-    assert_eq!(report.dof, fresh.dof);
-    assert_eq!(report.free_points, fresh.free_points);
     // Ein Rechteck weniger.
     assert_eq!(s.session_sketch().unwrap().curves().count(), 4);
     // Der Entwurf hat genau den Stand des Bildes; die Profile sind die des zurückgeholten Stands.
@@ -764,4 +801,343 @@ fn constraint_while_tool_open_is_its_own_step() {
     se.apply(sk, ConstraintAction::Fixed, None).unwrap();
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);
+}
+
+// ---- Nachbesserung: Aufschub nur für reine Punkte, Lücken ------------------------------------
+
+/// Linie (0,0)–(10,4) mit Längenmaß 10 (ein Schritt je Aktion); danach Linienwerkzeug mit
+/// offenem erstem Klick. Liefert Linie und Maß.
+fn line_with_dimension_and_open_click(
+    w: &mut Workspace,
+) -> (
+    planora_sketch::model::CurveId,
+    planora_sketch::constraint::ConstraintId,
+) {
+    tool(w, Tool::Line);
+    click(w, 0.0, 0.0);
+    click(w, 10.0, 4.0);
+    observe(w);
+    tool(w, Tool::Select);
+    let line = draft(w).curves().next().unwrap().0;
+    let (se, sk) = sess(w);
+    se.selection = vec![Item::Curve(line)];
+    let dim = se
+        .apply(sk, ConstraintAction::Distance, Some(10.0))
+        .unwrap();
+    observe(w);
+    assert_eq!(w.active_tab().undo_label(), Some("Maß setzen"));
+    tool(w, Tool::Line);
+    click(w, 30.0, 30.0);
+    observe(w);
+    assert!(!sess(w).0.pending.is_empty());
+    (line, dim)
+}
+
+/// I1: Maßwert ändern bei offenem erstem Klick ist ein eigener Schritt; die Linie danach auch.
+#[test]
+fn dimension_value_with_open_click_is_its_own_step() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    let (_, dim) = line_with_dimension_and_open_click(&mut w);
+    let n = sk_undo_len(&w);
+    let (se, sk) = sess(&mut w);
+    se.set_dimension_value(sk, dim, 20.0).unwrap();
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), n + 1, "Maß 10 → 20: eigener Schritt");
+    // Der offene Punkt benennt den Schritt nicht.
+    assert_eq!(w.active_tab().undo_label(), Some("Skizze ändern"));
+    click(&mut w, 40.0, 33.0);
+    observe(&mut w);
+    assert_eq!(
+        sk_undo_len(&w),
+        n + 2,
+        "die Linie bleibt ein eigener Schritt"
+    );
+    assert_eq!(w.active_tab().undo_label(), Some("Linie zeichnen"));
+    tab(&mut w).undo().unwrap();
+    tab(&mut w).undo().unwrap();
+    let v = |w: &Workspace| match draft(w).constraint(dim).unwrap().kind {
+        planora_sketch::constraint::ConstraintKind::Distance(_, _, v) => v,
+        _ => unreachable!(),
+    };
+    assert_eq!(v(&w), 10.0, "zwei Schritte zurück: Maß wieder 10");
+}
+
+/// I1: eine neue Abhängigkeit bei offenem erstem Klick ist ein eigener Schritt mit ihrem Namen.
+#[test]
+fn new_constraint_with_open_click_is_its_own_step() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    let (line, _) = line_with_dimension_and_open_click(&mut w);
+    let n = sk_undo_len(&w);
+    let (se, sk) = sess(&mut w);
+    se.selection = vec![Item::Curve(line)];
+    se.apply(sk, ConstraintAction::Horizontal, None).unwrap();
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), n + 1);
+    assert_eq!(w.active_tab().undo_label(), Some("Abhängigkeit setzen"));
+}
+
+/// I1: „anzeigend“ umschalten bei offenem erstem Klick ist ein eigener Schritt.
+#[test]
+fn driven_toggle_with_open_click_is_its_own_step() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    let (_, dim) = line_with_dimension_and_open_click(&mut w);
+    let n = sk_undo_len(&w);
+    let (se, sk) = sess(&mut w);
+    se.set_driven(sk, dim, true).unwrap();
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), n + 1);
+    tab(&mut w).undo().unwrap();
+    assert!(!draft(&w).constraint(dim).unwrap().driven);
+}
+
+/// I1: Hilfslinie umschalten bei offenem erstem Klick ist ein eigener Schritt.
+#[test]
+fn construction_toggle_with_open_click_is_its_own_step() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    let (line, _) = line_with_dimension_and_open_click(&mut w);
+    let n = sk_undo_len(&w);
+    let (se, sk) = sess(&mut w);
+    se.selection = vec![Item::Curve(line)];
+    se.toggle_construction(sk);
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), n + 1);
+    assert_eq!(w.active_tab().undo_label(), Some("Hilfslinie umschalten"));
+}
+
+/// Abhängigkeit löschen bei offenem erstem Klick: eigener Schritt.
+#[test]
+fn deleting_a_constraint_with_open_click_is_its_own_step() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    let (_, dim) = line_with_dimension_and_open_click(&mut w);
+    let n = sk_undo_len(&w);
+    let (se, sk) = sess(&mut w);
+    se.selection = vec![Item::Constraint(dim)];
+    se.delete_selection(sk);
+    assert!(!se.pending.is_empty(), "der offene Punkt bleibt");
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), n + 1);
+    assert_eq!(w.active_tab().undo_label(), Some("Löschen"));
+}
+
+/// Einen freien Punkt löschen bei offenem erstem Klick: eigener Schritt.
+#[test]
+fn deleting_a_point_with_open_click_is_its_own_step() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Point);
+    click(&mut w, -20.0, -20.0);
+    observe(&mut w);
+    let lone = draft(&w).points().next().unwrap().0;
+    tool(&mut w, Tool::Line);
+    click(&mut w, 30.0, 30.0);
+    observe(&mut w);
+    let n = sk_undo_len(&w);
+    let (se, sk) = sess(&mut w);
+    se.selection = vec![Item::Point(lone)];
+    se.delete_selection(sk);
+    assert!(!se.pending.is_empty());
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), n + 1);
+    assert_eq!(w.active_tab().undo_label(), Some("Löschen"));
+}
+
+/// Rückgängig ohne vorheriges Bildende: die noch nicht erfasste Änderung wird ein Schritt und
+/// genau dieser geht zurück (über `AppState` und über den Tab, wie die Tastenkürzel).
+#[test]
+fn undo_takes_an_unobserved_change_as_a_step() {
+    for via_tab in [false, true] {
+        let mut w = ws();
+        open_new_sketch(&mut w);
+        tool(&mut w, Tool::Point);
+        click(&mut w, 1.0, 1.0);
+        observe(&mut w);
+        click(&mut w, 2.0, 2.0); // ohne Bildende
+        if via_tab {
+            tab(&mut w).undo().unwrap();
+        } else {
+            assert!(st(&mut w).undo_sketch());
+        }
+        assert_eq!(draft(&w).points().count(), 1, "nur der neue Punkt geht");
+        assert_eq!(sk_redo_len(&w), 1);
+        if via_tab {
+            tab(&mut w).redo().unwrap();
+        } else {
+            assert!(st(&mut w).redo_sketch());
+        }
+        assert_eq!(draft(&w).points().count(), 2, "und kommt wieder");
+    }
+}
+
+/// Lehnt das Dokument den Entwurf beim Beenden ab, bleibt die Skizze offen samt Verlauf.
+#[test]
+fn rejected_commit_keeps_the_sketch_history() {
+    let mut w = ws();
+    let id = st(&mut w)
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    st(&mut w).create_box(DVec3::splat(4.0)).unwrap(); // entsteht nach der Skizze
+    observe(&mut w);
+    st(&mut w).open_sketch(id).unwrap();
+    tool(&mut w, Tool::Point);
+    click(&mut w, 1.0, 1.0);
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), 1);
+    let solid = st(&mut w).bodies[0].solid.clone();
+    let tol = st(&mut w).kernel.tolerance;
+    let edge = solid
+        .edges
+        .iter()
+        .find_map(|(e, _)| planora_feature::EdgeRef::from_edge(&solid, e, &tol).ok())
+        .unwrap();
+    let curve = {
+        let sk = sess(&mut w).1;
+        let a = sk.add_point(0.0, 0.0).unwrap();
+        let b = sk.add_point(1.0, 0.0).unwrap();
+        sk.add_line(a, b).unwrap()
+    };
+    st(&mut w)
+        .sketch_draft
+        .as_mut()
+        .unwrap()
+        .copies
+        .push(planora_feature::EdgeCopy { curve, edge });
+    assert!(st(&mut w).try_close_sketch().is_err());
+    assert!(st(&mut w).sketch_session.is_some());
+    assert_eq!(sk_undo_len(&w), 1, "der Verlauf bleibt");
+    assert_eq!(w.active_tab().undo_label(), Some("Kante übernehmen"));
+    tab(&mut w).undo().unwrap();
+    tab(&mut w).undo().unwrap();
+    assert_eq!(draft(&w).points().count(), 0);
+}
+
+/// Wiederholen-Name bei offener Änderung: keiner (auch beim offenen ersten Klick).
+#[test]
+fn redo_label_is_none_with_an_open_change() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Point);
+    click(&mut w, 1.0, 1.0);
+    observe(&mut w);
+    tab(&mut w).undo().unwrap();
+    assert_eq!(
+        w.active_tab().state.sketch_redo_label(),
+        Some("Punkt setzen")
+    );
+    click(&mut w, 2.0, 2.0); // noch kein Schritt
+    assert_eq!(w.active_tab().state.sketch_redo_label(), None);
+    assert_eq!(w.active_tab().redo_blocked(), Some(NOTHING_TO_REDO));
+    tab(&mut w).undo().unwrap();
+    assert_eq!(
+        w.active_tab().state.sketch_redo_label(),
+        Some("Punkt setzen")
+    );
+    tool(&mut w, Tool::Line);
+    click(&mut w, 3.0, 3.0); // offener erster Klick
+    observe(&mut w);
+    assert_eq!(w.active_tab().state.sketch_redo_label(), None);
+}
+
+/// M3: Ein offenes Maßfeld schließt nach Rückgängig, auch wenn das Maß noch da ist und die
+/// Auswahl wieder dieselbe ist.
+#[test]
+fn dimension_field_closes_after_a_jump() {
+    let c = egui::Context::default();
+    c.set_fonts(planora_app::fonts::definitions());
+    planora_app::theme::apply(&c, true);
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Line);
+    click(&mut w, 0.0, 0.0);
+    click(&mut w, 10.0, 4.0);
+    observe(&mut w);
+    tool(&mut w, Tool::Point);
+    click(&mut w, 30.0, 30.0);
+    observe(&mut w);
+    tool(&mut w, Tool::Select);
+    let line = draft(&w).curves().next().unwrap().0;
+    let frame = |c: &egui::Context, w: &mut Workspace| {
+        let out = c.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| planora_app::sketch_panel::show(ui.ctx(), st(w)),
+        );
+        out.drop_without_applying_deltas();
+    };
+    sess(&mut w).0.selection = vec![Item::Curve(line)];
+    planora_app::sketch_panel::open_dimension_editor(&c, st(&mut w), ConstraintAction::Distance);
+    frame(&c, &mut w);
+    assert!(planora_app::sketch_panel::dimension_editor_open(&c));
+    tab(&mut w).undo().unwrap(); // nimmt den Punkt, die Linie bleibt
+    assert!(draft(&w).curve(line).is_some());
+    sess(&mut w).0.selection = vec![Item::Curve(line)];
+    frame(&c, &mut w);
+    assert!(
+        !planora_app::sketch_panel::dimension_editor_open(&c),
+        "das Feld gehört zum alten Stand"
+    );
+}
+
+/// I1: Verschiebt sich ein vorhandener Punkt bei offenem erstem Klick (etwa durch den Solver),
+/// ist das ein eigener Schritt.
+#[test]
+fn moved_point_with_open_click_is_its_own_step() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Point);
+    click(&mut w, -20.0, -20.0);
+    observe(&mut w);
+    let lone = draft(&w).points().next().unwrap().0;
+    tool(&mut w, Tool::Line);
+    click(&mut w, 30.0, 30.0);
+    observe(&mut w);
+    let n = sk_undo_len(&w);
+    sess(&mut w).1.set_point_xy(lone, -21.0, -20.0).unwrap();
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), n + 1);
+    assert_eq!(w.active_tab().undo_label(), Some("Skizze ändern"));
+}
+
+/// I1: Häkchen „anzeigend“ direkt an der Skizze (Wert unverändert) bei offenem erstem Klick:
+/// eigener Schritt.
+#[test]
+fn flag_change_with_open_click_is_its_own_step() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    let (_, dim) = line_with_dimension_and_open_click(&mut w);
+    let n = sk_undo_len(&w);
+    sess(&mut w).1.set_driven(dim, true).unwrap();
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), n + 1);
+}
+
+/// Erster Klick auf den Rand eines Kreises und eines Bogens (Punkt samt Bindung, der Solver
+/// prüft die Gruppe): bleibt aufgeschoben, das Element ist ein Schritt.
+#[test]
+fn first_click_snapped_on_a_circle_is_deferred() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Circle);
+    click(&mut w, 0.0, 0.0);
+    click(&mut w, 7.3, 0.0);
+    observe(&mut w);
+    let n = sk_undo_len(&w);
+    tool(&mut w, Tool::Line);
+    let at = 7.3 / 2f64.sqrt();
+    click(&mut w, at + 0.1, at - 0.05);
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), n, "Fang auf dem Kreis: noch kein Schritt");
+    click(&mut w, 20.0, 15.0);
+    observe(&mut w);
+    assert_eq!(sk_undo_len(&w), n + 1);
+    assert_eq!(w.active_tab().undo_label(), Some("Linie zeichnen"));
 }

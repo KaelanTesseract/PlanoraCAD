@@ -218,23 +218,44 @@ impl ProfileCache {
 }
 
 /// R10: Der Schritt bleibt offen, solange ein Werkzeug offene Punkte hat (`pending`) und seit
-/// dem letzten Bild `before` nur Punkte hinzukamen (samt ihrer Bindung an eine Kurve beim
+/// dem letzten Bild `before` **nur** Punkte hinzukamen (samt ihrer Bindung an eine Kurve beim
 /// Fangen): Der erste Klick einer Linie, eines Kreises, Bogens, Splines gehört zum Element.
-/// Kam eine Kurve hinzu oder fehlt etwas, ist es ein Schritt (ein Linienzug: je Linie einer).
+/// Alles Vorhandene muss dafür unverändert sein: Kurven (Art, Hilfslinie), Punkte und alle
+/// übrigen Werte bitgleich, Abhängigkeiten (Art samt Maßwert, „anzeigend“, aktiv, Lage), Kopien.
+/// Kam eine Kurve hinzu, fehlt oder änderte sich etwas (Maßwert, „anzeigend“, Hilfslinie), ist
+/// es ein eigener Schritt (ein Linienzug: je Linie einer).
 fn deferred_by_tool(se: &SketchSession, before: &SketchFeature, after: &SketchFeature) -> bool {
     if se.pending.is_empty() || before.copies != after.copies {
         return false;
     }
     let (b, a) = (&before.sketch, &after.sketch);
-    let same_curves =
-        a.curves().count() == b.curves().count() && b.curves().all(|(id, _)| a.curve(id).is_some());
-    let points_kept = b.points().all(|(id, _)| a.point_xy(id).is_ok());
-    let constraints_kept = b.constraints().all(|(id, _)| a.constraint(id).is_some());
+    let same_curves = a.curves().count() == b.curves().count()
+        && b.curves().all(|(id, c)| {
+            a.curve(id)
+                .is_some_and(|n| n.kind == c.kind && n.construction == c.construction)
+        });
+    let bits = |v: DVec2| (v.x.to_bits(), v.y.to_bits());
+    let points_kept = b.points().all(
+        |(id, _)| matches!((b.point_xy(id), a.point_xy(id)), (Ok(p), Ok(q)) if bits(p) == bits(q)),
+    );
+    // Alle bisherigen Werte (Koordinaten, Radien, Kurvenparameter) bitgleich; neue Punkte
+    // hängen ihre Werte hinten an.
+    let (bv, av) = (b.variables(), a.variables());
+    let values_kept =
+        av.len() >= bv.len() && bv.iter().zip(av).all(|(x, y)| x.to_bits() == y.to_bits());
+    let constraints_kept = b.constraints().all(|(id, c)| {
+        a.constraint(id).is_some_and(|n| {
+            n.kind == c.kind
+                && n.driven == c.driven
+                && n.enabled == c.enabled
+                && n.branch() == c.branch()
+        })
+    });
     let only_snaps = a
         .constraints()
         .filter(|(id, _)| b.constraint(*id).is_none())
         .all(|(_, c)| matches!(c.kind, ConstraintKind::PointOnCurve(..)));
-    same_curves && points_kept && constraints_kept && only_snaps
+    same_curves && points_kept && values_kept && constraints_kept && only_snaps
 }
 
 /// Länge des Geometrieschlüssels einer Kante (Anfangs- und Endpunkt, Parameterbereich).
@@ -1767,17 +1788,17 @@ impl AppState {
         self.sketch_history.as_ref()
     }
 
-    /// Eine Änderung am Entwurf, die beim nächsten Beobachten ohne Geste ein Schritt würde:
-    /// Verlauf und Entwurf. Keine, wenn der Entwurf dem letzten Bild gleicht (gleicher Stand der
-    /// Skizze, gleiche Kopien) oder der Schritt aufgeschoben ist ([`deferred_by_tool`]).
-    fn sketch_change(&self) -> Option<(&History<SketchFeature>, &SketchFeature)> {
+    /// Eine noch nicht als Schritt erfasste Änderung am Entwurf (er gleicht nicht dem letzten
+    /// Bild: anderer Stand der Skizze oder andere Kopien): Verlauf und Entwurf, dazu, ob sie
+    /// aufgeschoben ist ([`deferred_by_tool`], offener erster Klick eines Werkzeugs).
+    fn sketch_open_change(&self) -> Option<(&History<SketchFeature>, &SketchFeature, bool)> {
         let se = self.sketch_session.as_ref()?;
         let h = self.sketch_history.as_ref()?;
         let draft = self.sketch_draft.as_ref()?;
-        if draft == h.current() || deferred_by_tool(se, h.current(), draft) {
+        if draft == h.current() {
             return None;
         }
-        Some((h, draft))
+        Some((h, draft, deferred_by_tool(se, h.current(), draft)))
     }
 
     /// Am Ende eines Bildes bei offener Skizze (R4, R10): Weicht der Entwurf vom letzten Bild ab
@@ -1789,10 +1810,10 @@ impl AppState {
         if gesture {
             return;
         }
-        let Some((h, draft)) = self.sketch_change() else {
+        let Some((h, draft, false)) = self.sketch_open_change() else {
             return;
         };
-        let label = crate::undo_labels::describe_sketch_change(h.current(), draft);
+        let label = self.sketch_label(h.current(), draft);
         let after = draft.clone();
         let bytes = sketch_bytes(&after);
         if let Some(h) = self.sketch_history.as_mut() {
@@ -1800,16 +1821,19 @@ impl AppState {
         }
     }
 
-    /// Nimmt den letzten Schritt der offenen Skizze zurück (offene Änderungen werden vorher ein
-    /// Schritt). Der Entwurf wird der Klon des Bildes (gleicher Stand); laufendes Werkzeug,
-    /// Auswahl, Ziehen und Meldung entfallen, der Lösungsbericht wird neu bestimmt
-    /// ([`SketchSession::after_history_jump`]). Das Dokument bleibt unberührt. `false`: keine
-    /// Skizze offen oder nichts zurückzunehmen.
+    /// Rückgängig in der offenen Skizze. Offene Änderungen werden vorher ein Schritt. Bleibt
+    /// danach nur ein offener erster Klick eines Werkzeugs (aufgeschoben), nimmt Rückgängig nur
+    /// diesen zurück (wie Esc, samt dem gesetzten Punkt) und lässt den Verlauf, wie er ist; sonst
+    /// den letzten Schritt. Der Entwurf wird jeweils der Klon des Bildes (gleicher Stand);
+    /// laufendes Werkzeug, Auswahl, Ziehen und Meldung entfallen, der Lösungsbericht wird neu
+    /// bestimmt ([`SketchSession::after_history_jump`]). Das Dokument bleibt unberührt.
+    /// `false`: keine Skizze offen oder nichts zurückzunehmen.
     pub fn undo_sketch(&mut self) -> bool {
         self.sketch_jump(true)
     }
 
-    /// Gegenstück zu [`AppState::undo_sketch`].
+    /// Gegenstück zu [`AppState::undo_sketch`]; bei einem offenen ersten Klick gibt es nichts zu
+    /// wiederholen.
     pub fn redo_sketch(&mut self) -> bool {
         self.sketch_jump(false)
     }
@@ -1825,36 +1849,57 @@ impl AppState {
         else {
             return false;
         };
-        let target = if back { h.peek_undo() } else { h.peek_redo() };
-        let Some(target) = target.cloned() else {
-            return false;
-        };
-        if back {
-            h.commit_undo();
+        let target = if *draft != *h.current() {
+            // Nur noch ein aufgeschobener erster Klick ist offen.
+            if !back {
+                return false;
+            }
+            h.current().clone()
         } else {
-            h.commit_redo();
-        }
+            let target = if back { h.peek_undo() } else { h.peek_redo() };
+            let Some(target) = target.cloned() else {
+                return false;
+            };
+            if back {
+                h.commit_undo();
+            } else {
+                h.commit_redo();
+            }
+            target
+        };
         *draft = target;
         se.after_history_jump(&draft.sketch);
         true
     }
 
-    /// Name des Schritts, den Rückgängig in der offenen Skizze zurücknähme (eine noch offene,
-    /// nicht aufgeschobene Änderung zählt mit); `None`: nichts da.
+    /// Name des Schritts, den Rückgängig in der offenen Skizze zurücknähme (eine noch offene
+    /// Änderung zählt mit, auch ein offener erster Klick); `None`: nichts da.
     pub fn sketch_undo_label(&self) -> Option<&'static str> {
-        match self.sketch_change() {
-            Some((h, draft)) => Some(crate::undo_labels::describe_sketch_change(
+        match self.sketch_open_change() {
+            // Nur ein offener erster Klick: Rückgängig nimmt diesen Punkt zurück.
+            Some((h, draft, true)) => Some(crate::undo_labels::describe_sketch_change(
                 h.current(),
                 draft,
             )),
+            Some((h, draft, false)) => Some(self.sketch_label(h.current(), draft)),
             None => self.sketch_history()?.undo_label(),
         }
     }
 
-    /// Name des Schritts, den Wiederholen in der offenen Skizze herstellte. Eine offene Änderung
-    /// leert beim Übernehmen die Wiederholen-Liste: dann `None`.
+    /// Name eines Skizzenschritts; offene Punkte des laufenden Werkzeugs gehören zum nächsten
+    /// Element und benennen ihn nicht.
+    fn sketch_label(&self, before: &SketchFeature, after: &SketchFeature) -> &'static str {
+        let open = self
+            .sketch_session
+            .as_ref()
+            .map_or(&[][..], |se| se.pending.as_slice());
+        crate::undo_labels::describe_sketch_change_beside(before, after, open)
+    }
+
+    /// Name des Schritts, den Wiederholen in der offenen Skizze herstellte. Bei einer offenen
+    /// Änderung (auch einem offenen ersten Klick) gibt es nichts zu wiederholen: `None`.
     pub fn sketch_redo_label(&self) -> Option<&'static str> {
-        if self.sketch_change().is_some() {
+        if self.sketch_open_change().is_some() {
             return None;
         }
         self.sketch_history()?.redo_label()

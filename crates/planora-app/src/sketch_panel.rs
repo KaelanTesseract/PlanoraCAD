@@ -115,6 +115,9 @@ struct Editor {
     reveal: bool,
     /// Auswahl beim Öffnen; ändert sie sich, gehört das Feld nicht mehr dazu und schließt.
     selection: Vec<Item>,
+    /// Stand von `SketchSession::history_jumps` beim Öffnen; nach Rückgängig/Wiederholen
+    /// gehört das Feld zum alten Stand und schließt (auch wenn es das Maß noch gibt).
+    jumps: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,6 +170,7 @@ fn new_editor(se: &SketchSession, sk: &Sketch, action: ConstraintAction) -> Edit
         focus: true,
         reveal: true,
         selection: se.selection.clone(),
+        jumps: se.history_jumps,
     }
 }
 
@@ -245,11 +249,12 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let Some((se, sk)) = state.session_sketch_mut() else {
         return;
     };
-    // Das Zahlenfeld gehört zur Auswahl, mit der es geöffnet wurde.
+    // Das Zahlenfeld gehört zur Auswahl und zum Stand (vor Rückgängig/Wiederholen), mit dem es
+    // geöffnet wurde.
     if panel
         .editor
         .as_ref()
-        .is_some_and(|e| e.selection != se.selection)
+        .is_some_and(|e| e.selection != se.selection || e.jumps != se.history_jumps)
     {
         panel.editor = None;
         panel.error = None;
@@ -796,6 +801,7 @@ fn constraint_list(
                             focus: true,
                             reveal: true,
                             selection: se.selection.clone(),
+                            jumps: se.history_jumps,
                         });
                     }
                     let mut d = driven;

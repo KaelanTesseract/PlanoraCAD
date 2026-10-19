@@ -7,6 +7,8 @@ use planora_drawing::model::{Balloon, DrawingKind, ViewSpec};
 use planora_feature::{FeatureKind, Snapshot, SnapshotFeature};
 use planora_kernel::boolean::BoolOp;
 use planora_sketch::CurveKind;
+use planora_sketch::constraint::ConstraintKind;
+use planora_sketch::model::PointId;
 
 /// Name, wenn keine Regel passt.
 pub const FALLBACK: &str = "Ändern";
@@ -230,6 +232,17 @@ pub fn describe_sketch_change(
     before: &planora_feature::SketchFeature,
     after: &planora_feature::SketchFeature,
 ) -> &'static str {
+    describe_sketch_change_beside(before, after, &[])
+}
+
+/// Wie [`describe_sketch_change`]; die offenen Punkte `open` eines laufenden Werkzeugs (erster
+/// Klick, samt ihrer Fangbindung) zählen nicht als „Punkt setzen“ bzw. neue Abhängigkeit: Sie
+/// gehören zum nächsten Element, der Name beschreibt die übrige Änderung.
+pub fn describe_sketch_change_beside(
+    before: &planora_feature::SketchFeature,
+    after: &planora_feature::SketchFeature,
+    open: &[PointId],
+) -> &'static str {
     let (bs, as_) = (&before.sketch, &after.sketch);
     if after.copies.len() > before.copies.len() {
         return "Kante übernehmen";
@@ -270,15 +283,19 @@ pub fn describe_sketch_change(
     }
     if as_
         .points()
-        .any(|(id, _)| bs.points().all(|(p, _)| p != id))
+        .any(|(id, _)| !open.contains(&id) && bs.points().all(|(p, _)| p != id))
     {
         return "Punkt setzen";
     }
-    if as_.constraints().any(|(id, _)| bs.constraint(id).is_none()) {
-        let any_dim = as_
-            .constraints()
-            .filter(|(id, _)| bs.constraint(*id).is_none())
-            .any(|(_, c)| c.kind.is_dimension());
+    let open_snap =
+        |k: &ConstraintKind| matches!(k, ConstraintKind::PointOnCurve(p, _) if open.contains(p));
+    let new_constraints: Vec<&ConstraintKind> = as_
+        .constraints()
+        .filter(|(id, c)| bs.constraint(*id).is_none() && !open_snap(&c.kind))
+        .map(|(_, c)| &c.kind)
+        .collect();
+    if !new_constraints.is_empty() {
+        let any_dim = new_constraints.iter().any(|k| k.is_dimension());
         return if any_dim {
             "Maß setzen"
         } else {
