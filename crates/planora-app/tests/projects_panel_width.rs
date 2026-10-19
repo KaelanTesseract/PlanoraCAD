@@ -221,3 +221,103 @@ fn a_project_can_still_be_created_from_the_field() {
     assert!(common::find(&seen, "Gehäuse").is_some(), "Projekt im Baum");
     assert!(common::find(&seen, "Anlegen").is_none(), "Feld geschlossen");
 }
+
+/// Die Zeile „Projektname“: Das Feld reicht bis an den inneren rechten Rand der Karte (nimmt die
+/// freie Breite), „Anlegen“ und „Abbrechen“ stehen in einer zweiten Zeile darunter.
+fn assert_name_row(s: &mut Screen, app: &mut PlanoraApp, at: &str, dark: bool) {
+    let seen: Vec<Seen> = s.settle(3, &mut |c| {
+        shell_panels::show_fields(c, app);
+    });
+    let card = card(&s.ctx);
+    let frame = theme::panel_frame(dark);
+    let inner_right = card.right() - f32::from(frame.inner_margin.right) - frame.stroke.width;
+    let hint = common::find(&seen, "Projektname")
+        .unwrap_or_else(|| panic!("{at}: Feld fehlt"))
+        .rect
+        .center();
+    let field = card_widgets(&s.ctx, card)
+        .into_iter()
+        .filter(|w| w.rect.contains(hint) && w.rect.width() < card.width() - 1.0)
+        .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
+        .unwrap_or_else(|| panic!("{at}: Element des Felds fehlt"))
+        .rect;
+    assert!(
+        (inner_right - field.right()).abs() <= 2.0,
+        "{at}: Feld {field:?} endet nicht am inneren Rand {inner_right} der Karte {card:?}"
+    );
+    for label in ["Anlegen", "Abbrechen"] {
+        let r = common::find(&seen, label)
+            .unwrap_or_else(|| panic!("{at}: „{label}“ fehlt"))
+            .rect;
+        assert!(
+            r.top() >= field.bottom(),
+            "{at}: „{label}“ {r:?} steht nicht unter dem Feld {field:?}"
+        );
+    }
+}
+
+#[test]
+fn the_project_name_field_takes_the_free_width_and_the_buttons_wrap() {
+    for dark in [true, false] {
+        for size in SIZES {
+            let at = format!("Zeile Projektname, {size:?}, dunkel {dark}");
+            let mut s = screen(size, dark);
+            let mut a = app(dark);
+            click_label(&mut s, &mut a, "Neues Projekt");
+            assert_name_row(&mut s, &mut a, &at, dark);
+        }
+    }
+}
+
+/// Auch in einem breiteren Bereich (breiter als die Vorgabebreite eines Textfelds von egui)
+/// nimmt das Feld die ganze freie Breite.
+#[test]
+fn the_project_name_field_fills_a_wide_area_too() {
+    let root = common::temp_root("planora-pwide");
+    let mut ws = Workspace::new(Some(Library::open(&root).unwrap()), Config::default());
+    let mut st = planora_app::projects_panel::ProjectsUi::default();
+    let area = Rect::from_min_size(egui::pos2(20.0, 20.0), vec2(600.0, 400.0));
+    let mut s = Screen::new(800.0, 600.0);
+    let mut f = |c: &egui::Context| {
+        egui::Area::new(egui::Id::new("breit"))
+            .fixed_pos(area.min)
+            .show(c, |ui| {
+                ui.set_width(area.width());
+                ui.set_max_width(area.width());
+                planora_app::projects_panel::show(ui, &mut ws, &mut st);
+            });
+    };
+    let seen = s.settle(3, &mut f);
+    let at = common::find(&seen, "Neues Projekt").unwrap().rect.center();
+    s.click(at, &mut f);
+    let seen = s.settle(3, &mut f);
+    let hint = common::find(&seen, "Projektname")
+        .expect("Feld")
+        .rect
+        .center();
+    let layers: Vec<LayerId> = s
+        .ctx
+        .viewport(|v| v.prev_pass.widgets.layer_ids().collect());
+    let field = layers
+        .into_iter()
+        .flat_map(|l| {
+            s.ctx.viewport(|v| {
+                v.prev_pass
+                    .widgets
+                    .get_layer(l)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+        })
+        .filter(|w| w.sense.is_focusable() && w.rect.contains(hint))
+        .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
+        .expect("Element des Felds")
+        .rect;
+    assert!(
+        (area.right() - field.right()).abs() <= 2.0,
+        "Feld {field:?} endet nicht am rechten Rand {} des Bereichs",
+        area.right()
+    );
+    let create = common::find(&seen, "Anlegen").expect("Anlegen").rect;
+    assert!(create.top() >= field.bottom(), "{create:?} unter {field:?}");
+}

@@ -2782,3 +2782,66 @@ impl ExportDialog {
         alive
     }
 }
+
+#[cfg(test)]
+mod line_count_tests {
+    use super::*;
+    use planora_drawing::sheet::build_sheet;
+    use planora_drawing::{Paper, Placement, Projection, Scale, ViewKind};
+    use planora_math::DVec3;
+
+    /// Fehlt eine Ansicht auf dem Blatt, ist die Zahl der Linien unvollständig: keine Zahl.
+    #[test]
+    fn counts_only_when_every_view_is_on_the_sheet() {
+        let mut s = AppState::new();
+        s.create_box(DVec3::new(100.0, 60.0, 40.0)).unwrap();
+        let sheet = Sheet {
+            paper: Paper::A3,
+            landscape: true,
+        };
+        let d = s
+            .document
+            .add_drawing("Blatt", sheet, Projection::First)
+            .unwrap();
+        let one = Scale { num: 1, den: 1 };
+        for (kind, x) in [(ViewKind::Front, 120.0), (ViewKind::Right, 300.0)] {
+            s.document
+                .add_view(d, kind, one, Placement::Free { x, y: 200.0 }, None)
+                .unwrap();
+        }
+        let drawing = s.document.drawing(d).unwrap();
+        let bodies: Vec<DrawBody> = s
+            .bodies
+            .iter()
+            .map(|b| DrawBody {
+                name: b.name.clone(),
+                solid: &b.solid,
+            })
+            .collect();
+        let lines: Vec<(ViewId, ViewLines)> = drawing
+            .views
+            .iter()
+            .map(|v| {
+                (
+                    v.id,
+                    compute_view(&bodies, v.kind, &Progress::new()).unwrap(),
+                )
+            })
+            .collect();
+        let all: BTreeMap<ViewId, &ViewLines> = lines.iter().map(|(i, l)| (*i, l)).collect();
+        let full = build_sheet(drawing, &all);
+        assert_eq!(full.views.len(), 2);
+        let counts = sheet_line_counts(drawing, &full).expect("alle Ansichten auf dem Blatt");
+        assert!(counts.0 > 0, "{counts:?}");
+        // Nur die erste Ansicht berechnet: das Blatt hat eine Ansicht weniger.
+        let first: BTreeMap<ViewId, &ViewLines> =
+            all.iter().take(1).map(|(i, l)| (*i, *l)).collect();
+        let part = build_sheet(drawing, &first);
+        assert_eq!(part.views.len(), 1, "Testvoraussetzung");
+        assert!(
+            line_count(&part, Visibility::Visible) > 0,
+            "Testvoraussetzung"
+        );
+        assert_eq!(sheet_line_counts(drawing, &part), None);
+    }
+}

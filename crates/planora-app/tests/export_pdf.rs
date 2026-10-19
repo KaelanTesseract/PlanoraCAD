@@ -2875,3 +2875,30 @@ fn while_computing_the_lines_say_so() {
         assert!(!text.contains("Linien: …"), "{format:?}: {text}");
     }
 }
+
+/// Nichts zu berechnen (Zeichnung ohne Ansicht, Dokument ohne Körper): „Linien: nicht
+/// berechnet“, weder „werden berechnet“ noch eine bloße Auslassung.
+#[test]
+fn unavailable_says_lines_not_computed() {
+    let mut s = box_state();
+    let empty = s
+        .document
+        .add_drawing("Leer", A3_QUER, Projection::First)
+        .unwrap();
+    let mut no_bodies = AppState::new();
+    let with_views = add_drawing(&mut no_bodies, "Ohne Körper");
+    for (state, id) in [(&mut s, empty), (&mut no_bodies, with_views)] {
+        for format in [PDF, DXF, SVG] {
+            let mut d = dialog_with(state, format, false, id);
+            assert!(
+                matches!(d.status(state), ExportStatus::Unavailable(_)),
+                "{format:?}: {:?}",
+                d.status(state)
+            );
+            let text = draw(&mut d, state);
+            assert!(text.contains(LINES_NOT_COMPUTED), "{format:?}: {text}");
+            assert!(!text.contains(LINES_COMPUTING), "{format:?}: {text}");
+            assert!(!text.contains("Linien: …"), "{format:?}: {text}");
+        }
+    }
+}
