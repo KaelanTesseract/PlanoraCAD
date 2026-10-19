@@ -258,10 +258,15 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut ProjectsUi) {
     if let Some(name) = &mut st.new_project {
         let mut done = false;
         let mut create = false;
-        ui.horizontal(|ui| {
+        // Umbrechende Zeile wie bei der Wurzel: das Feld nimmt die freie Breite der Karte, die
+        // Knöpfe rücken in die nächste Zeile (in einer festen Zeile ragten sie aus der Karte
+        // und machten den Inhalt darunter breiter als die Karte).
+        ui.horizontal_wrapped(|ui| {
             let r = theme::text_field(
                 ui,
-                egui::TextEdit::singleline(name).hint_text("Projektname"),
+                egui::TextEdit::singleline(name)
+                    .hint_text("Projektname")
+                    .desired_width(ui.available_width()),
             );
             if ui.button("Anlegen").clicked()
                 || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
