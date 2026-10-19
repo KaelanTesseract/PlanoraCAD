@@ -9,7 +9,7 @@
 
 Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
 
-**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern, PDF-Ausgabe).
+**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern, PDF-Ausgabe, Schnittansichten).
 
 Erste Version: Quader, Zylinder, Kugel, Kegel, Extrusion und Rotation von Skizzen, 3D-Ansicht mit Auswahl, Körper verschieben (Feld „Position“) sowie Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit Flächen aus Ebenen, Zylindern, Kegeln, Kugeln und Tori (Stufe A) und für Körper mit Freiformflächen aus Ellipsen und Splines (siehe „Freiformflächen“).
 
@@ -154,10 +154,11 @@ Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Ze
 - Sichtbare Kanten sind durchgezogen, verdeckte gestrichelt. Das Zeigen der verdeckten Kanten lässt sich je Ansicht ausschalten (Vorgabe: an für die Normansichten, aus für Isometrisch).
 - Kreise bleiben Kreise, Bögen bleiben Bögen, Freiformlinien bleiben glatte Kurven; es werden keine Streckenzüge daraus. Nur die Umrisse von Ringen (Torus) und Freiformflächen sind angenähert (auf 0,0001 mm genau).
 - Im Fenster: Umschalter zwischen 3D-Modell und Zeichnung (im Werkzeugfeld oben), Zoomen mit dem Mausrad, Verschieben mit der mittleren Maustaste, Ansichten anklicken und ziehen. Im Browser stehen die Zeichnungen mit ihren Ansichten. Die Berechnung läuft im Hintergrund mit Fortschrittsbalken; scheitert eine Ansicht, steht der Grund an ihr, und die Zeichnung bleibt erhalten.
-- Gespeichert wird nur die Beschreibung (Blatt, Ansichten, Maßstab, Lage), nicht die berechneten Linien. Ein Dokument mit Zeichnung bekommt das Dateiformat 4 (mit Maßen oder Mittellinien das Dateiformat 5, mit Blattangaben das Dateiformat 6, mit Stückliste oder Positionsnummern das Dateiformat 7, siehe „Zeichnungsblatt“ und „Stückliste und Positionsnummern“); ältere Programmversionen melden dann „zu neu“. Dokumente ohne Zeichnung bleiben unverändert.
+- Schnittansichten (Vollschnitt mit Schraffur, Schnittlinie mit Pfeilen und Buchstaben) legt man mit dem Werkzeug „Schnitt“ an, siehe „Schnittansichten“ weiter unten.
+- Gespeichert wird nur die Beschreibung (Blatt, Ansichten, Maßstab, Lage), nicht die berechneten Linien. Ein Dokument mit Zeichnung bekommt das Dateiformat 4 (mit Maßen oder Mittellinien das Dateiformat 5, mit Blattangaben das Dateiformat 6, mit Stückliste oder Positionsnummern das Dateiformat 7, mit Schnittansichten das Dateiformat 8, siehe „Zeichnungsblatt“, „Stückliste und Positionsnummern“ und „Schnittansichten“); ältere Programmversionen melden dann „zu neu“. Dokumente ohne Zeichnung bleiben unverändert.
 
 **Grenzen**
-- Nicht dabei: Schnittansichten, Schraffur, Detailansichten und das Einlesen von SVG oder DXF. Es gibt nur diese sieben Blickrichtungen. Maße und Mittellinien stehen im nächsten Abschnitt.
+- Nicht dabei: Halbschnitt, Teilschnitt, Stufen- und Winkelschnitt, Detailansichten und das Einlesen von SVG oder DXF. Vollschnitte gibt es, siehe „Schnittansichten“. Es gibt nur diese sieben Blickrichtungen. Maße und Mittellinien stehen im nächsten Abschnitt.
 - Netz-Körper (eingelesene Netze) werden nicht gezeichnet; das Programm nennt sie mit Namen.
 - Glatte Übergänge, etwa zwischen einer Rundung und der Fläche daneben, werden nicht als Linie gezeichnet. Der Umriss der Rundung selbst schon.
 - Kann das Programm bei einer Linie nicht sicher sagen, ob sie sichtbar oder verdeckt ist, steht an der Ansicht eine Meldung statt einer Zeichnung; es wird nichts geraten. Bei sehr vielen Flächen meldet es „zu aufwendig“ (höchstens 20 000 Linien je Ansicht).
@@ -264,7 +265,7 @@ In einer Zeichnung lassen sich Maße setzen und Mittellinien zeigen. Die Maße h
 - Passungen sind nur ein Text; es gibt keine Passungstabellen. In der DXF-Datei sind die Maße einfache Linien, Pfeile und Texte, keine echten CAD-Maße.
 - Wie breit ein Text wird, schätzt das Programm nur. Mit einer anderen Schrift kann er etwas breiter ausfallen.
 - Ob Fusion 360 die Maßtexte und Pfeile der DXF-Dateien richtig anzeigt, ist noch nicht von Hand geprüft.
-- Nicht dabei: freie Texte und Schnitte (kommen später). Schriftfeld, Stückliste und Positionsnummern gibt es inzwischen, siehe die Abschnitte davor und danach.
+- Nicht dabei: freie Texte. Schnitte, Schriftfeld, Stückliste und Positionsnummern gibt es inzwischen, siehe die Abschnitte davor und danach.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 12 – Maße und Mittellinien“.
 
@@ -294,6 +295,40 @@ Eine Zeichnung lässt sich auch als PDF ausgeben, zum Drucken, Weitergeben und A
 - Nicht dabei: eingebettete Schriften, Lesezeichen, Verknüpfungen, Formularfelder, PDF/A, Verschlüsselung, Farben (alles schwarz, verlorene Maße rot) und Drucken aus dem Programm. Die PDF öffnest und druckst du im Betrachter deiner Wahl.
 
 Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 3c-3 – PDF-Ausgabe“.
+
+## Schnittansichten
+
+Ein Teil mit Bohrungen, Taschen oder einem Hohlraum zeigt in den normalen Ansichten nur gestrichelte Linien für das, was innen liegt. Eine Schnittansicht schneidet das Teil an einer Ebene auf und zeigt die Schnittfläche schraffiert. Löcher und Hohlräume bleiben frei, alles dahinter ist als ganz normale Kante zu sehen. Es gibt den Vollschnitt: Die Ebene geht durch das ganze Teil.
+
+**Schnitt anlegen:** In der Zeichnung auf „Schnitt“ klicken (im Werkzeugfeld der Zeichnung), dann in einer geraden Ansicht (zum Beispiel „Vorne“) zwei Punkte anklicken. Die Linie rastet waagerecht oder senkrecht ein und rastet auf die Mitte des Teils ein, wenn man in deren Nähe klickt. Schon vor dem zweiten Klick zeigt eine Vorschau die Linie mit den Pfeilen. Esc bricht ab. Die Pfeile zeigen in Blickrichtung, und genau dorthin legt das Programm die neue Schnittansicht. In der Ausgangsansicht steht die Schnittlinie (Strich-Punkt, an den Enden dick, mit Pfeilen und dem Buchstaben), unter der Schnittansicht steht ihr Titel, zum Beispiel „A–A (1:2)“. Die Buchstaben vergibt das Programm der Reihe nach (A, B, C …; I, O und Q werden übersprungen). Frei gewordene Buchstaben werden wieder benutzt. Höchstens 12 Schnitte je Blatt.
+
+**Schnitt ändern:** Wählt man die Schnittansicht an, stehen im Ansichtsfeld „Schnittposition (mm)“ zum Eintippen, „Blickrichtung umdrehen“, der Schalter „Schraffur“ und „Schraffurabstand (mm)“. Der Maßstab ist gesperrt, weil er dem der Ausgangsansicht folgt. Ändert man den Maßstab der Ausgangsansicht, ziehen ihre Schnittansichten mit. Einen Winkel für die Schraffur gibt es nicht; das Programm wählt ihn selbst (siehe unten).
+
+**Wenn sich das Modell ändert:** Schnittlinie und Schnittansicht rechnen sich mit neu. Liegt die Ebene danach neben dem Teil, steht an der Ansicht „Die Schnittebene trifft den Körper nicht.“, und die Ausgabe ist gesperrt, bis man die Ebene zurückschiebt oder den Schnitt löscht. Liegt die Ebene genau auf einer Fläche oder Kante, schiebt das Programm sie um 0,001 mm und schreibt das ins Ansichtsfeld. Kann ein Körper gar nicht geschnitten werden, steht „Bei „…“ lässt sich der Schnitt nicht berechnen.“; auch dann wird nichts Falsches gezeigt, und die Ausgabe bleibt gesperrt.
+
+**Löschen:** Löscht man die Schnittansicht, verschwindet auch die Schnittlinie in der Ausgangsansicht, und umgekehrt. Vorher fragt das Programm nach; die Rückfrage nennt auch Maße, die mit verschwinden.
+
+**Schraffur:** dünne Linien im Winkel von 45 Grad. Bei mehreren Körpern in einer Ansicht wechselt der Winkel (45 und 135 Grad), damit man benachbarte Teile auseinanderhält; sie bleiben auch dann getrennt, wenn sie sich berühren. Der Abstand ist auf einem A3-Blatt 3 mm und wächst oder schrumpft mit dem Blatt wie das Schriftfeld; der Maßstab ändert ihn nicht. Auf A4 sind es also etwa 2,1 mm. Ein Abstand, der auf dem Blatt unter 0,5 mm käme, wird abgelehnt; wechselt man zu einem Blatt, auf dem das passieren würde, lehnt das Programm den Wechsel mit einer Meldung ab. Wird die Schraffur zu fein (mehr als 20 000 Striche in einer Ansicht), steht „Die Schraffur von „Schnitt A–A“ ist zu fein.“ und die Ausgabe ist gesperrt.
+
+**Maße und Positionsnummern:** In einer Schnittansicht lassen sich Maße setzen und Positionsnummern anlegen wie in jeder Ansicht; „Maße vorschlagen“ arbeitet mit. Der Vorschlag setzt kein Maß, das eine andere Ansicht der Zeichnung schon trägt (zum Beispiel die Gesamtbreite). Ein Maß an einer Schnittkante hängt an der Reihenfolge der Körper: Löscht man einen früheren Körper, wird so ein Maß rot, und die Ausgabe ist gesperrt, bis man es neu setzt. Ein falscher Wert wird nie gezeigt.
+
+**Ausgabe:** SVG, DXF und PDF zeigen dasselbe. Die Schraffur besteht aus einzelnen Linien, nicht aus einem Füllmuster. In der DXF-Datei liegt sie auf der Ebene „SCHRAFFUR“, die Schnittlinie auf „SCHNITTLINIE“ (dünn) und „SCHNITTLINIE_DICK“ (die Enden). Maße in Schnittansichten stehen mit einer Nachkommastelle („8,0“).
+
+**Datei und alte Zeichnungen:** Erst eine Zeichnung mit Schnittansicht macht das Dokument zum Dateiformat 8; ältere Programmversionen melden dann „zu neu“. Ohne Schnitte bleibt die Datei im bisherigen Format, Byte für Byte. Die Schraffur wird nicht gespeichert, sie wird bei jedem Blatt neu gerechnet.
+
+**Grenzen**
+- Nicht dabei: Halbschnitt, Teilschnitt (Ausbruch), Stufenschnitt und Winkelschnitt (schräge Ebene), Detailansichten. Die Ebene liegt immer parallel zu einer Hauptebene (Vorne, Oben, Links …), und der Schnitt geht nur aus einer geraden Ansicht, nicht aus einer Schnittansicht und nicht aus der Isometrie.
+- Netz-Körper (eingelesene Netze) werden nicht geschnitten und nicht gezeichnet; das Programm nennt sie mit Namen.
+- Rippen, Wellen und ähnliche Teile, die nach Norm nicht schraffiert werden sollten, werden trotzdem schraffiert. Es gibt keine Schraffur nach Werkstoff.
+- Schnittlinie, Schraffur und Beschriftung folgen gängiger Praxis. Die Normen (ISO 128-40, -44, -50 und DIN 6) liegen nicht vor; die Werte sind nicht an der Norm geprüft.
+- Eine Positionsnummer in einer Schnittansicht behält ihre Nummer, auch wenn ihr Teil durch eine verschobene Ebene gar nicht mehr im Schnitt vorkommt; der Kreis zeigt dann ins Leere, und die Ausgabe läuft trotzdem.
+- Der Schnitt durch die Mitte einer Bohrung gelingt nicht immer. Liegt die Ebene nur wenige Millimeter neben der Mittelachse einer Bohrung (bei größeren Bohrungen etwas mehr), oder auch genau in ihr, kann es sein, dass das Programm den Schnitt nicht berechnen kann. Dann steht die Meldung „Bei „…“ lässt sich der Schnitt nicht berechnen.“, und es hilft, die Ebene um einige Millimeter zu verschieben. Eine falsche Zeichnung entsteht dabei nie.
+- Bei extrem großen Kreisen oder extrem welligen Kanten zeichnet das Programm die Kante der Schnittfläche etwas gröber als sonst. Das tritt in der Praxis nicht auf.
+- Die Schnittbuchstaben haben die Höhe des Maßtexts (3,5 mm) auf jedem Blatt; auf A0 wirken sie neben dem größeren Titel klein.
+- Der Knopf „Blattangaben“ im Werkzeugfeld der Zeichnung zeigt jetzt nur sein Symbol (der Name steht im Hinweis beim Darüberfahren und im Menü „Zeichnung“), damit „Schnitt“ bei 1100 × 700 noch in die Zeile passt.
+- Ob Inkscape, Fusion (DXF) und zwei PDF-Betrachter die Proben richtig zeigen, ist noch nicht von Hand geprüft.
+
+Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 3d – Schnittansichten“.
 
 ## Feature-Baum
 

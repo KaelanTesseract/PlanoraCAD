@@ -87,3 +87,30 @@ Ein Teil mit Hohlräumen (Bohrung, Tasche, Gehäuse) zeigt in den Normansichten 
 3. Verdeckte Kanten in Schnittansichten **aus**?
 4. Schnittbuchstaben **A, B, C …** in Reihenfolge der Anlage?
 5. Schnittlinie **per zwei Klicks** in einer Ansicht (statt Wert eintippen)?
+
+## 11. Festlegungen der Umsetzung
+
+Stand 2026-10-19. Die Vorschläge aus §10 wurden vom Nutzer freigegeben (Vollschnitt, 3 mm × Blattfaktor und 45°, verdeckte Kanten aus, Buchstaben A, B, C …, Schnittlinie per zwei Klicks). Der Plan (`docs/superpowers/plans/2026-10-19-schnittansichten.md`) hat sie in S1 bis S12 festgelegt; hier die Kurzfassung und was in §1 bis §10 dadurch anders wurde.
+
+- **S1 Ebene:** Die Ebene liegt immer parallel zu einer Hauptebene und wird durch Ansichtsart und Lage (Weltkoordinate) beschrieben. „Blickrichtung umdrehen“ tauscht die Ansichtsart gegen die Gegenansicht, die Lage bleibt.
+- **S2 Schneidekörper:** Quader aus der Hüllbox des Körpers mal 2, auf die Ebene gelegt, mit eigener Herkunftsmarke (`u64::MAX − Körperindex`); die Schnittflächen erkennt die Zeichnung an dieser Marke.
+- **S3 Tangentialfall:** Liegt der Körper ganz auf einer Seite (auch berührend), wird er ohne Kernel behalten oder entfernt. Liegt eine Ecke näher als 1e-4 mm an der Ebene, wird um 0,001 mm zur behaltenen Seite verschoben; scheitert der Kernel, ein zweiter Versuch mit Verschiebung, dann Meldung.
+- **S4 Ansicht:** Jeder Körper wird geschnitten, die behaltenen laufen unverändert durch die Ansichtsrechnung. Trifft die Ebene keinen Körper: „Die Schnittebene trifft den Körper nicht.“
+- **S5 Blickrichtung aus der Linie:** Waagerechte Linie: Pfeile nach unten, senkrechte: nach rechts, umgedreht entgegengesetzt; daraus folgt die Art der Schnittansicht (Vorne/waagerecht → Oben, Vorne/senkrecht → Links …).
+- **S6 Lage der Linie:** in der Ausgangsansicht an der Stelle der Ebene, Länge = Hüllbox der Ansicht plus 5 mm × Blattfaktor Überstand.
+- **S7 Schraffur:** in Blattmaß gerechnet (Abstand = Wert × Blattfaktor, nicht abhängig vom Maßstab), gemeinsame Phase je Körper, Winkel nach Rang des Körpers unter den Körpern mit Schnittfläche (45° und 135° im Wechsel), höchstens 20 000 Stücke je Ansicht. **Abweichung von §4:** Ein Winkelfeld im Eigenschaftenfeld gibt es absichtlich nicht; dort stehen Schnittposition, Blickrichtung umdrehen, Schraffur an/aus und Schraffurabstand.
+- **S8 Schnittlinie:** Kette als Strich-Punkt, Endstücke 8 mm × Blattfaktor in 0,5 mm Stärke, Schäfte, eigene Pfeile (5 × 2 mal Blattfaktor), Buchstabe in Maßtexthöhe (3,5 mm, nicht mit dem Blatt skaliert).
+- **S9 Titel:** „A–A (1:2)“, 5 mm × Blattfaktor hoch, mittig 5 mm × Blattfaktor unter der Ansicht.
+- **S10 Meldungen:** „Die Schnittebene trifft den Körper nicht.“, „Bei „{Körper}“ lässt sich der Schnitt nicht berechnen.“, „Die Schraffur von „Schnitt A–A“ ist zu fein.“; der Kernel-Grund und die Zahl der Schraffurstücke erscheinen nie in der Oberfläche.
+- **S11 Buchstaben und Abstand:** A–Z ohne I, O, Q, immer der erste freie; Schraffurabstand als A3-Wert gespeichert (Vorgabe 3,0; gültig, wenn endlich, auf dem Blatt mindestens 0,5 mm, höchstens 50); ein Blattwechsel, der darunter fiele, wird abgelehnt.
+- **S12 Lage der Schnittansicht:** abhängig von der Ausgangsansicht, deren Maßstab sie übernimmt (Feld gesperrt); weitere Schnitte derselben Richtung stehen dahinter.
+
+**Weitere Abweichungen und Ergänzungen (Einzelheiten und Begründungen: `docs/superpowers/offene-punkte.md`, „Teilprojekt 3d“):**
+- §4/§2: Der Schnitt geht nur aus einer geraden Ansicht, nicht aus einer Schnittansicht und nicht aus der Isometrie; die Oberfläche bietet unter einer Schnittansicht keine neue Normansicht an. Wählt man eine Schnittansicht, geht das Werkzeug „Schnitt“ aus; ein Klick auf die Schnittlinie (6 Pixel) gewinnt gegen die Kanten darunter.
+- §4: Der Knopf „Blattangaben“ im Werkzeugfeld zeigt nur sein Symbol, damit „Schnitt“ bei 1100 × 700 in die Zeile passt.
+- §9.3: Maße und Positionsnummern gibt es in Schnittansichten auf den geschnittenen Körpern. Die Schnittmarke hängt am Körperindex, daher werden Maße an Schnittkanten rot, wenn man einen früheren Körper löscht. „Maße vorschlagen“ entfernt Doppelte über die ganze Zeichnung. Eine Positionsnummer behält ihre Nummer, wenn ihr Teil aus dem Schnitt fällt (Lücke dieser Spec).
+- Der Zwischenspeicher der App verdrängt fertige Schnitte ab `MAX_CACHED = 7 + MAX_SECTIONS`.
+- Kreise und Ellipsen (65 536 Stücke) und Freiformkanten (2049 Punkte) haben Obergrenzen, die praktisch nicht erreichbar sind.
+- **Kernel:** Eine Ebene sehr nahe an einer Bohrungsnaht oder auf der Bohrungsachse kann der Kernel in manchen Fällen nicht schneiden (Meldung „… lässt sich der Schnitt nicht berechnen.“); der Kernel blieb unverändert, siehe offene Punkte.
+- Die Normen (ISO 128-40, -44, -50, DIN 6) liegen weiterhin nicht vor; alle Werte sind unbelegt.
+- Die Handprüfung der Proben in Inkscape, Fusion (DXF) und zwei PDF-Betrachtern ist offen.

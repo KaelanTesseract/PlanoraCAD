@@ -418,4 +418,16 @@ Spec §9.3: Schnittansichten übernehmen keine Maße der Quelle; „Maß setzen�
 
 ## Abweichungen bei der Umsetzung
 
-(wird nach den Aufgaben ergänzt)
+Stand nach Aufgabe 11. Ausführlich mit Begründung: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 3d – Schnittansichten“, und `docs/superpowers/specs/2026-10-19-schnittansichten-design.md` §11.
+
+- **Aufgabe 1:** Prüfhilfe `cut_area` mit 4096 statt 512 Punkten je gekrümmter Kante; Nut-Schneidekörper im Test bis z = 12.
+- **Aufgabe 2:** Obergrenzen: Kreis und Ellipse 65 536 Stücke, Freiformkante höchstens 2049 Punkte (statt 4096); darüber gröbere Vielecke ohne Meldung, praktisch unerreichbar.
+- **Aufgabe 3:** Die Zahl in `TooMany` ist beim Bauen nur eine Untergrenze und wird nie angezeigt.
+- **Aufgabe 4:** Eine Normansicht unter einer Schnittansicht bleibt im Modell erlaubt, die Oberfläche bietet sie nicht an.
+- **Aufgabe 6:** Zusätzliche Meldung „Die Schraffur von „Schnitt A–A“ lässt sich nicht berechnen.“ bei ungültigem Abstand.
+- **Aufgabe 7:** Der Schnittpfeil ist auf A4 5·f lang (Blattfaktor), nicht 5 mm. Die Zeichnung in der App (`drawing_view.rs`: Stift der Enden, Kette, Pfeilgröße) hat keinen Test; Handliste.
+- **Aufgabe 8:** Verdrängen im Zwischenspeicher über den Auftrag hinaus (`MAX_CACHED = 7 + MAX_SECTIONS`); folgt der Einfügereihenfolge.
+- **Aufgabe 9:** Der Knopf „Blattangaben“ ist nur noch ein Symbol (Tooltip „Blattangaben: …“, Menüeintrag bleibt), damit „Schnitt“ bei 1100 × 700 passt. Wählt man eine Schnittansicht, geht das Werkzeug aus. Ein Klick auf die Schnittlinie (6 Pixel) gewinnt gegen die Kanten der Ausgangsansicht. Das Winkelfeld der Spec §4 fehlt absichtlich (S7).
+- **Aufgabe 10:** Schnittmarken hängen am Körperindex (`u64::MAX − i`): Löschen eines früheren Körpers macht Maße an Schnittkanten rot und sperrt den Export, nie ein falscher Wert. „Maße vorschlagen“ entfernt Doppelte über die ganze Zeichnung, eine Schnittansicht bekommt also kein Maß, das eine andere Ansicht schon trägt. Eine Positionsnummer in einer Schnittansicht, deren Teil aus dem Schnitt fällt, behält ihre Nummer und der Export läuft (Lücke der Spec). `Document::resolve_dimensions` lässt Schnittmaße weg (`*_views` benutzen). `ResolveFn` hat den zusätzlichen Parameter `&ViewSolids`. Maßtext im Export mit einer Nachkommastelle („8,0“).
+- **Aufgabe 11:** Die Proben zeigten, dass der Kernel Ebenen nahe an einer Bohrungsnaht oder auf der Bohrungsachse in manchen Fällen nicht schneiden kann (Meldung „… lässt sich der Schnitt nicht berechnen.“; Beispiele in den offenen Punkten). Der Kernel blieb unverändert. Die A0-Probe benutzt deshalb die Ebene 105 statt 100.
+- Keine Normquellen (ISO 128-40, -44, -50, DIN 6): alle Werte unbelegt. Die Handprüfung (Inkscape, Fusion/DXF, zwei PDF-Betrachter) und der Test im echten Fenster (Aufgabe 12) sind offen.
