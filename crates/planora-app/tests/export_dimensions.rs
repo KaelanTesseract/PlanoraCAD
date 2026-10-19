@@ -507,6 +507,7 @@ fn lost_dimension_blocks_writing_with_its_text() {
         "Das Maß „Waagerecht“ in der Ansicht „Vorne“ hat seinen Bezug verloren: {reason}. Bitte das Maß löschen und neu setzen."
     );
     let dir = temp_dir("verloren");
+    let mut locked_texts = Vec::new();
     for format in [SVG, DXF] {
         d.format = format;
         d.tick(&s, true);
@@ -526,6 +527,7 @@ fn lost_dimension_blocks_writing_with_its_text() {
             text.contains(&format!("Nicht geschrieben: {msg}")),
             "{text}"
         );
+        locked_texts.push((format, text));
     }
     assert_eq!(fs::read_dir(&dir).unwrap().count(), 0, "nichts geschrieben");
     // Mit eigenem Text heißt das Maß wie sein Text (Platzhalter des Werts als „?“).
@@ -543,6 +545,20 @@ fn lost_dimension_blocks_writing_with_its_text() {
     s.document.delete_dimension(id, dim).unwrap();
     let mut d = dialog(&s, SVG);
     assert_eq!(ready(&d, &s).0, 0);
+    // Die Linien waren trotz des verlorenen Maßes berechnet (Maße ändern keine Linie): die
+    // gesperrten Angaben nannten schon dieselbe Zahl.
+    let ExportStatus::DrawingReady {
+        visible, hidden, ..
+    } = d.status(&s)
+    else {
+        panic!("{:?}", d.status(&s))
+    };
+    for (format, text) in &locked_texts {
+        assert!(
+            text.contains(&lines_counts_text(visible, hidden)),
+            "{format:?}: {text}"
+        );
+    }
     write(&mut d, &s, &dir.join("ok.svg"));
     let _ = fs::remove_dir_all(&dir);
 }
