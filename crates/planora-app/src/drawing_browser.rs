@@ -178,7 +178,7 @@ fn plan_delete_view(
         let mut extra = Vec::new();
         if !dependents.is_empty() {
             extra.push(format!(
-                "Abgeleitete Ansichten ({}) werden mit gelöscht",
+                "abgeleitete Ansichten ({}) werden mit gelöscht",
                 dependents.join(", ")
             ));
         }
@@ -187,7 +187,7 @@ fn plan_delete_view(
         }
         if !extra.is_empty() {
             text.pop();
-            text.push_str(&format!(", und {}.", extra.join(", und ")));
+            text.push_str(&format!(" und {}.", extra.join(" und ")));
         }
         return Some((
             DrawingDeletePlan {

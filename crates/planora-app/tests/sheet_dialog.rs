@@ -565,7 +565,13 @@ fn locked_in_old_versions_and_in_the_sketch_mode() {
     h.click(p);
     assert!(!h.is_open(), "Knopf gesperrt");
     let tip = h.hover(p);
-    assert!(tip.has(READ_ONLY_HINT), "Hinweis am Knopf fehlt");
+    assert!(
+        tip.has(&format!(
+            "{}: {READ_ONLY_HINT}",
+            planora_app::sheet_dialog::BUTTON
+        )),
+        "Hinweis am Knopf fehlt"
+    );
     let texts = menu_entry_hint(h.st(), true);
     assert!(
         texts.contains(&READ_ONLY_HINT.to_string()),

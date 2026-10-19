@@ -181,6 +181,8 @@ impl Harness {
         let out = self
             .ctx
             .run_ui(raw, |ui| drawing_view::show_with(ui, st, editable));
+        // Wie die App am Ende jedes Bildes: merken, ob ein Eingabefeld die Tastatur hatte.
+        planora_app::viewport::remember_keyboard_focus(&self.ctx);
         let shot = Shot::of(&out);
         out.drop_without_applying_deltas();
         shot
@@ -842,6 +844,321 @@ fn tools_exclude_each_other() {
     // Der Knopf schaltet auch wieder aus.
     h.click_text(&mut st, TOOL);
     assert!(!st.section_tool.is_active());
+}
+
+// (k) Nachbesserung: Maßstab über die Leiste, Vorzeichen, Abstände, Esc, Fangweite, Vorschau -----
+
+/// Mitte des Auswahlfelds mit dem Text `text` im Ansichtsfeld (das rechteste; das Schriftfeld
+/// trägt denselben Text weiter links).
+fn combo_pos(shot: &Shot, text: &str) -> Pos2 {
+    shot.texts
+        .iter()
+        .filter(|t| t.text == text)
+        .max_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))
+        .unwrap_or_else(|| panic!("„{text}“ fehlt"))
+        .rect
+        .center()
+}
+
+fn scale_of(st: &AppState, d: DrawingId, v: ViewId) -> Scale {
+    st.document.drawing(d).unwrap().view(v).unwrap().scale
+}
+
+/// Der Maßstab der Quelle über das Auswahlfeld im Ansichtsfeld: der Schnitt folgt in derselben
+/// Änderung; im Ansichtsfeld der Schnittansicht ist die Auswahl gesperrt.
+#[test]
+fn scale_combo_forwards_and_is_locked_on_a_section() {
+    let (mut st, d, front, mut h) = box_front(A3_QUER, BIG);
+    let sec = cut(&mut st, &mut h, d, front, 30.0);
+    let half = Scale { num: 1, den: 2 };
+    st.drawing_ui.selected_view = Some(front);
+    h.idle(&mut st);
+    let e0 = st.document.edit_count();
+    let p = combo_pos(&h.idle(&mut st), "1:1");
+    h.click(&mut st, p);
+    h.click_text(&mut st, "1:2");
+    assert_eq!(scale_of(&st, d, front), half);
+    assert_eq!(scale_of(&st, d, sec), half, "Schnitt folgt über die Leiste");
+    assert_eq!(st.document.edit_count(), e0 + 1, "eine Änderung");
+
+    // Schnittansicht gewählt: das Auswahlfeld öffnet sich nicht, der Maßstab bleibt.
+    st.drawing_ui.selected_view = Some(sec);
+    h.idle(&mut st);
+    let e1 = st.document.edit_count();
+    let p = combo_pos(&h.idle(&mut st), "1:2");
+    let shot = h.click(&mut st, p);
+    assert!(!shot.has("1:5"), "keine Auswahl geöffnet");
+    assert!(!shot.has("2:1"), "keine Auswahl geöffnet");
+    assert_eq!(scale_of(&st, d, sec), half);
+    assert_eq!(st.document.edit_count(), e1);
+    // Der Tooltip erklärt, warum.
+    let p = combo_pos(&shot, "1:2");
+    h.frame(&mut st, vec![Event::PointerMoved(p)]);
+    h.frame(&mut st, vec![Event::PointerMoved(p)]);
+    let shot = h.frame(&mut st, vec![Event::PointerMoved(p)]);
+    assert!(shot.has(section_tool::SCALE_LOCKED_TIP));
+}
+
+/// Lage der Ebene aus den Klicks, auch auf der negativen Seite und bei einer Quellansicht, deren
+/// Achse gegen die Weltachse läuft.
+#[test]
+fn offset_signs_from_clicks() {
+    let mut st = AppState::new();
+    st.add_feature(
+        None,
+        FeatureKind::Box {
+            size: DVec3::new(40.0, 20.0, 60.0),
+            origin: DVec3::new(-50.0, -10.0, -30.0),
+        },
+    )
+    .unwrap();
+    st.refresh();
+    let d = st
+        .document
+        .add_drawing("Blatt 1", A3_QUER, Projection::First)
+        .unwrap();
+    let mut views = Vec::new();
+    for (kind, x) in [(ViewKind::Front, 100.0), (ViewKind::Back, 300.0)] {
+        views.push(
+            st.document
+                .add_view(d, kind, s11(), Placement::Free { x, y: 200.0 }, None)
+                .unwrap(),
+        );
+    }
+    let mut h = open(&mut st, d, BIG);
+    compute(&mut st, &mut h);
+    let offset_of = |st: &AppState, i: usize| sections(st, d)[i].section.unwrap().offset;
+    let click_pair =
+        |st: &mut AppState, h: &mut Harness, v: ViewId, a: (f64, f64), b: (f64, f64)| {
+            st.drawing_ui.selected_view = None;
+            st.section_tool.set_active(true);
+            h.idle(st);
+            click_v(h, st, d, v, a);
+            click_v(h, st, d, v, b);
+        };
+    let ((x0, y0), (x1, y1)) = bbox(&st, d, views[0]);
+    // Vorne, senkrecht links der Mitte: Welt-x = Ansichts-x (negativ).
+    click_pair(
+        &mut st,
+        &mut h,
+        views[0],
+        (x0 + 10.0, y0 + 5.0),
+        (x0 + 10.0, y0 + 40.0),
+    );
+    assert_eq!(sections(&st, d)[0].kind, ViewKind::Left);
+    assert!(
+        near(offset_of(&st, 0), x0 + 10.0, 0.02),
+        "{}",
+        offset_of(&st, 0)
+    );
+    assert!(offset_of(&st, 0) < 0.0);
+    // Vorne, waagerecht unter der Mitte: Welt-z = Ansichts-y (negativ).
+    click_pair(
+        &mut st,
+        &mut h,
+        views[0],
+        (x0 + 5.0, y0 + 10.0),
+        (x1 - 5.0, y0 + 10.0),
+    );
+    assert_eq!(sections(&st, d)[1].kind, ViewKind::Top);
+    assert!(
+        near(offset_of(&st, 1), y0 + 10.0, 0.02),
+        "{}",
+        offset_of(&st, 1)
+    );
+    assert!(offset_of(&st, 1) < 0.0 && y1 > 0.0);
+    // Hinten: die Ansichts-x-Achse läuft gegen die Welt-x-Achse.
+    let ((bx0, by0), _) = bbox(&st, d, views[1]);
+    click_pair(
+        &mut st,
+        &mut h,
+        views[1],
+        (bx0 + 10.0, by0 + 5.0),
+        (bx0 + 10.0, by0 + 40.0),
+    );
+    let back_sec = sections(&st, d)[2].clone();
+    assert!(
+        near(back_sec.section.unwrap().offset, -(bx0 + 10.0), 0.02),
+        "{} gegen {}",
+        back_sec.section.unwrap().offset,
+        bx0 + 10.0
+    );
+}
+
+/// Abstand hinter Geschwistern: Ausdehnung mal Maßstab der Quelle; Geschwister in anderer Richtung
+/// zählen nicht.
+#[test]
+fn sibling_distance_uses_source_scale_and_direction() {
+    use planora_app::drawing_state::estimate_view_size;
+    let (mut st, d, front, mut h) = box_front(A3_QUER, BIG);
+    section_tool::set_scale(&mut st, d, front, Scale { num: 1, den: 2 }).unwrap();
+    let dist =
+        |st: &AppState, v: ViewId| match st.document.drawing(d).unwrap().view(v).unwrap().placement
+        {
+            Placement::Aligned { distance } => distance,
+            Placement::Free { .. } => panic!("nicht ausgerichtet"),
+        };
+    let a = cut(&mut st, &mut h, d, front, 10.0);
+    let b = cut(&mut st, &mut h, d, front, 40.0);
+    let ext = estimate_view_size(&st.bodies, ViewKind::Top).1;
+    let expected = dist(&st, a) + ext * 0.5 + planora_drawing::GAP_MM;
+    assert!(
+        near(dist(&st, b), expected, 1e-9),
+        "{} gegen {expected}",
+        dist(&st, b)
+    );
+    // Ein weit entferntes Geschwister in anderer Richtung (Links, waagerecht) zählt nicht.
+    let side = section_tool::create(&mut st, d, front, false, 20.0).unwrap();
+    st.document
+        .update_drawing(d, |dr| {
+            if let Some(v) = dr.views.iter_mut().find(|v| v.id == side) {
+                v.placement = Placement::Aligned { distance: 500.0 };
+            }
+        })
+        .unwrap();
+    let c = section_tool::create(&mut st, d, front, true, 50.0).unwrap();
+    let expected = dist(&st, b) + ext * 0.5 + planora_drawing::GAP_MM;
+    assert!(
+        near(dist(&st, c), expected, 1e-9),
+        "{} gegen {expected}",
+        dist(&st, c)
+    );
+}
+
+/// Esc im Textfeld bricht weder die Auswahl noch sonst etwas ab.
+#[test]
+fn escape_while_typing_keeps_the_selection() {
+    let (mut st, d, front, mut h) = box_front(A3_QUER, BIG);
+    let sec = cut(&mut st, &mut h, d, front, 30.0);
+    st.drawing_ui.selected_view = Some(sec);
+    let shot = h.idle(&mut st);
+    let l = shot.find("Schnittposition (mm)").rect;
+    h.click(&mut st, pos2(l.left() + 20.0, l.bottom() + 17.0));
+    let e0 = st.document.edit_count();
+    h.frame(&mut st, vec![Event::Text("9".into())]);
+    h.key(&mut st, Key::Escape);
+    assert_eq!(st.drawing_ui.selected_view, Some(sec), "Auswahl bleibt");
+    assert_eq!(st.document.edit_count(), e0, "Esc verwirft die Eingabe");
+    let offset = st
+        .document
+        .drawing(d)
+        .unwrap()
+        .view(sec)
+        .unwrap()
+        .section
+        .unwrap()
+        .offset;
+    assert_eq!(offset, 30.0);
+    // Ohne Fokus im Feld hebt Esc die Auswahl auf.
+    h.key(&mut st, Key::Escape);
+    assert_eq!(st.drawing_ui.selected_view, None);
+}
+
+/// Fangweite für die Schnittlinie: 5 px treffen, 12 px nicht.
+#[test]
+fn section_line_pick_radius() {
+    let (mut st, d, front, mut h) = box_front(A3_QUER, BIG);
+    let sec = cut(&mut st, &mut h, d, front, 30.0);
+    h.idle(&mut st);
+    let dr = drawing(&st, d);
+    let model = st.document.model_edit_count();
+    let owned = st.drawing_ui.results_for(&dr, model);
+    let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, l)| (*k, l.as_ref())).collect();
+    let (_, a, b) = section_tool::section_lines(&dr, &refs)[0];
+    let m = h.screen((a + b) * 0.5);
+    st.drawing_ui.selected_view = None;
+    h.click(&mut st, m + vec2(0.0, 5.0));
+    assert_eq!(st.drawing_ui.selected_view, Some(sec), "5 px treffen");
+    st.drawing_ui.selected_view = None;
+    h.click(&mut st, m + vec2(0.0, 12.0));
+    assert_eq!(
+        st.drawing_ui.selected_view,
+        Some(front),
+        "12 px treffen nicht"
+    );
+}
+
+/// Die Vorschau zeigt die Pfeile in Blickrichtung: waagerechte Linie nach unten, senkrechte nach
+/// rechts; die Pfeile zeigen gegen die Blickrichtung.
+#[test]
+fn preview_arrows_point_the_way() {
+    let (mut st, d, front, mut h) = box_front(A3_QUER, BIG);
+    let ((x0, y0), (x1, _)) = bbox(&st, d, front);
+    let k = f64::from(h.layout().px_per_mm);
+    let arrows = |marks: &[Mark]| {
+        marks
+            .iter()
+            .filter_map(|m| match m {
+                Mark::Arrow { tip, dir, .. } => Some((*tip, *dir)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    st.section_tool.set_active(true);
+    h.idle(&mut st);
+    click_v(&mut h, &mut st, d, front, (x0 + 5.0, y0 + 15.0));
+    let at = pt(&st, d, front, (x1 - 5.0, y0 + 15.0));
+    let marks = section_tool::preview(&st, d, at, k);
+    let line_y = pt(&st, d, front, (x0, y0 + 15.0)).y;
+    let list = arrows(&marks);
+    assert_eq!(list.len(), 2);
+    for (tip, dir) in list {
+        assert_eq!(
+            dir,
+            DVec2::new(0.0, 1.0),
+            "zeigt gegen die Blickrichtung (nach unten)"
+        );
+        assert!(tip.y < line_y, "Spitze liegt unter der Linie");
+    }
+    // Senkrecht: Blick nach rechts, Pfeile zeigen nach links.
+    st.section_tool.cancel();
+    click_v(&mut h, &mut st, d, front, (x0 + 10.0, y0 + 10.0));
+    let at = pt(&st, d, front, (x0 + 10.0, y0 + 40.0));
+    let marks = section_tool::preview(&st, d, at, k);
+    let line_x = pt(&st, d, front, (x0 + 10.0, y0)).x;
+    let list = arrows(&marks);
+    assert_eq!(list.len(), 2);
+    for (tip, dir) in list {
+        assert_eq!(dir, DVec2::new(-1.0, 0.0));
+        assert!(tip.x > line_x, "Spitze liegt rechts der Linie");
+    }
+}
+
+/// Rückfrage beim Löschen einer Schnittansicht mit Maßen: einfacher Satz ohne Komma vor „und“.
+#[test]
+fn delete_question_with_dimensions_reads_plainly() {
+    use planora_drawing::dimension::{
+        DimId, DimKind, DimSpec, GeoRef, GeoRefData, TagData, Tolerance as DimTolerance,
+    };
+    let (mut st, d, front, mut h) = box_front(A3_QUER, BIG);
+    let sec = cut(&mut st, &mut h, d, front, 30.0);
+    for _ in 0..2 {
+        let spec = DimSpec {
+            id: DimId(0),
+            view: sec,
+            kind: DimKind::Diameter,
+            refs: vec![GeoRef::Face(GeoRefData::Face(TagData {
+                origin: 1,
+                role: "Mantel".into(),
+                hint: DVec3::ZERO,
+            }))],
+            offset: 10.0,
+            angle: 45.0,
+            text_shift: (0.0, 0.0),
+            tolerance: DimTolerance::None,
+            decimals: 1,
+            text_override: None,
+            chain: None,
+            suggested: false,
+        };
+        st.document.add_dimension(d, spec).unwrap();
+    }
+    drawing_browser::request_delete_view(&mut st, d, sec);
+    let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
+    assert_eq!(
+        plan.text,
+        "Die Schnittansicht „Schnitt A\u{2013}A“ wird gelöscht, mit ihr die Schnittlinie in „Vorne“ und 2 Maße werden mit gelöscht."
+    );
 }
 
 // (e) -----------------------------------------------------------------------------------------

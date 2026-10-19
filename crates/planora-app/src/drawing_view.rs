@@ -1436,7 +1436,11 @@ fn tool_field(
                             crate::sheet_dialog::BUTTON,
                             crate::sheet_dialog::BUTTON_TIP
                         ))
-                        .on_disabled_hover_text(crate::drawing_browser::READ_ONLY_HINT)
+                        .on_disabled_hover_text(format!(
+                            "{}: {}",
+                            crate::sheet_dialog::BUTTON,
+                            crate::drawing_browser::READ_ONLY_HINT
+                        ))
                         .clicked()
                     {
                         action = Some(Action::SheetInfo);
