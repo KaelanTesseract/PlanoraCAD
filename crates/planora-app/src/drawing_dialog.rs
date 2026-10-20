@@ -121,6 +121,10 @@ impl NewDrawingDialog {
         }
         let sheet = self.sheet();
         let had_project = state.document.project_info().is_some();
+        // Stand davor: Schlägt die Ansicht fehl, kommt er ganz zurück, auch der Zähler der
+        // Zeichnungskennungen. So bleibt das Dokument inhaltsgleich und Rückgängig sieht keinen
+        // Schritt.
+        let before = state.document.snapshot();
         let id = state
             .document
             .add_drawing_stamped(&self.name, sheet, self.projection, &Stamp::now())
@@ -138,10 +142,13 @@ impl NewDrawingDialog {
             .document
             .add_view(id, self.base, self.scale, placement, None)
         {
-            // Alles zurück, auch die Projektangaben, die das Anlegen miterzeugt hat.
-            let _ = state.document.delete_drawing(id);
-            if !had_project {
-                state.document.clear_project_info();
+            // Alles zurück, auch die Projektangaben, die das Anlegen miterzeugt hat (gleiches
+            // Modell: nur Zeichnungen und Angaben werden ersetzt, nichts wird neu gerechnet).
+            if state.document.restore(before).is_err() {
+                let _ = state.document.delete_drawing(id);
+                if !had_project {
+                    state.document.clear_project_info();
+                }
             }
             return Err(e.to_string());
         }

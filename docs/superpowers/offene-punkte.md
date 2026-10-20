@@ -45,7 +45,7 @@ Stand: 2026-10-09. Bewusst offen gelassen; Fehlerfälle liefern einen benannten 
 **Oberfläche**
 - Beim Ziehen am Feld „Position“ wird der Körper in jedem Bild neu vernetzt (später das Netz nur verschieben).
 - „Position“ zeigt die untere Ecke der Hülle des Netzes, nicht einen Bezugspunkt des Körpers.
-- Kein Rückgängig; ein Ergebnis ersetzt beide Ausgangskörper.
+- Ein Ergebnis ersetzt beide Ausgangskörper. (Damals: kein Rückgängig; seit dem Teilprojekt „Rückgängig und Wiederholen“ holt ein Rückgängig beide Ausgangskörper zurück.)
 - Der Dialog „Boolesche Operation“ merkt sich die Körper als Listenplatz; wird ein Körper gelöscht, während der Dialog offen ist, zeigt er auf einen anderen.
 
 ## Erledigt in Teilprojekt 4
@@ -66,7 +66,7 @@ Stand: 2026-10-10 (nach der Abschlusswelle). Bewusst offen gelassen; Fehlerfäll
 - Skizzen nur auf den Grundebenen und auf ebenen Körperflächen; die Ebene einer Skizze lässt sich nachträglich nicht verschieben.
 - Körperkanten werden nur einmalig kopiert (Geraden; Kreise und Bögen in parallelen Ebenen; ganze Kreise und Ellipsen auch schräg, dann als Ellipse). Schräge Bögen und Ellipsenbögen werden abgelehnt. (Seit Teilprojekt 5 folgen die Kopien der Kante, solange sie ihre Art behält.)
 - (Erledigt in Teilprojekt 5:) Körper aus Skizzen rechnen sich bei Änderung der Skizze neu; siehe Abschnitt „Nach Teilprojekt 5“.
-- Kein Rückgängig, kein Speichern/Laden.
+- (Damals: kein Rückgängig, kein Speichern/Laden. Beides gibt es inzwischen, siehe Teilprojekt 6 und „Teilprojekt: Rückgängig und Wiederholen“.)
 - Mehrdeutige Lagen werden vom nächstgelegenen Zustand entschieden: Der Winkel-Rest ist auch bei θ + π null (gespiegelte Lösung), ebenso bei `EllipseAngle`; es gibt keine Auswahl der Lösung.
 - Maße nur als Zahl; keine Gleichungen, Parameter oder Ausdrücke.
 - Konstruktionsgeometrie nur über den Umschalter „Konstruktion umschalten“ (kein eigenes Werkzeug).
@@ -115,7 +115,7 @@ Stand: 2026-10-10 (nach der Abschlusswelle). Bewusst offen gelassen; Fehlerfäll
 Stand: 2026-10-10. Skizzen, Extrusionen, Drehungen, Boolesche Operationen und Verschiebungen sind jetzt Features in einer Zeitleiste; sie rechnen sich neu, wenn ein früheres Feature geändert wird. Fehler werden an dem Feature gemeldet, das sie verursacht; die übrigen Features bleiben benutzbar.
 
 **Funktionsumfang (Grenzen)**
-- Kein Speichern und Laden, kein Rückgängig, keine benannten Parameter oder Gleichungen, keine Muster- oder Spiegel-Features.
+- (Damals auch: kein Speichern und Laden, kein Rückgängig; beides gibt es inzwischen.) Keine benannten Parameter oder Gleichungen, keine Muster- oder Spiegel-Features.
 - Der Rückrollmarker lässt sich nur per Menü setzen, nicht mit der Maus ziehen.
 - Die Ebene einer Skizze lässt sich nachträglich nicht ändern. Ein Körper lässt sich nicht vor die Skizze „projizieren“, die ihn braucht.
 - Die festen Beispielprofile sind entfernt; Profile kommen nur noch aus Skizzen.
@@ -156,7 +156,7 @@ Stand: 2026-10-10. Skizzen, Extrusionen, Drehungen, Boolesche Operationen und Ve
 
 **Aktualisierung früherer Abschnitte**
 - „Körper aus Skizzen sind Momentaufnahmen“ und „Keine lebende Verknüpfung“ gelten nicht mehr: Skizzen sind Features, Körper und Kantenkopien folgen Änderungen (Grenzen oben).
-- „Kein Rückgängig“ und „Kein Speichern/Laden“ gelten weiter.
+- „Kein Speichern/Laden“ galt damals weiter (seit Teilprojekt 6 erledigt); „Kein Rückgängig“ ebenfalls (seit dem Teilprojekt „Rückgängig und Wiederholen“ erledigt).
 
 ## Teilprojekt 6 – Speichern und Projekte
 Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen mit Zweigen verwalten und in mehreren Tabs öffnen; es gibt eine Autosicherung. Spec: `specs/2026-10-10-speichern-und-laden-design.md` (Abschnitt 11 listet, was bei der Umsetzung anders wurde).
@@ -203,7 +203,7 @@ Stand: 2026-10-11. Dokumente lassen sich in Projekten speichern, als Versionen m
 - `PlanoraApp::logic` selbst (die drei Zeilen Verdrahtung des Schließablaufs) ist nicht ohne Grafikkarte testbar; getestet ist `handle_close_request`.
 
 **Aktualisierung früherer Abschnitte**
-- „Kein Speichern und Laden“ in den Abschnitten zu den Teilprojekten 1–5 gilt nicht mehr. „Kein Rückgängig“ gilt weiter.
+- „Kein Speichern und Laden“ in den Abschnitten zu den Teilprojekten 1–5 gilt nicht mehr. „Kein Rückgängig“ galt damals weiter und gilt seit dem Teilprojekt „Rückgängig und Wiederholen“ nicht mehr.
 
 ## Teilprojekt 7 – NURBS (Freiformkurven)
 Stand: 2026-10-12. Ellipsen und Splines aus Skizzen werden zu Körpern mit Freiformflächen; Boolesche Operationen gehen auch damit. Spec: `specs/2026-10-11-nurbs-design.md` (Abschnitt 13 listet, was bei der Umsetzung anders wurde). Zahlen in Millimetern.
@@ -558,7 +558,7 @@ Stand: 2026-10-16. Zeichnungen bekommen Maße (waagerecht, senkrecht, schräg, D
 *Oberfläche*
 - Die Maße werden nach einer Modelländerung im Oberflächenfaden aufgelöst (billig, bei 2000 Maßen aber spürbar); beim Ziehen werden die Markierungen je Bild neu berechnet, die Vorschau des Werkzeugs je Bild ohne Zwischenspeicher.
 - Das Werkzeugfeld des Zeichnungsbereichs (früher: Werkzeugleiste) hat immer zwei Zeilen, damit die Fläche beim Wählen einer Ansicht nicht springt. Seit Etappe C schwebt es als Feld über dem Blatt; die Zeilen sind anders gruppiert (siehe „Teilprojekt 13 – Etappe C“).
-- Werkzeug: Ein Klick auf den Umriss eines Zylinders misst in linearen Maßen bis zur Achse (Hinweis erscheint). Die Richtung einer Kette folgt automatisch dem größeren Wert; bei fast diagonalen Punkten kann sie kippen. Esc setzt eine Kette, sonst bricht es ab; Doppelklick wirkt nur bei Ketten. Scheitert eine Kette in der Mitte, bleiben die schon gesetzten Maße. Ein Maß wird nahe Ecken vor den Ansichtskanten getroffen; der Abstand 0 zählt als positiv; der kleinste Abstand beim Ziehen ist 1 mm (die Seite wechselt man derzeit nicht; ein Eingabefeld für den Abstand folgt). Zieht man die Maßlinie eines Glieds einer Kette oder von Bezugsmaßen, wandert die ganze Gruppe um dasselbe Stück mit (Text und Führungslinien ziehen weiter einzeln). Das Ziehen schreibt je Bild eine Änderung, das Rückgängigmachen einer Kette sind n Schritte (es gibt noch kein Rückgängig).
+- Werkzeug: Ein Klick auf den Umriss eines Zylinders misst in linearen Maßen bis zur Achse (Hinweis erscheint). Die Richtung einer Kette folgt automatisch dem größeren Wert; bei fast diagonalen Punkten kann sie kippen. Esc setzt eine Kette, sonst bricht es ab; Doppelklick wirkt nur bei Ketten. Scheitert eine Kette in der Mitte, bleiben die schon gesetzten Maße. Ein Maß wird nahe Ecken vor den Ansichtskanten getroffen; der Abstand 0 zählt als positiv; der kleinste Abstand beim Ziehen ist 1 mm (die Seite wechselt man derzeit nicht; ein Eingabefeld für den Abstand folgt). Zieht man die Maßlinie eines Glieds einer Kette oder von Bezugsmaßen, wandert die ganze Gruppe um dasselbe Stück mit (Text und Führungslinien ziehen weiter einzeln). Das Ziehen schreibt je Bild eine Änderung, damals gab es noch kein Rückgängig. Heute ist das Ziehen ein Schritt; was in einem Bild geschieht, ist ein Schritt, eine Kette wird nicht gesondert zusammengefasst.
 - Die Meldung von „Maße vorschlagen“ verschwindet auch bei anderen Änderungen der Zeichnung. Bei noch nicht berechneter Ansicht fehlt ein eigener Hinweis.
 - Fenster „Maß bearbeiten“: Eigener Text und Passung werden am Rand gekürzt, nur Leerzeichen gilt als „kein Text“; eine obere Abweichung kleiner als die untere und eine negative symmetrische Abweichung lehnt das Fenster rot ab (die Dokumentprüfung und der Dateileser prüfen das nicht, ältere oder veränderte Dateien laden also weiter). Zeilen zweier Maße mit gleichem Text unterscheiden sich nur durch Lage und Tooltip; Gruppenzeilen im Browser haben keine Wirkung; die Symbole sind von Hand gezeichnet und nicht im Bild geprüft; die Anzeige im Hauptfenster (`app.rs`) hat keinen Test.
 - Export: Genannt wird nur das erste verlorene Maß. Der Satz endet mit „Bitte das Maß löschen und neu setzen.“, weil das Fenster „Maß bearbeiten“ keinen Bezug neu verknüpfen kann (früher „Bitte ändern oder löschen.“). Das DXF-Ergebnis kann scheitern (Textlänge), während SVG gelingt.
@@ -583,7 +583,7 @@ Stand: 2026-10-16. Zeichnungen bekommen Maße (waagerecht, senkrecht, schräg, D
   2. Maße nach Modelländerungen im Hintergrund auflösen statt im Oberflächenfaden; Zwischenspeicher für Marken und Vorschau beim Ziehen. Prüfpunkte großer Flächen über mehrere Klicks des Werkzeugs hinweg merken (heute je Klick neu, siehe Nachbesserung).
 - *Mittel*
   3. Mittellinien an den Ansichtsrand begrenzen (Spec §3.4); Überladung durch Ausrundungsachsen prüfen.
-  4. Rückgängig/Wiederholen für Maße, auch als ein Schritt je Ziehen und je Kette.
+  4. ~~Rückgängig/Wiederholen für Maße, auch als ein Schritt je Ziehen und je Kette.~~ Erledigt im Teilprojekt „Rückgängig und Wiederholen“: Maße gehören zum Dokument und sind rücknehmbar, ein Ziehen ist ein Schritt (eine Kette nicht gesondert zusammengefasst).
   5. Textbreite aus der echten Schrift messen statt zu schätzen.
   6. Passungstabellen nach ISO 286, echte DXF-Maße, Maße an Ellipsen, Splines und Freiformflächen.
   7. Richtung einer Kette wählbar; Seite der Maßlinie beim Ziehen wechseln; Bezug eines roten Maßes im Fenster „Maß bearbeiten“ neu wählen.
@@ -1311,3 +1311,98 @@ Proben liegen in `D:\Testumgebung\zeichnung-proben\schnitt` (Namen: `Schnitt_<Pr
 16. Schnitt durch die Mitte einer größeren Bohrung legen und die Schnittposition danach auf wenige Zehntausendstel daneben ändern (zum Beispiel 150,0003): Der Schnitt gelingt jedes Mal, die Schraffur lässt die Bohrung frei; bei der winzigen Abweichung steht im Ansichtsfeld der Hinweis, dass die Ebene um 0,001 mm verschoben wurde. Eine Bohrung mit gerundeter Kante der Länge nach schneiden: Es kommt die Meldung „… lässt sich der Schnitt nicht berechnen.“, die Ausgabe ist gesperrt.
 17. Hell und Dunkel, Fenster 1100 × 700 und 800 × 600: Der Knopf „Schnitt“ passt in die Zeile, „Blattangaben“ zeigt nur sein Symbol mit Hinweis, nichts ragt heraus.
 18. SVG, DXF und PDF aus der Oberfläche exportieren und mit den Proben vergleichen.
+
+## Teilprojekt: Rückgängig und Wiederholen
+
+### Stand und Geliefertes
+Stand: 2026-10-20 (Zweig `feature/rueckgaengig`, Basis `master` @ `6685f3e`). Jede Änderung am Dokument lässt sich rückgängig machen und wiederholen, je Tab, mit dem Namen der Aktion.
+
+- **Bedienung:** Strg+Z (Rückgängig), Strg+Umschalt+Z und Strg+Y (Wiederholen); im Menü „Bearbeiten“ ganz oben „Rückgängig: <Aktion>“ und „Wiederholen: <Aktion>“ mit dem Kürzel; **zwei Symbolknöpfe im oberen Feld** gleich neben den Menüs (in 3D, Zeichnung und Skizze). Nicht im Befehlsfeld unten, siehe Abweichungen.
+- **Verlauf je Tab:** höchstens 100 Schritte und etwa 200 MB (geschätzt, Netze zählen nicht), die ältesten fallen still heraus. Eine neue Aktion nach Rückgängig leert die Wiederholen-Liste.
+- **Schritte:** Ein Schritt ist, was zwischen zwei Bildern ohne gedrückte Maustaste und ohne Tippen im Feld geschieht. Ziehen (Position, Ansicht, Maßlinie, Positionsnummer, Skizzenpunkt) und Tippen einer Zahl sind je ein Schritt; „Löschen mit Folgen“ ist ein Schritt. Gibt es keinen Unterschied zum Stand davor, entsteht kein Schritt.
+- **Skizze:** Eigener Skizzenverlauf, solange die Skizze offen ist; das Dokument ruht. Der erste Klick eines Werkzeugs ist kein Schritt; hat ein Werkzeug einen offenen Punkt, nimmt das erste Rückgängig nur diesen Punkt zurück. „Skizze beenden“ ist danach ein Dokumentschritt („Skizze bearbeiten“), der die ganze Skizze zurücknimmt.
+- **Punkt „ungespeichert“:** folgt dem Verlauf (Schrittnummern, nicht dem Änderungszähler). Rückgängig zum gespeicherten Stand: kein Punkt; davon weg: Punkt. Rückgängig geht auch nach dem Speichern. Ein gespeicherter Stand, der aus dem Verlauf herausgefallen ist, bleibt „ungespeichert“ bis zum nächsten Speichern.
+- **Autosicherung:** Ist ein Tab durch Rückgängig wieder gleich dem gespeicherten Stand, wird seine eigene Autosicherung gelöscht (auch beim Schließen), sonst bot das Programm sie beim Öffnen als überholt an. Wiederholen schreibt sie neu.
+- **Auswahl nach Rückgängig:** Der gewählte Körper bleibt gewählt und folgt dem Körper durch Verschieben, Verrunden und Boolesche Operationen (vorwärts und rückwärts); gibt es ihn nicht mehr, wird er abgewählt. Flächen- und Kantenwahl und Hervorhebung werden beim vollen Zurückladen geleert; bei Schritten nur an der Zeichnung bleiben sie. Kamera und Hell/Dunkel bleiben immer.
+- **Fenster:** Nach jedem gelungenen Rückgängig/Wiederholen schließen alle offenen Fenster und Rückfragen des Tabs (sie halten Kennungen des alten Standes). Ein Export, der gerade schreibt, wird nicht geschlossen (dann ist Rückgängig gesperrt).
+- **Tastenschutz:** Strg+Z und Strg+Y wirken nicht, wenn getippt wird (dort gilt das Rückgängig des Feldes), bei offenem Fenster, bei offener Rückfrage, im Fenster „Über“, bei offenen Rückfragen der Felder Projekte und Versionen, bei gedrückter Maustaste und während ein Export schreibt. Gesperrt heißt: die Taste bleibt unverbraucht, es gibt keine Meldung. Menü und Knöpfe gehen auch bei offenem Fenster und schließen es; ungespeicherte Eingaben darin gehen verloren. In alten Versionen (nur lesbar), bei offener Rückfrage und während ein Export schreibt, sind sie gesperrt, mit Grund im Hinweis.
+- **Hinweis in der Statuszeile:** `AppState::info` (neu, getrennt von `message`) zeigt „Rückgängig: <Aktion>“ bzw. „Wiederholen: <Aktion>“ in der normalen Textfarbe (nicht in der Fehlerfarbe). Er bleibt stehen, bis ein neuer Schritt entsteht oder eine Meldung kommt; in der Skizze steht er hinter „Skizzen-Modus: <Name> ·“. Eine Meldung hat Vorrang.
+- **Namen** der Schritte (`planora-app/src/undo_labels.rs`) werden aus dem Unterschied von vorher und nachher abgeleitet, nicht an den Aufrufstellen gesetzt; die Reihenfolge der Regeln steht im Quelltext. Ohne passende Regel heißt der Schritt „Ändern“. Netz-Körper: „Netz importieren“, bei Lageänderung „Verschieben“.
+- **Dateien:** neu `history.rs`, `undo_labels.rs` (beide `planora-app`); `Document::restore`, `Snapshot::same_content/same_model`, `RestoreKind`, `PartialEq` für Skizzen (`planora-feature`); `AppState::restore_document`; `DocTab` mit Verlauf. Kernel, Netz, STEP, Austausch, Projekt, Skizze, Zeichnung, Render, Mathe, Abhängigkeiten, `deny.toml` und das Dateiformat sind unverändert.
+
+### Festlegungen R1 bis R10 und Abweichungen
+Die Festlegungen stehen im Kopf des Plans und kurz in der Spec §10.
+- **R1 Zähler steigen immer:** `Document::restore` setzt `edits` und `drawing_edits` nie zurück (voller Weg: beide alt + 1; Zeichnungsweg: `drawing_edits` + 1). Feature-Versionen und Netz-Kennungen steigen ebenfalls weiter (über den Auftrag hinaus: sonst träfe ein offener Dialog eine alte Version zufällig wieder, und eine Netz-Kennung würde nach Rückgängig eines Imports neu vergeben).
+- **R2 Zwei Wege:** Gleichen sich Features, Marker, Nummern und Netze, werden nur Zeichnungen, Projektangaben und Stücklistentexte ersetzt (keine Neuberechnung, Ansichtsergebnisse bleiben). Sonst wird wie beim Laden neu gerechnet; bereits geprüfte Netze (derselbe `Arc`) nicht noch einmal. Nach dem vollen Weg sind alle Körper neue Objekte.
+- **R3 Schritt = Bild vorher**, kein Schritt bei inhaltsgleichem Bild. Ein Dokument mit NaN-Parameter ist nie gleich mit sich selbst; der Zähler entscheidet zuerst, es entstehen keine Scheinschritte je Bild (Grenze: eine echte Zähleränderung ohne Inhaltsänderung gibt dort einen überflüssigen Schritt).
+- **R4 Geste:** offen, solange eine Maustaste gedrückt ist oder ein Feld die Tastatur hat.
+- **R5 Skizzen** gelten als gleich bei gleichem Stand (`sketch.revision()`), gleicher Ebene, gleichem Namen und gleichen Kopien; ungleicher Stand bei gleichem Inhalt gilt als geändert.
+- **R6 Namen** aus dem Unterschied; **R7 Gespeichert-Marke** an Schrittnummern; **R8 Sperren** wie oben; **R9 Namenszähler** werden aus den Namen neu gebildet (nach Rückgängig von „Quader 3“ heißt der nächste wieder „Quader 3“); **R10 Skizze** wie oben.
+- **Abweichung Knöpfe:** Der Plan sah die zwei Knöpfe im Befehlsfeld unten vor. Dort fehlten bei 1100 × 700 etwa 36 px (der Knopf „Fase …“ ragte heraus, der Test `every_button_is_reachable_at_narrow_widths` war rot). Auf Entscheidung des Nutzers stehen sie im **oberen Feld** neben den Menüs. Das untere Feld und seine Tests sind unverändert.
+- **Abweichung Tab-Leiste (Option A):** Mit den Knöpfen bleiben der Tab-Leiste bei 1100 Pixel nur etwa 100 px. Das Symbol „Neu“ (+) steht deshalb fest hinter der rollenden Leiste und ist immer sichtbar und klickbar; ein Trennstrich hinter den Knöpfen entfällt. Bei 1100 Pixel rollt die Leiste schon ab einem Tab; Name und Schließkreuz des aktiven Tabs sind **ab 1150 Pixel** in allen Fällen ganz sichtbar (getestet mit 1 bis 9 Tabs, geändert und ungeändert). Bei 1140 Pixel gilt das für ungeänderte Tabs; bei einem geänderten aktiven Tab ragt das Schließkreuz bei 4, 7, 8 oder 9 Tabs 0,1 bis 0,6 px hinaus (Breite der Tabnummer). Bei 1130 Pixel gilt es für ungeänderte Tabs (gemessen mit 1, 2 und 5 Tabs). Darunter schließt Strg+W den aktiven Tab (getestet). Bei 800 × 600 steht das Feld wie bisher über den Spalten, dort passt alles.
+- **Abweichung `drawing_dialog.rs`:** Scheitert die erste Ansicht einer neuen Zeichnung, stellt `NewDrawingDialog::create` den Stand davor mit `Document::restore(before)` ganz wieder her (statt nur die Zeichnung zu entfernen). Vorher blieb der Zeichnungszähler erhöht, das Bild war ungleich, und es entstand ein Scheinschritt ohne sichtbare Änderung.
+- **Abweichung Skizze ohne `Tracker`:** Der Skizzenverlauf hat keinen `Tracker`; er vergleicht den Entwurf je Bild mit dem letzten Eintrag über den Skizzenstand (der Aufschub durch ein offenes Werkzeug verträgt keinen verbrauchenden Beobachter). Zusätzlich geändert gegenüber den Dateilisten der Aufgaben: `history.rs` (`sketch_bytes`), `sketch_panel.rs` (Maßfeld schließt nach einem Sprung), `undo_labels.rs` (Name ohne die offenen Punkte).
+- **Zeichnungskennungen werden nach Rückgängig wiederverwendet:** Nimmt Rückgängig eine Zeichnung zurück und wird danach eine neue angelegt, bekommt sie dieselbe Kennung. Die Oberfläche vergisst Auswahl, Zoom und Verschiebung der fehlenden Zeichnung (`forget_missing`), die neue beginnt frisch.
+- **Menü Bearbeiten** ist in alten Versionen als Ganzes ausgegraut (bestehende Logik); der Hinweis des Eintrags ist dort nicht erreichbar.
+- **Strg+Alt+Z** (und Strg+Alt+Y) lösen ebenfalls aus. Das ist bei allen Kürzeln des Programms so (egui vergleicht nur die logischen Tasten); auf QWERTZ gibt es keinen Zeichenkonflikt. Angenommen.
+- Strg+Z in dem Bild, in dem ein Fenster schließt, bleibt ohne Wirkung; bei offenem Menü wirkt Strg+Z. Jedes fokussierte Widget (auch ein Knopf nach Tab) sperrt über „Tippen“. Mehrere Tastenereignisse in einem Bild zählen als ein Schritt.
+
+### Grenzen
+- Der Verlauf liegt nur im Speicher: nicht in der Datei, nicht über den Programmstart, nicht zwischen Tabs. Das Dateiformat ist unverändert.
+- **Namen aus dem Unterschied, mitunter allgemein:** Fallen mehrere Änderungen in ein Bild, gilt die feste Reihenfolge der Regeln, selten heißt der Schritt „Ändern“. Bekannte Eigenheiten: Ist in einem Bild ein Feature neu und ein anderes gelöscht, heißt der Schritt nach dem neuen; bei mehreren geänderten Features gilt das erste; ein geänderter Maßwert in der Skizze heißt „Skizze ändern“ (es gibt keine Regel „Maß ändern“, auch nicht bei offenem Klick); das Spiegeln einer einzelnen Kurve heißt nach der Kurve („Kreis zeichnen“), das mehrerer „Zeichnen“; Maße für Winkel oder Ellipsenachsen zählen als „Maß setzen“.
+- **Nach einem fehlgeschlagenen Zurückladen** fällt dieser Schritt aus dem Verlauf, der nächste Schritt fasst dann zwei Änderungen zusammen. Das Dokument bleibt dabei unverändert, es kommt die Meldung „Rückgängig ist nicht möglich.“ (bzw. „Wiederholen ist nicht möglich.“). Das Programm erzeugt so einen Fehler nicht von selbst; er ist nur über einen unbrauchbaren Eintrag im Test erreichbar.
+- **Skizzen mit gleichem Inhalt, aber neuem Stand** gelten als geändert (höchstens ein überflüssiger Schritt, etwa „Skizze ändern“ ohne sichtbaren Unterschied nach einem Lösen, das Werte nur bitweise verschiebt).
+- Flächen- und Kantenwahl sind nach einem vollen Zurückladen leer; der gewählte Körper wird nur über Verschieben, Verrunden und Boolesche Operationen mitgeführt. Ein zurückgenommener Quader verliert die Wahl.
+- Die Zeichnungsansichten rechnen nach einem Schritt im Modell neu (nicht gemessen). Das Zurückladen läuft auf der Oberfläche; ein Fortschrittsbalken ist nicht nötig (siehe Zahlen).
+- Das Zahlenfeld „Maß“ im Skizzenfeld wird nach einem Sprung geschlossen. Tippen sperrt Strg+Z ohnehin.
+- **Speichergrenze geschätzt:** Die 200 MB zählen Netze nicht mit (geteilte `Arc`). Netze, die nur noch Bilder im Verlauf festhalten (etwa nach mehrmaligem Importieren und Löschen großer Netz-Körper), werden nicht gezählt; der tatsächliche Speicher kann die Grenze dann deutlich übersteigen. Später denkbar: Netze zählen, die nicht mehr im Dokument sind.
+- **Hinweis je Tab:** Der Hinweis „Rückgängig: …“ (`AppState::info`) gehört zum Tab. Nach einem Tabwechsel und zurück steht ein alter Hinweis noch da, bis in diesem Tab der nächste Schritt entsteht (Regel „bis zum nächsten Schritt“). Landet Rückgängig oder Wiederholen auf einem Stand mit fehlerhaftem Feature, entfällt der Hinweis, und die Statuszeile zeigt den Fehler in der Fehlerfarbe (außer in der offenen Skizze, dort steht die Skizzenzeile vor Feature-Fehlern).
+- **Nur 18,75 px Luft bei 1100 Pixel:** Jede weitere Verbreiterung von Menü oder Knöpfen schiebt das obere Feld über die Seitenspalten (die Tests fangen das).
+- **Offene Ideen für das obere Feld** (nicht umgesetzt): **B** Knöpfe aus der Zeile nehmen (zum Beispiel ins Statusfeld oder an den linken Rand der freien Fläche): gibt der Tab-Leiste 60 px zurück, dann passen Name und × auch bei 1100 für „Unbenannt n ●“. **C** Das Feld bei 1100 über die Seitenspalten rücken lassen (Mindestbreite = Menü + Knöpfe + aktiver Tab + × + „Neu“): verlangt, die Tests `every_button_is_reachable_at_narrow_widths` und `status_stays_readable_with_the_real_bottom_field` zu ändern, nur mit Freigabe. **D** Menüs verkürzen (zum Beispiel einzelne Menüs als Symbol).
+- Die Knöpfe sind 20 × 24 px (schmaler als die 24-px-Symbolknöpfe unten); die Optik ist noch nicht von Hand geprüft.
+- Nicht von Hand im echten Fenster geprüft (offen): alles unter „Handliste“; ausdrücklich, dass der Hinweis in der Statuszeile nach Rückgängig sichtbar bleibt (nicht nur ein Bild lang).
+
+### Zahlen
+- **Zurückladen (Aufgabe 2, Ryzen 9 9950X, Median aus 5 Läufen):** schweres Modell (Platte mit 10 × 10 Bohrungen, Spline-Extrusion, Netz-Körper mit 200 000 Dreiecken, 6 Ansichten mit 2 Schnitten, 30 Maße) im Release-Build **etwa 289 ms** (`from_snapshot` 250 ms + Auffrischen 39 ms; je nach Lauf 230 bis 290 ms); mittleres Modell (37 Features, 4 Ansichten) 235 ms. Das Bild machen (`snapshot()`) kostet 0,0 ms, die Schätzung der Größe 0,00 ms. Im Debug-Build 962 ms (mittel) und 1209 ms (schwer), das betrifft nur Tests. Grenze des Plans war 1 s bzw. 50 ms: eingehalten, das Zurückladen bleibt synchron. Die Zeit entsteht fast ganz in der Neuberechnung der Features; die Netzprüfung ist nebensächlich.
+- **Mutationsproben:** 249 Einträge (einzelne Mutationen) aus den Berichten der Aufgaben 1 bis 10 (`.superpowers/sdd/2026-10-19-rueckgaengig/`, Summenliste in `task-11-report.md`), jede rot außer fünf begründet gleichwertigen (grün, bleiben als Schutz). Dazu 244 Einzelproben in den Reviews.
+- **Platz bei 1100 × 700:** oberes Feld Mindestbreite 525,25 px (ohne Knöpfe 487,25), Platz zwischen den Spalten 544 px, also 18,75 px Luft. Feld 544 = Rand 26 + Menü 319,25 + Knöpfe mit Abständen 60 + Tab-Leiste 100,75 + „Neu“ mit Abstand 38.
+- **Gates (Stand der Abschlussprüfung):** `cargo fmt --all --check` und `cargo clippy --workspace --all-targets -- -D warnings` sauber; `cargo test --workspace -j 2 --no-fail-fast` (Debug): 303 Testläufe, 2932 Tests bestanden, 0 fehlgeschlagen, 40 ausgeschaltet; `cargo deny check`: advisories, bans, licenses und sources ok (nur Hinweise auf doppelte Versionen). Keine neue Abhängigkeit. Geschützte Pfade (`planora-kernel`, `planora-mesh/src`, `planora-step`, `planora-exchange`) bitgleich zu `6685f3e`; `Cargo.toml`, `Cargo.lock`, `deny.toml` ohne Unterschied.
+
+### Handliste für den Nutzer (Prüfung von Hand im echten Fenster, Stand 2026-10-20)
+Release-Build, Fenster zuerst 1400 × 900. Jeweils prüfen: Der Hinweis unten nennt die Aktion, der Punkt am Tab stimmt, nichts ragt heraus. Abhaken:
+
+**A. Körper und Tasten**
+- [ ] 1. Einen Quader anlegen. Strg+Z: Der Quader verschwindet, unten steht „Rückgängig: Quader anlegen“ in normaler Schrift (nicht rot). Strg+Y: er kommt zurück („Wiederholen: Quader anlegen“). Strg+Umschalt+Z tut dasselbe wie Strg+Y. Die Kamera bleibt, wo sie war.
+- [ ] 2. Noch einmal Strg+Z, dann das **Menü Bearbeiten** öffnen: oben „Wiederholen: Quader anlegen“ ist aktiv, „Rückgängig“ ist grau mit dem Hinweis „Es gibt nichts rückgängig zu machen.“ Den Eintrag „Wiederholen“ anklicken. Dann dasselbe mit den **zwei Knöpfen** im oberen Feld neben den Menüs (Hinweis mit Aktionsname und Kürzel).
+- [ ] 3. Quader wählen, im Feld „Position“ X mit der Maus ziehen (oder eine Zahl tippen und Enter): Ein einziges Strg+Z stellt die alte Lage her (nicht in Stücken), Strg+Y die neue. Der Körper bleibt gewählt, das Feld bleibt sichtbar.
+- [ ] 4. Zwei Körper und eine Skizze oder Rundung darauf, dann den ersten Körper mit „Löschen mit Folgen“ löschen: ein Strg+Z bringt alles zurück (gleiche Namen, Körper sichtbar, Zeitleistenmarke wie vorher); Strg+Y löscht wieder alles auf einmal.
+- [ ] 5. Zwei Körper vereinigen: Strg+Z bringt beide Ausgangskörper zurück, Strg+Y das Ergebnis. Eine Kante verrunden: Strg+Z nimmt die Rundung zurück. Ein Feature umbenennen und eins unterdrücken/einblenden: je ein Schritt mit richtigem Namen.
+- [ ] 6. Nach Rückgängig einen neuen Quader anlegen: Er heißt wieder wie der zurückgenommene („Quader 3“, nicht „Quader 4“), „Wiederholen“ ist danach grau.
+
+**B. Skizze**
+- [ ] 7. Skizze auf einer Ebene öffnen, mit dem Linienwerkzeug einen Linienzug aus drei Linien zeichnen. Strg+Z: die letzte Linie verschwindet, das Dokument und der Baum bleiben. Bei offenem ersten Klick (nur ein Punkt gesetzt): das erste Strg+Z nimmt nur den Punkt zurück, das zweite die Linie davor.
+- [ ] 8. Einen Skizzenpunkt mit der Maus ziehen: ein Strg+Z stellt ihn wieder her. Ein Maß setzen und den Wert ändern: Strg+Z (der Schritt heißt „Skizze ändern“, das ist so gewollt).
+- [ ] 9. „Skizze beenden“: Strg+Z nimmt die ganze Skizze auf einmal zurück (nicht Linie für Linie). Die Zeile „Skizzen-Modus: …“ bleibt unten sichtbar, auch nach Rückgängig.
+
+**C. Zeichnung**
+- [ ] 10. Zeichnung anlegen (mit Vorderansicht): Strg+Z nimmt die Zeichnung zurück (der Bereich wechselt auf das Modell), Strg+Y holt sie zurück, das Blatt zeigt sofort den richtigen Stand.
+- [ ] 11. Eine Ansicht verschieben (ziehen), ein Maß anlegen, eine Positionsnummer setzen, einen Schnitt anlegen, Blattangaben ändern: jeweils Strg+Z und Strg+Y. Das Blatt stimmt sofort, keine alte Ansicht, kein Flackern. Das Ziehen einer Ansicht ist ein Schritt.
+
+**D. Speichern und Punkt**
+- [ ] 12. Speichern: kein Punkt am Tab. Eine Änderung: Punkt. Strg+Z: kein Punkt (gleicher Stand wie gespeichert). Strg+Y: Punkt. Zweimal Strg+Z (hinter den gespeicherten Stand): Punkt. Rückgängig geht nach dem Speichern noch.
+- [ ] 13. Eine Änderung machen, die Autosicherung abwarten, dann zurück bis zum gespeicherten Stand und den Tab schließen: keine Rückfrage, und beim nächsten Öffnen wird keine Wiederherstellung angeboten.
+- [ ] 14. Zwei Tabs mit verschiedenen Dokumenten: Strg+Z wirkt nur im aktiven Tab, jeder Tab hat seinen eigenen Verlauf (das Menü zeigt andere Namen).
+
+**E. Sperren und Fenster**
+- [ ] 15. Ein Zahlenfeld (zum Beispiel „Position“) anklicken, etwas tippen und Strg+Z: Das Feld nimmt seine Eingabe zurück, das Dokument bleibt unverändert. Nach Escape oder einem Klick daneben wirkt Strg+Z auf das Dokument.
+- [ ] 16. Das Fenster „Quader erzeugen“ (oder „Ändern“, „Umbenennen“) offen lassen und Strg+Z drücken: nichts geschieht, das Fenster bleibt. Dann im Menü Bearbeiten „Rückgängig“ wählen: Das Fenster schließt, die Eingabe darin ist weg. Dasselbe mit dem Knopf. Bei der Rückfrage „Löschen mit Folgen“ sind Menü und Knöpfe gesperrt (Hinweis mit Grund).
+- [ ] 17. Mit gedrückter Maustaste (Position ziehen) Strg+Z drücken: wirkt nicht; nach dem Loslassen geht es.
+- [ ] 18. Eine alte Version aus der Versionsliste öffnen (nur lesbar): Menü und Knöpfe sind grau mit Hinweis, die Tasten tun nichts. Beim Export in ein Fenster, solange die Datei geschrieben wird, ist Rückgängig gesperrt.
+
+**F. Aussehen und Fenstergrößen**
+- [ ] 19. Hell und Dunkel: Knopfsymbole gut lesbar, gesperrt gedämpft, beim Darüberfahren heller; der Hinweis unten in normaler Textfarbe, nicht rot.
+- [ ] 20. Fenster 1100 × 700: Die zwei Knöpfe sitzen zwischen Menü und Tab-Leiste, das obere Feld steht zwischen den Seitenspalten und überlappt nichts; das „+“ ist immer sichtbar, auch mit vielen Tabs; die Tab-Leiste rollt, Strg+W schließt den aktiven Tab.
+- [ ] 21. Fenster 800 × 600: Knöpfe, Menü, Tab-Leiste und „+“ sichtbar, nichts abgeschnitten (das Feld steht dort über den Spalten wie bisher).
+- [ ] 22. Fenster ab 1150 Pixel Breite: Name und Schließkreuz des aktiven Tabs ganz zu sehen, auch mit Punkt.
+- [ ] 23. Ein sehr großes Modell (Netz-Körper) und Strg+Z: Das Zurückladen dauert deutlich unter einer Sekunde. Falls nicht, bitte melden (dann kommt eine Fortschrittsanzeige).
+- [ ] 24. Der Hinweis „Rückgängig: …“ unten bleibt stehen, bis der nächste Schritt kommt (nicht nur einen Augenblick), auch nach Mausbewegungen.

@@ -7,8 +7,11 @@ use crate::create_dialog::CreateDialog;
 use crate::drawing_dialog::NewDrawingDialog;
 use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
+use crate::history::{History, Tracker, snapshot_bytes};
 use crate::import_dialog::ImportDialog;
-use crate::state::AppState;
+use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
+use crate::undo_labels::describe_change;
+use planora_feature::Snapshot;
 use planora_project::config::Config;
 use planora_project::docstore::{Autosave, DocStore, DocumentInfo, LockMode, peek, read_version};
 use planora_project::fsutil::validate_name;
@@ -22,6 +25,13 @@ pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
 
 /// Meldung, wenn noch keine Wurzel (Projektordner) gewählt ist.
 const NO_ROOT: &str = "Es ist noch kein Projektordner gewählt.";
+
+/// Grund, warum Rückgängig nicht geht: kein Schritt da.
+pub const NOTHING_TO_UNDO: &str = "Es gibt nichts rückgängig zu machen.";
+/// Grund, warum Wiederholen nicht geht: kein Schritt da.
+pub const NOTHING_TO_REDO: &str = "Es gibt nichts zu wiederholen.";
+/// Grund, warum Rückgängig und Wiederholen nicht gehen: das Export-Fenster schreibt eine Datei.
+pub const EXPORT_WRITING: &str = "Während des Exports ist das nicht möglich.";
 
 pub struct DocTab {
     pub id: u64,
@@ -49,14 +59,23 @@ pub struct DocTab {
     /// Eine vorhandene Autosicherung ließ sich nicht lesen (z. B. von einer neueren
     /// Programmversion). Sie bleibt unangetastet: keine neue Autosicherung, kein Löschen.
     keep_autosave: bool,
-    saved_edits: u64,
+    /// Verlauf für Rückgängig und Wiederholen (Bilder des Dokuments, R3, R7). Die Nummer des
+    /// gespeicherten Stands ersetzt den früheren Zählervergleich für „ungespeichert“.
+    history: History<Snapshot>,
+    /// Erkennt Änderungen am Dokument je Bild und fasst Gesten zusammen (R4).
+    tracker: Tracker,
     autosaved_edits: u64,
+    /// Seit dem letzten Speichern hat dieser Tab eine Autosicherung geschrieben. Ist der Tab
+    /// danach wieder sauber (Rückgängig bis zum gespeicherten Stand), ist sie überholt und wird
+    /// gelöscht ([`DocTab::drop_stale_autosave`]).
+    autosave_written: bool,
     last_autosave: Instant,
 }
 
 impl DocTab {
     fn new(id: u64, name: String, state: AppState) -> DocTab {
         let edits = state.document.edit_count();
+        let (history, tracker) = fresh_history(&state);
         DocTab {
             id,
             state,
@@ -75,18 +94,22 @@ impl DocTab {
             read_only: false,
             pending_autosave: None,
             keep_autosave: false,
-            saved_edits: edits,
+            history,
+            tracker,
             autosaved_edits: edits,
+            autosave_written: false,
             last_autosave: Instant::now(),
         }
     }
 
-    /// Ungespeicherte Änderungen: Zähler weicht ab oder eine Skizze ist offen. Schreibgeschützte
-    /// Ansichten sind nie „geändert“.
+    /// Ungespeicherte Änderungen (R7): eine Skizze ist offen, eine Änderung ist noch kein
+    /// Schritt (auch vor dem ersten Bild danach und während einer Geste), oder der aktuelle
+    /// Schritt ist nicht der gespeicherte. Schreibgeschützte Ansichten sind nie „geändert“.
     pub fn is_dirty(&self) -> bool {
         !self.read_only
-            && (self.state.document.edit_count() != self.saved_edits
-                || self.state.sketch_session.is_some())
+            && (self.state.sketch_session.is_some()
+                || self.tracker.is_pending(self.state.document.edit_count())
+                || !self.history.is_saved())
     }
 
     pub fn title(&self) -> String {
@@ -110,10 +133,299 @@ impl DocTab {
         self.pending_autosave.is_none() && !self.keep_autosave
     }
 
+    /// Der Stand ist gespeichert: offene Änderungen werden zuerst ein Schritt, dann merkt sich
+    /// der Verlauf diesen Schritt als gespeichert (R7). Der Verlauf bleibt erhalten.
     fn mark_clean(&mut self) {
-        self.saved_edits = self.state.document.edit_count();
-        self.autosaved_edits = self.saved_edits;
+        self.observe_history(false);
+        self.history.mark_saved();
+        self.autosaved_edits = self.state.document.edit_count();
+        self.autosave_written = false;
     }
+
+    /// Löscht eine selbst geschriebene Autosicherung, wenn der Tab wieder sauber ist (etwa nach
+    /// Rückgängig bis zum gespeicherten Stand): Sie hielte einen zurückgenommenen Stand fest und
+    /// würde beim nächsten Öffnen angeboten. Der saubere Stand liegt als Version auf der Platte.
+    /// Fremde oder unlesbare Sicherungen (Angebot offen, `keep_autosave`) bleiben.
+    fn drop_stale_autosave(&mut self) {
+        if !self.autosave_written || self.read_only || !self.owns_autosave() || self.is_dirty() {
+            return;
+        }
+        if let Some(store) = &self.store {
+            store.discard_autosave();
+        }
+        self.autosave_written = false;
+        self.autosaved_edits = self.state.document.edit_count();
+    }
+
+    // ---- Rückgängig und Wiederholen --------------------------------------------------
+
+    /// Am Ende eines Bildes (R3, R4): Hat sich das Dokument geändert und läuft keine Geste
+    /// (Maustaste gedrückt, Eingabefeld aktiv) mehr, wird die Änderung ein Schritt – außer das
+    /// neue Bild gleicht dem letzten (etwa „angelegt und wieder entfernt“). Ob sich etwas
+    /// geändert hat, entscheidet zuerst der Änderungszähler (in beide Richtungen, ohne Verlass
+    /// auf Steigen); nur dann entsteht ein Bild. So bildet auch ein Dokument, dessen Bild nie
+    /// sich selbst gleicht (eine Zahl „keine Zahl“), ohne Änderung keine Schritte. Danach die
+    /// offene Skizze in ihrem eigenen Verlauf (R10, [`AppState::observe_sketch`]); das
+    /// Dokument selbst ändert sich während der Skizze kaum (Anlegen im selben Bild, Löschen).
+    ///
+    /// Der Hinweis `state.info` („Rückgängig: …“) endet hier, sobald ein neuer Schritt entsteht
+    /// (im Dokument oder in der Skizze) oder eine Meldung in `state.message` steht.
+    pub fn observe_history(&mut self, gesture: bool) {
+        let steps = |t: &DocTab| {
+            (
+                t.history.current_id(),
+                t.state.sketch_history().map(|h| h.current_id()),
+            )
+        };
+        let before = steps(self);
+        self.observe_document(gesture);
+        self.state.observe_sketch(gesture);
+        if steps(self) != before || self.state.message.is_some() {
+            self.state.info = None;
+        }
+    }
+
+    fn observe_document(&mut self, gesture: bool) {
+        if !self
+            .tracker
+            .observe(self.state.document.edit_count(), gesture)
+        {
+            return;
+        }
+        let after = self.state.snapshot();
+        if after.same_content(self.history.current()) {
+            return;
+        }
+        let label = describe_change(self.history.current(), &after);
+        let bytes = snapshot_bytes(&after);
+        self.history.record(after, bytes, label);
+    }
+
+    /// Eine Änderung, die noch kein Schritt ist und sich vom letzten Schritt unterscheidet (sie
+    /// würde beim nächsten Beobachten einer): das Bild dazu.
+    fn pending_change(&self) -> Option<Snapshot> {
+        if !self.tracker.is_pending(self.state.document.edit_count()) {
+            return None;
+        }
+        let now = self.state.snapshot();
+        (!now.same_content(self.history.current())).then_some(now)
+    }
+
+    /// Gemeinsame Sperren von Rückgängig und Wiederholen: alte Version, Export schreibt.
+    fn history_locked(&self) -> Option<&'static str> {
+        if self.read_only {
+            Some(crate::drawing_browser::READ_ONLY_HINT)
+        } else if self
+            .export_dialog
+            .as_ref()
+            .is_some_and(|d| d.is_writing_file())
+        {
+            Some(EXPORT_WRITING)
+        } else {
+            None
+        }
+    }
+
+    /// Ist eine Skizze offen? Dann wirken Rückgängig und Wiederholen nur auf ihren Verlauf
+    /// (R10), der Dokumentverlauf ruht.
+    fn in_sketch(&self) -> bool {
+        self.state.sketch_session.is_some()
+    }
+
+    /// Warum Rückgängig gerade nicht geht (`None`: es geht).
+    pub fn undo_blocked(&self) -> Option<&'static str> {
+        self.history_locked().or_else(|| {
+            let nothing = if self.in_sketch() {
+                self.state.sketch_undo_label().is_none()
+            } else {
+                self.history.undo_len() == 0 && self.pending_change().is_none()
+            };
+            nothing.then_some(NOTHING_TO_UNDO)
+        })
+    }
+
+    /// Warum Wiederholen gerade nicht geht (`None`: es geht). Eine noch offene Änderung leert
+    /// beim Übernehmen die Wiederholen-Liste; dann gibt es nichts zu wiederholen.
+    pub fn redo_blocked(&self) -> Option<&'static str> {
+        self.history_locked().or_else(|| {
+            let nothing = if self.in_sketch() {
+                self.state.sketch_redo_label().is_none()
+            } else {
+                self.history.redo_len() == 0 || self.pending_change().is_some()
+            };
+            nothing.then_some(NOTHING_TO_REDO)
+        })
+    }
+
+    /// Name des Schritts, den Rückgängig zurücknähme (eine noch offene Änderung zählt mit; bei
+    /// offener Skizze der Schritt der Skizze).
+    pub fn undo_label(&self) -> Option<&'static str> {
+        if self.in_sketch() {
+            return self.state.sketch_undo_label();
+        }
+        match self.pending_change() {
+            Some(now) => Some(describe_change(self.history.current(), &now)),
+            None => self.history.undo_label(),
+        }
+    }
+
+    /// Name des Schritts, den Wiederholen herstellte (bei offener Skizze der Schritt der
+    /// Skizze).
+    pub fn redo_label(&self) -> Option<&'static str> {
+        if self.in_sketch() {
+            return self.state.sketch_redo_label();
+        }
+        if self.pending_change().is_some() {
+            return None;
+        }
+        self.history.redo_label()
+    }
+
+    /// Nimmt den letzten Schritt zurück. Offene Änderungen werden vorher ein Schritt. Gelingt
+    /// das Zurückladen, schließen die Fenster des Tabs (sie gehören zum alten Stand); schlägt es
+    /// fehl, bleibt das Dokument, nur dieser Schritt wird verworfen und `state.message` sagt
+    /// [`UNDO_FAILED`] (Spec §6a.8). Bei offener Skizze nur deren Verlauf (R10); das Dokument
+    /// bleibt dann unberührt, auch wenn die Skizze nichts zurückzunehmen hat.
+    pub fn undo(&mut self) -> Result<(), String> {
+        if let Some(why) = self.history_locked() {
+            return Err(why.into());
+        }
+        self.observe_history(false);
+        if self.in_sketch() {
+            return if self.state.undo_sketch() {
+                Ok(())
+            } else {
+                Err(NOTHING_TO_UNDO.into())
+            };
+        }
+        let Some(target) = self.history.peek_undo().cloned() else {
+            return Err(NOTHING_TO_UNDO.into());
+        };
+        match self.state.restore_document(target) {
+            Ok(_) => {
+                self.history.commit_undo();
+                self.after_jump();
+                Ok(())
+            }
+            Err(e) => {
+                self.history.discard_undo();
+                self.state.message = Some(UNDO_FAILED.into());
+                Err(e)
+            }
+        }
+    }
+
+    /// Stellt den zuletzt zurückgenommenen Schritt wieder her (Gegenstück zu [`DocTab::undo`];
+    /// Meldung bei Fehler [`REDO_FAILED`]; bei offener Skizze nur deren Verlauf).
+    pub fn redo(&mut self) -> Result<(), String> {
+        if let Some(why) = self.history_locked() {
+            return Err(why.into());
+        }
+        self.observe_history(false);
+        if self.in_sketch() {
+            return if self.state.redo_sketch() {
+                Ok(())
+            } else {
+                Err(NOTHING_TO_REDO.into())
+            };
+        }
+        let Some(target) = self.history.peek_redo().cloned() else {
+            return Err(NOTHING_TO_REDO.into());
+        };
+        match self.state.restore_document(target) {
+            Ok(_) => {
+                self.history.commit_redo();
+                self.after_jump();
+                Ok(())
+            }
+            Err(e) => {
+                self.history.discard_redo();
+                self.state.message = Some(REDO_FAILED.into());
+                Err(e)
+            }
+        }
+    }
+
+    /// Nach gelungenem Zurückladen: der neue Zählerstand ist kein Schritt; die Fenster des Tabs
+    /// halten Kennungen des alten Stands und schließen.
+    fn after_jump(&mut self) {
+        self.tracker.reset(self.state.document.edit_count());
+        self.close_dialogs();
+    }
+
+    /// Ist ein Fenster oder eine Rückfrage dieses Tabs offen (sperrt Strg+Z, R8)?
+    pub fn dialog_open(&self) -> bool {
+        let s = &self.state;
+        self.dialog.is_some()
+            || self.boolean_dialog.is_some()
+            || self.feature_dialog.is_some()
+            || self.blend_dialog.is_some()
+            || self.export_dialog.is_some()
+            || self.import_dialog.is_some()
+            || self.drawing_dialog.is_some()
+            || s.dimension_dialog.is_some()
+            || s.sheet_dialog.is_some()
+            || s.pending_delete.is_some()
+            || s.pending_delete_drawing.is_some()
+            || s.pending_delete_dimension.is_some()
+            || s.rename_draft.is_some()
+            || s.rename_drawing_draft.is_some()
+    }
+
+    /// Schließt alle Fenster und Rückfragen des Tabs, außer einem Export-Fenster, das gerade
+    /// eine Datei schreibt (es darf nicht ohne Meldung enden).
+    pub fn close_dialogs(&mut self) {
+        self.dialog = None;
+        self.boolean_dialog = None;
+        self.feature_dialog = None;
+        self.blend_dialog = None;
+        if !self
+            .export_dialog
+            .as_ref()
+            .is_some_and(|d| d.is_writing_file())
+        {
+            self.export_dialog = None;
+        }
+        self.import_dialog = None;
+        self.drawing_dialog = None;
+        let s = &mut self.state;
+        s.dimension_dialog = None;
+        s.sheet_dialog = None;
+        s.pending_delete = None;
+        s.pending_delete_drawing = None;
+        s.pending_delete_dimension = None;
+        s.rename_draft = None;
+        s.rename_drawing_draft = None;
+    }
+
+    /// Ersetzt den ganzen Zustand des Tabs (Autosicherung übernommen, Version wiederhergestellt):
+    /// ein neuer Verlauf beginnt, die Fenster des alten Stands schließen.
+    pub fn replace_state(&mut self, state: AppState) {
+        self.state = state;
+        (self.history, self.tracker) = fresh_history(&self.state);
+        self.close_dialogs();
+    }
+
+    /// Verlauf des Tabs (lesen).
+    pub fn history(&self) -> &History<Snapshot> {
+        &self.history
+    }
+
+    /// Verlauf des Tabs zum Verändern (nur für Tests).
+    #[doc(hidden)]
+    pub fn history_mut(&mut self) -> &mut History<Snapshot> {
+        &mut self.history
+    }
+}
+
+/// Neuer Verlauf und Beobachter für `state`; der Anfangsstand gilt als gespeichert.
+fn fresh_history(state: &AppState) -> (History<Snapshot>, Tracker) {
+    let snapshot = state.snapshot();
+    let bytes = snapshot_bytes(&snapshot);
+    (
+        History::new(snapshot, bytes),
+        Tracker::new(state.document.edit_count()),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -284,11 +596,13 @@ impl Workspace {
 
     /// Schließt einen Tab ohne Rückfrage; nach dem letzten entsteht ein frischer leerer Tab.
     /// Eine vorhandene `.autosave.json` des Dokuments bleibt liegen (auch beim Verwerfen) und
-    /// wird beim nächsten Öffnen wieder angeboten.
+    /// wird beim nächsten Öffnen wieder angeboten – außer der Tab ist sauber und hat sie selbst
+    /// geschrieben (dann ist sie überholt und wird gelöscht).
     pub fn close_tab(&mut self, i: usize) {
         if i >= self.tabs.len() {
             return;
         }
+        self.tabs[i].drop_stale_autosave();
         self.tabs.remove(i);
         if self.tabs.is_empty() {
             self.new_tab();
@@ -601,10 +915,10 @@ impl Workspace {
                 state.dark = self.tabs[i].state.dark;
                 state.rebuild_scene();
                 let t = &mut self.tabs[i];
-                t.state = state;
+                t.replace_state(state);
                 t.based_on = a.based_on.or(t.based_on);
-                // gilt als geändert gegenüber dem gespeicherten Stand
-                t.saved_edits = u64::MAX;
+                // gilt als geändert gegenüber dem gespeicherten Stand, bis gespeichert wird
+                t.history.forget_saved();
             }
             Err(e) => {
                 // Datei unangetastet lassen
@@ -746,7 +1060,7 @@ impl Workspace {
         let mut state = AppState::from_snapshot(snapshot)?;
         state.dark = tab.state.dark;
         state.rebuild_scene();
-        tab.state = state;
+        tab.replace_state(state);
         tab.based_on = Some(new);
         tab.mark_clean();
         self.active = target;
@@ -810,6 +1124,14 @@ impl Workspace {
         Ok(())
     }
 
+    /// Am Ende jedes Bildes: Änderungen aller Tabs werden Schritte ihres Verlaufs (R3, R4);
+    /// `gesture` = Maustaste gedrückt oder Eingabefeld aktiv.
+    pub fn observe_history(&mut self, gesture: bool) {
+        for t in &mut self.tabs {
+            t.observe_history(gesture);
+        }
+    }
+
     /// Speichert die Konfiguration (gewählte Wurzel); Fehler sind nicht schlimm.
     pub fn persist_config(&self) {
         let _ = self.config.save();
@@ -824,6 +1146,7 @@ impl Workspace {
     pub fn autosave_tick(&mut self, now: Instant) {
         let interval = self.autosave_interval;
         for t in &mut self.tabs {
+            t.drop_stale_autosave();
             if t.read_only
                 || !t.owns_autosave()
                 || !t.is_dirty()
@@ -840,6 +1163,7 @@ impl Workspace {
                 .is_ok()
             {
                 t.autosaved_edits = t.state.document.edit_count();
+                t.autosave_written = true;
             }
             t.last_autosave = now;
         }

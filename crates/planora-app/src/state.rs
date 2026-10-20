@@ -1,9 +1,10 @@
+use crate::history::{History, sketch_bytes};
 use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
 use planora_feature::{
     BlendArt, BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
-    MESH_LOCKED, MeshId, SketchFeature, SketchPlane,
+    MESH_LOCKED, MeshId, RestoreKind, SketchFeature, SketchPlane,
 };
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{AnalyticKernel, Edge, Face, Id, Solid};
@@ -15,6 +16,7 @@ use planora_render::{
     EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, SceneData, build_scene_marked,
     pick_edge, pick_face,
 };
+use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::model::{CurveId, Sketch};
 use planora_sketch::{ExtractedProfiles, plane_of_face};
 use std::cell::{Cell, RefCell};
@@ -42,6 +44,11 @@ pub use planora_feature::StandardPlane;
 /// Nummern (nur aus fremden oder bösartigen Dateien denkbar) werden ignoriert, damit der Zähler
 /// nicht an `u64::MAX` stößt; neue Namen kollidieren mit ihnen erst nach so vielen Features.
 const MAX_NAME_COUNTER: u64 = 1_000_000;
+
+/// Meldung, wenn sich ein Schritt nicht zurückladen lässt (Rückgängig).
+pub const UNDO_FAILED: &str = "Rückgängig ist nicht möglich.";
+/// Meldung, wenn sich ein Schritt nicht zurückladen lässt (Wiederholen).
+pub const REDO_FAILED: &str = "Wiederholen ist nicht möglich.";
 
 static NEXT_SCENE_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -105,6 +112,10 @@ pub struct AppState {
     pub chord_tolerance: f64,
     /// Letzte Fehlermeldung für die Statuszeile.
     pub message: Option<String>,
+    /// Letzter Hinweis ohne Fehler für die Statuszeile (etwa „Rückgängig: Quader anlegen“),
+    /// in der normalen Textfarbe. Eine Meldung in `message` hat Vorrang; der Hinweis endet mit
+    /// dem nächsten Verlaufsschritt oder einer Meldung ([`crate::workspace::DocTab::observe_history`]).
+    pub info: Option<String>,
     /// Laufende Nummer je Bezeichnung für neue Features („Quader 1“, „Quader 2“, …); zählt
     /// nur hoch, damit Namen auch nach dem Löschen eindeutig bleiben.
     name_counters: BTreeMap<String, u64>,
@@ -116,6 +127,11 @@ pub struct AppState {
     /// der berechneten Skizze. Der Skizzen-Modus arbeitet nur hierauf; erst
     /// [`AppState::close_sketch`] schreibt den Entwurf ins Dokument zurück.
     pub sketch_draft: Option<SketchFeature>,
+    /// Verlauf der offenen Skizze (R10): Bilder des Entwurfs, angelegt beim Öffnen, verworfen,
+    /// sobald die Sitzung endet (Beenden, Löschen, Zurückladen des Dokuments). Geändert heißt:
+    /// der Entwurf ist ungleich dem aktuellen Bild (Stand der Skizze, Kopien), siehe
+    /// [`AppState::observe_sketch`].
+    sketch_history: Option<History<SketchFeature>>,
     /// Kamera vor dem Öffnen des Skizzen-Modus.
     saved_camera: Option<OrbitCamera>,
     /// Einpassen beim Öffnen einer Skizze, das die 3D-Ansicht mit dem freien Rechteck des
@@ -205,6 +221,47 @@ impl ProfileCache {
     }
 }
 
+/// R10: Der Schritt bleibt offen, solange ein Werkzeug offene Punkte hat (`pending`) und seit
+/// dem letzten Bild `before` **nur** Punkte hinzukamen (samt ihrer Bindung an eine Kurve beim
+/// Fangen): Der erste Klick einer Linie, eines Kreises, Bogens, Splines gehört zum Element.
+/// Alles Vorhandene muss dafür unverändert sein: Kurven (Art, Hilfslinie), Punkte und alle
+/// übrigen Werte bitgleich, Abhängigkeiten (Art samt Maßwert, „anzeigend“, aktiv, Lage), Kopien.
+/// Kam eine Kurve hinzu, fehlt oder änderte sich etwas (Maßwert, „anzeigend“, Hilfslinie), ist
+/// es ein eigener Schritt (ein Linienzug: je Linie einer).
+fn deferred_by_tool(se: &SketchSession, before: &SketchFeature, after: &SketchFeature) -> bool {
+    if se.pending.is_empty() || before.copies != after.copies {
+        return false;
+    }
+    let (b, a) = (&before.sketch, &after.sketch);
+    let same_curves = a.curves().count() == b.curves().count()
+        && b.curves().all(|(id, c)| {
+            a.curve(id)
+                .is_some_and(|n| n.kind == c.kind && n.construction == c.construction)
+        });
+    let bits = |v: DVec2| (v.x.to_bits(), v.y.to_bits());
+    let points_kept = b.points().all(
+        |(id, _)| matches!((b.point_xy(id), a.point_xy(id)), (Ok(p), Ok(q)) if bits(p) == bits(q)),
+    );
+    // Alle bisherigen Werte (Koordinaten, Radien, Kurvenparameter) bitgleich; neue Punkte
+    // hängen ihre Werte hinten an.
+    let (bv, av) = (b.variables(), a.variables());
+    let values_kept =
+        av.len() >= bv.len() && bv.iter().zip(av).all(|(x, y)| x.to_bits() == y.to_bits());
+    let constraints_kept = b.constraints().all(|(id, c)| {
+        a.constraint(id).is_some_and(|n| {
+            n.kind == c.kind
+                && n.driven == c.driven
+                && n.enabled == c.enabled
+                && n.branch() == c.branch()
+        })
+    });
+    let only_snaps = a
+        .constraints()
+        .filter(|(id, _)| b.constraint(*id).is_none())
+        .all(|(_, c)| matches!(c.kind, ConstraintKind::PointOnCurve(..)));
+    same_curves && points_kept && values_kept && constraints_kept && only_snaps
+}
+
 /// Länge des Geometrieschlüssels einer Kante (Anfangs- und Endpunkt, Parameterbereich).
 const EDGE_KEY_LEN: usize = 8;
 
@@ -280,10 +337,12 @@ impl AppState {
             kernel: AnalyticKernel::default(),
             chord_tolerance,
             message: None,
+            info: None,
             name_counters: BTreeMap::new(),
             selected_feature: None,
             sketch_session: None,
             sketch_draft: None,
+            sketch_history: None,
             saved_camera: None,
             sketch_fit: None,
             fit_pending: false,
@@ -340,6 +399,12 @@ impl AppState {
     /// Wie [`AppState::refresh`]; Verweise auf den Körper `follow.0` gehen auf `follow.1` über
     /// (z. B. auf das Ergebnis eines neuen Verschiebens).
     fn refresh_following(&mut self, follow: Option<(BodyRef, BodyRef)>) {
+        self.refresh_with(follow, true);
+    }
+
+    /// Wie [`AppState::refresh_following`]; mit `fit == false` wird die Ansicht nie neu
+    /// eingepasst (Rückgängig/Wiederholen, Spec §3).
+    fn refresh_with(&mut self, follow: Option<(BodyRef, BodyRef)>, fit: bool) {
         let old: Vec<BodyRef> = self.bodies.iter().map(|b| b.source).collect();
         // Geometrie der markierten Kanten vor der Neuberechnung: Ändert sich der Körper, können
         // Kanten-Ids umnummeriert sein; eine Markierung darf dann nicht still auf eine andere
@@ -415,7 +480,7 @@ impl AppState {
             self.message = Some(failed.join("; "));
         }
         self.rebuild_scene();
-        if self.bodies.len() != count_before {
+        if fit && self.bodies.len() != count_before {
             self.frame_all();
         }
     }
@@ -463,6 +528,149 @@ impl AppState {
         // Die frische Kamera kennt das freie Rechteck noch nicht.
         s.fit_pending = true;
         Ok(s)
+    }
+
+    /// Ersetzt nur das Dokument durch das Bild `s` (Rückgängig/Wiederholen, Spec §6a.1, R1, R2,
+    /// R9). Kamera, Hell/Dunkel, `instance` und `fit_pending` bleiben; die Ansicht wird nicht neu
+    /// eingepasst.
+    ///
+    /// Bei Erfolg: Namenszähler aus den Namen neu; Körper neu ohne Einpassen (Weg
+    /// [`RestoreKind::Full`]; bei [`RestoreKind::Annotations`] bleiben Körper und Szene, wie sie
+    /// sind); auf dem vollen Weg entfallen Flächen-/Kantenwahl und Hervorhebung, gewählter Körper
+    /// und gewähltes Feature bleiben, solange es sie gibt (der Körper auch über ein
+    /// zurückgenommenes oder wiederholtes Verschieben, Verrunden oder eine Boolesche Operation
+    /// hinweg, siehe `same_body_after`); auf dem Zeichnungsweg bleiben Auswahl,
+    /// Hervorhebung und gewählter Körper unverändert; offene Rückfragen, Umbenennen-Felder, Dialogwünsche, Maß- und
+    /// Blattangaben-Fenster, markierte Kanten, ein laufender Zug und die Werkzeuge des
+    /// Zeichnungsbereichs werden geleert, `message` ebenso. Eine offene Skizze (kommt über die
+    /// Oberfläche nicht vor, R10) wird verworfen wie beim Löschen ihres Features. Eine geöffnete
+    /// Zeichnung, die es im Bild nicht gibt, schaltet auf das Modell zurück
+    /// ([`crate::drawing_state::DrawingUi::forget_missing`]).
+    ///
+    /// Bei Fehler bleibt alles unverändert (auch `message`; die Meldung setzt der Aufrufer).
+    ///
+    /// Sache des Aufrufers (`DocTab`, Aufgabe 6): Die Fenster des Tabs (`feature_dialog`,
+    /// `blend_dialog`, `boolean_dialog`, …) halten `FeatureId`s und Kanten des alten Dokuments
+    /// und kennen diesen Zustand nicht; nach jedem gelungenen Aufruf muss
+    /// `DocTab::close_dialogs()` sie schließen.
+    pub fn restore_document(
+        &mut self,
+        s: planora_feature::Snapshot,
+    ) -> Result<RestoreKind, String> {
+        // Herkunft der Körper im alten Stand: Ein gewählter Körper bleibt gewählt, solange es
+        // ihn aus Sicht des Nutzers noch gibt (nur ein Verschieben, Verrunden oder eine Boolesche
+        // Operation an ihm wurde zurückgenommen oder wiederholt).
+        let chosen = self
+            .selected_body
+            .and_then(|i| self.bodies.get(i))
+            .map(|b| b.source);
+        let old_inputs: Vec<(FeatureId, BodyRef)> = self
+            .document
+            .features()
+            .iter()
+            .filter_map(|f| carried_body(&f.kind).map(|b| (f.id, b)))
+            .collect();
+        let kind = self.document.restore(s).map_err(|e| e.to_string())?;
+        self.rebuild_name_counters();
+        // Eine offene Skizze verwerfen: Ihr Entwurf (samt Verlauf) gehört zum alten Dokument.
+        self.sketch_draft = None;
+        self.sketch_history = None;
+        let left_sketch = self.sketch_session.take().is_some();
+        let had_marks = !self.marked_edges.is_empty();
+        self.marked_edges.clear();
+        self.edge_picking = false;
+        self.drag_move = None;
+        self.pending_delete = None;
+        self.pending_delete_drawing = None;
+        self.pending_delete_dimension = None;
+        self.rename_draft = None;
+        self.rename_drawing_draft = None;
+        self.edit_request = None;
+        self.sketch_request = None;
+        self.dimension_dialog = None;
+        self.sheet_dialog = None;
+        self.dimension_tool = crate::dimension_tool::DimensionTool::default();
+        self.balloon_tool = crate::balloon_tool::BalloonTool::default();
+        self.section_tool = crate::section_tool::SectionTool::default();
+        self.message = None;
+        if self
+            .selected_feature
+            .is_some_and(|id| self.document.feature(id).is_none())
+        {
+            self.selected_feature = None;
+        }
+        self.drawing_ui.forget_missing(&self.document);
+        match kind {
+            RestoreKind::Full => {
+                // Ein zurückgeholter Körper kann seine Flächen und Kanten anders nummerieren:
+                // Flächen-/Kantenwahl und Hervorhebung entfallen, damit sie nie auf einer gleich
+                // nummerierten, aber anderen Fläche stehen. Der gewählte Körper bleibt (über
+                // seinen Verweis abgebildet), solange es ihn gibt.
+                self.selection = None;
+                self.hover = None;
+                let follow = chosen.map(|from| (from, self.same_body_after(from, &old_inputs)));
+                self.refresh_with(follow, false);
+            }
+            // Gleiches Modell: Körper und Auswahl gelten weiter; die Szene nur neu, wenn sich
+            // ihre Hervorhebung (markierte Kanten) geändert hat.
+            RestoreKind::Annotations if had_marks && !left_sketch => self.rebuild_scene(),
+            RestoreKind::Annotations => {}
+        }
+        if left_sketch {
+            // Wie beim Verwerfen einer Skizze: die Kamera von vor dem Skizzenmodus.
+            self.restore_camera();
+        }
+        Ok(kind)
+    }
+
+    /// Derselbe Körper aus Sicht des Nutzers im zurückgeladenen Stand (der Verweis `from` stammt
+    /// aus dem alten): Ist `from` nicht mehr sichtbar, geht es zurück zum Eingangskörper eines
+    /// fehlenden Verschiebens/Verrundens/einer Booleschen Operation (`old_inputs`, alter Stand)
+    /// bzw. vorwärts zum Ergebnis eines solchen Features im neuen Stand, das ihn fortführt. Ein
+    /// Körper ohne solche Herkunft (etwa ein zurückgenommener Quader) bleibt `from` und
+    /// entfällt dann bei der Abbildung.
+    fn same_body_after(&self, from: BodyRef, old_inputs: &[(FeatureId, BodyRef)]) -> BodyRef {
+        let visible: Vec<BodyRef> = self
+            .document
+            .visible_bodies()
+            .iter()
+            .map(|v| v.body)
+            .chain(self.document.visible_meshes().iter().map(|v| v.body))
+            .collect();
+        let mut r = from;
+        // Jeder Schritt führt zu einem anderen Feature; mehr Schritte als Features gibt es nicht.
+        for _ in 0..=self.document.features().len() + old_inputs.len() {
+            if visible.contains(&r) {
+                break;
+            }
+            let forward = self
+                .document
+                .features()
+                .iter()
+                .find(|f| carried_body(&f.kind) == Some(r));
+            if let Some(f) = forward {
+                r = BodyRef {
+                    feature: f.id,
+                    index: 0,
+                };
+                continue;
+            }
+            let back = old_inputs
+                .iter()
+                .find(|(id, _)| r.index == 0 && *id == r.feature)
+                .filter(|_| self.document.feature(r.feature).is_none());
+            match back {
+                Some((_, input)) => r = *input,
+                None => break,
+            }
+        }
+        r
+    }
+
+    /// Feature des laufenden Zugs im Eigenschaftenfenster (nur für Tests).
+    #[doc(hidden)]
+    pub fn drag_move(&self) -> Option<FeatureId> {
+        self.drag_move
     }
 
     /// Setzt die Zähler je Bezeichnung aus vorhandenen Namen „Bezeichnung N“ fort, damit neue
@@ -1335,6 +1543,8 @@ impl AppState {
             self.saved_camera = Some(self.camera);
         }
         self.sketch_session = Some(session);
+        // Jede geöffnete Skizze beginnt mit einem eigenen, leeren Verlauf (R10).
+        self.sketch_history = Some(History::new(draft.clone(), sketch_bytes(&draft)));
         self.sketch_draft = Some(draft);
         self.selected_feature = Some(id);
         // Senkrecht auf die Ebene blicken, dann mittig in das freie Rechteck einpassen. Die
@@ -1512,6 +1722,9 @@ impl AppState {
     /// Lehnt das Dokument den Entwurf ab, bleiben Sitzung und Entwurf offen; die Meldung steht
     /// in `message` und im Skizzenfenster.
     fn commit_draft(&mut self) -> Result<(), String> {
+        // Der Skizzenverlauf endet mit der Sitzung; nur wenn das Dokument den Entwurf ablehnt
+        // und die Skizze offen bleibt, bleibt er auch.
+        let history = self.sketch_history.take();
         let (Some(mut se), Some(mut draft)) =
             (self.sketch_session.take(), self.sketch_draft.take())
         else {
@@ -1545,6 +1758,7 @@ impl AppState {
                 se.message = Some(message.clone());
                 self.sketch_session = Some(se);
                 self.sketch_draft = Some(draft);
+                self.sketch_history = history;
                 self.fail(message)
             }
         }
@@ -1563,6 +1777,7 @@ impl AppState {
     pub fn try_close_sketch(&mut self) -> Result<(), String> {
         if self.sketch_session.is_none() {
             self.sketch_draft = None;
+            self.sketch_history = None;
             return Ok(());
         }
         self.commit_draft()?;
@@ -1570,9 +1785,135 @@ impl AppState {
         Ok(())
     }
 
+    // ---- Rückgängig in der offenen Skizze (R10) ------------------------------------------
+
+    /// Verlauf der offenen Skizze (lesen); `None` ohne offene Skizze (er lebt genau so lange
+    /// wie die Sitzung).
+    pub fn sketch_history(&self) -> Option<&History<SketchFeature>> {
+        self.sketch_history.as_ref()
+    }
+
+    /// Eine noch nicht als Schritt erfasste Änderung am Entwurf (er gleicht nicht dem letzten
+    /// Bild: anderer Stand der Skizze oder andere Kopien): Verlauf und Entwurf, dazu, ob sie
+    /// aufgeschoben ist ([`deferred_by_tool`], offener erster Klick eines Werkzeugs).
+    fn sketch_open_change(&self) -> Option<(&History<SketchFeature>, &SketchFeature, bool)> {
+        let se = self.sketch_session.as_ref()?;
+        let h = self.sketch_history.as_ref()?;
+        let draft = self.sketch_draft.as_ref()?;
+        if draft == h.current() {
+            return None;
+        }
+        Some((h, draft, deferred_by_tool(se, h.current(), draft)))
+    }
+
+    /// Am Ende eines Bildes bei offener Skizze (R4, R10): Weicht der Entwurf vom letzten Bild ab
+    /// und läuft keine Geste (Maustaste, Eingabefeld), wird er ein Schritt mit dem Namen aus
+    /// dem Vergleich ([`describe_sketch_change`](crate::undo_labels::describe_sketch_change)).
+    /// Ziehen eines Punktes ist so ein Schritt; der erste Klick eines Werkzeugs bleibt offen,
+    /// bis das Element entsteht.
+    pub fn observe_sketch(&mut self, gesture: bool) {
+        if gesture {
+            return;
+        }
+        let Some((h, draft, false)) = self.sketch_open_change() else {
+            return;
+        };
+        let label = self.sketch_label(h.current(), draft);
+        let after = draft.clone();
+        let bytes = sketch_bytes(&after);
+        if let Some(h) = self.sketch_history.as_mut() {
+            h.record(after, bytes, label);
+        }
+    }
+
+    /// Rückgängig in der offenen Skizze. Offene Änderungen werden vorher ein Schritt. Bleibt
+    /// danach nur ein offener erster Klick eines Werkzeugs (aufgeschoben), nimmt Rückgängig nur
+    /// diesen zurück (wie Esc, samt dem gesetzten Punkt) und lässt den Verlauf, wie er ist; sonst
+    /// den letzten Schritt. Der Entwurf wird jeweils der Klon des Bildes (gleicher Stand);
+    /// laufendes Werkzeug, Auswahl, Ziehen und Meldung entfallen, der Lösungsbericht wird neu
+    /// bestimmt ([`SketchSession::after_history_jump`]). Das Dokument bleibt unberührt.
+    /// `false`: keine Skizze offen oder nichts zurückzunehmen.
+    pub fn undo_sketch(&mut self) -> bool {
+        self.sketch_jump(true)
+    }
+
+    /// Gegenstück zu [`AppState::undo_sketch`]; bei einem offenen ersten Klick gibt es nichts zu
+    /// wiederholen.
+    pub fn redo_sketch(&mut self) -> bool {
+        self.sketch_jump(false)
+    }
+
+    fn sketch_jump(&mut self, back: bool) -> bool {
+        self.observe_sketch(false);
+        let AppState {
+            sketch_session: Some(se),
+            sketch_draft: Some(draft),
+            sketch_history: Some(h),
+            ..
+        } = self
+        else {
+            return false;
+        };
+        let target = if *draft != *h.current() {
+            // Nur noch ein aufgeschobener erster Klick ist offen.
+            if !back {
+                return false;
+            }
+            h.current().clone()
+        } else {
+            let target = if back { h.peek_undo() } else { h.peek_redo() };
+            let Some(target) = target.cloned() else {
+                return false;
+            };
+            if back {
+                h.commit_undo();
+            } else {
+                h.commit_redo();
+            }
+            target
+        };
+        *draft = target;
+        se.after_history_jump(&draft.sketch);
+        true
+    }
+
+    /// Name des Schritts, den Rückgängig in der offenen Skizze zurücknähme (eine noch offene
+    /// Änderung zählt mit, auch ein offener erster Klick); `None`: nichts da.
+    pub fn sketch_undo_label(&self) -> Option<&'static str> {
+        match self.sketch_open_change() {
+            // Nur ein offener erster Klick: Rückgängig nimmt diesen Punkt zurück.
+            Some((h, draft, true)) => Some(crate::undo_labels::describe_sketch_change(
+                h.current(),
+                draft,
+            )),
+            Some((h, draft, false)) => Some(self.sketch_label(h.current(), draft)),
+            None => self.sketch_history()?.undo_label(),
+        }
+    }
+
+    /// Name eines Skizzenschritts; offene Punkte des laufenden Werkzeugs gehören zum nächsten
+    /// Element und benennen ihn nicht.
+    fn sketch_label(&self, before: &SketchFeature, after: &SketchFeature) -> &'static str {
+        let open = self
+            .sketch_session
+            .as_ref()
+            .map_or(&[][..], |se| se.pending.as_slice());
+        crate::undo_labels::describe_sketch_change_beside(before, after, open)
+    }
+
+    /// Name des Schritts, den Wiederholen in der offenen Skizze herstellte. Bei einer offenen
+    /// Änderung (auch einem offenen ersten Klick) gibt es nichts zu wiederholen: `None`.
+    pub fn sketch_redo_label(&self) -> Option<&'static str> {
+        if self.sketch_open_change().is_some() {
+            return None;
+        }
+        self.sketch_history()?.redo_label()
+    }
+
     /// Verwirft Sitzung und Entwurf (das Skizzen-Feature gibt es nicht mehr).
     fn discard_sketch(&mut self) {
         self.sketch_draft = None;
+        self.sketch_history = None;
         if self.sketch_session.take().is_some() {
             self.restore_camera();
         }
@@ -1808,6 +2149,16 @@ const MESH_LABEL: &str = "Netz-Körper";
 
 /// Hinweis an ausgegrauten Menüpunkten bei gewähltem Netz-Körper (Spec §6).
 pub const MESH_LOCKED_HINT: &str = "Netz-Körper lassen sich nicht bearbeiten.";
+
+/// Der Körper, den ein Feature fortführt (sein Ergebnis ist für den Nutzer „derselbe Körper“):
+/// Verschieben, Verrunden/Fase, bei Booleschen Operationen das Ziel.
+fn carried_body(kind: &FeatureKind) -> Option<BodyRef> {
+    match kind {
+        FeatureKind::Move { body, .. } | FeatureKind::Verrunden { body, .. } => Some(*body),
+        FeatureKind::Boolean { target, .. } => Some(*target),
+        _ => None,
+    }
+}
 
 /// Schreibt die Lage `t` in einen Netz-Körper.
 fn set_transform(kind: &mut FeatureKind, t: MeshTransform) {

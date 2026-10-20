@@ -403,8 +403,29 @@ Strg+Umschalt+Z vor Strg+Z abfragen (`consume_shortcut` mit `COMMAND` passt sons
 
 ## Messergebnis Aufgabe 2
 
-(wird in Aufgabe 2 ausgefüllt: Tabelle, Rechner, Build, Entscheidung synchron/Hintergrund)
+Rechner: AMD Ryzen 9 9950X (16 Kerne), 62 GB; Build `cargo test --release -p planora-app --test history_perf -j 2 -- --ignored --nocapture` (Median aus 5 Läufen, Zeiten in ms). Mittleres Modell: 37 Features, 4 Ansichten. Schweres Modell: mittleres Modell + Platte 10 x 10 Bohrungen + Spline-Extrusion + Netz-Körper (200 000 Dreiecke) + 6 Ansichten (2 Schnitte) + 30 Maße.
+
+| Modell | snapshot() | snapshot_bytes | from_snapshot | refresh (mit Netz-Speicher) | refresh (ohne) | davon Netzprüfung | Summe from_snapshot + refresh |
+|---|---|---|---|---|---|---|---|
+| mittel (Release) | 0,0 | 0,00 | 232,3 | 2,5 | 2,7 | 0,0 | 234,8 |
+| schwer (Release) | 0,0 | 0,00 | 250,1 | 39,0 | 42,6 | 0,2 | 289,1 |
+| mittel (Debug) | 0,0 | 0,01 | 925,8 | 36,4 | 37,5 | 0,0 | 962,2 |
+| schwer (Debug) | 0,1 | 0,01 | 970,1 | 238,7 | 458,9 | 2,4 | 1208,8 |
+
+Den größten Teil von `from_snapshot` macht die Neuberechnung der Features (`recompute_features`); die Netzprüfung ist vernachlässigbar. **Entscheidung (Release):** Summe 289 ms <= 1000 ms und `snapshot()` unter 1 ms <= 50 ms, also synchron wie geplant, Aufgaben 3-10 unverändert. Im Debug-Build liegt das schwere Modell mit 1209 ms über der Grenze (Tests laufen dort, kein Bedienweg). Nicht gemessen: Neuberechnung der Ansichten der Zeichnung nach dem Zurückladen (läuft im Hintergrund, nicht Teil der Grenze).
 
 ## Abweichungen bei der Umsetzung
 
-(wird während der Umsetzung gepflegt)
+Stand 2026-10-20, nach Aufgabe 10 (Aufgabe 12, die Prüfung im echten Fenster, steht aus). Abweichungen vom Plan und was darüber hinaus festgelegt wurde:
+
+- **Aufgabe 2:** Messung bestanden (Release 289 ms schwer, `snapshot()` 0,0 ms); keine Hintergrundrechnung nötig. Ergänzt gegenüber dem Brief: Marker am Ende, Platte mit mindestens 100 Zylinderwänden.
+- **Aufgabe 3:** Feature-Versionen im vollen Weg beginnen bei `next_version` statt bei 1 (offene Dialoge erkennen veraltete Kopien an der Version); Netz-Kennungen werden nie wiederverwendet (`next_mesh` = max); `SketchFeature::eq` vergleicht zusätzlich den Namen; ein NaN-Bild ist nie gleich mit sich selbst (immer voller Weg).
+- **Aufgabe 4:** Der Szene-Zwischenspeicher bleibt beim Zeichnungsweg; auf dem vollen Weg werden Flächen-/Kantenwahl und Hover geleert, der gewählte Körper bleibt; `DrawingUi::forget_missing` vergisst Ziele fehlender Zeichnungen (Zeichnungskennungen werden nach Rückgängig wiederverwendet).
+- **Aufgabe 5:** „Löschen“ in der Skizze wird über fehlende Kennungen erkannt (strenger als „weniger Elemente“). Das erste Feature in Listenreihenfolge gilt bei mehreren geänderten.
+- **Aufgabe 6:** Datei `drawing_dialog.rs` zusätzlich (Stand davor mit `Document::restore(before)` wiederherstellen, wenn die Ansicht einer neuen Zeichnung scheitert). `undo_blocked`/`undo_label` berücksichtigen eine noch nicht übernommene Änderung. Der gewählte Körper wird über Verschieben, Verrunden, Boolesche Operationen mitgeführt. Überholte Autosicherungen werden gelöscht. `history_mut` nur `#[doc(hidden)]`.
+- **Aufgabe 7:** Kein `Tracker` im Skizzenverlauf (Vergleich Entwurf gegen aktuelles Bild über den Stand). Aufschub nur für reine Punkte; erstes Rückgängig bei offenem Klick nimmt nur den Punkt zurück. Maßwert 10 auf 20 heißt „Skizze ändern“ (keine Regel „Maß ändern“). `history.rs`, `sketch_panel.rs`, `undo_labels.rs` zusätzlich geändert.
+- **Aufgabe 8:** Nach dem Review ein eigenes Feld `AppState::info` für die Erfolgsmeldung in normaler Farbe; die Sperre gilt auch bei gedrückter Maustaste und bei Rückfragen der Felder Projekte und Versionen. Strg+Alt+Z löst auch aus (angenommen).
+- **Aufgabe 9:** Wie geplant; Symbole `Icon::Undo` (U+E038) und `Icon::Redo` (U+E036).
+- **Aufgabe 10 (wesentliche Abweichung):** Die Knöpfe stehen **im oberen Feld neben den Menüs**, nicht im Befehlsfeld unten. Der erste Anlauf unten (BLOCKED) scheiterte bei 1100 × 700 um etwa 36 px; der Nutzer entschied für das obere Feld. Danach ging die Tab-Leiste bei 1100 auf etwa 100 px zusammen; Option A: Das Symbol „Neu“ ist fest hinter der Leiste, der Trennstrich entfällt, Name und Schließkreuz des aktiven Tabs sind ab 1150 Pixel Breite ganz sichtbar, getestet mit 1 bis 9 Tabs (Strg+W schließt darunter). Der Plan-Hinweis zu `shell_commands.rs` (`+ 2` Knöpfe) entfällt: Die Datei ist unverändert. `bottom_lock` heißt jetzt `edit_lock`. Offene Ideen B bis D stehen in `docs/superpowers/offene-punkte.md`.
+- **Aufgabe 11:** Handproben entfallen; Mutationssumme im Bericht (249 Einträge).
+

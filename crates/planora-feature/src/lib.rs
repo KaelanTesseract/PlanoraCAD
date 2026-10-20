@@ -43,4 +43,4 @@ pub use refs::{
     EdgeRef, FaceRef, RefCache, ResolvedEdge, ResolvedFace, face_probe_calls, first_face,
     resolve_edge, resolve_face,
 };
-pub use snapshot::{Snapshot, SnapshotFeature};
+pub use snapshot::{RestoreKind, Snapshot, SnapshotFeature, mesh_validations};

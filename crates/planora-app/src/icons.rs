@@ -140,6 +140,10 @@ pub enum Icon {
     PositionTool,
     /// Phosphor `scissors`.
     SectionTool,
+    /// Phosphor `arrow-counter-clockwise`.
+    Undo,
+    /// Phosphor `arrow-clockwise`.
+    Redo,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -208,6 +212,8 @@ pub const ALL: &[Icon] = &[
     Icon::SheetInfo,
     Icon::PositionTool,
     Icon::SectionTool,
+    Icon::Undo,
+    Icon::Redo,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -276,6 +282,8 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::SheetInfo, '\u{e34c}', "note-pencil"),
     (Icon::PositionTool, '\u{e36a}', "number-circle-one"),
     (Icon::SectionTool, '\u{eae0}', "scissors"),
+    (Icon::Undo, '\u{e038}', "arrow-counter-clockwise"),
+    (Icon::Redo, '\u{e036}', "arrow-clockwise"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {

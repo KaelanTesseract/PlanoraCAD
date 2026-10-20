@@ -80,6 +80,18 @@ pub struct SketchFeature {
     pub copies: Vec<EdgeCopy>,
 }
 
+/// Gleich heißt: gleicher Stand der Skizze ([`Sketch::revision`]), gleicher Skizzenname (ändert
+/// den Stand nicht, wird aber gespeichert), gleiche Ebene, gleiche Kantenkopien. Zwei getrennt gebaute Skizzen mit gleichem Inhalt sind ungleich (vorsichtig:
+/// höchstens ein überflüssiger Schritt im Verlauf oder eine Neuberechnung mehr).
+impl PartialEq for SketchFeature {
+    fn eq(&self, other: &Self) -> bool {
+        self.sketch.revision() == other.sketch.revision()
+            && self.sketch.name == other.sketch.name
+            && self.plane == other.plane
+            && self.copies == other.copies
+    }
+}
+
 /// Art einer Verrundung (Maße in mm, Winkel in Grad, Positionen in Prozent der Kettenlänge).
 #[derive(Clone, Debug, PartialEq)]
 pub enum BlendArt {
@@ -163,7 +175,7 @@ impl BlendArt {
 }
 
 /// Art eines Features mit seinen Parametern (Maße in Millimetern).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(
     clippy::large_enum_variant,
     reason = "wenige Features je Dokument; die Skizze direkt zu halten hält die Schnittstelle einfach"

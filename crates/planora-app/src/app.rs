@@ -116,9 +116,12 @@ impl PlanoraApp {
         self.projects_ui.invalidate();
     }
 
-    /// Tastenkürzel Strg+N/O/S/W und Strg+Umschalt+E. Nur ohne aktives Eingabefeld, ohne offene
-    /// Rückfrage (die sonst überschrieben würde) und nur im ersten Durchgang eines Bildes (ein verworfener
-    /// Durchgang würde das Kürzel sonst zweimal ausführen).
+    /// Tastenkürzel Strg+N/O/S/W, Strg+Umschalt+E, Strg+Z (Rückgängig) sowie Strg+Umschalt+Z und
+    /// Strg+Y (Wiederholen). Nur ohne aktives Eingabefeld (dort gehören Strg+Z und Strg+Y dem
+    /// Feld), ohne offene Rückfrage (die sonst überschrieben würde) und nur im ersten Durchgang
+    /// eines Bildes (ein verworfener Durchgang würde das Kürzel sonst zweimal ausführen).
+    /// Rückgängig und Wiederholen sind zusätzlich gesperrt, solange ein Fenster offen ist und
+    /// solange eine Maustaste gedrückt ist ([`PlanoraApp::undo_keys`]).
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if viewport::typing(ctx) || self.ws.prompt.is_some() || ctx.current_pass_index() != 0 {
             return;
@@ -150,6 +153,91 @@ impl PlanoraApp {
         if export {
             open_export(&mut self.ws);
         }
+        self.undo_keys(ctx);
+    }
+
+    /// Strg+Z, Strg+Umschalt+Z und Strg+Y (R8). Gesperrt (die Tasten bleiben dann
+    /// unverbraucht) bei einem offenen Fenster des Tabs
+    /// ([`crate::workspace::DocTab::dialog_open`], auch Export), bei „Über“, bei einem Fenster der
+    /// Felder Projekte und Versionen und solange eine Maustaste gedrückt ist: Mitten im Ziehen
+    /// würde das halbe Ziehen sonst ein Schritt und gleich wieder zurückgenommen.
+    /// Strg+Umschalt+Z wird vor Strg+Z abgefragt, weil das Kürzel mit Strg allein auch bei
+    /// gedrückter Umschalttaste passt. Gehaltene Tasten: jedes Bild mit (Wiederholungs-)Ereignis
+    /// ist ein Schritt, mehrere Ereignisse desselben Kürzels in einem Bild zusammen nur einer
+    /// (`consume_shortcut` verbraucht sie alle).
+    fn undo_keys(&mut self, ctx: &egui::Context) {
+        if self.ws.about_open
+            || self.ws.active_tab().dialog_open()
+            || crate::projects_panel::dialog_open(&self.projects_ui)
+            || crate::versions_panel::has_pending(&self.versions_ui)
+            || ctx.input(|i| i.pointer.any_down())
+        {
+            return;
+        }
+        let consume = |modifiers: egui::Modifiers, key: egui::Key| {
+            ctx.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(modifiers, key)))
+        };
+        let shift_z = consume(
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::Z,
+        );
+        let z = consume(egui::Modifiers::COMMAND, egui::Key::Z);
+        let y = consume(egui::Modifiers::COMMAND, egui::Key::Y);
+        if z {
+            undo_active(&mut self.ws);
+        }
+        if shift_z || y {
+            redo_active(&mut self.ws);
+        }
+    }
+}
+
+/// Rückgängig im aktiven Tab (bei offener Skizze in der Skizze). Die Statuszeile nennt danach
+/// den Schritt als Hinweis in normaler Farbe (`state.info`, „Rückgängig: Quader anlegen“) oder
+/// sagt als Meldung, warum es nicht geht (etwa „Es gibt nichts rückgängig zu machen.“).
+/// Schlägt das Zurückladen fehl, steht dort die Meldung von [`crate::workspace::DocTab::undo`];
+/// hat der erreichte Stand ein fehlerhaftes Feature, dessen Fehler.
+pub(crate) fn undo_active(ws: &mut Workspace) {
+    history_step(ws, true);
+}
+
+/// Wiederholen im aktiven Tab; Meldung wie bei [`undo_active`].
+pub(crate) fn redo_active(ws: &mut Workspace) {
+    history_step(ws, false);
+}
+
+fn history_step(ws: &mut Workspace, undo: bool) {
+    let tab = ws.active_tab_mut();
+    let blocked = if undo {
+        tab.undo_blocked()
+    } else {
+        tab.redo_blocked()
+    };
+    if let Some(why) = blocked {
+        tab.state.message = Some(why.into());
+        tab.state.info = None;
+        return;
+    }
+    // Alte Meldungen gehören zum alten Stand; was danach in `message` steht, kommt vom Sprung
+    // (etwa „Rückgängig ist nicht möglich.“) und bleibt.
+    tab.state.message = None;
+    tab.state.info = None;
+    let (label, done, word) = if undo {
+        (tab.undo_label(), tab.undo(), "Rückgängig")
+    } else {
+        (tab.redo_label(), tab.redo(), "Wiederholen")
+    };
+    // Landet der Sprung auf einem Stand mit fehlerhaftem Feature, zeigt die Statuszeile dessen
+    // Fehler (Fehlerfarbe) statt des Hinweises; in der offenen Skizze steht der Hinweis hinter
+    // der Zeile „Skizzen-Modus: …“, die dort vor Feature-Fehlern kommt.
+    let shows_error = tab.state.message.is_some()
+        || (tab.state.sketch_session.is_none()
+            && crate::browser::status_text(&tab.state).is_some());
+    if done.is_ok() && !shows_error {
+        tab.state.info = Some(match label {
+            Some(l) => format!("{word}: {l}"),
+            None => word.into(),
+        });
     }
 }
 
@@ -504,7 +592,45 @@ fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
 }
 
+/// Text des Menüeintrags „Rückgängig“: mit Aktionsnamen „Rückgängig: Quader anlegen“, ohne
+/// Schritt nur „Rückgängig“.
+pub fn undo_menu_text(label: Option<&str>) -> String {
+    match label {
+        Some(l) => format!("Rückgängig: {l}"),
+        None => "Rückgängig".into(),
+    }
+}
+
+/// Text des Menüeintrags „Wiederholen“ (wie [`undo_menu_text`]).
+pub fn redo_menu_text(label: Option<&str>) -> String {
+    match label {
+        Some(l) => format!("Wiederholen: {l}"),
+        None => "Wiederholen".into(),
+    }
+}
+
 fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+    // Rückgängig und Wiederholen: gesperrt mit Hilfetext, wenn es nichts zu tun gibt, in alten
+    // Versionen und während des Exports. Ein offenes Fenster sperrt nicht, es wird geschlossen.
+    let tab = ws.active_tab();
+    let (undo_block, redo_block) = (tab.undo_blocked(), tab.redo_blocked());
+    let undo_text = undo_menu_text(tab.undo_label());
+    let redo_text = redo_menu_text(tab.redo_label());
+    if shortcut_button(ui, undo_block.is_none(), Icon::Undo, &undo_text, "Strg+Z")
+        .on_disabled_hover_text(undo_block.unwrap_or_default())
+        .clicked()
+    {
+        undo_active(ws);
+        ui.close();
+    }
+    if shortcut_button(ui, redo_block.is_none(), Icon::Redo, &redo_text, "Strg+Y")
+        .on_disabled_hover_text(redo_block.unwrap_or_default())
+        .clicked()
+    {
+        redo_active(ws);
+        ui.close();
+    }
+    ui.separator();
     // Boolesche Operationen brauchen zwei gewöhnliche Körper; Netz-Körper sind gesperrt.
     let boolean = ws.active_tab().state.boolean_blocked();
     for (icon, label, op) in [
@@ -803,6 +929,12 @@ impl eframe::App for PlanoraApp {
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
 
+        // Änderungen am Dokument werden Schritte für Rückgängig (R3, R4): erst wenn keine
+        // Maustaste mehr gedrückt ist und kein Eingabefeld die Tastatur hat, damit Ziehen und
+        // Tippen je ein Schritt sind. Vor `remember_keyboard_focus` zählt dabei auch das vorige
+        // Bild; das verschiebt den Schritt nach Enter nur um ein Bild (beides ein Schritt).
+        let gesture = ctx.input(|i| i.pointer.any_down()) || viewport::typing(&ctx);
+        self.ws.observe_history(gesture);
         viewport::remember_keyboard_focus(&ctx);
         if self.ws.quit && !self.close_sent {
             // Beenden ist freigegeben (Menü oder letzte Rückfrage): `logic` des nächsten Bildes

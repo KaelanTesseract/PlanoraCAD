@@ -79,3 +79,26 @@ Der Punkt „ungespeichert“ am Tab folgt dem Verlauf: Wer rückgängig bis zum
 3. Zwei Knöpfe in der Leiste zusätzlich zum Menü und den Tasten?
 4. Ein Schritt je gezeichnetem Skizzenelement (statt nur „Skizze beenden“ als ganzer Schritt)?
 5. Soll Rückgängig auch **nach dem Speichern** noch funktionieren? (Vorschlag: ja.)
+
+## 10. Festlegungen der Umsetzung
+
+Stand 2026-10-20. Die Vorschläge aus §9 hat der Nutzer so bestätigt (Verlauf je Tab, 100 Schritte / 200 MB, Knöpfe zusätzlich zu Menü und Tasten, ein Schritt je Skizzenelement, Rückgängig auch nach dem Speichern). Dazu gelten folgende Festlegungen aus dem Plan; sie ändern oder ergänzen §3 bis §7:
+
+- **R1 Zähler steigen:** Zurückladen setzt `edit_count` und `model_edit_count` nie zurück, auch Feature-Versionen und Netz-Kennungen steigen weiter. Zwischenspeicher der Zeichnung hängen an diesen Zählern.
+- **R2 Zwei Wege:** Ändern sich nur Zeichnungen, Projektangaben oder Stücklistentexte, wird nichts neu gerechnet. Sonst rechnet das Zurückladen wie das Laden; Netze, die schon geprüft im Dokument liegen, werden nicht erneut geprüft.
+- **R3 Schritt = Bild vorher;** ein Bild ohne Unterschied zum letzten Stand ist kein Schritt.
+- **R4 Geste:** Eine Änderung bleibt offen, solange eine Maustaste gedrückt ist oder ein Feld die Tastatur hat; danach ist sie ein Schritt.
+- **R5 Skizzen** sind gleich bei gleichem Stand, Ebene, Namen und Kopien.
+- **R6 Namen** der Schritte entstehen aus dem Unterschied vorher/nachher (nicht an den Aufrufstellen); ohne Regel heißt der Schritt „Ändern“. Bekannte Eigenheiten: Neu und gelöscht im selben Bild heißt nach dem neuen; mehrere geänderte Features: das erste; ein Maßwert in der Skizze heißt „Skizze ändern“; Spiegeln einer einzelnen Kurve heißt nach der Kurve.
+- **R7 Gespeichert-Marke** an Schrittnummern. Ein aus dem Verlauf verdrängter gespeicherter Stand bleibt „ungespeichert“. Die Autosicherung eines Tabs, der wieder dem gespeicherten Stand gleicht, wird gelöscht.
+- **R8 Sperren:** Die Tasten sind gesperrt beim Tippen, bei Fenstern und Rückfragen (auch „Über“ und die Rückfragen der Felder Projekte und Versionen), bei gedrückter Maustaste und während ein Export schreibt. Menü und Knöpfe schließen offene Fenster; sie sind nur in alten Versionen, bei offener Rückfrage und beim Schreiben eines Exports gesperrt. Statt Abbrechen (§7) gilt für den Export die Sperre.
+- **R9 Namenszähler** werden nach dem Zurückladen aus den Namen neu gebildet.
+- **R10 Skizze** wie §6a.2. Der erste Klick eines Werkzeugs gehört zur Linie, das erste Rückgängig bei offenem Punkt nimmt nur den Punkt zurück. Das Maßfeld der Skizze schließt nach jedem Sprung.
+
+Abweichungen von diesem Entwurf:
+1. **Knöpfe im oberen Feld statt in der Werkzeugleiste (§3).** Auf Entscheidung des Nutzers stehen sie im oberen Feld neben den Menüs, in jedem Modus. Das Symbol „Neu“ (+) steht fest hinter der rollenden Tab-Leiste; Name und Schließkreuz des aktiven Tabs sind ab 1150 Pixel Breite immer ganz sichtbar (getestet mit 1 bis 9 Tabs), bei 1100 rollt die Leiste. Offene Ideen: Knöpfe woanders hin, Feld über den Seitenspalten, kürzere Menüs.
+2. **Statuszeile:** Der Hinweis „Rückgängig: …“ ist keine Meldung, sondern eine eigene Anzeige (`AppState::info`) in normaler Farbe.
+3. **Auswahl (§3):** Ein gewählter Körper bleibt gewählt und folgt Verschieben, Verrunden und Booleschen Operationen; Flächen- und Kantenwahl werden beim vollen Zurückladen geleert.
+4. **Fehler (§7):** Zurückladen schlägt nur über unbrauchbare Einträge fehl; der Schritt fällt aus dem Verlauf, das Dokument bleibt, Meldung „Rückgängig ist nicht möglich.“
+5. **Dauer (§6a.6):** Gemessen im Release-Build etwa 0,23 bis 0,29 s für das schwere Modell, `snapshot()` unter 1 ms; synchron, keine Fortschrittsanzeige.
+6. Eine Zeichnung, die nach einem Rückgängig neu angelegt wird, kann die Kennung der zurückgenommenen bekommen; die Oberfläche vergisst deren Zustand.

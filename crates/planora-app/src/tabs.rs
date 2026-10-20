@@ -35,12 +35,38 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace) {
 /// Wie [`show`]; mit `reveal_active` rollt eine umgebende ScrollArea den aktiven Tab (mit seinem
 /// Schließen-Symbol) in den sichtbaren Bereich.
 pub fn show_revealing(ui: &mut egui::Ui, ws: &mut Workspace, reveal_active: bool) {
+    show_impl(ui, ws, reveal_active, true);
+}
+
+/// Nur die Tabs, ohne das Symbol „Neu“ (das steht dann mit [`new_tab_button`] außerhalb einer
+/// rollenden Leiste und bleibt so immer sichtbar). `reveal_active` wie bei [`show_revealing`].
+pub fn show_tabs_only(ui: &mut egui::Ui, ws: &mut Workspace, reveal_active: bool) {
+    show_impl(ui, ws, reveal_active, false);
+}
+
+/// Symbol „Neu“ (Neues Dokument, Strg+N) für sich; legt beim Klick einen neuen Tab an.
+pub fn new_tab_button(ui: &mut egui::Ui, ws: &mut Workspace) -> egui::Response {
+    let response = ui
+        .scope(|ui| {
+            theme::frameless(ui.style_mut());
+            icon_button(ui, Icon::NewTab)
+        })
+        .inner
+        .on_hover_text("Neues Dokument (Strg+N)");
+    if response.clicked() {
+        ws.new_tab();
+    }
+    response
+}
+
+fn show_impl(ui: &mut egui::Ui, ws: &mut Workspace, reveal_active: bool, with_new: bool) {
     let mut activate = None;
     let mut close = None;
     let mut add = false;
     ui.horizontal_wrapped(|ui| {
         theme::frameless(ui.style_mut());
         ui.spacing_mut().item_spacing.x = theme::SPACE_1;
+        let last = ws.tabs.len().saturating_sub(1);
         for (i, t) in ws.tabs.iter().enumerate() {
             let head = tab_label(ui, i == ws.active, &t.title(), t.is_dirty());
             if head.clicked() {
@@ -53,11 +79,14 @@ pub fn show_revealing(ui: &mut egui::Ui, ws: &mut Workspace, reveal_active: bool
             if close_button.clicked() {
                 close = Some(i);
             }
-            ui.add_space(theme::SPACE_2);
+            if with_new || i < last {
+                ui.add_space(theme::SPACE_2);
+            }
         }
-        if icon_button(ui, Icon::NewTab)
-            .on_hover_text("Neues Dokument (Strg+N)")
-            .clicked()
+        if with_new
+            && icon_button(ui, Icon::NewTab)
+                .on_hover_text("Neues Dokument (Strg+N)")
+                .clicked()
         {
             add = true;
         }
