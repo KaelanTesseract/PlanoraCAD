@@ -41,8 +41,8 @@ pub use georef::{
 pub use meshes::VisibleMesh;
 pub use model::{
     BlendArt, BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus,
-    MAX_MESH_SCALE, MESH_LOCKED, MIN_MESH_SCALE, MeshId, ROTATION_NORM_TOL, SketchFeature,
-    SketchPlane, StandardPlane,
+    MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE, MESH_LOCKED, MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE,
+    MeshId, ROTATION_NORM_TOL, SketchFeature, SketchPlane, StandardPlane,
 };
 pub use params::{ParamEdit, ParamId, ParamScope, Parameter};
 pub use parts_sheets::{

@@ -27,6 +27,10 @@ pub struct MeshId(pub u64);
 /// Kleinster und größter Maßstab eines Netz-Körpers (Spec §6).
 pub const MIN_MESH_SCALE: f64 = 1e-6;
 pub const MAX_MESH_SCALE: f64 = 1e6;
+/// Kleinster und größter Fasenwinkel in Grad, beide eingeschlossen (wie im Fenster „Fase“ und
+/// im Kernel, Teilprojekt 8 P4).
+pub const MIN_CHAMFER_ANGLE_DEG: f64 = 1.0;
+pub const MAX_CHAMFER_ANGLE_DEG: f64 = 179.0;
 /// Größte Abweichung der Länge der Drehung von 1 (Spec §6 „normiert“, Plan P17); deckt das
 /// Runden beim Speichern und beim Umrechnen aus Grad ab.
 pub const ROTATION_NORM_TOL: f64 = 1e-6;

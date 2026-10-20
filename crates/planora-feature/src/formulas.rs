@@ -16,7 +16,10 @@
 
 use crate::error::FeatureError;
 use crate::expr::{self, ParamUnit};
-use crate::model::{Document, FeatureId, FeatureKind, MAX_MESH_SCALE, MIN_MESH_SCALE};
+use crate::model::{
+    BlendArt, Document, FeatureId, FeatureKind, MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE,
+    MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE,
+};
 use crate::params::ParamScope;
 use std::collections::{BTreeMap, HashSet};
 
@@ -91,10 +94,17 @@ pub fn field_keys(kind: &FeatureKind) -> Vec<FieldKey> {
         FeatureKind::Move { .. } => vec![X, Y, Z],
         // Die Drehung bleibt ein Ziehfeld (P10).
         FeatureKind::MeshBody { .. } => vec![X, Y, Z, Massstab],
-        FeatureKind::Sketch(_)
-        | FeatureKind::Revolve { .. }
-        | FeatureKind::Boolean { .. }
-        | FeatureKind::Verrunden { .. } => Vec::new(),
+        FeatureKind::Verrunden { art, .. } => match art {
+            BlendArt::Rundung { .. } => vec![Radius],
+            BlendArt::FaseGleich { .. } => vec![Abstand],
+            BlendArt::FaseZwei { .. } => vec![Abstand1, Abstand2],
+            BlendArt::FaseWinkel { .. } => vec![Abstand, Winkel],
+            // Die Punkte der variablen Rundung bleiben ohne Formeln (Spec §4a.2).
+            BlendArt::RundungVariabel { .. } => Vec::new(),
+        },
+        FeatureKind::Sketch(_) | FeatureKind::Revolve { .. } | FeatureKind::Boolean { .. } => {
+            Vec::new()
+        }
     }
 }
 
@@ -119,7 +129,9 @@ pub fn field_label(kind: &FeatureKind, key: FieldKey) -> &'static str {
     }
 }
 
-/// Einheit, die eine Formel in diesem Feld ergeben muss (eine reine Zahl passt immer, P4).
+/// Einheit, die eine Formel in diesem Feld ergeben muss (eine reine Zahl passt immer, P4). Der
+/// Fasenwinkel steht wie im Fenster in Grad im Feld (`BlendArt::FaseWinkel::winkel`); eine
+/// Winkelformel ergibt Grad, der Wert wird ohne Umrechnung geschrieben.
 pub fn field_unit(_kind: &FeatureKind, key: FieldKey) -> ParamUnit {
     match key {
         FieldKey::Winkel => ParamUnit::Angle,
@@ -185,6 +197,15 @@ macro_rules! field_table {
                 Massstab => Some($($r)+ *scale),
                 _ => None,
             },
+            FeatureKind::Verrunden { art, .. } => match (art, $key) {
+                (BlendArt::Rundung { radius }, Radius) => Some($($r)+ *radius),
+                (BlendArt::FaseGleich { abstand }, Abstand) => Some($($r)+ *abstand),
+                (BlendArt::FaseZwei { abstand1, .. }, Abstand1) => Some($($r)+ *abstand1),
+                (BlendArt::FaseZwei { abstand2, .. }, Abstand2) => Some($($r)+ *abstand2),
+                (BlendArt::FaseWinkel { abstand, .. }, Abstand) => Some($($r)+ *abstand),
+                (BlendArt::FaseWinkel { winkel, .. }, Winkel) => Some($($r)+ *winkel),
+                _ => None,
+            },
             _ => None,
         }
     }};
@@ -217,12 +238,21 @@ pub fn set_field_value(kind: &mut FeatureKind, key: FieldKey, v: f64) -> bool {
 }
 
 /// Wertfehler eines Formelergebnisses `v` im Feld, sonst `None`. Maße (Breite, Tiefe, Höhe,
-/// Radius, auch die Extrusionshöhe, die der Kernel nur positiv kennt) müssen größer als 0 sein;
-/// der Maßstab eines Netz-Körpers muss in `MIN_MESH_SCALE..=MAX_MESH_SCALE` liegen (wie beim
-/// Eintippen); Lagen und Verschiebungen dürfen jedes Vorzeichen haben.
+/// Radius, auch die Extrusionshöhe, die der Kernel nur positiv kennt, und die Fasenabstände)
+/// müssen größer als 0 sein; der Maßstab eines Netz-Körpers muss in
+/// `MIN_MESH_SCALE..=MAX_MESH_SCALE` liegen (wie beim Eintippen); der Fasenwinkel in
+/// `MIN_CHAMFER_ANGLE_DEG..=MAX_CHAMFER_ANGLE_DEG` (Grenzen eingeschlossen, wie im Fenster
+/// „Fase“); Lagen und Verschiebungen dürfen jedes Vorzeichen haben. Das Kleinstmaß einer Rundung
+/// oder Fase prüft der Kernel beim Rechnen (Fehlerstatus mit seiner Meldung).
 fn value_issue(kind: &FeatureKind, key: FieldKey, v: f64, tolerance: f64) -> Option<String> {
     match key {
-        FieldKey::Breite | FieldKey::Tiefe | FieldKey::Hoehe | FieldKey::Radius
+        FieldKey::Breite
+        | FieldKey::Tiefe
+        | FieldKey::Hoehe
+        | FieldKey::Radius
+        | FieldKey::Abstand
+        | FieldKey::Abstand1
+        | FieldKey::Abstand2
             if v <= tolerance =>
         {
             Some(format!(
@@ -235,7 +265,29 @@ fn value_issue(kind: &FeatureKind, key: FieldKey, v: f64, tolerance: f64) -> Opt
             "Maßstab ergibt {}, er muss zwischen 0,000001 und 1 000 000 liegen",
             scale_text(v)
         )),
+        FieldKey::Winkel if !(MIN_CHAMFER_ANGLE_DEG..=MAX_CHAMFER_ANGLE_DEG).contains(&v) => {
+            Some(format!(
+                "Winkel ergibt {}°, er muss zwischen 1° und 179° liegen",
+                angle_text(v)
+            ))
+        }
         _ => None,
+    }
+}
+
+/// Text eines unzulässigen Fasenwinkels: kurz ([`expr::short_number`], „200“), außer wenn die
+/// gerundete Zahl selbst zulässig wäre (0,999 → „1“, 179,004 → „179“); dann verlustfrei
+/// ([`expr::number_text`]), damit die Meldung sich nicht selbst widerspricht.
+fn angle_text(v: f64) -> String {
+    let short = expr::short_number(v);
+    let rounded_inside = short
+        .replace(',', ".")
+        .parse::<f64>()
+        .is_ok_and(|r| (MIN_CHAMFER_ANGLE_DEG..=MAX_CHAMFER_ANGLE_DEG).contains(&r));
+    if rounded_inside {
+        expr::number_text(v)
+    } else {
+        short
     }
 }
 
