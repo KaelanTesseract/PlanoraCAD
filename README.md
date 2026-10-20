@@ -9,11 +9,11 @@
 
 Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
 
-**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern, PDF-Ausgabe, Schnittansichten).
+**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern, PDF-Ausgabe, Schnittansichten, Rückgängig und Wiederholen).
 
 Erste Version: Quader, Zylinder, Kugel, Kegel, Extrusion und Rotation von Skizzen, 3D-Ansicht mit Auswahl, Körper verschieben (Feld „Position“) sowie Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit Flächen aus Ebenen, Zylindern, Kegeln, Kugeln und Tori (Stufe A) und für Körper mit Freiformflächen aus Ellipsen und Splines (siehe „Freiformflächen“).
 
-Bekannte Grenzen: Bei Körpern aus einfachen Flächen werden Schnitte, die Raumkurven ergeben (z. B. zwei Zylinder mit gekreuzten Achsen), noch nicht unterstützt (mit Freiformflächen dagegen oft schon, siehe „Freiformflächen“); das Vereinigen von Körpern, die sich nur an einer Kante berühren, manche genau tangentialen Lagen und Kanten oder Ecken, die genau auf einer Fläche des anderen Körpers aufliegen, liefern eine Fehlermeldung statt eines Ergebnisses (bei Berührung nur an einer Ecke entsteht ein Körper aus zwei Teilen mit gemeinsamer Ecke); es gibt noch kein Rückgängig. Details: `docs/superpowers/offene-punkte.md`.
+Bekannte Grenzen: Bei Körpern aus einfachen Flächen werden Schnitte, die Raumkurven ergeben (z. B. zwei Zylinder mit gekreuzten Achsen), noch nicht unterstützt (mit Freiformflächen dagegen oft schon, siehe „Freiformflächen“); das Vereinigen von Körpern, die sich nur an einer Kante berühren, manche genau tangentialen Lagen und Kanten oder Ecken, die genau auf einer Fläche des anderen Körpers aufliegen, liefern eine Fehlermeldung statt eines Ergebnisses (bei Berührung nur an einer Ecke entsteht ein Körper aus zwei Teilen mit gemeinsamer Ecke). Details: `docs/superpowers/offene-punkte.md`.
 
 ## Skizzen
 
@@ -32,7 +32,6 @@ Bekannte Grenzen: Bei Körpern aus einfachen Flächen werden Schnitte, die Raumk
 - Drehen nur für Profile ohne Löcher, die mit genau einer Linie auf der Drehachse liegen und ganz auf einer Seite davon; immer 360°.
 - Skizzen nur auf den Grundebenen und auf ebenen Körperflächen.
 - Kopierte Körperkanten folgen der Kante nur, solange sie ihre Art behält (eine Gerade bleibt eine Gerade).
-- Kein Rückgängig.
 - Maße nur als Zahl, keine Gleichungen oder Parameter.
 - Mehrdeutige Lagen (z. B. ein Winkel um 180° gedreht) entscheidet der nächstgelegene Zustand; es gibt keine Auswahl der Lösung.
 - Der Solver rechnet je zusammenhängender Gruppe mit dichten Matrizen. Unveränderte Gruppen werden nicht neu gerechnet (auch beim Ziehen nicht); innerhalb einer Gruppe wird flüssiges Ziehen ab etwa 150–300 Variablen zäh (300 Variablen: etwa 0,15 s je Zugschritt im Release-Build). Widersprüchliche Gruppen sind langsamer: Beim Ziehen sucht der Solver dort nicht nach der Ursache, das holt er am Ende des Ziehens nach; hat eine Gruppe mehr als 48 Abhängigkeiten, meldet er statt der genauen Ursache „nicht lösbar“ mit den verletzten Abhängigkeiten. Ein Muster mit 100 Kopien eines Rechtecks ist eine Gruppe mit über 800 Variablen (Anlegen etwa 1,7 s, Ziehen etwa 1,5 s je Schritt).
@@ -347,7 +346,6 @@ Alles, was du baust, steht als Liste von Schritten im Feature-Baum: Quader, Skiz
 - Fehler stehen an dem Schritt, der sie auslöst. Alles davor bleibt benutzbar; Schritte, die davon abhängen, werden übersprungen.
 
 **Was (noch) nicht geht**
-- Kein Rückgängig.
 - Keine benannten Maße oder Gleichungen.
 - Keine Muster- oder Spiegel-Schritte.
 - Der Zurückroll-Marker lässt sich nur über das Menü setzen, nicht mit der Maus ziehen.
@@ -392,6 +390,50 @@ Deine Arbeit bleibt jetzt erhalten. Gespeichert wird die Liste der Schritte aus 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 6 – Speichern und Projekte“.
 
 Lizenz: GPL-3.0-only (siehe `LICENSE`).
+
+## Rückgängig und Wiederholen
+
+Jede Änderung am Dokument lässt sich zurücknehmen und wieder herstellen: Körper anlegen, verschieben, verrunden, löschen, umbenennen, unterdrücken, Skizzen, Zeichnungen mit Ansichten, Maßen, Positionsnummern, Schnitten und Blattangaben.
+
+**Bedienung**
+- **Tasten:** Strg+Z nimmt den letzten Schritt zurück. Strg+Umschalt+Z oder Strg+Y holt ihn wieder.
+- **Menü „Bearbeiten“:** ganz oben „Rückgängig: …“ und „Wiederholen: …“, mit dem Namen der Aktion, zum Beispiel „Rückgängig: Quader anlegen“. Gibt es nichts zu tun, ist der Eintrag grau, und der Hinweis sagt es.
+- **Zwei Knöpfe** im oberen Feld, gleich neben den Menüs. Sie gehen in jeder Ansicht: 3D, Zeichnung und Skizze.
+- Nach dem Klick oder der Taste steht unten in der Statuszeile, was zurückgenommen wurde. Der Hinweis bleibt, bis du den nächsten Schritt machst.
+
+**Was ein Schritt ist**
+- Eine Aktion ist ein Schritt, auch wenn das Programm dabei mehrere Dinge ändert. „Löschen mit Folgen“ zum Beispiel nimmt ein einziges Rückgängig wieder ganz zurück.
+- Ziehen mit der Maus ist ein Schritt, vom Anfassen bis zum Loslassen. Das gilt für das Feld „Position“, für Ansichten, Maßlinien und Positionsnummern im Blatt und für Punkte in der Skizze. Eine Zahl in ein Feld zu tippen ist ein Schritt, auch wenn man Zeichen für Zeichen tippt.
+- Nach einem Rückgängig löscht jede neue Aktion die Liste der Schritte zum Wiederholen.
+- Jeder Tab hat seinen eigenen Verlauf. Es bleiben die letzten 100 Schritte (oder weniger, wenn der Speicher dafür nicht reicht: etwa 200 MB). Die ältesten fallen ohne Meldung heraus.
+
+**Skizze**
+- Solange eine Skizze offen ist, gilt Rückgängig nur für die Skizze, und das Dokument bleibt, wie es ist. Jedes gezeichnete Element, jede Abhängigkeit und jedes Ziehen eines Punktes ist ein Schritt.
+- Der erste Klick einer Linie ist noch kein Schritt, er gehört zur Linie. Ist ein Klick offen, nimmt das erste Rückgängig nur diesen Klick zurück.
+- „Skizze beenden“ ist danach ein Schritt im Dokument. Rückgängig nimmt die ganze Skizze auf einmal zurück.
+
+**Der Punkt „ungespeichert“**
+- Der Punkt am Tab folgt dem Verlauf. Gehst du nach dem Speichern zurück, erscheint er. Gehst du zurück bis zum gespeicherten Stand, verschwindet er wieder.
+- Rückgängig geht auch nach dem Speichern noch. Der Verlauf wird aber nicht mit der Datei gespeichert; nach einem Neustart ist er leer.
+- Ist ein Tab nach Rückgängig wieder so wie gespeichert, löscht das Programm seine Sicherung zwischendurch, damit beim Öffnen nichts Überholtes angeboten wird.
+
+**Was dabei passiert**
+- Kamera und Hell oder Dunkel bleiben. Ein gewählter Körper bleibt gewählt, solange es ihn gibt. Eine gewählte Fläche oder Kante wird abgewählt, wenn sich das Modell ändert. Bei Schritten, die nur die Zeichnung betreffen, bleibt auch sie.
+- Offene Fenster (zum Beispiel „Quader erzeugen“ oder „Ändern“) werden geschlossen, wenn du Rückgängig über das Menü oder die Knöpfe benutzt. Was du darin noch nicht übernommen hattest, ist weg.
+- Die Tasten sind gesperrt, solange du in ein Feld tippst (dort gilt das Rückgängig des Feldes), ein Fenster oder eine Rückfrage offen ist, die Maustaste gedrückt ist oder eine Datei exportiert wird. Menü und Knöpfe gehen auch bei offenem Fenster und schließen es. Beim Export sind sie gesperrt.
+- Strg+Alt+Z löst ebenfalls Rückgängig aus, wie bei allen Tastenkürzeln des Programms.
+- Die Namen der Aktionen erkennt das Programm am Unterschied zwischen vorher und nachher. Sie stimmen fast immer. Wenn mehrere Dinge in einem Schritt zusammenfallen, gilt eine feste Reihenfolge; ist nichts Passendes dabei, heißt der Schritt „Ändern“. Zwei Eigenheiten: Ändert man einen Maßwert in einer Skizze, heißt der Schritt „Skizze ändern“ (nicht „Maß ändern“). Spiegelt man eine einzelne Kurve, heißt der Schritt nach der Kurve (zum Beispiel „Kreis zeichnen“).
+- Ist das Zurückholen eines Schrittes einmal nicht möglich, bleibt das Dokument unverändert, es kommt die Meldung „Rückgängig ist nicht möglich.“ (bzw. „Wiederholen ist nicht möglich.“), und nur dieser Schritt fällt aus dem Verlauf. Das sollte nicht vorkommen.
+- Wie lange es dauert: Ein Schritt im Modell rechnet das Dokument neu, wie beim Öffnen. Bei einem schweren Beispielmodell (37 Einträge im Baum, Netz-Körper mit 200 000 Dreiecken, Zeichnung mit sechs Ansichten) dauerte das im Release-Build etwa 0,23 bis 0,29 Sekunden. Ein Schritt, der nur die Zeichnung betrifft, rechnet nichts neu.
+
+**Grenzen**
+- Der Verlauf liegt nur im Arbeitsspeicher: nicht in der Datei, nicht über einen Neustart, nicht zwischen Tabs.
+- Nicht zurückgenommen werden Kamera, Auswahl, Ansichtseinstellungen, Export, Speichern, und das Öffnen, Neu-Anlegen oder Schließen von Tabs.
+- Die Tab-Leiste rollt bei 1100 Pixel Fensterbreite, weil die zwei Knöpfe Platz brauchen: Das Symbol „Neu“ (+) steht dafür fest rechts neben der Leiste und bleibt immer sichtbar. Name und Schließkreuz des aktiven Tabs sind ab etwa 1140 Pixel Breite immer ganz zu sehen; darunter schließt Strg+W den aktiven Tab.
+- Eine Skizze mit gleichem Inhalt, aber neuem Stand gilt als geändert; das kann einen überflüssigen Schritt ergeben.
+- Fällt ein Schritt nach einem Fehler aus dem Verlauf, fasst der nächste Schritt danach zwei Änderungen zusammen.
+
+Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt: Rückgängig und Wiederholen“.
 
 ## Neues Aussehen (Graphit)
 
