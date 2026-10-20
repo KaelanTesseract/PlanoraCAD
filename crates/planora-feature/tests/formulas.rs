@@ -851,12 +851,17 @@ fn rename_tolerates_old_broken_formula() {
         d.feature(q).unwrap().status,
         FeatureStatus::Error(_)
     ));
-    // Durch den Wert ersetzen entfernt beide Formeln; der Fehler verschwindet, das Feld behält
-    // seinen letzten Wert
-    d.replace_parameter_by_value(b).unwrap();
-    assert!(d.feature(q).unwrap().formulas().is_empty());
-    assert_eq!(box_of(&d, q).0, DVec3::new(1.0, 10.0, 1.0));
-    assert_eq!(d.feature(q).unwrap().status, FeatureStatus::Ok);
+    // Durch den Wert ersetzen wird abgelehnt, solange der Quader einen Fehler hat (sonst würde
+    // das Modell still ein anderes: Breite mit dem letzten Wert statt Fehler; Aufgabe 6, F2)
+    let before = d.snapshot();
+    let count = d.edit_count();
+    assert_eq!(
+        d.replace_parameter_by_value(b).unwrap_err().to_string(),
+        "Parameter „Weite“ lässt sich nicht durch den Wert ersetzen: „Quader 1“ hat gerade \
+         einen Fehler. Beheben Sie zuerst den Fehler."
+    );
+    assert!(d.snapshot().same_content(&before));
+    assert_eq!(d.edit_count(), count);
     d.check_invariants().unwrap();
 }
 

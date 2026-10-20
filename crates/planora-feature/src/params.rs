@@ -258,10 +258,29 @@ impl Document {
     /// „Durch den Wert ersetzen“ (Plan P7): Jede Formel, die den Parameter direkt nennt, wird
     /// durch ihren aktuellen Wert ersetzt ([`expr::value_text`]), dann wird der Parameter
     /// gelöscht. Ein Schritt; kein Wert ändert sich. Lässt sich ein Wert nicht als Formel
-    /// schreiben, wird abgelehnt und nichts ändert sich.
+    /// schreiben oder hat ein Feature, das den Parameter nennt, gerade einen Fehler (Status
+    /// `Error`/`Skipped` oder Wertfehler), wird abgelehnt und nichts ändert sich.
     pub fn replace_parameter_by_value(&mut self, id: ParamId) -> Result<(), FeatureError> {
         let idx = self.param_index(id)?;
         let name = self.parameters[idx].name.clone();
+        // Nie still ein anderes Modell: Hat ein Feature, das den Parameter nennt, gerade einen
+        // Fehler (Status oder Wertfehler), ergäbe das Ersetzen ein anderes Modell als die
+        // Formel (etwa ein Skizzenmaß mit seinem letzten gültigen Wert). Dann wird abgelehnt.
+        if let Some(f) = self.features.iter().find(|f| {
+            mentions(&f.kind, &f.formulas, &name)
+                && (f.issue.is_some()
+                    || matches!(
+                        f.status,
+                        crate::model::FeatureStatus::Error(_)
+                            | crate::model::FeatureStatus::Skipped(_)
+                    ))
+        }) {
+            return Err(FeatureError::Formula(format!(
+                "Parameter „{name}“ lässt sich nicht durch den Wert ersetzen: „{}“ hat gerade \
+                 einen Fehler. Beheben Sie zuerst den Fehler.",
+                f.name
+            )));
+        }
         let mut table = self.parameters.clone();
         for (i, p) in table.iter_mut().enumerate() {
             if i != idx && expr::references(&p.formula, &name) {
@@ -343,6 +362,17 @@ impl Document {
         self.param_values = values;
         self.next_param = next_param;
         for (i, kind, formulas) in features {
+            // Ändern sich die Formeln einer Skizze, rechnet sie neu: Ob sie Formeln hat,
+            // entscheidet über die Auswertung des Solverstatus (P12); ein gespeicherter
+            // Fehlschlag darf diese Änderung nicht überdauern.
+            let sketch_changed = match (&self.features[i].kind, &kind) {
+                (FeatureKind::Sketch(a), FeatureKind::Sketch(b)) => a.formulas != b.formulas,
+                _ => false,
+            };
+            if sketch_changed {
+                let version = self.bump();
+                self.features[i].version = version;
+            }
             self.features[i].kind = kind;
             self.features[i].formulas = formulas;
         }

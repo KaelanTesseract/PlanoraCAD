@@ -751,3 +751,245 @@ fn not_converged_has_its_own_message() {
     );
     d.check_invariants().unwrap();
 }
+
+// ---- Nachbesserung (Review F1, F2, F3, F6) ----------------------------------------------------
+
+/// Status aller Features gleich wie nach dem Laden desselben Bildes (pfadunabhängig).
+fn assert_same_as_loaded(d: &Document) {
+    let loaded = Document::from_snapshot(d.snapshot(), 0.05).unwrap();
+    for f in d.features() {
+        assert_eq!(
+            f.status,
+            loaded.feature(f.id).unwrap().status,
+            "Feature „{}“ nach dem Laden anders",
+            f.name
+        );
+    }
+}
+
+fn replace_refused(d: &mut Document, p: ParamId, feature: &str) {
+    let before = d.snapshot();
+    let count = d.edit_count();
+    let name = d.parameter(p).unwrap().name.clone();
+    assert_eq!(
+        formula_err(d.replace_parameter_by_value(p)),
+        format!(
+            "Parameter „{name}“ lässt sich nicht durch den Wert ersetzen: „{feature}“ hat \
+             gerade einen Fehler. Beheben Sie zuerst den Fehler."
+        )
+    );
+    assert!(d.snapshot().same_content(&before), "nichts geändert");
+    assert_eq!(d.edit_count(), count, "kein Schritt");
+}
+
+#[test]
+fn replace_in_unsolved_sketch_is_refused_and_path_independent() {
+    // Probe aus dem Review (F1): Dreieck a/b/c, c = 100 → Widerspruch. Die Formeln dürfen nicht
+    // so verschwinden, dass ein alter Fehlschlag stehen bleibt; das Ersetzen wird abgelehnt.
+    let (mut d, c, s, e) = triangle_doc();
+    d.set_parameter(c, edit(&d, c, "100")).unwrap();
+    assert!(matches!(status(&d, s), FeatureStatus::Error(_)));
+    let ids: Vec<ParamId> = d.parameters().iter().map(|p| p.id).collect();
+    for p in ids {
+        replace_refused(&mut d, p, "Skizze 1");
+    }
+    assert_eq!(sketch_feature(&d, s).formulas.len(), 3);
+    assert!(matches!(status(&d, e), FeatureStatus::Skipped(_)));
+    assert_same_as_loaded(&d);
+    d.check_invariants().unwrap();
+    // Ungelöste Skizze mit einer Formel an einem unbeteiligten Maß: ebenso.
+    let mut d = Document::new();
+    let h = d.add_parameter("h", "20", Length, "").unwrap();
+    let (sk, right) = conflicting_sketch();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, one(right, "h"))))
+        .unwrap();
+    assert!(matches!(status(&d, s), FeatureStatus::Error(_)));
+    replace_refused(&mut d, h, "Skizze 1");
+    assert_same_as_loaded(&d);
+}
+
+#[test]
+fn changed_sketch_formulas_get_a_new_version() {
+    // F1: Ändern Umbenennen oder Ersetzen die Formeln einer Skizze, bekommt sie eine neue
+    // Version (kein gespeicherter Fehlschlag überdauert); gesunde Skizzen bleiben Ok.
+    let (mut d, b, s, e, r) = rect_doc();
+    let v0 = d.feature(s).unwrap().version();
+    let mut ed = edit(&d, b, "30");
+    ed.name = "Weite".into();
+    d.set_parameter(b, ed).unwrap();
+    let v1 = d.feature(s).unwrap().version();
+    assert!(v1 > v0, "Umbenennen: neue Version");
+    assert_same_as_loaded(&d);
+    let count = d.edit_count();
+    d.replace_parameter_by_value(b).unwrap();
+    assert!(
+        d.feature(s).unwrap().version() > v1,
+        "Ersetzen: neue Version"
+    );
+    assert_eq!(d.edit_count(), count + 1, "ein Schritt");
+    assert_eq!(stored(&d, s, r.bottom), 30.0);
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    assert_eq!(status(&d, e), FeatureStatus::Ok);
+    assert_same_as_loaded(&d);
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn replace_refused_while_sketch_has_a_value_error() {
+    // F2: „Breite-30“ mit Breite 30 ergibt 0 → Wertfehler, das Maß steht noch auf 10. Ersetzen
+    // ergäbe still ein gültiges 10-mm-Modell; es wird abgelehnt.
+    let (mut d, b, s, e, r) = rect_doc();
+    d.update(s, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            sf.formulas.insert(r.bottom, "Breite-30".into());
+        }
+    })
+    .unwrap();
+    d.set_parameter(b, edit(&d, b, "40")).unwrap();
+    d.set_parameter(b, edit(&d, b, "30")).unwrap();
+    assert!(error_text(&d, s).starts_with("Ein Maß ergibt 0 mm: "));
+    replace_refused(&mut d, b, "Skizze 1");
+    assert!(matches!(status(&d, e), FeatureStatus::Skipped(_)));
+    assert_same_as_loaded(&d);
+    // Nach dem Beheben geht es wie gewohnt, als ein Schritt.
+    d.set_parameter(b, edit(&d, b, "40")).unwrap();
+    let count = d.edit_count();
+    d.replace_parameter_by_value(b).unwrap();
+    assert_eq!(d.edit_count(), count + 1);
+    assert_eq!(stored(&d, s, r.bottom), 10.0);
+    assert_eq!(status(&d, e), FeatureStatus::Ok);
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn replace_refused_while_body_feature_fails() {
+    // F2 auch für Körperfelder: Fehler (Wertfehler) und übersprungen.
+    let mut d = Document::new();
+    let b = d.add_parameter("Breite", "40", Length, "").unwrap();
+    let q = d
+        .add_feature_with_formulas(
+            "Quader 1",
+            FeatureKind::Box {
+                size: DVec3::ONE,
+                origin: DVec3::ZERO,
+            },
+            [(FieldKey::Breite, "Breite-40".to_string())]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+    assert!(matches!(status(&d, q), FeatureStatus::Error(_)));
+    replace_refused(&mut d, b, "Quader 1");
+    // Verschieben mit Formel hinter einem Quader im Fehler: übersprungen → ebenso abgelehnt.
+    let mut d2 = Document::new();
+    let k2 = d2.add_parameter("k", "1", Length, "").unwrap();
+    let dx = d2.add_parameter("dx", "5", Length, "").unwrap();
+    let q2 = d2
+        .add_feature_with_formulas(
+            "Quader 1",
+            FeatureKind::Box {
+                size: DVec3::ONE,
+                origin: DVec3::ZERO,
+            },
+            [(FieldKey::Breite, "k-1".to_string())]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+    let m = d2
+        .add_feature_with_formulas(
+            "Verschieben 1",
+            FeatureKind::Move {
+                body: BodyRef {
+                    feature: q2,
+                    index: 0,
+                },
+                delta: DVec3::ZERO,
+            },
+            [(FieldKey::X, "dx".to_string())].into_iter().collect(),
+        )
+        .unwrap();
+    assert!(matches!(status(&d2, m), FeatureStatus::Skipped(_)));
+    replace_refused(&mut d2, dx, "Verschieben 1");
+    // Behoben (k = 2): Ersetzen von dx ist ein Schritt, Δx bleibt 5.
+    d2.set_parameter(k2, edit(&d2, k2, "2")).unwrap();
+    let count = d2.edit_count();
+    d2.replace_parameter_by_value(dx).unwrap();
+    assert_eq!(d2.edit_count(), count + 1);
+    assert!(d2.feature(m).unwrap().formulas().is_empty());
+    assert_eq!(status(&d2, m), FeatureStatus::Ok);
+    d2.check_invariants().unwrap();
+}
+
+#[test]
+fn load_with_broken_sketch_formula() {
+    // F3: Ein Bild mit einer kaputten Skizzenformel lädt (P3); die Skizze zeigt den Fehler, das
+    // Maß behält seinen Wert, andere Parameteränderungen werden geduldet.
+    let (d, b, s, e, r) = rect_doc();
+    let mut snap = d.snapshot();
+    let idx = snap.features.iter().position(|f| f.id == s).unwrap();
+    let FeatureKind::Sketch(sf) = &mut snap.features[idx].kind else {
+        panic!("keine Skizze")
+    };
+    sf.formulas.insert(r.right, "Gibtsnicht".into());
+    let mut d = Document::from_snapshot(snap, 0.05).unwrap();
+    assert_eq!(
+        status(&d, s),
+        FeatureStatus::Error("Den Namen „Gibtsnicht“ gibt es nicht.".into())
+    );
+    assert!(matches!(status(&d, e), FeatureStatus::Skipped(_)));
+    assert_eq!(stored(&d, s, r.right), 20.0, "Maß behält seinen Wert");
+    assert_eq!(stored(&d, s, r.bottom), 30.0);
+    d.check_invariants().unwrap();
+    // andere Parameteränderung geduldet (der alte Fehler blockiert nicht)
+    let other = d.add_parameter("Andere", "1", Length, "").unwrap();
+    d.set_parameter(other, edit(&d, other, "2")).unwrap();
+    d.set_parameter(b, edit(&d, b, "35")).unwrap();
+    assert_eq!(stored(&d, s, r.bottom), 35.0);
+    assert!(matches!(status(&d, s), FeatureStatus::Error(_)));
+    // gültige Formel → Ok
+    d.update(s, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            sf.formulas.insert(r.right, "Breite/7*4".into());
+        }
+    })
+    .unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    assert_eq!(status(&d, e), FeatureStatus::Ok);
+    assert!((stored(&d, s, r.right) - 20.0).abs() <= 1e-12);
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn ellipse_angle_formula_in_degrees() {
+    // F6: Winkel einer Ellipse in Grad durch das Feature (Bogenmaß in der Skizze).
+    let mut d = Document::new();
+    let w = d.add_parameter("w", "30", Angle, "").unwrap();
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let m = sk.add_point(0.0, 0.0).unwrap();
+    let el = sk.add_ellipse(m, DVec2::new(20.0, 0.0), 10.0).unwrap();
+    sk.add_constraint(ConstraintKind::Fixed(m, 0.0, 0.0))
+        .unwrap();
+    let ang = sk
+        .add_constraint(ConstraintKind::EllipseAngle(el, 0.0))
+        .unwrap();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, one(ang, "w"))))
+        .unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    let value = |d: &Document| match sketch_feature(d, s).sketch.constraint(ang).unwrap().kind {
+        ConstraintKind::EllipseAngle(_, v) => v,
+        ref k => panic!("{k:?}"),
+    };
+    assert_eq!(value(&d), 30f64.to_radians());
+    let measure = |d: &Document| {
+        let sk = d.sketch_of(s).unwrap();
+        sk.measure(&sk.constraint(ang).unwrap().kind).unwrap()
+    };
+    assert!((measure(&d) - 30f64.to_radians()).abs() <= 1e-9);
+    d.set_parameter(w, edit(&d, w, "60")).unwrap();
+    assert_eq!(value(&d), 60f64.to_radians());
+    assert!((measure(&d) - 60f64.to_radians()).abs() <= 1e-9);
+    d.check_invariants().unwrap();
+}

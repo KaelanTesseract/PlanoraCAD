@@ -483,6 +483,8 @@ fn evaluate_sketch(sf: &SketchFeature, scope: &ParamScope) -> (Sketch, Option<Fo
         }
         if !progress {
             let (d, e) = &rejected[0];
+            // Winkel lehnt die Skizze nur bei nicht endlichen Werten ab, die eine Formel nie
+            // ergibt: Der Zweig „°“ ist derzeit unerreichbar und bleibt als Absicherung.
             let suffix = if d.unit == ParamUnit::Angle {
                 "°"
             } else {
