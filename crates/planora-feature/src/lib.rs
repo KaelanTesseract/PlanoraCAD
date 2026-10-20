@@ -5,6 +5,7 @@ mod compute;
 mod dimensions;
 mod drawings;
 pub mod error;
+pub mod expr;
 pub mod georef;
 mod meshes;
 pub mod model;
@@ -24,6 +25,10 @@ pub use drawings::{
     MAX_DRAWINGS, MAX_NAME_CHARS, MAX_POS_MM, MAX_VIEWS, TOO_MANY_BALLOONS, validate_drawing,
 };
 pub use error::FeatureError;
+pub use expr::{
+    MAX_COMMENT_CHARS, MAX_FORMULA_CHARS, MAX_FORMULA_DEPTH, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS,
+    ParamUnit,
+};
 pub use georef::{
     from_edge_ref, from_face_ref, geo_ref_for_edge, geo_ref_for_edge_cached, geo_ref_for_face,
     geo_ref_for_face_cached, resolve_geo, resolve_geo_cached, to_edge_ref, to_face_ref,
