@@ -520,3 +520,59 @@ fn parameter_breaks_blend_then_back() {
     assert_ne!(corners(&d, f), ok_body);
     d.check_invariants().unwrap();
 }
+
+/// Nachtrag (Aufgabe 10, offene Punkte der Prüfung von Aufgabe 5): „Abstand 1“ ≤ 0 und ein
+/// unzulässiger Winkel mit Nachkommastellen in Kurzform.
+#[test]
+fn first_distance_and_decimal_angle_messages() {
+    let (mut d, b, e) = with_box();
+    let a = d.add_parameter("a", "1", Length, "").unwrap();
+    let f = d
+        .add_feature_with_formulas(
+            "Fase 1",
+            blend(
+                b,
+                &e,
+                BlendArt::FaseZwei {
+                    abstand1: 7.0,
+                    abstand2: 8.0,
+                },
+            ),
+            formulas(&[(Abstand1, "a-1"), (Abstand2, "2")]),
+        )
+        .unwrap();
+    assert_eq!(
+        status(&d, f),
+        FeatureStatus::Error("Abstand 1 ergibt 0 mm, es muss größer als 0 sein".into())
+    );
+    d.set_parameter(a, edit(&d, a, "-2")).unwrap();
+    assert_eq!(
+        status(&d, f),
+        FeatureStatus::Error("Abstand 1 ergibt -3 mm, es muss größer als 0 sein".into())
+    );
+    assert!(!has_body(&d, f));
+    d.check_invariants().unwrap();
+
+    let (mut d, b, e) = with_box();
+    let w = d.add_parameter("w", "45", Angle, "").unwrap();
+    let f = d
+        .add_feature_with_formulas(
+            "Fase 1",
+            blend(
+                b,
+                &e,
+                BlendArt::FaseWinkel {
+                    abstand: 1.0,
+                    winkel: 30.0,
+                },
+            ),
+            formulas(&[(Winkel, "w")]),
+        )
+        .unwrap();
+    assert_eq!(status(&d, f), FeatureStatus::Ok);
+    d.set_parameter(w, edit(&d, w, "200.123")).unwrap();
+    assert_eq!(
+        status(&d, f),
+        FeatureStatus::Error("Winkel ergibt 200,12°, er muss zwischen 1° und 179° liegen".into())
+    );
+}

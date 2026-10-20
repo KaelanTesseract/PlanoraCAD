@@ -8,10 +8,15 @@ use crate::blend_dialog::{
 use crate::browser::error_color;
 use crate::create_dialog::axis_candidates;
 use crate::dialog::{Dialog, DialogSize};
-use crate::sketch_view::{format_number, parse_number};
+use crate::formula_field::{FieldInput, FormulaField, classify, names_hint, resolve};
+use crate::sketch_view::format_number;
 use crate::state::{AppState, MAX_COORD_MM};
 use crate::theme;
-use planora_feature::{BlendArt, BodyRef, FeatureId, FeatureKind, FeatureStatus};
+use planora_feature::expr::number_text;
+use planora_feature::{
+    BlendArt, BodyRef, FeatureId, FeatureKind, FeatureStatus, FieldKey, Formulas, ParamScope,
+    field_keys, field_label, field_unit, field_value, set_field_value,
+};
 use planora_kernel::BoolOp;
 use planora_math::DVec3;
 
@@ -22,11 +27,24 @@ pub struct FeatureDialog {
     id: FeatureId,
     name: String,
     kind: FeatureKind,
-    /// Zahlenfelder in der Reihenfolge von [`numbers_of`]: Bezeichnung und eingegebener Text.
-    numbers: Vec<(String, String)>,
+    /// Zahlenfelder in der Reihenfolge von [`fields_of`].
+    numbers: Vec<NumberField>,
     error: Option<String>,
     /// Stand des Features beim Öffnen (siehe [`planora_feature::Feature::version`]).
     version: u64,
+}
+
+/// Ein Zahlenfeld des Dialogs.
+#[derive(Clone, Debug)]
+struct NumberField {
+    label: String,
+    /// Formelfähiges Feld (`None`: nur Zahlen, die Punkte der variablen Rundung).
+    key: Option<FieldKey>,
+    /// Einheit hinter einem Feld ohne Formel („%“ oder „mm“; Formelfelder zeigen ihre Einheit
+    /// selbst).
+    suffix: &'static str,
+    /// Eingegebener Text (Zahl oder Formel).
+    text: String,
 }
 
 /// Meldung, wenn sich das Feature geändert hat, seit der Dialog geöffnet wurde.
@@ -34,8 +52,14 @@ pub const STALE_MESSAGE: &str = "Das Feature wurde inzwischen geändert; der Dia
                                  den aktuellen Stand. Bitte die Werte prüfen und erneut \
                                  übernehmen.";
 
-/// Die Zahlen einer Feature-Art mit ihren Bezeichnungen (Millimeter).
-fn numbers_of(kind: &FeatureKind) -> Vec<(String, f64)> {
+/// Meldung eines Feldes, das nur Zahlen annimmt, bei einer Formel.
+pub fn numbers_only(label: &str) -> String {
+    format!("{label}: Hier sind nur Zahlen möglich.")
+}
+
+/// Die Zahlenfelder einer Feature-Art: die formelfähigen Felder ([`field_keys`]) mit ihrer
+/// gespeicherten Formel (sonst dem Wert), bei der variablen Rundung die Punkte (nur Zahlen).
+fn fields_of(kind: &FeatureKind, formulas: &Formulas) -> Vec<NumberField> {
     if let FeatureKind::Verrunden {
         art: BlendArt::RundungVariabel { punkte },
         ..
@@ -46,138 +70,51 @@ fn numbers_of(kind: &FeatureKind) -> Vec<(String, f64)> {
             .enumerate()
             .flat_map(|(k, (p, r))| {
                 [
-                    (format!("Position {}", k + 1), *p),
-                    (format!("Radius {}", k + 1), *r),
+                    // Anteil der Kettenlänge in %.
+                    (format!("Position {}", k + 1), "%", *p),
+                    (format!("Radius {}", k + 1), "mm", *r),
                 ]
+            })
+            .map(|(label, suffix, v)| NumberField {
+                label,
+                key: None,
+                suffix,
+                text: number_text(v),
             })
             .collect();
     }
-    numbers_fixed(kind)
+    field_keys(kind)
         .into_iter()
-        .map(|(l, v)| (l.to_string(), v))
+        .map(|key| NumberField {
+            label: field_label(kind, key).to_string(),
+            key: Some(key),
+            suffix: field_unit(kind, key).suffix(),
+            text: formulas
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| number_text(field_value(kind, key).unwrap_or(0.0))),
+        })
         .collect()
 }
 
-/// Die Zahlen mit festen Bezeichnungen (alle Arten außer der variablen Rundung).
-fn numbers_fixed(kind: &FeatureKind) -> Vec<(&'static str, f64)> {
-    let pos = |o: &DVec3| {
-        [
-            ("Position x", o.x),
-            ("Position y", o.y),
-            ("Position z", o.z),
-        ]
-    };
-    match kind {
-        FeatureKind::Box { size, origin } => {
-            let mut v = vec![("Breite", size.x), ("Tiefe", size.y), ("Höhe", size.z)];
-            v.extend(pos(origin));
-            v
-        }
-        FeatureKind::Cylinder {
-            radius,
-            height,
-            origin,
-        }
-        | FeatureKind::Cone {
-            radius,
-            height,
-            origin,
-        } => {
-            let mut v = vec![("Radius", *radius), ("Höhe", *height)];
-            v.extend(pos(origin));
-            v
-        }
-        FeatureKind::Sphere { radius, origin } => {
-            let mut v = vec![("Radius", *radius)];
-            v.extend(pos(origin));
-            v
-        }
-        FeatureKind::Extrude { height, .. } => vec![("Höhe", *height)],
-        FeatureKind::Move { delta, .. } => vec![("Δx", delta.x), ("Δy", delta.y), ("Δz", delta.z)],
-        FeatureKind::Verrunden { art, .. } => match art {
-            BlendArt::Rundung { radius } => vec![("Radius", *radius)],
-            BlendArt::FaseGleich { abstand } => vec![("Abstand", *abstand)],
-            BlendArt::FaseZwei { abstand1, abstand2 } => {
-                vec![("Abstand 1", *abstand1), ("Abstand 2", *abstand2)]
-            }
-            BlendArt::FaseWinkel { abstand, winkel } => {
-                vec![("Abstand", *abstand), ("Winkel", *winkel)]
-            }
-            BlendArt::RundungVariabel { .. } => Vec::new(),
-        },
-        FeatureKind::Sketch(_)
-        | FeatureKind::Revolve { .. }
-        | FeatureKind::Boolean { .. }
-        | FeatureKind::MeshBody { .. } => Vec::new(),
+/// Liest eine Zahl eines Feldes ohne Formeln; der Fehlertext nennt das Feld.
+fn plain_value(label: &str, text: &str) -> Result<f64, String> {
+    match classify(text) {
+        Some(FieldInput::Number(v)) => Ok(v),
+        Some(FieldInput::Formula(_)) => Err(numbers_only(label)),
+        None => Err(format!("Ungültige Zahl bei „{label}“: „{text}“")),
     }
 }
 
-/// Einheit eines Zahlenfelds.
-fn unit(label: &str) -> &'static str {
-    if label == "Winkel" {
-        "°"
-    } else if label
-        .strip_prefix("Position ")
-        .is_some_and(|k| k.chars().all(|c| c.is_ascii_digit()))
-    {
-        // „Position k“ der variablen Rundung (Anteil der Kettenlänge); „Position x“ ist mm.
-        "%"
+/// Prüft den Betrag eines Wertes (höchstens [`MAX_COORD_MM`]).
+fn check_size(label: &str, v: f64) -> Result<f64, String> {
+    if v.abs() <= MAX_COORD_MM {
+        Ok(v)
     } else {
-        "mm"
+        Err(format!(
+            "Der Wert bei „{label}“ ist zu groß (Betrag höchstens {MAX_COORD_MM:e} mm)"
+        ))
     }
-}
-
-/// Schreibt Zahlen (in der Reihenfolge von [`numbers_of`]) in die Feature-Art.
-fn set_numbers(kind: &mut FeatureKind, v: &[f64]) {
-    let p = |v: &[f64]| DVec3::new(v[0], v[1], v[2]);
-    match (kind, v) {
-        (FeatureKind::Box { size, origin }, [x, y, z, rest @ ..]) if rest.len() == 3 => {
-            *size = DVec3::new(*x, *y, *z);
-            *origin = p(rest);
-        }
-        (
-            FeatureKind::Cylinder {
-                radius,
-                height,
-                origin,
-            }
-            | FeatureKind::Cone {
-                radius,
-                height,
-                origin,
-            },
-            [r, h, rest @ ..],
-        ) if rest.len() == 3 => {
-            (*radius, *height) = (*r, *h);
-            *origin = p(rest);
-        }
-        (FeatureKind::Sphere { radius, origin }, [r, rest @ ..]) if rest.len() == 3 => {
-            *radius = *r;
-            *origin = p(rest);
-        }
-        (FeatureKind::Extrude { height, .. }, [h]) => *height = *h,
-        (FeatureKind::Move { delta, .. }, [_, _, _]) => *delta = p(v),
-        (FeatureKind::Verrunden { art, .. }, values) => match (art, values) {
-            (BlendArt::Rundung { radius }, [r]) => *radius = *r,
-            (BlendArt::FaseGleich { abstand }, [a]) => *abstand = *a,
-            (BlendArt::FaseZwei { abstand1, abstand2 }, [a, b]) => {
-                (*abstand1, *abstand2) = (*a, *b)
-            }
-            (BlendArt::FaseWinkel { abstand, winkel }, [a, w]) => (*abstand, *winkel) = (*a, *w),
-            (BlendArt::RundungVariabel { punkte }, values) if values.len() == 2 * punkte.len() => {
-                for (k, p) in punkte.iter_mut().enumerate() {
-                    *p = (values[2 * k], values[2 * k + 1]);
-                }
-            }
-            _ => {}
-        },
-        _ => {}
-    }
-}
-
-/// Zahl als Text für das Eingabefeld: ohne Rundung, mit Komma.
-fn number_text(v: f64) -> String {
-    v.to_string().replace('.', ",")
 }
 
 fn op_label(op: BoolOp) -> &'static str {
@@ -202,10 +139,7 @@ impl FeatureDialog {
             id,
             name: f.name.clone(),
             kind: f.kind.clone(),
-            numbers: numbers_of(&f.kind)
-                .into_iter()
-                .map(|(l, v)| (l, number_text(v)))
-                .collect(),
+            numbers: fields_of(&f.kind, f.formulas()),
             error: None,
             version: f.version(),
         })
@@ -230,13 +164,21 @@ impl FeatureDialog {
 
     /// Setzt den Text des Zahlenfelds `label`; `false`, wenn es das Feld nicht gibt.
     pub fn set_text(&mut self, label: &str, text: &str) -> bool {
-        match self.numbers.iter_mut().find(|(l, _)| l == label) {
-            Some((_, t)) => {
-                *t = text.to_string();
+        match self.numbers.iter_mut().find(|f| f.label == label) {
+            Some(f) => {
+                f.text = text.to_string();
                 true
             }
             None => false,
         }
+    }
+
+    /// Text des Zahlenfelds `label` (Zahl oder Formel); `None`, wenn es das Feld nicht gibt.
+    pub fn text(&self, label: &str) -> Option<&str> {
+        self.numbers
+            .iter()
+            .find(|f| f.label == label)
+            .map(|f| f.text.as_str())
     }
 
     /// Aktuelle Meldung des Dialogs (für Tests).
@@ -246,35 +188,63 @@ impl FeatureDialog {
 
     /// Bezeichnungen der Zahlenfelder (für Tests).
     pub fn labels(&self) -> Vec<String> {
-        self.numbers.iter().map(|(l, _)| l.clone()).collect()
+        self.numbers.iter().map(|f| f.label.clone()).collect()
     }
 
-    fn renumber(&mut self) {
-        self.numbers = numbers_of(&self.kind)
-            .into_iter()
-            .map(|(l, v)| (l, number_text(v)))
-            .collect();
+    /// Die Formeltexte der Felder (Feld mit einer Formel statt einer Zahl).
+    fn formula_texts(&self) -> Formulas {
+        self.numbers
+            .iter()
+            .filter_map(|f| match (f.key, classify(&f.text)) {
+                (Some(key), Some(FieldInput::Formula(t))) => Some((key, t)),
+                _ => None,
+            })
+            .collect()
     }
 
-    /// Übernimmt eingegebene Zahlen, soweit gültig, in die Kopie der Art (vor einem Umbau).
-    fn absorb(&mut self) {
-        if let Ok(kind) = self.edited_kind() {
-            self.kind = kind;
+    /// Baut die Felder aus der Kopie der Art neu; Formeln in `keep` bleiben bei Feldern, die es
+    /// weiterhin gibt.
+    fn renumber(&mut self, keep: &Formulas) {
+        self.numbers = fields_of(&self.kind, keep);
+    }
+
+    /// Übernimmt eingegebene Zahlen, soweit gültig, in die Kopie der Art (vor einem Umbau);
+    /// liefert die Formeltexte, die der Umbau behalten soll.
+    fn absorb(&mut self) -> Formulas {
+        let mut kind = self.kind.clone();
+        if let FeatureKind::Verrunden {
+            art: BlendArt::RundungVariabel { punkte },
+            ..
+        } = &mut kind
+        {
+            if let Ok(values) = self.variable_points() {
+                *punkte = values;
+            }
+        } else {
+            for f in &self.numbers {
+                if let (Some(key), Some(FieldInput::Number(v))) = (f.key, classify(&f.text))
+                    && v.abs() <= MAX_COORD_MM
+                {
+                    set_field_value(&mut kind, key, v);
+                }
+            }
         }
+        self.kind = kind;
+        self.formula_texts()
     }
 
     /// Art einer Verrundung wechseln (das erste Maß bleibt).
     pub fn set_blend_art(&mut self, choice: ArtChoice) {
-        self.absorb();
+        let keep = self.absorb();
         if let FeatureKind::Verrunden { art, .. } = &mut self.kind {
             *art = choice.convert(art);
         }
-        self.renumber();
+        self.renumber(&keep);
     }
 
     /// Punkt einer variablen Rundung einfügen (Mitte des größten Abstands).
     pub fn add_point(&mut self) {
-        self.absorb();
+        let keep = self.absorb();
         if let FeatureKind::Verrunden {
             art: BlendArt::RundungVariabel { punkte },
             ..
@@ -283,12 +253,12 @@ impl FeatureDialog {
         {
             self.error = Some(e);
         }
-        self.renumber();
+        self.renumber(&keep);
     }
 
     /// Punkt `i` einer variablen Rundung entfernen; mindestens zwei bleiben.
     pub fn remove_point(&mut self, i: usize) {
-        self.absorb();
+        let keep = self.absorb();
         if let FeatureKind::Verrunden {
             art: BlendArt::RundungVariabel { punkte },
             ..
@@ -301,7 +271,7 @@ impl FeatureDialog {
                 self.error = None;
             }
         }
-        self.renumber();
+        self.renumber(&keep);
     }
 
     pub fn set_tangent_chain(&mut self, on: bool) {
@@ -366,32 +336,60 @@ impl FeatureDialog {
             .collect()
     }
 
-    /// Die Feature-Art mit den eingegebenen Zahlen; ein Fehlertext nennt das ungültige Feld.
-    fn edited_kind(&self) -> Result<FeatureKind, String> {
+    /// Die Punkte der variablen Rundung aus den Feldern (nur Zahlen).
+    fn variable_points(&self) -> Result<Vec<(f64, f64)>, String> {
         let mut values = Vec::with_capacity(self.numbers.len());
-        for (label, text) in &self.numbers {
-            match parse_number(text) {
-                Some(v) if v.abs() <= MAX_COORD_MM => values.push(v),
-                Some(_) => {
-                    return Err(format!(
-                        "Der Wert bei „{label}“ ist zu groß (Betrag höchstens {MAX_COORD_MM:e} mm)"
-                    ));
-                }
-                None => return Err(format!("Ungültige Zahl bei „{label}“: „{text}“")),
+        for f in &self.numbers {
+            values.push(check_size(&f.label, plain_value(&f.label, &f.text)?)?);
+        }
+        Ok(values
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[p, r]| (p, r))
+            .collect())
+    }
+
+    /// Die Feature-Art mit den eingegebenen Werten und die Formeln aller Felder (ein Feld mit
+    /// einer Zahl hat keine Formel, P2); ein Fehlertext nennt das ungültige Feld
+    /// („Breite: Den Namen „Breit“ gibt es nicht.“).
+    fn edited(&self, scope: &ParamScope) -> Result<(FeatureKind, Formulas), String> {
+        let mut kind = self.kind.clone();
+        let mut formulas = Formulas::new();
+        if let FeatureKind::Verrunden {
+            art: BlendArt::RundungVariabel { punkte },
+            ..
+        } = &mut kind
+        {
+            let values = self.variable_points()?;
+            if values.len() == punkte.len() {
+                *punkte = values;
+            }
+            return Ok((kind, formulas));
+        }
+        for f in &self.numbers {
+            let Some(key) = f.key else {
+                continue;
+            };
+            let (v, formula) = resolve(&f.text, field_unit(&kind, key), scope)
+                .map_err(|e| format!("{}: {e}", f.label))?;
+            set_field_value(&mut kind, key, check_size(&f.label, v)?);
+            if let Some(t) = formula {
+                formulas.insert(key, t);
             }
         }
-        let mut kind = self.kind.clone();
-        set_numbers(&mut kind, &values);
-        Ok(kind)
+        Ok((kind, formulas))
     }
 
     /// „Übernehmen“: ändert das Feature im Dokument und berechnet neu. Ungültige Eingaben und
     /// abgelehnte Änderungen liefern einen Fehler (Dokument unverändert). Lässt sich das
     /// Feature danach nicht berechnen, steht der Grund in `message` und im Baum; das gilt
     /// trotzdem als übernommen. Eine offene Skizze wird vorher beendet. Hat sich das Feature
-    /// seit dem Öffnen geändert, wird nichts überschrieben ([`STALE_MESSAGE`]).
+    /// seit dem Öffnen geändert, wird nichts überschrieben ([`STALE_MESSAGE`]). Die Formeln der
+    /// Felder ersetzen die des Features (Zahl statt Formel: nur diese Formel entfällt).
     pub fn apply(&self, state: &mut AppState) -> Result<(), String> {
-        let kind = match self.edited_kind() {
+        let scope = state.document.param_scope();
+        let (kind, formulas) = match self.edited(&scope) {
             Ok(k) => k,
             Err(e) => return state.fail(e),
         };
@@ -407,7 +405,10 @@ impl FeatureDialog {
         }
         state.end_sketch_for(None)?;
         state.message = None;
-        if let Err(e) = state.document.update(self.id, |k| *k = kind) {
+        if let Err(e) = state
+            .document
+            .update_with_formulas(self.id, |k| *k = kind, formulas)
+        {
             return state.fail(format!("Die Änderung wurde abgelehnt: {e}"));
         }
         state.refresh();
@@ -423,6 +424,7 @@ impl FeatureDialog {
     pub fn show(&mut self, ctx: &egui::Context, state: &mut AppState) -> bool {
         let mut open = true;
         let (mut apply, mut cancel) = (false, false);
+        let scope = state.document.param_scope();
         Dialog::new(format!("„{}“ bearbeiten", self.name), DialogSize::Normal)
             .id(egui::Id::new(("feature_dialog", self.id)))
             .open(&mut open)
@@ -438,19 +440,51 @@ impl FeatureDialog {
                     }
                 );
                 let mut remove = None;
+                // Meldungen der Formelfelder stehen gesammelt unter dem Raster, damit sich die
+                // Felder nicht verschieben.
+                let mut errors = Vec::new();
                 if !self.numbers.is_empty() {
-                    egui::Grid::new(("feature_numbers", self.id))
-                        .num_columns(4)
+                    let (id, kind) = (self.id, &self.kind);
+                    egui::Grid::new(("feature_numbers", id))
+                        .num_columns(3)
                         .show(ui, |ui| {
-                            for (k, (label, text)) in self.numbers.iter_mut().enumerate() {
-                                ui.label(label.as_str());
-                                theme::text_field(
-                                    ui,
-                                    egui::TextEdit::singleline(text).desired_width(90.0),
-                                );
-                                ui.label(unit(label));
+                            for (k, f) in self.numbers.iter_mut().enumerate() {
+                                ui.label(f.label.as_str());
+                                match f.key {
+                                    Some(key) => {
+                                        let out = FormulaField::new(
+                                            ("feature-field", id, key),
+                                            &mut f.text,
+                                            field_unit(kind, key),
+                                        )
+                                        .error_below(false)
+                                        .label(f.label.as_str())
+                                        .show(ui, &scope);
+                                        if let Some(e) = out.error {
+                                            errors.push(format!("{}: {e}", f.label));
+                                        }
+                                    }
+                                    None => {
+                                        ui.horizontal(|ui| {
+                                            let r = theme::text_field(
+                                                ui,
+                                                egui::TextEdit::singleline(&mut f.text)
+                                                    .desired_width(90.0),
+                                            );
+                                            let label = f.label.as_str();
+                                            r.widget_info(|| {
+                                                egui::WidgetInfo::labeled(
+                                                    egui::WidgetType::TextEdit,
+                                                    true,
+                                                    label,
+                                                )
+                                            });
+                                            ui.label(f.suffix);
+                                        });
+                                    }
+                                }
                                 if variable
-                                    && label.starts_with("Radius")
+                                    && f.label.starts_with("Radius")
                                     && ui.button("Punkt entfernen").clicked()
                                 {
                                     remove = Some(k / 2);
@@ -458,6 +492,12 @@ impl FeatureDialog {
                                 ui.end_row();
                             }
                         });
+                    if self.numbers.iter().any(|f| f.key.is_some())
+                        && let Some(hint) = names_hint(&scope)
+                    {
+                        ui.add_space(4.0);
+                        ui.weak(hint);
+                    }
                 }
                 if let Some(k) = remove {
                     self.remove_point(k);
@@ -465,13 +505,17 @@ impl FeatureDialog {
                 if let Some(min) = self.min_size(state) {
                     ui.weak(format!("Kleinstes Maß: {} mm", min_text(min)));
                 }
-                if let Some(e) = &self.error {
+                let dark = ui.visuals().dark_mode;
+                for e in errors.iter().chain(&self.error) {
                     ui.add_space(4.0);
-                    ui.colored_label(error_color(ui.visuals().dark_mode), e);
+                    ui.colored_label(error_color(dark), e);
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Übernehmen").clicked() {
+                    if ui
+                        .add_enabled(errors.is_empty(), egui::Button::new("Übernehmen"))
+                        .clicked()
+                    {
                         apply = true;
                     }
                     if ui.button("Abbrechen").clicked() {

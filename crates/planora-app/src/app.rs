@@ -900,6 +900,10 @@ impl eframe::App for PlanoraApp {
         {
             tab.dialog = Some(dialog);
         }
+        // Auf jedem Weg geschlossen (Rückgängig, Skizze, Tab): die getippten Texte vergessen.
+        if tab.dialog.is_none() {
+            CreateDialog::forget_texts(&ctx, tab.state.instance);
+        }
         if let Some(mut dialog) = tab.feature_dialog.take()
             && dialog.show(&ctx, &mut tab.state)
         {
