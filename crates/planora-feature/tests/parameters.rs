@@ -82,6 +82,14 @@ fn add_and_read() {
         Err("Hier wird ein Winkel erwartet, die Formel ergibt eine Länge.".to_string())
     );
     assert_eq!(ParamScope::default().names(), Vec::<String>::new());
+    // Tabellenreihenfolge, nicht alphabetisch (auch nicht ohne Groß-/Kleinschreibung).
+    for n in ["Zeta", "alpha", "Mitte"] {
+        d.add_parameter(n, "1", Length, "").unwrap();
+    }
+    assert_eq!(
+        d.param_scope().names(),
+        vec!["Breite", "Tiefe", "Zeta", "alpha", "Mitte"]
+    );
     assert_eq!(d.check_invariants(), Ok(()));
 }
 
@@ -109,9 +117,19 @@ fn rejected_edits_change_nothing() {
 
     let mut e = edit_of(d.parameter(b).unwrap());
     e.formula = "Tiefe+1".into();
-    let m = formula_err(d.set_parameter(b, e));
-    assert!(m.contains("im Kreis"), "{m}");
+    assert_eq!(
+        formula_err(d.set_parameter(b, e)),
+        "Die Parameter „Breite“, „Tiefe“ hängen im Kreis voneinander ab."
+    );
     unchanged(&d, "Kreis");
+
+    let mut e = edit_of(d.parameter(b).unwrap());
+    e.formula = "breite*2".into();
+    assert_eq!(
+        formula_err(d.set_parameter(b, e)),
+        "Der Parameter „Breite“ hängt von sich selbst ab."
+    );
+    unchanged(&d, "Selbstbezug");
 
     let mut e = edit_of(d.parameter(b).unwrap());
     e.unit = Angle;
@@ -421,9 +439,15 @@ fn build_rejects_invalid_table() {
     );
 
     let m = err(snap(vec![param(1, "a", "b+1"), param(2, "b", "a")], 3));
-    assert!(
-        m.contains("Parametertabelle") && m.contains("im Kreis"),
-        "{m}"
+    assert_eq!(
+        m,
+        "Ungültige Eingabe: Parametertabelle: Die Parameter „a“, „b“ hängen im Kreis voneinander ab."
+    );
+
+    let m = err(snap(vec![param(1, "a", "A+1")], 2));
+    assert_eq!(
+        m,
+        "Ungültige Eingabe: Parametertabelle: Der Parameter „a“ hängt von sich selbst ab."
     );
 
     let m = err(snap(vec![param(1, "a", "1+")], 2));
@@ -509,6 +533,36 @@ fn no_op_edit_counts_nothing() {
     d.set_parameter(b, e).unwrap();
     assert_eq!(d.edit_count(), e0 + 2);
     assert_eq!(d.parameter(t).unwrap().formula, "BREITE/2");
+
+    // Formel nur in Groß-/Kleinschreibung anders: echte Änderung, kein No-op.
+    let x = d.add_parameter("Doppelt", "breite*2", Length, "").unwrap();
+    let e1 = d.edit_count();
+    let mut e = edit_of(d.parameter(x).unwrap());
+    e.formula = "Breite*2".into();
+    d.set_parameter(x, e).unwrap();
+    assert_eq!(d.parameter(x).unwrap().formula, "Breite*2");
+    assert_eq!(d.parameter_value(x), Some(80.0));
+    assert_eq!(d.edit_count(), e1 + 1);
+    assert!(!d.snapshot().same_model(&before));
+}
+
+#[test]
+fn replace_touches_only_direct_users() {
+    let (mut d, b, t) = breite_tiefe();
+    let frei = d.add_parameter("Frei", "  7 + 0,5 ", Length, "").unwrap();
+    let z = d.add_parameter("Z", "Tiefe + 1", Length, "").unwrap();
+    let before_frei = d.parameter(frei).unwrap().clone();
+    let before_z = d.parameter(z).unwrap().clone();
+    let e0 = d.edit_count();
+    d.replace_parameter_by_value(b).unwrap();
+    assert_eq!(d.edit_count(), e0 + 1);
+    assert_eq!(d.parameter(t).unwrap().formula, "20");
+    // Unabhängige und nur mittelbar abhängige Zeilen bleiben zeichengleich.
+    assert_eq!(d.parameter(frei), Some(&before_frei));
+    assert_eq!(d.parameter(z), Some(&before_z));
+    assert_eq!(d.parameter_value(frei), Some(7.5));
+    assert_eq!(d.parameter_value(z), Some(21.0));
+    assert_eq!(names(&d), vec!["Tiefe", "Frei", "Z"]);
 }
 
 #[test]
