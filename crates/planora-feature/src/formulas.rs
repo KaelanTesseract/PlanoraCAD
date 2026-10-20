@@ -233,9 +233,22 @@ fn value_issue(kind: &FeatureKind, key: FieldKey, v: f64, tolerance: f64) -> Opt
         }
         FieldKey::Massstab if !(MIN_MESH_SCALE..=MAX_MESH_SCALE).contains(&v) => Some(format!(
             "Maßstab ergibt {}, er muss zwischen 0,000001 und 1 000 000 liegen",
-            expr::short_number(v)
+            scale_text(v)
         )),
         _ => None,
+    }
+}
+
+/// Verlustfreier, kurzer Text eines Maßstabs für die Wertfehler-Meldung: nie gerundet (eine
+/// gerundete Zahl wie „0“ für 5e-7 oder „1000000“ für 1000000,0000001 widerspräche dem Satz);
+/// sehr kleine und sehr große Beträge in Exponentschreibweise („5e-7“, „1e20“), sonst
+/// [`expr::number_text`] („1000000,0000001“). Dezimalkomma.
+fn scale_text(v: f64) -> String {
+    let a = v.abs();
+    if v != 0.0 && a.is_finite() && !(MIN_MESH_SCALE..1e15).contains(&a) {
+        format!("{v:e}").replace('.', ",")
+    } else {
+        expr::number_text(v)
     }
 }
 

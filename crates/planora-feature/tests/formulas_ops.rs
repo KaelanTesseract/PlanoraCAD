@@ -145,6 +145,18 @@ fn extrude_height_formula() {
         FeatureStatus::Error("Höhe ergibt -4 mm, es muss größer als 0 sein".into())
     );
 
+    // Grenze an der Toleranz (1e-6): genau die Toleranz ist ein Wertfehler, das Doppelte nicht.
+    d.set_parameter(h, edit(&d, h, "0,0000005")).unwrap();
+    assert_eq!(
+        status(&d, e),
+        FeatureStatus::Error("Höhe ergibt 0 mm, es muss größer als 0 sein".into())
+    );
+    d.set_parameter(h, edit(&d, h, "0,000001")).unwrap();
+    assert_eq!(status(&d, e), FeatureStatus::Ok, "Höhe 2e-6");
+    let (_, hi) = hull_of(&d, e);
+    assert!((hi.z - 2e-6).abs() <= 1e-12, "{hi}");
+    d.check_invariants().unwrap();
+
     d.set_parameter(h, edit(&d, h, "7")).unwrap();
     assert_eq!(status(&d, e), FeatureStatus::Ok);
     let (_, hi) = hull_of(&d, e);
@@ -328,6 +340,27 @@ fn mesh_offset_and_scale() {
             "Maßstab ergibt 1000001, er muss zwischen 0,000001 und 1 000 000 liegen".into()
         )
     );
+
+    // Der Wert in der Meldung ist nie gerundet (kein „0“ für 5e-7, kein „1000000“ über der
+    // Grenze), sehr kleine und sehr große Beträge in Exponentschreibweise.
+    for (text, shown) in [
+        ("0,0000005", "5e-7"),
+        ("0,0000001", "1e-7"),
+        ("0,0000009999999", "9,999999e-7"),
+        ("-0,0000001", "-1e-7"),
+        ("1000000,0000001", "1000000,0000001"),
+        ("1000000,5", "1000000,5"),
+        ("1000000*1000000*1000000*100", "1e20"),
+    ] {
+        d.set_parameter(k, edit(&d, k, text)).unwrap();
+        assert_eq!(
+            status(&d, n),
+            FeatureStatus::Error(format!(
+                "Maßstab ergibt {shown}, er muss zwischen 0,000001 und 1 000 000 liegen"
+            )),
+            "{text}"
+        );
+    }
 
     // Die Grenzen selbst sind erlaubt (wie beim Eintippen).
     for (text, v) in [("0,000001", MIN_MESH_SCALE), ("1000000", MAX_MESH_SCALE)] {
