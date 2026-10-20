@@ -13,14 +13,21 @@
 //! Status `Error(meldung)` und kein Ergebnis. Öffentliche Änderungen werden vorher auf einer Kopie
 //! geprüft und abgelehnt, wenn danach eine Formel einen Formelfehler hätte, den sie vorher nicht
 //! hatte; beim Laden entstehen Formelfehler ohne Ablehnung.
+//!
+//! Skizzen (Aufgabe 6) tragen ihre Formeln in [`SketchFeature::formulas`] (Abhängigkeit →
+//! Text). Der Durchgang schreibt die Werte mit [`Sketch::set_constraint_value`] in die Definition
+//! der Skizze, nur bei bitweise anderem Wert (sonst bliebe der Stand der Skizze nicht gleich).
+//! Winkelformeln ergeben Grad, gespeichert wird Bogenmaß. Ein Wert, den die Skizze ablehnt
+//! (etwa ein Abstand 0), ist ein Wertfehler; das Maß behält dann seinen letzten Wert.
 
 use crate::error::FeatureError;
 use crate::expr::{self, ParamUnit};
 use crate::model::{
     BlendArt, Document, FeatureId, FeatureKind, MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE,
-    MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE,
+    MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE, SketchFeature,
 };
 use crate::params::ParamScope;
+use planora_sketch::{ConstraintId, ConstraintKind, Sketch, SketchError};
 use std::collections::{BTreeMap, HashSet};
 
 /// Ein formelfähiges Zahlenfeld eines Features.
@@ -339,8 +346,13 @@ pub(crate) fn evaluate(
 ) -> Evaluated {
     let mut out = kind.clone();
     let mut issue = None;
-    if formulas.is_empty() {
+    if !has_formulas(kind, formulas) {
         return Evaluated { kind: out, issue };
+    }
+    if let (FeatureKind::Sketch(sf), FeatureKind::Sketch(target)) = (kind, &mut out) {
+        let (sketch, sketch_issue) = evaluate_sketch(sf, scope);
+        target.sketch = sketch;
+        issue = sketch_issue;
     }
     for key in field_keys(kind) {
         let Some(text) = formulas.get(&key) else {
@@ -361,6 +373,230 @@ pub(crate) fn evaluate(
     Evaluated { kind: out, issue }
 }
 
+/// Hat das Feature Formeln (in Feldern oder, bei Skizzen, an Maßen)?
+pub(crate) fn has_formulas(kind: &FeatureKind, formulas: &Formulas) -> bool {
+    !formulas.is_empty() || matches!(kind, FeatureKind::Sketch(sf) if !sf.formulas.is_empty())
+}
+
+/// Einheit, die eine Formel an diesem Skizzenmaß ergeben muss: Winkel bei Winkelmaßen (auch
+/// dem Winkel einer Ellipse), sonst Länge. Eine reine Zahl passt immer (P4).
+pub fn constraint_unit(kind: &ConstraintKind) -> ParamUnit {
+    match kind {
+        ConstraintKind::Angle(..) | ConstraintKind::EllipseAngle(..) => ParamUnit::Angle,
+        _ => ParamUnit::Length,
+    }
+}
+
+/// Gespeicherter Zahlenwert eines Maßes; `None` für Abhängigkeiten ohne Zahlenwert.
+fn dimension_value(kind: &ConstraintKind) -> Option<f64> {
+    use ConstraintKind::*;
+    match kind {
+        Distance(_, _, v)
+        | DistancePointLine(_, _, v)
+        | Angle(_, _, v)
+        | Radius(_, v)
+        | Diameter(_, v)
+        | EllipseMajor(_, v)
+        | EllipseMinor(_, v)
+        | EllipseAngle(_, v) => Some(*v),
+        _ => None,
+    }
+}
+
+/// Text einer Ablehnung durch die Skizze ohne die Vorsilbe der Fehlerart.
+fn sketch_reason(e: &SketchError) -> String {
+    match e {
+        SketchError::InvalidInput(m) | SketchError::Degenerate(m) | SketchError::WrongType(m) => {
+            m.clone()
+        }
+        other => other.to_string(),
+    }
+}
+
+/// Ein ausgewerteter Maßwert, der noch in die Skizze muss.
+struct DimValue {
+    id: ConstraintId,
+    /// Wert in der Skizze (Bogenmaß bei Winkeln).
+    stored: f64,
+    /// Wert der Formel (Grad bei Winkeln) für die Meldung.
+    shown: f64,
+    unit: ParamUnit,
+}
+
+/// Wertet die Maßformeln einer Skizze aus und schreibt die Werte in eine Kopie der Definition,
+/// nur bitweise andere Werte (sonst bleibt der Stand der Skizze gleich). Formeln an fehlenden,
+/// anzeigenden oder nicht maßgebenden Abhängigkeiten bleiben unbeachtet (die Eingänge entfernen
+/// sie). Lehnt die Skizze einen Wert ab, wird er nach den übrigen noch einmal versucht (die
+/// kleine Halbachse einer Ellipse darf nicht länger als die große sein, beide können zugleich
+/// wechseln); bleibt es bei der Ablehnung, ist das ein Wertfehler und das Maß behält seinen
+/// letzten Wert.
+fn evaluate_sketch(sf: &SketchFeature, scope: &ParamScope) -> (Sketch, Option<FormulaIssue>) {
+    let mut sketch = sf.sketch.clone();
+    let mut issue = None;
+    let mut pending = Vec::new();
+    for (id, text) in &sf.formulas {
+        let Some(c) = sketch.constraint(*id) else {
+            continue;
+        };
+        if !c.kind.is_dimension() || c.driven {
+            continue;
+        }
+        let unit = constraint_unit(&c.kind);
+        match scope.eval(text, unit) {
+            Err(m) => {
+                issue.get_or_insert(FormulaIssue::Broken(m));
+            }
+            Ok(v) => {
+                let stored = if unit == ParamUnit::Angle {
+                    v.to_radians()
+                } else {
+                    v
+                };
+                pending.push(DimValue {
+                    id: *id,
+                    stored,
+                    shown: v,
+                    unit,
+                });
+            }
+        }
+    }
+    loop {
+        let mut rejected = Vec::new();
+        let mut progress = false;
+        for d in pending {
+            let kind = &sketch.constraint(d.id).expect("oben geprüft").kind;
+            if dimension_value(kind).map(f64::to_bits) == Some(d.stored.to_bits()) {
+                continue;
+            }
+            let candidate = kind.with_value(d.stored).expect("ein Maß");
+            let checked = sketch
+                .check_constraint_value(&candidate)
+                .and_then(|()| sketch.set_constraint_value(d.id, d.stored));
+            match checked {
+                Ok(()) => progress = true,
+                Err(e) => rejected.push((d, e)),
+            }
+        }
+        if rejected.is_empty() {
+            break;
+        }
+        if !progress {
+            let (d, e) = &rejected[0];
+            let suffix = if d.unit == ParamUnit::Angle {
+                "°"
+            } else {
+                " mm"
+            };
+            issue.get_or_insert(FormulaIssue::Value(format!(
+                "Ein Maß ergibt {}{suffix}: {}",
+                expr::short_number(d.shown),
+                sketch_reason(e)
+            )));
+            break;
+        }
+        pending = rejected.into_iter().map(|(d, _)| d).collect();
+    }
+    (sketch, issue)
+}
+
+/// Gleiche Werte in allen Formelfeldern (bitgenau) und bei Skizzen derselbe Stand der
+/// Definition (der Durchgang ändert ihn nur bei einem anderen Maßwert).
+pub(crate) fn same_values(a: &FeatureKind, b: &FeatureKind) -> bool {
+    let sketches_same = match (a, b) {
+        (FeatureKind::Sketch(x), FeatureKind::Sketch(y)) => {
+            x.sketch.revision() == y.sketch.revision()
+        }
+        _ => true,
+    };
+    sketches_same && field_keys(a).into_iter().all(|k| same_fields(a, b, k))
+}
+
+/// Stelle einer Formel: ein Feld des Features oder ein Maß der Skizze.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Slot {
+    Field(FieldKey),
+    Dim(ConstraintId),
+}
+
+/// Alle Formeln eines Features mit Stelle und verlangter Einheit: erst die Felder in
+/// Feldreihenfolge, dann die Skizzenmaße nach Kennung (nur lebende Abhängigkeiten).
+pub(crate) fn formula_slots<'a>(
+    kind: &'a FeatureKind,
+    formulas: &'a Formulas,
+) -> Vec<(Slot, &'a str, ParamUnit)> {
+    let mut out: Vec<(Slot, &'a str, ParamUnit)> = field_keys(kind)
+        .into_iter()
+        .filter_map(|k| {
+            formulas
+                .get(&k)
+                .map(|t| (Slot::Field(k), t.as_str(), field_unit(kind, k)))
+        })
+        .collect();
+    if let FeatureKind::Sketch(sf) = kind {
+        for (id, text) in &sf.formulas {
+            if let Some(c) = sf.sketch.constraint(*id) {
+                out.push((Slot::Dim(*id), text.as_str(), constraint_unit(&c.kind)));
+            }
+        }
+    }
+    out
+}
+
+/// Nennt eine Formel des Features (Feld oder Skizzenmaß) den Parameter `name` direkt?
+pub(crate) fn mentions(kind: &FeatureKind, formulas: &Formulas, name: &str) -> bool {
+    formulas.values().any(|t| expr::references(t, name))
+        || matches!(kind, FeatureKind::Sketch(sf)
+            if sf.formulas.values().any(|t| expr::references(t, name)))
+}
+
+/// Schreibt alle Formeltexte des Features um (Felder und Skizzenmaße); `None` entfernt die
+/// Formel. Liefert die Art (mit den neuen Skizzenformeln) und die Feldformeln.
+pub(crate) fn rewrite_formulas(
+    kind: &FeatureKind,
+    formulas: &Formulas,
+    f: impl Fn(&str) -> Option<String>,
+) -> (FeatureKind, Formulas) {
+    let mut kind = kind.clone();
+    if let FeatureKind::Sketch(sf) = &mut kind {
+        sf.formulas = rewrite_map(&sf.formulas, &f);
+    }
+    (kind, rewrite_map(formulas, &f))
+}
+
+fn rewrite_map<K: Ord + Copy>(
+    map: &BTreeMap<K, String>,
+    f: &impl Fn(&str) -> Option<String>,
+) -> BTreeMap<K, String> {
+    map.iter()
+        .filter_map(|(k, t)| f(t).map(|t| (*k, t)))
+        .collect()
+}
+
+/// Entfernt bei einer Skizze die Formeln an Abhängigkeiten, die keine haben können.
+pub(crate) fn prune_sketch(kind: &mut FeatureKind) {
+    if let FeatureKind::Sketch(sf) = kind {
+        sf.prune_formulas();
+    }
+}
+
+/// P2 für Skizzen: Formeln an Maßen, deren Wert sich gegenüber `old` geändert hat, entfallen,
+/// außer der Formeltext wurde zugleich neu gesetzt (dann gilt die neue Formel).
+pub(crate) fn drop_overwritten_dims(old: &FeatureKind, new: &mut FeatureKind) {
+    let (FeatureKind::Sketch(o), FeatureKind::Sketch(n)) = (old, new) else {
+        return;
+    };
+    let value = |sk: &Sketch, id: ConstraintId| {
+        sk.constraint(id)
+            .and_then(|c| dimension_value(&c.kind))
+            .map(f64::to_bits)
+    };
+    let sketch = &n.sketch;
+    n.formulas.retain(|id, text| {
+        o.formulas.get(id) != Some(text) || value(&o.sketch, *id) == value(sketch, *id)
+    });
+}
+
 /// Alle Schlüssel müssen Felder der Art sein.
 pub(crate) fn check_keys(kind: &FeatureKind, formulas: &Formulas) -> Result<(), FeatureError> {
     let keys = field_keys(kind);
@@ -378,8 +614,8 @@ pub(crate) fn same_fields(a: &FeatureKind, b: &FeatureKind, key: FieldKey) -> bo
     field_value(a, key).map(f64::to_bits) == field_value(b, key).map(f64::to_bits)
 }
 
-/// Formelfehler, die schon bestehen: (Feature, Feld, Formeltext).
-pub(crate) type BrokenSet = HashSet<(FeatureId, FieldKey, String)>;
+/// Formelfehler, die schon bestehen: (Feature, Stelle, Formeltext).
+pub(crate) type BrokenSet = HashSet<(FeatureId, Slot, String)>;
 
 impl Document {
     /// Die Formeln, die mit den aktuellen Parametern einen Formelfehler haben. Mit `renamed`
@@ -388,13 +624,13 @@ impl Document {
         let scope = self.param_scope();
         let mut set = BrokenSet::new();
         for f in &self.features {
-            for (key, text) in &f.formulas {
-                if scope.eval(text, field_unit(&f.kind, *key)).is_err() {
+            for (slot, text, unit) in formula_slots(&f.kind, &f.formulas) {
+                if scope.eval(text, unit).is_err() {
                     let text = match renamed {
                         Some((old, new)) => expr::rename_in(text, old, new),
-                        None => text.clone(),
+                        None => text.to_string(),
                     };
-                    set.insert((f.id, *key, text));
+                    set.insert((f.id, slot, text));
                 }
             }
         }
@@ -402,7 +638,8 @@ impl Document {
     }
 
     /// Strenge Prüfung eines Kandidaten (P3): Lehnt ab, wenn eine Formel mit `scope` einen
-    /// Formelfehler hat, der nicht schon in `known` steht. Meldung „{Feature}, {Feld}: {Text}“.
+    /// Formelfehler hat, der nicht schon in `known` steht. Meldung „{Feature}, {Feld}: {Text}“,
+    /// bei Skizzenmaßen „{Skizze}: {Text}“.
     pub(crate) fn check_new_broken(
         id: Option<FeatureId>,
         name: &str,
@@ -411,17 +648,14 @@ impl Document {
         scope: &ParamScope,
         known: &BrokenSet,
     ) -> Result<(), FeatureError> {
-        for key in field_keys(kind) {
-            let Some(text) = formulas.get(&key) else {
-                continue;
-            };
-            if let Err(m) = scope.eval(text, field_unit(kind, key))
-                && !id.is_some_and(|id| known.contains(&(id, key, text.clone())))
+        for (slot, text, unit) in formula_slots(kind, formulas) {
+            if let Err(m) = scope.eval(text, unit)
+                && !id.is_some_and(|id| known.contains(&(id, slot, text.to_string())))
             {
-                return Err(FeatureError::Formula(format!(
-                    "{name}, {}: {m}",
-                    field_label(kind, key)
-                )));
+                return Err(FeatureError::Formula(match slot {
+                    Slot::Field(key) => format!("{name}, {}: {m}", field_label(kind, key)),
+                    Slot::Dim(_) => format!("{name}: {m}"),
+                }));
             }
         }
         Ok(())
@@ -435,14 +669,11 @@ impl Document {
         let tolerance = self.kernel.tolerance.linear;
         for idx in 0..self.features.len() {
             let f = &self.features[idx];
-            if f.formulas.is_empty() && f.issue.is_none() {
+            if !has_formulas(&f.kind, &f.formulas) && f.issue.is_none() {
                 continue;
             }
             let ev = evaluate(&f.kind, &f.formulas, &scope, tolerance);
-            let changed = field_keys(&f.kind)
-                .into_iter()
-                .any(|k| !same_fields(&f.kind, &ev.kind, k));
-            if changed || ev.issue != f.issue {
+            if !same_values(&f.kind, &ev.kind) || ev.issue != f.issue {
                 let version = self.bump();
                 let f = &mut self.features[idx];
                 f.kind = ev.kind;
@@ -464,6 +695,8 @@ impl Document {
         formulas: Formulas,
     ) -> Result<FeatureId, FeatureError> {
         let name = name.into();
+        let mut kind = kind;
+        prune_sketch(&mut kind);
         self.check_references(&kind, self.marker)?;
         check_keys(&kind, &formulas)?;
         Document::check_new_broken(

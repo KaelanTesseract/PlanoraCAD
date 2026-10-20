@@ -258,7 +258,10 @@ impl Document {
             None => 1,
         };
         doc.meshes = s.meshes;
-        for f in s.features {
+        for mut f in s.features {
+            // Skizzenformeln an Abhängigkeiten, die keine haben können (gelöscht, anzeigend,
+            // kein Maß), entfallen beim Laden still (milder Ladeweg wie bei P3).
+            crate::formulas::prune_sketch(&mut f.kind);
             let version = doc.bump();
             doc.features.push(Feature {
                 id: f.id,

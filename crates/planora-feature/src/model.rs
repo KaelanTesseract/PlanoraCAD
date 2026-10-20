@@ -4,7 +4,7 @@ use crate::refs::{EdgeRef, FaceRef};
 use planora_exchange::{ExchangeMesh, MeshTransform};
 use planora_kernel::{AnalyticKernel, BlendKind, BoolOp, Solid};
 use planora_math::{DQuat, DVec3, Frame};
-use planora_sketch::{CurveId, Sketch};
+use planora_sketch::{ConstraintId, CurveId, Sketch};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -77,22 +77,48 @@ pub struct EdgeCopy {
     pub edge: EdgeRef,
 }
 
+/// Formeln der Skizzenmaße: Abhängigkeit → Formeltext (Nebentabelle, Spec §4a.1). Der Wert in
+/// der Abhängigkeit ist der zuletzt berechnete; Winkelformeln ergeben Grad, gespeichert wird
+/// Bogenmaß.
+pub type SketchFormulas = BTreeMap<ConstraintId, String>;
+
 #[derive(Clone, Debug)]
 pub struct SketchFeature {
     pub sketch: Sketch,
     pub plane: SketchPlane,
     pub copies: Vec<EdgeCopy>,
+    /// Formeln der bestimmenden Maße (nur lebende, nicht anzeigende Maß-Abhängigkeiten, siehe
+    /// [`SketchFeature::prune_formulas`]).
+    pub formulas: SketchFormulas,
+}
+
+impl SketchFeature {
+    /// Entfernt Formeln an fehlenden, nicht maßgebenden (`!is_dimension()`) oder anzeigenden
+    /// (`driven`) Abhängigkeiten; `true`, wenn sich etwas änderte.
+    pub fn prune_formulas(&mut self) -> bool {
+        let before = self.formulas.len();
+        let sketch = &self.sketch;
+        self.formulas.retain(|id, _| {
+            sketch
+                .constraint(*id)
+                .is_some_and(|c| c.kind.is_dimension() && !c.driven)
+        });
+        self.formulas.len() != before
+    }
 }
 
 /// Gleich heißt: gleicher Stand der Skizze ([`Sketch::revision`]), gleicher Skizzenname (ändert
-/// den Stand nicht, wird aber gespeichert), gleiche Ebene, gleiche Kantenkopien. Zwei getrennt gebaute Skizzen mit gleichem Inhalt sind ungleich (vorsichtig:
-/// höchstens ein überflüssiger Schritt im Verlauf oder eine Neuberechnung mehr).
+/// den Stand nicht, wird aber gespeichert), gleiche Ebene, gleiche Kantenkopien, gleiche
+/// Formeltexte (eine Formel ändert den Stand der Skizze nicht). Zwei getrennt gebaute Skizzen
+/// mit gleichem Inhalt sind ungleich (vorsichtig: höchstens ein überflüssiger Schritt im Verlauf
+/// oder eine Neuberechnung mehr).
 impl PartialEq for SketchFeature {
     fn eq(&self, other: &Self) -> bool {
         self.sketch.revision() == other.sketch.revision()
             && self.sketch.name == other.sketch.name
             && self.plane == other.plane
             && self.copies == other.copies
+            && self.formulas == other.formulas
     }
 }
 

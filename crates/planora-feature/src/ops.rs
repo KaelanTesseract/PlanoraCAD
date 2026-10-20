@@ -2,7 +2,10 @@
 //! die Prüfung der Dokument-Invarianten für Tests.
 
 use crate::error::FeatureError;
-use crate::formulas::{Formulas, check_keys, evaluate, field_keys, same_fields};
+use crate::formulas::{
+    Formulas, check_keys, drop_overwritten_dims, evaluate, field_keys, prune_sketch, same_fields,
+    same_values,
+};
 use crate::model::{Document, FeatureId, FeatureKind, FeatureStatus};
 use crate::recompute::RecomputeReport;
 use planora_kernel::Kernel;
@@ -18,13 +21,18 @@ impl Document {
     /// Formeln (Plan P2): Ändert `f` den Wert eines Feldes mit Formel, entfällt **nur diese**
     /// Formel (die getippte Zahl gilt); Formeln für Felder, die die Art danach nicht mehr hat,
     /// entfallen ebenfalls. Alle übrigen Formeln bleiben und bestimmen ihre Felder weiter.
+    /// Skizzen: Die Formeln der Maße stehen in [`crate::SketchFeature::formulas`] und lassen
+    /// sich in `f` mit ändern. Ändert `f` den Wert eines Maßes mit Formel, ohne deren Text neu
+    /// zu setzen, entfällt diese Formel; Formeln an gelöschten, anzeigenden oder nicht
+    /// maßgebenden Abhängigkeiten entfallen ([`crate::SketchFeature::prune_formulas`]).
     pub fn update_with_report(
         &mut self,
         id: FeatureId,
         f: impl FnOnce(&mut FeatureKind),
     ) -> Result<RecomputeReport, FeatureError> {
-        let (idx, kind) = self.updated_kind(id, f)?;
+        let (idx, mut kind) = self.updated_kind(id, f)?;
         let old = &self.features[idx];
+        drop_overwritten_dims(&old.kind, &mut kind);
         let keys = field_keys(&kind);
         let formulas: Formulas = old
             .formulas
@@ -55,13 +63,15 @@ impl Document {
     }
 
     /// Prüft die Formeln des Kandidaten streng (P3) und übernimmt erst dann Art und Formeln:
-    /// neue Version, eine Änderung, Neuberechnung.
+    /// neue Version, eine Änderung, Neuberechnung. Bei Skizzen entfallen vorher die Formeln an
+    /// Abhängigkeiten, die keine haben können.
     pub(crate) fn commit_update(
         &mut self,
         idx: usize,
-        kind: FeatureKind,
+        mut kind: FeatureKind,
         formulas: Formulas,
     ) -> Result<RecomputeReport, FeatureError> {
+        prune_sketch(&mut kind);
         let f = &self.features[idx];
         Document::check_new_broken(
             Some(f.id),
@@ -292,6 +302,14 @@ impl Document {
         let tolerance = self.kernel.tolerance.linear;
         for (idx, f) in self.features.iter().enumerate() {
             check_keys(&f.kind, &f.formulas).map_err(|e| format!("Feature „{}“: {e}", f.name))?;
+            if let FeatureKind::Sketch(sf) = &f.kind
+                && sf.clone().prune_formulas()
+            {
+                return Err(format!(
+                    "Feature „{}“: Formel an einer Abhängigkeit, die keine haben kann",
+                    f.name
+                ));
+            }
             let ev = evaluate(&f.kind, &f.formulas, &scope, tolerance);
             if let Some(k) = field_keys(&f.kind)
                 .into_iter()
@@ -299,6 +317,12 @@ impl Document {
             {
                 return Err(format!(
                     "Feature „{}“: Feld {k:?} trägt nicht den Wert seiner Formel",
+                    f.name
+                ));
+            }
+            if !same_values(&f.kind, &ev.kind) {
+                return Err(format!(
+                    "Feature „{}“: ein Skizzenmaß trägt nicht den Wert seiner Formel",
                     f.name
                 ));
             }

@@ -328,6 +328,7 @@ fn extruded(st: &mut AppState, build: impl FnOnce(&mut Sketch)) {
                 sketch: sk,
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
+                formulas: Default::default(),
             }),
         )
         .unwrap();

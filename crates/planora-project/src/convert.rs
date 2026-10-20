@@ -657,6 +657,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?,
+                formulas: Default::default(),
             })
         }
         KindDto::Quader { groesse, ursprung } => FeatureKind::Box {

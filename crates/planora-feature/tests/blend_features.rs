@@ -467,6 +467,7 @@ fn convex_and_concave_edges_in_one_feature_pass_the_volume_probe() {
                 sketch: sk,
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
+                formulas: Default::default(),
             }),
         )
         .unwrap();

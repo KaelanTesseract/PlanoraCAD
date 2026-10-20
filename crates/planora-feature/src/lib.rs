@@ -32,7 +32,8 @@ pub use expr::{
     ParamUnit,
 };
 pub use formulas::{
-    FieldKey, Formulas, field_keys, field_label, field_unit, field_value, set_field_value,
+    FieldKey, Formulas, constraint_unit, field_keys, field_label, field_unit, field_value,
+    set_field_value,
 };
 pub use georef::{
     from_edge_ref, from_face_ref, geo_ref_for_edge, geo_ref_for_edge_cached, geo_ref_for_face,
@@ -42,7 +43,7 @@ pub use meshes::VisibleMesh;
 pub use model::{
     BlendArt, BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus,
     MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE, MESH_LOCKED, MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE,
-    MeshId, ROTATION_NORM_TOL, SketchFeature, SketchPlane, StandardPlane,
+    MeshId, ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane,
 };
 pub use params::{ParamEdit, ParamId, ParamScope, Parameter};
 pub use parts_sheets::{

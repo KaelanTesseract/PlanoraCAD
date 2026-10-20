@@ -17,7 +17,7 @@ use planora_mesh::{
     BLEND_REL, BLEND_SLACK_FACTOR, Discretizer, TessellationOptions, blend_volume_plausible,
     boolean_volume_plausible, curved_area, mass_properties, tessellate, tessellate_with,
 };
-use planora_sketch::{Sketch, extrude_profile, plane_of_face, revolve_profile};
+use planora_sketch::{Sketch, SolveStatus, extrude_profile, plane_of_face, revolve_profile};
 
 /// Größter Betrag einer Koordinate oder eines Maßes in mm (wie
 /// [`planora_sketch::model::MAX_COORD`]): Darüber ist der Abstand benachbarter `f64`-Werte größer
@@ -564,8 +564,29 @@ fn compute_sketch(
         updated.edge.hint = found.hint;
         copies.push(updated);
     }
-    // Der Lösungsstatus wird bewusst nicht ausgewertet: eine unterbestimmte Skizze ist gültig.
-    let _ = sketch.solve();
+    if sf.formulas.is_empty() {
+        // Ohne Formeln wird der Lösungsstatus bewusst nicht ausgewertet (wie bisher): eine
+        // unterbestimmte oder vom Nutzer ungelöst gelassene Skizze ist gültig.
+        let _ = sketch.solve();
+    } else {
+        // Mit Formeln (Plan P12) ist jedes andere Ergebnis als „gelöst“ ein Fehler, auch wenn die
+        // Skizze schon vorher ungelöst war: Ein Parameter kann sie still in eine andere Lage
+        // kippen lassen, das Modell darf dann nicht still falsch werden. Eine unterbestimmte
+        // Skizze gilt als gelöst.
+        match sketch.solve().status {
+            SolveStatus::Solved => {}
+            SolveStatus::Conflicting => {
+                return Err(FeatureError::Sketch(
+                    "Mit den Werten der Formeln widersprechen sich Abhängigkeiten".into(),
+                ));
+            }
+            SolveStatus::NotConverged => {
+                return Err(FeatureError::Sketch(
+                    "Mit den Werten der Formeln lässt sich die Skizze nicht lösen".into(),
+                ));
+            }
+        }
+    }
     Ok(Computed {
         bodies: Vec::new(),
         sketch: Some(sketch),

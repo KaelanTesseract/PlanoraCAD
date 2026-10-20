@@ -8,8 +8,8 @@
 
 use crate::error::FeatureError;
 use crate::expr::{self, MAX_COMMENT_CHARS, MAX_PARAMETERS, ParamDef, ParamUnit, TableError};
-use crate::formulas::Formulas;
-use crate::model::Document;
+use crate::formulas::{Formulas, mentions, rewrite_formulas};
+use crate::model::{Document, FeatureKind};
 use crate::recompute::RecomputeReport;
 use std::collections::HashMap;
 
@@ -216,15 +216,13 @@ impl Document {
                     p.formula = expr::rename_in(&p.formula, &old_name, &edit.name);
                 }
             }
-            // Feature-Formeln ebenso (P6: ganze Namen, übriger Text zeichengleich).
+            // Feature- und Skizzenformeln ebenso (P6: ganze Namen, übriger Text zeichengleich).
             for (i, f) in self.features.iter().enumerate() {
-                if f.formulas.values().any(|t| expr::references(t, &old_name)) {
-                    let rewritten: Formulas = f
-                        .formulas
-                        .iter()
-                        .map(|(k, t)| (*k, expr::rename_in(t, &old_name, &edit.name)))
-                        .collect();
-                    features.push((i, rewritten));
+                if mentions(&f.kind, &f.formulas, &old_name) {
+                    let (kind, formulas) = rewrite_formulas(&f.kind, &f.formulas, |t| {
+                        Some(expr::rename_in(t, &old_name, &edit.name))
+                    });
+                    features.push((i, kind, formulas));
                 }
             }
         }
@@ -273,20 +271,18 @@ impl Document {
             }
         }
         table.remove(idx);
-        // Feature-Felder: Die Formel entfällt, das Feld trägt schon ihren Wert.
+        // Feature-Felder und Skizzenmaße: Die Formel entfällt, Feld bzw. Maß trägt schon ihren
+        // Wert.
         let features = self
             .features
             .iter()
             .enumerate()
-            .filter(|(_, f)| f.formulas.values().any(|t| expr::references(t, &name)))
+            .filter(|(_, f)| mentions(&f.kind, &f.formulas, &name))
             .map(|(i, f)| {
-                let kept: Formulas = f
-                    .formulas
-                    .iter()
-                    .filter(|(_, t)| !expr::references(t, &name))
-                    .map(|(k, t)| (*k, t.clone()))
-                    .collect();
-                (i, kept)
+                let (kind, kept) = rewrite_formulas(&f.kind, &f.formulas, |t| {
+                    (!expr::references(t, &name)).then(|| t.to_string())
+                });
+                (i, kind, kept)
             })
             .collect();
         self.apply_table(table, self.next_param, features, None)
@@ -303,7 +299,7 @@ impl Document {
         let features = self
             .features
             .iter()
-            .filter(|f| f.formulas.values().any(|t| expr::references(t, &me.name)))
+            .filter(|f| mentions(&f.kind, &f.formulas, &me.name))
             .map(|f| f.name.clone());
         let params = self
             .parameters
@@ -320,8 +316,9 @@ impl Document {
             .ok_or_else(|| FeatureError::InvalidInput(UNKNOWN_PARAMETER.into()))
     }
 
-    /// Prüft die neue Tabelle und mit ihren Werten alle Feature-Formeln (`features`: neue
-    /// Formeln je Feature-Index, etwa nach dem Umbenennen; P3: kein neuer Formelfehler) und
+    /// Prüft die neue Tabelle und mit ihren Werten alle Feature-Formeln (`features`: neue Art
+    /// mit Skizzenformeln und neue Feldformeln je Feature-Index, etwa nach dem Umbenennen; die
+    /// Art unterscheidet sich nur in den Skizzenformeln; P3: kein neuer Formelfehler) und
     /// übernimmt erst dann alles zusammen; zählt eine Änderung am Modell und rechnet neu (der
     /// Durchgang schreibt dabei die neuen Formelwerte in die Felder). `renamed` (alt, neu) lässt
     /// schon bestehende Formelfehler auch in umgeschriebener Form gelten.
@@ -329,23 +326,24 @@ impl Document {
         &mut self,
         table: Vec<Parameter>,
         next_param: u64,
-        features: Vec<(usize, Formulas)>,
+        features: Vec<(usize, FeatureKind, Formulas)>,
         renamed: Option<(&str, &str)>,
     ) -> Result<RecomputeReport, FeatureError> {
         let values = check_table(&table).map_err(FeatureError::Formula)?;
         let scope = ParamScope::new(&table, &values);
         let known = self.broken_set(renamed);
         for (i, f) in self.features.iter().enumerate() {
-            let formulas = features
+            let (kind, formulas) = features
                 .iter()
-                .find(|(j, _)| *j == i)
-                .map_or(&f.formulas, |(_, t)| t);
-            Document::check_new_broken(Some(f.id), &f.name, &f.kind, formulas, &scope, &known)?;
+                .find(|(j, _, _)| *j == i)
+                .map_or((&f.kind, &f.formulas), |(_, k, t)| (k, t));
+            Document::check_new_broken(Some(f.id), &f.name, kind, formulas, &scope, &known)?;
         }
         self.parameters = table;
         self.param_values = values;
         self.next_param = next_param;
-        for (i, formulas) in features {
+        for (i, kind, formulas) in features {
+            self.features[i].kind = kind;
             self.features[i].formulas = formulas;
         }
         self.edits += 1;

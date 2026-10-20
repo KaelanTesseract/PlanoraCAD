@@ -439,6 +439,7 @@ mod tests {
                     sketch: sk,
                     plane: SketchPlane::OnFace(face),
                     copies: vec![],
+                    formulas: Default::default(),
                 }),
             )
             .unwrap();

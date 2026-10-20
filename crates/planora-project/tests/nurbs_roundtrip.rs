@@ -31,6 +31,7 @@ fn freeform_document() -> Document {
                 sketch: sk,
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
+                formulas: Default::default(),
             }),
         )
         .unwrap();

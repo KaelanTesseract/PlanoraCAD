@@ -1479,6 +1479,7 @@ impl AppState {
             sketch,
             plane,
             copies: Vec::new(),
+            formulas: Default::default(),
         });
         self.add_checked(SKETCH_LABEL, kind)
     }

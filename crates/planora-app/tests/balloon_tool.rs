@@ -423,6 +423,7 @@ fn l_profile(st: &mut AppState) -> FeatureId {
                 sketch: sk,
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
+                formulas: Default::default(),
             }),
         )
         .unwrap();
