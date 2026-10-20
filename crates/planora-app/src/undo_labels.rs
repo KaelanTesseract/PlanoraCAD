@@ -4,7 +4,7 @@
 
 use planora_drawing::Drawing;
 use planora_drawing::model::{Balloon, DrawingKind, ViewSpec};
-use planora_feature::{FeatureKind, Snapshot, SnapshotFeature};
+use planora_feature::{FeatureKind, Parameter, Snapshot, SnapshotFeature};
 use planora_kernel::boolean::BoolOp;
 use planora_sketch::CurveKind;
 use planora_sketch::constraint::ConstraintKind;
@@ -15,13 +15,38 @@ pub const FALLBACK: &str = "Ändern";
 
 /// Name des Schritts, der das Bild `before` in das Bild `after` verwandelt hat.
 pub fn describe_change(before: &Snapshot, after: &Snapshot) -> &'static str {
-    features(before, after)
+    parameters(before, after)
+        .or_else(|| features(before, after))
         .or_else(|| drawings(before, after))
         .or_else(|| (before.project_info != after.project_info).then_some("Blattangaben ändern"))
         .or_else(|| {
             (before.parts_overrides != after.parts_overrides).then_some("Stücklistentext ändern")
         })
         .unwrap_or(FALLBACK)
+}
+
+/// Parametertabelle (vor allen anderen Regeln: eine Parameteränderung ändert meist auch Felder
+/// und Körper, der Schritt heißt trotzdem nach dem Parameter). Eine neue Kennung: „Parameter
+/// anlegen“; eine fehlende (Löschen, auch „Durch den Wert ersetzen“): „Parameter löschen“; sonst
+/// eine andere Zeile oder ein anderer Zähler: „Parameter ändern“.
+fn parameters(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
+    let missing = |list: &[Parameter], p: &Parameter| list.iter().all(|q| q.id != p.id);
+    if after
+        .parameters
+        .iter()
+        .any(|p| missing(&before.parameters, p))
+    {
+        return Some("Parameter anlegen");
+    }
+    if before
+        .parameters
+        .iter()
+        .any(|p| missing(&after.parameters, p))
+    {
+        return Some("Parameter löschen");
+    }
+    (before.parameters != after.parameters || before.next_param != after.next_param)
+        .then_some("Parameter ändern")
 }
 
 fn has(list: &[SnapshotFeature], f: &SnapshotFeature) -> bool {
@@ -63,7 +88,12 @@ fn features(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
     if before.marker != after.marker {
         return Some("Zeitleistenmarke setzen");
     }
-    if let Some((_, a)) = pairs.iter().find(|(b, a)| b.kind != a.kind) {
+    // Gleiche Art, aber andere Formeln (etwa nur der Formeltext, der Wert bleibt): benannt wie
+    // eine Änderung der Art.
+    if let Some((_, a)) = pairs
+        .iter()
+        .find(|(b, a)| b.kind != a.kind || b.formulas != a.formulas)
+    {
         return Some(match a.kind {
             FeatureKind::Move { .. } | FeatureKind::MeshBody { .. } => "Verschieben",
             FeatureKind::Sketch(_) => "Skizze bearbeiten",
@@ -307,6 +337,11 @@ pub fn describe_sketch_change_beside(
             .is_some_and(|o| o.construction != c.construction)
     }) {
         return "Hilfslinie umschalten";
+    }
+    // Nach allen Strukturregeln: eine Formel neu, anders oder entfernt (auch wenn sich dabei der
+    // Wert des Maßes ändert).
+    if before.formulas != after.formulas {
+        return "Formel ändern";
     }
     "Skizze ändern"
 }

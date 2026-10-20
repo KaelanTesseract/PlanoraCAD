@@ -17,7 +17,7 @@
 
 use planora_drawing::Drawing;
 use planora_drawing::model::{Balloon, ViewSpec};
-use planora_feature::{FeatureKind, SketchFeature, Snapshot, SnapshotFeature};
+use planora_feature::{FeatureKind, Parameter, SketchFeature, Snapshot, SnapshotFeature};
 use std::collections::VecDeque;
 use std::mem::size_of;
 
@@ -234,11 +234,18 @@ impl Tracker {
     }
 }
 
-/// Geschätzte Größe eines Zustandsbildes. Netze zählen nicht (geteilte `Arc`).
+/// Geschätzter Platz einer Formel (Eintrag der Nebentabelle) außer ihrem Text.
+const FORMULA_BYTES: usize = 32;
+
+/// Geschätzte Größe eines Zustandsbildes. Netze zählen nicht (geteilte `Arc`). Parameter zählen
+/// mit Name, Formel und Kommentar, Formeln (Feature und Skizze) mit ihrem Text.
 pub fn snapshot_bytes(s: &Snapshot) -> usize {
     let mut total = size_of::<Snapshot>();
+    for p in &s.parameters {
+        total += size_of::<Parameter>() + p.name.len() + p.formula.len() + p.comment.len();
+    }
     for f in &s.features {
-        total += size_of::<SnapshotFeature>() + f.name.len();
+        total += size_of::<SnapshotFeature>() + f.name.len() + formulas_bytes(f.formulas.values());
         if let FeatureKind::Sketch(sf) = &f.kind {
             total += sketch_data_bytes(sf);
         }
@@ -249,7 +256,7 @@ pub fn snapshot_bytes(s: &Snapshot) -> usize {
     total + s.parts_overrides.len() * 256
 }
 
-/// Geschätzte Größe eines Skizzenentwurfs (Eintrag im Skizzenverlauf, R10).
+/// Geschätzte Größe eines Skizzenentwurfs (Eintrag im Skizzenverlauf, R10), samt Formeln.
 pub fn sketch_bytes(sf: &SketchFeature) -> usize {
     size_of::<SketchFeature>() + sf.sketch.name.len() + sketch_data_bytes(sf)
 }
@@ -259,6 +266,11 @@ fn sketch_data_bytes(sf: &SketchFeature) -> usize {
         + (sf.sketch.points().count() + sf.sketch.curves().count()) * 64
         + sf.sketch.constraints().count() * 64
         + sf.copies.len() * 64
+        + formulas_bytes(sf.formulas.values())
+}
+
+fn formulas_bytes<'a>(texts: impl Iterator<Item = &'a String>) -> usize {
+    texts.map(|t| FORMULA_BYTES + t.len()).sum()
 }
 
 fn drawing_bytes(d: &Drawing) -> usize {
