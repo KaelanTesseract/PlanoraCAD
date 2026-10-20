@@ -127,86 +127,64 @@ pub fn field_unit(_kind: &FeatureKind, key: FieldKey) -> ParamUnit {
     }
 }
 
+/// Die **eine** Zuordnung Feldschlüssel → Feld der Art. `$r` ist `&` oder `&mut`; daraus
+/// entstehen [`field_ref`] (Lesen) und [`field_mut`] (Schreiben), damit jedes Feld nur einmal
+/// eingetragen wird (Aufgaben 4–6 ergänzen hier).
+macro_rules! field_table {
+    ($kind:expr, $key:expr, $($r:tt)+) => {{
+        use FieldKey::*;
+        match $kind {
+            FeatureKind::Box { size, origin } => match $key {
+                Breite => Some($($r)+ size.x),
+                Tiefe => Some($($r)+ size.y),
+                Hoehe => Some($($r)+ size.z),
+                X => Some($($r)+ origin.x),
+                Y => Some($($r)+ origin.y),
+                Z => Some($($r)+ origin.z),
+                _ => None,
+            },
+            FeatureKind::Cylinder {
+                radius,
+                height,
+                origin,
+            }
+            | FeatureKind::Cone {
+                radius,
+                height,
+                origin,
+            } => match $key {
+                Radius => Some($($r)+ *radius),
+                Hoehe => Some($($r)+ *height),
+                X => Some($($r)+ origin.x),
+                Y => Some($($r)+ origin.y),
+                Z => Some($($r)+ origin.z),
+                _ => None,
+            },
+            FeatureKind::Sphere { radius, origin } => match $key {
+                Radius => Some($($r)+ *radius),
+                X => Some($($r)+ origin.x),
+                Y => Some($($r)+ origin.y),
+                Z => Some($($r)+ origin.z),
+                _ => None,
+            },
+            _ => None,
+        }
+    }};
+}
+
+/// Verweis auf das Feld; `None`, wenn die Art es nicht hat.
+fn field_ref(kind: &FeatureKind, key: FieldKey) -> Option<&f64> {
+    field_table!(kind, key, &)
+}
+
 /// Veränderbarer Verweis auf das Feld; `None`, wenn die Art es nicht hat.
 fn field_mut(kind: &mut FeatureKind, key: FieldKey) -> Option<&mut f64> {
-    use FieldKey::*;
-    match kind {
-        FeatureKind::Box { size, origin } => match key {
-            Breite => Some(&mut size.x),
-            Tiefe => Some(&mut size.y),
-            Hoehe => Some(&mut size.z),
-            X => Some(&mut origin.x),
-            Y => Some(&mut origin.y),
-            Z => Some(&mut origin.z),
-            _ => None,
-        },
-        FeatureKind::Cylinder {
-            radius,
-            height,
-            origin,
-        }
-        | FeatureKind::Cone {
-            radius,
-            height,
-            origin,
-        } => match key {
-            Radius => Some(radius),
-            Hoehe => Some(height),
-            X => Some(&mut origin.x),
-            Y => Some(&mut origin.y),
-            Z => Some(&mut origin.z),
-            _ => None,
-        },
-        FeatureKind::Sphere { radius, origin } => match key {
-            Radius => Some(radius),
-            X => Some(&mut origin.x),
-            Y => Some(&mut origin.y),
-            Z => Some(&mut origin.z),
-            _ => None,
-        },
-        _ => None,
-    }
+    field_table!(kind, key, &mut)
 }
 
 /// Wert des Feldes; `None`, wenn die Art es nicht hat.
 pub fn field_value(kind: &FeatureKind, key: FieldKey) -> Option<f64> {
-    use FieldKey::*;
-    match kind {
-        FeatureKind::Box { size, origin } => match key {
-            Breite => Some(size.x),
-            Tiefe => Some(size.y),
-            Hoehe => Some(size.z),
-            X => Some(origin.x),
-            Y => Some(origin.y),
-            Z => Some(origin.z),
-            _ => None,
-        },
-        FeatureKind::Cylinder {
-            radius,
-            height,
-            origin,
-        }
-        | FeatureKind::Cone {
-            radius,
-            height,
-            origin,
-        } => match key {
-            Radius => Some(*radius),
-            Hoehe => Some(*height),
-            X => Some(origin.x),
-            Y => Some(origin.y),
-            Z => Some(origin.z),
-            _ => None,
-        },
-        FeatureKind::Sphere { radius, origin } => match key {
-            Radius => Some(*radius),
-            X => Some(origin.x),
-            Y => Some(origin.y),
-            Z => Some(origin.z),
-            _ => None,
-        },
-        _ => None,
-    }
+    field_ref(kind, key).copied()
 }
 
 /// Schreibt den Wert in das Feld; `false`, wenn die Art es nicht hat.

@@ -434,6 +434,8 @@ fn bad_value_is_error_status() {
         d.feature(q).unwrap().status,
         FeatureStatus::Error("Breite ergibt 0 mm, es muss größer als 0 sein".into())
     );
+    // Der Wertfehler schreibt den Wert trotzdem ins Feld (Aufgabentext, Abweichung von P3).
+    assert_eq!(box_of(&d, q).0, DVec3::new(0.0, 5.0, 5.0));
     assert!(
         d.body(BodyRef {
             feature: q,
@@ -851,5 +853,166 @@ fn rename_tolerates_old_broken_formula() {
     assert!(d.feature(q).unwrap().formulas().is_empty());
     assert_eq!(box_of(&d, q).0, DVec3::new(1.0, 10.0, 1.0));
     assert_eq!(d.feature(q).unwrap().status, FeatureStatus::Ok);
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn radius_value_error() {
+    let mut d = Document::new();
+    let p = d.add_parameter("d", "20", Length, "").unwrap();
+    let kinds = [
+        (
+            "Zylinder 1",
+            FeatureKind::Cylinder {
+                radius: 1.0,
+                height: 1.0,
+                origin: DVec3::ZERO,
+            },
+        ),
+        (
+            "Kegel 1",
+            FeatureKind::Cone {
+                radius: 1.0,
+                height: 1.0,
+                origin: DVec3::new(50.0, 0.0, 0.0),
+            },
+        ),
+        (
+            "Kugel 1",
+            FeatureKind::Sphere {
+                radius: 1.0,
+                origin: DVec3::new(0.0, 50.0, 0.0),
+            },
+        ),
+    ];
+    let ids: Vec<FeatureId> = kinds
+        .into_iter()
+        .map(|(name, kind)| {
+            d.add_feature_with_formulas(name, kind, formulas(&[(Radius, "d-10")]))
+                .unwrap()
+        })
+        .collect();
+    for id in &ids {
+        assert_eq!(d.feature(*id).unwrap().status, FeatureStatus::Ok);
+    }
+    d.set_parameter(p, edit(&d, p, "10")).unwrap();
+    for id in &ids {
+        let f = d.feature(*id).unwrap();
+        assert_eq!(
+            f.status,
+            FeatureStatus::Error("Radius ergibt 0 mm, es muss größer als 0 sein".into()),
+            "{}",
+            f.name
+        );
+        assert_eq!(field_value(&f.kind, Radius), Some(0.0), "Wert geschrieben");
+    }
+    assert!(d.visible_bodies().is_empty());
+    d.check_invariants().unwrap();
+    d.set_parameter(p, edit(&d, p, "12")).unwrap();
+    for id in &ids {
+        assert_eq!(d.feature(*id).unwrap().status, FeatureStatus::Ok);
+    }
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn every_field_key_maps_to_its_own_field() {
+    // Jedes Feld mit einem eigenen Wert: Art nach dem Durchgang genau wie erwartet.
+    /// Ausgangsart, Formeln je Feld (Reihenfolge wie `field_keys`), erwartete Art.
+    type Case = (FeatureKind, Vec<(FieldKey, &'static str)>, FeatureKind);
+    let cases: Vec<Case> = vec![
+        (
+            unit_box(),
+            vec![
+                (Breite, "11"),
+                (Tiefe, "12"),
+                (Hoehe, "13"),
+                (X, "1"),
+                (Y, "2"),
+                (Z, "3"),
+            ],
+            FeatureKind::Box {
+                size: DVec3::new(11.0, 12.0, 13.0),
+                origin: DVec3::new(1.0, 2.0, 3.0),
+            },
+        ),
+        (
+            FeatureKind::Cylinder {
+                radius: 1.0,
+                height: 1.0,
+                origin: DVec3::ZERO,
+            },
+            vec![
+                (Radius, "4"),
+                (Hoehe, "7"),
+                (X, "101"),
+                (Y, "102"),
+                (Z, "103"),
+            ],
+            FeatureKind::Cylinder {
+                radius: 4.0,
+                height: 7.0,
+                origin: DVec3::new(101.0, 102.0, 103.0),
+            },
+        ),
+        (
+            FeatureKind::Cone {
+                radius: 1.0,
+                height: 1.0,
+                origin: DVec3::ZERO,
+            },
+            vec![
+                (Radius, "5"),
+                (Hoehe, "8"),
+                (X, "201"),
+                (Y, "202"),
+                (Z, "203"),
+            ],
+            FeatureKind::Cone {
+                radius: 5.0,
+                height: 8.0,
+                origin: DVec3::new(201.0, 202.0, 203.0),
+            },
+        ),
+        (
+            FeatureKind::Sphere {
+                radius: 1.0,
+                origin: DVec3::ZERO,
+            },
+            vec![(Radius, "6"), (X, "301"), (Y, "302"), (Z, "303")],
+            FeatureKind::Sphere {
+                radius: 6.0,
+                origin: DVec3::new(301.0, 302.0, 303.0),
+            },
+        ),
+    ];
+    let mut d = Document::new();
+    for (i, (start, pairs, want)) in cases.into_iter().enumerate() {
+        // Feldzugriff ohne Dokument: Lesen und Schreiben über dieselbe Zuordnung
+        let mut k = start.clone();
+        for (key, text) in &pairs {
+            let v: f64 = text.parse().unwrap();
+            assert!(set_field_value(&mut k, *key, v), "{key:?}");
+            assert_eq!(field_value(&k, *key), Some(v), "{key:?}");
+        }
+        assert_eq!(k, want);
+        assert_eq!(
+            field_keys(&want),
+            pairs.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+            "Feldreihenfolge"
+        );
+        // und über Formeln im Dokument
+        let id = d
+            .add_feature_with_formulas(format!("F{i}"), start, formulas(&pairs))
+            .unwrap();
+        let f = d.feature(id).unwrap();
+        assert_eq!(f.kind, want);
+        assert_eq!(f.status, FeatureStatus::Ok);
+    }
+    // Kugel: Lage geometrisch geprüft (Mittelpunkt 301, 302, 303)
+    let kugel = d.features()[3].id;
+    let (lo, hi) = hull_of(&d, kugel);
+    assert!(near(lo, DVec3::new(295.0, 296.0, 297.0), 1e-6), "{lo}");
+    assert!(near(hi, DVec3::new(307.0, 308.0, 309.0), 1e-6), "{hi}");
     d.check_invariants().unwrap();
 }
