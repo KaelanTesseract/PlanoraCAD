@@ -187,6 +187,11 @@ fn revealed_key() -> egui::Id {
     top_id().with("revealed")
 }
 
+/// Breite des Symbols „Neu“ hinter der Tab-Leiste im letzten Bild.
+fn new_tab_width_key() -> egui::Id {
+    top_id().with("new-tab")
+}
+
 /// Höchstzahl der Zeilen in Status und Hinweis; erst darüber endet der Text mit „…“.
 const MAX_ROWS: usize = 2;
 
@@ -536,7 +541,7 @@ pub fn history_buttons_seen(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
 /// Skizzenverlauf). Gesperrt wie dort (nichts zu tun, alte Version, Export schreibt) und wie das
 /// ganze Feld bei offener Rückfrage; beim Überfahren Name und Grund.
 fn history_buttons(ui: &mut egui::Ui, ws: &mut crate::workspace::Workspace, dark: bool) {
-    let lock = bottom_lock(ws);
+    let lock = edit_lock(ws);
     let tab = ws.active_tab();
     let entries = [
         (
@@ -636,15 +641,22 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
             }
             // Rückgängig und Wiederholen rechts neben dem Menü, in jedem Modus; ihr Platz zählt
             // zur Wunsch- und Mindestbreite des Felds (über `gap`; die Tabs rollen statt dessen).
+            // Sie trennen Menü und Tabs selbst (kein Trennstrich).
             history_buttons(ui, &mut app.ws, dark);
-            ui.separator();
+            // Das Symbol „Neu“ steht fest rechts hinter der rollenden Tab-Leiste: es bleibt immer
+            // sichtbar, die Leiste bekommt die übrige Breite.
+            let spacing = ui.spacing().item_spacing.x;
+            let new_w = stored(ctx, new_tab_width_key()).unwrap_or(theme::ROW_H) + spacing;
             // Die Tab-Leiste reicht bis in den unteren Rand des Felds: ihr schwebender Rollbalken
             // liegt dort, unter den Namen der Tabs statt über ihnen. Das Feld selbst wird dadurch
             // nicht höher (eigene Fläche, belegt wird nur die Zeilenhöhe).
             let row = ui.max_rect();
             let area_rect = egui::Rect::from_min_max(
                 egui::pos2(ui.cursor().left(), row.top()),
-                egui::pos2(row.right(), row.bottom() + below_tabs),
+                egui::pos2(
+                    (row.right() - new_w).max(ui.cursor().left()),
+                    row.bottom() + below_tabs,
+                ),
             );
             let mut strip = ui.new_child(
                 egui::UiBuilder::new()
@@ -660,7 +672,7 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     ui.horizontal(|ui| {
                         ui.add_enabled_ui(no_prompt, |ui| {
-                            tabs::show_revealing(ui, &mut app.ws, reveal)
+                            tabs::show_tabs_only(ui, &mut app.ws, reveal)
                         });
                     });
                     ui.add_space(below_tabs);
@@ -670,13 +682,19 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 area_rect.min,
                 vec2(tabs.inner_rect.width(), row.height()),
             ));
-            // Wunschbreite: Menüknöpfe, Rückgängig/Wiederholen, Trennstrich mit Abständen, alle
-            // Tabs, Rand (`gap` umfasst die beiden Knöpfe).
+            let new_tab = ui
+                .add_enabled_ui(no_prompt, |ui| tabs::new_tab_button(ui, &mut app.ws))
+                .inner;
+            remember_width(ui, new_tab_width_key(), new_tab.rect.width());
+            let new_w = new_tab.rect.width() + spacing;
+            // Wunschbreite: Menüknöpfe, Rückgängig/Wiederholen mit Abständen, alle Tabs, Symbol
+            // „Neu“, Rand (`gap` umfasst die beiden Knöpfe). Die Mindestbreite lässt Tabs und
+            // „Neu“ zusammen [`MIN_TABS_W`].
             let gap = tabs.inner_rect.left() - menu.response.rect.right();
             remember_width(ui, menu_width_key(), menu_natural);
             // Das Zeichen zählt nach der Regel mit, auch wenn es in diesem Durchgang noch fehlt:
             // so stehen die gemerkten Breiten schon nach dem ersten Durchgang fest (kein Sprung).
-            let base = menu_natural + gap + tabs.content_size.x + margin;
+            let base = menu_natural + gap + tabs.content_size.x + new_w + margin;
             let planned = if shell::top_icon_fits(ctx.content_rect().width(), base, lead_w) {
                 lead_w
             } else {
@@ -793,8 +811,8 @@ enum Command {
     Blend(bool),
 }
 
-/// Warum das Befehlsfeld gerade ganz gesperrt ist (wie das Menü).
-fn bottom_lock(ws: &crate::workspace::Workspace) -> Option<&'static str> {
+/// Warum Befehlsfeld und Knöpfe Rückgängig/Wiederholen gerade gesperrt sind (wie das Menü).
+fn edit_lock(ws: &crate::workspace::Workspace) -> Option<&'static str> {
     let tab = ws.active_tab();
     if ws.prompt.is_some() {
         Some("Zuerst die offene Rückfrage beantworten.")
@@ -872,7 +890,7 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let frame = bar_frame(dark, shell::BOTTOM_H);
     let inner = inner_size(&frame, rects.bottom.size());
     let margin = frame.total_margin().sum().x;
-    let lock = bottom_lock(&app.ws);
+    let lock = edit_lock(&app.ws);
     let boolean_blocked = app.ws.active_tab().state.boolean_blocked();
     let blend_blocked = app.ws.active_tab().state.blend_blocked();
     let mut command = None;

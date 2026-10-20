@@ -57,6 +57,8 @@ struct Seen {
     text: String,
     rect: Rect,
     color: egui::Color32,
+    /// Ausschnitt, in dem gezeichnet wird (die Tab-Leiste rollt darin).
+    clip: Rect,
 }
 
 struct Rig {
@@ -121,9 +123,9 @@ impl Rig {
                 shell_panels::show_fields(ui.ctx(), app);
             }
         });
-        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<Seen>) {
+        fn walk(shape: &egui::epaint::Shape, clip: Rect, out: &mut Vec<Seen>) {
             match shape {
-                egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, out)),
                 egui::epaint::Shape::Text(t) => {
                     let section = t.galley.job.sections.first();
                     let mut color = section.map_or(t.fallback_color, |x| x.format.color);
@@ -148,6 +150,7 @@ impl Rig {
                         text: t.galley.text().to_string(),
                         rect: Rect::from_min_size(t.pos, t.galley.size()),
                         color: color.gamma_multiply(t.opacity_factor),
+                        clip,
                     })
                 }
                 // Trennstriche als eigener Eintrag „<Linie>“.
@@ -155,13 +158,14 @@ impl Rig {
                     text: LINE.into(),
                     rect: Rect::from_two_pos(points[0], points[1]),
                     color: stroke.color,
+                    clip,
                 }),
                 _ => {}
             }
         }
         let mut seen = Vec::new();
         for c in &out.shapes {
-            walk(&c.shape, &mut seen);
+            walk(&c.shape, c.clip_rect, &mut seen);
         }
         self.access.clear();
         if let Some(u) = out.platform_output.accesskit_update.take() {
@@ -331,19 +335,16 @@ fn buttons_next_to_the_menu() {
         );
         assert!(r.width() <= 24.0, "nur Symbol: {r:?}");
     }
-    // Ein Trennstrich zwischen Knöpfen und Tabs, keiner zwischen Menü und Knöpfen.
+    // Kein Trennstrich mehr zwischen Menü, Knöpfen und Tabs: die Knöpfe trennen selbst (Platz
+    // für die Tab-Leiste, Review I1).
     let lines: Vec<f32> = seen
         .iter()
         .filter(|s| s.text == LINE && top.contains(s.rect.center()) && s.rect.height() > 8.0)
         .map(|s| s.rect.center().x)
         .collect();
     assert!(
-        lines.iter().any(|x| *x > redo.right() && *x < tab.left()),
-        "Trennstrich hinter den Knöpfen: {lines:?}"
-    );
-    assert!(
-        !lines.iter().any(|x| *x > menu.right() && *x < undo.left()),
-        "kein Trennstrich vor den Knöpfen: {lines:?}"
+        !lines.iter().any(|x| *x > menu.right() && *x < tab.left()),
+        "kein Trennstrich: {lines:?}"
     );
     // Die Symbole stehen in den Knöpfen.
     for (r, icon) in [(undo, Icon::Undo), (redo, Icon::Redo)] {
@@ -759,6 +760,19 @@ fn locked_in_old_versions_and_prompts() {
             .any(|t| t == "Zuerst die offene Rückfrage beantworten."),
         "{texts:?}"
     );
+    // Vorrang der Gründe: die Rückfrage vor „nichts zu wiederholen“ (Wiederholen hat hier
+    // keinen Schritt).
+    let texts = rig.hover(REDO);
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "Zuerst die offene Rückfrage beantworten."),
+        "{texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t == "Es gibt nichts zu wiederholen."),
+        "{texts:?}"
+    );
     rig.press(UNDO);
     assert_eq!(rig.bodies(), 1, "gesperrt bei offener Rückfrage");
     assert_eq!(rig.tab().state.info, None);
@@ -804,4 +818,224 @@ fn themes() {
             "dark={dark}"
         );
     }
+}
+
+// ---- Tab-Leiste neben den Knöpfen (Review I1, Entscheidung Option A) -----------------------
+
+/// Arbeitsbereich mit `n` Tabs; der letzte ist aktiv, auf Wunsch geändert (Titel mit „●“).
+fn tabs_ws(n: usize, dirty: bool) -> Workspace {
+    let mut w = ws();
+    for _ in 1..n {
+        w.new_tab();
+    }
+    if dirty {
+        w.active_tab_mut()
+            .state
+            .create_box(DVec3::splat(5.0))
+            .unwrap();
+    }
+    w
+}
+
+/// Was von der Tab-Leiste zu sehen ist, nachdem der aktive Tab ins Bild gerollt ist.
+struct Strip {
+    /// Sichtbarer Ausschnitt der rollenden Leiste.
+    clip: Rect,
+    /// Name des aktiven Tabs (ungeschnitten).
+    name: Rect,
+    /// Schließen-Symbol des aktiven Tabs; `None`: ganz außerhalb des Ausschnitts (egui zeichnet
+    /// es dann nicht).
+    close: Option<Rect>,
+    /// Symbol „Neu“ und sein Ausschnitt.
+    plus: Rect,
+    plus_clip: Rect,
+    top: Rect,
+    redo: Rect,
+}
+
+impl Strip {
+    /// Um wie viel das Schließen-Symbol rechts über den Ausschnitt ragt (≤ 0: ganz sichtbar;
+    /// `None`: gar nicht zu sehen).
+    fn close_hidden(&self) -> Option<f32> {
+        self.close.map(|c| c.right() - self.clip.right())
+    }
+
+    fn name_shown(&self) -> bool {
+        self.clip.contains_rect(self.name)
+    }
+}
+
+fn strip(rig: &mut Rig) -> Strip {
+    // Der aktive Tab rollt mit kurzer Bewegung ins Bild.
+    for _ in 0..20 {
+        rig.time += 0.1;
+        rig.frame(vec![]);
+    }
+    let seen = rig.settle();
+    let top = top(&rig.ctx);
+    let title = rig.tab().title();
+    let name = title.trim_end_matches(" ●").to_string();
+    let head = seen
+        .iter()
+        .find(|s| s.text.starts_with(&name) && top.intersects(s.rect))
+        .unwrap_or_else(|| panic!("aktiver Tab „{name}“ fehlt"));
+    let close_glyph = icons::glyph(Icon::Close).to_string();
+    let close = seen
+        .iter()
+        .filter(|s| s.text == close_glyph && s.rect.left() >= head.rect.right() - 1.0)
+        .min_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))
+        .map(|s| s.rect);
+    let plus_glyph = icons::glyph(Icon::NewTab).to_string();
+    let plus = seen
+        .iter()
+        .find(|s| s.text == plus_glyph && top.intersects(s.rect))
+        .expect("Symbol „Neu“");
+    Strip {
+        clip: head.clip.intersect(top),
+        name: head.rect,
+        close,
+        plus: plus.rect,
+        plus_clip: plus.clip,
+        top,
+        redo: rect_of(&rig.ctx, REDO),
+    }
+}
+
+/// „Neu“ steht fest hinter der rollenden Tab-Leiste: immer ganz sichtbar und klickbar, bei 1100 ×
+/// 700 und 800 × 600 mit 1, 2 und 5 Tabs (geändert und ungeändert). Der aktive Tab ist ins Bild
+/// gerollt; die Knöpfe überdecken keinen Tab.
+///
+/// Gemessen bei 1100 × 700 (Feld 544 px = Rand 26 + Menü 319,25 + Knöpfe mit Abständen 60 + Tab-Leiste
+/// 100,75 + „Neu“ mit Abstand 38): Ein aktiver Tab samt Schließen-Symbol braucht etwa 127 px
+/// („Unbenannt n“) bzw. 136 px („Unbenannt n ●“). Deshalb (festgehalten, damit eine Änderung auffällt):
+/// - 1 Tab, ungeändert: Name ganz sichtbar, Schließen-Symbol ragt 17,8 px über den Rand;
+/// - 1 Tab geändert, oder 2/5 Tabs ungeändert: Name ganz sichtbar, Schließen-Symbol ganz außerhalb;
+/// - 2/5 Tabs, aktiver geändert: Name am Ende (Kennzeichen „●“) angeschnitten, Schließen-Symbol
+///   ganz außerhalb.
+///
+/// Das Schließen-Symbol ist nach Rollen erreichbar; Strg+W schließt den aktiven Tab (siehe
+/// `ctrl_w_closes_the_active_tab_at_1100`).
+///
+/// Bei 800 × 600 steht das Feld wie bisher über den Spalten: Name und Schließen-Symbol ganz sichtbar.
+#[test]
+fn new_tab_pinned_and_active_tab_revealed() {
+    for size in [MID, SMALL] {
+        for n in [1, 2, 5] {
+            for dirty in [false, true] {
+                let what = format!("{size:?}/{n} Tabs/geändert={dirty}");
+                let mut rig = Rig::with(tabs_ws(n, dirty), size, true, true);
+                let s = strip(&mut rig);
+                // „Neu“ ganz sichtbar, außerhalb der rollenden Leiste, rechts davon.
+                assert!(
+                    s.top.contains_rect(s.plus) && s.plus_clip.contains_rect(s.plus),
+                    "{what}: „Neu“ {:?} sichtbar",
+                    s.plus
+                );
+                assert!(
+                    s.plus.left() >= s.clip.right(),
+                    "{what}: „Neu“ hinter der Leiste"
+                );
+                // Die Knöpfe stehen vor der Leiste, kein Tab darunter.
+                assert!(
+                    s.redo.right() <= s.clip.left(),
+                    "{what}: Knöpfe vor den Tabs"
+                );
+                // Der aktive Tab ist ins Bild gerollt: ein Teil von ihm ist sichtbar.
+                assert!(
+                    s.clip.intersects(s.name),
+                    "{what}: aktiver Tab {:?} in {:?}",
+                    s.name,
+                    s.clip
+                );
+                if size == SMALL {
+                    assert!(s.name_shown(), "{what}: Name ganz sichtbar");
+                    assert!(
+                        s.close_hidden().is_some_and(|h| h <= 0.0),
+                        "{what}: × ganz sichtbar"
+                    );
+                } else {
+                    assert!(
+                        (s.clip.width() - 100.75).abs() < 0.5,
+                        "{what}: Leiste {}",
+                        s.clip.width()
+                    );
+                    // Festgehaltene Messung bei 1100 (siehe Doku oben).
+                    if n == 1 && !dirty {
+                        assert!(s.name_shown(), "{what}");
+                        let h = s.close_hidden().expect("×");
+                        assert!((h - 17.8).abs() < 1.0, "{what}: × ragt {h}");
+                    } else {
+                        assert_eq!(
+                            s.name_shown(),
+                            !(dirty && n > 1),
+                            "{what}: Name ganz sichtbar"
+                        );
+                        assert_eq!(s.close_hidden(), None, "{what}: × außerhalb");
+                    }
+                }
+                // Klick auf „Neu“ legt einen Tab an.
+                rig.click(s.plus.center());
+                assert_eq!(rig.app.ws_mut().tabs.len(), n + 1, "{what}: „Neu“ klickbar");
+            }
+        }
+    }
+}
+
+/// Ab 1140 px Breite sind Name und Schließen-Symbol des aktiven Tabs ganz zu sehen (1, 2 und
+/// 5 Tabs, geändert und ungeändert). Bei 1130 px (Leiste 130,75 px) gilt das nur für ungeänderte
+/// Tabs; ein geänderter aktiver Tab („Unbenannt n ●“) ragt mit seinem Schließen-Symbol bei 2 und
+/// mehr Tabs noch etwa 9,9 px hinaus (gemessen, festgehalten).
+#[test]
+fn active_tab_fully_visible_from_1140() {
+    for width in [1130.0, 1140.0, 1200.0, 1400.0] {
+        for n in [1, 2, 5] {
+            for dirty in [false, true] {
+                let what = format!("{width}/{n} Tabs/geändert={dirty}");
+                let mut rig = Rig::with(tabs_ws(n, dirty), vec2(width, 700.0), true, true);
+                let s = strip(&mut rig);
+                let h = s.close_hidden();
+                assert!(s.plus_clip.contains_rect(s.plus), "{what}: „Neu“ sichtbar");
+                if width == 1400.0 && n == 1 {
+                    // „Neu“ folgt dicht auf das Schließen-Symbol des letzten Tabs.
+                    let gap = s.plus.left() - s.close.expect("×").right();
+                    // Gemessen 24,25 px (Innenabstände beider Symbole und ein Abstand).
+                    assert!((gap - 24.25).abs() < 1.0, "{what}: Abstand × → Neu {gap}");
+                }
+                if width == 1130.0 && dirty && n > 1 {
+                    assert!(s.name_shown(), "{what}: Name");
+                    let h = h.expect("×");
+                    assert!((h - 9.9).abs() < 1.0, "{what}: × ragt {h}");
+                } else {
+                    assert!(s.name_shown(), "{what}: Name ganz sichtbar");
+                    assert!(
+                        h.is_some_and(|h| h <= 0.0),
+                        "{what}: × ganz sichtbar ({h:?})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Bei 1100 × 700 schließt Strg+W weiter den aktiven Tab (auch wenn sein Schließen-Symbol erst nach
+/// Rollen zu sehen ist).
+#[test]
+fn ctrl_w_closes_the_active_tab_at_1100() {
+    let mut rig = Rig::with(tabs_ws(2, false), MID, true, true);
+    let s = strip(&mut rig);
+    assert!(
+        s.close_hidden().is_none_or(|h| h > 0.0),
+        "× nicht ganz sichtbar"
+    );
+    let active = rig.tab().id;
+    rig.frame(vec![Event::Key {
+        key: egui::Key::W,
+        physical_key: Some(egui::Key::W),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND,
+    }]);
+    rig.settle();
+    assert_eq!(rig.app.ws_mut().tabs.len(), 1);
+    assert_ne!(rig.tab().id, active, "der aktive Tab ist zu");
 }
