@@ -1,8 +1,10 @@
-//! Die Typen der Versionsdatei (Format 1 bis 6). Unabhängig von den internen Strukturen.
+//! Die Typen der Versionsdatei (Format 1 bis 9). Unabhängig von den internen Strukturen.
 //! Absichtlich ohne `deny_unknown_fields`: unbekannte Felder in bekannten Versionen werden
-//! ignoriert.
+//! ignoriert (unbekannte **Feldschlüssel** in einer Formeltabelle sind dagegen Daten und werden
+//! beim Lesen abgelehnt, siehe `convert.rs`).
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct VersionFile {
@@ -38,6 +40,76 @@ pub struct VersionFile {
         deserialize_with = "de_overrides"
     )]
     pub stueckliste: Vec<StuecklisteZeileDto>,
+    /// Parametertabelle (ab Format 9). Leer heißt: fehlt, damit alte Dateien Byte für Byte
+    /// bleiben. Beim Lesen auf eins über dem Höchstwert begrenzt, die Prüfung danach meldet die
+    /// zu lange Tabelle im Klartext.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "de_parameters"
+    )]
+    pub parameter: Vec<ParameterDto>,
+    /// Nächste Parameterkennung (ab Format 9); nur mit Parametern geschrieben, 0 oder fehlend
+    /// heißt „aus den Kennungen ableiten“.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub naechster_parameter: u64,
+}
+
+/// Ein Parameter (ab Format 9). `art`: `"laenge"`, `"winkel"` oder `"zahl"`; ein leerer
+/// Kommentar fehlt.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ParameterDto {
+    pub id: u64,
+    pub name: String,
+    pub formel: String,
+    pub art: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kommentar: String,
+}
+
+/// Formel an einem Skizzenmaß (ab Format 9): `abhaengigkeit` ist der Index in
+/// `abhaengigkeiten` (gleich `ConstraintId::index()`, auch gelöschte Abhängigkeiten zählen).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct SketchFormulaDto {
+    pub abhaengigkeit: usize,
+    pub formel: String,
+}
+
+/// Höchstzahl der Parameter beim Lesen (eine mehr, damit die Prüfung danach im Klartext meldet).
+const MAX_FILE_PARAMETERS: usize = planora_feature::MAX_PARAMETERS + 1;
+
+fn de_parameters<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ParameterDto>, D::Error> {
+    de_capped(d, MAX_FILE_PARAMETERS)
+}
+
+/// Liest die Formeltabelle eines Features (Feldschlüssel → Formel); ein Schlüssel, der doppelt
+/// vorkommt, ist ein Fehler (sonst gälte still der letzte).
+fn de_formula_map<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<BTreeMap<String, String>, D::Error> {
+    struct Map;
+    impl<'de> serde::de::Visitor<'de> for Map {
+        type Value = BTreeMap<String, String>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "eine Tabelle Feld → Formel")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut out = BTreeMap::new();
+            while let Some((k, v)) = map.next_entry::<String, String>()? {
+                if out.contains_key(&k) {
+                    return Err(serde::de::Error::custom(format!(
+                        "Das Formelfeld „{k}“ kommt doppelt vor"
+                    )));
+                }
+                out.insert(k, v);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_map(Map)
 }
 
 /// Eigene Texte einer Stücklistenzeile (ab Format 7); `koerper` ist `[Feature, Ergebnis-Index]`
@@ -456,6 +528,14 @@ pub struct FeatureDto {
     pub name: String,
     pub unterdrueckt: bool,
     pub art: KindDto,
+    /// Formeln der Zahlenfelder (ab Format 9): Feldschlüssel (`FieldKey::file_key`) → Formel.
+    /// Leer heißt: fehlt (alte Dateien Byte für Byte).
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "de_formula_map"
+    )]
+    pub formeln: BTreeMap<String, String>,
 }
 
 pub type V3 = [f64; 3];
@@ -673,6 +753,10 @@ pub struct SketchFeatureDto {
     pub skizze: SketchDto,
     pub lage: PlaneDto,
     pub kopien: Vec<EdgeCopyDto>,
+    /// Formeln der bestimmenden Maße (ab Format 9), aufsteigend nach Abhängigkeit. Leer heißt:
+    /// fehlt (alte Dateien Byte für Byte).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub formeln: Vec<SketchFormulaDto>,
 }
 
 /// Art einer Verrundung (Grad, Prozent und Millimeter wie im Feature).

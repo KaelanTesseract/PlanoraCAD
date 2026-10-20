@@ -20,35 +20,43 @@ use planora_drawing::{
 };
 use planora_exchange::{ExchangeMesh, MAX_FILE_BYTES};
 use planora_feature::{
-    BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, MAX_COORD_MM,
-    MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS, MAX_POS_MM, MAX_ROLE_CHARS,
-    MAX_TOL_MM, MAX_VIEWS, MeshId, SketchFeature, SketchPlane, Snapshot, SnapshotFeature,
-    StandardPlane, validate_drawing,
+    BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, FieldKey, Formulas,
+    MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS,
+    MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM, MAX_ROLE_CHARS,
+    MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, SketchFeature, SketchFormulas,
+    SketchPlane, Snapshot, SnapshotFeature, StandardPlane, field_keys, validate_drawing,
 };
 use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
 use planora_sketch::{
-    ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord, LineOrPoints, PointId,
-    PointRecord, Sketch, SketchData,
+    ConstraintId, ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord, LineOrPoints,
+    PointId, PointRecord, Sketch, SketchData,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 8;
+pub const FORMAT_VERSION: u32 = 9;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 8 mit Schnittansichten, 7 mit Stücklisten-Daten (eigene Zeilentexte,
+/// Kleinste Formatnummer, die den Stand darstellt: 9 mit Parametern, Feature-Formeln oder
+/// Skizzenformeln (als erste Regel geprüft), 8 mit Schnittansichten, 7 mit Stücklisten-Daten (eigene Zeilentexte,
 /// Stücklistenblatt, Nummernkreise oder eingeschalteter Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder eingeschalteten
 /// Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder Fasen, sonst 1
 /// (P7, P12, F7, Teilprojekt 12 P11).
 pub fn required_format(s: &Snapshot) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if s.drawings
+    if !s.parameters.is_empty()
+        || s.features.iter().any(|f| !f.formulas.is_empty())
+        || has(|k| matches!(k, FeatureKind::Sketch(sf) if !sf.formulas.is_empty()))
+    {
+        9
+    } else if s
+        .drawings
         .iter()
         .any(|d| d.views.iter().any(|v| v.section.is_some()))
     {
@@ -492,6 +500,14 @@ fn kind_to(k: &FeatureKind) -> KindDto {
                     kante: edge_to(&c.edge),
                 })
                 .collect(),
+            formeln: s
+                .formulas
+                .iter()
+                .map(|(id, text)| SketchFormulaDto {
+                    abhaengigkeit: id.index(),
+                    formel: text.clone(),
+                })
+                .collect(),
         })),
         FeatureKind::Box { size, origin } => KindDto::Quader {
             groesse: v3(*size),
@@ -629,8 +645,10 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
     Ok(match d {
         KindDto::Skizze(s) => {
             check_len(origin, "Kantenkopien", s.kopien.len())?;
+            let sketch = sketch_from(origin, name, &s.skizze)?;
+            let formulas = sketch_formulas_from(origin, name, s, &sketch)?;
             FeatureKind::Sketch(SketchFeature {
-                sketch: sketch_from(origin, name, &s.skizze)?,
+                sketch,
                 plane: match &s.lage {
                     PlaneDto::Standard { ebene } => SketchPlane::Standard(match ebene.as_str() {
                         "xy" => StandardPlane::XY,
@@ -657,7 +675,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?,
-                formulas: Default::default(),
+                formulas,
             })
         }
         KindDto::Quader { groesse, ursprung } => FeatureKind::Box {
@@ -770,6 +788,147 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
             }
         }
     })
+}
+
+// ---- Parameter und Formeln (Format 9) ---------------------------------------------------
+
+const PARAM_UNITS: [(ParamUnit, &str); 3] = [
+    (ParamUnit::Length, "laenge"),
+    (ParamUnit::Angle, "winkel"),
+    (ParamUnit::Number, "zahl"),
+];
+
+fn too_long(text: &str, max: usize) -> bool {
+    text.chars().count() > max
+}
+
+/// Prüft die Länge einer Formel aus der Datei; ob sie sich auswerten lässt, entscheidet erst
+/// das Dokument (eine kaputte Feature-Formel lädt, Spec §4a.7).
+fn formula_from(origin: &str, what: &str, text: &str) -> Result<String> {
+    if too_long(text, MAX_FORMULA_CHARS) {
+        return Err(ProjectError::corrupt(
+            origin,
+            format!("{what}: Die Formel ist zu lang (höchstens {MAX_FORMULA_CHARS} Zeichen)"),
+        ));
+    }
+    Ok(text.to_string())
+}
+
+/// Formeln einer Skizze: nur an lebenden, bestimmenden Maßen (Index in `abhaengigkeiten`),
+/// jede Abhängigkeit höchstens einmal. An abgeschalteten Maßen bleiben Formeln erlaubt.
+fn sketch_formulas_from(
+    origin: &str,
+    feature: &str,
+    d: &SketchFeatureDto,
+    sketch: &Sketch,
+) -> Result<SketchFormulas> {
+    let bad = |m: &str| ProjectError::corrupt(origin, format!("„{feature}“: {m}"));
+    let mut out = SketchFormulas::new();
+    for f in &d.formeln {
+        // Erst gegen die Länge der Liste prüfen: `from_index` schneidet sonst große Zahlen ab.
+        if f.abhaengigkeit >= d.skizze.abhaengigkeiten.len() {
+            return Err(bad("Formel an einer fehlenden Abhängigkeit"));
+        }
+        let id = ConstraintId::from_index(f.abhaengigkeit);
+        match sketch.constraint(id) {
+            None => return Err(bad("Formel an einer fehlenden Abhängigkeit")),
+            Some(c) if !c.kind.is_dimension() || c.driven => {
+                return Err(bad(
+                    "Formel an einer Abhängigkeit, die kein bestimmendes Maß ist",
+                ));
+            }
+            Some(_) => {}
+        }
+        let text = formula_from(origin, &format!("„{feature}“"), &f.formel)?;
+        if out.insert(id, text).is_some() {
+            return Err(bad("Eine Abhängigkeit hat mehr als eine Formel"));
+        }
+    }
+    Ok(out)
+}
+
+/// Formeln der Zahlenfelder eines Features: bekannte Schlüssel, die die Art auch hat.
+fn feature_formulas_from(origin: &str, f: &FeatureDto, kind: &FeatureKind) -> Result<Formulas> {
+    let bad = |m: String| ProjectError::corrupt(origin, format!("„{}“: {m}", f.name));
+    let keys = field_keys(kind);
+    let mut out = Formulas::new();
+    for (key, text) in &f.formeln {
+        let k = FieldKey::from_file_key(key)
+            .ok_or_else(|| bad(format!("unbekanntes Formelfeld „{key}“")))?;
+        if !keys.contains(&k) {
+            return Err(bad(format!("Das Feld „{key}“ kann keine Formel haben")));
+        }
+        out.insert(k, formula_from(origin, &format!("„{}“", f.name), text)?);
+    }
+    Ok(out)
+}
+
+/// Parametertabelle samt Zähler. Hier geprüft: Anzahl, Längen, Art, Kennungen; die Tabelle
+/// selbst (Namensregeln, doppelte Namen, Kreise, unbekannte Namen) prüft
+/// `Document::from_snapshot`.
+fn parameters_from(origin: &str, file: &VersionFile) -> Result<(Vec<Parameter>, u64)> {
+    if file.parameter.len() > MAX_PARAMETERS {
+        return Err(ProjectError::corrupt(
+            origin,
+            format!("Höchstens {MAX_PARAMETERS} Parameter"),
+        ));
+    }
+    let next = counter(
+        origin,
+        "Parameter",
+        file.naechster_parameter,
+        file.parameter.iter().map(|p| p.id),
+    )?;
+    let mut ids = HashSet::with_capacity(file.parameter.len());
+    let mut out = Vec::with_capacity(file.parameter.len());
+    for p in &file.parameter {
+        if too_long(&p.name, MAX_PARAM_NAME_CHARS) {
+            return Err(ProjectError::corrupt(
+                origin,
+                format!(
+                    "Parameter: Ein Name ist zu lang (höchstens {MAX_PARAM_NAME_CHARS} Zeichen)"
+                ),
+            ));
+        }
+        let bad = |m: String| ProjectError::corrupt(origin, format!("Parameter „{}“: {m}", p.name));
+        if !ids.insert(p.id) {
+            return Err(bad("Die Kennung kommt doppelt vor".into()));
+        }
+        let unit = value_of(&PARAM_UNITS, &p.art)
+            .ok_or_else(|| bad(format!("unbekannte Art „{}“", p.art)))?;
+        if too_long(&p.kommentar, MAX_COMMENT_CHARS) {
+            return Err(bad(format!(
+                "Der Kommentar ist zu lang (höchstens {MAX_COMMENT_CHARS} Zeichen)"
+            )));
+        }
+        out.push(Parameter {
+            id: ParamId(p.id),
+            name: p.name.clone(),
+            formula: formula_from(origin, &format!("Parameter „{}“", p.name), &p.formel)?,
+            unit,
+            comment: p.kommentar.clone(),
+        });
+    }
+    Ok((out, next))
+}
+
+fn parameter_to(p: &Parameter) -> ParameterDto {
+    ParameterDto {
+        id: p.id.0,
+        name: p.name.clone(),
+        formel: p.formula.clone(),
+        art: name_of(&PARAM_UNITS, p.unit),
+        kommentar: p.comment.clone(),
+    }
+}
+
+/// Hat die Datei Parameter oder Formeln (erst ab Format 9)?
+fn has_format_9_data(file: &VersionFile) -> bool {
+    !file.parameter.is_empty()
+        || file.naechster_parameter != 0
+        || file.features.iter().any(|f| {
+            !f.formeln.is_empty() || matches!(&f.art, KindDto::Skizze(s) if !s.formeln.is_empty())
+        })
 }
 
 // ---- Netze ------------------------------------------------------------------------------
@@ -1626,6 +1785,11 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
                 name: f.name.clone(),
                 unterdrueckt: f.suppressed,
                 art: kind_to(&f.kind),
+                formeln: f
+                    .formulas
+                    .iter()
+                    .map(|(k, t)| (k.file_key().to_string(), t.clone()))
+                    .collect(),
             })
             .collect(),
         netze: s
@@ -1649,6 +1813,14 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         },
         projektangaben: s.project_info.as_ref().map(project_to),
         stueckliste: overrides_to(&s.parts_overrides),
+        parameter: s.parameters.iter().map(parameter_to).collect(),
+        // Der Zähler steht nur mit Parametern in der Datei (ohne fehlt er, alte Dateien bleiben
+        // Byte für Byte); ohne Parameter beginnen Kennungen nach dem Laden wieder bei 1.
+        naechster_parameter: if s.parameters.is_empty() {
+            0
+        } else {
+            s.next_param
+        },
     };
     let text = serde_json::to_string_pretty(&file).map_err(|e| {
         ProjectError::Invalid(format!("Das Dokument lässt sich nicht schreiben: {e}"))
@@ -1725,6 +1897,13 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             "Stücklisten und Positionsnummern gibt es erst ab Dateiformat 7",
         ));
     }
+    if file.format < 9 && has_format_9_data(&file) {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Parameter und Formeln gibt es erst ab Dateiformat 9",
+        ));
+    }
+    let (parameters, next_param) = parameters_from(origin, &file)?;
     let parts_overrides = overrides_from(origin, &file.stueckliste)?;
     let (drawings, next_drawing) = drawings_from(origin, &file)?;
     let project_info = file
@@ -1747,12 +1926,14 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     check_len(origin, "Features", file.features.len())?;
     let mut features = Vec::with_capacity(file.features.len());
     for f in &file.features {
+        let kind = kind_from(origin, &f.name, &f.art)?;
+        let formulas = feature_formulas_from(origin, f, &kind)?;
         features.push(SnapshotFeature {
             id: FeatureId(f.id),
             name: f.name.clone(),
             suppressed: f.unterdrueckt,
-            kind: kind_from(origin, &f.name, &f.art)?,
-            formulas: Default::default(),
+            kind,
+            formulas,
         });
     }
     Ok(Snapshot {
@@ -1764,8 +1945,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         next_drawing,
         project_info,
         parts_overrides,
-        // Parameter speichert und liest erst Format 9 (Aufgabe 7).
-        parameters: Vec::new(),
-        next_param: 1,
+        parameters,
+        next_param,
     })
 }
