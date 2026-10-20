@@ -864,7 +864,7 @@ fn replace_refused_while_sketch_has_a_value_error() {
 
 #[test]
 fn replace_refused_while_body_feature_fails() {
-    // F2 auch für Körperfelder: Fehler (Wertfehler) und übersprungen.
+    // Körperfelder (R2): Ein Wertfehler sperrt; übersprungen wegen eines fremden Fehlers nicht.
     let mut d = Document::new();
     let b = d.add_parameter("Breite", "40", Length, "").unwrap();
     let q = d
@@ -911,15 +911,153 @@ fn replace_refused_while_body_feature_fails() {
         )
         .unwrap();
     assert!(matches!(status(&d2, m), FeatureStatus::Skipped(_)));
-    replace_refused(&mut d2, dx, "Verschieben 1");
-    // Behoben (k = 2): Ersetzen von dx ist ein Schritt, Δx bleibt 5.
-    d2.set_parameter(k2, edit(&d2, k2, "2")).unwrap();
+    // R2: Δx trägt schon den Formelwert; übersprungen wegen eines fremden Fehlers bleibt nach
+    // dem Ersetzen alles gleich → erlaubt, ein Schritt.
+    let before = d2.snapshot();
     let count = d2.edit_count();
     d2.replace_parameter_by_value(dx).unwrap();
     assert_eq!(d2.edit_count(), count + 1);
     assert!(d2.feature(m).unwrap().formulas().is_empty());
+    assert_eq!(status(&d2, m), status_in(&before, m));
+    let FeatureKind::Move { delta, .. } = d2.feature(m).unwrap().kind else {
+        panic!("kein Verschieben")
+    };
+    assert_eq!(delta.x, 5.0);
+    assert_same_as_loaded(&d2);
+    // Behoben (k = 2): Verschieben Ok mit Δx 5.
+    d2.set_parameter(k2, edit(&d2, k2, "2")).unwrap();
     assert_eq!(status(&d2, m), FeatureStatus::Ok);
+    let (lo, _) = hull_of(&d2, m);
+    assert!((lo.x - 5.0).abs() <= 1e-9, "{lo:?}");
     d2.check_invariants().unwrap();
+}
+
+/// Status eines Features nach dem Laden des Bildes.
+fn status_in(snap: &Snapshot, id: FeatureId) -> FeatureStatus {
+    Document::from_snapshot(snap.clone(), 0.05)
+        .unwrap()
+        .feature(id)
+        .unwrap()
+        .status
+        .clone()
+}
+
+#[test]
+fn value_error_behind_the_marker_refuses_replace() {
+    // R3: Hinter dem Marker zeigt der Status nichts; der Wertfehler (Durchgang für alle
+    // Features) sperrt trotzdem – bei Skizze und Körperfeld.
+    let (mut d, b, s, _e, r) = rect_doc();
+    d.update(s, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            sf.formulas.insert(r.bottom, "Breite-30".into());
+        }
+    })
+    .unwrap();
+    d.set_parameter(b, edit(&d, b, "40")).unwrap();
+    d.set_parameter(b, edit(&d, b, "30")).unwrap();
+    d.set_marker(0).unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::NotComputed);
+    replace_refused(&mut d, b, "Skizze 1");
+    let mut d = Document::new();
+    let p = d.add_parameter("Breite", "40", Length, "").unwrap();
+    let q = d
+        .add_feature_with_formulas(
+            "Quader 1",
+            FeatureKind::Box {
+                size: DVec3::ONE,
+                origin: DVec3::ZERO,
+            },
+            [(FieldKey::Breite, "Breite-40".to_string())]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+    d.set_suppressed(q, true).unwrap();
+    replace_refused(&mut d, p, "Quader 1");
+}
+
+#[test]
+fn unsolved_sketch_behind_marker_or_suppressed_keeps_its_last_formula() {
+    // R1: Eine widersprüchliche Skizze mit ihrer letzten Formel, hinter dem Marker bzw.
+    // unterdrückt: Ersetzen abgelehnt (sonst wäre sie ohne Formel still Ok); nichts ändert sich.
+    let mut d = Document::new();
+    let h = d.add_parameter("h", "20", Length, "").unwrap();
+    let (sk, right) = conflicting_sketch();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, one(right, "h"))))
+        .unwrap();
+    assert!(matches!(status(&d, s), FeatureStatus::Error(_)));
+    d.set_marker(0).unwrap();
+    replace_refused(&mut d, h, "Skizze 1");
+    d.set_marker(1).unwrap();
+    d.set_suppressed(s, true).unwrap();
+    replace_refused(&mut d, h, "Skizze 1");
+    d.set_suppressed(s, false).unwrap();
+    assert!(matches!(status(&d, s), FeatureStatus::Error(_)));
+    assert_same_as_loaded(&d);
+    // Widerspruch behoben (zweiter Abstand der Unterseite weg), hinter dem Marker ersetzt,
+    // Marker zurück: Ok, gleich wie geladen.
+    d.set_marker(0).unwrap();
+    d.update(s, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            let extra = sf
+                .sketch
+                .constraints()
+                .filter(|(_, c)| matches!(c.kind, ConstraintKind::Distance(_, _, v) if v == 40.0))
+                .map(|(id, _)| id)
+                .next()
+                .unwrap();
+            sf.sketch.remove_constraint(extra).unwrap();
+        }
+    })
+    .unwrap();
+    let count = d.edit_count();
+    d.replace_parameter_by_value(h).unwrap();
+    assert_eq!(d.edit_count(), count + 1);
+    assert!(sketch_feature(&d, s).formulas.is_empty());
+    d.set_marker(1).unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    assert_same_as_loaded(&d);
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn replace_allowed_when_the_failing_feature_does_not_use_it() {
+    // R3: Ein Feature im Fehler, das den Parameter nicht nennt, sperrt nicht.
+    let mut d = Document::new();
+    let p = d.add_parameter("p", "10", Length, "").unwrap();
+    d.add_parameter("q", "40", Length, "").unwrap();
+    let box_kind = || FeatureKind::Box {
+        size: DVec3::ONE,
+        origin: DVec3::ZERO,
+    };
+    let a = d
+        .add_feature_with_formulas(
+            "Quader A",
+            box_kind(),
+            [(FieldKey::Breite, "p".to_string())].into_iter().collect(),
+        )
+        .unwrap();
+    let bq = d
+        .add_feature_with_formulas(
+            "Quader B",
+            box_kind(),
+            [(FieldKey::Breite, "q-40".to_string())]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+    assert!(matches!(status(&d, bq), FeatureStatus::Error(_)));
+    let hull_before = hull_of(&d, a);
+    let count = d.edit_count();
+    d.replace_parameter_by_value(p).unwrap();
+    assert_eq!(d.edit_count(), count + 1);
+    assert!(d.feature(a).unwrap().formulas().is_empty());
+    assert_eq!(status(&d, a), FeatureStatus::Ok);
+    assert_eq!(hull_of(&d, a), hull_before, "Modell gleich");
+    assert!(matches!(status(&d, bq), FeatureStatus::Error(_)));
+    assert_same_as_loaded(&d);
+    d.check_invariants().unwrap();
 }
 
 #[test]

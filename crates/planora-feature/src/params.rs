@@ -78,6 +78,34 @@ impl ParamScope {
 const COMMENT_TOO_LONG: &str = "Der Kommentar ist zu lang (höchstens 200 Zeichen).";
 const UNKNOWN_PARAMETER: &str = "Den Parameter gibt es in diesem Dokument nicht";
 
+/// Ergäbe „Durch den Wert ersetzen“ des Parameters `name` an diesem Feature (das ihn nennt)
+/// still ein anderes Modell? (Nie still ein anderes Modell, Spec §1.)
+/// - Formel- oder Wertfehler (`issue`, auch hinter dem Marker): Das Feld bzw. Maß trägt nicht
+///   den Wert der Formel; ersetzt man sie, gälte still der alte Wert.
+/// - Körperfelder ohne solchen Fehler tragen schon den Formelwert; Fehler aus anderem Grund
+///   oder „übersprungen“ bleiben nach dem Ersetzen genau gleich – erlaubt.
+/// - Skizzen: Status `Error`/`Skipped` sperrt (der Status kann von den Formeln abhängen, P12).
+///   Entfiele die **letzte** Formel einer Skizze, die nicht berechnet ist (hinter dem Marker
+///   oder unterdrückt), muss ihre Definition gelöst sein; sonst würde sie nach P12 ohne
+///   Formeln still „Ok“. Geprüft wird die Definition (ohne Ebenen- und Kantennachführung).
+fn replace_would_change_model(f: &crate::model::Feature, name: &str) -> bool {
+    use crate::model::FeatureStatus;
+    if f.issue.is_some() {
+        return true;
+    }
+    let FeatureKind::Sketch(sf) = &f.kind else {
+        return false;
+    };
+    match f.status {
+        FeatureStatus::Error(_) | FeatureStatus::Skipped(_) => true,
+        FeatureStatus::Ok => false,
+        FeatureStatus::NotComputed | FeatureStatus::Suppressed => {
+            let last = sf.formulas.values().all(|t| expr::references(t, name));
+            last && sf.sketch.clone().solve().status != planora_sketch::SolveStatus::Solved
+        }
+    }
+}
+
 /// Prüft die ganze Tabelle und liefert die Werte in Tabellenreihenfolge, sonst die Meldung.
 /// Namens-, Anzahl- und Kreisfehler stehen ohne Vorsilbe (sie nennen die Namen selbst),
 /// Formel- und Einheitenfehler als „Parameter „{name}“: {meldung}“.
@@ -258,23 +286,16 @@ impl Document {
     /// „Durch den Wert ersetzen“ (Plan P7): Jede Formel, die den Parameter direkt nennt, wird
     /// durch ihren aktuellen Wert ersetzt ([`expr::value_text`]), dann wird der Parameter
     /// gelöscht. Ein Schritt; kein Wert ändert sich. Lässt sich ein Wert nicht als Formel
-    /// schreiben oder hat ein Feature, das den Parameter nennt, gerade einen Fehler (Status
-    /// `Error`/`Skipped` oder Wertfehler), wird abgelehnt und nichts ändert sich.
+    /// schreiben oder ergäbe das Ersetzen still ein anderes Modell (siehe
+    /// [`replace_would_change_model`]), wird abgelehnt und nichts ändert sich.
     pub fn replace_parameter_by_value(&mut self, id: ParamId) -> Result<(), FeatureError> {
         let idx = self.param_index(id)?;
         let name = self.parameters[idx].name.clone();
-        // Nie still ein anderes Modell: Hat ein Feature, das den Parameter nennt, gerade einen
-        // Fehler (Status oder Wertfehler), ergäbe das Ersetzen ein anderes Modell als die
-        // Formel (etwa ein Skizzenmaß mit seinem letzten gültigen Wert). Dann wird abgelehnt.
-        if let Some(f) = self.features.iter().find(|f| {
-            mentions(&f.kind, &f.formulas, &name)
-                && (f.issue.is_some()
-                    || matches!(
-                        f.status,
-                        crate::model::FeatureStatus::Error(_)
-                            | crate::model::FeatureStatus::Skipped(_)
-                    ))
-        }) {
+        if let Some(f) = self
+            .features
+            .iter()
+            .find(|f| mentions(&f.kind, &f.formulas, &name) && replace_would_change_model(f, &name))
+        {
             return Err(FeatureError::Formula(format!(
                 "Parameter „{name}“ lässt sich nicht durch den Wert ersetzen: „{}“ hat gerade \
                  einen Fehler. Beheben Sie zuerst den Fehler.",
