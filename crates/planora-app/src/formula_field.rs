@@ -21,6 +21,8 @@ pub enum FieldInput {
 
 /// Zeichen vor einer Formel.
 pub const FX: &str = "fx";
+/// Name des Zeichens „fx“ für Bildschirmleser.
+pub const FX_LABEL: &str = "In Wert umwandeln";
 /// Hinweis zum Zeichen „fx“.
 pub const FX_HINT: &str = "Formel. Klicken setzt den berechneten Wert ein und löscht die Formel.";
 /// Meldung bei leerem Feld.
@@ -113,6 +115,13 @@ pub struct FieldOutcome {
 /// - `error_below(false)`: Die Meldung steht nicht unter dem Feld (gleich hohe Zeilen in einer
 ///   Tabelle); der Aufrufer zeigt [`FieldOutcome::error`] selbst.
 /// - `label`: Name für Bildschirmleser.
+/// - `saved`: der übernommene Text (etwa aus dem Dokument). Dann übernimmt das Verlassen des
+///   Feldes, sobald der Text davon abweicht, auch wenn die Änderung schon vor dem letzten
+///   Fokus getippt wurde (sonst nur nach einer Änderung seit dem Fokus).
+///
+/// Für Aufgabe 10: Mit `error_below(true)` schiebt die Meldung das Feld darunter um eine
+/// Zeile (etwa 49 px statt 26 px) nach unten; in einem Raster Platz vorsehen oder die Meldung
+/// (`FieldOutcome::error`) in einer Fußzeile zeigen.
 pub struct FormulaField<'a> {
     id_salt: egui::Id,
     text: &'a mut String,
@@ -121,6 +130,7 @@ pub struct FormulaField<'a> {
     enabled: bool,
     error_below: bool,
     label: Option<String>,
+    saved: Option<&'a str>,
 }
 
 impl<'a> FormulaField<'a> {
@@ -137,6 +147,7 @@ impl<'a> FormulaField<'a> {
             enabled: true,
             error_below: true,
             label: None,
+            saved: None,
         }
     }
 
@@ -157,6 +168,11 @@ impl<'a> FormulaField<'a> {
 
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    pub fn saved(mut self, saved: &'a str) -> Self {
+        self.saved = Some(saved);
         self
     }
 
@@ -182,6 +198,7 @@ impl<'a> FormulaField<'a> {
             enabled,
             error_below,
             label,
+            saved,
         } = self;
         let dark = ui.visuals().dark_mode;
         let result = match classify(text) {
@@ -200,6 +217,13 @@ impl<'a> FormulaField<'a> {
                         )
                         .on_hover_text(FX_HINT)
                         .on_disabled_hover_text(FX_HINT);
+                    fx.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            enabled && valid,
+                            FX_LABEL,
+                        )
+                    });
                     theme::focus_ring(ui, &fx);
                     if fx.clicked()
                         && let Some(Ok(v)) = result
@@ -223,9 +247,9 @@ impl<'a> FormulaField<'a> {
                 match &result {
                     Some(Ok(v)) => {
                         let shown = value_text(*v, unit);
-                        // Große Werte schneidet die Zelle ab; der Hinweis zeigt alles.
-                        ui.add(egui::Label::new(theme::value(shown.clone())).truncate())
-                            .on_hover_text(shown);
+                        // Große Werte werden gekürzt; egui zeigt dann beim Überfahren den
+                        // ganzen Text als Hinweis.
+                        ui.add(egui::Label::new(theme::value(shown)).truncate());
                     }
                     Some(Err(_)) => {}
                     None => {
@@ -242,7 +266,11 @@ impl<'a> FormulaField<'a> {
             row.inner
         });
         let response = inner.inner;
-        let committed = enabled && commit_signal(ui, &response);
+        let committed = enabled
+            && match saved {
+                Some(s) => leave_signal(ui, &response, text.as_str() != s),
+                None => commit_signal(ui, &response),
+            };
         FieldOutcome {
             response,
             committed,
@@ -268,6 +296,12 @@ pub fn formula_field(
     FormulaField::new(id_salt, text, unit)
         .width(width)
         .show(ui, scope)
+}
+
+/// Übernahme eines Textfelds, dessen Entwurf mit einem übernommenen Stand verglichen wird:
+/// Enter, oder das Feld wurde verlassen und `differs` (Entwurf weicht vom Stand ab).
+pub fn leave_signal(ui: &egui::Ui, response: &egui::Response, differs: bool) -> bool {
+    response.lost_focus() && (differs || ui.input(|i| i.key_pressed(egui::Key::Enter)))
 }
 
 /// Übernahme eines Textfelds: Enter, oder das Feld wurde nach einer Änderung verlassen (Plan

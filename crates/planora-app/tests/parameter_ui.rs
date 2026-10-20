@@ -34,6 +34,7 @@ struct Seen {
     clip: Rect,
     color: egui::Color32,
     opacity: f32,
+    elided: bool,
 }
 
 fn walk(shape: &egui::epaint::Shape, clip: Rect, out: &mut Vec<Seen>) {
@@ -54,6 +55,7 @@ fn walk(shape: &egui::epaint::Shape, clip: Rect, out: &mut Vec<Seen>) {
                 clip,
                 color,
                 opacity: t.opacity_factor,
+                elided: t.galley.elided,
             })
         }
         _ => {}
@@ -1099,37 +1101,39 @@ fn fits_small_and_both_themes() {
 #[test]
 #[ignore]
 fn perf_500_rows() {
-    let mut s = AppState::new();
-    for i in 1..=500 {
-        let f = if i == 1 {
-            "10".to_string()
-        } else {
-            format!("p{} + 1", i - 1)
+    for count in [60, 500] {
+        let mut s = AppState::new();
+        for i in 1..=count {
+            let f = if i == 1 {
+                "10".to_string()
+            } else {
+                format!("p{} + 1", i - 1)
+            };
+            param(&mut s, &format!("p{i}"), &f, ParamUnit::Length);
+        }
+        let mut d = ParameterDialog::new(&s);
+        let mut pane = Pane::new(true);
+        pane.size = vec2(1100.0, 700.0);
+        let mut f = |ui: &mut egui::Ui| {
+            d.show(ui.ctx(), &mut s, false);
         };
-        param(&mut s, &format!("p{i}"), &f, ParamUnit::Length);
+        pane.settle(&mut f);
+        let n = 40;
+        let t0 = std::time::Instant::now();
+        for _ in 0..n {
+            pane.frame(vec![], &mut f);
+        }
+        let rows = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        drop(f);
+        let t0 = std::time::Instant::now();
+        for _ in 0..n {
+            pane.frame(vec![], &mut |ui| {
+                ui.label("x");
+            });
+        }
+        let empty = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        eprintln!("PERF {count} Zeilen: {rows:.2} ms/Bild, leeres Bild {empty:.2} ms");
     }
-    let mut d = ParameterDialog::new(&s);
-    let mut pane = Pane::new(true);
-    pane.size = vec2(1100.0, 700.0);
-    let mut f = |ui: &mut egui::Ui| {
-        d.show(ui.ctx(), &mut s, false);
-    };
-    pane.settle(&mut f);
-    let n = 40;
-    let t0 = std::time::Instant::now();
-    for _ in 0..n {
-        pane.frame(vec![], &mut f);
-    }
-    let rows = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
-    drop(f);
-    let t0 = std::time::Instant::now();
-    for _ in 0..n {
-        pane.frame(vec![], &mut |ui| {
-            ui.label("x");
-        });
-    }
-    let empty = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
-    eprintln!("PERF 500 Zeilen: {rows:.2} ms/Bild, leeres Bild {empty:.2} ms");
 }
 // ---- Nachbesserung (Review F1–F7) ------------------------------------------------------------
 
@@ -1658,4 +1662,470 @@ fn field_locked_while_typing_does_not_commit() {
     pane.frame(vec![key(Key::Enter, Modifiers::NONE)], &mut f);
     drop(f);
     assert_eq!(commits.get(), 0);
+}
+
+// ---- Nachbesserung 2 (Re-Review G1–G5) -------------------------------------------------------
+
+/// Zustand mit `count` Zeilen q1 … q{count} (Formel = Nummer, Zahl).
+fn many(count: usize) -> (AppState, Vec<ParamId>) {
+    let mut s = AppState::new();
+    let ids = (1..=count)
+        .map(|i| param(&mut s, &format!("q{i}"), &format!("{i}"), ParamUnit::Number))
+        .collect();
+    (s, ids)
+}
+
+/// Bildschirmleser-Baum eines Bildes: (Name, Rolle).
+fn access_nodes(
+    pane: &mut Pane,
+    f: &mut dyn FnMut(&mut egui::Ui),
+) -> Vec<(String, egui::accesskit::Role)> {
+    pane.ctx.enable_accesskit();
+    pane.frame(vec![], f);
+    pane.time += 0.05;
+    let raw = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, pane.size)),
+        time: Some(pane.time),
+        ..Default::default()
+    };
+    let mut out = pane.ctx.run_ui(raw, |ui| f(ui));
+    let update = out.platform_output.accesskit_update.take().expect("Baum");
+    out.drop_without_applying_deltas();
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, n)| n.label().map(|l| (l.to_string(), n.role())))
+        .collect()
+}
+
+/// Tab-Lauf durch die Tabelle: Liefert die Zeilen in der Reihenfolge, in der ihre Textfelder
+/// die Tastatur bekamen; prüft dabei, dass jede neu erreichte Zeile im Rollbereich zu sehen ist.
+fn tab_through(count: usize, back: bool) -> (Vec<ParamId>, Vec<ParamId>) {
+    let (mut s, ids) = many(count);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    pane.size = vec2(1100.0, 700.0);
+    let last = std::cell::Cell::new(None);
+    let focused = std::cell::Cell::new(None);
+    let mut f = |ui: &mut egui::Ui| {
+        assert!(d.show(ui.ctx(), &mut s, false));
+        last.set(d.last_rect);
+        focused.set(d.focused_row());
+    };
+    let seen = pane.settle(&mut f);
+    let name = find(&seen, "q1").unwrap().rect.center();
+    pane.click(name, &mut f);
+    let mut order = vec![ids[0]];
+    let modifiers = if back {
+        Modifiers::SHIFT
+    } else {
+        Modifiers::NONE
+    };
+    // Rückwärts: zuerst vorwärts bis ans Ende.
+    if back {
+        for _ in 0..count * 7 {
+            pane.frame(vec![key(Key::Tab, Modifiers::NONE)], &mut f);
+            if focused.get() == ids.last().copied() {
+                break;
+            }
+        }
+        assert_eq!(focused.get(), ids.last().copied(), "Ende erreicht");
+        order = vec![*ids.last().unwrap()];
+    }
+    for _ in 0..count * 7 {
+        pane.frame(vec![key(Key::Tab, modifiers)], &mut f);
+        pane.frame(vec![], &mut f);
+        pane.frame(vec![], &mut f);
+        pane.frame(vec![], &mut f);
+        pane.frame(vec![], &mut f);
+        let seen2 = pane.frame(vec![], &mut f);
+        let _ = seen;
+        if let Some(r) = focused.get()
+            && order.last() != Some(&r)
+        {
+            order.push(r);
+            let i = ids.iter().position(|x| *x == r).unwrap();
+            let rect = last.get().unwrap();
+            let shown = seen2.iter().any(|t| {
+                t.text == format!("q{}", i + 1)
+                    && t.clip.contains_rect(t.rect)
+                    && rect.contains_rect(t.rect)
+            });
+            assert!(shown, "Zeile q{} ist nach Tab zu sehen", i + 1);
+        }
+        let done = if back { ids[0] } else { *ids.last().unwrap() };
+        if order.last() == Some(&done) && order.len() > 1 {
+            break;
+        }
+    }
+    (order, ids)
+}
+
+/// G1: Bis 60 Zeilen sind alle gezeichnet: Tab erreicht jede, Bildschirmleser sehen alle.
+#[test]
+fn tab_reaches_all_of_40_rows() {
+    let (order, ids) = tab_through(40, false);
+    assert_eq!(order, ids, "jede Zeile in Reihenfolge");
+    let (mut s, _) = many(40);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    pane.size = vec2(1100.0, 700.0);
+    let nodes = access_nodes(&mut pane, &mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    let names = nodes
+        .iter()
+        .filter(|(l, _)| l.starts_with("Name von q"))
+        .count();
+    assert_eq!(names, 40, "alle Zeilen im Baum");
+}
+
+/// G1: Über 60 Zeilen (nur sichtbare gezeichnet) führt Tab trotzdem durch alle Zeilen, der
+/// Rollbereich folgt; Umschalt+Tab ebenso zurück.
+#[test]
+fn tab_reaches_all_of_100_rows_and_scroll_follows() {
+    let (order, ids) = tab_through(100, false);
+    assert_eq!(order, ids, "vorwärts jede Zeile");
+    let (order, ids) = tab_through(100, true);
+    let mut back = ids.clone();
+    back.reverse();
+    assert_eq!(order, back, "rückwärts jede Zeile");
+}
+
+/// G4 (Zeilenhöhe): Ausschnitt → gezeichnete Zeilen, und im Bild liegen die Zeilen lückenlos
+/// im Zeilenabstand.
+#[test]
+fn scroll_positions_map_to_rows() {
+    let stride = theme::FIELD_H + theme::SPACE_2;
+    assert_eq!(visible_rows(0.0, 340.0, 100), 0..11);
+    assert_eq!(visible_rows(340.0, 680.0, 100), 9..21);
+    assert_eq!(visible_rows(3300.0, 3400.0, 100), 96..100);
+    let (mut s, _) = many(100);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    pane.size = vec2(1100.0, 700.0);
+    let mut f = |ui: &mut egui::Ui| {
+        assert!(d.show(ui.ctx(), &mut s, false));
+    };
+    let mut seen = pane.settle(&mut f);
+    for step in 0..6 {
+        let mut rows: Vec<(usize, Rect, Rect)> = seen
+            .iter()
+            .filter_map(|t| {
+                let n: usize = t.text.strip_prefix('q')?.parse().ok()?;
+                t.clip.intersects(t.rect).then_some((n, t.rect, t.clip))
+            })
+            .collect();
+        rows.sort_by_key(|r| r.0);
+        assert!(rows.len() >= 8, "Schritt {step}: {} Zeilen", rows.len());
+        for w in rows.windows(2) {
+            assert_eq!(w[1].0, w[0].0 + 1, "lückenlos");
+            assert!(
+                (w[1].1.top() - w[0].1.top() - stride).abs() < 0.5,
+                "Zeilenabstand {stride}: {:?} {:?}",
+                w[0].1,
+                w[1].1
+            );
+        }
+        let clip = rows[0].2;
+        assert!(rows[0].1.top() <= clip.top() + stride, "oben keine Lücke");
+        assert!(
+            rows.last().unwrap().1.bottom() >= clip.bottom() - stride
+                || rows.last().unwrap().0 == 100,
+            "unten keine Lücke"
+        );
+        pane.frame(vec![Event::PointerMoved(clip.center())], &mut f);
+        pane.frame(
+            vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -517.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            }],
+            &mut f,
+        );
+        seen = pane.settle(&mut f);
+    }
+}
+
+/// G2: Ein Entwurf, dessen Feld aus dem Bild rollt, wird übernommen.
+#[test]
+fn draft_scrolled_out_is_committed() {
+    let (mut s, ids) = many(100);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    pane.size = vec2(1100.0, 700.0);
+    let last = std::cell::Cell::new(None);
+    let mut f = |ui: &mut egui::Ui| {
+        assert!(d.show(ui.ctx(), &mut s, false));
+        last.set(d.last_rect);
+    };
+    let seen = pane.settle(&mut f);
+    let field = find(&seen, "1").expect("Formel von q1").rect.center();
+    pane.click(field, &mut f);
+    pane.frame(vec![key(Key::A, Modifiers::COMMAND)], &mut f);
+    pane.frame(vec![text_event('7')], &mut f);
+    pane.frame(vec![text_event('7')], &mut f);
+    let center = last.get().unwrap().center();
+    pane.frame(vec![Event::PointerMoved(center)], &mut f);
+    for _ in 0..4 {
+        pane.frame(
+            vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -600.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            }],
+            &mut f,
+        );
+    }
+    pane.settle(&mut f);
+    drop(f);
+    assert_eq!(s.document.parameter(ids[0]).unwrap().formula, "77");
+}
+
+/// G2: Ein Entwurf von früher (etwa nach dem Zurückrollen ohne Übernahme) wird beim
+/// Hineinklicken und Verlassen übernommen, weil er vom Dokument abweicht.
+#[test]
+fn click_in_and_out_commits_stale_draft() {
+    let mut s = AppState::new();
+    let a = param(&mut s, "a", "40", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    d.set_text(a, Column::Formula, "42");
+    d.set_text(a, Column::Comment, "Rand");
+    let mut pane = Pane::new(true);
+    let last = std::cell::Cell::new(None);
+    let mut f = |ui: &mut egui::Ui| {
+        assert!(d.show(ui.ctx(), &mut s, false));
+        last.set(d.last_rect);
+    };
+    let seen = pane.settle(&mut f);
+    let field = find(&seen, "42").unwrap().rect.center();
+    let title = last.get().unwrap().left_top() + vec2(30.0, 20.0);
+    pane.click(field, &mut f);
+    pane.click(title, &mut f);
+    let p = s.document.parameter(a).unwrap().clone();
+    assert_eq!(p.formula, "42");
+    assert_eq!(p.comment, "Rand", "die ganze Zeile");
+    // Ohne Abweichung übernimmt Hinein und Hinaus nichts.
+    let count = s.document.edit_count();
+    let mut f = |ui: &mut egui::Ui| {
+        assert!(d.show(ui.ctx(), &mut s, false));
+    };
+    let seen = pane.settle(&mut f);
+    let field = find(&seen, "42").unwrap().rect.center();
+    pane.click(field, &mut f);
+    pane.click(title, &mut f);
+    drop(f);
+    assert_eq!(s.document.edit_count(), count);
+    // Ebenso ein alter Entwurf im Namen und im Kommentar.
+    for (column, text) in [(Column::Name, "a2"), (Column::Comment, "Mitte")] {
+        d.set_text(a, column, text);
+        let mut f = |ui: &mut egui::Ui| {
+            assert!(d.show(ui.ctx(), &mut s, false));
+        };
+        let seen = pane.settle(&mut f);
+        let field = find(&seen, text).unwrap().rect.center();
+        pane.click(field, &mut f);
+        pane.click(title, &mut f);
+        drop(f);
+        let p = s.document.parameter(a).unwrap();
+        let got = if column == Column::Name {
+            &p.name
+        } else {
+            &p.comment
+        };
+        assert_eq!(got, text);
+    }
+}
+
+/// G3: „Zeile hinzufügen“ rollt die neue Zeile ins Bild und gibt ihrem Namen die Tastatur;
+/// bei voller Tabelle eine Meldung.
+#[test]
+fn add_row_scrolls_into_view_and_focuses_name() {
+    let (mut s, _) = many(100);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    pane.size = vec2(1100.0, 700.0);
+    let last = std::cell::Cell::new(None);
+    let focused = std::cell::Cell::new(None);
+    let mut f = |ui: &mut egui::Ui| {
+        assert!(d.show(ui.ctx(), &mut s, false));
+        last.set(d.last_rect);
+        focused.set(d.focused_row());
+    };
+    let seen = pane.settle(&mut f);
+    let add = find(&seen, ADD_ROW).unwrap().rect.center();
+    pane.click(add, &mut f);
+    let seen = pane.settle(&mut f);
+    drop(f);
+    let new = s.document.parameters().last().unwrap().id;
+    assert_eq!(s.document.parameters().len(), 101);
+    assert!(
+        visible(&seen, "Parameter1", last.get().unwrap()),
+        "neue Zeile im Bild"
+    );
+    assert_eq!(focused.get(), Some(new), "Name hat die Tastatur");
+
+    let (mut s, _) = many(500);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    let mut f = |ui: &mut egui::Ui| {
+        assert!(d.show(ui.ctx(), &mut s, false));
+    };
+    let seen = pane.settle(&mut f);
+    let add = find(&seen, ADD_ROW).unwrap().rect.center();
+    pane.click(add, &mut f);
+    let seen = pane.settle(&mut f);
+    drop(f);
+    assert_eq!(s.document.parameters().len(), 500);
+    let e = seen
+        .iter()
+        .find(|t| t.text.contains("500"))
+        .expect("Meldung „voll“");
+    assert_eq!(e.color, theme::palette(true).error);
+}
+
+/// G4: „fx“ in einer Zeile des Fensters setzt den Wert ein und übernimmt sofort.
+#[test]
+fn fx_in_row_commits_value() {
+    let mut s = AppState::new();
+    param(&mut s, "a", "40", ParamUnit::Length);
+    let b = param(&mut s, "b", "a/3", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    let count = s.document.edit_count();
+    let mut f = |ui: &mut egui::Ui| {
+        assert!(d.show(ui.ctx(), &mut s, false));
+    };
+    let seen = pane.settle(&mut f);
+    let fx = find(&seen, FX).expect("„fx“ in der Zeile b").rect.center();
+    pane.click(fx, &mut f);
+    drop(f);
+    assert_eq!(
+        s.document.parameter(b).unwrap().formula,
+        planora_feature::expr::number_text(40.0 / 3.0)
+    );
+    assert_eq!(s.document.edit_count(), count + 1);
+}
+
+/// G4: Große Werte im Formelfeld werden gekürzt, der Hinweis zeigt den ganzen Wert.
+#[test]
+fn huge_value_truncated_with_full_tooltip() {
+    let mut s = AppState::new();
+    param(&mut s, "a", "1000000000000", ParamUnit::Length);
+    let scope = s.document.param_scope();
+    let mut text = "a*1".to_string();
+    let mut pane = Pane::new(true);
+    pane.ctx
+        .all_styles_mut(|st| st.interaction.tooltip_delay = 0.0);
+    let full = "= 1000000000000,00 mm";
+    let mut f = |ui: &mut egui::Ui| {
+        ui.allocate_ui(vec2(210.0, 60.0), |ui| {
+            formula_field(ui, "feld", &mut text, ParamUnit::Length, &scope, 60.0);
+        });
+    };
+    let seen = pane.settle(&mut f);
+    let value = seen
+        .iter()
+        .find(|t| t.text.starts_with("= 1"))
+        .expect("Wertanzeige");
+    assert!(value.elided, "gekürzt");
+    assert!(value.rect.right() <= 210.5, "{:?}", value.rect);
+    let at = value.rect.center();
+    pane.frame(vec![Event::PointerMoved(at)], &mut f);
+    let seen = pane.settle(&mut f);
+    assert!(
+        seen.iter().any(|t| t.text == full && !t.elided),
+        "Hinweis mit dem ganzen Wert"
+    );
+}
+
+/// G4: Der Änderungsmerker gilt ab dem Fokus: Eine Änderung, deren Feld die Tastatur ohne
+/// „verlassen“ verlor (nicht gezeichnet), wird beim nächsten Hinein und Hinaus nicht
+/// übernommen (ohne gespeicherten Stand zählt nur, was seit dem Fokus getippt wurde).
+#[test]
+fn dirty_flag_restarts_on_focus() {
+    let mut pane = Pane::new(true);
+    let scope = breite_scope();
+    let mut text = "5".to_string();
+    let drawn = std::cell::Cell::new(true);
+    let commits = std::cell::Cell::new(0);
+    let mut f = |ui: &mut egui::Ui| {
+        if drawn.get() {
+            let o = formula_field(ui, "feld", &mut text, ParamUnit::Length, &scope, 100.0);
+            commits.set(commits.get() + usize::from(o.committed));
+        }
+        ui.add_space(200.0);
+        ui.label("daneben");
+    };
+    let seen = pane.settle(&mut f);
+    let field = find(&seen, "5").unwrap().rect.center();
+    let elsewhere = find(&seen, "daneben").unwrap().rect.center();
+    pane.click(field, &mut f);
+    pane.frame(vec![text_event('7')], &mut f);
+    drawn.set(false);
+    pane.settle(&mut f);
+    drawn.set(true);
+    pane.settle(&mut f);
+    pane.click(field, &mut f);
+    pane.click(elsewhere, &mut f);
+    drop(f);
+    assert_eq!(commits.get(), 0);
+}
+
+/// G4: Der Rollbereich gibt dem Inhalt den Stil des Aufrufers zurück (nicht die Farben der
+/// Rollgriffe).
+#[test]
+fn scroll_area_viewport_keeps_content_style() {
+    let mut pane = Pane::new(true);
+    let inner = std::cell::Cell::new(None);
+    let outer = std::cell::Cell::new(None);
+    pane.settle(&mut |ui| {
+        outer.set(Some(ui.visuals().widgets.inactive.fg_stroke.color));
+        theme::scroll_area_viewport(ui, egui::ScrollArea::vertical(), |ui, _| {
+            inner.set(Some(ui.visuals().widgets.inactive.fg_stroke.color));
+        });
+        assert_eq!(
+            Some(ui.visuals().widgets.inactive.fg_stroke.color),
+            outer.get(),
+            "danach wie vorher"
+        );
+    });
+    assert_eq!(inner.get(), outer.get());
+}
+
+/// G5: „fx“ heißt für Bildschirmleser „In Wert umwandeln“; die Fußzeile zählt weitere Fehler.
+#[test]
+fn fx_name_and_error_count() {
+    let mut s = AppState::new();
+    let a = param(&mut s, "a", "1", ParamUnit::Length);
+    let b = param(&mut s, "b", "2", ParamUnit::Length);
+    let c = param(&mut s, "c", "a*3", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    let nodes = access_nodes(&mut pane, &mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    assert!(
+        nodes
+            .iter()
+            .any(|(l, r)| l == FX_LABEL && *r == egui::accesskit::Role::Button),
+        "{nodes:?}"
+    );
+    d.set_text(a, Column::Formula, "x1");
+    d.set_text(b, Column::Formula, "x2");
+    let seen = pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    assert!(
+        find(&seen, "Den Namen „x1“ gibt es nicht. (+ 1 weiterer Fehler)").is_some(),
+        "{:?}",
+        seen.iter().map(|t| &t.text).collect::<Vec<_>>()
+    );
+    d.set_text(c, Column::Formula, "x3");
+    let seen = pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    assert!(find(&seen, "Den Namen „x1“ gibt es nicht. (+ 2 weitere Fehler)").is_some());
 }

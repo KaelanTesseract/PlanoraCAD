@@ -14,14 +14,13 @@
 
 use crate::dialog::{Dialog, DialogSize};
 use crate::drawing_browser::READ_ONLY_HINT;
-use crate::formula_field::{FormulaField, commit_signal, unit_value};
+use crate::formula_field::{FieldInput, FormulaField, classify, leave_signal, unit_value};
 use crate::icons::{self, Icon};
 use crate::state::{AppState, SKETCH_OPEN_LOCK};
 use crate::theme::{self, SPACE_2};
 use crate::workspace::DocTab;
 use planora_feature::expr::{ParamDef, evaluate_table};
 use planora_feature::{FeatureError, ParamEdit, ParamId, ParamUnit, Parameter};
-use std::cell::RefCell;
 
 /// Titel des Fensters.
 pub const TITLE: &str = "Parameter";
@@ -100,6 +99,13 @@ impl Row {
         }
     }
 
+    /// Weicht ein Entwurf vom Stand ab?
+    fn differs(&self) -> bool {
+        self.name != self.base.name
+            || self.formula != self.base.formula
+            || self.comment != self.base.comment
+    }
+
     fn text_mut(&mut self, column: Column) -> &mut String {
         match column {
             Column::Name => &mut self.name,
@@ -131,6 +137,13 @@ pub struct ParameterDialog {
     /// Im vorigen Bild gesperrt (offene Skizze, alte Version). Setzt die Sperre ein, entfallen
     /// die Entwürfe: Danach zeigen die Zeilen wieder das Dokument.
     locked: bool,
+    /// Zeile, deren Textfeld im letzten Bild die Tastatur hatte (Übernahme, wenn sie aus dem
+    /// Bild rollt).
+    editing: Option<ParamId>,
+    /// Neue Zeile, die ins Bild rollt und deren Name die Tastatur bekommt.
+    focus_new: Option<ParamId>,
+    /// Rollstand im letzten Bild (Versatz, Höhe des Ausschnitts).
+    scroll: (f32, f32),
     /// Rechteck im letzten Bild (für Tests).
     pub last_rect: Option<egui::Rect>,
 }
@@ -143,6 +156,9 @@ impl ParameterDialog {
             confirm: None,
             seen: (0, 0),
             locked: false,
+            editing: None,
+            focus_new: None,
+            scroll: (0.0, 0.0),
             last_rect: None,
         };
         d.reload(state);
@@ -248,6 +264,7 @@ impl ParameterDialog {
         let result = state.add_parameter();
         let id = result.as_ref().ok().copied();
         self.finish(state, result.map(|_| ()), None)?;
+        self.focus_new = id;
         Ok(id.expect("gelungen"))
     }
 
@@ -335,6 +352,28 @@ impl ParameterDialog {
         open
     }
 
+    /// Zeile, deren Textfeld im letzten Bild die Tastatur hatte.
+    pub fn focused_row(&self) -> Option<ParamId> {
+        self.editing
+    }
+
+    /// Meldungen der Formelentwürfe aller Zeilen (auch nicht gezeichneter) in
+    /// Tabellenreihenfolge.
+    fn draft_errors(&self, state: &AppState) -> Vec<String> {
+        let params = state.document.parameters();
+        self.rows
+            .iter()
+            .filter(|r| r.formula != r.base.formula)
+            .filter_map(|r| {
+                let i = params.iter().position(|p| p.id == r.id)?;
+                match classify(&r.formula) {
+                    Some(FieldInput::Formula(f)) => trial_value(params, i, &f).err(),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     /// Zeichnet das Fenster; liefert, ob es offen bleibt, und die Aktionen dieses Bildes (bei
     /// Sperre keine).
     fn draw(
@@ -367,7 +406,7 @@ impl ParameterDialog {
         let mut footer_actions = Vec::new();
         let confirm = self.confirm.as_ref().map(|(_, t)| t.clone());
         let error = self.error.clone();
-        let live = RefCell::new(None);
+        let live = live_message(&self.draft_errors(state));
         let table_h = (ctx.content_rect().height() - 260.0).clamp(120.0, TABLE_MAX_H);
         let shown = Dialog::new(TITLE, DialogSize::Wide)
             .id(egui::Id::new("parameter_dialog"))
@@ -383,7 +422,7 @@ impl ParameterDialog {
                         ui.add_space(SPACE_2);
                     }
                     ui.add_enabled_ui(lock.is_none(), |ui| {
-                        self.table(ui, state, table_h, &live, &mut actions);
+                        self.table(ui, state, table_h, &mut actions);
                     });
                 },
                 |ui| {
@@ -391,7 +430,7 @@ impl ParameterDialog {
                         ui,
                         lock.is_none(),
                         confirm.as_deref(),
-                        live.borrow().as_deref(),
+                        live.as_deref(),
                         error.as_deref(),
                         &mut footer_actions,
                     )
@@ -422,24 +461,22 @@ impl ParameterDialog {
         }
     }
 
-    /// Kopfzeile und Zeilen. Die Zeilen sind gleich hoch und werden nur gezeichnet, soweit sie
-    /// im Rollbereich zu sehen sind (`show_rows`; 500 Zeilen bleiben schnell). Die Meldung einer
-    /// ungültigen Formel steht deshalb nicht unter dem Feld, sondern in der Fußzeile (`live`).
-    fn table(
-        &mut self,
-        ui: &mut egui::Ui,
-        state: &AppState,
-        max_h: f32,
-        live: &RefCell<Option<String>>,
-        out: &mut Vec<Action>,
-    ) {
+    /// Kopfzeile und Zeilen in einem Rollbereich. Bis [`ALL_ROWS_UP_TO`] Zeilen werden alle
+    /// gezeichnet; darüber nur die sichtbaren und je eine Zeile davor und dahinter (schnell bei
+    /// 500 Zeilen). Die Nachbarzeilen halten Tab und Umschalt+Tab am Rand in Gang: Ihr Feld
+    /// bekommt die Tastatur, der Rollbereich folgt ihm (`scroll_to_me`), und im nächsten Bild
+    /// liegt wieder eine Zeile dahinter bereit.
+    fn table(&mut self, ui: &mut egui::Ui, state: &AppState, max_h: f32, out: &mut Vec<Action>) {
         if self.rows.is_empty() {
             ui.weak(EMPTY_TABLE);
             return;
         }
         let dark = ui.visuals().dark_mode;
         let params = state.document.parameters();
-        let rows = &mut self.rows;
+        let n = self.rows.len();
+        let focus_new = self.focus_new.take();
+        let mut drawn = Vec::new();
+        let mut focused = None;
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(SPACE_2, SPACE_2);
             ui.horizontal(|ui| {
@@ -453,32 +490,107 @@ impl ParameterDialog {
                     });
                 }
             });
-            let n = rows.len();
-            theme::scroll_area_rows(
-                ui,
-                egui::ScrollArea::vertical()
-                    .id_salt("parameter_tabelle")
-                    .max_height(max_h)
-                    .auto_shrink([false, true]),
-                theme::FIELD_H,
-                n,
-                |ui, range| {
-                    for i in range {
-                        let row = &mut rows[i];
-                        let Some(p) = params.get(i).filter(|p| p.id == row.id) else {
-                            continue;
-                        };
-                        ui.horizontal(|ui| {
-                            ui.set_height(theme::FIELD_H);
-                            if let Some(e) = row_ui(ui, row, p, i, state, out) {
-                                live.borrow_mut().get_or_insert(e);
-                            }
-                        });
+            let mut area = egui::ScrollArea::vertical()
+                .id_salt("parameter_tabelle")
+                .max_height(max_h)
+                .auto_shrink([false, true]);
+            // Neue Zeile: hinrollen, damit sie gezeichnet wird und die Tastatur bekommt.
+            let target = focus_new.and_then(|t| self.rows.iter().position(|r| r.id == t));
+            if let Some(i) = target
+                && let Some(offset) = offset_showing(i, self.scroll)
+            {
+                area = area.vertical_scroll_offset(offset);
+            }
+            let rows = &mut self.rows;
+            let output = theme::scroll_area_viewport(ui, area, |ui, viewport| {
+                ui.spacing_mut().item_spacing = egui::vec2(SPACE_2, SPACE_2);
+                ui.set_min_height(n as f32 * ROW_STRIDE - SPACE_2);
+                let range = if n > ALL_ROWS_UP_TO {
+                    visible_rows(viewport.min.y, viewport.max.y, n)
+                } else {
+                    0..n
+                };
+                ui.add_space(range.start as f32 * ROW_STRIDE);
+                // Kennungen ohne eigenen Namen (Löschsymbol, „fx“) bleiben gleich, egal ab welcher
+                // Zeile gezeichnet wird (wie `show_rows`): je Zeile eine Kennung überspringen.
+                ui.skip_ahead_auto_ids(range.start);
+                for i in range {
+                    let row = &mut rows[i];
+                    let Some(p) = params.get(i).filter(|p| p.id == row.id) else {
+                        continue;
+                    };
+                    let focus_name = focus_new == Some(row.id);
+                    let has_focus = ui
+                        .push_id(("parameter_zeile", row.id.0), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.set_height(theme::FIELD_H);
+                                row_ui(ui, row, p, i, state, focus_name, out)
+                            })
+                            .inner
+                        })
+                        .inner;
+                    drawn.push(row.id);
+                    if has_focus {
+                        focused = Some(row.id);
                     }
-                },
-            );
+                }
+            });
+            self.scroll = (output.state.offset.y, output.inner_rect.height());
         });
+        // Ein Feld mit Entwurf, das aus dem Bild gerollt ist, verliert die Tastatur ohne
+        // „verlassen“: Sein Entwurf wird übernommen wie beim Verlassen.
+        if let Some(prev) = self.editing
+            && focused != Some(prev)
+            && !drawn.contains(&prev)
+            && self.rows.iter().any(|r| r.id == prev && r.differs())
+        {
+            out.push(Action::Commit(prev));
+        }
+        self.editing = focused;
     }
+}
+
+/// Bis zu so vielen Zeilen zeichnet das Fenster alle (Tab und Bildschirmleser erreichen jede
+/// Zeile direkt); darüber nur die sichtbaren.
+pub const ALL_ROWS_UP_TO: usize = 60;
+
+/// Abstand zweier Zeilen: Feldhöhe und Zeilenabstand.
+const ROW_STRIDE: f32 = theme::FIELD_H + SPACE_2;
+
+/// Zeilen, die im Ausschnitt `top..bottom` (Punkte ab Tabellenanfang) liegen, dazu je eine
+/// davor und dahinter (für Tab am Rand).
+#[doc(hidden)]
+pub fn visible_rows(top: f32, bottom: f32, n: usize) -> std::ops::Range<usize> {
+    let first = ((top / ROW_STRIDE).floor().max(0.0) as usize).saturating_sub(1);
+    let last = ((bottom / ROW_STRIDE).ceil().max(0.0) as usize + 1).min(n);
+    first.min(last)..last
+}
+
+/// Versatz, bei dem Zeile `i` ganz im Ausschnitt liegt (`scroll`: Versatz und Höhe), oder
+/// `None`, wenn sie schon ganz zu sehen ist.
+fn offset_showing(i: usize, scroll: (f32, f32)) -> Option<f32> {
+    let (offset, height) = scroll;
+    let top = i as f32 * ROW_STRIDE;
+    let bottom = top + theme::FIELD_H;
+    if top < offset {
+        Some(top)
+    } else if height > 0.0 && bottom > offset + height {
+        Some((bottom - height).max(0.0))
+    } else if height <= 0.0 {
+        Some(top)
+    } else {
+        None
+    }
+}
+
+/// Meldung der ersten ungültigen Entwurfszeile, bei weiteren mit ihrer Zahl.
+fn live_message(errors: &[String]) -> Option<String> {
+    let first = errors.first()?;
+    Some(match errors.len() - 1 {
+        0 => first.clone(),
+        1 => format!("{first} (+ 1 weiterer Fehler)"),
+        k => format!("{first} (+ {k} weitere Fehler)"),
+    })
 }
 
 /// Zellen mittig in der Höhe.
@@ -495,7 +607,7 @@ fn cell<R>(
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     let size = egui::vec2(w, theme::FIELD_H);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let (_, rect) = ui.allocate_space(size);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(layout));
     child.set_clip_rect(rect.intersect(ui.clip_rect()));
     add(&mut child)
@@ -579,16 +691,25 @@ fn field_label(column: &str, name: &str) -> String {
     format!("{column} von {name}")
 }
 
-/// Eine Zeile: Name, Formel (Formelfeld), Wert, Art, Kommentar, Löschsymbol. Liefert die
-/// Meldung einer ungültigen Formel im Entwurf.
+/// Bekommt ein Bedienelement die Tastatur (Tab), rollt der Bereich zu ihm.
+fn follow_focus(response: &egui::Response) {
+    if response.gained_focus() {
+        response.scroll_to_me(None);
+    }
+}
+
+/// Eine Zeile: Name, Formel (Formelfeld), Wert, Art, Kommentar, Löschsymbol. `focus_name`:
+/// Das Namensfeld bekommt die Tastatur (neue Zeile). Liefert, ob ein Textfeld der Zeile die
+/// Tastatur hat.
 fn row_ui(
     ui: &mut egui::Ui,
     row: &mut Row,
     p: &Parameter,
     index: usize,
     state: &AppState,
+    focus_name: bool,
     out: &mut Vec<Action>,
-) -> Option<String> {
+) -> bool {
     let id = row.id;
     let enabled = ui.is_enabled();
     let name = cell(ui, NAME_W, center(), |ui| {
@@ -605,7 +726,12 @@ fn row_ui(
         enabled,
         &field_label("Name", &p.name),
     );
-    if commit_signal(ui, &name) {
+    if focus_name {
+        name.request_focus();
+        name.scroll_to_me(None);
+    }
+    follow_focus(&name);
+    if leave_signal(ui, &name, row.name != row.base.name) {
         out.push(Action::Commit(id));
     }
     // Die Formel der Zeile rechnet mit einer Probetabelle: die übrigen Zeilen wie im Dokument,
@@ -626,16 +752,17 @@ fn row_ui(
             .enabled(enabled)
             .error_below(false)
             .label(field_label("Formel", &p.name))
+            .saved(&row.base.formula)
             .show_with(ui, &eval)
     });
+    follow_focus(&field.response);
     if field.committed || field.fx_clicked {
         out.push(Action::Commit(id));
     }
     cell(ui, VALUE_W, center(), |ui| {
         if let Some(v) = committed {
-            let shown = unit_value(v, p.unit);
-            ui.add(egui::Label::new(theme::value(shown.clone())).truncate())
-                .on_hover_text(shown);
+            // Gekürzt zeigt egui den ganzen Wert als Hinweis.
+            ui.add(egui::Label::new(theme::value(unit_value(v, p.unit))).truncate());
         }
     });
     let mut unit = p.unit;
@@ -656,6 +783,7 @@ fn row_ui(
         enabled,
         &field_label("Art", &p.name),
     );
+    follow_focus(&art);
     if unit != p.unit {
         out.push(Action::Unit(id, unit));
     }
@@ -673,7 +801,8 @@ fn row_ui(
         enabled,
         &field_label("Kommentar", &p.name),
     );
-    if commit_signal(ui, &comment) {
+    follow_focus(&comment);
+    if leave_signal(ui, &comment, row.comment != row.base.comment) {
         out.push(Action::Commit(id));
     }
     let delete = cell(ui, DELETE_W, center(), |ui| {
@@ -689,11 +818,12 @@ fn row_ui(
     .on_hover_text(DELETE_ROW);
     // Das Symbol ist ein Zeichen der Symbolschrift; Bildschirmleser hören „Zeile löschen“.
     labelled(&delete, egui::WidgetType::Button, enabled, DELETE_ROW);
+    follow_focus(&delete);
     theme::focus_ring(ui, &delete);
     if delete.clicked() {
         out.push(Action::Delete(id));
     }
-    field.error
+    name.has_focus() || field.response.has_focus() || comment.has_focus()
 }
 
 /// Gibt einem Bedienelement einen Namen für Bildschirmleser.
