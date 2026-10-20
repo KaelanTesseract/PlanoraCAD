@@ -16,7 +16,7 @@
 
 use crate::error::FeatureError;
 use crate::expr::{self, ParamUnit};
-use crate::model::{Document, FeatureId, FeatureKind};
+use crate::model::{Document, FeatureId, FeatureKind, MAX_MESH_SCALE, MIN_MESH_SCALE};
 use crate::params::ParamScope;
 use std::collections::{BTreeMap, HashSet};
 
@@ -87,13 +87,14 @@ pub fn field_keys(kind: &FeatureKind) -> Vec<FieldKey> {
         FeatureKind::Box { .. } => vec![Breite, Tiefe, Hoehe, X, Y, Z],
         FeatureKind::Cylinder { .. } | FeatureKind::Cone { .. } => vec![Radius, Hoehe, X, Y, Z],
         FeatureKind::Sphere { .. } => vec![Radius, X, Y, Z],
+        FeatureKind::Extrude { .. } => vec![Hoehe],
+        FeatureKind::Move { .. } => vec![X, Y, Z],
+        // Die Drehung bleibt ein Ziehfeld (P10).
+        FeatureKind::MeshBody { .. } => vec![X, Y, Z, Massstab],
         FeatureKind::Sketch(_)
-        | FeatureKind::Extrude { .. }
         | FeatureKind::Revolve { .. }
         | FeatureKind::Boolean { .. }
-        | FeatureKind::Move { .. }
-        | FeatureKind::Verrunden { .. }
-        | FeatureKind::MeshBody { .. } => Vec::new(),
+        | FeatureKind::Verrunden { .. } => Vec::new(),
     }
 }
 
@@ -129,7 +130,7 @@ pub fn field_unit(_kind: &FeatureKind, key: FieldKey) -> ParamUnit {
 
 /// Die **eine** Zuordnung Feldschlüssel → Feld der Art. `$r` ist `&` oder `&mut`; daraus
 /// entstehen [`field_ref`] (Lesen) und [`field_mut`] (Schreiben), damit jedes Feld nur einmal
-/// eingetragen wird (Aufgaben 4–6 ergänzen hier).
+/// eingetragen wird (Aufgaben 5–6 ergänzen hier).
 macro_rules! field_table {
     ($kind:expr, $key:expr, $($r:tt)+) => {{
         use FieldKey::*;
@@ -167,6 +168,23 @@ macro_rules! field_table {
                 Z => Some($($r)+ origin.z),
                 _ => None,
             },
+            FeatureKind::Extrude { height, .. } => match $key {
+                Hoehe => Some($($r)+ *height),
+                _ => None,
+            },
+            FeatureKind::Move { delta, .. } => match $key {
+                X => Some($($r)+ delta.x),
+                Y => Some($($r)+ delta.y),
+                Z => Some($($r)+ delta.z),
+                _ => None,
+            },
+            FeatureKind::MeshBody { offset, scale, .. } => match $key {
+                X => Some($($r)+ offset.x),
+                Y => Some($($r)+ offset.y),
+                Z => Some($($r)+ offset.z),
+                Massstab => Some($($r)+ *scale),
+                _ => None,
+            },
             _ => None,
         }
     }};
@@ -198,12 +216,27 @@ pub fn set_field_value(kind: &mut FeatureKind, key: FieldKey, v: f64) -> bool {
     }
 }
 
-/// Muss das Feld größer als 0 sein (sonst Wertfehler)?
-fn must_be_positive(key: FieldKey) -> bool {
-    matches!(
-        key,
+/// Wertfehler eines Formelergebnisses `v` im Feld, sonst `None`. Maße (Breite, Tiefe, Höhe,
+/// Radius, auch die Extrusionshöhe, die der Kernel nur positiv kennt) müssen größer als 0 sein;
+/// der Maßstab eines Netz-Körpers muss in `MIN_MESH_SCALE..=MAX_MESH_SCALE` liegen (wie beim
+/// Eintippen); Lagen und Verschiebungen dürfen jedes Vorzeichen haben.
+fn value_issue(kind: &FeatureKind, key: FieldKey, v: f64, tolerance: f64) -> Option<String> {
+    match key {
         FieldKey::Breite | FieldKey::Tiefe | FieldKey::Hoehe | FieldKey::Radius
-    )
+            if v <= tolerance =>
+        {
+            Some(format!(
+                "{} ergibt {} mm, es muss größer als 0 sein",
+                field_label(kind, key),
+                expr::short_number(v)
+            ))
+        }
+        FieldKey::Massstab if !(MIN_MESH_SCALE..=MAX_MESH_SCALE).contains(&v) => Some(format!(
+            "Maßstab ergibt {}, er muss zwischen 0,000001 und 1 000 000 liegen",
+            expr::short_number(v)
+        )),
+        _ => None,
+    }
 }
 
 /// Fehler einer Formel nach dem Durchgang (P3).
@@ -254,12 +287,8 @@ pub(crate) fn evaluate(
             }
             Ok(v) => {
                 set_field_value(&mut out, key, v);
-                if must_be_positive(key) && v <= tolerance {
-                    issue.get_or_insert(FormulaIssue::Value(format!(
-                        "{} ergibt {} mm, es muss größer als 0 sein",
-                        field_label(kind, key),
-                        expr::short_number(v)
-                    )));
+                if let Some(m) = value_issue(kind, key, v, tolerance) {
+                    issue.get_or_insert(FormulaIssue::Value(m));
                 }
             }
         }

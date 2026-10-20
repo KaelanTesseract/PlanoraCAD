@@ -305,12 +305,16 @@ fn cylinder_cone_sphere_follow() {
     assert_eq!(Hoehe.file_key(), "hoehe");
     assert_eq!(FieldKey::Massstab.file_key(), "massstab");
     assert_eq!(FieldKey::from_file_key("Breite"), None);
-    // Arten ohne Formelfelder in dieser Aufgabe
+    // Arten ohne Formelfelder
+    let body = BodyRef {
+        feature: FeatureId(1),
+        index: 0,
+    };
     assert!(
-        field_keys(&FeatureKind::Extrude {
-            sketch: FeatureId(1),
-            profile: 0,
-            height: 1.0
+        field_keys(&FeatureKind::Boolean {
+            target: body,
+            tool: body,
+            op: planora_kernel::BoolOp::Union,
         })
         .is_empty()
     );
