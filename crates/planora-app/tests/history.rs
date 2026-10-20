@@ -377,6 +377,7 @@ fn with_sketch(sf: SketchFeature) -> Snapshot {
         name: "S".into(),
         suppressed: false,
         kind: FeatureKind::Sketch(sf),
+        formulas: Default::default(),
     });
     s
 }

@@ -339,15 +339,26 @@ pub struct Feature {
     pub suppressed: bool,
     pub kind: FeatureKind,
     pub status: FeatureStatus,
-    /// Wird bei jeder Änderung der Parameter erhöht.
+    /// Wird bei jeder Änderung der Parameter erhöht (auch wenn eine Formel einen neuen Wert
+    /// ergibt).
     pub(crate) version: u64,
     pub(crate) result: Option<FeatureResult>,
     /// Schlüssel der Eingaben und Meldung der zuletzt fehlgeschlagenen Berechnung. Bei gleichen
     /// Eingaben wird der Fehler übernommen statt erneut gerechnet.
     pub(crate) failed: Option<(Vec<u64>, String)>,
+    /// Formeln der Zahlenfelder (Nebentabelle, Spec §4a.1); die Felder in `kind` tragen den
+    /// zuletzt berechneten Wert.
+    pub(crate) formulas: crate::formulas::Formulas,
+    /// Erster Formelfehler nach dem letzten Auswertungsdurchgang; ergibt den Status `Error`.
+    pub(crate) issue: Option<crate::formulas::FormulaIssue>,
 }
 
 impl Feature {
+    /// Die Formeln der Zahlenfelder (Feld → Formeltext).
+    pub fn formulas(&self) -> &crate::formulas::Formulas {
+        &self.formulas
+    }
+
     /// Stand der Parameter (und der Unterdrückung); ändert sich bei jeder solchen Änderung.
     /// Dialoge erkennen daran, dass ihre Kopie veraltet ist.
     pub fn version(&self) -> u64 {

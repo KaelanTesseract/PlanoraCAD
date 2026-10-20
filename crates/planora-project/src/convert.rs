@@ -1751,6 +1751,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             name: f.name.clone(),
             suppressed: f.unterdrueckt,
             kind: kind_from(origin, &f.name, &f.art)?,
+            formulas: Default::default(),
         });
     }
     Ok(Snapshot {

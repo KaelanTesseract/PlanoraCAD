@@ -8,6 +8,7 @@
 
 use crate::error::FeatureError;
 use crate::expr::{self, MAX_COMMENT_CHARS, MAX_PARAMETERS, ParamDef, ParamUnit, TableError};
+use crate::formulas::Formulas;
 use crate::model::Document;
 use crate::recompute::RecomputeReport;
 use std::collections::HashMap;
@@ -161,7 +162,7 @@ impl Document {
             unit,
             comment: comment.to_string(),
         });
-        self.apply_table(table, next_param)?;
+        self.apply_table(table, next_param, Vec::new(), None)?;
         Ok(id)
     }
 
@@ -207,13 +208,27 @@ impl Document {
             )));
         }
         let mut table = self.parameters.clone();
-        if old_name != edit.name {
+        let mut features = Vec::new();
+        let renamed = old_name != edit.name;
+        if renamed {
             for (i, p) in table.iter_mut().enumerate() {
                 if i != idx {
                     p.formula = expr::rename_in(&p.formula, &old_name, &edit.name);
                 }
             }
+            // Feature-Formeln ebenso (P6: ganze Namen, übriger Text zeichengleich).
+            for (i, f) in self.features.iter().enumerate() {
+                if f.formulas.values().any(|t| expr::references(t, &old_name)) {
+                    let rewritten: Formulas = f
+                        .formulas
+                        .iter()
+                        .map(|(k, t)| (*k, expr::rename_in(t, &old_name, &edit.name)))
+                        .collect();
+                    features.push((i, rewritten));
+                }
+            }
         }
+        let new_name = edit.name.clone();
         table[idx] = Parameter {
             id,
             name: edit.name,
@@ -221,7 +236,8 @@ impl Document {
             unit: edit.unit,
             comment: edit.comment,
         };
-        self.apply_table(table, self.next_param)
+        let renamed = renamed.then_some((old_name.as_str(), new_name.as_str()));
+        self.apply_table(table, self.next_param, features, renamed)
     }
 
     /// Löscht einen Parameter; gesperrt, solange eine Formel ihn nennt
@@ -237,7 +253,8 @@ impl Document {
         }
         let mut table = self.parameters.clone();
         table.remove(idx);
-        self.apply_table(table, self.next_param).map(|_| ())
+        self.apply_table(table, self.next_param, Vec::new(), None)
+            .map(|_| ())
     }
 
     /// „Durch den Wert ersetzen“ (Plan P7): Jede Formel, die den Parameter direkt nennt, wird
@@ -256,20 +273,44 @@ impl Document {
             }
         }
         table.remove(idx);
-        self.apply_table(table, self.next_param).map(|_| ())
+        // Feature-Felder: Die Formel entfällt, das Feld trägt schon ihren Wert.
+        let features = self
+            .features
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.formulas.values().any(|t| expr::references(t, &name)))
+            .map(|(i, f)| {
+                let kept: Formulas = f
+                    .formulas
+                    .iter()
+                    .filter(|(_, t)| !expr::references(t, &name))
+                    .map(|(k, t)| (*k, t.clone()))
+                    .collect();
+                (i, kept)
+            })
+            .collect();
+        self.apply_table(table, self.next_param, features, None)
+            .map(|_| ())
     }
 
-    /// Wo der Parameter direkt benutzt wird, für Meldungen: „Parameter {name}“ je Parameter,
-    /// dessen Formel ihn nennt, in Tabellenreihenfolge. Leer bei unbekannter Kennung.
+    /// Wo der Parameter direkt benutzt wird, für Meldungen: zuerst die Namen der Features, deren
+    /// Formeln ihn nennen (Zeitleistenreihenfolge), dann „Parameter {name}“ je Parameter, dessen
+    /// Formel ihn nennt (Tabellenreihenfolge). Leer bei unbekannter Kennung.
     pub fn parameter_users(&self, id: ParamId) -> Vec<String> {
         let Some(me) = self.parameter(id) else {
             return Vec::new();
         };
-        self.parameters
+        let features = self
+            .features
+            .iter()
+            .filter(|f| f.formulas.values().any(|t| expr::references(t, &me.name)))
+            .map(|f| f.name.clone());
+        let params = self
+            .parameters
             .iter()
             .filter(|p| p.id != id && expr::references(&p.formula, &me.name))
-            .map(|p| format!("Parameter {}", p.name))
-            .collect()
+            .map(|p| format!("Parameter {}", p.name));
+        features.chain(params).collect()
     }
 
     fn param_index(&self, id: ParamId) -> Result<usize, FeatureError> {
@@ -279,17 +320,34 @@ impl Document {
             .ok_or_else(|| FeatureError::InvalidInput(UNKNOWN_PARAMETER.into()))
     }
 
-    /// Prüft die neue Tabelle und übernimmt sie erst dann; zählt eine Änderung am Modell und
-    /// rechnet neu.
+    /// Prüft die neue Tabelle und mit ihren Werten alle Feature-Formeln (`features`: neue
+    /// Formeln je Feature-Index, etwa nach dem Umbenennen; P3: kein neuer Formelfehler) und
+    /// übernimmt erst dann alles zusammen; zählt eine Änderung am Modell und rechnet neu (der
+    /// Durchgang schreibt dabei die neuen Formelwerte in die Felder). `renamed` (alt, neu) lässt
+    /// schon bestehende Formelfehler auch in umgeschriebener Form gelten.
     fn apply_table(
         &mut self,
         table: Vec<Parameter>,
         next_param: u64,
+        features: Vec<(usize, Formulas)>,
+        renamed: Option<(&str, &str)>,
     ) -> Result<RecomputeReport, FeatureError> {
         let values = check_table(&table).map_err(FeatureError::Formula)?;
+        let scope = ParamScope::new(&table, &values);
+        let known = self.broken_set(renamed);
+        for (i, f) in self.features.iter().enumerate() {
+            let formulas = features
+                .iter()
+                .find(|(j, _)| *j == i)
+                .map_or(&f.formulas, |(_, t)| t);
+            Document::check_new_broken(Some(f.id), &f.name, &f.kind, formulas, &scope, &known)?;
+        }
         self.parameters = table;
         self.param_values = values;
         self.next_param = next_param;
+        for (i, formulas) in features {
+            self.features[i].formulas = formulas;
+        }
         self.edits += 1;
         Ok(self.recompute())
     }

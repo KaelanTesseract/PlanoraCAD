@@ -1,6 +1,7 @@
 //! Reine Daten eines Dokuments zum Speichern und Laden (ohne Ergebnisse und Zwischenspeicher).
 
 use crate::error::FeatureError;
+use crate::formulas::{Formulas, check_keys};
 use crate::model::{Document, Feature, FeatureId, FeatureKind, FeatureStatus, MeshId};
 use crate::params::{Parameter, check_table};
 use planora_drawing::sheet_info::{ProjectInfo, validate_project_info};
@@ -39,6 +40,8 @@ pub struct SnapshotFeature {
     pub name: String,
     pub suppressed: bool,
     pub kind: FeatureKind,
+    /// Formeln der Zahlenfelder; die Felder in `kind` tragen den zuletzt berechneten Wert.
+    pub formulas: Formulas,
 }
 
 #[derive(Clone, Debug)]
@@ -85,9 +88,10 @@ impl Snapshot {
             && self.parts_overrides == other.parts_overrides
     }
 
-    /// Gleiches Modell: Features, Marker, Kennungszähler, Netze und Parametertabelle (samt
+    /// Gleiches Modell: Features (samt Formeltexten), Marker, Kennungszähler, Netze und Parametertabelle (samt
     /// Parameterzähler) gleich; Zeichnungen, Projektangaben und Stücklistentexte zählen nicht.
-    /// Eine Änderung nur an Parametern nimmt deshalb in [`Document::restore`] den vollen Weg.
+    /// Eine Änderung nur an Parametern oder Formeln nimmt deshalb in [`Document::restore`] den
+    /// vollen Weg.
     pub fn same_model(&self, other: &Snapshot) -> bool {
         self.features == other.features
             && self.marker == other.marker
@@ -110,6 +114,7 @@ impl Document {
                     name: f.name.clone(),
                     suppressed: f.suppressed,
                     kind: f.kind.clone(),
+                    formulas: f.formulas.clone(),
                 })
                 .collect(),
             marker: self.marker,
@@ -225,6 +230,14 @@ impl Document {
             if f.name.trim().is_empty() {
                 return Err(bad("Ein Feature hat keinen Namen"));
             }
+            // Formeln an Feldern, die die Art nicht hat: Bild kaputt. Eine kaputte Formel selbst
+            // lädt dagegen; das Feature zeigt dann den Fehlerstatus (Spec §4a.7, P3).
+            check_keys(&f.kind, &f.formulas).map_err(|_| {
+                bad(&format!(
+                    "Feature „{}“: Dieses Feld kann keine Formel haben",
+                    f.name
+                ))
+            })?;
         }
         for (id, mesh) in &s.meshes {
             if id.0 == 0 {
@@ -256,6 +269,8 @@ impl Document {
                 version,
                 result: None,
                 failed: None,
+                formulas: f.formulas,
+                issue: None,
             });
         }
         for idx in 0..doc.features.len() {

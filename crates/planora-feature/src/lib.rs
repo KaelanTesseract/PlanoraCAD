@@ -6,6 +6,7 @@ mod dimensions;
 mod drawings;
 pub mod error;
 pub mod expr;
+pub mod formulas;
 pub mod georef;
 mod meshes;
 pub mod model;
@@ -29,6 +30,9 @@ pub use error::FeatureError;
 pub use expr::{
     MAX_COMMENT_CHARS, MAX_FORMULA_CHARS, MAX_FORMULA_DEPTH, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS,
     ParamUnit,
+};
+pub use formulas::{
+    FieldKey, Formulas, field_keys, field_label, field_unit, field_value, set_field_value,
 };
 pub use georef::{
     from_edge_ref, from_face_ref, geo_ref_for_edge, geo_ref_for_edge_cached, geo_ref_for_face,

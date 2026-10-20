@@ -2,6 +2,7 @@
 //! die Prüfung der Dokument-Invarianten für Tests.
 
 use crate::error::FeatureError;
+use crate::formulas::{Formulas, check_keys, evaluate, field_keys, same_fields};
 use crate::model::{Document, FeatureId, FeatureKind, FeatureStatus};
 use crate::recompute::RecomputeReport;
 use planora_kernel::Kernel;
@@ -13,11 +14,33 @@ impl Document {
     /// ([`FeatureError::InvalidInput`]), alle Verweise müssen auf vorhandene Features vor dem
     /// Feature zeigen ([`FeatureError::UnknownFeature`], [`FeatureError::ForwardReference`]).
     /// Bei einem Fehler bleibt das Dokument unverändert.
+    ///
+    /// Formeln (Plan P2): Ändert `f` den Wert eines Feldes mit Formel, entfällt **nur diese**
+    /// Formel (die getippte Zahl gilt); Formeln für Felder, die die Art danach nicht mehr hat,
+    /// entfallen ebenfalls. Alle übrigen Formeln bleiben und bestimmen ihre Felder weiter.
     pub fn update_with_report(
         &mut self,
         id: FeatureId,
         f: impl FnOnce(&mut FeatureKind),
     ) -> Result<RecomputeReport, FeatureError> {
+        let (idx, kind) = self.updated_kind(id, f)?;
+        let old = &self.features[idx];
+        let keys = field_keys(&kind);
+        let formulas: Formulas = old
+            .formulas
+            .iter()
+            .filter(|(k, _)| keys.contains(k) && same_fields(&old.kind, &kind, **k))
+            .map(|(k, t)| (*k, t.clone()))
+            .collect();
+        self.commit_update(idx, kind, formulas)
+    }
+
+    /// Wendet `f` auf eine Kopie der Art an und prüft Variante und Verweise.
+    pub(crate) fn updated_kind(
+        &self,
+        id: FeatureId,
+        f: impl FnOnce(&mut FeatureKind),
+    ) -> Result<(usize, FeatureKind), FeatureError> {
         let idx = self.index_of(id).ok_or(FeatureError::UnknownFeature)?;
         let mut kind = self.features[idx].kind.clone();
         let before = std::mem::discriminant(&kind);
@@ -28,9 +51,30 @@ impl Document {
             ));
         }
         self.check_references(&kind, idx)?;
+        Ok((idx, kind))
+    }
+
+    /// Prüft die Formeln des Kandidaten streng (P3) und übernimmt erst dann Art und Formeln:
+    /// neue Version, eine Änderung, Neuberechnung.
+    pub(crate) fn commit_update(
+        &mut self,
+        idx: usize,
+        kind: FeatureKind,
+        formulas: Formulas,
+    ) -> Result<RecomputeReport, FeatureError> {
+        let f = &self.features[idx];
+        Document::check_new_broken(
+            Some(f.id),
+            &f.name,
+            &kind,
+            &formulas,
+            &self.param_scope(),
+            &self.broken_set(None),
+        )?;
         let version = self.bump();
         let feature = &mut self.features[idx];
         feature.kind = kind;
+        feature.formulas = formulas;
         feature.version = version;
         self.edits += 1;
         Ok(self.recompute())
@@ -142,7 +186,9 @@ impl Document {
     /// frühere Features, Marker im Bereich, Features ab dem Marker `NotComputed` und davor nie
     /// `NotComputed` (außer unterdrückt), Ergebnis
     /// genau bei `Ok` (alte Ergebnisse dürfen nur `NotComputed`/`Suppressed` behalten) und
-    /// gültige sichtbare Körper. Liefert die erste Verletzung als Text.
+    /// gültige sichtbare Körper, gültige Parametertabelle mit aktuellen Werten und
+    /// abgeschlossener Formeldurchgang (siehe `check_formula_invariants`). Liefert die erste
+    /// Verletzung als Text.
     pub fn check_invariants(&self) -> Result<(), String> {
         for (i, f) in self.features.iter().enumerate() {
             if self.features[..i].iter().any(|g| g.id == f.id) {
@@ -197,9 +243,80 @@ impl Document {
                 ));
             }
         }
+        self.check_parameter_invariants()?;
+        self.check_formula_invariants()?;
         for v in self.visible_bodies() {
             if let Err(e) = self.kernel.validate(v.solid) {
                 return Err(format!("Sichtbarer Körper „{}“ ist ungültig: {e}", v.name));
+            }
+        }
+        Ok(())
+    }
+
+    /// Parametertabelle: Kennungen eindeutig und vergeben, Tabelle gültig (Namen, Kreise,
+    /// Einheiten, Kommentare), gespeicherte Werte bitgenau wie berechnet.
+    fn check_parameter_invariants(&self) -> Result<(), String> {
+        if self.next_param == 0 {
+            return Err("Parameterzähler ist 0".into());
+        }
+        for (i, p) in self.parameters.iter().enumerate() {
+            if p.id.0 == 0 || p.id.0 >= self.next_param {
+                return Err(format!("Parameter-Id {} wurde nie vergeben", p.id.0));
+            }
+            if self.parameters[..i].iter().any(|q| q.id == p.id) {
+                return Err(format!("Parameter-Id {} ist doppelt", p.id.0));
+            }
+        }
+        let values = crate::params::check_table(&self.parameters)
+            .map_err(|m| format!("Parametertabelle ungültig: {m}"))?;
+        if values.len() != self.param_values.len()
+            || values
+                .iter()
+                .zip(&self.param_values)
+                .any(|(a, b)| a.to_bits() != b.to_bits())
+        {
+            return Err(format!(
+                "Parameterwerte veraltet: {:?} statt {values:?}",
+                self.param_values
+            ));
+        }
+        Ok(())
+    }
+
+    /// Formeln: nur Felder der Art; der Auswertungsdurchgang ist abgeschlossen (Felder und
+    /// Formelfehler wie mit den aktuellen Parametern berechnet, unbekannte Namen, falsche
+    /// Einheiten und nicht endliche Werte also nur als Formelfehler); ein Feature mit Fehler vor
+    /// dem Marker, nicht unterdrückt, hat den Status `Error(meldung)`.
+    fn check_formula_invariants(&self) -> Result<(), String> {
+        let scope = self.param_scope();
+        let tolerance = self.kernel.tolerance.linear;
+        for (idx, f) in self.features.iter().enumerate() {
+            check_keys(&f.kind, &f.formulas).map_err(|e| format!("Feature „{}“: {e}", f.name))?;
+            let ev = evaluate(&f.kind, &f.formulas, &scope, tolerance);
+            if let Some(k) = field_keys(&f.kind)
+                .into_iter()
+                .find(|k| !same_fields(&f.kind, &ev.kind, *k))
+            {
+                return Err(format!(
+                    "Feature „{}“: Feld {k:?} trägt nicht den Wert seiner Formel",
+                    f.name
+                ));
+            }
+            if ev.issue != f.issue {
+                return Err(format!(
+                    "Feature „{}“: Formelfehler {:?} statt {:?}",
+                    f.name, f.issue, ev.issue
+                ));
+            }
+            if let Some(issue) = &f.issue
+                && idx < self.marker
+                && !f.suppressed
+                && f.status != FeatureStatus::Error(issue.message().to_string())
+            {
+                return Err(format!(
+                    "Feature „{}“ hat einen Formelfehler, aber Status {:?}",
+                    f.name, f.status
+                ));
             }
         }
         Ok(())
@@ -234,5 +351,75 @@ mod tests {
         d.check_invariants().unwrap();
         d.set_marker(0).unwrap();
         d.check_invariants().unwrap();
+    }
+
+    #[test]
+    fn stale_parameters_and_formulas_violate_the_invariants() {
+        use crate::expr::ParamUnit;
+        use crate::formulas::{FieldKey, FormulaIssue};
+        let fresh = || {
+            let mut d = Document::new();
+            d.add_parameter("Breite", "40", ParamUnit::Length, "")
+                .unwrap();
+            let mut f = crate::formulas::Formulas::new();
+            f.insert(FieldKey::Breite, "Breite".to_string());
+            d.add_feature_with_formulas(
+                "A",
+                FeatureKind::Box {
+                    size: DVec3::ONE,
+                    origin: DVec3::ZERO,
+                },
+                f,
+            )
+            .unwrap();
+            d.check_invariants().unwrap();
+            (d, 0)
+        };
+        let check = |d: &Document, want: &str| {
+            let e = d.check_invariants().unwrap_err();
+            assert!(e.contains(want), "{e}");
+        };
+        // Werte der Tabelle veraltet
+        let (mut d, _) = fresh();
+        d.param_values[0] = 41.0;
+        check(&d, "Parameterwerte veraltet");
+        // Tabelle ungültig (Kreis)
+        let (mut d, _) = fresh();
+        d.parameters[0].formula = "Breite+1".into();
+        check(&d, "Parametertabelle ungültig");
+        // doppelte Kennung
+        let (mut d, _) = fresh();
+        let mut p = d.parameters[0].clone();
+        p.name = "Zweite".into();
+        d.parameters.push(p);
+        d.param_values.push(40.0);
+        check(&d, "doppelt");
+        // Feld trägt nicht den Formelwert
+        let (mut d, i) = fresh();
+        if let FeatureKind::Box { size, .. } = &mut d.features[i].kind {
+            size.x = 39.0;
+        }
+        check(&d, "trägt nicht den Wert");
+        // Formel an einem Feld, das die Art nicht hat
+        let (mut d, i) = fresh();
+        d.features[i]
+            .formulas
+            .insert(FieldKey::Radius, "1".to_string());
+        check(&d, "kann keine Formel haben");
+        // unbekannter Name ohne Formelfehler
+        let (mut d, i) = fresh();
+        d.features[i]
+            .formulas
+            .insert(FieldKey::Breite, "Gibtsnicht".to_string());
+        check(&d, "Formelfehler");
+        // Formelfehler ohne Fehlerstatus
+        let (mut d, i) = fresh();
+        d.features[i]
+            .formulas
+            .insert(FieldKey::Breite, "Gibtsnicht".to_string());
+        d.features[i].issue = Some(FormulaIssue::Broken(
+            "Den Namen „Gibtsnicht“ gibt es nicht.".into(),
+        ));
+        check(&d, "hat einen Formelfehler, aber Status");
     }
 }
