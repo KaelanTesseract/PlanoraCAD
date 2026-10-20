@@ -429,9 +429,11 @@ Jede Änderung am Dokument lässt sich zurücknehmen und wieder herstellen: Kör
 **Grenzen**
 - Der Verlauf liegt nur im Arbeitsspeicher: nicht in der Datei, nicht über einen Neustart, nicht zwischen Tabs.
 - Nicht zurückgenommen werden Kamera, Auswahl, Ansichtseinstellungen, Export, Speichern, und das Öffnen, Neu-Anlegen oder Schließen von Tabs.
-- Die Tab-Leiste rollt bei 1100 Pixel Fensterbreite, weil die zwei Knöpfe Platz brauchen: Das Symbol „Neu“ (+) steht dafür fest rechts neben der Leiste und bleibt immer sichtbar. Name und Schließkreuz des aktiven Tabs sind ab etwa 1140 Pixel Breite immer ganz zu sehen; darunter schließt Strg+W den aktiven Tab.
+- Die Tab-Leiste rollt bei 1100 Pixel Fensterbreite, weil die zwei Knöpfe Platz brauchen: Das Symbol „Neu“ (+) steht dafür fest rechts neben der Leiste und bleibt immer sichtbar. Name und Schließkreuz des aktiven Tabs sind ab 1150 Pixel Breite immer ganz zu sehen (geprüft mit 1 bis 9 Tabs); darunter schließt Strg+W den aktiven Tab.
 - Eine Skizze mit gleichem Inhalt, aber neuem Stand gilt als geändert; das kann einen überflüssigen Schritt ergeben.
 - Fällt ein Schritt nach einem Fehler aus dem Verlauf, fasst der nächste Schritt danach zwei Änderungen zusammen.
+- Die Grenze von etwa 200 MB ist geschätzt und zählt Netz-Körper nicht mit. Netze, die nur noch der Verlauf festhält (etwa nach mehrmaligem Importieren und Löschen großer Netze), können deutlich mehr Speicher belegen.
+- Der Hinweis „Rückgängig: …“ in der Statuszeile gehört zum Tab: Wechselst du weg und zurück, steht er dort noch, bis du in diesem Tab den nächsten Schritt machst. Landet Rückgängig auf einem Stand mit einem fehlerhaften Eintrag im Baum, zeigt die Statuszeile statt des Hinweises dessen Fehler.
 
 Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt: Rückgängig und Wiederholen“.
 

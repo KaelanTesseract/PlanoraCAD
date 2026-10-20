@@ -29,7 +29,7 @@ use planora_app::workspace::*;
 use planora_app::{about_dialog, fonts, sheet_dialog, theme, viewport};
 use planora_drawing::dimension::{DimId, DimKind, DimSpec, GeoRef, Tolerance as DimTolerance};
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind};
-use planora_feature::{SketchPlane, StandardPlane, geo_ref_for_edge};
+use planora_feature::{FeatureKind, FeatureStatus, SketchPlane, StandardPlane, geo_ref_for_edge};
 use planora_math::{DVec2, DVec3, Tolerance};
 use planora_project::config::Config;
 use planora_project::library::Library;
@@ -1114,4 +1114,109 @@ fn message_wins_over_info() {
         theme::palette(true).error
     );
     assert!(!seen.iter().any(|s| s.text.starts_with("Rückgängig")));
+}
+
+/// Landet Rückgängig auf einem Stand mit einem fehlerhaften Feature, zeigt die Statuszeile
+/// dessen Fehler in der Fehlerfarbe statt des Hinweises „Rückgängig: …“.
+#[test]
+fn undo_onto_a_failing_feature_shows_the_error() {
+    let mut w = ws();
+    let id = w
+        .active_tab_mut()
+        .state
+        .add_feature(
+            None,
+            FeatureKind::Cylinder {
+                radius: -1.0,
+                height: 1.0,
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    w.observe_history(false);
+    w.active_tab_mut().state.message = None;
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(10.0))
+        .unwrap();
+    w.observe_history(false);
+    let mut rig = Rig::new(w);
+    let name = rig.st().document.feature(id).unwrap().name.clone();
+    rig.undo_key();
+    assert!(matches!(
+        rig.st().document.feature(id).unwrap().status,
+        FeatureStatus::Error(_)
+    ));
+    assert_eq!(rig.bodies(), 0, "der Quader ist zurückgenommen");
+    assert_eq!(rig.info(), None, "kein Hinweis über dem Fehler");
+    let seen = rig.settle();
+    let error = seen
+        .iter()
+        .find(|s| s.text.starts_with(&format!("„{name}“")))
+        .unwrap_or_else(|| panic!("Fehler von „{name}“ nicht in der Statuszeile"));
+    assert_eq!(error.color, theme::palette(true).error);
+    assert!(!seen.iter().any(|s| s.text.starts_with("Rückgängig")));
+    // Wiederholen auf einen Stand, in dem der Fehler weiter besteht: ebenso.
+    rig.press(Key::Y, Modifiers::COMMAND);
+    assert_eq!(rig.bodies(), 1);
+    assert_eq!(rig.info(), None);
+    let seen = rig.settle();
+    assert!(
+        seen.iter()
+            .any(|s| s.text.starts_with(&format!("„{name}“")))
+    );
+}
+
+/// In der offenen Skizze steht der Hinweis auch dann, wenn das Dokument ein fehlerhaftes Feature
+/// hat (dort kommt die Skizzenzeile vor Feature-Fehlern), und eine ältere Meldung („nichts zu
+/// wiederholen“) verdrängt ihn nicht.
+#[test]
+fn sketch_hint_despite_failing_feature_and_old_message() {
+    let mut w = ws();
+    w.active_tab_mut()
+        .state
+        .add_feature(
+            None,
+            FeatureKind::Cylinder {
+                radius: -1.0,
+                height: 1.0,
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    w.observe_history(false);
+    let id = w
+        .active_tab_mut()
+        .state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    w.active_tab_mut().state.open_sketch(id).unwrap();
+    w.observe_history(false);
+    w.active_tab_mut().state.message = None;
+    let mut rig = Rig::new(w);
+    let name = rig.st().session_sketch().unwrap().name.clone();
+    {
+        let (se, sk) = rig.st().session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Line);
+    }
+    for (x, y) in [(0.0, 0.0), (10.0, 4.0)] {
+        let (se, sk) = rig.st().session_sketch_mut().unwrap();
+        se.click(sk, DVec2::new(x, y), 0.5, false).unwrap();
+        rig.frame(vec![]);
+    }
+    rig.settle();
+    rig.press(Key::Y, Modifiers::COMMAND);
+    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_REDO));
+    rig.settle();
+    rig.undo_key();
+    assert_eq!(rig.message(), None, "die alte Meldung ist weg");
+    assert_eq!(rig.info().as_deref(), Some("Rückgängig: Linie zeichnen"));
+    let seen = rig.settle();
+    assert_eq!(
+        status_color(
+            &seen,
+            &format!("Skizzen-Modus: {name} · Rückgängig: Linie zeichnen")
+        ),
+        theme::palette(true).text_secondary
+    );
 }

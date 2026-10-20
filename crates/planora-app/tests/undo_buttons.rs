@@ -981,14 +981,20 @@ fn new_tab_pinned_and_active_tab_revealed() {
     }
 }
 
-/// Ab 1140 px Breite sind Name und Schließen-Symbol des aktiven Tabs ganz zu sehen (1, 2 und
-/// 5 Tabs, geändert und ungeändert). Bei 1130 px (Leiste 130,75 px) gilt das nur für ungeänderte
-/// Tabs; ein geänderter aktiver Tab („Unbenannt n ●“) ragt mit seinem Schließen-Symbol bei 2 und
-/// mehr Tabs noch etwa 9,9 px hinaus (gemessen, festgehalten).
+/// Ab 1150 px Breite sind Name und Schließen-Symbol des aktiven Tabs ganz zu sehen (1 bis 9
+/// Tabs, geändert und ungeändert). Bei 1140 px gilt das für ungeänderte Tabs; bei einem
+/// geänderten aktiven Tab ragt das Schließen-Symbol je nach Breite der Tabnummer bis etwa 0,6 px
+/// hinaus (4, 7, 8, 9 Tabs; gemessen, festgehalten). Bei 1130 px (Leiste 130,75 px) ragt es bei
+/// einem geänderten Tab und 2 und mehr Tabs etwa 9,9 px hinaus (gemessen bei 2 und 5 Tabs).
 #[test]
-fn active_tab_fully_visible_from_1140() {
-    for width in [1130.0, 1140.0, 1200.0, 1400.0] {
-        for n in [1, 2, 5] {
+fn active_tab_fully_visible_from_1150() {
+    for width in [1130.0, 1140.0, 1150.0, 1200.0, 1400.0] {
+        let counts: Vec<usize> = if width == 1130.0 {
+            vec![1, 2, 5]
+        } else {
+            (1..=9).collect()
+        };
+        for n in counts {
             for dirty in [false, true] {
                 let what = format!("{width}/{n} Tabs/geändert={dirty}");
                 let mut rig = Rig::with(tabs_ws(n, dirty), vec2(width, 700.0), true, true);
@@ -1005,6 +1011,10 @@ fn active_tab_fully_visible_from_1140() {
                     assert!(s.name_shown(), "{what}: Name");
                     let h = h.expect("×");
                     assert!((h - 9.9).abs() < 1.0, "{what}: × ragt {h}");
+                } else if width == 1140.0 && dirty && [4, 7, 8, 9].contains(&n) {
+                    assert!(s.name_shown(), "{what}: Name");
+                    let h = h.expect("×");
+                    assert!(h > 0.0 && h < 0.6, "{what}: × ragt {h}");
                 } else {
                     assert!(s.name_shown(), "{what}: Name ganz sichtbar");
                     assert!(

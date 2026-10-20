@@ -96,7 +96,7 @@ Stand 2026-10-20. Die Vorschläge aus §9 hat der Nutzer so bestätigt (Verlauf 
 - **R10 Skizze** wie §6a.2. Der erste Klick eines Werkzeugs gehört zur Linie, das erste Rückgängig bei offenem Punkt nimmt nur den Punkt zurück. Das Maßfeld der Skizze schließt nach jedem Sprung.
 
 Abweichungen von diesem Entwurf:
-1. **Knöpfe im oberen Feld statt in der Werkzeugleiste (§3).** Auf Entscheidung des Nutzers stehen sie im oberen Feld neben den Menüs, in jedem Modus. Das Symbol „Neu“ (+) steht fest hinter der rollenden Tab-Leiste; Name und Schließkreuz des aktiven Tabs sind ab 1140 Pixel Breite immer ganz sichtbar, bei 1100 rollt die Leiste. Offene Ideen: Knöpfe woanders hin, Feld über den Seitenspalten, kürzere Menüs.
+1. **Knöpfe im oberen Feld statt in der Werkzeugleiste (§3).** Auf Entscheidung des Nutzers stehen sie im oberen Feld neben den Menüs, in jedem Modus. Das Symbol „Neu“ (+) steht fest hinter der rollenden Tab-Leiste; Name und Schließkreuz des aktiven Tabs sind ab 1150 Pixel Breite immer ganz sichtbar (getestet mit 1 bis 9 Tabs), bei 1100 rollt die Leiste. Offene Ideen: Knöpfe woanders hin, Feld über den Seitenspalten, kürzere Menüs.
 2. **Statuszeile:** Der Hinweis „Rückgängig: …“ ist keine Meldung, sondern eine eigene Anzeige (`AppState::info`) in normaler Farbe.
 3. **Auswahl (§3):** Ein gewählter Körper bleibt gewählt und folgt Verschieben, Verrunden und Booleschen Operationen; Flächen- und Kantenwahl werden beim vollen Zurückladen geleert.
 4. **Fehler (§7):** Zurückladen schlägt nur über unbrauchbare Einträge fehl; der Schritt fällt aus dem Verlauf, das Dokument bleibt, Meldung „Rückgängig ist nicht möglich.“

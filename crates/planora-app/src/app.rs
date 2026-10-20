@@ -195,7 +195,8 @@ impl PlanoraApp {
 /// Rückgängig im aktiven Tab (bei offener Skizze in der Skizze). Die Statuszeile nennt danach
 /// den Schritt als Hinweis in normaler Farbe (`state.info`, „Rückgängig: Quader anlegen“) oder
 /// sagt als Meldung, warum es nicht geht (etwa „Es gibt nichts rückgängig zu machen.“).
-/// Schlägt das Zurückladen fehl, steht dort die Meldung von [`crate::workspace::DocTab::undo`].
+/// Schlägt das Zurückladen fehl, steht dort die Meldung von [`crate::workspace::DocTab::undo`];
+/// hat der erreichte Stand ein fehlerhaftes Feature, dessen Fehler.
 pub(crate) fn undo_active(ws: &mut Workspace) {
     history_step(ws, true);
 }
@@ -217,14 +218,22 @@ fn history_step(ws: &mut Workspace, undo: bool) {
         tab.state.info = None;
         return;
     }
+    // Alte Meldungen gehören zum alten Stand; was danach in `message` steht, kommt vom Sprung
+    // (etwa „Rückgängig ist nicht möglich.“) und bleibt.
+    tab.state.message = None;
+    tab.state.info = None;
     let (label, done, word) = if undo {
         (tab.undo_label(), tab.undo(), "Rückgängig")
     } else {
         (tab.redo_label(), tab.redo(), "Wiederholen")
     };
-    tab.state.info = None;
-    if done.is_ok() {
-        tab.state.message = None;
+    // Landet der Sprung auf einem Stand mit fehlerhaftem Feature, zeigt die Statuszeile dessen
+    // Fehler (Fehlerfarbe) statt des Hinweises; in der offenen Skizze steht der Hinweis hinter
+    // der Zeile „Skizzen-Modus: …“, die dort vor Feature-Fehlern kommt.
+    let shows_error = tab.state.message.is_some()
+        || (tab.state.sketch_session.is_none()
+            && crate::browser::status_text(&tab.state).is_some());
+    if done.is_ok() && !shows_error {
         tab.state.info = Some(match label {
             Some(l) => format!("{word}: {l}"),
             None => word.into(),
