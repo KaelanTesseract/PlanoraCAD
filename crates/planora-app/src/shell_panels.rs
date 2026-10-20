@@ -516,8 +516,81 @@ pub fn field_rects(ctx: &egui::Context) -> Vec<(&'static str, egui::Rect)> {
     .collect()
 }
 
-/// Menü + Trennstrich + Tabs (Tabs in waagerechter ScrollArea). Solange eine Rückfrage offen ist,
-/// sind Menü und Tabs gesperrt (sonst könnte z. B. „Speichern“ die Rückfrage ersetzen).
+/// Innenabstand links und rechts der Knöpfe „Rückgängig“ und „Wiederholen“.
+const HISTORY_PAD: f32 = 2.0;
+
+fn history_key() -> egui::Id {
+    top_id().with("history")
+}
+
+/// Beschriftung und Lage der Knöpfe „Rückgängig“ und „Wiederholen“ im oberen Feld im letzten
+/// Bild (für Tests).
+#[doc(hidden)]
+pub fn history_buttons_seen(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<(String, egui::Rect)>>(history_key()))
+        .unwrap_or_default()
+}
+
+/// Knöpfe „Rückgängig“ und „Wiederholen“ (nur Symbole, eng gesetzt): dieselben Wege wie das
+/// Menü „Bearbeiten“ (bei offenem Fenster bedienbar, es schließt sich; bei offener Skizze der
+/// Skizzenverlauf). Gesperrt wie dort (nichts zu tun, alte Version, Export schreibt) und wie das
+/// ganze Feld bei offener Rückfrage; beim Überfahren Name und Grund.
+fn history_buttons(ui: &mut egui::Ui, ws: &mut crate::workspace::Workspace, dark: bool) {
+    let lock = bottom_lock(ws);
+    let tab = ws.active_tab();
+    let entries = [
+        (
+            icons::Icon::Undo,
+            "Rückgängig",
+            app::undo_menu_text(tab.undo_label()),
+            "Strg+Z",
+            tab.undo_blocked(),
+            true,
+        ),
+        (
+            icons::Icon::Redo,
+            "Wiederholen",
+            app::redo_menu_text(tab.redo_label()),
+            "Strg+Y",
+            tab.redo_blocked(),
+            false,
+        ),
+    ];
+    let mut seen = Vec::new();
+    let mut step = None;
+    ui.scope(|ui| {
+        // Schmal gesetzt (20 px je Knopf), damit das Feld bei 1100 px Fensterbreite noch zwischen
+        // die Spalten passt.
+        ui.spacing_mut().item_spacing.x = theme::SPACE_1;
+        ui.spacing_mut().button_padding.x = HISTORY_PAD;
+        for (icon, label, text, keys, own, undo) in entries {
+            let reason = lock.or(own);
+            let r = ui
+                .add_enabled_ui(reason.is_none(), |ui| {
+                    icons::source_icon_button(ui, icons::IconSource::Font(icon), &text, dark)
+                })
+                .inner;
+            let r = match reason {
+                Some(why) => explain(r, label, why),
+                None => r.on_hover_text(format!("{text} ({keys})")),
+            };
+            if r.clicked() {
+                step = Some(undo);
+            }
+            seen.push((label.to_owned(), r.rect));
+        }
+    });
+    ui.ctx().data_mut(|d| d.insert_temp(history_key(), seen));
+    match step {
+        Some(true) => app::undo_active(ws),
+        Some(false) => app::redo_active(ws),
+        None => {}
+    }
+}
+
+/// Menü + Rückgängig/Wiederholen + Trennstrich + Tabs (Tabs in waagerechter ScrollArea). Solange
+/// eine Rückfrage offen ist, sind Menü, Knöpfe und Tabs gesperrt (sonst könnte z. B. „Speichern“
+/// die Rückfrage ersetzen).
 fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let dark = app.ws.active_tab().state.dark;
     let frame = bar_frame(dark, shell::TOP_H);
@@ -561,6 +634,9 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 // „Öffnen …“: Projekte einblenden und den Baum neu lesen.
                 app.show_projects();
             }
+            // Rückgängig und Wiederholen rechts neben dem Menü, in jedem Modus; ihr Platz zählt
+            // zur Wunsch- und Mindestbreite des Felds (über `gap`; die Tabs rollen statt dessen).
+            history_buttons(ui, &mut app.ws, dark);
             ui.separator();
             // Die Tab-Leiste reicht bis in den unteren Rand des Felds: ihr schwebender Rollbalken
             // liegt dort, unter den Namen der Tabs statt über ihnen. Das Feld selbst wird dadurch
@@ -594,7 +670,8 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 area_rect.min,
                 vec2(tabs.inner_rect.width(), row.height()),
             ));
-            // Wunschbreite: Menüknöpfe, Trennstrich mit Abständen, alle Tabs, Rand.
+            // Wunschbreite: Menüknöpfe, Rückgängig/Wiederholen, Trennstrich mit Abständen, alle
+            // Tabs, Rand (`gap` umfasst die beiden Knöpfe).
             let gap = tabs.inner_rect.left() - menu.response.rect.right();
             remember_width(ui, menu_width_key(), menu_natural);
             // Das Zeichen zählt nach der Regel mit, auch wenn es in diesem Durchgang noch fehlt:
