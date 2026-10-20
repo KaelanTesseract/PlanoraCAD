@@ -386,6 +386,30 @@ pub fn scroll_area<R>(
     out
 }
 
+/// Wie [`scroll_area`], zeichnet aber nur die sichtbaren von `total_rows` gleich hohen Zeilen
+/// (`row_height` ohne Zeilenabstand; `ScrollArea::show_rows`).
+pub fn scroll_area_rows<R>(
+    ui: &mut egui::Ui,
+    area: egui::ScrollArea,
+    row_height: f32,
+    total_rows: usize,
+    add_contents: impl FnOnce(&mut egui::Ui, std::ops::Range<usize>) -> R,
+) -> egui::scroll_area::ScrollAreaOutput<R> {
+    let saved = ui.style().clone();
+    let (rest, hover) = scroll_handle_colors(ui.visuals().dark_mode);
+    let w = &mut ui.style_mut().visuals.widgets;
+    w.inactive.fg_stroke.color = rest;
+    w.hovered.fg_stroke.color = hover;
+    w.active.fg_stroke.color = hover;
+    let content_style = saved.clone();
+    let out = area.show_rows(ui, row_height, total_rows, |ui, range| {
+        ui.set_style(content_style);
+        add_contents(ui, range)
+    });
+    ui.set_style(saved);
+    out
+}
+
 /// Rahmen schwebender Felder, Leisten und Menüs: bg_panel, 1 px Rand, Rundung 14, kein Schatten.
 pub fn panel_frame(dark: bool) -> egui::Frame {
     let p = palette(dark);

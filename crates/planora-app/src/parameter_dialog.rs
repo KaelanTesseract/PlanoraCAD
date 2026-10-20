@@ -14,13 +14,14 @@
 
 use crate::dialog::{Dialog, DialogSize};
 use crate::drawing_browser::READ_ONLY_HINT;
-use crate::formula_field::{commit_signal, formula_field_with, unit_value};
+use crate::formula_field::{FormulaField, commit_signal, unit_value};
 use crate::icons::{self, Icon};
 use crate::state::{AppState, SKETCH_OPEN_LOCK};
 use crate::theme::{self, SPACE_2};
 use crate::workspace::DocTab;
 use planora_feature::expr::{ParamDef, evaluate_table};
 use planora_feature::{FeatureError, ParamEdit, ParamId, ParamUnit, Parameter};
+use std::cell::RefCell;
 
 /// Titel des Fensters.
 pub const TITLE: &str = "Parameter";
@@ -127,6 +128,9 @@ pub struct ParameterDialog {
     /// Stand, aus dem die Zeilen gelesen wurden: Zustand (`AppState::instance`) und
     /// Änderungszähler des Dokuments. Weicht er ab, lädt das Fenster neu.
     seen: (u64, u64),
+    /// Im vorigen Bild gesperrt (offene Skizze, alte Version). Setzt die Sperre ein, entfallen
+    /// die Entwürfe: Danach zeigen die Zeilen wieder das Dokument.
+    locked: bool,
     /// Rechteck im letzten Bild (für Tests).
     pub last_rect: Option<egui::Rect>,
 }
@@ -138,6 +142,7 @@ impl ParameterDialog {
             error: None,
             confirm: None,
             seen: (0, 0),
+            locked: false,
             last_rect: None,
         };
         d.reload(state);
@@ -353,11 +358,16 @@ impl ParameterDialog {
         } else {
             None
         };
+        if lock.is_some() && !self.locked {
+            self.reload(state);
+        }
+        self.locked = lock.is_some();
         let mut open = true;
         let mut actions = Vec::new();
         let mut footer_actions = Vec::new();
         let confirm = self.confirm.as_ref().map(|(_, t)| t.clone());
         let error = self.error.clone();
+        let live = RefCell::new(None);
         let table_h = (ctx.content_rect().height() - 260.0).clamp(120.0, TABLE_MAX_H);
         let shown = Dialog::new(TITLE, DialogSize::Wide)
             .id(egui::Id::new("parameter_dialog"))
@@ -373,7 +383,7 @@ impl ParameterDialog {
                         ui.add_space(SPACE_2);
                     }
                     ui.add_enabled_ui(lock.is_none(), |ui| {
-                        self.table(ui, state, table_h, &mut actions);
+                        self.table(ui, state, table_h, &live, &mut actions);
                     });
                 },
                 |ui| {
@@ -381,6 +391,7 @@ impl ParameterDialog {
                         ui,
                         lock.is_none(),
                         confirm.as_deref(),
+                        live.borrow().as_deref(),
                         error.as_deref(),
                         &mut footer_actions,
                     )
@@ -411,70 +422,92 @@ impl ParameterDialog {
         }
     }
 
-    /// Kopfzeile und Zeilen in einem Rollbereich.
-    fn table(&mut self, ui: &mut egui::Ui, state: &AppState, max_h: f32, out: &mut Vec<Action>) {
+    /// Kopfzeile und Zeilen. Die Zeilen sind gleich hoch und werden nur gezeichnet, soweit sie
+    /// im Rollbereich zu sehen sind (`show_rows`; 500 Zeilen bleiben schnell). Die Meldung einer
+    /// ungültigen Formel steht deshalb nicht unter dem Feld, sondern in der Fußzeile (`live`).
+    fn table(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &AppState,
+        max_h: f32,
+        live: &RefCell<Option<String>>,
+        out: &mut Vec<Action>,
+    ) {
         if self.rows.is_empty() {
             ui.weak(EMPTY_TABLE);
             return;
         }
         let dark = ui.visuals().dark_mode;
         let params = state.document.parameters();
-        theme::scroll_area(
-            ui,
-            egui::ScrollArea::vertical()
-                .id_salt("parameter_tabelle")
-                .max_height(max_h)
-                .auto_shrink([false, true]),
-            |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(SPACE_2, SPACE_2);
-                ui.horizontal(|ui| {
-                    for (head, w) in COLUMNS.iter().zip(WIDTHS) {
-                        cell(
-                            ui,
-                            w,
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.label(
-                                    egui::RichText::new(*head)
-                                        .font(theme::label_font())
-                                        .color(theme::palette(dark).text_tertiary),
-                                );
-                            },
+        let rows = &mut self.rows;
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(SPACE_2, SPACE_2);
+            ui.horizontal(|ui| {
+                for (head, w) in COLUMNS.iter().zip(WIDTHS) {
+                    cell(ui, w, center(), |ui| {
+                        ui.label(
+                            egui::RichText::new(*head)
+                                .font(theme::label_font())
+                                .color(theme::palette(dark).text_tertiary),
                         );
-                    }
-                });
-                for (i, row) in self.rows.iter_mut().enumerate() {
-                    let Some(p) = params.get(i).filter(|p| p.id == row.id) else {
-                        continue;
-                    };
-                    ui.horizontal_top(|ui| row_ui(ui, row, p, i, state, out));
+                    });
                 }
-            },
-        );
+            });
+            let n = rows.len();
+            theme::scroll_area_rows(
+                ui,
+                egui::ScrollArea::vertical()
+                    .id_salt("parameter_tabelle")
+                    .max_height(max_h)
+                    .auto_shrink([false, true]),
+                theme::FIELD_H,
+                n,
+                |ui, range| {
+                    for i in range {
+                        let row = &mut rows[i];
+                        let Some(p) = params.get(i).filter(|p| p.id == row.id) else {
+                            continue;
+                        };
+                        ui.horizontal(|ui| {
+                            ui.set_height(theme::FIELD_H);
+                            if let Some(e) = row_ui(ui, row, p, i, state, out) {
+                                live.borrow_mut().get_or_insert(e);
+                            }
+                        });
+                    }
+                },
+            );
+        });
     }
 }
 
-/// Eine Zelle fester Breite `w` (mindestens Feldhöhe hoch), damit die Spalten untereinander
-/// stehen.
+/// Zellen mittig in der Höhe.
+fn center() -> egui::Layout {
+    egui::Layout::left_to_right(egui::Align::Center)
+}
+
+/// Eine Zelle fester Breite `w` und Feldhöhe, damit die Spalten untereinander stehen; was
+/// breiter wäre, wird abgeschnitten.
 fn cell<R>(
     ui: &mut egui::Ui,
     w: f32,
     layout: egui::Layout,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
-    ui.allocate_ui_with_layout(egui::vec2(w, theme::FIELD_H), layout, |ui| {
-        ui.set_min_size(egui::vec2(w, theme::FIELD_H));
-        ui.set_max_width(w);
-        add(ui)
-    })
-    .inner
+    let size = egui::vec2(w, theme::FIELD_H);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(layout));
+    child.set_clip_rect(rect.intersect(ui.clip_rect()));
+    add(&mut child)
 }
 
-/// Rückfrage, „Zeile hinzufügen“ und die Meldung; bleibt unter dem rollenden Inhalt stehen.
+/// Rückfrage, „Zeile hinzufügen“ und die Meldungen (ungültige Formel einer Zeile, abgelehnte
+/// Änderung); bleibt unter dem rollenden Inhalt stehen.
 fn footer(
     ui: &mut egui::Ui,
     enabled: bool,
     confirm: Option<&str>,
+    live: Option<&str>,
     error: Option<&str>,
     out: &mut Vec<Action>,
 ) {
@@ -501,7 +534,7 @@ fn footer(
     {
         out.push(Action::Add);
     }
-    if let Some(e) = error {
+    for e in [live, error].into_iter().flatten() {
         ui.add_space(SPACE_2);
         ui.colored_label(theme::palette(dark).error, e);
     }
@@ -528,7 +561,8 @@ pub fn show_in_tab(ctx: &egui::Context, tab: &mut DocTab) {
     }
 }
 
-/// Bearbeiten → Parameter …: öffnet das Fenster (ein offenes bleibt, wie es ist).
+/// Bearbeiten → Parameter …: öffnet das Fenster (ein offenes bleibt, wie es ist, samt
+/// Entwürfen).
 pub fn open(tab: &mut DocTab) {
     if tab.parameter_dialog.is_none() {
         tab.parameter_dialog = Some(ParameterDialog::new(&tab.state));
@@ -540,7 +574,13 @@ fn stand(state: &AppState) -> (u64, u64) {
     (state.instance, state.document.edit_count())
 }
 
-/// Eine Zeile: Name, Formel (Formelfeld), Wert, Art, Kommentar, Löschsymbol.
+/// Name einer Zeile für Bildschirmleser und Meldungen.
+fn field_label(column: &str, name: &str) -> String {
+    format!("{column} von {name}")
+}
+
+/// Eine Zeile: Name, Formel (Formelfeld), Wert, Art, Kommentar, Löschsymbol. Liefert die
+/// Meldung einer ungültigen Formel im Entwurf.
 fn row_ui(
     ui: &mut egui::Ui,
     row: &mut Row,
@@ -548,10 +588,10 @@ fn row_ui(
     index: usize,
     state: &AppState,
     out: &mut Vec<Action>,
-) {
+) -> Option<String> {
     let id = row.id;
-    let center = egui::Layout::left_to_right(egui::Align::Center);
-    let name = cell(ui, NAME_W, center, |ui| {
+    let enabled = ui.is_enabled();
+    let name = cell(ui, NAME_W, center(), |ui| {
         theme::text_field(
             ui,
             egui::TextEdit::singleline(&mut row.name)
@@ -559,6 +599,12 @@ fn row_ui(
                 .desired_width(NAME_W),
         )
     });
+    labelled(
+        &name,
+        egui::WidgetType::TextEdit,
+        enabled,
+        &field_label("Name", &p.name),
+    );
     if commit_signal(ui, &name) {
         out.push(Action::Commit(id));
     }
@@ -574,23 +620,26 @@ fn row_ui(
         }
         trial_value(state.document.parameters(), index, text)
     };
-    let top = egui::Layout::top_down(egui::Align::Min);
-    let field = cell(ui, FORMULA_CELL_W, top, |ui| {
-        ui.push_id(("parameter_formel", id.0), |ui| {
-            formula_field_with(ui, &mut row.formula, p.unit, &eval, FORMULA_W)
-        })
-        .inner
+    let field = cell(ui, FORMULA_CELL_W, center(), |ui| {
+        FormulaField::new(("parameter_formel", id.0), &mut row.formula, p.unit)
+            .width(FORMULA_W)
+            .enabled(enabled)
+            .error_below(false)
+            .label(field_label("Formel", &p.name))
+            .show_with(ui, &eval)
     });
     if field.committed || field.fx_clicked {
         out.push(Action::Commit(id));
     }
-    cell(ui, VALUE_W, center, |ui| {
+    cell(ui, VALUE_W, center(), |ui| {
         if let Some(v) = committed {
-            ui.label(theme::value(unit_value(v, p.unit)));
+            let shown = unit_value(v, p.unit);
+            ui.add(egui::Label::new(theme::value(shown.clone())).truncate())
+                .on_hover_text(shown);
         }
     });
     let mut unit = p.unit;
-    cell(ui, UNIT_W, center, |ui| {
+    let art = cell(ui, UNIT_W, center(), |ui| {
         egui::ComboBox::from_id_salt(("parameter_art", id.0))
             .selected_text(unit.label())
             .width(UNIT_W - SPACE_2)
@@ -598,12 +647,19 @@ fn row_ui(
                 for u in ParamUnit::ALL {
                     ui.selectable_value(&mut unit, u, u.label());
                 }
-            });
+            })
+            .response
     });
+    labelled(
+        &art,
+        egui::WidgetType::ComboBox,
+        enabled,
+        &field_label("Art", &p.name),
+    );
     if unit != p.unit {
         out.push(Action::Unit(id, unit));
     }
-    let comment = cell(ui, COMMENT_W, center, |ui| {
+    let comment = cell(ui, COMMENT_W, center(), |ui| {
         theme::text_field(
             ui,
             egui::TextEdit::singleline(&mut row.comment)
@@ -611,10 +667,16 @@ fn row_ui(
                 .desired_width(COMMENT_W),
         )
     });
+    labelled(
+        &comment,
+        egui::WidgetType::TextEdit,
+        enabled,
+        &field_label("Kommentar", &p.name),
+    );
     if commit_signal(ui, &comment) {
         out.push(Action::Commit(id));
     }
-    let delete = cell(ui, DELETE_W, center, |ui| {
+    let delete = cell(ui, DELETE_W, center(), |ui| {
         ui.add(
             egui::Button::new(icons::text(
                 Icon::Delete,
@@ -626,11 +688,17 @@ fn row_ui(
     })
     .on_hover_text(DELETE_ROW);
     // Das Symbol ist ein Zeichen der Symbolschrift; Bildschirmleser hören „Zeile löschen“.
-    delete.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, DELETE_ROW));
+    labelled(&delete, egui::WidgetType::Button, enabled, DELETE_ROW);
     theme::focus_ring(ui, &delete);
     if delete.clicked() {
         out.push(Action::Delete(id));
     }
+    field.error
+}
+
+/// Gibt einem Bedienelement einen Namen für Bildschirmleser.
+fn labelled(response: &egui::Response, kind: egui::WidgetType, enabled: bool, label: &str) {
+    response.widget_info(|| egui::WidgetInfo::labeled(kind, enabled, label));
 }
 
 /// Wert der Zeile `index` mit dem Formelentwurf `text` (übrige Zeilen wie im Dokument). Fehler

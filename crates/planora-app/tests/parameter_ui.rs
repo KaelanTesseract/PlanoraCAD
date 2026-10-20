@@ -33,6 +33,7 @@ struct Seen {
     rect: Rect,
     clip: Rect,
     color: egui::Color32,
+    opacity: f32,
 }
 
 fn walk(shape: &egui::epaint::Shape, clip: Rect, out: &mut Vec<Seen>) {
@@ -52,6 +53,7 @@ fn walk(shape: &egui::epaint::Shape, clip: Rect, out: &mut Vec<Seen>) {
                 rect: Rect::from_min_size(t.pos, t.galley.size()),
                 clip,
                 color,
+                opacity: t.opacity_factor,
             })
         }
         _ => {}
@@ -338,7 +340,7 @@ fn draw_field(pane: &mut Pane, text: &mut String) -> (Vec<Seen>, bool, bool) {
     let scope = breite_scope();
     let mut flags = (false, false);
     let seen = pane.settle(&mut |ui| {
-        let o = formula_field(ui, text, ParamUnit::Length, &scope, 100.0);
+        let o = formula_field(ui, "feld", text, ParamUnit::Length, &scope, 100.0);
         flags.0 |= o.fx_clicked;
         flags.1 |= o.committed;
     });
@@ -390,7 +392,7 @@ fn fx_click_sets_value() {
     let mut text = "Breite/2".to_string();
     let mut clicked = false;
     let mut f = |ui: &mut egui::Ui| {
-        let o = formula_field(ui, &mut text, ParamUnit::Length, &scope, 100.0);
+        let o = formula_field(ui, "feld", &mut text, ParamUnit::Length, &scope, 100.0);
         clicked |= o.fx_clicked;
     };
     let seen = pane.settle(&mut f);
@@ -403,7 +405,7 @@ fn fx_click_sets_value() {
     // Ein unrunder Wert wird verlustfrei eingesetzt, nicht gerundet.
     let mut text = "Breite/3".to_string();
     let mut f = |ui: &mut egui::Ui| {
-        formula_field(ui, &mut text, ParamUnit::Length, &scope, 100.0);
+        formula_field(ui, "feld", &mut text, ParamUnit::Length, &scope, 100.0);
     };
     let seen = pane.settle(&mut f);
     let fx = find(&seen, FX).unwrap().rect.center();
@@ -421,7 +423,7 @@ fn field_commits_on_enter_or_leaving() {
     let mut text = "5".to_string();
     let commits = std::cell::Cell::new(0);
     let mut f = |ui: &mut egui::Ui| {
-        let o = formula_field(ui, &mut text, ParamUnit::Length, &scope, 100.0);
+        let o = formula_field(ui, "feld", &mut text, ParamUnit::Length, &scope, 100.0);
         commits.set(commits.get() + usize::from(o.committed));
         ui.add_space(200.0);
         ui.label("daneben");
@@ -1088,4 +1090,572 @@ fn fits_small_and_both_themes() {
             );
         }
     }
+}
+
+// ---- Laufzeit (von Hand, im Release-Bau) ----------------------------------------------------
+
+/// 500 Zeilen (Kette p_i = p_(i-1) + 1), 1100 × 700: Zeit je Bild ohne Tessellieren.
+/// `cargo test --release -p planora-app --test parameter_ui perf_500_rows -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn perf_500_rows() {
+    let mut s = AppState::new();
+    for i in 1..=500 {
+        let f = if i == 1 {
+            "10".to_string()
+        } else {
+            format!("p{} + 1", i - 1)
+        };
+        param(&mut s, &format!("p{i}"), &f, ParamUnit::Length);
+    }
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    pane.size = vec2(1100.0, 700.0);
+    let mut f = |ui: &mut egui::Ui| {
+        d.show(ui.ctx(), &mut s, false);
+    };
+    pane.settle(&mut f);
+    let n = 40;
+    let t0 = std::time::Instant::now();
+    for _ in 0..n {
+        pane.frame(vec![], &mut f);
+    }
+    let rows = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+    drop(f);
+    let t0 = std::time::Instant::now();
+    for _ in 0..n {
+        pane.frame(vec![], &mut |ui| {
+            ui.label("x");
+        });
+    }
+    let empty = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+    eprintln!("PERF 500 Zeilen: {rows:.2} ms/Bild, leeres Bild {empty:.2} ms");
+}
+// ---- Nachbesserung (Review F1–F7) ------------------------------------------------------------
+
+fn text_event(c: char) -> Event {
+    Event::Text(c.to_string())
+}
+
+fn draft(rig: &mut Rig, id: ParamId, column: Column) -> String {
+    rig.tab()
+        .parameter_dialog
+        .as_ref()
+        .unwrap()
+        .text(id, column)
+        .unwrap()
+        .to_string()
+}
+
+/// F1: Eine Formel lässt sich in einer Zeile Zeichen für Zeichen tippen (echte Tasten, ein
+/// Zeichen je Bild); das Feld behält die Tastatur, wenn aus der Zahl eine Formel wird und
+/// umgekehrt.
+#[test]
+fn typing_formula_in_row_keeps_focus() {
+    let (w, _breite, _f) = ws_with_box();
+    let mut rig = Rig::new(w);
+    parameter_dialog::open(rig.tab());
+    rig.settle();
+    let id = {
+        let tab = rig.tab();
+        let d = tab.parameter_dialog.as_mut().unwrap();
+        let id = d.add_row(&mut tab.state).unwrap();
+        tab.after_parameter_change();
+        id
+    };
+    rig.focus_field("10");
+    let focus = rig.ctx.memory(|m| m.focused());
+    assert!(focus.is_some(), "Feld hat die Tastatur");
+    let mut typed = String::new();
+    for c in "Breite*2".chars() {
+        rig.frame(vec![text_event(c)]);
+        typed.push(c);
+        assert_eq!(draft(&mut rig, id, Column::Formula), typed);
+        assert_eq!(
+            rig.ctx.memory(|m| m.focused()),
+            focus,
+            "Fokus nach „{typed}“"
+        );
+    }
+    let steps = rig.tab().history().undo_len();
+    rig.frame(vec![key(Key::Enter, Modifiers::NONE)]);
+    rig.settle();
+    let tab = rig.tab();
+    assert_eq!(
+        tab.state.document.parameter(id).unwrap().formula,
+        "Breite*2"
+    );
+    assert_eq!(tab.history().undo_len(), steps + 1);
+    // Rückweg: Formel zu Zahl.
+    rig.focus_field("Breite*2");
+    let focus = rig.ctx.memory(|m| m.focused());
+    for (c, want) in [('7', "7"), ('5', "75")] {
+        rig.frame(vec![text_event(c)]);
+        assert_eq!(draft(&mut rig, id, Column::Formula), want);
+        assert_eq!(
+            rig.ctx.memory(|m| m.focused()),
+            focus,
+            "Fokus nach „{want}“"
+        );
+    }
+    rig.frame(vec![key(Key::Enter, Modifiers::NONE)]);
+    rig.settle();
+    assert_eq!(
+        rig.tab().state.document.parameter(id).unwrap().formula,
+        "75"
+    );
+}
+
+/// F1 im Baustein selbst: „10“ → „B“ … „Breite/4“ behält die Tastatur, Enter übernimmt.
+#[test]
+fn typing_formula_in_widget_keeps_focus() {
+    let mut pane = Pane::new(true);
+    let scope = breite_scope();
+    let mut text = "10".to_string();
+    let commits = std::cell::Cell::new(0);
+    let mut f = |ui: &mut egui::Ui| {
+        let o = formula_field(ui, "feld", &mut text, ParamUnit::Length, &scope, 100.0);
+        commits.set(commits.get() + usize::from(o.committed));
+    };
+    let seen = pane.settle(&mut f);
+    let field = find(&seen, "10").unwrap().rect.center();
+    pane.click(field, &mut f);
+    pane.frame(vec![key(Key::A, Modifiers::COMMAND)], &mut f);
+    let focus = pane.ctx.memory(|m| m.focused());
+    assert!(focus.is_some());
+    for c in "Breite/4".chars() {
+        pane.frame(vec![text_event(c)], &mut f);
+        assert_eq!(pane.ctx.memory(|m| m.focused()), focus, "Fokus nach „{c}“");
+    }
+    pane.frame(vec![key(Key::A, Modifiers::COMMAND)], &mut f);
+    for c in "12".chars() {
+        pane.frame(vec![text_event(c)], &mut f);
+        assert_eq!(
+            pane.ctx.memory(|m| m.focused()),
+            focus,
+            "Fokus zurück zur Zahl"
+        );
+    }
+    pane.frame(vec![key(Key::Enter, Modifiers::NONE)], &mut f);
+    drop(f);
+    assert_eq!(text, "12");
+    assert_eq!(commits.get(), 1);
+}
+
+/// F3: gesperrtes Feld nimmt nichts an und übernimmt nie; „fx“ ist gesperrt.
+#[test]
+fn disabled_field_is_read_only() {
+    let mut pane = Pane::new(false);
+    let scope = breite_scope();
+    let mut text = "Breite/2".to_string();
+    let flags = std::cell::Cell::new((false, false));
+    let mut f = |ui: &mut egui::Ui| {
+        let o = FormulaField::new("gesperrt", &mut text, ParamUnit::Length)
+            .enabled(false)
+            .show(ui, &scope);
+        let (a, b) = flags.get();
+        flags.set((a || o.fx_clicked, b || o.committed));
+    };
+    let seen = pane.settle(&mut f);
+    assert!(find(&seen, "= 20,00 mm").is_some(), "Wert wird gezeigt");
+    let fx = find(&seen, FX).unwrap().rect.center();
+    let field = find(&seen, "Breite/2").unwrap().rect.center();
+    pane.click(fx, &mut f);
+    pane.click(field, &mut f);
+    pane.frame(vec![text_event('9')], &mut f);
+    pane.frame(vec![key(Key::Enter, Modifiers::NONE)], &mut f);
+    drop(f);
+    assert_eq!(text, "Breite/2");
+    assert_eq!(flags.get(), (false, false));
+}
+
+/// F7 (R4): „fx“ ist bei ungültiger Formel gesperrt; die Meldung kommt auch als Ergebnis.
+#[test]
+fn fx_disabled_for_invalid_formula() {
+    let mut pane = Pane::new(true);
+    let scope = breite_scope();
+    let mut text = "Breit*2".to_string();
+    let clicked = std::cell::Cell::new(false);
+    let error = std::cell::RefCell::new(None);
+    let mut f = |ui: &mut egui::Ui| {
+        let o = formula_field(ui, "feld", &mut text, ParamUnit::Length, &scope, 100.0);
+        clicked.set(clicked.get() || o.fx_clicked);
+        *error.borrow_mut() = o.error;
+    };
+    let seen = pane.settle(&mut f);
+    let fx_invalid = find(&seen, FX).expect("„fx“ steht da").clone();
+    let fx = fx_invalid.rect.center();
+    pane.click(fx, &mut f);
+    drop(f);
+    assert_eq!(text, "Breit*2");
+    // Gesperrt: blass (Deckkraft gesperrter Bedienelemente), nicht wie ein freier Knopf.
+    assert!(
+        fx_invalid.color.a() < 255 || fx_invalid.opacity < 1.0,
+        "{fx_invalid:?}"
+    );
+    assert!(!clicked.get());
+    assert_eq!(
+        error.borrow().as_deref(),
+        Some("Den Namen „Breit“ gibt es nicht.")
+    );
+}
+
+/// F2: Nur die sichtbaren Zeilen werden gezeichnet; die letzte erreicht man durch Rollen.
+#[test]
+fn table_draws_only_visible_rows() {
+    let mut s = AppState::new();
+    for i in 1..=200 {
+        param(&mut s, &format!("q{i}"), "1", ParamUnit::Number);
+    }
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    let last = std::cell::Cell::new(None);
+    let mut f = |ui: &mut egui::Ui| {
+        assert!(d.show(ui.ctx(), &mut s, false));
+        last.set(d.last_rect);
+    };
+    pane.ctx.enable_accesskit();
+    let seen = pane.settle(&mut f);
+    // Gezeichnete Namensfelder zählen (auch abgeschnittene Felder hätten einen Knoten).
+    pane.time += 0.05;
+    let raw = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, pane.size)),
+        time: Some(pane.time),
+        ..Default::default()
+    };
+    let mut out = pane.ctx.run_ui(raw, |ui| f(ui));
+    let update = out.platform_output.accesskit_update.take().expect("Baum");
+    out.drop_without_applying_deltas();
+    let fields = update
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.label().is_some_and(|l| l.starts_with("Name von q")))
+        .count();
+    assert!((5..40).contains(&fields), "{fields} Zeilen gezeichnet");
+    let rect = last.get().unwrap();
+    let mut seen = seen;
+    for _ in 0..80 {
+        if visible(&seen, "q200", rect) {
+            break;
+        }
+        pane.frame(vec![Event::PointerMoved(rect.center())], &mut f);
+        pane.frame(
+            vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -400.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            }],
+            &mut f,
+        );
+        seen = pane.settle(&mut f);
+    }
+    assert!(visible(&seen, "q200", rect), "letzte Zeile nach dem Rollen");
+}
+
+/// F4: Sehr große Werte verschieben keine Spalten; die Zellen schneiden ab.
+#[test]
+fn huge_values_keep_columns() {
+    let mut s = AppState::new();
+    param(&mut s, "a", "1000", ParamUnit::Length);
+    let b = param(&mut s, "b", "a * 1000000000", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    d.set_text(b, Column::Formula, "a * 1000000000 + 1");
+    let mut pane = Pane::new(true);
+    let seen = pane.settle(&mut |ui| {
+        assert!(d.show(ui.ctx(), &mut s, false));
+    });
+    let arts: Vec<&Seen> = seen.iter().filter(|t| t.text == "Länge").collect();
+    assert_eq!(arts.len(), 2, "zwei Zeilen");
+    let head = find(&seen, "Art").unwrap();
+    for t in &arts {
+        assert!(
+            (t.rect.left() - arts[0].rect.left()).abs() < 0.5,
+            "Art steht untereinander: {:?}",
+            arts.iter().map(|t| t.rect).collect::<Vec<_>>()
+        );
+        assert!(t.rect.left() >= head.rect.left() - 0.5);
+    }
+    let value_head = find(&seen, "Wert").unwrap();
+    for t in seen
+        .iter()
+        .filter(|t| t.text.contains("mm") && t.rect.top() > head.rect.bottom())
+    {
+        let shown = t.clip.intersect(t.rect);
+        assert!(
+            shown.right() <= head.rect.left() + 0.5,
+            "„{}“ ragt in die Spalte Art: {shown:?}",
+            t.text
+        );
+        let _ = value_head;
+    }
+}
+
+/// F5: Öffnet sich eine Skizze, verfallen Entwürfe; danach zeigt die Zeile das Dokument.
+#[test]
+fn sketch_lock_discards_drafts() {
+    let mut s = AppState::new();
+    let a = param(&mut s, "a", "40", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    d.set_text(a, Column::Formula, "55");
+    let mut pane = Pane::new(true);
+    pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    assert_eq!(d.text(a, Column::Formula), Some("55"));
+    let sk = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(sk).unwrap();
+    pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    s.try_close_sketch().unwrap();
+    let seen = pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    assert_eq!(d.text(a, Column::Formula), Some("40"), "Dokumentwert");
+    assert!(find(&seen, "55").is_none());
+    assert_eq!(s.document.parameter(a).unwrap().formula, "40");
+}
+
+/// F6 (und R26): Namen für Bildschirmleser.
+#[test]
+fn fields_have_accessible_names() {
+    use egui::accesskit::Role;
+    let mut s = AppState::new();
+    param(&mut s, "Breite", "40", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    pane.ctx.enable_accesskit();
+    pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    pane.time += 0.05;
+    let raw = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, pane.size)),
+        time: Some(pane.time),
+        ..Default::default()
+    };
+    let mut out = pane.ctx.run_ui(raw, |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    let update = out.platform_output.accesskit_update.take().expect("Baum");
+    out.drop_without_applying_deltas();
+    let role_of = |label: &str| {
+        update
+            .nodes
+            .iter()
+            .map(|(_, n)| n)
+            .find(|n| n.label() == Some(label))
+            .map(|n| n.role())
+    };
+    assert_eq!(role_of("Name von Breite"), Some(Role::TextInput));
+    assert_eq!(role_of("Formel von Breite"), Some(Role::TextInput));
+    assert_eq!(role_of("Kommentar von Breite"), Some(Role::TextInput));
+    assert_eq!(role_of("Art von Breite"), Some(Role::ComboBox));
+    assert_eq!(role_of(DELETE_ROW), Some(Role::Button));
+}
+
+/// F7 (R11/R12): Name und Formel ohne Leerraum am Rand übernommen.
+#[test]
+fn commit_trims_name_and_formula() {
+    let mut s = AppState::new();
+    let a = param(&mut s, "a", "1", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    d.set_text(a, Column::Name, "  a2 ");
+    d.set_text(a, Column::Formula, " 7 ");
+    d.commit(a, &mut s).unwrap();
+    let p = s.document.parameter(a).unwrap();
+    assert_eq!((p.name.as_str(), p.formula.as_str()), ("a2", "7"));
+}
+
+/// F7 (R15): Löschwunsch bei offener Skizze: Sperrmeldung, keine Rückfrage, nichts gelöscht.
+#[test]
+fn request_delete_while_sketch_open() {
+    let mut s = AppState::new();
+    let a = param(&mut s, "a", "10", ParamUnit::Length);
+    s.create_box_with(
+        DVec3::new(10.0, 10.0, 10.0),
+        formulas(&[(FieldKey::Breite, "a")]),
+    )
+    .unwrap();
+    let b = param(&mut s, "b", "3", ParamUnit::Length);
+    let sk = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(sk).unwrap();
+    let mut d = ParameterDialog::new(&s);
+    for id in [a, b] {
+        assert_eq!(
+            d.request_delete(id, &mut s),
+            Err(SKETCH_OPEN_LOCK.to_string())
+        );
+        assert_eq!(d.confirm_text(), None);
+        assert!(s.document.parameter(id).is_some());
+    }
+}
+
+/// F7 (R19): Anderer Zustand mit derselben Kennung: der alte Entwurf wandert nicht mit.
+#[test]
+fn new_instance_with_same_ids_reloads() {
+    let mut first = AppState::new();
+    let a = param(&mut first, "a", "1", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&first);
+    d.set_text(a, Column::Formula, "99");
+    let mut second = AppState::new();
+    let b = param(&mut second, "b", "3", ParamUnit::Length);
+    assert_eq!(a, b, "gleiche Kennung");
+    // Gleicher Zählerstand, nur der Zustand ist ein anderer.
+    assert_eq!(first.document.edit_count(), second.document.edit_count());
+    let mut pane = Pane::new(true);
+    pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut second, false);
+    });
+    assert_eq!(d.text(b, Column::Formula), Some("3"));
+    assert_eq!(d.text(b, Column::Name), Some("b"));
+}
+
+/// F7 (R20): Was während der Sperre aus einem Feld käme (Fokusverlust nach einer Änderung),
+/// wird verworfen, ohne Meldung.
+#[test]
+fn actions_dropped_while_locked() {
+    let mut s = AppState::new();
+    let a = param(&mut s, "a", "10", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    let seen = pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    let name = find(&seen, "a").unwrap().rect.center();
+    pane.click(name, &mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    pane.frame(vec![text_event('x')], &mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    let sk = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(sk).unwrap();
+    s.message = None;
+    pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    assert_eq!(d.error(), None, "keine Meldung im Fenster");
+    assert_eq!(s.message, None, "keine Meldung in der Statuszeile");
+    assert_eq!(s.document.parameter(a).unwrap().name, "a");
+}
+
+/// F7 (R24): Fehler einer anderen Zeile nennen deren Namen.
+#[test]
+fn errors_of_other_rows_are_prefixed() {
+    let mut s = AppState::new();
+    let a = param(&mut s, "a", "10", ParamUnit::Length);
+    param(&mut s, "b", "a*10/(a-5)", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    d.set_text(a, Column::Formula, "2+3");
+    let mut pane = Pane::new(true);
+    let seen = pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    let e = seen
+        .iter()
+        .find(|t| t.text.starts_with("Parameter „b“: "))
+        .expect("Meldung mit dem Namen der anderen Zeile");
+    assert_eq!(e.color, theme::palette(true).error);
+}
+
+/// F7 (R40): Eine abgelehnte Änderung schließt das Bearbeiten-Fenster nicht.
+#[test]
+fn rejected_change_keeps_edit_dialog() {
+    let (w, breite, f) = ws_with_box();
+    let mut rig = Rig::new(w);
+    parameter_dialog::open(rig.tab());
+    rig.focus_field("40");
+    rig.type_text("Breit");
+    {
+        let tab = rig.tab();
+        tab.feature_dialog = FeatureDialog::new(&tab.state, f);
+    }
+    let steps = rig.tab().history().undo_len();
+    rig.frame(vec![key(Key::Enter, Modifiers::NONE)]);
+    rig.settle();
+    let tab = rig.tab();
+    assert_eq!(tab.state.document.parameter(breite).unwrap().formula, "40");
+    assert!(tab.feature_dialog.is_some(), "Bearbeiten-Fenster bleibt");
+    assert_eq!(tab.state.info, None);
+    assert_eq!(tab.history().undo_len(), steps);
+    assert!(
+        tab.parameter_dialog.as_ref().unwrap().error().is_some(),
+        "Meldung im Fenster"
+    );
+}
+
+/// F7 (R41): Erneutes Öffnen über das Menü behält offene Entwürfe.
+#[test]
+fn reopening_keeps_drafts() {
+    let (mut w, breite, _f) = ws_with_box();
+    let tab = w.active_tab_mut();
+    parameter_dialog::open(tab);
+    tab.parameter_dialog
+        .as_mut()
+        .unwrap()
+        .set_text(breite, Column::Formula, "77");
+    parameter_dialog::open(tab);
+    assert_eq!(
+        tab.parameter_dialog
+            .as_ref()
+            .unwrap()
+            .text(breite, Column::Formula),
+        Some("77")
+    );
+}
+
+/// F7 (R42): Die Rückfrage verschwindet, wenn ihr Parameter anderweitig verschwindet.
+#[test]
+fn delete_prompt_vanishes_with_its_parameter() {
+    let mut s = AppState::new();
+    let a = param(&mut s, "a", "10", ParamUnit::Length);
+    s.create_box_with(
+        DVec3::new(10.0, 10.0, 10.0),
+        formulas(&[(FieldKey::Breite, "a")]),
+    )
+    .unwrap();
+    let mut d = ParameterDialog::new(&s);
+    d.request_delete(a, &mut s).unwrap();
+    assert!(d.confirm_text().is_some());
+    s.replace_parameter(a).unwrap();
+    let mut pane = Pane::new(true);
+    let seen = pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    assert_eq!(d.confirm_text(), None);
+    assert!(find(&seen, REPLACE).is_none());
+}
+
+/// F3: Wird ein Feld mitten im Tippen gesperrt, übernimmt es nicht (der Fokusverlust ist dann
+/// keine Übernahme).
+#[test]
+fn field_locked_while_typing_does_not_commit() {
+    let mut pane = Pane::new(true);
+    let scope = breite_scope();
+    let mut text = "5".to_string();
+    let enabled = std::cell::Cell::new(true);
+    let commits = std::cell::Cell::new(0);
+    let mut f = |ui: &mut egui::Ui| {
+        let o = FormulaField::new("feld", &mut text, ParamUnit::Length)
+            .enabled(enabled.get())
+            .show(ui, &scope);
+        commits.set(commits.get() + usize::from(o.committed));
+    };
+    let seen = pane.settle(&mut f);
+    let field = find(&seen, "5").unwrap().rect.center();
+    pane.click(field, &mut f);
+    pane.frame(vec![text_event('7')], &mut f);
+    enabled.set(false);
+    pane.settle(&mut f);
+    pane.frame(vec![key(Key::Enter, Modifiers::NONE)], &mut f);
+    drop(f);
+    assert_eq!(commits.get(), 0);
 }

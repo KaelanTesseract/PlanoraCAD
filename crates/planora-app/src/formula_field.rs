@@ -89,82 +89,185 @@ pub struct FieldOutcome {
     pub committed: bool,
     /// „fx“ wurde angeklickt; der Text ist jetzt der berechnete Wert.
     pub fx_clicked: bool,
+    /// Meldung einer ungültigen Formel (auch wenn sie nicht unter dem Feld steht, siehe
+    /// [`FormulaField::error_below`]).
+    pub error: Option<String>,
 }
 
-/// Formelfeld (siehe Modulbeschreibung) mit Textbreite `width`; die Formel wird mit `scope`
-/// ausgewertet.
+/// Formelfeld (siehe Modulbeschreibung) als Baustein:
+///
+/// ```ignore
+/// let o = FormulaField::new(("quader", "breite"), &mut text, ParamUnit::Length)
+///     .width(90.0)
+///     .enabled(!read_only)
+///     .label("Breite")
+///     .show(ui, &scope);
+/// if o.committed { /* übernehmen */ }
+/// ```
+///
+/// - `id_salt` (Pflicht) macht die Kennung des Textfelds fest: Das Zeichen „fx“ erscheint vor
+///   dem Feld, sobald aus einer Zahl eine Formel wird; ohne feste Kennung verlöre das Feld dabei
+///   die Tastatur. Mehrere Felder in einem Fenster brauchen verschiedene Werte.
+/// - `width`: Breite des Textes (Vorgabe 90 px).
+/// - `enabled(false)`: gesperrt (nur lesbar, blass), „fx“ ebenso; nie `committed`.
+/// - `error_below(false)`: Die Meldung steht nicht unter dem Feld (gleich hohe Zeilen in einer
+///   Tabelle); der Aufrufer zeigt [`FieldOutcome::error`] selbst.
+/// - `label`: Name für Bildschirmleser.
+pub struct FormulaField<'a> {
+    id_salt: egui::Id,
+    text: &'a mut String,
+    unit: ParamUnit,
+    width: f32,
+    enabled: bool,
+    error_below: bool,
+    label: Option<String>,
+}
+
+impl<'a> FormulaField<'a> {
+    pub fn new(
+        id_salt: impl std::hash::Hash + std::fmt::Debug,
+        text: &'a mut String,
+        unit: ParamUnit,
+    ) -> Self {
+        FormulaField {
+            id_salt: egui::Id::new(id_salt),
+            text,
+            unit,
+            width: 90.0,
+            enabled: true,
+            error_below: true,
+            label: None,
+        }
+    }
+
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = width;
+        self
+    }
+
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    pub fn error_below(mut self, below: bool) -> Self {
+        self.error_below = below;
+        self
+    }
+
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Zeigt das Feld; die Formel wird mit `scope` ausgewertet.
+    pub fn show(self, ui: &mut egui::Ui, scope: &ParamScope) -> FieldOutcome {
+        let unit = self.unit;
+        self.show_with(ui, &|f| scope.eval(f, unit))
+    }
+
+    /// Wie [`FormulaField::show`], die Formel wertet aber `eval` aus (etwa mit einer
+    /// Probetabelle im Fenster „Parameter“, damit eine Zeile sich nicht mit ihrem alten Wert
+    /// selbst berechnet).
+    pub fn show_with(
+        self,
+        ui: &mut egui::Ui,
+        eval: &dyn Fn(&str) -> Result<f64, String>,
+    ) -> FieldOutcome {
+        let FormulaField {
+            id_salt,
+            text,
+            unit,
+            width,
+            enabled,
+            error_below,
+            label,
+        } = self;
+        let dark = ui.visuals().dark_mode;
+        let result = match classify(text) {
+            Some(FieldInput::Formula(f)) => Some(eval(&f)),
+            _ => None,
+        };
+        let mut fx_clicked = false;
+        let inner = ui.vertical(|ui| {
+            let row = ui.horizontal(|ui| {
+                if result.is_some() {
+                    let valid = matches!(result, Some(Ok(_)));
+                    let fx = ui
+                        .add_enabled(
+                            enabled && valid,
+                            egui::Button::new(egui::RichText::new(FX).italics()).frame(false),
+                        )
+                        .on_hover_text(FX_HINT)
+                        .on_disabled_hover_text(FX_HINT);
+                    theme::focus_ring(ui, &fx);
+                    if fx.clicked()
+                        && let Some(Ok(v)) = result
+                    {
+                        *text = number_text(v);
+                        fx_clicked = true;
+                    }
+                }
+                let response = theme::text_field_enabled(
+                    ui,
+                    enabled,
+                    egui::TextEdit::singleline(text)
+                        .id_salt(id_salt)
+                        .desired_width(width),
+                );
+                if let Some(l) = &label {
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, enabled, l)
+                    });
+                }
+                match &result {
+                    Some(Ok(v)) => {
+                        let shown = value_text(*v, unit);
+                        // Große Werte schneidet die Zelle ab; der Hinweis zeigt alles.
+                        ui.add(egui::Label::new(theme::value(shown.clone())).truncate())
+                            .on_hover_text(shown);
+                    }
+                    Some(Err(_)) => {}
+                    None => {
+                        if !unit.suffix().is_empty() {
+                            ui.label(unit.suffix());
+                        }
+                    }
+                }
+                response
+            });
+            if error_below && let Some(Err(e)) = &result {
+                ui.colored_label(theme::palette(dark).error, e);
+            }
+            row.inner
+        });
+        let response = inner.inner;
+        let committed = enabled && commit_signal(ui, &response);
+        FieldOutcome {
+            response,
+            committed,
+            fx_clicked,
+            error: match result {
+                Some(Err(e)) => Some(e),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// Kurzform von [`FormulaField`]: Feld mit fester Kennung `id_salt` und Textbreite `width`,
+/// Formel mit `scope` ausgewertet, Meldung unter dem Feld.
 pub fn formula_field(
     ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
     text: &mut String,
     unit: ParamUnit,
     scope: &ParamScope,
     width: f32,
 ) -> FieldOutcome {
-    formula_field_with(ui, text, unit, &|f| scope.eval(f, unit), width)
-}
-
-/// Wie [`formula_field`], die Formel wertet aber `eval` aus (etwa mit einer Probetabelle im
-/// Fenster „Parameter“, damit eine Zeile sich nicht mit ihrem alten Wert selbst berechnet).
-pub fn formula_field_with(
-    ui: &mut egui::Ui,
-    text: &mut String,
-    unit: ParamUnit,
-    eval: &dyn Fn(&str) -> Result<f64, String>,
-    width: f32,
-) -> FieldOutcome {
-    let dark = ui.visuals().dark_mode;
-    let input = classify(text);
-    let result = match &input {
-        Some(FieldInput::Formula(f)) => Some(eval(f)),
-        _ => None,
-    };
-    let mut fx_clicked = false;
-    let inner = ui.vertical(|ui| {
-        let row = ui.horizontal(|ui| {
-            if result.is_some() {
-                let valid = matches!(result, Some(Ok(_)));
-                let fx = ui
-                    .add_enabled(
-                        valid,
-                        egui::Button::new(egui::RichText::new(FX).italics()).frame(false),
-                    )
-                    .on_hover_text(FX_HINT)
-                    .on_disabled_hover_text(FX_HINT);
-                theme::focus_ring(ui, &fx);
-                if fx.clicked()
-                    && let Some(Ok(v)) = result
-                {
-                    *text = number_text(v);
-                    fx_clicked = true;
-                }
-            }
-            let response =
-                theme::text_field(ui, egui::TextEdit::singleline(text).desired_width(width));
-            match &result {
-                Some(Ok(v)) => {
-                    ui.label(theme::value(value_text(*v, unit)));
-                }
-                Some(Err(_)) => {}
-                None => {
-                    if !unit.suffix().is_empty() {
-                        ui.label(unit.suffix());
-                    }
-                }
-            }
-            response
-        });
-        if let Some(Err(e)) = &result {
-            ui.colored_label(theme::palette(dark).error, e);
-        }
-        row.inner
-    });
-    let response = inner.inner;
-    let committed = commit_signal(ui, &response);
-    FieldOutcome {
-        response,
-        committed,
-        fx_clicked,
-    }
+    FormulaField::new(id_salt, text, unit)
+        .width(width)
+        .show(ui, scope)
 }
 
 /// Übernahme eines Textfelds: Enter, oder das Feld wurde nach einer Änderung verlassen (Plan
