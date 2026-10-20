@@ -92,7 +92,8 @@ pub fn evaluate(e: &Expr, lookup: &dyn Fn(&str) -> Option<(f64, ParamUnit)>) -> 
 pub fn fit_unit(value: f64, dim: Dim, want: ParamUnit) -> Result<f64, ExprError>;
 pub fn eval_text(text: &str, want: ParamUnit, lookup: &dyn Fn(&str) -> Option<(f64, ParamUnit)>) -> Result<f64, ExprError>;
 pub fn plain_number(text: &str) -> Option<f64>;   // genau wie planora_app::sketch_view::parse_number
-pub fn number_text(v: f64) -> String;             // v.to_string() mit Komma: verlustfrei hin und zurück
+pub fn number_text(v: f64) -> String;             // v.to_string() mit Komma: verlustfrei hin und zurück, nie "-0" (kann > 200 Zeichen sein)
+pub fn value_text(v: f64) -> Result<String, ExprError>; // number_text, aber nur endlich und ≤ 200 Zeichen (für Formeln, z. B. „Durch den Wert ersetzen“), sonst Meldung „Wert zu lang“
 pub fn short_number(v: f64) -> String;            // höchstens 2 Nachkommastellen, Nullen weg, Komma, nie "-0"
 pub fn check_name(name: &str) -> Result<(), ExprError>;
 pub fn same_name(a: &str, b: &str) -> bool;       // a.to_lowercase() == b.to_lowercase()
@@ -126,6 +127,10 @@ Grammatik (absteigender Parser): `sum := prod (('+'|'-') prod)*`, `prod := unary
 | Potenz Einheit | `Eine Länge oder ein Winkel lässt sich nur mit einer ganzen Zahl potenzieren.` |
 | Winkelfunktion | `„{f}“ braucht einen Winkel oder eine Zahl.` |
 | Mischung | `Länge und Winkel lassen sich nicht zusammenrechnen.` |
+| Einheiten ungleich (Fix-Runde Aufgabe 1) | `Die Einheiten passen nicht zusammen: {A} und {B} lassen sich nicht zusammenrechnen.` mit A, B ∈ {„Länge“, „Fläche“, „Rauminhalt“, „Winkel“, „eine andere Einheit“} (linker, dann rechter Wert; Länge mit Winkel bleibt „Mischung“) |
+| Einheiten ungleich, beide unbenannt | `Die Einheiten passen nicht zusammen.` |
+| Exponent mit Einheit (Fix-Runde Aufgabe 1) | `Der Exponent darf keine Einheit haben.` (`2^Breite`; „Potenz Einheit“ bleibt für `Breite^1,5`) |
+| Wert zu lang (Fix-Runde Aufgabe 1) | `Der Wert lässt sich nicht als Zahl mit höchstens 200 Zeichen schreiben.` (`value_text`: nicht endlich oder Zahltext > 200 Zeichen, etwa ab 1e200 oder unter 1e-190) |
 | nicht endlich | `Das Ergebnis ist zu groß oder keine Zahl.` |
 | Einheit | `Hier wird {soll} erwartet, die Formel ergibt {ist}.` mit soll ∈ {„eine Länge“, „ein Winkel“, „eine Zahl“}, ist ∈ {„eine Länge“, „einen Winkel“, „eine Zahl“, „eine andere Einheit“} |
 | Name leer | `Der Name darf nicht leer sein.` |

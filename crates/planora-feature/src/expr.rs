@@ -8,8 +8,8 @@
 //! `atom := zahl | name | name '(' args ')' | '(' sum ')'`.
 //!
 //! **P4 Einheiten:** Ausdrücke rechnen mit Exponenten von Länge und Winkel ([`Dim`]). Bei
-//! `+`, `-`, `min`, `max` passt eine reine Zahl zu allem; Länge mit Winkel (allgemein zwei
-//! verschiedene Einheiten) ist ein Fehler. `*` und `/` addieren bzw. ziehen Exponenten ab;
+//! `+`, `-`, `min`, `max` passt eine reine Zahl zu allem; Länge mit Winkel ist ein Fehler
+//! („Mischung“), andere ungleiche Einheiten (mm + mm²) nennen beide Einheiten. `*` und `/` addieren bzw. ziehen Exponenten ab;
 //! `^` mit Einheit nur mit ganzzahligem, einheitenlosem Exponenten; `sqrt` nur bei geraden
 //! Exponenten. `sin`, `cos`, `tan` nehmen einen Winkel oder eine Zahl, beides in Grad, und
 //! ergeben eine Zahl. Ein Feld nimmt seine Einheit oder eine reine Zahl an ([`fit_unit`]).
@@ -48,7 +48,11 @@ const SQRT_NEG: &str = "Die Wurzel einer negativen Zahl gibt es nicht.";
 const SQRT_UNIT: &str = "„sqrt“ passt hier nicht zur Einheit.";
 const POW_UNIT: &str =
     "Eine Länge oder ein Winkel lässt sich nur mit einer ganzen Zahl potenzieren.";
+const POW_EXP_UNIT: &str = "Der Exponent darf keine Einheit haben.";
 const MIX: &str = "Länge und Winkel lassen sich nicht zusammenrechnen.";
+const UNITS_DIFFER: &str = "Die Einheiten passen nicht zusammen.";
+const VALUE_TOO_LONG: &str =
+    "Der Wert lässt sich nicht als Zahl mit höchstens 200 Zeichen schreiben.";
 const NOT_FINITE: &str = "Das Ergebnis ist zu groß oder keine Zahl.";
 const NAME_EMPTY: &str = "Der Name darf nicht leer sein.";
 const NAME_FORM: &str =
@@ -531,15 +535,37 @@ pub fn parse(text: &str) -> Result<Expr, ExprError> {
 
 type Lookup<'a> = &'a dyn Fn(&str) -> Option<(f64, ParamUnit)>;
 
+/// Name einer Einheit in Meldungen über unpassende Einheiten.
+fn dim_name(d: Dim) -> &'static str {
+    match (d.length, d.angle) {
+        (1, 0) => "Länge",
+        (2, 0) => "Fläche",
+        (3, 0) => "Rauminhalt",
+        (0, 1) => "Winkel",
+        _ => "eine andere Einheit",
+    }
+}
+
 /// Gemeinsame Einheit für `+`, `-`, `min`, `max`: eine reine Zahl passt zu allem.
 fn join(a: Dim, b: Dim) -> Result<Dim, ExprError> {
     if a == b || b == Dim::NUMBER {
-        Ok(a)
-    } else if a == Dim::NUMBER {
-        Ok(b)
-    } else {
-        fail(MIX)
+        return Ok(a);
     }
+    if a == Dim::NUMBER {
+        return Ok(b);
+    }
+    let length = Dim::of(ParamUnit::Length);
+    let angle = Dim::of(ParamUnit::Angle);
+    if (a == length && b == angle) || (a == angle && b == length) {
+        return fail(MIX);
+    }
+    let (na, nb) = (dim_name(a), dim_name(b));
+    if na == nb {
+        return fail(UNITS_DIFFER);
+    }
+    fail(format!(
+        "Die Einheiten passen nicht zusammen: {na} und {nb} lassen sich nicht zusammenrechnen."
+    ))
 }
 
 fn dim_op(a: Dim, b: Dim, f: fn(i32, i32) -> Option<i32>) -> Result<Dim, ExprError> {
@@ -613,122 +639,136 @@ fn cos_deg(deg: f64) -> f64 {
     })
 }
 
+/// Wertet einen Knoten aus. Jedes Zwischenergebnis muss endlich sein (kein stilles
+/// `min(10^400; 1) = 1`) und „-0“ wird zu 0. Zweierknoten und Funktionsaufrufe stehen in
+/// eigenen Funktionen, damit der Rahmen dieser rekursiven Funktion klein bleibt.
 fn eval_node(node: &Node, lookup: Lookup<'_>) -> Result<(f64, Dim), ExprError> {
     let (v, d) = match node {
         Node::Num(v) => (*v, Dim::NUMBER),
         Node::Pi => (PI, Dim::NUMBER),
-        Node::Name(name) => match lookup(name) {
-            Some((v, unit)) => (v, Dim::of(unit)),
-            None => return fail(format!("Den Namen „{name}“ gibt es nicht.")),
-        },
+        Node::Name(name) => eval_name(name, lookup)?,
         Node::Neg(inner) => {
             let (v, d) = eval_node(inner, lookup)?;
             (-v, d)
         }
-        Node::Bin(op, l, r) => {
-            let (a, da) = eval_node(l, lookup)?;
-            let (b, db) = eval_node(r, lookup)?;
-            match op {
-                Op::Add => (a + b, join(da, db)?),
-                Op::Sub => (a - b, join(da, db)?),
-                Op::Mul => (a * b, dim_op(da, db, i32::checked_add)?),
-                Op::Div => {
-                    if b == 0.0 {
-                        return fail(DIV_ZERO);
-                    }
-                    (a / b, dim_op(da, db, i32::checked_sub)?)
-                }
-                Op::Pow => {
-                    if db != Dim::NUMBER {
-                        return fail(POW_UNIT);
-                    }
-                    let d = if da == Dim::NUMBER {
-                        Dim::NUMBER
-                    } else {
-                        if b.fract() != 0.0 {
-                            return fail(POW_UNIT);
-                        }
-                        if b.abs() > f64::from(i32::MAX) {
-                            return fail(NOT_FINITE);
-                        }
-                        let n = Dim {
-                            length: b as i32,
-                            angle: b as i32,
-                        };
-                        dim_op(da, n, i32::checked_mul)?
-                    };
-                    (a.powf(b), d)
-                }
-            }
-        }
-        Node::Call(func, args) => {
-            let mut vals = Vec::with_capacity(args.len());
-            for arg in args {
-                vals.push(eval_node(arg, lookup)?);
-            }
-            let (x, dx) = vals[0];
-            let angle_ok = dx == Dim::NUMBER || dx == Dim::of(ParamUnit::Angle);
-            let trig = || -> Result<(), ExprError> {
-                if angle_ok {
-                    Ok(())
-                } else {
-                    fail(format!(
-                        "„{}“ braucht einen Winkel oder eine Zahl.",
-                        func.name()
-                    ))
-                }
-            };
-            match func {
-                Func::Sqrt => {
-                    if dx.length % 2 != 0 || dx.angle % 2 != 0 {
-                        return fail(SQRT_UNIT);
-                    }
-                    if x < 0.0 {
-                        return fail(SQRT_NEG);
-                    }
-                    let d = Dim {
-                        length: dx.length / 2,
-                        angle: dx.angle / 2,
-                    };
-                    (x.sqrt(), d)
-                }
-                Func::Sin => {
-                    trig()?;
-                    (sin_deg(x), Dim::NUMBER)
-                }
-                Func::Cos => {
-                    trig()?;
-                    (cos_deg(x), Dim::NUMBER)
-                }
-                Func::Tan => {
-                    trig()?;
-                    let c = cos_deg(x);
-                    if c == 0.0 {
-                        return fail(NOT_FINITE);
-                    }
-                    (no_neg_zero(sin_deg(x) / c), Dim::NUMBER)
-                }
-                Func::Abs => (x.abs(), dx),
-                Func::Round => (x.round(), dx),
-                Func::Min | Func::Max => {
-                    let mut acc = (x, dx);
-                    for &(v, d) in &vals[1..] {
-                        let m = if *func == Func::Min {
-                            acc.0.min(v)
-                        } else {
-                            acc.0.max(v)
-                        };
-                        acc = (m, join(acc.1, d)?);
-                    }
-                    acc
-                }
-            }
-        }
+        Node::Bin(op, l, r) => eval_bin(*op, l, r, lookup)?,
+        Node::Call(func, args) => eval_call(*func, args, lookup)?,
     };
     if !v.is_finite() {
         return fail(NOT_FINITE);
     }
-    Ok((v, d))
+    Ok((no_neg_zero(v), d))
+}
+
+#[inline(never)]
+fn eval_name(name: &str, lookup: Lookup<'_>) -> Result<(f64, Dim), ExprError> {
+    match lookup(name) {
+        Some((v, unit)) => Ok((v, Dim::of(unit))),
+        None => fail(format!("Den Namen „{name}“ gibt es nicht.")),
+    }
+}
+
+#[inline(never)]
+fn eval_bin(op: Op, l: &Node, r: &Node, lookup: Lookup<'_>) -> Result<(f64, Dim), ExprError> {
+    let (a, da) = eval_node(l, lookup)?;
+    let (b, db) = eval_node(r, lookup)?;
+    Ok(match op {
+        Op::Add => (a + b, join(da, db)?),
+        Op::Sub => (a - b, join(da, db)?),
+        Op::Mul => (a * b, dim_op(da, db, i32::checked_add)?),
+        Op::Div => {
+            if b == 0.0 {
+                return fail(DIV_ZERO);
+            }
+            (a / b, dim_op(da, db, i32::checked_sub)?)
+        }
+        Op::Pow => {
+            if db != Dim::NUMBER {
+                return fail(POW_EXP_UNIT);
+            }
+            let d = if da == Dim::NUMBER {
+                Dim::NUMBER
+            } else {
+                if b.fract() != 0.0 {
+                    return fail(POW_UNIT);
+                }
+                if b.abs() > f64::from(i32::MAX) {
+                    return fail(NOT_FINITE);
+                }
+                let n = Dim {
+                    length: b as i32,
+                    angle: b as i32,
+                };
+                dim_op(da, n, i32::checked_mul)?
+            };
+            (a.powf(b), d)
+        }
+    })
+}
+
+#[inline(never)]
+fn eval_call(func: Func, args: &[Node], lookup: Lookup<'_>) -> Result<(f64, Dim), ExprError> {
+    let mut vals = Vec::with_capacity(args.len());
+    for arg in args {
+        vals.push(eval_node(arg, lookup)?);
+    }
+    let (x, dx) = vals[0];
+    let angle_ok = dx == Dim::NUMBER || dx == Dim::of(ParamUnit::Angle);
+    let trig = || -> Result<(), ExprError> {
+        if angle_ok {
+            Ok(())
+        } else {
+            fail(format!(
+                "„{}“ braucht einen Winkel oder eine Zahl.",
+                func.name()
+            ))
+        }
+    };
+    Ok(match func {
+        Func::Sqrt => {
+            if dx.length % 2 != 0 || dx.angle % 2 != 0 {
+                return fail(SQRT_UNIT);
+            }
+            if x < 0.0 {
+                return fail(SQRT_NEG);
+            }
+            let d = Dim {
+                length: dx.length / 2,
+                angle: dx.angle / 2,
+            };
+            (x.sqrt(), d)
+        }
+        Func::Sin => {
+            trig()?;
+            (sin_deg(x), Dim::NUMBER)
+        }
+        Func::Cos => {
+            trig()?;
+            (cos_deg(x), Dim::NUMBER)
+        }
+        Func::Tan => {
+            trig()?;
+            let c = cos_deg(x);
+            if c == 0.0 {
+                return fail(NOT_FINITE);
+            }
+            (sin_deg(x) / c, Dim::NUMBER)
+        }
+        Func::Abs => (x.abs(), dx),
+        Func::Round => (x.round(), dx),
+        Func::Min | Func::Max => {
+            let mut acc = (x, dx);
+            for &(v, d) in &vals[1..] {
+                let m = if func == Func::Min {
+                    acc.0.min(v)
+                } else {
+                    acc.0.max(v)
+                };
+                acc = (m, join(acc.1, d)?);
+            }
+            acc
+        }
+    })
 }
 
 /// Wertet eine zerlegte Formel aus. `lookup` bekommt Namen wie geschrieben und vergleicht
@@ -758,7 +798,7 @@ pub fn fit_unit(value: f64, dim: Dim, want: ParamUnit) -> Result<f64, ExprError>
         return fail(NOT_FINITE);
     }
     if dim == Dim::of(want) || dim == Dim::NUMBER {
-        return Ok(value);
+        return Ok(no_neg_zero(value));
     }
     let soll = match want {
         ParamUnit::Length => "eine Länge",
@@ -796,9 +836,27 @@ pub fn plain_number(text: &str) -> Option<f64> {
         .filter(|v| v.is_finite())
 }
 
-/// Zahl als Text mit Komma, verlustfrei: `plain_number(&number_text(v)) == Some(v)`.
+/// Zahl als Text mit Komma, verlustfrei: `plain_number(&number_text(v)) == Some(v)`
+/// („-0“ wird „0“). Kann bei sehr großen oder sehr kleinen Beträgen (ab etwa 1e200 bzw.
+/// unter etwa 1e-190) länger als [`MAX_FORMULA_CHARS`] werden; wer den Text als Formel
+/// speichert, nimmt [`value_text`].
 pub fn number_text(v: f64) -> String {
-    v.to_string().replace('.', ",")
+    no_neg_zero(v).to_string().replace('.', ",")
+}
+
+/// Zahltext für eine Formel (zum Beispiel „Durch den Wert ersetzen“): wie [`number_text`],
+/// aber nur, wenn der Wert endlich ist und der Text höchstens [`MAX_FORMULA_CHARS`] Zeichen
+/// hat; dann ergibt `parse` + Auswerten bitgenau denselben Wert. Sonst eine Meldung, und
+/// der Aufrufer lehnt ab.
+pub fn value_text(v: f64) -> Result<String, ExprError> {
+    if !v.is_finite() {
+        return fail(VALUE_TOO_LONG);
+    }
+    let text = number_text(v);
+    if text.chars().count() > MAX_FORMULA_CHARS {
+        return fail(VALUE_TOO_LONG);
+    }
+    Ok(text)
 }
 
 /// Zahl für die Anzeige: höchstens zwei Nachkommastellen, ohne Nullen am Ende, mit Komma,

@@ -3,7 +3,7 @@
 
 use planora_feature::expr::{
     ExprError, ParamDef, ParamUnit, TableError, check_name, eval_text, evaluate_table, number_text,
-    parse, plain_number, references, rename_in, same_name, short_number,
+    parse, plain_number, references, rename_in, same_name, short_number, value_text,
 };
 use std::f64::consts::PI;
 
@@ -90,6 +90,24 @@ fn functions_pi_and_commas() {
     assert_eq!(ev("sin(30)"), 0.5);
     assert_eq!(ev("cos(60)"), 0.5);
     assert_eq!(ev("tan(45)"), 1.0);
+    assert_eq!(ev("cos(30)"), 3f64.sqrt() / 2.0);
+    assert_eq!(ev("sin(60)"), 3f64.sqrt() / 2.0);
+    assert_eq!(ev("cos(45)"), std::f64::consts::FRAC_1_SQRT_2);
+    // Kosinus in allen Vierteln, auch für negative Winkel (Vorzeichen!).
+    assert_eq!(ev("cos(-30)"), 3f64.sqrt() / 2.0);
+    assert!((ev("cos(200)") - 200f64.to_radians().cos()).abs() < 1e-15);
+    assert!(ev("cos(200)") < -0.93);
+    assert!((ev("cos(250)") - 250f64.to_radians().cos()).abs() < 1e-15);
+    assert_eq!(ev("cos(300)"), 0.5);
+    assert!((ev("cos(-80)") - 80f64.to_radians().cos()).abs() < 1e-15);
+    assert!((ev("cos(340)") - 340f64.to_radians().cos()).abs() < 1e-15);
+    assert_eq!(ev("cos(240)"), -0.5);
+    assert_eq!(ev("tan(-45)"), -1.0);
+    assert!((ev("tan(300)") + 3f64.sqrt()).abs() < 1e-15);
+    assert!((ev("tan(200)") - 200f64.to_radians().tan()).abs() < 1e-15);
+    // Winzige negative Winkel landen nicht im Viertel „360°“.
+    assert_eq!(ev("sin(-0,00000000000000000001)"), 0.0);
+    assert_eq!(ev("cos(-0,00000000000000000001)"), 1.0);
     assert_eq!(ev("cos(90)"), 0.0);
     assert_eq!(ev("sin(180)"), 0.0);
     assert!(ev("sin(180)").is_sign_positive());
@@ -109,6 +127,25 @@ fn functions_pi_and_commas() {
     assert_eq!(ev("max(1,5;1)"), 1.5);
     assert_eq!(ev_err("1,5,3"), "Unerwartetes Zeichen „,“ an Stelle 4.");
     assert_eq!(ev_err("1;2"), "Unerwartetes Zeichen „;“ an Stelle 2.");
+    // Ein Komma zwischen Ziffern, das zu keiner Zahl mehr gehört, trennt nicht still.
+    assert_eq!(
+        ev_err("min(1,5,3)"),
+        "Unerwartetes Zeichen „,“ an Stelle 8."
+    );
+    assert_eq!(
+        eval_text("min(k1,5)", ParamUnit::Number, &|_| Some((
+            1.0,
+            ParamUnit::Number
+        )))
+        .unwrap_err()
+        .0,
+        "Unerwartetes Zeichen „,“ an Stelle 7."
+    );
+    // Tabulator und geschütztes Leerzeichen sind Leerraum.
+    assert_eq!(ev("2\t*\u{a0}3"), 6.0);
+    assert_eq!(ev("min(1,\u{a0}5)"), 1.0);
+    assert_eq!(ev("\t\n 4 \u{a0}"), 4.0);
+    assert_eq!(ev_err("\t\u{a0}"), "Die Formel ist leer.");
 }
 
 #[test]
@@ -131,6 +168,70 @@ fn numbers_round_trip() {
     }
     assert_eq!(number_text(2.5), "2,5");
     assert_eq!(number_text(40.0), "40");
+    // Nie „-0“: weder als Text noch als Ergebnis (bitgenauer Vergleich mit 0).
+    assert_eq!(number_text(-0.0), "0");
+    for t in [
+        "-0",
+        "round(-0,4)",
+        "sqrt(-0)",
+        "0*-1",
+        "-(1-1)",
+        "abs(0)*-2",
+    ] {
+        assert_eq!(ev(t).to_bits(), 0f64.to_bits(), "{t}");
+    }
+    assert_eq!(
+        eval_text("-0", ParamUnit::Length, &|_| None)
+            .unwrap()
+            .to_bits(),
+        0f64.to_bits()
+    );
+    assert_eq!(
+        planora_feature::expr::fit_unit(-0.0, planora_feature::expr::Dim::NUMBER, ParamUnit::Angle)
+            .unwrap()
+            .to_bits(),
+        0f64.to_bits()
+    );
+    let raw = planora_feature::expr::evaluate(&parse("-0*Breite").unwrap(), &sc).unwrap();
+    assert_eq!(raw.0.to_bits(), 0f64.to_bits());
+    // value_text: höchstens 200 Zeichen, als Formel bitgenau derselbe Wert.
+    for v in [
+        0.0,
+        -0.0,
+        2.5,
+        -12.5,
+        1.0 / 3.0,
+        1e-7,
+        1e199,
+        -1e198,
+        1e-180,
+        -2.2250738585072014e-180,
+        123456.789,
+    ] {
+        let t = value_text(v).unwrap();
+        assert!(t.chars().count() <= 200, "{v}");
+        assert_eq!(ev(&t).to_bits(), (v + 0.0).to_bits(), "{v}");
+        assert_eq!(
+            plain_number(&t).unwrap().to_bits(),
+            (v + 0.0).to_bits(),
+            "{v}"
+        );
+    }
+    assert_eq!(value_text(1e199).unwrap().chars().count(), 200);
+    const VALUE_LONG: &str =
+        "Der Wert lässt sich nicht als Zahl mit höchstens 200 Zeichen schreiben.";
+    for v in [
+        1e200,
+        -1e199,
+        1e300,
+        f64::MAX,
+        5e-324,
+        -1e-250,
+        f64::INFINITY,
+        f64::NAN,
+    ] {
+        assert_eq!(value_text(v).unwrap_err().0, VALUE_LONG, "{v}");
+    }
     assert_eq!(short_number(0.0), "0");
     assert_eq!(short_number(-0.0), "0");
     assert_eq!(short_number(12.5), "12,5");
@@ -191,7 +292,33 @@ fn units() {
     assert_eq!(sc_err("Breite-w", Length), MIX);
     assert_eq!(sc_err("min(Breite; w)", Length), MIX);
     assert_eq!(sc_err("max(w; 1; Breite)", Length), MIX);
-    assert_eq!(sc_err("Breite + Breite^2", Length), MIX);
+    assert_eq!(sc_err("w-Breite", Length), MIX);
+    assert_eq!(
+        sc_err("Breite + Breite^2", Length),
+        "Die Einheiten passen nicht zusammen: Länge und Fläche lassen sich nicht zusammenrechnen."
+    );
+    assert_eq!(
+        sc_err("Breite^3 - Breite^2", Length),
+        "Die Einheiten passen nicht zusammen: Rauminhalt und Fläche lassen sich nicht zusammenrechnen."
+    );
+    assert_eq!(
+        sc_err("min(w; w^2)", Angle),
+        "Die Einheiten passen nicht zusammen: Winkel und eine andere Einheit lassen sich nicht zusammenrechnen."
+    );
+    assert_eq!(
+        sc_err("Breite^4 + Breite*w", Length),
+        "Die Einheiten passen nicht zusammen."
+    );
+    assert_eq!(sc_ok("sqrt(Breite^2*Breite^2)/Breite", Length), 40.0);
+    assert_eq!(
+        sc_err("sqrt(w)", Number),
+        "„sqrt“ passt hier nicht zur Einheit."
+    );
+    assert_eq!(
+        sc_err("sqrt(w*Breite^2)", Number),
+        "„sqrt“ passt hier nicht zur Einheit."
+    );
+    assert_eq!(sc_ok("sqrt(w^2)", Angle), 30.0);
     assert_eq!(
         sc_err("sin(Breite)", Number),
         "„sin“ braucht einen Winkel oder eine Zahl."
@@ -210,7 +337,11 @@ fn units() {
     );
     assert_eq!(
         sc_err("2^Breite", Number),
-        "Eine Länge oder ein Winkel lässt sich nur mit einer ganzen Zahl potenzieren."
+        "Der Exponent darf keine Einheit haben."
+    );
+    assert_eq!(
+        sc_err("Breite^w", Length),
+        "Der Exponent darf keine Einheit haben."
     );
 }
 
@@ -288,6 +419,22 @@ fn errors_and_limits() {
         DEEP
     );
     assert_eq!(ev(&format!("{}1{}", "-(".repeat(32), ")".repeat(32))), 1.0);
+    // Funktionsaufrufe zählen als Ebene.
+    let neg_abs = |n: usize| format!("{}1{}", "-abs(".repeat(n), ")".repeat(n));
+    assert_eq!(neg_abs(33).chars().count(), 199);
+    assert_eq!(ev_err(&neg_abs(33)), DEEP);
+    assert_eq!(ev(&neg_abs(32)), -1.0);
+    // Die 65. Ebene ist selbst ein Funktionsaufruf.
+    let call_last = format!("{}abs(1){}", "-abs(".repeat(32), ")".repeat(32));
+    assert_eq!(call_last.chars().count(), 198);
+    assert_eq!(ev_err(&call_last), DEEP);
+
+    // Jedes Zwischenergebnis muss endlich sein, auch wenn das Endergebnis es wäre.
+    const BIG: &str = "Das Ergebnis ist zu groß oder keine Zahl.";
+    assert_eq!(ev_err("min(10^400; 1)"), BIG);
+    assert_eq!(ev_err("1/10^400"), BIG);
+    assert_eq!(ev_err("max(-(10^400); 1)"), BIG);
+    assert_eq!(ev_err("10^308*10 - 10^308*10"), BIG);
 }
 
 #[test]
@@ -484,6 +631,20 @@ fn table() {
     let values = evaluate_table(&defs).unwrap();
     assert_eq!(values[0], 500.0);
     assert_eq!(values[499], 1.0);
+    // Kreis, der nicht in Tabellenreihenfolge gefunden wird: Glieder nach Tabelle sortiert,
+    // Zeile ist das erste Kreisglied, nicht der Abhängige „y“.
+    assert_eq!(
+        evaluate_table(&[
+            def("y", "d", Length),
+            def("e", "d", Length),
+            def("d", "c", Length),
+            def("c", "e", Length),
+        ]),
+        Err(TableError {
+            index: 1,
+            message: "Die Parameter „e“, „d“, „c“ hängen im Kreis voneinander ab.".into()
+        })
+    );
     // Ein Kreis über 500 Parameter wird ohne Stapelüberlauf erkannt.
     let mut ring = chain.clone();
     ring[499].1 = "p500+1".into();
@@ -492,6 +653,34 @@ fn table() {
     assert_eq!(e.index, 0);
     assert!(e.message.starts_with("Die Parameter „p500“, „p499“, "));
     assert!(e.message.ends_with("„p1“ hängen im Kreis voneinander ab."));
+}
+
+/// Die ungünstigsten 200-Zeichen-Formeln lassen sich auf einem kleinen Stapel (512 KiB,
+/// Debug-Build) zerlegen und auswerten, wie später tief in der Oberfläche („= Wert“).
+#[test]
+fn worst_formulas_on_small_stack() {
+    let run = || {
+        let chain = format!("{}1", "1-".repeat(99));
+        let parens = format!("{}1{}", "(".repeat(64), ")".repeat(64));
+        let parens_chain = format!("{}{}1{}", "(".repeat(64), "1-".repeat(35), ")".repeat(64));
+        let minus = format!("{}1", "-".repeat(64));
+        let pow = format!("{}1", "1^".repeat(64));
+        let calls = format!("{}1{}", "-abs(".repeat(32), ")".repeat(32));
+        let mins = format!("{}1{}", "min(1;".repeat(28), ")".repeat(28));
+        let mut out = Vec::new();
+        for f in [chain, parens, parens_chain, minus, pow, calls, mins] {
+            assert!(f.chars().count() <= 200, "{f}");
+            out.push(eval_text(&f, ParamUnit::Number, &|_| None).unwrap());
+        }
+        out
+    };
+    let values = std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(run)
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(values, vec![-98.0, 1.0, -34.0, 1.0, 1.0, -1.0, 1.0]);
 }
 
 #[test]
