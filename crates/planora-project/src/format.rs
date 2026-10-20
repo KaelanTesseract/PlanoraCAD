@@ -75,6 +75,21 @@ pub struct SketchFormulaDto {
     pub formel: String,
 }
 
+/// Höchstlänge eines Fremdtexts aus der Datei in einer Meldung (Zeichen, samt „…“).
+pub(crate) const MAX_QUOTED_CHARS: usize = 40;
+
+/// Kürzt einen Text aus der Datei für eine Meldung auf höchstens [`MAX_QUOTED_CHARS`] Zeichen
+/// (39 Zeichen und „…“); zählt Zeichen, nicht Bytes, und schneidet nie mitten in einem Zeichen.
+pub(crate) fn quoted(text: &str) -> String {
+    if text.chars().count() <= MAX_QUOTED_CHARS {
+        text.to_string()
+    } else {
+        let mut s: String = text.chars().take(MAX_QUOTED_CHARS - 1).collect();
+        s.push('…');
+        s
+    }
+}
+
 /// Höchstzahl der Parameter beim Lesen (eine mehr, damit die Prüfung danach im Klartext meldet).
 const MAX_FILE_PARAMETERS: usize = planora_feature::MAX_PARAMETERS + 1;
 
@@ -101,7 +116,8 @@ fn de_formula_map<'de, D: serde::Deserializer<'de>>(
             while let Some((k, v)) = map.next_entry::<String, String>()? {
                 if out.contains_key(&k) {
                     return Err(serde::de::Error::custom(format!(
-                        "Das Formelfeld „{k}“ kommt doppelt vor"
+                        "Das Formelfeld „{}“ kommt doppelt vor",
+                        quoted(&k)
                     )));
                 }
                 out.insert(k, v);

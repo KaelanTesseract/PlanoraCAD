@@ -716,6 +716,105 @@ fn rejected_and_lenient() {
     );
 }
 
+/// Format-9-Text: Quader 1, Skizze 1 und Parameter „Breite“; `f` ändert ihn danach.
+fn text9(f: impl FnOnce(&mut Value)) -> String {
+    let mut plain = quader();
+    plain.add_feature("Skizze 1", sketch_kind(None).0).unwrap();
+    edited(&encode_version(&plain.snapshot()).unwrap(), |v| {
+        v["format"] = 9.into();
+        v["parameter"] = json!([{"id": 1, "name": "Breite", "formel": "40", "art": "laenge"}]);
+        f(v);
+    })
+}
+
+#[test]
+fn foreign_text_in_messages_is_short() {
+    // 5 MB aus „ß“ (zwei Bytes je Zeichen): gekürzt auf 39 Zeichen und „…“, ohne ein Zeichen
+    // zu zerschneiden.
+    let huge = "ß".repeat(2_500_000);
+    assert_eq!(huge.len(), 5_000_000);
+    let short = format!("„{}…“", "ß".repeat(39));
+    let check = |m: String, start: &str| {
+        assert!(m.chars().count() < 200, "Meldung zu lang: {}", m.len());
+        assert!(m.contains(&format!("{start}{short}")), "{m}");
+    };
+    check(
+        msg(&text9(|v| v["parameter"][0]["art"] = huge.clone().into())),
+        "Parameter „Breite“: unbekannte Art ",
+    );
+    check(
+        msg(&text9(|v| {
+            v["features"][0]["formeln"] = json!({ huge.clone(): "1" });
+        })),
+        "„Quader 1“: unbekanntes Formelfeld ",
+    );
+    // Doppelter langer Feldschlüssel (nur im Text möglich).
+    let one = text9(|v| v["features"][0]["formeln"] = json!({ "QQ": "1" }));
+    let dup = one.replacen(
+        "\"QQ\": \"1\"",
+        &format!("\"{huge}\": \"1\", \"{huge}\": \"2\""),
+        1,
+    );
+    check(msg(&dup), "Das Formelfeld ");
+    // Genau 40 Zeichen bleiben ganz, 41 werden gekürzt.
+    let forty = "ä".repeat(40);
+    let m = msg(&text9(|v| v["parameter"][0]["art"] = forty.clone().into()));
+    assert!(m.contains(&format!("unbekannte Art „{forty}“")), "{m}");
+    let m = msg(&text9(|v| v["parameter"][0]["art"] = "ä".repeat(41).into()));
+    assert!(
+        m.contains(&format!("unbekannte Art „{}…“", "ä".repeat(39))),
+        "{m}"
+    );
+}
+
+#[test]
+fn limits_count_characters_not_bytes() {
+    // Name: 64 × „ä“ (128 Bytes) lädt, 65 nicht.
+    assert!(load(&text9(|v| v["parameter"][0]["name"] = "ä".repeat(64).into())).is_ok());
+    let m = msg(&text9(|v| {
+        v["parameter"][0]["name"] = "ä".repeat(65).into()
+    }));
+    assert!(m.contains("Name ist zu lang"), "{m}");
+    // Kommentar: 200 × „ö“ lädt, 201 nicht.
+    let ok = load(&text9(|v| {
+        v["parameter"][0]["kommentar"] = "ö".repeat(200).into()
+    }))
+    .unwrap();
+    assert_eq!(ok.parameters()[0].comment.chars().count(), 200);
+    let m = msg(&text9(|v| {
+        v["parameter"][0]["kommentar"] = "ö".repeat(201).into()
+    }));
+    assert!(m.contains("Kommentar ist zu lang"), "{m}");
+    // Formel mit „ü“: 200 Zeichen werden gelesen, 201 nicht (Feature, Skizze, Parameter).
+    let f200 = format!("1+{}", "ü".repeat(198));
+    let f201 = format!("1+{}", "ü".repeat(199));
+    assert_eq!((f200.chars().count(), f201.chars().count()), (200, 201));
+    let feature = |t: &str| {
+        let t = t.to_string();
+        text9(move |v| v["features"][0]["formeln"] = json!({ "breite": t }))
+    };
+    let doc = load(&feature(&f200)).unwrap();
+    assert!(matches!(doc.features()[0].status, FeatureStatus::Error(_)));
+    assert!(msg(&feature(&f201)).contains("Die Formel ist zu lang"));
+    let sketch = |t: &str| {
+        let t = t.to_string();
+        text9(move |v| {
+            v["features"][1]["art"]["formeln"] = json!([{"abhaengigkeit": 2, "formel": t}])
+        })
+    };
+    assert!(load(&sketch(&f200)).is_ok());
+    assert!(msg(&sketch(&f201)).contains("Die Formel ist zu lang"));
+    let param = |t: &str| {
+        let t = t.to_string();
+        text9(move |v| v["parameter"][0]["formel"] = t.into())
+    };
+    assert_eq!(
+        decode_version(&param(&f200), "x").unwrap().parameters[0].formula,
+        f200
+    );
+    assert!(msg(&param(&f201)).contains("Parameter „Breite“: Die Formel ist zu lang"));
+}
+
 // ---- (f) Zu neu ---------------------------------------------------------------------------
 
 #[test]

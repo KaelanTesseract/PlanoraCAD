@@ -854,9 +854,12 @@ fn feature_formulas_from(origin: &str, f: &FeatureDto, kind: &FeatureKind) -> Re
     let mut out = Formulas::new();
     for (key, text) in &f.formeln {
         let k = FieldKey::from_file_key(key)
-            .ok_or_else(|| bad(format!("unbekanntes Formelfeld „{key}“")))?;
+            .ok_or_else(|| bad(format!("unbekanntes Formelfeld „{}“", quoted(key))))?;
         if !keys.contains(&k) {
-            return Err(bad(format!("Das Feld „{key}“ kann keine Formel haben")));
+            return Err(bad(format!(
+                "Das Feld „{}“ kann keine Formel haben",
+                quoted(key)
+            )));
         }
         out.insert(k, formula_from(origin, &format!("„{}“", f.name), text)?);
     }
@@ -895,7 +898,7 @@ fn parameters_from(origin: &str, file: &VersionFile) -> Result<(Vec<Parameter>, 
             return Err(bad("Die Kennung kommt doppelt vor".into()));
         }
         let unit = value_of(&PARAM_UNITS, &p.art)
-            .ok_or_else(|| bad(format!("unbekannte Art „{}“", p.art)))?;
+            .ok_or_else(|| bad(format!("unbekannte Art „{}“", quoted(&p.art))))?;
         if too_long(&p.kommentar, MAX_COMMENT_CHARS) {
             return Err(bad(format!(
                 "Der Kommentar ist zu lang (höchstens {MAX_COMMENT_CHARS} Zeichen)"
