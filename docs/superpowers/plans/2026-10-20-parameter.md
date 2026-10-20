@@ -575,3 +575,6 @@ Der Controller führt sie selbst aus (keine Subagent-Aufgabe): Release-Build `ca
 ## Abweichungen bei der Umsetzung
 
 (wird während der Umsetzung gefüllt)
+
+- **Aufgabe 2, Meldungen der Tabelle:** Ohne Vorsilbe stehen Namensfehler (Form, Länge, reserviert, doppelt), „Höchstens 500 Parameter.“, Kreis und Selbstbezug (sie nennen die Namen selbst) und der Kommentar; alle übrigen Fehler als `Parameter „{name}“: {meldung}`. Umbenennen auf einen vorhandenen Namen meldet den **getippten** Namen („Den Namen „tiefe“ gibt es schon.“), nicht den der späteren Zeile. „Durch den Wert ersetzen“ lehnt bei zu langem Wert mit `Parameter „{name}“: Der Wert lässt sich nicht als Zahl mit höchstens 200 Zeichen schreiben.` ab.
+- **Aufgabe 2, zusätzliche Texte:** unbekannte Kennung → `InvalidInput("Den Parameter gibt es in diesem Dokument nicht")`; Kennungen erschöpft → „Die Parameter-Kennungen sind aufgebraucht“; `build` lehnt `next_param` 0 oder `u64::MAX` mit „Der Parameterzähler ist ungültig“ ab (wie beim Feature-Zähler).

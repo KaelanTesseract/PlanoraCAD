@@ -10,6 +10,7 @@ pub mod georef;
 mod meshes;
 pub mod model;
 mod ops;
+pub mod params;
 mod parts;
 mod parts_sheets;
 pub mod recompute;
@@ -39,6 +40,7 @@ pub use model::{
     MAX_MESH_SCALE, MESH_LOCKED, MIN_MESH_SCALE, MeshId, ROTATION_NORM_TOL, SketchFeature,
     SketchPlane, StandardPlane,
 };
+pub use params::{ParamEdit, ParamId, ParamScope, Parameter};
 pub use parts_sheets::{
     FOLLOW_PAGE_DELETE, PARTS_NAME_TAKEN, PARTS_PAGE_NAME_TAKEN, PARTS_SHEET_EXISTS,
     PARTS_SHEET_RENAME,

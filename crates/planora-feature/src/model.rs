@@ -387,6 +387,12 @@ pub struct Document {
     /// Eigene Texte der Stücklistenzeilen, nach Körperkennung (Teilprojekt 3c-2); zählt wie die
     /// Zeichnungen zu [`Document::edit_count`], nicht zu [`Document::model_edit_count`].
     pub(crate) parts_overrides: BTreeMap<planora_drawing::BodyKey, planora_drawing::RowOverride>,
+    /// Parametertabelle (Tabellenreihenfolge); zählt zum Modell.
+    pub(crate) parameters: Vec<crate::params::Parameter>,
+    /// Berechnete Werte, je Zeile von `parameters` einer.
+    pub(crate) param_values: Vec<f64>,
+    /// Nächste zu vergebende Parameterkennung (beginnt bei 1).
+    pub(crate) next_param: u64,
 }
 
 /// Standard-Sehnentoleranz in Millimetern (wie in der App).
@@ -427,6 +433,9 @@ impl Document {
             drawing_edits: 0,
             project_info: None,
             parts_overrides: BTreeMap::new(),
+            parameters: Vec::new(),
+            param_values: Vec::new(),
+            next_param: 1,
         }
     }
 

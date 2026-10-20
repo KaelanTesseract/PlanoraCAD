@@ -2,6 +2,7 @@
 
 use crate::error::FeatureError;
 use crate::model::{Document, Feature, FeatureId, FeatureKind, FeatureStatus, MeshId};
+use crate::params::{Parameter, check_table};
 use planora_drawing::sheet_info::{ProjectInfo, validate_project_info};
 use planora_drawing::{BodyKey, Drawing, RowOverride};
 use planora_exchange::ExchangeMesh;
@@ -55,6 +56,10 @@ pub struct Snapshot {
     pub project_info: Option<ProjectInfo>,
     /// Eigene Texte der Stücklistenzeilen.
     pub parts_overrides: BTreeMap<BodyKey, RowOverride>,
+    /// Parametertabelle (ohne Werte; sie werden beim Bauen berechnet).
+    pub parameters: Vec<Parameter>,
+    /// Nächste Parameterkennung (mindestens 1).
+    pub next_param: u64,
 }
 
 /// Gleiche Netztabellen: gleiche Kennungen mit jeweils demselben `Arc` (nicht nur gleichem
@@ -80,13 +85,16 @@ impl Snapshot {
             && self.parts_overrides == other.parts_overrides
     }
 
-    /// Gleiches Modell: Features, Marker, Kennungszähler und Netze gleich; Zeichnungen,
-    /// Projektangaben und Stücklistentexte zählen nicht.
+    /// Gleiches Modell: Features, Marker, Kennungszähler, Netze und Parametertabelle (samt
+    /// Parameterzähler) gleich; Zeichnungen, Projektangaben und Stücklistentexte zählen nicht.
+    /// Eine Änderung nur an Parametern nimmt deshalb in [`Document::restore`] den vollen Weg.
     pub fn same_model(&self, other: &Snapshot) -> bool {
         self.features == other.features
             && self.marker == other.marker
             && self.next_id == other.next_id
             && same_meshes(&self.meshes, &other.meshes)
+            && self.parameters == other.parameters
+            && self.next_param == other.next_param
     }
 }
 
@@ -116,6 +124,8 @@ impl Document {
             next_drawing: self.next_drawing,
             project_info: self.project_info.clone(),
             parts_overrides: self.parts_overrides.clone(),
+            parameters: self.parameters.clone(),
+            next_param: self.next_param,
         }
     }
 
@@ -184,9 +194,27 @@ impl Document {
         if s.marker > s.features.len() {
             return Err(bad("Der Rückrollmarker liegt hinter dem letzten Feature"));
         }
+        // Parametertabelle vor den Features: Kennungen, dann die ganze Tabelle.
+        if s.next_param == 0 || s.next_param == u64::MAX {
+            return Err(bad("Der Parameterzähler ist ungültig"));
+        }
+        let mut seen_params = std::collections::HashSet::with_capacity(s.parameters.len());
+        for p in &s.parameters {
+            if p.id.0 == 0 || p.id.0 >= s.next_param {
+                return Err(bad("Ein Parameter hat eine ungültige Kennung"));
+            }
+            if !seen_params.insert(p.id) {
+                return Err(bad("Eine Parameter-Kennung kommt doppelt vor"));
+            }
+        }
+        let param_values = check_table(&s.parameters)
+            .map_err(|m| FeatureError::InvalidInput(format!("Parametertabelle: {m}")))?;
         let mut seen = std::collections::HashSet::with_capacity(s.features.len());
         let mut doc = Document::with_options(chord_tolerance);
         doc.next_version = first_version.max(1);
+        doc.parameters = s.parameters;
+        doc.param_values = param_values;
+        doc.next_param = s.next_param;
         for f in s.features.iter() {
             if f.id.0 == 0 || f.id.0 >= s.next_id {
                 return Err(bad("Ein Feature hat eine ungültige Kennung"));

@@ -1762,5 +1762,8 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         next_drawing,
         project_info,
         parts_overrides,
+        // Parameter speichert und liest erst Format 9 (Aufgabe 7).
+        parameters: Vec::new(),
+        next_param: 1,
     })
 }
