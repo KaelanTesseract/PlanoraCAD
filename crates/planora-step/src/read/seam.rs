@@ -10,10 +10,12 @@
 //!   Ecken zusammen; `VERTEX_LOOP`s sind beim Lesen keine Ränder geworden, ihre Punkte stehen als
 //!   Pole der Fläche (`pole_marks`) bereit;
 //! - fügt Zylinder-, Kegel- und Kugelflächen ohne Naht eine Naht hinzu ([`insert_seams`], P9):
-//!   zwischen zwei vollen Kreisen, von einem Kreis zum Pol oder (Kugel ohne Rand oder mit beiden
-//!   Polen zwischen ihren Löchern) von Pol zu Pol, immer mit Abstand zum übrigen Rand; andere
-//!   Flächen ohne Naht werden ausgelassen. Wo nur der Umlaufsinn die Seite einer Kugelfläche
-//!   bestimmt (kein Pol genannt), wird das vermerkt (`side_guessed`);
+//!   zwischen zwei vollen Kreisen, von einem Kreis zum Pol, (Kugel ohne Rand oder mit beiden
+//!   Polen zwischen ihren Löchern) von Pol zu Pol oder (Kugelfläche, deren Rand einen Pol
+//!   berührt und um die Kugel herumläuft) vom inneren zum berührten Pol, immer mit Abstand zum
+//!   übrigen Rand; andere Flächen ohne Naht werden ausgelassen. Wo nur der Umlaufsinn die Seite
+//!   einer Kugelfläche bestimmt (kein Pol genannt, oder ein Pol liegt im Rand), wird das
+//!   vermerkt (`side_guessed`);
 //! - prüft, dass jeder Rand, der in die Nähe eines Pols kommt, genau durch ihn läuft
 //!   ([`check_poles`]); sonst sähe der Kernel dort keinen Pol und der Körper käme mit falschem
 //!   Volumen an.
@@ -120,7 +122,10 @@ pub(crate) fn snap_poles(raw: &mut RawBody, tol: f64) {
 /// läge er zwischen zwei Abtastpunkten, und u spränge dort um eine halbe Periode.
 pub(crate) fn split_at_poles(raw: &mut RawBody, tol: f64) {
     let near = tol.max(linear());
-    for _ in 0..8 {
+    // So lange teilen, bis keine Kante mehr durch einen Pol läuft; jede Teilung setzt eine Ecke
+    // auf den Pol, die Zahl ist also durch Kanten × Pole begrenzt (die Schranke nur zur Sicherheit).
+    let limit = 2 * raw.edges.len() * raw.faces.len().max(1) + 16;
+    for _ in 0..limit {
         let mut found: Option<(usize, f64, DVec3)> = None;
         'faces: for f in &raw.faces {
             let poles = pole_points(&f.surface);
@@ -372,14 +377,26 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
         return sphere_piece(raw, i, &polys, tol);
     }
     // Ein Rand ohne Naht ist ein Kreis um die Achse; einer, der durch einen Pol läuft und sich
-    // trotzdem windet, erreicht den anderen Pol nicht. Schließt er sich mit dem umgekehrten Sinn
-    // der Fläche, liegt es am Sinn.
+    // trotzdem windet, läuft um die Kugel herum: Die Fläche enthält den anderen Pol im Inneren
+    // (Kugel ohne Achtel) und bekommt eine Naht vom berührten zum inneren Pol. Sonst erreicht er
+    // den anderen Pol nicht. Schließt er sich mit dem umgekehrten Sinn der Fläche, liegt es am
+    // Sinn.
     let poles = surface.pole_vs();
     for &k in &winding_loops {
         if polys[k]
             .iter()
             .any(|q| poles.iter().any(|pv| at_pole(q.y, *pv)))
         {
+            let mut seen = std::collections::HashSet::new();
+            let has_seam = f.loops.iter().flatten().any(|he| !seen.insert(he.edge));
+            if matches!(surface, Surface::Sphere { .. })
+                && winding_loops.len() == 1
+                && windings[k][0].abs() == 1
+                && windings[k][1] == 0
+                && !has_seam
+            {
+                return sphere_around_pole(raw, i, k, tol);
+            }
             let other = points_to_uv(&surface, !same_sense, &raw.loop_points(&f.loops[k]));
             return Err(if winding(&other, 0, periods[0]) == 0 {
                 twisted()
@@ -516,19 +533,6 @@ fn sphere_piece(raw: &mut RawBody, i: usize, polys: &[Vec<DVec2>], tol: f64) -> 
     if has_seam {
         return Ok(());
     }
-    if touches {
-        // Ein Pol im Rand entscheidet die Seite nicht. Berührt der Rand beide Pole (Keil,
-        // Halbkugel mit der Achse in der Schnittfläche), ist auch die Gegenfläche darstellbar:
-        // Die Seite folgt nur aus dem Umlaufsinn. Mit nur einem Pol im Rand läge der andere im
-        // Inneren der Gegenfläche; die ließe sich ohne Naht nicht bauen und wird abgelehnt.
-        let both = poles
-            .iter()
-            .all(|pv| polys.iter().flatten().any(|q| at_pole(q.y, *pv)));
-        if both && f.pole_marks.is_empty() {
-            raw.faces[i].side_guessed = true;
-        }
-        return Ok(());
-    }
     let twisted = || {
         Skip(format!(
             "Die Fläche „{}“ ist verdreht: Rand und Außenseite passen nicht zusammen.",
@@ -537,6 +541,24 @@ fn sphere_piece(raw: &mut RawBody, i: usize, polys: &[Vec<DVec2>], tol: f64) -> 
     };
     let near = tol.max(linear());
     let pole_points = pole_points(&surface);
+    if touches {
+        // Ein Pol im Rand entscheidet die Seite nicht: Auch die Gegenfläche ist darstellbar
+        // (Keil, Halbkugel mit der Achse in der Schnittfläche; beim Achtel die Kugel ohne
+        // Achtel mit einer Naht zum inneren Pol). Die Seite folgt nur aus dem Umlaufsinn. Ein
+        // Pol, den der Rand nicht berührt, liegt außerhalb (der Rand windet sich nicht um
+        // ihn): Eine Marke dort oder anderswo ist verdreht; eine Marke am berührten Pol sagt
+        // nichts.
+        for m in &f.pole_marks {
+            let at = pole_points.iter().position(|(_, q)| q.distance(*m) <= near);
+            let touched =
+                at.is_some_and(|j| polys.iter().flatten().any(|q| at_pole(q.y, poles[j])));
+            if !touched {
+                return Err(twisted());
+            }
+        }
+        raw.faces[i].side_guessed = true;
+        return Ok(());
+    }
     let marks_at_poles = f
         .pole_marks
         .iter()
@@ -570,6 +592,150 @@ fn no_room(role: &str) -> Skip {
     Skip(format!(
         "Der Fläche „{role}“ lässt sich keine Naht hinzufügen."
     ))
+}
+
+/// Anteile der Sprungstrecke am Pol, an denen die Naht zum inneren Pol versucht wird.
+const AROUND_POLE_FRACTIONS: [f64; 7] = [0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875];
+
+/// Kugelfläche, deren Rand `k` genau einen Pol berührt und sich einmal um die Achse windet: Sie
+/// enthält den anderen Pol im Inneren (Kugel ohne Achtel). Sie bekommt eine Naht vom inneren
+/// zum berührten Pol, in der Lücke, die der Rand am berührten Pol lässt (die Sprungstrecke im
+/// Parameterraum nach der Regel des Kernels), mit Abstand zum übrigen Rand und zu Löchern. Die
+/// Schleife hat dann die Form `[Naht, Rand ab dem Pol, Naht rückwärts]`. Marken: eine am inneren
+/// Pol bestätigt die Seite, eine am berührten Pol sagt nichts, jede andere ist verdreht; ohne
+/// Bestätigung folgt die Seite nur aus dem Umlaufsinn (`side_guessed`).
+fn sphere_around_pole(raw: &mut RawBody, i: usize, k: usize, tol: f64) -> Result<(), Skip> {
+    let f = &raw.faces[i];
+    let surface = f.surface.clone();
+    let role = f.tag.role.clone();
+    let line = f.line;
+    let near = tol.max(linear());
+    let per = surface.u_period().unwrap_or(std::f64::consts::TAU);
+    let not_closing = || {
+        Skip(format!(
+            "Der Rand der Fläche „{role}“ schließt sich nicht: Eine Kante läuft falsch herum."
+        ))
+    };
+    let twisted = || {
+        Skip(format!(
+            "Die Fläche „{role}“ ist verdreht: Rand und Außenseite passen nicht zusammen."
+        ))
+    };
+    let poles = pole_points(&surface);
+    let lp = f.loops[k].clone();
+    // Der berührte Pol ist eine Ecke der Schleife (nach dem Teilen an den Polen), der andere nicht.
+    let at_vertex = |q: DVec3| {
+        lp.iter()
+            .position(|he| raw.vertices[raw.he_start(*he)].distance(q) <= near)
+    };
+    let touched: Vec<Option<usize>> = poles.iter().map(|(_, q)| at_vertex(*q)).collect();
+    let (Some(t), Some(inner)) = (
+        (0..poles.len()).find(|&j| touched[j].is_some()),
+        (0..poles.len()).find(|&j| touched[j].is_none()),
+    ) else {
+        return Err(not_closing());
+    };
+    let mut confirmed = false;
+    for m in &f.pole_marks {
+        if m.distance(poles[inner].1) <= near {
+            confirmed = true;
+        } else if m.distance(poles[t].1) > near {
+            return Err(twisted());
+        }
+    }
+    let j = touched[t].expect("berührter Pol ist eine Ecke");
+    let vt = raw.he_start(lp[j]);
+    let rim: Vec<RawHalfEdge> = lp[j..].iter().chain(&lp[..j]).copied().collect();
+    // Sprungstrecke am berührten Pol: die letzten beiden Polpunkte des Polygons (die Schleife
+    // beginnt und endet dort).
+    let poly = points_to_uv(&surface, f.same_sense, &raw.loop_points(&rim));
+    let pv = poles[t].0;
+    let jump = poly
+        .windows(2)
+        .rev()
+        .find(|w| at_pole(w[0].y, pv) && at_pole(w[1].y, pv))
+        .map(|w| (w[0].x, w[1].x - w[0].x));
+    let Some((u_a, delta)) = jump else {
+        return Err(not_closing());
+    };
+    // Löcher (die übrigen Schleifen) mit Abstand; der Rand selbst darf die Mantellinie außer
+    // am Pol nicht kreuzen und ihr nicht nahe kommen.
+    let holes: Vec<usize> = (0..f.loops.len()).filter(|&h| h != k).collect();
+    let (hole_ranges, hole_margin) = hole_ranges(raw, i, &holes, tol, per);
+    let margin = SEAM_CLEARANCE * per;
+    let wrap = |x: f64| x.rem_euclid(per);
+    let track = u_track(raw, &surface, &rim);
+    let pole_pts: Vec<DVec3> = poles.iter().map(|(_, q)| *q).collect();
+    let runs: Vec<Vec<(usize, f64, f64)>> = track
+        .split(|&(h, s, _)| {
+            let p = he_point(raw, rim[h], s);
+            pole_pts.iter().any(|q| q.distance(p) <= near)
+        })
+        .filter(|r| !r.is_empty())
+        .map(|r| r.to_vec())
+        .collect();
+    let clear = |u_s: f64| {
+        for &(lo, hi) in &hole_ranges {
+            if hi - lo >= per - 2.0 * hole_margin
+                || wrap(u_s - (lo - hole_margin)) <= hi - lo + 2.0 * hole_margin
+            {
+                return false;
+            }
+        }
+        runs.iter().all(|r| {
+            crossings(r, u_s, per).is_empty()
+                && r.iter().all(|t| {
+                    let d = wrap(t.2 - u_s);
+                    d.min(per - d) >= margin
+                })
+        })
+    };
+    let Some(u_s) = AROUND_POLE_FRACTIONS
+        .iter()
+        .map(|frac| wrap(u_a + delta * frac))
+        .find(|&u_s| clear(u_s))
+    else {
+        return Err(no_room(&role));
+    };
+    let vi = push_vertex(raw, surface.point(u_s, poles[inner].0));
+    let seam = push_seam(raw, &surface, u_s, vi, vt, line)?;
+    let mut lp = vec![fwd(seam)];
+    lp.extend(rim);
+    lp.push(bwd(seam));
+    set_seam_loop(raw, i, &[k], lp);
+    raw.faces[i].side_guessed = !confirmed;
+    Ok(())
+}
+
+/// Genaue Bereiche der Löcher `holes` der Fläche `i` in u und der Abstand, den eine Naht von
+/// ihnen halten muss: mindestens [`HOLE_CLEARANCE_TOLS`] Genauigkeiten der Datei als Winkel am
+/// kleinsten Abstand zur Achse, höchstens [`MAX_HOLE_CLEARANCE`] der Periode.
+fn hole_ranges(
+    raw: &RawBody,
+    i: usize,
+    holes: &[usize],
+    tol: f64,
+    per: f64,
+) -> (Vec<(f64, f64)>, f64) {
+    let f = &raw.faces[i];
+    let surface = &f.surface;
+    let mut hole_margin = SEAM_CLEARANCE * per;
+    let ranges: Vec<(f64, f64)> = holes
+        .iter()
+        .map(|&k| {
+            let lp = &f.loops[k];
+            let rho = raw
+                .loop_points(lp)
+                .iter()
+                .map(|p| axis_distance(surface, *p))
+                .fold(f64::INFINITY, f64::min);
+            if rho > 0.0 {
+                hole_margin = hole_margin.max(HOLE_CLEARANCE_TOLS * tol / rho);
+            }
+            u_extent(raw, surface, f.same_sense, lp, per)
+        })
+        .collect();
+    (ranges, hole_margin.min(MAX_HOLE_CLEARANCE * per))
 }
 
 /// Abstand (Anteil der Periode), den die Naht von anderem Rand der Fläche halten muss.
@@ -763,23 +929,7 @@ fn free_angle(raw: &RawBody, i: usize, rims: &[usize], holes: &[usize], tol: f64
         .collect();
     // Genaue Bereiche der Löcher in u (Extremwerte auf den Kanten gesucht) und ein Abstand von
     // mindestens einigen Genauigkeiten der Datei, als Winkel am kleinsten Abstand zur Achse.
-    let mut hole_margin = margin;
-    let hole_ranges: Vec<(f64, f64)> = holes
-        .iter()
-        .map(|&k| {
-            let lp = &f.loops[k];
-            let rho = raw
-                .loop_points(lp)
-                .iter()
-                .map(|p| axis_distance(surface, *p))
-                .fold(f64::INFINITY, f64::min);
-            if rho > 0.0 {
-                hole_margin = hole_margin.max(HOLE_CLEARANCE_TOLS * tol / rho);
-            }
-            u_extent(raw, surface, f.same_sense, lp, per)
-        })
-        .collect();
-    let hole_margin = hole_margin.min(MAX_HOLE_CLEARANCE * per);
+    let (hole_ranges, hole_margin) = hole_ranges(raw, i, holes, tol, per);
     let wrap = |x: f64| x.rem_euclid(per);
     let near = |x: f64, t: f64| {
         let d = wrap(x - t);

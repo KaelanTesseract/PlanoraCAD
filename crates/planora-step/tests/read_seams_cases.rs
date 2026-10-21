@@ -6,10 +6,11 @@
 
 mod common;
 
-use common::Lcg;
+use common::{Lcg, export};
 use planora_exchange::Progress;
-use planora_kernel::{Solid, validate};
-use planora_math::{DVec3, PI, TAU};
+use planora_kernel::boolean::BoolOp;
+use planora_kernel::{AnalyticKernel, Kernel, Solid, validate};
+use planora_math::{DMat4, DVec3, PI, TAU};
 use planora_mesh::{TessellationOptions, mass_properties, tessellate};
 use planora_step::read::geom::Skip;
 use planora_step::read::topo::{BuildOptions, build_solid};
@@ -91,6 +92,13 @@ impl Step {
             "FACE_BOUND"
         };
         self.push(format!("{kind}('',#{lp},.T.)"))
+    }
+
+    /// Pol als `VERTEX_LOOP` in einem `FACE_BOUND`.
+    fn pole_bound(&mut self, p: DVec3) -> u64 {
+        let v = self.vertex(p);
+        let lp = self.push(format!("VERTEX_LOOP('',#{v})"));
+        self.push(format!("FACE_BOUND('',#{lp},.T.)"))
     }
 
     fn face(&mut self, bounds: &[u64], surface: u64, sense: bool) -> u64 {
@@ -324,7 +332,13 @@ fn read(text: &str) -> Result<Solid, Skip> {
         .arg("ADVANCED_BREP_SHAPE_REPRESENTATION", 1)
         .expect("Liste")
         .refs()
-        .expect("Verweise");
+        .expect("Verweise")
+        .into_iter()
+        .filter(|id| {
+            let it = file.entity(*id).expect("Eintrag");
+            it.is("MANIFOLD_SOLID_BREP") || it.is("BREP_WITH_VOIDS")
+        })
+        .collect();
     build_solid(
         &file,
         units,
@@ -1080,17 +1094,27 @@ fn lunes_through_both_poles_are_never_the_other_lune() {
 /// Großkreiskante; ihre Ecke liegt beim Winkel `t` (π/2: am Nordpol, 0: am Äquator).
 fn great_circle_hemisphere(t: f64) -> String {
     let mut s = Step::new();
-    let f = s.axis2(DVec3::ZERO, -DVec3::Y, DVec3::X);
-    let c = s.push(format!("CIRCLE('',#{f},{SR:.1})"));
-    let v = s.vertex(DVec3::new(t.cos(), 0.0, t.sin()) * SR);
-    let e = s.edge(v, v, c, true);
+    let faces = great_circle_hemisphere_at(&mut s, DVec3::ZERO, t, 0.0);
+    s.file(&faces)
+}
+
+/// Flächen der Halbkugel wie [`great_circle_hemisphere`] um `c`; `tilt` kippt die Kreisebene um
+/// die x-Achse (dann läuft der Großkreis `SR · sin(tilt)` neben beiden Polen vorbei).
+fn great_circle_hemisphere_at(s: &mut Step, c: DVec3, t: f64, tilt: f64) -> Vec<u64> {
+    let n = DVec3::new(0.0, -tilt.cos(), tilt.sin());
+    let f = s.axis2(c, n, DVec3::X);
+    let circle = s.push(format!("CIRCLE('',#{f},{SR:.1})"));
+    let y = n.cross(DVec3::X);
+    let v = s.vertex(c + (DVec3::X * t.cos() + y * t.sin()) * SR);
+    let e = s.edge(v, v, circle, true);
     let p = s.push(format!("PLANE('',#{f})"));
     let b = s.bound(&[(e, true)], true);
     let disk = s.face(&[b], p, true);
-    let sphere = sphere_surface(&mut s);
+    let sf = s.axis2(c, DVec3::Z, DVec3::X);
+    let sphere = s.push(format!("SPHERICAL_SURFACE('',#{sf},{SR:.1})"));
     let b = s.bound(&[(e, false)], false);
     let half = s.face(&[b], sphere, true);
-    s.file(&[disk, half])
+    vec![disk, half]
 }
 
 #[test]
@@ -1318,5 +1342,395 @@ fn shallow_box_overlap_is_named() {
                 assert_eq!(m, "Zwei Stücke des Körpers überschneiden sich.");
             }
         }
+    }
+}
+
+// --- Nacharbeit 4: Kugelflächen mit einem Pol im Rand, Schalen ohne Volumen, Halbkreise,
+// --- viele Teilungen, Raster neben spitzen Kanten.
+
+/// Kugel r 6 ohne das Achtel x, y, z ≥ 0: Die Kugelfläche ist das große Stück, ihr Rand berührt
+/// nur den Nordpol, der Südpol liegt in ihrem Inneren (`mark`: `VERTEX_LOOP` am Südpol).
+/// Volumen 252π.
+fn ball_minus_octant(mark: bool) -> String {
+    let mut s = Step::new();
+    let o = s.vertex(DVec3::ZERO);
+    let a = s.vertex(DVec3::new(SR, 0.0, 0.0));
+    let b = s.vertex(DVec3::new(0.0, SR, 0.0));
+    let n = s.vertex(DVec3::new(0.0, 0.0, SR));
+    let fz = s.axis2(DVec3::ZERO, DVec3::Z, DVec3::X);
+    let ce = s.push(format!("CIRCLE('',#{fz},{SR:.1})"));
+    let e = s.edge(a, b, ce, true);
+    let f0 = s.axis2(DVec3::ZERO, -DVec3::Y, DVec3::X);
+    let c0 = s.push(format!("CIRCLE('',#{f0},{SR:.1})"));
+    let m0 = s.edge(a, n, c0, true);
+    let f9 = s.axis2(DVec3::ZERO, DVec3::X, DVec3::Y);
+    let c9 = s.push(format!("CIRCLE('',#{f9},{SR:.1})"));
+    let m9 = s.edge(b, n, c9, true);
+    let lx = s.line(DVec3::ZERO, DVec3::new(SR, 0.0, 0.0));
+    let x = s.edge(o, a, lx, true);
+    let ly = s.line(DVec3::ZERO, DVec3::new(0.0, SR, 0.0));
+    let y = s.edge(o, b, ly, true);
+    let lz = s.line(DVec3::ZERO, DVec3::new(0.0, 0.0, SR));
+    let z = s.edge(o, n, lz, true);
+    let plane = |s: &mut Step, normal: DVec3| {
+        let f = s.axis2(DVec3::ZERO, normal, normal.any_orthonormal_vector());
+        s.push(format!("PLANE('',#{f})"))
+    };
+    let pz = plane(&mut s, DVec3::Z);
+    let b1 = s.bound(&[(x, true), (e, true), (y, false)], true);
+    let f1 = s.face(&[b1], pz, true);
+    let py = plane(&mut s, DVec3::Y);
+    let b2 = s.bound(&[(z, true), (m0, false), (x, false)], true);
+    let f2 = s.face(&[b2], py, true);
+    let px = plane(&mut s, DVec3::X);
+    let b3 = s.bound(&[(y, true), (m9, true), (z, false)], true);
+    let f3 = s.face(&[b3], px, true);
+    let sphere = sphere_surface(&mut s);
+    let b4 = s.bound(&[(m0, true), (m9, false), (e, false)], false);
+    let mut bounds = vec![b4];
+    if mark {
+        bounds.push(s.pole_bound(DVec3::new(0.0, 0.0, -SR)));
+    }
+    let f4 = s.face(&bounds, sphere, true);
+    s.file(&[f1, f2, f3, f4])
+}
+
+#[test]
+fn ball_minus_octant_is_read_and_never_the_octant() {
+    // R3-1: Das große Stück (Rand berührt genau einen Pol) wird gelesen, mit und ohne Marke am
+    // inneren Pol; jede Kippung ist abgelehnt oder derselbe Körper, nie das Achtel.
+    for mark in [false, true] {
+        assert_never_opposite(
+            &ball_minus_octant(mark),
+            252.0 * PI,
+            DVec3::splat(-2.0),
+            &format!("Kugel ohne Achtel, Marke {mark}"),
+        );
+    }
+}
+
+/// Achtel wie [`octant`], die Kugelfläche zusätzlich mit einer Marke am Punkt `p`.
+fn octant_with_mark(p: DVec3) -> String {
+    let text = octant();
+    // Die Kugelfläche ist die letzte `ADVANCED_FACE`; die Marke bekommt freie Kennungen.
+    let face = text
+        .lines()
+        .rfind(|l| l.contains("ADVANCED_FACE("))
+        .expect("Kugelfläche")
+        .to_string();
+    let with_mark = face.replacen("),#", ",#9003),#", 1);
+    assert_ne!(with_mark, face);
+    let mark = format!(
+        "#9000=CARTESIAN_POINT('',({:.17e},{:.17e},{:.17e}));\n#9001=VERTEX_POINT('',#9000);\n\
+         #9002=VERTEX_LOOP('',#9001);\n#9003=FACE_BOUND('',#9002,.T.);\nENDSEC;\nEND-ISO-10303-21;",
+        p.x, p.y, p.z
+    );
+    let out = text
+        .replace(&face, &with_mark)
+        .replace("ENDSEC;\nEND-ISO-10303-21;", &mark);
+    assert!(out.contains("#9003=FACE_BOUND"), "Dateiende nicht gefunden");
+    out
+}
+
+#[test]
+fn pole_mark_outside_a_piece_touching_one_pole_is_named() {
+    // V02: Ein Achtel (Rand berührt den Nordpol) mit einer Marke am Südpol, der nicht in ihm
+    // liegt, ist verdreht; eine Marke am berührten Pol stört nicht.
+    match read(&octant_with_mark(DVec3::new(0.0, 0.0, -SR))) {
+        Ok(_) => panic!("Achtel mit Marke am falschen Pol angenommen"),
+        Err(Skip(m)) => assert_eq!(
+            m,
+            "Die Fläche „STEP-Fläche 4“ ist verdreht: Rand und Außenseite passen nicht zusammen."
+        ),
+    }
+    let s = read(&octant_with_mark(DVec3::new(0.0, 0.0, SR)))
+        .unwrap_or_else(|Skip(m)| panic!("Marke am berührten Pol: {m}"));
+    let v = mesh_volume(&s, 0.002);
+    assert!(((v - 36.0 * PI) / (36.0 * PI)).abs() <= 5e-3, "{v}");
+}
+
+/// Kugel r 6 aus `n` Keilen (nur Kugelflächen, Meridiane bei 2πk/n). Volumen 288π.
+fn sphere_of_lunes(n: usize) -> String {
+    let mut s = Step::new();
+    let south = s.vertex(DVec3::new(0.0, 0.0, -SR));
+    let north = s.vertex(DVec3::new(0.0, 0.0, SR));
+    let m: Vec<u64> = (0..n)
+        .map(|k| meridian_edge(&mut s, south, north, TAU * k as f64 / n as f64))
+        .collect();
+    let sphere = sphere_surface(&mut s);
+    let faces: Vec<u64> = (0..n)
+        .map(|k| {
+            let b = s.bound(&[(m[(k + 1) % n], true), (m[k], false)], false);
+            s.face(&[b], sphere, true)
+        })
+        .collect();
+    s.file(&faces)
+}
+
+/// Kugel r 6 aus zwei Halbkugeln an einer Großkreiskante (Ebene y = 0). Volumen 288π.
+fn two_hemispheres() -> String {
+    let mut s = Step::new();
+    let f = s.axis2(DVec3::ZERO, -DVec3::Y, DVec3::X);
+    let c = s.push(format!("CIRCLE('',#{f},{SR:.1})"));
+    let v = s.vertex(DVec3::new(SR, 0.0, 0.0));
+    let e = s.edge(v, v, c, true);
+    let sphere = sphere_surface(&mut s);
+    let b = s.bound(&[(e, false)], false);
+    let front = s.face(&[b], sphere, true);
+    let b = s.bound(&[(e, true)], false);
+    let back = s.face(&[b], sphere, true);
+    s.file(&[front, back])
+}
+
+#[test]
+fn spheres_of_lunes_and_hemispheres_are_never_doubled_or_empty() {
+    // R3-2/R3-3: Kippt man ein Flächenbit, hat die Schale das Volumen null; kippt man den Sinn
+    // einer Halbkreiskante, läuft sie über die andere Hälfte und die Kugel ist doppelt belegt.
+    // Beides darf nie still angenommen werden.
+    for n in [2, 3, 4] {
+        assert_never_opposite(
+            &sphere_of_lunes(n),
+            288.0 * PI,
+            DVec3::new(1.0, 0.5, 0.2),
+            &format!("Kugel aus {n} Keilen"),
+        );
+    }
+    assert_never_opposite(
+        &two_hemispheres(),
+        288.0 * PI,
+        DVec3::new(1.0, 0.5, 0.2),
+        "zwei Halbkugeln",
+    );
+}
+
+fn kernel() -> AnalyticKernel {
+    AnalyticKernel::default()
+}
+
+fn moved(s: &Solid, v: DVec3) -> Solid {
+    kernel()
+        .transform(s, &DMat4::from_translation(v))
+        .expect("verschoben")
+}
+
+#[test]
+fn kernel_written_pocket_and_dome_with_axis_in_the_top_face_never_double() {
+    // R3-3: Der Kernel schreibt den Rand als zwei Halbkreise zwischen den Polen; ein gekippter
+    // Kantensinn darf nie eine doppelt gezählte Mulde oder Kuppel ergeben. Die Kugelnaht liegt
+    // einmal in der Deckfläche (Drehung um x) und einmal senkrecht dazu (Drehung um y: die
+    // Mulde trägt die Naht). Das Kippen von Flächenbit oder Rand der Kugelfläche allein ergibt
+    // den jeweils anderen gültigen Körper (Mulde ↔ Kuppel; die Datei ist dann dieser Körper);
+    // Kanten- und Halbkantenkippungen dürfen nur abgelehnt werden oder denselben Körper ergeben.
+    let k = kernel();
+    let cube = k.make_box(DVec3::splat(10.0)).expect("Quader");
+    let pocket_v = 1000.0 - 18.0 * PI;
+    let dome_v = 1000.0 + 18.0 * PI;
+    for (name, rot) in [
+        ("um x", DMat4::from_rotation_x(PI / 2.0)),
+        ("um y", DMat4::from_rotation_y(PI / 2.0)),
+    ] {
+        let lying = k
+            .transform(&k.make_sphere(3.0).expect("Kugel"), &rot)
+            .expect("gedreht");
+        let ball = moved(&lying, DVec3::new(5.0, 5.0, 10.0));
+        let pocket = k.boolean(&cube, &ball, BoolOp::Difference).expect("Mulde");
+        let dome = k.boolean(&cube, &ball, BoolOp::Union).expect("Kuppel");
+        for (what, body, want, other) in [
+            ("Mulde", &pocket, pocket_v, dome_v),
+            ("Kuppel", &dome, dome_v, pocket_v),
+        ] {
+            let (text, _) = export(&[(what, body)]);
+            let s = read(&text).unwrap_or_else(|Skip(m)| panic!("{what} {name}: {m}"));
+            let v = mesh_volume(&s, 0.002);
+            assert!(((v - want) / want).abs() <= 5e-3, "{what} {name}: {v}");
+            let flipped_lines: Vec<&str> = text
+                .lines()
+                .filter(|l| l.ends_with(".T.);") || l.ends_with(".F.);"))
+                .filter(|l| {
+                    [
+                        "ADVANCED_FACE(",
+                        "FACE_BOUND(",
+                        "FACE_OUTER_BOUND(",
+                        "ORIENTED_EDGE(",
+                        "EDGE_CURVE(",
+                    ]
+                    .iter()
+                    .any(|t| l.contains(t))
+                })
+                .collect();
+            for (k, t) in single_flips(&text).iter().enumerate() {
+                let Ok(s) = read(t) else { continue };
+                let v = mesh_volume(&s, 0.002);
+                let same = ((v - want) / want).abs() <= 5e-3;
+                let complement = ((v - other) / other).abs() <= 5e-3;
+                let edge_flip = flipped_lines[k].contains("EDGE_CURVE(")
+                    || flipped_lines[k].contains("ORIENTED_EDGE(");
+                assert!(
+                    same || (complement && !edge_flip),
+                    "{what} {name}, Kippung {k} ({}): {v} statt {want}",
+                    flipped_lines[k]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn more_than_eight_pole_splits_are_made() {
+    // R3-4: neun getrennte Halbkugeln mit Großkreiskante (Ecke am Nordpol, der Südpol mitten
+    // auf der Kante) brauchen neun Teilungen.
+    let mut s = Step::new();
+    let mut items = Vec::new();
+    for k in 0..9 {
+        let c = DVec3::new(20.0 * k as f64, 0.0, 0.0);
+        let faces = great_circle_hemisphere_at(&mut s, c, PI / 2.0, 0.0);
+        let shell = s.shell(&faces);
+        items.push(s.push(format!("MANIFOLD_SOLID_BREP('Halb',#{shell})")));
+    }
+    let text = s.finish(&items);
+    let solid = read(&text).unwrap_or_else(|Skip(m)| panic!("{m}"));
+    assert_eq!(solid.shells.len(), 9);
+    let v = mesh_volume(&solid, 0.002);
+    let want = 9.0 * 144.0 * PI;
+    assert!(((v - want) / want).abs() <= 5e-3, "{v} statt {want}");
+    // Das Kugelbit der letzten Halbkugel gekippt: abgelehnt oder derselbe Körper.
+    let last_sphere = text
+        .lines()
+        .rfind(|l| l.contains("ADVANCED_FACE("))
+        .expect("Fläche")
+        .to_string();
+    let flipped = text.replace(&last_sphere, &last_sphere.replace(".T.);", ".F.);"));
+    assert_ne!(flipped, text);
+    if let Ok(s) = read(&flipped) {
+        let v = mesh_volume(&s, 0.002);
+        assert!(
+            ((v - want) / want).abs() <= 5e-3,
+            "gekippt: {v} statt {want}"
+        );
+        assert!(
+            winding_at(&s, DVec3::new(160.0, 3.0, 0.0)) > 0.5,
+            "gekippt: die letzte Halbkugel liegt auf der anderen Seite"
+        );
+    }
+    // Platte mit fünf Kuppeln, deren Kugelachse in der Deckfläche liegt (zwei Teilungen je
+    // Kuppel), vom Kernel geschrieben.
+    let k = kernel();
+    let mut plate = k.make_box(DVec3::new(60.0, 12.0, 4.0)).expect("Platte");
+    let lying = k
+        .transform(
+            &k.make_sphere(3.0).expect("Kugel"),
+            &DMat4::from_rotation_x(PI / 2.0),
+        )
+        .expect("gedreht");
+    for i in 0..5 {
+        let ball = moved(&lying, DVec3::new(6.0 + 12.0 * i as f64, 6.0, 4.0));
+        plate = k.boolean(&plate, &ball, BoolOp::Union).expect("Kuppel");
+    }
+    let (text, _) = export(&[("Platte", &plate)]);
+    let solid = read(&text).unwrap_or_else(|Skip(m)| panic!("Platte: {m}"));
+    let v = mesh_volume(&solid, 0.002);
+    let want = 60.0 * 12.0 * 4.0 + 5.0 * 18.0 * PI;
+    assert!(
+        ((v - want) / want).abs() <= 5e-3,
+        "Platte: {v} statt {want}"
+    );
+}
+
+/// Kegelstumpf (unten Radius `rb` bei z = 0, oben `rt` bei z = `h`, Mantel ohne Naht) und
+/// daneben eine kleine Kugel r 0,5 um `c` als zweites Stück. Volumen
+/// πh(rb² + rb·rt + rt²)/3 + π/6.
+fn frustum_and_ball(rb: f64, rt: f64, h: f64, c: DVec3) -> String {
+    let mut s = Step::new();
+    let fb = s.axis2(DVec3::ZERO, DVec3::Z, DVec3::X);
+    let ft = s.axis2(DVec3::new(0.0, 0.0, h), DVec3::Z, DVec3::X);
+    let cb = s.push(format!("CIRCLE('',#{fb},{rb:.17e})"));
+    let ct = s.push(format!("CIRCLE('',#{ft},{rt:.17e})"));
+    let vb = s.vertex(DVec3::new(rb, 0.0, 0.0));
+    let vt = s.vertex(DVec3::new(0.0, rt, h));
+    let eb = s.edge(vb, vb, cb, true);
+    let et = s.edge(vt, vt, ct, true);
+    let pb = s.push(format!("PLANE('',#{fb})"));
+    let pt = s.push(format!("PLANE('',#{ft})"));
+    // Achse nach unten: Der Radius wächst entlang der Achse (`rt` oben, `rb` unten).
+    let fc = s.axis2(DVec3::new(0.0, 0.0, h), -DVec3::Z, DVec3::X);
+    let cone = s.push(format!(
+        "CONICAL_SURFACE('',#{fc},{rt:.17e},{:.17e})",
+        ((rb - rt) / h).atan()
+    ));
+    let b = s.bound(&[(eb, false)], true);
+    let bottom = s.face(&[b], pb, false);
+    let b = s.bound(&[(et, true)], true);
+    let top = s.face(&[b], pt, true);
+    let b1 = s.bound(&[(eb, true)], false);
+    let b2 = s.bound(&[(et, false)], false);
+    let side = s.face(&[b1, b2], cone, true);
+    let frustum = s.shell(&[bottom, top, side]);
+    let ball = sphere_shell(&mut s, c, 0.5, true);
+    let a = s.push(format!("MANIFOLD_SOLID_BREP('Stumpf',#{frustum})"));
+    let b = s.push(format!("MANIFOLD_SOLID_BREP('Kugel',#{ball})"));
+    s.finish(&[a, b])
+}
+
+#[test]
+fn frustum_beside_a_small_ball_is_read() {
+    // R3-5: Die Kugel liegt im Hüllquader des Stumpfs, aber mit Abstand außerhalb seines Mantels
+    // (spitze Kante am Boden); das Raster darf den Außenraum nicht als innen einstufen.
+    for (rb, rt, h) in [
+        (5.0, 3.0, 4.0),
+        (5.0, 2.0, 6.0),
+        (4.0, 2.0, 2.0),
+        (6.0, 3.0, 5.0),
+    ] {
+        let want = PI * h * (rb * rb + rb * rt + rt * rt) / 3.0 + PI / 6.0;
+        for k in 0..8 {
+            let phi = TAU * (k % 4) as f64 / 4.0 + 0.3;
+            // Kugel oben außen neben dem Mantel, mit Abstand ≥ 0,2 und im Hüllquader.
+            let z = if k < 4 { 0.8 * h } else { 0.95 * h };
+            let rho = rb - 0.6;
+            let c = DVec3::new(rho * phi.cos(), rho * phi.sin(), z);
+            let text = frustum_and_ball(rb, rt, h, c);
+            let solid =
+                read(&text).unwrap_or_else(|Skip(m)| panic!("Stumpf {rb}/{rt}/{h}, Lage {k}: {m}"));
+            assert_eq!(solid.shells.len(), 2);
+            let v = mesh_volume(&solid, 0.002);
+            assert!(
+                ((v - want) / want).abs() <= 5e-3,
+                "Stumpf {rb}/{rt}/{h}, Lage {k}: {v} statt {want}"
+            );
+        }
+    }
+}
+
+#[test]
+fn great_circle_barely_beside_the_poles_is_split_onto_them() {
+    // V04: Der Großkreis läuft 1e-7 neben beiden Polen vorbei (innerhalb der Genauigkeit des
+    // Kernels); die Teilungsecken müssen genau auf die Pole gesetzt werden. Läuft die Kurve
+    // selbst weiter neben dem Pol vorbei (5e-4 bei Genauigkeit 1e-3), wird abgelehnt: Der Kernel
+    // sähe dort keinen Pol.
+    let hemisphere = |gap: f64| {
+        let mut s = Step::new();
+        let faces = great_circle_hemisphere_at(&mut s, DVec3::ZERO, 0.0, gap / SR);
+        s.file(&faces)
+    };
+    let solid = read(&hemisphere(1e-7)).unwrap_or_else(|Skip(m)| panic!("1e-7: {m}"));
+    for pole in [DVec3::new(0.0, 0.0, SR), DVec3::new(0.0, 0.0, -SR)] {
+        let d = solid
+            .vertices
+            .iter()
+            .map(|(_, v)| v.point.distance(pole))
+            .fold(f64::INFINITY, f64::min);
+        assert!(d <= 1e-12, "Ecke {d} neben dem Pol {pole}");
+    }
+    let v = mesh_volume(&solid, 0.002);
+    let want = 144.0 * PI;
+    assert!(((v - want) / want).abs() <= 5e-3, "{v} statt {want}");
+    let coarse = hemisphere(5e-4).replace("LENGTH_MEASURE(1.E-06)", "LENGTH_MEASURE(1.E-03)");
+    assert!(coarse.contains("1.E-03"));
+    match read(&coarse) {
+        Ok(_) => panic!("Kurve 5e-4 neben dem Pol angenommen"),
+        Err(Skip(m)) => assert_eq!(
+            m,
+            "Der Rand der Fläche „STEP-Fläche 2“ läuft nicht genau durch einen Pol."
+        ),
     }
 }

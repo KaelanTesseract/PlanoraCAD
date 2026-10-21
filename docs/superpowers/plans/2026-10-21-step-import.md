@@ -177,6 +177,8 @@ Re-Export in `lib.rs`: `pub use read::error::{MAX_STEP_BODIES, MAX_STEP_ENTITIES
 | Hohlraum ragt aus seiner äußeren Schale (Aufgabe 6, Nacharbeit) | `Ein Hohlraum liegt nicht ganz im Körper.` |
 | Stücke eines Körpers überschneiden sich, auch ein innen-außen geschriebenes Stück im anderen (Aufgabe 6, Nacharbeit; Berühren erlaubt) | `Zwei Stücke des Körpers überschneiden sich.` |
 | Getrimmtes Profil einer Drehfläche (Aufgabe 6) | `Zeile {n}: Eine Trimmkurve hat keine Grenze.`, `Zeile {n}: Eine Grenze einer Trimmkurve ist keine endliche Zahl.`, `Zeile {n}: Eine Trimmkurve hat keine Ausdehnung.`, `Ein getrimmtes Profil lässt sich nicht ausschneiden.` |
+| Probe am fertigen Netz je Stück (Aufgabe 6, Nacharbeit 4): dicht hinter einer Fläche ist die Umlaufzahl nicht 1 oder dicht davor nicht 0 (doppelt belegte, gegengleich übereinanderliegende oder falsch liegende Flächen, Ränder über die falsche Kreishälfte) | `Die Fläche „{f}“ liegt nicht richtig im Körper: Innen und außen passen an ihr nicht zusammen.` |
+| Schale ohne Volumen (Aufgabe 6, Nacharbeit 4: Volumen unter 1e-6 der Summe der Tetraederbeträge, etwa zwei gegengleiche Flächen am selben Ort) | `Der Körper hat kein Volumen.` (wie bei `validate`) |
 
 Entfallen mit Aufgabe 6 (Platzhalter aus Aufgabe 3): „Ein Körper aus mehreren Stücken wird noch nicht unterstützt.“, „Ein Körper mit Hohlräumen wird noch nicht unterstützt.“, „Ein Rand vom Typ VERTEX_LOOP wird noch nicht unterstützt.“ (andere Randtypen behalten „Ein Rand vom Typ {Typ} wird noch nicht unterstützt.“) und „Eine Fläche, deren Rand durch einen Pol läuft, wird noch nicht unterstützt.“ (mit der Nacharbeit ganz entfallen, samt `derive_patch`/`derive_patch_with_tol` ohne Flächensinn; es gilt `derive_patch_sensed`).
 

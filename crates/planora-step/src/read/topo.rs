@@ -33,7 +33,7 @@ use planora_kernel::{
     Curve, Face, FaceTag, HalfEdge, Id, Loop, NURBS_EDGE_TOL, Shell, Solid, Surface, UvRect,
     ValidationError, point_surface_tol, validate,
 };
-use planora_math::{DVec2, DVec3, Tolerance};
+use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_mesh::{MeshError, TessellationOptions, tessellate};
 use std::collections::HashMap;
 
@@ -1070,9 +1070,20 @@ fn turn_inside_out(solid: &mut Solid, ids: &[Id<Face>]) {
 /// Dreiecke je Schale (Reihenfolge von `solid.shells`).
 type ShellTriangles = Vec<Vec<[DVec3; 3]>>;
 
+/// Je Dreieck einer Schale (wie [`ShellTriangles`]) der Index seiner Fläche.
+type ShellTriangleFaces = Vec<Vec<usize>>;
+
+/// Unter diesem Anteil der Summe aller Tetraederbeträge (Bezugspunkt: Mitte der Schale) hat
+/// eine Schale kein Volumen: Zwei gegengleiche Flächen am selben Ort heben sich bis auf
+/// Rundungsrauschen auf, das Vorzeichen wäre Zufall.
+const VOLUME_REL: f64 = 1e-6;
+
 /// Vorzeichenbehaftetes Volumen je Schale aus einem groben Netz (Reihenfolge von
-/// `solid.shells`) und die Dreiecke je Schale.
-fn shell_volumes(solid: &Solid) -> Result<(Vec<f64>, ShellTriangles), Skip> {
+/// `solid.shells`), die Dreiecke je Schale und je Dreieck seine Fläche. Eine Schale, deren
+/// Volumen unter [`VOLUME_REL`] der Summe der Tetraederbeträge liegt, hat kein Volumen.
+// Der negierte Vergleich lehnt absichtlich auch NaN ab.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn shell_volumes(solid: &Solid) -> Result<(Vec<f64>, ShellTriangles, ShellTriangleFaces), Skip> {
     let mesh = tessellate(
         solid,
         &TessellationOptions {
@@ -1096,39 +1107,38 @@ fn shell_volumes(solid: &Solid) -> Result<(Vec<f64>, ShellTriangles), Skip> {
             shell_of[f.index()] = k;
         }
     }
-    // Bezugspunkt in der Mitte der Hülle (kleinere Rundungsfehler als der Ursprung).
-    let (lo, hi) = mesh
-        .positions
-        .iter()
-        .fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), p| {
-            (lo.min(*p), hi.max(*p))
-        });
-    let o = 0.5 * (lo + hi);
     let shells = solid.shells.len().max(1);
-    let mut volumes = vec![0.0; shells];
     let mut triangles: ShellTriangles = vec![Vec::new(); shells];
+    let mut faces: ShellTriangleFaces = vec![Vec::new(); shells];
     for r in &mesh.face_ranges {
         let k = shell_of[r.face.index()];
         let start = r.first_index as usize;
         let end = start + r.index_count as usize;
         for t in mesh.indices[start..end].as_chunks::<3>().0 {
-            let t = t.map(|i| mesh.positions[i as usize]);
-            let [a, b, c] = t.map(|p| p - o);
-            volumes[k] += a.dot(b.cross(c)) / 6.0;
-            triangles[k].push(t);
+            triangles[k].push(t.map(|i| mesh.positions[i as usize]));
+            faces[k].push(r.face.index());
         }
     }
-    if volumes.iter().any(|v| !v.is_finite() || *v == 0.0) {
-        return Err(Skip("Der Körper hat kein Volumen.".into()));
+    // Bezugspunkt je Schale in ihrer Mitte (kleinere Rundungsfehler als der Ursprung); die
+    // Summe der Beträge sagt, ob das Ergebnis mehr als Rundungsrauschen ist.
+    let mut volumes = vec![0.0; shells];
+    for (k, tris) in triangles.iter().enumerate() {
+        let (lo, hi) = bounds_of(tris.iter().flatten());
+        let o = 0.5 * (lo + hi);
+        let (mut sum, mut abs) = (0.0, 0.0);
+        for t in tris {
+            let [a, b, c] = t.map(|p| p - o);
+            let v = a.dot(b.cross(c)) / 6.0;
+            sum += v;
+            abs += v.abs();
+        }
+        if !(sum.is_finite() && sum.abs() > VOLUME_REL * abs) {
+            return Err(Skip("Der Körper hat kein Volumen.".into()));
+        }
+        volumes[k] = sum;
     }
-    Ok((volumes, triangles))
+    Ok((volumes, triangles, faces))
 }
-
-/// Höchstens so viele Probepunkte (Schwerpunkte von Dreiecken) je Schale.
-const SHELL_PROBES: usize = 512;
-
-/// Höchstens so viele Zellen je Achse im Raster über die Dreiecke einer Schale.
-const GRID_CELLS: f64 = 48.0;
 
 /// Hüllquader von Punkten.
 fn bounds_of<'a>(points: impl IntoIterator<Item = &'a DVec3>) -> (DVec3, DVec3) {
@@ -1184,14 +1194,30 @@ fn closest_on_triangle(q: DVec3, t: &[DVec3; 3]) -> DVec3 {
     a + ab * (vb * denom) + ac * (vc * denom)
 }
 
-/// Dreieck mit der Normale, die aus dem betrachteten Bereich heraus zeigt.
+/// Dreieck mit der Normale, die aus dem Material heraus zeigt, und seiner Fläche.
 struct Facet {
     t: [DVec3; 3],
     n: DVec3,
+    face: usize,
 }
 
+/// Höchstens so viele Zellen je Achse im Raster über die Dreiecke eines Stücks.
+const GRID_CELLS: f64 = 48.0;
+
+/// Wenigstens so viele Zellen je Achse.
+const MIN_GRID_CELLS: f64 = 4.0;
+
+/// Drei feste, zueinander schiefe Strahlrichtungen für die Umlaufzahl; keine liegt in einer
+/// Achsen- oder Diagonalebene, damit ein Strahl nicht entlang von Kanten oder Ecken der
+/// üblichen Netze läuft.
+const RAY_DIRS: [[f64; 3]; 3] = [
+    [0.3317, 0.7213, 0.6083],
+    [-0.6271, 0.2117, 0.7496],
+    [0.5407, -0.6329, 0.5541],
+];
+
 /// Gleichmäßiges Raster über Dreiecke (je Zelle die Dreiecke, deren Hüllquader sie trifft) für
-/// die Suche nach dem nächsten Dreieck.
+/// die Suche nach dem nächsten Dreieck und für Strahlen durch das Netz (Umlaufzahl).
 struct FacetGrid {
     lo: DVec3,
     cell: f64,
@@ -1202,22 +1228,55 @@ struct FacetGrid {
     /// steht in allen Zellen, die sein Hüllquader trifft), deshalb gilt das für die ganze Zelle
     /// und für benachbarte leere Zellen gleich.
     inside: Vec<Option<bool>>,
+    /// Je Dreieck die Nummer des Strahls, der es zuletzt geprüft hat (ein Dreieck steht in
+    /// mehreren Zellen und darf je Strahl nur einmal zählen).
+    stamp: std::cell::RefCell<Vec<u32>>,
+    rays: std::cell::Cell<u32>,
+}
+
+/// Schnitt des Strahls `o + t·d` (t > 0) mit dem Dreieck (Möller–Trumbore).
+fn ray_triangle(o: DVec3, d: DVec3, t: &[DVec3; 3]) -> Option<f64> {
+    let [a, b, c] = *t;
+    let (e1, e2) = (b - a, c - a);
+    let p = d.cross(e2);
+    let det = e1.dot(p);
+    if det.abs() <= 1e-300 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let s = o - a;
+    let u = s.dot(p) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(e1);
+    let v = d.dot(q) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let tt = e2.dot(q) * inv;
+    (tt > 0.0).then_some(tt)
 }
 
 impl FacetGrid {
     fn new(facets: Vec<Facet>) -> FacetGrid {
         let (lo, hi) = bounds_of(facets.iter().flat_map(|f| f.t.iter()));
         let extent = (hi - lo).max(DVec3::splat(1e-9));
-        let cell = (extent.max_element() / GRID_CELLS).max(1e-9);
+        // Zellenzahl nach der Zahl der Dreiecke (etwa ein Dreieck je Zelle auf der Oberfläche),
+        // damit kleine Stücke kein großes Raster bekommen.
+        let per_axis = (facets.len() as f64)
+            .cbrt()
+            .clamp(MIN_GRID_CELLS, GRID_CELLS);
+        let cell = (extent.max_element() / per_axis).max(1e-9);
         let dims = [extent.x, extent.y, extent.z].map(|e| ((e / cell).ceil() as usize).max(1));
         let mut cells = vec![Vec::new(); dims[0] * dims[1] * dims[2]];
-        let index = |p: DVec3| {
+        let index = |p: DVec3| -> [usize; 3] {
             let c = ((p - lo) / cell).floor();
-            [c.x, c.y, c.z]
-                .iter()
-                .zip(dims)
-                .map(|(x, d)| (*x).clamp(0.0, (d - 1) as f64) as usize)
-                .collect::<Vec<_>>()
+            let mut out = [0usize; 3];
+            for (k, x) in [c.x, c.y, c.z].into_iter().enumerate() {
+                out[k] = x.clamp(0.0, (dims[k] - 1) as f64) as usize;
+            }
+            out
         };
         for (k, f) in facets.iter().enumerate() {
             let (a, b) = bounds_of(f.t.iter());
@@ -1230,6 +1289,7 @@ impl FacetGrid {
                 }
             }
         }
+        let n = facets.len();
         let mut grid = FacetGrid {
             lo,
             cell,
@@ -1237,6 +1297,8 @@ impl FacetGrid {
             cells,
             facets,
             inside: Vec::new(),
+            stamp: std::cell::RefCell::new(vec![0; n]),
+            rays: std::cell::Cell::new(0),
         };
         grid.classify();
         grid
@@ -1246,8 +1308,9 @@ impl FacetGrid {
         (c[0] * self.dims[1] + c[1]) * self.dims[2] + c[2]
     }
 
-    /// Leere Zellen: je zusammenhängendem Gebiet einmal über das nächste Dreieck bestimmt, dann
-    /// über Nachbarn (6 Richtungen) weitergegeben.
+    /// Leere Zellen: je zusammenhängendem Gebiet einmal über die Umlaufzahl in der Mitte der
+    /// ersten Zelle bestimmt (ersatzweise über das nächste Dreieck), dann über Nachbarn
+    /// (6 Richtungen) weitergegeben.
     fn classify(&mut self) {
         let n = self.cells.len();
         let mut inside: Vec<Option<bool>> = vec![None; n];
@@ -1260,9 +1323,12 @@ impl FacetGrid {
             let centre = self.lo
                 + (DVec3::new(c[0] as f64, c[1] as f64, c[2] as f64) + DVec3::splat(0.5))
                     * self.cell;
-            let label = self
-                .nearest(centre)
-                .is_some_and(|(_, p, k)| (centre - p).dot(self.facets[k].n) < 0.0);
+            let label = match self.winding(centre) {
+                Some(w) => w > 0,
+                None => self
+                    .nearest(centre)
+                    .is_some_and(|(_, p, k)| (centre - p).dot(self.facets[k].n) < 0.0),
+            };
             inside[start] = Some(label);
             let mut stack = vec![c];
             while let Some([x, y, z]) = stack.pop() {
@@ -1286,6 +1352,18 @@ impl FacetGrid {
         self.inside = inside;
     }
 
+    /// Zelle des Punkts (auch außerhalb des Rasters, dann jenseits der Grenzen).
+    fn cell_of(&self, q: DVec3) -> [i64; 3] {
+        let c = ((q - self.lo) / self.cell).floor();
+        [c.x as i64, c.y as i64, c.z as i64]
+    }
+
+    fn in_grid(&self, c: [i64; 3]) -> bool {
+        c.iter()
+            .zip(self.dims)
+            .all(|(x, d)| *x >= 0 && *x < d as i64)
+    }
+
     /// Nächstes Dreieck zu `q`: Abstand, nächster Punkt, Index. Ringweise um die Zelle von `q`,
     /// bis kein weiterer Ring näher sein kann.
     fn nearest(&self, q: DVec3) -> Option<(f64, DVec3, usize)> {
@@ -1302,14 +1380,7 @@ impl FacetGrid {
                 for y in (c[1] - r)..=(c[1] + r) {
                     for z in (c[2] - r)..=(c[2] + r) {
                         let ring = (x - c[0]).abs().max((y - c[1]).abs()).max((z - c[2]).abs());
-                        if ring != r
-                            || x < 0
-                            || y < 0
-                            || z < 0
-                            || x >= self.dims[0] as i64
-                            || y >= self.dims[1] as i64
-                            || z >= self.dims[2] as i64
-                        {
+                        if ring != r || !self.in_grid([x, y, z]) {
                             continue;
                         }
                         let idx =
@@ -1331,64 +1402,167 @@ impl FacetGrid {
         best
     }
 
-    /// Liegt `q` innen (gegen die Normale des nächsten Dreiecks) und weiter als `depth` von den
-    /// Dreiecken? `None`: näher als `depth` (Berühren, Netzfehler) – zählt nicht.
+    /// Dreiecke (Index, Abstand), die höchstens `r` von `q` entfernt liegen.
+    fn within(&self, q: DVec3, r: f64) -> Vec<(usize, f64)> {
+        // Nur die Zellen, die die Kugel mit Radius `r` um `q` trifft.
+        let a = self.cell_of(q - DVec3::splat(r));
+        let b = self.cell_of(q + DVec3::splat(r));
+        self.rays.set(self.rays.get().wrapping_add(1));
+        let mark = self.rays.get();
+        let mut stamp = self.stamp.borrow_mut();
+        let mut out = Vec::new();
+        for x in a[0]..=b[0] {
+            for y in a[1]..=b[1] {
+                for z in a[2]..=b[2] {
+                    if !self.in_grid([x, y, z]) {
+                        continue;
+                    }
+                    let idx = self.idx([x as usize, y as usize, z as usize]);
+                    for &k in &self.cells[idx] {
+                        let k = k as usize;
+                        if stamp[k] == mark {
+                            continue;
+                        }
+                        stamp[k] = mark;
+                        let d = closest_on_triangle(q, &self.facets[k].t).distance(q);
+                        if d <= r {
+                            out.push((k, d));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Vorzeichenbehaftete Zahl der Dreiecke, die der Strahl `p + t·d` (t > 0) durchstößt
+    /// (+1 aus dem Material heraus, −1 hinein): für ein geschlossenes Netz die Umlaufzahl von
+    /// `p`. Der Strahl läuft Zelle für Zelle durch das Raster (Amanatides–Woo); jedes Dreieck
+    /// zählt nur einmal.
+    fn ray_count(&self, p: DVec3, d: DVec3) -> i64 {
+        // Eintritt in das Raster, falls `p` außerhalb liegt.
+        let hi = self.lo
+            + DVec3::new(
+                self.dims[0] as f64,
+                self.dims[1] as f64,
+                self.dims[2] as f64,
+            ) * self.cell;
+        let (mut t_in, mut t_out) = (0.0_f64, f64::INFINITY);
+        for k in 0..3 {
+            let (o, dk, l, h) = (p[k], d[k], self.lo[k], hi[k]);
+            if dk.abs() < 1e-300 {
+                if o < l || o > h {
+                    return 0;
+                }
+                continue;
+            }
+            let (a, b) = ((l - o) / dk, (h - o) / dk);
+            t_in = t_in.max(a.min(b));
+            t_out = t_out.min(a.max(b));
+        }
+        if t_in > t_out {
+            return 0;
+        }
+        let start = if t_in > 0.0 {
+            p + d * (t_in + 1e-9 * self.cell)
+        } else {
+            p
+        };
+        let mut c = self.cell_of(start);
+        for (x, d) in c.iter_mut().zip(self.dims) {
+            *x = (*x).clamp(0, d as i64 - 1);
+        }
+        let step: [i64; 3] = [0, 1, 2].map(|k| if d[k] > 0.0 { 1 } else { -1 });
+        let mut t_max = [f64::INFINITY; 3];
+        let mut t_delta = [f64::INFINITY; 3];
+        for k in 0..3 {
+            if d[k].abs() > 1e-300 {
+                let edge = self.lo[k] + (c[k] + i64::from(d[k] > 0.0)) as f64 * self.cell;
+                t_max[k] = (edge - start[k]) / d[k];
+                t_delta[k] = self.cell / d[k].abs();
+            }
+        }
+        self.rays.set(self.rays.get().wrapping_add(1));
+        let mark = self.rays.get();
+        let mut stamp = self.stamp.borrow_mut();
+        let mut count = 0;
+        loop {
+            let idx = self.idx([c[0] as usize, c[1] as usize, c[2] as usize]);
+            for &k in &self.cells[idx] {
+                let k = k as usize;
+                if stamp[k] == mark {
+                    continue;
+                }
+                stamp[k] = mark;
+                let f = &self.facets[k];
+                if ray_triangle(p, d, &f.t).is_some() {
+                    count += if d.dot(f.n) > 0.0 { 1 } else { -1 };
+                }
+            }
+            let k = (0..3)
+                .min_by(|&a, &b| t_max[a].total_cmp(&t_max[b]))
+                .expect("drei Achsen");
+            c[k] += step[k];
+            if !self.in_grid(c) {
+                break;
+            }
+            t_max[k] += t_delta[k];
+        }
+        count
+    }
+
+    /// Umlaufzahl von `q` aus zwei Strahlen, bei Uneinigkeit (ein Strahl traf eine Kante oder
+    /// Ecke des Netzes) entscheidet ein dritter; `None`, wenn sich keine zwei einig sind.
+    fn winding(&self, q: DVec3) -> Option<i64> {
+        let ray = |k: usize| self.ray_count(q, DVec3::from_array(RAY_DIRS[k]).normalize());
+        let (a, b) = (ray(0), ray(1));
+        if a == b {
+            return Some(a);
+        }
+        let c = ray(2);
+        (c == a || c == b).then_some(c)
+    }
+
+    /// Liegt `q` innen (Umlaufzahl > 0) und weiter als `depth` von den Dreiecken? `None`: näher
+    /// als `depth` (Berühren, Netzfehler) oder unentscheidbar – zählt nicht.
     fn deep_inside(&self, q: DVec3, depth: f64) -> Option<bool> {
-        let f = (q - self.lo) / self.cell;
-        let c = [f.x, f.y, f.z];
-        let within = c
-            .iter()
-            .zip(self.dims)
-            .all(|(x, d)| *x >= 0.0 && *x < d as f64);
-        if within {
-            let cell = c.map(|x| x as usize);
-            let k = self.idx(cell);
+        let c = self.cell_of(q);
+        if self.in_grid(c) {
+            let k = self.idx([c[0] as usize, c[1] as usize, c[2] as usize]);
             if let Some(label) = self.inside.get(k).copied().flatten() {
                 // Leere Zelle: innen oder außen steht fest; zählt nur, wenn kein Dreieck näher
                 // als `depth` liegt (in den Zellen bis `depth` um sie herum).
-                let reach = (depth / self.cell).ceil() as i64 + 1;
-                let close = (-reach..=reach).any(|ox| {
-                    (-reach..=reach).any(|oy| {
-                        (-reach..=reach).any(|oz| {
-                            let m = [
-                                cell[0] as i64 + ox,
-                                cell[1] as i64 + oy,
-                                cell[2] as i64 + oz,
-                            ];
-                            if m.iter()
-                                .zip(self.dims)
-                                .any(|(x, d)| *x < 0 || *x >= d as i64)
-                            {
-                                return false;
-                            }
-                            let m = m.map(|x| x as usize);
-                            self.cells[self.idx(m)].iter().any(|t| {
-                                closest_on_triangle(q, &self.facets[*t as usize].t).distance(q)
-                                    <= depth
-                            })
-                        })
-                    })
-                });
-                return (!close).then_some(label);
+                return self.within(q, depth).is_empty().then_some(label);
             }
         }
-        let (d, p, k) = self.nearest(q)?;
-        (d > depth).then(|| (q - p).dot(self.facets[k].n) < 0.0)
+        let (d, _, _) = self.nearest(q)?;
+        if d <= depth {
+            return None;
+        }
+        self.winding(q).map(|w| w > 0)
     }
 }
 
-/// Dreiecke der Schale mit Normalen aus ihrem Bereich heraus (`volume`: ihr Volumen mit
-/// Vorzeichen; `flip`: Normalen umkehren, für das Material um einen Hohlraum).
-fn facets(triangles: &[[DVec3; 3]], volume: f64, flip: bool) -> Vec<Facet> {
+/// Dreiecke der Schale mit Normalen aus dem Material heraus (`volume`: ihr Volumen mit
+/// Vorzeichen; `flip`: Normalen umkehren, für das Material um einen Hohlraum) und ihren Flächen.
+fn facets(triangles: &[[DVec3; 3]], faces: &[usize], volume: f64, flip: bool) -> Vec<Facet> {
     let s = volume.signum() * if flip { -1.0 } else { 1.0 };
     triangles
         .iter()
-        .filter_map(|t| {
+        .zip(faces)
+        .filter_map(|(t, face)| {
             let n = (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero();
-            (n != DVec3::ZERO).then(|| Facet { t: *t, n: n * s })
+            (n != DVec3::ZERO).then(|| Facet {
+                t: *t,
+                n: n * s,
+                face: *face,
+            })
         })
         .collect()
 }
+
+/// Höchstens so viele Probepunkte (Schwerpunkte von Dreiecken) je Schale.
+const SHELL_PROBES: usize = 512;
 
 /// Schwerpunkte gleichmäßig verteilter Dreiecke der Schale (höchstens [`SHELL_PROBES`]), ein
 /// kleines Stück ins Innere der Schale gerückt (`volume`: ihr Volumen mit Vorzeichen, gibt an,
@@ -1407,17 +1581,188 @@ fn probes(triangles: &[[DVec3; 3]], volume: f64) -> Vec<DVec3> {
         .collect()
 }
 
+/// Sind zwei Trägerflächen dieselbe Fläche (Lage bis `tol`, Richtungen bis [`SAME_DIR`])?
+/// Freiformflächen nur, wenn sie dieselben Daten teilen.
+fn same_surface(a: &Surface, b: &Surface, tol: f64) -> bool {
+    let parallel = |u: DVec3, v: DVec3| u.dot(v).abs() >= SAME_DIR;
+    let close = |x: f64, y: f64| (x - y).abs() <= tol;
+    // Abstand des Punkts `p` von der Geraden durch `o` in Richtung `z`.
+    let off_axis = |p: DVec3, o: DVec3, z: DVec3| {
+        let d = p - o;
+        (d - z * d.dot(z)).length()
+    };
+    match (a, b) {
+        (Surface::Plane { frame: f }, Surface::Plane { frame: g }) => {
+            parallel(f.z, g.z) && (g.origin - f.origin).dot(f.z).abs() <= tol
+        }
+        (
+            Surface::Cylinder {
+                frame: f,
+                radius: r,
+            },
+            Surface::Cylinder {
+                frame: g,
+                radius: q,
+            },
+        ) => parallel(f.z, g.z) && off_axis(g.origin, f.origin, f.z) <= tol && close(*r, *q),
+        (
+            Surface::Cone {
+                frame: f,
+                radius: r,
+                slope: s,
+            },
+            Surface::Cone {
+                frame: g,
+                radius: q,
+                slope: t,
+            },
+        ) => {
+            // Gleiche Spitze und gleicher halber Öffnungswinkel (die Achse darf umgekehrt sein).
+            let apex = |fr: &Frame, radius: f64, slope: f64| fr.origin - fr.z * (radius / slope);
+            s.abs() > 1e-12
+                && t.abs() > 1e-12
+                && parallel(f.z, g.z)
+                && apex(f, *r, *s).distance(apex(g, *q, *t)) <= tol
+                && (s.abs() - t.abs()).abs() <= 1e-9 * (1.0 + s.abs())
+        }
+        (
+            Surface::Sphere {
+                frame: f,
+                radius: r,
+            },
+            Surface::Sphere {
+                frame: g,
+                radius: q,
+            },
+        ) => f.origin.distance(g.origin) <= tol && close(*r, *q),
+        (
+            Surface::Torus {
+                frame: f,
+                major: r,
+                minor: s,
+            },
+            Surface::Torus {
+                frame: g,
+                major: q,
+                minor: t,
+            },
+        ) => {
+            parallel(f.z, g.z)
+                && f.origin.distance(g.origin) <= tol
+                && close(*r, *q)
+                && close(*s, *t)
+        }
+        (Surface::Nurbs(d), Surface::Nurbs(e)) => std::sync::Arc::ptr_eq(d, e),
+        _ => false,
+    }
+}
+
+/// Skalarprodukt zweier Einheitsrichtungen, ab dem sie als gleich gelten ([`same_surface`]).
+const SAME_DIR: f64 = 1.0 - 1e-9;
+
+/// Höchstens so viele gleichmäßig gewählte Dreiecke je Stück prüft [`check_face_sides`]
+/// (dazu je Fläche ihr größtes Dreieck).
+const SIDE_PROBES: usize = 64;
+
+/// Normalen, deren Skalarprodukt darüber liegt, gelten als gleich gerichtet (etwa 30°):
+/// Nachbardreiecke derselben gekrümmten Fläche und Flächen, die auf derselben Trägerfläche
+/// übereinanderliegen.
+const PARALLEL: f64 = 0.87;
+
+/// Prüft jedes Stück (äußere Schale mit ihren Hohlräumen) unabhängig vom Aufbau: Dicht hinter
+/// jedem Dreieck (gegen die Außennormale) muss die Umlaufzahl 1 sein, dicht davor 0. Doppelt
+/// belegte oder gegengleich übereinanderliegende Flächen, Flächen auf der falschen Seite und
+/// Ränder, die um die falsche Hälfte laufen, fallen so auf. Der Abstand der Probepunkte ist
+/// `depth` (zwei Sehnen des Netzes plus Genauigkeit), kleiner nur, wo ein anders gerichtetes
+/// Dreieck einer anderen Trägerfläche näher liegt (dünne Stege, Fasen: dann die Hälfte dieses
+/// Abstands). Liegt ein gegengleich gerichtetes Dreieck einer anderen Trägerfläche näher als
+/// `depth` am Schwerpunkt (dünne Wand), entscheidet das Dreieck nicht; Dreiecke auf derselben
+/// Trägerfläche (bis `tol` genau) sind keine Wand, sondern eine doppelte Belegung, und zählen.
+/// Geprüft werden je Fläche ihr größtes Dreieck und je Stück bis [`SIDE_PROBES`] weitere.
+// Der negierte Vergleich lehnt absichtlich auch NaN ab.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn check_face_sides(grid: &FacetGrid, depth: f64, tol: f64, solid: &Solid) -> Result<(), Skip> {
+    let area = |t: &[DVec3; 3]| (t[1] - t[0]).cross(t[2] - t[0]).length();
+    let coincident = |a: usize, b: usize| {
+        same_surface(
+            &solid.faces[Id::from_index(a)].surface,
+            &solid.faces[Id::from_index(b)].surface,
+            tol.max(Tolerance::default().linear),
+        )
+    };
+    let mut largest: HashMap<usize, (f64, usize)> = HashMap::new();
+    for (k, f) in grid.facets.iter().enumerate() {
+        let a = area(&f.t);
+        let e = largest.entry(f.face).or_insert((a, k));
+        if a > e.0 {
+            *e = (a, k);
+        }
+    }
+    let step = grid.facets.len().div_ceil(SIDE_PROBES).max(1);
+    let mut chosen: Vec<usize> = largest.values().map(|(_, k)| *k).collect();
+    chosen.extend((0..grid.facets.len()).step_by(step));
+    chosen.sort_unstable();
+    chosen.dedup();
+    for k in chosen {
+        let f = &grid.facets[k];
+        let c = (f.t[0] + f.t[1] + f.t[2]) / 3.0;
+        let mut d_other = f64::INFINITY;
+        let mut thin = false;
+        for (j, d) in grid.within(c, depth) {
+            if j == k {
+                continue;
+            }
+            let other = &grid.facets[j];
+            let dot = other.n.dot(f.n);
+            if dot > PARALLEL {
+                continue;
+            }
+            if dot < -PARALLEL {
+                // Gegengleich auf derselben Trägerfläche: doppelte Belegung, die Probe zählt.
+                if other.face != f.face && coincident(other.face, f.face) {
+                    continue;
+                }
+                thin = true;
+            } else {
+                d_other = d_other.min(d);
+            }
+        }
+        if thin {
+            continue;
+        }
+        let h = depth.min(0.5 * d_other);
+        if !(h > 0.0) {
+            continue;
+        }
+        let (Some(inside), Some(outside)) = (grid.winding(c - f.n * h), grid.winding(c + f.n * h))
+        else {
+            continue;
+        };
+        if inside != 1 || outside != 0 {
+            return Err(Skip(format!(
+                "Die Fläche {} liegt nicht richtig im Körper: Innen und außen passen an ihr \
+                 nicht zusammen.",
+                face_name(solid, f.face)
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Lage der Schalen zueinander, über die groben Netze: Ein Hohlraum liegt in seiner äußeren
 /// Schale, Stücke überschneiden sich nicht. Ein Stück ist seine äußere Schale ohne seine
-/// Hohlräume (ein Stück im Hohlraum eines anderen ist erlaubt). Ein Probepunkt (Schwerpunkt eines
-/// Netzdreiecks) zählt erst, wenn er weiter als `depth` (zwei Sehnen des Netzes plus Genauigkeit
-/// der Datei) von den Dreiecken des anderen Stücks entfernt liegt; ob innen oder außen, sagt die
-/// Normale des nächsten Dreiecks (Suche über ein Raster). Berührende Stücke (Stift in Bohrung)
-/// und Netzfehler bleiben erlaubt. Nur Paare, deren Hüllquader sich treffen, werden verglichen.
+/// Hohlräume (`pieces`: je äußerer Schale ihr Raster; ein Stück im Hohlraum eines anderen ist
+/// erlaubt). Ein Probepunkt (Schwerpunkt eines Netzdreiecks) zählt erst, wenn er weiter als
+/// `depth` (zwei Sehnen des Netzes plus Genauigkeit der Datei) von den Dreiecken des anderen
+/// Stücks entfernt liegt; ob innen oder außen, sagt die Umlaufzahl (Strahlen durch das Raster).
+/// Berührende Stücke (Stift in Bohrung) und Netzfehler bleiben erlaubt. Nur Paare, deren
+/// Hüllquader sich treffen, werden verglichen.
 fn check_shells(
     triangles: &ShellTriangles,
+    faces: &ShellTriangleFaces,
     volumes: &[f64],
     owners: &[Option<usize>],
+    pieces: &[Option<FacetGrid>],
     depth: f64,
 ) -> Result<(), Skip> {
     let boxes: Vec<(DVec3, DVec3)> = triangles
@@ -1430,12 +1775,7 @@ fn check_shells(
         .map(|(t, v)| probes(t, *v))
         .collect();
     let lumps: Vec<usize> = (0..owners.len()).filter(|k| owners[*k].is_none()).collect();
-    let voids_of = |l: usize| -> Vec<usize> {
-        (0..owners.len())
-            .filter(|k| owners[*k] == Some(l))
-            .collect()
-    };
-    let region = |k: usize| FacetGrid::new(facets(&triangles[k], volumes[k], false));
+    let region = |k: usize| FacetGrid::new(facets(&triangles[k], &faces[k], volumes[k], false));
     let outside = || Skip("Ein Hohlraum liegt nicht ganz im Körper.".into());
     // Hohlräume: ganz in ihrer äußeren Schale, die äußere Schale nicht im Hohlraum.
     for (v, owner) in owners.iter().enumerate() {
@@ -1458,19 +1798,14 @@ fn check_shells(
         }
     }
     // Stücke: kein Punkt eines Stücks tief im Material eines anderen.
-    let mut pieces: Vec<Option<FacetGrid>> = (0..owners.len()).map(|_| None).collect();
     for &b in &lumps {
+        let Some(grid) = &pieces[b] else {
+            continue;
+        };
         for &a in &lumps {
             if a == b || !boxes_meet(boxes[a], boxes[b], depth) {
                 continue;
             }
-            let grid = pieces[b].get_or_insert_with(|| {
-                let mut f = facets(&triangles[b], volumes[b], false);
-                for v in voids_of(b) {
-                    f.extend(facets(&triangles[v], volumes[v], true));
-                }
-                FacetGrid::new(f)
-            });
             if probes[a]
                 .iter()
                 .any(|q| in_box(*q, boxes[b], depth) && grid.deep_inside(*q, depth) == Some(true))
@@ -1485,14 +1820,16 @@ fn check_shells(
 /// Außenrichtung je Schale über ihr Volumen: äußere Schalen positiv, Hohlräume (Eigentümer in
 /// `owners`, Reihenfolge von `solid.shells`) negativ; sonst wird die Schale umgedreht – außer sie
 /// enthält eine Fläche, deren Seite nur geraten ist (`guessed`, je Fläche): Dann ist der Körper
-/// zweideutig. Danach Lage der Schalen zueinander ([`check_shells`], mit der Genauigkeit `tol`).
+/// zweideutig. Danach je Stück (äußere Schale mit Hohlräumen) die Probe, ob innen und außen an
+/// jeder Fläche stimmen ([`check_face_sides`]), und die Lage der Schalen zueinander
+/// ([`check_shells`]), beides mit der Tiefe aus zwei Sehnen des Netzes und der Genauigkeit `tol`.
 fn orient_shells(
     solid: &mut Solid,
     owners: &[Option<usize>],
     guessed: &[bool],
     tol: f64,
 ) -> Result<(), Skip> {
-    let (volumes, triangles) = shell_volumes(solid)?;
+    let (volumes, triangles, faces) = shell_volumes(solid)?;
     for (k, &v) in volumes.iter().enumerate() {
         let void = owners.get(k).is_some_and(Option::is_some);
         if (v > 0.0) == void {
@@ -1507,7 +1844,25 @@ fn orient_shells(
             turn_inside_out(solid, &ids);
         }
     }
-    check_shells(&triangles, &volumes, owners, 2.0 * CLASSIFY_CHORD + tol)
+    let depth = 2.0 * CLASSIFY_CHORD + tol;
+    // Je Stück ein Raster über äußere Schale und Hohlräume, Normalen aus dem Material heraus.
+    let pieces: Vec<Option<FacetGrid>> = (0..owners.len())
+        .map(|b| {
+            owners.get(b).copied().flatten().is_none().then(|| {
+                let mut f = facets(&triangles[b], &faces[b], volumes[b], false);
+                for v in (0..owners.len()).filter(|v| owners[*v] == Some(b)) {
+                    f.extend(facets(&triangles[v], &faces[v], volumes[v], true));
+                }
+                FacetGrid::new(f)
+            })
+        })
+        .collect();
+    // Erst die Lage der Schalen (die genauere Meldung), dann die allgemeine Probe.
+    check_shells(&triangles, &faces, &volumes, owners, &pieces, depth)?;
+    for grid in pieces.iter().flatten() {
+        check_face_sides(grid, depth, tol, solid)?;
+    }
+    Ok(())
 }
 
 /// Jede Kante liegt mit ihrer Mitte auf ihren Flächen, jede Ecke auf ihren Kanten.
