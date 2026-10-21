@@ -570,10 +570,18 @@ pub(crate) fn finish_face(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), S
     let points: Vec<Vec<DVec3>> = if plane && f.marked_outer.is_some() {
         Vec::new()
     } else {
-        f.loops.iter().map(|l| raw.loop_points(l)).collect()
+        // Auf Flächen mit Polen dichter, wo u schnell läuft (Rand nahe einem Pol).
+        if surface.pole_vs().is_empty() {
+            f.loops.iter().map(|l| raw.loop_points(l)).collect()
+        } else {
+            f.loops
+                .iter()
+                .map(|l| seam::fine_loop_points(raw, surface, l))
+                .collect()
+        }
     };
     let outer = match (f.marked_outer, surface) {
-        (Some(k), _) => k,
+        (Some(k), Surface::Plane { .. }) => k,
         (None, Surface::Plane { frame }) => {
             // Ohne Kennzeichnung: der Rand mit der größten Fläche in der Ebene.
             let area = |pts: &[DVec3]| {
@@ -591,13 +599,18 @@ pub(crate) fn finish_face(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), S
                 .max_by(|&a, &b| area(&points[a]).total_cmp(&area(&points[b])))
                 .unwrap_or(0)
         }
-        (None, _) => {
-            // Gekrümmt ohne Kennzeichnung: der Rand, der am deutlichsten gegen den
-            // Uhrzeigersinn um die Außennormale läuft (Löcher laufen andersherum).
+        (marked, _) => {
+            // Gekrümmt: der Rand, der am deutlichsten gegen den Uhrzeigersinn um die
+            // Außennormale läuft (Löcher laufen andersherum). Eine Kennzeichnung „außen“ gilt
+            // nur, wenn ihr Rand auch so läuft: Auf geschlossenen Flächen (Kugelband ohne Pol)
+            // ist „außen“ in STEP nicht eindeutig.
             let turn = |pts: &[DVec3]| oriented_area(&points_to_uv(surface, sense, pts), sense);
-            (0..points.len())
-                .max_by(|&a, &b| turn(&points[a]).total_cmp(&turn(&points[b])))
-                .unwrap_or(0)
+            match marked {
+                Some(k) if turn(&points[k]) > 0.0 => k,
+                _ => (0..points.len())
+                    .max_by(|&a, &b| turn(&points[a]).total_cmp(&turn(&points[b])))
+                    .unwrap_or(0),
+            }
         }
     };
     let patch = if plane {
@@ -1111,28 +1124,16 @@ fn shell_volumes(solid: &Solid) -> Result<(Vec<f64>, ShellTriangles), Skip> {
     Ok((volumes, triangles))
 }
 
-/// Raumwinkel des Dreiecks `t` von `q` aus (Van Oosterom/Strackee).
-fn solid_angle(q: DVec3, t: &[DVec3; 3]) -> f64 {
-    let [a, b, c] = t.map(|p| p - q);
-    let (la, lb, lc) = (a.length(), b.length(), c.length());
-    let num = a.dot(b.cross(c));
-    let den = la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
-    2.0 * num.atan2(den)
-}
-
-/// Betrag der Umlaufzahl der Dreiecke um `q`: innen 1, außen 0, auf dem Rand etwa ½.
-fn winding_number(q: DVec3, triangles: &[[DVec3; 3]]) -> f64 {
-    (triangles.iter().map(|t| solid_angle(q, t)).sum::<f64>() / (4.0 * std::f64::consts::PI)).abs()
-}
-
 /// Höchstens so viele Probepunkte (Schwerpunkte von Dreiecken) je Schale.
 const SHELL_PROBES: usize = 512;
 
-/// Hüllquader von Dreiecken.
-fn bounds_of(triangles: &[[DVec3; 3]]) -> (DVec3, DVec3) {
-    triangles
-        .iter()
-        .flatten()
+/// Höchstens so viele Zellen je Achse im Raster über die Dreiecke einer Schale.
+const GRID_CELLS: f64 = 48.0;
+
+/// Hüllquader von Punkten.
+fn bounds_of<'a>(points: impl IntoIterator<Item = &'a DVec3>) -> (DVec3, DVec3) {
+    points
+        .into_iter()
         .fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), p| {
             (lo.min(*p), hi.max(*p))
         })
@@ -1148,56 +1149,252 @@ fn boxes_meet(a: (DVec3, DVec3), b: (DVec3, DVec3), d: f64) -> bool {
     (a.0 - DVec3::splat(d)).cmple(b.1).all() && (b.0 - DVec3::splat(d)).cmple(a.1).all()
 }
 
-/// Abstand von `q` zum Dreieck `t` (nächster Punkt nach Ericson, „Real-Time Collision
-/// Detection“, 5.1.5).
-fn triangle_distance(q: DVec3, t: &[DVec3; 3]) -> f64 {
+/// Nächster Punkt des Dreiecks `t` zu `q` (Ericson, „Real-Time Collision Detection“, 5.1.5).
+fn closest_on_triangle(q: DVec3, t: &[DVec3; 3]) -> DVec3 {
     let [a, b, c] = *t;
     let (ab, ac, ap) = (b - a, c - a, q - a);
     let (d1, d2) = (ab.dot(ap), ac.dot(ap));
     if d1 <= 0.0 && d2 <= 0.0 {
-        return q.distance(a);
+        return a;
     }
     let bp = q - b;
     let (d3, d4) = (ab.dot(bp), ac.dot(bp));
     if d3 >= 0.0 && d4 <= d3 {
-        return q.distance(b);
+        return b;
     }
     let vc = d1 * d4 - d3 * d2;
     if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-        return q.distance(a + ab * (d1 / (d1 - d3)));
+        return a + ab * (d1 / (d1 - d3));
     }
     let cp = q - c;
     let (d5, d6) = (ab.dot(cp), ac.dot(cp));
     if d6 >= 0.0 && d5 <= d6 {
-        return q.distance(c);
+        return c;
     }
     let vb = d5 * d2 - d1 * d6;
     if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-        return q.distance(a + ac * (d2 / (d2 - d6)));
+        return a + ac * (d2 / (d2 - d6));
     }
     let va = d3 * d6 - d5 * d4;
     if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
         let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        return q.distance(b + (c - b) * w);
+        return b + (c - b) * w;
     }
     let denom = 1.0 / (va + vb + vc);
-    let (v, w) = (vb * denom, vc * denom);
-    q.distance(a + ab * v + ac * w)
+    a + ab * (vb * denom) + ac * (vc * denom)
 }
 
-/// Kleinster Abstand von `q` zu den Dreiecken.
-fn mesh_distance(q: DVec3, triangles: &[[DVec3; 3]]) -> f64 {
+/// Dreieck mit der Normale, die aus dem betrachteten Bereich heraus zeigt.
+struct Facet {
+    t: [DVec3; 3],
+    n: DVec3,
+}
+
+/// Gleichmäßiges Raster über Dreiecke (je Zelle die Dreiecke, deren Hüllquader sie trifft) für
+/// die Suche nach dem nächsten Dreieck.
+struct FacetGrid {
+    lo: DVec3,
+    cell: f64,
+    dims: [usize; 3],
+    cells: Vec<Vec<u32>>,
+    facets: Vec<Facet>,
+    /// Je leerer Zelle: liegt sie innen? Keine Fläche schneidet eine leere Zelle (jedes Dreieck
+    /// steht in allen Zellen, die sein Hüllquader trifft), deshalb gilt das für die ganze Zelle
+    /// und für benachbarte leere Zellen gleich.
+    inside: Vec<Option<bool>>,
+}
+
+impl FacetGrid {
+    fn new(facets: Vec<Facet>) -> FacetGrid {
+        let (lo, hi) = bounds_of(facets.iter().flat_map(|f| f.t.iter()));
+        let extent = (hi - lo).max(DVec3::splat(1e-9));
+        let cell = (extent.max_element() / GRID_CELLS).max(1e-9);
+        let dims = [extent.x, extent.y, extent.z].map(|e| ((e / cell).ceil() as usize).max(1));
+        let mut cells = vec![Vec::new(); dims[0] * dims[1] * dims[2]];
+        let index = |p: DVec3| {
+            let c = ((p - lo) / cell).floor();
+            [c.x, c.y, c.z]
+                .iter()
+                .zip(dims)
+                .map(|(x, d)| (*x).clamp(0.0, (d - 1) as f64) as usize)
+                .collect::<Vec<_>>()
+        };
+        for (k, f) in facets.iter().enumerate() {
+            let (a, b) = bounds_of(f.t.iter());
+            let (ia, ib) = (index(a), index(b));
+            for x in ia[0]..=ib[0] {
+                for y in ia[1]..=ib[1] {
+                    for z in ia[2]..=ib[2] {
+                        cells[(x * dims[1] + y) * dims[2] + z].push(k as u32);
+                    }
+                }
+            }
+        }
+        let mut grid = FacetGrid {
+            lo,
+            cell,
+            dims,
+            cells,
+            facets,
+            inside: Vec::new(),
+        };
+        grid.classify();
+        grid
+    }
+
+    fn idx(&self, c: [usize; 3]) -> usize {
+        (c[0] * self.dims[1] + c[1]) * self.dims[2] + c[2]
+    }
+
+    /// Leere Zellen: je zusammenhängendem Gebiet einmal über das nächste Dreieck bestimmt, dann
+    /// über Nachbarn (6 Richtungen) weitergegeben.
+    fn classify(&mut self) {
+        let n = self.cells.len();
+        let mut inside: Vec<Option<bool>> = vec![None; n];
+        let [dx, dy, dz] = self.dims;
+        for start in 0..n {
+            if inside[start].is_some() || !self.cells[start].is_empty() {
+                continue;
+            }
+            let c = [start / (dy * dz), (start / dz) % dy, start % dz];
+            let centre = self.lo
+                + (DVec3::new(c[0] as f64, c[1] as f64, c[2] as f64) + DVec3::splat(0.5))
+                    * self.cell;
+            let label = self
+                .nearest(centre)
+                .is_some_and(|(_, p, k)| (centre - p).dot(self.facets[k].n) < 0.0);
+            inside[start] = Some(label);
+            let mut stack = vec![c];
+            while let Some([x, y, z]) = stack.pop() {
+                let next = [
+                    (x > 0).then(|| [x - 1, y, z]),
+                    (x + 1 < dx).then(|| [x + 1, y, z]),
+                    (y > 0).then(|| [x, y - 1, z]),
+                    (y + 1 < dy).then(|| [x, y + 1, z]),
+                    (z > 0).then(|| [x, y, z - 1]),
+                    (z + 1 < dz).then(|| [x, y, z + 1]),
+                ];
+                for m in next.into_iter().flatten() {
+                    let k = self.idx(m);
+                    if inside[k].is_none() && self.cells[k].is_empty() {
+                        inside[k] = Some(label);
+                        stack.push(m);
+                    }
+                }
+            }
+        }
+        self.inside = inside;
+    }
+
+    /// Nächstes Dreieck zu `q`: Abstand, nächster Punkt, Index. Ringweise um die Zelle von `q`,
+    /// bis kein weiterer Ring näher sein kann.
+    fn nearest(&self, q: DVec3) -> Option<(f64, DVec3, usize)> {
+        let c = ((q - self.lo) / self.cell).floor();
+        let c = [c.x, c.y, c.z]
+            .iter()
+            .zip(self.dims)
+            .map(|(x, d)| (*x).clamp(0.0, (d - 1) as f64) as i64)
+            .collect::<Vec<_>>();
+        let max_r = *self.dims.iter().max()? as i64;
+        let mut best: Option<(f64, DVec3, usize)> = None;
+        for r in 0..=max_r {
+            for x in (c[0] - r)..=(c[0] + r) {
+                for y in (c[1] - r)..=(c[1] + r) {
+                    for z in (c[2] - r)..=(c[2] + r) {
+                        let ring = (x - c[0]).abs().max((y - c[1]).abs()).max((z - c[2]).abs());
+                        if ring != r
+                            || x < 0
+                            || y < 0
+                            || z < 0
+                            || x >= self.dims[0] as i64
+                            || y >= self.dims[1] as i64
+                            || z >= self.dims[2] as i64
+                        {
+                            continue;
+                        }
+                        let idx =
+                            (x as usize * self.dims[1] + y as usize) * self.dims[2] + z as usize;
+                        for &k in &self.cells[idx] {
+                            let p = closest_on_triangle(q, &self.facets[k as usize].t);
+                            let d = p.distance(q);
+                            if best.is_none_or(|b| d < b.0) {
+                                best = Some((d, p, k as usize));
+                            }
+                        }
+                    }
+                }
+            }
+            if best.is_some_and(|b| b.0 <= r as f64 * self.cell) {
+                break;
+            }
+        }
+        best
+    }
+
+    /// Liegt `q` innen (gegen die Normale des nächsten Dreiecks) und weiter als `depth` von den
+    /// Dreiecken? `None`: näher als `depth` (Berühren, Netzfehler) – zählt nicht.
+    fn deep_inside(&self, q: DVec3, depth: f64) -> Option<bool> {
+        let f = (q - self.lo) / self.cell;
+        let c = [f.x, f.y, f.z];
+        let within = c
+            .iter()
+            .zip(self.dims)
+            .all(|(x, d)| *x >= 0.0 && *x < d as f64);
+        if within {
+            let cell = c.map(|x| x as usize);
+            let k = self.idx(cell);
+            if let Some(label) = self.inside.get(k).copied().flatten() {
+                // Leere Zelle: innen oder außen steht fest; zählt nur, wenn kein Dreieck näher
+                // als `depth` liegt (in den Zellen bis `depth` um sie herum).
+                let reach = (depth / self.cell).ceil() as i64 + 1;
+                let close = (-reach..=reach).any(|ox| {
+                    (-reach..=reach).any(|oy| {
+                        (-reach..=reach).any(|oz| {
+                            let m = [
+                                cell[0] as i64 + ox,
+                                cell[1] as i64 + oy,
+                                cell[2] as i64 + oz,
+                            ];
+                            if m.iter()
+                                .zip(self.dims)
+                                .any(|(x, d)| *x < 0 || *x >= d as i64)
+                            {
+                                return false;
+                            }
+                            let m = m.map(|x| x as usize);
+                            self.cells[self.idx(m)].iter().any(|t| {
+                                closest_on_triangle(q, &self.facets[*t as usize].t).distance(q)
+                                    <= depth
+                            })
+                        })
+                    })
+                });
+                return (!close).then_some(label);
+            }
+        }
+        let (d, p, k) = self.nearest(q)?;
+        (d > depth).then(|| (q - p).dot(self.facets[k].n) < 0.0)
+    }
+}
+
+/// Dreiecke der Schale mit Normalen aus ihrem Bereich heraus (`volume`: ihr Volumen mit
+/// Vorzeichen; `flip`: Normalen umkehren, für das Material um einen Hohlraum).
+fn facets(triangles: &[[DVec3; 3]], volume: f64, flip: bool) -> Vec<Facet> {
+    let s = volume.signum() * if flip { -1.0 } else { 1.0 };
     triangles
         .iter()
-        .map(|t| triangle_distance(q, t))
-        .fold(f64::INFINITY, f64::min)
+        .filter_map(|t| {
+            let n = (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero();
+            (n != DVec3::ZERO).then(|| Facet { t: *t, n: n * s })
+        })
+        .collect()
 }
 
 /// Schwerpunkte gleichmäßig verteilter Dreiecke der Schale (höchstens [`SHELL_PROBES`]), ein
 /// kleines Stück ins Innere der Schale gerückt (`volume`: ihr Volumen mit Vorzeichen, gibt an,
 /// wohin die Dreiecke zeigen).
 fn probes(triangles: &[[DVec3; 3]], volume: f64) -> Vec<DVec3> {
-    let (lo, hi) = bounds_of(triangles);
+    let (lo, hi) = bounds_of(triangles.iter().flatten());
     let inset = 1e-6 * (1.0 + lo.distance(hi));
     let step = triangles.len().div_ceil(SHELL_PROBES).max(1);
     triangles
@@ -1214,15 +1411,19 @@ fn probes(triangles: &[[DVec3; 3]], volume: f64) -> Vec<DVec3> {
 /// Schale, Stücke überschneiden sich nicht. Ein Stück ist seine äußere Schale ohne seine
 /// Hohlräume (ein Stück im Hohlraum eines anderen ist erlaubt). Ein Probepunkt (Schwerpunkt eines
 /// Netzdreiecks) zählt erst, wenn er weiter als `depth` (zwei Sehnen des Netzes plus Genauigkeit
-/// der Datei) von der anderen Schale entfernt liegt: Berührende Stücke (Stift in Bohrung) und
-/// Netzfehler bleiben erlaubt. Nur Paare, deren Hüllquader sich treffen, werden verglichen.
+/// der Datei) von den Dreiecken des anderen Stücks entfernt liegt; ob innen oder außen, sagt die
+/// Normale des nächsten Dreiecks (Suche über ein Raster). Berührende Stücke (Stift in Bohrung)
+/// und Netzfehler bleiben erlaubt. Nur Paare, deren Hüllquader sich treffen, werden verglichen.
 fn check_shells(
     triangles: &ShellTriangles,
     volumes: &[f64],
     owners: &[Option<usize>],
     depth: f64,
 ) -> Result<(), Skip> {
-    let boxes: Vec<(DVec3, DVec3)> = triangles.iter().map(|t| bounds_of(t)).collect();
+    let boxes: Vec<(DVec3, DVec3)> = triangles
+        .iter()
+        .map(|t| bounds_of(t.iter().flatten()))
+        .collect();
     let probes: Vec<Vec<DVec3>> = triangles
         .iter()
         .zip(volumes)
@@ -1234,46 +1435,45 @@ fn check_shells(
             .filter(|k| owners[*k] == Some(l))
             .collect()
     };
+    let region = |k: usize| FacetGrid::new(facets(&triangles[k], volumes[k], false));
     let outside = || Skip("Ein Hohlraum liegt nicht ganz im Körper.".into());
     // Hohlräume: ganz in ihrer äußeren Schale, die äußere Schale nicht im Hohlraum.
     for (v, owner) in owners.iter().enumerate() {
         let Some(o) = *owner else {
             continue;
         };
-        if probes[v].iter().any(|q| {
-            winding_number(*q, &triangles[o]) < 0.25 && mesh_distance(*q, &triangles[o]) > depth
-        }) {
+        let outer = region(o);
+        if probes[v]
+            .iter()
+            .any(|q| outer.deep_inside(*q, depth) == Some(false))
+        {
             return Err(outside());
         }
-        if probes[o].iter().any(|q| {
-            in_box(*q, boxes[v], depth)
-                && winding_number(*q, &triangles[v]) > 0.75
-                && mesh_distance(*q, &triangles[v]) > depth
-        }) {
+        let cavity = region(v);
+        if probes[o]
+            .iter()
+            .any(|q| in_box(*q, boxes[v], depth) && cavity.deep_inside(*q, depth) == Some(true))
+        {
             return Err(outside());
         }
     }
     // Stücke: kein Punkt eines Stücks tief im Material eines anderen.
-    for &a in &lumps {
-        for &b in &lumps {
+    let mut pieces: Vec<Option<FacetGrid>> = (0..owners.len()).map(|_| None).collect();
+    for &b in &lumps {
+        for &a in &lumps {
             if a == b || !boxes_meet(boxes[a], boxes[b], depth) {
                 continue;
             }
-            let voids = voids_of(b);
-            let inside = |q: DVec3| {
-                let w = winding_number(q, &triangles[b])
-                    - voids
-                        .iter()
-                        .map(|v| winding_number(q, &triangles[*v]))
-                        .sum::<f64>();
-                w > 0.75
-                    && std::iter::once(b)
-                        .chain(voids.iter().copied())
-                        .all(|s| mesh_distance(q, &triangles[s]) > depth)
-            };
+            let grid = pieces[b].get_or_insert_with(|| {
+                let mut f = facets(&triangles[b], volumes[b], false);
+                for v in voids_of(b) {
+                    f.extend(facets(&triangles[v], volumes[v], true));
+                }
+                FacetGrid::new(f)
+            });
             if probes[a]
                 .iter()
-                .any(|q| in_box(*q, boxes[b], depth) && inside(*q))
+                .any(|q| in_box(*q, boxes[b], depth) && grid.deep_inside(*q, depth) == Some(true))
             {
                 return Err(Skip("Zwei Stücke des Körpers überschneiden sich.".into()));
             }
@@ -1374,6 +1574,7 @@ pub fn build_solid(
     let tol = opts.weld_tol_mm;
     let mut raw = read_raw(file, units, items, tol, progress)?;
     seam::snap_poles(&mut raw, tol);
+    seam::split_at_poles(&mut raw, tol);
     seam::drop_degenerate(&mut raw, tol)?;
     seam::insert_seams(&mut raw, tol)?;
     seam::check_poles(&raw, tol)?;

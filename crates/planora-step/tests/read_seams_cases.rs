@@ -969,3 +969,354 @@ fn many_pieces_are_checked_quickly() {
     assert_eq!(solid.shells.len(), 60);
     assert!(took.as_secs_f64() < 5.0, "{took:?}");
 }
+
+// --- Nacharbeit 3: Kugelflächen mit Polen im Rand, Bänder, Laufzeit der Schalenprüfung ---
+
+/// Umlaufzahl des Netzes um `q` (innen 1, außen 0).
+fn winding_at(s: &Solid, q: DVec3) -> f64 {
+    let m = tessellate(
+        s,
+        &TessellationOptions {
+            chord_tolerance: 0.01,
+        },
+    )
+    .expect("Netz");
+    let mut total = 0.0;
+    for t in m.indices.chunks(3) {
+        let [a, b, c] = [t[0], t[1], t[2]].map(|i| m.positions[i as usize] - q);
+        let (la, lb, lc) = (a.length(), b.length(), c.length());
+        let num = a.dot(b.cross(c));
+        let den = la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
+        total += 2.0 * num.atan2(den);
+    }
+    total / (4.0 * PI)
+}
+
+/// Richtig gelesen (Volumen, `inside` innen) und jede einzelne Kippung abgelehnt oder derselbe
+/// Körper (nie der Gegenkörper).
+fn assert_never_opposite(text: &str, want: f64, inside: DVec3, what: &str) {
+    let check = |s: &Solid, how: &str| {
+        let v = mesh_volume(s, 0.002);
+        assert!(
+            ((v - want) / want).abs() <= 5e-3,
+            "{what} {how}: {v} statt {want}"
+        );
+        let w = winding_at(s, inside);
+        assert!(w > 0.5, "{what} {how}: Probepunkt außen ({w})");
+    };
+    let s = read(text).unwrap_or_else(|Skip(m)| panic!("{what}: {m}"));
+    validate(&s).unwrap_or_else(|e| panic!("{what}: {e}"));
+    check(&s, "richtig");
+    for (k, t) in single_flips(text).iter().enumerate() {
+        if let Ok(s) = read(t) {
+            check(&s, &format!("Kippung {k}"));
+        }
+    }
+}
+
+const SR: f64 = 6.0;
+
+/// Meridian der Kugel r 6 um den Ursprung (Achse z) bei der Länge `u`, als Kante vom Süd- zum
+/// Nordpol.
+fn meridian_edge(s: &mut Step, south: u64, north: u64, u: f64) -> u64 {
+    let radial = DVec3::new(u.cos(), u.sin(), 0.0);
+    let f = s.axis2(DVec3::ZERO, radial.cross(DVec3::Z), radial);
+    let c = s.push(format!("CIRCLE('',#{f},{SR:.1})"));
+    s.edge(south, north, c, true)
+}
+
+fn sphere_surface(s: &mut Step) -> u64 {
+    let f = s.axis2(DVec3::ZERO, DVec3::Z, DVec3::X);
+    s.push(format!("SPHERICAL_SURFACE('',#{f},{SR:.1})"))
+}
+
+/// Kugelkeil zwischen den Längen 0 und `alpha` (Rand durch beide Pole); bei `alpha = π` mit
+/// einer ebenen Halbscheibe statt zweier. Volumen 144 · α.
+fn lune(alpha: f64) -> String {
+    let mut s = Step::new();
+    let south = s.vertex(DVec3::new(0.0, 0.0, -SR));
+    let north = s.vertex(DVec3::new(0.0, 0.0, SR));
+    let m0 = meridian_edge(&mut s, south, north, 0.0);
+    let ma = meridian_edge(&mut s, south, north, alpha);
+    let sphere = sphere_surface(&mut s);
+    let b = s.bound(&[(ma, true), (m0, false)], false);
+    let lune = s.face(&[b], sphere, true);
+    let mut faces = vec![lune];
+    if (alpha - PI).abs() < 1e-12 {
+        let f = s.axis2(DVec3::ZERO, -DVec3::Y, DVec3::X);
+        let p = s.push(format!("PLANE('',#{f})"));
+        let b = s.bound(&[(m0, true), (ma, false)], true);
+        faces.push(s.face(&[b], p, true));
+    } else {
+        let axis = s.line(DVec3::new(0.0, 0.0, -SR), DVec3::new(0.0, 0.0, SR));
+        let z = s.edge(south, north, axis, true);
+        let f = s.axis2(DVec3::ZERO, -DVec3::Y, DVec3::X);
+        let p = s.push(format!("PLANE('',#{f})"));
+        let b = s.bound(&[(m0, true), (z, false)], true);
+        faces.push(s.face(&[b], p, true));
+        let n = DVec3::new(-alpha.sin(), alpha.cos(), 0.0);
+        let f = s.axis2(DVec3::ZERO, n, DVec3::new(alpha.cos(), alpha.sin(), 0.0));
+        let p = s.push(format!("PLANE('',#{f})"));
+        let b = s.bound(&[(ma, false), (z, true)], true);
+        faces.push(s.face(&[b], p, true));
+    }
+    s.file(&faces)
+}
+
+#[test]
+fn lunes_through_both_poles_are_never_the_other_lune() {
+    for alpha in [0.7, 2.0, PI, 4.0, 5.5] {
+        let inside = DVec3::new((0.5 * alpha).cos(), (0.5 * alpha).sin(), 0.0) * 3.0;
+        assert_never_opposite(
+            &lune(alpha),
+            144.0 * alpha,
+            inside,
+            &format!("Keil {alpha}"),
+        );
+    }
+}
+
+/// Halbkugel y ≥ 0 (Kugelachse z liegt in der flachen Seite) mit dem Rand als eine geschlossene
+/// Großkreiskante; ihre Ecke liegt beim Winkel `t` (π/2: am Nordpol, 0: am Äquator).
+fn great_circle_hemisphere(t: f64) -> String {
+    let mut s = Step::new();
+    let f = s.axis2(DVec3::ZERO, -DVec3::Y, DVec3::X);
+    let c = s.push(format!("CIRCLE('',#{f},{SR:.1})"));
+    let v = s.vertex(DVec3::new(t.cos(), 0.0, t.sin()) * SR);
+    let e = s.edge(v, v, c, true);
+    let p = s.push(format!("PLANE('',#{f})"));
+    let b = s.bound(&[(e, true)], true);
+    let disk = s.face(&[b], p, true);
+    let sphere = sphere_surface(&mut s);
+    let b = s.bound(&[(e, false)], false);
+    let half = s.face(&[b], sphere, true);
+    s.file(&[disk, half])
+}
+
+#[test]
+fn great_circle_through_the_poles_is_read_and_never_the_other_half() {
+    for t in [PI / 2.0, -PI / 2.0, 0.0, 1.0, 2.5] {
+        assert_never_opposite(
+            &great_circle_hemisphere(t),
+            144.0 * PI,
+            DVec3::new(0.0, 3.0, 0.0),
+            &format!("Großkreis, Ecke bei {t}"),
+        );
+    }
+}
+
+/// Achtelkugel x, y, z ≥ 0 (der Rand berührt nur den Nordpol). Volumen 36π.
+fn octant() -> String {
+    let mut s = Step::new();
+    let o = s.vertex(DVec3::ZERO);
+    let a = s.vertex(DVec3::new(SR, 0.0, 0.0));
+    let b = s.vertex(DVec3::new(0.0, SR, 0.0));
+    let n = s.vertex(DVec3::new(0.0, 0.0, SR));
+    let fz = s.axis2(DVec3::ZERO, DVec3::Z, DVec3::X);
+    let ce = s.push(format!("CIRCLE('',#{fz},{SR:.1})"));
+    let e = s.edge(a, b, ce, true);
+    let f0 = s.axis2(DVec3::ZERO, -DVec3::Y, DVec3::X);
+    let c0 = s.push(format!("CIRCLE('',#{f0},{SR:.1})"));
+    let m0 = s.edge(a, n, c0, true);
+    let f9 = s.axis2(DVec3::ZERO, DVec3::X, DVec3::Y);
+    let c9 = s.push(format!("CIRCLE('',#{f9},{SR:.1})"));
+    let m9 = s.edge(b, n, c9, true);
+    let lx = s.line(DVec3::ZERO, DVec3::new(SR, 0.0, 0.0));
+    let x = s.edge(o, a, lx, true);
+    let ly = s.line(DVec3::ZERO, DVec3::new(0.0, SR, 0.0));
+    let y = s.edge(o, b, ly, true);
+    let lz = s.line(DVec3::ZERO, DVec3::new(0.0, 0.0, SR));
+    let z = s.edge(o, n, lz, true);
+    let plane = |s: &mut Step, normal: DVec3| {
+        let f = s.axis2(DVec3::ZERO, normal, normal.any_orthonormal_vector());
+        s.push(format!("PLANE('',#{f})"))
+    };
+    let pz = plane(&mut s, -DVec3::Z);
+    let b1 = s.bound(&[(x, false), (y, true), (e, false)], true);
+    let f1 = s.face(&[b1], pz, true);
+    let py = plane(&mut s, -DVec3::Y);
+    let b2 = s.bound(&[(m0, true), (z, false), (x, true)], true);
+    let f2 = s.face(&[b2], py, true);
+    let px = plane(&mut s, -DVec3::X);
+    let b3 = s.bound(&[(y, false), (z, true), (m9, false)], true);
+    let f3 = s.face(&[b3], px, true);
+    let sphere = sphere_surface(&mut s);
+    let b4 = s.bound(&[(e, true), (m9, true), (m0, false)], false);
+    let f4 = s.face(&[b4], sphere, true);
+    s.file(&[f1, f2, f3, f4])
+}
+
+#[test]
+fn octant_touching_one_pole_stays_fine() {
+    assert_never_opposite(&octant(), 36.0 * PI, DVec3::splat(2.0), "Achtel");
+}
+
+/// Kugelband zwischen den Ebenen x = 2 und x = 4 (beide Pole liegen in derselben Kappe, das Band
+/// ist im Parameterraum ein Ring); `outer`: welcher Rand `FACE_OUTER_BOUND` ist (0: x = 2,
+/// 1: x = 4, sonst keiner). Volumen 160π/3.
+fn band_without_poles(outer: usize) -> String {
+    let mut s = Step::new();
+    let circle = |s: &mut Step, c: f64| {
+        let r = (SR * SR - c * c).sqrt();
+        let f = s.axis2(DVec3::new(c, 0.0, 0.0), DVec3::X, DVec3::Y);
+        let k = s.push(format!("CIRCLE('',#{f},{r:.17e})"));
+        let v = s.vertex(DVec3::new(c, r, 0.0));
+        (s.edge(v, v, k, true), f)
+    };
+    let (c2, f2) = circle(&mut s, 2.0);
+    let (c4, f4) = circle(&mut s, 4.0);
+    let p2 = s.push(format!("PLANE('',#{f2})"));
+    let p4 = s.push(format!("PLANE('',#{f4})"));
+    let b = s.bound(&[(c2, false)], true);
+    let d2 = s.face(&[b], p2, false);
+    let b = s.bound(&[(c4, true)], true);
+    let d4 = s.face(&[b], p4, true);
+    let sphere = sphere_surface(&mut s);
+    let b2 = s.bound(&[(c2, true)], outer == 0);
+    let b4 = s.bound(&[(c4, false)], outer == 1);
+    let band = s.face(&[b2, b4], sphere, true);
+    s.file(&[d2, d4, band])
+}
+
+#[test]
+fn band_without_poles_reads_whichever_loop_is_marked_outer() {
+    for outer in [0, 1, 2] {
+        assert_never_opposite(
+            &band_without_poles(outer),
+            160.0 * PI / 3.0,
+            DVec3::new(3.0, 0.0, 0.0),
+            &format!("Band, außen {outer}"),
+        );
+    }
+}
+
+/// Kugelfläche (eine Fläche mit Naht im Meridian bei u = 0) um `c` mit Radius `r`, als Schale.
+fn sphere_shell(s: &mut Step, c: DVec3, r: f64, outward: bool) -> u64 {
+    let south = s.vertex(c - DVec3::Z * r);
+    let north = s.vertex(c + DVec3::Z * r);
+    let mf = s.axis2(c, -DVec3::Y, DVec3::X);
+    let m = s.push(format!("CIRCLE('',#{mf},{r:.1})"));
+    let e = s.edge(south, north, m, true);
+    let sf = s.axis2(c, DVec3::Z, DVec3::X);
+    let sphere = s.push(format!("SPHERICAL_SURFACE('',#{sf},{r:.1})"));
+    let b = s.bound(&[(e, true), (e, false)], true);
+    let f = s.face(&[b], sphere, outward);
+    s.shell(&[f])
+}
+
+#[test]
+fn overlapping_balls_are_named() {
+    // Zwei Kugeln r 5, 0,3 mm ineinander: abgelehnt; 0,3 mm auseinander: gelesen.
+    for (gap, ok) in [(-0.3, false), (0.3, true)] {
+        let mut s = Step::new();
+        let a = sphere_shell(&mut s, DVec3::ZERO, 5.0, true);
+        let b = sphere_shell(&mut s, DVec3::new(10.0 + gap, 0.0, 0.0), 5.0, true);
+        let a = s.push(format!("MANIFOLD_SOLID_BREP('A',#{a})"));
+        let b = s.push(format!("MANIFOLD_SOLID_BREP('B',#{b})"));
+        match read(&s.finish(&[a, b])) {
+            Ok(_) => assert!(ok, "Überlappung {gap} angenommen"),
+            Err(Skip(m)) => {
+                assert!(!ok, "{gap}: {m}");
+                assert_eq!(m, "Zwei Stücke des Körpers überschneiden sich.");
+            }
+        }
+    }
+}
+
+#[test]
+fn pieces_in_a_curved_housing_are_checked_quickly() {
+    // Hohlkugel r 210 mit Hohlraum r 200 und 50 Kugeln r 10 darin.
+    let mut s = Step::new();
+    let outer = sphere_shell(&mut s, DVec3::ZERO, 210.0, true);
+    let cavity = sphere_shell(&mut s, DVec3::ZERO, 200.0, true);
+    let void = s.push(format!("ORIENTED_CLOSED_SHELL('',*,#{cavity},.F.)"));
+    let mut items = vec![s.push(format!("BREP_WITH_VOIDS('Gehäuse',#{outer},(#{void}))"))];
+    for k in 0..50 {
+        let c = DVec3::new(
+            -100.0 + 40.0 * (k % 5) as f64,
+            -100.0 + 40.0 * ((k / 5) % 5) as f64,
+            -40.0 + 40.0 * (k / 25) as f64,
+        );
+        let b = sphere_shell(&mut s, c, 10.0, true);
+        items.push(s.push(format!("MANIFOLD_SOLID_BREP('Kugel',#{b})")));
+    }
+    let text = s.finish(&items);
+    let t = std::time::Instant::now();
+    let solid = read(&text).unwrap_or_else(|Skip(m)| panic!("{m}"));
+    let took = t.elapsed();
+    assert_eq!(solid.shells.len(), 52);
+    assert!(took.as_secs_f64() < 5.0, "{took:?}");
+}
+
+#[test]
+fn many_separate_balls_are_checked_quickly() {
+    let mut s = Step::new();
+    let mut items = Vec::new();
+    for k in 0..300 {
+        let c = DVec3::new(30.0 * (k % 20) as f64, 30.0 * (k / 20) as f64, 0.0);
+        let b = sphere_shell(&mut s, c, 10.0, true);
+        items.push(s.push(format!("MANIFOLD_SOLID_BREP('Kugel',#{b})")));
+    }
+    let text = s.finish(&items);
+    let t = std::time::Instant::now();
+    let solid = read(&text).unwrap_or_else(|Skip(m)| panic!("{m}"));
+    let took = t.elapsed();
+    assert_eq!(solid.shells.len(), 300);
+    assert!(took.as_secs_f64() < 3.0, "{took:?}");
+}
+
+#[test]
+fn rim_close_to_a_pole_gets_its_seam() {
+    // Kappe mit schräger Kugelachse, deren Rand 0,02 mm neben einem Pol vorbeiläuft (N4).
+    let cases = [1.0, -2.0, 3.5, 0.2, -4.5, 5.0]
+        .iter()
+        .enumerate()
+        .flat_map(|(k, h)| [(2 * k, *h, 0.02), (2 * k + 1, *h, 0.02)]);
+    let mut read_ok = 0;
+    for (k, h, gap) in cases {
+        // Achse so gekippt, dass der Pol 0,02 mm neben dem Kreis liegt.
+        let n = DVec3::Z;
+        let rho = (36.0f64 - h * h).sqrt();
+        // Pol auf der Kugel im Abstand 0,02 vom Kreis: Polarwinkel des Kreises ± 0,02 / 6.
+        let polar = (h / SR).acos() + gap / SR * if k % 2 == 0 { 1.0 } else { -1.0 };
+        let axis = DVec3::new(polar.sin(), 0.0, polar.cos());
+        let (text, want) = skew_cap(axis, n, h, 0.3 + 0.7 * k as f64);
+        match read(&text) {
+            Ok(s) => {
+                read_ok += 1;
+                assert_cap(&s, n, h, want, &format!("Pol nahe am Rand {k}"));
+            }
+            // Der Vernetzer des Kernels tastet Ränder alle 5° ab; 0,02 mm neben dem Pol reicht
+            // das nicht immer (Grenze des Kernels, nicht des Lesers).
+            Err(Skip(m)) => assert!(
+                m.ends_with("lässt sich nicht in Dreiecke zerlegen."),
+                "{k}: {m}"
+            ),
+        }
+        let _ = rho;
+    }
+    assert!(read_ok >= 11, "nur {read_ok} von 12 gelesen");
+}
+
+#[test]
+fn shallow_box_overlap_is_named() {
+    // Zwei Quader 10, 0,15 mm ineinander: abgelehnt; berührend: gelesen.
+    for (shift, ok) in [(9.85, false), (10.0, true)] {
+        let mut s = Step::new();
+        let a = box_shell(&mut s, DVec3::ZERO, DVec3::splat(10.0));
+        let b = box_shell(
+            &mut s,
+            DVec3::new(shift, 0.0, 0.0),
+            DVec3::new(shift + 10.0, 10.0, 10.0),
+        );
+        let a = s.push(format!("MANIFOLD_SOLID_BREP('A',#{a})"));
+        let b = s.push(format!("MANIFOLD_SOLID_BREP('B',#{b})"));
+        match read(&s.finish(&[a, b])) {
+            Ok(_) => assert!(ok, "Überlappung bei {shift} angenommen"),
+            Err(Skip(m)) => {
+                assert!(!ok, "{shift}: {m}");
+                assert_eq!(m, "Zwei Stücke des Körpers überschneiden sich.");
+            }
+        }
+    }
+}

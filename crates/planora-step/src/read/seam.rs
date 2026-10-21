@@ -115,6 +115,46 @@ pub(crate) fn snap_poles(raw: &mut RawBody, tol: f64) {
     }
 }
 
+/// Teilt jede Kante einer Fläche mit Polen, die mitten durch einen Pol läuft (etwa ein Großkreis
+/// mit seiner Ecke am Äquator oder an einem Pol), genau dort: Der Pol wird eine Ecke. Sonst
+/// läge er zwischen zwei Abtastpunkten, und u spränge dort um eine halbe Periode.
+pub(crate) fn split_at_poles(raw: &mut RawBody, tol: f64) {
+    let near = tol.max(linear());
+    for _ in 0..8 {
+        let mut found: Option<(usize, f64, DVec3)> = None;
+        'faces: for f in &raw.faces {
+            let poles = pole_points(&f.surface);
+            if poles.is_empty() {
+                continue;
+            }
+            for he in f.loops.iter().flatten() {
+                let e = &raw.edges[he.edge];
+                for (_, q) in &poles {
+                    if raw.vertices[e.start].distance(*q) <= near
+                        || raw.vertices[e.end].distance(*q) <= near
+                    {
+                        continue;
+                    }
+                    let (lo, hi) = (e.t0.min(e.t1), e.t0.max(e.t1));
+                    let mut t = e.curve.project(*q);
+                    if let Some(per) = e.curve.period() {
+                        t += per * ((lo - t) / per).ceil();
+                    }
+                    if t > lo && t < hi && e.curve.point(t).distance(*q) <= near {
+                        found = Some((he.edge, t, *q));
+                        break 'faces;
+                    }
+                }
+            }
+        }
+        let Some((k, t, q)) = found else {
+            return;
+        };
+        let v = split_edge(raw, k, t);
+        raw.vertices[v] = q;
+    }
+}
+
 /// Entfernt Kanten, deren Kurve kürzer als `tol` ist (mindestens die Toleranz des Kernels;
 /// Länge über [`LENGTH_SECTIONS`] Abschnitte, nicht über den Abstand der Ecken: ein voller Kreis
 /// hat gleiche Ecken und bleibt), aus allen Schleifen und legt ihre beiden Ecken zusammen.
@@ -304,9 +344,26 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
         .iter()
         .map(|lp| points_to_uv(&surface, same_sense, &raw.loop_points(lp)))
         .collect();
+    // Windung in u: für Ränder ohne Pol aus der verfeinerten Spur (nahe einem Pol springt u
+    // zwischen den groben Abtastpunkten, das Aufrollen wäre dort mehrdeutig).
+    let pole_vs = surface.pole_vs();
     let windings: Vec<[i64; 2]> = polys
         .iter()
-        .map(|p| [winding(p, 0, periods[0]), winding(p, 1, periods[1])])
+        .zip(&f.loops)
+        .map(|(p, lp)| {
+            let through_pole = p.iter().any(|q| pole_vs.iter().any(|pv| at_pole(q.y, *pv)));
+            let wu = match periods[0] {
+                Some(per) if !through_pole && !pole_vs.is_empty() => {
+                    let tr = u_track(raw, &surface, lp);
+                    match (tr.first(), tr.last()) {
+                        (Some(a), Some(b)) => ((b.2 - a.2) / per).round() as i64,
+                        _ => 0,
+                    }
+                }
+                _ => winding(p, 0, periods[0]),
+            };
+            [wu, winding(p, 1, periods[1])]
+        })
         .collect();
     let winding_loops: Vec<usize> = (0..windings.len())
         .filter(|&k| windings[k] != [0, 0])
@@ -456,7 +513,20 @@ fn sphere_piece(raw: &mut RawBody, i: usize, polys: &[Vec<DVec2>], tol: f64) -> 
         .any(|q| poles.iter().any(|pv| at_pole(q.y, *pv)));
     let mut seen = std::collections::HashSet::new();
     let has_seam = f.loops.iter().flatten().any(|he| !seen.insert(he.edge));
-    if touches || has_seam {
+    if has_seam {
+        return Ok(());
+    }
+    if touches {
+        // Ein Pol im Rand entscheidet die Seite nicht. Berührt der Rand beide Pole (Keil,
+        // Halbkugel mit der Achse in der Schnittfläche), ist auch die Gegenfläche darstellbar:
+        // Die Seite folgt nur aus dem Umlaufsinn. Mit nur einem Pol im Rand läge der andere im
+        // Inneren der Gegenfläche; die ließe sich ohne Naht nicht bauen und wird abgelehnt.
+        let both = poles
+            .iter()
+            .all(|pv| polys.iter().flatten().any(|q| at_pole(q.y, *pv)));
+        if both && f.pole_marks.is_empty() {
+            raw.faces[i].side_guessed = true;
+        }
         return Ok(());
     }
     let twisted = || {
@@ -543,8 +613,17 @@ fn u_extent(
     let refine = |j: usize, sign: f64| -> f64 {
         let (he_i, s, u0) = track[j];
         let he = lp[he_i];
-        let step = 1.0 / EDGE_STEPS as f64;
-        let (mut a, mut b) = ((s - step).max(0.0), (s + step).min(1.0));
+        // Nachbarn auf derselben Halbkante begrenzen die Suche.
+        let a0 = track[..j]
+            .iter()
+            .rev()
+            .find(|t| t.0 == he_i && t.1 < s)
+            .map_or(s, |t| t.1);
+        let b0 = track[j + 1..]
+            .iter()
+            .find(|t| t.0 == he_i && t.1 > s)
+            .map_or(s, |t| t.1);
+        let (mut a, mut b) = (a0, b0);
         let u_at = |x: f64| {
             let u = surface.project(he_point(raw, he, x)).0;
             sign * (u + per * ((u0 - u) / per).round())
@@ -576,11 +655,47 @@ fn u_extent(
 fn u_track(raw: &RawBody, surface: &Surface, lp: &[RawHalfEdge]) -> Vec<(usize, f64, f64)> {
     let n = EDGE_STEPS;
     let per = surface.u_period().unwrap_or(f64::INFINITY);
+    // Abstand zweier Werte modulo der Periode (−½ … ½ Periode).
+    let step = |a: f64, b: f64| {
+        if per.is_finite() {
+            (b - a) - per * ((b - a) / per).round()
+        } else {
+            b - a
+        }
+    };
     let mut out: Vec<(usize, f64, f64)> = Vec::with_capacity(lp.len() * (n + 1));
     for (j, he) in lp.iter().enumerate() {
-        for k in 0..=n {
-            let s = k as f64 / n as f64;
-            let mut u = surface.project(he_point(raw, *he, s)).0;
+        let u_of = |s: f64| surface.project(he_point(raw, *he, s)).0;
+        // Gleichmäßig, dann dort verfeinert, wo u zwischen Nachbarn stark springt (nahe einem
+        // Pol ändert sich u schnell; dort wäre das Aufrollen sonst mehrdeutig).
+        let mut pts: Vec<(f64, f64)> = (0..=n)
+            .map(|k| {
+                let s = k as f64 / n as f64;
+                (s, u_of(s))
+            })
+            .collect();
+        loop {
+            let mut refined = Vec::with_capacity(pts.len() * 2);
+            let mut changed = false;
+            refined.push(pts[0]);
+            for w in pts.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                if step(a.1, b.1).abs() > MAX_U_STEP
+                    && b.0 - a.0 > 1e-9
+                    && pts.len() < MAX_EDGE_SAMPLES
+                {
+                    let m = 0.5 * (a.0 + b.0);
+                    refined.push((m, u_of(m)));
+                    changed = true;
+                }
+                refined.push(b);
+            }
+            pts = refined;
+            if !changed {
+                break;
+            }
+        }
+        for (s, mut u) in pts {
             if let Some(&(_, _, prev)) = out.last() {
                 u += per * ((prev - u) / per).round();
             }
@@ -589,6 +704,21 @@ fn u_track(raw: &RawBody, surface: &Surface, lp: &[RawHalfEdge]) -> Vec<(usize, 
     }
     out
 }
+
+/// Punkte einer Schleife in Laufrichtung, dort verfeinert, wo u schnell läuft (wie
+/// [`u_track`]); für den Parameterbereich von Flächen mit Polen.
+pub(crate) fn fine_loop_points(raw: &RawBody, surface: &Surface, lp: &[RawHalfEdge]) -> Vec<DVec3> {
+    u_track(raw, surface, lp)
+        .into_iter()
+        .map(|(j, s, _)| he_point(raw, lp[j], s))
+        .collect()
+}
+
+/// Größter Sprung von u zwischen zwei Punkten der Spur, bevor nachverfeinert wird.
+const MAX_U_STEP: f64 = 0.25;
+
+/// Höchstzahl der Punkte je Halbkante in [`u_track`].
+const MAX_EDGE_SAMPLES: usize = 4096;
 
 /// Zwischenpunkte je Halbkante für [`u_track`].
 const EDGE_STEPS: usize = 24;
