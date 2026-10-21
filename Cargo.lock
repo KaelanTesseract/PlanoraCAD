@@ -2556,6 +2556,7 @@ dependencies = [
 name = "planora-step"
 version = "0.1.0"
 dependencies = [
+ "planora-drawing",
  "planora-exchange",
  "planora-kernel",
  "planora-math",

@@ -13,5 +13,8 @@ planora-exchange.workspace = true
 planora-mesh.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+planora-drawing.workspace = true
+
 [lints]
 workspace = true
