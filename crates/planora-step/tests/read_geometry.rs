@@ -307,15 +307,16 @@ fn curves_match_hand_values() {
         .to_string()
     );
 
-    // Freiformkanten kommen in Aufgabe 5.
-    assert_eq!(
-        skip_text(r.curve(36)),
-        "Kante vom Typ B_SPLINE_CURVE_WITH_KNOTS wird noch nicht unterstützt."
-    );
-    assert_eq!(
-        skip_text(r.curve(37)),
-        "Kante vom Typ B_SPLINE_CURVE_WITH_KNOTS wird noch nicht unterstützt."
-    );
+    // Freiformkanten (seit Aufgabe 5 gelesen; die Länge null fällt erst an der Kante auf),
+    // rational mit normierten Gewichten.
+    let Curve::Nurbs(c) = r.curve(36).expect("Freiformkurve") else {
+        panic!("Freiformkurve erwartet")
+    };
+    assert_eq!((c.degree(), c.weights()), (1, &[1.0, 1.0][..]));
+    let Curve::Nurbs(c) = r.curve(37).expect("rationale Freiformkurve") else {
+        panic!("Freiformkurve erwartet")
+    };
+    assert_eq!(c.weights(), &[0.5, 1.0]);
     assert_eq!(
         skip_text(r.curve(41)),
         "Kante vom Typ POLYLINE wird noch nicht unterstützt."
@@ -661,21 +662,27 @@ fn surfaces_match_the_kernel_conventions() {
     assert_eq!(skip_text(r.surface(12)), torus);
     assert_eq!(skip_text(r.surface(13)), torus);
 
-    assert_eq!(
-        skip_text(r.surface(14)),
-        "Fläche vom Typ B_SPLINE_SURFACE_WITH_KNOTS wird noch nicht unterstützt."
-    );
-    assert_eq!(
-        skip_text(r.surface(21)),
-        "Fläche vom Typ B_SPLINE_SURFACE_WITH_KNOTS wird noch nicht unterstützt."
-    );
+    // Freiformflächen (seit Aufgabe 5): Hier fallen alle Kontrollpunkte zusammen, also auch nach
+    // dem Tausch von u und v ein Pol in u-Richtung – die Meldung des Kernels.
+    for id in [14, 21] {
+        assert_eq!(
+            skip_text(r.surface(id)),
+            format!(
+                "Zeile {}: Eine Freiformfläche lässt sich nicht übernehmen: eine Linie in \
+                 v-Richtung fällt zu einem Punkt zusammen (Pol in u-Richtung wird nicht \
+                 unterstützt)",
+                line_of(data, id)
+            )
+        );
+    }
     assert_eq!(
         skip_text(r.surface(15)),
         "Fläche vom Typ OFFSET_SURFACE wird noch nicht unterstützt."
     );
+    // Drehfläche (seit Aufgabe 5) einer Geraden auf der Achse.
     assert_eq!(
         skip_text(r.surface(22)),
-        "Fläche vom Typ SURFACE_OF_REVOLUTION wird noch nicht unterstützt."
+        "Eine Drehfläche hat keine Ausdehnung."
     );
 
     // Radien ≤ 0 und Kegelwinkel außerhalb (0, π/2) → mit Zeile ausgelassen.

@@ -20,6 +20,7 @@
 use crate::read::error::MAX_STEP_FACES;
 use crate::read::geom::{Resolver, Skip, SurfaceGeom};
 use crate::read::index::StepFile;
+use crate::read::spline::{close_curve, extrusion_flipped, finish_extrusion_with_tol};
 use crate::read::units::Units;
 use crate::read::value::Entity;
 use crate::topology::CLASSIFY_CHORD;
@@ -297,11 +298,30 @@ impl<'f> TopoReader<'f> {
         let same_sense = self.flag(id, &e, kind, 4)?;
         let start = self.vertex(start)?;
         let end = self.vertex(end)?;
-        let curve = self.res.curve(curve)?;
+        let mut curve = self.res.curve(curve)?;
         let (p, q) = (self.raw.vertices[start], self.raw.vertices[end]);
+        let linear = Tolerance::default().linear;
+        // Eine Freiformkurve mit einer Ecke an beiden Enden, die sich nur bis zur Genauigkeit
+        // der Datei schließt, wird genau geschlossen (beide Enden auf ihre Mitte); liegen ihre
+        // Enden weiter auseinander, liegt die Ecke nicht auf beiden Enden.
+        if let Curve::Nurbs(c) = &curve
+            && curve.period().is_none()
+            && p.distance(q) <= linear
+        {
+            let (a, b) = c.domain();
+            let gap = c.point(a).distance(c.point(b));
+            if let Some(closed) = close_curve(c, self.tol) {
+                curve = Curve::nurbs(closed);
+            } else if gap > self.tol.max(linear) {
+                return Err(Skip(format!(
+                    "Die Ecke bei {} liegt nicht auf ihrer Kante.",
+                    place(p)
+                )));
+            }
+        }
         // Eine offene Kurve zwischen zusammenfallenden Ecken ist keine Kante (geschlossene
         // Kurven ergeben dort einen vollen Umlauf). Aufgabe 6 entfernt solche Kanten vorher.
-        if curve.period().is_none() && p.distance(q) <= Tolerance::default().linear {
+        if curve.period().is_none() && p.distance(q) <= linear {
             return Err(self.fail(id, "Eine Kante hat die Länge null."));
         }
         let (t0, t1) = edge_params(&curve, p, q, same_sense).map_err(|Skip(m)| self.fail(id, m))?;
@@ -374,14 +394,7 @@ impl<'f> TopoReader<'f> {
         let bounds = self.refs(id, &e, kind, 1)?;
         let geometry = self.reference(id, &e, kind, 2)?;
         let same_sense = self.flag(id, &e, kind, 3)?;
-        let (surface, flipped) = match self.res.surface(geometry)? {
-            SurfaceGeom::Ready { surface, flipped } => (surface, flipped),
-            SurfaceGeom::Extrusion { .. } => {
-                return Err(Skip(
-                    "Eine Strangfläche aus einer Freiformkurve wird noch nicht unterstützt.".into(),
-                ));
-            }
-        };
+        let geom = self.res.surface(geometry)?;
         if bounds.is_empty() {
             return Err(self.fail(id, "Eine Fläche hat keinen Rand."));
         }
@@ -397,14 +410,27 @@ impl<'f> TopoReader<'f> {
             }
             loops.push(lp);
         }
+        // Eine Strangfläche aus einer Freiformkurve bekommt ihren Bereich aus den Schleifen;
+        // ihre Richtung wird an der fertigen Fläche gemessen.
+        let (surface, flipped, points) = match geom {
+            SurfaceGeom::Ready { surface, flipped } => (surface, flipped, None),
+            SurfaceGeom::Extrusion { curve, dir } => {
+                let pts: Vec<Vec<DVec3>> = loops.iter().map(|l| self.raw.loop_points(l)).collect();
+                let surface = finish_extrusion_with_tol(&curve, dir, &pts, self.tol)
+                    .map_err(|Skip(m)| self.fail(geometry, m))?;
+                let flipped = extrusion_flipped(&curve, dir, &surface)
+                    .map_err(|Skip(m)| self.fail(geometry, m))?;
+                (surface, flipped, Some(pts))
+            }
+        };
         let sense = same_sense ^ flipped ^ reverse;
         let plane = matches!(surface, Surface::Plane { .. });
         // Punkte der Schleifen nur, wo sie gebraucht werden: Wahl des äußeren Rands ohne
         // Kennzeichnung und Parameterbereich gekrümmter Flächen.
-        let points: Vec<Vec<DVec3>> = if plane && outer_marked.is_some() {
-            Vec::new()
-        } else {
-            loops.iter().map(|l| self.raw.loop_points(l)).collect()
+        let points: Vec<Vec<DVec3>> = match points {
+            Some(p) => p,
+            None if plane && outer_marked.is_some() => Vec::new(),
+            None => loops.iter().map(|l| self.raw.loop_points(l)).collect(),
         };
         let outer = match (outer_marked, &surface) {
             (Some(i), _) => i,

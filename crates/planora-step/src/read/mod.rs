@@ -10,6 +10,7 @@ pub mod error;
 pub mod geom;
 pub mod index;
 pub mod lex;
+pub mod spline;
 pub mod topo;
 pub mod units;
 pub mod value;
