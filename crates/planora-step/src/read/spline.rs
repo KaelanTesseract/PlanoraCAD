@@ -8,7 +8,9 @@
 //! Dreh- und Strangflächen (P8) werden, wo das exakt geht, analytisch (Ebene, Zylinder, Kegel,
 //! Kugel, Torus), sonst als NURBS übernommen. Ob die natürliche Normale des Kernels gegen die
 //! Normale von STEP zeigt (`flipped`), wird an einem Probepunkt gemessen: STEP-Normale aus der
-//! Definition `σ(u, v)` (Ableitungen per zentraler Differenz), Kernel-Normale am Fußpunkt.
+//! Definition `σ(u, v)` (Ableitungen per zentraler Differenz), Kernel-Normale am Fußpunkt. Nach
+//! ISO 10303-42 ist bei der Drehfläche u der Drehwinkel und v der Kurvenparameter (wie in
+//! Open CASCADE und `NurbsSurface::revolve`), bei der Strangfläche u der Kurvenparameter.
 //!
 //! Die Hilfen [`expand_knots`], [`implicit_knots`], [`clamp_knots`] und [`normalize_weights`]
 //! liefern im Fehlerfall nur den Grund; der Resolver setzt „Eine Freiformfläche lässt sich nicht
@@ -43,6 +45,10 @@ const DIFF_STEP: f64 = 1e-6;
 
 /// Rand der Strangfläche über die Schleifen hinaus, bezogen auf deren Ausdehnung.
 const EXTRUSION_MARGIN: f64 = 1e-6;
+
+/// Ein Torus, dessen kleiner Radius bis auf diesen Anteil an den großen heranreicht, gilt als
+/// Horntorus (klein ≥ groß nach Rundung).
+const TORUS_REL: f64 = 1e-9;
 
 fn skip(m: impl Into<String>) -> Skip {
     Skip(m.into())
@@ -503,8 +509,9 @@ fn curve_samples(c: &Curve, line_t: f64) -> Vec<f64> {
     }
 }
 
-/// STEP-Normale `σ_u × σ_v` mit zentralen Differenzen; liefert Punkt und Normale an der Stelle
-/// mit der längsten Normale unter `samples` (Kurvenparameter), dazu `v = v_at`.
+/// STEP-Normale `σ_u × σ_v` (Strangfläche: u = Kurvenparameter, v entlang des Vektors) mit
+/// zentralen Differenzen; liefert Punkt und Normale an der Stelle mit der längsten Normale unter
+/// `samples` (Kurvenparameter), dazu `v = v_at`.
 fn step_probe(
     sigma: impl Fn(f64, f64) -> DVec3,
     samples: &[f64],
@@ -539,10 +546,36 @@ fn frame(origin: DVec3, x: DVec3, z: DVec3) -> Frame {
     }
 }
 
+/// STEP-Normale einer Drehfläche nach ISO 10303-42 (`surface_of_revolution`): u = Drehwinkel,
+/// v = Kurvenparameter, σ(u, v) = C + R_u(λ(v) − C), Normale σ_u × σ_v (wie Open CASCADE und
+/// `NurbsSurface::revolve`). Zentrale Differenzen bei u = 0; liefert Punkt und Normale an der
+/// Stelle mit der längsten Normale unter `samples` (Kurvenparameter).
+fn revolution_probe(
+    curve: &Curve,
+    origin: DVec3,
+    axis: DVec3,
+    samples: &[f64],
+    ht: f64,
+) -> Option<(DVec3, DVec3)> {
+    let sigma = |angle: f64, t: f64| origin + rotate(curve.point(t) - origin, axis, angle);
+    let ha = DIFF_STEP * TAU;
+    samples
+        .iter()
+        .map(|&t| {
+            let su = (sigma(ha, t) - sigma(-ha, t)) / (2.0 * ha);
+            let sv = (sigma(0.0, t + ht) - sigma(0.0, t - ht)) / (2.0 * ht);
+            (sigma(0.0, t), su.cross(sv))
+        })
+        .filter(|(p, n)| p.is_finite() && n.is_finite())
+        .max_by(|a, b| a.1.length().total_cmp(&b.1.length()))
+}
+
 /// Drehfläche (`SURFACE_OF_REVOLUTION`, P8): Kurve `curve` um die Achse durch `origin` mit der
 /// Einheitsrichtung `axis`. Gerade parallel → Zylinder, senkrecht → Ebene, die Achse schneidend
-/// → Kegel, schräg daneben → Skip; Kreis in einer Ebene durch die Achse → Kugel bzw. Torus;
-/// sonst NURBS (`NurbsSurface::revolve` über die ganze Kurve). `flipped` gemessen.
+/// → [`SurfaceGeom::LineCone`] (die Hälfte des Doppelkegels folgt aus den Schleifen, siehe
+/// [`finish_cone`]), schräg daneben → Skip; Kreis in einer Ebene durch die Achse → Kugel bzw.
+/// Torus; sonst NURBS (`NurbsSurface::revolve` über die ganze Kurve; ein ebenes Profil darf die
+/// Achse nicht kreuzen). `flipped` gemessen (ISO-Normale, [`revolution_probe`]).
 pub fn revolution(
     curve: &Curve,
     origin: DVec3,
@@ -553,7 +586,7 @@ pub fn revolution(
     let foot = |p: DVec3| origin + v * (p - origin).dot(v);
     let near = |d: f64, p: DVec3| d <= LINEAR_EPS * (1.0 + (p - origin).length());
     let none = || skip("Eine Drehfläche hat keine Ausdehnung.");
-    // Probe und Bezugspunkt einer Geraden: ihr Ursprung, liegt er auf der Achse, 1 weiter.
+    // Probe einer Geraden: ihr Ursprung, liegt er auf der Achse, 1 weiter.
     let line_t = match curve {
         Curve::Line { origin: o, .. } if near((*o - foot(*o)).length(), *o) => 1.0,
         _ => 0.0,
@@ -584,23 +617,12 @@ pub fn revolution(
                         "Eine Drehfläche aus einer schrägen Geraden wird noch nicht unterstützt.",
                     ));
                 }
-                // Bezugspunkt R neben der Achse (siehe `line_t`); der Kegel liegt auf seiner
-                // Seite der Spitze.
-                let r = *o + *dir * line_t;
-                let fr = foot(r);
-                let rr = (r - fr).length();
-                let e = (r - fr) / rr;
-                // Radius entlang der Geraden: rr + s · (dir · e); Spitze bei s = −rr / (dir · e).
-                let along = dir.dot(v);
-                let h_r = (r - origin).dot(v);
-                let apex_h = h_r - rr * along / dir.dot(e);
-                // Die Achse des Kegels zeigt dorthin, wo der Radius wächst.
-                let z = if h_r > apex_h { v } else { -v };
-                Surface::Cone {
-                    frame: frame(fr, e, z),
-                    radius: rr,
-                    slope: cross.length() / along.abs(),
-                }
+                return Ok(SurfaceGeom::LineCone {
+                    line_origin: *o,
+                    dir: *dir,
+                    axis_origin: origin,
+                    axis: v,
+                });
             }
         }
         Curve::Circle { frame: cf, radius } => {
@@ -615,7 +637,8 @@ pub fn revolution(
                         frame: frame(fc, v.any_orthonormal_vector(), v),
                         radius: *radius,
                     }
-                } else if *radius >= major {
+                } else if *radius >= major * (1.0 - TORUS_REL) {
+                    // Auch „gleich nach Rundung“ (Horntorus) und darüber (Spindeltorus).
                     return Err(skip(
                         "Eine Torusfläche mit kleinem Radius größer oder gleich dem großen wird noch nicht unterstützt.",
                     ));
@@ -632,27 +655,86 @@ pub fn revolution(
         }
         _ => revolve_nurbs(curve, origin, v, weld_tol)?,
     };
-    let sigma = |t: f64, angle: f64| {
-        let p = curve.point(t);
-        origin + rotate(p - origin, v, angle)
-    };
     let range = match curve {
         Curve::Line { origin: o, .. } => (*o - origin).length().max(1.0),
         _ => curve_range(curve),
     };
-    let (p, n) = step_probe(
-        sigma,
+    let (p, n) = revolution_probe(
+        curve,
+        origin,
+        v,
         &curve_samples(curve, line_t),
         DIFF_STEP * range,
-        DIFF_STEP * TAU,
-        0.0,
     )
     .ok_or_else(none)?;
     let flipped = measured_flip(&surface, p, n)?;
     Ok(SurfaceGeom::Ready { surface, flipped })
 }
 
-/// NURBS-Drehfläche über die ganze Kurve (Kreis und Ellipse als voller Umlauf).
+/// Kegel aus einer Geraden (Ursprung `line_origin`, Einheitsrichtung `dir`), die die Achse
+/// schneidet: Die Hälfte des Doppelkegels ist die, auf der die Schleifenpunkte liegen (reichen
+/// sie über die Spitze, ist es keine Fläche). Rahmen am Fußpunkt des am weitesten von der Spitze
+/// entfernten Randpunkts, Kegelachse dorthin, wo der Radius wächst; `flipped` gemessen.
+// Der negierte Vergleich lehnt absichtlich auch NaN ab.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn finish_cone(
+    line_origin: DVec3,
+    dir: DVec3,
+    axis_origin: DVec3,
+    axis: DVec3,
+    loops: &[Vec<DVec3>],
+) -> Result<(Surface, bool), Skip> {
+    let v = axis;
+    let foot = |p: DVec3| axis_origin + v * (p - axis_origin).dot(v);
+    // Spitze: Der Anteil senkrecht zur Achse w(s) = w0 + s·dp verschwindet.
+    let w0 = line_origin - foot(line_origin);
+    let dp = dir - v * dir.dot(v);
+    let apex = line_origin + dir * (-w0.dot(dp) / dp.length_squared());
+    let along: Vec<f64> = loops
+        .iter()
+        .flatten()
+        .map(|p| (*p - apex).dot(dir))
+        .collect();
+    let far = along.iter().copied().fold(0.0, |m: f64, s| m.max(s.abs()));
+    let tol = LINEAR_EPS * (1.0 + far);
+    let (lo, hi) = along
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), s| {
+            (a.min(*s), b.max(*s))
+        });
+    if !(far > tol) {
+        return Err(skip("Eine Drehfläche hat keine Ausdehnung."));
+    }
+    if lo < -tol && hi > tol {
+        return Err(skip("Eine Kegelfläche reicht über ihre Spitze hinaus."));
+    }
+    let s_ref = if hi > tol { hi } else { lo };
+    let r = apex + dir * s_ref;
+    let fr = foot(r);
+    let rr = (r - fr).length();
+    let e = (r - fr) / rr;
+    // Die Kegelachse zeigt von der Spitze zum Bezugspunkt (dort wächst der Radius).
+    let z = if (r - apex).dot(v) > 0.0 { v } else { -v };
+    let along_v = dir.dot(v).abs();
+    let surface = Surface::Cone {
+        frame: frame(fr, e, z),
+        radius: rr,
+        slope: dir.cross(v).length() / along_v,
+    };
+    let line = Curve::Line {
+        origin: line_origin,
+        dir,
+    };
+    let t_ref = (r - line_origin).dot(dir);
+    let range = (line_origin - axis_origin).length().max(1.0);
+    let (p, n) = revolution_probe(&line, axis_origin, v, &[t_ref], DIFF_STEP * range)
+        .ok_or_else(|| skip("Eine Drehfläche hat keine Ausdehnung."))?;
+    let flipped = measured_flip(&surface, p, n)?;
+    Ok((surface, flipped))
+}
+
+/// NURBS-Drehfläche über die ganze Kurve (Kreis und Ellipse als voller Umlauf). Liegt das
+/// Profil in einer Ebene durch die Achse, darf es nicht auf beiden Seiten der Achse liegen.
 fn revolve_nurbs(
     curve: &Curve,
     origin: DVec3,
@@ -661,9 +743,40 @@ fn revolve_nurbs(
 ) -> Result<Surface, Skip> {
     let why = |m: String| skip(format!("Eine Drehfläche lässt sich nicht übernehmen: {m}"));
     let c = curve_to_nurbs(curve, 0.0, TAU)?;
+    if crosses_axis(&c, origin, axis) {
+        return Err(skip("Das Profil einer Drehfläche schneidet die Drehachse."));
+    }
     let ns = NurbsSurface::revolve(&c, origin, axis, 0.0, TAU).map_err(|e| why(e.to_string()))?;
     let (surface, _) = finish_nurbs_surface(ns, weld_tol).map_err(|Skip(m)| why(m))?;
     Ok(surface)
+}
+
+/// Liegt ein ebenes Profil (in einer Ebene durch die Achse) auf beiden Seiten der Achse?
+fn crosses_axis(c: &NurbsCurve, origin: DVec3, axis: DVec3) -> bool {
+    const SAMPLES: usize = 256;
+    let (a, b) = c.domain();
+    let radial: Vec<DVec3> = (0..=SAMPLES)
+        .map(|k| {
+            let p = c.point(a + (b - a) * k as f64 / SAMPLES as f64);
+            let d = p - origin;
+            d - axis * d.dot(axis)
+        })
+        .collect();
+    let Some(far) = radial
+        .iter()
+        .copied()
+        .max_by(|x, y| x.length().total_cmp(&y.length()))
+    else {
+        return false;
+    };
+    let scale = far.length();
+    if scale == 0.0 {
+        return false;
+    }
+    let side = far / scale;
+    let tol = LINEAR_EPS * (1.0 + scale);
+    let planar = radial.iter().all(|r| r.cross(side).length() <= tol);
+    planar && radial.iter().any(|r| r.dot(side) < -tol)
 }
 
 /// Strangfläche (`SURFACE_OF_LINEAR_EXTRUSION`, P8) der Kurve `curve` entlang der
@@ -732,7 +845,10 @@ fn extrude_between(
 /// Strangfläche über den Bereich der Schleifenpunkte entlang `dir` (Rand 1e-6 relativ).
 /// Erst eine sichere Hülle (Schleifen gegen Kontrollpunkte entlang `dir`), dann der genaue
 /// Bereich aus den Fußpunkten der Schleifenpunkte. u = Kurvenparameter, v ∈ [0, 1] steigt mit
-/// `dir`; geschlossen in u, wenn die Kurve geschlossen ist.
+/// `dir`; geschlossen in u, wenn die Kurve geschlossen ist. Die natürliche Normale ist damit
+/// stets `λ'(u) × dir` – genau die Normale von STEP (ISO 10303-42, `surface_of_linear_extrusion`):
+/// Die Fläche ist nie gekippt (ein Tausch von u und v kann nicht vorkommen, keine Spalte
+/// `P_i, P_i + d` fällt zusammen).
 pub fn finish_extrusion(
     curve: &NurbsCurve,
     dir: DVec3,
@@ -783,34 +899,6 @@ pub fn finish_extrusion_with_tol(
     }
     let margin = EXTRUSION_MARGIN * (hi - lo);
     extrude_between(curve, d, lo - margin, hi + margin, weld_tol)
-}
-
-/// Ob die natürliche Normale einer mit [`finish_extrusion`] gebauten Fläche gegen die Normale
-/// von STEP (`λ'(u) × dir`) zeigt; gemessen an einem Probepunkt der Fläche.
-pub fn extrusion_flipped(curve: &NurbsCurve, dir: DVec3, surface: &Surface) -> Result<bool, Skip> {
-    let (a, b) = curve.domain();
-    let h = DIFF_STEP * (b - a);
-    let samples: Vec<f64> = (1..10).map(|k| a + (b - a) * k as f64 / 10.0).collect();
-    let v_mid = match surface {
-        Surface::Nurbs(s) => {
-            let (_, (v0, v1)) = s.surface().domain();
-            0.5 * (v0 + v1)
-        }
-        _ => 0.5,
-    };
-    let best = samples
-        .iter()
-        .map(|&t| {
-            let du = (curve.point(t + h) - curve.point(t - h)) / (2.0 * h);
-            (t, du.cross(dir))
-        })
-        .max_by(|x, y| x.1.length().total_cmp(&y.1.length()));
-    let Some((t, n)) = best else {
-        return Err(skip(
-            "Die Richtung einer Fläche lässt sich nicht bestimmen.",
-        ));
-    };
-    measured_flip(surface, surface.point(t, v_mid), n)
 }
 
 /// Eine bis `weld_tol` geschlossene Freiformkurve (Anfang und Ende auseinander, aber nicht

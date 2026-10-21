@@ -6,12 +6,12 @@ use planora_exchange::Progress;
 use planora_kernel::boolean::face_probe_point;
 use planora_kernel::{Curve, Face, Solid, Surface, validate};
 use planora_math::nurbs::{KnotVector, NurbsCurve, NurbsSurface};
-use planora_math::{DVec3, PI, TAU, Tolerance};
+use planora_math::{DVec3, Frame, PI, TAU, Tolerance};
 use planora_mesh::{Mesh, TessellationOptions, mass_properties, tessellate};
 use planora_step::read::geom::{Skip, SurfaceGeom};
 use planora_step::read::spline::{
-    check_knots, clamp_knots, expand_knots, finish_nurbs_surface, implicit_knots,
-    normalize_weights, revolution,
+    check_knots, clamp_knots, close_curve, expand_knots, extrusion, finish_cone,
+    finish_nurbs_surface, implicit_knots, measured_flip, normalize_weights, revolution,
 };
 use planora_step::read::topo::{BuildOptions, BuiltSolid, build_solid};
 use planora_step::read::units::{Units, context_units};
@@ -305,6 +305,17 @@ fn clamping_keeps_the_curve() {
     let (k2, c2) = clamp_knots(2, &k, &c).unwrap();
     assert_eq!(k2, k);
     assert_eq!(c2, c);
+    // Anfang mit Vielfachheit p + 2: Der erste Kontrollpunkt zählt nicht und fällt weg.
+    let k4 = vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0];
+    let (k2, c2) = clamp_knots(2, &k4, &c).unwrap();
+    assert_eq!(k2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+    KnotVector::new(2, k2.clone()).expect("geklemmt");
+    for i in 0..20 {
+        let u = i as f64 / 19.0;
+        let a = de_boor(2, &k4, &c, u);
+        let b = de_boor(2, &k2, &c2, u);
+        assert!((a.truncate() / a.w).distance(b.truncate() / b.w) <= 1e-12);
+    }
     // Nur am Ende ungeklemmt (Anfang bleibt, Ende wird eingefügt).
     let k = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0];
     let (k2, c2) = clamp_knots(2, &k, &c).unwrap();
@@ -527,30 +538,125 @@ fn revolution_becomes_analytic_where_exact() {
 fn flipped_is_measured_not_assumed() {
     let text = data("revolution_extrusion.step");
     let axis = "#1524=DIRECTION('',(0.,0.,1.));";
-    let face = "#1603=ADVANCED_FACE('',(#1613),#1623,.F.);";
+    let face = "#1603=ADVANCED_FACE('',(#1613),#1623,.T.);";
     assert!(text.contains(axis) && text.contains(face));
     let reference = brep_volume(&body(&text, "Welle"));
-    // Achse umgekehrt: Die Normale der Drehfläche zeigt jetzt nach außen, also .T. für dieselbe
-    // Außenseite – derselbe Körper.
+    let same = |t: &str, what: &str| {
+        let w = body(t, "Welle");
+        let v = brep_volume(&w);
+        assert!(v > 0.0);
+        assert_rel(v, reference, 1e-9, what);
+        assert_normals_point_out(&w, what);
+    };
+    // Achse umgekehrt: Die ISO-Normale der Drehfläche zeigt jetzt zur Achse, also .F. für
+    // dieselbe Außenseite – derselbe Körper.
     let turned = text
         .replace(axis, "#1524=DIRECTION('',(0.,0.,-1.));")
-        .replace(face, "#1603=ADVANCED_FACE('',(#1613),#1623,.T.);");
-    let w = body(&turned, "Welle");
-    let v = brep_volume(&w);
-    assert!(v > 0.0);
-    assert_rel(v, reference, 1e-9, "umgekehrte Achse");
-    assert_normals_point_out(&w, "Welle, umgekehrte Achse");
+        .replace(face, "#1603=ADVANCED_FACE('',(#1613),#1623,.F.);");
+    same(&turned, "umgekehrte Achse");
+    // AXIS1_PLACEMENT ohne Richtung ($) ist die z-Achse.
+    let unset = text.replace(
+        "#1571=AXIS1_PLACEMENT('',#1501,#1524);",
+        "#1571=AXIS1_PLACEMENT('',#1501,$);",
+    );
+    assert_ne!(unset, text);
+    same(&unset, "Achse $");
+    // Alle Flächen .F. statt .T. (und umgekehrt) und alle Ränder rückwärts: ein nach innen
+    // gekehrter, aber stimmiger Körper; er wird umgedreht und ist derselbe.
+    let mut inside_out = text.clone();
+    for (a, b) in [
+        (
+            "#1601=ADVANCED_FACE('',(#1611),#1621,.F.);",
+            "#1601=ADVANCED_FACE('',(#1611),#1621,.T.);",
+        ),
+        (
+            "#1602=ADVANCED_FACE('',(#1612),#1622,.T.);",
+            "#1602=ADVANCED_FACE('',(#1612),#1622,.F.);",
+        ),
+        (face, "#1603=ADVANCED_FACE('',(#1613),#1623,.F.);"),
+        (
+            "#1611=FACE_OUTER_BOUND('',#1631,.T.);",
+            "#1611=FACE_OUTER_BOUND('',#1631,.F.);",
+        ),
+        (
+            "#1612=FACE_OUTER_BOUND('',#1632,.T.);",
+            "#1612=FACE_OUTER_BOUND('',#1632,.F.);",
+        ),
+        (
+            "#1613=FACE_OUTER_BOUND('',#1633,.T.);",
+            "#1613=FACE_OUTER_BOUND('',#1633,.F.);",
+        ),
+    ] {
+        assert!(inside_out.contains(a), "{a}");
+        inside_out = inside_out.replace(a, b);
+    }
+    same(&inside_out, "nach innen gekehrt");
     // Nur die Achse umgekehrt: Außenseite und Rand passen nicht mehr – nie still übernommen.
     let wrong = text.replace(axis, "#1524=DIRECTION('',(0.,0.,-1.));");
     let m = skip_of(&wrong, "Welle");
     assert!(m.contains("verdreht"), "{m}");
-    // Ebenso beim Kegel: .T. statt .F. passt nicht zur gemessenen Normale.
+    // Nur der Mantel .F.: ebenso.
+    let m = skip_of(
+        &text.replace(face, "#1603=ADVANCED_FACE('',(#1613),#1623,.F.);"),
+        "Welle",
+    );
+    assert!(m.contains("verdreht"), "{m}");
+    // Ebenso beim Kegel: .F. statt .T. passt nicht zur gemessenen Normale.
     let cone_wrong = text.replace(
-        "#2603=ADVANCED_FACE('',(#2613),#2623,.F.);",
         "#2603=ADVANCED_FACE('',(#2613),#2623,.T.);",
+        "#2603=ADVANCED_FACE('',(#2613),#2623,.F.);",
     );
     let m = skip_of(&cone_wrong, "Kegelstumpf");
     assert!(m.contains("verdreht"), "{m}");
+}
+
+/// Kegelstumpf mit einer anderen Profilgeraden (Ursprung `o`, Richtung `d`) und `same_sense`.
+fn frustum_with_profile(o: &str, d: &str, sense: &str) -> String {
+    data("revolution_extrusion.step")
+        .replace(
+            "#2623=SURFACE_OF_REVOLUTION('',#2551,#2571);",
+            "#2623=SURFACE_OF_REVOLUTION('',#2590,#2571);",
+        )
+        .replace(
+            "#2603=ADVANCED_FACE('',(#2613),#2623,.T.);",
+            &format!("#2603=ADVANCED_FACE('',(#2613),#2623,{sense});"),
+        )
+        .replace(
+            "ENDSEC;\nEND-ISO",
+            &format!(
+                "#2590=LINE('',#2591,#2592);\n#2591=CARTESIAN_POINT('',{o});\n\
+                 #2592=VECTOR('',#2593,1.);\n#2593=DIRECTION('',{d});\nENDSEC;\nEND-ISO"
+            ),
+        )
+}
+
+#[test]
+fn cone_half_follows_the_loops() {
+    // Der Kegelstumpf liegt unter der Spitze (0; 0; 20). Profilgeraden mit Ursprung in der
+    // Spitze bzw. jenseits davon (−5; 0; 30), Richtung von der Fläche weg (.T.: die ISO-Normale
+    // σ_u × λ' zeigt nach außen) oder zur Fläche hin (.F.).
+    let want = PI * 10.0 / 3.0 * (100.0 + 50.0 + 25.0);
+    for (o, d, sense) in [
+        ("(0.,0.,20.)", "(-1.,0.,2.)", ".T."),
+        ("(0.,0.,20.)", "(1.,0.,-2.)", ".F."),
+        ("(-5.,0.,30.)", "(-1.,0.,2.)", ".T."),
+        ("(-5.,0.,30.)", "(1.,0.,-2.)", ".F."),
+        ("(10.,0.,0.)", "(1.,0.,-2.)", ".F."),
+    ] {
+        let what = format!("Profil {o} {d} {sense}");
+        let k = body(&frustum_with_profile(o, d, sense), "Kegelstumpf");
+        assert_eq!(
+            faces_of(&k, |s| matches!(s, Surface::Cone { .. })).count(),
+            1,
+            "{what}"
+        );
+        assert_volume(&k, want, &what);
+        assert_normals_point_out(&k, &what);
+        // Das falsche same_sense wird nie still übernommen.
+        let other = if sense == ".T." { ".F." } else { ".T." };
+        let m = skip_of(&frustum_with_profile(o, d, other), "Kegelstumpf");
+        assert!(m.contains("verdreht"), "{what}: {m}");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -604,8 +710,9 @@ fn extrusion_of_a_spline_is_bounded_by_its_loops() {
     };
     let (_, (v0, v1)) = d.surface().domain();
     let (b0, b1) = (f.surface.point(um, v0).z, f.surface.point(um, v1).z);
+    // Rand je 1e-6 · 12 unter und über den Schleifen.
     assert!(
-        (-1e-4..=0.0).contains(&b0) && (12.0..=12.0 + 1e-4).contains(&b1),
+        (b0 + 1.2e-5).abs() < 1e-8 && (b1 - 12.0 - 1.2e-5).abs() < 1e-8,
         "{b0} … {b1}"
     );
     assert_volume(&p, (100.0 + bulge_area()) * 12.0, "Profil");
@@ -721,6 +828,15 @@ fn unsupported_spline_cases_are_named() {
     );
     assert!(
         m.contains("Eine Freiformkurve lässt sich nicht übernehmen: Der Grad 10"),
+        "{m}"
+    );
+    // Kontrollpunkte fehlen ($): mit dem Vorsatz.
+    let m = skip_of(
+        &text.replace("B_SPLINE_CURVE(2,(#502,#507,#503),", "B_SPLINE_CURVE(2,$,"),
+        "Viertelzylinder",
+    );
+    assert!(
+        m.contains("Eine Freiformkurve lässt sich nicht übernehmen: Erwartet wird eine Liste"),
         "{m}"
     );
     // Gewicht 0.
@@ -864,9 +980,12 @@ fn periodic_rows_follow_the_geometry() {
 #[test]
 fn revolution_of_a_freeform_profile_is_nurbs() {
     // Ellipse (Halbachsen 3 in x, 2 in z) um (10; 0; 0) in der x-z-Ebene, um die z-Achse gedreht:
-    // kein analytischer Fall. STEP-Normale (Kurve × Drehung) am äußersten Punkt: zur Achse hin.
+    // kein analytischer Fall. ISO 10303-42: σ(u = Winkel, v = Kurve), Normale σ_u × σ_v; am
+    // äußersten Punkt (13; 0; 0): σ_u = z × (13; 0; 0) = (0; 13; 0), σ_v = λ' = (0; 0; 2),
+    // Normale (26; 0; 0) – vom Rohr weg. Die NURBS-Drehfläche des Kernels hat dieselbe
+    // Parametrisierung (u = Winkel), also ist sie nicht gekippt.
     let ellipse = Curve::Ellipse {
-        frame: planora_math::Frame {
+        frame: Frame {
             origin: DVec3::new(10.0, 0.0, 0.0),
             x: DVec3::X,
             y: DVec3::Z,
@@ -883,19 +1002,20 @@ fn revolution_of_a_freeform_profile_is_nurbs() {
         panic!("Freiformfläche erwartet")
     };
     assert!(d.is_periodic_u() && d.is_periodic_v());
-    for (p, inward) in [
-        (DVec3::new(13.0, 0.0, 0.0), DVec3::NEG_X),
-        (DVec3::new(0.0, 7.0, 0.0), DVec3::Y),
-        (DVec3::new(-10.0, 0.0, 2.0), DVec3::NEG_Z),
+    assert!(!flipped);
+    for (p, away) in [
+        (DVec3::new(13.0, 0.0, 0.0), DVec3::X),
+        (DVec3::new(0.0, 7.0, 0.0), DVec3::NEG_Y),
+        (DVec3::new(-10.0, 0.0, 2.0), DVec3::Z),
     ] {
         let (u, v) = surface.project(p);
         assert!(surface.point(u, v).distance(p) < 1e-9);
         let n = surface.normal(u, v) * if flipped { -1.0 } else { 1.0 };
-        assert!(n.dot(inward) > 0.99, "{p}: {n}");
+        assert!(n.dot(away) > 0.99, "{p}: {n}");
     }
-    // Dieselbe Ellipse andersherum durchlaufen: die STEP-Normale zeigt nach außen.
+    // Dieselbe Ellipse andersherum durchlaufen: die STEP-Normale zeigt ins Rohr.
     let reversed = Curve::Ellipse {
-        frame: planora_math::Frame {
+        frame: Frame {
             origin: DVec3::new(10.0, 0.0, 0.0),
             x: DVec3::X,
             y: DVec3::NEG_Z,
@@ -912,5 +1032,272 @@ fn revolution_of_a_freeform_profile_is_nurbs() {
     let p = DVec3::new(13.0, 0.0, 0.0);
     let (u, v) = surface.project(p);
     let n = surface.normal(u, v) * if flipped { -1.0 } else { 1.0 };
-    assert!(n.dot(DVec3::X) > 0.99, "{n}");
+    assert!(n.dot(DVec3::NEG_X) > 0.99, "{n}");
+}
+
+fn circle(origin: DVec3, x: DVec3, y: DVec3, radius: f64) -> Curve {
+    Curve::Circle {
+        frame: Frame {
+            origin,
+            x,
+            y,
+            z: x.cross(y),
+        },
+        radius,
+    }
+}
+
+fn ready(g: Result<SurfaceGeom, Skip>) -> (Surface, bool) {
+    match g {
+        Ok(SurfaceGeom::Ready { surface, flipped }) => (surface, flipped),
+        Ok(other) => panic!("fertige Fläche erwartet: {other:?}"),
+        Err(Skip(m)) => panic!("ausgelassen: {m}"),
+    }
+}
+
+/// ISO 10303-42 `surface_of_revolution`: σ(u, v) mit u = Drehwinkel, v = Kurvenparameter,
+/// Normale σ_u × σ_v (wie Open CASCADE und `NurbsSurface::revolve`). Von Hand gerechnet.
+#[test]
+fn iso_revolution_normal_by_hand() {
+    let z = DVec3::Z;
+    // Gerade (8; 0; 0) + t·z um z: σ_u = z × (8; 0; 0) = (0; 8; 0), σ_v = z,
+    // Normale (8; 0; 0): nach außen wie die natürliche Normale des Zylinders.
+    let line = |o: DVec3, d: DVec3| Curve::Line { origin: o, dir: d };
+    let p8 = DVec3::new(8.0, 0.0, 0.0);
+    let (s, f) = ready(revolution(&line(p8, z), DVec3::ZERO, z, 1e-6));
+    assert!(matches!(s, Surface::Cylinder { radius, .. } if (radius - 8.0).abs() < 1e-12));
+    assert!(!f);
+    let (_, f) = ready(revolution(&line(p8, -z), DVec3::ZERO, z, 1e-6));
+    assert!(f, "Gerade nach unten: Normale zur Achse");
+    let (_, f) = ready(revolution(&line(p8, z), DVec3::ZERO, -z, 1e-6));
+    assert!(f, "Achse nach unten: Normale zur Achse");
+    // Gerade senkrecht zur Achse mit Ursprung auf der Achse: Probe 1 weiter, (1; 0; 0):
+    // σ_u = (0; 1; 0), σ_v = (1; 0; 0), Normale (0; 0; −1) gegen die Ebenennormale +z.
+    let (s, f) = ready(revolution(
+        &line(DVec3::ZERO, DVec3::X),
+        DVec3::ZERO,
+        z,
+        1e-6,
+    ));
+    assert!(matches!(s, Surface::Plane { frame } if frame.z == z));
+    assert!(f);
+    // Kreis R 4 in der x-z-Ebene um (0; 0; 1), gegen den Uhrzeigersinn von x nach z: Kugel. Bei
+    // (4; 0; 1): σ_u = (0; 4; 0), σ_v = (0; 0; 4), Normale (16; 0; 0) nach außen.
+    let c = DVec3::new(0.0, 0.0, 1.0);
+    let (s, f) = ready(revolution(
+        &circle(c, DVec3::X, z, 4.0),
+        DVec3::ZERO,
+        z,
+        1e-6,
+    ));
+    let Surface::Sphere { frame, radius } = s else {
+        panic!("Kugel erwartet: {s:?}")
+    };
+    assert!((radius - 4.0).abs() < 1e-12 && frame.origin.distance(c) < 1e-12);
+    assert!(!f);
+    let (_, f) = ready(revolution(
+        &circle(c, DVec3::X, -z, 4.0),
+        DVec3::ZERO,
+        z,
+        1e-6,
+    ));
+    assert!(f);
+    // Kreis r 3 um (10; 0; 0): Torus 10 / 3, Normale vom Rohr weg.
+    let tc = DVec3::new(10.0, 0.0, 0.0);
+    let (s, f) = ready(revolution(
+        &circle(tc, DVec3::X, z, 3.0),
+        DVec3::ZERO,
+        z,
+        1e-6,
+    ));
+    let Surface::Torus { major, minor, .. } = s else {
+        panic!("Torus erwartet: {s:?}")
+    };
+    assert!((major - 10.0).abs() < 1e-12 && (minor - 3.0).abs() < 1e-12);
+    assert!(!f);
+    // Klein ≥ groß, auch nur nach Rundung gleich: abgelehnt.
+    let torus = "Eine Torusfläche mit kleinem Radius größer oder gleich dem großen wird noch nicht unterstützt.";
+    for r in [3.0, 3.0 - 1e-13, 4.0] {
+        let g = revolution(
+            &circle(DVec3::new(3.0, 0.0, 0.0), DVec3::X, z, r),
+            DVec3::ZERO,
+            z,
+            1e-6,
+        );
+        assert_eq!(g.unwrap_err().0, torus, "r = {r}");
+    }
+    // Ein Profil, das die Achse kreuzt (ISO verbietet das): Meldung.
+    let crossing = Curve::Ellipse {
+        frame: Frame {
+            origin: DVec3::new(1.0, 0.0, 0.0),
+            x: DVec3::X,
+            y: z,
+            z: DVec3::NEG_Y,
+        },
+        major: 3.0,
+        minor: 2.0,
+    };
+    assert_eq!(
+        revolution(&crossing, DVec3::ZERO, z, 1e-6).unwrap_err().0,
+        "Das Profil einer Drehfläche schneidet die Drehachse."
+    );
+}
+
+#[test]
+fn extrusion_of_a_circle_is_a_cylinder() {
+    let c = circle(DVec3::new(1.0, 2.0, 3.0), DVec3::X, DVec3::Y, 5.0);
+    // λ'(0) = (0; 5; 0), × z = (5; 0; 0): nach außen.
+    let (s, f) = ready(extrusion(&c, DVec3::Z));
+    assert!(matches!(s, Surface::Cylinder { radius, .. } if (radius - 5.0).abs() < 1e-12));
+    assert!(!f);
+    let (_, f) = ready(extrusion(&c, DVec3::NEG_Z));
+    assert!(f);
+    // Schräg: elliptischer Zylinder als Freiform-Strangfläche.
+    let g = extrusion(&c, DVec3::new(0.0, 1.0, 1.0).normalize()).expect("Strangfläche");
+    assert!(matches!(g, SurfaceGeom::Extrusion { .. }));
+    // Betrag null in der Datei → Meldung mit Zeile.
+    let text = data("revolution_extrusion.step")
+        .replace("#3546=VECTOR('',#3523,1.);", "#3546=VECTOR('',#3523,0.);");
+    let m = skip_of(&text, "Profil");
+    assert!(
+        m.starts_with("Zeile ") && m.ends_with("Eine Strangfläche hat keine Länge (Betrag null)."),
+        "{m}"
+    );
+}
+
+#[test]
+fn small_helpers_guard_their_limits() {
+    // measured_flip: Punkt neben der Fläche oder Normale quer → keine Entscheidung.
+    let plane = Surface::Plane {
+        frame: Frame::WORLD,
+    };
+    let unclear = "Die Richtung einer Fläche lässt sich nicht bestimmen.";
+    assert_eq!(measured_flip(&plane, DVec3::ZERO, DVec3::Z), Ok(false));
+    assert_eq!(measured_flip(&plane, DVec3::ZERO, DVec3::NEG_Z), Ok(true));
+    assert_eq!(
+        measured_flip(&plane, DVec3::new(0.0, 0.0, 1.0), DVec3::Z)
+            .unwrap_err()
+            .0,
+        unclear
+    );
+    assert_eq!(
+        measured_flip(&plane, DVec3::ZERO, DVec3::X).unwrap_err().0,
+        unclear
+    );
+    // finish_cone: Gerade (10; 0; 0) + s·(−1; 0; 2)/√5 um z, Spitze (0; 0; 20). Randpunkte auf
+    // einer Seite → Kegel; auf beiden Seiten der Spitze → keine Fläche.
+    let d = DVec3::new(-1.0, 0.0, 2.0).normalize();
+    let o = DVec3::new(10.0, 0.0, 0.0);
+    let below = vec![vec![
+        o,
+        DVec3::new(5.0, 0.0, 10.0),
+        DVec3::new(0.0, 5.0, 10.0),
+    ]];
+    let (s, f) = finish_cone(o, d, DVec3::ZERO, DVec3::Z, &below).expect("Kegel");
+    assert!(matches!(s, Surface::Cone { slope, .. } if (slope - 0.5).abs() < 1e-12));
+    assert!(!f);
+    let both = vec![vec![o, DVec3::new(-5.0, 0.0, 30.0)]];
+    assert_eq!(
+        finish_cone(o, d, DVec3::ZERO, DVec3::Z, &both)
+            .unwrap_err()
+            .0,
+        "Eine Kegelfläche reicht über ihre Spitze hinaus."
+    );
+    // close_curve: Lücke bis zur Genauigkeit geschlossen, größer oder bei winziger Kurve nicht.
+    let open = |gap: f64, scale: f64| {
+        NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0, 3.0],
+            vec![
+                DVec3::ZERO,
+                DVec3::new(10.0, 0.0, 0.0) * scale,
+                DVec3::new(10.0, 10.0, 0.0) * scale,
+                DVec3::new(0.0, 10.0, 0.0) * scale,
+                DVec3::new(gap, 0.0, 0.0),
+            ],
+            vec![1.0; 5],
+        )
+        .unwrap()
+    };
+    let c = close_curve(&open(5e-4, 1.0), 1e-3).expect("geschlossen");
+    let p = c.control_points();
+    assert_eq!(p[0], p[4]);
+    assert_eq!(p[0], DVec3::new(2.5e-4, 0.0, 0.0));
+    assert!(close_curve(&open(1.5e-3, 1.0), 1e-3).is_none());
+    assert!(close_curve(&open(5e-4, 5e-4), 1e-3).is_none());
+}
+
+#[test]
+fn rational_pole_is_transposed_with_its_weights() {
+    // Rationale Kugel (Drehfläche eines Halbkreises, Pole in v), dann u und v im Netz getauscht:
+    // Pole in u-Richtung. Nach dem Zurücktauschen ist es dieselbe Fläche.
+    let half = NurbsCurve::elliptic_arc(
+        DVec3::ZERO,
+        DVec3::new(0.0, 0.0, -5.0),
+        DVec3::new(5.0, 0.0, 0.0),
+        0.0,
+        PI,
+    )
+    .unwrap();
+    let ns = NurbsSurface::revolve(&half, DVec3::ZERO, DVec3::Z, 0.0, TAU).unwrap();
+    let (nu, nv) = ns.counts();
+    assert!((0..nu).any(|i| ns.weight_at(i, 1) != 1.0));
+    let mut c = Vec::new();
+    let mut w = Vec::new();
+    for j in 0..nv {
+        for i in 0..nu {
+            c.push(ns.control_at(i, j));
+            w.push(ns.weight_at(i, j));
+        }
+    }
+    let t = NurbsSurface::new(
+        ns.degree_v(),
+        ns.degree_u(),
+        ns.knots_v().knots().to_vec(),
+        ns.knots_u().knots().to_vec(),
+        nv,
+        nu,
+        c,
+        w,
+    )
+    .unwrap();
+    let (s, swapped) = finish_nurbs_surface(t, 1e-6).unwrap();
+    assert!(swapped);
+    let Surface::Nurbs(d) = &s else { panic!() };
+    assert_eq!(d.poles_v().len(), 2);
+    assert!(d.is_periodic_u());
+    let ((u0, u1), (v0, v1)) = ns.domain();
+    for a in 0..7 {
+        for b in 0..7 {
+            let (u, v) = (
+                u0 + (u1 - u0) * a as f64 / 6.0,
+                v0 + (v1 - v0) * b as f64 / 6.0,
+            );
+            assert!(s.point(u, v).distance(ns.point(u, v)) < 1e-12, "({u}, {v})");
+        }
+    }
+    // Gleiche Punkte, aber verschiedene Gewichte in erster und letzter Reihe: nicht geschlossen.
+    let mut w = Vec::new();
+    let mut c = Vec::new();
+    for i in 0..nu {
+        for j in 0..nv {
+            c.push(ns.control_at(i, j));
+            let k = if i == nu - 1 { 1.5 } else { 1.0 };
+            w.push(ns.weight_at(i, j) * k);
+        }
+    }
+    let odd = NurbsSurface::new(
+        ns.degree_u(),
+        ns.degree_v(),
+        ns.knots_u().knots().to_vec(),
+        ns.knots_v().knots().to_vec(),
+        nu,
+        nv,
+        c,
+        w,
+    )
+    .unwrap();
+    let (s, _) = finish_nurbs_surface(odd, 1e-3).expect("gelesen");
+    let Surface::Nurbs(d) = &s else { panic!() };
+    assert!(!d.is_periodic_u());
 }

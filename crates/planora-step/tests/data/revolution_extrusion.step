@@ -27,8 +27,9 @@ DATA;
 #1612=FACE_OUTER_BOUND('',#1632,.T.);
 #1632=EDGE_LOOP('',(#1702));
 #1702=ORIENTED_EDGE('',*,*,#1562,.T.);
-/* Die Normale der Drehfläche (Kurve x Drehung) zeigt hier zur Achse: .F. */
-#1603=ADVANCED_FACE('',(#1613),#1623,.F.);
+/* ISO 10303-42: u = Drehwinkel, v = Kurvenparameter; die Normale (Drehung x Kurve) zeigt
+   hier nach außen: .T. */
+#1603=ADVANCED_FACE('',(#1613),#1623,.T.);
 #1613=FACE_OUTER_BOUND('',#1633,.T.);
 #1633=EDGE_LOOP('',(#1703,#1704,#1705,#1706));
 #1703=ORIENTED_EDGE('',*,*,#1561,.T.);
@@ -69,7 +70,7 @@ DATA;
 #2612=FACE_OUTER_BOUND('',#2632,.T.);
 #2632=EDGE_LOOP('',(#2702));
 #2702=ORIENTED_EDGE('',*,*,#2562,.T.);
-#2603=ADVANCED_FACE('',(#2613),#2623,.F.);
+#2603=ADVANCED_FACE('',(#2613),#2623,.T.);
 #2613=FACE_OUTER_BOUND('',#2633,.T.);
 #2633=EDGE_LOOP('',(#2703,#2704,#2705,#2706));
 #2703=ORIENTED_EDGE('',*,*,#2561,.T.);

@@ -64,7 +64,7 @@ fn ready(g: SurfaceGeom) -> Surface {
             assert!(!flipped, "analytische Flächen sind nie gekippt");
             surface
         }
-        SurfaceGeom::Extrusion { .. } => panic!("Strangfläche statt fertiger Fläche"),
+        other => panic!("fertige Fläche erwartet: {other:?}"),
     }
 }
 

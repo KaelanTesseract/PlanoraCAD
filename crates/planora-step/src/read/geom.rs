@@ -88,9 +88,16 @@ pub enum SurfaceGeom {
     /// Fertige Fläche; `flipped`: Die Normale von STEP zeigt gegen die natürliche des Kernels.
     Ready { surface: Surface, flipped: bool },
     /// Strangfläche aus einer Freiformkurve entlang der Einheitsrichtung `dir`: Der Bereich folgt
-    /// aus den Schleifen, `flipped` wird danach an der fertigen Fläche gemessen
-    /// ([`crate::read::spline::finish_extrusion`], [`crate::read::spline::extrusion_flipped`]).
+    /// aus den Schleifen ([`crate::read::spline::finish_extrusion`]); nie gekippt.
     Extrusion { curve: NurbsCurve, dir: DVec3 },
+    /// Kegel aus einer Geraden, die die Drehachse schneidet: Die Hälfte des Doppelkegels folgt
+    /// aus den Schleifen ([`crate::read::spline::finish_cone`]).
+    LineCone {
+        line_origin: DVec3,
+        dir: DVec3,
+        axis_origin: DVec3,
+        axis: DVec3,
+    },
 }
 
 /// Typen, die in zusammengesetzten Einträgen nur Obertypen sind und keinen Namen abgeben.
@@ -545,9 +552,9 @@ impl<'f> Resolver<'f> {
         self.vector_direction(id)
     }
 
-    /// Kontrollpunkte einer Liste von Verweisen.
-    fn points_of(&mut self, id: u64, v: &Value) -> Result<Vec<DVec3>, Skip> {
-        let refs = v.refs().map_err(|m| self.bad(id, m))?;
+    /// Kontrollpunkte einer Liste von Verweisen (Fehler der Liste mit dem Vorsatz `what`).
+    fn points_of(&mut self, id: u64, v: &Value, what: &str) -> Result<Vec<DVec3>, Skip> {
+        let refs = v.refs().map_err(|m| self.not_taken(id, what, m))?;
         refs.into_iter().map(|r| self.point(r)).collect()
     }
 
@@ -591,7 +598,7 @@ impl<'f> Resolver<'f> {
             .base
             .get(1)
             .ok_or_else(|| self.not_taken(id, WHAT, "Die Kontrollpunkte fehlen."))?;
-        let points = self.points_of(id, cps)?;
+        let points = self.points_of(id, cps, WHAT)?;
         let n = points.len();
         let knots = self.knots_of(id, WHAT, &head.knots, (0, 1), degree, n)?;
         let mut w = match &head.weights {
@@ -636,7 +643,7 @@ impl<'f> Resolver<'f> {
             .map_err(|m| self.not_taken(id, WHAT, m))?;
         let mut grid = Vec::with_capacity(rows.len());
         for row in &rows {
-            grid.push(self.points_of(id, row)?);
+            grid.push(self.points_of(id, row, WHAT)?);
         }
         let nu = grid.len();
         let nv = grid.first().map_or(0, Vec::len);

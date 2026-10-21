@@ -20,7 +20,7 @@
 use crate::read::error::MAX_STEP_FACES;
 use crate::read::geom::{Resolver, Skip, SurfaceGeom};
 use crate::read::index::StepFile;
-use crate::read::spline::{close_curve, extrusion_flipped, finish_extrusion_with_tol};
+use crate::read::spline::{close_curve, finish_cone, finish_extrusion_with_tol};
 use crate::read::units::Units;
 use crate::read::value::Entity;
 use crate::topology::CLASSIFY_CHORD;
@@ -410,15 +410,25 @@ impl<'f> TopoReader<'f> {
             }
             loops.push(lp);
         }
-        // Eine Strangfläche aus einer Freiformkurve bekommt ihren Bereich aus den Schleifen;
-        // ihre Richtung wird an der fertigen Fläche gemessen.
+        // Eine Strangfläche aus einer Freiformkurve bekommt ihren Bereich aus den Schleifen (nie
+        // gekippt: ihre natürliche Normale ist die von STEP), ein Kegel aus einer Geraden seine
+        // Hälfte (gemessen).
         let (surface, flipped, points) = match geom {
             SurfaceGeom::Ready { surface, flipped } => (surface, flipped, None),
             SurfaceGeom::Extrusion { curve, dir } => {
                 let pts: Vec<Vec<DVec3>> = loops.iter().map(|l| self.raw.loop_points(l)).collect();
                 let surface = finish_extrusion_with_tol(&curve, dir, &pts, self.tol)
                     .map_err(|Skip(m)| self.fail(geometry, m))?;
-                let flipped = extrusion_flipped(&curve, dir, &surface)
+                (surface, false, Some(pts))
+            }
+            SurfaceGeom::LineCone {
+                line_origin,
+                dir,
+                axis_origin,
+                axis,
+            } => {
+                let pts: Vec<Vec<DVec3>> = loops.iter().map(|l| self.raw.loop_points(l)).collect();
+                let (surface, flipped) = finish_cone(line_origin, dir, axis_origin, axis, &pts)
                     .map_err(|Skip(m)| self.fail(geometry, m))?;
                 (surface, flipped, Some(pts))
             }
