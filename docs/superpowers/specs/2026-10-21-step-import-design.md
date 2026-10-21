@@ -49,6 +49,14 @@ Heute kommen fremde Teile nur als **Netz-Körper** (STL/OBJ) ins Programm: Dreie
 6. **Dokument:** `StepBody` geht über die gewöhnliche Fertigstellung des Körpers (Prüfung, Ausdehnung), Dateiformat 10 mit eigener Regel vor der Regel für Format 9; die Stellen, die heute `MeshBody` kennen (etwa 14 in 5 Crates), werden ergänzt.
 7. **Aufwand (grob):** Lexer/Parser 3 Tage, Geometrie 4, Topologie/Normalisieren/Zusammenziehen 6–8, Dokument/Projekt/App 5: zusammen etwa 18–20 Arbeitstage klassischer Zählung, in der Praxis die größte Aufgabe seit dem Kernel.
 
+## 4b. Antworten von Dennis (2026-10-21)
+
+1. Umfang wie in §2 und §4a.1: **ja**.
+2. Baugruppen: alle Körper werden einzeln übernommen, und zwar **an den Positionen, die in der STEP-Datei stehen** (Platzierungen aus `ITEM_DEFINED_TRANSFORMATION`, `AXIS2_PLACEMENT_3D` und Verschachtelung werden angewandt, damit Teile einer Baugruppe so liegen wie im Original). Die Hierarchie selbst bleibt unberücksichtigt. Platzierungen, die sich nicht eindeutig bestimmen lassen (Spiegelungen, Skalierungen, Zyklen), ergeben eine Meldung und der Körper bleibt am Ursprung.
+3. Nicht lesbare oder ungültige Körper auslassen, übrige übernehmen: **ja**.
+4. STEP-Text in der Projektdatei: **ja**.
+5. Körper mit grober Dateigenauigkeit mit Warnung übernehmen: **ja**; Kernel-Änderungen dürfen vorgeschlagen werden, die Entscheidung bleibt bei Dennis (wie bei den Schnittansichten).
+
 ## 5. Grenzen und Fehler (Vorschlag)
 
 - Dateigröße höchstens 200 MB, höchstens 5 Millionen Einträge, höchstens 100 000 Flächen je Körper und 50 Körper je Datei; darüber klare Meldung.
