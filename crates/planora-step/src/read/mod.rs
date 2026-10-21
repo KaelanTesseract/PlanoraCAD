@@ -7,6 +7,8 @@
 //! die Körper, die sie brauchen. Speicher: Dateibytes plus etwa 32 Bytes je Eintrag.
 
 pub mod error;
+pub mod geom;
 pub mod index;
 pub mod lex;
+pub mod units;
 pub mod value;
