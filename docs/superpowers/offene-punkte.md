@@ -1406,3 +1406,105 @@ Release-Build, Fenster zuerst 1400 × 900. Jeweils prüfen: Der Hinweis unten ne
 - [ ] 22. Fenster ab 1150 Pixel Breite: Name und Schließkreuz des aktiven Tabs ganz zu sehen, auch mit Punkt.
 - [ ] 23. Ein sehr großes Modell (Netz-Körper) und Strg+Z: Das Zurückladen dauert deutlich unter einer Sekunde. Falls nicht, bitte melden (dann kommt eine Fortschrittsanzeige).
 - [ ] 24. Der Hinweis „Rückgängig: …“ unten bleibt stehen, bis der nächste Schritt kommt (nicht nur einen Augenblick), auch nach Mausbewegungen.
+
+## Teilprojekt: Parameter und Gleichungen
+
+### Stand und Geliefertes
+Stand: 2026-10-21 (Zweig `feature/parameter`, Basis `master` @ `ad1da89`, Spec @ `7f571c6`). Ein Dokument hat eine Parametertabelle; die Zahlenfelder der Körper-Funktionen und die bestimmenden Skizzenmaße nehmen Formeln an; ändert man einen Parameter, rechnet das Modell als **ein** rücknehmbarer Schritt neu.
+
+- **Formelbaustein** (`planora-feature/src/expr.rs`, rein, nur `std` und `thiserror`): Zerleger, Auswertung mit Einheiten (Länge, Winkel, Zahl), Kreiserkennung, Umbenennen Wort für Wort. Operatoren `+ - * / ^`, Klammern, `sqrt sin cos tan abs min max round`, `pi`; Winkel in Grad.
+- **Parametertabelle im Dokument** (`params.rs`): anlegen, ändern, umbenennen, löschen, „Durch den Wert ersetzen“; jede Änderung ist eine Operation mit Ablehnung ohne Wirkung (Dokument und Zähler bleiben gleich). Teil des Bildes (`Snapshot`), damit Speichern, Laden und Rückgängig sie tragen.
+- **Formeln in Körper-Features** (`formulas.rs`): Nebentabelle je Feature (Feldschlüssel → Text), ein Durchgang vor jeder Neuberechnung schreibt die Werte in die `f64`-Felder. Felder: Quader 6, Zylinder und Kegel je 5, Kugel 4, Extrusion: Höhe, Verschieben Δx/Δy/Δz, Rundung: Radius, Fase gleich 1, Fase zwei 2, Fase mit Winkel 2, Netz-Körper: Position x/y/z und Maßstab. Skizzenmaße über die Kennung der Abhängigkeit, mit dem Rechenstatus des Lösers (Widerspruch oder keine Lösung ergibt den Fehlerstatus).
+- **Dateiformat 9** (`planora-project`): nur bei Parametern oder Formeln; alle Golden-Dateien Byte für Byte unverändert. Strenges Lesen mit deutschen Meldungen.
+- **App:** Menü „Bearbeiten → Parameter …“ (Symbol Phosphor `function`), Fenster „Parameter“ mit Tabelle, Formelfeld mit „fx“ und Wertanzeige, Formelfelder in allen Erzeugen-Fenstern, im Fenster „… bearbeiten“, im Rundungsfenster, im Maßfeld der Skizze, in der Maßliste (Zeile „fx“) und im Eigenschaftenfeld des Netz-Körpers. Schrittnamen „Parameter anlegen/ändern/löschen“, „Formel ändern“; Verlaufsgröße zählt Tabelle und Formeltexte.
+- **Dateien:** neu `expr.rs`, `params.rs`, `formulas.rs` (`planora-feature`), `formula_field.rs`, `parameter_dialog.rs` (`planora-app`); geändert `ops.rs`, `snapshot.rs`, `model.rs`, `sketch_feature`-Teile, `convert.rs`/`format.rs` (`planora-project`), die Dialoge, `state.rs`, `app.rs`, `history.rs`, `undo_labels.rs`. Kernel, Netz, STEP, Austausch, Skizze, Zeichnung, Render, Mathe, `Cargo.toml`, `Cargo.lock`, `deny.toml` und alle Golden-Dateien sind unverändert (geprüft gegen `7f571c6`).
+
+### Festlegungen P1 bis P14 mit Abweichungen
+Die Festlegungen stehen im Kopf des Plans und kurz in der Spec §8. Einzelheiten und alle Abweichungen: Plan, Abschnitt „Abweichungen bei der Umsetzung“.
+- **P1 Werte schreiben:** Vor jeder Neuberechnung (Änderung, Laden, Zurückladen) wertet `Document` erst die Tabelle, dann alle Formeln aus und schreibt die Ergebnisse in die `f64`-Felder. Nur Features, deren Werte oder Formelfehler sich ändern, bekommen eine neue Version. *Abweichung:* Bei einer Skizze mit geänderten Formeln (Umbenennen, Ersetzen) steigt die Version immer, damit kein gespeicherter Fehlschlag die Änderung überdauert.
+- **P2 Zahl statt Formel:** Eine Operation ohne Formelangabe, die den Wert eines Feldes mit Formel ändert, löscht nur diese Formel. Formeln für Felder, die es nach einem Artwechsel nicht mehr gibt, entfallen. Gilt auch für Skizzen (getippte Zahl gilt).
+- **P3 Strenge Prüfung, milder Ladeweg:** Ein „Formelfehler“ (Formel selbst kaputt) wird beim Ändern abgelehnt, ein „Wertfehler“ (Ergebnis außerhalb des Bereichs) nicht. *Abweichung:* Ein Wertfehler schreibt den Wert trotzdem ins Feld (P3 sagte „letzter Wert“); der Status ist Fehler. Nur für Formelfehler bleibt der letzte Wert. Ein alter Formelfehler gilt als schon vorhanden, wenn Feature, Feld und Formeltext gleich sind (beim Umbenennen mit dem umgeschriebenen Text). Skizzenmaße behalten bei Wertfehlern ihren letzten gültigen Wert, weil die Skizze den Wert selbst prüft.
+- **P4 Einheiten:** Ausdrücke rechnen mit Exponenten von Länge und Winkel. Ein Feld nimmt seine Einheit oder eine reine Zahl; eine Länge passt nicht in den Maßstab. Die Extrusionshöhe muss größer als die Toleranz sein; Δ und Netz-Lage haben kein Vorzeichen-Gebot; der Maßstab liegt zwischen den Grenzen des Eintippens. Die Meldungen nennen Werte verlustfrei, wo eine gerundete Zahl dem Satz widerspräche (Maßstab, Winkel 0,999 und 179,004).
+- **P5 Komma:** Zwischen zwei Ziffern ist das Komma Dezimalzeichen; sonst trennt es Werte („; “ oder „, “). `1,5,3` ist ein unerwartetes Zeichen, nie ein stiller Trenner.
+- **P6 Namen:** ohne Rücksicht auf Groß- und Kleinschreibung; Umbenennen ersetzt ganze Namen (Zerleger, nicht Textsuche); Namen bis 64, Kommentare bis 200 Zeichen. *Abweichung:* Das Projekt hat daneben eine eigene Grenze von 500 Zeichen für Projektkommentare (zwei Konstanten `MAX_COMMENT_CHARS`, getrennte Namensräume).
+- **P7 Durch den Wert ersetzen:** Jede Formel, die den Parameter direkt nennt, wird durch ihren Wert ersetzt, dann wird der Parameter gelöscht; ein Schritt, keine Wertänderung. *Abweichung (Endregel):* Abgelehnt wird bei Formel- oder Wertfehler eines Benutzers, bei Skizzen im Fehler oder übersprungen und bei nicht berechneten Skizzen (hinter dem Marker, unterdrückt), deren letzte Formel entfiele und die sich nicht lösen lassen. Körperfelder ohne Formel- oder Wertfehler tragen schon den Formelwert und dürfen ersetzt werden, auch wenn das Feature aus anderem Grund im Fehler ist. Zu lange Werte (über 200 Zeichen) werden mit Meldung abgelehnt.
+- **P8 Strg+Z mit dem Fenster „Parameter“:** Das Fenster zählt nicht zu den sperrenden Fenstern; Strg+Z wirkt, wenn kein Feld die Tastatur hat; danach lädt es seine Zeilen neu und verwirft Entwürfe.
+- **P9 Übernahme:** Fenster mit Knopf übernehmen erst mit dem Knopf; die Anzeige „= Wert“ rechnet beim Tippen mit. Zeilen des Fensters „Parameter“ und Netz-Formelfelder wirken bei Enter oder Verlassen. *Abweichungen:* Das Fenster läuft im Bild vor allen übrigen Bereichen; eine noch offene andere Änderung wird zuerst ein eigener Schritt (so wird ein Ziehen nicht mit „Parameter ändern“ verschmolzen); nach der Übernahme entsteht der Schritt sofort. Verlassen übernimmt, wenn der Entwurf vom Dokument abweicht; ein aus dem Bild gerolltes Feld mit Entwurf wird übernommen wie beim Verlassen.
+- **P10 Netz-Körper:** Position x/y/z und Maßstab sind Formelfelder (Tippen statt Ziehen); die Drehung bleibt ein Ziehfeld. Der 3D-Griff zieht weiter, entfernt aber die Formel der gezogenen Achse.
+- **P11 Verschieben mit Formeln:** Ein Verschieben mit Formeln wird beim Ziehen oder im Positionsfeld nie erweitert; es entsteht ein neues Verschieben.
+- **P12 Skizzenstatus:** Eine Skizze mit mindestens einer Formel bekommt den Fehlerstatus, wenn der Löser nicht „gelöst“ meldet, auch wenn sie schon vorher ungelöst war. *Abweichung (Maßfeld):* Eine Eingabe, die die Skizze neu widersprüchlich macht, wird wie bisher abgelehnt; war sie schon vorher ungelöst und hat Formeln, steht im Maßfeld rot derselbe Text wie im Fehlerstatus, und die Ansicht zeigt die gespeicherte Lage.
+- **P13 Neue Zeile:** „ParameterN“ (kleinstes freies N), Formel „10“, Länge, ohne Kommentar.
+- **P14 Meldungsgrammatik:** „Den Namen „Breit“ gibt es nicht.“
+
+Weitere Abweichungen im Überblick (Einzelheiten im Plan): Kreis- und Selbstbezugsmeldungen nennen die Namen ohne Vorsilbe; Umbenennen auf einen vorhandenen Namen meldet den getippten Namen; ein Bild mit Formel an einem Feld, das die Art nicht hat, wird abgelehnt; Dateien mit Formeln an gelöschten, anzeigenden oder nicht bestimmenden Skizzenabhängigkeiten werden abgelehnt (das stille Aufräumen bleibt nur für Rückgängig-Bilder), Formeln an abgeschalteten Maßen laden und folgen weiter dem Parameter; Fremdtexte aus Dateien stehen in Meldungen auf höchstens 40 Zeichen gekürzt; alle Längengrenzen zählen Zeichen, nicht Bytes; alle Erzeugen-Fenster bleiben bei einem Fehler offen; ein offenes Fenster „… bearbeiten“ schließt nach jeder Parameteraktion; Netz-Körper-Position als drei Zeilen; im Bearbeiten-Fenster meldet ein Feld der variablen Rundung mit Text „Hier sind nur Zahlen möglich.“; „fx“ heißt für Bildschirmleser „In Wert umwandeln“.
+
+### Grenzen
+- **Profilnummer bei Extrusion:** Eine Extrusion wählt ihr Profil über die Nummer. Ändert eine Parameteränderung die Reihenfolge der Profile, kann ein anderes Profil gewählt sein.
+- **Hinweispunkte bei großen Sprüngen:** Flächen-Hinweispunkte können bei sehr großen Sprüngen verloren gehen.
+- **Löser startet von der gespeicherten Lösung:** Große Sprünge können eine andere Lösung wählen oder nicht konvergieren (dann Fehlerstatus statt stiller falscher Form).
+- **Netz-Körper:** Position und Maßstab per Tippen; der 3D-Griff entfernt die Formel der gezogenen Achse. Die Drehung hat keine Formel.
+- **Zeichnungsmaße ohne Formeln;** anzeigende Skizzenmaße ohne Formeln; variable Rundung und das Positionsfeld des Körpers ohne Formeln.
+- **Keine Auswahlliste** der Namen im Feld; nur der Hinweis „Namen: …“ (höchstens eine feste Zahl Namen, danach „…“).
+- **Fase 179°:** als Zahl zulässig, scheitert an einer rechtwinkligen Kante im Kernel mit dessen Meldung.
+- **Zahlen:** höchstens 500 Parameter, Namen 64, Kommentare 200, Formeln 200 Zeichen, Tiefe 64.
+- **Fenster „Parameter“:** Bis 60 Zeilen werden alle gezeichnet, darüber nur die sichtbaren plus je eine davor und dahinter. Ein fokussiertes Feld, das aus dem Bild rollt, wird übernommen wie beim Verlassen.
+- **Schrittname:** „Formel ändern“ entsteht, wann immer sich Formeln ändern, auch wenn sich der Wert mitändert.
+- **Winkel im Maßfeld:** Das Feld zeigt Grad mit einer Nachkommastelle wie bisher; gespeichert wird `wert.to_radians()`, bitgleich mit dem Durchgang des Dokuments. Eine Skizze, die schon ungelöst ist, nimmt in der offenen Skizze weiter Formeln an; P12 greift beim Beenden und als rote Meldung im Feld.
+- **Lücken in den Tests (bewusst angenommen):** Sofortiges Entfernen der Formel beim Haken „anzeigend“ ist doppelt abgesichert (eine Mutation dort bleibt grün); gemeinsame Textkonstanten des Lösers; einzelne Randfälle der Meldungen sind in den Reviews vermerkt.
+- **Nicht von Hand im echten Fenster geprüft** (offen): alles unter „Handliste“.
+
+### Zahlen
+- **Bildzeiten des Fensters „Parameter“ (Release-Build, Ryzen 9 9950X, ohne Tessellieren):** 60 Zeilen (alle gezeichnet) 0,74 ms je Bild; 500 Zeilen (nur sichtbare) 0,20 ms. Vor dem Rollen waren es 6,09 ms für 500 Zeilen.
+- **Mutationsproben:** 294 Einträge (einzelne Mutationen) aus den Berichten der Aufgaben 1 bis 11 (`.superpowers/sdd/2026-10-20-parameter/`, Summenliste in `task-12-report.md`), jede rot; die wenigen, die zunächst grün blieben, haben die Tests schärfer gemacht (Liste im Bericht). Dazu die Einzelproben der Reviews (zwischen 26 und 42 je Aufgabe).
+- **Gates (Stand der Abschlussprüfung):** siehe `task-12-report.md`; `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -j 2 --no-fail-fast` und `cargo deny check` sauber. Keine neue Abhängigkeit.
+
+### Handliste für den Nutzer (Prüfung von Hand im echten Fenster, Stand 2026-10-21)
+Release-Build, Fenster zuerst 1400 × 900. Jeweils prüfen: Texte lesbar, nichts ragt heraus, Meldung nennt den Grund. Abhaken:
+
+**A. Fenster „Parameter“**
+- [ ] 1. Menü „Bearbeiten → Parameter …“ öffnen. Es erscheint das Fenster „Parameter“ mit den Spalten Name, Formel, Wert, Art, Kommentar. Mit „Zeile hinzufügen“ entsteht „Parameter1“, Formel „10“, Wert „10,00 mm“, Art „Länge“.
+- [ ] 2. Name auf „Breite“ ändern, Formel auf „40“, Enter: Wert „40,00 mm“. Eine zweite Zeile „Tiefe“ mit Formel „Breite / 2“: Wert „20,00 mm“. Unten im Menü „Bearbeiten“ steht „Rückgängig: Parameter ändern“ bzw. „anlegen“.
+- [ ] 3. Breite auf „60“ ändern: Tiefe zeigt „30,00 mm“. Strg+Z (Tastatur nicht im Feld): Breite wieder 40, das Fenster bleibt offen und zeigt den alten Stand; Strg+Umschalt+Z holt die 60 zurück.
+- [ ] 4. Eine Zeile umbenennen („Breite“ zu „B“): Die Formel von „Tiefe“ lautet jetzt „B / 2“. Rückgängig bringt beides zurück.
+- [ ] 5. Kommentar eintippen, Art auf „Winkel“ stellen: „Wert“ zeigt „°“. Zurück auf „Länge“. Namen mit Umlaut („Höhe“) und mit Leerzeichen („Zu breit“) tippen: Umlaut geht, Leerzeichen wird mit Meldung abgelehnt.
+
+**B. Ungültige Eingaben**
+- [ ] 6. Formel „Breit“ eintippen: rote Meldung „Den Namen „Breit“ gibt es nicht.“, Dokument unverändert. Formel „Breite + w“ mit einem Winkelparameter „w“: Meldung zu Länge und Winkel. Formel „1/0“: Meldung. `min(1,5)`: Meldung „min braucht mindestens zwei Werte“. Name „sin“: abgelehnt.
+- [ ] 7. Kreis: „a = b + 1“ und danach „b = a“ eintippen: Meldung nennt „a“ und „b“, nichts ändert sich.
+- [ ] 8. Eine Formel mit 201 Zeichen wird abgelehnt. Bei voller Tabelle (500 Zeilen) gilt: Meldung „Höchstens 500 Parameter.“ (die rote Meldung steht dann unter dem Knopf).
+
+**C. Körper mit Formeln**
+- [ ] 9. Quader erzeugen: Breite „Breite“, Tiefe „Tiefe“, Höhe „Breite / 4“. Die Anzeige „= 10,00 mm“ rechnet beim Tippen mit; „Erzeugen“ ist gesperrt, solange eine Formel ungültig ist. Nach „Erzeugen“ steht der Quader mit 40 × 20 × 10.
+- [ ] 10. Zylinder (Radius `Breite / 4`), Kugel (Radius `Tiefe / 2`), Kegel (Höhe `sqrt(Breite^2 + Tiefe^2)`) erzeugen: Maße stimmen.
+- [ ] 11. Breite auf 80 ändern: Alle Körper wachsen mit; ein einziges Strg+Z stellt alle vier wieder her.
+- [ ] 12. Ändern-Dialog eines Quaders mit drei Formeln: „fx“ und „= …“ stehen bei den Feldern, nichts wird abgeschnitten. In einem Feld eine Zahl tippen („7“): nur diese Formel entfällt, die anderen bleiben. „fx“ anklicken: die Formel wird zur Zahl.
+- [ ] 13. Verschieben: Δx `Breite / 2`, Δy `0`, Δz `Tiefe`. Der Körper wandert; Breite ändern, er folgt. Dann das Feld „Position“ des Körpers ziehen: Es entsteht ein neues Verschieben, die Formeln des ersten bleiben.
+- [ ] 14. Extrusion: Skizze (Rechteck) beenden, extrudieren mit Höhe `Breite / 4`. Parameter ändern: Höhe folgt.
+- [ ] 15. Rundung: Radius `Wand` an einer Kante. Fase mit Winkel: Abstand `Wand`, Winkel `w` (Winkelparameter). Parameter ändern, Körper folgt. Wand sehr groß: Eintrag im Baum zeigt den Fehler, Rückgängig stellt zurück.
+- [ ] 16. Netz-Körper (eine Beispieldatei einlesen): im Eigenschaftenfeld stehen Zeilen „Position x“, „Position y“, „Position z“, „Maßstab“ mit Formelfeldern; Formel `Breite / 10` bei „Maßstab“ eintippen, Enter: Körper skaliert. Parameter ändern: die Zeile zeigt die Formel weiter, das Modell folgt. Die Drehung lässt sich weiter ziehen. 3D-Griff entlang einer Achse mit Formel ziehen: die Formel dieser Achse entfällt.
+
+**D. Skizze**
+- [ ] 17. Skizze: Rechteck mit Maß „Breite“ (Maßfeld zeigt „fx“, daneben „= 40,00 mm“). In der Maßliste steht unter dem Maß eine Zeile „fx Breite“. „OK“ ist bei ungültiger Formel gesperrt, die Meldung steht über „OK“.
+- [ ] 18. Winkelmaß mit Formel `w` (in Grad) und Radius mit Formel `Breite / 4`: Werte stimmen, der Zeichenbereich zeigt Zahlen, nicht Formeln.
+- [ ] 19. Dreieck mit Seiten a, b, c als Parameter; c auf 100 ändern (c > a + b): Die Skizze zeigt den Fehler „widersprechen sich Abhängigkeiten“, nichts Falsches wird gezeichnet, Rückgängig stellt zurück. Rechteck 30 auf 400: die Skizze folgt.
+- [ ] 20. Anzeigendes Maß: Haken „anzeigend“ setzen; eine Formel hineintippen gibt „Ein anzeigendes Maß bestimmt nichts und kann keine Formel haben.“
+- [ ] 21. Skizze offen lassen und das Fenster „Parameter“ öffnen: Es ist ausgegraut mit „Beenden Sie zuerst die Skizze.“
+
+**E. Löschen und Ersetzen**
+- [ ] 22. „Breite“ löschen, obwohl benutzt: „Breite wird in Quader 1, Skizze 1, Parameter Tiefe benutzt.“ „Durch den Wert ersetzen“: alle Körper bleiben gleich, die Formeln sind zu Zahlen geworden, Rückgängig bringt Parameter und Formeln zurück (ein einziger Schritt).
+- [ ] 23. „Durch den Wert ersetzen“ mit einem Eintrag im Fehler (zum Beispiel Skizze mit widersprüchlichen Formeln): wird abgelehnt mit „… hat gerade einen Fehler. Beheben Sie zuerst den Fehler.“.
+- [ ] 24. Ein Fenster „… bearbeiten“ offen lassen und im Fenster „Parameter“ etwas ändern: das Bearbeiten-Fenster schließt, unten steht „Der Dialog wurde geschlossen, weil sich Parameter geändert haben.“ Das Erzeugen-Fenster dagegen bleibt offen.
+
+**F. Rückgängig und Datei**
+- [ ] 25. Mehrere Parameteränderungen hintereinander mit Strg+Z zurücknehmen und mit Strg+Y wieder holen: Namen der Schritte stimmen („Parameter ändern“, „anlegen“, „löschen“, „Formel ändern“), der Punkt „ungespeichert“ folgt dem Verlauf.
+- [ ] 26. Speichern, Tab schließen, Datei öffnen: Parameter, Formeln und Körper sind gleich (Format 9). Ein Dokument ohne Parameter speichern: Dateigröße und Inhalt wie vorher.
+- [ ] 27. Eine Datei mit einer von Hand zerstörten Formel (Textfeld in der Datei ändern, zum Beispiel einen Namen falsch schreiben): sie lädt, der Eintrag im Baum zeigt den Fehler, das Feld hat den gespeicherten Wert. Eine Datei mit doppelten Parameternamen: wird mit deutscher Meldung abgelehnt.
+
+**G. Tasten, Fenstergrößen, Aussehen**
+- [ ] 28. Tipp-Test mit echten Tasten: In ein Formelfeld („Breite / 4“) Zeichen für Zeichen tippen: das Feld behält die Tastatur beim Wechsel von Zahl zu Formel und zurück, nichts geht verloren. Im Fenster „Parameter“ mit Tab durch die Zellen laufen; „Zeile hinzufügen“ setzt die Tastatur in den neuen Namen.
+- [ ] 29. Strg+Z beim Tippen im Fenster „Parameter“ wirkt auf das Feld, nicht auf das Dokument; nach Escape oder Klick daneben wirkt es auf das Dokument.
+- [ ] 30. Mit gedrückter Maustaste (Position ziehen) bei offenem Fenster „Parameter“ den Wert ändern: Ziehen und Parameteränderung sind zwei Schritte.
+- [ ] 31. Viele Zeilen (über 60) anlegen: das Fenster rollt flott, Tab führt in die Nachbarzeile, ein Eintrag aus dem Bild gerollt wird übernommen.
+- [ ] 32. Fenster 1100 × 700 und 800 × 600: Das Fenster „Parameter“, die Formelfelder und die Fußzeile sind im Bild, nichts wird abgeschnitten; die Knöpfe sind erreichbar.
+- [ ] 33. Hell und Dunkel: „fx“, rote Meldungen, Wertanzeige und das Symbol im Menü sind lesbar; Farben stimmen mit dem übrigen Programm.
+- [ ] 34. Zwei Tabs mit verschiedenen Dokumenten: Parameter und Formeln eines Tabs erscheinen nicht im anderen, und ein getippter Formeltext in einem offenen Erzeugen-Fenster erscheint nicht im anderen Tab.

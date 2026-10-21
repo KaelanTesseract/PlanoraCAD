@@ -9,7 +9,7 @@
 
 Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
 
-**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern, PDF-Ausgabe, Schnittansichten, Rückgängig und Wiederholen).
+**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern, PDF-Ausgabe, Schnittansichten, Rückgängig und Wiederholen, benannte Parameter mit Formeln).
 
 Erste Version: Quader, Zylinder, Kugel, Kegel, Extrusion und Rotation von Skizzen, 3D-Ansicht mit Auswahl, Körper verschieben (Feld „Position“) sowie Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit Flächen aus Ebenen, Zylindern, Kegeln, Kugeln und Tori (Stufe A) und für Körper mit Freiformflächen aus Ellipsen und Splines (siehe „Freiformflächen“).
 
@@ -264,7 +264,7 @@ In einer Zeichnung lassen sich Maße setzen und Mittellinien zeigen. Die Maße h
 - Passungen sind nur ein Text; es gibt keine Passungstabellen. In der DXF-Datei sind die Maße einfache Linien, Pfeile und Texte, keine echten CAD-Maße.
 - Wie breit ein Text wird, schätzt das Programm nur. Mit einer anderen Schrift kann er etwas breiter ausfallen.
 - Ob Fusion 360 die Maßtexte und Pfeile der DXF-Dateien richtig anzeigt, ist noch nicht von Hand geprüft.
-- Nicht dabei: freie Texte. Schnitte, Schriftfeld, Stückliste und Positionsnummern gibt es inzwischen, siehe die Abschnitte davor und danach.
+- Nicht dabei: freie Texte. Schnitte, Schriftfeld, Stückliste und Positionsnummern gibt es inzwischen, siehe die Abschnitte davor und danach. Maße in Zeichnungen messen das Modell und rechnen nicht mit Parametern; Formeln gibt es nur im Modell und in den Maßen der Skizze (siehe „Parameter und Formeln“).
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 12 – Maße und Mittellinien“.
 
@@ -436,6 +436,52 @@ Jede Änderung am Dokument lässt sich zurücknehmen und wieder herstellen: Kör
 - Der Hinweis „Rückgängig: …“ in der Statuszeile gehört zum Tab: Wechselst du weg und zurück, steht er dort noch, bis du in diesem Tab den nächsten Schritt machst. Landet Rückgängig auf einem Stand mit einem fehlerhaften Eintrag im Baum, zeigt die Statuszeile statt des Hinweises dessen Fehler.
 
 Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt: Rückgängig und Wiederholen“.
+
+## Parameter und Formeln
+
+Statt jede Zahl einzeln einzutippen, gibst du einem Maß einen Namen und rechnest damit. Zum Beispiel „Breite = 40“, und das Loch ist immer „Breite / 4“ groß. Änderst du später die Breite, folgen alle Körper und Skizzen, die den Namen benutzen, in einem Zug.
+
+**Das Fenster „Parameter“:** im Menü „Bearbeiten → Parameter …“. Jede Zeile hat Name, Formel, Wert (wird ausgerechnet), Art und Kommentar. „Zeile hinzufügen“ legt einen neuen Parameter an („Parameter1“, Formel „10“, Länge); „Zeile löschen“ entfernt ihn. Eine Änderung gilt, sobald du Enter drückst oder die Zeile verlässt, nicht bei jeder Taste.
+
+**Arten:** „Länge“ (in mm), „Winkel“ (in Grad) und „Zahl“ (ohne Einheit, zum Beispiel ein Faktor). Ein Winkel passt nicht in ein Längenfeld und eine Länge nicht in ein Winkelfeld; das Programm sagt es dir. Eine reine Zahl passt überall hin. Namen beginnen mit einem Buchstaben oder „_“, danach Buchstaben, Ziffern und „_“ (Umlaute gehen), höchstens 64 Zeichen. Groß- und Kleinschreibung zählt beim Namen nicht: „Breite“ und „breite“ sind derselbe Name. Namen wie „sin“ oder „pi“ sind belegt.
+
+**Was in eine Formel darf:** Zahlen, Namen anderer Parameter, die Zeichen `+ - * / ^` (hoch), Klammern, die Funktionen `sqrt` (Wurzel), `sin`, `cos`, `tan` (Winkel in Grad), `abs`, `min`, `max`, `round` und die Zahl `pi`. Beispiele:
+- `Breite / 4`
+- `sqrt(a^2 + b^2)` (Länge der Diagonale)
+- `min(Breite; Tiefe) - 2*Wand`
+- `Durchmesser / 2`
+- `50 * sin(Winkel)`
+
+**Komma:** Als Dezimalzeichen geht Komma oder Punkt (`2,5` und `2.5`). Ein Komma zwischen zwei Ziffern ist deshalb immer ein Dezimalkomma. Werte in einer Funktion trennst du mit Semikolon oder mit Komma und Leerzeichen: `min(1; 5)` oder `min(a, b)`. `min(1,5)` ist **ein** Wert (1,5), und das Programm meldet, dass „min“ mindestens zwei Werte braucht.
+
+**Wo Formeln gehen:** in den Zahlenfeldern von Quader, Zylinder, Kugel und Kegel (Größe und Lage), bei der Extrusion in der Höhe, im Fenster „Verschieben“ in Δx, Δy und Δz, bei Rundung und Fase im Radius, in den Abständen und im Winkel, bei Netz-Körpern in Position und Maßstab (im Eigenschaftenfeld als Zeilen zum Tippen; die Drehung bleibt ein Ziehfeld) und in den Maßen der Skizze (Abstand, Radius, Durchmesser, Winkel, Achsen der Ellipse). Nicht dabei: die variable Rundung, das Feld „Position“ des gewählten Körpers (es zeigt die Ecke und legt Verschiebungen an; Formeln gehören in das Fenster „Verschieben“) und anzeigende Maße der Skizze (sie bestimmen nichts).
+
+**Im Feld:** Tippst du eine Zahl, bleibt es eine Zahl. Tippst du einen Namen oder ein Rechenzeichen, wird es eine Formel. Das Feld zeigt dann „fx“ und daneben den berechneten Wert, zum Beispiel „= 10,00 mm“. Ein Klick auf „fx“ ersetzt die Formel durch ihren Wert. In Fenstern mit „Erzeugen“, „Übernehmen“ oder „OK“ gilt die Formel erst mit dem Knopf (oder Enter); der Wert daneben rechnet schon beim Tippen mit. In den Fenstern steht ein Hinweis mit den vorhandenen Namen („Namen: Breite, Tiefe …“). In der Liste der Skizzenmaße steht unter einem Maß mit Formel eine Zeile mit „fx“ und der Formel; die Zeichnung der Skizze zeigt den Wert. Tippst du in einem Feld mit Formel eine neue Zahl, entfällt nur diese Formel. Die anderen Felder behalten ihre.
+
+**Wenn etwas nicht stimmt**
+- Eine **ungültige Formel** (Tippfehler, unbekannter Name, ein Name, der im Kreis auf sich selbst zurückführt, Länge in einem Winkelfeld, Teilen durch null) wird abgelehnt. Es ändert sich nichts, die Meldung steht rot am Feld oder unter der Tabelle („Den Namen „Breit“ gibt es nicht.“).
+- Eine **gültige Formel, die das Modell scheitern lässt** (zum Beispiel Breite 0, eine Rundung, die nicht mehr passt, eine Skizze ohne Lösung), wird übernommen. Der Eintrag im Baum zeigt dann seinen Fehler mit Meldung, abhängige Einträge werden übersprungen, und nichts Falsches wird gezeichnet. Rückgängig stellt alles wieder her.
+- Eine Änderung an den Parametern ist **ein** Schritt im Verlauf („Parameter ändern“, „Parameter anlegen“, „Parameter löschen“). Strg+Z geht auch, solange das Fenster „Parameter“ offen ist und du nicht gerade in einem Feld tippst; das Fenster bleibt dabei offen und zeigt den alten Stand.
+
+**Löschen, Ersetzen, Umbenennen**
+- Ein Parameter, der irgendwo benutzt wird, lässt sich nicht löschen. Die Meldung nennt, wo: „Breite wird in Quader 1, Skizze 2 benutzt.“ Dazu gibt es „Durch den Wert ersetzen“: Alle Formeln, die den Namen nennen, bekommen seinen aktuellen Wert, dann wird der Parameter gelöscht. Das Modell bleibt dabei gleich, und es ist ein Schritt.
+- „Durch den Wert ersetzen“ wird abgelehnt, wenn dadurch still ein anderes Modell entstünde. Skizzen sind streng: Hat eine Skizze, die den Parameter nennt, gerade einen Fehler, oder ließe sie sich ohne die letzte Formel nicht lösen, geht es nicht. Bei Körperfeldern lehnt das Programm nur ab, wenn die Formel selbst oder ihr Wert den Fehler macht. Die Meldung sagt, welcher Eintrag zuerst repariert werden muss.
+- Beim **Umbenennen** ändert das Programm den Namen in allen Formeln mit. Rückgängig bringt Name und Formeln zusammen zurück.
+- Solange eine **Skizze offen** ist, ist das Fenster „Parameter“ gesperrt („Beenden Sie zuerst die Skizze.“).
+- Ändert sich ein Parameter, schließt ein offenes Fenster „… bearbeiten“ mit dem Hinweis „Der Dialog wurde geschlossen, weil sich Parameter geändert haben.“ Es hielte sonst alte Zahlen und würde beim Übernehmen Formeln verlieren. Die Fenster zum Erzeugen und für Rundungen bleiben offen.
+
+**Datei:** Erst wenn ein Dokument Parameter oder Formeln enthält, wird es im Dateiformat 9 gespeichert; ältere Programmversionen melden dann „zu neu“. Dokumente ohne Parameter und Formeln bleiben im bisherigen Format, Byte für Byte. Ältere Dateien öffnen unverändert. Ist die Parametertabelle in einer Datei selbst kaputt (zum Beispiel zwei gleiche Namen oder ein Kreis), lehnt das Programm die Datei mit einer deutschen Meldung ab. Ist nur eine einzelne Formel an einem Körper kaputt, lädt die Datei, der Eintrag zeigt den Fehler, und das Feld behält den zuletzt gespeicherten Wert.
+
+**Grenzen**
+- Höchstens 500 Parameter; Namen bis 64 Zeichen, Kommentare bis 200 Zeichen, Formeln bis 200 Zeichen, Klammern höchstens 64 Ebenen tief.
+- Eine Extrusion wählt ihr Profil über die Nummer. Ändert eine Parameteränderung die Reihenfolge der Profile in der Skizze, kann ein anderes Profil gewählt sein.
+- Der Löser der Skizze startet von der gespeicherten Lösung. Ein großer Sprung eines Maßes kann eine andere Lösung wählen oder nicht zu einer Lösung kommen; dann zeigt die Skizze einen Fehler statt einer falschen Form. Flächen, die ein Feature an Punkten festmacht, können bei sehr großen Sprüngen verloren gehen.
+- Eine Fase mit 179° ist als Zahl erlaubt, scheitert aber an einer rechtwinkligen Kante im Kernel (mit dessen Meldung).
+- Zieht man einen Netz-Körper mit dem 3D-Griff entlang einer Achse, deren Position eine Formel hat, entfällt die Formel dieser Achse (der gezogene Wert gilt); die Formeln der anderen Achsen bleiben.
+- Das Fenster „Parameter“ zeichnet bis 60 Zeilen alle Zeilen (mit Tab erreichst du jede). Darüber zeichnet es nur die sichtbaren, damit es flott bleibt; Tab führt trotzdem in die Nachbarzeile.
+- Nicht dabei: Formeln in Zeichnungsmaßen, Text-Parameter, Wenn-dann, eigene Funktionen, Einheiten wie „Zoll“ in der Formel, Parameter über mehrere Dokumente, Import aus Tabellen, Gruppen, eine Auswahlliste der Namen in jedem Feld (es gibt nur den Hinweis unter dem Feld).
+
+Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt: Parameter und Gleichungen“.
 
 ## Neues Aussehen (Graphit)
 
