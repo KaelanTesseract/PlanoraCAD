@@ -1,5 +1,6 @@
-//! STEP-Export (Teilprojekt 10): exakte Körper des Kernels als STEP-Datei (AP214,
-//! `AUTOMOTIVE_DESIGN`). Das Textformat ist von Hand geschrieben, ohne neue Abhängigkeit.
+//! STEP-Export und -Import: exakte Körper des Kernels als STEP-Datei (AP214,
+//! `AUTOMOTIVE_DESIGN`, Teilprojekt 10) und ein eigener Leser für STEP-Dateien (`read`).
+//! Das Textformat ist von Hand geschrieben und gelesen, ohne neue Abhängigkeit.
 
 pub mod entity;
 pub mod error;
@@ -7,6 +8,7 @@ mod file;
 mod geometry;
 pub mod number;
 mod product;
+pub mod read;
 pub mod text;
 mod topology;
 
@@ -16,6 +18,11 @@ pub use file::export_step_file;
 pub use geometry::FRAME_TOL;
 pub use number::{push_real, real};
 pub use product::{SCHEMA, SYSTEM, utc_timestamp};
+pub use read::error::{
+    MAX_STEP_BODIES, MAX_STEP_ENTITIES, MAX_STEP_FACES, MAX_STEP_FILE_BYTES, ReadLimits,
+    StepReadError,
+};
+pub use read::index::{StepFile, StepHeader, read_step_file};
 pub use text::{MAX_NAME_CHARS, StepText, step_string};
 
 use planora_exchange::Progress;
