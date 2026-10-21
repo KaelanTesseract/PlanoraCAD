@@ -770,13 +770,13 @@ fn the_blend_create_window_takes_formulas() {
     d.set_art(ArtChoice::FaseWinkel);
     d.second = "w*10".into();
     assert_eq!(
-        d.art_value_with(&s.document.param_scope()),
+        d.art_formulas(&s.document.param_scope()),
         Err(angle_message("w*10"))
     );
     // Zwei Abstände: zweites Feld „Abstand 2“.
     d.set_art(ArtChoice::FaseZwei);
     d.second = "Breite/20".into();
-    let (art, f) = d.art_value_with(&s.document.param_scope()).unwrap();
+    let (art, f) = d.art_formulas(&s.document.param_scope()).unwrap();
     assert_eq!(
         art,
         BlendArt::FaseZwei {

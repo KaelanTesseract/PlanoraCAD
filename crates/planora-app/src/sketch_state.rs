@@ -3,7 +3,8 @@
 //! Alle Methoden, die die Skizze ändern, sind atomar: Bei einem Fehler bleiben Skizze und
 //! Sitzung (laufendes Werkzeug, Auswahl) unverändert, und `message` erklärt den Fehler.
 
-use planora_feature::FeatureId;
+use crate::formula_field::resolve;
+use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_kernel::{Edge, Id, Solid};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
@@ -91,6 +92,51 @@ impl ConstraintAction {
             Distance | DistancePointLine | Radius | Diameter | Angle
         )
     }
+
+    /// Einheit, die eine Formel für dieses Maß ergeben muss (Winkel in Grad, sonst Länge).
+    pub fn unit(self) -> ParamUnit {
+        if self == ConstraintAction::Angle {
+            ParamUnit::Angle
+        } else {
+            ParamUnit::Length
+        }
+    }
+}
+
+/// Meldung, wenn man in ein anzeigendes Maß eine Formel tippt.
+pub const DRIVEN_NO_FORMULA: &str =
+    "Ein anzeigendes Maß bestimmt nichts und kann keine Formel haben.";
+
+/// Zustand einer Skizze mit Formeln, die sich nicht lösen lässt (Plan P12): derselbe Text wie
+/// der Fehlerstatus, den die Skizze beim Beenden bekommt. `None` ohne Formeln oder gelöst.
+pub fn formula_problem(sf: &SketchFeature, report: Option<&SolveReport>) -> Option<&'static str> {
+    if sf.formulas.is_empty() {
+        return None;
+    }
+    match report?.status {
+        SolveStatus::Solved => None,
+        SolveStatus::Conflicting => {
+            Some("Mit den Werten der Formeln widersprechen sich Abhängigkeiten")
+        }
+        SolveStatus::NotConverged => {
+            Some("Mit den Werten der Formeln lässt sich die Skizze nicht lösen")
+        }
+    }
+}
+
+/// Wert für die Skizze (Winkel in Bogenmaß) und Formel aus dem Text eines Maßfelds.
+fn dimension_input(
+    text: &str,
+    unit: ParamUnit,
+    scope: &ParamScope,
+) -> Result<(f64, Option<String>), String> {
+    let (v, formula) = resolve(text, unit, scope)?;
+    let v = if unit == ParamUnit::Angle {
+        v.to_radians()
+    } else {
+        v
+    };
+    Ok((v, formula))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,6 +196,17 @@ fn err(e: impl std::fmt::Display) -> String {
 
 fn status_ok(r: &SolveReport) -> bool {
     r.status == SolveStatus::Solved
+}
+
+/// Hinweis, wenn die Skizze nach einer erlaubten Änderung weiterhin nicht gelöst ist.
+fn unsolved_hint(report: Option<&SolveReport>) -> Option<&'static str> {
+    match report.map(|r| r.status) {
+        Some(SolveStatus::Conflicting) => Some("Die Skizze enthält weiterhin Widersprüche"),
+        Some(SolveStatus::NotConverged) => {
+            Some("Die Skizze lässt sich weiterhin nicht vollständig lösen")
+        }
+        _ => None,
+    }
 }
 
 impl SketchSession {
@@ -267,15 +324,7 @@ impl SketchSession {
         if self.message.is_some() {
             return;
         }
-        self.message = match self.last_report.as_ref().map(|r| r.status) {
-            Some(SolveStatus::Conflicting) => {
-                Some("Die Skizze enthält weiterhin Widersprüche".into())
-            }
-            Some(SolveStatus::NotConverged) => {
-                Some("Die Skizze lässt sich weiterhin nicht vollständig lösen".into())
-            }
-            _ => None,
-        };
+        self.message = unsolved_hint(self.last_report.as_ref()).map(str::to_string);
     }
 
     // ---- Werkzeuge ----------------------------------------------------------------------
@@ -834,6 +883,103 @@ impl SketchSession {
             se.solve_checked(sk, prior)?;
             Ok(())
         })
+    }
+
+    /// Zahl oder Formel `text` für das bestehende Maß `id` des Entwurfs `sf`: auswerten mit den
+    /// Parametern `scope` (Winkel in Grad, gespeichert in Bogenmaß), Wert setzen und lösen wie
+    /// [`set_dimension_value`](Self::set_dimension_value), erst danach die Formel setzen bzw.
+    /// bei einer Zahl nur die Formel dieses Maßes entfernen (Plan P2). Atomar: Bei einem Fehler
+    /// bleiben Skizze und Formeln unverändert, `message` erklärt ihn. Ein anzeigendes Maß nimmt
+    /// nur Zahlen.
+    pub fn set_dimension_input(
+        &mut self,
+        sf: &mut SketchFeature,
+        id: ConstraintId,
+        text: &str,
+        scope: &ParamScope,
+    ) -> Result<(), String> {
+        self.message = None;
+        let read = match sf.sketch.constraint(id) {
+            None => Err("Abhängigkeit nicht gefunden".to_string()),
+            Some(c) if !c.kind.is_dimension() => Err("Das ist kein Maß".to_string()),
+            Some(c) => {
+                let driven = c.driven;
+                dimension_input(text, constraint_unit(&c.kind), scope).and_then(|(v, f)| {
+                    if driven && f.is_some() {
+                        Err(DRIVEN_NO_FORMULA.to_string())
+                    } else {
+                        Ok((v, f))
+                    }
+                })
+            }
+        };
+        let (value, formula) = match read {
+            Ok(r) => r,
+            Err(e) => {
+                self.message = Some(e.clone());
+                return Err(e);
+            }
+        };
+        self.set_dimension_value(&mut sf.sketch, id, value)?;
+        match formula {
+            Some(f) => {
+                sf.formulas.insert(id, f);
+            }
+            None => {
+                sf.formulas.remove(&id);
+            }
+        }
+        self.note_formula_problem(sf);
+        Ok(())
+    }
+
+    /// Neues Maß `action` aus der Auswahl mit Zahl oder Formel `text` (wie
+    /// [`apply`](Self::apply)); die Formel kommt erst nach dem erfolgreichen Lösen dazu. Wird
+    /// das Maß anzeigend (überzählig), entfällt die Formel, und die Meldung von `apply` steht da.
+    pub fn apply_dimension_input(
+        &mut self,
+        sf: &mut SketchFeature,
+        action: ConstraintAction,
+        text: &str,
+        scope: &ParamScope,
+    ) -> Result<ConstraintId, String> {
+        self.message = None;
+        let read = if action.is_dimension() {
+            dimension_input(text, action.unit(), scope)
+        } else {
+            Err("Das ist kein Maß".to_string())
+        };
+        let (value, formula) = match read {
+            Ok(r) => r,
+            Err(e) => {
+                self.message = Some(e.clone());
+                return Err(e);
+            }
+        };
+        let id = self.apply(&mut sf.sketch, action, Some(value))?;
+        let driven = sf.sketch.constraint(id).is_none_or(|c| c.driven);
+        match formula {
+            Some(f) if !driven => {
+                sf.formulas.insert(id, f);
+            }
+            _ => {
+                sf.formulas.remove(&id);
+            }
+        }
+        self.note_formula_problem(sf);
+        Ok(id)
+    }
+
+    /// Lässt sich eine Skizze mit Formeln nach einer erlaubten Änderung nicht lösen (der Fehler
+    /// bestand schon vorher), steht der Fehler, den sie beim Beenden bekommt (Plan P12), als
+    /// Meldung da, sofern keine andere ansteht oder nur der allgemeine Hinweis.
+    fn note_formula_problem(&mut self, sf: &SketchFeature) {
+        if let Some(p) = formula_problem(sf, self.last_report.as_ref())
+            && (self.message.is_none()
+                || self.message.as_deref() == unsolved_hint(self.last_report.as_ref()))
+        {
+            self.message = Some(p.to_string());
+        }
     }
 
     /// Schaltet das Maß `id` auf „nur anzeigend“ (`driven`) oder zurück auf bestimmend. Beim

@@ -4,15 +4,16 @@
 //! Fußfeld (Hinweis zum Werkzeug, Zustand der Skizze, „Skizze beenden“). Es wird nur gezeichnet
 //! und an [`SketchSession`] weitergereicht.
 
+use crate::formula_field::{FX, FormulaField, names_hint};
 use crate::icons::{self, Icon, IconSource};
 use crate::shell::{self, ShellMode, ShellRects, ShellState};
 use crate::shell_panels;
-use crate::sketch_state::{ConstraintAction, Item, Severity, SketchSession, Tool};
-use crate::sketch_view::{constraint_name, format_number, is_angle, parse_number, shown_value};
+use crate::sketch_state::{ConstraintAction, Item, Severity, SketchSession, Tool, formula_problem};
+use crate::sketch_view::{constraint_name, format_number, parse_number, shown_value};
 use crate::state::AppState;
 use crate::theme;
 use egui::RichText;
-use planora_feature::FeatureId;
+use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::model::{CurveKind, Sketch};
@@ -91,8 +92,16 @@ pub const ACTIONS: [ConstraintAction; 16] = {
 const STRIP_ICON: f32 = 20.0;
 /// Schmalster Platz, in dem der Werkzeughinweis im Fuß noch gezeigt wird.
 const MIN_HINT_W: f32 = 60.0;
-/// Breite des Zahlenfelds der Maßeingabe (Text; Einheit daneben, OK/Abbrechen darunter).
-const VALUE_WIDTH: f32 = 120.0;
+/// Breite des Maßfelds (Text; davor bei einer Formel „fx“, dahinter Einheit bzw. „= Wert“,
+/// OK/Abbrechen darunter). Mit „fx“ und „= 40,00 mm“ passt es in die Feldbreite 250.
+const VALUE_WIDTH: f32 = 100.0;
+/// Feste Kennung des Maßfelds: Sie hängt nicht vom Text ab, damit das Feld beim Wechsel von
+/// Zahl zu Formel („fx“ erscheint davor) die Tastatur behält.
+const VALUE_FIELD_ID: &str = "planora-sketch-dimension-field";
+/// Name des Zeichens „fx“ in der Liste der Abhängigkeiten (Bildschirmleser).
+pub const LIST_FX_LABEL: &str = "Formel bearbeiten";
+/// Hinweis zum Zeichen „fx“ in der Liste.
+const LIST_FX_HINT: &str = "Dieses Maß folgt einer Formel. Klicken öffnet das Maßfeld.";
 /// Höhe der Abhängigkeitsliste, ab der sie rollt.
 const LIST_HEIGHT: f32 = 180.0;
 
@@ -108,8 +117,10 @@ enum EditTarget {
 struct Editor {
     target: EditTarget,
     text: String,
-    /// Eingabe in Grad (intern Radiant).
-    angle: bool,
+    /// Einheit der Eingabe (Winkel in Grad, intern Bogenmaß).
+    unit: ParamUnit,
+    /// Anzeigendes Maß: nur Zahlen, kein Formelfeld.
+    driven: bool,
     focus: bool,
     /// Feld noch ins Bild rollen (kleine Fenster: das Skizzenfeld rollt).
     reveal: bool,
@@ -159,14 +170,42 @@ fn panel_id() -> egui::Id {
 
 const NOT_A_NUMBER: &str = "Bitte eine Zahl eingeben";
 
+/// Maßfeld für das bestehende Maß `id`: zeigt die Formel, sonst den Wert (Winkel in Grad,
+/// gerundet). `None`, wenn es kein Maß ist.
+fn existing_editor(se: &SketchSession, sf: &SketchFeature, id: ConstraintId) -> Option<Editor> {
+    let c = sf.sketch.constraint(id)?;
+    if !c.kind.is_dimension() {
+        return None;
+    }
+    let unit = constraint_unit(&c.kind);
+    let text = match sf.formulas.get(&id).filter(|_| !c.driven) {
+        Some(f) => f.clone(),
+        None => editor_text(
+            shown_value(&sf.sketch, &c.kind, c.driven).unwrap_or(0.0),
+            unit,
+        ),
+    };
+    Some(Editor {
+        target: EditTarget::Existing(id),
+        text,
+        unit,
+        driven: c.driven,
+        focus: true,
+        reveal: true,
+        selection: se.selection.clone(),
+        jumps: se.history_jumps,
+    })
+}
+
 /// Zahlenfeld für ein neues Maß `action` aus der aktuellen Auswahl (Vorgabe: aktueller Wert).
 fn new_editor(se: &SketchSession, sk: &Sketch, action: ConstraintAction) -> Editor {
-    let angle = action == ConstraintAction::Angle;
+    let unit = action.unit();
     let value = se.measure_action(sk, action).unwrap_or(0.0);
     Editor {
         target: EditTarget::New(action),
-        text: editor_text(value, angle),
-        angle,
+        text: editor_text(value, unit),
+        unit,
+        driven: false,
         focus: true,
         reveal: true,
         selection: se.selection.clone(),
@@ -195,6 +234,21 @@ pub fn open_dimension_editor(ctx: &egui::Context, state: &AppState, action: Cons
     let mut panel = load_panel(ctx, se.sketch);
     panel.error = None;
     panel.editor = Some(new_editor(se, sk, action));
+    ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
+}
+
+/// Öffnet das Maßfeld für das bestehende Maß `id` der offenen Skizze, wie ein Doppelklick
+/// in der Liste (auch für Tests ohne Mausklick).
+pub fn open_existing_dimension_editor(ctx: &egui::Context, state: &AppState, id: ConstraintId) {
+    let (Some(se), Some(sf)) = (state.sketch_session.as_ref(), state.sketch_draft.as_ref()) else {
+        return;
+    };
+    let Some(editor) = existing_editor(se, sf, id) else {
+        return;
+    };
+    let mut panel = load_panel(ctx, se.sketch);
+    panel.error = None;
+    panel.editor = Some(editor);
     ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
 }
 
@@ -246,7 +300,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     };
     let dark = state.dark;
     let mut panel = load_panel(ctx, index);
-    let Some((se, sk)) = state.session_sketch_mut() else {
+    // Formeln der Maße nennen Parameter nur lesend (das Fenster „Parameter“ ist gesperrt).
+    let scope = state.document.param_scope();
+    let Some((se, sf)) = state.session_draft_mut() else {
         return;
     };
     // Das Zahlenfeld gehört zur Auswahl und zum Stand (vor Rückgängig/Wiederholen), mit dem es
@@ -259,9 +315,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         panel.editor = None;
         panel.error = None;
     }
-    strip_field(ctx, strip, dark, se, sk);
-    side_field(ctx, rects.right, dark, se, sk, &mut panel);
-    let close = foot_field(ctx, rects.bottom, dark, se, sk);
+    strip_field(ctx, strip, dark, se, &mut sf.sketch);
+    side_field(ctx, rects.right, dark, se, sf, &mut panel, &scope);
+    let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
     ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
     if close {
         state.close_sketch();
@@ -366,8 +422,9 @@ fn side_field(
     rect: egui::Rect,
     dark: bool,
     se: &mut SketchSession,
-    sk: &mut Sketch,
+    sf: &mut SketchFeature,
     panel: &mut PanelState,
+    scope: &ParamScope,
 ) {
     let frame = theme::panel_frame(dark);
     let inner = shell_panels::inner_size(&frame, rect.size());
@@ -378,7 +435,7 @@ fn side_field(
                 .id_salt("planora-field-sketch-side-scroll")
                 .max_height(inner.y)
                 .auto_shrink([false, true]);
-            theme::scroll_area(ui, area, |ui| side_contents(ui, se, sk, panel));
+            theme::scroll_area(ui, area, |ui| side_contents(ui, se, sf, panel, scope));
         });
     });
 }
@@ -387,14 +444,16 @@ fn side_field(
 fn side_contents(
     ui: &mut egui::Ui,
     se: &mut SketchSession,
-    sk: &mut Sketch,
+    sf: &mut SketchFeature,
     panel: &mut PanelState,
+    scope: &ParamScope,
 ) {
-    ui.strong(&sk.name);
+    ui.strong(&sf.sketch.name);
     ui.add_space(2.0);
 
     // Abhängigkeiten
     theme::section_header(ui, "Abhängigkeiten", theme::SUB_HEADER_H);
+    let sk = &mut sf.sketch;
     let available = se.available_actions(sk);
     ui.horizontal_wrapped(|ui| {
         for action in ACTIONS {
@@ -417,10 +476,21 @@ fn side_contents(
             }
         }
     });
-    value_editor(ui, se, sk, panel);
-    if let Some(m) = panel.error.as_ref().or(se.message.as_ref()) {
+    let live = value_editor(ui, se, sf, panel, scope);
+    // Meldungen: die eigenen und die der Sitzung (ohne die der gerade getippten Formel, die
+    // schon unter dem Feld steht); sonst bei einer Skizze mit Formeln, die sich nicht lösen
+    // lässt, ihr Fehler (Plan P12).
+    let problem = formula_problem(sf, se.last_report.as_ref());
+    if let Some(m) = panel
+        .error
+        .as_deref()
+        .or(se.message.as_deref())
+        .filter(|m| live.as_deref() != Some(*m))
+        .or(problem)
+    {
         ui.colored_label(theme::palette(ui.visuals().dark_mode).error, m);
     }
+    let sk = &mut sf.sketch;
     ui.separator();
 
     // Bearbeiten
@@ -484,7 +554,7 @@ fn side_contents(
 
     // Liste der Abhängigkeiten
     theme::section_header(ui, "Abhängigkeiten der Skizze", theme::SUB_HEADER_H);
-    constraint_list(ui, se, sk, panel);
+    constraint_list(ui, se, sf, panel);
 }
 
 /// Fußfeld: rechts „Skizze beenden“, davor der Zustand der Skizze (Farbe nach Schweregrad und
@@ -563,9 +633,9 @@ fn tool_button(
     })
 }
 
-/// Vorgabetext des Zahlenfelds (Winkel in Grad).
-fn editor_text(value: f64, angle: bool) -> String {
-    if angle {
+/// Vorgabetext des Zahlenfelds (Winkel in Grad, eine Nachkommastelle).
+fn editor_text(value: f64, unit: ParamUnit) -> String {
+    if unit == ParamUnit::Angle {
         format_number(value.to_degrees(), 1)
     } else {
         format_number(value, 2)
@@ -580,47 +650,77 @@ fn mirror_axis(se: &SketchSession, sk: &Sketch) -> Option<planora_sketch::model:
     })
 }
 
-/// Zahlenfeld für ein Maß mit „OK“ (oder Eingabe) und „Abbrechen“.
+/// Maßfeld mit „OK“ (oder Eingabe) und „Abbrechen“: ein Formelfeld (Zahl oder Formel mit
+/// Parameternamen; bei einer Formel „fx“ davor und „= Wert“ dahinter), bei anzeigenden Maßen
+/// ein reines Zahlenfeld. Übernommen wird nur mit „OK“ oder Eingabe (Plan P9). Die Meldung
+/// einer gerade getippten fehlerhaften Formel steht unter dem Feld (über den Knöpfen, damit sie
+/// mit ihnen im Bild ist); solange sie ansteht, ist „OK“ gesperrt. Liefert diese Meldung.
 fn value_editor(
     ui: &mut egui::Ui,
     se: &mut SketchSession,
-    sk: &mut Sketch,
+    sf: &mut SketchFeature,
     panel: &mut PanelState,
-) {
-    let Some(editor) = panel.editor.as_mut() else {
-        return;
-    };
+    scope: &ParamScope,
+) -> Option<String> {
+    let editor = panel.editor.as_mut()?;
     let title = match editor.target {
         EditTarget::New(a) => a.label().to_string(),
-        EditTarget::Existing(id) => match sk.constraint(id) {
+        EditTarget::Existing(id) => match sf.sketch.constraint(id) {
             Some(c) => crate::sketch_view::kind_label(&c.kind).to_string(),
             None => {
                 panel.editor = None;
-                return;
+                return None;
             }
         },
     };
-    let unit = if editor.angle { "°" } else { "mm" };
     let (mut ok, mut cancel) = (false, false);
-    // Untereinander, damit es in die Feldbreite 250 passt: Name, Zahl mit Einheit, Knöpfe.
+    let mut live = None;
+    // Untereinander, damit es in die Feldbreite 250 passt: Name, Feld mit Einheit bzw. Wert,
+    // Namen der Parameter, Knöpfe.
     let top = ui.cursor().top();
     ui.label(format!("{title}:"));
-    ui.horizontal(|ui| {
-        let r = theme::text_field(
-            ui,
-            egui::TextEdit::singleline(&mut editor.text).desired_width(VALUE_WIDTH),
-        );
-        if editor.focus {
-            r.request_focus();
-            editor.focus = false;
+    let response = if editor.driven {
+        ui.horizontal(|ui| {
+            let r = theme::text_field(
+                ui,
+                egui::TextEdit::singleline(&mut editor.text)
+                    .id_salt(VALUE_FIELD_ID)
+                    .desired_width(VALUE_WIDTH),
+            );
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, &title));
+            ui.label(editor.unit.suffix());
+            r
+        })
+        .inner
+    } else {
+        let outcome = FormulaField::new(VALUE_FIELD_ID, &mut editor.text, editor.unit)
+            .width(VALUE_WIDTH)
+            .label(title.clone())
+            .show(ui, scope);
+        live = outcome.error;
+        if let Some(hint) = names_hint(scope) {
+            ui.label(RichText::new(hint).small().weak());
         }
-        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            ok = true;
-        }
-        ui.label(unit);
-    });
+        outcome.response
+    };
+    if editor.focus {
+        response.request_focus();
+        editor.focus = false;
+    }
+    // Eine Meldung zur vorigen Eingabe gilt nach einer Änderung des Textes nicht mehr.
+    if response.changed() {
+        se.message = None;
+        panel.error = None;
+    }
+    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        ok = true;
+    }
     ui.horizontal(|ui| {
-        if ui.small_button("OK").clicked() {
+        if ui
+            .add_enabled(live.is_none(), egui::Button::new("OK").small())
+            .on_disabled_hover_text("Die Formel enthält einen Fehler.")
+            .clicked()
+        {
             ok = true;
         }
         if ui.small_button("Abbrechen").clicked() {
@@ -639,24 +739,22 @@ fn value_editor(
     if cancel {
         panel.editor = None;
         panel.error = None;
-        return;
+        return None;
     }
     if !ok {
-        return;
+        return live;
     }
-    let Some(v) = parse_number(&editor.text) else {
-        panel.error = Some(NOT_A_NUMBER.into());
-        return;
-    };
-    let v = if editor.angle { v.to_radians() } else { v };
     panel.error = None;
     let done = match editor.target {
-        EditTarget::New(action) => se.apply(sk, action, Some(v)).is_ok(),
-        EditTarget::Existing(id) => se.set_dimension_value(sk, id, v).is_ok(),
+        EditTarget::New(action) => se
+            .apply_dimension_input(sf, action, &editor.text, scope)
+            .is_ok(),
+        EditTarget::Existing(id) => se.set_dimension_input(sf, id, &editor.text, scope).is_ok(),
     };
     if done {
         panel.editor = None;
     }
+    live
 }
 
 /// Eingaben für „Spiegeln …“ und „Muster …“.
@@ -724,13 +822,15 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
 }
 
 /// Liste der Abhängigkeiten: Klick wählt, Doppelklick ändert ein Maß, „anzeigend“ schaltet ein
-/// Maß auf nur anzeigend, das Löschsymbol entfernt die Abhängigkeit.
+/// Maß auf nur anzeigend, das Löschsymbol entfernt die Abhängigkeit. Maße mit Formel tragen
+/// darunter „fx“ und die Formel; „fx“ öffnet das Maßfeld. Der Name zeigt weiter den Wert.
 fn constraint_list(
     ui: &mut egui::Ui,
     se: &mut SketchSession,
-    sk: &mut Sketch,
+    sf: &mut SketchFeature,
     panel: &mut PanelState,
 ) {
+    let sk = &sf.sketch;
     let rows: Vec<(ConstraintId, ConstraintKind, bool)> = sk
         .constraints()
         .map(|(id, c)| (id, c.kind.clone(), c.driven))
@@ -754,7 +854,7 @@ fn constraint_list(
             for (id, kind, driven) in rows {
                 let item = Item::Constraint(id);
                 let selected = se.selection.contains(&item);
-                let mut text = RichText::new(constraint_name(sk, &kind, driven));
+                let mut text = RichText::new(constraint_name(&sf.sketch, &kind, driven));
                 if bad.contains(&id) {
                     text = text.color(theme::palette(ui.visuals().dark_mode).error);
                 }
@@ -790,36 +890,53 @@ fn constraint_list(
                     }
                 }
                 if kind.is_dimension() {
-                    if r.double_clicked() {
-                        let angle = is_angle(&kind);
-                        let value = shown_value(sk, &kind, driven).unwrap_or(0.0);
+                    let mut open = r.double_clicked();
+                    if let Some(f) = sf.formulas.get(&id).filter(|_| !driven)
+                        && formula_row(ui, f).clicked()
+                    {
+                        se.selection = vec![item];
+                        open = true;
+                    }
+                    if open && let Some(editor) = existing_editor(se, sf, id) {
                         panel.error = None;
-                        panel.editor = Some(Editor {
-                            target: EditTarget::Existing(id),
-                            text: editor_text(value, angle),
-                            angle,
-                            focus: true,
-                            reveal: true,
-                            selection: se.selection.clone(),
-                            jumps: se.history_jumps,
-                        });
+                        panel.editor = Some(editor);
                     }
                     let mut d = driven;
                     if ui
                         .checkbox(&mut d, "anzeigend")
                         .on_hover_text("Nur anzeigendes Maß (bestimmt nichts)")
                         .changed()
+                        && se.set_driven(&mut sf.sketch, id, d).is_ok()
                     {
-                        let _ = se.set_driven(sk, id, d);
+                        // Ein anzeigendes Maß bestimmt nichts und hat keine Formel.
+                        sf.prune_formulas();
                     }
                 }
                 if delete {
                     se.selection = vec![item];
-                    se.delete_selection(sk);
+                    se.delete_selection(&mut sf.sketch);
                 }
             }
         },
     );
+}
+
+/// Zeile unter einem Maß mit Formel: „fx“ (öffnet das Maßfeld) und die Formel (gekürzt,
+/// ganz beim Überfahren). Liefert die Antwort von „fx“.
+fn formula_row(ui: &mut egui::Ui, formula: &str) -> egui::Response {
+    let p = theme::palette(ui.visuals().dark_mode);
+    ui.horizontal(|ui| {
+        let fx = ui
+            .add(egui::Button::new(RichText::new(FX).italics()).frame(false))
+            .on_hover_text(LIST_FX_HINT);
+        fx.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), LIST_FX_LABEL)
+        });
+        theme::focus_ring(ui, &fx);
+        ui.add(egui::Label::new(RichText::new(formula).color(p.text_secondary)).truncate());
+        fx
+    })
+    .inner
 }
 
 /// Beschriftung des Schalters [`AUTO_AXIS`] in zwei Zeilen („erkennen“ in der zweiten).

@@ -449,13 +449,13 @@ impl BlendDialog {
     /// Art mit den eingegebenen Maßen (nur Zahlen, ohne Parameter); ein Fehlertext nennt das
     /// ungültige Feld.
     pub fn art_value(&self) -> Result<BlendArt, String> {
-        self.art_value_with(&ParamScope::default())
+        self.art_formulas(&ParamScope::default())
             .map(|(art, _)| art)
     }
 
     /// Art mit den eingegebenen Maßen und die Formeln der Felder (Formeln mit den Parametern
     /// `scope` ausgewertet; die Punkte der variablen Rundung nehmen nur Zahlen).
-    pub fn art_value_with(&self, scope: &ParamScope) -> Result<(BlendArt, Formulas), String> {
+    pub fn art_formulas(&self, scope: &ParamScope) -> Result<(BlendArt, Formulas), String> {
         let mut formulas = Formulas::new();
         if self.art == ArtChoice::RundungVariabel {
             let mut punkte = Vec::with_capacity(self.points.len());
@@ -521,7 +521,7 @@ impl BlendDialog {
             return true;
         };
         let scope = state.document.param_scope();
-        let (art, formulas) = match self.art_value_with(&scope).and_then(|(a, f)| {
+        let (art, formulas) = match self.art_formulas(&scope).and_then(|(a, f)| {
             let min = self.min_size(state).unwrap_or(0.0);
             check_min_sizes(&a, min).map(|()| (a, f))
         }) {
