@@ -200,10 +200,18 @@ impl StepFile {
 
 /// Weg der gerade verfolgten Verweise (für Folger wie die Geometrie-Auflösung): `enter` vor dem
 /// Auflösen von `#id`, `leave` danach. Ein Eintrag, der schon auf dem Weg liegt, ergibt
-/// `Cycle`; mehr als [`MAX_REF_DEPTH`] Ebenen ergeben einen Fehler statt eines tiefen Stapels.
-#[derive(Clone, Debug, Default)]
+/// `Cycle`; mehr als `limit` Ebenen (Vorgabe [`MAX_REF_DEPTH`]) ergeben einen Fehler statt
+/// eines tiefen Stapels.
+#[derive(Clone, Debug)]
 pub struct RefPath {
     ids: Vec<u64>,
+    limit: usize,
+}
+
+impl Default for RefPath {
+    fn default() -> Self {
+        RefPath::with_limit(MAX_REF_DEPTH)
+    }
 }
 
 impl RefPath {
@@ -211,16 +219,30 @@ impl RefPath {
         RefPath::default()
     }
 
+    /// Weg mit eigener Tiefengrenze (die Geometrie-Auflösung nimmt 64, weil ihre Rahmen groß
+    /// sind).
+    pub fn with_limit(limit: usize) -> RefPath {
+        RefPath {
+            ids: Vec::new(),
+            limit,
+        }
+    }
+
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
     pub fn enter(&mut self, file: &StepFile, id: u64) -> Result<()> {
         let line = file.line(id).ok_or(StepReadError::NoEntity { id })?;
         if self.ids.contains(&id) {
             return Err(StepReadError::Cycle { line, id });
         }
-        if self.ids.len() >= MAX_REF_DEPTH {
+        if self.ids.len() >= self.limit {
             return Err(StepReadError::syntax(
                 line,
                 format!(
-                    "Die Verweise sind zu tief verschachtelt (höchstens {MAX_REF_DEPTH} Ebenen)."
+                    "Die Verweise sind zu tief verschachtelt (höchstens {} Ebenen).",
+                    self.limit
                 ),
             ));
         }

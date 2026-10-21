@@ -96,7 +96,15 @@ fn placements_are_orthonormal() {
                 #12=DIRECTION('',(2.,2.,0.));\n\
                 #13=AXIS2_PLACEMENT_3D('',#1,#11,#12);\n\
                 #14=DIRECTION('',(0.,1.E-13,0.));\n\
-                #15=CARTESIAN_POINT('',(1.,2.));\n";
+                #15=CARTESIAN_POINT('',(1.,2.));\n\
+                #16=DIRECTION('',(1.,0.,0.));\n\
+                #17=AXIS2_PLACEMENT_3D('',#1,#16,$);\n\
+                #18=DIRECTION('',(1.E200,1.E200,0.));\n\
+                #19=DIRECTION('',(0.,1.E-12,0.));\n\
+                #20=DIRECTION('',(0.,1.E-10,1.));\n\
+                #21=AXIS2_PLACEMENT_3D('',#1,#2,#20);\n\
+                #22=DIRECTION('',(1.E-7,0.,1.));\n\
+                #23=AXIS2_PLACEMENT_3D('',#1,#2,#22);\n";
     let f = parse(data);
     let mut r = Resolver::new(&f, Units::MM);
 
@@ -123,11 +131,30 @@ fn placements_are_orthonormal() {
     assert!(skip_text(r.direction(14)).contains("Länge null"));
     assert!(skip_text(r.point(15)).starts_with(&format!("Zeile {}:", line_of(data, 15))));
 
-    // Achse nicht normiert, Bezugsrichtung parallel zur Achse → beliebige Senkrechte.
-    let q = r.placement(10).unwrap();
-    assert_close(q.z, DVec3::Z, 0.0);
+    // Angegebene Bezugsrichtung auf der Achse (ISO verbietet das) → ausgelassen, auch wenn sie
+    // um 1e-10 abweicht; 1e-7 reicht für eine Richtung.
+    for id in [10, 21] {
+        assert_eq!(
+            skip_text(r.placement(id)),
+            format!(
+                "Zeile {}: Die Bezugsrichtung liegt auf der Achse.",
+                line_of(data, id)
+            )
+        );
+    }
+    let t = r.placement(23).unwrap();
+    assert_close(t.x, DVec3::X, 1e-15);
+    orthonormal(&t);
+    // Fehlende Bezugsrichtung (`$` → Welt-x) auf der Achse → beliebige Senkrechte.
+    let q = r.placement(17).unwrap();
+    assert_close(q.z, DVec3::X, 0.0);
     assert!(q.x.dot(q.z).abs() <= 1e-15);
     orthonormal(&q);
+
+    // Sehr große Werte laufen beim Normieren nicht über; 1e-12 ist gerade noch eine Richtung.
+    let h = std::f64::consts::FRAC_1_SQRT_2;
+    assert_close(r.direction(18).unwrap(), DVec3::new(h, h, 0.0), 1e-15);
+    assert_eq!(r.direction(19).unwrap(), DVec3::Y);
 
     // Schräge Achse, nicht normierte Bezugsrichtung: x ist die Projektion, y = z × x.
     let s = r.placement(13).unwrap();
@@ -166,7 +193,16 @@ fn curves_match_hand_values() {
          #38=INTERSECTION_CURVE('',#28,(#30,#31),.CURVE_3D.);\n\
          #39=CIRCLE('',#23,0.);\n\
          #40=ELLIPSE('',#23,2.,-1.);\n\
-         #41=POLYLINE('',(#20,#20));\n",
+         #41=POLYLINE('',(#20,#20));\n\
+         #42=TRIMMED_CURVE('',#24,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.)),.F.,.PARAMETER.);\n\
+         #43=TRIMMED_CURVE('',#25,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.)),.F.,.PARAMETER.);\n\
+         #44=TRIMMED_CURVE('',#28,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.)),.F.,.PARAMETER.);\n\
+         #45=TRIMMED_CURVE('',#42,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.)),.F.,.PARAMETER.);\n\
+         #46=TRIMMED_CURVE('',#24,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.)),.U.,.PARAMETER.);\n\
+         #47=TRIMMED_CURVE('',#24,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.)),'x',.PARAMETER.);\n\
+         #48=VECTOR('',#26,-2.);\n\
+         #49=LINE('',#20,#48);\n\
+         #50=SURFACE_CURVE('',#42,(#30),.CURVE_3D.);\n",
     );
     // Kette aus 61 bzw. 62 Trimmkurven über dem Kreis #24: Kreis, Lage und Punkt kommen dazu.
     for i in 0..62u64 {
@@ -208,6 +244,58 @@ fn curves_match_hand_values() {
     assert!(matches!(r.curve(32).unwrap(), Curve::Circle { radius, .. } if radius == 5.0));
     assert!(matches!(r.curve(38).unwrap(), Curve::Line { .. }));
 
+    // Trimmkurve mit `sense_agreement` .F.: Laufrichtung umgekehrt, point'(t) = point(−t).
+    // Kreis um (1, 2, 3), r 5, x = (1, 0, 0), y = (0, 1, 0): point'(π/2) = (1, −3, 3).
+    let k = r.curve(42).unwrap();
+    assert_close(k.point(FRAC_PI_2), DVec3::new(1.0, -3.0, 3.0), 1e-12);
+    assert_close(k.point(0.0), DVec3::new(6.0, 2.0, 3.0), 1e-12);
+    assert_close(k.tangent(0.0), DVec3::new(0.0, -5.0, 0.0), 1e-12);
+    match &k {
+        Curve::Circle { frame, radius } => {
+            assert_eq!(*radius, 5.0);
+            assert_close(frame.z, DVec3::new(0.0, 0.0, -1.0), 0.0);
+            orthonormal(frame);
+        }
+        other => panic!("{other:?}"),
+    }
+    for t in [0.3, 1.0, 2.5, -2.0] {
+        assert_close(k.point(t), c.point(-t), 1e-12);
+    }
+    // Ellipse a1 2, a2 4: point'(π/2) = O − 4·y = (1, −2, 3).
+    let ke = r.curve(43).unwrap();
+    assert_close(ke.point(FRAC_PI_2), DVec3::new(1.0, -2.0, 3.0), 1e-12);
+    assert_close(ke.point(0.0), DVec3::new(3.0, 2.0, 3.0), 1e-12);
+    // Gerade: Richtung umgekehrt, point'(5) = (1, 2, 3) + 5·(0, −0,6, −0,8) = (1, −1, −1).
+    let kl = r.curve(44).unwrap();
+    assert_close(kl.point(5.0), DVec3::new(1.0, -1.0, -1.0), 1e-12);
+    // Zweimal umgekehrt = wie die Grundkurve; Kantenkurve über einer umgekehrten Trimmkurve.
+    assert_close(
+        r.curve(45).unwrap().point(FRAC_PI_2),
+        DVec3::new(1.0, 7.0, 3.0),
+        1e-12,
+    );
+    assert_close(
+        r.curve(50).unwrap().point(FRAC_PI_2),
+        DVec3::new(1.0, -3.0, 3.0),
+        1e-12,
+    );
+    assert_eq!(
+        skip_text(r.curve(46)),
+        format!(
+            "Zeile {}: Die Laufrichtung einer Trimmkurve ist unbestimmt („.U.“).",
+            line_of(&data, 46)
+        )
+    );
+    assert!(skip_text(r.curve(47)).starts_with(&format!("Zeile {}:", line_of(&data, 47))));
+    // Negativer Betrag eines Vektors (ISO verbietet ihn).
+    assert_eq!(
+        skip_text(r.curve(49)),
+        format!(
+            "Zeile {}: Der Betrag eines Vektors ist negativ.",
+            line_of(&data, 48)
+        )
+    );
+
     // Verweise im Kreis: auf sich selbst (beim Zerlegen) und über zwei Einträge (Stapel).
     assert!(skip_text(r.curve(33)).contains("verweisen im Kreis"));
     assert_eq!(
@@ -245,14 +333,62 @@ fn curves_match_hand_values() {
     assert_eq!(MAX_RESOLVE_DEPTH, 64);
     let mut fresh = Resolver::new(&f, Units::MM);
     assert!(matches!(fresh.curve(160).unwrap(), Curve::Circle { .. }));
-    let mut fresh = Resolver::new(&f, Units::MM);
-    assert_eq!(
-        skip_text(fresh.curve(161)),
-        StepReadError::TooDeep {
-            line: line_of(&data, 20)
-        }
-        .to_string()
+    let too_deep = format!(
+        "Zeile {}: Die Verweise sind zu tief verschachtelt (höchstens 64 Ebenen).",
+        line_of(&data, 20)
     );
+    let mut fresh = Resolver::new(&f, Units::MM);
+    assert_eq!(skip_text(fresh.curve(161)), too_deep);
+    // Das Scheitern an der Tiefe hängt vom Weg ab und wird nicht gespeichert: Ein flacher
+    // Kreis mit derselben Lage und die kürzere Kette gelingen danach.
+    assert_eq!(fresh.cached_count(), 0);
+    assert!(matches!(fresh.curve(25).unwrap(), Curve::Ellipse { .. }));
+    assert_eq!(fresh.point(20).unwrap(), DVec3::new(1.0, 2.0, 3.0));
+    assert!(matches!(fresh.curve(24).unwrap(), Curve::Circle { .. }));
+    let mut fresh = Resolver::new(&f, Units::MM);
+    assert_eq!(skip_text(fresh.curve(161)), too_deep);
+    assert!(matches!(fresh.curve(160).unwrap(), Curve::Circle { .. }));
+    // Nach dem Erfolg ist der Kreis gespeichert; jetzt reicht die Tiefe auch für #161.
+    assert!(matches!(fresh.curve(161).unwrap(), Curve::Circle { .. }));
+}
+
+#[test]
+fn results_are_cached() {
+    let data = "#20=CARTESIAN_POINT('',(1.,2.,3.));\n\
+                #21=DIRECTION('',(0.,0.,1.));\n\
+                #22=DIRECTION('',(1.,0.,0.));\n\
+                #23=AXIS2_PLACEMENT_3D('',#20,#21,#22);\n\
+                #24=CIRCLE('',#23,5.);\n\
+                #25=TRIMMED_CURVE('',#24,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.)),.T.,.PARAMETER.);\n\
+                #26=TRIMMED_CURVE('',#27,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.)),.T.,.PARAMETER.);\n\
+                #27=SURFACE_CURVE('',#26,(#24),.CURVE_3D.);\n\
+                #28=PLANE('',#23);\n";
+    let f = parse(data);
+    let mut r = Resolver::new(&f, Units::MM);
+    assert_eq!(r.cached_count(), 0);
+    // Punkt, zwei Richtungen, Lage, Kreis.
+    let first = r.curve(24).unwrap();
+    assert_eq!(r.cached_count(), 5);
+    let again = r.curve(24).unwrap();
+    assert_eq!(r.cached_count(), 5);
+    assert_eq!(first.point(1.0), again.point(1.0));
+    assert!(matches!(r.curve(25).unwrap(), Curve::Circle { .. }));
+    assert_eq!(r.cached_count(), 6);
+    // Fläche über derselben Lage: nur die Fläche kommt dazu.
+    ready(r.surface(28).unwrap());
+    assert_eq!(r.cached_count(), 7);
+    // Kreise hängen nur vom Eintrag ab und werden gespeichert (beide Einträge).
+    let cycle = skip_text(r.curve(26));
+    assert_eq!(
+        cycle,
+        format!(
+            "Zeile {}: Die Einträge verweisen im Kreis (#26).",
+            line_of(data, 26)
+        )
+    );
+    assert_eq!(r.cached_count(), 9);
+    assert_eq!(skip_text(r.curve(26)), cycle);
+    assert_eq!(r.cached_count(), 9);
 }
 
 /// Kontext #909 in Zoll (25,4 · mm) und Grad; Genauigkeit 1e-3 Zoll.
@@ -576,6 +712,191 @@ fn surfaces_match_the_kernel_conventions() {
     }
 }
 
+/// Kontext #909 mit den Einheiten `units` (Liste von Nummern) und den Genauigkeiten
+/// `uncertainties`; die Einträge stehen in `entities`.
+fn context(entities: &str, units: &str, uncertainties: &str) -> String {
+    format!(
+        "{entities}#909=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT(({uncertainties}))\
+         GLOBAL_UNIT_ASSIGNED_CONTEXT(({units}))REPRESENTATION_CONTEXT('',''));\n"
+    )
+}
+
+const MM: &str = "#900=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));\n";
+const RAD: &str = "#901=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.));\n";
+
+#[test]
+fn unit_edge_cases() {
+    let ctx_err = |data: &str| context_units(&parse(data), 909).unwrap_err().to_string();
+
+    // Zwei verschiedene Längeneinheiten → Meldung mit der Zeile des Kontexts; dieselbe
+    // Einheit zweimal (mm und 0,1 cm) ist in Ordnung.
+    let data = context(
+        &format!(
+            "{MM}#902=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.CENTI.,.METRE.));\n\
+             #903=LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(0.1),#902);\n\
+             #904=(CONVERSION_BASED_UNIT('MM',#903)LENGTH_UNIT()NAMED_UNIT(*));\n"
+        ),
+        "#900,#902",
+        "",
+    );
+    assert_eq!(
+        ctx_err(&data),
+        format!(
+            "Zeile {}: Der Kontext nennt mehrere verschiedene Einheiten derselben Art.",
+            line_of(&data, 909)
+        )
+    );
+    let data = data.replace("((#900,#902))", "((#900,#904))");
+    let u = context_units(&parse(&data), 909).unwrap();
+    assert_eq!(u.length, LengthUnit::Millimeter);
+
+    // Zwei Schreibweisen von Grad im selben Kontext: beide werden vor dem Vergleich eingerastet.
+    let data = context(
+        &format!(
+            "{RAD}#902=PLANE_ANGLE_MEASURE_WITH_UNIT(PLANE_ANGLE_MEASURE(0.0174532925199433),#901);\n\
+             #903=(CONVERSION_BASED_UNIT('DEGREE',#902)NAMED_UNIT(*)PLANE_ANGLE_UNIT());\n\
+             #904=PLANE_ANGLE_MEASURE_WITH_UNIT(PLANE_ANGLE_MEASURE(0.01745329252),#901);\n\
+             #905=(CONVERSION_BASED_UNIT('DEGREE',#904)NAMED_UNIT(*)PLANE_ANGLE_UNIT());\n"
+        ),
+        "#903,#905",
+        "",
+    );
+    assert_eq!(
+        context_units(&parse(&data), 909).unwrap().angle_rad,
+        PI / 180.0
+    );
+
+    // Längeneinheit aus einem Winkel umgerechnet → Meldung.
+    let data = context(
+        &format!(
+            "{RAD}#902=MEASURE_WITH_UNIT(LENGTH_MEASURE(2.),#901);\n\
+             #903=(CONVERSION_BASED_UNIT('X',#902)LENGTH_UNIT()NAMED_UNIT(*));\n"
+        ),
+        "#903",
+        "",
+    );
+    assert_eq!(
+        ctx_err(&data),
+        format!(
+            "Zeile {}: Die Einheit wird aus einer Einheit anderer Art umgerechnet.",
+            line_of(&data, 903)
+        )
+    );
+
+    // Umrechnungswert nicht endlich (1e300 · 1e21 mm) bzw. ≤ 0.
+    for (value, text) in [
+        ("1.E300", "keine endliche Zahl"),
+        ("-1.", "nicht größer als null"),
+        ("0.", "nicht größer als null"),
+    ] {
+        let data = context(
+            &format!(
+                "#902=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.EXA.,.METRE.));\n\
+                 #903=LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE({value}),#902);\n\
+                 #904=(CONVERSION_BASED_UNIT('X',#903)LENGTH_UNIT()NAMED_UNIT(*));\n"
+            ),
+            "#904",
+            "",
+        );
+        assert_eq!(
+            ctx_err(&data),
+            format!(
+                "Zeile {}: Der Umrechnungswert der Einheit ist {text}.",
+                line_of(&data, 904)
+            )
+        );
+    }
+
+    // Breite des Einrastens: relativ 5e-10 → Zoll bzw. Grad, 2e-9 → nicht.
+    for (rel, snapped) in [(5e-10, true), (2e-9, false), (-5e-10, true), (-2e-9, false)] {
+        let inch = 25.4 * (1.0 + rel);
+        let degree = PI / 180.0 * (1.0 + rel);
+        let data = context(
+            &format!(
+                "{MM}{RAD}#902=LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE({inch:e}),#900);\n\
+                 #903=(CONVERSION_BASED_UNIT('INCH',#902)LENGTH_UNIT()NAMED_UNIT(*));\n\
+                 #904=PLANE_ANGLE_MEASURE_WITH_UNIT(PLANE_ANGLE_MEASURE({degree:e}),#901);\n\
+                 #905=(CONVERSION_BASED_UNIT('DEGREE',#904)NAMED_UNIT(*)PLANE_ANGLE_UNIT());\n"
+            ),
+            "#903,#905",
+            "",
+        );
+        let u = context_units(&parse(&data), 909).unwrap();
+        if snapped {
+            assert_eq!(u.length, LengthUnit::Zoll, "{rel}");
+            assert_eq!(u.angle_rad, PI / 180.0, "{rel}");
+        } else {
+            assert!(matches!(u.length, LengthUnit::Other { .. }), "{rel}");
+            assert_ne!(u.angle_rad, PI / 180.0, "{rel}");
+        }
+    }
+
+    // Einrasten je Stufe: Zoll = 25,4000000001 mm wird eingerastet, bevor der Fuß ihn
+    // zwölffach nimmt (sonst wäre der Fuß um 1,2e-9 mm daneben).
+    let data = context(
+        &format!(
+            "{MM}#902=LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4000000001),#900);\n\
+             #903=(CONVERSION_BASED_UNIT('INCH',#902)LENGTH_UNIT()NAMED_UNIT(*));\n\
+             #904=LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(12.),#903);\n\
+             #905=(CONVERSION_BASED_UNIT('FOOT',#904)LENGTH_UNIT()NAMED_UNIT(*));\n"
+        ),
+        "#905",
+        "",
+    );
+    let foot = context_units(&parse(&data), 909).unwrap().length;
+    assert_eq!(foot, LengthUnit::Other { mm: 12.0 * 25.4 });
+
+    // Unsicherheit 0, negativ oder nicht endlich (1e300 · 1e21 mm): übergangen, die Datei
+    // bleibt lesbar; Vorgabe 1e-3 mm und grob. Eine brauchbare daneben zählt.
+    for bad in ["0.", "-1.E-3", "1.E300"] {
+        let entities = format!(
+            "{MM}#902=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.EXA.,.METRE.));\n\
+             #903=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE({bad}),#902,'a','');\n\
+             #904=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(2.E-6),#900,'b','');\n"
+        );
+        let u = context_units(&parse(&context(&entities, "#900", "#903")), 909).unwrap();
+        assert_eq!(u.uncertainty_mm, None, "{bad}");
+        assert_eq!(u.weld_tol_mm(), DEFAULT_FILE_TOL_MM);
+        assert!(u.is_coarse());
+        let u = context_units(&parse(&context(&entities, "#900", "#903,#904")), 909).unwrap();
+        assert_eq!(u.uncertainty_mm, Some(2e-6), "{bad}");
+        assert!(!u.is_coarse());
+    }
+
+    // Nicht endliche Zahlen in der Geometrie (Meter: 1e306 · 1000 läuft über).
+    let data = format!(
+        "{}#1=CARTESIAN_POINT('',(1.E306,0.,0.));\n\
+         #2=CARTESIAN_POINT('',(0.,0.,0.));\n\
+         #3=AXIS2_PLACEMENT_3D('',#2,$,$);\n\
+         #4=CIRCLE('',#3,1.E306);\n\
+         #5=CONICAL_SURFACE('',#3,1.E306,0.5);\n",
+        length_only("(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT($,.METRE.))")
+    );
+    let f = parse(&data);
+    let mut r = Resolver::new(&f, context_units(&f, 909).unwrap());
+    assert_eq!(
+        skip_text(r.point(1)),
+        format!(
+            "Zeile {}: Ein Punkt hat keine endlichen Koordinaten.",
+            line_of(&data, 1)
+        )
+    );
+    assert_eq!(
+        skip_text(r.curve(4)),
+        format!(
+            "Zeile {}: Der Radius eines Kreises ist keine endliche Zahl.",
+            line_of(&data, 4)
+        )
+    );
+    assert_eq!(
+        skip_text(r.surface(5)),
+        format!(
+            "Zeile {}: Der Radius eines Kegels ist keine endliche Zahl.",
+            line_of(&data, 5)
+        )
+    );
+}
+
 #[test]
 fn units_override() {
     let data = format!(
@@ -605,6 +926,23 @@ fn units_override() {
         PI / 180.0,
         "der Winkel bleibt wie in der Datei"
     );
+    assert!(inch.uncertainty_follows_length);
+
+    // Zoll-Datei, Unsicherheit ausdrücklich in mm: Sie nennt ihre eigene Einheit und bleibt
+    // beim Umstellen der Längeneinheit unverändert (nicht 0,01 / 25,4).
+    let data = INCH_DEGREE.replace(
+        "#907=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-3),#903,",
+        "#907=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-2),#900,",
+    );
+    assert_ne!(data, INCH_DEGREE);
+    let f = parse(&data);
+    let inch = context_units(&f, 909).unwrap();
+    assert_eq!(inch.length, LengthUnit::Zoll);
+    assert_eq!(inch.uncertainty_mm, Some(0.01));
+    assert!(!inch.uncertainty_follows_length);
+    for l in [LengthUnit::Millimeter, LengthUnit::Meter] {
+        assert_eq!(inch.with_length(l).uncertainty_mm, Some(0.01), "{l:?}");
+    }
 
     // Einheit unbekannt → nach dem Umstellen bekannt.
     let unknown = Units {

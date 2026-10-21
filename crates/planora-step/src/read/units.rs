@@ -97,8 +97,12 @@ pub struct Units {
     pub length_known: bool,
     /// Radiant je Winkeleinheit der Datei.
     pub angle_rad: f64,
-    /// Kleinste Längen-Unsicherheit der Datei in mm.
+    /// Kleinste Längen-Unsicherheit der Datei in mm. Werte ≤ 0 oder nicht endliche werden
+    /// übergangen (dann gilt die Vorgabe und die Datei zählt als grob).
     pub uncertainty_mm: Option<f64>,
+    /// `true`: Die Unsicherheit steht in der Längeneinheit des Kontexts und wird beim Umstellen
+    /// der Einheit mit umgerechnet; `false`: Sie nennt eine eigene Einheit und bleibt.
+    pub uncertainty_follows_length: bool,
 }
 
 impl Units {
@@ -108,6 +112,7 @@ impl Units {
         length_known: true,
         angle_rad: 1.0,
         uncertainty_mm: None,
+        uncertainty_follows_length: true,
     };
 
     /// Toleranz für das Zusammenziehen: Unsicherheit der Datei (sonst
@@ -123,13 +128,20 @@ impl Units {
         self.uncertainty_mm.is_none() || self.weld_tol_mm() > COARSE_TOL_MM
     }
 
-    /// Andere Längeneinheit (P11): Die Unsicherheit wird mit umgerechnet, der Winkel bleibt.
+    /// Andere Längeneinheit (P11): Eine Unsicherheit in der Längeneinheit des Kontexts wird mit
+    /// umgerechnet, eine mit eigener Einheit (etwa ausdrücklich mm in einer Zoll-Datei) bleibt;
+    /// der Winkel bleibt.
     pub fn with_length(self, l: LengthUnit) -> Units {
+        let uncertainty_mm = if self.uncertainty_follows_length {
+            self.uncertainty_mm.map(|u| u / self.length.mm() * l.mm())
+        } else {
+            self.uncertainty_mm
+        };
         Units {
             length: l,
             length_known: true,
-            angle_rad: self.angle_rad,
-            uncertainty_mm: self.uncertainty_mm.map(|u| u / self.length.mm() * l.mm()),
+            uncertainty_mm,
+            ..self
         }
     }
 }
@@ -225,7 +237,7 @@ fn unit_value(file: &StepFile, id: u64, depth: usize) -> Result<(Kind, f64), Ste
         };
         return Ok(match kind {
             Kind::Length => (Kind::Length, mm),
-            _ => (Kind::Angle, mm / 1e3),
+            _ => (Kind::Angle, snap_angle(mm / 1e3)),
         });
     }
     if let Some(args) = e.part("CONVERSION_BASED_UNIT") {
@@ -254,25 +266,44 @@ fn unit_value(file: &StepFile, id: u64, depth: usize) -> Result<(Kind, f64), Ste
             ));
         }
         let x = value * f;
-        if !(x.is_finite() && x > 0.0) {
+        if !x.is_finite() {
+            return Err(file.fail(
+                id,
+                "Der Umrechnungswert der Einheit ist keine endliche Zahl.",
+            ));
+        }
+        if x <= 0.0 {
             return Err(file.fail(
                 id,
                 "Der Umrechnungswert der Einheit ist nicht größer als null.",
             ));
         }
-        // Bekannte Längen genau (2,54 · 10 mm = 25,4 mm auch bei Rundungsresten).
+        // Bekannte Einheiten je Stufe genau (2,54 · 10 mm = 25,4 mm, Grad = π/180), damit
+        // verschachtelte Einheiten und mehrere Schreibweisen derselben Einheit übereinstimmen.
         let x = match declared {
             Kind::Length => LengthUnit::from_mm(x).mm(),
-            _ => x,
+            Kind::Angle => snap_angle(x),
+            Kind::Other => x,
         };
         return Ok((declared, x));
     }
     Ok((Kind::Other, 1.0))
 }
 
+/// Grad (π/180) genau, wenn `rad` ihm bis auf relativ 1e-9 gleicht.
+fn snap_angle(rad: f64) -> f64 {
+    let degree = PI / 180.0;
+    if ((rad - degree) / degree).abs() <= UNIT_MATCH {
+        degree
+    } else {
+        rad
+    }
+}
+
 /// Einheiten und Genauigkeit des Kontexts `#context`. Fehlt die Längeneinheit, gelten
-/// Millimeter mit `length_known: false`; fehlt der Winkel, Radiant; Grad wird auf genau π/180
-/// gesetzt, wenn der Faktor ihm bis auf relativ 1e-9 gleicht.
+/// Millimeter mit `length_known: false`; fehlt der Winkel, Radiant. Mehrere verschiedene
+/// Einheiten derselben Art sind ein Fehler; eine Unsicherheit ≤ 0 oder nicht endlich wird
+/// übergangen.
 pub fn context_units(file: &StepFile, context: u64) -> Result<Units, StepReadError> {
     let ctx = file.entity(context)?;
     let mut length: Option<f64> = None;
@@ -305,13 +336,9 @@ pub fn context_units(file: &StepFile, context: u64) -> Result<Units, StepReadErr
         Some(mm) => (LengthUnit::from_mm(mm), true),
         None => (LengthUnit::Millimeter, false),
     };
-    let degree = PI / 180.0;
-    let angle_rad = match angle {
-        Some(a) if ((a - degree) / degree).abs() <= UNIT_MATCH => degree,
-        Some(a) => a,
-        None => 1.0,
-    };
-    let mut uncertainty: Option<f64> = None;
+    let angle_rad = angle.unwrap_or(1.0);
+    // Kleinste Unsicherheit in mm und ob sie in der Längeneinheit des Kontexts steht.
+    let mut uncertainty: Option<(f64, bool)> = None;
     if let Some(args) = ctx.part("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT") {
         let list = args
             .first()
@@ -329,17 +356,22 @@ pub fn context_units(file: &StepFile, context: u64) -> Result<Units, StepReadErr
                 continue;
             }
             let value = value.measure().map_err(|m| file.fail(u, m))?;
-            let mm = value * LengthUnit::from_mm(f).mm();
+            let mm = value * f;
             if !(mm.is_finite() && mm > 0.0) {
-                return Err(file.fail(u, "Die Genauigkeit ist nicht größer als null."));
+                // Unbrauchbar: übergehen; ohne andere gilt die Vorgabe (Genauigkeit unbekannt).
+                continue;
             }
-            uncertainty = Some(uncertainty.map_or(mm, |old: f64| old.min(mm)));
+            let follows = length == Some(f);
+            if uncertainty.is_none_or(|(old, _)| mm < old) {
+                uncertainty = Some((mm, follows));
+            }
         }
     }
     Ok(Units {
         length: unit,
         length_known: known,
         angle_rad,
-        uncertainty_mm: uncertainty,
+        uncertainty_mm: uncertainty.map(|(mm, _)| mm),
+        uncertainty_follows_length: uncertainty.is_none_or(|(_, follows)| follows),
     })
 }

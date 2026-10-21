@@ -7,11 +7,12 @@
 //! mit der Längeneinheit in Millimeter umgerechnet, Winkel mit der Winkeleinheit in Radiant.
 //!
 //! Ergebnisse werden je Nummer zwischengespeichert (`StepFile::entity` zerlegt bei jedem Aufruf
-//! neu). Der Auflösungsstapel erkennt Verweise im Kreis und begrenzt die Tiefe auf
-//! [`MAX_RESOLVE_DEPTH`].
+//! neu). Der Weg der Verweise ([`RefPath`]) erkennt Verweise im Kreis und begrenzt die Tiefe auf
+//! [`MAX_RESOLVE_DEPTH`]. Ein Scheitern an der Tiefe hängt vom Aufrufweg ab und wird deshalb nie
+//! gespeichert; Erfolge und Fehler, die nur vom Eintrag selbst abhängen (auch Kreise), schon.
 
 use crate::read::error::StepReadError;
-use crate::read::index::StepFile;
+use crate::read::index::{RefPath, StepFile};
 use crate::read::units::Units;
 use crate::read::value::{Entity, Value};
 use planora_kernel::{Curve, Surface};
@@ -19,12 +20,49 @@ use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec3, Frame};
 use std::collections::HashMap;
 use std::f64::consts::FRAC_PI_2;
+use std::sync::Arc;
 
-/// Höchste Tiefe des Auflösungsstapels.
+/// Höchste Tiefe des Auflösungswegs (kleiner als `MAX_REF_DEPTH`, weil die Rahmen groß sind).
 pub const MAX_RESOLVE_DEPTH: usize = 64;
 
 /// Kürzeste Richtung, die noch eine Richtung ist (vor dem Normieren).
 const MIN_DIRECTION: f64 = 1e-12;
+
+/// Eine angegebene Bezugsrichtung, deren Anteil senkrecht zur Achse (nach dem Normieren)
+/// kürzer ist, liegt auf der Achse (ISO 10303-42 verbietet das).
+const MIN_REF_PERP: f64 = 1e-9;
+
+/// Kurve mit umgekehrter Laufrichtung: `point'(t) = point(−t)` bei Gerade, Kreis und Ellipse
+/// (Kreis/Ellipse: y und z umgekehrt, das System bleibt rechtshändig).
+fn reversed(c: Curve) -> Result<Curve, String> {
+    let flip = |f: Frame| Frame {
+        origin: f.origin,
+        x: f.x,
+        y: -f.y,
+        z: -f.z,
+    };
+    Ok(match c {
+        Curve::Line { origin, dir } => Curve::Line { origin, dir: -dir },
+        Curve::Circle { frame, radius } => Curve::Circle {
+            frame: flip(frame),
+            radius,
+        },
+        Curve::Ellipse {
+            frame,
+            major,
+            minor,
+        } => Curve::Ellipse {
+            frame: flip(frame),
+            major,
+            minor,
+        },
+        Curve::Nurbs(n) => {
+            Curve::Nurbs(Arc::new(n.reversed().map_err(|e| {
+                format!("Eine Freiformkurve lässt sich nicht umkehren: {e}")
+            })?))
+        }
+    })
+}
 
 /// Grund, weshalb ein Körper ausgelassen wird; fertig für die Oberfläche.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,8 +119,14 @@ pub struct Resolver<'f> {
     placements: HashMap<u64, Result<Frame, Skip>>,
     curves: HashMap<u64, Result<Curve, Skip>>,
     surfaces: HashMap<u64, Result<SurfaceGeom, Skip>>,
-    stack: Vec<u64>,
+    path: RefPath,
+    /// Zahl der Fehler an der Tiefengrenze; ändert sie sich während einer Auflösung, wird deren
+    /// Fehler nicht gespeichert.
+    depth_failures: usize,
 }
+
+/// Wählt einen Zwischenspeicher des Resolvers.
+type Store<T> = for<'a, 'f> fn(&'a mut Resolver<'f>) -> &'a mut HashMap<u64, Result<T, Skip>>;
 
 impl<'f> Resolver<'f> {
     pub fn new(file: &'f StepFile, units: Units) -> Resolver<'f> {
@@ -94,7 +138,8 @@ impl<'f> Resolver<'f> {
             placements: HashMap::new(),
             curves: HashMap::new(),
             surfaces: HashMap::new(),
-            stack: Vec::new(),
+            path: RefPath::with_limit(MAX_RESOLVE_DEPTH),
+            depth_failures: 0,
         }
     }
 
@@ -106,28 +151,54 @@ impl<'f> Resolver<'f> {
         self.file
     }
 
+    /// Zahl der gespeicherten Ergebnisse (alle Arten; zur Prüfung des Zwischenspeichers).
+    pub fn cached_count(&self) -> usize {
+        self.points.len()
+            + self.directions.len()
+            + self.placements.len()
+            + self.curves.len()
+            + self.surfaces.len()
+    }
+
+    /// Ergebnis aus dem Zwischenspeicher oder neu berechnet (auf dem Weg der Verweise) und
+    /// gespeichert, außer es scheiterte an der Tiefengrenze.
+    fn cached<T: Clone>(
+        &mut self,
+        id: u64,
+        store: Store<T>,
+        now: fn(&mut Self, u64) -> Result<T, Skip>,
+    ) -> Result<T, Skip> {
+        if let Some(r) = store(self).get(&id) {
+            return r.clone();
+        }
+        let before = self.depth_failures;
+        let r = self.guarded(id, |s| now(s, id));
+        if r.is_ok() || self.depth_failures == before {
+            store(self).insert(id, r.clone());
+        }
+        r
+    }
+
     /// Grund mit der Zeile von `#id`.
     fn bad(&self, id: u64, msg: impl Into<String>) -> Skip {
         self.file.fail(id, msg).into()
     }
 
-    /// Führt `f` mit `#id` auf dem Stapel aus: schon auf dem Stapel → `Cycle`, mehr als
-    /// [`MAX_RESOLVE_DEPTH`] Ebenen → `TooDeep`.
+    /// Führt `f` mit `#id` auf dem Weg der Verweise aus: schon auf dem Weg → `Cycle`, mehr als
+    /// [`MAX_RESOLVE_DEPTH`] Ebenen → „Die Verweise sind zu tief verschachtelt …“.
     fn guarded<T>(
         &mut self,
         id: u64,
         f: impl FnOnce(&mut Self) -> Result<T, Skip>,
     ) -> Result<T, Skip> {
-        let line = self.file.line(id).ok_or(StepReadError::NoEntity { id })?;
-        if self.stack.contains(&id) {
-            return Err(StepReadError::Cycle { line, id }.into());
+        if let Err(e) = self.path.enter(self.file, id) {
+            if matches!(e, StepReadError::Syntax { .. }) {
+                self.depth_failures += 1;
+            }
+            return Err(e.into());
         }
-        if self.stack.len() >= MAX_RESOLVE_DEPTH {
-            return Err(StepReadError::TooDeep { line }.into());
-        }
-        self.stack.push(id);
         let r = f(self);
-        self.stack.pop();
+        self.path.leave();
         r
     }
 
@@ -173,12 +244,7 @@ impl<'f> Resolver<'f> {
 
     /// `CARTESIAN_POINT` in mm.
     pub fn point(&mut self, id: u64) -> Result<DVec3, Skip> {
-        if let Some(r) = self.points.get(&id) {
-            return r.clone();
-        }
-        let r = self.guarded(id, |s| s.point_now(id));
-        self.points.insert(id, r.clone());
-        r
+        self.cached(id, |s| &mut s.points, Self::point_now)
     }
 
     fn point_now(&mut self, id: u64) -> Result<DVec3, Skip> {
@@ -199,12 +265,7 @@ impl<'f> Resolver<'f> {
 
     /// `DIRECTION`, normiert auf Länge 1.
     pub fn direction(&mut self, id: u64) -> Result<DVec3, Skip> {
-        if let Some(r) = self.directions.get(&id) {
-            return r.clone();
-        }
-        let r = self.guarded(id, |s| s.direction_now(id));
-        self.directions.insert(id, r.clone());
-        r
+        self.cached(id, |s| &mut s.directions, Self::direction_now)
     }
 
     fn direction_now(&mut self, id: u64) -> Result<DVec3, Skip> {
@@ -216,28 +277,28 @@ impl<'f> Resolver<'f> {
         let [x, y, z] = c[..] else {
             return Err(self.bad(id, "Eine Richtung braucht drei Werte."));
         };
+        // Erst durch den größten Betrag teilen: kein Überlauf bei sehr großen Werten (1e200).
+        // Die Werte sind endlich (der Lexer lehnt anderes ab).
         let d = DVec3::new(x, y, z);
-        let len = d.length();
-        if !len.is_finite() {
-            return Err(self.bad(id, "Eine Richtung hat keine endlichen Werte."));
-        }
-        if len < MIN_DIRECTION {
+        let m = d.abs().max_element();
+        if m == 0.0 {
             return Err(self.bad(id, "Eine Richtung hat die Länge null."));
         }
-        Ok(d / len)
+        let unit = d / m;
+        let len = unit.length();
+        if m * len < MIN_DIRECTION {
+            return Err(self.bad(id, "Eine Richtung hat die Länge null."));
+        }
+        Ok(unit / len)
     }
 
     /// `AXIS2_PLACEMENT_3D` als rechtshändiges, orthonormales Koordinatensystem: `z` = Achse
-    /// (`$` → Welt-z), `x` = Bezugsrichtung (`$` → Welt-x) senkrecht zu `z` gemacht (parallel zu
-    /// `z` → beliebige Senkrechte), `y = z × x`. Ein schiefes oder linkshändiges System kann so
-    /// nicht entstehen.
+    /// (`$` → Welt-z), `x` = Bezugsrichtung senkrecht zu `z` gemacht, `y = z × x`. Fehlt die
+    /// Bezugsrichtung (`$`), gilt Welt-x (liegt sie auf der Achse: beliebige Senkrechte); eine
+    /// angegebene Bezugsrichtung auf der Achse wird abgelehnt. Ein schiefes oder linkshändiges
+    /// System kann so nicht entstehen.
     pub fn placement(&mut self, id: u64) -> Result<Frame, Skip> {
-        if let Some(r) = self.placements.get(&id) {
-            return r.clone();
-        }
-        let r = self.guarded(id, |s| s.placement_now(id));
-        self.placements.insert(id, r.clone());
-        r
+        self.cached(id, |s| &mut s.placements, Self::placement_now)
     }
 
     fn placement_now(&mut self, id: u64) -> Result<Frame, Skip> {
@@ -249,15 +310,20 @@ impl<'f> Resolver<'f> {
             v if v.is_unset() => DVec3::Z,
             v => self.direction(v.reference().map_err(|m| self.bad(id, m))?)?,
         };
-        let r = match self.arg(id, &e, P, 3)? {
-            v if v.is_unset() => DVec3::X,
-            v => self.direction(v.reference().map_err(|m| self.bad(id, m))?)?,
+        let (r, given) = match self.arg(id, &e, P, 3)? {
+            v if v.is_unset() => (DVec3::X, false),
+            v => (
+                self.direction(v.reference().map_err(|m| self.bad(id, m))?)?,
+                true,
+            ),
         };
         let x = r - z * r.dot(z);
-        let x = if x.length() < MIN_DIRECTION {
-            z.any_orthonormal_vector()
-        } else {
+        let x = if x.length() >= MIN_REF_PERP {
             x.normalize()
+        } else if given {
+            return Err(self.bad(id, "Die Bezugsrichtung liegt auf der Achse."));
+        } else {
+            z.any_orthonormal_vector()
         };
         let y = z.cross(x);
         Ok(Frame { origin, x, y, z })
@@ -265,12 +331,7 @@ impl<'f> Resolver<'f> {
 
     /// Trägerkurve einer Kante.
     pub fn curve(&mut self, id: u64) -> Result<Curve, Skip> {
-        if let Some(r) = self.curves.get(&id) {
-            return r.clone();
-        }
-        let r = self.guarded(id, |s| s.curve_now(id));
-        self.curves.insert(id, r.clone());
-        r
+        self.cached(id, |s| &mut s.curves, Self::curve_now)
     }
 
     fn curve_now(&mut self, id: u64) -> Result<Curve, Skip> {
@@ -308,9 +369,23 @@ impl<'f> Resolver<'f> {
             }
         }
         if e.is("TRIMMED_CURVE") {
-            // Die Ecken der Kante begrenzen die Kurve; die Grundkurve genügt.
-            let c = self.reference(id, &e, "TRIMMED_CURVE", 1)?;
-            return self.curve(c);
+            // Die Ecken der Kante begrenzen die Kurve; die Grundkurve genügt, aber in der
+            // Laufrichtung der Trimmkurve (`sense_agreement` .F. → umgekehrt).
+            const T: &str = "TRIMMED_CURVE";
+            let c = self.reference(id, &e, T, 1)?;
+            let sense = self
+                .arg(id, &e, T, 4)?
+                .logical()
+                .map_err(|m| self.bad(id, m))?;
+            let base = self.curve(c)?;
+            return match sense {
+                Some(true) => Ok(base),
+                Some(false) => reversed(base).map_err(|m| self.bad(id, m)),
+                None => Err(self.bad(
+                    id,
+                    "Die Laufrichtung einer Trimmkurve ist unbestimmt („.U.“).",
+                )),
+            };
         }
         Err(Skip(format!(
             "Kante vom Typ {} wird noch nicht unterstützt.",
@@ -323,18 +398,20 @@ impl<'f> Resolver<'f> {
         self.guarded(id, |s| {
             let e = s.file.entity(id)?;
             let d = s.reference(id, &e, "VECTOR", 1)?;
+            let m = s
+                .arg(id, &e, "VECTOR", 2)?
+                .measure()
+                .map_err(|m| s.bad(id, m))?;
+            if m < 0.0 {
+                return Err(s.bad(id, "Der Betrag eines Vektors ist negativ."));
+            }
             s.direction(d)
         })
     }
 
     /// Trägerfläche einer Fläche.
     pub fn surface(&mut self, id: u64) -> Result<SurfaceGeom, Skip> {
-        if let Some(r) = self.surfaces.get(&id) {
-            return r.clone();
-        }
-        let r = self.guarded(id, |s| s.surface_now(id));
-        self.surfaces.insert(id, r.clone());
-        r
+        self.cached(id, |s| &mut s.surfaces, Self::surface_now)
     }
 
     fn surface_now(&mut self, id: u64) -> Result<SurfaceGeom, Skip> {
