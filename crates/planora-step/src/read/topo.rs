@@ -47,6 +47,13 @@ const MAX_ORIENTED_CHAIN: usize = 8;
 /// Abstand (Anteil der Periode), bis zu dem ein Parameterbereich noch als ein Umlauf gilt.
 const PERIOD_SLACK: f64 = 1e-9;
 
+/// Höchstens so viel (Anteil der Periode) darf ein Bereich grober Dateien über eine Periode
+/// reichen, bevor er gekappt wird (bei 1e-3 mm Genauigkeit genügt das ab etwa 0,3 mm Radius).
+const MAX_PERIOD_SLACK: f64 = 1e-3;
+
+/// Schritt (Anteil der Periode) für die Länge je Parametereinheit in [`derive_patch_with_tol`].
+const SPEED_STEP: f64 = 1e-6;
+
 /// Abstand (relativ), unter dem `v` auf einem Pol der Fläche liegt (dort ist `u` beliebig);
 /// derselbe Wert wie in `planora_kernel::boolean::points_to_uv`.
 const POLE_REL: f64 = 1e-7;
@@ -202,6 +209,8 @@ fn place(p: DVec3) -> String {
 /// Liest die Topologie eines Körpers.
 struct TopoReader<'f> {
     file: &'f StepFile,
+    /// Genauigkeit der Datei (mm) für den Parameterbereich grober Nähte.
+    tol: f64,
     res: Resolver<'f>,
     vertex_of: HashMap<u64, usize>,
     edge_of: HashMap<u64, usize>,
@@ -442,7 +451,10 @@ impl<'f> TopoReader<'f> {
                     .filter(|(i, _)| *i != outer)
                     .map(|(_, p)| p.clone()),
             );
-            Some(derive_patch(&surface, &ordered).map_err(|Skip(m)| self.fail(id, m))?)
+            Some(
+                derive_patch_with_tol(&surface, &ordered, self.tol)
+                    .map_err(|Skip(m)| self.fail(id, m))?,
+            )
         };
         let inner = loops
             .into_iter()
@@ -501,10 +513,25 @@ pub fn edge_params(
 /// Richtungen werden entlang der Schleife fortlaufend entfaltet (Sprung > halbe Periode →
 /// ±Periode). An Polen (Kugelpol, Kegelspitze) zählt nur `v`. Ergebnis ist die Hülle, in jeder
 /// periodischen Richtung um Vielfache der Periode an den Anfang des Bereichs geschoben (analytisch
-/// `[0, 2π)`); mehr als eine Periode oder keine Ausdehnung ist kein Bereich.
+/// `[0, 2π)`); mehr als eine Periode oder keine Ausdehnung ist kein Bereich. Genaue Dateien
+/// (wie [`derive_patch_with_tol`] mit Toleranz 0).
+pub fn derive_patch(surface: &Surface, loops: &[Vec<DVec3>]) -> Result<UvRect, Skip> {
+    derive_patch_with_tol(surface, loops, 0.0)
+}
+
+/// Wie [`derive_patch`], für Dateien mit der Genauigkeit `tol_mm`: Liegen die Ecken einer Naht
+/// bis zu `tol_mm` neben ihr, überspannt der Mantel eine Periode plus einen kleinen Winkel. Bis
+/// `2 · tol_mm / Geschwindigkeit` (kleinste Länge je Parameter an den Randpunkten, Punkte näher
+/// als `10 · tol_mm` an einem Pol ausgenommen; mindestens [`PERIOD_SLACK`], höchstens
+/// [`MAX_PERIOD_SLACK`] der Periode) über eine Periode wird der Bereich auf genau eine Periode
+/// gekappt; darüber ist er kein Bereich.
 // Die negierten Vergleiche lehnen absichtlich auch NaN ab.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-pub fn derive_patch(surface: &Surface, loops: &[Vec<DVec3>]) -> Result<UvRect, Skip> {
+pub fn derive_patch_with_tol(
+    surface: &Surface,
+    loops: &[Vec<DVec3>],
+    tol_mm: f64,
+) -> Result<UvRect, Skip> {
     let periods = [surface.u_period(), surface.v_period()];
     let base = match surface {
         Surface::Nurbs(d) => {
@@ -516,6 +543,8 @@ pub fn derive_patch(surface: &Surface, loops: &[Vec<DVec3>]) -> Result<UvRect, S
     let poles = surface.pole_vs();
     let mut lo = [f64::INFINITY; 2];
     let mut hi = [f64::NEG_INFINITY; 2];
+    // Kleinste Länge je Parametereinheit an den Randpunkten, je periodischer Richtung.
+    let mut speed = [f64::INFINITY; 2];
     for lp in loops {
         let mut hint: Option<(f64, f64)> = None;
         // Jede weitere Schleife beginnt neben dem schon bestimmten Bereich (Loch nahe der
@@ -543,6 +572,18 @@ pub fn derive_patch(surface: &Surface, loops: &[Vec<DVec3>]) -> Result<UvRect, S
                 if let (Some(per), Some(q)) = (periods[k], prev[k]) {
                     x += per * ((q - x) / per).round();
                 }
+                if let Some(per) = periods[k].filter(|_| tol_mm > 0.0) {
+                    let h = SPEED_STEP * per;
+                    let q = if k == 0 {
+                        surface.point(u + h, v)
+                    } else {
+                        surface.point(u, v + h)
+                    };
+                    let s = q.distance(surface.point(u, v)) / h;
+                    if s.is_finite() && s > 10.0 * tol_mm {
+                        speed[k] = speed[k].min(s);
+                    }
+                }
                 prev[k] = Some(x);
                 lo[k] = lo[k].min(x);
                 hi[k] = hi[k].max(x);
@@ -561,10 +602,14 @@ pub fn derive_patch(surface: &Surface, loops: &[Vec<DVec3>]) -> Result<UvRect, S
     }
     for k in 0..2 {
         if let Some(per) = periods[k] {
-            if hi[k] - lo[k] > per * (1.0 + PERIOD_SLACK) {
+            let slack = (2.0 * tol_mm / speed[k]).clamp(PERIOD_SLACK * per, MAX_PERIOD_SLACK * per);
+            if !(hi[k] - lo[k] <= per + slack) {
                 return Err(Skip(
                     "Der Parameterbereich einer Fläche reicht über mehr als einen Umlauf.".into(),
                 ));
+            }
+            if hi[k] - lo[k] > per {
+                hi[k] = lo[k] + per;
             }
             let shift = per * ((lo[k] - base[k]) / per).floor();
             lo[k] -= shift;
@@ -584,10 +629,12 @@ fn read_raw(
     file: &StepFile,
     units: Units,
     items: &[u64],
+    tol: f64,
     progress: &Progress,
 ) -> Result<RawBody, Skip> {
     let mut r = TopoReader {
         file,
+        tol,
         res: Resolver::new(file, units),
         vertex_of: HashMap::new(),
         edge_of: HashMap::new(),
@@ -856,7 +903,7 @@ pub fn build_solid(
     opts: &BuildOptions,
     progress: &Progress,
 ) -> Result<BuiltSolid, Skip> {
-    let raw = read_raw(file, units, items, progress)?;
+    let raw = read_raw(file, units, items, opts.weld_tol_mm, progress)?;
     let mut solid = raw.to_solid();
     // Erst prüfen, dann vernetzen: Das Netz für das Volumen setzt gültige Topologie voraus. Die
     // Prüfung am Ende (nach dem Umdrehen) verlangt der Ablauf des Plans; sie ist billig.

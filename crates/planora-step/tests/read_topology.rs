@@ -15,7 +15,8 @@ use planora_math::{DVec2, DVec3, Frame, PI, TAU, Tolerance};
 use planora_mesh::{Mesh, TessellationOptions, mass_properties, tessellate};
 use planora_step::read::geom::Skip;
 use planora_step::read::topo::{
-    BuildOptions, BuiltSolid, STEP_FACE_ROLE, build_solid, derive_patch, edge_params,
+    BuildOptions, BuiltSolid, STEP_FACE_ROLE, build_solid, derive_patch, derive_patch_with_tol,
+    edge_params,
 };
 use planora_step::read::units::{Units, context_units};
 use planora_step::{MAX_STEP_FACES, ReadLimits, StepFile};
@@ -487,6 +488,19 @@ fn patch_is_unwrapped_along_the_loop() {
         "{p:?}"
     );
     assert!((p.v0 + 0.5 * PI).abs() <= 1e-12 && (p.v1 - 0.5 * PI).abs() <= 1e-12);
+    // Polgrenze wie im Kernel (`points_to_uv`): |v − Pol| < 1e-7 · (1 + |Pol|). Ein Punkt
+    // 1e-7 neben dem Pol bei u = 0 zählt nicht in u; 1e-6 daneben schon.
+    let near_pole = |off: f64| -> Vec<DVec3> {
+        let mut lp = turn(0.25 * PI, meridian(-0.5 * PI, 0.5 * PI));
+        lp.extend(turn(0.75 * PI, meridian(0.5 * PI, -0.5 * PI)));
+        let b = 0.5 * PI - off;
+        lp.push(DVec3::new(2.0 * b.cos(), 0.0, 2.0 * b.sin()));
+        lp
+    };
+    let p = derive_patch(&sphere, &[near_pole(1e-7)]).expect("am Pol");
+    assert!((p.u0 - 0.25 * PI).abs() <= 1e-12, "{p:?}");
+    let p = derive_patch(&sphere, &[near_pole(1e-6)]).expect("neben dem Pol");
+    assert!(p.u0.abs() <= 1e-12, "{p:?}");
 }
 
 /// Alle `same_sense` der Flächen und alle Richtungen der Ränder umgedreht.
@@ -829,13 +843,21 @@ fn holes_near_the_seam_keep_their_place() {
 
 #[test]
 fn curved_face_outer_loop_by_turn() {
-    // Zylinder mit Tasche durch die Wand: Der Mantel hat ein Loch. In der Datei steht das Loch
-    // zuerst, und beide Ränder sind FACE_BOUND.
+    // Tasche bei u ≈ π/2 und nahe der Naht bei u ≈ −0,35 (≡ 5,93): Mit dem Loch zuerst an
+    // `derive_patch` würde der Mantel dort über mehr als einen Umlauf entfaltet.
+    hole_listed_first(DVec2::new(-2.0, 8.0), DVec2::new(2.0, 12.0));
+    let c = DVec2::new(10.0 * (-0.35f64).cos(), 10.0 * (-0.35f64).sin());
+    hole_listed_first(c - DVec2::splat(2.0), c + DVec2::splat(2.0));
+}
+
+/// Zylinder R 10 mit Tasche (Rechteck `lo`–`hi` in xy, z 8…12) durch die Wand: Der Mantel hat
+/// ein Loch. In der Datei steht das Loch zuerst, und beide Ränder sind FACE_BOUND.
+fn hole_listed_first(lo: DVec2, hi: DVec2) {
     let tol = Tolerance::default();
     let cyl = make_cylinder(10.0, 20.0, &tol).expect("Zylinder");
     let pocket = extrude(
         &Profile {
-            outer: ProfileLoop::rectangle(DVec2::new(-2.0, 8.0), DVec2::new(2.0, 12.0)),
+            outer: ProfileLoop::rectangle(lo, hi),
             holes: vec![],
         },
         &Frame {
@@ -1018,4 +1040,189 @@ fn hostile_topology_is_named() {
          #60=PLANE('',#61);\n#61=AXIS2_PLACEMENT_3D('',#121,$,$);\n",
     );
     assert_eq!(skip(&flat), "Der Körper hat kein Volumen.");
+}
+
+// --- Nacharbeit 2 (Re-Review Task 3) ---
+
+/// `bore_seam.step` mit Ecken, die um 5e-4 mm in Umfangsrichtung neben der Naht liegen, und der
+/// Genauigkeit `uncertainty` (Text der Datei).
+fn coarse_bore_seam(uncertainty: &str) -> String {
+    let mut t = data("bore_seam.step");
+    for (from, to) in [
+        (
+            "#501=CARTESIAN_POINT('',(20.,0.,0.));",
+            "#501=CARTESIAN_POINT('',(20.,0.0005,0.));",
+        ),
+        (
+            "#507=CARTESIAN_POINT('',(5.,0.,30.));",
+            "#507=CARTESIAN_POINT('',(5.,-0.0005,30.));",
+        ),
+        (
+            "LENGTH_MEASURE(1.E-06)",
+            &format!("LENGTH_MEASURE({uncertainty})"),
+        ),
+    ] {
+        t = swap_once(&t, from, to);
+    }
+    t
+}
+
+#[test]
+fn coarse_seam_is_taken_within_the_file_tolerance() {
+    // Genauigkeit 1e-3: Der Mantel überspannt eine Periode plus den Versatz an der Naht
+    // (etwa 2,5e-5 bzw. 1e-4 rad); der Bereich wird auf genau eine Periode gekappt.
+    let built = build(&coarse_bore_seam("1.E-03"));
+    validate(&built.solid).expect("gültig");
+    for (_, f) in built.solid.faces.iter() {
+        if let Some(p) = f.patch {
+            assert!((p.u1 - p.u0 - TAU).abs() <= 1e-12, "{p:?}");
+        }
+    }
+    // Gegen den genauen Ring bei gleicher Sehne (das grobe Netz hält den Test schnell); der
+    // Versatz von 5e-4 mm ändert das Volumen um weit weniger als 1e-4.
+    let mp = mass_properties(&mesh(&built.solid, 0.01));
+    let exact = mass_properties(&mesh(&build(&data("bore_seam.step")).solid, 0.01));
+    assert!(
+        rel(mp.volume, exact.volume) <= 1e-4,
+        "Volumen {}",
+        mp.volume
+    );
+    assert!(
+        rel(mp.volume, 11_250.0 * PI) <= 1e-3,
+        "Volumen {}",
+        mp.volume
+    );
+    // Genauigkeit 1e-6: Der Versatz ist größer als die Datei erlaubt.
+    let s = skip_of(&coarse_bore_seam("1.E-06"), &ReadLimits::DEFAULT);
+    assert!(s.ends_with("reicht über mehr als einen Umlauf."), "{s}");
+}
+
+#[test]
+fn too_wide_range_stays_rejected() {
+    let cyl = Surface::Cylinder {
+        frame: Frame::WORLD,
+        radius: 20.0,
+    };
+    let arc = |a0: f64, a1: f64, z: f64| -> Vec<DVec3> {
+        (0..=64)
+            .map(|k| {
+                let a = a0 + (a1 - a0) * k as f64 / 64.0;
+                DVec3::new(20.0 * a.cos(), 20.0 * a.sin(), z)
+            })
+            .collect()
+    };
+    let lp = |w: f64| {
+        let mut lp = arc(0.0, w, 0.0);
+        lp.extend(arc(w, 0.0, 1.0));
+        lp
+    };
+    // 1,1 Perioden: auch mit grober Genauigkeit abgelehnt.
+    for tol in [0.0, 1e-3] {
+        let Err(Skip(s)) = derive_patch_with_tol(&cyl, &[lp(1.1 * TAU)], tol) else {
+            panic!("1,1 Perioden bei {tol}");
+        };
+        assert!(s.ends_with("reicht über mehr als einen Umlauf."), "{s}");
+    }
+    // Eine Periode plus 4e-5 rad (8e-4 mm am Umfang): bei 1e-3 gekappt, bei 1e-6 abgelehnt.
+    let p = derive_patch_with_tol(&cyl, &[lp(TAU + 4e-5)], 1e-3).expect("grob");
+    assert!((p.u1 - p.u0 - TAU).abs() <= 1e-12, "{p:?}");
+    assert!(derive_patch_with_tol(&cyl, &[lp(TAU + 4e-5)], 1e-6).is_err());
+    // Dünner Zylinder (R 0,1): 2 · 1e-3 / 0,1 = 0,02 rad wäre zu großzügig; der Schlupf ist
+    // auf 1e-3 der Periode (0,0063 rad) begrenzt.
+    let thin = Surface::Cylinder {
+        frame: Frame::WORLD,
+        radius: 0.1,
+    };
+    let thin_lp = |w: f64| -> Vec<DVec3> {
+        let pt = |a: f64, z: f64| DVec3::new(0.1 * a.cos(), 0.1 * a.sin(), z);
+        let mut lp: Vec<DVec3> = (0..=64).map(|k| pt(w * k as f64 / 64.0, 0.0)).collect();
+        lp.extend((0..=64).map(|k| pt(w * (64 - k) as f64 / 64.0, 1.0)));
+        lp
+    };
+    assert!(derive_patch_with_tol(&thin, &[thin_lp(TAU + 0.005)], 1e-3).is_ok());
+    assert!(derive_patch_with_tol(&thin, &[thin_lp(TAU + 0.01)], 1e-3).is_err());
+    // Kegel (Radius 5 bei v = 0, Spitze bei v = 5) mit zwei Randpunkten 1e-4 mm vor der Spitze:
+    // Punkte näher als 10 · Genauigkeit an der Achse bestimmen den Schlupf nicht (sonst wäre er
+    // bis zur Obergrenze groß); 0,004 rad Überstand bleiben bei 1e-3 abgelehnt (2e-3/5 = 4e-4).
+    let cone = Surface::Cone {
+        frame: Frame::WORLD,
+        radius: 5.0,
+        slope: -1.0,
+    };
+    let on = |a: f64, v: f64| DVec3::new((5.0 - v) * a.cos(), (5.0 - v) * a.sin(), v);
+    let w = TAU + 0.004;
+    let mut cone_lp: Vec<DVec3> = (0..=64).map(|k| on(w * k as f64 / 64.0, 0.0)).collect();
+    cone_lp.push(on(w, 5.0 - 1e-4));
+    cone_lp.push(on(0.0, 5.0 - 1e-4));
+    assert!(derive_patch_with_tol(&cone, &[cone_lp], 1e-3).is_err());
+    assert_eq!(
+        derive_patch(&cyl, &[lp(TAU)]).map(|p| p.u1 - p.u0),
+        derive_patch_with_tol(&cyl, &[lp(TAU)], 0.0).map(|p| p.u1 - p.u0)
+    );
+}
+
+/// Ring-Torus R 20, r 5 um z aus vier Viertelflächen (u und v je in zwei Hälften; Meridiane bei
+/// u = 0 und π, Parallelkreise außen und innen); `m0a` ist der Sinn des Meridianbogens bei u = 0
+/// von v = 0 nach π.
+fn quartered_torus(m0a: &str) -> String {
+    small_body(&format!(
+        "#20=MANIFOLD_SOLID_BREP('',#21);\n#21=CLOSED_SHELL('',(#31,#32,#33,#34));\n\
+         #31=ADVANCED_FACE('',(#41),#60,.T.);\n#32=ADVANCED_FACE('',(#42),#60,.T.);\n\
+         #33=ADVANCED_FACE('',(#43),#60,.T.);\n#34=ADVANCED_FACE('',(#44),#60,.T.);\n\
+         #41=FACE_OUTER_BOUND('',#51,.T.);\n#42=FACE_OUTER_BOUND('',#52,.T.);\n\
+         #43=FACE_OUTER_BOUND('',#53,.T.);\n#44=FACE_OUTER_BOUND('',#54,.T.);\n\
+         #51=EDGE_LOOP('',(#201,#202,#203,#204));\n#52=EDGE_LOOP('',(#205,#206,#207,#208));\n\
+         #53=EDGE_LOOP('',(#209,#210,#211,#212));\n#54=EDGE_LOOP('',(#213,#214,#215,#216));\n\
+         #201=ORIENTED_EDGE('',*,*,#81,.T.);\n#202=ORIENTED_EDGE('',*,*,#87,.T.);\n\
+         #203=ORIENTED_EDGE('',*,*,#83,.F.);\n#204=ORIENTED_EDGE('',*,*,#85,.F.);\n\
+         #205=ORIENTED_EDGE('',*,*,#82,.T.);\n#206=ORIENTED_EDGE('',*,*,#85,.T.);\n\
+         #207=ORIENTED_EDGE('',*,*,#84,.F.);\n#208=ORIENTED_EDGE('',*,*,#87,.F.);\n\
+         #209=ORIENTED_EDGE('',*,*,#83,.T.);\n#210=ORIENTED_EDGE('',*,*,#88,.T.);\n\
+         #211=ORIENTED_EDGE('',*,*,#81,.F.);\n#212=ORIENTED_EDGE('',*,*,#86,.F.);\n\
+         #213=ORIENTED_EDGE('',*,*,#84,.T.);\n#214=ORIENTED_EDGE('',*,*,#86,.T.);\n\
+         #215=ORIENTED_EDGE('',*,*,#82,.F.);\n#216=ORIENTED_EDGE('',*,*,#88,.F.);\n\
+         #81=EDGE_CURVE('',#91,#93,#101,.T.);\n#82=EDGE_CURVE('',#93,#91,#101,.T.);\n\
+         #83=EDGE_CURVE('',#92,#94,#102,.T.);\n#84=EDGE_CURVE('',#94,#92,#102,.T.);\n\
+         #85=EDGE_CURVE('',#91,#92,#103,{m0a});\n#86=EDGE_CURVE('',#92,#91,#103,.T.);\n\
+         #87=EDGE_CURVE('',#93,#94,#104,.T.);\n#88=EDGE_CURVE('',#94,#93,#104,.T.);\n\
+         #91=VERTEX_POINT('',#121);\n#92=VERTEX_POINT('',#122);\n\
+         #93=VERTEX_POINT('',#123);\n#94=VERTEX_POINT('',#124);\n\
+         #121=CARTESIAN_POINT('',(25.,0.,0.));\n#122=CARTESIAN_POINT('',(15.,0.,0.));\n\
+         #123=CARTESIAN_POINT('',(-25.,0.,0.));\n#124=CARTESIAN_POINT('',(-15.,0.,0.));\n\
+         #101=CIRCLE('',#131,25.);\n#102=CIRCLE('',#131,15.);\n\
+         #103=CIRCLE('',#132,5.);\n#104=CIRCLE('',#133,5.);\n\
+         #131=AXIS2_PLACEMENT_3D('',#125,#141,#142);\n\
+         #132=AXIS2_PLACEMENT_3D('',#126,#143,#142);\n\
+         #133=AXIS2_PLACEMENT_3D('',#127,#144,#145);\n\
+         #125=CARTESIAN_POINT('',(0.,0.,0.));\n#126=CARTESIAN_POINT('',(20.,0.,0.));\n\
+         #127=CARTESIAN_POINT('',(-20.,0.,0.));\n\
+         #141=DIRECTION('',(0.,0.,1.));\n#142=DIRECTION('',(1.,0.,0.));\n\
+         #143=DIRECTION('',(0.,-1.,0.));\n#144=DIRECTION('',(0.,1.,0.));\n\
+         #145=DIRECTION('',(-1.,0.,0.));\n\
+         #60=TOROIDAL_SURFACE('',#131,20.,5.);\n"
+    ))
+}
+
+#[test]
+fn torus_quarters_close_in_v() {
+    let built = build(&quartered_torus(".T."));
+    let s = &built.solid;
+    validate(s).expect("gültig");
+    let mp = mass_properties(&mesh(s, 0.001));
+    let want = 2.0 * PI * PI * 20.0 * 25.0;
+    assert!(
+        rel(mp.volume, want) <= 5e-4,
+        "Volumen {} statt {want}",
+        mp.volume
+    );
+    for (_, f) in s.faces.iter() {
+        let p = f.patch.expect("Bereich");
+        assert!((p.u1 - p.u0 - PI).abs() <= 1e-12 && (p.v1 - p.v0 - PI).abs() <= 1e-12);
+        assert!((0.0..TAU).contains(&p.v0), "{p:?}");
+    }
+    // Meridianbogen mit falschem Sinn: Die Viertelfläche windet sich einmal in v.
+    assert_eq!(
+        skip_of(&quartered_torus(".F."), &ReadLimits::DEFAULT),
+        format!("Der Rand der Fläche „STEP-Fläche 1“ {NOT_CLOSED}")
+    );
 }
