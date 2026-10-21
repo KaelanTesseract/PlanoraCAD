@@ -14,6 +14,9 @@ pub const MAX_STEP_FACES: usize = 20_000;
 /// Höchste Klammertiefe eines Eintrags; die Parameterliste des Eintrags selbst ist Ebene 1.
 pub const MAX_STEP_NESTING: usize = 64;
 
+/// Höchste Länge einer Verweiskette, der [`crate::read::index::RefPath`] folgt.
+pub const MAX_REF_DEPTH: usize = 256;
+
 /// Höchstens so viele Zeichen einer fehlerhaften Zahl stehen in der Meldung.
 pub const MAX_BAD_NUMBER_CHARS: usize = 32;
 
@@ -52,8 +55,8 @@ pub enum StepReadError {
     TooLarge { bytes: u64 },
     #[error("Die Datei hat mehr als 5 Millionen Einträge.")]
     TooManyEntities,
-    #[error("Zeile {line}: Die Nummer #{id} kommt doppelt vor.")]
-    Duplicate { line: usize, id: u64 },
+    #[error("Zeile {line}: Die Nummer #{id} kommt doppelt vor (zuerst in Zeile {first}).")]
+    Duplicate { line: usize, id: u64, first: usize },
     #[error("Zeile {line}: #{id} verweist auf #{target}, den es nicht gibt.")]
     MissingRef { line: usize, id: u64, target: u64 },
     #[error("Zeile {line}: Die Einträge verweisen im Kreis (#{id}).")]
@@ -62,7 +65,7 @@ pub enum StepReadError {
     BadNumber { line: usize, text: String },
     #[error("Zeile {line}: Die Klammern sind zu tief verschachtelt (höchstens 64 Ebenen).")]
     TooDeep { line: usize },
-    #[error("Zeile {line}: Unerwartetes Zeichen „{c}“.")]
+    #[error("Zeile {line}: Unerwartetes Zeichen „{}“.", show_char(*.c))]
     UnexpectedChar { line: usize, c: char },
     #[error("Zeile {line}: Eine Zeichenkette ist nicht geschlossen.")]
     OpenString { line: usize },
@@ -78,6 +81,9 @@ pub enum StepReadError {
     TooManyBodies,
     #[error("Abgebrochen")]
     Cancelled,
+    /// Programmfehler des Aufrufers: nach einer Nummer gefragt, die es nicht gibt.
+    #[error("Den Eintrag #{id} gibt es nicht.")]
+    NoEntity { id: u64 },
 }
 
 impl StepReadError {
@@ -101,6 +107,15 @@ impl StepReadError {
 /// Bytes in MB (1024·1024) mit einer Nachkommastelle und Komma.
 fn megabytes(bytes: u64) -> String {
     format!("{:.1}", bytes as f64 / (1024.0 * 1024.0)).replace('.', ",")
+}
+
+/// Steuer- und unsichtbare Zeichen erscheinen als `U+XXXX`, nie roh.
+fn show_char(c: char) -> String {
+    if c.is_control() || c.is_whitespace() || c == '\u{FEFF}' {
+        format!("U+{:04X}", u32::from(c))
+    } else {
+        c.to_string()
+    }
 }
 
 fn shorten(text: &str) -> String {

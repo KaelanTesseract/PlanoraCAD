@@ -2,9 +2,14 @@
 //! Zahlen, doppelte Nummern und Grenzen, merkt sich je Eintrag nur Byte-Bereich und Zeile.
 //! Die Parameter eines Eintrags werden erst in [`StepFile::entity`] zerlegt; dort fallen
 //! fehlende Verweise auf.
+//!
+//! Für die Folgeaufgaben: `entity` zerlegt bei **jedem** Aufruf neu und legt Werte an; wer
+//! Einträge mehrfach braucht (Punkte, Richtungen), speichert die Ergebnisse selbst zwischen
+//! (Nummer → Ergebnis). `entity` erkennt nur Selbstverweise; wer Verweisen folgt, muss längere
+//! Kreise selbst erkennen, mit Besuchsliste und Tiefengrenze: dafür gibt es [`RefPath`].
 
-use super::error::{ReadLimits, StepReadError};
-use super::lex::{Lexer, Tok, parse_args, parse_body};
+use super::error::{MAX_REF_DEPTH, ReadLimits, StepReadError};
+use super::lex::{Lexer, TOO_MANY_CLOSE, Tok, parse_args, parse_body};
 use super::value::{Entity, Value};
 use planora_exchange::{CHECK_EVERY, Progress};
 use std::collections::HashMap;
@@ -19,6 +24,7 @@ const MAX_HEADER_ENTRY_BYTES: usize = 64 * 1024;
 
 const MAGIC: &str = "ISO-10303-21";
 const END_MAGIC: &str = "END-ISO-10303-21";
+const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
 /// Was der Kopf über die Datei sagt.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -123,10 +129,7 @@ impl StepFile {
     /// nicht auf sich selbst verweist. Längere Kreise erkennt erst, wer den Verweisen folgt.
     pub fn entity(&self, id: u64) -> Result<Entity> {
         let Some(slot) = self.slot(id) else {
-            return Err(StepReadError::syntax(
-                0,
-                format!("Den Eintrag #{id} gibt es nicht."),
-            ));
+            return Err(StepReadError::NoEntity { id });
         };
         let line = slot.line as usize;
         let start = slot.start as usize;
@@ -135,8 +138,10 @@ impl StepFile {
         let mut lex = Lexer::new(src, line);
         let mut names = Vec::new();
         let body = parse_body(&mut lex, true, &mut names)?;
-        if lex.token()? != Tok::Eof {
-            return Err(StepReadError::syntax(line, "Es fehlt ein „;“."));
+        match lex.token()? {
+            Tok::Eof => {}
+            Tok::Close => return Err(StepReadError::syntax(line, TOO_MANY_CLOSE)),
+            _ => return Err(StepReadError::syntax(line, "Es fehlt ein „;“.")),
         }
         let Some(entity) = body.entity else {
             return Err(StepReadError::syntax(line, "Der Eintrag ist leer."));
@@ -175,12 +180,60 @@ impl StepFile {
         Ok(())
     }
 
-    /// Einfache Einträge dieses Typs und zusammengesetzte mit diesem Teil, aufsteigend.
-    pub fn ids_of(&self, name: &str) -> Vec<u64> {
+    /// Einfache Einträge dieses Typs und zusammengesetzte mit diesem Teil, aufsteigend und
+    /// ohne Doppelte.
+    pub fn ids_of(&self, name: &str) -> &[u64] {
         self.by_name
             .get(&name.to_ascii_uppercase())
-            .cloned()
-            .unwrap_or_default()
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Fehler mit der Zeile von `#id` und dem Grund `msg` (etwa aus [`Value`]-Zugriffen); eine
+    /// unbekannte Nummer ergibt `NoEntity`.
+    pub fn fail(&self, id: u64, msg: impl Into<String>) -> StepReadError {
+        match self.line(id) {
+            Some(line) => StepReadError::syntax(line, msg),
+            None => StepReadError::NoEntity { id },
+        }
+    }
+}
+
+/// Weg der gerade verfolgten Verweise (für Folger wie die Geometrie-Auflösung): `enter` vor dem
+/// Auflösen von `#id`, `leave` danach. Ein Eintrag, der schon auf dem Weg liegt, ergibt
+/// `Cycle`; mehr als [`MAX_REF_DEPTH`] Ebenen ergeben einen Fehler statt eines tiefen Stapels.
+#[derive(Clone, Debug, Default)]
+pub struct RefPath {
+    ids: Vec<u64>,
+}
+
+impl RefPath {
+    pub fn new() -> RefPath {
+        RefPath::default()
+    }
+
+    pub fn enter(&mut self, file: &StepFile, id: u64) -> Result<()> {
+        let line = file.line(id).ok_or(StepReadError::NoEntity { id })?;
+        if self.ids.contains(&id) {
+            return Err(StepReadError::Cycle { line, id });
+        }
+        if self.ids.len() >= MAX_REF_DEPTH {
+            return Err(StepReadError::syntax(
+                line,
+                format!(
+                    "Die Verweise sind zu tief verschachtelt (höchstens {MAX_REF_DEPTH} Ebenen)."
+                ),
+            ));
+        }
+        self.ids.push(id);
+        Ok(())
+    }
+
+    pub fn leave(&mut self) {
+        self.ids.pop();
+    }
+
+    pub fn depth(&self) -> usize {
+        self.ids.len()
     }
 }
 
@@ -196,7 +249,6 @@ struct Indexer<'a> {
     limits: &'a ReadLimits,
     progress: &'a Progress,
     kib: u64,
-    reported: u64,
     slots: Vec<Slot>,
     symbols: HashMap<String, usize>,
     ids: Vec<Vec<u64>>,
@@ -212,18 +264,18 @@ impl<'a> Indexer<'a> {
         kib: u64,
     ) -> Result<Index> {
         let mut ix = Indexer {
-            lex: Lexer::new(src, 1),
+            lex: Lexer::new(src, 1).watch(progress, kib),
             src,
             limits,
             progress,
             kib,
-            reported: 0,
             slots: Vec::new(),
             symbols: HashMap::new(),
             ids: Vec::new(),
             names: Vec::new(),
             upper: String::new(),
         };
+        ix.lex.skip_bom();
         ix.magic()?;
         let header = ix.header()?;
         let mut sections = 0usize;
@@ -262,7 +314,11 @@ impl<'a> Indexer<'a> {
     fn magic(&mut self) -> Result<()> {
         let tok = match self.lex.token() {
             Ok(t) => t,
-            Err(e @ (StepReadError::OpenComment { .. } | StepReadError::Truncated { .. })) => {
+            Err(
+                e @ (StepReadError::OpenComment { .. }
+                | StepReadError::Truncated { .. }
+                | StepReadError::Cancelled),
+            ) => {
                 return Err(e);
             }
             Err(_) => return Err(StepReadError::NotStep),
@@ -272,7 +328,14 @@ impl<'a> Indexer<'a> {
         }
         let at_end = |lex: &mut Lexer| matches!(lex.peek_byte(), Ok(None));
         match tok {
-            Tok::Eof if self.src.iter().any(|b| !b.is_ascii_whitespace()) => {
+            Tok::Eof
+                if self
+                    .src
+                    .strip_prefix(BOM)
+                    .unwrap_or(self.src)
+                    .iter()
+                    .any(|b| !b.is_ascii_whitespace()) =>
+            {
                 Err(self.lex.truncated())
             }
             Tok::Keyword { start, end }
@@ -386,6 +449,9 @@ impl<'a> Indexer<'a> {
             match self.lex.token()? {
                 Tok::Semicolon => {}
                 Tok::Eof => return Err(self.lex.truncated()),
+                Tok::Close => {
+                    return Err(StepReadError::syntax(self.lex.tok_line(), TOO_MANY_CLOSE));
+                }
                 _ => {
                     return Err(StepReadError::syntax(
                         self.lex.end_line(),
@@ -422,12 +488,7 @@ impl<'a> Indexer<'a> {
                 self.ids[sym].push(id);
             }
             if (self.slots.len() as u64).is_multiple_of(CHECK_EVERY) {
-                if self.progress.is_cancelled() {
-                    return Err(StepReadError::Cancelled);
-                }
-                let done = (self.lex.pos() as u64 / 1024).min(self.kib);
-                self.progress.advance(done - self.reported.min(done));
-                self.reported = self.reported.max(done);
+                self.lex.checkpoint()?;
             }
         }
     }
@@ -439,23 +500,27 @@ impl<'a> Indexer<'a> {
             .slots
             .windows(2)
             .filter(|w| w[0].id == w[1].id)
-            .map(|w| (w[0].line.max(w[1].line), w[0].id))
+            .map(|w| (w[1].line, w[0].line, w[0].id))
             .min();
-        if let Some((line, id)) = dup {
+        if let Some((line, first, id)) = dup {
             return Err(StepReadError::Duplicate {
                 line: line as usize,
                 id,
+                first: first as usize,
             });
         }
+        // Keine Wachstumsreserve behalten: 24 Bytes je Eintrag im Index.
+        self.slots.shrink_to_fit();
         let mut by_name = HashMap::with_capacity(self.symbols.len());
         for (name, sym) in self.symbols {
             let mut ids = std::mem::take(&mut self.ids[sym]);
             ids.sort_unstable();
             ids.dedup();
+            ids.shrink_to_fit();
             by_name.insert(name, ids);
         }
         self.progress
-            .advance(self.kib - self.reported.min(self.kib));
+            .advance(self.kib.saturating_sub(self.lex.reported()));
         Ok((self.slots, by_name, header))
     }
 }

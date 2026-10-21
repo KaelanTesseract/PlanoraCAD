@@ -86,10 +86,10 @@ impl ReadLimits { pub const DEFAULT: ReadLimits; }   // die vier Konstanten oben
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StepReadError {
     NotStep, Truncated { line: usize }, TooLarge { bytes: u64 }, TooManyEntities,
-    Duplicate { line: usize, id: u64 }, MissingRef { line: usize, id: u64, target: u64 },
+    Duplicate { line: usize, id: u64, first: usize }, MissingRef { line: usize, id: u64, target: u64 },
     Cycle { line: usize, id: u64 }, BadNumber { line: usize, text: String }, TooDeep { line: usize },
     UnexpectedChar { line: usize, c: char }, OpenString { line: usize }, OpenComment { line: usize },
-    Syntax { line: usize, msg: String }, Io { msg: String }, NoBodies, TooManyBodies, Cancelled,
+    Syntax { line: usize, msg: String }, Io { msg: String }, NoBodies, TooManyBodies, Cancelled, NoEntity { id: u64 },
 }
 // read/value.rs
 #[derive(Clone, Debug, PartialEq)]
@@ -125,8 +125,12 @@ impl StepFile {
     pub fn limits(&self) -> &ReadLimits;
     pub fn entity(&self, id: u64) -> Result<Entity, StepReadError>;   // zerlegt jetzt; prüft, dass alle Verweise existieren
     pub fn line(&self, id: u64) -> Option<usize>;
-    pub fn ids_of(&self, name: &str) -> Vec<u64>;    // einfache Einträge dieses Typs und zusammengesetzte mit diesem Teil, aufsteigend
+    pub fn ids_of(&self, name: &str) -> &[u64];      // einfache Einträge dieses Typs und zusammengesetzte mit diesem Teil, aufsteigend, ohne Doppelte (Nacharbeit: Slice statt Vec)
+    pub fn fail(&self, id: u64, msg: impl Into<String>) -> StepReadError;   // Nacharbeit: Syntax mit der Zeile von #id (unbekannt → NoEntity)
 }
+// Nacharbeit Aufgabe 1: Value::measure() (Real/Int/Typed(_, [Zahl])), Entity::arg(name, i) -> Result<&Value, String>,
+// RefPath { new, enter(file, id), leave, depth } erkennt längere Verweiskreise (Cycle) und begrenzt die Tiefe (MAX_REF_DEPTH = 256).
+// entity() zerlegt bei jedem Aufruf neu: Folger speichern Ergebnisse selbst zwischen.
 pub fn read_step_file(path: &std::path::Path, limits: &ReadLimits, progress: &Progress) -> Result<StepFile, StepReadError>;
 ```
 Re-Export in `lib.rs`: `pub use read::error::{MAX_STEP_BODIES, MAX_STEP_ENTITIES, MAX_STEP_FACES, MAX_STEP_FILE_BYTES, ReadLimits, StepReadError}; pub use read::index::{StepFile, StepHeader, read_step_file};`
@@ -139,12 +143,12 @@ Re-Export in `lib.rs`: `pub use read::error::{MAX_STEP_BODIES, MAX_STEP_ENTITIES
 | `Truncated` | `Die Datei ist unvollständig: Sie endet in Zeile {n}, bevor alles gelesen ist.` |
 | `TooLarge` | `Die Datei ist zu groß ({x} MB); erlaubt sind höchstens 200 MB.` (x mit Komma, eine Nachkommastelle, MB = 1024·1024 Bytes) |
 | `TooManyEntities` | `Die Datei hat mehr als 5 Millionen Einträge.` |
-| `Duplicate` | `Zeile {n}: Die Nummer #{id} kommt doppelt vor.` |
+| `Duplicate` | `Zeile {n}: Die Nummer #{id} kommt doppelt vor (zuerst in Zeile {first}).` |
 | `MissingRef` | `Zeile {n}: #{id} verweist auf #{target}, den es nicht gibt.` |
 | `Cycle` | `Zeile {n}: Die Einträge verweisen im Kreis (#{id}).` |
 | `BadNumber` | `Zeile {n}: Die Zahl „{text}“ ist zu groß oder keine gültige Zahl.` (`text` höchstens 32 Zeichen) |
 | `TooDeep` | `Zeile {n}: Die Klammern sind zu tief verschachtelt (höchstens 64 Ebenen).` |
-| `UnexpectedChar` | `Zeile {n}: Unerwartetes Zeichen „{c}“.` |
+| `UnexpectedChar` | `Zeile {n}: Unerwartetes Zeichen „{c}“.` (Steuer- und unsichtbare Zeichen als `U+XXXX`) |
 | `OpenString` | `Zeile {n}: Eine Zeichenkette ist nicht geschlossen.` |
 | `OpenComment` | `Zeile {n}: Ein Kommentar ist nicht geschlossen.` |
 | `Syntax` | `Zeile {n}: {msg}` (`msg` z. B. „Es fehlt ein „;“.“, „Es fehlt eine schließende Klammer.“, „Nach „#{id}“ fehlt „=“.“) |
@@ -152,14 +156,15 @@ Re-Export in `lib.rs`: `pub use read::error::{MAX_STEP_BODIES, MAX_STEP_ENTITIES
 | `NoBodies` | `Die Datei enthält keine Volumenkörper.` |
 | `TooManyBodies` | `Die Datei enthält mehr als 50 Körper.` |
 | `Cancelled` | `Abgebrochen` |
+| `NoEntity` | `Den Eintrag #{id} gibt es nicht.` (nur bei Fehlern des Aufrufers) |
 
-Lexer-Regeln (nachsichtig, wie fremde Schreiber es brauchen): Leerraum `' ' \t \r \n` und Kommentare `/* … */` überall außerhalb von Zeichenketten (auch vor `ISO-10303-21;`); Schlüsselwörter `[A-Za-z_][A-Za-z0-9_-]*` werden in Großbuchstaben verglichen; Zahlen `[+-]?Ziffern[.Ziffern*][(E|e)[+-]?Ziffern]` (mit Punkt oder Exponent → `Real`, sonst `Int`; `Int` über `i64` oder nicht endliches `Real` → `BadNumber`); `#Ziffern` Verweis; `.NAME.` Aufzählung; `$` `*`; Zeichenketten mit `''`, `\\`, `\X2\…\X0\`, `\X4\…\X0\`, `\X\hh` (ein Byte ISO 8859-1), `\S\c` (Zeichen `c` + 128), `\Px\` (wird übergangen); Bytes ≥ 0x80 in Zeichenketten gelten als ISO 8859-1, außerhalb sind sie `UnexpectedChar`. Ein Eintrag ist `#id = TYP(…);` oder zusammengesetzt `#id = ( A(…) B(…) … );` (Reihenfolge der Teile wird nicht geprüft). Kopf: `ISO-10303-21; HEADER; … ENDSEC;`, dann ein oder mehrere `DATA; … ENDSEC;`, dann `END-ISO-10303-21;`; unbekannte Kopfeinträge werden übergangen. Tiefe von Listen und getypten Werten zählt; ab 65 → `TooDeep` (Zerleger mit eigenem Stapel oder Rekursion mit Zähler). Fortschritt: `set_total(kib)`, je 4096 Einträge `advance` und Abbruchprüfung.
+Lexer-Regeln (nachsichtig, wie fremde Schreiber es brauchen): Leerraum `' ' \t \r \n` und Kommentare `/* … */` überall außerhalb von Zeichenketten (auch vor `ISO-10303-21;`); Schlüsselwörter `[A-Za-z_][A-Za-z0-9_-]*` werden in Großbuchstaben verglichen; Zahlen `[+-]?Ziffern[.Ziffern*][(E|e)[+-]?Ziffern]` (mit Punkt oder Exponent → `Real`, sonst `Int`; `Int` über `i64` oder nicht endliches `Real` → `BadNumber`); `#Ziffern` Verweis; `.NAME.` Aufzählung; `$` `*`; Zeichenketten mit `''`, `\\`, `\X2\…\X0\`, `\X4\…\X0\`, `\X\hh` (ein Byte ISO 8859-1), `\S\c` (Zeichen `c` + 128), `\Px\` (wird übergangen); rohe Bytes ≥ 0x80 in Zeichenketten: gültiges UTF-8 als UTF-8, sonst ISO 8859-1 (Nacharbeit), außerhalb sind sie `UnexpectedChar`; eine UTF-8-Kennung (BOM) am Anfang wird übergangen. Ein Eintrag ist `#id = TYP(…);` oder zusammengesetzt `#id = ( A(…) B(…) … );` (Reihenfolge der Teile wird nicht geprüft). Kopf: `ISO-10303-21; HEADER; … ENDSEC;`, dann ein oder mehrere `DATA; … ENDSEC;`, dann `END-ISO-10303-21;`; unbekannte Kopfeinträge werden übergangen. Tiefe von Listen und getypten Werten zählt; ab 65 → `TooDeep` (Zerleger mit eigenem Stapel oder Rekursion mit Zähler). Fortschritt: `set_total(kib)`, je 4096 Einträge und zusätzlich je 1 MiB gelesener Bytes (auch beim ersten Wort) `advance` und Abbruchprüfung.
 
 - [ ] **Step 1: Write the failing tests** in `crates/planora-step/tests/read_parse.rs` (Hilfe `file(data)` baut Kopf + `DATA;` + `data` + Ende wie in `tests/reader.rs`):
   (a) `all_value_kinds_and_complex_entities`: Text mit Kommentar vor dem Kopf, `#3=FOO(#1,$,*,.T.,.UNSPECIFIED.,(1,2,3),LENGTH_MEASURE(1.E-6),'O''Brien \\ \X2\00FC\X0\ \X4\0001F600\X0\ \X\E4 \S\d')` über drei Zeilen umbrochen, Vorwärtsverweis `#1` nach `#3` definiert, zusammengesetzter Eintrag `#4=(BOUNDED_CURVE()B_SPLINE_CURVE(2,(#1,#1,#1),.UNSPECIFIED.,.F.,.F.)…RATIONAL_B_SPLINE_CURVE((1.,0.5,1.))REPRESENTATION_ITEM(''))` → `entity(3)` liefert die Werte in dieser Reihenfolge, Text `"O'Brien \\ ü 😀 ä ä"`; `entity(4).part("RATIONAL_B_SPLINE_CURVE")` = `[List([1.0,0.5,1.0])]`; `ids_of("B_SPLINE_CURVE") == vec![4]`; `line(3) == Some(Zeile von „#3=“)`.
   (b) `lenient_numbers_and_keywords`: `A(1E5, 1.e-3, -0.5, +2, foo_bar())` lädt: `Real(1e5)`, `Real(1e-3)`, `Real(-0.5)`, `Int(2)`, `Typed("FOO_BAR", [])`; `Value::Int(2).real() == Ok(2.0)`.
   (c) `header_is_read`: `schemas == ["AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }"]`, `file_name == "a.step"`, `system` = 6. Feld von `FILE_NAME`; zwei `DATA;`-Abschnitte werden beide gelesen.
-  (d) `hostile_files_give_exact_messages` (Tabelle Text → `to_string()` exakt; mit der Hilfe `file` beginnt der Datenteil in Zeile 8): „hallo“ → `NotStep`; gültige Datei bei jedem Byte, das kein Leerraum ist, abgeschnitten (alle Schnittstellen der Probe aus (a)) → nie Panik, immer `Err`, Meldung beginnt mit „Die Datei ist unvollständig“ oder „Zeile“; `#1=A(1E400);` → `Zeile 8: Die Zahl „1E400“ ist zu groß oder keine gültige Zahl.`; `#1=A(99999999999999999999);` → `BadNumber`; 65-fach geschachtelte Klammern → `TooDeep`, 64-fach lädt; `#1=A();\n#1=B();` → `Zeile 9: Die Nummer #1 kommt doppelt vor.`; `#1=A('offen);` → `OpenString`; `/* offen` → `OpenComment`; `#1=A(ä);` → `UnexpectedChar`; `#1=A(1)` ohne `;` vor `ENDSEC` → `Syntax` mit „Es fehlt ein „;“.“.
+  (d) `hostile_files_give_exact_messages` (Tabelle Text → `to_string()` exakt; mit der Hilfe `file` beginnt der Datenteil in Zeile 8): „hallo“ → `NotStep`; gültige Datei bei jedem Byte, das kein Leerraum ist, abgeschnitten (alle Schnittstellen der Probe aus (a)) → nie Panik, immer `Err`, Meldung beginnt mit „Die Datei ist unvollständig“ oder „Zeile“; `#1=A(1E400);` → `Zeile 8: Die Zahl „1E400“ ist zu groß oder keine gültige Zahl.`; `#1=A(99999999999999999999);` → `BadNumber`; 65-fach geschachtelte Klammern → `TooDeep`, 64-fach lädt; `#1=A();\n#1=B();` → `Zeile 9: Die Nummer #1 kommt doppelt vor (zuerst in Zeile 8).`; `#1=A('offen);` → `OpenString`; `/* offen` → `OpenComment`; `#1=A(ä);` → `UnexpectedChar`; `#1=A(1)` ohne `;` vor `ENDSEC` → `Syntax` mit „Es fehlt ein „;“.“.
   (e) `missing_refs_hit_only_the_entity`: `#1=A(#2);\n#3=B(1);` lädt; `entity(1)` → `MissingRef { line: 8, id: 1, target: 2 }` mit Text `Zeile 8: #1 verweist auf #2, den es nicht gibt.`; `entity(3)` ist `Ok`.
   (f) `limits_are_named_errors`: `ReadLimits { max_entities: 3, ..DEFAULT }` mit 4 Einträgen → `TooManyEntities`; `read_step_file` auf eine Datei von `max_bytes + 1` Bytes (Limit 1000 in der Probe) → `TooLarge { bytes: 1001 }` **ohne** die Datei zu lesen (Datei aus Nullbytes, Fehler kommt vor dem Lesen: Zeitmessung nicht nötig, aber `bytes` muss aus den Metadaten stammen); `TooLarge { bytes: 210_000_000 }.to_string() == "Die Datei ist zu groß (200,3 MB); erlaubt sind höchstens 200 MB."`.
   (g) `cancel_and_progress`: `Progress` vorher abgebrochen, 10 000 Einträge → `Err(Cancelled)`; ohne Abbruch `progress.fraction() == 1.0` nach dem Lesen.

@@ -3,12 +3,18 @@
 //! Nachsichtig, wie fremde Schreiber es brauchen: Leerraum (`' ' \t \r \n`) und Kommentare
 //! `/* … */` überall außerhalb von Zeichenketten; Schlüsselwörter `[A-Za-z_!][A-Za-z0-9_-]*`
 //! in Großbuchstaben; Zahlen `[+-]?Ziffern[.Ziffern*][(E|e)[+-]?Ziffern]` und zusätzlich
-//! `[+-]?.Ziffern…`; Zeilenumbrüche innerhalb von Zeichenketten werden übergangen. Derselbe
+//! `[+-]?.Ziffern…`; Zeilenumbrüche innerhalb von Zeichenketten werden übergangen, rohe Bytes
+//! ab 0x80 in Zeichenketten als UTF-8 gelesen, wenn gültig, sonst als ISO 8859-1. Derselbe
 //! Zerleger prüft im Indexlauf (`build = false`, ohne Werte anzulegen) und baut bei Bedarf die
 //! Werte eines Eintrags (`build = true`).
 
 use super::error::{MAX_STEP_NESTING, StepReadError};
 use super::value::{Entity, Record, Value};
+use planora_exchange::Progress;
+
+/// Abstand der Abbruchprüfungen im Zeichenstrom (1 MiB), damit auch ein riesiger einzelner
+/// Eintrag abgebrochen werden kann.
+pub const CHECK_BYTES: usize = 1024 * 1024;
 
 type Result<T> = std::result::Result<T, StepReadError>;
 
@@ -50,6 +56,10 @@ pub struct Lexer<'a> {
     tok_start: usize,
     tok_line: usize,
     end_line: usize,
+    watch: Option<&'a Progress>,
+    kib_total: u64,
+    reported: u64,
+    next_check: usize,
 }
 
 impl<'a> Lexer<'a> {
@@ -62,6 +72,45 @@ impl<'a> Lexer<'a> {
             tok_start: 0,
             tok_line: line,
             end_line: line,
+            watch: None,
+            kib_total: 0,
+            reported: 0,
+            next_check: 0,
+        }
+    }
+
+    /// Meldet Fortschritt (in KiB von `kib_total`) und prüft den Abbruch: beim ersten Wort
+    /// und danach je [`CHECK_BYTES`] gelesener Bytes.
+    pub fn watch(mut self, progress: &'a Progress, kib_total: u64) -> Lexer<'a> {
+        self.watch = Some(progress);
+        self.kib_total = kib_total;
+        self
+    }
+
+    /// Abbruchprüfung und Fortschritt jetzt.
+    pub fn checkpoint(&mut self) -> Result<()> {
+        let Some(progress) = self.watch else {
+            return Ok(());
+        };
+        if progress.is_cancelled() {
+            return Err(StepReadError::Cancelled);
+        }
+        let done = (self.pos as u64 / 1024).min(self.kib_total);
+        progress.advance(done.saturating_sub(self.reported));
+        self.reported = self.reported.max(done);
+        self.next_check = self.pos.saturating_add(CHECK_BYTES);
+        Ok(())
+    }
+
+    /// Bisher gemeldeter Fortschritt in KiB.
+    pub fn reported(&self) -> u64 {
+        self.reported
+    }
+
+    /// Übergeht eine UTF-8-Kennung (BOM) am Anfang; die Zeile bleibt 1.
+    pub fn skip_bom(&mut self) {
+        if self.pos == 0 && self.src.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            self.pos = 3;
         }
     }
 
@@ -182,6 +231,9 @@ impl<'a> Lexer<'a> {
 
     /// Nächstes Wort.
     pub fn token(&mut self) -> Result<Tok> {
+        if self.watch.is_some() && self.pos >= self.next_check {
+            self.checkpoint()?;
+        }
         self.end_line = self.line;
         self.skip_space()?;
         self.tok_start = self.pos;
@@ -383,7 +435,8 @@ fn hex(bytes: &[u8]) -> Option<u32> {
 /// Entmaskiert den Inhalt einer Zeichenkette (ohne die äußeren Hochkommas); mit `out = None`
 /// wird nur geprüft. `''` → `'`, `\\` → `\`, `\X\hh` (ein Byte ISO 8859-1), `\X2\…\X0\`
 /// (UTF-16, auch Ersatzpaare), `\X4\…\X0\`, `\S\c` (`c` + 128), `\Px\` wird übergangen; ein
-/// anderer einzelner Rückstrich bleibt stehen. Bytes ab 0x80 gelten als ISO 8859-1.
+/// anderer einzelner Rückstrich bleibt stehen. Rohe Bytes ab 0x80: gültiges UTF-8 als UTF-8,
+/// sonst ISO 8859-1. Zeilenumbrüche fallen weg (ISO 10303-21, 3. Ausgabe).
 pub fn decode(s: &[u8], line: usize, mut out: Option<&mut String>) -> Result<()> {
     let bad = || StepReadError::syntax(line, "Eine Maskierung in einer Zeichenkette ist ungültig.");
     let mut push = |c: char| {
@@ -456,8 +509,28 @@ pub fn decode(s: &[u8], line: usize, mut out: Option<&mut String>) -> Result<()>
             }
             b'\\' if at(i + 1, b'P') && s.get(i + 2).is_some() && at(i + 3, b'\\') => i += 4,
             _ => {
-                push(char::from(b));
-                i += 1;
+                // Rohe Bytes: gültiges UTF-8 als UTF-8, sonst ISO 8859-1.
+                let width = match b {
+                    0xC2..=0xDF => 2,
+                    0xE0..=0xEF => 3,
+                    0xF0..=0xF4 => 4,
+                    _ => 1,
+                };
+                let utf8 = (width > 1)
+                    .then(|| s.get(i..i + width))
+                    .flatten()
+                    .and_then(|w| std::str::from_utf8(w).ok())
+                    .and_then(|w| w.chars().next());
+                match utf8 {
+                    Some(c) => {
+                        push(c);
+                        i += width;
+                    }
+                    None => {
+                        push(char::from(b));
+                        i += 1;
+                    }
+                }
             }
         }
     }
@@ -570,8 +643,10 @@ pub fn parse_args(
                 if !may_close {
                     return Err(StepReadError::syntax(line, "Nach „,“ fehlt ein Wert."));
                 }
+                // Der Stapel ist hier nie leer: die äußerste „)“ beendet die Schleife unten;
+                // eine weitere „)“ meldet der Aufrufer („Zu viele „)“.“).
                 let Some(frame) = stack.pop() else {
-                    return Err(StepReadError::syntax(line, "Zu viele „)“."));
+                    return Err(StepReadError::syntax(line, TOO_MANY_CLOSE));
                 };
                 let Some(parent) = stack.last_mut() else {
                     return Ok(frame.items);
@@ -657,6 +732,9 @@ pub fn parse_args(
         may_close = true;
     }
 }
+
+/// Meldung für eine „)“ zu viel.
+pub const TOO_MANY_CLOSE: &str = "Zu viele „)“.";
 
 fn missing_open(lex: &Lexer, (start, end): (usize, usize)) -> StepReadError {
     StepReadError::syntax(

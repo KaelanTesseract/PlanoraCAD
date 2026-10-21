@@ -49,6 +49,16 @@ impl Value {
         }
     }
 
+    /// Zahl, auch als getypter Wert mit genau einer Zahl (`LENGTH_MEASURE(1.E-3)`,
+    /// `PLANE_ANGLE_MEASURE(0.01745)`); den Typnamen prüft der Aufrufer bei Bedarf selbst.
+    pub fn measure(&self) -> Result<f64, String> {
+        match self {
+            Value::Typed(_, args) if args.len() == 1 => args[0].real(),
+            Value::Typed(name, _) => Err(format!("Erwartet wird {name} mit genau einer Zahl.")),
+            other => other.real(),
+        }
+    }
+
     pub fn int(&self) -> Result<i64, String> {
         match self {
             Value::Int(i) => Ok(*i),
@@ -145,6 +155,16 @@ impl Entity {
             .iter()
             .find(|r| r.name.eq_ignore_ascii_case(name))
             .map(|r| r.args.as_slice())
+    }
+
+    /// Parameter `i` (ab 0) des Teils `name`; der Fehler nennt Teil und Stelle (ab 1), die
+    /// Zeile setzt [`crate::read::index::StepFile::fail`] davor.
+    pub fn arg(&self, name: &str, i: usize) -> Result<&Value, String> {
+        let args = self
+            .part(name)
+            .ok_or_else(|| format!("Der Eintrag ist kein {name}."))?;
+        args.get(i)
+            .ok_or_else(|| format!("{name}: Der {}. Parameter fehlt.", i + 1))
     }
 
     /// Typnamen in der Reihenfolge der Datei.
