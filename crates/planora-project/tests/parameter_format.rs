@@ -410,6 +410,27 @@ fn old_files_unchanged() {
 
 // ---- (e) Abgelehnte und milde gelesene Dateien --------------------------------------------
 
+/// Eine Datei mit `naechster_parameter = u64::MAX - 1` lädt; ein neuer Parameter wird dann mit
+/// Meldung abgelehnt, statt einen Stand zu erzeugen, der sich nicht mehr laden ließe.
+#[test]
+fn counter_just_below_max_loads_but_refuses_more() {
+    let mut d = Document::new();
+    d.add_parameter("Breite", "40", Length, "").unwrap();
+    let text = edited(&encode_version(&d.snapshot()).unwrap(), |v| {
+        v["naechster_parameter"] = json!(u64::MAX - 1);
+    });
+    let mut loaded = load(&text).unwrap();
+    assert_eq!(
+        loaded
+            .add_parameter("Tiefe", "20", Length, "")
+            .unwrap_err()
+            .to_string(),
+        "Ungültige Eingabe: Die Parameter-Kennungen sind aufgebraucht"
+    );
+    let again = encode_version(&loaded.snapshot()).unwrap();
+    assert!(load(&again).is_ok(), "gespeichert lädt der Stand wieder");
+}
+
 #[test]
 fn rejected_and_lenient() {
     // Grundlage ohne Formeln: Quader und Skizze, Format 1.

@@ -231,7 +231,7 @@ impl ParameterDialog {
         };
         let edit = ParamEdit {
             name: row.name.trim().to_string(),
-            formula: row.formula.trim().to_string(),
+            formula: table_formula(&row.formula),
             unit,
             comment: row.comment.clone(),
         };
@@ -679,6 +679,21 @@ pub fn open(tab: &mut DocTab) {
     if tab.parameter_dialog.is_none() {
         tab.parameter_dialog = Some(ParameterDialog::new(&tab.state));
     }
+}
+
+/// Formeltext einer Zeile zum Übernehmen: wie getippt (ohne Leerraum am Rand). Eine reine Zahl,
+/// die der Formelbaustein nicht liest („1e3“, „+5“, „5.“, „5,“), wird als Zahl geschrieben
+/// („1000“, „5“): Die Zeile zeigt sie wie jedes Zahlenfeld als gültig an (zuerst die
+/// Zahlenregel), also muss die Übernahme sie auch annehmen.
+fn table_formula(text: &str) -> String {
+    let t = text.trim();
+    if planora_feature::expr::parse(t).is_err()
+        && let Some(FieldInput::Number(v)) = classify(t)
+        && let Ok(n) = planora_feature::expr::value_text(v)
+    {
+        return n;
+    }
+    t.to_string()
 }
 
 /// Stand des Dokuments, aus dem die Zeilen stammen.

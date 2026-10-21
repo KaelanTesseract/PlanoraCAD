@@ -1493,3 +1493,108 @@ fn real_typing_in_the_mesh_fields() {
         formulas(&[(FieldKey::Y, "Breite*2")])
     );
 }
+
+// ---- Schlussreview F1: „fx“ ist kein Halt für Tab ----------------------------------------------
+
+/// Klickt in das Textfeld mit der Formel „Breite“ (rechts von der Bezeichnung „Breite“).
+fn click_breite_field(pane: &mut Pane, draw: &mut dyn FnMut(&mut egui::Ui)) {
+    let seen = pane.settle(draw);
+    let field = seen
+        .iter()
+        .filter(|t| t.text == "Breite")
+        .max_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))
+        .unwrap()
+        .rect;
+    pane.click(field.center(), draw);
+    assert!(
+        pane.ctx.memory(|m| m.focused()).is_some(),
+        "Feld hat die Tastatur"
+    );
+}
+
+/// Bearbeiten-Fenster: Tab von „Breite“ führt in das Feld „Tiefe“ (nicht auf dessen „fx“);
+/// Leertaste und Enter danach verwandeln die Formel nie in eine Zahl.
+#[test]
+fn tab_in_edit_window_skips_fx() {
+    let (mut s, _) = with_width();
+    let f = s
+        .create_box_with(
+            DVec3::new(40.0, 20.0, 10.0),
+            formulas(&[(FieldKey::Breite, "Breite"), (FieldKey::Tiefe, "Breite/2")]),
+        )
+        .unwrap();
+    for key_after in [Key::Space, Key::Enter] {
+        let mut d = FeatureDialog::new(&s, f).unwrap();
+        let mut pane = Pane::new(true, vec2(1100.0, 700.0));
+        let mut draw = |ui: &mut egui::Ui| {
+            d.show(ui.ctx(), &mut s);
+        };
+        click_breite_field(&mut pane, &mut draw);
+        pane.frame(vec![key(Key::Tab, Modifiers::NONE)], &mut draw);
+        pane.frame(vec![key(key_after, Modifiers::NONE)], &mut draw);
+        pane.settle(&mut draw);
+        drop(draw);
+        assert_eq!(d.text("Tiefe"), Some("Breite/2"), "{key_after:?}");
+        assert_eq!(
+            feature_formulas(&s, f)
+                .get(&FieldKey::Tiefe)
+                .map(String::as_str),
+            Some("Breite/2")
+        );
+    }
+    // Tab und Tippen landen im Feld selbst.
+    let mut d = FeatureDialog::new(&s, f).unwrap();
+    let mut pane = Pane::new(true, vec2(1100.0, 700.0));
+    let mut draw = |ui: &mut egui::Ui| {
+        d.show(ui.ctx(), &mut s);
+    };
+    click_breite_field(&mut pane, &mut draw);
+    pane.frame(vec![key(Key::Tab, Modifiers::NONE)], &mut draw);
+    pane.frame(vec![Event::Text("x".into())], &mut draw);
+    pane.settle(&mut draw);
+    drop(draw);
+    assert!(
+        d.text("Tiefe").unwrap().contains('x'),
+        "{:?}",
+        d.text("Tiefe")
+    );
+}
+
+/// Erzeugen-Fenster: Umschalt+Tab aus „Höhe“ (Formel) führt in das Feld „Tiefe“, nicht auf
+/// das „fx“ der Höhe; Getipptes landet dort.
+#[test]
+fn shift_tab_in_create_window_skips_fx() {
+    let mut w = ws();
+    param(
+        &mut w.active_tab_mut().state,
+        "Breite",
+        "40",
+        ParamUnit::Length,
+    );
+    w.observe_history(false);
+    let mut rig = Rig::new(w);
+    let title = "Quader erzeugen";
+    rig.tab().dialog = Some(CreateDialog::Box {
+        x: 11.0,
+        y: 12.0,
+        z: 13.0,
+    });
+    rig.retype(title, "13", "Breite/4");
+    rig.settle();
+    let r = rig.in_window(title, "Breite/4").expect("Höhe");
+    rig.click(r.center());
+    rig.frame(vec![key(Key::Tab, Modifiers::SHIFT)]);
+    rig.frame(vec![key(Key::A, Modifiers::COMMAND)]);
+    rig.frame(vec![Event::Text("17".into())]);
+    rig.settle();
+    let erzeugen = rig.in_window(title, "Erzeugen").expect("Erzeugen");
+    rig.click(erzeugen.center());
+    rig.settle();
+    let tab = rig.tab();
+    let f = tab.state.document.features()[0].id;
+    assert_eq!(box_size(&tab.state, f), DVec3::new(11.0, 17.0, 10.0));
+    assert_eq!(
+        feature_formulas(&tab.state, f),
+        formulas(&[(FieldKey::Hoehe, "Breite/4")])
+    );
+}

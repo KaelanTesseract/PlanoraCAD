@@ -210,10 +210,16 @@ impl<'a> FormulaField<'a> {
             let row = ui.horizontal(|ui| {
                 if result.is_some() {
                     let valid = matches!(result, Some(Ok(_)));
+                    // Nur per Mausklick: kein Halt für Tab und Umschalt+Tab, also auch nie
+                    // Enter oder Leertaste auf einem „fx“ mit der Tastatur (die Formel ginge
+                    // sonst mit einem Tastendruck verloren). Bildschirmleser finden es weiter
+                    // unter seinem Namen.
                     let fx = ui
                         .add_enabled(
                             enabled && valid,
-                            egui::Button::new(egui::RichText::new(FX).italics()).frame(false),
+                            egui::Button::new(egui::RichText::new(FX).italics())
+                                .frame(false)
+                                .sense(egui::Sense::CLICK),
                         )
                         .on_hover_text(FX_HINT)
                         .on_disabled_hover_text(FX_HINT);
@@ -224,7 +230,6 @@ impl<'a> FormulaField<'a> {
                             FX_LABEL,
                         )
                     });
-                    theme::focus_ring(ui, &fx);
                     if fx.clicked()
                         && let Some(Ok(v)) = result
                     {

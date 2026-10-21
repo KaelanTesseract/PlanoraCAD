@@ -1443,6 +1443,7 @@ Weitere Abweichungen im Überblick (Einzelheiten im Plan): Kreis- und Selbstbezu
 - **Hinweispunkte bei großen Sprüngen:** Flächen-Hinweispunkte können bei sehr großen Sprüngen verloren gehen.
 - **Löser startet von der gespeicherten Lösung:** Große Sprünge können eine andere Lösung wählen oder nicht konvergieren (dann Fehlerstatus statt stiller falscher Form).
 - **Netz-Körper:** Position und Maßstab per Tippen; der 3D-Griff entfernt die Formel der gezogenen Achse. Die Drehung hat keine Formel.
+- **Rechengenauigkeit:** Bei Winkeln, die keine runden Vielfachen sind (30°, 45°, 60°, 90° rechnen genau), und bei Potenzen rechnen sin, cos, tan und „^“ mit der Mathematikbibliothek des Betriebssystems; die letzte Stelle des Ergebnisses kann deshalb zwischen Betriebssystemen abweichen (auf demselben Rechner kommt immer genau dasselbe heraus).
 - **Zeichnungsmaße ohne Formeln;** anzeigende Skizzenmaße ohne Formeln; variable Rundung und das Positionsfeld des Körpers ohne Formeln.
 - **Keine Auswahlliste** der Namen im Feld; nur der Hinweis „Namen: …“ (höchstens eine feste Zahl Namen, danach „…“).
 - **Fase 179°:** als Zahl zulässig, scheitert an einer rechtwinkligen Kante im Kernel mit dessen Meldung.
@@ -1501,7 +1502,7 @@ Release-Build, Fenster zuerst 1400 × 900. Jeweils prüfen: Texte lesbar, nichts
 - [ ] 27. Eine Datei mit einer von Hand zerstörten Formel (Textfeld in der Datei ändern, zum Beispiel einen Namen falsch schreiben): sie lädt, der Eintrag im Baum zeigt den Fehler, das Feld hat den gespeicherten Wert. Eine Datei mit doppelten Parameternamen: wird mit deutscher Meldung abgelehnt.
 
 **G. Tasten, Fenstergrößen, Aussehen**
-- [ ] 28. Tipp-Test mit echten Tasten: In ein Formelfeld („Breite / 4“) Zeichen für Zeichen tippen: das Feld behält die Tastatur beim Wechsel von Zahl zu Formel und zurück, nichts geht verloren. Im Fenster „Parameter“ mit Tab durch die Zellen laufen; „Zeile hinzufügen“ setzt die Tastatur in den neuen Namen.
+- [ ] 28. Tipp-Test mit echten Tasten: In ein Formelfeld („Breite / 4“) Zeichen für Zeichen tippen: das Feld behält die Tastatur beim Wechsel von Zahl zu Formel und zurück, nichts geht verloren. Im Fenster „Parameter“ mit Tab durch die Zellen laufen (Tab springt am „fx“ vorbei vom Namen in die Formel; Enter oder Leertaste danach ändern die Formel nicht); „Zeile hinzufügen“ setzt die Tastatur in den neuen Namen.
 - [ ] 29. Strg+Z beim Tippen im Fenster „Parameter“ wirkt auf das Feld, nicht auf das Dokument; nach Escape oder Klick daneben wirkt es auf das Dokument.
 - [ ] 30. Mit gedrückter Maustaste (Position ziehen) bei offenem Fenster „Parameter“ den Wert ändern: Ziehen und Parameteränderung sind zwei Schritte.
 - [ ] 31. Viele Zeilen (über 60) anlegen: das Fenster rollt flott, Tab führt in die Nachbarzeile, ein Eintrag aus dem Bild gerollt wird übernommen.

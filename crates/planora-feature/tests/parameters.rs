@@ -497,6 +497,38 @@ fn build_rejects_invalid_table() {
     assert_eq!(d.parameter_value(ParamId(5)), Some(3.0));
 }
 
+/// Der Zähler erreicht nie `u64::MAX` (den lehnt das Laden ab): Bei `u64::MAX - 1` wird das
+/// Anlegen mit Meldung abgelehnt, nichts ändert sich, der Stand lässt sich weiter laden.
+#[test]
+fn counter_never_reaches_max() {
+    let mut s = Document::new().snapshot();
+    s.parameters = vec![param(1, "a", "1")];
+    s.next_param = u64::MAX - 1;
+    let mut d = Document::from_snapshot(s, 0.05).unwrap();
+    let before = d.snapshot();
+    let e0 = d.edit_count();
+    let e = d
+        .add_parameter("b", "2", ParamUnit::Length, "")
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "Ungültige Eingabe: Die Parameter-Kennungen sind aufgebraucht"
+    );
+    assert!(d.add_parameter_default().is_err());
+    assert!(d.snapshot().same_content(&before));
+    assert_eq!(d.edit_count(), e0);
+    // Löschen und Ändern gehen weiter; der Stand lädt.
+    d.remove_parameter(ParamId(1)).unwrap();
+    assert!(Document::from_snapshot(d.snapshot(), 0.05).is_ok());
+    // Eins darunter geht das Anlegen noch einmal, danach ist Schluss.
+    let mut s = Document::new().snapshot();
+    s.next_param = u64::MAX - 2;
+    let mut d = Document::from_snapshot(s, 0.05).unwrap();
+    assert_eq!(d.add_parameter_default().unwrap(), ParamId(u64::MAX - 2));
+    assert!(Document::from_snapshot(d.snapshot(), 0.05).is_ok());
+    assert!(d.add_parameter_default().is_err());
+}
+
 #[test]
 fn no_op_edit_counts_nothing() {
     let (mut d, b, t) = breite_tiefe();

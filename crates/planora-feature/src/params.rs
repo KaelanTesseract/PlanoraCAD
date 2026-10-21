@@ -179,9 +179,15 @@ impl Document {
         comment: &str,
     ) -> Result<ParamId, FeatureError> {
         let id = ParamId(self.next_param);
-        let next_param = self.next_param.checked_add(1).ok_or_else(|| {
-            FeatureError::InvalidInput("Die Parameter-Kennungen sind aufgebraucht".into())
-        })?;
+        // `u64::MAX` als Zähler lehnt das Laden ab („Der Parameterzähler ist ungültig“); ein
+        // solcher Stand ließe sich nicht mehr zurückladen oder speichern und öffnen.
+        let next_param = self
+            .next_param
+            .checked_add(1)
+            .filter(|n| *n < u64::MAX)
+            .ok_or_else(|| {
+                FeatureError::InvalidInput("Die Parameter-Kennungen sind aufgebraucht".into())
+            })?;
         let mut table = self.parameters.clone();
         table.push(Parameter {
             id,

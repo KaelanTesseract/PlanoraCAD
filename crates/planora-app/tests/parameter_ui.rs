@@ -2129,3 +2129,114 @@ fn fx_name_and_error_count() {
     });
     assert!(find(&seen, "Den Namen „x1“ gibt es nicht. (+ 2 weitere Fehler)").is_some());
 }
+
+// ---- Schlussreview F1, F2, F4 ----------------------------------------------------------------
+
+/// F1: In einer Zeile führt Tab vom Namen direkt in die Formel (nicht auf „fx“); Leertaste
+/// und Enter danach ändern die Formel nie, Umschalt+Tab führt zurück zum Namen.
+#[test]
+fn tab_in_row_skips_fx() {
+    for key_after in [Key::Space, Key::Enter] {
+        let mut s = AppState::new();
+        param(&mut s, "a", "40", ParamUnit::Length);
+        let b = param(&mut s, "b", "a/2", ParamUnit::Length);
+        let mut d = ParameterDialog::new(&s);
+        let mut pane = Pane::new(true);
+        let count = s.document.edit_count();
+        let mut f = |ui: &mut egui::Ui| {
+            assert!(d.show(ui.ctx(), &mut s, false));
+        };
+        let seen = pane.settle(&mut f);
+        let name = find(&seen, "b").unwrap().rect.center();
+        pane.click(name, &mut f);
+        pane.frame(vec![key(Key::Tab, Modifiers::NONE)], &mut f);
+        pane.frame(vec![key(key_after, Modifiers::NONE)], &mut f);
+        pane.settle(&mut f);
+        drop(f);
+        assert_eq!(
+            s.document.parameter(b).unwrap().formula,
+            "a/2",
+            "{key_after:?}"
+        );
+        assert_eq!(s.document.edit_count(), count);
+    }
+    // Tab landet im Formelfeld (Getipptes kommt an), Umschalt+Tab wieder im Namen.
+    let mut s = AppState::new();
+    param(&mut s, "a", "40", ParamUnit::Length);
+    let b = param(&mut s, "b", "a/2", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    let mut f = |ui: &mut egui::Ui| {
+        assert!(d.show(ui.ctx(), &mut s, false));
+    };
+    let seen = pane.settle(&mut f);
+    let name = find(&seen, "b").unwrap().rect.center();
+    pane.click(name, &mut f);
+    pane.frame(vec![key(Key::Tab, Modifiers::NONE)], &mut f);
+    pane.frame(vec![key(Key::End, Modifiers::NONE)], &mut f);
+    pane.frame(vec![text_event('9')], &mut f);
+    pane.frame(vec![key(Key::Tab, Modifiers::SHIFT)], &mut f);
+    pane.frame(vec![key(Key::End, Modifiers::NONE)], &mut f);
+    pane.frame(vec![text_event('z')], &mut f);
+    pane.settle(&mut f);
+    drop(f);
+    assert_eq!(d.text(b, Column::Formula), Some("a/29"));
+    assert_eq!(d.text(b, Column::Name), Some("bz"));
+}
+
+/// F2: Was die Zeile als Zahl zeigt („1e3“, „+5“, „5.“, „5,“), nimmt die Übernahme auch an
+/// und schreibt es als Zahl.
+#[test]
+fn row_numbers_commit_like_they_show() {
+    for (typed, stored) in [
+        ("1e3", "1000"),
+        ("+5", "5"),
+        ("5.", "5"),
+        ("5,", "5"),
+        (" 7 ", "7"),
+    ] {
+        let mut s = AppState::new();
+        let a = param(&mut s, "a", "40", ParamUnit::Length);
+        let mut d = ParameterDialog::new(&s);
+        d.set_text(a, Column::Formula, typed);
+        let mut pane = Pane::new(true);
+        let seen = pane.settle(&mut |ui| {
+            d.show(ui.ctx(), &mut s, false);
+        });
+        assert!(
+            !seen.iter().any(|t| t.color == theme::palette(true).error),
+            "„{typed}“ gilt als gültig"
+        );
+        d.commit(a, &mut s).unwrap();
+        assert_eq!(s.document.parameter(a).unwrap().formula, stored, "{typed}");
+    }
+    // Eine gültige Formel bleibt wie getippt.
+    let mut s = AppState::new();
+    let a = param(&mut s, "a", "40", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    d.set_text(a, Column::Formula, "0.50");
+    d.commit(a, &mut s).unwrap();
+    assert_eq!(s.document.parameter(a).unwrap().formula, "0.50");
+}
+
+/// F4: Die Wertanzeige „= …“ einer Zeile folgt dem getippten Entwurf, die Spalte „Wert“ zeigt
+/// weiter das Dokument.
+#[test]
+fn row_preview_follows_the_draft() {
+    let mut s = AppState::new();
+    param(&mut s, "a", "10", ParamUnit::Length);
+    let b = param(&mut s, "b", "a*2", ParamUnit::Length);
+    let mut d = ParameterDialog::new(&s);
+    let mut pane = Pane::new(true);
+    let seen = pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    assert!(find(&seen, "= 20,00 mm").is_some());
+    d.set_text(b, Column::Formula, "a*3");
+    let seen = pane.settle(&mut |ui| {
+        d.show(ui.ctx(), &mut s, false);
+    });
+    assert!(find(&seen, "= 30,00 mm").is_some(), "Vorschau des Entwurfs");
+    assert!(find(&seen, "= 20,00 mm").is_none());
+    assert!(find(&seen, "20,00 mm").is_some(), "Spalte Wert: Dokument");
+}
