@@ -10,12 +10,12 @@ use planora_kernel::{AnalyticKernel, Curve, Face, FaceTag, Kernel, Solid, Surfac
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DMat4, DVec3, Frame, PI, TAU, Tolerance};
 use planora_mesh::{Mesh, TessellationOptions, mass_properties, tessellate};
-use planora_step::read::geom::{Skip, SurfaceGeom};
+use planora_step::read::geom::{Resolver, Skip, SurfaceGeom};
 use planora_step::read::seam::drop_degenerate;
 use planora_step::read::spline::{finish_cone, revolution};
 use planora_step::read::topo::{
     BuildOptions, BuiltSolid, RawBody, RawEdge, RawFace, RawHalfEdge, STEP_FACE_ROLE, build_solid,
-    derive_patch_sensed, derive_patch_with_tol, read_raw,
+    derive_patch_sensed, read_raw,
 };
 use planora_step::read::units::{Units, context_units};
 use planora_step::{ReadLimits, StepFile};
@@ -351,6 +351,8 @@ fn drop_degenerate_joins_corners_and_keeps_full_circles() {
                 role: "STEP-Fläche 1".into(),
             },
             line: 9,
+            pole_marks: Vec::new(),
+            side_guessed: false,
         }],
         shells: Vec::new(),
     };
@@ -724,10 +726,13 @@ fn pole_jump_rule_for_the_patch() {
     let mut lp = meridian(0.25 * PI, -FRAC_PI_2, FRAC_PI_2);
     lp.extend(meridian(0.75 * PI, FRAC_PI_2, -FRAC_PI_2));
     lp.push(DVec3::new(5e-4, 0.0, (4.0f64 - 25e-8).sqrt()));
-    let p = derive_patch_with_tol(&sphere, &[lp.clone()], 1e-3).expect("grob");
+    let p = derive_patch_sensed(&sphere, false, &[lp.clone()], 1e-3).expect("grob");
     assert!((p.u0 - 0.25 * PI).abs() <= 1e-12, "{p:?}");
-    let p = derive_patch_with_tol(&sphere, &[lp], 1e-6).expect("genau");
-    assert!(p.u0.abs() <= 1e-12, "{p:?}");
+    let r = derive_patch_sensed(&sphere, false, &[lp], 1e-6);
+    assert!(
+        !matches!(r, Ok(p) if (p.u0 - 0.25 * PI).abs() <= 1e-12),
+        "{r:?}"
+    );
 }
 
 // --- Drehflächen: Trimmung, Toleranzen, Kegelspitze ---
@@ -882,5 +887,309 @@ fn pointed_cone_takes_its_reference_away_from_the_apex() {
         assert!((radius - 10.0).abs() <= 1e-9, "Radius {radius}");
         assert!(frame.origin.distance(DVec3::ZERO) <= 1e-9, "{frame:?}");
         assert!((slope - 0.5).abs() <= 1e-12);
+    }
+}
+
+// --- Nacharbeit 1 (Review Aufgabe 6) ---
+
+#[test]
+fn flipped_seamless_cap_is_never_the_other_cap() {
+    let text = data("seamless.step");
+    // Richtig geschrieben: gelesen (Kappe nach unten, Haube nach oben, Schale mit Südpol).
+    assert_volume(&body(&text, "Kappe"), 144.0 * PI, "Kappe");
+    let s = body(&text, "Haube");
+    assert_volume(&s, 144.0 * PI, "Haube");
+    // Die Naht der Haube läuft von der Ecke bei 45 Grad zum Nordpol.
+    let dome = face_n(&s, 2);
+    let seam = dome
+        .outer
+        .half_edges
+        .iter()
+        .map(|he| &s.edges[he.edge])
+        .find(|e| e.start != e.end)
+        .expect("Naht");
+    let ends = [seam.curve.point(seam.t0), seam.curve.point(seam.t1)];
+    let corner = DVec3::new(80.0 + 6.0 * (PI / 4.0).cos(), 6.0 * (PI / 4.0).sin(), 0.0);
+    assert!(ends.iter().any(|p| p.distance(corner) <= 1e-9), "{ends:?}");
+    assert!(
+        ends.iter()
+            .any(|p| p.distance(DVec3::new(80.0, 0.0, 6.0)) <= 1e-9),
+        "{ends:?}"
+    );
+    assert_volume(&body(&text, "Schale"), 144.0 * PI, "Schale");
+    // Ein falsches `same_sense` der Kugelfläche ergäbe still die Gegenkappe: abgelehnt.
+    for (name, from, to) in [
+        (
+            "Kappe",
+            "#562=ADVANCED_FACE('',(#572),#552,.T.);",
+            "#562=ADVANCED_FACE('',(#572),#552,.F.);",
+        ),
+        (
+            "Haube",
+            "#662=ADVANCED_FACE('',(#672),#652,.T.);",
+            "#662=ADVANCED_FACE('',(#672),#652,.F.);",
+        ),
+    ] {
+        let why = skip_of(&swap(&text, from, to), name);
+        assert_eq!(
+            why,
+            "Die Seite der Fläche „STEP-Fläche 2“ ist nicht eindeutig: Sie hat weder Naht noch \
+             Pol, und der Körper müsste umgedreht werden.",
+            "{name}"
+        );
+    }
+    // Mit `VERTEX_LOOP` am Südpol: Die Naht muss dorthin; derselbe Bitfehler → verdreht.
+    let why = skip_of(
+        &swap(
+            &text,
+            "#762=ADVANCED_FACE('',(#772,#773),#752,.T.);",
+            "#762=ADVANCED_FACE('',(#772,#773),#752,.F.);",
+        ),
+        "Schale",
+    );
+    assert_eq!(
+        why,
+        "Die Fläche „STEP-Fläche 2“ ist verdreht: Rand und Außenseite passen nicht zusammen."
+    );
+    // Die ganze Schale umgekehrt (beide Flächen und beide Ränder) mit dem Pol bleibt richtig.
+    let mut inv = text.clone();
+    for (from, to) in [
+        (
+            "#761=ADVANCED_FACE('',(#771),#751,.T.);",
+            "#761=ADVANCED_FACE('',(#771),#751,.F.);",
+        ),
+        (
+            "#762=ADVANCED_FACE('',(#772,#773),#752,.T.);",
+            "#762=ADVANCED_FACE('',(#772,#773),#752,.F.);",
+        ),
+        (
+            "#771=FACE_OUTER_BOUND('',#781,.T.);",
+            "#771=FACE_OUTER_BOUND('',#781,.F.);",
+        ),
+        (
+            "#772=FACE_BOUND('',#782,.T.);",
+            "#772=FACE_BOUND('',#782,.F.);",
+        ),
+    ] {
+        inv = swap(&inv, from, to);
+    }
+    let s = body(&inv, "Schale");
+    assert_volume(&s, 144.0 * PI, "Schale umgekehrt");
+    let zmin = s
+        .vertices
+        .iter()
+        .map(|(_, v)| v.point.z)
+        .fold(f64::INFINITY, f64::min);
+    assert!((zmin + 6.0).abs() <= 1e-9, "Südpol {zmin}");
+}
+
+#[test]
+fn seamless_freeform_cap_is_named_by_p9() {
+    // Ellipsoidboden als Drehfläche nur mit dem Äquator (kein Meridian): P9.
+    let text = revolved_dome(
+        "#700=TRIMMED_CURVE('',#703,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.5707963267949)),\
+         .T.,.PARAMETER.);\n#703=ELLIPSE('',#83,10.,5.);\n",
+        ".T.",
+    );
+    let text = swap(
+        &text,
+        "#143=EDGE_LOOP('',(#156,#157,#158,#159));",
+        "#143=EDGE_LOOP('',(#156));",
+    );
+    assert_eq!(
+        skip_of(&text, "Kuppel"),
+        "Fläche vom Typ Freiformfläche ohne Naht wird noch nicht unterstützt."
+    );
+}
+
+/// Text mit den Punkten der Kennungen `ids` um `shift` verschoben.
+fn shifted(text: &str, ids: std::ops::RangeInclusive<u64>, shift: DVec3) -> String {
+    text.lines()
+        .map(|l| {
+            let Some((head, rest)) = l.split_once("=CARTESIAN_POINT('',(") else {
+                return l.to_string();
+            };
+            let id: u64 = head.trim_start_matches('#').parse().unwrap_or(0);
+            if !ids.contains(&id) {
+                return l.to_string();
+            }
+            let nums: Vec<f64> = rest
+                .trim_end_matches("));")
+                .split(',')
+                .map(|x| x.parse().expect("Zahl"))
+                .collect();
+            let p = DVec3::new(nums[0], nums[1], nums[2]) + shift;
+            format!(
+                "{head}=CARTESIAN_POINT('',({:?},{:?},{:?}));",
+                p.x, p.y, p.z
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn broken_shells_are_named() {
+    let text = data("void_box.step");
+    // Hohlraum ragt aus dem Quader (Kugel um (10; 10; 18) r 5, Quader bis 20).
+    let out = shifted(&text, 44..=47, DVec3::new(0.0, 0.0, 8.0));
+    assert_eq!(
+        skip_of(&out, "Hohlquader"),
+        "Ein Hohlraum liegt nicht ganz im Körper."
+    );
+    // Zweites Stück im ersten (2 … 8 im Würfel 0 … 10), auch innen-außen geschrieben.
+    let inner = text
+        .lines()
+        .map(|l| {
+            let Some((head, rest)) = l.split_once("=CARTESIAN_POINT('',(") else {
+                return l.to_string();
+            };
+            let id: u64 = head.trim_start_matches('#').parse().unwrap_or(0);
+            if !(3001..=3008).contains(&id) {
+                return l.to_string();
+            }
+            let map = |x: &str| match x {
+                "20." | "0." => "2.",
+                "30." | "10." => "8.",
+                other => panic!("{other}"),
+            };
+            let c: Vec<&str> = rest.trim_end_matches("));").split(',').map(map).collect();
+            format!("{head}=CARTESIAN_POINT('',({}));", c.join(","))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let why = "Zwei Stücke des Körpers überschneiden sich.";
+    assert_eq!(skip_of(&inner, "Zwei Quader"), why);
+    let inside_out = swap(
+        &inner,
+        "#31=MANIFOLD_SOLID_BREP('Stück 2',#3140);",
+        "#31=MANIFOLD_SOLID_BREP('Stück 2',#3141);\n#3141=ORIENTED_CLOSED_SHELL('',*,#3140,.F.);",
+    );
+    assert_eq!(skip_of(&inside_out, "Zwei Quader"), why);
+    // Überlappende Stücke (zweiter Würfel bei x 5 … 15).
+    let overlap = shifted(&text, 3001..=3008, DVec3::new(-15.0, 0.0, 0.0));
+    assert_eq!(skip_of(&overlap, "Zwei Quader"), why);
+    // Berührende Stücke (gemeinsame Seitenfläche bei x = 10) bleiben erlaubt.
+    let touch = shifted(&text, 3001..=3008, DVec3::new(-10.0, 0.0, 0.0));
+    assert!((volume(&body(&touch, "Zwei Quader")) - 2000.0).abs() <= 1e-9);
+}
+
+#[test]
+fn torus_band_without_seam_is_named_by_p9() {
+    // Torusfläche zwischen zwei Meridiankreisen (windet sich in v): P9, nicht „schließt sich
+    // nicht“ (das wäre ein falsch laufender Rand).
+    let band = "#20=MANIFOLD_SOLID_BREP('Ring',#21);\n#21=CLOSED_SHELL('',(#30));\n\
+        #30=ADVANCED_FACE('',(#31,#32),#40,.T.);\n\
+        #31=FACE_BOUND('',#33,.T.);\n#32=FACE_BOUND('',#34,.T.);\n\
+        #33=EDGE_LOOP('',(#35));\n#34=EDGE_LOOP('',(#36));\n\
+        #35=ORIENTED_EDGE('',*,*,#37,.F.);\n#36=ORIENTED_EDGE('',*,*,#38,.T.);\n\
+        #37=EDGE_CURVE('',#51,#51,#61,.T.);\n#38=EDGE_CURVE('',#52,#52,#62,.T.);\n\
+        #51=VERTEX_POINT('',#71);\n#52=VERTEX_POINT('',#72);\n\
+        #71=CARTESIAN_POINT('',(13.,0.,0.));\n#72=CARTESIAN_POINT('',(0.,13.,0.));\n\
+        #61=CIRCLE('',#81,3.);\n#62=CIRCLE('',#82,3.);\n\
+        #81=AXIS2_PLACEMENT_3D('',#73,#93,#91);\n#82=AXIS2_PLACEMENT_3D('',#74,#94,#92);\n\
+        #73=CARTESIAN_POINT('',(10.,0.,0.));\n#74=CARTESIAN_POINT('',(0.,10.,0.));\n\
+        #91=DIRECTION('',(1.,0.,0.));\n#92=DIRECTION('',(0.,1.,0.));\n\
+        #93=DIRECTION('',(0.,-1.,0.));\n#94=DIRECTION('',(1.,0.,0.));\n\
+        #40=TOROIDAL_SURFACE('',#83,10.,3.);\n#83=AXIS2_PLACEMENT_3D('',#75,$,$);\n\
+        #75=CARTESIAN_POINT('',(0.,0.,0.));\n";
+    let text = format!(
+        "ISO-10303-21;\n/* Selbst geschrieben für die Tests von PlanoraCAD (GPL-3.0-only). */\n\
+         HEADER;\nFILE_DESCRIPTION((''),'2;1');\n\
+         FILE_NAME('x.step','2026-10-21T00:00:00',(''),(''),'','','');\n\
+         FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n\
+         #9=ADVANCED_BREP_SHAPE_REPRESENTATION('Ring',(#20),#105);\n\
+         #100=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));\n\
+         #105=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNIT_ASSIGNED_CONTEXT((#100))\
+         REPRESENTATION_CONTEXT('',''));\n{band}ENDSEC;\nEND-ISO-10303-21;\n"
+    );
+    assert_eq!(
+        skip_of(&text, "Ring"),
+        "Fläche vom Typ Torus ohne Naht wird noch nicht unterstützt."
+    );
+}
+
+#[test]
+fn coarse_pole_corners_are_pulled_before_short_edges_go() {
+    // Kuppel mit zwei Ecken am Pol, 1,2e-3 auseinander (je 6e-4 neben dem Pol), dazwischen die
+    // Kante „Länge null“; Genauigkeit 1e-3: erst auf den Pol ziehen, dann ist die Kante kurz.
+    let text = data("sphere_vertex_loop.step");
+    let text = swap(
+        &text,
+        "#197=EDGE_CURVE('',#73,#73,#95,.T.);",
+        "#197=EDGE_CURVE('',#73,#74,#95,.T.);\n#74=VERTEX_POINT('',#66);\n\
+         #66=CARTESIAN_POINT('',(-6.E-4,0.,20.));",
+    );
+    let text = swap(
+        &text,
+        "#65=CARTESIAN_POINT('',(0.,0.,20.));",
+        "#65=CARTESIAN_POINT('',(6.E-4,0.,20.));",
+    );
+    let text = swap(&text, "LENGTH_MEASURE(1.E-06)", "LENGTH_MEASURE(1.E-3)");
+    let s = body(&text, "Kuppel");
+    assert_eq!((s.edges.len(), s.vertices.len()), (4, 3));
+    assert_volume(&s, 5000.0 * PI / 3.0, "Kuppel grob");
+}
+
+/// Rationaler Halbkreis r 10 in der xz-Ebene um (0; 0; 10), von (10; 0; 10) über den Pol nach
+/// (−10; 0; 10), Parameter 0 … 1 (Knoten 0,5 am Pol), als Eintrag #704.
+const SEMICIRCLE: &str = "#704=(BOUNDED_CURVE()B_SPLINE_CURVE(2,(#64,#705,#65,#706,#702),\
+    .CIRCULAR_ARC.,.F.,.F.)B_SPLINE_CURVE_WITH_KNOTS((3,2,3),(0.,0.5,1.),.UNSPECIFIED.)CURVE()\
+    GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_CURVE((1.,0.7071067811865476,1.,\
+    0.7071067811865476,1.))REPRESENTATION_ITEM(''));\n\
+    #705=CARTESIAN_POINT('',(10.,0.,20.));\n#706=CARTESIAN_POINT('',(-10.,0.,20.));\n";
+
+#[test]
+fn trim_paths_are_exact() {
+    let want = 5000.0 * PI / 3.0;
+    // Freiformprofil, Sinn .F.: vom Ende (1, bei x < 0) zurück zum Pol (0,5). Die Spiegelung
+    // des Bereichs bei der Umkehrung muss stimmen, sonst wird die Hälfte bei x > 0 gemessen.
+    let text = revolved_dome(
+        &format!(
+            "#700=TRIMMED_CURVE('',#704,(PARAMETER_VALUE(1.)),(PARAMETER_VALUE(0.5)),.F.,\
+             .PARAMETER.);\n{SEMICIRCLE}"
+        ),
+        ".T.",
+    );
+    assert_volume(&body(&text, "Kuppel"), want, "Freiform .F.");
+    // Dieselbe Hälfte vorwärts vom Pol (Knoten 0,5) zum Ende der Kurve (Rand des Bereichs).
+    let text = revolved_dome(
+        &format!(
+            "#700=TRIMMED_CURVE('',#704,(PARAMETER_VALUE(0.5)),(PARAMETER_VALUE(1.)),.T.,\
+             .PARAMETER.);\n{SEMICIRCLE}"
+        ),
+        ".F.",
+    );
+    assert_volume(&body(&text, "Kuppel"), want, "Freiform .T.");
+    // Punkte und (falsche) Parameter mit `.CARTESIAN.`: Die Punkte gelten.
+    let text = revolved_dome(
+        "#700=TRIMMED_CURVE('',#94,(#65,PARAMETER_VALUE(0.)),(#702,PARAMETER_VALUE(0.5)),.T.,\
+         .CARTESIAN.);\n",
+        ".F.",
+    );
+    assert_volume(&body(&text, "Kuppel"), want, "CARTESIAN");
+}
+
+#[test]
+fn trim_over_a_full_turn_is_the_whole_curve() {
+    // Gleiche Grenzen bei einem Kreis: ein voller Umlauf (Torus, nicht „keine Ausdehnung“).
+    let text = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\n\
+         FILE_NAME('x.step','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\n\
+         ENDSEC;\nDATA;\n\
+         #1=SURFACE_OF_REVOLUTION('',#2,#3);\n\
+         #2=TRIMMED_CURVE('',#4,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(0.)),.T.,.PARAMETER.);\n\
+         #3=AXIS1_PLACEMENT('',#5,#6);\n#4=CIRCLE('',#7,3.);\n\
+         #5=CARTESIAN_POINT('',(0.,0.,0.));\n#6=DIRECTION('',(0.,0.,1.));\n\
+         #7=AXIS2_PLACEMENT_3D('',#8,#9,#10);\n#8=CARTESIAN_POINT('',(10.,0.,0.));\n\
+         #9=DIRECTION('',(0.,-1.,0.));\n#10=DIRECTION('',(1.,0.,0.));\n\
+         ENDSEC;\nEND-ISO-10303-21;\n";
+    let file = parse(text);
+    let mut res = Resolver::new(&file, Units::MM);
+    match res.surface(1) {
+        Ok(SurfaceGeom::Ready {
+            surface: Surface::Torus { major, minor, .. },
+            ..
+        }) => assert_eq!((major, minor), (10.0, 3.0)),
+        other => panic!("Torus erwartet: {other:?}"),
     }
 }

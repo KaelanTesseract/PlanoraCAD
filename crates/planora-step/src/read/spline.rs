@@ -599,7 +599,7 @@ pub fn revolution(
 /// innerhalb dieses Bereichs (ein Kreis oder eine Ellipse mit Mitte auf der Achse überdeckt die
 /// Drehfläche zweimal, mit entgegengesetzter Normale), als NURBS gedreht und auf das Kreuzen der
 /// Achse geprüft wird nur dieser Bereich.
-pub fn revolution_trimmed(
+pub(crate) fn revolution_trimmed(
     curve: &Curve,
     range: Option<(f64, f64)>,
     origin: DVec3,
@@ -818,7 +818,7 @@ fn crosses_axis(c: &NurbsCurve, origin: DVec3, axis: DVec3, weld_tol: f64) -> bo
 /// Bereich (an Probestellen geprüft).
 // Die negierten Vergleiche lehnen absichtlich auch NaN ab.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-pub fn nurbs_between(c: &NurbsCurve, a: f64, b: f64) -> Result<NurbsCurve, Skip> {
+pub(crate) fn nurbs_between(c: &NurbsCurve, a: f64, b: f64) -> Result<NurbsCurve, Skip> {
     let why = |m: String| {
         skip(format!(
             "Eine Freiformkurve lässt sich nicht übernehmen: {m}"

@@ -55,7 +55,7 @@ const PERIOD_SLACK: f64 = 1e-9;
 /// reichen, bevor er gekappt wird (bei 1e-3 mm Genauigkeit genügt das ab etwa 0,3 mm Radius).
 const MAX_PERIOD_SLACK: f64 = 1e-3;
 
-/// Schritt (Anteil der Periode) für die Länge je Parametereinheit in [`derive_patch_with_tol`].
+/// Schritt (Anteil der Periode) für die Länge je Parametereinheit in [`derive_patch_sensed`].
 const SPEED_STEP: f64 = 1e-6;
 
 /// Abstand (relativ), unter dem `v` auf einem Pol der Fläche liegt (dort ist `u` beliebig);
@@ -117,6 +117,12 @@ pub struct RawFace {
     pub patch: Option<UvRect>,
     pub tag: FaceTag,
     pub line: usize,
+    /// Pole, die die Datei als `VERTEX_LOOP` nennt (Punkte); eine eingefügte Naht muss zu einem
+    /// davon laufen.
+    pub pole_marks: Vec<DVec3>,
+    /// Die Seite der Fläche folgt nur aus dem Umlaufsinn ihres Rands (Kugelkappe ohne Naht und
+    /// ohne Pol); ein solcher Körper darf nicht umgedreht werden.
+    pub side_guessed: bool,
 }
 
 /// Schale der Rohform: Indizes in [`RawBody::faces`]; `void`: Hohlraum (`BREP_WITH_VOIDS`).
@@ -124,6 +130,8 @@ pub struct RawFace {
 pub struct RawShell {
     pub faces: Vec<usize>,
     pub void: bool,
+    /// Bei Hohlräumen: Index der äußeren Schale, in der sie liegen.
+    pub owner: Option<usize>,
 }
 
 /// Rohform eines Körpers: Ecken, Kanten, Flächen, Schalen (Aufgaben 6 und 7 arbeiten darauf).
@@ -433,14 +441,17 @@ impl<'f> TopoReader<'f> {
 
     /// Ein Rand (`FACE_BOUND`/`FACE_OUTER_BOUND`) als Schleife des Kernels; `reverse` kehrt ihn
     /// zusätzlich um (umgekehrte Schale). Liefert auch, ob er als äußerer Rand markiert ist.
-    /// Ein `VERTEX_LOOP` (Pol, Kegelspitze) ist kein Rand für den Kernel: `None`.
-    fn bound(&mut self, id: u64, reverse: bool) -> Result<Option<(Vec<RawHalfEdge>, bool)>, Skip> {
+    /// Ein `VERTEX_LOOP` (Pol, Kegelspitze) ist kein Rand für den Kernel: sein Punkt als Pol.
+    fn bound(&mut self, id: u64, reverse: bool) -> Result<Bound, Skip> {
         let (e, kind) = self.expect(id, &["FACE_OUTER_BOUND", "FACE_BOUND"])?;
         let lp = self.reference(id, &e, kind, 1)?;
         let along = self.flag(id, &e, kind, 2)?;
         let le = self.file.entity(lp)?;
         if le.is("VERTEX_LOOP") {
-            return Ok(None);
+            let v = self.reference(lp, &le, "VERTEX_LOOP", 1)?;
+            let (ve, kind) = self.expect(v, &["VERTEX_POINT"])?;
+            let p = self.reference(v, &ve, kind, 1)?;
+            return Ok(Bound::Pole(self.res.point(p)?));
         }
         if !le.is("EDGE_LOOP") {
             return Err(self.fail(
@@ -465,7 +476,7 @@ impl<'f> TopoReader<'f> {
                 he.forward = !he.forward;
             }
         }
-        Ok(Some((hes, kind == "FACE_OUTER_BOUND")))
+        Ok(Bound::Loop(hes, kind == "FACE_OUTER_BOUND"))
     }
 
     /// Eine Fläche mit der Marke `n` (ab 1); `reverse`: Schale umgekehrt. Äußerer Rand und
@@ -479,9 +490,14 @@ impl<'f> TopoReader<'f> {
         let geom = self.res.surface(geometry)?;
         let mut loops = Vec::with_capacity(bounds.len());
         let mut marked_outer: Option<usize> = None;
+        let mut pole_marks = Vec::new();
         for b in &bounds {
-            let Some((lp, outer)) = self.bound(*b, reverse)? else {
-                continue;
+            let (lp, outer) = match self.bound(*b, reverse)? {
+                Bound::Loop(lp, outer) => (lp, outer),
+                Bound::Pole(p) => {
+                    pole_marks.push(p);
+                    continue;
+                }
             };
             if outer {
                 if marked_outer.is_some() {
@@ -524,8 +540,16 @@ impl<'f> TopoReader<'f> {
                 role: format!("{STEP_FACE_ROLE} {n}"),
             },
             line: self.file.line(id).unwrap_or(0),
+            pole_marks,
+            side_guessed: false,
         })
     }
+}
+
+/// Ein Rand einer Fläche: Schleife (mit Kennzeichen „äußerer Rand“) oder Pol (`VERTEX_LOOP`).
+enum Bound {
+    Loop(Vec<RawHalfEdge>, bool),
+    Pole(DVec3),
 }
 
 /// Stellt die Fläche `i` fertig: äußerer Rand (gekennzeichnet; sonst bei Ebenen der mit der
@@ -533,7 +557,7 @@ impl<'f> TopoReader<'f> {
 /// Außennormale läuft) als erste Schleife, Parameterbereich gekrümmter Flächen aus allen
 /// Schleifen (äußerer Rand zuerst, Pole nach der Regel des Kernels). Ohne Schleife: „Eine Fläche
 /// hat keinen Rand.“
-pub fn finish_face(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
+pub(crate) fn finish_face(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
     let f = &raw.faces[i];
     if f.loops.is_empty() {
         return Err(at_line(f.line, "Eine Fläche hat keinen Rand."));
@@ -644,44 +668,26 @@ pub fn edge_params(
 }
 
 /// Parameterbereich einer gekrümmten Fläche aus den Punkten ihrer Schleifen (je Schleife in
-/// Laufrichtung, dicht genug, dass zwei Nachbarn nie eine halbe Periode auseinanderliegen).
-/// Jeder Punkt wird mit `project_near` (Startwert: der vorige) zurückgerechnet; periodische
-/// Richtungen werden entlang der Schleife fortlaufend entfaltet (Sprung > halbe Periode →
-/// ±Periode). An Polen (Kugelpol, Kegelspitze) zählt nur `v`. Ergebnis ist die Hülle, in jeder
-/// periodischen Richtung um Vielfache der Periode an den Anfang des Bereichs geschoben (analytisch
-/// `[0, 2π)`); mehr als eine Periode oder keine Ausdehnung ist kein Bereich. Genaue Dateien
-/// (wie [`derive_patch_with_tol`] mit Toleranz 0).
-pub fn derive_patch(surface: &Surface, loops: &[Vec<DVec3>]) -> Result<UvRect, Skip> {
-    derive_patch_with_tol(surface, loops, 0.0)
-}
-
-/// Wie [`derive_patch`], für Dateien mit der Genauigkeit `tol_mm`: Liegen die Ecken einer Naht
-/// bis zu `tol_mm` neben ihr, überspannt der Mantel eine Periode plus einen kleinen Winkel. Bis
-/// `2 · tol_mm / Geschwindigkeit` (kleinste Länge je Parameter an den Randpunkten, Punkte näher
-/// als `10 · tol_mm` an einem Pol ausgenommen; mindestens [`PERIOD_SLACK`], höchstens
-/// [`MAX_PERIOD_SLACK`] der Periode) über eine Periode wird der Bereich auf genau eine Periode
-/// gekappt; darüber ist er kein Bereich. Ein Randpunkt liegt auf einem Pol, wenn sein `v` es tut
-/// (relativ [`POLE_REL`], wie im Kernel) oder er höchstens `tol_mm` vom Polpunkt entfernt ist.
-pub fn derive_patch_with_tol(
-    surface: &Surface,
-    loops: &[Vec<DVec3>],
-    tol_mm: f64,
-) -> Result<UvRect, Skip> {
-    derive_patch_impl(surface, None, loops, tol_mm)
-}
-
-/// Wie [`derive_patch_with_tol`] mit dem Sinn der Fläche: Läuft eine Schleife durch einen Pol,
-/// folgt `u` dort der Regel des Kernels (`boolean::points_to_uv`: Sprung über den Pol in die
-/// Richtung, auf der die Fläche liegt, bis zum Wert des nächsten Randpunkts). So bekommt auch eine
-/// Kugel nur aus einer Naht von Pol zu Pol ihren vollen Umlauf und ein Ausschnitt mit Pol im Rand
-/// seinen richtigen Bereich. Punkte, die nur geometrisch auf dem Pol liegen, zählen als Polpunkt.
+/// Laufrichtung, dicht genug, dass zwei Nachbarn nie eine halbe Periode auseinanderliegen; der
+/// äußere Rand zuerst) und dem Sinn der Fläche. Jeder Punkt wird mit `project_near` (Startwert:
+/// der vorige) zurückgerechnet; periodische Richtungen werden entlang der Schleife fortlaufend
+/// entfaltet (Sprung > halbe Periode → ±Periode), jede weitere Schleife beginnt neben dem schon
+/// bestimmten Bereich. Läuft eine Schleife durch einen Pol (Kugelpol, Kegelspitze; `v` am Pol
+/// relativ [`POLE_REL`] wie im Kernel oder der Punkt höchstens `tol_mm` vom Polpunkt), folgt `u`
+/// der Regel des Kernels (`boolean::points_to_uv`: Sprung über den Pol in die Richtung, auf der
+/// die Fläche liegt). Ergebnis ist die Hülle, in jeder periodischen Richtung um Vielfache der
+/// Periode an den Anfang des Bereichs geschoben (analytisch `[0, 2π)`). Für Dateien mit der
+/// Genauigkeit `tol_mm`: Bis `2 · tol_mm / Geschwindigkeit` (kleinste Länge je Parameter an den
+/// Randpunkten, Punkte näher als `10 · tol_mm` an einem Pol ausgenommen; mindestens
+/// [`PERIOD_SLACK`], höchstens [`MAX_PERIOD_SLACK`] der Periode) über eine Periode wird der
+/// Bereich auf genau eine Periode gekappt; darüber oder ohne Ausdehnung ist er kein Bereich.
 pub fn derive_patch_sensed(
     surface: &Surface,
     same_sense: bool,
     loops: &[Vec<DVec3>],
     tol_mm: f64,
 ) -> Result<UvRect, Skip> {
-    derive_patch_impl(surface, Some(same_sense), loops, tol_mm)
+    derive_patch_impl(surface, same_sense, loops, tol_mm)
 }
 
 /// Randpunkte im Parameterraum: `u`, `v` (entfaltet), ob `u` für den Bereich zählt und ob der
@@ -692,7 +698,7 @@ type Track = Vec<(f64, f64, bool, bool)>;
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn derive_patch_impl(
     surface: &Surface,
-    sense: Option<bool>,
+    sense: bool,
     loops: &[Vec<DVec3>],
     tol_mm: f64,
 ) -> Result<UvRect, Skip> {
@@ -758,13 +764,11 @@ fn derive_patch_impl(
             }
             track.push((x[0], x[1], !at_pole, at_pole));
         }
-        if let Some(s) = sense
-            && track.iter().any(|t| t.3)
-        {
+        if track.iter().any(|t| t.3) {
             // Durch einen Pol: `u` nach der Regel des Kernels (Polpunkte genau auf den Pol).
             through_pole = true;
             let pts: Vec<DVec3> = lp.iter().map(|p| geo_pole(*p).unwrap_or(*p)).collect();
-            track = points_to_uv(surface, s, &pts)
+            track = points_to_uv(surface, sense, &pts)
                 .into_iter()
                 .map(|q| (q.x, q.y, true, param_pole(q.y)))
                 .collect();
@@ -808,15 +812,12 @@ fn derive_patch_impl(
             }
         }
     }
-    // Ohne Ausdehnung (etwa eine Kugel nur aus einer Naht von Pol zu Pol, deren Polsprung ohne
-    // den Sinn der Fläche unbestimmt ist) ist es kein Bereich.
+    // Ohne Ausdehnung ist es kein Bereich.
     let flat = |k: usize| !(hi[k] - lo[k] > EMPTY_REL * (1.0 + lo[k].abs()));
     if flat(0) || flat(1) {
-        return Err(Skip(if flat(0) && !poles.is_empty() && sense.is_none() {
-            "Eine Fläche, deren Rand durch einen Pol läuft, wird noch nicht unterstützt.".into()
-        } else {
-            "Der Parameterbereich einer Fläche lässt sich nicht bestimmen.".into()
-        }));
+        return Err(Skip(
+            "Der Parameterbereich einer Fläche lässt sich nicht bestimmen.".into(),
+        ));
     }
     for k in 0..2 {
         if let Some(per) = periods[k] {
@@ -869,17 +870,18 @@ pub fn read_raw(
     if items.is_empty() {
         return Err(Skip("Der Körper hat keine Flächen.".into()));
     }
-    // Schalen: (Flächen, umgekehrt, Hohlraum).
-    let mut shells: Vec<(Vec<u64>, bool, bool)> = Vec::new();
+    // Schalen: (Flächen, umgekehrt, äußere Schale des Hohlraums).
+    let mut shells: Vec<(Vec<u64>, bool, Option<usize>)> = Vec::new();
     for &item in items {
         let (e, kind) = r.expect(item, &["MANIFOLD_SOLID_BREP", "BREP_WITH_VOIDS"])?;
         let outer = r.reference(item, &e, kind, 1)?;
         let (faces, reverse) = r.shell(outer)?;
-        shells.push((faces, reverse, false));
+        let owner = shells.len();
+        shells.push((faces, reverse, None));
         if kind == "BREP_WITH_VOIDS" {
             for void in r.refs(item, &e, kind, 2)? {
                 let (faces, reverse) = r.shell(void)?;
-                shells.push((faces, reverse, true));
+                shells.push((faces, reverse, Some(owner)));
             }
         }
     }
@@ -893,10 +895,11 @@ pub fn read_raw(
             grouped(MAX_STEP_FACES)
         )));
     }
-    for (faces, reverse, void) in shells {
+    for (faces, reverse, owner) in shells {
         let mut shell = RawShell {
             faces: Vec::with_capacity(faces.len()),
-            void,
+            void: owner.is_some(),
+            owner,
         };
         for f in faces {
             if progress.is_cancelled() {
@@ -1051,9 +1054,12 @@ fn turn_inside_out(solid: &mut Solid, ids: &[Id<Face>]) {
     }
 }
 
+/// Dreiecke je Schale (Reihenfolge von `solid.shells`).
+type ShellTriangles = Vec<Vec<[DVec3; 3]>>;
+
 /// Vorzeichenbehaftetes Volumen je Schale aus einem groben Netz (Reihenfolge von
-/// `solid.shells`).
-fn shell_volumes(solid: &Solid) -> Result<Vec<f64>, Skip> {
+/// `solid.shells`) und die Dreiecke je Schale.
+fn shell_volumes(solid: &Solid) -> Result<(Vec<f64>, ShellTriangles), Skip> {
     let mesh = tessellate(
         solid,
         &TessellationOptions {
@@ -1085,34 +1091,126 @@ fn shell_volumes(solid: &Solid) -> Result<Vec<f64>, Skip> {
             (lo.min(*p), hi.max(*p))
         });
     let o = 0.5 * (lo + hi);
-    let mut volumes = vec![0.0; solid.shells.len().max(1)];
+    let shells = solid.shells.len().max(1);
+    let mut volumes = vec![0.0; shells];
+    let mut triangles: ShellTriangles = vec![Vec::new(); shells];
     for r in &mesh.face_ranges {
         let k = shell_of[r.face.index()];
         let start = r.first_index as usize;
         let end = start + r.index_count as usize;
         for t in mesh.indices[start..end].as_chunks::<3>().0 {
-            let [a, b, c] = t.map(|i| mesh.positions[i as usize] - o);
+            let t = t.map(|i| mesh.positions[i as usize]);
+            let [a, b, c] = t.map(|p| p - o);
             volumes[k] += a.dot(b.cross(c)) / 6.0;
+            triangles[k].push(t);
         }
     }
     if volumes.iter().any(|v| !v.is_finite() || *v == 0.0) {
         return Err(Skip("Der Körper hat kein Volumen.".into()));
     }
-    Ok(volumes)
+    Ok((volumes, triangles))
 }
 
-/// Außenrichtung je Schale über ihr Volumen: äußere Schalen positiv, Hohlräume (`voids`, in der
-/// Reihenfolge von `solid.shells`) negativ; sonst wird die Schale umgedreht.
-fn orient_shells(solid: &mut Solid, voids: &[bool]) -> Result<(), Skip> {
-    let volumes = shell_volumes(solid)?;
-    for (k, v) in volumes.into_iter().enumerate() {
-        let void = voids.get(k).copied().unwrap_or(false);
-        if (v > 0.0) == void {
-            let ids = solid.shells[k].faces.clone();
-            turn_inside_out(solid, &ids);
+/// Raumwinkel des Dreiecks `t` von `q` aus (Van Oosterom/Strackee).
+fn solid_angle(q: DVec3, t: &[DVec3; 3]) -> f64 {
+    let [a, b, c] = t.map(|p| p - q);
+    let (la, lb, lc) = (a.length(), b.length(), c.length());
+    let num = a.dot(b.cross(c));
+    let den = la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
+    2.0 * num.atan2(den)
+}
+
+/// Betrag der Umlaufzahl der Dreiecke um `q`: innen 1, außen 0, auf dem Rand etwa ½.
+fn winding_number(q: DVec3, triangles: &[[DVec3; 3]]) -> f64 {
+    (triangles.iter().map(|t| solid_angle(q, t)).sum::<f64>() / (4.0 * std::f64::consts::PI)).abs()
+}
+
+/// Höchstens so viele Probepunkte (Schwerpunkte von Dreiecken) je Schale.
+const SHELL_PROBES: usize = 32;
+
+/// Schwerpunkte gleichmäßig verteilter Dreiecke der Schale, ein kleines Stück ins Innere der
+/// Schale gerückt (`volume`: ihr Volumen mit Vorzeichen, gibt an, wohin die Dreiecke zeigen), damit
+/// ein Punkt nie genau auf einer berührenden Schale liegt.
+fn probes(triangles: &[[DVec3; 3]], volume: f64) -> Vec<DVec3> {
+    let (lo, hi) = triangles
+        .iter()
+        .flatten()
+        .fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), p| {
+            (lo.min(*p), hi.max(*p))
+        });
+    let inset = 1e-6 * (1.0 + lo.distance(hi));
+    let step = triangles.len().div_ceil(SHELL_PROBES).max(1);
+    triangles
+        .iter()
+        .step_by(step)
+        .filter_map(|t| {
+            let n = (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero();
+            (n != DVec3::ZERO).then(|| (t[0] + t[1] + t[2]) / 3.0 - n * (inset * volume.signum()))
+        })
+        .collect()
+}
+
+/// Hohlräume liegen ganz in ihrer äußeren Schale, Stücke überschneiden sich nicht (je Schale
+/// Probepunkte gegen die Umlaufzahl der anderen; Berühren ist erlaubt). Billig, nicht vollständig.
+fn check_shells(
+    triangles: &ShellTriangles,
+    volumes: &[f64],
+    owners: &[Option<usize>],
+) -> Result<(), Skip> {
+    let probes: Vec<Vec<DVec3>> = triangles
+        .iter()
+        .zip(volumes)
+        .map(|(t, v)| probes(t, *v))
+        .collect();
+    for (k, owner) in owners.iter().enumerate() {
+        if let Some(o) = owner
+            && probes[k]
+                .iter()
+                .any(|q| winding_number(*q, &triangles[*o]) < 0.25)
+        {
+            return Err(Skip("Ein Hohlraum liegt nicht ganz im Körper.".into()));
+        }
+    }
+    let lumps: Vec<usize> = (0..owners.len()).filter(|k| owners[*k].is_none()).collect();
+    for &a in &lumps {
+        for &b in &lumps {
+            if a != b
+                && probes[a]
+                    .iter()
+                    .any(|q| winding_number(*q, &triangles[b]) > 0.75)
+            {
+                return Err(Skip("Zwei Stücke des Körpers überschneiden sich.".into()));
+            }
         }
     }
     Ok(())
+}
+
+/// Außenrichtung je Schale über ihr Volumen: äußere Schalen positiv, Hohlräume (Eigentümer in
+/// `owners`, Reihenfolge von `solid.shells`) negativ; sonst wird die Schale umgedreht – außer sie
+/// enthält eine Fläche, deren Seite nur geraten ist (`guessed`, je Fläche): Dann ist der Körper
+/// zweideutig. Danach Lage der Schalen zueinander ([`check_shells`]).
+fn orient_shells(
+    solid: &mut Solid,
+    owners: &[Option<usize>],
+    guessed: &[bool],
+) -> Result<(), Skip> {
+    let (volumes, triangles) = shell_volumes(solid)?;
+    for (k, &v) in volumes.iter().enumerate() {
+        let void = owners.get(k).is_some_and(Option::is_some);
+        if (v > 0.0) == void {
+            let ids = solid.shells[k].faces.clone();
+            if let Some(f) = ids.iter().find(|f| guessed.get(f.index()) == Some(&true)) {
+                return Err(Skip(format!(
+                    "Die Seite der Fläche {} ist nicht eindeutig: Sie hat weder Naht noch Pol, und \
+                     der Körper müsste umgedreht werden.",
+                    face_name(solid, f.index())
+                )));
+            }
+            turn_inside_out(solid, &ids);
+        }
+    }
+    check_shells(&triangles, &volumes, owners)
 }
 
 /// Jede Kante liegt mit ihrer Mitte auf ihren Flächen, jede Ecke auf ihren Kanten.
@@ -1186,13 +1284,14 @@ pub fn build_solid(
         finish_face(&mut raw, i, tol)?;
     }
     raw.compact();
-    let voids: Vec<bool> = raw.shells.iter().map(|s| s.void).collect();
+    let owners: Vec<Option<usize>> = raw.shells.iter().map(|s| s.owner).collect();
+    let guessed: Vec<bool> = raw.faces.iter().map(|f| f.side_guessed).collect();
     let mut solid = raw.to_solid();
     // Erst prüfen, dann vernetzen: Das Netz für das Volumen setzt gültige Topologie voraus. Die
     // Prüfung am Ende (nach dem Umdrehen) verlangt der Ablauf des Plans; sie ist billig.
     validate(&solid).map_err(|e| invalid(&solid, &e))?;
     check_face_loops(&solid)?;
-    orient_shells(&mut solid, &voids)?;
+    orient_shells(&mut solid, &owners, &guessed)?;
     check_edges(&solid, tol)?;
     validate(&solid).map_err(|e| invalid(&solid, &e))?;
     Ok(BuiltSolid {

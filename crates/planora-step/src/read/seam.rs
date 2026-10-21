@@ -33,7 +33,7 @@ fn linear() -> f64 {
 }
 
 /// Länge der Kurve einer Kante über [`LENGTH_SECTIONS`] Abschnitte.
-pub fn edge_length(e: &RawEdge) -> f64 {
+pub(crate) fn edge_length(e: &RawEdge) -> f64 {
     let n = LENGTH_SECTIONS;
     (0..n)
         .map(|k| {
@@ -77,7 +77,7 @@ fn param_near(c: &Curve, p: DVec3, old: f64) -> f64 {
 /// den Pol; die Kanten an ihr bekommen dort ihren Parameter neu.
 // Der negierte Vergleich lehnt absichtlich auch NaN ab.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-pub fn snap_poles(raw: &mut RawBody, tol: f64) {
+pub(crate) fn snap_poles(raw: &mut RawBody, tol: f64) {
     if !(tol > 0.0) {
         return;
     }
@@ -187,7 +187,7 @@ pub fn drop_degenerate(raw: &mut RawBody, tol: f64) -> Result<(), Skip> {
 /// seiner Fläche herankommt, genau durch ihn (`v` wie im Kernel auf 1e-7 am Pol)? Sonst ließe sich
 /// der Rand dort nicht in den Parameterraum abbilden (der Kernel sähe keinen Pol, `u` wäre
 /// zufällig) und der Körper käme falsch an.
-pub fn check_poles(raw: &RawBody, tol: f64) -> Result<(), Skip> {
+pub(crate) fn check_poles(raw: &RawBody, tol: f64) -> Result<(), Skip> {
     let near = tol.max(linear());
     for f in &raw.faces {
         let poles = pole_points(&f.surface);
@@ -227,12 +227,17 @@ fn kind_name(s: &Surface) -> &'static str {
 /// aufgerollt: Anfang und Ende liegen eine Periode auseinander). Nur bei Zylinder, Kegel und
 /// Kugel wird eingefügt:
 /// - zwei Kreisschleifen (die untere läuft in Richtung der Außennormale gegen den Uhrzeigersinn,
-///   die obere andersherum): Naht entlang der Mantellinie (Kugel: Meridian) beim Winkel `u_s` der
-///   ersten Ecke der ersten Kreisschleife; hat die andere Schleife dort keine Ecke, wird ihre
-///   Kante bei `u_s` geteilt (in allen Schleifen, die sie benutzen);
+///   die obere andersherum): Naht entlang der Mantellinie (Kugel: Meridian) beim Winkel `u_s`;
 /// - eine Kreisschleife und auf ihrer Seite ein Pol (Kugelkappe, Kegel mit Spitze): Naht vom
-///   Kreis zum Pol, der Pol wird eine Ecke;
+///   Kreis zum Pol, der Pol wird eine Ecke. Nennt die Datei Pole (`VERTEX_LOOP`), muss es einer
+///   davon sein (sonst „verdreht“); ohne sie ist die Seite einer Kugelkappe nur geraten
+///   (`side_guessed`, siehe `build_solid`);
 /// - Kugel ohne Rand: Naht im Meridian bei `u = 0` von Pol zu Pol.
+///
+/// `u_s` hält Abstand zu allem anderen Rand der Fläche (`free_angle`: Löcher, Mantellinien
+/// von Aussparungen, Kreuzungen); die Kreisschleifen werden dort von der Mantellinie geschnitten
+/// (`vertex_on`) und, wo keine Ecke liegt, geteilt (in allen Schleifen, die die Kante
+/// benutzen). Gibt es keinen solchen Winkel: „Der Fläche „…“ lässt sich keine Naht hinzufügen.“
 ///
 /// Die neue Schleife hat die Form des Kernels `[Kreis, Naht, Kreis, Naht rückwärts]` (ohne den
 /// fehlenden Kreis an einem Pol) und wird der äußere Rand. Passen die Ränder, die sich um die
@@ -261,8 +266,11 @@ fn winding(poly: &[DVec2], k: usize, period: Option<f64>) -> i64 {
 fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
     let f = &raw.faces[i];
     let surface = f.surface.clone();
+    let role = f.tag.role.clone();
+    let line = f.line;
+    let same_sense = f.same_sense;
     let periods = [surface.u_period(), surface.v_period()];
-    let no_rim = || at_line(f.line, "Eine Fläche hat keinen Rand.");
+    let no_rim = || at_line(line, "Eine Fläche hat keinen Rand.");
     let no_seam = || {
         Skip(format!(
             "Fläche vom Typ {} ohne Naht wird noch nicht unterstützt.",
@@ -273,8 +281,12 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
     // ein Kreis falsch herum): derselbe Grund wie bei der Prüfung der Schleifen.
     let not_closing = || {
         Skip(format!(
-            "Der Rand der Fläche „{}“ schließt sich nicht: Eine Kante läuft falsch herum.",
-            f.tag.role
+            "Der Rand der Fläche „{role}“ schließt sich nicht: Eine Kante läuft falsch herum."
+        ))
+    };
+    let twisted = || {
+        Skip(format!(
+            "Die Fläche „{role}“ ist verdreht: Rand und Außenseite passen nicht zusammen."
         ))
     };
     if periods.iter().all(Option::is_none) {
@@ -287,7 +299,7 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
     let polys: Vec<Vec<DVec2>> = f
         .loops
         .iter()
-        .map(|lp| points_to_uv(&surface, f.same_sense, &raw.loop_points(lp)))
+        .map(|lp| points_to_uv(&surface, same_sense, &raw.loop_points(lp)))
         .collect();
     let windings: Vec<[i64; 2]> = polys
         .iter()
@@ -300,20 +312,17 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
         return Ok(());
     }
     // Ein Rand ohne Naht ist ein Kreis um die Achse; einer, der durch einen Pol läuft und sich
-    // trotzdem windet, erreicht den anderen Pol nicht.
-    // Schließt er sich mit dem umgekehrten Sinn der Fläche, liegt es am Sinn.
+    // trotzdem windet, erreicht den anderen Pol nicht. Schließt er sich mit dem umgekehrten Sinn
+    // der Fläche, liegt es am Sinn.
     let poles = surface.pole_vs();
     for &k in &winding_loops {
         if polys[k]
             .iter()
             .any(|q| poles.iter().any(|pv| at_pole(q.y, *pv)))
         {
-            let other = points_to_uv(&surface, !f.same_sense, &raw.loop_points(&f.loops[k]));
+            let other = points_to_uv(&surface, !same_sense, &raw.loop_points(&f.loops[k]));
             return Err(if winding(&other, 0, periods[0]) == 0 {
-                Skip(format!(
-                    "Die Fläche „{}“ ist verdreht: Rand und Außenseite passen nicht zusammen.",
-                    f.tag.role
-                ))
+                twisted()
             } else {
                 not_closing()
             });
@@ -329,16 +338,20 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
         let sum = windings
             .iter()
             .fold([0, 0], |s, w| [s[0] + w[0], s[1] + w[1]]);
-        // Gegenläufige Ränder um die Achse: eine heile Fläche ohne Naht. Sonst ein Fehler in
-        // den Rändern.
-        return Err(if sum == [0, 0] {
+        // Gegenläufige Ränder um die Achse, oder ein Rand um die Achse und ein Pol (Kappe einer
+        // Freiform-Drehfläche): eine heile Fläche ohne Naht. Sonst ein Fehler in den Rändern.
+        let cap = winding_loops.len() == 1 && sum[1] == 0 && !poles.is_empty();
+        return Err(if sum == [0, 0] || cap {
             no_seam()
         } else {
             not_closing()
         });
     }
-    let s: i64 = if f.same_sense { 1 } else { -1 };
-    let line = f.line;
+    let s: i64 = if same_sense { 1 } else { -1 };
+    let marks = f.pole_marks.clone();
+    let holes: Vec<usize> = (0..f.loops.len())
+        .filter(|k| !winding_loops.contains(k))
+        .collect();
     match winding_loops[..] {
         [] => match surface {
             Surface::Sphere { .. } => {
@@ -354,24 +367,34 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
             // Fläche auf der linken Seite des Rands: oberhalb, wenn er um die Außennormale
             // gegen den Uhrzeigersinn läuft.
             let above = windings[a][0] * s > 0;
-            let va = raw.he_start(f.loops[a][0]);
-            let (u_s, v_a) = surface.project(raw.vertices[va]);
-            let pole = surface
-                .pole_vs()
-                .into_iter()
-                .filter(|&pv| if above { pv > v_a } else { pv < v_a })
-                .min_by(|x, y| (x - v_a).abs().total_cmp(&(y - v_a).abs()));
+            let level = polys[a].iter().map(|q| q.y).sum::<f64>() / polys[a].len() as f64;
+            let pole = poles
+                .iter()
+                .copied()
+                .filter(|&pv| if above { pv > level } else { pv < level })
+                .min_by(|x, y| (x - level).abs().total_cmp(&(y - level).abs()));
             let Some(pv) = pole else {
                 return Err(not_closing());
             };
-            let Some(rim) = rotated(raw, &f.loops[a], va) else {
-                return Err(not_closing());
+            // Nennt die Datei Pole (`VERTEX_LOOP`), muss die Naht zu einem davon laufen; sonst
+            // ist die Seite nur aus dem Umlaufsinn gewählt (bei der Kugel zweideutig).
+            let pole_point = surface.point(0.0, pv);
+            let near = tol.max(linear());
+            if !marks.is_empty() && !marks.iter().any(|m| m.distance(pole_point) <= near) {
+                return Err(twisted());
+            }
+            let guessed = marks.is_empty() && matches!(surface, Surface::Sphere { .. });
+            let Some(u_s) = free_angle(raw, i, &[a], &holes) else {
+                return Err(no_room(&role));
             };
+            let va = vertex_on(raw, i, a, u_s, tol).ok_or_else(|| no_room(&role))?;
+            let rim = rotated(raw, &raw.faces[i].loops[a], va).ok_or_else(|| no_room(&role))?;
             let vp = push_vertex(raw, surface.point(u_s, pv));
             let seam = push_seam(raw, &surface, u_s, va, vp, line)?;
             let mut lp = rim;
             lp.extend([fwd(seam), bwd(seam)]);
             set_seam_loop(raw, i, &[a], lp);
+            raw.faces[i].side_guessed = guessed;
             Ok(())
         }
         [a, b] => {
@@ -387,17 +410,16 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
             if windings[lower][0] != s || windings[upper][0] != -s {
                 return Err(not_closing());
             }
-            let va = raw.he_start(f.loops[a][0]);
-            let (u_s, _) = surface.project(raw.vertices[va]);
-            let vb = vertex_at(raw, i, b, u_s, tol)?;
+            let Some(u_s) = free_angle(raw, i, &[a, b], &holes) else {
+                return Err(no_room(&role));
+            };
+            let va = vertex_on(raw, i, a, u_s, tol).ok_or_else(|| no_room(&role))?;
+            let vb = vertex_on(raw, i, b, u_s, tol).ok_or_else(|| no_room(&role))?;
             let f = &raw.faces[i];
             let (Some(rim_a), Some(rim_b)) =
                 (rotated(raw, &f.loops[a], va), rotated(raw, &f.loops[b], vb))
             else {
-                return Err(Skip(format!(
-                    "Der Fläche „{}“ lässt sich keine Naht hinzufügen.",
-                    f.tag.role
-                )));
+                return Err(no_room(&role));
             };
             let seam = push_seam(raw, &surface, u_s, va, vb, line)?;
             let mut lp = rim_a;
@@ -409,6 +431,193 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
         }
         _ => Err(not_closing()),
     }
+}
+
+fn no_room(role: &str) -> Skip {
+    Skip(format!(
+        "Der Fläche „{role}“ lässt sich keine Naht hinzufügen."
+    ))
+}
+
+/// Abstand (Anteil der Periode), den die Naht von anderem Rand der Fläche halten muss.
+const SEAM_CLEARANCE: f64 = 1e-6;
+
+/// Punkte einer Schleife mit ihrer Stelle (Index der Halbkante, Anteil entlang ihr) und `u`
+/// entlang der Schleife fortlaufend entfaltet (Schleifen ohne Pol).
+fn u_track(raw: &RawBody, surface: &Surface, lp: &[RawHalfEdge]) -> Vec<(usize, f64, f64)> {
+    let n = EDGE_STEPS;
+    let per = surface.u_period().unwrap_or(f64::INFINITY);
+    let mut out: Vec<(usize, f64, f64)> = Vec::with_capacity(lp.len() * (n + 1));
+    for (j, he) in lp.iter().enumerate() {
+        for k in 0..=n {
+            let s = k as f64 / n as f64;
+            let mut u = surface.project(he_point(raw, *he, s)).0;
+            if let Some(&(_, _, prev)) = out.last() {
+                u += per * ((prev - u) / per).round();
+            }
+            out.push((j, s, u));
+        }
+    }
+    out
+}
+
+/// Zwischenpunkte je Halbkante für [`u_track`].
+const EDGE_STEPS: usize = 24;
+
+/// Punkt der Halbkante beim Anteil `s` (0 am Anfang, 1 am Ende).
+fn he_point(raw: &RawBody, he: RawHalfEdge, s: f64) -> DVec3 {
+    let e = &raw.edges[he.edge];
+    let s = if he.forward { s } else { 1.0 - s };
+    e.curve.point(e.t0 + (e.t1 - e.t0) * s)
+}
+
+/// Abschnitte der Spur, die `u = t` (bis auf Vielfache der Periode) kreuzen, halboffen gezählt.
+fn crossings(track: &[(usize, f64, f64)], t: f64, per: f64) -> Vec<(usize, f64)> {
+    let mut out = Vec::new();
+    for w in track.windows(2) {
+        let (a, b) = (w[0].2, w[1].2);
+        let k = ((a.min(b) - t) / per).ceil();
+        let mut x = t + k * per;
+        while x <= a.max(b) {
+            if (a <= x && x < b) || (b <= x && x < a) {
+                out.push((w[0].0, x));
+            }
+            x += per;
+        }
+    }
+    out
+}
+
+/// Ein Winkel für die Naht, der Abstand zu allem anderen Rand der Fläche hält: Jede der
+/// Kreisschleifen `rims` kreuzt die Mantellinie dort genau einmal, und nicht entlang einer
+/// Kante (Mantellinien von Aussparungen und Fenstern); kein Loch (`holes`) reicht an ihn heran.
+/// Zuerst die Winkel der Ecken der ersten Kreisschleife (so verbindet die Naht bei den meisten
+/// Exporten vorhandene Ecken), dann die Mitten der größten freien Lücken.
+fn free_angle(raw: &RawBody, i: usize, rims: &[usize], holes: &[usize]) -> Option<f64> {
+    let f = &raw.faces[i];
+    let surface = &f.surface;
+    let per = surface.u_period()?;
+    let margin = SEAM_CLEARANCE * per;
+    let tracks: Vec<Vec<(usize, f64, f64)>> = rims
+        .iter()
+        .map(|&k| u_track(raw, surface, &f.loops[k]))
+        .collect();
+    // Bereiche der Löcher in u (nach der Regel des Kernels aufgerollt, auch über Pole).
+    let hole_ranges: Vec<(f64, f64)> = holes
+        .iter()
+        .map(|&k| {
+            let poly = points_to_uv(surface, f.same_sense, &raw.loop_points(&f.loops[k]));
+            poly.iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), q| {
+                    (lo.min(q.x), hi.max(q.x))
+                })
+        })
+        .collect();
+    let wrap = |x: f64| x.rem_euclid(per);
+    let near = |x: f64, t: f64| {
+        let d = wrap(x - t);
+        d.min(per - d) < margin
+    };
+    let clear = |t: f64| {
+        for &(lo, hi) in &hole_ranges {
+            if hi - lo >= per - 2.0 * margin {
+                return false;
+            }
+            if wrap(t - (lo - margin)) <= hi - lo + 2.0 * margin {
+                return false;
+            }
+        }
+        tracks.iter().all(|tr| {
+            crossings(tr, t, per).len() == 1
+                && !tr.windows(2).any(|w| {
+                    near(w[0].2, t)
+                        && near(w[1].2, t)
+                        && (w[0].2 - w[1].2).abs() < margin
+                        && w[0].0 == w[1].0
+                })
+        })
+    };
+    // Kandidaten: Ecken der ersten Kreisschleife, dann Lückenmitten.
+    let mut candidates: Vec<f64> = tracks[0]
+        .iter()
+        .filter(|(_, s, _)| *s == 0.0)
+        .map(|t| wrap(t.2))
+        .collect();
+    // Grenzen alles Belegten (Ecken aller Schleifen, Ränder der Löcher); die Mitten der Lücken
+    // dazwischen, größte zuerst. Mitten in einem Loch fallen bei der Prüfung heraus.
+    let mut marks: Vec<f64> = hole_ranges
+        .iter()
+        .flat_map(|&(lo, hi)| [wrap(lo), wrap(hi)])
+        .collect();
+    for lp in &f.loops {
+        for he in lp {
+            marks.push(wrap(surface.project(raw.vertices[raw.he_start(*he)]).0));
+        }
+    }
+    marks.sort_by(f64::total_cmp);
+    let mut gaps: Vec<(f64, f64)> = (0..marks.len())
+        .map(|k| {
+            let a = marks[k];
+            let b = if k + 1 < marks.len() {
+                marks[k + 1]
+            } else {
+                marks[0] + per
+            };
+            (b - a, 0.5 * (a + b))
+        })
+        .collect();
+    gaps.sort_by(|a, b| b.0.total_cmp(&a.0));
+    candidates.extend(gaps.iter().map(|g| wrap(g.1)));
+    candidates.into_iter().find(|&t| clear(t))
+}
+
+/// Ecke der Schleife `k` der Fläche `i` beim Winkel `u_s`: Die Mantellinie schneidet die
+/// Schleife dort (genau einmal, siehe [`free_angle`]); liegt der Schnittpunkt höchstens `tol`
+/// neben einer Ecke, ist es diese, sonst wird die Kante dort geteilt.
+fn vertex_on(raw: &mut RawBody, i: usize, k: usize, u_s: f64, tol: f64) -> Option<usize> {
+    let surface = raw.faces[i].surface.clone();
+    let per = surface.u_period()?;
+    let lp = raw.faces[i].loops[k].clone();
+    let track = u_track(raw, &surface, &lp);
+    let &[(j, target)] = &crossings(&track, u_s, per)[..] else {
+        return None;
+    };
+    // Bereich des Anteils auf der Halbkante j, in dem `u` die Zielstelle kreuzt.
+    let pos = track.windows(2).position(|w| {
+        w[0].0 == j && {
+            let (a, b) = (w[0].2, w[1].2);
+            (a <= target && target < b) || (b <= target && target < a)
+        }
+    })?;
+    let (s0, u0) = (track[pos].1, track[pos].2);
+    let (s1, _) = (track[pos + 1].1, track[pos + 1].2);
+    let he = lp[j];
+    let u_at = |s: f64| {
+        let u = surface.project(he_point(raw, he, s)).0;
+        u + per * ((u0 - u) / per).round()
+    };
+    let rising = u_at(s1) > u_at(s0);
+    let (mut lo, mut hi) = (s0, s1);
+    for _ in 0..80 {
+        let mid = 0.5 * (lo + hi);
+        if (u_at(mid) < target) == rising {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let s = 0.5 * (lo + hi);
+    let p = he_point(raw, he, s);
+    let (vs, ve) = (raw.he_start(he), raw.he_end(he));
+    for v in [vs, ve] {
+        if raw.vertices[v].distance(p) <= tol {
+            return Some(v);
+        }
+    }
+    let e = &raw.edges[he.edge];
+    let fe = if he.forward { s } else { 1.0 - s };
+    let t = e.t0 + (e.t1 - e.t0) * fe;
+    Some(split_edge(raw, he.edge, t))
 }
 
 fn fwd(edge: usize) -> RawHalfEdge {
@@ -502,37 +711,6 @@ fn push_seam(
         line: 0,
     });
     Ok(raw.edges.len() - 1)
-}
-
-/// Ecke der Schleife `b` der Fläche `i` beim Winkel `u_s`: eine vorhandene (höchstens `tol`
-/// daneben) oder eine neue, für die die Kante an dieser Stelle geteilt wird.
-fn vertex_at(raw: &mut RawBody, i: usize, b: usize, u_s: f64, tol: f64) -> Result<usize, Skip> {
-    let f = &raw.faces[i];
-    let surface = f.surface.clone();
-    let lp = f.loops[b].clone();
-    let (_, level) = surface.project(raw.vertices[raw.he_start(lp[0])]);
-    let target = surface.point(u_s, level);
-    for he in &lp {
-        let v = raw.he_start(*he);
-        if raw.vertices[v].distance(target) <= tol {
-            return Ok(v);
-        }
-    }
-    for he in &lp {
-        let e = &raw.edges[he.edge];
-        let (lo, hi) = (e.t0.min(e.t1), e.t0.max(e.t1));
-        let mut t = e.curve.project(target);
-        if let Some(per) = e.curve.period() {
-            t += per * ((lo - t) / per).ceil();
-        }
-        if t > lo && t < hi && e.curve.point(t).distance(target) <= tol {
-            return Ok(split_edge(raw, he.edge, t));
-        }
-    }
-    Err(Skip(format!(
-        "Der Fläche „{}“ lässt sich keine Naht hinzufügen.",
-        f.tag.role
-    )))
 }
 
 /// Teilt die Kante `k` beim Parameter `t` (neue Ecke auf der Kurve); jede Schleife, die sie

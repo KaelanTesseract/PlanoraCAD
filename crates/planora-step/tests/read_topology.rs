@@ -15,8 +15,7 @@ use planora_math::{DVec2, DVec3, Frame, PI, TAU, Tolerance};
 use planora_mesh::{Mesh, TessellationOptions, mass_properties, tessellate};
 use planora_step::read::geom::Skip;
 use planora_step::read::topo::{
-    BuildOptions, BuiltSolid, STEP_FACE_ROLE, build_solid, derive_patch, derive_patch_with_tol,
-    edge_params,
+    BuildOptions, BuiltSolid, STEP_FACE_ROLE, build_solid, derive_patch_sensed, edge_params,
 };
 use planora_step::read::units::{Units, context_units};
 use planora_step::{MAX_STEP_FACES, ReadLimits, StepFile};
@@ -422,27 +421,27 @@ fn patch_is_unwrapped_along_the_loop() {
     // Bogen über die Naht bei ±π: von 3π/4 bis 5π/4, dann zurück in der Höhe 1.
     let mut lp = arc(0.75 * PI, 1.25 * PI, 0.0);
     lp.extend(arc(1.25 * PI, 0.75 * PI, 1.0));
-    let p = derive_patch(&cyl, &[lp]).expect("Bereich");
+    let p = derive_patch_sensed(&cyl, true, &[lp], 0.0).expect("Bereich");
     assert!((p.u0 - 0.75 * PI).abs() <= 1e-12 && (p.u1 - 1.25 * PI).abs() <= 1e-12);
     assert!(p.v0.abs() <= 1e-12 && (p.v1 - 1.0).abs() <= 1e-12);
     // Ganz um die Achse: Breite 2π, u0 in [0, 2π).
     let mut lp = arc(-0.5 * PI, 1.5 * PI, 0.0);
     lp.extend(arc(1.5 * PI, -0.5 * PI, 3.0));
-    let p = derive_patch(&cyl, &[lp]).expect("voller Umlauf");
+    let p = derive_patch_sensed(&cyl, true, &[lp], 0.0).expect("voller Umlauf");
     assert!((p.u1 - p.u0 - TAU).abs() <= 1e-12);
     assert!((p.u0 - 1.5 * PI).abs() <= 1e-12, "u0 = {}", p.u0);
     // Mehr als ein Umlauf ist kein Parameterbereich.
     let mut lp = arc(0.0, 2.5 * PI, 0.0);
     lp.extend(arc(2.5 * PI, 0.0, 1.0));
-    let Err(Skip(s)) = derive_patch(&cyl, &[lp]) else {
+    let Err(Skip(s)) = derive_patch_sensed(&cyl, true, &[lp], 0.0) else {
         panic!("mehr als ein Umlauf");
     };
     assert_eq!(
         s,
         "Der Parameterbereich einer Fläche reicht über mehr als einen Umlauf."
     );
-    // Kugel nur aus einer Naht von Pol zu Pol (hin und zurück): `u` hat ohne Polsprung keine
-    // Breite; das ist (noch) kein Bereich statt eines leeren.
+    // Kugel nur aus einer Naht von Pol zu Pol (hin und zurück): Mit dem Polsprung des Kernels
+    // ein voller Umlauf (Aufgabe 6).
     let sphere = Surface::Sphere {
         frame: Frame::WORLD,
         radius: 2.0,
@@ -457,16 +456,12 @@ fn patch_is_unwrapped_along_the_loop() {
     };
     let mut lp = meridian(-0.5 * PI, 0.5 * PI);
     lp.extend(meridian(0.5 * PI, -0.5 * PI));
-    let Err(Skip(s)) = derive_patch(&sphere, &[lp]) else {
-        panic!("Kugel ohne Polsprung");
-    };
-    assert_eq!(
-        s,
-        "Eine Fläche, deren Rand durch einen Pol läuft, wird noch nicht unterstützt."
-    );
+    let p = derive_patch_sensed(&sphere, true, &[lp], 0.0).expect("Kugel");
+    assert!((p.u1 - p.u0 - TAU).abs() <= 1e-12, "{p:?}");
     // Ein Kugelstück mit Pol im Rand und echter Breite (Viertel von Pol zu Pol zwischen den
-    // Längen π/4 und 3π/4): Die Pole selbst (genau auf der Achse, dort ist `u` beliebig, die
-    // Rückrechnung liefert 0) zählen nur in v.
+    // Längen π/4 und 3π/4, im Parameterraum im Uhrzeigersinn: Sinn der Fläche falsch): Die Pole
+    // selbst (genau auf der Achse, dort ist `u` beliebig, die Rückrechnung liefert 0) zählen nur
+    // in v.
     let turn = |phi: f64, pts: Vec<DVec3>| -> Vec<DVec3> {
         let n = pts.len();
         pts.into_iter()
@@ -482,7 +477,7 @@ fn patch_is_unwrapped_along_the_loop() {
     };
     let mut lp = turn(0.25 * PI, meridian(-0.5 * PI, 0.5 * PI));
     lp.extend(turn(0.75 * PI, meridian(0.5 * PI, -0.5 * PI)));
-    let p = derive_patch(&sphere, &[lp]).expect("Viertel");
+    let p = derive_patch_sensed(&sphere, false, &[lp], 0.0).expect("Viertel");
     assert!(
         (p.u0 - 0.25 * PI).abs() <= 1e-12 && (p.u1 - 0.75 * PI).abs() <= 1e-12,
         "{p:?}"
@@ -497,10 +492,15 @@ fn patch_is_unwrapped_along_the_loop() {
         lp.push(DVec3::new(2.0 * b.cos(), 0.0, 2.0 * b.sin()));
         lp
     };
-    let p = derive_patch(&sphere, &[near_pole(1e-7)]).expect("am Pol");
+    let p = derive_patch_sensed(&sphere, false, &[near_pole(1e-7)], 0.0).expect("am Pol");
     assert!((p.u0 - 0.25 * PI).abs() <= 1e-12, "{p:?}");
-    let p = derive_patch(&sphere, &[near_pole(1e-6)]).expect("neben dem Pol");
-    assert!(p.u0.abs() <= 1e-12, "{p:?}");
+    // 1e-6 daneben ist kein Pol mehr: Der Punkt zählt in u (hier ergibt das keinen Bereich mehr
+    // zwischen π/4 und 3π/4).
+    let r = derive_patch_sensed(&sphere, false, &[near_pole(1e-6)], 0.0);
+    assert!(
+        !matches!(r, Ok(p) if (p.u0 - 0.25 * PI).abs() <= 1e-12),
+        "{r:?}"
+    );
 }
 
 /// Alle `same_sense` der Flächen und alle Richtungen der Ränder umgedreht.
@@ -830,11 +830,12 @@ fn holes_near_the_seam_keep_their_place() {
             .collect()
     };
     // Voller Mantel, Naht bei u = 0, Loch bei u = 5,28.
-    let p = derive_patch(&cyl, &[rect(0.0, TAU), hole(5.28)]).expect("voller Mantel");
+    let p =
+        derive_patch_sensed(&cyl, true, &[rect(0.0, TAU), hole(5.28)], 0.0).expect("voller Mantel");
     assert!(p.u0.abs() <= 1e-12 && (p.u1 - TAU).abs() <= 1e-12, "{p:?}");
     assert!(p.v0.abs() <= 1e-12 && (p.v1 - 10.0).abs() <= 1e-12);
     // Mantelstück u 2,5 … 4,0 (über ±π), Loch bei u = 3,6.
-    let p = derive_patch(&cyl, &[rect(2.5, 4.0), hole(3.6)]).expect("Stück");
+    let p = derive_patch_sensed(&cyl, true, &[rect(2.5, 4.0), hole(3.6)], 0.0).expect("Stück");
     assert!(
         (p.u0 - 2.5).abs() <= 1e-12 && (p.u1 - 4.0).abs() <= 1e-12,
         "{p:?}"
@@ -844,7 +845,7 @@ fn holes_near_the_seam_keep_their_place() {
 #[test]
 fn curved_face_outer_loop_by_turn() {
     // Tasche bei u ≈ π/2 und nahe der Naht bei u ≈ −0,35 (≡ 5,93): Mit dem Loch zuerst an
-    // `derive_patch` würde der Mantel dort über mehr als einen Umlauf entfaltet.
+    // `derive_patch_sensed` würde der Mantel dort über mehr als einen Umlauf entfaltet.
     hole_listed_first(DVec2::new(-2.0, 8.0), DVec2::new(2.0, 12.0));
     let c = DVec2::new(10.0 * (-0.35f64).cos(), 10.0 * (-0.35f64).sin());
     hole_listed_first(c - DVec2::splat(2.0), c + DVec2::splat(2.0));
@@ -1118,15 +1119,15 @@ fn too_wide_range_stays_rejected() {
     };
     // 1,1 Perioden: auch mit grober Genauigkeit abgelehnt.
     for tol in [0.0, 1e-3] {
-        let Err(Skip(s)) = derive_patch_with_tol(&cyl, &[lp(1.1 * TAU)], tol) else {
+        let Err(Skip(s)) = derive_patch_sensed(&cyl, true, &[lp(1.1 * TAU)], tol) else {
             panic!("1,1 Perioden bei {tol}");
         };
         assert!(s.ends_with("reicht über mehr als einen Umlauf."), "{s}");
     }
     // Eine Periode plus 4e-5 rad (8e-4 mm am Umfang): bei 1e-3 gekappt, bei 1e-6 abgelehnt.
-    let p = derive_patch_with_tol(&cyl, &[lp(TAU + 4e-5)], 1e-3).expect("grob");
+    let p = derive_patch_sensed(&cyl, true, &[lp(TAU + 4e-5)], 1e-3).expect("grob");
     assert!((p.u1 - p.u0 - TAU).abs() <= 1e-12, "{p:?}");
-    assert!(derive_patch_with_tol(&cyl, &[lp(TAU + 4e-5)], 1e-6).is_err());
+    assert!(derive_patch_sensed(&cyl, true, &[lp(TAU + 4e-5)], 1e-6).is_err());
     // Dünner Zylinder (R 0,1): 2 · 1e-3 / 0,1 = 0,02 rad wäre zu großzügig; der Schlupf ist
     // auf 1e-3 der Periode (0,0063 rad) begrenzt.
     let thin = Surface::Cylinder {
@@ -1139,8 +1140,8 @@ fn too_wide_range_stays_rejected() {
         lp.extend((0..=64).map(|k| pt(w * (64 - k) as f64 / 64.0, 1.0)));
         lp
     };
-    assert!(derive_patch_with_tol(&thin, &[thin_lp(TAU + 0.005)], 1e-3).is_ok());
-    assert!(derive_patch_with_tol(&thin, &[thin_lp(TAU + 0.01)], 1e-3).is_err());
+    assert!(derive_patch_sensed(&thin, true, &[thin_lp(TAU + 0.005)], 1e-3).is_ok());
+    assert!(derive_patch_sensed(&thin, true, &[thin_lp(TAU + 0.01)], 1e-3).is_err());
     // Kegel (Radius 5 bei v = 0, Spitze bei v = 5) mit zwei Randpunkten 1e-4 mm vor der Spitze:
     // Punkte näher als 10 · Genauigkeit an der Achse bestimmen den Schlupf nicht (sonst wäre er
     // bis zur Obergrenze groß); 0,004 rad Überstand bleiben bei 1e-3 abgelehnt (2e-3/5 = 4e-4).
@@ -1154,10 +1155,11 @@ fn too_wide_range_stays_rejected() {
     let mut cone_lp: Vec<DVec3> = (0..=64).map(|k| on(w * k as f64 / 64.0, 0.0)).collect();
     cone_lp.push(on(w, 5.0 - 1e-4));
     cone_lp.push(on(0.0, 5.0 - 1e-4));
-    assert!(derive_patch_with_tol(&cone, &[cone_lp], 1e-3).is_err());
+    assert!(derive_patch_sensed(&cone, true, &[cone_lp], 1e-3).is_err());
+    // Der Sinn der Fläche ändert ohne Pol nichts.
     assert_eq!(
-        derive_patch(&cyl, &[lp(TAU)]).map(|p| p.u1 - p.u0),
-        derive_patch_with_tol(&cyl, &[lp(TAU)], 0.0).map(|p| p.u1 - p.u0)
+        derive_patch_sensed(&cyl, true, &[lp(TAU)], 0.0).map(|p| p.u1 - p.u0),
+        derive_patch_sensed(&cyl, false, &[lp(TAU)], 0.0).map(|p| p.u1 - p.u0)
     );
 }
 
