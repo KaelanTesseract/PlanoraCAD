@@ -323,6 +323,7 @@ fn mesh_bodies_cannot_be_edited_by_other_features() {
             sketch: Sketch::new(Frame::WORLD, "S", Tolerance::default()),
             plane: SketchPlane::OnFace(face),
             copies: vec![],
+            formulas: Default::default(),
         }),
     ];
     for kind in kinds {

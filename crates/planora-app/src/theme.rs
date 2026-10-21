@@ -386,6 +386,28 @@ pub fn scroll_area<R>(
     out
 }
 
+/// Wie [`scroll_area`], der Inhalt bekommt aber den sichtbaren Ausschnitt (Punkte ab dem
+/// Inhaltsanfang) und zeichnet nur, was er braucht (`ScrollArea::show_viewport`).
+pub fn scroll_area_viewport<R>(
+    ui: &mut egui::Ui,
+    area: egui::ScrollArea,
+    add_contents: impl FnOnce(&mut egui::Ui, egui::Rect) -> R,
+) -> egui::scroll_area::ScrollAreaOutput<R> {
+    let saved = ui.style().clone();
+    let (rest, hover) = scroll_handle_colors(ui.visuals().dark_mode);
+    let w = &mut ui.style_mut().visuals.widgets;
+    w.inactive.fg_stroke.color = rest;
+    w.hovered.fg_stroke.color = hover;
+    w.active.fg_stroke.color = hover;
+    let content_style = saved.clone();
+    let out = area.show_viewport(ui, |ui, viewport| {
+        ui.set_style(content_style);
+        add_contents(ui, viewport)
+    });
+    ui.set_style(saved);
+    out
+}
+
 /// Rahmen schwebender Felder, Leisten und Menüs: bg_panel, 1 px Rand, Rundung 14, kein Schatten.
 pub fn panel_frame(dark: bool) -> egui::Frame {
     let p = palette(dark);

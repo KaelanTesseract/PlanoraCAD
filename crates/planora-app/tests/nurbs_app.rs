@@ -62,6 +62,7 @@ fn add_sketch(s: &mut AppState, sk: Sketch) -> FeatureId {
                 sketch: sk,
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
+                formulas: Default::default(),
             }),
         )
         .unwrap();

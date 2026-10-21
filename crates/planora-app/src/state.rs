@@ -4,7 +4,8 @@ use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
 use planora_feature::{
     BlendArt, BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
-    MESH_LOCKED, MeshId, RestoreKind, SketchFeature, SketchPlane,
+    FieldKey, Formulas, MESH_LOCKED, MeshId, ParamEdit, ParamId, RestoreKind, SketchFeature,
+    SketchPlane,
 };
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{AnalyticKernel, Edge, Face, Id, Solid};
@@ -49,6 +50,10 @@ const MAX_NAME_COUNTER: u64 = 1_000_000;
 pub const UNDO_FAILED: &str = "Rückgängig ist nicht möglich.";
 /// Meldung, wenn sich ein Schritt nicht zurückladen lässt (Wiederholen).
 pub const REDO_FAILED: &str = "Wiederholen ist nicht möglich.";
+/// Sperre der Parameter, solange eine Skizze offen ist (ihr Entwurf hängt an den alten Werten).
+pub const SKETCH_OPEN_LOCK: &str = "Beenden Sie zuerst die Skizze.";
+/// Meldung bei leerem Formelfeld.
+const EMPTY_FIELD: &str = "Bitte eine Zahl oder Formel eingeben.";
 
 static NEXT_SCENE_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -714,9 +719,24 @@ impl AppState {
         base_name: Option<&str>,
         kind: FeatureKind,
     ) -> Result<FeatureId, String> {
+        self.add_feature_with(base_name, kind, Formulas::new())
+    }
+
+    /// Wie [`AppState::add_feature`], mit den Formeln der Zahlenfelder. Eine Formel, die sich
+    /// nicht auswerten lässt, wird abgelehnt (Dokument unverändert); ein unzulässiges Ergebnis
+    /// (etwa Breite 0) ergibt den Fehlerstatus mit Meldung.
+    pub fn add_feature_with(
+        &mut self,
+        base_name: Option<&str>,
+        kind: FeatureKind,
+        formulas: Formulas,
+    ) -> Result<FeatureId, String> {
         let label = base_name.unwrap_or(kind.label()).to_string();
         let name = self.next_name(&label);
-        match self.document.add_feature(name, kind) {
+        match self
+            .document
+            .add_feature_with_formulas(name, kind, formulas)
+        {
             Ok(id) => {
                 self.count_name(&label);
                 self.refresh();
@@ -757,43 +777,84 @@ impl AppState {
 
     /// Quader neben den vorhandenen Körpern.
     pub fn create_box(&mut self, size: DVec3) -> Result<FeatureId, String> {
+        self.create_box_with(size, Formulas::new())
+    }
+
+    /// Wie [`AppState::create_box`], mit Formeln (`size` sind die Werte der Felder; die Formeln
+    /// bestimmen ihre Felder beim Rechnen).
+    pub fn create_box_with(
+        &mut self,
+        size: DVec3,
+        formulas: Formulas,
+    ) -> Result<FeatureId, String> {
         self.check_sizes(&size.to_array())?;
         let origin = self.free_origin(0.0);
-        self.add_feature(None, FeatureKind::Box { size, origin })
+        self.add_feature_with(None, FeatureKind::Box { size, origin }, formulas)
     }
 
     /// Zylinder neben den vorhandenen Körpern.
     pub fn create_cylinder(&mut self, radius: f64, height: f64) -> Result<FeatureId, String> {
+        self.create_cylinder_with(radius, height, Formulas::new())
+    }
+
+    /// Wie [`AppState::create_cylinder`], mit Formeln.
+    pub fn create_cylinder_with(
+        &mut self,
+        radius: f64,
+        height: f64,
+        formulas: Formulas,
+    ) -> Result<FeatureId, String> {
         self.check_sizes(&[radius, height])?;
         let origin = self.free_origin(radius);
-        self.add_feature(
+        self.add_feature_with(
             None,
             FeatureKind::Cylinder {
                 radius,
                 height,
                 origin,
             },
+            formulas,
         )
     }
 
     /// Kugel neben den vorhandenen Körpern (linke Kante am freien Rand).
     pub fn create_sphere(&mut self, radius: f64) -> Result<FeatureId, String> {
+        self.create_sphere_with(radius, Formulas::new())
+    }
+
+    /// Wie [`AppState::create_sphere`], mit Formeln.
+    pub fn create_sphere_with(
+        &mut self,
+        radius: f64,
+        formulas: Formulas,
+    ) -> Result<FeatureId, String> {
         self.check_sizes(&[radius])?;
         let origin = self.free_origin(radius);
-        self.add_feature(None, FeatureKind::Sphere { radius, origin })
+        self.add_feature_with(None, FeatureKind::Sphere { radius, origin }, formulas)
     }
 
     /// Kegel neben den vorhandenen Körpern.
     pub fn create_cone(&mut self, radius: f64, height: f64) -> Result<FeatureId, String> {
+        self.create_cone_with(radius, height, Formulas::new())
+    }
+
+    /// Wie [`AppState::create_cone`], mit Formeln.
+    pub fn create_cone_with(
+        &mut self,
+        radius: f64,
+        height: f64,
+        formulas: Formulas,
+    ) -> Result<FeatureId, String> {
         self.check_sizes(&[radius, height])?;
         let origin = self.free_origin(radius);
-        self.add_feature(
+        self.add_feature_with(
             None,
             FeatureKind::Cone {
                 radius,
                 height,
                 origin,
             },
+            formulas,
         )
     }
 
@@ -849,6 +910,26 @@ impl AppState {
         tangentenkette: bool,
         first_face: Option<&str>,
     ) -> Result<FeatureId, String> {
+        self.add_blend_with(
+            body,
+            edges,
+            art,
+            tangentenkette,
+            first_face,
+            Formulas::new(),
+        )
+    }
+
+    /// Wie [`AppState::add_blend_first`], mit Formeln (Radius, Abstände, Winkel).
+    pub fn add_blend_with(
+        &mut self,
+        body: usize,
+        edges: &[Id<Edge>],
+        art: BlendArt,
+        tangentenkette: bool,
+        first_face: Option<&str>,
+        formulas: Formulas,
+    ) -> Result<FeatureId, String> {
         if self.is_mesh(body) {
             return self.fail(MESH_LOCKED.into());
         }
@@ -877,7 +958,7 @@ impl AppState {
             art,
             tangentenkette,
         };
-        let id = self.add_checked(kind.label(), kind)?;
+        let id = self.add_checked_with(kind.label(), kind, formulas)?;
         self.hover = None;
         self.selection = None;
         self.refresh();
@@ -891,14 +972,32 @@ impl AppState {
     /// Legt ein Feature an und nimmt es wieder heraus, wenn es nicht berechnet werden konnte
     /// (die Meldung steht dann in `message`). Aktualisiert die Körper nicht.
     fn add_checked(&mut self, label: &str, kind: FeatureKind) -> Result<FeatureId, String> {
-        let id = self.add_checked_named(self.next_name(label), kind)?;
+        self.add_checked_with(label, kind, Formulas::new())
+    }
+
+    /// Wie [`AppState::add_checked`], mit Formeln.
+    fn add_checked_with(
+        &mut self,
+        label: &str,
+        kind: FeatureKind,
+        formulas: Formulas,
+    ) -> Result<FeatureId, String> {
+        let id = self.add_checked_named(self.next_name(label), kind, formulas)?;
         self.count_name(label);
         Ok(id)
     }
 
-    /// Wie [`AppState::add_checked`], mit festem Namen (ohne Zähler).
-    fn add_checked_named(&mut self, name: String, kind: FeatureKind) -> Result<FeatureId, String> {
-        let id = match self.document.add_feature(name, kind) {
+    /// Wie [`AppState::add_checked_with`], mit festem Namen (ohne Zähler).
+    fn add_checked_named(
+        &mut self,
+        name: String,
+        kind: FeatureKind,
+        formulas: Formulas,
+    ) -> Result<FeatureId, String> {
+        let id = match self
+            .document
+            .add_feature_with_formulas(name, kind, formulas)
+        {
             Ok(id) => id,
             Err(e) => return self.fail(e.to_string()),
         };
@@ -913,8 +1012,9 @@ impl AppState {
 
     /// Verschiebt den Körper `index` um `delta` (Millimeter) **zusätzlich** zur derzeitigen
     /// Lage (Entscheidung F9). Ist der Körper das Ergebnis eines Verschiebens und liest ihn
-    /// danach kein anderes Feature (siehe [`AppState::read_later`]), wird dessen Verschiebung
-    /// erhöht; sonst entsteht ein neues Verschieben am Marker. Auswahl
+    /// danach kein anderes Feature (siehe [`AppState::read_later`]) und hat es keine Formeln
+    /// (P11), wird dessen Verschiebung erhöht; sonst entsteht ein neues Verschieben am Marker.
+    /// Auswahl
     /// und gewählter Körper gehen auf das Ergebnis über. Bei einem Fehler bleibt alles
     /// unverändert. Eine offene Skizze wird vorher beendet (ihr Entwurf übernommen), damit
     /// Dokument und Entwurf nicht auseinanderlaufen.
@@ -966,11 +1066,12 @@ impl AppState {
                 "Verschieben abgelehnt: Der Körper läge außerhalb von ±{MAX_COORD_MM:e} mm"
             ));
         }
+        // Ein Verschieben mit Formeln wird nie erweitert (P11): Die Formeln bleiben gültig, die
+        // neue Strecke bekommt ein eigenes Verschieben.
         let extendable = r.index == 0
-            && self
-                .document
-                .feature(r.feature)
-                .is_some_and(|f| matches!(f.kind, FeatureKind::Move { .. }))
+            && self.document.feature(r.feature).is_some_and(|f| {
+                matches!(f.kind, FeatureKind::Move { .. }) && f.formulas().is_empty()
+            })
             && (!self.read_later(index) || (dragging && self.drag_move == Some(r.feature)));
         let moved = if extendable {
             self.extend_move(r.feature, delta)?;
@@ -1018,9 +1119,12 @@ impl AppState {
     /// berechenbar oder schlägt dadurch ein späteres, bisher fehlerfreies Feature fehl, wird
     /// die alte Verschiebung zurückgeschrieben: Das Dokument bleibt dann unverändert.
     fn extend_move(&mut self, id: FeatureId, delta: DVec3) -> Result<(), String> {
-        let old = match self.document.feature(id).map(|f| &f.kind) {
-            Some(FeatureKind::Move { delta, .. }) => *delta,
-            _ => return self.fail("Das Verschieben gibt es nicht mehr".into()),
+        let (old, old_formulas) = match self.document.feature(id) {
+            Some(f) => match &f.kind {
+                FeatureKind::Move { delta, .. } => (*delta, f.formulas().clone()),
+                _ => return self.fail("Das Verschieben gibt es nicht mehr".into()),
+            },
+            None => return self.fail("Das Verschieben gibt es nicht mehr".into()),
         };
         let was_ok: Vec<FeatureId> = self
             .document
@@ -1046,7 +1150,10 @@ impl AppState {
         match broken {
             None => Ok(()),
             Some((broken_id, status)) => {
-                let _ = self.document.update(id, |k| set(k, old));
+                // Zurückschreiben samt Formeln (nie still eine Formel verlieren).
+                let _ = self
+                    .document
+                    .update_with_formulas(id, |k| set(k, old), old_formulas);
                 let message = status_message(Some(status));
                 if broken_id == id {
                     self.fail(message)
@@ -1479,6 +1586,7 @@ impl AppState {
             sketch,
             plane,
             copies: Vec::new(),
+            formulas: Default::default(),
         });
         self.add_checked(SKETCH_LABEL, kind)
     }
@@ -1714,6 +1822,17 @@ impl AppState {
         Some((sketch_session.as_mut()?, &mut sketch_draft.as_mut()?.sketch))
     }
 
+    /// Sitzung und ganzer Entwurf (Skizze, Kopien, Formeln der Maße) gemeinsam; der Entwurf
+    /// selbst, keine Kopie.
+    pub fn session_draft_mut(&mut self) -> Option<(&mut SketchSession, &mut SketchFeature)> {
+        let AppState {
+            sketch_session,
+            sketch_draft,
+            ..
+        } = self;
+        Some((sketch_session.as_mut()?, sketch_draft.as_mut()?))
+    }
+
     /// Schreibt den Entwurf ins Dokument zurück (Skizze und Kopien aus dem Entwurf; die Ebene
     /// bleibt die der aktuellen Definition, im Skizzen-Modus lässt sie sich nicht ändern) und beendet
     /// die Sitzung, ohne die Kamera anzufassen. Ein unveränderter Entwurf löst keine
@@ -1735,7 +1854,10 @@ impl AppState {
             return Ok(());
         };
         draft.plane = def.plane.clone();
+        // Auch eine reine Formeländerung (gleicher Wert, etwa „Breite“ → „breite“) wird
+        // übernommen.
         let unchanged = draft.copies == def.copies
+            && draft.formulas == def.formulas
             && self
                 .document
                 .sketch_of(id)
@@ -1811,7 +1933,12 @@ impl AppState {
     /// dem Vergleich ([`describe_sketch_change`](crate::undo_labels::describe_sketch_change)).
     /// Ziehen eines Punktes ist so ein Schritt; der erste Klick eines Werkzeugs bleibt offen,
     /// bis das Element entsteht.
+    /// Vorher entfallen im Entwurf die Formeln an Maßen, die keine haben können (gelöscht,
+    /// anzeigend), damit kein Bild des Verlaufs sie trägt.
     pub fn observe_sketch(&mut self, gesture: bool) {
+        if let Some(draft) = self.sketch_draft.as_mut() {
+            draft.prune_formulas();
+        }
         if gesture {
             return;
         }
@@ -2054,8 +2181,9 @@ impl AppState {
         &mut self,
         name: String,
         kind: FeatureKind,
+        formulas: Formulas,
     ) -> Result<FeatureId, String> {
-        let id = self.add_checked_named(name, kind)?;
+        let id = self.add_checked_named(name, kind, formulas)?;
         self.refresh();
         Ok(id)
     }
@@ -2068,6 +2196,17 @@ impl AppState {
         sketch: FeatureId,
         profile: usize,
         height: f64,
+    ) -> Result<FeatureId, String> {
+        self.extrude_sketch_with(sketch, profile, height, Formulas::new())
+    }
+
+    /// Wie [`AppState::extrude_sketch`], mit Formeln (Höhe).
+    pub fn extrude_sketch_with(
+        &mut self,
+        sketch: FeatureId,
+        profile: usize,
+        height: f64,
+        formulas: Formulas,
     ) -> Result<FeatureId, String> {
         self.try_close_sketch()?;
         if !(height.is_finite() && height > self.kernel.tolerance.linear) {
@@ -2084,6 +2223,7 @@ impl AppState {
                 profile,
                 height,
             },
+            formulas,
         )
     }
 
@@ -2108,6 +2248,7 @@ impl AppState {
                 profile,
                 axis,
             },
+            Formulas::new(),
         )
     }
 }
@@ -2306,6 +2447,7 @@ impl AppState {
         self.set_mesh_transform_of(r, t)
     }
 
+    /// Setzt die Lage `t` (P2: ändert sich ein Feld mit Formel, entfällt nur diese Formel).
     fn set_mesh_transform_of(&mut self, r: BodyRef, t: MeshTransform) -> Result<(), String> {
         self.try_close_sketch()?;
         let Some(old) = self.document.mesh_body(r.feature).map(|(_, t)| t) else {
@@ -2314,7 +2456,94 @@ impl AppState {
         if old == t {
             return Ok(());
         }
-        if let Err(e) = self.document.update(r.feature, |k| set_transform(k, t)) {
+        self.update_mesh_body(r, |k| set_transform(k, t), None)
+    }
+
+    /// Formelfeld des Netz-Körpers `index` (Position x/y/z, Maßstab; P10): Eine Zahl setzt den
+    /// Wert, die Formel dieses Feldes entfällt; sonst wird der Text die Formel des Feldes und
+    /// bestimmt den Wert. Eine kaputte Formel oder ein Wert, mit dem sich der Körper nicht
+    /// berechnen lässt, wird abgelehnt; Lage und Formeln bleiben dann, wie sie waren.
+    pub fn set_mesh_formula(
+        &mut self,
+        index: usize,
+        key: FieldKey,
+        text: &str,
+    ) -> Result<(), String> {
+        let Some(r) = self
+            .bodies
+            .get(index)
+            .filter(|b| b.kind == BodyKind::Mesh)
+            .map(|b| b.source)
+        else {
+            return self.fail("Das ist kein Netz-Körper".into());
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return self.fail(EMPTY_FIELD.into());
+        }
+        self.try_close_sketch()?;
+        let Some(f) = self.document.feature(r.feature) else {
+            return self.fail("Körper nicht gefunden".into());
+        };
+        if !planora_feature::field_keys(&f.kind).contains(&key) {
+            return self.fail(
+                FeatureError::InvalidInput("Dieses Feld kann keine Formel haben".into())
+                    .to_string(),
+            );
+        }
+        let mut formulas = f.formulas().clone();
+        let number = planora_feature::expr::plain_number(text);
+        match number {
+            Some(v) => {
+                let same = planora_feature::field_value(&f.kind, key).map(f64::to_bits)
+                    == Some(v.to_bits());
+                if same && !formulas.contains_key(&key) {
+                    return Ok(());
+                }
+                formulas.remove(&key);
+            }
+            None => {
+                if formulas.get(&key).map(String::as_str) == Some(text) {
+                    return Ok(());
+                }
+                formulas.insert(key, text.to_string());
+            }
+        }
+        self.update_mesh_body(
+            r,
+            |k| {
+                if let Some(v) = number {
+                    planora_feature::set_field_value(k, key, v);
+                }
+            },
+            Some(formulas),
+        )
+    }
+
+    /// Ändert den Netz-Körper `r` (mit `formulas`: ganze Formeltabelle, sonst P2). Lässt er sich
+    /// danach nicht berechnen, werden Lage **und Formeln** zurückgeschrieben (nie still eine
+    /// Formel verlieren) und die Meldung steht in `message`.
+    fn update_mesh_body(
+        &mut self,
+        r: BodyRef,
+        f: impl FnOnce(&mut FeatureKind),
+        formulas: Option<Formulas>,
+    ) -> Result<(), String> {
+        let Some((old_kind, old_formulas)) = self
+            .document
+            .feature(r.feature)
+            .map(|f| (f.kind.clone(), f.formulas().clone()))
+        else {
+            return self.fail("Körper nicht gefunden".into());
+        };
+        let changed = match formulas {
+            Some(t) => self
+                .document
+                .update_with_formulas(r.feature, f, t)
+                .map(|_| ()),
+            None => self.document.update(r.feature, f),
+        };
+        if let Err(e) = changed {
             return self.fail(e.to_string());
         }
         match self.document.feature(r.feature).map(|f| f.status.clone()) {
@@ -2323,10 +2552,82 @@ impl AppState {
                 Ok(())
             }
             status => {
-                let _ = self.document.update(r.feature, |k| set_transform(k, old));
+                let _ =
+                    self.document
+                        .update_with_formulas(r.feature, |k| *k = old_kind, old_formulas);
                 self.refresh();
                 self.fail(status_message(status))
             }
         }
+    }
+}
+
+// ---- Parameter --------------------------------------------------------------------------------
+
+impl AppState {
+    /// Neue Zeile mit Vorgaben (`ParameterN`, Formel „10“, Länge; Plan P13).
+    pub fn add_parameter(&mut self) -> Result<ParamId, String> {
+        self.parameter_action(Document::add_parameter_default)
+    }
+
+    /// Ändert Name, Formel, Art und Kommentar eines Parameters; die Formeln, die ihn nennen,
+    /// rechnen mit, ein neuer Name wird in allen Formeln ersetzt.
+    pub fn edit_parameter(&mut self, id: ParamId, edit: ParamEdit) -> Result<(), String> {
+        self.parameter_action(|d| d.set_parameter(id, edit).map(|_| ()))
+    }
+
+    /// Löscht einen Parameter, den keine Formel nennt (sonst Meldung mit den Benutzern).
+    pub fn delete_parameter(&mut self, id: ParamId) -> Result<(), String> {
+        self.parameter_action(|d| d.remove_parameter(id))
+    }
+
+    /// „Durch den Wert ersetzen“: Formeln, die den Parameter nennen, werden durch ihren Wert
+    /// ersetzt, dann wird er gelöscht (ein Schritt, kein Wert ändert sich; Plan P7).
+    pub fn replace_parameter(&mut self, id: ParamId) -> Result<(), String> {
+        self.parameter_action(|d| d.replace_parameter_by_value(id))
+    }
+
+    /// Gemeinsamer Ablauf der Parameter-Aktionen: Bei offener Skizze gesperrt
+    /// ([`SKETCH_OPEN_LOCK`], Dokument unverändert). Sonst die Änderung am Dokument (abgelehnt:
+    /// nichts ändert sich, Meldung in `message`), danach die Körper neu; Auswahl und gewählter
+    /// Körper folgen den Regeln von [`AppState::refresh`]. Scheitert dadurch ein Feature, das
+    /// vorher keinen Fehler hatte, nennt `message` das erste davon („„Quader 1“: …“).
+    fn parameter_action<T>(
+        &mut self,
+        act: impl FnOnce(&mut Document) -> Result<T, FeatureError>,
+    ) -> Result<T, String> {
+        if self.sketch_session.is_some() {
+            return self.fail(SKETCH_OPEN_LOCK.into());
+        }
+        let failed_before: Vec<FeatureId> = self
+            .document
+            .features()
+            .iter()
+            .filter(|f| matches!(f.status, FeatureStatus::Error(_)))
+            .map(|f| f.id)
+            .collect();
+        let count = self.document.edit_count();
+        let out = match act(&mut self.document) {
+            Ok(out) => out,
+            Err(e) => return self.fail(e.to_string()),
+        };
+        if self.document.edit_count() == count {
+            return Ok(out);
+        }
+        self.refresh();
+        let newly_failed = self
+            .document
+            .features()
+            .iter()
+            .find_map(|f| match &f.status {
+                FeatureStatus::Error(e) if !failed_before.contains(&f.id) => {
+                    Some(format!("„{}“: {e}", f.name))
+                }
+                _ => None,
+            });
+        if let Some(m) = newly_failed {
+            self.message = Some(m);
+        }
+        Ok(out)
     }
 }

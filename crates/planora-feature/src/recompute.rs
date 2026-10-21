@@ -3,6 +3,7 @@
 
 use crate::compute::{Computed, compute_feature};
 use crate::error::FeatureError;
+use crate::formulas::Formulas;
 use crate::model::{
     BodyRef, Document, Feature, FeatureId, FeatureKind, FeatureResult, FeatureStatus, SketchPlane,
 };
@@ -41,7 +42,16 @@ impl Document {
         name: impl Into<String>,
         kind: FeatureKind,
     ) -> Result<FeatureId, FeatureError> {
-        self.check_references(&kind, self.marker)?;
+        self.add_feature_with_formulas(name, kind, Formulas::new())
+    }
+
+    /// Fügt das geprüfte Feature am Marker ein, zählt eine Änderung und berechnet neu.
+    pub(crate) fn insert_feature(
+        &mut self,
+        name: String,
+        kind: FeatureKind,
+        formulas: Formulas,
+    ) -> Result<FeatureId, FeatureError> {
         let id = FeatureId(self.next_id);
         let next_id = self.next_id.checked_add(1).ok_or_else(|| {
             FeatureError::InvalidInput("Die Feature-Kennungen sind aufgebraucht".into())
@@ -52,13 +62,15 @@ impl Document {
             self.marker,
             Feature {
                 id,
-                name: name.into(),
+                name,
                 suppressed: false,
                 kind,
                 status: FeatureStatus::NotComputed,
                 version,
                 result: None,
                 failed: None,
+                formulas,
+                issue: None,
             },
         );
         self.marker += 1;
@@ -116,7 +128,9 @@ impl Document {
     }
 
     /// Wie [`Document::recompute`], ohne die Stücklistenblätter abzugleichen (Laden ändert nichts).
+    /// Zuerst schreibt der Auswertungsdurchgang die Formelwerte in die Felder (P1).
     pub(crate) fn recompute_features(&mut self) -> RecomputeReport {
+        self.apply_formula_pass();
         let mut report = RecomputeReport::default();
         for idx in 0..self.features.len() {
             let id = self.features[idx].id;
@@ -128,6 +142,20 @@ impl Document {
             if self.features[idx].suppressed {
                 self.features[idx].status = FeatureStatus::Suppressed;
                 self.features[idx].result = None;
+                continue;
+            }
+            if let Some(issue) = &self.features[idx].issue {
+                // Formelfehler: nicht rechnen, Fehlerstatus mit der Meldung der Formel.
+                let status = FeatureStatus::Error(issue.message().to_string());
+                let f = &mut self.features[idx];
+                if f.status == status {
+                    report.reused.push(id);
+                } else {
+                    report.computed.push(id);
+                }
+                f.status = status;
+                f.result = None;
+                f.failed = None;
                 continue;
             }
             match self.blocked_by_dependency(idx) {
@@ -411,6 +439,7 @@ mod tests {
                     sketch: sk,
                     plane: SketchPlane::OnFace(face),
                     copies: vec![],
+                    formulas: Default::default(),
                 }),
             )
             .unwrap();

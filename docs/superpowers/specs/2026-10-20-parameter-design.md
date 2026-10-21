@@ -75,3 +75,24 @@ Heute ist jedes Maß nur eine Zahl. Wer ein Teil später ändern will („Breite
 3. Sind die **Formelfunktionen** (`+ − * / ^`, `sqrt`, `sin`, `cos`, `tan`, `abs`, `min`, `max`, `round`, `pi`) genug?
 4. **Eigenes Fenster** „Parameter“ im Menü „Bearbeiten“ (statt fester Karte am Rand)?
 5. Ein benutzter Parameter lässt sich **nicht löschen**, außer man ersetzt ihn durch den Wert?
+
+## 8. Festlegungen der Umsetzung
+
+Stand 2026-10-21. Der Plan (`docs/superpowers/plans/2026-10-20-parameter.md`) hat die Festlegungen P1 bis P14 getroffen; hier die Kurzfassung. Abweichungen und Einzelheiten stehen im Plan, Abschnitt „Abweichungen bei der Umsetzung“, und in `docs/superpowers/offene-punkte.md`.
+
+- **P1 Werte schreiben:** Vor jeder Neuberechnung rechnet das Dokument erst die Tabelle, dann alle Formeln aus und schreibt die Ergebnisse in die Zahlenfelder. Nur Features mit neuem Wert oder Formelfehler bekommen eine neue Version.
+- **P2 Zahl statt Formel:** Tippt man in ein Feld mit Formel eine Zahl, entfällt nur diese Formel (auch bei Skizzenmaßen). Formeln für Felder, die es nach einer Änderung der Art nicht mehr gibt, entfallen.
+- **P3 Strenge Prüfung, milder Ladeweg:** Eine Formel, die selbst kaputt ist, wird abgelehnt. Eine Formel mit einem Ergebnis außerhalb des Bereichs wird übernommen, das Feature zeigt den Fehlerstatus (das Feld trägt den Wert der Formel). Beim Laden lädt auch eine kaputte Feature-Formel (Fehlerstatus, gespeicherter Wert).
+- **P4 Einheiten:** Länge, Winkel, Zahl. Eine reine Zahl passt überall; Länge mit Winkel nie; ein Feld nimmt seine Einheit oder eine reine Zahl.
+- **P5 Komma:** Zwischen zwei Ziffern ist es das Dezimalkomma. Werte trennt man mit „;“ oder „, “.
+- **P6 Namen:** ohne Rücksicht auf Groß- und Kleinschreibung; Umbenennen ersetzt ganze Namen in den Formeln; Namen bis 64, Kommentare bis 200 Zeichen.
+- **P7 Durch den Wert ersetzen:** Direkte Benutzer bekommen den Wert, dann wird der Parameter gelöscht; ein Schritt. Abgelehnt wird, wenn ein Benutzer gerade einen Fehler hat, der sonst still ein anderes Modell ergäbe (Skizzen streng, Körperfelder nur bei Wertfehler).
+- **P8 Strg+Z:** wirkt auch bei offenem Fenster „Parameter“; das Fenster lädt danach neu.
+- **P9 Übernahme:** In Fenstern mit Knopf erst mit dem Knopf; im Fenster „Parameter“ und in den Netz-Formelfeldern bei Enter oder Verlassen.
+- **P10 Netz-Körper:** Position und Maßstab per Tippen; die Drehung bleibt Ziehen.
+- **P11 Verschieben mit Formeln:** wird nie erweitert; ein neues Verschieben entsteht.
+- **P12 Skizzenstatus:** Eine Skizze mit Formeln ist im Fehlerstatus, wenn der Löser nicht „gelöst“ meldet.
+- **P13 Neue Zeile:** „ParameterN“, Formel „10“, Länge.
+- **P14 Meldungen:** „Den Namen „Breit“ gibt es nicht.“
+
+Zur Frage 7 (Offen): Formeln gehen in allen Zahlenfeldern der Körper-Funktionen (außer variabler Rundung, Position des Körpers, Drehung) und in den bestimmenden Skizzenmaßen, nicht in Zeichnungsmaßen; drei Arten genügen; die Funktionen sind wie unter §2; das Fenster „Parameter“ liegt im Menü „Bearbeiten“; ein benutzter Parameter lässt sich nur mit „Durch den Wert ersetzen“ entfernen.

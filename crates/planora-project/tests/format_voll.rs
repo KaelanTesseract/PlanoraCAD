@@ -160,6 +160,7 @@ fn rich_document() -> Document {
                 sketch: rs,
                 plane: SketchPlane::Standard(StandardPlane::XZ),
                 copies: vec![],
+                formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -178,6 +179,7 @@ fn rich_document() -> Document {
             sketch: rich_sketch(StandardPlane::YZ.frame()),
             plane: SketchPlane::Standard(StandardPlane::YZ),
             copies: vec![],
+            formulas: Default::default(),
         }),
     )
     .unwrap();
@@ -192,6 +194,7 @@ fn rich_document() -> Document {
                 sketch: base,
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
+                formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -230,6 +233,7 @@ fn rich_document() -> Document {
             sketch: fs,
             plane: SketchPlane::OnFace(face),
             copies: vec![copy],
+            formulas: Default::default(),
         }),
     )
     .unwrap();

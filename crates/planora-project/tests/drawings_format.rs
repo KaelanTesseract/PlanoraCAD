@@ -320,7 +320,7 @@ fn positions_roundtrip_bit_exact() {
 #[test]
 fn format_4_with_drawings_and_5_with_centerlines() {
     // Format 6 gilt seit Teilprojekt 3c-1 (Blattangaben), Format 7 seit 3c-2; Mittellinien brauchen Format 5.
-    assert_eq!(FORMAT_VERSION, 8);
+    assert_eq!(FORMAT_VERSION, 9);
     let plain = box_document();
     assert_eq!(required_format(&plain.snapshot()), 1);
     let mut d = drawing_document();
@@ -737,19 +737,19 @@ fn missing_counters_are_derived_from_the_ids() {
 // ---- (f) Neuere Formate ------------------------------------------------------------------
 
 #[test]
-fn format_9_is_refused_with_clear_text() {
-    // Seit Teilprojekt 3c-2 (Stückliste) ist Format 7 gültig; „zu neu“ ist jetzt 9.
+fn format_10_is_refused_with_clear_text() {
+    // Seit den benannten Parametern ist Format 9 gültig; „zu neu“ ist jetzt 10.
     let good = good();
-    let e = bad(&good.replacen("\"format\": 5", "\"format\": 9", 1));
-    assert!(matches!(e, ProjectError::TooNew { found: 9, .. }), "{e:?}");
+    let e = bad(&good.replacen("\"format\": 5", "\"format\": 10", 1));
+    assert!(matches!(e, ProjectError::TooNew { found: 10, .. }), "{e:?}");
     let msg = e.to_string();
     assert!(
-        msg.contains("neueren Programmversion") && msg.contains("Format 9"),
+        msg.contains("neueren Programmversion") && msg.contains("Format 10"),
         "{msg}"
     );
     // Auch eine Datei, deren übrige Struktur unbekannt ist.
-    let e = bad("{\"format\": 9, \"zeichnungen\": \"ganz anders\"}");
-    assert!(matches!(e, ProjectError::TooNew { found: 9, .. }), "{e:?}");
+    let e = bad("{\"format\": 10, \"zeichnungen\": \"ganz anders\"}");
+    assert!(matches!(e, ProjectError::TooNew { found: 10, .. }), "{e:?}");
 }
 
 // ---- Versionsspeicher und Autosave ------------------------------------------------------

@@ -1004,6 +1004,7 @@ fn sketch_feature() -> SketchFeature {
         sketch: Sketch::new(Frame::WORLD, "Skizze", Tolerance::default()),
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: vec![],
+        formulas: Default::default(),
     }
 }
 
@@ -1261,4 +1262,176 @@ fn labels_use_allowed_glyphs() {
         assert!(texts.iter().any(|t| t == got), "{name}: {got}");
         assert!(texts.iter().any(|t| t == want), "{name}: {want}");
     }
+}
+
+// (e) Parameter und Formeln (Aufgabe 8) ----------------------------------------------------
+
+fn fx(pairs: &[(planora_feature::FieldKey, &str)]) -> planora_feature::Formulas {
+    pairs.iter().map(|(k, t)| (*k, t.to_string())).collect()
+}
+
+fn set_param(st: &mut AppState, id: planora_feature::ParamId, name: &str, formula: &str) {
+    let p = st.document.parameter(id).unwrap().clone();
+    st.edit_parameter(
+        id,
+        planora_feature::ParamEdit {
+            name: name.into(),
+            formula: formula.into(),
+            unit: p.unit,
+            comment: p.comment,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn parameter_labels() {
+    use planora_feature::FieldKey;
+    let mut s = AppState::new();
+    let mut breite = None;
+    assert_eq!(
+        label(&mut s, |s| breite = Some(s.add_parameter().unwrap())),
+        "Parameter anlegen"
+    );
+    let breite = breite.unwrap();
+    assert_eq!(
+        label(&mut s, |s| set_param(s, breite, "Breite", "40")),
+        "Parameter ändern"
+    );
+    let q = s
+        .create_box_with(
+            DVec3::new(40.0, 20.0, 10.0),
+            fx(&[(FieldKey::Breite, "Breite")]),
+        )
+        .unwrap();
+    // Der Quader ändert sich mit, der Name bleibt „Parameter ändern“ (Regel vor den Features).
+    let before = s.snapshot();
+    set_param(&mut s, breite, "Breite", "60");
+    let after = s.snapshot();
+    assert_ne!(before.features[0].kind, after.features[0].kind);
+    assert_eq!(describe_change(&before, &after), "Parameter ändern");
+    // Kommentar ändern.
+    assert_eq!(
+        label(&mut s, |s| {
+            let p = s.document.parameter(breite).unwrap().clone();
+            s.edit_parameter(
+                breite,
+                planora_feature::ParamEdit {
+                    comment: "außen".into(),
+                    name: p.name,
+                    formula: p.formula,
+                    unit: p.unit,
+                },
+            )
+            .unwrap();
+        }),
+        "Parameter ändern"
+    );
+    // Löschen und Ersetzen heißen beide „Parameter löschen“.
+    let other = s.add_parameter().unwrap();
+    assert_eq!(
+        label(&mut s, |s| s.delete_parameter(other).unwrap()),
+        "Parameter löschen"
+    );
+    // Nur der Zähler anders (ein Parameter angelegt und wieder gelöscht): „Parameter ändern“.
+    let mut counted = s.snapshot();
+    counted.next_param += 1;
+    assert_eq!(describe_change(&s.snapshot(), &counted), "Parameter ändern");
+    assert_eq!(
+        label(&mut s, |s| s.replace_parameter(breite).unwrap()),
+        "Parameter löschen"
+    );
+    assert!(s.document.feature(q).unwrap().formulas().is_empty());
+
+    // Nur der Formeltext eines Features anders (gleicher Wert): wie eine Änderung der Art.
+    let mut s = AppState::new();
+    let b = s.add_parameter().unwrap();
+    set_param(&mut s, b, "Breite", "40");
+    let q = s
+        .create_box_with(
+            DVec3::new(40.0, 20.0, 10.0),
+            fx(&[(FieldKey::Breite, "Breite")]),
+        )
+        .unwrap();
+    let before = s.snapshot();
+    s.document
+        .update_with_formulas(q, |_| {}, fx(&[(FieldKey::Breite, "breite")]))
+        .unwrap();
+    let after = s.snapshot();
+    assert_eq!(before.features[0].kind, after.features[0].kind);
+    assert_eq!(describe_change(&before, &after), "Feature ändern");
+    // Verschieben mit Formel.
+    let body = s.bodies[0].source;
+    let m = s
+        .document
+        .add_feature_with_formulas(
+            "Verschieben 1",
+            FeatureKind::Move {
+                body,
+                delta: DVec3::ZERO,
+            },
+            fx(&[(FieldKey::X, "Breite")]),
+        )
+        .unwrap();
+    let before = s.snapshot();
+    s.document
+        .update_with_formulas(m, |_| {}, fx(&[(FieldKey::X, "BREITE")]))
+        .unwrap();
+    assert_eq!(describe_change(&before, &s.snapshot()), "Verschieben");
+    // Formel entfernt (Wert bleibt): ebenso.
+    let before = s.snapshot();
+    s.document
+        .update_with_formulas(m, |_| {}, Default::default())
+        .unwrap();
+    assert_eq!(describe_change(&before, &s.snapshot()), "Verschieben");
+}
+
+#[test]
+fn sketch_formula_labels() {
+    let Base { f: base, a, b, .. } = base_sketch();
+    let mut with_dim = base.clone();
+    let c = with_dim
+        .sketch
+        .add_constraint(ConstraintKind::Distance(a, b, 3.0))
+        .unwrap();
+    // Neues Maß mit Formel: „Maß setzen“ (Strukturregel vor der Formel).
+    let mut dim_formula = with_dim.clone();
+    dim_formula.formulas.insert(c, "3".into());
+    assert_eq!(describe_sketch_change(&base, &dim_formula), "Maß setzen");
+    // Nur die Formel neu, anders oder entfernt: „Formel ändern“.
+    assert_eq!(
+        describe_sketch_change(&with_dim, &dim_formula),
+        "Formel ändern"
+    );
+    let mut other = dim_formula.clone();
+    other.formulas.insert(c, "1 + 2".into());
+    assert_eq!(
+        describe_sketch_change(&dim_formula, &other),
+        "Formel ändern"
+    );
+    assert_eq!(
+        describe_sketch_change(&dim_formula, &with_dim),
+        "Formel ändern"
+    );
+    // Formel samt Maß gelöscht: „Löschen“ (vor „Formel ändern“).
+    let mut removed = dim_formula.clone();
+    removed.sketch.remove_constraint(c).unwrap();
+    removed.formulas.clear();
+    assert_eq!(describe_sketch_change(&dim_formula, &removed), "Löschen");
+    // Hilfslinie und Formel zugleich: die Strukturregel gewinnt.
+    let mut both = dim_formula.clone();
+    both.formulas.clear();
+    let line = both.sketch.curves().next().unwrap().0;
+    both.sketch.set_construction(line, true).unwrap();
+    assert_eq!(
+        describe_sketch_change(&dim_formula, &both),
+        "Hilfslinie umschalten"
+    );
+    // Ohne Formelunterschied bleibt es beim bisherigen Namen.
+    let mut moved = dim_formula.clone();
+    moved.sketch.set_constraint_value(c, 4.0).unwrap();
+    assert_eq!(
+        describe_sketch_change(&dim_formula, &moved),
+        "Skizze ändern"
+    );
 }

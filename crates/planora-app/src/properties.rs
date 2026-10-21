@@ -1,12 +1,14 @@
 use crate::browser::error_color;
+use crate::formula_field::FormulaField;
 use crate::mesh_body::{euler_degrees, report_text, rotation_from_degrees, warning_color};
 use crate::sketch_view::format_number;
 use crate::state::AppState;
 use crate::theme;
 use planora_exchange::MeshTransform;
+use planora_feature::expr::number_text;
 use planora_feature::{
-    BlendArt, FeatureId, FeatureKind, FeatureStatus, MAX_MESH_SCALE, MIN_MESH_SCALE, SketchPlane,
-    StandardPlane,
+    BlendArt, FeatureId, FeatureKind, FeatureStatus, FieldKey, ParamUnit, SketchPlane,
+    StandardPlane, field_unit, field_value,
 };
 use planora_kernel::{BoolOp, Kernel};
 use planora_math::DVec3;
@@ -110,16 +112,6 @@ fn row(ui: &mut egui::Ui, label: &str, value: impl Into<egui::WidgetText>) {
         ui.add(egui::Label::new(value).wrap());
         ui.add_space(theme::SPACE_1);
     }
-}
-
-/// Zeile mit Bezeichnung links und einem schmalen Element (z. B. Zahlenfeld) rechtsbündig.
-fn widget_row<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    ui.horizontal(|ui| {
-        ui.label(label);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add)
-            .inner
-    })
-    .inner
 }
 
 /// Drei Zahlenfelder x, y, z unter der Bezeichnung `label`, nebeneinander in der Breite des
@@ -524,8 +516,12 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         return;
     };
     let shown_degrees = euler_degrees(t.rotation);
-    let (mut offset, mut degrees, mut scale) = (t.offset, shown_degrees, t.scale);
+    let mut degrees = shown_degrees;
+    let Some(fid) = state.bodies.get(index).map(|b| b.source.feature) else {
+        return;
+    };
     let renamed;
+    let mut commit: Option<(FieldKey, String)>;
     {
         let body = &state.bodies[index];
         ui.label("Name");
@@ -548,13 +544,10 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
             );
         }
         ui.add_space(theme::SPACE_1);
-        xyz_fields(
-            ui,
-            "mesh-position",
-            POSITION_LABEL,
-            [&mut offset.x, &mut offset.y, &mut offset.z],
-            0.5,
-        );
+        // Position und Maßstab sind Formelfelder (P10, Tippen statt Ziehen), die Drehung bleibt
+        // ein Ziehfeld.
+        let fields = mesh_fields(state, index);
+        commit = mesh_formula_rows(ui, state, ("mesh-position", fid), &fields[..3]);
         xyz_fields(
             ui,
             "mesh-rotation",
@@ -562,14 +555,12 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
             [&mut degrees.x, &mut degrees.y, &mut degrees.z],
             1.0,
         );
-        widget_row(ui, "Maßstab", |ui| {
-            theme::field(
-                ui,
-                egui::DragValue::new(&mut scale)
-                    .speed(0.01)
-                    .range(MIN_MESH_SCALE..=MAX_MESH_SCALE),
-            )
-        });
+        commit = commit.or(mesh_formula_rows(
+            ui,
+            state,
+            ("mesh-scale", fid),
+            &fields[3..],
+        ));
         if let Some(r) = body.mesh_report
             && !r.closed
         {
@@ -583,19 +574,167 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
     }
     // Die Drehung wird nur neu gebildet, wenn ein Winkel geändert wurde (sonst bliebe sie durch
     // das Hin- und Zurückrechnen nicht bitgleich).
-    let rotation = if degrees == shown_degrees {
-        t.rotation
-    } else {
-        rotation_from_degrees(degrees)
-    };
-    let new = MeshTransform {
-        offset,
-        rotation,
-        scale,
-    };
-    if new != t {
+    if degrees != shown_degrees {
+        let new = MeshTransform {
+            rotation: rotation_from_degrees(degrees),
+            ..t
+        };
         let _ = state.set_mesh_transform(index, new);
     }
+    // Ein Formelfeld wirkt bei Enter oder beim Verlassen (P9): eine Zahl setzt den Wert (die
+    // Formel dieses Feldes entfällt), sonst wird der Text die Formel des Feldes. Abgelehnt:
+    // Text und Meldung bleiben im Feld.
+    if let Some((key, text)) = commit {
+        let id = mesh_draft_id(fid, key);
+        match state.set_mesh_formula(index, key, &text) {
+            Ok(()) => ui.data_mut(|d| d.remove::<MeshDraft>(id)),
+            Err(e) => {
+                let draft = MeshDraft {
+                    stand: stand(state),
+                    text,
+                    error: Some(e),
+                };
+                ui.data_mut(|d| d.insert_temp(id, draft));
+            }
+        }
+    }
+}
+
+/// Entwurf eines Formelfelds des Netz-Körpers im egui-Speicher: der getippte Text, solange er
+/// nicht übernommen ist, und die Meldung einer abgelehnten Übernahme. Ändert sich das Dokument
+/// (Parameter, Rückgängig, andere Änderung), gilt der Entwurf nicht mehr: Das Feld zeigt wieder
+/// Formel bzw. Wert aus dem Dokument (wie die Zeilen des Fensters „Parameter“).
+#[derive(Clone, Debug)]
+struct MeshDraft {
+    stand: (u64, u64),
+    text: String,
+    error: Option<String>,
+}
+
+/// Stand des Dokuments, zu dem ein Entwurf gehört.
+fn stand(state: &AppState) -> (u64, u64) {
+    (state.instance, state.document.edit_count())
+}
+
+fn mesh_draft_id(fid: FeatureId, key: FieldKey) -> egui::Id {
+    egui::Id::new(("mesh-formula", fid, key))
+}
+
+/// Ein Formelfeld des Netz-Körpers: Feld, Bezeichnung, Einheit und gespeicherter Text (Formel,
+/// sonst der Wert).
+struct MeshField {
+    key: FieldKey,
+    label: &'static str,
+    unit: ParamUnit,
+    saved: String,
+}
+
+/// Die vier Formelfelder des Netz-Körpers `index` (Position x/y/z, Maßstab).
+fn mesh_fields(state: &AppState, index: usize) -> Vec<MeshField> {
+    let f = state
+        .bodies
+        .get(index)
+        .and_then(|b| state.document.feature(b.source.feature));
+    [
+        (FieldKey::X, "Position x"),
+        (FieldKey::Y, "Position y"),
+        (FieldKey::Z, "Position z"),
+        (FieldKey::Massstab, "Maßstab"),
+    ]
+    .into_iter()
+    .map(|(key, label)| {
+        let saved = f
+            .and_then(|f| {
+                f.formulas()
+                    .get(&key)
+                    .cloned()
+                    .or_else(|| field_value(&f.kind, key).map(field_text))
+            })
+            .unwrap_or_default();
+        MeshField {
+            key,
+            label,
+            unit: f.map_or(ParamUnit::Length, |f| field_unit(&f.kind, key)),
+            saved,
+        }
+    })
+    .collect()
+}
+
+/// Zahl für ein Formelfeld: verlustfrei, solange sie kurz ist, sonst auf vier Stellen gerundet
+/// (Nullen am Ende weg). Bleibt der Text unverändert, wird nichts übernommen.
+fn field_text(v: f64) -> String {
+    let exact = number_text(v);
+    if exact.chars().count() <= 12 {
+        return exact;
+    }
+    let rounded = format_number(v, 4);
+    let rounded = rounded.trim_end_matches('0').trim_end_matches(',');
+    if rounded.is_empty() || rounded == "-" {
+        "0".into()
+    } else {
+        rounded.to_string()
+    }
+}
+
+/// Zeilen „Bezeichnung – Formelfeld“; liefert eine Übernahme (Enter oder Verlassen nach einer
+/// Änderung) mit dem Text, wenn er gültig ist und vom gespeicherten Text abweicht.
+fn mesh_formula_rows(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    grid: (&'static str, FeatureId),
+    fields: &[MeshField],
+) -> Option<(FieldKey, String)> {
+    let scope = state.document.param_scope();
+    let now = stand(state);
+    let fid = grid.1;
+    let mut commit = None;
+    egui::Grid::new(grid).num_columns(2).show(ui, |ui| {
+        for f in fields {
+            let id = mesh_draft_id(fid, f.key);
+            let draft = ui
+                .data(|d| d.get_temp::<MeshDraft>(id))
+                .filter(|d| d.stand == now);
+            let mut text = draft
+                .as_ref()
+                .map_or_else(|| f.saved.clone(), |d| d.text.clone());
+            let mut error = draft.and_then(|d| d.error);
+            ui.label(f.label);
+            let out = ui
+                .vertical(|ui| {
+                    let out = FormulaField::new(("mesh-field", fid, f.key), &mut text, f.unit)
+                        .width(80.0)
+                        .label(f.label)
+                        .saved(&f.saved)
+                        .show(ui, &scope);
+                    if let Some(e) = &error
+                        && out.error.is_none()
+                    {
+                        ui.colored_label(theme::palette(ui.visuals().dark_mode).error, e);
+                    }
+                    out
+                })
+                .inner;
+            if out.response.changed() {
+                error = None;
+            }
+            if out.committed && out.error.is_none() && text.trim() != f.saved {
+                commit = Some((f.key, text.clone()));
+            }
+            if text == f.saved && error.is_none() {
+                ui.data_mut(|d| d.remove::<MeshDraft>(id));
+            } else {
+                let draft = MeshDraft {
+                    stand: now,
+                    text,
+                    error,
+                };
+                ui.data_mut(|d| d.insert_temp(id, draft));
+            }
+            ui.end_row();
+        }
+    });
+    commit
 }
 
 #[cfg(test)]

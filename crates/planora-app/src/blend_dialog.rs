@@ -3,10 +3,14 @@
 
 use crate::browser::error_color;
 use crate::dialog::{Dialog, DialogSize};
+use crate::formula_field::{FieldInput, FormulaField, classify, names_hint};
 use crate::sketch_view::{format_number, parse_number};
 use crate::state::{AppState, MAX_COORD_MM};
 use crate::theme;
-use planora_feature::BlendArt;
+use planora_feature::{
+    BlendArt, FieldKey, Formulas, MAX_CHAMFER_ANGLE_DEG, MIN_CHAMFER_ANGLE_DEG, ParamScope,
+    ParamUnit,
+};
 use planora_kernel::blend::topo::{edge_uses, face_name};
 use planora_kernel::blend::{MAX_RADIUS_POINTS, min_blend_size_request};
 use planora_kernel::{BlendKind, Edge, Id, Solid};
@@ -15,10 +19,6 @@ use planora_render::{EdgeRef, Pick};
 
 /// Meldung, solange keine Kante angeklickt ist.
 pub const NO_EDGE: &str = "Bitte zuerst eine Kante im Fenster anklicken.";
-
-/// Kleinster und größter Fasenwinkel in Grad (wie im Kernel, Entscheidung P4).
-const MIN_ANGLE_DEG: f64 = 1.0;
-const MAX_ANGLE_DEG: f64 = 179.0;
 
 /// Vorgabe des zweiten Abstands bei „Fase: zwei Abstände“ in mm (wie der erste).
 const DEFAULT_SECOND_DISTANCE: &str = "1";
@@ -55,6 +55,17 @@ impl ArtChoice {
             ArtChoice::FaseGleich => ("Abstand", None),
             ArtChoice::FaseZwei => ("Abstand 1", Some("Abstand 2")),
             ArtChoice::FaseWinkel => ("Abstand", Some("Winkel")),
+        }
+    }
+
+    /// Formelfelder zu [`ArtChoice::fields`] (die variable Rundung nimmt keine Formeln, ihr
+    /// Eintrag wird nicht benutzt).
+    pub fn keys(self) -> (FieldKey, Option<FieldKey>) {
+        match self {
+            ArtChoice::Rundung | ArtChoice::RundungVariabel => (FieldKey::Radius, None),
+            ArtChoice::FaseGleich => (FieldKey::Abstand, None),
+            ArtChoice::FaseZwei => (FieldKey::Abstand1, Some(FieldKey::Abstand2)),
+            ArtChoice::FaseWinkel => (FieldKey::Abstand, Some(FieldKey::Winkel)),
         }
     }
 
@@ -203,13 +214,58 @@ pub struct BlendDialog {
     error: Option<String>,
 }
 
-/// Liest ein Maß (größer als null, höchstens `MAX_COORD_MM`).
+/// Zulässiges Maß: größer als null, höchstens `MAX_COORD_MM`.
+fn size_ok(v: f64) -> bool {
+    v > 0.0 && v <= MAX_COORD_MM
+}
+
+/// Zulässiger Fasenwinkel in Grad (Grenzen wie im Dokument und im Kernel eingeschlossen).
+fn angle_ok(w: f64) -> bool {
+    (MIN_CHAMFER_ANGLE_DEG..=MAX_CHAMFER_ANGLE_DEG).contains(&w)
+}
+
+fn size_message(label: &str, text: &str) -> String {
+    format!("„{label}“ muss eine Zahl größer als null sein (eingegeben: „{text}“)")
+}
+
+/// Meldung bei einem unzulässigen Fasenwinkel.
+pub fn angle_message(text: &str) -> String {
+    format!(
+        "„Winkel“ muss zwischen {MIN_CHAMFER_ANGLE_DEG:.0}° und {MAX_CHAMFER_ANGLE_DEG:.0}° liegen (eingegeben: „{text}“)"
+    )
+}
+
+/// Liest ein Maß (nur Zahlen).
 fn size(label: &str, text: &str) -> Result<f64, String> {
     match parse_number(text) {
-        Some(v) if v > 0.0 && v <= MAX_COORD_MM => Ok(v),
-        _ => Err(format!(
-            "„{label}“ muss eine Zahl größer als null sein (eingegeben: „{text}“)"
-        )),
+        Some(v) if size_ok(v) => Ok(v),
+        _ => Err(size_message(label, text)),
+    }
+}
+
+/// Liest ein Feld: Zahl oder Formel (in `unit`, mit den Parametern `scope`), geprüft mit `ok`;
+/// ein unzulässiger Wert ergibt `bad()`, eine fehlerhafte Formel „{label}: {Meldung}“. Ohne
+/// Parameter gilt ein Text, der sich nicht auswerten lässt, wie bisher als ungültige Zahl
+/// (`bad()`, etwa bei „nan“).
+fn read_field(
+    label: &str,
+    text: &str,
+    unit: ParamUnit,
+    scope: &ParamScope,
+    ok: fn(f64) -> bool,
+    bad: impl Fn() -> String,
+) -> Result<(f64, Option<String>), String> {
+    if let Some(FieldInput::Formula(f)) = classify(text) {
+        match scope.eval(&f, unit) {
+            Ok(v) if ok(v) => return Ok((v, Some(f))),
+            Ok(_) => return Err(bad()),
+            Err(e) if !scope.names().is_empty() => return Err(format!("{label}: {e}")),
+            Err(_) => return Err(bad()),
+        }
+    }
+    match parse_number(text) {
+        Some(v) if ok(v) => Ok((v, None)),
+        _ => Err(bad()),
     }
 }
 
@@ -390,8 +446,17 @@ impl BlendDialog {
         ))
     }
 
-    /// Art mit den eingegebenen Maßen; ein Fehlertext nennt das ungültige Feld.
+    /// Art mit den eingegebenen Maßen (nur Zahlen, ohne Parameter); ein Fehlertext nennt das
+    /// ungültige Feld.
     pub fn art_value(&self) -> Result<BlendArt, String> {
+        self.art_formulas(&ParamScope::default())
+            .map(|(art, _)| art)
+    }
+
+    /// Art mit den eingegebenen Maßen und die Formeln der Felder (Formeln mit den Parametern
+    /// `scope` ausgewertet; die Punkte der variablen Rundung nehmen nur Zahlen).
+    pub fn art_formulas(&self, scope: &ParamScope) -> Result<(BlendArt, Formulas), String> {
+        let mut formulas = Formulas::new();
         if self.art == ArtChoice::RundungVariabel {
             let mut punkte = Vec::with_capacity(self.points.len());
             for (k, (p, r)) in self.points.iter().enumerate() {
@@ -402,30 +467,43 @@ impl BlendDialog {
                     })?;
                 punkte.push((pos, size(&format!("Radius {}", k + 1), r)?));
             }
-            return Ok(BlendArt::RundungVariabel { punkte });
+            return Ok((BlendArt::RundungVariabel { punkte }, formulas));
         }
         let (l1, l2) = self.art.fields();
-        let a = size(l1, &self.first)?;
-        Ok(match self.art {
-            ArtChoice::Rundung | ArtChoice::RundungVariabel => BlendArt::Rundung { radius: a },
-            ArtChoice::FaseGleich => BlendArt::FaseGleich { abstand: a },
-            ArtChoice::FaseZwei => BlendArt::FaseZwei {
+        let (k1, k2) = self.art.keys();
+        let mut read = |label: &str, key: FieldKey, text: &str| -> Result<f64, String> {
+            let (v, formula) = if key == FieldKey::Winkel {
+                read_field(label, text, ParamUnit::Angle, scope, angle_ok, || {
+                    angle_message(text)
+                })?
+            } else {
+                read_field(label, text, ParamUnit::Length, scope, size_ok, || {
+                    size_message(label, text)
+                })?
+            };
+            if let Some(f) = formula {
+                formulas.insert(key, f);
+            }
+            Ok(v)
+        };
+        let a = read(l1, k1, &self.first)?;
+        let second = match (l2, k2) {
+            (Some(l2), Some(k2)) => Some(read(l2, k2, &self.second)?),
+            _ => None,
+        };
+        let art = match (self.art, second) {
+            (ArtChoice::FaseZwei, Some(b)) => BlendArt::FaseZwei {
                 abstand1: a,
-                abstand2: size(l2.unwrap_or("Abstand 2"), &self.second)?,
+                abstand2: b,
             },
-            ArtChoice::FaseWinkel => match parse_number(&self.second) {
-                Some(w) if (MIN_ANGLE_DEG..=MAX_ANGLE_DEG).contains(&w) => BlendArt::FaseWinkel {
-                    abstand: a,
-                    winkel: w,
-                },
-                _ => {
-                    return Err(format!(
-                        "„Winkel“ muss zwischen {MIN_ANGLE_DEG:.0}° und {MAX_ANGLE_DEG:.0}° liegen (eingegeben: „{}“)",
-                        self.second
-                    ));
-                }
+            (ArtChoice::FaseWinkel, Some(w)) => BlendArt::FaseWinkel {
+                abstand: a,
+                winkel: w,
             },
-        })
+            (ArtChoice::FaseGleich, _) => BlendArt::FaseGleich { abstand: a },
+            _ => BlendArt::Rundung { radius: a },
+        };
+        Ok((art, formulas))
     }
 
     /// „Erzeugen“: `true`, wenn das Fenster offen bleiben soll (Fehler stehen dann im Fenster
@@ -442,9 +520,10 @@ impl BlendDialog {
             state.message = Some(NO_EDGE.into());
             return true;
         };
-        let art = match self.art_value().and_then(|a| {
+        let scope = state.document.param_scope();
+        let (art, formulas) = match self.art_formulas(&scope).and_then(|(a, f)| {
             let min = self.min_size(state).unwrap_or(0.0);
-            check_min_sizes(&a, min).map(|()| a)
+            check_min_sizes(&a, min).map(|()| (a, f))
         }) {
             Ok(a) => a,
             Err(e) => {
@@ -457,7 +536,7 @@ impl BlendDialog {
             .first_face
             .as_deref()
             .filter(|_| self.art.uses_first_face());
-        match state.add_blend_first(body, &edges, art, self.tangentenkette, first_face) {
+        match state.add_blend_with(body, &edges, art, self.tangentenkette, first_face, formulas) {
             Ok(_) => {
                 self.error = None;
                 false
@@ -481,6 +560,8 @@ impl BlendDialog {
         }
         let mut open = true;
         let (mut run, mut cancel) = (false, false);
+        let scope = state.document.param_scope();
+        let mut errors: Vec<String> = Vec::new();
         Dialog::new(self.title(), DialogSize::Normal)
             .open(&mut open)
             .show(ctx, |ui| {
@@ -540,27 +621,36 @@ impl BlendDialog {
                     }
                 } else {
                     let (l1, l2) = self.art.fields();
+                    let (k1, k2) = self.art.keys();
+                    let unit = |k: FieldKey| {
+                        if k == FieldKey::Winkel {
+                            ParamUnit::Angle
+                        } else {
+                            ParamUnit::Length
+                        }
+                    };
                     egui::Grid::new("blend_numbers")
-                        .num_columns(3)
+                        .num_columns(2)
                         .show(ui, |ui| {
-                            ui.label(l1);
-                            theme::text_field(
-                                ui,
-                                egui::TextEdit::singleline(&mut self.first).desired_width(90.0),
-                            );
-                            ui.label("mm");
-                            ui.end_row();
-                            if let Some(l2) = l2 {
-                                ui.label(l2);
-                                theme::text_field(
-                                    ui,
-                                    egui::TextEdit::singleline(&mut self.second)
-                                        .desired_width(90.0),
-                                );
-                                ui.label(if l2 == "Winkel" { "°" } else { "mm" });
+                            let rows = [
+                                Some((l1, k1, &mut self.first)),
+                                l2.zip(k2).map(|(l, k)| (l, k, &mut self.second)),
+                            ];
+                            for (label, key, text) in rows.into_iter().flatten() {
+                                ui.label(label);
+                                let out = FormulaField::new(("blend-field", key), text, unit(key))
+                                    .error_below(false)
+                                    .label(label)
+                                    .show(ui, &scope);
+                                if let Some(e) = out.error {
+                                    errors.push(format!("{label}: {e}"));
+                                }
                                 ui.end_row();
                             }
                         });
+                    if let Some(hint) = names_hint(&scope) {
+                        ui.weak(hint);
+                    }
                 }
                 if self.art.uses_first_face()
                     && let Some((a, b)) = self.faces(state)
@@ -583,11 +673,15 @@ impl BlendDialog {
                     &mut self.tangentenkette,
                     "Tangentenkette (glatt anschließende Kanten mitnehmen)",
                 );
-                if let Some(e) = &self.error {
-                    ui.colored_label(error_color(ui.visuals().dark_mode), e);
+                let dark = ui.visuals().dark_mode;
+                for e in errors.iter().chain(&self.error) {
+                    ui.colored_label(error_color(dark), e);
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Erzeugen").clicked() {
+                    if ui
+                        .add_enabled(errors.is_empty(), egui::Button::new("Erzeugen"))
+                        .clicked()
+                    {
                         run = true;
                     }
                     if ui.button("Abbrechen").clicked() {

@@ -43,6 +43,12 @@ pub enum FeatureError {
         max = crate::compute::MAX_COORD_MM
     )]
     OutOfRange(String),
+    /// Ungültige Formel oder Parametertabelle (Meldung fertig für die Oberfläche).
+    #[error("{0}")]
+    Formula(String),
+    /// Ein Parameter lässt sich nicht löschen, weil Formeln ihn nennen.
+    #[error("{name} wird in {} benutzt.", .users.join(", "))]
+    ParameterInUse { name: String, users: Vec<String> },
 }
 
 fn join_ids(ids: &[u64]) -> String {

@@ -24,6 +24,7 @@ pub fn rect_sketch(w: f64, h: f64) -> SketchFeature {
         sketch: sk,
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: vec![],
+        formulas: Default::default(),
     }
 }
 
@@ -199,6 +200,7 @@ fn revolve_from_a_sketch_axis() {
                 sketch: sk,
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
+                formulas: Default::default(),
             }),
         )
         .unwrap();

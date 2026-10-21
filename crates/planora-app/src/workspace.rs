@@ -9,6 +9,7 @@ use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
 use crate::history::{History, Tracker, snapshot_bytes};
 use crate::import_dialog::ImportDialog;
+use crate::parameter_dialog::ParameterDialog;
 use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
 use crate::undo_labels::describe_change;
 use planora_feature::Snapshot;
@@ -44,6 +45,9 @@ pub struct DocTab {
     pub import_dialog: Option<ImportDialog>,
     /// Fenster „Neue Zeichnung“.
     pub drawing_dialog: Option<NewDrawingDialog>,
+    /// Fenster „Parameter“. Es sperrt Rückgängig nicht (Plan P8): nicht in
+    /// [`DocTab::dialog_open`], nicht in [`DocTab::close_dialogs`]; nach jedem Sprung lädt es neu.
+    pub parameter_dialog: Option<ParameterDialog>,
     /// Anzeigename ohne `.pcad`, bzw. „Unbenannt n“.
     pub name: String,
     pub path: Option<NodePath>,
@@ -86,6 +90,7 @@ impl DocTab {
             export_dialog: None,
             import_dialog: None,
             drawing_dialog: None,
+            parameter_dialog: None,
             name,
             path: None,
             store: None,
@@ -351,6 +356,26 @@ impl DocTab {
     fn after_jump(&mut self) {
         self.tracker.reset(self.state.document.edit_count());
         self.close_dialogs();
+        self.reload_parameter_dialog();
+    }
+
+    /// Das Fenster „Parameter“ liest seine Zeilen neu (Entwürfe und Kennungen des alten Stands
+    /// entfallen); es bleibt offen.
+    fn reload_parameter_dialog(&mut self) {
+        if let Some(d) = &mut self.parameter_dialog {
+            d.reload(&self.state);
+        }
+    }
+
+    /// Nach einer Änderung im Fenster „Parameter“: Die Änderung wird sofort ein eigener Schritt
+    /// (auch wenn die Maustaste schon für ein Ziehen gedrückt ist, das sonst mit ihr zu einem
+    /// Schritt verschmölze). Ein offenes Bearbeiten-Fenster schließt mit Hinweis: Seine Felder
+    /// zeigten alte Werte und Formeln, „Übernehmen“ würde Formeln still verwerfen.
+    pub fn after_parameter_change(&mut self) {
+        self.observe_history(false);
+        if self.feature_dialog.take().is_some() {
+            self.state.info = Some(crate::parameter_dialog::DIALOG_CLOSED.into());
+        }
     }
 
     /// Ist ein Fenster oder eine Rückfrage dieses Tabs offen (sperrt Strg+Z, R8)?
@@ -404,6 +429,7 @@ impl DocTab {
         self.state = state;
         (self.history, self.tracker) = fresh_history(&self.state);
         self.close_dialogs();
+        self.reload_parameter_dialog();
     }
 
     /// Verlauf des Tabs (lesen).

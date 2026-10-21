@@ -4,7 +4,7 @@ use crate::refs::{EdgeRef, FaceRef};
 use planora_exchange::{ExchangeMesh, MeshTransform};
 use planora_kernel::{AnalyticKernel, BlendKind, BoolOp, Solid};
 use planora_math::{DQuat, DVec3, Frame};
-use planora_sketch::{CurveId, Sketch};
+use planora_sketch::{ConstraintId, CurveId, Sketch};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -27,6 +27,10 @@ pub struct MeshId(pub u64);
 /// Kleinster und größter Maßstab eines Netz-Körpers (Spec §6).
 pub const MIN_MESH_SCALE: f64 = 1e-6;
 pub const MAX_MESH_SCALE: f64 = 1e6;
+/// Kleinster und größter Fasenwinkel in Grad, beide eingeschlossen (wie im Fenster „Fase“ und
+/// im Kernel, Teilprojekt 8 P4).
+pub const MIN_CHAMFER_ANGLE_DEG: f64 = 1.0;
+pub const MAX_CHAMFER_ANGLE_DEG: f64 = 179.0;
 /// Größte Abweichung der Länge der Drehung von 1 (Spec §6 „normiert“, Plan P17); deckt das
 /// Runden beim Speichern und beim Umrechnen aus Grad ab.
 pub const ROTATION_NORM_TOL: f64 = 1e-6;
@@ -73,22 +77,48 @@ pub struct EdgeCopy {
     pub edge: EdgeRef,
 }
 
+/// Formeln der Skizzenmaße: Abhängigkeit → Formeltext (Nebentabelle, Spec §4a.1). Der Wert in
+/// der Abhängigkeit ist der zuletzt berechnete; Winkelformeln ergeben Grad, gespeichert wird
+/// Bogenmaß.
+pub type SketchFormulas = BTreeMap<ConstraintId, String>;
+
 #[derive(Clone, Debug)]
 pub struct SketchFeature {
     pub sketch: Sketch,
     pub plane: SketchPlane,
     pub copies: Vec<EdgeCopy>,
+    /// Formeln der bestimmenden Maße (nur lebende, nicht anzeigende Maß-Abhängigkeiten, siehe
+    /// [`SketchFeature::prune_formulas`]).
+    pub formulas: SketchFormulas,
+}
+
+impl SketchFeature {
+    /// Entfernt Formeln an fehlenden, nicht maßgebenden (`!is_dimension()`) oder anzeigenden
+    /// (`driven`) Abhängigkeiten; `true`, wenn sich etwas änderte.
+    pub fn prune_formulas(&mut self) -> bool {
+        let before = self.formulas.len();
+        let sketch = &self.sketch;
+        self.formulas.retain(|id, _| {
+            sketch
+                .constraint(*id)
+                .is_some_and(|c| c.kind.is_dimension() && !c.driven)
+        });
+        self.formulas.len() != before
+    }
 }
 
 /// Gleich heißt: gleicher Stand der Skizze ([`Sketch::revision`]), gleicher Skizzenname (ändert
-/// den Stand nicht, wird aber gespeichert), gleiche Ebene, gleiche Kantenkopien. Zwei getrennt gebaute Skizzen mit gleichem Inhalt sind ungleich (vorsichtig:
-/// höchstens ein überflüssiger Schritt im Verlauf oder eine Neuberechnung mehr).
+/// den Stand nicht, wird aber gespeichert), gleiche Ebene, gleiche Kantenkopien, gleiche
+/// Formeltexte (eine Formel ändert den Stand der Skizze nicht). Zwei getrennt gebaute Skizzen
+/// mit gleichem Inhalt sind ungleich (vorsichtig: höchstens ein überflüssiger Schritt im Verlauf
+/// oder eine Neuberechnung mehr).
 impl PartialEq for SketchFeature {
     fn eq(&self, other: &Self) -> bool {
         self.sketch.revision() == other.sketch.revision()
             && self.sketch.name == other.sketch.name
             && self.plane == other.plane
             && self.copies == other.copies
+            && self.formulas == other.formulas
     }
 }
 
@@ -339,15 +369,26 @@ pub struct Feature {
     pub suppressed: bool,
     pub kind: FeatureKind,
     pub status: FeatureStatus,
-    /// Wird bei jeder Änderung der Parameter erhöht.
+    /// Wird bei jeder Änderung der Parameter erhöht (auch wenn eine Formel einen neuen Wert
+    /// ergibt).
     pub(crate) version: u64,
     pub(crate) result: Option<FeatureResult>,
     /// Schlüssel der Eingaben und Meldung der zuletzt fehlgeschlagenen Berechnung. Bei gleichen
     /// Eingaben wird der Fehler übernommen statt erneut gerechnet.
     pub(crate) failed: Option<(Vec<u64>, String)>,
+    /// Formeln der Zahlenfelder (Nebentabelle, Spec §4a.1); die Felder in `kind` tragen den
+    /// zuletzt berechneten Wert.
+    pub(crate) formulas: crate::formulas::Formulas,
+    /// Erster Formelfehler nach dem letzten Auswertungsdurchgang; ergibt den Status `Error`.
+    pub(crate) issue: Option<crate::formulas::FormulaIssue>,
 }
 
 impl Feature {
+    /// Die Formeln der Zahlenfelder (Feld → Formeltext).
+    pub fn formulas(&self) -> &crate::formulas::Formulas {
+        &self.formulas
+    }
+
     /// Stand der Parameter (und der Unterdrückung); ändert sich bei jeder solchen Änderung.
     /// Dialoge erkennen daran, dass ihre Kopie veraltet ist.
     pub fn version(&self) -> u64 {
@@ -387,6 +428,12 @@ pub struct Document {
     /// Eigene Texte der Stücklistenzeilen, nach Körperkennung (Teilprojekt 3c-2); zählt wie die
     /// Zeichnungen zu [`Document::edit_count`], nicht zu [`Document::model_edit_count`].
     pub(crate) parts_overrides: BTreeMap<planora_drawing::BodyKey, planora_drawing::RowOverride>,
+    /// Parametertabelle (Tabellenreihenfolge); zählt zum Modell.
+    pub(crate) parameters: Vec<crate::params::Parameter>,
+    /// Berechnete Werte, je Zeile von `parameters` einer.
+    pub(crate) param_values: Vec<f64>,
+    /// Nächste zu vergebende Parameterkennung (beginnt bei 1).
+    pub(crate) next_param: u64,
 }
 
 /// Standard-Sehnentoleranz in Millimetern (wie in der App).
@@ -427,6 +474,9 @@ impl Document {
             drawing_edits: 0,
             project_info: None,
             parts_overrides: BTreeMap::new(),
+            parameters: Vec::new(),
+            param_values: Vec::new(),
+            next_param: 1,
         }
     }
 

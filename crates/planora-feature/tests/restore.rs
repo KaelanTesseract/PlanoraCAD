@@ -39,6 +39,7 @@ fn sketch_feature() -> SketchFeature {
         sketch: sk,
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: vec![],
+        formulas: Default::default(),
     }
 }
 

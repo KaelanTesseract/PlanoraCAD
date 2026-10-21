@@ -367,6 +367,7 @@ fn sketch_feature() -> SketchFeature {
         sketch: Sketch::new(Frame::WORLD, "Skizze", Tolerance::default()),
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: vec![],
+        formulas: Default::default(),
     }
 }
 
@@ -377,6 +378,7 @@ fn with_sketch(sf: SketchFeature) -> Snapshot {
         name: "S".into(),
         suppressed: false,
         kind: FeatureKind::Sketch(sf),
+        formulas: Default::default(),
     });
     s
 }

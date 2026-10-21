@@ -14,8 +14,8 @@ use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
 use crate::{
-    about_dialog, browser, drawing_view, fonts, prompts, shell_panels, sketch_panel, theme,
-    viewport,
+    about_dialog, browser, drawing_view, fonts, parameter_dialog, prompts, shell_panels,
+    sketch_panel, theme, viewport,
 };
 use planora_feature::SketchPlane;
 use planora_kernel::BoolOp;
@@ -609,6 +609,9 @@ pub fn redo_menu_text(label: Option<&str>) -> String {
     }
 }
 
+/// Menüeintrag „Bearbeiten → Parameter …“.
+pub const PARAMETERS_ENTRY: &str = "Parameter …";
+
 fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     // Rückgängig und Wiederholen: gesperrt mit Hilfetext, wenn es nichts zu tun gibt, in alten
     // Versionen und während des Exports. Ein offenes Fenster sperrt nicht, es wird geschlossen.
@@ -628,6 +631,21 @@ fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         .clicked()
     {
         redo_active(ws);
+        ui.close();
+    }
+    ui.separator();
+    // Parameter: gesperrt, solange eine Skizze offen ist (ihr Entwurf hängt an den alten Werten).
+    let tab = ws.active_tab_mut();
+    let sketch_open = tab.state.sketch_session.is_some();
+    if entry(
+        ui,
+        !sketch_open,
+        icons::button(Icon::Parameters, PARAMETERS_ENTRY),
+    )
+    .on_disabled_hover_text(crate::state::SKETCH_OPEN_LOCK)
+    .clicked()
+    {
+        parameter_dialog::open(tab);
         ui.close();
     }
     ui.separator();
@@ -810,6 +828,11 @@ impl eframe::App for PlanoraApp {
         }
 
         self.shortcuts(&ctx);
+        // Das Fenster „Parameter“ vor allen übrigen Bereichen: Übernimmt es eine Zeile, weil ein
+        // Klick das Feld verlassen hat, wird die Änderung ein eigener Schritt, bevor die Ansicht
+        // im selben Bild mit einem Ziehen beginnt (sonst ein gemeinsamer Schritt). Ein Fenster
+        // schwebt ohnehin über den Feldern.
+        parameter_dialog::show_in_tab(&ctx, self.ws.active_tab_mut());
         // Im Skizzen-Modus gibt es keinen Zeichnungsbereich: die Skizze braucht die 3D-Ansicht.
         let tab = self.ws.active_tab_mut();
         if tab.state.document_name != tab.name {
@@ -876,6 +899,10 @@ impl eframe::App for PlanoraApp {
             && dialog.show(&ctx, &mut tab.state)
         {
             tab.dialog = Some(dialog);
+        }
+        // Auf jedem Weg geschlossen (Rückgängig, Skizze, Tab): die getippten Texte vergessen.
+        if tab.dialog.is_none() {
+            CreateDialog::forget_texts(&ctx, tab.state.instance);
         }
         if let Some(mut dialog) = tab.feature_dialog.take()
             && dialog.show(&ctx, &mut tab.state)
