@@ -1126,18 +1126,78 @@ fn winding_number(q: DVec3, triangles: &[[DVec3; 3]]) -> f64 {
 }
 
 /// Höchstens so viele Probepunkte (Schwerpunkte von Dreiecken) je Schale.
-const SHELL_PROBES: usize = 32;
+const SHELL_PROBES: usize = 512;
 
-/// Schwerpunkte gleichmäßig verteilter Dreiecke der Schale, ein kleines Stück ins Innere der
-/// Schale gerückt (`volume`: ihr Volumen mit Vorzeichen, gibt an, wohin die Dreiecke zeigen), damit
-/// ein Punkt nie genau auf einer berührenden Schale liegt.
-fn probes(triangles: &[[DVec3; 3]], volume: f64) -> Vec<DVec3> {
-    let (lo, hi) = triangles
+/// Hüllquader von Dreiecken.
+fn bounds_of(triangles: &[[DVec3; 3]]) -> (DVec3, DVec3) {
+    triangles
         .iter()
         .flatten()
         .fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), p| {
             (lo.min(*p), hi.max(*p))
-        });
+        })
+}
+
+/// Liegt `q` im um `d` vergrößerten Quader?
+fn in_box(q: DVec3, (lo, hi): (DVec3, DVec3), d: f64) -> bool {
+    q.cmpge(lo - DVec3::splat(d)).all() && q.cmple(hi + DVec3::splat(d)).all()
+}
+
+/// Überschneiden sich die um `d` vergrößerten Quader?
+fn boxes_meet(a: (DVec3, DVec3), b: (DVec3, DVec3), d: f64) -> bool {
+    (a.0 - DVec3::splat(d)).cmple(b.1).all() && (b.0 - DVec3::splat(d)).cmple(a.1).all()
+}
+
+/// Abstand von `q` zum Dreieck `t` (nächster Punkt nach Ericson, „Real-Time Collision
+/// Detection“, 5.1.5).
+fn triangle_distance(q: DVec3, t: &[DVec3; 3]) -> f64 {
+    let [a, b, c] = *t;
+    let (ab, ac, ap) = (b - a, c - a, q - a);
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return q.distance(a);
+    }
+    let bp = q - b;
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return q.distance(b);
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return q.distance(a + ab * (d1 / (d1 - d3)));
+    }
+    let cp = q - c;
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return q.distance(c);
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return q.distance(a + ac * (d2 / (d2 - d6)));
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return q.distance(b + (c - b) * w);
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let (v, w) = (vb * denom, vc * denom);
+    q.distance(a + ab * v + ac * w)
+}
+
+/// Kleinster Abstand von `q` zu den Dreiecken.
+fn mesh_distance(q: DVec3, triangles: &[[DVec3; 3]]) -> f64 {
+    triangles
+        .iter()
+        .map(|t| triangle_distance(q, t))
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// Schwerpunkte gleichmäßig verteilter Dreiecke der Schale (höchstens [`SHELL_PROBES`]), ein
+/// kleines Stück ins Innere der Schale gerückt (`volume`: ihr Volumen mit Vorzeichen, gibt an,
+/// wohin die Dreiecke zeigen).
+fn probes(triangles: &[[DVec3; 3]], volume: f64) -> Vec<DVec3> {
+    let (lo, hi) = bounds_of(triangles);
     let inset = 1e-6 * (1.0 + lo.distance(hi));
     let step = triangles.len().div_ceil(SHELL_PROBES).max(1);
     triangles
@@ -1150,34 +1210,70 @@ fn probes(triangles: &[[DVec3; 3]], volume: f64) -> Vec<DVec3> {
         .collect()
 }
 
-/// Hohlräume liegen ganz in ihrer äußeren Schale, Stücke überschneiden sich nicht (je Schale
-/// Probepunkte gegen die Umlaufzahl der anderen; Berühren ist erlaubt). Billig, nicht vollständig.
+/// Lage der Schalen zueinander, über die groben Netze: Ein Hohlraum liegt in seiner äußeren
+/// Schale, Stücke überschneiden sich nicht. Ein Stück ist seine äußere Schale ohne seine
+/// Hohlräume (ein Stück im Hohlraum eines anderen ist erlaubt). Ein Probepunkt (Schwerpunkt eines
+/// Netzdreiecks) zählt erst, wenn er weiter als `depth` (zwei Sehnen des Netzes plus Genauigkeit
+/// der Datei) von der anderen Schale entfernt liegt: Berührende Stücke (Stift in Bohrung) und
+/// Netzfehler bleiben erlaubt. Nur Paare, deren Hüllquader sich treffen, werden verglichen.
 fn check_shells(
     triangles: &ShellTriangles,
     volumes: &[f64],
     owners: &[Option<usize>],
+    depth: f64,
 ) -> Result<(), Skip> {
+    let boxes: Vec<(DVec3, DVec3)> = triangles.iter().map(|t| bounds_of(t)).collect();
     let probes: Vec<Vec<DVec3>> = triangles
         .iter()
         .zip(volumes)
         .map(|(t, v)| probes(t, *v))
         .collect();
-    for (k, owner) in owners.iter().enumerate() {
-        if let Some(o) = owner
-            && probes[k]
-                .iter()
-                .any(|q| winding_number(*q, &triangles[*o]) < 0.25)
-        {
-            return Err(Skip("Ein Hohlraum liegt nicht ganz im Körper.".into()));
+    let lumps: Vec<usize> = (0..owners.len()).filter(|k| owners[*k].is_none()).collect();
+    let voids_of = |l: usize| -> Vec<usize> {
+        (0..owners.len())
+            .filter(|k| owners[*k] == Some(l))
+            .collect()
+    };
+    let outside = || Skip("Ein Hohlraum liegt nicht ganz im Körper.".into());
+    // Hohlräume: ganz in ihrer äußeren Schale, die äußere Schale nicht im Hohlraum.
+    for (v, owner) in owners.iter().enumerate() {
+        let Some(o) = *owner else {
+            continue;
+        };
+        if probes[v].iter().any(|q| {
+            winding_number(*q, &triangles[o]) < 0.25 && mesh_distance(*q, &triangles[o]) > depth
+        }) {
+            return Err(outside());
+        }
+        if probes[o].iter().any(|q| {
+            in_box(*q, boxes[v], depth)
+                && winding_number(*q, &triangles[v]) > 0.75
+                && mesh_distance(*q, &triangles[v]) > depth
+        }) {
+            return Err(outside());
         }
     }
-    let lumps: Vec<usize> = (0..owners.len()).filter(|k| owners[*k].is_none()).collect();
+    // Stücke: kein Punkt eines Stücks tief im Material eines anderen.
     for &a in &lumps {
         for &b in &lumps {
-            if a != b
-                && probes[a]
-                    .iter()
-                    .any(|q| winding_number(*q, &triangles[b]) > 0.75)
+            if a == b || !boxes_meet(boxes[a], boxes[b], depth) {
+                continue;
+            }
+            let voids = voids_of(b);
+            let inside = |q: DVec3| {
+                let w = winding_number(q, &triangles[b])
+                    - voids
+                        .iter()
+                        .map(|v| winding_number(q, &triangles[*v]))
+                        .sum::<f64>();
+                w > 0.75
+                    && std::iter::once(b)
+                        .chain(voids.iter().copied())
+                        .all(|s| mesh_distance(q, &triangles[s]) > depth)
+            };
+            if probes[a]
+                .iter()
+                .any(|q| in_box(*q, boxes[b], depth) && inside(*q))
             {
                 return Err(Skip("Zwei Stücke des Körpers überschneiden sich.".into()));
             }
@@ -1189,11 +1285,12 @@ fn check_shells(
 /// Außenrichtung je Schale über ihr Volumen: äußere Schalen positiv, Hohlräume (Eigentümer in
 /// `owners`, Reihenfolge von `solid.shells`) negativ; sonst wird die Schale umgedreht – außer sie
 /// enthält eine Fläche, deren Seite nur geraten ist (`guessed`, je Fläche): Dann ist der Körper
-/// zweideutig. Danach Lage der Schalen zueinander ([`check_shells`]).
+/// zweideutig. Danach Lage der Schalen zueinander ([`check_shells`], mit der Genauigkeit `tol`).
 fn orient_shells(
     solid: &mut Solid,
     owners: &[Option<usize>],
     guessed: &[bool],
+    tol: f64,
 ) -> Result<(), Skip> {
     let (volumes, triangles) = shell_volumes(solid)?;
     for (k, &v) in volumes.iter().enumerate() {
@@ -1210,7 +1307,7 @@ fn orient_shells(
             turn_inside_out(solid, &ids);
         }
     }
-    check_shells(&triangles, &volumes, owners)
+    check_shells(&triangles, &volumes, owners, 2.0 * CLASSIFY_CHORD + tol)
 }
 
 /// Jede Kante liegt mit ihrer Mitte auf ihren Flächen, jede Ecke auf ihren Kanten.
@@ -1291,7 +1388,7 @@ pub fn build_solid(
     // Prüfung am Ende (nach dem Umdrehen) verlangt der Ablauf des Plans; sie ist billig.
     validate(&solid).map_err(|e| invalid(&solid, &e))?;
     check_face_loops(&solid)?;
-    orient_shells(&mut solid, &owners, &guessed)?;
+    orient_shells(&mut solid, &owners, &guessed, tol)?;
     check_edges(&solid, tol)?;
     validate(&solid).map_err(|e| invalid(&solid, &e))?;
     Ok(BuiltSolid {

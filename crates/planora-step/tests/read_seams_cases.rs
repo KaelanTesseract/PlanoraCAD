@@ -104,15 +104,26 @@ impl Step {
 
     /// Ganze Datei mit einem Körper aus den Flächen `faces`.
     fn file(mut self, faces: &[u64]) -> String {
-        let f: Vec<String> = faces.iter().map(|f| format!("#{f}")).collect();
-        let shell = self.push(format!("CLOSED_SHELL('',({}))", f.join(",")));
+        let shell = self.shell(faces);
         let body = self.push(format!("MANIFOLD_SOLID_BREP('Teil',#{shell})"));
+        self.finish(&[body])
+    }
+
+    fn shell(&mut self, faces: &[u64]) -> u64 {
+        let f: Vec<String> = faces.iter().map(|f| format!("#{f}")).collect();
+        self.push(format!("CLOSED_SHELL('',({}))", f.join(",")))
+    }
+
+    /// Ganze Datei; `items` sind die Volumen-Einträge der einen Darstellung.
+    fn finish(self, items: &[u64]) -> String {
+        let body: Vec<String> = items.iter().map(|f| format!("#{f}")).collect();
+        let body = body.join(",");
         format!(
             "ISO-10303-21;\n/* Selbst geschrieben für die Tests von PlanoraCAD (GPL-3.0-only). */\n\
              HEADER;\nFILE_DESCRIPTION((''),'2;1');\n\
              FILE_NAME('x.step','2026-10-21T00:00:00',(''),(''),'','','');\n\
              FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n\
-             #9=ADVANCED_BREP_SHAPE_REPRESENTATION('',(#{body}),#105);\n\
+             #9=ADVANCED_BREP_SHAPE_REPRESENTATION('',({body}),#105);\n\
              #100=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));\n\
              #101=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.));\n\
              #103=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-06),#100,'distance_accuracy_value','');\n\
@@ -309,7 +320,11 @@ fn read(text: &str) -> Result<Solid, Skip> {
         .reference()
         .expect("Verweis");
     let units = context_units(&file, ctx).expect("Einheiten");
-    let items = file.ids_of("MANIFOLD_SOLID_BREP").to_vec();
+    let items: Vec<u64> = e
+        .arg("ADVANCED_BREP_SHAPE_REPRESENTATION", 1)
+        .expect("Liste")
+        .refs()
+        .expect("Verweise");
     build_solid(
         &file,
         units,
@@ -479,7 +494,7 @@ fn random_seamless_cylinders() {
 
 /// Spitzer Kegel R 5, h 10 (Spitze oben) mit Naht vom Grundkreis zur Spitze; die Ecke der
 /// Spitze liegt `shift` entlang der Naht neben ihr, Genauigkeit 1e-3.
-fn pointed_cone(shift: f64) -> String {
+fn pointed_cone(shift: f64, apex_first: bool) -> String {
     let mut s = Step::new();
     let apex = DVec3::new(0.0, 0.0, H);
     let base = on_cyl(0.0, 0.0);
@@ -490,7 +505,13 @@ fn pointed_cone(shift: f64) -> String {
     let va = s.vertex(apex + (base - apex).normalize() * shift);
     let circle = s.edge(vb, vb, c0, true);
     let generator = s.line(base, apex);
-    let seam = s.edge(vb, va, generator, true);
+    // Die Naht beginnt an der Spitze (`apex_first`) oder am Grundkreis.
+    let seam = if apex_first {
+        s.edge(va, vb, generator, false)
+    } else {
+        s.edge(vb, va, generator, true)
+    };
+    let up = !apex_first;
     let plane = s.push(format!("PLANE('',#{a0})"));
     let b = s.bound(&[(circle, false)], true);
     let bottom = s.face(&[b], plane, false);
@@ -498,7 +519,7 @@ fn pointed_cone(shift: f64) -> String {
         "CONICAL_SURFACE('',#{down},{R:.1},{:.17e})",
         (R / H).atan()
     ));
-    let b = s.bound(&[(circle, true), (seam, true), (seam, false)], true);
+    let b = s.bound(&[(circle, true), (seam, up), (seam, !up)], true);
     let mantle = s.face(&[b], cone, true);
     s.file(&[bottom, mantle])
         .replace("LENGTH_MEASURE(1.E-06)", "LENGTH_MEASURE(1.E-3)")
@@ -508,8 +529,9 @@ fn pointed_cone(shift: f64) -> String {
 fn apex_corner_along_the_seam_is_pulled_onto_the_apex() {
     // Die Ecke liegt auf der Naht-Geraden 5e-4 vor der Spitze: Nach dem Ziehen auf die Spitze
     // muss auch der Parameter der Kante dort neu sein (sonst endet die Kante neben dem Pol).
-    for shift in [0.0, 5e-4] {
-        let s = read(&pointed_cone(shift)).unwrap_or_else(|Skip(m)| panic!("{shift}: {m}"));
+    for (shift, apex_first) in [(0.0, false), (5e-4, false), (0.0, true), (5e-4, true)] {
+        let s = read(&pointed_cone(shift, apex_first))
+            .unwrap_or_else(|Skip(m)| panic!("{shift} {apex_first}: {m}"));
         validate(&s).expect("gültig");
         let mesh = tessellate(
             &s,
@@ -525,4 +547,425 @@ fn apex_corner_along_the_seam_is_pulled_onto_the_apex() {
             "{shift}: {v} statt {want}"
         );
     }
+}
+
+// --- Nacharbeit 2: schräge Kugelkappen, runde Löcher an der Naht, Mehrkörper ---
+
+fn unit(rng: &mut Lcg) -> DVec3 {
+    let z = rng.range(-1.0, 1.0);
+    let phi = rng.range(0.0, TAU);
+    let r = (1.0 - z * z).sqrt();
+    DVec3::new(r * phi.cos(), r * phi.sin(), z)
+}
+
+/// Die Kappe liegt ganz auf der Seite `n · p ≥ h` (die Gegenkappe nicht) und hat das Volumen.
+fn assert_cap(s: &Solid, n: DVec3, h: f64, want: f64, what: &str) {
+    let mesh = tessellate(
+        s,
+        &TessellationOptions {
+            chord_tolerance: 0.002,
+        },
+    )
+    .expect("Netz");
+    let v = mass_properties(&mesh).volume;
+    assert!(
+        ((v - want) / want).abs() <= 5e-3,
+        "{what}: {v} statt {want}"
+    );
+    let low = mesh
+        .positions
+        .iter()
+        .map(|p| p.dot(n))
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        low >= h - 1e-6,
+        "{what}: Punkt bei {low} unter der Schnittebene {h}"
+    );
+}
+
+fn mesh_volume(s: &Solid, chord: f64) -> f64 {
+    let mesh = tessellate(
+        s,
+        &TessellationOptions {
+            chord_tolerance: chord,
+        },
+    )
+    .expect("Netz");
+    mass_properties(&mesh).volume
+}
+
+/// Kugel r 6 um den Ursprung mit Achse `axis`, geschnitten von der Ebene `n · p = h`; der Körper
+/// ist der Teil auf der Seite von `n` (eben der Deckel, gekrümmt die Kappe ohne Naht und ohne
+/// Pol). Liefert Text und Volumen.
+fn skew_cap(axis: DVec3, n: DVec3, h: f64, theta: f64) -> (String, f64) {
+    let r = 6.0;
+    let rho = (r * r - h * h).sqrt();
+    let c = n * h;
+    let cx = n.any_orthonormal_vector();
+    let cy = n.cross(cx);
+    let mut s = Step::new();
+    let frame = s.axis2(c, n, cx);
+    let circle = s.push(format!("CIRCLE('',#{frame},{rho:.17e})"));
+    let v = s.vertex(c + (cx * theta.cos() + cy * theta.sin()) * rho);
+    let e = s.edge(v, v, circle, true);
+    let plane = s.push(format!("PLANE('',#{frame})"));
+    let b = s.bound(&[(e, false)], true);
+    let lid = s.face(&[b], plane, false);
+    let sf = s.axis2(DVec3::ZERO, axis, axis.any_orthonormal_vector());
+    let sphere = s.push(format!("SPHERICAL_SURFACE('',#{sf},{r:.1})"));
+    let b = s.bound(&[(e, true)], false);
+    let cap = s.face(&[b], sphere, true);
+    let height = r - h;
+    (
+        s.file(&[lid, cap]),
+        PI * height * height * (3.0 * r - height) / 3.0,
+    )
+}
+
+/// Jede einzelne Richtungsangabe (`.T.`/`.F.` am Zeilenende von Fläche, Rand, Halbkante, Kante)
+/// gekippt.
+fn single_flips(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    for (k, l) in lines.iter().enumerate() {
+        let kinds = [
+            "ADVANCED_FACE(",
+            "FACE_BOUND(",
+            "FACE_OUTER_BOUND(",
+            "ORIENTED_EDGE(",
+            "EDGE_CURVE(",
+        ];
+        if !kinds.iter().any(|t| l.contains(t)) {
+            continue;
+        }
+        let flipped = if let Some(head) = l.strip_suffix(".T.);") {
+            format!("{head}.F.);")
+        } else if let Some(head) = l.strip_suffix(".F.);") {
+            format!("{head}.T.);")
+        } else {
+            continue;
+        };
+        let mut t: Vec<String> = lines.iter().map(|x| x.to_string()).collect();
+        t[k] = flipped;
+        out.push(t.join("\n"));
+    }
+    out
+}
+
+#[test]
+fn skew_caps_are_never_the_other_cap() {
+    // Kugelachse schräg zur Kappe (die Kappe enthält einen, beide oder keinen Parameterpol):
+    // richtig geschrieben gelesen; jede einzelne gekippte Richtung abgelehnt oder derselbe
+    // Körper, nie die Gegenkappe.
+    let mut rng = Lcg(0x5eed_6007);
+    for case in 0..40 {
+        let axis = unit(&mut rng);
+        let n = unit(&mut rng);
+        let h = rng.range(-0.8, 0.8) * 6.0;
+        let theta = rng.range(0.0, TAU);
+        let (text, want) = skew_cap(axis, n, h, theta);
+        let s = read(&text).unwrap_or_else(|Skip(m)| panic!("Fall {case}: {m}"));
+        validate(&s).expect("gültig");
+        assert_cap(&s, n, h, want, &format!("Fall {case}"));
+        for (k, t) in single_flips(&text).iter().enumerate() {
+            if let Ok(s) = read(t) {
+                assert_cap(&s, n, h, want, &format!("Fall {case}, Kippung {k}"));
+            }
+        }
+    }
+}
+
+/// Kugelband r 6 zwischen z = −3 und z = 3 mit einer runden Bohrung (Kreis auf der Kugel um die
+/// Richtung bei der Länge `phi`, Winkelradius 0,4), mit einer Kugelfläche gefüllt; die Ecken des
+/// unteren und oberen Kreises liegen bei den Längen `ub` und `ut`. Volumen 198π.
+fn bored_band(phi: f64, ub: f64, ut: f64, uncertainty: &str) -> String {
+    let r = 6.0;
+    let mut s = Step::new();
+    let ring = |z: f64, u: f64| {
+        let q = (r * r - z * z).sqrt();
+        DVec3::new(q * u.cos(), q * u.sin(), z)
+    };
+    let q = (r * r - 9.0f64).sqrt();
+    let fb = s.axis2(DVec3::new(0.0, 0.0, -3.0), DVec3::Z, DVec3::X);
+    let ft = s.axis2(DVec3::new(0.0, 0.0, 3.0), DVec3::Z, DVec3::X);
+    let cb = s.push(format!("CIRCLE('',#{fb},{q:.17e})"));
+    let ct = s.push(format!("CIRCLE('',#{ft},{q:.17e})"));
+    let vb = s.vertex(ring(-3.0, ub));
+    let vt = s.vertex(ring(3.0, ut));
+    let eb = s.edge(vb, vb, cb, true);
+    let et = s.edge(vt, vt, ct, true);
+    let alpha: f64 = 0.4;
+    let d = DVec3::new(phi.cos(), phi.sin(), 0.0);
+    let fh = s.axis2(d * (r * alpha.cos()), d, DVec3::Z);
+    let ch = s.push(format!("CIRCLE('',#{fh},{:.17e})", r * alpha.sin()));
+    // Ecke des Lochkreises schräg (nicht an einem Extrem von u, damit Abtastpunkte es verfehlen).
+    let beta: f64 = 0.123;
+    let side = d.cross(DVec3::Z);
+    let vh = s.vertex(
+        d * (r * alpha.cos()) + (DVec3::Z * beta.cos() + side * beta.sin()) * (r * alpha.sin()),
+    );
+    let eh = s.edge(vh, vh, ch, true);
+    let pb = s.push(format!("PLANE('',#{fb})"));
+    let pt = s.push(format!("PLANE('',#{ft})"));
+    let sf = s.axis2(DVec3::ZERO, DVec3::Z, DVec3::X);
+    let sphere = s.push(format!("SPHERICAL_SURFACE('',#{sf},{r:.1})"));
+    let b = s.bound(&[(eb, false)], true);
+    let bottom = s.face(&[b], pb, false);
+    let b = s.bound(&[(et, true)], true);
+    let top = s.face(&[b], pt, true);
+    let b1 = s.bound(&[(eb, true)], false);
+    let b2 = s.bound(&[(et, false)], false);
+    let b3 = s.bound(&[(eh, false)], false);
+    let band = s.face(&[b1, b2, b3], sphere, true);
+    let b = s.bound(&[(eh, true)], false);
+    let plug = s.face(&[b], sphere, true);
+    s.file(&[bottom, top, band, plug]).replace(
+        "LENGTH_MEASURE(1.E-06)",
+        &format!("LENGTH_MEASURE({uncertainty})"),
+    )
+}
+
+#[test]
+fn round_hole_near_a_corner_angle_keeps_off_the_seam() {
+    // Die Ecken der Kreise liegen knapp innerhalb des Längenbereichs der Bohrung (φ ± 0,4); die
+    // Naht muss trotzdem neben dem Loch liegen. Fein vernetzbar (Sehne 0,001), Volumen 198π.
+    let want = 198.0 * PI;
+    for phi in [0.3, 2.0] {
+        for delta in [1e-5, 1e-4, 1e-3, 3e-3, 6e-3] {
+            for side in [1.0, -1.0] {
+                let inside = phi + side * (0.4 - delta);
+                let away = phi + PI;
+                for (ub, ut) in [(inside, away), (away, inside), (inside, inside)] {
+                    let what = format!("φ {phi}, δ {delta}, Seite {side}, Ecken {ub}/{ut}");
+                    let s = read(&bored_band(phi, ub, ut, "1.E-06"))
+                        .unwrap_or_else(|Skip(m)| panic!("{what}: {m}"));
+                    validate(&s).unwrap_or_else(|e| panic!("{what}: {e}"));
+                    let v = mesh_volume(&s, 0.001);
+                    assert!(((v - want) / want).abs() <= 1e-3, "{what}: {v}");
+                }
+            }
+        }
+    }
+    // Grobe Datei (1e-3): Die Naht hält mindestens 10 Genauigkeiten Abstand vom Loch (als
+    // Winkel am kleinsten Abstand des Lochs zur Achse, 6 · cos 0,4), auch wenn eine Ecke knapp
+    // außerhalb des Lochbereichs liegt.
+    for side in [1.0, -1.0] {
+        let phi = 0.3;
+        let corner = phi + side * (0.4 + 1e-4);
+        let s = read(&bored_band(phi, corner, corner, "1.E-3"))
+            .unwrap_or_else(|Skip(m)| panic!("grob {side}: {m}"));
+        let band = s
+            .faces
+            .iter()
+            .map(|(_, f)| f)
+            .find(|f| f.inner.len() == 1)
+            .expect("Band mit Loch");
+        let seam = band
+            .outer
+            .half_edges
+            .iter()
+            .find(|a| {
+                band.outer
+                    .half_edges
+                    .iter()
+                    .filter(|b| b.edge == a.edge)
+                    .count()
+                    == 2
+            })
+            .map(|he| &s.edges[he.edge])
+            .expect("Naht");
+        let (u, _) = band
+            .surface
+            .project(seam.curve.point(0.5 * (seam.t0 + seam.t1)));
+        let off = |x: f64| {
+            let d = (x - u).rem_euclid(TAU);
+            d.min(TAU - d)
+        };
+        let gap = if ((u - phi + PI).rem_euclid(TAU) - PI).abs() <= 0.4 {
+            0.0
+        } else {
+            off(phi - 0.4).min(off(phi + 0.4))
+        };
+        let need = 10.0 * 1e-3 / (6.0 * 0.4f64.cos());
+        assert!(
+            gap >= need * (1.0 - 1e-9),
+            "grob {side}: Abstand {gap} < {need}"
+        );
+    }
+}
+
+/// Fläche eines Quaders: Kanten (Index, vorwärts), Außennormale, Ecke für den Rahmen.
+type BoxFace = ([(usize, bool); 4], DVec3, usize);
+
+/// Flächen des Quaders `lo`…`hi` (nach außen); `holes`: zusätzliche Ränder (Löcher) für Boden
+/// und Deckel.
+fn box_faces(s: &mut Step, lo: DVec3, hi: DVec3, holes: Option<(u64, u64)>) -> Vec<u64> {
+    let corner = |i: usize| {
+        DVec3::new(
+            if i & 1 == 0 { lo.x } else { hi.x },
+            if i & 2 == 0 { lo.y } else { hi.y },
+            if i & 4 == 0 { lo.z } else { hi.z },
+        )
+    };
+    let v: Vec<u64> = (0..8).map(|i| s.vertex(corner(i))).collect();
+    // Kanten: x (j, k), y (i, k), z (i, j) wie in `void_box.step`.
+    let mut e = Vec::new();
+    for idx in 0..12 {
+        let (a, b) = match idx {
+            0..=3 => {
+                let (j, k) = (idx % 2, idx / 2);
+                (2 * j + 4 * k, 1 + 2 * j + 4 * k)
+            }
+            4..=7 => {
+                let t = idx - 4;
+                let (i, k) = (t % 2, t / 2);
+                (i + 4 * k, i + 2 + 4 * k)
+            }
+            _ => {
+                let t = idx - 8;
+                let (i, j) = (t % 2, t / 2);
+                (i + 2 * j, i + 2 * j + 4)
+            }
+        };
+        let l = s.line(corner(a), corner(b));
+        e.push(s.edge(v[a], v[b], l, true));
+    }
+    let faces: [BoxFace; 6] = [
+        ([(4, true), (1, true), (5, false), (0, false)], -DVec3::Z, 0),
+        ([(2, true), (7, true), (3, false), (6, false)], DVec3::Z, 7),
+        ([(0, true), (9, true), (2, false), (8, false)], -DVec3::Y, 0),
+        (
+            [(10, true), (3, true), (11, false), (1, false)],
+            DVec3::Y,
+            7,
+        ),
+        (
+            [(8, true), (6, true), (10, false), (4, false)],
+            -DVec3::X,
+            0,
+        ),
+        ([(5, true), (11, true), (7, false), (9, false)], DVec3::X, 7),
+    ];
+    let mut ids = Vec::new();
+    for (k, (hes, normal, at)) in faces.into_iter().enumerate() {
+        let hes: Vec<(u64, bool)> = hes.iter().map(|(k, f)| (e[*k], *f)).collect();
+        let mut bounds = vec![s.bound(&hes, true)];
+        match (k, holes) {
+            (0, Some((b, _))) | (1, Some((_, b))) => bounds.push(b),
+            _ => {}
+        }
+        let a = s.axis2(corner(at), normal, normal.any_orthonormal_vector());
+        let p = s.push(format!("PLANE('',#{a})"));
+        ids.push(s.face(&bounds, p, true));
+    }
+    ids
+}
+
+/// Quader `lo`…`hi` als Schale (Flächen nach außen).
+fn box_shell(s: &mut Step, lo: DVec3, hi: DVec3) -> u64 {
+    let faces = box_faces(s, lo, hi, None);
+    s.shell(&faces)
+}
+
+#[test]
+fn piece_in_a_cavity_is_legitimate() {
+    // Quader 20 mit Quaderhohlraum 5 … 15 und darin ein Quader 8 … 12 als zweites Stück:
+    // 8000 − 1000 + 64.
+    let mut s = Step::new();
+    let outer = box_shell(&mut s, DVec3::ZERO, DVec3::splat(20.0));
+    let cavity = box_shell(&mut s, DVec3::splat(5.0), DVec3::splat(15.0));
+    let void = s.push(format!("ORIENTED_CLOSED_SHELL('',*,#{cavity},.F.)"));
+    let a = s.push(format!("BREP_WITH_VOIDS('Hohl',#{outer},(#{void}))"));
+    let inner = box_shell(&mut s, DVec3::splat(8.0), DVec3::splat(12.0));
+    let b = s.push(format!("MANIFOLD_SOLID_BREP('Kern',#{inner})"));
+    let text = s.finish(&[a, b]);
+    let solid = read(&text).unwrap_or_else(|Skip(m)| panic!("{m}"));
+    assert_eq!(solid.shells.len(), 3);
+    assert!((mesh_volume(&solid, 0.05) - 7064.0).abs() <= 1e-9);
+}
+
+/// Platte 20 × 20 × 10 mit Bohrung r 5 und darin ein Stift r 5, h 10 (zwei Stücke, die sich
+/// am Mantel berühren); Ecken der Bohrungs- und Stiftkreise bei den Winkeln `ub` und `up`.
+fn pin_in_bore(ub: f64, up: f64) -> String {
+    let mut s = Step::new();
+    let fb = s.axis2(DVec3::ZERO, DVec3::Z, DVec3::X);
+    let ft = s.axis2(DVec3::new(0.0, 0.0, H), DVec3::Z, DVec3::X);
+    let circles = |s: &mut Step, u: f64| {
+        let cb = s.push(format!("CIRCLE('',#{fb},{R:.1})"));
+        let ct = s.push(format!("CIRCLE('',#{ft},{R:.1})"));
+        let vb = s.vertex(on_cyl(u, 0.0));
+        let vt = s.vertex(on_cyl(u, H));
+        (s.edge(vb, vb, cb, true), s.edge(vt, vt, ct, true))
+    };
+    let (bb, bt) = circles(&mut s, ub);
+    let (pb, pt) = circles(&mut s, up);
+    let cyl = s.push(format!("CYLINDRICAL_SURFACE('',#{fb},{R:.1})"));
+    // Platte: Löcher in Boden und Deckel, Bohrungsmantel nach innen (Material außen).
+    let holes = (
+        s.bound(&[(bb, true)], false),
+        s.bound(&[(bt, false)], false),
+    );
+    let mut faces = box_faces(
+        &mut s,
+        DVec3::new(-10.0, -10.0, 0.0),
+        DVec3::new(10.0, 10.0, H),
+        Some(holes),
+    );
+    let b1 = s.bound(&[(bb, false)], false);
+    let b2 = s.bound(&[(bt, true)], false);
+    faces.push(s.face(&[b1, b2], cyl, false));
+    let plate = s.shell(&faces);
+    let a = s.push(format!("MANIFOLD_SOLID_BREP('Platte',#{plate})"));
+    // Stift.
+    let pbp = s.push(format!("PLANE('',#{fb})"));
+    let ptp = s.push(format!("PLANE('',#{ft})"));
+    let b = s.bound(&[(pb, false)], true);
+    let f1 = s.face(&[b], pbp, false);
+    let b = s.bound(&[(pt, true)], true);
+    let f2 = s.face(&[b], ptp, true);
+    let b1 = s.bound(&[(pb, true)], false);
+    let b2 = s.bound(&[(pt, false)], false);
+    let f3 = s.face(&[b1, b2], cyl, true);
+    let pin = s.shell(&[f1, f2, f3]);
+    let b = s.push(format!("MANIFOLD_SOLID_BREP('Stift',#{pin})"));
+    s.finish(&[a, b])
+}
+
+#[test]
+fn pin_in_bore_touches_but_does_not_overlap() {
+    for (ub, up) in [(0.0, 0.0), (0.0, 1.0), (2.0, 0.5), (PI, 0.0)] {
+        let solid = read(&pin_in_bore(ub, up)).unwrap_or_else(|Skip(m)| panic!("{ub}/{up}: {m}"));
+        assert_eq!(solid.shells.len(), 2);
+        let v = mesh_volume(&solid, 0.002);
+        assert!(((v - 4000.0) / 4000.0).abs() <= 1e-3, "{ub}/{up}: {v}");
+    }
+}
+
+#[test]
+fn many_pieces_are_checked_quickly() {
+    // 60 Kugeln r 100 (je eine Fläche mit Naht) in einer Darstellung: Die Prüfung der Schalen
+    // filtert über die Hüllquader und bleibt schnell.
+    let mut s = Step::new();
+    let mut items = Vec::new();
+    for k in 0..60 {
+        let c = DVec3::new(250.0 * (k % 8) as f64, 250.0 * (k / 8) as f64, 0.0);
+        let r = 100.0;
+        let south = s.vertex(c - DVec3::Z * r);
+        let north = s.vertex(c + DVec3::Z * r);
+        let mf = s.axis2(c, -DVec3::Y, DVec3::X);
+        let m = s.push(format!("CIRCLE('',#{mf},{r:.1})"));
+        let e = s.edge(south, north, m, true);
+        let sf = s.axis2(c, DVec3::Z, DVec3::X);
+        let sphere = s.push(format!("SPHERICAL_SURFACE('',#{sf},{r:.1})"));
+        let b = s.bound(&[(e, true), (e, false)], true);
+        let f = s.face(&[b], sphere, true);
+        let sh = s.shell(&[f]);
+        items.push(s.push(format!("MANIFOLD_SOLID_BREP('Kugel',#{sh})")));
+    }
+    let text = s.finish(&items);
+    let t = std::time::Instant::now();
+    let solid = read(&text).unwrap_or_else(|Skip(m)| panic!("{m}"));
+    let took = t.elapsed();
+    assert_eq!(solid.shells.len(), 60);
+    assert!(took.as_secs_f64() < 5.0, "{took:?}");
 }
