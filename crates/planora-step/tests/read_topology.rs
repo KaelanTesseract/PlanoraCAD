@@ -7,7 +7,10 @@ mod common;
 use planora_exchange::Progress;
 use planora_kernel::boolean::{face_probe_point, oriented_area, points_to_uv};
 use planora_kernel::primitives::{make_box, make_cone, make_cylinder};
-use planora_kernel::{Curve, Face, Id, Profile, ProfileLoop, Solid, Surface, extrude, validate};
+use planora_kernel::{
+    AnalyticKernel, BlendEdge, BlendKind, BlendRequest, BoolOp, Curve, Face, Id, Kernel, Profile,
+    ProfileLoop, Solid, Surface, extrude, validate,
+};
 use planora_math::{DVec2, DVec3, Frame, PI, TAU, Tolerance};
 use planora_mesh::{Mesh, TessellationOptions, mass_properties, tessellate};
 use planora_step::read::geom::Skip;
@@ -561,7 +564,11 @@ fn broken_topology_is_skipped_with_reason() {
     let missing = text.replace("#33,#34,#35));", "#33,#34));");
     assert_ne!(missing, text);
     let s = skip_of(&missing, &ReadLimits::DEFAULT);
-    assert!(s.starts_with("Der Körper ist ungültig:"), "{s}");
+    // Ohne Kernel-Nummern: die erste Kante der linken Fläche (E4, Mitte bei (0; 10; 0)).
+    assert_eq!(
+        s,
+        "Der Körper ist ungültig: Die Kante bei (0,00; 10,00; 0,00) gehört nur zu einer Fläche."
+    );
     // Ecke V8 um 0,5 mm in x verschoben: die Gerade von E8 geht durch sie und liegt nicht mehr
     // auf der linken Fläche.
     let moved = text.replace(
@@ -680,4 +687,335 @@ fn kernel_bodies_survive_write_and_read() {
             vk.volume
         );
     }
+}
+
+// --- Nacharbeit 1 (Review Task 3) ---
+
+/// Ersetzt genau einen Text (muss genau einmal vorkommen).
+fn swap_once(text: &str, from: &str, to: &str) -> String {
+    assert_eq!(text.matches(from).count(), 1, "„{from}“ nicht genau einmal");
+    text.replace(from, to)
+}
+
+#[test]
+fn hole_direction_is_checked() {
+    // Bohrungsfläche in sich umgekehrt und beide Lochränder der Deckel gekippt: Kanten paaren,
+    // Volumen positiv, aber die Bohrung zeigt ins Material (Review: V = 38 482 statt 35 343).
+    let mut t = data("bore_seam.step");
+    for (from, to) in [
+        (
+            "#605=ADVANCED_FACE('',(#617),#624,.F.);",
+            "#605=ADVANCED_FACE('',(#617),#624,.T.);",
+        ),
+        (
+            "#617=FACE_OUTER_BOUND('',#637,.T.);",
+            "#617=FACE_OUTER_BOUND('',#637,.F.);",
+        ),
+        (
+            "#612=FACE_BOUND('',#632,.T.);",
+            "#612=FACE_BOUND('',#632,.F.);",
+        ),
+        (
+            "#614=FACE_BOUND('',#634,.T.);",
+            "#614=FACE_BOUND('',#634,.F.);",
+        ),
+    ] {
+        t = swap_once(&t, from, to);
+    }
+    assert_eq!(
+        skip_of(&t, &ReadLimits::DEFAULT),
+        "Die Fläche „STEP-Fläche 1“ ist verdreht: Rand und Außenseite passen nicht zusammen."
+    );
+}
+
+const NOT_CLOSED: &str = "schließt sich nicht: Eine Kante läuft falsch herum.";
+
+#[test]
+fn arc_with_wrong_sense_is_rejected() {
+    // Halbkreis A1 (#561) mit falschem Sinn läuft über −y: Die Schleife der Halbschale
+    // (Fläche 3) windet sich einmal um die Achse.
+    let t = swap_once(
+        &data("bore_halves.step"),
+        "#561=EDGE_CURVE('',#511,#512,#541,.T.);",
+        "#561=EDGE_CURVE('',#511,#512,#541,.F.);",
+    );
+    assert_eq!(
+        skip_of(&t, &ReadLimits::DEFAULT),
+        format!("Der Rand der Fläche „STEP-Fläche 3“ {NOT_CLOSED}")
+    );
+    // Quader mit Rundung (Kernel → eigener Schreiber): jeder Kreisbogen einzeln mit falschem
+    // Sinn wird abgelehnt, nie still mit anderem Volumen übernommen (Review: 947,6 statt 991,4).
+    let tol = Tolerance::default();
+    let b = make_box(DVec3::new(10.0, 10.0, 10.0), &tol).expect("Quader");
+    let edge = b.edges.iter().map(|(id, _)| id).next().expect("Kante");
+    let blended = AnalyticKernel::default()
+        .blend(
+            &b,
+            &BlendRequest {
+                edges: vec![BlendEdge {
+                    edge,
+                    first_face: None,
+                }],
+                kind: BlendKind::Fillet { radius: 2.0 },
+                tangent_chain: false,
+            },
+        )
+        .expect("Rundung");
+    let (text, _) = common::export(&[("Rundung", &blended.solid)]);
+    build(&text);
+    let circles: Vec<String> = text
+        .lines()
+        .filter(|l| l.contains("=CIRCLE("))
+        .map(|l| l[..l.find('=').expect("=")].to_string())
+        .collect();
+    assert!(!circles.is_empty());
+    let mut not_closed = 0;
+    let mut arcs = 0;
+    for line in text.lines().filter(|l| l.contains("=EDGE_CURVE(")) {
+        if !circles.iter().any(|c| line.contains(&format!(",{c},"))) {
+            continue;
+        }
+        arcs += 1;
+        let flipped = if let Some(h) = line.strip_suffix(".T.);") {
+            format!("{h}.F.);")
+        } else {
+            format!("{}.T.);", line.strip_suffix(".F.);").expect("Sinn"))
+        };
+        let s = skip_of(&swap_once(&text, line, &flipped), &ReadLimits::DEFAULT);
+        if s.starts_with("Der Rand der Fläche „STEP-Fläche ") && s.ends_with(NOT_CLOSED) {
+            not_closed += 1;
+        }
+    }
+    assert!(arcs >= 2, "Bögen: {arcs}");
+    assert!(not_closed >= 1);
+}
+
+#[test]
+fn holes_near_the_seam_keep_their_place() {
+    let cyl = Surface::Cylinder {
+        frame: Frame::WORLD,
+        radius: 2.0,
+    };
+    let at = |u: f64, v: f64| DVec3::new(2.0 * u.cos(), 2.0 * u.sin(), v);
+    let rect = |u0: f64, u1: f64| -> Vec<DVec3> {
+        let mut pts = Vec::new();
+        for k in 0..=32 {
+            pts.push(at(u0 + (u1 - u0) * k as f64 / 32.0, 0.0));
+        }
+        for k in 0..=32 {
+            pts.push(at(u1 - (u1 - u0) * k as f64 / 32.0, 10.0));
+        }
+        pts
+    };
+    let hole = |uc: f64| -> Vec<DVec3> {
+        (0..=32)
+            .map(|k| {
+                let s = -TAU * k as f64 / 32.0;
+                at(uc + 0.2 * s.cos(), 5.0 + 2.0 * s.sin())
+            })
+            .collect()
+    };
+    // Voller Mantel, Naht bei u = 0, Loch bei u = 5,28.
+    let p = derive_patch(&cyl, &[rect(0.0, TAU), hole(5.28)]).expect("voller Mantel");
+    assert!(p.u0.abs() <= 1e-12 && (p.u1 - TAU).abs() <= 1e-12, "{p:?}");
+    assert!(p.v0.abs() <= 1e-12 && (p.v1 - 10.0).abs() <= 1e-12);
+    // Mantelstück u 2,5 … 4,0 (über ±π), Loch bei u = 3,6.
+    let p = derive_patch(&cyl, &[rect(2.5, 4.0), hole(3.6)]).expect("Stück");
+    assert!(
+        (p.u0 - 2.5).abs() <= 1e-12 && (p.u1 - 4.0).abs() <= 1e-12,
+        "{p:?}"
+    );
+}
+
+#[test]
+fn curved_face_outer_loop_by_turn() {
+    // Zylinder mit Tasche durch die Wand: Der Mantel hat ein Loch. In der Datei steht das Loch
+    // zuerst, und beide Ränder sind FACE_BOUND.
+    let tol = Tolerance::default();
+    let cyl = make_cylinder(10.0, 20.0, &tol).expect("Zylinder");
+    let pocket = extrude(
+        &Profile {
+            outer: ProfileLoop::rectangle(DVec2::new(-2.0, 8.0), DVec2::new(2.0, 12.0)),
+            holes: vec![],
+        },
+        &Frame {
+            origin: DVec3::new(0.0, 0.0, 8.0),
+            ..Frame::WORLD
+        },
+        4.0,
+        &tol,
+    )
+    .expect("Tasche");
+    let body = AnalyticKernel::default()
+        .boolean(&cyl, &pocket, BoolOp::Difference)
+        .expect("Abziehen");
+    let (text, _) = common::export(&[("Tasche", &body)]);
+    let reference = build(&text).solid;
+    let cyl_ids: Vec<String> = text
+        .lines()
+        .filter(|l| l.contains("=CYLINDRICAL_SURFACE("))
+        .map(|l| l[..l.find('=').expect("=")].to_string())
+        .collect();
+    let face_line = text
+        .lines()
+        .find(|l| {
+            l.contains("=ADVANCED_FACE('',(#")
+                && cyl_ids.iter().any(|c| l.contains(&format!("),{c},")))
+                && l.split("),#").next().is_some_and(|b| b.contains(','))
+        })
+        .expect("Mantel mit Loch")
+        .to_string();
+    let open = face_line.find("(#").expect("Liste") + 1;
+    let close = face_line[open..].find(')').expect("Ende") + open;
+    let bounds: Vec<&str> = face_line[open..close].split(',').collect();
+    assert_eq!(bounds.len(), 2, "{face_line}");
+    let swapped = format!(
+        "{}{},{}{}",
+        &face_line[..open],
+        bounds[1],
+        bounds[0],
+        &face_line[close..]
+    );
+    let mut t = swap_once(&text, &face_line, &swapped);
+    t = swap_once(
+        &t,
+        &format!("{}=FACE_OUTER_BOUND(", bounds[0]),
+        &format!("{}=FACE_BOUND(", bounds[0]),
+    );
+    let read = build(&t).solid;
+    let (a, b) = (
+        mass_properties(&mesh(&reference, 0.01)),
+        mass_properties(&mesh(&read, 0.01)),
+    );
+    assert!((a.volume - b.volume).abs() <= 1e-9 * a.volume);
+    // Kennungen der Kanten folgen der Lesereihenfolge; verglichen werden die Ecken der Ränder.
+    let corners = |s: &Solid, lp: &planora_kernel::Loop| -> Vec<DVec3> {
+        lp.half_edges
+            .iter()
+            .map(|he| s.vertices[s.half_edge_start(*he)].point)
+            .collect()
+    };
+    for ((_, f), (_, g)) in reference.faces.iter().zip(read.faces.iter()) {
+        assert_eq!(corners(&reference, &f.outer), corners(&read, &g.outer));
+        assert_eq!(f.inner.len(), g.inner.len());
+        for (a, b) in f.inner.iter().zip(&g.inner) {
+            assert_eq!(corners(&reference, a), corners(&read, b));
+        }
+    }
+}
+
+/// Kleiner Körper mit Kontext und Darstellung (Kontext #105, Körper #20).
+fn small_body(entities: &str) -> String {
+    format!(
+        "ISO-10303-21;\n/* Selbst geschrieben für die Tests von PlanoraCAD (GPL-3.0-only). */\n\
+         HEADER;\nFILE_DESCRIPTION((''),'2;1');\n\
+         FILE_NAME('x.step','2026-10-21T00:00:00',(''),(''),'','','');\n\
+         FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n\
+         #9=ADVANCED_BREP_SHAPE_REPRESENTATION('',(#20),#105);\n\
+         #100=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));\n\
+         #105=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNIT_ASSIGNED_CONTEXT((#100))\
+         REPRESENTATION_CONTEXT('',''));\n{entities}ENDSEC;\nEND-ISO-10303-21;\n"
+    )
+}
+
+#[test]
+fn hostile_topology_is_named() {
+    let text = data("box_ap214.step");
+    let skip = |t: &str| skip_of(t, &ReadLimits::DEFAULT);
+    // Fläche ohne Rand: Meldung, keine Panik.
+    let s = skip(&swap_once(
+        &text,
+        "#30=ADVANCED_FACE('',(#40),#60,.F.);",
+        "#30=ADVANCED_FACE('',(),#60,.F.);",
+    ));
+    assert!(s.ends_with(": Eine Fläche hat keinen Rand."), "{s}");
+    // Rand ohne Kanten.
+    let s = skip(&swap_once(
+        &text,
+        "#51=EDGE_LOOP('',(#204,#205,#206,#207));",
+        "#51=EDGE_LOOP('',());",
+    ));
+    assert!(s.ends_with(": Ein Rand hat keine Kanten."), "{s}");
+    // Zwei äußere Ränder.
+    let s = skip(&swap_once(
+        &text,
+        "#30=ADVANCED_FACE('',(#40),#60,.F.);",
+        "#30=ADVANCED_FACE('',(#40,#40),#60,.F.);",
+    ));
+    assert!(
+        s.ends_with(": Eine Fläche hat mehr als einen äußeren Rand."),
+        "{s}"
+    );
+    // Kante der Länge null.
+    let s = skip(&swap_once(
+        &text,
+        "#121=EDGE_CURVE('',#141,#142,#161,.T.);",
+        "#121=EDGE_CURVE('',#141,#141,#161,.T.);",
+    ));
+    assert!(s.ends_with(": Eine Kante hat die Länge null."), "{s}");
+    // Leere Schale.
+    let empty = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("(#30") && !l.trim_start().starts_with("#33,"))
+        .map(|l| {
+            if l.starts_with("#21=CLOSED_SHELL(") {
+                "#21=CLOSED_SHELL('',());"
+            } else {
+                l
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(empty.contains("#21=CLOSED_SHELL('',());"));
+    assert_eq!(skip(&empty), "Der Körper hat keine Flächen.");
+    // Ecke nur am Ende ihrer Kanten neben ihnen (E5 umgedreht, damit V5 nirgends Anfang ist);
+    // x = −0,001 erscheint als „0,00“, nie als „-0,00“.
+    let mut t = text.clone();
+    for (from, to) in [
+        (
+            "#125=EDGE_CURVE('',#145,#146,#165,.T.);",
+            "#125=EDGE_CURVE('',#146,#145,#165,.F.);",
+        ),
+        (
+            "#207=ORIENTED_EDGE('',*,*,#125,.F.);",
+            "#207=ORIENTED_EDGE('',*,*,#125,.T.);",
+        ),
+        (
+            "#210=ORIENTED_EDGE('',*,*,#125,.F.);",
+            "#210=ORIENTED_EDGE('',*,*,#125,.T.);",
+        ),
+        (
+            "#145=VERTEX_POINT('',#155);",
+            "#145=VERTEX_POINT('',#159);\n#159=CARTESIAN_POINT('',(-0.001,0.,30.25));",
+        ),
+    ] {
+        t = swap_once(&t, from, to);
+    }
+    assert_eq!(
+        skip(&t),
+        "Die Ecke bei (0,00; 0,00; 30,25) liegt nicht auf ihrer Kante."
+    );
+    // Flacher Körper: zwei deckungsgleiche Flächen, Volumen genau null.
+    let flat = small_body(
+        "#20=MANIFOLD_SOLID_BREP('',#21);\n#21=CLOSED_SHELL('',(#30,#31));\n\
+         #30=ADVANCED_FACE('',(#40),#60,.T.);\n#31=ADVANCED_FACE('',(#41),#60,.F.);\n\
+         #40=FACE_OUTER_BOUND('',#50,.T.);\n#41=FACE_OUTER_BOUND('',#50,.F.);\n\
+         #50=EDGE_LOOP('',(#71,#72,#73,#74));\n\
+         #71=ORIENTED_EDGE('',*,*,#81,.T.);\n#72=ORIENTED_EDGE('',*,*,#82,.T.);\n\
+         #73=ORIENTED_EDGE('',*,*,#83,.T.);\n#74=ORIENTED_EDGE('',*,*,#84,.T.);\n\
+         #81=EDGE_CURVE('',#91,#92,#111,.T.);\n#82=EDGE_CURVE('',#92,#93,#112,.T.);\n\
+         #83=EDGE_CURVE('',#93,#94,#113,.T.);\n#84=EDGE_CURVE('',#94,#91,#114,.T.);\n\
+         #91=VERTEX_POINT('',#121);\n#92=VERTEX_POINT('',#122);\n\
+         #93=VERTEX_POINT('',#123);\n#94=VERTEX_POINT('',#124);\n\
+         #111=LINE('',#121,#131);\n#112=LINE('',#122,#132);\n\
+         #113=LINE('',#123,#133);\n#114=LINE('',#124,#134);\n\
+         #121=CARTESIAN_POINT('',(0.,0.,0.));\n#122=CARTESIAN_POINT('',(10.,0.,0.));\n\
+         #123=CARTESIAN_POINT('',(10.,10.,0.));\n#124=CARTESIAN_POINT('',(0.,10.,0.));\n\
+         #131=VECTOR('',#141,1.);\n#132=VECTOR('',#142,1.);\n\
+         #133=VECTOR('',#143,1.);\n#134=VECTOR('',#144,1.);\n\
+         #141=DIRECTION('',(1.,0.,0.));\n#142=DIRECTION('',(0.,1.,0.));\n\
+         #143=DIRECTION('',(-1.,0.,0.));\n#144=DIRECTION('',(0.,-1.,0.));\n\
+         #60=PLANE('',#61);\n#61=AXIS2_PLACEMENT_3D('',#121,$,$);\n",
+    );
+    assert_eq!(skip(&flat), "Der Körper hat kein Volumen.");
 }

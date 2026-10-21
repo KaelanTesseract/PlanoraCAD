@@ -13,7 +13,8 @@
 //! - `EDGE_CURVE.same_sense` (Kante läuft mit oder gegen den Kurvenparameter: `t1 < t0`).
 //!
 //! Der Aufbau geht über eine Rohform ([`RawBody`]); daraus entsteht der Körper, der dann
-//! geprüft wird: `validate`, Umlaufsinn je Fläche, Außenrichtung über das Volumen (negativ →
+//! geprüft wird: `validate`, je Fläche das Schließen jeder Schleife im Parameterraum und ihr
+//! Umlaufsinn (außen gegen, Löcher im Uhrzeigersinn), Außenrichtung über das Volumen (negativ →
 //! ganz umgedreht), Lage jeder Kante auf ihren Flächen und jeder Ecke auf ihren Kanten.
 
 use crate::read::error::MAX_STEP_FACES;
@@ -26,10 +27,10 @@ use planora_exchange::Progress;
 use planora_kernel::boolean::{face_geom, loop_points, oriented_area, points_to_uv};
 use planora_kernel::{
     Curve, Face, FaceTag, HalfEdge, Id, Loop, NURBS_EDGE_TOL, Shell, Solid, Surface, UvRect,
-    point_surface_tol, validate,
+    ValidationError, point_surface_tol, validate,
 };
-use planora_math::{DVec3, Tolerance};
-use planora_mesh::{TessellationOptions, mass_properties, tessellate};
+use planora_math::{DVec2, DVec3, Tolerance};
+use planora_mesh::{MeshError, TessellationOptions, mass_properties, tessellate};
 use std::collections::HashMap;
 
 /// Rolle der Flächenmarke: „STEP-Fläche {n}“, `n` ab 1 in der Reihenfolge der Datei (P7).
@@ -46,8 +47,9 @@ const MAX_ORIENTED_CHAIN: usize = 8;
 /// Abstand (Anteil der Periode), bis zu dem ein Parameterbereich noch als ein Umlauf gilt.
 const PERIOD_SLACK: f64 = 1e-9;
 
-/// Abstand (relativ), bis zu dem `v` auf einem Pol der Fläche liegt (dort ist `u` beliebig).
-const POLE_REL: f64 = 1e-9;
+/// Abstand (relativ), unter dem `v` auf einem Pol der Fläche liegt (dort ist `u` beliebig);
+/// derselbe Wert wie in `planora_kernel::boolean::points_to_uv`.
+const POLE_REL: f64 = 1e-7;
 
 /// Breite (relativ), unter der ein Parameterbereich keine Ausdehnung hat.
 const EMPTY_REL: f64 = 1e-12;
@@ -288,6 +290,11 @@ impl<'f> TopoReader<'f> {
         let end = self.vertex(end)?;
         let curve = self.res.curve(curve)?;
         let (p, q) = (self.raw.vertices[start], self.raw.vertices[end]);
+        // Eine offene Kurve zwischen zusammenfallenden Ecken ist keine Kante (geschlossene
+        // Kurven ergeben dort einen vollen Umlauf). Aufgabe 6 entfernt solche Kanten vorher.
+        if curve.period().is_none() && p.distance(q) <= Tolerance::default().linear {
+            return Err(self.fail(id, "Eine Kante hat die Länge null."));
+        }
         let (t0, t1) = edge_params(&curve, p, q, same_sense).map_err(|Skip(m)| self.fail(id, m))?;
         let k = self.raw.edges.len();
         self.raw.edges.push(RawEdge {
@@ -381,7 +388,15 @@ impl<'f> TopoReader<'f> {
             }
             loops.push(lp);
         }
-        let points: Vec<Vec<DVec3>> = loops.iter().map(|l| self.raw.loop_points(l)).collect();
+        let sense = same_sense ^ flipped ^ reverse;
+        let plane = matches!(surface, Surface::Plane { .. });
+        // Punkte der Schleifen nur, wo sie gebraucht werden: Wahl des äußeren Rands ohne
+        // Kennzeichnung und Parameterbereich gekrümmter Flächen.
+        let points: Vec<Vec<DVec3>> = if plane && outer_marked.is_some() {
+            Vec::new()
+        } else {
+            loops.iter().map(|l| self.raw.loop_points(l)).collect()
+        };
         let outer = match (outer_marked, &surface) {
             (Some(i), _) => i,
             (None, Surface::Plane { frame }) => {
@@ -401,15 +416,34 @@ impl<'f> TopoReader<'f> {
                     .max_by(|&a, &b| area(&points[a]).total_cmp(&area(&points[b])))
                     .unwrap_or(0)
             }
-            (None, _) => 0,
+            (None, _) => {
+                // Gekrümmt ohne Kennzeichnung: der Rand, der am deutlichsten gegen den
+                // Uhrzeigersinn um die Außennormale läuft (Löcher laufen andersherum).
+                let turn =
+                    |pts: &[DVec3]| oriented_area(&points_to_uv(&surface, sense, pts), sense);
+                (0..loops.len())
+                    .max_by(|&a, &b| turn(&points[a]).total_cmp(&turn(&points[b])))
+                    .unwrap_or(0)
+            }
         };
-        let patch = if matches!(surface, Surface::Plane { .. }) {
+        let Some(outer_loop) = loops.get(outer).cloned() else {
+            return Err(self.fail(id, "Eine Fläche hat keinen Rand."));
+        };
+        let patch = if plane {
             None
         } else {
-            // Die Hülle hängt nicht von der Reihenfolge der Schleifen ab.
-            Some(derive_patch(&surface, &points).map_err(|Skip(m)| self.fail(id, m))?)
+            // Äußerer Rand zuerst: weitere Schleifen werden neben ihm entfaltet.
+            let mut ordered = Vec::with_capacity(points.len());
+            ordered.extend(points.get(outer).cloned());
+            ordered.extend(
+                points
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != outer)
+                    .map(|(_, p)| p.clone()),
+            );
+            Some(derive_patch(&surface, &ordered).map_err(|Skip(m)| self.fail(id, m))?)
         };
-        let outer_loop = loops[outer].clone();
         let inner = loops
             .into_iter()
             .enumerate()
@@ -418,7 +452,7 @@ impl<'f> TopoReader<'f> {
             .collect();
         Ok(RawFace {
             surface,
-            same_sense: same_sense ^ flipped ^ reverse,
+            same_sense: sense,
             outer: outer_loop,
             inner,
             patch,
@@ -484,7 +518,10 @@ pub fn derive_patch(surface: &Surface, loops: &[Vec<DVec3>]) -> Result<UvRect, S
     let mut hi = [f64::NEG_INFINITY; 2];
     for lp in loops {
         let mut hint: Option<(f64, f64)> = None;
-        let mut prev: [Option<f64>; 2] = [None, None];
+        // Jede weitere Schleife beginnt neben dem schon bestimmten Bereich (Loch nahe der
+        // Naht): ihr erster Wert wird um Vielfache der Periode an dessen Mitte gelegt.
+        let mut prev: [Option<f64>; 2] =
+            [0, 1].map(|k| (lo[k] <= hi[k]).then(|| 0.5 * (lo[k] + hi[k])));
         for p in lp {
             let (u, v) = match hint {
                 Some(h) => surface.project_near(*p, h),
@@ -498,7 +535,7 @@ pub fn derive_patch(surface: &Surface, loops: &[Vec<DVec3>]) -> Result<UvRect, S
             hint = Some((u, v));
             let at_pole = poles
                 .iter()
-                .any(|pv| (v - pv).abs() <= POLE_REL * (1.0 + pv.abs()));
+                .any(|pv| (v - pv).abs() < POLE_REL * (1.0 + pv.abs()));
             for (k, mut x) in [u, v].into_iter().enumerate() {
                 if k == 0 && at_pole {
                     continue;
@@ -574,6 +611,9 @@ fn read_raw(
     }
     let outer = r.reference(first, &e, kind, 1)?;
     let (faces, reverse) = r.shell(outer)?;
+    if faces.is_empty() {
+        return Err(Skip("Der Körper hat keine Flächen.".into()));
+    }
     if faces.len() > file.limits().max_faces {
         return Err(Skip(format!(
             "Der Körper hat mehr als {} Flächen.",
@@ -594,8 +634,132 @@ fn read_raw(
     Ok(r.raw)
 }
 
-fn invalid(e: impl std::fmt::Display) -> Skip {
-    Skip(format!("Der Körper ist ungültig: {e}"))
+/// Name der Fläche mit dem Kernel-Index `i` für Meldungen („„STEP-Fläche n““).
+fn face_name(solid: &Solid, i: usize) -> String {
+    match solid
+        .faces
+        .get(Id::from_index(i))
+        .and_then(|f| f.tag.as_ref())
+    {
+        Some(t) => format!("„{}“", t.role),
+        None => "einer Fläche".into(),
+    }
+}
+
+/// Ort der Kante mit dem Kernel-Index `i` (Mitte) für Meldungen.
+fn edge_place(solid: &Solid, i: usize) -> String {
+    match solid.edges.get(Id::from_index(i)) {
+        Some(e) => place(e.curve.point(0.5 * (e.t0 + e.t1))),
+        None => "(?)".into(),
+    }
+}
+
+/// „Der Körper ist ungültig: …“ mit Flächenmarken und Kantenorten statt Kernel-Nummern.
+fn invalid(solid: &Solid, e: &ValidationError) -> Skip {
+    use ValidationError as V;
+    let why = match *e {
+        V::EdgeUseCount(k, 1) => {
+            format!(
+                "Die Kante bei {} gehört nur zu einer Fläche.",
+                edge_place(solid, k)
+            )
+        }
+        V::EdgeUseCount(k, n) => format!(
+            "Die Kante bei {} gehört zu {n} Flächen statt zu zwei.",
+            edge_place(solid, k)
+        ),
+        V::EdgeOrientation(k) => format!(
+            "Die Kante bei {} wird von beiden Flächen in derselben Richtung durchlaufen.",
+            edge_place(solid, k)
+        ),
+        V::OpenLoop(f) => format!(
+            "Ein Rand der Fläche {} ist nicht geschlossen.",
+            face_name(solid, f)
+        ),
+        V::EmptyLoop(f) => format!("Ein Rand der Fläche {} ist leer.", face_name(solid, f)),
+        V::MissingPatch(f) => format!(
+            "Die Fläche {} hat keinen Parameterbereich.",
+            face_name(solid, f)
+        ),
+        V::InvalidEulerCharacteristic(_) => {
+            "Die Flächen schließen den Körper nicht richtig ab.".into()
+        }
+        V::ShellMembership(f) => format!(
+            "Die Fläche {} gehört nicht zu genau einer Schale.",
+            face_name(solid, f)
+        ),
+        V::EdgeOffSurface(k, f) => format!(
+            "Die Kante bei {} liegt nicht auf der Fläche {}.",
+            edge_place(solid, k),
+            face_name(solid, f)
+        ),
+        V::HoleAcrossSeam(f) => format!(
+            "Ein Loch der Fläche {} reicht über ihre Naht.",
+            face_name(solid, f)
+        ),
+    };
+    Skip(format!("Der Körper ist ungültig: {why}"))
+}
+
+/// Liegt der Wert eines Polygons im Parameterraum um ganze Perioden neben dem Anfang? Dann
+/// windet sich die Schleife um die Achse statt sich zu schließen.
+fn winds(poly: &[DVec2], axis: usize, period: f64) -> bool {
+    let (Some(a), Some(b)) = (poly.first(), poly.last()) else {
+        return false;
+    };
+    let (a, b) = if axis == 0 { (a.x, b.x) } else { (a.y, b.y) };
+    ((b - a) / period).round() != 0.0
+}
+
+/// Ränder jeder Fläche im Parameterraum: Auf periodischen Flächen schließt sich jede Schleife
+/// (ein Kreisbogen mit falschem `same_sense` läuft sonst um die Achse); dann läuft der äußere
+/// Rand gegen den Uhrzeigersinn um die Außennormale und jedes Loch im Uhrzeigersinn. Sonst
+/// passen `same_sense` und Ränder einer Fläche nicht zusammen (das Volumen sähe das nicht).
+// Die negierten Vergleiche lehnen absichtlich auch NaN ab.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn check_face_loops(solid: &Solid) -> Result<(), Skip> {
+    let polys: Vec<(Id<Face>, Vec<Vec<DVec2>>)> = solid
+        .faces
+        .iter()
+        .map(|(id, _)| {
+            let g = face_geom(solid, id);
+            let polys = g
+                .loops
+                .iter()
+                .map(|lp| points_to_uv(&g.surface, g.same_sense, &loop_points(lp)))
+                .collect();
+            (id, polys)
+        })
+        .collect();
+    // Erst das Schließen (die genauere Ursache), dann der Umlaufsinn.
+    for (id, loops) in &polys {
+        let s = &solid.faces[*id].surface;
+        let periods = [s.u_period(), s.v_period()];
+        for poly in loops {
+            for (axis, period) in periods.iter().enumerate() {
+                if period.is_some_and(|p| winds(poly, axis, p)) {
+                    return Err(Skip(format!(
+                        "Der Rand der Fläche {} schließt sich nicht: Eine Kante läuft falsch herum.",
+                        face_name(solid, id.index())
+                    )));
+                }
+            }
+        }
+    }
+    for (id, loops) in &polys {
+        let sense = solid.faces[*id].same_sense;
+        for (k, poly) in loops.iter().enumerate() {
+            let area = oriented_area(poly, sense);
+            let ok = if k == 0 { area > 0.0 } else { area < 0.0 };
+            if !ok {
+                return Err(Skip(format!(
+                    "Die Fläche {} ist verdreht: Rand und Außenseite passen nicht zusammen.",
+                    face_name(solid, id.index())
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Dreht jede Fläche um: `same_sense` gekippt, Schleifen rückwärts.
@@ -609,26 +773,6 @@ fn turn_inside_out(solid: &mut Solid) {
     }
 }
 
-/// Läuft die äußere Schleife jeder Fläche gegen den Uhrzeigersinn um ihre Außennormale? Sonst
-/// passen `same_sense` und Ränder einer Fläche nicht zusammen (das Volumen sähe das nicht).
-// Die negierten Vergleiche lehnen absichtlich auch NaN ab.
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn check_face_turns(solid: &Solid) -> Result<(), Skip> {
-    for (id, face) in solid.faces.iter() {
-        let g = face_geom(solid, id);
-        let pts = loop_points(&g.loops[0]);
-        let poly = points_to_uv(&g.surface, g.same_sense, &pts);
-        let area = oriented_area(&poly, g.same_sense);
-        if !(area > 0.0) {
-            let role = face.tag.as_ref().map_or("", |t| t.role.as_str());
-            return Err(Skip(format!(
-                "Die Fläche „{role}“ ist verdreht: Rand und Außenseite passen nicht zusammen."
-            )));
-        }
-    }
-    Ok(())
-}
-
 /// Vorzeichenbehaftetes Volumen aus einem groben Netz.
 fn volume(solid: &Solid) -> Result<f64, Skip> {
     let mesh = tessellate(
@@ -637,7 +781,17 @@ fn volume(solid: &Solid) -> Result<f64, Skip> {
             chord_tolerance: CLASSIFY_CHORD,
         },
     )
-    .map_err(|e| Skip(format!("Der Körper lässt sich nicht vernetzen: {e}")))?;
+    .map_err(|e| {
+        Skip(match e {
+            MeshError::Triangulation(f) | MeshError::MissingPatch(f) | MeshError::OffSurface(f) => {
+                format!(
+                    "Die Fläche {} lässt sich nicht in Dreiecke zerlegen.",
+                    face_name(solid, f)
+                )
+            }
+            MeshError::TooLarge => "Der Körper ist zu groß für ein Dreiecksnetz.".into(),
+        })
+    })?;
     let v = mass_properties(&mesh).volume;
     if !v.is_finite() || v == 0.0 {
         return Err(Skip("Der Körper hat kein Volumen.".into()));
@@ -706,13 +860,13 @@ pub fn build_solid(
     let mut solid = raw.to_solid();
     // Erst prüfen, dann vernetzen: Das Netz für das Volumen setzt gültige Topologie voraus. Die
     // Prüfung am Ende (nach dem Umdrehen) verlangt der Ablauf des Plans; sie ist billig.
-    validate(&solid).map_err(invalid)?;
-    check_face_turns(&solid)?;
+    validate(&solid).map_err(|e| invalid(&solid, &e))?;
+    check_face_loops(&solid)?;
     if volume(&solid)? < 0.0 {
         turn_inside_out(&mut solid);
     }
     check_edges(&solid, opts.weld_tol_mm)?;
-    validate(&solid).map_err(invalid)?;
+    validate(&solid).map_err(|e| invalid(&solid, &e))?;
     Ok(BuiltSolid {
         faces: solid.faces.len(),
         solid,
