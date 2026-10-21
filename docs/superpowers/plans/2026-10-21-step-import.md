@@ -158,6 +158,25 @@ Re-Export in `lib.rs`: `pub use read::error::{MAX_STEP_BODIES, MAX_STEP_ENTITIES
 | `Cancelled` | `Abgebrochen` |
 | `NoEntity` | `Den Eintrag #{id} gibt es nicht.` (nur bei Fehlern des Aufrufers) |
 
+**Meldungstabelle des Körperaufbaus (`Skip`, ein Körper wird ausgelassen; ergänzt in den Aufgaben 3–6; `Zeile {n}:` steht davor, wo ein Eintrag bekannt ist; `{f}` ist die Marke „STEP-Fläche n“):**
+
+| Fall | Text |
+|---|---|
+| Rand schließt sich nicht (Aufgabe 3; seit Aufgabe 6 auch: Ränder um die Achse, die zu keiner Fläche ohne Naht passen) | `Der Rand der Fläche „{f}“ schließt sich nicht: Eine Kante läuft falsch herum.` |
+| Rand und Sinn passen nicht (Aufgabe 3; seit Aufgabe 6 auch am Pol) | `Die Fläche „{f}“ ist verdreht: Rand und Außenseite passen nicht zusammen.` |
+| Kante der Länge null, die sich nicht entfernen lässt (Aufgabe 3; seit Aufgabe 6 erst nach dem Entfernen entarteter Kanten) | `Zeile {n}: Eine Kante hat die Länge null.` |
+| Fläche ohne Rand (seit Aufgabe 6 erst nach dem Einfügen der Nähte) | `Zeile {n}: Eine Fläche hat keinen Rand.` |
+| Leere Schale (Aufgabe 3) | `Der Körper hat keine Flächen.` |
+| `validate` bzw. Vernetzung (Aufgabe 3) | `Der Körper ist ungültig: {Grund}` (z. B. `Die Kante bei ({x}; {y}; {z}) gehört nur zu einer Fläche.`), `Die Fläche „{f}“ lässt sich nicht in Dreiecke zerlegen.`, `Der Körper hat kein Volumen.` |
+| Kegel über die Spitze (Aufgabe 5) | `Zeile {n}: Eine Kegelfläche reicht über ihre Spitze hinaus.` |
+| Profil kreuzt die Drehachse (Aufgabe 5; seit Aufgabe 6 erst um mehr als `weld_tol`, nur im getrimmten Bereich) | `Das Profil einer Drehfläche schneidet die Drehachse.` |
+| Periodische Fläche ohne Naht, nicht Zylinder/Kegel/Kugel (P9, Aufgabe 6) | `Fläche vom Typ {Typ} ohne Naht wird noch nicht unterstützt.` (`{Typ}`: `Torus`, `Freiformfläche`) |
+| Rand nahe einem Pol, aber nicht genau durch ihn (Aufgabe 6) | `Der Rand der Fläche „{f}“ läuft nicht genau durch einen Pol.` |
+| Naht lässt sich nicht einfügen (Aufgabe 6) | `Der Fläche „{f}“ lässt sich keine Naht hinzufügen.`, `Zeile {n}: Eine Naht hätte die Länge null.` |
+| Getrimmtes Profil einer Drehfläche (Aufgabe 6) | `Zeile {n}: Eine Trimmkurve hat keine Grenze.`, `Zeile {n}: Eine Grenze einer Trimmkurve ist keine endliche Zahl.`, `Zeile {n}: Eine Trimmkurve hat keine Ausdehnung.`, `Ein getrimmtes Profil lässt sich nicht ausschneiden.` |
+
+Entfallen mit Aufgabe 6 (Platzhalter aus Aufgabe 3): „Ein Körper aus mehreren Stücken wird noch nicht unterstützt.“, „Ein Körper mit Hohlräumen wird noch nicht unterstützt.“, „Ein Rand vom Typ VERTEX_LOOP wird noch nicht unterstützt.“ (andere Randtypen behalten „Ein Rand vom Typ {Typ} wird noch nicht unterstützt.“) und im Körperaufbau „Eine Fläche, deren Rand durch einen Pol läuft, wird noch nicht unterstützt.“ (bleibt nur bei `derive_patch` ohne Flächensinn).
+
 Lexer-Regeln (nachsichtig, wie fremde Schreiber es brauchen): Leerraum `' ' \t \r \n` und Kommentare `/* … */` überall außerhalb von Zeichenketten (auch vor `ISO-10303-21;`); Schlüsselwörter `[A-Za-z_][A-Za-z0-9_-]*` werden in Großbuchstaben verglichen; Zahlen `[+-]?Ziffern[.Ziffern*][(E|e)[+-]?Ziffern]` (mit Punkt oder Exponent → `Real`, sonst `Int`; `Int` über `i64` oder nicht endliches `Real` → `BadNumber`); `#Ziffern` Verweis; `.NAME.` Aufzählung; `$` `*`; Zeichenketten mit `''`, `\\`, `\X2\…\X0\`, `\X4\…\X0\`, `\X\hh` (ein Byte ISO 8859-1), `\S\c` (Zeichen `c` + 128), `\Px\` (wird übergangen); rohe Bytes ≥ 0x80 in Zeichenketten: gültiges UTF-8 als UTF-8, sonst ISO 8859-1 (Nacharbeit), außerhalb sind sie `UnexpectedChar`; eine UTF-8-Kennung (BOM) am Anfang wird übergangen. Ein Eintrag ist `#id = TYP(…);` oder zusammengesetzt `#id = ( A(…) B(…) … );` (Reihenfolge der Teile wird nicht geprüft). Kopf: `ISO-10303-21; HEADER; … ENDSEC;`, dann ein oder mehrere `DATA; … ENDSEC;`, dann `END-ISO-10303-21;`; unbekannte Kopfeinträge werden übergangen. Tiefe von Listen und getypten Werten zählt; ab 65 → `TooDeep` (Zerleger mit eigenem Stapel oder Rekursion mit Zähler). Fortschritt: `set_total(kib)`, je 4096 Einträge und zusätzlich je 1 MiB gelesener Bytes (auch beim ersten Wort) `advance` und Abbruchprüfung.
 
 - [ ] **Step 1: Write the failing tests** in `crates/planora-step/tests/read_parse.rs` (Hilfe `file(data)` baut Kopf + `DATA;` + `data` + Ende wie in `tests/reader.rs`):

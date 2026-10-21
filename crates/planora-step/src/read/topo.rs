@@ -12,14 +12,17 @@
 //! - `ORIENTED_EDGE.orientation` (Halbkante vorwärts oder rückwärts),
 //! - `EDGE_CURVE.same_sense` (Kante läuft mit oder gegen den Kurvenparameter: `t1 < t0`).
 //!
-//! Der Aufbau geht über eine Rohform ([`RawBody`]); daraus entsteht der Körper, der dann
-//! geprüft wird: `validate`, je Fläche das Schließen jeder Schleife im Parameterraum und ihr
-//! Umlaufsinn (außen gegen, Löcher im Uhrzeigersinn), Außenrichtung über das Volumen (negativ →
-//! ganz umgedreht), Lage jeder Kante auf ihren Flächen und jeder Ecke auf ihren Kanten.
+//! Der Aufbau geht über eine Rohform ([`RawBody`]); sie wird bereinigt (Pole, entartete
+//! Kanten, fehlende Nähte: Aufgabe 6, [`crate::read::seam`]), dann entsteht daraus der Körper,
+//! der geprüft wird: `validate`, je Fläche das Schließen jeder Schleife im Parameterraum und ihr
+//! Umlaufsinn (außen gegen, Löcher im Uhrzeigersinn), Außenrichtung je Schale über ihr Volumen
+//! (äußere Schalen positiv, Hohlräume negativ, sonst umgedreht), Lage jeder Kante auf ihren
+//! Flächen und jeder Ecke auf ihren Kanten.
 
 use crate::read::error::MAX_STEP_FACES;
 use crate::read::geom::{Resolver, Skip, SurfaceGeom};
 use crate::read::index::StepFile;
+use crate::read::seam;
 use crate::read::spline::{close_curve, finish_cone, finish_extrusion_with_tol};
 use crate::read::units::Units;
 use crate::read::value::Entity;
@@ -31,7 +34,7 @@ use planora_kernel::{
     ValidationError, point_surface_tol, validate,
 };
 use planora_math::{DVec2, DVec3, Tolerance};
-use planora_mesh::{MeshError, TessellationOptions, mass_properties, tessellate};
+use planora_mesh::{MeshError, TessellationOptions, tessellate};
 use std::collections::HashMap;
 
 /// Rolle der Flächenmarke: „STEP-Fläche {n}“, `n` ab 1 in der Reihenfolge der Datei (P7).
@@ -59,6 +62,10 @@ const SPEED_STEP: f64 = 1e-6;
 /// derselbe Wert wie in `planora_kernel::boolean::points_to_uv`.
 const POLE_REL: f64 = 1e-7;
 
+/// Grund aus [`derive_patch_sensed`], wenn ein Rand am Pol zur falschen Seite springt (Rand und
+/// Sinn der Fläche passen nicht zusammen); [`finish_face`] nennt dazu die Fläche.
+const TWISTED_AT_POLE: &str = "Rand und Außenseite passen am Pol nicht zusammen.";
+
 /// Breite (relativ), unter der ein Parameterbereich keine Ausdehnung hat.
 const EMPTY_REL: f64 = 1e-12;
 
@@ -79,52 +86,81 @@ pub struct BuiltSolid {
 
 /// Halbkante der Rohform: Index in [`RawBody::edges`] und Laufrichtung.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RawHalfEdge {
+pub struct RawHalfEdge {
     pub edge: usize,
     pub forward: bool,
 }
 
 /// Kante der Rohform: Kurve über `t0 → t1` von Ecke `start` nach `end` (Indizes in
-/// [`RawBody::vertices`]).
+/// [`RawBody::vertices`]); `line` ist die Zeile ihres Eintrags für Meldungen (0: vom Leser
+/// eingefügt, etwa eine Naht).
 #[derive(Clone, Debug)]
-pub(crate) struct RawEdge {
+pub struct RawEdge {
     pub curve: Curve,
     pub t0: f64,
     pub t1: f64,
     pub start: usize,
     pub end: usize,
+    pub line: usize,
 }
 
 /// Fläche der Rohform; `same_sense` schon mit `flipped` und der Schalenrichtung verrechnet.
+/// `loops` sind die Ränder (ohne `VERTEX_LOOP`); nach dem Fertigstellen ist der erste der äußere,
+/// vorher zeigt `marked_outer` auf den in der Datei als äußerer gekennzeichneten. `line` ist die
+/// Zeile der Fläche für Meldungen.
 #[derive(Clone, Debug)]
-pub(crate) struct RawFace {
+pub struct RawFace {
     pub surface: Surface,
     pub same_sense: bool,
-    pub outer: Vec<RawHalfEdge>,
-    pub inner: Vec<Vec<RawHalfEdge>>,
+    pub loops: Vec<Vec<RawHalfEdge>>,
+    pub marked_outer: Option<usize>,
     pub patch: Option<UvRect>,
     pub tag: FaceTag,
+    pub line: usize,
 }
 
-/// Schale der Rohform: Indizes in [`RawBody::faces`].
+/// Schale der Rohform: Indizes in [`RawBody::faces`]; `void`: Hohlraum (`BREP_WITH_VOIDS`).
 #[derive(Clone, Debug, Default)]
-pub(crate) struct RawShell {
+pub struct RawShell {
     pub faces: Vec<usize>,
+    pub void: bool,
 }
 
 /// Rohform eines Körpers: Ecken, Kanten, Flächen, Schalen (Aufgaben 6 und 7 arbeiten darauf).
 #[derive(Clone, Debug, Default)]
-pub(crate) struct RawBody {
+pub struct RawBody {
     pub vertices: Vec<DVec3>,
     pub edges: Vec<RawEdge>,
     pub faces: Vec<RawFace>,
     pub shells: Vec<RawShell>,
 }
 
+/// Meldung mit der Zeile davor („Zeile n: …“), wenn sie bekannt ist.
+pub(crate) fn at_line(line: usize, msg: impl Into<String>) -> Skip {
+    let msg = msg.into();
+    if line > 0 {
+        Skip(format!("Zeile {line}: {msg}"))
+    } else {
+        Skip(msg)
+    }
+}
+
 impl RawBody {
+    /// Anfangsecke einer Halbkante.
+    pub fn he_start(&self, he: RawHalfEdge) -> usize {
+        let e = &self.edges[he.edge];
+        if he.forward { e.start } else { e.end }
+    }
+
+    /// Endecke einer Halbkante.
+    pub fn he_end(&self, he: RawHalfEdge) -> usize {
+        let e = &self.edges[he.edge];
+        if he.forward { e.end } else { e.start }
+    }
+
     /// Punkte einer Schleife in Laufrichtung: je Halbkante beide Ecken und
     /// [`EDGE_SAMPLES`] Zwischenpunkte.
-    fn loop_points(&self, lp: &[RawHalfEdge]) -> Vec<DVec3> {
+    pub fn loop_points(&self, lp: &[RawHalfEdge]) -> Vec<DVec3> {
         let n = EDGE_SAMPLES + 1;
         let mut pts = Vec::with_capacity(lp.len() * (n + 1));
         for he in lp {
@@ -166,8 +202,11 @@ impl RawBody {
             solid.add_face(Face {
                 surface: f.surface.clone(),
                 same_sense: f.same_sense,
-                outer: kernel_loop(&f.outer),
-                inner: f.inner.iter().map(|l| kernel_loop(l)).collect(),
+                outer: f
+                    .loops
+                    .first()
+                    .map_or(Loop { half_edges: vec![] }, |l| kernel_loop(l)),
+                inner: f.loops.iter().skip(1).map(|l| kernel_loop(l)).collect(),
                 patch: f.patch,
                 tag: Some(f.tag.clone()),
             });
@@ -180,6 +219,44 @@ impl RawBody {
             })
             .collect();
         solid
+    }
+
+    /// Entfernt Kanten, die keine Schleife mehr benutzt, und Ecken ohne Kante (nach dem
+    /// Entfernen entarteter Kanten und dem Teilen für Nähte); die Indizes werden neu vergeben,
+    /// die Reihenfolge bleibt.
+    pub fn compact(&mut self) {
+        let mut used = vec![false; self.edges.len()];
+        for f in &self.faces {
+            for he in f.loops.iter().flatten() {
+                used[he.edge] = true;
+            }
+        }
+        let mut edge_map = vec![usize::MAX; self.edges.len()];
+        let mut edges = Vec::with_capacity(self.edges.len());
+        for (k, e) in std::mem::take(&mut self.edges).into_iter().enumerate() {
+            if used[k] {
+                edge_map[k] = edges.len();
+                edges.push(e);
+            }
+        }
+        let mut vertex_map = vec![usize::MAX; self.vertices.len()];
+        let mut vertices = Vec::with_capacity(self.vertices.len());
+        for e in &mut edges {
+            for v in [&mut e.start, &mut e.end] {
+                if vertex_map[*v] == usize::MAX {
+                    vertex_map[*v] = vertices.len();
+                    vertices.push(self.vertices[*v]);
+                }
+                *v = vertex_map[*v];
+            }
+        }
+        self.vertices = vertices;
+        self.edges = edges;
+        for f in &mut self.faces {
+            for he in f.loops.iter_mut().flatten() {
+                he.edge = edge_map[he.edge];
+            }
+        }
     }
 }
 
@@ -319,11 +396,9 @@ impl<'f> TopoReader<'f> {
                 )));
             }
         }
-        // Eine offene Kurve zwischen zusammenfallenden Ecken ist keine Kante (geschlossene
-        // Kurven ergeben dort einen vollen Umlauf). Aufgabe 6 entfernt solche Kanten vorher.
-        if curve.period().is_none() && p.distance(q) <= linear {
-            return Err(self.fail(id, "Eine Kante hat die Länge null."));
-        }
+        // Eine offene Kurve zwischen zusammenfallenden Ecken hat die Länge null (geschlossene
+        // Kurven ergeben dort einen vollen Umlauf); sie wird mit den übrigen entarteten Kanten
+        // entfernt (`seam::drop_degenerate`), erst danach fällt sie gegebenenfalls auf.
         let (t0, t1) = edge_params(&curve, p, q, same_sense).map_err(|Skip(m)| self.fail(id, m))?;
         let k = self.raw.edges.len();
         self.raw.edges.push(RawEdge {
@@ -332,6 +407,7 @@ impl<'f> TopoReader<'f> {
             t1,
             start,
             end,
+            line: self.file.line(id).unwrap_or(0),
         });
         self.edge_of.insert(id, k);
         Ok(k)
@@ -357,11 +433,15 @@ impl<'f> TopoReader<'f> {
 
     /// Ein Rand (`FACE_BOUND`/`FACE_OUTER_BOUND`) als Schleife des Kernels; `reverse` kehrt ihn
     /// zusätzlich um (umgekehrte Schale). Liefert auch, ob er als äußerer Rand markiert ist.
-    fn bound(&mut self, id: u64, reverse: bool) -> Result<(Vec<RawHalfEdge>, bool), Skip> {
+    /// Ein `VERTEX_LOOP` (Pol, Kegelspitze) ist kein Rand für den Kernel: `None`.
+    fn bound(&mut self, id: u64, reverse: bool) -> Result<Option<(Vec<RawHalfEdge>, bool)>, Skip> {
         let (e, kind) = self.expect(id, &["FACE_OUTER_BOUND", "FACE_BOUND"])?;
         let lp = self.reference(id, &e, kind, 1)?;
         let along = self.flag(id, &e, kind, 2)?;
         let le = self.file.entity(lp)?;
+        if le.is("VERTEX_LOOP") {
+            return Ok(None);
+        }
         if !le.is("EDGE_LOOP") {
             return Err(self.fail(
                 lp,
@@ -385,41 +465,42 @@ impl<'f> TopoReader<'f> {
                 he.forward = !he.forward;
             }
         }
-        Ok((hes, kind == "FACE_OUTER_BOUND"))
+        Ok(Some((hes, kind == "FACE_OUTER_BOUND")))
     }
 
-    /// Eine Fläche mit der Marke `n` (ab 1); `reverse`: Schale umgekehrt.
+    /// Eine Fläche mit der Marke `n` (ab 1); `reverse`: Schale umgekehrt. Äußerer Rand und
+    /// Parameterbereich folgen erst nach dem Bereinigen ([`finish_face`]); `VERTEX_LOOP`s werden
+    /// verworfen, eine Fläche ohne Rand kommt bis zum Einfügen der Nähte durch.
     fn face(&mut self, id: u64, n: usize, reverse: bool) -> Result<RawFace, Skip> {
         let (e, kind) = self.expect(id, &["ADVANCED_FACE", "FACE_SURFACE"])?;
         let bounds = self.refs(id, &e, kind, 1)?;
         let geometry = self.reference(id, &e, kind, 2)?;
         let same_sense = self.flag(id, &e, kind, 3)?;
         let geom = self.res.surface(geometry)?;
-        if bounds.is_empty() {
-            return Err(self.fail(id, "Eine Fläche hat keinen Rand."));
-        }
         let mut loops = Vec::with_capacity(bounds.len());
-        let mut outer_marked: Option<usize> = None;
-        for (i, b) in bounds.iter().enumerate() {
-            let (lp, outer) = self.bound(*b, reverse)?;
+        let mut marked_outer: Option<usize> = None;
+        for b in &bounds {
+            let Some((lp, outer)) = self.bound(*b, reverse)? else {
+                continue;
+            };
             if outer {
-                if outer_marked.is_some() {
+                if marked_outer.is_some() {
                     return Err(self.fail(id, "Eine Fläche hat mehr als einen äußeren Rand."));
                 }
-                outer_marked = Some(i);
+                marked_outer = Some(loops.len());
             }
             loops.push(lp);
         }
         // Eine Strangfläche aus einer Freiformkurve bekommt ihren Bereich aus den Schleifen (nie
         // gekippt: ihre natürliche Normale ist die von STEP), ein Kegel aus einer Geraden seine
         // Hälfte (gemessen).
-        let (surface, flipped, points) = match geom {
-            SurfaceGeom::Ready { surface, flipped } => (surface, flipped, None),
+        let (surface, flipped) = match geom {
+            SurfaceGeom::Ready { surface, flipped } => (surface, flipped),
             SurfaceGeom::Extrusion { curve, dir } => {
                 let pts: Vec<Vec<DVec3>> = loops.iter().map(|l| self.raw.loop_points(l)).collect();
                 let surface = finish_extrusion_with_tol(&curve, dir, &pts, self.tol)
                     .map_err(|Skip(m)| self.fail(geometry, m))?;
-                (surface, false, Some(pts))
+                (surface, false)
             }
             SurfaceGeom::LineCone {
                 line_origin,
@@ -428,88 +509,107 @@ impl<'f> TopoReader<'f> {
                 axis,
             } => {
                 let pts: Vec<Vec<DVec3>> = loops.iter().map(|l| self.raw.loop_points(l)).collect();
-                let (surface, flipped) = finish_cone(line_origin, dir, axis_origin, axis, &pts)
-                    .map_err(|Skip(m)| self.fail(geometry, m))?;
-                (surface, flipped, Some(pts))
+                finish_cone(line_origin, dir, axis_origin, axis, &pts)
+                    .map_err(|Skip(m)| self.fail(geometry, m))?
             }
         };
-        let sense = same_sense ^ flipped ^ reverse;
-        let plane = matches!(surface, Surface::Plane { .. });
-        // Punkte der Schleifen nur, wo sie gebraucht werden: Wahl des äußeren Rands ohne
-        // Kennzeichnung und Parameterbereich gekrümmter Flächen.
-        let points: Vec<Vec<DVec3>> = match points {
-            Some(p) => p,
-            None if plane && outer_marked.is_some() => Vec::new(),
-            None => loops.iter().map(|l| self.raw.loop_points(l)).collect(),
-        };
-        let outer = match (outer_marked, &surface) {
-            (Some(i), _) => i,
-            (None, Surface::Plane { frame }) => {
-                // Ohne Kennzeichnung: der Rand mit der größten Fläche in der Ebene.
-                let area = |pts: &[DVec3]| {
-                    let local: Vec<DVec3> = pts.iter().map(|p| frame.to_local(*p)).collect();
-                    let n = local.len();
-                    (0..n)
-                        .map(|k| {
-                            let (a, b) = (local[k], local[(k + 1) % n]);
-                            a.x * b.y - b.x * a.y
-                        })
-                        .sum::<f64>()
-                        .abs()
-                };
-                (0..loops.len())
-                    .max_by(|&a, &b| area(&points[a]).total_cmp(&area(&points[b])))
-                    .unwrap_or(0)
-            }
-            (None, _) => {
-                // Gekrümmt ohne Kennzeichnung: der Rand, der am deutlichsten gegen den
-                // Uhrzeigersinn um die Außennormale läuft (Löcher laufen andersherum).
-                let turn =
-                    |pts: &[DVec3]| oriented_area(&points_to_uv(&surface, sense, pts), sense);
-                (0..loops.len())
-                    .max_by(|&a, &b| turn(&points[a]).total_cmp(&turn(&points[b])))
-                    .unwrap_or(0)
-            }
-        };
-        let Some(outer_loop) = loops.get(outer).cloned() else {
-            return Err(self.fail(id, "Eine Fläche hat keinen Rand."));
-        };
-        let patch = if plane {
-            None
-        } else {
-            // Äußerer Rand zuerst: weitere Schleifen werden neben ihm entfaltet.
-            let mut ordered = Vec::with_capacity(points.len());
-            ordered.extend(points.get(outer).cloned());
-            ordered.extend(
-                points
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i != outer)
-                    .map(|(_, p)| p.clone()),
-            );
-            Some(
-                derive_patch_with_tol(&surface, &ordered, self.tol)
-                    .map_err(|Skip(m)| self.fail(id, m))?,
-            )
-        };
-        let inner = loops
-            .into_iter()
-            .enumerate()
-            .filter(|(i, _)| *i != outer)
-            .map(|(_, l)| l)
-            .collect();
         Ok(RawFace {
             surface,
-            same_sense: sense,
-            outer: outer_loop,
-            inner,
-            patch,
+            same_sense: same_sense ^ flipped ^ reverse,
+            loops,
+            marked_outer,
+            patch: None,
             tag: FaceTag {
                 origin: 0,
                 role: format!("{STEP_FACE_ROLE} {n}"),
             },
+            line: self.file.line(id).unwrap_or(0),
         })
     }
+}
+
+/// Stellt die Fläche `i` fertig: äußerer Rand (gekennzeichnet; sonst bei Ebenen der mit der
+/// größten Fläche, bei gekrümmten Flächen der, der am deutlichsten gegen den Uhrzeigersinn um die
+/// Außennormale läuft) als erste Schleife, Parameterbereich gekrümmter Flächen aus allen
+/// Schleifen (äußerer Rand zuerst, Pole nach der Regel des Kernels). Ohne Schleife: „Eine Fläche
+/// hat keinen Rand.“
+pub fn finish_face(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
+    let f = &raw.faces[i];
+    if f.loops.is_empty() {
+        return Err(at_line(f.line, "Eine Fläche hat keinen Rand."));
+    }
+    let surface = &f.surface;
+    let sense = f.same_sense;
+    let plane = matches!(surface, Surface::Plane { .. });
+    // Punkte der Schleifen nur, wo sie gebraucht werden: Wahl des äußeren Rands ohne
+    // Kennzeichnung und Parameterbereich gekrümmter Flächen.
+    let points: Vec<Vec<DVec3>> = if plane && f.marked_outer.is_some() {
+        Vec::new()
+    } else {
+        f.loops.iter().map(|l| raw.loop_points(l)).collect()
+    };
+    let outer = match (f.marked_outer, surface) {
+        (Some(k), _) => k,
+        (None, Surface::Plane { frame }) => {
+            // Ohne Kennzeichnung: der Rand mit der größten Fläche in der Ebene.
+            let area = |pts: &[DVec3]| {
+                let local: Vec<DVec3> = pts.iter().map(|p| frame.to_local(*p)).collect();
+                let n = local.len();
+                (0..n)
+                    .map(|k| {
+                        let (a, b) = (local[k], local[(k + 1) % n]);
+                        a.x * b.y - b.x * a.y
+                    })
+                    .sum::<f64>()
+                    .abs()
+            };
+            (0..points.len())
+                .max_by(|&a, &b| area(&points[a]).total_cmp(&area(&points[b])))
+                .unwrap_or(0)
+        }
+        (None, _) => {
+            // Gekrümmt ohne Kennzeichnung: der Rand, der am deutlichsten gegen den
+            // Uhrzeigersinn um die Außennormale läuft (Löcher laufen andersherum).
+            let turn = |pts: &[DVec3]| oriented_area(&points_to_uv(surface, sense, pts), sense);
+            (0..points.len())
+                .max_by(|&a, &b| turn(&points[a]).total_cmp(&turn(&points[b])))
+                .unwrap_or(0)
+        }
+    };
+    let patch = if plane {
+        None
+    } else {
+        // Äußerer Rand zuerst: weitere Schleifen werden neben ihm entfaltet.
+        let mut ordered = Vec::with_capacity(points.len());
+        ordered.extend(points.get(outer).cloned());
+        ordered.extend(
+            points
+                .iter()
+                .enumerate()
+                .filter(|(k, _)| *k != outer)
+                .map(|(_, p)| p.clone()),
+        );
+        Some(
+            derive_patch_sensed(surface, sense, &ordered, tol).map_err(|Skip(m)| {
+                if m == TWISTED_AT_POLE {
+                    Skip(format!(
+                        "Die Fläche „{}“ ist verdreht: Rand und Außenseite passen nicht zusammen.",
+                        f.tag.role
+                    ))
+                } else {
+                    at_line(f.line, m)
+                }
+            })?,
+        )
+    };
+    let f = &mut raw.faces[i];
+    if outer < f.loops.len() {
+        let first = f.loops.remove(outer);
+        f.loops.insert(0, first);
+    }
+    f.marked_outer = Some(0);
+    f.patch = patch;
+    Ok(())
 }
 
 /// Kantenparameter: `t0` am Anfang, `t1` am Ende. Gerade: `t = (p − origin) · dir` (läuft die
@@ -560,11 +660,39 @@ pub fn derive_patch(surface: &Surface, loops: &[Vec<DVec3>]) -> Result<UvRect, S
 /// `2 · tol_mm / Geschwindigkeit` (kleinste Länge je Parameter an den Randpunkten, Punkte näher
 /// als `10 · tol_mm` an einem Pol ausgenommen; mindestens [`PERIOD_SLACK`], höchstens
 /// [`MAX_PERIOD_SLACK`] der Periode) über eine Periode wird der Bereich auf genau eine Periode
-/// gekappt; darüber ist er kein Bereich.
-// Die negierten Vergleiche lehnen absichtlich auch NaN ab.
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
+/// gekappt; darüber ist er kein Bereich. Ein Randpunkt liegt auf einem Pol, wenn sein `v` es tut
+/// (relativ [`POLE_REL`], wie im Kernel) oder er höchstens `tol_mm` vom Polpunkt entfernt ist.
 pub fn derive_patch_with_tol(
     surface: &Surface,
+    loops: &[Vec<DVec3>],
+    tol_mm: f64,
+) -> Result<UvRect, Skip> {
+    derive_patch_impl(surface, None, loops, tol_mm)
+}
+
+/// Wie [`derive_patch_with_tol`] mit dem Sinn der Fläche: Läuft eine Schleife durch einen Pol,
+/// folgt `u` dort der Regel des Kernels (`boolean::points_to_uv`: Sprung über den Pol in die
+/// Richtung, auf der die Fläche liegt, bis zum Wert des nächsten Randpunkts). So bekommt auch eine
+/// Kugel nur aus einer Naht von Pol zu Pol ihren vollen Umlauf und ein Ausschnitt mit Pol im Rand
+/// seinen richtigen Bereich. Punkte, die nur geometrisch auf dem Pol liegen, zählen als Polpunkt.
+pub fn derive_patch_sensed(
+    surface: &Surface,
+    same_sense: bool,
+    loops: &[Vec<DVec3>],
+    tol_mm: f64,
+) -> Result<UvRect, Skip> {
+    derive_patch_impl(surface, Some(same_sense), loops, tol_mm)
+}
+
+/// Randpunkte im Parameterraum: `u`, `v` (entfaltet), ob `u` für den Bereich zählt und ob der
+/// Punkt auf einem Pol liegt.
+type Track = Vec<(f64, f64, bool, bool)>;
+
+// Die negierten Vergleiche lehnen absichtlich auch NaN ab.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn derive_patch_impl(
+    surface: &Surface,
+    sense: Option<bool>,
     loops: &[Vec<DVec3>],
     tol_mm: f64,
 ) -> Result<UvRect, Skip> {
@@ -577,16 +705,35 @@ pub fn derive_patch_with_tol(
         _ => [0.0, 0.0],
     };
     let poles = surface.pole_vs();
+    let pole_points: Vec<DVec3> = poles.iter().map(|&pv| surface.point(base[0], pv)).collect();
+    let param_pole = |v: f64| {
+        poles
+            .iter()
+            .any(|pv| (v - pv).abs() < POLE_REL * (1.0 + pv.abs()))
+    };
+    let geo_pole = |p: DVec3| {
+        pole_points
+            .iter()
+            .copied()
+            .find(|q| tol_mm > 0.0 && q.distance(p) <= tol_mm)
+    };
+    let fold = |k: usize, x: f64| match periods[k] {
+        Some(per) => base[k] + (x - base[k]).rem_euclid(per),
+        None => x,
+    };
     let mut lo = [f64::INFINITY; 2];
     let mut hi = [f64::NEG_INFINITY; 2];
     // Kleinste Länge je Parametereinheit an den Randpunkten, je periodischer Richtung.
     let mut speed = [f64::INFINITY; 2];
+    let mut through_pole = false;
     for lp in loops {
-        let mut hint: Option<(f64, f64)> = None;
         // Jede weitere Schleife beginnt neben dem schon bestimmten Bereich (Loch nahe der
         // Naht): ihr erster Wert wird um Vielfache der Periode an dessen Mitte gelegt.
-        let mut prev: [Option<f64>; 2] =
+        let start: [Option<f64>; 2] =
             [0, 1].map(|k| (lo[k] <= hi[k]).then(|| 0.5 * (lo[k] + hi[k])));
+        let mut track: Track = Vec::with_capacity(lp.len());
+        let mut hint: Option<(f64, f64)> = None;
+        let mut prev = start;
         for p in lp {
             let (u, v) = match hint {
                 Some(h) => surface.project_near(*p, h),
@@ -598,39 +745,74 @@ pub fn derive_patch_with_tol(
                 ));
             }
             hint = Some((u, v));
-            let at_pole = poles
-                .iter()
-                .any(|pv| (v - pv).abs() < POLE_REL * (1.0 + pv.abs()));
-            for (k, mut x) in [u, v].into_iter().enumerate() {
+            let at_pole = param_pole(v) || geo_pole(*p).is_some();
+            let mut x = [u, v];
+            for k in 0..2 {
                 if k == 0 && at_pole {
                     continue;
                 }
                 if let (Some(per), Some(q)) = (periods[k], prev[k]) {
-                    x += per * ((q - x) / per).round();
+                    x[k] += per * ((q - x[k]) / per).round();
                 }
-                if let Some(per) = periods[k].filter(|_| tol_mm > 0.0) {
+                prev[k] = Some(x[k]);
+            }
+            track.push((x[0], x[1], !at_pole, at_pole));
+        }
+        if let Some(s) = sense
+            && track.iter().any(|t| t.3)
+        {
+            // Durch einen Pol: `u` nach der Regel des Kernels (Polpunkte genau auf den Pol).
+            through_pole = true;
+            let pts: Vec<DVec3> = lp.iter().map(|p| geo_pole(*p).unwrap_or(*p)).collect();
+            track = points_to_uv(surface, s, &pts)
+                .into_iter()
+                .map(|q| (q.x, q.y, true, param_pole(q.y)))
+                .collect();
+            for k in 0..2 {
+                let first = track
+                    .iter()
+                    .find(|t| k == 1 || !t.3)
+                    .map(|t| if k == 0 { t.0 } else { t.1 });
+                if let (Some(per), Some(q), Some(f)) = (periods[k], start[k], first) {
+                    let shift = per * ((q - f) / per).round();
+                    for t in &mut track {
+                        if k == 0 {
+                            t.0 += shift;
+                        } else {
+                            t.1 += shift;
+                        }
+                    }
+                }
+            }
+        }
+        for &(u, v, count_u, at_pole) in &track {
+            for (k, x) in [u, v].into_iter().enumerate() {
+                if k == 0 && !count_u {
+                    continue;
+                }
+                if let Some(per) = periods[k].filter(|_| tol_mm > 0.0 && !at_pole) {
+                    let (uf, vf) = (fold(0, u), fold(1, v));
                     let h = SPEED_STEP * per;
                     let q = if k == 0 {
-                        surface.point(u + h, v)
+                        surface.point(uf + h, vf)
                     } else {
-                        surface.point(u, v + h)
+                        surface.point(uf, vf + h)
                     };
-                    let s = q.distance(surface.point(u, v)) / h;
+                    let s = q.distance(surface.point(uf, vf)) / h;
                     if s.is_finite() && s > 10.0 * tol_mm {
                         speed[k] = speed[k].min(s);
                     }
                 }
-                prev[k] = Some(x);
                 lo[k] = lo[k].min(x);
                 hi[k] = hi[k].max(x);
             }
         }
     }
-    // Ohne Ausdehnung (etwa eine Kugel nur aus einer Naht von Pol zu Pol: `u` springt am Pol,
-    // die Richtung des Sprungs folgt erst mit Aufgabe 6) ist es kein Bereich.
+    // Ohne Ausdehnung (etwa eine Kugel nur aus einer Naht von Pol zu Pol, deren Polsprung ohne
+    // den Sinn der Fläche unbestimmt ist) ist es kein Bereich.
     let flat = |k: usize| !(hi[k] - lo[k] > EMPTY_REL * (1.0 + lo[k].abs()));
     if flat(0) || flat(1) {
-        return Err(Skip(if flat(0) && !poles.is_empty() {
+        return Err(Skip(if flat(0) && !poles.is_empty() && sense.is_none() {
             "Eine Fläche, deren Rand durch einen Pol läuft, wird noch nicht unterstützt.".into()
         } else {
             "Der Parameterbereich einer Fläche lässt sich nicht bestimmen.".into()
@@ -640,9 +822,13 @@ pub fn derive_patch_with_tol(
         if let Some(per) = periods[k] {
             let slack = (2.0 * tol_mm / speed[k]).clamp(PERIOD_SLACK * per, MAX_PERIOD_SLACK * per);
             if !(hi[k] - lo[k] <= per + slack) {
-                return Err(Skip(
-                    "Der Parameterbereich einer Fläche reicht über mehr als einen Umlauf.".into(),
-                ));
+                // Über einen Pol hinweg heißt das: Der Sprung am Pol läuft zur falschen Seite,
+                // Rand und Sinn der Fläche passen nicht zusammen.
+                return Err(Skip(if through_pole && k == 0 {
+                    TWISTED_AT_POLE.into()
+                } else {
+                    "Der Parameterbereich einer Fläche reicht über mehr als einen Umlauf.".into()
+                }));
             }
             if hi[k] - lo[k] > per {
                 hi[k] = lo[k] + per;
@@ -660,8 +846,12 @@ pub fn derive_patch_with_tol(
     })
 }
 
-/// Liest die Rohform der Volumen-Einträge `items`.
-fn read_raw(
+/// Liest die Rohform der Volumen-Einträge `items` (`MANIFOLD_SOLID_BREP`, `BREP_WITH_VOIDS`):
+/// je äußere Schale und je Hohlraum eine Schale (`void`), alle in einem Körper. Die Richtung der
+/// Schalen (`ORIENTED_CLOSED_SHELL`) ist schon in die Flächen verrechnet; Marken „STEP-Fläche n“
+/// laufen über alle Schalen. Noch nicht bereinigt (Pole, entartete Kanten, Nähte) und ohne
+/// äußeren Rand und Parameterbereich (siehe [`build_solid`]).
+pub fn read_raw(
     file: &StepFile,
     units: Units,
     items: &[u64],
@@ -676,44 +866,50 @@ fn read_raw(
         edge_of: HashMap::new(),
         raw: RawBody::default(),
     };
-    let Some(&first) = items.first() else {
-        return Err(Skip("Der Körper hat keine Flächen.".into()));
-    };
-    if items.len() > 1 {
-        // Mehrere Stücke in einem Körper: Aufgabe 6.
-        return Err(Skip(
-            "Ein Körper aus mehreren Stücken wird noch nicht unterstützt.".into(),
-        ));
-    }
-    let (e, kind) = r.expect(first, &["MANIFOLD_SOLID_BREP", "BREP_WITH_VOIDS"])?;
-    if kind == "BREP_WITH_VOIDS" {
-        // Hohlräume: Aufgabe 6.
-        return Err(Skip(
-            "Ein Körper mit Hohlräumen wird noch nicht unterstützt.".into(),
-        ));
-    }
-    let outer = r.reference(first, &e, kind, 1)?;
-    let (faces, reverse) = r.shell(outer)?;
-    if faces.is_empty() {
+    if items.is_empty() {
         return Err(Skip("Der Körper hat keine Flächen.".into()));
     }
-    if faces.len() > file.limits().max_faces {
+    // Schalen: (Flächen, umgekehrt, Hohlraum).
+    let mut shells: Vec<(Vec<u64>, bool, bool)> = Vec::new();
+    for &item in items {
+        let (e, kind) = r.expect(item, &["MANIFOLD_SOLID_BREP", "BREP_WITH_VOIDS"])?;
+        let outer = r.reference(item, &e, kind, 1)?;
+        let (faces, reverse) = r.shell(outer)?;
+        shells.push((faces, reverse, false));
+        if kind == "BREP_WITH_VOIDS" {
+            for void in r.refs(item, &e, kind, 2)? {
+                let (faces, reverse) = r.shell(void)?;
+                shells.push((faces, reverse, true));
+            }
+        }
+    }
+    if shells.iter().any(|(faces, ..)| faces.is_empty()) {
+        return Err(Skip("Der Körper hat keine Flächen.".into()));
+    }
+    let total: usize = shells.iter().map(|(faces, ..)| faces.len()).sum();
+    if total > file.limits().max_faces {
         return Err(Skip(format!(
             "Der Körper hat mehr als {} Flächen.",
             grouped(MAX_STEP_FACES)
         )));
     }
-    let mut shell = RawShell::default();
-    for (i, f) in faces.into_iter().enumerate() {
-        if progress.is_cancelled() {
-            return Err(Skip("Abgebrochen".into()));
+    for (faces, reverse, void) in shells {
+        let mut shell = RawShell {
+            faces: Vec::with_capacity(faces.len()),
+            void,
+        };
+        for f in faces {
+            if progress.is_cancelled() {
+                return Err(Skip("Abgebrochen".into()));
+            }
+            let n = r.raw.faces.len() + 1;
+            let face = r.face(f, n, reverse)?;
+            shell.faces.push(r.raw.faces.len());
+            r.raw.faces.push(face);
+            progress.advance(1);
         }
-        let face = r.face(f, i + 1, reverse)?;
-        shell.faces.push(r.raw.faces.len());
-        r.raw.faces.push(face);
-        progress.advance(1);
+        r.raw.shells.push(shell);
     }
-    r.raw.shells.push(shell);
     Ok(r.raw)
 }
 
@@ -845,10 +1041,9 @@ fn check_face_loops(solid: &Solid) -> Result<(), Skip> {
     Ok(())
 }
 
-/// Dreht jede Fläche um: `same_sense` gekippt, Schleifen rückwärts.
-fn turn_inside_out(solid: &mut Solid) {
-    let ids: Vec<Id<Face>> = solid.faces.iter().map(|(id, _)| id).collect();
-    for id in ids {
+/// Dreht die Flächen `ids` um: `same_sense` gekippt, Schleifen rückwärts.
+fn turn_inside_out(solid: &mut Solid, ids: &[Id<Face>]) {
+    for &id in ids {
         let f = &mut solid.faces[id];
         f.same_sense = !f.same_sense;
         f.outer = f.outer.reversed();
@@ -856,8 +1051,9 @@ fn turn_inside_out(solid: &mut Solid) {
     }
 }
 
-/// Vorzeichenbehaftetes Volumen aus einem groben Netz.
-fn volume(solid: &Solid) -> Result<f64, Skip> {
+/// Vorzeichenbehaftetes Volumen je Schale aus einem groben Netz (Reihenfolge von
+/// `solid.shells`).
+fn shell_volumes(solid: &Solid) -> Result<Vec<f64>, Skip> {
     let mesh = tessellate(
         solid,
         &TessellationOptions {
@@ -875,11 +1071,48 @@ fn volume(solid: &Solid) -> Result<f64, Skip> {
             MeshError::TooLarge => "Der Körper ist zu groß für ein Dreiecksnetz.".into(),
         })
     })?;
-    let v = mass_properties(&mesh).volume;
-    if !v.is_finite() || v == 0.0 {
+    let mut shell_of = vec![0usize; solid.faces.len()];
+    for (k, s) in solid.shells.iter().enumerate() {
+        for f in &s.faces {
+            shell_of[f.index()] = k;
+        }
+    }
+    // Bezugspunkt in der Mitte der Hülle (kleinere Rundungsfehler als der Ursprung).
+    let (lo, hi) = mesh
+        .positions
+        .iter()
+        .fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), p| {
+            (lo.min(*p), hi.max(*p))
+        });
+    let o = 0.5 * (lo + hi);
+    let mut volumes = vec![0.0; solid.shells.len().max(1)];
+    for r in &mesh.face_ranges {
+        let k = shell_of[r.face.index()];
+        let start = r.first_index as usize;
+        let end = start + r.index_count as usize;
+        for t in mesh.indices[start..end].as_chunks::<3>().0 {
+            let [a, b, c] = t.map(|i| mesh.positions[i as usize] - o);
+            volumes[k] += a.dot(b.cross(c)) / 6.0;
+        }
+    }
+    if volumes.iter().any(|v| !v.is_finite() || *v == 0.0) {
         return Err(Skip("Der Körper hat kein Volumen.".into()));
     }
-    Ok(v)
+    Ok(volumes)
+}
+
+/// Außenrichtung je Schale über ihr Volumen: äußere Schalen positiv, Hohlräume (`voids`, in der
+/// Reihenfolge von `solid.shells`) negativ; sonst wird die Schale umgedreht.
+fn orient_shells(solid: &mut Solid, voids: &[bool]) -> Result<(), Skip> {
+    let volumes = shell_volumes(solid)?;
+    for (k, v) in volumes.into_iter().enumerate() {
+        let void = voids.get(k).copied().unwrap_or(false);
+        if (v > 0.0) == void {
+            let ids = solid.shells[k].faces.clone();
+            turn_inside_out(solid, &ids);
+        }
+    }
+    Ok(())
 }
 
 /// Jede Kante liegt mit ihrer Mitte auf ihren Flächen, jede Ecke auf ihren Kanten.
@@ -927,11 +1160,15 @@ fn check_edges(solid: &Solid, weld_tol: f64) -> Result<(), Skip> {
     Ok(())
 }
 
-/// Baut aus den Volumen-Einträgen `items` (`MANIFOLD_SOLID_BREP`; `BREP_WITH_VOIDS` und mehrere
-/// Stücke folgen in Aufgabe 6) einen geprüften Körper. Mehr als `file.limits().max_faces`
-/// Flächen, ungültige Topologie, verdrehte Flächen, Kanten neben ihren Flächen oder Ecken neben
-/// ihren Kanten ergeben ein [`Skip`] mit Grund; ein nach innen gekehrter Körper wird umgedreht.
-/// `progress` zählt je Fläche eins weiter; Abbruch ergibt `Skip("Abgebrochen")`.
+/// Baut aus den Volumen-Einträgen `items` (`MANIFOLD_SOLID_BREP`, `BREP_WITH_VOIDS`; mehrere
+/// ergeben mehrere Schalen eines Körpers) einen geprüften Körper. Ablauf: Rohform lesen, Ecken auf
+/// Pole ziehen, entartete Kanten entfernen, fehlende Nähte einfügen ([`crate::read::seam`]),
+/// Pole prüfen, je Fläche äußerer Rand und Parameterbereich, ungenutzte Kanten und Ecken
+/// entfernen; dann `validate`, Schleifen je Fläche, Außenrichtung je Schale über ihr Volumen,
+/// Lage der Kanten und Ecken, `validate`. Mehr als `file.limits().max_faces` Flächen, ungültige
+/// Topologie, verdrehte Flächen, Kanten neben ihren Flächen oder Ecken neben ihren Kanten ergeben
+/// ein [`Skip`] mit Grund. `progress` zählt je Fläche eins weiter; Abbruch ergibt
+/// `Skip("Abgebrochen")`.
 pub fn build_solid(
     file: &StepFile,
     units: Units,
@@ -939,16 +1176,24 @@ pub fn build_solid(
     opts: &BuildOptions,
     progress: &Progress,
 ) -> Result<BuiltSolid, Skip> {
-    let raw = read_raw(file, units, items, opts.weld_tol_mm, progress)?;
+    let tol = opts.weld_tol_mm;
+    let mut raw = read_raw(file, units, items, tol, progress)?;
+    seam::snap_poles(&mut raw, tol);
+    seam::drop_degenerate(&mut raw, tol)?;
+    seam::insert_seams(&mut raw, tol)?;
+    seam::check_poles(&raw, tol)?;
+    for i in 0..raw.faces.len() {
+        finish_face(&mut raw, i, tol)?;
+    }
+    raw.compact();
+    let voids: Vec<bool> = raw.shells.iter().map(|s| s.void).collect();
     let mut solid = raw.to_solid();
     // Erst prüfen, dann vernetzen: Das Netz für das Volumen setzt gültige Topologie voraus. Die
     // Prüfung am Ende (nach dem Umdrehen) verlangt der Ablauf des Plans; sie ist billig.
     validate(&solid).map_err(|e| invalid(&solid, &e))?;
     check_face_loops(&solid)?;
-    if volume(&solid)? < 0.0 {
-        turn_inside_out(&mut solid);
-    }
-    check_edges(&solid, opts.weld_tol_mm)?;
+    orient_shells(&mut solid, &voids)?;
+    check_edges(&solid, tol)?;
     validate(&solid).map_err(|e| invalid(&solid, &e))?;
     Ok(BuiltSolid {
         faces: solid.faces.len(),

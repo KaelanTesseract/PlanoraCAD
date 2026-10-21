@@ -509,6 +509,14 @@ fn curve_samples(c: &Curve, line_t: f64) -> Vec<f64> {
     }
 }
 
+/// Probestellen im Bereich `range` der Kurve (getrimmtes Profil), sonst wie [`curve_samples`].
+fn samples_in(c: &Curve, line_t: f64, range: Option<(f64, f64)>) -> Vec<f64> {
+    match (c, range) {
+        (Curve::Line { .. }, _) | (_, None) => curve_samples(c, line_t),
+        (_, Some((a, b))) => (1..10).map(|k| a + (b - a) * k as f64 / 10.0).collect(),
+    }
+}
+
 /// STEP-Normale `σ_u × σ_v` (Strangfläche: u = Kurvenparameter, v entlang des Vektors) mit
 /// zentralen Differenzen; liefert Punkt und Normale an der Stelle mit der längsten Normale unter
 /// `samples` (Kurvenparameter), dazu `v = v_at`.
@@ -573,11 +581,27 @@ fn revolution_probe(
 /// Drehfläche (`SURFACE_OF_REVOLUTION`, P8): Kurve `curve` um die Achse durch `origin` mit der
 /// Einheitsrichtung `axis`. Gerade parallel → Zylinder, senkrecht → Ebene, die Achse schneidend
 /// → [`SurfaceGeom::LineCone`] (die Hälfte des Doppelkegels folgt aus den Schleifen, siehe
-/// [`finish_cone`]), schräg daneben → Skip; Kreis in einer Ebene durch die Achse → Kugel bzw.
-/// Torus; sonst NURBS (`NurbsSurface::revolve` über die ganze Kurve; ein ebenes Profil darf die
-/// Achse nicht kreuzen). `flipped` gemessen (ISO-Normale, [`revolution_probe`]).
+/// [`finish_cone`]), schräg daneben → Skip; Kreis in einer Ebene durch die Achse → Kugel (Mitte
+/// bis `weld_tol` neben der Achse) bzw. Torus; sonst NURBS (`NurbsSurface::revolve` über die ganze
+/// Kurve; ein ebenes Profil darf die Achse nicht um mehr als `weld_tol` kreuzen). `flipped`
+/// gemessen (ISO-Normale, [`revolution_probe`]).
 pub fn revolution(
     curve: &Curve,
+    origin: DVec3,
+    axis: DVec3,
+    weld_tol: f64,
+) -> Result<SurfaceGeom, Skip> {
+    revolution_trimmed(curve, None, origin, axis, weld_tol)
+}
+
+/// Wie [`revolution`] für ein getrimmtes Profil (`TRIMMED_CURVE`): `range` ist der benutzte
+/// Bereich `a < b` im Parameter von `curve` (schon in Laufrichtung des Profils). Gemessen wird
+/// innerhalb dieses Bereichs (ein Kreis oder eine Ellipse mit Mitte auf der Achse überdeckt die
+/// Drehfläche zweimal, mit entgegengesetzter Normale), als NURBS gedreht und auf das Kreuzen der
+/// Achse geprüft wird nur dieser Bereich.
+pub fn revolution_trimmed(
+    curve: &Curve,
+    range: Option<(f64, f64)>,
     origin: DVec3,
     axis: DVec3,
     weld_tol: f64,
@@ -585,6 +609,8 @@ pub fn revolution(
     let v = axis;
     let foot = |p: DVec3| origin + v * (p - origin).dot(v);
     let near = |d: f64, p: DVec3| d <= LINEAR_EPS * (1.0 + (p - origin).length());
+    // Liegt eine Kreismitte auf der Achse? Bis zur Genauigkeit der Datei.
+    let on_axis = |d: f64, p: DVec3| near(d, p) || d <= weld_tol;
     let none = || skip("Eine Drehfläche hat keine Ausdehnung.");
     // Probe einer Geraden: ihr Ursprung, liegt er auf der Achse, 1 weiter.
     let line_t = match curve {
@@ -632,7 +658,7 @@ pub fn revolution(
             if in_axis_plane {
                 let fc = foot(c);
                 let major = (c - fc).length();
-                if near(major, c) {
+                if on_axis(major, c) {
                     Surface::Sphere {
                         frame: frame(fc, v.any_orthonormal_vector(), v),
                         radius: *radius,
@@ -650,21 +676,22 @@ pub fn revolution(
                     }
                 }
             } else {
-                revolve_nurbs(curve, origin, v, weld_tol)?
+                revolve_nurbs(curve, range, origin, v, weld_tol)?
             }
         }
-        _ => revolve_nurbs(curve, origin, v, weld_tol)?,
+        _ => revolve_nurbs(curve, range, origin, v, weld_tol)?,
     };
-    let range = match curve {
-        Curve::Line { origin: o, .. } => (*o - origin).length().max(1.0),
+    let width = match (curve, range) {
+        (Curve::Line { origin: o, .. }, _) => (*o - origin).length().max(1.0),
+        (_, Some((a, b))) => b - a,
         _ => curve_range(curve),
     };
     let (p, n) = revolution_probe(
         curve,
         origin,
         v,
-        &curve_samples(curve, line_t),
-        DIFF_STEP * range,
+        &samples_in(curve, line_t, range),
+        DIFF_STEP * width,
     )
     .ok_or_else(none)?;
     let flipped = measured_flip(&surface, p, n)?;
@@ -733,17 +760,23 @@ pub fn finish_cone(
     Ok((surface, flipped))
 }
 
-/// NURBS-Drehfläche über die ganze Kurve (Kreis und Ellipse als voller Umlauf). Liegt das
-/// Profil in einer Ebene durch die Achse, darf es nicht auf beiden Seiten der Achse liegen.
+/// NURBS-Drehfläche über die ganze Kurve (Kreis und Ellipse als voller Umlauf) bzw. über den
+/// Bereich `range` eines getrimmten Profils. Liegt das Profil in einer Ebene durch die Achse, darf
+/// es nicht (um mehr als `weld_tol`) auf beiden Seiten der Achse liegen.
 fn revolve_nurbs(
     curve: &Curve,
+    range: Option<(f64, f64)>,
     origin: DVec3,
     axis: DVec3,
     weld_tol: f64,
 ) -> Result<Surface, Skip> {
     let why = |m: String| skip(format!("Eine Drehfläche lässt sich nicht übernehmen: {m}"));
-    let c = curve_to_nurbs(curve, 0.0, TAU)?;
-    if crosses_axis(&c, origin, axis) {
+    let c = match (curve, range) {
+        (Curve::Nurbs(n), Some((a, b))) => nurbs_between(n, a, b)?,
+        (_, Some((a, b))) => curve_to_nurbs(curve, a, b)?,
+        _ => curve_to_nurbs(curve, 0.0, TAU)?,
+    };
+    if crosses_axis(&c, origin, axis, weld_tol) {
         return Err(skip("Das Profil einer Drehfläche schneidet die Drehachse."));
     }
     let ns = NurbsSurface::revolve(&c, origin, axis, 0.0, TAU).map_err(|e| why(e.to_string()))?;
@@ -751,8 +784,9 @@ fn revolve_nurbs(
     Ok(surface)
 }
 
-/// Liegt ein ebenes Profil (in einer Ebene durch die Achse) auf beiden Seiten der Achse?
-fn crosses_axis(c: &NurbsCurve, origin: DVec3, axis: DVec3) -> bool {
+/// Liegt ein ebenes Profil (in einer Ebene durch die Achse) auf beiden Seiten der Achse, und zwar
+/// um mehr als `weld_tol` (ein Profilende genau auf der Achse ist eine Kugelkappe)?
+fn crosses_axis(c: &NurbsCurve, origin: DVec3, axis: DVec3, weld_tol: f64) -> bool {
     const SAMPLES: usize = 256;
     let (a, b) = c.domain();
     let radial: Vec<DVec3> = (0..=SAMPLES)
@@ -774,9 +808,78 @@ fn crosses_axis(c: &NurbsCurve, origin: DVec3, axis: DVec3) -> bool {
         return false;
     }
     let side = far / scale;
-    let tol = LINEAR_EPS * (1.0 + scale);
+    let tol = (LINEAR_EPS * (1.0 + scale)).max(weld_tol);
     let planar = radial.iter().all(|r| r.cross(side).length() <= tol);
     planar && radial.iter().any(|r| r.dot(side) < -tol)
+}
+
+/// Teilstück `[a, b]` einer Freiformkurve (Knoten an beiden Enden bis zur Vielfachheit des
+/// Grades eingefügt, dann die Kontrollpunkte dazwischen genommen); dieselbe Kurve auf diesem
+/// Bereich (an Probestellen geprüft).
+// Die negierten Vergleiche lehnen absichtlich auch NaN ab.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn nurbs_between(c: &NurbsCurve, a: f64, b: f64) -> Result<NurbsCurve, Skip> {
+    let why = |m: String| {
+        skip(format!(
+            "Eine Freiformkurve lässt sich nicht übernehmen: {m}"
+        ))
+    };
+    let cut = || skip("Ein getrimmtes Profil lässt sich nicht ausschneiden.");
+    let (d0, d1) = c.domain();
+    let eps = 1e-12 * (d1 - d0);
+    let a = if a <= d0 + eps { d0 } else { a };
+    let b = if b >= d1 - eps { d1 } else { b };
+    if !(a < b) {
+        return Err(cut());
+    }
+    if a == d0 && b == d1 {
+        return Ok(c.clone());
+    }
+    let p = c.degree();
+    let mut cur = c.clone();
+    for u in [a, b] {
+        if u == d0 || u == d1 {
+            continue;
+        }
+        let m = cur.knots().knots().iter().filter(|k| **k == u).count();
+        if m < p {
+            cur = cur.insert_knot(u, p - m).map_err(|e| why(e.to_string()))?;
+        }
+    }
+    let k = cur.knots().knots();
+    let mut knots = vec![a; p + 1];
+    knots.extend(k.iter().copied().filter(|x| *x > a && *x < b));
+    knots.extend(std::iter::repeat_n(b, p + 1));
+    let count = knots.len() - p - 1;
+    // Erster Kontrollpunkt: der am Anfang `a` (Vielfachheit p innen, p + 1 am Rand).
+    let first = k
+        .iter()
+        .filter(|x| **x <= a)
+        .count()
+        .checked_sub(p + 1)
+        .ok_or_else(cut)?;
+    let control = cur
+        .control_points()
+        .get(first..first + count)
+        .ok_or_else(cut)?
+        .to_vec();
+    let weights = cur
+        .weights()
+        .get(first..first + count)
+        .ok_or_else(cut)?
+        .to_vec();
+    let part = NurbsCurve::new(p, knots, control, weights).map_err(|e| why(e.to_string()))?;
+    let scale = c
+        .control_points()
+        .iter()
+        .fold(0.0, |m: f64, q| m.max(q.length()));
+    for j in 0..=8 {
+        let t = a + (b - a) * j as f64 / 8.0;
+        if !(part.point(t).distance(c.point(t)) <= 1e-9 * (1.0 + scale)) {
+            return Err(cut());
+        }
+    }
+    Ok(part)
 }
 
 /// Strangfläche (`SURFACE_OF_LINEAR_EXTRUSION`, P8) der Kurve `curve` entlang der

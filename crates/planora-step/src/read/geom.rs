@@ -19,7 +19,7 @@ use crate::read::error::StepReadError;
 use crate::read::index::{RefPath, StepFile};
 use crate::read::spline::{
     clamp_knots, expand_knots, extrusion, finish_nurbs_surface, implicit_knots, normalize_weights,
-    revolution,
+    revolution_trimmed,
 };
 use crate::read::units::Units;
 use crate::read::value::{Entity, Value};
@@ -409,6 +409,123 @@ impl<'f> Resolver<'f> {
         )))
     }
 
+    /// Profil einer Drehfläche: die Kurve und, bei `TRIMMED_CURVE`, der benutzte Bereich `a < b`
+    /// in ihrem Parameter. Die Kurve läuft wie das Profil (`sense_agreement` .F.: umgekehrt, der
+    /// Bereich mit ihr gespiegelt). Grenzen als `PARAMETER_VALUE` (Kreis und Ellipse in der
+    /// Winkeleinheit, Gerade in der Längeneinheit) oder als Punkt (auf die Kurve projiziert); gibt
+    /// es beides, entscheidet `master_representation` (sonst der Parameter).
+    // Der negierte Vergleich lehnt absichtlich auch NaN ab.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn profile(&mut self, id: u64) -> Result<(Curve, Option<(f64, f64)>), Skip> {
+        const T: &str = "TRIMMED_CURVE";
+        let e = self.file.entity(id)?;
+        if !e.is(T) {
+            return Ok((self.curve(id)?, None));
+        }
+        let base_id = self.reference(id, &e, T, 1)?;
+        let base = self.curve(base_id)?;
+        let sense = match self
+            .arg(id, &e, T, 4)?
+            .logical()
+            .map_err(|m| self.bad(id, m))?
+        {
+            Some(s) => s,
+            None => {
+                return Err(self.bad(
+                    id,
+                    "Die Laufrichtung einer Trimmkurve ist unbestimmt („.U.“).",
+                ));
+            }
+        };
+        let cartesian = matches!(
+            self.arg(id, &e, T, 5)
+                .ok()
+                .and_then(|v| v.enumeration().ok()),
+            Some("CARTESIAN")
+        );
+        let t1 = self.trim(id, &e, 2, &base, cartesian)?;
+        let t2 = self.trim(id, &e, 3, &base, cartesian)?;
+        // Bereich auf der Grundkurve, von t1 nach t2 in Laufrichtung.
+        let (a, b) = match base.period() {
+            Some(per) => {
+                let span = if sense {
+                    (t2 - t1).rem_euclid(per)
+                } else {
+                    (t1 - t2).rem_euclid(per)
+                };
+                let span = if span == 0.0 { per } else { span };
+                if sense {
+                    (t1, t1 + span)
+                } else {
+                    (t1 - span, t1)
+                }
+            }
+            None => (t1.min(t2), t1.max(t2)),
+        };
+        if !(b > a) {
+            return Err(self.bad(id, "Eine Trimmkurve hat keine Ausdehnung."));
+        }
+        if sense {
+            return Ok((base, Some((a, b))));
+        }
+        // Umgekehrt: Gerade, Kreis, Ellipse `t' = −t`; Freiformkurve `t' = d0 + d1 − t`.
+        let mirror = match &base {
+            Curve::Nurbs(n) => {
+                let (d0, d1) = n.domain();
+                d0 + d1
+            }
+            _ => 0.0,
+        };
+        let rev = reversed(base).map_err(|m| self.bad(id, m))?;
+        Ok((rev, Some((mirror - b, mirror - a))))
+    }
+
+    /// Eine Grenze (`trim_1`/`trim_2`, Parameter `i`) einer Trimmkurve als Parameter der
+    /// Grundkurve `base`.
+    fn trim(
+        &mut self,
+        id: u64,
+        e: &Entity,
+        i: usize,
+        base: &Curve,
+        cartesian: bool,
+    ) -> Result<f64, Skip> {
+        let items = self
+            .arg(id, e, "TRIMMED_CURVE", i)?
+            .list()
+            .map_err(|m| self.bad(id, m))?
+            .to_vec();
+        let mut param = None;
+        let mut point = None;
+        for v in &items {
+            match v {
+                Value::Typed(name, _) if name.eq_ignore_ascii_case("PARAMETER_VALUE") => {
+                    param = Some(v.measure().map_err(|m| self.bad(id, m))?);
+                }
+                Value::Ref(r) => point = Some(self.point(*r)?),
+                _ => {}
+            }
+        }
+        let from_point = |p: DVec3| base.project(p);
+        let from_param = |x: f64| match base {
+            Curve::Line { .. } => x * self.units.length.mm(),
+            Curve::Circle { .. } | Curve::Ellipse { .. } => x * self.units.angle_rad,
+            Curve::Nurbs(_) => x,
+        };
+        let t = match (param, point) {
+            (_, Some(p)) if cartesian => from_point(p),
+            (Some(x), _) => from_param(x),
+            (None, Some(p)) => from_point(p),
+            (None, None) => {
+                return Err(self.bad(id, "Eine Trimmkurve hat keine Grenze."));
+            }
+        };
+        if !t.is_finite() {
+            return Err(self.bad(id, "Eine Grenze einer Trimmkurve ist keine endliche Zahl."));
+        }
+        Ok(t)
+    }
+
     /// Richtung eines `VECTOR` (Länge 1; der Betrag zählt für eine Gerade nicht).
     fn vector_direction(&mut self, id: u64) -> Result<DVec3, Skip> {
         self.guarded(id, |s| {
@@ -504,9 +621,9 @@ impl<'f> Resolver<'f> {
             const N: &str = "SURFACE_OF_REVOLUTION";
             let c = self.reference(id, &e, N, 1)?;
             let a = self.reference(id, &e, N, 2)?;
-            let curve = self.curve(c)?;
+            let (curve, range) = self.profile(c)?;
             let (origin, axis) = self.axis1(a)?;
-            return revolution(&curve, origin, axis, self.units.weld_tol_mm());
+            return revolution_trimmed(&curve, range, origin, axis, self.units.weld_tol_mm());
         }
         if e.is("SURFACE_OF_LINEAR_EXTRUSION") {
             const N: &str = "SURFACE_OF_LINEAR_EXTRUSION";
