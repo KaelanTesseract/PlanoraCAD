@@ -1,0 +1,161 @@
+ISO-10303-21;
+/* Selbst geschrieben für die Tests von PlanoraCAD (GPL-3.0-only). */
+HEADER;
+FILE_DESCRIPTION(('Quader 10 x 20 x 30, Ecke im Ursprung'),'2;1');
+FILE_NAME('box_ap214.step','2026-10-21T00:00:00',('PlanoraCAD'),(''),
+  'von Hand','von Hand','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+/* Produkt und Darstellung, so wie AP214-Dateien anderer Programme sie schreiben */
+#1=APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,#2);
+#2=APPLICATION_CONTEXT('core data for automotive mechanical design processes');
+#3=SHAPE_DEFINITION_REPRESENTATION(#4,#10);
+#4=PRODUCT_DEFINITION_SHAPE('','',#5);
+#5=PRODUCT_DEFINITION('design','',#6,#9);
+#6=PRODUCT_DEFINITION_FORMATION('','',#7);
+#7=PRODUCT('W\X2\00FC\X0\rfel','W\X2\00FC\X0\rfel','',(#8));
+#8=PRODUCT_CONTEXT('',#2,'mechanical');
+#9=PRODUCT_DEFINITION_CONTEXT('part definition',#2,'design');
+#10=ADVANCED_BREP_SHAPE_REPRESENTATION('W\X2\00FC\X0\rfel',(#11,#20),#105);
+#11=AXIS2_PLACEMENT_3D('',#151,#301,#302);
+#12=PRODUCT_RELATED_PRODUCT_CATEGORY('part',$,(#7));
+/* Der Körper; die Flächen stehen vor ihren Rändern (Vorwärtsverweise) */
+#20=MANIFOLD_SOLID_BREP('W\X2\00FC\X0\rfel',#21);
+#21=CLOSED_SHELL('',
+  (#30,#31,#32,
+   #33,#34,#35));
+/* Boden: Ebene mit Normale +z, Außenseite -z */
+#30=ADVANCED_FACE('',(#40),#60,.F.);
+#31=ADVANCED_FACE('',(#41),#61,.T.);
+#32=ADVANCED_FACE('',(#42),#62,.T.);
+#33=ADVANCED_FACE('',(#43),#63,.T.);
+#34=ADVANCED_FACE('',(#44),#64,.T.);
+/* Links: Ebene mit Normale +x, Außenseite -x */
+#35=ADVANCED_FACE('',(#45),#65,.F.);
+#40=FACE_OUTER_BOUND('',#50,.T.);
+/* Deckel: Schleife rückwärts geschrieben */
+#41=FACE_OUTER_BOUND('',#51,.F.);
+#42=FACE_OUTER_BOUND('',#52,.T.);
+#43=FACE_BOUND('',#53,.T.);
+#44=FACE_OUTER_BOUND('',#54,.T.);
+#45=FACE_OUTER_BOUND('',#55,.T.);
+#50=EDGE_LOOP('',(#200,#201,
+  #202,#203));
+#51=EDGE_LOOP('',(#204,#205,#206,#207));
+#52=EDGE_LOOP('',(#208,#209,#210,#211));
+#53=EDGE_LOOP('',(#212,#213,#214,#215));
+#54=EDGE_LOOP('',(#216,#217,#218,#219));
+#55=EDGE_LOOP('',(#220,#221,#222,#223));
+#60=PLANE('',#310);
+#61=PLANE('',#311);
+#62=PLANE('',#312);
+#63=PLANE('',#313);
+#64=PLANE('',#314);
+#65=PLANE('',#315);
+/* Einheiten: zusammengesetzte Einträge */
+#100=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));
+#101=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.));
+#102=(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT());
+#103=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-07),#100,
+  'distance_accuracy_value','confusion accuracy');
+#105=(GEOMETRIC_REPRESENTATION_CONTEXT(3)
+  GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#103))
+  GLOBAL_UNIT_ASSIGNED_CONTEXT((#100,#101,#102))
+  REPRESENTATION_CONTEXT('Context #1','3D Context with UNIT and UNCERTAINTY'));
+/* Kanten E1..E12; E3 läuft gegen ihre Gerade */
+#121=EDGE_CURVE('',#141,#142,#161,.T.);
+#122=EDGE_CURVE('',#142,#143,#162,.T.);
+#123=EDGE_CURVE('',#143,#144,#163,.F.);
+#124=EDGE_CURVE('',#144,#141,#164,.T.);
+#125=EDGE_CURVE('',#145,#146,#165,.T.);
+#126=EDGE_CURVE('',#146,#147,#166,.T.);
+#127=EDGE_CURVE('',#147,#148,#167,.T.);
+#128=EDGE_CURVE('',#148,#145,#168,.T.);
+#129=EDGE_CURVE('',#141,#145,#169,.T.);
+#130=EDGE_CURVE('',#142,#146,#170,.T.);
+#131=EDGE_CURVE('',#143,#147,#171,.T.);
+#132=EDGE_CURVE('',#144,#148,#172,.T.);
+#141=VERTEX_POINT('',#151);
+#142=VERTEX_POINT('',#152);
+#143=VERTEX_POINT('',#153);
+#144=VERTEX_POINT('',#154);
+#145=VERTEX_POINT('',#155);
+#146=VERTEX_POINT('',#156);
+#147=VERTEX_POINT('',#157);
+#148=VERTEX_POINT('',#158);
+#151=CARTESIAN_POINT('',(0.,0.,0.));
+#152=CARTESIAN_POINT('',(10.,0.,0.));
+#153=CARTESIAN_POINT('',(10.,20.,0.));
+#154=CARTESIAN_POINT('',(0.,20.,0.));
+#155=CARTESIAN_POINT('',(0.,0.,30.));
+#156=CARTESIAN_POINT('',(10.,0.,30.));
+#157=CARTESIAN_POINT('',(10.,20.,30.));
+#158=CARTESIAN_POINT('',(0.,20.,30.));
+#161=LINE('',#151,#181);
+#162=LINE('',#152,#182);
+#163=LINE('',#154,#183);
+#164=LINE('',#154,#184);
+#165=LINE('',#155,#185);
+#166=LINE('',#156,#186);
+#167=LINE('',#157,#187);
+#168=LINE('',#158,#188);
+#169=LINE('',#151,#189);
+#170=LINE('',#152,#190);
+#171=LINE('',#153,#191);
+#172=LINE('',#154,#192);
+#181=VECTOR('',#302,10.);
+#182=VECTOR('',#303,20.);
+#183=VECTOR('',#302,10.);
+#184=VECTOR('',#305,20.);
+#185=VECTOR('',#302,10.);
+#186=VECTOR('',#303,20.);
+#187=VECTOR('',#304,10.);
+#188=VECTOR('',#305,20.);
+#189=VECTOR('',#301,30.);
+#190=VECTOR('',#301,30.);
+#191=VECTOR('',#301,30.);
+#192=VECTOR('',#301,30.);
+/* Boden: E4-, E3-, E2-, E1- */
+#200=ORIENTED_EDGE('',*,*,#124,.F.);
+#201=ORIENTED_EDGE('',*,*,#123,.F.);
+#202=ORIENTED_EDGE('',*,*,#122,.F.);
+#203=ORIENTED_EDGE('',*,*,#121,.F.);
+/* Deckel rückwärts: E8-, E7-, E6-, E5- (gelesen: E5+, E6+, E7+, E8+) */
+#204=ORIENTED_EDGE('',*,*,#128,.F.);
+#205=ORIENTED_EDGE('',*,*,#127,.F.);
+#206=ORIENTED_EDGE('',*,*,#126,.F.);
+#207=ORIENTED_EDGE('',*,*,#125,.F.);
+/* Vorn (y = 0): E1+, E10+, E5-, E9- */
+#208=ORIENTED_EDGE('',*,*,#121,.T.);
+#209=ORIENTED_EDGE('',*,*,#130,.T.);
+#210=ORIENTED_EDGE('',*,*,#125,.F.);
+#211=ORIENTED_EDGE('',*,*,#129,.F.);
+/* Rechts (x = 10): E2+, E11+, E6-, E10- */
+#212=ORIENTED_EDGE('',*,*,#122,.T.);
+#213=ORIENTED_EDGE('',*,*,#131,.T.);
+#214=ORIENTED_EDGE('',*,*,#126,.F.);
+#215=ORIENTED_EDGE('',*,*,#130,.F.);
+/* Hinten (y = 20): E3+, E12+, E7-, E11- */
+#216=ORIENTED_EDGE('',*,*,#123,.T.);
+#217=ORIENTED_EDGE('',*,*,#132,.T.);
+#218=ORIENTED_EDGE('',*,*,#127,.F.);
+#219=ORIENTED_EDGE('',*,*,#131,.F.);
+/* Links (x = 0): E4+, E9+, E8-, E12- */
+#220=ORIENTED_EDGE('',*,*,#124,.T.);
+#221=ORIENTED_EDGE('',*,*,#129,.T.);
+#222=ORIENTED_EDGE('',*,*,#128,.F.);
+#223=ORIENTED_EDGE('',*,*,#132,.F.);
+#301=DIRECTION('',(0.,0.,1.));
+#302=DIRECTION('',(1.,0.,0.));
+#303=DIRECTION('',(0.,1.,0.));
+#304=DIRECTION('',(-1.,0.,0.));
+#305=DIRECTION('',(0.,-1.,0.));
+#310=AXIS2_PLACEMENT_3D('',#151,#301,#302);
+#311=AXIS2_PLACEMENT_3D('',#155,#301,#302);
+#312=AXIS2_PLACEMENT_3D('',#151,#305,#302);
+#313=AXIS2_PLACEMENT_3D('',#152,#302,#303);
+#314=AXIS2_PLACEMENT_3D('',#154,#303,#304);
+#315=AXIS2_PLACEMENT_3D('',#151,#302,#301);
+ENDSEC;
+END-ISO-10303-21;

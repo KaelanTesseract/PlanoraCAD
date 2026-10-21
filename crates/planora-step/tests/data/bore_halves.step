@@ -1,0 +1,133 @@
+ISO-10303-21;
+/* Selbst geschrieben für die Tests von PlanoraCAD (GPL-3.0-only). */
+HEADER;
+FILE_DESCRIPTION(('Zylinder R 20, h 30 mit Bohrung r 5; Mantel aus Halbschalen'),'2;1');
+FILE_NAME('bore_halves.step','2026-10-21T00:00:00',('PlanoraCAD'),(''),'von Hand','von Hand','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+#1=APPLICATION_CONTEXT('core data for automotive mechanical design processes');
+#2=PRODUCT_CONTEXT('',#1,'mechanical');
+#3=PRODUCT('Ring','Ring','',(#2));
+#4=PRODUCT_DEFINITION_FORMATION('','',#3);
+#5=PRODUCT_DEFINITION_CONTEXT('part definition',#1,'design');
+#6=PRODUCT_DEFINITION('design','',#4,#5);
+#7=PRODUCT_DEFINITION_SHAPE('','',#6);
+#8=SHAPE_DEFINITION_REPRESENTATION(#7,#9);
+#9=ADVANCED_BREP_SHAPE_REPRESENTATION('Ring',(#20),#105);
+#100=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));
+#101=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.));
+#102=(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT());
+#103=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-06),#100,'distance_accuracy_value','');
+#105=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#103))
+  GLOBAL_UNIT_ASSIGNED_CONTEXT((#100,#101,#102))REPRESENTATION_CONTEXT('',''));
+#20=MANIFOLD_SOLID_BREP('Ring',#21);
+#21=CLOSED_SHELL('',(#601,#602,#603,#604,#605,#606));
+/* Boden (Ebene mit Normale +z, Außenseite -z): außen A2-, A1-; Loch B1+, B2+ */
+#601=ADVANCED_FACE('',(#611,#612),#621,.F.);
+#611=FACE_OUTER_BOUND('',#631,.T.);
+#612=FACE_BOUND('',#632,.T.);
+#631=EDGE_LOOP('',(#701,#702));
+#632=EDGE_LOOP('',(#703,#704));
+#701=ORIENTED_EDGE('',*,*,#562,.F.);
+#702=ORIENTED_EDGE('',*,*,#561,.F.);
+#703=ORIENTED_EDGE('',*,*,#567,.T.);
+#704=ORIENTED_EDGE('',*,*,#568,.T.);
+/* Deckel: Loch zuerst, beide als FACE_BOUND (außen = größte Fläche); außen A3+, A4+; Loch B4-, B3- */
+#602=ADVANCED_FACE('',(#614,#613),#622,.T.);
+#613=FACE_BOUND('',#633,.T.);
+#614=FACE_BOUND('',#634,.T.);
+#633=EDGE_LOOP('',(#705,#706));
+#634=EDGE_LOOP('',(#707,#708));
+#705=ORIENTED_EDGE('',*,*,#563,.T.);
+#706=ORIENTED_EDGE('',*,*,#564,.T.);
+#707=ORIENTED_EDGE('',*,*,#570,.F.);
+#708=ORIENTED_EDGE('',*,*,#569,.F.);
+/* Mantel außen, Hälfte y > 0: A1+, L2+, A3-, L1- */
+#603=ADVANCED_FACE('',(#615),#623,.T.);
+#615=FACE_BOUND('',#635,.T.);
+#635=EDGE_LOOP('',(#709,#710,#711,#712));
+#709=ORIENTED_EDGE('',*,*,#561,.T.);
+#710=ORIENTED_EDGE('',*,*,#566,.T.);
+#711=ORIENTED_EDGE('',*,*,#563,.F.);
+#712=ORIENTED_EDGE('',*,*,#565,.F.);
+/* Mantel außen, Hälfte y < 0: A2+, L1+, A4-, L2- */
+#604=ADVANCED_FACE('',(#616),#623,.T.);
+#616=FACE_BOUND('',#636,.T.);
+#636=EDGE_LOOP('',(#713,#714,#715,#716));
+#713=ORIENTED_EDGE('',*,*,#562,.T.);
+#714=ORIENTED_EDGE('',*,*,#565,.T.);
+#715=ORIENTED_EDGE('',*,*,#564,.F.);
+#716=ORIENTED_EDGE('',*,*,#566,.F.);
+/* Bohrung (Normale der Zylinderfläche nach außen, Außenseite des Körpers zur Achse) */
+/* Hälfte y > 0: L3+, B3+, L4-, B1- */
+#605=ADVANCED_FACE('',(#617),#624,.F.);
+#617=FACE_BOUND('',#637,.T.);
+#637=EDGE_LOOP('',(#717,#718,#719,#720));
+#717=ORIENTED_EDGE('',*,*,#571,.T.);
+#718=ORIENTED_EDGE('',*,*,#569,.T.);
+#719=ORIENTED_EDGE('',*,*,#572,.F.);
+#720=ORIENTED_EDGE('',*,*,#567,.F.);
+/* Hälfte y < 0: L4+, B4+, L3-, B2- */
+#606=ADVANCED_FACE('',(#618),#624,.F.);
+#618=FACE_BOUND('',#638,.T.);
+#638=EDGE_LOOP('',(#721,#722,#723,#724));
+#721=ORIENTED_EDGE('',*,*,#572,.T.);
+#722=ORIENTED_EDGE('',*,*,#570,.T.);
+#723=ORIENTED_EDGE('',*,*,#571,.F.);
+#724=ORIENTED_EDGE('',*,*,#568,.F.);
+#621=PLANE('',#531);
+#622=PLANE('',#532);
+#623=CYLINDRICAL_SURFACE('',#531,20.);
+#624=CYLINDRICAL_SURFACE('',#531,5.);
+/* Kanten: Halbkreise A (R 20) und B (r 5), Nähte L */
+#561=EDGE_CURVE('',#511,#512,#541,.T.);
+#562=EDGE_CURVE('',#512,#511,#541,.T.);
+#563=EDGE_CURVE('',#513,#514,#542,.T.);
+#564=EDGE_CURVE('',#514,#513,#542,.T.);
+#565=EDGE_CURVE('',#511,#513,#551,.T.);
+#566=EDGE_CURVE('',#512,#514,#552,.T.);
+#567=EDGE_CURVE('',#515,#516,#543,.T.);
+#568=EDGE_CURVE('',#516,#515,#543,.T.);
+/* Oberer Bohrungskreis mit Achse -z: beide Hälften laufen gegen den Kreisparameter */
+#569=EDGE_CURVE('',#517,#518,#544,.F.);
+#570=EDGE_CURVE('',#518,#517,#544,.F.);
+#571=EDGE_CURVE('',#515,#517,#553,.T.);
+/* L4 mit einer Geraden nach unten */
+#572=EDGE_CURVE('',#516,#518,#554,.F.);
+#541=CIRCLE('',#531,20.);
+#542=CIRCLE('',#532,20.);
+#543=CIRCLE('',#531,5.);
+#544=CIRCLE('',#533,5.);
+#551=LINE('',#501,#556);
+#552=LINE('',#502,#556);
+#553=LINE('',#505,#556);
+#554=LINE('',#508,#557);
+#556=VECTOR('',#521,1.);
+#557=VECTOR('',#523,1.);
+#511=VERTEX_POINT('',#501);
+#512=VERTEX_POINT('',#502);
+#513=VERTEX_POINT('',#503);
+#514=VERTEX_POINT('',#504);
+#515=VERTEX_POINT('',#505);
+#516=VERTEX_POINT('',#506);
+#517=VERTEX_POINT('',#507);
+#518=VERTEX_POINT('',#508);
+#501=CARTESIAN_POINT('',(20.,0.,0.));
+#502=CARTESIAN_POINT('',(-20.,0.,0.));
+#503=CARTESIAN_POINT('',(20.,0.,30.));
+#504=CARTESIAN_POINT('',(-20.,0.,30.));
+#505=CARTESIAN_POINT('',(5.,0.,0.));
+#506=CARTESIAN_POINT('',(-5.,0.,0.));
+#507=CARTESIAN_POINT('',(5.,0.,30.));
+#508=CARTESIAN_POINT('',(-5.,0.,30.));
+#509=CARTESIAN_POINT('',(0.,0.,0.));
+#510=CARTESIAN_POINT('',(0.,0.,30.));
+#521=DIRECTION('',(0.,0.,1.));
+#522=DIRECTION('',(1.,0.,0.));
+#523=DIRECTION('',(0.,0.,-1.));
+#531=AXIS2_PLACEMENT_3D('',#509,#521,#522);
+#532=AXIS2_PLACEMENT_3D('',#510,#521,#522);
+#533=AXIS2_PLACEMENT_3D('',#510,#523,#522);
+ENDSEC;
+END-ISO-10303-21;
