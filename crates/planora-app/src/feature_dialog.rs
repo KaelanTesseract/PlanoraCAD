@@ -29,6 +29,8 @@ pub struct FeatureDialog {
     kind: FeatureKind,
     /// Zahlenfelder in der Reihenfolge von [`fields_of`].
     numbers: Vec<NumberField>,
+    /// Formeln des Features beim Öffnen (eine unveränderte kaputte Formel geht mit).
+    saved: Formulas,
     error: Option<String>,
     /// Stand des Features beim Öffnen (siehe [`planora_feature::Feature::version`]).
     version: u64,
@@ -97,6 +99,11 @@ fn fields_of(kind: &FeatureKind, formulas: &Formulas) -> Vec<NumberField> {
         .collect()
 }
 
+/// Steht im Feld `key` unverändert die beim Öffnen gespeicherte Formel (`saved`)?
+fn is_kept_broken(saved: &Formulas, key: FieldKey, text: &str) -> bool {
+    saved.get(&key).is_some_and(|s| s.trim() == text.trim())
+}
+
 /// Liest eine Zahl eines Feldes ohne Formeln; der Fehlertext nennt das Feld.
 fn plain_value(label: &str, text: &str) -> Result<f64, String> {
     match classify(text) {
@@ -140,6 +147,7 @@ impl FeatureDialog {
             name: f.name.clone(),
             kind: f.kind.clone(),
             numbers: fields_of(&f.kind, f.formulas()),
+            saved: f.formulas().clone(),
             error: None,
             version: f.version(),
         })
@@ -371,8 +379,17 @@ impl FeatureDialog {
             let Some(key) = f.key else {
                 continue;
             };
-            let (v, formula) = resolve(&f.text, field_unit(&kind, key), scope)
-                .map_err(|e| format!("{}: {e}", f.label))?;
+            let (v, formula) = match resolve(&f.text, field_unit(&kind, key), scope) {
+                Ok(r) => r,
+                // Eine gespeicherte kaputte Formel (etwa aus einer Datei) geht unverändert mit;
+                // das Dokument duldet sie (gleiches Feature, Feld und Text), andere Felder lassen
+                // sich trotzdem ändern. Der Wert bleibt der Feldwert.
+                Err(_) if is_kept_broken(&self.saved, key, &f.text) => (
+                    field_value(&kind, key).unwrap_or(0.0),
+                    self.saved.get(&key).cloned(),
+                ),
+                Err(e) => return Err(format!("{}: {e}", f.label)),
+            };
             set_field_value(&mut kind, key, check_size(&f.label, v)?);
             if let Some(t) = formula {
                 formulas.insert(key, t);
@@ -443,10 +460,13 @@ impl FeatureDialog {
                 // Meldungen der Formelfelder stehen gesammelt unter dem Raster, damit sich die
                 // Felder nicht verschieben.
                 let mut errors = Vec::new();
+                // Meldungen gespeicherter kaputter Formeln (unverändert): gezeigt, sperren aber
+                // „Übernehmen“ nicht, damit sich andere Felder ändern lassen.
+                let mut kept_broken = Vec::new();
                 if !self.numbers.is_empty() {
-                    let (id, kind) = (self.id, &self.kind);
+                    let (id, kind, saved) = (self.id, &self.kind, &self.saved);
                     egui::Grid::new(("feature_numbers", id))
-                        .num_columns(3)
+                        .num_columns(2)
                         .show(ui, |ui| {
                             for (k, f) in self.numbers.iter_mut().enumerate() {
                                 ui.label(f.label.as_str());
@@ -461,9 +481,18 @@ impl FeatureDialog {
                                         .label(f.label.as_str())
                                         .show(ui, &scope);
                                         if let Some(e) = out.error {
-                                            errors.push(format!("{}: {e}", f.label));
+                                            let msg = format!("{}: {e}", f.label);
+                                            if is_kept_broken(saved, key, &f.text) {
+                                                kept_broken.push(msg);
+                                            } else {
+                                                errors.push(msg);
+                                            }
                                         }
                                     }
+                                    // Punkte der variablen Rundung: Feld, Einheit und „Punkt
+                                    // entfernen“ in einer Zelle (zwei Spalten: das Formelfeld
+                                    // steht in der letzten Spalte, sein Wert bekommt die
+                                    // ganze Breite).
                                     None => {
                                         ui.horizontal(|ui| {
                                             let r = theme::text_field(
@@ -480,14 +509,14 @@ impl FeatureDialog {
                                                 )
                                             });
                                             ui.label(f.suffix);
+                                            if variable
+                                                && f.label.starts_with("Radius")
+                                                && ui.button("Punkt entfernen").clicked()
+                                            {
+                                                remove = Some(k / 2);
+                                            }
                                         });
                                     }
-                                }
-                                if variable
-                                    && f.label.starts_with("Radius")
-                                    && ui.button("Punkt entfernen").clicked()
-                                {
-                                    remove = Some(k / 2);
                                 }
                                 ui.end_row();
                             }
@@ -506,7 +535,7 @@ impl FeatureDialog {
                     ui.weak(format!("Kleinstes Maß: {} mm", min_text(min)));
                 }
                 let dark = ui.visuals().dark_mode;
-                for e in errors.iter().chain(&self.error) {
+                for e in errors.iter().chain(&kept_broken).chain(&self.error) {
                     ui.add_space(4.0);
                     ui.colored_label(error_color(dark), e);
                 }

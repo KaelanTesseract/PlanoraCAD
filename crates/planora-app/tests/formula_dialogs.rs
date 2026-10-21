@@ -157,7 +157,7 @@ impl Pane {
             .unwrap_or_else(|| panic!("kein Feld neben „{label}“"))
             .rect;
         // „fx“ steht vor einer Formel: dann das nächste Element.
-        let field = if find(&seen, "fx").is_some_and(|fx| fx.rect == field) {
+        let field = if seen.iter().any(|s| s.text == "fx" && s.rect == field) {
             seen.iter()
                 .filter(|s| {
                     s.rect.left() > field.right() + 1.0
@@ -559,10 +559,11 @@ fn edit_dialog_rejects_bad_formula() {
 #[test]
 fn the_edit_window_shows_fx_value_and_locks_apply_on_error() {
     for dark in [true, false] {
-        let (mut s, _) = with_width();
+        let (mut s, breite) = with_width();
+        set_formula(&mut s, breite, "80");
         let f = s
             .create_box_with(
-                DVec3::new(40.0, 20.0, 10.0),
+                DVec3::new(80.0, 20.0, 10.0),
                 formulas(&[(FieldKey::Breite, "Breite")]),
             )
             .unwrap();
@@ -574,7 +575,10 @@ fn the_edit_window_shows_fx_value_and_locks_apply_on_error() {
         };
         let seen = pane.settle(&mut draw);
         assert!(has(&seen, "fx"));
-        assert!(has(&seen, "= 40,00 mm"));
+        // Der Wert steht ganz da, nicht auf „…“ gekürzt.
+        let v = find(&seen, "= 80,00 mm").expect("Wert");
+        assert!(v.rect.width() > 50.0, "Wert {:?} gekürzt", v.rect);
+        assert!(v.clip.contains_rect(v.rect));
         assert!(has(&seen, "Namen: Breite"));
         // Abstand der Zeilen Breite → Tiefe (das Fenster selbst darf mit der Meldung wachsen).
         // Die Bezeichnungen stehen vor den Feldern (das erste „Breite“ ist die Bezeichnung).
@@ -1036,10 +1040,25 @@ fn create_window_fits_small_screens_in_both_themes() {
                     .color,
                 p.error
             );
-            // Die Höhe steht unter dem Radius, auch mit Meldung nicht verschoben.
-            let radius = find(&seen, "Radius").unwrap().rect;
-            let hoehe = find(&seen, "Höhe").unwrap().rect;
-            assert!(hoehe.top() - radius.top() < 40.0, "{radius:?} {hoehe:?}");
+            // Die Höhe steht unter dem Radius, mit Meldung genau so weit wie ohne.
+            let gap = |seen: &[Seen]| {
+                find(seen, "Höhe").unwrap().rect.top() - find(seen, "Radius").unwrap().rect.top()
+            };
+            drop(draw);
+            let (mut s2, _) = with_width();
+            let mut plain = CreateDialog::Cylinder {
+                radius: 15.0,
+                height: 30.0,
+            };
+            let mut base = Pane::new(dark, size);
+            let without = base.settle(&mut |ui| {
+                plain.show(ui.ctx(), &mut s2);
+            });
+            assert_eq!(
+                gap(&seen),
+                gap(&without),
+                "die Meldung verschiebt die Felder nicht"
+            );
         }
     }
 }
@@ -1072,4 +1091,405 @@ fn edit_window_closes_after_a_parameter_change() {
         Some(planora_app::parameter_dialog::DIALOG_CLOSED)
     );
     assert_eq!(feature_formulas(&tab.state, f).len(), 1, "Formel bleibt");
+}
+
+// ---- Nachbesserung (Review Q1–Q6): echtes Tippen, ein Zeichen je Bild ------------------------
+
+impl Pane {
+    /// Tippt `text` Zeichen für Zeichen; das Feld behält dabei die Tastatur (auch beim Wechsel
+    /// Zahl ↔ Formel, wenn „fx“ erscheint oder verschwindet).
+    fn type_chars(&mut self, text: &str, f: &mut dyn FnMut(&mut egui::Ui)) {
+        let focused = self.ctx.memory(|m| m.focused());
+        assert!(focused.is_some(), "kein Feld hat die Tastatur");
+        for c in text.chars() {
+            self.frame(vec![Event::Text(c.to_string())], f);
+            assert_eq!(
+                self.ctx.memory(|m| m.focused()),
+                focused,
+                "Tastatur verloren nach „{c}“"
+            );
+        }
+        self.frame(vec![], f);
+    }
+}
+
+impl Rig {
+    /// Klickt in das Feld mit `old` im Fenster `title`, markiert alles und tippt `text` Zeichen
+    /// für Zeichen; die Tastatur bleibt im Feld.
+    fn type_chars(&mut self, title: &str, old: &str, text: &str) {
+        let r = self
+            .in_window(title, old)
+            .unwrap_or_else(|| panic!("Feld „{old}“ fehlt"));
+        self.click(r.center());
+        self.frame(vec![key(Key::A, Modifiers::COMMAND)]);
+        let focused = self.ctx.memory(|m| m.focused());
+        assert!(focused.is_some());
+        for c in text.chars() {
+            self.frame(vec![Event::Text(c.to_string())]);
+            assert_eq!(
+                self.ctx.memory(|m| m.focused()),
+                focused,
+                "Tastatur verloren nach „{c}“"
+            );
+        }
+        self.frame(vec![]);
+    }
+}
+
+fn ws_with_width() -> Workspace {
+    let mut w = ws();
+    param(
+        &mut w.active_tab_mut().state,
+        "Breite",
+        "40",
+        ParamUnit::Length,
+    );
+    w.observe_history(false);
+    w
+}
+
+fn quader() -> CreateDialog {
+    CreateDialog::Box {
+        x: 11.0,
+        y: 12.0,
+        z: 13.0,
+    }
+}
+
+#[test]
+fn real_typing_in_the_create_window() {
+    let mut rig = Rig::new(ws_with_width());
+    let title = "Quader erzeugen";
+    rig.tab().dialog = Some(quader());
+    // Zahl → Formel (beim „B“ erscheint „fx“) und Formel → Zahl im selben Feld.
+    rig.type_chars(title, "11", "Breite*2");
+    rig.type_chars(title, "13", "Breite");
+    rig.type_chars(title, "Breite", "7");
+    let seen = rig.settle();
+    assert!(has(&seen, "= 80,00 mm"));
+    let steps = rig.tab().history().undo_len();
+    let e = rig.in_window(title, "Erzeugen").unwrap();
+    rig.click(e.center());
+    rig.settle();
+    let tab = rig.tab();
+    let f = tab.state.document.features()[0].id;
+    assert_eq!(box_size(&tab.state, f), DVec3::new(80.0, 12.0, 7.0));
+    assert_eq!(
+        feature_formulas(&tab.state, f),
+        formulas(&[(FieldKey::Breite, "Breite*2")])
+    );
+    assert_eq!(tab.history().undo_len(), steps + 1);
+    assert_eq!(tab.history().undo_label(), Some("Quader anlegen"));
+}
+
+#[test]
+fn a_failed_creation_keeps_the_window_and_the_text() {
+    let mut rig = Rig::new(ws_with_width());
+    let title = "Quader erzeugen";
+    rig.tab().dialog = Some(quader());
+    rig.type_chars(title, "11", "Breite-40");
+    assert!(has(&rig.settle(), "= 0,00 mm"));
+    let e = rig.in_window(title, "Erzeugen").unwrap();
+    rig.click(e.center());
+    rig.settle();
+    assert!(rig.tab().dialog.is_some(), "Fenster bleibt offen");
+    assert!(rig.in_window(title, "Breite-40").is_some(), "Text bleibt");
+    assert!(rig.tab().state.document.features().is_empty());
+    assert!(
+        rig.tab()
+            .state
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("größer als null")
+    );
+}
+
+#[test]
+fn switching_the_create_window_forgets_the_other_texts() {
+    let mut rig = Rig::new(ws_with_width());
+    rig.tab().dialog = Some(quader());
+    rig.type_chars("Quader erzeugen", "11", "Breite");
+    rig.tab().dialog = Some(CreateDialog::Sphere { radius: 5.0 });
+    assert!(rig.in_window("Kugel erzeugen", "5").is_some());
+    rig.tab().dialog = Some(quader());
+    assert!(rig.in_window("Quader erzeugen", "11").is_some(), "Vorgabe");
+    assert!(rig.in_window("Quader erzeugen", "Breite").is_none());
+}
+
+#[test]
+fn create_texts_belong_to_their_tab() {
+    let (mut a, _) = with_width();
+    let (mut b, _) = with_width();
+    let mut pane = Pane::new(true, vec2(1100.0, 700.0));
+    let d = quader();
+    d.set_text(&pane.ctx, &a, FieldKey::Breite, "Breite");
+    let mut shown = d.clone();
+    let seen = pane.settle(&mut |ui| {
+        shown.show(ui.ctx(), &mut b);
+    });
+    assert!(has(&seen, "11"), "Tab B zeigt die Vorgabe");
+    assert!(!has(&seen, "Breite"));
+    assert_eq!(
+        d.texts(&pane.ctx, &a)[&FieldKey::Breite],
+        "Breite",
+        "Tab A behält"
+    );
+    let seen = pane.settle(&mut |ui| {
+        shown.show(ui.ctx(), &mut a);
+    });
+    assert!(has(&seen, "= 40,00 mm"));
+}
+
+/// Quader 40 × 20 × 10 mit Formeln in Breite, Tiefe und Höhe.
+fn box_with_three_formulas() -> (AppState, FeatureId) {
+    let (mut s, _) = with_width();
+    let f = s
+        .create_box_with(
+            DVec3::new(40.0, 20.0, 10.0),
+            formulas(&[
+                (FieldKey::Breite, "Breite"),
+                (FieldKey::Tiefe, "Breite/2"),
+                (FieldKey::Hoehe, "Breite/4"),
+            ]),
+        )
+        .unwrap();
+    (s, f)
+}
+
+#[test]
+fn real_typing_in_the_edit_window() {
+    let (mut s, f) = box_with_three_formulas();
+    let mut d = FeatureDialog::new(&s, f).unwrap();
+    let mut pane = Pane::new(false, vec2(1100.0, 700.0));
+    let mut open = true;
+    let edits = s.document.edit_count();
+    let mut draw = |ui: &mut egui::Ui| {
+        if open {
+            open = d.show(ui.ctx(), &mut s);
+        }
+    };
+    // Formel → Zahl (das „fx“ verschwindet beim ersten Zeichen).
+    pane.focus_beside("Tiefe", &mut draw);
+    pane.type_chars("25", &mut draw);
+    // Zahl → Formel.
+    pane.focus_beside("Position x", &mut draw);
+    let before = pane.ctx.memory(|m| m.focused());
+    pane.type_chars("Breite/8", &mut draw);
+    assert_eq!(pane.ctx.memory(|m| m.focused()), before);
+    let seen = pane.settle(&mut draw);
+    assert!(has(&seen, "= 5,00 mm"));
+    let apply = find(&seen, "Übernehmen").unwrap().rect.center();
+    pane.click(apply, &mut draw);
+    drop(draw);
+    assert!(!open, "nach Erfolg geschlossen");
+    assert_eq!(s.document.edit_count(), edits + 1);
+    assert_eq!(box_size(&s, f), DVec3::new(40.0, 25.0, 10.0));
+    assert_eq!(
+        feature_formulas(&s, f),
+        formulas(&[
+            (FieldKey::Breite, "Breite"),
+            (FieldKey::Hoehe, "Breite/4"),
+            (FieldKey::X, "Breite/8")
+        ])
+    );
+    match &s.document.feature(f).unwrap().kind {
+        FeatureKind::Box { origin, .. } => assert_eq!(origin.x, 5.0),
+        k => panic!("{k:?}"),
+    }
+}
+
+#[test]
+fn edit_values_are_shown_in_full() {
+    let (mut s, _) = with_width();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    s.move_body(0, DVec3::new(1.0, 0.0, 0.0)).unwrap();
+    let mv = s.document.features().last().unwrap().id;
+    let mut d = FeatureDialog::new(&s, mv).unwrap();
+    d.set_text("Δx", "Breite/2");
+    for size in [vec2(800.0, 600.0), vec2(1400.0, 900.0)] {
+        let mut pane = Pane::new(true, size);
+        let seen = pane.settle(&mut |ui| {
+            d.show(ui.ctx(), &mut s);
+        });
+        let v = find(&seen, "= 20,00 mm").expect("Wert");
+        assert!(v.rect.width() > 50.0, "{size:?}: Wert gekürzt {:?}", v.rect);
+        assert!(v.clip.contains_rect(v.rect));
+    }
+}
+
+/// Quader mit der gespeicherten, kaputten Breite-Formel „Gibtsnicht“ (wie aus einer Datei).
+fn box_with_broken_formula() -> (AppState, FeatureId) {
+    let (mut s, _) = with_width();
+    let f = s
+        .create_box_with(
+            DVec3::new(40.0, 20.0, 10.0),
+            formulas(&[(FieldKey::Breite, "Breite")]),
+        )
+        .unwrap();
+    let mut snap = s.document.snapshot();
+    snap.features[0]
+        .formulas
+        .insert(FieldKey::Breite, "Gibtsnicht".into());
+    s.document.restore(snap).unwrap();
+    s.refresh();
+    assert!(matches!(
+        s.document.feature(f).unwrap().status,
+        planora_feature::FeatureStatus::Error(_)
+    ));
+    (s, f)
+}
+
+#[test]
+fn a_stored_broken_formula_does_not_lock_other_fields() {
+    let (mut s, f) = box_with_broken_formula();
+    let mut d = FeatureDialog::new(&s, f).unwrap();
+    let mut pane = Pane::new(true, vec2(1100.0, 700.0));
+    let mut open = true;
+    let mut draw = |ui: &mut egui::Ui| {
+        if open {
+            open = d.show(ui.ctx(), &mut s);
+        }
+    };
+    let msg = "Breite: Den Namen „Gibtsnicht“ gibt es nicht.";
+    let seen = pane.settle(&mut draw);
+    assert!(has(&seen, msg), "Meldung bleibt sichtbar");
+    pane.focus_beside("Tiefe", &mut draw);
+    pane.type_chars("25", &mut draw);
+    let seen = pane.settle(&mut draw);
+    let apply = find(&seen, "Übernehmen").unwrap().rect.center();
+    pane.click(apply, &mut draw);
+    drop(draw);
+    assert!(!open, "übernommen");
+    assert_eq!(box_size(&s, f).y, 25.0);
+    assert_eq!(
+        feature_formulas(&s, f),
+        formulas(&[(FieldKey::Breite, "Gibtsnicht")]),
+        "die kaputte Formel bleibt unverändert"
+    );
+
+    // Das kaputte Feld selbst geändert: normal geprüft, „Übernehmen“ gesperrt.
+    let (mut s, f) = box_with_broken_formula();
+    let mut d = FeatureDialog::new(&s, f).unwrap();
+    let edits = s.document.edit_count();
+    let mut open = true;
+    let mut draw = |ui: &mut egui::Ui| {
+        if open {
+            open = d.show(ui.ctx(), &mut s);
+        }
+    };
+    let mut pane = Pane::new(true, vec2(1100.0, 700.0));
+    pane.focus_beside("Breite", &mut draw);
+    pane.type_chars("Gibtsnich", &mut draw);
+    let seen = pane.settle(&mut draw);
+    assert!(has(&seen, "Breite: Den Namen „Gibtsnich“ gibt es nicht."));
+    let apply = find(&seen, "Übernehmen").unwrap().rect.center();
+    pane.click(apply, &mut draw);
+    drop(draw);
+    assert!(open, "gesperrt");
+    assert_eq!(d.error(), None, "kein Versuch");
+    assert_eq!(s.document.edit_count(), edits);
+    d.set_text("Breite", "Gibtsnich2");
+    assert_eq!(
+        d.apply(&mut s),
+        Err("Breite: Den Namen „Gibtsnich2“ gibt es nicht.".to_string())
+    );
+}
+
+#[test]
+fn art_change_keeps_formula_texts_of_fields_that_stay() {
+    let (mut s, id) = with_fillet();
+    let mut d = FeatureDialog::new(&s, id).unwrap();
+    d.set_blend_art(ArtChoice::FaseGleich);
+    d.set_text("Abstand", "Breite/40");
+    d.apply(&mut s).unwrap();
+    let mut d = FeatureDialog::new(&s, id).unwrap();
+    d.set_blend_art(ArtChoice::FaseWinkel);
+    assert_eq!(d.text("Abstand"), Some("Breite/40"), "Formel bleibt");
+    assert_eq!(d.text("Winkel"), Some("45"));
+    // Ungespeichert getippte Formel bleibt ebenso.
+    d.set_text("Abstand", "Breite/20");
+    d.set_blend_art(ArtChoice::FaseZwei);
+    d.set_blend_art(ArtChoice::FaseWinkel);
+    assert_eq!(
+        d.text("Abstand"),
+        Some("1"),
+        "Abstand 1 ist ein anderes Feld"
+    );
+    d.set_text("Abstand", "Breite/20");
+    d.add_point();
+    assert_eq!(d.text("Abstand"), Some("Breite/20"));
+}
+
+#[test]
+fn the_blend_window_locks_create_on_a_formula_error() {
+    let (mut s, _) = with_width();
+    param(&mut s, "w", "30", ParamUnit::Angle);
+    s.create_box(DVec3::splat(20.0)).unwrap();
+    let e = edge_between(&s.bodies[0].solid, "Deckel", "Wand 1");
+    s.set_selection(Some(Pick::Edge(EdgeRef { body: 0, edge: e })));
+    let mut d = BlendDialog::fillet();
+    let mut pane = Pane::new(false, vec2(1100.0, 700.0));
+    let mut draw = |ui: &mut egui::Ui| {
+        d.show(ui.ctx(), &mut s);
+    };
+    pane.focus_beside("Radius", &mut draw);
+    pane.type_chars("w", &mut draw);
+    let seen = pane.settle(&mut draw);
+    let m = find(
+        &seen,
+        "Radius: Hier wird eine Länge erwartet, die Formel ergibt einen Winkel.",
+    )
+    .expect("Meldung");
+    assert_eq!(m.color, theme::palette(false).error);
+    let run = find(&seen, "Erzeugen").unwrap().rect.center();
+    pane.click(run, &mut draw);
+    drop(draw);
+    assert_eq!(d.error(), None, "kein Versuch");
+    assert_eq!(s.document.features().len(), 1);
+}
+
+#[test]
+fn mesh_drafts_belong_to_their_body() {
+    let (mut s, _) = with_width();
+    s.import_mesh("A", Arc::new(cube()), 1.0).unwrap();
+    s.import_mesh("B", Arc::new(cube()), 2.0).unwrap();
+    s.selected_body = Some(0);
+    let mut pane = Pane::new(true, vec2(1100.0, 700.0));
+    let mut draw = |ui: &mut egui::Ui| panel(ui, &mut s);
+    pane.focus_beside("Maßstab", &mut draw);
+    pane.type_chars("0", &mut draw);
+    let seen = pane.enter(&mut draw);
+    let red = |seen: &[Seen]| {
+        seen.iter()
+            .any(|x| x.text.contains("Maßstab") && x.color == theme::palette(true).error)
+    };
+    assert!(red(&seen), "abgelehnt, Meldung im Feld");
+    drop(draw);
+    // Anderer Netz-Körper: sein eigener Maßstab, nicht der Entwurf des ersten.
+    s.selected_body = Some(1);
+    let mut draw = |ui: &mut egui::Ui| panel(ui, &mut s);
+    let seen = pane.settle(&mut draw);
+    assert!(!red(&seen), "Entwurf des anderen Körpers");
+    assert!(has(&seen, "2"), "Maßstab 2 des zweiten Körpers");
+    drop(draw);
+    assert_eq!(s.mesh_transform(1).unwrap().scale, 2.0);
+}
+
+#[test]
+fn real_typing_in_the_mesh_fields() {
+    let (mut s, _) = with_width();
+    s.import_mesh("N", Arc::new(cube()), 1.0).unwrap();
+    let fid = s.document.features()[1 - 1].id;
+    let mut pane = Pane::new(true, vec2(1100.0, 700.0));
+    let mut draw = |ui: &mut egui::Ui| panel(ui, &mut s);
+    pane.focus_beside("Position y", &mut draw);
+    pane.type_chars("Breite*2", &mut draw);
+    pane.enter(&mut draw);
+    drop(draw);
+    assert_eq!(s.mesh_transform(0).unwrap().offset.y, 80.0);
+    assert_eq!(
+        feature_formulas(&s, fid),
+        formulas(&[(FieldKey::Y, "Breite*2")])
+    );
 }

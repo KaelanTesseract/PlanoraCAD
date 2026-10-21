@@ -263,6 +263,13 @@ impl CreateDialog {
         let mut create = false;
         let mut cancel = false;
         let title = self.title();
+        // Ein Tab hat höchstens ein Erzeugen-Fenster: Texte anderer Fenster (etwa eines
+        // Quaders, der durch eine Kugel ersetzt wurde) gelten nicht mehr.
+        ctx.data_mut(|d| {
+            for other in TITLES.into_iter().filter(|t| *t != title) {
+                d.remove::<BTreeMap<FieldKey, String>>(texts_id(other, state.instance));
+            }
+        });
         let mut texts = self.texts(ctx, state);
         let fields = self.fields();
         let scope = state.document.param_scope();
