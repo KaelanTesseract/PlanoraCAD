@@ -41,7 +41,7 @@ use crate::read::assembly::{
 use crate::read::error::{ReadLimits, StepReadError};
 use crate::read::geom::Skip;
 use crate::read::index::{StepFile, StepHeader};
-use crate::read::topo::{BuildOptions, build_solid, count_faces};
+use crate::read::topo::{BuildOptions, build_solid, count_faces, probe_chord};
 use crate::read::units::{DEFAULT_FILE_TOL_MM, LengthUnit, Units, context_units};
 use crate::topology::CLASSIFY_CHORD;
 use crate::{StepBody, StepError, StepOptions, check_body, write_step};
@@ -371,22 +371,32 @@ fn reason_of(name: &str, note: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Hülle (mm): Ecken und ein Netz mit Sehne [`CLASSIFY_CHORD`] (darum bei gekrümmten Flächen
-/// höchstens so viel zu klein); lässt sich kein Netz bilden, nur die Ecken.
+/// Hülle (mm): Ecken und ein Netz mit Sehne [`CLASSIFY_CHORD`], bei großen Körpern
+/// [`probe_chord`] (darum bei gekrümmten Flächen höchstens so viel zu klein: 0,05 mm, bei 10 m
+/// Größe 5 mm); lässt sich kein Netz bilden, nur die Ecken.
 fn bounds_of(solid: &Solid) -> (DVec3, DVec3) {
     let mut lo = DVec3::splat(f64::INFINITY);
     let mut hi = DVec3::splat(f64::NEG_INFINITY);
+    for (_, v) in solid.vertices.iter() {
+        lo = lo.min(v.point);
+        hi = hi.max(v.point);
+    }
+    // Große Körper relativ zur Größe (wie die Seitenprobe), damit die Zeit nicht mit der Größe
+    // wächst; bis 100 mm Diagonale wie bisher 0,05 mm.
+    let diag = if lo.is_finite() && hi.is_finite() {
+        lo.distance(hi)
+    } else {
+        0.0
+    };
+    let chord = probe_chord(diag).max(CLASSIFY_CHORD);
     let mut add = |p: DVec3| {
         lo = lo.min(p);
         hi = hi.max(p);
     };
-    for (_, v) in solid.vertices.iter() {
-        add(v.point);
-    }
     if let Ok(mesh) = tessellate(
         solid,
         &TessellationOptions {
-            chord_tolerance: CLASSIFY_CHORD,
+            chord_tolerance: chord,
         },
     ) {
         for &p in &mesh.positions {

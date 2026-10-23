@@ -9,7 +9,9 @@ use common::{Lcg, export};
 use planora_exchange::Progress;
 use planora_kernel::{AnalyticKernel, Kernel, Profile, ProfileLoop, Segment, Solid};
 use planora_math::{DMat4, DVec2, DVec3, Frame};
-use planora_step::{ImportOptions, ReadLimits, StepFile, import_bodies, normalize};
+use planora_step::{
+    ImportOptions, ReadLimits, StepFile, import_bodies, normalize, read_normal_body,
+};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -336,4 +338,40 @@ fn a_flange_with_a_doubled_control_range_is_refused_in_time() {
         "{messages:?}"
     );
     println!("Flansch: {:.3} s", took.as_secs_f64());
+}
+
+/// Prüfer-Befund M4 (Schlussprüfung): Die Seitenprobe vernetzte mit fester Sehne 0,05 mm, die
+/// Zeit wuchs mit der Größe (Vase ×1000: 27 s). Gemessen: Prüfen beim Import und Neuladen des
+/// normalisierten Texts der Vase ×1, ×100, ×1000 (Release); große Körper höchstens so lange wie
+/// 100 mm große plus 1 s.
+#[test]
+#[ignore = "nur Release: Zeiten"]
+fn large_bodies_take_about_as_long_as_small_ones() {
+    let mut times = Vec::new();
+    for scale in [1.0, 100.0, 1000.0] {
+        let s = k()
+            .transform(&vase(), &DMat4::from_scale(DVec3::splat(scale)))
+            .unwrap();
+        let (text, _) = export(&[("Vase", &s)]);
+        let (took, ok, _) = import_time(&text);
+        assert_eq!(ok, 1, "×{scale}");
+        let n = normalize(&s, "Vase").unwrap();
+        let start = Instant::now();
+        read_normal_body(&n.text).unwrap();
+        let reload = start.elapsed();
+        println!(
+            "Vase ×{scale}: Import {:.2} s, Neuladen {:.2} s",
+            took.as_secs_f64(),
+            reload.as_secs_f64()
+        );
+        times.push((took, reload));
+    }
+    let (base_import, base_reload) = times[1];
+    let limit = |t: Duration| t + Duration::from_secs(1);
+    assert!(times[2].0 <= limit(base_import), "{times:?}");
+    assert!(times[2].1 <= limit(base_reload), "{times:?}");
+    assert!(
+        times[1].0 <= limit(times[0].0) + Duration::from_secs(1),
+        "{times:?}"
+    );
 }

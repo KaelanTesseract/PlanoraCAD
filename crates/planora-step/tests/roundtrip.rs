@@ -1403,3 +1403,33 @@ fn a_box_with_a_sphere_and_one_circle_edge_flipped() {
     let (edges, _) = flipped_edges(&cube, &ball, BoolOp::Union, "Würfel mit Kugel");
     assert!(edges >= 12, "{edges} Kanten");
 }
+
+/// Große Körper (Schlussprüfung M4: die Sehne der Seitenprobe wächst ab 100 mm Größe mit):
+/// Die Tasche um den Pol und der Kegel ×100 und ×1000 kommen zurück, mit umgekehrter Kugel- bzw.
+/// Mantelfläche werden sie weiter abgelehnt.
+#[test]
+fn large_bodies_keep_the_safety_net() {
+    for scale in [100.0, 1000.0] {
+        let grow = DMat4::from_scale(DVec3::splat(scale));
+        for (name, s, kind) in [
+            (
+                "Tasche",
+                moved(&pocket_around_a_pole(), grow),
+                "SPHERICAL_SURFACE",
+            ),
+            (
+                "Kegel",
+                moved(&k().make_cone(6.0, 9.0).unwrap(), grow),
+                "CONICAL_SURFACE",
+            ),
+        ] {
+            round_trip(name, &s, false).unwrap_or_else(|e| panic!("{name} ×{scale}: {e}"));
+            let (text, _) = export(&[(name, &s)]);
+            let imp = import(&flip_face_on(&text, kind));
+            assert!(
+                imp.bodies[0].outcome.is_err(),
+                "{name} ×{scale}: umgekehrte Fläche übernommen"
+            );
+        }
+    }
+}

@@ -1210,6 +1210,22 @@ struct ShellMesh {
 /// [`CLASSIFY_CHORD`].
 const CHORD_REL: f64 = 1e-3;
 
+/// Sehne des groben Netzes großer Körper als Anteil ihrer Hülldiagonale (ab 100 mm Diagonale
+/// mehr als [`CLASSIFY_CHORD`]): So bleibt die Zahl der Dreiecke und damit die Zeit der Probe
+/// über dieser Größe etwa gleich (vorher Vase ×1000: 23 s Import, 8 s Neuladen). Wie bei kleinen
+/// Körpern bleiben Wände dünner als zwei Sehnen ungeprüft – bei großen Körpern also relativ zur
+/// Größe (10 m Diagonale: 5 mm Sehne).
+const LARGE_CHORD_REL: f64 = 5e-4;
+
+/// Sehne des groben Netzes eines Körpers mit Hülldiagonale `diag` (mm): klein wie bisher
+/// ([`CHORD_REL`] · `diag`, höchstens [`CLASSIFY_CHORD`]), groß relativ ([`LARGE_CHORD_REL`]).
+pub(crate) fn probe_chord(diag: f64) -> f64 {
+    CLASSIFY_CHORD
+        .min(CHORD_REL * diag)
+        .max(LARGE_CHORD_REL * diag)
+        .max(Tolerance::default().linear)
+}
+
 /// Unter diesem Anteil der Summe aller Tetraederbeträge (Bezugspunkt: Mitte der Schale) hat
 /// eine Schale kein Volumen: Zwei gegengleiche Flächen am selben Ort heben sich bis auf
 /// Rundungsrauschen auf, das Vorzeichen wäre Zufall.
@@ -1224,9 +1240,7 @@ fn shell_volumes(solid: &Solid) -> Result<ShellMesh, Skip> {
     // Sehne höchstens [`CLASSIFY_CHORD`], bei kleinen Körpern [`CHORD_REL`] ihrer Größe: Sonst
     // schnitten sich die Netze dünner Wände, und die Probe sähe bei winzigen Körpern nichts.
     let (lo, hi) = bounds_of(solid.vertices.iter().map(|(_, v)| &v.point));
-    let chord = CLASSIFY_CHORD
-        .min(CHORD_REL * lo.distance(hi))
-        .max(Tolerance::default().linear);
+    let chord = probe_chord(lo.distance(hi));
     let mesh = tessellate(
         solid,
         &TessellationOptions {
