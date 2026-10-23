@@ -867,9 +867,11 @@ impl StepImportDialog {
                     }
                 },
                 |ui| {
-                    // Fußzeile: bleibt stehen, auch wenn eine lange Liste rollt.
+                    // Fußzeile: bleibt stehen, auch wenn eine lange Liste rollt. Bei der
+                    // Dateiauswahl nur deren „Öffnen“ und „Abbrechen“ (kein „Schließen“).
                     if choosing {
                         footer_action = chooser.borrow_mut().show_footer(ui);
+                        return;
                     }
                     ui.horizontal(|ui| {
                         if has_list {
@@ -880,7 +882,7 @@ impl StepImportDialog {
                             {
                                 import = true;
                             }
-                            if !choosing && ui.button("Andere Datei wählen …").clicked() {
+                            if ui.button("Andere Datei wählen …").clicked() {
                                 other = true;
                             }
                         }

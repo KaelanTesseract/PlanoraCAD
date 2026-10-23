@@ -645,8 +645,9 @@ fn one_undo_step() {
     rig.ws().active_tab_mut().step_import_dialog = Some(StepImportDialog::new(dir.clone()));
     rig.settle();
 
-    // Nach dem Schließen nimmt es alle Körper auf einmal zurück.
-    let close = rig.in_dialog("Schließen");
+    // Nach dem Schließen nimmt es alle Körper auf einmal zurück. Ohne Liste gibt es kein
+    // „Schließen“, „Abbrechen“ der Dateiauswahl schließt das Fenster.
+    let close = rig.in_dialog("Abbrechen");
     rig.click(close.center());
     assert!(rig.ws().active_tab().step_import_dialog.is_none());
     rig.keys(Key::Z, Modifiers::COMMAND);
@@ -965,8 +966,10 @@ fn stale_and_undo_consistency() {
             t.text
         );
     }
-    let close = rig.in_dialog("Schließen");
+    // Ohne Liste: „Abbrechen“ der Dateiauswahl schließt das Fenster.
+    let close = rig.in_dialog("Abbrechen");
     rig.click(close.center());
+    assert!(rig.ws().active_tab().step_import_dialog.is_none());
     rig.keys(Key::Z, SHIFT_COMMAND);
     assert_eq!(rig.bodies(), 3, "Wiederholen");
     let state = &mut rig.ws().active_tab_mut().state;
@@ -1564,12 +1567,23 @@ fn cancelling_another_file_choice_returns_to_the_list() {
         find(&seen, "Datei wählen (STEP)").is_some(),
         "Dateiwahl offen"
     );
+    // Während der Dateiwahl nur „Öffnen“ und „Abbrechen“ in der Fußzeile.
+    assert!(find(&seen, "Öffnen").is_some());
+    assert!(
+        find(&seen, "Schließen").is_none(),
+        "kein „Schließen“ bei der Dateiwahl"
+    );
+    assert!(find(&seen, "Importieren").is_none());
     // „Abbrechen“ der Dateiwahl: zurück zur Liste, das Fenster bleibt offen.
     let seen = click_text(&mut screen, &mut d, &mut s, &mut open, "Abbrechen");
     assert!(open, "Fenster bleibt offen");
     assert!(d.loaded.is_some(), "Liste bleibt");
     assert!(find(&seen, "Datei wählen (STEP)").is_none(), "Dateiwahl zu");
     assert!(find(&seen, "Block").is_some());
+    assert!(
+        find(&seen, "Schließen").is_some(),
+        "in der Liste wieder „Schließen“"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 

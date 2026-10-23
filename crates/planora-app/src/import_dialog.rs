@@ -224,7 +224,6 @@ impl ImportDialog {
         // Die Dateiauswahl zeichnet oben (rollt) und in der Fußzeile (Öffnen, Abbrechen).
         let chooser = RefCell::new(&mut self.chooser);
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
-        let mut close_footer = false;
         let response = Dialog::new("Netz importieren", DialogSize::File)
             .center_on_open()
             .open(&mut open)
@@ -291,16 +290,12 @@ impl ImportDialog {
                     }
                 },
                 |ui| {
-                    // Fußzeile: bleibt stehen, auch wenn der Inhalt darüber rollt.
+                    // Fußzeile: bleibt stehen, auch wenn der Inhalt darüber rollt. Die Dateiauswahl
+                    // ist immer zu sehen, darum kein eigenes „Schließen“: „Abbrechen“ schließt.
                     footer_action = chooser.borrow_mut().show_footer(ui);
-                    ui.horizontal(|ui| {
-                        if has_loaded && ui.button("Importieren").clicked() {
-                            import = true;
-                        }
-                        if ui.button("Schließen").clicked() {
-                            close_footer = true;
-                        }
-                    });
+                    if has_loaded && ui.button("Importieren").clicked() {
+                        import = true;
+                    }
                 },
             );
         for action in [body_action, footer_action] {
@@ -310,7 +305,6 @@ impl ImportDialog {
                 ChooserAction::None => {}
             }
         }
-        close |= close_footer;
         self.last_rect = response.map(|r| r.response.rect);
         self.last_cards = cards;
         (self.name, self.unit) = (name, unit);
