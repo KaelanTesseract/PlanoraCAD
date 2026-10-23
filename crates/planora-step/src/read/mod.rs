@@ -9,6 +9,7 @@
 pub mod assembly;
 pub mod error;
 pub mod geom;
+pub mod import;
 pub mod index;
 pub mod lex;
 pub mod seam;

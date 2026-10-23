@@ -40,6 +40,13 @@ const MIN_DIRECTION: f64 = 1e-12;
 /// kürzer ist, liegt auf der Achse (ISO 10303-42 verbietet das).
 const MIN_REF_PERP: f64 = 1e-9;
 
+/// Rundungsspielraum (Länge² − 1 bzw. Skalarprodukt), in dem eine Richtung schon Länge 1 hat
+/// bzw. eine Bezugsrichtung schon senkrecht zur Achse steht. Solche Werte bleiben bitgleich:
+/// Normieren eines schon normierten Vektors ändert sonst die letzten Stellen, und unser eigener
+/// Text käme nach Schreiben und Wiederlesen nicht gleich zurück (Aufgabe 9, „Normalisieren ist
+/// ruhend“).
+const UNIT_SLACK: f64 = 4.0 * f64::EPSILON;
+
 /// Kurve mit umgekehrter Laufrichtung: `point'(t) = point(−t)` bei Gerade, Kreis und Ellipse
 /// (Kreis/Ellipse: y und z umgekehrt, das System bleibt rechtshändig).
 fn reversed(c: Curve) -> Result<Curve, String> {
@@ -293,6 +300,9 @@ impl<'f> Resolver<'f> {
         // Erst durch den größten Betrag teilen: kein Überlauf bei sehr großen Werten (1e200).
         // Die Werte sind endlich (der Lexer lehnt anderes ab).
         let d = DVec3::new(x, y, z);
+        if (d.length_squared() - 1.0).abs() <= UNIT_SLACK {
+            return Ok(d);
+        }
         let m = d.abs().max_element();
         if m == 0.0 {
             return Err(self.bad(id, "Eine Richtung hat die Länge null."));
@@ -331,7 +341,9 @@ impl<'f> Resolver<'f> {
             ),
         };
         let x = r - z * r.dot(z);
-        let x = if x.length() >= MIN_REF_PERP {
+        let x = if r.dot(z).abs() <= UNIT_SLACK {
+            r
+        } else if x.length() >= MIN_REF_PERP {
             x.normalize()
         } else if given {
             return Err(self.bad(id, "Die Bezugsrichtung liegt auf der Achse."));

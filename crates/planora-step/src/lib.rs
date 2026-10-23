@@ -22,7 +22,12 @@ pub use read::error::{
     MAX_STEP_BODIES, MAX_STEP_ENTITIES, MAX_STEP_FACES, MAX_STEP_FILE_BYTES, ReadLimits,
     StepReadError,
 };
+pub use read::import::{
+    ImportOptions, ImportedBody, MAX_STEP_TEXT_BYTES, NORMAL_FILE_NAME, NormalBody, StepImport,
+    UNNAMED_BODY, check_normal_header, import_bodies, normalize, read_normal_body,
+};
 pub use read::index::{StepFile, StepHeader, read_step_file};
+pub use read::units::{COARSE_TOL_MM, DEFAULT_FILE_TOL_MM, LengthUnit};
 pub use text::{MAX_NAME_CHARS, StepText, step_string};
 
 use planora_exchange::Progress;

@@ -346,6 +346,33 @@ impl<'f> TopoReader<'f> {
             .ok_or_else(|| self.fail(id, "Eine Richtung ist unbestimmt („.U.“)."))
     }
 
+    /// Schalen der Volumen-Einträge `items`: (Flächen, umgekehrt, äußere Schale des Hohlraums).
+    /// Keine Einträge oder eine leere Schale: „keine Flächen“.
+    #[allow(clippy::type_complexity)]
+    fn shells(&self, items: &[u64]) -> Result<Vec<(Vec<u64>, bool, Option<usize>)>, Skip> {
+        if items.is_empty() {
+            return Err(Skip("Der Körper hat keine Flächen.".into()));
+        }
+        let mut shells: Vec<(Vec<u64>, bool, Option<usize>)> = Vec::new();
+        for &item in items {
+            let (e, kind) = self.expect(item, &["MANIFOLD_SOLID_BREP", "BREP_WITH_VOIDS"])?;
+            let outer = self.reference(item, &e, kind, 1)?;
+            let (faces, reverse) = self.shell(outer)?;
+            let owner = shells.len();
+            shells.push((faces, reverse, None));
+            if kind == "BREP_WITH_VOIDS" {
+                for void in self.refs(item, &e, kind, 2)? {
+                    let (faces, reverse) = self.shell(void)?;
+                    shells.push((faces, reverse, Some(owner)));
+                }
+            }
+        }
+        if shells.iter().any(|(faces, ..)| faces.is_empty()) {
+            return Err(Skip("Der Körper hat keine Flächen.".into()));
+        }
+        Ok(shells)
+    }
+
     /// Flächen einer Schale und ob sie umgekehrt ist (`ORIENTED_CLOSED_SHELL` mit .F.).
     fn shell(&self, id: u64) -> Result<(Vec<u64>, bool), Skip> {
         let mut id = id;
@@ -882,27 +909,7 @@ pub fn read_raw(
         edge_of: HashMap::new(),
         raw: RawBody::default(),
     };
-    if items.is_empty() {
-        return Err(Skip("Der Körper hat keine Flächen.".into()));
-    }
-    // Schalen: (Flächen, umgekehrt, äußere Schale des Hohlraums).
-    let mut shells: Vec<(Vec<u64>, bool, Option<usize>)> = Vec::new();
-    for &item in items {
-        let (e, kind) = r.expect(item, &["MANIFOLD_SOLID_BREP", "BREP_WITH_VOIDS"])?;
-        let outer = r.reference(item, &e, kind, 1)?;
-        let (faces, reverse) = r.shell(outer)?;
-        let owner = shells.len();
-        shells.push((faces, reverse, None));
-        if kind == "BREP_WITH_VOIDS" {
-            for void in r.refs(item, &e, kind, 2)? {
-                let (faces, reverse) = r.shell(void)?;
-                shells.push((faces, reverse, Some(owner)));
-            }
-        }
-    }
-    if shells.iter().any(|(faces, ..)| faces.is_empty()) {
-        return Err(Skip("Der Körper hat keine Flächen.".into()));
-    }
+    let shells = r.shells(items)?;
     let total: usize = shells.iter().map(|(faces, ..)| faces.len()).sum();
     if total > file.limits().max_faces {
         return Err(Skip(format!(
@@ -910,6 +917,9 @@ pub fn read_raw(
             grouped(MAX_STEP_FACES)
         )));
     }
+    // Noch nicht gezählte Flächen: Scheitert eine Fläche, zählt der Körper trotzdem ganz (die
+    // Pipeline rechnet mit genau `count_faces` Schritten je Körper).
+    let mut left = total as u64;
     for (faces, reverse, owner) in shells {
         let mut shell = RawShell {
             faces: Vec::with_capacity(faces.len()),
@@ -921,14 +931,37 @@ pub fn read_raw(
                 return Err(Skip("Abgebrochen".into()));
             }
             let n = r.raw.faces.len() + 1;
-            let face = r.face(f, n, reverse)?;
+            let face = match r.face(f, n, reverse) {
+                Ok(face) => face,
+                Err(e) => {
+                    progress.advance(left);
+                    return Err(e);
+                }
+            };
             shell.faces.push(r.raw.faces.len());
             r.raw.faces.push(face);
             progress.advance(1);
+            left -= 1;
         }
         r.raw.shells.push(shell);
     }
     Ok(r.raw)
+}
+
+/// Zahl der Flächen der Volumen-Einträge `items`, so wie [`read_raw`] sie zählt (alle Schalen,
+/// ohne Grenze), mit dessen Fehlern beim Lesen der Schalen. Liegt sie innerhalb von
+/// `file.limits().max_faces`, zählt [`build_solid`] den Fortschritt um genau so viele Schritte
+/// weiter (auch wenn der Körper scheitert); sonst und bei einem Fehler hier um keinen.
+pub fn count_faces(file: &StepFile, items: &[u64]) -> Result<usize, Skip> {
+    let r = TopoReader {
+        file,
+        tol: 0.0,
+        res: Resolver::new(file, Units::MM),
+        vertex_of: HashMap::new(),
+        edge_of: HashMap::new(),
+        raw: RawBody::default(),
+    };
+    Ok(r.shells(items)?.iter().map(|(faces, ..)| faces.len()).sum())
 }
 
 /// Name der Fläche mit dem Kernel-Index `i` für Meldungen („„STEP-Fläche n““).

@@ -81,6 +81,13 @@ pub enum StepReadError {
     TooManyBodies,
     #[error("Abgebrochen")]
     Cancelled,
+    /// Ein Eintrag ohne eigenen Kontext (freier Volumen-Eintrag), während die Kontexte der Datei
+    /// verschiedene Einheiten nennen (Aufgabe 9).
+    #[error(
+        "Die Einheit ist unklar: Der Körper steht in keiner Darstellung, und die Datei nennt \
+         verschiedene Einheiten."
+    )]
+    UnclearUnits,
     /// Programmfehler des Aufrufers: nach einer Nummer gefragt, die es nicht gibt.
     #[error("Den Eintrag #{id} gibt es nicht.")]
     NoEntity { id: u64 },
