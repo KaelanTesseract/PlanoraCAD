@@ -91,7 +91,12 @@ fn show_export<'a>(
 ) -> impl FnMut(&egui::Context) + 'a {
     let mut dir = None;
     move |ctx| {
-        assert!(d.show(ctx, s, &mut dir));
+        assert!(d.show_in(
+            ctx,
+            s,
+            &mut dir,
+            &mut planora_app::places::Places::default()
+        ));
     }
 }
 
@@ -151,7 +156,12 @@ fn cards_stay_side_by_side_and_inside_at_800x600() {
     let mut screen = Screen::new(800.0, 600.0);
     let mut last = None;
     let seen = screen.settle(8, &mut |ctx| {
-        assert!(d.show(ctx, &mut s, &mut last));
+        assert!(d.show_in(
+            ctx,
+            &mut s,
+            &mut last,
+            &mut planora_app::places::Places::default()
+        ));
     });
     let rect = d.last_rect.unwrap();
     assert!(window(&screen).contains_rect(rect), "{rect:?}");
@@ -222,9 +232,51 @@ fn export_dialog_with_chooser_fits_at_800x600() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Dateiauswahl mit gefülltem Ordner (Liste so hoch wie möglich) bei 800 × 600: der Inhalt
+/// rollt, „Speichern“ und „Abbrechen“ stehen in der Fußzeile und bleiben ohne Blättern
+/// sichtbar; ein Klick schreibt die Datei.
+#[test]
+fn export_dialog_with_chooser_in_a_full_folder_keeps_speichern_visible() {
+    let dir = temp_dir("voll");
+    for i in 0..12 {
+        fs::create_dir_all(dir.join(format!("Ordner {i:02}"))).unwrap();
+        fs::write(dir.join(format!("Teil {i:02}.stl")), b"x").unwrap();
+    }
+    let mut s = export_state();
+    let mut d = export_dialog(&s, ExportFormat::Mesh(Format::Stl));
+    d.begin_save(dir.clone(), &s);
+    let mut screen = Screen::new(800.0, 600.0);
+    let seen = screen.settle(8, &mut show_export(&mut d, &mut s));
+    let rect = d.last_rect.unwrap();
+    assert!(window(&screen).contains_rect(rect), "{rect:?}");
+    assert!(find(&seen, "Ordner 00").is_some(), "Liste gezeichnet");
+    for label in ["Speichern", "Abbrechen"] {
+        let b = find(&seen, label).unwrap_or_else(|| panic!("„{label}“ ohne Blättern"));
+        assert!(
+            b.clip.contains_rect(b.rect) && rect.contains_rect(b.rect),
+            "{label}: {:?} in {:?}",
+            b.rect,
+            b.clip
+        );
+    }
+    let button = find(&seen, "Speichern").unwrap().rect;
+    let mut f = show_export(&mut d, &mut s);
+    screen.click(button.center(), &mut f);
+    drop(f);
+    for _ in 0..200 {
+        if !matches!(d.write_state(), WriteState::Idle | WriteState::Writing) {
+            break;
+        }
+        d.tick(&s, true);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(dir.join("Körper.stl").exists(), "Datei geschrieben");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Nachbesserung (Re-Review 3): in einem niedrigen Fenster (800 × 480) rollt Exportieren mit
-/// Dateiwahl; Titel und Schließen-Symbol bleiben dabei stehen, „Speichern“ ist nach dem Rollen
-/// erreichbar.
+/// Dateiwahl; Titel und Schließen-Symbol bleiben dabei stehen. Seit der Dateiauswahl mit
+/// Fußzeile ist „Speichern“ schon vor dem Rollen sichtbar und bleibt es danach.
 #[test]
 fn export_dialog_with_chooser_scrolls_in_a_low_window() {
     let dir = temp_dir("rollen");
@@ -240,9 +292,9 @@ fn export_dialog_with_chooser_scrolls_in_a_low_window() {
     let close = planora_app::icons::glyph(planora_app::icons::Icon::Close).to_string();
     let title_before = find(&seen, "Exportieren").expect("Titel").rect;
     let close_before = find(&seen, &close).expect("Schließen-Symbol").rect;
-    let hidden = find(&seen, "Speichern")
-        .is_none_or(|t| !t.clip.contains_rect(t.rect) || !rect.contains_rect(t.rect));
-    assert!(hidden, "„Speichern“ schon ohne Rollen sichtbar");
+    let visible = find(&seen, "Speichern")
+        .is_some_and(|t| t.clip.contains_rect(t.rect) && rect.contains_rect(t.rect));
+    assert!(visible, "„Speichern“ in der Fußzeile ohne Rollen sichtbar");
     let mut f = show_export(&mut d, &mut s);
     for _ in 0..3 {
         screen.wheel(rect.center() + egui::vec2(0.0, 40.0), -400.0, &mut f);

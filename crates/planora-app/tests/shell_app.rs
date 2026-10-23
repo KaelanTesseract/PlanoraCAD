@@ -624,9 +624,15 @@ fn open_export(c: &egui::Context, app: &mut PlanoraApp, size: Vec2) -> (egui::La
     let dialog = c.layer_id_at(title.center()).expect("Ebene des Dialogs");
     assert_eq!(dialog.order, egui::Order::Foreground);
     let dialog_rect = c.memory(|m| m.area_rect(dialog.id)).unwrap();
+    // Dateifenster: 55 % der Fensterbreite, mindestens 720 (Teilprojekt Dateiauswahl).
+    let wanted = planora_app::dialog::limits(
+        Rect::from_min_size(Pos2::ZERO, size),
+        planora_app::dialog::DialogSize::File,
+    )
+    .0;
     assert!(
-        (dialog_rect.width() - 720.0).abs() <= 1.0,
-        "720 breit: {dialog_rect:?}"
+        (dialog_rect.width() - wanted).abs() <= 1.0,
+        "{wanted} breit: {dialog_rect:?}"
     );
     assert!(
         (dialog_rect.center().x - size.x / 2.0).abs() <= 1.0,

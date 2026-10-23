@@ -10,6 +10,7 @@ use crate::feature_dialog::FeatureDialog;
 use crate::history::{History, Tracker, snapshot_bytes};
 use crate::import_dialog::ImportDialog;
 use crate::parameter_dialog::ParameterDialog;
+use crate::places::{FavoriteChange, Places};
 use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
 use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
@@ -518,6 +519,16 @@ pub struct Workspace {
     pub active: usize,
     pub library: Option<Library>,
     pub config: Config,
+    /// Ort der Konfigurationsdatei (Vorgabe [`Config::config_path`]; Tests setzen einen
+    /// Temp-Ordner, damit nie die echte Datei geschrieben wird).
+    pub config_path: PathBuf,
+    /// Favoriten-Änderungen, die noch nicht gespeichert werden konnten (Datei unlesbar,
+    /// schreibgeschützt, gesperrt). Sie stehen schon in `config.favorites` und werden beim
+    /// nächsten gelungenen Schreiben mit angewandt.
+    pub favorites_pending: Vec<FavoriteChange>,
+    /// Meldung aus dem letzten Speichern der Favoriten (z. B. Liste auf der Platte voll); geht
+    /// über [`Workspace::places`] an die nächste gezeichnete Dateiauswahl.
+    pub favorites_notice: Option<&'static str>,
     pub prompt: Option<Prompt>,
     pub quit: bool,
     /// Der Dialog „Über PlanoraCAD“ ist offen.
@@ -551,6 +562,9 @@ impl Workspace {
             active: 0,
             library,
             config,
+            config_path: Config::config_path(),
+            favorites_pending: Vec::new(),
+            favorites_notice: None,
             prompt: None,
             quit: false,
             about_open: false,
@@ -1168,9 +1182,89 @@ impl Workspace {
         }
     }
 
-    /// Speichert die Konfiguration (gewählte Wurzel); Fehler sind nicht schlimm.
-    pub fn persist_config(&self) {
-        let _ = self.config.save();
+    /// Speichert die gewählte Wurzel; Fehler sind nicht schlimm. Nur `root` wird in den Stand
+    /// der Datei geschrieben, die Favoriten auf der Platte bleiben (eine andere Instanz kann
+    /// sie inzwischen geändert haben) und werden übernommen. Ist die Datei unlesbar, wird sie
+    /// wie bisher mit dem Stand im Speicher ersetzt: die Wurzel ist eine bewusste Wahl.
+    ///
+    /// Noch nicht gespeicherte Favoriten-Änderungen werden dabei mit geschrieben.
+    pub fn persist_config(&mut self) {
+        let root = self.config.root.clone();
+        let pending = std::mem::take(&mut self.favorites_pending);
+        let mut full = None;
+        let written = Config::update_at(&self.config_path, |c| {
+            c.root = root;
+            full = apply_changes(&pending, &mut c.favorites);
+        });
+        match written {
+            Ok(disk) => {
+                self.config.favorites = disk.favorites;
+                if full.is_some() {
+                    self.favorites_notice = full;
+                }
+            }
+            Err(_) => {
+                if self.config.save_to(&self.config_path).is_err() {
+                    self.favorites_pending = pending;
+                }
+            }
+        }
+    }
+
+    /// Gemeinsamer Stand der Schnellzugriffe für die Dateiauswahlen eines Bildes: Favoriten aus
+    /// der Konfiguration, Projektordner = gewählte Wurzel oder ihre Vorgabe.
+    pub fn places(&self) -> Places {
+        Places {
+            favorites: self.config.favorites.clone(),
+            project_root: Some(
+                self.config
+                    .root
+                    .clone()
+                    .unwrap_or_else(Config::default_root),
+            ),
+            changes: Vec::new(),
+            drives: None,
+            notice: self.favorites_notice,
+        }
+    }
+
+    /// Übernimmt geänderte Favoriten und speichert sie gleich (in [`Workspace::config_path`]);
+    /// `true`, wenn geschrieben wurde. Gelesen, geändert, geschrieben: Die Änderungen werden
+    /// auf den Stand der Datei angewandt, deren Wurzel und fremde Favoriten bleiben (eine
+    /// andere Instanz oder eine beim Start kurz unlesbare Datei überschreibt so nichts).
+    ///
+    /// Lässt sich die Datei nicht lesen oder schreiben, bleibt sie unangetastet; die
+    /// Änderungen bleiben im Speicher (in der Leiste zu sehen) und vorgemerkt
+    /// ([`Workspace::favorites_pending`]) und werden beim nächsten gelungenen Schreiben mit
+    /// angewandt, sonst gelten sie bis Programmende. Ist die Liste auf der Platte schon voll
+    /// (eine andere Instanz), fehlt der neue Favorit danach und die Auswahl meldet
+    /// [`crate::places::FAVORITES_FULL`].
+    pub fn save_places(&mut self, places: Places) -> bool {
+        // Die Meldung des letzten Speicherns hat eine Auswahl übernommen (Feld geleert).
+        if places.notice.is_none() {
+            self.favorites_notice = None;
+        }
+        if !places.changed() {
+            return false;
+        }
+        let mut all = std::mem::take(&mut self.favorites_pending);
+        all.extend(places.changes);
+        let mut full = None;
+        let written = Config::update_at(&self.config_path, |c| {
+            full = apply_changes(&all, &mut c.favorites);
+        });
+        match written {
+            Ok(disk) => {
+                self.config.favorites = disk.favorites;
+                self.favorites_notice = full;
+                true
+            }
+            Err(_) => {
+                self.config.favorites = places.favorites;
+                self.favorites_pending = all;
+                false
+            }
+        }
     }
 
     /// Schreibt für geänderte, gespeicherte Dokumente eine Autosicherung, wenn das Intervall
@@ -1204,4 +1298,15 @@ impl Workspace {
             t.last_autosave = now;
         }
     }
+}
+
+/// Wendet Favoriten-Änderungen der Reihe nach an; die erste Meldung (volle Liste) oder `None`.
+fn apply_changes(changes: &[FavoriteChange], favorites: &mut Vec<PathBuf>) -> Option<&'static str> {
+    let mut first = None;
+    for ch in changes {
+        if let Err(e) = ch.apply(favorites) {
+            first.get_or_insert(e);
+        }
+    }
+    first
 }

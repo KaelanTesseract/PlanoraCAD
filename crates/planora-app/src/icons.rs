@@ -148,6 +148,22 @@ pub enum Icon {
     Parameters,
     /// Phosphor `file-arrow-down` (STEP-Körper im Feature-Baum).
     StepBody,
+    /// Phosphor `folder` (Ordner in der Dateiauswahl).
+    Folder,
+    /// Phosphor `file` (Datei in der Dateiauswahl).
+    File,
+    /// Phosphor `desktop` (Schnellzugriff Desktop).
+    Desktop,
+    /// Phosphor `image` (Schnellzugriff Bilder).
+    Pictures,
+    /// Phosphor `hard-drive` (Laufwerk).
+    Drive,
+    /// Phosphor `star` (Favorit).
+    Favorite,
+    /// Phosphor `files` (Schnellzugriff Dokumente).
+    Documents,
+    /// Phosphor `briefcase` (Schnellzugriff Projekte).
+    Projects,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -220,6 +236,14 @@ pub const ALL: &[Icon] = &[
     Icon::Redo,
     Icon::Parameters,
     Icon::StepBody,
+    Icon::Folder,
+    Icon::File,
+    Icon::Desktop,
+    Icon::Pictures,
+    Icon::Drive,
+    Icon::Favorite,
+    Icon::Documents,
+    Icon::Projects,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -292,6 +316,14 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Redo, '\u{e036}', "arrow-clockwise"),
     (Icon::Parameters, '\u{ebe4}', "function"),
     (Icon::StepBody, '\u{e232}', "file-arrow-down"),
+    (Icon::Folder, '\u{e24a}', "folder"),
+    (Icon::File, '\u{e230}', "file"),
+    (Icon::Desktop, '\u{e560}', "desktop"),
+    (Icon::Pictures, '\u{e2ca}', "image"),
+    (Icon::Drive, '\u{e29e}', "hard-drive"),
+    (Icon::Favorite, '\u{e46a}', "star"),
+    (Icon::Documents, '\u{e710}', "files"),
+    (Icon::Projects, '\u{e0ee}', "briefcase"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {

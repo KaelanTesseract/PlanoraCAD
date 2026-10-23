@@ -142,6 +142,7 @@ fn config_round_trips_and_survives_garbage() {
     assert!(Config::load_from(&p).root.is_none());
     let c = Config {
         root: Some(PathBuf::from("D:/Projekte")),
+        ..Config::default()
     };
     c.save_to(&p).unwrap();
     assert_eq!(Config::load_from(&p).root, c.root);

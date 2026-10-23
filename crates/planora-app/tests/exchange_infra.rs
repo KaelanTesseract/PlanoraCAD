@@ -132,8 +132,10 @@ fn the_chooser_draws_without_input() {
     ctx.set_fonts(fonts::definitions());
     for _ in 0..2 {
         let mut action = ChooserAction::None;
-        ctx.run_ui(egui::RawInput::default(), |ui| action = c.show(ui))
-            .drop_without_applying_deltas();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            action = c.show_with(ui, &mut planora_app::places::Places::default())
+        })
+        .drop_without_applying_deltas();
         assert_eq!(action, ChooserAction::None);
     }
     let _ = fs::remove_dir_all(&d);
@@ -209,7 +211,9 @@ impl Driver {
             time: Some(self.time),
             ..Default::default()
         };
-        let out = self.ctx.run_ui(input, |ui| action = c.show(ui));
+        let out = self.ctx.run_ui(input, |ui| {
+            action = c.show_with(ui, &mut planora_app::places::Places::default())
+        });
         let mut found = None;
         fn walk(s: &egui::epaint::Shape, find: &str, found: &mut Option<egui::Pos2>) {
             match s {
@@ -259,18 +263,19 @@ fn click(pos: egui::Pos2, pressed: bool) -> egui::Event {
 #[test]
 fn a_double_click_on_a_folder_enters_it_without_choosing_a_file_inside() {
     let d = temp_dir("doppelklick");
-    fs::create_dir_all(d.join("A")).unwrap();
-    fs::write(d.join("A").join("inner.stl"), b"x").unwrap();
+    fs::create_dir_all(d.join("Unterordner A")).unwrap();
+    fs::write(d.join("Unterordner A").join("inner.stl"), b"x").unwrap();
     let mut drv = Driver::new();
     let mut c = FileChooser::open(d.clone(), vec!["stl"]);
-    let actions = drv.double_click(&mut c, "A  (Ordner");
+    // Die Zeile ist Ordnersymbol und Name; der Hinweis zum Öffnen steht nur im Tooltip.
+    let actions = drv.double_click(&mut c, "Unterordner A");
     assert!(
         actions.iter().all(|a| *a == ChooserAction::None),
         "keine Datei im neuen Ordner gewählt: {actions:?}"
     );
     assert_eq!(
         c.dir(),
-        d.join("A").as_path(),
+        d.join("Unterordner A").as_path(),
         "Doppelklick öffnet den Ordner"
     );
     let _ = fs::remove_dir_all(&d);

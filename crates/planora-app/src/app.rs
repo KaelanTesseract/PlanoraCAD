@@ -277,6 +277,34 @@ fn open_export(ws: &mut Workspace) {
     tab.export_dialog = Some(ExportDialog::new(&tab.state));
 }
 
+/// Die Fenster mit Dateiauswahl des aktiven Tabs (Exportieren, Netz importieren, STEP
+/// importieren): gemeinsamer zuletzt benutzter Ordner und gemeinsame Schnellzugriffe.
+/// Geänderte Favoriten werden gleich gespeichert ([`Workspace::save_places`]).
+#[doc(hidden)]
+pub fn show_file_dialogs(ctx: &egui::Context, ws: &mut Workspace) {
+    // Der Ordner der Dateiauswahl wird für die Fenster kurz herausgenommen.
+    let mut exchange_dir = ws.exchange_dir.take();
+    let mut places = ws.places();
+    let tab = ws.active_tab_mut();
+    if let Some(mut dialog) = tab.export_dialog.take()
+        && dialog.show_in(ctx, &mut tab.state, &mut exchange_dir, &mut places)
+    {
+        tab.export_dialog = Some(dialog);
+    }
+    if let Some(mut dialog) = tab.import_dialog.take()
+        && dialog.show_in(ctx, &mut tab.state, &mut exchange_dir, &mut places)
+    {
+        tab.import_dialog = Some(dialog);
+    }
+    if let Some(mut dialog) = tab.step_import_dialog.take()
+        && dialog.show_in(ctx, &mut tab.state, &mut exchange_dir, &mut places)
+    {
+        tab.step_import_dialog = Some(dialog);
+    }
+    ws.exchange_dir = exchange_dir;
+    ws.save_places(places);
+}
+
 /// Datei → Netz importieren …: öffnet das Fenster im zuletzt benutzten Ordner; eine offene
 /// Skizze wird vorher beendet. Nicht in schreibgeschützten Ansichten.
 fn open_import(ws: &mut Workspace) {
@@ -887,9 +915,7 @@ impl eframe::App for PlanoraApp {
             }
         });
 
-        // Das Feld Projekte kann den aktiven Tab gewechselt haben (Dokument geöffnet). Der
-        // Ordner der Dateiauswahl wird für die Fenster kurz herausgenommen.
-        let mut exchange_dir = self.ws.exchange_dir.take();
+        // Das Feld Projekte kann den aktiven Tab gewechselt haben (Dokument geöffnet).
         let tab = self.ws.active_tab_mut();
         if let Some(dialog) = dialog_for_request(&mut tab.state) {
             tab.dialog = Some(dialog);
@@ -946,11 +972,6 @@ impl eframe::App for PlanoraApp {
         {
             tab.blend_dialog = Some(dialog);
         }
-        if let Some(mut dialog) = tab.export_dialog.take()
-            && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
-        {
-            tab.export_dialog = Some(dialog);
-        }
         if let Some(mut dialog) = tab.drawing_dialog.take()
             && dialog.show(&ctx, &mut tab.state)
         {
@@ -968,22 +989,12 @@ impl eframe::App for PlanoraApp {
         {
             tab.state.sheet_dialog = Some(dialog);
         }
-        if let Some(mut dialog) = tab.import_dialog.take()
-            && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
-        {
-            tab.import_dialog = Some(dialog);
-        }
-        if let Some(mut dialog) = tab.step_import_dialog.take()
-            && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
-        {
-            tab.step_import_dialog = Some(dialog);
-        }
         if tab.blend_dialog.is_none() && tab.state.edge_picking {
             tab.state.edge_picking = false;
             tab.state.clear_edge_marks();
         }
 
-        self.ws.exchange_dir = exchange_dir;
+        show_file_dialogs(&ctx, &mut self.ws);
         self.ws.refresh_prompts();
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);

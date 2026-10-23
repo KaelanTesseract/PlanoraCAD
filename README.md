@@ -106,6 +106,8 @@ Körper lassen sich als Dreiecksnetz speichern, etwa für den 3D-Druck oder um s
 
 Netze aus anderen Programmen lassen sich einlesen: „Datei“ → „Netz importieren …“ (STL und OBJ). Das Fenster zeigt vorher, wie viele Dreiecke die Datei hat und ob das Netz geschlossen ist. Die Einheit der Datei lässt sich wählen (Millimeter, Zentimeter, Meter, Zoll). Das Ergebnis ist ein **Netz-Körper**: Er lässt sich anzeigen, verschieben, drehen, vergrößern oder verkleinern, messen und wieder exportieren. Mit anderen Körpern verrechnen, runden oder als Fläche für eine Skizze nutzen lässt er sich nicht; diese Menüpunkte sind dann ausgegraut.
 
+Die Dateiauswahl (beim Importieren und Exportieren) zeigt Ordner mit einem Ordnersymbol (Doppelklick öffnet sie) und hat über der Liste Knöpfe für Dokumente, Downloads, Desktop, Bilder, den Projektordner, die Laufwerke und eigene Favoriten; einen Ordner macht man mit einem Rechtsklick zum Favoriten und entfernt ihn ebenso wieder.
+
 Dokumente mit Netz-Körpern speichert das Programm im Dateiformat 3; das Netz steckt im Dokument selbst. Ältere Programmversionen melden dann „zu neu“. Dokumente ohne Netz-Körper bleiben im Format 1 oder 2.
 
 **Grenzen**

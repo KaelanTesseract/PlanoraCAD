@@ -26,6 +26,7 @@ use crate::file_chooser::{ChooserAction, FileChooser};
 use crate::import_dialog::{STALE, Unit};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::warning_color;
+use crate::places::Places;
 use crate::state::AppState;
 use crate::theme;
 use planora_exchange::Progress;
@@ -38,6 +39,7 @@ use planora_step::{
     ImportOptions, LengthUnit, ReadLimits, StepFile, StepHeader, StepImport, StepReadError,
     UNNAMED_BODY, UnitState, import_bodies, read_step_file,
 };
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -779,11 +781,15 @@ impl StepImportDialog {
     }
 
     /// Zeichnet das Fenster; `true`, solange es offen bleiben soll.
-    pub fn show(
+    ///
+    /// `places` sind die gemeinsamen Schnellzugriffe der Dateiauswahl (Favoriten,
+    /// Projektordner); geänderte Favoriten stehen danach darin.
+    pub fn show_in(
         &mut self,
         ctx: &egui::Context,
         state: &mut AppState,
         last_dir: &mut Option<PathBuf>,
+        places: &mut Places,
     ) -> bool {
         self.tick(false);
         self.drop_if_stale(state);
@@ -812,7 +818,12 @@ impl StepImportDialog {
             .and_then(|l| unit_hint(&l.units, self.chosen));
         let has_list = self.loaded.is_some() && loading.is_none();
         let any = checked.iter().any(|c| *c);
-        let response = Dialog::new(TITLE, DialogSize::Wide)
+        let has_loaded = self.loaded.is_some();
+        // Die Dateiauswahl zeichnet oben (rollt) und in der Fußzeile (Öffnen, Abbrechen).
+        let chooser = RefCell::new(&mut self.chooser);
+        let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
+        let response = Dialog::new(TITLE, DialogSize::File)
+            .center_on_open()
             .open(&mut open)
             .show_with_footer(
                 ctx,
@@ -820,13 +831,7 @@ impl StepImportDialog {
                     let dark = ui.visuals().dark_mode;
                     if choosing {
                         ui.strong("Datei wählen (STEP)");
-                        match self.chooser.show(ui) {
-                            ChooserAction::Chosen(p) => chosen = Some(p),
-                            // Mit gelesener Liste zurück zur Liste, sonst Fenster schließen.
-                            ChooserAction::Cancel if self.loaded.is_some() => back = true,
-                            ChooserAction::Cancel => close = true,
-                            ChooserAction::None => {}
-                        }
+                        body_action = chooser.borrow_mut().show_body(ui, places);
                     }
                     if let Some((phase, f)) = loading {
                         ui.horizontal(|ui| {
@@ -862,7 +867,12 @@ impl StepImportDialog {
                     }
                 },
                 |ui| {
-                    // Fußzeile: bleibt stehen, auch wenn eine lange Liste rollt.
+                    // Fußzeile: bleibt stehen, auch wenn eine lange Liste rollt. Bei der
+                    // Dateiauswahl nur deren „Öffnen“ und „Abbrechen“ (kein „Schließen“).
+                    if choosing {
+                        footer_action = chooser.borrow_mut().show_footer(ui);
+                        return;
+                    }
                     ui.horizontal(|ui| {
                         if has_list {
                             if ui
@@ -872,7 +882,7 @@ impl StepImportDialog {
                             {
                                 import = true;
                             }
-                            if !choosing && ui.button("Andere Datei wählen …").clicked() {
+                            if ui.button("Andere Datei wählen …").clicked() {
                                 other = true;
                             }
                         }
@@ -882,6 +892,15 @@ impl StepImportDialog {
                     });
                 },
             );
+        for action in [body_action, footer_action] {
+            match action {
+                ChooserAction::Chosen(p) => chosen = Some(p),
+                // Mit gelesener Liste zurück zur Liste, sonst Fenster schließen.
+                ChooserAction::Cancel if has_loaded => back = true,
+                ChooserAction::Cancel => close = true,
+                ChooserAction::None => {}
+            }
+        }
         self.last_rect = response.map(|r| r.response.rect);
         self.last_cards = cards;
         self.last_rows = rows;

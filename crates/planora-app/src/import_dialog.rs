@@ -11,10 +11,12 @@ use crate::export_dialog::{LOST, PROGRESS_WIDTH, REPAINT, file_name, group_digit
 use crate::file_chooser::{ChooserAction, FileChooser};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
+use crate::places::Places;
 use crate::state::AppState;
 use crate::theme;
 use planora_exchange::{ExchangeError, ExchangeMesh, MeshReport, check_mesh, import_file};
 use planora_feature::FeatureId;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -201,11 +203,15 @@ impl ImportDialog {
     }
 
     /// Zeichnet das Fenster; `true`, solange es offen bleiben soll.
-    pub fn show(
+    ///
+    /// `places` sind die gemeinsamen Schnellzugriffe der Dateiauswahl (Favoriten,
+    /// Projektordner); geänderte Favoriten stehen danach darin.
+    pub fn show_in(
         &mut self,
         ctx: &egui::Context,
         state: &mut AppState,
         last_dir: &mut Option<PathBuf>,
+        places: &mut Places,
     ) -> bool {
         self.tick(false);
         self.drop_if_stale(state);
@@ -214,80 +220,91 @@ impl ImportDialog {
         let mut cards = Vec::new();
         let (mut name, mut unit) = (self.name.clone(), self.unit);
         let loading = self.is_loading().then(|| self.progress());
-        let response = Dialog::new("Netz importieren", DialogSize::Wide)
+        let has_loaded = self.loaded.is_some();
+        // Die Dateiauswahl zeichnet oben (rollt) und in der Fußzeile (Öffnen, Abbrechen).
+        let chooser = RefCell::new(&mut self.chooser);
+        let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
+        let response = Dialog::new("Netz importieren", DialogSize::File)
+            .center_on_open()
             .open(&mut open)
-            .show(ctx, |ui| {
-                ui.strong("Datei wählen (STL oder OBJ)");
-                match self.chooser.show(ui) {
-                    ChooserAction::Chosen(p) => chosen = Some(p),
-                    ChooserAction::Cancel => close = true,
-                    ChooserAction::None => {}
-                }
-                if let Some(f) = loading {
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::ProgressBar::new(f)
-                                .desired_width(PROGRESS_WIDTH)
-                                .text("Die Datei wird gelesen …"),
-                        );
-                        if ui.button("Abbrechen").clicked() {
-                            cancel = true;
-                        }
-                    });
-                }
-                if let Some(e) = &self.error {
-                    ui.colored_label(error_color(ui.visuals().dark_mode), e);
-                }
-                if let Some(l) = &self.loaded {
-                    ui.separator();
-                    let mut report_card = |ui: &mut egui::Ui| {
-                        ui.strong("Prüfung");
-                        ui.label(format!("Datei: {}", file_name(&l.path)));
-                        ui.label(format!(
-                            "{} Dreiecke, {} Punkte",
-                            group_digits(l.report.triangles as u64),
-                            group_digits(l.report.vertices as u64)
-                        ));
-                        if l.report.closed {
-                            ui.label(report_text(&l.report));
-                        } else {
-                            ui.colored_label(
-                                warning_color(ui.visuals().dark_mode),
-                                report_text(&l.report),
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    ui.strong("Datei wählen (STL oder OBJ)");
+                    body_action = chooser.borrow_mut().show_body(ui, places);
+                    if let Some(f) = loading {
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::ProgressBar::new(f)
+                                    .desired_width(PROGRESS_WIDTH)
+                                    .text("Die Datei wird gelesen …"),
                             );
-                            ui.colored_label(warning_color(ui.visuals().dark_mode), OPEN_MESH_HINT);
-                        }
-                    };
-                    let mut name_card = |ui: &mut egui::Ui| {
-                        ui.strong("Name");
-                        theme::text_field(
-                            ui,
-                            egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY),
-                        );
-                        ui.add_space(4.0);
-                        ui.strong("Einheit der Datei");
-                        ui.horizontal_wrapped(|ui| {
-                            for u in Unit::ALL {
-                                ui.radio_value(&mut unit, u, u.label());
+                            if ui.button("Abbrechen").clicked() {
+                                cancel = true;
                             }
                         });
-                    };
-                    let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
-                        &mut [&mut report_card, &mut name_card];
-                    cards = card_row(ui, "import", row);
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Importieren").clicked() {
-                            import = true;
-                        }
-                        if ui.button("Schließen").clicked() {
-                            close = true;
-                        }
-                    });
-                } else if ui.button("Schließen").clicked() {
-                    close = true;
-                }
-            });
+                    }
+                    if let Some(e) = &self.error {
+                        ui.colored_label(error_color(ui.visuals().dark_mode), e);
+                    }
+                    if let Some(l) = &self.loaded {
+                        ui.separator();
+                        let mut report_card = |ui: &mut egui::Ui| {
+                            ui.strong("Prüfung");
+                            ui.label(format!("Datei: {}", file_name(&l.path)));
+                            ui.label(format!(
+                                "{} Dreiecke, {} Punkte",
+                                group_digits(l.report.triangles as u64),
+                                group_digits(l.report.vertices as u64)
+                            ));
+                            if l.report.closed {
+                                ui.label(report_text(&l.report));
+                            } else {
+                                ui.colored_label(
+                                    warning_color(ui.visuals().dark_mode),
+                                    report_text(&l.report),
+                                );
+                                ui.colored_label(
+                                    warning_color(ui.visuals().dark_mode),
+                                    OPEN_MESH_HINT,
+                                );
+                            }
+                        };
+                        let mut name_card = |ui: &mut egui::Ui| {
+                            ui.strong("Name");
+                            theme::text_field(
+                                ui,
+                                egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY),
+                            );
+                            ui.add_space(4.0);
+                            ui.strong("Einheit der Datei");
+                            ui.horizontal_wrapped(|ui| {
+                                for u in Unit::ALL {
+                                    ui.radio_value(&mut unit, u, u.label());
+                                }
+                            });
+                        };
+                        let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
+                            &mut [&mut report_card, &mut name_card];
+                        cards = card_row(ui, "import", row);
+                    }
+                },
+                |ui| {
+                    // Fußzeile: bleibt stehen, auch wenn der Inhalt darüber rollt. Die Dateiauswahl
+                    // ist immer zu sehen, darum kein eigenes „Schließen“: „Abbrechen“ schließt.
+                    footer_action = chooser.borrow_mut().show_footer(ui);
+                    if has_loaded && ui.button("Importieren").clicked() {
+                        import = true;
+                    }
+                },
+            );
+        for action in [body_action, footer_action] {
+            match action {
+                ChooserAction::Chosen(p) => chosen = Some(p),
+                ChooserAction::Cancel => close = true,
+                ChooserAction::None => {}
+            }
+        }
         self.last_rect = response.map(|r| r.response.rect);
         self.last_cards = cards;
         (self.name, self.unit) = (name, unit);

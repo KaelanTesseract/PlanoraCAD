@@ -1655,3 +1655,56 @@ Entscheidung von Dennis am 2026-10-23: Der STEP-Import soll auch Körper lesen, 
 - **Ausgangslage:** Zylinder, Kegel und Kugel ohne Naht liest der Leser (Naht wird beim Lesen eingefügt, `seam.rs`: Naht mit Abstand zu allen anderen Rändern, Pole geometrisch erkannt). Der Algorithmus mit zwei Kreisen lässt sich auf den Torus übertragen; beim Torus kann die Fläche in beiden Richtungen rundum gehen (zwei Nähte, u und v).
 - **Zu klären:** Welche Formen echte Programme schreiben (Rundung zwischen zwei Kreisen, Rohrbogen mit zwei Rohrkreisen, voller Reifen mit zwei Kreisen), wie die Seitenprobe (`check_face_sides`) und die Wickelregel (Rand schließt sich nicht, Aufgabe 3) mit zwei Nähten umgehen, und welche Gegenproben gebraucht werden.
 - **Vorgehen:** wie bei den anderen Teilprojekten: Entwurf, Plan, Bau mit Prüfungen, Handtest. Dazu gehört, mindestens eine echte STEP-Datei eines anderen CAD-Programms zu bekommen (bisher wurden nur Dateien aus dem eigenen Schreiber und von Hand gebaute Proben gelesen).
+
+## Teilprojekt: Dateiauswahl
+
+Entscheidung von Dennis am 2026-10-23; gilt für alle drei Fenster mit Dateiauswahl (Netz importieren, STEP importieren, Exportieren), weil sie dieselbe Auswahl nutzen.
+
+**Geliefert (Zweig `feature/dateiauswahl`):**
+- Ordnersymbol (Phosphor `folder`, Markierungsfarbe des Themas) statt „(Ordner, Doppelklick zum Öffnen)“; der Hinweis „Doppelklick zum Öffnen“ steht nur noch im Tooltip. Dateien haben ein graues Dateisymbol (Phosphor `file`), damit die Namen bündig stehen. Ordner öffnen bleibt Doppelklick.
+- Schnellzugriffe über der Liste (brechen in weitere Zeilen um): Dokumente, Downloads, Desktop, Bilder (im Benutzerordner, sonst unter `OneDrive`, fehlende werden nicht gezeigt), Projekte (gewählter Projektordner oder die Vorgabe, nur wenn vorhanden), die Laufwerke, dann die Favoriten. Der Knopf des aktuellen Ordners ist hervorgehoben; ein Klick wechselt wie ein eingetippter Ordner.
+- Laufwerke werden einmal je Programmlauf im Hintergrund gesucht (je Buchstabe ein eigener Thread); ein hängendes Netzlaufwerk hält die Oberfläche nicht auf, es erscheint erst, wenn es antwortet.
+- Favoriten: Rechtsklick auf einen Ordner der Liste → „Zu Favoriten hinzufügen“ bzw. „Aus Favoriten entfernen“; Rechtsklick auf einen Favoriten-Knopf → „Aus Favoriten entfernen“. Höchstens 24, ohne Doppelte (Groß- und Kleinschreibung und Schrägstrich am Ende zählen nicht), Reihenfolge des Hinzufügens. Gleich heißende Favoriten zeigen den übergeordneten Ordner mit. Ein Favorit, dessen Ordner fehlt, bleibt sichtbar; ein Klick meldet das und nennt den Weg zum Entfernen.
+- Gespeichert in `config.json` als Feld `favorites` (fehlt es in alten Dateien, bleiben Wurzel und alles andere erhalten; ältere Programmstände übergehen das Feld). Speichern gleich nach jeder Änderung; ein Fehler beim Schreiben ist nicht schlimm.
+- Nachbesserung 1 (nach der Prüfung):
+  - Die Leiste bricht jetzt wirklich um und rollt ab zwei Zeilen; die drei Fenster bleiben bei 800 × 600 auch mit 24 Favoriten (auch mit langen Namen) höchstens 720 px breit, „Speichern“ bzw. „Öffnen“ ist sichtbar.
+  - Lesen, ändern, schreiben: Ein Favorit ändert nur die Favoriten in der Datei (die Änderung wird auf den Stand auf der Platte angewandt), die Wahl der Wurzel ändert nur `root`. So überschreibt eine zweite Instanz oder eine beim Start kurz unlesbare Datei weder Wurzel noch fremde Favoriten. Eine unlesbare Datei wird durch Favoriten nie überschrieben.
+  - `favorites` wird nachsichtig gelesen: `null`, ein falscher Typ, leere oder nicht-textliche Einträge werden übergangen, Doppelte und mehr als 24 beim Laden entfernt; die Wurzel lädt immer.
+  - Die Konfiguration schreibt über eine eigene Zwischendatei je Schreibvorgang.
+  - Dokumente mit Symbol `files`, Projekte mit `briefcase` (deutlich anders als die Ordnerzeilen).
+  - Neuzeichnen während der Laufwerkssuche höchstens 3 s, danach zeigt die Auswahl die bis dahin gefundenen Laufwerke.
+- Nachbesserung 2 (nach der Nachprüfung):
+  - „Speichern“/„Ersetzen“ bzw. „Öffnen“ und „Abbrechen“ samt Meldungen stehen in allen drei Fenstern in der festen Fußzeile: auch in einem vollen Ordner bei 800 × 600 ohne Rollen sichtbar. Beim Netz-Import steht „Importieren“ ebenfalls in der Fußzeile. Braucht die Leiste eine zweite Zeile, wird die Liste um diese kürzer (die Auswahl wird nicht höher).
+  - Favoriten-Änderungen, die nicht gespeichert werden konnten (Datei unlesbar, schreibgeschützt, gesperrt), bleiben in der Leiste und vorgemerkt; sie werden beim nächsten gelungenen Schreiben (Favorit oder Wurzelwahl) mit gespeichert.
+  - Ist die Liste in der Datei schon voll (andere Instanz), meldet die Auswahl „Es gibt schon 24 Favoriten …“, statt den neuen Favoriten still fallen zu lassen.
+- Nachbesserung 4: Bei der Dateiauswahl gibt es in allen drei Fenstern nur „Öffnen“/„Speichern“ und „Abbrechen“, kein zusätzliches „Schließen“ (das ✕ oben bleibt). „Abbrechen“ schließt das Fenster, wenn es nichts gibt, wohin es zurückgehen kann; STEP mit gelesener Liste kehrt zur Liste zurück, Exportieren zum Exportformular.
+- Nachbesserung 3 (Rückmeldung von Dennis am laufenden Programm):
+  - Alle Zeilen (Kopfzeile mit Schließen-Symbol am rechten Rand, Ordnerzeile, Leiste, Liste, Dateiname, Fußzeile) nutzen dieselbe Breite. Ursache des zu breiten „Netz importieren“: sehr lange Datei- oder Ordnernamen machten die Listenzeile breiter als das Fenster vorsah, das Fenster wuchs mit. Jetzt geht jede Listenzeile über die ganze Breite, zu lange Namen enden mit „…“. Knöpfe der Leiste zeigen höchstens 40 Zeichen (voller Pfad im Tooltip).
+  - Überfahren, Drücken oder Hervorheben eines Knopfs der Leiste ändert seine Größe nicht mehr (gleicher Rahmen in jedem Zustand), die Leiste verschiebt sich nicht.
+  - Die drei Dateifenster öffnen immer mittig im Programmfenster, auch nach einer Größenänderung des Programmfensters zwischen zwei Öffnungen (danach verschiebbar wie bisher). Sie sind 55 % der Fensterbreite breit (720 bis 1200 px); die Liste wächst mit der Fensterhöhe (bei 600 px wie bisher, höchstens 700 px). Bei 800 × 600 ändert sich nichts.
+
+**Grenzen:**
+- Die bekannten Ordner werden über die üblichen Namen im Benutzerordner gefunden (`Documents`, `Downloads`, `Desktop`, `Pictures`, ggf. unter `OneDrive`), nicht über die Windows-Einstellung für verschobene Ordner (z. B. `OneDrive\Dokumente` wird nicht gefunden).
+- Laufwerke, die erst während des Programmlaufs dazukommen (USB-Stick), erscheinen erst nach einem Neustart; ein Laufwerk, das länger als 3 s hängt, erscheint erst beim nächsten Bild nach seiner Antwort (zum Beispiel bei Mausbewegung).
+- Favoriten lassen sich nur mit der Maus (Rechtsklick) hinzufügen und entfernen, nicht über die Tastatur.
+- Im UI-Thread laufen weiterhin kurze Prüfungen: ob der Projektordner vorhanden ist (einmal je Auswahl), die bekannten Ordner (beim Öffnen der Auswahl) und das Öffnen eines Ordners per Knopf; ein hängendes Netzlaufwerk kann dabei kurz aufhalten (wie beim Eintippen).
+- Ist die Konfigurationsdatei unlesbar, gilt wie bisher die Vorgabe; neue Favoriten bleiben vorgemerkt und werden gespeichert, sobald die Datei wieder lesbar und schreibbar ist, sonst gelten sie bis Programmende. Eine Meldung, dass das Speichern gescheitert ist, gibt es nicht.
+- Eine von Hand mit BOM oder als UTF-16 gespeicherte config.json gilt als unlesbar (wie vor dem Teilprojekt).
+- Stürzt das Programm genau beim Schreiben ab, kann eine Zwischendatei `config.json.<Nummer>.tmp` liegen bleiben (harmlos).
+- Ändern zwei Programmfenster im selben Augenblick Favoriten, kann eine der beiden Änderungen verloren gehen (nie die Wurzel).
+- Im Exportfenster gibt es bei 800 × 600 weiterhin bis zu drei Rollbereiche (Fensterinhalt, Leiste, Liste).
+
+**Handtest (Hell und Dunkel, Fenster 1100 × 700 und 800 × 600):**
+- [ ] 1. „Netz importieren …“: Ordner mit blauem Ordnersymbol, Dateien mit grauem Dateisymbol, Namen bündig; kein Text „(Ordner, …)“. Beim Überfahren eines Ordners erscheint „Doppelklick zum Öffnen“.
+- [ ] 2. Einfacher Klick auf einen Ordner öffnet ihn nicht; Doppelklick öffnet ihn.
+- [ ] 3. Knöpfe über der Liste: Dokumente, Downloads, Desktop, Bilder, Projekte, Laufwerke (C:, D: …). Jeder Klick wechselt dorthin, der Knopf des aktuellen Ordners ist hervorgehoben. Bei 800 × 600 brechen die Knöpfe um, das Fenster rollt.
+- [ ] 4. Rechtsklick auf einen Ordner → „Zu Favoriten hinzufügen“: Der Ordner erscheint als Knopf mit Stern. Rechtsklick auf denselben Ordner zeigt jetzt „Aus Favoriten entfernen“. Rechtsklick auf eine Datei zeigt kein Menü.
+- [ ] 5. Favorit in „STEP importieren …“ und in „Exportieren“ (Dateiauswahl) ebenfalls da; nach Programmneustart noch da.
+- [ ] 6. Zwei Ordner gleichen Namens (z. B. `Kunde A\Teile` und `Kunde B\Teile`) als Favoriten: Die Knöpfe unterscheiden sich.
+- [ ] 7. Favoriten-Ordner im Explorer umbenennen, dann Knopf klicken: Meldung, dass es den Ordner nicht gibt, mit Hinweis zum Entfernen; Rechtsklick auf den Knopf → „Aus Favoriten entfernen“ wirkt.
+- [ ] 8. Mit einem getrennten Netzlaufwerk: Die Auswahl öffnet sofort, das Laufwerk fehlt oder erscheint später.
+- [ ] 9. Ältere `config.json` ohne `favorites` (vorher sichern): Programm startet mit dem gewählten Projektordner.
+- [ ] 10. Alle drei Dateifenster öffnen mittig, auch nachdem das Programmfenster zwischen zwei Öffnungen vergrößert oder verkleinert wurde; im großen Fenster (z. B. 2000 × 1100) sind sie breiter und die Liste höher, „Speichern“/„Öffnen“ bleibt unten sichtbar.
+- [ ] 11. Ordner mit sehr langen Namen: Kopfzeile, Ordnerzeile, Leiste, Liste und Dateiname enden am selben rechten Rand, lange Namen enden mit „…“.
+- [ ] 12. Maus über die Knöpfe der Leiste führen und einen drücken: kein Knopf verschiebt sich, nichts springt in die nächste Zeile.
+- [ ] 13. Während die Dateiauswahl zu sehen ist, gibt es nur „Öffnen“ bzw. „Speichern“ und „Abbrechen“ (kein zusätzliches „Schließen“). „Abbrechen“ schließt „Netz importieren“ und „STEP importieren“ (ohne gelesene Liste); hat STEP schon eine Liste, führt es zu ihr zurück (dort wieder „Schließen“); beim Exportieren zurück zum Exportformular.

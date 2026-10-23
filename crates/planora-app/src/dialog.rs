@@ -23,6 +23,9 @@ pub enum DialogSize {
     Normal,
     /// Dialoge mit Karten oder Listen nebeneinander.
     Wide,
+    /// Fenster mit Dateiauswahl (Exportieren, Netz und STEP importieren): mindestens so breit
+    /// wie [`DialogSize::Wide`], in großen Fenstern breiter (siehe [`limits`]).
+    File,
 }
 
 impl DialogSize {
@@ -31,15 +34,28 @@ impl DialogSize {
         match self {
             DialogSize::Prompt => 440.0,
             DialogSize::Normal => 480.0,
-            DialogSize::Wide => 720.0,
+            DialogSize::Wide | DialogSize::File => 720.0,
         }
     }
 }
 
-/// Außenbreite und größte Außenhöhe im Fenster `content` (Rand [`SHELL_INSET`] rundum).
+/// Anteil der Fensterbreite, den ein Dateifenster einnimmt.
+pub const FILE_WIDTH_SHARE: f32 = 0.55;
+/// Größte Breite eines Dateifensters.
+pub const FILE_MAX_WIDTH: f32 = 1200.0;
+
+/// Außenbreite und größte Außenhöhe im Fenster `content` (Rand [`SHELL_INSET`] rundum). Ein
+/// Dateifenster ist [`FILE_WIDTH_SHARE`] der Fensterbreite breit, mindestens 720 und höchstens
+/// [`FILE_MAX_WIDTH`] px.
 pub fn limits(content: egui::Rect, size: DialogSize) -> (f32, f32) {
     let free = content.shrink(SHELL_INSET);
-    (size.width().min(free.width()), free.height())
+    let wanted = match size {
+        DialogSize::File => {
+            (FILE_WIDTH_SHARE * content.width()).clamp(DialogSize::Wide.width(), FILE_MAX_WIDTH)
+        }
+        other => other.width(),
+    };
+    (wanted.min(free.width()), free.height())
 }
 
 /// Ein Dialog; Aufbau wie bei `egui::Window`.
@@ -49,6 +65,7 @@ pub struct Dialog<'a> {
     size: DialogSize,
     open: Option<&'a mut bool>,
     fixed: bool,
+    center_on_open: bool,
 }
 
 impl<'a> Dialog<'a> {
@@ -61,7 +78,15 @@ impl<'a> Dialog<'a> {
             size,
             open: None,
             fixed: false,
+            center_on_open: false,
         }
+    }
+
+    /// Steht beim Öffnen immer mittig im Fenster, auch wenn er vorher woanders stand oder das
+    /// Fenster seither größer oder kleiner geworden ist (danach verschiebbar wie sonst).
+    pub fn center_on_open(mut self) -> Self {
+        self.center_on_open = true;
+        self
     }
 
     /// Eigene Id (wenn der Titel wechselt oder nicht eindeutig ist).
@@ -115,6 +140,7 @@ impl<'a> Dialog<'a> {
             size,
             open,
             fixed,
+            center_on_open,
         } = self;
         if matches!(open.as_deref(), Some(false)) {
             return None;
@@ -157,6 +183,11 @@ impl<'a> Dialog<'a> {
             .constrain_to(content);
         window = if fixed {
             window.anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+        } else if center_on_open && reopened {
+            // Wieder geöffnet: nicht an der alten Stelle (aus einer anderen Fenstergröße).
+            window
+                .pivot(Align2::CENTER_CENTER)
+                .current_pos(content.center())
         } else {
             window
                 .pivot(Align2::CENTER_CENTER)

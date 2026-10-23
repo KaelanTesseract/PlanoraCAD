@@ -31,6 +31,7 @@ use crate::drawing_view::{context_or_single, parts_on, parts_space_for, view_nam
 use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
+use crate::places::Places;
 use crate::sheet_dialog::title_field_name;
 use crate::state::{AppState, BodyKind};
 use crate::theme;
@@ -65,6 +66,7 @@ use planora_mesh::{TessellationOptions, tessellate};
 use planora_step::{
     MAX_NAME_CHARS, StepBody, StepError, StepOptions, check_body, display_name, export_step_file,
 };
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -2379,11 +2381,15 @@ impl ExportDialog {
 
     /// Zeichnet das Fenster; `true`, solange es offen bleiben soll. `last_dir` ist der zuletzt
     /// benutzte Ordner der Dateiauswahl.
-    pub fn show(
+    ///
+    /// `places` sind die gemeinsamen Schnellzugriffe der Dateiauswahl (Favoriten,
+    /// Projektordner); geänderte Favoriten stehen danach darin.
+    pub fn show_in(
         &mut self,
         ctx: &egui::Context,
         state: &mut AppState,
         last_dir: &mut Option<PathBuf>,
+        places: &mut Places,
     ) -> bool {
         self.tick(state, false);
         let status = self.status(state);
@@ -2483,256 +2489,285 @@ impl ExportDialog {
         let mut cancel_write = false;
         let mut chosen: Option<PathBuf> = None;
         let mut cards = Vec::new();
-        let chooser = &mut self.chooser;
-        let response = Dialog::new("Exportieren", DialogSize::Wide)
+        // Die Dateiauswahl zeichnet oben (rollt) und in der Fußzeile (Speichern, Abbrechen).
+        let chooser = RefCell::new(&mut self.chooser);
+        let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
+        let response = Dialog::new("Exportieren", DialogSize::File)
+            .center_on_open()
             .open(&mut open)
-            .show(ctx, |ui| {
-                let mut format_card = |ui: &mut egui::Ui| {
-                    ui.strong("Format");
-                    for f in ExportFormat::ALL {
-                        ui.radio_value(&mut format, f, f.label());
-                    }
-                };
-                let mut quality_card = |ui: &mut egui::Ui| {
-                    if before.is_step() {
-                        ui.label(STEP_EXACT);
-                    } else {
-                        ui.strong("Qualität");
-                        for q in Quality::ALL {
-                            ui.radio_value(&mut quality, q, q.label());
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    let mut format_card = |ui: &mut egui::Ui| {
+                        ui.strong("Format");
+                        for f in ExportFormat::ALL {
+                            ui.radio_value(&mut format, f, f.label());
                         }
-                        ui.weak("Feiner heißt mehr Dreiecke und größere Dateien.");
-                    }
-                };
-                let mut scope_card = |ui: &mut egui::Ui| {
-                    ui.strong("Umfang");
-                    let selected = ui
-                        .add_enabled(
-                            has_selection,
-                            egui::RadioButton::new(scope == Scope::Selected, "Gewählter Körper"),
-                        )
-                        .on_disabled_hover_text("Dafür zuerst einen Körper wählen.");
-                    if selected.clicked() {
-                        scope = Scope::Selected;
-                    }
-                    ui.radio_value(&mut scope, Scope::Visible, "Alle sichtbaren Körper");
-                    ui.weak("Unterdrückte Schritte zählen nicht.");
-                };
-                let mut drawing_card = |ui: &mut egui::Ui| {
-                    ui.strong("Zeichnung");
-                    // Nur bei PDF: das gewählte Blatt oder alle Blätter (P9).
-                    if is_pdf {
-                        ui.radio_value(&mut pdf_pages, PdfPages::Selected, PDF_SELECTED);
-                        ui.radio_value(&mut pdf_pages, PdfPages::All, PDF_ALL);
-                    }
-                    if drawing_list.is_empty() {
-                        ui.weak("Keine Zeichnung vorhanden.");
-                    } else {
-                        let shown = drawing_list
-                            .iter()
-                            .find(|(id, _)| Some(*id) == picked)
-                            .map_or("", |(_, n)| n.as_str());
-                        ui.add_enabled_ui(!all, |ui| {
-                            egui::ComboBox::from_id_salt("export-drawing")
-                                .selected_text(shown)
-                                .width(ui.available_width())
-                                .show_ui(ui, |ui| {
-                                    for (id, name) in &drawing_list {
-                                        ui.selectable_value(&mut picked, Some(*id), name.as_str());
-                                    }
-                                });
-                        })
-                        .response
-                        .on_disabled_hover_text(PDF_ALL_HINT);
-                        if all {
-                            ui.weak(PDF_ALL_HINT);
-                        }
-                    }
-                    for line in &drawing_info {
-                        ui.label(line);
-                    }
-                    ui.add_space(4.0);
-                    ui.add(theme::Toggle::new(&mut with_frame, FRAME_SWITCH));
-                };
-                cards = if before.is_drawing() {
-                    let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
-                        &mut [&mut format_card, &mut drawing_card];
-                    card_row(ui, "export-drawing", row)
-                } else {
-                    let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
-                        &mut [&mut format_card, &mut quality_card, &mut scope_card];
-                    card_row(ui, "export", row)
-                };
-                ui.add_space(8.0);
-                match &status {
-                    ExportStatus::Computing(f) => {
-                        let text = match sheet_no {
-                            Some((n, total)) if all => sheet_progress_text(n, total),
-                            _ => computing_text(before, is_list).to_string(),
-                        };
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::ProgressBar::new(*f)
-                                    .desired_width(PROGRESS_WIDTH)
-                                    .text(text),
-                            );
-                            if ui.button("Abbrechen").clicked() {
-                                cancel = true;
+                    };
+                    let mut quality_card = |ui: &mut egui::Ui| {
+                        if before.is_step() {
+                            ui.label(STEP_EXACT);
+                        } else {
+                            ui.strong("Qualität");
+                            for q in Quality::ALL {
+                                ui.radio_value(&mut quality, q, q.label());
                             }
-                        });
-                    }
-                    ExportStatus::Failed(m) => {
-                        ui.colored_label(error_color(ui.visuals().dark_mode), m);
-                        if ui.button("Neu berechnen").clicked() {
-                            recompute = true;
+                            ui.weak("Feiner heißt mehr Dreiecke und größere Dateien.");
                         }
-                    }
-                    ExportStatus::Ready {
-                        triangles,
-                        bytes,
-                        report,
-                    } => {
-                        ui.label(format!(
-                            "{} Dreiecke, {}",
-                            group_digits(*triangles),
-                            estimate_text(*bytes)
-                        ));
-                        if report.closed {
-                            ui.label(report_text(report));
-                        } else {
-                            ui.colored_label(
-                                warning_color(ui.visuals().dark_mode),
-                                report_text(report),
-                            );
-                            ui.colored_label(
-                                warning_color(ui.visuals().dark_mode),
-                                NOT_CLOSED_WARNING,
-                            );
+                    };
+                    let mut scope_card = |ui: &mut egui::Ui| {
+                        ui.strong("Umfang");
+                        let selected = ui
+                            .add_enabled(
+                                has_selection,
+                                egui::RadioButton::new(
+                                    scope == Scope::Selected,
+                                    "Gewählter Körper",
+                                ),
+                            )
+                            .on_disabled_hover_text("Dafür zuerst einen Körper wählen.");
+                        if selected.clicked() {
+                            scope = Scope::Selected;
                         }
-                    }
-                    ExportStatus::StepReady {
-                        bodies,
-                        faces,
-                        rejected,
-                        skipped_meshes,
-                    } => {
-                        if *bodies == 0 {
-                            ui.colored_label(warning_color(ui.visuals().dark_mode), STEP_NOTHING);
+                        ui.radio_value(&mut scope, Scope::Visible, "Alle sichtbaren Körper");
+                        ui.weak("Unterdrückte Schritte zählen nicht.");
+                    };
+                    let mut drawing_card = |ui: &mut egui::Ui| {
+                        ui.strong("Zeichnung");
+                        // Nur bei PDF: das gewählte Blatt oder alle Blätter (P9).
+                        if is_pdf {
+                            ui.radio_value(&mut pdf_pages, PdfPages::Selected, PDF_SELECTED);
+                            ui.radio_value(&mut pdf_pages, PdfPages::All, PDF_ALL);
+                        }
+                        if drawing_list.is_empty() {
+                            ui.weak("Keine Zeichnung vorhanden.");
                         } else {
+                            let shown = drawing_list
+                                .iter()
+                                .find(|(id, _)| Some(*id) == picked)
+                                .map_or("", |(_, n)| n.as_str());
+                            ui.add_enabled_ui(!all, |ui| {
+                                egui::ComboBox::from_id_salt("export-drawing")
+                                    .selected_text(shown)
+                                    .width(ui.available_width())
+                                    .show_ui(ui, |ui| {
+                                        for (id, name) in &drawing_list {
+                                            ui.selectable_value(
+                                                &mut picked,
+                                                Some(*id),
+                                                name.as_str(),
+                                            );
+                                        }
+                                    });
+                            })
+                            .response
+                            .on_disabled_hover_text(PDF_ALL_HINT);
+                            if all {
+                                ui.weak(PDF_ALL_HINT);
+                            }
+                        }
+                        for line in &drawing_info {
+                            ui.label(line);
+                        }
+                        ui.add_space(4.0);
+                        ui.add(theme::Toggle::new(&mut with_frame, FRAME_SWITCH));
+                    };
+                    cards = if before.is_drawing() {
+                        let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
+                            &mut [&mut format_card, &mut drawing_card];
+                        card_row(ui, "export-drawing", row)
+                    } else {
+                        let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
+                            &mut [&mut format_card, &mut quality_card, &mut scope_card];
+                        card_row(ui, "export", row)
+                    };
+                    ui.add_space(8.0);
+                    match &status {
+                        ExportStatus::Computing(f) => {
+                            let text = match sheet_no {
+                                Some((n, total)) if all => sheet_progress_text(n, total),
+                                _ => computing_text(before, is_list).to_string(),
+                            };
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::ProgressBar::new(*f)
+                                        .desired_width(PROGRESS_WIDTH)
+                                        .text(text),
+                                );
+                                if ui.button("Abbrechen").clicked() {
+                                    cancel = true;
+                                }
+                            });
+                        }
+                        ExportStatus::Failed(m) => {
+                            ui.colored_label(error_color(ui.visuals().dark_mode), m);
+                            if ui.button("Neu berechnen").clicked() {
+                                recompute = true;
+                            }
+                        }
+                        ExportStatus::Ready {
+                            triangles,
+                            bytes,
+                            report,
+                        } => {
                             ui.label(format!(
-                                "{} Körper, {} Flächen",
-                                group_digits(*bodies as u64),
-                                group_digits(*faces as u64)
+                                "{} Dreiecke, {}",
+                                group_digits(*triangles),
+                                estimate_text(*bytes)
                             ));
-                        }
-                        for r in rejected {
-                            ui.colored_label(warning_color(ui.visuals().dark_mode), r);
-                        }
-                        if !skipped_meshes.is_empty() {
-                            ui.colored_label(
-                                warning_color(ui.visuals().dark_mode),
-                                skipped_text(skipped_meshes),
-                            );
-                        }
-                    }
-                    ExportStatus::DrawingReady {
-                        skipped_meshes,
-                        outside,
-                        ..
-                    } => {
-                        ui.label(if all {
-                            "Alle Blätter sind berechnet."
-                        } else if is_list {
-                            "Die Stückliste ist berechnet."
-                        } else {
-                            "Alle Ansichten sind berechnet."
-                        });
-                        if *outside > 0 {
-                            ui.colored_label(
-                                warning_color(ui.visuals().dark_mode),
-                                outside_text(*outside),
-                            );
-                        }
-                        if !skipped_meshes.is_empty() {
-                            ui.colored_label(
-                                warning_color(ui.visuals().dark_mode),
-                                drawing_skipped_text(skipped_meshes),
-                            );
-                        }
-                    }
-                    ExportStatus::Unavailable(m) => {
-                        ui.colored_label(warning_color(ui.visuals().dark_mode), m);
-                    }
-                }
-                match &write_state {
-                    WriteState::Idle => {}
-                    WriteState::Writing => {
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::ProgressBar::new(write_progress)
-                                    .desired_width(PROGRESS_WIDTH)
-                                    .text("Die Datei wird geschrieben …"),
-                            );
-                            if writing_file && ui.button("Abbrechen").clicked() {
-                                cancel_write = true;
+                            if report.closed {
+                                ui.label(report_text(report));
+                            } else {
+                                ui.colored_label(
+                                    warning_color(ui.visuals().dark_mode),
+                                    report_text(report),
+                                );
+                                ui.colored_label(
+                                    warning_color(ui.visuals().dark_mode),
+                                    NOT_CLOSED_WARNING,
+                                );
                             }
-                        });
-                        if denied {
-                            ui.colored_label(warning_color(ui.visuals().dark_mode), WRITING_HINT);
+                        }
+                        ExportStatus::StepReady {
+                            bodies,
+                            faces,
+                            rejected,
+                            skipped_meshes,
+                        } => {
+                            if *bodies == 0 {
+                                ui.colored_label(
+                                    warning_color(ui.visuals().dark_mode),
+                                    STEP_NOTHING,
+                                );
+                            } else {
+                                ui.label(format!(
+                                    "{} Körper, {} Flächen",
+                                    group_digits(*bodies as u64),
+                                    group_digits(*faces as u64)
+                                ));
+                            }
+                            for r in rejected {
+                                ui.colored_label(warning_color(ui.visuals().dark_mode), r);
+                            }
+                            if !skipped_meshes.is_empty() {
+                                ui.colored_label(
+                                    warning_color(ui.visuals().dark_mode),
+                                    skipped_text(skipped_meshes),
+                                );
+                            }
+                        }
+                        ExportStatus::DrawingReady {
+                            skipped_meshes,
+                            outside,
+                            ..
+                        } => {
+                            ui.label(if all {
+                                "Alle Blätter sind berechnet."
+                            } else if is_list {
+                                "Die Stückliste ist berechnet."
+                            } else {
+                                "Alle Ansichten sind berechnet."
+                            });
+                            if *outside > 0 {
+                                ui.colored_label(
+                                    warning_color(ui.visuals().dark_mode),
+                                    outside_text(*outside),
+                                );
+                            }
+                            if !skipped_meshes.is_empty() {
+                                ui.colored_label(
+                                    warning_color(ui.visuals().dark_mode),
+                                    drawing_skipped_text(skipped_meshes),
+                                );
+                            }
+                        }
+                        ExportStatus::Unavailable(m) => {
+                            ui.colored_label(warning_color(ui.visuals().dark_mode), m);
                         }
                     }
-                    WriteState::Done(path, n) => {
-                        ui.label(format!(
-                            "Fertig: „{}“ geschrieben ({}).",
-                            file_name(path),
-                            mb_text(*n)
-                        ));
-                        if !shortened.is_empty() {
+                    match &write_state {
+                        WriteState::Idle => {}
+                        WriteState::Writing => {
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::ProgressBar::new(write_progress)
+                                        .desired_width(PROGRESS_WIDTH)
+                                        .text("Die Datei wird geschrieben …"),
+                                );
+                                if writing_file && ui.button("Abbrechen").clicked() {
+                                    cancel_write = true;
+                                }
+                            });
+                            if denied {
+                                ui.colored_label(
+                                    warning_color(ui.visuals().dark_mode),
+                                    WRITING_HINT,
+                                );
+                            }
+                        }
+                        WriteState::Done(path, n) => {
+                            ui.label(format!(
+                                "Fertig: „{}“ geschrieben ({}).",
+                                file_name(path),
+                                mb_text(*n)
+                            ));
+                            if !shortened.is_empty() {
+                                ui.colored_label(
+                                    warning_color(ui.visuals().dark_mode),
+                                    shortened_text(&shortened),
+                                );
+                            }
+                        }
+                        WriteState::Failed(m) => {
                             ui.colored_label(
-                                warning_color(ui.visuals().dark_mode),
-                                shortened_text(&shortened),
+                                error_color(ui.visuals().dark_mode),
+                                format!("Nicht geschrieben: {m}"),
                             );
                         }
                     }
-                    WriteState::Failed(m) => {
-                        ui.colored_label(
-                            error_color(ui.visuals().dark_mode),
-                            format!("Nicht geschrieben: {m}"),
-                        );
-                    }
-                }
-                ui.separator();
-                match chooser.as_mut() {
-                    Some(c) => {
-                        ui.strong("Speichern unter");
-                        match c.show(ui) {
-                            ChooserAction::Chosen(p) => chosen = Some(p),
-                            ChooserAction::Cancel => drop_chooser = true,
-                            ChooserAction::None => {}
+                    ui.separator();
+                    match chooser.borrow_mut().as_mut() {
+                        Some(c) => {
+                            ui.strong("Speichern unter");
+                            body_action = c.show_body(ui, places);
+                        }
+                        None => {
+                            let ready = match &status {
+                                ExportStatus::Ready { .. } => true,
+                                ExportStatus::StepReady { bodies, .. } => *bodies > 0,
+                                ExportStatus::DrawingReady { .. } => true,
+                                _ => false,
+                            } && write_state != WriteState::Writing;
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(ready, egui::Button::new("Exportieren …"))
+                                    .on_disabled_hover_text(disabled_hint(&status))
+                                    .clicked()
+                                {
+                                    begin = true;
+                                }
+                                if ui.button("Schließen").clicked() {
+                                    close = true;
+                                }
+                            });
                         }
                     }
-                    None => {
-                        let ready = match &status {
-                            ExportStatus::Ready { .. } => true,
-                            ExportStatus::StepReady { bodies, .. } => *bodies > 0,
-                            ExportStatus::DrawingReady { .. } => true,
-                            _ => false,
-                        } && write_state != WriteState::Writing;
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(ready, egui::Button::new("Exportieren …"))
-                                .on_disabled_hover_text(disabled_hint(&status))
-                                .clicked()
-                            {
-                                begin = true;
-                            }
-                            if ui.button("Schließen").clicked() {
-                                close = true;
-                            }
-                        });
+                },
+                |ui| {
+                    // Fußzeile: „Speichern“ und „Abbrechen“ bleiben stehen, auch wenn der Inhalt
+                    // darüber rollt.
+                    if let Some(c) = chooser.borrow_mut().as_mut() {
+                        footer_action = c.show_footer(ui);
                     }
-                }
-            });
+                },
+            );
+        for action in [body_action, footer_action] {
+            match action {
+                ChooserAction::Chosen(p) => chosen = Some(p),
+                ChooserAction::Cancel => drop_chooser = true,
+                ChooserAction::None => {}
+            }
+        }
         let want_close = !open || close;
         let alive = !want_close || !self.request_close();
         self.last_rect = response.map(|r| r.response.rect);
