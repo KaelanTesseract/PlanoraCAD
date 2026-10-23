@@ -60,6 +60,19 @@ fn the_list_shows_versions_comments_the_current_one_and_pending_changes() {
 }
 
 #[test]
+fn the_list_shows_the_local_time_of_each_version() {
+    let c = ctx();
+    let mut w = ws_with_doc(1);
+    let info = w.active_tab().version_info().unwrap();
+    let iso = info.version(1).unwrap().time.clone();
+    let t = frame(&c, &mut w, &mut VersionsUi::default());
+    let local = planora_app::local_time::local_time_text(&iso);
+    assert!(t.contains(&local), "„{local}“ fehlt:\n{t}");
+    // nicht mehr die alte UTC-Form „JJJJ-MM-TT hh:mm“
+    assert!(!t.contains(&iso[0..10]), "{t}");
+}
+
+#[test]
 fn rows_are_newest_first_and_indented_by_branch() {
     let mut w = ws_with_doc(2);
     let path = w.active_tab().path.clone().unwrap();

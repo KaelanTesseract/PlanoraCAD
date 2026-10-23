@@ -27,6 +27,7 @@ pub mod history;
 pub mod icons;
 pub mod import_dialog;
 pub mod jobs;
+pub mod local_time;
 pub mod logo;
 pub mod mesh_body;
 pub mod parameter_dialog;
