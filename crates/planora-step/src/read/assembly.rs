@@ -2,43 +2,60 @@
 //!
 //! **Was ein Körper ist (P2):** Je Vorkommen einer Darstellung mit mindestens einem
 //! `MANIFOLD_SOLID_BREP`/`BREP_WITH_VOIDS` ein Körper; alle Volumen-Einträge der Darstellung
-//! werden Schalen dieses einen Körpers. Volumen-Einträge, die in keiner Darstellung stehen, sind
+//! werden Schalen dieses einen Körpers (steht derselbe Volumen-Eintrag in zwei Darstellungen
+//! desselben Raums, zählt er einmal). Volumen-Einträge, die in keiner Darstellung stehen, sind
 //! je ein eigener Körper. Ein Teil, das eine Baugruppe zweimal benutzt, ergibt zwei Körper.
 //!
 //! **Lagen (P3):** Die Baugruppe ist ein Graph aus Darstellungen. Kanten (Eltern → Kind, mit der
 //! Transformation von Kind- in Elternkoordinaten):
-//! - `CONTEXT_DEPENDENT_SHAPE_REPRESENTATION`: Die Beziehung (`rep_1`, `rep_2`) ist nach ISO
-//!   `rep_1` = Kind; die Richtung wird aber über das zugehörige `NEXT_ASSEMBLY_USAGE_OCCURRENCE`
-//!   bestimmt (Elternteil = `relating_product_definition`): Gehört `rep_1` zum Kind, gilt sie
-//!   so, gehört `rep_2` zum Kind, ist sie vertauscht, sonst „Richtung unklar“.
-//!   `ITEM_DEFINED_TRANSFORMATION(it1, it2)`: `it1` gehört zu `rep_1`, `it2` zu `rep_2`;
-//!   `T = A(Eltern-Lage) · A(Kind-Lage)⁻¹`. Ein `CARTESIAN_TRANSFORMATION_OPERATOR_3D` bildet
-//!   `rep_1` auf `rep_2` ab (vertauscht: sein Kehrwert). Ohne Transformation: Einheitslage.
+//! - `CONTEXT_DEPENDENT_SHAPE_REPRESENTATION` (je CDSR ein Vorkommen, auch wenn zwei dieselbe
+//!   Beziehung nennen): Die Beziehung (`rep_1`, `rep_2`) ist nach ISO `rep_1` = Kind; die
+//!   Richtung wird aber über das zugehörige `NEXT_ASSEMBLY_USAGE_OCCURRENCE` bestimmt
+//!   (Elternteil = `relating_product_definition`): Gehört genau eine der beiden Darstellungen zum
+//!   Kind, entscheidet das, sonst genau eine zum Elternteil, sonst „Richtung unklar“.
+//!   `ITEM_DEFINED_TRANSFORMATION(it1, it2)`: `it1` gehört zu `rep_1`, `it2` zu `rep_2` (ISO
+//!   10303-43); stehen die Lagen in den `items` der Darstellungen gekreuzt, werden sie getauscht,
+//!   widersprechen sie beiden Zuordnungen: „Richtung unklar“. `T = A(Eltern-Lage) ·
+//!   A(Kind-Lage)⁻¹`. Ein `CARTESIAN_TRANSFORMATION_OPERATOR_3D` bildet `rep_1` auf `rep_2` ab
+//!   (vertauscht: sein Kehrwert). Ohne Transformation: Einheitslage – außer eine `MAPPED_ITEM`
+//!   verbindet dieselben Gruppen schon (sie trägt dann die Lage, das Vorkommen ohne
+//!   Transformation entfällt, sonst gäbe es einen zweiten Körper am Ursprung).
 //! - `MAPPED_ITEM` in einer Darstellung: Eltern = diese Darstellung, Kind = die abgebildete;
 //!   `T = A(mapping_target) · A(mapping_origin)⁻¹`.
-//! - Beziehung ohne `CONTEXT_DEPENDENT_SHAPE_REPRESENTATION` und ohne Transformation (etwa
-//!   `SHAPE_REPRESENTATION` ↔ `ADVANCED_BREP_SHAPE_REPRESENTATION` eines Teils): beide
-//!   Darstellungen liegen im selben Raum (eine Gruppe).
+//! - Beziehung ohne CDSR und ohne Transformation (etwa `SHAPE_REPRESENTATION` ↔
+//!   `ADVANCED_BREP_SHAPE_REPRESENTATION` eines Teils): beide Darstellungen liegen im selben
+//!   Raum (eine Gruppe). Ebenso eine nicht platzierte Darstellung derselben Produktdefinition wie
+//!   eine platzierte (zwei `SHAPE_DEFINITION_REPRESENTATION` eines Teils).
 //! - Beziehung mit Transformation, aber ohne Vorkommen: Eltern ist die Darstellung, die als
 //!   einzige zu einem Produkt gehört, sonst `rep_2` (ISO).
 //!
 //! Jede Lage wird in den Einheiten der Darstellung gelesen, zu der sie gehört (`units_of`), und
 //! ist danach eine Bewegung in mm. Verschachtelte Lagen werden bis zur Wurzel multipliziert
-//! (`M = T_Wurzel · … · T_Kind`). Spiegelung (negative Determinante), Skalierung (Maßstab ≠ 1
-//! oder schiefe Achsen), unbekannte Arten von Lagen und unklare Richtungen ergeben eine Meldung
-//! ([`placement_note`]); der Körper und alles darunter liegt dann am Ursprung. Darstellungen in
-//! einem Kreis (und alles, was nur über einen Kreis erreichbar ist) erscheinen je einmal mit
-//! „Verweise im Kreis“; tiefer als [`MAX_ASSEMBLY_DEPTH`] Ebenen: „zu tief verschachtelt“.
-//! Verweise, die fehlen oder nicht zu einer Darstellung führen, lehnen die ganze Datei ab (sonst
-//! läge ein Teil still an der falschen Stelle).
+//! (`M = T_Wurzel · … · T_Kind`). Spiegelung (negative Determinante), Skalierung (Maßstab ≠ 1,
+//! auch nicht gleichmäßig, oder schiefe bzw. entartete Achsen), unbekannte Arten von Lagen und
+//! unklare Richtungen ergeben eine Meldung ([`placement_note`]); der Körper und alles darunter
+//! liegt dann am Ursprung. Darstellungen in einem Kreis (und alles, was nur über einen Kreis
+//! erreichbar ist) erscheinen je einmal mit „Verweise im Kreis“; tiefer als
+//! [`MAX_ASSEMBLY_DEPTH`] Ebenen: „zu tief verschachtelt“.
+//!
+//! **Kaputte Einträge** treffen nur, was sie betreffen: Darstellungen werden nur gelesen, wenn
+//! sie Volumen-Einträge oder `MAPPED_ITEM`s enthalten oder Endpunkt einer Beziehung sind;
+//! Einträge werden ohne Verweisprüfung zerlegt ([`StepFile::entity_unchecked`]), damit ein
+//! fehlender Verweis nur seinen Endpunkt kostet. Ein unlesbares Vorkommen (PDS/NAUO) hinter einer
+//! lesbaren Beziehung → „Richtung unklar – …“. Abgelehnt wird die ganze Datei nur, wenn ein
+//! Körper sonst still an falscher Stelle läge: eine Beziehung, deren einer Endpunkt fehlt oder
+//! keine Darstellung ist, während unter dem anderen Körper hängen; ein CDSR ohne lesbare
+//! Beziehung, dessen Kind Körper hat; eine unlesbare `MAPPED_ITEM`/`REPRESENTATION_MAP`. Eine
+//! unlesbare Darstellung könnte freie Volumen-Einträge enthalten haben: Diese bekommen dann die
+//! Meldung mit dem Grund.
 //!
 //! **Reihenfolge:** Tiefensuche ab den Wurzeln (Gruppen ohne eingehende Kante) in
 //! Dateireihenfolge, Kinder in der Reihenfolge ihrer Einträge; dann nicht erreichte
 //! Darstellungen; dann freie Volumen-Einträge. Teilbäume ohne Körper werden nicht betreten
 //! (vorab gezählt), so bleibt die Suche auch bei vielen leeren Verzweigungen linear.
 //!
-//! **Namen (P10):** Produktname, sonst Name der Darstellung, sonst Name des ersten
-//! Volumen-Eintrags; Steuerzeichen → Leerzeichen, getrimmt, höchstens
+//! **Namen (P10):** Produktname (`PRODUCT.name`, nicht die Kennung), sonst Name der Darstellung,
+//! sonst Name des ersten Volumen-Eintrags; Steuerzeichen → Leerzeichen, getrimmt, höchstens
 //! [`MAX_BODY_NAME_CHARS`] Zeichen; Doppelte „Name (2)“, „Name (3)“ … (auch dann höchstens 64
 //! Zeichen); leere Namen bleiben leer (die App vergibt „STEP-Körper n“).
 
@@ -48,7 +65,7 @@ use crate::read::index::StepFile;
 use crate::read::units::Units;
 use crate::read::value::{Entity, Value};
 use planora_math::{DMat4, DVec3, Frame};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Höchstens so viele Ebenen von Vorkommen liegen zwischen Wurzel und Körper.
 pub const MAX_ASSEMBLY_DEPTH: usize = 32;
@@ -74,6 +91,41 @@ pub fn placement_note(name: &str, reason: &str) -> String {
     format!(
         "Die Lage von „{name}“ ließ sich nicht bestimmen ({reason}); der Körper liegt am Ursprung."
     )
+}
+
+/// Arten von Körpern, die (noch) nicht übernommen werden: Typ, Einzahl, Mehrzahl.
+const UNSUPPORTED: &[(&str, &str, &str)] = &[
+    ("FACETED_BREP", "Facettenkörper", "Facettenkörper"),
+    (
+        "SHELL_BASED_SURFACE_MODEL",
+        "Flächenmodell",
+        "Flächenmodelle",
+    ),
+    (
+        "FACE_BASED_SURFACE_MODEL",
+        "Flächenmodell",
+        "Flächenmodelle",
+    ),
+    ("SHELL_BASED_WIREFRAME_MODEL", "Drahtmodell", "Drahtmodelle"),
+    ("EDGE_BASED_WIREFRAME_MODEL", "Drahtmodell", "Drahtmodelle"),
+];
+
+/// Je Art von Körper, die die Datei enthält, aber nicht übernommen wird, eine Meldung
+/// (Reihenfolge wie [`UNSUPPORTED`]).
+pub fn unsupported_kinds(file: &StepFile) -> Vec<String> {
+    UNSUPPORTED
+        .iter()
+        .filter_map(|(ty, one, many)| {
+            let n = file.ids_of(ty).len();
+            (n > 0).then(|| {
+                format!(
+                    "Die Datei enthält {n} {} ({ty}); diese Art wird noch nicht unterstützt und \
+                     ausgelassen.",
+                    if n == 1 { one } else { many }
+                )
+            })
+        })
+        .collect()
 }
 
 /// Gründe (wörtlich, Plan Aufgabe 8).
@@ -105,11 +157,15 @@ const USAGE_TYPES: &[&str] = &[
     "PRODUCT_DEFINITION_USAGE",
     "PRODUCT_DEFINITION_RELATIONSHIP",
 ];
+const CTO_3D: &str = "CARTESIAN_TRANSFORMATION_OPERATOR_3D";
+const CTO_NON_UNIFORM: &str = "CARTESIAN_TRANSFORMATION_OPERATOR_3D_NON_UNIFORM";
 
 /// Abstand, ab dem gegebene Achsen eines Operators als schief gelten (Kosinus).
 const OBLIQUE_TOL: f64 = 1e-6;
-/// Abstand, ab dem ein Maßstab nicht 1 ist.
-const SCALE_TOL: f64 = 1e-9;
+/// Kürzer als das ist eine projizierte Achse entartet.
+const DEGENERATE: f64 = 1e-9;
+/// Abstand von 1, ab dem ein Maßstab eine Skalierung ist (darunter wird genau 1 genommen).
+const SCALE_TOL: f64 = 1e-6;
 
 /// Ergebnis einer Lage: Bewegung in mm oder Grund.
 type Placed = Result<DMat4, String>;
@@ -118,8 +174,18 @@ type Placed = Result<DMat4, String>;
 struct Rep {
     id: u64,
     name: String,
+    items: Vec<u64>,
     solids: Vec<u64>,
     context: Option<u64>,
+}
+
+/// Woher eine Kante kommt (für das Verwerfen doppelter Vorkommen).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// CDSR ohne Transformation.
+    PlainOccurrence,
+    Mapped,
+    Other,
 }
 
 /// Eine Kante zwischen Darstellungen (vor dem Zusammenfassen zu Gruppen).
@@ -128,6 +194,7 @@ struct RawEdge {
     child: u64,
     /// Ordnung unter Geschwistern: Zeile und Nummer des bestimmenden Eintrags.
     key: (usize, u64),
+    kind: Kind,
     transform: Placed,
 }
 
@@ -141,9 +208,13 @@ struct Edge {
 /// Ein Vorkommen eines Körpers vor der Namensvergabe.
 struct Hit {
     rep: Option<usize>,
-    solid: Option<u64>,
+    items: Vec<u64>,
     placement: Placed,
 }
+
+/// Vorkommen hinter einem CDSR: Eltern- und Kind-Produktdefinition, kein Vorkommen (`None`) oder
+/// Grund, weshalb es sich nicht lesen ließ.
+type Usage = Result<Option<(u64, u64)>, String>;
 
 /// Alle Körper (Vorkommen) der Datei; `units_of(context)` liefert die (ggf. umgestellten)
 /// Einheiten je Kontext.
@@ -175,14 +246,20 @@ struct Finder<'a> {
     rep_index: HashMap<u64, usize>,
     /// Darstellung → Produktdefinition (erste `SHAPE_DEFINITION_REPRESENTATION`).
     rep_pd: HashMap<u64, u64>,
-    /// Produktdefinition → ihre Darstellungen.
-    pd_reps: HashMap<u64, Vec<u64>>,
+    /// Produktdefinition → ihre Darstellungen (geordnet, damit alles bestimmt bleibt).
+    pd_reps: BTreeMap<u64, Vec<u64>>,
     /// Gleiche Räume (Beziehungen ohne Transformation und ohne Vorkommen).
     links: Vec<(u64, u64)>,
     edges: Vec<RawEdge>,
     /// Noch zu lesende `MAPPED_ITEM`s: (Darstellung, Eintrag).
     pending: Vec<(u64, u64)>,
     units: HashMap<Option<u64>, Result<Units, String>>,
+    /// Erster Grund, weshalb sich eine Darstellung nicht lesen ließ (sie könnte freie
+    /// Volumen-Einträge enthalten haben).
+    broken_rep: Option<String>,
+    /// Darstellungen, an denen eine Beziehung mit unlesbarem anderem Ende hängt: Hängen unter
+    /// ihnen Körper, wird die Datei mit dem Fehler abgelehnt.
+    doubtful: Vec<(u64, StepReadError)>,
 }
 
 impl<'a> Finder<'a> {
@@ -199,11 +276,13 @@ impl<'a> Finder<'a> {
             reps: Vec::new(),
             rep_index: HashMap::new(),
             rep_pd: HashMap::new(),
-            pd_reps: HashMap::new(),
+            pd_reps: BTreeMap::new(),
             links: Vec::new(),
             edges: Vec::new(),
             pending: Vec::new(),
             units: HashMap::new(),
+            broken_rep: None,
+            doubtful: Vec::new(),
         }
     }
 
@@ -216,16 +295,18 @@ impl<'a> Finder<'a> {
         (self.line(id), id)
     }
 
-    fn refer(&self, id: u64, v: &Value) -> Result<u64, StepReadError> {
-        v.reference().map_err(|m| self.file.fail(id, m))
+    /// Fehler, mit dem die Datei abgelehnt wird, weil `#id` nicht lesbar ist: der Fehler der
+    /// Verweisprüfung (etwa `MissingRef`) oder `fallback`.
+    fn refusal(&self, id: u64, fallback: &str) -> StepReadError {
+        match self.file.entity(id) {
+            Err(e) => e,
+            Ok(_) => self.file.fail(id, fallback),
+        }
     }
 
-    /// Lädt die Darstellung `#id` (einmal) samt ihrer `MAPPED_ITEM`s; liefert ihren Index.
-    fn load_rep(&mut self, id: u64) -> Result<usize, StepReadError> {
-        if let Some(&i) = self.rep_index.get(&id) {
-            return Ok(i);
-        }
-        let e = self.file.entity(id)?;
+    /// Liest die Darstellung `#id` (ohne Verweisprüfung): Name, Einträge, Kontext.
+    fn read_rep(&self, id: u64) -> Result<Rep, StepReadError> {
+        let e = self.file.entity_unchecked(id)?;
         let Some(args) = rep_args(&e) else {
             return Err(self.file.fail(id, "Erwartet wird eine Darstellung."));
         };
@@ -240,59 +321,76 @@ impl<'a> Finder<'a> {
             .copied()
             .filter(|i| self.solid_set.contains(i))
             .collect();
-        let index = self.reps.len();
-        self.reps.push(Rep {
+        Ok(Rep {
             id,
             name,
+            items,
             solids,
             context,
-        });
-        self.rep_index.insert(id, index);
-        // `MAPPED_ITEM`s erst später (ohne Rekursion über Ketten von Abbildungen).
-        let mapped = self.file.ids_of("MAPPED_ITEM");
-        self.pending.extend(
-            items
-                .into_iter()
-                .filter(|item| mapped.binary_search(item).is_ok())
-                .map(|item| (id, item)),
-        );
-        Ok(index)
+        })
     }
 
-    /// Lädt die Darstellung `#id` und alle über `MAPPED_ITEM` von ihr erreichten.
-    fn load_rep_all(&mut self, id: u64) -> Result<usize, StepReadError> {
-        let index = self.load_rep(id)?;
+    /// Nimmt eine gelesene Darstellung auf (einmal) und merkt ihre `MAPPED_ITEM`s vor.
+    fn register(&mut self, rep: Rep) -> usize {
+        if let Some(&i) = self.rep_index.get(&rep.id) {
+            return i;
+        }
+        let mapped = self.file.ids_of("MAPPED_ITEM");
+        self.pending.extend(
+            rep.items
+                .iter()
+                .filter(|item| mapped.binary_search(item).is_ok())
+                .map(|&item| (rep.id, item)),
+        );
+        let index = self.reps.len();
+        self.rep_index.insert(rep.id, index);
+        self.reps.push(rep);
+        index
+    }
+
+    /// Lädt die Darstellung `#id` (einmal); `Err`, wenn es sie nicht gibt oder sie keine ist.
+    fn load_rep(&mut self, id: u64) -> Result<usize, StepReadError> {
+        if let Some(&i) = self.rep_index.get(&id) {
+            return Ok(i);
+        }
+        let rep = self.read_rep(id)?;
+        Ok(self.register(rep))
+    }
+
+    /// Liest alle vorgemerkten `MAPPED_ITEM`s (ohne Rekursion über Ketten von Abbildungen).
+    fn drain_mapped(&mut self) -> Result<(), StepReadError> {
         while let Some((parent, item)) = self.pending.pop() {
             self.mapped_item(parent, item)?;
         }
-        Ok(index)
+        Ok(())
     }
 
     /// `MAPPED_ITEM(name, REPRESENTATION_MAP(origin, rep), target)` in der Darstellung `parent`.
+    /// Unlesbare Abbildung → ganze Datei abgelehnt (welcher Körper an ihr hängt, ist unbekannt);
+    /// fehlt die abgebildete Darstellung, hängt nichts an ihr.
     fn mapped_item(&mut self, parent: u64, item: u64) -> Result<(), StepReadError> {
-        let e = self.file.entity(item)?;
-        let source = self.refer(
-            item,
-            e.arg("MAPPED_ITEM", 1)
-                .map_err(|m| self.file.fail(item, m))?,
-        )?;
-        let target = self.refer(
-            item,
-            e.arg("MAPPED_ITEM", 2)
-                .map_err(|m| self.file.fail(item, m))?,
-        )?;
-        let map = self.file.entity(source)?;
-        let origin = self.refer(
-            source,
-            map.arg("REPRESENTATION_MAP", 0)
-                .map_err(|m| self.file.fail(source, m))?,
-        )?;
-        let child = self.refer(
-            source,
-            map.arg("REPRESENTATION_MAP", 1)
-                .map_err(|m| self.file.fail(source, m))?,
-        )?;
-        let ci = self.load_rep(child)?;
+        const MI: &str = "MAPPED_ITEM";
+        const RM: &str = "REPRESENTATION_MAP";
+        let refs =
+            |e: &Entity, t: &str, i: usize| e.arg(t, i).ok().and_then(|v| v.reference().ok());
+        let e = self.file.entity_unchecked(item)?;
+        let (Some(source), Some(target)) = (refs(&e, MI, 1), refs(&e, MI, 2)) else {
+            return Err(self.refusal(item, "Die Abbildung lässt sich nicht lesen."));
+        };
+        let map = self
+            .file
+            .entity_unchecked(source)
+            .map_err(|_| self.refusal(item, "Die Abbildung lässt sich nicht lesen."))?;
+        let (Some(origin), Some(child)) = (refs(&map, RM, 0), refs(&map, RM, 1)) else {
+            return Err(self.refusal(source, "Die Abbildung lässt sich nicht lesen."));
+        };
+        if self.file.line(child).is_none() {
+            return Ok(());
+        }
+        let Ok(ci) = self.load_rep(child) else {
+            // Keine Darstellung: Sie trägt keine bekannten Körper.
+            return Ok(());
+        };
         let pi = self.rep_index[&parent];
         let (pctx, cctx) = (self.reps[pi].context, self.reps[ci].context);
         let transform = match (
@@ -307,6 +405,7 @@ impl<'a> Finder<'a> {
             parent,
             child,
             key,
+            kind: Kind::Mapped,
             transform,
         });
         Ok(())
@@ -322,8 +421,8 @@ impl<'a> Finder<'a> {
         u
     }
 
-    /// Lage `#id` (`AXIS2_PLACEMENT_3D` oder `CARTESIAN_TRANSFORMATION_OPERATOR_3D`) in den
-    /// Einheiten von `context`, als Bewegung in mm.
+    /// Lage `#id` (`AXIS2_PLACEMENT_3D` oder ein Operator) in den Einheiten von `context`, als
+    /// Bewegung in mm.
     fn item_matrix(&mut self, id: u64, context: Option<u64>) -> Placed {
         let units = self.units(context)?;
         let e = self.file.entity(id).map_err(|e| reason(&e.to_string()))?;
@@ -332,13 +431,13 @@ impl<'a> Finder<'a> {
             let f = res.placement(id).map_err(|Skip(m)| reason(&m))?;
             return Ok(frame_matrix(&f));
         }
-        if e.is("CARTESIAN_TRANSFORMATION_OPERATOR_3D") {
+        if is_operator(&e) {
             return operator_matrix(self.file, &mut res, id, &e);
         }
         Err(format!("unbekannte Art {}", type_name(&e)))
     }
 
-    /// Liest alle Darstellungen, Produkte, Vorkommen und Beziehungen.
+    /// Liest Darstellungen mit Körpern oder Abbildungen, Produkte, Vorkommen und Beziehungen.
     fn collect(&mut self) -> Result<(), StepReadError> {
         let mut rep_ids: Vec<u64> = REP_TYPES
             .iter()
@@ -346,21 +445,47 @@ impl<'a> Finder<'a> {
             .collect();
         rep_ids.sort_unstable();
         rep_ids.dedup();
+        let mapped = self.file.ids_of("MAPPED_ITEM");
         for id in rep_ids {
-            self.load_rep_all(id)?;
+            match self.read_rep(id) {
+                Ok(rep) => {
+                    let relevant = !rep.solids.is_empty()
+                        || rep.items.iter().any(|i| mapped.binary_search(i).is_ok());
+                    if relevant {
+                        self.register(rep);
+                    }
+                }
+                Err(e) => {
+                    if self.broken_rep.is_none() {
+                        self.broken_rep = Some(reason(&e.to_string()));
+                    }
+                }
+            }
         }
+        self.drain_mapped()?;
         self.products();
-        // Vorkommen: Beziehung → (CDSR, Eltern-PD, Kind-PD).
-        let mut occurrence: HashMap<u64, (u64, Option<(u64, u64)>)> = HashMap::new();
+        // Vorkommen: Beziehung → [(CDSR, Vorkommen)].
+        let mut occurrences: HashMap<u64, Vec<(u64, Usage)>> = HashMap::new();
         let mut rels: Vec<u64> = Vec::new();
         for &cdsr in self.file.ids_of("CONTEXT_DEPENDENT_SHAPE_REPRESENTATION") {
-            let e = self.file.entity(cdsr)?;
             const C: &str = "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION";
-            let rr = self.refer(cdsr, e.arg(C, 0).map_err(|m| self.file.fail(cdsr, m))?)?;
-            let pds = self.refer(cdsr, e.arg(C, 1).map_err(|m| self.file.fail(cdsr, m))?)?;
-            let usage = self.usage_of(pds)?;
-            occurrence.entry(rr).or_insert((cdsr, usage));
-            rels.push(rr);
+            let e = self.file.entity_unchecked(cdsr)?;
+            let (Ok(Value::Ref(rr)), Ok(Value::Ref(pds))) = (e.arg(C, 0), e.arg(C, 1)) else {
+                return Err(self.refusal(cdsr, "Das Vorkommen lässt sich nicht lesen."));
+            };
+            let usage = self.usage_of(*pds);
+            if self.relation_ends(*rr).is_none() {
+                // Ohne lesbare Beziehung: Hat das Kind Körper, läge es still am Ursprung.
+                if let Ok(Some((_, child))) = usage {
+                    let err = self.refusal(cdsr, "Die Beziehung des Vorkommens fehlt.");
+                    for rep in self.pd_reps.get(&child).cloned().unwrap_or_default() {
+                        self.doubtful.push((rep, err.clone()));
+                    }
+                }
+                continue;
+            }
+            occurrences.entry(*rr).or_default().push((cdsr, usage));
+            rels.push(*rr);
         }
         rels.extend(
             RELATIONSHIP_TYPES
@@ -370,8 +495,9 @@ impl<'a> Finder<'a> {
         rels.sort_unstable();
         rels.dedup();
         for rr in rels {
-            let occ = occurrence.get(&rr).copied();
+            let occ = occurrences.remove(&rr).unwrap_or_default();
             self.relationship(rr, occ)?;
+            self.drain_mapped()?;
         }
         Ok(())
     }
@@ -405,19 +531,21 @@ impl<'a> Finder<'a> {
         args.get(2)?.reference().ok()
     }
 
-    /// Eltern- und Kind-Produktdefinition des Vorkommens hinter `pds`; `None`, wenn die
-    /// Definition kein Vorkommen ist.
-    fn usage_of(&self, pds: u64) -> Result<Option<(u64, u64)>, StepReadError> {
-        let e = self.file.entity(pds)?;
+    /// Eltern- und Kind-Produktdefinition des Vorkommens hinter `pds`; `Ok(None)`, wenn die
+    /// Definition kein Vorkommen ist; `Err(Grund)`, wenn sie sich nicht lesen lässt.
+    fn usage_of(&self, pds: u64) -> Usage {
+        let e = self.file.entity(pds).map_err(|e| reason(&e.to_string()))?;
         let Some(def) = e
             .part("PRODUCT_DEFINITION_SHAPE")
             .or_else(|| e.part("PROPERTY_DEFINITION"))
             .and_then(|a| a.get(2))
             .and_then(|v| v.reference().ok())
         else {
-            return Ok(None);
+            return Err(reason(
+                &self.file.fail(pds, "Die Definition fehlt.").to_string(),
+            ));
         };
-        let u = self.file.entity(def)?;
+        let u = self.file.entity(def).map_err(|e| reason(&e.to_string()))?;
         for t in USAGE_TYPES {
             if let Some(args) = u.part(t)
                 && let (Some(Value::Ref(parent)), Some(Value::Ref(child))) =
@@ -429,81 +557,113 @@ impl<'a> Finder<'a> {
         Ok(None)
     }
 
-    /// Eine Beziehung zwischen Darstellungen; `occ`: ihr Vorkommen (CDSR) mit Eltern- und
-    /// Kind-Produktdefinition.
-    fn relationship(
-        &mut self,
-        rr: u64,
-        occ: Option<(u64, Option<(u64, u64)>)>,
-    ) -> Result<(), StepReadError> {
-        let e = self.file.entity(rr)?;
-        let Some(args) = e
+    /// `rep_1`, `rep_2` und Transformation (falls genannt) der Beziehung `#rr`, ohne
+    /// Verweisprüfung; `None`, wenn sich das nicht lesen lässt.
+    fn relation_ends(&self, rr: u64) -> Option<(u64, u64, Option<u64>)> {
+        let e = self.file.entity_unchecked(rr).ok()?;
+        let args = e
             .part("REPRESENTATION_RELATIONSHIP")
             .filter(|a| a.len() >= 4)
             .or_else(|| match &e {
                 Entity::Simple(r) if r.args.len() >= 4 => Some(&r.args[..]),
                 _ => None,
-            })
-        else {
-            return Err(self
-                .file
-                .fail(rr, "Erwartet wird eine Beziehung zweier Darstellungen."));
-        };
-        let rep_1 = self.refer(rr, &args[2])?;
-        let rep_2 = self.refer(rr, &args[3])?;
+            })?;
+        let rep_1 = args[2].reference().ok()?;
+        let rep_2 = args[3].reference().ok()?;
         let op = match e.part("REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION") {
-            Some(a) if a.len() == 1 => Some(self.refer(rr, &a[0])?),
-            Some(a) if a.len() >= 5 => Some(self.refer(rr, &a[4])?),
-            Some(_) => return Err(self.file.fail(rr, "Die Transformation fehlt.")),
+            Some(a) if a.len() == 1 => Some(a[0].reference().ok()?),
+            Some(a) if a.len() >= 5 => Some(a[4].reference().ok()?),
+            Some(_) => return None,
             None => None,
         };
-        self.load_rep_all(rep_1)?;
-        self.load_rep_all(rep_2)?;
-        let (swapped, key) = match occ {
-            Some((cdsr, usage)) => {
-                let swapped = match usage {
-                    Some((ppd, cpd)) => self.direction(rep_1, rep_2, ppd, cpd),
-                    None => None,
-                };
-                let key = self.key(cdsr);
-                let Some(swapped) = swapped else {
-                    self.edges.push(RawEdge {
-                        parent: rep_2,
-                        child: rep_1,
-                        key,
-                        transform: Err(UNCLEAR.into()),
-                    });
-                    return Ok(());
-                };
-                (swapped, key)
-            }
-            None => {
-                if op.is_none() {
-                    self.links.push((rep_1, rep_2));
-                    return Ok(());
-                }
-                // Ohne Vorkommen: Eltern ist die Darstellung, die als einzige zu einem Produkt
-                // gehört, sonst `rep_2` (ISO).
-                let swapped = self.rep_pd.contains_key(&rep_1) && !self.rep_pd.contains_key(&rep_2);
-                (swapped, self.key(rr))
-            }
+        Some((rep_1, rep_2, op))
+    }
+
+    /// Eine Beziehung zwischen Darstellungen mit ihren Vorkommen (CDSR) `occ`.
+    fn relationship(&mut self, rr: u64, occ: Vec<(u64, Usage)>) -> Result<(), StepReadError> {
+        let Some((rep_1, rep_2, op)) = self.relation_ends(rr) else {
+            // Beide Endpunkte unbekannt: Sie betrifft keinen bekannten Körper … außer sie gehört
+            // zu einem Vorkommen (dann wäre sie oben schon aufgefallen).
+            return Ok(());
         };
+        let end_1 = self.load_rep(rep_1);
+        let end_2 = self.load_rep(rep_2);
+        match (&end_1, &end_2) {
+            (Ok(_), Ok(_)) => {}
+            (Ok(_), Err(e)) | (Err(e), Ok(_)) => {
+                // Ein Ende fehlt: Hängen unter dem anderen Körper, läge einer still falsch.
+                let ok = if end_1.is_ok() { rep_1 } else { rep_2 };
+                let err = match self.file.entity(rr) {
+                    Err(re) => re,
+                    Ok(_) => e.clone(),
+                };
+                self.doubtful.push((ok, err));
+                return Ok(());
+            }
+            (Err(_), Err(_)) => return Ok(()),
+        }
+        if occ.is_empty() {
+            let Some(op) = op else {
+                self.links.push((rep_1, rep_2));
+                return Ok(());
+            };
+            // Ohne Vorkommen: Eltern ist die Darstellung, die als einzige zu einem Produkt
+            // gehört, sonst `rep_2` (ISO).
+            let swapped = self.rep_pd.contains_key(&rep_1) && !self.rep_pd.contains_key(&rep_2);
+            let transform = self.relation_transform(op, rep_1, rep_2, swapped);
+            self.push_edge(rep_1, rep_2, swapped, self.key(rr), Kind::Other, transform);
+            return Ok(());
+        }
+        for (cdsr, usage) in occ {
+            let key = self.key(cdsr);
+            let swapped = match usage {
+                Ok(Some((ppd, cpd))) => {
+                    self.direction(rep_1, rep_2, ppd, cpd).ok_or(UNCLEAR.into())
+                }
+                Ok(None) => Err(UNCLEAR.into()),
+                Err(why) => Err(format!("{UNCLEAR} – {why}")),
+            };
+            let swapped = match swapped {
+                Ok(s) => s,
+                Err(why) => {
+                    self.push_edge(rep_1, rep_2, false, key, Kind::Other, Err(why));
+                    continue;
+                }
+            };
+            let (kind, transform) = match op {
+                None => (Kind::PlainOccurrence, Ok(DMat4::IDENTITY)),
+                Some(op) => (
+                    Kind::Other,
+                    self.relation_transform(op, rep_1, rep_2, swapped),
+                ),
+            };
+            self.push_edge(rep_1, rep_2, swapped, key, kind, transform);
+        }
+        Ok(())
+    }
+
+    /// Kante der Beziehung (`rep_1`, `rep_2`); `swapped`: `rep_1` ist das Elternteil.
+    fn push_edge(
+        &mut self,
+        rep_1: u64,
+        rep_2: u64,
+        swapped: bool,
+        key: (usize, u64),
+        kind: Kind,
+        transform: Placed,
+    ) {
         let (parent, child) = if swapped {
             (rep_1, rep_2)
         } else {
             (rep_2, rep_1)
         };
-        let transform = match op {
-            None => Ok(DMat4::IDENTITY),
-            Some(op) => self.relation_transform(op, rep_1, rep_2, swapped),
-        };
         self.edges.push(RawEdge {
             parent,
             child,
             key,
+            kind,
             transform,
         });
-        Ok(())
     }
 
     /// Richtung einer Beziehung über das Vorkommen: `Some(false)`: `rep_1` ist das Kind,
@@ -528,8 +688,9 @@ impl<'a> Finder<'a> {
     /// Transformation von Kind- in Elternkoordinaten aus dem Operator `op` der Beziehung
     /// (`rep_1`, `rep_2`); `swapped`: `rep_1` ist das Elternteil.
     fn relation_transform(&mut self, op: u64, rep_1: u64, rep_2: u64, swapped: bool) -> Placed {
-        let ctx_1 = self.reps[self.rep_index[&rep_1]].context;
-        let ctx_2 = self.reps[self.rep_index[&rep_2]].context;
+        let r1 = self.rep_index[&rep_1];
+        let r2 = self.rep_index[&rep_2];
+        let (ctx_1, ctx_2) = (self.reps[r1].context, self.reps[r2].context);
         let e = self.file.entity(op).map_err(|e| reason(&e.to_string()))?;
         if let Some(args) = e.part("ITEM_DEFINED_TRANSFORMATION") {
             let (Some(Value::Ref(it_1)), Some(Value::Ref(it_2))) = (args.get(2), args.get(3))
@@ -541,13 +702,20 @@ impl<'a> Finder<'a> {
                         .to_string(),
                 ));
             };
-            // `it_1` gehört zu `rep_1`, `it_2` zu `rep_2`.
-            let a_1 = self.item_matrix(*it_1, ctx_1)?;
-            let a_2 = self.item_matrix(*it_2, ctx_2)?;
+            // ISO: `it_1` gehört zu `rep_1`, `it_2` zu `rep_2`; die `items` der Darstellungen
+            // entscheiden, wenn sie es anders sagen.
+            let (it_1, it_2) =
+                match item_order(*it_1, *it_2, &self.reps[r1].items, &self.reps[r2].items) {
+                    Some(true) => (*it_1, *it_2),
+                    Some(false) => (*it_2, *it_1),
+                    None => return Err(UNCLEAR.into()),
+                };
+            let a_1 = self.item_matrix(it_1, ctx_1)?;
+            let a_2 = self.item_matrix(it_2, ctx_2)?;
             let (parent, child) = if swapped { (a_1, a_2) } else { (a_2, a_1) };
             return Ok(parent * rigid_inverse(child));
         }
-        if e.is("CARTESIAN_TRANSFORMATION_OPERATOR_3D") {
+        if is_operator(&e) {
             // Bildet `rep_1` auf `rep_2` ab; der Ursprung steht in den Einheiten von `rep_2`.
             let m = self.item_matrix(op, ctx_2)?;
             return Ok(if swapped { rigid_inverse(m) } else { m });
@@ -576,7 +744,7 @@ impl<'a> Finder<'a> {
     /// Rohname eines Körpers aus der Darstellung `rep` (Gruppe `group`): Produkt der
     /// Darstellung, sonst Produkt der Gruppe, sonst Name der Darstellung, sonst des ersten
     /// Volumen-Eintrags.
-    fn raw_name(&self, rep: usize, group_members: &[usize]) -> String {
+    fn raw_name(&self, rep: usize, group_members: &[usize], items: &[u64]) -> String {
         let r = &self.reps[rep];
         // Der Reihe nach, erst bei Bedarf gelesen (eine Gruppe kann viele Darstellungen haben).
         let products = std::iter::once(r.id)
@@ -584,7 +752,7 @@ impl<'a> Finder<'a> {
             .filter(|id| self.rep_pd.contains_key(id))
             .filter_map(|id| self.product_name(id));
         let rest = std::iter::once_with(|| r.name.clone())
-            .chain(r.solids.first().map(|&s| self.solid_name(s)));
+            .chain(items.first().map(|&s| self.solid_name(s)));
         products
             .chain(rest)
             .map(|n| clean_name(&n))
@@ -607,6 +775,41 @@ impl<'a> Finder<'a> {
             .unwrap_or_default()
     }
 
+    /// Legt jede nicht platzierte Darstellung einer Produktdefinition in die Gruppe der ersten
+    /// platzierten derselben Definition (gleicher Raum des Teils). Platziert = eine Kante von
+    /// außerhalb der Produktdefinition führt hinein.
+    fn join_part_spaces(&self, uf: &mut [usize]) {
+        let mut placed_roots: HashSet<usize> = HashSet::new();
+        for e in &self.edges {
+            let same_pd = matches!(
+                (self.rep_pd.get(&e.parent), self.rep_pd.get(&e.child)),
+                (Some(a), Some(b)) if a == b
+            );
+            if !same_pd {
+                let c = find(uf, self.rep_index[&e.child]);
+                placed_roots.insert(c);
+            }
+        }
+        for reps in self.pd_reps.values() {
+            let mut roots: Vec<usize> = reps
+                .iter()
+                .filter_map(|r| self.rep_index.get(r))
+                .map(|&i| find(uf, i))
+                .collect();
+            roots.dedup();
+            let Some(&placed) = roots.iter().find(|r| placed_roots.contains(r)) else {
+                continue;
+            };
+            for &r in &roots {
+                let (a, b) = (find(uf, r), find(uf, placed));
+                // Die platzierte Wurzel bleibt Wurzel (sonst stimmte `placed_roots` nicht mehr).
+                if a != b && !placed_roots.contains(&r) {
+                    uf[a] = b;
+                }
+            }
+        }
+    }
+
     /// Gruppen, Kreise, Tiefensuche, Namen.
     fn search(&mut self) -> Result<Vec<FoundBody>, StepReadError> {
         let n = self.reps.len();
@@ -621,6 +824,7 @@ impl<'a> Finder<'a> {
                 uf[a.max(b)] = a.min(b);
             }
         }
+        self.join_part_spaces(&mut uf);
         let mut group_of = vec![usize::MAX; n];
         let mut members: Vec<Vec<usize>> = Vec::new();
         let mut order: Vec<usize> = (0..n).collect();
@@ -636,12 +840,45 @@ impl<'a> Finder<'a> {
             members[g].push(i);
         }
         let groups = members.len();
-        // Kanten zwischen Gruppen, Geschwister in Dateireihenfolge.
+        // Körper je Gruppe: jeder Volumen-Eintrag einmal (Darstellungen in Dateireihenfolge).
+        let bodies: Vec<Vec<(usize, Vec<u64>)>> = members
+            .iter()
+            .map(|m| {
+                let mut seen: HashSet<u64> = HashSet::new();
+                m.iter()
+                    .filter_map(|&r| {
+                        let items: Vec<u64> = self.reps[r]
+                            .solids
+                            .iter()
+                            .copied()
+                            .filter(|s| seen.insert(*s))
+                            .collect();
+                        (!items.is_empty()).then_some((r, items))
+                    })
+                    .collect()
+            })
+            .collect();
+        // Kanten zwischen Gruppen; ein Vorkommen ohne Transformation entfällt, wenn eine
+        // Abbildung dieselben Gruppen verbindet.
+        let edges = std::mem::take(&mut self.edges);
+        let pair = |e: &RawEdge| {
+            (
+                group_of[self.rep_index[&e.parent]],
+                group_of[self.rep_index[&e.child]],
+            )
+        };
+        let mapped_pairs: HashSet<(usize, usize)> = edges
+            .iter()
+            .filter(|e| e.kind == Kind::Mapped)
+            .map(pair)
+            .collect();
         let mut children: Vec<Vec<Edge>> = (0..groups).map(|_| Vec::new()).collect();
         let mut incoming = vec![false; groups];
-        for e in std::mem::take(&mut self.edges) {
-            let p = group_of[self.rep_index[&e.parent]];
-            let c = group_of[self.rep_index[&e.child]];
+        for e in edges {
+            let (p, c) = pair(&e);
+            if e.kind == Kind::PlainOccurrence && mapped_pairs.contains(&(p, c)) {
+                continue;
+            }
             incoming[c] = true;
             children[p].push(Edge {
                 child: c,
@@ -657,20 +894,21 @@ impl<'a> Finder<'a> {
             .map(|l| l.iter().map(|e| e.child).collect())
             .collect();
         let cyclic = cyclic_nodes(&succ);
-        let own: Vec<usize> = members
-            .iter()
-            .map(|m| {
-                m.iter()
-                    .filter(|&&r| !self.reps[r].solids.is_empty())
-                    .count()
-            })
-            .collect();
+        let own: Vec<usize> = bodies.iter().map(Vec::len).collect();
         let cap = self.file.limits().max_bodies + 1;
         let count = subtree_counts(&succ, &own, &cyclic, cap);
+        // Beziehungen mit unlesbarem Ende an Darstellungen, unter denen Körper hängen.
+        for (rep, err) in std::mem::take(&mut self.doubtful) {
+            if let Some(&i) = self.rep_index.get(&rep) {
+                let g = group_of[i];
+                if count[g] > 0 || cyclic[g] {
+                    return Err(err);
+                }
+            }
+        }
 
         let mut walk = Walk {
-            members: &members,
-            reps: &self.reps,
+            bodies: &bodies,
             children: &children,
             cyclic: &cyclic,
             count: &count,
@@ -690,18 +928,23 @@ impl<'a> Finder<'a> {
                 walk.emit(g, &Err(CYCLE.into()))?;
             }
         }
-        // Freie Volumen-Einträge.
+        // Freie Volumen-Einträge; ließ sich eine Darstellung nicht lesen, könnten sie in ihr
+        // gestanden haben (dann ist ihre Lage unbekannt).
         let in_rep: HashSet<u64> = self
             .reps
             .iter()
             .flat_map(|r| r.solids.iter().copied())
             .collect();
+        let free: Placed = match &self.broken_rep {
+            Some(why) => Err(why.clone()),
+            None => Ok(DMat4::IDENTITY),
+        };
         for &s in self.solids {
             if !in_rep.contains(&s) {
                 walk.push(Hit {
                     rep: None,
-                    solid: Some(s),
-                    placement: Ok(DMat4::IDENTITY),
+                    items: vec![s],
+                    placement: free.clone(),
                 })?;
             }
         }
@@ -710,18 +953,19 @@ impl<'a> Finder<'a> {
         let mut used: HashSet<String> = HashSet::new();
         let mut out = Vec::with_capacity(hits.len());
         for h in hits {
-            let (raw, items, context) = match (h.rep, h.solid) {
-                (Some(r), _) => {
-                    let g = group_of[r];
-                    let rep = &self.reps[r];
-                    (
-                        self.raw_name(r, &members[g]),
-                        rep.solids.clone(),
-                        rep.context,
-                    )
-                }
-                (None, Some(s)) => (clean_name(&self.solid_name(s)), vec![s], None),
-                (None, None) => continue,
+            let (raw, context) = match h.rep {
+                Some(r) => (
+                    self.raw_name(r, &members[group_of[r]], &h.items),
+                    self.reps[r].context,
+                ),
+                None => (
+                    clean_name(
+                        &h.items
+                            .first()
+                            .map_or_else(String::new, |&s| self.solid_name(s)),
+                    ),
+                    None,
+                ),
             };
             let name = unique_name(raw, &mut used);
             let (placement, placement_note) = match h.placement {
@@ -730,7 +974,7 @@ impl<'a> Finder<'a> {
             };
             out.push(FoundBody {
                 name,
-                items,
+                items: h.items,
                 context,
                 placement,
                 placement_note,
@@ -740,10 +984,31 @@ impl<'a> Finder<'a> {
     }
 }
 
+/// Zuordnung der Lagen einer `ITEM_DEFINED_TRANSFORMATION` zu `rep_1`/`rep_2` über die `items`
+/// der Darstellungen: `Some(true)` wie geschrieben (ISO), `Some(false)` gekreuzt, `None`
+/// widersprüchlich. Eine Lage, die in keiner oder in beiden Darstellungen steht, entscheidet
+/// nichts.
+fn item_order(it_1: u64, it_2: u64, items_1: &[u64], items_2: &[u64]) -> Option<bool> {
+    let side = |it: u64| match (items_1.contains(&it), items_2.contains(&it)) {
+        (true, false) => Some(1),
+        (false, true) => Some(2),
+        _ => None,
+    };
+    let (s1, s2) = (side(it_1), side(it_2));
+    let straight = s1 != Some(2) && s2 != Some(1);
+    let crossed = s1 != Some(1) && s2 != Some(2);
+    if straight {
+        Some(true)
+    } else if crossed {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// Tiefensuche über die Gruppen.
 struct Walk<'w> {
-    members: &'w [Vec<usize>],
-    reps: &'w [Rep],
+    bodies: &'w [Vec<(usize, Vec<u64>)>],
     children: &'w [Vec<Edge>],
     cyclic: &'w [bool],
     count: &'w [usize],
@@ -764,14 +1029,13 @@ impl Walk<'_> {
     /// Körper der Gruppe `g` mit der Lage `m`.
     fn emit(&mut self, g: usize, m: &Placed) -> Result<(), StepReadError> {
         self.reached[g] = true;
-        for &r in &self.members[g] {
-            if !self.reps[r].solids.is_empty() {
-                self.push(Hit {
-                    rep: Some(r),
-                    solid: None,
-                    placement: m.clone(),
-                })?;
-            }
+        let bodies = self.bodies;
+        for (r, items) in &bodies[g] {
+            self.push(Hit {
+                rep: Some(*r),
+                items: items.clone(),
+                placement: m.clone(),
+            })?;
         }
         Ok(())
     }
@@ -985,21 +1249,63 @@ fn rigid_inverse(m: DMat4) -> DMat4 {
     )
 }
 
-/// `CARTESIAN_TRANSFORMATION_OPERATOR_3D(…, axis1, axis2, local_origin, scale, axis3)` (die
-/// letzten fünf Parameter) nach ISO 10303-42 (`base_axis`): `D3` = axis3 (Vorgabe z), `D1` =
-/// axis1 senkrecht zu `D3`, `D2` = axis2 senkrecht zu beiden (Vorgabe `D3 × D1`); Bild
-/// `p ↦ origin + scale · (p.x D1 + p.y D2 + p.z D3)`. Nur Bewegungen werden angenommen:
-/// negative Determinante → Spiegelung; Maßstab ≠ 1 oder gegebene Achsen, die nicht senkrecht
-/// aufeinander stehen → Skalierung.
+/// Ein Operator `CARTESIAN_TRANSFORMATION_OPERATOR_3D` (auch nicht gleichmäßig).
+fn is_operator(e: &Entity) -> bool {
+    e.is(CTO_3D) || e.is(CTO_NON_UNIFORM)
+}
+
+/// Parameter eines Operators: (axis1, axis2, local_origin, scale, axis3, scale2, scale3), die
+/// letzten beiden nur beim nicht gleichmäßigen. Einfach (`…_3D(name, [description,] axis1,
+/// axis2, origin, scale, axis3)`, nicht gleichmäßig mit `scale2, scale3` dahinter) oder
+/// zusammengesetzt (`CARTESIAN_TRANSFORMATION_OPERATOR(axis1, axis2, origin, scale)
+/// …_3D(axis3) [ …_NON_UNIFORM(scale2, scale3)]`).
+fn operator_args(e: &Entity) -> Option<Vec<&Value>> {
+    let unset = &Value::Unset;
+    if let Entity::Simple(r) = e {
+        let n = r.args.len();
+        if e.is(CTO_NON_UNIFORM) && n >= 7 {
+            return Some(r.args[n - 7..].iter().collect());
+        }
+        if e.is(CTO_3D) && n >= 5 {
+            return Some(r.args[n - 5..].iter().chain([unset, unset]).collect());
+        }
+        return None;
+    }
+    let base = e.part("CARTESIAN_TRANSFORMATION_OPERATOR")?;
+    let a3 = e.part(CTO_3D)?;
+    if base.len() < 4 || a3.is_empty() {
+        return None;
+    }
+    let mut out: Vec<&Value> = base[base.len() - 4..].iter().collect();
+    out.push(&a3[a3.len() - 1]);
+    match e.part(CTO_NON_UNIFORM) {
+        Some(nu) if nu.len() >= 2 => out.extend(&nu[nu.len() - 2..]),
+        Some(_) => return None,
+        None => out.extend([unset, unset]),
+    }
+    Some(out)
+}
+
+/// Operator nach ISO 10303-42 (`base_axis`, `first_proj_axis`, `second_proj_axis`):
+/// `z` = axis3 (Vorgabe (0, 0, 1)); `x` = axis1 senkrecht zu `z` gemacht (Vorgabe (1, 0, 0),
+/// liegt `z` auf ±(1, 0, 0): (0, 1, 0)); `y` = axis2 (Vorgabe (0, 1, 0)!) senkrecht zu `z` und
+/// `x` gemacht – ISO bildet `y` nicht als `z × x`, das System kann also linkshändig werden;
+/// Bild `p ↦ origin + scale · (p.x x + p.y y + p.z z)`. Angenommen werden nur Bewegungen:
+/// Determinante < 0 → Spiegelung; Maßstab (auch scale2, scale3, Vorgabe = scale) weiter als
+/// 1e-6 von 1, gegebene Achsen nicht senkrecht aufeinander (P3; ISO würde sie projizieren) oder
+/// entartete Achsen (ISO lässt das Ergebnis dann offen) → Skalierung. Ein negativer Maßstab bei
+/// linkshändigen Achsen ergibt zwar eine Drehung, ist nach ISO (`scale > 0`) aber ungültig →
+/// Skalierung. Maßstäbe innerhalb 1e-6 werden als genau 1 genommen.
+///
+/// OCCT (`StepToGeom`) baut das System nach unserer Kenntnis anders: rechtshändig aus axis3
+/// (fehlt sie: axis1 × axis2) und axis1, axis2 dann ohne Einfluss auf die Händigkeit. Wo die
+/// ISO-Vorgabe linkshändig wird (etwa axis1 = (−1, 0, 0) ohne axis2), nimmt OCCT eine Drehung um
+/// 180°, wir melden „Spiegelung“ (sicher, nie still anders). Gegen den OCCT-Quelltext ist das
+/// hier nicht geprüft.
 fn operator_matrix(file: &StepFile, res: &mut Resolver, id: u64, e: &Entity) -> Placed {
     let fail = |m: String| reason(&file.fail(id, m).to_string());
-    let args: Vec<&Value> = match e.part("CARTESIAN_TRANSFORMATION_OPERATOR_3D") {
-        Some(a) if a.len() >= 5 => a[a.len() - 5..].iter().collect(),
-        Some(a3) if a3.len() == 1 => match e.part("CARTESIAN_TRANSFORMATION_OPERATOR") {
-            Some(a) if a.len() >= 4 => a[a.len() - 4..].iter().chain(a3).collect(),
-            _ => return Err(fail("Parameter des Operators fehlen.".into())),
-        },
-        _ => return Err(fail("Parameter des Operators fehlen.".into())),
+    let Some(args) = operator_args(e) else {
+        return Err(fail("Parameter des Operators fehlen.".into()));
     };
     let mut dir = |v: &Value| -> Result<Option<DVec3>, String> {
         if v.is_unset() {
@@ -1013,47 +1319,67 @@ fn operator_matrix(file: &StepFile, res: &mut Resolver, id: u64, e: &Entity) -> 
     let axis3 = dir(args[4])?;
     let origin = args[2].reference().map_err(fail)?;
     let origin = res.point(origin).map_err(|Skip(m)| reason(&m))?;
-    let scale = if args[3].is_unset() {
-        1.0
-    } else {
-        args[3].real().map_err(fail)?
+    let number = |v: &Value, default: f64| -> Result<f64, String> {
+        if v.is_unset() {
+            Ok(default)
+        } else {
+            v.real().map_err(fail)
+        }
     };
-    let d3 = axis3.unwrap_or(DVec3::Z);
-    let v1 = match axis1 {
+    let scale = number(args[3], 1.0)?;
+    let scale2 = number(args[5], scale)?;
+    let scale3 = number(args[6], scale)?;
+    // base_axis: z, dann x (first_proj_axis), dann y (second_proj_axis).
+    let z = axis3.unwrap_or(DVec3::Z);
+    let v = match axis1 {
         Some(a) => {
-            if a.dot(d3).abs() > OBLIQUE_TOL {
+            if a.dot(z).abs() > OBLIQUE_TOL {
                 return Err(SCALING.into());
             }
             a
         }
-        None if d3.cross(DVec3::X).length() > 1e-9 => DVec3::X,
-        None => DVec3::Z,
+        None if (z - DVec3::X).length() <= DEGENERATE || (z + DVec3::X).length() <= DEGENERATE => {
+            DVec3::Y
+        }
+        None => DVec3::X,
     };
-    let d1 = (v1 - d3 * v1.dot(d3)).normalize();
-    let d2 = match axis2 {
+    let x = v - z * v.dot(z);
+    if x.length() <= DEGENERATE {
+        return Err(SCALING.into());
+    }
+    let x = x.normalize();
+    let w = match axis2 {
         Some(a) => {
-            if a.dot(d3).abs() > OBLIQUE_TOL || a.dot(d1).abs() > OBLIQUE_TOL {
+            if a.dot(z).abs() > OBLIQUE_TOL || a.dot(x).abs() > OBLIQUE_TOL {
                 return Err(SCALING.into());
             }
-            (a - d3 * a.dot(d3) - d1 * a.dot(d1)).normalize()
+            a
         }
-        None => d3.cross(d1),
+        None => DVec3::Y,
     };
-    let handed = d1.cross(d2).dot(d3);
-    let det = scale * scale * scale * handed;
+    let y = w - z * w.dot(z) - x * w.dot(x);
+    if y.length() <= DEGENERATE {
+        return Err(SCALING.into());
+    }
+    let y = y.normalize();
+    let handed = x.cross(y).dot(z);
+    let det = scale * scale2 * scale3 * handed;
     if !(det.is_finite() && origin.is_finite()) {
         return Err(SCALING.into());
     }
     if det < 0.0 {
         return Err(MIRROR.into());
     }
-    if (scale - 1.0).abs() > SCALE_TOL {
+    if [scale, scale2, scale3]
+        .iter()
+        .any(|s| (s - 1.0).abs() > SCALE_TOL)
+    {
         return Err(SCALING.into());
     }
     Ok(DMat4::from_cols(
-        d1.extend(0.0),
-        d2.extend(0.0),
-        d3.extend(0.0),
+        x.extend(0.0),
+        y.extend(0.0),
+        z.extend(0.0),
         origin.extend(1.0),
     ))
 }

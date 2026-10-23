@@ -128,6 +128,22 @@ impl StepFile {
     /// Zerlegt den Eintrag `#id` jetzt und prüft, dass alle seine Verweise existieren und er
     /// nicht auf sich selbst verweist. Längere Kreise erkennt erst, wer den Verweisen folgt.
     pub fn entity(&self, id: u64) -> Result<Entity> {
+        let entity = self.entity_unchecked(id)?;
+        let line = self.line(id).unwrap_or(0);
+        let records: Vec<&[Value]> = match &entity {
+            Entity::Simple(r) => vec![&r.args],
+            Entity::Complex(parts) => parts.iter().map(|r| r.args.as_slice()).collect(),
+        };
+        for args in records {
+            self.check_refs(args, id, line)?;
+        }
+        Ok(entity)
+    }
+
+    /// Wie [`StepFile::entity`], aber ohne die Prüfung der Verweise: Für Folger, die auch bei
+    /// einem fehlenden Verweis wissen müssen, worauf der Eintrag sonst zeigt (Baugruppen,
+    /// Aufgabe 8). Jeder Verweis kann ins Leere zeigen.
+    pub fn entity_unchecked(&self, id: u64) -> Result<Entity> {
         let Some(slot) = self.slot(id) else {
             return Err(StepReadError::NoEntity { id });
         };
@@ -146,13 +162,6 @@ impl StepFile {
         let Some(entity) = body.entity else {
             return Err(StepReadError::syntax(line, "Der Eintrag ist leer."));
         };
-        let records: Vec<&[Value]> = match &entity {
-            Entity::Simple(r) => vec![&r.args],
-            Entity::Complex(parts) => parts.iter().map(|r| r.args.as_slice()).collect(),
-        };
-        for args in records {
-            self.check_refs(args, id, line)?;
-        }
         Ok(entity)
     }
 
