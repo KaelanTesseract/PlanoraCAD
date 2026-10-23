@@ -718,7 +718,8 @@ pub fn edge_params(
 /// relativ [`POLE_REL`] wie im Kernel oder der Punkt höchstens `tol_mm` vom Polpunkt), folgt `u`
 /// der Regel des Kernels (`boolean::points_to_uv`: Sprung über den Pol in die Richtung, auf der
 /// die Fläche liegt). Ergebnis ist die Hülle, in jeder periodischen Richtung um Vielfache der
-/// Periode an den Anfang des Bereichs geschoben (analytisch `[0, 2π)`). Für Dateien mit der
+/// Periode an den Anfang des Bereichs geschoben (analytisch `[0, 2π)`, bis auf [`FOLD_SLACK`] der
+/// Periode darunter: Rauschen knapp unter 0 bleibt dort). Für Dateien mit der
 /// Genauigkeit `tol_mm`: Bis `2 · tol_mm / Geschwindigkeit` (kleinste Länge je Parameter an den
 /// Randpunkten, Punkte näher als `10 · tol_mm` an einem Pol ausgenommen; mindestens
 /// [`PERIOD_SLACK`], höchstens [`MAX_PERIOD_SLACK`] der Periode) über eine Periode wird der
@@ -884,7 +885,9 @@ fn derive_patch_impl(
             if hi[k] - lo[k] > per {
                 hi[k] = lo[k] + per;
             }
-            let shift = per * ((lo[k] - base[k]) / per).floor();
+            // Rundungsrauschen knapp unter einem Vielfachen der Periode bleibt dort (sonst läge
+            // der Bereich eine ganze Periode höher).
+            let shift = per * ((lo[k] - base[k]) / per + FOLD_SLACK).floor();
             lo[k] -= shift;
             hi[k] -= shift;
         }
@@ -896,6 +899,10 @@ fn derive_patch_impl(
         v1: hi[1],
     })
 }
+
+/// Anteil der Periode, um den der Anfang des Parameterbereichs unter einem Vielfachen der
+/// Periode liegen darf, ohne um eine Periode verschoben zu werden.
+const FOLD_SLACK: f64 = 1e-9;
 
 /// Nähe zum Pol (relativ zu `1 + |Pol|`), unter der Punkte einer Schleife beim Anlauf auf den
 /// Pol als Pol gelten: Ihr `u` ist dort nur noch Rundungsrauschen (`ε · |p| / Abstand`), und der
