@@ -60,3 +60,101 @@ fn an_unreadable_config_is_not_overwritten_by_favorites() {
     assert!(!Config::safe_to_overwrite(&p), "unlesbare Datei bleibt");
     let _ = std::fs::remove_dir_all(p.parent().unwrap());
 }
+
+#[test]
+fn other_read_errors_also_protect_the_file() {
+    // Ein Ordner an der Stelle der Datei: Lesefehler, aber nicht „fehlt“.
+    let p = temp_file("ordner");
+    std::fs::create_dir_all(&p).unwrap();
+    assert!(Config::read_from(&p).is_err());
+    assert!(!Config::safe_to_overwrite(&p));
+    assert!(Config::update_at(&p, |c| c.root = None).is_err());
+    assert!(p.is_dir(), "bleibt unangetastet");
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+}
+
+#[test]
+fn update_at_changes_only_what_it_is_asked_to() {
+    let p = temp_file("update");
+    // Fehlende Datei: von der Vorgabe aus.
+    let c = Config::update_at(&p, |c| c.favorites.push(PathBuf::from("D:/A"))).unwrap();
+    assert_eq!(c.root, None);
+    assert_eq!(Config::load_from(&p).favorites, [PathBuf::from("D:/A")]);
+    std::fs::write(&p, r#"{ "root": "D:/Projekte", "favorites": ["D:/A"] }"#).unwrap();
+    Config::update_at(&p, |c| c.favorites.push(PathBuf::from("D:/B"))).unwrap();
+    let back = Config::load_from(&p);
+    assert_eq!(back.root, Some(PathBuf::from("D:/Projekte")));
+    assert_eq!(
+        back.favorites,
+        [PathBuf::from("D:/A"), PathBuf::from("D:/B")]
+    );
+    Config::update_at(&p, |c| c.root = Some(PathBuf::from("E:/Neu"))).unwrap();
+    let back = Config::load_from(&p);
+    assert_eq!(back.root, Some(PathBuf::from("E:/Neu")));
+    assert_eq!(back.favorites.len(), 2, "Favoriten bleiben");
+    // Keine Zwischendateien bleiben liegen.
+    let names: Vec<String> = std::fs::read_dir(p.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["config.json"]);
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+}
+
+#[test]
+fn a_bad_favorites_field_never_costs_the_root() {
+    let p = temp_file("tolerant");
+    for favs in [
+        "null",
+        "3",
+        "\"D:/Einzeln\"",
+        "{ \"a\": 1 }",
+        "[1, null, \"\", \"  \", \"D:/Gut\"]",
+    ] {
+        std::fs::write(
+            &p,
+            format!(r#"{{ "root": "D:/Projekte", "favorites": {favs} }}"#),
+        )
+        .unwrap();
+        let c = Config::load_from(&p);
+        assert_eq!(c.root, Some(PathBuf::from("D:/Projekte")), "{favs}");
+        let expected: Vec<PathBuf> = if favs.contains("D:/Gut") {
+            vec![PathBuf::from("D:/Gut")]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(c.favorites, expected, "{favs}");
+        assert!(Config::safe_to_overwrite(&p), "{favs}");
+    }
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+}
+
+#[test]
+fn duplicate_and_surplus_favorites_are_cleaned_on_load() {
+    let p = temp_file("aufraeumen");
+    let mut list: Vec<String> = vec!["\"D:/Teile\"".into(), "\"D:/Teile/\"".into()];
+    if cfg!(windows) {
+        list.push("\"d:\\\\teile\"".into());
+    }
+    for i in 0..30 {
+        list.push(format!("\"D:/F{i}\""));
+    }
+    std::fs::write(
+        &p,
+        format!(
+            r#"{{ "root": "D:/Projekte", "favorites": [{}] }}"#,
+            list.join(", ")
+        ),
+    )
+    .unwrap();
+    let c = Config::load_from(&p);
+    assert_eq!(c.favorites.len(), planora_project::config::MAX_FAVORITES);
+    assert_eq!(c.favorites[0], PathBuf::from("D:/Teile"));
+    assert_eq!(c.favorites[1], PathBuf::from("D:/F0"), "Doppelte entfernt");
+    assert_eq!(
+        c.favorites[23],
+        PathBuf::from("D:/F22"),
+        "Reihenfolge bleibt"
+    );
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+}

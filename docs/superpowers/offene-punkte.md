@@ -1666,8 +1666,20 @@ Entscheidung von Dennis am 2026-10-23; gilt für alle drei Fenster mit Dateiausw
 - Laufwerke werden einmal je Programmlauf im Hintergrund gesucht (je Buchstabe ein eigener Thread); ein hängendes Netzlaufwerk hält die Oberfläche nicht auf, es erscheint erst, wenn es antwortet.
 - Favoriten: Rechtsklick auf einen Ordner der Liste → „Zu Favoriten hinzufügen“ bzw. „Aus Favoriten entfernen“; Rechtsklick auf einen Favoriten-Knopf → „Aus Favoriten entfernen“. Höchstens 24, ohne Doppelte (Groß- und Kleinschreibung und Schrägstrich am Ende zählen nicht), Reihenfolge des Hinzufügens. Gleich heißende Favoriten zeigen den übergeordneten Ordner mit. Ein Favorit, dessen Ordner fehlt, bleibt sichtbar; ein Klick meldet das und nennt den Weg zum Entfernen.
 - Gespeichert in `config.json` als Feld `favorites` (fehlt es in alten Dateien, bleiben Wurzel und alles andere erhalten; ältere Programmstände übergehen das Feld). Speichern gleich nach jeder Änderung; ein Fehler beim Schreiben ist nicht schlimm.
+- Nachbesserung 1 (nach der Prüfung):
+  - Die Leiste bricht jetzt wirklich um und rollt ab zwei Zeilen; die drei Fenster bleiben bei 800 × 600 auch mit 24 Favoriten (auch mit langen Namen) höchstens 720 px breit, „Speichern“ bzw. „Öffnen“ ist sichtbar.
+  - Lesen, ändern, schreiben: Ein Favorit ändert nur die Favoriten in der Datei (die Änderung wird auf den Stand auf der Platte angewandt), die Wahl der Wurzel ändert nur `root`. So überschreibt eine zweite Instanz oder eine beim Start kurz unlesbare Datei weder Wurzel noch fremde Favoriten. Eine unlesbare Datei wird durch Favoriten nie überschrieben.
+  - `favorites` wird nachsichtig gelesen: `null`, ein falscher Typ, leere oder nicht-textliche Einträge werden übergangen, Doppelte und mehr als 24 beim Laden entfernt; die Wurzel lädt immer.
+  - Die Konfiguration schreibt über eine eigene Zwischendatei je Schreibvorgang.
+  - Dokumente mit Symbol `files`, Projekte mit `briefcase` (deutlich anders als die Ordnerzeilen).
+  - Neuzeichnen während der Laufwerkssuche höchstens 3 s, danach zeigt die Auswahl die bis dahin gefundenen Laufwerke.
 
-**Grenzen:** Die bekannten Ordner werden über die üblichen Namen im Benutzerordner gefunden (`Documents`, `Downloads`, `Desktop`, `Pictures`, ggf. unter `OneDrive`), nicht über die Windows-Einstellung für verschobene Ordner. Laufwerke, die erst während des Programmlaufs dazukommen (USB-Stick), erscheinen erst nach einem Neustart. Ist die Konfigurationsdatei unlesbar, gilt wie bisher die Vorgabe (dann ohne Favoriten).
+**Grenzen:**
+- Die bekannten Ordner werden über die üblichen Namen im Benutzerordner gefunden (`Documents`, `Downloads`, `Desktop`, `Pictures`, ggf. unter `OneDrive`), nicht über die Windows-Einstellung für verschobene Ordner (z. B. `OneDrive\Dokumente` wird nicht gefunden).
+- Laufwerke, die erst während des Programmlaufs dazukommen (USB-Stick), erscheinen erst nach einem Neustart; ein Laufwerk, das länger als 3 s hängt, erscheint erst beim nächsten Bild nach seiner Antwort (zum Beispiel bei Mausbewegung).
+- Favoriten lassen sich nur mit der Maus (Rechtsklick) hinzufügen und entfernen, nicht über die Tastatur.
+- Im UI-Thread laufen weiterhin kurze Prüfungen: ob der Projektordner vorhanden ist (einmal je Auswahl), die bekannten Ordner (beim Öffnen der Auswahl) und das Öffnen eines Ordners per Knopf; ein hängendes Netzlaufwerk kann dabei kurz aufhalten (wie beim Eintippen).
+- Ist die Konfigurationsdatei unlesbar, gilt wie bisher die Vorgabe; neue Favoriten gelten dann nur bis Programmende.
 
 **Handtest (Hell und Dunkel, Fenster 1100 × 700 und 800 × 600):**
 - [ ] 1. „Netz importieren …“: Ordner mit blauem Ordnersymbol, Dateien mit grauem Dateisymbol, Namen bündig; kein Text „(Ordner, …)“. Beim Überfahren eines Ordners erscheint „Doppelklick zum Öffnen“.

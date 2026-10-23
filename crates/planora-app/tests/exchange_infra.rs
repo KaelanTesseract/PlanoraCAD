@@ -132,8 +132,10 @@ fn the_chooser_draws_without_input() {
     ctx.set_fonts(fonts::definitions());
     for _ in 0..2 {
         let mut action = ChooserAction::None;
-        ctx.run_ui(egui::RawInput::default(), |ui| action = c.show(ui))
-            .drop_without_applying_deltas();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            action = c.show_with(ui, &mut planora_app::places::Places::default())
+        })
+        .drop_without_applying_deltas();
         assert_eq!(action, ChooserAction::None);
     }
     let _ = fs::remove_dir_all(&d);
@@ -209,7 +211,9 @@ impl Driver {
             time: Some(self.time),
             ..Default::default()
         };
-        let out = self.ctx.run_ui(input, |ui| action = c.show(ui));
+        let out = self.ctx.run_ui(input, |ui| {
+            action = c.show_with(ui, &mut planora_app::places::Places::default())
+        });
         let mut found = None;
         fn walk(s: &egui::epaint::Shape, find: &str, found: &mut Option<egui::Pos2>) {
             match s {

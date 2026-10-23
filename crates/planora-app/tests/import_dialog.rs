@@ -69,7 +69,12 @@ fn draw(d: &mut ImportDialog, s: &mut AppState) -> String {
     let mut text = String::new();
     for _ in 0..3 {
         let out = ctx.run_ui(wide(), |ui| {
-            assert!(d.show(ui.ctx(), s, &mut dir));
+            assert!(d.show_in(
+                ui.ctx(),
+                s,
+                &mut dir,
+                &mut planora_app::places::Places::default()
+            ));
         });
         text = collect_texts(&out);
         out.drop_without_applying_deltas();

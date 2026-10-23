@@ -94,7 +94,26 @@ pub fn validate_name(name: &str) -> Result<String> {
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
+    write_via(&PathBuf::from(tmp), path, bytes)
+}
+
+/// Wie [`atomic_write`], aber mit eigener Zwischendatei je Schreibvorgang
+/// (`<Name>.<Prozess>-<Zähler>.tmp`): Schreiben zwei Programme gleichzeitig dieselbe Datei
+/// (Konfiguration), vermischen sich ihre Zwischendateien nicht.
+pub fn atomic_write_unique(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_via(&unique_tmp(path), path, bytes)
+}
+
+/// Eigener Name der Zwischendatei je Aufruf: `<Name>.<Prozess>-<Zähler>.tmp`.
+fn unique_tmp(path: &Path) -> PathBuf {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".{}-{n}.tmp", std::process::id()));
+    PathBuf::from(tmp)
+}
+
+fn write_via(tmp: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
+    let tmp = tmp.to_path_buf();
     let written = (|| -> std::io::Result<()> {
         let mut f = fs::File::create(&tmp)?;
         f.write_all(bytes)?;
@@ -324,6 +343,27 @@ mod tests {
         // atomic_write räumt seine eigene Zwischendatei dagegen weg.
         assert!(atomic_write(&d.join("ziel"), b"neu").is_err());
         assert!(!d.join("ziel.tmp").exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn unique_writes_use_their_own_temp_file() {
+        let p = Path::new("config.json");
+        let (a, b) = (unique_tmp(p), unique_tmp(p));
+        assert_ne!(a, b, "jeder Schreibvorgang eine eigene Zwischendatei");
+        for t in [&a, &b] {
+            let name = t.to_string_lossy();
+            assert!(
+                name.starts_with("config.json.") && name.ends_with(".tmp"),
+                "{name}"
+            );
+        }
+        let d = std::env::temp_dir().join(format!("planora-fsutil-u-{}", new_id()));
+        fs::create_dir_all(&d).unwrap();
+        atomic_write_unique(&d.join("c.json"), b"1").unwrap();
+        atomic_write_unique(&d.join("c.json"), b"2").unwrap();
+        assert_eq!(fs::read(d.join("c.json")).unwrap(), b"2");
+        assert_eq!(fs::read_dir(&d).unwrap().count(), 1, "keine Reste");
         let _ = fs::remove_dir_all(&d);
     }
 }

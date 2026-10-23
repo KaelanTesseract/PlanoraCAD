@@ -9,9 +9,10 @@ use crate::icons::Icon;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 /// Höchstzahl der Favoriten.
-pub const MAX_FAVORITES: usize = 24;
+pub const MAX_FAVORITES: usize = planora_project::config::MAX_FAVORITES;
 /// Meldung, wenn schon [`MAX_FAVORITES`] Favoriten da sind.
 pub const FAVORITES_FULL: &str = "Es gibt schon 24 Favoriten. Bitte zuerst einen entfernen.";
 /// Eintrag im Kontextmenü eines Ordners.
@@ -37,11 +38,11 @@ impl PlaceKind {
     /// Symbol des Knopfs (Phosphor, Linienstil des Programms).
     pub fn icon(self) -> Icon {
         match self {
-            PlaceKind::Documents => Icon::Home,
+            PlaceKind::Documents => Icon::Documents,
             PlaceKind::Downloads => Icon::Import,
             PlaceKind::Desktop => Icon::Desktop,
             PlaceKind::Pictures => Icon::Pictures,
-            PlaceKind::Project => Icon::PanelProjects,
+            PlaceKind::Project => Icon::Projects,
             PlaceKind::Drive => Icon::Drive,
             PlaceKind::Favorite => Icon::Favorite,
         }
@@ -146,12 +147,7 @@ pub fn drive_label(path: &Path) -> String {
 /// Vergleichsform eines Ordners: unter Windows ohne Groß- und Kleinschreibung und mit `\`;
 /// abschließende Trennzeichen zählen nicht.
 pub fn normalize(path: &Path) -> String {
-    let mut s = path.to_string_lossy().into_owned();
-    if cfg!(windows) {
-        s = s.replace('/', "\\").to_lowercase();
-    }
-    let t = s.trim_end_matches(['\\', '/']);
-    if t.is_empty() { s } else { t.to_string() }
+    planora_project::config::path_key(path)
 }
 
 /// Derselbe Ordner (nach [`normalize`])?
@@ -232,23 +228,51 @@ pub fn favorite_labels(favorites: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
+/// Eine Änderung der Favoriten; beim Speichern wird sie auf den Stand der Datei angewandt
+/// (nicht die ganze Liste aus dem Speicher geschrieben), damit nichts von einer anderen
+/// Instanz verloren geht.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FavoriteChange {
+    Add(PathBuf),
+    Remove(PathBuf),
+}
+
+impl FavoriteChange {
+    /// Wendet die Änderung auf `favorites` an (eine volle Liste nimmt nichts mehr auf).
+    pub fn apply(&self, favorites: &mut Vec<PathBuf>) {
+        match self {
+            FavoriteChange::Add(p) => {
+                let _ = add_favorite(favorites, p);
+            }
+            FavoriteChange::Remove(p) => {
+                remove_favorite(favorites, p);
+            }
+        }
+    }
+}
+
 /// Gemeinsamer Stand der Schnellzugriffe für alle Dateiauswahlen (Netz importieren, STEP
 /// importieren, Exportieren): kommt aus der Konfiguration und geht dorthin zurück
-/// (`Workspace::places`, `Workspace::take_places`).
+/// (`Workspace::places`, `Workspace::save_places`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Places {
     pub favorites: Vec<PathBuf>,
     /// Projektordner (gewählte Wurzel oder ihre Vorgabe).
     pub project_root: Option<PathBuf>,
-    /// Favoriten wurden geändert und sollen gespeichert werden.
-    pub changed: bool,
+    /// Änderungen der Favoriten in diesem Bild, in ihrer Reihenfolge.
+    pub changes: Vec<FavoriteChange>,
 }
 
 impl Places {
+    /// Wurden die Favoriten geändert (sollen sie gespeichert werden)?
+    pub fn changed(&self) -> bool {
+        !self.changes.is_empty()
+    }
+
     /// Fügt einen Favoriten hinzu (siehe [`add_favorite`]).
     pub fn add_favorite(&mut self, path: &Path) -> Result<(), &'static str> {
         if add_favorite(&mut self.favorites, path)? {
-            self.changed = true;
+            self.changes.push(FavoriteChange::Add(path.to_path_buf()));
         }
         Ok(())
     }
@@ -256,7 +280,8 @@ impl Places {
     /// Entfernt einen Favoriten (siehe [`remove_favorite`]).
     pub fn remove_favorite(&mut self, path: &Path) {
         if remove_favorite(&mut self.favorites, path) {
-            self.changed = true;
+            self.changes
+                .push(FavoriteChange::Remove(path.to_path_buf()));
         }
     }
 }
@@ -265,7 +290,12 @@ impl Places {
 pub struct DriveScan {
     found: Arc<Mutex<Vec<PathBuf>>>,
     done: Arc<AtomicBool>,
+    started: Instant,
 }
+
+/// So lange wird höchstens auf hängende Laufwerke gewartet (neu gezeichnet); danach zeigt die
+/// Auswahl die bis dahin gefundenen.
+pub const DRIVE_WAIT: Duration = Duration::from_secs(3);
 
 /// Rückmeldung eines Laufwerkssuchers (darf in weitere Threads mitgenommen werden).
 #[derive(Clone)]
@@ -299,7 +329,11 @@ impl DriveScan {
         if spawned.is_err() {
             done.store(true, Ordering::Release);
         }
-        DriveScan { found, done }
+        DriveScan {
+            found,
+            done,
+            started: Instant::now(),
+        }
     }
 
     /// Die bisher gefundenen Laufwerke, sortiert.
@@ -317,6 +351,17 @@ impl DriveScan {
     /// Ist die Suche fertig?
     pub fn is_done(&self) -> bool {
         self.done.load(Ordering::Acquire)
+    }
+
+    /// Soll die Auswahl noch neu zeichnen, um später gefundene Laufwerke zu zeigen? Nur
+    /// solange die Suche läuft und höchstens [`DRIVE_WAIT`] seit ihrem Start.
+    pub fn wants_repaint(&self) -> bool {
+        self.wants_repaint_at(Instant::now())
+    }
+
+    /// Wie [`DriveScan::wants_repaint`] zum Zeitpunkt `now`.
+    pub fn wants_repaint_at(&self, now: Instant) -> bool {
+        !self.is_done() && now.saturating_duration_since(self.started) < DRIVE_WAIT
     }
 }
 

@@ -111,8 +111,21 @@ pub fn place_menu(place: &Place) -> Option<RowMenu> {
     (place.kind == PlaceKind::Favorite).then(|| RowMenu::RemoveFavorite(place.path.clone()))
 }
 
-/// Wie oft das Bild neu gezeichnet wird, solange Laufwerke noch gesucht werden.
+/// Wie oft das Bild neu gezeichnet wird, solange Laufwerke noch gesucht werden (höchstens
+/// [`places::DRIVE_WAIT`] lang).
 const DRIVE_REPAINT: Duration = Duration::from_millis(250);
+/// Höhe der Leiste der Schnellzugriffe, ab der sie rollt (zwei Zeilen Knöpfe).
+pub const PLACES_HEIGHT: f32 = 56.0;
+
+/// Ein Knopf der Schnellzugriffe, wie er gezeichnet wird.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceButton {
+    pub place: Place,
+    /// Hervorgehoben: der aktuelle Ordner.
+    pub current: bool,
+    /// Kontextmenü (nur Favoriten).
+    pub menu: Option<RowMenu>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChooserAction {
@@ -391,12 +404,6 @@ impl FileChooser {
         self.confirm.is_some()
     }
 
-    /// Zeichnet die Auswahl über die volle Breite, ohne Favoriten und Projektordner (siehe
-    /// [`FileChooser::show_with`]).
-    pub fn show(&mut self, ui: &mut egui::Ui) -> ChooserAction {
-        self.show_with(ui, &mut Places::default())
-    }
-
     /// Zeichnet die Auswahl über die volle Breite mit den gemeinsamen Schnellzugriffen;
     /// geänderte Favoriten stehen danach in `shared` (`changed`).
     pub fn show_with(&mut self, ui: &mut egui::Ui, shared: &mut Places) -> ChooserAction {
@@ -516,41 +523,67 @@ impl FileChooser {
         action
     }
 
-    /// Leiste der Schnellzugriffe (bricht bei Bedarf in weitere Zeilen um). Der Knopf des
-    /// aktuellen Ordners ist hervorgehoben; Favoriten haben ein Kontextmenü zum Entfernen.
+    /// Knöpfe der Schnellzugriffe mit Hervorhebung und Kontextmenü (ohne Oberfläche, für
+    /// [`FileChooser::show_with`] und Tests).
+    pub fn place_buttons(&mut self, shared: &Places, drives: &[PathBuf]) -> Vec<PlaceButton> {
+        self.places_with(shared, drives)
+            .into_iter()
+            .map(|place| PlaceButton {
+                current: places::is_current(&place, &self.dir),
+                menu: place_menu(&place),
+                place,
+            })
+            .collect()
+    }
+
+    /// Leiste der Schnellzugriffe: bricht in weitere Zeilen um und rollt ab
+    /// [`PLACES_HEIGHT`]. Der Knopf des aktuellen Ordners ist hervorgehoben; Favoriten haben
+    /// ein Kontextmenü zum Entfernen.
     fn show_places(&mut self, ui: &mut egui::Ui, shared: &Places, menu: &mut Option<RowMenu>) {
-        let list = self.places(shared);
-        if !places::system_drives().is_done() {
+        let scan = places::system_drives();
+        let buttons = self.place_buttons(shared, &scan.known());
+        if scan.wants_repaint() {
             ui.ctx().request_repaint_after(DRIVE_REPAINT);
         }
-        if list.is_empty() {
+        if buttons.is_empty() {
             return;
         }
         let mut go = None;
-        ui.horizontal_wrapped(|ui| {
-            for (i, p) in list.iter().enumerate() {
-                let current = places::is_current(p, &self.dir);
-                let r = ui
-                    .push_id(("planora-place", i), |ui| {
-                        ui.add(icons::selectable(current, p.kind.icon(), p.label.as_str()))
-                    })
-                    .inner
-                    .on_hover_text(p.path.display().to_string());
-                if r.clicked() {
-                    go = Some(i);
-                }
-                if let Some(m) = place_menu(p) {
-                    r.context_menu(|ui| {
-                        if ui.button(m.label()).clicked() {
-                            *menu = Some(m.clone());
-                            ui.close();
+        theme::scroll_area(
+            ui,
+            egui::ScrollArea::vertical()
+                .id_salt("planora-places")
+                .max_height(PLACES_HEIGHT)
+                .auto_shrink([false, true]),
+            |ui| {
+                // Ohne eigene Unterbereiche je Knopf: nur so bricht die Zeile um.
+                ui.horizontal_wrapped(|ui| {
+                    for (i, b) in buttons.iter().enumerate() {
+                        let p = &b.place;
+                        let r = ui
+                            .add(icons::selectable(
+                                b.current,
+                                p.kind.icon(),
+                                p.label.as_str(),
+                            ))
+                            .on_hover_text(p.path.display().to_string());
+                        if r.clicked() {
+                            go = Some(i);
                         }
-                    });
-                }
-            }
-        });
+                        if let Some(m) = &b.menu {
+                            r.context_menu(|ui| {
+                                if ui.button(m.label()).clicked() {
+                                    *menu = Some(m.clone());
+                                    ui.close();
+                                }
+                            });
+                        }
+                    }
+                });
+            },
+        );
         if let Some(i) = go {
-            self.go_to_place(&list[i]);
+            self.go_to_place(&buttons[i].place);
         }
     }
 }

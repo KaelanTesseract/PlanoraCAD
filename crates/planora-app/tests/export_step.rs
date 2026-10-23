@@ -63,7 +63,12 @@ fn draw(d: &mut ExportDialog, s: &mut AppState) -> String {
     let mut text = String::new();
     for _ in 0..3 {
         let out = ctx.run_ui(wide(), |ui| {
-            assert!(d.show(ui.ctx(), s, &mut dir));
+            assert!(d.show_in(
+                ui.ctx(),
+                s,
+                &mut dir,
+                &mut planora_app::places::Places::default()
+            ));
         });
         text = collect_texts(&out);
         out.drop_without_applying_deltas();
@@ -364,7 +369,15 @@ fn the_window_stays_open_with_a_hint_while_step_is_written() {
     let mut text = String::new();
     for _ in 0..2 {
         let out = ctx.run_ui(wide(), |ui| {
-            assert!(d.show(ui.ctx(), &mut s, &mut last), "Fenster bleibt offen");
+            assert!(
+                d.show_in(
+                    ui.ctx(),
+                    &mut s,
+                    &mut last,
+                    &mut planora_app::places::Places::default()
+                ),
+                "Fenster bleibt offen"
+            );
         });
         text = collect_texts(&out);
         out.drop_without_applying_deltas();
@@ -534,7 +547,12 @@ fn draw_frames(d: &mut ExportDialog, s: &mut AppState, n: usize) -> String {
     let mut text = String::new();
     for _ in 0..n {
         let out = ctx.run_ui(wide(), |ui| {
-            assert!(d.show(ui.ctx(), s, &mut last));
+            assert!(d.show_in(
+                ui.ctx(),
+                s,
+                &mut last,
+                &mut planora_app::places::Places::default()
+            ));
         });
         text = collect_texts(&out);
         out.drop_without_applying_deltas();
@@ -602,7 +620,12 @@ impl Clicker {
         input.time = Some(self.time);
         let mut dir = None;
         let out = self.ctx.run_ui(input, |ui| {
-            d.show(ui.ctx(), s, &mut dir);
+            d.show_in(
+                ui.ctx(),
+                s,
+                &mut dir,
+                &mut planora_app::places::Places::default(),
+            );
         });
         let mut found = None;
         fn walk(sh: &egui::epaint::Shape, find: &str, found: &mut Option<egui::Pos2>) {

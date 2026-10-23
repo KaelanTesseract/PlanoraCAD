@@ -122,7 +122,7 @@ fn the_chooser_shows_the_project_root_only_when_it_exists_and_favorites_always()
     let shared = Places {
         favorites: vec![missing_fav.clone()],
         project_root: Some(root.clone()),
-        changed: false,
+        changes: Vec::new(),
     };
     let list = c.places_with(&shared, &[]);
     assert!(
@@ -262,7 +262,7 @@ fn at_most_24_favorites() {
     };
     c.apply_menu(&RowMenu::AddFavorite(d.join("x")), &mut shared);
     assert_eq!(c.error.as_deref(), Some(FAVORITES_FULL));
-    assert!(!shared.changed);
+    assert!(!shared.changed());
     let _ = fs::remove_dir_all(&d);
 }
 
@@ -270,14 +270,17 @@ fn at_most_24_favorites() {
 fn places_mark_changes_only_when_the_list_changes() {
     let mut p = Places::default();
     p.add_favorite(Path::new("D:\\Teile")).unwrap();
-    assert!(p.changed);
-    p.changed = false;
+    assert_eq!(p.changes, [FavoriteChange::Add(PathBuf::from("D:\\Teile"))]);
     p.add_favorite(Path::new("D:\\Teile\\")).unwrap();
-    assert!(!p.changed, "doppelt: keine Änderung");
+    assert_eq!(p.changes.len(), 1, "doppelt: keine Änderung");
     p.remove_favorite(Path::new("D:\\Anders"));
-    assert!(!p.changed);
+    assert_eq!(p.changes.len(), 1);
     p.remove_favorite(Path::new("D:\\Teile"));
-    assert!(p.changed && p.favorites.is_empty());
+    assert!(p.changed() && p.favorites.is_empty());
+    assert_eq!(
+        p.changes[1],
+        FavoriteChange::Remove(PathBuf::from("D:\\Teile"))
+    );
 }
 
 #[test]
@@ -300,12 +303,20 @@ fn favorite_labels_tell_equal_names_apart() {
     );
 }
 
+/// Arbeitsbereich, der seine Konfiguration in `file` schreibt (nie in die echte).
+fn workspace_at(file: &Path, config: Config) -> Workspace {
+    let mut ws = Workspace::new(None, config);
+    ws.config_path = file.to_path_buf();
+    ws
+}
+
 #[test]
 fn favorites_persist_through_the_workspace_and_the_config_file() {
     let d = temp_dir("speichern");
     let root = d.join("Projekte");
-    let mut ws = Workspace::new(
-        None,
+    let file = d.join("planora").join("config.json");
+    let mut ws = workspace_at(
+        &file,
         Config {
             root: Some(root.clone()),
             ..Config::default()
@@ -314,20 +325,86 @@ fn favorites_persist_through_the_workspace_and_the_config_file() {
     let mut places = ws.places();
     assert_eq!(places.project_root.as_deref(), Some(root.as_path()));
     assert!(
-        !ws.take_places(places.clone()),
+        !ws.save_places(places.clone()),
         "ohne Änderung nichts speichern"
     );
+    assert!(!file.exists(), "nichts geschrieben");
     places.add_favorite(&d.join("Teile")).unwrap();
-    assert!(ws.take_places(places), "geänderte Favoriten speichern");
+    assert!(ws.save_places(places), "geänderte Favoriten speichern");
     assert_eq!(ws.config.favorites, [d.join("Teile")]);
-    // Nächstes Bild: die Favoriten kommen wieder aus der Konfiguration.
     assert_eq!(ws.places().favorites, [d.join("Teile")]);
-    // Über eine Sitzung hinaus: Datei im Temp-Ordner, nie die echte Konfiguration.
+    // Über eine Sitzung hinaus.
+    assert_eq!(Config::load_from(&file).favorites, [d.join("Teile")]);
+    // Entfernen ebenso.
+    let mut places = ws.places();
+    places.remove_favorite(&d.join("Teile"));
+    assert!(ws.save_places(places));
+    assert!(Config::load_from(&file).favorites.is_empty());
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_stale_instance_keeps_the_root_and_favorites_of_another() {
+    let d = temp_dir("zwei");
     let file = d.join("config.json");
-    ws.config.save_to(&file).unwrap();
-    let back = Config::load_from(&file);
-    assert_eq!(back.favorites, [d.join("Teile")]);
-    assert_eq!(back.root, Some(root));
+    // A startet ohne Datei (Wurzel None, keine Favoriten).
+    let mut a = workspace_at(&file, Config::load_from(&file));
+    // B startet, wählt eine Wurzel und einen Favoriten.
+    let mut b = workspace_at(&file, Config::load_from(&file));
+    b.config.root = Some(d.join("Y"));
+    b.persist_config();
+    let mut pb = b.places();
+    pb.add_favorite(&d.join("Von B")).unwrap();
+    assert!(b.save_places(pb));
+    // A (veralteter Stand im Speicher) fügt einen Favoriten hinzu.
+    let mut pa = a.places();
+    pa.add_favorite(&d.join("Von A")).unwrap();
+    assert!(a.save_places(pa));
+    let disk = Config::load_from(&file);
+    assert_eq!(disk.root, Some(d.join("Y")), "Wurzel von B bleibt");
+    assert_eq!(disk.favorites, [d.join("Von B"), d.join("Von A")]);
+    assert_eq!(a.config.favorites, disk.favorites, "A übernimmt den Stand");
+    // A entfernt den Favoriten von B: nur dieser geht.
+    let mut pa = a.places();
+    pa.remove_favorite(&d.join("Von B"));
+    assert!(a.save_places(pa));
+    assert_eq!(Config::load_from(&file).favorites, [d.join("Von A")]);
+    // B wählt eine neue Wurzel: die Favoriten von A bleiben.
+    b.config.root = Some(d.join("Z"));
+    b.persist_config();
+    let disk = Config::load_from(&file);
+    assert_eq!(disk.root, Some(d.join("Z")));
+    assert_eq!(disk.favorites, [d.join("Von A")]);
+    assert_eq!(b.config.favorites, disk.favorites, "B übernimmt den Stand");
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_config_unreadable_at_start_is_not_overwritten_later() {
+    let d = temp_dir("kurz-unlesbar");
+    let file = d.join("config.json");
+    let good = r#"{ "root": "D:/Projekte", "favorites": ["D:/Alt"] }"#;
+    // Beim Start kurz unlesbar: Wurzel None im Speicher.
+    fs::write(&file, "{ halb").unwrap();
+    let mut ws = workspace_at(&file, Config::load_from(&file));
+    assert!(ws.config.root.is_none());
+    // Solange unlesbar: nicht überschreiben, Favorit nur im Speicher.
+    let mut p = ws.places();
+    p.add_favorite(&d.join("Neu")).unwrap();
+    assert!(!ws.save_places(p));
+    assert_eq!(fs::read_to_string(&file).unwrap(), "{ halb");
+    assert_eq!(ws.config.favorites, [d.join("Neu")]);
+    // Später wieder lesbar: die Wurzel der Datei bleibt.
+    fs::write(&file, good).unwrap();
+    let mut p = ws.places();
+    p.add_favorite(&d.join("Noch einer")).unwrap();
+    assert!(ws.save_places(p));
+    let disk = Config::load_from(&file);
+    assert_eq!(disk.root, Some(PathBuf::from("D:/Projekte")));
+    assert_eq!(
+        disk.favorites,
+        [PathBuf::from("D:/Alt"), d.join("Noch einer")]
+    );
     let _ = fs::remove_dir_all(&d);
 }
 
@@ -412,7 +489,7 @@ fn the_row_menu_adds_and_removes_favorites() {
     let mut shared = Places::default();
     c.apply_menu(&RowMenu::AddFavorite(d.join("Teile")), &mut shared);
     assert_eq!(shared.favorites, [d.join("Teile")]);
-    assert!(shared.changed);
+    assert!(shared.changed());
     c.apply_menu(&RowMenu::RemoveFavorite(d.join("Teile")), &mut shared);
     assert!(shared.favorites.is_empty());
     let _ = fs::remove_dir_all(&d);
@@ -584,6 +661,7 @@ fn right_click_on_a_folder_offers_favorites_but_not_on_a_file() {
     drv.click(&mut c, &mut shared, at, egui::PointerButton::Secondary);
     let seen = drv.frame(&mut c, &mut shared, vec![]);
     assert!(!has(&seen, ADD_FAVORITE), "kein Menü an Dateien");
+    assert_eq!(c.file_name, "", "Rechtsklick wählt keine Datei");
     // Menü schließen (Escape gibt es nicht im Treiber: Klick ins Leere).
     drv.click(
         &mut c,
@@ -600,7 +678,7 @@ fn right_click_on_a_folder_offers_favorites_but_not_on_a_file() {
     let item = pos_of(&seen, ADD_FAVORITE).expect("Menüeintrag");
     drv.click(&mut c, &mut shared, item, egui::PointerButton::Primary);
     assert_eq!(shared.favorites, [d.join("Teile")]);
-    assert!(shared.changed);
+    assert!(shared.changed());
     assert_eq!(c.dir(), d.as_path(), "Rechtsklick öffnet den Ordner nicht");
 
     // Der neue Favorit erscheint als Knopf.
@@ -624,7 +702,7 @@ fn both_import_dialogs_show_the_shared_places() {
     let mut shared = Places {
         project_root: Some(root),
         favorites: vec![d.join("Lieblingsordner")],
-        changed: false,
+        changes: Vec::new(),
     };
     let texts = |f: &mut dyn FnMut(&egui::Context)| {
         let ctx = egui::Context::default();

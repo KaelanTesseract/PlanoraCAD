@@ -519,6 +519,9 @@ pub struct Workspace {
     pub active: usize,
     pub library: Option<Library>,
     pub config: Config,
+    /// Ort der Konfigurationsdatei (Vorgabe [`Config::config_path`]; Tests setzen einen
+    /// Temp-Ordner, damit nie die echte Datei geschrieben wird).
+    pub config_path: PathBuf,
     pub prompt: Option<Prompt>,
     pub quit: bool,
     /// Der Dialog „Über PlanoraCAD“ ist offen.
@@ -552,6 +555,7 @@ impl Workspace {
             active: 0,
             library,
             config,
+            config_path: Config::config_path(),
             prompt: None,
             quit: false,
             about_open: false,
@@ -1169,9 +1173,18 @@ impl Workspace {
         }
     }
 
-    /// Speichert die Konfiguration (gewählte Wurzel, Favoriten); Fehler sind nicht schlimm.
-    pub fn persist_config(&self) {
-        let _ = self.config.save();
+    /// Speichert die gewählte Wurzel; Fehler sind nicht schlimm. Nur `root` wird in den Stand
+    /// der Datei geschrieben, die Favoriten auf der Platte bleiben (eine andere Instanz kann
+    /// sie inzwischen geändert haben) und werden übernommen. Ist die Datei unlesbar, wird sie
+    /// wie bisher mit dem Stand im Speicher ersetzt: die Wurzel ist eine bewusste Wahl.
+    pub fn persist_config(&mut self) {
+        let root = self.config.root.clone();
+        match Config::update_at(&self.config_path, |c| c.root = root) {
+            Ok(disk) => self.config.favorites = disk.favorites,
+            Err(_) => {
+                let _ = self.config.save_to(&self.config_path);
+            }
+        }
     }
 
     /// Gemeinsamer Stand der Schnellzugriffe für die Dateiauswahlen eines Bildes: Favoriten aus
@@ -1185,18 +1198,35 @@ impl Workspace {
                     .clone()
                     .unwrap_or_else(Config::default_root),
             ),
-            changed: false,
+            changes: Vec::new(),
         }
     }
 
-    /// Übernimmt geänderte Favoriten in die Konfiguration; `true`, wenn sie gespeichert werden
-    /// soll (der Aufrufer ruft dann [`Workspace::persist_config`]).
-    pub fn take_places(&mut self, places: Places) -> bool {
-        if !places.changed {
+    /// Übernimmt geänderte Favoriten und speichert sie gleich (in [`Workspace::config_path`]);
+    /// `true`, wenn geschrieben wurde. Gelesen, geändert, geschrieben: Die Änderungen werden
+    /// auf den Stand der Datei angewandt, deren Wurzel und fremde Favoriten bleiben (eine
+    /// andere Instanz oder eine beim Start kurz unlesbare Datei überschreibt so nichts). Eine
+    /// unlesbare Datei bleibt unangetastet; die Favoriten gelten dann bis Programmende.
+    pub fn save_places(&mut self, places: Places) -> bool {
+        if !places.changed() {
             return false;
         }
-        self.config.favorites = places.favorites;
-        true
+        let changes = places.changes;
+        let written = Config::update_at(&self.config_path, |c| {
+            for ch in &changes {
+                ch.apply(&mut c.favorites);
+            }
+        });
+        match written {
+            Ok(disk) => {
+                self.config.favorites = disk.favorites;
+                true
+            }
+            Err(_) => {
+                self.config.favorites = places.favorites;
+                false
+            }
+        }
     }
 
     /// Schreibt für geänderte, gespeicherte Dokumente eine Autosicherung, wenn das Intervall

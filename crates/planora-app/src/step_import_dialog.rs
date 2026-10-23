@@ -780,17 +780,9 @@ impl StepImportDialog {
     }
 
     /// Zeichnet das Fenster; `true`, solange es offen bleiben soll.
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        state: &mut AppState,
-        last_dir: &mut Option<PathBuf>,
-    ) -> bool {
-        self.show_in(ctx, state, last_dir, &mut Places::default())
-    }
-
-    /// Wie `show`, mit den gemeinsamen Schnellzugriffen der Dateiauswahl (Favoriten,
-    /// Projektordner); geänderte Favoriten stehen danach in `places`.
+    ///
+    /// `places` sind die gemeinsamen Schnellzugriffe der Dateiauswahl (Favoriten,
+    /// Projektordner); geänderte Favoriten stehen danach darin.
     pub fn show_in(
         &mut self,
         ctx: &egui::Context,

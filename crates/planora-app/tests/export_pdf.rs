@@ -100,7 +100,12 @@ fn draw(d: &mut ExportDialog, s: &mut AppState) -> String {
     let mut text = String::new();
     for _ in 0..3 {
         let out = ctx.run_ui(wide(), |ui| {
-            assert!(d.show(ui.ctx(), s, &mut dir));
+            assert!(d.show_in(
+                ui.ctx(),
+                s,
+                &mut dir,
+                &mut planora_app::places::Places::default()
+            ));
         });
         text = collect_texts(&out);
         out.drop_without_applying_deltas();
@@ -960,7 +965,15 @@ fn existing_file_stays_when_cancelled_and_window_stays_open_while_writing() {
     let mut text = String::new();
     for _ in 0..2 {
         let out = ctx.run_ui(wide(), |ui| {
-            assert!(d.show(ui.ctx(), &mut s, &mut last), "Fenster bleibt offen");
+            assert!(
+                d.show_in(
+                    ui.ctx(),
+                    &mut s,
+                    &mut last,
+                    &mut planora_app::places::Places::default()
+                ),
+                "Fenster bleibt offen"
+            );
         });
         text = collect_texts(&out);
         out.drop_without_applying_deltas();
@@ -1749,14 +1762,24 @@ fn choice_ui() {
     let mut screen = Screen::new(800.0, 600.0);
     let mut last = None;
     let seen = screen.settle(8, &mut |ctx| {
-        assert!(d.show(ctx, &mut s, &mut last));
+        assert!(d.show_in(
+            ctx,
+            &mut s,
+            &mut last,
+            &mut planora_app::places::Places::default()
+        ));
     });
     assert_cards_inside(d.last_rect.unwrap(), &d.last_cards, &seen);
     // Gewähltes Blatt: ein Klick auf die Auswahl öffnet die Liste der Zeichnungen.
     let combo = find(&seen, "Blatt A").expect("Auswahl").rect.center();
     let after = {
         let mut f = |ctx: &egui::Context| {
-            assert!(d.show(ctx, &mut s, &mut last));
+            assert!(d.show_in(
+                ctx,
+                &mut s,
+                &mut last,
+                &mut planora_app::places::Places::default()
+            ));
         };
         screen.click(combo, &mut f);
         screen.settle(2, &mut f)
@@ -1765,7 +1788,12 @@ fn choice_ui() {
     // Liste wieder schließen (zweiter Klick auf die Auswahl).
     let after = {
         let mut f = |ctx: &egui::Context| {
-            assert!(d.show(ctx, &mut s, &mut last));
+            assert!(d.show_in(
+                ctx,
+                &mut s,
+                &mut last,
+                &mut planora_app::places::Places::default()
+            ));
         };
         screen.click(combo, &mut f);
         screen.settle(3, &mut f)
@@ -1778,7 +1806,12 @@ fn choice_ui() {
         .center();
     let seen = {
         let mut f = |ctx: &egui::Context| {
-            assert!(d.show(ctx, &mut s, &mut last));
+            assert!(d.show_in(
+                ctx,
+                &mut s,
+                &mut last,
+                &mut planora_app::places::Places::default()
+            ));
         };
         screen.click(all_button, &mut f);
         screen.settle(8, &mut f)
@@ -1799,7 +1832,12 @@ fn choice_ui() {
     let combo = find(&seen, "Blatt A").expect("Auswahl").rect.center();
     let after = {
         let mut f = |ctx: &egui::Context| {
-            assert!(d.show(ctx, &mut s, &mut last));
+            assert!(d.show_in(
+                ctx,
+                &mut s,
+                &mut last,
+                &mut planora_app::places::Places::default()
+            ));
         };
         screen.click(combo, &mut f);
         screen.settle(2, &mut f)
@@ -2256,7 +2294,12 @@ fn progress_names_the_sheet() {
     let mut screen = Screen::new(1200.0, 800.0);
     let mut last = None;
     let seen = screen.settle(3, &mut |ctx| {
-        assert!(d.show(ctx, &mut s, &mut last));
+        assert!(d.show_in(
+            ctx,
+            &mut s,
+            &mut last,
+            &mut planora_app::places::Places::default()
+        ));
     });
     let words: Vec<&str> = seen.iter().map(|x| x.text.as_str()).collect();
     assert!(
@@ -2266,18 +2309,33 @@ fn progress_names_the_sheet() {
     // „Exportieren …“ ist gesperrt: ein Klick öffnet keine Dateiauswahl.
     let export = find(&seen, "Exportieren …").expect("Knopf").rect.center();
     let mut f = |ctx: &egui::Context| {
-        assert!(d.show(ctx, &mut s, &mut last));
+        assert!(d.show_in(
+            ctx,
+            &mut s,
+            &mut last,
+            &mut planora_app::places::Places::default()
+        ));
     };
     screen.click(export, &mut f);
     drop(f);
     assert!(d.chooser().is_none(), "gesperrt während der Berechnung");
     // „Abbrechen“: abgebrochen, keine Datei; der Auftrag endet.
     let seen = screen.settle(1, &mut |ctx| {
-        assert!(d.show(ctx, &mut s, &mut last));
+        assert!(d.show_in(
+            ctx,
+            &mut s,
+            &mut last,
+            &mut planora_app::places::Places::default()
+        ));
     });
     let cancel = find(&seen, "Abbrechen").expect("Abbrechen").rect.center();
     let mut f = |ctx: &egui::Context| {
-        assert!(d.show(ctx, &mut s, &mut last));
+        assert!(d.show_in(
+            ctx,
+            &mut s,
+            &mut last,
+            &mut planora_app::places::Places::default()
+        ));
     };
     screen.click(cancel, &mut f);
     drop(f);
@@ -2727,14 +2785,24 @@ fn page_choice_clears_the_done_message() {
     let mut screen = Screen::new(1200.0, 800.0);
     let mut last = None;
     let seen = screen.settle(3, &mut |ctx| {
-        assert!(d.show(ctx, &mut s, &mut last));
+        assert!(d.show_in(
+            ctx,
+            &mut s,
+            &mut last,
+            &mut planora_app::places::Places::default()
+        ));
     });
     let done_text = |seen: &[common::Seen]| seen.iter().any(|x| x.text.starts_with("Fertig:"));
     assert!(done_text(&seen), "Fertig vor dem Wechsel");
     let all = find(&seen, PDF_ALL).expect("Wahl").rect.center();
     let seen = {
         let mut f = |ctx: &egui::Context| {
-            assert!(d.show(ctx, &mut s, &mut last));
+            assert!(d.show_in(
+                ctx,
+                &mut s,
+                &mut last,
+                &mut planora_app::places::Places::default()
+            ));
         };
         screen.click(all, &mut f);
         screen.settle(2, &mut f)
@@ -2862,7 +2930,12 @@ fn while_computing_the_lines_say_so() {
         d.drawing = Some(id);
         let mut dir = None;
         let out = context().run_ui(wide(), |ui| {
-            assert!(d.show(ui.ctx(), &mut s, &mut dir));
+            assert!(d.show_in(
+                ui.ctx(),
+                &mut s,
+                &mut dir,
+                &mut planora_app::places::Places::default()
+            ));
         });
         let text = collect_texts(&out);
         out.drop_without_applying_deltas();

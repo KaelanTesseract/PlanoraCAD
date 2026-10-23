@@ -203,7 +203,15 @@ fn draw_in(d: &mut StepImportDialog, s: &mut AppState, dark: bool) -> Vec<Shown>
             ..Default::default()
         };
         let out = ctx.run_ui(raw, |ui| {
-            assert!(d.show(ui.ctx(), s, &mut dir), "Fenster bleibt offen");
+            assert!(
+                d.show_in(
+                    ui.ctx(),
+                    s,
+                    &mut dir,
+                    &mut planora_app::places::Places::default()
+                ),
+                "Fenster bleibt offen"
+            );
         });
         seen.clear();
         for c in &out.shapes {
@@ -231,7 +239,12 @@ fn show_on<'a>(
     let mut dir = None;
     move |ctx| {
         if *open {
-            *open = d.show(ctx, s, &mut dir);
+            *open = d.show_in(
+                ctx,
+                s,
+                &mut dir,
+                &mut planora_app::places::Places::default(),
+            );
         }
     }
 }

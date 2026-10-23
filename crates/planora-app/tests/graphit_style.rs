@@ -311,7 +311,12 @@ fn dialog_windows_use_the_panel_frame() {
         let mut export = ExportDialog::new(&st);
         let mut dir = None;
         let s = settle(&c, |ctx| {
-            export.show(ctx, &mut st, &mut dir);
+            export.show_in(
+                ctx,
+                &mut st,
+                &mut dir,
+                &mut planora_app::places::Places::default(),
+            );
         });
         has_panel_frame(&s, dark, "Exportieren");
 

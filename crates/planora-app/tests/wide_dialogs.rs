@@ -91,7 +91,12 @@ fn show_export<'a>(
 ) -> impl FnMut(&egui::Context) + 'a {
     let mut dir = None;
     move |ctx| {
-        assert!(d.show(ctx, s, &mut dir));
+        assert!(d.show_in(
+            ctx,
+            s,
+            &mut dir,
+            &mut planora_app::places::Places::default()
+        ));
     }
 }
 
@@ -151,7 +156,12 @@ fn cards_stay_side_by_side_and_inside_at_800x600() {
     let mut screen = Screen::new(800.0, 600.0);
     let mut last = None;
     let seen = screen.settle(8, &mut |ctx| {
-        assert!(d.show(ctx, &mut s, &mut last));
+        assert!(d.show_in(
+            ctx,
+            &mut s,
+            &mut last,
+            &mut planora_app::places::Places::default()
+        ));
     });
     let rect = d.last_rect.unwrap();
     assert!(window(&screen).contains_rect(rect), "{rect:?}");
