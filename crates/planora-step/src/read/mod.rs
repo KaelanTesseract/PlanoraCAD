@@ -6,6 +6,7 @@
 //! beim Gebrauch zerlegt (`StepFile::entity`); fehlende Verweise fallen dort auf und treffen nur
 //! die Körper, die sie brauchen. Speicher: Dateibytes plus etwa 32 Bytes je Eintrag.
 
+pub mod assembly;
 pub mod error;
 pub mod geom;
 pub mod index;
