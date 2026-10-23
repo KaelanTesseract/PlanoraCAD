@@ -3,6 +3,7 @@
 //! Stückliste und STEP-Export.
 
 use planora_drawing::section::{SectionPlane, loop_polygon, polygon_area};
+use planora_drawing::sheet_info::Stamp;
 use planora_drawing::{DrawBody, Paper, Placement, Projection, Scale, Sheet, ViewKind};
 use planora_exchange::Progress;
 use planora_feature::*;
@@ -190,6 +191,12 @@ fn step_body_is_one_exact_body() {
     assert_eq!(d.edit_count(), edits + 2);
     assert_eq!(step_shape_of(&d, more[0]), StepShapeId(2));
     assert_eq!(step_shape_of(&d, more[1]), StepShapeId(3));
+    for (feature, shape) in [(more[0], 2), (more[1], 3)] {
+        assert!(Arc::ptr_eq(
+            d.step_body(feature).unwrap(),
+            d.step_shape(StepShapeId(shape)).unwrap()
+        ));
+    }
     assert_eq!(d.visible_bodies().len(), 3);
     assert_eq!(d.features()[1].id, more[0], "in der Reihenfolge am Marker");
     assert_eq!(d.marker(), 3);
@@ -250,6 +257,54 @@ fn all_or_nothing() {
     assert_eq!(ids, vec![FeatureId(next_id)]);
     assert_eq!(step_shape_of(&d, ids[0]), StepShapeId(1));
     d.check_invariants().unwrap();
+}
+
+/// Die Rücknahme nimmt auch ein Folgeblatt der Stückliste zurück, das die neuen Körper
+/// ausgelöst haben: Zeichnungen, Zeichnungskennung und Änderungszahl wie vorher.
+#[test]
+fn rollback_restores_parts_sheets() {
+    let a4_quer = Sheet {
+        paper: Paper::A4,
+        landscape: true,
+    };
+    let mut d = Document::new();
+    // A4 quer: 26 Zeilen je Blatt; 26 Quader füllen Seite 1.
+    for i in 1..=26 {
+        d.add_feature(
+            format!("Teil {i}"),
+            FeatureKind::Box {
+                size: DVec3::splat(5.0),
+                origin: DVec3::new(20.0 * i as f64, 100.0, 0.0),
+            },
+        )
+        .unwrap();
+    }
+    let stamp = Stamp {
+        date: "2026-10-23".into(),
+        user: "dennis".into(),
+    };
+    d.add_parts_sheets(a4_quer, &stamp).unwrap();
+    assert_eq!(d.parts_sheets().len(), 1);
+    let before = d.snapshot();
+    let (edits, model) = (d.edit_count(), d.model_edit_count());
+    let broken = Arc::new(StepShape::new(broken_text(), 1e-6).unwrap());
+    let e = d
+        .add_step_bodies(vec![
+            body("Q", imported(&box_solid(), "Q")),
+            body("Kaputt", broken),
+        ])
+        .unwrap_err();
+    assert!(e.to_string().starts_with("„Kaputt“: "), "{e}");
+    assert_eq!(d.parts_sheets().len(), 1);
+    assert!(d.snapshot().same_content(&before));
+    assert_eq!(d.snapshot().next_drawing, before.next_drawing);
+    assert_eq!(d.edit_count(), edits);
+    assert_eq!(d.model_edit_count(), model);
+    d.check_invariants().unwrap();
+    // Gelingt der Import, entsteht das Folgeblatt.
+    d.add_step_bodies(vec![body("Q", imported(&box_solid(), "Q"))])
+        .unwrap();
+    assert_eq!(d.parts_sheets().len(), 2);
 }
 
 /// Ein Körper außerhalb des darstellbaren Bereichs wird wie jeder Körper abgelehnt; der Import

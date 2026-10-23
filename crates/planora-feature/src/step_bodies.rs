@@ -127,7 +127,8 @@ impl Document {
 
     /// Legt die Formen mit fortlaufenden Kennungen und je Körper ein Feature am Marker an (in
     /// der gegebenen Reihenfolge, je Körper eine Änderung). Ist danach ein neuer Körper nicht
-    /// `Ok`, wird alles zurückgenommen (Features, Formen, Kennungszähler, Änderungszahl, Marker)
+    /// `Ok`, wird alles zurückgenommen (Features, Formen, Kennungszähler, Änderungszahl, Marker,
+    /// dabei entstandene Folgeblätter der Stückliste samt Zeichnungszähler)
     /// und die Meldung des ersten geliefert („„{Name}“: {Meldung}“). Ein leerer Aufruf ändert
     /// nichts.
     pub fn add_step_bodies(
@@ -143,6 +144,9 @@ impl Document {
             ));
         }
         let saved = (self.next_id, self.next_step_shape, self.edits, self.marker);
+        // Neue Körper können ein Folgeblatt der Stückliste auslösen (`sync_parts_sheets`); die
+        // Rücknahme stellt deshalb auch Zeichnungen, Zeichnungskennung und -änderungszahl her.
+        let saved_drawings = (self.drawings.clone(), self.next_drawing, self.drawing_edits);
         let mut shapes = Vec::with_capacity(bodies.len());
         let mut ids = Vec::with_capacity(bodies.len());
         let added = self.insert_step_bodies(bodies, &mut shapes, &mut ids);
@@ -167,6 +171,7 @@ impl Document {
         }
         (self.next_id, self.next_step_shape, self.edits, self.marker) = saved;
         self.recompute();
+        (self.drawings, self.next_drawing, self.drawing_edits) = saved_drawings;
         Err(e)
     }
 
