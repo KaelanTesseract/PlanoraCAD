@@ -162,9 +162,9 @@ impl Entity {
     pub fn arg(&self, name: &str, i: usize) -> Result<&Value, String> {
         let args = self
             .part(name)
-            .ok_or_else(|| format!("Der Eintrag ist kein {name}."))?;
+            .ok_or_else(|| format!("Ein Eintrag hat die falsche Art (erwartet: {name})."))?;
         args.get(i)
-            .ok_or_else(|| format!("{name}: Der {}. Parameter fehlt.", i + 1))
+            .ok_or_else(|| format!("Bei einem Eintrag fehlt die {}. Angabe ({name}).", i + 1))
     }
 
     /// Typnamen in der Reihenfolge der Datei.

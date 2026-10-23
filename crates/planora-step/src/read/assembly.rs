@@ -32,7 +32,8 @@
 //! Jede Lage wird in den Einheiten der Darstellung gelesen, zu der sie gehört (`units_of`), und
 //! ist danach eine Bewegung in mm. Verschachtelte Lagen werden bis zur Wurzel multipliziert
 //! (`M = T_Wurzel · … · T_Kind`). Spiegelung (negative Determinante), Skalierung (Maßstab ≠ 1,
-//! auch nicht gleichmäßig, oder schiefe bzw. entartete Achsen), unbekannte Arten von Lagen und
+//! auch nicht gleichmäßig), schiefe Achsen (Kosinus über 1e-4 oder entartet; darunter wie ISO
+//! projiziert), unbekannte Arten von Lagen und
 //! unklare Richtungen ergeben eine Meldung ([`placement_note`]); der Körper und alles darunter
 //! liegt dann am Ursprung. Darstellungen in einem Kreis (und alles, was nur über einen Kreis
 //! erreichbar ist) erscheinen je einmal mit „Verweise im Kreis“; tiefer als
@@ -145,6 +146,7 @@ pub fn unsupported_kinds(file: &StepFile) -> Vec<String> {
 /// Gründe (wörtlich, Plan Aufgabe 8).
 const MIRROR: &str = "Spiegelung";
 const SCALING: &str = "Skalierung";
+const OBLIQUE: &str = "schiefe Achsen";
 const CYCLE: &str = "Verweise im Kreis";
 const TOO_DEEP: &str = "zu tief verschachtelt";
 const UNCLEAR: &str = "Richtung unklar";
@@ -174,8 +176,9 @@ const USAGE_TYPES: &[&str] = &[
 const CTO_3D: &str = "CARTESIAN_TRANSFORMATION_OPERATOR_3D";
 const CTO_NON_UNIFORM: &str = "CARTESIAN_TRANSFORMATION_OPERATOR_3D_NON_UNIFORM";
 
-/// Abstand, ab dem gegebene Achsen eines Operators als schief gelten (Kosinus).
-const OBLIQUE_TOL: f64 = 1e-6;
+/// Kosinus, bis zu dem gegebene Achsen eines Operators wie in ISO 10303-42 senkrecht projiziert
+/// werden (Dateien mit sechsstelligen Richtungen); darüber gelten sie als schief.
+const OBLIQUE_TOL: f64 = 1e-4;
 /// Kürzer als das ist eine projizierte Achse entartet.
 const DEGENERATE: f64 = 1e-9;
 /// Abstand von 1, ab dem ein Maßstab eine Skalierung ist (darunter wird genau 1 genommen).
@@ -454,7 +457,7 @@ impl<'a> Finder<'a> {
         if is_operator(&e) {
             return operator_matrix(self.file, &mut res, id, &e);
         }
-        Err(format!("unbekannte Art {}", type_name(&e)))
+        Err(format!("unbekannte Form der Lage: {}", type_name(&e)))
     }
 
     /// Liest Darstellungen mit Körpern oder Abbildungen, Produkte, Vorkommen und Beziehungen.
@@ -745,7 +748,7 @@ impl<'a> Finder<'a> {
             let m = self.item_matrix(op, ctx_2)?;
             return Ok(if swapped { rigid_inverse(m) } else { m });
         }
-        Err(format!("unbekannte Art {}", type_name(&e)))
+        Err(format!("unbekannte Form der Lage: {}", type_name(&e)))
     }
 
     /// Name des Produkts einer Darstellung (P10), getrimmt; leer, wenn keins.
@@ -1327,18 +1330,19 @@ fn operator_args(e: &Entity) -> Option<Vec<&Value>> {
 /// `z` = axis3 (Vorgabe (0, 0, 1)); `x` = axis1 senkrecht zu `z` gemacht (Vorgabe (1, 0, 0),
 /// liegt `z` auf ±(1, 0, 0): (0, 1, 0)); `y` = axis2 (Vorgabe (0, 1, 0)!) senkrecht zu `z` und
 /// `x` gemacht – ISO bildet `y` nicht als `z × x`, das System kann also linkshändig werden;
-/// Bild `p ↦ origin + scale · (p.x x + p.y y + p.z z)`. Angenommen werden nur Bewegungen:
+/// Bild `p ↦ origin + scale · (p.x x + p.y y + p.z z)` mit den Achsen nach ISO 10303-42
+/// (`base_axis`: z = axis3 oder (0, 0, 1); x = `first_proj_axis` (axis1, ohne sie (1, 0, 0), bei
+/// z = ±x (0, 1, 0)), senkrecht zu z projiziert; y = `second_proj_axis` (axis2, ohne sie
+/// (0, 1, 0)), senkrecht zu z und x projiziert; kein Kreuzprodukt, das System darf linkshändig
+/// sein). Gegen die veröffentlichte EXPRESS-Fassung geprüft (Schlussprüfung). Angenommen werden
+/// nur Bewegungen; Abweichungen sind vorsichtig (Meldung, Körper am Ursprung, nie still anders):
 /// Determinante < 0 → Spiegelung; Maßstab (auch scale2, scale3, Vorgabe = scale) weiter als
-/// 1e-6 von 1, gegebene Achsen nicht senkrecht aufeinander (P3; ISO würde sie projizieren) oder
-/// entartete Achsen (ISO lässt das Ergebnis dann offen) → Skalierung. Ein negativer Maßstab bei
-/// linkshändigen Achsen ergibt zwar eine Drehung, ist nach ISO (`scale > 0`) aber ungültig →
-/// Skalierung. Maßstäbe innerhalb 1e-6 werden als genau 1 genommen.
-///
-/// OCCT (`StepToGeom`) baut das System nach unserer Kenntnis anders: rechtshändig aus axis3
-/// (fehlt sie: axis1 × axis2) und axis1, axis2 dann ohne Einfluss auf die Händigkeit. Wo die
-/// ISO-Vorgabe linkshändig wird (etwa axis1 = (−1, 0, 0) ohne axis2), nimmt OCCT eine Drehung um
-/// 180°, wir melden „Spiegelung“ (sicher, nie still anders). Gegen den OCCT-Quelltext ist das
-/// hier nicht geprüft.
+/// 1e-6 von 1 → Skalierung; gegebene Achsen bis zum Kosinus [`OBLIQUE_TOL`] (1e-4) nicht
+/// senkrecht werden wie bei ISO projiziert, darüber oder entartet (ISO lässt das Ergebnis dann
+/// offen) → schiefe Achsen. Ein negativer Maßstab bei linkshändigen Achsen ergibt zwar eine
+/// Drehung, ist nach ISO (`scale > 0`) aber ungültig → Skalierung. Maßstäbe innerhalb 1e-6
+/// werden als genau 1 genommen. Wo die ISO-Vorgabe linkshändig wird (etwa axis1 = (−1, 0, 0)
+/// ohne axis2), melden wir „Spiegelung“ (andere Programme nehmen dort teils eine Drehung).
 fn operator_matrix(file: &StepFile, res: &mut Resolver, id: u64, e: &Entity) -> Placed {
     let fail = |m: String| reason(&file.fail(id, m).to_string());
     let Some(args) = operator_args(e) else {
@@ -1371,7 +1375,7 @@ fn operator_matrix(file: &StepFile, res: &mut Resolver, id: u64, e: &Entity) -> 
     let v = match axis1 {
         Some(a) => {
             if a.dot(z).abs() > OBLIQUE_TOL {
-                return Err(SCALING.into());
+                return Err(OBLIQUE.into());
             }
             a
         }
@@ -1382,13 +1386,13 @@ fn operator_matrix(file: &StepFile, res: &mut Resolver, id: u64, e: &Entity) -> 
     };
     let x = v - z * v.dot(z);
     if x.length() <= DEGENERATE {
-        return Err(SCALING.into());
+        return Err(OBLIQUE.into());
     }
     let x = x.normalize();
     let w = match axis2 {
         Some(a) => {
             if a.dot(z).abs() > OBLIQUE_TOL || a.dot(x).abs() > OBLIQUE_TOL {
-                return Err(SCALING.into());
+                return Err(OBLIQUE.into());
             }
             a
         }
@@ -1396,7 +1400,7 @@ fn operator_matrix(file: &StepFile, res: &mut Resolver, id: u64, e: &Entity) -> 
     };
     let y = w - z * w.dot(z) - x * w.dot(x);
     if y.length() <= DEGENERATE {
-        return Err(SCALING.into());
+        return Err(OBLIQUE.into());
     }
     let y = y.normalize();
     let handed = x.cross(y).dot(z);

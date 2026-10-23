@@ -1433,3 +1433,23 @@ fn large_bodies_keep_the_safety_net() {
         }
     }
 }
+
+/// Schlussprüfung M6: Gründe zu kaputten Einheiten in einfachen Worten (der Typname höchstens in
+/// Klammern dahinter).
+#[test]
+fn broken_units_are_explained_in_plain_words() {
+    for (unit, want) in [
+        (
+            "(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.));",
+            "Eine Einheit ist unvollständig angegeben (SI_UNIT).",
+        ),
+        (
+            "(CONVERSION_BASED_UNIT()LENGTH_UNIT()NAMED_UNIT(#901));",
+            "Bei einer umgerechneten Einheit fehlt der Umrechnungswert (CONVERSION_BASED_UNIT).",
+        ),
+    ] {
+        let imp = import(&box_in(unit));
+        let e = imp.bodies[0].outcome.as_ref().expect_err(unit);
+        assert!(e.ends_with(want), "{unit}: {e}");
+    }
+}

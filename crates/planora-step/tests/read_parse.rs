@@ -876,11 +876,11 @@ fn helpers_for_later_tasks() {
     assert!(a(0).real().is_err(), "real() packt nicht aus");
     assert_eq!(
         e.arg("UNCERTAINTY", 4),
-        Err("UNCERTAINTY: Der 5. Parameter fehlt.".to_string())
+        Err("Bei einem Eintrag fehlt die 5. Angabe (UNCERTAINTY).".to_string())
     );
     assert_eq!(
         e.arg("FOO", 0),
-        Err("Der Eintrag ist kein FOO.".to_string())
+        Err("Ein Eintrag hat die falsche Art (erwartet: FOO).".to_string())
     );
     let why = a(3).real().unwrap_err();
     assert_eq!(

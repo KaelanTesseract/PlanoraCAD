@@ -213,7 +213,7 @@ fn unit_value(file: &StepFile, id: u64, depth: usize) -> Result<(Kind, f64), Ste
     let e = file.entity(id)?;
     if let Some(args) = e.part("SI_UNIT") {
         let Some((prefix, name)) = si_args(args) else {
-            return Err(file.fail(id, "SI_UNIT: Die Parameter passen nicht."));
+            return Err(file.fail(id, "Eine Einheit ist unvollständig angegeben (SI_UNIT)."));
         };
         let prefix = if prefix.is_unset() {
             None
@@ -242,7 +242,7 @@ fn unit_value(file: &StepFile, id: u64, depth: usize) -> Result<(Kind, f64), Ste
     }
     if let Some(args) = e.part("CONVERSION_BASED_UNIT") {
         let Some(factor) = args.last() else {
-            return Err(file.fail(id, "CONVERSION_BASED_UNIT: Der Umrechnungswert fehlt."));
+            return Err(file.fail(id, "Bei einer umgerechneten Einheit fehlt der Umrechnungswert (CONVERSION_BASED_UNIT)."));
         };
         let m = factor.reference().map_err(|msg| file.fail(id, msg))?;
         let me = file.entity(m)?;

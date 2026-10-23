@@ -521,10 +521,10 @@ fn transform_kinds() {
     assert_eq!(names_of(&found), n);
     let expected = [
         note("K1", "Skalierung"),
-        note("K2", "Skalierung"),
+        note("K2", "schiefe Achsen"),
         note("K3", "Spiegelung"),
         None,
-        note("K5", "unbekannte Art AXIS2_PLACEMENT_2D"),
+        note("K5", "unbekannte Form der Lage: AXIS2_PLACEMENT_2D"),
         note("K6", "Richtung unklar"),
         note("K7", "Richtung unklar"),
         None,
@@ -949,14 +949,14 @@ fn operator_rules() {
     let found = bodies(&parse(&g.text())).expect("Körper");
     let expected = [
         note("C1", "Skalierung"),
-        note("C2", "Skalierung"),
+        note("C2", "schiefe Achsen"),
         None,
         None,
         note("C5", "Skalierung"),
         None,
         note("C7", "Skalierung"),
         None,
-        note("C9", "Skalierung"),
+        note("C9", "schiefe Achsen"),
         note("C10", "Skalierung"),
         None,
         note("C12", "Skalierung"),
@@ -1339,4 +1339,51 @@ fn unsupported_kinds_are_named() {
         ]
     );
     assert!(unsupported_kinds(&parse(&data("box_ap214.step"))).is_empty());
+}
+
+/// Schlussprüfung M3: Nicht ganz senkrechte Achsen eines Operators projiziert ISO 10303-42
+/// (`first_proj_axis`, `second_proj_axis`); bis zum Kosinus 1e-4 tun wir das auch (Dateien mit
+/// sechsstelligen Richtungen), darüber Meldung „schiefe Achsen“, Körper am Ursprung.
+#[test]
+fn slightly_oblique_axes_are_projected() {
+    let mut g = Gen::new();
+    let r = g.part("R", None);
+    let z = Some([0.0, 0.0, 1.0]);
+    let ops = [
+        g.cto(Some([1.0, 0.0, 1e-7]), None, [0.0, 0.0, 3.0], 1.0, z),
+        g.cto(Some([1.0, 0.0, 1e-5]), None, [0.0, 0.0, 3.0], 1.0, z),
+        g.cto(
+            Some([1.0, 0.0, 0.0]),
+            Some([1e-5, 1.0, 0.0]),
+            [0.0, 0.0, 3.0],
+            1.0,
+            z,
+        ),
+        g.cto(Some([1.0, 0.0, 1e-3]), None, [0.0, 0.0, 3.0], 1.0, z),
+        g.cto(
+            Some([1.0, 0.0, 0.0]),
+            Some([1e-3, 1.0, 0.0]),
+            [0.0, 0.0, 3.0],
+            1.0,
+            z,
+        ),
+    ];
+    let parts: Vec<Part> = (1..=ops.len())
+        .map(|i| g.part(&format!("S{i}"), Some("x")))
+        .collect();
+    for (p, op) in parts.iter().zip(&ops) {
+        g.place_op(r, *p, *op);
+    }
+    let found = bodies(&parse(&g.text())).expect("Körper");
+    assert_eq!(found.len(), 5);
+    for b in &found[..3] {
+        assert_eq!(b.placement_note, None, "{}", b.name);
+        check_placement(
+            b.placement,
+            [[0.0, 0.0, 3.0], [1.0, 0.0, 3.0], [0.0, 1.0, 3.0]],
+            &b.name,
+        );
+    }
+    assert_eq!(found[3].placement_note, note("S4", "schiefe Achsen"));
+    assert_eq!(found[4].placement_note, note("S5", "schiefe Achsen"));
 }
