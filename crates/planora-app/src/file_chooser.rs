@@ -1,11 +1,17 @@
 //! Eigene Dateiauswahl im Fenster (Plan P14: ohne neue Abhängigkeit statt des Dialogs des
 //! Betriebssystems): Ordner wechseln oder eintippen, Datei wählen oder Namen eingeben, Ersetzen
 //! einer vorhandenen Datei erst nach einem zweiten Klick.
+//!
+//! Über der Liste stehen die Schnellzugriffe ([`crate::places`]); Ordner und Dateien der Liste
+//! haben ein Symbol, Ordner lassen sich per Rechtsklick zu den Favoriten hinzufügen.
 
 use crate::browser::error_color;
+use crate::icons::{self, Icon};
 use crate::mesh_body::warning_color;
+use crate::places::{self, Place, PlaceKind, Places};
 use crate::theme;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Höchstzahl der gezeigten Einträge eines Ordners (große Ordner bleiben bedienbar).
 pub const MAX_ENTRIES: usize = 2000;
@@ -24,6 +30,89 @@ pub struct Entry {
     pub name: String,
     pub is_dir: bool,
 }
+
+/// Hinweis beim Überfahren eines Ordners.
+pub const OPEN_HINT: &str = "Doppelklick zum Öffnen";
+
+/// Symbol eines Eintrags der Liste: Ordner (Akzentfarbe) oder Datei (ruhiges Grau, eines für
+/// alle Dateiarten, damit die Namen bündig stehen).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryIcon {
+    Folder,
+    File,
+}
+
+impl EntryIcon {
+    pub fn of(entry: &Entry) -> EntryIcon {
+        if entry.is_dir {
+            EntryIcon::Folder
+        } else {
+            EntryIcon::File
+        }
+    }
+
+    pub fn icon(self) -> Icon {
+        match self {
+            EntryIcon::Folder => Icon::Folder,
+            EntryIcon::File => Icon::File,
+        }
+    }
+
+    pub fn color(self, dark: bool) -> egui::Color32 {
+        match self {
+            EntryIcon::Folder => theme::folder_icon_color(dark),
+            EntryIcon::File => theme::file_icon_color(dark),
+        }
+    }
+}
+
+/// Text eines Eintrags: nur der Name (der Hinweis zum Öffnen steht im Tooltip).
+pub fn entry_text(entry: &Entry) -> &str {
+    &entry.name
+}
+
+/// Tooltip eines Eintrags: bei Ordnern [`OPEN_HINT`].
+pub fn entry_hover(entry: &Entry) -> Option<&'static str> {
+    entry.is_dir.then_some(OPEN_HINT)
+}
+
+/// Eintrag des Kontextmenüs einer Zeile oder eines Favoriten-Knopfs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RowMenu {
+    AddFavorite(PathBuf),
+    RemoveFavorite(PathBuf),
+}
+
+impl RowMenu {
+    pub fn label(&self) -> &'static str {
+        match self {
+            RowMenu::AddFavorite(_) => places::ADD_FAVORITE,
+            RowMenu::RemoveFavorite(_) => places::REMOVE_FAVORITE,
+        }
+    }
+}
+
+/// Kontextmenü einer Zeile: nur Ordner haben eins (hinzufügen oder, wenn schon Favorit,
+/// entfernen).
+pub fn row_menu(entry: &Entry, dir: &Path, favorites: &[PathBuf]) -> Option<RowMenu> {
+    if !entry.is_dir {
+        return None;
+    }
+    let path = dir.join(&entry.name);
+    Some(if places::is_favorite(favorites, &path) {
+        RowMenu::RemoveFavorite(path)
+    } else {
+        RowMenu::AddFavorite(path)
+    })
+}
+
+/// Kontextmenü eines Schnellzugriffs: nur Favoriten lassen sich entfernen.
+pub fn place_menu(place: &Place) -> Option<RowMenu> {
+    (place.kind == PlaceKind::Favorite).then(|| RowMenu::RemoveFavorite(place.path.clone()))
+}
+
+/// Wie oft das Bild neu gezeichnet wird, solange Laufwerke noch gesucht werden.
+const DRIVE_REPAINT: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChooserAction {
@@ -46,6 +135,10 @@ pub struct FileChooser {
     pub error: Option<String>,
     /// Ziel, dessen Ersetzen noch bestätigt werden muss.
     confirm: Option<PathBuf>,
+    /// Vorhandene bekannte Ordner (einmal beim Öffnen der Auswahl ermittelt).
+    known: Vec<Place>,
+    /// Zuletzt geprüfter Projektordner und ob es ihn gibt (nicht in jedem Bild prüfen).
+    project: Option<(PathBuf, bool)>,
 }
 
 /// Startordner: „Documents“ im Benutzerordner, sonst der Benutzerordner, sonst der aktuelle
@@ -102,9 +195,58 @@ impl FileChooser {
             truncated: false,
             error: None,
             confirm: None,
+            known: places::known_places(places::home_dir().as_deref(), &|p| p.is_dir()),
+            project: None,
         };
         c.reload();
         c
+    }
+
+    /// Die Schnellzugriffe mit den bisher bekannten Laufwerken (wartet nie auf die Suche).
+    pub fn places(&mut self, shared: &Places) -> Vec<Place> {
+        let drives = places::system_drives().known();
+        self.places_with(shared, &drives)
+    }
+
+    /// Wie [`FileChooser::places`] mit vorgegebenen Laufwerken.
+    pub fn places_with(&mut self, shared: &Places, drives: &[PathBuf]) -> Vec<Place> {
+        let project = match &shared.project_root {
+            Some(root) => {
+                let fresh = !matches!(&self.project, Some((p, _)) if p == root);
+                if fresh {
+                    self.project = Some((root.clone(), root.is_dir()));
+                }
+                self.project
+                    .as_ref()
+                    .filter(|(_, exists)| *exists)
+                    .map(|(p, _)| p.as_path())
+            }
+            None => None,
+        };
+        places::build_places(&self.known, project, drives, &shared.favorites)
+    }
+
+    /// Wechselt in den Ordner eines Schnellzugriffs (wie eingetippt); fehlt er, die übliche
+    /// Meldung, bei einem Favoriten mit dem Hinweis zum Entfernen.
+    pub fn go_to_place(&mut self, place: &Place) -> bool {
+        self.dir_text = place.path.display().to_string();
+        let ok = self.go_to_text();
+        if !ok && place.kind == PlaceKind::Favorite {
+            self.error = Some(places::FAVORITE_MISSING.into());
+        }
+        ok
+    }
+
+    /// Führt einen Eintrag eines Kontextmenüs aus; eine volle Liste ergibt eine Meldung.
+    pub fn apply_menu(&mut self, menu: &RowMenu, shared: &mut Places) {
+        match menu {
+            RowMenu::AddFavorite(p) => {
+                if let Err(e) = shared.add_favorite(p) {
+                    self.error = Some(e.into());
+                }
+            }
+            RowMenu::RemoveFavorite(p) => shared.remove_favorite(p),
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -249,8 +391,15 @@ impl FileChooser {
         self.confirm.is_some()
     }
 
-    /// Zeichnet die Auswahl über die volle Breite.
+    /// Zeichnet die Auswahl über die volle Breite, ohne Favoriten und Projektordner (siehe
+    /// [`FileChooser::show_with`]).
     pub fn show(&mut self, ui: &mut egui::Ui) -> ChooserAction {
+        self.show_with(ui, &mut Places::default())
+    }
+
+    /// Zeichnet die Auswahl über die volle Breite mit den gemeinsamen Schnellzugriffen;
+    /// geänderte Favoriten stehen danach in `shared` (`changed`).
+    pub fn show_with(&mut self, ui: &mut egui::Ui, shared: &mut Places) -> ChooserAction {
         let mut action = ChooserAction::None;
         ui.horizontal(|ui| {
             if ui.button("Ordner höher").clicked() {
@@ -264,7 +413,10 @@ impl FileChooser {
                 self.go_to_text();
             }
         });
+        let mut menu = None;
+        self.show_places(ui, shared, &mut menu);
         let (mut enter, mut pick, mut double) = (None, None, None);
+        let dark = ui.visuals().dark_mode;
         theme::scroll_area(
             ui,
             egui::ScrollArea::vertical()
@@ -272,13 +424,23 @@ impl FileChooser {
                 .auto_shrink([false, true]),
             |ui| {
                 for e in &self.entries {
-                    let text = if e.is_dir {
-                        format!("{}  (Ordner, Doppelklick zum Öffnen)", e.name)
-                    } else {
-                        e.name.clone()
-                    };
+                    let kind = EntryIcon::of(e);
+                    // Symbol und Name als getrennte Bausteine: der Name bleibt ein eigener Text
+                    // in der üblichen Schrift, alle Namen stehen bündig hinter dem Symbol.
+                    let symbol = icons::text(kind.icon(), icons::LABEL_ICON_SIZE, kind.color(dark));
                     let selected = !e.is_dir && e.name == self.file_name;
-                    let r = ui.selectable_label(selected, text.as_str());
+                    let mut r = ui.add(egui::Button::selectable(selected, (symbol, entry_text(e))));
+                    if let Some(hint) = entry_hover(e) {
+                        r = r.on_hover_text(hint);
+                    }
+                    if let Some(m) = row_menu(e, &self.dir, &shared.favorites) {
+                        r.context_menu(|ui| {
+                            if ui.button(m.label()).clicked() {
+                                menu = Some(m.clone());
+                                ui.close();
+                            }
+                        });
+                    }
                     // Ordner öffnen nur per Doppelklick: ein einfacher Klick würde sofort den
                     // Ordner wechseln, und der zweite Klick träfe dann einen Eintrag darin.
                     if e.is_dir {
@@ -301,6 +463,9 @@ impl FileChooser {
                 }
             },
         );
+        if let Some(m) = menu {
+            self.apply_menu(&m, shared);
+        }
         if let Some(n) = enter {
             self.enter(&n);
         }
@@ -349,5 +514,43 @@ impl FileChooser {
             action = self.confirm();
         }
         action
+    }
+
+    /// Leiste der Schnellzugriffe (bricht bei Bedarf in weitere Zeilen um). Der Knopf des
+    /// aktuellen Ordners ist hervorgehoben; Favoriten haben ein Kontextmenü zum Entfernen.
+    fn show_places(&mut self, ui: &mut egui::Ui, shared: &Places, menu: &mut Option<RowMenu>) {
+        let list = self.places(shared);
+        if !places::system_drives().is_done() {
+            ui.ctx().request_repaint_after(DRIVE_REPAINT);
+        }
+        if list.is_empty() {
+            return;
+        }
+        let mut go = None;
+        ui.horizontal_wrapped(|ui| {
+            for (i, p) in list.iter().enumerate() {
+                let current = places::is_current(p, &self.dir);
+                let r = ui
+                    .push_id(("planora-place", i), |ui| {
+                        ui.add(icons::selectable(current, p.kind.icon(), p.label.as_str()))
+                    })
+                    .inner
+                    .on_hover_text(p.path.display().to_string());
+                if r.clicked() {
+                    go = Some(i);
+                }
+                if let Some(m) = place_menu(p) {
+                    r.context_menu(|ui| {
+                        if ui.button(m.label()).clicked() {
+                            *menu = Some(m.clone());
+                            ui.close();
+                        }
+                    });
+                }
+            }
+        });
+        if let Some(i) = go {
+            self.go_to_place(&list[i]);
+        }
     }
 }

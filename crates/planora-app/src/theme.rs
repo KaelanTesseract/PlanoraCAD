@@ -656,6 +656,17 @@ pub fn accent(dark: bool) -> Color32 {
     palette(dark).accent
 }
 
+/// Ordnersymbol der Dateiauswahl: ein heller Akzent (die Markierungsfarbe), der in beiden Themen
+/// auf der Fläche der Fenster gut lesbar ist.
+pub fn folder_icon_color(dark: bool) -> Color32 {
+    palette(dark).marker
+}
+
+/// Dateisymbol der Dateiauswahl: ein ruhiges Grau.
+pub fn file_icon_color(dark: bool) -> Color32 {
+    palette(dark).text_secondary
+}
+
 /// Papier einer Zeichnung: auch im dunklen Thema weiß.
 pub const PAPER: Color32 = Color32::WHITE;
 /// Linien der Ansichten auf dem Papier.

@@ -1,13 +1,19 @@
-//! Kleine Konfiguration (gewählte Wurzel), ohne neue Abhängigkeit.
+//! Kleine Konfiguration (gewählte Wurzel, Favoriten der Dateiauswahl), ohne neue Abhängigkeit.
 
 use crate::error::{ProjectError, Result};
 use crate::fsutil::atomic_write;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Kein `deny_unknown_fields`: ältere Programmstände lesen eine neuere Datei (mit Feldern, die
+/// sie nicht kennen) weiter, und neue Felder haben `#[serde(default)]`, damit ältere Dateien
+/// ohne sie samt Wurzel geladen werden.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub root: Option<PathBuf>,
+    /// Lieblingsordner der Dateiauswahl, in der Reihenfolge des Hinzufügens.
+    #[serde(default)]
+    pub favorites: Vec<PathBuf>,
 }
 
 impl Config {

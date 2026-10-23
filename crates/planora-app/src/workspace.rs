@@ -10,6 +10,7 @@ use crate::feature_dialog::FeatureDialog;
 use crate::history::{History, Tracker, snapshot_bytes};
 use crate::import_dialog::ImportDialog;
 use crate::parameter_dialog::ParameterDialog;
+use crate::places::Places;
 use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
 use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
@@ -1168,9 +1169,34 @@ impl Workspace {
         }
     }
 
-    /// Speichert die Konfiguration (gewählte Wurzel); Fehler sind nicht schlimm.
+    /// Speichert die Konfiguration (gewählte Wurzel, Favoriten); Fehler sind nicht schlimm.
     pub fn persist_config(&self) {
         let _ = self.config.save();
+    }
+
+    /// Gemeinsamer Stand der Schnellzugriffe für die Dateiauswahlen eines Bildes: Favoriten aus
+    /// der Konfiguration, Projektordner = gewählte Wurzel oder ihre Vorgabe.
+    pub fn places(&self) -> Places {
+        Places {
+            favorites: self.config.favorites.clone(),
+            project_root: Some(
+                self.config
+                    .root
+                    .clone()
+                    .unwrap_or_else(Config::default_root),
+            ),
+            changed: false,
+        }
+    }
+
+    /// Übernimmt geänderte Favoriten in die Konfiguration; `true`, wenn sie gespeichert werden
+    /// soll (der Aufrufer ruft dann [`Workspace::persist_config`]).
+    pub fn take_places(&mut self, places: Places) -> bool {
+        if !places.changed {
+            return false;
+        }
+        self.config.favorites = places.favorites;
+        true
     }
 
     /// Schreibt für geänderte, gespeicherte Dokumente eine Autosicherung, wenn das Intervall

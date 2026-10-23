@@ -26,6 +26,7 @@ use crate::file_chooser::{ChooserAction, FileChooser};
 use crate::import_dialog::{STALE, Unit};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::warning_color;
+use crate::places::Places;
 use crate::state::AppState;
 use crate::theme;
 use planora_exchange::Progress;
@@ -785,6 +786,18 @@ impl StepImportDialog {
         state: &mut AppState,
         last_dir: &mut Option<PathBuf>,
     ) -> bool {
+        self.show_in(ctx, state, last_dir, &mut Places::default())
+    }
+
+    /// Wie `show`, mit den gemeinsamen Schnellzugriffen der Dateiauswahl (Favoriten,
+    /// Projektordner); geänderte Favoriten stehen danach in `places`.
+    pub fn show_in(
+        &mut self,
+        ctx: &egui::Context,
+        state: &mut AppState,
+        last_dir: &mut Option<PathBuf>,
+        places: &mut Places,
+    ) -> bool {
         self.tick(false);
         self.drop_if_stale(state);
         let mut close_footer = false;
@@ -820,7 +833,7 @@ impl StepImportDialog {
                     let dark = ui.visuals().dark_mode;
                     if choosing {
                         ui.strong("Datei wählen (STEP)");
-                        match self.chooser.show(ui) {
+                        match self.chooser.show_with(ui, places) {
                             ChooserAction::Chosen(p) => chosen = Some(p),
                             // Mit gelesener Liste zurück zur Liste, sonst Fenster schließen.
                             ChooserAction::Cancel if self.loaded.is_some() => back = true,

@@ -1655,3 +1655,27 @@ Entscheidung von Dennis am 2026-10-23: Der STEP-Import soll auch Körper lesen, 
 - **Ausgangslage:** Zylinder, Kegel und Kugel ohne Naht liest der Leser (Naht wird beim Lesen eingefügt, `seam.rs`: Naht mit Abstand zu allen anderen Rändern, Pole geometrisch erkannt). Der Algorithmus mit zwei Kreisen lässt sich auf den Torus übertragen; beim Torus kann die Fläche in beiden Richtungen rundum gehen (zwei Nähte, u und v).
 - **Zu klären:** Welche Formen echte Programme schreiben (Rundung zwischen zwei Kreisen, Rohrbogen mit zwei Rohrkreisen, voller Reifen mit zwei Kreisen), wie die Seitenprobe (`check_face_sides`) und die Wickelregel (Rand schließt sich nicht, Aufgabe 3) mit zwei Nähten umgehen, und welche Gegenproben gebraucht werden.
 - **Vorgehen:** wie bei den anderen Teilprojekten: Entwurf, Plan, Bau mit Prüfungen, Handtest. Dazu gehört, mindestens eine echte STEP-Datei eines anderen CAD-Programms zu bekommen (bisher wurden nur Dateien aus dem eigenen Schreiber und von Hand gebaute Proben gelesen).
+
+## Teilprojekt: Dateiauswahl
+
+Entscheidung von Dennis am 2026-10-23; gilt für alle drei Fenster mit Dateiauswahl (Netz importieren, STEP importieren, Exportieren), weil sie dieselbe Auswahl nutzen.
+
+**Geliefert (Zweig `feature/dateiauswahl`):**
+- Ordnersymbol (Phosphor `folder`, Markierungsfarbe des Themas) statt „(Ordner, Doppelklick zum Öffnen)“; der Hinweis „Doppelklick zum Öffnen“ steht nur noch im Tooltip. Dateien haben ein graues Dateisymbol (Phosphor `file`), damit die Namen bündig stehen. Ordner öffnen bleibt Doppelklick.
+- Schnellzugriffe über der Liste (brechen in weitere Zeilen um): Dokumente, Downloads, Desktop, Bilder (im Benutzerordner, sonst unter `OneDrive`, fehlende werden nicht gezeigt), Projekte (gewählter Projektordner oder die Vorgabe, nur wenn vorhanden), die Laufwerke, dann die Favoriten. Der Knopf des aktuellen Ordners ist hervorgehoben; ein Klick wechselt wie ein eingetippter Ordner.
+- Laufwerke werden einmal je Programmlauf im Hintergrund gesucht (je Buchstabe ein eigener Thread); ein hängendes Netzlaufwerk hält die Oberfläche nicht auf, es erscheint erst, wenn es antwortet.
+- Favoriten: Rechtsklick auf einen Ordner der Liste → „Zu Favoriten hinzufügen“ bzw. „Aus Favoriten entfernen“; Rechtsklick auf einen Favoriten-Knopf → „Aus Favoriten entfernen“. Höchstens 24, ohne Doppelte (Groß- und Kleinschreibung und Schrägstrich am Ende zählen nicht), Reihenfolge des Hinzufügens. Gleich heißende Favoriten zeigen den übergeordneten Ordner mit. Ein Favorit, dessen Ordner fehlt, bleibt sichtbar; ein Klick meldet das und nennt den Weg zum Entfernen.
+- Gespeichert in `config.json` als Feld `favorites` (fehlt es in alten Dateien, bleiben Wurzel und alles andere erhalten; ältere Programmstände übergehen das Feld). Speichern gleich nach jeder Änderung; ein Fehler beim Schreiben ist nicht schlimm.
+
+**Grenzen:** Die bekannten Ordner werden über die üblichen Namen im Benutzerordner gefunden (`Documents`, `Downloads`, `Desktop`, `Pictures`, ggf. unter `OneDrive`), nicht über die Windows-Einstellung für verschobene Ordner. Laufwerke, die erst während des Programmlaufs dazukommen (USB-Stick), erscheinen erst nach einem Neustart. Ist die Konfigurationsdatei unlesbar, gilt wie bisher die Vorgabe (dann ohne Favoriten).
+
+**Handtest (Hell und Dunkel, Fenster 1100 × 700 und 800 × 600):**
+- [ ] 1. „Netz importieren …“: Ordner mit blauem Ordnersymbol, Dateien mit grauem Dateisymbol, Namen bündig; kein Text „(Ordner, …)“. Beim Überfahren eines Ordners erscheint „Doppelklick zum Öffnen“.
+- [ ] 2. Einfacher Klick auf einen Ordner öffnet ihn nicht; Doppelklick öffnet ihn.
+- [ ] 3. Knöpfe über der Liste: Dokumente, Downloads, Desktop, Bilder, Projekte, Laufwerke (C:, D: …). Jeder Klick wechselt dorthin, der Knopf des aktuellen Ordners ist hervorgehoben. Bei 800 × 600 brechen die Knöpfe um, das Fenster rollt.
+- [ ] 4. Rechtsklick auf einen Ordner → „Zu Favoriten hinzufügen“: Der Ordner erscheint als Knopf mit Stern. Rechtsklick auf denselben Ordner zeigt jetzt „Aus Favoriten entfernen“. Rechtsklick auf eine Datei zeigt kein Menü.
+- [ ] 5. Favorit in „STEP importieren …“ und in „Exportieren“ (Dateiauswahl) ebenfalls da; nach Programmneustart noch da.
+- [ ] 6. Zwei Ordner gleichen Namens (z. B. `Kunde A\Teile` und `Kunde B\Teile`) als Favoriten: Die Knöpfe unterscheiden sich.
+- [ ] 7. Favoriten-Ordner im Explorer umbenennen, dann Knopf klicken: Meldung, dass es den Ordner nicht gibt, mit Hinweis zum Entfernen; Rechtsklick auf den Knopf → „Aus Favoriten entfernen“ wirkt.
+- [ ] 8. Mit einem getrennten Netzlaufwerk: Die Auswahl öffnet sofort, das Laufwerk fehlt oder erscheint später.
+- [ ] 9. Ältere `config.json` ohne `favorites` (vorher sichern): Programm startet mit dem gewählten Projektordner.

@@ -31,6 +31,7 @@ use crate::drawing_view::{context_or_single, parts_on, parts_space_for, view_nam
 use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
+use crate::places::Places;
 use crate::sheet_dialog::title_field_name;
 use crate::state::{AppState, BodyKind};
 use crate::theme;
@@ -2385,6 +2386,18 @@ impl ExportDialog {
         state: &mut AppState,
         last_dir: &mut Option<PathBuf>,
     ) -> bool {
+        self.show_in(ctx, state, last_dir, &mut Places::default())
+    }
+
+    /// Wie `show`, mit den gemeinsamen Schnellzugriffen der Dateiauswahl (Favoriten,
+    /// Projektordner); geänderte Favoriten stehen danach in `places`.
+    pub fn show_in(
+        &mut self,
+        ctx: &egui::Context,
+        state: &mut AppState,
+        last_dir: &mut Option<PathBuf>,
+        places: &mut Places,
+    ) -> bool {
         self.tick(state, false);
         let status = self.status(state);
         let write_state = self.write_state();
@@ -2705,7 +2718,7 @@ impl ExportDialog {
                 match chooser.as_mut() {
                     Some(c) => {
                         ui.strong("Speichern unter");
-                        match c.show(ui) {
+                        match c.show_with(ui, places) {
                             ChooserAction::Chosen(p) => chosen = Some(p),
                             ChooserAction::Cancel => drop_chooser = true,
                             ChooserAction::None => {}

@@ -259,18 +259,19 @@ fn click(pos: egui::Pos2, pressed: bool) -> egui::Event {
 #[test]
 fn a_double_click_on_a_folder_enters_it_without_choosing_a_file_inside() {
     let d = temp_dir("doppelklick");
-    fs::create_dir_all(d.join("A")).unwrap();
-    fs::write(d.join("A").join("inner.stl"), b"x").unwrap();
+    fs::create_dir_all(d.join("Unterordner A")).unwrap();
+    fs::write(d.join("Unterordner A").join("inner.stl"), b"x").unwrap();
     let mut drv = Driver::new();
     let mut c = FileChooser::open(d.clone(), vec!["stl"]);
-    let actions = drv.double_click(&mut c, "A  (Ordner");
+    // Die Zeile ist Ordnersymbol und Name; der Hinweis zum Öffnen steht nur im Tooltip.
+    let actions = drv.double_click(&mut c, "Unterordner A");
     assert!(
         actions.iter().all(|a| *a == ChooserAction::None),
         "keine Datei im neuen Ordner gewählt: {actions:?}"
     );
     assert_eq!(
         c.dir(),
-        d.join("A").as_path(),
+        d.join("Unterordner A").as_path(),
         "Doppelklick öffnet den Ordner"
     );
     let _ = fs::remove_dir_all(&d);

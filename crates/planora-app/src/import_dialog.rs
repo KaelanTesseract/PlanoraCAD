@@ -11,6 +11,7 @@ use crate::export_dialog::{LOST, PROGRESS_WIDTH, REPAINT, file_name, group_digit
 use crate::file_chooser::{ChooserAction, FileChooser};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
+use crate::places::Places;
 use crate::state::AppState;
 use crate::theme;
 use planora_exchange::{ExchangeError, ExchangeMesh, MeshReport, check_mesh, import_file};
@@ -207,6 +208,18 @@ impl ImportDialog {
         state: &mut AppState,
         last_dir: &mut Option<PathBuf>,
     ) -> bool {
+        self.show_in(ctx, state, last_dir, &mut Places::default())
+    }
+
+    /// Wie `show`, mit den gemeinsamen Schnellzugriffen der Dateiauswahl (Favoriten,
+    /// Projektordner); geänderte Favoriten stehen danach in `places`.
+    pub fn show_in(
+        &mut self,
+        ctx: &egui::Context,
+        state: &mut AppState,
+        last_dir: &mut Option<PathBuf>,
+        places: &mut Places,
+    ) -> bool {
         self.tick(false);
         self.drop_if_stale(state);
         let (mut open, mut close, mut cancel, mut import) = (true, false, false, false);
@@ -218,7 +231,7 @@ impl ImportDialog {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.strong("Datei wählen (STL oder OBJ)");
-                match self.chooser.show(ui) {
+                match self.chooser.show_with(ui, places) {
                     ChooserAction::Chosen(p) => chosen = Some(p),
                     ChooserAction::Cancel => close = true,
                     ChooserAction::None => {}

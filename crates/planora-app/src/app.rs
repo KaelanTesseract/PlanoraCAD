@@ -890,6 +890,8 @@ impl eframe::App for PlanoraApp {
         // Das Feld Projekte kann den aktiven Tab gewechselt haben (Dokument geöffnet). Der
         // Ordner der Dateiauswahl wird für die Fenster kurz herausgenommen.
         let mut exchange_dir = self.ws.exchange_dir.take();
+        // Schnellzugriffe und Favoriten, gemeinsam für alle Dateiauswahlen.
+        let mut places = self.ws.places();
         let tab = self.ws.active_tab_mut();
         if let Some(dialog) = dialog_for_request(&mut tab.state) {
             tab.dialog = Some(dialog);
@@ -947,7 +949,7 @@ impl eframe::App for PlanoraApp {
             tab.blend_dialog = Some(dialog);
         }
         if let Some(mut dialog) = tab.export_dialog.take()
-            && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
+            && dialog.show_in(&ctx, &mut tab.state, &mut exchange_dir, &mut places)
         {
             tab.export_dialog = Some(dialog);
         }
@@ -969,12 +971,12 @@ impl eframe::App for PlanoraApp {
             tab.state.sheet_dialog = Some(dialog);
         }
         if let Some(mut dialog) = tab.import_dialog.take()
-            && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
+            && dialog.show_in(&ctx, &mut tab.state, &mut exchange_dir, &mut places)
         {
             tab.import_dialog = Some(dialog);
         }
         if let Some(mut dialog) = tab.step_import_dialog.take()
-            && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
+            && dialog.show_in(&ctx, &mut tab.state, &mut exchange_dir, &mut places)
         {
             tab.step_import_dialog = Some(dialog);
         }
@@ -984,6 +986,10 @@ impl eframe::App for PlanoraApp {
         }
 
         self.ws.exchange_dir = exchange_dir;
+        // Geänderte Favoriten gleich speichern (ein Fehler beim Schreiben ist nicht schlimm).
+        if self.ws.take_places(places) {
+            self.ws.persist_config();
+        }
         self.ws.refresh_prompts();
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
