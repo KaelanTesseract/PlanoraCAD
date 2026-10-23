@@ -4,19 +4,27 @@
 //! `j + 1`; Nachbarn durchlaufen ihre Kopie andersherum). Grobe Fassungen erzeugt der Test aus
 //! dieser Datei: Ecken je Fläche verschoben, Geraden durch die verschobenen Ecken neu gelegt.
 
+mod common;
+
+use common::export;
 use planora_drawing::model::ViewKind;
 use planora_drawing::section::{CutOutcome, SECTION_NUDGE_MM, SectionPlane, cut_body};
 use planora_exchange::Progress;
 use planora_kernel::{
-    AnalyticKernel, BlendEdge, BlendKind, BlendRequest, BoolOp, Kernel, Solid, Surface, validate,
+    AnalyticKernel, BlendEdge, BlendKind, BlendRequest, BoolOp, Curve, FaceTag, Kernel, Solid,
+    Surface, validate,
 };
-use planora_math::{DMat4, DVec3, PI, Tolerance};
+use planora_math::nurbs::NurbsCurve;
+use planora_math::{DMat4, DVec3, Frame, PI, Tolerance};
 use planora_mesh::{TessellationOptions, mass_properties, tessellate};
 use planora_step::read::geom::Skip;
-use planora_step::read::topo::{BuildOptions, BuiltSolid, build_solid, read_raw};
+use planora_step::read::topo::{
+    BuildOptions, BuiltSolid, RawBody, RawEdge, RawFace, RawHalfEdge, RawShell, build_solid,
+    read_raw,
+};
 use planora_step::read::units::{Units, context_units};
 use planora_step::read::weld::{
-    HashGrid, check_open_edges, coarse_warning, weld_body, weld_points,
+    HashGrid, check_open_edges, coarse_warning, tighten_vertices, weld_body, weld_points,
 };
 use planora_step::{ReadLimits, StepFile};
 use std::collections::HashMap;
@@ -189,7 +197,10 @@ fn corner_dir(c: usize) -> DVec3 {
 }
 
 /// Grob: jede Kopie einer Ecke bis 9e-4 neben der genauen, je Fläche anders (Betrag und
-/// Richtung), die Kopien einer Ecke höchstens 1e-3 auseinander.
+/// Richtung), aber **nicht unabhängig**: Die Kopien einer Ecke streuen um eine gemeinsame
+/// Richtung und liegen höchstens 1e-3 (die Genauigkeit der Datei) auseinander. Unabhängig bis
+/// 9e-4 versetzte Kopien können bis 1,8e-3 auseinanderliegen; sie werden nicht zusammengezogen
+/// (siehe `copies_farther_apart_than_the_accuracy_are_a_gap`).
 fn coarse_shift(f: usize, _k: usize, p: DVec3) -> DVec3 {
     const SCALE: [f64; 6] = [1.0, 0.8, 0.6, 0.9, 0.7, 0.95];
     let wobble = DVec3::new(
@@ -261,7 +272,7 @@ fn split_vertices_box_is_welded() {
 fn coarse_box_is_taken_with_warning() {
     let text = coarse_box();
     // Der Testkörper ist so grob wie gewollt: jede Kopie bis 9e-4 neben der genauen Ecke, die
-    // Kopien einer Ecke höchstens 1e-3 auseinander.
+    // Kopien einer Ecke aber höchstens 1e-3 auseinander (nicht unabhängig versetzt).
     let exact = data("split_vertices.step");
     let mut copies: Vec<Vec<DVec3>> = vec![Vec::new(); 8];
     let mut largest: f64 = 0.0;
@@ -287,7 +298,7 @@ fn coarse_box_is_taken_with_warning() {
     let units = units_of(&file);
     let items = file.ids_of("MANIFOLD_SOLID_BREP").to_vec();
     let mut raw = read_raw(&file, units, &items, 1e-3, &Progress::new()).expect("Rohform");
-    weld_body(&mut raw, 1e-3);
+    weld_body(&mut raw, 1e-3).expect("zusammengezogen");
     assert_eq!(raw.vertices.len(), 8);
     for v in &raw.vertices {
         let first = (0..6)
@@ -306,6 +317,11 @@ fn coarse_box_is_taken_with_warning() {
         data("split_vertices.step").replace("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#103))\n  ", "");
     assert!(!none.contains("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT"));
     let built = build(&none).expect("gelesen");
+    assert_eq!(built.warnings, vec![COARSE_WARNING.to_string()]);
+    // Gröbere Genauigkeit als 1e-3 wird begrenzt; die Warnung nennt den begrenzten Wert.
+    let rough =
+        data("split_vertices.step").replace("LENGTH_MEASURE(1.E-07)", "LENGTH_MEASURE(1.E-02)");
+    let built = build(&rough).expect("gelesen");
     assert_eq!(built.warnings, vec![COARSE_WARNING.to_string()]);
     // Text der Warnung.
     assert_eq!(coarse_warning(1e-3), COARSE_WARNING);
@@ -597,7 +613,7 @@ fn welding_scales_linearly() {
     let corners = 2 * (2 * steps + 2);
     assert!(raw.vertices.len() > 2 * corners);
     let t = Instant::now();
-    weld_body(&mut raw, tol);
+    weld_body(&mut raw, tol).expect("zusammengezogen");
     check_open_edges(&raw, tol).expect("jede Kante zweimal benutzt");
     let took = t.elapsed();
     eprintln!("Zusammenziehen und Paaren: {took:?}");
@@ -725,4 +741,474 @@ fn coarse_box_after_tightening_passes_the_gate_steps() {
     gate_steps_for_the_box(&built.solid);
     // Gegenprobe: ohne Nachziehen (Datei genau so grob, aber die Ecken dort, wo die Datei sie
     // hat) wäre derselbe Körper für den Kernel zu ungenau – geprüft im Tor (`gate.rs`).
+}
+
+/// Zahl aus „Lücke von {d} mm …“.
+fn gap_number(m: &str) -> f64 {
+    let rest = m
+        .strip_prefix("Lücke von ")
+        .unwrap_or_else(|| panic!("keine Lücke: „{m}“"));
+    rest.split_once(" mm")
+        .expect("Einheit")
+        .0
+        .replace(',', ".")
+        .parse()
+        .expect("Zahl")
+}
+
+#[test]
+fn copies_farther_apart_than_the_accuracy_are_a_gap() {
+    // Festlegung (Ledger, Aufgabe 7): Kopien einer Ecke müssen innerhalb der Genauigkeit der
+    // Datei beieinanderliegen. Hier liegen Boden- und Vorderseitenkopie der Ecke (0; 0; 0) je
+    // 9e-4 neben der genauen, aber in entgegengesetzter Richtung (1,8e-3 auseinander); die
+    // linke Kopie (genau) liegt nahe bei beiden. Zusammengezogen wird nicht transitiv: Die
+    // Vorderseitenkopie bleibt getrennt, der Körper wird mit einer Lücke über der Genauigkeit
+    // ausgelassen – nichts wird still geschlossen.
+    let dir = DVec3::new(1.0, -1.0, 1.0).normalize();
+    let text = displaced(
+        &|f, k, _| match (f, k) {
+            (0, 0) => 9e-4 * dir,
+            (2, 0) => -9e-4 * dir,
+            _ => DVec3::ZERO,
+        },
+        "LENGTH_MEASURE(1.E-03)",
+    );
+    let m = build(&text).err().unwrap_or_default();
+    let d = gap_number(&m);
+    assert!(d >= 1e-3, "„{m}“");
+}
+
+/// Rohform mit Ecken, Kanten (Kurve, t0, t1, Anfang, Ende) und Flächen (Fläche, Halbkanten), alle
+/// in einer Schale.
+fn raw_body(
+    vertices: Vec<DVec3>,
+    edges: Vec<(Curve, f64, f64, usize, usize)>,
+    faces: Vec<(Surface, Vec<(usize, bool)>)>,
+) -> RawBody {
+    let n = faces.len();
+    RawBody {
+        vertices,
+        edges: edges
+            .into_iter()
+            .map(|(curve, t0, t1, start, end)| RawEdge {
+                curve,
+                t0,
+                t1,
+                start,
+                end,
+                line: 0,
+            })
+            .collect(),
+        faces: faces
+            .into_iter()
+            .enumerate()
+            .map(|(i, (surface, hes))| RawFace {
+                surface,
+                same_sense: true,
+                loops: vec![
+                    hes.into_iter()
+                        .map(|(edge, forward)| RawHalfEdge { edge, forward })
+                        .collect(),
+                ],
+                marked_outer: Some(0),
+                patch: None,
+                tag: FaceTag {
+                    origin: 0,
+                    role: format!("STEP-Fläche {}", i + 1),
+                },
+                line: 0,
+                pole_marks: Vec::new(),
+                side_guessed: false,
+            })
+            .collect(),
+        shells: vec![RawShell {
+            faces: (0..n).collect(),
+            void: false,
+            owner: None,
+        }],
+    }
+}
+
+fn plane(origin: DVec3, x: DVec3, y: DVec3) -> Surface {
+    Surface::Plane {
+        frame: Frame {
+            origin,
+            x,
+            y,
+            z: x.cross(y),
+        },
+    }
+}
+
+/// Kubische Bézierkurve von `p` nach `q` mit den inneren Punkten `a`, `b`.
+fn bezier(p: DVec3, a: DVec3, b: DVec3, q: DVec3) -> Curve {
+    Curve::nurbs(
+        NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![p, a, b, q],
+            vec![1.0; 4],
+        )
+        .expect("Bézier"),
+    )
+}
+
+#[test]
+fn gap_counts_the_unwelded_corners() {
+    // Zwei Kopien derselben Kurve, eine Ecke der zweiten 2e-3 daneben (nicht zusammengezogen):
+    // Die Kurvenpunkte der Kopien fallen zusammen (Parameter = Projektion auf dieselbe Kurve),
+    // die Lücke ist trotzdem 2e-3 – nie eine Zahl unter der Genauigkeit oder 0.
+    let circle = |origin: DVec3, x: DVec3, y: DVec3, radius: f64| Curve::Circle {
+        frame: Frame {
+            origin,
+            x,
+            y,
+            z: x.cross(y),
+        },
+        radius,
+    };
+    let cases = [
+        // Rand eines Zylinders R 20 oben, Ecke radial nach außen.
+        (
+            "Zylinder",
+            circle(DVec3::new(0.0, 0.0, 30.0), DVec3::X, DVec3::Y, 20.0),
+            DVec3::X,
+        ),
+        // Meridian einer Kugel R 5, Ecke radial.
+        (
+            "Kugel",
+            circle(DVec3::ZERO, DVec3::X, DVec3::Z, 5.0),
+            DVec3::X,
+        ),
+        // Rohrkreis eines Torus (Mitte bei x = 10, Rohr 3), Ecke quer zum Kreis.
+        (
+            "Torus",
+            circle(DVec3::new(10.0, 0.0, 0.0), DVec3::X, DVec3::Z, 3.0),
+            DVec3::Y,
+        ),
+    ];
+    for (name, curve, off) in cases {
+        for reversed in [false, true] {
+            let a = curve.point(0.0);
+            let b = curve.point(PI);
+            let a2 = a + 2e-3 * off;
+            let second = if reversed {
+                (curve.clone(), PI, 0.0, 1, 2)
+            } else {
+                (curve.clone(), 0.0, PI, 2, 1)
+            };
+            let raw = raw_body(
+                vec![a, b, a2],
+                vec![(curve.clone(), 0.0, PI, 0, 1), second],
+                vec![
+                    (plane(DVec3::ZERO, DVec3::X, DVec3::Y), vec![(0, true)]),
+                    (plane(DVec3::ZERO, DVec3::X, DVec3::Y), vec![(1, true)]),
+                ],
+            );
+            let Skip(m) = check_open_edges(&raw, 1e-3).expect_err("offen");
+            let d = gap_number(&m);
+            assert!(
+                (d - 2e-3).abs() < 1e-9,
+                "{name}, rückwärts {reversed}: „{m}“"
+            );
+        }
+    }
+}
+
+#[test]
+fn pairing_needs_quarter_and_middle_points() {
+    // Zwischen denselben Ecken: Gerade A, S-Kurve B (Mitte genau auf A, Viertel 2,8e-3 daneben),
+    // Bogen C (überall 3,75e-3 … 5e-3 neben A, also unter 10 · tol), Kopie D von A (rückwärts).
+    // Nur D wird mit A gepaart.
+    let (p, q) = (DVec3::ZERO, DVec3::new(10.0, 0.0, 0.0));
+    let at = |x: f64, y: f64| DVec3::new(x, y, 0.0);
+    let line = Curve::Line {
+        origin: p,
+        dir: DVec3::X,
+    };
+    let h = 0.01;
+    let s_curve = bezier(p, at(10.0 / 3.0, h), at(20.0 / 3.0, -h), q);
+    let bow = bezier(p, at(10.0 / 3.0, 6.67e-3), at(20.0 / 3.0, 6.67e-3), q);
+    let pl = plane(DVec3::ZERO, DVec3::X, DVec3::Y);
+    let mut raw = raw_body(
+        vec![p, q],
+        vec![
+            (line.clone(), 0.0, 10.0, 0, 1),
+            (s_curve, 0.0, 1.0, 0, 1),
+            (bow, 0.0, 1.0, 0, 1),
+            (line, 10.0, 0.0, 1, 0),
+        ],
+        vec![
+            (pl.clone(), vec![(0, true)]),
+            (pl.clone(), vec![(1, true)]),
+            (pl.clone(), vec![(2, true)]),
+            (pl, vec![(3, false)]),
+        ],
+    );
+    weld_body(&mut raw, 1e-3).expect("zusammengezogen");
+    assert_eq!(raw.edges.len(), 3);
+    assert_eq!(raw.faces[3].loops[0][0].edge, 0);
+    assert!(
+        raw.faces[3].loops[0][0].forward,
+        "Richtung der Kopie gekippt"
+    );
+    for f in 0..3 {
+        assert_eq!(raw.faces[f].loops[0][0].edge, f);
+    }
+}
+
+#[test]
+fn gap_is_measured_along_the_whole_edge_to_the_nearest_partner() {
+    // Offene Gerade A; daneben ein Bogen B zwischen denselben Ecken (Mitte 1,5e-3 neben A) und
+    // eine Gerade E 0,05 neben A (weiter weg, aber im Suchabstand). Die Lücke kommt vom nächsten
+    // Partner B und aus der Mitte (an den Enden ist sie 0): 0,0015.
+    let at = |x: f64, y: f64| DVec3::new(x, y, 0.0);
+    let (p, q) = (at(0.0, 0.0), at(10.0, 0.0));
+    let h = 2e-3;
+    let pl = plane(DVec3::ZERO, DVec3::X, DVec3::Y);
+    let raw = raw_body(
+        vec![p, q, at(0.0, 0.05), at(10.0, 0.05)],
+        vec![
+            (
+                Curve::Line {
+                    origin: p,
+                    dir: DVec3::X,
+                },
+                0.0,
+                10.0,
+                0,
+                1,
+            ),
+            (
+                bezier(p, at(10.0 / 3.0, h), at(20.0 / 3.0, h), q),
+                0.0,
+                1.0,
+                0,
+                1,
+            ),
+            (
+                Curve::Line {
+                    origin: at(0.0, 0.05),
+                    dir: DVec3::X,
+                },
+                0.0,
+                10.0,
+                2,
+                3,
+            ),
+        ],
+        vec![
+            (pl.clone(), vec![(0, true)]),
+            (pl.clone(), vec![(1, false)]),
+            (pl, vec![(2, false)]),
+        ],
+    );
+    assert_eq!(
+        check_open_edges(&raw, 1e-3)
+            .err()
+            .map(|Skip(m)| m)
+            .as_deref(),
+        Some("Lücke von 0,0015 mm an der Kante bei (5,00; 0,00; 0,00).")
+    );
+}
+
+#[test]
+fn edge_used_three_times_is_left_to_validate() {
+    // Dreimal benutzt ist nicht offen: Das meldet `validate` („… gehört zu 3 Flächen …“).
+    let pl = plane(DVec3::ZERO, DVec3::X, DVec3::Y);
+    let raw = raw_body(
+        vec![DVec3::ZERO, DVec3::X],
+        vec![(
+            Curve::Line {
+                origin: DVec3::ZERO,
+                dir: DVec3::X,
+            },
+            0.0,
+            1.0,
+            0,
+            1,
+        )],
+        vec![
+            (pl.clone(), vec![(0, true)]),
+            (pl.clone(), vec![(0, false)]),
+            (pl, vec![(0, true)]),
+        ],
+    );
+    assert!(check_open_edges(&raw, 1e-3).is_ok());
+}
+
+/// Ecke `corner` an drei Ebenen x = 0, y = 0, z = 0 mit Kanten entlang der Achsen; `nurbs`:
+/// die Kante entlang z als Freiformkurve (Gerade 1. Grades).
+fn corner_body(corner: DVec3, nurbs: bool) -> RawBody {
+    let axis = |d: DVec3| Curve::Line {
+        origin: DVec3::ZERO,
+        dir: d,
+    };
+    let z_edge = if nurbs {
+        (
+            Curve::nurbs(
+                NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 10.0, 10.0],
+                    vec![DVec3::ZERO, DVec3::new(0.0, 0.0, 10.0)],
+                    vec![1.0; 2],
+                )
+                .expect("Gerade"),
+            ),
+            corner.z,
+            10.0,
+            0,
+            3,
+        )
+    } else {
+        (axis(DVec3::Z), corner.z, 10.0, 0, 3)
+    };
+    raw_body(
+        vec![
+            corner,
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(0.0, 10.0, 0.0),
+            DVec3::new(0.0, 0.0, 10.0),
+        ],
+        vec![
+            (axis(DVec3::X), corner.x, 10.0, 0, 1),
+            (axis(DVec3::Y), corner.y, 10.0, 0, 2),
+            z_edge,
+        ],
+        vec![
+            (
+                plane(DVec3::ZERO, DVec3::X, DVec3::Y),
+                vec![(0, true), (1, false)],
+            ),
+            (
+                plane(DVec3::ZERO, DVec3::Y, DVec3::Z),
+                vec![(1, true), (2, false)],
+            ),
+            (
+                plane(DVec3::ZERO, DVec3::Z, DVec3::X),
+                vec![(2, true), (0, false)],
+            ),
+        ],
+    )
+}
+
+#[test]
+fn tightening_stays_within_the_accuracy_and_away_from_freeform_edges() {
+    let dir = DVec3::ONE.normalize();
+    // 9,9e-4 neben der Ecke: genau auf die Ecke gezogen.
+    let mut raw = corner_body(9.9e-4 * dir, false);
+    tighten_vertices(&mut raw, 1e-3);
+    assert!(raw.vertices[0].length() < 1e-12, "{:?}", raw.vertices[0]);
+    // 1,2e-3 neben der Ecke (über der Genauigkeit): bleibt, wo die Datei sie hat.
+    let far = 1.2e-3 * dir;
+    let mut raw = corner_body(far, false);
+    tighten_vertices(&mut raw, 1e-3);
+    assert_eq!(raw.vertices[0], far);
+    // Eine Freiformkante an der Ecke: nicht gezogen (sonst wanderte die Ecke vom Ende der Kurve
+    // weg).
+    let near = 5e-4 * dir;
+    let mut raw = corner_body(near, true);
+    tighten_vertices(&mut raw, 1e-3);
+    assert_eq!(raw.vertices[0], near);
+}
+
+/// Ecken und Kantenparameter als Bits.
+fn bits(raw: &RawBody) -> Vec<u64> {
+    raw.vertices
+        .iter()
+        .flat_map(|p| p.to_array())
+        .chain(raw.edges.iter().flat_map(|e| [e.t0, e.t1]))
+        .map(f64::to_bits)
+        .collect()
+}
+
+#[test]
+fn exact_corners_are_left_bit_for_bit() {
+    // Genaue Dateien: Das Nachziehen verändert kein Bit an Ecken und Kantenparametern.
+    let kernel = AnalyticKernel::default();
+    let mut texts: Vec<(String, String)> = [
+        "box_ap214.step",
+        "bore_halves.step",
+        "bore_seam.step",
+        "split_vertices.step",
+    ]
+    .iter()
+    .map(|n| (n.to_string(), data(n)))
+    .collect();
+    let bar = kernel
+        .make_cylinder(3.0, 40.0)
+        .and_then(|c| {
+            kernel.transform(
+                &c,
+                &(DMat4::from_rotation_y(0.7)
+                    * DMat4::from_translation(DVec3::new(2.0, 1.0, -20.0))),
+            )
+        })
+        .expect("Stab");
+    let block = kernel
+        .make_box(DVec3::new(20.0, 20.0, 10.0))
+        .and_then(|b| {
+            kernel.transform(&b, &DMat4::from_translation(DVec3::new(-10.0, -10.0, -5.0)))
+        })
+        .expect("Block");
+    let bodies: Vec<(&str, Solid)> = vec![
+        (
+            "Zylinder",
+            kernel.make_cylinder(5.0, 12.0).expect("Zylinder"),
+        ),
+        ("Kegel", kernel.make_cone(4.0, 9.0).expect("Kegel")),
+        ("Kugel", kernel.make_sphere(6.0).expect("Kugel")),
+        (
+            "Querbohrung",
+            kernel
+                .boolean(&block, &bar, BoolOp::Difference)
+                .expect("Querbohrung"),
+        ),
+    ];
+    for (name, body) in &bodies {
+        texts.push((name.to_string(), export(&[(name, body)]).0));
+    }
+    for (name, text) in texts {
+        let file = parse(&text);
+        let units = units_of(&file);
+        let items = file.ids_of("MANIFOLD_SOLID_BREP").to_vec();
+        let tol = units.weld_tol_mm();
+        let mut raw = read_raw(&file, units, &items, tol, &Progress::new()).expect("Rohform");
+        weld_body(&mut raw, tol).expect("zusammengezogen");
+        let before = bits(&raw);
+        tighten_vertices(&mut raw, tol);
+        assert!(before == bits(&raw), "{name}: Bits verändert");
+    }
+}
+
+#[test]
+fn far_away_bodies_are_refused_quickly() {
+    // Koordinaten um 1e14 mm: Das Raster könnte dort keine Zellen mehr unterscheiden (alles in
+    // einer Zelle, quadratisch). Solche Körper werden sofort abgelehnt.
+    let far = DVec3::new(1e14, 0.0, 0.0);
+    let faces: Vec<Vec<DVec3>> = staircase(2500)
+        .into_iter()
+        .map(|f| f.into_iter().map(|p| p + far).collect())
+        .collect();
+    let text = polyhedron_text(&faces);
+    let file = parse(&text);
+    let units = units_of(&file);
+    let items = file.ids_of("MANIFOLD_SOLID_BREP").to_vec();
+    let tol = units.weld_tol_mm();
+    let mut raw = read_raw(&file, units, &items, tol, &Progress::new()).expect("Rohform");
+    let t = Instant::now();
+    let r = weld_body(&mut raw, tol);
+    assert!(t.elapsed().as_secs_f64() < 1.0, "{:?}", t.elapsed());
+    assert_eq!(
+        r.err().map(|Skip(m)| m).as_deref(),
+        Some("Der Körper liegt weiter als 1 000 km vom Ursprung entfernt.")
+    );
+    let small: Vec<Vec<DVec3>> = staircase(3)
+        .into_iter()
+        .map(|f| f.into_iter().map(|p| p + far).collect())
+        .collect();
+    assert_eq!(
+        build(&polyhedron_text(&small)).err().as_deref(),
+        Some("Der Körper liegt weiter als 1 000 km vom Ursprung entfernt.")
+    );
 }

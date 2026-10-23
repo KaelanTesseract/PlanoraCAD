@@ -17,7 +17,12 @@
 //!   1e-6 und lehnt Abziehen, Rundung und Schnitt schon bei Ecken 1e-5 neben ihren Kanten ab.
 //!
 //! Nachbarn werden über ein Raster ([`HashGrid`]) bzw. über das Eckenpaar gesucht, nie paarweise
-//! über alle; der Aufwand wächst linear mit der Zahl der Ecken und Kanten.
+//! über alle; der Aufwand wächst linear mit der Zahl der Ecken und Kanten. Körper mit Ecken
+//! weiter als 1 000 km vom Ursprung werden abgelehnt (dort unterschiede das Raster keine Zellen
+//! mehr).
+//!
+//! Festlegung: Kopien einer Ecke müssen innerhalb der Genauigkeit der Datei beieinanderliegen
+//! (Bedeutung der STEP-Unsicherheit); weiter auseinanderliegende Kopien ergeben eine Lücke.
 
 use crate::read::geom::Skip;
 use crate::read::topo::{RawBody, place};
@@ -134,6 +139,9 @@ pub fn coarse_warning(tol_mm: f64) -> String {
     )
 }
 
+/// Größter Betrag einer Koordinate (mm, 1 000 km), den das Zusammenziehen annimmt.
+const MAX_COORD_MM: f64 = 1e9;
+
 /// Viertel- und Mittelpunkt, an denen gepaarte Kanten verglichen werden.
 const PAIR_SAMPLES: [f64; 3] = [0.25, 0.5, 0.75];
 
@@ -177,7 +185,18 @@ fn first_shells(raw: &RawBody) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
 /// eine Kante (Kurve und Parameter der ersten; Halbkanten der zweiten zeigen auf die erste, bei
 /// gegenläufigen Tangenten mit gekippter Richtung). Danach werden ungenutzte Ecken und Kanten
 /// entfernt. Kein Lückenschließen: Was weiter auseinanderliegt, bleibt getrennt.
-pub fn weld_body(raw: &mut RawBody, tol: f64) {
+pub fn weld_body(raw: &mut RawBody, tol: f64) -> Result<(), Skip> {
+    // Weit draußen unterscheidet das Raster keine Zellen mehr (alles fiele in eine Zelle, die Suche
+    // würde quadratisch); dort ist auch die Zahlengenauigkeit weit gröber als die des Kernels.
+    if raw
+        .vertices
+        .iter()
+        .any(|p| !p.is_finite() || p.abs().max_element() > MAX_COORD_MM)
+    {
+        return Err(Skip(
+            "Der Körper liegt weiter als 1 000 km vom Ursprung entfernt.".into(),
+        ));
+    }
     let tol = tol.max(Tolerance::default().linear);
     let (vertex_shell, edge_shell) = first_shells(raw);
     // Ecken je Schale zusammenziehen.
@@ -230,6 +249,7 @@ pub fn weld_body(raw: &mut RawBody, tol: f64) {
         }
     }
     raw.compact();
+    Ok(())
 }
 
 /// Kleinster Suchabstand (mm) für die Partnerkante einer offenen Kante.
@@ -263,6 +283,17 @@ fn gap_of(raw: &RawBody, grid: &HashGrid, k: usize, radius: f64) -> Option<f64> 
                 .total_cmp(&edge_at(raw, b, 0.5).distance(mid))
         })?;
     let flip = opposed(raw, k, partner);
+    let (e, p) = (&raw.edges[k], &raw.edges[partner]);
+    // Die Ecken selbst zählen mit: Teilen sich die Kopien eine Kurve, fallen ihre Kurvenpunkte
+    // zusammen (Parameter = Projektion), die nicht zusammengezogenen Ecken aber nicht.
+    let ends = if flip {
+        [(e.start, p.end), (e.end, p.start)]
+    } else {
+        [(e.start, p.start), (e.end, p.end)]
+    };
+    let corners = ends
+        .iter()
+        .map(|&(a, b)| raw.vertices[a].distance(raw.vertices[b]));
     Some(
         GAP_SAMPLES
             .iter()
@@ -270,55 +301,34 @@ fn gap_of(raw: &RawBody, grid: &HashGrid, k: usize, radius: f64) -> Option<f64> 
                 let q = edge_at(raw, partner, if flip { 1.0 - t } else { t });
                 edge_at(raw, k, t).distance(q)
             })
+            .chain(corners)
             .fold(0.0, f64::max),
     )
 }
 
-/// Prüft die offenen Kanten; `gaps_only`: nur Lücken melden.
-fn open_edge_check(raw: &RawBody, tol: f64, gaps_only: bool) -> Result<(), Skip> {
+/// Jede Kante wird genau zweimal benutzt (geprüft vor dem Aufbau des Kernel-Körpers, nach
+/// Nähten und Rändern, damit P9 und „keinen Rand“ zuerst sprechen). Die erste nur einmal benutzte
+/// Kante (in der Reihenfolge der Rohform) ergibt ein [`Skip`]: Liegt eine andere offene Kante
+/// daneben (Mittelpunkte höchstens `max(100 · tol, 0,01 mm)` auseinander; die nächste zählt),
+/// „Lücke von {d} mm an der Kante bei (…).“ mit dem größten Abstand gleichlaufender Punkte beider
+/// Kanten (Ecken, Enden, Viertel, Mitte; `d` mit höchstens vier gültigen Stellen); sonst „Der
+/// Körper ist ungültig: Die Kante bei (…) gehört nur zu einer Fläche.“ Öfter als zweimal benutzte
+/// Kanten meldet `validate`.
+pub fn check_open_edges(raw: &RawBody, tol: f64) -> Result<(), Skip> {
     let open = open_edges(raw);
-    if open.is_empty() {
+    let Some(&first) = open.first() else {
         return Ok(());
-    }
+    };
     let radius = (GAP_SEARCH_TOLS * tol).max(MIN_GAP_SEARCH);
     let mut grid = HashGrid::new(radius);
     for &k in &open {
         grid.insert(edge_at(raw, k, 0.5), k);
     }
-    for &k in &open {
-        if let Some(gap) = gap_of(raw, &grid, k, radius) {
-            return Err(Skip(format!(
-                "Lücke von {} mm an der Kante bei {}.",
-                short_number(gap),
-                place(edge_at(raw, k, 0.5))
-            )));
-        }
-        if !gaps_only {
-            return Err(Skip(format!(
-                "Der Körper ist ungültig: Die Kante bei {} gehört nur zu einer Fläche.",
-                place(edge_at(raw, k, 0.5))
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Lücken zwischen offenen Kanten (früh, gleich nach dem Paaren und dem Entfernen entarteter
-/// Kanten): Die erste nur einmal benutzte Kante (in der Reihenfolge der Rohform), neben der eine
-/// andere offene Kante liegt (Mittelpunkte höchstens `max(100 · tol, 0,01 mm)` auseinander; die
-/// nächste zählt), ergibt „Lücke von {d} mm an der Kante bei (…).“ mit dem größten Abstand
-/// gleichlaufender Punkte beider Kanten (Enden, Viertel, Mitte; `d` mit höchstens vier gültigen
-/// Stellen). Offene Kanten ohne Partner meldet erst [`check_open_edges`]: Davor sagen das Einfügen
-/// der Nähte (P9) und das Fertigstellen der Flächen („keinen Rand“) genauer, was fehlt.
-pub fn check_gaps(raw: &RawBody, tol: f64) -> Result<(), Skip> {
-    open_edge_check(raw, tol, true)
-}
-
-/// Jede Kante wird genau zweimal benutzt: Die erste nur einmal benutzte Kante ergibt eine Lücke
-/// wie bei [`check_gaps`] oder, ohne Partner, „Der Körper ist ungültig: Die Kante bei (…) gehört
-/// nur zu einer Fläche.“ Öfter als zweimal benutzte Kanten meldet `validate`.
-pub fn check_open_edges(raw: &RawBody, tol: f64) -> Result<(), Skip> {
-    open_edge_check(raw, tol, false)
+    let at = place(edge_at(raw, first, 0.5));
+    Err(Skip(match gap_of(raw, &grid, first, radius) {
+        Some(gap) => format!("Lücke von {} mm an der Kante bei {at}.", short_number(gap)),
+        None => format!("Der Körper ist ungültig: Die Kante bei {at} gehört nur zu einer Fläche."),
+    }))
 }
 
 /// Größter Rest (relativ `1 + |p|`), bis zu dem eine Ecke als genau auf ihren Flächen gilt.

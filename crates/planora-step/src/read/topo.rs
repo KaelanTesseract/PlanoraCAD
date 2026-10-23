@@ -1955,13 +1955,13 @@ fn check_edges(solid: &Solid, weld_tol: f64) -> Result<(), Skip> {
 /// Baut aus den Volumen-Einträgen `items` (`MANIFOLD_SOLID_BREP`, `BREP_WITH_VOIDS`; mehrere
 /// ergeben mehrere Schalen eines Körpers) einen geprüften Körper. Ablauf: Rohform lesen, Ecken
 /// zusammenziehen und Kanten paaren ([`crate::read::weld`]), Ecken auf Pole ziehen, entartete
-/// Kanten entfernen, Lücken zwischen offenen Kanten melden, Ecken auf den Schnitt ihrer Flächen
-/// nachziehen (P16), fehlende Nähte einfügen ([`crate::read::seam`]), Pole prüfen, je Fläche
-/// äußerer Rand und Parameterbereich, ungenutzte Kanten und Ecken entfernen, jede Kante genau
-/// zweimal benutzt; dann `validate`, Schleifen je Fläche, Außenrichtung je Schale über ihr Volumen,
-/// Lage der Kanten und Ecken, `validate`. Mehr als `file.limits().max_faces` Flächen, ungültige
-/// Topologie, verdrehte Flächen, Kanten neben ihren Flächen oder Ecken neben ihren Kanten ergeben
-/// ein [`Skip`] mit Grund. Grobe Dateien (`Units::is_coarse`) bekommen die Warnung
+/// Kanten entfernen, Ecken auf den Schnitt ihrer Flächen nachziehen (P16), fehlende Nähte
+/// einfügen ([`crate::read::seam`]), Pole prüfen, je Fläche äußerer Rand und Parameterbereich,
+/// ungenutzte Kanten und Ecken entfernen, jede Kante genau zweimal benutzt (sonst Lücke oder
+/// offene Kante); dann `validate`, Schleifen je Fläche, Außenrichtung je Schale über ihr
+/// Volumen, Lage der Kanten und Ecken, `validate`. Mehr als `file.limits().max_faces` Flächen,
+/// ungültige Topologie, verdrehte Flächen, Kanten neben ihren Flächen oder Ecken neben ihren
+/// Kanten ergeben ein [`Skip`] mit Grund. Grobe Dateien (`Units::is_coarse`) bekommen die Warnung
 /// [`weld::coarse_warning`]. `progress` zählt je Fläche eins weiter; Abbruch ergibt
 /// `Skip("Abgebrochen")`.
 pub fn build_solid(
@@ -1973,11 +1973,10 @@ pub fn build_solid(
 ) -> Result<BuiltSolid, Skip> {
     let tol = opts.weld_tol_mm;
     let mut raw = read_raw(file, units, items, tol, progress)?;
-    weld::weld_body(&mut raw, tol);
+    weld::weld_body(&mut raw, tol)?;
     seam::snap_poles(&mut raw, tol);
     seam::split_at_poles(&mut raw, tol);
     seam::drop_degenerate(&mut raw, tol)?;
-    weld::check_gaps(&raw, tol)?;
     weld::tighten_vertices(&mut raw, tol);
     seam::insert_seams(&mut raw, tol)?;
     seam::check_poles(&raw, tol)?;
