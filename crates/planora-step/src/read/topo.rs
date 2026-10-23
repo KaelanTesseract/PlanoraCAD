@@ -809,11 +809,21 @@ fn derive_patch_impl(
         if track.iter().any(|t| t.3) {
             // Durch einen Pol: `u` nach der Regel des Kernels (Polpunkte genau auf den Pol).
             through_pole = true;
-            let pts: Vec<DVec3> = lp.iter().map(|p| geo_pole(*p).unwrap_or(*p)).collect();
+            let mut pts: Vec<DVec3> = lp.iter().map(|p| geo_pole(*p).unwrap_or(*p)).collect();
+            snap_pole_approach(&mut pts, &track, &pole_points);
             track = points_to_uv(surface, sense, &pts)
                 .into_iter()
                 .map(|q| (q.x, q.y, true, param_pole(q.y)))
                 .collect();
+            // Läuft der Sprung am Pol zur falschen Seite, schließt sich die Schleife in `u` erst
+            // nach einem weiteren Umlauf: Rand und Sinn der Fläche passen nicht zusammen. (Die
+            // Ausdehnung allein sagt das nicht: Ein Rand um den Pol darf in `u` vor- und
+            // zurücklaufen und so über eine Periode reichen.)
+            if let (Some(per), Some(a), Some(b)) = (periods[0], track.first(), track.last())
+                && !((b.0 - a.0).abs() < 0.5 * per)
+            {
+                return Err(Skip(TWISTED_AT_POLE.into()));
+            }
             for k in 0..2 {
                 let first = track
                     .iter()
@@ -864,14 +874,12 @@ fn derive_patch_impl(
     for k in 0..2 {
         if let Some(per) = periods[k] {
             let slack = (2.0 * tol_mm / speed[k]).clamp(PERIOD_SLACK * per, MAX_PERIOD_SLACK * per);
-            if !(hi[k] - lo[k] <= per + slack) {
-                // Über einen Pol hinweg heißt das: Der Sprung am Pol läuft zur falschen Seite,
-                // Rand und Sinn der Fläche passen nicht zusammen.
-                return Err(Skip(if through_pole && k == 0 {
-                    TWISTED_AT_POLE.into()
-                } else {
-                    "Der Parameterbereich einer Fläche reicht über mehr als einen Umlauf.".into()
-                }));
+            // Über einen Pol hinweg darf `u` weiter reichen (geschlossene Schleife oben geprüft);
+            // der Bereich ist dann genau eine Periode.
+            if !(hi[k] - lo[k] <= per + slack) && !(through_pole && k == 0) {
+                return Err(Skip(
+                    "Der Parameterbereich einer Fläche reicht über mehr als einen Umlauf.".into(),
+                ));
             }
             if hi[k] - lo[k] > per {
                 hi[k] = lo[k] + per;
@@ -887,6 +895,81 @@ fn derive_patch_impl(
         v0: lo[1],
         v1: hi[1],
     })
+}
+
+/// Nähe zum Pol (relativ zu `1 + |Pol|`), unter der Punkte einer Schleife beim Anlauf auf den
+/// Pol als Pol gelten: Ihr `u` ist dort nur noch Rundungsrauschen (`ε · |p| / Abstand`), und der
+/// Kernel entscheidet den Sprung am Pol schon bei 1e-9 Unterschied in `u`. Bei 1e-4 bleibt das
+/// Rauschen unter etwa 1e-11 · (1 / Öffnungssinus).
+const POLE_APPROACH_REL: f64 = 1e-4;
+
+/// Höchstens dieser Anteil des größten Abstands der Schleife vom Pol wird so zum Pol gezählt.
+const POLE_APPROACH_SHARE: f64 = 0.01;
+
+/// Punkte, mit denen die Schleife auf einen Pol zu- oder von ihm wegläuft (zusammenhängend mit
+/// einem Polbesuch aus `track`), werden bis zum Abstand [`POLE_APPROACH_REL`] · (1 + |Pol|)
+/// (höchstens [`POLE_APPROACH_SHARE`] der Ausdehnung der Schleife um den Pol) genau auf den Pol
+/// gelegt. So entscheidet `u` weiter weg, wo es verlässlich ist, über den Sprung am Pol (Spitze
+/// eines Kegels mit Naht: sonst je nach Rauschen kein Sprung).
+fn snap_pole_approach(pts: &mut [DVec3], track: &Track, pole_points: &[DVec3]) {
+    let n = pts.len();
+    if n == 0 || track.len() != n {
+        return;
+    }
+    let near: Vec<f64> = pole_points
+        .iter()
+        .map(|pole| {
+            let extent = pts.iter().map(|p| p.distance(*pole)).fold(0.0, f64::max);
+            (POLE_APPROACH_REL * (1.0 + pole.length())).min(POLE_APPROACH_SHARE * extent)
+        })
+        .collect();
+    for i in 0..n {
+        if !track[i].3 {
+            continue;
+        }
+        let Some((k, pole)) = pole_points
+            .iter()
+            .copied()
+            .enumerate()
+            .min_by(|a, b| a.1.distance(pts[i]).total_cmp(&b.1.distance(pts[i])))
+        else {
+            return;
+        };
+        pts[i] = pole;
+        for dir in [n - 1, 1] {
+            let mut j = (i + dir) % n;
+            while j != i && !track[j].3 && pts[j].distance(pole) <= near[k] {
+                pts[j] = pole;
+                j = (j + dir) % n;
+            }
+        }
+    }
+}
+
+/// Eine gekrümmte Fläche, deren Rand eine Kante zweimal benutzt (Naht), muss sich schließen:
+/// Ist sie in keiner Richtung periodisch (Freiformfläche, deren erste und letzte Kontrollreihe
+/// weiter als `weld_tol` auseinanderliegen), liegt die Naht nur auf einer Seite, und die Fläche
+/// lässt einen Spalt. Billig vor dem Netz der Seitenprobe geprüft (dort fiele es auch auf, aber
+/// erst nach einem teuren Netz entlang der Naht; Prüfer-Befund P4 aus Aufgabe 9).
+fn check_open_seams(solid: &Solid) -> Result<(), Skip> {
+    for (fid, f) in solid.faces.iter() {
+        if matches!(f.surface, Surface::Plane { .. }) || f.surface.is_periodic() {
+            continue;
+        }
+        let mut edges: Vec<usize> = std::iter::once(&f.outer)
+            .chain(&f.inner)
+            .flat_map(|l| l.half_edges.iter().map(|h| h.edge.index()))
+            .collect();
+        edges.sort_unstable();
+        if edges.windows(2).any(|w| w[0] == w[1]) {
+            return Err(Skip(format!(
+                "Die Fläche {} liegt nicht richtig im Körper: Innen und außen passen an ihr \
+                 nicht zusammen.",
+                face_name(solid, fid.index())
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Liest die Rohform der Volumen-Einträge `items` (`MANIFOLD_SOLID_BREP`, `BREP_WITH_VOIDS`):
@@ -2040,6 +2123,7 @@ pub fn build_solid(
     // Prüfung am Ende (nach dem Umdrehen) verlangt der Ablauf des Plans; sie ist billig.
     validate(&solid).map_err(|e| invalid(&solid, &e))?;
     check_face_loops(&solid)?;
+    check_open_seams(&solid)?;
     stop()?;
     orient_shells(&mut solid, &owners, &guessed, tol)?;
     stop()?;
