@@ -6,6 +6,7 @@
 
 use crate::browser::error_color;
 use crate::dialog::{Dialog, DialogSize};
+use crate::file_chooser::display_path;
 use crate::theme;
 use crate::workspace::{Prompt, Workspace};
 use planora_project::ProjectError;
@@ -204,19 +205,6 @@ enum Action {
 pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut ProjectsUi) {
     let enabled = ws.prompt.is_none();
     ui.add_enabled_ui(enabled, |ui| show_enabled(ui, ws, st));
-}
-
-/// Pfad für die Anzeige ohne das Windows-Präfix für lange Pfade (`\\?\`; bei Netzpfaden wird
-/// `\\?\UNC\` zu `\\`). Für Dateizugriffe gilt weiter der echte Pfad.
-pub fn display_path(path: &Path) -> String {
-    let s = path.display().to_string();
-    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
-        format!(r"\\{rest}")
-    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
-        rest.to_string()
-    } else {
-        s
-    }
 }
 
 fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut ProjectsUi) {
@@ -626,14 +614,6 @@ mod tests {
         let t = collect_texts(&out);
         out.drop_without_applying_deltas();
         t
-    }
-
-    #[test]
-    fn the_verbatim_prefix_is_hidden_in_the_display_only() {
-        assert_eq!(display_path(Path::new(r"\\?\C:\Users\x")), r"C:\Users\x");
-        assert_eq!(display_path(Path::new(r"\\?\UNC\srv\frei")), r"\\srv\frei");
-        assert_eq!(display_path(Path::new(r"C:\a")), r"C:\a");
-        assert_eq!(display_path(Path::new("/home/x")), "/home/x");
     }
 
     #[test]

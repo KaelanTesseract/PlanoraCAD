@@ -4,6 +4,9 @@
 //!
 //! Über der Liste stehen die Schnellzugriffe ([`crate::places`]); Ordner und Dateien der Liste
 //! haben ein Symbol, Ordner lassen sich per Rechtsklick zu den Favoriten hinzufügen.
+//!
+//! Im Ordner-Modus ([`ChooserMode::Folder`]) stehen nur Ordner in der Liste: Klick markiert,
+//! Doppelklick geht hinein, gewählt wird der markierte oder sonst der aktuelle Ordner.
 
 use crate::browser::error_color;
 use crate::icons::{self, Icon};
@@ -19,10 +22,35 @@ pub const MAX_ENTRIES: usize = 2000;
 const LIST_HEIGHT: f32 = 220.0;
 const REPLACE_HINT: &str = "Diese Datei gibt es schon. Noch einmal klicken, um sie zu ersetzen.";
 
+/// Knopf der Fußzeile im Ordner-Modus.
+pub const CHOOSE_FOLDER: &str = "Diesen Ordner wählen";
+/// Leere Liste im Ordner-Modus.
+pub const NO_SUBFOLDERS: &str = "Hier gibt es keine Unterordner.";
+/// Anfang der Zeile mit dem Ordner, der gewählt würde (Ordner-Modus, statt „Dateiname“).
+pub const CHOSEN_PREFIX: &str = "Gewählt:";
+/// Meldung, wenn der Ordner nicht (mehr) vorhanden ist.
+pub const NO_FOLDER: &str = "Bitte einen vorhandenen Ordner wählen.";
+const NO_MATCHING_FILES: &str = "Hier gibt es keine passenden Dateien.";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChooserMode {
     Save,
     Open,
+    /// Einen Ordner wählen: nur Ordner gelistet, kein Dateiname.
+    Folder,
+}
+
+/// Pfad für die Anzeige ohne das Windows-Präfix für lange Pfade (`\\?\`; bei Netzpfaden wird
+/// `\\?\UNC\` zu `\\`). Für Dateizugriffe gilt weiter der echte Pfad.
+pub fn display_path(path: &Path) -> String {
+    let s = path.display().to_string();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        s
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -225,6 +253,8 @@ pub struct FileChooser {
     pub error: Option<String>,
     /// Ziel, dessen Ersetzen noch bestätigt werden muss.
     confirm: Option<PathBuf>,
+    /// Per Klick markierter Unterordner (nur Ordner-Modus); jeder Ordnerwechsel löscht ihn.
+    marked: Option<String>,
     /// Vorhandene bekannte Ordner (einmal beim Öffnen der Auswahl ermittelt).
     known: Vec<Place>,
     /// Zuletzt geprüfter Projektordner und ob es ihn gibt (nicht in jedem Bild prüfen).
@@ -274,6 +304,11 @@ impl FileChooser {
         FileChooser::new(ChooserMode::Open, dir, extensions)
     }
 
+    /// Auswahl eines Ordners: nur Ordner werden gelistet.
+    pub fn folder(dir: PathBuf) -> FileChooser {
+        FileChooser::new(ChooserMode::Folder, dir, Vec::new())
+    }
+
     fn new(mode: ChooserMode, dir: PathBuf, extensions: Vec<&'static str>) -> FileChooser {
         let mut c = FileChooser {
             mode,
@@ -285,6 +320,7 @@ impl FileChooser {
             truncated: false,
             error: None,
             confirm: None,
+            marked: None,
             known: places::known_places(places::home_dir().as_deref(), &|p| p.is_dir()),
             project: None,
         };
@@ -347,8 +383,8 @@ impl FileChooser {
         &self.entries
     }
 
-    /// Liest den Ordner neu: Unterordner zuerst, dann passende Dateien, je nach Namen ohne
-    /// Groß- und Kleinschreibung sortiert.
+    /// Liest den Ordner neu: Unterordner zuerst, dann passende Dateien (im Ordner-Modus nie
+    /// Dateien), je nach Namen ohne Groß- und Kleinschreibung sortiert.
     pub fn reload(&mut self) {
         self.entries.clear();
         self.truncated = false;
@@ -365,7 +401,7 @@ impl FileChooser {
             let name = item.file_name().to_string_lossy().into_owned();
             if item.path().is_dir() {
                 dirs.push(name);
-            } else if self.matches(&name) {
+            } else if self.mode != ChooserMode::Folder && self.matches(&name) {
                 files.push(name);
             }
         }
@@ -395,6 +431,7 @@ impl FileChooser {
         self.dir_text = dir.display().to_string();
         self.dir = dir;
         self.confirm = None;
+        self.marked = None;
         self.reload();
     }
 
@@ -422,14 +459,44 @@ impl FileChooser {
         }
     }
 
+    /// Per Klick markierter Unterordner (nur im Ordner-Modus).
+    pub fn marked(&self) -> Option<&str> {
+        self.marked.as_deref()
+    }
+
+    /// Markiert einen Unterordner der Liste; außerhalb des Ordner-Modus ohne Wirkung.
+    pub fn mark(&mut self, name: &str) {
+        if self.mode == ChooserMode::Folder {
+            self.marked = Some(name.to_string());
+        }
+    }
+
+    /// Ordner, der im Ordner-Modus gewählt würde (ohne Prüfung im Dateisystem, für die
+    /// Anzeige in jedem Bild).
+    fn folder_choice(&self) -> PathBuf {
+        match &self.marked {
+            Some(m) => self.dir.join(m),
+            None => self.dir.clone(),
+        }
+    }
+
     pub fn select(&mut self, name: &str) {
         self.file_name = name.to_string();
         self.confirm = None;
     }
 
     /// Ziel: beim Speichern im aktuellen Ordner, Endung ergänzt; beim Öffnen nur eine
-    /// vorhandene Datei. `None` bei leerem Namen oder Namen mit Ordnerteilen.
+    /// vorhandene Datei. `None` bei leerem Namen oder Namen mit Ordnerteilen. Im Ordner-Modus
+    /// der markierte Ordner (wenn es ihn gibt), sonst der aktuelle; `None`, wenn es den nicht
+    /// (mehr) gibt.
     pub fn target(&self) -> Option<PathBuf> {
+        if self.mode == ChooserMode::Folder {
+            let marked = self.marked.as_ref().map(|m| self.dir.join(m));
+            return match marked.filter(|p| p.is_dir()) {
+                Some(p) => Some(p),
+                None => self.dir.is_dir().then(|| self.dir.clone()),
+            };
+        }
         let name = self.file_name.trim().trim_end_matches(['.', ' ']);
         if name.is_empty() || name.contains(FORBIDDEN_CHARS) || name.chars().any(char::is_control) {
             return None;
@@ -447,11 +514,13 @@ impl FileChooser {
                 let p = self.dir.join(name);
                 p.is_file().then_some(p)
             }
+            ChooserMode::Folder => unreachable!("oben behandelt"),
         }
     }
 
-    /// „Speichern“ oder „Öffnen“: liefert das Ziel. Gibt es die Datei beim Speichern schon,
-    /// erst beim zweiten Aufruf mit demselben Ziel.
+    /// „Speichern“, „Öffnen“ oder [`CHOOSE_FOLDER`]: liefert das Ziel. Gibt es die Datei beim
+    /// Speichern schon, erst beim zweiten Aufruf mit demselben Ziel (ein Ordner wird nie
+    /// ersetzt).
     pub fn confirm(&mut self) -> ChooserAction {
         let Some(target) = self.target() else {
             self.error = Some(
@@ -460,6 +529,7 @@ impl FileChooser {
                         "Bitte einen gültigen Dateinamen eingeben (ohne Sonderzeichen wie : ? * oder Schrägstriche)."
                     }
                     ChooserMode::Open => "Bitte eine vorhandene Datei wählen.",
+                    ChooserMode::Folder => NO_FOLDER,
                 }
                 .into(),
             );
@@ -494,7 +564,8 @@ impl FileChooser {
         }
     }
 
-    /// Oberer Teil: Ordnerzeile, Schnellzugriffe, Liste und Dateiname (alles, was rollen darf).
+    /// Oberer Teil: Ordnerzeile, Schnellzugriffe, Liste und Dateiname, im Ordner-Modus statt
+    /// des Dateinamens die Zeile [`CHOSEN_PREFIX`] (alles, was rollen darf).
     /// Geänderte Favoriten stehen danach in `shared` (`changes`); eine Meldung aus dem letzten
     /// Speichern (`shared.notice`) wird übernommen und angezeigt.
     pub fn show_body(&mut self, ui: &mut egui::Ui, shared: &mut Places) -> ChooserAction {
@@ -523,7 +594,8 @@ impl FileChooser {
         let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
         let base = list_height_for(ui.ctx().content_rect().height());
         let list_height = (base - (bar - row).max(0.0)).max(MIN_LIST_HEIGHT);
-        let (mut enter, mut pick, mut double) = (None, None, None);
+        let (mut enter, mut pick, mut double, mut mark) = (None, None, None, None);
+        let folder_mode = self.mode == ChooserMode::Folder;
         let dark = ui.visuals().dark_mode;
         theme::scroll_area(
             ui,
@@ -540,7 +612,11 @@ impl FileChooser {
                         // in der üblichen Schrift, alle Namen stehen bündig hinter dem Symbol.
                         let symbol =
                             icons::text(kind.icon(), icons::LABEL_ICON_SIZE, kind.color(dark));
-                        let selected = !e.is_dir && e.name == self.file_name;
+                        let selected = if folder_mode {
+                            self.marked.as_deref() == Some(e.name.as_str())
+                        } else {
+                            !e.is_dir && e.name == self.file_name
+                        };
                         let mut r = ui.add(
                             egui::Button::selectable(
                                 selected,
@@ -561,9 +637,12 @@ impl FileChooser {
                         }
                         // Ordner öffnen nur per Doppelklick: ein einfacher Klick würde sofort den
                         // Ordner wechseln, und der zweite Klick träfe dann einen Eintrag darin.
+                        // Im Ordner-Modus markiert der einfache Klick den Ordner.
                         if e.is_dir {
                             if r.double_clicked() {
                                 enter = Some(e.name.clone());
+                            } else if folder_mode && r.clicked() {
+                                mark = Some(e.name.clone());
                             }
                         } else if r.double_clicked() {
                             double = Some(e.name.clone());
@@ -573,7 +652,11 @@ impl FileChooser {
                     }
                 });
                 if self.entries.is_empty() {
-                    ui.weak("Hier gibt es keine passenden Dateien.");
+                    ui.weak(if folder_mode {
+                        NO_SUBFOLDERS
+                    } else {
+                        NO_MATCHING_FILES
+                    });
                 }
                 if self.truncated {
                     ui.weak(format!(
@@ -590,6 +673,15 @@ impl FileChooser {
         }
         if let Some(n) = pick {
             self.select(&n);
+        }
+        if let Some(n) = mark {
+            self.mark(&n);
+        }
+        if folder_mode {
+            // Statt des Dateinamens: der Ordner, der gewählt würde (eine Zeile, gekürzt).
+            let chosen = format!("{CHOSEN_PREFIX} {}", display_path(&self.folder_choice()));
+            ui.add(egui::Label::new(chosen).truncate());
+            return action;
         }
         let mut enter = false;
         ui.horizontal(|ui| {
@@ -616,8 +708,8 @@ impl FileChooser {
         action
     }
 
-    /// Unterer Teil: Meldungen und die Knöpfe „Speichern“ bzw. „Ersetzen“ oder „Öffnen“ und
-    /// „Abbrechen“ (in Fenstern mit Fußzeile dort, damit sie nie unter den Rand rollen).
+    /// Unterer Teil: Meldungen und die Knöpfe „Speichern“ bzw. „Ersetzen“, „Öffnen“ oder
+    /// [`CHOOSE_FOLDER`] und „Abbrechen“ (in Fenstern mit Fußzeile dort, damit sie nie unter den Rand rollen).
     pub fn show_footer(&mut self, ui: &mut egui::Ui) -> ChooserAction {
         let mut action = ChooserAction::None;
         if let Some(e) = &self.error {
@@ -631,6 +723,7 @@ impl FileChooser {
                 ChooserMode::Save if self.asks_to_replace() => "Ersetzen",
                 ChooserMode::Save => "Speichern",
                 ChooserMode::Open => "Öffnen",
+                ChooserMode::Folder => CHOOSE_FOLDER,
             };
             if ui.button(label).clicked() {
                 action = self.confirm();
@@ -704,5 +797,18 @@ impl FileChooser {
         if let Some(i) = go {
             self.go_to_place(&buttons[i].place);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_verbatim_prefix_is_hidden_in_the_display_only() {
+        assert_eq!(display_path(Path::new(r"\\?\C:\Users\x")), r"C:\Users\x");
+        assert_eq!(display_path(Path::new(r"\\?\UNC\srv\frei")), r"\\srv\frei");
+        assert_eq!(display_path(Path::new(r"C:\a")), r"C:\a");
+        assert_eq!(display_path(Path::new("/home/x")), "/home/x");
     }
 }
