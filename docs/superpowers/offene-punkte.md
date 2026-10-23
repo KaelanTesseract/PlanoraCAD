@@ -1673,13 +1673,21 @@ Entscheidung von Dennis am 2026-10-23; gilt für alle drei Fenster mit Dateiausw
   - Die Konfiguration schreibt über eine eigene Zwischendatei je Schreibvorgang.
   - Dokumente mit Symbol `files`, Projekte mit `briefcase` (deutlich anders als die Ordnerzeilen).
   - Neuzeichnen während der Laufwerkssuche höchstens 3 s, danach zeigt die Auswahl die bis dahin gefundenen Laufwerke.
+- Nachbesserung 2 (nach der Nachprüfung):
+  - „Speichern“/„Ersetzen“ bzw. „Öffnen“ und „Abbrechen“ samt Meldungen stehen in allen drei Fenstern in der festen Fußzeile: auch in einem vollen Ordner bei 800 × 600 ohne Rollen sichtbar. Beim Netz-Import stehen „Importieren“ und „Schließen“ ebenfalls in der Fußzeile. Braucht die Leiste eine zweite Zeile, wird die Liste um diese kürzer (die Auswahl wird nicht höher).
+  - Favoriten-Änderungen, die nicht gespeichert werden konnten (Datei unlesbar, schreibgeschützt, gesperrt), bleiben in der Leiste und vorgemerkt; sie werden beim nächsten gelungenen Schreiben (Favorit oder Wurzelwahl) mit gespeichert.
+  - Ist die Liste in der Datei schon voll (andere Instanz), meldet die Auswahl „Es gibt schon 24 Favoriten …“, statt den neuen Favoriten still fallen zu lassen.
 
 **Grenzen:**
 - Die bekannten Ordner werden über die üblichen Namen im Benutzerordner gefunden (`Documents`, `Downloads`, `Desktop`, `Pictures`, ggf. unter `OneDrive`), nicht über die Windows-Einstellung für verschobene Ordner (z. B. `OneDrive\Dokumente` wird nicht gefunden).
 - Laufwerke, die erst während des Programmlaufs dazukommen (USB-Stick), erscheinen erst nach einem Neustart; ein Laufwerk, das länger als 3 s hängt, erscheint erst beim nächsten Bild nach seiner Antwort (zum Beispiel bei Mausbewegung).
 - Favoriten lassen sich nur mit der Maus (Rechtsklick) hinzufügen und entfernen, nicht über die Tastatur.
 - Im UI-Thread laufen weiterhin kurze Prüfungen: ob der Projektordner vorhanden ist (einmal je Auswahl), die bekannten Ordner (beim Öffnen der Auswahl) und das Öffnen eines Ordners per Knopf; ein hängendes Netzlaufwerk kann dabei kurz aufhalten (wie beim Eintippen).
-- Ist die Konfigurationsdatei unlesbar, gilt wie bisher die Vorgabe; neue Favoriten gelten dann nur bis Programmende.
+- Ist die Konfigurationsdatei unlesbar, gilt wie bisher die Vorgabe; neue Favoriten bleiben vorgemerkt und werden gespeichert, sobald die Datei wieder lesbar und schreibbar ist, sonst gelten sie bis Programmende. Eine Meldung, dass das Speichern gescheitert ist, gibt es nicht.
+- Eine von Hand mit BOM oder als UTF-16 gespeicherte config.json gilt als unlesbar (wie vor dem Teilprojekt).
+- Stürzt das Programm genau beim Schreiben ab, kann eine Zwischendatei `config.json.<Nummer>.tmp` liegen bleiben (harmlos).
+- Ändern zwei Programmfenster im selben Augenblick Favoriten, kann eine der beiden Änderungen verloren gehen (nie die Wurzel).
+- Im Exportfenster gibt es bei 800 × 600 weiterhin bis zu drei Rollbereiche (Fensterinhalt, Leiste, Liste).
 
 **Handtest (Hell und Dunkel, Fenster 1100 × 700 und 800 × 600):**
 - [ ] 1. „Netz importieren …“: Ordner mit blauem Ordnersymbol, Dateien mit grauem Dateisymbol, Namen bündig; kein Text „(Ordner, …)“. Beim Überfahren eines Ordners erscheint „Doppelklick zum Öffnen“.

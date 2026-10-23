@@ -39,6 +39,7 @@ use planora_step::{
     ImportOptions, LengthUnit, ReadLimits, StepFile, StepHeader, StepImport, StepReadError,
     UNNAMED_BODY, UnitState, import_bodies, read_step_file,
 };
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -817,6 +818,10 @@ impl StepImportDialog {
             .and_then(|l| unit_hint(&l.units, self.chosen));
         let has_list = self.loaded.is_some() && loading.is_none();
         let any = checked.iter().any(|c| *c);
+        let has_loaded = self.loaded.is_some();
+        // Die Dateiauswahl zeichnet oben (rollt) und in der Fußzeile (Öffnen, Abbrechen).
+        let chooser = RefCell::new(&mut self.chooser);
+        let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
         let response = Dialog::new(TITLE, DialogSize::Wide)
             .open(&mut open)
             .show_with_footer(
@@ -825,13 +830,7 @@ impl StepImportDialog {
                     let dark = ui.visuals().dark_mode;
                     if choosing {
                         ui.strong("Datei wählen (STEP)");
-                        match self.chooser.show_with(ui, places) {
-                            ChooserAction::Chosen(p) => chosen = Some(p),
-                            // Mit gelesener Liste zurück zur Liste, sonst Fenster schließen.
-                            ChooserAction::Cancel if self.loaded.is_some() => back = true,
-                            ChooserAction::Cancel => close = true,
-                            ChooserAction::None => {}
-                        }
+                        body_action = chooser.borrow_mut().show_body(ui, places);
                     }
                     if let Some((phase, f)) = loading {
                         ui.horizontal(|ui| {
@@ -868,6 +867,9 @@ impl StepImportDialog {
                 },
                 |ui| {
                     // Fußzeile: bleibt stehen, auch wenn eine lange Liste rollt.
+                    if choosing {
+                        footer_action = chooser.borrow_mut().show_footer(ui);
+                    }
                     ui.horizontal(|ui| {
                         if has_list {
                             if ui
@@ -887,6 +889,15 @@ impl StepImportDialog {
                     });
                 },
             );
+        for action in [body_action, footer_action] {
+            match action {
+                ChooserAction::Chosen(p) => chosen = Some(p),
+                // Mit gelesener Liste zurück zur Liste, sonst Fenster schließen.
+                ChooserAction::Cancel if has_loaded => back = true,
+                ChooserAction::Cancel => close = true,
+                ChooserAction::None => {}
+            }
+        }
         self.last_rect = response.map(|r| r.response.rect);
         self.last_cards = cards;
         self.last_rows = rows;

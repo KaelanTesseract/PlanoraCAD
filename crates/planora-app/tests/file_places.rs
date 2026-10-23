@@ -122,7 +122,7 @@ fn the_chooser_shows_the_project_root_only_when_it_exists_and_favorites_always()
     let shared = Places {
         favorites: vec![missing_fav.clone()],
         project_root: Some(root.clone()),
-        changes: Vec::new(),
+        ..Places::default()
     };
     let list = c.places_with(&shared, &[]);
     assert!(
@@ -394,7 +394,12 @@ fn a_config_unreadable_at_start_is_not_overwritten_later() {
     assert!(!ws.save_places(p));
     assert_eq!(fs::read_to_string(&file).unwrap(), "{ halb");
     assert_eq!(ws.config.favorites, [d.join("Neu")]);
-    // Später wieder lesbar: die Wurzel der Datei bleibt.
+    assert_eq!(ws.favorites_pending.len(), 1, "vorgemerkt");
+    // Ein Bild ohne Änderung schreibt nichts und vergisst nichts.
+    let p = ws.places();
+    assert!(!ws.save_places(p));
+    assert_eq!(ws.config.favorites, [d.join("Neu")]);
+    // Später wieder lesbar: die Wurzel der Datei bleibt, der vorgemerkte Favorit kommt mit.
     fs::write(&file, good).unwrap();
     let mut p = ws.places();
     p.add_favorite(&d.join("Noch einer")).unwrap();
@@ -403,8 +408,84 @@ fn a_config_unreadable_at_start_is_not_overwritten_later() {
     assert_eq!(disk.root, Some(PathBuf::from("D:/Projekte")));
     assert_eq!(
         disk.favorites,
-        [PathBuf::from("D:/Alt"), d.join("Noch einer")]
+        [PathBuf::from("D:/Alt"), d.join("Neu"), d.join("Noch einer")]
     );
+    assert_eq!(ws.config.favorites, disk.favorites, "nichts verschwindet");
+    assert!(ws.favorites_pending.is_empty());
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn unsaved_removals_are_kept_too_and_the_root_choice_writes_them() {
+    let d = temp_dir("vorgemerkt");
+    let file = d.join("config.json");
+    fs::write(
+        &file,
+        r#"{ "root": "D:/Projekte", "favorites": ["D:/A", "D:/B"] }"#,
+    )
+    .unwrap();
+    let mut ws = workspace_at(&file, Config::load_from(&file));
+    // Die Datei wird unlesbar (z. B. gesperrt); Entfernen und Hinzufügen bleiben vorgemerkt.
+    fs::write(&file, "gesperrt").unwrap();
+    let mut p = ws.places();
+    p.remove_favorite(Path::new("D:/A"));
+    p.add_favorite(&d.join("C")).unwrap();
+    assert!(!ws.save_places(p));
+    assert_eq!(ws.config.favorites, [PathBuf::from("D:/B"), d.join("C")]);
+    // Wieder lesbar; die nächste Schreibgelegenheit ist eine Wurzelwahl.
+    fs::write(
+        &file,
+        r#"{ "root": "D:/Projekte", "favorites": ["D:/A", "D:/B"] }"#,
+    )
+    .unwrap();
+    ws.config.root = Some(PathBuf::from("E:/Neu"));
+    ws.persist_config();
+    let disk = Config::load_from(&file);
+    assert_eq!(disk.root, Some(PathBuf::from("E:/Neu")));
+    assert_eq!(disk.favorites, [PathBuf::from("D:/B"), d.join("C")]);
+    assert_eq!(ws.config.favorites, disk.favorites);
+    assert!(ws.favorites_pending.is_empty());
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_full_list_on_disk_reports_instead_of_dropping_silently() {
+    let d = temp_dir("platte-voll");
+    let file = d.join("config.json");
+    let mut a = workspace_at(&file, Config::load_from(&file));
+    let mut b = workspace_at(&file, Config::load_from(&file));
+    // B füllt die Liste auf der Platte.
+    let mut pb = b.places();
+    for i in 0..MAX_FAVORITES {
+        pb.add_favorite(&d.join(format!("B{i}"))).unwrap();
+    }
+    assert!(b.save_places(pb));
+    // A (leere Liste im Speicher) fügt einen hinzu.
+    let mut pa = a.places();
+    pa.add_favorite(&d.join("Von A")).unwrap();
+    a.save_places(pa);
+    let disk = Config::load_from(&file);
+    assert_eq!(disk.favorites.len(), MAX_FAVORITES);
+    assert!(!disk.favorites.contains(&d.join("Von A")));
+    assert_eq!(
+        a.config.favorites, disk.favorites,
+        "A zeigt den Stand der Platte"
+    );
+    // Die nächste Dateiauswahl zeigt die Meldung.
+    let mut shared = a.places();
+    assert_eq!(shared.notice, Some(FAVORITES_FULL));
+    let mut c = FileChooser::open(d.clone(), vec!["stl"]);
+    let ctx = egui::Context::default();
+    ctx.set_fonts(planora_app::fonts::definitions());
+    ctx.run_ui(egui::RawInput::default(), |ui| {
+        c.show_with(ui, &mut shared);
+    })
+    .drop_without_applying_deltas();
+    assert_eq!(c.error.as_deref(), Some(FAVORITES_FULL));
+    assert_eq!(shared.notice, None, "übernommen");
+    // Danach verschwindet sie aus dem Arbeitsbereich.
+    a.save_places(shared);
+    assert_eq!(a.places().notice, None);
     let _ = fs::remove_dir_all(&d);
 }
 
@@ -623,6 +704,8 @@ fn rows_show_symbol_and_name_without_the_bracket_text() {
     }
     assert!(!has(&seen, "Doppelklick"), "Hinweis nur im Tooltip");
     assert!(!has(&seen, "(Ordner"));
+    // Die ganze Auswahl zeichnet auch ihre Knöpfe.
+    assert!(pos_of(&seen, "Öffnen").is_some() && pos_of(&seen, "Abbrechen").is_some());
     let _ = fs::remove_dir_all(&d);
 }
 
@@ -702,7 +785,7 @@ fn both_import_dialogs_show_the_shared_places() {
     let mut shared = Places {
         project_root: Some(root),
         favorites: vec![d.join("Lieblingsordner")],
-        changes: Vec::new(),
+        ..Places::default()
     };
     let texts = |f: &mut dyn FnMut(&egui::Context)| {
         let ctx = egui::Context::default();

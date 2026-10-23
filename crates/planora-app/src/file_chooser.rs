@@ -116,6 +116,8 @@ pub fn place_menu(place: &Place) -> Option<RowMenu> {
 const DRIVE_REPAINT: Duration = Duration::from_millis(250);
 /// Höhe der Leiste der Schnellzugriffe, ab der sie rollt (zwei Zeilen Knöpfe).
 pub const PLACES_HEIGHT: f32 = 56.0;
+/// Mindesthöhe der Liste, auch wenn die Leiste zwei Zeilen braucht.
+const MIN_LIST_HEIGHT: f32 = 160.0;
 
 /// Ein Knopf der Schnellzugriffe, wie er gezeichnet wird.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -404,9 +406,26 @@ impl FileChooser {
         self.confirm.is_some()
     }
 
-    /// Zeichnet die Auswahl über die volle Breite mit den gemeinsamen Schnellzugriffen;
-    /// geänderte Favoriten stehen danach in `shared` (`changed`).
+    /// Zeichnet die ganze Auswahl über die volle Breite: [`FileChooser::show_body`] und darunter
+    /// [`FileChooser::show_footer`]. Fenster mit fester Fußzeile zeichnen beide Teile getrennt,
+    /// damit „Speichern“/„Öffnen“ ohne Rollen zu sehen bleibt.
     pub fn show_with(&mut self, ui: &mut egui::Ui, shared: &mut Places) -> ChooserAction {
+        match self.show_body(ui, shared) {
+            ChooserAction::None => self.show_footer(ui),
+            other => {
+                self.show_footer(ui);
+                other
+            }
+        }
+    }
+
+    /// Oberer Teil: Ordnerzeile, Schnellzugriffe, Liste und Dateiname (alles, was rollen darf).
+    /// Geänderte Favoriten stehen danach in `shared` (`changes`); eine Meldung aus dem letzten
+    /// Speichern (`shared.notice`) wird übernommen und angezeigt.
+    pub fn show_body(&mut self, ui: &mut egui::Ui, shared: &mut Places) -> ChooserAction {
+        if let Some(notice) = shared.notice.take() {
+            self.error = Some(notice.into());
+        }
         let mut action = ChooserAction::None;
         ui.horizontal(|ui| {
             if ui.button("Ordner höher").clicked() {
@@ -421,13 +440,19 @@ impl FileChooser {
             }
         });
         let mut menu = None;
+        let before = ui.cursor().top();
         self.show_places(ui, shared, &mut menu);
+        let bar = ui.cursor().top() - before;
+        // Eine zweite Zeile der Leiste geht von der Liste ab: zusammen bleiben sie so hoch wie
+        // Leiste (eine Zeile) und Liste, das Fenster rollt dadurch nicht früher.
+        let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+        let list_height = (LIST_HEIGHT - (bar - row).max(0.0)).max(MIN_LIST_HEIGHT);
         let (mut enter, mut pick, mut double) = (None, None, None);
         let dark = ui.visuals().dark_mode;
         theme::scroll_area(
             ui,
             egui::ScrollArea::vertical()
-                .max_height(LIST_HEIGHT)
+                .max_height(list_height)
                 .auto_shrink([false, true]),
             |ui| {
                 for e in &self.entries {
@@ -497,6 +522,17 @@ impl FileChooser {
         if enter {
             action = self.confirm();
         }
+        if let Some(n) = double {
+            self.select(&n);
+            action = self.confirm();
+        }
+        action
+    }
+
+    /// Unterer Teil: Meldungen und die Knöpfe „Speichern“ bzw. „Ersetzen“ oder „Öffnen“ und
+    /// „Abbrechen“ (in Fenstern mit Fußzeile dort, damit sie nie unter den Rand rollen).
+    pub fn show_footer(&mut self, ui: &mut egui::Ui) -> ChooserAction {
+        let mut action = ChooserAction::None;
         if let Some(e) = &self.error {
             ui.colored_label(error_color(ui.visuals().dark_mode), e);
         }
@@ -516,10 +552,6 @@ impl FileChooser {
                 action = ChooserAction::Cancel;
             }
         });
-        if let Some(n) = double {
-            self.select(&n);
-            action = self.confirm();
-        }
         action
     }
 
@@ -540,11 +572,16 @@ impl FileChooser {
     /// [`PLACES_HEIGHT`]. Der Knopf des aktuellen Ordners ist hervorgehoben; Favoriten haben
     /// ein Kontextmenü zum Entfernen.
     fn show_places(&mut self, ui: &mut egui::Ui, shared: &Places, menu: &mut Option<RowMenu>) {
-        let scan = places::system_drives();
-        let buttons = self.place_buttons(shared, &scan.known());
-        if scan.wants_repaint() {
-            ui.ctx().request_repaint_after(DRIVE_REPAINT);
-        }
+        let buttons = match &shared.drives {
+            Some(drives) => self.place_buttons(shared, drives),
+            None => {
+                let scan = places::system_drives();
+                if scan.wants_repaint() {
+                    ui.ctx().request_repaint_after(DRIVE_REPAINT);
+                }
+                self.place_buttons(shared, &scan.known())
+            }
+        };
         if buttons.is_empty() {
             return;
         }

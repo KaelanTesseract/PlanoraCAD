@@ -238,14 +238,14 @@ pub enum FavoriteChange {
 }
 
 impl FavoriteChange {
-    /// Wendet die Änderung auf `favorites` an (eine volle Liste nimmt nichts mehr auf).
-    pub fn apply(&self, favorites: &mut Vec<PathBuf>) {
+    /// Wendet die Änderung auf `favorites` an. Eine volle Liste nimmt nichts mehr auf: dann
+    /// [`FAVORITES_FULL`] (der Favorit fehlt danach).
+    pub fn apply(&self, favorites: &mut Vec<PathBuf>) -> Result<(), &'static str> {
         match self {
-            FavoriteChange::Add(p) => {
-                let _ = add_favorite(favorites, p);
-            }
+            FavoriteChange::Add(p) => add_favorite(favorites, p).map(|_| ()),
             FavoriteChange::Remove(p) => {
                 remove_favorite(favorites, p);
+                Ok(())
             }
         }
     }
@@ -261,6 +261,11 @@ pub struct Places {
     pub project_root: Option<PathBuf>,
     /// Änderungen der Favoriten in diesem Bild, in ihrer Reihenfolge.
     pub changes: Vec<FavoriteChange>,
+    /// Vorgegebene Laufwerke (Tests); `None` = die des Rechners ([`system_drives`]).
+    pub drives: Option<Vec<PathBuf>>,
+    /// Meldung aus dem letzten Speichern (z. B. [`FAVORITES_FULL`]); die nächste gezeichnete
+    /// Dateiauswahl zeigt sie an und leert das Feld.
+    pub notice: Option<&'static str>,
 }
 
 impl Places {
