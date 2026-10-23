@@ -418,6 +418,8 @@ fn checkboxes_and_summary() {
     let pin = d.last_rows[2].1;
     screen.click(pin.center(), &mut show_on(&mut d, &mut s, &mut open));
     assert_eq!(d.checked, [true, true, false, false]);
+    // Eine alte Meldung verschwindet mit dem gelungenen Import.
+    s.message = Some("alte Meldung".into());
     let seen = screen.settle(2, &mut show_on(&mut d, &mut s, &mut open));
     let button = find(&seen, "Importieren").expect("Importieren").rect;
     screen.click(button.center(), &mut show_on(&mut d, &mut s, &mut open));
@@ -429,20 +431,29 @@ fn checkboxes_and_summary() {
         .map(|f| f.name.clone())
         .collect();
     assert_eq!(names, ["Block", "Block (2)"]);
+    // Erfolg ist keine Fehlermeldung: die Zusammenfassung steht als Hinweis da.
     assert_eq!(
-        s.message.as_deref(),
+        s.info.as_deref(),
         Some(summary(2, &[("Deckellos".into(), lid.clone())]).as_str())
     );
     assert_eq!(
-        s.message.as_deref().unwrap(),
+        s.info.as_deref().unwrap(),
         format!("2 Körper importiert, 1 ausgelassen: Deckellos ({lid})")
     );
+    assert_eq!(s.message, None, "keine Meldung in Fehlerfarbe");
 
     // Nichts angehakt: „Importieren“ ist gesperrt und ändert nichts.
     let mut d = loaded(&dir, "g2.step", &combined());
     let mut s = AppState::new();
     d.checked = vec![false; 4];
     assert!(d.import(&mut s).is_err());
+    assert_eq!(
+        s.message.as_deref(),
+        Some(NOTHING_CHECKED),
+        "Ablehnung als Meldung"
+    );
+    assert_eq!(s.info, None);
+    s.message = None;
     let mut open = true;
     let mut screen = Screen::new(1200.0, 800.0);
     let seen = screen.settle(4, &mut show_on(&mut d, &mut s, &mut open));
@@ -580,8 +591,25 @@ fn one_undo_step() {
         "geschlossen"
     );
     assert_eq!(rig.bodies(), 3);
-    rig.settle();
+    let seen = rig.settle();
     assert_eq!(rig.ws().active_tab().undo_label(), Some("STEP importieren"));
+    // Die Zusammenfassung überlebt den neuen Verlaufsschritt als Hinweis in neutraler Farbe.
+    let st = &rig.ws().active_tab().state;
+    let info = st.info.clone().expect("Hinweis nach dem Import");
+    assert!(
+        info.starts_with("3 Körper importiert, 1 ausgelassen: Deckellos ("),
+        "{info}"
+    );
+    assert_eq!(st.message, None);
+    let line = seen
+        .iter()
+        .find(|t| t.text.starts_with("3 Körper importiert"))
+        .expect("Statuszeile");
+    assert_eq!(
+        line.color,
+        theme::palette(true).text_secondary,
+        "neutrale Farbe"
+    );
     let steps = rig.ws().active_tab().history().undo_len();
 
     // Strg+Z bei offenem Fenster ändert nichts.
@@ -884,7 +912,10 @@ fn stale_and_undo_consistency() {
     d.tick(true);
     assert!(d.loaded.is_some());
     s.create_box(DVec3::splat(10.0)).unwrap();
+    s.info = Some("alt".into());
     assert_eq!(d.import(&mut s), Err(STALE.to_string()));
+    assert_eq!(s.message.as_deref(), Some(STALE), "Ablehnung als Meldung");
+    assert_eq!(s.info.as_deref(), Some("alt"), "kein Erfolgshinweis");
     assert_eq!(s.document.features().len(), 1);
     let text = draw(&mut d, &mut s);
     assert!(d.loaded.is_none());

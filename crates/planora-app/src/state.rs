@@ -123,6 +123,9 @@ pub struct AppState {
     /// in der normalen Textfarbe. Eine Meldung in `message` hat Vorrang; der Hinweis endet mit
     /// dem nächsten Verlaufsschritt oder einer Meldung ([`crate::workspace::DocTab::observe_history`]).
     pub info: Option<String>,
+    /// Der Hinweis `info` beschreibt die Änderung, aus der der nächste Verlaufsschritt wird (etwa
+    /// die Zusammenfassung von „STEP importieren“): dieser eine Schritt beendet ihn nicht.
+    pub info_outlives_step: bool,
     /// Laufende Nummer je Bezeichnung für neue Features („Quader 1“, „Quader 2“, …); zählt
     /// nur hoch, damit Namen auch nach dem Löschen eindeutig bleiben.
     name_counters: BTreeMap<String, u64>,
@@ -345,6 +348,7 @@ impl AppState {
             chord_tolerance,
             message: None,
             info: None,
+            info_outlives_step: false,
             name_counters: BTreeMap::new(),
             selected_feature: None,
             sketch_session: None,

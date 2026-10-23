@@ -189,8 +189,12 @@ impl DocTab {
         let before = steps(self);
         self.observe_document(gesture);
         self.state.observe_sketch(gesture);
-        if steps(self) != before || self.state.message.is_some() {
+        let new_step = steps(self) != before;
+        // Ein Hinweis zur gerade entstehenden Änderung überlebt genau ihren Schritt.
+        let kept = new_step && std::mem::take(&mut self.state.info_outlives_step);
+        if (new_step && !kept) || self.state.message.is_some() {
             self.state.info = None;
+            self.state.info_outlives_step = false;
         }
     }
 

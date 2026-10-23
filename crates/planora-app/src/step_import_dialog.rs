@@ -710,9 +710,28 @@ impl StepImportDialog {
         }
     }
 
-    /// Legt die angehakten Körper in einem Schritt an; danach steht die Zusammenfassung in
-    /// `state.message`. Das Dokument ändert sich nur bei Erfolg.
+    /// Legt die angehakten Körper in einem Schritt an. Bei Erfolg steht die Zusammenfassung als
+    /// Hinweis in `state.info` (neutrale Farbe; sie überlebt den Verlaufsschritt des Imports),
+    /// eine alte Meldung verschwindet. Jede Ablehnung (keine Datei, Prüfung läuft, veraltet,
+    /// nichts angehakt, Import abgelehnt) steht in `state.message`. Das Dokument ändert sich
+    /// nur bei Erfolg.
     pub fn import(&mut self, state: &mut AppState) -> Result<Vec<FeatureId>, String> {
+        match self.try_import(state) {
+            Ok((ids, text)) => {
+                state.message = None;
+                state.info = Some(text);
+                state.info_outlives_step = true;
+                Ok(ids)
+            }
+            Err(e) => {
+                state.message = Some(e.clone());
+                Err(e)
+            }
+        }
+    }
+
+    /// Wie [`StepImportDialog::import`], liefert die Zusammenfassung statt sie zu setzen.
+    fn try_import(&self, state: &mut AppState) -> Result<(Vec<FeatureId>, String), String> {
         let Some(l) = &self.loaded else {
             return Err("Bitte zuerst eine Datei wählen.".into());
         };
@@ -756,8 +775,8 @@ impl StepImportDialog {
             })
             .collect();
         let ids = state.import_step(bodies)?;
-        state.message = Some(summary(ids.len(), &skipped));
-        Ok(ids)
+        let text = summary(ids.len(), &skipped);
+        Ok((ids, text))
     }
 
     /// Zeichnet das Fenster; `true`, solange es offen bleiben soll.
