@@ -109,9 +109,10 @@ pub fn field_keys(kind: &FeatureKind) -> Vec<FieldKey> {
             // Die Punkte der variablen Rundung bleiben ohne Formeln (Spec §4a.2).
             BlendArt::RundungVariabel { .. } => Vec::new(),
         },
-        FeatureKind::Sketch(_) | FeatureKind::Revolve { .. } | FeatureKind::Boolean { .. } => {
-            Vec::new()
-        }
+        FeatureKind::Sketch(_)
+        | FeatureKind::Revolve { .. }
+        | FeatureKind::Boolean { .. }
+        | FeatureKind::StepBody { .. } => Vec::new(),
     }
 }
 

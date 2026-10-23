@@ -329,6 +329,8 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str
                 ("Maßstab", format_number(*scale, 4)),
             ]
         }
+        // Übergang bis zu den Zeilen der Aufgabe 13 (STEP-Import): keine Zahlenfelder.
+        FeatureKind::StepBody { .. } => Vec::new(),
     }
 }
 

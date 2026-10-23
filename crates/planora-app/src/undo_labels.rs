@@ -126,6 +126,7 @@ fn created_label(kind: &FeatureKind) -> &'static str {
             }
         }
         FeatureKind::MeshBody { .. } => "Netz importieren",
+        FeatureKind::StepBody { .. } => "STEP importieren",
     }
 }
 

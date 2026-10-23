@@ -1,0 +1,212 @@
+//! STEP-Körper (Teilprojekt STEP-Import, Plan P4, P6, P7, P14): Formtabelle des Dokuments mit
+//! dem normalisierten STEP-Text je Form, einmal gebautem Körper und Anlegen beim Import (ganz
+//! oder gar nicht).
+//!
+//! Ein STEP-Körper ist ein gewöhnlicher exakter Körper: Er läuft über die Fertigstellung
+//! (`finish`: Prüfung und Marken „STEP-Fläche n“ mit der Feature-Kennung als Herkunft) und lässt
+//! sich verrechnen, verrunden, verschieben und als Skizzenebene benutzen. Er hat keine
+//! Zahlenfelder; Verschieben geht über das Verschieben-Feature.
+
+use crate::error::FeatureError;
+use crate::model::{Document, FeatureId, FeatureKind, FeatureStatus};
+use planora_kernel::Solid;
+use planora_step::read::units::{MAX_WELD_TOL_MM, MIN_WELD_TOL_MM};
+use planora_step::{COARSE_TOL_MM, check_normal_header, read_normal_body};
+use std::cell::Cell;
+use std::collections::BTreeSet;
+use std::sync::{Arc, OnceLock};
+
+thread_local! {
+    static STEP_BUILDS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Zahl der Körperaufbauten aus einem gespeicherten Text ([`StepShape::solid`]) in diesem
+/// Thread seit Programmstart. Nur für Tests, die prüfen, dass eine schon gebaute Form nicht
+/// erneut gebaut wird (zählt im aufrufenden Thread, deshalb unabhängig von parallel laufenden
+/// Tests).
+#[doc(hidden)]
+pub fn step_builds() -> u64 {
+    STEP_BUILDS.with(Cell::get)
+}
+
+/// Kennung einer Form in der Formtabelle des Dokuments (ab 1); wird nie wiederverwendet, außer
+/// nach einem zurückgenommenen Import.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StepShapeId(pub u64);
+
+/// Form eines STEP-Körpers: der normalisierte STEP-Text (P5), die Genauigkeit der Datei in mm
+/// (P4, für die Warnung „grob“) und der daraus gebaute Körper. Gebaut wird höchstens einmal je
+/// Form; mehrere Dokumente (Verlauf, Rückgängig) teilen sich die Form über `Arc`.
+pub struct StepShape {
+    text: String,
+    tolerance_mm: f64,
+    solid: OnceLock<Result<Solid, String>>,
+}
+
+impl StepShape {
+    /// Form aus einem gespeicherten Text. Prüft nur den Kopf ([`check_normal_header`], P14) und
+    /// die Genauigkeit (1e-6 … 1e-3 mm); gebaut wird erst beim Rechnen ([`StepShape::solid`]).
+    pub fn new(text: String, tolerance_mm: f64) -> Result<StepShape, String> {
+        check_normal_header(&text)?;
+        if !(MIN_WELD_TOL_MM..=MAX_WELD_TOL_MM).contains(&tolerance_mm) {
+            return Err("Die Genauigkeit muss zwischen 0,000001 und 0,001 mm liegen.".into());
+        }
+        Ok(StepShape {
+            text,
+            tolerance_mm,
+            solid: OnceLock::new(),
+        })
+    }
+
+    /// Form aus dem Import: Text und der daraus schon gebaute Körper (Sitzung = Neuladen, P5).
+    pub fn with_solid(text: String, tolerance_mm: f64, solid: Solid) -> StepShape {
+        StepShape {
+            text,
+            tolerance_mm,
+            solid: OnceLock::from(Ok(solid)),
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Genauigkeit der Datei in mm.
+    pub fn tolerance_mm(&self) -> f64 {
+        self.tolerance_mm
+    }
+
+    /// Grobe Genauigkeit (gröber als [`COARSE_TOL_MM`]): Rechnen mit dem Körper kann scheitern.
+    pub fn is_coarse(&self) -> bool {
+        self.tolerance_mm > COARSE_TOL_MM
+    }
+
+    /// Der Körper der Form; beim ersten Aufruf aus dem Text gebaut ([`read_normal_body`]), danach
+    /// (auch ein Fehler) nur noch geliefert.
+    pub fn solid(&self) -> Result<&Solid, &str> {
+        self.solid
+            .get_or_init(|| {
+                STEP_BUILDS.with(|c| c.set(c.get() + 1));
+                read_normal_body(&self.text)
+            })
+            .as_ref()
+            .map_err(String::as_str)
+    }
+}
+
+impl std::fmt::Debug for StepShape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StepShape")
+            .field("text_bytes", &self.text.len())
+            .field("tolerance_mm", &self.tolerance_mm)
+            .field("built", &self.solid.get().map(Result::is_ok))
+            .finish()
+    }
+}
+
+/// Ein neuer STEP-Körper beim Import: Name (nicht leer) und Form.
+#[derive(Clone, Debug)]
+pub struct NewStepBody {
+    pub name: String,
+    pub shape: Arc<StepShape>,
+}
+
+impl Document {
+    pub fn step_shape(&self, id: StepShapeId) -> Option<&Arc<StepShape>> {
+        self.step_shapes.get(&id)
+    }
+
+    /// Form des STEP-Körpers `feature` (auch wenn er unterdrückt oder fehlerhaft ist); `None`
+    /// für andere Arten.
+    pub fn step_body(&self, feature: FeatureId) -> Option<&Arc<StepShape>> {
+        match &self.feature(feature)?.kind {
+            FeatureKind::StepBody { shape } => self.step_shapes.get(shape),
+            _ => None,
+        }
+    }
+
+    /// Legt die Formen mit fortlaufenden Kennungen und je Körper ein Feature am Marker an (in
+    /// der gegebenen Reihenfolge, je Körper eine Änderung). Ist danach ein neuer Körper nicht
+    /// `Ok`, wird alles zurückgenommen (Features, Formen, Kennungszähler, Änderungszahl, Marker)
+    /// und die Meldung des ersten geliefert („„{Name}“: {Meldung}“). Ein leerer Aufruf ändert
+    /// nichts.
+    pub fn add_step_bodies(
+        &mut self,
+        bodies: Vec<NewStepBody>,
+    ) -> Result<Vec<FeatureId>, FeatureError> {
+        if bodies.is_empty() {
+            return Ok(Vec::new());
+        }
+        if bodies.iter().any(|b| b.name.trim().is_empty()) {
+            return Err(FeatureError::InvalidInput(
+                "Der Name darf nicht leer sein".into(),
+            ));
+        }
+        let saved = (self.next_id, self.next_step_shape, self.edits, self.marker);
+        let mut shapes = Vec::with_capacity(bodies.len());
+        let mut ids = Vec::with_capacity(bodies.len());
+        let added = self.insert_step_bodies(bodies, &mut shapes, &mut ids);
+        let refused = match added {
+            Err(e) => Some(e),
+            Ok(()) => ids.iter().find_map(|id| {
+                let f = self.feature(*id)?;
+                let message = match &f.status {
+                    FeatureStatus::Ok => return None,
+                    FeatureStatus::Error(m) | FeatureStatus::Skipped(m) => m.clone(),
+                    other => format!("{other:?}"),
+                };
+                Some(FeatureError::StepImport(format!("„{}“: {message}", f.name)))
+            }),
+        };
+        let Some(e) = refused else {
+            return Ok(ids);
+        };
+        self.features.retain(|f| !ids.contains(&f.id));
+        for s in &shapes {
+            self.step_shapes.remove(s);
+        }
+        (self.next_id, self.next_step_shape, self.edits, self.marker) = saved;
+        self.recompute();
+        Err(e)
+    }
+
+    /// Formen und Features anlegen; merkt sich alles Angelegte für die Rücknahme.
+    fn insert_step_bodies(
+        &mut self,
+        bodies: Vec<NewStepBody>,
+        shapes: &mut Vec<StepShapeId>,
+        ids: &mut Vec<FeatureId>,
+    ) -> Result<(), FeatureError> {
+        let mut named = Vec::with_capacity(bodies.len());
+        for b in bodies {
+            let id = StepShapeId(self.next_step_shape);
+            self.next_step_shape = self.next_step_shape.checked_add(1).ok_or_else(|| {
+                FeatureError::InvalidInput("Die STEP-Form-Kennungen sind aufgebraucht".into())
+            })?;
+            self.step_shapes.insert(id, b.shape);
+            shapes.push(id);
+            named.push((b.name, id));
+        }
+        for (name, shape) in named {
+            ids.push(self.add_feature(name, FeatureKind::StepBody { shape })?);
+        }
+        Ok(())
+    }
+
+    /// Formen, auf die ein Feature verweist.
+    pub(crate) fn used_step_shapes(&self) -> BTreeSet<StepShapeId> {
+        self.features
+            .iter()
+            .filter_map(|f| match &f.kind {
+                FeatureKind::StepBody { shape } => Some(*shape),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Entfernt Formen, auf die kein Feature mehr verweist.
+    pub(crate) fn prune_step_shapes(&mut self) {
+        let used = self.used_step_shapes();
+        self.step_shapes.retain(|id, _| used.contains(id));
+    }
+}

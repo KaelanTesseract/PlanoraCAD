@@ -1,6 +1,7 @@
 //! Datenmodell des Feature-Baums: Features, ihre Arten und das Dokument.
 
 use crate::refs::{EdgeRef, FaceRef};
+use crate::step_bodies::{StepShape, StepShapeId};
 use planora_exchange::{ExchangeMesh, MeshTransform};
 use planora_kernel::{AnalyticKernel, BlendKind, BoolOp, Solid};
 use planora_math::{DQuat, DVec3, Frame};
@@ -265,6 +266,11 @@ pub enum FeatureKind {
         rotation: DQuat,
         scale: f64,
     },
+    /// Eingelesener exakter Körper („STEP-Körper“, Plan P6): Verweis in die Formtabelle des
+    /// Dokuments; keine Zahlenfelder, keine Lage (Verschieben über das Verschieben-Feature).
+    StepBody {
+        shape: StepShapeId,
+    },
 }
 
 impl FeatureKind {
@@ -282,6 +288,7 @@ impl FeatureKind {
             FeatureKind::Move { .. } => "Verschieben",
             FeatureKind::Verrunden { art, .. } => art.label(),
             FeatureKind::MeshBody { .. } => "Netz-Körper",
+            FeatureKind::StepBody { .. } => "STEP-Körper",
         }
     }
 
@@ -303,7 +310,8 @@ impl FeatureKind {
             | FeatureKind::Cylinder { .. }
             | FeatureKind::Sphere { .. }
             | FeatureKind::Cone { .. }
-            | FeatureKind::MeshBody { .. } => Vec::new(),
+            | FeatureKind::MeshBody { .. }
+            | FeatureKind::StepBody { .. } => Vec::new(),
             FeatureKind::Extrude { sketch, .. } | FeatureKind::Revolve { sketch, .. } => {
                 vec![*sketch]
             }
@@ -415,6 +423,10 @@ pub struct Document {
     pub(crate) meshes: BTreeMap<MeshId, Arc<ExchangeMesh>>,
     /// Nächste zu vergebende Netz-Kennung (beginnt bei 1).
     pub(crate) next_mesh: u64,
+    /// Formen der STEP-Körper (normalisierter Text, einmal gebauter Körper).
+    pub(crate) step_shapes: BTreeMap<StepShapeId, Arc<StepShape>>,
+    /// Nächste zu vergebende Form-Kennung (beginnt bei 1).
+    pub(crate) next_step_shape: u64,
     /// Zeichnungen des Dokuments (Teilprojekt 11).
     pub(crate) drawings: Vec<planora_drawing::Drawing>,
     /// Nächste zu vergebende Zeichnungskennung (beginnt bei 1).
@@ -469,6 +481,8 @@ impl Document {
             edits: 0,
             meshes: BTreeMap::new(),
             next_mesh: 1,
+            step_shapes: BTreeMap::new(),
+            next_step_shape: 1,
             drawings: Vec::new(),
             next_drawing: 1,
             drawing_edits: 0,

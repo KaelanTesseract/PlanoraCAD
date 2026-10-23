@@ -480,8 +480,8 @@ fn plane_name(p: StandardPlane) -> &'static str {
     }
 }
 
-fn kind_to(k: &FeatureKind) -> KindDto {
-    match k {
+fn kind_to(k: &FeatureKind) -> Result<KindDto> {
+    Ok(match k {
         FeatureKind::Sketch(s) => KindDto::Skizze(Box::new(SketchFeatureDto {
             skizze: sketch_to(&s.sketch),
             lage: match &s.plane {
@@ -589,7 +589,13 @@ fn kind_to(k: &FeatureKind) -> KindDto {
             drehung: rotation.to_array(),
             massstab: *scale,
         },
-    }
+        // Übergang bis Dateiformat 10 (STEP-Import, Aufgabe 12): nie still weglassen.
+        FeatureKind::StepBody { .. } => {
+            return Err(ProjectError::Invalid(
+                "STEP-Körper lassen sich noch nicht speichern".into(),
+            ));
+        }
+    })
 }
 
 fn art_to(a: &BlendArt) -> BlendArtDto {
@@ -1783,18 +1789,20 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         features: s
             .features
             .iter()
-            .map(|f| FeatureDto {
-                id: f.id.0,
-                name: f.name.clone(),
-                unterdrueckt: f.suppressed,
-                art: kind_to(&f.kind),
-                formeln: f
-                    .formulas
-                    .iter()
-                    .map(|(k, t)| (k.file_key().to_string(), t.clone()))
-                    .collect(),
+            .map(|f| {
+                Ok(FeatureDto {
+                    id: f.id.0,
+                    name: f.name.clone(),
+                    unterdrueckt: f.suppressed,
+                    art: kind_to(&f.kind)?,
+                    formeln: f
+                        .formulas
+                        .iter()
+                        .map(|(k, t)| (k.file_key().to_string(), t.clone()))
+                        .collect(),
+                })
             })
-            .collect(),
+            .collect::<Result<_>>()?,
         netze: s
             .meshes
             .iter()
@@ -1944,6 +1952,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         marker: file.marker,
         next_id: file.naechste_id,
         meshes,
+        step_shapes: Default::default(),
         drawings,
         next_drawing,
         project_info,

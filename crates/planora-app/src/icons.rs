@@ -555,6 +555,8 @@ impl FeatureIcon {
             K::Move { .. } => FeatureIcon::Move,
             K::Verrunden { art, .. } => FeatureIcon::for_blend(art.is_chamfer()),
             K::MeshBody { .. } => FeatureIcon::Body(BodyKind::Mesh),
+            // Übergang bis zum eigenen Symbol (STEP-Import, Aufgabe 13).
+            K::StepBody { .. } => FeatureIcon::Body(BodyKind::Combined),
         }
     }
 }
