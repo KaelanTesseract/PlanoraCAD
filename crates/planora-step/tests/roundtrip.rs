@@ -3,23 +3,27 @@
 
 mod common;
 
-use common::bodies::{nurbs_sphere, poses, spline_prism, torus_ring, vase, weighted_prism};
+use common::bodies::{
+    nurbs_sphere, poses, random_body, random_pose, spline_prism, torus_ring, vase, weighted_prism,
+};
 use common::{Lcg, export};
 use planora_exchange::Progress;
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{
-    AnalyticKernel, BlendEdge, BlendKind, BlendRequest, BooleanError, Curve, Edge, Face, Id,
-    Kernel, NURBS_EDGE_TOL, Solid, Surface, UvRect, validate,
+    AnalyticKernel, BlendEdge, BlendKind, BlendRequest, Curve, Edge, Face, Id, Kernel,
+    NURBS_EDGE_TOL, Solid, Surface, UvRect, validate,
 };
 use planora_math::nurbs::{NurbsCurve, NurbsSurface};
-use planora_math::{DMat4, DVec3, EulerRot, PI, TAU};
+use planora_math::{DMat4, DVec3, Frame, PI, TAU};
 use planora_mesh::{
     Mesh, TessellationOptions, boolean_volume_plausible, mass_properties, tessellate,
 };
+use planora_step::read::topo::derive_patch_sensed;
 use planora_step::{
     ImportOptions, ImportedBody, LengthUnit, NormalBody, ReadLimits, StepFile, StepImport,
     import_bodies,
 };
+use std::f64::consts::FRAC_PI_2;
 use std::path::PathBuf;
 
 /// Sehnentoleranz der Netze für Volumen, Oberfläche und Hülle.
@@ -50,6 +54,8 @@ const SERIES_SEED: u64 = 20_261_014;
 const RANDOM_BODIES: usize = 6;
 /// Kegel der kurzen Zufallsreihe in `cones_in_any_pose_come_back`.
 const CONE_SERIES: usize = 12;
+/// Punkte je Seite des Rands in `notch_at_pole`.
+const NOTCH_STEPS: usize = 200;
 
 fn k() -> AnalyticKernel {
     AnalyticKernel::default()
@@ -297,14 +303,24 @@ fn used_vertices(s: &Solid) -> Vec<DVec3> {
     ids.into_iter().map(|id| s.vertices[id].point).collect()
 }
 
-/// Kanten, die eine Fläche benutzt.
+/// Kanten, die eine Fläche benutzt, ohne Nähte.
 fn used_edges(s: &Solid) -> Vec<&Edge> {
-    let mut ids: Vec<_> = s
-        .faces
-        .iter()
-        .flat_map(|(_, f)| std::iter::once(&f.outer).chain(&f.inner))
-        .flat_map(|l| l.half_edges.iter().map(|h| h.edge))
-        .collect();
+    let mut ids: Vec<_> = Vec::new();
+    for (_, f) in s.faces.iter() {
+        let mut own: Vec<_> = std::iter::once(&f.outer)
+            .chain(&f.inner)
+            .flat_map(|l| l.half_edges.iter().map(|h| h.edge))
+            .collect();
+        own.sort_by_key(|id| id.index());
+        // Nähte (zweimal in derselben Fläche) sind keine Kanten der Gestalt: Ihre Lage hängt nur
+        // von der Parametrisierung ab.
+        let seams: Vec<_> = own
+            .windows(2)
+            .filter(|w| w[0] == w[1])
+            .map(|w| w[0])
+            .collect();
+        ids.extend(own.into_iter().filter(|id| !seams.contains(id)));
+    }
     ids.sort_by_key(|id| id.index());
     ids.dedup();
     ids.into_iter().map(|id| &s.edges[id]).collect()
@@ -337,15 +353,25 @@ fn foot(f: &Face, p: DVec3) -> (DVec3, f64) {
 /// Gleiche Geometrie unabhängig von der Parametrisierung: Die Netzpunkte jeder Fläche liegen
 /// auf einer Fläche des anderen Körpers (höchstens `tol`), deren Außennormale dorthin zeigt,
 /// wohin auch die eigene zeigt; die Kanten liegen auf Kanten, die Ecken stimmen (höchstens
-/// `tol`) überein.
+/// `tol`) überein. Ob eine gekrümmte Fläche das richtige *Gebiet* ihrer Trägerfläche bedeckt,
+/// prüft das nicht (Punkte liegen auf der unbegrenzten Fläche): Das deckt der Vergleich der
+/// Netzvolumina in [`same_body`] (ein falsches Gebiet bei gleichen Kanten ändert das Volumen
+/// grob).
+fn same_geometry(a: &Solid, b: &Solid, mesh_a: &Mesh, tol: f64) -> Result<(), String> {
+    if a.faces.len() != b.faces.len() {
+        return Err(format!("{} Flächen statt {}", b.faces.len(), a.faces.len()));
+    }
+    same_faces(a, b, mesh_a, tol)?;
+    same_edges_and_vertices(a, b, tol)
+}
+
+/// Die Netzpunkte jeder Fläche von `a` liegen auf einer Fläche von `b` mit gleicher Außenseite.
 // Die negierten Vergleiche lehnen absichtlich auch NaN ab.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn same_geometry(a: &Solid, b: &Solid, mesh_a: &Mesh, tol: f64) -> Result<(), String> {
+fn same_faces(a: &Solid, b: &Solid, mesh_a: &Mesh, tol: f64) -> Result<(), String> {
     let fa: Vec<&Face> = a.faces.iter().map(|(_, f)| f).collect();
     let fb: Vec<&Face> = b.faces.iter().map(|(_, f)| f).collect();
-    if fa.len() != fb.len() {
-        return Err(format!("{} Flächen statt {}", fb.len(), fa.len()));
-    }
+    let corners = used_vertices(a);
     for (i, pts) in face_samples(a, mesh_a).iter().enumerate() {
         if pts.is_empty() {
             return Err(format!("Fläche {} ohne Netz", i + 1));
@@ -353,7 +379,6 @@ fn same_geometry(a: &Solid, b: &Solid, mesh_a: &Mesh, tol: f64) -> Result<(), St
         // Die Flächen müssen nicht in derselben Reihenfolge stehen (der Schreiber ordnet nach
         // Schalen): Jeder Punkt liegt auf irgendeiner Fläche des anderen Körpers, die ihn zur
         // selben Seite hin begrenzt.
-        let corners = used_vertices(a);
         for &p in pts {
             let (na, _) = foot(fa[i], p);
             // An Spitzen und Polen (Ecken) gibt es keine Normale.
@@ -366,17 +391,26 @@ fn same_geometry(a: &Solid, b: &Solid, mesh_a: &Mesh, tol: f64) -> Result<(), St
             });
             if !found {
                 return Err(format!(
-                    "Fläche {}: Punkt {p} auf keiner Fläche mit derselben Außenseite                      (nächste {nearest:e} entfernt)",
+                    "Fläche {}: Punkt {p} auf keiner Fläche mit derselben Außenseite \
+                     (nächste {nearest:e} entfernt)",
                     i + 1
                 ));
             }
         }
     }
+    Ok(())
+}
+
+/// Kantenpunkte (ohne Nähte) liegen auf Kanten, die Ecken stimmen überein.
+// Die negierten Vergleiche lehnen absichtlich auch NaN ab.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn same_edges_and_vertices(a: &Solid, b: &Solid, tol: f64) -> Result<(), String> {
+    let edges_b = used_edges(b);
     for e in used_edges(a) {
         for k in 1..EDGE_SAMPLES {
             let t = e.t0 + (e.t1 - e.t0) * k as f64 / EDGE_SAMPLES as f64;
             let p = e.curve.point(t);
-            if !used_edges(b).iter().any(|f| on_edge(f, p, tol)) {
+            if !edges_b.iter().any(|f| on_edge(f, p, tol)) {
                 return Err(format!("Kantenpunkt {p} liegt auf keiner Kante"));
             }
         }
@@ -400,7 +434,12 @@ fn same_geometry(a: &Solid, b: &Solid, mesh_a: &Mesh, tol: f64) -> Result<(), St
 /// Export → Import eines Körpers und Vergleich mit dem Original; `Err` mit Befund.
 fn round_trip(name: &str, s: &Solid, freeform: bool) -> Result<(), String> {
     let (text, _) = export(&[(name, s)]);
-    let imp = import(&text);
+    same_body(&text, s, freeform)
+}
+
+/// Liest `text` (ein Körper) und vergleicht ihn mit `s`; `Err` mit Befund.
+fn same_body(text: &str, s: &Solid, freeform: bool) -> Result<(), String> {
+    let imp = import(text);
     if imp.bodies.len() != 1 {
         return Err(format!("{} Körper statt 1", imp.bodies.len()));
     }
@@ -455,48 +494,6 @@ fn every_exportable_body_comes_back() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Zufällige Lage: verschoben um bis zu ±2 und beliebig gedreht (wie `stage3.rs`).
-fn random_pose(rng: &mut Lcg) -> DMat4 {
-    DMat4::from_translation(DVec3::new(
-        rng.range(-2.0, 2.0),
-        rng.range(-2.0, 2.0),
-        rng.range(-2.0, 2.0),
-    )) * DMat4::from_euler(
-        EulerRot::XYZ,
-        rng.range(0.0, 3.0),
-        rng.range(0.0, 3.0),
-        rng.range(0.0, 3.0),
-    )
-}
-
-/// Zufälliger Körper wie in `stage3.rs`: ein gedrehter Quader, verrechnet mit einem gedrehten
-/// Quader, einem Zylinder oder einer Kugel; `None` bei leerer Schnittmenge.
-fn random_body(rng: &mut Lcg) -> Option<Solid> {
-    let size = |rng: &mut Lcg| {
-        DVec3::new(
-            rng.range(2.0, 8.0),
-            rng.range(2.0, 8.0),
-            rng.range(2.0, 8.0),
-        )
-    };
-    let a = moved(&k().make_box(size(rng)).unwrap(), random_pose(rng));
-    let b = match (rng.uniform() * 3.0) as usize {
-        0 => k().make_box(size(rng)).unwrap(),
-        1 => k()
-            .make_cylinder(rng.range(1.0, 4.0), rng.range(2.0, 8.0))
-            .unwrap(),
-        _ => k().make_sphere(rng.range(1.0, 4.0)).unwrap(),
-    };
-    let b = moved(&b, random_pose(rng));
-    let op =
-        [BoolOp::Union, BoolOp::Difference, BoolOp::Intersection][(rng.uniform() * 3.0) as usize];
-    match k().boolean(&a, &b, op) {
-        Ok(s) => Some(s),
-        Err(BooleanError::EmptyResult) => None,
-        Err(e) => panic!("Boolesche Operation {op:?}: {e}"),
-    }
-}
-
 /// Der dritte nicht leere Zufallskörper ab `Lcg(77)` (Prüfer-Befund P1 aus Aufgabe 9): Quader
 /// minus Kugel; der Pol der Kugel liegt in der Taschenfläche, der Kernel führt eine Naht bis zum
 /// Pol und zurück.
@@ -530,13 +527,12 @@ fn flip_face_on(text: &str, kind: &str) -> String {
             }
         })
         .collect::<Vec<_>>()
-        .join(
-            "
-",
-        )
+        .join("\n")
 }
 
 /// P1: Die Tasche kommt zurück; mit umgekehrter Kugelfläche wird der Körper weiter abgelehnt.
+/// Das ist vorsichtig: Die umgekehrte Taschenfläche beschreibt gültig den vereinigten Körper
+/// (Prüfer-Befund N1); der Leser kann ihn nur nicht sicher von einem Fehler unterscheiden.
 #[test]
 fn a_pocket_around_the_pole_of_its_sphere_comes_back() {
     let s = pocket_around_a_pole();
@@ -556,7 +552,7 @@ fn a_pocket_around_the_pole_of_its_sphere_comes_back() {
         let imp = import(&flipped);
         assert!(
             imp.bodies[0].outcome.is_err(),
-            "{pose}: umgekehrte Kugelfläche übernommen"
+            "{pose}: umgekehrte Kugelfläche übernommen (vorsichtig abgelehnt erwartet; sie beschriebe gültig einen anderen Körper)"
         );
     }
 }
@@ -664,7 +660,7 @@ fn cones_in_any_pose_come_back() {
         let imp = import(&flip_face_on(&text, "CONICAL_SURFACE"));
         assert!(
             imp.bodies[0].outcome.is_err(),
-            "Kegel {i}: umgekehrte Mantelfläche übernommen"
+            "Kegel {i}: umgekehrte Mantelfläche übernommen (vorsichtig abgelehnt erwartet)"
         );
     }
 }
@@ -1168,4 +1164,242 @@ fn after_blends_and_booleans() {
         not_rounded.iter().all(|n| n.starts_with("Zufall")) && not_rounded.len() <= RANDOM_BODIES,
         "nicht gerundet: {not_rounded:?}"
     );
+}
+
+/// Rand einer Kugelfläche durch den Nordpol mit einer Ausbuchtung dicht am Pol (Prüfer-Befund
+/// I1): Keil u ∈ [0; 1] vom Äquator bis zum Pol, dazu am Pol bis zum Breitenkreis mit Polabstand
+/// `d` ein Stück u ∈ [−2; 0]. Im Parameterraum (u, v):
+/// (0, 0) → (0, lat) → (−2, lat) → (−2, Pol) → (1, Pol) → (1, 0) → (0, 0).
+fn notch_at_pole(surface: &Surface, r: f64, d: f64) -> Vec<DVec3> {
+    let lat = FRAC_PI_2 - d / r;
+    let corners = [
+        (0.0, 0.0),
+        (0.0, lat),
+        (-2.0, lat),
+        (-2.0, FRAC_PI_2),
+        (1.0, FRAC_PI_2),
+        (1.0, 0.0),
+    ];
+    let mut out = Vec::new();
+    for k in 0..corners.len() {
+        let (a, b) = (corners[k], corners[(k + 1) % corners.len()]);
+        for j in 0..NOTCH_STEPS {
+            let t = j as f64 / NOTCH_STEPS as f64;
+            out.push(surface.point(a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t));
+        }
+    }
+    out
+}
+
+/// Obergrenzen des Einrastens am Pol (`POLE_APPROACH_REL`, `POLE_APPROACH_SHARE`): Ein Stück des
+/// Rands 1e-2 vom Pol einer Kugel r 5 (am Ursprung) bzw. 5 % der Schleife vom Pol einer Kugel r 1
+/// (1 000 mm vom Ursprung, wo die relative Grenze 0,1 mm wäre) ist echte Form und bleibt im
+/// Parameterbereich: u reicht über 3, nicht nur über 1.
+#[test]
+fn features_close_to_a_pole_keep_their_u_range() {
+    for (r, c, d) in [
+        (5.0, DVec3::ZERO, 1e-2),
+        (1.0, DVec3::new(1000.0, 0.0, 0.0), 0.05),
+    ] {
+        let surface = Surface::Sphere {
+            frame: Frame {
+                origin: c,
+                ..Frame::WORLD
+            },
+            radius: r,
+        };
+        let pts = notch_at_pole(&surface, r, d);
+        let patch = derive_patch_sensed(&surface, false, &[pts], 1e-6)
+            .unwrap_or_else(|e| panic!("r {r}, d {d}: {e:?}"));
+        let span = patch.u1 - patch.u0;
+        assert!((span - 3.0).abs() < 1e-9, "r {r}, d {d}: u-Bereich {span}");
+    }
+}
+
+/// Der Parameterbereich geschlossener Flächen beginnt bei 0 (bzw. am Anfang des Bereichs der
+/// Freiformfläche), auch wenn die Naht nur bis auf Rundung bei 0 liegt (Prüfer-Befund M1: eine
+/// gedrehte Kugel kam mit u ab 2π − 4e-10 zurück).
+#[test]
+fn closed_faces_start_their_range_at_zero() {
+    for (name, body) in [
+        ("Kugel", k().make_sphere(6.0).unwrap()),
+        ("NURBS-Kugel", nurbs_sphere()),
+    ] {
+        for (pose, m) in poses() {
+            let (text, _) = export(&[(name, &moved(&body, m))]);
+            let imp = import(&text);
+            let n = ok(&imp.bodies[0], name);
+            for (_, f) in n.solid.faces.iter() {
+                if let (Some(per), Some(p)) = (f.surface.u_period(), f.patch) {
+                    assert!(p.u0.abs() < 1e-8 * per, "{name}, {pose}: u ab {}", p.u0);
+                }
+            }
+        }
+    }
+}
+
+/// Ebene Kreise des Körpers (Bezug und Normale).
+fn circle_planes(s: &Solid) -> Vec<(DVec3, DVec3)> {
+    s.edges
+        .iter()
+        .filter_map(|(_, e)| match e.curve {
+            Curve::Circle { frame, .. } => Some((frame.origin, frame.z)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `b` beschnitten durch den Halbraum vor der Ebene (`origin`, `normal`).
+fn clipped(b: &Solid, origin: DVec3, normal: DVec3) -> Option<Solid> {
+    let x = normal.any_orthonormal_vector();
+    let y = normal.cross(x);
+    let m = DMat4::from_cols(
+        x.extend(0.0),
+        y.extend(0.0),
+        normal.extend(0.0),
+        origin.extend(1.0),
+    ) * DMat4::from_translation(DVec3::new(-50.0, -50.0, 0.0));
+    let half = moved(&k().make_box(DVec3::splat(100.0)).unwrap(), m);
+    k().boolean(b, &half, BoolOp::Intersection).ok()
+}
+
+/// Volumen von `a op c` über Netze; lässt sich das Ergebnis nicht vernetzen, aus den Teilen
+/// (Vereinigung: `V(a) + V(c) − V(a ∩ c)`, Differenz: `V(a) − V(a ∩ c)`).
+fn op_volume(a: &Solid, c: &Solid, op: BoolOp, result: &Solid) -> Option<f64> {
+    let v = |s: &Solid| measured(s, CHORD).ok().map(|m| m.0.volume);
+    if let Some(x) = v(result) {
+        return Some(x);
+    }
+    let both = k().boolean(a, c, BoolOp::Intersection).ok();
+    let common = both.as_ref().and_then(v).unwrap_or(0.0);
+    match op {
+        BoolOp::Union => Some(v(a)? + v(c)? - common),
+        BoolOp::Difference => Some(v(a)? - common),
+        BoolOp::Intersection => None,
+    }
+}
+
+/// `n` hat die Gestalt von `a op c`: Seine Flächenpunkte liegen auf Flächen des Ergebnisses mit
+/// gleicher Außenseite, und die Volumina stimmen bis zum Netzfehler (die Zerlegung in Flächen
+/// darf anders sein; Ergebnisse, die der Kernel nicht vernetzt, über ihre Teile).
+fn has_shape_of(n: &Solid, a: &Solid, c: &Solid, op: BoolOp) -> bool {
+    let Ok(result) = k().boolean(a, c, op) else {
+        return false;
+    };
+    let Ok((m, mesh)) = measured(n, CHORD) else {
+        return false;
+    };
+    same_faces(n, &result, &mesh, HULL_TOL).is_ok()
+        && op_volume(a, c, op, &result)
+            .is_some_and(|v| (v - m.volume).abs() <= SAG_FACTOR * CHORD * m.area)
+}
+
+/// Kehrt den Sinn der Kante `edge_line` (eine Zeile `#n=EDGE_CURVE(…)`) im Text um.
+fn flip_edge_line(text: &str, line: &str) -> String {
+    let flipped = if line.ends_with(".T.);") {
+        line.replace(".T.);", ".F.);")
+    } else {
+        line.replace(".F.);", ".T.);")
+    };
+    text.replacen(line, &flipped, 1)
+}
+
+/// Jede Kante von `a op b` mit umgekehrtem Sinn (`EDGE_CURVE.same_sense`): Der Leser lehnt ab,
+/// liest den Körper genau wie gebaut, oder die Datei beschreibt gültig einen anderen Körper,
+/// nämlich `a op (b ∩ Halbraum)` an der Ebene eines Kreises (der Bogen läuft dann den langen Weg
+/// um den Kreis; die ebene Fläche überdeckt die ganze Kreisscheibe, die Kugel verliert die Kappe
+/// jenseits der Ebene – Prüfer-Befund I2, Aufgabe 10). Liefert die Zahl der Kanten und die der
+/// gültigen anderen Körper; jeder andere Fall ist ein Fehler.
+fn flipped_edges(a: &Solid, b: &Solid, op: BoolOp, what: &str) -> (usize, usize) {
+    let s = k().boolean(a, b, op).unwrap();
+    let (text, _) = export(&[("K", &s)]);
+    let (mut edges, mut other) = (0, 0);
+    for line in text.lines().filter(|l| l.contains("=EDGE_CURVE(")) {
+        edges += 1;
+        let t = flip_edge_line(&text, line);
+        let imp = import(&t);
+        let Ok(n) = &imp.bodies[0].outcome else {
+            continue;
+        };
+        if same_body(&t, &s, false).is_ok() {
+            continue;
+        }
+        let described = circle_planes(&n.solid).into_iter().any(|(o, z)| {
+            [z, -z]
+                .into_iter()
+                .any(|z| clipped(b, o, z).is_some_and(|c| has_shape_of(&n.solid, a, &c, op)))
+        });
+        assert!(described, "{what}, {line}: anderer Körper übernommen");
+        other += 1;
+    }
+    (edges, other)
+}
+
+/// Die Box-mit-Kugel-Reihe des Prüfers (`Lcg(777)`): Quader und Kugel in Zufallslage, verrechnet.
+fn box_with_sphere(rng: &mut Lcg) -> (Solid, Solid, BoolOp) {
+    let a = moved(
+        &k().make_box(DVec3::new(
+            rng.range(2.0, 8.0),
+            rng.range(2.0, 8.0),
+            rng.range(2.0, 8.0),
+        ))
+        .unwrap(),
+        random_pose(rng),
+    );
+    let b = moved(
+        &k().make_sphere(rng.range(1.0, 4.0)).unwrap(),
+        random_pose(rng),
+    );
+    let op =
+        [BoolOp::Union, BoolOp::Difference, BoolOp::Intersection][(rng.uniform() * 3.0) as usize];
+    (a, b, op)
+}
+
+/// Die Fälle `cases` der Reihe (Index wie beim Prüfer, nur Paare, die der Kernel rechnet).
+fn box_sphere_series(cases: &[usize], what: &str) -> (usize, usize) {
+    let mut rng = Lcg(777);
+    let (mut edges, mut other) = (0, 0);
+    for i in 0..=*cases.iter().max().unwrap() {
+        let (a, b, op) = box_with_sphere(&mut rng);
+        if !cases.contains(&i) || k().boolean(&a, &b, op).is_err() {
+            continue;
+        }
+        let (e, o) = flipped_edges(&a, &b, op, &format!("{what} {i}"));
+        edges += e;
+        other += o;
+    }
+    (edges, other)
+}
+
+/// Prüfer-Befund I2: In der Reihe sind 27 umgekehrte Kanten übernommen worden, die anders als
+/// das Original sind. Jede beschreibt gültig `a op (b ∩ Halbraum)`; hier die Körper 2, 55 und
+/// 219 („sph219“, Kante #56) der Reihe, die ganze Reihe nur im Release.
+#[test]
+fn flipped_circle_edges_describe_a_clipped_sphere() {
+    let (edges, other) = box_sphere_series(&[2, 55, 219], "Reihe");
+    assert!(edges > 0);
+    assert_eq!(other, 4, "andere Körper in den Fällen 2, 55 (zwei) und 219");
+}
+
+#[test]
+#[ignore = "lange Reihe, nur mit --release --ignored"]
+fn flipped_circle_edges_in_the_whole_box_sphere_series() {
+    let all: Vec<usize> = (0..250).collect();
+    let (edges, other) = box_sphere_series(&all, "Reihe");
+    println!("{edges} Kanten umgekehrt, {other} beschreiben einen beschnittenen Ball");
+    assert_eq!(other, 27);
+}
+
+/// Von Hand: Würfel 10³ vereinigt mit einer Kugel r 3 um die Mitte der oberen rechten Kante;
+/// auf Deckel und rechter Seite je ein Halbkreis. Jede Kante umgekehrt: abgelehnt, gleich oder
+/// der Würfel mit der an einer Kreisebene beschnittenen Kugel.
+#[test]
+fn a_box_with_a_sphere_and_one_circle_edge_flipped() {
+    let cube = cube();
+    let ball = moved(
+        &k().make_sphere(3.0).unwrap(),
+        DMat4::from_translation(DVec3::new(10.0, 5.0, 10.0)),
+    );
+    let (edges, _) = flipped_edges(&cube, &ball, BoolOp::Union, "Würfel mit Kugel");
+    assert!(edges >= 12, "{edges} Kanten");
 }

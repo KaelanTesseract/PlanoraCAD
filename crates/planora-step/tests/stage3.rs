@@ -4,12 +4,13 @@
 
 mod common;
 
+use common::bodies::random_body;
 use common::check::{check_geometry, measure};
 use common::{Lcg, checked, export};
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{
-    AnalyticKernel, BlendEdge, BlendKind, BlendRequest, BooleanError, Edge, Id, Kernel,
-    NURBS_EDGE_TOL, Solid, Surface, UvRect,
+    AnalyticKernel, BlendEdge, BlendKind, BlendRequest, Edge, Id, Kernel, NURBS_EDGE_TOL, Solid,
+    Surface, UvRect,
 };
 use planora_math::nurbs::{NurbsCurve, NurbsSurface};
 use planora_math::{DMat4, DVec3, EulerRot, PI, TAU};
@@ -372,50 +373,6 @@ fn the_blends_produce_the_expected_kinds_of_faces() {
         text.contains("B_SPLINE_CURVE"),
         "Schnittkurve mit der Freiformfläche"
     );
-}
-
-/// Zufällige Lage: verschoben um bis zu ±2 und beliebig gedreht.
-fn random_pose(rng: &mut Lcg) -> DMat4 {
-    DMat4::from_translation(DVec3::new(
-        rng.range(-2.0, 2.0),
-        rng.range(-2.0, 2.0),
-        rng.range(-2.0, 2.0),
-    )) * DMat4::from_euler(
-        EulerRot::XYZ,
-        rng.range(0.0, 3.0),
-        rng.range(0.0, 3.0),
-        rng.range(0.0, 3.0),
-    )
-}
-
-/// Zufälliger Körper: ein gedrehter Quader, verrechnet mit einem gedrehten Quader, einem Zylinder
-/// oder einer Kugel (Paare, die der Kernel kann; Zylinder mit Zylinder oder Kugel schräg zur
-/// Achse rechnet er noch nicht). `None` nur bei leerer Schnittmenge; jeder andere Fehler des
-/// Kernels lässt den Test fehlschlagen.
-fn random_body(rng: &mut Lcg) -> Option<Solid> {
-    let size = |rng: &mut Lcg| {
-        DVec3::new(
-            rng.range(2.0, 8.0),
-            rng.range(2.0, 8.0),
-            rng.range(2.0, 8.0),
-        )
-    };
-    let a = moved(&k().make_box(size(rng)).unwrap(), random_pose(rng));
-    let b = match (rng.uniform() * 3.0) as usize {
-        0 => k().make_box(size(rng)).unwrap(),
-        1 => k()
-            .make_cylinder(rng.range(1.0, 4.0), rng.range(2.0, 8.0))
-            .unwrap(),
-        _ => k().make_sphere(rng.range(1.0, 4.0)).unwrap(),
-    };
-    let b = moved(&b, random_pose(rng));
-    let op =
-        [BoolOp::Union, BoolOp::Difference, BoolOp::Intersection][(rng.uniform() * 3.0) as usize];
-    match k().boolean(&a, &b, op) {
-        Ok(s) => Some(s),
-        Err(BooleanError::EmptyResult) => None,
-        Err(e) => panic!("Boolesche Operation {op:?}: {e}"),
-    }
 }
 
 /// Rechnet `cases` Fälle; gibt (geprüfte, übersprungene wegen leerer Schnittmenge) zurück.

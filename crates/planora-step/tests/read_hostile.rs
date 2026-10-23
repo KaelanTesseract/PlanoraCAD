@@ -16,9 +16,9 @@ use std::time::{Duration, Instant};
 
 /// Startwert der Zufallsfälle (Tag der Aufgabe, JJJJMMTT).
 const SEED: u64 = 20_261_021;
-/// Zufallsfälle im Debug-Build.
+/// Zufallsfälle im Debug-Build (über alle Dateien, siehe [`random_cases`]).
 const DEBUG_CASES: usize = 200;
-/// Zufallsfälle im Release-Build (`--ignored`).
+/// Zufallsfälle im Release-Build (`--ignored`, über alle Dateien).
 const RELEASE_CASES: usize = 5000;
 /// Abschneiden bei jedem so vielten Byte.
 const CUT_EVERY: usize = 97;
@@ -148,7 +148,12 @@ fn mutate(rng: &mut Lcg, bytes: &[u8]) -> (String, Vec<u8>) {
     }
 }
 
-/// `cases` Zufallsfälle über alle Testdateien; liefert die längste Laufzeit.
+/// `cases` Zufallsfälle über alle Testdateien (die Datei je Fall zufällig); liefert die längste
+/// Laufzeit. Gezählt über alle Dateien, nicht je Datei: Je Datei (11 × 5 000 im Release, einmal
+/// gemessen) gab es keine Panik und einen einzigen Fall über 2 s, einen gültigen, übernommenen
+/// Körper (Kontrollpunkt des Viertelzylinders von x 10 nach 105: 3,2 s, fast ganz Netz der
+/// Seitenprobe); im Debug-Build träfe man so auch den Fall aus
+/// `a_flange_with_a_doubled_control_range_is_refused_in_time`.
 fn random_cases(cases: usize) -> Duration {
     let files = data_files();
     let mut rng = Lcg(SEED);
@@ -300,4 +305,35 @@ fn big_file_release_only() {
     );
     assert_eq!(ok, 50);
     assert!(took < Duration::from_secs(5), "{took:?}");
+}
+
+/// Gefunden mit den Zufallsfällen je Datei: Im Flansch (`rational_bspline.step`) ist ein Stück
+/// der Kontrollpunktliste der unteren Kurve doppelt; die Kurve läuft ein Stück zweimal, die
+/// Strangfläche überdeckt sich. Abgelehnt wird erst von der Seitenprobe nach dem Netz: Release
+/// 1,45 s, Debug etwa 11 s (darum nur im Release unter der Grenze von 2 s).
+#[test]
+#[ignore = "nur Release: Zeitgrenze"]
+fn a_flange_with_a_doubled_control_range_is_refused_in_time() {
+    let files = data_files();
+    let (_, bytes) = files
+        .iter()
+        .find(|f| f.0 == "rational_bspline.step")
+        .unwrap();
+    let text = String::from_utf8(bytes.clone()).unwrap();
+    let list = "B_SPLINE_CURVE(3,(#1400,#1401,#1402,#1403,#1404,";
+    assert!(text.contains(list));
+    let broken = text.replacen(
+        list,
+        "B_SPLINE_CURVE(3,(#1400,#1401,#1402,#1403,#1404,#1401,#1402,#1403,#1404,",
+        1,
+    );
+    let took = case("Flansch", broken.clone().into_bytes());
+    let messages = messages_of(broken.into_bytes());
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("„STEP-Fläche 3“ liegt nicht richtig im Körper")),
+        "{messages:?}"
+    );
+    println!("Flansch: {:.3} s", took.as_secs_f64());
 }

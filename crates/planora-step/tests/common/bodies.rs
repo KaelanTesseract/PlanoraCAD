@@ -1,15 +1,21 @@
 //! Körper der Tests, die mehrere Testdateien brauchen (aus `curved.rs` und `freeform.rs`
 //! hierher verschoben, Rümpfe unverändert; STEP-Import, Aufgabe 10).
 
+use super::Lcg;
+use planora_kernel::boolean::BoolOp;
 use planora_kernel::{
-    AnalyticKernel, Kernel, Profile, ProfileLoop, Segment, Solid, Surface, UvRect,
+    AnalyticKernel, BooleanError, Kernel, Profile, ProfileLoop, Segment, Solid, Surface, UvRect,
 };
 use planora_math::nurbs::{NurbsCurve, NurbsSurface};
-use planora_math::{DMat4, DVec2, DVec3, Frame, PI, TAU};
+use planora_math::{DMat4, DVec2, DVec3, EulerRot, Frame, PI, TAU};
 use std::sync::Arc;
 
 fn k() -> AnalyticKernel {
     AnalyticKernel::default()
+}
+
+fn moved(s: &Solid, m: DMat4) -> Solid {
+    k().transform(s, &m).unwrap()
 }
 
 /// Lagen, in denen jeder Körper geprüft wird: wie gebaut, verschoben und gedreht, gespiegelt,
@@ -250,4 +256,48 @@ pub fn weighted_prism() -> Solid {
         4.0,
     )
     .unwrap()
+}
+
+/// Zufällige Lage: verschoben um bis zu ±2 und beliebig gedreht.
+pub fn random_pose(rng: &mut Lcg) -> DMat4 {
+    DMat4::from_translation(DVec3::new(
+        rng.range(-2.0, 2.0),
+        rng.range(-2.0, 2.0),
+        rng.range(-2.0, 2.0),
+    )) * DMat4::from_euler(
+        EulerRot::XYZ,
+        rng.range(0.0, 3.0),
+        rng.range(0.0, 3.0),
+        rng.range(0.0, 3.0),
+    )
+}
+
+/// Zufälliger Körper: ein gedrehter Quader, verrechnet mit einem gedrehten Quader, einem Zylinder
+/// oder einer Kugel (Paare, die der Kernel kann; Zylinder mit Zylinder oder Kugel schräg zur
+/// Achse rechnet er noch nicht). `None` nur bei leerer Schnittmenge; jeder andere Fehler des
+/// Kernels lässt den Test fehlschlagen.
+pub fn random_body(rng: &mut Lcg) -> Option<Solid> {
+    let size = |rng: &mut Lcg| {
+        DVec3::new(
+            rng.range(2.0, 8.0),
+            rng.range(2.0, 8.0),
+            rng.range(2.0, 8.0),
+        )
+    };
+    let a = moved(&k().make_box(size(rng)).unwrap(), random_pose(rng));
+    let b = match (rng.uniform() * 3.0) as usize {
+        0 => k().make_box(size(rng)).unwrap(),
+        1 => k()
+            .make_cylinder(rng.range(1.0, 4.0), rng.range(2.0, 8.0))
+            .unwrap(),
+        _ => k().make_sphere(rng.range(1.0, 4.0)).unwrap(),
+    };
+    let b = moved(&b, random_pose(rng));
+    let op =
+        [BoolOp::Union, BoolOp::Difference, BoolOp::Intersection][(rng.uniform() * 3.0) as usize];
+    match k().boolean(&a, &b, op) {
+        Ok(s) => Some(s),
+        Err(BooleanError::EmptyResult) => None,
+        Err(e) => panic!("Boolesche Operation {op:?}: {e}"),
+    }
 }
