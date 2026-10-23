@@ -1,5 +1,5 @@
 //! Feature-Baum von PlanoraCAD: Datenmodell, stabile Verweise auf Flächen und Kanten,
-//! Berechnung und Neuberechnung mit Zwischenspeicher, Änderungsoperationen und Netz-Körper.
+//! Berechnung und Neuberechnung mit Zwischenspeicher, Änderungsoperationen, Netz-Körper und STEP-Körper.
 
 mod compute;
 mod dimensions;
@@ -17,6 +17,7 @@ mod parts_sheets;
 pub mod recompute;
 pub mod refs;
 mod snapshot;
+mod step_bodies;
 
 pub use compute::MAX_COORD_MM;
 pub use dimensions::{
@@ -56,3 +57,8 @@ pub use refs::{
     resolve_edge, resolve_face,
 };
 pub use snapshot::{RestoreKind, Snapshot, SnapshotFeature, mesh_validations};
+pub use step_bodies::{
+    MAX_STEP_TEXT_SUM_BYTES, NewStepBody, StepShape, StepShapeId, StepTextSumLimitGuard,
+    limit_step_text_sum_for_tests, step_builds, step_text_megabytes, step_text_sum,
+    step_text_sum_limit,
+};

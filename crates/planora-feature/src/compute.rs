@@ -169,7 +169,10 @@ pub(crate) fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
                 ));
             }
         }
-        FeatureKind::Sketch(_) | FeatureKind::Revolve { .. } | FeatureKind::Boolean { .. } => {}
+        FeatureKind::Sketch(_)
+        | FeatureKind::Revolve { .. }
+        | FeatureKind::Boolean { .. }
+        | FeatureKind::StepBody { .. } => {}
     }
     Ok(())
 }
@@ -316,6 +319,16 @@ fn compute_unchecked(
             let t = feature.kind.mesh_transform().unwrap_or_default();
             check_mesh_extent(m, &t)?;
             Ok(Computed::default())
+        }
+        FeatureKind::StepBody { shape } => {
+            let s = doc
+                .step_shapes
+                .get(shape)
+                .ok_or(FeatureError::StepShapeMissing(shape.0))?;
+            let solid = s
+                .solid()
+                .map_err(|m| FeatureError::StepShape(m.to_string()))?;
+            finish(doc, solid.clone(), id.0)
         }
     }
 }

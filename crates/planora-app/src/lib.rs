@@ -42,6 +42,7 @@ pub mod sketch_panel;
 pub mod sketch_state;
 pub mod sketch_view;
 pub mod state;
+pub mod step_import_dialog;
 pub mod tabs;
 pub mod theme;
 pub mod undo_labels;

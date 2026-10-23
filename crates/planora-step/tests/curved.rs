@@ -3,14 +3,13 @@
 
 mod common;
 
+use common::bodies::{notched, poses, torus_ring, tube};
 use common::check::check_geometry;
 use common::model::{Crv, Model, Surf};
 use common::{checked, export, options};
 use planora_exchange::Progress;
 use planora_kernel::boolean::BoolOp;
-use planora_kernel::{
-    AnalyticKernel, Curve, Kernel, Profile, ProfileLoop, Segment, Solid, Surface,
-};
+use planora_kernel::{AnalyticKernel, Curve, Kernel, ProfileLoop, Segment, Solid, Surface};
 use planora_math::{DMat4, DVec2, DVec3, Frame, PI};
 use planora_step::{StepBody, StepError, write_step};
 
@@ -32,90 +31,6 @@ fn k() -> AnalyticKernel {
 
 fn moved(s: &Solid, m: DMat4) -> Solid {
     k().transform(s, &m).unwrap()
-}
-
-/// Lagen, in denen jeder Körper geprüft wird: wie gebaut, verschoben und gedreht, gespiegelt,
-/// gespiegelt und gedreht.
-fn poses() -> Vec<(&'static str, DMat4)> {
-    vec![
-        ("wie gebaut", DMat4::IDENTITY),
-        (
-            "gedreht",
-            DMat4::from_translation(DVec3::new(5.0, -3.0, 7.0))
-                * DMat4::from_rotation_x(0.9)
-                * DMat4::from_rotation_z(0.4),
-        ),
-        ("gespiegelt", DMat4::from_scale(DVec3::new(1.0, -1.0, 1.0))),
-        (
-            "gespiegelt und gedreht",
-            DMat4::from_rotation_y(-1.3) * DMat4::from_scale(DVec3::new(1.0, 1.0, -1.0)),
-        ),
-    ]
-}
-
-/// Ring mit Torusfläche: Kette (0,0) → (8,0) → Halbkreis um (8,3) nach außen → (0,6).
-fn torus_ring() -> Solid {
-    k().revolve(
-        &ProfileLoop {
-            start: DVec2::ZERO,
-            segments: vec![
-                Segment::Line {
-                    to: DVec2::new(8.0, 0.0),
-                },
-                Segment::Arc {
-                    center: DVec2::new(8.0, 3.0),
-                    sweep: PI,
-                },
-                Segment::Line {
-                    to: DVec2::new(0.0, 6.0),
-                },
-            ],
-        },
-        &Frame::WORLD,
-    )
-    .unwrap()
-}
-
-/// Quader 10 × 10 × 4 mit einer nach innen gewölbten Bucht (Bogen im Uhrzeigersinn).
-fn notched() -> Solid {
-    let outer = ProfileLoop {
-        start: DVec2::ZERO,
-        segments: vec![
-            Segment::Line {
-                to: DVec2::new(10.0, 0.0),
-            },
-            Segment::Line {
-                to: DVec2::new(10.0, 10.0),
-            },
-            Segment::Arc {
-                center: DVec2::new(5.0, 10.0),
-                sweep: -PI,
-            },
-            Segment::Line { to: DVec2::ZERO },
-        ],
-    };
-    k().extrude(
-        &Profile {
-            outer,
-            holes: vec![],
-        },
-        &Frame::WORLD,
-        4.0,
-    )
-    .unwrap()
-}
-
-/// Rohr: Kreis r = 5 mit Loch r = 3, Höhe 8.
-fn tube() -> Solid {
-    k().extrude(
-        &Profile {
-            outer: ProfileLoop::circle(DVec2::ZERO, 5.0),
-            holes: vec![ProfileLoop::circle(DVec2::ZERO, 3.0)],
-        },
-        &Frame::WORLD,
-        8.0,
-    )
-    .unwrap()
 }
 
 /// Zylinder r = 5, h = 40, oben schräg abgeschnitten (Ellipse als Schnittkante).

@@ -1,0 +1,96 @@
+ISO-10303-21;
+/* Selbst geschrieben für die Tests von PlanoraCAD (GPL-3.0-only). */
+HEADER;
+FILE_DESCRIPTION(('Kugel r 10 mit Naht und VERTEX_LOOP an den Polen; Halbkugel auf Zylinder mit Kante der Länge null am Pol'),'2;1');
+FILE_NAME('sphere_vertex_loop.step','2026-10-21T00:00:00',('PlanoraCAD'),(''),'von Hand','von Hand','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+#9=ADVANCED_BREP_SHAPE_REPRESENTATION('Kugel',(#20),#105);
+#10=ADVANCED_BREP_SHAPE_REPRESENTATION('Kuppel',(#30),#105);
+#100=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));
+#101=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.));
+#102=(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT());
+#103=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-06),#100,'distance_accuracy_value','');
+#105=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#103))
+  GLOBAL_UNIT_ASSIGNED_CONTEXT((#100,#101,#102))REPRESENTATION_CONTEXT('',''));
+#901=DIRECTION('',(1.,0.,0.));
+#902=DIRECTION('',(0.,1.,0.));
+#903=DIRECTION('',(0.,0.,1.));
+#905=DIRECTION('',(0.,-1.,0.));
+#911=VECTOR('',#901,1.);
+#913=VECTOR('',#903,1.);
+/* Kugel r 10 um den Ursprung: eine Fläche, Naht hin und zurück, Pole als VERTEX_LOOP */
+#20=MANIFOLD_SOLID_BREP('Kugel',#21);
+#21=CLOSED_SHELL('',(#22));
+#22=ADVANCED_FACE('',(#23,#24,#25),#26,.T.);
+#23=FACE_BOUND('',#27,.T.);
+#24=FACE_BOUND('',#33,.T.);
+#25=FACE_BOUND('',#34,.T.);
+#27=EDGE_LOOP('',(#28,#29));
+#28=ORIENTED_EDGE('',*,*,#40,.T.);
+#29=ORIENTED_EDGE('',*,*,#40,.F.);
+#33=VERTEX_LOOP('',#42);
+#34=VERTEX_LOOP('',#41);
+/* Naht: Halbkreis im Meridian bei x > 0 vom Südpol zum Nordpol */
+#40=EDGE_CURVE('',#41,#42,#43,.T.);
+#41=VERTEX_POINT('',#44);
+#42=VERTEX_POINT('',#45);
+#43=CIRCLE('',#46,10.);
+#44=CARTESIAN_POINT('',(0.,0.,-10.));
+#45=CARTESIAN_POINT('',(0.,0.,10.));
+#46=AXIS2_PLACEMENT_3D('',#47,#905,#901);
+#47=CARTESIAN_POINT('',(0.,0.,0.));
+#48=AXIS2_PLACEMENT_3D('',#47,#903,#901);
+#26=SPHERICAL_SURFACE('',#48,10.);
+/* Kuppel: Zylinder R 10, h 10 mit Halbkugel r 10 obenauf; am Pol (0; 0; 20) eine Kante der
+   Länge null (Gerade mit derselben Ecke an beiden Enden) */
+#30=MANIFOLD_SOLID_BREP('Kuppel',#31);
+#31=CLOSED_SHELL('',(#121,#122,#123));
+#61=CARTESIAN_POINT('',(0.,0.,0.));
+#62=CARTESIAN_POINT('',(0.,0.,10.));
+#63=CARTESIAN_POINT('',(10.,0.,0.));
+#64=CARTESIAN_POINT('',(10.,0.,10.));
+#65=CARTESIAN_POINT('',(0.,0.,20.));
+#71=VERTEX_POINT('',#63);
+#72=VERTEX_POINT('',#64);
+#73=VERTEX_POINT('',#65);
+#81=AXIS2_PLACEMENT_3D('',#61,#903,#901);
+#82=AXIS2_PLACEMENT_3D('',#62,#903,#901);
+#83=AXIS2_PLACEMENT_3D('',#62,#905,#901);
+#91=CIRCLE('',#81,10.);
+#92=CIRCLE('',#82,10.);
+#93=LINE('',#63,#913);
+#94=CIRCLE('',#83,10.);
+#95=LINE('',#65,#911);
+#191=EDGE_CURVE('',#71,#71,#91,.T.);
+#192=EDGE_CURVE('',#72,#72,#92,.T.);
+#193=EDGE_CURVE('',#71,#72,#93,.T.);
+#194=EDGE_CURVE('',#72,#73,#94,.T.);
+#197=EDGE_CURVE('',#73,#73,#95,.T.);
+#111=PLANE('',#81);
+#112=CYLINDRICAL_SURFACE('',#81,10.);
+#113=SPHERICAL_SURFACE('',#82,10.);
+/* Boden (Normale -z) */
+#121=ADVANCED_FACE('',(#131),#111,.F.);
+#131=FACE_OUTER_BOUND('',#141,.T.);
+#141=EDGE_LOOP('',(#151));
+#151=ORIENTED_EDGE('',*,*,#191,.F.);
+/* Mantel: unten vorwärts, Naht hoch, oben rückwärts, Naht runter */
+#122=ADVANCED_FACE('',(#132),#112,.T.);
+#132=FACE_OUTER_BOUND('',#142,.T.);
+#142=EDGE_LOOP('',(#152,#153,#154,#155));
+#152=ORIENTED_EDGE('',*,*,#191,.T.);
+#153=ORIENTED_EDGE('',*,*,#193,.T.);
+#154=ORIENTED_EDGE('',*,*,#192,.F.);
+#155=ORIENTED_EDGE('',*,*,#193,.F.);
+/* Halbkugel: Äquator vorwärts, Meridian hoch, Kante der Länge null am Pol, Meridian runter */
+#123=ADVANCED_FACE('',(#133),#113,.T.);
+#133=FACE_OUTER_BOUND('',#143,.T.);
+#143=EDGE_LOOP('',(#156,#157,#158,#159));
+#156=ORIENTED_EDGE('',*,*,#192,.T.);
+#157=ORIENTED_EDGE('',*,*,#194,.T.);
+#158=ORIENTED_EDGE('',*,*,#197,.T.);
+#159=ORIENTED_EDGE('',*,*,#194,.F.);
+ENDSEC;
+END-ISO-10303-21;

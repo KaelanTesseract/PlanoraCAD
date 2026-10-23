@@ -4,6 +4,7 @@ use crate::error::FeatureError;
 use crate::formulas::{Formulas, check_keys};
 use crate::model::{Document, Feature, FeatureId, FeatureKind, FeatureStatus, MeshId};
 use crate::params::{Parameter, check_table};
+use crate::step_bodies::{StepShape, StepShapeId};
 use planora_drawing::sheet_info::{ProjectInfo, validate_project_info};
 use planora_drawing::{BodyKey, Drawing, RowOverride};
 use planora_exchange::ExchangeMesh;
@@ -51,6 +52,8 @@ pub struct Snapshot {
     pub next_id: u64,
     /// Netze der Netz-Körper; nur die, auf die ein Feature verweist (Plan P11).
     pub meshes: BTreeMap<MeshId, Arc<ExchangeMesh>>,
+    /// Formen der STEP-Körper; nur die, auf die ein Feature verweist (wie bei Netzen).
+    pub step_shapes: BTreeMap<StepShapeId, Arc<StepShape>>,
     /// Zeichnungen des Dokuments.
     pub drawings: Vec<Drawing>,
     /// Nächste Zeichnungskennung (mindestens 1).
@@ -77,6 +80,18 @@ fn same_meshes(
             .all(|((ka, ma), (kb, mb))| ka == kb && Arc::ptr_eq(ma, mb))
 }
 
+/// Gleiche Formtabellen: gleiche Kennungen mit jeweils demselben `Arc` (gleicher Text in einem
+/// anderen `Arc` gilt als andere Form).
+fn same_step_shapes(
+    a: &BTreeMap<StepShapeId, Arc<StepShape>>,
+    b: &BTreeMap<StepShapeId, Arc<StepShape>>,
+) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|((ka, sa), (kb, sb))| ka == kb && Arc::ptr_eq(sa, sb))
+}
+
 impl Snapshot {
     /// Gleicher Inhalt in allen Feldern. Netze gelten nur als gleich, wenn es dieselben `Arc`
     /// sind; Skizzen nach ihrem Stand (siehe [`crate::SketchFeature`]).
@@ -88,7 +103,8 @@ impl Snapshot {
             && self.parts_overrides == other.parts_overrides
     }
 
-    /// Gleiches Modell: Features (samt Formeltexten), Marker, Kennungszähler, Netze und Parametertabelle (samt
+    /// Gleiches Modell: Features (samt Formeltexten), Marker, Kennungszähler, Netze, STEP-Formen
+    /// (beide als derselbe `Arc`) und Parametertabelle (samt
     /// Parameterzähler) gleich; Zeichnungen, Projektangaben und Stücklistentexte zählen nicht.
     /// Eine Änderung nur an Parametern oder Formeln nimmt deshalb in [`Document::restore`] den
     /// vollen Weg.
@@ -97,6 +113,7 @@ impl Snapshot {
             && self.marker == other.marker
             && self.next_id == other.next_id
             && same_meshes(&self.meshes, &other.meshes)
+            && same_step_shapes(&self.step_shapes, &other.step_shapes)
             && self.parameters == other.parameters
             && self.next_param == other.next_param
     }
@@ -105,6 +122,7 @@ impl Snapshot {
 impl Document {
     pub fn snapshot(&self) -> Snapshot {
         let used = self.used_meshes();
+        let used_shapes = self.used_step_shapes();
         Snapshot {
             features: self
                 .features
@@ -124,6 +142,12 @@ impl Document {
                 .iter()
                 .filter(|(id, _)| used.contains(id))
                 .map(|(id, m)| (*id, Arc::clone(m)))
+                .collect(),
+            step_shapes: self
+                .step_shapes
+                .iter()
+                .filter(|(id, _)| used_shapes.contains(id))
+                .map(|(id, s)| (*id, Arc::clone(s)))
                 .collect(),
             drawings: self.drawings.clone(),
             next_drawing: self.next_drawing,
@@ -180,6 +204,7 @@ impl Document {
         doc.edits = self.edits + 1;
         doc.drawing_edits = self.drawing_edits + 1;
         doc.next_mesh = doc.next_mesh.max(self.next_mesh);
+        doc.next_step_shape = doc.next_step_shape.max(self.next_step_shape);
         *self = doc;
         Ok(RestoreKind::Full)
     }
@@ -258,6 +283,20 @@ impl Document {
             None => 1,
         };
         doc.meshes = s.meshes;
+        // STEP-Formen werden übernommen, nicht gebaut: Gebaut wird beim Rechnen über
+        // `StepShape::solid` (ein schon gebautes `Arc` baut nie neu). Ein unlesbarer Text gibt
+        // nur dem STEP-Körper den Fehlerstatus (P14), das Laden geht weiter.
+        if s.step_shapes.contains_key(&StepShapeId(0)) {
+            return Err(bad("Eine STEP-Form hat eine ungültige Kennung"));
+        }
+        doc.next_step_shape = match s.step_shapes.last_key_value() {
+            Some((id, _)) => {
+                id.0.checked_add(1)
+                    .ok_or_else(|| bad("Eine STEP-Form hat eine ungültige Kennung"))?
+            }
+            None => 1,
+        };
+        doc.step_shapes = s.step_shapes;
         for mut f in s.features {
             // Skizzenformeln an Abhängigkeiten, die keine haben können (gelöscht, anzeigend,
             // kein Maß), entfallen beim Laden still (milder Ladeweg wie bei P3).

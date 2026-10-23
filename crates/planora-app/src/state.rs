@@ -4,8 +4,8 @@ use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
 use planora_feature::{
     BlendArt, BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
-    FieldKey, Formulas, MESH_LOCKED, MeshId, ParamEdit, ParamId, RestoreKind, SketchFeature,
-    SketchPlane,
+    FieldKey, Formulas, MESH_LOCKED, MeshId, NewStepBody, ParamEdit, ParamId, RestoreKind,
+    SketchFeature, SketchPlane, StepShape,
 };
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{AnalyticKernel, Edge, Face, Id, Solid};
@@ -36,6 +36,8 @@ pub enum BodyKind {
     Combined,
     /// Eingelesenes Netz (Netz-Körper, Teilprojekt 9).
     Mesh,
+    /// Aus einer STEP-Datei übernommener exakter Körper (STEP-Körper); verschoben bleibt er es.
+    Step,
 }
 
 /// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
@@ -121,6 +123,9 @@ pub struct AppState {
     /// in der normalen Textfarbe. Eine Meldung in `message` hat Vorrang; der Hinweis endet mit
     /// dem nächsten Verlaufsschritt oder einer Meldung ([`crate::workspace::DocTab::observe_history`]).
     pub info: Option<String>,
+    /// Der Hinweis `info` beschreibt die Änderung, aus der der nächste Verlaufsschritt wird (etwa
+    /// die Zusammenfassung von „STEP importieren“): dieser eine Schritt beendet ihn nicht.
+    pub info_outlives_step: bool,
     /// Laufende Nummer je Bezeichnung für neue Features („Quader 1“, „Quader 2“, …); zählt
     /// nur hoch, damit Namen auch nach dem Löschen eindeutig bleiben.
     name_counters: BTreeMap<String, u64>,
@@ -343,6 +348,7 @@ impl AppState {
             chord_tolerance,
             message: None,
             info: None,
+            info_outlives_step: false,
             name_counters: BTreeMap::new(),
             selected_feature: None,
             sketch_session: None,
@@ -1355,6 +1361,20 @@ impl AppState {
         self.scene_version = next_scene_version();
     }
 
+    /// Wie [`AppState::frame_all`], nur für die Körper `indices` (Indizes in `bodies`; unbekannte
+    /// zählen nicht). Ohne einen solchen Körper bleibt die Kamera, wie sie ist.
+    pub fn frame_bodies(&mut self, indices: &[usize]) {
+        let mut iter = indices
+            .iter()
+            .filter_map(|&i| self.bodies.get(i))
+            .map(|b| b.bounds);
+        let Some(first) = iter.next() else {
+            return;
+        };
+        let (min, max) = iter.fold(first, |(lo, hi), (a, b)| (lo.min(a), hi.max(b)));
+        self.camera.frame_bounds(to_vec3(min), to_vec3(max));
+    }
+
     /// Richtet die Kamera auf alle Körper aus (ohne Körper: Standardansicht auf den Ursprung).
     pub fn frame_all(&mut self) {
         let mut iter = self.bodies.iter().map(|b| b.bounds);
@@ -2279,6 +2299,7 @@ fn body_kind(doc: &Document, r: BodyRef) -> BodyKind {
         Some(FeatureKind::Extrude { .. }) => BodyKind::Extrusion,
         Some(FeatureKind::Revolve { .. }) => BodyKind::Revolution,
         Some(FeatureKind::MeshBody { .. }) => BodyKind::Mesh,
+        Some(FeatureKind::StepBody { .. }) => BodyKind::Step,
         _ => BodyKind::Combined,
     }
 }
@@ -2558,6 +2579,110 @@ impl AppState {
                 self.refresh();
                 self.fail(status_message(status))
             }
+        }
+    }
+}
+
+// ---- STEP-Körper ------------------------------------------------------------------------------
+
+/// Bezeichnung (und Namensstamm) der aus STEP-Dateien übernommenen Körper, gleich
+/// `FeatureKind::StepBody.label()`. Nur in der Crate sichtbar: `export_dialog::STEP_LABEL` (Name
+/// des Exportformats) trägt denselben Namen, und Tests binden beide Module mit `*` ein.
+pub(crate) const STEP_LABEL: &str = planora_step::UNNAMED_BODY;
+
+/// Nummer `n`, wenn `name` genau „STEP-Körper n“ ist (n höchstens `MAX_NAME_COUNTER`).
+fn step_number(name: &str) -> Option<u64> {
+    let (label, num) = name.trim().rsplit_once(' ')?;
+    let n = num.parse::<u64>().ok()?;
+    (label == STEP_LABEL && n <= MAX_NAME_COUNTER).then_some(n)
+}
+
+impl AppState {
+    /// Die Namen, die [`AppState::import_step`] den Körpern mit den Namen `given` (in dieser
+    /// Reihenfolge) geben würde: ein Name wird getrimmt übernommen, ein leerer wird
+    /// „STEP-Körper n“. Die Nummern liegen über allen „STEP-Körper k“ im Dokument (Features und
+    /// sichtbare Körper, auch umbenannte), über allen schon vergebenen und über denen in `given`
+    /// selbst, damit kein Name doppelt vorkommt. Das Fenster „STEP importieren“ benutzt sie für
+    /// die Lage-Meldung (`ImportedBody::warnings_named`), damit Meldung und Baum übereinstimmen.
+    pub fn step_body_names(&self, given: &[String]) -> Vec<String> {
+        self.plan_step_names(given).0
+    }
+
+    /// Wie [`AppState::step_body_names`]; dazu die letzte vergebene Nummer (keine: `None`).
+    fn plan_step_names(&self, given: &[String]) -> (Vec<String>, Option<u64>) {
+        let base = self
+            .document
+            .features()
+            .iter()
+            .map(|f| f.name.as_str())
+            .chain(self.bodies.iter().map(|b| b.name.as_str()))
+            .chain(given.iter().map(String::as_str))
+            .filter_map(step_number)
+            .chain(self.name_counters.get(STEP_LABEL).copied())
+            .max()
+            .unwrap_or(0);
+        let mut next = base;
+        let mut last = None;
+        let names = given
+            .iter()
+            .map(|name| {
+                let trimmed = name.trim();
+                if trimmed.is_empty() {
+                    next = next.saturating_add(1);
+                    last = Some(next);
+                    format!("{STEP_LABEL} {next}")
+                } else {
+                    trimmed.to_string()
+                }
+            })
+            .collect();
+        (names, last)
+    }
+
+    /// Legt die Körper `bodies` (Name, Form aus dem Import) als STEP-Körper an, alle in einem
+    /// Schritt am Marker (ganz oder gar nicht). Ein leerer Name ergibt „STEP-Körper n“ (Zähler wie
+    /// bei „Netz-Körper n“; er zählt nur nach gelungenem Anlegen weiter). Danach ist der erste
+    /// neue Körper gewählt und die Kamera auf die neuen Körper ausgerichtet. Eine offene Skizze
+    /// wird vorher beendet. Schlägt es fehl, bleibt das Dokument unverändert und die Meldung
+    /// steht in `message` (etwa die Summengrenze der STEP-Formen). Eine leere Liste ändert nichts.
+    pub fn import_step(
+        &mut self,
+        bodies: Vec<(String, Arc<StepShape>)>,
+    ) -> Result<Vec<FeatureId>, String> {
+        self.try_close_sketch()?;
+        if bodies.is_empty() {
+            return Ok(Vec::new());
+        }
+        let given: Vec<String> = bodies.iter().map(|(n, _)| n.clone()).collect();
+        let (names, last) = self.plan_step_names(&given);
+        let list: Vec<NewStepBody> = bodies
+            .into_iter()
+            .zip(names)
+            .map(|((_, shape), name)| NewStepBody { name, shape })
+            .collect();
+        match self.document.add_step_bodies(list) {
+            Ok(ids) => {
+                if let Some(n) = last {
+                    self.name_counters.insert(STEP_LABEL.to_string(), n);
+                }
+                self.hover = None;
+                self.selection = None;
+                self.selected_feature = None;
+                self.refresh();
+                let shown: Vec<usize> = ids
+                    .iter()
+                    .filter_map(|id| {
+                        self.body_index(BodyRef {
+                            feature: *id,
+                            index: 0,
+                        })
+                    })
+                    .collect();
+                self.selected_body = shown.first().copied();
+                self.frame_bodies(&shown);
+                Ok(ids)
+            }
+            Err(e) => self.fail(e.to_string()),
         }
     }
 }

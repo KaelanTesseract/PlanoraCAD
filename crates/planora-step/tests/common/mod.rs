@@ -2,6 +2,7 @@
 //! (§5.2) und Ausgabe über `write_step`.
 #![allow(dead_code)]
 
+pub mod bodies;
 pub mod check;
 pub mod model;
 pub mod reader;

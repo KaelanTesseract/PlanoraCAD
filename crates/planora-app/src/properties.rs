@@ -2,13 +2,13 @@ use crate::browser::error_color;
 use crate::formula_field::FormulaField;
 use crate::mesh_body::{euler_degrees, report_text, rotation_from_degrees, warning_color};
 use crate::sketch_view::format_number;
-use crate::state::AppState;
+use crate::state::{AppState, BodyKind, STEP_LABEL};
 use crate::theme;
 use planora_exchange::MeshTransform;
 use planora_feature::expr::number_text;
 use planora_feature::{
     BlendArt, FeatureId, FeatureKind, FeatureStatus, FieldKey, ParamUnit, SketchPlane,
-    StandardPlane, field_unit, field_value,
+    StandardPlane, StepShape, field_unit, field_value,
 };
 use planora_kernel::{BoolOp, Kernel};
 use planora_math::DVec3;
@@ -38,6 +38,56 @@ const MESH_BODY_HINT: &str = concat!(
     "Netz-Körper lassen sich verschieben, drehen, vergrößern, messen und exportieren, ",
     "aber nicht mit anderen Körpern verrechnen, runden oder als Fläche für eine Skizze nutzen."
 );
+
+/// Warnung bei STEP-Körpern mit grober Genauigkeit der Datei (gröber als 1e-5 mm), in Warnfarbe.
+pub const STEP_COARSE_HINT: &str = "Rechnen mit diesem Körper kann scheitern.";
+
+/// Genauigkeit in mm für die Anzeige: höchstens vier gültige Stellen, Komma, ohne überflüssige
+/// Nullen („0,001 mm“, „0,00000254 mm“), wie in den Meldungen des STEP-Lesers.
+fn tolerance_text(t: f64) -> String {
+    if !t.is_finite() || t <= 0.0 {
+        return "0 mm".into();
+    }
+    let digits = (3 - t.log10().floor() as i32).max(0) as usize;
+    let s = format!("{t:.digits$}");
+    let s = if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    };
+    format!("{} mm", s.replace('.', ","))
+}
+
+/// Genauigkeit der Datei für die Anzeige; nennt die Datei keine, „unbekannt“ mit dem
+/// angenommenen Wert (P4).
+fn accuracy_text(shape: &StepShape) -> String {
+    let t = tolerance_text(shape.tolerance_mm());
+    if shape.tolerance_known() {
+        t
+    } else {
+        format!("unbekannt (angenommen {t})")
+    }
+}
+
+/// Zeilen „Flächen“ und „Genauigkeit der Datei“ einer STEP-Form (Flächen der Form, wie sie aus
+/// der Datei kam; „–“, wenn sie sich nicht lesen lässt).
+fn step_rows(state: &AppState, shape: &StepShape) -> Vec<(&'static str, String)> {
+    let faces = shape.solid().map_or_else(
+        |_| "–".to_string(),
+        |s| state.kernel.counts(s).0.to_string(),
+    );
+    vec![
+        ("Flächen", faces),
+        ("Genauigkeit der Datei", accuracy_text(shape)),
+    ]
+}
+
+/// Warnung unter den Zeilen eines groben STEP-Körpers.
+fn step_warning(ui: &mut egui::Ui, shape: &StepShape) {
+    if shape.is_coarse() {
+        ui.colored_label(warning_color(ui.visuals().dark_mode), STEP_COARSE_HINT);
+    }
+}
 
 /// Eigenschaften: für einen gewählten Körper Maße, Fläche/Kante und Position; für ein
 /// gewähltes Feature Art, Name, Status und Parameter.
@@ -329,6 +379,10 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str
                 ("Maßstab", format_number(*scale, 4)),
             ]
         }
+        // Keine Zahlenfelder (P6): nur Angaben zur Form aus der Datei.
+        FeatureKind::StepBody { shape } => doc
+            .step_shape(*shape)
+            .map_or_else(Vec::new, |s| step_rows(state, s)),
     }
 }
 
@@ -357,6 +411,9 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
     row(ui, "Status", status_text);
     for (k, v) in &rows {
         row(ui, k, theme::value(v));
+    }
+    if let Some(shape) = state.document.step_body(id).cloned() {
+        step_warning(ui, &shape);
     }
     ui.add_space(8.0);
     let edit = ui
@@ -412,6 +469,26 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         // Der Name gehört dem erzeugenden Feature.
         renamed = name_field(ui, state.naming_feature(index), &body.name);
         ui.add_space(6.0);
+        // STEP-Körper (auch verschoben): Art, Angaben zur Form und bei grober Datei die Warnung.
+        let step = (body.kind == BodyKind::Step)
+            .then(|| state.naming_feature(index))
+            .flatten()
+            .and_then(|f| state.document.step_body(f));
+        if let Some(shape) = step {
+            row(ui, "Art", theme::value(STEP_LABEL));
+            // Der Körper kann seit dem Import gerundet oder verrechnet sein: Die Zahl der Form
+            // aus der Datei heißt hier ausdrücklich so, „Flächen / Kanten“ unten zählt den
+            // Körper, wie er jetzt ist.
+            for (k, v) in step_rows(state, shape) {
+                let k = if k == "Flächen" {
+                    "Flächen in der Datei"
+                } else {
+                    k
+                };
+                row(ui, k, theme::value(v));
+            }
+            step_warning(ui, shape);
+        }
         let (min, max) = body.bounds;
         let size = max - min;
         mass_rows(ui, &body.mass);

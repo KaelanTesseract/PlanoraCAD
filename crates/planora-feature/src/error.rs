@@ -34,6 +34,16 @@ pub enum FeatureError {
     MeshBodyLocked,
     #[error("Das Netz {0} fehlt im Dokument")]
     MeshMissing(u64),
+    #[error("Die STEP-Form {0} fehlt im Dokument")]
+    StepShapeMissing(u64),
+    /// Der gespeicherte STEP-Text lässt sich nicht zu einem Körper bauen (P14: nur dieses
+    /// Feature bekommt den Fehlerstatus, das Dokument lädt).
+    #[error("Die gespeicherte STEP-Form lässt sich nicht lesen: {0}")]
+    StepShape(String),
+    /// Ein Import wurde ganz zurückgenommen; Meldung „„{Name}“: {Grund}“, fertig für die
+    /// Oberfläche ([`crate::Document::add_step_bodies`]).
+    #[error("{0}")]
+    StepImport(String),
     #[error("Folgende Features hängen davon ab: {}", join_ids(.0))]
     HasDependents(Vec<u64>),
     #[error("Ungültige Eingabe: {0}")]

@@ -207,6 +207,7 @@ fn menu_entries_have_icons_and_separate_shortcuts() {
         "Speichern unter …",
         "Exportieren …",
         "Netz importieren …",
+        "STEP importieren …",
         "Schließen",
         "Beenden",
     ] {

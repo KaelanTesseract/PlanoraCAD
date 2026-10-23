@@ -166,6 +166,7 @@ impl Document {
         self.features.retain(|f| !removed.contains(&f.id));
         self.marker -= before_marker;
         self.prune_meshes();
+        self.prune_step_shapes();
         self.edits += 1;
         self.recompute();
         Ok(removed)
@@ -188,6 +189,11 @@ impl Document {
             && !self.meshes.contains_key(mesh)
         {
             return Err(FeatureError::MeshMissing(mesh.0));
+        }
+        if let FeatureKind::StepBody { shape } = kind
+            && !self.step_shapes.contains_key(shape)
+        {
+            return Err(FeatureError::StepShapeMissing(shape.0));
         }
         Ok(())
     }

@@ -13,6 +13,7 @@ planora-mesh.workspace = true
 planora-exchange.workspace = true
 planora-sketch.workspace = true
 planora-drawing.workspace = true
+planora-step.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -9,7 +9,7 @@
 
 Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
 
-**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern, PDF-Ausgabe, Schnittansichten, Rückgängig und Wiederholen, benannte Parameter mit Formeln).
+**Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, STEP-Import, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern, PDF-Ausgabe, Schnittansichten, Rückgängig und Wiederholen, benannte Parameter mit Formeln).
 
 Erste Version: Quader, Zylinder, Kugel, Kegel, Extrusion und Rotation von Skizzen, 3D-Ansicht mit Auswahl, Körper verschieben (Feld „Position“) sowie Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit Flächen aus Ebenen, Zylindern, Kegeln, Kugeln und Tori (Stufe A) und für Körper mit Freiformflächen aus Ellipsen und Splines (siehe „Freiformflächen“).
 
@@ -117,7 +117,7 @@ Dokumente mit Netz-Körpern speichert das Programm im Dateiformat 3; das Netz st
 - Wird das Dokument geändert, während das Fenster „Netz importieren“ offen ist, verwirft es die gelesene Datei; sie muss dann neu gewählt werden.
 - Zum Wählen der Datei hat das Programm ein eigenes Fenster mit Ordnerliste und Dateiname; der Dateidialog des Betriebssystems wird nicht benutzt, weil dafür ein zusätzliches Programmpaket nötig wäre. Unter Windows wechselt man das Laufwerk, indem man den Pfad eintippt. Sehr große Ordner und Netzlaufwerke können das Fenster kurz hakeln lassen.
 - Während das Netz berechnet oder eine Datei gelesen wird, bleibt das Fenster bedienbar. „Abbrechen“ wirkt beim Export zwischen zwei Körpern; ein einzelner großer Körper wird noch zu Ende gerechnet.
-- Nicht dabei: das Einlesen von 3MF, glTF oder STEP. (Zeichnungen als SVG/DXF gibt es seit Teilprojekt 11, siehe „Zeichnungen“.)
+- Nicht dabei: das Einlesen von 3MF und glTF. STEP-Dateien liest der STEP-Import (siehe „STEP-Import“). (Zeichnungen als SVG/DXF gibt es seit Teilprojekt 11, siehe „Zeichnungen“.)
 - Von Hand im echten Fenster ist der Netz-Austausch teilweise geprüft (Export, Import, Speichern und Laden); Abbrechen, sehr große Netze und das Öffnen der Dateien in fremden Programmen nicht. Siehe „Handprüfung“ in den offenen Punkten.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 9 – Netz-Austausch“.
@@ -133,7 +133,7 @@ Körper lassen sich als STEP-Datei speichern. Andere CAD-Programme öffnen sie a
 - Das Fenster zeigt vorher, wie viele Körper und Flächen es werden. Das Schreiben läuft im Hintergrund mit Fortschrittsbalken und lässt sich abbrechen. Eine vorhandene Datei wird erst ersetzt, wenn alles geklappt hat.
 
 **Grenzen**
-- In der Datei stehen nur Form, Namen und die Einheit Millimeter; keine Farben, Materialien oder Baugruppen. STEP-Dateien einlesen kann das Programm noch nicht.
+- In der Datei stehen nur Form, Namen und die Einheit Millimeter; keine Farben, Materialien oder Baugruppen. STEP-Dateien einlesen geht seit dem STEP-Import (nächster Abschnitt).
 - **Fusion 360:** Alle Beispieldateien lassen sich dort ohne Fehler öffnen; bei Kugel und Hohlkörper stimmen Volumen und Oberfläche mit den erwarteten Werten überein. Bei den übrigen wurden sie dort noch nicht verglichen. Beim Bauen prüft das Programm seine Dateien nur mit einem eigenen Leser und eigenen Formeln. Andere Programme können strenger sein als Fusion 360.
 - Beendet man das Programm oder schließt man den Tab, während eine STEP-Datei geschrieben wird, wird das Schreiben abgebrochen und die alte Datei bleibt unverändert (ohne Meldung).
 - Ringe aus einer Drehung, bei denen der Bogen die Drehachse berührt oder überschreitet (sogenannte Spindelringe), kann das Programm noch nicht als STEP ausgeben. Solche Körper werden ausgelassen und mit Grund genannt.
@@ -142,6 +142,67 @@ Körper lassen sich als STEP-Datei speichern. Andere CAD-Programme öffnen sie a
 - Namen über 256 Zeichen werden in der Datei gekürzt; das Fenster nennt sie nach dem Schreiben. Gibt man „.stp“ ein, wird daraus „.step“; Dateien mit „.stp“ stehen aber nicht in der Liste. Zwei Körper mit gleichem Namen werden zwei Teile mit demselben Namen. Bei Körpern mit vielen Hohlräumen dauert die Zuordnung länger.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 10 – STEP-Export“.
+
+## STEP-Import (exakte Körper)
+
+Teile aus anderen CAD-Programmen lassen sich als echte Volumenkörper einlesen: Menü „Datei“ → „STEP importieren …“ (direkt unter „Netz importieren …“). Das Ergebnis ist ein ganz normaler exakter Körper, benannt nach der Datei oder „STEP-Körper n“. Man kann ihn abziehen, vereinigen, verrunden, verschieben, als Fläche für eine Skizze nutzen, in Zeichnungen und in der Stückliste zeigen und wieder als STEP ausgeben. Seine eigene Form lässt sich nicht über Maße ändern; „Bearbeiten …“ tut bei ihm nichts. Umbenennen geht im Feature-Baum.
+
+**Das Fenster**
+- Oben steht „Datei wählen (STEP)“ mit dem Dateinamen und dem Knopf „Andere Datei wählen …“. Das Programm liest die Datei im Hintergrund („Die Datei wird gelesen …“) und prüft dann jeden Körper („Die Körper werden geprüft …“). Beides zeigt einen Fortschrittsbalken und lässt sich mit „Abbrechen“ beenden. Eine offene Skizze beendet das Programm, bevor das Fenster aufgeht.
+- Darunter steht die Liste „Körper“ über die ganze Breite: Name, Flächen, Größe (Maße der Hülle), Einheit und Status. Der Status ist „wird übernommen“, „wird übernommen – {Warnung}“ oder „wird ausgelassen: {Grund}“. Jeder Körper hat ein Häkchen; ausgelassene sind gesperrt.
+- „Einheit der Datei“: Millimeter, Zentimeter, Meter oder Zoll. Vorgabe ist die Einheit, die in der Datei steht. Wählt man eine andere, werden alle Körper neu berechnet, und die Größen in der Liste ändern sich. Nennt die Datei keine oder verschiedene Einheiten, steht ein Hinweis im Fenster.
+- „Importieren“ legt die angehakten Körper an. Das ist **ein** Schritt; Strg+Z nimmt alle zusammen zurück. Danach passt die Kamera auf die neuen Körper, der erste ist gewählt, und die Meldung nennt, wie viele Körper importiert und wie viele ausgelassen wurden. Warnungen zu einzelnen Körpern stehen nur vor dem Import in der Liste.
+- Hat sich das Dokument zwischen Dateiwahl und „Importieren“ geändert, wird nichts angelegt. Das Fenster bittet dann, die Datei noch einmal zu wählen.
+
+**Was gelesen wird**
+- STEP-Textdateien (`.step`, `.stp`) nach AP203, AP214 und AP242. Aus AP242 zählt nur die Form.
+- Körper und Körper mit Hohlräumen. Besteht ein Körper aus zwei getrennten Stücken, bleibt er ein Körper.
+- Flächen: Ebenen, Zylinder, Kegel, Kugeln, Ringflächen (Torus), Freiformflächen (auch mit Gewichten, mit und ohne Knotenliste) sowie Dreh- und Strangflächen. Eine Dreh- oder Strangfläche wird, wo es genau geht, zu Ebene, Zylinder, Kegel, Kugel oder Torus, sonst zu einer Freiformfläche.
+- Kanten: Geraden, Kreise, Ellipsen und Freiformkurven.
+- Jeder gelesene Körper wird einmal mit dem eigenen STEP-Schreiber des Programms geschrieben und wieder gelesen; benutzt wird genau dieses Ergebnis. Körper, die der Schreiber nicht ausgeben kann (zum Beispiel Kegel, die über ihre Spitze hinausreichen), werden mit Grund ausgelassen.
+- Jede Fläche bekommt eine Marke „STEP-Fläche 1“, „STEP-Fläche 2“ … in der Reihenfolge des eigenen, geprüften STEP-Texts des Körpers (nicht unbedingt in der Reihenfolge der Originaldatei). Damit gehören Skizzen und Rundungen auch nach dem Speichern und Öffnen zur selben Fläche.
+- Der Name ist der Produktname aus der Datei, sonst der Name der Darstellung. Gleiche Namen werden zu „Name (2)“, „Name (3)“ …; fehlt ein Name, heißt der Körper „STEP-Körper 1“, „STEP-Körper 2“ …
+
+**Baugruppen**
+- Jeder Körper einer Baugruppe wird einzeln übernommen, und zwar an der Stelle (Lage und Drehung), die in der Datei steht. Die Gliederung der Baugruppe (Unterbaugruppen, Stücklistenstruktur) wird nicht übernommen.
+- Ein Teil, das die Baugruppe mehrmals benutzt, ergibt mehrere Körper, jeder an seiner Stelle.
+- Lässt sich die Lage eines Körpers nicht sicher bestimmen, bleibt er am Ursprung, und die Liste nennt den Grund. Das gilt bei Spiegelung, bei Maßstab ungleich 1, bei deutlich schiefen Achsen (leicht schiefe, wie sie durch gerundete Zahlen entstehen, richtet das Programm wie die Norm gerade), bei Verweisen im Kreis und bei mehr als 32 Ebenen Verschachtelung. Die Regeln für die Achsen folgen der veröffentlichten Fassung der Norm (ISO 10303-42); wo das Programm abweicht, meldet es das und legt den Körper an den Ursprung, statt zu raten. Sagt die Datei nicht, welches Teil das übergeordnete ist, wird die wahrscheinliche Lage angewandt und das gemeldet.
+- Ist eine Lagenangabe so beschädigt, dass nicht zu erkennen ist, welcher Körper sich bewegt, wird die ganze Datei abgelehnt; das Programm rät dann nicht.
+
+**Einheiten**
+- Die Einheit steht in der Datei (Millimeter, Zentimeter, Meter, Zoll, auch selbst definierte Einheiten, die darauf beruhen) und wird in Millimeter umgerechnet. Winkel in Grad oder Bogenmaß werden richtig gelesen.
+- Die im Fenster gewählte Einheit ersetzt die der Datei für **alle** Körper. Das hilft, wenn die Datei falsch beschriftet ist.
+
+**Genauigkeit der Datei**
+- STEP-Dateien tragen eine Genauigkeit, oft 0,001 mm. Das Programm selbst rechnet mit 0,000001 mm. Ecken und Kanten, die innerhalb der Genauigkeit der Datei zusammentreffen, werden zusammengezogen. Lücken, die größer sind als die Genauigkeit der Datei, schließt das Programm **nicht**; der Körper wird ausgelassen („Lücke von … mm …“).
+- Ist die Genauigkeit gröber als 0,00001 mm oder steht keine in der Datei, wird der Körper übernommen, aber mit der Warnung „Rechnen mit diesem Körper kann scheitern“. Steht keine in der Datei, heißt es „Genauigkeit der Datei unbekannt (angenommen 0,001 mm)“, und gerechnet wird mit 0,001 mm. Sie steht in der Liste und im Eigenschaftenfeld des Körpers. In den Tests der Entwicklung gelangen Abziehen, Verrunden und Schnitte auch mit grober Genauigkeit; wo der Kernel einen Körper nicht rechnen kann, nennt er den Grund und rechnet nichts Falsches aus.
+
+**Was ausgelassen wird und warum**
+- **Flächenmodelle, offene Schalen, einzelne Flächen und Körper aus Dreiecken** (`OPEN_SHELL`, `SHELL_BASED_SURFACE_MODEL`, `FACETED_BREP`): Sie schließen kein Volumen ein, mit dem sich rechnen ließe. Die Meldung sagt, welche Art die Datei enthält.
+- **Farben, Materialien, Ebenen, Toleranzen und Bemaßung (PMI):** Das Programm liest nur die Form.
+- **Flächenarten und Kurven, die es noch nicht kann** (`OFFSET_SURFACE`, `DEGENERATE_TOROIDAL_SURFACE`, Polylinien, Parabeln, Hyperbeln): Der Körper wird mit „… wird noch nicht unterstützt“ ausgelassen.
+- **Ringflächen ohne Naht:** Ein Torus, der rundum geht, ohne dass eine Kante ihn aufteilt, lässt sich nicht verarbeiten. Der Körper wird ausgelassen. Dasselbe gilt für andere Flächenarten, die rundum gehen und keine Naht haben; nur Zylinder, Kegel und Kugel ergänzt das Programm selbst.
+- **Drehflächen aus einer schrägen Geraden** (die Gerade liegt weder parallel noch senkrecht zur Achse und schneidet sie nicht): „Eine Drehfläche aus einer schrägen Geraden wird noch nicht unterstützt.“
+- **Verdreht oder nicht eindeutig:** Findet das Programm in einem Körper eine Fläche, deren Seite nicht zum Rest passt, wird er ausgelassen, statt still anders zu erscheinen. Das ist Absicht: Lieber fehlt ein Körper mit Begründung, als dass ein falscher im Modell steht.
+- Gepackte Dateien (`.stpz`) und die XML-Form von AP242.
+
+**Speichern in der Projektdatei**
+- Die Form jedes STEP-Körpers steht in der Projektdatei selbst, nicht als Verweis auf die Originaldatei. Das Programm speichert dafür den eigenen, geprüften STEP-Text des Körpers und liest ihn beim Öffnen wieder.
+- Dokumente mit STEP-Körpern speichert das Programm im Dateiformat 10. Ältere Programmversionen lehnen sie als „zu neu“ ab. Dokumente ohne STEP-Körper bleiben unverändert und lassen sich weiter mit älteren Versionen öffnen.
+- Der Text steht in **jeder** gespeicherten Version noch einmal; er braucht grob 1 KB je Fläche. Alle STEP-Formen eines Dokuments zusammen dürfen höchstens 200 MB groß sein. Passt ein Import nicht mehr hinein, lehnt das Programm ihn ganz ab („Die STEP-Formen im Projekt sind zusammen zu groß …“); beim Speichern gibt es eine eigene, ähnliche Meldung.
+- Lässt sich der gespeicherte Text einer Form beim Öffnen nicht mehr lesen, lädt das Dokument trotzdem; nur dieser Körper steht mit Fehlermeldung im Baum. Ist der Kopf des Textes beschädigt, gilt die ganze Version als beschädigt, und das Programm fällt auf die nächstältere lesbare zurück.
+
+**Grenzen**
+- Die Datei darf höchstens 200 MB groß sein, höchstens 5 Millionen Einträge haben und höchstens 50 Körper enthalten (gezählt wird jedes Vorkommen). Bei mehr als 50 Körpern wird die ganze Datei abgelehnt („Die Datei enthält mehr als 50 Körper.“). Ein Körper darf höchstens 20 000 Flächen haben; hat einer mehr, wird nur dieser ausgelassen. Namen werden auf 64 Zeichen gekürzt.
+- Dateien, die kein STEP sind, abgeschnitten sind, Verweise im Kreis oder doppelte Nummern haben, ergeben eine Meldung mit Zeilennummer. Das Programm stürzt dabei nicht ab.
+- **Die Prüfung der Körper ist eine Stichprobe.** Das Programm prüft an Probepunkten, ob jede Fläche zum Körper passt. Wände, die dünner als etwa 0,1 mm sind, und Überlappungen unter etwa 0,1 mm bleiben ungeprüft oder fallen nur zufällig auf. Manche Fehler in der Datei beschreiben außerdem einen anderen, aber gültigen Körper, etwa eine Kugelmulde mit umgekehrter Seite; das lässt sich nicht erkennen. Nach innen gekehrte Dateien mit Kugelstücken, die genau einen Pol berühren, lehnt das Programm als „nicht eindeutig“ ab.
+- **Laden dauert bei gekrümmten Körpern bis etwa eine halbe Sekunde je Körper** (gemessen: Freiform-Vase 0,07 s, dieselbe Vase 100- und 1000-mal so groß je 0,12 s) und läuft in der Oberfläche; das Programm steht dann kurz. Große Körper prüft das Programm mit einem Netz, dessen Feinheit mit der Größe wächst; bei sehr großen Körpern bleiben darum auch etwas dickere Wände als 0,1 mm ungeprüft (bei 10 m Größe etwa 10 mm). Ungünstige, aber gültige Freiformkörper können auch einige Sekunden brauchen. Das Importieren selbst läuft im Hintergrund.
+- **Rechnen mit Freiformflächen** kann langsam sein oder vom Kernel abgelehnt werden (wie bei selbst gebauten Freiformflächen).
+- Besteht eine Datei aus Körpern mit verschiedenen Einheiten, steht in der Spalte „Einheit“ die Einheit der Datei oder „gemischt“. Jeder Körper wird trotzdem in seiner eigenen Einheit gelesen.
+- Beim Öffnen einer Projektdatei gibt es keine Größengrenze vor dem Lesen (gilt auch für Netze). Eine sehr große oder bösartige Projektdatei kann viel Speicher brauchen.
+- Von Hand im echten Fenster ist der STEP-Import noch nicht geprüft; siehe „Handliste“ in den offenen Punkten.
+
+Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt: STEP-Import“.
 
 ## Zeichnungen (Ansichten)
 

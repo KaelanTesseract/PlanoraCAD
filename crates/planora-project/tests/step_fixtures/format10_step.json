@@ -1,0 +1,40 @@
+{
+  "format": 10,
+  "marker": 2,
+  "naechste_id": 3,
+  "features": [
+    {
+      "id": 1,
+      "name": "Quader",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "step_koerper",
+        "form": 1
+      }
+    },
+    {
+      "id": 2,
+      "name": "Verschieben 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "verschieben",
+        "koerper": {
+          "feature": 1,
+          "index": 0
+        },
+        "versatz": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      }
+    }
+  ],
+  "step_formen": [
+    {
+      "id": 1,
+      "genauigkeit": 0.001,
+      "text": "ISO-10303-21;\n/* Selbst geschrieben fuer die Tests von PlanoraCAD (GPL-3.0-only). */\nHEADER;\nFILE_DESCRIPTION(('Quader'),'2;1');\nFILE_NAME('quader.step','2026-10-21T00:00:00',(''),(''),'von Hand','von Hand','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n#1=APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,#2);\n#2=APPLICATION_CONTEXT('core data for automotive mechanical design processes');\n#3=SHAPE_DEFINITION_REPRESENTATION(#4,#10);\n#4=PRODUCT_DEFINITION_SHAPE('','',#5);\n#5=PRODUCT_DEFINITION('design','',#6,#9);\n#6=PRODUCT_DEFINITION_FORMATION('','',#7);\n#7=PRODUCT('Quader','Quader','',(#8));\n#8=PRODUCT_CONTEXT('',#2,'mechanical');\n#9=PRODUCT_DEFINITION_CONTEXT('part definition',#2,'design');\n#10=ADVANCED_BREP_SHAPE_REPRESENTATION('Quader',(#11,#20),#105);\n#11=AXIS2_PLACEMENT_3D('',#150,#301,#302);\n#20=MANIFOLD_SOLID_BREP('Quader',#21);\n#21=CLOSED_SHELL('',(#30,#31,#32,#33,#34,#35));\n#30=ADVANCED_FACE('',(#40),#60,.F.);\n#31=ADVANCED_FACE('',(#41),#61,.T.);\n#32=ADVANCED_FACE('',(#42),#62,.T.);\n#33=ADVANCED_FACE('',(#43),#63,.T.);\n#34=ADVANCED_FACE('',(#44),#64,.T.);\n#35=ADVANCED_FACE('',(#45),#65,.F.);\n#40=FACE_OUTER_BOUND('',#50,.T.);\n#41=FACE_OUTER_BOUND('',#51,.F.);\n#42=FACE_OUTER_BOUND('',#52,.T.);\n#43=FACE_OUTER_BOUND('',#53,.T.);\n#44=FACE_OUTER_BOUND('',#54,.T.);\n#45=FACE_OUTER_BOUND('',#55,.T.);\n#50=EDGE_LOOP('',(#200,#201,#202,#203));\n#51=EDGE_LOOP('',(#204,#205,#206,#207));\n#52=EDGE_LOOP('',(#208,#209,#210,#211));\n#53=EDGE_LOOP('',(#212,#213,#214,#215));\n#54=EDGE_LOOP('',(#216,#217,#218,#219));\n#55=EDGE_LOOP('',(#220,#221,#222,#223));\n#60=PLANE('',#310);\n#61=PLANE('',#311);\n#62=PLANE('',#312);\n#63=PLANE('',#313);\n#64=PLANE('',#314);\n#65=PLANE('',#315);\n#100=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));\n#101=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.));\n#102=(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT());\n#103=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-07),#100,'distance_accuracy_value','');\n#105=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#103))GLOBAL_UNIT_ASSIGNED_CONTEXT((#100,#101,#102))REPRESENTATION_CONTEXT('',''));\n#121=EDGE_CURVE('',#141,#142,#161,.T.);\n#122=EDGE_CURVE('',#142,#143,#162,.T.);\n#123=EDGE_CURVE('',#143,#144,#163,.F.);\n#124=EDGE_CURVE('',#144,#141,#164,.T.);\n#125=EDGE_CURVE('',#145,#146,#165,.T.);\n#126=EDGE_CURVE('',#146,#147,#166,.T.);\n#127=EDGE_CURVE('',#147,#148,#167,.T.);\n#128=EDGE_CURVE('',#148,#145,#168,.T.);\n#129=EDGE_CURVE('',#141,#145,#169,.T.);\n#130=EDGE_CURVE('',#142,#146,#170,.T.);\n#131=EDGE_CURVE('',#143,#147,#171,.T.);\n#132=EDGE_CURVE('',#144,#148,#172,.T.);\n#141=VERTEX_POINT('',#151);\n#142=VERTEX_POINT('',#152);\n#143=VERTEX_POINT('',#153);\n#144=VERTEX_POINT('',#154);\n#145=VERTEX_POINT('',#155);\n#146=VERTEX_POINT('',#156);\n#147=VERTEX_POINT('',#157);\n#148=VERTEX_POINT('',#158);\n#150=CARTESIAN_POINT('',(0.,0.,0.));\n#151=CARTESIAN_POINT('',(0.0,0.0,0.0));\n#152=CARTESIAN_POINT('',(10.0,0.0,0.0));\n#153=CARTESIAN_POINT('',(10.0,20.0,0.0));\n#154=CARTESIAN_POINT('',(0.0,20.0,0.0));\n#155=CARTESIAN_POINT('',(0.0,0.0,30.0));\n#156=CARTESIAN_POINT('',(10.0,0.0,30.0));\n#157=CARTESIAN_POINT('',(10.0,20.0,30.0));\n#158=CARTESIAN_POINT('',(0.0,20.0,30.0));\n#161=LINE('',#151,#181);\n#162=LINE('',#152,#182);\n#163=LINE('',#154,#183);\n#164=LINE('',#154,#184);\n#165=LINE('',#155,#185);\n#166=LINE('',#156,#186);\n#167=LINE('',#157,#187);\n#168=LINE('',#158,#188);\n#169=LINE('',#151,#189);\n#170=LINE('',#152,#190);\n#171=LINE('',#153,#191);\n#172=LINE('',#154,#192);\n#181=VECTOR('',#302,10.0);\n#182=VECTOR('',#303,20.0);\n#183=VECTOR('',#302,10.0);\n#184=VECTOR('',#305,20.0);\n#185=VECTOR('',#302,10.0);\n#186=VECTOR('',#303,20.0);\n#187=VECTOR('',#304,10.0);\n#188=VECTOR('',#305,20.0);\n#189=VECTOR('',#301,30.0);\n#190=VECTOR('',#301,30.0);\n#191=VECTOR('',#301,30.0);\n#192=VECTOR('',#301,30.0);\n#200=ORIENTED_EDGE('',*,*,#124,.F.);\n#201=ORIENTED_EDGE('',*,*,#123,.F.);\n#202=ORIENTED_EDGE('',*,*,#122,.F.);\n#203=ORIENTED_EDGE('',*,*,#121,.F.);\n#204=ORIENTED_EDGE('',*,*,#128,.F.);\n#205=ORIENTED_EDGE('',*,*,#127,.F.);\n#206=ORIENTED_EDGE('',*,*,#126,.F.);\n#207=ORIENTED_EDGE('',*,*,#125,.F.);\n#208=ORIENTED_EDGE('',*,*,#121,.T.);\n#209=ORIENTED_EDGE('',*,*,#130,.T.);\n#210=ORIENTED_EDGE('',*,*,#125,.F.);\n#211=ORIENTED_EDGE('',*,*,#129,.F.);\n#212=ORIENTED_EDGE('',*,*,#122,.T.);\n#213=ORIENTED_EDGE('',*,*,#131,.T.);\n#214=ORIENTED_EDGE('',*,*,#126,.F.);\n#215=ORIENTED_EDGE('',*,*,#130,.F.);\n#216=ORIENTED_EDGE('',*,*,#123,.T.);\n#217=ORIENTED_EDGE('',*,*,#132,.T.);\n#218=ORIENTED_EDGE('',*,*,#127,.F.);\n#219=ORIENTED_EDGE('',*,*,#131,.F.);\n#220=ORIENTED_EDGE('',*,*,#124,.T.);\n#221=ORIENTED_EDGE('',*,*,#129,.T.);\n#222=ORIENTED_EDGE('',*,*,#128,.F.);\n#223=ORIENTED_EDGE('',*,*,#132,.F.);\n#301=DIRECTION('',(0.,0.,1.));\n#302=DIRECTION('',(1.,0.,0.));\n#303=DIRECTION('',(0.,1.,0.));\n#304=DIRECTION('',(-1.,0.,0.));\n#305=DIRECTION('',(0.,-1.,0.));\n#310=AXIS2_PLACEMENT_3D('',#151,#301,#302);\n#311=AXIS2_PLACEMENT_3D('',#155,#301,#302);\n#312=AXIS2_PLACEMENT_3D('',#151,#305,#302);\n#313=AXIS2_PLACEMENT_3D('',#152,#302,#303);\n#314=AXIS2_PLACEMENT_3D('',#154,#303,#304);\n#315=AXIS2_PLACEMENT_3D('',#151,#302,#301);\nENDSEC;\nEND-ISO-10303-21;\n"
+    }
+  ]
+}

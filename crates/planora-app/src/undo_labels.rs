@@ -59,10 +59,17 @@ fn features(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
         .iter()
         .filter(|f| !has(&before.features, f))
         .collect();
-    // 1. Genau ein Feature neu (hat Vorrang vor allem anderen); mehrere neu: Ändern.
+    // 1. Genau ein Feature neu (hat Vorrang vor allem anderen); mehrere neu: Ändern, außer es sind
+    //    lauter STEP-Körper (ein Import legt alle Körper der Datei in einem Schritt an).
     match added.as_slice() {
         [] => {}
         [f] => return Some(created_label(&f.kind)),
+        many if many
+            .iter()
+            .all(|f| matches!(f.kind, FeatureKind::StepBody { .. })) =>
+        {
+            return Some(created_label(&many[0].kind));
+        }
         _ => return Some(FALLBACK),
     }
     // 2. Features fehlen.
@@ -126,6 +133,7 @@ fn created_label(kind: &FeatureKind) -> &'static str {
             }
         }
         FeatureKind::MeshBody { .. } => "Netz importieren",
+        FeatureKind::StepBody { .. } => "STEP importieren",
     }
 }
 

@@ -277,7 +277,13 @@ fn cone(
     let Some(p) = patch else {
         return Err(reject("Eine Kegelfläche hat keinen Parameterbereich"));
     };
-    let v_mid = 0.5 * (p.v0 + p.v1);
+    // Liegt der Bezugsort des Kernels (v = 0) im Bereich der Fläche (bis auf Rundung) und ist
+    // der Radius dort positiv, bleibt er: Ein gelesener Kegel wird dann bitgleich wieder
+    // geschrieben (der neu bestimmte Bereich verschiebt die Mitte sonst in der letzten Stelle,
+    // und der Text käme nach Lesen und Schreiben nicht gleich zurück; STEP-Import Aufgabe 9).
+    let slack = 1e-9 * (p.v1 - p.v0).abs().max(1.0);
+    let keep = radius > 0.0 && p.v0.min(p.v1) - slack <= 0.0 && 0.0 <= p.v0.max(p.v1) + slack;
+    let v_mid = if keep { 0.0 } else { 0.5 * (p.v0 + p.v1) };
     if !v_mid.is_finite() {
         return Err(StepError::NotFinite);
     }
