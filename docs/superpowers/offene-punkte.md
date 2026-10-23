@@ -1532,7 +1532,7 @@ Die Festlegungen stehen im Kopf des Plans und kurz in der Spec §8. Einzelheiten
 - **P6 Keine Lagefelder:** Verschieben geht über das gewöhnliche Verschieben. *Folge (offen):* Das Menü „Bearbeiten …“ ist für STEP-Körper sichtbar und tut nichts, wie bei Netz-Körpern.
 - **P7 Marken:** „STEP-Fläche n“, Reihenfolge des normalisierten Textes. Nach dem Laden sind sie gleich.
 - **P8 Dreh- und Strangflächen:** Analytisch, wo es geht, sonst Freiform. *Abweichung (Fehler im Plan):* Bei einer Drehfläche ist u der Winkel und v die Kurve (ISO-Reihenfolge), nicht umgekehrt; so steht es im Leser. Eine Drehfläche aus einer schrägen Geraden wird abgelehnt.
-- **P9 Nähte:** Nur Zylinder, Kegel und Kugel ohne Naht. *Folge (Entscheidung für Dennis, offen):* Torusbänder ohne Naht werden abgelehnt. Pole werden geometrisch erkannt (nicht nur in der Parameterebene).
+- **P9 Nähte:** Nur Zylinder, Kegel und Kugel ohne Naht. *Folge (Dennis hat am 2026-10-23 entschieden: eigenes Teilprojekt, siehe unten):* Torusbänder ohne Naht werden abgelehnt. Pole werden geometrisch erkannt (nicht nur in der Parameterebene).
 - **P10 Namen:** Wie geplant. *Abweichung:* Erzeugte Namen „STEP-Körper n“ steigen über die vorhandenen Namen im Dokument und in der Datei (`AppState::step_body_names`), damit die Teileliste nichts zusammenwirft.
 - **P11 Einheit umstellen:** Wie geplant, auch für gemischte Dateien (alle Kontexte auf einmal). Bei Dateien mit mehreren Einheiten gilt: eine gewählte Einheit gilt für alle, die eigene Einheit der Datei hebt die Wahl wieder auf.
 - **P12 Grenzen:** Wie geplant. *Zusatz:* Alle STEP-Formen eines Dokuments zusammen höchstens 200 MiB, schon beim Import geprüft (Meldung) und beim Speichern (eigene Meldung); sonst ließe sich ein Dokument zwar bearbeiten, aber nicht speichern.
@@ -1561,7 +1561,7 @@ Alles unten ist bekannt, in den Reviews beurteilt und bewusst angenommen oder al
 - Flächenmodelle, offene Schalen, einzelne Flächen und Körper aus Dreiecken (`FACETED_BREP`): keine Körper; es gibt eine Meldung, welche Art in der Datei steht.
 - Farben, Materialien, Ebenen, Toleranzen, Bemaßung (PMI), die Gliederung der Baugruppe, `.stpz`, XML-Form.
 - `OFFSET_SURFACE`, `DEGENERATE_TOROIDAL_SURFACE`, Polylinie, Parabel, Hyperbel: Körper wird mit „… wird noch nicht unterstützt“ ausgelassen.
-- **Torus und andere rundum gehende Flächen ohne Naht** (außer Zylinder, Kegel, Kugel): ausgelassen (P9). *Entscheidung für Dennis:* Soll später eine Naht für Torusbänder eingefügt werden? Das hängt davon ab, ob echte Dateien so etwas enthalten.
+- **Torus und andere rundum gehende Flächen ohne Naht** (außer Zylinder, Kegel, Kugel): ausgelassen (P9). *Dennis hat am 2026-10-23 entschieden, dass dafür ein eigenes Teilprojekt aufgenommen wird (Abschnitt „Teilprojekt (aufgenommen): Torusbänder ohne Naht“ am Ende).*
 - **Drehflächen aus einer schrägen Geraden:** ausgelassen mit eigener Meldung.
 - **Speicherbedarf je Version:** Der Text steht in jeder gespeicherten Version erneut (grob 1 KB je Fläche); alle Formen eines Dokuments zusammen höchstens 200 MiB. Das Speichern bei voller Grenze braucht etwa 600 MB; die Grenzprobe braucht im Debug-Build 6 bis 8 s und 0,9 GB.
 
@@ -1647,3 +1647,11 @@ Release-Build, Fenster zuerst 1400 × 900. Dateien: Kopien der Proben aus `crate
 - [ ] 23. Fenster 1100 × 700 und 800 × 600: Das Fenster, die Liste und die Fußzeile sind im Bild, nichts wird abgeschnitten.
 - [ ] 24. Hell und Dunkel: Symbol im Menü, Status „wird übernommen“ / „wird ausgelassen“ und die Warnung sind lesbar, Farben stimmen mit dem übrigen Programm; Hinweise (Einheit, gemischt) nicht rot.
 - [ ] 25. Strg+Z und Strg+Y bei offenem Fenster tun nichts am Dokument; nach „Schließen“ wirken sie wieder.
+
+## Teilprojekt (aufgenommen, noch nicht begonnen): Torusbänder ohne Naht beim STEP-Import
+
+Entscheidung von Dennis am 2026-10-23: Der STEP-Import soll auch Körper lesen, deren Torusfläche (Rundung zwischen zwei Kreisen, Rohrbogen, Reifen) als rundum gehendes Band ohne Naht in der Datei steht. Bisher wird so ein Körper mit Begründung ausgelassen (P9), die übrigen Körper der Datei kommen an.
+
+- **Ausgangslage:** Zylinder, Kegel und Kugel ohne Naht liest der Leser (Naht wird beim Lesen eingefügt, `seam.rs`: Naht mit Abstand zu allen anderen Rändern, Pole geometrisch erkannt). Der Algorithmus mit zwei Kreisen lässt sich auf den Torus übertragen; beim Torus kann die Fläche in beiden Richtungen rundum gehen (zwei Nähte, u und v).
+- **Zu klären:** Welche Formen echte Programme schreiben (Rundung zwischen zwei Kreisen, Rohrbogen mit zwei Rohrkreisen, voller Reifen mit zwei Kreisen), wie die Seitenprobe (`check_face_sides`) und die Wickelregel (Rand schließt sich nicht, Aufgabe 3) mit zwei Nähten umgehen, und welche Gegenproben gebraucht werden.
+- **Vorgehen:** wie bei den anderen Teilprojekten: Entwurf, Plan, Bau mit Prüfungen, Handtest. Dazu gehört, mindestens eine echte STEP-Datei eines anderen CAD-Programms zu bekommen (bisher wurden nur Dateien aus dem eigenen Schreiber und von Hand gebaute Proben gelesen).
