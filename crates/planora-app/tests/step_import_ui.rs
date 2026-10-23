@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{Screen, assert_cards_inside, find};
+use common::{Screen, find};
 use eframe::App as _;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
 use planora_app::app::{self, PlanoraApp};
@@ -774,29 +774,78 @@ fn unit_hints_tell_missing_from_unclear() {
         bodies: Vec::new(),
         messages: Vec::new(),
     };
+    let info = |state: UnitState, own: LengthUnit, contexts: Vec<LengthUnit>| UnitInfo {
+        state,
+        own,
+        contexts,
+        unreadable: false,
+        free_skipped: false,
+    };
     let named = import(UnitState::Named, LengthUnit::Zoll);
-    assert_eq!(unit_hint(&named, None), None);
+    let zoll = info(UnitState::Named, LengthUnit::Zoll, vec![LengthUnit::Zoll]);
+    assert_eq!(unit_hint(&zoll, None), None);
     assert_eq!(selected_unit(&named, None), Some(Unit::Zoll));
+    // Eine Wahl auf einer Datei mit eigener Einheit wird genannt.
+    assert_eq!(
+        unit_hint(&zoll, Some(LengthUnit::Millimeter)).as_deref(),
+        Some("Die Datei nennt Zoll; gewählt: Millimeter.")
+    );
+    // Körper in verschiedenen Einheiten.
+    let mixed = info(
+        UnitState::Named,
+        LengthUnit::Zoll,
+        vec![LengthUnit::Zoll, LengthUnit::Millimeter],
+    );
+    assert_eq!(unit_hint(&mixed, None).as_deref(), Some(MIXED_UNIT_HINT));
+    assert_eq!(
+        unit_hint(&mixed, Some(LengthUnit::Meter)).as_deref(),
+        Some("Die Datei nennt verschiedene Längeneinheiten; gewählt: Meter für alle Körper.")
+    );
+    // Ein freier Körper ist wegen unklarer Einheit ausgelassen, die Datei nennt sonst eine.
+    let free = UnitInfo {
+        free_skipped: true,
+        ..zoll.clone()
+    };
+    assert_eq!(unit_hint(&free, None).as_deref(), Some(FREE_SKIPPED_HINT));
     let missing = import(UnitState::Missing, LengthUnit::Millimeter);
-    assert_eq!(unit_hint(&missing, None).as_deref(), Some(NO_UNIT_HINT));
+    let none = info(UnitState::Missing, LengthUnit::Millimeter, vec![]);
+    assert_eq!(unit_hint(&none, None).as_deref(), Some(NO_UNIT_HINT));
     assert_eq!(
         NO_UNIT_HINT,
         "Die Datei nennt keine Längeneinheit; angenommen: Millimeter."
     );
     assert_eq!(selected_unit(&missing, None), Some(Unit::Millimeter));
     assert_eq!(
-        unit_hint(&missing, Some(LengthUnit::Zoll)).as_deref(),
+        unit_hint(&none, Some(LengthUnit::Zoll)).as_deref(),
         Some("Die Datei nennt keine Längeneinheit; gewählt: Zoll.")
     );
+    // Unklar nur bei echtem Widerspruch; unlesbare Einheiten haben einen eigenen Hinweis.
     let unclear = import(UnitState::Unclear, LengthUnit::Millimeter);
+    let conflict = info(
+        UnitState::Unclear,
+        LengthUnit::Millimeter,
+        vec![LengthUnit::Millimeter, LengthUnit::Zoll],
+    );
     assert_eq!(
-        unit_hint(&unclear, None).as_deref(),
+        unit_hint(&conflict, None).as_deref(),
         Some(UNCLEAR_UNIT_HINT)
     );
     assert_eq!(selected_unit(&unclear, None), None, "nichts vorgewählt");
     assert_eq!(
-        unit_hint(&unclear, Some(LengthUnit::Meter)).as_deref(),
+        unit_hint(&conflict, Some(LengthUnit::Meter)).as_deref(),
         Some("Die Datei nennt verschiedene Längeneinheiten; gewählt: Meter.")
+    );
+    let unreadable = UnitInfo {
+        unreadable: true,
+        ..info(UnitState::Unclear, LengthUnit::Millimeter, vec![])
+    };
+    assert_eq!(
+        unit_hint(&unreadable, None).as_deref(),
+        Some(UNREADABLE_UNIT_HINT)
+    );
+    assert_eq!(
+        unit_hint(&unreadable, Some(LengthUnit::Zoll)).as_deref(),
+        Some("Die Einheit der Datei lässt sich nicht lesen; gewählt: Zoll.")
     );
     let other = import(UnitState::Named, LengthUnit::Other { mm: 2.0 });
     assert_eq!(selected_unit(&other, None), None);
@@ -1009,7 +1058,15 @@ fn layout() {
             );
             assert!((rect.center().x - w / 2.0).abs() <= 1.0, "mittig: {rect:?}");
             assert_eq!(d.last_cards.len(), 2, "Karten „Datei“ und „Körper“");
-            assert_cards_inside(rect, &d.last_cards, &seen);
+            assert_stacked(rect, &d.last_cards, &seen);
+            // Die Größen brechen nicht um (breite Spalten).
+            let size = find(&seen, "25,4 × 50,8 × 76,2 mm").expect("Größe");
+            assert!(size.rect.height() < 20.0, "einzeilig: {:?}", size.rect);
+            let footer = find(&seen, "Importieren").expect("Importieren");
+            assert!(
+                footer.clip.contains_rect(footer.rect) && rect.contains_rect(footer.rect),
+                "Knopf sichtbar"
+            );
             for t in &seen {
                 for c in t.text.chars() {
                     assert!(
@@ -1029,6 +1086,71 @@ fn layout() {
             }
         }
     }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Karten untereinander über die ganze Breite: gleiche linke und rechte Kante, nahezu so breit
+/// wie das Fenster, die zweite unter der ersten; kein Text ragt aus seiner Karte.
+fn assert_stacked(rect: Rect, cards: &[Rect], seen: &[common::Seen]) {
+    for c in cards {
+        assert!((c.left() - cards[0].left()).abs() <= 0.5, "{cards:?}");
+        assert!((c.width() - cards[0].width()).abs() <= 0.5, "{cards:?}");
+        assert!(
+            c.width() >= rect.width() - 60.0,
+            "ganze Breite: {c:?} in {rect:?}"
+        );
+        assert!(
+            c.left() >= rect.left() - 0.5 && c.right() <= rect.right() + 0.5,
+            "{c:?} in {rect:?}"
+        );
+    }
+    for pair in cards.windows(2) {
+        assert!(pair[1].top() >= pair[0].bottom(), "untereinander {cards:?}");
+    }
+    for t in seen {
+        if let Some(card) = cards.iter().find(|c| c.contains(t.rect.center())) {
+            assert!(
+                card.expand(0.5).contains_rect(t.rect),
+                "Text „{}“ {:?} ragt aus seiner Karte {card:?}",
+                t.text,
+                t.rect
+            );
+        }
+    }
+}
+
+#[test]
+fn fifty_bodies_keep_the_buttons_reachable() {
+    let dir = temp_dir("fuenfzig");
+    let one = data_part(&step_data("box_ap214.step"));
+    let many: Vec<String> = (0..50).map(|i| shift_ids(&one, i * 10_000)).collect();
+    let mut d = loaded(
+        &dir,
+        "viele.step",
+        &wrap(&many.join(
+            "
+",
+        )),
+    );
+    assert_eq!(d.loaded.as_ref().unwrap().import.bodies.len(), 50);
+    let mut s = AppState::new();
+    let mut open = true;
+    let mut screen = Screen::new(800.0, 600.0);
+    let seen = screen.settle(8, &mut show_on(&mut d, &mut s, &mut open));
+    let rect = d.last_rect.unwrap();
+    assert!(Rect::from_min_size(Pos2::ZERO, screen.size).contains_rect(rect));
+    let button = find(&seen, "Importieren").expect("Importieren in der Fußzeile");
+    assert!(
+        button.clip.contains_rect(button.rect) && rect.contains_rect(button.rect),
+        "{:?} in {rect:?}",
+        button.rect
+    );
+    screen.click(
+        button.rect.center(),
+        &mut show_on(&mut d, &mut s, &mut open),
+    );
+    assert!(!open);
+    assert_eq!(s.document.features().len(), 50);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -1145,5 +1267,313 @@ fn menu_entry() {
         ws.active_tab().step_import_dialog.is_none(),
         "schreibgeschützt öffnet nichts"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- Fix-Runde 1 ---------------------------------------------------------------------------------
+
+/// Tippt `name` mit echten Tasten in das Feld „Dateiname“ und drückt Enter.
+fn choose_by_keys(
+    screen: &mut Screen,
+    d: &mut StepImportDialog,
+    s: &mut AppState,
+    open: &mut bool,
+    name: &str,
+) {
+    let seen = screen.settle(3, &mut show_on(d, s, open));
+    let label = find(&seen, "Dateiname").expect("Feld").rect;
+    screen.click(
+        Pos2::new(label.right() + 80.0, label.center().y),
+        &mut show_on(d, s, open),
+    );
+    for c in name.chars() {
+        let k = key_of(c);
+        let mut f = show_on(d, s, open);
+        screen.frame(
+            vec![
+                key_event(k, true),
+                Event::Text(c.to_string()),
+                key_event(k, false),
+            ],
+            &mut f,
+        );
+        screen.frame(vec![], &mut f);
+    }
+    let mut f = show_on(d, s, open);
+    screen.frame(
+        vec![key_event(Key::Enter, true), key_event(Key::Enter, false)],
+        &mut f,
+    );
+    screen.frame(vec![], &mut f);
+}
+
+/// Klickt den Text `t` im Fenster, wartet die Aufträge ab und liefert das Bild danach.
+fn click_text(
+    screen: &mut Screen,
+    d: &mut StepImportDialog,
+    s: &mut AppState,
+    open: &mut bool,
+    t: &str,
+) -> Vec<common::Seen> {
+    let seen = screen.settle(3, &mut show_on(d, s, open));
+    let r = find(&seen, t)
+        .unwrap_or_else(|| panic!("„{t}“ fehlt:\n{}", all(&seen)))
+        .rect;
+    screen.click(r.center(), &mut show_on(d, s, open));
+    d.tick(true);
+    screen.settle(4, &mut show_on(d, s, open))
+}
+
+/// Zeile `name`: (Größe, Einheit) wie gezeigt.
+fn row_of(d: &StepImportDialog, name: &str) -> (String, String) {
+    let l = d.loaded.as_ref().unwrap();
+    let i = l
+        .import
+        .bodies
+        .iter()
+        .position(|b| b.name == name)
+        .unwrap_or_else(|| panic!("{name}"));
+    (l.sizes[i].clone(), l.row_units[i].clone())
+}
+
+/// Baugruppe in Zoll und ein Würfel 10 × 20 × 30 mm mit eigenem Kontext in einer Datei.
+fn mixed_units() -> String {
+    wrap(&format!(
+        "{}\n{}",
+        data_part(&step_data("inch_assembly.step")),
+        shift_ids(&data_part(&step_data("box_ap214.step")), 100_000)
+    ))
+}
+
+#[test]
+fn choosing_the_file_unit_again_never_rescales_other_bodies() {
+    let dir = temp_dir("gemischt");
+    let mut d = loaded(&dir, "gemischt.step", &mixed_units());
+    let mut s = AppState::new();
+    let mut open = true;
+    let mut screen = Screen::new(1200.0, 800.0);
+    // Jede Zeile in ihrer eigenen Einheit, Hinweis auf die verschiedenen Einheiten.
+    assert_eq!(
+        row_of(&d, "Block"),
+        ("25,4 × 50,8 × 76,2 mm".into(), "Zoll".into())
+    );
+    assert_eq!(
+        row_of(&d, "Würfel"),
+        ("10 × 20 × 30 mm".into(), "mm".into())
+    );
+    let seen = screen.settle(4, &mut show_on(&mut d, &mut s, &mut open));
+    assert!(find(&seen, MIXED_UNIT_HINT).is_some(), "{}", all(&seen));
+    assert!(find(&seen, "mm").is_some() && find(&seen, "Zoll").is_some());
+
+    // Millimeter für alle: der Hinweis sagt es.
+    let seen = click_text(&mut screen, &mut d, &mut s, &mut open, "Millimeter");
+    assert_eq!(d.chosen_unit(), Some(LengthUnit::Millimeter));
+    assert_eq!(row_of(&d, "Block"), ("1 × 2 × 3 mm".into(), "mm".into()));
+    let chosen_hint =
+        "Die Datei nennt verschiedene Längeneinheiten; gewählt: Millimeter für alle Körper.";
+    assert!(find(&seen, chosen_hint).is_some(), "{}", all(&seen));
+
+    // Zurück auf „Zoll“, die Einheit der Datei: ohne Wahl gerechnet, der Würfel bleibt in mm.
+    let seen = click_text(&mut screen, &mut d, &mut s, &mut open, "Zoll");
+    assert_eq!(d.chosen_unit(), None, "keine Wahl mehr");
+    assert_eq!(
+        row_of(&d, "Würfel"),
+        ("10 × 20 × 30 mm".into(), "mm".into())
+    );
+    assert_eq!(
+        row_of(&d, "Block"),
+        ("25,4 × 50,8 × 76,2 mm".into(), "Zoll".into())
+    );
+    assert!(find(&seen, MIXED_UNIT_HINT).is_some(), "{}", all(&seen));
+    d.import(&mut s).unwrap();
+    let cube = s.bodies.iter().find(|b| b.name == "Würfel").unwrap();
+    let size = cube.bounds.1 - cube.bounds.0;
+    assert!(
+        (size - DVec3::new(10.0, 20.0, 30.0)).abs().max_element() < 1e-9,
+        "{size}"
+    );
+
+    // Datei mit einer Einheit: die Wahl wird genannt, die eigene Einheit hebt sie auf.
+    let mut d = loaded(&dir, "zoll.step", &step_data("inch_assembly.step"));
+    let mut s = AppState::new();
+    let seen = click_text(&mut screen, &mut d, &mut s, &mut open, "Millimeter");
+    assert!(
+        find(&seen, "Die Datei nennt Zoll; gewählt: Millimeter.").is_some(),
+        "{}",
+        all(&seen)
+    );
+    let seen = click_text(&mut screen, &mut d, &mut s, &mut open, "Zoll");
+    assert_eq!(d.chosen_unit(), None);
+    assert!(!all(&seen).contains("gewählt"), "{}", all(&seen));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Würfel als freier Volumen-Eintrag (in keiner Darstellung) in einer Datei, deren Kontexte
+/// Millimeter und Zoll nennen.
+fn free_cube_conflicting() -> String {
+    let cube = data_part(&step_data("box_ap214.step")).replace("(#11,#20)", "(#11)");
+    assert!(!cube.contains("(#11,#20)"));
+    let inch = data_part(&step_data("inch_assembly.step"));
+    let start = inch.find("#100=").expect("Einheiten");
+    let end = inch.find("#120=").expect("Richtungen");
+    // Winkel wie im Würfel (Radiant), damit sich nur die Längeneinheit widerspricht.
+    let units =
+        shift_ids(&inch[start..end], 500_000).replace("#500107,#500108))", "#500104,#500108))");
+    assert!(units.contains("#500104,#500108))"));
+    wrap(&format!("{cube}\n{units}"))
+}
+
+#[test]
+fn a_newly_usable_body_is_ticked_and_the_choice_is_shown() {
+    let dir = temp_dir("frei");
+    let mut d = loaded(&dir, "frei.step", &free_cube_conflicting());
+    let l = d.loaded.as_ref().unwrap();
+    assert_eq!(l.import.unit_state, UnitState::Unclear);
+    assert!(l.units.mixed());
+    assert_eq!(d.checked, [false], "unklar: ausgelassen");
+    let mut s = AppState::new();
+    let mut open = true;
+    let mut screen = Screen::new(1200.0, 800.0);
+    let seen = screen.settle(4, &mut show_on(&mut d, &mut s, &mut open));
+    assert!(find(&seen, UNCLEAR_UNIT_HINT).is_some(), "{}", all(&seen));
+    let seen = click_text(&mut screen, &mut d, &mut s, &mut open, "Millimeter");
+    assert_eq!(d.checked, [true], "neu übernehmbar: angehakt");
+    assert_eq!(d.chosen_unit(), Some(LengthUnit::Millimeter));
+    assert!(
+        find(
+            &seen,
+            "Die Datei nennt verschiedene Längeneinheiten; gewählt: Millimeter."
+        )
+        .is_some(),
+        "{}",
+        all(&seen)
+    );
+    assert_eq!(
+        row_of(&d, "Würfel"),
+        ("10 × 20 × 30 mm".into(), "mm".into())
+    );
+    // Eine neue Datei beginnt ohne Wahl.
+    d.load(write(&dir, "g.step", &combined()));
+    d.tick(true);
+    assert_eq!(d.chosen_unit(), None);
+
+    // In einer Datei mit eigener Einheit: Hinweis auf den ausgelassenen freien Körper.
+    let text = wrap(&format!(
+        "{}\n{}",
+        data_part(&step_data("inch_assembly.step")),
+        shift_ids(
+            &data_part(&step_data("box_ap214.step")).replace("(#11,#20)", "(#11)"),
+            100_000
+        )
+    ));
+    let mut d = loaded(&dir, "frei2.step", &text);
+    let l = d.loaded.as_ref().unwrap();
+    assert_eq!(l.import.unit_state, UnitState::Named);
+    assert!(l.units.free_skipped);
+    let text = draw(&mut d, &mut s);
+    assert!(text.contains(FREE_SKIPPED_HINT), "{text}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_chosen_in_the_window_is_bound_to_the_document() {
+    let dir = temp_dir("gebunden");
+    write(&dir, "teil.step", &combined());
+    let mut d = StepImportDialog::new(dir.clone());
+    let mut s = AppState::new();
+    let mut open = true;
+    let mut screen = Screen::new(1200.0, 800.0);
+    choose_by_keys(&mut screen, &mut d, &mut s, &mut open, "teil.step");
+    d.tick(true);
+    assert!(
+        d.loaded.as_ref().expect("gelesen").edits.is_some(),
+        "an den Stand gebunden"
+    );
+    // Das Dokument ändert sich nach der Vorschau: nichts wird übernommen.
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    assert_eq!(d.import(&mut s), Err(STALE.to_string()));
+    let seen = screen.settle(3, &mut show_on(&mut d, &mut s, &mut open));
+    assert!(find(&seen, STALE).is_some(), "{}", all(&seen));
+    assert!(find(&seen, "Importieren").is_none());
+    assert_eq!(s.document.features().len(), 1, "kein Teil-Import");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cancelling_another_file_choice_returns_to_the_list() {
+    let dir = temp_dir("zurueck");
+    let mut d = loaded(&dir, "g.step", &combined());
+    let mut s = AppState::new();
+    let mut open = true;
+    let mut screen = Screen::new(1200.0, 800.0);
+    let seen = click_text(
+        &mut screen,
+        &mut d,
+        &mut s,
+        &mut open,
+        "Andere Datei wählen …",
+    );
+    assert!(
+        find(&seen, "Datei wählen (STEP)").is_some(),
+        "Dateiwahl offen"
+    );
+    // „Abbrechen“ der Dateiwahl: zurück zur Liste, das Fenster bleibt offen.
+    let seen = click_text(&mut screen, &mut d, &mut s, &mut open, "Abbrechen");
+    assert!(open, "Fenster bleibt offen");
+    assert!(d.loaded.is_some(), "Liste bleibt");
+    assert!(find(&seen, "Datei wählen (STEP)").is_none(), "Dateiwahl zu");
+    assert!(find(&seen, "Block").is_some());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn long_summaries_stay_short_enough_to_read() {
+    let skipped: Vec<(String, String)> = ["A", "B", "C", "D", "E"]
+        .iter()
+        .map(|n| (n.to_string(), format!("Grund {n}")))
+        .collect();
+    assert_eq!(
+        summary(1, &skipped),
+        "1 Körper importiert, 5 ausgelassen: A (Grund A); B (Grund B); C (Grund C); und 2 weitere"
+    );
+    assert_eq!(
+        summary(0, &skipped[..3]),
+        "0 Körper importiert, 3 ausgelassen: A (Grund A); B (Grund B); C (Grund C)"
+    );
+}
+
+#[test]
+fn import_windows_exclude_each_other_and_sketch_mode_drops_them() {
+    let mut ws = workspace();
+    let mut screen = Screen::new(800.0, 600.0);
+    let seen = screen.settle(3, &mut menu_frame(&mut ws));
+    let mesh = find(&seen, "Netz importieren …").unwrap().rect;
+    let step = find(&seen, "STEP importieren …").unwrap().rect;
+    screen.click(mesh.center(), &mut menu_frame(&mut ws));
+    assert!(ws.active_tab().import_dialog.is_some());
+    screen.click(step.center(), &mut menu_frame(&mut ws));
+    assert!(ws.active_tab().step_import_dialog.is_some());
+    assert!(ws.active_tab().import_dialog.is_none(), "Netz-Fenster zu");
+    screen.click(mesh.center(), &mut menu_frame(&mut ws));
+    assert!(ws.active_tab().import_dialog.is_some());
+    assert!(
+        ws.active_tab().step_import_dialog.is_none(),
+        "STEP-Fenster zu"
+    );
+
+    // Eine Skizze verwirft das Fenster (wie das Netz-Fenster).
+    let mut rig = Rig::new(workspace());
+    let dir = temp_dir("skizze");
+    rig.ws().active_tab_mut().step_import_dialog = Some(StepImportDialog::new(dir.clone()));
+    rig.settle();
+    {
+        let st = &mut rig.ws().active_tab_mut().state;
+        let sketch = st
+            .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+            .unwrap();
+        st.open_sketch(sketch).unwrap();
+    }
+    rig.settle();
+    assert!(rig.ws().active_tab().step_import_dialog.is_none());
     let _ = fs::remove_dir_all(&dir);
 }

@@ -32,7 +32,8 @@ use planora_exchange::Progress;
 use planora_feature::{FeatureId, StepShape};
 use planora_kernel::Surface;
 use planora_math::DVec3;
-use planora_step::read::assembly::unsupported_kinds;
+use planora_step::read::assembly::{find_bodies, unsupported_kinds};
+use planora_step::read::units::context_units;
 use planora_step::{
     ImportOptions, LengthUnit, ReadLimits, StepFile, StepHeader, StepImport, StepReadError,
     UNNAMED_BODY, UnitState, import_bodies, read_step_file,
@@ -54,6 +55,18 @@ pub const NO_UNIT_HINT: &str = "Die Datei nennt keine Längeneinheit; angenommen
 /// ausgelassen, bis eine Einheit gewählt ist).
 pub const UNCLEAR_UNIT_HINT: &str =
     "Die Datei nennt verschiedene Längeneinheiten. Bitte die Einheit der Datei wählen.";
+/// Hinweis, wenn sich die Einheit der Datei nicht lesen lässt (kein Widerspruch).
+pub const UNREADABLE_UNIT_HINT: &str =
+    "Die Einheit der Datei lässt sich nicht lesen. Bitte die Einheit der Datei wählen.";
+/// Hinweis bei einer Datei, deren Körper in verschiedenen Einheiten stehen (jeder Körper wird in
+/// seiner eigenen gelesen).
+pub const MIXED_UNIT_HINT: &str = "Die Körper der Datei stehen in verschiedenen Längeneinheiten; jeder wird in seiner eigenen gelesen.";
+/// Hinweis, wenn ein Körper ohne eigene Einheit wegen widersprüchlicher Einheiten ausgelassen ist.
+pub const FREE_SKIPPED_HINT: &str = "Ein Körper ohne eigene Einheit ist ausgelassen, weil die Datei verschiedene Längeneinheiten nennt. Eine gewählte Einheit gilt für alle Körper.";
+/// Text der Spalte „Einheit“, wenn sich die Einheit eines Körpers nicht sicher zeigen lässt.
+pub const MIXED_UNIT: &str = "gemischt";
+/// Höchstens so viele ausgelassene Körper nennt [`summary`] mit Grund.
+pub const MAX_SUMMARY_SKIPPED: usize = 3;
 /// Hinweis am gesperrten Knopf „Importieren“.
 pub const NOTHING_CHECKED: &str = "Bitte mindestens einen Körper anhaken.";
 /// Hinweis an der gerundeten Größe.
@@ -91,23 +104,129 @@ pub fn selected_unit(import: &StepImport, chosen: Option<LengthUnit>) -> Option<
     }
 }
 
-/// Hinweis unter der Einheitenwahl: Die Datei nennt keine Längeneinheit (Millimeter angenommen,
-/// alle Körper sind lesbar) oder verschiedene (Körper ohne eigenen Kontext sind dann
-/// ausgelassen). Nach einer Wahl nennt er die gewählte Einheit.
-pub fn unit_hint(import: &StepImport, chosen: Option<LengthUnit>) -> Option<String> {
-    match (import.unit_state, chosen) {
-        (UnitState::Named, _) => None,
+/// Was die Datei über ihre Längeneinheiten sagt (einmal je Prüfung bestimmt).
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnitInfo {
+    pub state: UnitState,
+    /// Längeneinheit der Datei ohne Wahl (bei [`UnitState::Missing`] die angenommenen
+    /// Millimeter); aus der ersten Prüfung, bleibt bei jeder Neuberechnung.
+    pub own: LengthUnit,
+    /// Die verschiedenen Längeneinheiten, die die Kontexte der Datei nennen.
+    pub contexts: Vec<LengthUnit>,
+    /// Ein Kontext der Datei lässt sich nicht lesen.
+    pub unreadable: bool,
+    /// Ein Körper ohne eigenen Kontext ist wegen widersprüchlicher Einheiten ausgelassen.
+    pub free_skipped: bool,
+}
+
+impl UnitInfo {
+    /// Nennen die Kontexte der Datei verschiedene Längeneinheiten?
+    pub fn mixed(&self) -> bool {
+        self.contexts.len() > 1
+    }
+}
+
+/// Hinweis unter der Einheitenwahl. Ohne Wahl: keine Längeneinheit (Millimeter angenommen),
+/// widersprüchliche oder unlesbare Einheiten, Körper in verschiedenen Einheiten, ein freier
+/// Körper wegen unklarer Einheit ausgelassen. Mit Wahl nennt er die gewählte Einheit, bei einer
+/// Datei mit eigener Einheit auch diese (die Wahl ersetzt dann die Einheit der Datei).
+pub fn unit_hint(info: &UnitInfo, chosen: Option<LengthUnit>) -> Option<String> {
+    let label = |u: LengthUnit| u.label();
+    match (info.state, chosen) {
+        (UnitState::Named, None) if info.free_skipped => Some(FREE_SKIPPED_HINT.into()),
+        (UnitState::Named, None) if info.mixed() => Some(MIXED_UNIT_HINT.into()),
+        (UnitState::Named, None) => None,
+        (UnitState::Named, Some(u)) if info.mixed() => Some(format!(
+            "Die Datei nennt verschiedene Längeneinheiten; gewählt: {} für alle Körper.",
+            label(u)
+        )),
+        (UnitState::Named, Some(u)) => Some(format!(
+            "Die Datei nennt {}; gewählt: {}.",
+            label(info.own),
+            label(u)
+        )),
         (UnitState::Missing, None) => Some(NO_UNIT_HINT.into()),
         (UnitState::Missing, Some(u)) => Some(format!(
             "Die Datei nennt keine Längeneinheit; gewählt: {}.",
-            u.label()
+            label(u)
         )),
-        (UnitState::Unclear, None) => Some(UNCLEAR_UNIT_HINT.into()),
-        (UnitState::Unclear, Some(u)) => Some(format!(
+        (UnitState::Unclear, None) if info.mixed() => Some(UNCLEAR_UNIT_HINT.into()),
+        (UnitState::Unclear, None) => Some(UNREADABLE_UNIT_HINT.into()),
+        (UnitState::Unclear, Some(u)) if info.mixed() => Some(format!(
             "Die Datei nennt verschiedene Längeneinheiten; gewählt: {}.",
-            u.label()
+            label(u)
+        )),
+        (UnitState::Unclear, Some(u)) => Some(format!(
+            "Die Einheit der Datei lässt sich nicht lesen; gewählt: {}.",
+            label(u)
         )),
     }
+}
+
+/// Längeneinheiten der Kontexte der Datei (verschiedene, in Reihenfolge) und ob sich einer nicht
+/// lesen lässt.
+fn context_survey(file: &StepFile) -> (Vec<LengthUnit>, bool) {
+    let mut units = Vec::new();
+    let mut unreadable = false;
+    for &c in file.ids_of("GEOMETRIC_REPRESENTATION_CONTEXT") {
+        match context_units(file, c) {
+            Ok(u) if u.length_known => {
+                if !units.contains(&u.length) {
+                    units.push(u.length);
+                }
+            }
+            Ok(_) => {}
+            Err(_) => unreadable = true,
+        }
+    }
+    (units, unreadable)
+}
+
+/// Einheit je Zeile: mit Wahl die gewählte, sonst bei einer Datei mit einer Einheit diese. Bei
+/// Kontexten in verschiedenen Einheiten wird die Einheit jedes Körpers aus seinem eigenen
+/// Kontext bestimmt (gleiche Suche wie der Import); lässt sie sich so nicht sicher zuordnen,
+/// steht [`MIXED_UNIT`] da statt einer falschen Einheit. Ausgelassene Körper: „–“.
+fn row_units(
+    file: &StepFile,
+    import: &StepImport,
+    chosen: Option<LengthUnit>,
+    info: &UnitInfo,
+) -> Vec<String> {
+    let per_body: Vec<String> = match chosen {
+        Some(u) => vec![unit_short(u); import.bodies.len()],
+        None if !info.mixed() => vec![unit_short(import.unit); import.bodies.len()],
+        None => {
+            // Ohne Wahl rechnet der Import freie Körper mit den Einheiten der ganzen Datei; die
+            // widersprechen sich hier, also „unklar“ (wie im Leser).
+            let units = |c: Option<u64>| match c {
+                Some(c) => context_units(file, c),
+                None => Err(StepReadError::UnclearUnits),
+            };
+            match find_bodies(file, &units) {
+                Ok(found)
+                    if found.len() == import.bodies.len()
+                        && found
+                            .iter()
+                            .zip(&import.bodies)
+                            .all(|(f, b)| f.name == b.name) =>
+                {
+                    found
+                        .iter()
+                        .map(|f| match f.context.map(|c| context_units(file, c)) {
+                            Some(Ok(u)) if u.length_known => unit_short(u.length),
+                            _ => MIXED_UNIT.into(),
+                        })
+                        .collect()
+                }
+                _ => vec![MIXED_UNIT.into(); import.bodies.len()],
+            }
+        }
+    };
+    per_body
+        .into_iter()
+        .zip(&import.bodies)
+        .map(|(u, b)| if b.outcome.is_ok() { u } else { "–".into() })
+        .collect()
 }
 
 /// Kurzform der Einheit in der Tabelle.
@@ -155,15 +274,25 @@ fn row_size(body: &planora_step::ImportedBody) -> String {
 
 /// Meldung nach dem Import: „3 Körper importiert“ bzw. „3 Körper importiert, 1 ausgelassen:
 /// Name (Grund)“ (mehrere mit „; “).
+///
+/// Damit die Meldung in der Statuszeile lesbar bleibt, stehen höchstens
+/// [`MAX_SUMMARY_SKIPPED`] Körper mit Grund da, danach „und n weitere“.
 pub fn summary(imported: usize, skipped: &[(String, String)]) -> String {
     let head = format!("{imported} Körper importiert");
     if skipped.is_empty() {
         return head;
     }
-    let list: Vec<String> = skipped
+    let mut list: Vec<String> = skipped
         .iter()
+        .take(MAX_SUMMARY_SKIPPED)
         .map(|(name, why)| format!("{name} ({why})"))
         .collect();
+    if skipped.len() > MAX_SUMMARY_SKIPPED {
+        list.push(format!(
+            "und {} weitere",
+            skipped.len() - MAX_SUMMARY_SKIPPED
+        ));
+    }
     format!("{head}, {} ausgelassen: {}", skipped.len(), list.join("; "))
 }
 
@@ -276,6 +405,20 @@ pub struct StepLoaded {
     pub import: StepImport,
     /// Änderungszähler des Dokuments bei der Dateiwahl; `None` ohne Bindung an ein Dokument.
     pub edits: Option<u64>,
+    /// Einheiten der Datei.
+    pub units: UnitInfo,
+    /// Größe je Zeile (einmal je Prüfung berechnet, nicht je Bild).
+    pub sizes: Vec<String>,
+    /// Einheit je Zeile.
+    pub row_units: Vec<String>,
+}
+
+/// Ergebnis einer Prüfung im Arbeitsthread.
+struct Checked {
+    import: StepImport,
+    units: UnitInfo,
+    sizes: Vec<String>,
+    row_units: Vec<String>,
 }
 
 /// Abgelehnte Datei: Meldung und Hinweise (etwa die Körperarten, die sie stattdessen enthält).
@@ -285,7 +428,7 @@ struct Refused {
 }
 
 type ReadJob = Job<Result<StepFile, StepReadError>>;
-type CheckJob = Job<Result<StepImport, Refused>>;
+type CheckJob = Job<Result<Checked, Refused>>;
 
 /// Laufender Auftrag.
 enum Work {
@@ -319,14 +462,15 @@ impl Work {
     }
 }
 
-/// Startet das Prüfen der gelesenen Datei mit frischem Fortschritt.
-fn check_job(file: &Arc<StepFile>, unit: Option<LengthUnit>) -> CheckJob {
+/// Startet das Prüfen der gelesenen Datei mit frischem Fortschritt; `own` ist die Einheit der
+/// Datei aus der ersten Prüfung (`None` bei der ersten).
+fn check_job(file: &Arc<StepFile>, unit: Option<LengthUnit>, own: Option<LengthUnit>) -> CheckJob {
     let file = Arc::clone(file);
     Job::spawn(move |progress| {
         let opts = ImportOptions {
             unit_override: unit,
         };
-        import_bodies(&file, &opts, progress).map_err(|e| Refused {
+        let import = import_bodies(&file, &opts, progress).map_err(|e| Refused {
             // Ohne Volumenkörper: sagen, was die Datei stattdessen enthält.
             notes: if e == StepReadError::NoBodies {
                 unsupported_kinds(&file)
@@ -334,6 +478,26 @@ fn check_job(file: &Arc<StepFile>, unit: Option<LengthUnit>) -> CheckJob {
                 Vec::new()
             },
             message: e.to_string(),
+        })?;
+        let (contexts, unreadable) = context_survey(&file);
+        let unclear = StepReadError::UnclearUnits.to_string();
+        let units = UnitInfo {
+            state: import.unit_state,
+            own: own.unwrap_or(import.unit),
+            contexts,
+            unreadable,
+            free_skipped: import
+                .bodies
+                .iter()
+                .any(|b| b.outcome.as_ref().err() == Some(&unclear)),
+        };
+        let sizes = import.bodies.iter().map(row_size).collect();
+        let row_units = row_units(&file, &import, unit, &units);
+        Ok(Checked {
+            import,
+            units,
+            sizes,
+            row_units,
         })
     })
 }
@@ -408,17 +572,24 @@ impl StepImportDialog {
     }
 
     /// Rechnet die gelesene Datei mit der Einheit `unit` neu (P11, im Arbeitsthread). Die Liste
-    /// erscheint wieder, wenn die Prüfung fertig ist; die Häkchen bleiben je Zeile.
+    /// erscheint wieder, wenn die Prüfung fertig ist; die Häkchen bleiben je Zeile. Ist `unit`
+    /// die Einheit der Datei selbst, wird ohne Wahl gerechnet (jeder Kontext in seiner eigenen
+    /// Einheit) – eine Wahl stellte sonst alle Kontexte um, auch die in anderen Einheiten.
     pub fn set_unit(&mut self, unit: LengthUnit) {
         let Some(l) = &self.loaded else { return };
+        let over = if l.units.state != UnitState::Unclear && unit == l.units.own {
+            None
+        } else {
+            Some(unit)
+        };
         self.error = None;
         self.notes.clear();
         self.work = Some(Work::Check {
             path: l.path.clone(),
             edits: l.edits,
             file: Arc::clone(&l.file),
-            unit: Some(unit),
-            job: check_job(&l.file, Some(unit)),
+            unit: over,
+            job: check_job(&l.file, over, Some(l.units.own)),
         });
     }
 
@@ -469,7 +640,7 @@ impl StepImportDialog {
                         self.work = Some(Work::Check {
                             path,
                             edits,
-                            job: check_job(&file, None),
+                            job: check_job(&file, None, None),
                             file,
                             unit: None,
                         });
@@ -494,15 +665,18 @@ impl StepImportDialog {
                         });
                         return;
                     }
-                    Poll::Ready(Ok(import)) => {
+                    Poll::Ready(Ok(c)) => {
                         let before = self.loaded.as_ref().map(|l| (&l.import, &self.checked[..]));
-                        self.checked = checks_after(before, &import);
+                        self.checked = checks_after(before, &c.import);
                         self.chosen = unit;
                         self.loaded = Some(StepLoaded {
                             path,
                             file,
-                            import,
+                            import: c.import,
                             edits,
+                            units: c.units,
+                            sizes: c.sizes,
+                            row_units: c.row_units,
                         });
                     }
                     Poll::Ready(Err(r)) => {
@@ -595,8 +769,9 @@ impl StepImportDialog {
     ) -> bool {
         self.tick(false);
         self.drop_if_stale(state);
-        let (mut open, mut close, mut cancel, mut import, mut other) =
-            (true, false, false, false, false);
+        let mut close_footer = false;
+        let (mut open, mut close, mut cancel, mut import, mut other, mut back) =
+            (true, false, false, false, false, false);
         let mut chosen = None;
         let mut pick_unit = None;
         let mut cards = Vec::new();
@@ -616,54 +791,62 @@ impl StepImportDialog {
         let hint = self
             .loaded
             .as_ref()
-            .and_then(|l| unit_hint(&l.import, self.chosen));
+            .and_then(|l| unit_hint(&l.units, self.chosen));
+        let has_list = self.loaded.is_some() && loading.is_none();
+        let any = checked.iter().any(|c| *c);
         let response = Dialog::new(TITLE, DialogSize::Wide)
             .open(&mut open)
-            .show(ctx, |ui| {
-                let dark = ui.visuals().dark_mode;
-                if choosing {
-                    ui.strong("Datei wählen (STEP)");
-                    match self.chooser.show(ui) {
-                        ChooserAction::Chosen(p) => chosen = Some(p),
-                        ChooserAction::Cancel => close = true,
-                        ChooserAction::None => {}
-                    }
-                }
-                if let Some((phase, f)) = loading {
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::ProgressBar::new(f)
-                                .desired_width(PROGRESS_WIDTH)
-                                .text(phase),
-                        );
-                        if ui.button("Abbrechen").clicked() {
-                            cancel = true;
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    let dark = ui.visuals().dark_mode;
+                    if choosing {
+                        ui.strong("Datei wählen (STEP)");
+                        match self.chooser.show(ui) {
+                            ChooserAction::Chosen(p) => chosen = Some(p),
+                            // Mit gelesener Liste zurück zur Liste, sonst Fenster schließen.
+                            ChooserAction::Cancel if self.loaded.is_some() => back = true,
+                            ChooserAction::Cancel => close = true,
+                            ChooserAction::None => {}
                         }
-                    });
-                }
-                if let Some(e) = &self.error {
-                    ui.colored_label(error_color(dark), e);
-                }
-                for n in &self.notes {
-                    ui.colored_label(warning_color(dark), n);
-                }
-                match (&self.loaded, loading) {
-                    (Some(l), None) => {
-                        ui.separator();
-                        cards = {
-                            let mut file_card = |ui: &mut egui::Ui| {
-                                file_card(ui, l, selected, hint.as_deref(), &mut pick_unit);
-                            };
-                            let mut body_card = |ui: &mut egui::Ui| {
-                                rows = body_card(ui, &l.import, &names, &mut checked);
-                            };
-                            let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
-                                &mut [&mut file_card, &mut body_card];
-                            card_row(ui, "step-import", row)
-                        };
-                        ui.add_space(6.0);
+                    }
+                    if let Some((phase, f)) = loading {
                         ui.horizontal(|ui| {
-                            let any = checked.iter().any(|c| *c);
+                            ui.add(
+                                egui::ProgressBar::new(f)
+                                    .desired_width(PROGRESS_WIDTH)
+                                    .text(phase),
+                            );
+                            if ui.button("Abbrechen").clicked() {
+                                cancel = true;
+                            }
+                        });
+                    }
+                    if let Some(e) = &self.error {
+                        ui.colored_label(error_color(dark), e);
+                    }
+                    for n in &self.notes {
+                        ui.colored_label(warning_color(dark), n);
+                    }
+                    if let (Some(l), None) = (&self.loaded, loading) {
+                        ui.separator();
+                        // „Datei“ und „Körper“ je über die ganze Breite untereinander (Entscheid
+                        // des Controllers, Fix-Runde 1): die Tabelle braucht die Breite.
+                        let mut file_card = |ui: &mut egui::Ui| {
+                            file_card(ui, l, selected, hint.as_deref(), &mut pick_unit);
+                        };
+                        cards.extend(card_row(ui, "step-datei", &mut [&mut file_card]));
+                        ui.add_space(theme::SPACE_2);
+                        let mut body_card = |ui: &mut egui::Ui| {
+                            rows = body_card(ui, l, &names, &mut checked);
+                        };
+                        cards.extend(card_row(ui, "step-koerper", &mut [&mut body_card]));
+                    }
+                },
+                |ui| {
+                    // Fußzeile: bleibt stehen, auch wenn eine lange Liste rollt.
+                    ui.horizontal(|ui| {
+                        if has_list {
                             if ui
                                 .add_enabled(any, egui::Button::new("Importieren"))
                                 .on_disabled_hover_text(NOTHING_CHECKED)
@@ -674,18 +857,13 @@ impl StepImportDialog {
                             if !choosing && ui.button("Andere Datei wählen …").clicked() {
                                 other = true;
                             }
-                            if ui.button("Schließen").clicked() {
-                                close = true;
-                            }
-                        });
-                    }
-                    _ => {
-                        if ui.button("Schließen").clicked() {
-                            close = true;
                         }
-                    }
-                }
-            });
+                        if ui.button("Schließen").clicked() {
+                            close_footer = true;
+                        }
+                    });
+                },
+            );
         self.last_rect = response.map(|r| r.response.rect);
         self.last_cards = cards;
         self.last_rows = rows;
@@ -701,6 +879,9 @@ impl StepImportDialog {
         if other {
             self.choosing = true;
         }
+        if back {
+            self.choosing = false;
+        }
         if let Some(u) = pick_unit {
             self.set_unit(u);
         }
@@ -714,7 +895,7 @@ impl StepImportDialog {
                 Err(e) => self.error = Some(e),
             }
         }
-        open && !close
+        open && !close && !close_footer
     }
 }
 
@@ -757,7 +938,7 @@ fn file_card(
 /// Abstand zwischen den Spalten der Tabelle.
 const COLUMN_GAP: f32 = 4.0;
 /// Anteile der Spalten Name, Flächen, Größe, Einheit an der Breite ohne Häkchen.
-const COLUMNS: [f32; 4] = [0.28, 0.20, 0.34, 0.18];
+const COLUMNS: [f32; 4] = [0.38, 0.12, 0.36, 0.14];
 
 /// Leere Spalte des Häkchens (wie eine Zelle, damit die Spalten genau untereinander stehen).
 fn indent(ui: &mut egui::Ui, width: f32) {
@@ -781,10 +962,11 @@ fn cell(ui: &mut egui::Ui, width: f32, text: egui::RichText) -> egui::Response {
 /// einem Häkchen je Zeile. Liefert Kennung und Rechteck der Häkchen.
 fn body_card(
     ui: &mut egui::Ui,
-    import: &StepImport,
+    l: &StepLoaded,
     names: &[String],
     checked: &mut [bool],
 ) -> Vec<(egui::Id, egui::Rect)> {
+    let import = &l.import;
     let p = theme::palette(ui.visuals().dark_mode);
     ui.strong("Körper");
     ui.spacing_mut().item_spacing.x = COLUMN_GAP;
@@ -807,7 +989,6 @@ fn body_card(
         indent(ui, check_w);
         cell(ui, rest, head("Status"));
     });
-    let unit = unit_short(import.unit);
     let mut rows = Vec::with_capacity(import.bodies.len());
     for (i, b) in import.bodies.iter().enumerate() {
         ui.separator();
@@ -834,9 +1015,10 @@ fn body_card(
                 rows.push((r.id, r.rect));
                 cell(ui, widths[0], egui::RichText::new(name));
                 cell(ui, widths[1], egui::RichText::new(b.faces.to_string()));
-                cell(ui, widths[2], egui::RichText::new(row_size(b))).on_hover_text(SIZE_HINT);
-                // Ausgelassene Körper haben keine Größe und keine Einheit, mit der gerechnet wurde.
-                let unit = if ok { unit.as_str() } else { "–" };
+                let size = l.sizes.get(i).map_or("–", String::as_str);
+                cell(ui, widths[2], egui::RichText::new(size)).on_hover_text(SIZE_HINT);
+                // Ausgelassene Körper: „–“ (keine Einheit, mit der gerechnet wurde).
+                let unit = l.row_units.get(i).map_or("–", String::as_str);
                 cell(ui, widths[3], egui::RichText::new(unit));
             });
             let (text, tone) = status(b, name);

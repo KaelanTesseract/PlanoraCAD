@@ -327,3 +327,119 @@ fn relative_folders_become_absolute_and_errors_are_plain_german() {
     );
     assert!(!c2.error.clone().unwrap_or_default().contains("os error"));
 }
+
+/// Enter als gedrückte und losgelassene Taste.
+fn enter() -> Vec<egui::Event> {
+    let key = |pressed| egui::Event::Key {
+        key: egui::Key::Enter,
+        physical_key: Some(egui::Key::Enter),
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    vec![key(true), key(false)]
+}
+
+impl Driver {
+    /// Klick an `p` (je Ereignis ein Bild); liefert alle Aktionen.
+    fn click_at(&mut self, c: &mut FileChooser, p: egui::Pos2) -> Vec<ChooserAction> {
+        [
+            egui::Event::PointerMoved(p),
+            click(p, true),
+            click(p, false),
+        ]
+        .into_iter()
+        .map(|ev| self.frame(c, vec![ev], "").0)
+        .collect()
+    }
+
+    /// Mitte des Felds „Dateiname“ (rechts neben der Beschriftung).
+    fn name_field(&mut self, c: &mut FileChooser) -> egui::Pos2 {
+        self.frame(c, vec![], "Dateiname");
+        let (_, p) = self.frame(c, vec![], "Dateiname");
+        p.expect("Beschriftung") + egui::vec2(120.0, 0.0)
+    }
+
+    /// Enter in einem Bild, dann ein leeres; liefert alle Aktionen.
+    fn press_enter(&mut self, c: &mut FileChooser) -> Vec<ChooserAction> {
+        vec![self.frame(c, enter(), "").0, self.frame(c, vec![], "").0]
+    }
+}
+
+#[test]
+fn enter_in_the_name_field_opens_only_when_opening() {
+    let d = temp_dir("enter");
+    fs::write(d.join("x.stl"), b"x").unwrap();
+
+    // Öffnen: Enter im Namensfeld wählt die Datei.
+    let mut drv = Driver::new();
+    let mut c = FileChooser::open(d.clone(), vec!["stl"]);
+    let field = drv.name_field(&mut c);
+    drv.click_at(&mut c, field);
+    c.select("x.stl");
+    let actions = drv.press_enter(&mut c);
+    assert!(
+        actions.contains(&ChooserAction::Chosen(d.join("x.stl"))),
+        "{actions:?}"
+    );
+
+    // Öffnen mit leerem Namen: Meldung, keine Wahl.
+    let mut drv = Driver::new();
+    let mut c = FileChooser::open(d.clone(), vec!["stl"]);
+    let field = drv.name_field(&mut c);
+    drv.click_at(&mut c, field);
+    let actions = drv.press_enter(&mut c);
+    assert!(
+        actions.iter().all(|a| *a == ChooserAction::None),
+        "{actions:?}"
+    );
+    assert_eq!(
+        c.error.as_deref(),
+        Some("Bitte eine vorhandene Datei wählen.")
+    );
+
+    // Speichern: Enter im Namensfeld tut nichts (auch keine Rückfrage zum Ersetzen).
+    let mut drv = Driver::new();
+    let mut c = FileChooser::save(d.clone(), "y".into(), "stl");
+    let field = drv.name_field(&mut c);
+    drv.click_at(&mut c, field);
+    let actions = drv.press_enter(&mut c);
+    assert!(
+        actions.iter().all(|a| *a == ChooserAction::None),
+        "{actions:?}"
+    );
+    assert!(!c.asks_to_replace() && c.error.is_none());
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn enter_elsewhere_does_not_open_the_named_file() {
+    let d = temp_dir("enter-ordner");
+    fs::write(d.join("x.stl"), b"x").unwrap();
+    let path_text = d.display().to_string();
+
+    // Enter im Ordnerfeld wechselt nur den Ordner, auch wenn ein Dateiname dasteht.
+    let mut drv = Driver::new();
+    let mut c = FileChooser::open(d.clone(), vec!["stl"]);
+    c.select("x.stl");
+    drv.frame(&mut c, vec![], &path_text);
+    let (_, p) = drv.frame(&mut c, vec![], &path_text);
+    drv.click_at(&mut c, p.expect("Ordnerfeld") + egui::vec2(40.0, 0.0));
+    let actions = drv.press_enter(&mut c);
+    assert!(
+        actions.iter().all(|a| *a == ChooserAction::None),
+        "{actions:?}"
+    );
+
+    // Enter ohne ein Feld mit Fokus.
+    let mut drv = Driver::new();
+    let mut c = FileChooser::open(d.clone(), vec!["stl"]);
+    c.select("x.stl");
+    drv.frame(&mut c, vec![], "");
+    let actions = drv.press_enter(&mut c);
+    assert!(
+        actions.iter().all(|a| *a == ChooserAction::None),
+        "{actions:?}"
+    );
+    let _ = fs::remove_dir_all(&d);
+}

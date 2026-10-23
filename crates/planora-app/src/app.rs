@@ -285,6 +285,8 @@ fn open_import(ws: &mut Workspace) {
     if tab.read_only || tab.state.try_close_sketch().is_err() {
         return;
     }
+    // Die beiden Import-Fenster schließen einander aus (sie lägen sonst übereinander).
+    tab.step_import_dialog = None;
     tab.import_dialog = Some(ImportDialog::new(dir));
 }
 
@@ -296,6 +298,7 @@ fn open_step_import(ws: &mut Workspace) {
     if tab.read_only || tab.state.try_close_sketch().is_err() {
         return;
     }
+    tab.import_dialog = None;
     tab.step_import_dialog = Some(StepImportDialog::new(dir));
 }
 
