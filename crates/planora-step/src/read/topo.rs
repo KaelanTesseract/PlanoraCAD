@@ -29,7 +29,7 @@ use crate::read::units::Units;
 use crate::read::value::Entity;
 use crate::read::weld;
 use crate::topology::CLASSIFY_CHORD;
-use planora_exchange::Progress;
+use planora_exchange::{CHECK_EVERY, Progress};
 use planora_kernel::boolean::{face_geom, loop_points, oriented_area, points_to_uv};
 use planora_kernel::{
     Curve, Face, FaceTag, HalfEdge, Id, Loop, NURBS_EDGE_TOL, Shell, Solid, Surface, UvRect,
@@ -1995,8 +1995,8 @@ fn check_edges(solid: &Solid, weld_tol: f64) -> Result<(), Skip> {
 /// Volumen, Lage der Kanten und Ecken, `validate`. Mehr als `file.limits().max_faces` Flächen,
 /// ungültige Topologie, verdrehte Flächen, Kanten neben ihren Flächen oder Ecken neben ihren
 /// Kanten ergeben ein [`Skip`] mit Grund. Grobe Dateien (`Units::is_coarse`) bekommen die Warnung
-/// [`weld::coarse_warning`]. `progress` zählt je Fläche eins weiter; Abbruch ergibt
-/// `Skip("Abgebrochen")`.
+/// [`weld::coarse_warning`]. `progress` zählt je Fläche eins weiter; Abbruch (beim Lesen je
+/// Fläche, danach zwischen den Stufen) ergibt `Skip("Abgebrochen")`.
 pub fn build_solid(
     file: &StepFile,
     units: Units,
@@ -2005,15 +2005,29 @@ pub fn build_solid(
     progress: &Progress,
 ) -> Result<BuiltSolid, Skip> {
     let tol = opts.weld_tol_mm;
+    // Abbruch auch zwischen den Stufen (nicht nur beim Lesen der Flächen).
+    let stop = || {
+        if progress.is_cancelled() {
+            Err(Skip("Abgebrochen".into()))
+        } else {
+            Ok(())
+        }
+    };
     let mut raw = read_raw(file, units, items, tol, progress)?;
+    stop()?;
     weld::weld_body(&mut raw, tol)?;
+    stop()?;
     seam::snap_poles(&mut raw, tol);
     seam::split_at_poles(&mut raw, tol);
     seam::drop_degenerate(&mut raw, tol)?;
     weld::tighten_vertices(&mut raw, tol);
+    stop()?;
     seam::insert_seams(&mut raw, tol)?;
     seam::check_poles(&raw, tol)?;
     for i in 0..raw.faces.len() {
+        if (i as u64).is_multiple_of(CHECK_EVERY) {
+            stop()?;
+        }
         finish_face(&mut raw, i, tol)?;
     }
     raw.compact();
@@ -2021,11 +2035,14 @@ pub fn build_solid(
     let owners: Vec<Option<usize>> = raw.shells.iter().map(|s| s.owner).collect();
     let guessed: Vec<bool> = raw.faces.iter().map(|f| f.side_guessed).collect();
     let mut solid = raw.to_solid();
+    stop()?;
     // Erst prüfen, dann vernetzen: Das Netz für das Volumen setzt gültige Topologie voraus. Die
     // Prüfung am Ende (nach dem Umdrehen) verlangt der Ablauf des Plans; sie ist billig.
     validate(&solid).map_err(|e| invalid(&solid, &e))?;
     check_face_loops(&solid)?;
+    stop()?;
     orient_shells(&mut solid, &owners, &guessed, tol)?;
+    stop()?;
     check_edges(&solid, tol)?;
     validate(&solid).map_err(|e| invalid(&solid, &e))?;
     let mut warnings = Vec::new();

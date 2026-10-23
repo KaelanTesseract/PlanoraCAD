@@ -43,8 +43,9 @@ const MIN_REF_PERP: f64 = 1e-9;
 /// Rundungsspielraum (Länge² − 1 bzw. Skalarprodukt), in dem eine Richtung schon Länge 1 hat
 /// bzw. eine Bezugsrichtung schon senkrecht zur Achse steht. Solche Werte bleiben bitgleich:
 /// Normieren eines schon normierten Vektors ändert sonst die letzten Stellen, und unser eigener
-/// Text käme nach Schreiben und Wiederlesen nicht gleich zurück (Aufgabe 9, „Normalisieren ist
-/// ruhend“).
+/// Text käme nach Schreiben und Wiederlesen nicht gleich zurück (Aufgabe 9: ein gelesener
+/// Körper soll für den Schreiber ein Fixpunkt sein). Eine Richtung der Länge 1 + 1e-7 oder eine
+/// um 1e-6 schiefe Bezugsrichtung liegt weit außerhalb und wird normiert bzw. senkrecht gemacht.
 const UNIT_SLACK: f64 = 4.0 * f64::EPSILON;
 
 /// Kurve mit umgekehrter Laufrichtung: `point'(t) = point(−t)` bei Gerade, Kreis und Ellipse

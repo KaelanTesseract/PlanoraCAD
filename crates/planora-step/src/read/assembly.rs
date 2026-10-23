@@ -84,12 +84,26 @@ pub struct FoundBody {
     /// Bewegung in mm (Einheitslage bei `placement_note`).
     pub placement: DMat4,
     pub placement_note: Option<String>,
+    /// Die Richtung einer Beziehung auf dem Weg zur Wurzel wurde angenommen (Beziehung mit
+    /// Transformation ohne Vorkommen); die Lage ist angewandt, Meldung [`guessed_note`]. Nur
+    /// ohne `placement_note`.
+    pub placement_guessed: bool,
 }
 
 /// Meldung zu einer Lage, die sich nicht bestimmen ließ.
 pub fn placement_note(name: &str, reason: &str) -> String {
     format!(
         "Die Lage von „{name}“ ließ sich nicht bestimmen ({reason}); der Körper liegt am Ursprung."
+    )
+}
+
+/// Meldung zu einer Lage, deren Richtung in der Baugruppe angenommen wurde (Beziehung mit
+/// Transformation ohne Vorkommen: Eltern ist die Darstellung mit Produkt, sonst `rep_2`). Der
+/// Körper liegt an der angenommenen Stelle.
+pub fn guessed_note(name: &str) -> String {
+    format!(
+        "Die Lage von „{name}“ ist angenommen: Die Datei sagt nicht, welches Teil das \
+         übergeordnete ist."
     )
 }
 
@@ -196,6 +210,8 @@ struct RawEdge {
     key: (usize, u64),
     kind: Kind,
     transform: Placed,
+    /// Richtung angenommen (siehe [`guessed_note`]).
+    guessed: bool,
 }
 
 /// Eine Kante zwischen Gruppen.
@@ -203,6 +219,7 @@ struct Edge {
     child: usize,
     key: (usize, u64),
     transform: Placed,
+    guessed: bool,
 }
 
 /// Ein Vorkommen eines Körpers vor der Namensvergabe.
@@ -210,6 +227,8 @@ struct Hit {
     rep: Option<usize>,
     items: Vec<u64>,
     placement: Placed,
+    /// Auf dem Weg wurde eine Richtung angenommen.
+    guessed: bool,
 }
 
 /// Vorkommen hinter einem CDSR: Eltern- und Kind-Produktdefinition, kein Vorkommen (`None`) oder
@@ -407,6 +426,7 @@ impl<'a> Finder<'a> {
             key,
             kind: Kind::Mapped,
             transform,
+            guessed: false,
         });
         Ok(())
     }
@@ -611,7 +631,8 @@ impl<'a> Finder<'a> {
             // gehört, sonst `rep_2` (ISO).
             let swapped = self.rep_pd.contains_key(&rep_1) && !self.rep_pd.contains_key(&rep_2);
             let transform = self.relation_transform(op, rep_1, rep_2, swapped);
-            self.push_edge(rep_1, rep_2, swapped, self.key(rr), Kind::Other, transform);
+            let key = self.key(rr);
+            self.push_edge(rep_1, rep_2, swapped, key, Kind::Other, transform, true);
             return Ok(());
         }
         for (cdsr, usage) in occ {
@@ -626,7 +647,7 @@ impl<'a> Finder<'a> {
             let swapped = match swapped {
                 Ok(s) => s,
                 Err(why) => {
-                    self.push_edge(rep_1, rep_2, false, key, Kind::Other, Err(why));
+                    self.push_edge(rep_1, rep_2, false, key, Kind::Other, Err(why), false);
                     continue;
                 }
             };
@@ -637,12 +658,14 @@ impl<'a> Finder<'a> {
                     self.relation_transform(op, rep_1, rep_2, swapped),
                 ),
             };
-            self.push_edge(rep_1, rep_2, swapped, key, kind, transform);
+            self.push_edge(rep_1, rep_2, swapped, key, kind, transform, false);
         }
         Ok(())
     }
 
-    /// Kante der Beziehung (`rep_1`, `rep_2`); `swapped`: `rep_1` ist das Elternteil.
+    /// Kante der Beziehung (`rep_1`, `rep_2`); `swapped`: `rep_1` ist das Elternteil;
+    /// `guessed`: diese Richtung ist angenommen.
+    #[allow(clippy::too_many_arguments)]
     fn push_edge(
         &mut self,
         rep_1: u64,
@@ -651,6 +674,7 @@ impl<'a> Finder<'a> {
         key: (usize, u64),
         kind: Kind,
         transform: Placed,
+        guessed: bool,
     ) {
         let (parent, child) = if swapped {
             (rep_1, rep_2)
@@ -663,6 +687,7 @@ impl<'a> Finder<'a> {
             key,
             kind,
             transform,
+            guessed,
         });
     }
 
@@ -884,6 +909,7 @@ impl<'a> Finder<'a> {
                 child: c,
                 key: e.key,
                 transform: e.transform,
+                guessed: e.guessed,
             });
         }
         for list in &mut children {
@@ -919,13 +945,13 @@ impl<'a> Finder<'a> {
         // Wurzeln in Dateireihenfolge (Gruppen sind nach ihrer ersten Darstellung geordnet).
         for g in 0..groups {
             if !incoming[g] && count[g] > 0 {
-                walk.visit(g, Ok(DMat4::IDENTITY), 0)?;
+                walk.visit(g, Ok(DMat4::IDENTITY), false, 0)?;
             }
         }
         // Nicht erreichte Darstellungen: nur über Kreise erreichbar.
         for g in 0..groups {
             if !walk.reached[g] {
-                walk.emit(g, &Err(CYCLE.into()))?;
+                walk.emit(g, &Err(CYCLE.into()), false)?;
             }
         }
         // Freie Volumen-Einträge; ließ sich eine Darstellung nicht lesen, könnten sie in ihr
@@ -945,6 +971,7 @@ impl<'a> Finder<'a> {
                     rep: None,
                     items: vec![s],
                     placement: free.clone(),
+                    guessed: false,
                 })?;
             }
         }
@@ -968,6 +995,7 @@ impl<'a> Finder<'a> {
                 ),
             };
             let name = unique_name(raw, &mut used);
+            let placement_guessed = h.guessed && h.placement.is_ok();
             let (placement, placement_note) = match h.placement {
                 Ok(m) => (m, None),
                 Err(why) => (DMat4::IDENTITY, Some(placement_note(&name, &why))),
@@ -978,6 +1006,7 @@ impl<'a> Finder<'a> {
                 context,
                 placement,
                 placement_note,
+                placement_guessed,
             });
         }
         Ok(out)
@@ -1027,7 +1056,7 @@ impl Walk<'_> {
     }
 
     /// Körper der Gruppe `g` mit der Lage `m`.
-    fn emit(&mut self, g: usize, m: &Placed) -> Result<(), StepReadError> {
+    fn emit(&mut self, g: usize, m: &Placed, guessed: bool) -> Result<(), StepReadError> {
         self.reached[g] = true;
         let bodies = self.bodies;
         for (r, items) in &bodies[g] {
@@ -1035,14 +1064,22 @@ impl Walk<'_> {
                 rep: Some(*r),
                 items: items.clone(),
                 placement: m.clone(),
+                guessed,
             })?;
         }
         Ok(())
     }
 
-    /// Besucht `g` in der Tiefe `depth` (Zahl der Vorkommen ab der Wurzel) mit der Lage `m`.
-    fn visit(&mut self, g: usize, m: Placed, depth: usize) -> Result<(), StepReadError> {
-        self.emit(g, &m)?;
+    /// Besucht `g` in der Tiefe `depth` (Zahl der Vorkommen ab der Wurzel) mit der Lage `m`;
+    /// `guessed`: auf dem Weg wurde eine Richtung angenommen.
+    fn visit(
+        &mut self,
+        g: usize,
+        m: Placed,
+        guessed: bool,
+        depth: usize,
+    ) -> Result<(), StepReadError> {
+        self.emit(g, &m, guessed)?;
         let children = self.children;
         for e in &children[g] {
             if self.cyclic[e.child] || self.count[e.child] == 0 {
@@ -1056,7 +1093,7 @@ impl Walk<'_> {
                 (Ok(a), Ok(t)) => Ok(*a * *t),
                 (Err(r), _) | (Ok(_), Err(r)) => Err(r.clone()),
             };
-            self.visit(e.child, next, depth + 1)?;
+            self.visit(e.child, next, guessed || e.guessed, depth + 1)?;
         }
         Ok(())
     }
@@ -1067,7 +1104,7 @@ impl Walk<'_> {
         let mut todo = vec![g];
         let why: Placed = Err(why.into());
         while let Some(v) = todo.pop() {
-            self.emit(v, &why)?;
+            self.emit(v, &why, false)?;
             for e in &self.children[v] {
                 if !self.cyclic[e.child] && seen.insert(e.child) {
                     todo.push(e.child);

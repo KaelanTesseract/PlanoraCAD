@@ -12,18 +12,32 @@
 //! mit [`read_normal_body`] wieder und liefert Text **und** diesen gelesenen Körper. Weil die
 //! Sitzung genau den Körper benutzt, den auch das Laden der Projektdatei aus dem Text baut, ist
 //! Sitzung = Neuladen (gleiche Flächen, Marken „STEP-Fläche n“, Ecken und Kantenparameter).
+//! Dass ein zweites Normalisieren denselben Text gibt, ist in den Tests so (auch weit vom
+//! Ursprung), aber nicht allgemein bewiesen; siehe [`normalize`]. Scheitert das Normalisieren
+//! eines gelesenen Körpers, steht der Grund ohne „Zeile n“ da (die Zeile gehörte zu unserem
+//! eigenen Text).
 //!
 //! **Freie Volumen-Einträge** (in keiner Darstellung) haben keinen eigenen Kontext. Sie bekommen
-//! die Einheiten der Datei, wenn alle Kontexte mit Längeneinheit in Länge und Winkel
-//! übereinstimmen; nennt kein Kontext eine Längeneinheit, gelten Millimeter (als unbekannt
-//! gemeldet); widersprechen sich die Kontexte, ist die Einheit unklar und der Körper wird
-//! ausgelassen – nie still Millimeter in einer Zoll-Datei.
+//! die Einheiten der Datei: Jeder Kontext mit Längeneinheit wird zuerst auf die gewählte Einheit
+//! umgestellt, dann müssen alle in Länge und Winkel übereinstimmen (Genauigkeit: die gröbste);
+//! nennt kein Kontext eine Längeneinheit, gelten Millimeter ([`UnitState::Missing`]);
+//! widersprechen sich die Kontexte, ist die Einheit unklar ([`UnitState::Unclear`]) und der
+//! Körper wird ausgelassen – nie still Millimeter in einer Zoll-Datei.
+//!
+//! **Lagen:** Lage-Meldungen aus Aufgabe 8 und, wo die Richtung einer Beziehung ohne Vorkommen
+//! angenommen wurde, [`guessed_note`]; bei leerem Namen mit „STEP-Körper“, die App bildet sie mit
+//! [`ImportedBody::warnings_named`] neu.
 //!
 //! **Fortschritt (P15):** Gesamtzahl = Summe der Flächen aller Körper innerhalb der
 //! Flächengrenze (vorab über die Schalen gezählt, [`count_faces`]); je Fläche ein Schritt, auch
 //! für Körper, die scheitern; Körper über der Grenze zählen nicht. Am Ende steht der Anteil auf 1.
+//! `Progress` hat keinen Rücksetzer: Der Aufrufer gibt jedem Aufruf einen **frischen**
+//! `Progress` (sonst zählt der Anteil die alten Schritte mit). Abbruch wird beim Lesen je Fläche,
+//! zwischen den Stufen des Aufbaus und zwischen den Runden des Normalisierens geprüft.
 
-use crate::read::assembly::{FoundBody, find_bodies, placement_note, unsupported_kinds};
+use crate::read::assembly::{
+    FoundBody, find_bodies, guessed_note, placement_note, unsupported_kinds,
+};
 use crate::read::error::{ReadLimits, StepReadError};
 use crate::read::geom::Skip;
 use crate::read::index::{StepFile, StepHeader};
@@ -79,6 +93,9 @@ pub struct ImportedBody {
     pub warnings: Vec<String>,
     /// Grund der Lage-Meldung (für [`ImportedBody::warnings_named`]).
     pub placement_reason: Option<String>,
+    /// Die Lage folgt aus einer angenommenen Richtung der Baugruppe (Meldung
+    /// [`guessed_note`] zuletzt in `warnings`).
+    pub placement_guessed: bool,
     /// Der normalisierte Körper oder der Grund des Auslassens.
     pub outcome: Result<NormalBody, String>,
 }
@@ -88,11 +105,26 @@ impl ImportedBody {
     /// hier den Namen, den sie vergibt („STEP-Körper n“).
     pub fn warnings_named(&self, shown: &str) -> Vec<String> {
         let mut w = self.warnings.clone();
-        if let (Some(reason), Some(last)) = (&self.placement_reason, w.last_mut()) {
-            *last = placement_note(shown, reason);
+        if let Some(last) = w.last_mut() {
+            if let Some(reason) = &self.placement_reason {
+                *last = placement_note(shown, reason);
+            } else if self.placement_guessed {
+                *last = guessed_note(shown);
+            }
         }
         w
     }
+}
+
+/// Was die Datei über ihre Längeneinheit sagt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitState {
+    /// Die Datei nennt eine Längeneinheit.
+    Named,
+    /// Die Datei nennt keine (angenommen: Millimeter).
+    Missing,
+    /// Die Datei nennt verschiedene, die nicht zueinander passen.
+    Unclear,
 }
 
 /// Ergebnis der Prüfung einer Datei.
@@ -101,8 +133,12 @@ pub struct StepImport {
     pub header: StepHeader,
     /// Längeneinheit, mit der gerechnet wurde (die gewählte oder die der Datei).
     pub unit: LengthUnit,
-    /// Nennt die Datei eine Längeneinheit? (`false`: angenommen werden Millimeter.)
+    /// Nennt die Datei eine Längeneinheit eindeutig? (`unit_state == Named`, auch wenn eine
+    /// Einheit gewählt ist.)
     pub unit_known: bool,
+    /// Was die Datei über ihre Längeneinheit sagt (für den Hinweis im Fenster: keine oder
+    /// widersprüchliche).
+    pub unit_state: UnitState,
     pub bodies: Vec<ImportedBody>,
     /// Meldungen zur ganzen Datei: Körperarten, die nicht übernommen werden.
     pub messages: Vec<String>,
@@ -126,26 +162,33 @@ impl FileUnits<'_> {
     fn of(&self, context: Option<u64>) -> Result<Units, StepReadError> {
         match context {
             Some(c) => context_units(self.file, c).map(|u| self.apply(u)),
-            None => free_units(self.file, self.unit_override.is_some()).map(|u| self.apply(u)),
+            None => free_units(self.file, self.unit_override),
         }
     }
 }
 
-/// Einheiten für Einträge ohne Kontext: Alle Kontexte, die eine Längeneinheit nennen, müssen in
-/// Länge und Winkel übereinstimmen (`length_free`: die Länge wird ohnehin ersetzt, nur der
-/// Winkel zählt). Genauigkeit: die gröbste der Kontexte (fehlt sie in einem, gilt sie als
-/// unbekannt). Nennt keiner eine Längeneinheit: Millimeter, unbekannt.
-fn free_units(file: &StepFile, length_free: bool) -> Result<Units, StepReadError> {
+/// Einheiten für Einträge ohne Kontext (schon mit der gewählten Längeneinheit `chosen`): Jeder
+/// Kontext, der eine Längeneinheit nennt, wird zuerst auf die gewählte Einheit umgestellt (seine
+/// Genauigkeit wird dabei mit umgerechnet, P11); danach müssen alle in Länge und Winkel
+/// übereinstimmen, sonst ist die Einheit unklar. Genauigkeit: die gröbste (in mm, also
+/// unabhängig von der Reihenfolge); fehlt sie in einem, gilt sie als unbekannt (grob). Nennt
+/// keiner eine Längeneinheit: Millimeter, unbekannt (bzw. die gewählte Einheit).
+fn free_units(file: &StepFile, chosen: Option<LengthUnit>) -> Result<Units, StepReadError> {
+    let apply = |u: Units| match chosen {
+        Some(l) => u.with_length(l),
+        None => u,
+    };
     let mut found: Option<Units> = None;
     for &c in file.ids_of("GEOMETRIC_REPRESENTATION_CONTEXT") {
         let u = context_units(file, c)?;
         if !u.length_known {
             continue;
         }
+        let u = apply(u);
         found = Some(match found {
             None => u,
             Some(f) => {
-                if f.angle_rad != u.angle_rad || (!length_free && f.length != u.length) {
+                if f.angle_rad != u.angle_rad || f.length != u.length {
                     return Err(StepReadError::UnclearUnits);
                 }
                 let uncertainty_mm = match (f.uncertainty_mm, u.uncertainty_mm) {
@@ -161,15 +204,18 @@ fn free_units(file: &StepFile, length_free: bool) -> Result<Units, StepReadError
             }
         });
     }
-    Ok(found.unwrap_or(Units {
-        length_known: false,
-        ..Units::MM
+    Ok(found.unwrap_or_else(|| {
+        apply(Units {
+            length_known: false,
+            ..Units::MM
+        })
     }))
 }
 
 /// Liest und prüft alle Körper der Datei (Spec §4b.3: unlesbare oder ungültige Körper werden
 /// mit Grund ausgelassen, die übrigen übernommen). Fehler der ganzen Datei (keine Körper, mehr
-/// als 50, unlesbare Baugruppe) und Abbrechen sind `Err`.
+/// als 50, unlesbare Baugruppe) und Abbrechen sind `Err`. `progress` muss frisch sein (je
+/// Aufruf ein neuer `Progress`; `set_total` setzt die schon gezählten Schritte nicht zurück).
 pub fn import_bodies(
     file: &StepFile,
     opts: &ImportOptions,
@@ -210,29 +256,30 @@ pub fn import_bodies(
     if total == 0 {
         progress.advance(1);
     }
-    let (unit, unit_known) = file_unit(&units, &found);
+    let (unit, unit_state) = file_unit(&units, &found);
     Ok(StepImport {
         header: file.header().clone(),
         unit: opts.unit_override.unwrap_or(unit),
-        unit_known,
+        unit_known: unit_state == UnitState::Named,
+        unit_state,
         bodies,
         messages: unsupported_kinds(file),
     })
 }
 
-/// Längeneinheit der Datei (ohne die Wahl): die des ersten lesbaren Kontexts eines Körpers,
-/// sonst die der ganzen Datei, sonst Millimeter (unbekannt).
-fn file_unit(units: &FileUnits, found: &[FoundBody]) -> (LengthUnit, bool) {
+/// Längeneinheit der Datei (ohne die Wahl) und was die Datei darüber sagt: die des ersten
+/// Körpers, dessen Einheiten sich bestimmen lassen; lassen sie sich für keinen bestimmen
+/// (verschiedene Einheiten, unlesbarer Kontext), ist sie unklar.
+fn file_unit(units: &FileUnits, found: &[FoundBody]) -> (LengthUnit, UnitState) {
     let plain = FileUnits {
         file: units.file,
         unit_override: None,
     };
-    found
-        .iter()
-        .find_map(|b| plain.of(b.context).ok())
-        .map_or((LengthUnit::Millimeter, false), |u| {
-            (u.length, u.length_known)
-        })
+    match found.iter().find_map(|b| plain.of(b.context).ok()) {
+        Some(u) if u.length_known => (u.length, UnitState::Named),
+        Some(u) => (u.length, UnitState::Missing),
+        None => (LengthUnit::Millimeter, UnitState::Unclear),
+    }
 }
 
 /// Ein Körper: Einheiten, Aufbau, Lage, Normalisieren. `Err` nur beim Abbrechen.
@@ -260,11 +307,13 @@ fn import_one(
         tolerance_mm: DEFAULT_FILE_TOL_MM,
         warnings: Vec::new(),
         placement_reason: placement_reason.clone(),
+        placement_guessed: b.placement_guessed,
         outcome: Err(String::new()),
     };
     let note = match (&placement_reason, &b.placement_note) {
         (Some(reason), _) => Some(placement_note(shown, reason)),
-        (None, note) => note.clone(),
+        (None, Some(note)) => Some(note.clone()),
+        (None, None) => b.placement_guessed.then(|| guessed_note(shown)),
     };
     let u = match units.of(b.context) {
         Ok(u) => u,
@@ -293,7 +342,13 @@ fn import_one(
         Ok(built) => {
             body.warnings.extend(built.warnings);
             match built.solid.transformed(&b.placement) {
-                Ok(placed) => normalize(&placed, &b.name),
+                Ok(placed) => {
+                    match normalize_until(&placed, &b.name, &|| progress.is_cancelled()) {
+                        Ok(n) => Ok(n),
+                        Err(Stop::Cancelled) => return Err(StepReadError::Cancelled),
+                        Err(Stop::Failed(m)) => Err(normal_failure(&m)),
+                    }
+                }
                 Err(_) => Err("Der Körper lässt sich nicht an seine Lage bringen.".into()),
             }
         }
@@ -381,31 +436,104 @@ fn write_normal(solid: &Solid, name: &str) -> Result<String, String> {
     String::from_utf8(out).map_err(|_| "Der Schreiber lieferte keinen Text.".to_string())
 }
 
-/// Normalisiert einen Körper (P5): schreibt ihn mit festem Zeitstempel und Dateinamen, liest
-/// den Text wieder ([`read_normal_body`]) und liefert Text und gelesenen Körper. Weil Lesen und
-/// Schreiben in den letzten Stellen runden können (etwa der Bezugsort eines Kegels in der Mitte
-/// seines Bereichs), wird der gelesene Körper noch einmal geschrieben, bis der Text gleich
-/// bleibt (höchstens [`MAX_NORMAL_ROUNDS`] Lesungen); meist kostet das nur ein weiteres
-/// Schreiben. Damit ist Normalisieren ruhend: `normalize(&n.solid).text == n.text`. Text und
-/// Körper gehören immer zusammen (`read_normal_body(&n.text)` ergibt `n.solid`). Lehnt der
-/// Schreiber ab (etwa ein Torus mit kleinem Radius ≥ großem), ist sein Grund der Fehler.
-pub fn normalize(solid: &Solid, name: &str) -> Result<NormalBody, String> {
-    let mut text = write_normal(solid, name)?;
-    let mut solid = read_normal_body(&text)?;
+/// Warum das Normalisieren aufhörte.
+#[derive(Debug, PartialEq)]
+enum Stop {
+    Cancelled,
+    Failed(String),
+}
+
+/// Grund für einen Körper, der sich lesen, aber nicht normalisieren ließ: ohne „Zeile n:“
+/// (die Zeile gehörte zu unserem eigenen Text, nicht zur Datei des Nutzers).
+fn normal_failure(reason: &str) -> String {
+    format!(
+        "Der Körper lässt sich nicht in die Form des Programms umschreiben: {}",
+        without_line(reason)
+    )
+}
+
+/// `reason` ohne vorangestelltes „Zeile n: “.
+fn without_line(reason: &str) -> &str {
+    reason
+        .strip_prefix("Zeile ")
+        .and_then(|rest| rest.split_once(": "))
+        .filter(|(n, _)| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+        .map_or(reason, |(_, tail)| tail)
+}
+
+/// Schreibt `solid` erneut, bis der Text gleich bleibt (höchstens [`MAX_NORMAL_ROUNDS`]
+/// Lesungen insgesamt, die erste macht der Aufrufer). Scheitert ein späteres Schreiben oder
+/// Lesen, bleibt das letzte zusammengehörige Paar. `cancelled` wird vor jedem Schreiben und
+/// Lesen gefragt.
+fn settle<S>(
+    mut text: String,
+    mut solid: S,
+    write: impl Fn(&S) -> Result<String, String>,
+    read: impl Fn(&str) -> Result<S, String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(String, S), Stop> {
     for _ in 1..MAX_NORMAL_ROUNDS {
-        let Ok(again) = write_normal(&solid, name) else {
+        if cancelled() {
+            return Err(Stop::Cancelled);
+        }
+        let Ok(again) = write(&solid) else {
             break;
         };
         if again == text {
             break;
         }
-        let Ok(next) = read_normal_body(&again) else {
+        if cancelled() {
+            return Err(Stop::Cancelled);
+        }
+        let Ok(next) = read(&again) else {
             break;
         };
         text = again;
         solid = next;
     }
+    Ok((text, solid))
+}
+
+/// [`normalize`] mit Abbruchfrage zwischen den Schritten.
+fn normalize_until(
+    solid: &Solid,
+    name: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<NormalBody, Stop> {
+    if cancelled() {
+        return Err(Stop::Cancelled);
+    }
+    let text = write_normal(solid, name).map_err(Stop::Failed)?;
+    if cancelled() {
+        return Err(Stop::Cancelled);
+    }
+    let first = read_normal_body(&text).map_err(Stop::Failed)?;
+    let (text, solid) = settle(
+        text,
+        first,
+        |s| write_normal(s, name),
+        read_normal_body,
+        cancelled,
+    )?;
     Ok(NormalBody { text, solid })
+}
+
+/// Normalisiert einen Körper (P5): schreibt ihn mit festem Zeitstempel und Dateinamen, liest
+/// den Text wieder ([`read_normal_body`]) und liefert Text und gelesenen Körper; Text und
+/// Körper gehören immer zusammen (`read_normal_body(&n.text)` ergibt `n.solid`, Sitzung =
+/// Neuladen). Die erste Lesung kann den Körper in den letzten Stellen ändern (etwa Ecken, die
+/// der Leser auf eine Kegelspitze oder einen Pol zieht); darum wird der gelesene Körper noch
+/// einmal geschrieben und nur dann noch einmal gelesen, wenn der Text sich dabei ändert
+/// (höchstens [`MAX_NORMAL_ROUNDS`] Lesungen). Ein gelesener Körper ist für den Schreiber ein
+/// Fixpunkt (Kegel und Zylinder behalten ihren Bezugsort), so dass in allen Tests nach
+/// höchstens zwei Lesungen `normalize(&n.solid).text == n.text` gilt; garantiert ist das nicht,
+/// die Schleife bleibt als Sicherheitsnetz. Lehnt der Schreiber ab, ist sein Grund der Fehler
+/// (bei Körpern aus unserem Leser bisher nicht beobachtet).
+pub fn normalize(solid: &Solid, name: &str) -> Result<NormalBody, String> {
+    normalize_until(solid, name, &|| false).map_err(|stop| match stop {
+        Stop::Failed(m) => m,
+        Stop::Cancelled => "Abgebrochen".into(),
+    })
 }
 
 /// Billige Prüfung eines gespeicherten Textes (P14): nur ASCII, beginnt mit „ISO-10303-21;“,
@@ -433,7 +561,7 @@ pub fn read_normal_body(text: &str) -> Result<Solid, String> {
         .map_err(|e| e.to_string())?;
     let units_of = |c: Option<u64>| match c {
         Some(c) => context_units(&file, c),
-        None => free_units(&file, false),
+        None => free_units(&file, None),
     };
     let found = find_bodies(&file, &units_of).map_err(|e| e.to_string())?;
     let [body] = found.as_slice() else {
@@ -460,4 +588,128 @@ pub fn read_normal_body(text: &str) -> Result<Solid, String> {
     )
     .map_err(|Skip(m)| m)?;
     Ok(built.solid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// Lauf von [`settle`] mit Zahlen als „Körper“; Abbruch nach `cancel_after` Fragen. Liefert
+    /// das Ergebnis und die Zahl der Fragen.
+    fn run(
+        start: i32,
+        write: impl Fn(&i32) -> Result<String, String>,
+        read: impl Fn(&str) -> Result<i32, String>,
+        cancel_after: usize,
+    ) -> (Result<(String, i32), Stop>, usize) {
+        let asked = Cell::new(0);
+        let cancelled = || {
+            asked.set(asked.get() + 1);
+            asked.get() > cancel_after
+        };
+        let r = settle(start.to_string(), start, write, read, &cancelled);
+        (r, asked.get())
+    }
+
+    fn parse(t: &str) -> Result<i32, String> {
+        t.parse().map_err(|_| String::from("keine Zahl"))
+    }
+
+    #[test]
+    fn settle_stops_at_the_fixed_point() {
+        let reads = Cell::new(0);
+        // Schreiben zieht jede Zahl um eins hoch, höchstens auf 3: Fixpunkt nach 2 Lesungen.
+        let (r, _) = run(
+            1,
+            |s| Ok((s + 1).min(3).to_string()),
+            |t| {
+                reads.set(reads.get() + 1);
+                parse(t)
+            },
+            usize::MAX,
+        );
+        assert_eq!(r, Ok(("3".to_string(), 3)));
+        assert_eq!(reads.get(), 2);
+    }
+
+    #[test]
+    fn settle_gives_up_after_the_last_round() {
+        let reads = Cell::new(0);
+        let (r, _) = run(
+            0,
+            |s| Ok((s + 1).to_string()),
+            |t| {
+                reads.set(reads.get() + 1);
+                parse(t)
+            },
+            usize::MAX,
+        );
+        // Insgesamt höchstens MAX_NORMAL_ROUNDS Lesungen (die erste macht der Aufrufer).
+        assert_eq!(reads.get(), MAX_NORMAL_ROUNDS - 1);
+        let (text, solid) = r.expect("Paar");
+        assert_eq!(text, solid.to_string(), "Text und Körper gehören zusammen");
+    }
+
+    #[test]
+    fn settle_keeps_the_last_pair_when_a_round_fails() {
+        // Lesen scheitert ab der zweiten Runde.
+        let (r, _) = run(
+            0,
+            |s| Ok((s + 1).to_string()),
+            |t| match t {
+                "1" => Ok(1),
+                _ => Err("kaputt".into()),
+            },
+            usize::MAX,
+        );
+        assert_eq!(r, Ok(("1".to_string(), 1)));
+        // Schreiben scheitert gleich.
+        let (r, _) = run(5, |_| Err("nein".into()), |_| Ok(9), usize::MAX);
+        assert_eq!(r, Ok(("5".to_string(), 5)));
+    }
+
+    #[test]
+    fn settle_asks_for_cancel_before_writing_and_reading() {
+        let (r, asked) = run(0, |s| Ok((s + 1).to_string()), parse, 0);
+        assert_eq!(r, Err(Stop::Cancelled));
+        assert_eq!(asked, 1, "vor dem Schreiben gefragt");
+        let (r, asked) = run(0, |s| Ok((s + 1).to_string()), parse, 1);
+        assert_eq!(r, Err(Stop::Cancelled));
+        assert_eq!(asked, 2, "vor dem Lesen gefragt");
+    }
+
+    #[test]
+    fn failures_of_our_own_text_show_no_line() {
+        assert_eq!(
+            normal_failure(
+                "Zeile 121: Der Parameterbereich einer Fläche reicht über mehr als einen Umlauf."
+            ),
+            "Der Körper lässt sich nicht in die Form des Programms umschreiben: Der \
+             Parameterbereich einer Fläche reicht über mehr als einen Umlauf."
+        );
+        assert_eq!(without_line("Zeile x: a"), "Zeile x: a");
+        assert_eq!(without_line("Zeile : a"), "Zeile : a");
+        assert_eq!(
+            without_line("Der Körper ist ungültig: x"),
+            "Der Körper ist ungültig: x"
+        );
+    }
+
+    #[test]
+    fn writer_reasons_end_with_a_full_stop() {
+        let e = StepError::InvalidBody {
+            name: "K".into(),
+            reason: "Eine Kegelfläche liegt jenseits ihrer Spitze".into(),
+        };
+        assert_eq!(
+            writer_reason(e),
+            "Eine Kegelfläche liegt jenseits ihrer Spitze."
+        );
+        assert_eq!(
+            writer_reason(StepError::NotFinite),
+            "Eine Zahl ist zu groß oder keine gültige Zahl."
+        );
+        assert_eq!(sentence("Schon."), "Schon.");
+    }
 }

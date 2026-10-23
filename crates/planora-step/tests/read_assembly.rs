@@ -1020,6 +1020,10 @@ fn relationship_without_occurrence() {
         found.iter().all(|b| b.placement_note.is_none()),
         "{found:?}"
     );
+    // Ohne Vorkommen ist die Richtung angenommen (Fix-Runde 1 von Aufgabe 9, P3).
+    assert!(found.iter().all(|b| b.placement_guessed), "{found:?}");
+    let inch = bodies(&parse(&data("inch_assembly.step"))).expect("Körper");
+    assert!(inch.iter().all(|b| !b.placement_guessed));
     assert_eq!(
         found[0].placement,
         DMat4::from_translation(DVec3::new(0.0, 0.0, 5.0))

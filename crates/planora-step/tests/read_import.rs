@@ -5,17 +5,18 @@
 
 use planora_exchange::Progress;
 use planora_kernel::{AnalyticKernel, Kernel, Solid};
-use planora_math::{DMat4, DVec3};
+use planora_math::{DMat4, DVec3, Tolerance};
 use planora_step::read::geom::Resolver;
+use planora_step::read::topo::count_faces;
 use planora_step::read::units::Units;
 use planora_step::{
     ImportOptions, ImportedBody, LengthUnit, MAX_STEP_TEXT_BYTES, NORMAL_FILE_NAME, ReadLimits,
-    StepFile, StepImport, StepReadError, check_normal_header, import_bodies, normalize,
-    read_normal_body,
+    StepBody, StepFile, StepImport, StepOptions, StepReadError, UnitState, check_normal_header,
+    import_bodies, normalize, read_normal_body, write_step,
 };
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 const TORUS: &str = "Eine Torusfläche mit kleinem Radius größer oder gleich dem großen wird noch nicht unterstützt.";
 
@@ -176,26 +177,55 @@ impl Gen {
 
     /// Kontext in mm (`inch`: Zoll) mit Unsicherheit 1e-7 in dieser Einheit.
     fn context(&mut self, inch: bool) -> u64 {
-        let mm = self.add("(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.))");
-        let length = if inch {
+        self.context_with(Some(inch), Some(1e-7), false)
+    }
+
+    /// Kontext: Länge `None` (keine Längeneinheit), `Some(false)` mm, `Some(true)` Zoll;
+    /// Unsicherheit in dieser Einheit (nur mit Längeneinheit); Winkel in Grad oder Radiant.
+    fn context_with(&mut self, length: Option<bool>, unc: Option<f64>, degrees: bool) -> u64 {
+        let mut units = Vec::new();
+        let length = length.map(|inch| {
+            let mm = self.add("(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.))");
+            if inch {
+                let m = self.add(&format!(
+                    "LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),#{mm})"
+                ));
+                let d = self.add("DIMENSIONAL_EXPONENTS(1.,0.,0.,0.,0.,0.,0.)");
+                self.add(&format!(
+                    "(CONVERSION_BASED_UNIT('INCH',#{m})LENGTH_UNIT()NAMED_UNIT(#{d}))"
+                ))
+            } else {
+                mm
+            }
+        });
+        units.extend(length);
+        let rad = self.add("(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.))");
+        let angle = if degrees {
             let m = self.add(&format!(
-                "LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),#{mm})"
+                "PLANE_ANGLE_MEASURE_WITH_UNIT(PLANE_ANGLE_MEASURE(0.0174532925199433),#{rad})"
             ));
-            let d = self.add("DIMENSIONAL_EXPONENTS(1.,0.,0.,0.,0.,0.,0.)");
+            let d = self.add("DIMENSIONAL_EXPONENTS(0.,0.,0.,0.,0.,0.,0.)");
             self.add(&format!(
-                "(CONVERSION_BASED_UNIT('INCH',#{m})LENGTH_UNIT()NAMED_UNIT(#{d}))"
+                "(CONVERSION_BASED_UNIT('DEGREE',#{m})NAMED_UNIT(#{d})PLANE_ANGLE_UNIT())"
             ))
         } else {
-            mm
+            rad
         };
-        let rad = self.add("(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.))");
-        let sr = self.add("(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT())");
-        let u = self.add(&format!(
-            "UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-07),#{length},'distance_accuracy_value','')"
-        ));
+        units.push(angle);
+        units.push(self.add("(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT())"));
+        let list: Vec<String> = units.iter().map(|u| format!("#{u}")).collect();
+        let unc = match (length, unc) {
+            (Some(l), Some(v)) => {
+                let u = self.add(&format!(
+                    "UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE({v:E}),#{l},'distance_accuracy_value','')"
+                ));
+                format!("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{u}))")
+            }
+            _ => String::new(),
+        };
         self.add(&format!(
-            "(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{u}))\
-             GLOBAL_UNIT_ASSIGNED_CONTEXT((#{length},#{rad},#{sr}))REPRESENTATION_CONTEXT('',''))"
+            "(GEOMETRIC_REPRESENTATION_CONTEXT(3){unc}             GLOBAL_UNIT_ASSIGNED_CONTEXT(({}))REPRESENTATION_CONTEXT('',''))",
+            list.join(",")
         ))
     }
 
@@ -868,4 +898,415 @@ fn notes_and_messages() {
         )]
     );
     assert_eq!(m.warnings_named(&m.name), m.warnings);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix-Runde 1
+
+const UNCLEAR: &str = "Die Einheit ist unklar: Der Körper steht in keiner Darstellung, und die \
+                       Datei nennt verschiedene Einheiten.";
+const COARSE: &str = "Genauigkeit der Datei 0,001 mm: Rechnen mit diesem Körper kann scheitern.";
+
+fn chosen(l: LengthUnit) -> ImportOptions {
+    ImportOptions {
+        unit_override: Some(l),
+    }
+}
+
+/// Freier Quader in einer Datei mit den Kontexten `ctx` (Länge, Unsicherheit, Grad).
+fn free_box(ctx: &[(Option<bool>, Option<f64>, bool)]) -> String {
+    let mut g = Gen::new();
+    for &(l, u, d) in ctx {
+        g.context_with(l, u, d);
+    }
+    g.prism("Quader", &BOX, 30.0);
+    g.file()
+}
+
+fn coarse_note(tol: &str) -> String {
+    format!("Genauigkeit der Datei {tol} mm: Rechnen mit diesem Körper kann scheitern.")
+}
+
+#[test]
+fn free_solid_accuracy_follows_the_chosen_unit_in_any_order() {
+    let inch = (Some(true), Some(1e-7), false);
+    let mm = (Some(false), Some(1e-4), false);
+    for ctx in [[inch, mm], [mm, inch]] {
+        let text = free_box(&ctx);
+        // Ohne Wahl: zwei Längeneinheiten → unklar.
+        assert_eq!(err(&import(&text).bodies[0]), UNCLEAR);
+        // mm gewählt: 1e-7 mm und 1e-4 mm → gröbste 1e-4, grob mit Warnung.
+        let imp = import_with(&text, &chosen(LengthUnit::Millimeter));
+        let b = &imp.bodies[0];
+        ok(b);
+        assert_eq!(b.tolerance_mm, 1e-4, "{ctx:?}");
+        assert_eq!(b.warnings, [coarse_note("0,0001")], "{ctx:?}");
+        // Zoll gewählt: 2,54e-6 und 2,54e-3 mm → begrenzt auf 1e-3.
+        let imp = import_with(&text, &chosen(LengthUnit::Zoll));
+        assert_eq!(imp.bodies[0].tolerance_mm, 1e-3, "{ctx:?}");
+        assert_eq!(imp.bodies[0].warnings, [COARSE], "{ctx:?}");
+    }
+}
+
+#[test]
+fn free_solid_accuracy_is_the_coarsest_and_missing_counts_as_coarse() {
+    let fine = (Some(false), Some(1e-7), false);
+    let rough = (Some(false), Some(1e-4), false);
+    let none = (Some(false), None, false);
+    for ctx in [[fine, rough], [rough, fine]] {
+        let imp = import(&free_box(&ctx));
+        assert_eq!(imp.bodies[0].tolerance_mm, 1e-4, "{ctx:?}");
+        assert_eq!(imp.bodies[0].warnings, [coarse_note("0,0001")]);
+    }
+    for ctx in [[fine, none], [none, fine]] {
+        let imp = import(&free_box(&ctx));
+        assert_eq!(imp.bodies[0].tolerance_mm, 1e-3, "{ctx:?}");
+        assert_eq!(imp.bodies[0].warnings, [COARSE], "{ctx:?}");
+    }
+    let imp = import(&free_box(&[fine, fine]));
+    assert_eq!(imp.bodies[0].tolerance_mm, 1e-6);
+    assert!(imp.bodies[0].warnings.is_empty());
+}
+
+#[test]
+fn free_solid_angles_and_contexts_without_length() {
+    // Gleiche Länge, verschiedene Winkel → unklar (auch mit gewählter Länge).
+    let text = free_box(&[
+        (Some(false), Some(1e-7), false),
+        (Some(false), Some(1e-7), true),
+    ]);
+    assert_eq!(err(&import(&text).bodies[0]), UNCLEAR);
+    assert_eq!(
+        err(&import_with(&text, &chosen(LengthUnit::Millimeter)).bodies[0]),
+        UNCLEAR
+    );
+    // Ein Kontext ohne Längeneinheit sagt nichts über die Länge: Zoll gilt.
+    let text = free_box(&[(None, None, false), (Some(true), Some(1e-7), false)]);
+    let imp = import(&text);
+    assert_eq!(imp.unit, LengthUnit::Zoll);
+    assert_eq!(imp.unit_state, UnitState::Named);
+    let (_, hi) = imp.bodies[0].bounds.expect("Hülle");
+    near(hi, DVec3::new(254.0, 508.0, 762.0), 1e-9, "Zoll");
+    // Nur Kontexte ohne Längeneinheit: Millimeter, als fehlend gemeldet.
+    let text = free_box(&[(None, None, false)]);
+    let imp = import(&text);
+    assert_eq!(imp.unit_state, UnitState::Missing);
+    assert!(!imp.unit_known);
+}
+
+#[test]
+fn unit_state_tells_missing_from_unclear() {
+    let named = free_box(&[(Some(true), Some(1e-7), false)]);
+    let missing = free_box(&[]);
+    let unclear = free_box(&[
+        (Some(false), Some(1e-7), false),
+        (Some(true), Some(1e-7), false),
+    ]);
+    for opts in [
+        ImportOptions::default(),
+        chosen(LengthUnit::Millimeter),
+        chosen(LengthUnit::Meter),
+    ] {
+        let imp = import_with(&named, &opts);
+        assert_eq!((imp.unit_state, imp.unit_known), (UnitState::Named, true));
+        let imp = import_with(&missing, &opts);
+        assert_eq!(
+            (imp.unit_state, imp.unit_known),
+            (UnitState::Missing, false)
+        );
+        let imp = import_with(&unclear, &opts);
+        assert_eq!(
+            (imp.unit_state, imp.unit_known),
+            (UnitState::Unclear, false)
+        );
+        assert_eq!(
+            imp.unit,
+            opts.unit_override.unwrap_or(LengthUnit::Millimeter)
+        );
+    }
+    assert_eq!(
+        import_with(&named, &chosen(LengthUnit::Meter)).unit,
+        LengthUnit::Meter
+    );
+    assert_eq!(import(&named).unit, LengthUnit::Zoll);
+}
+
+#[test]
+fn unit_error_keeps_the_placement_note_and_counts() {
+    // Unklare Einheit und eine unlesbare Darstellung: Grund und Lage-Meldung, Fortschritt voll.
+    let mut g = Gen::new();
+    let ctx = g.context(false);
+    g.context(true);
+    g.prism("Quader", &BOX, 30.0);
+    g.add(&format!("SHAPE_REPRESENTATION('',5,#{ctx})"));
+    let p = Progress::new();
+    let imp = import_bodies(&parse(&g.file()), &ImportOptions::default(), &p).expect("Import");
+    let b = &imp.bodies[0];
+    assert_eq!(err(b), UNCLEAR);
+    assert_eq!(b.warnings.len(), 1, "{:?}", b.warnings);
+    assert!(
+        b.warnings[0].starts_with("Die Lage von „Quader“"),
+        "{:?}",
+        b.warnings
+    );
+    assert_eq!(p.fraction(), 1.0);
+}
+
+#[test]
+fn progress_ends_at_one_when_nothing_counts() {
+    // Jede Schale unlesbar: Gesamtzahl 0, der Anteil steht am Ende trotzdem auf 1.
+    let mut g = Gen::new();
+    g.context(false);
+    g.prism("Quader", &BOX, 30.0);
+    let text = g.file().replace("CLOSED_SHELL(", "OPEN_SHELL(");
+    let p = Progress::new();
+    let imp = import_bodies(&parse(&text), &ImportOptions::default(), &p).expect("Import");
+    assert!(imp.bodies[0].outcome.is_err());
+    assert_eq!(imp.bodies[0].faces, 0);
+    assert_eq!(p.fraction(), 1.0);
+}
+
+/// Zahl der gezählten Schritte nach dem Import (über eine neue Gesamtzahl abgelesen).
+fn steps(p: &Progress) -> f64 {
+    p.set_total(1_000_000);
+    (f64::from(p.fraction()) * 1e6).round()
+}
+
+#[test]
+fn progress_counts_voids_and_bodies_exactly_at_the_limit() {
+    let text = data("void_box.step");
+    let file = parse(&text);
+    let p = Progress::new();
+    let imp = import_bodies(&file, &ImportOptions::default(), &p).expect("Import");
+    ok(&imp.bodies[0]);
+    assert_eq!(p.fraction(), 1.0);
+    let faces = file.ids_of("ADVANCED_FACE").len();
+    assert!(faces > 6, "Hohlraum fehlt");
+    assert_eq!(steps(&p), faces as f64);
+    // Treppe mit genau 11 Flächen bei der Grenze 11: übernommen und gezählt.
+    let limits = ReadLimits {
+        max_faces: 11,
+        ..ReadLimits::DEFAULT
+    };
+    let p = Progress::new();
+    let imp = import_bodies(
+        &parse_with(&box_and_stairs(3), &limits),
+        &ImportOptions::default(),
+        &p,
+    )
+    .expect("Import");
+    assert_eq!(ok(&imp.bodies[1]).solid.faces.len(), 11);
+    assert_eq!(steps(&p), 17.0);
+    // Nur die Treppe an der Grenze: Sie zählt in der Gesamtzahl (sonst käme der Ersatzschritt
+    // für „nichts zu zählen“ dazu).
+    let mut g = Gen::new();
+    g.context(false);
+    g.prism("Treppe", &stairs(3), 1.0);
+    let p = Progress::new();
+    let imp = import_bodies(
+        &parse_with(&g.file(), &limits),
+        &ImportOptions::default(),
+        &p,
+    )
+    .expect("Import");
+    ok(&imp.bodies[0]);
+    assert_eq!(steps(&p), 11.0);
+    // Die Zählung vorab schließt Hohlräume ein.
+    let mut items = file.ids_of("BREP_WITH_VOIDS").to_vec();
+    assert!(!items.is_empty());
+    items.extend_from_slice(file.ids_of("MANIFOLD_SOLID_BREP"));
+    assert_eq!(
+        count_faces(&file, &items).expect("zählt"),
+        file.ids_of("ADVANCED_FACE").len()
+    );
+}
+
+#[test]
+fn read_normal_body_wants_unit_placement_and_millimetre() {
+    // Lage-Meldung (unlesbare Darstellung neben einem freien Körper) → abgelehnt.
+    let mut g = Gen::new();
+    let ctx = g.context(false);
+    g.prism("Quader", &BOX, 30.0);
+    g.add(&format!("SHAPE_REPRESENTATION('',5,#{ctx})"));
+    let e = read_normal_body(&g.file()).unwrap_err();
+    assert_eq!(e, "Der Körper im Text liegt nicht an der Einheitslage.");
+    // Ohne Längeneinheit → abgelehnt.
+    let mut g = Gen::new();
+    g.prism("Quader", &BOX, 30.0);
+    let e = read_normal_body(&g.file()).unwrap_err();
+    assert_eq!(e, "Der Text ist nicht in Millimeter geschrieben.");
+    // Ein freier Quader in mm geht.
+    let mut g = Gen::new();
+    g.context(false);
+    g.prism("Quader", &BOX, 30.0);
+    read_normal_body(&g.file()).expect("Quader");
+}
+
+#[test]
+fn slack_of_kept_directions_is_tight() {
+    let text = wrap(&format!(
+        "{}\n#9001=DIRECTION('',(1.0000001,0.,0.));\n#9002=DIRECTION('',(0.,0.,1.));\n\
+         #9003=DIRECTION('',(1.,0.,1.E-4));\n#9004=AXIS2_PLACEMENT_3D('',#151,#9002,#9003);\n\
+         #9005=DIRECTION('',({:?},0.,1.E-6));\n#9006=AXIS2_PLACEMENT_3D('',#151,#9002,#9005);",
+        box_data(),
+        (1.0f64 - 1e-12).sqrt()
+    ));
+    let file = parse(&text);
+    let mut res = Resolver::new(&file, Units::MM);
+    // Länge 1 + 1e-7: wird normiert.
+    assert_eq!(res.direction(9001).expect("Richtung"), DVec3::X);
+    // Bezugsrichtung um 1e-4 bzw. 1e-6 schief zur Achse: wird senkrecht gemacht.
+    for id in [9004, 9006] {
+        let f = res.placement(id).expect("Lage");
+        assert!(f.x.dot(f.z).abs() <= 1e-15, "{id}: {}", f.x.dot(f.z));
+        assert!((f.x.length() - 1.0).abs() <= 1e-15);
+    }
+}
+
+#[test]
+fn cancel_while_the_last_body_is_finished() {
+    // Abbruch, sobald alle Flächen gelesen sind (der letzte Körper wird noch gebaut und
+    // normalisiert): kein Ergebnis.
+    let text = box_and_stairs(1500);
+    let file = parse(&text);
+    let p = Progress::new();
+    let start = Instant::now();
+    let res = std::thread::scope(|s| {
+        s.spawn(|| {
+            let until = Instant::now() + Duration::from_secs(120);
+            while p.fraction() < 1.0 && Instant::now() < until {
+                std::thread::yield_now();
+            }
+            p.cancel();
+        });
+        import_bodies(&file, &ImportOptions::default(), &p)
+    });
+    assert_eq!(res.unwrap_err(), StepReadError::Cancelled);
+    assert!(
+        start.elapsed() < Duration::from_secs(60),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
+/// Kleiner Zufallsgenerator (fester Startwert).
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    fn range(&mut self, a: f64, b: f64) -> f64 {
+        a + (b - a) * self.next()
+    }
+}
+
+/// Text des Schreibers mit den Einstellungen des Normalisierens (ohne Wiederholung).
+fn normal_text(solid: &Solid) -> String {
+    let opts = StepOptions {
+        file_name: NORMAL_FILE_NAME.to_string(),
+        time: UNIX_EPOCH,
+        tolerance: Tolerance::default(),
+    };
+    let mut out = Vec::new();
+    write_step(
+        &[StepBody {
+            name: "K".into(),
+            solid,
+        }],
+        &opts,
+        &mut out,
+        &Progress::new(),
+    )
+    .expect("schreibt");
+    String::from_utf8(out).expect("ASCII")
+}
+
+#[test]
+fn cones_and_cylinders_far_away_are_stable_after_one_round() {
+    let k = AnalyticKernel::default();
+    let shapes = [
+        k.make_cone(6.0, 9.0).unwrap(),
+        k.make_cylinder(4.0, 7.0).unwrap(),
+    ];
+    let mut rng = Lcg(20_261_023);
+    let (mut checked, mut refused) = (0, 0);
+    for dist in [1_000.0, 10_000.0] {
+        for _ in 0..20 {
+            let axis = DVec3::new(
+                rng.range(-1.0, 1.0),
+                rng.range(-1.0, 1.0),
+                rng.range(-1.0, 1.0),
+            )
+            .normalize();
+            let at = DVec3::new(
+                rng.range(-dist, dist),
+                rng.range(-dist, dist),
+                rng.range(-dist, dist),
+            );
+            let pose = DMat4::from_translation(at)
+                * DMat4::from_axis_angle(axis, rng.range(0.0, std::f64::consts::TAU));
+            for shape in &shapes {
+                let solid = k.transform(shape, &pose).expect("Lage");
+                // Ein gelesener Körper ist ein Fixpunkt von Schreiben → Lesen → Schreiben (ohne
+                // Wiederholungsschleife). Die erste Lesung darf Ecken noch auf die Spitze ziehen.
+                let Ok(first) = read_normal_body(&normal_text(&solid)) else {
+                    refused += 1;
+                    continue;
+                };
+                let text = normal_text(&first);
+                let read = read_normal_body(&text).expect("eigener Text liest");
+                assert_eq!(normal_text(&read), text, "Abstand {dist}");
+                // Normalisieren und noch einmal: nie abgelehnt, gleicher Text.
+                let n = normalize(&solid, "K").expect("normalisiert");
+                let again = normalize(&n.solid, "K").expect("nie abgelehnt");
+                assert_eq!(again.text, n.text);
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked >= 70, "geprüft {checked}, abgelehnt {refused}");
+}
+
+#[test]
+fn guessed_assembly_direction_is_reported() {
+    // Ohne Vorkommen (CDSR) ist die Richtung einer Beziehung mit Transformation angenommen:
+    // Keine der beiden Darstellungen gehört zu einem Produkt → Eltern ist `rep_2` (Halter).
+    let one = box_data().replace("#3=SHAPE_DEFINITION_REPRESENTATION(#4,#10);", "");
+    assert!(!one.contains("#3="));
+    let text = wrap(&format!(
+        "{one}\n#9000=SHAPE_REPRESENTATION('Halter',(#9001),#105);\n\
+         #9001=AXIS2_PLACEMENT_3D('',#9002,#301,#302);\n\
+         #9002=CARTESIAN_POINT('',(0.,0.,50.));\n\
+         #9003=(REPRESENTATION_RELATIONSHIP('','',#10,#9000)\
+         REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#9004)\
+         SHAPE_REPRESENTATION_RELATIONSHIP());\n\
+         #9004=ITEM_DEFINED_TRANSFORMATION('','',#11,#9001);"
+    ));
+    let imp = import(&text);
+    let b = &imp.bodies[0];
+    ok(b);
+    // Die angenommene Lage ist angewandt: um 50 mm nach oben.
+    let (lo, hi) = b.bounds.expect("Hülle");
+    near(lo, DVec3::new(0.0, 0.0, 50.0), 1e-9, "unten");
+    near(hi, DVec3::new(10.0, 20.0, 80.0), 1e-9, "oben");
+    let note = "Die Lage von „Würfel“ ist angenommen: Die Datei sagt nicht, welches Teil das \
+                übergeordnete ist.";
+    assert_eq!(b.warnings, [note]);
+    assert_eq!(
+        b.warnings_named("Anders"),
+        [note.replace("„Würfel“", "„Anders“")]
+    );
+    // Mit Vorkommen (inch_assembly): keine solche Meldung.
+    assert!(
+        import(&data("inch_assembly.step"))
+            .bodies
+            .iter()
+            .all(|b| b.warnings.is_empty())
+    );
 }
