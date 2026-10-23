@@ -987,7 +987,12 @@ impl eframe::App for PlanoraApp {
 
         self.ws.exchange_dir = exchange_dir;
         // Geänderte Favoriten gleich speichern (ein Fehler beim Schreiben ist nicht schlimm).
-        if self.ws.take_places(places) {
+        // Eine unlesbare Konfigurationsdatei bleibt stehen: sie könnte noch die Wurzel enthalten.
+        if self.ws.take_places(places)
+            && planora_project::config::Config::safe_to_overwrite(
+                &planora_project::config::Config::config_path(),
+            )
+        {
             self.ws.persist_config();
         }
         self.ws.refresh_prompts();

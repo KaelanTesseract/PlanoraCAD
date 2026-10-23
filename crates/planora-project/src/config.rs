@@ -57,6 +57,15 @@ impl Config {
             .unwrap_or_default()
     }
 
+    /// Darf `path` überschrieben werden, ohne etwas zu verlieren? Ja, wenn es die Datei nicht
+    /// gibt oder sie sich lesen lässt (eine unlesbare Datei könnte noch die Wurzel enthalten).
+    pub fn safe_to_overwrite(path: &Path) -> bool {
+        match std::fs::read_to_string(path) {
+            Ok(t) => serde_json::from_str::<Config>(&t).is_ok(),
+            Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        }
+    }
+
     pub fn save_to(&self, path: &Path) -> Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| ProjectError::io(dir, &e))?;

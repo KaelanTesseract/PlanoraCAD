@@ -49,3 +49,14 @@ fn unknown_fields_of_newer_versions_are_ignored() {
     assert_eq!(c.favorites, [PathBuf::from("D:/Teile")]);
     let _ = std::fs::remove_dir_all(p.parent().unwrap());
 }
+
+#[test]
+fn an_unreadable_config_is_not_overwritten_by_favorites() {
+    let p = temp_file("kaputt");
+    assert!(Config::safe_to_overwrite(&p), "fehlende Datei");
+    Config::default().save_to(&p).unwrap();
+    assert!(Config::safe_to_overwrite(&p), "lesbare Datei");
+    std::fs::write(&p, r#"{ "root": "D:/Projekte", "#).unwrap();
+    assert!(!Config::safe_to_overwrite(&p), "unlesbare Datei bleibt");
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+}
