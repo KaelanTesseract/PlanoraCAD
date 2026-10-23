@@ -1073,6 +1073,18 @@ type ShellTriangles = Vec<Vec<[DVec3; 3]>>;
 /// Je Dreieck einer Schale (wie [`ShellTriangles`]) der Index seiner Fläche.
 type ShellTriangleFaces = Vec<Vec<usize>>;
 
+/// Grobes Netz je Schale: Volumen mit Vorzeichen, Dreiecke, Flächen und die benutzte Sehne.
+struct ShellMesh {
+    volumes: Vec<f64>,
+    triangles: ShellTriangles,
+    faces: ShellTriangleFaces,
+    chord: f64,
+}
+
+/// Sehne des groben Netzes als Anteil der Körpergröße (Hülldiagonale), höchstens
+/// [`CLASSIFY_CHORD`].
+const CHORD_REL: f64 = 1e-3;
+
 /// Unter diesem Anteil der Summe aller Tetraederbeträge (Bezugspunkt: Mitte der Schale) hat
 /// eine Schale kein Volumen: Zwei gegengleiche Flächen am selben Ort heben sich bis auf
 /// Rundungsrauschen auf, das Vorzeichen wäre Zufall.
@@ -1083,11 +1095,17 @@ const VOLUME_REL: f64 = 1e-6;
 /// Volumen unter [`VOLUME_REL`] der Summe der Tetraederbeträge liegt, hat kein Volumen.
 // Der negierte Vergleich lehnt absichtlich auch NaN ab.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn shell_volumes(solid: &Solid) -> Result<(Vec<f64>, ShellTriangles, ShellTriangleFaces), Skip> {
+fn shell_volumes(solid: &Solid) -> Result<ShellMesh, Skip> {
+    // Sehne höchstens [`CLASSIFY_CHORD`], bei kleinen Körpern [`CHORD_REL`] ihrer Größe: Sonst
+    // schnitten sich die Netze dünner Wände, und die Probe sähe bei winzigen Körpern nichts.
+    let (lo, hi) = bounds_of(solid.vertices.iter().map(|(_, v)| &v.point));
+    let chord = CLASSIFY_CHORD
+        .min(CHORD_REL * lo.distance(hi))
+        .max(Tolerance::default().linear);
     let mesh = tessellate(
         solid,
         &TessellationOptions {
-            chord_tolerance: CLASSIFY_CHORD,
+            chord_tolerance: chord,
         },
     )
     .map_err(|e| {
@@ -1137,7 +1155,12 @@ fn shell_volumes(solid: &Solid) -> Result<(Vec<f64>, ShellTriangles, ShellTriang
         }
         volumes[k] = sum;
     }
-    Ok((volumes, triangles, faces))
+    Ok(ShellMesh {
+        volumes,
+        triangles,
+        faces,
+        chord,
+    })
 }
 
 /// Hüllquader von Punkten.
@@ -1405,8 +1428,12 @@ impl FacetGrid {
     /// Dreiecke (Index, Abstand), die höchstens `r` von `q` entfernt liegen.
     fn within(&self, q: DVec3, r: f64) -> Vec<(usize, f64)> {
         // Nur die Zellen, die die Kugel mit Radius `r` um `q` trifft.
-        let a = self.cell_of(q - DVec3::splat(r));
-        let b = self.cell_of(q + DVec3::splat(r));
+        let mut a = self.cell_of(q - DVec3::splat(r));
+        let mut b = self.cell_of(q + DVec3::splat(r));
+        for k in 0..3 {
+            a[k] = a[k].max(0);
+            b[k] = b[k].min(self.dims[k] as i64 - 1);
+        }
         self.rays.set(self.rays.get().wrapping_add(1));
         let mark = self.rays.get();
         let mut stamp = self.stamp.borrow_mut();
@@ -1674,14 +1701,20 @@ const PARALLEL: f64 = 0.87;
 /// belegte oder gegengleich übereinanderliegende Flächen, Flächen auf der falschen Seite und
 /// Ränder, die um die falsche Hälfte laufen, fallen so auf. Der Abstand der Probepunkte ist
 /// `depth` (zwei Sehnen des Netzes plus Genauigkeit), kleiner nur, wo ein anders gerichtetes
-/// Dreieck einer anderen Trägerfläche näher liegt (dünne Stege, Fasen: dann die Hälfte dieses
-/// Abstands). Liegt ein gegengleich gerichtetes Dreieck einer anderen Trägerfläche näher als
-/// `depth` am Schwerpunkt (dünne Wand), entscheidet das Dreieck nicht; Dreiecke auf derselben
-/// Trägerfläche (bis `tol` genau) sind keine Wand, sondern eine doppelte Belegung, und zählen.
+/// Dreieck einer anderen Trägerfläche näher liegt (dünne Stege, Fasen, dünne Wände: dann die
+/// Hälfte dieses Abstands). Ist eine Wand dünner als zwei Sehnen (`chord`; die Netze könnten
+/// sich schneiden), entscheidet das Dreieck nicht; Dreiecke auf derselben Trägerfläche (bis
+/// `tol` genau) sind keine Wand, sondern eine doppelte Belegung, und zählen mit vollem Abstand.
 /// Geprüft werden je Fläche ihr größtes Dreieck und je Stück bis [`SIDE_PROBES`] weitere.
 // Der negierte Vergleich lehnt absichtlich auch NaN ab.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn check_face_sides(grid: &FacetGrid, depth: f64, tol: f64, solid: &Solid) -> Result<(), Skip> {
+fn check_face_sides(
+    grid: &FacetGrid,
+    depth: f64,
+    chord: f64,
+    tol: f64,
+    solid: &Solid,
+) -> Result<(), Skip> {
     let area = |t: &[DVec3; 3]| (t[1] - t[0]).cross(t[2] - t[0]).length();
     let coincident = |a: usize, b: usize| {
         same_surface(
@@ -1707,7 +1740,7 @@ fn check_face_sides(grid: &FacetGrid, depth: f64, tol: f64, solid: &Solid) -> Re
         let f = &grid.facets[k];
         let c = (f.t[0] + f.t[1] + f.t[2]) / 3.0;
         let mut d_other = f64::INFINITY;
-        let mut thin = false;
+        let mut d_wall = f64::INFINITY;
         for (j, d) in grid.within(c, depth) {
             if j == k {
                 continue;
@@ -1722,15 +1755,17 @@ fn check_face_sides(grid: &FacetGrid, depth: f64, tol: f64, solid: &Solid) -> Re
                 if other.face != f.face && coincident(other.face, f.face) {
                     continue;
                 }
-                thin = true;
+                d_wall = d_wall.min(d);
             } else {
                 d_other = d_other.min(d);
             }
         }
-        if thin {
+        // Dünne Wand: Die Probe rückt auf die halbe Wandstärke heran. Ist die Wand dünner als
+        // zwei Sehnen, könnten sich die Netze schneiden; dann entscheidet das Dreieck nicht.
+        if d_wall <= 2.0 * chord {
             continue;
         }
-        let h = depth.min(0.5 * d_other);
+        let h = depth.min(0.5 * d_other).min(0.5 * d_wall);
         if !(h > 0.0) {
             continue;
         }
@@ -1829,7 +1864,12 @@ fn orient_shells(
     guessed: &[bool],
     tol: f64,
 ) -> Result<(), Skip> {
-    let (volumes, triangles, faces) = shell_volumes(solid)?;
+    let ShellMesh {
+        volumes,
+        triangles,
+        faces,
+        chord,
+    } = shell_volumes(solid)?;
     for (k, &v) in volumes.iter().enumerate() {
         let void = owners.get(k).is_some_and(Option::is_some);
         if (v > 0.0) == void {
@@ -1844,7 +1884,7 @@ fn orient_shells(
             turn_inside_out(solid, &ids);
         }
     }
-    let depth = 2.0 * CLASSIFY_CHORD + tol;
+    let depth = 2.0 * chord + tol;
     // Je Stück ein Raster über äußere Schale und Hohlräume, Normalen aus dem Material heraus.
     let pieces: Vec<Option<FacetGrid>> = (0..owners.len())
         .map(|b| {
@@ -1860,7 +1900,7 @@ fn orient_shells(
     // Erst die Lage der Schalen (die genauere Meldung), dann die allgemeine Probe.
     check_shells(&triangles, &faces, &volumes, owners, &pieces, depth)?;
     for grid in pieces.iter().flatten() {
-        check_face_sides(grid, depth, tol, solid)?;
+        check_face_sides(grid, depth, chord, tol, solid)?;
     }
     Ok(())
 }

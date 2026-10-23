@@ -122,17 +122,22 @@ pub(crate) fn snap_poles(raw: &mut RawBody, tol: f64) {
 /// läge er zwischen zwei Abtastpunkten, und u spränge dort um eine halbe Periode.
 pub(crate) fn split_at_poles(raw: &mut RawBody, tol: f64) {
     let near = tol.max(linear());
-    // So lange teilen, bis keine Kante mehr durch einen Pol läuft; jede Teilung setzt eine Ecke
-    // auf den Pol, die Zahl ist also durch Kanten × Pole begrenzt (die Schranke nur zur Sicherheit).
-    let limit = 2 * raw.edges.len() * raw.faces.len().max(1) + 16;
-    for _ in 0..limit {
-        let mut found: Option<(usize, f64, DVec3)> = None;
-        'faces: for f in &raw.faces {
+    // Je Durchlauf alle Kanten einmal absuchen und je Kante höchstens eine Teilung sammeln
+    // (eine Kante durch beide Pole bekommt die zweite im nächsten Durchlauf); so lange, bis
+    // nichts mehr zu teilen ist. Jede Teilung setzt eine Ecke auf einen Pol, die Zahl der
+    // Durchläufe ist also durch die Pole je Kante begrenzt (die Schranke nur zur Sicherheit).
+    for _ in 0..16 {
+        let mut found: Vec<(usize, f64, DVec3)> = Vec::new();
+        let mut done = vec![false; raw.edges.len()];
+        for f in &raw.faces {
             let poles = pole_points(&f.surface);
             if poles.is_empty() {
                 continue;
             }
             for he in f.loops.iter().flatten() {
+                if done[he.edge] {
+                    continue;
+                }
                 let e = &raw.edges[he.edge];
                 for (_, q) in &poles {
                     if raw.vertices[e.start].distance(*q) <= near
@@ -146,17 +151,20 @@ pub(crate) fn split_at_poles(raw: &mut RawBody, tol: f64) {
                         t += per * ((lo - t) / per).ceil();
                     }
                     if t > lo && t < hi && e.curve.point(t).distance(*q) <= near {
-                        found = Some((he.edge, t, *q));
-                        break 'faces;
+                        found.push((he.edge, t, *q));
+                        done[he.edge] = true;
+                        break;
                     }
                 }
             }
         }
-        let Some((k, t, q)) = found else {
+        if found.is_empty() {
             return;
-        };
-        let v = split_edge(raw, k, t);
-        raw.vertices[v] = q;
+        }
+        for (k, t, q) in found {
+            let v = split_edge(raw, k, t);
+            raw.vertices[v] = q;
+        }
     }
 }
 

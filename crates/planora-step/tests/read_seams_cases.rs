@@ -9,8 +9,8 @@ mod common;
 use common::{Lcg, export};
 use planora_exchange::Progress;
 use planora_kernel::boolean::BoolOp;
-use planora_kernel::{AnalyticKernel, Kernel, Solid, validate};
-use planora_math::{DMat4, DVec3, PI, TAU};
+use planora_kernel::{AnalyticKernel, Kernel, Profile, ProfileLoop, Solid, validate};
+use planora_math::{DMat4, DVec2, DVec3, Frame, PI, TAU};
 use planora_mesh::{TessellationOptions, mass_properties, tessellate};
 use planora_step::read::geom::Skip;
 use planora_step::read::topo::{BuildOptions, build_solid};
@@ -1219,10 +1219,10 @@ fn sphere_shell(s: &mut Step, c: DVec3, r: f64, outward: bool) -> u64 {
     let south = s.vertex(c - DVec3::Z * r);
     let north = s.vertex(c + DVec3::Z * r);
     let mf = s.axis2(c, -DVec3::Y, DVec3::X);
-    let m = s.push(format!("CIRCLE('',#{mf},{r:.1})"));
+    let m = s.push(format!("CIRCLE('',#{mf},{r:.17e})"));
     let e = s.edge(south, north, m, true);
     let sf = s.axis2(c, DVec3::Z, DVec3::X);
-    let sphere = s.push(format!("SPHERICAL_SURFACE('',#{sf},{r:.1})"));
+    let sphere = s.push(format!("SPHERICAL_SURFACE('',#{sf},{r:.17e})"));
     let b = s.bound(&[(e, true), (e, false)], true);
     let f = s.face(&[b], sphere, outward);
     s.shell(&[f])
@@ -1732,5 +1732,305 @@ fn great_circle_barely_beside_the_poles_is_split_onto_them() {
             m,
             "Der Rand der Fläche „STEP-Fläche 2“ läuft nicht genau durch einen Pol."
         ),
+    }
+}
+
+// --- Nacharbeit 5: dünne Wände, winzige Körper, viele Teilungen, Testlücken.
+
+/// Kugelschale um `c` mit Radius `r` aus `n` Keilen (Meridiane bei 2πk/n), als Schale.
+fn lunes_shell(s: &mut Step, c: DVec3, r: f64, n: usize) -> u64 {
+    let south = s.vertex(c - DVec3::Z * r);
+    let north = s.vertex(c + DVec3::Z * r);
+    let m: Vec<u64> = (0..n)
+        .map(|k| {
+            let u = TAU * k as f64 / n as f64;
+            let radial = DVec3::new(u.cos(), u.sin(), 0.0);
+            let f = s.axis2(c, radial.cross(DVec3::Z), radial);
+            let circle = s.push(format!("CIRCLE('',#{f},{r:.17e})"));
+            s.edge(south, north, circle, true)
+        })
+        .collect();
+    let sf = s.axis2(c, DVec3::Z, DVec3::X);
+    let sphere = s.push(format!("SPHERICAL_SURFACE('',#{sf},{r:.17e})"));
+    let faces: Vec<u64> = (0..n)
+        .map(|k| {
+            let b = s.bound(&[(m[(k + 1) % n], true), (m[k], false)], false);
+            s.face(&[b], sphere, true)
+        })
+        .collect();
+    s.shell(&faces)
+}
+
+/// Hohlkugel r 6 aus drei Keilen mit einem Hohlraum aus drei Keilen, Wand `wall`.
+fn hollow_lune_ball(wall: f64) -> String {
+    let mut s = Step::new();
+    let outer = lunes_shell(&mut s, DVec3::ZERO, SR, 3);
+    let cavity = lunes_shell(&mut s, DVec3::ZERO, SR - wall, 3);
+    let void = s.push(format!("ORIENTED_CLOSED_SHELL('',*,#{cavity},.F.)"));
+    let body = s.push(format!("BREP_WITH_VOIDS('Hohl',#{outer},(#{void}))"));
+    s.finish(&[body])
+}
+
+#[test]
+fn thin_hollow_ball_of_lunes_is_never_doubled() {
+    // F1: Bei Wänden unter 0,1 mm darf die Probe nicht aussetzen. Ein gekippter Meridian macht
+    // aus der dünnen Hohlkugel sonst still eine doppelt belegte volle Kugel (926 statt 22,4).
+    for wall in [0.05, 0.08, 0.2] {
+        let inner = SR - wall;
+        let want = 4.0 / 3.0 * PI * (SR * SR * SR - inner * inner * inner);
+        assert_never_opposite(
+            &hollow_lune_ball(wall),
+            want,
+            DVec3::new(0.0, 0.0, SR - 0.5 * wall),
+            &format!("Hohlkugel, Wand {wall}"),
+        );
+    }
+}
+
+/// Liest einen Kernel-Körper über den Schreiber und prüft das Volumen (Sehne 0,002, 5e-3).
+fn read_kernel_body(body: &Solid, want: f64, what: &str) -> Solid {
+    let (text, _) = export(&[(what, body)]);
+    let s = read(&text).unwrap_or_else(|Skip(m)| panic!("{what}: {m}"));
+    let v = mesh_volume(&s, 0.002);
+    assert!(
+        ((v - want) / want).abs() <= 5e-3,
+        "{what}: {v} statt {want}"
+    );
+    s
+}
+
+#[test]
+fn thin_walls_plates_and_floors_are_read() {
+    // F1: keine Fehlablehnung bei Wänden 0,05 … 0,5 (Hohlquader), dünnen Platten und einem
+    // dünnen Boden unter einer Mulde.
+    let k = kernel();
+    // Wand 0,02: Volumen unter 1 % der Tetraederbeträge (Bezugspunkt im Hohlraum), kein Grund zur
+    // Ablehnung.
+    for wall in [0.02, 0.05, 0.1, 0.2, 0.5] {
+        let outer = k.make_box(DVec3::splat(10.0)).expect("Quader");
+        let inner = moved(
+            &k.make_box(DVec3::splat(10.0 - 2.0 * wall)).expect("Quader"),
+            DVec3::splat(wall),
+        );
+        let hollow = k.boolean(&outer, &inner, BoolOp::Difference).expect("hohl");
+        let a = 10.0 - 2.0 * wall;
+        read_kernel_body(&hollow, 1000.0 - a * a * a, &format!("Hohlquader {wall}"));
+    }
+    // Quadratisches Rohr mit Wand 0,02 (eine Schale, Volumen unter 1 % der Tetraederbeträge).
+    let profile = Profile {
+        outer: ProfileLoop::rectangle(DVec2::ZERO, DVec2::splat(10.0)),
+        holes: vec![ProfileLoop::rectangle(
+            DVec2::splat(0.02),
+            DVec2::splat(9.98),
+        )],
+    };
+    let tube = k.extrude(&profile, &Frame::WORLD, 10.0).expect("Rohr");
+    let s = read_kernel_body(&tube, 1000.0 - 9.96 * 9.96 * 10.0, "Rohr 0,02");
+    assert_eq!(s.shells.len(), 1);
+    for t in [0.05, 0.1, 0.5] {
+        let plate = k.make_box(DVec3::new(100.0, 100.0, t)).expect("Platte");
+        read_kernel_body(&plate, 1.0e4 * t, &format!("Platte {t}"));
+    }
+    // Mulde r 2,99 mit Achse in der Deckfläche einer Platte der Höhe 3,05 (Boden 0,06).
+    let plate = k.make_box(DVec3::new(10.0, 10.0, 3.05)).expect("Platte");
+    let lying = k
+        .transform(
+            &k.make_sphere(2.99).expect("Kugel"),
+            &DMat4::from_rotation_y(PI / 2.0),
+        )
+        .expect("gedreht");
+    let ball = moved(&lying, DVec3::new(5.0, 5.0, 3.05));
+    let pocket = k.boolean(&plate, &ball, BoolOp::Difference).expect("Mulde");
+    let r3 = 2.99f64.powi(3);
+    read_kernel_body(&pocket, 305.0 - 2.0 / 3.0 * PI * r3, "dünner Boden");
+}
+
+#[test]
+fn tiny_bodies_are_read_quickly() {
+    // F2: Das Raster darf bei winzigen Körpern nicht über Zellen weit außerhalb laufen.
+    let k = kernel();
+    let cube = k.make_box(DVec3::splat(0.02)).expect("Würfel");
+    let ball = moved(&k.make_sphere(0.006).expect("Kugel"), DVec3::splat(0.01));
+    let tiny = k.boolean(&cube, &ball, BoolOp::Difference).expect("winzig");
+    let (text, _) = export(&[("winzig", &tiny)]);
+    let t = std::time::Instant::now();
+    let s = read(&text).unwrap_or_else(|Skip(m)| panic!("winzig: {m}"));
+    assert!(t.elapsed().as_secs_f64() < 3.0, "{:?}", t.elapsed());
+    let v = mesh_volume(&s, 2e-6);
+    let want = 0.02f64.powi(3) - 4.0 / 3.0 * PI * 0.006f64.powi(3);
+    assert!(
+        ((v - want) / want).abs() <= 5e-3,
+        "winzig: {v} statt {want}"
+    );
+    // Viele winzige Kugeln als ein Körper.
+    let mut s = Step::new();
+    let mut items = Vec::new();
+    for i in 0..40 {
+        let c = DVec3::new(0.05 * (i % 8) as f64, 0.05 * (i / 8) as f64, 0.0);
+        let b = sphere_shell(&mut s, c, 0.01, true);
+        items.push(s.push(format!("MANIFOLD_SOLID_BREP('Kugel',#{b})")));
+    }
+    let text = s.finish(&items);
+    let t = std::time::Instant::now();
+    let solid = read(&text).unwrap_or_else(|Skip(m)| panic!("{m}"));
+    assert_eq!(solid.shells.len(), 40);
+    assert!(t.elapsed().as_secs_f64() < 3.0, "{:?}", t.elapsed());
+}
+
+#[test]
+fn many_pole_splits_stay_fast() {
+    // F4: 300 Halbkugeln mit Großkreis durch beide Pole (300 Teilungen).
+    let mut s = Step::new();
+    let mut items = Vec::new();
+    for k in 0..300 {
+        let c = DVec3::new(20.0 * (k % 20) as f64, 20.0 * (k / 20) as f64, 0.0);
+        let faces = great_circle_hemisphere_at(&mut s, c, PI / 2.0, 0.0);
+        let shell = s.shell(&faces);
+        items.push(s.push(format!("MANIFOLD_SOLID_BREP('Halb',#{shell})")));
+    }
+    let text = s.finish(&items);
+    let t = std::time::Instant::now();
+    let solid = read(&text).unwrap_or_else(|Skip(m)| panic!("{m}"));
+    assert_eq!(solid.shells.len(), 300);
+    assert!(t.elapsed().as_secs_f64() < 8.0, "{:?}", t.elapsed());
+}
+
+/// Dieselbe Datei mit der Schale als `ORIENTED_CLOSED_SHELL(…,.F.)` (ganz innen-außen).
+fn inside_out(text: &str) -> String {
+    let shell = text
+        .lines()
+        .find(|l| l.contains("=CLOSED_SHELL("))
+        .expect("Schale")
+        .split('=')
+        .next()
+        .expect("Kennung")
+        .to_string();
+    let out = text.replace(
+        &format!("MANIFOLD_SOLID_BREP('Teil',{shell})"),
+        &format!(
+            "MANIFOLD_SOLID_BREP('Teil',#8999);\n#8999=ORIENTED_CLOSED_SHELL('',*,{shell},.F.)"
+        ),
+    );
+    assert_ne!(out, text);
+    out
+}
+
+#[test]
+fn pole_marks_decide_the_ball_minus_octant() {
+    // M17: Eine Marke am inneren Pol bestätigt die Seite, auch bei ganz innen-außen
+    // geschriebener Datei (ohne Marke ist das zweideutig). M18: eine Marke anderswo ist verdreht.
+    let s = read(&inside_out(&ball_minus_octant(true)))
+        .unwrap_or_else(|Skip(m)| panic!("innen-außen mit Marke: {m}"));
+    let v = mesh_volume(&s, 0.002);
+    assert!(((v - 252.0 * PI) / (252.0 * PI)).abs() <= 5e-3, "{v}");
+    match read(&inside_out(&ball_minus_octant(false))) {
+        Ok(_) => panic!("innen-außen ohne Marke angenommen"),
+        Err(Skip(m)) => assert!(m.contains("nicht eindeutig"), "{m}"),
+    }
+    let wrong = ball_minus_octant(true).replace(
+        "(0.00000000000000000e0,0.00000000000000000e0,-6.00000000000000000e0)",
+        "(6.00000000000000000e0,0.00000000000000000e0,0.00000000000000000e0)",
+    );
+    assert_ne!(wrong, ball_minus_octant(true));
+    match read(&wrong) {
+        Ok(_) => panic!("Marke neben dem Pol angenommen"),
+        Err(Skip(m)) => assert_eq!(
+            m,
+            "Die Fläche „STEP-Fläche 4“ ist verdreht: Rand und Außenseite passen nicht zusammen."
+        ),
+    }
+}
+
+/// Zylinder r 5, h 10 aus zwei Halbmänteln (Halbkreise zwischen Gegenpunkten) und zwei Deckeln.
+fn split_cylinder() -> String {
+    let mut s = Step::new();
+    let p = |u: f64, z: f64| DVec3::new(5.0 * u.cos(), 5.0 * u.sin(), z);
+    let v = [
+        s.vertex(p(0.0, 0.0)),
+        s.vertex(p(PI, 0.0)),
+        s.vertex(p(0.0, H)),
+        s.vertex(p(PI, H)),
+    ];
+    let fb = s.axis2(DVec3::ZERO, DVec3::Z, DVec3::X);
+    let ft = s.axis2(DVec3::new(0.0, 0.0, H), DVec3::Z, DVec3::X);
+    let cb = s.push(format!("CIRCLE('',#{fb},5.)"));
+    let ct = s.push(format!("CIRCLE('',#{ft},5.)"));
+    // Halbkreise: unten a (0→π), b (π→0); oben c (0→π), d (π→0); Mantellinien bei 0 und π.
+    let a = s.edge(v[0], v[1], cb, true);
+    let b = s.edge(v[1], v[0], cb, true);
+    let c = s.edge(v[2], v[3], ct, true);
+    let d = s.edge(v[3], v[2], ct, true);
+    let l0 = s.line(p(0.0, 0.0), p(0.0, H));
+    let lp = s.line(p(PI, 0.0), p(PI, H));
+    let e0 = s.edge(v[0], v[2], l0, true);
+    let ep = s.edge(v[1], v[3], lp, true);
+    let cf = s.axis2(DVec3::ZERO, DVec3::Z, DVec3::X);
+    let cyl = s.push(format!("CYLINDRICAL_SURFACE('',#{cf},5.)"));
+    let pb = s.push(format!("PLANE('',#{fb})"));
+    let pt = s.push(format!("PLANE('',#{ft})"));
+    let bb = s.bound(&[(a, false), (b, false)], true);
+    let bottom = s.face(&[bb], pb, false);
+    let bt = s.bound(&[(c, true), (d, true)], true);
+    let top = s.face(&[bt], pt, true);
+    let b1 = s.bound(&[(a, true), (ep, true), (c, false), (e0, false)], true);
+    let half1 = s.face(&[b1], cyl, true);
+    let b2 = s.bound(&[(b, true), (e0, true), (d, false), (ep, false)], true);
+    let half2 = s.face(&[b2], cyl, true);
+    s.file(&[bottom, top, half1, half2])
+}
+
+#[test]
+fn split_cylinder_halves_are_never_doubled() {
+    // M09: Zwei Halbmäntel auf demselben Zylinder; ein gekippter Halbkreis läuft über die
+    // andere Hälfte und belegt den Mantel doppelt (gegengleiche Dreiecke derselben Zylinderfläche
+    // zählen, sie sind keine Wand).
+    assert_never_opposite(
+        &split_cylinder(),
+        PI * 25.0 * H,
+        DVec3::new(1.0, 1.0, 5.0),
+        "geteilter Zylinder",
+    );
+}
+
+#[test]
+fn thin_plate_far_away_has_a_volume() {
+    // M19/M20: Eine dünne Platte (Volumen klein gegen die Tetraederbeträge) auch 1e6 entfernt.
+    let k = kernel();
+    let plate = k.make_box(DVec3::new(100.0, 100.0, 0.5)).expect("Platte");
+    read_kernel_body(&plate, 5000.0, "Platte 0,5");
+    let far = moved(&plate, DVec3::splat(1.0e6));
+    read_kernel_body(&far, 5000.0, "Platte 0,5 bei 1e6");
+}
+
+#[test]
+fn small_pocket_on_a_large_body_is_probed() {
+    // M06: Jede Fläche wird mindestens einmal geprobt, auch eine kleine Mulde an einem großen
+    // Körper mit vielen Dreiecken (Kugel r 80 unter dem Quader): ein gekippter Halbkreis der
+    // Mulde (wie im Kernel-Test) darf nicht zwischen den Probepunkten durchrutschen.
+    let k = kernel();
+    let cube = k.make_box(DVec3::splat(10.0)).expect("Quader");
+    let big = moved(
+        &k.make_sphere(80.0).expect("Kugel"),
+        DVec3::new(5.0, 5.0, -75.0),
+    );
+    let body = k.boolean(&cube, &big, BoolOp::Union).expect("vereinigt");
+    let lying = k
+        .transform(
+            &k.make_sphere(3.0).expect("Kugel"),
+            &DMat4::from_rotation_y(PI / 2.0),
+        )
+        .expect("gedreht");
+    let ball = moved(&lying, DVec3::new(5.0, 5.0, 10.0));
+    let pocket = k.boolean(&body, &ball, BoolOp::Difference).expect("Mulde");
+    let (text, _) = export(&[("Mulde", &pocket)]);
+    let s = read(&text).unwrap_or_else(|Skip(m)| panic!("{m}"));
+    // Knapp über der Mulde liegt Luft (Umlaufzahl 0); eine doppelt belegte Kugelfläche ergäbe
+    // dort −1 (eine Kuppel nach Flächenbit-Kippung 1, systembedingt).
+    let above = DVec3::new(5.0, 5.0, 11.0);
+    assert!(winding_at(&s, above).abs() < 0.5);
+    for (k, t) in single_flips(&text).iter().enumerate() {
+        let Ok(s) = read(t) else { continue };
+        let w = winding_at(&s, above);
+        assert!(w > -0.5, "Kippung {k}: Umlaufzahl {w} über der Mulde");
     }
 }
