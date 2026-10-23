@@ -1509,3 +1509,141 @@ Release-Build, Fenster zuerst 1400 × 900. Jeweils prüfen: Texte lesbar, nichts
 - [ ] 32. Fenster 1100 × 700 und 800 × 600: Das Fenster „Parameter“, die Formelfelder und die Fußzeile sind im Bild, nichts wird abgeschnitten; die Knöpfe sind erreichbar.
 - [ ] 33. Hell und Dunkel: „fx“, rote Meldungen, Wertanzeige und das Symbol im Menü sind lesbar; Farben stimmen mit dem übrigen Programm.
 - [ ] 34. Zwei Tabs mit verschiedenen Dokumenten: Parameter und Formeln eines Tabs erscheinen nicht im anderen, und ein getippter Formeltext in einem offenen Erzeugen-Fenster erscheint nicht im anderen Tab.
+
+## Teilprojekt: STEP-Import
+
+### Stand und Geliefertes
+Stand: 2026-10-23 (Zweig `feature/step-import`, Basis `master` @ `c16d988`, Spec `docs/superpowers/specs/2026-10-21-step-import-design.md`, Plan `docs/superpowers/plans/2026-10-21-step-import.md`). „Datei → STEP importieren …“ liest STEP-Dateien (AP203, AP214, AP242, Text) und legt jeden lesbaren Volumenkörper als gewöhnlichen exakten Körper „STEP-Körper“ an, an der Lage aus der Datei, als **ein** rücknehmbarer Schritt. Die Form steht als normalisierter STEP-Text in der Projektdatei (Format 10). Kernel, Mathe, Netz, Austausch, Zeichnung, Skizze und Darstellung sind unverändert (geprüft gegen `c16d988`).
+
+- **Leser** (`planora-step/src/read/`, 13 Dateien, keine neue Abhängigkeit): `lex.rs`, `index.rs`, `value.rs` (Zeichenstrom, Index, Einträge, feindliche Dateien), `units.rs` (Einheiten, Genauigkeit), `geom.rs` (Punkte bis Flächen), `spline.rs` (Freiformkurven und -flächen, Dreh- und Strangflächen), `topo.rs` (Schleifen, Orientierung, Parameterbereiche, Sicherheitsnetz gegen verdrehte Seiten), `seam.rs` (Nähte, Pole, Hohlräume), `weld.rs` (Zusammenziehen und Paaren mit Rastersuche), `assembly.rs` (Körper, Namen, Lagen), `import.rs` (Pipeline und Normalisieren), `error.rs`, `mod.rs`.
+- **Dokument** (`planora-feature`): Formtabelle (`StepShapeId → Arc<StepShape>`), Feature-Art `StepBody`, Marken „STEP-Fläche n“, Summengrenze `MAX_STEP_TEXT_SUM_BYTES`.
+- **Datei** (`planora-project`): Dateiformat 10, nur wenn ein STEP-Körper im Dokument ist; alle bisherigen Golden-Dateien Byte für Byte unverändert; neue Probe `tests/step_fixtures/format10_step.json`.
+- **App:** Menü „Datei → STEP importieren …“ (Symbol `file-arrow-down`), Fenster „STEP importieren“ (Datei, Liste „Körper“ über die ganze Breite, „Einheit der Datei“, Fußzeile mit „Importieren“, „Andere Datei wählen …“, „Schließen“), Eigenschaftenfeld mit Warnung bei grober Genauigkeit, Schrittname „STEP importieren“, Symbol, Verlaufsgröße.
+- **Tests:** `planora-step/tests/{read_parse, read_geometry, read_splines, read_topology, read_seams, read_seams_cases, read_weld, read_assembly, read_import, read_hostile, roundtrip, gate}.rs` und 11 handgeschriebene Dateien unter `tests/data/` (alle selbst geschrieben, Lizenz GPL-3.0-only), dazu `planora-feature/tests/step_bodies.rs`, `planora-project/tests/step_format.rs`, `planora-app/tests/{step_state, step_import_ui}.rs`.
+- **Nur zwei interne Abhängigkeiten dazu:** `planora-feature → planora-step` und die Entwicklungs-Abhängigkeit `planora-step → planora-drawing` (für das Tor). `Cargo.lock` ändert sich nur um diese zwei Zeilen, `deny.toml` ist unverändert.
+
+### Festlegungen P1 bis P16 mit Abweichungen
+Die Festlegungen stehen im Kopf des Plans und kurz in der Spec §8. Einzelheiten und alle Abweichungen: Plan, Abschnitt „Abweichungen bei der Umsetzung“.
+- **P1 Lesen in zwei Stufen:** Index, dann Zerlegen beim Gebrauch. Ein fehlender Verweis trifft nur die Körper, die ihn brauchen. *Zusatz:* `StepFile::entity_unchecked` (öffentlich); Aufrufer schützen sich selbst gegen Verweise im Kreis.
+- **P2 Was ein Körper ist:** Eine Darstellung ergibt einen Körper (mehrere Volumen darin sind Schalen); mehrfach benutzte Teile ergeben mehrere Körper.
+- **P3 Lagen:** Richtung über die Beziehungen der Baugruppe, Lagen bis zur Wurzel multipliziert. *Entscheidungen:* Beschädigte Einträge, die mit keinem Körper zu tun haben, lassen die Datei weiter lesbar. Eine Beziehung oder Abbildung, deren Enden nicht lesbar sind, lehnt die **ganze** Datei ab (es wäre nicht zu erkennen, welcher Körper sich bewegt). Ein Körper, dessen Vorkommen unlesbar ist, aber dessen Beziehung lesbar bleibt, liegt am Ursprung mit „Richtung unklar“. Wird die Richtung nur geraten, wird die Lage angewandt und das gemeldet. Eine Beziehung ohne Transformation neben einer Abbildung desselben Teils wird nicht doppelt als Körper am Ursprung gezählt.
+- **P4 Genauigkeit:** 1e-6 bis 1e-3 mm, fehlend oder ungültig: 1e-3 mm mit Warnung. *Zusatz:* Werte ≤ 0 oder nicht endlich werden übergangen; gespeichert wird die Genauigkeit der Datei in der Form (`StepShape::tolerance_mm`, Bereich 1e-6 … 1e-3 mm, sonst Meldung).
+- **P5 Normalisieren:** Schreiben und Wieder-Lesen mit festem Zeitstempel. *Abweichung:* Bis zu vier Durchgänge, bis der Text sich nicht mehr ändert (die erste Lesung zieht z. B. Ecken auf eine Kegelspitze). „Ruhend“ ist für die Testkörper erreicht (Kegel getestet bei ±1000 und ±10 000 mm, 80 von 80), aber nicht bewiesen. Der Schreiber behält den Bezugsradius eines Kegels, wenn dieser im Bereich der Fläche liegt.
+- **P6 Keine Lagefelder:** Verschieben geht über das gewöhnliche Verschieben. *Folge (offen):* Das Menü „Bearbeiten …“ ist für STEP-Körper sichtbar und tut nichts, wie bei Netz-Körpern.
+- **P7 Marken:** „STEP-Fläche n“, Reihenfolge des normalisierten Textes. Nach dem Laden sind sie gleich.
+- **P8 Dreh- und Strangflächen:** Analytisch, wo es geht, sonst Freiform. *Abweichung (Fehler im Plan):* Bei einer Drehfläche ist u der Winkel und v die Kurve (ISO-Reihenfolge), nicht umgekehrt; so steht es im Leser. Eine Drehfläche aus einer schrägen Geraden wird abgelehnt.
+- **P9 Nähte:** Nur Zylinder, Kegel und Kugel ohne Naht. *Folge (Entscheidung für Dennis, offen):* Torusbänder ohne Naht werden abgelehnt. Pole werden geometrisch erkannt (nicht nur in der Parameterebene).
+- **P10 Namen:** Wie geplant. *Abweichung:* Erzeugte Namen „STEP-Körper n“ steigen über die vorhandenen Namen im Dokument und in der Datei (`AppState::step_body_names`), damit die Teileliste nichts zusammenwirft.
+- **P11 Einheit umstellen:** Wie geplant, auch für gemischte Dateien (alle Kontexte auf einmal). Bei Dateien mit mehreren Einheiten gilt: eine gewählte Einheit gilt für alle, die eigene Einheit der Datei hebt die Wahl wieder auf.
+- **P12 Grenzen:** Wie geplant. *Zusatz:* Alle STEP-Formen eines Dokuments zusammen höchstens 200 MiB, schon beim Import geprüft (Meldung) und beim Speichern (eigene Meldung); sonst ließe sich ein Dokument zwar bearbeiten, aber nicht speichern.
+- **P13 Fenster:** Wie „Netz importieren“. Das Ergebnis gilt nur für den Dokumentstand bei der Dateiwahl. Das Fenster beendet eine offene Skizze (`try_close_sketch`), bevor es aufgeht.
+- **P14 Laden:** Beschädigter Körpertext → Fehlerstatus nur dieses Körpers. *Abweichung:* Ein beschädigter Kopf, Nicht-ASCII-Text oder eine Genauigkeit außerhalb 1e-6 … 1e-3 lehnt die **ganze Version** ab; die App fällt auf die nächstältere lesbare Version zurück.
+- **P15 Fortschritt:** Zwei Aufträge nacheinander, je Auftrag ein neuer Fortschritt; Abbrechen in beiden.
+- **P16 Nachziehen der Ecken:** Eingetreten, siehe Tor unten. Umgesetzt in `weld.rs`: Ecken werden innerhalb der Genauigkeit der Datei **genau** auf den Schnitt ihrer Flächen gezogen (auf etwa 1e-6 mm; weniger genau lehnt der Kernel schon bei 1e-5 ab).
+
+### Torergebnis aus Aufgabe 4 (Machbarkeit fremder Körper im Kernel)
+Frage: Rechnet der Kernel mit eingelesenen Körpern (Prüfen, Volumen, Abziehen eines Stabs, Verrunden, Schnitt)? Ergebnis: **Das Tor ist bestanden, kein Kernel-Eingriff nötig.**
+
+| Körper | Prüfung | Volumen | Abziehen | Rundung | Schnitt |
+|---|---|---|---|---|---|
+| Quader (`box_ap214.step`), genau | ok | ok | ok | ok | ok |
+| Ring mit Bohrung aus Halbschalen (`bore_halves.step`), genau | ok | ok | ok | ok | ok |
+| Ring mit Bohrung, Zylinder mit Naht (`bore_seam.step`), genau | ok | ok | ok | ok | ok |
+| dieselben drei, grob (Ecken um 9e-4 mm versetzt, Genauigkeit 1e-3 mm), **vor** Aufgabe 7 | ok | ok | Kernel lehnt ab: „… liegen zu knapp beieinander …“ | Kernel lehnt ab (Meldung zur Rundung) | Kernel lehnt ab |
+| dieselben drei, grob, **nach** der Verschärfung in Aufgabe 7 (P16) | ok | ok | ok | ok | ok |
+
+Das Volumen stimmt bei genauen Körpern auf 1e-4, bei groben auf 1e-3 (relativ, über das Netz mit Sehne 0,001 mm). Der Kernel rechnet nie mit falschem Ergebnis: Grobe Körper wurden vor der Verschärfung mit einer Meldung abgelehnt, nicht falsch gerechnet. Abweichung vom Wortlaut: Der Stab 4 × 4 × 100 geht beim Ring quer (entlang x in halber Höhe), weil ein Stab entlang z ganz in der Bohrung läge. Der Test prüft zusätzlich, dass der Parameterbereich jeder gekrümmten Fläche ihren Rand enthält, weil der Kernel einen verschobenen Bereich nicht bemerkt. Eine Ecke 2e-3 mm neben ihrer Kante (also über der Genauigkeit der Datei) wird weiter abgelehnt.
+
+### Grenzen und angenommene Punkte
+Alles unten ist bekannt, in den Reviews beurteilt und bewusst angenommen oder als eigener Auftrag vorgemerkt.
+
+**Was das Programm nicht liest (in der Beschreibung für Nutzer: README, „STEP-Import“)**
+- Flächenmodelle, offene Schalen, einzelne Flächen und Körper aus Dreiecken (`FACETED_BREP`): keine Körper; es gibt eine Meldung, welche Art in der Datei steht.
+- Farben, Materialien, Ebenen, Toleranzen, Bemaßung (PMI), die Gliederung der Baugruppe, `.stpz`, XML-Form.
+- `OFFSET_SURFACE`, `DEGENERATE_TOROIDAL_SURFACE`, Polylinie, Parabel, Hyperbel: Körper wird mit „… wird noch nicht unterstützt“ ausgelassen.
+- **Torus und andere rundum gehende Flächen ohne Naht** (außer Zylinder, Kegel, Kugel): ausgelassen (P9). *Entscheidung für Dennis:* Soll später eine Naht für Torusbänder eingefügt werden? Das hängt davon ab, ob echte Dateien so etwas enthalten.
+- **Drehflächen aus einer schrägen Geraden:** ausgelassen mit eigener Meldung.
+- **Speicherbedarf je Version:** Der Text steht in jeder gespeicherten Version erneut (grob 1 KB je Fläche); alle Formen eines Dokuments zusammen höchstens 200 MiB. Das Speichern bei voller Grenze braucht etwa 600 MB; die Grenzprobe braucht im Debug-Build 6 bis 8 s und 0,9 GB.
+
+**Sicherheitsnetz des Lesers (Seitenprobe gegen verdrehte Körper)** – das Ziel „nie ein still anderer Körper“ ist erreicht, soweit eine Stichprobe es erreichen kann:
+- Die Prüfung arbeitet mit Probepunkten (bis 512 Probepunkte je Schale und eine begrenzte Zahl Dreiecke je Fläche). Eine Datei mit Wänden dünner als etwa zwei Sehnen (0,1 mm; bei Körpern unter 50 mm etwa 2e-3 der Diagonale) wird in diesen Wänden **nicht** geprüft. Überlappungen oder Hohlräume, die weniger als etwa 0,1 mm aus dem Körper ragen, werden angenommen; tiefere nur, wenn ein Probepunkt hineinfällt. Nicht erkannt werden unter anderem Eckenüberlappungen, ein Hohlraum im Hohlraum und flache Überlappungen unter 0,3 mm.
+- Ein Teil der Fehler in einer Datei beschreibt einen **anderen, gültigen Körper** und ist deshalb nicht erkennbar: ein umgedrehtes Richtungsbit an einer Kugelmulde oder -kappe (die Datei beschreibt dann genau die Vereinigung, die der Kernel selbst bilden würde), umgedrehte Kreiskanten bei Quader ⊕ Kugel (27 von 3015 gedrehten Fällen, die Kugel wird von der Kreisebene geschnitten), umgekehrte Mulde oder Kuppe, deren Rand durch beide Pole geht.
+- Nach innen gekehrte Dateien (alle Flächenseiten verkehrt) mit einem Kugelstück, das genau **einen** Pol berührt oder dessen Seite nur aus der Schleifenrichtung folgt (zum Beispiel eine Eckrundung): ausgelassen mit „nicht eindeutig“.
+- Der Vernetzer des Kernels scheitert bei einem Rand 0,02 mm neben einem Pol (1 von 12 Fällen; der Körper wird mit Meldung ausgelassen, nie falsch gebaut). Der Kernel tastet dort alle 5 Grad ab.
+- Ein zufälliger Kernel-Körper (Quader minus Kugel, Zufallsreihe `Lcg(777)`) scheint selbst fehlerhaft zu sein: Sein Netz hat das Volumen des Quaders, und er wird in 3 von 4 Lagen abgelehnt. Der Fehler liegt wohl im Kernel, nicht im Leser.
+- Eine Bohrung genau auf dem eingefügten Nahtwinkel wird von `validate` abgelehnt (bekannt).
+
+**Genauigkeit und Zusammenziehen**
+- Das Zusammenziehen ist bewusst **nicht transitiv** (Spec §4a): Kopien einer Ecke müssen innerhalb der Genauigkeit der Datei beieinander liegen. Dateien, bei denen die Kopien bis zu 2 × Genauigkeit auseinanderliegen, werden mit der Lücken-Meldung abgelehnt.
+- Grobe Kreise und Ellipsen werden nicht ersetzt, Ecken und Kanten von Freiformflächen werden nicht bewegt, und dieselbe Kurve in zwei Darstellungen (Gerade und Grad-1-B-Spline) wird nicht gepaart. Eine Vollkreis-Kopie mit anderer Startecke wird abgelehnt. Koordinaten über etwa 1e9 mm werden mit einer Meldung abgelehnt. Die Lückenzahl nennt auch ungepaarte Endecken.
+- Das Zusammenziehen prüft nicht auf Abbruch (linear, bei bis zu 20 000 Flächen kurz).
+- Die Lücken- und Warnschwellen sind einmal gemessen (Tor), nicht für jede Geometrie bewiesen.
+
+**Baugruppen**
+- **Offen: Die Rechenregeln für `CARTESIAN_TRANSFORMATION_OPERATOR_3D` (Achsen aus `axis1`, `axis2`, Standardwerte bei fehlenden Angaben) wurden nach der Erinnerung an ISO 10303-42 geschrieben und nicht an der Norm oder einer echten Datei geprüft.** Fehlt `axis2`, setzt der Leser die y-Achse (0,1,0); eine Datei mit `axis1 = −x` und ohne `axis2` ergibt dann „Spiegelung“, wo ein anderes Programm drehen würde; `CTO(X, Z, o, 1, $)` ergibt „Skalierung“. Bevor Dateien aus solchen Programmen als verlässlich gelten, an der Norm prüfen.
+- Zwei Vorkommen derselben Produktdefinition bleiben getrennt; zwei `CONTEXT_DEPENDENT_SHAPE_REPRESENTATION` an einer Beziehung ergeben zwei Körper; Beziehungen mit Argumenten, die keine Verweise sind, werden übersprungen (in einer syntaktisch gültigen Datei nicht möglich).
+- Unbekannte Teile in komplexen Einträgen werden still übergangen.
+- Alle Proben von Baugruppen sind handgeschrieben (`inch_assembly.step`, `mapped_item.step`) oder mit dem eigenen Schreiber erzeugt. **Es wurde keine Datei eines anderen CAD-Programms gelesen** (Lizenz: keine fremden Beispiele im Repository).
+
+**Dauer und Speicher**
+- **Laden einer Projektdatei mit STEP-Körpern** baut die Körper in der Oberfläche auf: grob 0,5 bis 1 s je großem gekrümmtem Körper (Fenster steht kurz). Das Importieren selbst läuft im Hintergrund. Eine spätere Aufgabe könnte das Laden im Hintergrund erledigen.
+- Gültige, aber ungünstige Körper brauchen auch im Release-Build Zeit: eine gültige „Vase“ mit 230 000 Dreiecken 3,7 s, eine Kugel mit Bohrung 1e-4 … 1e-2 mm 2,0 bis 3,4 s (der alte Code ebenso); die Flanschdatei der feindlichen Proben 1,5 s Release (11 s Debug, deshalb nur im Release-Test mit Zeitgrenze).
+- Grobe Ringe vernetzen langsam (im Debug-Build bis 3 s bei Sehne 0,001).
+
+**Fenster und Dokument**
+- **„Bearbeiten …“** ist für STEP-Körper (wie für Netz-Körper) sichtbar und ohne Wirkung. Ein eigener Aufräum-Auftrag könnte den Eintrag ausgrauen.
+- **Einheit je Körper:** `planora-step` kennt noch kein eigenes Einheiten-Feld je Körper. Die App findet die Einheit jeder Zeile mit einer zweiten Suche in der Datei (Anzahl und Namen müssen passen) und schreibt sonst „gemischt“. Bei gemischten Dateien stellt eine Wahl **alle** Kontexte um; der Hinweis im Fenster sagt es.
+- Die Größen in der Liste sind auf 0,1 mm gerundet und bei gekrümmten Flächen ungefähr (Netz mit Sehne 0,05 mm; die Hülle ist bis zu 0,05 mm zu klein). Der Text einer Fehlermeldung des Betriebssystems beim Lesen der Datei steht unverändert da. Lange Listen rollen als Ganzes.
+- Warnungen zu einzelnen Körpern (Lage am Ursprung) stehen nur **vor** dem Import in der Liste; danach zeigt das Eigenschaftenfeld nur die grobe Genauigkeit.
+- **Keine Größengrenze vor dem Lesen der Projektdatei** (gilt auch für Netze, Format 3): Versionsdateien und Autosicherung werden ganz gelesen, bevor die 200-MiB-Summe zählt. Vorschlag: eigene Aufgabe, die Dateigröße vor `read_to_string` zu begrenzen (etwa 2 × Summengrenze plus Rahmen).
+- Die Grenzprobe für die Summe benutzt einen nur für Tests gedachten Haken (`#[doc(hidden)]`) im Produktionscode.
+
+**Tests (bewusst angenommene Lücken)**
+- Das Netz zweier Körper mit gleicher Geometrie, aber verschiedener Parametrisierung weicht leicht ab (4 von 60 Fällen bis 4,5e-4 im Volumen und 7e-3 mm in der Hülle), weil der Netzer vom Parameterbereich abhängt. Der Round-Trip-Test prüft darum die Geometrie selbst (Punkte jeder Fläche auf einer Fläche des anderen Körpers, Kantenpunkte, Ecken; je 1e-9 bzw. `NURBS_EDGE_TOL`) und das Netz nur bis zu seinem eigenen Fehler.
+- Das Abziehen eines Stabs fehlt bei Körpern mit Kegel- oder Torusfläche (der Kernel lehnt „Schnitt von Kegel/Torus mit Ebene“ auch bei eigenen Körpern ab); das Rundung-Probe läuft nur dort, wo der Kernel auch das Original rundet.
+- Die Zufallsfälle der feindlichen Dateien zählen über alle Dateien zusammen, nicht je Datei; das Zeitlimit je Datei prüft nur der Release-Test.
+- Einige Mutationen blieben begründet grün (Absicherungen doppelt vorhanden, gleichwertige Prüfungen, nicht bestimmbare Zufälle). Die Liste je Aufgabe steht im Bericht, ebenso die Gründe.
+- `planora-project` darf nicht von `planora-step` abhängen; dessen Tests benutzen darum handgeschriebene STEP-Quader. Der Aufbau anderer Flächenarten ist in `planora-step` und `planora-feature` getestet.
+
+### Zahlen
+- **Mutationsproben der Aufgaben 1 bis 14: 605** (einzeln mit dem Editor oder Skript eingespielt, mit den Originalbytes zurückgenommen, Hash geprüft; Quelle: die Berichte in `.superpowers/sdd/2026-10-21-step-import/task-N-report.md`, alle Runden einschließlich der Nacharbeiten gezählt). Je Aufgabe: 1: 64 · 2: 45 · 3: 41 · 4: 17 · 5: 41 · 6: 101 · 7: 30 · 8: 51 · 9: 64 · 10: 19 · 11: 28 · 12: 28 · 13: 31 · 14: 45. **573 rot, 32 grün geblieben**, alle 32 mit Begründung (keine offene grüne): gleichwertig (Prüfung doppelt vorhanden oder ohne Wirkung auf das Ergebnis, z. B. Aufgabe 4: M9, M14; Aufgabe 6: M29, M30, N4), „Absicherung“ (eine zweite Prüfung fängt denselben Fall), nur mit unvertretbarem Aufwand oder nicht deterministisch tötbar (Aufgabe 6: M06, M09, M11, W12, W13, W15, W18) oder Testlücke ohne Wirkung auf gültige Dateien. Einige Mutationen blieben zuerst grün und wurden durch einen schärferen Test rot (nicht in den 32 gezählt). Aufgabe 8 zählt die 20 Mutationen der ersten Runde nur einmal, obwohl die Fix-Runde sie alle noch einmal rot laufen ließ; Aufgabe 10 ebenso (M01, M15, M16). Nicht gezählt: die Einzelproben der Prüfer (zwischen 16 und 44 je Aufgabe, z. B. Aufgabe 4: 16, Aufgabe 8: 44, Aufgabe 13: 28, Aufgabe 14: 24); sie liegen in den `task-N-review.md`.
+- **Gates (Abschlussprüfung am 2026-10-23, Stand `a17497c`):** `cargo fmt --all --check` sauber. `cargo clippy --workspace --all-targets -- -D warnings` sauber. `cargo test --workspace -j 2 --no-fail-fast`: 3393 bestanden, 0 fehlgeschlagen, 47 ausgeschlossen (`#[ignore]`) in 329 Testläufen, rund 23 Minuten im Debug-Build einschließlich Übersetzen. `cargo test -p planora-step --release -- --ignored`: 6 Tests grün (`read_hostile` 3 Tests 26,2 s, `roundtrip` 1 Test 20,7 s, `stage3` 2 Tests 3,6 s). `cargo deny check`: advisories, bans, licenses, sources ok; die Ausnahmen für `ttf-parser` (RUSTSEC-2026-0192) und die zbus-Familie (RUSTSEC-2026-0370, -0371, -0372) greifen unverändert (keine Meldung „nicht gefunden“), `deny.toml` ohne Diff. Die Kernel-Crates ohne Diff gegen `c16d988`.
+- Keine neue externe Abhängigkeit; zwei interne Kanten (siehe oben).
+
+### Handliste für den Nutzer (Prüfung von Hand im echten Fenster)
+Release-Build, Fenster zuerst 1400 × 900. Dateien: Kopien der Proben aus `crates/planora-step/tests/data/` in einen Ordner außerhalb des Repositorys (`box_ap214.step` ist ein Quader „Würfel“, `bore_halves.step` und `bore_seam.step` sind ein „Ring“ mit Bohrung, `inch_assembly.step` ist eine Baugruppe in Zoll mit „Gestell“, „Block“ und „Stift“). Dazu ein Export eigener Körper (Treppe mit vielen Flächen) und eine selbst abgeänderte Kopie von `box_ap214.step`, in der `LENGTH_MEASURE(1.E-07)` durch `LENGTH_MEASURE(1.E-03)` ersetzt ist (grobe Genauigkeit). Jeweils prüfen: Texte lesbar, nichts ragt heraus, Meldung nennt den Grund. Abhaken:
+
+**A. Einlesen und Fenster**
+- [ ] 1. „Datei → STEP importieren …“ (direkt unter „Netz importieren …“, Symbol vorhanden) öffnet das Fenster „STEP importieren“ mit „Datei wählen (STEP)“. Dateiauswahl, `box_ap214.step` wählen: Fortschrittsbalken „Die Datei wird gelesen …“, dann „Die Körper werden geprüft …“, dann die Liste mit einem Körper „Würfel“ (Spalten Name, Flächen = 6, Größe, Einheit, Status „wird übernommen“), Häkchen gesetzt.
+- [ ] 2. „Importieren“: Meldung „1 Körper importiert …“ (in neutraler Farbe, nicht rot), Kamera zeigt den Quader, er ist gewählt, der Baum zeigt „Würfel“ mit Symbol, das Eigenschaftenfeld zeigt Flächen, Kanten und die Genauigkeit der Datei.
+- [ ] 3. Ring mit Bohrung (`bore_halves.step`, dann `bore_seam.step`): Liste, Importieren; Bohrung und Wand stimmen (Querschnitt prüfen, siehe Punkt 9).
+- [ ] 4. Baugruppe `inch_assembly.step`: Die Liste zeigt „Block“, „Block (2)“, „Stift“ (das Gestell selbst hat keinen Körper), Einheit „Zoll“; die Größen sind das 25,4-fache der Zahlen in der Datei.
+- [ ] 5. Einheit auf „Millimeter“ stellen und zurück auf „Zoll“: Die Größen ändern sich, die Häkchen bleiben. Nach „Millimeter“ sind alle Größen 25,4-mal kleiner.
+- [ ] 6. Importieren der Baugruppe: Meldung „3 Körper importiert“; die Körper liegen so wie in der Datei zueinander (nicht alle am Ursprung). Strg+Z nimmt alle drei zurück (ein Schritt, Name „STEP importieren“), Strg+Y bringt sie wieder.
+
+**B. Weiterverwenden**
+- [ ] 7. Block mit einem Zylinder abziehen; eine Kante runden; eine Skizze auf eine Blockfläche („STEP-Fläche 3“ in der Auswahl) legen und extrudieren. Alles gelingt, oder die Meldung nennt klar den Grund.
+- [ ] 8. Importierten Körper verschieben (Position ziehen oder Verschieben-Feature).
+- [ ] 9. Zeichnung mit Draufsicht und Schnitt durch den Ring; Stückliste mit den Importen: Namen und Zahl stimmen.
+- [ ] 10. STEP-Export des importierten Körpers und erneuter Import: gleiche Flächenzahl.
+
+**C. Speichern und Öffnen**
+- [ ] 11. Speichern, Tab schließen, Dokument öffnen: Körper, Namen, Lage und Marken sind gleich; die Skizze aus Punkt 7 sitzt auf derselben Fläche. Das Öffnen dauert bei einem großen gekrümmten Körper kurz (siehe Grenzen).
+- [ ] 12. Ein Dokument ohne STEP-Körper speichern: Dateiformat und Inhalt wie vorher (nicht Format 10).
+- [ ] 13. Eine von Hand beschädigte Datei: ein Zeichen im STEP-Text einer Form ändern, Dokument öffnen: Es lädt, der Körper zeigt den Fehler im Baum. Den Kopf des Textes beschädigen: die Version wird abgelehnt und die vorherige geöffnet.
+
+**D. Warnungen, Auslassen, Abbrechen**
+- [ ] 14. Grobe Datei (Kopie mit `1.E-03`): In der Liste steht „wird übernommen – … Rechnen mit diesem Körper kann scheitern“, nach dem Import steht dieselbe Warnung im Eigenschaftenfeld. Abziehen und Runden gelingen oder melden klar.
+- [ ] 15. Datei mit ausgelassenem Körper (zum Beispiel eine selbst abgeänderte Kopie, in der eine Ebene durch `OFFSET_SURFACE` ersetzt ist): roter Grund „wird ausgelassen: …“ in der Liste, Häkchen gesperrt, die übrigen Körper lassen sich importieren.
+- [ ] 16. Abgeschnittene Datei (bei der Hälfte abschneiden): Meldung mit Zeilennummer, keine Abstürze. Keine STEP-Datei (Textdatei umbenannt): Meldung „… keine STEP-Datei …“.
+- [ ] 17. Große Datei (Export einer Treppe mit 10 000 Flächen): Die Oberfläche bleibt bedienbar, „Abbrechen“ wirkt sofort, danach lässt sich eine andere Datei wählen.
+- [ ] 18. Datei mit mehr als 50 Körpern (Export von 51 Quadern): „Die Datei enthält mehr als 50 Körper.“
+- [ ] 19. Dokument ändern (zum Beispiel einen Quader anlegen), während die Liste offen ist, dann „Importieren“: nichts wird angelegt, die Meldung bittet, die Datei noch einmal zu wählen.
+- [ ] 20. „Schließen“ und „Abbrechen“ während des Lesens: Das Fenster schließt, nichts bleibt im Hintergrund hängen. Eine offene Skizze: sie wird beim Öffnen des Fensters beendet.
+
+**E. Fenster, Tasten, Aussehen**
+- [ ] 21. Enter im Feld „Dateiname“ der Dateiauswahl öffnet die Datei; „Andere Datei wählen …“ geht; „Abbrechen“ in der Dateiauswahl lässt das Fenster mit der alten Liste offen.
+- [ ] 22. Liste mit 50 Körpern: „Importieren“ bleibt erreichbar (Fußzeile fest), die Liste rollt; keine Zeilen wrappen.
+- [ ] 23. Fenster 1100 × 700 und 800 × 600: Das Fenster, die Liste und die Fußzeile sind im Bild, nichts wird abgeschnitten.
+- [ ] 24. Hell und Dunkel: Symbol im Menü, Status „wird übernommen“ / „wird ausgelassen“ und die Warnung sind lesbar, Farben stimmen mit dem übrigen Programm; Hinweise (Einheit, gemischt) nicht rot.
+- [ ] 25. Strg+Z und Strg+Y bei offenem Fenster tun nichts am Dokument; nach „Schließen“ wirken sie wieder.

@@ -81,3 +81,24 @@ Heute kommen fremde Teile nur als **Netz-Körper** (STL/OBJ) ins Programm: Dreie
 3. **Nicht lesbare oder ungültige Körper:** auslassen mit Begründung und die übrigen trotzdem übernehmen (statt alles oder nichts)?
 4. **Speichern:** Die Körperform steckt als normalisierter STEP-Text in der Projektdatei (je Version erneut), kein Verweis auf die Originaldatei?
 5. **Wirkung und Genauigkeit:** Ein STEP-Körper ist ein normaler exakter Körper, seine Form nicht parametrisch änderbar; Körper mit grober Dateigenauigkeit (gröber als 1e-5 mm) werden mit Warnung übernommen („Rechnen kann scheitern“) statt abgelehnt? Und falls das Messen zeigt, dass der Kernel dafür eine Änderung braucht: darf ich sie vorschlagen und Sie entscheiden dann?
+
+## 8. Festlegungen der Umsetzung
+
+Die Festlegungen P1 bis P16 stehen ausführlich im Kopf des Plans (`docs/superpowers/plans/2026-10-21-step-import.md`), Abweichungen im Abschnitt „Abweichungen bei der Umsetzung“ des Plans und in `docs/superpowers/offene-punkte.md`. Hier die Kurzfassung. Wo sie von §2 bis §5 abweicht, gilt diese Liste: Die Grenze von 100 000 Flächen je Körper aus §5 ist nach §4a.5 auf 20 000 gesenkt.
+
+1. **P1 Lesen in zwei Stufen:** Erst ein Indexlauf über die Datei (Nummer, Lage in der Datei, Zeile, Typname), Parameter eines Eintrags werden erst beim Gebrauch zerlegt. Ein fehlender Verweis trifft nur die Körper, die ihn brauchen.
+2. **P2 Was ein Körper ist:** Eine Darstellung mit mindestens einem Volumen-Eintrag ergibt einen Körper (mehrere Volumen darin sind Schalen **eines** Körpers). Ein Teil, das die Baugruppe zweimal benutzt, ergibt zwei Körper.
+3. **P3 Lagen:** Die Lage jedes Körpers kommt aus den Beziehungen der Baugruppe und wird bis zur Wurzel multipliziert. Spiegelung, Maßstab ungleich 1, Zyklen, Tiefe über 32 und unklare Richtung ergeben eine Meldung; der Körper bleibt am Ursprung. Ist nur die Richtung geraten, wird die Lage angewandt und das gemeldet.
+4. **P4 Genauigkeit:** Zusammengezogen wird nur innerhalb der Genauigkeit der Datei (zwischen 1e-6 und 1e-3 mm, fehlt sie: 1e-3 mm mit Warnung). Lücken werden nie geschlossen. Gröber als 1e-5 mm: Warnung „Rechnen mit diesem Körper kann scheitern“.
+5. **P5 Normalisieren:** Jeder gelesene Körper wird mit dem eigenen Schreiber (fester Zeitstempel) geschrieben und wieder gelesen; benutzt wird genau dieses Ergebnis. Sitzung und Neuladen sind dadurch gleich.
+6. **P6 Keine Lagefelder:** Ein STEP-Körper hat keine Zahlenfelder und keine Formeln; verschoben wird mit dem gewöhnlichen Verschieben, ein Bearbeiten-Fenster gibt es nicht.
+7. **P7 Marken:** Jede Fläche heißt „STEP-Fläche n“, n ab 1 in der Reihenfolge des normalisierten Textes.
+8. **P8 Dreh- und Strangflächen:** Wo es genau geht, werden sie zu Ebene, Zylinder, Kegel, Kugel oder Torus, sonst zu Freiformflächen. Ob die Normale gekippt ist, entscheidet ein Vergleich an einem Probepunkt, nie eine Annahme.
+9. **P9 Nähte:** Nur Zylinder, Kegel und Kugel ohne Naht bekommen eine eingefügte Naht; andere rundum gehende Flächen ohne Naht (Torus) lassen den Körper aus.
+10. **P10 Namen:** Produktname, sonst Name der Darstellung, sonst Name des Volumen-Eintrags; getrimmt, höchstens 64 Zeichen; Doppelte „Name (2)“; leer: „STEP-Körper n“.
+11. **P11 Einheit umstellen:** Die Wahl im Fenster ersetzt die Längeneinheit aller Darstellungen der Datei (auch Lagen und Genauigkeit), der Winkel bleibt.
+12. **P12 Grenzen:** Mehr als 50 Körper lehnt die ganze Datei ab; mehr als 20 000 Flächen lassen nur diesen Körper aus. Dazu 200 MB Dateigröße, 5 Millionen Einträge, Klammertiefe 64, Baugruppentiefe 32. Hinzu kam bei der Umsetzung: Alle STEP-Formen eines Dokuments zusammen dürfen höchstens 200 MB groß sein.
+13. **P13 Fenster:** Wie „Netz importieren“: Das Ergebnis gilt nur für den Dokumentstand bei der Dateiwahl; solange das Fenster offen ist, wirkt Strg+Z nicht.
+14. **P14 Laden:** Ein beschädigter STEP-Text in einer Projektdatei lässt das Dokument laden; der Körper bekommt den Fehlerstatus mit Meldung.
+15. **P15 Fortschritt:** Zwei Aufträge nacheinander (Lesen, dann Prüfen und Bauen), beide abbrechbar.
+16. **P16 Nachziehen der Ecken:** Das Machbarkeitstor (Aufgabe 4) zeigte, dass Körper mit grober Genauigkeit sonst beim Abziehen, Verrunden und Schnitt vom Kernel abgelehnt werden. Darum werden Ecken innerhalb der Genauigkeit der Datei auf den Schnitt ihrer Flächen gezogen (Zusammenziehen, kein Lückenschließen). Der Kernel bleibt unverändert.
