@@ -565,6 +565,11 @@ pub fn check_normal_header(text: &str) -> Result<(), String> {
 /// Liest einen normalisierten Text: Kopf wie [`check_normal_header`], genau ein Körper,
 /// Millimeter, Einheitslage; Marken „STEP-Fläche n“ (P7). Sonst `Err` mit Grund.
 pub fn read_normal_body(text: &str) -> Result<Solid, String> {
+    // Zeilen unseres eigenen Texts sagen dem Nutzer nichts (wie beim Import, I4).
+    read_normal_inner(text).map_err(|m| without_line(&m).to_string())
+}
+
+fn read_normal_inner(text: &str) -> Result<Solid, String> {
     check_normal_header(text)?;
     let quiet = Progress::new();
     let file = StepFile::parse(text.as_bytes().to_vec(), &ReadLimits::DEFAULT, &quiet)

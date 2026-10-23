@@ -753,3 +753,17 @@ fn import_respects_the_step_text_sum_limit() {
         "Wächter stellt zurück"
     );
 }
+
+/// Schlussprüfung M2: Gründe aus dem gespeicherten Text nennen keine Zeilen unseres eigenen
+/// Texts (dort sucht niemand), wie schon beim Import.
+#[test]
+fn damaged_saved_text_names_no_line_of_the_internal_text() {
+    let text = normalize(&box_solid(), "Q").unwrap().text;
+    let from = "DIRECTION('',(0.,0.,1.))";
+    assert!(text.contains(from), "Richtung im Text");
+    let broken = text.replacen(from, "DIRECTION('',(0.,0.,0.))", 1);
+    let shape = StepShape::new(broken, 1e-6).unwrap();
+    let e = shape.solid().expect_err("kaputte Richtung");
+    assert!(!e.contains("Zeile"), "{e}");
+    assert!(!e.is_empty());
+}
