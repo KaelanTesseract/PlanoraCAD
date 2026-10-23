@@ -12,8 +12,9 @@
 //! - `ORIENTED_EDGE.orientation` (Halbkante vorwärts oder rückwärts),
 //! - `EDGE_CURVE.same_sense` (Kante läuft mit oder gegen den Kurvenparameter: `t1 < t0`).
 //!
-//! Der Aufbau geht über eine Rohform ([`RawBody`]); sie wird bereinigt (Pole, entartete
-//! Kanten, fehlende Nähte: Aufgabe 6, [`crate::read::seam`]), dann entsteht daraus der Körper,
+//! Der Aufbau geht über eine Rohform ([`RawBody`]); sie wird bereinigt (Zusammenziehen, Paaren
+//! und Nachziehen der Ecken: Aufgabe 7, [`crate::read::weld`]; Pole, entartete Kanten, fehlende
+//! Nähte: Aufgabe 6, [`crate::read::seam`]), dann entsteht daraus der Körper,
 //! der geprüft wird: `validate`, je Fläche das Schließen jeder Schleife im Parameterraum und ihr
 //! Umlaufsinn (außen gegen, Löcher im Uhrzeigersinn), Außenrichtung je Schale über ihr Volumen
 //! (äußere Schalen positiv, Hohlräume negativ, sonst umgedreht), Lage jeder Kante auf ihren
@@ -26,6 +27,7 @@ use crate::read::seam;
 use crate::read::spline::{close_curve, finish_cone, finish_extrusion_with_tol};
 use crate::read::units::Units;
 use crate::read::value::Entity;
+use crate::read::weld;
 use crate::topology::CLASSIFY_CHORD;
 use planora_exchange::Progress;
 use planora_kernel::boolean::{face_geom, loop_points, oriented_area, points_to_uv};
@@ -288,7 +290,7 @@ fn coord(x: f64) -> String {
     format!("{r:.2}").replace('.', ",")
 }
 
-fn place(p: DVec3) -> String {
+pub(crate) fn place(p: DVec3) -> String {
     format!("({}; {}; {})", coord(p.x), coord(p.y), coord(p.z))
 }
 
@@ -1951,13 +1953,16 @@ fn check_edges(solid: &Solid, weld_tol: f64) -> Result<(), Skip> {
 }
 
 /// Baut aus den Volumen-Einträgen `items` (`MANIFOLD_SOLID_BREP`, `BREP_WITH_VOIDS`; mehrere
-/// ergeben mehrere Schalen eines Körpers) einen geprüften Körper. Ablauf: Rohform lesen, Ecken auf
-/// Pole ziehen, entartete Kanten entfernen, fehlende Nähte einfügen ([`crate::read::seam`]),
-/// Pole prüfen, je Fläche äußerer Rand und Parameterbereich, ungenutzte Kanten und Ecken
-/// entfernen; dann `validate`, Schleifen je Fläche, Außenrichtung je Schale über ihr Volumen,
+/// ergeben mehrere Schalen eines Körpers) einen geprüften Körper. Ablauf: Rohform lesen, Ecken
+/// zusammenziehen und Kanten paaren ([`crate::read::weld`]), Ecken auf Pole ziehen, entartete
+/// Kanten entfernen, Lücken zwischen offenen Kanten melden, Ecken auf den Schnitt ihrer Flächen
+/// nachziehen (P16), fehlende Nähte einfügen ([`crate::read::seam`]), Pole prüfen, je Fläche
+/// äußerer Rand und Parameterbereich, ungenutzte Kanten und Ecken entfernen, jede Kante genau
+/// zweimal benutzt; dann `validate`, Schleifen je Fläche, Außenrichtung je Schale über ihr Volumen,
 /// Lage der Kanten und Ecken, `validate`. Mehr als `file.limits().max_faces` Flächen, ungültige
 /// Topologie, verdrehte Flächen, Kanten neben ihren Flächen oder Ecken neben ihren Kanten ergeben
-/// ein [`Skip`] mit Grund. `progress` zählt je Fläche eins weiter; Abbruch ergibt
+/// ein [`Skip`] mit Grund. Grobe Dateien (`Units::is_coarse`) bekommen die Warnung
+/// [`weld::coarse_warning`]. `progress` zählt je Fläche eins weiter; Abbruch ergibt
 /// `Skip("Abgebrochen")`.
 pub fn build_solid(
     file: &StepFile,
@@ -1968,15 +1973,19 @@ pub fn build_solid(
 ) -> Result<BuiltSolid, Skip> {
     let tol = opts.weld_tol_mm;
     let mut raw = read_raw(file, units, items, tol, progress)?;
+    weld::weld_body(&mut raw, tol);
     seam::snap_poles(&mut raw, tol);
     seam::split_at_poles(&mut raw, tol);
     seam::drop_degenerate(&mut raw, tol)?;
+    weld::check_gaps(&raw, tol)?;
+    weld::tighten_vertices(&mut raw, tol);
     seam::insert_seams(&mut raw, tol)?;
     seam::check_poles(&raw, tol)?;
     for i in 0..raw.faces.len() {
         finish_face(&mut raw, i, tol)?;
     }
     raw.compact();
+    weld::check_open_edges(&raw, tol)?;
     let owners: Vec<Option<usize>> = raw.shells.iter().map(|s| s.owner).collect();
     let guessed: Vec<bool> = raw.faces.iter().map(|f| f.side_guessed).collect();
     let mut solid = raw.to_solid();
@@ -1987,9 +1996,13 @@ pub fn build_solid(
     orient_shells(&mut solid, &owners, &guessed, tol)?;
     check_edges(&solid, tol)?;
     validate(&solid).map_err(|e| invalid(&solid, &e))?;
+    let mut warnings = Vec::new();
+    if units.is_coarse() {
+        warnings.push(weld::coarse_warning(tol));
+    }
     Ok(BuiltSolid {
         faces: solid.faces.len(),
         solid,
-        warnings: Vec::new(),
+        warnings,
     })
 }

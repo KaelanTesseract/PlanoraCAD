@@ -13,12 +13,13 @@ use planora_drawing::model::ViewKind;
 use planora_drawing::section::{CutOutcome, SectionPlane, cut_body};
 use planora_exchange::Progress;
 use planora_kernel::{
-    AnalyticKernel, BlendEdge, BlendKind, BlendRequest, BoolOp, Edge, Id, Kernel, Solid, validate,
+    AnalyticKernel, BlendEdge, BlendKind, BlendRequest, BoolOp, Edge, Id, Kernel, Solid, Surface,
+    validate,
 };
 use planora_math::{DMat4, DVec3, PI, TAU, Tolerance};
 use planora_mesh::{TessellationOptions, boolean_volume_plausible, mass_properties, tessellate};
 use planora_step::read::geom::Skip;
-use planora_step::read::topo::{BuildOptions, STEP_FACE_ROLE, build_solid};
+use planora_step::read::topo::{BuildOptions, STEP_FACE_ROLE, build_solid, read_raw};
 use planora_step::read::units::{Units, context_units};
 use planora_step::{ReadLimits, StepFile};
 use std::path::PathBuf;
@@ -51,23 +52,20 @@ enum Outcome {
 
 use Outcome::{Fails, Ok as Pass};
 
-/// Gemessene Ergebnisse der groben Fassungen (Schritte wie [`STEPS`]; Messung 2026-10-21, Basis
-/// e54ae6a). Einlesen, `validate` und Volumen gelingen; Abziehen, Rundung und Schnitt lehnt der
-/// Kernel ab, weil die Ecken weiter als seine Toleranz (1e-6) neben den Kanten liegen – mit
-/// klarer Meldung, nie mit falschem Körper. Damit gilt P16 (Nachziehen der Ecken, Aufgabe 7).
+/// Gemessene Ergebnisse der groben Fassungen (Schritte wie [`STEPS`]).
+///
+/// Messung 2026-10-21 (Aufgabe 4, Basis e54ae6a, ohne Nachziehen): Einlesen, `validate` und
+/// Volumen gelangen; Abziehen, Rundung und Schnitt lehnte der Kernel ab, weil die Ecken weiter als
+/// seine Toleranz (1e-6) neben den Kanten lagen („… liegen zu knapp beieinander …“, „Eine Kante
+/// der Fläche „STEP-Fläche 3“ passt nicht zur Rundung“, „Eine Aussparung oder Kante … liegt im
+/// Bereich der Rundung …“) – nie mit falschem Körper. Damit galt P16.
+///
+/// Messung 2026-10-23 (Aufgabe 7, mit Nachziehen der Ecken auf den Schnitt ihrer Flächen und
+/// Kanten): alle fünf Schritte bestehen, die Rundung auch im Bau (siehe [`rounded`]).
 const EXPECTED_COARSE: [(&str, [Outcome; 5]); 3] = [
-    // Abziehen: „Die Körper berühren sich nur an einer Kante oder tangential oder liegen zu
-    //   knapp beieinander; diese Lage lässt sich nicht sicher auswerten“
-    // Rundung: „Eine Aussparung oder Kante der Fläche „STEP-Fläche 3“ liegt im Bereich der
-    //   Rundung; bitte ein kleineres Maß wählen“
-    // Schnitt: cut_body mit derselben Meldung wie beim Abziehen
-    ("box_ap214.step", [Pass, Pass, Fails, Fails, Fails]),
-    // Abziehen und Schnitt: wie beim Quader („… liegen zu knapp beieinander …“)
-    // Rundung: „Eine Kante der Fläche „STEP-Fläche 3“ passt nicht zur Rundung“
-    ("bore_halves.step", [Pass, Pass, Fails, Fails, Fails]),
-    // Abziehen und Schnitt: wie beim Quader („… liegen zu knapp beieinander …“)
-    // Rundung: „Eine Kante der Fläche „STEP-Fläche 3“ passt nicht zur Rundung“
-    ("bore_seam.step", [Pass, Pass, Fails, Fails, Fails]),
+    ("box_ap214.step", [Pass, Pass, Pass, Pass, Pass]),
+    ("bore_halves.step", [Pass, Pass, Pass, Pass, Pass]),
+    ("bore_seam.step", [Pass, Pass, Pass, Pass, Pass]),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -197,6 +195,22 @@ fn units_of(file: &StepFile) -> Result<Units, String> {
     context_units(file, ctx).map_err(|e| format!("{e:?}"))
 }
 
+/// Ecken der Rohform, wie die Datei sie nennt (vor Zusammenziehen und Nachziehen).
+fn raw_vertices(text: &str) -> Vec<DVec3> {
+    let file = StepFile::parse(
+        text.as_bytes().to_vec(),
+        &ReadLimits::DEFAULT,
+        &Progress::new(),
+    )
+    .expect("Datei lädt");
+    let units = units_of(&file).expect("Einheiten");
+    let items = file.ids_of("MANIFOLD_SOLID_BREP").to_vec();
+    read_raw(&file, units, &items, units.weld_tol_mm(), &Progress::new())
+        .map_err(|Skip(m)| m)
+        .expect("Rohform")
+        .vertices
+}
+
 /// Liest den Körper der Datei; liefert auch die Genauigkeit, mit der gebaut wurde.
 fn read(text: &str) -> Result<(Solid, f64), String> {
     let file = StepFile::parse(
@@ -301,6 +315,31 @@ fn patches_fit(what: &str, s: &Solid) -> Result<(), String> {
     Ok(())
 }
 
+/// Die Rundung ist gebaut: mehr Flächen als vorher, darunter eine Rundungsfläche mit Radius
+/// [`FILLET`] (Quader: Zylinder, Ring: Torus mit diesem Rohrradius), und keine Kante läuft mehr
+/// entlang der scharfen oberen Kante.
+fn rounded(what: &str, kind: Kind, s: &Solid, faces_before: usize) -> Result<(), String> {
+    if s.faces.len() <= faces_before {
+        return Err(format!(
+            "{what}: {} Flächen, vorher {faces_before}",
+            s.faces.len()
+        ));
+    }
+    let fillet_face = s.faces.iter().any(|(_, f)| match (kind, &f.surface) {
+        (Kind::Box, Surface::Cylinder { radius, .. }) => (radius - FILLET).abs() < 1e-9,
+        (Kind::Ring, Surface::Torus { minor, .. }) => (minor - FILLET).abs() < 1e-9,
+        _ => false,
+    });
+    if !fillet_face {
+        return Err(format!("{what}: keine Rundungsfläche mit Radius {FILLET}"));
+    }
+    let left = kind.top_edges(s).len();
+    if left > 0 {
+        return Err(format!("{what}: {left} scharfe obere Kanten übrig"));
+    }
+    Ok(())
+}
+
 /// Ergebnis der fünf Schritte für die Datei `name` mit dem Text `text`.
 fn run(name: &str, text: &str, rel: f64) -> [Result<(), String>; 5] {
     let kind = kind_of(name);
@@ -369,6 +408,10 @@ fn run(name: &str, text: &str, rel: f64) -> [Result<(), String>; 5] {
             .map_err(|e| format!("blend: {e}"))?;
         valid("gerundet", &b.solid)?;
         tags_kept("gerundet", &b.solid, faces)?;
+        // Das Volumen ändert sich durch die Rundung nur um 3,6e-4 (Quader) bzw. 7,5e-4 (Ring)
+        // relativ – bei groben Körpern (1e-3) zu wenig als Beweis. Darum auch der Bau: eine neue
+        // Rundungsfläche mit Radius 1, die scharfe Kante ist weg.
+        rounded("gerundet", kind, &b.solid, faces)?;
         check_volume(
             "gerundet",
             volume(&b.solid)?,
@@ -484,13 +527,28 @@ fn coarse_bodies_are_measured() {
         // Die grobe Fassung ist wirklich grob: jede Ecke 9e-4 mm neben der genauen, gebaut mit
         // der Genauigkeit 1e-3.
         let (e, _) = read(&exact).unwrap_or_else(|m| panic!("{name}: {m}"));
-        if let Ok((c, weld)) = read(&text) {
-            assert_eq!(weld, 1e-3, "{name}: Genauigkeit");
-            assert_eq!(c.vertices.len(), e.vertices.len(), "{name}: Ecken");
-            for ((_, a), (_, b)) in c.vertices.iter().zip(e.vertices.iter()) {
-                let d = a.point.distance(b.point);
-                assert!((d - COARSE_SHIFT).abs() < 1e-8, "{name}: Versatz {d}");
-            }
+        let (c, weld) = read(&text).unwrap_or_else(|m| panic!("{name} (grob): {m}"));
+        assert_eq!(weld, 1e-3, "{name}: Genauigkeit");
+        // In der Datei (Rohform vor dem Bereinigen) liegt jede Ecke 9e-4 neben der genauen …
+        let (raw_c, raw_e) = (raw_vertices(&text), raw_vertices(&exact));
+        assert_eq!(raw_c.len(), raw_e.len(), "{name}: Ecken der Rohform");
+        for (a, b) in raw_c.iter().zip(&raw_e) {
+            let d = a.distance(*b);
+            assert!((d - COARSE_SHIFT).abs() < 1e-8, "{name}: Versatz {d}");
+        }
+        // … und im Körper nach dem Nachziehen (P16) genau auf ihr (Kernel: 1e-6; hier 1e-9).
+        assert_eq!(c.vertices.len(), e.vertices.len(), "{name}: Ecken");
+        for (_, a) in c.vertices.iter() {
+            let d = e
+                .vertices
+                .iter()
+                .map(|(_, b)| a.point.distance(b.point))
+                .fold(f64::INFINITY, f64::min);
+            assert!(
+                d <= 1e-9,
+                "{name}: Ecke {:?} {d:e} neben der genauen",
+                a.point
+            );
         }
         let res = run(name, &text, COARSE_REL);
         for ((step, want), r) in STEPS.iter().zip(expected).zip(res) {

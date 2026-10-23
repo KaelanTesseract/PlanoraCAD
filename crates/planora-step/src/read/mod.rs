@@ -15,3 +15,4 @@ pub mod spline;
 pub mod topo;
 pub mod units;
 pub mod value;
+pub mod weld;
