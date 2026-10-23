@@ -11,6 +11,7 @@ use crate::import_dialog::ImportDialog;
 use crate::projects_panel::ProjectsUi;
 use crate::shell::ShellState;
 use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
+use crate::step_import_dialog::{self, StepImportDialog};
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
 use crate::{
@@ -287,6 +288,17 @@ fn open_import(ws: &mut Workspace) {
     tab.import_dialog = Some(ImportDialog::new(dir));
 }
 
+/// Datei → STEP importieren …: wie [`open_import`]. Die offene Skizze wird schon hier beendet
+/// (nicht erst beim Import), damit Rückgängig des Imports nur die Körper zurücknimmt.
+fn open_step_import(ws: &mut Workspace) {
+    let dir = ws.exchange_dir.clone().unwrap_or_else(default_dir);
+    let tab = ws.active_tab_mut();
+    if tab.read_only || tab.state.try_close_sketch().is_err() {
+        return;
+    }
+    tab.step_import_dialog = Some(StepImportDialog::new(dir));
+}
+
 /// Menüeintrag (gesperrt, wenn nicht `enabled`) mit sichtbarem Tastaturfokus: die Einträge haben
 /// keinen Rand, der Fokus zeigt sich als 2-px-Ring in Akzentfarbe.
 fn entry(ui: &mut egui::Ui, enabled: bool, widget: impl egui::Widget) -> egui::Response {
@@ -357,6 +369,17 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
     .clicked()
     {
         open_import(ws);
+        ui.close();
+    }
+    if entry(
+        ui,
+        !read_only,
+        icons::button(Icon::Import, step_import_dialog::MENU_LABEL),
+    )
+    .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
+    .clicked()
+    {
+        open_step_import(ws);
         ui.close();
     }
     ui.separator();
@@ -890,6 +913,7 @@ impl eframe::App for PlanoraApp {
                 tab.export_dialog = None;
             }
             tab.import_dialog = None;
+            tab.step_import_dialog = None;
             tab.drawing_dialog = None;
             tab.state.dimension_dialog = None;
             tab.state.sheet_dialog = None;
@@ -945,6 +969,11 @@ impl eframe::App for PlanoraApp {
             && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
         {
             tab.import_dialog = Some(dialog);
+        }
+        if let Some(mut dialog) = tab.step_import_dialog.take()
+            && dialog.show(&ctx, &mut tab.state, &mut exchange_dir)
+        {
+            tab.step_import_dialog = Some(dialog);
         }
         if tab.blend_dialog.is_none() && tab.state.edge_picking {
             tab.state.edge_picking = false;

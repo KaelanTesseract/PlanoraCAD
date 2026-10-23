@@ -307,6 +307,7 @@ impl FileChooser {
         if let Some(n) = pick {
             self.select(&n);
         }
+        let mut enter = false;
         ui.horizontal(|ui| {
             ui.label("Dateiname");
             let edit = theme::text_field(
@@ -316,7 +317,14 @@ impl FileChooser {
             if edit.changed() {
                 self.confirm = None;
             }
+            // Beim Öffnen wählt Enter im Namensfeld die Datei (wie „Öffnen“).
+            enter = self.mode == ChooserMode::Open
+                && edit.lost_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter));
         });
+        if enter {
+            action = self.confirm();
+        }
         if let Some(e) = &self.error {
             ui.colored_label(error_color(ui.visuals().dark_mode), e);
         }

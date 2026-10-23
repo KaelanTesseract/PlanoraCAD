@@ -11,6 +11,7 @@ use crate::history::{History, Tracker, snapshot_bytes};
 use crate::import_dialog::ImportDialog;
 use crate::parameter_dialog::ParameterDialog;
 use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
+use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
 use planora_feature::Snapshot;
 use planora_project::config::Config;
@@ -43,6 +44,8 @@ pub struct DocTab {
     pub blend_dialog: Option<BlendDialog>,
     pub export_dialog: Option<ExportDialog>,
     pub import_dialog: Option<ImportDialog>,
+    /// Fenster „STEP importieren“.
+    pub step_import_dialog: Option<StepImportDialog>,
     /// Fenster „Neue Zeichnung“.
     pub drawing_dialog: Option<NewDrawingDialog>,
     /// Fenster „Parameter“. Es sperrt Rückgängig nicht (Plan P8): nicht in
@@ -89,6 +92,7 @@ impl DocTab {
             blend_dialog: None,
             export_dialog: None,
             import_dialog: None,
+            step_import_dialog: None,
             drawing_dialog: None,
             parameter_dialog: None,
             name,
@@ -387,6 +391,7 @@ impl DocTab {
             || self.blend_dialog.is_some()
             || self.export_dialog.is_some()
             || self.import_dialog.is_some()
+            || self.step_import_dialog.is_some()
             || self.drawing_dialog.is_some()
             || s.dimension_dialog.is_some()
             || s.sheet_dialog.is_some()
@@ -412,6 +417,7 @@ impl DocTab {
             self.export_dialog = None;
         }
         self.import_dialog = None;
+        self.step_import_dialog = None;
         self.drawing_dialog = None;
         let s = &mut self.state;
         s.dimension_dialog = None;
