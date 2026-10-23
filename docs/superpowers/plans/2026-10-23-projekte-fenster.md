@@ -18,7 +18,7 @@
 ## Global Constraints
 
 - **Texte** deutsch, Laiensprache, keine Markennamen, keine Hinweise auf Datenherkunft. Das Wort „Wurzel“ erscheint in keinem Oberflächentext (Code, Kommentare und Konfigurationsschlüssel `root` bleiben). Feste Texte (wörtlich): Menü „Projekte …“ (Strg+O, ersetzt „Öffnen …“), „Einstellungen …“; Fenster „Projekte“, „Einstellungen“; Knöpfe „Neues Projekt“, „Neues Dokument“, „Neuer Ordner“, „Projektverzeichnis …“, „Projektverzeichnis ändern …“, „Diesen Ordner wählen“, „Abbrechen“, „Schließen“, „Aktualisieren“, „Anlegen“; Kontextmenü „Umbenennen …“, „Verschieben …“ (nicht für Projekte), „Löschen …“; Leer: „Noch keine Projekte. Lege mit „Neues Projekt“ das erste an.“; Hinweis Einstellungen: „Ihre Projekte bleiben, wo sie sind. Im neuen Verzeichnis erscheinen nur die Projekte, die dort liegen.“; Kacheltexte und Zählungen siehe Aufgabe 3. Meldungen der Bibliothek und von `choose_root` bleiben wörtlich.
-- **Nur `crates/planora-app/**` ändert sich** (Quellen, Tests). Ohne Diff gegen `0bd0743`: alle anderen Crates (`planora-project`, `-feature`, `-kernel`, `-mesh`, …), `Cargo.toml` (Workspace und App), `Cargo.lock`, `deny.toml`. Keine neue Abhängigkeit, kein `unsafe`.
+- **Nur `crates/planora-app/**` ändert sich** (Quellen, Tests). Ohne Diff gegen `0bd0743`: alle anderen Crates (`planora-project`, `-feature`, `-kernel`, `-mesh`, …). **Ausnahme (Entscheidung von Dennis, 2026-10-23: Ortszeit, Variante B):** Aufgabe 0 darf genau eine kleine, geprüfte Zeit-Abhängigkeit in `Cargo.toml` (Workspace und App) und `Cargo.lock` aufnehmen (`deny.toml` nur, wenn die Lizenzprüfung es zwingend verlangt: dann anhalten und fragen); danach ohne Diff. Sonst keine neue Abhängigkeit, kein `unsafe` in eigenem Code.
 - **Dateiformat unberührt:** `dokument.json`, `versionen/`, `projekt.json`, `config.json` (nur `root` wird beim Wechsel geschrieben, über `Workspace::persist_config`). Golden-Tests in `crates/planora-project/tests` laufen unverändert.
 - **Farben** nur aus `theme.rs` (`theme::palette(dark)`, `viewport::render_palette`; Wächter `tests/no_hard_coded_colors.rs`), Fenster nur über `dialog::Dialog` (`no_raw_windows.rs`), Textfelder nur über `theme::text_field*` (`no_raw_text_edits.rs`), Symbole nur aus Phosphor-Light mit Codepunkt aus `crates/planora-app/assets/fonts/Phosphor-Light-style.css` (`tests/icons.rs`). Kacheln einer Reihe gleich groß und gleich hoch; Zeilen über die ganze Fensterbreite; Hell und Dunkel.
 - **Tests berühren nie** `%APPDATA%` oder den Ordner Dokumente des Nutzers: Jede `Workspace`, die `persist_config`/`save_places` erreichen kann, bekommt `ws.config_path = <temp>/config.json`; Bibliotheken nur unter `common::temp_root(…)`; Miniaturen nur in Temp-Bibliotheken. Ordner am Testende entfernen.
@@ -29,7 +29,7 @@
 - **Bestehende Tests bleiben unverändert grün**, außer den in den Aufgaben 7 und 9 genannten Anpassungen (vollständige Liste dort).
 
 **Festlegungen des Plans (P1–P12; der Nutzer kann sie kippen):**
-- **P1 Zeitangaben in UTC:** `VersionInfo.time` ist UTC-Text „JJJJ-MM-TTThh:mm:ssZ“ (`fsutil::now_iso`). Ortszeit ginge nur über eine Betriebssystem-Schnittstelle (`unsafe`) oder eine neue Abhängigkeit, beides ausgeschlossen. Die Kachel zeigt deshalb dieselbe Uhrzeit wie der Reiter „Versionen“ (der ebenfalls UTC ohne Zusatz zeigt), umgeformt zu „23.10.2026, 16:42“. Ortszeit an allen Stellen wird ein eigener offener Punkt.
+- **P1 Zeitangaben in Ortszeit (Entscheidung von Dennis: B, 2026-10-23):** `VersionInfo.time` ist UTC-Text „JJJJ-MM-TTThh:mm:ssZ“ (`fsutil::now_iso`). Die Oberfläche zeigt Ortszeit des Rechners (mit Sommerzeit) als „23.10.2026, 18:42“, auf den Kacheln und im Reiter „Versionen“ (Aufgabe 0: kleine geprüfte Zeit-Abhängigkeit, `local_time.rs`). Gespeichert wird weiter UTC, am Dateiformat ändert sich nichts. Lässt sich die Ortszeit nicht ermitteln, zeigt die Oberfläche UTC mit dem Zusatz „UTC“.
 - **P2 Modulnamen:** `projects_panel.rs` wird aufgeteilt: Aktionen, `ProjectsUi`, die vier vorhandenen Fenster und zwei neue („Neues Projekt“, „Neues Dokument“) nach `project_actions.rs` (Aufgabe 7); das Feld selbst verschwindet in Aufgabe 9.
 - **P3 Kachelzählung rekursiv:** Projekt- und Ordnerkacheln zählen alle Dokumente darunter (auch in Unterordnern), unlesbare eingeschlossen; Datum und Version kommen vom zuletzt geänderten **lesbaren** Dokument darunter (größtes `latest_time()`, bei Gleichstand kleinerer Name ohne Groß-/Kleinschreibung, dann kleinerer Pfad).
 - **P4 500 Kacheln je Ebene:** Eine Ebene zeigt höchstens `MAX_TILES = 500` Kacheln (Hinweis „Es werden nur die ersten 500 gezeigt.“). Gelesen (`peek`) werden alle Dokumente, im Hintergrund und abbrechbar.
@@ -49,6 +49,28 @@
 3. **Falsche „Version“ oder falsches Datum:** aktiver Zweig ist nicht der jüngste, Spitze gelöscht, gleiche Zeiten, unlesbare Dokumente neben lesbaren, Dokument in Unterordner, offenes geändertes Dokument (Kachel zeigt den gespeicherten Stand). → Aufgabe 3 Tests `version_is_the_tip_of_the_active_branch_not_the_newest`, `ties_pick_the_smaller_name`, `unreadable_documents_count_but_do_not_date`, `nested_documents_count_for_project_and_folder`; Aufgabe 5 `an_open_modified_document_shows_the_saved_version`.
 4. **Nach dem Wegfall des Felds kein Weg mehr zum Öffnen, Umbenennen, Verschieben, Löschen** (auch per Tastatur, mit gesperrten offenen Dokumenten, nach Wechsel des Verzeichnisses, ohne Projektverzeichnis): alles über das Fenster erreichbar, Strg+O öffnet es, „Speichern unter“ verweist darauf. → Aufgabe 7 Tests `every_panel_action_is_reachable_from_tiles`, `open_documents_lock_rename_move_and_delete`; Aufgabe 8 `tab_reaches_every_tile_and_enter_opens_it`; Aufgabe 9 `ctrl_o_opens_the_projects_window_everywhere`, `after_a_directory_change_the_window_shows_the_new_projects`.
 5. **Fenster bei 800 × 600 und mit vielen Projekten:** 200 Kacheln, sehr lange Namen, 0 Kacheln, Hell/Dunkel, 1400 × 900, 2000 × 1100: Fenster ≤ 1200 px und ganz im Bild, Fußzeile sichtbar, alle Kacheln gleich groß, nichts verschiebt sich beim Überfahren oder wenn Miniaturen eintreffen. → Aufgabe 8 Tests `layout_holds_at_all_sizes_with_0_1_and_200_tiles`, `hover_and_arriving_thumbnails_move_nothing`, `long_names_stay_inside_their_tile`.
+
+---
+
+### Task 0: Ortszeit statt UTC (Entscheidung B)
+
+**Files:**
+- Modify: `Cargo.toml` (Workspace-Abhängigkeit), `crates/planora-app/Cargo.toml`, `Cargo.lock` (nur die Zeit-Abhängigkeit und ihre eigenen Unterabhängigkeiten), `deny.toml` nur falls `cargo deny check` die Lizenz zwingend nicht zulässt (dann anhalten, Controller fragt Dennis)
+- Create: `crates/planora-app/src/local_time.rs`, `crates/planora-app/tests/local_time.rs`
+- Modify: `crates/planora-app/src/lib.rs` (`pub mod local_time;`), die Stelle(n), an der der Reiter „Versionen“ die Zeit zeigt (`versions_panel.rs` oder wo `VersionInfo.time` formatiert wird; mit `grep -rn "\.time\|zeit" crates/planora-app/src` finden), dazugehörige bestehende Tests
+
+**Interfaces:**
+- Produces:
+  - `pub fn format_offset(iso_utc: &str, offset_seconds: i32) -> Option<String>` – rein: „2026-10-23T16:42:07Z“ + 7200 → „23.10.2026, 18:42“ (Tages- und Jahreswechsel, Schaltjahr; ungültiger Text → `None`).
+  - `pub fn local_time_text(iso_utc: &str) -> String` – Ortszeit des Rechners zum **angegebenen Zeitpunkt** (Sommer-/Winterzeit des damaligen Datums, nicht des heutigen), Form „dd.mm.yyyy, hh:mm“; lässt sich die Zone nicht ermitteln: UTC-Text mit Zusatz „ UTC“; ungültiger Text: der Eingabetext unverändert.
+  - `pub fn local_offset_at(unix_seconds: i64) -> Option<i32>` – dünne Schicht über der gewählten Bibliothek (die einzige Stelle, die sie berührt); Tests prüfen `format_offset` mit festen Abständen und die Schicht mit einer fest gewählten Zone, soweit die Bibliothek das erlaubt (Europe/Berlin: 2026-01-15 → +3600, 2026-07-15 → +7200, Umstellungstage).
+- Consumes: nichts aus früheren Aufgaben. Spätere Aufgaben (3, 8) benutzen `local_time::local_time_text` statt eigener Formatierung (`format_changed` in Aufgabe 3 ruft es auf).
+
+- [ ] **Step 1: Bibliothek wählen und prüfen.** Kandidaten `jiff`, `time` (nur Feature `local-offset`), `chrono` (nur `clock`). Bewerten: Lizenz laut `deny.toml` erlaubt, kein `unsafe` im eigenen Code, möglichst wenige Unterabhängigkeiten und kleine Merkmale, korrekte Ortszeit **mit Sommerzeit zu einem beliebigen vergangenen Zeitpunkt** unter Windows (auch ohne Neustart der App bei Zonenwechsel nicht nötig), Version mindestens zwei Wochen alt und exakt festgelegt. `cargo deny check` muss sauber bleiben (die Ausnahmen für zbus-Familie und `ttf-parser` gelten weiter, `deny.toml` bleibt unverändert). Begründung und Messzahlen (Anzahl neuer Pakete, Größenzuwachs) in den Bericht.
+- [ ] **Step 2: Tests zuerst** (`tests/local_time.rs`): `format_offset` (Normalfall, +0, negativer Abstand, Tageswechsel vorwärts/rückwärts, Jahreswechsel, 29.02.2028, Sekunden ignoriert, ungültige Texte: leer, ohne `Z`, falscher Monat, `2026-10-23 16:42:07`), Zeitzonenschicht (Berliner Winter/Sommer, Umstellungstage 29.03.2026 und 25.10.2026 jeweils eine Stunde vor/nach der Umstellung, wenn die Bibliothek eine feste Zone erlaubt; sonst die Schicht nur auf „liefert Some und plausibel (|Abstand| ≤ 14 h)“ testen), Rückfall „ UTC“, Versionen-Reiter zeigt Ortszeit (bestehender Test anpassen oder neuen schreiben).
+- [ ] **Step 3: Implementieren** (`local_time.rs`, Reiter „Versionen“ benutzt `local_time_text`; alle UTC-Anzeigen der Oberfläche auf diese Funktion umstellen: `grep -rn "now_iso\|\.time\b" crates/planora-app/src` prüfen).
+- [ ] **Step 4: Mutationsbeweise (≥ 10):** Abstand mit falschem Vorzeichen, Tageswechsel ohne Übertrag, Schaltjahr falsch, Sekunden statt Minuten, 24-Stunden-Fehler (12/24), Monat um eins versetzt, Sommerzeit des heutigen statt des angegebenen Datums, Rückfall ohne „ UTC“, ungültiger Text liefert leeren Text, Versionen-Reiter nutzt wieder UTC.
+- [ ] **Step 5: Gates und Commit** `feat(app): Ortszeit statt UTC in Versionen und Kacheln`: fmt, clippy, `cargo deny check`, `git diff --stat 0bd0743 -- Cargo.toml Cargo.lock deny.toml crates/planora-app/Cargo.toml` zeigt nur die Zeit-Abhängigkeit.
 
 ---
 
@@ -208,7 +230,7 @@ pub struct Tile { pub kind: TileKind, pub name: String, pub path: NodePath,
 /// Kacheln der Ebene `at` (leer = Projekte); `None`, wenn es `at` nicht mehr gibt. Reihenfolge
 /// wie der Baum (Ordner und Dokumente gemischt nach Namen, wie `Library::tree`).
 pub fn tiles_at(scan: &Scan, at: &NodePath) -> Option<Vec<Tile>>;
-/// „23.10.2026, 16:42“ aus „2026-10-23T16:42:07Z“ (P1: UTC); unlesbar → None.
+/// „23.10.2026, 16:42“ aus „2026-10-23T16:42:07Z“ (P1: Ortszeit über `local_time`); unlesbar → None.
 pub fn format_changed(iso: &str) -> Option<String>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum Tone { Normal, Warning }
 pub fn changed_line(tile: &Tile) -> String;     // „Geändert 23.10.2026, 16:42“ | „Datum unbekannt“ | "" (kein lesbares Dokument)
@@ -652,7 +674,7 @@ impl PlanoraApp {
 
 **Handliste für den Nutzer (echtes Fenster; Agents starten die App nicht):**
 1. Datei-Menü: „Projekte …“ mit Strg+O und „Einstellungen …“ da, „Öffnen …“ weg; Ansicht ohne „Projekte“; links nur noch Feature-Baum (Modell, Zeichnung, Skizze).
-2. Strg+O: Fenster „Projekte“ mittig, ≈ 55 % breit, Kacheln mit Miniatur, „Geändert …“, „Version n · k Dokumente“ für deine echten Projekte; Uhrzeit wie im Reiter „Versionen“ (UTC, P1).
+2. Strg+O: Fenster „Projekte“ mittig, ≈ 55 % breit, Kacheln mit Miniatur, „Geändert …“, „Version n · k Dokumente“ für deine echten Projekte; Uhrzeit in Ortszeit, gleich wie im Reiter „Versionen“ (P1).
 3. Miniaturen erscheinen nach und nach (sichtbare zuerst), das Fenster bleibt bedienbar und springt nicht; zweites Öffnen zeigt sie sofort.
 4. Doppelklick auf ein Projekt → Pfad „‹ Projekte › Name“; ‹ und „Projekte“ führen zurück; Doppelklick auf Ordner geht hinein.
 5. Doppelklick auf ein Dokument öffnet es im Tab, das Fenster bleibt offen; noch einmal → nur nach vorn geholt.
