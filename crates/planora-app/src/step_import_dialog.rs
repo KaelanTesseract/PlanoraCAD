@@ -750,14 +750,13 @@ impl StepImportDialog {
             .filter_map(|(i, name)| {
                 let b = &l.import.bodies[*i];
                 let n = b.outcome.as_ref().ok()?;
-                Some((
-                    name.clone(),
-                    Arc::new(StepShape::with_solid(
-                        n.text.clone(),
-                        b.tolerance_mm,
-                        n.solid.clone(),
-                    )),
-                ))
+                let shape = StepShape::with_solid(n.text.clone(), b.tolerance_mm, n.solid.clone());
+                let shape = if b.tolerance_known {
+                    shape
+                } else {
+                    shape.accuracy_unknown()
+                };
+                Some((name.clone(), Arc::new(shape)))
             })
             .collect();
         let skipped: Vec<(String, String)> = l

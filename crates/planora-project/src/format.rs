@@ -66,6 +66,9 @@ pub struct VersionFile {
 pub struct StepFormDto {
     pub id: u64,
     pub genauigkeit: f64,
+    /// Die Ursprungsdatei nennt keine Genauigkeit, `genauigkeit` ist angenommen (fehlt sonst).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub genauigkeit_unbekannt: bool,
     pub text: String,
 }
 

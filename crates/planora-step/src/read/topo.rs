@@ -2151,7 +2151,9 @@ pub fn build_solid(
     check_edges(&solid, tol)?;
     validate(&solid).map_err(|e| invalid(&solid, &e))?;
     let mut warnings = Vec::new();
-    if units.is_coarse() {
+    if units.uncertainty_mm.is_none() {
+        warnings.push(weld::unknown_accuracy_warning(tol));
+    } else if units.is_coarse() {
         warnings.push(weld::coarse_warning(tol));
     }
     Ok(BuiltSolid {

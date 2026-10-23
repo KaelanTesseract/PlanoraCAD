@@ -58,6 +58,17 @@ fn tolerance_text(t: f64) -> String {
     format!("{} mm", s.replace('.', ","))
 }
 
+/// Genauigkeit der Datei für die Anzeige; nennt die Datei keine, „unbekannt“ mit dem
+/// angenommenen Wert (P4).
+fn accuracy_text(shape: &StepShape) -> String {
+    let t = tolerance_text(shape.tolerance_mm());
+    if shape.tolerance_known() {
+        t
+    } else {
+        format!("unbekannt (angenommen {t})")
+    }
+}
+
 /// Zeilen „Flächen“ und „Genauigkeit der Datei“ einer STEP-Form (Flächen der Form, wie sie aus
 /// der Datei kam; „–“, wenn sie sich nicht lesen lässt).
 fn step_rows(state: &AppState, shape: &StepShape) -> Vec<(&'static str, String)> {
@@ -67,10 +78,7 @@ fn step_rows(state: &AppState, shape: &StepShape) -> Vec<(&'static str, String)>
     );
     vec![
         ("Flächen", faces),
-        (
-            "Genauigkeit der Datei",
-            tolerance_text(shape.tolerance_mm()),
-        ),
+        ("Genauigkeit der Datei", accuracy_text(shape)),
     ]
 }
 

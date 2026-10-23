@@ -89,6 +89,9 @@ pub struct ImportedBody {
     pub bounds: Option<(DVec3, DVec3)>,
     /// Genauigkeit der Datei (`weld_tol`, P4) in mm.
     pub tolerance_mm: f64,
+    /// Nennt die Datei ihre Genauigkeit? Sonst ist `tolerance_mm` die angenommene Vorgabe
+    /// (P4: „Genauigkeit unbekannt“).
+    pub tolerance_known: bool,
     /// Warnungen: grobe Genauigkeit, dann die Lage-Meldung (immer zuletzt).
     pub warnings: Vec<String>,
     /// Grund der Lage-Meldung (für [`ImportedBody::warnings_named`]).
@@ -305,6 +308,7 @@ fn import_one(
         faces,
         bounds: None,
         tolerance_mm: DEFAULT_FILE_TOL_MM,
+        tolerance_known: false,
         warnings: Vec::new(),
         placement_reason: placement_reason.clone(),
         placement_guessed: b.placement_guessed,
@@ -326,6 +330,7 @@ fn import_one(
         }
     };
     body.tolerance_mm = u.weld_tol_mm();
+    body.tolerance_known = u.uncertainty_mm.is_some();
     let built = build_solid(
         file,
         u,

@@ -132,6 +132,16 @@ pub(crate) fn short_number(x: f64) -> String {
 }
 
 /// Warnungstext für grobe Dateien.
+/// Warnung für eine Datei ohne Genauigkeit (P4: „Genauigkeit unbekannt“; gerechnet wird mit
+/// `tol_mm`, der Vorgabe 0,001 mm).
+pub fn unknown_accuracy_warning(tol_mm: f64) -> String {
+    format!(
+        "Genauigkeit der Datei unbekannt (angenommen {} mm): Rechnen mit diesem Körper kann scheitern.",
+        short_number(tol_mm)
+    )
+}
+
+/// Warnung für eine grobe Datei, die ihre Genauigkeit nennt (gröber als `COARSE_TOL_MM`).
 pub fn coarse_warning(tol_mm: f64) -> String {
     format!(
         "Genauigkeit der Datei {} mm: Rechnen mit diesem Körper kann scheitern.",

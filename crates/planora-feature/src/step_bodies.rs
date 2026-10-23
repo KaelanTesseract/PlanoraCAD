@@ -98,6 +98,8 @@ pub struct StepShapeId(pub u64);
 pub struct StepShape {
     text: String,
     tolerance_mm: f64,
+    /// Nennt die Ursprungsdatei ihre Genauigkeit? Sonst ist `tolerance_mm` angenommen (P4).
+    tolerance_known: bool,
     solid: OnceLock<Result<Solid, String>>,
 }
 
@@ -112,6 +114,7 @@ impl StepShape {
         Ok(StepShape {
             text,
             tolerance_mm,
+            tolerance_known: true,
             solid: OnceLock::new(),
         })
     }
@@ -121,8 +124,21 @@ impl StepShape {
         StepShape {
             text,
             tolerance_mm,
+            tolerance_known: true,
             solid: OnceLock::from(Ok(solid)),
         }
+    }
+
+    /// Dieselbe Form, deren Ursprungsdatei keine Genauigkeit nennt: `tolerance_mm` ist dann der
+    /// angenommene Wert (P4: „Genauigkeit unbekannt“), die Form gilt als grob.
+    pub fn accuracy_unknown(mut self) -> StepShape {
+        self.tolerance_known = false;
+        self
+    }
+
+    /// Nennt die Ursprungsdatei ihre Genauigkeit?
+    pub fn tolerance_known(&self) -> bool {
+        self.tolerance_known
     }
 
     pub fn text(&self) -> &str {
@@ -134,9 +150,10 @@ impl StepShape {
         self.tolerance_mm
     }
 
-    /// Grobe Genauigkeit (gröber als [`COARSE_TOL_MM`]): Rechnen mit dem Körper kann scheitern.
+    /// Grobe Genauigkeit (gröber als [`COARSE_TOL_MM`] oder unbekannt): Rechnen mit dem Körper
+    /// kann scheitern.
     pub fn is_coarse(&self) -> bool {
-        self.tolerance_mm > COARSE_TOL_MM
+        !self.tolerance_known || self.tolerance_mm > COARSE_TOL_MM
     }
 
     /// Der Körper der Form; beim ersten Aufruf aus dem Text gebaut ([`read_normal_body`]), danach
@@ -157,6 +174,7 @@ impl std::fmt::Debug for StepShape {
         f.debug_struct("StepShape")
             .field("text_bytes", &self.text.len())
             .field("tolerance_mm", &self.tolerance_mm)
+            .field("tolerance_known", &self.tolerance_known)
             .field("built", &self.solid.get().map(Result::is_ok))
             .finish()
     }

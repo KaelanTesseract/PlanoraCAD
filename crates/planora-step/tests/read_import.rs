@@ -823,12 +823,15 @@ fn free_solids_take_the_unit_of_the_file() {
     assert!(!imp.unit_known);
     let (_, hi) = imp.bodies[0].bounds.expect("Hülle");
     near(hi, DVec3::new(10.0, 20.0, 30.0), 1e-12, "ohne Kontext");
-    // Ohne Genauigkeit: grob, mit Warnung.
+    // Ohne Genauigkeit: unbekannt (angenommen 0,001 mm), mit Warnung (Schlussprüfung M1).
     assert_eq!(
         imp.bodies[0].warnings,
-        ["Genauigkeit der Datei 0,001 mm: Rechnen mit diesem Körper kann scheitern."]
+        [
+            "Genauigkeit der Datei unbekannt (angenommen 0,001 mm): Rechnen mit diesem Körper kann scheitern."
+        ]
     );
     assert_eq!(imp.bodies[0].tolerance_mm, 1e-3);
+    assert!(!imp.bodies[0].tolerance_known);
 }
 
 #[test]
@@ -906,6 +909,7 @@ fn notes_and_messages() {
 const UNCLEAR: &str = "Die Einheit ist unklar: Der Körper steht in keiner Darstellung, und die \
                        Datei nennt verschiedene Einheiten.";
 const COARSE: &str = "Genauigkeit der Datei 0,001 mm: Rechnen mit diesem Körper kann scheitern.";
+const UNKNOWN: &str = "Genauigkeit der Datei unbekannt (angenommen 0,001 mm): Rechnen mit diesem Körper kann scheitern.";
 
 fn chosen(l: LengthUnit) -> ImportOptions {
     ImportOptions {
@@ -961,9 +965,11 @@ fn free_solid_accuracy_is_the_coarsest_and_missing_counts_as_coarse() {
     for ctx in [[fine, none], [none, fine]] {
         let imp = import(&free_box(&ctx));
         assert_eq!(imp.bodies[0].tolerance_mm, 1e-3, "{ctx:?}");
-        assert_eq!(imp.bodies[0].warnings, [COARSE], "{ctx:?}");
+        assert_eq!(imp.bodies[0].warnings, [UNKNOWN], "{ctx:?}");
+        assert!(!imp.bodies[0].tolerance_known);
     }
     let imp = import(&free_box(&[fine, fine]));
+    assert!(imp.bodies[0].tolerance_known);
     assert_eq!(imp.bodies[0].tolerance_mm, 1e-6);
     assert!(imp.bodies[0].warnings.is_empty());
 }

@@ -24,13 +24,15 @@ use planora_step::read::topo::{
 };
 use planora_step::read::units::{Units, context_units};
 use planora_step::read::weld::{
-    HashGrid, check_open_edges, coarse_warning, tighten_vertices, weld_body, weld_points,
+    HashGrid, check_open_edges, coarse_warning, tighten_vertices, unknown_accuracy_warning,
+    weld_body, weld_points,
 };
 use planora_step::{ReadLimits, StepFile};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
+const UNKNOWN_WARNING: &str = "Genauigkeit der Datei unbekannt (angenommen 0,001 mm): Rechnen mit diesem Körper kann scheitern.";
 const COARSE_WARNING: &str =
     "Genauigkeit der Datei 0,001 mm: Rechnen mit diesem Körper kann scheitern.";
 
@@ -312,12 +314,13 @@ fn coarse_box_is_taken_with_warning() {
     assert_eq!(built.solid.vertices.len(), 8);
     assert_eq!(built.solid.edges.len(), 12);
     validate(&built.solid).expect("gültig");
-    // Ohne genannte Genauigkeit gilt 1e-3 und ebenfalls die Warnung.
+    // Ohne genannte Genauigkeit gilt 1e-3 und die Warnung „unbekannt“ (Schlussprüfung M1).
     let none =
         data("split_vertices.step").replace("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#103))\n  ", "");
     assert!(!none.contains("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT"));
     let built = build(&none).expect("gelesen");
-    assert_eq!(built.warnings, vec![COARSE_WARNING.to_string()]);
+    assert_eq!(built.warnings, vec![UNKNOWN_WARNING.to_string()]);
+    assert_eq!(unknown_accuracy_warning(1e-3), UNKNOWN_WARNING);
     // Gröbere Genauigkeit als 1e-3 wird begrenzt; die Warnung nennt den begrenzten Wert.
     let rough =
         data("split_vertices.step").replace("LENGTH_MEASURE(1.E-07)", "LENGTH_MEASURE(1.E-02)");

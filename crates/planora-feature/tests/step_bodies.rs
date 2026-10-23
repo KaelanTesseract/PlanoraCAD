@@ -767,3 +767,15 @@ fn damaged_saved_text_names_no_line_of_the_internal_text() {
     assert!(!e.contains("Zeile"), "{e}");
     assert!(!e.is_empty());
 }
+
+/// Schlussprüfung M1: Eine Form ohne Genauigkeit der Datei ist grob und sagt das.
+#[test]
+fn shapes_without_stated_accuracy_are_coarse() {
+    let n = normalize(&box_solid(), "Q").unwrap();
+    let known = StepShape::with_solid(n.text.clone(), 1e-6, n.solid.clone());
+    assert!(known.tolerance_known() && !known.is_coarse());
+    let unknown = StepShape::new(n.text, 1e-3).unwrap().accuracy_unknown();
+    assert!(!unknown.tolerance_known());
+    assert!(unknown.is_coarse());
+    assert_eq!(unknown.tolerance_mm(), 1e-3);
+}

@@ -1114,3 +1114,30 @@ fn format10_golden_file() {
         text.replace("\r\n", "\n")
     );
 }
+
+/// Schlussprüfung M1: „Genauigkeit unbekannt“ bleibt nach Speichern und Laden; das Feld steht
+/// nur in der Datei, wenn es zutrifft (bekannte Genauigkeit: Datei wie bisher).
+#[test]
+fn unknown_accuracy_survives_save_and_load() {
+    let mut d = Document::new();
+    let unknown = Arc::new(
+        StepShape::new(quader_text(), 1e-3)
+            .unwrap()
+            .accuracy_unknown(),
+    );
+    d.add_step_bodies(vec![
+        body("Quader", unknown),
+        body("Würfel", shape(wuerfel_text(), 1e-3)),
+    ])
+    .unwrap();
+    let text = encode_version(&d.snapshot()).unwrap();
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["step_formen"][0]["genauigkeit_unbekannt"], true);
+    let keys: Vec<&String> = v["step_formen"][1].as_object().unwrap().keys().collect();
+    assert_eq!(keys, ["genauigkeit", "id", "text"]);
+    let back = decode_version(&text, "x.json").unwrap();
+    assert!(!back.step_shapes[&StepShapeId(1)].tolerance_known());
+    assert!(back.step_shapes[&StepShapeId(1)].is_coarse());
+    assert!(back.step_shapes[&StepShapeId(2)].tolerance_known());
+    assert_eq!(encode_version(&back).unwrap(), text);
+}

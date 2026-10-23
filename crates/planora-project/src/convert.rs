@@ -1007,6 +1007,7 @@ fn step_forms_to(s: &Snapshot) -> (Vec<StepFormDto>, BTreeMap<StepShapeId, u64>)
         forms.push(StepFormDto {
             id: id.0,
             genauigkeit: shape.tolerance_mm(),
+            genauigkeit_unbekannt: !shape.tolerance_known(),
             text: shape.text().to_string(),
         });
     }
@@ -1040,7 +1041,10 @@ fn step_forms_from(
         if out.contains_key(&StepShapeId(f.id)) {
             return Err(bad("Die Kennung kommt doppelt vor"));
         }
-        let shape = StepShape::new(f.text, f.genauigkeit).map_err(|m| bad(&m))?;
+        let mut shape = StepShape::new(f.text, f.genauigkeit).map_err(|m| bad(&m))?;
+        if f.genauigkeit_unbekannt {
+            shape = shape.accuracy_unknown();
+        }
         out.insert(StepShapeId(f.id), Arc::new(shape));
     }
     Ok(out)

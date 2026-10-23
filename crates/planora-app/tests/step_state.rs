@@ -970,3 +970,29 @@ fn the_step_label_has_one_source() {
     let seen = draw_properties(&mut s, true);
     assert!(has_exact(&seen, label), "Art im Eigenschaftenfeld");
 }
+
+/// Schlussprüfung M1: Nennt die Datei keine Genauigkeit, zeigt die Eigenschaft das als
+/// „unbekannt“ mit dem angenommenen Wert, nicht als Angabe der Datei; die Warnung steht.
+#[test]
+fn unknown_accuracy_is_shown_as_unknown() {
+    let n = normalize(&box_at(DVec3::ZERO), "Q").unwrap();
+    let sh = Arc::new(StepShape::with_solid(n.text, 1e-3, n.solid).accuracy_unknown());
+    let mut s = AppState::new();
+    let id = s.import_step(vec![("Q".into(), sh)]).unwrap()[0];
+    let kind = s.document.feature(id).unwrap().kind.clone();
+    let rows = properties::parameter_rows(&s, &kind);
+    assert_eq!(
+        rows[1],
+        (
+            "Genauigkeit der Datei",
+            "unbekannt (angenommen 0,001 mm)".to_string()
+        )
+    );
+    s.selected_body = Some(0);
+    let seen = draw_properties(&mut s, true);
+    assert!(
+        seen.iter().any(|c| c.text == COARSE_HINT),
+        "Warnung fehlt:\n{}",
+        all_text(&seen)
+    );
+}
