@@ -24,7 +24,8 @@ use planora_feature::{
     MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS,
     MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM, MAX_ROLE_CHARS,
     MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, SketchFeature, SketchFormulas,
-    SketchPlane, Snapshot, SnapshotFeature, StandardPlane, field_keys, validate_drawing,
+    SketchPlane, Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId, field_keys,
+    validate_drawing,
 };
 use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
@@ -36,21 +37,27 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 9;
+pub const FORMAT_VERSION: u32 = 10;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
+/// Größte Summe der STEP-Texte einer Versionsdatei in Bytes (je Text gilt zusätzlich die Grenze
+/// von `StepShape::new`).
+const MAX_STEP_TEXT_SUM: usize = 200 * 1024 * 1024;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 9 mit Parametern, Feature-Formeln oder
-/// Skizzenformeln (als erste Regel geprüft), 8 mit Schnittansichten, 7 mit Stücklisten-Daten (eigene Zeilentexte,
+/// Kleinste Formatnummer, die den Stand darstellt: 10 mit einem STEP-Körper (als erste Regel
+/// geprüft, auch unterdrückt: sein Text muss in der Datei stehen), 9 mit Parametern,
+/// Feature-Formeln oder Skizzenformeln, 8 mit Schnittansichten, 7 mit Stücklisten-Daten (eigene Zeilentexte,
 /// Stücklistenblatt, Nummernkreise oder eingeschalteter Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder eingeschalteten
 /// Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder Fasen, sonst 1
-/// (P7, P12, F7, Teilprojekt 12 P11).
+/// (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import).
 pub fn required_format(s: &Snapshot) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if !s.parameters.is_empty()
+    if has(|k| matches!(k, FeatureKind::StepBody { .. })) {
+        10
+    } else if !s.parameters.is_empty()
         || s.features.iter().any(|f| !f.formulas.is_empty())
         || has(|k| matches!(k, FeatureKind::Sketch(sf) if !sf.formulas.is_empty()))
     {
@@ -480,7 +487,9 @@ fn plane_name(p: StandardPlane) -> &'static str {
     }
 }
 
-fn kind_to(k: &FeatureKind) -> Result<KindDto> {
+/// Art eines Features für die Datei; `forms` ordnet jeder Formkennung des Dokuments die
+/// Kennung zu, unter der ihr Text in der Datei steht (siehe [`step_forms_to`]).
+fn kind_to(k: &FeatureKind, forms: &BTreeMap<StepShapeId, u64>) -> Result<KindDto> {
     Ok(match k {
         FeatureKind::Sketch(s) => KindDto::Skizze(Box::new(SketchFeatureDto {
             skizze: sketch_to(&s.sketch),
@@ -589,12 +598,10 @@ fn kind_to(k: &FeatureKind) -> Result<KindDto> {
             drehung: rotation.to_array(),
             massstab: *scale,
         },
-        // Übergang bis Dateiformat 10 (STEP-Import, Aufgabe 12): nie still weglassen.
-        FeatureKind::StepBody { .. } => {
-            return Err(ProjectError::Invalid(
-                "STEP-Körper lassen sich noch nicht speichern".into(),
-            ));
-        }
+        FeatureKind::StepBody { shape } => KindDto::StepKoerper {
+            // Fehlt die Form im Bild, bleibt die Kennung; das Selbstlesen meldet sie dann.
+            form: forms.get(shape).copied().unwrap_or(shape.0),
+        },
     })
 }
 
@@ -793,6 +800,9 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
                 scale: n("Maßstab", *massstab)?,
             }
         }
+        KindDto::StepKoerper { form } => FeatureKind::StepBody {
+            shape: StepShapeId(*form),
+        },
     })
 }
 
@@ -968,6 +978,72 @@ fn meshes_from(origin: &str, list: &[MeshDto]) -> Result<BTreeMap<MeshId, Arc<Ex
         if out.insert(MeshId(d.id), Arc::new(mesh)).is_some() {
             return Err(bad("Die Kennung kommt doppelt vor"));
         }
+    }
+    Ok(out)
+}
+
+// ---- STEP-Formen (Format 10) ------------------------------------------------------------
+
+/// Formen für die Datei: nur die von STEP-Körpern benutzten, aufsteigend nach Kennung. Zeigen
+/// mehrere Kennungen auf dieselbe Form (dasselbe `Arc`, etwa zwei Körper aus einem Eintrag),
+/// steht der Text nur einmal in der Datei, unter der kleinsten dieser Kennungen. Liefert die
+/// Einträge und die Zuordnung Formkennung → Kennung in der Datei. Baut keinen Körper.
+fn step_forms_to(s: &Snapshot) -> (Vec<StepFormDto>, BTreeMap<StepShapeId, u64>) {
+    let used: HashSet<StepShapeId> = s
+        .features
+        .iter()
+        .filter_map(|f| match &f.kind {
+            FeatureKind::StepBody { shape } => Some(*shape),
+            _ => None,
+        })
+        .collect();
+    let mut written: Vec<(&Arc<StepShape>, u64)> = Vec::new();
+    let mut forms = Vec::new();
+    let mut map = BTreeMap::new();
+    for (id, shape) in s.step_shapes.iter().filter(|(id, _)| used.contains(id)) {
+        if let Some((_, file_id)) = written.iter().find(|(w, _)| Arc::ptr_eq(w, shape)) {
+            map.insert(*id, *file_id);
+            continue;
+        }
+        written.push((shape, id.0));
+        map.insert(*id, id.0);
+        forms.push(StepFormDto {
+            id: id.0,
+            genauigkeit: shape.tolerance_mm(),
+            text: shape.text().to_string(),
+        });
+    }
+    (forms, map)
+}
+
+/// Liest die STEP-Formen einer Datei. Geprüft werden Kennung (nicht 0, nicht doppelt), die
+/// Summe der Textlängen und je Form nur Kopf und Genauigkeit (`StepShape::new`, Plan P14);
+/// gebaut wird erst beim Rechnen, ein kaputter Körpertext lädt mit Fehlerstatus am Feature.
+fn step_forms_from(
+    origin: &str,
+    list: Vec<StepFormDto>,
+) -> Result<BTreeMap<StepShapeId, Arc<StepShape>>> {
+    check_len(origin, "STEP-Formen", list.len())?;
+    let total = list
+        .iter()
+        .fold(0usize, |sum, f| sum.saturating_add(f.text.len()));
+    if total > MAX_STEP_TEXT_SUM {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Die STEP-Formen sind zu groß",
+        ));
+    }
+    let mut out = BTreeMap::new();
+    for f in list {
+        let bad = |m: &str| ProjectError::corrupt(origin, format!("STEP-Form {}: {m}", f.id));
+        if f.id == 0 {
+            return Err(bad("Die Kennung ist ungültig"));
+        }
+        if out.contains_key(&StepShapeId(f.id)) {
+            return Err(bad("Die Kennung kommt doppelt vor"));
+        }
+        let shape = StepShape::new(f.text, f.genauigkeit).map_err(|m| bad(&m))?;
+        out.insert(StepShapeId(f.id), Arc::new(shape));
     }
     Ok(out)
 }
@@ -1782,6 +1858,7 @@ fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)
 /// Fehler (das Dokument wird dann nicht geschrieben).
 pub fn encode_version(s: &Snapshot) -> Result<String> {
     let format = required_format(s);
+    let (step_formen, forms) = step_forms_to(s);
     let file = VersionFile {
         format,
         marker: s.marker,
@@ -1794,7 +1871,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
                     id: f.id.0,
                     name: f.name.clone(),
                     unterdrueckt: f.suppressed,
-                    art: kind_to(&f.kind)?,
+                    art: kind_to(&f.kind, &forms)?,
                     formeln: f
                         .formulas
                         .iter()
@@ -1832,6 +1909,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         } else {
             s.next_param
         },
+        step_formen,
     };
     let text = serde_json::to_string_pretty(&file).map_err(|e| {
         ProjectError::Invalid(format!("Das Dokument lässt sich nicht schreiben: {e}"))
@@ -1867,7 +1945,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             found: head.format,
         });
     }
-    let file: VersionFile =
+    let mut file: VersionFile =
         serde_json::from_str(text).map_err(|e| ProjectError::corrupt(origin, e.to_string()))?;
     if file.format < 2
         && file
@@ -1914,6 +1992,16 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             "Parameter und Formeln gibt es erst ab Dateiformat 9",
         ));
     }
+    let has_step_body = file
+        .features
+        .iter()
+        .any(|f| matches!(f.art, KindDto::StepKoerper { .. }));
+    if file.format < 10 && (has_step_body || !file.step_formen.is_empty()) {
+        return Err(ProjectError::corrupt(
+            origin,
+            "STEP-Körper gibt es erst ab Dateiformat 10",
+        ));
+    }
     let (parameters, next_param) = parameters_from(origin, &file)?;
     let parts_overrides = overrides_from(origin, &file.stueckliste)?;
     let (drawings, next_drawing) = drawings_from(origin, &file)?;
@@ -1931,6 +2019,17 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             return Err(ProjectError::corrupt(
                 origin,
                 format!("„{}“: Das Netz {netz} fehlt in der Datei", f.name),
+            ));
+        }
+    }
+    let step_shapes = step_forms_from(origin, std::mem::take(&mut file.step_formen))?;
+    for f in &file.features {
+        if let KindDto::StepKoerper { form } = &f.art
+            && !step_shapes.contains_key(&StepShapeId(*form))
+        {
+            return Err(ProjectError::corrupt(
+                origin,
+                format!("„{}“: Die STEP-Form {form} fehlt in der Datei", f.name),
             ));
         }
     }
@@ -1952,7 +2051,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         marker: file.marker,
         next_id: file.naechste_id,
         meshes,
-        step_shapes: Default::default(),
+        step_shapes,
         drawings,
         next_drawing,
         project_info,

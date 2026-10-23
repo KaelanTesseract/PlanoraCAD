@@ -1,4 +1,4 @@
-//! Die Typen der Versionsdatei (Format 1 bis 9). Unabhängig von den internen Strukturen.
+//! Die Typen der Versionsdatei (Format 1 bis 10). Unabhängig von den internen Strukturen.
 //! Absichtlich ohne `deny_unknown_fields`: unbekannte Felder in bekannten Versionen werden
 //! ignoriert (unbekannte **Feldschlüssel** in einer Formeltabelle sind dagegen Daten und werden
 //! beim Lesen abgelehnt, siehe `convert.rs`).
@@ -53,6 +53,20 @@ pub struct VersionFile {
     /// heißt „aus den Kennungen ableiten“.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub naechster_parameter: u64,
+    /// Formen der STEP-Körper (ab Format 10, Teilprojekt STEP-Import): je benutzte Form der
+    /// normalisierte STEP-Text, in jeder Version erneut. Leer heißt: fehlt, damit alte Dateien
+    /// Byte für Byte bleiben. Steht am Ende, weil die Texte lang sind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub step_formen: Vec<StepFormDto>,
+}
+
+/// Form eines STEP-Körpers (ab Format 10): Kennung (ab 1), Genauigkeit der Ursprungsdatei in mm
+/// (1e-6 … 1e-3, für die Warnung „grob“) und der normalisierte STEP-Text (nur ASCII).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct StepFormDto {
+    pub id: u64,
+    pub genauigkeit: f64,
+    pub text: String,
 }
 
 /// Ein Parameter (ab Format 9). `art`: `"laenge"`, `"winkel"` oder `"zahl"`; ein leerer
@@ -840,5 +854,9 @@ pub enum KindDto {
         versatz: V3,
         drehung: [f64; 4],
         massstab: f64,
+    },
+    /// STEP-Körper (ab Format 10): Form aus `step_formen`. Keine Lagefelder (Plan P6).
+    StepKoerper {
+        form: u64,
     },
 }
