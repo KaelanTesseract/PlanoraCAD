@@ -4,8 +4,8 @@ use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
 use planora_feature::{
     BlendArt, BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
-    FieldKey, Formulas, MESH_LOCKED, MeshId, ParamEdit, ParamId, RestoreKind, SketchFeature,
-    SketchPlane,
+    FieldKey, Formulas, MESH_LOCKED, MeshId, NewStepBody, ParamEdit, ParamId, RestoreKind,
+    SketchFeature, SketchPlane, StepShape,
 };
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{AnalyticKernel, Edge, Face, Id, Solid};
@@ -36,6 +36,8 @@ pub enum BodyKind {
     Combined,
     /// Eingelesenes Netz (Netz-Körper, Teilprojekt 9).
     Mesh,
+    /// Aus einer STEP-Datei übernommener exakter Körper (STEP-Körper); verschoben bleibt er es.
+    Step,
 }
 
 /// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
@@ -1355,6 +1357,20 @@ impl AppState {
         self.scene_version = next_scene_version();
     }
 
+    /// Wie [`AppState::frame_all`], nur für die Körper `indices` (Indizes in `bodies`; unbekannte
+    /// zählen nicht). Ohne einen solchen Körper bleibt die Kamera, wie sie ist.
+    pub fn frame_bodies(&mut self, indices: &[usize]) {
+        let mut iter = indices
+            .iter()
+            .filter_map(|&i| self.bodies.get(i))
+            .map(|b| b.bounds);
+        let Some(first) = iter.next() else {
+            return;
+        };
+        let (min, max) = iter.fold(first, |(lo, hi), (a, b)| (lo.min(a), hi.max(b)));
+        self.camera.frame_bounds(to_vec3(min), to_vec3(max));
+    }
+
     /// Richtet die Kamera auf alle Körper aus (ohne Körper: Standardansicht auf den Ursprung).
     pub fn frame_all(&mut self) {
         let mut iter = self.bodies.iter().map(|b| b.bounds);
@@ -2279,6 +2295,7 @@ fn body_kind(doc: &Document, r: BodyRef) -> BodyKind {
         Some(FeatureKind::Extrude { .. }) => BodyKind::Extrusion,
         Some(FeatureKind::Revolve { .. }) => BodyKind::Revolution,
         Some(FeatureKind::MeshBody { .. }) => BodyKind::Mesh,
+        Some(FeatureKind::StepBody { .. }) => BodyKind::Step,
         _ => BodyKind::Combined,
     }
 }
@@ -2558,6 +2575,70 @@ impl AppState {
                 self.refresh();
                 self.fail(status_message(status))
             }
+        }
+    }
+}
+
+// ---- STEP-Körper ------------------------------------------------------------------------------
+
+/// Bezeichnung (und Namensstamm) der aus STEP-Dateien übernommenen Körper, gleich
+/// `FeatureKind::StepBody.label()`. Nur in der Crate sichtbar: `export_dialog::STEP_LABEL` (Name
+/// des Exportformats) trägt denselben Namen, und Tests binden beide Module mit `*` ein.
+pub(crate) const STEP_LABEL: &str = "STEP-Körper";
+
+impl AppState {
+    /// Legt die Körper `bodies` (Name, Form aus dem Import) als STEP-Körper an, alle in einem
+    /// Schritt am Marker (ganz oder gar nicht). Ein leerer Name ergibt „STEP-Körper n“ (Zähler wie
+    /// bei „Netz-Körper n“; er zählt nur nach gelungenem Anlegen weiter). Danach ist der erste
+    /// neue Körper gewählt und die Kamera auf die neuen Körper ausgerichtet. Eine offene Skizze
+    /// wird vorher beendet. Schlägt es fehl, bleibt das Dokument unverändert und die Meldung
+    /// steht in `message` (etwa die Summengrenze der STEP-Formen). Eine leere Liste ändert nichts.
+    pub fn import_step(
+        &mut self,
+        bodies: Vec<(String, Arc<StepShape>)>,
+    ) -> Result<Vec<FeatureId>, String> {
+        self.try_close_sketch()?;
+        if bodies.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut unnamed = 0u64;
+        let base = self.name_counters.get(STEP_LABEL).copied().unwrap_or(0);
+        let list: Vec<NewStepBody> = bodies
+            .into_iter()
+            .map(|(name, shape)| {
+                let trimmed = name.trim();
+                let name = if trimmed.is_empty() {
+                    unnamed += 1;
+                    format!("{STEP_LABEL} {}", base.saturating_add(unnamed))
+                } else {
+                    trimmed.to_string()
+                };
+                NewStepBody { name, shape }
+            })
+            .collect();
+        match self.document.add_step_bodies(list) {
+            Ok(ids) => {
+                for _ in 0..unnamed {
+                    self.count_name(STEP_LABEL);
+                }
+                self.hover = None;
+                self.selection = None;
+                self.selected_feature = None;
+                self.refresh();
+                let shown: Vec<usize> = ids
+                    .iter()
+                    .filter_map(|id| {
+                        self.body_index(BodyRef {
+                            feature: *id,
+                            index: 0,
+                        })
+                    })
+                    .collect();
+                self.selected_body = shown.first().copied();
+                self.frame_bodies(&shown);
+                Ok(ids)
+            }
+            Err(e) => self.fail(e.to_string()),
         }
     }
 }

@@ -237,7 +237,9 @@ impl Tracker {
 /// Geschätzter Platz einer Formel (Eintrag der Nebentabelle) außer ihrem Text.
 const FORMULA_BYTES: usize = 32;
 
-/// Geschätzte Größe eines Zustandsbildes. Netze zählen nicht (geteilte `Arc`). Parameter zählen
+/// Geschätzte Größe eines Zustandsbildes. Netze und STEP-Formen (`Snapshot::step_shapes`, Text
+/// samt gebautem Körper) zählen nicht: Alle Bilder teilen dieselben `Arc`, ein Bild kostet je
+/// STEP-Körper nur sein Feature. Parameter zählen
 /// mit Name, Formel und Kommentar, Formeln (Feature und Skizze) mit ihrem Text.
 pub fn snapshot_bytes(s: &Snapshot) -> usize {
     let mut total = size_of::<Snapshot>();

@@ -133,12 +133,14 @@ fn op_label(op: BoolOp) -> &'static str {
 }
 
 impl FeatureDialog {
-    /// Dialog für das Feature `id`; `None` für Skizzen, Netz-Körper (Lage im Eigenschaftenfenster) und unbekannte Features.
+    /// Dialog für das Feature `id`; `None` für Skizzen, Netz-Körper (Lage im Eigenschaftenfenster),
+    /// STEP-Körper (keine Felder; verschoben wird über das Verschieben-Feature, P6) und unbekannte
+    /// Features.
     pub fn new(state: &AppState, id: FeatureId) -> Option<FeatureDialog> {
         let f = state.document.feature(id)?;
         if matches!(
             f.kind,
-            FeatureKind::Sketch(_) | FeatureKind::MeshBody { .. }
+            FeatureKind::Sketch(_) | FeatureKind::MeshBody { .. } | FeatureKind::StepBody { .. }
         ) {
             return None;
         }

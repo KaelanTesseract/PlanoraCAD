@@ -146,6 +146,8 @@ pub enum Icon {
     Redo,
     /// Phosphor `function`.
     Parameters,
+    /// Phosphor `file-arrow-down` (STEP-Körper im Feature-Baum).
+    StepBody,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -217,6 +219,7 @@ pub const ALL: &[Icon] = &[
     Icon::Undo,
     Icon::Redo,
     Icon::Parameters,
+    Icon::StepBody,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -288,6 +291,7 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Undo, '\u{e038}', "arrow-counter-clockwise"),
     (Icon::Redo, '\u{e036}', "arrow-clockwise"),
     (Icon::Parameters, '\u{ebe4}', "function"),
+    (Icon::StepBody, '\u{e232}', "file-arrow-down"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {
@@ -517,6 +521,16 @@ pub fn paint_body_icon(painter: &Painter, rect: Rect, kind: BodyKind, color: Col
                 stroke,
             ));
         }
+        BodyKind::Step => {
+            // Aus der Symbolschrift (Phosphor `file-arrow-down`), in der Größe des Feldes.
+            painter.text(
+                c,
+                egui::Align2::CENTER_CENTER,
+                glyph(Icon::StepBody),
+                egui::FontId::new(rect.height().min(rect.width()), fonts::icons()),
+                color,
+            );
+        }
     }
 }
 
@@ -555,8 +569,7 @@ impl FeatureIcon {
             K::Move { .. } => FeatureIcon::Move,
             K::Verrunden { art, .. } => FeatureIcon::for_blend(art.is_chamfer()),
             K::MeshBody { .. } => FeatureIcon::Body(BodyKind::Mesh),
-            // Übergang bis zum eigenen Symbol (STEP-Import, Aufgabe 13).
-            K::StepBody { .. } => FeatureIcon::Body(BodyKind::Combined),
+            K::StepBody { .. } => FeatureIcon::Body(BodyKind::Step),
         }
     }
 }
@@ -929,6 +942,7 @@ pub fn body_icon(kind: BodyKind) -> IconSource {
         BodyKind::Extrusion => IconSource::Font(Icon::Extrude),
         BodyKind::Revolution => IconSource::Font(Icon::Revolve),
         BodyKind::Combined => IconSource::Font(Icon::Union),
+        BodyKind::Step => IconSource::Font(Icon::StepBody),
         BodyKind::Cone | BodyKind::Mesh => IconSource::Body(kind),
     }
 }
