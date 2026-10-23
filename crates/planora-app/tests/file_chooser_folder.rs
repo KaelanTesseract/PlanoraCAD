@@ -8,16 +8,32 @@ use planora_app::places::{Place, PlaceKind, Places};
 use std::fs;
 use std::path::PathBuf;
 
-fn temp_dir(name: &str) -> PathBuf {
+/// Temp-Ordner eines Tests; wird beim Verlassen des Tests gelöscht, auch wenn er fehlschlägt.
+struct TempDir(PathBuf);
+
+impl std::ops::Deref for TempDir {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(name: &str) -> TempDir {
     let d = std::env::temp_dir().join(format!("planora-ordnerwahl-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).unwrap();
     // Wie die Auswahl selbst (absolute Pfade), damit Vergleiche passen.
-    std::path::absolute(&d).unwrap()
+    TempDir(std::path::absolute(&d).unwrap())
 }
 
 /// Temp-Ordner mit `a/`, `b/`, `teil.stl`, `x.step`.
-fn populated(name: &str) -> PathBuf {
+fn populated(name: &str) -> TempDir {
     let d = temp_dir(name);
     fs::create_dir_all(d.join("a")).unwrap();
     fs::create_dir_all(d.join("b")).unwrap();
@@ -145,7 +161,6 @@ fn folder_mode_lists_only_folders() {
     assert_eq!(c.mode, ChooserMode::Folder);
     assert_eq!(names(&c), ["a", "b"]);
     assert!(c.entries().iter().all(|e| e.is_dir));
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -156,7 +171,6 @@ fn without_mark_the_current_folder_is_chosen() {
     assert_eq!(c.target(), Some(dir.clone()));
     assert_eq!(c.confirm(), ChooserAction::Chosen(dir.clone()));
     assert!(!c.asks_to_replace(), "ein Ordner wird nie ersetzt");
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -170,7 +184,6 @@ fn a_marked_folder_is_chosen_and_entering_clears_the_mark() {
     c.enter("a");
     assert_eq!(c.marked(), None);
     assert_eq!(c.target(), Some(dir.join("a")));
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -194,7 +207,6 @@ fn up_and_places_clear_the_mark() {
     assert!(c.go_to_place(&place));
     assert_eq!(c.marked(), None, "Schnellzugriff löscht die Marke");
     assert_eq!(c.target(), Some(dir.join("a")));
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -205,7 +217,6 @@ fn a_vanished_folder_cannot_be_chosen() {
     assert_eq!(c.target(), None);
     assert_eq!(c.confirm(), ChooserAction::None);
     assert_eq!(c.error.as_deref(), Some(NO_FOLDER));
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -224,7 +235,6 @@ fn click_marks_and_double_click_enters_in_the_list() {
     );
     assert_eq!(c.marked(), None);
     assert_eq!(h.action, ChooserAction::None, "Doppelklick wählt nicht");
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Flächen in der Farbe der Auswahl, die den Text `text` enthalten.
@@ -269,7 +279,6 @@ fn the_marked_folder_is_highlighted_like_a_chosen_file() {
         "markierter Ordner hervorgehoben"
     );
     assert!(!highlighted(&mut h, &mut c, "a"));
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -289,7 +298,6 @@ fn footer_says_choose_this_folder_and_cancel_closes() {
     h.action = ChooserAction::None;
     h.clicks(&mut c, "Abbrechen", 1);
     assert_eq!(h.action, ChooserAction::Cancel);
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -308,7 +316,6 @@ fn the_chosen_line_shows_the_target() {
     c.mark("b");
     let after = line(&h.settle(&mut c));
     assert!(after.contains(&display_path(&dir.join("b"))), "{after}");
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -325,7 +332,6 @@ fn empty_folder_shows_no_subfolders_hint() {
         !t.contains(&"Hier gibt es keine passenden Dateien."),
         "{t:?}"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -358,5 +364,142 @@ fn save_and_open_modes_are_unchanged() {
     assert!(s.asks_to_replace());
     let t = h.settle(&mut s);
     assert!(texts(&t).contains(&"Ersetzen"));
-    let _ = fs::remove_dir_all(&dir);
+}
+
+// --- Nachbesserung 1 ---------------------------------------------------------------------------
+
+#[test]
+fn a_vanished_marked_folder_is_not_replaced_by_the_current_one() {
+    let dir = populated("marke-weg");
+    let mut c = FileChooser::folder(dir.clone());
+    c.mark("b");
+    fs::remove_dir_all(dir.join("b")).unwrap();
+    assert_eq!(c.target(), None, "kein Rückfall auf den aktuellen Ordner");
+    assert_eq!(c.confirm(), ChooserAction::None);
+    assert_eq!(c.error.as_deref(), Some(NO_FOLDER));
+    assert_eq!(c.marked(), None, "Marke gelöscht");
+    assert_eq!(names(&c), ["a"], "Liste neu gelesen");
+    // Danach entscheidet der Nutzer neu: ohne Marke der aktuelle Ordner.
+    assert_eq!(c.confirm(), ChooserAction::Chosen(dir.clone()));
+    // Auch eine Datei gleichen Namens ist kein Ordner.
+    c.mark("a");
+    fs::remove_dir_all(dir.join("a")).unwrap();
+    fs::write(dir.join("a"), b"x").unwrap();
+    assert_eq!(c.target(), None);
+    assert_eq!(c.confirm(), ChooserAction::None);
+    assert_eq!(c.error.as_deref(), Some(NO_FOLDER));
+    assert_eq!(c.marked(), None);
+}
+
+#[test]
+fn only_folders_of_the_list_can_be_marked() {
+    let dir = populated("nur-liste");
+    let mut c = FileChooser::folder(dir.join("a"));
+    fs::create_dir_all(dir.join("a").join("innen")).unwrap();
+    c.reload();
+    let outside = dir.join("b").display().to_string();
+    for bad in [
+        "..",
+        ".",
+        "",
+        outside.as_str(),
+        "innen/x",
+        "innen\\x",
+        "INNEN ",
+        "fehlt",
+    ] {
+        c.mark(bad);
+        assert_eq!(c.marked(), None, "„{bad}“");
+    }
+    let mut c = FileChooser::folder(dir.clone());
+    c.mark("teil.stl");
+    assert_eq!(c.marked(), None, "Datei");
+    c.mark("b");
+    c.mark("..");
+    assert_eq!(c.marked(), Some("b"), "Ungültiges ändert die Marke nicht");
+}
+
+#[test]
+fn a_typed_folder_is_applied_before_choosing() {
+    let dir = populated("getippt");
+    let mut c = FileChooser::folder(dir.clone());
+    let mut h = Harness::new();
+    c.mark("b");
+    c.dir_text = dir.join("a").display().to_string();
+    h.clicks(&mut c, CHOOSE_FOLDER, 1);
+    assert_eq!(h.action, ChooserAction::Chosen(dir.join("a")));
+    assert_eq!(c.dir(), dir.join("a").as_path());
+    h.action = ChooserAction::None;
+    c.dir_text = dir.join("gibt-es-nicht").display().to_string();
+    h.clicks(&mut c, CHOOSE_FOLDER, 1);
+    assert_eq!(h.action, ChooserAction::None, "nichts gewählt");
+    assert_eq!(c.error.as_deref(), Some("Diesen Ordner gibt es nicht."));
+    let seen = h.settle(&mut c);
+    assert!(texts(&seen).contains(&"Diesen Ordner gibt es nicht."));
+    assert_eq!(c.dir(), dir.join("a").as_path(), "Ordner bleibt");
+}
+
+#[test]
+fn long_folders_are_cut_off_and_files_do_not_count_in_folder_mode() {
+    let dir = temp_dir("viele");
+    for i in 0..MAX_ENTRIES - 1 {
+        fs::create_dir(dir.join(format!("o{i:05}"))).unwrap();
+    }
+    for i in 0..3 {
+        fs::write(dir.join(format!("t{i}.stl")), b"x").unwrap();
+    }
+    // Ordner-Modus: nur die Ordner zählen, nichts gekürzt.
+    let c = FileChooser::folder(dir.clone());
+    assert_eq!(c.entries().len(), MAX_ENTRIES - 1);
+    assert!(!c.truncated);
+    // Öffnen: Ordner und Dateien zählen, gekürzt.
+    let o = FileChooser::open(dir.clone(), vec!["stl"]);
+    assert_eq!(o.entries().len(), MAX_ENTRIES);
+    assert!(o.truncated);
+    assert_eq!(o.entries().iter().filter(|e| !e.is_dir).count(), 1);
+    // Ordner-Modus mit mehr Ordnern als erlaubt: gekürzt, mit Hinweis.
+    fs::create_dir(dir.join("o99998")).unwrap();
+    fs::create_dir(dir.join("o99999")).unwrap();
+    let c = FileChooser::folder(dir.clone());
+    assert_eq!(c.entries().len(), MAX_ENTRIES);
+    assert!(c.truncated);
+    assert!(c.entries().iter().all(|e| e.is_dir));
+    assert_eq!(
+        c.entries().last().unwrap().name,
+        "o99998",
+        "die ersten nach Namen"
+    );
+}
+
+/// Verbindung (Junction) `link` → `target`; `false`, wenn sie sich nicht anlegen lässt.
+#[cfg(windows)]
+fn junction(link: &std::path::Path, target: &std::path::Path) -> bool {
+    std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .is_ok_and(|o| o.status.success())
+        && link.is_dir()
+}
+
+#[cfg(windows)]
+#[test]
+fn junctions_are_listed_and_can_be_entered_and_chosen() {
+    let dir = populated("verbindung");
+    let elsewhere = temp_dir("verbindung-ziel");
+    fs::create_dir_all(elsewhere.join("drin")).unwrap();
+    if !junction(&dir.join("link"), &elsewhere) {
+        eprintln!("Verbindung ließ sich nicht anlegen, Test übersprungen");
+        return;
+    }
+    let mut c = FileChooser::folder(dir.clone());
+    assert_eq!(names(&c), ["a", "b", "link"]);
+    c.mark("link");
+    assert_eq!(c.target(), Some(dir.join("link")));
+    c.enter("link");
+    assert_eq!(names(&c), ["drin"]);
+    assert_eq!(c.target(), Some(dir.join("link")));
+    // Die Verbindung zuerst entfernen (nicht durch sie hindurch löschen).
+    let _ = fs::remove_dir(dir.join("link"));
 }

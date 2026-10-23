@@ -464,9 +464,13 @@ impl FileChooser {
         self.marked.as_deref()
     }
 
-    /// Markiert einen Unterordner der Liste; außerhalb des Ordner-Modus ohne Wirkung.
+    /// Markiert einen Unterordner der Liste. Nur Namen von Ordnern aus [`FileChooser::entries`]
+    /// zählen (kein „..“, kein Pfad); alles andere und Aufrufe außerhalb des Ordner-Modus sind
+    /// ohne Wirkung.
     pub fn mark(&mut self, name: &str) {
-        if self.mode == ChooserMode::Folder {
+        if self.mode == ChooserMode::Folder
+            && self.entries.iter().any(|e| e.is_dir && e.name == name)
+        {
             self.marked = Some(name.to_string());
         }
     }
@@ -487,22 +491,16 @@ impl FileChooser {
 
     /// Ziel: beim Speichern im aktuellen Ordner, Endung ergänzt; beim Öffnen nur eine
     /// vorhandene Datei. `None` bei leerem Namen oder Namen mit Ordnerteilen. Im Ordner-Modus
-    /// der markierte Ordner (wenn es ihn gibt), sonst der aktuelle; `None`, wenn es den nicht
-    /// (mehr) gibt.
+    /// der markierte Ordner, ohne Marke der aktuelle; `None`, wenn es den nicht (mehr) als
+    /// Ordner gibt (kein Rückfall vom markierten auf den aktuellen Ordner).
     pub fn target(&self) -> Option<PathBuf> {
-        if self.mode == ChooserMode::Folder {
-            let marked = self.marked.as_ref().map(|m| self.dir.join(m));
-            return match marked.filter(|p| p.is_dir()) {
-                Some(p) => Some(p),
-                None => self.dir.is_dir().then(|| self.dir.clone()),
-            };
-        }
-        let name = self.file_name.trim().trim_end_matches(['.', ' ']);
-        if name.is_empty() || name.contains(FORBIDDEN_CHARS) || name.chars().any(char::is_control) {
-            return None;
-        }
         match self.mode {
+            ChooserMode::Folder => {
+                let p = self.folder_choice();
+                p.is_dir().then_some(p)
+            }
             ChooserMode::Save => {
+                let name = self.valid_name()?;
                 let name = if self.matches(name) {
                     name.to_string()
                 } else {
@@ -511,17 +509,39 @@ impl FileChooser {
                 Some(self.dir.join(name))
             }
             ChooserMode::Open => {
-                let p = self.dir.join(name);
+                let p = self.dir.join(self.valid_name()?);
                 p.is_file().then_some(p)
             }
-            ChooserMode::Folder => unreachable!("oben behandelt"),
         }
+    }
+
+    /// Eingegebener Dateiname ohne Leerzeichen und Punkte am Ende; `None`, wenn leer oder mit
+    /// verbotenen Zeichen (auch Ordnerteilen).
+    fn valid_name(&self) -> Option<&str> {
+        let name = self.file_name.trim().trim_end_matches(['.', ' ']);
+        let bad =
+            name.is_empty() || name.contains(FORBIDDEN_CHARS) || name.chars().any(char::is_control);
+        (!bad).then_some(name)
     }
 
     /// „Speichern“, „Öffnen“ oder [`CHOOSE_FOLDER`]: liefert das Ziel. Gibt es die Datei beim
     /// Speichern schon, erst beim zweiten Aufruf mit demselben Ziel (ein Ordner wird nie
-    /// ersetzt).
+    /// ersetzt). Im Ordner-Modus gilt ein eingetippter, noch nicht übernommener Ordner zuerst
+    /// (gibt es ihn nicht, wird nichts gewählt); ist der markierte Ordner verschwunden, wird
+    /// die Marke gelöscht, die Liste neu gelesen und nichts gewählt.
     pub fn confirm(&mut self) -> ChooserAction {
+        if self.mode == ChooserMode::Folder
+            && self.dir_text.trim() != self.dir.display().to_string()
+            && !self.go_to_text()
+        {
+            return ChooserAction::None;
+        }
+        if self.mode == ChooserMode::Folder && self.marked.is_some() && self.target().is_none() {
+            self.marked = None;
+            self.reload();
+            self.error = Some(NO_FOLDER.into());
+            return ChooserAction::None;
+        }
         let Some(target) = self.target() else {
             self.error = Some(
                 match self.mode {
