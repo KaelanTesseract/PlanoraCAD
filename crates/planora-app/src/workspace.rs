@@ -29,6 +29,10 @@ pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
 /// Meldung, wenn noch keine Wurzel (Projektordner) gewählt ist.
 const NO_ROOT: &str = "Es ist noch kein Projektordner gewählt.";
 
+/// Meldung von [`Workspace::choose_root`], solange gespeicherte Dokumente offen sind.
+pub const ROOT_LOCKED: &str =
+    "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt.";
+
 /// Grund, warum Rückgängig nicht geht: kein Schritt da.
 pub const NOTHING_TO_UNDO: &str = "Es gibt nichts rückgängig zu machen.";
 /// Grund, warum Wiederholen nicht geht: kein Schritt da.
@@ -1161,17 +1165,19 @@ impl Workspace {
     /// Solange gespeicherte Dokumente offen sind, wird die Wurzel nicht gewechselt: ihre Pfade
     /// gehören zur bisherigen Wurzel.
     pub fn choose_root(&mut self, root: &Path) -> Result<(), String> {
-        if self.tabs.iter().any(|t| t.path.is_some()) {
-            return Err(
-                "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt."
-                    .into(),
-            );
+        if self.has_saved_documents() {
+            return Err(ROOT_LOCKED.into());
         }
         let lib = Library::open(root).map_err(err)?;
         self.library = Some(lib);
         self.config.root = Some(root.to_path_buf());
         self.library_revision += 1;
         Ok(())
+    }
+
+    /// Ist ein Tab mit einem gespeicherten Dokument offen? Dann bleibt die Wurzel, wie sie ist.
+    pub fn has_saved_documents(&self) -> bool {
+        self.tabs.iter().any(|t| t.path.is_some())
     }
 
     /// Am Ende jedes Bildes: Änderungen aller Tabs werden Schritte ihres Verlaufs (R3, R4);
