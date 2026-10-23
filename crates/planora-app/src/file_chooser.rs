@@ -118,6 +118,81 @@ const DRIVE_REPAINT: Duration = Duration::from_millis(250);
 pub const PLACES_HEIGHT: f32 = 56.0;
 /// Mindesthöhe der Liste, auch wenn die Leiste zwei Zeilen braucht.
 const MIN_LIST_HEIGHT: f32 = 160.0;
+/// Größte Höhe der Liste in sehr hohen Fenstern.
+const MAX_LIST_HEIGHT: f32 = 700.0;
+/// Anteil der zusätzlichen Fensterhöhe (über 600 px), um den die Liste wächst.
+const LIST_GROWTH: f32 = 0.6;
+/// Längste Beschriftung eines Knopfs der Leiste (Zeichen), länger wird mit „…“ gekürzt.
+const MAX_PLACE_LABEL: usize = 40;
+/// Strichbreite des Rahmens eines Knopfs der Leiste, in jedem Zustand gleich.
+const PLACE_STROKE: f32 = 1.0;
+
+/// Höhe der Liste im Fenster der Höhe `window_h`: bei 600 px [`LIST_HEIGHT`], darüber wächst
+/// sie mit (höchstens [`MAX_LIST_HEIGHT`]).
+pub fn list_height_for(window_h: f32) -> f32 {
+    (LIST_HEIGHT + (window_h - 600.0).max(0.0) * LIST_GROWTH).min(MAX_LIST_HEIGHT)
+}
+
+/// Beschriftung eines Knopfs der Leiste, höchstens [`MAX_PLACE_LABEL`] Zeichen.
+pub fn short_label(label: &str) -> String {
+    if label.chars().count() <= MAX_PLACE_LABEL {
+        label.to_string()
+    } else {
+        let head: String = label.chars().take(MAX_PLACE_LABEL - 1).collect();
+        format!("{head}…")
+    }
+}
+
+/// Knopf der Leiste mit immer gleich großem Rahmen: Strich und Innenabstand sind in jedem
+/// Zustand gleich (in Ruhe unsichtbar), damit Überfahren, Drücken und Hervorhebung weder den
+/// Knopf noch die Leiste verschieben.
+fn place_button(ui: &mut egui::Ui, current: bool, icon: Icon, label: &str) -> egui::Response {
+    let p = theme::palette(ui.visuals().dark_mode);
+    let before = ui.ctx().read_response(ui.next_auto_id());
+    let hovered = before.as_ref().is_some_and(egui::Response::hovered);
+    let pressed = before
+        .as_ref()
+        .is_some_and(egui::Response::is_pointer_button_down_on);
+    let fill = if current || pressed {
+        p.bg_active
+    } else if hovered {
+        p.bg_field
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let stroke = if current || hovered || pressed {
+        p.border_subtle
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    // egui rechnet den Innenabstand aus Strichbreite und Ausdehnung des jeweiligen Zustands:
+    // für diesen Knopf in allen Zuständen gleich setzen (ohne eigenen Unterbereich, der das
+    // Umbrechen der Leiste verhindern würde), danach den Stil zurück.
+    let saved = ui.style().clone();
+    {
+        let w = &mut ui.style_mut().visuals.widgets;
+        for s in [
+            &mut w.noninteractive,
+            &mut w.inactive,
+            &mut w.hovered,
+            &mut w.active,
+            &mut w.open,
+        ] {
+            s.bg_stroke.width = PLACE_STROKE;
+            s.expansion = 0.0;
+        }
+    }
+    let response = ui.add(
+        egui::Button::new((icons::atom(icon), short_label(label)))
+            .selected(current)
+            .frame(true)
+            .frame_when_inactive(true)
+            .fill(fill)
+            .stroke(egui::Stroke::new(PLACE_STROKE, stroke)),
+    );
+    ui.set_style(saved);
+    response
+}
 
 /// Ein Knopf der Schnellzugriffe, wie er gezeichnet wird.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -446,7 +521,8 @@ impl FileChooser {
         // Eine zweite Zeile der Leiste geht von der Liste ab: zusammen bleiben sie so hoch wie
         // Leiste (eine Zeile) und Liste, das Fenster rollt dadurch nicht früher.
         let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
-        let list_height = (LIST_HEIGHT - (bar - row).max(0.0)).max(MIN_LIST_HEIGHT);
+        let base = list_height_for(ui.ctx().content_rect().height());
+        let list_height = (base - (bar - row).max(0.0)).max(MIN_LIST_HEIGHT);
         let (mut enter, mut pick, mut double) = (None, None, None);
         let dark = ui.visuals().dark_mode;
         theme::scroll_area(
@@ -455,36 +531,47 @@ impl FileChooser {
                 .max_height(list_height)
                 .auto_shrink([false, true]),
             |ui| {
-                for e in &self.entries {
-                    let kind = EntryIcon::of(e);
-                    // Symbol und Name als getrennte Bausteine: der Name bleibt ein eigener Text
-                    // in der üblichen Schrift, alle Namen stehen bündig hinter dem Symbol.
-                    let symbol = icons::text(kind.icon(), icons::LABEL_ICON_SIZE, kind.color(dark));
-                    let selected = !e.is_dir && e.name == self.file_name;
-                    let mut r = ui.add(egui::Button::selectable(selected, (symbol, entry_text(e))));
-                    if let Some(hint) = entry_hover(e) {
-                        r = r.on_hover_text(hint);
-                    }
-                    if let Some(m) = row_menu(e, &self.dir, &shared.favorites) {
-                        r.context_menu(|ui| {
-                            if ui.button(m.label()).clicked() {
-                                menu = Some(m.clone());
-                                ui.close();
-                            }
-                        });
-                    }
-                    // Ordner öffnen nur per Doppelklick: ein einfacher Klick würde sofort den
-                    // Ordner wechseln, und der zweite Klick träfe dann einen Eintrag darin.
-                    if e.is_dir {
-                        if r.double_clicked() {
-                            enter = Some(e.name.clone());
+                // Jede Zeile über die ganze Breite; zu lange Namen werden gekürzt (sonst würde
+                // das Fenster breiter als vorgesehen).
+                ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                    for e in &self.entries {
+                        let kind = EntryIcon::of(e);
+                        // Symbol und Name als getrennte Bausteine: der Name bleibt ein eigener Text
+                        // in der üblichen Schrift, alle Namen stehen bündig hinter dem Symbol.
+                        let symbol =
+                            icons::text(kind.icon(), icons::LABEL_ICON_SIZE, kind.color(dark));
+                        let selected = !e.is_dir && e.name == self.file_name;
+                        let mut r = ui.add(
+                            egui::Button::selectable(
+                                selected,
+                                (symbol, egui::AtomExt::atom_shrink(entry_text(e), true)),
+                            )
+                            .truncate(),
+                        );
+                        if let Some(hint) = entry_hover(e) {
+                            r = r.on_hover_text(hint);
                         }
-                    } else if r.double_clicked() {
-                        double = Some(e.name.clone());
-                    } else if r.clicked() {
-                        pick = Some(e.name.clone());
+                        if let Some(m) = row_menu(e, &self.dir, &shared.favorites) {
+                            r.context_menu(|ui| {
+                                if ui.button(m.label()).clicked() {
+                                    menu = Some(m.clone());
+                                    ui.close();
+                                }
+                            });
+                        }
+                        // Ordner öffnen nur per Doppelklick: ein einfacher Klick würde sofort den
+                        // Ordner wechseln, und der zweite Klick träfe dann einen Eintrag darin.
+                        if e.is_dir {
+                            if r.double_clicked() {
+                                enter = Some(e.name.clone());
+                            }
+                        } else if r.double_clicked() {
+                            double = Some(e.name.clone());
+                        } else if r.clicked() {
+                            pick = Some(e.name.clone());
+                        }
                     }
-                }
+                });
                 if self.entries.is_empty() {
                     ui.weak("Hier gibt es keine passenden Dateien.");
                 }
@@ -597,12 +684,7 @@ impl FileChooser {
                 ui.horizontal_wrapped(|ui| {
                     for (i, b) in buttons.iter().enumerate() {
                         let p = &b.place;
-                        let r = ui
-                            .add(icons::selectable(
-                                b.current,
-                                p.kind.icon(),
-                                p.label.as_str(),
-                            ))
+                        let r = place_button(ui, b.current, p.kind.icon(), &p.label)
                             .on_hover_text(p.path.display().to_string());
                         if r.clicked() {
                             go = Some(i);

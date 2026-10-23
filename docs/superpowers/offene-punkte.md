@@ -1677,6 +1677,10 @@ Entscheidung von Dennis am 2026-10-23; gilt für alle drei Fenster mit Dateiausw
   - „Speichern“/„Ersetzen“ bzw. „Öffnen“ und „Abbrechen“ samt Meldungen stehen in allen drei Fenstern in der festen Fußzeile: auch in einem vollen Ordner bei 800 × 600 ohne Rollen sichtbar. Beim Netz-Import stehen „Importieren“ und „Schließen“ ebenfalls in der Fußzeile. Braucht die Leiste eine zweite Zeile, wird die Liste um diese kürzer (die Auswahl wird nicht höher).
   - Favoriten-Änderungen, die nicht gespeichert werden konnten (Datei unlesbar, schreibgeschützt, gesperrt), bleiben in der Leiste und vorgemerkt; sie werden beim nächsten gelungenen Schreiben (Favorit oder Wurzelwahl) mit gespeichert.
   - Ist die Liste in der Datei schon voll (andere Instanz), meldet die Auswahl „Es gibt schon 24 Favoriten …“, statt den neuen Favoriten still fallen zu lassen.
+- Nachbesserung 3 (Rückmeldung von Dennis am laufenden Programm):
+  - Alle Zeilen (Kopfzeile mit Schließen-Symbol am rechten Rand, Ordnerzeile, Leiste, Liste, Dateiname, Fußzeile) nutzen dieselbe Breite. Ursache des zu breiten „Netz importieren“: sehr lange Datei- oder Ordnernamen machten die Listenzeile breiter als das Fenster vorsah, das Fenster wuchs mit. Jetzt geht jede Listenzeile über die ganze Breite, zu lange Namen enden mit „…“. Knöpfe der Leiste zeigen höchstens 40 Zeichen (voller Pfad im Tooltip).
+  - Überfahren, Drücken oder Hervorheben eines Knopfs der Leiste ändert seine Größe nicht mehr (gleicher Rahmen in jedem Zustand), die Leiste verschiebt sich nicht.
+  - Die drei Dateifenster öffnen immer mittig im Programmfenster, auch nach einer Größenänderung des Programmfensters zwischen zwei Öffnungen (danach verschiebbar wie bisher). Sie sind 55 % der Fensterbreite breit (720 bis 1200 px); die Liste wächst mit der Fensterhöhe (bei 600 px wie bisher, höchstens 700 px). Bei 800 × 600 ändert sich nichts.
 
 **Grenzen:**
 - Die bekannten Ordner werden über die üblichen Namen im Benutzerordner gefunden (`Documents`, `Downloads`, `Desktop`, `Pictures`, ggf. unter `OneDrive`), nicht über die Windows-Einstellung für verschobene Ordner (z. B. `OneDrive\Dokumente` wird nicht gefunden).
@@ -1699,3 +1703,6 @@ Entscheidung von Dennis am 2026-10-23; gilt für alle drei Fenster mit Dateiausw
 - [ ] 7. Favoriten-Ordner im Explorer umbenennen, dann Knopf klicken: Meldung, dass es den Ordner nicht gibt, mit Hinweis zum Entfernen; Rechtsklick auf den Knopf → „Aus Favoriten entfernen“ wirkt.
 - [ ] 8. Mit einem getrennten Netzlaufwerk: Die Auswahl öffnet sofort, das Laufwerk fehlt oder erscheint später.
 - [ ] 9. Ältere `config.json` ohne `favorites` (vorher sichern): Programm startet mit dem gewählten Projektordner.
+- [ ] 10. Alle drei Dateifenster öffnen mittig, auch nachdem das Programmfenster zwischen zwei Öffnungen vergrößert oder verkleinert wurde; im großen Fenster (z. B. 2000 × 1100) sind sie breiter und die Liste höher, „Speichern“/„Öffnen“ bleibt unten sichtbar.
+- [ ] 11. Ordner mit sehr langen Namen: Kopfzeile, Ordnerzeile, Leiste, Liste und Dateiname enden am selben rechten Rand, lange Namen enden mit „…“.
+- [ ] 12. Maus über die Knöpfe der Leiste führen und einen drücken: kein Knopf verschiebt sich, nichts springt in die nächste Zeile.

@@ -225,7 +225,8 @@ impl ImportDialog {
         let chooser = RefCell::new(&mut self.chooser);
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
         let mut close_footer = false;
-        let response = Dialog::new("Netz importieren", DialogSize::Wide)
+        let response = Dialog::new("Netz importieren", DialogSize::File)
+            .center_on_open()
             .open(&mut open)
             .show_with_footer(
                 ctx,

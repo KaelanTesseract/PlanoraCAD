@@ -1096,9 +1096,12 @@ fn layout() {
             let rect = d.last_rect.expect("gezeichnet");
             let window = Rect::from_min_size(Pos2::ZERO, screen.size);
             assert!(window.contains_rect(rect), "{rect:?} in {window:?}");
+            // Dateifenster: 55 % der Fensterbreite, mindestens 720 (Teilprojekt Dateiauswahl).
+            let wanted =
+                planora_app::dialog::limits(window, planora_app::dialog::DialogSize::File).0;
             assert!(
-                (rect.width() - 720.0).abs() <= 1.0,
-                "volle Breite: {rect:?}"
+                (rect.width() - wanted).abs() <= 1.0,
+                "volle Breite {wanted}: {rect:?}"
             );
             assert!((rect.center().x - w / 2.0).abs() <= 1.0, "mittig: {rect:?}");
             assert_eq!(d.last_cards.len(), 2, "Karten „Datei“ und „Körper“");
