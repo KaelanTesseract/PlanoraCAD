@@ -57,4 +57,8 @@ pub use refs::{
     resolve_edge, resolve_face,
 };
 pub use snapshot::{RestoreKind, Snapshot, SnapshotFeature, mesh_validations};
-pub use step_bodies::{NewStepBody, StepShape, StepShapeId, step_builds};
+pub use step_bodies::{
+    MAX_STEP_TEXT_SUM_BYTES, NewStepBody, StepShape, StepShapeId, StepTextSumLimitGuard,
+    limit_step_text_sum_for_tests, step_builds, step_text_megabytes, step_text_sum,
+    step_text_sum_limit,
+};

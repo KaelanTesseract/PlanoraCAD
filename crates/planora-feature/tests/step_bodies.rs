@@ -699,3 +699,57 @@ fn drawings_and_parts_list_see_it() {
     assert_eq!(report.faces, 6);
     assert!(report.rejected.is_empty());
 }
+
+/// Summengrenze des Dateiformats schon beim Import (Aufgabe 12, Fix-Runde 1): mehr STEP-Text,
+/// als sich speichern ließe, wird ganz abgelehnt; dieselbe Form zählt einmal.
+#[test]
+fn import_respects_the_step_text_sum_limit() {
+    assert_eq!(MAX_STEP_TEXT_SUM_BYTES, 200 * 1024 * 1024);
+    assert_eq!(step_text_sum_limit(), MAX_STEP_TEXT_SUM_BYTES);
+    assert_eq!(step_text_megabytes(MAX_STEP_TEXT_SUM_BYTES), "200");
+    assert_eq!(step_text_megabytes(MAX_STEP_TEXT_SUM_BYTES + 1), "200,1");
+    assert_eq!(step_text_megabytes(1024 * 1024 / 2), "0,5");
+    assert_eq!(step_text_megabytes(0), "0");
+
+    let a = loaded(&box_solid());
+    let b = loaded(&sphere_solid());
+    let (la, lb) = (a.text().len(), b.text().len());
+    assert_eq!(
+        step_text_sum([&a, &a, &b]),
+        la + lb,
+        "dasselbe Arc zählt einmal"
+    );
+    {
+        let _limit = limit_step_text_sum_for_tests(la + lb - 1);
+        assert_eq!(step_text_sum_limit(), la + lb - 1);
+        let mut d = Document::new();
+        d.add_step_bodies(vec![body("A", Arc::clone(&a))]).unwrap();
+        let (before, edits) = (d.snapshot(), d.edit_count());
+        let builds = step_builds();
+        let e = d
+            .add_step_bodies(vec![body("B", Arc::clone(&b))])
+            .unwrap_err();
+        assert!(matches!(e, FeatureError::StepImport(_)), "{e:?}");
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "Die STEP-Formen im Projekt sind zusammen zu groß ({} MB, erlaubt {} MB). \
+                 Bitte weniger oder kleinere Körper importieren.",
+                step_text_megabytes(la + lb),
+                step_text_megabytes(la + lb - 1)
+            )
+        );
+        assert_eq!(step_builds(), builds, "abgelehnt, bevor gebaut wird");
+        assert!(d.snapshot().same_content(&before));
+        assert_eq!(d.edit_count(), edits);
+        assert_eq!(d.snapshot().step_shapes.len(), 1);
+        // Dieselbe Form noch einmal: die Summe wächst nicht.
+        d.add_step_bodies(vec![body("A2", Arc::clone(&a))]).unwrap();
+        d.check_invariants().unwrap();
+    }
+    assert_eq!(
+        step_text_sum_limit(),
+        MAX_STEP_TEXT_SUM_BYTES,
+        "Wächter stellt zurück"
+    );
+}

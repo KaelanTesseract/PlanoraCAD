@@ -13,11 +13,69 @@ use planora_kernel::Solid;
 use planora_step::read::units::{MAX_WELD_TOL_MM, MIN_WELD_TOL_MM};
 use planora_step::{COARSE_TOL_MM, check_normal_header, read_normal_body};
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::{Arc, OnceLock};
 
 thread_local! {
     static STEP_BUILDS: Cell<u64> = const { Cell::new(0) };
+    static STEP_TEXT_SUM_LIMIT: Cell<usize> = const { Cell::new(MAX_STEP_TEXT_SUM_BYTES) };
+}
+
+/// Größte Summe der STEP-Texte eines Dokuments in Bytes (jede Form einmal gezählt). Bis hierhin
+/// lässt sich das Dokument speichern (Dateiformat 10); der Import lehnt mehr ab, damit ein
+/// Dokument nie mehr hält, als es speichern kann.
+pub const MAX_STEP_TEXT_SUM_BYTES: usize = 200 * 1024 * 1024;
+
+/// Die geltende Summengrenze: [`MAX_STEP_TEXT_SUM_BYTES`], außer ein Test hat sie in diesem
+/// Thread mit [`limit_step_text_sum_for_tests`] herabgesetzt.
+#[doc(hidden)]
+pub fn step_text_sum_limit() -> usize {
+    STEP_TEXT_SUM_LIMIT.with(Cell::get)
+}
+
+/// Setzt die Summengrenze im aufrufenden Thread, bis der Wächter fällt (nur für Tests, damit
+/// die Grenze ohne Hunderte MiB Text prüfbar ist).
+#[doc(hidden)]
+#[must_use]
+pub fn limit_step_text_sum_for_tests(limit: usize) -> StepTextSumLimitGuard {
+    let previous = STEP_TEXT_SUM_LIMIT.with(|c| c.replace(limit));
+    StepTextSumLimitGuard { previous }
+}
+
+/// Stellt beim Fallen die vorige Summengrenze wieder her.
+#[doc(hidden)]
+pub struct StepTextSumLimitGuard {
+    previous: usize,
+}
+
+impl Drop for StepTextSumLimitGuard {
+    fn drop(&mut self) {
+        STEP_TEXT_SUM_LIMIT.with(|c| c.set(self.previous));
+    }
+}
+
+/// Summe der Textlängen der Formen in Bytes; dieselbe Form (dasselbe `Arc`) zählt einmal, wie
+/// sie auch nur einmal in der Datei steht.
+pub fn step_text_sum<'a>(shapes: impl IntoIterator<Item = &'a Arc<StepShape>>) -> usize {
+    let mut seen: HashSet<*const StepShape> = HashSet::new();
+    let mut sum = 0usize;
+    for s in shapes {
+        if seen.insert(Arc::as_ptr(s)) {
+            sum = sum.saturating_add(s.text().len());
+        }
+    }
+    sum
+}
+
+/// Bytes als Megabyte (1 MB = 1024 × 1024 Bytes) mit höchstens einer Nachkommastelle, nach
+/// oben gerundet, mit deutschem Komma: knapp über der Grenze ist nie „gleich“ der Grenze.
+pub fn step_text_megabytes(bytes: usize) -> String {
+    let tenths = (bytes as u128 * 10).div_ceil(1024 * 1024);
+    if tenths.is_multiple_of(10) {
+        format!("{}", tenths / 10)
+    } else {
+        format!("{},{}", tenths / 10, tenths % 10)
+    }
 }
 
 /// Zahl der Körperaufbauten aus einem gespeicherten Text ([`StepShape::solid`]) in diesem
@@ -130,7 +188,8 @@ impl Document {
     /// `Ok`, wird alles zurückgenommen (Features, Formen, Kennungszähler, Änderungszahl, Marker,
     /// dabei entstandene Folgeblätter der Stückliste samt Zeichnungszähler)
     /// und die Meldung des ersten geliefert („„{Name}“: {Meldung}“). Ein leerer Aufruf ändert
-    /// nichts.
+    /// nichts. Vorher abgelehnt (nichts geändert): leere Namen und STEP-Text, der zusammen mit
+    /// den Formen des Dokuments die Summengrenze ([`MAX_STEP_TEXT_SUM_BYTES`]) überschreitet.
     pub fn add_step_bodies(
         &mut self,
         bodies: Vec<NewStepBody>,
@@ -142,6 +201,20 @@ impl Document {
             return Err(FeatureError::InvalidInput(
                 "Der Name darf nicht leer sein".into(),
             ));
+        }
+        // Nie mehr STEP-Text halten, als sich speichern lässt (Summengrenze des Dateiformats).
+        let total = step_text_sum(
+            self.step_shapes
+                .values()
+                .chain(bodies.iter().map(|b| &b.shape)),
+        );
+        let limit = step_text_sum_limit();
+        if total > limit {
+            return Err(FeatureError::StepImport(format!(
+                "Die STEP-Formen im Projekt sind zusammen zu groß ({} MB, erlaubt {} MB). Bitte weniger oder kleinere Körper importieren.",
+                step_text_megabytes(total),
+                step_text_megabytes(limit)
+            )));
         }
         let saved = (self.next_id, self.next_step_shape, self.edits, self.marker);
         // Neue Körper können ein Folgeblatt der Stückliste auslösen (`sync_parts_sheets`); die

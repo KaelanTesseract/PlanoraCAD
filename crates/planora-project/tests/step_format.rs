@@ -915,3 +915,202 @@ fn encode_does_not_build() {
     assert_eq!(step_builds(), builds + 2);
     assert_eq!(status(&e, q), FeatureStatus::Ok);
 }
+
+// ---- Fix-Runde 1: Summengrenze schon beim Import, Genauigkeit je Form, Goldene Datei ------
+
+/// Quader 5 × 5 × 5 bei (x, 0, 0) als Text von genau `len` Bytes (mit Leerzeichen-Kommentar
+/// nach der ersten Zeile aufgefüllt).
+fn padded_box(name: &str, x: f64, len: usize) -> String {
+    let t = box_text(name, [x, 0.0, 0.0], [5.0, 5.0, 5.0]);
+    let head = "ISO-10303-21;\n";
+    let pad = len - t.len();
+    assert!(pad >= 5, "zu kurz: {len}");
+    let out = format!("{head}/*{}*/\n{}", " ".repeat(pad - 5), &t[head.len()..]);
+    assert_eq!(out.len(), len);
+    out
+}
+
+/// Vier Formen von genau `n` Bytes, Grenze `4 n` (über `limit`): Import bis zur Grenze geht,
+/// darüber wird er ganz abgelehnt; ein Dokument an der Grenze speichert und lädt.
+fn import_and_save_at_limit(n: usize, limit: usize) {
+    assert_eq!(step_text_sum_limit(), limit);
+    let forms: Vec<Arc<StepShape>> = (0..4)
+        .map(|i| shape(padded_box(&format!("K{i}"), 10.0 * i as f64, n), 1e-6))
+        .collect();
+    let mut d = Document::new();
+    d.add_step_bodies(
+        (0..3)
+            .map(|i| body(&format!("K{i}"), Arc::clone(&forms[i])))
+            .collect(),
+    )
+    .unwrap();
+    let (before, edits, next) = (d.snapshot(), d.edit_count(), d.snapshot().next_id);
+    // Über der Grenze: ganz abgelehnt, das Dokument bleibt unverändert.
+    let e = d
+        .add_step_bodies(vec![
+            body("K3", Arc::clone(&forms[3])),
+            body("X", shape(quader_text(), 1e-6)),
+        ])
+        .unwrap_err();
+    let m = e.to_string();
+    assert!(
+        m.starts_with("Die STEP-Formen im Projekt sind zusammen zu groß (")
+            && m.ends_with("). Bitte weniger oder kleinere Körper importieren."),
+        "{m}"
+    );
+    assert!(m.contains(", erlaubt "), "{m}");
+    assert!(d.snapshot().same_content(&before));
+    assert_eq!((d.edit_count(), d.snapshot().next_id), (edits, next));
+    assert_eq!(d.snapshot().step_shapes.len(), 3);
+    // Genau an der Grenze: angenommen; dieselbe Form noch einmal zählt nicht doppelt.
+    d.add_step_bodies(vec![body("K3", Arc::clone(&forms[3]))])
+        .unwrap();
+    d.add_step_bodies(vec![body("K3b", Arc::clone(&forms[3]))])
+        .unwrap();
+    assert!(d.features().iter().all(|f| f.status == FeatureStatus::Ok));
+    // Das Dokument an der Grenze speichert und lädt.
+    let text = encode_version(&d.snapshot()).unwrap();
+    let e = load(&text);
+    assert_eq!(e.features().len(), 5);
+    assert!(e.features().iter().all(|f| f.status == FeatureStatus::Ok));
+    assert_eq!(encode_version(&e.snapshot()).unwrap(), text);
+    // Lesen benutzt dieselbe Grenze: ein Byte weniger erlaubt, und die Datei ist zu groß.
+    {
+        let _smaller = limit_step_text_sum_for_tests(limit - 1);
+        let m = msg(&text);
+        assert!(m.contains("Die STEP-Formen sind zu groß"), "{m}");
+    }
+    assert_eq!(step_text_sum_limit(), limit);
+
+    // Ein Bild über der Grenze (am Import vorbei): eigene, verständliche Meldung beim Speichern.
+    let mut s = d.snapshot();
+    s.step_shapes
+        .insert(StepShapeId(99), shape(quader_text(), 1e-6));
+    s.features.push(SnapshotFeature {
+        id: FeatureId(99),
+        name: "Zu viel".into(),
+        suppressed: false,
+        kind: FeatureKind::StepBody {
+            shape: StepShapeId(99),
+        },
+        formulas: Default::default(),
+    });
+    s.next_id = 100;
+    let m = encode_version(&s).unwrap_err().to_string();
+    assert!(
+        m.starts_with(
+            "Das Projekt lässt sich nicht speichern: Die STEP-Formen sind zusammen zu groß ("
+        ) && m.ends_with("). Bitte STEP-Körper löschen oder durch kleinere ersetzen."),
+        "{m}"
+    );
+    assert!(!m.contains("ungültige Werte"), "{m}");
+}
+
+#[test]
+fn import_refuses_more_step_text_than_can_be_saved() {
+    let n = 16 * 1024;
+    let _limit = limit_step_text_sum_for_tests(4 * n);
+    import_and_save_at_limit(n, 4 * n);
+}
+
+/// Dasselbe mit der echten Grenze von 200 MiB (vier Formen à 50 MiB); nur im Release-Build.
+#[test]
+#[ignore = "groß: cargo test --release -p planora-project --test step_format -- --ignored"]
+fn real_step_text_limit() {
+    assert_eq!(MAX_STEP_TEXT_SUM_BYTES, 200 * 1024 * 1024);
+    import_and_save_at_limit(50 * 1024 * 1024, MAX_STEP_TEXT_SUM_BYTES);
+    let mut d = Document::new();
+    let big = shape(padded_box("G", 0.0, 50 * 1024 * 1024), 1e-6);
+    let small = shape(quader_text(), 1e-6);
+    let e = d
+        .add_step_bodies(vec![
+            body("A", Arc::clone(&big)),
+            body("B", shape(padded_box("H", 10.0, 50 * 1024 * 1024), 1e-6)),
+            body("C", shape(padded_box("I", 20.0, 50 * 1024 * 1024), 1e-6)),
+            body("D", shape(padded_box("J", 30.0, 50 * 1024 * 1024), 1e-6)),
+            body("E", small),
+        ])
+        .unwrap_err();
+    assert!(
+        e.to_string().starts_with(
+            "Die STEP-Formen im Projekt sind zusammen zu groß (200,1 MB, erlaubt 200 MB)."
+        ),
+        "{e}"
+    );
+    assert!(d.features().is_empty());
+}
+
+/// Zwei getrennte Importe mit gleichem Text, aber anderer Genauigkeit bleiben zwei Formen;
+/// beide Genauigkeiten (und damit die Warnung „grob“) überstehen Speichern und Laden.
+#[test]
+fn equal_text_with_other_accuracy_stays_apart() {
+    let mut d = Document::new();
+    let a = d
+        .add_step_bodies(vec![body("Fein", shape(quader_text(), 1e-6))])
+        .unwrap()[0];
+    let b = d
+        .add_step_bodies(vec![body("Grob", shape(quader_text(), 1e-3))])
+        .unwrap()[0];
+    let text = encode_version(&d.snapshot()).unwrap();
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["step_formen"].as_array().unwrap().len(), 2);
+    let e = load(&text);
+    assert_eq!(e.step_body(a).unwrap().tolerance_mm(), 1e-6);
+    assert_eq!(e.step_body(b).unwrap().tolerance_mm(), 1e-3);
+    assert!(!e.step_body(a).unwrap().is_coarse());
+    assert!(e.step_body(b).unwrap().is_coarse());
+    assert_eq!(encode_version(&e.snapshot()).unwrap(), text);
+}
+
+/// Mehr als 1 000 000 Formen: abgelehnt, bevor eine einzelne Form geprüft wird.
+#[test]
+fn too_many_step_forms() {
+    let n = 1_000_001;
+    let mut forms = String::with_capacity(n * 48);
+    for i in 1..=n {
+        if i > 1 {
+            forms.push(',');
+        }
+        forms.push_str(&format!(
+            "{{\"id\":{i},\"genauigkeit\":0.000001,\"text\":\"\"}}"
+        ));
+    }
+    let file = format!(
+        "{{\"format\": 10, \"marker\": 0, \"naechste_id\": 1, \"features\": [], \
+         \"step_formen\": [{forms}]}}"
+    );
+    let m = msg(&file);
+    assert!(m.contains("STEP-Formen: zu viele Einträge"), "{m}");
+}
+
+/// Eingefrorene Format-10-Datei (die Formate 8 und 9 haben keine eigene): ein grober
+/// STEP-Quader, verschoben. Liest sich, rechnet und wird Byte für Byte gleich geschrieben.
+#[test]
+fn format10_golden_file() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("step_fixtures")
+        .join("format10_step.json");
+    let text = std::fs::read_to_string(path).unwrap();
+    let s = decode_version(&text, "format10_step.json").unwrap();
+    assert_eq!(required_format(&s), 10);
+    assert_eq!(s.step_shapes.len(), 1);
+    let form = &s.step_shapes[&StepShapeId(1)];
+    assert_eq!(form.text(), quader_text());
+    assert_eq!(form.tolerance_mm(), 1e-3);
+    assert_eq!(
+        encode_version(&s).unwrap().replace("\r\n", "\n"),
+        text.replace("\r\n", "\n")
+    );
+    let d = Document::from_snapshot(s, 0.05).unwrap();
+    assert_eq!(d.features().len(), 2);
+    assert!(d.features().iter().all(|f| f.status == FeatureStatus::Ok));
+    let moved = d.body(first(d.features()[1].id)).unwrap();
+    let (lo, hi) = bounds(moved);
+    assert!((lo - DVec3::new(1.0, 0.0, 0.0)).abs().max_element() < 1e-9);
+    assert!((hi - DVec3::new(11.0, 20.0, 30.0)).abs().max_element() < 1e-9);
+    assert_eq!(
+        encode_version(&d.snapshot()).unwrap().replace("\r\n", "\n"),
+        text.replace("\r\n", "\n")
+    );
+}

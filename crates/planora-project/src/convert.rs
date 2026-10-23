@@ -25,7 +25,7 @@ use planora_feature::{
     MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM, MAX_ROLE_CHARS,
     MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, SketchFeature, SketchFormulas,
     SketchPlane, Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId, field_keys,
-    validate_drawing,
+    step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
 use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
@@ -43,9 +43,6 @@ pub const FORMAT_VERSION: u32 = 10;
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
-/// Größte Summe der STEP-Texte einer Versionsdatei in Bytes (je Text gilt zusätzlich die Grenze
-/// von `StepShape::new`).
-const MAX_STEP_TEXT_SUM: usize = 200 * 1024 * 1024;
 
 /// Kleinste Formatnummer, die den Stand darstellt: 10 mit einem STEP-Körper (als erste Regel
 /// geprüft, auch unterdrückt: sein Text muss in der Datei stehen), 9 mit Parametern,
@@ -1017,7 +1014,8 @@ fn step_forms_to(s: &Snapshot) -> (Vec<StepFormDto>, BTreeMap<StepShapeId, u64>)
 }
 
 /// Liest die STEP-Formen einer Datei. Geprüft werden Kennung (nicht 0, nicht doppelt), die
-/// Summe der Textlängen und je Form nur Kopf und Genauigkeit (`StepShape::new`, Plan P14);
+/// Summe der Textlängen (`planora_feature::MAX_STEP_TEXT_SUM_BYTES`, dieselbe Grenze wie beim
+/// Import) und je Form nur Kopf und Genauigkeit (`StepShape::new`, Plan P14);
 /// gebaut wird erst beim Rechnen, ein kaputter Körpertext lädt mit Fehlerstatus am Feature.
 fn step_forms_from(
     origin: &str,
@@ -1027,7 +1025,7 @@ fn step_forms_from(
     let total = list
         .iter()
         .fold(0usize, |sum, f| sum.saturating_add(f.text.len()));
-    if total > MAX_STEP_TEXT_SUM {
+    if total > step_text_sum_limit() {
         return Err(ProjectError::corrupt(
             origin,
             "Die STEP-Formen sind zu groß",
@@ -1859,6 +1857,19 @@ fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)
 pub fn encode_version(s: &Snapshot) -> Result<String> {
     let format = required_format(s);
     let (step_formen, forms) = step_forms_to(s);
+    // Mehr STEP-Text, als sich lesen ließe: eigene Meldung statt „ungültige Werte“. Der Import
+    // lässt das nicht zu; die Prüfung hier schützt vor jedem anderen Weg dorthin.
+    let total = step_formen
+        .iter()
+        .fold(0usize, |sum, f| sum.saturating_add(f.text.len()));
+    let limit = step_text_sum_limit();
+    if total > limit {
+        return Err(ProjectError::Invalid(format!(
+            "Das Projekt lässt sich nicht speichern: Die STEP-Formen sind zusammen zu groß ({} MB, erlaubt {} MB). Bitte STEP-Körper löschen oder durch kleinere ersetzen.",
+            step_text_megabytes(total),
+            step_text_megabytes(limit)
+        )));
+    }
     let file = VersionFile {
         format,
         marker: s.marker,

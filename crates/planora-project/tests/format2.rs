@@ -134,7 +134,7 @@ fn documents_without_blends_still_write_format_1() {
             .contains("\"format\": 1")
     );
     assert_eq!(required_format(&blend_document().snapshot()), 2);
-    assert_eq!(FORMAT_VERSION, 10); // seit den benannten Parametern
+    assert_eq!(FORMAT_VERSION, 10); // seit den STEP-Körpern
 }
 
 #[test]
