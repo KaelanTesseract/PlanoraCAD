@@ -192,6 +192,25 @@ fn invalid_texts_give_none() {
 }
 
 #[test]
+fn short_months_the_year_2000_and_times_before_1970() {
+    for bad in [
+        "2026-11-31T12:00:00Z",
+        "2026-06-31T12:00:00Z",
+        "2026-09-31T12:00:00Z",
+    ] {
+        assert_eq!(fo(bad, 0), None, "„{bad}“");
+    }
+    assert_eq!(
+        fo("2000-02-29T12:00:00Z", 0).as_deref(),
+        Some("29.02.2000, 12:00")
+    );
+    assert_eq!(
+        fo("1969-12-31T23:30:00Z", 0).as_deref(),
+        Some("31.12.1969, 23:30")
+    );
+}
+
+#[test]
 fn local_time_text_keeps_invalid_text_unchanged() {
     for bad in ["", "kaputt", "2026-10-23 16:42:07", "2026-13-23T16:42:07Z"] {
         assert_eq!(local_time_text(bad), bad);
