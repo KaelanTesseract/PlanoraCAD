@@ -468,7 +468,15 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
             .and_then(|f| state.document.step_body(f));
         if let Some(shape) = step {
             row(ui, "Art", theme::value(STEP_LABEL));
+            // Der Körper kann seit dem Import gerundet oder verrechnet sein: Die Zahl der Form
+            // aus der Datei heißt hier ausdrücklich so, „Flächen / Kanten“ unten zählt den
+            // Körper, wie er jetzt ist.
             for (k, v) in step_rows(state, shape) {
+                let k = if k == "Flächen" {
+                    "Flächen in der Datei"
+                } else {
+                    k
+                };
                 row(ui, k, theme::value(v));
             }
             step_warning(ui, shape);

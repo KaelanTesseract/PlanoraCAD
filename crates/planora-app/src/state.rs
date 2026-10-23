@@ -2584,9 +2584,57 @@ impl AppState {
 /// Bezeichnung (und Namensstamm) der aus STEP-Dateien übernommenen Körper, gleich
 /// `FeatureKind::StepBody.label()`. Nur in der Crate sichtbar: `export_dialog::STEP_LABEL` (Name
 /// des Exportformats) trägt denselben Namen, und Tests binden beide Module mit `*` ein.
-pub(crate) const STEP_LABEL: &str = "STEP-Körper";
+pub(crate) const STEP_LABEL: &str = planora_step::UNNAMED_BODY;
+
+/// Nummer `n`, wenn `name` genau „STEP-Körper n“ ist (n höchstens `MAX_NAME_COUNTER`).
+fn step_number(name: &str) -> Option<u64> {
+    let (label, num) = name.trim().rsplit_once(' ')?;
+    let n = num.parse::<u64>().ok()?;
+    (label == STEP_LABEL && n <= MAX_NAME_COUNTER).then_some(n)
+}
 
 impl AppState {
+    /// Die Namen, die [`AppState::import_step`] den Körpern mit den Namen `given` (in dieser
+    /// Reihenfolge) geben würde: ein Name wird getrimmt übernommen, ein leerer wird
+    /// „STEP-Körper n“. Die Nummern liegen über allen „STEP-Körper k“ im Dokument (Features und
+    /// sichtbare Körper, auch umbenannte), über allen schon vergebenen und über denen in `given`
+    /// selbst, damit kein Name doppelt vorkommt. Das Fenster „STEP importieren“ benutzt sie für
+    /// die Lage-Meldung (`ImportedBody::warnings_named`), damit Meldung und Baum übereinstimmen.
+    pub fn step_body_names(&self, given: &[String]) -> Vec<String> {
+        self.plan_step_names(given).0
+    }
+
+    /// Wie [`AppState::step_body_names`]; dazu die letzte vergebene Nummer (keine: `None`).
+    fn plan_step_names(&self, given: &[String]) -> (Vec<String>, Option<u64>) {
+        let base = self
+            .document
+            .features()
+            .iter()
+            .map(|f| f.name.as_str())
+            .chain(self.bodies.iter().map(|b| b.name.as_str()))
+            .chain(given.iter().map(String::as_str))
+            .filter_map(step_number)
+            .chain(self.name_counters.get(STEP_LABEL).copied())
+            .max()
+            .unwrap_or(0);
+        let mut next = base;
+        let mut last = None;
+        let names = given
+            .iter()
+            .map(|name| {
+                let trimmed = name.trim();
+                if trimmed.is_empty() {
+                    next = next.saturating_add(1);
+                    last = Some(next);
+                    format!("{STEP_LABEL} {next}")
+                } else {
+                    trimmed.to_string()
+                }
+            })
+            .collect();
+        (names, last)
+    }
+
     /// Legt die Körper `bodies` (Name, Form aus dem Import) als STEP-Körper an, alle in einem
     /// Schritt am Marker (ganz oder gar nicht). Ein leerer Name ergibt „STEP-Körper n“ (Zähler wie
     /// bei „Netz-Körper n“; er zählt nur nach gelungenem Anlegen weiter). Danach ist der erste
@@ -2601,25 +2649,17 @@ impl AppState {
         if bodies.is_empty() {
             return Ok(Vec::new());
         }
-        let mut unnamed = 0u64;
-        let base = self.name_counters.get(STEP_LABEL).copied().unwrap_or(0);
+        let given: Vec<String> = bodies.iter().map(|(n, _)| n.clone()).collect();
+        let (names, last) = self.plan_step_names(&given);
         let list: Vec<NewStepBody> = bodies
             .into_iter()
-            .map(|(name, shape)| {
-                let trimmed = name.trim();
-                let name = if trimmed.is_empty() {
-                    unnamed += 1;
-                    format!("{STEP_LABEL} {}", base.saturating_add(unnamed))
-                } else {
-                    trimmed.to_string()
-                };
-                NewStepBody { name, shape }
-            })
+            .zip(names)
+            .map(|((_, shape), name)| NewStepBody { name, shape })
             .collect();
         match self.document.add_step_bodies(list) {
             Ok(ids) => {
-                for _ in 0..unnamed {
-                    self.count_name(STEP_LABEL);
+                if let Some(n) = last {
+                    self.name_counters.insert(STEP_LABEL.to_string(), n);
                 }
                 self.hover = None;
                 self.selection = None;

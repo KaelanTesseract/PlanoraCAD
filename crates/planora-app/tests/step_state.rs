@@ -26,6 +26,7 @@ use planora_math::{DMat4, DVec2, DVec3, PI};
 use planora_mesh::{TessellationOptions, mass_properties, tessellate};
 use planora_project::config::Config;
 use planora_project::library::Library;
+use planora_render::{FaceRef, Pick};
 use planora_step::{ImportOptions, ReadLimits, StepFile, import_bodies, normalize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -434,8 +435,15 @@ fn import_is_all_or_nothing() {
     assert_eq!(names(&s)[1], "STEP-Körper 1");
     // Leere Liste: nichts geschieht.
     let edits = s.document.edit_count();
+    let face = s.bodies[0].solid.faces.iter().next().unwrap().0;
+    let pick = Pick::Face(FaceRef { body: 0, face });
+    s.set_selection(Some(pick));
+    s.selected_feature = Some(s.document.features()[0].id);
     assert_eq!(s.import_step(Vec::new()), Ok(Vec::new()));
     assert_eq!(s.document.edit_count(), edits);
+    assert_eq!(s.selection, Some(pick), "Auswahl bleibt");
+    assert_eq!(s.selected_body, Some(0));
+    assert_eq!(s.selected_feature, Some(s.document.features()[0].id));
 }
 
 #[test]
@@ -781,4 +789,184 @@ fn kind_icon_and_dialog() {
         "kein Bearbeiten-Fenster"
     );
     assert_eq!(kind.label(), "STEP-Körper");
+}
+
+// ---- Nachbesserung 1 -------------------------------------------------------------------------
+
+/// Text, der im Bild genau so steht (eine eigene Beschriftung).
+fn has_exact(seen: &[Colored], text: &str) -> bool {
+    seen.iter().any(|c| c.text == text)
+}
+
+#[test]
+fn body_panel_names_the_face_count_of_the_file() {
+    let mut s = AppState::new();
+    s.import_step(vec![("Q".into(), shape(&box_at(DVec3::ZERO)))])
+        .unwrap();
+    let edge = edge_between(&s.bodies[0].solid, "STEP-Fläche 1", "STEP-Fläche 2");
+    s.add_blend(0, &[edge], BlendArt::Rundung { radius: 1.0 }, false)
+        .unwrap();
+    assert_eq!(s.bodies[0].kind, BodyKind::Step, "gerundet bleibt STEP");
+    let seen = draw_properties(&mut s, true);
+    let text = all_text(&seen);
+    assert!(has_exact(&seen, "Flächen in der Datei"), "{text}");
+    assert!(
+        !has_exact(&seen, "Flächen"),
+        "kein zweites „Flächen“:
+{text}"
+    );
+    assert!(has_exact(&seen, "Flächen / Kanten"), "{text}");
+    // Feature-Ansicht: die Form aus der Datei
+    s.selected_body = None;
+    s.selected_feature = Some(s.document.features()[0].id);
+    let seen = draw_properties(&mut s, true);
+    assert!(has_exact(&seen, "Flächen"), "{}", all_text(&seen));
+}
+
+#[test]
+fn generated_names_never_repeat_existing_ones() {
+    let mut s = AppState::new();
+    // Name aus der Datei gleich einem erzeugten Namen, im selben Import
+    let ids = s
+        .import_step(vec![
+            ("STEP-Körper 1".into(), shape(&box_at(DVec3::ZERO))),
+            ("".into(), shape(&box_at(DVec3::new(100.0, 0.0, 0.0)))),
+        ])
+        .unwrap();
+    assert_eq!(names(&s), ["STEP-Körper 1", "STEP-Körper 2"]);
+    assert_eq!(ids.len(), 2);
+    let rows = s.document.parts_rows();
+    assert_eq!(rows.len(), 2, "zwei Zeilen in der Stückliste");
+    assert!(rows.iter().all(|r| r.qty == 1));
+    // Ein umbenannter Quader und ein Netz-Name im Dokument
+    let mut t = AppState::new();
+    let b = t.create_box(DVec3::splat(4.0)).unwrap();
+    t.rename_feature(b, "STEP-Körper 3").unwrap();
+    t.import_step(vec![("".into(), shape(&box_at(DVec3::ZERO)))])
+        .unwrap();
+    assert_eq!(names(&t), ["STEP-Körper 3", "STEP-Körper 4"]);
+    // Der Helfer liefert dieselben Namen wie der Import (für die Lage-Meldung im Fenster).
+    let given: Vec<String> = vec!["".into(), "Teil".into(), " ".into(), "STEP-Körper 9".into()];
+    let planned = t.step_body_names(&given);
+    assert_eq!(
+        planned,
+        ["STEP-Körper 10", "Teil", "STEP-Körper 11", "STEP-Körper 9"]
+    );
+    let list: Vec<(String, Arc<StepShape>)> = given
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            (
+                n.clone(),
+                shape(&box_at(DVec3::new(50.0 * i as f64, 0.0, 0.0))),
+            )
+        })
+        .collect();
+    t.import_step(list).unwrap();
+    assert_eq!(names(&t)[2..], planned[..]);
+    // Der Zähler zählt nur hoch: Nach dem Umbenennen kommt die Nummer nicht wieder.
+    let mut u = AppState::new();
+    let id = u
+        .import_step(vec![("".into(), shape(&box_at(DVec3::ZERO)))])
+        .unwrap()[0];
+    u.rename_feature(id, "Gehäuse").unwrap();
+    u.import_step(vec![("".into(), shape(&box_at(DVec3::ZERO)))])
+        .unwrap();
+    assert_eq!(names(&u), ["Gehäuse", "STEP-Körper 2"]);
+    let all = names(&t);
+    let mut unique = all.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), all.len(), "{all:?}");
+}
+
+#[test]
+fn bodies_follow_the_input_order() {
+    let mut s = AppState::new();
+    let at = [0.0, 100.0, 200.0];
+    let list: Vec<(String, Arc<StepShape>)> = ["A", "B", "C"]
+        .iter()
+        .zip(at)
+        .map(|(n, x)| (n.to_string(), shape(&box_at(DVec3::new(x, 0.0, 0.0)))))
+        .collect();
+    let ids = s.import_step(list).unwrap();
+    assert_eq!(names(&s), ["A", "B", "C"], "Baum in Dateireihenfolge");
+    let order: Vec<FeatureId> = s.document.features().iter().map(|f| f.id).collect();
+    assert_eq!(order, ids);
+    for (id, x) in ids.iter().zip(at) {
+        let i = s.body_index(first(*id)).unwrap();
+        assert!((s.bodies[i].bounds.0.x - x).abs() < 1e-9, "{id:?}");
+    }
+    let sel = s.selected_body.unwrap();
+    assert_eq!(s.bodies[sel].name, "A");
+    assert!(s.bodies[sel].bounds.0.x.abs() < 1e-9);
+}
+
+#[test]
+fn import_clears_picks_and_hover() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    let face = s.bodies[0].solid.faces.iter().next().unwrap().0;
+    let pick = Pick::Face(FaceRef { body: 0, face });
+    s.set_selection(Some(pick));
+    s.set_hover(Some(pick));
+    s.import_step(vec![(
+        "Q".into(),
+        shape(&box_at(DVec3::new(50.0, 0.0, 0.0))),
+    )])
+    .unwrap();
+    assert_eq!(s.selection, None);
+    assert_eq!(s.hover, None);
+}
+
+#[test]
+fn accuracy_shows_four_digits() {
+    let n = normalize(&box_at(DVec3::ZERO), "Q").unwrap();
+    for (t, want) in [
+        (2.54e-5, "0,0000254 mm"),
+        (1.2346e-4, "0,0001235 mm"),
+        (1e-3, "0,001 mm"),
+        (1e-6, "0,000001 mm"),
+    ] {
+        let mut s = AppState::new();
+        let sh = Arc::new(StepShape::with_solid(n.text.clone(), t, n.solid.clone()));
+        let id = s.import_step(vec![("Q".into(), sh)]).unwrap()[0];
+        let kind = s.document.feature(id).unwrap().kind.clone();
+        let rows = properties::parameter_rows(&s, &kind);
+        assert_eq!(rows[1], ("Genauigkeit der Datei", want.to_string()), "{t}");
+    }
+}
+
+#[test]
+fn undo_leaves_no_selection_and_import_makes_dirty() {
+    let root = common::temp_root("planora-step-state-dirty");
+    let mut w = Workspace::new(Some(Library::open(&root).unwrap()), Config::default());
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(10.0))
+        .unwrap();
+    w.observe_history(false);
+    w.active_tab_mut().history_mut().mark_saved();
+    assert!(!w.active_tab().is_dirty());
+    w.active_tab_mut().state.import_step(three()).unwrap();
+    w.observe_history(false);
+    assert!(w.active_tab().is_dirty(), "nach dem Import ungespeichert");
+    assert!(w.active_tab().state.selected_body.is_some());
+    w.active_tab_mut().undo().unwrap();
+    w.observe_history(false);
+    assert_eq!(w.active_tab().state.bodies.len(), 1, "der Quader bleibt");
+    assert_eq!(w.active_tab().state.selected_body, None, "keine Auswahl");
+}
+
+#[test]
+fn the_step_label_has_one_source() {
+    let mut s = AppState::new();
+    let id = s
+        .import_step(vec![("".into(), shape(&box_at(DVec3::ZERO)))])
+        .unwrap()[0];
+    let label = s.document.feature(id).unwrap().kind.label();
+    assert_eq!(label, planora_step::UNNAMED_BODY);
+    assert_eq!(names(&s), [format!("{label} 1")]);
+    let seen = draw_properties(&mut s, true);
+    assert!(has_exact(&seen, label), "Art im Eigenschaftenfeld");
 }
