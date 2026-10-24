@@ -128,3 +128,13 @@ Strg+N neues Dokument, Strg+O Projekte (bei Fusion: Öffnen), Strg+S Speichern, 
 6. Aufräumen und Dokumentation (README, offene Punkte).
 
 Jede Etappe mit Sichtprüfung im echten Fenster bei 1920 × 1080.
+
+## Festlegungen nach der Bauherren-Prüfung (Claudes Entscheidungen, bitte prüfen)
+
+1. **Maus in 2D-Ansichten:** Die neue Maussteuerung (Drehen, Schwenken, Zoomen mit änderbaren Gesten) gilt für die 3D-Ansicht. In der Skizze und in der Zeichnung gibt es kein Drehen. Dort schwenkt die mittlere Taste und das Rad zoomt schon heute wie bei Fusion; die linke Taste zeichnet und wählt aus (Umschalt+links schwenkt zusätzlich). Das bleibt, die Gesten „Schwenken“ und „Zoomen“ aus der Tabelle gelten dort mit (eine Belegung für alle Ansichten), Drehen nur in 3D.
+2. **Skizzenkürzel nur für vorhandene Werkzeuge:** Der Bauer erfasst zuerst, welche Skizzen- und Zeichnungswerkzeuge es gibt (heute in der Skizze: Auswahl, Punkt, Linie, Rechteck, Kreis, Bogen, Ellipse, Spline, Kante projizieren). Eingetragen werden nur Kürzel, für die es ein Werkzeug gibt (Linie L, Rechteck R, Kreis C, Projizieren P; weitere nach der Bestandsaufnahme). Versatz, Stutzen und Skizzenbemaßung entstehen erst mit ihrer Funktion; ihre Kürzel stehen dann in der Liste „noch nicht vorhanden“.
+3. **Leertaste:** Wiederholen hat nur Wirkung, wenn kein Bedienelement den Tastaturfokus hat (sonst gehört die Leertaste dem fokussierten Knopf) und wie alle Kürzel nicht bei aktivem Textfeld.
+4. **Erfassen einer Mausgeste:** In den Einstellungen wählt man „Mausgeste ändern“ und führt sie aus: Taste gedrückt halten und ziehen (mindestens wenige Pixel) oder Rad drehen, jeweils mit den gerade gehaltenen Umschalttasten (Strg/Umschalt/Alt). Ein bloßer Klick zählt nicht als Geste zum Schwenken/Drehen/Zoomen. Das Rad mit Umschalttaste ist erlaubt. Zwei Gesten sind gleich, wenn Taste/Rad, Umschalttasten und Art (Ziehen/Rad) gleich sind. Tastenbelegungen und Mausgesten werden nie gegeneinander als Doppelbelegung gezählt.
+5. **Version der Einstellungen:** Kein neues Versionsfeld. Unbekannte Aktionen und ungültige Tasten in der Konfigurationsdatei werden ignoriert und in den Einstellungen als Hinweis genannt (so verhält sich auch „Datei aus neuerer Version“). Die Konfigurationsdatei ändert sich nur durch einen neuen, optionalen Abschnitt für Abweichungen.
+6. **Doppelbelegung mit „Alle“:** Ja: Tauschen wird auch mit einer „Alle“-Aktion angeboten, weil keine Taste verschluckt werden darf (Anti-Ziel).
+7. **Gedächtnis:** Der Verweis auf das Gedächtnis (Entscheidung 5) betrifft nur Claudes Arbeitsweise, nicht das Programm; der Plan enthält dafür keinen Schritt.
