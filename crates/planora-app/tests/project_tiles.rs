@@ -7,10 +7,10 @@ use chrono::{Datelike, NaiveDate, TimeZone, Timelike};
 use planora_app::project_tiles::*;
 use planora_exchange::Progress;
 use planora_feature::Document;
-use planora_project::docstore::{DocStore, DocumentInfo, peek};
+use planora_project::docstore::{DocStore, DocumentInfo, LockMode, VersionInfo, peek};
 use planora_project::library::{Library, NodeKind, NodePath, TreeNode};
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ---------- Hilfen ----------
 
@@ -188,7 +188,8 @@ fn version_is_the_tip_of_the_active_branch_not_the_newest() {
     let f = facts(&info).unwrap();
     assert_eq!(f.version, 1);
     assert_eq!(f.branch, "Haupt");
-    assert_eq!(f.changed, info.latest_time());
+    // Datum und Version beschreiben dieselbe Version: die Spitze des aktiven Zweigs.
+    assert_eq!(f.changed, info.version(1).unwrap().time);
     assert_eq!(doc_entry(&dir).state, DocState::Read(f));
     assert_eq!(doc_entry(&dir).dir, dir);
 }
@@ -539,4 +540,224 @@ fn a_cancelled_scan_stops() {
     progress.cancel();
     assert_eq!(scan_library(&root, &progress).unwrap_err(), CANCELLED);
     assert_eq!(CANCELLED, "Abgebrochen");
+}
+
+// ---------- Fix-Runde 1: Datum der Spitze, unmögliche Zeiten, Abbruch, Fortschritt ----------
+
+/// Schreibt die Zeiten der genannten Versionen in `dokument.json` um (ohne Warten). Die Datei
+/// wird zeilenweise geändert: in jedem Versionseintrag steht `"nummer"` vor `"zeit"`.
+fn set_times(dir: &Path, times: &[(u32, &str)]) {
+    let file = dir.join("dokument.json");
+    let text = std::fs::read_to_string(&file).unwrap();
+    let mut current: Option<u32> = None;
+    let mut changed = 0;
+    let out: Vec<String> = text
+        .lines()
+        .map(|line| {
+            let t = line.trim_start();
+            if let Some(rest) = t.strip_prefix("\"nummer\":") {
+                current = rest.trim().trim_end_matches(',').parse().ok();
+            } else if t.starts_with("\"zeit\":")
+                && let Some((_, time)) = times.iter().find(|(n, _)| Some(*n) == current)
+            {
+                changed += 1;
+                let indent = &line[..line.len() - t.len()];
+                return format!("{indent}\"zeit\": \"{time}\",");
+            }
+            line.to_string()
+        })
+        .collect();
+    assert_eq!(
+        changed,
+        times.len(),
+        "jede Zeit muss genau einmal ersetzt werden"
+    );
+    std::fs::write(&file, out.join("\n")).unwrap();
+}
+
+fn new_doc(root: &Path, project: &str, name: &str) -> PathBuf {
+    let dir = root.join(project).join(format!("{name}.pcad"));
+    DocStore::create(&dir, &Document::new().snapshot(), "").unwrap();
+    dir
+}
+
+fn read_facts(dir: &Path) -> DocFacts {
+    match doc_entry(dir).state {
+        DocState::Read(f) => f,
+        DocState::Unreadable(e) => panic!("unlesbar: {e}"),
+    }
+}
+
+#[test]
+fn the_date_is_the_time_of_the_active_tip_after_branch_restore_and_delete() {
+    let (root, lib) = temp_library("planora-tiles-tipdate");
+    lib.create_project("P").unwrap();
+    let dir = new_doc(&root, "P", "d");
+    let mut store = DocStore::open(&dir, LockMode::Acquire).unwrap().0;
+    store
+        .save(None, &Document::new().snapshot(), "", Some("B"))
+        .unwrap(); // v2 auf B
+    store
+        .save(None, &Document::new().snapshot(), "", None)
+        .unwrap(); // v3 auf B
+    store.set_active_branch("Haupt").unwrap();
+    drop(store);
+    set_times(
+        &dir,
+        &[
+            (1, "2026-10-23T10:00:00Z"),
+            (2, "2026-10-23T11:00:00Z"),
+            (3, "2026-10-23T12:00:00Z"),
+        ],
+    );
+    let f = read_facts(&dir);
+    assert_eq!((f.version, f.branch.as_str()), (1, "Haupt"));
+    assert_eq!(
+        f.changed, "2026-10-23T10:00:00Z",
+        "Datum von v1, nicht von v3 auf B"
+    );
+    let scan = scan_library(&root, &Progress::new()).unwrap();
+    let t = tiles_at(&scan, &p(&["P"])).unwrap().remove(0);
+    assert_eq!(meta_line(&t, false), ("Version 1".into(), Tone::Normal));
+    assert_eq!(
+        changed_line(&t),
+        format!("Geändert {}", expected_local(2026, 10, 23, 10, 0, 0))
+    );
+
+    // Wiederherstellen auf den aktiven Zweig: neue Spitze v4 mit eigenem Datum.
+    let mut store = DocStore::open(&dir, LockMode::Acquire).unwrap().0;
+    assert_eq!(store.restore(3, "Haupt").unwrap(), 4);
+    drop(store);
+    set_times(&dir, &[(4, "2026-10-23T13:00:00Z")]);
+    let f = read_facts(&dir);
+    assert_eq!((f.version, f.changed.as_str()), (4, "2026-10-23T13:00:00Z"));
+
+    // Die Spitze löschen: wieder v1 mit dem Datum von v1 (v3 auf B bleibt jünger).
+    let mut store = DocStore::open(&dir, LockMode::Acquire).unwrap().0;
+    store.delete_version(4).unwrap();
+    drop(store);
+    let f = read_facts(&dir);
+    assert_eq!((f.version, f.changed.as_str()), (1, "2026-10-23T10:00:00Z"));
+}
+
+#[test]
+fn the_newest_document_is_judged_by_its_active_tip() {
+    let (root, lib) = temp_library("planora-tiles-tiporder");
+    lib.create_project("P").unwrap();
+    // X: aktiver Zweig alt (10:00), Nebenzweig sehr jung (15:00)
+    let x = new_doc(&root, "P", "X");
+    let mut store = DocStore::open(&x, LockMode::Acquire).unwrap().0;
+    store
+        .save(None, &Document::new().snapshot(), "", Some("B"))
+        .unwrap();
+    store.set_active_branch("Haupt").unwrap();
+    drop(store);
+    set_times(
+        &x,
+        &[(1, "2026-10-23T10:00:00Z"), (2, "2026-10-23T15:00:00Z")],
+    );
+    // Y: Spitze 12:00
+    let y = new_doc(&root, "P", "Y");
+    set_times(&y, &[(1, "2026-10-23T12:00:00Z")]);
+    let scan = scan_library(&root, &Progress::new()).unwrap();
+    let t = tiles_at(&scan, &vec![]).unwrap().remove(0);
+    let (path, f) = t.newest.clone().unwrap();
+    assert_eq!(path, p(&["P", "Y.pcad"]));
+    assert_eq!(f.changed, "2026-10-23T12:00:00Z");
+}
+
+#[test]
+fn an_impossible_time_does_not_date_and_does_not_win() {
+    for bad_time in ["9999-99-99T99:99:99Z", "2026-13-40T25:61:61Z"] {
+        let (root, lib) = temp_library("planora-tiles-badtime");
+        lib.create_project("P").unwrap();
+        let healthy = new_doc(&root, "P", "gesund");
+        set_times(&healthy, &[(1, "2026-10-23T12:00:00Z")]);
+        let odd = new_doc(&root, "P", "seltsam");
+        set_times(&odd, &[(1, bad_time)]);
+        assert!(
+            matches!(doc_entry(&odd).state, DocState::Unreadable(ref m) if !m.is_empty()),
+            "{bad_time}"
+        );
+        let scan = scan_library(&root, &Progress::new()).unwrap();
+        let t = tiles_at(&scan, &vec![]).unwrap().remove(0);
+        assert_eq!((t.documents, t.unreadable), (2, 1), "{bad_time}");
+        assert_eq!(t.newest.as_ref().unwrap().0, p(&["P", "gesund.pcad"]));
+        assert_eq!(
+            changed_line(&t),
+            format!("Geändert {}", expected_local(2026, 10, 23, 12, 0, 0))
+        );
+    }
+}
+
+fn info_with_time(time: &str) -> DocumentInfo {
+    DocumentInfo {
+        id: "x".into(),
+        versions: vec![VersionInfo {
+            number: 1,
+            parent: None,
+            branch: "Haupt".into(),
+            time: time.into(),
+            comment: String::new(),
+            program: String::new(),
+        }],
+        branches: BTreeMap::from([("Haupt".to_string(), 1)]),
+        active_branch: "Haupt".into(),
+        max_number: 1,
+    }
+}
+
+#[test]
+fn facts_reject_an_impossible_tip_time() {
+    assert_eq!(facts(&info_with_time("9999-99-99T99:99:99Z")), None);
+    assert_eq!(facts(&info_with_time("2026-13-40T25:61:61Z")), None);
+    let f = facts(&info_with_time("2026-10-23T12:00:00Z")).unwrap();
+    assert_eq!((f.version, f.changed.as_str()), (1, "2026-10-23T12:00:00Z"));
+}
+
+/// Bibliothek mit drei Dokumenten.
+fn three_docs(prefix: &str) -> PathBuf {
+    let (root, lib) = temp_library(prefix);
+    lib.create_project("P").unwrap();
+    for n in ["a", "b", "c"] {
+        new_doc(&root, "P", n);
+    }
+    root
+}
+
+#[test]
+fn cancelling_during_the_scan_stops_before_the_rest() {
+    let root = three_docs("planora-tiles-midcancel");
+    let progress = Progress::new();
+    let mut read = 0;
+    let result = scan_library_with(&root, &progress, |_| {
+        read += 1;
+        progress.cancel(); // nach dem ersten Dokument
+    });
+    assert_eq!(result.unwrap_err(), CANCELLED);
+    assert_eq!(
+        read, 1,
+        "nach dem Abbruch wird kein weiteres Dokument gelesen"
+    );
+}
+
+#[test]
+fn progress_counts_every_document_once() {
+    let root = three_docs("planora-tiles-progress");
+    let progress = Progress::new();
+    assert_eq!(progress.fraction(), 0.0);
+    let mut seen = Vec::new();
+    let mut paths = Vec::new();
+    let scan = scan_library_with(&root, &progress, |path| {
+        seen.push(progress.fraction());
+        paths.push(path.clone());
+    })
+    .unwrap();
+    // Gesamtzahl 3, je Dokument genau ein Schritt, am Ende alles erledigt.
+    assert_eq!(seen, [1.0 / 3.0, 2.0 / 3.0, 1.0]);
+    assert_eq!(progress.fraction(), 1.0);
+    assert_eq!(paths, scan.docs.keys().cloned().collect::<Vec<_>>());
+    // Ohne Haken: gleiches Ergebnis.
+    let plain = scan_library(&root, &Progress::new()).unwrap();
+    assert_eq!(plain.docs, scan.docs);
 }

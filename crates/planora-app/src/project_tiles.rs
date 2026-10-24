@@ -50,6 +50,16 @@ pub struct Scan {
 
 /// Baum + `peek` je Dokument; fehlt `root`, Fehler (nie anlegen); Abbruch → Err(CANCELLED).
 pub fn scan_library(root: &Path, progress: &Progress) -> Result<Scan, String> {
+    scan_library_with(root, progress, |_| {})
+}
+
+/// Wie [`scan_library`]; `after_document` läuft nach jedem gelesenen Dokument (nachdem der
+/// Fortschritt weitergezählt wurde). Prüfhaken für Tests, etwa für einen Abbruch mittendrin.
+pub fn scan_library_with(
+    root: &Path,
+    progress: &Progress,
+    mut after_document: impl FnMut(&NodePath),
+) -> Result<Scan, String> {
     // `Library::open` legt einen fehlenden Ordner an: vorher prüfen.
     if !root.is_dir() {
         return Err(format!("„{}“ wurde nicht gefunden.", root.display()));
@@ -78,6 +88,7 @@ pub fn scan_library(root: &Path, progress: &Progress) -> Result<Scan, String> {
         };
         docs.insert(node.path.clone(), entry);
         progress.advance(1);
+        after_document(&node.path);
     });
     if cancelled {
         return Err(CANCELLED.into());
@@ -118,22 +129,36 @@ fn walk_documents<'a>(nodes: &'a [TreeNode], f: &mut impl FnMut(&'a TreeNode)) {
     }
 }
 
-/// Spitze des aktiven Zweigs, Zweigname, `latest_time()`; ohne Spitze → None.
+/// Spitze des aktiven Zweigs, Zweigname und Zeit **dieser** Version (Datum und Version
+/// beschreiben immer dieselbe Version); ohne Spitze oder mit unmöglicher Zeit → None.
 pub fn facts(info: &DocumentInfo) -> Option<DocFacts> {
-    let version = info.tip(&info.active_branch)?;
-    Some(DocFacts {
+    tip_facts(info).ok()
+}
+
+/// Wie [`facts`], mit dem Grund, warum es keine Angaben gibt.
+fn tip_facts(info: &DocumentInfo) -> Result<DocFacts, String> {
+    let no_tip = || "Der aktive Zweig hat keine Version.".to_string();
+    let version = info.tip(&info.active_branch).ok_or_else(no_tip)?;
+    let time = &info.version(version).ok_or_else(no_tip)?.time;
+    // `peek` prüft nur die Form der Zeit; „9999-99-99T99:99:99Z“ darf weder datieren noch
+    // beim Vergleich „zuletzt geändert“ gewinnen.
+    if local_time::format_offset(time, 0).is_none() {
+        return Err(format!("Die Zeitangabe „{time}“ ist ungültig."));
+    }
+    Ok(DocFacts {
         version,
         branch: info.active_branch.clone(),
-        changed: info.latest_time().to_string(),
+        changed: time.clone(),
     })
 }
 
-/// Liest `dokument.json` eines Dokumentordners; peek-Fehler → `Unreadable(e.to_string())`.
+/// Liest `dokument.json` eines Dokumentordners; peek-Fehler → `Unreadable(e.to_string())`,
+/// ebenso ohne Spitze oder mit unmöglicher Zeit der Spitze.
 pub fn doc_entry(dir: &Path) -> DocEntry {
     let state = match peek(dir) {
-        Ok((info, _)) => match facts(&info) {
-            Some(f) => DocState::Read(f),
-            None => DocState::Unreadable("Der aktive Zweig hat keine Version.".into()),
+        Ok((info, _)) => match tip_facts(&info) {
+            Ok(f) => DocState::Read(f),
+            Err(e) => DocState::Unreadable(e),
         },
         Err(e) => DocState::Unreadable(e.to_string()),
     };
