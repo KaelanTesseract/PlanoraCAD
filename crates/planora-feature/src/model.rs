@@ -404,12 +404,16 @@ impl Feature {
     }
 }
 
-/// Geordnete Liste der Features mit Rückrollmarker.
+/// Geordnete Liste der Features mit Rückrollmarker und Rückrollstellen je Körper.
 #[derive(Clone, Debug)]
 pub struct Document {
     pub(crate) features: Vec<Feature>,
     /// Anzahl der aktiven Features von vorn; Features ab diesem Index sind zurückgestellt.
     pub(crate) marker: usize,
+    /// Rückrollstellen je Körper in Listenordnung (siehe [`Document::set_rollback`]): Eine Stelle
+    /// setzt ihren Schritt und alle davon abhängigen zurück. Keine Stelle liegt in der Kette
+    /// einer anderen.
+    pub(crate) rollbacks: Vec<FeatureId>,
     /// Nächste zu vergebende Feature-Id (beginnt bei 1, da 0 „nicht zugewiesen“ bedeutet).
     pub(crate) next_id: u64,
     /// Zähler für Feature-Versionen und Ergebnisstände (beginnt bei 1; 0 heißt „kein Ergebnis“).
@@ -474,6 +478,7 @@ impl Document {
         Document {
             features: Vec::new(),
             marker: 0,
+            rollbacks: Vec::new(),
             next_id: 1,
             next_version: 1,
             kernel: AnalyticKernel::default(),
