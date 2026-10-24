@@ -48,6 +48,9 @@ pub use planora_feature::StandardPlane;
 /// nicht an `u64::MAX` stößt; neue Namen kollidieren mit ihnen erst nach so vielen Features.
 const MAX_NAME_COUNTER: u64 = 1_000_000;
 
+/// Sehnentoleranz (mm), mit der die App Dokumente aufbaut (`Document::from_snapshot`).
+pub const CHORD_TOLERANCE: f64 = 0.05;
+
 /// Meldung, wenn sich ein Schritt nicht zurückladen lässt (Rückgängig).
 pub const UNDO_FAILED: &str = "Rückgängig ist nicht möglich.";
 /// Meldung, wenn sich ein Schritt nicht zurückladen lässt (Wiederholen).
@@ -333,7 +336,7 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let chord_tolerance = 0.05;
+        let chord_tolerance = CHORD_TOLERANCE;
         let mut state = Self {
             document: Document::with_options(chord_tolerance),
             bodies: Vec::new(),

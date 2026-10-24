@@ -50,6 +50,7 @@ pub mod step_import_dialog;
 pub mod tabs;
 pub mod theme;
 pub mod thumbnail;
+pub mod thumbnail_cache;
 pub mod undo_labels;
 pub mod versions_panel;
 pub mod viewport;
