@@ -700,6 +700,11 @@ pub fn viewport_background(dark: bool) -> Color32 {
     palette(dark).bg_viewport
 }
 
+/// Hintergrund der Miniaturen im Projekte-Fenster (wie vertiefte Flächen).
+pub fn thumbnail_background(dark: bool) -> Color32 {
+    palette(dark).bg_inset
+}
+
 /// Farben der Skizzen-Ansicht (Entwurf und fertige Skizzen in der 3D-Ansicht).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SketchColors {
