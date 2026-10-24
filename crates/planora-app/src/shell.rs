@@ -36,6 +36,8 @@ pub const STRIP_SPACING: f32 = 4.0;
 pub const STRIP_PAD: f32 = (STRIP_W - STRIP_BUTTON) / 2.0;
 /// Höhe des Werkzeugfelds der Zeichnung: zwei feste Zeilen (Ansichten und Blatt, Maße).
 pub const TOOL_H: f32 = 76.0;
+/// Höhe der Verlaufsleiste über dem Befehlsfeld (nur im Modell).
+pub const HISTORY_H: f32 = theme::TOOLBAR_H;
 /// Anzahl der Werkzeuge in der Leiste.
 pub const STRIP_TOOLS: usize = 9;
 /// Höhe der Leiste mit allen Werkzeugen: 9 × 36, 8 Abstände, oben und unten der Rand.
@@ -113,6 +115,8 @@ pub struct ShellRects {
     pub strip: Option<Rect>,
     /// Werkzeugfeld der Zeichnung (nur im Zeichnungsmodus).
     pub tool: Option<Rect>,
+    /// Verlaufsleiste (nur im Modell): zwischen den Spalten über dem Befehlsfeld.
+    pub history: Option<Rect>,
 }
 
 /// Breite der Seitenspalten bei Fensterbreite `content_width`. Zu kleines Fenster: die Spalten
@@ -140,6 +144,9 @@ pub fn top_icon_fits(content_width: f32, base_wanted: f32, lead: f32) -> bool {
 
 /// Wie [`layout_with_top_min`] für den Modus `mode`.
 ///
+/// Modell: dazu die Verlaufsleiste ([`HISTORY_H`] hoch, so breit wie die freie Fläche) direkt
+/// über dem Befehlsfeld; die freie Fläche endet darüber.
+///
 /// Zeichnung: linke und rechte Spalte, oberes Feld, Status und Hinweis wie im Modell; das
 /// Werkzeugfeld ([`TOOL_H`] hoch, so breit wie zwischen den Spalten Platz ist) steht mittig direkt
 /// unter dem oberen Feld (bzw. unter dem Hinweis einer alten Version), die freie Fläche beginnt
@@ -161,7 +168,20 @@ pub fn layout_in_mode(
 ) -> ShellRects {
     let mut r = layout_with_top_min(content, state, top, bottom_width, status_width, read_only);
     match mode {
-        ShellMode::Model => return r,
+        ShellMode::Model => {
+            // So breit wie die freie Fläche, GAP über dem Befehlsfeld; die freie Fläche endet
+            // GAP darüber. Status und Spalten bleiben, wo sie sind: Der Status liegt unter der
+            // Leiste (er wächst höchstens bis zur Oberkante des Befehlsfelds), die Spalten
+            // daneben.
+            let bottom = r.bottom.top() - GAP;
+            let history = Rect::from_min_max(
+                pos2(r.free.left(), bottom - HISTORY_H),
+                pos2(r.free.right(), bottom),
+            );
+            r.free.max.y = r.free.max.y.min(history.top() - GAP).max(r.free.min.y);
+            r.history = Some(history);
+            return r;
+        }
         ShellMode::Drawing => {
             let above = r.banner.map_or(r.top.bottom(), |b| b.bottom());
             // So breit wie zwischen den Spalten Platz ist (wie der Hinweis), mindestens 120.
@@ -344,5 +364,6 @@ pub fn layout_with_top_min(
         free,
         strip: None,
         tool: None,
+        history: None,
     }
 }

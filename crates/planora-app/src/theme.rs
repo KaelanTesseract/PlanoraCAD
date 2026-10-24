@@ -265,6 +265,9 @@ pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
 /// Deckkraft gesperrter Elemente (`Visuals::disabled_alpha`).
 pub const DISABLED_ALPHA: f32 = 0.75;
 
+/// Deckkraft abgeblendeter Schritte der Verlaufsleiste (hinter dem Marker).
+pub const HISTORY_DIM_ALPHA: f32 = 0.35;
+
 /// Dauer der Übergänge (Aufklappen, Hover-Wechsel), 120 ms.
 pub const ANIMATION_TIME: f32 = 0.12;
 

@@ -166,6 +166,18 @@ pub enum Icon {
     PathSeparator,
     /// Phosphor `gear-six` (Menüeintrag „Einstellungen …“).
     Settings,
+    /// Phosphor `skip-back` (Verlaufsleiste: zum Anfang).
+    HistoryStart,
+    /// Phosphor `rewind` (Verlaufsleiste: ein Schritt zurück).
+    HistoryBack,
+    /// Phosphor `play` (Verlaufsleiste: abspielen).
+    HistoryPlay,
+    /// Phosphor `pause` (Verlaufsleiste: anhalten).
+    HistoryPause,
+    /// Phosphor `fast-forward` (Verlaufsleiste: ein Schritt vor).
+    HistoryForward,
+    /// Phosphor `warning` (Verlaufsleiste: Schritt mit Fehler).
+    Warning,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -247,6 +259,12 @@ pub const ALL: &[Icon] = &[
     Icon::Back,
     Icon::PathSeparator,
     Icon::Settings,
+    Icon::HistoryStart,
+    Icon::HistoryBack,
+    Icon::HistoryPlay,
+    Icon::HistoryPause,
+    Icon::HistoryForward,
+    Icon::Warning,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -328,6 +346,12 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Back, '\u{e138}', "caret-left"),
     (Icon::PathSeparator, '\u{e13a}', "caret-right"),
     (Icon::Settings, '\u{e272}', "gear-six"),
+    (Icon::HistoryStart, '\u{e5a4}', "skip-back"),
+    (Icon::HistoryBack, '\u{e6a8}', "rewind"),
+    (Icon::HistoryPlay, '\u{e3d0}', "play"),
+    (Icon::HistoryPause, '\u{e39e}', "pause"),
+    (Icon::HistoryForward, '\u{e6a6}', "fast-forward"),
+    (Icon::Warning, '\u{e4e0}', "warning"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {

@@ -6,7 +6,8 @@
 //! Skizzenmodus (Etappe C) entfallen Baum, Eigenschaften und Befehlsfeld; Leiste, Skizzenfeld und
 //! Fuß zeichnet `sketch_panel::show` an den hier berechneten Rechtecken. Im Zeichnungsmodus bleibt
 //! der Baum links; Werkzeugfeld, Ansichtsfeld (statt Eigenschaften) und Hinweisfeld (statt des
-//! Befehlsfelds) zeichnet `drawing_view::show_with` an den hier berechneten Rechtecken.
+//! Befehlsfelds) zeichnet `drawing_view::show_with` an den hier berechneten Rechtecken. Im Modell
+//! steht über dem Befehlsfeld die Verlaufsleiste (`history_bar::show_with`).
 //!
 //! Breiten und Höhen kommen aus der Geometrie (keine Rückkopplung über die Feldgröße). Status und
 //! Hinweis werden vorab gesetzt (der Hinweis bis zu zwei Zeilen, der Status bis zu drei und er
@@ -24,7 +25,7 @@ use egui::{Vec2, vec2};
 use crate::app::{self, CreateKind, PlanoraApp};
 use crate::shell::{self, RightTab, ShellMode, ShellRects};
 use crate::state::AppState;
-use crate::{browser, icons, logo, properties, tabs, theme, versions_panel, viewport};
+use crate::{browser, history_bar, icons, logo, properties, tabs, theme, versions_panel, viewport};
 use planora_kernel::BoolOp;
 
 /// Breite, bis zu der die Tab-Leiste nicht umbricht (sie rollt waagerecht statt dessen).
@@ -446,9 +447,11 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
     if rects.strip.is_none() && rects.tool.is_none() {
         right_field(ctx, &rects, app);
         bottom_field(ctx, &rects, app);
+        history_field(ctx, &rects, app);
     } else {
         // Kein Befehlsfeld: auch keine Knopflagen aus einem früheren Bild melden.
         ctx.data_mut(|d| d.remove::<Vec<(String, egui::Rect)>>(buttons_key()));
+        history_bar::forget(ctx);
     }
     // Die Felder können den Tab gewechselt oder eine Meldung gesetzt haben: Status und Hinweis
     // zeigen schon den neuen Stand.
@@ -508,6 +511,7 @@ pub fn field_rects(ctx: &egui::Context) -> Vec<(&'static str, egui::Rect)> {
         ("Werkzeugfeld", drawing_tool_id()),
         ("Ansichtsfeld", drawing_view_id()),
         ("Hinweisfeld", drawing_hint_id()),
+        ("Verlauf", history_bar::bar_id()),
     ]
     .into_iter()
     .filter(|(_, id)| {
@@ -964,6 +968,17 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
         Some(Command::Blend(chamfer)) => app::open_blend(&mut app.ws, chamfer),
         None => {}
     }
+}
+
+/// Verlaufsleiste über dem Befehlsfeld (nur im Modell); gesperrt wie das Befehlsfeld (offene
+/// Rückfrage, alte Version).
+fn history_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
+    let Some(rect) = rects.history else {
+        history_bar::forget(ctx);
+        return;
+    };
+    let lock = edit_lock(&app.ws);
+    history_bar::show_with(ctx, &mut app.ws.active_tab_mut().state, rect, lock);
 }
 
 /// Text und Farbe der Statuszeile. Vorrang: letzte Meldung (Fehlerfarbe), Hinweis `info`
