@@ -37,22 +37,25 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 10;
+pub const FORMAT_VERSION: u32 = 11;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 10 mit einem STEP-Körper (als erste Regel
-/// geprüft, auch unterdrückt: sein Text muss in der Datei stehen), 9 mit Parametern,
+/// Kleinste Formatnummer, die den Stand darstellt: 11 mit Rückrollstellen (als erste Regel
+/// geprüft), 10 mit einem STEP-Körper (auch unterdrückt: sein Text muss in der Datei stehen),
+/// 9 mit Parametern,
 /// Feature-Formeln oder Skizzenformeln, 8 mit Schnittansichten, 7 mit Stücklisten-Daten (eigene Zeilentexte,
 /// Stücklistenblatt, Nummernkreise oder eingeschalteter Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder eingeschalteten
 /// Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder Fasen, sonst 1
-/// (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import).
+/// (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste).
 pub fn required_format(s: &Snapshot) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if has(|k| matches!(k, FeatureKind::StepBody { .. })) {
+    if !s.rollbacks.is_empty() {
+        11
+    } else if has(|k| matches!(k, FeatureKind::StepBody { .. })) {
         10
     } else if !s.parameters.is_empty()
         || s.features.iter().any(|f| !f.formulas.is_empty())
@@ -1924,6 +1927,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         } else {
             s.next_param
         },
+        rueckrollstellen: s.rollbacks.iter().map(|r| r.0).collect(),
         step_formen,
     };
     let text = serde_json::to_string_pretty(&file).map_err(|e| {
@@ -2017,6 +2021,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             "STEP-Körper gibt es erst ab Dateiformat 10",
         ));
     }
+    let rollbacks = rollbacks_from(origin, &file)?;
     let (parameters, next_param) = parameters_from(origin, &file)?;
     let parts_overrides = overrides_from(origin, &file.stueckliste)?;
     let (drawings, next_drawing) = drawings_from(origin, &file)?;
@@ -2073,5 +2078,35 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         parts_overrides,
         parameters,
         next_param,
+        rollbacks,
     })
+}
+
+/// Liest die Rückrollstellen (ab Format 11). Prüft hier nur, dass jede Stelle einen Schritt der
+/// Datei nennt; dass keine Stelle im Verlauf einer anderen liegt, prüft
+/// `Document::from_snapshot` (es braucht die Ketten).
+fn rollbacks_from(origin: &str, file: &VersionFile) -> Result<Vec<FeatureId>> {
+    if file.format < 11 && !file.rueckrollstellen.is_empty() {
+        return Err(ProjectError::corrupt(
+            origin,
+            "Rückrollstellen gibt es erst ab Dateiformat 11",
+        ));
+    }
+    check_len(origin, "Rückrollstellen", file.rueckrollstellen.len())?;
+    let ids: HashSet<u64> = file.features.iter().map(|f| f.id).collect();
+    file.rueckrollstellen
+        .iter()
+        .map(|&r| {
+            if ids.contains(&r) {
+                Ok(FeatureId(r))
+            } else {
+                Err(ProjectError::corrupt(
+                    origin,
+                    format!(
+                        "Eine Rückrollstelle verweist auf einen unbekannten Schritt (Kennung {r})"
+                    ),
+                ))
+            }
+        })
+        .collect()
 }

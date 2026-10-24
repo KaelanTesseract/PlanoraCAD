@@ -1,4 +1,4 @@
-//! Die Typen der Versionsdatei (Format 1 bis 10). Unabhängig von den internen Strukturen.
+//! Die Typen der Versionsdatei (Format 1 bis 11). Unabhängig von den internen Strukturen.
 //! Absichtlich ohne `deny_unknown_fields`: unbekannte Felder in bekannten Versionen werden
 //! ignoriert (unbekannte **Feldschlüssel** in einer Formeltabelle sind dagegen Daten und werden
 //! beim Lesen abgelehnt, siehe `convert.rs`).
@@ -53,6 +53,10 @@ pub struct VersionFile {
     /// heißt „aus den Kennungen ableiten“.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub naechster_parameter: u64,
+    /// Rückrollstellen je Körper (ab Format 11, Verlaufsleiste): Kennungen der zurückgesetzten
+    /// Schritte in Listenordnung. Leer heißt: fehlt, damit alte Dateien Byte für Byte bleiben.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rueckrollstellen: Vec<u64>,
     /// Formen der STEP-Körper (ab Format 10, Teilprojekt STEP-Import): je benutzte Form der
     /// normalisierte STEP-Text, in jeder Version erneut. Leer heißt: fehlt, damit alte Dateien
     /// Byte für Byte bleiben. Steht am Ende, weil die Texte lang sind.

@@ -46,6 +46,7 @@ fn snapshot_with(drawings: Vec<Drawing>, next_drawing: u64) -> Snapshot {
         parts_overrides: Default::default(),
         parameters: Vec::new(),
         next_param: 1,
+        rollbacks: Vec::new(),
     }
 }
 

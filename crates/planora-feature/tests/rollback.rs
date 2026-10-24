@@ -460,3 +460,88 @@ fn is_active_on_unknown_id() {
     d.delete_with_dependents(a).unwrap();
     assert!(!d.is_active(a), "gelöscht");
 }
+
+// ---- Schnappschuss (Rückgängig, Wiederholen, Laden) --------------------------------------
+
+fn statuses(d: &Document) -> Vec<(FeatureId, FeatureStatus)> {
+    d.features()
+        .iter()
+        .map(|f| (f.id, f.status.clone()))
+        .collect()
+}
+
+#[test]
+fn snapshot_restore_brings_rollbacks_back() {
+    let (mut d, [_a, ma, b, mb, u]) = union_model();
+    d.set_rollback(u, ma).unwrap();
+    d.set_rollback(u, mb).unwrap();
+    let rollbacks = d.rollbacks().to_vec();
+    assert_eq!(rollbacks, vec![ma, mb]);
+    let states = statuses(&d);
+    let shown = visible(&d);
+    let snap = d.snapshot();
+    assert_eq!(snap.rollbacks, rollbacks);
+
+    d.clear_all_rollbacks();
+    assert!(d.rollbacks().is_empty());
+    // Nur die Stellen unterscheiden sich: kein gleiches Modell, Wiederherstellen rechnet neu.
+    assert!(!d.snapshot().same_model(&snap));
+    assert_eq!(d.restore(snap.clone()).unwrap(), RestoreKind::Full);
+    assert_eq!(d.rollbacks(), rollbacks.as_slice());
+    assert_eq!(statuses(&d), states);
+    assert_eq!(visible(&d), shown);
+    assert!(!d.is_active(u) && d.is_active(b));
+    d.check_invariants().unwrap();
+
+    // Laden aus dem Bild bringt die Stellen ebenso mit.
+    let loaded = Document::from_snapshot(snap, 0.05).unwrap();
+    assert_eq!(loaded.rollbacks(), rollbacks.as_slice());
+    assert_eq!(statuses(&loaded), states);
+}
+
+#[test]
+fn snapshot_with_invalid_rollbacks_is_rejected() {
+    let (mut d, [a, ma, _b, _mb, u]) = union_model();
+    d.set_rollback(u, ma).unwrap();
+    let good = d.snapshot();
+    let msg = |s: Snapshot| match Document::from_snapshot(s, 0.05) {
+        Err(FeatureError::InvalidInput(m)) => m,
+        other => panic!("{other:?}"),
+    };
+
+    let mut unknown = good.clone();
+    unknown.rollbacks = vec![FeatureId(999)];
+    assert!(
+        msg(unknown).contains("unbekannten Schritt (Kennung 999)"),
+        "unbekannt"
+    );
+
+    let mut twice = good.clone();
+    twice.rollbacks = vec![ma, ma];
+    assert!(msg(twice).contains("doppelt"));
+
+    // Zwei Stellen im Verlauf desselben Körpers (Quader 1 liegt in der Kette von Verschieben 1).
+    let mut same_chain = good.clone();
+    same_chain.rollbacks = vec![a, ma];
+    let m = msg(same_chain.clone());
+    assert!(
+        m.contains("„Quader 1“")
+            && m.contains("„Verschieben 1“")
+            && m.contains("desselben Körpers"),
+        "{m}"
+    );
+    // Auch der Rückgängig-Weg lehnt ab und lässt das Dokument unverändert.
+    let before = d.snapshot();
+    assert!(d.restore(same_chain).is_err());
+    assert!(d.snapshot().same_content(&before));
+    assert_eq!(d.rollbacks(), &[ma]);
+
+    // Ungeordnet, aber gültig: wird in Listenordnung übernommen.
+    let (mut d2, [_a, ma2, _b, mb2, u2]) = union_model();
+    d2.set_rollback(u2, ma2).unwrap();
+    d2.set_rollback(u2, mb2).unwrap();
+    let mut swapped = d2.snapshot();
+    swapped.rollbacks.reverse();
+    let loaded = Document::from_snapshot(swapped, 0.05).unwrap();
+    assert_eq!(loaded.rollbacks(), &[ma2, mb2]);
+}

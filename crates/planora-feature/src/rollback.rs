@@ -165,6 +165,46 @@ impl Document {
         }
     }
 
+    /// Prüft die Stellen aus einem Bild (Laden, Rückgängig) streng, statt sie wie
+    /// [`Document::prune_rollbacks`] still zu bereinigen: jede Stelle ein vorhandenes Feature,
+    /// keine doppelt, keine in der Kette einer anderen (das schließt „hinter einer anderen“ ein).
+    /// Liefert die Stellen in Listenordnung. Braucht die schon übernommenen Features.
+    pub(crate) fn checked_rollbacks(
+        &self,
+        given: &[FeatureId],
+    ) -> Result<Vec<FeatureId>, FeatureError> {
+        let bad = |m: String| FeatureError::InvalidInput(m);
+        let mut out = Vec::with_capacity(given.len());
+        for r in given {
+            if self.index_of(*r).is_none() {
+                return Err(bad(format!(
+                    "Eine Rückrollstelle verweist auf einen unbekannten Schritt (Kennung {})",
+                    r.0
+                )));
+            }
+            if out.contains(r) {
+                return Err(bad(format!(
+                    "Eine Rückrollstelle kommt doppelt vor (Kennung {})",
+                    r.0
+                )));
+            }
+            out.push(*r);
+        }
+        out.sort_by_key(|r| self.index_of(*r));
+        for r in &out {
+            let chain = self.chain(*r);
+            if let Some(o) = out.iter().find(|o| *o != r && chain.contains(o)) {
+                let name = |id: FeatureId| self.feature(id).map_or("?", |f| f.name.as_str());
+                return Err(bad(format!(
+                    "Die Rückrollstellen „{}“ und „{}“ liegen im Verlauf desselben Körpers",
+                    name(*o),
+                    name(*r)
+                )));
+            }
+        }
+        Ok(out)
+    }
+
     /// Hält die Stellen gültig (vor jeder Neuberechnung): Stellen gelöschter Features entfallen,
     /// ebenso Stellen hinter einer anderen Stelle (nach einer Änderung der Verweise); der Rest
     /// steht in Listenordnung. Zählt keine Änderung (Folge einer schon gezählten).

@@ -332,7 +332,7 @@ const NEW_KEYS: [&str; 2] = ["\"step_formen\"", "step_koerper"];
 
 #[test]
 fn roundtrip_keeps_text_and_tolerance() {
-    assert_eq!(FORMAT_VERSION, 10);
+    assert_eq!(FORMAT_VERSION, 11);
     let (d, [q, w]) = two_bodies();
     let snap = d.snapshot();
     assert_eq!(required_format(&snap), 10);
@@ -603,8 +603,8 @@ fn old_files_unchanged() {
     let s = decode_version(&ten, "x.json").unwrap();
     assert!(s.step_shapes.is_empty());
     assert!(matches!(
-        bad(&text.replacen("\"format\": 9", "\"format\": 11", 1)),
-        ProjectError::TooNew { found: 11, .. }
+        bad(&text.replacen("\"format\": 9", "\"format\": 12", 1)),
+        ProjectError::TooNew { found: 12, .. }
     ));
 }
 
@@ -789,8 +789,8 @@ fn hostile_step_data() {
     }));
     msg(&edited(&good, |v| v["step_formen"] = json!("ganz anders")));
     // Zu neu.
-    let e = bad(&good.replacen("\"format\": 10", "\"format\": 11", 1));
-    assert!(matches!(e, ProjectError::TooNew { found: 11, .. }), "{e:?}");
+    let e = bad(&good.replacen("\"format\": 10", "\"format\": 12", 1));
+    assert!(matches!(e, ProjectError::TooNew { found: 12, .. }), "{e:?}");
 
     // Gültiger Kopf, kaputter Körper: die Datei lädt, nur der STEP-Körper hat den Fehler (P14).
     let broken = edited(&good, |v| {
