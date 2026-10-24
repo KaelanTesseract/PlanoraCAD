@@ -756,11 +756,14 @@ fn for_all(mut check: impl FnMut(&Case, &mut Rig, &Shot, Rect, bool)) {
 #[test]
 fn every_dialog_has_its_size_class() {
     for_all(|case, rig, _, rect, _| {
-        // Dateifenster wachsen mit dem Fenster (`dialog::limits`), die anderen sind fest.
-        let want = planora_app::dialog::limits(rig.content(), case.class).0;
-        if case.class != DialogSize::File {
-            assert_eq!(want, case.class.width(), "{}", case.name);
-        }
+        // Dateifenster: 55 % der Fensterbreite, mindestens 720 (bei 800 also 720, bei 1400 770);
+        // die anderen Klassen sind fest.
+        let want = match (case.class, rig.size.x) {
+            (DialogSize::File, 800.0) => 720.0,
+            (DialogSize::File, 1400.0) => 770.0,
+            (DialogSize::File, w) => panic!("keine Erwartung für Breite {w}"),
+            (class, _) => class.width(),
+        };
         assert!(
             (rect.width() - want).abs() <= 1.0,
             "{}: Breite {} statt {want}",
@@ -1036,6 +1039,31 @@ fn dialogs_in_all_modes_above_fields() {
             }
         }
     }
+}
+
+/// Breite der Dateifenster: 55 % des Fensters, mindestens 720, höchstens 1200, nie breiter als
+/// das Fenster ohne Rand (16 rundum); die Höhe ist die des Fensters ohne Rand.
+#[test]
+fn file_window_limits() {
+    let at = |w: f32, h: f32| {
+        planora_app::dialog::limits(
+            Rect::from_min_size(Pos2::ZERO, vec2(w, h)),
+            DialogSize::File,
+        )
+    };
+    assert_eq!(at(800.0, 600.0), (720.0, 568.0));
+    assert_eq!(at(1400.0, 900.0), (770.0, 868.0));
+    assert_eq!(at(2000.0, 1100.0), (1100.0, 1068.0));
+    assert_eq!(at(3000.0, 1100.0), (1200.0, 1068.0));
+    assert_eq!(at(700.0, 500.0), (668.0, 468.0));
+    assert_eq!(
+        planora_app::dialog::limits(
+            Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0)),
+            DialogSize::Wide
+        )
+        .0,
+        720.0
+    );
 }
 
 /// Projekte und Einstellungen lassen sich verschieben, stehen aber nach dem Schließen beim

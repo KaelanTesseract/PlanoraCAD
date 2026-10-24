@@ -36,6 +36,8 @@ pub const EXIT_WAIT: Duration = Duration::from_secs(2);
 
 /// Menüeintrag „Datei → Projekte …“ (Strg+O).
 pub const PROJECTS_ENTRY: &str = "Projekte …";
+/// Hinweis, wenn Projekte oder Einstellungen nicht öffnen, weil gerade ein Export schreibt.
+pub const EXPORT_BUSY: &str = "Bitte erst den Export beenden.";
 /// Menüeintrag „Datei → Einstellungen …“.
 pub const SETTINGS_ENTRY: &str = "Einstellungen …";
 
@@ -350,8 +352,8 @@ fn file_window_open(ws: &Workspace) -> bool {
 }
 
 /// P10: schließt die Dateifenster des aktiven Tabs für Projekte oder Einstellungen. Ein
-/// schreibendes Exportfenster bleibt (sonst endete das Schreiben ohne Meldung); dann `false`
-/// und das andere Fenster öffnet nicht.
+/// schreibendes Exportfenster bleibt (sonst endete das Schreiben ohne Meldung); dann `false`,
+/// das andere Fenster öffnet nicht und die Statuszeile sagt warum ([`EXPORT_BUSY`]).
 fn close_file_windows(ws: &mut Workspace) -> bool {
     let tab = ws.active_tab_mut();
     if tab
@@ -359,6 +361,8 @@ fn close_file_windows(ws: &mut Workspace) -> bool {
         .as_ref()
         .is_some_and(|d| d.is_writing_file())
     {
+        tab.state.message = Some(EXPORT_BUSY.into());
+        tab.state.info = None;
         return false;
     }
     tab.export_dialog = None;
@@ -392,14 +396,15 @@ pub fn open_projects(
 
 /// P10: wie [`open_projects`] für die Einstellungen; Projekte schließt dabei. Mit
 /// `return_to_projects` (Knopf „Projektverzeichnis …“) öffnet das Schließen der Einstellungen
-/// wieder Projekte.
+/// wieder Projekte. Bei offener Rückfrage öffnen die Einstellungen nicht: deren Pfade (etwa
+/// „Dokument gesperrt“) gehören zum aktuellen Projektverzeichnis.
 pub fn open_settings(
     ws: &mut Workspace,
     projects: &mut ProjectsWindow,
     settings: &mut SettingsWindow,
     return_to_projects: bool,
 ) {
-    if !close_file_windows(ws) {
+    if ws.prompt.is_some() || !close_file_windows(ws) {
         return;
     }
     close_projects(projects);
@@ -559,7 +564,14 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
         ws.request_close(i);
         ui.close();
     }
-    if entry(ui, true, icons::button(Icon::Settings, SETTINGS_ENTRY)).clicked() {
+    if entry(
+        ui,
+        ws.prompt.is_none(),
+        icons::button(Icon::Settings, SETTINGS_ENTRY),
+    )
+    .on_disabled_hover_text("Zuerst die offene Rückfrage beantworten.")
+    .clicked()
+    {
         request = MenuRequest::Settings;
         ui.close();
     }

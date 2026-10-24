@@ -8,7 +8,9 @@ mod common;
 use eframe::App as _;
 use egui::epaint::Shape;
 use egui::{Event, FontFamily, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
-use planora_app::app::{self, EXIT_WAIT, MenuRequest, PROJECTS_ENTRY, PlanoraApp, SETTINGS_ENTRY};
+use planora_app::app::{
+    self, EXIT_WAIT, EXPORT_BUSY, MenuRequest, PROJECTS_ENTRY, PlanoraApp, SETTINGS_ENTRY,
+};
 use planora_app::dialog::CLOSE_LABEL;
 use planora_app::export_dialog::{ExportDialog, ExportFormat};
 use planora_app::file_chooser::CHOOSE_FOLDER;
@@ -689,6 +691,233 @@ fn change_directory_and_come_back(blocked: bool) {
     assert_eq!(rig.tile_names(), ["B"]);
     assert!(shot.has("B"), "{}", shot.texts());
     assert!(!shot.has("A"), "keine alte Kachel: {}", shot.texts());
+}
+
+// ---- Sperre bei offener Rückfrage (Prüfrunde 1) ----------------------------------------------
+
+/// Projekte mit „P“ offen und gelesen.
+fn rig_with_project() -> (Rig, NodePath) {
+    let ws = workspace();
+    let p = ws.library.as_ref().unwrap().create_project("P").unwrap();
+    let mut rig = Rig::new(ws);
+    rig.ctrl(Key::O);
+    rig.wait_scan();
+    (rig, p)
+}
+
+/// Klick auf `text` im Fenster Projekte (nicht in einer Rückfrage).
+fn click_in_projects(rig: &mut Rig, text: &str) {
+    let open = rig.projects_open();
+    let area = rig
+        .app
+        .windows_mut()
+        .1
+        .last_rect
+        .unwrap_or_else(|| panic!("Projekte gezeichnet (offen: {open})"));
+    rig.click_in(text, Some(area));
+}
+
+#[test]
+fn a_prompt_locks_every_button_of_the_projects_window() {
+    let (mut rig, p) = rig_with_project();
+    // Strg+S: „Speichern unter“ (Rückfrage) bei offenem Fenster Projekte.
+    rig.ctrl(Key::S);
+    assert!(matches!(rig.ws().prompt, Some(Prompt::SaveAs { .. })));
+    let generation = rig.app.windows_mut().1.ui.generation();
+    click_in_projects(&mut rig, DIRECTORY_BUTTON);
+    assert!(!rig.settings_open(), "Projektverzeichnis … öffnet nichts");
+    assert!(rig.projects_open());
+    click_in_projects(&mut rig, planora_app::projects_window::NEW_PROJECT);
+    click_in_projects(&mut rig, planora_app::projects_window::REFRESH);
+    assert!(
+        !project_actions::dialog_open(&rig.app.windows_mut().1.ui),
+        "Neues Projekt öffnet nichts"
+    );
+    assert_eq!(
+        rig.app.windows_mut().1.ui.generation(),
+        generation,
+        "Aktualisieren wirkt nicht"
+    );
+    // Tiefer: Pfad, Neues Dokument, Neuer Ordner.
+    rig.ws().prompt = None;
+    rig.app.windows_mut().1.go_to(p.clone());
+    rig.settle(3);
+    rig.ctrl(Key::S);
+    for text in [
+        planora_app::projects_window::NEW_DOCUMENT,
+        planora_app::projects_window::NEW_FOLDER,
+        planora_app::projects_window::TITLE,
+    ] {
+        click_in_projects(&mut rig, text);
+    }
+    assert!(!project_actions::dialog_open(&rig.app.windows_mut().1.ui));
+    assert_eq!(rig.app.windows_mut().1.location(), &p, "Pfad gesperrt");
+    // Nach der Antwort geht alles wieder.
+    rig.ws().prompt = None;
+    rig.settle(2);
+    click_in_projects(&mut rig, planora_app::projects_window::NEW_FOLDER);
+    assert!(project_actions::dialog_open(&rig.app.windows_mut().1.ui));
+}
+
+#[test]
+fn the_directory_cannot_be_changed_while_a_prompt_is_open() {
+    let ws = workspace();
+    let p = ws.library.as_ref().unwrap().create_project("P").unwrap();
+    let root = lib_root(&ws);
+    fs::create_dir_all(root.join("Neu")).unwrap();
+    let mut rig = Rig::new(ws);
+    // RV1: Projekte offen → Strg+S → „Projektverzeichnis …“ öffnet die Einstellungen nicht.
+    rig.ctrl(Key::O);
+    rig.wait_scan();
+    rig.ctrl(Key::S);
+    click_in_projects(&mut rig, DIRECTORY_BUTTON);
+    assert!(!rig.settings_open(), "keine Einstellungen bei Rückfrage");
+    // Auch direkt nicht.
+    {
+        let (ws, pr, s) = rig.app.windows_mut();
+        app::open_settings(ws, pr, s, true);
+    }
+    assert!(!rig.settings_open(), "open_settings bei Rückfrage");
+    rig.ws().prompt = None;
+    rig.settle(2);
+
+    // RV3: Einstellungen offen, Auswahl läuft; dann „Dokument gesperrt“ (Übernahme) als
+    // Rückfrage: die Wahl ist gesperrt, bis die Rückfrage beantwortet ist.
+    rig.menu("Datei", SETTINGS_ENTRY);
+    rig.click(CHANGE_DIRECTORY);
+    rig.app
+        .windows_mut()
+        .2
+        .chooser_mut()
+        .expect("Auswahl offen")
+        .mark("Neu");
+    let mut doc = p.clone();
+    doc.push("Teil.pcad".into());
+    rig.ws().prompt = Some(Prompt::TakeOver {
+        path: doc,
+        version: None,
+    });
+    rig.settle(2);
+    let area = rig.settings_rect();
+    rig.click_in(CHOOSE_FOLDER, Some(area));
+    assert_eq!(lib_root(rig.ws()), root, "Verzeichnis bleibt");
+    assert!(
+        rig.app.windows_mut().2.chooser_mut().is_some(),
+        "Auswahl bleibt offen, nichts gewählt"
+    );
+    // Mit Strg+S (Speichern unter) ebenso; „Projektverzeichnis ändern …“ geht dann auch nicht.
+    rig.ws().prompt = None;
+    rig.settle(2);
+    rig.app.windows_mut().2.open(false);
+    rig.settle(2);
+    rig.ctrl(Key::S);
+    assert!(rig.ws().prompt.is_some());
+    let area = rig.settings_rect();
+    rig.click_in(CHANGE_DIRECTORY, Some(area));
+    assert!(
+        rig.app.windows_mut().2.chooser_mut().is_none(),
+        "„ändern“ gesperrt"
+    );
+    // Beantwortet: wieder frei.
+    rig.ws().prompt = None;
+    rig.settle(2);
+    rig.click(CHANGE_DIRECTORY);
+    assert!(rig.app.windows_mut().2.chooser_mut().is_some());
+}
+
+#[test]
+fn the_settings_entry_is_disabled_while_a_prompt_is_open() {
+    for prompt in [false, true] {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts::definitions());
+        theme::apply(&ctx, true);
+        let mut ws = workspace();
+        if prompt {
+            ws.prompt = Some(Prompt::Notice("x".into()));
+        }
+        let mut got = MenuRequest::None;
+        let mut time = 0.0;
+        let mut run = |events: Vec<Event>, got: &mut MenuRequest| {
+            time += 0.05;
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, BIG)),
+                events,
+                time: Some(time),
+                ..Default::default()
+            };
+            let out = ctx.run_ui(raw, |ui| {
+                let r = app::file_menu(ui, &mut ws);
+                if r != MenuRequest::None {
+                    *got = r;
+                }
+            });
+            let shot = Shot::of(&out);
+            out.drop_without_applying_deltas();
+            shot
+        };
+        run(vec![], &mut got);
+        let shot = run(vec![], &mut got);
+        let at = shot.all(SETTINGS_ENTRY)[0].rect.center();
+        let b = |pressed| Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        for ev in [
+            vec![Event::PointerMoved(at)],
+            vec![b(true)],
+            vec![b(false)],
+            vec![],
+        ] {
+            run(ev, &mut got);
+        }
+        let want = if prompt {
+            MenuRequest::None
+        } else {
+            MenuRequest::Settings
+        };
+        assert_eq!(got, want, "Rückfrage offen: {prompt}");
+    }
+}
+
+#[test]
+fn a_writing_export_explains_why_nothing_opens() {
+    let mut ws = with_box(workspace());
+    let d = add_drawing(&mut ws.active_tab_mut().state);
+    let mut rig = Rig::new(ws);
+    let dir = common::temp_root("planora-projekte-menue-busy");
+    fs::create_dir_all(&dir).unwrap();
+    {
+        let s = &rig.app.ws_mut().active_tab().state;
+        let mut e = ExportDialog::new(s);
+        e.format = ExportFormat::Drawing(DrawingFormat::Svg);
+        e.drawing = Some(d);
+        e.tick(s, true);
+        e.set_writer(slow_writer);
+        e.write_to(dir.join("z.svg"), s);
+        rig.ws().active_tab_mut().export_dialog = Some(e);
+    }
+    rig.settle(2);
+    let shot = rig.ctrl(Key::O);
+    assert!(!rig.projects_open());
+    assert_eq!(rig.state().message.as_deref(), Some(EXPORT_BUSY));
+    assert_eq!(EXPORT_BUSY, "Bitte erst den Export beenden.");
+    let shot = if shot.has(EXPORT_BUSY) {
+        shot
+    } else {
+        rig.settle(2)
+    };
+    assert!(
+        shot.has(EXPORT_BUSY),
+        "in der Statuszeile: {}",
+        shot.texts()
+    );
+    rig.state().message = None;
+    rig.menu("Datei", SETTINGS_ENTRY);
+    assert!(!rig.settings_open());
+    assert_eq!(rig.state().message.as_deref(), Some(EXPORT_BUSY));
+    rig.ws().active_tab_mut().export_dialog = None;
 }
 
 // ---- Schließregeln (P10) ---------------------------------------------------------------------

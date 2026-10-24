@@ -201,6 +201,10 @@ impl SettingsWindow {
             return SettingsEvent::None;
         }
         let (mut open, mut close, mut start) = (true, false, false);
+        // Bei offener Rückfrage (etwa „Dokument gesperrt“, deren Pfad zum aktuellen Verzeichnis
+        // gehört) ist der Inhalt gesperrt: kein Wechsel, keine Auswahl, bis sie beantwortet ist.
+        // „Schließen“ und ✕ bleiben.
+        let locked = ws.prompt.is_some();
         let path = display_path(&current_directory(ws));
         let message = self.message.clone();
         let choosing = self.chooser.is_some();
@@ -214,26 +218,30 @@ impl SettingsWindow {
             .show_with_footer(
                 ctx,
                 |ui| {
-                    let dark = ui.visuals().dark_mode;
-                    theme::section_header(ui, SECTION_PROJECTS, theme::SUB_HEADER_H);
-                    ui.add_space(theme::SPACE_2);
-                    ui.strong(DIRECTORY_LABEL);
-                    ui.add(egui::Label::new(path).wrap());
-                    if !choosing && ui.button(CHANGE_DIRECTORY).clicked() {
-                        start = true;
-                    }
-                    ui.label(KEEP_HINT);
-                    if let Some(m) = &message {
-                        ui.colored_label(m.color(dark), m.text());
-                    }
-                    if let Some(c) = chooser.borrow_mut().as_mut() {
+                    ui.add_enabled_ui(!locked, |ui| {
+                        let dark = ui.visuals().dark_mode;
+                        theme::section_header(ui, SECTION_PROJECTS, theme::SUB_HEADER_H);
                         ui.add_space(theme::SPACE_2);
-                        ui.strong(CHOOSE_HEADING);
-                        body_action = c.show_body(ui, places);
-                    }
+                        ui.strong(DIRECTORY_LABEL);
+                        ui.add(egui::Label::new(path).wrap());
+                        if !choosing && ui.button(CHANGE_DIRECTORY).clicked() {
+                            start = true;
+                        }
+                        ui.label(KEEP_HINT);
+                        if let Some(m) = &message {
+                            ui.colored_label(m.color(dark), m.text());
+                        }
+                        if let Some(c) = chooser.borrow_mut().as_mut() {
+                            ui.add_space(theme::SPACE_2);
+                            ui.strong(CHOOSE_HEADING);
+                            body_action = c.show_body(ui, places);
+                        }
+                    });
                 },
                 |ui| match chooser.borrow_mut().as_mut() {
-                    Some(c) => footer_action = c.show_footer(ui),
+                    Some(c) => {
+                        footer_action = ui.add_enabled_ui(!locked, |ui| c.show_footer(ui)).inner
+                    }
                     None => {
                         if ui.button(CLOSE_LABEL).clicked() {
                             close = true;

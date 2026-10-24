@@ -826,7 +826,8 @@ impl ProjectsWindow {
 
     // ---- Zeichnen ----------------------------------------------------------------------------
 
-    /// Zeichnet das Fenster (nur wenn offen); Kacheln gesperrt bei offener Rückfrage. Liest
+    /// Zeichnet das Fenster (nur wenn offen); bei offener Rückfrage ganz gesperrt (Kacheln,
+    /// Knöpfe, Pfad, „Aktualisieren“; nur ✕ schließt). Liest
     /// vorher den Stand ([`ProjectsWindow::update`]), damit Klicks dieses Bilds zu den
     /// gezeichneten Kacheln gehören, und holt fertige Miniaturen ab. Wartet nie. Danach die
     /// Fenster der Aktionen ([`actions::show_dialogs`]).
@@ -873,7 +874,11 @@ impl ProjectsWindow {
             .show_with_footer(
                 ctx,
                 |ui| self.body(ui, &frame, &mut acts),
-                |ui| footer_row(ui, &footer, &mut refresh),
+                // Bei offener Rückfrage ist das ganze Fenster gesperrt (wie früher das Feld):
+                // gesperrte Knöpfe nehmen auch keinen Tastaturfokus und kein Enter an.
+                |ui| {
+                    ui.add_enabled_ui(!frame.locked, |ui| footer_row(ui, &footer, &mut refresh));
+                },
             );
         self.last_rect = response.map(|r| r.response.rect);
         if self.manage_textures(ctx) {
@@ -918,7 +923,7 @@ impl ProjectsWindow {
 
     /// Inhalt über der Fußzeile: Knopfzeile bzw. Pfad, dann der Kachelbereich fester Höhe.
     fn body(&mut self, ui: &mut egui::Ui, frame: &Frame, out: &mut Vec<Action>) {
-        self.top_row(ui, frame, out);
+        ui.add_enabled_ui(!frame.locked, |ui| self.top_row(ui, frame, out));
         let dark = ui.visuals().dark_mode;
         let p = theme::palette(dark);
         let area = egui::ScrollArea::vertical()
