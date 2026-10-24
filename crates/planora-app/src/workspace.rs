@@ -9,6 +9,7 @@ use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
 use crate::history::{History, Tracker, snapshot_bytes};
 use crate::import_dialog::ImportDialog;
+use crate::keymap::Keymap;
 use crate::parameter_dialog::ParameterDialog;
 use crate::places::{FavoriteChange, Places};
 use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
@@ -551,6 +552,15 @@ pub struct Workspace {
     /// sie wird beim nächsten gelungenen Schreiben ([`Workspace::try_persist_config`]) mit
     /// geschrieben.
     pub panel_transparency_pending: bool,
+    /// Geltende Tastenbelegung (Voreinstellung plus Abweichungen aus `config.keys`).
+    pub keymap: Keymap,
+    /// Hinweise vom Laden der Tastenbelegung: übergangene Einträge der Konfiguration
+    /// (unbekannte Aktion, ungültige Belegung, Doppelbelegung).
+    pub key_notes: Vec<String>,
+    /// Die Abweichungen in `config.keys` konnten noch nicht gespeichert werden; sie werden beim
+    /// nächsten gelungenen Schreiben der Konfiguration mit geschrieben (wie
+    /// `panel_transparency_pending`).
+    pub keys_pending: bool,
     pub prompt: Option<Prompt>,
     pub quit: bool,
     /// Der Dialog „Über PlanoraCAD“ ist offen.
@@ -584,6 +594,7 @@ fn display_name(path: &NodePath) -> String {
 
 impl Workspace {
     pub fn new(library: Option<Library>, config: Config) -> Workspace {
+        let (keymap, key_notes) = Keymap::from_overrides(&config.keys);
         let mut w = Workspace {
             tabs: Vec::new(),
             active: 0,
@@ -593,6 +604,9 @@ impl Workspace {
             favorites_pending: Vec::new(),
             favorites_notice: None,
             panel_transparency_pending: false,
+            keymap,
+            key_notes,
+            keys_pending: false,
             prompt: None,
             quit: false,
             about_open: false,
@@ -1265,12 +1279,16 @@ impl Workspace {
         let transparency = self
             .panel_transparency_pending
             .then(|| self.panel_transparency());
+        let keys = self.pending_keys();
         let mut full = None;
         let written = Config::update_at(&self.config_path, |c| {
             c.root = root;
             full = apply_changes(&pending, &mut c.favorites);
             if let Some(t) = transparency {
                 c.panel_transparency = t;
+            }
+            if let Some(k) = keys {
+                c.keys = k;
             }
         });
         match written {
@@ -1280,12 +1298,14 @@ impl Workspace {
                     self.favorites_notice = full;
                 }
                 self.panel_transparency_pending = false;
+                self.keys_pending = false;
                 true
             }
             Err(_) => {
                 let saved = self.config.save_to(&self.config_path).is_ok();
                 if saved {
                     self.panel_transparency_pending = false;
+                    self.keys_pending = false;
                 } else {
                     self.favorites_pending = pending;
                 }
@@ -1307,11 +1327,52 @@ impl Workspace {
     pub fn set_panel_transparency(&mut self, percent: u8) -> bool {
         let percent = clamp_panel_transparency(percent);
         self.config.panel_transparency = percent;
+        // Vorgemerkte Tasten kommen mit (wie in `try_persist_config`).
+        let keys = self.pending_keys();
         let written = Config::update_at(&self.config_path, |c| {
             c.panel_transparency = percent;
+            if let Some(k) = keys {
+                c.keys = k;
+            }
         })
         .is_ok();
         self.panel_transparency_pending = !written;
+        if written {
+            self.keys_pending = false;
+        }
+        written
+    }
+
+    /// Die Abweichungen der Tastenbelegung, wenn sie zum Schreiben vorgemerkt sind.
+    fn pending_keys(&self) -> Option<std::collections::BTreeMap<String, Vec<String>>> {
+        self.keys_pending.then(|| self.config.keys.clone())
+    }
+
+    /// Übernimmt eine geänderte Tastenbelegung; sie wirkt sofort und wird gleich in
+    /// [`Workspace::config_path`] gespeichert (nur ihre Abweichungen von der Voreinstellung,
+    /// Abschnitt `keys`); `true`, wenn geschrieben wurde. Nur dieser Abschnitt wird in den Stand
+    /// der Datei geschrieben (Wurzel, Favoriten und Durchsichtigkeit bleiben; eine vorgemerkte
+    /// Durchsichtigkeit kommt mit). Lässt sich die Datei nicht lesen oder schreiben, bleibt sie
+    /// unangetastet; die Belegung gilt dann für die Sitzung und wird beim nächsten gelungenen
+    /// Schreiben mit gespeichert ([`Workspace::keys_pending`]).
+    pub fn set_keymap(&mut self, km: Keymap) -> bool {
+        let keys = km.to_overrides();
+        self.keymap = km;
+        self.config.keys = keys.clone();
+        let transparency = self
+            .panel_transparency_pending
+            .then(|| self.panel_transparency());
+        let written = Config::update_at(&self.config_path, |c| {
+            c.keys = keys;
+            if let Some(t) = transparency {
+                c.panel_transparency = t;
+            }
+        })
+        .is_ok();
+        self.keys_pending = !written;
+        if written {
+            self.panel_transparency_pending = false;
+        }
         written
     }
 
@@ -1354,14 +1415,18 @@ impl Workspace {
         let mut all = std::mem::take(&mut self.favorites_pending);
         all.extend(places.changes);
         let mut full = None;
-        // Eine vorgemerkte Durchsichtigkeit kommt mit (wie in `try_persist_config`).
+        // Vorgemerkte Durchsichtigkeit und Tasten kommen mit (wie in `try_persist_config`).
         let transparency = self
             .panel_transparency_pending
             .then(|| self.panel_transparency());
+        let keys = self.pending_keys();
         let written = Config::update_at(&self.config_path, |c| {
             full = apply_changes(&all, &mut c.favorites);
             if let Some(t) = transparency {
                 c.panel_transparency = t;
+            }
+            if let Some(k) = keys {
+                c.keys = k;
             }
         });
         match written {
@@ -1369,6 +1434,7 @@ impl Workspace {
                 self.config.favorites = disk.favorites;
                 self.favorites_notice = full;
                 self.panel_transparency_pending = false;
+                self.keys_pending = false;
                 true
             }
             Err(_) => {

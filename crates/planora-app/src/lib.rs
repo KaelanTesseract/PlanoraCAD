@@ -28,6 +28,7 @@ pub mod history_bar;
 pub mod icons;
 pub mod import_dialog;
 pub mod jobs;
+pub mod keymap;
 pub mod local_time;
 pub mod logo;
 pub mod mesh_body;

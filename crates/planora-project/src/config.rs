@@ -1,9 +1,10 @@
 //! Kleine Konfiguration (gewählte Wurzel, Favoriten der Dateiauswahl, Durchsichtigkeit der
-//! Panels), ohne neue Abhängigkeit.
+//! Panels, Abweichungen der Tastenbelegung), ohne neue Abhängigkeit.
 
 use crate::error::{ProjectError, Result};
 use crate::fsutil::atomic_write_unique;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Höchstzahl der Favoriten.
@@ -38,6 +39,16 @@ pub struct Config {
         deserialize_with = "lenient_transparency"
     )]
     pub panel_transparency: u8,
+    /// Abweichungen der Tastenbelegung von der Voreinstellung: Id der Aktion → Belegungen als
+    /// Text (eine leere Liste heißt „ohne Belegung“). Geprüft wird erst beim Aufbau der
+    /// Belegung im Programm; hier nur nachsichtig gelesen (siehe [`lenient_keys`]). Ohne
+    /// Abweichungen wird der Abschnitt nicht geschrieben.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "lenient_keys"
+    )]
+    pub keys: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for Config {
@@ -46,8 +57,33 @@ impl Default for Config {
             root: None,
             favorites: Vec::new(),
             panel_transparency: DEFAULT_PANEL_TRANSPARENCY,
+            keys: BTreeMap::new(),
         }
     }
+}
+
+/// Liest `keys` aus jedem JSON-Wert: Ist es kein Objekt, gilt es als leer. Einträge, die keine
+/// Texte sind (eine Zahl in der Liste oder ein Wert statt einer Liste), bleiben als ihr
+/// JSON-Text erhalten, damit die Tastenbelegung sie als ungültig melden kann, statt dass sie
+/// still verschwinden.
+fn lenient_keys<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<BTreeMap<String, Vec<String>>, D::Error> {
+    let text = |v: &serde_json::Value| v.as_str().map_or_else(|| v.to_string(), String::from);
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value
+        .as_object()
+        .map(|o| {
+            o.iter()
+                .map(|(id, v)| {
+                    let list = v
+                        .as_array()
+                        .map_or_else(|| vec![v.to_string()], |a| a.iter().map(text).collect());
+                    (id.clone(), list)
+                })
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 fn default_panel_transparency() -> u8 {
