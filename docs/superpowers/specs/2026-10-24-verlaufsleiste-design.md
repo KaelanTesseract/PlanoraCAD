@@ -102,3 +102,14 @@ Betroffene Bereiche: `planora-feature` (Modell, Neuberechnung, Schnappschuss), `
 5. Bereinigung: alter Verlauf im Baum entfernen, Dokumentation.
 
 Jede Etappe mit Sichtprüfung im echten Fenster.
+
+## Festlegungen nach der Bauherren-Prüfung (Claudes Entscheidungen, bitte prüfen)
+
+1. **Eine Rückrollstelle je Körper.** `set_rollback(körper, schritt)` ersetzt die alte Stelle dieses Körpers. `clear_rollbacks(körper)` löscht nur dessen Stelle, `clear_all_rollbacks()` alle. Schritte anderer Körper, die vom zurückgesetzten abhängen, sind abgeleitet inaktiv; ihre Leiste zeigt sie abgeblendet, ohne eigene Stelle.
+2. **Vereinigen/Schneiden** erscheint in den Leisten aller Eingangskörper. Der Ergebnis-Körper führt die Kette weiter. Das Ziehen in Leiste A bewegt nur die Stelle von A; die Kette von B bleibt unberührt. Das Vereinigen wird erst wieder aktiv, wenn beide Eingangsketten bis dahin aktiv sind.
+3. **Sperre je Körper:** Solange ein Körper zurückgesetzt ist, sind neue Aktionen an ihm gesperrt (Hinweis, „Zum Ende springen“). Erlaubt bleiben: Parameter bearbeiten (Doppelklick, auch bei zurückgesetzten Schritten), Löschen, Auge, Umbenennen. Andere Körper sind nicht betroffen.
+4. **Rückgängig/Wiederholen:** Marker- und Rückrollbewegungen werden behandelt wie heute der globale Marker (der Bauer prüft das im Code und übernimmt das vorhandene Verhalten; keine neue Rückgängig-Art).
+5. **Körperfarbe** wird aus der Id des ersten Schritts des Körpers abgeleitet (Palette der Reihe nach). Kein neues Feld im Format, Löschen anderer Körper ändert die Farbe nicht.
+6. **Skizzen** erscheinen als Symbole in der Kette der Körper, die sie verwenden. Eine Rückrollstelle auf einer Skizze setzt deren Körper zurück; die Skizze bleibt im Baum unter „Skizzen“ sichtbar und bearbeitbar.
+7. **Globaler Marker:** Er hat in der Oberfläche keine eigene Bedienung mehr. Liegt er vor Schritten des gewählten Körpers, zeigt die Leiste diese abgeblendet mit einem Hinweis „Gesamter Verlauf zurückgesetzt“ und einem Knopf „Alles aktivieren“. Ziehen bewegt immer die Stelle des gewählten Körpers.
+8. **Formatversion:** die nächste freie Nummer; Speichern mit Rückrollstellen braucht keine zusätzliche Warnung (alte Programmstände lehnen die Datei mit der üblichen Versionsmeldung ab).
