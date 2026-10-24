@@ -1708,3 +1708,67 @@ Entscheidung von Dennis am 2026-10-23; gilt für alle drei Fenster mit Dateiausw
 - [ ] 11. Ordner mit sehr langen Namen: Kopfzeile, Ordnerzeile, Leiste, Liste und Dateiname enden am selben rechten Rand, lange Namen enden mit „…“.
 - [ ] 12. Maus über die Knöpfe der Leiste führen und einen drücken: kein Knopf verschiebt sich, nichts springt in die nächste Zeile.
 - [ ] 13. Während die Dateiauswahl zu sehen ist, gibt es nur „Öffnen“ bzw. „Speichern“ und „Abbrechen“ (kein zusätzliches „Schließen“). „Abbrechen“ schließt „Netz importieren“ und „STEP importieren“ (ohne gelesene Liste); hat STEP schon eine Liste, führt es zu ihr zurück (dort wieder „Schließen“); beim Exportieren zurück zum Exportformular.
+
+## Teilprojekt: Projekte-Fenster und Einstellungen
+
+Entscheidungen von Dennis am 2026-10-23. Zweig `feature/projekte-fenster`. Entwurf: `docs/superpowers/specs/2026-10-23-projekte-fenster-design.md`, Plan mit „Abweichungen bei der Umsetzung“: `docs/superpowers/plans/2026-10-23-projekte-fenster.md`. Geändert hat sich nur `planora-app`, dazu kommt die neue Abhängigkeit `chrono` (siehe unten). Dateiformate und alle anderen Crates sind unberührt.
+
+**Geliefert:**
+- Menü „Datei → Projekte …“ (Strg+O, ersetzt „Öffnen …“) und „Datei → Einstellungen …“. Das Feld „Projekte“ links und „Ansicht → Projekte“ sind weg; links steht nur noch der Feature-Baum.
+- Fenster „Projekte“ (nicht modal, mittig, etwa 55 % der Fensterbreite, 720 bis 1200 px): Kacheln mit Miniatur, „Geändert …“ in Ortszeit und „Version n“, zwei Ebenen (Projekte, dann Ordner und Dokumente), Doppelklick, Rechtsklick (Umbenennen, Verschieben, Löschen wie bisher), „Neues Projekt“, „Neuer Ordner“, „Neues Dokument“, Tab und Enter, „Aktualisieren“. Alle Aktionen des alten Felds sind von dort erreichbar.
+- Fenster „Einstellungen“: „Projektverzeichnis ändern …“ öffnet die Dateiauswahl im neuen Ordner-Modus (mit Schnellzugriffen und Favoriten). Der Wechsel wird abgelehnt, solange ein gespeichertes Dokument offen ist. Es wird nichts verschoben, kopiert oder gelöscht; `config.json` behält Favoriten, nur `root` ändert sich.
+- Miniaturen: eigener Software-Rasterer (kein Zugriff auf die Grafikkarte), ein Hintergrund-Arbeiter, Zwischenspeicher `vorschau.png` und `vorschau.json` im Dokumentordner, Absturzsicherung, Zeit- und Größengrenzen.
+- Zeiten in Ortszeit (Kacheln und Reiter „Versionen“); gespeichert wird weiter UTC.
+
+**Entscheidungen:**
+- a) „Neues Dokument“ legt das Dokument sofort an (Version 1, Byte für Byte wie das erste Speichern), öffnet einen Tab und zeigt die Kachel. Strg+N bleibt wie es war.
+- „Öffnen …“ wird zu „Projekte …“ (Strg+O bleibt). Texte, die auf das Feld verwiesen, sagen „im Fenster Projekte“. Ohne Projektverzeichnis lautet die Meldung: „Es ist noch kein Projektverzeichnis gewählt. …“
+- Das Datum auf der Kachel ist die Zeit der Spitzenversion des aktiven Zweigs, nicht die der neuesten Version über alle Zweige. So gehören Datum und „Version n“ zur selben Version. Bei Projekten und Ordnern zählt das zuletzt geänderte lesbare Dokument darunter, bei Gleichstand der kleinere Name. Das weicht vom Wortlaut des Entwurfs (§ 4) ab.
+- Ortszeit mit der Bibliothek `chrono` (nur die Uhr-Funktion; Entscheidung B von Dennis). Neu in `Cargo.lock`: `chrono`, `iana-time-zone`, `iana-time-zone-haiku`. `deny.toml` ist unverändert.
+- Miniaturen: `art` in `vorschau.json` kann `bild`, `leer`, `zu_aufwendig`, `baut` oder `fehlgeschlagen` sein. Während eines Aufbaus steht eine Marke `baut` mit `pid`, `since` und `versuche`. Ist sie älter als 15 Minuten, gilt der Aufbau als abgestürzt: beim ersten Mal wird noch einmal versucht, beim zweiten Mal gilt `fehlgeschlagen` (Kachel: „Miniatur nicht möglich“) bis zur nächsten Version. Eine frische Marke heißt: ein anderes Programm baut gerade, es wird übersprungen (Kachel: „Wird gerade erzeugt …“).
+- Es gibt genau eine Miniatur je Dokument (aktuelle Version, aktuelles Design). Beim Umschalten von Hell und Dunkel wird die andere gelöscht und neu gemalt.
+- Grenzen für Miniaturen: höchstens 200 000 Dreiecke, höchstens 3 s Aufbau (nur zwischen zwei Körpern geprüft), eine Aufwandsgrenze fürs Malen (`render_cost`, 20 Millionen), Bild höchstens 1024 Punkte je Seite und 524 288 Punkte insgesamt. Darüber steht „Miniatur zu aufwendig“ (`zu_aufwendig`).
+- Beim Beenden wartet das Programm höchstens 2 s auf den Arbeiter und räumt seine eigene Marke weg.
+- Fenster schließen einander: Strg+O bei offenem Import schließt den Import; Import oder Export öffnen schließt „Projekte“. Ein schreibender Export wird nie geschlossen; dann öffnen „Projekte“ und „Einstellungen“ nicht, und die Statuszeile sagt „Bitte erst den Export beenden.“
+- Steht eine Rückfrage auf dem Bildschirm (zum Beispiel nach Strg+S oder „Dokument gesperrt“), ist „Projekte“ ganz gesperrt, und „Einstellungen“ lassen sich nicht öffnen oder ändern. Sonst könnte das Verzeichnis unter der Rückfrage wechseln. Auch die Tasten für Rückgängig sind bei offenen Einstellungen und Eingabefenstern gesperrt.
+- Namen von Dokumenten dürfen nicht auf `.pcad` enden (bei „Neues Dokument“, „Speichern unter“ und „Umbenennen“, wie bei Ordnern).
+- Abschlussprüfung: Speichern, Wiederherstellen und Zweigwechsel erneuern die Kacheln bei offenem Fenster sofort (Ort, Auswahl und offene kleine Fenster bleiben). Ein leeres Projekt oder ein leerer Ordner sagt das in einem ruhigen Hinweis. „Speichern unter“ ohne Projekt bzw. ohne Projektverzeichnis rät, mit „Abbrechen“ zu schließen und dann Strg+O bzw. „Datei → Einstellungen …“ zu nehmen (bei offener Rückfrage sind beide Fenster gesperrt). Die neuen Texte duzen durchgehend („Deine Projekte bleiben, wo sie sind. …“) und sagen „Projektverzeichnis“; nur die Meldung von `choose_root` („… bevor der Projektordner wechselt.“) bleibt wörtlich, wie der Plan es verlangt.
+
+**Grenzen:**
+- Das Datum im Schriftfeld und die Blattdaten der Zeichnung (`Stamp::now` in `planora-drawing`) sind weiter der UTC-Tag. Zwischen Mitternacht und 1 bis 2 Uhr Ortszeit zeigen sie den Vortag. Das ist ein eigener Punkt, nicht Teil dieses Teilprojekts.
+- Die Tests zur Ortszeit mit Berliner Zeit prüfen nur auf Rechnern mit dieser Zeitzone alles.
+- Im Programm selbst laufen weiter kurze Prüfungen, ob Ordner da sind (Wechsel des Verzeichnisses, Öffnen der Auswahl). Ein hängendes Netzlaufwerk kann dabei kurz aufhalten.
+- Konnte `config.json` beim Wechsel des Projektverzeichnisses nicht geschrieben werden, gilt der Wechsel trotzdem für diese Sitzung; das Programm warnt, dass er nicht gemerkt wird. Intern kommt das als Fehler zurück, obwohl gewechselt wurde.
+- Felder in `config.json`, die dieses Programm nicht kennt, gehen beim Schreiben verloren (war schon vorher so; `planora-project` ist eingefroren und bleibt unverändert). Beheben, sobald `planora-project` wieder geändert werden darf (unbekannte Felder mitführen).
+- Der Aufbau eines großen Dokuments für die Miniatur lässt sich nicht abbrechen. Das Fenster bleibt bedienbar, aber die übrigen Miniaturen kommen erst danach.
+- Die Miniatur entsteht erst, wenn das Fenster geöffnet wird, nicht schon beim Speichern. Danach liegt sie auf der Platte.
+- Es gibt nur eine Miniatur je Dokument: Wechselst du oft zwischen hell und dunkel, wird jedes Mal neu gemalt.
+- Ohne Schreibrecht im Dokumentordner gibt es keine Absturzsicherung für die Miniatur (sie bleibt nur im Speicher). Eine Marke kann fälschlich auf „fehlgeschlagen“ führen, wenn das Speichern und das Wegräumen der Marke beide scheitern; auch Prozessnummern können sich wiederholen. Beim Beenden mitten im Aufbau bleibt in seltenen Fällen die Marke liegen (kurzes Zeitfenster).
+- Höchstens 64 Bilder liegen gleichzeitig im Grafikspeicher (nur Kacheln im und nahe am sichtbaren Ausschnitt); entferntere werden bei Bedarf neu geholt.
+- Höchstens 500 Kacheln je Ebene: Das Programm liest alle Dokumente, zeigt aber nur die ersten 500 („500 von 600 Projekten“).
+- Das schlimmste Malen einer Miniatur dauerte in der Debug-Version etwa 9 s (ein Stab mit 100 000 Segmenten). Die Aufwandsgrenze verhindert das jetzt; Fälle knapp darunter dauern weiter lange, halten aber nur den Arbeiter auf. PNG-Dateien werden beim Lesen auf ihre Größe geprüft, beschädigte gelten als fehlend.
+- Die ausgewählte Kachel hat in beiden Designs eine leicht blau getönte Fläche (`accent_subtle`) und einen 2 px breiten blauen Rand innen; im hellen Design hebt sie sich so auch vom weißen Fenster ab (Kontrast etwa 1,26 : 1, nur eine Fläche, kein Text).
+- Umbenennen, Verschieben oder Löschen kann kurz mit „Zugriff verweigert“ scheitern, während der Miniatur-Arbeiter oder das Lesen gerade eine Datei in diesem Ordner offen hat. Es geht nichts verloren (ein einziger Schritt, ein Hinweis erscheint); ein zweiter Versuch gelingt.
+- Miniaturen entstehen für jede Kachel einer Ebene, nicht nur für die sichtbaren (die sichtbaren zuerst). Liegt das Projektverzeichnis in einem Cloud-Ordner (etwa „Dokumente“ mit Synchronisierung), werden dabei alle Dokumente heruntergeladen, und `vorschau.*` wird in jedem Dokumentordner mit synchronisiert; ein Wechsel von Hell und Dunkel schreibt sie alle neu.
+- Nach einem echten Absturz beim Malen zeigt die Kachel bis zu 15 Minuten „Wird gerade erzeugt …“ (ob das alte Programm noch läuft, lässt sich nicht prüfen). Danach versucht das Programm es noch einmal, was noch einmal abstürzen kann; erst dann steht „Miniatur nicht möglich“.
+- Ein Dokument, dessen Miniatur einmal länger als 3 s braucht (auch nur, weil der Rechner gerade ausgelastet ist), bleibt „Miniatur zu aufwendig“, bis es eine neue Version gibt.
+- „Verschieben“ zeigt keine Ziele, solange der Baum noch gelesen wird („Die Ziele werden noch gelesen …“). Jede fremde Änderung am Verzeichnis (zum Beispiel durch ein zweites Programm) schließt offene Namensfenster; ein halb getippter Name geht dann verloren.
+- Tests mit Zeitannahmen: Der Test „während des Lesens ungültig machen“ nutzt eine Pause von 120 ms, der Test zum Beenden erlaubt unter 500 ms, die Klicktests legen Pausen vor Doppelklicks ein. Auf sehr langsamen Rechnern können sie flackern.
+- Nicht enthalten: Suche, Sortierung, Mehrfachauswahl, Ziehen mit der Maus, Pfeiltasten (Tab und Enter gehen).
+
+**Handliste (echtes Fenster; die Agents starten die App nie):**
+- [ ] 1. Datei-Menü: „Projekte …“ mit Strg+O und „Einstellungen …“ sind da, „Öffnen …“ ist weg; „Ansicht“ hat kein „Projekte“; links steht nur noch der Feature-Baum (Modell, Zeichnung, Skizze).
+- [ ] 2. Strg+O: Fenster „Projekte“ in der Mitte, etwa 55 % breit. Kacheln als Karten (Rahmen, ausgewählte mit blauem Rand), mit Miniatur, „Geändert …“ und „Version n · k Dokumente“ für deine echten Projekte. Die Uhrzeit ist Ortszeit und gleich wie im Reiter „Versionen“.
+- [ ] 3. Miniaturen erscheinen nach und nach (sichtbare zuerst); bis dahin steht „Wird gerade erzeugt …“. Das Fenster bleibt bedienbar und springt nicht; beim zweiten Öffnen sind sie sofort da.
+- [ ] 4. Doppelklick auf ein Projekt: Der Pfad steht in einer eigenen Zeile unter dem Titel, mit Pfeilsymbolen (nicht den Zeichen ‹ ›); Pfeil und „Projekte“ führen zurück. Darunter steht eine Zeile mit „Neues Dokument“ und „Neuer Ordner“. Doppelklick auf einen Ordner geht hinein, der Pfad wird länger (vorne mit „…“ gekürzt, wenn er nicht mehr passt).
+- [ ] 5. Doppelklick auf ein Dokument öffnet es im Tab, das Fenster bleibt offen; noch einmal: nur nach vorn geholt.
+- [ ] 6. Rechtsklick: Umbenennen, Verschieben (nicht bei Projekten), Löschen mit den gewohnten Rückfragen. Bei offenem Dokument: „Bitte zuerst die betroffenen Dokumente schließen.“
+- [ ] 7. „Neues Projekt“, „Neuer Ordner“, „Neues Dokument“ (öffnet sofort einen Tab; die Kachel zeigt „Version 1“). Das Namensfeld nimmt gleich Eingaben an.
+- [ ] 8. Die Tab-Taste läuft über die Kacheln (Fokusring außen, anders als der blaue Auswahlrand), das Fenster rollt mit; Enter öffnet.
+- [ ] 9. „Projektverzeichnis …“ öffnet die Einstellungen; „Projektverzeichnis ändern …“ die Ordnerauswahl mit Schnellzugriffen; „Abbrechen“ ändert nichts. Mit offenem gespeichertem Dokument: Hinweis in Warnfarbe. Mit allen Dokumenten geschlossen: Wechsel auf einen Testordner, „Projekte“ zeigt nur dessen Projekte; zurück auf `Dokumente\PlanoraCAD`, alles ist wieder da (nichts wurde verschoben).
+- [ ] 10. Hell und Dunkel umschalten, Fenster wieder öffnen: Die Miniaturen werden neu gemalt; beide Designs sind gut lesbar, auch die ausgewählte Kachel im hellen Design.
+- [ ] 11. Fenstergröße 800 × 600: Kopf, Kacheln (rollen) und Fußzeile mit „Aktualisieren“ sind sichtbar. Großes Fenster: mehr Spalten, alle Kacheln gleich groß.
+- [ ] 12. Netz importieren / STEP importieren / Exportieren öffnen, während „Projekte“ offen ist: „Projekte“ schließt. Strg+O bei offenem Import schließt den Import. Schreibt gerade ein Export, melden Strg+O, „Projekte …“ und „Einstellungen …“: „Bitte erst den Export beenden.“
+- [ ] 13. Ein Dokumentordner im Explorer: `vorschau.png` und `vorschau.json` liegen neben `dokument.json`; beide löschen, Fenster neu öffnen: Sie werden neu angelegt.
+- [ ] 14. Ein großes Dokument (zum Beispiel ein großer Netz-Körper): Die Kachel sagt „Miniatur zu aufwendig“, die Oberfläche bleibt flüssig. „Miniatur nicht möglich“ darf nur nach einem früheren Absturz beim Malen erscheinen.
+- [ ] 15. Rückfrage offen (zum Beispiel Strg+S bei geändertem Dokument, „Projekte“ offen): Alle Knöpfe im Fenster „Projekte“ sind gesperrt, „Einstellungen …“ lässt sich nicht öffnen. Nach der Rückfrage geht wieder alles.

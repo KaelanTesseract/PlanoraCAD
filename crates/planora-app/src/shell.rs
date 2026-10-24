@@ -65,7 +65,6 @@ pub enum RightTab {
 /// Sichtbarkeit und Reiter der Felder.
 #[derive(Clone, Debug)]
 pub struct ShellState {
-    pub projects_visible: bool,
     pub versions_visible: bool,
     pub right_tab: RightTab,
 }
@@ -73,7 +72,6 @@ pub struct ShellState {
 impl Default for ShellState {
     fn default() -> Self {
         Self {
-            projects_visible: true,
             versions_visible: true,
             right_tab: RightTab::Properties,
         }
@@ -81,11 +79,6 @@ impl Default for ShellState {
 }
 
 impl ShellState {
-    /// Projekte einblenden (zum Beispiel nach „Neues Projekt“).
-    pub fn show_projects(&mut self) {
-        self.projects_visible = true;
-    }
-
     /// Versionen ein- oder ausblenden; ohne Versionen zeigt die rechte Spalte wieder Eigenschaften.
     pub fn set_versions_visible(&mut self, v: bool) {
         self.versions_visible = v;
@@ -243,8 +236,8 @@ pub fn layout_with_top_min(
     status_width: f32,
     read_only: bool,
 ) -> ShellRects {
-    // Die Seitenspalten sind immer vorhanden (Baum links, Eigenschaften rechts); die
-    // Umschalter für Projekte und Versionen ändern nur ihren Inhalt, nicht die Geometrie.
+    // Die Seitenspalten sind immer vorhanden (Baum links, Eigenschaften rechts); der
+    // Umschalter für Versionen ändert nur ihren Inhalt, nicht die Geometrie.
     let banner_extra = if read_only { BANNER_H + GAP } else { 0.0 };
     let normal_free_h =
         content.height() - (2.0 * SHELL_INSET + TOP_H + BOTTOM_H + 2.0 * GAP + banner_extra);

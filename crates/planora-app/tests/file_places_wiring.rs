@@ -266,8 +266,8 @@ fn documents_and_projects_have_their_own_symbols() {
     assert_eq!(PlaceKind::Project.icon(), Icon::Projects);
     assert_eq!(icons::phosphor_name(Icon::Documents), "files");
     assert_eq!(icons::phosphor_name(Icon::Projects), "briefcase");
-    // Der Projektordner sieht anders aus als die Ordnerzeilen und das Feld „Projekte“.
-    for other in [Icon::Folder, Icon::PanelProjects, Icon::Home] {
+    // Der Projektordner sieht anders aus als die Ordnerzeilen und die Grundansicht (Home).
+    for other in [Icon::Folder, Icon::Home] {
         assert_ne!(icons::glyph(Icon::Projects), icons::glyph(other));
         assert_ne!(icons::glyph(Icon::Documents), icons::glyph(other));
     }

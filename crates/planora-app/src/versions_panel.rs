@@ -6,6 +6,7 @@
 
 use crate::browser::error_color;
 use crate::dialog::{Dialog, DialogSize};
+use crate::local_time;
 use crate::theme;
 use crate::workspace::{Prompt, Workspace};
 use planora_project::docstore::DocumentInfo;
@@ -223,19 +224,14 @@ pub fn switch_branch(ws: &mut Workspace, name: &str) {
     if let Err(e) = store.set_active_branch(name) {
         return notice(ws, e.to_string());
     }
-    let Some(tip) = store.info().tip(name) else {
+    let tip = store.info().tip(name);
+    // die Kachel zeigt die Spitze des aktiven Zweigs: das Fenster Projekte liest neu
+    ws.content_revision += 1;
+    let Some(tip) = tip else {
         return;
     };
     ws.activate(i);
     open_version(ws, tip);
-}
-
-/// „JJJJ-MM-TT hh:mm“ aus dem ISO-Text (unlesbare Zeitangaben werden unverändert gezeigt).
-fn short_time(iso: &str) -> String {
-    match (iso.get(0..10), iso.get(11..16)) {
-        (Some(d), Some(t)) => format!("{d} {t}"),
-        _ => iso.to_string(),
-    }
 }
 
 enum Action {
@@ -340,7 +336,7 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi, head
             "  ".repeat(r.depth),
             r.number,
             r.branch,
-            short_time(&v.time),
+            local_time::local_time_text(&v.time),
             v.comment
         );
         let resp = ui.selectable_label(based_on == Some(r.number), text);

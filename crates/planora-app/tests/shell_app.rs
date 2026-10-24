@@ -477,12 +477,13 @@ fn the_viewport_fills_the_window_under_the_fields() {
 }
 
 #[test]
-fn view_menu_toggles_projects_and_versions_fields() {
+fn view_menu_toggles_versions_and_has_no_projects() {
     let c = context();
     let mut app = app_with_box();
     let shot = settle(&c, &mut app, BIG);
     let r = shell_panels::last_layout(&c).unwrap();
-    assert!(shot.has_in("Projekte", r.left), "Projekte sichtbar");
+    // Das Feld Projekte gibt es nicht mehr: links nur der Baum.
+    assert!(!shot.has_in("Projekte", r.left), "kein Feld Projekte");
     assert!(
         shot.has_in("Versionen", r.right),
         "Umschalter mit Versionen"
@@ -490,51 +491,61 @@ fn view_menu_toggles_projects_and_versions_fields() {
 
     let fields = [r.left, r.right];
     // Menüs schließen bei einem Klick in ihnen (egui `PopupCloseBehavior::CloseOnClick`, die
-    // Menüleiste ändert das nicht): jeder Umschalter braucht „Ansicht“ erneut.
+    // Menüleiste ändert das nicht).
     let menu_open = |shot: &Shot| !shot.all("Isometrisch").is_empty();
-    for (entry, what) in [("Projekte", "Projekte"), ("Versionen", "Versionen")] {
-        let shot = settle(&c, &mut app, BIG);
-        assert!(!menu_open(&shot), "Menü ist zu");
-        let shot = click(
-            &c,
-            &mut app,
-            BIG,
-            shot.find_outside("Ansicht", &fields).center(),
-        );
-        assert!(menu_open(&shot), "Ansicht ist offen");
-        let shot = click(
-            &c,
-            &mut app,
-            BIG,
-            shot.find_outside(entry, &fields).center(),
-        );
-        assert!(!menu_open(&shot), "Klick auf {what} schließt das Menü");
-    }
-    assert!(!app.shell_mut().projects_visible);
+    let shot = settle(&c, &mut app, BIG);
+    assert!(!menu_open(&shot), "Menü ist zu");
+    let shot = click(
+        &c,
+        &mut app,
+        BIG,
+        shot.find_outside("Ansicht", &fields).center(),
+    );
+    assert!(menu_open(&shot), "Ansicht ist offen");
+    // „Projekte“ steht nicht im Menü Ansicht (nur außerhalb der Felder gesucht: dort ist das Menü).
+    assert!(
+        !shot
+            .all("Projekte")
+            .iter()
+            .any(|t| !fields.iter().any(|f| f.intersects(*t))),
+        "kein Eintrag Projekte im Menü Ansicht"
+    );
+    let shot = click(
+        &c,
+        &mut app,
+        BIG,
+        shot.find_outside("Versionen", &fields).center(),
+    );
+    assert!(!menu_open(&shot), "Klick auf Versionen schließt das Menü");
     assert!(!app.shell_mut().versions_visible);
     let shot = settle(&c, &mut app, BIG);
-    assert!(!shot.has_in("Projekte", r.left), "Projekte ausgeblendet");
     assert!(!shot.has_in("Versionen", r.right), "Versionen ausgeblendet");
     // Die Spalten bleiben gültig: Baum links, Eigenschaften rechts, freie Fläche unverändert.
     assert!(shot.has_in("Eigenschaften", r.right));
     assert!(shot.has_in("Quader 1", r.left), "Baum links");
-    assert_centred(&mut app, BIG, "ohne Projekte und Versionen");
+    assert_centred(&mut app, BIG, "ohne Versionen");
 }
 
 #[test]
-fn ctrl_o_shows_the_projects_field() {
+fn ctrl_o_opens_the_projects_window() {
     let c = context();
     let mut app = app_with_box();
-    app.shell_mut().projects_visible = false;
     let shot = settle(&c, &mut app, BIG);
     let r = shell_panels::last_layout(&c).unwrap();
     assert!(!shot.has_in("Projekte", r.left));
+    assert!(!app.windows_mut().1.is_open());
     press(&c, &mut app, BIG, Key::O, Modifiers::COMMAND);
-    assert!(app.shell_mut().projects_visible);
+    assert!(app.windows_mut().1.is_open(), "Strg+O öffnet Projekte");
     let shot = settle(&c, &mut app, BIG);
+    let window = app.windows_mut().1.last_rect.expect("Fenster gezeichnet");
+    assert!(shot.has_in("Projekte", window), "Titel im Fenster Projekte");
+    // Das linke Feld bleibt ohne Projekte (Texte des Fensters zählen nicht).
     assert!(
-        shot.has_in("Projekte", r.left),
-        "Strg+O blendet Projekte ein"
+        !shot
+            .all("Projekte")
+            .iter()
+            .any(|t| r.left.contains_rect(*t) && !window.contains_rect(*t)),
+        "kein Feld Projekte"
     );
 }
 
@@ -718,10 +729,10 @@ fn all_menu_entries_still_present_and_shortcuts_work() {
     // Strg+W: schließt den (unveränderten) neuen Tab.
     press(&c, &mut app, BIG, Key::W, Modifiers::COMMAND);
     assert_eq!(app.ws_mut().tabs.len(), 1);
-    // Strg+O: Projekte einblenden.
-    app.shell_mut().projects_visible = false;
+    // Strg+O: Fenster Projekte öffnen.
+    assert!(!app.windows_mut().1.is_open());
     press(&c, &mut app, BIG, Key::O, Modifiers::COMMAND);
-    assert!(app.shell_mut().projects_visible);
+    assert!(app.windows_mut().1.is_open());
     // Strg+Umschalt+E: Export.
     press(
         &c,

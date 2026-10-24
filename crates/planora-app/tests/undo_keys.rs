@@ -685,8 +685,8 @@ fn dialog_blocks_keys() {
     assert_eq!(n, 10);
 }
 
-/// Die Fenster der Felder Projekte (Rückfrage „Löschen“) und Versionen (Rückfrage „Löschen“)
-/// sperren ebenso.
+/// Die Fenster der Aktionen im Fenster Projekte (Rückfrage „Löschen“) und des Reiters Versionen
+/// (Rückfrage „Löschen“) sperren ebenso.
 #[test]
 fn panel_windows_block_keys() {
     let mut w = ws();
@@ -708,8 +708,8 @@ fn panel_windows_block_keys() {
         {
             let (ws, projects, versions) = rig.app.panels_mut();
             if which == 0 {
-                planora_app::projects_panel::request_delete(projects, p.clone());
-                assert!(planora_app::projects_panel::dialog_open(projects));
+                planora_app::project_actions::request_delete(projects, p.clone());
+                assert!(planora_app::project_actions::dialog_open(projects));
             } else {
                 planora_app::versions_panel::request_delete_version(ws, versions, 1);
                 assert!(planora_app::versions_panel::has_pending(versions));
@@ -911,12 +911,16 @@ fn other_shortcuts_unchanged() {
     rig.ws().prompt = None;
     rig.settle();
 
-    // Strg+O blendet die Projekte ein und ändert das Dokument nicht.
+    // Strg+O öffnet das Fenster Projekte und ändert das Dokument nicht.
     let doc = rig.st().snapshot();
     rig.press(Key::O, Modifiers::COMMAND);
     rig.settle();
     assert!(rig.st().snapshot().same_content(&doc));
     assert_eq!(rig.bodies(), 1);
+    assert!(
+        rig.app.windows_mut().1.is_open(),
+        "Strg+O: Fenster Projekte"
+    );
 
     // Keines der Kürzel war ein Rückgängig; Strg+Z wirkt danach wie gewohnt.
     assert_eq!(rig.redo_len(), 0);

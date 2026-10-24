@@ -31,6 +31,8 @@ egui.workspace = true
 winit.workspace = true
 # Fenster- und Programmsymbol sowie Logo im Über-Dialog aus PNG lesen (png ist über egui ohnehin im Baum).
 png = "0.18"
+# Ortszeit des Rechners für Zeitangaben (nur in local_time.rs benutzt).
+chrono.workspace = true
 
 [dev-dependencies]
 # Zeichentabellen der Schriftdateien lesen (Zeichentest in tests/fonts.rs); skrifa zieht egui ohnehin.

@@ -14,8 +14,6 @@ use egui::{Color32, Painter, Pos2, Rect, Stroke, pos2, vec2};
 pub enum Icon {
     /// Phosphor `file-plus`.
     New,
-    /// Phosphor `folder-open`.
-    Open,
     /// Phosphor `floppy-disk`.
     Save,
     /// Phosphor `floppy-disk-back`.
@@ -64,8 +62,6 @@ pub enum Icon {
     ThemeDark,
     /// Phosphor `sun`.
     ThemeLight,
-    /// Phosphor `folder-simple`.
-    PanelProjects,
     /// Phosphor `clock-counter-clockwise`.
     PanelVersions,
     /// Phosphor `eye`.
@@ -164,12 +160,17 @@ pub enum Icon {
     Documents,
     /// Phosphor `briefcase` (Schnellzugriff Projekte).
     Projects,
+    /// Phosphor `caret-left` (eine Ebene hinauf im Pfad des Fensters „Projekte“).
+    Back,
+    /// Phosphor `caret-right` (Trenner im Pfad des Fensters „Projekte“).
+    PathSeparator,
+    /// Phosphor `gear-six` (Menüeintrag „Einstellungen …“).
+    Settings,
 }
 
 /// Alle Einträge von [`Icon`].
 pub const ALL: &[Icon] = &[
     Icon::New,
-    Icon::Open,
     Icon::Save,
     Icon::SaveAs,
     Icon::Close,
@@ -194,7 +195,6 @@ pub const ALL: &[Icon] = &[
     Icon::FitAll,
     Icon::ThemeDark,
     Icon::ThemeLight,
-    Icon::PanelProjects,
     Icon::PanelVersions,
     Icon::Visible,
     Icon::Hidden,
@@ -244,12 +244,14 @@ pub const ALL: &[Icon] = &[
     Icon::Favorite,
     Icon::Documents,
     Icon::Projects,
+    Icon::Back,
+    Icon::PathSeparator,
+    Icon::Settings,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
 const TABLE: &[(Icon, char, &str)] = &[
     (Icon::New, '\u{e236}', "file-plus"),
-    (Icon::Open, '\u{e256}', "folder-open"),
     (Icon::Save, '\u{e248}', "floppy-disk"),
     (Icon::SaveAs, '\u{eaf4}', "floppy-disk-back"),
     (Icon::Close, '\u{e4f6}', "x"),
@@ -274,7 +276,6 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::FitAll, '\u{e1d0}', "corners-out"),
     (Icon::ThemeDark, '\u{e330}', "moon"),
     (Icon::ThemeLight, '\u{e472}', "sun"),
-    (Icon::PanelProjects, '\u{e25a}', "folder-simple"),
     (Icon::PanelVersions, '\u{e1a0}', "clock-counter-clockwise"),
     (Icon::Visible, '\u{e220}', "eye"),
     (Icon::Hidden, '\u{e224}', "eye-slash"),
@@ -324,6 +325,9 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Favorite, '\u{e46a}', "star"),
     (Icon::Documents, '\u{e710}', "files"),
     (Icon::Projects, '\u{e0ee}', "briefcase"),
+    (Icon::Back, '\u{e138}', "caret-left"),
+    (Icon::PathSeparator, '\u{e13a}', "caret-right"),
+    (Icon::Settings, '\u{e272}', "gear-six"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {

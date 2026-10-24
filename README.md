@@ -106,7 +106,7 @@ Körper lassen sich als Dreiecksnetz speichern, etwa für den 3D-Druck oder um s
 
 Netze aus anderen Programmen lassen sich einlesen: „Datei“ → „Netz importieren …“ (STL und OBJ). Das Fenster zeigt vorher, wie viele Dreiecke die Datei hat und ob das Netz geschlossen ist. Die Einheit der Datei lässt sich wählen (Millimeter, Zentimeter, Meter, Zoll). Das Ergebnis ist ein **Netz-Körper**: Er lässt sich anzeigen, verschieben, drehen, vergrößern oder verkleinern, messen und wieder exportieren. Mit anderen Körpern verrechnen, runden oder als Fläche für eine Skizze nutzen lässt er sich nicht; diese Menüpunkte sind dann ausgegraut.
 
-Die Dateiauswahl (beim Importieren und Exportieren) zeigt Ordner mit einem Ordnersymbol (Doppelklick öffnet sie) und hat über der Liste Knöpfe für Dokumente, Downloads, Desktop, Bilder, den Projektordner, die Laufwerke und eigene Favoriten; einen Ordner macht man mit einem Rechtsklick zum Favoriten und entfernt ihn ebenso wieder.
+Die Dateiauswahl (beim Importieren und Exportieren) zeigt Ordner mit einem Ordnersymbol (Doppelklick öffnet sie) und hat über der Liste Knöpfe für Dokumente, Downloads, Desktop, Bilder, das Projektverzeichnis, die Laufwerke und eigene Favoriten; einen Ordner macht man mit einem Rechtsklick zum Favoriten und entfernt ihn ebenso wieder. Dieselbe Auswahl gibt es in den Einstellungen, um das Projektverzeichnis zu wählen; dort zeigt sie nur Ordner.
 
 Dokumente mit Netz-Körpern speichert das Programm im Dateiformat 3; das Netz steckt im Dokument selbst. Ältere Programmversionen melden dann „zu neu“. Dokumente ohne Netz-Körper bleiben im Format 1 oder 2.
 
@@ -424,29 +424,35 @@ Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Nach Teilprojekt
 Deine Arbeit bleibt jetzt erhalten. Gespeichert wird die Liste der Schritte aus dem Feature-Baum; beim Öffnen rechnet das Programm daraus alles neu.
 
 **Wo die Dateien liegen**
-- Alles liegt in einem normalen Ordner auf deiner Festplatte, vorgegeben ist `Dokumente\PlanoraCAD`. Im Fenster „Projekte“ kannst du einen anderen Ordner wählen („Wurzel wählen“). Das Programm merkt sich die Wahl.
-- Ein **Projekt** ist ein Ordner direkt darin. Darin kannst du beliebig viele **Ordner** anlegen und verschachteln. Ein **Dokument** ist ein Ordner mit der Endung `.pcad`; darin liegen die Versionen als einzelne Textdateien. Du kannst den ganzen Projektordner also einfach kopieren oder sichern.
-- Gelöschte Projekte, Ordner und Dokumente landen im Ordner `.papierkorb` unter dem Projektordner und werden vom Programm nie endgültig gelöscht. Gelöschte Versionen und Zweige im Fenster „Versionen“ sind dagegen nach der Rückfrage endgültig weg.
+- Alles liegt in einem normalen Ordner auf deiner Festplatte, dem **Projektverzeichnis**. Vorgegeben ist `Dokumente\PlanoraCAD`. Ändern kannst du es mit „Datei → Einstellungen …“ und „Projektverzeichnis ändern …“: Du wählst einen Ordner (mit „Diesen Ordner wählen“), „Abbrechen“ ändert nichts. Das Programm merkt sich die Wahl. Dabei wird nichts verschoben oder kopiert: Die Projekte im alten Verzeichnis bleiben dort liegen und sind wieder da, wenn du zurückwechselst. Der Wechsel geht nur, solange kein gespeichertes Dokument offen ist (sonst erscheint ein Hinweis) und keine Rückfrage auf dem Bildschirm steht.
+- Ein **Projekt** ist ein Ordner direkt darin. Darin kannst du beliebig viele **Ordner** anlegen und verschachteln. Ein **Dokument** ist ein Ordner mit der Endung `.pcad`; darin liegen die Versionen als einzelne Textdateien. Du kannst das ganze Projektverzeichnis also einfach kopieren oder sichern.
+- Gelöschte Projekte, Ordner und Dokumente landen im Ordner `.papierkorb` im Projektverzeichnis und werden vom Programm nie endgültig gelöscht. Gelöschte Versionen und Zweige im Reiter „Versionen“ sind dagegen nach der Rückfrage endgültig weg.
 
 **Speichern und Versionen**
 - Mit „Datei → Speichern“ (Strg+S) legst du eine **neue Version** an; dabei kannst du einen Kommentar eintragen. Frühere Versionen bleiben unverändert erhalten.
 - Ein neues Dokument heißt „Unbenannt 1“. Beim ersten Speichern wählst du Projekt, Ordner und Namen. „Speichern unter …“ legt ein eigenes neues Dokument an.
 - Ein „●“ am Tab zeigt, dass es ungespeicherte Änderungen gibt. Beim Schließen eines Tabs oder des Programms fragt PlanoraCAD nach (Speichern, Verwerfen, Abbrechen). Eine gerade offene Skizze wird beim Speichern mitgenommen.
-- Das Fenster „Versionen“ (Menü „Ansicht“) listet alle Versionen des Dokuments mit Nummer, Zweig, Zeit und Kommentar. Ein Doppelklick öffnet eine alte Version **nur zum Ansehen** in einem eigenen Tab („Name · v1“); dort lässt sich nichts ändern.
+- Der Reiter „Versionen“ im rechten Feld (neben „Eigenschaften“; ein- und ausblenden mit „Ansicht → Versionen“) listet alle Versionen des Dokuments mit Nummer, Zweig, Zeit (deine Ortszeit, mit Sommerzeit) und Kommentar. Ein Doppelklick öffnet eine alte Version **nur zum Ansehen** in einem eigenen Tab („Name · v1“); dort lässt sich nichts ändern.
 - Per Rechtsklick auf eine Version kannst du sie **wiederherstellen** (sie wird als neueste Version noch einmal gespeichert, nichts geht verloren), von ihr aus einen **Zweig abzweigen** (eine Variante mit eigenem Namen), den Kommentar ändern oder eine Version bzw. einen Zweig löschen, solange keine andere Version darauf aufbaut.
 - Speicherst du ein Dokument, das auf einer älteren Version beruht, fragt das Programm nach dem Namen eines neuen Zweigs, damit nichts überschrieben wird.
 - Zusammenführen von Zweigen gibt es noch nicht.
 
 **Mehrere Dokumente und Absicherung**
-- Mehrere Dokumente können gleichzeitig in Tabs offen sein. Das Fenster „Projekte“ (Menü „Ansicht“ oder Strg+O) zeigt den Baum aus Projekten, Ordnern und Dokumenten; Doppelklick öffnet, Rechtsklick bietet Anlegen, Umbenennen, Verschieben und Löschen.
+- Mehrere Dokumente können gleichzeitig in Tabs offen sein. Zum Öffnen und Verwalten gibt es das Fenster „Projekte“ (Menü „Datei → Projekte …“ oder Strg+O). Das Feld „Projekte“ links im Hauptfenster gibt es nicht mehr; links bleibt der Feature-Baum.
+- **Das Fenster „Projekte“** öffnet in der Mitte, ist etwa halb so breit wie das Programmfenster und bleibt offen, solange du es nicht schließt. Du kannst dabei weiterarbeiten. Es hat zwei Ebenen: zuerst eine Kachel je Projekt, nach einem Doppelklick auf ein Projekt dessen Ordner und Dokumente. Der Pfad oben („Projekte“, dann der Name, getrennt durch kleine Pfeile) und der Pfeil nach links davor führen zurück; ein Doppelklick auf einen Ordner geht hinein. Speicherst du ein Dokument, während das Fenster offen ist, zeigt seine Kachel gleich die neue Version.
+- Jede Kachel zeigt eine Miniatur der Körper, den Namen, „Geändert“ mit Datum und Uhrzeit in deiner Ortszeit und „Version n“. Bei Projekten steht dahinter die Zahl der Dokumente. Datum und Version eines Projekts kommen von dem Dokument darin, das zuletzt gespeichert wurde, und zwar vom aktuellen Stand des Zweigs, an dem du arbeitest. Dokumente, die sich nicht lesen lassen, werden mitgezählt, geben aber kein Datum.
+- Ein Doppelklick auf ein Dokument öffnet es in einem Tab; das Fenster bleibt offen. Ist es schon offen, wird sein Tab nur nach vorn geholt. Mit der Tab-Taste kommst du auf jede Kachel (ein Rahmen zeigt, wo du bist), Enter öffnet. Ein Rechtsklick auf eine Kachel bietet Umbenennen, Verschieben (nicht bei Projekten) und Löschen, mit den gewohnten Rückfragen.
+- „Neues Projekt“ legt ein Projekt an. Innerhalb eines Projekts oder Ordners gibt es „Neuer Ordner“ und „Neues Dokument“. Ein neues Dokument ist sofort da: Es wird als Version 1 gespeichert und in einem Tab geöffnet. „Aktualisieren“ unten liest alles noch einmal ein. „Projektverzeichnis …“ führt zu den Einstellungen.
+- **Miniaturen:** Das Programm malt sie im Hintergrund, die sichtbaren zuerst. Bis eine fertig ist, steht „Wird gerade erzeugt …“, das Fenster bleibt dabei bedienbar. Dafür legt es neben `dokument.json` zwei Zusatzdateien an: `vorschau.png` und `vorschau.json`. Es gibt nur eine Miniatur je Dokument, für die aktuelle Version und das aktuelle Design (hell oder dunkel). Die beiden Dateien gehören nicht zu den Versionen. Du kannst sie jederzeit löschen oder beim Sichern weglassen; das Programm macht sie wieder neu. Ist ein Dokument zu groß für eine Miniatur, steht „Miniatur zu aufwendig“. Ist das Malen früher einmal abgestürzt, steht „Miniatur nicht möglich“, bis es eine neue Version gibt.
 - Ein Dokument kann nur von einem Programm zur gleichen Zeit geändert werden. Ist es schon gesperrt, fragt PlanoraCAD, ob du die Sperre übernehmen willst.
 - Alle zwei Minuten sichert das Programm geänderte, schon gespeicherte Dokumente automatisch (das ist keine neue Version). Nach einem Absturz bietet es beim nächsten Öffnen an, diesen Stand zurückzuholen oder zu verwerfen.
 - Beschädigte oder zu neue Dateien werden mit einer Meldung abgelehnt; das geöffnete Dokument bleibt dabei unverändert.
 
 **Was (noch) nicht geht**
-- Kein Zusammenführen von Zweigen, kein Teilen über das Internet, keine Vorschaubilder, die Kameraansicht wird nicht gespeichert.
+- Kein Zusammenführen von Zweigen, kein Teilen über das Internet, die Kameraansicht wird nicht gespeichert.
+- Im Fenster „Projekte“ gibt es keine Suche, keine Sortierung, keine Mehrfachauswahl und kein Ziehen mit der Maus; Pfeiltasten gehen nicht (Tab und Enter schon). Pro Ebene zeigt es höchstens 500 Kacheln. Große Dokumente brauchen für ihre Miniatur etwas länger oder bekommen keine. Das Datum auf Zeichnungsblättern und in der PDF ist weiter der Tag nach Weltzeit (UTC), nicht der nach Ortszeit.
 - Unbenannte Dokumente (noch nie gespeichert) haben keine Autosicherung.
-- Umbenennen, Verschieben und Löschen im Projektbaum geht nur, wenn die betroffenen Dokumente geschlossen sind. Verschoben wird über ein Auswahlfenster, nicht durch Ziehen.
+- Umbenennen, Verschieben und Löschen im Fenster „Projekte“ geht nur, wenn die betroffenen Dokumente geschlossen sind („Bitte zuerst die betroffenen Dokumente schließen.“). Verschoben wird über ein Auswahlfenster, nicht durch Ziehen.
 
 **Handprüfung:** Am 11.10.2026 von Hand im echten Fenster geprüft (mit `tools/gui-drive.ps1`): Projekt anlegen, Quader anlegen, Strg+S und „Speichern unter“, zweite Version mit Kommentar, Versionen-Panel, alte Version öffnen (schreibgeschützt, Menüs ausgegraut), Wiederherstellen, Fenster-× mit ungespeicherten Änderungen (Rückfrage, das Programm bleibt offen), „Speichern“ in der Rückfrage beendet das Programm und gibt die Sperre frei, Neustart und Öffnen aus dem Projekt-Panel (der Stand ist vollständig da), × ohne Änderungen schließt sofort. Nicht von Hand geprüft (nur durch automatische Tests ohne Fenster): Abzweigen mit Zweignamen-Fenster, Zweig oder Version löschen, Kommentar ändern, Ordner anlegen, umbenennen, verschieben und löschen im Projekt-Panel, Autosicherungs-Angebot nach einem Absturz, Sperre übernehmen, Schließen bei minimiertem Fenster, mehrere Tabs mit mehreren Dokumenten.
 
@@ -559,10 +565,10 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 **Neuer Aufbau des Fensters (Modell-Ansicht):** Die Felder schweben jetzt frei über dem 3D-Bereich, der das ganze Fenster füllt.
 
 - Oben in der Mitte: das kleine Programmzeichen, das Menü und die Tabs. Unter „Datei“ → „Über PlanoraCAD“ stehen Version, Lizenz und die Herkunft der mitgelieferten Schriften und Symbole.
-- Links: ein Feld mit deinen Projekten und darunter der Baum mit den Arbeitsschritten.
+- Links: der Baum mit den Arbeitsschritten (deine Projekte stehen im Fenster „Projekte“, Strg+O).
 - Rechts: Eigenschaften und Versionen. Ein Umschalter im Feld wechselt zwischen beiden.
 - Unten: das Befehlsfeld mit Abkürzungen zu den Menüeinträgen, daneben Meldungen.
-- Die Felder lassen sich nicht verschieben oder andocken. Projekte und Versionen blendest du im Menü Ansicht ein oder aus.
+- Die Felder lassen sich nicht verschieben oder andocken. Den Reiter Versionen blendest du im Menü Ansicht ein oder aus.
 - Klicken, Ziehen und das Mausrad auf einem Feld bewegen das Modell nicht. Dialoge liegen immer über den Feldern.
 - „Alles einpassen“ zentriert das Modell in dem Bereich, der zwischen den Feldern frei bleibt.
 - Das Fenster ist mindestens 800 × 600 groß. Kleiner lässt es sich nicht ziehen.
@@ -594,7 +600,7 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 **Dialoge:** Alle Fenster, die sich öffnen (zum Beispiel Exportieren, Verrunden, Boolesche Operation, Umbenennen und die Rückfragen), sehen jetzt gleich aus und erscheinen in der Mitte des Fensters.
 
 - Es gibt drei Breiten: schmal für Rückfragen und Umbenennen, mittel für Körper anlegen, Verrunden und Boolesche Operation, breit für Exportieren, Netz importieren, Neue Zeichnung und Maß bearbeiten.
-- Oben steht der Titel, rechts ein kleines Kreuz zum Schließen. Kein Kreuz haben die Fragen beim Speichern und Öffnen (zum Beispiel „Änderungen speichern?“, „Speichern unter“, „Dokument gesperrt“), die Fenster im Projekt-Bereich (zum Beispiel „Neuer Ordner“, „Umbenennen“) und im Bereich „Versionen“ („Kommentar ändern“, „Löschen“). Dort schließt du mit den Knöpfen.
+- Oben steht der Titel, rechts ein kleines Kreuz zum Schließen. Kein Kreuz haben die Fragen beim Speichern und Öffnen (zum Beispiel „Änderungen speichern?“, „Speichern unter“, „Dokument gesperrt“), die kleinen Fenster des Fensters „Projekte“ (zum Beispiel „Neuer Ordner“, „Umbenennen“) und im Bereich „Versionen“ („Kommentar ändern“, „Löschen“). Dort schließt du mit den Knöpfen.
 - Die meisten Dialoge lassen sich verschieben, zum Beispiel beim Verrunden, damit du Kanten neben dem Dialog anklicken kannst. Auch am Titel kannst du sie greifen. Die eben genannten Fenster ohne Kreuz bleiben fest in der Mitte. Die Rückfrage beim Löschen im Feature-Baum, in der Maßliste und in der Zeichnungsliste hat dagegen ein Kreuz und lässt sich verschieben.
 - Ein Dialog ist so hoch wie sein Inhalt. Erst wenn der Inhalt nicht ins Fenster passt, lässt er sich innen nach unten rollen; der Titel mit dem Kreuz bleibt dabei oben stehen. Auch bei 800 × 600 bleibt er ganz im Fenster.
 - In „Neuer Ordner“, „Umbenennen“ und „Kommentar ändern“ übernimmt die Eingabetaste jetzt die Eingabe.

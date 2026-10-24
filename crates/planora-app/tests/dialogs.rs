@@ -22,7 +22,7 @@ use planora_app::icons::{self, Icon};
 use planora_app::shell::RightTab;
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::{After, Prompt, Workspace};
-use planora_app::{drawing_browser, fonts, projects_panel, theme, versions_panel};
+use planora_app::{drawing_browser, fonts, project_actions, theme, versions_panel};
 use planora_drawing::dimension::{
     DimId, DimKind, DimSpec, GeoRef, GeoRefData, Tolerance as DimTol,
 };
@@ -120,6 +120,10 @@ impl Rig {
     fn new(size: Vec2, dark: bool) -> Rig {
         let root = common::temp_root("planora-dialogs");
         let mut ws = Workspace::new(Some(Library::open(&root).unwrap()), Config::default());
+        // Die Einstellungen könnten Favoriten speichern: nur in Temp.
+        let cfg = common::temp_root("planora-dialogs-cfg");
+        std::fs::create_dir_all(&cfg).unwrap();
+        ws.config_path = cfg.join("config.json");
         let project = ws.library.as_ref().unwrap().create_project("P").unwrap();
         let fid = ws
             .active_tab_mut()
@@ -193,7 +197,6 @@ impl Rig {
             dim,
             project,
         };
-        rig.app.shell_mut().show_projects();
         rig.app.shell_mut().right_tab = RightTab::Versions;
         rig
     }
@@ -381,8 +384,31 @@ fn project_case(
         id: Some(Id::new(("planora_projects_dialog", key.to_string()))),
         class: DialogSize::Prompt,
         closable: false,
+        // Die Fenster der Aktionen zeichnet das Fenster Projekte: es ist dabei offen.
+        open: Box::new(move |r| {
+            r.app.windows_mut().1.open();
+            open(r)
+        }),
+        is_open: Box::new(|r| project_actions::dialog_open(r.app.panels_mut().1)),
+    }
+}
+
+/// Fenster der App mit Dateiauswahl-Größe, mittig beim Öffnen, mit Schließen-Symbol.
+fn app_window_case(
+    name: &'static str,
+    title: &'static str,
+    id: &'static str,
+    open: impl Fn(&mut Rig) + 'static,
+    is_open: impl Fn(&mut Rig) -> bool + 'static,
+) -> Case {
+    Case {
+        name,
+        title,
+        id: Some(Id::new(id)),
+        class: DialogSize::File,
+        closable: true,
         open: Box::new(open),
-        is_open: Box::new(|r| projects_panel::dialog_open(r.app.panels_mut().1)),
+        is_open: Box::new(is_open),
     }
 }
 
@@ -545,23 +571,51 @@ fn cases() -> Vec<Case> {
             }),
             is_open: Box::new(|r| r.state().sheet_dialog.is_some()),
         },
-        // Projekte (fest, ohne Schließen-Symbol).
+        // Fenster Projekte und Einstellungen (Dateiauswahl-Größe, mittig beim Öffnen).
+        app_window_case(
+            "Projekte",
+            "Projekte",
+            "planora_projects_window",
+            |r| {
+                let (ws, p, s) = r.app.windows_mut();
+                planora_app::app::open_projects(ws, p, s);
+            },
+            |r| r.app.windows_mut().1.is_open(),
+        ),
+        app_window_case(
+            "Einstellungen",
+            "Einstellungen",
+            "planora_settings_window",
+            |r| {
+                let (ws, p, s) = r.app.windows_mut();
+                planora_app::app::open_settings(ws, p, s, false);
+            },
+            |r| r.app.windows_mut().2.is_open(),
+        ),
+        // Aktionen im Fenster Projekte (fest, ohne Schließen-Symbol).
+        project_case("Neues Projekt", "Neues Projekt", "project", |r| {
+            project_actions::request_new_project(r.app.panels_mut().1, "Projekt 1");
+        }),
+        project_case("Neues Dokument", "Neues Dokument", "document", |r| {
+            let p = r.project.clone();
+            project_actions::request_new_document(r.app.panels_mut().1, p, "Dokument 1");
+        }),
         project_case("Neuer Ordner", "Neuer Ordner", "folder", |r| {
             let p = r.project.clone();
-            projects_panel::request_new_folder(r.app.panels_mut().1, p, "Ordner 1");
+            project_actions::request_new_folder(r.app.panels_mut().1, p, "Ordner 1");
         }),
         project_case("Projekt umbenennen", "Umbenennen", "rename", |r| {
             let p = r.project.clone();
-            projects_panel::request_rename(r.app.panels_mut().1, p, "Q");
+            project_actions::request_rename(r.app.panels_mut().1, p, "Q");
         }),
         project_case("Projekt verschieben", "Verschieben", "move", |r| {
             let mut p = r.project.clone();
             p.push("Teil".into());
-            projects_panel::request_move(r.app.panels_mut().1, p);
+            project_actions::request_move(r.app.panels_mut().1, p);
         }),
         project_case("Projekt löschen", "Löschen", "delete", |r| {
             let p = r.project.clone();
-            projects_panel::request_delete(r.app.panels_mut().1, p);
+            project_actions::request_delete(r.app.panels_mut().1, p);
         }),
         // Versionen (fest, ohne Schließen-Symbol).
         Case {
@@ -701,13 +755,20 @@ fn for_all(mut check: impl FnMut(&Case, &mut Rig, &Shot, Rect, bool)) {
 
 #[test]
 fn every_dialog_has_its_size_class() {
-    for_all(|case, _, _, rect, _| {
+    for_all(|case, rig, _, rect, _| {
+        // Dateifenster: 55 % der Fensterbreite, mindestens 720 (bei 800 also 720, bei 1400 770);
+        // die anderen Klassen sind fest.
+        let want = match (case.class, rig.size.x) {
+            (DialogSize::File, 800.0) => 720.0,
+            (DialogSize::File, 1400.0) => 770.0,
+            (DialogSize::File, w) => panic!("keine Erwartung für Breite {w}"),
+            (class, _) => class.width(),
+        };
         assert!(
-            (rect.width() - case.class.width()).abs() <= 1.0,
-            "{}: Breite {} statt {}",
+            (rect.width() - want).abs() <= 1.0,
+            "{}: Breite {} statt {want}",
             case.name,
             rect.width(),
-            case.class.width()
         );
     });
 }
@@ -977,6 +1038,64 @@ fn dialogs_in_all_modes_above_fields() {
                 );
             }
         }
+    }
+}
+
+/// Breite der Dateifenster: 55 % des Fensters, mindestens 720, höchstens 1200, nie breiter als
+/// das Fenster ohne Rand (16 rundum); die Höhe ist die des Fensters ohne Rand.
+#[test]
+fn file_window_limits() {
+    let at = |w: f32, h: f32| {
+        planora_app::dialog::limits(
+            Rect::from_min_size(Pos2::ZERO, vec2(w, h)),
+            DialogSize::File,
+        )
+    };
+    assert_eq!(at(800.0, 600.0), (720.0, 568.0));
+    assert_eq!(at(1400.0, 900.0), (770.0, 868.0));
+    assert_eq!(at(2000.0, 1100.0), (1100.0, 1068.0));
+    assert_eq!(at(3000.0, 1100.0), (1200.0, 1068.0));
+    assert_eq!(at(700.0, 500.0), (668.0, 468.0));
+    assert_eq!(
+        planora_app::dialog::limits(
+            Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0)),
+            DialogSize::Wide
+        )
+        .0,
+        720.0
+    );
+}
+
+/// Projekte und Einstellungen lassen sich verschieben, stehen aber nach dem Schließen beim
+/// nächsten Öffnen wieder mittig (`center_on_open`), unter ihrer festen Kennung.
+#[test]
+fn app_windows_open_centred_again_after_moving() {
+    for name in ["Projekte", "Einstellungen"] {
+        let case = case_named(name);
+        let (mut rig, _, rect) = opened(&case, BIG, true);
+        let id = case.id(&rig);
+        let grab = pos2(rect.left() + rect.width() * 0.5, rect.top() + 14.0);
+        rig.drag(grab, vec2(-200.0, 120.0));
+        let moved = rig.area(id).expect("Fenster");
+        assert!(
+            (moved.center() - rect.center()).length() > 100.0,
+            "{name}: verschoben {rect:?} → {moved:?}"
+        );
+        // Schließen über das Symbol, dann wieder öffnen.
+        let shot = rig.settle(2);
+        let icons = close_icons_in(&shot, moved);
+        assert_eq!(icons.len(), 1, "{name}: {:?}", shot.names());
+        rig.click(icons[0].center());
+        assert!(!(case.is_open)(&mut rig), "{name}: zu");
+        rig.settle(3);
+        (case.open)(&mut rig);
+        rig.settle(6);
+        let again = rig.area(id).expect("Fenster wieder da");
+        let c = rig.content().center();
+        assert!(
+            (again.center() - c).abs().max_elem() <= 1.0,
+            "{name}: wieder mittig, nicht an {again:?}"
+        );
     }
 }
 

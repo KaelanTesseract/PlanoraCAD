@@ -353,77 +353,85 @@ fn top_field_contains_menu_and_tabs() {
 }
 
 #[test]
-fn view_menu_toggles_projects_and_versions_in_the_shell() {
+fn view_menu_toggles_versions_in_the_shell() {
     let c = context(true);
     let mut app = app_with_box();
     let size = vec2(1400.0, 900.0);
     let (shot, _) = settle(&c, &mut app, size);
     let top = fields_of(&shot, true, size).top;
     let ansicht = shot.find(top, "Ansicht").rect.center();
-    for (label, check) in [
-        (
-            "Projekte",
-            (|app: &mut PlanoraApp| app.shell_mut().projects_visible)
-                as fn(&mut PlanoraApp) -> bool,
-        ),
-        ("Versionen", |app: &mut PlanoraApp| {
-            app.shell_mut().versions_visible
-        }),
-    ] {
-        assert!(check(&mut app), "{label} anfangs sichtbar");
-        click(&c, &mut app, size, ansicht, false);
-        let (shot, _) = settle(&c, &mut app, size);
-        // Eintrag im aufgeklappten Menü (unter dem oberen Feld).
-        let entry = shot
+    assert!(
+        app.shell_mut().versions_visible,
+        "Versionen anfangs sichtbar"
+    );
+    click(&c, &mut app, size, ansicht, false);
+    let (shot, _) = settle(&c, &mut app, size);
+    // Das Menü hat keinen Eintrag „Projekte“ mehr (das Feld gibt es nicht).
+    assert!(
+        !shot
             .texts
             .iter()
-            .find(|t| t.text == label && t.rect.top() > top.bottom())
-            .unwrap_or_else(|| panic!("Menüeintrag „{label}“ fehlt"))
-            .rect
-            .center();
-        click(&c, &mut app, size, entry, false);
-        assert!(!check(&mut app), "{label} ausgeblendet");
-        // Menü schließen.
-        run(
-            &c,
-            &mut app,
-            size,
-            vec![Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: Modifiers::NONE,
-            }],
-            false,
-        );
-        settle(&c, &mut app, size);
-    }
+            .any(|t| t.text == "Projekte" && t.rect.top() > top.bottom()),
+        "kein Eintrag Projekte"
+    );
+    // Eintrag im aufgeklappten Menü (unter dem oberen Feld).
+    let entry = shot
+        .texts
+        .iter()
+        .find(|t| t.text == "Versionen" && t.rect.top() > top.bottom())
+        .unwrap_or_else(|| panic!("Menüeintrag „Versionen“ fehlt"))
+        .rect
+        .center();
+    click(&c, &mut app, size, entry, false);
+    assert!(!app.shell_mut().versions_visible, "Versionen ausgeblendet");
+    // Menü schließen.
+    run(
+        &c,
+        &mut app,
+        size,
+        vec![Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }],
+        false,
+    );
+    settle(&c, &mut app, size);
 }
 
 #[test]
-fn left_field_shows_projects_and_tree_and_hides_projects_on_request() {
+fn left_field_shows_only_the_tree() {
     let c = context(true);
     let mut app = app_with_box();
     let size = vec2(1400.0, 900.0);
     let (shot, _) = settle(&c, &mut app, size);
     let left = fields_of(&shot, true, size).left;
-    for must in ["Projekte", "Noch keine Projekte", "Feature-Baum"] {
-        assert!(
-            shot.texts_in(left).iter().any(|t| t.text.contains(must)),
-            "„{must}“ fehlt"
-        );
-    }
-    let projects = shot.find(left, "Projekte").rect;
-    assert!(projects.top() < shot.find(left, "Feature-Baum").rect.top());
-
-    app.shell_mut().projects_visible = false;
-    let (shot, _) = settle(&c, &mut app, size);
-    let left = fields_of(&shot, true, size).left;
     let texts = shot.texts_in(left);
     assert!(!texts.iter().any(|t| t.text == "Projekte"), "{texts:?}");
     assert!(!texts.iter().any(|t| t.text.contains("Noch keine Projekte")));
-    shot.find(left, "Feature-Baum");
+    // Der Baum steht oben im Feld (kein Abschnitt mehr darüber).
+    let tree = shot.find(left, "Feature-Baum").rect;
+    assert!(
+        tree.top() < left.top() + 40.0,
+        "Baum oben im Feld: {tree:?} in {left:?}"
+    );
+    // Ein langer Baum bekommt die ganze Spalte (den Platz des früheren Felds Projekte).
+    for i in 0..40 {
+        app.ws_mut()
+            .active_tab_mut()
+            .state
+            .create_box(DVec3::splat(5.0 + i as f64))
+            .unwrap();
+    }
+    let (shot, _) = settle(&c, &mut app, size);
+    let column = shell_panels::last_layout(&c).unwrap().left;
+    let left = fields_of(&shot, true, size).left;
+    assert!(
+        (left.height() - column.height()).abs() < 1.0,
+        "Feld {left:?} füllt die Spalte {column:?}"
+    );
 }
 
 #[test]

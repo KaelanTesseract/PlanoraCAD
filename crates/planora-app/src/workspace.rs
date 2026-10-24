@@ -18,7 +18,7 @@ use planora_feature::Snapshot;
 use planora_project::config::Config;
 use planora_project::docstore::{Autosave, DocStore, DocumentInfo, LockMode, peek, read_version};
 use planora_project::fsutil::validate_name;
-use planora_project::library::{Library, NodePath};
+use planora_project::library::{DOCUMENT_SUFFIX, Library, NodePath};
 use planora_project::{ProjectError, Result as ProjectResult};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -26,8 +26,26 @@ use std::time::{Duration, Instant};
 /// Abstand der Autosicherungen geänderter Dokumente.
 pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
 
-/// Meldung, wenn noch keine Wurzel (Projektordner) gewählt ist.
-const NO_ROOT: &str = "Es ist noch kein Projektordner gewählt.";
+/// Meldung, wenn noch kein Projektverzeichnis gewählt ist.
+const NO_ROOT: &str = "Es ist noch kein Projektverzeichnis gewählt.";
+
+/// Ablehnung eines Dokumentnamens auf „.pcad“ (wie bei Ordnern; die Endung hängt das Programm
+/// selbst an).
+pub const DOCUMENT_NAME_SUFFIX: &str = "Dokumentnamen dürfen nicht auf „.pcad“ enden.";
+
+/// Geprüfter Dokumentname (wie `validate_name`, dazu ohne „.pcad“ am Ende, gleich welche
+/// Schreibweise).
+fn document_name(name: &str) -> Result<String, String> {
+    let name = validate_name(name).map_err(err)?;
+    if name.to_lowercase().ends_with(DOCUMENT_SUFFIX) {
+        return Err(DOCUMENT_NAME_SUFFIX.into());
+    }
+    Ok(name)
+}
+
+/// Meldung von [`Workspace::choose_root`], solange gespeicherte Dokumente offen sind.
+pub const ROOT_LOCKED: &str =
+    "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt.";
 
 /// Grund, warum Rückgängig nicht geht: kein Schritt da.
 pub const NOTHING_TO_UNDO: &str = "Es gibt nichts rückgängig zu machen.";
@@ -534,8 +552,13 @@ pub struct Workspace {
     /// Der Dialog „Über PlanoraCAD“ ist offen.
     pub about_open: bool,
     /// Zählt Änderungen an der Bibliothek auf der Festplatte, die über den Arbeitsbereich laufen
-    /// (Speichern unter, Wurzelwechsel); das Feld Projekte liest danach den Baum neu.
+    /// (Speichern unter, Wurzelwechsel); das Fenster Projekte liest danach den Baum neu.
     pub library_revision: u64,
+    /// Zählt neue Stände von Dokumenten über den Arbeitsbereich (jedes gelungene Speichern,
+    /// Speichern unter, neues Dokument, Wiederherstellen, Version oder Zweig löschen, Zweig
+    /// wechseln). Das Fenster Projekte liest danach neu (Version, Datum, Miniatur), lässt aber
+    /// – anders als bei `library_revision` – Ort, Auswahl und offene Fenster der Aktionen stehen.
+    pub content_revision: u64,
     pub autosave_interval: Duration,
     /// Zuletzt benutzter Ordner der Dateiauswahl beim Exportieren und Importieren (nicht
     /// gespeichert).
@@ -569,6 +592,7 @@ impl Workspace {
             quit: false,
             about_open: false,
             library_revision: 0,
+            content_revision: 0,
             autosave_interval: AUTOSAVE_INTERVAL,
             exchange_dir: None,
             next_tab_id: 1,
@@ -777,7 +801,11 @@ impl Workspace {
         new_branch: Option<&str>,
     ) -> Result<SaveOutcome, String> {
         let i = self.active_index();
-        Self::save_tab(&mut self.tabs[i], comment, new_branch)
+        let r = Self::save_tab(&mut self.tabs[i], comment, new_branch);
+        if matches!(r, Ok(SaveOutcome::Saved(_))) {
+            self.content_revision += 1;
+        }
+        r
     }
 
     pub fn save_as(
@@ -790,7 +818,7 @@ impl Workspace {
         if !lib.is_container(parent) {
             return Err("Bitte ein Projekt oder einen Ordner als Ziel wählen.".into());
         }
-        let name = validate_name(name).map_err(err)?;
+        let name = document_name(name)?;
         let mut path = parent.clone();
         path.push(format!("{name}.pcad"));
         let dir = lib.root().resolve(&path).map_err(err)?;
@@ -814,6 +842,30 @@ impl Workspace {
         tab.keep_autosave = false;
         tab.mark_clean();
         self.library_revision += 1;
+        self.content_revision += 1;
+        Ok(path)
+    }
+
+    /// Neues leeres Dokument (Version 1 aus `AppState::new().snapshot()`, Kommentar "") in einem
+    /// Projekt oder Ordner; dieselben Prüfungen und Meldungen wie `save_as`; `library_revision += 1`.
+    /// Die offenen Tabs bleiben unberührt (Öffnen ist Sache des Aufrufers).
+    pub fn create_document(&mut self, parent: &NodePath, name: &str) -> Result<NodePath, String> {
+        let lib = self.library.as_ref().ok_or(NO_ROOT)?;
+        if !lib.is_container(parent) {
+            return Err("Bitte ein Projekt oder einen Ordner als Ziel wählen.".into());
+        }
+        let name = document_name(name)?;
+        let mut path = parent.clone();
+        path.push(format!("{name}.pcad"));
+        let dir = lib.root().resolve(&path).map_err(err)?;
+        if dir.exists() {
+            return Err(err(ProjectError::Exists(dir.display().to_string())));
+        }
+        // derselbe Stand wie beim ersten Speichern eines neuen Tabs; die Sperre endet mit `store`
+        let store = DocStore::create(&dir, &AppState::new().snapshot(), "").map_err(err)?;
+        drop(store);
+        self.library_revision += 1;
+        self.content_revision += 1;
         Ok(path)
     }
 
@@ -826,7 +878,10 @@ impl Workspace {
         let Some(i) = self.tab_index(tab) else { return };
         self.active = i;
         match Self::save_tab(&mut self.tabs[i], "", None) {
-            Ok(SaveOutcome::Saved(_)) => self.finish_after(tab, Some(then)),
+            Ok(SaveOutcome::Saved(_)) => {
+                self.content_revision += 1;
+                self.finish_after(tab, Some(then))
+            }
             Ok(SaveOutcome::NeedsLocation) => {
                 self.prompt = Some(Prompt::SaveAs {
                     tab,
@@ -1114,6 +1169,7 @@ impl Workspace {
         tab.based_on = Some(new);
         tab.mark_clean();
         self.active = target;
+        self.content_revision += 1;
         Ok(())
     }
 
@@ -1129,6 +1185,7 @@ impl Workspace {
         let branch = store.info().version(n).map(|v| v.branch.clone());
         store.delete_version(n).map_err(err)?;
         Self::fix_based_on(tab, branch.as_deref());
+        self.content_revision += 1;
         Ok(())
     }
 
@@ -1141,6 +1198,7 @@ impl Workspace {
             .ok_or("Das Dokument ist nicht gespeichert.")?;
         store.delete_branch(name).map_err(err)?;
         Self::fix_based_on(tab, Some(name));
+        self.content_revision += 1;
         Ok(())
     }
 
@@ -1161,17 +1219,19 @@ impl Workspace {
     /// Solange gespeicherte Dokumente offen sind, wird die Wurzel nicht gewechselt: ihre Pfade
     /// gehören zur bisherigen Wurzel.
     pub fn choose_root(&mut self, root: &Path) -> Result<(), String> {
-        if self.tabs.iter().any(|t| t.path.is_some()) {
-            return Err(
-                "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt."
-                    .into(),
-            );
+        if self.has_saved_documents() {
+            return Err(ROOT_LOCKED.into());
         }
         let lib = Library::open(root).map_err(err)?;
         self.library = Some(lib);
         self.config.root = Some(root.to_path_buf());
         self.library_revision += 1;
         Ok(())
+    }
+
+    /// Ist ein Tab mit einem gespeicherten Dokument offen? Dann bleibt die Wurzel, wie sie ist.
+    pub fn has_saved_documents(&self) -> bool {
+        self.tabs.iter().any(|t| t.path.is_some())
     }
 
     /// Am Ende jedes Bildes: Änderungen aller Tabs werden Schritte ihres Verlaufs (R3, R4);
@@ -1189,6 +1249,12 @@ impl Workspace {
     ///
     /// Noch nicht gespeicherte Favoriten-Änderungen werden dabei mit geschrieben.
     pub fn persist_config(&mut self) {
+        self.try_persist_config();
+    }
+
+    /// Wie [`Workspace::persist_config`]; `true`, wenn die Datei geschrieben wurde (auch über
+    /// den Ersatz einer unlesbaren Datei).
+    pub fn try_persist_config(&mut self) -> bool {
         let root = self.config.root.clone();
         let pending = std::mem::take(&mut self.favorites_pending);
         let mut full = None;
@@ -1202,11 +1268,14 @@ impl Workspace {
                 if full.is_some() {
                     self.favorites_notice = full;
                 }
+                true
             }
             Err(_) => {
-                if self.config.save_to(&self.config_path).is_err() {
+                let saved = self.config.save_to(&self.config_path).is_ok();
+                if !saved {
                     self.favorites_pending = pending;
                 }
+                saved
             }
         }
     }

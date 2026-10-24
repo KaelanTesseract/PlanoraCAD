@@ -41,6 +41,8 @@ pub struct Palette {
     pub text_muted: Color32,
     /// Einzige gesättigte Fläche: Modus ein, Tastaturfokus, aktive Auswahl.
     pub accent: Color32,
+    /// Leicht getönte Fläche der Auswahl (gewählte Karte): etwa 10 % `accent` über `bg_section`.
+    pub accent_subtle: Color32,
     /// Text auf der Akzentfarbe.
     pub on_accent: Color32,
     /// Hervorhebung der Auswahl im 3D-Bereich.
@@ -87,6 +89,7 @@ pub(crate) const DARK: Palette = Palette {
     text_tertiary: rgb(0x7d7d7d),
     text_muted: rgb(0x737373),
     accent: rgb(0x006dfd),
+    accent_subtle: rgb(0x172231),
     on_accent: rgb(0xffffff),
     selection: rgb(0xf1f05c),
     axis_x: rgb(0xe0303a),
@@ -122,6 +125,7 @@ const LIGHT: Palette = Palette {
     text_tertiary: rgb(0x66666e),
     text_muted: rgb(0x7a7a82),
     accent: rgb(0x006dfd),
+    accent_subtle: rgb(0xdce6f7),
     on_accent: rgb(0xffffff),
     selection: rgb(0xd9a400),
     axis_x: rgb(0xc8202a),
@@ -651,6 +655,27 @@ impl egui::Widget for Toggle<'_> {
     }
 }
 
+/// Hauptknopf eines Fensters (etwa „Neues Projekt“): Fläche `accent`, Schrift `on_accent`. Rand
+/// und Innenabstand kommen wie bei jedem Knopf aus dem Zustand (egui gleicht den Innenabstand
+/// an die Strichbreite an); ein eigener Strich würde den Knopf beim Drücken wachsen lassen. So
+/// ist er in Ruhe, beim Überfahren und beim Drücken gleich groß.
+pub fn primary_button(text: &str, dark: bool) -> egui::Button<'_> {
+    let p = palette(dark);
+    egui::Button::new(egui::RichText::new(text).color(p.on_accent)).fill(p.accent)
+}
+
+/// Fläche einer Karte (Kachel im Fenster „Projekte“): in Ruhe `bg_section`, gewählt in beiden
+/// Themen leicht getönt (`accent_subtle`), damit sie sich auch im hellen Thema vom weißen Fenster
+/// abhebt.
+pub fn card_fill(dark: bool, selected: bool) -> Color32 {
+    let p = palette(dark);
+    if selected {
+        p.accent_subtle
+    } else {
+        p.bg_section
+    }
+}
+
 /// Akzentfarbe (Modus eingeschaltet, Tastaturfokus, aktive Auswahl); in beiden Themen gleich.
 pub fn accent(dark: bool) -> Color32 {
     palette(dark).accent
@@ -698,6 +723,11 @@ pub fn drawing_surround(dark: bool) -> Color32 {
 /// Hintergrundfarbe des 3D-Viewports.
 pub fn viewport_background(dark: bool) -> Color32 {
     palette(dark).bg_viewport
+}
+
+/// Hintergrund der Miniaturen im Projekte-Fenster (wie vertiefte Flächen).
+pub fn thumbnail_background(dark: bool) -> Color32 {
+    palette(dark).bg_inset
 }
 
 /// Farben der Skizzen-Ansicht (Entwurf und fertige Skizzen in der 3D-Ansicht).

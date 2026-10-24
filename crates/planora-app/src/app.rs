@@ -8,7 +8,9 @@ use crate::feature_dialog::FeatureDialog;
 use crate::file_chooser::default_dir;
 use crate::icons::{self, Icon};
 use crate::import_dialog::ImportDialog;
-use crate::projects_panel::ProjectsUi;
+use crate::project_actions::ProjectsUi;
+use crate::projects_window::{ProjectsEvent, ProjectsWindow};
+use crate::settings_window::{SettingsEvent, SettingsWindow};
 use crate::shell::ShellState;
 use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::step_import_dialog::{self, StepImportDialog};
@@ -28,11 +30,36 @@ use std::time::{Duration, Instant};
 /// Wie oft die App ohne Eingaben neu zeichnet, damit die Autosicherung auch im Leerlauf läuft.
 const AUTOSAVE_REPAINT: Duration = Duration::from_secs(30);
 
+/// So lange wartet das Programmende ([`eframe::App::on_exit`]) höchstens auf eine gerade
+/// entstehende Miniatur, damit sie noch gespeichert wird (danach wird nur ihre Marke entfernt).
+pub const EXIT_WAIT: Duration = Duration::from_secs(2);
+
+/// Menüeintrag „Datei → Projekte …“ (Strg+O).
+pub const PROJECTS_ENTRY: &str = "Projekte …";
+/// Hinweis, wenn Projekte oder Einstellungen nicht öffnen, weil gerade ein Export schreibt.
+pub const EXPORT_BUSY: &str = "Bitte erst den Export beenden.";
+/// Menüeintrag „Datei → Einstellungen …“.
+pub const SETTINGS_ENTRY: &str = "Einstellungen …";
+
+/// Was das Menü „Datei“ außer seinen eigenen Aktionen verlangt: das Fenster „Projekte“ oder
+/// „Einstellungen“ öffnen (die Fenster gehören der App, nicht dem Arbeitsbereich).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MenuRequest {
+    #[default]
+    None,
+    Projects,
+    Settings,
+}
+
 pub struct PlanoraApp {
     pub(crate) ws: Workspace,
     /// Sichtbarkeit und Reiter der schwebenden Felder (`shell_panels`).
     pub(crate) shell: ShellState,
-    pub(crate) projects_ui: ProjectsUi,
+    /// Fenster „Projekte“: eines je App (nicht je Tab); sein Miniatur-Arbeiter lebt so lange wie
+    /// die App und wird in [`eframe::App::on_exit`] geordnet beendet.
+    pub(crate) projects: ProjectsWindow,
+    /// Fenster „Einstellungen“.
+    pub(crate) settings: SettingsWindow,
     pub(crate) versions_ui: VersionsUi,
     applied_dark: Option<bool>,
     /// `ViewportCommand::Close` wurde nach freigegebenem Beenden schon geschickt.
@@ -73,7 +100,8 @@ impl PlanoraApp {
         Self {
             ws,
             shell: ShellState::default(),
-            projects_ui: ProjectsUi::default(),
+            projects: ProjectsWindow::default(),
+            settings: SettingsWindow::default(),
             versions_ui: VersionsUi::default(),
             applied_dark: None,
             close_sent: false,
@@ -92,16 +120,17 @@ impl PlanoraApp {
         &mut self.ws
     }
 
-    /// Arbeitsbereich und die Zustände der Felder Projekte und Versionen (für Tests).
+    /// Arbeitsbereich, die Auswahl und Fenster der Aktionen im Fenster Projekte und der Zustand
+    /// des Reiters Versionen (für Tests).
     #[doc(hidden)]
-    pub fn panels_mut(
-        &mut self,
-    ) -> (
-        &mut Workspace,
-        &mut crate::projects_panel::ProjectsUi,
-        &mut VersionsUi,
-    ) {
-        (&mut self.ws, &mut self.projects_ui, &mut self.versions_ui)
+    pub fn panels_mut(&mut self) -> (&mut Workspace, &mut ProjectsUi, &mut VersionsUi) {
+        (&mut self.ws, &mut self.projects.ui, &mut self.versions_ui)
+    }
+
+    /// Arbeitsbereich und die Fenster Projekte und Einstellungen (für Tests).
+    #[doc(hidden)]
+    pub fn windows_mut(&mut self) -> (&mut Workspace, &mut ProjectsWindow, &mut SettingsWindow) {
+        (&mut self.ws, &mut self.projects, &mut self.settings)
     }
 
     /// Zustand der schwebenden Felder (für Tests).
@@ -110,17 +139,24 @@ impl PlanoraApp {
         &mut self.shell
     }
 
-    /// Öffnen (Strg+O): blendet die Projekte im linken Feld ein; dort wird das Dokument gewählt.
-    /// Der Baum wird dabei neu gelesen, damit er aktuell ist.
-    pub(crate) fn show_projects(&mut self) {
-        self.shell.show_projects();
-        self.projects_ui.invalidate();
+    /// Wunsch aus dem Menü „Datei“ ausführen.
+    pub(crate) fn apply_menu_request(&mut self, request: MenuRequest) {
+        match request {
+            MenuRequest::None => {}
+            MenuRequest::Projects => {
+                open_projects(&mut self.ws, &mut self.projects, &mut self.settings)
+            }
+            MenuRequest::Settings => {
+                open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false)
+            }
+        }
     }
 
     /// Tastenkürzel Strg+N/O/S/W, Strg+Umschalt+E, Strg+Z (Rückgängig) sowie Strg+Umschalt+Z und
     /// Strg+Y (Wiederholen). Nur ohne aktives Eingabefeld (dort gehören Strg+Z und Strg+Y dem
     /// Feld), ohne offene Rückfrage (die sonst überschrieben würde) und nur im ersten Durchgang
     /// eines Bildes (ein verworfener Durchgang würde das Kürzel sonst zweimal ausführen).
+    /// Strg+O öffnet das Fenster Projekte ([`open_projects`]).
     /// Rückgängig und Wiederholen sind zusätzlich gesperrt, solange ein Fenster offen ist und
     /// solange eine Maustaste gedrückt ist ([`PlanoraApp::undo_keys`]).
     fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -136,7 +172,7 @@ impl PlanoraApp {
             self.ws.new_tab();
         }
         if pressed(egui::Key::O) {
-            self.show_projects();
+            self.apply_menu_request(MenuRequest::Projects);
         }
         if pressed(egui::Key::S) {
             begin_save(&mut self.ws, false);
@@ -159,9 +195,12 @@ impl PlanoraApp {
 
     /// Strg+Z, Strg+Umschalt+Z und Strg+Y (R8). Gesperrt (die Tasten bleiben dann
     /// unverbraucht) bei einem offenen Fenster des Tabs
-    /// ([`crate::workspace::DocTab::dialog_open`], auch Export), bei „Über“, bei einem Fenster der
-    /// Felder Projekte und Versionen und solange eine Maustaste gedrückt ist: Mitten im Ziehen
-    /// würde das halbe Ziehen sonst ein Schritt und gleich wieder zurückgenommen.
+    /// ([`crate::workspace::DocTab::dialog_open`], auch Export und Import), bei „Über“, bei einem
+    /// Fenster der Aktionen im Fenster Projekte („Neues Projekt“, „Umbenennen“, „Löschen“, …), bei
+    /// einem Fenster des Reiters Versionen, solange das Fenster Einstellungen offen ist (es ist
+    /// wie die Dateifenster ein Fenster mit Dateiauswahl) und solange eine Maustaste gedrückt ist:
+    /// Mitten im Ziehen würde das halbe Ziehen sonst ein Schritt und gleich wieder
+    /// zurückgenommen. Das Fenster Projekte selbst sperrt nicht (es ändert kein Dokument).
     /// Strg+Umschalt+Z wird vor Strg+Z abgefragt, weil das Kürzel mit Strg allein auch bei
     /// gedrückter Umschalttaste passt. Gehaltene Tasten: jedes Bild mit (Wiederholungs-)Ereignis
     /// ist ein Schritt, mehrere Ereignisse desselben Kürzels in einem Bild zusammen nur einer
@@ -169,7 +208,8 @@ impl PlanoraApp {
     fn undo_keys(&mut self, ctx: &egui::Context) {
         if self.ws.about_open
             || self.ws.active_tab().dialog_open()
-            || crate::projects_panel::dialog_open(&self.projects_ui)
+            || crate::project_actions::dialog_open(&self.projects.ui)
+            || self.settings.is_open()
             || crate::versions_panel::has_pending(&self.versions_ui)
             || ctx.input(|i| i.pointer.any_down())
         {
@@ -305,6 +345,110 @@ pub fn show_file_dialogs(ctx: &egui::Context, ws: &mut Workspace) {
     ws.save_places(places);
 }
 
+/// Ist ein Dateifenster (Exportieren, Netz importieren, STEP importieren) des aktiven Tabs offen?
+fn file_window_open(ws: &Workspace) -> bool {
+    let tab = ws.active_tab();
+    tab.export_dialog.is_some() || tab.import_dialog.is_some() || tab.step_import_dialog.is_some()
+}
+
+/// P10: schließt die Dateifenster des aktiven Tabs für Projekte oder Einstellungen. Ein
+/// schreibendes Exportfenster bleibt (sonst endete das Schreiben ohne Meldung); dann `false`,
+/// das andere Fenster öffnet nicht und die Statuszeile sagt warum ([`EXPORT_BUSY`]).
+fn close_file_windows(ws: &mut Workspace) -> bool {
+    let tab = ws.active_tab_mut();
+    if tab
+        .export_dialog
+        .as_ref()
+        .is_some_and(|d| d.is_writing_file())
+    {
+        tab.state.message = Some(EXPORT_BUSY.into());
+        tab.state.info = None;
+        return false;
+    }
+    tab.export_dialog = None;
+    tab.import_dialog = None;
+    tab.step_import_dialog = None;
+    true
+}
+
+/// Schließt das Fenster Projekte samt den Fenstern seiner Aktionen (sonst blieben sie unsichtbar
+/// offen und sperrten Rückgängig).
+fn close_projects(projects: &mut ProjectsWindow) {
+    projects.ui.close_dialogs();
+    if projects.is_open() {
+        projects.close();
+    }
+}
+
+/// P10: schließt die Dateifenster des aktiven Tabs (nicht ein schreibendes Export-Fenster; dann
+/// bleibt Projekte zu) und Einstellungen; öffnet Projekte (der Stand wird neu gelesen).
+pub fn open_projects(
+    ws: &mut Workspace,
+    projects: &mut ProjectsWindow,
+    settings: &mut SettingsWindow,
+) {
+    if !close_file_windows(ws) {
+        return;
+    }
+    settings.close();
+    projects.open();
+}
+
+/// P10: wie [`open_projects`] für die Einstellungen; Projekte schließt dabei. Mit
+/// `return_to_projects` (Knopf „Projektverzeichnis …“) öffnet das Schließen der Einstellungen
+/// wieder Projekte. Bei offener Rückfrage öffnen die Einstellungen nicht: deren Pfade (etwa
+/// „Dokument gesperrt“) gehören zum aktuellen Projektverzeichnis.
+pub fn open_settings(
+    ws: &mut Workspace,
+    projects: &mut ProjectsWindow,
+    settings: &mut SettingsWindow,
+    return_to_projects: bool,
+) {
+    if ws.prompt.is_some() || !close_file_windows(ws) {
+        return;
+    }
+    close_projects(projects);
+    settings.open(return_to_projects);
+}
+
+/// P10: Ist ein Dateifenster des aktiven Tabs offen (neu geöffnet oder nach einem Tabwechsel),
+/// schließen Projekte und Einstellungen (die Dateifenster haben Vorrang, ohne Rückweg).
+pub fn enforce_window_rules(
+    ws: &Workspace,
+    projects: &mut ProjectsWindow,
+    settings: &mut SettingsWindow,
+) {
+    if file_window_open(ws) {
+        close_projects(projects);
+        settings.close();
+    }
+}
+
+/// Die Fenster Projekte und Einstellungen; nach [`show_file_dialogs`], vor den Rückfragen. Erst
+/// die Regeln ([`enforce_window_rules`]), dann Projekte (liest vor dem Zeichnen den Stand;
+/// „Projektverzeichnis …“ führt mit Rückweg zu den Einstellungen), dann die Einstellungen mit den
+/// Schnellzugriffen des Arbeitsbereichs (geänderte Favoriten werden gespeichert; Schließen mit
+/// Rückweg öffnet wieder Projekte).
+#[doc(hidden)]
+pub fn show_windows(
+    ctx: &egui::Context,
+    ws: &mut Workspace,
+    projects: &mut ProjectsWindow,
+    settings: &mut SettingsWindow,
+) {
+    enforce_window_rules(ws, projects, settings);
+    match projects.show(ctx, ws) {
+        ProjectsEvent::OpenSettings => open_settings(ws, projects, settings, true),
+        ProjectsEvent::None | ProjectsEvent::Closed => {}
+    }
+    if let SettingsEvent::Closed {
+        return_to_projects: true,
+    } = settings.show_in(ctx, ws)
+    {
+        open_projects(ws, projects, settings);
+    }
+}
+
 /// Datei → Netz importieren …: öffnet das Fenster im zuletzt benutzten Ordner; eine offene
 /// Skizze wird vorher beendet. Nicht in schreibgeschützten Ansichten.
 fn open_import(ws: &mut Workspace) {
@@ -353,18 +497,19 @@ fn shortcut_button(
     )
 }
 
-/// Menü „Datei“. Liefert `true`, wenn „Öffnen …“ gewählt wurde (der Aufrufer blendet dann die
-/// Projekte im linken Feld ein).
+/// Menü „Datei“. „Projekte …“ (Strg+O) und „Einstellungen …“ öffnen Fenster der App: sie
+/// kommen als [`MenuRequest`] zurück, der Aufrufer öffnet sie ([`open_projects`],
+/// [`open_settings`]).
 #[doc(hidden)]
-pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
+pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     let read_only = ws.active_tab().read_only;
-    let mut open_projects = false;
+    let mut request = MenuRequest::None;
     if shortcut_button(ui, true, Icon::New, "Neu", "Strg+N").clicked() {
         ws.new_tab();
         ui.close();
     }
-    if shortcut_button(ui, true, Icon::Open, "Öffnen …", "Strg+O").clicked() {
-        open_projects = true;
+    if shortcut_button(ui, true, Icon::Projects, PROJECTS_ENTRY, "Strg+O").clicked() {
+        request = MenuRequest::Projects;
         ui.close();
     }
     ui.separator();
@@ -419,6 +564,17 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
         ws.request_close(i);
         ui.close();
     }
+    if entry(
+        ui,
+        ws.prompt.is_none(),
+        icons::button(Icon::Settings, SETTINGS_ENTRY),
+    )
+    .on_disabled_hover_text("Zuerst die offene Rückfrage beantworten.")
+    .clicked()
+    {
+        request = MenuRequest::Settings;
+        ui.close();
+    }
     if entry(ui, true, icons::button(Icon::About, about_dialog::TITLE)).clicked() {
         ws.about_open = true;
         ui.close();
@@ -428,13 +584,13 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> bool {
         ws.request_quit();
         ui.close();
     }
-    open_projects
+    request
 }
 
-/// Menüleiste im oberen Feld; „Ansicht“ blendet Projekte und Versionen über den [`ShellState`]
-/// ein und aus. Liefert `true`, wenn „Datei → Öffnen …“ gewählt wurde.
+/// Menüleiste im oberen Feld; „Ansicht“ blendet Versionen über den [`ShellState`] ein und aus.
+/// Liefert den Wunsch aus „Datei“ ([`file_menu`]).
 #[doc(hidden)]
-pub fn menu_bar(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> bool {
+pub fn menu_bar(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> MenuRequest {
     menu_bar_measured(ui, ws, shell).0
 }
 
@@ -444,15 +600,15 @@ pub(crate) fn menu_bar_measured(
     ui: &mut egui::Ui,
     ws: &mut Workspace,
     shell: &mut ShellState,
-) -> (bool, f32) {
+) -> (MenuRequest, f32) {
     let read_only = ws.active_tab().read_only;
-    let mut open_projects = false;
+    let mut request = MenuRequest::None;
     let mut width = 0.0;
     egui::MenuBar::new()
         .config(egui::containers::menu::MenuConfig::new().style(theme::menu_style))
         .ui(ui, |ui| {
             let start = ui.cursor().left();
-            ui.menu_button("Datei", |ui| open_projects = file_menu(ui, ws));
+            ui.menu_button("Datei", |ui| request = file_menu(ui, ws));
             ui.add_enabled_ui(!read_only, |ui| {
                 ui.menu_button("Erzeugen", |ui| create_menu(ui, ws));
             });
@@ -468,21 +624,11 @@ pub(crate) fn menu_bar_measured(
             // Der Zeiger steht hinter dem letzten Knopf und einem Abstand.
             width = ui.cursor().left() - start - ui.spacing().item_spacing.x;
         });
-    (open_projects, width)
+    (request, width)
 }
 
-/// „Ansicht“: Projekte und Versionen in den schwebenden Feldern.
+/// „Ansicht“: Versionen im rechten Feld (die Projekte stehen im Fenster „Projekte“).
 fn shell_toggles(ui: &mut egui::Ui, shell: &mut ShellState) {
-    let mut projects = shell.projects_visible;
-    if ui
-        .checkbox(
-            &mut projects,
-            (icons::atom(Icon::PanelProjects), "Projekte"),
-        )
-        .changed()
-    {
-        shell.projects_visible = projects;
-    }
     let mut versions = shell.versions_visible;
     if ui
         .checkbox(
@@ -873,6 +1019,14 @@ impl eframe::App for PlanoraApp {
         ctx.request_repaint_after(AUTOSAVE_REPAINT);
     }
 
+    /// Programmende: der Miniatur-Arbeiter des Fensters Projekte nimmt nichts mehr an; eine gerade
+    /// entstehende Miniatur bekommt höchstens [`EXIT_WAIT`], um noch gespeichert zu werden.
+    /// (Ohne diesen Aufruf, etwa bei bloßem Fallenlassen, wartet der Arbeiter nur
+    /// [`crate::thumbnail_worker::DROP_WAIT`].)
+    fn on_exit(&mut self) {
+        self.projects.shutdown(EXIT_WAIT);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let dark = self.ws.active_tab().state.dark;
@@ -915,7 +1069,8 @@ impl eframe::App for PlanoraApp {
             }
         });
 
-        // Das Feld Projekte kann den aktiven Tab gewechselt haben (Dokument geöffnet).
+        // Die Felder (Tab-Leiste, Menü) können den aktiven Tab gewechselt haben; ab hier gilt der
+        // aktive Tab dieses Bilds. (Das Fenster Projekte öffnet Dokumente erst weiter unten.)
         let tab = self.ws.active_tab_mut();
         if let Some(dialog) = dialog_for_request(&mut tab.state) {
             tab.dialog = Some(dialog);
@@ -995,6 +1150,7 @@ impl eframe::App for PlanoraApp {
         }
 
         show_file_dialogs(&ctx, &mut self.ws);
+        show_windows(&ctx, &mut self.ws, &mut self.projects, &mut self.settings);
         self.ws.refresh_prompts();
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
