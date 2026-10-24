@@ -134,6 +134,9 @@ pub struct AppState {
     name_counters: BTreeMap<String, u64>,
     /// Im Browser gewähltes Feature (bis zum Feature-Baum: eine Skizze).
     pub selected_feature: Option<FeatureId>,
+    /// Für die Verlaufsleiste gewählter Körper (Spitze oder ein Schritt seiner Kette), wie
+    /// gewählt; gelesen wird er über [`AppState::history_body`].
+    history_choice: Option<FeatureId>,
     /// Geöffneter Skizzen-Modus.
     pub sketch_session: Option<SketchSession>,
     /// Entwurf des geöffneten Skizzen-Features (Entscheidung F6): eine Kopie der Definition mit
@@ -354,6 +357,7 @@ impl AppState {
             info_outlives_step: false,
             name_counters: BTreeMap::new(),
             selected_feature: None,
+            history_choice: None,
             sketch_session: None,
             sketch_draft: None,
             sketch_history: None,
@@ -517,6 +521,29 @@ impl AppState {
                 Some(Pick::Edge(EdgeRef { body, edge }))
             }
         }
+    }
+
+    /// Wählt den Körper der Verlaufsleiste (`None`: Standard, der letzte Körper). Unabhängig
+    /// von `selected_body` (Index in der Körperliste für die Eigenschaften).
+    pub fn select_body(&mut self, tip: Option<FeatureId>) {
+        self.history_choice = tip;
+    }
+
+    /// Körper der Verlaufsleiste als Spitze ([`Document::body_tips`]): der gewählte, solange er
+    /// eine Spitze ist; ist er in einem späteren Schritt aufgegangen (Verschieben, Vereinigen),
+    /// dessen Spitze; gibt es ihn nicht mehr oder ist nichts gewählt, der letzte Körper.
+    /// `None` ohne Körper. Jedes Tab hat einen eigenen Zustand und damit eine eigene Wahl.
+    pub fn history_body(&self) -> Option<FeatureId> {
+        let tips = self.document.body_tips();
+        if let Some(c) = self.history_choice {
+            if tips.contains(&c) {
+                return Some(c);
+            }
+            if let Some(t) = tips.iter().find(|t| self.document.chain(**t).contains(&c)) {
+                return Some(*t);
+            }
+        }
+        tips.last().copied()
     }
 
     /// Index des Körpers `r` in der Körperliste, falls er sichtbar ist.

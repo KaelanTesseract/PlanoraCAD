@@ -148,6 +148,66 @@ pub fn palette(dark: bool) -> &'static Palette {
     if dark { &DARK } else { &LIGHT }
 }
 
+/// Farbe eines Körpers (Verlaufsleiste, Feature-Baum) in beiden Themen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BodyColor {
+    pub dark: Color32,
+    pub light: Color32,
+}
+
+impl BodyColor {
+    /// Die Farbe im gewünschten Thema.
+    pub fn get(self, dark: bool) -> Color32 {
+        if dark { self.dark } else { self.light }
+    }
+}
+
+/// Feste Reihe der Körperfarben, der Reihe nach vergeben. Töne wie die Text- und Chipfarben der
+/// Palette (Blau wie `marker`, Grün wie `ok`, Bernstein wie `chip_bridge`); jede erreicht auf
+/// `bg_panel` mindestens 3 : 1 (Symbole, keine Fließtexte).
+pub const BODY_COLORS: [BodyColor; 8] = [
+    // Blau
+    BodyColor {
+        dark: rgb(0x5a96e6),
+        light: rgb(0x1a5cc4),
+    },
+    // Grün
+    BodyColor {
+        dark: rgb(0x6ecd62),
+        light: rgb(0x2d7a22),
+    },
+    // Bernstein
+    BodyColor {
+        dark: rgb(0xe2ab63),
+        light: rgb(0x8a5a13),
+    },
+    // Violett
+    BodyColor {
+        dark: rgb(0xa98be8),
+        light: rgb(0x6a3fc0),
+    },
+    // Türkis
+    BodyColor {
+        dark: rgb(0x4fc1c4),
+        light: rgb(0x0f7478),
+    },
+    // Magenta
+    BodyColor {
+        dark: rgb(0xe57ab0),
+        light: rgb(0xb0306e),
+    },
+    // Orange
+    BodyColor {
+        dark: rgb(0xe8865a),
+        light: rgb(0xb04a18),
+    },
+    // Oliv
+    BodyColor {
+        dark: rgb(0xb8c25a),
+        light: rgb(0x66701a),
+    },
+];
+
 /// Abstand 4.
 pub const SPACE_1: f32 = 4.0;
 /// Abstand 8.

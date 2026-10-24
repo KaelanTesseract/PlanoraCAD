@@ -24,6 +24,7 @@ pub mod file_chooser;
 pub mod fonts;
 pub mod formula_field;
 pub mod history;
+pub mod history_bar;
 pub mod icons;
 pub mod import_dialog;
 pub mod jobs;

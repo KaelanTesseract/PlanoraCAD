@@ -95,6 +95,11 @@ fn features(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
     if before.marker != after.marker {
         return Some("Zeitleistenmarke setzen");
     }
+    // Marker eines Körpers in der Verlaufsleiste (vor- wie zurück): eigener Name neben der
+    // globalen Zeitleistenmarke.
+    if before.rollbacks != after.rollbacks {
+        return Some("Verlaufsmarke setzen");
+    }
     // Gleiche Art, aber andere Formeln (etwa nur der Formeltext, der Wert bleibt): benannt wie
     // eine Änderung der Art.
     if let Some((_, a)) = pairs
