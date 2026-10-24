@@ -1105,9 +1105,18 @@ fn the_kernel_body_triangle_limit_is_exact() {
     assert!(matches!(at(n - 1), Thumb::TooComplex), "{:?}", at(n - 1));
 }
 
-/// Marke „baut“ von Hand (z. B. eines fremden Prozesses).
+/// Marke „baut“ von Hand (z. B. eines fremden Prozesses), erster Versuch.
 fn marker(dir: &Path, key: &ThumbKey, pid: u32, since: &str) {
-    fs::write(dir.join(PREVIEW_JSON), marker_json(key, pid, since)).unwrap();
+    marker_n(dir, key, pid, since, 1);
+}
+
+/// Marke „baut“ von Hand mit Versuchszahl.
+fn marker_n(dir: &Path, key: &ThumbKey, pid: u32, since: &str, versuche: u32) {
+    fs::write(
+        dir.join(PREVIEW_JSON),
+        marker_json(key, pid, since, versuche),
+    )
+    .unwrap();
 }
 
 /// Zeitpunkt als „JJJJ-MM-TTThh:mm:ssZ“ (UTC; Rechnung nach H. Hinnant).
@@ -1167,6 +1176,7 @@ fn the_marker_is_written_before_the_build_and_visible_during_it() {
         let pid = format!("\"pid\":{}", std::process::id());
         assert!(json.contains(&pid), "{json}");
         assert!(json.contains("\"since\":\""), "{json}");
+        assert!(json.contains("\"versuche\":1}"), "erster Versuch: {json}");
         assert!(json.contains("\"dark\":true"), "{json}");
         assert!(!png, "altes Bild vor dem Aufbau entfernt");
         assert!(not_cached, "die Marke ist keine Miniatur");
@@ -1197,11 +1207,100 @@ fn a_fresh_foreign_marker_means_busy_and_nothing_is_built() {
 }
 
 #[test]
+fn a_stale_first_attempt_is_built_again_as_attempt_two() {
+    // Ein Lauf endete während des Aufbaus (Beenden oder Absturz): einmal neu versuchen.
+    let dir = doc(&boxed());
+    let key = key_of(&dir);
+    let hour_ago = iso(std::time::SystemTime::now() - Duration::from_secs(3600));
+    marker_n(&dir, &key, FOREIGN_PID, &hour_ago, 1);
+    let mut seen = Vec::new();
+    let out = thumbnail_for_with(&dir, &key, &BuildLimits::default(), &mut || {
+        seen.push(fs::read_to_string(dir.join(PREVIEW_JSON)).unwrap_or_default());
+    });
+    assert!(matches!(out.thumb, Thumb::Image(_)), "{:?}", out.thumb);
+    assert!(out.stored && !out.from_cache);
+    assert!(!seen.is_empty(), "neu gebaut");
+    for json in &seen {
+        let pid = format!("\"pid\":{}", std::process::id());
+        assert!(json.contains(&pid), "eigene Marke: {json}");
+        assert!(json.contains("\"versuche\":2}"), "zweiter Versuch: {json}");
+    }
+    assert!(
+        load_cached(&dir, &key).is_some(),
+        "Ergebnis ersetzt die Marke"
+    );
+    // Endet auch der zweite Versuch nie, gilt die Miniatur danach als nicht möglich.
+    let dir = doc(&boxed());
+    let key = key_of(&dir);
+    marker_n(&dir, &key, FOREIGN_PID, &hour_ago, 1);
+    let mut second = String::new();
+    thumbnail_for_with(&dir, &key, &BuildLimits::default(), &mut || {
+        if second.is_empty() {
+            second = fs::read_to_string(dir.join(PREVIEW_JSON)).unwrap();
+        }
+    });
+    let crashed = second
+        .replace(
+            &format!("\"pid\":{}", std::process::id()),
+            &format!("\"pid\":{FOREIGN_PID}"),
+        )
+        .replace(&now_iso_like(&second), &hour_ago);
+    fs::write(dir.join(PREVIEW_JSON), &crashed).unwrap();
+    fs::remove_file(dir.join(PREVIEW_PNG)).unwrap();
+    let mut steps = 0;
+    let out = thumbnail_for_with(&dir, &key, &BuildLimits::default(), &mut || steps += 1);
+    assert!(matches!(out.thumb, Thumb::Impossible), "{:?}", out.thumb);
+    assert_eq!(steps, 0, "kein dritter Versuch");
+    assert_eq!(MAX_ATTEMPTS, 2);
+}
+
+/// Der Wert von `since` in einer Marke.
+fn now_iso_like(json: &str) -> String {
+    let start = json.find("\"since\":\"").unwrap() + 9;
+    json[start..start + 20].to_string()
+}
+
+#[test]
+fn a_fresh_foreign_second_attempt_is_still_busy() {
+    let dir = doc(&boxed());
+    let key = key_of(&dir);
+    marker_n(
+        &dir,
+        &key,
+        FOREIGN_PID,
+        &iso(std::time::SystemTime::now()),
+        2,
+    );
+    let mut steps = 0;
+    let out = thumbnail_for_with(&dir, &key, &BuildLimits::default(), &mut || steps += 1);
+    assert!(matches!(out.thumb, Thumb::Busy), "{:?}", out.thumb);
+    assert_eq!(steps, 0);
+}
+
+#[test]
+fn an_own_marker_starts_again_at_attempt_one() {
+    // Eigene Prozessnummer: Rest dieses lebenden Laufs, nie ein Absturz, zählt nicht weiter.
+    let dir = doc(&boxed());
+    let key = key_of(&dir);
+    let hour_ago = iso(std::time::SystemTime::now() - Duration::from_secs(3600));
+    marker_n(&dir, &key, std::process::id(), &hour_ago, 2);
+    let mut seen = Vec::new();
+    let out = thumbnail_for_with(&dir, &key, &BuildLimits::default(), &mut || {
+        seen.push(fs::read_to_string(dir.join(PREVIEW_JSON)).unwrap_or_default());
+    });
+    assert!(matches!(out.thumb, Thumb::Image(_)), "{:?}", out.thumb);
+    assert!(
+        seen.iter().all(|j| j.contains("\"versuche\":1}")),
+        "{seen:?}"
+    );
+}
+
+#[test]
 fn a_stale_foreign_marker_stores_impossible_and_never_builds() {
     let dir = doc(&boxed());
     let key = key_of(&dir);
     let hour_ago = iso(std::time::SystemTime::now() - Duration::from_secs(3600));
-    marker(&dir, &key, FOREIGN_PID, &hour_ago);
+    marker_n(&dir, &key, FOREIGN_PID, &hour_ago, 2);
     let mut steps = 0;
     let out = thumbnail_for_with(&dir, &key, &BuildLimits::default(), &mut || steps += 1);
     assert!(matches!(out.thumb, Thumb::Impossible), "{:?}", out.thumb);
@@ -1221,21 +1320,21 @@ fn a_stale_foreign_marker_stores_impossible_and_never_builds() {
     let dir = doc(&boxed());
     let key = key_of(&dir);
     let later = iso(std::time::SystemTime::now() + Duration::from_secs(3600));
-    marker(&dir, &key, FOREIGN_PID, &later);
+    marker_n(&dir, &key, FOREIGN_PID, &later, 2);
     let out = thumbnail_for(&dir, &key, &BuildLimits::default());
     assert!(matches!(out.thumb, Thumb::Impossible), "{:?}", out.thumb);
     // Kurz vor der Grenze von 15 Minuten: noch frisch.
     let dir = doc(&boxed());
     let key = key_of(&dir);
     let recent = iso(std::time::SystemTime::now() - Duration::from_secs(14 * 60));
-    marker(&dir, &key, FOREIGN_PID, &recent);
+    marker_n(&dir, &key, FOREIGN_PID, &recent, 2);
     let out = thumbnail_for(&dir, &key, &BuildLimits::default());
     assert!(matches!(out.thumb, Thumb::Busy), "{:?}", out.thumb);
     // Kurz nach der Grenze: alt.
     let dir = doc(&boxed());
     let key = key_of(&dir);
     let past = iso(std::time::SystemTime::now() - Duration::from_secs(16 * 60));
-    marker(&dir, &key, FOREIGN_PID, &past);
+    marker_n(&dir, &key, FOREIGN_PID, &past, 2);
     let out = thumbnail_for(&dir, &key, &BuildLimits::default());
     assert!(matches!(out.thumb, Thumb::Impossible), "{:?}", out.thumb);
     assert_eq!(MARKER_FRESH, Duration::from_secs(15 * 60));
@@ -1306,14 +1405,15 @@ fn the_reader_handles_the_new_art_values_strictly() {
     let dir = doc(&AppState::new());
     let key = key_of(&dir);
     let now = iso(std::time::SystemTime::now());
-    let good_marker = marker_json(&key, FOREIGN_PID, &now);
+    let good_marker = marker_json(&key, FOREIGN_PID, &now, 1);
     assert_eq!(
         good_marker,
         json_for(&key, 496, 280, "baut").replace(
             '}',
-            &format!(",\"pid\":{FOREIGN_PID},\"since\":\"{now}\"}}")
+            &format!(",\"pid\":{FOREIGN_PID},\"since\":\"{now}\",\"versuche\":1}}")
         )
     );
+    assert!(marker_json(&key, FOREIGN_PID, &now, 7).ends_with(",\"versuche\":7}"));
     // Gültige Marke: keine Miniatur, aber eine Marke (frisch → Busy).
     fs::write(dir.join(PREVIEW_JSON), &good_marker).unwrap();
     assert!(load_cached(&dir, &key).is_none(), "baut ist keine Miniatur");
@@ -1325,10 +1425,27 @@ fn the_reader_handles_the_new_art_values_strictly() {
     let base = json_for(&key, 496, 280, "baut");
     let since = format!(",\"since\":\"{now}\"");
     let pid = format!(",\"pid\":{FOREIGN_PID}");
+    let tries = ",\"versuche\":1";
     for (what, text) in [
-        ("ohne pid und since", base.clone()),
-        ("ohne since", base.replace('}', &format!("{pid}}}"))),
-        ("ohne pid", base.replace('}', &format!("{since}}}"))),
+        (
+            "ohne pid und since",
+            base.replace('}', &format!("{tries}}}")),
+        ),
+        ("ohne since", base.replace('}', &format!("{pid}{tries}}}"))),
+        ("ohne pid", base.replace('}', &format!("{since}{tries}}}"))),
+        (
+            "ohne versuche",
+            base.replace('}', &format!("{pid}{since}}}")),
+        ),
+        ("versuche 0", good_marker.replace(tries, ",\"versuche\":0")),
+        (
+            "versuche als Text",
+            good_marker.replace(tries, ",\"versuche\":\"1\""),
+        ),
+        (
+            "versuche doppelt",
+            good_marker.replace(tries, &format!("{tries}{tries}")),
+        ),
         (
             "since falsch",
             good_marker.replace(&now, "2026-10-24 12:00:00"),
@@ -1351,11 +1468,14 @@ fn the_reader_handles_the_new_art_values_strictly() {
         );
         assert!(out.stored, "{what}");
     }
-    // `pid`/`since` gehören nur zu „baut“.
+    // `pid`/`since`/`versuche` gehören nur zu „baut“.
     for art in ["bild", "leer", "zu_aufwendig", "fehlgeschlagen"] {
         let text = json_for(&key, 496, 280, art).replace('}', &format!("{pid}{since}}}"));
         fs::write(dir.join(PREVIEW_JSON), &text).unwrap();
         assert!(load_cached(&dir, &key).is_none(), "{art} mit pid");
+        let text = json_for(&key, 496, 280, art).replace('}', &format!("{tries}}}"));
+        fs::write(dir.join(PREVIEW_JSON), &text).unwrap();
+        assert!(load_cached(&dir, &key).is_none(), "{art} mit versuche");
     }
     // `fehlgeschlagen` und `baut` sind nie ein Bild, auch mit einem gültigen PNG daneben.
     let png = encode_png(&Image {

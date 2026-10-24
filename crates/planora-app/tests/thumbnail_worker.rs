@@ -10,7 +10,8 @@ mod common;
 
 use planora_app::state::AppState;
 use planora_app::thumbnail_cache::{
-    PREVIEW_JSON, PREVIEW_PNG, Thumb, ThumbKey, ThumbOutcome, marker_json,
+    BuildLimits, PREVIEW_JSON, PREVIEW_PNG, Thumb, ThumbKey, ThumbOutcome, load_cached,
+    marker_json, thumbnail_for_with,
 };
 use planora_app::thumbnail_worker::*;
 use planora_math::DVec3;
@@ -366,7 +367,7 @@ fn a_theme_change_rebuilds_for_the_new_theme() {
 fn another_instance_building_is_reported_busy_and_nothing_is_built() {
     let dir = box_document("Quader");
     let key = ThumbKey::current(&dir, true).unwrap();
-    let marker = marker_json(&key, std::process::id().wrapping_add(1), &now_iso());
+    let marker = marker_json(&key, std::process::id().wrapping_add(1), &now_iso(), 1);
     fs::write(dir.join(PREVIEW_JSON), &marker).unwrap();
     let w = ThumbWorker::start();
     w.set_queue(
@@ -453,4 +454,193 @@ fn dropping_during_a_build_finishes_it_and_then_ends_the_thread() {
         "danach endet der Thread, „a“ beginnt nicht"
     );
     assert_eq!(finished.load(Ordering::SeqCst), 1);
+}
+
+// ---- Nachbesserung 1: Beenden, Leerlauf, Lebenszeichen ---------------------------------------
+
+/// Echter Aufbau (mit Marke „baut“), der nach dem ersten Schritt meldet und auf Freigabe wartet.
+/// Die Zeitgrenze des Aufbaus ist hoch, damit das Warten nicht „zu aufwendig“ ergibt.
+fn slow_real_worker() -> (ThumbWorker, Receiver<()>, Sender<()>) {
+    let (started_tx, started) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let limits = BuildLimits {
+        max_time: Duration::from_secs(600),
+        ..BuildLimits::default()
+    };
+    let w = ThumbWorker::start_with(move |r: &ThumbRequest| {
+        let mut first = true;
+        thumbnail_for_with(&r.dir, &r.key, &limits, &mut || {
+            if std::mem::take(&mut first) {
+                let _ = started_tx.send(());
+                let _ = release_rx.lock().unwrap().recv_timeout(T);
+            }
+        })
+    });
+    (w, started, release)
+}
+
+fn request_for(dir: &std::path::Path) -> ThumbRequest {
+    ThumbRequest {
+        dir: dir.to_path_buf(),
+        key: ThumbKey::current(dir, true).unwrap(),
+    }
+}
+
+fn own_marker_present(dir: &std::path::Path) -> bool {
+    fs::read_to_string(dir.join(PREVIEW_JSON)).is_ok_and(|j| {
+        j.contains("\"art\":\"baut\"") && j.contains(&format!("\"pid\":{}", std::process::id()))
+    })
+}
+
+/// Wartet (höchstens `T`), bis der Thread geendet hat.
+fn until_dead(w: &ThumbWorker) {
+    let t0 = Instant::now();
+    while w.alive() {
+        assert!(t0.elapsed() < T, "der Thread endet");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn shutdown_removes_our_marker_when_the_build_does_not_finish_in_time() {
+    let dir = box_document("Quader");
+    let (w, started, release) = slow_real_worker();
+    w.set_queue(vec![request_for(&dir)], Vec::new());
+    started.recv_timeout(T).unwrap();
+    assert!(own_marker_present(&dir), "Marke während des Aufbaus");
+    let t0 = Instant::now();
+    w.shutdown(Duration::from_millis(50));
+    assert!(t0.elapsed() < Duration::from_secs(2), "kurz begrenzt");
+    assert!(
+        !dir.join(PREVIEW_JSON).exists(),
+        "die eigene Marke ist entfernt (sonst gälte sie beim nächsten Start als fremder Aufbau)"
+    );
+    assert!(w.alive(), "der Aufbau läuft noch");
+    // Läuft der Aufbau doch noch zu Ende, speichert er sein Ergebnis wie sonst auch.
+    release.send(()).unwrap();
+    until_dead(&w);
+    assert!(load_cached(&dir, &request_for(&dir).key).is_some());
+    assert!(
+        w.poll().is_empty(),
+        "nach dem Beenden kommt kein Ergebnis mehr"
+    );
+}
+
+#[test]
+fn shutdown_waits_for_a_build_that_finishes_and_keeps_its_result() {
+    let dir = box_document("Quader");
+    let (w, started, release) = slow_real_worker();
+    w.set_queue(vec![request_for(&dir)], Vec::new());
+    started.recv_timeout(T).unwrap();
+    release.send(()).unwrap();
+    w.shutdown(T);
+    assert!(
+        matches!(
+            load_cached(&dir, &request_for(&dir).key),
+            Some(Thumb::Image(_))
+        ),
+        "fertig gespeichert, als shutdown zurückkehrt"
+    );
+    assert!(!w.alive(), "der Thread hat geendet");
+}
+
+#[test]
+fn shutdown_of_an_idle_worker_returns_at_once_and_later_queues_are_harmless() {
+    let w = ThumbWorker::start_with(|_r: &ThumbRequest| outcome(true));
+    assert!(w.alive());
+    let t0 = Instant::now();
+    w.shutdown(T);
+    assert!(t0.elapsed() < Duration::from_secs(2));
+    assert!(!w.alive());
+    w.set_queue(vec![req("a")], vec![req("b")]);
+    assert!(w.is_idle(), "ein toter Arbeiter nimmt nichts an");
+    assert!(w.wait_idle(Duration::from_secs(1)));
+    assert_eq!(w.running(), None);
+    assert!(w.poll().is_empty());
+    w.cancel_pending();
+    w.shutdown(Duration::ZERO); // zweimal ist harmlos
+}
+
+#[test]
+fn dropping_during_a_real_build_removes_our_marker_quickly() {
+    let dir = box_document("Quader");
+    let (w, started, release) = slow_real_worker();
+    w.set_queue(vec![request_for(&dir)], Vec::new());
+    started.recv_timeout(T).unwrap();
+    assert!(own_marker_present(&dir));
+    let t0 = Instant::now();
+    drop(w);
+    assert!(
+        t0.elapsed() < Duration::from_millis(500),
+        "höchstens kurz warten"
+    );
+    assert!(!dir.join(PREVIEW_JSON).exists(), "eigene Marke entfernt");
+    // Aufbau zu Ende laufen lassen, bevor der Ordner gelöscht wird.
+    release.send(()).unwrap();
+    let t1 = Instant::now();
+    while !dir.join(PREVIEW_JSON).exists() {
+        assert!(t1.elapsed() < T, "der Aufbau läuft zu Ende");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(DROP_WAIT <= Duration::from_millis(50));
+}
+
+#[test]
+fn wait_idle_returns_soon_after_the_build_finishes() {
+    let (w, s) = scripted("x", &[]);
+    w.set_queue(vec![req("x")], Vec::new());
+    s.wait_started("x");
+    let release = s.release.clone();
+    let helper = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        release.send(()).unwrap();
+    });
+    let t0 = Instant::now();
+    assert!(w.wait_idle(T));
+    assert!(
+        t0.elapsed() < Duration::from_secs(3),
+        "geweckt, nicht erst nach Ablauf: {:?}",
+        t0.elapsed()
+    );
+    helper.join().unwrap();
+}
+
+#[test]
+fn is_idle_tells_whether_anything_waits_or_runs() {
+    let (w, s) = scripted("x", &[]);
+    assert!(w.is_idle());
+    w.set_queue(vec![req("x")], vec![req("a")]);
+    assert!(!w.is_idle());
+    s.wait_started("x");
+    assert!(!w.is_idle(), "x läuft, a wartet");
+    w.cancel_pending();
+    assert!(!w.is_idle(), "x läuft noch");
+    s.release.send(()).unwrap();
+    assert!(w.wait_idle(T));
+    assert!(w.is_idle());
+}
+
+#[test]
+fn wait_idle_without_a_limit_does_not_overflow() {
+    // `wait_idle(Duration::MAX)` wartet ohne Grenze: es läuft in einem eigenen Thread, der Test
+    // wartet darauf nur begrenzt (ein Hängen wird zum roten Test statt zum hängenden Lauf).
+    let (w, s) = scripted("x", &[]);
+    let (result_tx, result) = mpsc::channel::<(bool, bool)>();
+    let waiter = std::thread::spawn(move || {
+        let idle_at_once = w.wait_idle(Duration::MAX);
+        w.set_queue(vec![req("x")], Vec::new());
+        let idle_after_x = w.wait_idle(Duration::MAX);
+        let _ = result_tx.send((idle_at_once, idle_after_x));
+    });
+    s.wait_started("x");
+    s.release.send(()).unwrap();
+    match result.recv_timeout(T) {
+        Ok(r) => assert_eq!(r, (true, true)),
+        Err(RecvTimeoutError::Timeout) => {
+            panic!("wait_idle(Duration::MAX) kehrt nicht zurück (fehlendes Wecken?)")
+        }
+        Err(RecvTimeoutError::Disconnected) => panic!("wait_idle(Duration::MAX) ist abgestürzt"),
+    }
+    waiter.join().unwrap();
 }

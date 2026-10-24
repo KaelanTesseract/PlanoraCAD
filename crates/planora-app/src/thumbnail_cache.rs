@@ -11,11 +11,14 @@
 //! Absturzschutz: Vor dem Aufbau steht in `vorschau.json` die Marke `"art":"baut"` (mit Prozess
 //! und Beginn). Findet ein späterer Lauf eine alte Marke eines anderen Prozesses für denselben
 //! Schlüssel, hat dieser Aufbau das Programm beendet (Speicher, Stapel – das fängt
-//! `catch_unwind` nicht): dann wird `"art":"fehlgeschlagen"` gespeichert und diese Version nie
-//! wieder automatisch gebaut. Eine frische fremde Marke heißt: eine andere Instanz baut gerade.
+//! `catch_unwind` nicht) – oder das Programm wurde mitten im Aufbau beendet. Die Marke zählt die
+//! Versuche (`versuche`, eine neue Marke beginnt bei 1): nach dem ersten so geendeten Versuch wird
+//! noch einmal gebaut (Marke mit `versuche` + 1), erst nach [`MAX_ATTEMPTS`] Versuchen wird
+//! `"art":"fehlgeschlagen"` gespeichert und diese Version nie wieder automatisch gebaut. Eine
+//! frische fremde Marke heißt: eine andere Instanz baut gerade.
 //!
 //! Werte von `art`: `bild`, `leer`, `zu_aufwendig`, `fehlgeschlagen` (Miniatur nicht möglich),
-//! `baut` (nur mit den Zusatzschlüsseln `pid` und `since`; nie eine gültige Miniatur).
+//! `baut` (nur mit den Zusatzschlüsseln `pid`, `since` und `versuche`; nie eine gültige Miniatur).
 
 use crate::state::CHORD_TOLERANCE;
 use crate::thumbnail::{
@@ -42,6 +45,8 @@ pub const MAX_BUILD: Duration = Duration::from_secs(3);
 pub const THUMB_CHORD_MM: f64 = 0.1;
 /// So lange gilt die Marke „baut“ einer anderen Instanz als laufender Aufbau; danach als Absturz.
 pub const MARKER_FRESH: Duration = Duration::from_secs(15 * 60);
+/// So viele Aufbauten, die nie zu Ende kamen (alte fremde Marke), bis „fehlgeschlagen“ gilt.
+pub const MAX_ATTEMPTS: u32 = 2;
 /// Eigene Zwischendateien (`vorschau.*.<Prozess>-<Zähler>.tmp`), die älter sind, werden beim
 /// Speichern entfernt (Reste eines Absturzes).
 pub const STALE_TMP: Duration = Duration::from_secs(60 * 60);
@@ -422,15 +427,16 @@ pub fn thumbnail_for_with(
             false,
         );
     }
-    match marker_state(doc_dir, key) {
+    let attempt = match marker_state(doc_dir, key) {
         Marker::Fresh => return outcome(Thumb::Busy, false, false),
-        Marker::Stale => {
+        Marker::Stale(tries) if tries >= MAX_ATTEMPTS => {
             let stored = store(doc_dir, key, &Thumb::Impossible).is_ok();
             return outcome(Thumb::Impossible, stored, false);
         }
-        Marker::None => {}
-    }
-    let marked = begin_build(doc_dir, key);
+        Marker::Stale(tries) => tries + 1,
+        Marker::None => 1,
+    };
+    let marked = begin_build(doc_dir, key, attempt);
     let thumb = build_with(doc_dir, key, limits, after_step);
     let stored = store(doc_dir, key, &thumb).is_ok();
     if !stored && marked {
@@ -445,8 +451,8 @@ enum Marker {
     None,
     /// Eine andere Instanz baut gerade.
     Fresh,
-    /// Ein früherer Aufbau hat sein Programm nicht überlebt.
-    Stale,
+    /// Ein früherer Aufbau kam nie zu Ende (Absturz oder Beenden); so viele Versuche bisher.
+    Stale(u32),
 }
 
 fn marker_state(doc_dir: &Path, key: &ThumbKey) -> Marker {
@@ -456,7 +462,8 @@ fn marker_state(doc_dir: &Path, key: &ThumbKey) -> Marker {
     if rec.art != ART_BUILDING || !same_key(&rec, key) {
         return Marker::None;
     }
-    let (Some(pid), Some(since)) = (rec.pid, rec.since.as_deref()) else {
+    let (Some(pid), Some(since), Some(tries)) = (rec.pid, rec.since.as_deref(), rec.versuche)
+    else {
         return Marker::None;
     };
     if pid == std::process::id() {
@@ -466,22 +473,29 @@ fn marker_state(doc_dir: &Path, key: &ThumbKey) -> Marker {
     let fresh = iso_seconds(since)
         .zip(unix_now())
         .is_some_and(|(t, now)| (now - t).abs() <= MARKER_FRESH.as_secs() as i64);
-    if fresh { Marker::Fresh } else { Marker::Stale }
+    if fresh {
+        Marker::Fresh
+    } else {
+        Marker::Stale(tries)
+    }
 }
 
-/// Löscht alte Zusatzdateien (erst JSON, dann PNG) und schreibt die Marke „baut“. false, wenn
-/// die Marke nicht steht (dann bleibt eine nicht löschbare alte JSON samt PNG unberührt).
-fn begin_build(doc_dir: &Path, key: &ThumbKey) -> bool {
+/// Löscht alte Zusatzdateien (erst JSON, dann PNG) und schreibt die Marke „baut“ mit Versuch
+/// `attempt`. false, wenn die Marke nicht steht (dann bleibt eine nicht löschbare alte JSON samt
+/// PNG unberührt).
+fn begin_build(doc_dir: &Path, key: &ThumbKey, attempt: u32) -> bool {
     if remove_if_present(&doc_dir.join(PREVIEW_JSON)).is_err() {
         return false;
     }
     let _ = remove_if_present(&doc_dir.join(PREVIEW_PNG));
-    let text = marker_json(key, std::process::id(), &now_iso());
+    let text = marker_json(key, std::process::id(), &now_iso(), attempt);
     write_preview(&doc_dir.join(PREVIEW_JSON), text.as_bytes()).is_ok()
 }
 
-/// Entfernt die eigene Marke nach einem nicht gespeicherten Ergebnis (Fehlschlag im Speicher).
-fn clear_own_marker(doc_dir: &Path, key: &ThumbKey) {
+/// Entfernt die eigene Marke (gleicher Schlüssel, Prozessnummer dieses Prozesses): nach einem
+/// nicht gespeicherten Ergebnis (Fehlschlag im Speicher) und beim geordneten Beenden mitten in
+/// einem Aufbau (Hintergrund-Arbeiter). Eine fremde Marke oder ein Ergebnis bleibt.
+pub(crate) fn clear_own_marker(doc_dir: &Path, key: &ThumbKey) {
     let own = read_record(doc_dir).is_some_and(|r| {
         r.art == ART_BUILDING && same_key(&r, key) && r.pid == Some(std::process::id())
     });
@@ -551,9 +565,10 @@ struct Record {
     w: u32,
     h: u32,
     art: String,
-    /// Nur bei `baut`: Prozess und Beginn (UTC, „JJJJ-MM-TTThh:mm:ssZ“).
+    /// Nur bei `baut`: Prozess, Beginn (UTC, „JJJJ-MM-TTThh:mm:ssZ“) und Versuch (ab 1).
     pid: Option<u32>,
     since: Option<String>,
+    versuche: Option<u32>,
 }
 
 /// Text von `vorschau.json` für den Schlüssel und die Art (eine Zeile, Schlüssel in der
@@ -569,11 +584,14 @@ pub fn record_json(key: &ThumbKey, art: &str) -> String {
     )
 }
 
-/// Marke „baut“: wie [`record_json`] mit `pid` und `since` dahinter.
-pub fn marker_json(key: &ThumbKey, pid: u32, since: &str) -> String {
+/// Marke „baut“: wie [`record_json`] mit `pid`, `since` und `versuche` dahinter.
+pub fn marker_json(key: &ThumbKey, pid: u32, since: &str, versuche: u32) -> String {
     let base = record_json(key, ART_BUILDING);
     let head = base.strip_suffix('}').unwrap_or(&base);
-    format!("{head},\"pid\":{pid},\"since\":{}}}", json_string(since))
+    format!(
+        "{head},\"pid\":{pid},\"since\":{},\"versuche\":{versuche}}}",
+        json_string(since)
+    )
 }
 
 /// Text als JSON-Zeichenkette: `"` und `\` maskiert, Steuerzeichen als `\uXXXX`.
@@ -599,7 +617,8 @@ enum Value {
 }
 
 /// Strenger Leser: ein Objekt mit genau den acht Schlüsseln (je einmal, Reihenfolge beliebig),
-/// bei `"art":"baut"` zusätzlich genau `pid` und `since` (gültige Zeitangabe), sonst nie;
+/// bei `"art":"baut"` zusätzlich genau `pid`, `since` (gültige Zeitangabe) und `versuche` (ab 1),
+/// sonst nie;
 /// Zahlen ganzzahlig ohne Vorzeichen und ohne führende Null, `true`/`false`, sonst nichts.
 fn parse_record(text: &str) -> Option<Record> {
     let mut r = Reader {
@@ -607,7 +626,7 @@ fn parse_record(text: &str) -> Option<Record> {
     };
     let (mut v, mut version, mut w, mut h, mut pid) = (None, None, None, None, None);
     let (mut branch, mut program, mut art, mut dark) = (None, None, None, None);
-    let mut since = None;
+    let (mut since, mut versuche) = (None, None);
     r.expect('{')?;
     loop {
         let name = r.string()?;
@@ -619,6 +638,7 @@ fn parse_record(text: &str) -> Option<Record> {
             ("w", Value::Number(n)) => w.replace(n).is_none(),
             ("h", Value::Number(n)) => h.replace(n).is_none(),
             ("pid", Value::Number(n)) => pid.replace(n).is_none(),
+            ("versuche", Value::Number(n)) => versuche.replace(n).is_none(),
             ("branch", Value::Text(t)) => branch.replace(t).is_none(),
             ("program", Value::Text(t)) => program.replace(t).is_none(),
             ("art", Value::Text(t)) => art.replace(t).is_none(),
@@ -643,9 +663,11 @@ fn parse_record(text: &str) -> Option<Record> {
     let art: String = art?;
     let building = art == ART_BUILDING;
     let extras_ok = if building {
-        pid.is_some() && since.as_deref().and_then(iso_seconds).is_some()
+        pid.is_some()
+            && since.as_deref().and_then(iso_seconds).is_some()
+            && versuche.is_some_and(|n| n >= 1)
     } else {
-        pid.is_none() && since.is_none()
+        pid.is_none() && since.is_none() && versuche.is_none()
     };
     if !extras_ok {
         return None;
@@ -661,6 +683,7 @@ fn parse_record(text: &str) -> Option<Record> {
         art,
         pid,
         since,
+        versuche,
     })
 }
 
