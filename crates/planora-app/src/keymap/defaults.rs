@@ -84,14 +84,54 @@ action_table! {
     DeleteSelection, "modell.loeschen", "Löschen", Model, [key(Key::Delete)];
     /// Startet den zuletzt abgeschlossenen wiederholbaren Befehl noch einmal.
     RepeatLast, "modell.befehl_wiederholen", "Letzten Befehl wiederholen", Model, [key(Key::Space)];
+    // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Versatz O,
+    // Stutzen T, Skizzenbemaßung D und Hilfslinie X kommen erst mit ihrer Funktion. Esc, Enter
+    // und Entf der Skizze sind fest (`sketch_view`), nicht in der Tabelle.
+    SketchLine, "skizze.linie", "Linie", Sketch, [key(Key::L)];
+    SketchRectangle, "skizze.rechteck", "Rechteck", Sketch, [key(Key::R)];
+    SketchCircle, "skizze.kreis", "Kreis", Sketch, [key(Key::C)];
+    /// Fusion „Projizieren“.
+    SketchProjectEdge, "skizze.projizieren", "Körperkante kopieren", Sketch, [key(Key::P)];
+    /// Wählt das zuletzt benutzte Skizzenwerkzeug wieder (eigenes Gedächtnis, siehe
+    /// `commands::LastCommand`).
+    SketchRepeatLast, "skizze.werkzeug_wiederholen", "Letztes Skizzenwerkzeug wiederholen", Sketch,
+        [key(Key::Space)];
+    // Zeichnung: die vorhandenen Werkzeuge (wie ihr Schalter). Mittelpunktmarke C, Verschieben
+    // M, Projizierte Ansicht P und Text T kommen erst mit ihrer Funktion; Entf (Nummernkreis
+    // löschen) ist fest (`drawing_view`).
+    /// Werkzeug „Maß“ ein/aus (Fusion „Bemaßung“).
+    DrawingDimension, "zeichnung.mass", "Maß", Drawing, [key(Key::D)];
+    /// Werkzeug „Position“ ein/aus (Fusion „Ballon“).
+    DrawingBalloon, "zeichnung.position", "Position", Drawing, [key(Key::B)];
 }
 
 impl Action {
     /// Merkt sich „Letzten Befehl wiederholen“ diese Aktion? Nur Erzeugen- und
-    /// Bearbeiten-Befehle mit eigenem Fenster oder Werkzeug; nicht Datei, Rückgängig,
-    /// Ansicht, Sichtbarkeit, Löschen und das Wiederholen selbst.
+    /// Bearbeiten-Befehle mit eigenem Fenster oder Werkzeug und die Werkzeuge der Skizze (mit
+    /// eigenem Gedächtnis); nicht Datei, Rückgängig, Ansicht, Sichtbarkeit, Löschen, die
+    /// Schalter der Zeichnung und das Wiederholen selbst.
     pub fn repeatable(self) -> bool {
-        matches!(self, Action::ExtrudeSketch | Action::Fillet)
+        matches!(self, Action::ExtrudeSketch | Action::Fillet) || self.sketch_tool().is_some()
+    }
+
+    /// Das Skizzenwerkzeug, das diese Aktion wählt.
+    pub fn sketch_tool(self) -> Option<crate::sketch_state::Tool> {
+        use crate::sketch_state::Tool;
+        match self {
+            Action::SketchLine => Some(Tool::Line),
+            Action::SketchRectangle => Some(Tool::Rectangle),
+            Action::SketchCircle => Some(Tool::Circle),
+            Action::SketchProjectEdge => Some(Tool::ProjectEdge),
+            _ => None,
+        }
+    }
+
+    /// Die Aktion, die das Skizzenwerkzeug `tool` wählt (nicht jedes Werkzeug hat eine).
+    pub fn for_sketch_tool(tool: crate::sketch_state::Tool) -> Option<Action> {
+        Action::ALL
+            .iter()
+            .copied()
+            .find(|a| a.sketch_tool() == Some(tool))
     }
 
     /// Stelle in [`Action::ALL`] (die Varianten stehen dort in Tabellenreihenfolge).

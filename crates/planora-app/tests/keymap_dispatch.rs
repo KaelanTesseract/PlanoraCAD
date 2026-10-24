@@ -427,6 +427,7 @@ fn focus_on_a_widget_blocks_only_the_space_key() {
     let km = keymap_from(&[
         ("datei.neu", &["Leertaste"]),
         ("modell.befehl_wiederholen", &[]),
+        ("skizze.werkzeug_wiederholen", &[]),
     ]);
     let ctx = egui::Context::default();
     let id = egui::Id::new("knopf");

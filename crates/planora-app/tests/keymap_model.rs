@@ -305,9 +305,12 @@ fn model_defaults_and_conflicts_with_all_actions() {
         assert_eq!(km.bindings(a), [plain(k)], "{a:?}");
         let c = chord(k, false, false, false);
         assert_eq!(km.action_for_key(Area::Model, &c), Some(a));
-        // In Skizze, Zeichnung und „Überall“ gilt die Modelltaste nicht.
+        // In Skizze, Zeichnung und „Überall“ gilt die Modelltaste nicht (die Leertaste hat in
+        // der Skizze ihre eigene Aktion).
         for area in [Area::Sketch, Area::Drawing, Area::All] {
-            assert_eq!(km.action_for_key(area, &c), None, "{a:?} in {area:?}");
+            let want = (a == Action::RepeatLast && area == Area::Sketch)
+                .then_some(Action::SketchRepeatLast);
+            assert_eq!(km.action_for_key(area, &c), want, "{a:?} in {area:?}");
         }
     }
     // Strg+S im Modell: die „Überall“-Aktion Speichern.
@@ -332,11 +335,12 @@ fn model_defaults_and_conflicts_with_all_actions() {
         SetResult::Conflict(Action::Save)
     );
     assert_eq!(km2, km, "nichts geändert");
-    // Wiederholbar sind nur die Erzeugen-/Bearbeiten-Befehle.
+    // Wiederholbar sind im Modell nur die Erzeugen-/Bearbeiten-Befehle (die Skizzenwerkzeuge
+    // prüft `keymap_sketch_drawing.rs`).
     let repeatable: Vec<Action> = Action::ALL
         .iter()
         .copied()
-        .filter(|a| a.repeatable())
+        .filter(|a| a.repeatable() && a.area() == Area::Model)
         .collect();
     assert_eq!(repeatable, [Action::ExtrudeSketch, Action::Fillet]);
 }

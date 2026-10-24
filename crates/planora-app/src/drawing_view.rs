@@ -1037,6 +1037,54 @@ pub fn tool_blocked(drawing: &Drawing, editable: bool) -> Option<&'static str> {
     }
 }
 
+/// Schalter „Maß“ (Klick oder Taste): ein oder aus; eingeschaltet sind „Position“ und
+/// „Schnitt“ aus (die drei schließen sich aus).
+pub(crate) fn toggle_dimension_tool(state: &mut AppState) {
+    state.dimension_tool.toggle();
+    if state.dimension_tool.is_active() {
+        state.balloon_tool.set_active(false);
+        state.section_tool.set_active(false);
+    }
+}
+
+/// Schalter „Position“ (Klick oder Taste): ein oder aus; eingeschaltet sind „Maß“ und
+/// „Schnitt“ aus.
+pub(crate) fn toggle_balloon_tool(state: &mut AppState) {
+    let on = !state.balloon_tool.is_active();
+    state.balloon_tool.set_active(on);
+    if on {
+        state.dimension_tool.set_mode(ToolMode::Off);
+        state.section_tool.set_active(false);
+    }
+}
+
+/// Werkzeug der Zeichnung über seine Taste ([`crate::keymap::Action::DrawingDimension`],
+/// [`crate::keymap::Action::DrawingBalloon`]): wie der Klick auf den Schalter, also nichts,
+/// solange der Schalter gesperrt ist (alte Version, keine passende Ansicht, Stücklistenblatt;
+/// die Erklärung steht an ihm).
+pub(crate) fn tool_key(state: &mut AppState, balloon: bool, editable: bool) {
+    let WorkArea::Drawing(id) = state.drawing_ui.area else {
+        return;
+    };
+    let Some(drawing) = state.document.drawing(id) else {
+        return;
+    };
+    if balloon {
+        if balloon_tool::blocked(drawing, editable).is_none() && state.sketch_session.is_none() {
+            toggle_balloon_tool(state);
+        }
+    } else if tool_blocked(drawing, editable).is_none() {
+        toggle_dimension_tool(state);
+    }
+}
+
+/// Hinweistext eines Werkzeugschalters: Name mit Taste („Position (B)“), darunter die Erklärung.
+fn tool_tip(ui: &mut egui::Ui, action: crate::keymap::Action, name: &str, tip: &str) {
+    let km = crate::keymap::mouse::current(ui.ctx());
+    ui.strong(crate::keymap::with_hint(&km, action, name));
+    ui.label(tip);
+}
+
 /// Zeichnungsbereich (bearbeitbar).
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     show_with(ui, state, true);
@@ -1141,27 +1189,13 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
         }),
         Some(Action::Suggest) => suggest_dimensions(state, id),
         Some(Action::Delete) => delete_selected(state),
-        // „Maß“, „Position“ und „Schnitt“ schließen sich aus.
-        Some(Action::ToolToggle) => {
-            state.dimension_tool.toggle();
-            if state.dimension_tool.is_active() {
-                state.balloon_tool.set_active(false);
-                state.section_tool.set_active(false);
-            }
-        }
+        Some(Action::ToolToggle) => toggle_dimension_tool(state),
         Some(Action::Tool(m)) => {
             state.dimension_tool.set_mode(m);
             state.balloon_tool.set_active(false);
             state.section_tool.set_active(false);
         }
-        Some(Action::BalloonTool) => {
-            let on = !state.balloon_tool.is_active();
-            state.balloon_tool.set_active(on);
-            if on {
-                state.dimension_tool.set_mode(ToolMode::Off);
-                state.section_tool.set_active(false);
-            }
-        }
+        Some(Action::BalloonTool) => toggle_balloon_tool(state),
         Some(Action::SectionTool) => {
             let on = !state.section_tool.is_active();
             state.section_tool.set_active(on);
@@ -1507,7 +1541,9 @@ fn tool_field(
                     };
                     if ui
                         .add_enabled(free, flat(button))
-                        .on_hover_text(TOOL_TIP)
+                        .on_hover_ui(|ui| {
+                            tool_tip(ui, crate::keymap::Action::DrawingDimension, TOOL, TOOL_TIP)
+                        })
                         .on_disabled_hover_text(why)
                         .clicked()
                     {
@@ -1545,7 +1581,14 @@ fn tool_field(
                     };
                     if ui
                         .add_enabled(balloon_why.is_none(), flat(button))
-                        .on_hover_text(balloon_tool::TOOL_TIP)
+                        .on_hover_ui(|ui| {
+                            tool_tip(
+                                ui,
+                                crate::keymap::Action::DrawingBalloon,
+                                balloon_tool::TOOL,
+                                balloon_tool::TOOL_TIP,
+                            )
+                        })
                         .on_disabled_hover_text(balloon_why.unwrap_or(balloon_tool::TOOL_TIP))
                         .clicked()
                     {

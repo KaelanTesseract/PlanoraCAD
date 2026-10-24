@@ -235,6 +235,15 @@ impl SketchSession {
         self.pending_pos.clear();
     }
 
+    /// Wählt `tool` wie der Klick auf seinen Knopf in der Leiste (und sein Tastenkürzel): ist
+    /// es schon gewählt, bleibt alles (auch ein laufender Linienzug), sonst wie
+    /// [`set_tool`](Self::set_tool).
+    pub fn choose_tool(&mut self, sk: &mut Sketch, tool: Tool) {
+        if self.tool != tool {
+            self.set_tool(sk, tool);
+        }
+    }
+
     /// Nach Rückgängig/Wiederholen in der Skizze (R10): `sk` ist der zurückgeholte Entwurf.
     /// Laufendes Werkzeug (offene Punkte und Ecken), Auswahl, Ziehen und Meldung gehören zum
     /// alten Stand und entfallen, ebenso ein offenes Maßfeld (über `history_jumps`).

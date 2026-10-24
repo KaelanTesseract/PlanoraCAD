@@ -6,6 +6,11 @@
 //! ist: Sein Fenster ist zu und dabei ist ein neues Feature seiner Art entstanden ([`observe`]).
 //! Abbrechen, Schließen oder ein anderes Fenster an seiner Stelle ersetzen den zuvor gemerkten
 //! Befehl also nicht, ebenso wenig ein anderer Befehl, der nebenher ein Feature anlegt. Die Leertaste startet den gemerkten Befehl wie sein Menüeintrag.
+//!
+//! Skizzenwerkzeuge haben ein eigenes Gedächtnis (die Leertaste in der Skizze wählt das zuletzt
+//! benutzte wieder): gemerkt, sobald das Werkzeug eine Kurve angelegt hat ([`observe`]). Ein
+//! gewähltes und mit Esc verlassenes Werkzeug ersetzt so nichts, und das Gedächtnis des Modells
+//! (etwa eine Extrusion) bleibt neben dem der Skizze bestehen.
 
 use crate::app::{self, CreateKind, MenuRequest};
 use crate::create_dialog::CreateDialog;
@@ -21,11 +26,26 @@ pub const NEED_BODY: &str = "Zuerst einen Körper wählen.";
 /// Hinweis, wenn „Löschen“ nichts Gewähltes findet.
 pub const NEED_SELECTION: &str = "Zuerst einen Körper oder Schritt wählen.";
 
-/// Der zuletzt abgeschlossene wiederholbare Befehl und der gerade laufende (Fenster offen).
+/// Der zuletzt abgeschlossene wiederholbare Befehl und der gerade laufende (Fenster offen),
+/// getrennt davon das zuletzt benutzte Skizzenwerkzeug.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LastCommand {
     last: Option<Action>,
     pending: Option<Pending>,
+    /// Zuletzt benutztes Skizzenwerkzeug (Leertaste in der Skizze).
+    sketch_last: Option<Action>,
+    /// Stand der offenen Skizze im vorigen Bild (für [`observe`]).
+    sketch_seen: Option<SketchSeen>,
+}
+
+/// Was [`observe`] von der offenen Skizze zuletzt gesehen hat: ein Bild später mehr Kurven in
+/// derselben Skizze, ohne Rückgängig/Wiederholen dazwischen, heißt „das Werkzeug wurde benutzt“.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SketchSeen {
+    tab: u64,
+    sketch: FeatureId,
+    jumps: u64,
+    curves: usize,
 }
 
 /// Ein gestarteter Befehl, dessen Fenster noch offen ist.
@@ -40,16 +60,25 @@ struct Pending {
 }
 
 impl LastCommand {
-    /// Merkt sich `a`, wenn sie wiederholbar ist; sonst bleibt der bisherige Befehl.
+    /// Merkt sich `a`, wenn sie wiederholbar ist; sonst bleibt der bisherige Befehl. Ein
+    /// Skizzenwerkzeug kommt ins eigene Gedächtnis der Skizze und ersetzt den Befehl des Modells
+    /// nicht.
     pub fn remember(&mut self, a: Action) {
-        if a.repeatable() {
+        if a.sketch_tool().is_some() {
+            self.sketch_last = Some(a);
+        } else if a.repeatable() {
             self.last = Some(a);
         }
     }
 
-    /// Der gemerkte Befehl (bleibt gemerkt).
+    /// Der gemerkte Befehl des Modells (bleibt gemerkt).
     pub fn take(&self) -> Option<Action> {
         self.last
+    }
+
+    /// Das gemerkte Skizzenwerkzeug (bleibt gemerkt, auch über das Ende der Skizze hinaus).
+    pub fn sketch_tool(&self) -> Option<Action> {
+        self.sketch_last
     }
 }
 
@@ -105,6 +134,26 @@ pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
             if let Some(last) = ws.last_command.take() {
                 return run_action(ws, last);
             }
+        }
+        Action::SketchLine
+        | Action::SketchRectangle
+        | Action::SketchCircle
+        | Action::SketchProjectEdge => {
+            if let Some(tool) = a.sketch_tool()
+                && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
+            {
+                se.choose_tool(sk, tool);
+            }
+        }
+        Action::SketchRepeatLast => {
+            if let Some(last) = ws.last_command.sketch_tool() {
+                return run_action(ws, last);
+            }
+        }
+        Action::DrawingDimension | Action::DrawingBalloon => {
+            let tab = ws.active_tab_mut();
+            let editable = !tab.read_only;
+            crate::drawing_view::tool_key(&mut tab.state, a == Action::DrawingBalloon, editable);
         }
     }
     MenuRequest::None
@@ -201,6 +250,7 @@ pub(crate) fn track(ws: &mut Workspace, a: Action) {
 /// vergessen. Ein
 /// Fenster in einem anderen Tab wartet, bis der Tab wieder vorn ist; ist der Tab zu, entfällt es.
 pub fn observe(ws: &mut Workspace) {
+    observe_sketch(ws);
     let Some(p) = ws.last_command.pending.clone() else {
         return;
     };
@@ -221,4 +271,37 @@ pub fn observe(ws: &mut Workspace) {
     if done {
         ws.last_command.remember(p.action);
     }
+}
+
+/// Abschluss der Skizzenwerkzeuge (sie haben kein Fenster): gemerkt wird ein Werkzeug mit
+/// Kürzel, sobald es in der offenen Skizze eine Kurve angelegt hat, gleich ob es über Taste,
+/// Knopf oder Leertaste gewählt wurde. Nur wählen und mit Esc oder einem anderen Werkzeug
+/// verlassen merkt nichts (wie ein abgebrochenes Fenster); Rückgängig/Wiederholen in der Skizze
+/// zählt nicht als Benutzen. Ein Werkzeug ohne Kürzel (Bogen, Spline, …) ersetzt das Gedächtnis
+/// nicht. Das Gedächtnis des Modells bleibt in jedem Fall.
+fn observe_sketch(ws: &mut Workspace) {
+    let tab = ws.active_tab();
+    let (Some(se), Some(sk)) = (
+        tab.state.sketch_session.as_ref(),
+        tab.state.session_sketch(),
+    ) else {
+        ws.last_command.sketch_seen = None;
+        return;
+    };
+    let now = SketchSeen {
+        tab: tab.id,
+        sketch: se.sketch,
+        jumps: se.history_jumps,
+        curves: sk.curves().count(),
+    };
+    let used = ws.last_command.sketch_seen.is_some_and(|before| {
+        before.tab == now.tab
+            && before.sketch == now.sketch
+            && before.jumps == now.jumps
+            && now.curves > before.curves
+    });
+    if used && let Some(a) = Action::for_sketch_tool(se.tool) {
+        ws.last_command.remember(a);
+    }
+    ws.last_command.sketch_seen = Some(now);
 }
