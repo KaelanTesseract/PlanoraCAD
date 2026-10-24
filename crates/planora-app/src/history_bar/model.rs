@@ -1,8 +1,10 @@
 //! Modell der Verlaufsleiste ohne Oberfläche: Schritte, Markerstelle, Bewegen, Farbe, Sperre.
 
+use crate::feature_dialog::FeatureDialog;
 use crate::icons::FeatureIcon;
 use crate::state::AppState;
 pub use crate::theme::BodyColor;
+use crate::workspace::Workspace;
 use planora_feature::{Document, FeatureId, FeatureKind, FeatureStatus};
 use std::collections::{HashMap, HashSet};
 
@@ -266,6 +268,53 @@ pub fn body_color(state: &AppState, tip: FeatureId) -> BodyColor {
 /// an ihm gesperrt ([`LOCK_HINT`]).
 pub fn is_locked(state: &AppState, tip: FeatureId) -> bool {
     state.document.rollback_in_chain(tip).is_some()
+}
+
+/// Die zentrale Prüfung der Sperre: Warum eine neue Aktion mit den Eingaben `inputs` gerade nicht
+/// geht. Eingaben sind die Kennungen, auf denen das neue Feature aufbaut
+/// ([`FeatureKind::dependencies`]: Körper, Skizzen, Herkunft von Flächen und Kanten).
+/// [`LOCK_HINT`], wenn eine davon in der Kette eines zurückgesetzten Körpers liegt
+/// ([`is_locked`]); bei mehreren Eingangskörpern reicht einer. Andere Körper und neue
+/// freistehende Körper (ohne Eingaben) sind nie gesperrt.
+///
+/// Eine Skizze, die mehrere Körper verwenden, ist gesperrt, sobald einer davon zurückgesetzt
+/// ist (vorsichtig: ein neuer Körper aus ihr gehörte sonst halb zu einem zurückgesetzten Verlauf).
+pub fn lock_reason(state: &AppState, inputs: &[FeatureId]) -> Option<&'static str> {
+    let doc = &state.document;
+    if doc.rollbacks().is_empty() || inputs.is_empty() {
+        return None;
+    }
+    let locked = doc.body_tips().into_iter().any(|tip| {
+        let chain = doc.chain(tip);
+        inputs.iter().any(|i| chain.contains(i))
+            && doc.rollbacks().iter().any(|r| chain.contains(r))
+    });
+    locked.then_some(LOCK_HINT)
+}
+
+/// Wie [`lock_reason`] vor einer neuen Aktion: gesperrt steht [`LOCK_HINT`] in `message` und
+/// kommt als Fehler zurück (nichts geändert).
+pub fn refuse_if_locked(state: &mut AppState, inputs: &[FeatureId]) -> Result<(), String> {
+    match lock_reason(state, inputs) {
+        Some(why) => state.fail(why.into()),
+        None => Ok(()),
+    }
+}
+
+/// Doppelklick auf einen Schritt: wählt ihn und öffnet seine Einstellungen wie ein Doppelklick
+/// im Feature-Baum (`browser::edit`); eine Skizze öffnet sich zum Bearbeiten, sonst der
+/// Dialog „Bearbeiten“ ([`FeatureDialog`]). Das geht auch bei zurückgesetzten Schritten: Der
+/// Dialog ändert nur die Werte, der Marker bleibt stehen; die abhängigen Schritte rechnet das
+/// Dokument beim Übernehmen neu. In einer alten Version geschieht nichts.
+pub fn open_step(ws: &mut Workspace, id: FeatureId) {
+    let tab = ws.active_tab_mut();
+    if tab.read_only {
+        return;
+    }
+    crate::browser::edit(&mut tab.state, id);
+    if let Some(id) = tab.state.edit_request.take() {
+        tab.feature_dialog = FeatureDialog::new(&tab.state, id);
+    }
 }
 
 /// Anzahl der Schritte von vorn, die der globale Marker nicht zurücksetzt: Index des ersten

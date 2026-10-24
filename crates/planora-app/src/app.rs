@@ -698,21 +698,28 @@ fn sketch_target(state: &AppState) -> Option<planora_feature::FeatureId> {
 }
 
 /// Grund, warum `kind` gerade nicht geht (Menü und Befehlsfeld); `None`: erlaubt.
+/// Körper aus der Skizze eines zurückgesetzten Körpers sind gesperrt
+/// ([`crate::history_bar::lock_reason`]); freistehende Grundkörper nie.
 pub fn create_blocked(ws: &Workspace, kind: CreateKind) -> Option<&'static str> {
+    let state = &ws.active_tab().state;
     match kind {
-        CreateKind::Extrusion | CreateKind::Revolution
-            if sketch_target(&ws.active_tab().state).is_none() =>
-        {
-            Some("Zuerst eine Skizze anlegen.")
-        }
+        CreateKind::Extrusion | CreateKind::Revolution => match sketch_target(state) {
+            None => Some("Zuerst eine Skizze anlegen."),
+            Some(sketch) => crate::history_bar::lock_reason(state, &[sketch]),
+        },
         _ => None,
     }
 }
 
 /// Öffnet den Erzeugen-Dialog zu `kind` im aktiven Tab. Körper entstehen außerhalb des
 /// Skizzen-Modus: eine offene Skizze wird vorher beendet. Wird der Entwurf abgelehnt, bleibt die
-/// Skizze offen und der Dialog entfällt.
+/// Skizze offen und der Dialog entfällt. Ist `kind` gesperrt ([`create_blocked`], etwa die
+/// Skizze eines zurückgesetzten Körpers), steht der Grund in `message`.
 pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
+    if let Some(why) = create_blocked(ws, kind).filter(|w| *w == crate::history_bar::LOCK_HINT) {
+        ws.active_tab_mut().state.message = Some(why.into());
+        return;
+    }
     let tab = ws.active_tab_mut();
     let dialog = match kind {
         CreateKind::Box => CreateDialog::Box {
@@ -752,6 +759,10 @@ pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
 /// Öffnet den Dialog „Boolesche Operation“ mit vorgewählter Operation (Menü und Chips).
 pub fn open_boolean(ws: &mut Workspace, op: BoolOp) {
     let tab = ws.active_tab_mut();
+    if let Some(why) = tab.state.chosen_lock() {
+        tab.state.message = Some(why.into());
+        return;
+    }
     if tab.state.try_close_sketch().is_ok() {
         tab.boolean_dialog = Some(BooleanDialog::with_op(&tab.state, op));
     }
@@ -760,6 +771,10 @@ pub fn open_boolean(ws: &mut Workspace, op: BoolOp) {
 /// Öffnet den Dialog Verrunden (`chamfer == false`) oder Fase.
 pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
     let tab = ws.active_tab_mut();
+    if let Some(why) = tab.state.chosen_lock() {
+        tab.state.message = Some(why.into());
+        return;
+    }
     if tab.state.try_close_sketch().is_ok() {
         tab.blend_dialog = Some(if chamfer {
             BlendDialog::chamfer()
@@ -946,6 +961,7 @@ fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
             .map(|_| (body, face)),
         _ => None,
     };
+    // Gesperrt auch, wenn der Körper der Fläche zurückgesetzt ist (Verlaufsleiste).
     let blocked = state.sketch_on_face_blocked();
     if entry(
         ui,

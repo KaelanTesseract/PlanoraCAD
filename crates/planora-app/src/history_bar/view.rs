@@ -32,9 +32,24 @@ fn rects_key() -> egui::Id {
     bar_id().with("rects")
 }
 
-/// Abspielen im Tab `instance`: Körper und Zeit des letzten Schritts (fehlt: es läuft nicht).
-fn play_key(instance: u64) -> egui::Id {
-    bar_id().with(("play", instance))
+/// Laufendes Abspielen (höchstens eines): Tab, Körper und Zeit des letzten Schritts.
+#[derive(Clone, Copy)]
+struct Playing {
+    instance: u64,
+    tip: FeatureId,
+    last: f64,
+}
+
+fn play_key() -> egui::Id {
+    bar_id().with("play")
+}
+
+fn playing(ctx: &egui::Context) -> Option<Playing> {
+    ctx.data(|d| d.get_temp::<Playing>(play_key()))
+}
+
+fn stop_playing(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<Playing>(play_key()));
 }
 
 /// Körper und Markerstelle, zu denen die Reihe im Tab `instance` zuletzt gerollt wurde.
@@ -81,9 +96,11 @@ pub fn bar_rects(ctx: &egui::Context) -> BarRects {
     ctx.data(|d| d.get_temp(rects_key())).unwrap_or_default()
 }
 
-/// Die Leiste ist in diesem Bild nicht da (Skizze, Zeichnung): keine alte Lage melden.
+/// Die Leiste ist in diesem Bild nicht da (Skizze, Zeichnung): keine alte Lage melden, und ein
+/// laufendes Abspielen endet (es geht nach der Rückkehr nicht von selbst weiter).
 pub(crate) fn forget(ctx: &egui::Context) {
     ctx.data_mut(|d| d.remove::<BarRects>(rects_key()));
+    stop_playing(ctx);
 }
 
 /// Lage der Leiste in einem Fenster `content` ohne gemessene Felder (Geometrie des Modells mit
@@ -116,6 +133,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 #[derive(Clone, Copy)]
 enum Action {
     Select(FeatureId),
+    /// Doppelklick: Einstellungen bzw. Skizze öffnen.
+    Open(FeatureId),
     Go(usize),
     Play,
     Pause,
@@ -163,9 +182,9 @@ pub fn show_with(
         reach: reachable_end(state, tip),
         color: body_color(state, tip).get(dark),
     });
-    let playing = ctx
-        .data(|d| d.get_temp::<(FeatureId, f64)>(play_key(instance)))
-        .is_some_and(|(tip, _)| bar.as_ref().is_some_and(|b| b.tip == tip) && lock.is_none());
+    let playing = playing(ctx).is_some_and(|p| {
+        p.instance == instance && bar.as_ref().is_some_and(|b| b.tip == p.tip) && lock.is_none()
+    });
     let frame = theme::panel_frame(dark).inner_margin(egui::Margin::symmetric(
         theme::SPACE_3 as i8,
         theme::SPACE_1 as i8,
@@ -325,40 +344,58 @@ fn strip(
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             // Platz für den Marker vor dem ersten und hinter dem letzten Schritt.
             ui.add_space(MARKER_W / 2.0);
-            let mut rects = Vec::with_capacity(bar.len());
-            for v in &bar.steps {
-                let r = step_button(ui, state, v, bar.color);
-                if r.clicked() {
+            // Erst die Lage der Schritte, dann die Fläche des Markers, dann die Schritte selbst:
+            // Sie liegen damit über dem Marker und bekommen Klicks an ihrem Rand, den die Fläche
+            // des Markers überdeckt (gezogen wird der Marker dort trotzdem).
+            let rects: Vec<(FeatureId, Rect)> = bar
+                .steps
+                .iter()
+                .map(|v| {
+                    let size = vec2(STEP_SIZE, STEP_SIZE);
+                    (v.id, ui.allocate_exact_size(size, egui::Sense::hover()).0)
+                })
+                .collect();
+            ui.add_space(MARKER_W / 2.0);
+            let row = ui.max_rect();
+            let hit = marker(ui, bar, &rects, row, action);
+            for (v, (_, rect)) in bar.steps.iter().zip(&rects) {
+                let r = step_button(ui, state, v, *rect, bar);
+                if r.double_clicked() {
+                    *action = Some(Action::Open(v.id));
+                } else if r.clicked() {
                     *action = Some(Action::Select(v.id));
                     // Danach bewegen die Pfeiltasten den Marker.
                     ui.memory_mut(|m| m.request_focus(marker_id(bar.instance)));
                 }
-                rects.push((v.id, r.rect));
                 if v.state == StepState::Inactive {
                     out.dimmed.push(v.id);
                 }
             }
-            ui.add_space(MARKER_W / 2.0);
-            let row = ui.max_rect();
-            out.marker = marker(ui, bar, &rects, row, action);
+            if let Some(hit) = &hit {
+                paint_marker(ui, hit, row);
+            }
+            out.marker = hit.map_or(Rect::NOTHING, |h| h.rect);
             out.steps = rects;
         });
     });
     out.strip = scroll.inner_rect;
 }
 
-/// Ein Schritt: Symbol in der Körperfarbe (abgeblendet, wenn er nicht berechnet wird), bei einem
-/// Fehler mit Warnzeichen; gewählt mit Fläche. Beim Überfahren Name, die wichtigsten Maße und
-/// gegebenenfalls der Fehler.
+/// Ein Schritt in `rect`: Symbol in der Körperfarbe (abgeblendet, wenn er nicht berechnet wird),
+/// bei einem Fehler mit Warnzeichen; gewählt mit Fläche. Beim Überfahren Name, die wichtigsten
+/// Maße, gegebenenfalls der Fehler und der Hinweis auf den Doppelklick.
 fn step_button(
     ui: &mut egui::Ui,
     state: &AppState,
     v: &StepView,
-    color: egui::Color32,
+    rect: Rect,
+    bar: &Bar,
 ) -> egui::Response {
     let dark = ui.visuals().dark_mode;
     let p = theme::palette(dark);
-    let (rect, response) = ui.allocate_exact_size(vec2(STEP_SIZE, STEP_SIZE), egui::Sense::click());
+    let color = bar.color;
+    let id = bar_id().with(("step", bar.instance, v.id));
+    let response = ui.interact(rect, id, egui::Sense::click());
     let enabled = ui.is_enabled();
     let selected = state.selected_feature == Some(v.id);
     response.widget_info(|| {
@@ -405,6 +442,11 @@ fn step_button(
             }
             StepState::Active => {}
         }
+        let hint = match state.document.feature(v.id).map(|f| &f.kind) {
+            Some(FeatureKind::Sketch(_)) => "Doppelklick öffnet die Skizze.",
+            _ => "Doppelklick öffnet die Einstellungen.",
+        };
+        ui.label(egui::RichText::new(hint).color(p.text_secondary));
     })
 }
 
@@ -432,23 +474,27 @@ fn gaps(rects: &[(FeatureId, Rect)]) -> Vec<f32> {
     gaps
 }
 
-/// Der Marker: senkrechte Linie mit Griff in der Lücke an der Markerstelle. Ziehen setzt ihn in
-/// die nächste Lücke (höchstens bis [`reachable_end`]); hat er den Fokus, bewegen ihn die Pfeile
-/// nach links und rechts. Ändert sich die Stelle, rollt die Reihe, bis er sichtbar ist. Liefert
-/// seine Fläche (leer ohne Schritte).
+/// Der Marker nach der Bedienung: Fläche, Lage der Linie und ob er den Fokus hat.
+#[derive(Clone, Copy)]
+struct MarkerHit {
+    rect: Rect,
+    x: f32,
+    focused: bool,
+}
+
+/// Bedienung des Markers in der Lücke an der Markerstelle. Ziehen setzt ihn in die nächste Lücke
+/// (höchstens bis [`reachable_end`]); hat er den Fokus, bewegen ihn die Pfeile nach links und
+/// rechts. Ändert sich die Stelle, rollt die Reihe, bis er sichtbar ist. `None` ohne Schritte;
+/// gezeichnet wird er mit [`paint_marker`] nach den Schritten.
 fn marker(
     ui: &mut egui::Ui,
     bar: &Bar,
     rects: &[(FeatureId, Rect)],
     row: Rect,
     action: &mut Option<Action>,
-) -> Rect {
+) -> Option<MarkerHit> {
     let gaps = gaps(rects);
-    let Some(&x) = gaps.get(bar.pos) else {
-        return Rect::NOTHING;
-    };
-    let dark = ui.visuals().dark_mode;
-    let p = theme::palette(dark);
+    let &x = gaps.get(bar.pos)?;
     let rect = Rect::from_center_size(pos2(x, row.center().y), vec2(MARKER_W, row.height()));
     let response = ui.interact(rect, marker_id(bar.instance), egui::Sense::click_and_drag());
     let enabled = ui.is_enabled();
@@ -510,11 +556,23 @@ fn marker(
             ui.ctx().data_mut(|d| d.insert_temp(key, shown));
         }
     }
-    let color = if enabled {
+    Some(MarkerHit {
+        rect,
+        x,
+        focused: response.has_focus(),
+    })
+}
+
+/// Zeichnet den Marker als senkrechte Linie mit Griff (über den Schritten).
+fn paint_marker(ui: &egui::Ui, hit: &MarkerHit, row: Rect) {
+    let dark = ui.visuals().dark_mode;
+    let p = theme::palette(dark);
+    let color = if ui.is_enabled() {
         p.marker
     } else {
         p.marker.gamma_multiply(theme::DISABLED_ALPHA)
     };
+    let x = hit.x;
     let painter = ui.painter();
     painter.line_segment(
         [pos2(x, row.top() + 2.0), pos2(x, row.bottom() - 2.0)],
@@ -526,20 +584,18 @@ fn marker(
         egui::CornerRadius::same(theme::RADIUS_XS / 2),
         color,
     );
-    if response.has_focus() {
+    if hit.focused {
         painter.rect_stroke(
-            rect.expand(1.0),
+            hit.rect.expand(1.0),
             egui::CornerRadius::same(theme::RADIUS_XS),
             egui::Stroke::new(2.0, theme::accent(dark)),
             egui::StrokeKind::Outside,
         );
     }
-    rect
 }
 
 /// Führt eine Aktion der Leiste aus. Fehler stehen danach in `state.message`.
 fn run(ctx: &egui::Context, state: &mut AppState, bar: &Bar, action: Action) {
-    let key = play_key(bar.instance);
     match action {
         Action::Select(id) => {
             // Wie ein Klick auf die Zeile im Feature-Baum: nur der Schritt ist hervorgehoben.
@@ -548,8 +604,14 @@ fn run(ctx: &egui::Context, state: &mut AppState, bar: &Bar, action: Action) {
             state.drawing_ui.selected_drawing = None;
             state.set_selection(None);
         }
+        // Wie ein Doppelklick im Feature-Baum; den Dialog öffnet die App aus `edit_request`
+        // (siehe [`super::open_step`]).
+        Action::Open(id) => {
+            stop_playing(ctx);
+            browser::edit(state, id);
+        }
         Action::Go(position) => {
-            ctx.data_mut(|d| d.remove::<(FeatureId, f64)>(key));
+            stop_playing(ctx);
             let _ = go_to(state, bar.tip, position);
         }
         Action::Play => {
@@ -557,28 +619,37 @@ fn run(ctx: &egui::Context, state: &mut AppState, bar: &Bar, action: Action) {
             if bar.pos >= bar.reach && go_to(state, bar.tip, 0).is_err() {
                 return;
             }
-            let now = ctx.input(|i| i.time);
-            ctx.data_mut(|d| d.insert_temp(key, (bar.tip, now)));
+            let last = ctx.input(|i| i.time);
+            let p = Playing {
+                instance: bar.instance,
+                tip: bar.tip,
+                last,
+            };
+            ctx.data_mut(|d| d.insert_temp(play_key(), p));
             ctx.request_repaint_after_secs(PLAY_INTERVAL as f32);
         }
-        Action::Pause => ctx.data_mut(|d| d.remove::<(FeatureId, f64)>(key)),
+        Action::Pause => stop_playing(ctx),
         Action::ActivateAll => {
-            ctx.data_mut(|d| d.remove::<(FeatureId, f64)>(key));
+            stop_playing(ctx);
             let _ = browser::roll_to_end(state);
         }
     }
 }
 
 /// Abspielen: alle [`PLAY_INTERVAL`] Sekunden ein Schritt vor; hält am Ende (bei
-/// [`reachable_end`]), bei einem Fehler, einem anderen Körper oder einer Sperre an. Nur solange
-/// es läuft, wird ein neues Bild angefordert.
+/// [`reachable_end`]), bei einem Fehler, einem anderen Körper oder Tab oder einer Sperre an. Nur
+/// solange es läuft, wird ein neues Bild angefordert.
 fn tick(ctx: &egui::Context, state: &mut AppState, lock: Option<&'static str>) {
-    let key = play_key(state.instance);
-    let Some((tip, last)) = ctx.data(|d| d.get_temp::<(FeatureId, f64)>(key)) else {
+    let Some(Playing {
+        instance,
+        tip,
+        last,
+    }) = playing(ctx)
+    else {
         return;
     };
-    let stop = || ctx.data_mut(|d| d.remove::<(FeatureId, f64)>(key));
-    if lock.is_some() || state.history_body() != Some(tip) {
+    let stop = || stop_playing(ctx);
+    if lock.is_some() || instance != state.instance || state.history_body() != Some(tip) {
         stop();
         return;
     }
@@ -597,6 +668,11 @@ fn tick(ctx: &egui::Context, state: &mut AppState, lock: Option<&'static str>) {
         stop();
         return;
     }
-    ctx.data_mut(|d| d.insert_temp(key, (tip, now)));
+    let p = Playing {
+        instance,
+        tip,
+        last: now,
+    };
+    ctx.data_mut(|d| d.insert_temp(play_key(), p));
     ctx.request_repaint_after_secs(PLAY_INTERVAL as f32);
 }

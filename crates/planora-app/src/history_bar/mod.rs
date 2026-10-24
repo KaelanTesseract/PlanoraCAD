@@ -1,9 +1,9 @@
 //! Verlaufsleiste: die Schritte des gewählten Körpers mit einem Marker je Körper.
 //!
-//! - [`model`]: das Modell ohne Oberfläche (Schritte, Markerstelle, Bewegen, Farbe, Sperre); es
+//! - `model`: das Modell ohne Oberfläche (Schritte, Markerstelle, Bewegen, Farbe, Sperre); es
 //!   ist ohne Fenster testbar. Der globale Marker des Feature-Baums (`browser::roll_back_to`)
 //!   bleibt daneben unverändert.
-//! - [`view`]: die Oberfläche ([`show_with`]), ein schwebendes Feld zwischen den Spalten über dem
+//! - `view`: die Oberfläche ([`show_with`]), ein schwebendes Feld zwischen den Spalten über dem
 //!   Befehlsfeld (Lage aus [`crate::shell::layout_in_mode`]) mit Abspielknöpfen, einem Symbol je
 //!   Schritt in der Körperfarbe, dem Marker als senkrechter Linie mit Griff und rechts dem Stand.
 //!

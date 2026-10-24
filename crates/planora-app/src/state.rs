@@ -767,6 +767,7 @@ impl AppState {
         kind: FeatureKind,
         formulas: Formulas,
     ) -> Result<FeatureId, String> {
+        crate::history_bar::refuse_if_locked(self, &kind.dependencies())?;
         let label = base_name.unwrap_or(kind.label()).to_string();
         let name = self.next_name(&label);
         match self
@@ -1030,6 +1031,7 @@ impl AppState {
         kind: FeatureKind,
         formulas: Formulas,
     ) -> Result<FeatureId, String> {
+        crate::history_bar::refuse_if_locked(self, &kind.dependencies())?;
         let id = match self
             .document
             .add_feature_with_formulas(name, kind, formulas)
@@ -1083,6 +1085,8 @@ impl AppState {
         if delta == DVec3::ZERO {
             return Ok(());
         }
+        // Auch das Erweitern eines vorhandenen Verschiebens ist eine neue Aktion am Körper.
+        crate::history_bar::refuse_if_locked(self, &[r.feature])?;
         // Netz-Körper verschieben sich über ihre eigene Lage (Plan P10), ohne Feature.
         if self.is_mesh(index) {
             return self.move_mesh_body(r, delta);
@@ -2378,6 +2382,24 @@ impl AppState {
         self.selected_body.is_some_and(|i| self.is_mesh(i))
     }
 
+    /// Ist der sichtbare Körper `index` zurückgesetzt? Dann [`crate::history_bar::LOCK_HINT`]
+    /// (neue Aktionen an ihm sind gesperrt, siehe [`crate::history_bar::lock_reason`]).
+    pub fn body_lock(&self, index: usize) -> Option<&'static str> {
+        let b = self.bodies.get(index)?;
+        crate::history_bar::lock_reason(self, &[b.source.feature])
+    }
+
+    /// Sperre des Körpers, um den es bei Menü und Befehlsfeld geht: der gewählte, sonst der
+    /// Körper der gewählten Fläche oder Kante.
+    pub(crate) fn chosen_lock(&self) -> Option<&'static str> {
+        let body = self.selected_body.or(match self.selection {
+            Some(Pick::Face(f)) => Some(f.body),
+            Some(Pick::Edge(e)) => Some(e.body),
+            None => None,
+        });
+        body.and_then(|i| self.body_lock(i))
+    }
+
     /// Warum „Vereinigen“, „Abziehen“ und „Schneiden“ gerade nicht gehen (`None`: sie gehen).
     pub fn boolean_blocked(&self) -> Option<&'static str> {
         if self.selected_is_mesh() {
@@ -2385,7 +2407,7 @@ impl AppState {
         } else if self.solid_body_count() < 2 {
             Some("Dafür werden mindestens zwei Körper benötigt.")
         } else {
-            None
+            self.chosen_lock()
         }
     }
 
@@ -2396,7 +2418,7 @@ impl AppState {
         } else if self.solid_body_count() == 0 {
             Some("Dafür wird mindestens ein Körper benötigt.")
         } else {
-            None
+            self.chosen_lock()
         }
     }
 
@@ -2409,11 +2431,12 @@ impl AppState {
             Some(Pick::Face(FaceRef { body, face })) => self
                 .bodies
                 .get(body)
-                .is_some_and(|b| plane_of_face(&b.solid, face).is_some()),
-            _ => false,
+                .is_some_and(|b| plane_of_face(&b.solid, face).is_some())
+                .then_some(body),
+            _ => None,
         };
-        if planar {
-            None
+        if let Some(body) = planar {
+            self.body_lock(body)
         } else {
             Some("Dafür zuerst eine ebene Fläche eines Körpers anklicken.")
         }

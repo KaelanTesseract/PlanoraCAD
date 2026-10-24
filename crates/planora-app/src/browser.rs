@@ -555,11 +555,19 @@ fn feature_tree(ui: &mut egui::Ui, state: &mut AppState) {
             }
             if r.sketch {
                 ui.separator();
-                if ui.button("Extrudieren …").clicked() {
-                    pick(Action::Extrude(id), ui);
-                }
-                if ui.button("Drehen …").clicked() {
-                    pick(Action::Revolve(id), ui);
+                // Neue Körper aus der Skizze eines zurückgesetzten Körpers sind gesperrt.
+                let lock = crate::history_bar::lock_reason(state, &[id]);
+                for (label, act) in [
+                    ("Extrudieren …", Action::Extrude(id)),
+                    ("Drehen …", Action::Revolve(id)),
+                ] {
+                    if ui
+                        .add_enabled(lock.is_none(), egui::Button::new(label))
+                        .on_disabled_hover_text(lock.unwrap_or_default())
+                        .clicked()
+                    {
+                        pick(act, ui);
+                    }
                 }
             }
             ui.separator();
@@ -597,14 +605,14 @@ fn feature_tree(ui: &mut egui::Ui, state: &mut AppState) {
         }
     }
     if let Some(a) = action {
-        run(state, a, open);
+        run(state, a);
     }
     rename_window(ui.ctx(), state);
     delete_window(ui.ctx(), state);
 }
 
 /// Führt einen Befehl aus einer Zeile aus. Fehler legt `AppState` in `message` ab.
-fn run(state: &mut AppState, action: Action, open: Option<FeatureId>) {
+fn run(state: &mut AppState, action: Action) {
     let select = |state: &mut AppState, id: FeatureId| {
         // Nur eines ist hervorgehoben: Feature statt Körper bzw. 3D-Auswahl.
         state.selected_feature = Some(id);
@@ -620,23 +628,7 @@ fn run(state: &mut AppState, action: Action, open: Option<FeatureId>) {
             state.drawing_ui.selected_drawing = None;
             state.selected_body = Some(j);
         }
-        Action::Edit(id) => {
-            select(state, id);
-            let sketch = state
-                .document
-                .feature(id)
-                .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)));
-            if sketch {
-                if open != Some(id) {
-                    let _ = state.open_sketch(id);
-                }
-            } else {
-                // Bearbeiten ändert das Dokument: eine offene Skizze wird vorher beendet.
-                if state.try_close_sketch().is_ok() {
-                    state.edit_request = Some(id);
-                }
-            }
-        }
+        Action::Edit(id) => edit(state, id),
         Action::Rename(id) => {
             if let Some(f) = state.document.feature(id) {
                 state.rename_draft = Some((id, f.name.clone()));
@@ -655,6 +647,28 @@ fn run(state: &mut AppState, action: Action, open: Option<FeatureId>) {
         Action::Extrude(id) => state.request_sketch_dialog(SketchRequest::Extrude(id)),
         Action::Revolve(id) => state.request_sketch_dialog(SketchRequest::Revolve(id)),
         Action::Delete(id) => request_delete(state, id),
+    }
+}
+
+/// „Bearbeiten“ (Doppelklick im Baum oder in der Verlaufsleiste): wählt das Feature `id`; eine
+/// Skizze wird zum Bearbeiten geöffnet, sonst wird der Dialog angefordert (`edit_request`, eine
+/// offene Skizze wird vorher beendet). Nicht gesperrt, auch nicht bei zurückgesetzten Körpern.
+pub(crate) fn edit(state: &mut AppState, id: FeatureId) {
+    state.selected_feature = Some(id);
+    state.selected_body = None;
+    state.drawing_ui.selected_drawing = None;
+    state.set_selection(None);
+    let sketch = state
+        .document
+        .feature(id)
+        .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)));
+    if sketch {
+        if state.open_sketch_id() != Some(id) {
+            let _ = state.open_sketch(id);
+        }
+    } else if state.try_close_sketch().is_ok() {
+        // Bearbeiten ändert das Dokument: eine offene Skizze wird vorher beendet.
+        state.edit_request = Some(id);
     }
 }
 
