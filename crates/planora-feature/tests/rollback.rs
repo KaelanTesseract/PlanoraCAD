@@ -623,6 +623,6 @@ fn checking_thousands_of_rollbacks_is_not_quadratic() {
     };
     let mut s = a.snapshot();
     s.rollbacks = vec![b.0, b.1];
-    let e = Document::from_snapshot(s, 0.05).err().expect("abgelehnt");
+    let e = Document::from_snapshot(s, 0.05).expect_err("abgelehnt");
     assert!(e.to_string().contains("desselben Körpers"), "{e}");
 }
