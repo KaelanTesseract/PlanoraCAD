@@ -307,8 +307,91 @@ fn move_marker_ends_an_open_sketch() {
         .add_sketch(SketchPlane::Standard(StandardPlane::XY))
         .unwrap();
     s.open_sketch(sk).unwrap();
-    assert_eq!(s.open_sketch_id(), Some(sk));
+    s.session_sketch_mut()
+        .unwrap()
+        .1
+        .add_rectangle(DVec2::ZERO, DVec2::new(5.0, 10.0))
+        .unwrap();
+    let curves = |s: &AppState| match &s.document.feature(sk).unwrap().kind {
+        FeatureKind::Sketch(f) => f.sketch.curves().count(),
+        k => panic!("{k:?}"),
+    };
+    assert_eq!(curves(&s), 0, "Entwurf noch nicht im Dokument");
     history_bar::move_marker(&mut s, a, 0).unwrap();
     assert_eq!(s.open_sketch_id(), None, "Skizze beendet");
+    assert_eq!(curves(&s), 4, "Entwurf übernommen");
     assert_eq!(s.document.rollbacks(), &[a]);
+}
+
+#[test]
+fn global_marker_blocks_moving_past_it() {
+    let (mut s, [_, e, m]) = chain_model();
+    s.document.set_marker(1).unwrap();
+    s.refresh();
+    assert_eq!(history_bar::marker_position(&s, m), 1);
+    let edits = s.document.edit_count();
+    let before = s.snapshot();
+    for r in [
+        history_bar::step(&mut s, m, true),
+        history_bar::to_end(&mut s, m),
+        history_bar::move_marker(&mut s, m, 2),
+    ] {
+        assert_eq!(r.unwrap_err(), history_bar::GLOBAL_HINT);
+        assert_eq!(s.message.as_deref(), Some(history_bar::GLOBAL_HINT));
+    }
+    assert!(s.document.rollbacks().is_empty());
+    assert!(!history_bar::is_locked(&s, m));
+    assert_eq!(s.document.edit_count(), edits, "kein Rückgängig-Schritt");
+    assert!(before.same_content(&s.snapshot()));
+    // Zurück vor den globalen Marker geht.
+    history_bar::to_start(&mut s, m).unwrap();
+    assert_eq!(history_bar::marker_position(&s, m), 0);
+    // Steht eine Stelle vor dem globalen Marker, darf der Marker bis dorthin vor.
+    s.document.set_marker(3).unwrap();
+    history_bar::move_marker(&mut s, m, 1).unwrap();
+    s.document.set_marker(2).unwrap();
+    s.refresh();
+    assert_eq!(s.document.rollbacks(), &[e]);
+    history_bar::step(&mut s, m, true).unwrap();
+    assert_eq!(s.document.rollbacks(), &[m]);
+    assert_eq!(history_bar::marker_position(&s, m), 2);
+    assert!(history_bar::to_end(&mut s, m).is_err());
+    assert_eq!(s.document.rollbacks(), &[m]);
+}
+
+#[test]
+fn union_bar_keeps_the_other_input_rollback_while_it_still_applies() {
+    let mut s = AppState::new();
+    let a = s.create_box(DVec3::splat(10.0)).unwrap();
+    let b = s.create_box(DVec3::splat(10.0)).unwrap();
+    let (pa, pb) = (s.bodies[0].bounds.0, s.bodies[1].bounds.0);
+    s.move_body(body_of(&s, b), pa - pb + DVec3::new(5.0, 0.0, 0.0))
+        .unwrap();
+    let mb = s.document.features().last().unwrap().id;
+    let u = s
+        .add_boolean(body_of(&s, a), body_of(&s, mb), BoolOp::Union)
+        .unwrap();
+    // Stelle in der Kette von B (hinter Position 1), dann Marker auf A: B bleibt zurückgesetzt.
+    s.document.set_rollback(u, mb).unwrap();
+    history_bar::move_marker(&mut s, u, 0).unwrap();
+    assert_eq!(s.document.rollbacks(), &[a, mb]);
+    assert_eq!(history_bar::marker_position(&s, u), 0);
+    s.document.check_invariants().unwrap();
+}
+
+#[test]
+fn bodies_from_one_sketch_get_different_colours() {
+    let mut s = AppState::new();
+    let sk = rect_sketch(&mut s);
+    let e1 = s.extrude_sketch(sk, 0, 2.0).unwrap();
+    let e2 = s.extrude_sketch(sk, 0, 4.0).unwrap();
+    assert_ne!(
+        history_bar::body_color(&s, e1),
+        history_bar::body_color(&s, e2)
+    );
+    let n = theme::BODY_COLORS.len();
+    assert_eq!(
+        history_bar::body_color(&s, e2),
+        theme::BODY_COLORS[(e2.0 as usize) % n]
+    );
 }
