@@ -23,6 +23,7 @@
 use egui::{Vec2, vec2};
 
 use crate::app::{self, CreateKind, PlanoraApp};
+use crate::keymap::{self, Action};
 use crate::shell::{self, RightTab, ShellMode, ShellRects};
 use crate::state::AppState;
 use crate::{browser, history_bar, icons, logo, properties, tabs, theme, versions_panel, viewport};
@@ -933,18 +934,31 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                     }
                     ui.separator();
                     chips_end = ui.cursor().left() - start;
-                    let mut items: Vec<(&str, icons::IconSource, Command, Option<&'static str>)> =
-                        CreateKind::ALL
-                            .iter()
-                            .map(|k| {
-                                let own = app::create_blocked(&app.ws, *k);
-                                (k.label(), k.icon(), Command::Create(*k), own)
-                            })
-                            .collect();
+                    type Item = (
+                        &'static str,
+                        icons::IconSource,
+                        Command,
+                        Option<&'static str>,
+                        Option<Action>,
+                    );
+                    let mut items: Vec<Item> = CreateKind::ALL
+                        .iter()
+                        .map(|k| {
+                            let own = app::create_blocked(&app.ws, *k);
+                            (k.label(), k.icon(), Command::Create(*k), own, k.action())
+                        })
+                        .collect();
                     for (label, source, chamfer) in icons::blend_entries() {
-                        items.push((label, source, Command::Blend(chamfer), blend_blocked));
+                        let action = (!chamfer).then_some(Action::Fillet);
+                        items.push((
+                            label,
+                            source,
+                            Command::Blend(chamfer),
+                            blend_blocked,
+                            action,
+                        ));
                     }
-                    for (i, (label, source, cmd, own)) in items.into_iter().enumerate() {
+                    for (i, (label, source, cmd, own, action)) in items.into_iter().enumerate() {
                         if i == CreateKind::ALL.len() {
                             ui.separator();
                         }
@@ -954,9 +968,14 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                                 icons::source_icon_button(ui, source, label, dark)
                             })
                             .inner;
+                        // Tooltip mit der Taste aus der Tastenbelegung (etwa „Verrunden … (F)“).
+                        let tip = match action {
+                            Some(a) => keymap::with_hint(&app.ws.keymap, a, label),
+                            None => label.to_owned(),
+                        };
                         let r = match reason {
-                            Some(why) => explain(r, label, why),
-                            None => r.on_hover_text(label),
+                            Some(why) => explain(r, &tip, why),
+                            None => r.on_hover_text(tip),
                         };
                         if r.clicked() {
                             command = Some(cmd);
@@ -971,8 +990,8 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     ctx.data_mut(|d| d.insert_temp(buttons_key(), seen));
     match command {
         Some(Command::Boolean(op)) => app::open_boolean(&mut app.ws, op),
-        Some(Command::Create(kind)) => app::do_create(&mut app.ws, kind),
-        Some(Command::Blend(chamfer)) => app::open_blend(&mut app.ws, chamfer),
+        Some(Command::Create(kind)) => app::run_create(&mut app.ws, kind),
+        Some(Command::Blend(chamfer)) => app::run_blend(&mut app.ws, chamfer),
         None => {}
     }
 }

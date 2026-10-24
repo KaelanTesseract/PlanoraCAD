@@ -8,6 +8,7 @@ pub mod blend_dialog;
 pub mod boolean_dialog;
 pub mod browser;
 pub mod cards;
+pub mod commands;
 pub mod create_dialog;
 pub mod dialog;
 pub mod dimension_browser;

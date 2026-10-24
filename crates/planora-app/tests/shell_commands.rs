@@ -432,9 +432,12 @@ fn tooltips_name_the_action_in_german() {
         let c = context(true);
         let mut app = app_with(2, true);
         let p = pos_of(&c, &mut app, SIZE, label);
-        // Der Hinweis heißt wie der Menüeintrag und steht außerhalb des Knopfs.
+        // Der Hinweis heißt wie der Menüeintrag und steht außerhalb des Knopfs; Befehle mit
+        // Taste nennen sie dahinter (Voreinstellung).
         let want = match label {
             "Vereinigen" | "Abziehen" | "Schneiden" => format!("{label} …"),
+            "Skizze extrudieren …" => format!("{label} (E)"),
+            "Verrunden …" => format!("{label} (F)"),
             other => other.to_string(),
         };
         let texts = hover_texts(&c, &mut app, p);

@@ -561,6 +561,9 @@ pub struct Workspace {
     /// nächsten gelungenen Schreiben der Konfiguration mit geschrieben (wie
     /// `panel_transparency_pending`).
     pub keys_pending: bool,
+    /// Für „Letzten Befehl wiederholen“ (Leertaste): der zuletzt abgeschlossene Befehl, über
+    /// alle Tabs.
+    pub last_command: crate::commands::LastCommand,
     pub prompt: Option<Prompt>,
     pub quit: bool,
     /// Der Dialog „Über PlanoraCAD“ ist offen.
@@ -607,6 +610,7 @@ impl Workspace {
             keymap,
             key_notes,
             keys_pending: false,
+            last_command: Default::default(),
             prompt: None,
             quit: false,
             about_open: false,

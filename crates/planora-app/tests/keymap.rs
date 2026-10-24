@@ -96,7 +96,9 @@ fn defaults_match_the_spec_table_for_existing_actions() {
         ),
         (Action::ViewZoom, vec![wheel(), ctrl_wheel()]),
     ];
-    assert_eq!(Action::ALL.len(), want.len());
+    // Die Aktionen für überall; die Modellaktionen prüft `keymap_model.rs`.
+    let all = Action::ALL.iter().filter(|a| a.area() == Area::All).count();
+    assert_eq!(all, want.len());
     for (a, b) in &want {
         assert_eq!(km.bindings(*a), b.as_slice(), "{a:?}");
         assert_eq!(a.area(), Area::All, "{a:?}");

@@ -73,9 +73,27 @@ action_table! {
     /// Strg+Rad zusätzlich: so zoomt auch das Zusammenziehen auf Windows-Touchpads (kommt als
     /// Strg+Rad).
     ViewZoom, "ansicht.zoomen", "Ansicht zoomen", All, [WHEEL, CTRL_WHEEL];
+    /// Wie „Erzeugen → Skizze extrudieren …“; über die Taste nur mit einer gewählten Skizze,
+    /// die ein geschlossenes Profil hat.
+    ExtrudeSketch, "modell.extrudieren", "Skizze extrudieren", Model, [key(Key::E)];
+    /// Öffnet das Fenster Verrunden (wie „Bearbeiten → Verrunden …“).
+    Fillet, "modell.verrunden", "Verrunden", Model, [key(Key::F)];
+    /// Das Auge des gewählten Körpers im Feature-Baum.
+    ToggleVisibility, "modell.sichtbarkeit", "Sichtbarkeit umschalten", Model, [key(Key::V)];
+    /// Wie „Löschen“ im Kontextmenü des Baums (Rückfrage, wenn etwas davon abhängt).
+    DeleteSelection, "modell.loeschen", "Löschen", Model, [key(Key::Delete)];
+    /// Startet den zuletzt abgeschlossenen wiederholbaren Befehl noch einmal.
+    RepeatLast, "modell.befehl_wiederholen", "Letzten Befehl wiederholen", Model, [key(Key::Space)];
 }
 
 impl Action {
+    /// Merkt sich „Letzten Befehl wiederholen“ diese Aktion? Nur Erzeugen- und
+    /// Bearbeiten-Befehle mit eigenem Fenster oder Werkzeug; nicht Datei, Rückgängig,
+    /// Ansicht, Sichtbarkeit, Löschen und das Wiederholen selbst.
+    pub fn repeatable(self) -> bool {
+        matches!(self, Action::ExtrudeSketch | Action::Fillet)
+    }
+
     /// Stelle in [`Action::ALL`] (die Varianten stehen dort in Tabellenreihenfolge).
     pub(super) fn index(self) -> usize {
         self as usize
@@ -85,6 +103,15 @@ impl Action {
     pub fn from_id(id: &str) -> Option<Action> {
         Action::ALL.iter().copied().find(|a| a.id() == id)
     }
+}
+
+const fn key(key: Key) -> Binding {
+    Binding::Key(KeyChord {
+        key,
+        ctrl: false,
+        shift: false,
+        alt: false,
+    })
 }
 
 const fn ctrl(key: Key) -> Binding {

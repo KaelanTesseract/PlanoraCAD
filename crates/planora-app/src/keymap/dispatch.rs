@@ -29,14 +29,18 @@ pub fn pressed(ctx: &egui::Context, km: &Keymap, area: Area) -> Vec<Action> {
 /// Strg+Alt+Z, anders als bei `consume_shortcut`). Alle passenden Ereignisse werden verbraucht
 /// (gehaltene Taste: Wiederholungen eines Bildes zusammen), jede Aktion kommt höchstens einmal.
 /// Reihenfolge: mehr Umschalttasten zuerst, sonst die Tabelle. Hat ein Bedienelement den
-/// Tastaturfokus, bleibt die Leertaste ihm (sie drückt den Knopf), die übrigen Kürzel wirken.
+/// Tastaturfokus, das Tasten liest (Knopf über Tab, Textfeld), bleibt die Leertaste ihm (sie
+/// drückt den Knopf), die übrigen Kürzel wirken. Elemente, die nur Pfeile lesen und mit
+/// [`crate::viewport::focus_is_not_typing`] gemeldet sind (Marker der Verlaufsleiste, Ansicht,
+/// Statuszeile), halten die Leertaste nicht zurück. Verbraucht wird sie vor dem Aufbau der
+/// Bedienelemente, egui macht aus ihr dann keinen Ersatzklick auf das fokussierte Element.
 pub fn pressed_if(
     ctx: &egui::Context,
     km: &Keymap,
     area: Area,
     want: impl Fn(Action) -> bool,
 ) -> Vec<Action> {
-    let focus = ctx.memory(|m| m.focused()).is_some();
+    let focus = crate::viewport::keyboard_taken(ctx);
     let mut chords: Vec<(Action, KeyChord)> = Action::ALL
         .iter()
         .copied()

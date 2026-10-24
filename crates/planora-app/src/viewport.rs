@@ -493,7 +493,7 @@ pub fn focus_is_not_typing(ctx: &egui::Context, id: egui::Id) {
 
 /// Hat ein Widget den Fokus, das Tasten liest (alles außer den mit [`focus_is_not_typing`]
 /// gemeldeten)?
-fn keyboard_taken(ctx: &egui::Context) -> bool {
+pub(crate) fn keyboard_taken(ctx: &egui::Context) -> bool {
     let Some(focused) = ctx.memory(|m| m.focused()) else {
         return false;
     };
