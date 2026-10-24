@@ -124,16 +124,6 @@ fn hidden_versions_keep_the_right_column() {
 }
 
 #[test]
-fn show_projects_makes_projects_visible() {
-    let mut state = ShellState {
-        projects_visible: false,
-        ..ShellState::default()
-    };
-    state.show_projects();
-    assert!(state.projects_visible);
-}
-
-#[test]
 fn right_tab_falls_back_when_versions_hidden() {
     let mut state = ShellState {
         right_tab: RightTab::Versions,

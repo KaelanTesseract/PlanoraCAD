@@ -413,6 +413,16 @@ impl ProjectsWindow {
         self.worker.as_ref()
     }
 
+    /// Ende des Programms: der Miniatur-Arbeiter (falls gestartet) nimmt nichts mehr an und
+    /// bekommt höchstens `wait`, um einen laufenden Aufbau zu beenden und zu speichern
+    /// ([`ThumbWorker::shutdown`]); ein laufendes Lesen wird abgebrochen.
+    pub fn shutdown(&mut self, wait: Duration) {
+        self.job = None;
+        if let Some(w) = &self.worker {
+            w.shutdown(wait);
+        }
+    }
+
     /// Läuft gerade ein Lesen?
     pub fn scanning(&self) -> bool {
         self.job.is_some()

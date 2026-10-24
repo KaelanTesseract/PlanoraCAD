@@ -1,6 +1,6 @@
 //! Aktionen auf Projekte, Ordner und Dokumente und ihre Fenster („Neues Projekt“, „Neues
 //! Dokument“, „Neuer Ordner“, „Umbenennen“, „Verschieben“, „Löschen“). Das Fenster „Projekte“
-//! und (bis es entfällt) das Feld „Projekte“ rufen sie auf.
+//! ruft sie auf.
 //!
 //! Die Aktionen (`open_node`, `create_project`, …) lassen sich auch ohne Oberfläche aufrufen.
 //! Fehler landen als `Prompt::Notice`, nie als Panik. Pfade kommen nur aus dem Baum der

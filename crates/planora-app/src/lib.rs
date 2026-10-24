@@ -35,7 +35,6 @@ pub mod parts_section;
 pub mod places;
 pub mod project_actions;
 pub mod project_tiles;
-pub mod projects_panel;
 pub mod projects_window;
 pub mod prompts;
 pub mod properties;

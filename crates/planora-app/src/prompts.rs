@@ -194,7 +194,7 @@ fn save_as(
     window(ctx, "save_as", "Speichern unter", |ui| {
         match &tree {
             None => {
-                ui.label("Zuerst im Feld Projekte einen Projektordner wählen.");
+                ui.label("Zuerst im Fenster Projekte ein Projektverzeichnis wählen.");
             }
             Some(Err(e)) => {
                 ui.label(format!("Die Projekte lassen sich nicht lesen: {e}"));
@@ -207,7 +207,7 @@ fn save_as(
                         .auto_shrink([false, true]);
                     theme::scroll_area(ui, area, |ui| {
                         if nodes.iter().all(|n| n.kind == NodeKind::Document) {
-                            ui.weak("Noch kein Projekt vorhanden. Zuerst im Feld Projekte ein Projekt anlegen.");
+                            ui.weak("Noch kein Projekt vorhanden. Zuerst im Fenster Projekte ein Projekt anlegen.");
                         }
                         container_tree(ui, nodes, &mut parent);
                     });

@@ -1,5 +1,6 @@
-//! Schwebende Felder (Graphit, Etappe B): oben Menü und Tabs, links Projekte und Feature-Baum,
-//! rechts Eigenschaften oder Versionen, links unten die Statuszeile und bei alten Versionen ein
+//! Schwebende Felder (Graphit, Etappe B): oben Menü und Tabs, links der Feature-Baum (mit den
+//! Zeichnungen, über die ganze Spalte; die Projekte stehen im Fenster „Projekte“), rechts
+//! Eigenschaften oder Versionen, links unten die Statuszeile und bei alten Versionen ein
 //! schmaler Hinweis unter dem oberen Feld. Jedes Feld ist ein `egui::Area` an der Stelle aus
 //! [`shell::layout_in_mode`]; die Inhalte zeichnen die bisherigen Bereichsfunktionen. Im
 //! Skizzenmodus (Etappe C) entfallen Baum, Eigenschaften und Befehlsfeld; Leiste, Skizzenfeld und
@@ -23,9 +24,7 @@ use egui::{Vec2, vec2};
 use crate::app::{self, CreateKind, PlanoraApp};
 use crate::shell::{self, RightTab, ShellMode, ShellRects};
 use crate::state::AppState;
-use crate::{
-    browser, icons, logo, projects_panel, properties, tabs, theme, versions_panel, viewport,
-};
+use crate::{browser, icons, logo, properties, tabs, theme, versions_panel, viewport};
 use planora_kernel::BoolOp;
 
 /// Breite, bis zu der die Tab-Leiste nicht umbricht (sie rollt waagerecht statt dessen).
@@ -634,11 +633,9 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 })
                 .inner
             });
-            let (open_projects, menu_natural) = menu.inner;
-            if open_projects {
-                // „Öffnen …“: Projekte einblenden und den Baum neu lesen.
-                app.show_projects();
-            }
+            let (request, menu_natural) = menu.inner;
+            // „Projekte …“ und „Einstellungen …“ öffnen Fenster der App.
+            app.apply_menu_request(request);
             // Rückgängig und Wiederholen rechts neben dem Menü, in jedem Modus; ihr Platz zählt
             // zur Wunsch- und Mindestbreite des Felds (über `gap`; die Tabs rollen statt dessen).
             // Sie trennen Menü und Tabs selbst (kein Trennstrich).
@@ -715,8 +712,8 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     });
 }
 
-/// Projekte (wenn sichtbar) + Feature-Baum in einer senkrechten ScrollArea, höchstens so hoch
-/// wie die Spalte. Schreibgeschützt ist der Baum gesperrt.
+/// Feature-Baum (mit den Zeichnungen) in einer senkrechten ScrollArea über die ganze Höhe der
+/// Spalte. Schreibgeschützt ist der Baum gesperrt.
 fn left_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let dark = app.ws.active_tab().state.dark;
     let frame = theme::panel_frame(dark);
@@ -732,12 +729,6 @@ fn left_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 .max_height(inner.y)
                 .auto_shrink([false, true]);
             theme::scroll_area(ui, area, |ui| {
-                if app.shell.projects_visible {
-                    theme::section_header(ui, "Projekte", theme::HEADER_H);
-                    ui.add_space(theme::SPACE_1);
-                    projects_panel::show(ui, &mut app.ws, &mut app.projects_ui);
-                    ui.add_space(theme::SPACE_3);
-                }
                 let state = &mut app.ws.active_tab_mut().state;
                 browser::show_with(ui, state, read_only);
             });

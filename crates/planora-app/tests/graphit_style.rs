@@ -202,13 +202,14 @@ fn menu_entries_have_icons_and_separate_shortcuts() {
     }
     // Jeder Eintrag hat ein Symbol links in seiner Zeile.
     for label in [
-        "Öffnen …",
+        "Projekte …",
         "Speichern",
         "Speichern unter …",
         "Exportieren …",
         "Netz importieren …",
         "STEP importieren …",
         "Schließen",
+        "Einstellungen …",
         "Beenden",
     ] {
         let l = s.text(label);
@@ -755,13 +756,16 @@ fn the_refactored_menus_and_tab_buttons_still_act() {
         app::file_menu(ui, &mut ws);
     });
     let neu = s.text("Neu").rect.center();
-    click(&c, neu, |ui| app::file_menu(ui, &mut ws));
+    click(&c, neu, |ui| {
+        app::file_menu(ui, &mut ws) != app::MenuRequest::None
+    });
     assert_eq!(ws.tabs.len(), 2, "Neu legt einen Tab an");
 
-    // „Datei → Öffnen …“ in der Menüleiste meldet: Projekte einblenden.
+    // „Datei → Projekte …“ in der Menüleiste meldet: Fenster Projekte öffnen.
     let c = context(Some(true));
     let mut shell = ShellState::default();
-    let mut bar = |ui: &mut egui::Ui| app::menu_bar(ui, &mut ws, &mut shell);
+    let mut bar =
+        |ui: &mut egui::Ui| app::menu_bar(ui, &mut ws, &mut shell) == app::MenuRequest::Projects;
     let (s, _) = shot_with(&c, vec![], |ui| {
         bar(ui);
     });
@@ -770,8 +774,8 @@ fn the_refactored_menus_and_tab_buttons_still_act() {
         bar(ui);
     });
     assert!(
-        click(&c, s.text("Öffnen …").rect.center(), &mut bar),
-        "Öffnen … blendet die Projekte ein"
+        click(&c, s.text("Projekte …").rect.center(), &mut bar),
+        "Projekte … öffnet das Fenster Projekte"
     );
 
     // Symbole der Tab-Leiste: „Schließen“ am zweiten Tab, „Neu“ am Ende.

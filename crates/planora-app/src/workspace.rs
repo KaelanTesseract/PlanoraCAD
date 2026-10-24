@@ -552,7 +552,7 @@ pub struct Workspace {
     /// Der Dialog „Über PlanoraCAD“ ist offen.
     pub about_open: bool,
     /// Zählt Änderungen an der Bibliothek auf der Festplatte, die über den Arbeitsbereich laufen
-    /// (Speichern unter, Wurzelwechsel); das Feld Projekte liest danach den Baum neu.
+    /// (Speichern unter, Wurzelwechsel); das Fenster Projekte liest danach den Baum neu.
     pub library_revision: u64,
     pub autosave_interval: Duration,
     /// Zuletzt benutzter Ordner der Dateiauswahl beim Exportieren und Importieren (nicht
