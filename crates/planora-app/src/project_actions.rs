@@ -358,9 +358,14 @@ pub fn dialog_open(st: &ProjectsUi) -> bool {
         || st.confirm_delete.is_some()
 }
 
-/// Textfeld eines Fensters; `true`, wenn darin Enter gedrückt wurde.
+/// Textfeld eines Fensters; `true`, wenn darin Enter gedrückt wurde. Im ersten Bild des Fensters
+/// bekommt das Feld den Tastaturfokus (gleich lostippen nach „Neues Projekt“ oder „Umbenennen …“).
 fn name_field(ui: &mut egui::Ui, name: &mut String) -> bool {
     let r = theme::text_field(ui, egui::TextEdit::singleline(name));
+    let layer = ui.layer_id();
+    if !ui.ctx().memory(|m| m.areas().visible_last_frame(&layer)) {
+        r.request_focus();
+    }
     r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
 }
 

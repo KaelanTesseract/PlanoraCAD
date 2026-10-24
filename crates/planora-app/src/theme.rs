@@ -651,6 +651,15 @@ impl egui::Widget for Toggle<'_> {
     }
 }
 
+/// Hauptknopf eines Fensters (etwa „Neues Projekt“): Fläche `accent`, Schrift `on_accent`. Rand
+/// und Innenabstand kommen wie bei jedem Knopf aus dem Zustand (egui gleicht den Innenabstand
+/// an die Strichbreite an); ein eigener Strich würde den Knopf beim Drücken wachsen lassen. So
+/// ist er in Ruhe, beim Überfahren und beim Drücken gleich groß.
+pub fn primary_button(text: &str, dark: bool) -> egui::Button<'_> {
+    let p = palette(dark);
+    egui::Button::new(egui::RichText::new(text).color(p.on_accent)).fill(p.accent)
+}
+
 /// Akzentfarbe (Modus eingeschaltet, Tastaturfokus, aktive Auswahl); in beiden Themen gleich.
 pub fn accent(dark: bool) -> Color32 {
     palette(dark).accent

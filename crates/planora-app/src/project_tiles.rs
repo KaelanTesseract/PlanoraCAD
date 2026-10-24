@@ -46,6 +46,9 @@ pub struct Scan {
     pub root: PathBuf,
     pub tree: Vec<TreeNode>,
     pub docs: BTreeMap<NodePath, DocEntry>,
+    /// Kennung (`dokument.json`) je lesbarem Dokument, für den Schlüssel der Miniatur (leer bei
+    /// [`scan_tree`]).
+    pub ids: BTreeMap<NodePath, String>,
 }
 
 /// Baum + `peek` je Dokument; fehlt `root`, Fehler (nie anlegen); Abbruch → Err(CANCELLED).
@@ -74,13 +77,20 @@ pub fn scan_library_with(
     progress.set_total(count);
     let mut cancelled = false;
     let mut docs = BTreeMap::new();
+    let mut ids = BTreeMap::new();
     walk_documents(&tree, &mut |node| {
         if cancelled || stop(progress) {
             cancelled = true;
             return;
         }
         let entry = match lib.document_dir(&node.path) {
-            Ok(dir) => doc_entry(&dir),
+            Ok(dir) => {
+                let (entry, id) = read_entry(&dir);
+                if let Some(id) = id {
+                    ids.insert(node.path.clone(), id);
+                }
+                entry
+            }
             Err(e) => DocEntry {
                 dir: node.path.iter().fold(root.to_path_buf(), |d, p| d.join(p)),
                 state: DocState::Unreadable(e.to_string()),
@@ -97,6 +107,7 @@ pub fn scan_library_with(
         root: root.to_path_buf(),
         tree,
         docs,
+        ids,
     })
 }
 
@@ -115,7 +126,12 @@ pub fn scan_tree(
     walk_documents(&tree, &mut |node| {
         docs.insert(node.path.clone(), read(&node.path));
     });
-    Scan { root, tree, docs }
+    Scan {
+        root,
+        tree,
+        docs,
+        ids: BTreeMap::new(),
+    }
 }
 
 /// Ruft `f` für jedes Dokument im Baum (in Baumreihenfolge).
@@ -155,17 +171,23 @@ fn tip_facts(info: &DocumentInfo) -> Result<DocFacts, String> {
 /// Liest `dokument.json` eines Dokumentordners; peek-Fehler → `Unreadable(e.to_string())`,
 /// ebenso ohne Spitze oder mit unmöglicher Zeit der Spitze.
 pub fn doc_entry(dir: &Path) -> DocEntry {
-    let state = match peek(dir) {
+    read_entry(dir).0
+}
+
+/// Wie [`doc_entry`], dazu die Kennung des Dokuments, wenn es lesbar ist.
+fn read_entry(dir: &Path) -> (DocEntry, Option<String>) {
+    let (state, id) = match peek(dir) {
         Ok((info, _)) => match tip_facts(&info) {
-            Ok(f) => DocState::Read(f),
-            Err(e) => DocState::Unreadable(e),
+            Ok(f) => (DocState::Read(f), Some(info.id)),
+            Err(e) => (DocState::Unreadable(e), None),
         },
-        Err(e) => DocState::Unreadable(e.to_string()),
+        Err(e) => (DocState::Unreadable(e.to_string()), None),
     };
-    DocEntry {
+    let entry = DocEntry {
         dir: dir.to_path_buf(),
         state,
-    }
+    };
+    (entry, id)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

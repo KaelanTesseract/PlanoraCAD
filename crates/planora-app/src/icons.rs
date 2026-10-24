@@ -164,6 +164,10 @@ pub enum Icon {
     Documents,
     /// Phosphor `briefcase` (Schnellzugriff Projekte).
     Projects,
+    /// Phosphor `caret-left` (eine Ebene hinauf im Pfad des Fensters „Projekte“).
+    Back,
+    /// Phosphor `caret-right` (Trenner im Pfad des Fensters „Projekte“).
+    PathSeparator,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -244,6 +248,8 @@ pub const ALL: &[Icon] = &[
     Icon::Favorite,
     Icon::Documents,
     Icon::Projects,
+    Icon::Back,
+    Icon::PathSeparator,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -324,6 +330,8 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Favorite, '\u{e46a}', "star"),
     (Icon::Documents, '\u{e710}', "files"),
     (Icon::Projects, '\u{e0ee}', "briefcase"),
+    (Icon::Back, '\u{e138}', "caret-left"),
+    (Icon::PathSeparator, '\u{e13a}', "caret-right"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {

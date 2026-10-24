@@ -693,3 +693,12 @@ impl PlanoraApp {
 ## Abweichungen bei der Umsetzung
 
 (wird während der Ausführung gefüllt)
+
+- **Aufgabe 8:** `PROJECTS_CHROME_H` bleibt 260 (passt bei 800 × 600). `ThumbKey::new` braucht seit
+  Aufgabe 5 die Kennung des Dokuments: `project_tiles::Scan` hat dafür `ids` (Kennung je lesbarem
+  Dokument, beim Lesen mit `peek` gemerkt; `scan_tree` lässt sie leer). Die Zeichen „‹“ und „›“
+  fehlen in den Schriften (Test `fonts`): der Pfad nutzt die Phosphor-Symbole `caret-left`
+  (`Icon::Back`, U+E138) und `caret-right` (`Icon::PathSeparator`, U+E13A). Die Namensfelder der
+  Fenster „Neues Projekt“, „Neues Dokument“, „Neuer Ordner“ und „Umbenennen“ bekommen im ersten
+  Bild den Tastaturfokus (gleich lostippen). egui 0.36 malt Bilder als Rechteck mit Textur, nicht
+  als `Shape::Mesh`; der Test prüft beides.

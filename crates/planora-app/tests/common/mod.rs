@@ -75,6 +75,15 @@ impl Screen {
         events: Vec<egui::Event>,
         f: &mut dyn FnMut(&egui::Context),
     ) -> Vec<Seen> {
+        self.frame_shapes(events, f).0
+    }
+
+    /// Wie [`Screen::frame`], dazu alle gezeichneten Formen des Bilds.
+    pub fn frame_shapes(
+        &mut self,
+        events: Vec<egui::Event>,
+        f: &mut dyn FnMut(&egui::Context),
+    ) -> (Vec<Seen>, Vec<egui::epaint::ClippedShape>) {
         self.time += 0.05;
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
@@ -82,13 +91,14 @@ impl Screen {
             time: Some(self.time),
             ..Default::default()
         };
-        let out = self.ctx.run_ui(raw, |ui| f(ui.ctx()));
+        let mut out = self.ctx.run_ui(raw, |ui| f(ui.ctx()));
         let mut seen = Vec::new();
         for c in &out.shapes {
             walk_shape(&c.shape, c.clip_rect, &mut seen);
         }
+        let shapes = std::mem::take(&mut out.shapes);
         out.drop_without_applying_deltas();
-        seen
+        (seen, shapes)
     }
 
     /// `n` Bilder ohne Ereignisse; liefert die Texte des letzten.
