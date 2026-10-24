@@ -1195,6 +1195,12 @@ impl Workspace {
     ///
     /// Noch nicht gespeicherte Favoriten-Änderungen werden dabei mit geschrieben.
     pub fn persist_config(&mut self) {
+        self.try_persist_config();
+    }
+
+    /// Wie [`Workspace::persist_config`]; `true`, wenn die Datei geschrieben wurde (auch über
+    /// den Ersatz einer unlesbaren Datei).
+    pub fn try_persist_config(&mut self) -> bool {
         let root = self.config.root.clone();
         let pending = std::mem::take(&mut self.favorites_pending);
         let mut full = None;
@@ -1208,11 +1214,14 @@ impl Workspace {
                 if full.is_some() {
                     self.favorites_notice = full;
                 }
+                true
             }
             Err(_) => {
-                if self.config.save_to(&self.config_path).is_err() {
+                let saved = self.config.save_to(&self.config_path).is_ok();
+                if !saved {
                     self.favorites_pending = pending;
                 }
+                saved
             }
         }
     }

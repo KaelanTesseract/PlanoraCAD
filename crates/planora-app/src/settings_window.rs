@@ -10,6 +10,7 @@ use crate::places::{self, Places};
 use crate::theme;
 use crate::workspace::{ROOT_LOCKED, Workspace};
 use planora_project::config::Config;
+use planora_project::library::{DOCUMENT_FILE, DOCUMENT_SUFFIX, PROJECT_FILE};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
@@ -19,6 +20,12 @@ pub const DIRECTORY_LABEL: &str = "Projektverzeichnis";
 pub const CHANGE_DIRECTORY: &str = "Projektverzeichnis ändern …";
 pub const CHOOSE_HEADING: &str = "Projektverzeichnis wählen";
 pub const KEEP_HINT: &str = "Ihre Projekte bleiben, wo sie sind. Im neuen Verzeichnis erscheinen nur die Projekte, die dort liegen.";
+/// Anfang der Meldung, wenn sich das gewählte Verzeichnis nicht lesen lässt (danach der Grund).
+pub const UNREADABLE: &str = "Das Verzeichnis lässt sich nicht lesen.";
+/// Meldung, wenn das gewählte Verzeichnis selbst ein Projekt oder Dokument ist.
+pub const NESTED: &str = "Das ist selbst schon ein Projekt oder Dokument. Bitte den Ordner wählen, der deine Projekte enthält.";
+/// Warnung, wenn der Wechsel gilt, die Einstellung aber nicht gespeichert werden konnte.
+pub const NOT_SAVED: &str = "Das neue Projektverzeichnis gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
 
 /// Kennung des Fensters (unabhängig vom Titel).
 const WINDOW_ID: &str = "planora_settings_window";
@@ -65,9 +72,35 @@ fn is_open_library(ws: &Workspace, dir: &Path) -> bool {
         || std::fs::canonicalize(dir).is_ok_and(|c| places::same_dir(&c, root))
 }
 
+/// Prüft ein vorhandenes Ziel vor dem Wechsel: lesbar und nicht selbst ein Projekt- oder
+/// Dokumentordner. Ein fehlendes Ziel legt `choose_root` an.
+fn check_target(dir: &Path) -> Result<(), RootMessage> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    if let Err(e) = std::fs::read_dir(dir) {
+        return Err(RootMessage::Error(format!(
+            "{UNREADABLE} {}",
+            file_chooser::io_message(e.kind())
+        )));
+    }
+    let document_name = dir.file_name().is_some_and(|n| {
+        n.to_string_lossy()
+            .to_lowercase()
+            .ends_with(DOCUMENT_SUFFIX)
+    });
+    if document_name || dir.join(PROJECT_FILE).exists() || dir.join(DOCUMENT_FILE).exists() {
+        return Err(RootMessage::Error(NESTED.into()));
+    }
+    Ok(())
+}
+
 /// Wechselt das Projektverzeichnis wie `Workspace::choose_root` + `persist_config`.
 /// Gleicher Ordner (nach `places::same_dir`) → Ok ohne Schreiben. Offene gespeicherte Dokumente
-/// → Warning mit dem Wortlaut aus `choose_root`; `Library::open`-Fehler → Error.
+/// → Warning mit dem Wortlaut aus `choose_root`; ein nicht lesbares Ziel, ein Projekt- oder
+/// Dokumentordner und `Library::open`-Fehler → Error (altes Verzeichnis und Datei bleiben).
+/// Lässt sich die Einstellung nicht speichern, gilt der Wechsel bis Programmende (Warning
+/// [`NOT_SAVED`]).
 pub fn change_root(ws: &mut Workspace, dir: &Path) -> Result<(), RootMessage> {
     if is_open_library(ws, dir) {
         return Ok(());
@@ -75,8 +108,11 @@ pub fn change_root(ws: &mut Workspace, dir: &Path) -> Result<(), RootMessage> {
     if ws.has_saved_documents() {
         return Err(RootMessage::Warning(ROOT_LOCKED.into()));
     }
+    check_target(dir)?;
     ws.choose_root(dir).map_err(RootMessage::Error)?;
-    ws.persist_config();
+    if !ws.try_persist_config() {
+        return Err(RootMessage::Warning(NOT_SAVED.into()));
+    }
     Ok(())
 }
 
@@ -137,6 +173,16 @@ impl SettingsWindow {
 
     pub fn message(&self) -> Option<&RootMessage> {
         self.message.as_ref()
+    }
+
+    /// Wie in der App: [`SettingsWindow::show`] mit den Schnellzugriffen des Arbeitsbereichs;
+    /// geänderte Favoriten werden danach gespeichert. Das Ereignis (auch der Rückweg zu
+    /// „Projekte“) geht an den Aufrufer.
+    pub fn show_in(&mut self, ctx: &egui::Context, ws: &mut Workspace) -> SettingsEvent {
+        let mut places = ws.places();
+        let event = self.show(ctx, ws, &mut places);
+        ws.save_places(places);
+        event
     }
 
     /// Zeichnet das Fenster (Id `"planora_settings_window"`, `center_on_open`, ✕, Fußzeile

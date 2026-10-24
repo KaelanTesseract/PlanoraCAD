@@ -150,14 +150,129 @@ fn an_unusable_directory_gives_an_error_and_keeps_the_old_one() {
 }
 
 #[test]
-fn an_unreadable_config_is_not_overwritten_by_favorites_but_root_is_chosen() {
+fn an_unreadable_config_is_replaced_with_the_chosen_directory_and_the_favorites_in_memory() {
     let mut e = env();
     fs::write(&e.cfg, b"{kaputt").unwrap();
+    let fav = e.tmp.join("Im Speicher");
+    e.ws.config.favorites = vec![fav.clone()];
     let other = e.tmp.join("Anderes");
     assert_eq!(change_root(&mut e.ws, &other), Ok(()));
     let disk = Config::read_from(&e.cfg).expect("danach gültig");
     assert_eq!(disk.root, Some(other.clone()));
-    assert!(disk.favorites.is_empty());
+    assert_eq!(disk.favorites, vec![fav], "Stand im Speicher geschrieben");
+}
+
+#[test]
+fn a_project_or_document_folder_is_not_accepted() {
+    let mut e = env();
+    write_config(&e.cfg, &e.root, vec![e.tmp.join("Fav")]);
+    let before = fs::read(&e.cfg).unwrap();
+    let p = e.ws.library.as_ref().unwrap().create_project("P").unwrap();
+    e.ws.save_as(&p, "Teil", "").unwrap();
+    // Das Dokument wieder schließen (neuer leerer Tab), damit nichts gesperrt ist.
+    e.ws.new_tab();
+    e.ws.close_tab(0);
+    assert!(!e.ws.has_saved_documents());
+    let rev = e.ws.library_revision;
+    let bare = e.tmp.join("Kopie.PCAD");
+    fs::create_dir_all(&bare).unwrap();
+    let doc_inside = e.tmp.join("Doku");
+    fs::create_dir_all(&doc_inside).unwrap();
+    fs::write(doc_inside.join("dokument.json"), b"{}").unwrap();
+    for target in [
+        e.root.join("P"),
+        e.root.join("P").join("Teil.pcad"),
+        bare,
+        doc_inside,
+    ] {
+        assert_eq!(
+            change_root(&mut e.ws, &target),
+            Err(RootMessage::Error(NESTED.into())),
+            "{target:?}"
+        );
+    }
+    assert_eq!(
+        NESTED,
+        "Das ist selbst schon ein Projekt oder Dokument. Bitte den Ordner wählen, der deine Projekte enthält."
+    );
+    assert_eq!(lib_root(&e.ws), e.root);
+    assert_eq!(e.ws.library_revision, rev);
+    assert_eq!(fs::read(&e.cfg).unwrap(), before);
+}
+
+#[test]
+fn an_unreadable_target_gives_a_plain_error_and_keeps_the_old_one() {
+    let mut e = env();
+    write_config(&e.cfg, &e.root, vec![]);
+    let before = fs::read(&e.cfg).unwrap();
+    // Eine Datei lässt sich nicht als Ordner lesen.
+    let file = e.tmp.join("datei.txt");
+    fs::write(&file, b"x").unwrap();
+    let Err(RootMessage::Error(text)) = change_root(&mut e.ws, &file) else {
+        panic!("Fehler erwartet");
+    };
+    assert!(text.starts_with(UNREADABLE), "{text}");
+    assert!(text.len() > UNREADABLE.len(), "mit Grund: {text}");
+    assert!(
+        !text.contains("os error"),
+        "ohne Text des Betriebssystems: {text}"
+    );
+    assert_eq!(UNREADABLE, "Das Verzeichnis lässt sich nicht lesen.");
+    assert_eq!(lib_root(&e.ws), e.root);
+    assert_eq!(fs::read(&e.cfg).unwrap(), before);
+}
+
+#[test]
+fn a_failed_save_switches_for_this_session_with_a_warning() {
+    let mut e = env();
+    // Der Ordner der Konfiguration ist eine Datei: Schreiben ist unmöglich.
+    let blocker = e.tmp.join("blockiert");
+    fs::write(&blocker, b"x").unwrap();
+    e.ws.config_path = blocker.join("config.json");
+    let rev = e.ws.library_revision;
+    let other = e.tmp.join("Anderes");
+    assert_eq!(
+        change_root(&mut e.ws, &other),
+        Err(RootMessage::Warning(NOT_SAVED.into()))
+    );
+    assert_eq!(
+        NOT_SAVED,
+        "Das neue Projektverzeichnis gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden."
+    );
+    assert!(places::same_dir(
+        &lib_root(&e.ws),
+        &fs::canonicalize(&other).unwrap()
+    ));
+    assert_eq!(e.ws.config.root, Some(other.clone()));
+    assert_eq!(e.ws.library_revision, rev + 1);
+    assert_eq!(fs::read(&blocker).unwrap(), b"x");
+}
+
+#[test]
+fn persisting_reports_whether_it_was_written() {
+    let mut e = env();
+    e.ws.config.root = Some(e.tmp.join("A"));
+    assert!(e.ws.try_persist_config());
+    assert_eq!(
+        Config::read_from(&e.cfg).unwrap().root,
+        Some(e.tmp.join("A"))
+    );
+    let blocker = e.tmp.join("blockiert");
+    fs::write(&blocker, b"x").unwrap();
+    e.ws.config_path = blocker.join("config.json");
+    assert!(!e.ws.try_persist_config());
+    // Die alte Form bleibt still.
+    e.ws.persist_config();
+}
+
+#[test]
+fn errors_and_warnings_have_their_own_colours() {
+    for dark in [false, true] {
+        let p = theme::palette(dark);
+        assert_eq!(RootMessage::Error("x".into()).color(dark), p.error);
+        assert_eq!(RootMessage::Warning("x".into()).color(dark), p.warning);
+        assert_ne!(p.error, p.warning);
+    }
 }
 
 #[test]
@@ -217,6 +332,8 @@ struct App {
     places: Places,
     /// Letztes Ereignis ungleich `None`.
     last: SettingsEvent,
+    /// Wie in der App über `show_in` (Schnellzugriffe aus dem Arbeitsbereich, Speichern danach).
+    via_show_in: bool,
 }
 
 impl App {
@@ -236,6 +353,7 @@ impl App {
             e,
             places,
             last: SettingsEvent::None,
+            via_show_in: false,
         }
     }
 
@@ -253,8 +371,13 @@ impl App {
             &mut self.places,
             &mut self.last,
         );
+        let via_show_in = self.via_show_in;
         let out = self.ctx.run_ui(raw, |ui| {
-            let ev = w.show(ui.ctx(), ws, places);
+            let ev = if via_show_in {
+                w.show_in(ui.ctx(), ws)
+            } else {
+                w.show(ui.ctx(), ws, places)
+            };
             if ev != SettingsEvent::None {
                 *last = ev;
             }
@@ -277,6 +400,10 @@ impl App {
 
     /// Klick auf den sichtbaren Text `text` (vorher eine Pause, damit kein Doppelklick entsteht).
     fn click(&mut self, text: &str) {
+        self.click_with(text, PointerButton::Primary);
+    }
+
+    fn click_with(&mut self, text: &str, which: PointerButton) {
         self.time += 1.0;
         let seen = self.settle(4);
         let s = seen
@@ -286,7 +413,7 @@ impl App {
         let at = s.rect.center();
         let button = |pressed| Event::PointerButton {
             pos: at,
-            button: PointerButton::Primary,
+            button: which,
             pressed,
             modifiers: Modifiers::NONE,
         };
@@ -428,6 +555,57 @@ fn a_refusal_is_shown_in_warning_colour() {
             .unwrap_or_else(|| panic!("Meldung nicht gezeichnet ({dark})"));
         assert_eq!(shot.color, theme::palette(dark).warning, "dunkel: {dark}");
     }
+}
+
+#[test]
+fn a_later_successful_change_clears_an_earlier_warning() {
+    let mut e = env();
+    save_document(&mut e.ws);
+    fs::create_dir_all(e.given.join("Neu")).unwrap();
+    let mut a = App::new(e, true, 1400.0, 900.0);
+    refuse(&mut a);
+    assert!(matches!(a.w.message(), Some(RootMessage::Warning(_))));
+    // Dokument schließen, dann noch einmal wählen (ohne neues `open`).
+    a.e.ws.new_tab();
+    a.e.ws.close_tab(0);
+    a.click(CHANGE_DIRECTORY);
+    a.w.chooser_mut().unwrap().mark("Neu");
+    a.click(CHOOSE_FOLDER);
+    assert_eq!(a.w.message(), None, "alte Warnung weg");
+    assert_eq!(lib_root(&a.e.ws), a.e.root.join("Neu"));
+    let seen = a.settle(4);
+    assert!(!texts(&seen).iter().any(|t| t.starts_with("Bitte zuerst")));
+}
+
+#[test]
+fn a_favorite_added_in_the_settings_chooser_is_written_to_the_config_file() {
+    let e = env();
+    fs::create_dir_all(e.given.join("Teile")).unwrap();
+    write_config(&e.cfg, &e.root, vec![]);
+    let mut a = App::new(e, true, 1400.0, 900.0);
+    a.via_show_in = true;
+    a.w.open(false);
+    a.click(CHANGE_DIRECTORY);
+    a.click_with("Teile", PointerButton::Secondary);
+    a.click(places::ADD_FAVORITE);
+    let disk = Config::read_from(&a.e.cfg).unwrap();
+    assert_eq!(disk.favorites.len(), 1, "{disk:?}");
+    assert!(places::same_dir(
+        &disk.favorites[0],
+        &a.e.given.join("Teile")
+    ));
+    assert_eq!(disk.root, Some(a.e.root.clone()), "Verzeichnis bleibt");
+    assert_eq!(a.e.ws.config.favorites, disk.favorites);
+    assert!(a.w.chooser_mut().is_some(), "Auswahl bleibt offen");
+    // `show_in` gibt den Rückweg weiter.
+    a.w.open(true);
+    a.click("Schließen");
+    assert_eq!(
+        a.last,
+        SettingsEvent::Closed {
+            return_to_projects: true
+        }
+    );
 }
 
 #[test]

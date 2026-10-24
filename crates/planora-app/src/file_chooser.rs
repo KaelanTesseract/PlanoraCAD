@@ -280,7 +280,7 @@ pub fn default_dir() -> PathBuf {
 }
 
 /// Einfache Meldung zu einem Lesefehler, ohne Text des Betriebssystems.
-fn io_message(kind: std::io::ErrorKind) -> &'static str {
+pub fn io_message(kind: std::io::ErrorKind) -> &'static str {
     match kind {
         std::io::ErrorKind::NotFound => "Der Ordner ist nicht vorhanden.",
         std::io::ErrorKind::PermissionDenied => "Auf diesen Ordner darf nicht zugegriffen werden.",
