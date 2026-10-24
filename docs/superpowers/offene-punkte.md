@@ -1801,7 +1801,8 @@ Entscheidungen von Dennis am 2026-10-23. Zweig `feature/projekte-fenster`. Entwu
 - Nach einem zurückgesetzten Vereinigen sind beide Eingangszeilen im Baum zusammen hervorgehoben.
 - Bei sehr schmalen Fenstern kann der Statustext der Leiste so viel Platz nehmen, dass nur ein Schritt sichtbar bleibt.
 - In Dokumenten mit mehreren Körpern kostet das Bewegen des Markers (und damit das Abspielen) Rechenzeit, weil die Schritte der anderen Körper mit neu gerechnet werden. Bei vielen Verrundungen kann das ruckeln; im Fenstertest mit einem solchen Dokument prüfen.
-- Zurückgestellt aus den Prüfungen: Die Leiste legt beim Abspielen einen Rückgängig-Schritt je Schritt an; der Marker hat 12 px Trefferfläche und überdeckt dabei Nachbarschritte etwas; Dialoge „Erzeugen“ und „Bearbeiten“ sperren die Leiste nicht (wie das Befehlsfeld).
+- Die Prüfung vieler Rückrollstellen beim Laden kostet insgesamt noch quadratische Zeit, weil `Document::chain()` je Aufruf linear ist (eine Berechnung der Ketten in einem Durchlauf würde das beheben). Das spielt nur bei absichtlich gebauten Dateien eine Rolle.
+- Zurückgestellt aus den Prüfungen: Der Marker hat 12 px Trefferfläche und überdeckt dabei Nachbarschritte etwas; Dialoge „Erzeugen“ und „Bearbeiten“ sperren die Leiste nicht (wie das Befehlsfeld).
 
 ### Handliste (echtes Fenster)
 - [ ] 1. Quader und Zylinder anlegen, verschieben, vereinigen: Die Leiste zeigt eine Kette in den Farben der Körper, das Farbquadrat im Baum passt dazu.
