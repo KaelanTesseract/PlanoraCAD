@@ -155,6 +155,15 @@ impl Document {
         found
     }
 
+    /// Stelle jedes Features in der Liste (einmal gebaut, statt `index_of` in Schleifen).
+    fn position_map(&self) -> std::collections::HashMap<FeatureId, usize> {
+        self.features
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.id, i))
+            .collect()
+    }
+
     /// Übernimmt die Stellen in Listenordnung; zählt eine Änderung, wenn sie sich ändern.
     fn replace_rollbacks(&mut self, mut next: Vec<FeatureId>) {
         next.sort_by_key(|r| self.index_of(*r));
@@ -174,15 +183,17 @@ impl Document {
         given: &[FeatureId],
     ) -> Result<Vec<FeatureId>, FeatureError> {
         let bad = |m: String| FeatureError::InvalidInput(m);
+        let position = self.position_map();
+        let mut seen: HashSet<FeatureId> = HashSet::with_capacity(given.len());
         let mut out = Vec::with_capacity(given.len());
         for r in given {
-            if self.index_of(*r).is_none() {
+            if !position.contains_key(r) {
                 return Err(bad(format!(
                     "Eine Rückrollstelle verweist auf einen unbekannten Schritt (Kennung {})",
                     r.0
                 )));
             }
-            if out.contains(r) {
+            if !seen.insert(*r) {
                 return Err(bad(format!(
                     "Eine Rückrollstelle kommt doppelt vor (Kennung {})",
                     r.0
@@ -190,14 +201,19 @@ impl Document {
             }
             out.push(*r);
         }
-        out.sort_by_key(|r| self.index_of(*r));
+        out.sort_by_key(|r| position[r]);
         for r in &out {
-            let chain = self.chain(*r);
-            if let Some(o) = out.iter().find(|o| *o != r && chain.contains(o)) {
+            // Die Kette steht in Listenordnung wie `out`: der erste Treffer ist derselbe wie
+            // beim Suchen in `out`.
+            let found = self
+                .chain(*r)
+                .into_iter()
+                .find(|c| c != r && seen.contains(c));
+            if let Some(o) = found {
                 let name = |id: FeatureId| self.feature(id).map_or("?", |f| f.name.as_str());
                 return Err(bad(format!(
                     "Die Rückrollstellen „{}“ und „{}“ liegen im Verlauf desselben Körpers",
-                    name(*o),
+                    name(o),
                     name(*r)
                 )));
             }
@@ -212,19 +228,17 @@ impl Document {
         if self.rollbacks.is_empty() {
             return;
         }
+        let position = self.position_map();
         let mut kept: Vec<FeatureId> = self
             .rollbacks
             .iter()
             .copied()
-            .filter(|r| self.index_of(*r).is_some())
+            .filter(|r| position.contains_key(r))
             .collect();
-        kept.sort_by_key(|r| self.index_of(*r));
+        kept.sort_by_key(|r| position[r]);
         kept.dedup();
-        let all = kept.clone();
-        kept.retain(|r| {
-            let chain = self.chain(*r);
-            !all.iter().any(|o| o != r && chain.contains(o))
-        });
+        let all: HashSet<FeatureId> = kept.iter().copied().collect();
+        kept.retain(|r| !self.chain(*r).iter().any(|c| c != r && all.contains(c)));
         self.rollbacks = kept;
     }
 }

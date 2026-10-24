@@ -546,3 +546,83 @@ fn snapshot_with_invalid_rollbacks_is_rejected() {
     let loaded = Document::from_snapshot(swapped, 0.05).unwrap();
     assert_eq!(loaded.rollbacks(), &[ma2, mb2]);
 }
+
+#[test]
+fn checking_thousands_of_rollbacks_is_not_quadratic() {
+    // Viele unabhängige Körper, jeder mit einer Rückrollstelle: die Prüfung beim Laden darf nicht
+    // quadratisch in der Zahl der Stellen sein (beschädigte oder feindliche Datei).
+    const N: usize = 3000;
+    // Das Dokument entsteht aus einem Bild mit vielen Quadern (Aufbau über `add_feature` wäre
+    // selbst quadratisch); mit allen Stellen sind alle Quader zurückgesetzt und werden nicht
+    // gerechnet.
+    let mut one = Document::new();
+    let first = one
+        .add_feature(
+            "Quader",
+            FeatureKind::Box {
+                size: DVec3::splat(1.0),
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    let mut s = one.snapshot();
+    let proto = s.features[0].clone();
+    assert_eq!(proto.id, first);
+    s.features = (0..N as u64)
+        .map(|i| {
+            let mut f = proto.clone();
+            f.id = FeatureId(i + 1);
+            f.name = format!("Quader {i}");
+            f
+        })
+        .collect();
+    s.marker = N;
+    s.next_id = N as u64 + 1;
+    let ids: Vec<FeatureId> = s.features.iter().map(|f| f.id).collect();
+    s.rollbacks = ids.clone();
+    let start = std::time::Instant::now();
+    let doc = Document::from_snapshot(s.clone(), 0.05).unwrap();
+    let load = start.elapsed();
+    assert_eq!(doc.rollbacks().len(), N);
+    // Großzügige Grenze (Debug-Build), nur gegen grobe Rückfälle; `chain` selbst ist je Aufruf linear.
+    assert!(load.as_secs_f64() < 20.0, "Laden dauerte {load:?}");
+    // Dieselbe Prüfung, die ein Rückgängig auf dasselbe Bild macht.
+    let mut again = doc;
+    let start = std::time::Instant::now();
+    again.restore(s).unwrap();
+    assert!(
+        start.elapsed().as_secs_f64() < 20.0,
+        "{:?}",
+        start.elapsed()
+    );
+    // Zwei Stellen in einer Kette werden weiter abgelehnt, mit derselben Meldung.
+    let (a, b) = {
+        let mut d = Document::new();
+        let a = d
+            .add_feature(
+                "Quader 1",
+                FeatureKind::Box {
+                    size: DVec3::splat(1.0),
+                    origin: DVec3::ZERO,
+                },
+            )
+            .unwrap();
+        let m = d
+            .add_feature(
+                "Verschieben 1",
+                FeatureKind::Move {
+                    body: BodyRef {
+                        feature: a,
+                        index: 0,
+                    },
+                    delta: DVec3::X,
+                },
+            )
+            .unwrap();
+        (d, (a, m))
+    };
+    let mut s = a.snapshot();
+    s.rollbacks = vec![b.0, b.1];
+    let e = Document::from_snapshot(s, 0.05).err().expect("abgelehnt");
+    assert!(e.to_string().contains("desselben Körpers"), "{e}");
+}
