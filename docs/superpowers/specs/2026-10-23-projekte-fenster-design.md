@@ -53,6 +53,7 @@ besser nutzen.
   - Miniaturansicht der Körper (§ 6) oder Platzhalter („Noch keine Körper“).
   - Name; „Geändert 23.10.2026, 18:42“; „Version 12 · 3 Dokumente“ („1 Dokument“, „Noch keine
     Körper · 1 Dokument“, „Noch kein Dokument“ bei leerem Projekt).
+  - **[Geändert in der Umsetzung, siehe § 11: Datum und Reihenfolge nutzen die Zeit der Spitzenversion des aktiven Zweigs, nicht `latest_time()`.]**
   - Angaben stammen vom **zuletzt geänderten Dokument** des Projekts (größte `latest_time()`;
     bei Gleichstand das mit dem kleineren Namen): Miniatur, Datum = dessen jüngste Version,
     Version = Spitze seines aktiven Zweigs (`tip(active_branch)`). Dokumente, die sich nicht
@@ -220,3 +221,14 @@ Bibliothek bleiben wie bisher. Das Wort „Wurzel“ entfällt aus der Oberfläc
    Favoriten und Fußzeile).
 6. Einstellungen als Abschnitte untereinander, nicht als Reiter.
 7. Keine neue Tastenkombination in dieser Etappe.
+
+## 11. Festlegungen der Umsetzung
+
+Beim Bauen haben sich einzelne Festlegungen dieses Entwurfs geändert oder sind dazugekommen. Die vollständige Liste, nach Aufgaben geordnet, steht im Plan `docs/superpowers/plans/2026-10-23-projekte-fenster.md`, Abschnitt „Abweichungen bei der Umsetzung“. Die wichtigsten Punkte:
+
+1. **Datumsregel (§ 4) geändert:** Das Datum einer Kachel ist die Zeit der Spitzenversion des aktiven Zweigs, nicht die jüngste Version über alle Zweige. Datum und „Version n“ gehören so zur selben Version. Die Reihenfolge bei Projekten und Ordnern nutzt denselben Wert.
+2. **Zeitangaben in Ortszeit** (statt UTC, Entscheidung B) mit der Bibliothek `chrono`; gespeichert wird weiter UTC.
+3. **Strg+O** öffnet das Fenster „Projekte“ (§ 9a.2); „Neues Dokument“ legt das Dokument sofort an (§ 9a.1).
+4. **Miniaturen:** zusätzliche Werte `baut` und `fehlgeschlagen` für `art` samt Absturzmarke, Aufwandsgrenze `render_cost`, Bildgröße höchstens 1024 Punkte je Seite, eine Miniatur je Dokument, höchstens 64 Bilder im Grafikspeicher.
+5. **Fenster und Sperren:** Bei offener Rückfrage ist „Projekte“ gesperrt und „Einstellungen“ lassen sich nicht öffnen; offene Einstellungen sperren die Tasten für Rückgängig.
+6. **Pfad** mit Symbolen statt der Zeichen ‹ und ›, in einer eigenen Zeile unter dem Titel.
