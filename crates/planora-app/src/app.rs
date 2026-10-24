@@ -157,16 +157,17 @@ impl PlanoraApp {
     /// [`keymap::dispatch`]), ausgeführt wie Menü und Knöpfe über [`commands::run_key`]: Datei-
     /// Befehle, Rückgängig und Wiederholen, im Modell Skizze extrudieren, Verrunden,
     /// Sichtbarkeit, Löschen und Letzten Befehl wiederholen, in der offenen Skizze die Werkzeuge
-    /// (L, R, C, P, Leertaste) und in der Zeichnung die Schalter „Maß“ und „Position“; Esc, Enter
-    /// und Entf von Skizze und Zeichnung bleiben dort fest. Nur ohne aktives Eingabefeld (dort
-    /// gehören die Tasten dem Feld; ein über Tab fokussierter Knopf zählt mit, die Leertaste
-    /// drückt ihn), ohne offene Rückfrage (die sonst überschrieben würde) und nur im ersten
-    /// Durchgang eines Bildes (ein verworfener Durchgang würde das Kürzel sonst zweimal
-    /// ausführen). Der Marker der Verlaufsleiste und die Ansicht sperren nichts, auch nicht die
-    /// Leertaste: Sie wird hier vor dem Aufbau der Bedienelemente verbraucht, der Marker bekommt
-    /// also keinen Ersatzklick. Das Kürzel für Projekte öffnet das Fenster Projekte
-    /// ([`open_projects`]). Die Befehle von Modell, Skizze und Zeichnung sind wie Rückgängig gesperrt, solange ein
-    /// Fenster offen ist ([`PlanoraApp::windows_open`]; die Taste bleibt dann liegen). Ausgeführt
+    /// (L, R, C, P, Leertaste), „Konstruktion umschalten“ (X) und in der Zeichnung die Schalter
+    /// „Maß“ und „Position“; Esc, Enter und Entf von Skizze und Zeichnung bleiben dort fest. Nur
+    /// ohne aktives Eingabefeld (dort gehören die Tasten dem Feld; ein über Tab fokussierter
+    /// Knopf zählt mit, die Leertaste drückt ihn), ohne offene Rückfrage (die sonst überschrieben
+    /// würde) und nur im ersten Durchgang eines Bildes (ein verworfener Durchgang würde das
+    /// Kürzel sonst zweimal ausführen). Der Marker der Verlaufsleiste und die Ansicht sperren
+    /// nichts, auch nicht die Leertaste: Sie wird hier vor dem Aufbau der Bedienelemente
+    /// verbraucht, der Marker bekommt also keinen Ersatzklick. Das Kürzel für Projekte öffnet das
+    /// Fenster Projekte ([`open_projects`]). Die Befehle von Modell, Skizze und Zeichnung sind wie
+    /// Rückgängig gesperrt, solange ein Fenster offen ist ([`PlanoraApp::windows_open`]; die
+    /// Taste bleibt dann liegen). Ausgeführt
     /// wird in der Reihenfolge der Tabelle, Rückgängig und Wiederholen zuletzt; sie sind
     /// zusätzlich gesperrt, solange eine Maustaste gedrückt ist ([`PlanoraApp::undo_keys`]).
     fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -185,7 +186,8 @@ impl PlanoraApp {
         self.undo_keys(ctx);
     }
 
-    /// Ist ein Fenster offen, das Rückgängig und die Befehle des Modells sperrt? Ein Fenster des
+    /// Ist ein Fenster offen, das Rückgängig und die Befehle von Modell, Skizze und Zeichnung
+    /// sperrt? Ein Fenster des
     /// Tabs ([`crate::workspace::DocTab::dialog_open`], auch Export und Import), „Über“, ein
     /// Fenster der Aktionen im Fenster Projekte („Neues Projekt“, „Umbenennen“, „Löschen“, …),
     /// ein Fenster des Reiters Versionen oder das Fenster Einstellungen (es ist wie die

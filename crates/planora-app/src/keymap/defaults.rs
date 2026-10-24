@@ -85,8 +85,8 @@ action_table! {
     /// Startet den zuletzt abgeschlossenen wiederholbaren Befehl noch einmal.
     RepeatLast, "modell.befehl_wiederholen", "Letzten Befehl wiederholen", Model, [key(Key::Space)];
     // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Versatz O,
-    // Stutzen T, Skizzenbemaßung D und Hilfslinie X kommen erst mit ihrer Funktion. Esc, Enter
-    // und Entf der Skizze sind fest (`sketch_view`), nicht in der Tabelle.
+    // Stutzen T und Skizzenbemaßung D kommen erst mit ihrer Funktion. Esc, Enter und Entf der
+    // Skizze sind fest (`sketch_view`), nicht in der Tabelle.
     SketchLine, "skizze.linie", "Linie", Sketch, [key(Key::L)];
     SketchRectangle, "skizze.rechteck", "Rechteck", Sketch, [key(Key::R)];
     SketchCircle, "skizze.kreis", "Kreis", Sketch, [key(Key::C)];
@@ -96,6 +96,8 @@ action_table! {
     /// `commands::LastCommand`).
     SketchRepeatLast, "skizze.werkzeug_wiederholen", "Letztes Skizzenwerkzeug wiederholen", Sketch,
         [key(Key::Space)];
+    /// Wie der Knopf im Skizzenfeld (Fusion „Normal / Hilfslinie“): nur mit ausgewählten Kurven.
+    SketchConstruction, "skizze.konstruktion", "Konstruktion umschalten", Sketch, [key(Key::X)];
     // Zeichnung: die vorhandenen Werkzeuge (wie ihr Schalter). Mittelpunktmarke C, Verschieben
     // M, Projizierte Ansicht P und Text T kommen erst mit ihrer Funktion; Entf (Nummernkreis
     // löschen) ist fest (`drawing_view`).

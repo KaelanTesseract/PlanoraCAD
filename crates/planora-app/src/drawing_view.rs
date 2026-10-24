@@ -1070,6 +1070,9 @@ pub(crate) fn tool_key(state: &mut AppState, balloon: bool, editable: bool) {
         return;
     };
     if balloon {
+        // Die Prüfung auf eine offene Skizze bleibt, obwohl die Taste dann gar nicht im Bereich
+        // Zeichnung ankommt: `show_with` schaltet „Position“ bei offener Skizze ebenso aus, und
+        // ein Aufruf über `run_action` (ohne Verteiler) soll dieselbe Sperre haben.
         if balloon_tool::blocked(drawing, editable).is_none() && state.sketch_session.is_none() {
             toggle_balloon_tool(state);
         }

@@ -216,11 +216,11 @@ fn sketch_open_ws() -> Workspace {
 
 /// Ein Quader und eine gezeigte Zeichnung mit einer Vorderansicht.
 fn drawing_ws() -> Workspace {
-    drawing_ws_with(true)
+    drawing_ws_with(Some(ViewKind::Front))
 }
 
-/// Ein Quader und eine gezeigte Zeichnung, mit oder ohne Vorderansicht.
-fn drawing_ws_with(view: bool) -> Workspace {
+/// Ein Quader und eine gezeigte Zeichnung, mit einer Ansicht der Art `view` oder ohne Ansicht.
+fn drawing_ws_with(view: Option<ViewKind>) -> Workspace {
     let mut w = ws();
     let s = &mut w.active_tab_mut().state;
     s.create_box(DVec3::splat(20.0)).unwrap();
@@ -235,11 +235,11 @@ fn drawing_ws_with(view: bool) -> Workspace {
             Projection::First,
         )
         .unwrap();
-    if view {
+    if let Some(kind) = view {
         s.document
             .add_view(
                 d,
-                ViewKind::Front,
+                kind,
                 Scale { num: 1, den: 2 },
                 Placement::Free { x: 150.0, y: 110.0 },
                 None,
@@ -274,8 +274,8 @@ fn sketch_keys_select_the_tools() {
         assert_eq!(a.label(), label, "Name wie der Werkzeugknopf");
         assert_eq!(km.action_for_key(Area::Sketch, &chord(k, false)), Some(a));
     }
-    // Versatz O, Stutzen T, Skizzenbemaßung D, Hilfslinie X: gibt es (noch) nicht.
-    for k in [Key::O, Key::T, Key::D, Key::X] {
+    // Versatz O, Stutzen T, Skizzenbemaßung D: gibt es (noch) nicht.
+    for k in [Key::O, Key::T, Key::D] {
         assert_eq!(
             km.action_for_key(Area::Sketch, &chord(k, false)),
             None,
@@ -578,7 +578,7 @@ fn drawing_tool_keys_select_the_tools() {
     );
 
     // Gesperrter Schalter (Zeichnung ohne Ansicht): die Taste tut nichts.
-    let mut rig = Rig::new(drawing_ws_with(false));
+    let mut rig = Rig::new(drawing_ws_with(None));
     rig.press(Key::D, NONE);
     rig.press(Key::B, NONE);
     assert!(!rig.st().dimension_tool.is_active());
@@ -667,7 +667,7 @@ fn repeat_last_remembers_sketch_tools() {
     rig.sketch_click(20.0, 20.0);
     rig.sketch_click(30.0, 30.0);
     assert_eq!(rig.sketch_tool_memory(), Some(Action::SketchRectangle));
-    // Ein Werkzeug ohne Kürzel (Bogen) ersetzt das Gedächtnis nicht.
+    // Ein Werkzeug ohne Eintrag in der Tabelle (Bogen) ersetzt das Gedächtnis nicht.
     rig.click(rig.strip("Bogen"));
     rig.sketch_click(50.0, 0.0);
     rig.sketch_click(55.0, 0.0);
@@ -705,4 +705,130 @@ fn repeat_last_remembers_sketch_tools() {
     assert!(viewport::typing(&rig.ctx));
     rig.press(Key::Space, NONE);
     assert_eq!(rig.tool(), Tool::Select, "nicht beim Tippen");
+}
+
+// ---- Fix-Runde 1 ----------------------------------------------------------------------------
+
+/// Ist die Kurve `c` der offenen Skizze eine Konstruktionslinie?
+fn construction(rig: &mut Rig, c: planora_sketch::model::CurveId) -> bool {
+    rig.st()
+        .session_sketch()
+        .unwrap()
+        .curve(c)
+        .unwrap()
+        .construction
+}
+
+#[test]
+fn construction_key_toggles_like_the_button() {
+    let km = Keymap::defaults();
+    assert_eq!(Action::SketchConstruction.area(), Area::Sketch);
+    assert_eq!(Action::SketchConstruction.id(), "skizze.konstruktion");
+    assert_eq!(
+        Action::SketchConstruction.label(),
+        sketch_panel::CONSTRUCTION,
+        "Name wie der Knopf"
+    );
+    assert_eq!(km.bindings(Action::SketchConstruction), [plain(Key::X)]);
+    assert!(!Action::SketchConstruction.repeatable());
+    assert_eq!(km.action_for_key(Area::Model, &chord(Key::X, false)), None);
+
+    let mut rig = Rig::new(sketch_open_ws());
+    rig.press(Key::L, NONE);
+    rig.sketch_click(0.0, 0.0);
+    rig.sketch_click(10.0, 0.0);
+    rig.press(Key::Escape, NONE);
+    rig.click(rig.strip("Auswahl"));
+    let memory = rig.sketch_tool_memory();
+    let line = rig
+        .st()
+        .session_sketch()
+        .unwrap()
+        .curves()
+        .next()
+        .unwrap()
+        .0;
+    assert!(!construction(&mut rig, line));
+
+    // Ohne Auswahl: keine Wirkung (der Knopf ist dann gesperrt).
+    rig.st().sketch_session.as_mut().unwrap().selection.clear();
+    rig.press(Key::X, NONE);
+    assert!(!rig.left_over, "X verbraucht");
+    assert!(!construction(&mut rig, line));
+
+    // Mit gewählter Kurve: umschalten und zurück, wie der Knopf.
+    rig.st().sketch_session.as_mut().unwrap().selection = vec![Item::Curve(line)];
+    rig.press(Key::X, NONE);
+    assert!(construction(&mut rig, line), "X schaltet auf Konstruktion");
+    rig.press(Key::X, NONE);
+    assert!(!construction(&mut rig, line), "X schaltet zurück");
+    let at = rig
+        .settle()
+        .into_iter()
+        .find(|s| s.text == sketch_panel::CONSTRUCTION)
+        .expect("Knopf Konstruktion umschalten")
+        .rect
+        .center();
+    rig.click(at);
+    assert!(construction(&mut rig, line), "Knopf schaltet ebenso");
+    // Tooltip mit Taste; nicht wiederholbar (Gedächtnis unverändert).
+    let texts = rig.hover(at);
+    assert!(
+        texts.iter().any(|t| t == "Konstruktion umschalten (X)"),
+        "{texts:?}"
+    );
+    assert_eq!(rig.sketch_tool_memory(), memory);
+
+    // Beim Tippen im Maßfeld gehört X dem Feld.
+    sketch_panel::open_dimension_editor(
+        &rig.ctx,
+        &rig.app.ws_mut().active_tab().state,
+        ConstraintAction::Distance,
+    );
+    rig.settle();
+    assert!(viewport::typing(&rig.ctx));
+    rig.frame(vec![key(Key::X, NONE), Event::Text("x".into())]);
+    rig.settle();
+    assert!(construction(&mut rig, line), "nicht beim Tippen");
+
+    // Umbelegt auf J: X bleibt liegen, J schaltet.
+    let mut rig = Rig::new(sketch_open_ws());
+    rig.press(Key::L, NONE);
+    rig.sketch_click(0.0, 0.0);
+    rig.sketch_click(10.0, 0.0);
+    rig.press(Key::Escape, NONE);
+    let line = rig
+        .st()
+        .session_sketch()
+        .unwrap()
+        .curves()
+        .next()
+        .unwrap()
+        .0;
+    rig.st().sketch_session.as_mut().unwrap().selection = vec![Item::Curve(line)];
+    let mut km = rig.ws().keymap.clone();
+    assert_eq!(
+        km.set(Action::SketchConstruction, 0, plain(Key::J)),
+        SetResult::Ok
+    );
+    rig.ws().keymap = km;
+    rig.press(Key::X, NONE);
+    assert!(rig.left_over, "X bleibt liegen");
+    assert!(!construction(&mut rig, line));
+    rig.press(Key::J, NONE);
+    assert!(construction(&mut rig, line), "J schaltet");
+}
+
+#[test]
+fn dimension_key_does_nothing_on_an_isometric_only_drawing() {
+    // Nur Isometrie: „Maß“ ist gesperrt, „Position“ nicht.
+    let mut rig = Rig::new(drawing_ws_with(Some(ViewKind::Isometric)));
+    rig.press(Key::B, NONE);
+    assert!(rig.st().balloon_tool.is_active(), "Position ein");
+    rig.press(Key::D, NONE);
+    assert!(!rig.st().dimension_tool.is_active(), "Maß bleibt aus");
+    assert!(
+        rig.st().balloon_tool.is_active(),
+        "Position bleibt eingeschaltet"
+    );
 }

@@ -1076,6 +1076,20 @@ impl SketchSession {
         self.last_report = Some(sk.solve());
     }
 
+    /// Lässt sich „Konstruktion umschalten“ anwenden (mindestens eine Kurve ausgewählt)? Gilt
+    /// für den Knopf im Skizzenfeld und seine Taste.
+    pub fn can_toggle_construction(&self) -> bool {
+        self.selection.iter().any(|i| matches!(i, Item::Curve(_)))
+    }
+
+    /// „Konstruktion umschalten“ wie Knopf und Taste: nur, wenn
+    /// [`can_toggle_construction`](Self::can_toggle_construction) gilt, sonst nichts.
+    pub fn toggle_construction_if_possible(&mut self, sk: &mut Sketch) {
+        if self.can_toggle_construction() {
+            self.toggle_construction(sk);
+        }
+    }
+
     /// Schaltet bei den ausgewählten Kurven die Konstruktionseigenschaft um.
     pub fn toggle_construction(&mut self, sk: &mut Sketch) {
         for item in &self.selection {

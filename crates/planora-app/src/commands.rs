@@ -145,6 +145,11 @@ pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
                 se.choose_tool(sk, tool);
             }
         }
+        Action::SketchConstruction => {
+            if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
+                se.toggle_construction_if_possible(sk);
+            }
+        }
         Action::SketchRepeatLast => {
             if let Some(last) = ws.last_command.sketch_tool() {
                 return run_action(ws, last);
@@ -274,10 +279,11 @@ pub fn observe(ws: &mut Workspace) {
 }
 
 /// Abschluss der Skizzenwerkzeuge (sie haben kein Fenster): gemerkt wird ein Werkzeug mit
-/// Kürzel, sobald es in der offenen Skizze eine Kurve angelegt hat, gleich ob es über Taste,
+/// Eintrag in der Tabelle, sobald es in der offenen Skizze eine Kurve angelegt hat, gleich ob es über Taste,
 /// Knopf oder Leertaste gewählt wurde. Nur wählen und mit Esc oder einem anderen Werkzeug
 /// verlassen merkt nichts (wie ein abgebrochenes Fenster); Rückgängig/Wiederholen in der Skizze
-/// zählt nicht als Benutzen. Ein Werkzeug ohne Kürzel (Bogen, Spline, …) ersetzt das Gedächtnis
+/// zählt nicht als Benutzen. Ein Werkzeug ohne Eintrag in der Tabelle (Bogen, Spline, …) ersetzt
+/// das Gedächtnis
 /// nicht. Das Gedächtnis des Modells bleibt in jedem Fall.
 fn observe_sketch(ws: &mut Workspace) {
     let tab = ws.active_tab();

@@ -362,7 +362,8 @@ fn strip_field(
                     ui.spacing_mut().item_spacing.y = shell::STRIP_SPACING;
                     for (tool, label, hint) in TOOLS {
                         let selected = se.tool == tool;
-                        // Name mit Taste („Linie (L)“), ohne Kürzel nur der Name.
+                        // Name mit Taste („Linie (L)“), ohne Eintrag in der Tabelle nur der
+                        // Name.
                         let title = match Action::for_sketch_tool(tool) {
                             Some(a) => with_hint(&km, a, label),
                             None => label.to_string(),
@@ -511,17 +512,24 @@ fn side_contents(
         .filter(|i| matches!(i, Item::Curve(_)))
         .count();
     let axis = mirror_axis(se, sk);
+    // Die Taste steht im Hinweistext („Konstruktion umschalten (X)“).
+    let construction_tip = with_hint(
+        &crate::keymap::mouse::current(ui.ctx()),
+        Action::SketchConstruction,
+        CONSTRUCTION,
+    );
     ui.horizontal_wrapped(|ui| {
         if tool_button(
             ui,
             IconSource::Font(Icon::ToggleConstruction),
-            "Konstruktion umschalten",
-            curves > 0,
+            CONSTRUCTION,
+            se.can_toggle_construction(),
         )
+        .on_hover_text(construction_tip)
         .on_disabled_hover_text("Zuerst Kurven auswählen.")
         .clicked()
         {
-            se.toggle_construction(sk);
+            se.toggle_construction_if_possible(sk);
         }
         if tool_button(
             ui,
@@ -962,6 +970,9 @@ pub const AUTO_AXIS_HINT: &str = "Fast waagerechte oder senkrechte Linien bekomm
 
 /// Schalter für automatisch waagerechte/senkrechte Linien.
 pub const AUTO_AXIS: &str = "Waagerecht/senkrecht erkennen";
+
+/// Beschriftung des Knopfs „Konstruktion umschalten“ (gleich dem Namen seiner Aktion).
+pub const CONSTRUCTION: &str = "Konstruktion umschalten";
 
 /// Beschreibung des Löschknopfs einer Zeile der Liste.
 const DELETE_ROW: &str = "Abhängigkeit löschen";
