@@ -47,6 +47,14 @@ fn play_key() -> egui::Id {
     bar_id().with("play")
 }
 
+/// Läuft gerade ein Abspielen? Die Anwendung zählt das als Geste für Rückgängig: Die ganze
+/// Wiedergabe wird höchstens ein Schritt, sonst würden die Schritte der Wiedergabe den echten
+/// Rückgängig-Verlauf aus der Liste drängen.
+#[doc(hidden)]
+pub fn is_playing(ctx: &egui::Context) -> bool {
+    playing(ctx).is_some()
+}
+
 fn playing(ctx: &egui::Context) -> Option<Playing> {
     ctx.data(|d| d.get_temp::<Playing>(play_key()))
 }

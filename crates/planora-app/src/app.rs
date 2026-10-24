@@ -1175,7 +1175,9 @@ impl eframe::App for PlanoraApp {
         // Maustaste mehr gedrückt ist und kein Eingabefeld die Tastatur hat, damit Ziehen und
         // Tippen je ein Schritt sind. Vor `remember_keyboard_focus` zählt dabei auch das vorige
         // Bild; das verschiebt den Schritt nach Enter nur um ein Bild (beides ein Schritt).
-        let gesture = ctx.input(|i| i.pointer.any_down()) || viewport::typing(&ctx);
+        let gesture = ctx.input(|i| i.pointer.any_down())
+            || viewport::typing(&ctx)
+            || crate::history_bar::is_playing(&ctx);
         self.ws.observe_history(gesture);
         viewport::remember_keyboard_focus(&ctx);
         if self.ws.quit && !self.close_sent {

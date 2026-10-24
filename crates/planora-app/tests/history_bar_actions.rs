@@ -427,3 +427,91 @@ fn union_is_refused_when_the_rolled_back_body_is_the_newer_of_the_inputs() {
     assert_eq!(s.document.features().len(), count, "nichts angelegt");
     assert_eq!(s.body_lock(io), None, "der ältere Körper selbst ist frei");
 }
+
+/// Ein Bild der Leiste mit anschließender Beobachtung für Rückgängig, wie in `PlanoraApp`.
+fn play_frame(ctx: &egui::Context, ws: &mut Workspace, time: f64, events: Vec<Event>) {
+    let raw = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
+        time: Some(time),
+        events,
+        ..Default::default()
+    };
+    let out = ctx.run_ui(raw, |ui| {
+        history_bar::show(ui.ctx(), &mut ws.active_tab_mut().state)
+    });
+    out.drop_without_applying_deltas();
+    let gesture = history_bar::is_playing(ctx);
+    ws.observe_history(gesture);
+}
+
+fn click_button(ctx: &egui::Context, ws: &mut Workspace, time: &mut f64, label: &str) {
+    let rect = history_bar::bar_rects(ctx)
+        .buttons
+        .iter()
+        .find(|b| b.0 == label)
+        .unwrap_or_else(|| panic!("Knopf {label}"))
+        .1;
+    let p = rect.center();
+    for pressed in [true, false] {
+        *time += 0.1;
+        let ev = vec![
+            Event::PointerMoved(p),
+            Event::PointerButton {
+                pos: p,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+        play_frame(ctx, ws, *time, ev);
+    }
+}
+
+#[test]
+fn playback_adds_at_most_one_undo_entry_and_keeps_earlier_ones() {
+    let (mut ws, [_, e, m]) = chain_ws();
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts::definitions());
+    theme::apply(&ctx, true);
+    let mut time = 0.0;
+    // Frühere Einträge (echte Arbeit) und ein Körper, den die Leiste anzeigt.
+    ws.observe_history(false);
+    ws.active_tab_mut()
+        .state
+        .rename_feature(e, "Platte")
+        .unwrap();
+    ws.observe_history(false);
+    ws.active_tab_mut().state.select_body(Some(m));
+    play_frame(&ctx, &mut ws, time, vec![]);
+    let before = ws.active_tab().history().undo_len();
+    assert!(before >= 2, "{before}");
+    let content_before = ws.active_tab().history().current().clone();
+
+    // Abspielen vom Ende: springt an den Anfang und läuft bis zum Ende durch.
+    click_button(&ctx, &mut ws, &mut time, "Abspielen");
+    let mut max_during = before;
+    let mut was_playing = false;
+    for _ in 0..60 {
+        time += 0.1;
+        play_frame(&ctx, &mut ws, time, vec![]);
+        was_playing |= history_bar::is_playing(&ctx);
+        max_during = max_during.max(ws.active_tab().history().undo_len());
+        if !history_bar::is_playing(&ctx) {
+            break;
+        }
+    }
+    assert!(was_playing || !history_bar::is_playing(&ctx));
+    assert!(!history_bar::is_playing(&ctx), "Wiedergabe ist zu Ende");
+    assert_eq!(max_during, before, "während der Wiedergabe kein Eintrag");
+    play_frame(&ctx, &mut ws, time + 0.1, vec![]);
+    let h = ws.active_tab().history();
+    assert!(
+        h.undo_len() <= before + 1,
+        "{} > {}",
+        h.undo_len(),
+        before + 1
+    );
+    // Ende wie Anfang: dasselbe Modell, also kein Eintrag.
+    assert_eq!(h.undo_len(), before);
+    assert!(h.current().same_model(&content_before));
+}
