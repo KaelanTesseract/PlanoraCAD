@@ -546,20 +546,26 @@ pub fn history_buttons_seen(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
 fn history_buttons(ui: &mut egui::Ui, ws: &mut crate::workspace::Workspace, dark: bool) {
     let lock = edit_lock(ws);
     let tab = ws.active_tab();
+    let (undo_text, redo_text) = (
+        app::undo_menu_text(tab.undo_label()),
+        app::redo_menu_text(tab.redo_label()),
+    );
+    // Beim Überfahren der Menütext mit der (ersten) Taste aus der Tastenbelegung.
+    let hint = |a, text: &str| crate::keymap::with_hint(&ws.keymap, a, text);
     let entries = [
         (
             icons::Icon::Undo,
             "Rückgängig",
-            app::undo_menu_text(tab.undo_label()),
-            "Strg+Z",
+            hint(crate::keymap::Action::Undo, &undo_text),
+            undo_text,
             tab.undo_blocked(),
             true,
         ),
         (
             icons::Icon::Redo,
             "Wiederholen",
-            app::redo_menu_text(tab.redo_label()),
-            "Strg+Y",
+            hint(crate::keymap::Action::Redo, &redo_text),
+            redo_text,
             tab.redo_blocked(),
             false,
         ),
@@ -571,7 +577,7 @@ fn history_buttons(ui: &mut egui::Ui, ws: &mut crate::workspace::Workspace, dark
         // die Spalten passt.
         ui.spacing_mut().item_spacing.x = theme::SPACE_1;
         ui.spacing_mut().button_padding.x = HISTORY_PAD;
-        for (icon, label, text, keys, own, undo) in entries {
+        for (icon, label, hover, text, own, undo) in entries {
             let reason = lock.or(own);
             let r = ui
                 .add_enabled_ui(reason.is_none(), |ui| {
@@ -580,7 +586,7 @@ fn history_buttons(ui: &mut egui::Ui, ws: &mut crate::workspace::Workspace, dark
                 .inner;
             let r = match reason {
                 Some(why) => explain(r, label, why),
-                None => r.on_hover_text(format!("{text} ({keys})")),
+                None => r.on_hover_text(hover),
             };
             if r.clicked() {
                 step = Some(undo);

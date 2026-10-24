@@ -1,11 +1,13 @@
 //! Tastenbelegung: welche Taste oder Mausgeste welche Aktion auslöst, in welchem Bereich sie
 //! gilt, Doppelbelegungen, Ändern/Tauschen/Zurücksetzen und der Weg in die Konfiguration (nur
-//! Abweichungen von der Voreinstellung). Reine Logik ohne Zeichnen und ohne Verteiler.
+//! Abweichungen von der Voreinstellung). Reine Logik ohne Zeichnen; der Verteiler, der die
+//! Tastenereignisse eines Bildes in Aktionen übersetzt, steht in [`dispatch`].
 //!
 //! Alle Aktionen stehen in einer einzigen Tabelle in [`defaults`] (Variante, Id, Anzeigename,
 //! Bereich, Voreinstellung); eine neue Aktion braucht dort nur eine Zeile.
 
 pub mod defaults;
+pub mod dispatch;
 pub mod text;
 
 pub use defaults::Action;
@@ -303,5 +305,26 @@ impl Keymap {
             .map(text::binding_text)
             .collect::<Vec<_>>()
             .join(" / ")
+    }
+}
+
+/// Tastentext für Menüs, Tooltips und Hinweise: die erste Tastenbelegung von `a` („Strg+Y“ bei
+/// Wiederholen, nicht beide: rechts im Menü ist nur für eine Platz, die übrigen nennen
+/// Einstellungen und Übersicht). Ohne Tastenbelegung leer.
+pub fn shortcut_hint(km: &Keymap, a: Action) -> String {
+    km.bindings(a)
+        .iter()
+        .find_map(|b| match b {
+            Binding::Key(c) => Some(text::chord_text(c)),
+            Binding::Mouse(_) => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Tooltip „`text` (Taste)“ mit [`shortcut_hint`]; ohne Taste nur `text`.
+pub fn with_hint(km: &Keymap, a: Action, text: &str) -> String {
+    match shortcut_hint(km, a) {
+        k if k.is_empty() => text.to_string(),
+        k => format!("{text} ({k})"),
     }
 }
