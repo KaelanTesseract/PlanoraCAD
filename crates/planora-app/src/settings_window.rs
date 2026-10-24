@@ -11,7 +11,7 @@ use crate::file_chooser::{self, ChooserAction, FileChooser, display_path};
 use crate::places::{self, Places};
 use crate::theme;
 use crate::workspace::{ROOT_LOCKED, Workspace};
-use planora_project::config::{Config, MAX_PANEL_TRANSPARENCY};
+use planora_project::config::{Config, MAX_PANEL_TRANSPARENCY, clamp_panel_transparency};
 use planora_project::library::{DOCUMENT_FILE, DOCUMENT_SUFFIX, PROJECT_FILE};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -196,6 +196,16 @@ impl SettingsWindow {
 
     /// Speichert die Durchsichtigkeit (sie gilt schon); misslingt das, bleibt sie für die
     /// Sitzung und der Hinweis [`TRANSPARENCY_NOT_SAVED`] erscheint.
+    /// Was der Regler beim Ziehen tut: der Wert gilt sofort, ist aber noch nicht gespeichert. Er
+    /// wird im Arbeitsbereich vorgemerkt (`panel_transparency_pending`), damit er auch dann in
+    /// die Datei kommt, wenn das Fenster von außen ([`SettingsWindow::close`]) zugeht: beim
+    /// nächsten gelungenen Schreiben der Konfiguration.
+    pub fn preview_transparency(&mut self, ws: &mut Workspace, percent: u8) {
+        ws.config.panel_transparency = clamp_panel_transparency(percent);
+        ws.panel_transparency_pending = true;
+        self.transparency_unsaved = true;
+    }
+
     fn save_transparency(&mut self, ws: &mut Workspace) {
         self.transparency_unsaved = false;
         self.appearance_message = (!ws.set_panel_transparency(ws.panel_transparency()))
@@ -298,8 +308,7 @@ impl SettingsWindow {
         self.last_rect = response.map(|r| r.response.rect);
         // Wirkt sofort; gespeichert wird, sobald der Regler losgelassen ist (Tastatur sofort).
         if slid && !locked {
-            ws.config.panel_transparency = transparency;
-            self.transparency_unsaved = true;
+            self.preview_transparency(ws, transparency);
         }
         if self.transparency_unsaved && released {
             self.save_transparency(ws);

@@ -891,3 +891,39 @@ fn the_slider_is_locked_while_a_prompt_is_open() {
     assert_eq!(a.e.ws.panel_transparency(), 40);
     assert!(!a.e.cfg.exists());
 }
+
+#[test]
+fn an_unsaved_slider_value_survives_closing_from_outside() {
+    let e = env();
+    write_config(&e.cfg, &e.root, vec![]);
+    let mut a = App::new(e, true, 1400.0, 900.0);
+    a.w.open(false);
+    a.settle(2);
+    // Wie beim Ziehen: der Wert gilt schon, gespeichert ist er noch nicht.
+    a.w.preview_transparency(&mut a.e.ws, 66);
+    assert_eq!(a.e.ws.panel_transparency(), 66);
+    assert_eq!(Config::read_from(&a.e.cfg).unwrap().panel_transparency, 40);
+    assert!(a.e.ws.panel_transparency_pending, "vorgemerkt");
+    // Von außen geschlossen (ohne Arbeitsbereich): der Wert bleibt vorgemerkt …
+    a.w.close();
+    assert_eq!(a.e.ws.panel_transparency(), 66);
+    assert!(a.e.ws.panel_transparency_pending);
+    // … und kommt beim nächsten gelungenen Schreiben in die Datei.
+    assert!(a.e.ws.try_persist_config());
+    assert_eq!(Config::read_from(&a.e.cfg).unwrap().panel_transparency, 66);
+    assert!(!a.e.ws.panel_transparency_pending);
+}
+
+#[test]
+fn closing_the_window_saves_an_unsaved_slider_value() {
+    let e = env();
+    write_config(&e.cfg, &e.root, vec![]);
+    let mut a = App::new(e, true, 1400.0, 900.0);
+    a.w.open(false);
+    a.settle(2);
+    a.w.preview_transparency(&mut a.e.ws, 55);
+    a.click("Schließen");
+    assert!(!a.w.is_open());
+    assert_eq!(Config::read_from(&a.e.cfg).unwrap().panel_transparency, 55);
+    assert!(!a.e.ws.panel_transparency_pending);
+}

@@ -1354,13 +1354,21 @@ impl Workspace {
         let mut all = std::mem::take(&mut self.favorites_pending);
         all.extend(places.changes);
         let mut full = None;
+        // Eine vorgemerkte Durchsichtigkeit kommt mit (wie in `try_persist_config`).
+        let transparency = self
+            .panel_transparency_pending
+            .then(|| self.panel_transparency());
         let written = Config::update_at(&self.config_path, |c| {
             full = apply_changes(&all, &mut c.favorites);
+            if let Some(t) = transparency {
+                c.panel_transparency = t;
+            }
         });
         match written {
             Ok(disk) => {
                 self.config.favorites = disk.favorites;
                 self.favorites_notice = full;
+                self.panel_transparency_pending = false;
                 true
             }
             Err(_) => {

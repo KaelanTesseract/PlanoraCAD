@@ -498,25 +498,87 @@ fn panel_alpha(percent: u8) -> u8 {
     (255.0 * f32::from(100 - p) / 100.0).round() as u8
 }
 
-/// Mindestdeckkraft hinter den Zeilen eines durchsichtigen Panels, damit Zeilentext
-/// (`text_primary`, `text_secondary`) auch über einem weißen oder schwarzen 3D-Bereich 4,5 : 1
-/// erreicht (Test `contrast_of_text_over_light_background_at_80_percent_stays_readable` in
-/// tests/transparency.rs). Dunkel braucht fast volle Deckung: das Grau der Zeilen in Ruhe
-/// (#939393) hält auf hellem Grund sonst keinen Kontrast.
-fn min_row_opacity(dark: bool) -> f32 {
-    if dark { 0.93 } else { 0.87 }
+/// Schriftfarben im durchsichtigen Feature-Baum. Kräftiger als die Palette, damit die Zeilen auch
+/// mit wenig Fläche dahinter über jedem 3D-Hintergrund 4,5 : 1 erreichen und der Regler im
+/// Zeilenbereich sichtbar wirkt (das Grau der Palette, #939393 bzw. #5f5f66, bräuchte über
+/// weißem bzw. schwarzem Grund rund 90 % Deckung).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TreeInk {
+    /// Ordner, Dokument, gewählte und überfahrene Zeilen (`text_primary`).
+    pub active: Color32,
+    /// Zeilen in Ruhe (statt `text_secondary`).
+    pub rest: Color32,
+    /// Schwacher Text: Statuswörter wie „zurückgesetzt“, ausgeblendete Körper, Leer-Hinweise
+    /// (statt `text_tertiary`).
+    pub weak: Color32,
+    /// Fehler und verlorene Bezüge (statt `error`).
+    pub error: Color32,
+}
+
+/// Dunkel: Ruhe fast weiß, schwach etwas grauer, Fehler ein helles Rot; in der Palette gibt es
+/// zwischen `text_primary` (#ffffff) und `text_secondary` (#939393) keinen passenden Wert.
+const DARK_TREE_INK: TreeInk = TreeInk {
+    active: DARK.text_primary,
+    rest: rgb(0xf0f0f0),
+    weak: rgb(0xe2e2e2),
+    error: rgb(0xffd6d6),
+};
+
+/// Hell: Ruhe fast schwarz, schwach etwas heller, Fehler ein dunkles Rot; zwischen
+/// `text_primary` (#151515) und `text_secondary` (#5f5f66) fehlt ein passender Palettenwert.
+const LIGHT_TREE_INK: TreeInk = TreeInk {
+    active: LIGHT.text_primary,
+    rest: rgb(0x2a2a2e),
+    weak: rgb(0x38383e),
+    error: rgb(0x7a1414),
+};
+
+/// Schriftfarben des durchsichtigen Feature-Baums ([`TreeInk`]).
+pub fn tree_ink(dark: bool) -> TreeInk {
+    if dark { DARK_TREE_INK } else { LIGHT_TREE_INK }
+}
+
+/// Kleinste Gesamtdeckung (0 bis 1) von `bg_panel` hinter den Zeilen, bei der jede Farbe aus
+/// [`tree_ink`] über weißem und über schwarzem 3D-Bereich mindestens 4,5 : 1 erreicht. Aus den
+/// Farben berechnet (Mischung im Gamma-Raum wie egui), mit einem Schritt (1/255) Reserve für das
+/// Runden beim Zeichnen.
+pub fn tree_min_opacity(dark: bool) -> f32 {
+    let ink = tree_ink(dark);
+    let panel = palette(dark).bg_panel;
+    let inks = [ink.active, ink.rest, ink.weak, ink.error];
+    let readable = |cov: f32| {
+        [Color32::WHITE, Color32::BLACK].into_iter().all(|bg| {
+            let surface = mix(bg, panel, cov);
+            inks.iter().all(|&c| contrast_ratio(c, surface) >= 4.5)
+        })
+    };
+    let step = (0..=255u16)
+        .find(|&i| readable(f32::from(i) / 255.0))
+        .unwrap_or(255);
+    (f32::from(step + 1) / 255.0).min(1.0)
+}
+
+/// Gesamtdeckung hinter den Zeilen bei `percent` Prozent: 1 bei 0 %, [`tree_min_opacity`] bei
+/// 80 %, dazwischen gleichmäßig mit der Deckkraft des Panels. So wirkt jeder Reglerschritt auch
+/// im Zeilenbereich.
+fn row_opacity(dark: bool, percent: u8) -> f32 {
+    let panel = f32::from(panel_alpha(percent)) / 255.0;
+    let thinnest = f32::from(panel_alpha(planora_project::config::MAX_PANEL_TRANSPARENCY)) / 255.0;
+    let min = tree_min_opacity(dark);
+    let t = ((panel - thinnest) / (1.0 - thinnest)).clamp(0.0, 1.0);
+    (min + (1.0 - min) * t).max(panel)
 }
 
 /// Fläche, die hinter die Zeilen eines zu `percent` Prozent durchsichtigen Panels gelegt wird:
-/// Farbe `bg_panel`, gerade so deckend, dass Panel und Fläche zusammen [`min_row_opacity`]
-/// erreichen. Ist das Panel allein deckend genug, durchsichtig ([`Color32::TRANSPARENT`]).
+/// Farbe `bg_panel`, so deckend, dass Panel und Fläche zusammen [`row_opacity`] erreichen. Bei
+/// 0 % durchsichtig ([`Color32::TRANSPARENT`]).
 pub fn row_backing(dark: bool, percent: u8) -> Color32 {
     let panel = f32::from(panel_alpha(percent)) / 255.0;
-    let min = min_row_opacity(dark);
-    if panel >= min {
+    let total = row_opacity(dark, percent);
+    if panel >= total {
         return Color32::TRANSPARENT;
     }
-    let alpha = 1.0 - (1.0 - min) / (1.0 - panel);
+    let alpha = 1.0 - (1.0 - total) / (1.0 - panel);
     with_alpha(palette(dark).bg_panel, (alpha * 255.0).ceil() as u8)
 }
 

@@ -35,6 +35,31 @@ pub const ERROR_COLOR: Color32 = theme::DARK.error;
 pub fn error_color(dark: bool) -> Color32 {
     theme::palette(dark).error
 }
+
+fn tree_ink_id() -> egui::Id {
+    egui::Id::new("planora-browser-tree-ink")
+}
+
+/// Schriftfarben des durchsichtigen Baums, solange [`show_in_panel`] zeichnet, sonst `None`.
+fn tree_ink(ui: &egui::Ui) -> Option<theme::TreeInk> {
+    ui.ctx().data(|d| d.get_temp(tree_ink_id()))
+}
+
+/// Schrift- und Symbolfarbe einer Zeile: aktiv (gewählt, überfahren, Ordner) oder in Ruhe. Sonst
+/// wie [`crate::icons::stroke_color`], im durchsichtigen Baum aus [`theme::tree_ink`].
+pub(crate) fn row_ink(ui: &egui::Ui, active: bool) -> Color32 {
+    match tree_ink(ui) {
+        Some(i) if active => i.active,
+        Some(i) => i.rest,
+        None => crate::icons::stroke_color(ui.visuals().dark_mode, active),
+    }
+}
+
+/// Fehlerfarbe einer Zeile: sonst [`error_color`], im durchsichtigen Baum aus
+/// [`theme::tree_ink`].
+pub(crate) fn row_error(ui: &egui::Ui) -> Color32 {
+    tree_ink(ui).map_or_else(|| error_color(ui.visuals().dark_mode), |i| i.error)
+}
 /// Kurze Statustexte rechts in den Zeilen.
 const STATUS_WORDS: [&str; 4] = ["Fehler", "übersprungen", "unterdrückt", "nicht berechnet"];
 
@@ -352,11 +377,22 @@ pub fn tree_frame(dark: bool, percent: u8) -> egui::Frame {
 /// Zeile) kommt die Mindestfläche aus [`theme::row_backing`], damit die Schrift über jedem
 /// 3D-Hintergrund lesbar bleibt. Der freie Platz darunter und die Ränder bleiben durchsichtig.
 pub fn show_in_panel(ui: &mut egui::Ui, state: &mut AppState, read_only: bool, percent: u8) {
-    let backing = theme::row_backing(ui.visuals().dark_mode, percent);
+    let dark = ui.visuals().dark_mode;
+    let backing = theme::row_backing(dark, percent);
     // Platz in der Zeichenliste vor den Zeilen; gefüllt wird, wenn ihre Höhe feststeht.
     let slot = ui.painter().add(egui::Shape::Noop);
     let top = ui.cursor().min;
+    // Kräftigere Schrift im durchsichtigen Baum: Zeilen holen sie über [`row_ink`] und
+    // [`row_error`], schwacher Text (auch `ui.weak`) über den Stil. Danach gilt wieder alles wie
+    // beim Aufrufer.
+    let tree = theme::tree_ink(dark);
+    let saved = ui.style().clone();
+    ui.style_mut().visuals.weak_text_color = Some(tree.weak);
+    ui.ctx().data_mut(|d| d.insert_temp(tree_ink_id(), tree));
     show_with(ui, state, read_only);
+    ui.ctx()
+        .data_mut(|d| d.remove::<theme::TreeInk>(tree_ink_id()));
+    ui.set_style(saved);
     if backing != Color32::TRANSPARENT {
         let rect = egui::Rect::from_min_max(
             top,
@@ -502,15 +538,11 @@ fn body_rows(state: &AppState, dark: bool) -> Vec<BodyRow> {
 fn status_view(
     status: &FeatureStatus,
     weak: Color32,
-    dark: bool,
+    error: Color32,
 ) -> (Option<&'static str>, Option<Color32>, Option<String>) {
     match status {
         FeatureStatus::Ok => (None, None, None),
-        FeatureStatus::Error(e) => (
-            Some(STATUS_WORDS[0]),
-            Some(error_color(dark)),
-            Some(e.clone()),
-        ),
+        FeatureStatus::Error(e) => (Some(STATUS_WORDS[0]), Some(error), Some(e.clone())),
         FeatureStatus::Skipped(why) => (Some(STATUS_WORDS[1]), Some(weak), Some(why.clone())),
         FeatureStatus::Suppressed => (
             Some(STATUS_WORDS[2]),
@@ -627,7 +659,7 @@ fn row_lead(
     }
     let active = selected || hovered;
     // Text und gezeichnetes Symbol in derselben Farbe (Symbolfarbe wie bei allen Handsymbolen).
-    let color = color.unwrap_or(crate::icons::stroke_color(dark, active));
+    let color = color.unwrap_or(row_ink(ui, active));
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(
             rect.min.x + theme::SPACE_2 + lead + ICON_SIZE / 2.0,
@@ -731,7 +763,7 @@ fn folder_header(ui: &mut egui::Ui, folder: Folder, open: bool) -> egui::Respons
     if hovered {
         ui.painter().rect_filled(rect, theme::RADIUS_SM, p.bg_field);
     }
-    let color = crate::icons::stroke_color(dark, true);
+    let color = row_ink(ui, true);
     let caret_c = egui::pos2(rect.min.x + theme::SPACE_1 + CARET / 2.0, rect.center().y);
     let h = CARET / 2.0;
     let points = if open {
@@ -749,7 +781,7 @@ fn folder_header(ui: &mut egui::Ui, folder: Folder, open: bool) -> egui::Respons
     };
     ui.painter().add(egui::Shape::convex_polygon(
         points,
-        crate::icons::stroke_color(dark, hovered),
+        row_ink(ui, hovered),
         egui::Stroke::NONE,
     ));
     let icon_rect = egui::Rect::from_center_size(
@@ -782,7 +814,7 @@ fn folder_header(ui: &mut egui::Ui, folder: Folder, open: bool) -> egui::Respons
 /// Zeile des Dokuments ganz oben (Name des Tabs).
 fn document_row(ui: &mut egui::Ui, name: &str) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
-    let color = crate::icons::stroke_color(ui.visuals().dark_mode, true);
+    let color = row_ink(ui, true);
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(
             rect.min.x + theme::SPACE_2 + ICON_SIZE / 2.0,
@@ -899,7 +931,7 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
                 Some(ROLLED_BACK_HINT.to_string()),
             )
         } else {
-            status_view(&r.status, weak, dark)
+            status_view(&r.status, weak, row_error(ui))
         };
         if r.hidden && color.is_none() {
             color = Some(weak);
@@ -960,7 +992,7 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             } else {
                 Icon::Visible
             };
-            let c = crate::icons::stroke_color(dark, hovered);
+            let c = row_ink(ui, hovered);
             paint_source(
                 ui.painter(),
                 egui::Rect::from_center_size(eye.center(), vec2(EYE_ICON, EYE_ICON)),
@@ -981,7 +1013,6 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
 
 /// Ordner „Skizzen“: je Skizze eine Zeile mit den bisherigen Befehlen.
 fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
-    let dark = ui.visuals().dark_mode;
     let weak = ui.visuals().weak_text_color();
     prime_status_words(ui);
     let open = state.open_sketch_id();
@@ -1008,7 +1039,7 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
         } else {
             r.name.clone()
         };
-        let (status, color, reason) = status_view(&r.status, weak, dark);
+        let (status, color, reason) = status_view(&r.status, weak, row_error(ui));
         let resp = row(
             ui,
             0.0,

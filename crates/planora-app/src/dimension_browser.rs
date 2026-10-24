@@ -220,10 +220,7 @@ fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bo
         for r in &g.rows {
             let dim = r.id;
             let selected = state.drawing_ui.selected_dim == Some(dim);
-            let color = r
-                .lost
-                .is_some()
-                .then_some(error_color(ui.visuals().dark_mode));
+            let color = r.lost.is_some().then_some(crate::browser::row_error(ui));
             let resp = row(
                 ui,
                 body_indent(),

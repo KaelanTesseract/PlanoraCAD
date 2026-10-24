@@ -746,7 +746,9 @@ fn dark_and_light_frames() {
         let translucent: Vec<_> = shot
             .fills
             .iter()
-            .filter(|f| f.fill == tree_fill(dark))
+            .filter(|f| {
+                f.fill == tree_fill(dark) && f.radius == egui::CornerRadius::same(theme::RADIUS_LG)
+            })
             .collect();
         assert_eq!(translucent.len(), 1, "dunkel {dark}: {translucent:?}");
         assert_eq!(
