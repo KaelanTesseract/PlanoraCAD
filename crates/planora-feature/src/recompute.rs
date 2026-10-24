@@ -284,12 +284,8 @@ impl Document {
                 feature: f.id,
                 index,
             });
-            let consumed = |r: &BodyRef| match &f.kind {
-                FeatureKind::Boolean { target, tool, .. } => r == target || r == tool,
-                FeatureKind::Move { body, .. } => r == body,
-                FeatureKind::Verrunden { body, .. } => r == body,
-                _ => false,
-            };
+            let used = f.kind.consumed_bodies();
+            let consumed = |r: &BodyRef| used.contains(r);
             // Die erste verbrauchte Stelle bleibt beim Entfernen gleich (nur Spätere fallen weg).
             let at = visible.iter().position(consumed).unwrap_or(visible.len());
             visible.retain(|r| !consumed(r));

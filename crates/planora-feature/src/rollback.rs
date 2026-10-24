@@ -12,15 +12,6 @@ fn produces_body(kind: &FeatureKind) -> bool {
     !matches!(kind, FeatureKind::Sketch(_))
 }
 
-/// Die Features, deren Körper die Art verbraucht (ersetzt), wie in der Sichtbarkeitsberechnung.
-fn consumed_by(kind: &FeatureKind) -> Vec<FeatureId> {
-    match kind {
-        FeatureKind::Boolean { target, tool, .. } => vec![target.feature, tool.feature],
-        FeatureKind::Move { body, .. } | FeatureKind::Verrunden { body, .. } => vec![body.feature],
-        _ => Vec::new(),
-    }
-}
-
 impl Document {
     /// Schritte, die einen Körper erzeugen und von keinem späteren Schritt verbraucht werden
     /// (Vereinigen, Verschieben, Verrunden), in Listenordnung. Hängt nur von den Arten ab, nicht
@@ -29,7 +20,8 @@ impl Document {
         let consumed: HashSet<FeatureId> = self
             .features
             .iter()
-            .flat_map(|f| consumed_by(&f.kind))
+            .flat_map(|f| f.kind.consumed_bodies())
+            .map(|r| r.feature)
             .collect();
         self.features
             .iter()
@@ -76,8 +68,11 @@ impl Document {
     /// unbekannter `tip` ergibt [`FeatureError::UnknownFeature`]. Bei einem Fehler bleibt das
     /// Dokument unverändert.
     ///
-    /// Die Stelle ersetzt alle Stellen in der Kette von `tip` und alle Stellen hinter `step`
-    /// (abhängige Schritte sind ohnehin zurückgesetzt und haben keine eigene Stelle).
+    /// Die Stelle ersetzt nur die mit `step` vergleichbaren Stellen: die in der Kette von `step`
+    /// (sie würden `step` selbst zurücksetzen) und die hinter `step` (abhängige Schritte sind
+    /// ohnehin zurückgesetzt und haben keine eigene Stelle). Stellen in anderen Eingangsketten
+    /// bleiben: Nach einem Vereinigen U(A, B) lässt `set_rollback(U, schritt_von_A)` die Stelle
+    /// in der Kette von B stehen.
     pub fn set_rollback(&mut self, tip: FeatureId, step: FeatureId) -> Result<(), FeatureError> {
         self.set_rollback_with_report(tip, step).map(|_| ())
     }
@@ -95,12 +90,13 @@ impl Document {
                 "Der Schritt gehört nicht zum Verlauf dieses Körpers".into(),
             ));
         }
+        let before = self.chain(step);
         let behind = self.dependents(step);
         let mut next: Vec<FeatureId> = self
             .rollbacks
             .iter()
             .copied()
-            .filter(|r| !chain.contains(r) && !behind.contains(r))
+            .filter(|r| !before.contains(r) && !behind.contains(r))
             .collect();
         next.push(step);
         self.replace_rollbacks(next);

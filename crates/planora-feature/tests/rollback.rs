@@ -247,12 +247,13 @@ fn set_rollback_replaces_the_previous_one_in_the_same_chain() {
     let edits = d.edit_count();
     d.set_rollback(f, m).unwrap();
     assert_eq!(d.edit_count(), edits);
-    // Im Vereinigen-Modell ersetzt die Stelle des Ergebniskörpers beide Eingangsstellen.
+    // Im Vereinigen-Modell ersetzt eine Stelle nur die vergleichbare (hier die hinter `b` in
+    // derselben Eingangskette); die Stelle in der Kette von A bleibt.
     let (mut d, [_, ma, b, mb, u]) = union_model();
     d.set_rollback(ma, ma).unwrap();
     d.set_rollback(mb, mb).unwrap();
     d.set_rollback(u, b).unwrap();
-    assert_eq!(d.rollbacks(), &[b]);
+    assert_eq!(d.rollbacks(), &[ma, b]);
     d.check_invariants().unwrap();
     // Eine Stelle hinter dem neuen Schritt (außerhalb der Kette des gewählten Spitzen-Schritts)
     // entfällt ebenfalls: Abhängige Schritte haben keine eigene Stelle.
@@ -388,4 +389,74 @@ fn body_tips_and_chain() {
     let a = boxed(&mut d, "A", 1.0);
     let b = boxed(&mut d, "B", 2.0);
     assert_eq!(d.body_tips(), vec![a, b]);
+}
+
+#[test]
+fn set_rollback_on_a_union_tip_keeps_the_other_input_chain() {
+    let (mut d, [a, ma, b, mb, u]) = union_model();
+    assert_eq!(d.body_tips(), vec![u]);
+    d.set_rollback(u, ma).unwrap();
+    d.set_rollback(u, mb).unwrap();
+    assert_eq!(d.rollbacks(), &[ma, mb], "Stellen in beiden Eingangsketten");
+    assert_eq!(visible(&d), vec![a, b]);
+    d.check_invariants().unwrap();
+    // Leiste von A über die Spitze U: nur die Stelle von A wandert, B bleibt zurückgesetzt.
+    d.set_rollback(u, a).unwrap();
+    assert_eq!(d.rollbacks(), &[a, mb]);
+    assert_eq!(status(&d, mb), FeatureStatus::NotComputed);
+    assert_eq!(visible(&d), vec![b]);
+    d.check_invariants().unwrap();
+    // Die Stelle am Vereinigen selbst ersetzt beide (beide liegen in seiner Kette).
+    d.set_rollback(u, u).unwrap();
+    assert_eq!(d.rollbacks(), &[u]);
+    assert_eq!(visible(&d), vec![ma, mb]);
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn rollback_in_chain_with_two_rollbacks_in_a_union_chain() {
+    let (mut d, [_, ma, _, mb, u]) = union_model();
+    d.set_rollback(u, mb).unwrap();
+    d.set_rollback(u, ma).unwrap();
+    assert_eq!(d.rollbacks(), &[ma, mb]);
+    // Die Kette des Vereinigens enthält beide; geliefert wird die vorderste in Listenordnung.
+    assert_eq!(d.rollback_in_chain(u), Some(ma));
+    assert_eq!(d.rollback_in_chain(ma), Some(ma));
+    assert_eq!(d.rollback_in_chain(mb), Some(mb));
+}
+
+#[test]
+fn update_pushing_one_rollback_behind_another_is_pruned() {
+    let mut d = Document::new();
+    let a = boxed(&mut d, "A", 4.0);
+    let b = boxed(&mut d, "B", 2.0);
+    let m = moved(&mut d, "Verschieben", a, DVec3::X);
+    d.set_rollback(m, m).unwrap();
+    d.set_rollback(b, b).unwrap();
+    assert_eq!(d.rollbacks(), &[b, m], "unabhängige Ketten");
+    // Verschieben verweist jetzt auf B: seine Stelle läge hinter der von B und entfällt.
+    d.update(m, |k| {
+        if let FeatureKind::Move { body: r, .. } = k {
+            *r = body(b);
+        }
+    })
+    .unwrap();
+    assert_eq!(d.rollbacks(), &[b]);
+    assert_eq!(
+        status(&d, m),
+        FeatureStatus::NotComputed,
+        "abgeleitet inaktiv"
+    );
+    assert_eq!(visible(&d), vec![a]);
+    d.check_invariants().unwrap();
+}
+
+/// Ein unbekanntes Feature ist nicht aktiv (es gibt nichts zu berechnen oder zu zeigen).
+#[test]
+fn is_active_on_unknown_id() {
+    let (mut d, a, ..) = fillet_model();
+    assert!(!d.is_active(FeatureId(999)));
+    assert!(!d.is_active(FeatureId(0)));
+    d.delete_with_dependents(a).unwrap();
+    assert!(!d.is_active(a), "gelöscht");
 }

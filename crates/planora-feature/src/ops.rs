@@ -166,6 +166,7 @@ impl Document {
             .count();
         self.features.retain(|f| !removed.contains(&f.id));
         self.marker -= before_marker;
+        // Doppelt abgesichert: `prune_rollbacks` in der Neuberechnung entfernt sie ebenfalls.
         self.rollbacks.retain(|r| !removed.contains(r));
         self.prune_meshes();
         self.prune_step_shapes();
