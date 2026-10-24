@@ -1078,19 +1078,90 @@ fn save_as_points_to_the_projects_window() {
     assert!(matches!(rig.ws().prompt, Some(Prompt::SaveAs { .. })));
     let shot = rig.settle(3);
     assert!(
-        shot.has("Zuerst im Fenster Projekte ein Projektverzeichnis wählen."),
+        shot.has(
+            "Bitte mit „Abbrechen“ schließen, dann im Menü „Datei“ unter „Einstellungen …“ das Projektverzeichnis wählen."
+        ),
         "{}",
         shot.texts()
     );
+    // Der Rat führt zum Ziel: Abbrechen, dann Datei → Einstellungen ….
+    rig.click("Abbrechen");
+    assert!(rig.ws().prompt.is_none());
+    rig.menu("Datei", SETTINGS_ENTRY);
+    assert!(rig.settings_open(), "Einstellungen öffnen");
+
     // Bibliothek ohne Projekt.
     let mut rig = Rig::new(workspace());
     rig.ctrl(Key::S);
     let shot = rig.settle(3);
     assert!(
-        shot.has("Noch kein Projekt vorhanden. Zuerst im Fenster Projekte ein Projekt anlegen."),
+        shot.has(
+            "Noch kein Projekt vorhanden. Bitte mit „Abbrechen“ schließen, dann mit Strg+O das Fenster Projekte öffnen und ein Projekt anlegen."
+        ),
         "{}",
         shot.texts()
     );
+    rig.click("Abbrechen");
+    rig.ctrl(Key::O);
+    rig.wait_scan();
+    click_in_projects(&mut rig, planora_app::projects_window::NEW_PROJECT);
+    assert!(
+        project_actions::dialog_open(&rig.app.windows_mut().1.ui),
+        "Neues Projekt öffnet"
+    );
+}
+
+/// Prüfrunde M2: die neuen Texte duzen und sagen „Projektverzeichnis“; die Meldung von
+/// `choose_root` bleibt wörtlich (Vorgabe des Plans).
+#[test]
+fn new_texts_say_du_and_projektverzeichnis() {
+    assert_eq!(
+        planora_app::settings_window::KEEP_HINT,
+        "Deine Projekte bleiben, wo sie sind. Im neuen Verzeichnis erscheinen nur die Projekte, die dort liegen."
+    );
+    assert_eq!(
+        project_actions::READ_ERROR_PREFIX,
+        "Das Projektverzeichnis lässt sich nicht lesen: "
+    );
+    assert_eq!(
+        planora_app::workspace::ROOT_LOCKED,
+        "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt."
+    );
+}
+
+/// Prüfrunde M4: Ein Dokument lässt sich nicht in einen Namen auf „.pcad“ umbenennen (gleich
+/// welche Schreibweise), wie bei „Neues Dokument“ und „Speichern unter“.
+#[test]
+fn renaming_a_document_to_a_pcad_name_is_refused() {
+    let mut ws = workspace();
+    let p = ws.library.as_ref().unwrap().create_project("P").unwrap();
+    let doc = box_doc(&ws, &p, "Teil");
+    let mut st = project_actions::ProjectsUi::default();
+    for bad in ["Neu.pcad", "Neu.PCAD", " Neu.Pcad "] {
+        assert!(
+            project_actions::rename_node(&mut ws, &mut st, &doc, bad).is_none(),
+            "{bad}"
+        );
+        assert!(
+            matches!(&ws.prompt, Some(Prompt::Notice(t))
+                if t == planora_app::workspace::DOCUMENT_NAME_SUFFIX),
+            "{bad}: Hinweis wie beim Anlegen"
+        );
+        ws.prompt = None;
+    }
+    let tree = ws.library.as_ref().unwrap().tree().unwrap();
+    let names: Vec<_> = tree[0]
+        .children
+        .iter()
+        .map(|n| n.path.last().cloned().unwrap_or_default())
+        .collect();
+    assert_eq!(names, ["Teil.pcad"], "nichts umbenannt");
+    // Ein gewöhnlicher Name geht.
+    let to = project_actions::rename_node(&mut ws, &mut st, &doc, "Neu").expect("umbenannt");
+    assert_eq!(to.last().map(String::as_str), Some("Neu.pcad"));
+    // Ordner und Projekte prüft weiter die Bibliothek (ihre eigene Meldung).
+    let f = ws.library.as_ref().unwrap().create_folder(&p, "F").unwrap();
+    assert!(project_actions::rename_node(&mut ws, &mut st, &f, "G").is_some());
 }
 
 fn bodies(rig: &mut Rig) -> usize {

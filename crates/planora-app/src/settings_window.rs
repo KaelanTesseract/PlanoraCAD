@@ -19,7 +19,7 @@ pub const SECTION_PROJECTS: &str = "Projekte";
 pub const DIRECTORY_LABEL: &str = "Projektverzeichnis";
 pub const CHANGE_DIRECTORY: &str = "Projektverzeichnis ändern …";
 pub const CHOOSE_HEADING: &str = "Projektverzeichnis wählen";
-pub const KEEP_HINT: &str = "Ihre Projekte bleiben, wo sie sind. Im neuen Verzeichnis erscheinen nur die Projekte, die dort liegen.";
+pub const KEEP_HINT: &str = "Deine Projekte bleiben, wo sie sind. Im neuen Verzeichnis erscheinen nur die Projekte, die dort liegen.";
 /// Anfang der Meldung, wenn sich das gewählte Verzeichnis nicht lesen lässt (danach der Grund).
 pub const UNREADABLE: &str = "Das Verzeichnis lässt sich nicht lesen.";
 /// Meldung, wenn das gewählte Verzeichnis selbst ein Projekt oder Dokument ist.

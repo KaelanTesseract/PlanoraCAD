@@ -224,7 +224,10 @@ pub fn switch_branch(ws: &mut Workspace, name: &str) {
     if let Err(e) = store.set_active_branch(name) {
         return notice(ws, e.to_string());
     }
-    let Some(tip) = store.info().tip(name) else {
+    let tip = store.info().tip(name);
+    // die Kachel zeigt die Spitze des aktiven Zweigs: das Fenster Projekte liest neu
+    ws.content_revision += 1;
+    let Some(tip) = tip else {
         return;
     };
     ws.activate(i);

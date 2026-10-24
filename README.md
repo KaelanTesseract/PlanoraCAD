@@ -426,20 +426,20 @@ Deine Arbeit bleibt jetzt erhalten. Gespeichert wird die Liste der Schritte aus 
 **Wo die Dateien liegen**
 - Alles liegt in einem normalen Ordner auf deiner Festplatte, dem **Projektverzeichnis**. Vorgegeben ist `Dokumente\PlanoraCAD`. Ändern kannst du es mit „Datei → Einstellungen …“ und „Projektverzeichnis ändern …“: Du wählst einen Ordner (mit „Diesen Ordner wählen“), „Abbrechen“ ändert nichts. Das Programm merkt sich die Wahl. Dabei wird nichts verschoben oder kopiert: Die Projekte im alten Verzeichnis bleiben dort liegen und sind wieder da, wenn du zurückwechselst. Der Wechsel geht nur, solange kein gespeichertes Dokument offen ist (sonst erscheint ein Hinweis) und keine Rückfrage auf dem Bildschirm steht.
 - Ein **Projekt** ist ein Ordner direkt darin. Darin kannst du beliebig viele **Ordner** anlegen und verschachteln. Ein **Dokument** ist ein Ordner mit der Endung `.pcad`; darin liegen die Versionen als einzelne Textdateien. Du kannst das ganze Projektverzeichnis also einfach kopieren oder sichern.
-- Gelöschte Projekte, Ordner und Dokumente landen im Ordner `.papierkorb` im Projektverzeichnis und werden vom Programm nie endgültig gelöscht. Gelöschte Versionen und Zweige im Fenster „Versionen“ sind dagegen nach der Rückfrage endgültig weg.
+- Gelöschte Projekte, Ordner und Dokumente landen im Ordner `.papierkorb` im Projektverzeichnis und werden vom Programm nie endgültig gelöscht. Gelöschte Versionen und Zweige im Reiter „Versionen“ sind dagegen nach der Rückfrage endgültig weg.
 
 **Speichern und Versionen**
 - Mit „Datei → Speichern“ (Strg+S) legst du eine **neue Version** an; dabei kannst du einen Kommentar eintragen. Frühere Versionen bleiben unverändert erhalten.
 - Ein neues Dokument heißt „Unbenannt 1“. Beim ersten Speichern wählst du Projekt, Ordner und Namen. „Speichern unter …“ legt ein eigenes neues Dokument an.
 - Ein „●“ am Tab zeigt, dass es ungespeicherte Änderungen gibt. Beim Schließen eines Tabs oder des Programms fragt PlanoraCAD nach (Speichern, Verwerfen, Abbrechen). Eine gerade offene Skizze wird beim Speichern mitgenommen.
-- Das Fenster „Versionen“ (Menü „Ansicht“) listet alle Versionen des Dokuments mit Nummer, Zweig, Zeit (deine Ortszeit, mit Sommerzeit) und Kommentar. Ein Doppelklick öffnet eine alte Version **nur zum Ansehen** in einem eigenen Tab („Name · v1“); dort lässt sich nichts ändern.
+- Der Reiter „Versionen“ im rechten Feld (neben „Eigenschaften“; ein- und ausblenden mit „Ansicht → Versionen“) listet alle Versionen des Dokuments mit Nummer, Zweig, Zeit (deine Ortszeit, mit Sommerzeit) und Kommentar. Ein Doppelklick öffnet eine alte Version **nur zum Ansehen** in einem eigenen Tab („Name · v1“); dort lässt sich nichts ändern.
 - Per Rechtsklick auf eine Version kannst du sie **wiederherstellen** (sie wird als neueste Version noch einmal gespeichert, nichts geht verloren), von ihr aus einen **Zweig abzweigen** (eine Variante mit eigenem Namen), den Kommentar ändern oder eine Version bzw. einen Zweig löschen, solange keine andere Version darauf aufbaut.
 - Speicherst du ein Dokument, das auf einer älteren Version beruht, fragt das Programm nach dem Namen eines neuen Zweigs, damit nichts überschrieben wird.
 - Zusammenführen von Zweigen gibt es noch nicht.
 
 **Mehrere Dokumente und Absicherung**
 - Mehrere Dokumente können gleichzeitig in Tabs offen sein. Zum Öffnen und Verwalten gibt es das Fenster „Projekte“ (Menü „Datei → Projekte …“ oder Strg+O). Das Feld „Projekte“ links im Hauptfenster gibt es nicht mehr; links bleibt der Feature-Baum.
-- **Das Fenster „Projekte“** öffnet in der Mitte, ist etwa halb so breit wie das Programmfenster und bleibt offen, solange du es nicht schließt. Du kannst dabei weiterarbeiten. Es hat zwei Ebenen: zuerst eine Kachel je Projekt, nach einem Doppelklick auf ein Projekt dessen Ordner und Dokumente. Der Pfad oben („Projekte › Name“) und der Pfeil davor führen zurück; ein Doppelklick auf einen Ordner geht hinein.
+- **Das Fenster „Projekte“** öffnet in der Mitte, ist etwa halb so breit wie das Programmfenster und bleibt offen, solange du es nicht schließt. Du kannst dabei weiterarbeiten. Es hat zwei Ebenen: zuerst eine Kachel je Projekt, nach einem Doppelklick auf ein Projekt dessen Ordner und Dokumente. Der Pfad oben („Projekte“, dann der Name, getrennt durch kleine Pfeile) und der Pfeil nach links davor führen zurück; ein Doppelklick auf einen Ordner geht hinein. Speicherst du ein Dokument, während das Fenster offen ist, zeigt seine Kachel gleich die neue Version.
 - Jede Kachel zeigt eine Miniatur der Körper, den Namen, „Geändert“ mit Datum und Uhrzeit in deiner Ortszeit und „Version n“. Bei Projekten steht dahinter die Zahl der Dokumente. Datum und Version eines Projekts kommen von dem Dokument darin, das zuletzt gespeichert wurde, und zwar vom aktuellen Stand des Zweigs, an dem du arbeitest. Dokumente, die sich nicht lesen lassen, werden mitgezählt, geben aber kein Datum.
 - Ein Doppelklick auf ein Dokument öffnet es in einem Tab; das Fenster bleibt offen. Ist es schon offen, wird sein Tab nur nach vorn geholt. Mit der Tab-Taste kommst du auf jede Kachel (ein Rahmen zeigt, wo du bist), Enter öffnet. Ein Rechtsklick auf eine Kachel bietet Umbenennen, Verschieben (nicht bei Projekten) und Löschen, mit den gewohnten Rückfragen.
 - „Neues Projekt“ legt ein Projekt an. Innerhalb eines Projekts oder Ordners gibt es „Neuer Ordner“ und „Neues Dokument“. Ein neues Dokument ist sofort da: Es wird als Version 1 gespeichert und in einem Tab geöffnet. „Aktualisieren“ unten liest alles noch einmal ein. „Projektverzeichnis …“ führt zu den Einstellungen.
@@ -565,10 +565,10 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 **Neuer Aufbau des Fensters (Modell-Ansicht):** Die Felder schweben jetzt frei über dem 3D-Bereich, der das ganze Fenster füllt.
 
 - Oben in der Mitte: das kleine Programmzeichen, das Menü und die Tabs. Unter „Datei“ → „Über PlanoraCAD“ stehen Version, Lizenz und die Herkunft der mitgelieferten Schriften und Symbole.
-- Links: ein Feld mit deinen Projekten und darunter der Baum mit den Arbeitsschritten.
+- Links: der Baum mit den Arbeitsschritten (deine Projekte stehen im Fenster „Projekte“, Strg+O).
 - Rechts: Eigenschaften und Versionen. Ein Umschalter im Feld wechselt zwischen beiden.
 - Unten: das Befehlsfeld mit Abkürzungen zu den Menüeinträgen, daneben Meldungen.
-- Die Felder lassen sich nicht verschieben oder andocken. Projekte und Versionen blendest du im Menü Ansicht ein oder aus.
+- Die Felder lassen sich nicht verschieben oder andocken. Den Reiter Versionen blendest du im Menü Ansicht ein oder aus.
 - Klicken, Ziehen und das Mausrad auf einem Feld bewegen das Modell nicht. Dialoge liegen immer über den Feldern.
 - „Alles einpassen“ zentriert das Modell in dem Bereich, der zwischen den Feldern frei bleibt.
 - Das Fenster ist mindestens 800 × 600 groß. Kleiner lässt es sich nicht ziehen.

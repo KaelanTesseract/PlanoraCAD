@@ -6,7 +6,7 @@ mod common;
 
 use common::{Screen, Seen};
 use egui::epaint::{ClippedShape, Shape};
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, StrokeKind};
 use planora_app::icons::{self, Icon};
 use planora_app::project_actions::{self, NO_LIBRARY, READ_ERROR_PREFIX};
 use planora_app::project_tiles::format_changed;
@@ -153,10 +153,13 @@ impl Shot {
         panic!("„{text}“ fehlt: {}", self.texts());
     }
 
-    /// Ein Rechteck mit Rand der Kachelbreite in `color` genau um `rect`?
+    /// Der Rand der Auswahl (Akzent, [`SELECTED_BORDER`] breit, innen) genau um `rect`?
     fn border_around(&self, rect: Rect, color: egui::Color32) -> bool {
-        self.card(rect)
-            .is_some_and(|r| r.stroke.color == color && (r.stroke.width - TILE_BORDER).abs() < 0.01)
+        self.card(rect).is_some_and(|r| {
+            r.stroke.color == color
+                && (r.stroke.width - SELECTED_BORDER).abs() < 0.01
+                && r.stroke_kind == StrokeKind::Inside
+        })
     }
 
     /// Fläche und Rand der Karte genau an `rect`.
@@ -413,7 +416,9 @@ fn click_selects_with_accent_border_and_double_click_goes_in() {
     // in Ruhe: Kartenfläche mit feinem Rand
     let rest = shot.card(rect).expect("Karte");
     assert_eq!(rest.fill, theme::card_fill(dark, false));
+    assert_eq!(rest.fill, palette(&h).bg_section);
     assert_eq!(rest.stroke.color, palette(&h).border_subtle);
+    assert_eq!(rest.stroke.width, TILE_BORDER);
     // Maus weg von der Kachel, damit nur die Auswahl zählt
     let shot = h.click(rect.center());
     let shot = {
@@ -427,7 +432,8 @@ fn click_selects_with_accent_border_and_double_click_goes_in() {
         "Akzentrand um die gewählte Kachel"
     );
     let chosen = shot.card(h.tile("P")).unwrap();
-    assert_eq!(chosen.fill, theme::card_fill(dark, true), "gewählt heller");
+    assert_eq!(chosen.fill, theme::card_fill(dark, true), "gewählt getönt");
+    assert_eq!(chosen.fill, palette(&h).accent_subtle);
     assert_ne!(chosen.fill, rest.fill);
     assert!(!shot.border_around(h.tile("Q"), accent));
     assert!(
@@ -438,6 +444,122 @@ fn click_selects_with_accent_border_and_double_click_goes_in() {
     assert_eq!(h.w.location(), &p);
     let shot = h.settle(2);
     assert!(shot.has("F"), "{}", shot.texts());
+}
+
+/// Prüfrunde M8: Ein leeres Projekt oder ein leerer Ordner (Ebene 2) zeigt einen ruhigen Hinweis
+/// im Kachelbereich; Fenster und Kachelbereich bleiben gleich groß.
+#[test]
+fn an_empty_project_or_folder_shows_a_calm_hint() {
+    let ws = workspace();
+    let p = project(&ws, "P");
+    folder(&ws, &p, "F");
+    project(&ws, "Leer");
+    let mut h = H::new(ws);
+    h.ready();
+    let (window, grid) = (h.w.last_rect.unwrap(), h.w.grid_rect().unwrap());
+    h.double_click(h.tile("Leer").center());
+    let shot = h.settle(3);
+    assert!(h.w.tiles().is_empty());
+    assert_eq!(
+        EMPTY_PROJECT,
+        "Dieses Projekt ist noch leer. Lege oben ein Dokument oder einen Ordner an."
+    );
+    assert!(shot.has(EMPTY_PROJECT), "{}", shot.texts());
+    assert_eq!(shot.color_of(EMPTY_PROJECT), palette(&h).text_tertiary);
+    assert!(
+        h.w.grid_rect()
+            .unwrap()
+            .contains_rect(shot.find(EMPTY_PROJECT).unwrap().rect)
+    );
+    assert_eq!(h.w.last_rect.unwrap(), window, "Fenster gleich groß");
+    assert_eq!(h.w.grid_rect().unwrap(), grid, "Kachelbereich gleich groß");
+    assert!(!shot.has(EMPTY), "nicht der Text der ersten Ebene");
+    // Leerer Ordner im Projekt P.
+    h.w.go_to(vec!["P".to_string(), "F".to_string()]);
+    let shot = h.settle(3);
+    assert_eq!(
+        EMPTY_FOLDER,
+        "Dieser Ordner ist noch leer. Lege oben ein Dokument oder einen Ordner an."
+    );
+    assert!(shot.has(EMPTY_FOLDER), "{}", shot.texts());
+    assert_eq!(h.w.grid_rect().unwrap(), grid);
+    // Ein Projekt mit Inhalt zeigt keinen Hinweis.
+    h.w.go_to(p);
+    let shot = h.settle(3);
+    assert!(!shot.has(EMPTY_FOLDER) && !shot.has(EMPTY_PROJECT));
+}
+
+/// Relative Leuchtdichte (WCAG) einer Farbe.
+fn luminance(c: egui::Color32) -> f64 {
+    let lin = |v: u8| {
+        let v = v as f64 / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+fn contrast(a: egui::Color32, b: egui::Color32) -> f64 {
+    let (x, y) = (luminance(a), luminance(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// Prüfrunde I2: Die gewählte Karte ist in beiden Themen getönt (etwa 10 % Akzent über
+/// `bg_section`), hebt sich im hellen Thema deutlich vom Fenster ab, hat einen 2-px-Rand innen
+/// und verschiebt nichts; der Fokusring bleibt ein eigener Ring außen.
+#[test]
+fn the_selected_card_is_tinted_in_both_themes_without_layout_shift() {
+    for dark in [true, false] {
+        let mut ws = workspace();
+        ws.set_dark(dark);
+        project(&ws, "P");
+        project(&ws, "Q");
+        let mut h = H::new(ws);
+        let shot = h.ready();
+        let p = palette(&h);
+        // ≈ 10 % Akzent über bg_section (je Kanal höchstens 1 daneben)
+        let mix = |a: u8, b: u8| (a as f32 * 0.9 + b as f32 * 0.1).round() as i32;
+        let s = p.bg_section;
+        let a = p.accent;
+        let t = p.accent_subtle;
+        for (got, want) in [
+            (t.r(), mix(s.r(), a.r())),
+            (t.g(), mix(s.g(), a.g())),
+            (t.b(), mix(s.b(), a.b())),
+        ] {
+            assert!((got as i32 - want).abs() <= 1, "dunkel {dark}: {t:?}");
+        }
+        let before = (h.tile("P"), h.tile("Q"));
+        let rest = shot.card(before.0).expect("Karte");
+        h.click(before.0.center());
+        h.frame(vec![Event::PointerMoved(egui::pos2(1.0, 1.0))]);
+        let shot = h.settle(2);
+        assert_eq!((h.tile("P"), h.tile("Q")), before, "nichts verschoben");
+        let chosen = shot.card(h.tile("P")).expect("Karte");
+        assert_eq!(chosen.fill, p.accent_subtle, "dunkel {dark}");
+        assert_eq!(chosen.stroke.width, 2.0, "Auswahlrand 2 px");
+        assert_eq!(chosen.stroke.width, SELECTED_BORDER);
+        assert_eq!(chosen.stroke_kind, StrokeKind::Inside, "Rand innen");
+        assert_eq!(chosen.rect, before.0, "Karte selbst gleich groß");
+        assert_ne!(chosen.fill, rest.fill);
+        let other = shot.card(h.tile("Q")).expect("Karte");
+        assert_eq!(other.fill, p.bg_section, "ungewählt unverändert");
+        assert_eq!(other.stroke.width, TILE_BORDER);
+        if !dark {
+            assert!(
+                contrast(chosen.fill, p.bg_panel) >= 1.2,
+                "hell: gewählt hebt sich vom Fenster ab: {:.3}",
+                contrast(chosen.fill, p.bg_panel)
+            );
+            assert!(
+                contrast(chosen.fill, rest.fill) >= 1.1,
+                "und von ungewählten"
+            );
+        }
+    }
 }
 
 #[test]
@@ -864,6 +986,109 @@ fn a_failed_store_is_not_retried_in_this_session() {
 
 fn preview_json(dir: &Path) -> String {
     fs::read_to_string(dir.join(PREVIEW_JSON)).unwrap_or_default()
+}
+
+/// Version, die die Kachel `name` zeigt.
+fn tile_version(h: &H, name: &str) -> u32 {
+    h.w.tiles()[h.index(name)]
+        .newest
+        .as_ref()
+        .map(|(_, f)| f.version)
+        .unwrap_or_else(|| panic!("Kachel „{name}“ ohne Version"))
+}
+
+/// Endliches Warten auf einen Zustand: einige Bilder, dann Lesen und Miniaturen abwarten.
+fn wait_until(h: &mut H, what: &str, ok: impl Fn(&H) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ok(h) && Instant::now() < deadline {
+        h.settle(2);
+        h.w.wait_for_scan(&h.ws);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(ok(h), "{what}");
+}
+
+/// Prüfrunde I1: Speichern, Wiederherstellen und Zweigwechsel eines offenen Dokuments erneuern
+/// die Kachel (Version, Miniatur) ohne „Aktualisieren“; Ort, Auswahl und ein offenes Fenster der
+/// Aktionen bleiben.
+#[test]
+fn saving_an_open_document_updates_its_tile_without_refresh() {
+    let ws = workspace();
+    let p = project(&ws, "P");
+    let (doc, dir) = box_doc(&ws, &p, "Teil");
+    let mut h = H::new(ws);
+    h.ready();
+    h.double_click(h.tile("P").center());
+    h.ready();
+    h.double_click(h.tile("Teil").center());
+    assert!(h.ws.tab_for_path(&doc).is_some(), "Dokument offen");
+    h.ready();
+    assert_eq!(tile_version(&h, "Teil"), 1);
+    assert!(h.w.wait_for_thumbnails(WAIT));
+    assert!(
+        preview_json(&dir).contains("\"version\":1"),
+        "{}",
+        preview_json(&dir)
+    );
+    project_actions::request_new_folder(&mut h.w.ui, p.clone(), "Ordner");
+    h.settle(2);
+    let refreshes = h.w.tile_refreshes();
+
+    // Speichern (Strg+S): Version 2.
+    h.ws.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(3.0))
+        .unwrap();
+    h.ws.save_active("zwei", None).unwrap();
+    wait_until(&mut h, "Version 2 ohne Aktualisieren", |h| {
+        tile_version(h, "Teil") == 2
+    });
+    assert!(h.w.tile_refreshes() > refreshes, "neu berechnet");
+    assert_eq!(h.w.location(), &p, "Ort bleibt");
+    assert_eq!(h.w.ui.selected(), Some(&doc), "Auswahl bleibt");
+    assert!(
+        project_actions::dialog_open(&h.w.ui),
+        "Fenster der Aktion bleibt offen"
+    );
+    assert!(h.w.wait_for_thumbnails(WAIT));
+    assert!(
+        preview_json(&dir).contains("\"version\":2"),
+        "Miniatur der neuen Version: {}",
+        preview_json(&dir)
+    );
+
+    // Wiederherstellen von Version 1: neue Version 3.
+    planora_app::versions_panel::restore(&mut h.ws, 1);
+    assert!(h.ws.prompt.is_none(), "Wiederherstellen gelang");
+    wait_until(&mut h, "Version 3 nach Wiederherstellen", |h| {
+        tile_version(h, "Teil") == 3
+    });
+
+    // Neuer Zweig „Variante“ (Version 4), dann Wechsel zurück auf „Haupt“: Spitze 3.
+    let i = h.ws.tab_for_path(&doc).unwrap();
+    h.ws.activate(i);
+    h.ws.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(2.0))
+        .unwrap();
+    h.ws.save_active("vier", Some("Variante")).unwrap();
+    h.ws.activate(i);
+    planora_app::versions_panel::switch_branch(&mut h.ws, "Variante");
+    wait_until(&mut h, "Spitze von Variante", |h| {
+        tile_version(h, "Teil") == 4
+    });
+    h.ws.activate(i);
+    let main = h.ws.active_tab().store.as_ref().unwrap().info().versions[0]
+        .branch
+        .clone();
+    planora_app::versions_panel::switch_branch(&mut h.ws, &main);
+    wait_until(&mut h, "Spitze von Haupt nach dem Wechsel", |h| {
+        tile_version(h, "Teil") == 3
+    });
+    assert!(
+        project_actions::dialog_open(&h.w.ui),
+        "Fenster bleibt offen"
+    );
 }
 
 #[test]

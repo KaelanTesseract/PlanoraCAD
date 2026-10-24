@@ -41,6 +41,8 @@ pub struct Palette {
     pub text_muted: Color32,
     /// Einzige gesättigte Fläche: Modus ein, Tastaturfokus, aktive Auswahl.
     pub accent: Color32,
+    /// Leicht getönte Fläche der Auswahl (gewählte Karte): etwa 10 % `accent` über `bg_section`.
+    pub accent_subtle: Color32,
     /// Text auf der Akzentfarbe.
     pub on_accent: Color32,
     /// Hervorhebung der Auswahl im 3D-Bereich.
@@ -87,6 +89,7 @@ pub(crate) const DARK: Palette = Palette {
     text_tertiary: rgb(0x7d7d7d),
     text_muted: rgb(0x737373),
     accent: rgb(0x006dfd),
+    accent_subtle: rgb(0x172231),
     on_accent: rgb(0xffffff),
     selection: rgb(0xf1f05c),
     axis_x: rgb(0xe0303a),
@@ -122,6 +125,7 @@ const LIGHT: Palette = Palette {
     text_tertiary: rgb(0x66666e),
     text_muted: rgb(0x7a7a82),
     accent: rgb(0x006dfd),
+    accent_subtle: rgb(0xdce6f7),
     on_accent: rgb(0xffffff),
     selection: rgb(0xd9a400),
     axis_x: rgb(0xc8202a),
@@ -660,14 +664,15 @@ pub fn primary_button(text: &str, dark: bool) -> egui::Button<'_> {
     egui::Button::new(egui::RichText::new(text).color(p.on_accent)).fill(p.accent)
 }
 
-/// Fläche einer Karte (Kachel im Fenster „Projekte“): in Ruhe `bg_section`, gewählt etwas heller
-/// (Dunkel `bg_field`, Hell `bg_panel`).
+/// Fläche einer Karte (Kachel im Fenster „Projekte“): in Ruhe `bg_section`, gewählt in beiden
+/// Themen leicht getönt (`accent_subtle`), damit sie sich auch im hellen Thema vom weißen Fenster
+/// abhebt.
 pub fn card_fill(dark: bool, selected: bool) -> Color32 {
     let p = palette(dark);
-    match (selected, dark) {
-        (false, _) => p.bg_section,
-        (true, true) => p.bg_field,
-        (true, false) => p.bg_panel,
+    if selected {
+        p.accent_subtle
+    } else {
+        p.bg_section
     }
 }
 

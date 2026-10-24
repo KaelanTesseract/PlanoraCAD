@@ -1731,14 +1731,15 @@ Entscheidungen von Dennis am 2026-10-23. Zweig `feature/projekte-fenster`. Entwu
 - Beim Beenden wartet das Programm höchstens 2 s auf den Arbeiter und räumt seine eigene Marke weg.
 - Fenster schließen einander: Strg+O bei offenem Import schließt den Import; Import oder Export öffnen schließt „Projekte“. Ein schreibender Export wird nie geschlossen; dann öffnen „Projekte“ und „Einstellungen“ nicht, und die Statuszeile sagt „Bitte erst den Export beenden.“
 - Steht eine Rückfrage auf dem Bildschirm (zum Beispiel nach Strg+S oder „Dokument gesperrt“), ist „Projekte“ ganz gesperrt, und „Einstellungen“ lassen sich nicht öffnen oder ändern. Sonst könnte das Verzeichnis unter der Rückfrage wechseln. Auch die Tasten für Rückgängig sind bei offenen Einstellungen und Eingabefenstern gesperrt.
-- Namen von Dokumenten dürfen nicht auf `.pcad` enden (bei „Neues Dokument“ und „Speichern unter“, wie bei Ordnern).
+- Namen von Dokumenten dürfen nicht auf `.pcad` enden (bei „Neues Dokument“, „Speichern unter“ und „Umbenennen“, wie bei Ordnern).
+- Abschlussprüfung: Speichern, Wiederherstellen und Zweigwechsel erneuern die Kacheln bei offenem Fenster sofort (Ort, Auswahl und offene kleine Fenster bleiben). Ein leeres Projekt oder ein leerer Ordner sagt das in einem ruhigen Hinweis. „Speichern unter“ ohne Projekt bzw. ohne Projektverzeichnis rät, mit „Abbrechen“ zu schließen und dann Strg+O bzw. „Datei → Einstellungen …“ zu nehmen (bei offener Rückfrage sind beide Fenster gesperrt). Die neuen Texte duzen durchgehend („Deine Projekte bleiben, wo sie sind. …“) und sagen „Projektverzeichnis“; nur die Meldung von `choose_root` („… bevor der Projektordner wechselt.“) bleibt wörtlich, wie der Plan es verlangt.
 
 **Grenzen:**
 - Das Datum im Schriftfeld und die Blattdaten der Zeichnung (`Stamp::now` in `planora-drawing`) sind weiter der UTC-Tag. Zwischen Mitternacht und 1 bis 2 Uhr Ortszeit zeigen sie den Vortag. Das ist ein eigener Punkt, nicht Teil dieses Teilprojekts.
 - Die Tests zur Ortszeit mit Berliner Zeit prüfen nur auf Rechnern mit dieser Zeitzone alles.
 - Im Programm selbst laufen weiter kurze Prüfungen, ob Ordner da sind (Wechsel des Verzeichnisses, Öffnen der Auswahl). Ein hängendes Netzlaufwerk kann dabei kurz aufhalten.
 - Konnte `config.json` beim Wechsel des Projektverzeichnisses nicht geschrieben werden, gilt der Wechsel trotzdem für diese Sitzung; das Programm warnt, dass er nicht gemerkt wird. Intern kommt das als Fehler zurück, obwohl gewechselt wurde.
-- Felder in `config.json`, die dieses Programm nicht kennt, gehen beim Schreiben verloren (`planora-project` ist eingefroren und bleibt unverändert).
+- Felder in `config.json`, die dieses Programm nicht kennt, gehen beim Schreiben verloren (war schon vorher so; `planora-project` ist eingefroren und bleibt unverändert). Beheben, sobald `planora-project` wieder geändert werden darf (unbekannte Felder mitführen).
 - Der Aufbau eines großen Dokuments für die Miniatur lässt sich nicht abbrechen. Das Fenster bleibt bedienbar, aber die übrigen Miniaturen kommen erst danach.
 - Die Miniatur entsteht erst, wenn das Fenster geöffnet wird, nicht schon beim Speichern. Danach liegt sie auf der Platte.
 - Es gibt nur eine Miniatur je Dokument: Wechselst du oft zwischen hell und dunkel, wird jedes Mal neu gemalt.
@@ -1746,7 +1747,11 @@ Entscheidungen von Dennis am 2026-10-23. Zweig `feature/projekte-fenster`. Entwu
 - Höchstens 64 Bilder liegen gleichzeitig im Grafikspeicher (nur Kacheln im und nahe am sichtbaren Ausschnitt); entferntere werden bei Bedarf neu geholt.
 - Höchstens 500 Kacheln je Ebene: Das Programm liest alle Dokumente, zeigt aber nur die ersten 500 („500 von 600 Projekten“).
 - Das schlimmste Malen einer Miniatur dauerte in der Debug-Version etwa 9 s (ein Stab mit 100 000 Segmenten). Die Aufwandsgrenze verhindert das jetzt; Fälle knapp darunter dauern weiter lange, halten aber nur den Arbeiter auf. PNG-Dateien werden beim Lesen auf ihre Größe geprüft, beschädigte gelten als fehlend.
-- Im hellen Design hat eine ausgewählte Kachel fast dieselbe Füllung wie ihr Umfeld; sichtbar ist vor allem der blaue Rand. Ob das reicht, zeigt die Sichtprüfung.
+- Die ausgewählte Kachel hat in beiden Designs eine leicht blau getönte Fläche (`accent_subtle`) und einen 2 px breiten blauen Rand innen; im hellen Design hebt sie sich so auch vom weißen Fenster ab (Kontrast etwa 1,26 : 1, nur eine Fläche, kein Text).
+- Umbenennen, Verschieben oder Löschen kann kurz mit „Zugriff verweigert“ scheitern, während der Miniatur-Arbeiter oder das Lesen gerade eine Datei in diesem Ordner offen hat. Es geht nichts verloren (ein einziger Schritt, ein Hinweis erscheint); ein zweiter Versuch gelingt.
+- Miniaturen entstehen für jede Kachel einer Ebene, nicht nur für die sichtbaren (die sichtbaren zuerst). Liegt das Projektverzeichnis in einem Cloud-Ordner (etwa „Dokumente“ mit Synchronisierung), werden dabei alle Dokumente heruntergeladen, und `vorschau.*` wird in jedem Dokumentordner mit synchronisiert; ein Wechsel von Hell und Dunkel schreibt sie alle neu.
+- Nach einem echten Absturz beim Malen zeigt die Kachel bis zu 15 Minuten „Wird gerade erzeugt …“ (ob das alte Programm noch läuft, lässt sich nicht prüfen). Danach versucht das Programm es noch einmal, was noch einmal abstürzen kann; erst dann steht „Miniatur nicht möglich“.
+- Ein Dokument, dessen Miniatur einmal länger als 3 s braucht (auch nur, weil der Rechner gerade ausgelastet ist), bleibt „Miniatur zu aufwendig“, bis es eine neue Version gibt.
 - „Verschieben“ zeigt keine Ziele, solange der Baum noch gelesen wird („Die Ziele werden noch gelesen …“). Jede fremde Änderung am Verzeichnis (zum Beispiel durch ein zweites Programm) schließt offene Namensfenster; ein halb getippter Name geht dann verloren.
 - Tests mit Zeitannahmen: Der Test „während des Lesens ungültig machen“ nutzt eine Pause von 120 ms, der Test zum Beenden erlaubt unter 500 ms, die Klicktests legen Pausen vor Doppelklicks ein. Auf sehr langsamen Rechnern können sie flackern.
 - Nicht enthalten: Suche, Sortierung, Mehrfachauswahl, Ziehen mit der Maus, Pfeiltasten (Tab und Enter gehen).

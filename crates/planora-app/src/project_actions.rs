@@ -10,15 +10,15 @@
 
 use crate::dialog::{Dialog, DialogSize};
 use crate::theme;
-use crate::workspace::{Prompt, Workspace};
+use crate::workspace::{DOCUMENT_NAME_SUFFIX, Prompt, Workspace};
 use planora_project::ProjectError;
 use planora_project::docstore::LockMode;
-use planora_project::library::{Library, NodeKind, NodePath, TreeNode};
+use planora_project::library::{DOCUMENT_SUFFIX, Library, NodeKind, NodePath, TreeNode};
 
 /// Hinweis ohne gewähltes Projektverzeichnis.
 pub const NO_LIBRARY: &str = "Es ist noch kein Projektverzeichnis gewählt. Wähle mit „Projektverzeichnis …“ den Ordner, in dem deine Projekte liegen sollen.";
-/// Anfang der Meldung, wenn sich der Projektordner nicht lesen lässt (danach der Grund).
-pub const READ_ERROR_PREFIX: &str = "Der Projektordner lässt sich nicht lesen: ";
+/// Anfang der Meldung, wenn sich das Projektverzeichnis nicht lesen lässt (danach der Grund).
+pub const READ_ERROR_PREFIX: &str = "Das Projektverzeichnis lässt sich nicht lesen: ";
 /// Ablehnung, solange betroffene Dokumente in Tabs offen sind.
 const CLOSE_FIRST: &str = "Bitte zuerst die betroffenen Dokumente schließen.";
 /// Meldung, wenn eine Aktion keine Bibliothek hat.
@@ -238,6 +238,15 @@ pub fn rename_node(
     name: &str,
 ) -> Option<NodePath> {
     if !may_change(ws, path) {
+        return None;
+    }
+    // Dokumente: die Endung hängt das Programm an, wie bei „Neues Dokument“ und „Speichern
+    // unter“ (sonst entstünde „Teil.pcad.pcad“).
+    let is_document = path
+        .last()
+        .is_some_and(|p| p.to_lowercase().ends_with(DOCUMENT_SUFFIX));
+    if is_document && name.trim().to_lowercase().ends_with(DOCUMENT_SUFFIX) {
+        notice(ws, DOCUMENT_NAME_SUFFIX);
         return None;
     }
     let r = lib(ws)?.rename(path, name);

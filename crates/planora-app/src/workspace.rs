@@ -554,6 +554,11 @@ pub struct Workspace {
     /// Zählt Änderungen an der Bibliothek auf der Festplatte, die über den Arbeitsbereich laufen
     /// (Speichern unter, Wurzelwechsel); das Fenster Projekte liest danach den Baum neu.
     pub library_revision: u64,
+    /// Zählt neue Stände von Dokumenten über den Arbeitsbereich (jedes gelungene Speichern,
+    /// Speichern unter, neues Dokument, Wiederherstellen, Version oder Zweig löschen, Zweig
+    /// wechseln). Das Fenster Projekte liest danach neu (Version, Datum, Miniatur), lässt aber
+    /// – anders als bei `library_revision` – Ort, Auswahl und offene Fenster der Aktionen stehen.
+    pub content_revision: u64,
     pub autosave_interval: Duration,
     /// Zuletzt benutzter Ordner der Dateiauswahl beim Exportieren und Importieren (nicht
     /// gespeichert).
@@ -587,6 +592,7 @@ impl Workspace {
             quit: false,
             about_open: false,
             library_revision: 0,
+            content_revision: 0,
             autosave_interval: AUTOSAVE_INTERVAL,
             exchange_dir: None,
             next_tab_id: 1,
@@ -795,7 +801,11 @@ impl Workspace {
         new_branch: Option<&str>,
     ) -> Result<SaveOutcome, String> {
         let i = self.active_index();
-        Self::save_tab(&mut self.tabs[i], comment, new_branch)
+        let r = Self::save_tab(&mut self.tabs[i], comment, new_branch);
+        if matches!(r, Ok(SaveOutcome::Saved(_))) {
+            self.content_revision += 1;
+        }
+        r
     }
 
     pub fn save_as(
@@ -832,6 +842,7 @@ impl Workspace {
         tab.keep_autosave = false;
         tab.mark_clean();
         self.library_revision += 1;
+        self.content_revision += 1;
         Ok(path)
     }
 
@@ -854,6 +865,7 @@ impl Workspace {
         let store = DocStore::create(&dir, &AppState::new().snapshot(), "").map_err(err)?;
         drop(store);
         self.library_revision += 1;
+        self.content_revision += 1;
         Ok(path)
     }
 
@@ -866,7 +878,10 @@ impl Workspace {
         let Some(i) = self.tab_index(tab) else { return };
         self.active = i;
         match Self::save_tab(&mut self.tabs[i], "", None) {
-            Ok(SaveOutcome::Saved(_)) => self.finish_after(tab, Some(then)),
+            Ok(SaveOutcome::Saved(_)) => {
+                self.content_revision += 1;
+                self.finish_after(tab, Some(then))
+            }
             Ok(SaveOutcome::NeedsLocation) => {
                 self.prompt = Some(Prompt::SaveAs {
                     tab,
@@ -1154,6 +1169,7 @@ impl Workspace {
         tab.based_on = Some(new);
         tab.mark_clean();
         self.active = target;
+        self.content_revision += 1;
         Ok(())
     }
 
@@ -1169,6 +1185,7 @@ impl Workspace {
         let branch = store.info().version(n).map(|v| v.branch.clone());
         store.delete_version(n).map_err(err)?;
         Self::fix_based_on(tab, branch.as_deref());
+        self.content_revision += 1;
         Ok(())
     }
 
@@ -1181,6 +1198,7 @@ impl Workspace {
             .ok_or("Das Dokument ist nicht gespeichert.")?;
         store.delete_branch(name).map_err(err)?;
         Self::fix_based_on(tab, Some(name));
+        self.content_revision += 1;
         Ok(())
     }
 

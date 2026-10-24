@@ -6,9 +6,11 @@
 //!
 //! Gezeichnet wird wie bei den Fenstern der Dateiauswahl: [`DialogSize::File`], mittig beim
 //! Öffnen, feste Fußzeile. Der Kachelbereich hat eine feste Höhe ([`grid_height_for`]) und rollt
-//! selbst; Kacheln haben feste Maße ([`TILE_MIN_W`], [`TILE_H`], [`TILE_GAP`]) und einen Rand, der
-//! immer 2 px breit ist (nur die Farbe wechselt). So verschiebt sich nichts, wenn Kacheln oder
-//! Miniaturen eintreffen, beim Überfahren oder beim Wählen.
+//! selbst; Kacheln haben feste Maße ([`TILE_MIN_W`], [`TILE_H`], [`TILE_GAP`]); ihr Rand wird
+//! innen gezeichnet ([`TILE_BORDER`], gewählt [`SELECTED_BORDER`] in Akzentfarbe auf getönter
+//! Fläche). So verschiebt sich nichts, wenn Kacheln oder Miniaturen eintreffen, beim Überfahren
+//! oder beim Wählen. Ein neuer Stand eines Dokuments über den Arbeitsbereich
+//! (`Workspace::content_revision`) wird wie „Aktualisieren“ neu gelesen.
 //!
 //! Miniaturen entstehen im [`ThumbWorker`] (einer je Programmlauf, gehört diesem Fenster). Die
 //! Warteschlange wird nur neu gesetzt, wenn sich Kacheln, der sichtbare Ausschnitt oder Hell/Dunkel
@@ -81,8 +83,17 @@ const WINDOW_ID: &str = "planora_projects_window";
 const IMAGE_H: f32 = 140.0;
 /// Innenabstand einer Kachel.
 const TILE_PAD: f32 = theme::SPACE_2;
-/// Rand einer Kachel, in jedem Zustand gleich breit (nur die Farbe wechselt).
+/// Rand einer Kachel in Ruhe und beim Überfahren (innen gezeichnet).
 pub const TILE_BORDER: f32 = 1.0;
+/// Rand der gewählten Kachel (Akzent), ebenfalls innen gezeichnet: die Kachel bleibt gleich
+/// groß, nichts verschiebt sich.
+pub const SELECTED_BORDER: f32 = 2.0;
+/// Leeres Projekt (Ebene 2).
+pub const EMPTY_PROJECT: &str =
+    "Dieses Projekt ist noch leer. Lege oben ein Dokument oder einen Ordner an.";
+/// Leerer Ordner.
+pub const EMPTY_FOLDER: &str =
+    "Dieser Ordner ist noch leer. Lege oben ein Dokument oder einen Ordner an.";
 /// Tastaturfokus: Ring außen um die Kachel (Mitte des Strichs so weit außerhalb), deutlich
 /// anders als der Rand der Auswahl.
 pub const FOCUS_OFFSET: f32 = 2.0;
@@ -241,6 +252,8 @@ pub struct ProjectsWindow {
     refreshes: u64,
     /// Zuletzt gesehenes Projektverzeichnis (`None` = noch nie hingesehen).
     root_seen: Option<Option<PathBuf>>,
+    /// Zuletzt gesehenes `Workspace::content_revision`.
+    content_seen: Option<u64>,
     /// Pause nach jedem gelesenen Dokument (Tests: langsames Lesen).
     scan_delay: Duration,
     /// Miniatur-Arbeiter (beim ersten Bedarf gestartet).
@@ -445,6 +458,16 @@ impl ProjectsWindow {
         }
         self.root_seen = Some(root.clone());
         self.ui.observe(ws);
+        // Ein neuer Stand eines Dokuments (Speichern, Wiederherstellen, Zweigwechsel): neu
+        // lesen wie „Aktualisieren“; Ort, Auswahl und Fenster der Aktionen bleiben. Die Miniatur
+        // folgt, weil ihr Schlüssel die Version enthält.
+        if self
+            .content_seen
+            .is_some_and(|seen| seen != ws.content_revision)
+        {
+            self.ui.invalidate();
+        }
+        self.content_seen = Some(ws.content_revision);
         let Some(root) = root else {
             self.job = None;
             if self.data.is_some() || !self.tiles.is_empty() {
@@ -940,6 +963,13 @@ impl ProjectsWindow {
         let frame_no = self.frame_no;
         let selected = self.ui.selected();
         let location_empty = self.location.is_empty();
+        // Art der aktuellen Ebene (Projekt oder Ordner) für den Hinweis „noch leer“.
+        let level_kind = match &self.data {
+            Some(Ok(scan)) if !location_empty => {
+                find_node(&scan.tree, &self.location).map(|n| n.kind)
+            }
+            _ => None,
+        };
         let message = match (&self.data, frame.has_library) {
             (_, false) => Some((NO_LIBRARY.to_string(), p.text_primary)),
             (Some(Err(e)), true) => Some((format!("{READ_ERROR_PREFIX}{e}"), p.error)),
@@ -947,6 +977,11 @@ impl ProjectsWindow {
             (Some(Ok(_)), true) if tiles.is_empty() && location_empty => {
                 Some((EMPTY.to_string(), p.text_primary))
             }
+            (Some(Ok(_)), true) if tiles.is_empty() => match level_kind {
+                Some(NodeKind::Project) => Some((EMPTY_PROJECT.to_string(), p.text_tertiary)),
+                Some(_) => Some((EMPTY_FOLDER.to_string(), p.text_tertiary)),
+                None => None,
+            },
             _ => None,
         };
         let too_many = self.too_many;
@@ -1253,7 +1288,8 @@ fn fit(image: egui::Vec2, area: egui::Vec2) -> egui::Vec2 {
     image * (area.x / image.x).min(area.y / image.y)
 }
 
-/// Malt eine Kachel: Rand (immer 2 px; gewählt Akzent, überfahren `border_subtle`), Bildfläche,
+/// Malt eine Kachel: Fläche (gewählt `accent_subtle`, sonst `bg_section`), Rand innen (gewählt
+/// 2 px Akzent, sonst 1 px; überfahren `text_tertiary`, in Ruhe `border_subtle`), Bildfläche,
 /// Name, „Geändert …“ und Version/Anzahl (Warnfarbe bei `Tone::Warning`).
 fn paint_tile(
     ui: &egui::Ui,
@@ -1279,7 +1315,14 @@ fn paint_tile(
         rect,
         radius,
         theme::card_fill(dark, selected),
-        Stroke::new(TILE_BORDER, border),
+        Stroke::new(
+            if selected {
+                SELECTED_BORDER
+            } else {
+                TILE_BORDER
+            },
+            border,
+        ),
         StrokeKind::Inside,
     );
     if resp.has_focus() {

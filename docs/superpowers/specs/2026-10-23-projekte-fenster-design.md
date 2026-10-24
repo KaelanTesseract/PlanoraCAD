@@ -88,7 +88,7 @@ besser nutzen.
   (nicht Reiter), damit später weitere Abschnitte (zum Beispiel Darstellung, Autosicherung)
   ohne Umbau dazukommen. Jetzt gibt es einen Abschnitt:
   **Projekte → Projektverzeichnis:** Pfad als Text, Knopf „Projektverzeichnis ändern …“ öffnet die
-  Dateiauswahl im Ordner-Modus (§ 5.1). Darunter der Hinweis: „Ihre Projekte bleiben, wo sie sind.
+  Dateiauswahl im Ordner-Modus (§ 5.1). Darunter der Hinweis (Anrede seit der Abschlussprüfung „du“ wie in allen neuen Texten): „Deine Projekte bleiben, wo sie sind.
   Im neuen Verzeichnis erscheinen nur die Projekte, die dort liegen.“ (kein Kopieren, kein
   Verschieben).
 - Wirkung wie bisher `Workspace::choose_root`: das Verzeichnis wird bei Bedarf angelegt, in
