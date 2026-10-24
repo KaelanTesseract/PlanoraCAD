@@ -8,7 +8,7 @@ use crate::feature_dialog::FeatureDialog;
 use crate::file_chooser::default_dir;
 use crate::icons::{self, Icon};
 use crate::import_dialog::ImportDialog;
-use crate::projects_panel::ProjectsUi;
+use crate::project_actions::ProjectsUi;
 use crate::shell::ShellState;
 use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::step_import_dialog::{self, StepImportDialog};
@@ -98,7 +98,7 @@ impl PlanoraApp {
         &mut self,
     ) -> (
         &mut Workspace,
-        &mut crate::projects_panel::ProjectsUi,
+        &mut crate::project_actions::ProjectsUi,
         &mut VersionsUi,
     ) {
         (&mut self.ws, &mut self.projects_ui, &mut self.versions_ui)
@@ -169,7 +169,7 @@ impl PlanoraApp {
     fn undo_keys(&mut self, ctx: &egui::Context) {
         if self.ws.about_open
             || self.ws.active_tab().dialog_open()
-            || crate::projects_panel::dialog_open(&self.projects_ui)
+            || crate::project_actions::dialog_open(&self.projects_ui)
             || crate::versions_panel::has_pending(&self.versions_ui)
             || ctx.input(|i| i.pointer.any_down())
         {

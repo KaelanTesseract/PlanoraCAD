@@ -22,7 +22,7 @@ use planora_app::icons::{self, Icon};
 use planora_app::shell::RightTab;
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::{After, Prompt, Workspace};
-use planora_app::{drawing_browser, fonts, projects_panel, theme, versions_panel};
+use planora_app::{drawing_browser, fonts, project_actions, theme, versions_panel};
 use planora_drawing::dimension::{
     DimId, DimKind, DimSpec, GeoRef, GeoRefData, Tolerance as DimTol,
 };
@@ -382,7 +382,7 @@ fn project_case(
         class: DialogSize::Prompt,
         closable: false,
         open: Box::new(open),
-        is_open: Box::new(|r| projects_panel::dialog_open(r.app.panels_mut().1)),
+        is_open: Box::new(|r| project_actions::dialog_open(r.app.panels_mut().1)),
     }
 }
 
@@ -548,20 +548,20 @@ fn cases() -> Vec<Case> {
         // Projekte (fest, ohne Schließen-Symbol).
         project_case("Neuer Ordner", "Neuer Ordner", "folder", |r| {
             let p = r.project.clone();
-            projects_panel::request_new_folder(r.app.panels_mut().1, p, "Ordner 1");
+            project_actions::request_new_folder(r.app.panels_mut().1, p, "Ordner 1");
         }),
         project_case("Projekt umbenennen", "Umbenennen", "rename", |r| {
             let p = r.project.clone();
-            projects_panel::request_rename(r.app.panels_mut().1, p, "Q");
+            project_actions::request_rename(r.app.panels_mut().1, p, "Q");
         }),
         project_case("Projekt verschieben", "Verschieben", "move", |r| {
             let mut p = r.project.clone();
             p.push("Teil".into());
-            projects_panel::request_move(r.app.panels_mut().1, p);
+            project_actions::request_move(r.app.panels_mut().1, p);
         }),
         project_case("Projekt löschen", "Löschen", "delete", |r| {
             let p = r.project.clone();
-            projects_panel::request_delete(r.app.panels_mut().1, p);
+            project_actions::request_delete(r.app.panels_mut().1, p);
         }),
         // Versionen (fest, ohne Schließen-Symbol).
         Case {

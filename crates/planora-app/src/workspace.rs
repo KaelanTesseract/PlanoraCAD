@@ -821,6 +821,28 @@ impl Workspace {
         Ok(path)
     }
 
+    /// Neues leeres Dokument (Version 1 aus `AppState::new().snapshot()`, Kommentar "") in einem
+    /// Projekt oder Ordner; dieselben Prüfungen und Meldungen wie `save_as`; `library_revision += 1`.
+    /// Die offenen Tabs bleiben unberührt (Öffnen ist Sache des Aufrufers).
+    pub fn create_document(&mut self, parent: &NodePath, name: &str) -> Result<NodePath, String> {
+        let lib = self.library.as_ref().ok_or(NO_ROOT)?;
+        if !lib.is_container(parent) {
+            return Err("Bitte ein Projekt oder einen Ordner als Ziel wählen.".into());
+        }
+        let name = validate_name(name).map_err(err)?;
+        let mut path = parent.clone();
+        path.push(format!("{name}.pcad"));
+        let dir = lib.root().resolve(&path).map_err(err)?;
+        if dir.exists() {
+            return Err(err(ProjectError::Exists(dir.display().to_string())));
+        }
+        // derselbe Stand wie beim ersten Speichern eines neuen Tabs; die Sperre endet mit `store`
+        let store = DocStore::create(&dir, &AppState::new().snapshot(), "").map_err(err)?;
+        drop(store);
+        self.library_revision += 1;
+        Ok(path)
+    }
+
     /// „Speichern“ im Prompt `SaveChanges`: speichert den Tab und macht weiter; fehlen Ort oder
     /// Zweigname, wechselt der Prompt in das passende Fenster.
     pub fn save_for_prompt(&mut self) {

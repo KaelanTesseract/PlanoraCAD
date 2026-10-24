@@ -708,8 +708,8 @@ fn panel_windows_block_keys() {
         {
             let (ws, projects, versions) = rig.app.panels_mut();
             if which == 0 {
-                planora_app::projects_panel::request_delete(projects, p.clone());
-                assert!(planora_app::projects_panel::dialog_open(projects));
+                planora_app::project_actions::request_delete(projects, p.clone());
+                assert!(planora_app::project_actions::dialog_open(projects));
             } else {
                 planora_app::versions_panel::request_delete_version(ws, versions, 1);
                 assert!(planora_app::versions_panel::has_pending(versions));
