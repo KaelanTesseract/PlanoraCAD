@@ -349,6 +349,17 @@ pub fn documents_text(n: usize) -> String {
     }
 }
 
+/// Wie [`footer_text`]; zeigt die Ebene nur einen Teil ihrer `total` Einträge (über
+/// [`MAX_TILES`]), heißt es „500 von 600 Projekten“ bzw. „500 von 600 Einträgen“.
+pub fn footer_text_of(tiles: &[Tile], top_level: bool, total: usize) -> String {
+    if total <= tiles.len() {
+        return footer_text(tiles, top_level);
+    }
+    // `total` ist hier größer als eins: immer Mehrzahl
+    let noun = if top_level { "Projekten" } else { "Einträgen" };
+    format!("{} von {total} {noun}", tiles.len())
+}
+
 /// Fußzeile: oben die Zahl der Projekte, darunter Ordner und Dokumente der Ebene.
 pub fn footer_text(tiles: &[Tile], top_level: bool) -> String {
     if top_level {

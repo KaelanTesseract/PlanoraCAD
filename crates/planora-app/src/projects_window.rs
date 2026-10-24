@@ -25,11 +25,11 @@ use crate::icons::{self, Icon};
 use crate::jobs::{Job, Poll};
 use crate::project_actions::{self as actions, NO_LIBRARY, ProjectsUi, READ_ERROR_PREFIX};
 use crate::project_tiles::{
-    MAX_TILES, Scan, TOO_MANY, Tile, TileKind, Tone, changed_line, footer_text, meta_line,
+    MAX_TILES, Scan, TOO_MANY, Tile, TileKind, Tone, changed_line, footer_text_of, meta_line,
     scan_library_with, tiles_at,
 };
 use crate::theme;
-use crate::thumbnail::{THUMB_H, THUMB_W};
+use crate::thumbnail::{Image, THUMB_H, THUMB_W};
 use crate::thumbnail_cache::{IMPOSSIBLE_TEXT, Thumb, ThumbKey};
 use crate::thumbnail_worker::{BUSY_RETRY, ThumbRequest, ThumbWorker};
 use crate::workspace::Workspace;
@@ -38,6 +38,7 @@ use egui::{Align, Align2, Color32, FontId, Layout, Rect, Sense, Stroke, StrokeKi
 use planora_project::library::{NodeKind, NodePath, TreeNode};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const TITLE: &str = "Projekte";
@@ -69,6 +70,8 @@ pub const REFRESH: &str = "Aktualisieren";
 pub const EMPTY: &str = "Noch keine Projekte. Lege mit „Neues Projekt“ das erste an.";
 /// Solange das erste Lesen läuft.
 pub const READING: &str = "Die Projekte werden gelesen …";
+/// Steht im Pfad für zusammengefallene vordere Teile.
+pub const CRUMB_ELLIPSIS: &str = "…";
 /// Hinweis am Pfeil „eine Ebene hinauf“ im Pfad.
 pub const BACK_HINT: &str = "Eine Ebene hinauf";
 
@@ -78,8 +81,14 @@ const WINDOW_ID: &str = "planora_projects_window";
 const IMAGE_H: f32 = 140.0;
 /// Innenabstand einer Kachel.
 const TILE_PAD: f32 = theme::SPACE_2;
-/// Rand einer Kachel, in jedem Zustand gleich breit.
-const TILE_STROKE: f32 = 2.0;
+/// Rand einer Kachel, in jedem Zustand gleich breit (nur die Farbe wechselt).
+pub const TILE_BORDER: f32 = 1.0;
+/// Tastaturfokus: Ring außen um die Kachel (Mitte des Strichs so weit außerhalb), deutlich
+/// anders als der Rand der Auswahl.
+pub const FOCUS_OFFSET: f32 = 2.0;
+pub const FOCUS_WIDTH: f32 = 2.0;
+/// Platz über und unter den Kacheln, damit der Fokusring oben und unten nicht abgeschnitten wird.
+const FOCUS_ROOM: f32 = FOCUS_OFFSET + FOCUS_WIDTH / 2.0;
 /// Zeilenhöhen der Texte unter der Bildfläche.
 const NAME_LINE: f32 = 20.0;
 const SMALL_LINE: f32 = 16.0;
@@ -88,10 +97,38 @@ const SMALL_SIZE: f32 = 12.0;
 const CAPTION_SIZE: f32 = 11.0;
 const FOLDER_ICON_SIZE: f32 = 64.0;
 const CUBE_ICON_SIZE: f32 = 40.0;
-/// Größe der ruhigen Fortschrittsanzeige.
-const SPINNER_SIZE: f32 = 18.0;
-/// So oft wird neu gezeichnet, solange Miniaturen entstehen.
-const THUMB_POLL: Duration = Duration::from_millis(100);
+/// Ruhiger Hinweis, solange eine Miniatur entsteht (hier oder in einer anderen Instanz).
+pub const BUILDING_TEXT: &str = "Wird gerade erzeugt …";
+/// So oft wird neu gezeichnet, solange eigene Miniaturen entstehen.
+pub const THUMB_POLL: Duration = Duration::from_millis(100);
+/// Höchstens so viele Texturen gleichzeitig (sichtbare werden nie verdrängt).
+pub const MAX_TEXTURES: usize = 64;
+/// Texturen bleiben für Kacheln bis so viele Höhen des Kachelbereichs über und unter dem
+/// sichtbaren Ausschnitt.
+const KEEP_MARGIN: f32 = 2.0;
+
+/// Gemeinsames leeres Bild: eine Miniatur, deren Pixel schon als Textur hochgeladen und danach
+/// verworfen wurden.
+static UPLOADED: std::sync::LazyLock<Arc<Image>> = std::sync::LazyLock::new(|| {
+    Arc::new(Image {
+        width: 0,
+        height: 0,
+        rgba: Vec::new(),
+    })
+});
+
+/// Hat die Miniatur noch ihre Pixel?
+fn has_pixels(thumb: &Thumb) -> bool {
+    matches!(thumb, Thumb::Image(img) if !img.rgba.is_empty())
+}
+
+/// Eine hochgeladene Miniatur.
+struct Tex {
+    key: ThumbKey,
+    handle: egui::TextureHandle,
+    /// Bild, in dem sie zuletzt gezeichnet wurde (Verdrängen der am längsten ungenutzten).
+    used: u64,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectsEvent {
@@ -152,10 +189,9 @@ impl Slot {
 enum Picture {
     Folder,
     Texture(egui::TextureId),
-    /// Würfel, darunter ein Hinweis oder die Fortschrittsanzeige.
+    /// Würfel, darunter ein Hinweis (ruhig, ohne Bewegung).
     Placeholder {
         caption: Option<&'static str>,
-        spinner: bool,
     },
 }
 
@@ -176,6 +212,8 @@ enum Action {
 struct Frame {
     locked: bool,
     has_library: bool,
+    /// Das Projektverzeichnis ließ sich nicht lesen.
+    read_error: bool,
     root_text: String,
     grid_h: f32,
     alive: bool,
@@ -197,6 +235,8 @@ pub struct ProjectsWindow {
     tiles: Vec<Tile>,
     /// Die Ebene hat mehr als [`MAX_TILES`] Einträge.
     too_many: bool,
+    /// Zahl der Einträge der Ebene (auch über [`MAX_TILES`]).
+    total: usize,
     /// Zählt die Berechnungen der Kacheln (Tests).
     refreshes: u64,
     /// Zuletzt gesehenes Projektverzeichnis (`None` = noch nie hingesehen).
@@ -211,9 +251,16 @@ pub struct ProjectsWindow {
     sources: Vec<Option<(PathBuf, ThumbKey)>>,
     /// Miniaturen je Dokumentordner.
     slots: HashMap<PathBuf, Slot>,
-    /// Texturen je Dokumentordner (nur für Kacheln der Ebene).
-    textures: HashMap<PathBuf, (ThumbKey, egui::TextureHandle)>,
+    /// Texturen je Dokumentordner: nur für Kacheln nahe am sichtbaren Ausschnitt, höchstens
+    /// [`MAX_TEXTURES`]. Die Pixel einer gespeicherten Miniatur werden nach dem Hochladen
+    /// verworfen; wird ihre Textur verdrängt und die Kachel wieder sichtbar, wird sie über die
+    /// Warteschlange neu geholt (aus der Zusatzdatei). Nicht gespeicherte behalten ihre Pixel.
+    textures: HashMap<PathBuf, Tex>,
     textures_made: u64,
+    /// Zählt die Bilder (für `Tex::used`).
+    frame_no: u64,
+    /// Dokumentordner der Kacheln nahe am sichtbaren Ausschnitt (Texturen bleiben).
+    keep: HashSet<PathBuf>,
     /// Die Warteschlange muss neu gesetzt werden.
     queue_dirty: bool,
     /// Dokumentordner der sichtbaren Kacheln im letzten Bild.
@@ -272,6 +319,7 @@ impl ProjectsWindow {
         }
         self.last_queue = Default::default();
         self.textures.clear();
+        self.keep.clear();
         self.tile_rects.clear();
         self.grid_rect = None;
         self.focused = None;
@@ -312,6 +360,7 @@ impl ProjectsWindow {
                         find_node(&scan.tree, &self.location).map_or(0, |n| n.children.len())
                     };
                     self.too_many = total > MAX_TILES;
+                    self.total = total;
                     self.tiles = tiles;
                     break;
                 }
@@ -320,6 +369,7 @@ impl ProjectsWindow {
         } else {
             self.tiles.clear();
             self.too_many = false;
+            self.total = 0;
         }
         self.rebuild_sources();
     }
@@ -439,6 +489,7 @@ impl ProjectsWindow {
     fn drop_tiles(&mut self) {
         self.tiles.clear();
         self.too_many = false;
+        self.total = 0;
         if let Some(w) = &self.worker {
             w.cancel_pending();
         }
@@ -492,7 +543,23 @@ impl ProjectsWindow {
         self.focused
     }
 
-    /// Gemerkte Miniatur des Dokuments im Ordner `doc_dir` (`None` = keine oder angefragt).
+    /// Zahl der hochgeladenen Texturen (Tests).
+    #[doc(hidden)]
+    pub fn texture_count(&self) -> usize {
+        self.textures.len()
+    }
+
+    /// Zahl der Miniaturen, deren Pixel noch im Speicher liegen (Tests).
+    #[doc(hidden)]
+    pub fn pixel_count(&self) -> usize {
+        self.slots
+            .values()
+            .filter(|s| s.thumb.as_ref().is_some_and(has_pixels))
+            .count()
+    }
+
+    /// Gemerkte Miniatur des Dokuments im Ordner `doc_dir` (`None` = keine oder angefragt). Ein
+    /// Bild, dessen Pixel schon hochgeladen und verworfen sind, ist ein leeres `Thumb::Image`.
     pub fn thumb_state(&self, doc_dir: &Path) -> Option<&Thumb> {
         self.slots.get(doc_dir)?.thumb.as_ref()
     }
@@ -535,11 +602,12 @@ impl ProjectsWindow {
         })
     }
 
-    /// Fertige Miniaturen abholen (wartet nie); `true`, wenn der Arbeiter vorher noch zu tun
-    /// hatte (Zustand vor dem Abholen gelesen). Ergebnisse zu einem alten Schlüssel entfallen.
-    fn collect(&mut self) -> bool {
-        let Some(w) = &self.worker else { return false };
-        let working = !w.is_idle();
+    /// Fertige Miniaturen abholen (wartet nie). Ergebnisse zu einem alten Schlüssel entfallen.
+    /// Ob weiter neu gezeichnet wird, entscheidet danach [`ProjectsWindow::outstanding`] (fehlt
+    /// einer Kachel noch ihr Ergebnis?): das ist strenger als „der Arbeiter ist beschäftigt“ und
+    /// verpasst kein ungelesenes Ergebnis.
+    fn collect(&mut self) {
+        let Some(w) = &self.worker else { return };
         let now = Instant::now();
         let results = w.poll();
         if !results.is_empty() {
@@ -556,7 +624,6 @@ impl ProjectsWindow {
                 s.since = now;
             }
         }
-        working
     }
 
     /// Setzt die Warteschlange neu, wenn sich Kacheln, sichtbarer Ausschnitt oder Schlüssel
@@ -588,7 +655,16 @@ impl ProjectsWindow {
         let (mut visible, mut rest) = (Vec::new(), Vec::new());
         for (dir, key) in self.sources.iter().flatten() {
             match self.slots.get_mut(dir) {
-                Some(s) if s.key == *key && s.thumb.is_some() => continue,
+                Some(s) if s.key == *key && s.thumb.is_some() => {
+                    // verdrängt (ohne Pixel und ohne Textur): nur sichtbare neu holen, sonst
+                    // holten sich Kacheln am Rand immer wieder gegenseitig heraus
+                    let evicted = matches!(&s.thumb, Some(Thumb::Image(img)) if img.rgba.is_empty())
+                        && !self.textures.get(dir).is_some_and(|t| t.key == *key);
+                    if !(evicted && self.visible.contains(dir)) {
+                        continue;
+                    }
+                    *s = Slot::requested(key);
+                }
                 Some(s) if s.key == *key => {}
                 Some(s) => *s = Slot::requested(key),
                 None => {
@@ -614,6 +690,67 @@ impl ProjectsWindow {
             self.last_queue = planned;
         }
         retry_in
+    }
+
+    /// Lädt Miniaturen von Kacheln nahe am sichtbaren Ausschnitt als Textur hoch und verwirft
+    /// danach die Pixel gespeicherter Miniaturen (auch die von weiter entfernten Kacheln: die
+    /// werden, wenn sie sichtbar werden, aus der Zusatzdatei neu geholt). Gibt Texturen außerhalb
+    /// des nahen Bereichs frei und hält höchstens [`MAX_TEXTURES`] (die am längsten nicht
+    /// gezeichneten zuerst; sichtbare nie). `true`, wenn etwas hochgeladen wurde.
+    fn manage_textures(&mut self, ctx: &egui::Context) -> bool {
+        let mut uploaded = false;
+        for (dir, key) in self.sources.iter().flatten() {
+            let Some(slot) = self.slots.get_mut(dir) else {
+                continue;
+            };
+            if slot.key != *key {
+                continue;
+            }
+            let Some(Thumb::Image(img)) = &slot.thumb else {
+                continue;
+            };
+            if img.rgba.is_empty() {
+                continue;
+            }
+            if self.keep.contains(dir) && !self.textures.get(dir).is_some_and(|t| t.key == *key) {
+                let color = egui::ColorImage::from_rgba_unmultiplied(
+                    [img.width as usize, img.height as usize],
+                    &img.rgba,
+                );
+                self.textures_made += 1;
+                let handle = ctx.load_texture(
+                    format!("planora-miniatur-{}", self.textures_made),
+                    color,
+                    egui::TextureOptions::LINEAR,
+                );
+                let tex = Tex {
+                    key: key.clone(),
+                    handle,
+                    used: self.frame_no,
+                };
+                self.textures.insert(dir.clone(), tex);
+                uploaded = true;
+            }
+            if slot.stored {
+                slot.thumb = Some(Thumb::Image(UPLOADED.clone()));
+            }
+        }
+        self.textures.retain(|dir, _| self.keep.contains(dir));
+        while self.textures.len() > MAX_TEXTURES {
+            let oldest = self
+                .textures
+                .iter()
+                .filter(|(dir, _)| !self.visible.contains(*dir))
+                .min_by_key(|(_, t)| t.used)
+                .map(|(dir, _)| dir.clone());
+            match oldest {
+                Some(dir) => {
+                    self.textures.remove(&dir);
+                }
+                None => break,
+            }
+        }
+        uploaded
     }
 
     /// Doppelklick/Enter: Projekt oder Ordner → hinein; Dokument → wählen und öffnen
@@ -695,7 +832,8 @@ impl ProjectsWindow {
         }
         // vor dem Zeichnen: Klicks dieses Bilds gehören zu den Kacheln dieses Stands
         Self::update(self, ws);
-        let working = self.collect();
+        self.collect();
+        self.frame_no += 1;
         if self.location != self.view_location {
             self.view += 1;
             self.view_location = self.location.clone();
@@ -703,6 +841,7 @@ impl ProjectsWindow {
         let frame = Frame {
             locked: ws.prompt.is_some(),
             has_library: ws.library.is_some(),
+            read_error: matches!(self.data, Some(Err(_))),
             root_text: ws
                 .library
                 .as_ref()
@@ -712,7 +851,7 @@ impl ProjectsWindow {
             alive: self.worker.as_ref().is_none_or(ThumbWorker::alive),
         };
         let footer = match &self.data {
-            Some(Ok(_)) => footer_text(&self.tiles, self.location.is_empty()),
+            Some(Ok(_)) => footer_text_of(&self.tiles, self.location.is_empty(), self.total),
             _ => String::new(),
         };
         let mut acts = Vec::new();
@@ -727,11 +866,17 @@ impl ProjectsWindow {
                 |ui| footer_row(ui, &footer, &mut refresh),
             );
         self.last_rect = response.map(|r| r.response.rect);
+        if self.manage_textures(ctx) {
+            // neue Texturen erscheinen im nächsten Bild
+            ctx.request_repaint();
+        }
         let retry = self.sync_queue();
         let alive = self.worker.as_ref().is_some_and(ThumbWorker::alive);
-        if alive && (working || self.outstanding()) {
+        // eigene Aufträge: in Abständen nachsehen (nie in jedem Bild)
+        if alive && self.outstanding() {
             ctx.request_repaint_after(THUMB_POLL);
         }
+        // Thumb::Busy: erst zum erneuten Versuch wieder zeichnen
         if let Some(r) = retry {
             ctx.request_repaint_after(r);
         }
@@ -777,7 +922,7 @@ impl ProjectsWindow {
         let sources = &self.sources;
         let slots = &self.slots;
         let textures = &mut self.textures;
-        let made = &mut self.textures_made;
+        let frame_no = self.frame_no;
         let selected = self.ui.selected();
         let location_empty = self.location.is_empty();
         let message = match (&self.data, frame.has_library) {
@@ -797,6 +942,7 @@ impl ProjectsWindow {
             if too_many {
                 ui.label(egui::RichText::new(TOO_MANY).color(p.text_secondary));
             }
+            ui.add_space(FOCUS_ROOM);
             ui.spacing_mut().item_spacing = vec2(TILE_GAP, TILE_GAP);
             let width = ui.available_width();
             let cols = columns_for(width);
@@ -826,11 +972,13 @@ impl ProjectsWindow {
                         let thumb = slot.and_then(|s| s.thumb.as_ref());
                         let no_bodies = matches!(thumb, Some(Thumb::NoBodies));
                         if ui.is_rect_visible(rect) {
-                            let pic =
-                                picture(ui.ctx(), tile, source, thumb, textures, made, frame.alive);
+                            let pic = picture(tile, source, thumb, textures, frame_no, frame.alive);
                             paint_tile(ui, rect, &resp, tile, &pic, is_selected, no_bodies);
                         }
-                        theme::focus_ring(ui, &resp);
+                        if resp.gained_focus() {
+                            // per Tab erreicht: in den sichtbaren Ausschnitt rollen
+                            resp.scroll_to_me(None);
+                        }
                         if resp.has_focus() {
                             focused = Some(i);
                         }
@@ -856,13 +1004,21 @@ impl ProjectsWindow {
                     }
                 });
             }
+            if !tiles.is_empty() {
+                ui.add_space(FOCUS_ROOM);
+            }
         });
         let viewport = output.inner_rect;
-        let visible: HashSet<PathBuf> = drawn
-            .iter()
-            .filter(|(r, _)| r.intersects(viewport))
-            .filter_map(|(_, d)| d.clone())
-            .collect();
+        let near = viewport.expand2(vec2(0.0, KEEP_MARGIN * viewport.height()));
+        let dirs_in = |area: Rect| -> HashSet<PathBuf> {
+            drawn
+                .iter()
+                .filter(|(r, _)| r.intersects(area))
+                .filter_map(|(_, d)| d.clone())
+                .collect()
+        };
+        let visible = dirs_in(viewport);
+        self.keep = dirs_in(near);
         if visible != self.visible {
             self.visible = visible;
             self.queue_dirty = true;
@@ -872,52 +1028,59 @@ impl ProjectsWindow {
         self.focused = focused;
     }
 
-    /// Ebene 1: „Neues Projekt“, Pfad des Projektverzeichnisses, rechts „Projektverzeichnis …“.
-    /// Tiefer: Pfad „‹ Projekte › P › F“, rechts „Neuer Ordner“ und „Neues Dokument“.
+    /// Zwei Zeilen über dem Kachelbereich, auf jeder Ebene gleich hoch (das Fenster springt beim
+    /// Wechsel nicht). Erste Zeile: auf Ebene 1 der Pfad des Projektverzeichnisses, tiefer der
+    /// Pfad „‹ Projekte › P › F“; rechts „Projektverzeichnis …“ (Ebene 1 und bei einem
+    /// Lesefehler). Zweite Zeile: „Neues Projekt“ bzw. „Neues Dokument“ und „Neuer Ordner“.
     fn top_row(&self, ui: &mut egui::Ui, frame: &Frame, out: &mut Vec<Action>) {
         let dark = ui.visuals().dark_mode;
         let p = theme::palette(dark);
+        let row_h = ui.spacing().interact_size.y;
+        let level_one = self.location.is_empty();
         ui.horizontal(|ui| {
-            ui.set_min_height(ui.spacing().interact_size.y);
+            ui.set_min_height(row_h);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if self.location.is_empty() {
+                if level_one || frame.read_error {
                     let r = ui.button(DIRECTORY_BUTTON);
                     theme::focus_ring(ui, &r);
                     if r.clicked() {
                         out.push(Action::Settings);
                     }
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        let r = ui.add_enabled(
-                            frame.has_library,
-                            theme::primary_button(NEW_PROJECT, dark),
-                        );
-                        theme::focus_ring(ui, &r);
-                        if r.clicked() {
-                            out.push(Action::NewProject);
-                        }
+                }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    if level_one {
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(&frame.root_text).color(p.text_secondary),
                             )
                             .truncate(),
                         );
-                    });
-                } else {
-                    let r = ui.add(theme::primary_button(NEW_DOCUMENT, dark));
-                    theme::focus_ring(ui, &r);
-                    if r.clicked() {
-                        out.push(Action::NewDocument);
-                    }
-                    let r = ui.button(NEW_FOLDER);
-                    theme::focus_ring(ui, &r);
-                    if r.clicked() {
-                        out.push(Action::NewFolder);
-                    }
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    } else {
                         self.breadcrumb(ui, out);
-                    });
-                }
+                    }
+                });
             });
+        });
+        ui.horizontal(|ui| {
+            ui.set_min_height(row_h);
+            if level_one {
+                let r = ui.add_enabled(frame.has_library, theme::primary_button(NEW_PROJECT, dark));
+                theme::focus_ring(ui, &r);
+                if r.clicked() {
+                    out.push(Action::NewProject);
+                }
+            } else {
+                let r = ui.add(theme::primary_button(NEW_DOCUMENT, dark));
+                theme::focus_ring(ui, &r);
+                if r.clicked() {
+                    out.push(Action::NewDocument);
+                }
+                let r = ui.button(NEW_FOLDER);
+                theme::focus_ring(ui, &r);
+                if r.clicked() {
+                    out.push(Action::NewFolder);
+                }
+            }
         });
     }
 
@@ -944,17 +1107,60 @@ impl ProjectsWindow {
         if r.clicked() {
             out.push(Action::GoTo(NodePath::new()));
         }
-        for i in 0..self.location.len() {
+        let separator = |ui: &mut egui::Ui| {
             ui.label(icons::text(
                 Icon::PathSeparator,
                 icons::LABEL_ICON_SIZE,
                 p.text_tertiary,
             ));
+        };
+        let hidden = self.crumbs_hidden(ui);
+        if hidden > 0 {
+            // die vorderen Teile als „…“, der ganze Pfad als Hinweis
+            separator(ui);
+            let full = std::iter::once(TITLE)
+                .chain(self.location.iter().map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(" / ");
+            ui.label(egui::RichText::new(CRUMB_ELLIPSIS).color(p.text_secondary))
+                .on_hover_text(full);
+        }
+        for i in hidden..self.location.len() {
+            separator(ui);
+            // der letzte Teil steht immer da, notfalls mit „…“ gekürzt
             let r = ui.add(egui::Button::new(self.location[i].as_str()).truncate());
             theme::focus_ring(ui, &r);
             if r.clicked() {
                 out.push(Action::GoTo(self.location[..=i].to_vec()));
             }
+        }
+    }
+
+    /// Wie viele vordere Pfadteile als „…“ zusammenfallen, damit der Rest in die Zeile passt
+    /// (höchstens alle bis auf den letzten). Gemessen mit Schrift und Abständen der Knöpfe.
+    fn crumbs_hidden(&self, ui: &egui::Ui) -> usize {
+        let n = self.location.len();
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let pad = 2.0 * ui.spacing().button_padding.x;
+        let gap = ui.spacing().item_spacing.x;
+        let text_w = |t: &str| {
+            ui.painter()
+                .layout_no_wrap(t.to_owned(), font.clone(), Color32::PLACEHOLDER)
+                .size()
+                .x
+        };
+        let separator = icons::LABEL_ICON_SIZE + gap;
+        let part = |t: &str| separator + text_w(t) + pad + gap;
+        let ellipsis = separator + text_w(CRUMB_ELLIPSIS) + gap;
+        let avail = ui.available_width();
+        let mut hidden = 0;
+        loop {
+            let shown: f32 = self.location[hidden..].iter().map(|t| part(t)).sum();
+            let wanted = shown + if hidden > 0 { ellipsis } else { 0.0 };
+            if wanted <= avail || hidden + 1 >= n {
+                return hidden;
+            }
+            hidden += 1;
         }
     }
 }
@@ -979,50 +1185,38 @@ fn footer_row(ui: &mut egui::Ui, footer: &str, refresh: &mut bool) {
     });
 }
 
-/// Inhalt der Bildfläche; legt die Textur einer Miniatur einmal je Ordner und Schlüssel an.
+/// Inhalt der Bildfläche. Die Textur einer Miniatur legt [`ProjectsWindow::manage_textures`]
+/// an; bis dahin (und solange sie entsteht) steht der ruhige Hinweis [`BUILDING_TEXT`].
 fn picture(
-    ctx: &egui::Context,
     tile: &Tile,
     source: Option<&(PathBuf, ThumbKey)>,
     thumb: Option<&Thumb>,
-    textures: &mut HashMap<PathBuf, (ThumbKey, egui::TextureHandle)>,
-    made: &mut u64,
+    textures: &mut HashMap<PathBuf, Tex>,
+    frame_no: u64,
     alive: bool,
 ) -> Picture {
-    let placeholder = |caption, spinner| Picture::Placeholder { caption, spinner };
+    let placeholder = |caption| Picture::Placeholder { caption };
     if tile.kind == TileKind::Folder {
         return Picture::Folder;
     }
     let Some((dir, key)) = source else {
         // ohne lesbares Dokument: leeres Projekt oder nicht lesbar
-        return placeholder((tile.documents == 0).then_some(NO_BODIES), false);
+        return placeholder((tile.documents == 0).then_some(NO_BODIES));
     };
+    let building = alive.then_some(BUILDING_TEXT);
     match thumb {
-        Some(Thumb::Image(img)) => {
-            let fresh = textures.get(dir).is_none_or(|(k, _)| k != key);
-            if fresh {
-                let color = egui::ColorImage::from_rgba_unmultiplied(
-                    [img.width as usize, img.height as usize],
-                    &img.rgba,
-                );
-                *made += 1;
-                let handle = ctx.load_texture(
-                    format!("planora-miniatur-{made}"),
-                    color,
-                    egui::TextureOptions::LINEAR,
-                );
-                textures.insert(dir.clone(), (key.clone(), handle));
+        Some(Thumb::Image(_)) => match textures.get_mut(dir).filter(|t| t.key == *key) {
+            Some(t) => {
+                t.used = frame_no;
+                Picture::Texture(t.handle.id())
             }
-            match textures.get(dir) {
-                Some((_, handle)) => Picture::Texture(handle.id()),
-                None => placeholder(None, false),
-            }
-        }
-        Some(Thumb::NoBodies) => placeholder(Some(NO_BODIES), false),
-        Some(Thumb::TooComplex) => placeholder(Some(TOO_COMPLEX), false),
-        Some(Thumb::Impossible) => placeholder(Some(IMPOSSIBLE_TEXT), false),
-        Some(Thumb::Failed(_)) => placeholder(None, false),
-        Some(Thumb::Busy) | None => placeholder(None, alive),
+            None => placeholder(building),
+        },
+        Some(Thumb::NoBodies) => placeholder(Some(NO_BODIES)),
+        Some(Thumb::TooComplex) => placeholder(Some(TOO_COMPLEX)),
+        Some(Thumb::Impossible) => placeholder(Some(IMPOSSIBLE_TEXT)),
+        Some(Thumb::Failed(_)) => placeholder(None),
+        Some(Thumb::Busy) | None => placeholder(building),
     }
 }
 
@@ -1061,16 +1255,27 @@ fn paint_tile(
     let border = if selected {
         p.accent
     } else if resp.hovered() {
-        p.border_subtle
+        p.text_tertiary
     } else {
-        Color32::TRANSPARENT
+        p.border_subtle
     };
-    painter.rect_stroke(
+    let radius = egui::CornerRadius::same(theme::RADIUS_MD);
+    painter.rect(
         rect,
-        egui::CornerRadius::same(theme::RADIUS_MD),
-        Stroke::new(TILE_STROKE, border),
+        radius,
+        theme::card_fill(dark, selected),
+        Stroke::new(TILE_BORDER, border),
         StrokeKind::Inside,
     );
+    if resp.has_focus() {
+        // Fokus: eigener Ring außen, mit Abstand zum Rand (die Auswahl ist der Rand selbst)
+        painter.rect_stroke(
+            rect.expand(FOCUS_OFFSET),
+            egui::CornerRadius::same(theme::RADIUS_MD + FOCUS_OFFSET as u8),
+            Stroke::new(FOCUS_WIDTH, p.accent),
+            StrokeKind::Middle,
+        );
+    }
     let inner = rect.shrink(TILE_PAD);
     let image = Rect::from_min_size(inner.min, vec2(inner.width(), IMAGE_H));
     painter.rect_filled(
@@ -1093,8 +1298,8 @@ fn paint_tile(
             egui::Image::new((*id, size))
                 .paint_at(ui, Rect::from_center_size(image.center(), size));
         }
-        Picture::Placeholder { caption, spinner } => {
-            let lifted = caption.is_some() || *spinner;
+        Picture::Placeholder { caption } => {
+            let lifted = caption.is_some();
             let center = image.center() - vec2(0.0, if lifted { theme::SPACE_3 } else { 0.0 });
             painter.text(
                 center,
@@ -1104,16 +1309,7 @@ fn paint_tile(
                 p.text_muted,
             );
             let below = center.y + CUBE_ICON_SIZE / 2.0 + theme::SPACE_1;
-            if *spinner {
-                let at = Rect::from_min_size(
-                    pos2(image.center().x - SPINNER_SIZE / 2.0, below),
-                    vec2(SPINNER_SIZE, SPINNER_SIZE),
-                );
-                egui::Spinner::new()
-                    .size(SPINNER_SIZE)
-                    .color(p.text_tertiary)
-                    .paint_at(ui, at);
-            } else if let Some(c) = caption {
+            if let Some(c) = caption {
                 painter.text(
                     pos2(image.center().x, below),
                     Align2::CENTER_TOP,

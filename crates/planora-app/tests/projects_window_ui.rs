@@ -8,7 +8,7 @@ use common::{Screen, Seen};
 use egui::epaint::{ClippedShape, Shape};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
 use planora_app::icons::{self, Icon};
-use planora_app::project_actions::NO_LIBRARY;
+use planora_app::project_actions::{self, NO_LIBRARY, READ_ERROR_PREFIX};
 use planora_app::project_tiles::format_changed;
 use planora_app::projects_window::*;
 use planora_app::settings_window::change_root;
@@ -153,17 +153,45 @@ impl Shot {
         panic!("„{text}“ fehlt: {}", self.texts());
     }
 
-    /// Ein Rechteck mit 2-px-Rand in `color` genau um `rect`?
+    /// Ein Rechteck mit Rand der Kachelbreite in `color` genau um `rect`?
     fn border_around(&self, rect: Rect, color: egui::Color32) -> bool {
+        self.card(rect)
+            .is_some_and(|r| r.stroke.color == color && (r.stroke.width - TILE_BORDER).abs() < 0.01)
+    }
+
+    /// Fläche und Rand der Karte genau an `rect`.
+    fn card(&self, rect: Rect) -> Option<egui::epaint::RectShape> {
+        self.flat().iter().find_map(|s| match s {
+            Shape::Rect(r)
+                if (r.rect.min - rect.min).length() < 0.5
+                    && (r.rect.max - rect.max).length() < 0.5
+                    && r.stroke.width > 0.0 =>
+            {
+                Some(r.clone())
+            }
+            _ => None,
+        })
+    }
+
+    /// Fokusring: Strich in `color` um `rect`, mit Abstand (nicht der Rand der Karte).
+    fn focus_ring_around(&self, rect: Rect, color: egui::Color32) -> bool {
+        let ring = rect.expand(FOCUS_OFFSET);
         self.flat().iter().any(|s| match s {
             Shape::Rect(r) => {
                 r.stroke.color == color
-                    && (r.stroke.width - 2.0).abs() < 0.01
-                    && (r.rect.min - rect.min).length() < 1.0
-                    && (r.rect.max - rect.max).length() < 1.0
+                    && (r.stroke.width - FOCUS_WIDTH).abs() < 0.01
+                    && (r.rect.min - ring.min).length() < 0.5
+                    && (r.rect.max - ring.max).length() < 0.5
             }
             _ => false,
         })
+    }
+
+    /// Steht `text` in `area`?
+    fn text_in(&self, text: &str, area: Rect) -> bool {
+        self.seen
+            .iter()
+            .any(|s| s.text == text && area.contains_rect(s.rect))
     }
 
     /// Ein Bild (Netz oder Rechteck mit eigener Textur; egui malt Bilder als Rechteck mit
@@ -188,14 +216,6 @@ impl Shot {
                 Some(r.fill_texture_id())
             }
             _ => None,
-        })
-    }
-
-    /// Eine Linie (etwa die Fortschrittsanzeige) in `area`?
-    fn path_in(&self, area: Rect) -> bool {
-        self.flat().iter().any(|s| match s {
-            Shape::Path(p) => p.points.iter().all(|q| area.contains(*q)),
-            _ => false,
         })
     }
 }
@@ -368,6 +388,14 @@ fn an_empty_library_shows_the_empty_text_and_no_library_shows_the_directory_butt
     assert!(shot.has(DIRECTORY_BUTTON), "{}", shot.texts());
     assert!(!shot.texts().contains("Wurzel"));
     assert!(!shot.has(EMPTY));
+    // „Neues Projekt“ ist ohne Projektverzeichnis gesperrt
+    let shot = h.click(shot.at(NEW_PROJECT));
+    assert!(
+        !shot.has("Anlegen"),
+        "kein Fenster „Neues Projekt“: {}",
+        shot.texts()
+    );
+    assert!(!project_actions::dialog_open(&h.w.ui));
 }
 
 #[test]
@@ -379,15 +407,33 @@ fn click_selects_with_accent_border_and_double_click_goes_in() {
     let mut h = H::new(ws);
     let shot = h.ready();
     let accent = palette(&h).accent;
+    let dark = h.ws.active_tab().state.dark;
     let rect = h.tile("P");
     assert!(!shot.border_around(rect, accent), "noch nichts gewählt");
+    // in Ruhe: Kartenfläche mit feinem Rand
+    let rest = shot.card(rect).expect("Karte");
+    assert_eq!(rest.fill, theme::card_fill(dark, false));
+    assert_eq!(rest.stroke.color, palette(&h).border_subtle);
+    // Maus weg von der Kachel, damit nur die Auswahl zählt
     let shot = h.click(rect.center());
+    let shot = {
+        drop(shot);
+        h.frame(vec![Event::PointerMoved(egui::pos2(1.0, 1.0))]);
+        h.settle(2)
+    };
     assert_eq!(h.w.ui.selected(), Some(&p));
     assert!(
         shot.border_around(h.tile("P"), accent),
         "Akzentrand um die gewählte Kachel"
     );
+    let chosen = shot.card(h.tile("P")).unwrap();
+    assert_eq!(chosen.fill, theme::card_fill(dark, true), "gewählt heller");
+    assert_ne!(chosen.fill, rest.fill);
     assert!(!shot.border_around(h.tile("Q"), accent));
+    assert!(
+        !shot.focus_ring_around(h.tile("P"), accent),
+        "Klick ist keine Tastaturfokus-Anzeige"
+    );
     h.double_click(h.tile("P").center());
     assert_eq!(h.w.location(), &p);
     let shot = h.settle(2);
@@ -503,12 +549,15 @@ fn tab_reaches_every_tile_and_enter_opens_it() {
     let tabs = h.ws.tabs.len();
     let shot = h.settle(1);
     let accent = palette(&h).accent;
-    let ring = h.tile("B").expand(1.0);
     assert!(
-        shot.flat().iter().any(|s| matches!(s, Shape::Rect(r)
-            if r.stroke.color == accent && (r.rect.min - ring.min).length() < 1.5)),
-        "Fokusring um „B“"
+        shot.focus_ring_around(h.tile("B"), accent),
+        "Fokusring mit Abstand um „B“"
     );
+    assert!(
+        !shot.border_around(h.tile("B"), accent),
+        "Fokus ist keine Auswahl: der Rand bleibt ruhig"
+    );
+    assert!(!shot.focus_ring_around(h.tile("A"), accent));
     h.key(Key::Enter);
     assert!(h.ws.tab_for_path(&b).is_some(), "„B“ geöffnet");
     assert!(h.ws.tab_for_path(&a).is_none(), "nur „B“");
@@ -616,14 +665,36 @@ fn the_frame_never_waits_for_a_slow_thumbnail() {
     );
     assert!(h.w.thumb_state(&dir).is_none(), "noch nicht fertig");
     assert!(
-        shot.path_in(h.image_area("P")),
-        "ruhige Fortschrittsanzeige"
+        shot.text_in(BUILDING_TEXT, h.image_area("P")),
+        "ruhiger Hinweis: {}",
+        shot.texts()
+    );
+    // eigener Auftrag läuft: in Abständen neu zeichnen, nie in jedem Bild
+    let delay = h.screen.repaint_delay;
+    assert!(
+        delay > Duration::ZERO && delay <= THUMB_POLL,
+        "Abstand {delay:?}"
+    );
+    assert!(
+        !shot.flat().iter().any(|s| matches!(s, Shape::Path(_))),
+        "keine bewegte Anzeige"
     );
     drop(held);
     assert!(h.w.wait_for_thumbnails(WAIT));
     let shot = h.settle(3);
     assert!(shot.texture_in(h.image_area("P")));
-    assert!(!shot.path_in(h.image_area("P")), "Anzeige weg");
+    assert!(
+        !shot.text_in(BUILDING_TEXT, h.image_area("P")),
+        "Hinweis weg"
+    );
+    // fertig: kein weiteres Neuzeichnen
+    let shot = h.settle(3);
+    drop(shot);
+    assert!(
+        h.screen.repaint_delay > Duration::from_secs(1),
+        "Leerlauf: {:?}",
+        h.screen.repaint_delay
+    );
 }
 
 #[test]
@@ -901,8 +972,19 @@ fn a_busy_document_is_asked_again_later() {
         h.frame(vec![]);
     }
     assert!(matches!(h.w.thumb_state(&dir), Some(Thumb::Busy)));
-    h.settle(5);
+    let shot = h.settle(5);
     assert_eq!(count.load(Ordering::SeqCst), 1, "nicht sofort erneut");
+    assert!(
+        shot.text_in(BUILDING_TEXT, h.image_area("P")),
+        "{}",
+        shot.texts()
+    );
+    // eine andere Instanz baut: erst zum erneuten Versuch wieder zeichnen
+    let delay = h.screen.repaint_delay;
+    assert!(
+        delay > THUMB_POLL && delay <= BUSY_RETRY,
+        "Abstand {delay:?}"
+    );
     while count.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
         h.frame(vec![]);
@@ -1047,4 +1129,251 @@ fn thumbnails_belong_to_the_document_folder_not_the_path() {
         "kein Bild aus dem alten Verzeichnis"
     );
     assert!(shot.has(NO_BODIES), "{}", shot.texts());
+}
+
+// ---- Runde 1 der Prüfung -----------------------------------------------------------------------
+
+#[test]
+fn tab_scrolls_the_focused_tile_into_view() {
+    let ws = workspace();
+    for i in 0..40 {
+        project(&ws, &format!("P{i:02}"));
+    }
+    let mut h = H::sized(ws, 800.0, 600.0);
+    h.ready();
+    let target = h.index("P20");
+    for _ in 0..80 {
+        h.key(Key::Tab);
+        if h.w.focused_tile() == Some(target) {
+            break;
+        }
+    }
+    assert_eq!(h.w.focused_tile(), Some(target));
+    h.settle(10);
+    let grid = h.w.grid_rect().unwrap();
+    let rect = h.tile("P20");
+    assert!(
+        grid.contains_rect(rect),
+        "fokussierte Kachel {rect:?} im Kachelbereich {grid:?}"
+    );
+}
+
+/// Arbeiter ohne Plattenzugriff: ein kleines Bild je Auftrag, als gespeichert gemeldet.
+fn picture_worker(count: Arc<AtomicUsize>) -> ThumbWorker {
+    ThumbWorker::start_with(move |_r: &ThumbRequest| {
+        count.fetch_add(1, Ordering::SeqCst);
+        ThumbOutcome {
+            thumb: Thumb::Image(Arc::new(planora_app::thumbnail::Image {
+                width: 8,
+                height: 5,
+                rgba: vec![128; 8 * 5 * 4],
+            })),
+            stored: true,
+            from_cache: true,
+        }
+    })
+}
+
+#[test]
+fn textures_stay_near_the_view_and_pixels_are_dropped() {
+    let ws = workspace();
+    for i in 0..200 {
+        let p = project(&ws, &format!("P{i:03}"));
+        empty_doc(&ws, &p, "Teil");
+    }
+    let count = Arc::new(AtomicUsize::new(0));
+    // hohes Fenster: der nahe Bereich (± 2 Höhen) fasst mehr als MAX_TEXTURES Kacheln
+    let mut h = H::sized(ws, 2000.0, 2000.0);
+    h.w.set_worker(picture_worker(count.clone()));
+    h.ready();
+    assert!(h.w.wait_for_thumbnails(WAIT));
+    let shot = h.settle(4);
+    assert!(
+        h.w.texture_count() <= MAX_TEXTURES,
+        "{}",
+        h.w.texture_count()
+    );
+    assert!(h.w.texture_count() > 0);
+    assert_eq!(h.w.pixel_count(), 0, "Pixel nach dem Hochladen verworfen");
+    assert!(shot.texture_in(h.image_area("P000")));
+    let requested = count.load(Ordering::SeqCst);
+    assert_eq!(requested, 200, "jede Kachel einmal");
+    // schrittweise hinunter und wieder ein Stück hinauf: so sammeln sich Texturen nahe am
+    // Ausschnitt, die Obergrenze greift
+    let grid = h.w.grid_rect().unwrap();
+    let mut most = 0;
+    for dy in [-400.0; 10].into_iter().chain([400.0; 10]) {
+        let before = count.load(Ordering::SeqCst);
+        let H { screen, w, ws, .. } = &mut h;
+        screen.wheel(grid.center(), dy, &mut |ctx| {
+            w.show(ctx, ws);
+        });
+        assert!(h.w.wait_for_thumbnails(WAIT));
+        h.settle(3);
+        most = most.max(h.w.texture_count());
+        // je Schritt (400 px, unter zwei Reihen) nur die neu sichtbaren Kacheln neu holen
+        let asked = count.load(Ordering::SeqCst) - before;
+        assert!(asked <= 16, "{asked} Aufträge für einen Schritt");
+        assert!(
+            h.w.texture_count() <= MAX_TEXTURES,
+            "{}",
+            h.w.texture_count()
+        );
+        assert_eq!(h.w.pixel_count(), 0);
+    }
+    assert_eq!(most, MAX_TEXTURES, "die Grenze wurde erreicht und gehalten");
+    // ganz nach unten: unten Bilder, oben verdrängt
+    let H { screen, w, ws, .. } = &mut h;
+    screen.wheel(grid.center(), -100_000.0, &mut |ctx| {
+        w.show(ctx, ws);
+    });
+    assert!(h.w.wait_for_thumbnails(WAIT));
+    let shot = h.settle(6);
+    assert!(
+        h.w.texture_count() <= MAX_TEXTURES,
+        "{}",
+        h.w.texture_count()
+    );
+    assert!(
+        shot.texture_in(h.image_area("P199")),
+        "unten sichtbar mit Bild"
+    );
+    // nur Kacheln nahe am Ausschnitt (± 2 Höhen) behalten ihre Textur
+    let near = grid.expand2(egui::vec2(0.0, 2.0 * grid.height()));
+    let near_tiles =
+        h.w.tile_rects()
+            .iter()
+            .filter(|r| r.intersects(near))
+            .count();
+    assert!(
+        h.w.texture_count() <= near_tiles,
+        "{} Texturen, nahe Kacheln {near_tiles}",
+        h.w.texture_count()
+    );
+    // wieder nach oben: die oberen werden neu geholt und gezeigt, ohne Endlosschleife
+    let H { screen, w, ws, .. } = &mut h;
+    screen.wheel(grid.center(), 100_000.0, &mut |ctx| {
+        w.show(ctx, ws);
+    });
+    assert!(h.w.wait_for_thumbnails(WAIT));
+    let shot = h.settle(6);
+    assert!(
+        shot.texture_in(h.image_area("P000")),
+        "oben wieder mit Bild"
+    );
+    assert_eq!(h.w.pixel_count(), 0);
+    let after = count.load(Ordering::SeqCst);
+    assert!(after > requested, "verdrängte sichtbare neu geholt");
+    h.settle(20);
+    assert!(h.w.wait_for_thumbnails(WAIT));
+    h.settle(5);
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        after,
+        "keine weiteren Aufträge im Leerlauf"
+    );
+    assert!(h.w.texture_count() <= MAX_TEXTURES);
+    // andere Ebene (nur Ordner): alle Texturen frei; Schließen ebenso
+    h.w.go_to(vec!["P000".into()]);
+    h.settle(3);
+    assert_eq!(h.w.texture_count(), 1, "nur die Kachel dieser Ebene");
+    h.w.close();
+    assert_eq!(h.w.texture_count(), 0, "Schließen gibt alle Texturen frei");
+}
+
+#[test]
+fn leaving_a_level_frees_its_textures() {
+    let ws = workspace();
+    let p = project(&ws, "P");
+    box_doc(&ws, &p, "Teil");
+    folder(&ws, &project(&ws, "Q"), "F");
+    let mut h = H::new(ws);
+    h.ready();
+    assert!(h.w.wait_for_thumbnails(WAIT));
+    h.settle(3);
+    assert_eq!(h.w.texture_count(), 1);
+    h.double_click(h.tile("Q").center());
+    h.settle(3);
+    assert_eq!(h.w.texture_count(), 0, "Ebene ohne Miniaturen");
+}
+
+#[test]
+fn results_that_could_not_be_saved_survive_a_level_change() {
+    let ws = workspace();
+    let p = project(&ws, "P");
+    let (_, dir) = box_doc(&ws, &p, "Teil");
+    fs::create_dir_all(dir.join(PREVIEW_JSON)).unwrap();
+    project(&ws, "Q");
+    let count = Arc::new(AtomicUsize::new(0));
+    let mut h = H::new(ws);
+    h.w.set_worker(gated_worker(Arc::new(Mutex::new(())), count.clone()));
+    h.ready();
+    assert!(h.w.wait_for_thumbnails(WAIT));
+    h.settle(3);
+    h.double_click(h.tile("Q").center());
+    h.settle(3);
+    let back = h.settle(1).at(&icons::glyph(Icon::Back).to_string());
+    h.click(back);
+    assert!(h.w.location().is_empty());
+    assert!(h.w.wait_for_thumbnails(WAIT));
+    let shot = h.settle(3);
+    assert_eq!(count.load(Ordering::SeqCst), 1, "nicht neu gebaut");
+    assert!(shot.texture_in(h.image_area("P")), "Bild aus dem Speicher");
+}
+
+#[test]
+fn a_read_error_deeper_down_offers_the_directory_and_back() {
+    let ws = workspace();
+    let root = lib(&ws).root().path().to_path_buf();
+    project(&ws, "P");
+    let mut h = H::new(ws);
+    h.ready();
+    h.double_click(h.tile("P").center());
+    let shot = h.settle(2);
+    assert!(!shot.has(DIRECTORY_BUTTON), "tiefer nur bei einem Fehler");
+    fs::remove_dir_all(&root).unwrap();
+    h.click(shot.at(REFRESH));
+    h.w.wait_for_scan(&h.ws);
+    let shot = h.settle(3);
+    let Some(Err(e)) = h.w.scan_state() else {
+        panic!("Lesefehler erwartet")
+    };
+    let text = format!("{READ_ERROR_PREFIX}{e}");
+    assert_eq!(shot.color_of(&text), palette(&h).error, "Fehlerfarbe");
+    assert!(shot.has(DIRECTORY_BUTTON), "{}", shot.texts());
+    h.click(shot.at(&icons::glyph(Icon::Back).to_string()));
+    assert!(h.w.location().is_empty(), "zurück geht noch");
+    let shot = h.settle(2);
+    h.click(shot.at(DIRECTORY_BUTTON));
+    assert!(h.events.contains(&ProjectsEvent::OpenSettings));
+}
+
+#[test]
+fn each_level_starts_at_the_top() {
+    let ws = workspace();
+    for i in 0..40 {
+        project(&ws, &format!("P{i:02}"));
+    }
+    let first: NodePath = vec!["P00".into()];
+    for i in 0..40 {
+        folder(&ws, &first, &format!("F{i:02}"));
+    }
+    let mut h = H::sized(ws, 800.0, 600.0);
+    h.ready();
+    let grid = h.w.grid_rect().unwrap();
+    let H { screen, w, ws, .. } = &mut h;
+    screen.wheel(grid.center(), -2000.0, &mut |ctx| {
+        w.show(ctx, ws);
+    });
+    // das sanfte Rollen auslaufen lassen
+    h.settle(30);
+    assert!(h.w.tile_rects()[0].top() < grid.top(), "gerollt");
+    h.w.go_to(first);
+    h.settle(4);
+    let grid = h.w.grid_rect().unwrap();
+    let top = h.w.tile_rects()[0].top();
+    assert!(
+        top >= grid.top() && top < grid.top() + 2.0 * TILE_GAP,
+        "neue Ebene oben: {top} / {grid:?}"
+    );
 }

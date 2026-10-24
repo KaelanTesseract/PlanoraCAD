@@ -702,3 +702,13 @@ impl PlanoraApp {
   Fenster „Neues Projekt“, „Neues Dokument“, „Neuer Ordner“ und „Umbenennen“ bekommen im ersten
   Bild den Tastaturfokus (gleich lostippen). egui 0.36 malt Bilder als Rechteck mit Textur, nicht
   als `Shape::Mesh`; der Test prüft beides.
+- **Aufgabe 8, Prüfrunde 1:** Über dem Kachelbereich stehen zwei Zeilen (auf jeder Ebene gleich
+  hoch): oben der Pfad (Ebene 1: Projektverzeichnis; tiefer „‹ Projekte › … › F“, vordere Teile
+  fallen zu „…“ zusammen, der letzte bleibt, notfalls gekürzt), rechts „Projektverzeichnis …“
+  (Ebene 1 und bei Lesefehler); darunter „Neues Projekt“ bzw. „Neues Dokument“/„Neuer Ordner“.
+  Der Pfad steht direkt unter der Titelzeile des Dialogs, nicht in ihr (dialog.rs bleibt
+  unverändert). Kacheln als Karte (`bg_section`, 1 px `border_subtle`, gewählt Akzentrand und
+  `theme::card_fill(dark, true)`), Fokus als eigener Ring außen. Statt Spinner der ruhige Text
+  „Wird gerade erzeugt …“. Texturen nur für Kacheln bis ± 2 Höhen um den Ausschnitt, höchstens
+  64 (`MAX_TEXTURES`); Pixel gespeicherter Miniaturen werden nach dem Hochladen verworfen und bei
+  Bedarf über die Warteschlange neu geholt. Fußzeile über 500: „500 von 600 Projekten“.

@@ -357,10 +357,86 @@ fn more_than_500_projects_show_the_hint() {
         hint.rect
     );
     assert_eq!(x.w.tile_rects().len(), MAX_TILES);
+    let footer = format!("{MAX_TILES} von {} Projekten", MAX_TILES + 1);
+    assert!(find(&seen, &footer).is_some(), "Fußzeile „{footer}“");
     let root = library(MAX_TILES);
     let mut x = H::new(workspace(&root, true), 1400.0, 900.0);
     let seen = x.ready();
     assert!(find(&seen, TOO_MANY).is_none());
+    assert!(find(&seen, &format!("{MAX_TILES} Projekte")).is_some());
+}
+
+#[test]
+fn a_deep_path_never_covers_the_buttons() {
+    let project_name = "Gehäuse für die Kundenanlage Nord-West 1"; // 40 Zeichen
+    assert_eq!(project_name.chars().count(), 40);
+    let root = library(0);
+    let lib = Library::open(&root).unwrap();
+    let mut at = lib.create_project(project_name).unwrap();
+    for i in 0..5 {
+        let name = format!("Unterordner Nummer {i}"); // 20 Zeichen
+        assert_eq!(name.chars().count(), 20);
+        at = lib.create_folder(&at, &name).unwrap();
+    }
+    let last = at.last().unwrap().clone();
+    for (w, h) in SIZES {
+        let what = format!("{w}×{h}");
+        let mut x = H::new(workspace(&root, true), w, h);
+        x.ready();
+        let level_one = x.rect();
+        x.w.go_to(at.clone());
+        let seen = x.settle(4);
+        let rect = x.rect();
+        assert_eq!(
+            rect, level_one,
+            "{what}: gleiche Fenstergröße auf jeder Ebene"
+        );
+        let grid = x.w.grid_rect().unwrap();
+        // alle Texte über dem Kachelbereich: im Fenster, nicht übereinander
+        let header: Vec<&Seen> = seen
+            .iter()
+            .filter(|s| s.rect.bottom() <= grid.top() && s.rect.top() > rect.top())
+            .collect();
+        for s in &header {
+            let visible = s.rect.intersect(s.clip);
+            assert!(
+                rect.contains_rect(visible),
+                "{what}: „{}“ {:?} ragt aus {rect:?}",
+                s.text,
+                s.rect
+            );
+        }
+        for (i, a) in header.iter().enumerate() {
+            for b in &header[i + 1..] {
+                let overlap = a.rect.intersect(a.clip).intersect(b.rect.intersect(b.clip));
+                assert!(
+                    !(overlap.width() > 0.5 && overlap.height() > 0.5),
+                    "{what}: „{}“ {:?} überdeckt „{}“ {:?}",
+                    a.text,
+                    a.rect,
+                    b.text,
+                    b.rect
+                );
+            }
+        }
+        for button in [NEW_DOCUMENT, NEW_FOLDER] {
+            let b = find(&seen, button).unwrap_or_else(|| panic!("{what}: {button}"));
+            assert!(
+                b.clip.contains_rect(b.rect),
+                "{what}: {button} abgeschnitten"
+            );
+        }
+        assert!(
+            find(&seen, &last).is_some(),
+            "{what}: der letzte Teil „{last}“ steht immer da"
+        );
+        if w < 2000.0 {
+            assert!(
+                find(&seen, CRUMB_ELLIPSIS).is_some(),
+                "{what}: vordere Teile als „…“"
+            );
+        }
+    }
 }
 
 #[test]

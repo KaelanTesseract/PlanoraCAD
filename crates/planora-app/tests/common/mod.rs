@@ -54,6 +54,8 @@ fn walk_shape(shape: &egui::epaint::Shape, clip: egui::Rect, out: &mut Vec<Seen>
 pub struct Screen {
     pub ctx: egui::Context,
     pub size: egui::Vec2,
+    /// Gewünschter Abstand bis zum nächsten Bild nach dem letzten Bild (`Duration::MAX` = keins).
+    pub repaint_delay: std::time::Duration,
     time: f64,
 }
 
@@ -65,6 +67,7 @@ impl Screen {
         Screen {
             ctx,
             size: egui::vec2(w, h),
+            repaint_delay: std::time::Duration::MAX,
             time: 0.0,
         }
     }
@@ -97,6 +100,10 @@ impl Screen {
             walk_shape(&c.shape, c.clip_rect, &mut seen);
         }
         let shapes = std::mem::take(&mut out.shapes);
+        self.repaint_delay = out
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map_or(std::time::Duration::MAX, |v| v.repaint_delay);
         out.drop_without_applying_deltas();
         (seen, shapes)
     }

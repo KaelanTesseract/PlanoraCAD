@@ -660,6 +660,17 @@ pub fn primary_button(text: &str, dark: bool) -> egui::Button<'_> {
     egui::Button::new(egui::RichText::new(text).color(p.on_accent)).fill(p.accent)
 }
 
+/// Fläche einer Karte (Kachel im Fenster „Projekte“): in Ruhe `bg_section`, gewählt etwas heller
+/// (Dunkel `bg_field`, Hell `bg_panel`).
+pub fn card_fill(dark: bool, selected: bool) -> Color32 {
+    let p = palette(dark);
+    match (selected, dark) {
+        (false, _) => p.bg_section,
+        (true, true) => p.bg_field,
+        (true, false) => p.bg_panel,
+    }
+}
+
 /// Akzentfarbe (Modus eingeschaltet, Tastaturfokus, aktive Auswahl); in beiden Themen gleich.
 pub fn accent(dark: bool) -> Color32 {
     palette(dark).accent
