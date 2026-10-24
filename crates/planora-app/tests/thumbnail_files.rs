@@ -39,13 +39,15 @@ fn library() -> (Library, PathBuf, PathBuf) {
     (lib, a, b)
 }
 
+/// Schlüssel ohne Kennung (genügt zum Lesen mit `load_cached`).
 fn key1() -> ThumbKey {
-    ThumbKey::new(1, MAIN_BRANCH, true)
+    ThumbKey::new("", 1, MAIN_BRANCH, true)
 }
 
 /// Miniatur bauen und speichern; beide Zusatzdateien müssen danach da sein (bzw. die JSON).
 fn add_preview(dir: &Path) {
-    let out = thumbnail_for(dir, &key1(), &BuildLimits::default());
+    let key = ThumbKey::current(dir, true).unwrap();
+    let out = thumbnail_for(dir, &key, &BuildLimits::default());
     assert!(out.stored, "{:?}", out.thumb);
     assert!(dir.join(PREVIEW_JSON).is_file());
 }
@@ -134,7 +136,7 @@ fn peek_and_open_report_no_orphans_and_save_still_works() {
     assert_eq!(fs::read(a.join(PREVIEW_JSON)).unwrap(), json);
     // Die alte Miniatur gilt für Version 1 weiter, für die neue Spitze nicht.
     assert!(load_cached(&a, &key1()).is_some());
-    assert!(load_cached(&a, &ThumbKey::new(2, MAIN_BRANCH, true)).is_none());
+    assert!(load_cached(&a, &ThumbKey::new("", 2, MAIN_BRANCH, true)).is_none());
     let (_, report) = peek(&a).unwrap();
     assert!(report.orphans.is_empty() && report.missing.is_empty());
 }
@@ -243,7 +245,8 @@ fn old_golden_documents_still_load_and_save_byte_identical() {
         drop(DocStore::create(&dir, &AppState::new().snapshot(), "").unwrap());
         fs::write(dir.join(VERSIONS_DIR).join("0001.json"), &original).unwrap();
         // Miniatur aus dem alten Format bauen und daneben legen.
-        let out = thumbnail_for(&dir, &key1(), &BuildLimits::default());
+        let key = ThumbKey::current(&dir, true).unwrap();
+        let out = thumbnail_for(&dir, &key, &BuildLimits::default());
         assert!(
             !matches!(out.thumb, Thumb::Failed(_)),
             "{name}: {:?}",
