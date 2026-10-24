@@ -63,13 +63,14 @@ fn opened(ws: &Workspace) -> ProjectsWindow {
 }
 
 fn names(w: &ProjectsWindow) -> Vec<String> {
-    w.tiles().into_iter().map(|t| t.name).collect()
+    w.tiles().iter().map(|t| t.name.clone()).collect()
 }
 
 fn tile(w: &ProjectsWindow, name: &str) -> Tile {
     w.tiles()
-        .into_iter()
+        .iter()
         .find(|t| t.name == name)
+        .cloned()
         .unwrap_or_else(|| panic!("Kachel „{name}“ fehlt: {:?}", names(w)))
 }
 
@@ -375,7 +376,7 @@ fn new_document_names_follow_the_folder_rules() {
     let tree = || e_tree(&root);
     let before = tree();
     let rev = e.ws.library_revision;
-    for bad in ["..", "a/b", "", "Teil"] {
+    for bad in ["..", "a/b", "", "Teil", "x.pcad", "X.PCAD"] {
         let tabs = e.ws.tabs.len();
         assert!(
             project_actions::create_document(&mut e.ws, &mut w.ui, &p, bad).is_none(),
@@ -624,4 +625,136 @@ fn the_new_project_and_new_document_windows_are_not_drawn_under_a_prompt() {
         assert!(t.contains("Anlegen"), "{which}: {t}");
         w.ui.close_dialogs();
     }
+}
+
+/// Bibliothek mit `n` Projekten je einem Dokument (damit das Lesen über `set_scan_delay` dauert).
+fn with_documents(e: &mut Env, n: usize) {
+    for i in 0..n {
+        let p = project(&e.ws, &format!("P{i}"));
+        e.ws.save_as(&p, "Teil", "").unwrap();
+    }
+    e.ws.close_tab(0);
+}
+
+#[test]
+fn an_invalidate_during_a_running_scan_is_not_lost() {
+    let mut e = env();
+    with_documents(&mut e, 6);
+    let mut w = ProjectsWindow::default();
+    w.set_scan_delay(Duration::from_millis(80));
+    w.open();
+    w.update(&e.ws);
+    assert!(w.scanning());
+    // der Baum ist gelesen, die Dokumente noch nicht: jetzt ändert sich die Platte
+    std::thread::sleep(Duration::from_millis(120));
+    project(&e.ws, "Außen");
+    w.ui.invalidate();
+    w.update(&e.ws);
+    assert!(w.scanning());
+    w.wait_for_scan(&e.ws);
+    assert!(
+        names(&w).contains(&"Außen".to_string()),
+        "das alte Lesen gilt nicht als aktuell: {:?}",
+        names(&w)
+    );
+    assert!(!w.ui.is_stale(&e.ws));
+}
+
+#[test]
+fn close_cancels_the_running_scan() {
+    let mut e = env();
+    with_documents(&mut e, 6);
+    let mut w = ProjectsWindow::default();
+    w.set_scan_delay(Duration::from_millis(80));
+    w.open();
+    w.update(&e.ws);
+    assert!(w.scanning());
+    w.close();
+    assert!(!w.is_open());
+    assert!(!w.scanning(), "Schließen bricht das Lesen ab");
+    w.update(&e.ws);
+    assert!(!w.scanning(), "ein geschlossenes Fenster liest nicht");
+    assert!(w.scan_state().is_none());
+}
+
+#[test]
+fn open_documents_lock_their_paths_regardless_of_case() {
+    let mut e = env();
+    let p = project(&e.ws, "P");
+    let doc = e.ws.save_as(&p, "Teil", "").unwrap();
+    let dir = doc_dir(&e.ws, &doc);
+    let mut w = opened(&e.ws);
+    let lower_project = vec!["p".to_string()];
+    let lower_doc = vec!["p".to_string(), "teil.pcad".to_string()];
+    for path in [&lower_project, &lower_doc] {
+        assert!(
+            !project_actions::delete_node(&mut e.ws, &mut w.ui, path),
+            "{path:?}"
+        );
+        assert_eq!(notice(&e.ws), CLOSE_FIRST, "{path:?}");
+        e.ws.prompt = None;
+        assert!(project_actions::rename_node(&mut e.ws, &mut w.ui, path, "Neu").is_none());
+        assert_eq!(notice(&e.ws), CLOSE_FIRST, "{path:?}");
+        e.ws.prompt = None;
+    }
+    assert!(dir.join("dokument.json").is_file(), "nichts gelöscht");
+}
+
+#[test]
+fn deleting_drops_a_selection_below_but_keeps_one_elsewhere() {
+    let mut e = env();
+    let p = project(&e.ws, "P");
+    let f = folder(&e.ws, &p, "F");
+    let g = folder(&e.ws, &f, "G");
+    let other = folder(&e.ws, &p, "Anderes");
+    let mut w = opened(&e.ws);
+    w.ui.select(Some(g.clone()));
+    assert!(project_actions::delete_node(&mut e.ws, &mut w.ui, &f));
+    assert!(
+        w.ui.selected().is_none(),
+        "die Auswahl lag im gelöschten Ordner"
+    );
+    w.ui.select(Some(other.clone()));
+    let q = folder(&e.ws, &p, "Q");
+    assert!(project_actions::delete_node(&mut e.ws, &mut w.ui, &q));
+    assert_eq!(w.ui.selected(), Some(&other), "andere Auswahl bleibt");
+}
+
+#[test]
+fn document_names_ending_in_the_suffix_are_refused() {
+    let mut e = env();
+    let p = project(&e.ws, "P");
+    let mut w = opened(&e.ws);
+    for bad in ["x.pcad", "X.PCAD", "Teil.Pcad"] {
+        assert!(project_actions::create_document(&mut e.ws, &mut w.ui, &p, bad).is_none());
+        assert_eq!(notice(&e.ws), planora_app::workspace::DOCUMENT_NAME_SUFFIX);
+        e.ws.prompt = None;
+    }
+    assert!(fs::read_dir(lib_root(&e.ws).join("P")).unwrap().all(|x| {
+        !x.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .to_lowercase()
+            .ends_with(".pcad")
+    }));
+}
+
+#[test]
+fn the_move_window_says_when_the_targets_are_still_being_read() {
+    let c = ctx();
+    let mut e = env();
+    let p = project(&e.ws, "P");
+    let doc = e.ws.save_as(&p, "Teil", "").unwrap();
+    e.ws.close_tab(0);
+    // noch nichts gelesen
+    let mut st = ProjectsUi::default();
+    project_actions::request_move(&mut st, doc.clone());
+    let t = dialog_texts(&c, &mut e.ws, &mut st);
+    assert!(t.contains(project_actions::TARGETS_PENDING), "{t}");
+    // gelesen: kein Hinweis
+    let mut w = opened(&e.ws);
+    project_actions::request_move(&mut w.ui, doc);
+    let t = dialog_texts(&c, &mut e.ws, &mut w.ui);
+    assert!(!t.contains(project_actions::TARGETS_PENDING), "{t}");
+    assert!(t.contains("verschieben nach:"), "{t}");
 }

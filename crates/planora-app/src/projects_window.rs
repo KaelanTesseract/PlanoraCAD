@@ -218,8 +218,8 @@ impl ProjectsWindow {
     }
 
     /// Kacheln der aktuellen Ebene (leer, solange nichts gelesen ist).
-    pub fn tiles(&self) -> Vec<Tile> {
-        self.tiles.clone()
+    pub fn tiles(&self) -> &[Tile] {
+        &self.tiles
     }
 
     /// Doppelklick/Enter: Projekt oder Ordner → hinein; Dokument → wählen und öffnen

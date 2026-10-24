@@ -22,7 +22,9 @@ pub const READ_ERROR_PREFIX: &str = "Der Projektordner lässt sich nicht lesen: 
 /// Ablehnung, solange betroffene Dokumente in Tabs offen sind.
 const CLOSE_FIRST: &str = "Bitte zuerst die betroffenen Dokumente schließen.";
 /// Meldung, wenn eine Aktion keine Bibliothek hat.
-const NO_ROOT: &str = "Es ist noch kein Projektordner gewählt.";
+const NO_ROOT: &str = "Es ist noch kein Projektverzeichnis gewählt.";
+/// Hinweis im Fenster „Verschieben“, solange der Baum (neu) gelesen wird.
+pub const TARGETS_PENDING: &str = "Die Ziele werden noch gelesen …";
 
 #[derive(Default)]
 pub struct ProjectsUi {
@@ -442,9 +444,13 @@ pub fn show_dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi
     }
     if let Some((path, mut target)) = st.moving.take() {
         let targets = move_targets(st, &path);
+        let reading = st.tree.is_none();
         let (mut ok, mut cancel) = (false, false);
         dialog_window("Verschieben", "move").show(ctx, |ui| {
             ui.label(format!("„{}“ verschieben nach:", label(&path)));
+            if reading {
+                ui.weak(TARGETS_PENDING);
+            }
             egui::ComboBox::from_id_salt("planora_projects_move_target")
                 .selected_text(
                     target

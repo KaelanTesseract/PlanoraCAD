@@ -548,7 +548,32 @@ fn choosing_a_root_is_refused_while_saved_documents_are_open() {
 fn the_display_name_strips_the_document_suffix_only_once() {
     let mut w = ws();
     let path = saved_document(&mut w, "Teil", 1);
-    let project = vec![path[0].clone()];
-    let p2 = w.save_as(&project, "x.pcad", "").unwrap();
+    // „Speichern unter“ lehnt Namen auf „.pcad“ ab; ein solches Dokument kann nur von außen
+    // entstehen (hier direkt über den Dokumentspeicher angelegt).
+    let p2 = vec![path[0].clone(), "x.pcad.pcad".to_string()];
+    let dir = w.library.as_ref().unwrap().root().resolve(&p2).unwrap();
+    let snapshot = w.active_tab().state.snapshot();
+    drop(planora_project::docstore::DocStore::create(&dir, &snapshot, "").unwrap());
+    w.open_document(&p2, LockMode::Acquire).unwrap();
     assert_eq!(w.tabs[w.tab_for_path(&p2).unwrap()].title(), "x.pcad");
+}
+
+#[test]
+fn save_as_refuses_names_ending_in_the_document_suffix() {
+    let mut w = ws();
+    let p = w.library.as_ref().unwrap().create_project("P").unwrap();
+    for bad in ["x.pcad", "X.PCAD", "Teil.Pcad "] {
+        let err = w.save_as(&p, bad, "").unwrap_err();
+        assert_eq!(err, DOCUMENT_NAME_SUFFIX, "{bad}");
+        assert!(w.active_tab().path.is_none(), "{bad}");
+    }
+    assert_eq!(w.library_revision, 0);
+    assert!(
+        w.library.as_ref().unwrap().tree().unwrap()[0]
+            .children
+            .is_empty()
+    );
+    // „pcad“ ohne Punkt und mitten im Namen bleibt erlaubt
+    w.save_as(&p, "x.pcad-Kopie", "").unwrap();
+    w.save_as(&p, "pcad", "").unwrap();
 }

@@ -18,7 +18,7 @@ use planora_feature::Snapshot;
 use planora_project::config::Config;
 use planora_project::docstore::{Autosave, DocStore, DocumentInfo, LockMode, peek, read_version};
 use planora_project::fsutil::validate_name;
-use planora_project::library::{Library, NodePath};
+use planora_project::library::{DOCUMENT_SUFFIX, Library, NodePath};
 use planora_project::{ProjectError, Result as ProjectResult};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -26,8 +26,22 @@ use std::time::{Duration, Instant};
 /// Abstand der Autosicherungen geänderter Dokumente.
 pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
 
-/// Meldung, wenn noch keine Wurzel (Projektordner) gewählt ist.
-const NO_ROOT: &str = "Es ist noch kein Projektordner gewählt.";
+/// Meldung, wenn noch kein Projektverzeichnis gewählt ist.
+const NO_ROOT: &str = "Es ist noch kein Projektverzeichnis gewählt.";
+
+/// Ablehnung eines Dokumentnamens auf „.pcad“ (wie bei Ordnern; die Endung hängt das Programm
+/// selbst an).
+pub const DOCUMENT_NAME_SUFFIX: &str = "Dokumentnamen dürfen nicht auf „.pcad“ enden.";
+
+/// Geprüfter Dokumentname (wie `validate_name`, dazu ohne „.pcad“ am Ende, gleich welche
+/// Schreibweise).
+fn document_name(name: &str) -> Result<String, String> {
+    let name = validate_name(name).map_err(err)?;
+    if name.to_lowercase().ends_with(DOCUMENT_SUFFIX) {
+        return Err(DOCUMENT_NAME_SUFFIX.into());
+    }
+    Ok(name)
+}
 
 /// Meldung von [`Workspace::choose_root`], solange gespeicherte Dokumente offen sind.
 pub const ROOT_LOCKED: &str =
@@ -794,7 +808,7 @@ impl Workspace {
         if !lib.is_container(parent) {
             return Err("Bitte ein Projekt oder einen Ordner als Ziel wählen.".into());
         }
-        let name = validate_name(name).map_err(err)?;
+        let name = document_name(name)?;
         let mut path = parent.clone();
         path.push(format!("{name}.pcad"));
         let dir = lib.root().resolve(&path).map_err(err)?;
@@ -829,7 +843,7 @@ impl Workspace {
         if !lib.is_container(parent) {
             return Err("Bitte ein Projekt oder einen Ordner als Ziel wählen.".into());
         }
-        let name = validate_name(name).map_err(err)?;
+        let name = document_name(name)?;
         let mut path = parent.clone();
         path.push(format!("{name}.pcad"));
         let dir = lib.root().resolve(&path).map_err(err)?;
