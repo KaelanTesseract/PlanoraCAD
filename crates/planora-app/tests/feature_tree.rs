@@ -537,3 +537,181 @@ fn steps_keep_suppress_rename_and_delete_in_the_bar() {
     );
     assert!(s.document.feature(b).is_some());
 }
+
+// ---- Fenstertest: Befunde ---------------------------------------------------------------------
+
+/// Text `text` mit seinem sichtbaren Ausschnitt (Rechteck des Textes ∩ Schnittrechteck).
+fn clipped_text(out: &egui::FullOutput, text: &str) -> Option<(Rect, Rect)> {
+    fn walk(shape: &Shape, clip: Rect, text: &str) -> Option<(Rect, Rect)> {
+        match shape {
+            Shape::Text(t) if t.galley.text() == text => {
+                Some((Rect::from_min_size(t.pos, t.galley.size()), clip))
+            }
+            Shape::Vec(v) => v.iter().find_map(|s| walk(s, clip, text)),
+            _ => None,
+        }
+    }
+    out.shapes
+        .iter()
+        .find_map(|c| walk(&c.shape, c.clip_rect, text))
+}
+
+/// Baum in einem 250 px breiten Feld (wie die linke Spalte); liefert den Ausschnitt des Namens.
+fn name_in_narrow_panel(s: &mut AppState, name: &str) -> Option<(Rect, Rect)> {
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts::definitions());
+    theme::apply(&ctx, true);
+    let mut found = None;
+    for i in 0..3 {
+        let raw = egui::RawInput {
+            screen_rect: Some(SCREEN),
+            time: Some(f64::from(i) * 0.05),
+            ..Default::default()
+        };
+        let out = ctx.run_ui(raw, |ui| {
+            ui.allocate_ui(vec2(theme::PANEL_WIDTH, 700.0), |ui| {
+                ui.set_width(theme::PANEL_WIDTH);
+                browser::show(ui, s);
+            });
+        });
+        found = clipped_text(&out, name);
+        out.drop_without_applying_deltas();
+    }
+    found
+}
+
+#[test]
+fn body_names_are_not_cut_short_by_a_status_column() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    s.create_cylinder(1.0, 4.0).unwrap();
+    for name in ["Quader 1", "Zylinder 1"] {
+        let (text, clip) = name_in_narrow_panel(&mut s, name).expect(name);
+        assert!(
+            clip.contains_rect(text),
+            "{name} abgeschnitten: Text {text:?}, sichtbar {clip:?}"
+        );
+    }
+}
+
+#[test]
+fn rolled_back_body_keeps_its_full_name_visible() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    let m = s.document.features().last().unwrap().id;
+    history_bar::to_start(&mut s, m).unwrap();
+    let (text, clip) = name_in_narrow_panel(&mut s, "Quader 1").expect("Name");
+    assert!(clip.contains_rect(text), "Text {text:?}, sichtbar {clip:?}");
+}
+
+#[test]
+fn a_long_name_is_shortened_with_an_ellipsis_and_the_status_moves_to_the_hint() {
+    let mut s = AppState::new();
+    let b = s.create_box(DVec3::splat(4.0)).unwrap();
+    let long = "Grundplatte mit sehr langem Namen für die Werkstatt";
+    s.rename_feature(b, long).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    let m = s.document.features().last().unwrap().id;
+    history_bar::to_start(&mut s, m).unwrap();
+    let mut t = Tree::new(true);
+    let shot = t.settle(&mut s);
+    // Gezeichnet werden nur die Zeichen bis „…“ (der Text des Auftrags bleibt der volle Name).
+    let raw = egui::RawInput {
+        screen_rect: Some(SCREEN),
+        time: Some(100.0),
+        ..Default::default()
+    };
+    let out = t.ctx.run_ui(raw, |ui| browser::show(ui, &mut s));
+    fn shown(shape: &Shape, out: &mut Vec<String>) {
+        match shape {
+            Shape::Text(t) => out.push(
+                t.galley
+                    .rows
+                    .iter()
+                    .flat_map(|r| r.row.glyphs.iter().map(|g| g.chr))
+                    .collect(),
+            ),
+            Shape::Vec(v) => v.iter().for_each(|s| shown(s, out)),
+            _ => {}
+        }
+    }
+    let mut drawn = Vec::new();
+    out.shapes.iter().for_each(|c| shown(&c.shape, &mut drawn));
+    out.drop_without_applying_deltas();
+    assert!(
+        drawn
+            .iter()
+            .any(|x| x.ends_with('…') && long.starts_with(x.trim_end_matches('…'))),
+        "gekürzt mit …: {drawn:?}"
+    );
+    assert!(!drawn.iter().any(|x| x == long), "nicht in voller Länge");
+    // Der Status passt nicht mehr daneben: er steht nur im Hinweis.
+    assert!(!shot.has(browser::ROLLED_BACK), "{}", shot.all_text());
+    let row = t.row(long).expect("Zeile");
+    let mut text = String::new();
+    for i in 0..6 {
+        let events = if i == 0 {
+            vec![Event::PointerMoved(row.center())]
+        } else {
+            vec![]
+        };
+        t.time += 0.5;
+        text = t.frame(&mut s, events).all_text();
+    }
+    assert!(text.contains(browser::ROLLED_BACK), "Hinweis:\n{text}");
+}
+
+#[test]
+fn the_empty_hints_sit_inside_their_folders() {
+    let mut s = AppState::new();
+    let mut t = Tree::new(true);
+    t.settle(&mut s);
+    let shot = t.settle(&mut s);
+    let bodies = t.folder(Folder::Bodies);
+    let sketches = t.folder(Folder::Sketches);
+    let hint = shot.text(browser::EMPTY_TEXT).1;
+    assert!(
+        hint.top() >= bodies.bottom() - 0.5 && hint.bottom() <= sketches.top() + 0.5,
+        "Hinweis im Ordner „Körper“: {hint:?}, Körper {bodies:?}, Skizzen {sketches:?}"
+    );
+    assert!(shot.has(browser::NO_SKETCHES), "{}", shot.all_text());
+    let sk = shot.text(browser::NO_SKETCHES).1;
+    assert!(sk.top() >= sketches.bottom() - 0.5);
+    // Zugeklappt: kein Hinweis.
+    s.tree_folders.set_open(Folder::Bodies, false);
+    s.tree_folders.set_open(Folder::Sketches, false);
+    let shot = t.settle(&mut s);
+    assert!(!shot.has(browser::EMPTY_TEXT), "{}", shot.all_text());
+    assert!(!shot.has(browser::NO_SKETCHES), "{}", shot.all_text());
+    // Mit einem Körper, aber ohne Skizze: nur noch der Hinweis bei den Skizzen.
+    s.tree_folders = Default::default();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    let shot = t.settle(&mut s);
+    assert!(!shot.has(browser::EMPTY_TEXT));
+    assert!(shot.has(browser::NO_SKETCHES));
+}
+
+#[test]
+fn body_rows_keep_their_order_after_a_move() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    s.create_cylinder(1.0, 4.0).unwrap();
+    let mut t = Tree::new(true);
+    t.settle(&mut s);
+    let order = |t: &Tree| -> Vec<String> {
+        t.names()
+            .into_iter()
+            .filter(|n| n == "Quader 1" || n == "Zylinder 1")
+            .collect()
+    };
+    assert_eq!(order(&t), ["Quader 1", "Zylinder 1"]);
+    let j = s.bodies.iter().position(|b| b.name == "Quader 1").unwrap();
+    s.move_body(j, DVec3::X).unwrap();
+    t.settle(&mut s);
+    assert_eq!(
+        order(&t),
+        ["Quader 1", "Zylinder 1"],
+        "Verschieben ordnet nicht um"
+    );
+}

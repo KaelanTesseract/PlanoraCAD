@@ -216,17 +216,7 @@ fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bo
     }
     let mut action = None;
     for g in &groups {
-        row(
-            ui,
-            0.0,
-            0.0,
-            false,
-            &g.name,
-            None,
-            None,
-            None,
-            paint_view_icon,
-        );
+        row(ui, 0.0, false, &g.name, None, None, None, paint_view_icon);
         for r in &g.rows {
             let dim = r.id;
             let selected = state.drawing_ui.selected_dim == Some(dim);
@@ -237,7 +227,6 @@ fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bo
             let resp = row(
                 ui,
                 body_indent(),
-                0.0,
                 selected,
                 &r.text,
                 color,

@@ -251,17 +251,21 @@ pub fn to_end(state: &mut AppState, tip: FeatureId) -> Result<(), String> {
 /// werden; ein unbekannter Körper bekommt die erste Farbe.
 pub fn body_color(state: &AppState, tip: FeatureId) -> BodyColor {
     let colors = &crate::theme::BODY_COLORS;
+    let first = body_root(state, tip).map_or(0, |id| id.0);
+    colors[(first % colors.len() as u64) as usize]
+}
+
+/// Der erste Körperschritt der Kette von `tip` (kleinste Kennung, Skizzen zählen nicht): Grundlage
+/// der Körperfarbe und der festen Reihenfolge im Feature-Baum. `None` für einen unbekannten Körper.
+pub fn body_root(state: &AppState, tip: FeatureId) -> Option<FeatureId> {
     let doc = &state.document;
-    let first = doc
-        .chain(tip)
+    doc.chain(tip)
         .into_iter()
         .filter(|id| {
             doc.feature(*id)
                 .is_some_and(|f| !matches!(f.kind, FeatureKind::Sketch(_)))
         })
         .min()
-        .map_or(0, |id| id.0);
-    colors[(first % colors.len() as u64) as usize]
 }
 
 /// Ist der Körper zurückgesetzt (eine Rückrollstelle in seiner Kette)? Dann sind neue Aktionen

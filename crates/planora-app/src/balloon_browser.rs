@@ -120,17 +120,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     }
     let mut action = None;
     for g in &groups {
-        row(
-            ui,
-            0.0,
-            0.0,
-            false,
-            &g.name,
-            None,
-            None,
-            None,
-            paint_view_icon,
-        );
+        row(ui, 0.0, false, &g.name, None, None, None, paint_view_icon);
         for r in &g.rows {
             let b = r.id;
             let selected = state.drawing_ui.selected_balloon == Some(b);
@@ -138,7 +128,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
             let resp = row(
                 ui,
                 body_indent(),
-                0.0,
                 selected,
                 &r.text,
                 color,

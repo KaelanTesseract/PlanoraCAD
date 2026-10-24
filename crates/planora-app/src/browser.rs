@@ -17,6 +17,8 @@ const ROW_HEIGHT: f32 = theme::ROW_H;
 const BODY_INDENT: f32 = 22.0;
 /// Einrückung des Inhalts eines Ordners.
 const FOLDER_INDENT: f32 = 14.0;
+/// Abstand zwischen Name und Status in einer Zeile.
+const STATUS_GAP: f32 = 10.0;
 /// Größe der Zeilensymbole.
 const ICON_SIZE: f32 = 16.0;
 /// Größe des Pfeils vor einem Ordner.
@@ -322,9 +324,13 @@ impl FolderState {
 
 // ---- Zeichnen ---------------------------------------------------------------------------------
 
-/// Text, solange das Dokument leer ist.
+/// Text im Ordner „Körper“, solange es keinen Körper gibt.
 pub const EMPTY_TEXT: &str =
     "Noch keine Körper. Über „Erzeugen“ im Menü lässt sich ein Körper oder eine Skizze anlegen.";
+
+/// Text im Ordner „Skizzen“, solange es keine Skizze gibt.
+pub const NO_SKETCHES: &str =
+    "Noch keine Skizze. Über „Erzeugen“, dann „Skizze“ lässt sich eine anlegen.";
 
 /// Kurzer Statustext eines Körpers, dessen Verlauf zurückgesetzt ist.
 pub const ROLLED_BACK: &str = "zurückgesetzt";
@@ -383,9 +389,10 @@ struct BodyRow {
     status: FeatureStatus,
 }
 
-/// Die Körperzeilen in der Reihenfolge der Spitzen: je sichtbarem Körper eine Zeile (nach einem
-/// zurückgesetzten Vereinigen also beide Eingangskörper), sonst eine Zeile für die Spitze. Ein
-/// Körper, der in einem Vereinigen aufgegangen ist, erscheint nicht mehr einzeln.
+/// Die Körperzeilen in der Reihenfolge des Entstehens (erster Körperschritt, wie die Farbe): je
+/// sichtbarem Körper eine Zeile (nach einem zurückgesetzten Vereinigen also beide
+/// Eingangskörper), sonst eine Zeile für die Spitze. Ein Körper, der in einem Vereinigen
+/// aufgegangen ist, erscheint nicht mehr einzeln.
 fn body_rows(state: &AppState, dark: bool) -> Vec<BodyRow> {
     let doc = &state.document;
     let chains: Vec<(FeatureId, Vec<FeatureId>)> = doc
@@ -404,13 +411,15 @@ fn body_rows(state: &AppState, dark: bool) -> Vec<BodyRow> {
         .iter()
         .map(|b| owner(b.source.feature))
         .collect();
-    // Spitzen in Listenordnung, dazu (nur zur Sicherheit) Besitzer ohne Spitze.
+    // Spitzen, dazu (nur zur Sicherheit) Besitzer ohne Spitze; feste Reihenfolge nach dem ersten
+    // Körperschritt (wie die Farbe), damit Verschieben oder Bearbeiten nicht umsortiert.
     let mut tips: Vec<FeatureId> = chains.iter().map(|(t, _)| *t).collect();
     for o in &owners {
         if !tips.contains(o) {
             tips.push(*o);
         }
     }
+    tips.sort_by_key(|t| (crate::history_bar::body_root(state, *t).unwrap_or(*t), *t));
     let mut rows = Vec::new();
     for tip in tips {
         let Some(tip_feature) = doc.feature(tip) else {
@@ -541,7 +550,8 @@ pub(crate) const fn body_indent() -> f32 {
 }
 
 /// Eine Zeile mit Symbol, Name, optionalem Zusatz hinter dem Namen und optionalem Status
-/// rechts; liefert die Antwort für Klicks.
+/// rechts (nur wenn er neben den ganzen Namen passt, sonst im Hinweis); liefert die Antwort für
+/// Klicks.
 #[allow(
     clippy::too_many_arguments,
     reason = "eine Zeile hat so viele Bestandteile"
@@ -549,7 +559,6 @@ pub(crate) const fn body_indent() -> f32 {
 pub(crate) fn row(
     ui: &mut egui::Ui,
     indent: f32,
-    status_width: f32,
     selected: bool,
     name: &str,
     color: Option<Color32>,
@@ -558,16 +567,7 @@ pub(crate) fn row(
     paint_icon: impl FnOnce(&egui::Painter, egui::Rect, Color32),
 ) -> egui::Response {
     row_lead(
-        ui,
-        indent,
-        0.0,
-        status_width,
-        selected,
-        name,
-        color,
-        status,
-        detail,
-        paint_icon,
+        ui, indent, 0.0, selected, name, color, status, detail, paint_icon,
     )
 }
 
@@ -581,7 +581,6 @@ fn row_lead(
     ui: &mut egui::Ui,
     indent: f32,
     lead: f32,
-    status_width: f32,
     selected: bool,
     name: &str,
     color: Option<Color32>,
@@ -615,21 +614,54 @@ fn row_lead(
         vec2(ICON_SIZE, ICON_SIZE),
     );
     paint_icon(ui.painter(), icon_rect, color);
-    // Lange Namen werden vor der Statusspalte abgeschnitten.
-    let name_clip = egui::Rect::from_min_max(
-        rect.min,
-        egui::pos2(
-            (rect.max.x - status_width - 10.0).max(rect.min.x),
-            rect.max.y,
-        ),
-    );
-    let name_rect = ui.painter().with_clip_rect(name_clip).text(
-        egui::pos2(icon_rect.right() + theme::SPACE_2, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        name,
-        theme::label_font(),
-        color,
-    );
+    // Der Name bekommt die ganze Breite. Der Status rechts braucht nur seinen eigenen Platz;
+    // passen beide nicht nebeneinander, wird der Name mit „…“ gekürzt und der Status steht nur
+    // im Hinweis.
+    let name_x = icon_rect.right() + theme::SPACE_2;
+    let right = rect.max.x - theme::SPACE_2;
+    let font = theme::label_font();
+    let name_w = ui
+        .painter()
+        .layout_no_wrap(name.to_string(), font.clone(), color)
+        .size()
+        .x;
+    let status_w = status.map(|(t, c)| {
+        ui.painter()
+            .layout_no_wrap(t.to_string(), theme::value_font(), c)
+            .size()
+            .x
+    });
+    let show_status = status_w.is_some_and(|w| name_x + name_w + STATUS_GAP + w <= right);
+    let name_end = match status_w {
+        Some(w) if show_status => right - w - STATUS_GAP,
+        _ => right,
+    };
+    let name_clip =
+        egui::Rect::from_min_max(rect.min, egui::pos2(name_end.max(rect.min.x), rect.max.y));
+    let name_rect = if name_x + name_w <= name_end {
+        ui.painter().text(
+            egui::pos2(name_x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            name,
+            font,
+            color,
+        )
+    } else {
+        let mut job = egui::text::LayoutJob::simple_singleline(name.to_string(), font, color);
+        job.wrap = egui::text::TextWrapping {
+            max_width: (name_end - name_x).max(0.0),
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('…'),
+        };
+        let galley = ui.painter().layout_job(job);
+        let pos = egui::pos2(name_x, rect.center().y - galley.size().y / 2.0);
+        let r = egui::Rect::from_min_size(pos, galley.size());
+        ui.painter()
+            .with_clip_rect(name_clip)
+            .galley(pos, galley, color);
+        r
+    };
     // Kleiner, schwacher Zusatz hinter dem Namen (Blatt und Projektion, Maßstab).
     if let Some(detail) = detail {
         ui.painter().with_clip_rect(name_clip).text(
@@ -640,14 +672,18 @@ fn row_lead(
             ui.visuals().weak_text_color(),
         );
     }
-    if let Some((text, c)) = status {
-        ui.painter().text(
-            egui::pos2(rect.max.x - theme::SPACE_2, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            text,
-            theme::value_font(),
-            c,
-        );
+    match status {
+        Some((text, c)) if show_status => {
+            ui.painter().text(
+                egui::pos2(right, rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                text,
+                theme::value_font(),
+                c,
+            );
+        }
+        Some((text, _)) => return response.on_hover_text(text),
+        None => {}
     }
     response
 }
@@ -773,9 +809,6 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     ui.add_space(theme::SPACE_1);
     let name = state.document_name.clone();
     document_row(ui, &name);
-    if state.document.features().is_empty() {
-        indented(ui, |ui| ui.weak(EMPTY_TEXT));
-    }
     let mut action = None;
     indented(ui, |ui| {
         for folder in Folder::ALL {
@@ -812,29 +845,27 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     crate::dimension_browser::windows(ui.ctx(), state);
 }
 
-/// Breite der Statusspalte. Das Ausmessen legt die Zeichen der Statustexte zugleich schon im
-/// ersten Bild in den Schriftatlas, sodass das Erscheinen eines Status später keine
-/// Texturänderung braucht.
-fn status_width(ui: &egui::Ui) -> f32 {
+/// Misst die Statustexte einmal aus: Das legt ihre Zeichen schon im ersten Bild in den
+/// Schriftatlas, sodass das Erscheinen eines Status später keine Texturänderung braucht.
+fn prime_status_words(ui: &egui::Ui) {
     let weak = ui.visuals().weak_text_color();
-    STATUS_WORDS
-        .iter()
-        .chain([&ROLLED_BACK])
-        .map(|t| {
-            ui.painter()
-                .layout_no_wrap(t.to_string(), theme::value_font(), weak)
-                .size()
-                .x
-        })
-        .fold(0.0, f32::max)
+    for t in STATUS_WORDS.iter().chain([&ROLLED_BACK]) {
+        let _ = ui
+            .painter()
+            .layout_no_wrap(t.to_string(), theme::value_font(), weak);
+    }
 }
 
 /// Ordner „Körper“: je Körper Auge, Farbquadrat, Symbol, Name und Status.
 fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
     let dark = ui.visuals().dark_mode;
     let weak = ui.visuals().weak_text_color();
-    let width = status_width(ui);
-    for r in body_rows(state, dark) {
+    prime_status_words(ui);
+    let rows = body_rows(state, dark);
+    if rows.is_empty() {
+        ui.weak(EMPTY_TEXT);
+    }
+    for r in rows {
         let selected = r.index.is_some_and(|j| state.selected_body == Some(j))
             || state
                 .selected_feature
@@ -856,7 +887,6 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             ui,
             0.0,
             EYE_W + SWATCH + theme::SPACE_1,
-            width,
             selected,
             &r.name,
             color,
@@ -931,7 +961,7 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
 fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
     let dark = ui.visuals().dark_mode;
     let weak = ui.visuals().weak_text_color();
-    let width = status_width(ui);
+    prime_status_words(ui);
     let open = state.open_sketch_id();
     let rows: Vec<SketchRow> = state
         .document
@@ -945,6 +975,9 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             status: f.status.clone(),
         })
         .collect();
+    if rows.is_empty() {
+        ui.weak(NO_SKETCHES);
+    }
     for r in rows {
         let id = r.id;
         let selected = state.selected_feature == Some(id) || open == Some(id);
@@ -957,7 +990,6 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
         let resp = row(
             ui,
             0.0,
-            width,
             selected,
             &name,
             color,
@@ -1033,17 +1065,9 @@ fn feature_menu(
 /// Ordner „Ursprung“: die drei Grundebenen (nur zur Anzeige).
 fn origin(ui: &mut egui::Ui) {
     for plane in PLANES {
-        row(
-            ui,
-            0.0,
-            0.0,
-            false,
-            plane,
-            None,
-            None,
-            None,
-            |p, rect, c| paint_source(p, rect, IconSource::Font(Icon::SketchOnPlane), c),
-        )
+        row(ui, 0.0, false, plane, None, None, None, |p, rect, c| {
+            paint_source(p, rect, IconSource::Font(Icon::SketchOnPlane), c)
+        })
         .on_hover_text("Grundebene; „Erzeugen“, dann „Skizze“ legt darauf eine Skizze an.");
     }
 }

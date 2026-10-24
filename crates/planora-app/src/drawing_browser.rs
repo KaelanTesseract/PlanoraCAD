@@ -449,7 +449,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
         let resp = row(
             ui,
             0.0,
-            0.0,
             state.drawing_ui.selected_drawing == Some(id),
             &r.name,
             None,
@@ -506,7 +505,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
             let resp = row(
                 ui,
                 body_indent(),
-                0.0,
                 selected,
                 &v.name,
                 None,

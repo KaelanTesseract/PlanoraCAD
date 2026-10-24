@@ -18,6 +18,9 @@ const WARN_SIZE: f32 = 12.0;
 const STEP_GAP: f32 = theme::SPACE_1;
 /// Breite des Markers (Fläche zum Ziehen; gezeichnet wird eine Linie mit Griff).
 const MARKER_W: f32 = 12.0;
+/// So breit bleibt die Schrittreihe mindestens, bevor der Stand rechts kürzer wird oder entfällt
+/// (drei Schritte mit Marker).
+const MIN_STRIP: f32 = 3.0 * (STEP_SIZE + STEP_GAP) + MARKER_W;
 /// Takt beim Abspielen in Sekunden.
 const PLAY_INTERVAL: f64 = 0.6;
 /// Höchstzahl der Maße im Hinweis zu einem Schritt.
@@ -76,6 +79,8 @@ pub struct BarRects {
     pub dimmed: Vec<FeatureId>,
     /// Knöpfe: Beschriftung, Fläche, bedienbar.
     pub buttons: Vec<(String, Rect, bool)>,
+    /// Stand rechts (Text und gegebenenfalls „Alles aktivieren“); leer, wenn er entfällt.
+    pub status: Rect,
 }
 
 impl Default for BarRects {
@@ -87,6 +92,7 @@ impl Default for BarRects {
             marker: Rect::NOTHING,
             dimmed: Vec::new(),
             buttons: Vec::new(),
+            status: Rect::NOTHING,
         }
     }
 }
@@ -211,9 +217,12 @@ pub fn show_with(
                 playback(ui, controls, &mut out, &mut action);
                 ui.separator();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    status(ui, bar.as_ref(), dark, &mut out, &mut action);
-                    ui.separator();
-                    let w = ui.available_width();
+                    let fit = status_fit(ui, bar.as_ref());
+                    status(ui, bar.as_ref(), dark, fit, &mut out, &mut action);
+                    if fit != Fit::Hidden {
+                        ui.separator();
+                    }
+                    let w = ui.available_width().max(0.0);
                     ui.allocate_ui_with_layout(
                         vec2(w, inner.y),
                         egui::Layout::left_to_right(egui::Align::Center),
@@ -298,34 +307,113 @@ fn playback(
 /// Rechts der Stand: „Schritt n von m“, ohne Körper „Körper wählen“, bei vom globalen Marker
 /// zurückgesetztem Verlauf der Hinweis mit „Alles aktivieren“ (Zeile von rechts nach links, also
 /// in umgekehrter Reihenfolge gesetzt).
+/// Wie viel vom Stand rechts Platz hat, ohne die Schrittreihe unter [`MIN_STRIP`] zu drücken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fit {
+    /// „Schritt 2 von 3“ bzw. Hinweis und „Alles aktivieren“.
+    Full,
+    /// „2/3“ bzw. nur ein Symbolknopf für „Alles aktivieren“ (Hinweis beim Überfahren).
+    Short,
+    /// Ohne Stand (nur bei normaler Leiste; „Alles aktivieren“ bleibt immer).
+    Hidden,
+}
+
+/// Breite eines Textes in der Schrift der Beschriftungen.
+fn text_width(ui: &egui::Ui, text: &str) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    ui.painter()
+        .layout_no_wrap(text.to_string(), font, egui::Color32::PLACEHOLDER)
+        .size()
+        .x
+}
+
+/// Texte des Stands: lang und kurz.
+fn status_texts(bar: &Bar) -> (String, String) {
+    (
+        format!("Schritt {} von {}", bar.pos, bar.len()),
+        format!("{}/{}", bar.pos, bar.len()),
+    )
+}
+
+/// Wählt die längste Form des Stands, neben der die Schrittreihe noch [`MIN_STRIP`] breit
+/// bleibt. Erst wird der Text kürzer, dann entfällt er, bevor die Reihe schrumpft.
+fn status_fit(ui: &egui::Ui, bar: Option<&Bar>) -> Fit {
+    let Some(bar) = bar else {
+        return Fit::Full;
+    };
+    let gap = ui.spacing().item_spacing.x;
+    // Trennstrich mit Abständen.
+    let sep = 2.0 * gap + 1.0;
+    let avail = ui.available_width();
+    let fits = |w: f32| avail - w - sep >= MIN_STRIP;
+    if bar.hidden() {
+        let button = text_width(ui, ACTIVATE_ALL) + 2.0 * ui.spacing().button_padding.x;
+        let full = button + gap + text_width(ui, GLOBAL_RESET);
+        return if fits(full) { Fit::Full } else { Fit::Short };
+    }
+    let (long, short) = status_texts(bar);
+    if fits(text_width(ui, &long)) {
+        Fit::Full
+    } else if fits(text_width(ui, &short)) {
+        Fit::Short
+    } else {
+        Fit::Hidden
+    }
+}
+
+/// Beschriftung des Knopfs, der den globalen Marker ans Ende setzt.
+const ACTIVATE_ALL: &str = "Alles aktivieren";
+/// Hinweis, wenn der globale Marker Schritte des Körpers zurücksetzt.
+const GLOBAL_RESET: &str = "Gesamter Verlauf zurückgesetzt";
+
 fn status(
     ui: &mut egui::Ui,
     bar: Option<&Bar>,
     dark: bool,
+    fit: Fit,
     out: &mut BarRects,
     action: &mut Option<Action>,
 ) {
     let p = theme::palette(dark);
     match bar {
         None => {
-            ui.label(egui::RichText::new("Körper wählen").color(p.text_secondary));
+            let r = ui.label(egui::RichText::new("Körper wählen").color(p.text_secondary));
+            out.status = r.rect;
         }
         Some(bar) if bar.hidden() => {
-            let r = ui.button("Alles aktivieren");
+            // Schmal: nur ein Symbolknopf (Warnzeichen), Hinweis und Befehl beim Überfahren.
+            let r = if fit == Fit::Full {
+                ui.button(ACTIVATE_ALL)
+            } else {
+                icons::source_icon_button(ui, IconSource::Font(Icon::Warning), ACTIVATE_ALL, dark)
+            };
             theme::focus_ring(ui, &r);
-            let r = r.on_hover_text("Den ganzen Verlauf wieder berechnen");
+            let hint = if fit == Fit::Full {
+                "Den ganzen Verlauf wieder berechnen".to_string()
+            } else {
+                format!("{GLOBAL_RESET}. {ACTIVATE_ALL}: den ganzen Verlauf wieder berechnen")
+            };
+            let r = r.on_hover_text(hint);
             if r.clicked() {
                 *action = Some(Action::ActivateAll);
             }
             out.buttons
-                .push(("Alles aktivieren".into(), r.rect, ui.is_enabled()));
-            ui.label(egui::RichText::new("Gesamter Verlauf zurückgesetzt").color(p.warning));
+                .push((ACTIVATE_ALL.into(), r.rect, ui.is_enabled()));
+            out.status = r.rect;
+            if fit == Fit::Full {
+                let l = ui.label(egui::RichText::new(GLOBAL_RESET).color(p.warning));
+                out.status = out.status.union(l.rect);
+            }
         }
         Some(bar) => {
-            ui.label(
-                egui::RichText::new(format!("Schritt {} von {}", bar.pos, bar.len()))
-                    .color(p.text_secondary),
-            );
+            let (long, short) = status_texts(bar);
+            let text = match fit {
+                Fit::Full => long,
+                Fit::Short => short,
+                Fit::Hidden => return,
+            };
+            let r = ui.label(egui::RichText::new(text).color(p.text_secondary));
+            out.status = r.rect;
         }
     }
 }
@@ -339,8 +427,10 @@ fn strip(
     out: &mut BarRects,
     action: &mut Option<Action>,
 ) {
+    // Ohne Mindestbreite: Die Reihe bleibt in ihrem Platz und läuft nicht unter den Stand.
     let area = egui::ScrollArea::horizontal()
         .id_salt(bar_id().with(("strip", bar.instance)))
+        .min_scrolled_width(0.0)
         .auto_shrink([false, false]);
     let scroll = theme::scroll_area(ui, area, |ui| {
         ui.set_height(height);

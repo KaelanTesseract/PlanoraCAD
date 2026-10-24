@@ -514,3 +514,65 @@ fn hover_shows_the_most_important_dimensions() {
         "bei der Extrusion zuerst die Höhe: {rows:?}"
     );
 }
+
+// ---- Fenstertest: schmale Leiste (800 × 600) ---------------------------------------------------
+
+/// Die Schrittreihe überdeckt den Stand rechts nicht und bleibt mindestens `min` breit.
+fn assert_strip_clear_of_status(r: &BarRects, what: &str, min: f32) {
+    assert!(
+        !r.strip.intersects(r.status),
+        "{what}: Reihe {:?} überdeckt den Stand {:?}",
+        r.strip,
+        r.status
+    );
+    assert!(
+        r.bar.contains_rect(r.strip),
+        "{what}: {:?} in {:?}",
+        r.strip,
+        r.bar
+    );
+    assert!(
+        r.strip.width() >= min,
+        "{what}: Reihe zu schmal: {:?}",
+        r.strip
+    );
+}
+
+#[test]
+fn narrow_bar_keeps_the_status_text_clear_of_the_steps() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    let mut bar = Bar::new(vec2(800.0, 600.0));
+    bar.settle(&mut s);
+    // Die Leiste ist hier nur gut 240 px breit: Der Stand entfällt, die Reihe zeigt zwei
+    // Schritte.
+    let r = bar.rects();
+    assert_strip_clear_of_status(&r, "zwei Schritte", 2.0 * 30.0);
+    // Mit „Gesamter Verlauf zurückgesetzt“ und „Alles aktivieren“.
+    s.document.set_marker(1).unwrap();
+    s.refresh();
+    bar.settle(&mut s);
+    let r = bar.rects();
+    assert!(
+        r.buttons.iter().any(|(n, ..)| n == "Alles aktivieren"),
+        "{:?}",
+        r.buttons
+    );
+    // Nur das Warnzeichen als Knopf; die Reihe zeigt noch einen Schritt.
+    assert!(r.status != Rect::NOTHING);
+    assert_strip_clear_of_status(&r, "zurückgesetzt", 30.0);
+}
+
+#[test]
+fn wide_bar_shows_the_full_status_text() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(4.0)).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    let mut bar = Bar::new(SIZE);
+    let texts = bar.settle(&mut s);
+    assert!(texts.iter().any(|t| t == "Schritt 2 von 2"), "{texts:?}");
+    let r = bar.rects();
+    assert!(r.status != Rect::NOTHING);
+    assert_strip_clear_of_status(&r, "breit", 3.0 * 30.0);
+}
