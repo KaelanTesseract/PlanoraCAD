@@ -187,6 +187,33 @@ impl Rig {
         self.click(at);
     }
 
+    /// Klick auf den obersten sichtbaren Text `text` (Menüleiste vor Fenstern).
+    fn click_top(&mut self, text: &str) {
+        let seen = self.settle();
+        let at = seen
+            .iter()
+            .filter(|s| s.text == text)
+            .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+            .unwrap_or_else(|| panic!("„{text}“ nicht zu sehen"))
+            .rect
+            .center();
+        self.click(at);
+    }
+
+    /// Echter Weg durch die Menüleiste: Menü `menu` öffnen, Eintrag `entry` anklicken.
+    fn menu(&mut self, menu: &str, entry: &str) {
+        self.click_top(menu);
+        self.click_top(entry);
+    }
+
+    /// Das offene Fenster Verrunden ausführen (wie „Erzeugen“).
+    fn finish_fillet(&mut self) {
+        let tab = self.ws().active_tab_mut();
+        let mut d = tab.blend_dialog.take().expect("Fenster Verrunden");
+        assert!(!d.execute(&mut tab.state), "{:?}", d.error());
+        self.settle();
+    }
+
     /// Klick auf den Knopf `label` im Befehlsfeld.
     fn click_bottom(&mut self, label: &str) {
         let at = bottom_button(&self.ctx, label).center();
@@ -435,7 +462,7 @@ fn keys_do_nothing_without_a_matching_selection() {
 }
 
 #[test]
-fn model_keys_stay_out_of_sketch_and_drawing() {
+fn model_keys_stay_out_of_an_open_sketch() {
     // Offene Skizze: Entf gehört der Skizze, der gewählte Körper bleibt.
     let (mut w, b) = box_ws();
     let s = &mut w.active_tab_mut().state;
@@ -809,4 +836,174 @@ fn tooltips_show_the_current_keys() {
     let lines = menu_lines(&mut w, false);
     assert!(lines.iter().any(|l| l == "Umschalt+E"), "{lines:?}");
     assert!(!lines.iter().any(|l| l == "E"), "{lines:?}");
+}
+
+// ---- Fix-Runde 1: Menüwege, laufender Befehl, Hinweis, Zeichnung ------------------------------
+
+#[test]
+fn erzeugen_menu_extrude_is_remembered_and_space_repeats_it() {
+    let (w, sk) = sketch_ws();
+    let mut rig = Rig::new(w);
+    rig.menu("Erzeugen", app::CreateKind::Extrusion.label());
+    assert_eq!(
+        rig.ws().active_tab().dialog,
+        Some(CreateDialog::extrude_sketch(sk)),
+        "Menüeintrag öffnet das Fenster"
+    );
+    assert_eq!(rig.last(), None, "erst beim Abschluss");
+    rig.click_text("Erzeugen");
+    assert!(rig.ws().active_tab().dialog.is_none(), "erzeugt");
+    assert_eq!(rig.last(), Some(Action::ExtrudeSketch));
+    rig.st().selected_feature = None;
+    rig.press(Key::Space, NONE);
+    assert_eq!(
+        rig.ws().active_tab().dialog,
+        Some(CreateDialog::extrude_sketch(sk))
+    );
+}
+
+#[test]
+fn bearbeiten_menu_fillet_is_remembered() {
+    let (w, _) = box_ws();
+    let mut rig = Rig::new(w);
+    rig.menu("Bearbeiten", "Verrunden …");
+    assert!(
+        rig.ws().active_tab().blend_dialog.is_some(),
+        "Fenster offen"
+    );
+    assert_eq!(rig.last(), None);
+    rig.finish_fillet();
+    assert_eq!(rig.last(), Some(Action::Fillet));
+}
+
+#[test]
+fn tree_context_menu_extrude_is_remembered() {
+    let (w, sk) = sketch_ws();
+    let mut rig = Rig::new(w);
+    // Wie „Extrudieren …“ im Kontextmenü der Skizzenzeile (`browser::Action::Extrude`).
+    rig.st()
+        .request_sketch_dialog(planora_app::state::SketchRequest::Extrude(sk));
+    rig.settle();
+    assert_eq!(
+        rig.ws().active_tab().dialog,
+        Some(CreateDialog::extrude_sketch(sk))
+    );
+    rig.click_text("Erzeugen");
+    assert_eq!(rig.last(), Some(Action::ExtrudeSketch));
+}
+
+#[test]
+fn a_command_without_window_keeps_the_running_one() {
+    // Verrunden offen, dann „Skizze extrudieren“ ohne Skizze (nur ein Hinweis): Verrunden läuft
+    // weiter und wird nach dem Abschluss gemerkt.
+    let (w, _) = box_ws();
+    let mut rig = Rig::new(w);
+    rig.press(Key::F, NONE);
+    commands::run_action(rig.ws(), Action::ExtrudeSketch);
+    assert!(rig.ws().active_tab().dialog.is_none());
+    rig.settle();
+    rig.finish_fillet();
+    assert_eq!(rig.last(), Some(Action::Fillet));
+
+    // Ebenso mit einer gesperrten Skizze (Körper zurückgesetzt): `do_create` meldet nur.
+    let (mut w, sk) = sketch_ws();
+    let s = &mut w.active_tab_mut().state;
+    let e = s.extrude_sketch(sk, 0, 2.0).unwrap();
+    s.move_body(body_of(s, e), DVec3::X).unwrap();
+    let m = s.document.features().last().unwrap().id;
+    history_bar::move_marker(s, m, 2).unwrap();
+    // Ein zweiter, freier Körper mit gewählter Kante für Verrunden.
+    let b = s.create_box(DVec3::splat(20.0)).unwrap();
+    let j = body_of(s, b);
+    let edge = s.bodies[j].solid.edges.iter().next().unwrap().0;
+    s.set_selection(Some(planora_render::Pick::Edge(planora_render::EdgeRef {
+        body: j,
+        edge,
+    })));
+    w.observe_history(false);
+    let mut rig = Rig::new(w);
+    rig.press(Key::F, NONE);
+    assert!(rig.ws().active_tab().blend_dialog.is_some());
+    rig.st().selected_feature = Some(sk);
+    commands::run_action(rig.ws(), Action::ExtrudeSketch);
+    assert_eq!(
+        rig.st().message.as_deref(),
+        Some(history_bar::LOCK_HINT),
+        "nur eine Meldung"
+    );
+    assert!(rig.ws().active_tab().dialog.is_none());
+    rig.st().message = None;
+    rig.settle();
+    rig.finish_fillet();
+    assert_eq!(rig.last(), Some(Action::Fillet));
+}
+
+#[test]
+fn a_feature_from_another_command_does_not_complete_the_running_one() {
+    // Verrunden offen; nebenher entsteht über das Menü ein Quader; dann Verrunden abbrechen.
+    let (w, _) = box_ws();
+    let mut rig = Rig::new(w);
+    rig.ws().last_command.remember(Action::ExtrudeSketch);
+    rig.press(Key::F, NONE);
+    let before = rig.features();
+    // Wie ein Quader über „Erzeugen“ (dessen Fenster hätte denselben Knopf wie Verrunden).
+    rig.st().create_box(DVec3::splat(5.0)).unwrap();
+    rig.settle();
+    assert_eq!(rig.features(), before + 1, "Quader erzeugt");
+    assert!(
+        rig.ws().active_tab().blend_dialog.is_some(),
+        "Verrunden noch offen"
+    );
+    rig.ws().active_tab_mut().blend_dialog = None;
+    rig.settle();
+    assert_eq!(
+        rig.last(),
+        Some(Action::ExtrudeSketch),
+        "abgebrochenes Verrunden zählt nicht"
+    );
+}
+
+#[test]
+fn repeating_an_extrude_without_sketch_shows_the_hint() {
+    let (w, _) = box_ws();
+    let mut rig = Rig::new(w);
+    rig.ws().last_command.remember(Action::ExtrudeSketch);
+    rig.press(Key::Space, NONE);
+    assert!(rig.ws().active_tab().dialog.is_none());
+    assert_eq!(
+        rig.st().info.as_deref(),
+        Some("Zuerst eine Skizze anlegen.")
+    );
+}
+
+#[test]
+fn model_keys_do_nothing_while_a_drawing_is_shown() {
+    let (mut w, b) = box_ws();
+    let s = &mut w.active_tab_mut().state;
+    let d = s
+        .document
+        .add_drawing(
+            "Blatt 1",
+            planora_drawing::Sheet {
+                paper: planora_drawing::Paper::A4,
+                landscape: true,
+            },
+            planora_drawing::Projection::First,
+        )
+        .unwrap();
+    s.drawing_ui.open(d);
+    w.last_command.remember(Action::Fillet);
+    let mut rig = Rig::new(w);
+    assert_eq!(
+        planora_app::keymap::dispatch::current_area(rig.st()),
+        Area::Drawing
+    );
+    rig.st().selected_body = Some(0);
+    for k in [Key::Delete, Key::E, Key::F, Key::V, Key::Space] {
+        rig.press(k, NONE);
+    }
+    rig.settle();
+    assert!(rig.st().document.feature(b).is_some(), "Körper bleibt");
+    assert!(!rig.st().is_body_hidden(0));
+    assert!(!rig.ws().active_tab().dialog_open());
 }

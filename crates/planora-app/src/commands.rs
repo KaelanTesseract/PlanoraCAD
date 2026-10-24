@@ -3,15 +3,16 @@
 //! Gedächtnis für „Letzten Befehl wiederholen“ ([`LastCommand`]).
 //!
 //! Gemerkt wird ein wiederholbarer Befehl ([`Action::repeatable`]) erst, wenn er abgeschlossen
-//! ist: Sein Fenster ist zu und hat dabei ein Feature angelegt ([`observe`]). Abbrechen,
-//! Schließen oder ein anderes Fenster an seiner Stelle ersetzen den zuvor gemerkten Befehl also
-//! nicht. Die Leertaste startet den gemerkten Befehl wie sein Menüeintrag.
+//! ist: Sein Fenster ist zu und dabei ist ein neues Feature seiner Art entstanden ([`observe`]).
+//! Abbrechen, Schließen oder ein anderes Fenster an seiner Stelle ersetzen den zuvor gemerkten
+//! Befehl also nicht, ebenso wenig ein anderer Befehl, der nebenher ein Feature anlegt. Die Leertaste startet den gemerkten Befehl wie sein Menüeintrag.
 
 use crate::app::{self, CreateKind, MenuRequest};
 use crate::create_dialog::CreateDialog;
 use crate::keymap::{Action, Area};
 use crate::state::AppState;
 use crate::workspace::{DocTab, Workspace};
+use planora_feature::{FeatureId, FeatureKind};
 
 /// Hinweis, wenn „Skizze extrudieren“ über die Taste keine passende Skizze findet.
 pub const NEED_SKETCH: &str = "Zuerst eine Skizze mit geschlossenem Profil wählen.";
@@ -21,20 +22,21 @@ pub const NEED_BODY: &str = "Zuerst einen Körper wählen.";
 pub const NEED_SELECTION: &str = "Zuerst einen Körper oder Schritt wählen.";
 
 /// Der zuletzt abgeschlossene wiederholbare Befehl und der gerade laufende (Fenster offen).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LastCommand {
     last: Option<Action>,
     pending: Option<Pending>,
 }
 
 /// Ein gestarteter Befehl, dessen Fenster noch offen ist.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Pending {
     action: Action,
     /// Tab, in dem das Fenster offen ist.
     tab: u64,
-    /// Anzahl der Features beim Start: mehr beim Schließen heißt „ausgeführt“.
-    features: usize,
+    /// Die Features beim Öffnen des Fensters: ein neues Feature der Art des Befehls beim
+    /// Schließen heißt „ausgeführt“.
+    before: Vec<FeatureId>,
 }
 
 impl LastCommand {
@@ -74,8 +76,17 @@ pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
         // Die Ansicht hört auf Mausgesten (`keymap::mouse`).
         Action::ViewPan | Action::ViewOrbit | Action::ViewZoom => {}
         Action::ExtrudeSketch => {
-            app::do_create(ws, CreateKind::Extrusion);
-            track(ws, a);
+            // Ohne Skizze (etwa eine gemerkte Extrusion in einem Tab ohne Skizzen) ein Hinweis;
+            // die Sperre durch einen zurückgesetzten Körper meldet `do_create` selbst.
+            match app::create_blocked(ws, CreateKind::Extrusion) {
+                Some(why) if why != crate::history_bar::LOCK_HINT => {
+                    hint(&mut ws.active_tab_mut().state, why);
+                }
+                _ => {
+                    app::do_create(ws, CreateKind::Extrusion);
+                    track(ws, a);
+                }
+            }
         }
         Action::Fillet => {
             let state = &mut ws.active_tab_mut().state;
@@ -162,22 +173,35 @@ fn window_open(tab: &DocTab, a: Action) -> bool {
     }
 }
 
+/// Ist `kind` ein Ergebnis des Befehls `a`?
+fn made_by(a: Action, kind: &FeatureKind) -> bool {
+    match a {
+        Action::ExtrudeSketch => matches!(kind, FeatureKind::Extrude { .. }),
+        Action::Fillet => matches!(kind, FeatureKind::Verrunden { .. }),
+        _ => false,
+    }
+}
+
 /// Nach dem Start von `a` (Menü, Knopf, Taste, Kontextmenü im Baum): ist sein Fenster jetzt
-/// offen, wartet [`observe`] auf dessen Abschluss.
+/// offen, wartet [`observe`] auf dessen Abschluss. Hat der Befehl kein Fenster geöffnet (nur
+/// ein Hinweis), läuft ein schon laufender Befehl weiter.
 pub(crate) fn track(ws: &mut Workspace, a: Action) {
     let tab = ws.active_tab();
-    ws.last_command.pending = window_open(tab, a).then(|| Pending {
-        action: a,
-        tab: tab.id,
-        features: tab.state.document.features().len(),
-    });
+    if window_open(tab, a) {
+        ws.last_command.pending = Some(Pending {
+            action: a,
+            tab: tab.id,
+            before: tab.state.document.features().iter().map(|f| f.id).collect(),
+        });
+    }
 }
 
 /// Einmal je Bild nach den Fenstern: Ist das Fenster des laufenden Befehls zu (auch ersetzt
-/// durch ein anderes), wird er gemerkt, wenn dabei ein Feature entstand, sonst vergessen. Ein
+/// durch ein anderes), wird er gemerkt, wenn seither ein Feature seiner Art entstand, sonst
+/// vergessen. Ein
 /// Fenster in einem anderen Tab wartet, bis der Tab wieder vorn ist; ist der Tab zu, entfällt es.
 pub fn observe(ws: &mut Workspace) {
-    let Some(p) = ws.last_command.pending else {
+    let Some(p) = ws.last_command.pending.clone() else {
         return;
     };
     let Some(tab) = ws.tabs.iter().find(|t| t.id == p.tab) else {
@@ -187,7 +211,12 @@ pub fn observe(ws: &mut Workspace) {
     if ws.active_tab().id != p.tab || window_open(tab, p.action) {
         return;
     }
-    let done = tab.state.document.features().len() > p.features;
+    let done = tab
+        .state
+        .document
+        .features()
+        .iter()
+        .any(|f| !p.before.contains(&f.id) && made_by(p.action, &f.kind));
     ws.last_command.pending = None;
     if done {
         ws.last_command.remember(p.action);
