@@ -263,14 +263,14 @@ fn playback(
         (Icon::HistoryStart, "Zum Anfang", pos > 0, Action::Go(0)),
         (
             Icon::HistoryBack,
-            "Ein Schritt zurück",
+            "Einen Schritt zurück",
             pos > 0,
             Action::Go(pos.saturating_sub(1)),
         ),
         (play_icon, play_label, playing || reach > 0, play_action),
         (
             Icon::HistoryForward,
-            "Ein Schritt vor",
+            "Einen Schritt vor",
             pos < reach,
             Action::Go(pos + 1),
         ),
@@ -304,9 +304,6 @@ fn playback(
     }
 }
 
-/// Rechts der Stand: „Schritt n von m“, ohne Körper „Körper wählen“, bei vom globalen Marker
-/// zurückgesetztem Verlauf der Hinweis mit „Alles aktivieren“ (Zeile von rechts nach links, also
-/// in umgekehrter Reihenfolge gesetzt).
 /// Wie viel vom Stand rechts Platz hat, ohne die Schrittreihe unter [`MIN_STRIP`] zu drücken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fit {
@@ -329,10 +326,13 @@ fn text_width(ui: &egui::Ui, text: &str) -> f32 {
 
 /// Texte des Stands: lang und kurz.
 fn status_texts(bar: &Bar) -> (String, String) {
-    (
-        format!("Schritt {} von {}", bar.pos, bar.len()),
-        format!("{}/{}", bar.pos, bar.len()),
-    )
+    let long = if bar.pos == 0 && bar.len() > 0 {
+        // Noch kein Schritt ist aktiv: „Schritt 0 von 3“ liest sich schief.
+        "Vor Schritt 1".to_owned()
+    } else {
+        format!("Schritt {} von {}", bar.pos, bar.len())
+    };
+    (long, format!("{}/{}", bar.pos, bar.len()))
 }
 
 /// Wählt die längste Form des Stands, neben der die Schrittreihe noch [`MIN_STRIP`] breit
@@ -366,6 +366,9 @@ const ACTIVATE_ALL: &str = "Alles aktivieren";
 /// Hinweis, wenn der globale Marker Schritte des Körpers zurücksetzt.
 const GLOBAL_RESET: &str = "Gesamter Verlauf zurückgesetzt";
 
+/// Rechts der Stand: „Schritt n von m“, ohne Körper „Körper wählen“, bei vom globalen Marker
+/// zurückgesetztem Verlauf der Hinweis mit „Alles aktivieren“ (Zeile von rechts nach links, also
+/// in umgekehrter Reihenfolge gesetzt).
 fn status(
     ui: &mut egui::Ui,
     bar: Option<&Bar>,

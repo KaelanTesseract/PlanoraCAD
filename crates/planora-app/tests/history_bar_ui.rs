@@ -242,16 +242,16 @@ fn playback_buttons_move_the_marker() {
     let mut bar = Bar::new(SIZE);
     bar.settle(&mut s);
     let r = bar.rects();
-    assert!(!label(&r, "Ein Schritt vor").2, "am Ende gesperrt");
+    assert!(!label(&r, "Einen Schritt vor").2, "am Ende gesperrt");
     bar.click(&mut s, label(&r, "Zum Anfang").1.center());
     assert_eq!(history_bar::marker_position(&s, m), 0);
     let r = bar.rects();
-    assert!(!label(&r, "Ein Schritt zurück").2, "am Anfang gesperrt");
-    bar.click(&mut s, label(&r, "Ein Schritt vor").1.center());
+    assert!(!label(&r, "Einen Schritt zurück").2, "am Anfang gesperrt");
+    bar.click(&mut s, label(&r, "Einen Schritt vor").1.center());
     assert_eq!(history_bar::marker_position(&s, m), 1);
     bar.click(&mut s, label(&r, "Zum Ende").1.center());
     assert_eq!(history_bar::marker_position(&s, m), 3);
-    bar.click(&mut s, label(&r, "Ein Schritt zurück").1.center());
+    bar.click(&mut s, label(&r, "Einen Schritt zurück").1.center());
     assert_eq!(history_bar::marker_position(&s, m), 2);
 }
 
@@ -336,6 +336,16 @@ fn inactive_steps_are_dimmed() {
 }
 
 #[test]
+fn status_at_the_start_does_not_say_step_zero() {
+    let (mut s, [_, _, m]) = chain_model();
+    history_bar::move_marker(&mut s, m, 0).unwrap();
+    let mut bar = Bar::new(SIZE);
+    let texts = bar.settle(&mut s);
+    assert!(texts.iter().any(|t| t == "Vor Schritt 1"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t.contains("Schritt 0")), "{texts:?}");
+}
+
+#[test]
 fn global_marker_offers_activate_all() {
     let (mut s, [_, e, m]) = chain_model();
     // Der globale Marker steht hinter der Extrusion: das Verschieben ist zurückgesetzt.
@@ -350,12 +360,12 @@ fn global_marker_offers_activate_all() {
     let r = bar.rects();
     assert_eq!(r.dimmed, vec![m]);
     // Vorwärts geht es nicht über den globalen Marker hinaus.
-    assert!(!label(&r, "Ein Schritt vor").2);
+    assert!(!label(&r, "Einen Schritt vor").2);
     assert!(!label(&r, "Zum Ende").2);
     // Ein Schritt zurück und wieder vor: keine Stelle bleibt (der Körper ist nicht gesperrt).
-    bar.click(&mut s, label(&r, "Ein Schritt zurück").1.center());
+    bar.click(&mut s, label(&r, "Einen Schritt zurück").1.center());
     assert_eq!(s.document.rollbacks(), &[e]);
-    bar.click(&mut s, label(&r, "Ein Schritt vor").1.center());
+    bar.click(&mut s, label(&r, "Einen Schritt vor").1.center());
     assert!(
         s.document.rollbacks().is_empty(),
         "{:?}",

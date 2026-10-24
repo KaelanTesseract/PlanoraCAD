@@ -283,7 +283,7 @@ pub fn is_locked(state: &AppState, tip: FeatureId) -> bool {
 ///
 /// Eine Skizze, die mehrere Körper verwenden, ist gesperrt, sobald einer davon zurückgesetzt
 /// ist (vorsichtig: ein neuer Körper aus ihr gehörte sonst halb zu einem zurückgesetzten Verlauf).
-pub fn lock_reason(state: &AppState, inputs: &[FeatureId]) -> Option<&'static str> {
+pub(crate) fn lock_reason(state: &AppState, inputs: &[FeatureId]) -> Option<&'static str> {
     let doc = &state.document;
     if doc.rollbacks().is_empty() || inputs.is_empty() {
         return None;
@@ -298,7 +298,7 @@ pub fn lock_reason(state: &AppState, inputs: &[FeatureId]) -> Option<&'static st
 
 /// Wie [`lock_reason`] vor einer neuen Aktion: gesperrt steht [`LOCK_HINT`] in `message` und
 /// kommt als Fehler zurück (nichts geändert).
-pub fn refuse_if_locked(state: &mut AppState, inputs: &[FeatureId]) -> Result<(), String> {
+pub(crate) fn refuse_if_locked(state: &mut AppState, inputs: &[FeatureId]) -> Result<(), String> {
     match lock_reason(state, inputs) {
         Some(why) => state.fail(why.into()),
         None => Ok(()),

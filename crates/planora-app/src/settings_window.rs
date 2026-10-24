@@ -194,8 +194,6 @@ impl SettingsWindow {
         self.appearance_message.as_ref()
     }
 
-    /// Speichert die Durchsichtigkeit (sie gilt schon); misslingt das, bleibt sie für die
-    /// Sitzung und der Hinweis [`TRANSPARENCY_NOT_SAVED`] erscheint.
     /// Was der Regler beim Ziehen tut: der Wert gilt sofort, ist aber noch nicht gespeichert. Er
     /// wird im Arbeitsbereich vorgemerkt (`panel_transparency_pending`), damit er auch dann in
     /// die Datei kommt, wenn das Fenster von außen ([`SettingsWindow::close`]) zugeht: beim
@@ -206,6 +204,8 @@ impl SettingsWindow {
         self.transparency_unsaved = true;
     }
 
+    /// Speichert die Durchsichtigkeit (sie gilt schon); misslingt das, bleibt sie für die
+    /// Sitzung und der Hinweis [`TRANSPARENCY_NOT_SAVED`] erscheint.
     fn save_transparency(&mut self, ws: &mut Workspace) {
         self.transparency_unsaved = false;
         self.appearance_message = (!ws.set_panel_transparency(ws.panel_transparency()))

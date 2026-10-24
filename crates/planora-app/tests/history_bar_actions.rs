@@ -116,7 +116,7 @@ fn double_click_on_a_rolled_back_step_edits_it_without_moving_the_marker() {
         .feature_dialog
         .take()
         .expect("Dialog auch zurückgesetzt");
-    dialog.set_text("Höhe", "7");
+    assert!(dialog.set_text("Höhe", "7"), "Feld Höhe gibt es");
     dialog.apply(&mut tab.state).unwrap();
     let s = &mut tab.state;
     assert_eq!(s.document.rollbacks(), &[e], "der Marker bleibt");
@@ -400,4 +400,30 @@ fn other_bodies_are_not_locked() {
     s.add_blend(j, &[edge], BlendArt::Rundung { radius: 0.5 }, false)
         .unwrap();
     assert!(history_bar::is_locked(&s, m), "der andere bleibt gesperrt");
+}
+
+#[test]
+fn union_is_refused_when_the_rolled_back_body_is_the_newer_of_the_inputs() {
+    // Der gesperrte Körper ist hier der jüngere Eingang (`dependencies()` sortiert nach Kennung,
+    // der ältere steht vorn): Ziel und Werkzeug werden beide geprüft, nicht nur der erste.
+    let mut s = AppState::new();
+    let older = s.create_box(DVec3::splat(4.0)).unwrap();
+    let newer = s.create_box(DVec3::splat(3.0)).unwrap();
+    let j = body_of(&s, newer);
+    s.move_body(j, DVec3::X * 10.0).unwrap();
+    let m = s.document.features().last().unwrap().id;
+    history_bar::move_marker(&mut s, m, 1).unwrap();
+    assert!(history_bar::is_locked(&s, m));
+    let (io, jn) = (body_of(&s, older), body_of(&s, newer));
+    let count = s.document.features().len();
+    for (target, tool, what) in [
+        (io, jn, "älterer als Ziel"),
+        (jn, io, "älterer als Werkzeug"),
+    ] {
+        let r = s.add_boolean(target, tool, BoolOp::Union).map(|_| ());
+        assert_eq!(r, Err(LOCK_HINT.to_string()), "{what}");
+        s.message = None;
+    }
+    assert_eq!(s.document.features().len(), count, "nichts angelegt");
+    assert_eq!(s.body_lock(io), None, "der ältere Körper selbst ist frei");
 }

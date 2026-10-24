@@ -535,7 +535,7 @@ fn only_sketch_rows_offer_extrude_and_revolve() {
 }
 
 #[test]
-fn error_rows_explain_themselves_and_skipped_rows_are_grey() {
+fn error_rows_explain_themselves_and_suppressed_rows_are_grey() {
     let mut s = AppState::new();
     s.add_feature(
         None,
@@ -582,7 +582,8 @@ fn error_rows_explain_themselves_and_skipped_rows_are_grey() {
         "Tooltip mit dem Fehlertext:\n{text}"
     );
     // Der unterdrückte Körper bleibt gelistet: „unterdrückt“ und sein Name sind grau
-    // gezeichnet (vor Aufgabe 6: die Schrittzeile „Verschieben 1“ mit „übersprungen“).
+    // gezeichnet (vor Aufgabe 6: die Schrittzeile „Verschieben 1“ mit „übersprungen“; „übersprungen“ prüft jetzt
+    // a_skipped_tip_over_an_active_origin_is_marked_grey_with_its_reason).
     let mut weak = egui::Color32::TRANSPARENT;
     let out = c.run_ui(raw(vec![]), |ui| {
         weak = ui.visuals().weak_text_color();
@@ -605,4 +606,44 @@ fn error_rows_explain_themselves_and_skipped_rows_are_grey() {
         let found = colors.iter().find(|(t, _)| t == must);
         assert_eq!(found.map(|f| f.1), Some(weak), "{must}: {colors:?}");
     }
+}
+
+#[test]
+fn a_skipped_tip_over_an_active_origin_is_marked_grey_with_its_reason() {
+    // Vereinigen aus Quader und Zylinder; der Zylinder wird unterdrückt: Das Vereinigen wird
+    // übersprungen, der Quader (sein Ursprung) ist aber weiter aktiv und sichtbar.
+    let mut s = AppState::new();
+    let a = s.create_box(DVec3::splat(4.0)).unwrap();
+    let cyl = s.create_cylinder(1.0, 6.0).unwrap();
+    let u = s.add_boolean(0, 1, BoolOp::Union).unwrap();
+    browser::toggle_suppress(&mut s, cyl).unwrap();
+    let why = match &s.document.feature(u).unwrap().status {
+        FeatureStatus::Skipped(w) => w.clone(),
+        st => panic!("{st:?}"),
+    };
+    assert!(!s.document.feature(a).unwrap().suppressed);
+    assert_eq!(s.document.feature(a).unwrap().status, FeatureStatus::Ok);
+
+    let c = ctx();
+    let mut weak = egui::Color32::TRANSPARENT;
+    let out = c.run_ui(raw(vec![]), |ui| {
+        weak = ui.visuals().weak_text_color();
+        browser::show(ui, &mut s)
+    });
+    let mut colors = Vec::new();
+    fn walk(shape: &egui::epaint::Shape, colors: &mut Vec<(String, egui::Color32)>) {
+        match shape {
+            egui::epaint::Shape::Text(t) => colors.push((
+                t.galley.text().to_string(),
+                t.galley.job.sections[0].format.color,
+            )),
+            egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, colors)),
+            _ => {}
+        }
+    }
+    out.shapes.iter().for_each(|c| walk(&c.shape, &mut colors));
+    out.drop_without_applying_deltas();
+    let found = colors.iter().find(|(t, _)| t == "übersprungen");
+    assert_eq!(found.map(|f| f.1), Some(weak), "{colors:?}");
+    assert!(!why.is_empty());
 }

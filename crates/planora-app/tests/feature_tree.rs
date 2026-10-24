@@ -396,6 +396,9 @@ fn rolled_back_body_is_dimmed_but_listed() {
     history_bar::to_start(&mut s, m).unwrap();
     assert!(history_bar::is_locked(&s, m));
     assert!(s.bodies.is_empty(), "ganz zurückgesetzt: nichts sichtbar");
+    // Ein späterer, nicht zurückgesetzter Körper: Er soll nach dem Abwählen die Wahl der Leiste
+    // sein, damit der Klick unten wirklich etwas ändern muss.
+    let later = s.create_box(DVec3::splat(2.0)).unwrap();
     let mut t = Tree::new(true);
     let shot = t.settle(&mut s);
     let row = t
@@ -409,7 +412,8 @@ fn rolled_back_body_is_dimmed_but_listed() {
     assert_ne!(*color, planora_app::icons::stroke_color(true, false));
     assert!(shot.has(browser::ROLLED_BACK), "{}", shot.all_text());
     // Ein Klick wählt ihn für die Leiste (dort lässt er sich wieder vorspulen).
-    s.select_body(None);
+    s.select_body(Some(later));
+    assert_eq!(s.history_body(), Some(later));
     t.click(&mut s, row.center());
     assert_eq!(s.history_body(), Some(m));
     let _ = b;
