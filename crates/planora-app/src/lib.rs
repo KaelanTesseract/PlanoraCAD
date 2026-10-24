@@ -33,6 +33,7 @@ pub mod mesh_body;
 pub mod parameter_dialog;
 pub mod parts_section;
 pub mod places;
+pub mod project_tiles;
 pub mod projects_panel;
 pub mod prompts;
 pub mod properties;
