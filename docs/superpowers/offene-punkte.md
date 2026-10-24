@@ -1794,7 +1794,7 @@ Entscheidungen von Dennis am 2026-10-23. Zweig `feature/projekte-fenster`. Entwu
 - `crates/planora-app/src/browser.rs` hat etwa 1170 Zeilen und sollte in Baum, Zeilen und Menüs aufgeteilt werden.
 - Im durchsichtigen Baum haben gesperrte Zeilen in schreibgeschützten Versionen weniger Kontrast (0,75 Deckung), die Prüfung deckt das nicht ab.
 - Dokumente mit Rückrollstellen (Format 11) kann ein älteres Programm nicht öffnen; es meldet „zu neu“.
-- **Export:** STEP, Netz und PDF schreiben den Stand, wie er gerade ist: zurückgesetzte Körper fehlen, und mit dem Auge ausgeblendete Körper sind trotzdem dabei oder fehlen je nach Weg. Ein Hinweis im Ausgabefenster erscheint nicht. Wer mitten in der Wiedergabe anhält und exportiert, bekommt also nicht das fertige Teil.
+- **Export:** STEP, Netz und PDF schreiben den Stand, wie er gerade ist: zurückgesetzte Körper fehlen, und mit dem Auge ausgeblendete Körper sind trotzdem dabei (das Auge gilt nur für die Ansicht). Ein Hinweis im Ausgabefenster erscheint nicht. Wer mitten in der Wiedergabe anhält und exportiert, bekommt also nicht das fertige Teil.
 - **Stücklisten-Folgeblätter** werden bei jedem Zurücksetzen oder Vorschieben gelöscht und mit neuen Kennungen wieder angelegt (das war schon vorher so, fällt mit dem Abspielen aber öfter auf). Eigene Änderungen auf Folgeblättern gehen dabei verloren.
 - **Abspielen über ein Vereinigen** passt die Kamera neu an, sobald sich die Zahl der Körper ändert.
 - **Körperspitzen** werden je Schritt gezählt, nicht je entstandenem Körper: Hat ein Schritt mehrere Ergebnis-Körper und wird nur einer davon weiterverwendet, behandeln Leiste und Sperre beide als einen Körper. Im Baum geht nichts verloren.
