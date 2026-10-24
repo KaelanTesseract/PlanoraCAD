@@ -417,6 +417,23 @@ fn entry_cases() -> Vec<(String, Case)> {
         label(&mut s, |s| s.document.set_marker(1).unwrap()),
     );
     let mut s = one_box();
+    s.move_body(0, DVec3::X).unwrap();
+    let tip = s.document.features()[1].id;
+    add(
+        "history_bar::move_marker (zurück)",
+        "Verlaufsmarke setzen",
+        label(&mut s, |s| {
+            planora_app::history_bar::move_marker(s, tip, 1).unwrap();
+        }),
+    );
+    add(
+        "history_bar::to_end",
+        "Verlaufsmarke setzen",
+        label(&mut s, |s| {
+            planora_app::history_bar::to_end(s, tip).unwrap()
+        }),
+    );
+    let mut s = one_box();
     let f = s.document.features()[0].id;
     add(
         "Document::update (Quadergröße)",
@@ -799,6 +816,23 @@ fn feature_rules_are_ordered() {
         grow_box(s, a);
     });
     assert_eq!(got, "Zeitleistenmarke setzen");
+    // Zeitleistenmarke vor Verlaufsmarke; Verlaufsmarke vor Art.
+    let mut s = AppState::new();
+    let a = s.create_box(BOX).unwrap();
+    s.create_box(BOX).unwrap();
+    let got = label(&mut s, |s| {
+        s.document.set_rollback(a, a).unwrap();
+        s.document.set_marker(1).unwrap();
+    });
+    assert_eq!(got, "Zeitleistenmarke setzen");
+    let mut s = AppState::new();
+    let a = s.create_box(BOX).unwrap();
+    let b = s.create_box(BOX).unwrap();
+    let got = label(&mut s, |s| {
+        s.document.set_rollback(b, b).unwrap();
+        grow_box(s, a);
+    });
+    assert_eq!(got, "Verlaufsmarke setzen");
     // Umbenennen vor Unterdrücken und Art.
     let mut s = AppState::new();
     let a = s.create_box(BOX).unwrap();

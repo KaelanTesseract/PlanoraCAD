@@ -1,5 +1,7 @@
 //! Fenster „Einstellungen“ (Spec §5): Abschnitte untereinander mit Überschrift, damit später
-//! weitere dazukommen. Jetzt einer: „Projekte“ mit dem Projektverzeichnis. Gewählt wird über die
+//! weitere dazukommen. Oben „Darstellung“ mit dem Regler „Durchsichtigkeit der Panels“ (wirkt
+//! sofort, wird gespeichert wie das Projektverzeichnis), darunter „Projekte“ mit dem
+//! Projektverzeichnis. Gewählt wird über die
 //! Dateiauswahl im Ordner-Modus; der Wechsel wirkt wie [`Workspace::choose_root`] und
 //! [`Workspace::persist_config`] (nur `root` wird geschrieben, Favoriten bleiben). Nichts wird
 //! verschoben, kopiert oder gelöscht.
@@ -9,12 +11,18 @@ use crate::file_chooser::{self, ChooserAction, FileChooser, display_path};
 use crate::places::{self, Places};
 use crate::theme;
 use crate::workspace::{ROOT_LOCKED, Workspace};
-use planora_project::config::Config;
+use planora_project::config::{Config, MAX_PANEL_TRANSPARENCY, clamp_panel_transparency};
 use planora_project::library::{DOCUMENT_FILE, DOCUMENT_SUFFIX, PROJECT_FILE};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 pub const TITLE: &str = "Einstellungen";
+pub const SECTION_APPEARANCE: &str = "Darstellung";
+pub const TRANSPARENCY_LABEL: &str = "Durchsichtigkeit der Panels";
+/// Warnung, wenn die Durchsichtigkeit gilt, aber nicht gespeichert werden konnte.
+pub const TRANSPARENCY_NOT_SAVED: &str = "Die Durchsichtigkeit gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
+/// Breite der Schieberspur des Reglers.
+pub const SLIDER_WIDTH: f32 = 200.0;
 pub const SECTION_PROJECTS: &str = "Projekte";
 pub const DIRECTORY_LABEL: &str = "Projektverzeichnis";
 pub const CHANGE_DIRECTORY: &str = "Projektverzeichnis ändern …";
@@ -130,6 +138,11 @@ pub struct SettingsWindow {
     /// Dateiauswahl im Ordner-Modus, solange gewählt wird.
     chooser: Option<FileChooser>,
     message: Option<RootMessage>,
+    /// Hinweis unter dem Regler (nur [`TRANSPARENCY_NOT_SAVED`]).
+    appearance_message: Option<RootMessage>,
+    /// Der Regler wurde bewegt, der Wert ist aber noch nicht gespeichert (gespeichert wird beim
+    /// Loslassen, nicht in jedem Bild des Ziehens).
+    transparency_unsaved: bool,
     /// Rechteck des Fensters im letzten Bild (Layouttests).
     pub last_rect: Option<egui::Rect>,
 }
@@ -141,6 +154,7 @@ impl SettingsWindow {
         self.return_to_projects = return_to_projects;
         self.chooser = None;
         self.message = None;
+        self.appearance_message = None;
     }
 
     pub fn close(&mut self) {
@@ -175,6 +189,29 @@ impl SettingsWindow {
         self.message.as_ref()
     }
 
+    /// Hinweis des Abschnitts „Darstellung“ (Speichern fehlgeschlagen).
+    pub fn appearance_message(&self) -> Option<&RootMessage> {
+        self.appearance_message.as_ref()
+    }
+
+    /// Was der Regler beim Ziehen tut: der Wert gilt sofort, ist aber noch nicht gespeichert. Er
+    /// wird im Arbeitsbereich vorgemerkt (`panel_transparency_pending`), damit er auch dann in
+    /// die Datei kommt, wenn das Fenster von außen ([`SettingsWindow::close`]) zugeht: beim
+    /// nächsten gelungenen Schreiben der Konfiguration.
+    pub fn preview_transparency(&mut self, ws: &mut Workspace, percent: u8) {
+        ws.config.panel_transparency = clamp_panel_transparency(percent);
+        ws.panel_transparency_pending = true;
+        self.transparency_unsaved = true;
+    }
+
+    /// Speichert die Durchsichtigkeit (sie gilt schon); misslingt das, bleibt sie für die
+    /// Sitzung und der Hinweis [`TRANSPARENCY_NOT_SAVED`] erscheint.
+    fn save_transparency(&mut self, ws: &mut Workspace) {
+        self.transparency_unsaved = false;
+        self.appearance_message = (!ws.set_panel_transparency(ws.panel_transparency()))
+            .then(|| RootMessage::Warning(TRANSPARENCY_NOT_SAVED.into()));
+    }
+
     /// Wie in der App: [`SettingsWindow::show`] mit den Schnellzugriffen des Arbeitsbereichs;
     /// geänderte Favoriten werden danach gespeichert. Das Ereignis (auch der Rückweg zu
     /// „Projekte“) geht an den Aufrufer.
@@ -207,6 +244,9 @@ impl SettingsWindow {
         let locked = ws.prompt.is_some();
         let path = display_path(&current_directory(ws));
         let message = self.message.clone();
+        let appearance_message = self.appearance_message.clone();
+        let mut transparency = ws.panel_transparency();
+        let (mut slid, mut released) = (false, false);
         let choosing = self.chooser.is_some();
         // Die Auswahl zeichnet oben (rollt) und in der Fußzeile (wählen, abbrechen).
         let chooser = RefCell::new(self.chooser.as_mut());
@@ -220,6 +260,22 @@ impl SettingsWindow {
                 |ui| {
                     ui.add_enabled_ui(!locked, |ui| {
                         let dark = ui.visuals().dark_mode;
+                        theme::section_header(ui, SECTION_APPEARANCE, theme::SUB_HEADER_H);
+                        ui.add_space(theme::SPACE_2);
+                        ui.strong(TRANSPARENCY_LABEL);
+                        ui.spacing_mut().slider_width = SLIDER_WIDTH;
+                        let r = ui.add(
+                            egui::Slider::new(&mut transparency, 0..=MAX_PANEL_TRANSPARENCY)
+                                .integer()
+                                .suffix(" %"),
+                        );
+                        theme::focus_ring(ui, &r);
+                        slid = r.changed();
+                        released = !r.is_pointer_button_down_on() && !r.dragged();
+                        if let Some(m) = &appearance_message {
+                            ui.colored_label(m.color(dark), m.text());
+                        }
+                        ui.add_space(theme::SPACE_4);
                         theme::section_header(ui, SECTION_PROJECTS, theme::SUB_HEADER_H);
                         ui.add_space(theme::SPACE_2);
                         ui.strong(DIRECTORY_LABEL);
@@ -250,6 +306,13 @@ impl SettingsWindow {
                 },
             );
         self.last_rect = response.map(|r| r.response.rect);
+        // Wirkt sofort; gespeichert wird, sobald der Regler losgelassen ist (Tastatur sofort).
+        if slid && !locked {
+            self.preview_transparency(ws, transparency);
+        }
+        if self.transparency_unsaved && released {
+            self.save_transparency(ws);
+        }
         for action in [body_action, footer_action] {
             let target = match action {
                 ChooserAction::Chosen(p) => Some(p),
@@ -266,6 +329,10 @@ impl SettingsWindow {
             self.start_choosing(ws);
         }
         if !open || close {
+            // Ein noch nicht gespeicherter Reglerwert geht beim Schließen nicht verloren.
+            if self.transparency_unsaved {
+                self.save_transparency(ws);
+            }
             let return_to_projects = self.return_to_projects;
             self.close();
             return SettingsEvent::Closed { return_to_projects };

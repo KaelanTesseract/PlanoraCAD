@@ -21,6 +21,11 @@ use planora_math::DVec3;
 use planora_project::config::Config;
 use planora_project::library::Library;
 
+/// Fläche des Feature-Baums bei der voreingestellten Durchsichtigkeit.
+fn tree_fill(dark: bool) -> Color32 {
+    theme::panel_frame_translucent(dark, planora_project::config::DEFAULT_PANEL_TRANSPARENCY).fill
+}
+
 fn context(dark: bool) -> egui::Context {
     let c = egui::Context::default();
     c.set_fonts(fonts::definitions());
@@ -135,7 +140,8 @@ impl Shot {
         self.fills
             .iter()
             .filter(|f| {
-                f.fill == p.bg_panel
+                // Der Feature-Baum ist durchsichtig (Voreinstellung 40 %), die anderen deckend.
+                (f.fill == p.bg_panel || f.fill == tree_fill(dark))
                     && f.stroke == egui::Stroke::new(1.0, p.border_subtle)
                     && f.radius == egui::CornerRadius::same(theme::RADIUS_LG)
             })
@@ -285,7 +291,8 @@ fn fields_draw_inside_the_window_at_1400x900_and_1100x700() {
         let (shot, free) = settle(&c, &mut app, size);
         let content = Rect::from_min_size(Pos2::ZERO, size);
         let all = shot.fields(true);
-        assert_eq!(all.len(), 5, "{size:?}: fünf Felder: {all:?}");
+        // Fünf Felder und die Verlaufsleiste über dem Befehlsfeld.
+        assert_eq!(all.len(), 6, "{size:?}: sechs Felder: {all:?}");
         let f = fields_of(&shot, true, size);
         assert!(near(f.left.width(), theme::PANEL_WIDTH), "{:?}", f.left);
         assert!(near(f.right.width(), theme::PANEL_WIDTH), "{:?}", f.right);
@@ -495,7 +502,7 @@ fn read_only_banner_text_and_colour() {
         let (shot, free) = settle(&c, &mut app, size);
         let f = fields_of(&shot, dark, size);
         let all = shot.fields(dark);
-        assert_eq!(all.len(), 6, "mit Hinweisfeld: {all:?}");
+        assert_eq!(all.len(), 7, "mit Hinweisfeld und Verlaufsleiste: {all:?}");
         let banner = *all
             .iter()
             .find(|r| near(r.top(), f.top.bottom() + shell::GAP))
@@ -641,7 +648,7 @@ fn first_frame_has_no_jump() {
         let (first, _) = run(&c, &mut app, size, vec![], false);
         let (second, _) = run(&c, &mut app, size, vec![], false);
         let (a, b) = (first.fields(true), second.fields(true));
-        assert_eq!(a.len(), if read_only { 6 } else { 5 }, "erstes Bild: {a:?}");
+        assert_eq!(a.len(), if read_only { 7 } else { 6 }, "erstes Bild: {a:?}");
         assert_eq!(a, b, "erstes und zweites Bild gleich");
         // Auch die Texte stehen schon im ersten Bild an ihrem Platz.
         let datei = |s: &Shot| s.texts.iter().find(|t| t.text == "Datei").map(|t| t.rect);
@@ -719,7 +726,7 @@ fn dark_and_light_frames() {
         app.ws_mut().set_dark(dark);
         let size = vec2(1400.0, 900.0);
         let (shot, _) = settle(&c, &mut app, size);
-        assert_eq!(shot.fields(dark).len(), 5, "dunkel {dark}");
+        assert_eq!(shot.fields(dark).len(), 6, "dunkel {dark}");
         // Das andere Thema kommt nicht vor.
         assert!(shot.fields(!dark).is_empty());
         assert!(shot.fills.iter().all(|f| f.blur == 0.0), "kein Schatten");
@@ -730,8 +737,25 @@ fn dark_and_light_frames() {
             .filter(|f| f.radius == egui::CornerRadius::same(theme::RADIUS_LG))
         {
             assert_eq!(f.stroke.color, p.border_subtle, "{f:?}");
-            assert_eq!(f.fill, p.bg_panel, "kein Verlauf, Fläche bg_panel");
+            assert!(
+                f.fill == p.bg_panel || f.fill == tree_fill(dark),
+                "kein Verlauf, Fläche bg_panel: {f:?}"
+            );
         }
+        // Nur der Feature-Baum ist durchsichtig, und zwar das linke Feld.
+        let translucent: Vec<_> = shot
+            .fills
+            .iter()
+            .filter(|f| {
+                f.fill == tree_fill(dark) && f.radius == egui::CornerRadius::same(theme::RADIUS_LG)
+            })
+            .collect();
+        assert_eq!(translucent.len(), 1, "dunkel {dark}: {translucent:?}");
+        assert_eq!(
+            translucent[0].rect,
+            fields_of(&shot, dark, size).left,
+            "dunkel {dark}"
+        );
     }
 }
 

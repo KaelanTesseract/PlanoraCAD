@@ -81,8 +81,21 @@ fn every_allowed_character_has_a_glyph_in_proportional() {
 fn every_non_ascii_character_in_the_ui_sources_is_known_to_exist_in_the_font() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut bad = std::collections::BTreeSet::new();
-    for e in std::fs::read_dir(dir).unwrap().flatten() {
-        let text = std::fs::read_to_string(e.path()).unwrap();
+    // Quelltexte samt Modulordnern (etwa `history_bar/`).
+    let mut files = Vec::new();
+    let mut dirs = vec![dir];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(d).unwrap().flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    for path in files {
+        let text = std::fs::read_to_string(path).unwrap();
         for line in text.lines() {
             if line.trim_start().starts_with("//")
                 || line.contains("symbol(ctx")

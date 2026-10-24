@@ -191,15 +191,19 @@ fn groups_of(state: &mut AppState, drawing: DrawingId) -> Vec<Group> {
         .collect()
 }
 
-/// Abschnitt „Maße“ für die geöffnete Zeichnung samt Rückfrage. Ohne geöffnete Zeichnung
-/// erscheint nichts. `read_only` (alte Version): Wählen und Ansehen gehen, Ändern ist gesperrt.
+/// Abschnitt „Maße“ für die geöffnete Zeichnung (die Rückfrage zeichnet [`windows`]). Ohne
+/// geöffnete Zeichnung erscheint nichts. `read_only` (alte Version): Wählen und Ansehen gehen, Ändern ist gesperrt.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     if let WorkArea::Drawing(id) = state.drawing_ui.area
         && state.document.drawing(id).is_some()
     {
         section(ui, state, id, read_only);
     }
-    delete_window(ui.ctx(), state);
+}
+
+/// Rückfrage „Maß löschen“; jedes Bild, auch bei zugeklapptem Ordner „Zeichnungen“.
+pub(crate) fn windows(ctx: &egui::Context, state: &mut AppState) {
+    delete_window(ctx, state);
 }
 
 fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bool) {
@@ -212,28 +216,14 @@ fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bo
     }
     let mut action = None;
     for g in &groups {
-        row(
-            ui,
-            0.0,
-            0.0,
-            false,
-            &g.name,
-            None,
-            None,
-            None,
-            paint_view_icon,
-        );
+        row(ui, 0.0, false, &g.name, None, None, None, paint_view_icon);
         for r in &g.rows {
             let dim = r.id;
             let selected = state.drawing_ui.selected_dim == Some(dim);
-            let color = r
-                .lost
-                .is_some()
-                .then_some(error_color(ui.visuals().dark_mode));
+            let color = r.lost.is_some().then_some(crate::browser::row_error(ui));
             let resp = row(
                 ui,
                 body_indent(),
-                0.0,
                 selected,
                 &r.text,
                 color,

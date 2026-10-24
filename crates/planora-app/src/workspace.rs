@@ -15,7 +15,7 @@ use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
 use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
 use planora_feature::Snapshot;
-use planora_project::config::Config;
+use planora_project::config::{Config, clamp_panel_transparency};
 use planora_project::docstore::{Autosave, DocStore, DocumentInfo, LockMode, peek, read_version};
 use planora_project::fsutil::validate_name;
 use planora_project::library::{DOCUMENT_SUFFIX, Library, NodePath};
@@ -547,6 +547,10 @@ pub struct Workspace {
     /// Meldung aus dem letzten Speichern der Favoriten (z. B. Liste auf der Platte voll); geht
     /// über [`Workspace::places`] an die nächste gezeichnete Dateiauswahl.
     pub favorites_notice: Option<&'static str>,
+    /// Die Durchsichtigkeit in `config.panel_transparency` konnte noch nicht gespeichert werden;
+    /// sie wird beim nächsten gelungenen Schreiben ([`Workspace::try_persist_config`]) mit
+    /// geschrieben.
+    pub panel_transparency_pending: bool,
     pub prompt: Option<Prompt>,
     pub quit: bool,
     /// Der Dialog „Über PlanoraCAD“ ist offen.
@@ -588,6 +592,7 @@ impl Workspace {
             config_path: Config::config_path(),
             favorites_pending: Vec::new(),
             favorites_notice: None,
+            panel_transparency_pending: false,
             prompt: None,
             quit: false,
             about_open: false,
@@ -1257,10 +1262,16 @@ impl Workspace {
     pub fn try_persist_config(&mut self) -> bool {
         let root = self.config.root.clone();
         let pending = std::mem::take(&mut self.favorites_pending);
+        let transparency = self
+            .panel_transparency_pending
+            .then(|| self.panel_transparency());
         let mut full = None;
         let written = Config::update_at(&self.config_path, |c| {
             c.root = root;
             full = apply_changes(&pending, &mut c.favorites);
+            if let Some(t) = transparency {
+                c.panel_transparency = t;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1268,16 +1279,40 @@ impl Workspace {
                 if full.is_some() {
                     self.favorites_notice = full;
                 }
+                self.panel_transparency_pending = false;
                 true
             }
             Err(_) => {
                 let saved = self.config.save_to(&self.config_path).is_ok();
-                if !saved {
+                if saved {
+                    self.panel_transparency_pending = false;
+                } else {
                     self.favorites_pending = pending;
                 }
                 saved
             }
         }
+    }
+
+    /// Durchsichtigkeit der Panels in Prozent (0 bis 80, Einstellungen → Darstellung).
+    pub fn panel_transparency(&self) -> u8 {
+        clamp_panel_transparency(self.config.panel_transparency)
+    }
+
+    /// Setzt die Durchsichtigkeit (auf 0 bis 80 begrenzt), sie wirkt sofort, und speichert sie
+    /// gleich in [`Workspace::config_path`]; `true`, wenn geschrieben wurde. Nur dieses Feld
+    /// wird in den Stand der Datei geschrieben (Wurzel und Favoriten bleiben). Lässt sich die
+    /// Datei nicht lesen oder schreiben, bleibt sie unangetastet; der Wert gilt dann für die
+    /// Sitzung und wird beim nächsten gelungenen Schreiben mit gespeichert.
+    pub fn set_panel_transparency(&mut self, percent: u8) -> bool {
+        let percent = clamp_panel_transparency(percent);
+        self.config.panel_transparency = percent;
+        let written = Config::update_at(&self.config_path, |c| {
+            c.panel_transparency = percent;
+        })
+        .is_ok();
+        self.panel_transparency_pending = !written;
+        written
     }
 
     /// Gemeinsamer Stand der Schnellzugriffe für die Dateiauswahlen eines Bildes: Favoriten aus
@@ -1319,13 +1354,21 @@ impl Workspace {
         let mut all = std::mem::take(&mut self.favorites_pending);
         all.extend(places.changes);
         let mut full = None;
+        // Eine vorgemerkte Durchsichtigkeit kommt mit (wie in `try_persist_config`).
+        let transparency = self
+            .panel_transparency_pending
+            .then(|| self.panel_transparency());
         let written = Config::update_at(&self.config_path, |c| {
             full = apply_changes(&all, &mut c.favorites);
+            if let Some(t) = transparency {
+                c.panel_transparency = t;
+            }
         });
         match written {
             Ok(disk) => {
                 self.config.favorites = disk.favorites;
                 self.favorites_notice = full;
+                self.panel_transparency_pending = false;
                 true
             }
             Err(_) => {

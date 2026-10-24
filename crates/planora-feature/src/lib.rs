@@ -16,6 +16,7 @@ mod parts;
 mod parts_sheets;
 pub mod recompute;
 pub mod refs;
+mod rollback;
 mod snapshot;
 mod step_bodies;
 

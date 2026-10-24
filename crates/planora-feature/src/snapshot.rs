@@ -66,6 +66,9 @@ pub struct Snapshot {
     pub parameters: Vec<Parameter>,
     /// Nächste Parameterkennung (mindestens 1).
     pub next_param: u64,
+    /// Rückrollstellen je Körper in Listenordnung (siehe [`Document::rollbacks`]); beim Bauen
+    /// streng geprüft, nicht still repariert.
+    pub rollbacks: Vec<FeatureId>,
 }
 
 /// Gleiche Netztabellen: gleiche Kennungen mit jeweils demselben `Arc` (nicht nur gleichem
@@ -103,14 +106,15 @@ impl Snapshot {
             && self.parts_overrides == other.parts_overrides
     }
 
-    /// Gleiches Modell: Features (samt Formeltexten), Marker, Kennungszähler, Netze, STEP-Formen
-    /// (beide als derselbe `Arc`) und Parametertabelle (samt
+    /// Gleiches Modell: Features (samt Formeltexten), Marker, Rückrollstellen, Kennungszähler,
+    /// Netze, STEP-Formen (beide als derselbe `Arc`) und Parametertabelle (samt
     /// Parameterzähler) gleich; Zeichnungen, Projektangaben und Stücklistentexte zählen nicht.
     /// Eine Änderung nur an Parametern oder Formeln nimmt deshalb in [`Document::restore`] den
     /// vollen Weg.
     pub fn same_model(&self, other: &Snapshot) -> bool {
         self.features == other.features
             && self.marker == other.marker
+            && self.rollbacks == other.rollbacks
             && self.next_id == other.next_id
             && same_meshes(&self.meshes, &other.meshes)
             && same_step_shapes(&self.step_shapes, &other.step_shapes)
@@ -155,12 +159,13 @@ impl Document {
             parts_overrides: self.parts_overrides.clone(),
             parameters: self.parameters.clone(),
             next_param: self.next_param,
+            rollbacks: self.rollbacks.clone(),
         }
     }
 
     /// Baut ein Dokument aus einem Snapshot und berechnet es einmal. Prüft Ids, Namen, Marker,
-    /// Netze und Verweise; ungültige Zahlen führen erst bei der Berechnung zu einem Fehlerstatus
-    /// am betroffenen Feature (kein Panic, kein Abbruch des Ladens).
+    /// Rückrollstellen, Netze und Verweise; ungültige Zahlen führen erst bei der Berechnung zu
+    /// einem Fehlerstatus am betroffenen Feature (kein Panic, kein Abbruch des Ladens).
     pub fn from_snapshot(s: Snapshot, chord_tolerance: f64) -> Result<Document, FeatureError> {
         let mut doc = Document::build(s, chord_tolerance, &BTreeMap::new(), 1)?;
         doc.edits = 0;
@@ -327,6 +332,9 @@ impl Document {
         doc.parts_overrides = s.parts_overrides;
         doc.marker = s.marker;
         doc.next_id = s.next_id;
+        // Nach den Features, weil die Prüfung die Ketten braucht; ungültige Stellen sind ein
+        // Fehler im Bild (die stille Bereinigung in der Neuberechnung greift hier nicht).
+        doc.rollbacks = doc.checked_rollbacks(&s.rollbacks)?;
         doc.recompute_features();
         Ok(doc)
     }

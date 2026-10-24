@@ -19,6 +19,11 @@ use planora_math::DVec3;
 use planora_project::config::Config;
 use planora_project::library::Library;
 
+/// Fläche des Feature-Baums bei der voreingestellten Durchsichtigkeit.
+fn tree_fill(dark: bool) -> Color32 {
+    theme::panel_frame_translucent(dark, planora_project::config::DEFAULT_PANEL_TRANSPARENCY).fill
+}
+
 fn context(dark: bool) -> egui::Context {
     let c = egui::Context::default();
     c.set_fonts(fonts::definitions());
@@ -149,7 +154,8 @@ impl Shot {
         self.fills
             .iter()
             .filter(|f| {
-                f.fill == p.bg_panel
+                // Der Feature-Baum ist durchsichtig (Voreinstellung 40 %), die anderen deckend.
+                (f.fill == p.bg_panel || f.fill == tree_fill(dark))
                     && f.stroke == egui::Stroke::new(1.0, p.border_subtle)
                     && f.radius == egui::CornerRadius::same(theme::RADIUS_LG)
             })

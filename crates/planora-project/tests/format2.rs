@@ -134,7 +134,7 @@ fn documents_without_blends_still_write_format_1() {
             .contains("\"format\": 1")
     );
     assert_eq!(required_format(&blend_document().snapshot()), 2);
-    assert_eq!(FORMAT_VERSION, 10); // seit den STEP-Körpern
+    assert_eq!(FORMAT_VERSION, 11); // seit den Rückrollstellen
 }
 
 #[test]
@@ -146,10 +146,10 @@ fn a_format_1_file_with_a_blend_is_corrupt_and_format_3_is_too_new() {
     }
     let e = bad(&good.replacen("\"format\": 2", "\"format\": 1", 1)).to_string();
     assert!(e.contains("Dateiformat 2"), "{e}");
-    // Seit den STEP-Körpern ist Format 10 gültig; „zu neu“ ist jetzt 11.
+    // Seit den Rückrollstellen ist Format 11 gültig; „zu neu“ ist jetzt 12.
     assert!(matches!(
-        bad(&good.replacen("\"format\": 2", "\"format\": 11", 1)),
-        ProjectError::TooNew { found: 11, .. }
+        bad(&good.replacen("\"format\": 2", "\"format\": 12", 1)),
+        ProjectError::TooNew { found: 12, .. }
     ));
 }
 

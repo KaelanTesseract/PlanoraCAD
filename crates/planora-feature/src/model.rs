@@ -331,6 +331,25 @@ impl FeatureKind {
         deps
     }
 
+    /// Körper, die diese Art verbraucht (ersetzt): Ziel und Werkzeug einer Booleschen
+    /// Operation, der Körper von Verschieben und Verrunden. Grundlage der Sichtbarkeit und der
+    /// Körperspitzen ([`Document::body_tips`]).
+    pub fn consumed_bodies(&self) -> Vec<BodyRef> {
+        match self {
+            FeatureKind::Boolean { target, tool, .. } => vec![*target, *tool],
+            FeatureKind::Move { body, .. } | FeatureKind::Verrunden { body, .. } => vec![*body],
+            FeatureKind::Sketch(_)
+            | FeatureKind::Box { .. }
+            | FeatureKind::Cylinder { .. }
+            | FeatureKind::Sphere { .. }
+            | FeatureKind::Cone { .. }
+            | FeatureKind::Extrude { .. }
+            | FeatureKind::Revolve { .. }
+            | FeatureKind::MeshBody { .. }
+            | FeatureKind::StepBody { .. } => Vec::new(),
+        }
+    }
+
     /// Lage eines Netz-Körpers; `None` für alle anderen Arten.
     pub fn mesh_transform(&self) -> Option<MeshTransform> {
         match self {
@@ -404,12 +423,16 @@ impl Feature {
     }
 }
 
-/// Geordnete Liste der Features mit Rückrollmarker.
+/// Geordnete Liste der Features mit Rückrollmarker und Rückrollstellen je Körper.
 #[derive(Clone, Debug)]
 pub struct Document {
     pub(crate) features: Vec<Feature>,
     /// Anzahl der aktiven Features von vorn; Features ab diesem Index sind zurückgestellt.
     pub(crate) marker: usize,
+    /// Rückrollstellen je Körper in Listenordnung (siehe [`Document::set_rollback`]): Eine Stelle
+    /// setzt ihren Schritt und alle davon abhängigen zurück. Keine Stelle liegt in der Kette
+    /// einer anderen.
+    pub(crate) rollbacks: Vec<FeatureId>,
     /// Nächste zu vergebende Feature-Id (beginnt bei 1, da 0 „nicht zugewiesen“ bedeutet).
     pub(crate) next_id: u64,
     /// Zähler für Feature-Versionen und Ergebnisstände (beginnt bei 1; 0 heißt „kein Ergebnis“).
@@ -474,6 +497,7 @@ impl Document {
         Document {
             features: Vec::new(),
             marker: 0,
+            rollbacks: Vec::new(),
             next_id: 1,
             next_version: 1,
             kernel: AnalyticKernel::default(),

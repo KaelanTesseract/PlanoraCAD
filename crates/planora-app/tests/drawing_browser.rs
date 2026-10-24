@@ -893,7 +893,8 @@ fn a_selected_drawing_row_is_unselected_when_a_feature_is_clicked() {
     let mut h = Harness::new();
     h.click(&mut st, "Blatt 1");
     assert_eq!(st.drawing_ui.selected_drawing, Some(d1));
+    // „Quader 1“ ist seit Aufgabe 6 eine Körperzeile: sie wählt den Körper.
     h.click(&mut st, "Quader 1");
     assert_eq!(st.drawing_ui.selected_drawing, None);
-    assert!(st.selected_feature.is_some());
+    assert_eq!(st.selected_body, Some(0));
 }

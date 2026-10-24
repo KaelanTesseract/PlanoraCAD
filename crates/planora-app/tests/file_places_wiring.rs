@@ -155,6 +155,7 @@ fn the_export_window_shows_the_shared_favorites() {
         Config {
             root: Some(d.join("Projekte")),
             favorites: vec![d.join("Lieblingsordner")],
+            ..Config::default()
         },
     );
     fs::create_dir_all(d.join("Projekte")).unwrap();

@@ -16,7 +16,10 @@ fn texts(out: &egui::FullOutput) -> String {
 }
 
 #[test]
-fn the_tree_lists_features_bodies_and_the_marker() {
+fn the_tree_lists_bodies_and_no_marker_line() {
+    // Seit der Verlaufsleiste (Aufgabe 6) zeigt der Baum Körper statt Schritte: Nach dem
+    // Vereinigen gibt es eine Zeile für das Ergebnis, die Eingangskörper erscheinen nicht mehr
+    // einzeln. Der globale Marker hat keine eigene Linie mehr im Baum.
     let mut s = AppState::new();
     s.create_box(DVec3::splat(4.0)).unwrap();
     s.create_cylinder(1.0, 4.0).unwrap();
@@ -28,13 +31,19 @@ fn the_tree_lists_features_bodies_and_the_marker() {
         text = texts(&out);
         out.drop_without_applying_deltas();
     }
-    for must in ["Quader 1", "Zylinder 1", "Boolesche Operation 1"] {
-        assert!(text.contains(must), "„{must}“ fehlt:\n{text}");
-    }
+    let union = s.bodies[0].name.clone();
+    assert!(text.contains(&union), "„{union}“ fehlt:\n{text}");
+    assert!(!text.contains("Zylinder 1"), "{text}");
     s.document.set_marker(2).unwrap();
     s.refresh();
     let out = c.run_ui(egui::RawInput::default(), |ui| browser::show(ui, &mut s));
-    assert!(texts(&out).contains("Berechnung endet hier"));
+    let text = texts(&out);
+    out.drop_without_applying_deltas();
+    // Das Vereinigen ist zurückgestellt: beide Körper sind wieder einzeln da.
+    for must in ["Quader 1", "Zylinder 1"] {
+        assert!(text.contains(must), "„{must}“ fehlt:\n{text}");
+    }
+    assert!(!text.contains("Berechnung endet hier"), "{text}");
 }
 
 #[test]
@@ -174,7 +183,9 @@ fn sketch_with_rectangle(s: &mut AppState) -> planora_feature::FeatureId {
 }
 
 #[test]
-fn the_context_menu_suppresses_rolls_back_and_rolls_to_the_end() {
+fn the_context_menu_suppresses_and_activates() {
+    // „Zurückrollen bis hier“ und „Zum Ende“ gibt es im Baum nicht mehr (Verlaufsleiste,
+    // Aufgabe 6); der globale Marker steht im Menü „Bearbeiten“.
     let mut s = AppState::new();
     let a = s.create_box(DVec3::splat(4.0)).unwrap();
     s.create_box(DVec3::splat(2.0)).unwrap();
@@ -185,18 +196,18 @@ fn the_context_menu_suppresses_rolls_back_and_rolls_to_the_end() {
     assert!(text.contains("unterdrückt"), "{text}");
     context_menu(&mut s, "Quader 1", "Aktivieren");
     assert!(!s.document.feature(a).unwrap().suppressed);
-    context_menu(&mut s, "Quader 1", "Zurückrollen bis hier");
-    assert_eq!(s.document.marker(), 1);
-    context_menu(&mut s, "Quader 2", "Zum Ende");
-    assert_eq!(s.document.marker(), 2);
+    let menu = menu_texts(&mut s, "Quader 1");
+    assert!(!menu.contains("Zurückrollen bis hier"), "{menu}");
+    assert!(!menu.contains("Zum Ende"), "{menu}");
 }
 
 #[test]
 fn deleting_with_consequences_from_the_menu_asks_first() {
+    // Die Körperzeile „Quader 1“ löscht den Ursprung des Körpers samt Verschieben.
     let mut s = AppState::new();
     let a = s.create_box(DVec3::splat(4.0)).unwrap();
-    s.create_cylinder(1.0, 4.0).unwrap();
-    s.add_boolean(0, 1, BoolOp::Union).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    s.create_box(DVec3::splat(2.0)).unwrap();
     context_menu(&mut s, "Quader 1", "Löschen");
     assert!(s.document.feature(a).is_some(), "erst fragen");
     assert!(s.pending_delete.is_some());
@@ -273,7 +284,7 @@ fn the_tree_shows_error_and_grey_states_and_body_rows_select_bodies() {
     let (text, _) = frame(&c, &mut s, vec![], "");
     assert!(text.contains("Fehler"), "{text}");
     assert!(browser::status_text(&s).is_some_and(|t| t.contains("Zylinder 1")));
-    // Körperzeile unter „Quader 1“ (eingerückt, zweiter Text „Quader 1“)
+    // Eine Zeile je Körper (keine eigene Schrittzeile mehr, Aufgabe 6).
     s.selected_body = None;
     let out = c.run_ui(raw(vec![]), |ui| browser::show(ui, &mut s));
     let mut rows = Vec::new();
@@ -288,12 +299,11 @@ fn the_tree_shows_error_and_grey_states_and_body_rows_select_bodies() {
     }
     out.shapes.iter().for_each(|c| walk(&c.shape, &mut rows));
     out.drop_without_applying_deltas();
-    assert_eq!(rows.len(), 2, "Feature- und Körperzeile");
-    frame(&c, &mut s, click(rows[1], egui::PointerButton::Primary), "");
+    assert_eq!(rows.len(), 1, "eine Körperzeile");
+    frame(&c, &mut s, click(rows[0], egui::PointerButton::Primary), "");
     assert_eq!(s.selected_body, Some(0));
     assert_eq!(s.selected_feature, None);
-    frame(&c, &mut s, click(rows[0], egui::PointerButton::Primary), "");
-    assert_eq!(s.selected_feature, Some(s.document.features()[0].id));
+    assert_eq!(s.history_body(), Some(s.document.features()[0].id));
 }
 
 #[test]
@@ -525,7 +535,7 @@ fn only_sketch_rows_offer_extrude_and_revolve() {
 }
 
 #[test]
-fn error_rows_explain_themselves_and_skipped_rows_are_grey() {
+fn error_rows_explain_themselves_and_suppressed_rows_are_grey() {
     let mut s = AppState::new();
     s.add_feature(
         None,
@@ -571,7 +581,9 @@ fn error_rows_explain_themselves_and_skipped_rows_are_grey() {
         text.contains(&reason),
         "Tooltip mit dem Fehlertext:\n{text}"
     );
-    // „übersprungen“ und der Name des Verschiebens sind grau gezeichnet.
+    // Der unterdrückte Körper bleibt gelistet: „unterdrückt“ und sein Name sind grau
+    // gezeichnet (vor Aufgabe 6: die Schrittzeile „Verschieben 1“ mit „übersprungen“; „übersprungen“ prüft jetzt
+    // a_skipped_tip_over_an_active_origin_is_marked_grey_with_its_reason).
     let mut weak = egui::Color32::TRANSPARENT;
     let out = c.run_ui(raw(vec![]), |ui| {
         weak = ui.visuals().weak_text_color();
@@ -590,8 +602,48 @@ fn error_rows_explain_themselves_and_skipped_rows_are_grey() {
     }
     out.shapes.iter().for_each(|c| walk(&c.shape, &mut colors));
     out.drop_without_applying_deltas();
-    for must in ["übersprungen", "Verschieben 1"] {
+    for must in ["unterdrückt", "Quader 1"] {
         let found = colors.iter().find(|(t, _)| t == must);
         assert_eq!(found.map(|f| f.1), Some(weak), "{must}: {colors:?}");
     }
+}
+
+#[test]
+fn a_skipped_tip_over_an_active_origin_is_marked_grey_with_its_reason() {
+    // Vereinigen aus Quader und Zylinder; der Zylinder wird unterdrückt: Das Vereinigen wird
+    // übersprungen, der Quader (sein Ursprung) ist aber weiter aktiv und sichtbar.
+    let mut s = AppState::new();
+    let a = s.create_box(DVec3::splat(4.0)).unwrap();
+    let cyl = s.create_cylinder(1.0, 6.0).unwrap();
+    let u = s.add_boolean(0, 1, BoolOp::Union).unwrap();
+    browser::toggle_suppress(&mut s, cyl).unwrap();
+    let why = match &s.document.feature(u).unwrap().status {
+        FeatureStatus::Skipped(w) => w.clone(),
+        st => panic!("{st:?}"),
+    };
+    assert!(!s.document.feature(a).unwrap().suppressed);
+    assert_eq!(s.document.feature(a).unwrap().status, FeatureStatus::Ok);
+
+    let c = ctx();
+    let mut weak = egui::Color32::TRANSPARENT;
+    let out = c.run_ui(raw(vec![]), |ui| {
+        weak = ui.visuals().weak_text_color();
+        browser::show(ui, &mut s)
+    });
+    let mut colors = Vec::new();
+    fn walk(shape: &egui::epaint::Shape, colors: &mut Vec<(String, egui::Color32)>) {
+        match shape {
+            egui::epaint::Shape::Text(t) => colors.push((
+                t.galley.text().to_string(),
+                t.galley.job.sections[0].format.color,
+            )),
+            egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, colors)),
+            _ => {}
+        }
+    }
+    out.shapes.iter().for_each(|c| walk(&c.shape, &mut colors));
+    out.drop_without_applying_deltas();
+    let found = colors.iter().find(|(t, _)| t == "übersprungen");
+    assert_eq!(found.map(|f| f.1), Some(weak), "{colors:?}");
+    assert!(!why.is_empty());
 }

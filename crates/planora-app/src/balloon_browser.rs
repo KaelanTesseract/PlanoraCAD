@@ -4,7 +4,7 @@
 //! es nicht mehr gibt, steht rot als „Pos. ? – Teil fehlt“ mit dem Grund als Hinweistext.
 
 use crate::balloon_tool::{self, LOST_TIP};
-use crate::browser::{body_indent, error_color, row};
+use crate::browser::{body_indent, row};
 use crate::drawing_browser::{READ_ONLY_HINT, open_drawing, select_drawing};
 use crate::drawing_state::WorkArea;
 use crate::drawing_view::view_names;
@@ -120,25 +120,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     }
     let mut action = None;
     for g in &groups {
-        row(
-            ui,
-            0.0,
-            0.0,
-            false,
-            &g.name,
-            None,
-            None,
-            None,
-            paint_view_icon,
-        );
+        row(ui, 0.0, false, &g.name, None, None, None, paint_view_icon);
         for r in &g.rows {
             let b = r.id;
             let selected = state.drawing_ui.selected_balloon == Some(b);
-            let color = r.lost.then_some(error_color(ui.visuals().dark_mode));
+            let color = r.lost.then_some(crate::browser::row_error(ui));
             let resp = row(
                 ui,
                 body_indent(),
-                0.0,
                 selected,
                 &r.text,
                 color,

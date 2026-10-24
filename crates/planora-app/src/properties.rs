@@ -514,13 +514,21 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         ui.add_space(theme::SPACE_1);
         // Lage der unteren Ecke der Hülle; Änderungen verschieben den Körper.
         let mut position = min;
-        dragging = xyz_fields(
-            ui,
-            "body-position",
-            POSITION_LABEL,
-            [&mut position.x, &mut position.y, &mut position.z],
-            0.5,
-        );
+        // Verschieben ist eine neue Aktion: bei einem zurückgesetzten Körper gesperrt.
+        let lock = state.body_lock(index);
+        let fields = ui.add_enabled_ui(lock.is_none(), |ui| {
+            xyz_fields(
+                ui,
+                "body-position",
+                POSITION_LABEL,
+                [&mut position.x, &mut position.y, &mut position.z],
+                0.5,
+            )
+        });
+        if let Some(why) = lock {
+            fields.response.on_disabled_hover_text(why);
+        }
+        dragging = fields.inner;
         if position != min {
             moved = Some(position - min);
         }

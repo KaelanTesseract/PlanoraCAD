@@ -120,7 +120,8 @@ impl Document {
         Ok(())
     }
 
-    /// Berechnet alle Features vor dem Marker, deren Eingaben sich geändert haben.
+    /// Berechnet alle aktiven Features (vor dem Marker, außerhalb der Rückrollstellen), deren
+    /// Eingaben sich geändert haben.
     pub fn recompute(&mut self) -> RecomputeReport {
         let report = self.recompute_features();
         self.sync_parts_sheets();
@@ -131,11 +132,14 @@ impl Document {
     /// Zuerst schreibt der Auswertungsdurchgang die Formelwerte in die Felder (P1).
     pub(crate) fn recompute_features(&mut self) -> RecomputeReport {
         self.apply_formula_pass();
+        self.prune_rollbacks();
+        let rolled_back = self.rolled_back();
         let mut report = RecomputeReport::default();
         for idx in 0..self.features.len() {
             let id = self.features[idx].id;
-            if idx >= self.marker {
-                // Das Ergebnis bleibt, damit das Zurückholen des Markers billig ist.
+            if idx >= self.marker || rolled_back.contains(&id) {
+                // Hinter dem Marker oder von einer Rückrollstelle erfasst: Das Ergebnis bleibt,
+                // damit das Zurückholen des Markers (der Stelle) billig ist.
                 self.features[idx].status = FeatureStatus::NotComputed;
                 continue;
             }
@@ -280,12 +284,8 @@ impl Document {
                 feature: f.id,
                 index,
             });
-            let consumed = |r: &BodyRef| match &f.kind {
-                FeatureKind::Boolean { target, tool, .. } => r == target || r == tool,
-                FeatureKind::Move { body, .. } => r == body,
-                FeatureKind::Verrunden { body, .. } => r == body,
-                _ => false,
-            };
+            let used = f.kind.consumed_bodies();
+            let consumed = |r: &BodyRef| used.contains(r);
             // Die erste verbrauchte Stelle bleibt beim Entfernen gleich (nur Spätere fallen weg).
             let at = visible.iter().position(consumed).unwrap_or(visible.len());
             visible.retain(|r| !consumed(r));

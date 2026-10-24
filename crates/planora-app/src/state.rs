@@ -134,6 +134,15 @@ pub struct AppState {
     name_counters: BTreeMap<String, u64>,
     /// Im Browser gewähltes Feature (bis zum Feature-Baum: eine Skizze).
     pub selected_feature: Option<FeatureId>,
+    /// Für die Verlaufsleiste gewählter Körper (Spitze oder ein Schritt seiner Kette), wie
+    /// gewählt; gelesen wird er über [`AppState::history_body`].
+    history_choice: Option<FeatureId>,
+    /// Auf- und zugeklappte Ordner des Feature-Baums (je Tab).
+    pub tree_folders: crate::browser::FolderState,
+    /// Im Feature-Baum ausgeblendete Körper (Auge). Gilt nur für die Ansicht dieses Tabs: Der
+    /// Körper bleibt im Modell, wird aber nicht gezeichnet und nicht gewählt. Wird nicht
+    /// gespeichert. Kennung über Änderungen am Teil hinweg ([`Document::body_key`]).
+    hidden_bodies: std::collections::BTreeSet<planora_drawing::BodyKey>,
     /// Geöffneter Skizzen-Modus.
     pub sketch_session: Option<SketchSession>,
     /// Entwurf des geöffneten Skizzen-Features (Entscheidung F6): eine Kopie der Definition mit
@@ -354,6 +363,9 @@ impl AppState {
             info_outlives_step: false,
             name_counters: BTreeMap::new(),
             selected_feature: None,
+            history_choice: None,
+            tree_folders: crate::browser::FolderState::default(),
+            hidden_bodies: std::collections::BTreeSet::new(),
             sketch_session: None,
             sketch_draft: None,
             sketch_history: None,
@@ -517,6 +529,69 @@ impl AppState {
                 Some(Pick::Edge(EdgeRef { body, edge }))
             }
         }
+    }
+
+    /// Wählt den Körper der Verlaufsleiste (`None`: Standard, der letzte Körper). Unabhängig
+    /// von `selected_body` (Index in der Körperliste für die Eigenschaften).
+    pub fn select_body(&mut self, tip: Option<FeatureId>) {
+        self.history_choice = tip;
+    }
+
+    /// Körper der Verlaufsleiste als Spitze ([`Document::body_tips`]): der gewählte, solange er
+    /// eine Spitze ist; ist er in einem späteren Schritt aufgegangen (Verschieben, Vereinigen),
+    /// dessen Spitze; gibt es ihn nicht mehr oder ist nichts gewählt, der letzte Körper.
+    /// `None` ohne Körper. Jedes Tab hat einen eigenen Zustand und damit eine eigene Wahl.
+    pub fn history_body(&self) -> Option<FeatureId> {
+        let tips = self.document.body_tips();
+        if let Some(c) = self.history_choice {
+            if tips.contains(&c) {
+                return Some(c);
+            }
+            if let Some(t) = tips.iter().find(|t| self.document.chain(**t).contains(&c)) {
+                return Some(*t);
+            }
+        }
+        tips.last().copied()
+    }
+
+    /// Ist der Körper `j` (Index in `bodies`) im Feature-Baum ausgeblendet? Unbekannte nicht.
+    pub fn is_body_hidden(&self, j: usize) -> bool {
+        self.bodies.get(j).is_some_and(|b| {
+            self.hidden_bodies
+                .contains(&self.document.body_key(b.source))
+        })
+    }
+
+    /// Blendet den Körper `j` aus oder ein (Auge im Feature-Baum). Nur die Ansicht ändert sich:
+    /// Ein ausgeblendeter Körper wird nicht gezeichnet und nicht gewählt; Auswahl und
+    /// Hervorhebung auf ihm entfallen. Ein unbekannter Index ändert nichts.
+    pub fn set_body_hidden(&mut self, j: usize, hidden: bool) {
+        let Some(b) = self.bodies.get(j) else {
+            return;
+        };
+        let key = self.document.body_key(b.source);
+        let changed = if hidden {
+            self.hidden_bodies.insert(key)
+        } else {
+            self.hidden_bodies.remove(&key)
+        };
+        if !changed {
+            return;
+        }
+        if hidden {
+            let on = |p: Option<Pick>| p.is_some_and(|p| pick_body(p) == j);
+            if on(self.selection) {
+                self.selection = None;
+            }
+            if on(self.hover) {
+                self.hover = None;
+            }
+            if self.selected_body == Some(j) {
+                self.selected_body = None;
+            }
+            self.marked_edges.retain(|e| e.body != j);
+        }
+        self.rebuild_scene();
     }
 
     /// Index des Körpers `r` in der Körperliste, falls er sichtbar ist.
@@ -740,6 +815,7 @@ impl AppState {
         kind: FeatureKind,
         formulas: Formulas,
     ) -> Result<FeatureId, String> {
+        crate::history_bar::refuse_if_locked(self, &kind.dependencies())?;
         let label = base_name.unwrap_or(kind.label()).to_string();
         let name = self.next_name(&label);
         match self
@@ -1003,6 +1079,7 @@ impl AppState {
         kind: FeatureKind,
         formulas: Formulas,
     ) -> Result<FeatureId, String> {
+        crate::history_bar::refuse_if_locked(self, &kind.dependencies())?;
         let id = match self
             .document
             .add_feature_with_formulas(name, kind, formulas)
@@ -1056,6 +1133,8 @@ impl AppState {
         if delta == DVec3::ZERO {
             return Ok(());
         }
+        // Auch das Erweitern eines vorhandenen Verschiebens ist eine neue Aktion am Körper.
+        crate::history_bar::refuse_if_locked(self, &[r.feature])?;
         // Netz-Körper verschieben sich über ihre eigene Lage (Plan P10), ohne Feature.
         if self.is_mesh(index) {
             return self.move_mesh_body(r, delta);
@@ -1349,7 +1428,21 @@ impl AppState {
     }
 
     pub fn rebuild_scene(&mut self) {
-        let meshes: Vec<&Mesh> = self.bodies.iter().map(|b| &b.mesh).collect();
+        // Ausgeblendete Körper behalten ihren Platz (die Indizes der Auswahl bleiben gültig),
+        // tragen aber kein Netz bei.
+        let empty = Mesh::default();
+        let meshes: Vec<&Mesh> = self
+            .bodies
+            .iter()
+            .enumerate()
+            .map(|(j, b)| {
+                if self.is_body_hidden(j) {
+                    &empty
+                } else {
+                    &b.mesh
+                }
+            })
+            .collect();
         let highlight = Highlight {
             hover: self.hover,
             selected: self.selection,
@@ -1504,7 +1597,13 @@ impl AppState {
         let (origin, dir) = self.camera.ray(ndc);
 
         let mut nearest_face: Option<(usize, planora_render::FaceHit)> = None;
-        for (body, b) in self.bodies.iter().enumerate() {
+        let shown = || {
+            self.bodies
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| !self.is_body_hidden(*j))
+        };
+        for (body, b) in shown() {
             if let Some(hit) = pick_face(&b.mesh, origin, dir)
                 && nearest_face.is_none_or(|(_, h)| hit.distance < h.distance)
             {
@@ -1514,7 +1613,7 @@ impl AppState {
         let occluder = nearest_face.map(|(_, h)| h.distance);
 
         let mut best_edge: Option<(usize, planora_render::EdgeHit)> = None;
-        for (body, b) in self.bodies.iter().enumerate() {
+        for (body, b) in shown() {
             if let Some(hit) = pick_edge(
                 &b.mesh,
                 &self.camera,
@@ -1539,6 +1638,13 @@ impl AppState {
                 face: hit.face,
             })
         })
+    }
+}
+
+/// Index des Körpers, zu dem eine Fläche oder Kante gehört.
+fn pick_body(p: Pick) -> usize {
+    match p {
+        Pick::Face(FaceRef { body, .. }) | Pick::Edge(EdgeRef { body, .. }) => body,
     }
 }
 
@@ -2351,6 +2457,24 @@ impl AppState {
         self.selected_body.is_some_and(|i| self.is_mesh(i))
     }
 
+    /// Ist der sichtbare Körper `index` zurückgesetzt? Dann [`crate::history_bar::LOCK_HINT`]
+    /// (neue Aktionen an ihm sind gesperrt, siehe [`crate::history_bar::lock_reason`]).
+    pub fn body_lock(&self, index: usize) -> Option<&'static str> {
+        let b = self.bodies.get(index)?;
+        crate::history_bar::lock_reason(self, &[b.source.feature])
+    }
+
+    /// Sperre des Körpers, um den es bei Menü und Befehlsfeld geht: der gewählte, sonst der
+    /// Körper der gewählten Fläche oder Kante.
+    pub(crate) fn chosen_lock(&self) -> Option<&'static str> {
+        let body = self.selected_body.or(match self.selection {
+            Some(Pick::Face(f)) => Some(f.body),
+            Some(Pick::Edge(e)) => Some(e.body),
+            None => None,
+        });
+        body.and_then(|i| self.body_lock(i))
+    }
+
     /// Warum „Vereinigen“, „Abziehen“ und „Schneiden“ gerade nicht gehen (`None`: sie gehen).
     pub fn boolean_blocked(&self) -> Option<&'static str> {
         if self.selected_is_mesh() {
@@ -2358,7 +2482,7 @@ impl AppState {
         } else if self.solid_body_count() < 2 {
             Some("Dafür werden mindestens zwei Körper benötigt.")
         } else {
-            None
+            self.chosen_lock()
         }
     }
 
@@ -2369,7 +2493,7 @@ impl AppState {
         } else if self.solid_body_count() == 0 {
             Some("Dafür wird mindestens ein Körper benötigt.")
         } else {
-            None
+            self.chosen_lock()
         }
     }
 
@@ -2382,11 +2506,12 @@ impl AppState {
             Some(Pick::Face(FaceRef { body, face })) => self
                 .bodies
                 .get(body)
-                .is_some_and(|b| plane_of_face(&b.solid, face).is_some()),
-            _ => false,
+                .is_some_and(|b| plane_of_face(&b.solid, face).is_some())
+                .then_some(body),
+            _ => None,
         };
-        if planar {
-            None
+        if let Some(body) = planar {
+            self.body_lock(body)
         } else {
             Some("Dafür zuerst eine ebene Fläche eines Körpers anklicken.")
         }

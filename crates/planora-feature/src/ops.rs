@@ -150,8 +150,9 @@ impl Document {
         self.delete_with_dependents(id).map(|_| ())
     }
 
-    /// Löscht ein Feature samt allen abhängigen Features, passt den Rückrollmarker an und
-    /// berechnet neu. Liefert die entfernten Ids in Zeitleistenreihenfolge.
+    /// Löscht ein Feature samt allen abhängigen Features, passt den Rückrollmarker an, entfernt
+    /// Rückrollstellen an gelöschten Features und berechnet neu. Liefert die entfernten Ids in
+    /// Zeitleistenreihenfolge.
     pub fn delete_with_dependents(
         &mut self,
         id: FeatureId,
@@ -165,6 +166,8 @@ impl Document {
             .count();
         self.features.retain(|f| !removed.contains(&f.id));
         self.marker -= before_marker;
+        // Doppelt abgesichert: `prune_rollbacks` in der Neuberechnung entfernt sie ebenfalls.
+        self.rollbacks.retain(|r| !removed.contains(r));
         self.prune_meshes();
         self.prune_step_shapes();
         self.edits += 1;
@@ -199,8 +202,9 @@ impl Document {
     }
 
     /// Prüft die Invarianten des Dokuments (für Tests): eindeutige Ids, Verweise nur auf
-    /// frühere Features, Marker im Bereich, Features ab dem Marker `NotComputed` und davor nie
-    /// `NotComputed` (außer unterdrückt), Ergebnis
+    /// frühere Features, Marker im Bereich, gültige Rückrollstellen, Features ab dem Marker oder
+    /// von einer Rückrollstelle erfasst `NotComputed` und alle aktiven nie `NotComputed` (außer
+    /// unterdrückt), Ergebnis
     /// genau bei `Ok` (alte Ergebnisse dürfen nur `NotComputed`/`Suppressed` behalten) und
     /// gültige sichtbare Körper, gültige Parametertabelle mit aktuellen Werten und
     /// abgeschlossener Formeldurchgang (siehe `check_formula_invariants`). Liefert die erste
@@ -221,6 +225,8 @@ impl Document {
                 self.features.len()
             ));
         }
+        self.check_rollback_invariants()?;
+        let rolled_back = self.rolled_back();
         for (idx, f) in self.features.iter().enumerate() {
             if let Err(e) = self.check_references(&f.kind, idx) {
                 return Err(format!("Feature „{}“: {e}", f.name));
@@ -231,7 +237,14 @@ impl Document {
                     f.name, f.status
                 ));
             }
-            if idx < self.marker && !f.suppressed && f.status == FeatureStatus::NotComputed {
+            if rolled_back.contains(&f.id) && f.status != FeatureStatus::NotComputed {
+                return Err(format!(
+                    "Feature „{}“ ist zurückgesetzt, hat aber Status {:?}",
+                    f.name, f.status
+                ));
+            }
+            let active = idx < self.marker && !rolled_back.contains(&f.id);
+            if active && !f.suppressed && f.status == FeatureStatus::NotComputed {
                 return Err(format!(
                     "Feature „{}“ steht vor dem Marker, wurde aber nicht berechnet",
                     f.name
@@ -252,7 +265,7 @@ impl Document {
                 }
                 _ => {}
             }
-            if idx < self.marker && f.suppressed != (f.status == FeatureStatus::Suppressed) {
+            if active && f.suppressed != (f.status == FeatureStatus::Suppressed) {
                 return Err(format!(
                     "Feature „{}“: Unterdrückung und Status {:?} passen nicht zusammen",
                     f.name, f.status
@@ -264,6 +277,29 @@ impl Document {
         for v in self.visible_bodies() {
             if let Err(e) = self.kernel.validate(v.solid) {
                 return Err(format!("Sichtbarer Körper „{}“ ist ungültig: {e}", v.name));
+            }
+        }
+        Ok(())
+    }
+
+    /// Rückrollstellen: vorhandene Features, ohne Doppelte, in Listenordnung, keine in der Kette
+    /// einer anderen (höchstens eine je Kette).
+    fn check_rollback_invariants(&self) -> Result<(), String> {
+        let mut last = None;
+        for r in &self.rollbacks {
+            let Some(idx) = self.index_of(*r) else {
+                return Err(format!("Rückrollstelle {} verweist auf kein Feature", r.0));
+            };
+            if last.is_some_and(|l| l >= idx) {
+                return Err("Rückrollstellen nicht in Listenordnung oder doppelt".into());
+            }
+            last = Some(idx);
+            let chain = self.chain(*r);
+            if let Some(o) = self.rollbacks.iter().find(|o| *o != r && chain.contains(o)) {
+                return Err(format!(
+                    "Rückrollstelle {} liegt in der Kette der Stelle {}",
+                    o.0, r.0
+                ));
             }
         }
         Ok(())
@@ -301,11 +337,13 @@ impl Document {
 
     /// Formeln: nur Felder der Art; der Auswertungsdurchgang ist abgeschlossen (Felder und
     /// Formelfehler wie mit den aktuellen Parametern berechnet, unbekannte Namen, falsche
-    /// Einheiten und nicht endliche Werte also nur als Formelfehler); ein Feature mit Fehler vor
-    /// dem Marker, nicht unterdrückt, hat den Status `Error(meldung)`.
+    /// Einheiten und nicht endliche Werte also nur als Formelfehler); ein aktives Feature mit
+    /// Fehler (vor dem Marker, nicht zurückgesetzt), nicht unterdrückt, hat den Status
+    /// `Error(meldung)`.
     fn check_formula_invariants(&self) -> Result<(), String> {
         let scope = self.param_scope();
         let tolerance = self.kernel.tolerance.linear;
+        let rolled_back = self.rolled_back();
         for (idx, f) in self.features.iter().enumerate() {
             check_keys(&f.kind, &f.formulas).map_err(|e| format!("Feature „{}“: {e}", f.name))?;
             if let FeatureKind::Sketch(sf) = &f.kind
@@ -340,6 +378,7 @@ impl Document {
             }
             if let Some(issue) = &f.issue
                 && idx < self.marker
+                && !rolled_back.contains(&f.id)
                 && !f.suppressed
                 && f.status != FeatureStatus::Error(issue.message().to_string())
             {

@@ -1,22 +1,33 @@
-//! Feature-Baum: eine Zeile je Feature der Zeitleiste mit Symbol, Name und Status, darunter
-//! eingerückt die sichtbaren Körper des Features; Rückrollmarker als Trennlinie; Kontextmenü
-//! je Zeile. Die Zustandsfunktionen (Löschen mit Folgen, Unterdrücken, Zurückrollen) sind
-//! ohne Oberfläche testbar.
+//! Feature-Baum als Körper-Übersicht: oben das Dokument, darunter die Ordner „Körper“ (je
+//! Körper eine Zeile mit Auge und einem Quadrat in der Körperfarbe der Verlaufsleiste),
+//! „Skizzen“, „Zeichnungen“ und „Ursprung“; Kontextmenü je Zeile. Die einzelnen Schritte stehen
+//! in der Verlaufsleiste ([`crate::history_bar`]). Die Zustandsfunktionen (Löschen mit Folgen,
+//! Unterdrücken, globaler Marker) sind ohne Oberfläche testbar.
 
 use crate::dialog::{Dialog, DialogSize};
-use crate::icons::{FeatureIcon, paint_body_icon, paint_feature_icon};
-use crate::state::{AppState, BodyKind, SketchRequest};
+use crate::icons::{FeatureIcon, Icon, IconSource, paint_feature_icon, paint_source};
+use crate::state::{AppState, SketchRequest};
 use crate::theme;
 use egui::{Color32, Sense, vec2};
-use planora_feature::{FeatureId, FeatureKind, FeatureStatus, SketchPlane};
+use planora_feature::{BodyRef, FeatureId, FeatureKind, FeatureStatus, SketchPlane};
 
 /// Zeilenhöhe (Graphit: 24).
 const ROW_HEIGHT: f32 = theme::ROW_H;
-/// Einrückung der Körperzeilen unter ihrem Feature.
+/// Einrückung der Zeilen unter einem Eintrag (Ansichten unter ihrer Zeichnung).
 const BODY_INDENT: f32 = 22.0;
-const MARKER_HEIGHT: f32 = 20.0;
+/// Einrückung des Inhalts eines Ordners.
+const FOLDER_INDENT: f32 = 14.0;
+/// Abstand zwischen Name und Status in einer Zeile.
+const STATUS_GAP: f32 = 10.0;
 /// Größe der Zeilensymbole.
 const ICON_SIZE: f32 = 16.0;
+/// Größe des Pfeils vor einem Ordner.
+const CARET: f32 = 8.0;
+/// Breite des Auges vor einer Körperzeile und Größe seines Symbols.
+const EYE_W: f32 = 20.0;
+const EYE_ICON: f32 = 14.0;
+/// Kantenlänge des Farbquadrats einer Körperzeile.
+const SWATCH: f32 = 10.0;
 /// Rot für Fehler im dunklen Thema (Wert aus der Palette); die Oberfläche nutzt `error_color`.
 pub const ERROR_COLOR: Color32 = theme::DARK.error;
 
@@ -24,8 +35,31 @@ pub const ERROR_COLOR: Color32 = theme::DARK.error;
 pub fn error_color(dark: bool) -> Color32 {
     theme::palette(dark).error
 }
-/// Text der Rückroll-Linie.
-const MARKER_TEXT: &str = "Berechnung endet hier";
+
+fn tree_ink_id() -> egui::Id {
+    egui::Id::new("planora-browser-tree-ink")
+}
+
+/// Schriftfarben des durchsichtigen Baums, solange [`show_in_panel`] zeichnet, sonst `None`.
+fn tree_ink(ui: &egui::Ui) -> Option<theme::TreeInk> {
+    ui.ctx().data(|d| d.get_temp(tree_ink_id()))
+}
+
+/// Schrift- und Symbolfarbe einer Zeile: aktiv (gewählt, überfahren, Ordner) oder in Ruhe. Sonst
+/// wie [`crate::icons::stroke_color`], im durchsichtigen Baum aus [`theme::tree_ink`].
+pub(crate) fn row_ink(ui: &egui::Ui, active: bool) -> Color32 {
+    match tree_ink(ui) {
+        Some(i) if active => i.active,
+        Some(i) => i.rest,
+        None => crate::icons::stroke_color(ui.visuals().dark_mode, active),
+    }
+}
+
+/// Fehlerfarbe einer Zeile: sonst [`error_color`], im durchsichtigen Baum aus
+/// [`theme::tree_ink`].
+pub(crate) fn row_error(ui: &egui::Ui) -> Color32 {
+    tree_ink(ui).map_or_else(|| error_color(ui.visuals().dark_mode), |i| i.error)
+}
 /// Kurze Statustexte rechts in den Zeilen.
 const STATUS_WORDS: [&str; 4] = ["Fehler", "übersprungen", "unterdrückt", "nicht berechnet"];
 
@@ -186,7 +220,8 @@ pub fn toggle_suppress(state: &mut AppState, id: FeatureId) -> Result<(), String
     Ok(())
 }
 
-/// „Zurückrollen bis hier“: der Marker steht danach hinter `id`.
+/// Globaler Marker hinter `id` (ohne eigene Bedienung im Baum; die Verlaufsleiste setzt
+/// Rückrollstellen je Körper).
 pub fn roll_back_to(state: &mut AppState, id: FeatureId) -> Result<(), String> {
     state.message = None;
     let Some(idx) = state.document.index_of(id) else {
@@ -241,30 +276,261 @@ pub fn status_text(state: &AppState) -> Option<String> {
         })
 }
 
+// ---- Ordner ----------------------------------------------------------------------------------
+
+/// Ordner des Feature-Baums, von oben nach unten.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Folder {
+    /// Die Körper des Dokuments (je Körper eine Zeile, nicht je Schritt).
+    Bodies,
+    /// Die Skizzen.
+    Sketches,
+    /// Die Zeichnungen mit ihren Ansichten.
+    Drawings,
+    /// Die drei Grundebenen.
+    Origin,
+}
+
+impl Folder {
+    /// Alle Ordner in der Reihenfolge des Baums.
+    pub const ALL: [Folder; 4] = [
+        Folder::Bodies,
+        Folder::Sketches,
+        Folder::Drawings,
+        Folder::Origin,
+    ];
+
+    /// Beschriftung im Baum.
+    pub fn label(self) -> &'static str {
+        match self {
+            Folder::Bodies => "Körper",
+            Folder::Sketches => "Skizzen",
+            Folder::Drawings => "Zeichnungen",
+            Folder::Origin => "Ursprung",
+        }
+    }
+
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// Auf- und zugeklappte Ordner eines Tabs (steht im Zustand des Tabs, jedes Tab hat seinen
+/// eigenen). Anfangs ist alles offen außer „Ursprung“.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FolderState {
+    open: [bool; 4],
+}
+
+impl Default for FolderState {
+    fn default() -> Self {
+        FolderState {
+            open: [true, true, true, false],
+        }
+    }
+}
+
+impl FolderState {
+    /// Ist der Ordner aufgeklappt?
+    pub fn is_open(&self, f: Folder) -> bool {
+        self.open[f.index()]
+    }
+
+    /// Klappt den Ordner auf (`true`) oder zu.
+    pub fn set_open(&mut self, f: Folder, open: bool) {
+        self.open[f.index()] = open;
+    }
+
+    /// Klappt den Ordner um.
+    pub fn toggle(&mut self, f: Folder) {
+        self.open[f.index()] ^= true;
+    }
+}
+
 // ---- Zeichnen ---------------------------------------------------------------------------------
+
+/// Text im Ordner „Körper“, solange es keinen Körper gibt.
+pub const EMPTY_TEXT: &str =
+    "Noch keine Körper. Über „Erzeugen“ im Menü lässt sich ein Körper oder eine Skizze anlegen.";
+
+/// Text im Ordner „Skizzen“, solange es keine Skizze gibt.
+pub const NO_SKETCHES: &str =
+    "Noch keine Skizze. Über „Erzeugen“, dann „Skizze“ lässt sich eine anlegen.";
+
+/// Kurzer Statustext eines Körpers, dessen Verlauf zurückgesetzt ist.
+pub const ROLLED_BACK: &str = "zurückgesetzt";
+
+/// Hinweis zu einem zurückgesetzten Körper.
+const ROLLED_BACK_HINT: &str = "Der Verlauf dieses Körpers ist zurückgesetzt. In der \
+     Verlaufsleiste unten lässt er sich wieder bis zum Ende vorspulen.";
+
+/// Die drei Grundebenen im Ordner „Ursprung“.
+const PLANES: [&str; 3] = ["XY-Ebene", "XZ-Ebene", "YZ-Ebene"];
+
+/// Rahmen des Feldes, in dem der Baum steht (die einzige Stelle, an der er festgelegt wird):
+/// das Panel, zu `percent` Prozent durchsichtig (Einstellungen → Darstellung).
+pub fn tree_frame(dark: bool, percent: u8) -> egui::Frame {
+    theme::panel_frame_translucent(dark, percent)
+}
+
+/// Wie [`show_with`] im durchsichtigen Panel: hinter alle Zeilen (vom Kopf bis zur letzten
+/// Zeile) kommt die Mindestfläche aus [`theme::row_backing`], damit die Schrift über jedem
+/// 3D-Hintergrund lesbar bleibt. Der freie Platz darunter und die Ränder bleiben durchsichtig.
+pub fn show_in_panel(ui: &mut egui::Ui, state: &mut AppState, read_only: bool, percent: u8) {
+    let dark = ui.visuals().dark_mode;
+    let backing = theme::row_backing(dark, percent);
+    // Platz in der Zeichenliste vor den Zeilen; gefüllt wird, wenn ihre Höhe feststeht.
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let top = ui.cursor().min;
+    // Kräftigere Schrift im durchsichtigen Baum: Zeilen holen sie über [`row_ink`] und
+    // [`row_error`], schwacher Text (auch `ui.weak`) über den Stil. Danach gilt wieder alles wie
+    // beim Aufrufer.
+    let tree = theme::tree_ink(dark);
+    let saved = ui.style().clone();
+    ui.style_mut().visuals.weak_text_color = Some(tree.weak);
+    ui.ctx().data_mut(|d| d.insert_temp(tree_ink_id(), tree));
+    show_with(ui, state, read_only);
+    ui.ctx()
+        .data_mut(|d| d.remove::<theme::TreeInk>(tree_ink_id()));
+    ui.set_style(saved);
+    if backing != Color32::TRANSPARENT {
+        let rect = egui::Rect::from_min_max(
+            top,
+            egui::pos2(ui.max_rect().right(), ui.min_rect().bottom()),
+        );
+        ui.painter().set(
+            slot,
+            egui::epaint::RectShape::filled(rect, theme::RADIUS_SM, backing),
+        );
+    }
+}
 
 /// Befehl aus einer Zeile (wird nach dem Zeichnen ausgeführt).
 enum Action {
     Select(FeatureId),
-    SelectBody(usize),
+    /// Körperzeile: Spitze für die Verlaufsleiste und, falls sichtbar, Index in `bodies`.
+    SelectBody(FeatureId, Option<usize>),
+    ToggleHidden(usize),
+    Fold(Folder),
     Edit(FeatureId),
     Rename(FeatureId),
     ToggleSuppress(FeatureId),
-    RollBack(FeatureId),
-    ToEnd,
     Extrude(FeatureId),
     Revolve(FeatureId),
     Delete(FeatureId),
 }
 
-/// Angaben einer Feature-Zeile (aus dem Dokument kopiert, damit danach geändert werden darf).
-struct RowData {
+/// Angaben einer Skizzenzeile (aus dem Dokument kopiert, damit danach geändert werden darf).
+struct SketchRow {
     id: FeatureId,
     name: String,
-    icon: FeatureIcon,
-    sketch: bool,
     suppressed: bool,
     status: FeatureStatus,
+}
+
+/// Angaben einer Körperzeile: ein sichtbarer Körper oder, wenn von einem Körper gerade nichts
+/// zu sehen ist (zurückgesetzt, unterdrückt, Fehler), seine Spitze.
+struct BodyRow {
+    /// Spitze des Körpers ([`planora_feature::Document::body_tips`]).
+    tip: FeatureId,
+    /// Ursprung des Körpers (das Feature, das ihn erzeugt hat): Ziel von Bearbeiten,
+    /// Umbenennen, Unterdrücken und Löschen.
+    target: FeatureId,
+    /// Index in `bodies`, wenn der Körper sichtbar ist.
+    index: Option<usize>,
+    name: String,
+    icon: FeatureIcon,
+    color: Color32,
+    locked: bool,
+    hidden: bool,
+    suppressed: bool,
+    status: FeatureStatus,
+}
+
+/// Die Körperzeilen in der Reihenfolge des Entstehens (erster Körperschritt, wie die Farbe): je
+/// sichtbarem Körper eine Zeile (nach einem zurückgesetzten Vereinigen also beide
+/// Eingangskörper), sonst eine Zeile für die Spitze. Ein Körper, der in einem Vereinigen
+/// aufgegangen ist, erscheint nicht mehr einzeln.
+fn body_rows(state: &AppState, dark: bool) -> Vec<BodyRow> {
+    let doc = &state.document;
+    let chains: Vec<(FeatureId, Vec<FeatureId>)> = doc
+        .body_tips()
+        .into_iter()
+        .map(|t| (t, doc.chain(t)))
+        .collect();
+    let owner = |f: FeatureId| {
+        chains
+            .iter()
+            .find(|(_, c)| c.contains(&f))
+            .map_or(f, |(t, _)| *t)
+    };
+    let owners: Vec<FeatureId> = state
+        .bodies
+        .iter()
+        .map(|b| owner(b.source.feature))
+        .collect();
+    // Spitzen, dazu (nur zur Sicherheit) Besitzer ohne Spitze; feste Reihenfolge nach dem ersten
+    // Körperschritt (wie die Farbe), damit Verschieben oder Bearbeiten nicht umsortiert.
+    let mut tips: Vec<FeatureId> = chains.iter().map(|(t, _)| *t).collect();
+    for o in &owners {
+        if !tips.contains(o) {
+            tips.push(*o);
+        }
+    }
+    tips.sort_by_key(|t| (crate::history_bar::body_root(state, *t).unwrap_or(*t), *t));
+    let mut rows = Vec::new();
+    for tip in tips {
+        let Some(tip_feature) = doc.feature(tip) else {
+            continue;
+        };
+        let color = crate::history_bar::body_color(state, tip).get(dark);
+        let locked = crate::history_bar::is_locked(state, tip);
+        let mut push = |r: BodyRef, index: Option<usize>, name: String, icon: FeatureIcon| {
+            let target = doc.naming_origin(r).feature;
+            let suppressed = doc.feature(target).is_some_and(|f| f.suppressed);
+            let status = if suppressed {
+                FeatureStatus::Suppressed
+            } else {
+                tip_feature.status.clone()
+            };
+            rows.push(BodyRow {
+                tip,
+                target,
+                index,
+                name,
+                icon,
+                color,
+                locked,
+                hidden: index.is_some_and(|j| state.is_body_hidden(j)),
+                suppressed,
+                status,
+            });
+        };
+        let mut shown = false;
+        for (j, b) in state.bodies.iter().enumerate() {
+            if owners[j] == tip {
+                shown = true;
+                push(b.source, Some(j), b.name.clone(), FeatureIcon::Body(b.kind));
+            }
+        }
+        if !shown {
+            let r = BodyRef {
+                feature: tip,
+                index: 0,
+            };
+            let origin = doc.naming_origin(r).feature;
+            let name = doc
+                .body_display_name(r)
+                .unwrap_or_else(|| tip_feature.name.clone());
+            let icon = doc
+                .feature(origin)
+                .map_or(FeatureIcon::of(&tip_feature.kind), |f| {
+                    FeatureIcon::of(&f.kind)
+                });
+            push(r, None, name, icon);
+        }
+    }
+    rows
 }
 
 /// Kurzer Statustext rechts in der Zeile, seine Farbe (`None`: normal) und der Grund für den
@@ -272,15 +538,11 @@ struct RowData {
 fn status_view(
     status: &FeatureStatus,
     weak: Color32,
-    dark: bool,
+    error: Color32,
 ) -> (Option<&'static str>, Option<Color32>, Option<String>) {
     match status {
         FeatureStatus::Ok => (None, None, None),
-        FeatureStatus::Error(e) => (
-            Some(STATUS_WORDS[0]),
-            Some(error_color(dark)),
-            Some(e.clone()),
-        ),
+        FeatureStatus::Error(e) => (Some(STATUS_WORDS[0]), Some(error), Some(e.clone())),
         FeatureStatus::Skipped(why) => (Some(STATUS_WORDS[1]), Some(weak), Some(why.clone())),
         FeatureStatus::Suppressed => (
             Some(STATUS_WORDS[2]),
@@ -291,8 +553,8 @@ fn status_view(
             Some(STATUS_WORDS[3]),
             Some(weak),
             Some(
-                "Steht hinter der Linie „Berechnung endet hier“ und wird nicht berechnet \
-                 (Rechtsklick, dann „Zum Ende“)"
+                "Liegt hinter dem Ende des Verlaufs und wird nicht berechnet (Menü \
+                 „Bearbeiten“, dann „Zum Ende der Zeitleiste“)"
                     .into(),
             ),
         ),
@@ -303,11 +565,37 @@ fn rows_id() -> egui::Id {
     egui::Id::new("planora-browser-rows")
 }
 
-/// Namen und Rechtecke (volle Zeilenbreite) der im letzten Bild gezeichneten Zeilen: Features,
-/// Körper, Zeichnungen und Ansichten, von oben nach unten.
+fn folders_id() -> egui::Id {
+    egui::Id::new("planora-browser-folders")
+}
+
+fn eyes_id() -> egui::Id {
+    egui::Id::new("planora-browser-eyes")
+}
+
+/// Namen und Rechtecke (volle Zeilenbreite) der im letzten Bild gezeichneten Zeilen: Körper,
+/// Skizzen, Zeichnungen und Ansichten, Ebenen, Maße und Positionen, von oben nach unten (ohne
+/// Dokument und Ordner, siehe [`folder_rects`]).
 #[doc(hidden)]
 pub fn row_rects(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
     ctx.data(|d| d.get_temp(rows_id())).unwrap_or_default()
+}
+
+/// Die im letzten Bild gezeichneten Ordnerköpfe mit ihren Rechtecken.
+#[doc(hidden)]
+pub fn folder_rects(ctx: &egui::Context) -> Vec<(Folder, egui::Rect)> {
+    ctx.data(|d| d.get_temp(folders_id())).unwrap_or_default()
+}
+
+/// Die im letzten Bild gezeichneten Augen (Name der Körperzeile, Rechteck).
+#[doc(hidden)]
+pub fn eye_rects(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+    ctx.data(|d| d.get_temp(eyes_id())).unwrap_or_default()
+}
+
+fn remember<T: Clone + Send + Sync + 'static>(ui: &egui::Ui, id: egui::Id, item: T) {
+    ui.ctx()
+        .data_mut(|d| d.get_temp_mut_or_default::<Vec<T>>(id).push(item));
 }
 
 /// Einrückung der Zeilen unter einem Eintrag.
@@ -316,7 +604,8 @@ pub(crate) const fn body_indent() -> f32 {
 }
 
 /// Eine Zeile mit Symbol, Name, optionalem Zusatz hinter dem Namen und optionalem Status
-/// rechts; liefert die Antwort für Klicks.
+/// rechts (nur wenn er neben den ganzen Namen passt, sonst im Hinweis); liefert die Antwort für
+/// Klicks.
 #[allow(
     clippy::too_many_arguments,
     reason = "eine Zeile hat so viele Bestandteile"
@@ -324,7 +613,28 @@ pub(crate) const fn body_indent() -> f32 {
 pub(crate) fn row(
     ui: &mut egui::Ui,
     indent: f32,
-    status_width: f32,
+    selected: bool,
+    name: &str,
+    color: Option<Color32>,
+    status: Option<(&str, Color32)>,
+    detail: Option<&str>,
+    paint_icon: impl FnOnce(&egui::Painter, egui::Rect, Color32),
+) -> egui::Response {
+    row_lead(
+        ui, indent, 0.0, selected, name, color, status, detail, paint_icon,
+    )
+}
+
+/// Wie [`row`], mit `lead` Pixeln Platz vor dem Symbol (für Auge und Farbquadrat, die der
+/// Aufrufer in die Zeile zeichnet).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "eine Zeile hat so viele Bestandteile"
+)]
+fn row_lead(
+    ui: &mut egui::Ui,
+    indent: f32,
+    lead: f32,
     selected: bool,
     name: &str,
     color: Option<Color32>,
@@ -334,10 +644,7 @@ pub(crate) fn row(
 ) -> egui::Response {
     let (full, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-    ui.ctx().data_mut(|d| {
-        d.get_temp_mut_or_default::<Vec<(String, egui::Rect)>>(rows_id())
-            .push((name.to_string(), full));
-    });
+    remember(ui, rows_id(), (name.to_string(), full));
     let rect = egui::Rect::from_min_max(full.min + vec2(indent, 0.0), full.max);
     // Graphit: in Ruhe ohne Fläche und in text_secondary; überfahren bg_field, gewählt bg_active
     // (neutral, kein Akzent), beide mit text_primary.
@@ -352,30 +659,63 @@ pub(crate) fn row(
     }
     let active = selected || hovered;
     // Text und gezeichnetes Symbol in derselben Farbe (Symbolfarbe wie bei allen Handsymbolen).
-    let color = color.unwrap_or(crate::icons::stroke_color(dark, active));
+    let color = color.unwrap_or(row_ink(ui, active));
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(
-            rect.min.x + theme::SPACE_2 + ICON_SIZE / 2.0,
+            rect.min.x + theme::SPACE_2 + lead + ICON_SIZE / 2.0,
             rect.center().y,
         ),
         vec2(ICON_SIZE, ICON_SIZE),
     );
     paint_icon(ui.painter(), icon_rect, color);
-    // Lange Namen werden vor der Statusspalte abgeschnitten.
-    let name_clip = egui::Rect::from_min_max(
-        rect.min,
-        egui::pos2(
-            (rect.max.x - status_width - 10.0).max(rect.min.x),
-            rect.max.y,
-        ),
-    );
-    let name_rect = ui.painter().with_clip_rect(name_clip).text(
-        egui::pos2(icon_rect.right() + theme::SPACE_2, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        name,
-        theme::label_font(),
-        color,
-    );
+    // Der Name bekommt die ganze Breite. Der Status rechts braucht nur seinen eigenen Platz;
+    // passen beide nicht nebeneinander, wird der Name mit „…“ gekürzt und der Status steht nur
+    // im Hinweis.
+    let name_x = icon_rect.right() + theme::SPACE_2;
+    let right = rect.max.x - theme::SPACE_2;
+    let font = theme::label_font();
+    let name_w = ui
+        .painter()
+        .layout_no_wrap(name.to_string(), font.clone(), color)
+        .size()
+        .x;
+    let status_w = status.map(|(t, c)| {
+        ui.painter()
+            .layout_no_wrap(t.to_string(), theme::value_font(), c)
+            .size()
+            .x
+    });
+    let show_status = status_w.is_some_and(|w| name_x + name_w + STATUS_GAP + w <= right);
+    let name_end = match status_w {
+        Some(w) if show_status => right - w - STATUS_GAP,
+        _ => right,
+    };
+    let name_clip =
+        egui::Rect::from_min_max(rect.min, egui::pos2(name_end.max(rect.min.x), rect.max.y));
+    let name_rect = if name_x + name_w <= name_end {
+        ui.painter().text(
+            egui::pos2(name_x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            name,
+            font,
+            color,
+        )
+    } else {
+        let mut job = egui::text::LayoutJob::simple_singleline(name.to_string(), font, color);
+        job.wrap = egui::text::TextWrapping {
+            max_width: (name_end - name_x).max(0.0),
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('…'),
+        };
+        let galley = ui.painter().layout_job(job);
+        let pos = egui::pos2(name_x, rect.center().y - galley.size().y / 2.0);
+        let r = egui::Rect::from_min_size(pos, galley.size());
+        ui.painter()
+            .with_clip_rect(name_clip)
+            .galley(pos, galley, color);
+        r
+    };
     // Kleiner, schwacher Zusatz hinter dem Namen (Blatt und Projektion, Maßstab).
     if let Some(detail) = detail {
         ui.painter().with_clip_rect(name_clip).text(
@@ -386,110 +726,312 @@ pub(crate) fn row(
             ui.visuals().weak_text_color(),
         );
     }
-    if let Some((text, c)) = status {
-        ui.painter().text(
-            egui::pos2(rect.max.x - theme::SPACE_2, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            text,
-            theme::value_font(),
-            c,
-        );
+    match status {
+        Some((text, c)) if show_status => {
+            ui.painter().text(
+                egui::pos2(right, rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                text,
+                theme::value_font(),
+                c,
+            );
+        }
+        Some((text, _)) => return response.on_hover_text(text),
+        None => {}
     }
     response
 }
 
-/// Trennlinie des Rückrollmarkers.
-fn marker_line(ui: &mut egui::Ui) {
-    let marker = theme::palette(ui.visuals().dark_mode).marker;
+/// Kopf eines Ordners: Pfeil (zu: nach rechts, offen: nach unten), Ordnersymbol, Name. Ein
+/// Klick klappt ihn um.
+fn folder_header(ui: &mut egui::Ui, folder: Folder, open: bool) -> egui::Response {
     let (rect, response) =
-        ui.allocate_exact_size(vec2(ui.available_width(), MARKER_HEIGHT), Sense::hover());
-    let y = rect.center().y;
-    let text_rect = ui.painter().text(
-        egui::pos2(rect.min.x + 8.0, y),
+        ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+    remember(ui, folders_id(), (folder, rect));
+    let enabled = ui.is_enabled();
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::CollapsingHeader,
+            enabled,
+            open,
+            folder.label(),
+        )
+    });
+    let dark = ui.visuals().dark_mode;
+    let p = theme::palette(dark);
+    let hovered = response.hovered() && enabled;
+    if hovered {
+        ui.painter().rect_filled(rect, theme::RADIUS_SM, p.bg_field);
+    }
+    let color = row_ink(ui, true);
+    let caret_c = egui::pos2(rect.min.x + theme::SPACE_1 + CARET / 2.0, rect.center().y);
+    let h = CARET / 2.0;
+    let points = if open {
+        vec![
+            caret_c + vec2(-h, -h / 2.0),
+            caret_c + vec2(h, -h / 2.0),
+            caret_c + vec2(0.0, h / 2.0 + 1.0),
+        ]
+    } else {
+        vec![
+            caret_c + vec2(-h / 2.0, -h),
+            caret_c + vec2(h / 2.0 + 1.0, 0.0),
+            caret_c + vec2(-h / 2.0, h),
+        ]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(
+        points,
+        row_ink(ui, hovered),
+        egui::Stroke::NONE,
+    ));
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(
+            rect.min.x + theme::SPACE_1 + CARET + theme::SPACE_1 + ICON_SIZE / 2.0,
+            rect.center().y,
+        ),
+        vec2(ICON_SIZE, ICON_SIZE),
+    );
+    paint_source(
+        ui.painter(),
+        icon_rect,
+        IconSource::Font(Icon::Folder),
+        color,
+    );
+    ui.painter().text(
+        egui::pos2(icon_rect.right() + theme::SPACE_2, rect.center().y),
         egui::Align2::LEFT_CENTER,
-        MARKER_TEXT,
-        theme::value_font(),
-        marker,
+        folder.label(),
+        theme::label_font(),
+        color,
     );
-    let stroke = egui::Stroke::new(2.0, marker);
-    ui.painter().line_segment(
-        [egui::pos2(rect.min.x, y), egui::pos2(rect.min.x + 4.0, y)],
-        stroke,
+    response.on_hover_text(if open {
+        "Klick klappt den Ordner zu."
+    } else {
+        "Klick klappt den Ordner auf."
+    })
+}
+
+/// Zeile des Dokuments ganz oben (Name des Tabs).
+fn document_row(ui: &mut egui::Ui, name: &str) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
+    let color = row_ink(ui, true);
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(
+            rect.min.x + theme::SPACE_2 + ICON_SIZE / 2.0,
+            rect.center().y,
+        ),
+        vec2(ICON_SIZE, ICON_SIZE),
     );
-    ui.painter().line_segment(
-        [
-            egui::pos2(text_rect.max.x + 6.0, y),
-            egui::pos2(rect.max.x, y),
-        ],
-        stroke,
-    );
-    response.on_hover_text(
-        "Features unter dieser Linie werden nicht berechnet. Rechtsklick auf ein Feature, dann \
-         „Zum Ende“ berechnet wieder alles.",
+    paint_source(ui.painter(), icon_rect, IconSource::Font(Icon::File), color);
+    ui.painter().text(
+        egui::pos2(icon_rect.right() + theme::SPACE_2, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        name,
+        theme::label_font(),
+        color,
     );
 }
 
-/// Feature-Baum mit Kontextmenü, Fenster „Umbenennen“ und Rückfrage beim Löschen, darunter
-/// der Abschnitt „Zeichnungen“.
+/// Inhalt eines Ordners, um [`FOLDER_INDENT`] eingerückt.
+fn indented<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let mut rect = ui.available_rect_before_wrap();
+    rect.min.x += FOLDER_INDENT;
+    ui.scope_builder(
+        egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()),
+        add,
+    )
+    .inner
+}
+
+/// Feature-Baum mit Kontextmenü, Fenster „Umbenennen“ und Rückfrage beim Löschen: das Dokument,
+/// darunter die Ordner „Körper“, „Skizzen“, „Zeichnungen“ (mit den Maßen und Positionen der
+/// geöffneten Zeichnung) und „Ursprung“.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     show_with(ui, state, false);
 }
 
-/// Wie [`show`]; `read_only` (alte Version) sperrt den Feature-Baum und alle Änderungen an
-/// Zeichnungen, lässt aber das Wählen und Öffnen von Zeichnungen zu.
+/// Wie [`show`]; `read_only` (alte Version) sperrt alle Änderungen an Körpern, Skizzen und
+/// Zeichnungen, lässt aber das Auf- und Zuklappen der Ordner und das Wählen und Öffnen von
+/// Zeichnungen zu.
 pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
-    ui.ctx()
-        .data_mut(|d| d.insert_temp(rows_id(), Vec::<(String, egui::Rect)>::new()));
-    ui.add_enabled_ui(!read_only, |ui| feature_tree(ui, state));
-    ui.add_space(theme::SPACE_3);
-    crate::drawing_browser::show(ui, state, read_only);
-    crate::dimension_browser::show(ui, state, read_only);
-    crate::balloon_browser::show(ui, state, read_only);
-}
-
-fn feature_tree(ui: &mut egui::Ui, state: &mut AppState) {
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(rows_id(), Vec::<(String, egui::Rect)>::new());
+        d.insert_temp(folders_id(), Vec::<(Folder, egui::Rect)>::new());
+        d.insert_temp(eyes_id(), Vec::<(String, egui::Rect)>::new());
+    });
     theme::section_header(ui, "Feature-Baum", theme::HEADER_H);
     ui.add_space(theme::SPACE_1);
-    let rows: Vec<RowData> = state
+    let name = state.document_name.clone();
+    document_row(ui, &name);
+    let mut action = None;
+    indented(ui, |ui| {
+        for folder in Folder::ALL {
+            let open = state.tree_folders.is_open(folder);
+            if folder_header(ui, folder, open).clicked() {
+                action = Some(Action::Fold(folder));
+            }
+            if !open {
+                continue;
+            }
+            indented(ui, |ui| match folder {
+                Folder::Bodies => {
+                    ui.add_enabled_ui(!read_only, |ui| bodies(ui, state, &mut action));
+                }
+                Folder::Sketches => {
+                    ui.add_enabled_ui(!read_only, |ui| sketches(ui, state, &mut action));
+                }
+                Folder::Drawings => {
+                    crate::drawing_browser::show(ui, state, read_only);
+                    // Maße und Positionen der geöffneten Zeichnung gehören zu den Zeichnungen.
+                    crate::dimension_browser::show(ui, state, read_only);
+                    crate::balloon_browser::show(ui, state, read_only);
+                }
+                Folder::Origin => origin(ui),
+            });
+        }
+    });
+    if let Some(a) = action {
+        run(state, a);
+    }
+    rename_window(ui.ctx(), state);
+    delete_window(ui.ctx(), state);
+    crate::drawing_browser::windows(ui.ctx(), state);
+    crate::dimension_browser::windows(ui.ctx(), state);
+}
+
+/// Misst die Statustexte einmal aus: Das legt ihre Zeichen schon im ersten Bild in den
+/// Schriftatlas, sodass das Erscheinen eines Status später keine Texturänderung braucht.
+fn prime_status_words(ui: &egui::Ui) {
+    let weak = ui.visuals().weak_text_color();
+    for t in STATUS_WORDS.iter().chain([&ROLLED_BACK]) {
+        let _ = ui
+            .painter()
+            .layout_no_wrap(t.to_string(), theme::value_font(), weak);
+    }
+}
+
+/// Ordner „Körper“: je Körper Auge, Farbquadrat, Symbol, Name und Status.
+fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
+    let dark = ui.visuals().dark_mode;
+    let weak = ui.visuals().weak_text_color();
+    prime_status_words(ui);
+    let rows = body_rows(state, dark);
+    if rows.is_empty() {
+        ui.weak(EMPTY_TEXT);
+    }
+    for r in rows {
+        let selected = r.index.is_some_and(|j| state.selected_body == Some(j))
+            || state
+                .selected_feature
+                .is_some_and(|f| f == r.target || f == r.tip);
+        let (status, mut color, reason) = if r.locked {
+            (
+                Some(ROLLED_BACK),
+                Some(weak),
+                Some(ROLLED_BACK_HINT.to_string()),
+            )
+        } else {
+            status_view(&r.status, weak, row_error(ui))
+        };
+        if r.hidden && color.is_none() {
+            color = Some(weak);
+        }
+        let icon = r.icon;
+        let resp = row_lead(
+            ui,
+            0.0,
+            EYE_W + SWATCH + theme::SPACE_1,
+            selected,
+            &r.name,
+            color,
+            status.zip(color),
+            None,
+            |p, rect, c| paint_feature_icon(p, rect, icon, c),
+        );
+        let full = resp.rect;
+        let resp = resp.on_hover_text(reason.unwrap_or_else(|| {
+            "Körper: Klick wählt ihn für die Eigenschaften und die Verlaufsleiste; Doppelklick \
+             öffnet „Bearbeiten“; Rechtsklick zeigt weitere Befehle."
+                .to_string()
+        }));
+        if resp.double_clicked() {
+            *action = Some(Action::Edit(r.target));
+        } else if resp.clicked() {
+            *action = Some(Action::SelectBody(r.tip, r.index));
+        }
+        let target = r.target;
+        let suppressed = r.suppressed;
+        resp.context_menu(|ui| {
+            feature_menu(ui, action, target, suppressed, None);
+        });
+        // Farbquadrat in der Körperfarbe (wie die Schritte in der Leiste).
+        let lead_x = full.min.x + theme::SPACE_2;
+        let swatch = egui::Rect::from_center_size(
+            egui::pos2(lead_x + EYE_W + SWATCH / 2.0, full.center().y),
+            vec2(SWATCH, SWATCH),
+        );
+        let ink = if r.locked || r.hidden {
+            r.color.gamma_multiply(theme::HISTORY_DIM_ALPHA)
+        } else {
+            r.color
+        };
+        ui.painter()
+            .rect_filled(swatch, egui::CornerRadius::same(2), ink);
+        // Auge: nur für sichtbare Körper (sonst gibt es nichts aus- oder einzublenden).
+        if let Some(j) = r.index {
+            let eye = egui::Rect::from_min_size(
+                egui::pos2(lead_x - theme::SPACE_1, full.min.y),
+                vec2(EYE_W, ROW_HEIGHT),
+            );
+            let id = ui.id().with(("eye", r.tip, j));
+            let e = ui.interact(eye, id, Sense::click());
+            remember(ui, eyes_id(), (r.name.clone(), eye));
+            let hovered = e.hovered() && ui.is_enabled();
+            let glyph = if r.hidden {
+                Icon::Hidden
+            } else {
+                Icon::Visible
+            };
+            let c = row_ink(ui, hovered);
+            paint_source(
+                ui.painter(),
+                egui::Rect::from_center_size(eye.center(), vec2(EYE_ICON, EYE_ICON)),
+                IconSource::Font(glyph),
+                if r.hidden { weak } else { c },
+            );
+            let e = e.on_hover_text(if r.hidden {
+                "Körper einblenden"
+            } else {
+                "Körper ausblenden (nur in der Ansicht)"
+            });
+            if e.clicked() {
+                *action = Some(Action::ToggleHidden(j));
+            }
+        }
+    }
+}
+
+/// Ordner „Skizzen“: je Skizze eine Zeile mit den bisherigen Befehlen.
+fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
+    let weak = ui.visuals().weak_text_color();
+    prime_status_words(ui);
+    let open = state.open_sketch_id();
+    let rows: Vec<SketchRow> = state
         .document
         .features()
         .iter()
-        .map(|f| RowData {
+        .filter(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+        .map(|f| SketchRow {
             id: f.id,
             name: f.name.clone(),
-            icon: FeatureIcon::of(&f.kind),
-            sketch: matches!(f.kind, FeatureKind::Sketch(_)),
             suppressed: f.suppressed,
             status: f.status.clone(),
         })
         .collect();
     if rows.is_empty() {
-        ui.weak(
-            "Noch keine Features. Über „Erzeugen“ im Menü lässt sich ein Körper oder eine \
-             Skizze anlegen.",
-        );
+        ui.weak(NO_SKETCHES);
     }
-    let marker = state.document.marker();
-    let open = state.open_sketch_id();
-    let weak = ui.visuals().weak_text_color();
-    // Breite der Statusspalte. Das Ausmessen legt die Zeichen der Statustexte und der
-    // Rückroll-Linie zugleich schon im ersten Bild in den Schriftatlas, sodass das Erscheinen
-    // eines Status später keine Texturänderung braucht.
-    let status_width = STATUS_WORDS
-        .iter()
-        .chain([&MARKER_TEXT])
-        .map(|t| {
-            ui.painter()
-                .layout_no_wrap(t.to_string(), theme::value_font(), weak)
-                .size()
-                .x
-        })
-        .fold(0.0, f32::max);
-    let mut action = None;
-    if marker == 0 && !rows.is_empty() {
-        marker_line(ui);
-    }
-    for (i, r) in rows.iter().enumerate() {
+    for r in rows {
         let id = r.id;
         let selected = state.selected_feature == Some(id) || open == Some(id);
         let name = if open == Some(id) {
@@ -497,146 +1039,115 @@ fn feature_tree(ui: &mut egui::Ui, state: &mut AppState) {
         } else {
             r.name.clone()
         };
-        let (status, color, reason) = status_view(&r.status, weak, ui.visuals().dark_mode);
-        let icon = r.icon;
-        let mut resp = row(
+        let (status, color, reason) = status_view(&r.status, weak, row_error(ui));
+        let resp = row(
             ui,
             0.0,
-            status_width,
             selected,
             &name,
             color,
             status.zip(color),
             None,
-            |p, rect, c| paint_feature_icon(p, rect, icon, c),
-        );
-        resp = match reason {
-            Some(reason) => resp.on_hover_text(reason),
-            None => resp.on_hover_text(if r.sketch {
-                "Doppelklick öffnet die Skizze zum Bearbeiten; Rechtsklick zeigt weitere Befehle."
-            } else {
-                "Doppelklick öffnet „Bearbeiten“; Rechtsklick zeigt weitere Befehle."
-            }),
-        };
+            |p, rect, c| paint_feature_icon(p, rect, FeatureIcon::Sketch, c),
+        )
+        .on_hover_text(reason.unwrap_or_else(|| {
+            "Doppelklick öffnet die Skizze zum Bearbeiten; Rechtsklick zeigt weitere Befehle."
+                .to_string()
+        }));
         if resp.double_clicked() {
-            action = Some(Action::Edit(id));
+            *action = Some(Action::Edit(id));
         } else if resp.clicked() {
-            action = Some(Action::Select(id));
+            *action = Some(Action::Select(id));
         }
+        // Neue Körper aus der Skizze eines zurückgesetzten Körpers sind gesperrt.
+        let lock = crate::history_bar::lock_reason(state, &[id]);
         resp.context_menu(|ui| {
-            let mut pick = |a: Action, ui: &mut egui::Ui| {
-                action = Some(a);
-                ui.close();
-            };
-            if ui.button("Bearbeiten").clicked() {
-                pick(Action::Edit(id), ui);
-            }
-            if ui.button("Umbenennen").clicked() {
-                pick(Action::Rename(id), ui);
-            }
-            let toggle = if r.suppressed {
-                "Aktivieren"
-            } else {
-                "Unterdrücken"
-            };
-            if ui.button(toggle).clicked() {
-                pick(Action::ToggleSuppress(id), ui);
-            }
-            ui.separator();
-            if ui.button("Zurückrollen bis hier").clicked() {
-                pick(Action::RollBack(id), ui);
-            }
+            feature_menu(ui, action, id, r.suppressed, Some(lock));
+        });
+    }
+}
+
+/// Kontextmenü einer Körper- oder Skizzenzeile für das Feature `id`. `sketch` (nur bei
+/// Skizzen): die Sperre für neue Körper aus ihr.
+fn feature_menu(
+    ui: &mut egui::Ui,
+    action: &mut Option<Action>,
+    id: FeatureId,
+    suppressed: bool,
+    sketch: Option<Option<&'static str>>,
+) {
+    let mut pick = |a: Action, ui: &mut egui::Ui| {
+        *action = Some(a);
+        ui.close();
+    };
+    if ui.button("Bearbeiten").clicked() {
+        pick(Action::Edit(id), ui);
+    }
+    if ui.button("Umbenennen").clicked() {
+        pick(Action::Rename(id), ui);
+    }
+    let toggle = if suppressed {
+        "Aktivieren"
+    } else {
+        "Unterdrücken"
+    };
+    if ui.button(toggle).clicked() {
+        pick(Action::ToggleSuppress(id), ui);
+    }
+    if let Some(lock) = sketch {
+        ui.separator();
+        for (label, act) in [
+            ("Extrudieren …", Action::Extrude(id)),
+            ("Drehen …", Action::Revolve(id)),
+        ] {
             if ui
-                .add_enabled(marker < rows.len(), egui::Button::new("Zum Ende"))
-                .on_disabled_hover_text("Es wird bereits alles berechnet.")
+                .add_enabled(lock.is_none(), egui::Button::new(label))
+                .on_disabled_hover_text(lock.unwrap_or_default())
                 .clicked()
             {
-                pick(Action::ToEnd, ui);
-            }
-            if r.sketch {
-                ui.separator();
-                if ui.button("Extrudieren …").clicked() {
-                    pick(Action::Extrude(id), ui);
-                }
-                if ui.button("Drehen …").clicked() {
-                    pick(Action::Revolve(id), ui);
-                }
-            }
-            ui.separator();
-            if ui.button("Löschen").clicked() {
-                pick(Action::Delete(id), ui);
-            }
-        });
-        // Die sichtbaren Körper des Features, eingerückt.
-        let bodies: Vec<(usize, String, BodyKind)> = state
-            .bodies
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| b.source.feature == id)
-            .map(|(j, b)| (j, b.name.clone(), b.kind))
-            .collect();
-        for (j, body_name, kind) in bodies {
-            let r = row(
-                ui,
-                BODY_INDENT,
-                0.0,
-                state.selected_body == Some(j),
-                &body_name,
-                None,
-                None,
-                None,
-                |p, rect, c| paint_body_icon(p, rect, kind, c),
-            )
-            .on_hover_text("Körper; Klick wählt ihn für die Eigenschaften.");
-            if r.clicked() {
-                action = Some(Action::SelectBody(j));
+                pick(act, ui);
             }
         }
-        if i + 1 == marker && marker < rows.len() {
-            marker_line(ui);
-        }
     }
-    if let Some(a) = action {
-        run(state, a, open);
+    ui.separator();
+    if ui.button("Löschen").clicked() {
+        pick(Action::Delete(id), ui);
     }
-    rename_window(ui.ctx(), state);
-    delete_window(ui.ctx(), state);
+}
+
+/// Ordner „Ursprung“: die drei Grundebenen (nur zur Anzeige).
+fn origin(ui: &mut egui::Ui) {
+    for plane in PLANES {
+        row(ui, 0.0, false, plane, None, None, None, |p, rect, c| {
+            paint_source(p, rect, IconSource::Font(Icon::SketchOnPlane), c)
+        })
+        .on_hover_text("Grundebene; „Erzeugen“, dann „Skizze“ legt darauf eine Skizze an.");
+    }
 }
 
 /// Führt einen Befehl aus einer Zeile aus. Fehler legt `AppState` in `message` ab.
-fn run(state: &mut AppState, action: Action, open: Option<FeatureId>) {
-    let select = |state: &mut AppState, id: FeatureId| {
-        // Nur eines ist hervorgehoben: Feature statt Körper bzw. 3D-Auswahl.
-        state.selected_feature = Some(id);
-        state.selected_body = None;
-        state.drawing_ui.selected_drawing = None;
-        state.set_selection(None);
-    };
+fn run(state: &mut AppState, action: Action) {
     match action {
-        Action::Select(id) => select(state, id),
-        Action::SelectBody(j) => {
+        Action::Select(id) => {
+            // Nur eines ist hervorgehoben: Feature statt Körper bzw. 3D-Auswahl.
+            state.selected_feature = Some(id);
+            state.selected_body = None;
+            state.drawing_ui.selected_drawing = None;
+            state.set_selection(None);
+        }
+        Action::SelectBody(tip, index) => {
             state.set_selection(None);
             state.selected_feature = None;
             state.drawing_ui.selected_drawing = None;
-            state.selected_body = Some(j);
+            state.selected_body = index;
+            state.select_body(Some(tip));
         }
-        Action::Edit(id) => {
-            select(state, id);
-            let sketch = state
-                .document
-                .feature(id)
-                .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)));
-            if sketch {
-                if open != Some(id) {
-                    let _ = state.open_sketch(id);
-                }
-            } else {
-                // Bearbeiten ändert das Dokument: eine offene Skizze wird vorher beendet.
-                if state.try_close_sketch().is_ok() {
-                    state.edit_request = Some(id);
-                }
-            }
+        Action::ToggleHidden(j) => {
+            let hidden = state.is_body_hidden(j);
+            state.set_body_hidden(j, !hidden);
         }
+        Action::Fold(folder) => state.tree_folders.toggle(folder),
+        Action::Edit(id) => edit(state, id),
         Action::Rename(id) => {
             if let Some(f) = state.document.feature(id) {
                 state.rename_draft = Some((id, f.name.clone()));
@@ -645,16 +1156,32 @@ fn run(state: &mut AppState, action: Action, open: Option<FeatureId>) {
         Action::ToggleSuppress(id) => {
             let _ = toggle_suppress(state, id);
         }
-        Action::RollBack(id) => {
-            let _ = roll_back_to(state, id);
-        }
-        Action::ToEnd => {
-            let _ = roll_to_end(state);
-        }
         // Körper entstehen außerhalb des Skizzen-Modus: die offene Skizze wird vorher beendet.
         Action::Extrude(id) => state.request_sketch_dialog(SketchRequest::Extrude(id)),
         Action::Revolve(id) => state.request_sketch_dialog(SketchRequest::Revolve(id)),
         Action::Delete(id) => request_delete(state, id),
+    }
+}
+
+/// „Bearbeiten“ (Doppelklick im Baum oder in der Verlaufsleiste): wählt das Feature `id`; eine
+/// Skizze wird zum Bearbeiten geöffnet, sonst wird der Dialog angefordert (`edit_request`, eine
+/// offene Skizze wird vorher beendet). Nicht gesperrt, auch nicht bei zurückgesetzten Körpern.
+pub(crate) fn edit(state: &mut AppState, id: FeatureId) {
+    state.selected_feature = Some(id);
+    state.selected_body = None;
+    state.drawing_ui.selected_drawing = None;
+    state.set_selection(None);
+    let sketch = state
+        .document
+        .feature(id)
+        .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)));
+    if sketch {
+        if state.open_sketch_id() != Some(id) {
+            let _ = state.open_sketch(id);
+        }
+    } else if state.try_close_sketch().is_ok() {
+        // Bearbeiten ändert das Dokument: eine offene Skizze wird vorher beendet.
+        state.edit_request = Some(id);
     }
 }
 
