@@ -320,6 +320,10 @@ impl SettingsWindow {
             self.start_choosing(ws);
         }
         if !open || close {
+            // Ein noch nicht gespeicherter Reglerwert geht beim Schließen nicht verloren.
+            if self.transparency_unsaved {
+                self.save_transparency(ws);
+            }
             let return_to_projects = self.return_to_projects;
             self.close();
             return SettingsEvent::Closed { return_to_projects };
