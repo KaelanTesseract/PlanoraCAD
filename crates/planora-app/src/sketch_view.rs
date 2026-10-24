@@ -473,8 +473,11 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         .is_some_and(|s| s.dragging.is_some());
     // Schwenken nach der Tastenbelegung (Voreinstellung: Mitte oder Umschalt+links); nie
     // während ein Punkt gezogen wird. Die linke Taste ohne Umschalttasten bleibt dem Zeichnen.
+    // Ein Zug, der als Schwenken beginnt (z. B. Schwenken auf Strg+links umgelegt), zieht keinen
+    // Punkt.
     let km = crate::keymap::mouse::current(ui.ctx());
-    if crate::keymap::mouse::pan_2d(&km, ui, response) && !dragging_point {
+    let panning = crate::keymap::mouse::pan_2d(&km, ui, response);
+    if panning && !dragging_point {
         let d = response.drag_motion();
         state.camera.pan(d.x, d.y, rect.height());
     }
@@ -496,7 +499,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     }
 
     // Punkt ziehen (Auswahlwerkzeug)
-    if response.drag_started_by(PointerButton::Primary) && !shift {
+    if response.drag_started_by(PointerButton::Primary) && !shift && !panning {
         let origin = ui.input(|i| i.pointer.press_origin());
         if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);

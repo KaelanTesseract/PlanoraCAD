@@ -54,6 +54,14 @@ fn wheel() -> Binding {
     })
 }
 
+fn ctrl_wheel() -> Binding {
+    Binding::Mouse(Gesture::Wheel {
+        ctrl: true,
+        shift: false,
+        alt: false,
+    })
+}
+
 fn overrides(entries: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
     entries
         .iter()
@@ -86,7 +94,7 @@ fn defaults_match_the_spec_table_for_existing_actions() {
                 drag(MouseButton::Left, false),
             ],
         ),
-        (Action::ViewZoom, vec![wheel()]),
+        (Action::ViewZoom, vec![wheel(), ctrl_wheel()]),
     ];
     assert_eq!(Action::ALL.len(), want.len());
     for (a, b) in &want {
@@ -231,10 +239,10 @@ fn swap_gives_the_key_to_the_new_action_and_frees_the_old_one() {
 fn tastes_and_gestures_never_conflict_with_each_other() {
     let mut km = Keymap::defaults();
     // Eine Taste neben vorhandenen Gesten und eine Geste neben vorhandenen Tasten.
-    assert_eq!(km.set(Action::ViewZoom, 1, ctrl(Key::Q)), SetResult::Ok);
+    assert_eq!(km.set(Action::ViewZoom, 2, ctrl(Key::Q)), SetResult::Ok);
     let g = Binding::Mouse(Gesture::Wheel {
-        ctrl: true,
-        shift: false,
+        ctrl: false,
+        shift: true,
         alt: false,
     });
     assert_eq!(km.set(Action::Save, 1, g), SetResult::Ok);
@@ -243,7 +251,7 @@ fn tastes_and_gestures_never_conflict_with_each_other() {
             assert_eq!(km.conflict_for(a, b), None, "{a:?} {b:?}");
         }
     }
-    // Gleiche Taste, andere Geste: Rad mit Strg ist nicht Rad ohne Strg.
+    // Gleiche Taste, andere Geste: Rad mit Umschalt ist nicht Rad ohne Umschalt.
     assert_eq!(km.conflict_for(Action::Undo, &g), Some(Action::Save));
     assert_eq!(
         km.conflict_for(Action::Undo, &wheel()),
@@ -326,6 +334,8 @@ fn text_roundtrip_for_every_default_binding() {
         }),
         "Mausrad"
     );
+    assert_eq!(binding_text(&ctrl_wheel()), "Strg + Mausrad");
+    assert_eq!(parse_binding("Strg + Mausrad"), Some(ctrl_wheel()));
     // Ungültiges wird abgelehnt.
     for bad in [
         "",

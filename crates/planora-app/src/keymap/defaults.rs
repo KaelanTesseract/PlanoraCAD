@@ -70,7 +70,9 @@ action_table! {
     /// Umschalt+Mitte wie Fusion, links als Zusatz (wie bisher).
     ViewOrbit, "ansicht.drehen", "Ansicht drehen", All,
         [drag(MouseButton::Middle, true), drag(MouseButton::Left, false)];
-    ViewZoom, "ansicht.zoomen", "Ansicht zoomen", All, [WHEEL];
+    /// Strg+Rad zusätzlich: so zoomt auch das Zusammenziehen auf Windows-Touchpads (kommt als
+    /// Strg+Rad).
+    ViewZoom, "ansicht.zoomen", "Ansicht zoomen", All, [WHEEL, CTRL_WHEEL];
 }
 
 impl Action {
@@ -114,6 +116,12 @@ const fn drag(button: MouseButton, shift: bool) -> Binding {
 
 const WHEEL: Binding = Binding::Mouse(Gesture::Wheel {
     ctrl: false,
+    shift: false,
+    alt: false,
+});
+
+const CTRL_WHEEL: Binding = Binding::Mouse(Gesture::Wheel {
+    ctrl: true,
     shift: false,
     alt: false,
 });

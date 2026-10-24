@@ -55,9 +55,9 @@ fn held_modifiers(ui: &egui::Ui) -> (bool, bool, bool) {
 }
 
 /// Die Aktion aus `allowed`, deren Ziehgeste genau die Umschalttasten `mods` hat und deren Taste
-/// `active` meldet. Passen mehrere (mehrere Tasten gehalten), gewinnt die mit mehr
-/// Umschalttasten, sonst die erste in `allowed` und in der Belegung. `skip` blendet einzelne
-/// Gesten aus.
+/// `active` meldet. Weil die Umschalttasten genau passen müssen, unterscheiden sich Treffer nur in
+/// der Taste (mehrere Tasten gehalten); dann gewinnt der erste in `allowed` und in der Belegung.
+/// `skip` blendet einzelne Gesten aus.
 fn pick(
     km: &Keymap,
     allowed: &[Action],
@@ -65,36 +65,25 @@ fn pick(
     active: impl Fn(MouseButton) -> bool,
     skip: impl Fn(&Gesture) -> bool,
 ) -> Option<Action> {
-    let mut best: Option<(usize, Action)> = None;
-    for &a in allowed {
-        for b in km.bindings(a) {
-            let Binding::Mouse(
+    allowed.iter().copied().find(|&a| {
+        km.bindings(a).iter().any(|b| match b {
+            Binding::Mouse(
                 g @ Gesture::Drag {
                     button,
                     ctrl,
                     shift,
                     alt,
                 },
-            ) = b
-            else {
-                continue;
-            };
-            if (*ctrl, *shift, *alt) != mods || skip(g) || !active(*button) {
-                continue;
-            }
-            let n = usize::from(*ctrl) + usize::from(*shift) + usize::from(*alt);
-            if best.is_none_or(|(m, _)| n > m) {
-                best = Some((n, a));
-            }
-        }
-    }
-    best.map(|(_, a)| a)
+            ) => (*ctrl, *shift, *alt) == mods && !skip(g) && active(*button),
+            _ => false,
+        })
+    })
 }
 
 /// Welche Aktion aus `allowed` gehört zu der gerade laufenden Ziehgeste auf `response`? Taste
 /// und Umschalttasten (Strg, Umschalt, Alt) müssen genau passen; ein bloßer Klick ist keine
-/// Ziehgeste (egui meldet ein Ziehen erst nach einigen Pixeln). Passen mehrere, gewinnt die mit
-/// mehr Umschalttasten.
+/// Ziehgeste (egui meldet ein Ziehen erst nach einigen Pixeln). Passen mehrere (mehrere Tasten
+/// gehalten), gewinnt die erste in `allowed`.
 pub fn drag_action(
     km: &Keymap,
     ui: &egui::Ui,
@@ -153,13 +142,27 @@ pub fn held_action(km: &Keymap, ui: &egui::Ui, allowed: &[Action]) -> Option<Act
     )
 }
 
-/// Zoomwert des Mausrads in diesem Bild (Punkte wie `smooth_scroll_delta().y`, positiv = Rad
-/// nach vorn), wenn eine Radgeste von [`Action::ViewZoom`] genau die Umschalttasten des Drehens
-/// hat; sonst 0. egui glättet das Rad über mehrere Bilder und leitet es mit Umschalt in die
-/// Waagrechte, mit Strg in `zoom_delta` um; beides wird hier zurückgerechnet. Es zählen die
-/// Umschalttasten beim letzten Radereignis (wie bei egui), damit das Nachlaufen nicht kippt.
-pub fn wheel(km: &Keymap, ui: &egui::Ui) -> f32 {
-    let speed = ui.ctx().options(|o| o.input_options.scroll_zoom_speed);
+/// Das Mausrad dieses Bilds, wenn eine Radgeste von [`Action::ViewZoom`] genau die
+/// Umschalttasten des Drehens hat: `scroll` in Punkten wie `smooth_scroll_delta().y` (positiv =
+/// Rad nach vorn) und `factor`, der Zoomfaktor, in den egui Strg+Rad umrechnet (1 ohne Strg).
+/// egui glättet das Rad über mehrere Bilder und leitet es mit Umschalt in die Waagrechte, mit
+/// Strg in `zoom_delta` um. Es zählen die Umschalttasten beim letzten Radereignis (wie bei egui),
+/// damit das Nachlaufen nicht kippt.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WheelInput {
+    pub scroll: f32,
+    pub factor: f32,
+}
+
+impl WheelInput {
+    const NONE: WheelInput = WheelInput {
+        scroll: 0.0,
+        factor: 1.0,
+    };
+}
+
+/// Rad dieses Bilds nach der Belegung, siehe [`WheelInput`].
+pub fn wheel_input(km: &Keymap, ui: &egui::Ui) -> WheelInput {
     let (event_mods, smooth, zoom, touch, event_zoom, held) = ui.input(|i| {
         let event_mods = i.events.iter().rev().find_map(|e| match e {
             egui::Event::MouseWheel { modifiers, .. } => Some(*modifiers),
@@ -193,19 +196,40 @@ pub fn wheel(km: &Keymap, ui: &egui::Ui) -> f32 {
         .bindings(Action::ViewZoom)
         .contains(&Binding::Mouse(gesture))
     {
-        return 0.0;
+        return WheelInput::NONE;
     }
-    let mut amount = if m.shift {
+    let scroll = if m.shift {
         smooth.x + smooth.y
     } else {
         smooth.y
     };
     // Strg+Rad hat egui in einen Zoomfaktor umgerechnet (ohne Zwei-Finger-Geste).
     let wheel_zoom = zoom / event_zoom;
-    if !touch && speed > 0.0 && wheel_zoom.is_finite() && wheel_zoom > 0.0 && wheel_zoom != 1.0 {
-        amount += wheel_zoom.ln() / speed;
+    let factor = if !touch && wheel_zoom.is_finite() && wheel_zoom > 0.0 {
+        wheel_zoom
+    } else {
+        1.0
+    };
+    WheelInput { scroll, factor }
+}
+
+/// Zoomwert des Mausrads in Punkten (siehe [`WheelInput`]); der Strg+Rad-Faktor ist über egui's
+/// `scroll_zoom_speed` in Punkte zurückgerechnet. 0, wenn keine Radgeste passt.
+pub fn wheel(km: &Keymap, ui: &egui::Ui) -> f32 {
+    let w = wheel_input(km, ui);
+    let speed = ui.ctx().options(|o| o.input_options.scroll_zoom_speed);
+    if speed > 0.0 && w.factor != 1.0 {
+        w.scroll + w.factor.ln() / speed
+    } else {
+        w.scroll
     }
-    amount
+}
+
+/// Zoomfaktor des Mausrads für Flächen mit eigener Radrate `rate` je Punkt: das Rad ohne Strg mit
+/// `rate`, Strg+Rad mit egui's eigenem Faktor (wie `zoom_delta`). 1, wenn keine Radgeste passt.
+pub fn wheel_factor(km: &Keymap, ui: &egui::Ui, rate: f32) -> f32 {
+    let w = wheel_input(km, ui);
+    w.factor * (w.scroll * rate).exp()
 }
 
 /// Zoomfaktor der Zwei-Finger-Geste in diesem Bild (Berührung oder Zoomereignis des Touchpads),

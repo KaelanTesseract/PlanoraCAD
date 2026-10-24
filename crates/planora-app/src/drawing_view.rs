@@ -2355,13 +2355,11 @@ fn canvas_ui(
     if response.hovered()
         && let Some(p) = response.hover_pos()
     {
-        // Das Rad nach der Tastenbelegung (`ViewZoom`), die Zwei-Finger-Geste immer.
+        // Das Rad nach der Tastenbelegung (`ViewZoom`; Strg+Rad mit egui's Zoomrate wie
+        // `zoom_delta`), die Zwei-Finger-Geste immer.
         let km = crate::keymap::mouse::current(ui.ctx());
-        let (scroll, pinch) = (
-            crate::keymap::mouse::wheel(&km, ui),
-            crate::keymap::mouse::pinch(ui),
-        );
-        let f = pinch * (scroll * WHEEL_RATE).exp();
+        let f = crate::keymap::mouse::pinch(ui)
+            * crate::keymap::mouse::wheel_factor(&km, ui, WHEEL_RATE);
         if f != 1.0 && f.is_finite() {
             zoom_about(state, canvas, p, f);
         }

@@ -8,9 +8,9 @@ use planora_app::keymap::{Action, Binding, Gesture, Keymap, MouseButton, mouse};
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::{drawing_view, fonts, sketch_view, viewport};
 use planora_drawing::sheet_info::Stamp;
-use planora_drawing::{Paper, Projection, Sheet};
+use planora_drawing::{Paper, Placement, Projection, Scale, Sheet, ViewKind};
 use planora_feature::SketchPlane;
-use planora_math::DVec3;
+use planora_math::{DVec2, DVec3};
 
 const SCREEN: Rect = Rect {
     min: pos2(0.0, 0.0),
@@ -168,6 +168,10 @@ fn sketch() -> AppState {
 }
 
 fn drawing() -> AppState {
+    drawing_with_id().0
+}
+
+fn drawing_with_id() -> (AppState, planora_drawing::DrawingId) {
     let mut s = AppState::new();
     s.create_box(DVec3::new(100.0, 60.0, 40.0)).unwrap();
     let stamp = Stamp {
@@ -184,7 +188,7 @@ fn drawing() -> AppState {
         .unwrap();
     s.drawing_ui.open(d);
     s.drawing_ui.tick(&s.bodies, &s.document, true);
-    s
+    (s, d)
 }
 
 /// Freie Stelle in der 3D-Ansicht (nicht am Würfel).
@@ -293,19 +297,24 @@ fn wheel_zooms_in_3d_sketch_and_drawing() {
 
 #[test]
 fn wheel_modifiers_are_exact() {
-    // Voreinstellung „Mausrad“: Strg+Rad zoomt nicht.
-    let mut r = Rig::new(View::Model);
-    let mut s = model();
-    r.frame(&mut s, NONE, vec![]);
-    let d = s.camera.distance;
-    r.wheel(&mut s, CTRL, IN_VIEW);
-    assert_eq!(s.camera.distance, d, "Strg+Rad ist nicht belegt");
-    let mut r = Rig::new(View::Drawing);
-    let mut s = drawing();
-    r.frame(&mut s, NONE, vec![]);
-    let z = s.drawing_ui.zoom;
-    r.wheel(&mut s, CTRL, IN_VIEW);
-    assert_eq!(s.drawing_ui.zoom, z, "Zeichnung: Strg+Rad ist nicht belegt");
+    // Voreinstellung „Mausrad“ und „Strg + Mausrad“: Umschalt+Rad und Alt+Rad zoomen nicht.
+    for mods in [SHIFT, Modifiers::ALT] {
+        let mut r = Rig::new(View::Model);
+        let mut s = model();
+        r.frame(&mut s, NONE, vec![]);
+        let d = s.camera.distance;
+        r.wheel(&mut s, mods, IN_VIEW);
+        assert_eq!(s.camera.distance, d, "{mods:?}+Rad ist nicht belegt");
+        let mut r = Rig::new(View::Drawing);
+        let mut s = drawing();
+        r.frame(&mut s, NONE, vec![]);
+        let z = s.drawing_ui.zoom;
+        r.wheel(&mut s, mods, IN_VIEW);
+        assert_eq!(
+            s.drawing_ui.zoom, z,
+            "Zeichnung: {mods:?}+Rad ist nicht belegt"
+        );
+    }
 
     // Umbelegt auf Strg+Rad: nur noch das wirkt, in 3D und Zeichnung.
     let mut km = Keymap::defaults();
@@ -341,6 +350,49 @@ fn wheel_modifiers_are_exact() {
             assert!(s.drawing_ui.zoom > z, "Zeichnung: Strg+Rad zoomt");
         }
     }
+}
+
+#[test]
+fn ctrl_wheel_zooms_by_default_in_3d_sketch_and_drawing() {
+    // Strg+Rad ist die zweite Voreinstellung (so zoomt auch das Zusammenziehen auf
+    // Windows-Touchpads, das als Strg+Rad ankommt).
+    let mut r = Rig::new(View::Model);
+    let mut s = model();
+    r.frame(&mut s, NONE, vec![]);
+    let d = s.camera.distance;
+    r.wheel(&mut s, CTRL, IN_VIEW);
+    assert!(s.camera.distance < d, "3D: Strg+Rad zoomt hinein");
+    let mut r = Rig::new(View::Model);
+    let mut s = sketch();
+    r.frame(&mut s, NONE, vec![]);
+    r.frame(&mut s, NONE, vec![]);
+    let d = s.camera.distance;
+    r.wheel(&mut s, CTRL, IN_VIEW);
+    assert!(s.camera.distance < d, "Skizze: Strg+Rad zoomt hinein");
+    let mut r = Rig::new(View::Drawing);
+    let mut s = drawing();
+    r.frame(&mut s, NONE, vec![]);
+    let z = s.drawing_ui.zoom;
+    r.wheel(&mut s, CTRL, IN_VIEW);
+    assert!(s.drawing_ui.zoom > z, "Zeichnung: Strg+Rad zoomt hinein");
+}
+
+#[test]
+fn ctrl_wheel_zooms_the_drawing_at_the_old_rate() {
+    // Vor der Tastenbelegung zoomte Strg+Rad das Blatt über egui's `zoom_delta`, also um
+    // exp(scroll_zoom_speed · Punkte); das bleibt so (nicht die langsamere Rate des Rads).
+    let mut r = Rig::new(View::Drawing);
+    let mut s = drawing();
+    r.frame(&mut s, NONE, vec![]);
+    let z = s.drawing_ui.zoom;
+    r.wheel(&mut s, CTRL, IN_VIEW);
+    let speed = r.ctx.options(|o| o.input_options.scroll_zoom_speed);
+    let want = z * (speed * 40.0).exp();
+    assert!(
+        (s.drawing_ui.zoom - want).abs() < 1e-3 * want,
+        "Strg+Rad: {} statt {want}",
+        s.drawing_ui.zoom
+    );
 }
 
 #[test]
@@ -589,4 +641,112 @@ fn drag_in_sketch_with_left_still_draws_not_pans() {
         "Punkt weiter gezogen: {before:?} → {xy:?}"
     );
     assert_eq!(s.camera.target, t, "links schwenkt in der Skizze nicht");
+}
+
+#[test]
+fn sketch_pan_on_ctrl_left_does_not_drag_a_point() {
+    // Schwenken auf Strg+links umgelegt: ein Zug, der auf einem Punkt beginnt, schwenkt nur.
+    let mut r = Rig::new(View::Overlay);
+    let mut km = Keymap::defaults();
+    km.set(
+        Action::ViewPan,
+        1,
+        drag_gesture(MouseButton::Left, true, false, false),
+    );
+    r.km = km;
+    let mut s = sketch();
+    let p = s
+        .session_sketch_mut()
+        .unwrap()
+        .1
+        .add_point(0.0, 0.0)
+        .unwrap();
+    r.frame(&mut s, NONE, vec![]);
+    let t = s.camera.target;
+    let before = s.session_sketch().unwrap().point_xy(p).unwrap();
+    // Kleiner erster Schritt (7 px, knapp über egui's Ziehschwelle): der Druckpunkt liegt nach
+    // dem ersten Schwenken noch im Fangradius des Punkts.
+    let ev = |x: f32, pressed: bool| Event::PointerButton {
+        pos: pos2(x, 300.0),
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: CTRL,
+    };
+    r.frame(&mut s, CTRL, vec![Event::PointerMoved(pos2(400.0, 300.0))]);
+    r.frame(
+        &mut s,
+        CTRL,
+        vec![Event::PointerMoved(pos2(400.0, 300.0)), ev(400.0, true)],
+    );
+    for x in [407.0, 420.0, 440.0, 460.0] {
+        r.frame(&mut s, CTRL, vec![Event::PointerMoved(pos2(x, 300.0))]);
+        assert!(
+            s.sketch_session.as_ref().unwrap().dragging.is_none(),
+            "kein Punktziehen bei {x}"
+        );
+    }
+    r.frame(&mut s, CTRL, vec![ev(460.0, false)]);
+    r.frame(&mut s, NONE, vec![]);
+    assert_ne!(s.camera.target, t, "Strg+links schwenkt");
+    let xy = s.session_sketch().unwrap().point_xy(p).unwrap();
+    assert_eq!(xy, before, "der Punkt bleibt");
+    assert!(s.sketch_session.as_ref().unwrap().dragging.is_none());
+}
+
+#[test]
+fn drawing_left_drag_selects_even_if_pan_is_bound_to_left() {
+    // Schwenken auf links (ohne Umschalttasten) umgelegt: links wählt und zieht im Blatt weiter.
+    let (mut s, d) = drawing_with_id();
+    let v = s
+        .document
+        .add_view(
+            d,
+            ViewKind::Front,
+            Scale { num: 1, den: 2 },
+            Placement::Free { x: 150.0, y: 110.0 },
+            None,
+        )
+        .unwrap();
+    s.drawing_ui.tick(&s.bodies, &s.document, true);
+    let mut r = Rig::new(View::Drawing);
+    let mut km = Keymap::defaults();
+    km.swap(
+        Action::ViewPan,
+        0,
+        drag_gesture(MouseButton::Left, false, false, false),
+    );
+    r.km = km;
+    r.frame(&mut s, NONE, vec![]);
+    r.frame(&mut s, NONE, vec![]);
+    let l = drawing_view::last_layout(&r.ctx).expect("kein Zeichnungsbereich");
+    let from = drawing_view::sheet_to_screen(
+        l.canvas,
+        l.sheet_mm,
+        l.zoom,
+        l.pan,
+        DVec2::new(150.0, 110.0),
+    );
+    let pan = s.drawing_ui.pan;
+    let start = s.document.drawing(d).unwrap().view(v).unwrap().placement;
+    r.drag(
+        &mut s,
+        PointerButton::Primary,
+        NONE,
+        from,
+        from + vec2(40.0, 20.0),
+    );
+    assert_eq!(
+        s.drawing_ui.pan, pan,
+        "links schwenkt in der Zeichnung nicht"
+    );
+    assert_eq!(
+        s.drawing_ui.selected_view,
+        Some(v),
+        "links wählt die Ansicht"
+    );
+    assert_ne!(
+        s.document.drawing(d).unwrap().view(v).unwrap().placement,
+        start,
+        "links zieht die Ansicht"
+    );
 }
