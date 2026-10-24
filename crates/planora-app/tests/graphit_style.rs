@@ -229,11 +229,14 @@ fn browser_rows_are_24_high_and_use_theme_colors() {
         let p = theme::palette(dark);
         let mut st = AppState::new();
         st.create_box(DVec3::splat(10.0)).unwrap();
+        // Seit Aufgabe 6 zeigt der Baum Körper und Skizzen: eine Körper- und eine Skizzenzeile.
+        st.add_sketch(SketchPlane::Standard(StandardPlane::XY))
+            .unwrap();
         let id = st.document.features()[0].id;
         st.selected_feature = Some(id);
         let s = shot(&c, WIDTH, |ui| browser::show(ui, &mut st));
         let rows = browser::row_rects(&c);
-        assert!(rows.len() >= 2, "Feature- und Körperzeile: {rows:?}");
+        assert!(rows.len() >= 2, "Körper- und Skizzenzeile: {rows:?}");
         for (name, r) in &rows {
             assert_eq!(r.height(), theme::ROW_H, "Zeile {name}");
         }

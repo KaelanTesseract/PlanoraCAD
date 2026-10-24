@@ -431,11 +431,10 @@ fn rows_of(state: &AppState) -> Vec<DrawingRow> {
         .collect()
 }
 
-/// Abschnitt „Zeichnungen“ unter dem Feature-Baum samt Fenstern „Umbenennen“ und Rückfrage.
-/// `read_only` (alte Version): Wählen und Öffnen gehen, Ändern ist gesperrt.
+/// Inhalt des Ordners „Zeichnungen“ im Feature-Baum (den Ordnerkopf zeichnet
+/// [`crate::browser`], die Fenster [`windows`]). `read_only` (alte Version): Wählen und Öffnen
+/// gehen, Ändern ist gesperrt.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
-    theme::section_header(ui, "Zeichnungen", theme::SUB_HEADER_H);
-    ui.add_space(theme::SPACE_1);
     let rows = rows_of(state);
     if rows.is_empty() {
         ui.weak(EMPTY_TEXT);
@@ -547,8 +546,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     if let Some(a) = action {
         run(state, a, read_only);
     }
-    rename_window(ui.ctx(), state);
-    delete_window(ui.ctx(), state);
+}
+
+/// Fenster „Umbenennen“ und Rückfrage beim Löschen; jedes Bild, auch bei zugeklapptem Ordner
+/// (die Rückfrage kommt auch aus der Zeichnungsansicht).
+pub(crate) fn windows(ctx: &egui::Context, state: &mut AppState) {
+    rename_window(ctx, state);
+    delete_window(ctx, state);
 }
 
 /// Führt einen Befehl aus einer Zeile aus. Änderungen sind in einer alten Version gesperrt

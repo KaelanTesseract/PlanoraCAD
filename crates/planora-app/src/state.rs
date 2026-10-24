@@ -137,6 +137,12 @@ pub struct AppState {
     /// Für die Verlaufsleiste gewählter Körper (Spitze oder ein Schritt seiner Kette), wie
     /// gewählt; gelesen wird er über [`AppState::history_body`].
     history_choice: Option<FeatureId>,
+    /// Auf- und zugeklappte Ordner des Feature-Baums (je Tab).
+    pub tree_folders: crate::browser::FolderState,
+    /// Im Feature-Baum ausgeblendete Körper (Auge). Gilt nur für die Ansicht dieses Tabs: Der
+    /// Körper bleibt im Modell, wird aber nicht gezeichnet und nicht gewählt. Wird nicht
+    /// gespeichert. Kennung über Änderungen am Teil hinweg ([`Document::body_key`]).
+    hidden_bodies: std::collections::BTreeSet<planora_drawing::BodyKey>,
     /// Geöffneter Skizzen-Modus.
     pub sketch_session: Option<SketchSession>,
     /// Entwurf des geöffneten Skizzen-Features (Entscheidung F6): eine Kopie der Definition mit
@@ -358,6 +364,8 @@ impl AppState {
             name_counters: BTreeMap::new(),
             selected_feature: None,
             history_choice: None,
+            tree_folders: crate::browser::FolderState::default(),
+            hidden_bodies: std::collections::BTreeSet::new(),
             sketch_session: None,
             sketch_draft: None,
             sketch_history: None,
@@ -544,6 +552,46 @@ impl AppState {
             }
         }
         tips.last().copied()
+    }
+
+    /// Ist der Körper `j` (Index in `bodies`) im Feature-Baum ausgeblendet? Unbekannte nicht.
+    pub fn is_body_hidden(&self, j: usize) -> bool {
+        self.bodies.get(j).is_some_and(|b| {
+            self.hidden_bodies
+                .contains(&self.document.body_key(b.source))
+        })
+    }
+
+    /// Blendet den Körper `j` aus oder ein (Auge im Feature-Baum). Nur die Ansicht ändert sich:
+    /// Ein ausgeblendeter Körper wird nicht gezeichnet und nicht gewählt; Auswahl und
+    /// Hervorhebung auf ihm entfallen. Ein unbekannter Index ändert nichts.
+    pub fn set_body_hidden(&mut self, j: usize, hidden: bool) {
+        let Some(b) = self.bodies.get(j) else {
+            return;
+        };
+        let key = self.document.body_key(b.source);
+        let changed = if hidden {
+            self.hidden_bodies.insert(key)
+        } else {
+            self.hidden_bodies.remove(&key)
+        };
+        if !changed {
+            return;
+        }
+        if hidden {
+            let on = |p: Option<Pick>| p.is_some_and(|p| pick_body(p) == j);
+            if on(self.selection) {
+                self.selection = None;
+            }
+            if on(self.hover) {
+                self.hover = None;
+            }
+            if self.selected_body == Some(j) {
+                self.selected_body = None;
+            }
+            self.marked_edges.retain(|e| e.body != j);
+        }
+        self.rebuild_scene();
     }
 
     /// Index des Körpers `r` in der Körperliste, falls er sichtbar ist.
@@ -1380,7 +1428,21 @@ impl AppState {
     }
 
     pub fn rebuild_scene(&mut self) {
-        let meshes: Vec<&Mesh> = self.bodies.iter().map(|b| &b.mesh).collect();
+        // Ausgeblendete Körper behalten ihren Platz (die Indizes der Auswahl bleiben gültig),
+        // tragen aber kein Netz bei.
+        let empty = Mesh::default();
+        let meshes: Vec<&Mesh> = self
+            .bodies
+            .iter()
+            .enumerate()
+            .map(|(j, b)| {
+                if self.is_body_hidden(j) {
+                    &empty
+                } else {
+                    &b.mesh
+                }
+            })
+            .collect();
         let highlight = Highlight {
             hover: self.hover,
             selected: self.selection,
@@ -1535,7 +1597,13 @@ impl AppState {
         let (origin, dir) = self.camera.ray(ndc);
 
         let mut nearest_face: Option<(usize, planora_render::FaceHit)> = None;
-        for (body, b) in self.bodies.iter().enumerate() {
+        let shown = || {
+            self.bodies
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| !self.is_body_hidden(*j))
+        };
+        for (body, b) in shown() {
             if let Some(hit) = pick_face(&b.mesh, origin, dir)
                 && nearest_face.is_none_or(|(_, h)| hit.distance < h.distance)
             {
@@ -1545,7 +1613,7 @@ impl AppState {
         let occluder = nearest_face.map(|(_, h)| h.distance);
 
         let mut best_edge: Option<(usize, planora_render::EdgeHit)> = None;
-        for (body, b) in self.bodies.iter().enumerate() {
+        for (body, b) in shown() {
             if let Some(hit) = pick_edge(
                 &b.mesh,
                 &self.camera,
@@ -1570,6 +1638,13 @@ impl AppState {
                 face: hit.face,
             })
         })
+    }
+}
+
+/// Index des Körpers, zu dem eine Fläche oder Kante gehört.
+fn pick_body(p: Pick) -> usize {
+    match p {
+        Pick::Face(FaceRef { body, .. }) | Pick::Edge(EdgeRef { body, .. }) => body,
     }
 }
 
