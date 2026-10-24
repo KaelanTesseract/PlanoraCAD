@@ -23,7 +23,14 @@ pub const MARGIN: f32 = 0.08;
 pub const SUPERSAMPLE: u32 = 2;
 
 /// Größte Bildseite in Pixeln; größere Angaben werden darauf begrenzt (Speicher).
-const MAX_SIDE: u32 = 4096;
+pub const MAX_SIDE: u32 = 1024;
+/// Größte Pixelzahl eines Bildes; darüber wird die Höhe gekürzt. Mit 2 × 2 Abtastung belegt
+/// ein Bild so höchstens etwa 19 MB (Tiefe und Farbe je Abtastpunkt, dazu das Ergebnis).
+pub const MAX_PIXELS: u64 = 524_288;
+/// Obergrenze für [`render_cost`]: Netze darüber zeichnet die Miniatur nicht (zu aufwendig).
+pub const RENDER_COST_BUDGET: u64 = 20_000_000;
+/// Eine Abtastzeile kostet etwa so viel wie so viele gefüllte Abtastpunkte (gemessen).
+const COST_SAMPLES_PER_ROW: f64 = 10.0;
 /// Grundhelligkeit jeder Fläche (P7).
 const AMBIENT: f64 = 0.35;
 /// Anteil des gerichteten Lichts (P7).
@@ -225,7 +232,110 @@ fn row_span(
     (lo <= hi).then_some((lo as usize, hi as usize))
 }
 
-/// Zeichnet die Netze in ein Bild `width × height` (jede Seite höchstens 4096).
+/// Tatsächliche Bildgröße: jede Seite höchstens [`MAX_SIDE`], zusammen höchstens
+/// [`MAX_PIXELS`] (dann wird die Höhe gekürzt).
+fn capped_size(width: u32, height: u32) -> (u32, u32) {
+    let (w, mut h) = (width.min(MAX_SIDE), height.min(MAX_SIDE));
+    if u64::from(w) * u64::from(h) > MAX_PIXELS {
+        h = (MAX_PIXELS / u64::from(w)) as u32;
+    }
+    (w, h)
+}
+
+/// Ein zeichenbares Dreieck im Abtastraster (eine Einheit je Abtastpunkt), so geordnet, dass
+/// [`edge`] im Inneren positiv ist.
+struct Prepared {
+    a: (f64, f64, f64),
+    b: (f64, f64, f64),
+    c: (f64, f64, f64),
+    /// Doppelte Dreiecksfläche in Abtastpunkten.
+    area: f64,
+    /// Einheitsnormale in Weltkoordinaten.
+    normal: DVec3,
+    /// Abtastspalten und -zeilen des Begrenzungsrechtecks, auf das Bild beschnitten.
+    cols: (usize, usize),
+    rows: (usize, usize),
+}
+
+/// Bereitet ein Dreieck zum Zeichnen vor; None, wenn es nichts zeichnet (Index außerhalb, nicht
+/// endliche Punkte, Fläche 0, ganz außerhalb des Bildes).
+fn prepare(
+    proj: &Projector,
+    mesh: &Mesh,
+    tri: &[u32; 3],
+    sw: usize,
+    sh: usize,
+) -> Option<Prepared> {
+    let corner = |i: u32| mesh.positions.get(i as usize).copied();
+    let (pa, pb, pc) = (corner(tri[0])?, corner(tri[1])?, corner(tri[2])?);
+    let normal = face_normal(pa, pb, pc)?;
+    let s = f64::from(SUPERSAMPLE);
+    let to_samples = |p: DVec3| {
+        let (x, y, z) = proj.project_f64(p);
+        (x * s, y * s, z)
+    };
+    let (a, mut b, mut c) = (to_samples(pa), to_samples(pb), to_samples(pc));
+    if ![a.0, a.1, a.2, b.0, b.1, b.2, c.0, c.1, c.2]
+        .iter()
+        .all(|v| v.is_finite())
+    {
+        return None;
+    }
+    let mut area = edge((a.0, a.1), (b.0, b.1), (c.0, c.1));
+    if !area.is_finite() || area == 0.0 {
+        return None;
+    }
+    if area < 0.0 {
+        std::mem::swap(&mut b, &mut c);
+        area = -area;
+    }
+    let cols = sample_range(a.0.min(b.0).min(c.0), a.0.max(b.0).max(c.0), sw)?;
+    let rows = sample_range(a.1.min(b.1).min(c.1), a.1.max(b.1).max(c.1), sh)?;
+    Some(Prepared {
+        a,
+        b,
+        c,
+        area,
+        normal,
+        cols,
+        rows,
+    })
+}
+
+/// Geschätzter Aufwand von [`render`] mit denselben Eingaben, ohne zu zeichnen: je Dreieck die
+/// Zahl der Abtastzeilen seines Begrenzungsrechtecks im Bild plus die bedeckten Abtastpunkte
+/// geteilt durch 10 (eine Zeile kostet etwa so viel wie zehn gefüllte Punkte). 0, wenn nichts
+/// gezeichnet würde. Gleiches Einpassen und gleiche Projektion wie beim Zeichnen.
+pub fn render_cost(meshes: &[&Mesh], view: ThumbView, width: u32, height: u32) -> u64 {
+    let (width, height) = capped_size(width, height);
+    if width == 0 || height == 0 {
+        return 0;
+    }
+    let Some(proj) = Projector::fit(meshes, view, width, height) else {
+        return 0;
+    };
+    let ss = SUPERSAMPLE as usize;
+    let (sw, sh) = (width as usize * ss, height as usize * ss);
+    let mut cost = 0u64;
+    for mesh in meshes {
+        for tri in mesh.indices.as_chunks::<3>().0 {
+            let Some(t) = prepare(&proj, mesh, tri, sw, sh) else {
+                continue;
+            };
+            // Alle endlichen Punkte liegen eingepasst im Bild, die Fläche braucht also keinen
+            // Zuschnitt; `area` ist die doppelte Dreiecksfläche in Abtastpunkten.
+            let rows = (t.rows.1 - t.rows.0 + 1) as u64;
+            let covered = t.area / 2.0;
+            cost = cost
+                .saturating_add(rows)
+                .saturating_add((covered / COST_SAMPLES_PER_ROW) as u64);
+        }
+    }
+    cost
+}
+
+/// Zeichnet die Netze in ein Bild `width × height` (Größe begrenzt, siehe [`MAX_SIDE`] und
+/// [`MAX_PIXELS`]; das Bild meldet die tatsächliche Größe).
 pub fn render(
     meshes: &[&Mesh],
     view: ThumbView,
@@ -233,7 +343,7 @@ pub fn render(
     width: u32,
     height: u32,
 ) -> Image {
-    let (width, height) = (width.min(MAX_SIDE), height.min(MAX_SIDE));
+    let (width, height) = capped_size(width, height);
     let pixels = width as usize * height as usize;
     let ss = SUPERSAMPLE as usize;
     let per_pixel = ss * ss;
@@ -253,19 +363,13 @@ pub fn render(
     let mut depth = vec![f32::NEG_INFINITY; pixels * per_pixel];
     let mut colour = vec![colors.background; pixels * per_pixel];
     let (sw, sh) = (width as usize * ss, height as usize * ss);
-    let s = f64::from(SUPERSAMPLE);
     let light = DVec3::from_array(LIGHT).normalize();
     for mesh in meshes {
         for tri in mesh.indices.as_chunks::<3>().0 {
-            let corner = |i: u32| mesh.positions.get(i as usize).copied();
-            let (Some(pa), Some(pb), Some(pc)) = (corner(tri[0]), corner(tri[1]), corner(tri[2]))
-            else {
+            let Some(t) = prepare(&proj, mesh, tri, sw, sh) else {
                 continue;
             };
-            let Some(n) = face_normal(pa, pb, pc) else {
-                continue;
-            };
-            let n = proj.camera_dir(n);
+            let n = proj.camera_dir(t.normal);
             let shade = AMBIENT + DIFFUSE * n.dot(light).abs();
             let lit = |k: usize| {
                 (f64::from(colors.body[k]) * shade)
@@ -273,32 +377,8 @@ pub fn render(
                     .clamp(0.0, 255.0) as u8
             };
             let fill = [lit(0), lit(1), lit(2), colors.body[3]];
-            // Eckpunkte im Abtastraster (eine Einheit je Abtastpunkt).
-            let to_samples = |p: DVec3| {
-                let (x, y, z) = proj.project_f64(p);
-                (x * s, y * s, z)
-            };
-            let (a, mut b, mut c) = (to_samples(pa), to_samples(pb), to_samples(pc));
-            if ![a.0, a.1, a.2, b.0, b.1, b.2, c.0, c.1, c.2]
-                .iter()
-                .all(|v| v.is_finite())
-            {
-                continue;
-            }
-            let mut area = edge((a.0, a.1), (b.0, b.1), (c.0, c.1));
-            if !area.is_finite() || area == 0.0 {
-                continue;
-            }
-            if area < 0.0 {
-                std::mem::swap(&mut b, &mut c);
-                area = -area;
-            }
-            let (Some((x0, x1)), Some((y0, y1))) = (
-                sample_range(a.0.min(b.0).min(c.0), a.0.max(b.0).max(c.0), sw),
-                sample_range(a.1.min(b.1).min(c.1), a.1.max(b.1).max(c.1), sh),
-            ) else {
-                continue;
-            };
+            let (a, b, c, area) = (t.a, t.b, t.c, t.area);
+            let ((x0, x1), (y0, y1)) = (t.cols, t.rows);
             let (a2, b2, c2) = ((a.0, a.1), (b.0, b.1), (c.0, c.1));
             for j in y0..=y1 {
                 let py = j as f64 + 0.5;
