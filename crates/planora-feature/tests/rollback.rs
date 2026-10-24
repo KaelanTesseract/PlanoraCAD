@@ -506,7 +506,8 @@ fn snapshot_with_invalid_rollbacks_is_rejected() {
     let good = d.snapshot();
     let msg = |s: Snapshot| match Document::from_snapshot(s, 0.05) {
         Err(FeatureError::InvalidInput(m)) => m,
-        other => panic!("{other:?}"),
+        Err(e) => panic!("anderer Fehler: {e:?}"),
+        Ok(_) => panic!("Dokument hätte abgelehnt werden müssen"),
     };
 
     let mut unknown = good.clone();

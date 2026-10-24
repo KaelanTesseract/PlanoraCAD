@@ -229,3 +229,47 @@ fn older_program_limit() {
     // Format 11 selbst ist nicht zu neu.
     assert!(decode_version(&text, "x.json").is_ok());
 }
+
+#[test]
+fn format_11_file_with_empty_or_absent_list_loads_and_is_rewritten_with_lower_number() {
+    let (text, _, _) = good();
+    let (expected, _) = {
+        let (d, _) = union_model();
+        (encode_version(&d.snapshot()).unwrap(), ())
+    };
+    assert!(expected.contains("\"format\": 1,") || expected.contains("\"format\": 1\n"));
+
+    // Leere Liste.
+    let empty = edited(&text, |v| v["rueckrollstellen"] = json!([]));
+    assert!(empty.contains("\"format\": 11"));
+    let loaded = load(&empty).unwrap();
+    assert!(loaded.rollbacks().is_empty());
+    let again = encode_version(&loaded.snapshot()).unwrap();
+    assert_eq!(again, expected);
+    assert!(!again.contains("rueckrollstellen"));
+
+    // Feld fehlt ganz.
+    let absent = edited(&text, |v| {
+        v.as_object_mut().unwrap().remove("rueckrollstellen");
+    });
+    let loaded = load(&absent).unwrap();
+    assert!(loaded.rollbacks().is_empty());
+    assert_eq!(encode_version(&loaded.snapshot()).unwrap(), expected);
+}
+
+#[test]
+fn rollback_behind_the_global_marker_survives_a_file_round_trip() {
+    let (mut d, [_a, _ma, _b, mb, u]) = union_model();
+    d.set_rollback(u, mb).unwrap();
+    // Globaler Marker vor dem Schritt mit der Rückrollstelle (Verschieben 2 liegt an Stelle 3).
+    d.set_marker(2).unwrap();
+    assert_eq!(d.rollbacks(), &[mb]);
+    let text = encode_version(&d.snapshot()).unwrap();
+    assert!(text.contains("\"format\": 11"));
+
+    let loaded = load(&text).unwrap();
+    assert_eq!(loaded.marker(), 2);
+    assert_eq!(loaded.rollbacks(), &[mb]);
+    assert_eq!(statuses(&loaded), statuses(&d));
+    assert_eq!(encode_version(&loaded.snapshot()).unwrap(), text);
+}

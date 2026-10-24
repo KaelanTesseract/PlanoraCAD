@@ -737,7 +737,7 @@ fn missing_counters_are_derived_from_the_ids() {
 // ---- (f) Neuere Formate ------------------------------------------------------------------
 
 #[test]
-fn format_10_is_refused_with_clear_text() {
+fn too_new_format_is_refused_with_clear_text() {
     // Seit den Rückrollstellen ist Format 11 gültig; „zu neu“ ist jetzt 12.
     let good = good();
     let e = bad(&good.replacen("\"format\": 5", "\"format\": 12", 1));

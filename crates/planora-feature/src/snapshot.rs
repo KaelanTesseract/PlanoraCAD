@@ -164,8 +164,8 @@ impl Document {
     }
 
     /// Baut ein Dokument aus einem Snapshot und berechnet es einmal. Prüft Ids, Namen, Marker,
-    /// Rückrollstellen, Netze und Verweise; ungültige Zahlen führen erst bei der Berechnung zu einem Fehlerstatus
-    /// am betroffenen Feature (kein Panic, kein Abbruch des Ladens).
+    /// Rückrollstellen, Netze und Verweise; ungültige Zahlen führen erst bei der Berechnung zu
+    /// einem Fehlerstatus am betroffenen Feature (kein Panic, kein Abbruch des Ladens).
     pub fn from_snapshot(s: Snapshot, chord_tolerance: f64) -> Result<Document, FeatureError> {
         let mut doc = Document::build(s, chord_tolerance, &BTreeMap::new(), 1)?;
         doc.edits = 0;

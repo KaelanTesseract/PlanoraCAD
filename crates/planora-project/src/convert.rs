@@ -46,11 +46,11 @@ const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
 /// Kleinste Formatnummer, die den Stand darstellt: 11 mit Rückrollstellen (als erste Regel
 /// geprüft), 10 mit einem STEP-Körper (auch unterdrückt: sein Text muss in der Datei stehen),
-/// 9 mit Parametern,
-/// Feature-Formeln oder Skizzenformeln, 8 mit Schnittansichten, 7 mit Stücklisten-Daten (eigene Zeilentexte,
-/// Stücklistenblatt, Nummernkreise oder eingeschalteter Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder eingeschalteten
-/// Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder Fasen, sonst 1
-/// (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste).
+/// 9 mit Parametern, Feature-Formeln oder Skizzenformeln, 8 mit Schnittansichten, 7 mit
+/// Stücklisten-Daten (eigene Zeilentexte, Stücklistenblatt, Nummernkreise oder eingeschalteter
+/// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
+/// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
+/// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste).
 pub fn required_format(s: &Snapshot) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
     if !s.rollbacks.is_empty() {
