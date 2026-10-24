@@ -449,5 +449,91 @@ fn the_body_row_menu_acts_on_the_body() {
     let shot = t.settle(&mut s);
     assert!(t.row("Quader 1").is_some(), "unterdrückt, aber gelistet");
     assert!(shot.has("unterdrückt"), "{}", shot.all_text());
-    let _ = vec2(0.0, 0.0);
+}
+
+/// Ein Bild nur mit der Verlaufsleiste (1400 × 900); liefert die gezeichneten Texte.
+fn bar_frame(ctx: &egui::Context, s: &mut AppState, time: &mut f64, events: Vec<Event>) -> Shot {
+    *time += 0.05;
+    let raw = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0))),
+        time: Some(*time),
+        events,
+        ..Default::default()
+    };
+    let out = ctx.run_ui(raw, |ui| history_bar::show(ui.ctx(), &mut *s));
+    let mut shot = Shot {
+        texts: Vec::new(),
+        fills: Vec::new(),
+    };
+    out.shapes.iter().for_each(|c| walk(&c.shape, &mut shot));
+    out.drop_without_applying_deltas();
+    shot
+}
+
+/// Rechtsklick auf den Schritt `id` der Leiste, dann Klick auf `entry`.
+fn bar_menu(ctx: &egui::Context, s: &mut AppState, time: &mut f64, id: FeatureId, entry: &str) {
+    for _ in 0..3 {
+        bar_frame(ctx, s, time, vec![]);
+    }
+    let rect = history_bar::bar_rects(ctx)
+        .steps
+        .into_iter()
+        .find(|(f, _)| *f == id)
+        .expect("Schritt in der Leiste")
+        .1;
+    let p = rect.center();
+    let press = |pressed| Event::PointerButton {
+        pos: p,
+        button: PointerButton::Secondary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    bar_frame(
+        ctx,
+        s,
+        time,
+        vec![Event::PointerMoved(p), press(true), press(false)],
+    );
+    let shot = bar_frame(ctx, s, time, vec![]);
+    let item = shot.text(entry).1.center();
+    let click = |pressed| Event::PointerButton {
+        pos: item,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    for events in [
+        vec![Event::PointerMoved(item)],
+        vec![click(true)],
+        vec![click(false)],
+        vec![],
+    ] {
+        bar_frame(ctx, s, time, events);
+    }
+}
+
+#[test]
+fn steps_keep_suppress_rename_and_delete_in_the_bar() {
+    // Die Schritte stehen nicht mehr im Baum; ihre Befehle bietet das Kontextmenü der Leiste.
+    let mut s = AppState::new();
+    let b = s.create_box(DVec3::splat(4.0)).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    let m = s.document.features().last().unwrap().id;
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts::definitions());
+    theme::apply(&ctx, true);
+    let mut time = 0.0;
+    bar_menu(&ctx, &mut s, &mut time, m, "Unterdrücken");
+    assert!(s.document.feature(m).unwrap().suppressed);
+    bar_menu(&ctx, &mut s, &mut time, m, "Aktivieren");
+    assert!(!s.document.feature(m).unwrap().suppressed);
+    bar_menu(&ctx, &mut s, &mut time, m, "Umbenennen");
+    assert_eq!(s.rename_draft.as_ref().map(|r| r.0), Some(m));
+    s.rename_draft = None;
+    bar_menu(&ctx, &mut s, &mut time, m, "Löschen");
+    assert!(
+        s.document.feature(m).is_none(),
+        "ohne Folgen sofort gelöscht"
+    );
+    assert!(s.document.feature(b).is_some());
 }

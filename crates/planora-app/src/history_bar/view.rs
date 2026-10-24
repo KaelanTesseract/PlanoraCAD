@@ -139,6 +139,10 @@ enum Action {
     Play,
     Pause,
     ActivateAll,
+    /// Kontextmenü eines Schritts (wie früher die Zeilen im Feature-Baum).
+    Rename(FeatureId),
+    ToggleSuppress(FeatureId),
+    Delete(FeatureId),
 }
 
 /// Stand der Leiste für den gewählten Körper.
@@ -367,6 +371,7 @@ fn strip(
                     // Danach bewegen die Pfeiltasten den Marker.
                     ui.memory_mut(|m| m.request_focus(marker_id(bar.instance)));
                 }
+                step_menu(&r, state, v.id, action);
                 if v.state == StepState::Inactive {
                     out.dimmed.push(v.id);
                 }
@@ -448,6 +453,36 @@ fn step_button(
         };
         ui.label(egui::RichText::new(hint).color(p.text_secondary));
     })
+}
+
+/// Kontextmenü eines Schritts: Bearbeiten, Umbenennen, Unterdrücken bzw. Aktivieren, Löschen
+/// (die Befehle, die früher die Schrittzeilen im Feature-Baum hatten).
+fn step_menu(r: &egui::Response, state: &AppState, id: FeatureId, action: &mut Option<Action>) {
+    let suppressed = state.document.feature(id).is_some_and(|f| f.suppressed);
+    r.context_menu(|ui| {
+        let mut pick = |a: Action, ui: &mut egui::Ui| {
+            *action = Some(a);
+            ui.close();
+        };
+        if ui.button("Bearbeiten").clicked() {
+            pick(Action::Open(id), ui);
+        }
+        if ui.button("Umbenennen").clicked() {
+            pick(Action::Rename(id), ui);
+        }
+        let toggle = if suppressed {
+            "Aktivieren"
+        } else {
+            "Unterdrücken"
+        };
+        if ui.button(toggle).clicked() {
+            pick(Action::ToggleSuppress(id), ui);
+        }
+        ui.separator();
+        if ui.button("Löschen").clicked() {
+            pick(Action::Delete(id), ui);
+        }
+    });
 }
 
 /// Die wichtigsten Maße eines Schritts für den Hinweis: höchstens [`HOVER_ROWS`] Zeilen aus
@@ -632,6 +667,20 @@ fn run(ctx: &egui::Context, state: &mut AppState, bar: &Bar, action: Action) {
         Action::ActivateAll => {
             stop_playing(ctx);
             let _ = browser::roll_to_end(state);
+        }
+        // Das Fenster „Umbenennen“ und die Rückfrage zeichnet der Feature-Baum.
+        Action::Rename(id) => {
+            if let Some(f) = state.document.feature(id) {
+                state.rename_draft = Some((id, f.name.clone()));
+            }
+        }
+        Action::ToggleSuppress(id) => {
+            stop_playing(ctx);
+            let _ = browser::toggle_suppress(state, id);
+        }
+        Action::Delete(id) => {
+            stop_playing(ctx);
+            browser::request_delete(state, id);
         }
     }
 }

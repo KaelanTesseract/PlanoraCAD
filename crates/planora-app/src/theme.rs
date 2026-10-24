@@ -65,7 +65,7 @@ pub struct Palette {
     pub warning: Color32,
     /// Erfolg.
     pub ok: Color32,
-    /// Markierung (Rückroll-Zeile im Feature-Baum).
+    /// Markierung (Marker der Verlaufsleiste).
     pub marker: Color32,
 }
 
