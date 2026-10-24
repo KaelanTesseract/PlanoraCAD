@@ -502,3 +502,15 @@ fn bar_is_locked_while_a_prompt_is_open() {
     assert!(r.buttons.iter().all(|(.., on)| !on), "{:?}", r.buttons);
     assert_eq!(history_bar::marker_position(&s, m), 3);
 }
+
+#[test]
+fn hover_shows_the_most_important_dimensions() {
+    let (s, [_, e, _]) = chain_model();
+    let kind = &s.document.feature(e).unwrap().kind;
+    let rows = history_bar::hover_rows(&s, kind);
+    assert!(rows.len() <= 2, "{rows:?}");
+    assert_eq!(
+        rows[0].0, "Höhe",
+        "bei der Extrusion zuerst die Höhe: {rows:?}"
+    );
+}

@@ -708,10 +708,7 @@ fn step_button(
     response.on_hover_ui(|ui| {
         ui.strong(&v.name);
         if let Some(f) = state.document.feature(v.id) {
-            for (label, value) in properties::parameter_rows(state, &f.kind)
-                .into_iter()
-                .take(HOVER_ROWS)
-            {
+            for (label, value) in hover_rows(state, &f.kind) {
                 ui.label(format!("{label}: {value}"));
             }
         }
@@ -725,6 +722,17 @@ fn step_button(
             StepState::Active => {}
         }
     })
+}
+
+/// Die wichtigsten Maße eines Schritts für den Hinweis: höchstens [`HOVER_ROWS`] Zeilen aus
+/// [`properties::parameter_rows`], Maße (mm, Grad) zuerst; ohne Maße die ersten Zeilen.
+pub fn hover_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str, String)> {
+    let (mut rows, rest): (Vec<_>, Vec<_>) = properties::parameter_rows(state, kind)
+        .into_iter()
+        .partition(|(_, value)| value.ends_with(" mm") || value.ends_with('°'));
+    rows.extend(rest);
+    rows.truncate(HOVER_ROWS);
+    rows
 }
 
 /// Lage der Lücken vor jedem Schritt und hinter dem letzten (die möglichen Markerstellen).
