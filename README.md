@@ -397,27 +397,38 @@ Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt �
 
 ## Feature-Baum
 
-Alles, was du baust, steht als Liste von Schritten im Feature-Baum: Quader, Skizze, Extrusion, Drehung, Boolesche Operation, Verschiebung. Die Reihenfolge ist die Reihenfolge der Entstehung.
+Alles, was du baust, steht als Liste von Schritten im Dokument: Quader, Skizze, Extrusion, Drehung, Boolesche Operation, Verschiebung. Die Reihenfolge ist die Reihenfolge der Entstehung. Der Feature-Baum links zeigt eine Zeile je Körper (mit Auge und Farbquadrat), dazu die Ordner Skizzen, Zeichnungen und Ursprung; die einzelnen Schritte eines Körpers stehen in der Verlaufsleiste unten.
 
 **Was geht**
 - Zeitleiste: Jeder Schritt baut auf den früheren auf. Ein Schritt kann mit Rechtsklick umbenannt, bearbeitet oder gelöscht werden.
 - Neuberechnung: Änderst du ein Maß (z. B. in einer Skizze oder die Höhe einer Extrusion), rechnen sich alle Schritte danach neu. Nur das, was sich wirklich ändert, wird neu gebaut.
 - Feste Verweise: Eine Skizze auf einer Körperfläche oder eine Kantenkopie merkt sich die Fläche bzw. Kante und findet sie nach einer Änderung wieder.
 - Unterdrücken: Ein Schritt lässt sich abschalten. Schritte, die von ihm abhängen, werden dann übersprungen.
-- Zurückrollen: Über „Zurückrollen bis hier“ siehst du den Stand früherer Schritte; „Zum Ende“ holt alles zurück.
+- Zurückrollen: Jeder Körper hat in der Verlaufsleiste seinen eigenen Marker (siehe unten); „Zum Ende der Zeitleiste“ im Menü „Bearbeiten“ holt alles zurück.
 - Löschen mit Folgen: Beim Löschen zeigt das Programm, welche weiteren Schritte davon betroffen sind, und fragt nach.
 - Fehler stehen an dem Schritt, der sie auslöst. Alles davor bleibt benutzbar; Schritte, die davon abhängen, werden übersprungen.
 
 **Was (noch) nicht geht**
 - Keine benannten Maße oder Gleichungen.
 - Keine Muster- oder Spiegel-Schritte.
-- Der Zurückroll-Marker lässt sich nur über das Menü setzen, nicht mit der Maus ziehen.
 - Die Ebene einer Skizze lässt sich nachträglich nicht ändern.
 - Ein Körper lässt sich nicht nachträglich vor eine Skizze setzen, die ihn braucht.
 - Verschiebst du einen Körper im Eigenschaftenfenster, kommt ein neuer Schritt ans Ende; Skizzen und Extrusionen davor ziehen nicht mit. Änderst du dagegen die Maße des Quaders selbst, folgen sie.
 - Die Oberfläche des Feature-Baums wurde zuletzt von Hand durchgespielt (mit `tools/gui-drive.ps1`): Quader anlegen und ändern, Skizze auf einer Fläche, Extrusion, Vereinigen, Unterdrücken, Zurückrollen, Löschen mit Rückfrage und Position ziehen liefen ohne Absturz. Rotation und Fehlerfälle wurden nur durch automatische Tests geprüft.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Nach Teilprojekt 5 (Feature-Baum)“.
+
+## Verlaufsleiste
+
+Unten im Fenster, über dem Befehlsfeld, steht die Verlaufsleiste des gewählten Körpers: ein kleines Symbol je Schritt, in der Farbe des Körpers (dieselbe wie das Farbquadrat in seiner Baumzeile). Wählst du einen Körper im Baum, zeigt die Leiste seine Schritte.
+
+- **Marker je Körper:** Die senkrechte Linie mit dem Griff zeigt, bis wohin der Körper gerechnet wird. Zieh sie mit der Maus, klick auf einen Schritt oder nimm die Knöpfe (Anfang, einen Schritt zurück, Abspielen, einen Schritt vor, Ende) oder die Pfeiltasten. Schritte hinter dem Marker sind abgeblendet, im Baum steht der Körper als „zurückgesetzt“. Andere Körper bleiben, wie sie sind. Nach einem Vereinigen zeigt die Leiste die ganze Kette in einer Reihe.
+- **Doppelklick** auf einen Schritt öffnet seine Einstellungen (eine Skizze öffnet sich zum Bearbeiten), auch bei zurückgesetzten Schritten. Der Marker bleibt dabei stehen. Ein Rechtsklick auf einen Schritt bietet Unterdrücken, Umbenennen und Löschen.
+- **Sperre:** Auf einem zurückgesetzten Körper kannst du nichts Neues aufbauen (Verschieben, Verrunden, Vereinigen, Skizze auf Fläche und Ähnliches). Das Programm sagt es dir und nennt den Weg: den Marker zum Ende schieben. Neue, freistehende Körper gehen immer.
+- **Durchsichtigkeit:** Unter „Datei → Einstellungen …“ stellst du die „Durchsichtigkeit der Panels“ ein (0 bis 80 %). Der Feature-Baum bleibt dabei lesbar, die Schrift wird bei hoher Durchsichtigkeit kräftiger.
+- **Dateiformat 11:** Dokumente mit mindestens einer Rückrollstelle speichert das Programm im Format 11; ältere Programmversionen melden dann „zu neu“. Dokumente ohne Rückrollstelle bleiben bei ihrer bisherigen Nummer.
+
+Einzelheiten und offene Punkte: `docs/superpowers/offene-punkte.md`, Abschnitt „Verlaufsleiste und Feature-Baum“.
 
 ## Speichern, Projekte und Versionen
 

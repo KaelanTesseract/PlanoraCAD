@@ -208,4 +208,13 @@
 
 ## Abweichungen
 
-(Wird von Task 8 gefüllt.)
+- **`history_body()` statt `selected_body`:** `AppState::selected_body` war schon der Index in der Körperliste (Eigenschaften, Export). Die Leiste nutzt deshalb `select_body(Option<FeatureId>)` und `history_body()`; die Texte der Aufgaben 4 bis 6 sprechen noch von `selected_body`.
+- **Lineare Leiste nach dem Vereinigen:** Nach einem Vereinigen gibt es die Eingangskörper nicht mehr; die Leiste der Spitze ist eine einzige Reihe über die ganze Kette in Listenreihenfolge. Getrennte Leisten A und B gibt es nur, solange die Körper getrennt sind (Spec Festlegung 2 geändert).
+- **`GLOBAL_HINT`-Ablehnung:** `move_marker` und Schrittbewegungen lehnen mit deutschem Hinweis auf „Alles aktivieren“ ab, wenn das Ziel hinter Schritten liegt, die nur wegen des globalen Markers inaktiv sind. Keine Rückrollstelle, kein Rückgängig-Eintrag.
+- **Kontextmenü der Schritte:** Unterdrücken, Umbenennen und Löschen einzelner Schritte liegen im Kontextmenü der Leiste (über den Plan hinaus, vom Bauherrn bestätigt). Die Körperzeilen im Baum wirken auf den Ursprung des Körpers.
+- **Zeilenreihenfolge nach Wurzel:** Die Körperzeilen sind nach dem ersten Schritt (Wurzel) der Kette sortiert, damit ein Verschieben sie nicht umsortiert (Befund aus dem Fenstertest).
+- **Durchsichtigkeit über abgeleitete Hinterlegung und kräftigere Schrift:** Im durchsichtigen Baum haben ruhende Zeilen eine kräftigere Schriftfarbe, die Mindest-Hinterlegung wird aus der Schriftfarbe berechnet (Deckung bei 80 % etwa 0,68 dunkel, 0,66 hell). Der Plan sah feste Werte vor, die den Regler im Zeilenbereich aufhoben.
+- **Format 11 nur mit Rückrollstellen:** Ohne Stellen bleibt die alte Nummer, Byte für Byte; ungültige Stellen werden beim Laden und Wiederherstellen mit deutscher Meldung abgelehnt.
+- **`*_with_report`-Methoden:** `Document` hat zusätzlich Methoden mit Bericht (`set_rollback_with_report` und Verwandte), damit Tests prüfen können, was neu gerechnet und was wiederverwendet wurde.
+- **Schriften-Test liest rekursiv:** Der Test zu den Schriften liest die Quelldateien jetzt rekursiv, weil `history_bar` ein Ordner mit `model.rs` und `view.rs` ist.
+- **Aufgabe 8:** `browser::roll_back_to` bleibt (öffentliche Schnittstelle des globalen Markers, von Tests genutzt); `lock_reason` und `refuse_if_locked` sind `pub(crate)`; „Ein Schritt“-Knopftexte heißen jetzt „Einen Schritt zurück/vor“, am Anfang steht „Vor Schritt 1“ statt „Schritt 0 von n“.

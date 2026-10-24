@@ -1772,3 +1772,35 @@ Entscheidungen von Dennis am 2026-10-23. Zweig `feature/projekte-fenster`. Entwu
 - [ ] 13. Ein Dokumentordner im Explorer: `vorschau.png` und `vorschau.json` liegen neben `dokument.json`; beide löschen, Fenster neu öffnen: Sie werden neu angelegt.
 - [ ] 14. Ein großes Dokument (zum Beispiel ein großer Netz-Körper): Die Kachel sagt „Miniatur zu aufwendig“, die Oberfläche bleibt flüssig. „Miniatur nicht möglich“ darf nur nach einem früheren Absturz beim Malen erscheinen.
 - [ ] 15. Rückfrage offen (zum Beispiel Strg+S bei geändertem Dokument, „Projekte“ offen): Alle Knöpfe im Fenster „Projekte“ sind gesperrt, „Einstellungen …“ lässt sich nicht öffnen. Nach der Rückfrage geht wieder alles.
+
+## Verlaufsleiste und Feature-Baum
+
+### Stand und Geliefertes
+- Unten im Fenster steht die **Verlaufsleiste**: die Schritte des gewählten Körpers als kleine Symbole in der Farbe des Körpers. Ein senkrechter **Marker** zeigt, bis wohin der Körper gerechnet wird. Du ziehst ihn mit der Maus, klickst auf einen Schritt oder nimmst die Knöpfe (Anfang, einen Schritt zurück, Abspielen, einen Schritt vor, Ende) und die Pfeiltasten.
+- Jeder Körper hat seinen **eigenen Marker**. Zurückgesetzte Schritte sind abgeblendet, ihre Folgeschritte auch. Andere Körper bleiben davon unberührt.
+- **Doppelklick** auf einen Schritt öffnet seine Einstellungen (bei einer Skizze die Skizze), auch wenn der Schritt zurückgesetzt ist. Ein geänderter Wert gilt, sobald du den Marker wieder nach vorn schiebst.
+- **Sperre:** Solange ein Körper zurückgesetzt ist, kannst du nichts Neues auf ihm aufbauen (Verschieben, Verrunden, Vereinigen, Skizze auf Fläche, Extrusion seiner Skizze). Das Programm sagt es und nennt den Weg („Zum Ende“). Umbenennen, Löschen, Unterdrücken und das Ändern von Werten gehen weiter.
+- Der **Feature-Baum links** ist jetzt eine Körper-Übersicht: eine Zeile je Körper mit Auge und Farbquadrat, dazu die Ordner Skizzen, Zeichnungen und Ursprung. Die alte Rückroll-Linie im Baum gibt es nicht mehr; der globale Marker bleibt nur im Menü „Bearbeiten“ („Zum Ende der Zeitleiste“) und als Knopf „Alles aktivieren“ in der Leiste.
+- Neu in den Einstellungen: **Durchsichtigkeit der Panels** (0 bis 80 %). Der Baum bleibt auch bei 80 % lesbar.
+- **Dateiformat 11:** Nur Dokumente mit mindestens einer Rückrollstelle werden als Format 11 gespeichert; alle anderen bleiben bei ihrer bisherigen Nummer, Byte für Byte wie vorher.
+
+### Offene Punkte
+- Zurücksetzen eines Körpers rechnet unbeteiligte Schritte mit mehreren Körpern (Verschieben, Vereinigen, Verrunden) zweimal neu, weil der Zwischenspeicher-Schlüssel alle sichtbaren Körper enthält. Bei kleinen Modellen unmerklich.
+- Bei einem Fenster von 800 × 600 ist die Leiste schmal, und „n von m“ verschwindet (die Abspielknöpfe schrumpfen nicht mit).
+- Nach einem Vereinigen gibt es nur eine Leiste über die ganze Kette; getrennte Leisten je Eingangskörper gibt es nicht.
+- Ältere Programmversionen verlieren beim Speichern der Favoriten den Wert `panel_transparency` (unbekannte Felder in der Konfiguration gehen dort verloren, siehe oben).
+- Ausgeblendete Körper (Auge) werden nie aufgeräumt: Die Merkliste wächst, bis der Tab schließt. Sie wird nicht gespeichert.
+- Die Kennung einer Baumzeile hängt von ihrer Stellung ab; nach dem Umsortieren kann ein offenes Menü auf eine andere Zeile zeigen.
+- `crates/planora-app/src/browser.rs` hat etwa 1170 Zeilen und sollte in Baum, Zeilen und Menüs aufgeteilt werden.
+- Im durchsichtigen Baum haben gesperrte Zeilen in schreibgeschützten Versionen weniger Kontrast (0,75 Deckung), die Prüfung deckt das nicht ab.
+- Dokumente mit Rückrollstellen (Format 11) kann ein älteres Programm nicht öffnen; es meldet „zu neu“.
+- Zurückgestellt aus den Prüfungen: Die Leiste legt beim Abspielen einen Rückgängig-Schritt je Schritt an; der Marker hat 12 px Trefferfläche und überdeckt dabei Nachbarschritte etwas; Dialoge „Erzeugen“ und „Bearbeiten“ sperren die Leiste nicht (wie das Befehlsfeld).
+
+### Handliste (echtes Fenster)
+- [ ] 1. Quader und Zylinder anlegen, verschieben, vereinigen: Die Leiste zeigt eine Kette in den Farben der Körper, das Farbquadrat im Baum passt dazu.
+- [ ] 2. Marker ziehen und mit den Pfeiltasten bewegen; Abspielen läuft im Takt und hält am Ende.
+- [ ] 3. Doppelklick auf einen zurückgesetzten Schritt: Die Einstellungen öffnen sich, der Marker bleibt stehen.
+- [ ] 4. Sperre: Auf einem zurückgesetzten Körper „Vereinigen“ wählen: deutscher Hinweis, nichts angelegt.
+- [ ] 5. Durchsichtigkeit auf 0, 40 und 80 %, hell und dunkel: Der Baum bleibt lesbar.
+- [ ] 6. Auge in der Körperzeile: Der Körper verschwindet aus der Ansicht, nach dem Neustart ist er wieder da.
+
