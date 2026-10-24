@@ -485,6 +485,41 @@ pub fn panel_frame(dark: bool) -> egui::Frame {
         .inner_margin(Margin::same(SPACE_3 as i8))
 }
 
+/// Wie [`panel_frame`], die Fläche aber zu `percent` Prozent durchsichtig (auf 0 bis 80
+/// begrenzt): Deckkraft = 255 · (100 − p) / 100, gerundet. Rand, Rundung und Innenabstand bleiben;
+/// bei 0 % ist es genau [`panel_frame`].
+pub fn panel_frame_translucent(dark: bool, percent: u8) -> egui::Frame {
+    panel_frame(dark).fill(with_alpha(palette(dark).bg_panel, panel_alpha(percent)))
+}
+
+/// Deckkraft (0 bis 255) der Panel-Fläche bei `percent` Prozent Durchsichtigkeit.
+fn panel_alpha(percent: u8) -> u8 {
+    let p = planora_project::config::clamp_panel_transparency(percent);
+    (255.0 * f32::from(100 - p) / 100.0).round() as u8
+}
+
+/// Mindestdeckkraft hinter den Zeilen eines durchsichtigen Panels, damit Zeilentext
+/// (`text_primary`, `text_secondary`) auch über einem weißen oder schwarzen 3D-Bereich 4,5 : 1
+/// erreicht (Test `contrast_of_text_over_light_background_at_80_percent_stays_readable` in
+/// tests/transparency.rs). Dunkel braucht fast volle Deckung: das Grau der Zeilen in Ruhe
+/// (#939393) hält auf hellem Grund sonst keinen Kontrast.
+fn min_row_opacity(dark: bool) -> f32 {
+    if dark { 0.93 } else { 0.87 }
+}
+
+/// Fläche, die hinter die Zeilen eines zu `percent` Prozent durchsichtigen Panels gelegt wird:
+/// Farbe `bg_panel`, gerade so deckend, dass Panel und Fläche zusammen [`min_row_opacity`]
+/// erreichen. Ist das Panel allein deckend genug, durchsichtig ([`Color32::TRANSPARENT`]).
+pub fn row_backing(dark: bool, percent: u8) -> Color32 {
+    let panel = f32::from(panel_alpha(percent)) / 255.0;
+    let min = min_row_opacity(dark);
+    if panel >= min {
+        return Color32::TRANSPARENT;
+    }
+    let alpha = 1.0 - (1.0 - min) / (1.0 - panel);
+    with_alpha(palette(dark).bg_panel, (alpha * 255.0).ceil() as u8)
+}
+
 /// Abschnittskopf innerhalb eines Felds.
 pub fn section_frame(dark: bool) -> egui::Frame {
     egui::Frame::new()

@@ -720,7 +720,8 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
 /// Spalte. Schreibgeschützt ist der Baum gesperrt.
 fn left_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let dark = app.ws.active_tab().state.dark;
-    let frame = browser::tree_frame(dark);
+    let percent = app.ws.panel_transparency();
+    let frame = browser::tree_frame(dark, percent);
     let inner = inner_size(&frame, rects.left.size());
     let read_only = app.ws.active_tab().read_only;
     let margin = f32::from(frame.inner_margin.left);
@@ -734,7 +735,7 @@ fn left_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 .auto_shrink([false, true]);
             theme::scroll_area(ui, area, |ui| {
                 let state = &mut app.ws.active_tab_mut().state;
-                browser::show_with(ui, state, read_only);
+                browser::show_in_panel(ui, state, read_only, percent);
             });
         });
     });

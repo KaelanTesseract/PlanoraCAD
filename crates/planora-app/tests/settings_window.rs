@@ -61,6 +61,7 @@ fn write_config(cfg: &Path, root: &Path, favorites: Vec<PathBuf>) {
     Config {
         root: Some(root.to_path_buf()),
         favorites,
+        ..Config::default()
     }
     .save_to(cfg)
     .unwrap();
@@ -727,4 +728,166 @@ fn the_window_fits_800x600_while_choosing() {
             );
         }
     }
+}
+
+// --- Darstellung -------------------------------------------------------------------------------
+
+/// Angezeigter Wert des Reglers: Zahl und gleich dahinter „ %“ (egui zeichnet beide getrennt),
+/// unter der Beschriftung. Liefert Wert und Rechteck der Zahl.
+fn shown_value(seen: &[Shot]) -> (u8, Rect) {
+    let label = seen
+        .iter()
+        .find(|s| s.text == TRANSPARENCY_LABEL)
+        .expect("Beschriftung sichtbar");
+    let number = seen
+        .iter()
+        .find(|s| s.rect.top() > label.rect.top() && s.text.parse::<u8>().is_ok())
+        .expect("Zahl sichtbar");
+    let unit = seen
+        .iter()
+        .find(|s| s.text.trim() == "%")
+        .expect("„%“ sichtbar");
+    assert!(
+        (unit.rect.left() - number.rect.right()).abs() < 2.0
+            && (unit.rect.center().y - number.rect.center().y).abs() < 2.0,
+        "„%“ direkt hinter der Zahl"
+    );
+    assert_eq!(unit.text, " %", "mit Leerzeichen: „40 %“");
+    (number.text.parse().unwrap(), number.rect)
+}
+
+/// Klickt in die Schieberspur des Reglers: `at` = 0,0 (linkes Ende) bis 1,0 (rechtes Ende).
+/// Die Spur steht unter der Beschriftung und endet vor der Zahl.
+fn click_slider(a: &mut App, at: f32) {
+    a.time += 1.0;
+    let seen = a.settle(4);
+    let label = seen
+        .iter()
+        .find(|s| s.text == TRANSPARENCY_LABEL)
+        .expect("Beschriftung sichtbar");
+    let (_, value) = shown_value(&seen);
+    let value = Shot {
+        text: String::new(),
+        rect: value,
+        clip: value,
+        color: Color32::TRANSPARENT,
+    };
+    let left = label.rect.left();
+    let right = left + SLIDER_WIDTH;
+    assert!(right < value.rect.left(), "Zahl rechts neben der Spur");
+    let pos = pos2(left + (right - left) * at, value.rect.center().y);
+    let button = |pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    a.frame(vec![Event::PointerMoved(pos)]);
+    a.frame(vec![button(true)]);
+    a.frame(vec![button(false)]);
+    a.settle(3);
+}
+
+#[test]
+fn the_appearance_section_stands_above_projects() {
+    for dark in [false, true] {
+        let e = env();
+        let mut a = App::new(e, dark, 1400.0, 900.0);
+        a.w.open(false);
+        let seen = a.settle(6);
+        let find = |t: &str| {
+            seen.iter()
+                .find(|s| s.text == t)
+                .unwrap_or_else(|| panic!("„{t}“ fehlt: {:?}", texts(&seen)))
+                .rect
+        };
+        assert_eq!(SECTION_APPEARANCE, "Darstellung");
+        assert_eq!(TRANSPARENCY_LABEL, "Durchsichtigkeit der Panels");
+        let appearance = find(SECTION_APPEARANCE);
+        let label = find(TRANSPARENCY_LABEL);
+        let (shown, value) = shown_value(&seen);
+        assert_eq!(shown, 40, "Voreinstellung 40 %");
+        let projects = find(SECTION_PROJECTS);
+        assert!(
+            appearance.bottom() <= label.top(),
+            "Überschrift über dem Regler"
+        );
+        assert!(
+            value.bottom() <= projects.top(),
+            "Darstellung über Projekte"
+        );
+        assert!(appearance.bottom() <= projects.top());
+    }
+}
+
+#[test]
+fn moving_the_slider_applies_at_once_and_saves() {
+    let e = env();
+    write_config(&e.cfg, &e.root, vec![e.tmp.join("Fav")]);
+    let mut a = App::new(e, true, 1400.0, 900.0);
+    a.w.open(false);
+    click_slider(&mut a, 1.0);
+    let v = a.e.ws.panel_transparency();
+    assert!(v >= 76, "rechtes Ende: {v}");
+    let disk = Config::read_from(&a.e.cfg).unwrap();
+    assert_eq!(disk.panel_transparency, v, "gespeichert");
+    assert_eq!(
+        disk.favorites,
+        vec![a.e.tmp.join("Fav")],
+        "Favoriten bleiben"
+    );
+    assert_eq!(disk.root, Some(a.e.root.clone()), "Verzeichnis bleibt");
+    assert_eq!(a.w.appearance_message(), None);
+    let seen = a.settle(3);
+    assert_eq!(shown_value(&seen).0, v, "Zahl neu");
+    click_slider(&mut a, 0.0);
+    assert!(a.e.ws.panel_transparency() <= 4);
+    assert_eq!(
+        Config::read_from(&a.e.cfg).unwrap().panel_transparency,
+        a.e.ws.panel_transparency()
+    );
+}
+
+#[test]
+fn a_failed_save_keeps_the_transparency_for_the_session_with_a_hint() {
+    for dark in [false, true] {
+        let mut e = env();
+        let blocker = e.tmp.join("blockiert");
+        fs::write(&blocker, b"x").unwrap();
+        e.ws.config_path = blocker.join("config.json");
+        let mut a = App::new(e, dark, 1400.0, 900.0);
+        a.w.open(false);
+        click_slider(&mut a, 1.0);
+        assert!(a.e.ws.panel_transparency() >= 76, "gilt trotzdem");
+        assert_eq!(fs::read(&blocker).unwrap(), b"x");
+        assert_eq!(
+            a.w.appearance_message(),
+            Some(&RootMessage::Warning(TRANSPARENCY_NOT_SAVED.into()))
+        );
+        assert_eq!(
+            TRANSPARENCY_NOT_SAVED,
+            "Die Durchsichtigkeit gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden."
+        );
+        let seen = a.settle(3);
+        let shot = seen
+            .iter()
+            .find(|s| s.text == TRANSPARENCY_NOT_SAVED)
+            .expect("Hinweis gezeichnet");
+        assert_eq!(shot.color, theme::palette(dark).warning);
+        // Neu öffnen leert den Hinweis.
+        a.w.close();
+        a.w.open(false);
+        assert_eq!(a.w.appearance_message(), None);
+    }
+}
+
+#[test]
+fn the_slider_is_locked_while_a_prompt_is_open() {
+    let e = env();
+    let mut a = App::new(e, true, 1400.0, 900.0);
+    a.e.ws.prompt = Some(planora_app::workspace::Prompt::Notice("Hinweis".into()));
+    a.w.open(false);
+    click_slider(&mut a, 1.0);
+    assert_eq!(a.e.ws.panel_transparency(), 40);
+    assert!(!a.e.cfg.exists());
 }

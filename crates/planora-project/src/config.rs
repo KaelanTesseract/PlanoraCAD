@@ -1,4 +1,5 @@
-//! Kleine Konfiguration (gewählte Wurzel, Favoriten der Dateiauswahl), ohne neue Abhängigkeit.
+//! Kleine Konfiguration (gewählte Wurzel, Favoriten der Dateiauswahl, Durchsichtigkeit der
+//! Panels), ohne neue Abhängigkeit.
 
 use crate::error::{ProjectError, Result};
 use crate::fsutil::atomic_write_unique;
@@ -8,16 +9,59 @@ use std::path::{Path, PathBuf};
 /// Höchstzahl der Favoriten.
 pub const MAX_FAVORITES: usize = 24;
 
+/// Voreinstellung der Durchsichtigkeit der Panels in Prozent.
+pub const DEFAULT_PANEL_TRANSPARENCY: u8 = 40;
+
+/// Höchste Durchsichtigkeit der Panels in Prozent (mehr macht die Schrift unlesbar).
+pub const MAX_PANEL_TRANSPARENCY: u8 = 80;
+
+/// Begrenzt die Durchsichtigkeit auf 0 bis [`MAX_PANEL_TRANSPARENCY`].
+pub fn clamp_panel_transparency(percent: u8) -> u8 {
+    percent.min(MAX_PANEL_TRANSPARENCY)
+}
+
 /// Kein `deny_unknown_fields`: ältere Programmstände lesen eine neuere Datei (mit Feldern, die
 /// sie nicht kennen) weiter, und neue Felder haben `#[serde(default)]`, damit ältere Dateien
 /// ohne sie samt Wurzel geladen werden.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub root: Option<PathBuf>,
     /// Lieblingsordner der Dateiauswahl, in der Reihenfolge des Hinzufügens. Nachsichtig
     /// gelesen: ein kaputtes Feld kostet nie die Wurzel (siehe [`lenient_favorites`]).
     #[serde(default, deserialize_with = "lenient_favorites")]
     pub favorites: Vec<PathBuf>,
+    /// Durchsichtigkeit der Panels in Prozent (Einstellungen → Darstellung). Fehlt das Feld
+    /// (ältere Datei), gilt [`DEFAULT_PANEL_TRANSPARENCY`]; gelesen wird nachsichtig und auf 0
+    /// bis [`MAX_PANEL_TRANSPARENCY`] begrenzt (siehe [`lenient_transparency`]).
+    #[serde(
+        default = "default_panel_transparency",
+        deserialize_with = "lenient_transparency"
+    )]
+    pub panel_transparency: u8,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            root: None,
+            favorites: Vec::new(),
+            panel_transparency: DEFAULT_PANEL_TRANSPARENCY,
+        }
+    }
+}
+
+fn default_panel_transparency() -> u8 {
+    DEFAULT_PANEL_TRANSPARENCY
+}
+
+/// Liest `panel_transparency` aus jedem JSON-Wert: Zahlen werden gerundet und auf 0 bis
+/// [`MAX_PANEL_TRANSPARENCY`] begrenzt, alles andere ergibt die Voreinstellung (die Datei bleibt
+/// lesbar).
+fn lenient_transparency<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u8, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_f64().map_or(DEFAULT_PANEL_TRANSPARENCY, |v| {
+        v.round().clamp(0.0, f64::from(MAX_PANEL_TRANSPARENCY)) as u8
+    }))
 }
 
 /// Vergleichsform eines Ordners: unter Windows ohne Groß- und Kleinschreibung und mit `\`;

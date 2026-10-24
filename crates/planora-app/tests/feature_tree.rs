@@ -417,8 +417,9 @@ fn rolled_back_body_is_dimmed_but_listed() {
 
 #[test]
 fn the_tree_frame_is_the_panel_frame() {
+    // Bei 0 % Durchsichtigkeit genau das deckende Panel (mehr in tests/transparency.rs).
     for dark in [true, false] {
-        assert_eq!(browser::tree_frame(dark), theme::panel_frame(dark));
+        assert_eq!(browser::tree_frame(dark, 0), theme::panel_frame(dark));
     }
 }
 

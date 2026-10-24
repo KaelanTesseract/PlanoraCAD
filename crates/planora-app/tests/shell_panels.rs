@@ -21,6 +21,11 @@ use planora_math::DVec3;
 use planora_project::config::Config;
 use planora_project::library::Library;
 
+/// Fläche des Feature-Baums bei der voreingestellten Durchsichtigkeit.
+fn tree_fill(dark: bool) -> Color32 {
+    theme::panel_frame_translucent(dark, planora_project::config::DEFAULT_PANEL_TRANSPARENCY).fill
+}
+
 fn context(dark: bool) -> egui::Context {
     let c = egui::Context::default();
     c.set_fonts(fonts::definitions());
@@ -135,7 +140,8 @@ impl Shot {
         self.fills
             .iter()
             .filter(|f| {
-                f.fill == p.bg_panel
+                // Der Feature-Baum ist durchsichtig (Voreinstellung 40 %), die anderen deckend.
+                (f.fill == p.bg_panel || f.fill == tree_fill(dark))
                     && f.stroke == egui::Stroke::new(1.0, p.border_subtle)
                     && f.radius == egui::CornerRadius::same(theme::RADIUS_LG)
             })
@@ -731,8 +737,23 @@ fn dark_and_light_frames() {
             .filter(|f| f.radius == egui::CornerRadius::same(theme::RADIUS_LG))
         {
             assert_eq!(f.stroke.color, p.border_subtle, "{f:?}");
-            assert_eq!(f.fill, p.bg_panel, "kein Verlauf, Fläche bg_panel");
+            assert!(
+                f.fill == p.bg_panel || f.fill == tree_fill(dark),
+                "kein Verlauf, Fläche bg_panel: {f:?}"
+            );
         }
+        // Nur der Feature-Baum ist durchsichtig, und zwar das linke Feld.
+        let translucent: Vec<_> = shot
+            .fills
+            .iter()
+            .filter(|f| f.fill == tree_fill(dark))
+            .collect();
+        assert_eq!(translucent.len(), 1, "dunkel {dark}: {translucent:?}");
+        assert_eq!(
+            translucent[0].rect,
+            fields_of(&shot, dark, size).left,
+            "dunkel {dark}"
+        );
     }
 }
 

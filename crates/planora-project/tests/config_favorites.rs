@@ -28,6 +28,7 @@ fn favorites_round_trip_in_order() {
     let c = Config {
         root: Some(PathBuf::from("D:/Projekte")),
         favorites: vec![PathBuf::from("D:/Teile"), PathBuf::from("C:/Ablage")],
+        ..Config::default()
     };
     c.save_to(&p).unwrap();
     let text = std::fs::read_to_string(&p).unwrap();

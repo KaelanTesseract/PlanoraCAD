@@ -342,9 +342,31 @@ const ROLLED_BACK_HINT: &str = "Der Verlauf dieses Körpers ist zurückgesetzt. 
 /// Die drei Grundebenen im Ordner „Ursprung“.
 const PLANES: [&str; 3] = ["XY-Ebene", "XZ-Ebene", "YZ-Ebene"];
 
-/// Rahmen des Feldes, in dem der Baum steht (die einzige Stelle, an der er festgelegt wird).
-pub fn tree_frame(dark: bool) -> egui::Frame {
-    theme::panel_frame(dark)
+/// Rahmen des Feldes, in dem der Baum steht (die einzige Stelle, an der er festgelegt wird):
+/// das Panel, zu `percent` Prozent durchsichtig (Einstellungen → Darstellung).
+pub fn tree_frame(dark: bool, percent: u8) -> egui::Frame {
+    theme::panel_frame_translucent(dark, percent)
+}
+
+/// Wie [`show_with`] im durchsichtigen Panel: hinter alle Zeilen (vom Kopf bis zur letzten
+/// Zeile) kommt die Mindestfläche aus [`theme::row_backing`], damit die Schrift über jedem
+/// 3D-Hintergrund lesbar bleibt. Der freie Platz darunter und die Ränder bleiben durchsichtig.
+pub fn show_in_panel(ui: &mut egui::Ui, state: &mut AppState, read_only: bool, percent: u8) {
+    let backing = theme::row_backing(ui.visuals().dark_mode, percent);
+    // Platz in der Zeichenliste vor den Zeilen; gefüllt wird, wenn ihre Höhe feststeht.
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let top = ui.cursor().min;
+    show_with(ui, state, read_only);
+    if backing != Color32::TRANSPARENT {
+        let rect = egui::Rect::from_min_max(
+            top,
+            egui::pos2(ui.max_rect().right(), ui.min_rect().bottom()),
+        );
+        ui.painter().set(
+            slot,
+            egui::epaint::RectShape::filled(rect, theme::RADIUS_SM, backing),
+        );
+    }
 }
 
 /// Befehl aus einer Zeile (wird nach dem Zeichnen ausgeführt).
