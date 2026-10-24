@@ -1107,6 +1107,8 @@ impl eframe::App for PlanoraApp {
         // freien Fläche, ebenso das Blatt der Zeichnung (über das ganze Fenster gemalt, in die
         // freie Fläche eingepasst; Werkzeug-, Ansichts- und Hinweisfeld zeichnet `show_with`).
         let enabled = !self.ws.active_tab().read_only;
+        // Mausgesten der Ansichten aus der Tastenbelegung (siehe `keymap::mouse`).
+        keymap::mouse::set_current(&ctx, &self.ws.keymap);
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let state = &mut self.ws.active_tab_mut().state;
             match state.drawing_ui.area {

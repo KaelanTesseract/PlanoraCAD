@@ -1,10 +1,9 @@
 use crate::icons::{self, Icon};
+use crate::keymap::{self, Action};
 use crate::state::AppState;
 use crate::{fonts, sketch_view, theme};
 use egui::epaint::Vertex;
-use egui::{
-    Align2, Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2,
-};
+use egui::{Align2, Color32, FontId, Mesh, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
 use planora_render::gpu::ViewportCallback;
 use planora_render::{
@@ -576,6 +575,9 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
 
     let cube = cube_rect(free.unwrap_or(rect));
     let mut over_view = response.hovered();
+    // Mausgesten aus der Tastenbelegung (Schwenken, Drehen, Zoomen).
+    let km = keymap::mouse::current(ui.ctx());
+    const NAV: &[Action] = &[Action::ViewPan, Action::ViewOrbit];
     if sketching {
         // Das Overlay rechnet im ganzen Bereich (Auswahl und Fangen mit der vollen Größe) und
         // ruft selbst `set_viewport`; danach das freie Rechteck erneut setzen.
@@ -583,32 +585,35 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         fit_camera(state, rect, free);
     } else {
         // Navigation
-        let pan = response.dragged_by(PointerButton::Middle)
-            || (response.dragged_by(PointerButton::Primary) && ui.input(|i| i.modifiers.shift));
-        if pan {
-            let d = response.drag_motion();
-            state.camera.pan(d.x, d.y, rect.height());
-        } else if response.dragged_by(PointerButton::Primary) {
-            let d = response.drag_motion();
-            state.camera.orbit(d.x, d.y);
+        let d = response.drag_motion();
+        match keymap::mouse::drag_action(&km, ui, &response, NAV) {
+            Some(Action::ViewPan) => state.camera.pan(d.x, d.y, rect.height()),
+            Some(Action::ViewOrbit) => state.camera.orbit(d.x, d.y),
+            _ => {}
         }
     }
 
     // Navigationswürfel und Home-Knopf: eigene Schaltflächen über der Ansicht (auch im
-    // Skizzen-Modus). Sie nehmen Klicks auf, damit nichts dahinter gewählt wird. Ein Ziehen mit
-    // der Primärtaste (mehr als `CUBE_DRAG_THRESHOLD`) dreht die Ansicht wie in der Ansicht selbst
-    // (Modell und Skizze) und löst beim Loslassen keinen Regionsklick aus.
+    // Skizzen-Modus). Sie nehmen Klicks auf, damit nichts dahinter gewählt wird. Ziehen am
+    // Würfel wirkt wie in der Ansicht nach der Tastenbelegung (Modell und Skizze; links dreht,
+    // Umschalt+links schwenkt). Mit der Primärtaste gilt schon ab `CUBE_DRAG_THRESHOLD` als
+    // gezogen; das Loslassen löst dann keinen Regionsklick aus.
     let cube_response = ui.interact(
         cube,
         ui.id().with("planora-view-cube"),
         Sense::click_and_drag(),
     );
     let cube_dragging = cube_drag_active(ui, &cube_response);
-    // Mit Umschalt verschiebt die Ansicht (wie im Viewport), der Würfel dreht dann nicht.
-    let shift = ui.input(|i| i.modifiers.shift);
-    if cube_dragging && !shift && cube_response.is_pointer_button_down_on() {
-        let d = ui.input(|i| i.pointer.delta());
-        state.camera.orbit(d.x, d.y);
+    let cube_action = if cube_dragging && cube_response.is_pointer_button_down_on() {
+        keymap::mouse::held_action(&km, ui, NAV)
+    } else {
+        keymap::mouse::drag_action(&km, ui, &cube_response, NAV)
+    };
+    let d = ui.input(|i| i.pointer.delta());
+    match cube_action {
+        Some(Action::ViewPan) => state.camera.pan(d.x, d.y, rect.height()),
+        Some(Action::ViewOrbit) => state.camera.orbit(d.x, d.y),
+        _ => {}
     }
     let cube_hover = cube_response.hover_pos();
     let camera = state.camera;
@@ -641,7 +646,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     let home_hovered = home_response.hovered();
     // Mausrad-Zoom (Modell und Skizze) auch über Würfel und Home-Knopf.
     if over_view || cube_hover.is_some() || home_hovered {
-        let scroll = ui.input(|i| i.smooth_scroll_delta().y);
+        let scroll = keymap::mouse::wheel(&km, ui);
         if scroll != 0.0 {
             state.camera.zoom(scroll);
         }

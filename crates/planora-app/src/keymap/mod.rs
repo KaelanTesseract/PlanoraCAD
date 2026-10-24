@@ -8,6 +8,7 @@
 
 pub mod defaults;
 pub mod dispatch;
+pub mod mouse;
 pub mod text;
 
 pub use defaults::Action;

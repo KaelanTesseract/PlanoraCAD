@@ -428,8 +428,9 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
 }
 
 /// Zeichnet die Skizze über die 3D-Ansicht in `rect` und verarbeitet die Eingaben des
-/// Skizzen-Modus. In der Skizzenfläche selbst wird nicht gedreht; Verschieben (mittlere Maustaste
-/// oder Umschalt + Ziehen) und Zoomen (Mausrad) gelten dort. Gedreht wird durch Ziehen am
+/// Skizzen-Modus. In der Skizzenfläche selbst wird nicht gedreht; Verschieben und Zoomen gelten
+/// dort nach der Tastenbelegung (Voreinstellung: mittlere Maustaste oder Umschalt + Ziehen,
+/// Mausrad). Gedreht wird durch Ziehen am
 /// Navigationswürfel (siehe `viewport::show_in`).
 ///
 /// Gibt zurück, ob der Zeiger über der Skizzenfläche steht; das Mausrad-Zoomen macht der Aufrufer
@@ -470,9 +471,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         .sketch_session
         .as_ref()
         .is_some_and(|s| s.dragging.is_some());
-    let pan = response.dragged_by(PointerButton::Middle)
-        || (response.dragged_by(PointerButton::Primary) && shift && !dragging_point);
-    if pan {
+    // Schwenken nach der Tastenbelegung (Voreinstellung: Mitte oder Umschalt+links); nie
+    // während ein Punkt gezogen wird. Die linke Taste ohne Umschalttasten bleibt dem Zeichnen.
+    let km = crate::keymap::mouse::current(ui.ctx());
+    if crate::keymap::mouse::pan_2d(&km, ui, response) && !dragging_point {
         let d = response.drag_motion();
         state.camera.pan(d.x, d.y, rect.height());
     }

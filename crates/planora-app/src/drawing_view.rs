@@ -2355,22 +2355,27 @@ fn canvas_ui(
     if response.hovered()
         && let Some(p) = response.hover_pos()
     {
-        let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta().y, i.zoom_delta()));
+        // Das Rad nach der Tastenbelegung (`ViewZoom`), die Zwei-Finger-Geste immer.
+        let km = crate::keymap::mouse::current(ui.ctx());
+        let (scroll, pinch) = (
+            crate::keymap::mouse::wheel(&km, ui),
+            crate::keymap::mouse::pinch(ui),
+        );
         let f = pinch * (scroll * WHEEL_RATE).exp();
         if f != 1.0 && f.is_finite() {
             zoom_about(state, canvas, p, f);
         }
     }
 
-    let shift = ui.input(|i| i.modifiers.shift);
     if response.drag_started() {
         let origin = ui
             .input(|i| i.pointer.press_origin())
             .or(response.interact_pointer_pos());
         if let Some(origin) = origin {
-            let drag = if response.dragged_by(PointerButton::Middle)
-                || (response.dragged_by(PointerButton::Primary) && shift)
-            {
+            // Schwenken nach der Tastenbelegung (Voreinstellung: Mitte oder Umschalt+links);
+            // links ohne Umschalttasten wählt und zieht.
+            let km = crate::keymap::mouse::current(ui.ctx());
+            let drag = if crate::keymap::mouse::pan_2d(&km, ui, response) {
                 Some(Drag::Pan {
                     origin,
                     start: state.drawing_ui.pan,
