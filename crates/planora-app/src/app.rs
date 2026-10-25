@@ -8,6 +8,8 @@ use crate::feature_dialog::FeatureDialog;
 use crate::file_chooser::default_dir;
 use crate::icons::{self, Icon};
 use crate::import_dialog::ImportDialog;
+use crate::keymap::overview::{OverviewEvent, OverviewState};
+use crate::keymap::{self, Action};
 use crate::project_actions::ProjectsUi;
 use crate::projects_window::{ProjectsEvent, ProjectsWindow};
 use crate::settings_window::{SettingsEvent, SettingsWindow};
@@ -17,7 +19,7 @@ use crate::step_import_dialog::{self, StepImportDialog};
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
 use crate::{
-    about_dialog, browser, drawing_view, fonts, parameter_dialog, prompts, shell_panels,
+    about_dialog, browser, commands, drawing_view, fonts, parameter_dialog, prompts, shell_panels,
     sketch_panel, theme, viewport,
 };
 use planora_feature::SketchPlane;
@@ -34,21 +36,25 @@ const AUTOSAVE_REPAINT: Duration = Duration::from_secs(30);
 /// entstehende Miniatur, damit sie noch gespeichert wird (danach wird nur ihre Marke entfernt).
 pub const EXIT_WAIT: Duration = Duration::from_secs(2);
 
-/// Menüeintrag „Datei → Projekte …“ (Strg+O).
+/// Menüeintrag „Datei → Projekte …“ (Kürzel [`Action::Projects`]).
 pub const PROJECTS_ENTRY: &str = "Projekte …";
 /// Hinweis, wenn Projekte oder Einstellungen nicht öffnen, weil gerade ein Export schreibt.
 pub const EXPORT_BUSY: &str = "Bitte erst den Export beenden.";
 /// Menüeintrag „Datei → Einstellungen …“.
 pub const SETTINGS_ENTRY: &str = "Einstellungen …";
+/// Menüeintrag „Ansicht → Tastenkürzel …“ (Kürzel [`Action::ShowShortcuts`]).
+pub const VIEW_SHORTCUTS_ENTRY: &str = "Tastenkürzel …";
 
-/// Was das Menü „Datei“ außer seinen eigenen Aktionen verlangt: das Fenster „Projekte“ oder
-/// „Einstellungen“ öffnen (die Fenster gehören der App, nicht dem Arbeitsbereich).
+/// Was die Menüs außer ihren eigenen Aktionen verlangen: das Fenster „Projekte“,
+/// „Einstellungen“ oder „Tastenkürzel“ öffnen (die Fenster gehören der App, nicht dem
+/// Arbeitsbereich).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MenuRequest {
     #[default]
     None,
     Projects,
     Settings,
+    Shortcuts,
 }
 
 pub struct PlanoraApp {
@@ -60,6 +66,8 @@ pub struct PlanoraApp {
     pub(crate) projects: ProjectsWindow,
     /// Fenster „Einstellungen“.
     pub(crate) settings: SettingsWindow,
+    /// Fenster „Tastenkürzel“ (Übersicht, [`keymap::overview`]).
+    pub(crate) overview: OverviewState,
     pub(crate) versions_ui: VersionsUi,
     applied_dark: Option<bool>,
     /// `ViewportCommand::Close` wurde nach freigegebenem Beenden schon geschickt.
@@ -102,6 +110,7 @@ impl PlanoraApp {
             shell: ShellState::default(),
             projects: ProjectsWindow::default(),
             settings: SettingsWindow::default(),
+            overview: OverviewState::default(),
             versions_ui: VersionsUi::default(),
             applied_dark: None,
             close_sent: false,
@@ -133,6 +142,12 @@ impl PlanoraApp {
         (&mut self.ws, &mut self.projects, &mut self.settings)
     }
 
+    /// Zustand des Fensters „Tastenkürzel“ (für Tests).
+    #[doc(hidden)]
+    pub fn overview_mut(&mut self) -> &mut OverviewState {
+        &mut self.overview
+    }
+
     /// Zustand der schwebenden Felder (für Tests).
     #[doc(hidden)]
     pub fn shell_mut(&mut self) -> &mut ShellState {
@@ -149,88 +164,97 @@ impl PlanoraApp {
             MenuRequest::Settings => {
                 open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false)
             }
+            MenuRequest::Shortcuts => open_overview(
+                &mut self.ws,
+                &mut self.projects,
+                &mut self.settings,
+                &mut self.overview,
+            ),
         }
     }
 
-    /// Tastenkürzel Strg+N/O/S/W, Strg+Umschalt+E, Strg+Z (Rückgängig) sowie Strg+Umschalt+Z und
-    /// Strg+Y (Wiederholen). Nur ohne aktives Eingabefeld (dort gehören Strg+Z und Strg+Y dem
-    /// Feld), ohne offene Rückfrage (die sonst überschrieben würde) und nur im ersten Durchgang
-    /// eines Bildes (ein verworfener Durchgang würde das Kürzel sonst zweimal ausführen).
-    /// Strg+O öffnet das Fenster Projekte ([`open_projects`]).
-    /// Rückgängig und Wiederholen sind zusätzlich gesperrt, solange ein Fenster offen ist und
-    /// solange eine Maustaste gedrückt ist ([`PlanoraApp::undo_keys`]).
+    /// Tastenkürzel über die Tastenbelegung ([`Workspace::keymap`], Verteiler
+    /// [`keymap::dispatch`]), ausgeführt wie Menü und Knöpfe über [`commands::run_key`]: Datei-
+    /// Befehle, Rückgängig und Wiederholen, im Modell Skizze extrudieren, Verrunden,
+    /// Sichtbarkeit, Löschen und Letzten Befehl wiederholen, in der offenen Skizze die Werkzeuge
+    /// (L, R, C, P, Leertaste), „Konstruktion umschalten“ (X) und in der Zeichnung die Schalter
+    /// „Maß“ und „Position“; Esc, Enter und Entf von Skizze und Zeichnung bleiben dort fest. Nur
+    /// ohne aktives Eingabefeld (dort gehören die Tasten dem Feld; ein über Tab fokussierter
+    /// Knopf zählt mit, die Leertaste drückt ihn), ohne offene Rückfrage (die sonst überschrieben
+    /// würde) und nur im ersten Durchgang eines Bildes (ein verworfener Durchgang würde das
+    /// Kürzel sonst zweimal ausführen). Der Marker der Verlaufsleiste und die Ansicht sperren
+    /// nichts, auch nicht die Leertaste: Sie wird hier vor dem Aufbau der Bedienelemente
+    /// verbraucht, der Marker bekommt also keinen Ersatzklick. Das Kürzel für Projekte öffnet das
+    /// Fenster Projekte ([`open_projects`]), S die Übersicht der Tastenkürzel ([`open_overview`];
+    /// der getippte Text der Taste wird sicherheitshalber verbraucht, damit er nicht im
+    /// Suchfeld landet). Die Befehle von Modell, Skizze und Zeichnung sind wie Rückgängig
+    /// gesperrt, solange ein Fenster offen ist ([`PlanoraApp::windows_open`]), und außerdem,
+    /// solange das Fenster Projekte offen ist (sonst träfe Entf das Dokument dahinter); die
+    /// Taste bleibt dann liegen. Ausgeführt wird in der Reihenfolge der Tabelle, Rückgängig und
+    /// Wiederholen zuletzt; sie sind zusätzlich gesperrt, solange eine Maustaste gedrückt ist
+    /// ([`PlanoraApp::undo_keys`]).
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if viewport::typing(ctx) || self.ws.prompt.is_some() || ctx.current_pass_index() != 0 {
             return;
         }
-        let pressed = |key: egui::Key| {
-            ctx.input_mut(|i| {
-                i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, key))
-            })
-        };
-        if pressed(egui::Key::N) {
-            self.ws.new_tab();
-        }
-        if pressed(egui::Key::O) {
-            self.apply_menu_request(MenuRequest::Projects);
-        }
-        if pressed(egui::Key::S) {
-            begin_save(&mut self.ws, false);
-        }
-        if pressed(egui::Key::W) {
-            let i = self.ws.active;
-            self.ws.request_close(i);
-        }
-        let export = ctx.input_mut(|i| {
-            i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-                egui::Key::E,
-            ))
+        let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
+        let windows = self.windows_open() || self.projects.is_open();
+        let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, |a| {
+            !is_history_key(a) && !(windows && a.area() != keymap::Area::All)
         });
-        if export {
-            open_export(&mut self.ws);
+        for &a in Action::ALL.iter().filter(|a| pressed.contains(a)) {
+            let request = commands::run_key(&mut self.ws, a);
+            if request == MenuRequest::Shortcuts {
+                // Sicherheitshalber: der Text der Taste S soll nicht im neuen Suchfeld landen.
+                ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
+            }
+            self.apply_menu_request(request);
         }
         self.undo_keys(ctx);
     }
 
-    /// Strg+Z, Strg+Umschalt+Z und Strg+Y (R8). Gesperrt (die Tasten bleiben dann
-    /// unverbraucht) bei einem offenen Fenster des Tabs
-    /// ([`crate::workspace::DocTab::dialog_open`], auch Export und Import), bei „Über“, bei einem
-    /// Fenster der Aktionen im Fenster Projekte („Neues Projekt“, „Umbenennen“, „Löschen“, …), bei
-    /// einem Fenster des Reiters Versionen, solange das Fenster Einstellungen offen ist (es ist
-    /// wie die Dateifenster ein Fenster mit Dateiauswahl) und solange eine Maustaste gedrückt ist:
-    /// Mitten im Ziehen würde das halbe Ziehen sonst ein Schritt und gleich wieder
-    /// zurückgenommen. Das Fenster Projekte selbst sperrt nicht (es ändert kein Dokument).
-    /// Strg+Umschalt+Z wird vor Strg+Z abgefragt, weil das Kürzel mit Strg allein auch bei
-    /// gedrückter Umschalttaste passt. Gehaltene Tasten: jedes Bild mit (Wiederholungs-)Ereignis
-    /// ist ein Schritt, mehrere Ereignisse desselben Kürzels in einem Bild zusammen nur einer
-    /// (`consume_shortcut` verbraucht sie alle).
-    fn undo_keys(&mut self, ctx: &egui::Context) {
-        if self.ws.about_open
+    /// Ist ein Fenster offen, das Rückgängig und die Befehle von Modell, Skizze und Zeichnung
+    /// sperrt? Ein Fenster des Tabs ([`crate::workspace::DocTab::dialog_open`], auch Export und
+    /// Import), „Über“, ein Fenster der Aktionen im Fenster Projekte („Neues Projekt“,
+    /// „Umbenennen“, „Löschen“, …), ein Fenster des Reiters Versionen, das Fenster Einstellungen
+    /// (es ist wie die Dateifenster ein Fenster mit Dateiauswahl) oder die Übersicht
+    /// „Tastenkürzel“ (wie „Über“; S öffnet sie also nicht noch einmal). Das Fenster Projekte
+    /// selbst sperrt Rückgängig nicht (es ändert kein Dokument), wohl aber die Befehle der
+    /// Bereiche (siehe [`PlanoraApp::shortcuts`]).
+    fn windows_open(&self) -> bool {
+        self.ws.about_open
+            || self.overview.open
             || self.ws.active_tab().dialog_open()
             || crate::project_actions::dialog_open(&self.projects.ui)
             || self.settings.is_open()
             || crate::versions_panel::has_pending(&self.versions_ui)
-            || ctx.input(|i| i.pointer.any_down())
-        {
+    }
+
+    /// Rückgängig und Wiederholen (R8; Tasten laut Tastenbelegung). Gesperrt (die Tasten
+    /// bleiben dann unverbraucht), solange ein Fenster offen ist ([`PlanoraApp::windows_open`])
+    /// und solange eine Maustaste gedrückt ist: Mitten im Ziehen würde das halbe Ziehen sonst
+    /// ein Schritt und gleich wieder zurückgenommen. Der Verteiler nimmt Umschalttasten genau,
+    /// Strg+Umschalt+Z wird also nie zu Strg+Z. Gehaltene Tasten: jedes Bild mit
+    /// (Wiederholungs-)Ereignis ist ein Schritt, mehrere Ereignisse desselben Kürzels in einem
+    /// Bild zusammen nur einer (der Verteiler verbraucht sie alle). Kommen beide in einem Bild,
+    /// erst Rückgängig, dann Wiederholen.
+    fn undo_keys(&mut self, ctx: &egui::Context) {
+        if self.windows_open() || ctx.input(|i| i.pointer.any_down()) {
             return;
         }
-        let consume = |modifiers: egui::Modifiers, key: egui::Key| {
-            ctx.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(modifiers, key)))
-        };
-        let shift_z = consume(
-            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-            egui::Key::Z,
-        );
-        let z = consume(egui::Modifiers::COMMAND, egui::Key::Z);
-        let y = consume(egui::Modifiers::COMMAND, egui::Key::Y);
-        if z {
-            undo_active(&mut self.ws);
-        }
-        if shift_z || y {
-            redo_active(&mut self.ws);
+        let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
+        let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, is_history_key);
+        for a in [Action::Undo, Action::Redo] {
+            if pressed.contains(&a) {
+                commands::run_action(&mut self.ws, a);
+            }
         }
     }
+}
+
+/// Rückgängig oder Wiederholen: deren Tasten prüft [`PlanoraApp::undo_keys`] mit eigenen Sperren.
+fn is_history_key(a: Action) -> bool {
+    matches!(a, Action::Undo | Action::Redo)
 }
 
 /// Rückgängig im aktiven Tab (bei offener Skizze in der Skizze). Die Statuszeile nennt danach
@@ -282,8 +306,8 @@ fn history_step(ws: &mut Workspace, undo: bool) {
     }
 }
 
-/// Strg+S / Speichern: fragt nach Kommentar (Dialog), Ort oder Zweig.
-fn begin_save(ws: &mut Workspace, as_new: bool) {
+/// Kürzel oder Menü „Speichern“: fragt nach Kommentar (Dialog), Ort oder Zweig.
+pub(crate) fn begin_save(ws: &mut Workspace, as_new: bool) {
     let tab = ws.active_tab();
     if tab.read_only {
         return;
@@ -307,9 +331,9 @@ fn begin_save(ws: &mut Workspace, as_new: bool) {
     });
 }
 
-/// Datei → Exportieren … (Strg+Umschalt+E): öffnet das Fenster, wenn es Körper gibt; eine
+/// Datei → Exportieren … (auch über sein Kürzel): öffnet das Fenster, wenn es Körper gibt; eine
 /// offene Skizze wird vorher beendet. Auch in schreibgeschützten Ansichten möglich.
-fn open_export(ws: &mut Workspace) {
+pub(crate) fn open_export(ws: &mut Workspace) {
     let tab = ws.active_tab_mut();
     if tab.state.bodies.is_empty() || tab.state.try_close_sketch().is_err() {
         return;
@@ -411,6 +435,38 @@ pub fn open_settings(
     settings.open(return_to_projects);
 }
 
+/// Öffnet die Übersicht „Tastenkürzel“ (Menü Ansicht und Taste S) mit aktivem Suchfeld. Sie
+/// steht für sich wie Projekte und Einstellungen (P10): diese und die Dateifenster des aktiven
+/// Tabs schließen dabei (ein schreibendes Exportfenster bleibt, dann öffnet sie nicht,
+/// [`EXPORT_BUSY`]). Bei offener Rückfrage öffnet sie nicht (wie die Einstellungen).
+pub fn open_overview(
+    ws: &mut Workspace,
+    projects: &mut ProjectsWindow,
+    settings: &mut SettingsWindow,
+    overview: &mut OverviewState,
+) {
+    if ws.prompt.is_some() || !close_file_windows(ws) {
+        return;
+    }
+    close_projects(projects);
+    settings.close();
+    overview.open_focused();
+}
+
+/// Die Übersicht „Tastenkürzel“ schließt, sobald Projekte, Einstellungen oder ein Dateifenster
+/// des aktiven Tabs offen ist (das zuletzt geöffnete Fenster gewinnt; die Übersicht öffnet sie
+/// selbst zu, [`open_overview`]).
+pub fn enforce_overview_rules(
+    ws: &Workspace,
+    projects: &ProjectsWindow,
+    settings: &SettingsWindow,
+    overview: &mut OverviewState,
+) {
+    if overview.open && (file_window_open(ws) || projects.is_open() || settings.is_open()) {
+        overview.close();
+    }
+}
+
 /// P10: Ist ein Dateifenster des aktiven Tabs offen (neu geöffnet oder nach einem Tabwechsel),
 /// schließen Projekte und Einstellungen (die Dateifenster haben Vorrang, ohne Rückweg).
 pub fn enforce_window_rules(
@@ -480,41 +536,48 @@ fn entry(ui: &mut egui::Ui, enabled: bool, widget: impl egui::Widget) -> egui::R
     theme::entry(ui, enabled, widget)
 }
 
-/// Menüeintrag: Symbol, Beschriftung und rechtsbündig das Tastenkürzel (`kbd`-Schrift, schwach),
-/// jedes ein eigener Text; die Beschriftung wird nicht mit Leerzeichen aufgefüllt.
+/// Menüeintrag: Symbol, Beschriftung und rechtsbündig die Taste `keys` (der Tastentext aus
+/// [`keymap::shortcut_hint`], `kbd`-Schrift, schwach), jedes ein eigener Text; die Beschriftung
+/// wird nicht mit Leerzeichen aufgefüllt. Ohne Taste (leerer Text) steht rechts nichts.
 fn shortcut_button(
     ui: &mut egui::Ui,
     enabled: bool,
     icon: Icon,
     label: &str,
-    shortcut: &str,
+    keys: String,
 ) -> egui::Response {
-    entry(
-        ui,
-        enabled,
-        icons::button(icon, label)
-            .shortcut_text(egui::RichText::new(shortcut).font(theme::kbd_font())),
-    )
+    let mut button = icons::button(icon, label);
+    if !keys.is_empty() {
+        button = button.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()));
+    }
+    entry(ui, enabled, button)
 }
 
-/// Menü „Datei“. „Projekte …“ (Strg+O) und „Einstellungen …“ öffnen Fenster der App: sie
-/// kommen als [`MenuRequest`] zurück, der Aufrufer öffnet sie ([`open_projects`],
-/// [`open_settings`]).
+/// Menü „Datei“. „Projekte …“ und „Einstellungen …“ öffnen Fenster der App: sie kommen als
+/// [`MenuRequest`] zurück, der Aufrufer öffnet sie ([`open_projects`], [`open_settings`]).
 #[doc(hidden)]
 pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     let read_only = ws.active_tab().read_only;
     let mut request = MenuRequest::None;
-    if shortcut_button(ui, true, Icon::New, "Neu", "Strg+N").clicked() {
-        ws.new_tab();
+    let hint = |ws: &Workspace, a| keymap::shortcut_hint(&ws.keymap, a);
+    let (new_keys, projects_keys, save_keys, export_keys, close_keys) = (
+        hint(ws, Action::New),
+        hint(ws, Action::Projects),
+        hint(ws, Action::Save),
+        hint(ws, Action::Export),
+        hint(ws, Action::Close),
+    );
+    if shortcut_button(ui, true, Icon::New, "Neu", new_keys).clicked() {
+        commands::run_action(ws, Action::New);
         ui.close();
     }
-    if shortcut_button(ui, true, Icon::Projects, PROJECTS_ENTRY, "Strg+O").clicked() {
+    if shortcut_button(ui, true, Icon::Projects, PROJECTS_ENTRY, projects_keys).clicked() {
         request = MenuRequest::Projects;
         ui.close();
     }
     ui.separator();
-    if shortcut_button(ui, !read_only, Icon::Save, "Speichern", "Strg+S").clicked() {
-        begin_save(ws, false);
+    if shortcut_button(ui, !read_only, Icon::Save, "Speichern", save_keys).clicked() {
+        commands::run_action(ws, Action::Save);
         ui.close();
     }
     if entry(
@@ -529,11 +592,11 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     }
     ui.separator();
     let any = !ws.active_tab().state.bodies.is_empty();
-    if shortcut_button(ui, any, Icon::Export, "Exportieren …", "Strg+Umschalt+E")
+    if shortcut_button(ui, any, Icon::Export, "Exportieren …", export_keys)
         .on_disabled_hover_text("Es gibt noch keinen Körper.")
         .clicked()
     {
-        open_export(ws);
+        commands::run_action(ws, Action::Export);
         ui.close();
     }
     if entry(
@@ -559,9 +622,8 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
         ui.close();
     }
     ui.separator();
-    if shortcut_button(ui, true, Icon::Close, "Schließen", "Strg+W").clicked() {
-        let i = ws.active;
-        ws.request_close(i);
+    if shortcut_button(ui, true, Icon::Close, "Schließen", close_keys).clicked() {
+        commands::run_action(ws, Action::Close);
         ui.close();
     }
     if entry(
@@ -620,7 +682,11 @@ pub(crate) fn menu_bar_measured(
             ui.add_enabled_ui(!read_only, |ui| {
                 ui.menu_button("Bearbeiten", |ui| edit_menu(ui, ws));
             });
-            ui.menu_button("Ansicht", |ui| view_menu(ui, ws, shell));
+            ui.menu_button("Ansicht", |ui| {
+                if view_menu(ui, ws, shell) {
+                    request = MenuRequest::Shortcuts;
+                }
+            });
             // Der Zeiger steht hinter dem letzten Knopf und einem Abstand.
             width = ui.cursor().left() - start - ui.spacing().item_spacing.x;
         });
@@ -672,6 +738,11 @@ impl CreateKind {
             CreateKind::Extrusion => "Skizze extrudieren …",
             CreateKind::Revolution => "Skizze drehen …",
         }
+    }
+
+    /// Die Aktion der Tastenbelegung zu diesem Befehl (nur Skizze extrudieren hat eine).
+    pub fn action(self) -> Option<Action> {
+        (self == CreateKind::Extrusion).then_some(Action::ExtrudeSketch)
     }
 
     /// Symbol (wie im Menü).
@@ -784,7 +855,10 @@ pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
     }
 }
 
-fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+/// Menü „Erzeugen“: Grundkörper, Skizzen und Körper aus Skizzen. „Skizze extrudieren …“ läuft
+/// über [`commands::run_action`] und zeigt seine Taste.
+#[doc(hidden)]
+pub fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     for kind in &CreateKind::ALL[..4] {
         if icons::source_entry(ui, kind.icon(), kind.label(), true).clicked() {
             do_create(ws, *kind);
@@ -797,13 +871,35 @@ fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     // Körper aus Skizzen: die gewählte (sonst die geöffnete, sonst die letzte) Skizze.
     for kind in &CreateKind::ALL[4..] {
         let blocked = create_blocked(ws, *kind);
-        if icons::source_entry(ui, kind.icon(), kind.label(), blocked.is_none())
+        let action = kind.action();
+        let keys = action.map_or_else(String::new, |a| keymap::shortcut_hint(&ws.keymap, a));
+        if icons::source_entry_keys(ui, kind.icon(), kind.label(), &keys, blocked.is_none())
             .on_disabled_hover_text(blocked.unwrap_or_default())
             .clicked()
         {
-            do_create(ws, *kind);
+            run_create(ws, *kind);
             ui.close();
         }
+    }
+}
+
+/// Erzeugen-Befehl aus Menü oder Befehlsfeld: mit eigener Aktion (Skizze extrudieren) über
+/// [`commands::run_action`], sonst [`do_create`].
+pub(crate) fn run_create(ws: &mut Workspace, kind: CreateKind) {
+    match kind.action() {
+        Some(a) => {
+            commands::run_action(ws, a);
+        }
+        None => do_create(ws, kind),
+    }
+}
+
+/// Verrunden (über [`commands::run_action`]) oder Fase aus Menü oder Befehlsfeld.
+pub(crate) fn run_blend(ws: &mut Workspace, chamfer: bool) {
+    if chamfer {
+        open_blend(ws, true);
+    } else {
+        commands::run_action(ws, Action::Fillet);
     }
 }
 
@@ -827,25 +923,30 @@ pub fn redo_menu_text(label: Option<&str>) -> String {
 /// Menüeintrag „Bearbeiten → Parameter …“.
 pub const PARAMETERS_ENTRY: &str = "Parameter …";
 
-fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+/// Menü „Bearbeiten“: Rückgängig, Wiederholen, Parameter, Boolesche Operationen, Verrunden und
+/// Fase (Verrunden mit seiner Taste), Zum Ende der Zeitleiste.
+#[doc(hidden)]
+pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     // Rückgängig und Wiederholen: gesperrt mit Hilfetext, wenn es nichts zu tun gibt, in alten
     // Versionen und während des Exports. Ein offenes Fenster sperrt nicht, es wird geschlossen.
     let tab = ws.active_tab();
     let (undo_block, redo_block) = (tab.undo_blocked(), tab.redo_blocked());
     let undo_text = undo_menu_text(tab.undo_label());
     let redo_text = redo_menu_text(tab.redo_label());
-    if shortcut_button(ui, undo_block.is_none(), Icon::Undo, &undo_text, "Strg+Z")
+    let undo_keys = keymap::shortcut_hint(&ws.keymap, Action::Undo);
+    let redo_keys = keymap::shortcut_hint(&ws.keymap, Action::Redo);
+    if shortcut_button(ui, undo_block.is_none(), Icon::Undo, &undo_text, undo_keys)
         .on_disabled_hover_text(undo_block.unwrap_or_default())
         .clicked()
     {
-        undo_active(ws);
+        commands::run_action(ws, Action::Undo);
         ui.close();
     }
-    if shortcut_button(ui, redo_block.is_none(), Icon::Redo, &redo_text, "Strg+Y")
+    if shortcut_button(ui, redo_block.is_none(), Icon::Redo, &redo_text, redo_keys)
         .on_disabled_hover_text(redo_block.unwrap_or_default())
         .clicked()
     {
-        redo_active(ws);
+        commands::run_action(ws, Action::Redo);
         ui.close();
     }
     ui.separator();
@@ -882,11 +983,16 @@ fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     ui.separator();
     let blend = ws.active_tab().state.blend_blocked();
     for (label, source, chamfer) in icons::blend_entries() {
-        if icons::source_entry(ui, source, label, blend.is_none())
+        let keys = if chamfer {
+            String::new()
+        } else {
+            keymap::shortcut_hint(&ws.keymap, Action::Fillet)
+        };
+        if icons::source_entry_keys(ui, source, label, &keys, blend.is_none())
             .on_disabled_hover_text(blend.unwrap_or_default())
             .clicked()
         {
-            open_blend(ws, chamfer);
+            run_blend(ws, chamfer);
             ui.close();
         }
     }
@@ -906,7 +1012,10 @@ fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
 }
 
-fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) {
+/// Menü „Ansicht“: Blickrichtungen, Einpassen, Design, „Tastenkürzel …“ (mit seiner Taste) und
+/// Versionen. Liefert, ob „Tastenkürzel …“ gewählt wurde (das Fenster gehört der App).
+fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> bool {
+    let mut shortcuts = false;
     let state = &mut ws.active_tab_mut().state;
     for face in ViewFace::ALL {
         if entry(ui, true, icons::button(Icon::ViewFace, face.label())).clicked() {
@@ -935,7 +1044,14 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) {
         ui.close();
     }
     ui.separator();
+    let keys = keymap::shortcut_hint(&ws.keymap, Action::ShowShortcuts);
+    if shortcut_button(ui, true, Icon::Keyboard, VIEW_SHORTCUTS_ENTRY, keys).clicked() {
+        shortcuts = true;
+        ui.close();
+    }
+    ui.separator();
     shell_toggles(ui, shell);
+    shortcuts
 }
 
 /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
@@ -1052,6 +1168,8 @@ impl eframe::App for PlanoraApp {
         }
 
         self.shortcuts(&ctx);
+        // Esc der Übersicht vor den Ansichten (weder Auswahl noch Skizze sollen es sehen).
+        keymap::overview::take_escape(&ctx, &mut self.overview, self.ws.prompt.is_some());
         // Das Fenster „Parameter“ vor allen übrigen Bereichen: Übernimmt es eine Zeile, weil ein
         // Klick das Feld verlassen hat, wird die Änderung ein eigener Schritt, bevor die Ansicht
         // im selben Bild mit einem Ziehen beginnt (sonst ein gemeinsamer Schritt). Ein Fenster
@@ -1077,6 +1195,8 @@ impl eframe::App for PlanoraApp {
         // freien Fläche, ebenso das Blatt der Zeichnung (über das ganze Fenster gemalt, in die
         // freie Fläche eingepasst; Werkzeug-, Ansichts- und Hinweisfeld zeichnet `show_with`).
         let enabled = !self.ws.active_tab().read_only;
+        // Mausgesten der Ansichten aus der Tastenbelegung (siehe `keymap::mouse`).
+        keymap::mouse::set_current(&ctx, &self.ws.keymap);
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let state = &mut self.ws.active_tab_mut().state;
             match state.drawing_ui.area {
@@ -1090,7 +1210,10 @@ impl eframe::App for PlanoraApp {
         let tab = self.ws.active_tab_mut();
         if let Some(dialog) = dialog_for_request(&mut tab.state) {
             tab.dialog = Some(dialog);
+            // „Extrudieren …“ im Kontextmenü des Baums zählt wie der Menüeintrag.
+            commands::track(&mut self.ws, Action::ExtrudeSketch);
         }
+        let tab = self.ws.active_tab_mut();
         if let Some(id) = tab.state.edit_request.take() {
             tab.feature_dialog = FeatureDialog::new(&tab.state, id);
         }
@@ -1164,9 +1287,16 @@ impl eframe::App for PlanoraApp {
             tab.state.edge_picking = false;
             tab.state.clear_edge_marks();
         }
+        // Ein geschlossenes Fenster eines wiederholbaren Befehls: gemerkt, wenn ausgeführt.
+        commands::observe(&mut self.ws);
 
         show_file_dialogs(&ctx, &mut self.ws);
         show_windows(&ctx, &mut self.ws, &mut self.projects, &mut self.settings);
+        enforce_overview_rules(&self.ws, &self.projects, &self.settings, &mut self.overview);
+        if keymap::overview::show(&ctx, &self.ws, &mut self.overview) == OverviewEvent::OpenSettings
+        {
+            open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false);
+        }
         self.ws.refresh_prompts();
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);

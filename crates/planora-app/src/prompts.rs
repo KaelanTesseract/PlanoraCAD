@@ -3,6 +3,7 @@
 //! zurückgeschrieben wird.
 
 use crate::dialog::{Dialog, DialogSize};
+use crate::keymap::{self, Action, Keymap};
 use crate::theme;
 use crate::workspace::{After, Prompt, SaveOutcome, Workspace};
 use planora_project::docstore::LockMode;
@@ -180,6 +181,20 @@ fn container_tree(ui: &mut egui::Ui, nodes: &[TreeNode], selected: &mut NodePath
     }
 }
 
+/// Hinweis in „Speichern unter“, wenn es noch kein Projekt gibt: nennt die Taste für Projekte
+/// aus der Tastenbelegung, ohne Taste den Weg über das Menü „Datei“.
+pub fn no_project_hint(km: &Keymap) -> String {
+    let keys = keymap::shortcut_hint(km, Action::Projects);
+    let open = if keys.is_empty() {
+        format!("im Menü „Datei“ unter „{}“", crate::app::PROJECTS_ENTRY)
+    } else {
+        format!("mit {keys}")
+    };
+    format!(
+        "Noch kein Projekt vorhanden. Bitte mit „Abbrechen“ schließen, dann {open} das Fenster Projekte öffnen und ein Projekt anlegen."
+    )
+}
+
 fn save_as(
     ctx: &egui::Context,
     ws: &mut Workspace,
@@ -190,6 +205,7 @@ fn save_as(
     mut comment: String,
 ) {
     let tree = ws.library.as_ref().map(|l| l.tree());
+    let no_project_hint = no_project_hint(&ws.keymap);
     let mut done = None;
     window(ctx, "save_as", "Speichern unter", |ui| {
         match &tree {
@@ -209,7 +225,7 @@ fn save_as(
                         .auto_shrink([false, true]);
                     theme::scroll_area(ui, area, |ui| {
                         if nodes.iter().all(|n| n.kind == NodeKind::Document) {
-                            ui.weak("Noch kein Projekt vorhanden. Bitte mit „Abbrechen“ schließen, dann mit Strg+O das Fenster Projekte öffnen und ein Projekt anlegen.");
+                            ui.weak(&no_project_hint);
                         }
                         container_tree(ui, nodes, &mut parent);
                     });

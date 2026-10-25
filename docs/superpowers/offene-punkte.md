@@ -1344,7 +1344,7 @@ Die Festlegungen stehen im Kopf des Plans und kurz in der Spec §10.
 - **Abweichung Skizze ohne `Tracker`:** Der Skizzenverlauf hat keinen `Tracker`; er vergleicht den Entwurf je Bild mit dem letzten Eintrag über den Skizzenstand (der Aufschub durch ein offenes Werkzeug verträgt keinen verbrauchenden Beobachter). Zusätzlich geändert gegenüber den Dateilisten der Aufgaben: `history.rs` (`sketch_bytes`), `sketch_panel.rs` (Maßfeld schließt nach einem Sprung), `undo_labels.rs` (Name ohne die offenen Punkte).
 - **Zeichnungskennungen werden nach Rückgängig wiederverwendet:** Nimmt Rückgängig eine Zeichnung zurück und wird danach eine neue angelegt, bekommt sie dieselbe Kennung. Die Oberfläche vergisst Auswahl, Zoom und Verschiebung der fehlenden Zeichnung (`forget_missing`), die neue beginnt frisch.
 - **Menü Bearbeiten** ist in alten Versionen als Ganzes ausgegraut (bestehende Logik); der Hinweis des Eintrags ist dort nicht erreichbar.
-- **Strg+Alt+Z** (und Strg+Alt+Y) lösen ebenfalls aus. Das ist bei allen Kürzeln des Programms so (egui vergleicht nur die logischen Tasten); auf QWERTZ gibt es keinen Zeichenkonflikt. Angenommen.
+- **Strg+Alt+Z** (und Strg+Alt+Y) lösen ebenfalls aus. Das galt, bis die Tastenkürzel genaue Umschalttasten bekamen (Teilprojekt Tastenkürzel, unten): Strg+Alt+Z löst jetzt nichts mehr aus.
 - Strg+Z in dem Bild, in dem ein Fenster schließt, bleibt ohne Wirkung; bei offenem Menü wirkt Strg+Z. Jedes fokussierte Widget (auch ein Knopf nach Tab) sperrt über „Tippen“. Mehrere Tastenereignisse in einem Bild zählen als ein Schritt.
 
 ### Grenzen
@@ -1812,3 +1812,37 @@ Entscheidungen von Dennis am 2026-10-23. Zweig `feature/projekte-fenster`. Entwu
 - [ ] 5. Durchsichtigkeit auf 0, 40 und 80 %, hell und dunkel: Der Baum bleibt lesbar.
 - [ ] 6. Auge in der Körperzeile: Der Körper verschwindet aus der Ansicht, nach dem Neustart ist er wieder da.
 
+## Teilprojekt: Tastenkürzel
+
+Entwurf: `docs/superpowers/specs/2026-10-24-tastenkuerzel-design.md` (mit Nachtrag „Tatsächlich umgesetzt“). Plan mit „Abweichungen“: `docs/superpowers/plans/2026-10-24-tastenkuerzel.md`. Zweig `feature/tastenkuerzel`.
+
+### Stand und Geliefertes
+- Alle Kürzel stehen in **einer Tabelle** (`planora-app/src/keymap/defaults.rs`, Makro `action_table!`): Id, deutscher Name, Bereich (Überall, Modell, Skizze, Zeichnung), Voreinstellung. Menüs, Knöpfe und Tooltips zeigen die aktuelle Taste aus der Belegung.
+- Ab Werk wie in Fusion: E Extrudieren, F Verrunden, V Sichtbarkeit, Entf Löschen, Leertaste letzten Befehl wiederholen, S Übersicht; in der Skizze L, R, C, P, X; in der Zeichnung D (Maß) und B (Position). Dazu die bisherigen Dateikürzel (Strg+N, O, S, W, Umschalt+E, Z, Y).
+- Maus ab Werk wie Fusion: mittlere Taste schwenkt, Umschalt+mittlere dreht, Rad zoomt (auch Strg+Rad für das Touchpad); die linke Taste dreht weiter, Umschalt+links schwenkt.
+- Fenster Einstellungen, Abschnitt „Tastenkürzel“: Tabelle mit Suche, Ändern durch Tastendruck oder Mausgeste, Zurücksetzen je Zeile und für alles, Hinweis bei Doppelbelegung mit „Tauschen“. Gespeichert werden nur Abweichungen in der Konfigurationsdatei.
+- Übersicht „Tastenkürzel“ (Ansicht → Tastenkürzel … oder S) mit Suche nach Name und Taste.
+- Umschalttasten zählen genau (Strg+Umschalt+N und Strg+Alt+Z feuern nicht mehr).
+
+### Regel für künftige Funktionen
+Hat Fusion für eine neue Funktion ein Kürzel, gilt: **Taste eintragen, sobald die Funktion gebaut wird.** Bis dahin steht sie nur in der folgenden Liste.
+
+### Fusion-Kürzel ohne Funktion (nicht belegt, Grund: Funktion fehlt)
+- Modell: M Verschieben (kein Verschieben-Werkzeug, nur Positionsfelder), H Bohrung, I Messen, Q Drücken/Ziehen, A Erscheinungsbild, Strg+B Alles neu berechnen, 1 / 2 / 3 Auswahlarten.
+- Überall: Strg+C / Strg+X / Strg+V (Kopieren, Ausschneiden, Einfügen), Strg+Umschalt+S (Wiederherstellungs-Sicherung).
+- Skizze: O Versatz, T Stutzen, D Bemaßung.
+- Zeichnung: C Mittelpunktmarke, M Verschieben, P Projizierte Ansicht, T Text.
+- Maus: „Um Punkt drehen“ (Umschalt+Klick, dann mittlere Taste halten) ist nicht gebaut.
+
+### Offene Punkte und bekannte Eigenheiten
+- **Strg oder Alt + linke/mittlere Taste ziehen** dreht oder schwenkt nicht mehr (früher drehte und schwenkte jede Strg-/Alt-Stellung mit). Bewusst so, weil die Umschalttasten genau zählen; die Belegung „links dreht“ gilt nur ohne Strg/Alt.
+- **Deutsche Tastatur:** Tasten, die egui nicht kennt, erscheinen als die Taste auf der Hardware (Ü steht als „Eckige Klammer auf“). Sie funktionieren, der Name ist nur irreführend.
+- **V** blendet den Körper aus und leert die Auswahl (wie ein Klick aufs Auge). Ein zweites V tut darum nichts; der Körper muss erst wieder gewählt werden.
+- Wird ein Fenster **geschlossen, während eine erfasste Taste noch gehalten wird**, kann die Wiederholung der Taste einmal auslösen.
+- **Kontextmenüs und Skizzenzüge** während des Erfassens einer Mausgeste sind nicht besonders behandelt (ein Fenstertest fehlt).
+- **Esc bei gestapelten Fenstern** ist nicht besonders geregelt; die Übersicht schließt dagegen immer mit Esc.
+- **Einstellungen** öffnen oben, nicht beim Abschnitt „Tastenkürzel“ (auch nicht aus der Übersicht).
+- **Würfel (Ansichtswürfel):** Das Drehen am Würfel folgt der Tabelle. Entfernt man die Belegung „links dreht“, dreht der Würfel in der Skizze nicht mehr mit links; Umschalt+mittlere Taste dreht ihn weiter.
+- **Letztes Skizzenwerkzeug:** Beim Spiegeln oder Muster kann ein falsches Werkzeug gemerkt werden (die Kurve entsteht nicht durch das gewählte Werkzeug).
+- **Doppelbelegung:** Der Hinweis, dass eine Taste schon einer anderen Aktion gehört, kommt nur in den Einstellungen. Beim Laden einer von Hand bearbeiteten Datei gilt bei Doppelbelegung die erste Aktion der Tabelle.
+- Einträge in der Konfiguration, die nur eine neuere Version kennt, gehen beim Ändern in einer älteren Version verloren (Tester wechseln nicht zurück; angenommen).

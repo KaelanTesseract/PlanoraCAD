@@ -235,6 +235,15 @@ impl SketchSession {
         self.pending_pos.clear();
     }
 
+    /// Wählt `tool` wie der Klick auf seinen Knopf in der Leiste (und sein Tastenkürzel): ist
+    /// es schon gewählt, bleibt alles (auch ein laufender Linienzug), sonst wie
+    /// [`set_tool`](Self::set_tool).
+    pub fn choose_tool(&mut self, sk: &mut Sketch, tool: Tool) {
+        if self.tool != tool {
+            self.set_tool(sk, tool);
+        }
+    }
+
     /// Nach Rückgängig/Wiederholen in der Skizze (R10): `sk` ist der zurückgeholte Entwurf.
     /// Laufendes Werkzeug (offene Punkte und Ecken), Auswahl, Ziehen und Meldung gehören zum
     /// alten Stand und entfallen, ebenso ein offenes Maßfeld (über `history_jumps`).
@@ -1065,6 +1074,20 @@ impl SketchSession {
             self.dragging = None;
         }
         self.last_report = Some(sk.solve());
+    }
+
+    /// Lässt sich „Konstruktion umschalten“ anwenden (mindestens eine Kurve ausgewählt)? Gilt
+    /// für den Knopf im Skizzenfeld und seine Taste.
+    pub fn can_toggle_construction(&self) -> bool {
+        self.selection.iter().any(|i| matches!(i, Item::Curve(_)))
+    }
+
+    /// „Konstruktion umschalten“ wie Knopf und Taste: nur, wenn
+    /// [`can_toggle_construction`](Self::can_toggle_construction) gilt, sonst nichts.
+    pub fn toggle_construction_if_possible(&mut self, sk: &mut Sketch) {
+        if self.can_toggle_construction() {
+            self.toggle_construction(sk);
+        }
     }
 
     /// Schaltet bei den ausgewählten Kurven die Konstruktionseigenschaft um.

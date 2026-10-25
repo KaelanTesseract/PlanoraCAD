@@ -244,12 +244,22 @@ impl Rig {
     }
 
     /// Klick auf den sichtbaren Text `text` (in `area`, wenn angegeben).
+    /// Klick auf `text`, mit `area` auf den untersten Treffer darin (in den Einstellungen steht
+    /// die Aktion „Schließen“ der Tastenkürzel über dem Knopf „Schließen“ der Fußzeile).
     fn click_in(&mut self, text: &str, area: Option<Rect>) -> Shot {
         let shot = self.pause();
-        let at = shot
+        let inside: Vec<_> = shot
             .all(text)
             .into_iter()
-            .find(|s| area.is_none_or(|a| a.contains_rect(s.rect)))
+            .filter(|s| area.is_none_or(|a| a.contains_rect(s.rect)))
+            .collect();
+        let pick = match area {
+            Some(_) => inside
+                .into_iter()
+                .max_by(|a, b| a.rect.top().total_cmp(&b.rect.top())),
+            None => inside.into_iter().next(),
+        };
+        let at = pick
             .unwrap_or_else(|| panic!("„{text}“ nicht sichtbar: {}", shot.texts()))
             .rect
             .center();

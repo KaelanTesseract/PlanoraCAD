@@ -178,6 +178,8 @@ pub enum Icon {
     HistoryForward,
     /// Phosphor `warning` (Verlaufsleiste: Schritt mit Fehler).
     Warning,
+    /// Phosphor `keyboard` (Menüeintrag „Tastenkürzel …“).
+    Keyboard,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -265,6 +267,7 @@ pub const ALL: &[Icon] = &[
     Icon::HistoryPause,
     Icon::HistoryForward,
     Icon::Warning,
+    Icon::Keyboard,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -352,6 +355,7 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::HistoryPause, '\u{e39e}', "pause"),
     (Icon::HistoryForward, '\u{e6a6}', "fast-forward"),
     (Icon::Warning, '\u{e4e0}', "warning"),
+    (Icon::Keyboard, '\u{e2d8}', "keyboard"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {
@@ -421,16 +425,35 @@ pub fn source_entry(
     label: &str,
     enabled: bool,
 ) -> egui::Response {
+    source_entry_keys(ui, source, label, "", enabled)
+}
+
+/// Wie [`source_entry`], rechtsbündig mit der Taste `keys` (`kbd`-Schrift, schwach; leer:
+/// keine), wie die Einträge des Menüs „Datei“.
+pub fn source_entry_keys(
+    ui: &mut egui::Ui,
+    source: IconSource,
+    label: &str,
+    keys: &str,
+    enabled: bool,
+) -> egui::Response {
+    let with_keys = |b: egui::Button<'static>| {
+        if keys.is_empty() {
+            b
+        } else {
+            b.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()))
+        }
+    };
     if let IconSource::Font(icon) = source {
-        return theme::entry(ui, enabled, button(icon, label));
+        return theme::entry(ui, enabled, with_keys(button(icon, label.to_owned())));
     }
     let id = egui::Id::new(("planora-icon", label));
     // Gesperrt zeichnet der Maler blass, auch das Symbol.
     ui.add_enabled(enabled, |ui: &mut egui::Ui| {
-        let result = egui::Button::new((
+        let result = with_keys(egui::Button::new((
             egui::Atom::custom(id, vec2(LABEL_ICON_SIZE, LABEL_ICON_SIZE)),
-            label,
-        ))
+            label.to_owned(),
+        )))
         .atom_ui(ui);
         if let Some(rect) = result.rect(id) {
             let active = result.response.hovered();

@@ -2467,12 +2467,17 @@ impl AppState {
     /// Sperre des Körpers, um den es bei Menü und Befehlsfeld geht: der gewählte, sonst der
     /// Körper der gewählten Fläche oder Kante.
     pub(crate) fn chosen_lock(&self) -> Option<&'static str> {
-        let body = self.selected_body.or(match self.selection {
+        self.chosen_body().and_then(|i| self.body_lock(i))
+    }
+
+    /// Der Körper, um den es bei Menü, Befehlsfeld und Tasten geht (Index in `bodies`): der
+    /// gewählte, sonst der Körper der gewählten Fläche oder Kante.
+    pub fn chosen_body(&self) -> Option<usize> {
+        self.selected_body.or(match self.selection {
             Some(Pick::Face(f)) => Some(f.body),
             Some(Pick::Edge(e)) => Some(e.body),
             None => None,
-        });
-        body.and_then(|i| self.body_lock(i))
+        })
     }
 
     /// Warum „Vereinigen“, „Abziehen“ und „Schneiden“ gerade nicht gehen (`None`: sie gehen).

@@ -399,7 +399,9 @@ impl App {
         seen
     }
 
-    /// Klick auf den sichtbaren Text `text` (vorher eine Pause, damit kein Doppelklick entsteht).
+    /// Klick auf den sichtbaren Text `text` (vorher eine Pause, damit kein Doppelklick entsteht);
+    /// bei mehreren der unterste (die Aktion „Schließen“ der Tastenkürzel steht über dem Knopf
+    /// „Schließen“ der Fußzeile).
     fn click(&mut self, text: &str) {
         self.click_with(text, PointerButton::Primary);
     }
@@ -409,7 +411,8 @@ impl App {
         let seen = self.settle(4);
         let s = seen
             .iter()
-            .find(|s| s.text == text && s.clip.contains(s.rect.center()))
+            .filter(|s| s.text == text && s.clip.contains(s.rect.center()))
+            .max_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
             .unwrap_or_else(|| panic!("„{text}“ nicht sichtbar"));
         let at = s.rect.center();
         let button = |pressed| Event::PointerButton {

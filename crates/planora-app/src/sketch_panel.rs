@@ -6,6 +6,7 @@
 
 use crate::formula_field::{FX, FormulaField, names_hint};
 use crate::icons::{self, Icon, IconSource};
+use crate::keymap::{Action, with_hint};
 use crate::shell::{self, ShellMode, ShellRects, ShellState};
 use crate::shell_panels;
 use crate::sketch_state::{ConstraintAction, Item, Severity, SketchSession, Tool, formula_problem};
@@ -325,8 +326,10 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     }
 }
 
-/// Werkzeugleiste: die neun Werkzeuge als Symbolknöpfe untereinander. Name und Hinweis stehen im
-/// Hinweistext und (für Bildschirmleser) in der Knopfbeschreibung.
+/// Werkzeugleiste: die neun Werkzeuge als Symbolknöpfe untereinander. Name (mit Taste, soweit
+/// das Werkzeug ein Kürzel hat) und Hinweis stehen im Hinweistext, der Name (für
+/// Bildschirmleser) in der Knopfbeschreibung. Ein Klick wählt wie die Taste
+/// ([`SketchSession::choose_tool`]).
 fn strip_field(
     ctx: &egui::Context,
     rect: egui::Rect,
@@ -339,6 +342,8 @@ fn strip_field(
     ));
     let inner = shell_panels::inner_size(&frame, rect.size());
     let mut seen: Vec<(&'static str, egui::Rect)> = Vec::new();
+    // Die Tastenbelegung dieses Bilds (für die Taste im Hinweistext).
+    let km = crate::keymap::mouse::current(ctx);
     shell_panels::field(
         ctx,
         shell_panels::sketch_strip_id(),
@@ -357,14 +362,20 @@ fn strip_field(
                     ui.spacing_mut().item_spacing.y = shell::STRIP_SPACING;
                     for (tool, label, hint) in TOOLS {
                         let selected = se.tool == tool;
+                        // Name mit Taste („Linie (L)“), ohne Eintrag in der Tabelle nur der
+                        // Name.
+                        let title = match Action::for_sketch_tool(tool) {
+                            Some(a) => with_hint(&km, a, label),
+                            None => label.to_string(),
+                        };
                         let r =
                             strip_button(ui, icons::sketch_tool_icon(tool), label, selected, dark)
                                 .on_hover_ui(|ui| {
-                                    ui.strong(label);
+                                    ui.strong(&title);
                                     ui.label(hint);
                                 });
-                        if r.clicked() && !selected {
-                            se.set_tool(sk, tool);
+                        if r.clicked() {
+                            se.choose_tool(sk, tool);
                         }
                         seen.push((label, r.rect));
                     }
@@ -501,17 +512,24 @@ fn side_contents(
         .filter(|i| matches!(i, Item::Curve(_)))
         .count();
     let axis = mirror_axis(se, sk);
+    // Die Taste steht im Hinweistext („Konstruktion umschalten (X)“).
+    let construction_tip = with_hint(
+        &crate::keymap::mouse::current(ui.ctx()),
+        Action::SketchConstruction,
+        CONSTRUCTION,
+    );
     ui.horizontal_wrapped(|ui| {
         if tool_button(
             ui,
             IconSource::Font(Icon::ToggleConstruction),
-            "Konstruktion umschalten",
-            curves > 0,
+            CONSTRUCTION,
+            se.can_toggle_construction(),
         )
+        .on_hover_text(construction_tip)
         .on_disabled_hover_text("Zuerst Kurven auswählen.")
         .clicked()
         {
-            se.toggle_construction(sk);
+            se.toggle_construction_if_possible(sk);
         }
         if tool_button(
             ui,
@@ -952,6 +970,9 @@ pub const AUTO_AXIS_HINT: &str = "Fast waagerechte oder senkrechte Linien bekomm
 
 /// Schalter für automatisch waagerechte/senkrechte Linien.
 pub const AUTO_AXIS: &str = "Waagerecht/senkrecht erkennen";
+
+/// Beschriftung des Knopfs „Konstruktion umschalten“ (gleich dem Namen seiner Aktion).
+pub const CONSTRUCTION: &str = "Konstruktion umschalten";
 
 /// Beschreibung des Löschknopfs einer Zeile der Liste.
 const DELETE_ROW: &str = "Abhängigkeit löschen";

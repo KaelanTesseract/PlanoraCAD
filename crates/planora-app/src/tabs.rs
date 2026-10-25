@@ -1,6 +1,7 @@
 //! Tab-Leiste über der 3D-Ansicht.
 
 use crate::icons::{self, Icon};
+use crate::keymap::{self, Action};
 use crate::theme;
 use crate::workspace::Workspace;
 
@@ -44,7 +45,12 @@ pub fn show_tabs_only(ui: &mut egui::Ui, ws: &mut Workspace, reveal_active: bool
     show_impl(ui, ws, reveal_active, false);
 }
 
-/// Symbol „Neu“ (Neues Dokument, Strg+N) für sich; legt beim Klick einen neuen Tab an.
+/// Tooltip des Symbols „Neu“ mit der Taste aus der Tastenbelegung.
+fn new_tab_hint(ws: &Workspace) -> String {
+    keymap::with_hint(&ws.keymap, Action::New, "Neues Dokument")
+}
+
+/// Symbol „Neu“ (Neues Dokument) für sich; legt beim Klick einen neuen Tab an.
 pub fn new_tab_button(ui: &mut egui::Ui, ws: &mut Workspace) -> egui::Response {
     let response = ui
         .scope(|ui| {
@@ -52,7 +58,7 @@ pub fn new_tab_button(ui: &mut egui::Ui, ws: &mut Workspace) -> egui::Response {
             icon_button(ui, Icon::NewTab)
         })
         .inner
-        .on_hover_text("Neues Dokument (Strg+N)");
+        .on_hover_text(new_tab_hint(ws));
     if response.clicked() {
         ws.new_tab();
     }
@@ -63,6 +69,10 @@ fn show_impl(ui: &mut egui::Ui, ws: &mut Workspace, reveal_active: bool, with_ne
     let mut activate = None;
     let mut close = None;
     let mut add = false;
+    let (close_hint, new_hint) = (
+        keymap::with_hint(&ws.keymap, Action::Close, "Schließen"),
+        new_tab_hint(ws),
+    );
     ui.horizontal_wrapped(|ui| {
         theme::frameless(ui.style_mut());
         ui.spacing_mut().item_spacing.x = theme::SPACE_1;
@@ -72,7 +82,7 @@ fn show_impl(ui: &mut egui::Ui, ws: &mut Workspace, reveal_active: bool, with_ne
             if head.clicked() {
                 activate = Some(i);
             }
-            let close_button = icon_button(ui, Icon::Close).on_hover_text("Schließen (Strg+W)");
+            let close_button = icon_button(ui, Icon::Close).on_hover_text(&close_hint);
             if reveal_active && i == ws.active {
                 ui.scroll_to_rect(head.rect.union(close_button.rect), None);
             }
@@ -85,7 +95,7 @@ fn show_impl(ui: &mut egui::Ui, ws: &mut Workspace, reveal_active: bool, with_ne
         }
         if with_new
             && icon_button(ui, Icon::NewTab)
-                .on_hover_text("Neues Dokument (Strg+N)")
+                .on_hover_text(&new_hint)
                 .clicked()
         {
             add = true;

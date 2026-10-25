@@ -999,10 +999,18 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
                 IconSource::Font(glyph),
                 if r.hidden { weak } else { c },
             );
-            let e = e.on_hover_text(if r.hidden {
-                "Körper einblenden"
-            } else {
-                "Körper ausblenden (nur in der Ansicht)"
+            let e = e.on_hover_ui(|ui| {
+                let km = crate::keymap::mouse::current(ui.ctx());
+                let text = if r.hidden {
+                    "Körper einblenden"
+                } else {
+                    "Körper ausblenden (nur in der Ansicht)"
+                };
+                ui.label(crate::keymap::with_hint(
+                    &km,
+                    crate::keymap::Action::ToggleVisibility,
+                    text,
+                ));
             });
             if e.clicked() {
                 *action = Some(Action::ToggleHidden(j));
@@ -1080,6 +1088,17 @@ fn feature_menu(
         *action = Some(a);
         ui.close();
     };
+    // Die Tasten der Menüeinträge stehen rechts, wie sie in den Einstellungen belegt sind.
+    let km = crate::keymap::mouse::current(ui.ctx());
+    let key_button = |label: &str, a: crate::keymap::Action| {
+        let keys = crate::keymap::shortcut_hint(&km, a);
+        let b = egui::Button::new(label);
+        if keys.is_empty() {
+            b
+        } else {
+            b.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()))
+        }
+    };
     if ui.button("Bearbeiten").clicked() {
         pick(Action::Edit(id), ui);
     }
@@ -1096,12 +1115,20 @@ fn feature_menu(
     }
     if let Some(lock) = sketch {
         ui.separator();
-        for (label, act) in [
-            ("Extrudieren …", Action::Extrude(id)),
-            ("Drehen …", Action::Revolve(id)),
+        for (label, act, key) in [
+            (
+                "Extrudieren …",
+                Action::Extrude(id),
+                Some(crate::keymap::Action::ExtrudeSketch),
+            ),
+            ("Drehen …", Action::Revolve(id), None),
         ] {
+            let button = match key {
+                Some(k) => key_button(label, k),
+                None => egui::Button::new(label),
+            };
             if ui
-                .add_enabled(lock.is_none(), egui::Button::new(label))
+                .add_enabled(lock.is_none(), button)
                 .on_disabled_hover_text(lock.unwrap_or_default())
                 .clicked()
             {
@@ -1110,7 +1137,13 @@ fn feature_menu(
         }
     }
     ui.separator();
-    if ui.button("Löschen").clicked() {
+    if ui
+        .add(key_button(
+            "Löschen",
+            crate::keymap::Action::DeleteSelection,
+        ))
+        .clicked()
+    {
         pick(Action::Delete(id), ui);
     }
 }

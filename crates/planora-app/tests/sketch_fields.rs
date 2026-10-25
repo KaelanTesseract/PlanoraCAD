@@ -294,12 +294,18 @@ fn all_nine_tools_are_buttons_with_tooltips_and_widget_info() {
     };
     // Überfahren zeigt den Namen und den Hinweis als Hinweistext (vor jedem Klick: egui zeigt
     // kurz nach einem Klick keine Hinweistexte).
-    for (_, label, hint) in sketch_panel::TOOLS {
+    // Werkzeuge mit Kürzel nennen die Taste („Linie (L)“).
+    let km = planora_app::keymap::Keymap::defaults();
+    for (tool, label, hint) in sketch_panel::TOOLS {
         let r = at(&c, label);
         frame(&c, &mut app, SIZE, vec![moved(r.center())]);
         frame(&c, &mut app, SIZE, vec![moved(r.center())]);
         let shot = frame(&c, &mut app, SIZE, vec![]);
-        assert!(shot.has(label), "Hinweistext „{label}“ fehlt");
+        let title = match planora_app::keymap::Action::for_sketch_tool(tool) {
+            Some(a) => planora_app::keymap::with_hint(&km, a, label),
+            None => label.to_string(),
+        };
+        assert!(shot.has(&title), "Hinweistext „{title}“ fehlt");
         assert!(shot.has(hint), "Hinweis zu „{label}“ fehlt");
     }
     let p = theme::palette(true);
