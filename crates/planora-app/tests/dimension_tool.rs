@@ -1222,6 +1222,9 @@ fn resize_box(st: &mut AppState, f: FeatureId, size: DVec3) {
         })
         .unwrap();
     st.refresh();
+    // Die Ansichten des neuen Stands rechnen im Hintergrund; ohne Warten träfen die folgenden
+    // Klicks auf einem langsamen Rechner eine noch leere Ansicht.
+    st.drawing_ui.tick(&st.bodies, &st.document, true);
 }
 
 #[test]
