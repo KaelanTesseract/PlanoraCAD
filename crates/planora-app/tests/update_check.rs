@@ -433,6 +433,37 @@ fn manual_check_shows_up_to_date_hint() {
 }
 
 #[test]
+fn manual_result_survives_closing_settings_while_running() {
+    let (mut ws, cfg) = workspace("planora-update-knopf-zu-waehrend-suche");
+    assert!(ws.set_last_update_check(now_unix()));
+    let fake = Fake::new(Ok("[]".into()));
+    let (open, gate) = mpsc::channel();
+    *fake.gate.lock().unwrap() = Some(gate);
+    let mut h = Harness::new(ws, cfg, fake.clone());
+    h.open_settings();
+    h.click(CHECK_NOW);
+    assert!(h.app.update_check_running());
+    // Fenster zu, während die Suche läuft; das Ergebnis kommt bei geschlossenem Fenster.
+    h.app.windows_mut().2.close();
+    open.send(()).unwrap();
+    h.until_idle();
+    assert_eq!(
+        h.app.windows_mut().2.check_hint(),
+        Some(&CheckHint::UpToDate)
+    );
+    // Wieder geöffnet: das noch nie gezeigte Ergebnis steht da.
+    h.open_settings();
+    let seen = h.frame(vec![]);
+    assert!(has(&seen, UP_TO_DATE), "Ergebnis nicht verloren");
+    // Einmal gezeigt: beim nächsten Öffnen ist es weg.
+    h.app.windows_mut().2.close();
+    h.open_settings();
+    let seen = h.frame(vec![]);
+    assert!(!has(&seen, UP_TO_DATE));
+    assert_eq!(h.app.windows_mut().2.check_hint(), None);
+}
+
+#[test]
 fn manual_check_failure_hint() {
     for err in [
         NetError::Offline,

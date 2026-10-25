@@ -219,6 +219,9 @@ pub struct SettingsWindow {
     updates_message: Option<RootMessage>,
     /// Zustand der Suche über den Knopf [`CHECK_NOW`].
     check_hint: Option<CheckHint>,
+    /// Das Ergebnis in `check_hint` war schon einmal im offenen Fenster zu sehen (erst dann
+    /// leert es ein erneutes Öffnen).
+    check_hint_shown: bool,
     /// Der Knopf [`CHECK_NOW`] wurde gedrückt; die App holt das ab
     /// ([`SettingsWindow::take_check_request`]).
     check_requested: bool,
@@ -240,8 +243,9 @@ impl SettingsWindow {
         self.message = None;
         self.appearance_message = None;
         self.updates_message = None;
-        // Eine noch laufende Suche bleibt sichtbar, ein altes Ergebnis nicht.
-        if self.check_hint != Some(CheckHint::Running) {
+        // Eine noch laufende Suche bleibt sichtbar, ebenso ein Ergebnis, das noch nie zu sehen war
+        // (das Fenster ging zu, während die Suche lief); ein schon gezeigtes Ergebnis nicht.
+        if self.check_hint_shown && self.check_hint != Some(CheckHint::Running) {
             self.check_hint = None;
         }
         self.keys = CaptureState::default();
@@ -306,6 +310,7 @@ impl SettingsWindow {
     /// Setzt den Zustand der Suche (die App, wenn sie startet und wenn das Ergebnis da ist).
     pub fn set_check_hint(&mut self, hint: Option<CheckHint>) {
         self.check_hint = hint;
+        self.check_hint_shown = false;
     }
 
     /// Wurde der Knopf [`CHECK_NOW`] seit dem letzten Abholen gedrückt? Setzt zurück.
@@ -377,6 +382,7 @@ impl SettingsWindow {
         let appearance_message = self.appearance_message.clone();
         let updates_message = self.updates_message.clone();
         let check_hint = self.check_hint.clone();
+        self.check_hint_shown = true;
         let mut check_now = false;
         let channel = ws.update_channel();
         let (mut chosen_channel, mut check_on_start) = (channel, ws.update_check_enabled());
