@@ -253,6 +253,11 @@ impl Keymap {
             let mut list = Vec::new();
             for t in texts {
                 match text::parse_binding(t) {
+                    Some(b) if Keymap::fixed_key_text(a, &b).is_some() => notes.push(format!(
+                        "„{t}“ bei „{}“ übergangen: {}",
+                        a.label(),
+                        Keymap::fixed_key_text(a, &b).unwrap_or_default()
+                    )),
                     Some(b) => list.push(b),
                     None => notes.push(format!(
                         "Ungültige Belegung „{t}“ bei „{}“ übergangen.",
@@ -306,6 +311,28 @@ impl Keymap {
         }
         cap_notes(&mut notes);
         (km, notes)
+    }
+
+    /// Ist `b` für `a` eine Taste, die eine Ansicht fest braucht (Eingabe und Entf in der Skizze,
+    /// Entf in der Zeichnung, Tab zum Wechseln des Fokus, Pfeil links/rechts an der
+    /// Verlaufsleiste für Aktionen des Modells)? Dann der Hinweis „„Entf“ ist in der Skizze fest
+    /// belegt.“; solche Tasten ließen sich sonst belegen, würden aber vom Verteiler verschluckt.
+    pub fn fixed_key_text(a: Action, b: &Binding) -> Option<String> {
+        let Binding::Key(c) = b else {
+            return None;
+        };
+        let name = text::key_name(c.key);
+        let plain = !c.ctrl && !c.alt;
+        let place = match (c.key, a.area()) {
+            (egui::Key::Enter | egui::Key::Delete, Area::Sketch) => "in der Skizze",
+            (egui::Key::Delete, Area::Drawing) => "in der Zeichnung",
+            (egui::Key::Tab, _) if plain => "für den Wechsel zwischen Bedienelementen",
+            (egui::Key::ArrowLeft | egui::Key::ArrowRight, Area::Model) if plain && !c.shift => {
+                "an der Verlaufsleiste"
+            }
+            _ => return None,
+        };
+        Some(format!("„{name}“ ist {place} fest belegt."))
     }
 
     /// Abweichungen von der Voreinstellung für die Konfiguration (Id → Texte); eine Aktion ohne

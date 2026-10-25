@@ -69,7 +69,7 @@ pub fn is_modifier_key(key: Key) -> bool {
     )
 }
 
-fn key_name(key: Key) -> &'static str {
+pub(crate) fn key_name(key: Key) -> &'static str {
     GERMAN_KEYS
         .iter()
         .find(|(k, _)| *k == key)

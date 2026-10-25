@@ -58,7 +58,7 @@ action_table! {
     New, "datei.neu", "Neues Dokument", All, [ctrl(Key::N)];
     Projects, "datei.projekte", "Projekte", All, [ctrl(Key::O)];
     Save, "datei.speichern", "Speichern", All, [ctrl(Key::S)];
-    Close, "datei.schliessen", "Schließen", All, [ctrl(Key::W)];
+    Close, "datei.schliessen", "Dokument schließen", All, [ctrl(Key::W)];
     /// PlanoraCAD-eigenes Kürzel (Fusion hat dafür keins).
     Export, "datei.exportieren", "Exportieren", All, [ctrl_shift(Key::E)];
     Undo, "bearbeiten.rueckgaengig", "Rückgängig", All, [ctrl(Key::Z)];

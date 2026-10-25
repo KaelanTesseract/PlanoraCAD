@@ -618,3 +618,29 @@ fn load_notes_are_capped_at_twenty() {
     let o = BTreeMap::from([("datei.speichern".to_string(), texts)]);
     assert_eq!(Keymap::from_overrides(&o).1.len(), 20);
 }
+
+#[test]
+fn from_overrides_refuses_keys_the_views_need() {
+    let (km, notes) = Keymap::from_overrides(&overrides(&[
+        ("skizze.linie", &["Entf"]),
+        ("skizze.kreis", &["Eingabe"]),
+        ("zeichnung.mass", &["Entf"]),
+        ("modell.verrunden", &["Tab", "Pfeil links"]),
+        // Frei: Eingabe in der Zeichnung, Entf im Modell.
+        ("zeichnung.position", &["Eingabe"]),
+        ("modell.extrudieren", &["Entf"]),
+    ]));
+    // Nur Unbrauchbares: es gilt die Voreinstellung.
+    assert_eq!(km.bindings(Action::SketchLine), [key(Key::L)]);
+    assert_eq!(km.bindings(Action::DrawingDimension), [key(Key::D)]);
+    assert_eq!(km.bindings(Action::Fillet), [key(Key::F)]);
+    assert_eq!(km.bindings(Action::DrawingBalloon), [key(Key::Enter)]);
+    let text = |n: &str| notes.iter().any(|x| x.contains(n));
+    assert!(text("„Entf“ ist in der Skizze fest belegt."), "{notes:?}");
+    assert!(
+        text("„Entf“ ist in der Zeichnung fest belegt."),
+        "{notes:?}"
+    );
+    assert!(text("„Tab“ ist für den Wechsel"), "{notes:?}");
+    assert!(text("„Pfeil links“ ist an der Verlaufsleiste"), "{notes:?}");
+}

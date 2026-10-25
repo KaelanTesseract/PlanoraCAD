@@ -882,3 +882,50 @@ fn changing_to_the_actions_own_default_key_is_no_conflict() {
         &[chord(Key::Y, true, false, false)]
     );
 }
+
+#[test]
+fn keys_the_views_need_cannot_be_bound() {
+    let mut r = rig();
+    for (action, key, text) in [
+        (
+            Action::SketchLine,
+            Key::Delete,
+            "„Entf“ ist in der Skizze fest belegt.",
+        ),
+        (
+            Action::SketchCircle,
+            Key::Enter,
+            "„Eingabe“ ist in der Skizze fest belegt.",
+        ),
+        (
+            Action::DrawingBalloon,
+            Key::Delete,
+            "„Entf“ ist in der Zeichnung fest belegt.",
+        ),
+        (
+            Action::Fillet,
+            Key::Tab,
+            "„Tab“ ist für den Wechsel zwischen Bedienelementen fest belegt.",
+        ),
+        (
+            Action::Fillet,
+            Key::ArrowLeft,
+            "„Pfeil links“ ist an der Verlaufsleiste fest belegt.",
+        ),
+    ] {
+        r.filter(action.label());
+        r.click(CHANGE, 0);
+        r.press(key, NONE);
+        assert_eq!(r.km(), Keymap::defaults(), "{action:?} {key:?}");
+        assert_eq!(r.state().capturing, None);
+        assert!(r.sees(text), "{text}: {:?}", r.texts());
+    }
+    // Eingabe in der Zeichnung ist dagegen frei, Entf im Modell auch.
+    r.filter(Action::DrawingBalloon.label());
+    r.click(CHANGE, 0);
+    r.press(Key::Enter, NONE);
+    assert_eq!(
+        r.km().bindings(Action::DrawingBalloon),
+        &[chord(Key::Enter, false, false, false)]
+    );
+}

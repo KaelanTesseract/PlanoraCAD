@@ -57,7 +57,7 @@ pub const SWAP: &str = "Tauschen";
 /// Statt einer Belegung, wenn die Aktion keine hat.
 pub const UNBOUND: &str = "ohne Belegung";
 pub const NOTHING_FOUND: &str = "Keine Aktion gefunden.";
-pub const NOTES_HEADING: &str = "Beim Laden übergangen (es gilt die Voreinstellung):";
+pub const NOTES_HEADING: &str = "Beim Laden übergangen:";
 /// Warnung, wenn die Belegung gilt, aber nicht gespeichert werden konnte.
 pub const KEYS_NOT_SAVED: &str = "Die Tastenkürzel gelten nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
 /// Mindestweg einer Ziehgeste beim Erfassen (Pixel); darunter ist es ein Klick.
@@ -332,6 +332,10 @@ fn take(ws: &mut Workspace, state: &mut CaptureState, a: Action, index: usize, b
     state.capturing = None;
     state.info = None;
     if ws.keymap.bindings(a).get(index) == Some(&b) {
+        return;
+    }
+    if let Some(text) = Keymap::fixed_key_text(a, &b) {
+        state.info = Some(text);
         return;
     }
     if let Some(other) = ws.keymap.conflict_for(a, &b) {
