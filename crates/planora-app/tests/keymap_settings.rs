@@ -94,14 +94,24 @@ fn button(p: Pos2, b: PointerButton, pressed: bool, modifiers: Modifiers) -> Eve
 struct Seen {
     text: String,
     rect: Rect,
+    /// Ausschnitt, in dem der Text gezeichnet wird (rollende Tabelle).
+    clip: Rect,
 }
 
-fn walk(shape: &egui::epaint::Shape, out: &mut Vec<Seen>) {
+impl Seen {
+    /// Ganz zu sehen (nicht vom Ausschnitt abgeschnitten)?
+    fn visible(&self) -> bool {
+        self.clip.contains_rect(self.rect)
+    }
+}
+
+fn walk(shape: &egui::epaint::Shape, clip: Rect, out: &mut Vec<Seen>) {
     match shape {
-        egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+        egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, out)),
         egui::epaint::Shape::Text(t) => out.push(Seen {
             text: t.galley.text().to_string(),
             rect: Rect::from_min_size(t.pos, t.galley.size()),
+            clip,
         }),
         _ => {}
     }
@@ -115,10 +125,16 @@ struct Rig {
     left_over: bool,
     /// Texte des letzten Bilds.
     seen: Vec<Seen>,
+    /// Größe des Programmfensters.
+    size: Vec2,
 }
 
 impl Rig {
     fn new(w: Workspace) -> Rig {
+        Rig::sized(w, SIZE)
+    }
+
+    fn sized(w: Workspace, size: Vec2) -> Rig {
         let ctx = egui::Context::default();
         ctx.set_fonts(fonts::definitions());
         theme::apply(&ctx, true);
@@ -129,6 +145,7 @@ impl Rig {
             time: 0.0,
             left_over: false,
             seen: Vec::new(),
+            size,
         };
         rig.settle();
         rig.app.windows_mut().2.open(false);
@@ -154,7 +171,7 @@ impl Rig {
         let mut all = vec![Event::ModifiersChanged(modifiers)];
         all.extend(events);
         let raw = egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
             time: Some(self.time),
             events: all,
             ..Default::default()
@@ -173,7 +190,7 @@ impl Rig {
         self.left_over = left_over;
         let mut seen = Vec::new();
         for c in &out.shapes {
-            walk(&c.shape, &mut seen);
+            walk(&c.shape, c.clip_rect, &mut seen);
         }
         out.drop_without_applying_deltas();
         self.seen = seen;
@@ -928,4 +945,106 @@ fn keys_the_views_need_cannot_be_bound() {
         r.km().bindings(Action::DrawingBalloon),
         &[chord(Key::Enter, false, false, false)]
     );
+}
+
+#[test]
+fn a_conflict_below_the_last_visible_row_is_scrolled_into_view() {
+    for size in [vec2(1920.0, 1040.0), vec2(1400.0, 900.0)] {
+        let mut r = Rig::sized(ws_with(Config::default()).0, size);
+        // Die Tabelle so weit rollen, dass eine Tastenaktion unten am Rand steht: ihr „Ändern“
+        // ist ganz zu sehen, für die Rückfrage darunter ist aber kein Platz mehr.
+        let mut target = None;
+        for _ in 0..200 {
+            r.frame(vec![]);
+            target = bottom_key_row(&r);
+            if target.is_some() {
+                break;
+            }
+            // Über einem sichtbaren „Ändern“ (also über der Tabelle) drehen.
+            let at = r
+                .seen
+                .iter()
+                .find(|s| s.text == CHANGE && s.visible())
+                .expect("ein „Ändern“ zu sehen")
+                .rect
+                .center();
+            r.frame(vec![
+                Event::PointerMoved(at),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, -3.0),
+                    modifiers: NONE,
+                    phase: egui::TouchPhase::Move,
+                },
+            ]);
+        }
+        let (a, at) = target.unwrap_or_else(|| panic!("{size:?}: keine Zeile am unteren Rand"));
+        r.click_at(at);
+        assert_eq!(r.state().capturing.map(|c| c.0), Some(a), "{size:?}");
+        // Strg+N gehört „Neues Dokument“ (Überall): Doppelbelegung mit jeder Tastenaktion.
+        r.press(Key::N, CTRL);
+        for _ in 0..30 {
+            r.frame(vec![]);
+        }
+        let text = conflict_text(&chord(Key::N, true, false, false), Action::New);
+        let prompt = r
+            .seen
+            .iter()
+            .find(|s| s.text == text)
+            .unwrap_or_else(|| panic!("{size:?}: Rückfrage fehlt"));
+        assert!(
+            prompt.visible(),
+            "{size:?}: Rückfrage {:?} in {:?}",
+            prompt.rect,
+            prompt.clip
+        );
+        for b in [SWAP, CANCEL] {
+            let seen = r.seen.iter().find(|s| s.text == b).unwrap();
+            assert!(seen.visible(), "{size:?}: „{b}“ zu sehen");
+        }
+        // „Tauschen“ lässt sich anklicken.
+        let swap = r
+            .seen
+            .iter()
+            .find(|s| s.text == SWAP)
+            .unwrap()
+            .rect
+            .center();
+        r.click_at(swap);
+        assert_eq!(
+            r.km().bindings(a),
+            &[chord(Key::N, true, false, false)],
+            "{size:?}"
+        );
+        assert!(r.km().bindings(Action::New).is_empty());
+    }
+}
+
+/// Die unterste ganz sichtbare Zeile einer Tastenaktion (nicht „Neues Dokument“, nur eine
+/// Belegung), wenn darunter für die Rückfrage kein Platz mehr ist: Aktion und Mitte ihres
+/// „Ändern“.
+fn bottom_key_row(r: &Rig) -> Option<(Action, Pos2)> {
+    let change = r
+        .seen
+        .iter()
+        .filter(|s| s.text == CHANGE && s.visible())
+        .max_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))?;
+    if change.clip.bottom() - change.rect.bottom() > 20.0 {
+        return None;
+    }
+    let label = r
+        .seen
+        .iter()
+        .filter(|s| {
+            s.clip == change.clip
+                && (s.rect.top() - change.rect.top()).abs() < 6.0
+                && s.rect.left() < change.rect.left()
+        })
+        .min_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))?;
+    let a = Action::ALL
+        .iter()
+        .copied()
+        .find(|a| a.label() == label.text)?;
+    (!is_mouse_action(a) && a != Action::New && a.default_bindings().len() == 1)
+        .then(|| (a, change.rect.center()))
 }

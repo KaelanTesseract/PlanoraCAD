@@ -119,6 +119,9 @@ pub struct CaptureState {
     drag_start: Option<(MouseButton, egui::Pos2)>,
     /// Eine Ziehgeste ist erfasst, die Taste aber noch gedrückt: bis zum Loslassen gesperrt.
     hold_until_release: bool,
+    /// Die Rückfrage zur Doppelbelegung ist neu und noch nicht ganz zu sehen: die Tabelle rollt
+    /// sie ins Bild (sie steht unter der Zeile, bei der letzten sichtbaren Zeile sonst außerhalb).
+    scroll_to_conflict: bool,
     /// Die zuletzt erfasste Taste ist noch gedrückt: bis zum Loslassen gesperrt, ihre
     /// Wiederholungen werden verbraucht.
     held_key: Option<egui::Key>,
@@ -340,6 +343,7 @@ fn take(ws: &mut Workspace, state: &mut CaptureState, a: Action, index: usize, b
     }
     if let Some(other) = ws.keymap.conflict_for(a, &b) {
         state.pending_conflict = Some((a, index, b, other));
+        state.scroll_to_conflict = true;
         return;
     }
     let mut km = ws.keymap.clone();
@@ -429,6 +433,8 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
         .copied()
         .filter(|&a| search::matches(a, &ws.keymap, &state.filter))
         .collect();
+    // Ist die Rückfrage zur Doppelbelegung ganz zu sehen (dann muss nicht mehr gerollt werden)?
+    let mut visible_conflict = false;
     theme::scroll_area(
         ui,
         egui::ScrollArea::vertical()
@@ -441,12 +447,17 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
                 if shown.is_empty() {
                     ui.label(NOTHING_FOUND);
                 }
+                let mut conflict_seen = false;
                 for &a in &shown {
-                    row(ui, &ws.keymap, state, a, table_w, action_w, &mut click);
+                    conflict_seen |= row(ui, &ws.keymap, state, a, table_w, action_w, &mut click);
                 }
+                visible_conflict = conflict_seen;
             });
         },
     );
+    if visible_conflict {
+        state.scroll_to_conflict = false;
+    }
     match click {
         Some(Click::Change(a, i)) => {
             state.capturing = Some((a, i));
@@ -560,7 +571,9 @@ fn capture_prompt(a: Action) -> &'static str {
     }
 }
 
-/// Eine Zeile der Tabelle, darunter gegebenenfalls die Doppelbelegung.
+/// Eine Zeile der Tabelle, darunter gegebenenfalls die Doppelbelegung. Ist diese neu
+/// (`scroll_to_conflict`), wird sie ins Bild gerollt, bis sie ganz zu sehen ist; `true`, wenn sie
+/// ganz zu sehen ist.
 fn row(
     ui: &mut egui::Ui,
     km: &Keymap,
@@ -569,12 +582,13 @@ fn row(
     table_w: f32,
     action_w: f32,
     click: &mut Option<Click>,
-) {
+) -> bool {
     let dark = ui.visuals().dark_mode;
     let accent = theme::accent(dark);
     let muted = theme::palette(dark).text_secondary;
     let list = km.bindings(a);
     let capturing = state.capturing.filter(|(x, _)| *x == a).map(|(_, i)| i);
+    let mut visible = false;
     ui.push_id(a.id(), |ui| {
         ui.horizontal_top(|ui| {
             column(ui, action_w, |ui| {
@@ -633,7 +647,7 @@ fn row(
         if let Some((ca, _, b, other)) = &state.pending_conflict
             && *ca == a
         {
-            ui.horizontal_wrapped(|ui| {
+            let r = ui.horizontal_wrapped(|ui| {
                 ui.add_space(action_w + AREA_W);
                 ui.colored_label(theme::palette(dark).warning, conflict_text(b, *other));
                 if ui.button(SWAP).clicked() {
@@ -643,6 +657,11 @@ fn row(
                     *click = Some(Click::CancelConflict);
                 }
             });
+            visible = ui.clip_rect().contains_rect(r.response.rect);
+            if state.scroll_to_conflict && !visible {
+                r.response.scroll_to_me(Some(egui::Align::Center));
+            }
         }
     });
+    visible
 }
