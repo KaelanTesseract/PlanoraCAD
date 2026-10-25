@@ -225,7 +225,7 @@ impl Rig {
     }
 
     fn last(&mut self) -> Option<Action> {
-        self.ws().last_command.take()
+        self.ws().last_command.last()
     }
 }
 
@@ -722,7 +722,7 @@ fn save_undo_navigation_are_not_repeatable() {
         last.remember(a);
     }
     // Nur die wiederholbaren zählen; die letzte davon bleibt.
-    assert_eq!(last.take(), Some(Action::Fillet));
+    assert_eq!(last.last(), Some(Action::Fillet));
     for a in [
         Action::New,
         Action::Projects,
@@ -740,7 +740,7 @@ fn save_undo_navigation_are_not_repeatable() {
     ] {
         assert!(!a.repeatable(), "{a:?}");
         last.remember(a);
-        assert_eq!(last.take(), Some(Action::Fillet), "{a:?}");
+        assert_eq!(last.last(), Some(Action::Fillet), "{a:?}");
     }
 
     // In der App: Rückgängig über Strg+Z ersetzt den gemerkten Befehl nicht.
@@ -1010,4 +1010,137 @@ fn model_keys_do_nothing_while_a_drawing_is_shown() {
     assert!(rig.st().document.feature(b).is_some(), "Körper bleibt");
     assert!(!rig.st().is_body_hidden(0));
     assert!(!rig.ws().active_tab().dialog_open());
+}
+
+#[test]
+fn tree_context_menu_and_eye_tooltip_show_the_current_keys() {
+    let (mut w, _) = box_ws();
+    let sk = {
+        let s = &mut w.active_tab_mut().state;
+        let sk = s
+            .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+            .unwrap();
+        s.open_sketch(sk).unwrap();
+        s.session_sketch_mut()
+            .unwrap()
+            .1
+            .add_rectangle(DVec2::ZERO, DVec2::new(5.0, 10.0))
+            .unwrap();
+        s.close_sketch();
+        sk
+    };
+    w.observe_history(false);
+    let name = w
+        .active_tab()
+        .state
+        .document
+        .feature(sk)
+        .unwrap()
+        .name
+        .clone();
+    let mut rig = Rig::new(w);
+    let row = rig
+        .settle()
+        .into_iter()
+        .filter(|s| s.text == name)
+        .map(|s| s.rect.center())
+        .next()
+        .unwrap_or_else(|| panic!("Zeile „{name}“ nicht zu sehen"));
+    let right = |rig: &mut Rig, p: Pos2| {
+        rig.frame(vec![Event::PointerMoved(p)]);
+        for pressed in [true, false] {
+            rig.frame(vec![Event::PointerButton {
+                pos: p,
+                button: PointerButton::Secondary,
+                pressed,
+                modifiers: NONE,
+            }]);
+        }
+        rig.frame(vec![])
+            .into_iter()
+            .map(|s| s.text)
+            .collect::<Vec<_>>()
+    };
+    let texts = right(&mut rig, row);
+    assert!(texts.iter().any(|t| t == "Löschen"), "{texts:?}");
+    for want in ["Entf", "E"] {
+        assert!(texts.iter().any(|t| t == want), "{want}: {texts:?}");
+    }
+    // Nach dem Umbelegen die neue Taste.
+    rig.press(Key::Escape, NONE);
+    let mut km = rig.ws().keymap.clone();
+    km.set(Action::DeleteSelection, 0, plain(Key::J));
+    km.set(Action::ExtrudeSketch, 0, plain(Key::K));
+    rig.ws().keymap = km;
+    rig.settle();
+    let texts = right(&mut rig, row);
+    assert!(texts.iter().any(|t| t == "J"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "K"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "Entf"), "{texts:?}");
+}
+
+#[test]
+fn eye_tooltip_shows_the_current_key() {
+    let (w, _) = box_ws();
+    let mut rig = Rig::new(w);
+    rig.settle();
+    let (_, eye_rect) = browser::eye_rects(&rig.ctx)
+        .into_iter()
+        .find(|(n, _)| n == "Quader 1")
+        .expect("Auge");
+    let eye = eye_rect.center();
+    let texts = rig.hover(eye);
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "Körper ausblenden (nur in der Ansicht) (V)"),
+        "{texts:?}"
+    );
+    let mut km = rig.ws().keymap.clone();
+    km.set(Action::ToggleVisibility, 0, plain(Key::J));
+    rig.ws().keymap = km;
+    rig.settle();
+    let texts = rig.hover(eye);
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "Körper ausblenden (nur in der Ansicht) (J)"),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn area_keys_do_nothing_while_the_projects_window_is_open() {
+    // Fenster offen: nichts geschieht, die Tasten bleiben liegen.
+    let (w, b) = box_ws();
+    let mut rig = Rig::new(w);
+    rig.app.windows_mut().1.open();
+    rig.settle();
+    for k in [Key::V, Key::E, Key::F, Key::Space, Key::Delete] {
+        rig.press(k, NONE);
+        assert!(rig.left_over, "{k:?} bleibt liegen");
+    }
+    assert!(!rig.st().is_body_hidden(0), "V blendet nichts aus");
+    assert!(
+        !rig.ws().active_tab().dialog_open(),
+        "kein Fenster dahinter"
+    );
+    assert!(rig.st().document.feature(b).is_some(), "nichts gelöscht");
+    // Dateikürzel („Überall“) gelten weiter.
+    rig.press(Key::N, Modifiers::COMMAND);
+    assert!(!rig.left_over, "Strg+N wird verbraucht");
+
+    // Fenster zu: dieselben Tasten wirken.
+    let (w, _) = box_ws();
+    let mut rig = Rig::new(w);
+    rig.press(Key::V, NONE);
+    assert!(!rig.left_over && rig.st().is_body_hidden(0), "V wirkt");
+    let (w, _) = box_ws();
+    let mut rig = Rig::new(w);
+    rig.press(Key::F, NONE);
+    assert!(rig.ws().active_tab().blend_dialog.is_some(), "F wirkt");
+    let (w, b) = box_ws();
+    let mut rig = Rig::new(w);
+    rig.press(Key::Delete, NONE);
+    assert!(rig.st().document.feature(b).is_none(), "Entf wirkt");
 }

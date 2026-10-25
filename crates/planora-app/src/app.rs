@@ -187,16 +187,18 @@ impl PlanoraApp {
     /// verbraucht, der Marker bekommt also keinen Ersatzklick. Das Kürzel für Projekte öffnet das
     /// Fenster Projekte ([`open_projects`]), S die Übersicht der Tastenkürzel ([`open_overview`];
     /// der getippte Text der Taste wird sicherheitshalber verbraucht, damit er nicht im
-    /// Suchfeld landet). Die Befehle von Modell, Skizze und Zeichnung sind wie
-    /// Rückgängig gesperrt, solange ein Fenster offen ist ([`PlanoraApp::windows_open`]; die
-    /// Taste bleibt dann liegen). Ausgeführt wird in der Reihenfolge der Tabelle, Rückgängig und Wiederholen zuletzt; sie sind
-    /// zusätzlich gesperrt, solange eine Maustaste gedrückt ist ([`PlanoraApp::undo_keys`]).
+    /// Suchfeld landet). Die Befehle von Modell, Skizze und Zeichnung sind wie Rückgängig
+    /// gesperrt, solange ein Fenster offen ist ([`PlanoraApp::windows_open`]), und außerdem,
+    /// solange das Fenster Projekte offen ist (sonst träfe Entf das Dokument dahinter); die
+    /// Taste bleibt dann liegen. Ausgeführt wird in der Reihenfolge der Tabelle, Rückgängig und
+    /// Wiederholen zuletzt; sie sind zusätzlich gesperrt, solange eine Maustaste gedrückt ist
+    /// ([`PlanoraApp::undo_keys`]).
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if viewport::typing(ctx) || self.ws.prompt.is_some() || ctx.current_pass_index() != 0 {
             return;
         }
         let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
-        let windows = self.windows_open();
+        let windows = self.windows_open() || self.projects.is_open();
         let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, |a| {
             !is_history_key(a) && !(windows && a.area() != keymap::Area::All)
         });
@@ -212,12 +214,13 @@ impl PlanoraApp {
     }
 
     /// Ist ein Fenster offen, das Rückgängig und die Befehle von Modell, Skizze und Zeichnung
-    /// sperrt? Ein Fenster des Tabs ([`crate::workspace::DocTab::dialog_open`], auch Export und Import), „Über“, ein
-    /// Fenster der Aktionen im Fenster Projekte („Neues Projekt“, „Umbenennen“, „Löschen“, …),
-    /// ein Fenster des Reiters Versionen, das Fenster Einstellungen (es ist wie die
-    /// Dateifenster ein Fenster mit Dateiauswahl) oder die Übersicht „Tastenkürzel“ (wie „Über“;
-    /// S öffnet sie also nicht noch einmal). Das Fenster Projekte selbst sperrt nicht (es
-    /// ändert kein Dokument).
+    /// sperrt? Ein Fenster des Tabs ([`crate::workspace::DocTab::dialog_open`], auch Export und
+    /// Import), „Über“, ein Fenster der Aktionen im Fenster Projekte („Neues Projekt“,
+    /// „Umbenennen“, „Löschen“, …), ein Fenster des Reiters Versionen, das Fenster Einstellungen
+    /// (es ist wie die Dateifenster ein Fenster mit Dateiauswahl) oder die Übersicht
+    /// „Tastenkürzel“ (wie „Über“; S öffnet sie also nicht noch einmal). Das Fenster Projekte
+    /// selbst sperrt Rückgängig nicht (es ändert kein Dokument), wohl aber die Befehle der
+    /// Bereiche (siehe [`PlanoraApp::shortcuts`]).
     fn windows_open(&self) -> bool {
         self.ws.about_open
             || self.overview.open
@@ -227,10 +230,11 @@ impl PlanoraApp {
             || crate::versions_panel::has_pending(&self.versions_ui)
     }
 
-    /// Rückgängig und Wiederholen (R8; Tasten laut Tastenbelegung). Gesperrt (die Tasten bleiben dann unverbraucht), solange ein Fenster offen ist
-    /// ([`PlanoraApp::windows_open`]) und solange eine Maustaste gedrückt ist: Mitten im Ziehen
-    /// würde das halbe Ziehen sonst ein Schritt und gleich wieder zurückgenommen.
-    /// Der Verteiler nimmt Umschalttasten genau, Strg+Umschalt+Z wird also nie zu Strg+Z. Gehaltene Tasten: jedes Bild mit
+    /// Rückgängig und Wiederholen (R8; Tasten laut Tastenbelegung). Gesperrt (die Tasten
+    /// bleiben dann unverbraucht), solange ein Fenster offen ist ([`PlanoraApp::windows_open`])
+    /// und solange eine Maustaste gedrückt ist: Mitten im Ziehen würde das halbe Ziehen sonst
+    /// ein Schritt und gleich wieder zurückgenommen. Der Verteiler nimmt Umschalttasten genau,
+    /// Strg+Umschalt+Z wird also nie zu Strg+Z. Gehaltene Tasten: jedes Bild mit
     /// (Wiederholungs-)Ereignis ist ein Schritt, mehrere Ereignisse desselben Kürzels in einem
     /// Bild zusammen nur einer (der Verteiler verbraucht sie alle). Kommen beide in einem Bild,
     /// erst Rückgängig, dann Wiederholen.
