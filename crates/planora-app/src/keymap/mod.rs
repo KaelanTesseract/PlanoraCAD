@@ -9,6 +9,8 @@
 pub mod defaults;
 pub mod dispatch;
 pub mod mouse;
+pub mod search;
+pub mod settings_ui;
 pub mod text;
 
 pub use defaults::Action;
@@ -180,9 +182,28 @@ impl Keymap {
         });
     }
 
-    /// Eine Aktion auf ihre Voreinstellung.
-    pub fn reset(&mut self, a: Action) {
+    /// Nimmt die Belegung an Stelle `index` von `a` weg (gibt es sie nicht: nichts). Ohne
+    /// Belegung bleibt die Aktion in der Liste, löst aber nichts aus.
+    pub fn remove(&mut self, a: Action, index: usize) {
+        let list = &mut self.map[a.index()];
+        if index < list.len() {
+            list.remove(index);
+        }
+    }
+
+    /// Eine Aktion auf ihre Voreinstellung. Gehört eine davon inzwischen einer anderen Aktion
+    /// (im Bereich störend), verliert diese sie (wie bei [`Keymap::swap`]), damit keine Taste
+    /// zweimal belegt ist; zurückgegeben wird, was wem weggenommen wurde.
+    pub fn reset(&mut self, a: Action) -> Vec<(Binding, Action)> {
+        let mut taken = Vec::new();
+        for b in a.default_bindings() {
+            while let Some(o) = self.conflict_for(a, b) {
+                self.map[o.index()].retain(|x| x != b);
+                taken.push((*b, o));
+            }
+        }
         self.map[a.index()] = a.default_bindings().to_vec();
+        taken
     }
 
     /// Alle Aktionen auf die Voreinstellung.
@@ -280,6 +301,7 @@ impl Keymap {
                 }
             }
         }
+        cap_notes(&mut notes);
         (km, notes)
     }
 
@@ -306,6 +328,19 @@ impl Keymap {
             .map(text::binding_text)
             .collect::<Vec<_>>()
             .join(" / ")
+    }
+}
+
+/// Höchstens so viele Hinweise aus [`Keymap::from_overrides`]; der Rest wird nur gezählt.
+pub const MAX_NOTES: usize = 20;
+
+/// Kürzt `notes` auf [`MAX_NOTES`] und hängt „… und N weitere“ an (eine zerschossene Datei
+/// soll den Abschnitt nicht mit Hunderten Zeilen füllen).
+fn cap_notes(notes: &mut Vec<String>) {
+    if notes.len() > MAX_NOTES {
+        let more = notes.len() - MAX_NOTES;
+        notes.truncate(MAX_NOTES);
+        notes.push(format!("… und {more} weitere"));
     }
 }
 

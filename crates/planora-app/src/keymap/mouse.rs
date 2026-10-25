@@ -5,6 +5,9 @@
 //! Die Belegung kommt mit [`set_current`] einmal je Bild in den egui-Kontext (die App legt dort
 //! [`crate::workspace::Workspace::keymap`] ab); die Ansichten lesen sie mit [`current`] und
 //! brauchen so keinen eigenen Parameter. Ohne Eintrag gilt die Voreinstellung.
+//!
+//! Solange die Einstellungen eine neue Belegung erfassen ([`super::settings_ui::is_capturing`]),
+//! gilt keine Geste: Ziehen und Rad sollen dann nur erfasst werden, nicht die Ansicht bewegen.
 
 use std::sync::Arc;
 
@@ -35,6 +38,10 @@ pub fn set_current(ctx: &egui::Context, km: &Keymap) {
 pub fn current(ctx: &egui::Context) -> Arc<Keymap> {
     ctx.data(|d| d.get_temp::<Arc<Keymap>>(current_id()))
         .unwrap_or_else(|| Arc::new(Keymap::defaults()))
+}
+
+fn capturing(ui: &egui::Ui) -> bool {
+    super::settings_ui::is_capturing(ui.ctx())
 }
 
 fn pointer_button(b: MouseButton) -> PointerButton {
@@ -90,7 +97,7 @@ pub fn drag_action(
     response: &egui::Response,
     allowed: &[Action],
 ) -> Option<Action> {
-    if !response.dragged() {
+    if !response.dragged() || capturing(ui) {
         return None;
     }
     pick(
@@ -105,7 +112,7 @@ pub fn drag_action(
 /// Wie [`drag_action`] mit nur [`Action::ViewPan`], für Skizze und Zeichnung: dort zeichnet und
 /// wählt die linke Taste ohne Umschalttasten, eine solche Geste schwenkt also nie.
 pub fn pan_2d(km: &Keymap, ui: &egui::Ui, response: &egui::Response) -> bool {
-    if !response.dragged() {
+    if !response.dragged() || capturing(ui) {
         return false;
     }
     let plain_left = |g: &Gesture| {
@@ -129,6 +136,9 @@ pub fn pan_2d(km: &Keymap, ui: &egui::Ui, response: &egui::Response) -> bool {
 /// Flächen mit eigener Ziehschwelle (Navigationswürfel), die selbst entscheiden, dass gezogen
 /// wird.
 pub fn held_action(km: &Keymap, ui: &egui::Ui, allowed: &[Action]) -> Option<Action> {
+    if capturing(ui) {
+        return None;
+    }
     let down = ui.input(|i| {
         [MouseButton::Left, MouseButton::Middle, MouseButton::Right]
             .map(|b| (b, i.pointer.button_down(pointer_button(b))))
@@ -163,6 +173,9 @@ impl WheelInput {
 
 /// Rad dieses Bilds nach der Belegung, siehe [`WheelInput`].
 pub fn wheel_input(km: &Keymap, ui: &egui::Ui) -> WheelInput {
+    if capturing(ui) {
+        return WheelInput::NONE;
+    }
     let (event_mods, smooth, zoom, touch, event_zoom, held) = ui.input(|i| {
         let event_mods = i.events.iter().rev().find_map(|e| match e {
             egui::Event::MouseWheel { modifiers, .. } => Some(*modifiers),

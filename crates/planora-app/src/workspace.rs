@@ -1358,7 +1358,9 @@ impl Workspace {
     /// der Datei geschrieben (Wurzel, Favoriten und Durchsichtigkeit bleiben; eine vorgemerkte
     /// Durchsichtigkeit kommt mit). Lässt sich die Datei nicht lesen oder schreiben, bleibt sie
     /// unangetastet; die Belegung gilt dann für die Sitzung und wird beim nächsten gelungenen
-    /// Schreiben mit gespeichert ([`Workspace::keys_pending`]).
+    /// Schreiben mit gespeichert ([`Workspace::keys_pending`]). Nach dem Schreiben steht nur noch
+    /// die neue Belegung in der Datei: die Hinweise auf beim Laden Übergangenes
+    /// ([`Workspace::key_notes`]) sind dann erledigt und werden geleert.
     pub fn set_keymap(&mut self, km: Keymap) -> bool {
         let keys = km.to_overrides();
         self.keymap = km;
@@ -1376,6 +1378,7 @@ impl Workspace {
         self.keys_pending = !written;
         if written {
             self.panel_transparency_pending = false;
+            self.key_notes.clear();
         }
         written
     }

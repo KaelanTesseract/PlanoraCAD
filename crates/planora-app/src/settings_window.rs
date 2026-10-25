@@ -1,13 +1,15 @@
 //! Fenster „Einstellungen“ (Spec §5): Abschnitte untereinander mit Überschrift, damit später
 //! weitere dazukommen. Oben „Darstellung“ mit dem Regler „Durchsichtigkeit der Panels“ (wirkt
 //! sofort, wird gespeichert wie das Projektverzeichnis), darunter „Projekte“ mit dem
-//! Projektverzeichnis. Gewählt wird über die
+//! Projektverzeichnis und zuletzt „Tastenkürzel“ ([`crate::keymap::settings_ui`]; zuletzt, weil
+//! die lange Tabelle sonst „Projekte“ nach unten schöbe). Gewählt wird über die
 //! Dateiauswahl im Ordner-Modus; der Wechsel wirkt wie [`Workspace::choose_root`] und
 //! [`Workspace::persist_config`] (nur `root` wird geschrieben, Favoriten bleiben). Nichts wird
 //! verschoben, kopiert oder gelöscht.
 
 use crate::dialog::{CLOSE_LABEL, Dialog, DialogSize};
 use crate::file_chooser::{self, ChooserAction, FileChooser, display_path};
+use crate::keymap::settings_ui::{self, CaptureState};
 use crate::places::{self, Places};
 use crate::theme;
 use crate::workspace::{ROOT_LOCKED, Workspace};
@@ -143,6 +145,8 @@ pub struct SettingsWindow {
     /// Der Regler wurde bewegt, der Wert ist aber noch nicht gespeichert (gespeichert wird beim
     /// Loslassen, nicht in jedem Bild des Ziehens).
     transparency_unsaved: bool,
+    /// Abschnitt „Tastenkürzel“: Suche, Erfassen, Doppelbelegung, Hinweise.
+    keys: CaptureState,
     /// Rechteck des Fensters im letzten Bild (Layouttests).
     pub last_rect: Option<egui::Rect>,
 }
@@ -155,11 +159,21 @@ impl SettingsWindow {
         self.chooser = None;
         self.message = None;
         self.appearance_message = None;
+        self.keys = CaptureState::default();
     }
 
+    /// Schließt das Fenster; ein laufendes Erfassen einer Taste endet (die Sperre der Kürzel
+    /// fällt im nächsten Bild, siehe [`settings_ui::is_capturing`]).
     pub fn close(&mut self) {
         self.open = false;
         self.chooser = None;
+        self.keys.stop();
+    }
+
+    /// Zustand des Abschnitts „Tastenkürzel“ (Suchtext, Erfassen; für Tests).
+    #[doc(hidden)]
+    pub fn keys_mut(&mut self) -> &mut CaptureState {
+        &mut self.keys
     }
 
     pub fn is_open(&self) -> bool {
@@ -235,6 +249,7 @@ impl SettingsWindow {
     ) -> SettingsEvent {
         if !self.open {
             self.last_rect = None;
+            settings_ui::set_capturing(ctx, false);
             return SettingsEvent::None;
         }
         let (mut open, mut close, mut start) = (true, false, false);
@@ -242,6 +257,10 @@ impl SettingsWindow {
         // gehört) ist der Inhalt gesperrt: kein Wechsel, keine Auswahl, bis sie beantwortet ist.
         // „Schließen“ und ✕ bleiben.
         let locked = ws.prompt.is_some();
+        // Erfasst der Abschnitt „Tastenkürzel“ gerade eine Taste, gehört sie ihm: vor allen
+        // Knöpfen und Feldern des Fensters.
+        settings_ui::capture_input(ctx, ws, &mut self.keys, locked);
+        let keys = &mut self.keys;
         let path = display_path(&current_directory(ws));
         let message = self.message.clone();
         let appearance_message = self.appearance_message.clone();
@@ -292,6 +311,8 @@ impl SettingsWindow {
                             ui.strong(CHOOSE_HEADING);
                             body_action = c.show_body(ui, places);
                         }
+                        ui.add_space(theme::SPACE_4);
+                        settings_ui::show(ui, ws, keys);
                     });
                 },
                 |ui| match chooser.borrow_mut().as_mut() {

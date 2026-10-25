@@ -512,9 +512,12 @@ pub fn remember_keyboard_focus(ctx: &egui::Context) {
 
 /// Hat ein Eingabefeld die Tastatur (in diesem oder im vorigen Frame)? Dann sind Tastenkürzel
 /// der Ansicht gesperrt. egui nimmt bei Escape den Fokus schon zu Beginn des Frames weg; deshalb
-/// zählt auch, ob im vorigen Frame ein Eingabefeld (z. B. der Name) die Tastatur hatte.
+/// zählt auch, ob im vorigen Frame ein Eingabefeld (z. B. der Name) die Tastatur hatte. Ebenso
+/// gesperrt, solange die Einstellungen eine neue Belegung erfassen
+/// ([`crate::keymap::settings_ui::is_capturing`]): die erfasste Taste löst nichts aus.
 pub fn typing(ctx: &egui::Context) -> bool {
     keyboard_taken(ctx)
+        || crate::keymap::settings_ui::is_capturing(ctx)
         || ctx
             .data(|d| d.get_temp::<bool>(keyboard_focus_id()))
             .unwrap_or(false)
