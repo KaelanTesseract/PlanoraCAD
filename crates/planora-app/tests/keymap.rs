@@ -6,7 +6,9 @@
 mod common;
 
 use egui::Key;
-use planora_app::keymap::text::{binding_text, chord_text, gesture_text, parse_binding};
+use planora_app::keymap::text::{
+    binding_text, chord_text, gesture_text, is_modifier_key, parse_binding,
+};
 use planora_app::keymap::{
     Action, Area, Binding, Gesture, KeyChord, Keymap, MouseButton, SetResult,
 };
@@ -265,6 +267,58 @@ fn tastes_and_gestures_never_conflict_with_each_other() {
 }
 
 #[test]
+fn keys_without_letters_have_german_names_without_plus() {
+    for &k in Key::ALL {
+        if is_modifier_key(k) {
+            continue;
+        }
+        let t = chord_text(&chord(k, false, false, false));
+        assert!(!t.contains('+'), "{k:?}: {t}");
+    }
+    for (k, name) in [
+        (Key::Comma, "Komma"),
+        (Key::Minus, "Minus"),
+        (Key::Plus, "Plus"),
+        (Key::Period, "Punkt"),
+        (Key::Questionmark, "Fragezeichen"),
+        (Key::OpenBracket, "Eckige Klammer auf"),
+        (Key::Colon, "Doppelpunkt"),
+        (Key::Slash, "Schrägstrich"),
+    ] {
+        assert_eq!(chord_text(&chord(k, false, false, false)), name);
+    }
+    assert_eq!(
+        chord_text(&chord(Key::Plus, true, false, false)),
+        "Strg+Plus"
+    );
+    // Kein englischer egui-Name mehr für Satzzeichen und Sondertasten in der Oberfläche.
+    for &k in Key::ALL {
+        let t = chord_text(&chord(k, false, false, false));
+        let english = [
+            "Comma",
+            "Period",
+            "Questionmark",
+            "Exclamationmark",
+            "Bracket",
+            "Colon",
+            "Semicolon",
+            "Slash",
+            "Backtick",
+            "Quote",
+            "Equals",
+            "Pipe",
+            "Copy",
+            "Paste",
+            "Cut",
+            "Intl",
+        ];
+        if !is_modifier_key(k) && k != Key::Backslash {
+            assert!(!english.iter().any(|e| t.contains(e)), "{k:?}: {t}");
+        }
+    }
+}
+
+#[test]
 fn text_roundtrip_for_every_default_binding() {
     let km = Keymap::defaults();
     for &a in Action::ALL {
@@ -273,8 +327,15 @@ fn text_roundtrip_for_every_default_binding() {
             assert_eq!(parse_binding(&t), Some(*b), "{a:?}: {t}");
         }
     }
-    // Jede Taste mit jeder Kombination der Umschalttasten.
+    // Jede Taste mit jeder Kombination der Umschalttasten; eine Umschalttaste allein ist keine
+    // Belegung.
     for &k in Key::ALL {
+        if is_modifier_key(k) {
+            let t = chord_text(&chord(k, false, false, false));
+            assert_eq!(parse_binding(&t), None, "{t}");
+            assert_eq!(parse_binding(k.name()), None, "{k:?}");
+            continue;
+        }
         for bits in 0..8u8 {
             let c = chord(k, bits & 1 != 0, bits & 2 != 0, bits & 4 != 0);
             let t = chord_text(&c);

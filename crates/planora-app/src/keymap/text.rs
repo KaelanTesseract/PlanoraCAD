@@ -11,8 +11,8 @@ const ALT: &str = "Alt";
 const WHEEL: &str = "Mausrad";
 
 /// Deutsche Namen der Tasten, deren egui-Name englisch ist; alle übrigen behalten ihn („E“,
-/// „F5“, „1“).
-const GERMAN_KEYS: [(Key, &str); 15] = [
+/// „F5“, „1“). Kein Name enthält „+“ (das trennt die Teile, siehe [`parse_binding`]).
+const GERMAN_KEYS: [(Key, &str); 38] = [
     (Key::Delete, "Entf"),
     (Key::Space, "Leertaste"),
     (Key::Escape, "Esc"),
@@ -28,7 +28,46 @@ const GERMAN_KEYS: [(Key, &str); 15] = [
     (Key::ArrowUp, "Pfeil oben"),
     (Key::ArrowDown, "Pfeil unten"),
     (Key::Tab, "Tab"),
+    (Key::Copy, "Kopieren"),
+    (Key::Cut, "Ausschneiden"),
+    (Key::Paste, "Einfügen"),
+    (Key::Colon, "Doppelpunkt"),
+    (Key::Comma, "Komma"),
+    (Key::Minus, "Minus"),
+    (Key::Period, "Punkt"),
+    (Key::Plus, "Plus"),
+    (Key::Equals, "Gleich"),
+    (Key::Semicolon, "Semikolon"),
+    (Key::Backslash, "Backslash"),
+    (Key::Slash, "Schrägstrich"),
+    (Key::Pipe, "Senkrechter Strich"),
+    (Key::Questionmark, "Fragezeichen"),
+    (Key::Exclamationmark, "Ausrufezeichen"),
+    (Key::OpenBracket, "Eckige Klammer auf"),
+    (Key::CloseBracket, "Eckige Klammer zu"),
+    (Key::OpenCurlyBracket, "Geschweifte Klammer auf"),
+    (Key::CloseCurlyBracket, "Geschweifte Klammer zu"),
+    (Key::Backtick, "Gravis"),
+    (Key::Quote, "Apostroph"),
+    (Key::BrowserBack, "Browser zurück"),
+    (Key::IntlBackslash, "Taste <>"),
 ];
+
+/// Umschalttasten als eigene Taste (links, rechts, Windows-Taste): nie belegbar, sie gehören
+/// immer zu einer anderen Taste.
+pub fn is_modifier_key(key: Key) -> bool {
+    matches!(
+        key,
+        Key::ShiftLeft
+            | Key::ShiftRight
+            | Key::ControlLeft
+            | Key::ControlRight
+            | Key::AltLeft
+            | Key::AltRight
+            | Key::SuperLeft
+            | Key::SuperRight
+    )
+}
 
 fn key_name(key: Key) -> &'static str {
     GERMAN_KEYS
@@ -43,6 +82,7 @@ fn key_from_name(name: &str) -> Option<Key> {
         .find(|(_, n)| *n == name)
         .map(|(k, _)| *k)
         .or_else(|| Key::from_name(name))
+        .filter(|k| !is_modifier_key(*k))
 }
 
 fn button_name(button: MouseButton) -> &'static str {
@@ -90,7 +130,8 @@ pub fn binding_text(b: &Binding) -> String {
 }
 
 /// Umkehrung von [`binding_text`]: Umschalttasten (jede höchstens einmal) und zuletzt die
-/// Taste oder Geste, mit „+“ getrennt. Alles andere ergibt `None`.
+/// Taste oder Geste, mit „+“ getrennt. Alles andere ergibt `None`, auch eine Umschalttaste
+/// allein als Taste ([`is_modifier_key`]).
 pub fn parse_binding(text: &str) -> Option<Binding> {
     let parts: Vec<&str> = text.split('+').map(str::trim).collect();
     let (last, mods) = parts.split_last()?;
