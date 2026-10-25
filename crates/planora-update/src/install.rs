@@ -125,6 +125,9 @@ pub fn download_limit(asset_size: u64) -> Result<u64, InstallError> {
 /// Ist `url` eine Download-Adresse eines Releases von [`REPO`] (wie sie
 /// [`crate::parse_releases`] liefert)? Ohne Anfrageteil, ohne `..`.
 pub fn release_url_ok(url: &str) -> bool {
+    if local_test_url_ok(url) {
+        return true;
+    }
     let prefix = format!("https://github.com/{REPO}/releases/download/");
     url.strip_prefix(&prefix).is_some_and(|rest| {
         !rest.is_empty()
@@ -140,6 +143,10 @@ pub fn release_url_ok(url: &str) -> bool {
 /// `//host/pfad`) werden gegen `current` aufgelöst. Alles andere ist ein Netzfehler.
 pub fn redirect_target(current: &str, location: &str) -> Result<String, InstallError> {
     let location = location.trim();
+    #[cfg(feature = "update-test-source")]
+    if let Some(target) = local_redirect(current, location) {
+        return Ok(target);
+    }
     let target = if location.starts_with("https://") {
         location.to_string()
     } else if let Some(rest) = location.strip_prefix("//") {
@@ -157,6 +164,47 @@ pub fn redirect_target(current: &str, location: &str) -> Result<String, InstallE
             "Weiterleitung zu einer fremden Adresse".into(),
         )),
     }
+}
+
+/// Anfang einer Adresse der lokalen Test-Quelle (nur mit dem Schalter `update-test-source`).
+#[cfg(feature = "update-test-source")]
+pub const LOCAL_TEST_PREFIX: &str = "http://127.0.0.1:";
+
+/// Ist `url` eine Adresse der lokalen Test-Quelle: `http://127.0.0.1:<Port>/<Pfad>` ohne
+/// Anmeldedaten, Anfrageteil und `..`? Ohne den Schalter `update-test-source` nie.
+pub fn local_test_url_ok(url: &str) -> bool {
+    #[cfg(feature = "update-test-source")]
+    {
+        url.strip_prefix(LOCAL_TEST_PREFIX)
+            .and_then(|rest| rest.split_once('/'))
+            .is_some_and(|(port, path)| {
+                !port.is_empty()
+                    && port.bytes().all(|b| b.is_ascii_digit())
+                    && !path.is_empty()
+                    && !path.contains("..")
+                    && !path.contains(['?', '#', '\\', '@'])
+            })
+    }
+    #[cfg(not(feature = "update-test-source"))]
+    {
+        let _ = url;
+        false
+    }
+}
+
+/// Weiterleitung innerhalb der lokalen Test-Quelle (absolut oder `/pfad` von dort aus).
+#[cfg(feature = "update-test-source")]
+fn local_redirect(current: &str, location: &str) -> Option<String> {
+    if local_test_url_ok(location) {
+        return Some(location.to_string());
+    }
+    if location.starts_with('/') && !location.starts_with("//") && local_test_url_ok(current) {
+        let rest = current.strip_prefix(LOCAL_TEST_PREFIX)?;
+        let port = rest.split_once('/')?.0;
+        let target = format!("{LOCAL_TEST_PREFIX}{port}{location}");
+        return local_test_url_ok(&target).then_some(target);
+    }
+    None
 }
 
 /// `("https://authority", host)` einer HTTPS-Adresse; `None` mit Anmeldedaten oder anderem

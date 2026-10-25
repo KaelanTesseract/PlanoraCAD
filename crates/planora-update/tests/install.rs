@@ -561,3 +561,34 @@ fn http_downloader_is_built_but_never_used() {
     );
     assert!(matches!(r, Err(InstallError::Network(_))));
 }
+
+/// Ohne den Testschalter `update-test-source` (so wird jedes Release gebaut) gibt es keine lokale
+/// Quelle: keine `http://`-Adressen, keine Weiterleitung dorthin, keine andere Release-Liste.
+#[cfg(not(feature = "update-test-source"))]
+#[test]
+fn default_build_accepts_no_local_test_source() {
+    let local = format!("http://127.0.0.1:8080/dl/v9.0.0/{EXE_NAME}");
+    assert!(!local_test_url_ok(&local));
+    assert!(!release_url_ok(&local));
+    assert!(
+        redirect_target(
+            &format!("https://github.com/{REPO}/releases/download/v9.0.0/{EXE_NAME}"),
+            &local
+        )
+        .is_err()
+    );
+    let json = serde_json::json!([{
+        "tag_name": "v9.0.0",
+        "assets": [
+            {"name": EXE_NAME, "browser_download_url": local, "size": 10},
+            {"name": planora_update::SHA256_NAME,
+             "browser_download_url": format!("http://127.0.0.1:8080/dl/v9.0.0/{}", planora_update::SHA256_NAME),
+             "size": 10},
+        ],
+    }])
+    .to_string();
+    assert!(planora_update::parse_releases(&json).unwrap().is_empty());
+    let source =
+        planora_update::check::HttpSource::new(&planora_update::Version::parse("0.2.0").unwrap());
+    assert_eq!(source.url(), planora_update::check::RELEASES_URL);
+}

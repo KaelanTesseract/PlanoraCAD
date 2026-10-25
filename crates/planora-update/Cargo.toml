@@ -6,6 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Testschalter für eine lokale Update-Quelle (nur für die Echtprobe auf dem Entwicklungsrechner):
+# Release-Liste aus PLANORA_UPDATE_TEST_API und Downloads über http://127.0.0.1:<port>/…
+# Standardmäßig AUS. Release-Builds dürfen ihn NIE einschalten (kein TLS, andere Quelle).
+update-test-source = []
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

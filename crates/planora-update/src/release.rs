@@ -151,7 +151,10 @@ fn single_asset(raw: &RawRelease, name: &str) -> Option<AssetRef> {
         "https://github.com/{REPO}/releases/download/{}/{name}",
         raw.tag_name
     );
-    if asset.browser_download_url != expected {
+    // Mit dem Testschalter auch eine Datei der lokalen Test-Quelle mit diesem Namen.
+    let local = crate::install::local_test_url_ok(&asset.browser_download_url)
+        && asset.browser_download_url.ends_with(&format!("/{name}"));
+    if asset.browser_download_url != expected && !local {
         return None;
     }
     Some(AssetRef {

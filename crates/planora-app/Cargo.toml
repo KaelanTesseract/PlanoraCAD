@@ -14,6 +14,11 @@ path = "src/lib.rs"
 name = "planora-app"
 path = "src/main.rs"
 
+[features]
+# Lokale Update-Quelle für die Echtprobe (siehe planora-update). Standardmäßig AUS; Release-Builds
+# dürfen ihn NIE einschalten.
+update-test-source = ["planora-update/update-test-source"]
+
 [dependencies]
 planora-math.workspace = true
 planora-kernel.workspace = true

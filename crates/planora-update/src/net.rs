@@ -25,27 +25,54 @@ const TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Größte angenommene Antwort (Bytes); eine größere zählt als Fehler.
 pub const MAX_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Umgebungsvariable mit der Adresse einer lokalen Release-Liste (nur mit dem Schalter
+/// `update-test-source`; sonst ohne Wirkung).
+#[cfg(feature = "update-test-source")]
+pub const TEST_API_ENV: &str = "PLANORA_UPDATE_TEST_API";
+
 /// Abruf bei GitHub über HTTPS. Wird nur im Programm angelegt, nie in Tests benutzt.
 pub struct HttpSource {
     user_agent: String,
+    url: String,
     #[cfg(windows)]
     agent: ureq::Agent,
 }
 
 impl HttpSource {
     /// Quelle mit der Kennung `PlanoraCAD/<running>`; baut den Client, verbindet aber noch nicht.
+    /// Mit dem Schalter `update-test-source` und gesetztem [`TEST_API_ENV`] (eine Adresse
+    /// `http://127.0.0.1:<Port>/…`) wird statt GitHub diese Adresse gefragt.
     pub fn new(running: &Version) -> Self {
+        #[cfg(feature = "update-test-source")]
+        if let Some(url) = std::env::var(TEST_API_ENV)
+            .ok()
+            .filter(|u| crate::install::local_test_url_ok(u))
+        {
+            return Self::with_url(running, url);
+        }
+        Self::build(running, RELEASES_URL.to_string())
+    }
+
+    /// Quelle für die lokale Test-Quelle `url` (`http://127.0.0.1:<Port>/…`; nur mit dem
+    /// Schalter `update-test-source`).
+    #[cfg(feature = "update-test-source")]
+    pub fn with_url(running: &Version, url: String) -> Self {
+        Self::build(running, url)
+    }
+
+    fn build(running: &Version, url: String) -> Self {
         let user_agent = format!("PlanoraCAD/{running}");
         HttpSource {
             #[cfg(windows)]
-            agent: windows::agent(&user_agent),
+            agent: windows::agent(&user_agent, crate::install::local_test_url_ok(&url)),
             user_agent,
+            url,
         }
     }
 
-    /// Abgefragte Adresse ([`RELEASES_URL`]).
+    /// Abgefragte Adresse ([`RELEASES_URL`], mit dem Testschalter auch die lokale).
     pub fn url(&self) -> &str {
-        RELEASES_URL
+        &self.url
     }
 
     /// Gesendete Kennung des Programms.
@@ -57,7 +84,7 @@ impl HttpSource {
 impl ReleaseSource for HttpSource {
     #[cfg(windows)]
     fn fetch_releases(&self) -> Result<String, NetError> {
-        windows::fetch(&self.agent)
+        windows::fetch(&self.agent, &self.url)
     }
 
     #[cfg(not(windows))]
@@ -85,6 +112,9 @@ const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 pub struct HttpDownloader {
     #[cfg(windows)]
     agent: ureq::Agent,
+    /// Client ohne HTTPS-Zwang, nur für die lokale Test-Quelle.
+    #[cfg(all(windows, feature = "update-test-source"))]
+    local_agent: ureq::Agent,
 }
 
 impl HttpDownloader {
@@ -94,8 +124,21 @@ impl HttpDownloader {
         let _ = running;
         HttpDownloader {
             #[cfg(windows)]
-            agent: windows::download_agent(&format!("PlanoraCAD/{running}")),
+            agent: windows::download_agent(&format!("PlanoraCAD/{running}"), false),
+            #[cfg(all(windows, feature = "update-test-source"))]
+            local_agent: windows::download_agent(&format!("PlanoraCAD/{running}"), true),
         }
+    }
+
+    /// Der Client für `url`: für die lokale Test-Quelle der ohne HTTPS-Zwang, sonst der normale.
+    #[cfg(windows)]
+    fn agent_for(&self, url: &str) -> &ureq::Agent {
+        #[cfg(feature = "update-test-source")]
+        if crate::install::local_test_url_ok(url) {
+            return &self.local_agent;
+        }
+        let _ = url;
+        &self.agent
     }
 }
 
@@ -115,7 +158,7 @@ impl crate::install::Downloader for HttpDownloader {
         }
         #[cfg(windows)]
         {
-            windows::download(&self.agent, url, dest, max_bytes, progress)
+            windows::download(&|u| self.agent_for(u), url, dest, max_bytes, progress)
         }
         #[cfg(not(windows))]
         {
@@ -163,15 +206,16 @@ mod windows {
     use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
 
     /// Client: Schannel mit dem Zertifikatsspeicher von Windows, nur HTTPS, Statuscodes selbst
-    /// auswerten (für das Rate-Limit braucht es die Kopfzeilen).
-    pub(super) fn agent(user_agent: &str) -> ureq::Agent {
+    /// auswerten (für das Rate-Limit braucht es die Kopfzeilen). `local`: für die lokale
+    /// Test-Quelle ohne HTTPS-Zwang (nur mit dem Schalter `update-test-source` je `true`).
+    pub(super) fn agent(user_agent: &str, local: bool) -> ureq::Agent {
         let tls = TlsConfig::builder()
             .provider(TlsProvider::NativeTls)
             .root_certs(RootCerts::PlatformVerifier)
             .build();
         ureq::Agent::config_builder()
             .tls_config(tls)
-            .https_only(true)
+            .https_only(!local)
             .http_status_as_error(false)
             .user_agent(user_agent)
             .timeout_global(Some(TOTAL_TIMEOUT))
@@ -183,9 +227,9 @@ mod windows {
             .new_agent()
     }
 
-    pub(super) fn fetch(agent: &ureq::Agent) -> Result<String, NetError> {
+    pub(super) fn fetch(agent: &ureq::Agent, url: &str) -> Result<String, NetError> {
         let mut response = agent
-            .get(RELEASES_URL)
+            .get(url)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .call()
@@ -206,15 +250,15 @@ mod windows {
     }
 
     /// Client für Downloads: wie [`agent`], aber ohne eigene Weiterleitungen (jede wird in
-    /// [`download`] geprüft) und mit Zeitgrenzen für große Dateien.
-    pub(super) fn download_agent(user_agent: &str) -> ureq::Agent {
+    /// [`download`] geprüft) und mit Zeitgrenzen für große Dateien. `local` wie bei [`agent`].
+    pub(super) fn download_agent(user_agent: &str, local: bool) -> ureq::Agent {
         let tls = TlsConfig::builder()
             .provider(TlsProvider::NativeTls)
             .root_certs(RootCerts::PlatformVerifier)
             .build();
         ureq::Agent::config_builder()
             .tls_config(tls)
-            .https_only(true)
+            .https_only(!local)
             .http_status_as_error(false)
             .max_redirects(0)
             .user_agent(user_agent)
@@ -226,8 +270,8 @@ mod windows {
             .new_agent()
     }
 
-    pub(super) fn download(
-        agent: &ureq::Agent,
+    pub(super) fn download<'a>(
+        agent_for: &dyn Fn(&str) -> &'a ureq::Agent,
         url: &str,
         dest: &std::path::Path,
         max_bytes: u64,
@@ -242,7 +286,7 @@ mod windows {
             if !progress(0, 0) {
                 return Err(InstallError::Cancelled);
             }
-            let response = agent.get(&current).call().map_err(net)?;
+            let response = agent_for(&current).get(&current).call().map_err(net)?;
             let status = response.status().as_u16();
             if (300..400).contains(&status) {
                 let location = response
