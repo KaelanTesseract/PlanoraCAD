@@ -1835,6 +1835,8 @@ Hat Fusion für eine neue Funktion ein Kürzel, gilt: **Taste eintragen, sobald 
 - Maus: „Um Punkt drehen“ (Umschalt+Klick, dann mittlere Taste halten) ist nicht gebaut.
 
 ### Offene Punkte und bekannte Eigenheiten
+- **Strg oder Alt + linke/mittlere Taste ziehen** dreht oder schwenkt nicht mehr (früher drehte und schwenkte jede Strg-/Alt-Stellung mit). Bewusst so, weil die Umschalttasten genau zählen; die Belegung „links dreht“ gilt nur ohne Strg/Alt.
+- **Deutsche Tastatur:** Tasten, die egui nicht kennt, erscheinen als die Taste auf der Hardware (Ü steht als „Eckige Klammer auf“). Sie funktionieren, der Name ist nur irreführend.
 - **V** blendet den Körper aus und leert die Auswahl (wie ein Klick aufs Auge). Ein zweites V tut darum nichts; der Körper muss erst wieder gewählt werden.
 - Wird ein Fenster **geschlossen, während eine erfasste Taste noch gehalten wird**, kann die Wiederholung der Taste einmal auslösen.
 - **Kontextmenüs und Skizzenzüge** während des Erfassens einer Mausgeste sind nicht besonders behandelt (ein Fenstertest fehlt).

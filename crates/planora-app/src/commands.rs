@@ -73,7 +73,7 @@ impl LastCommand {
     }
 
     /// Der gemerkte Befehl des Modells (bleibt gemerkt).
-    pub fn take(&self) -> Option<Action> {
+    pub fn last(&self) -> Option<Action> {
         self.last
     }
 
@@ -134,7 +134,7 @@ pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
         Action::ToggleVisibility => toggle_visibility(&mut ws.active_tab_mut().state),
         Action::DeleteSelection => delete_selection(&mut ws.active_tab_mut().state),
         Action::RepeatLast => {
-            if let Some(last) = ws.last_command.take() {
+            if let Some(last) = ws.last_command.last() {
                 return run_action(ws, last);
             }
         }
@@ -255,8 +255,8 @@ pub(crate) fn track(ws: &mut Workspace, a: Action) {
 
 /// Einmal je Bild nach den Fenstern: Ist das Fenster des laufenden Befehls zu (auch ersetzt
 /// durch ein anderes), wird er gemerkt, wenn seither ein Feature seiner Art entstand, sonst
-/// vergessen. Ein
-/// Fenster in einem anderen Tab wartet, bis der Tab wieder vorn ist; ist der Tab zu, entfällt es.
+/// vergessen. Ein Fenster
+/// in einem anderen Tab wartet, bis der Tab wieder vorn ist; ist der Tab zu, entfällt es.
 pub fn observe(ws: &mut Workspace) {
     observe_sketch(ws);
     let Some(p) = ws.last_command.pending.clone() else {
@@ -282,12 +282,11 @@ pub fn observe(ws: &mut Workspace) {
 }
 
 /// Abschluss der Skizzenwerkzeuge (sie haben kein Fenster): gemerkt wird ein Werkzeug mit
-/// Eintrag in der Tabelle, sobald es in der offenen Skizze eine Kurve angelegt hat, gleich ob es über Taste,
-/// Knopf oder Leertaste gewählt wurde. Nur wählen und mit Esc oder einem anderen Werkzeug
-/// verlassen merkt nichts (wie ein abgebrochenes Fenster); Rückgängig/Wiederholen in der Skizze
-/// zählt nicht als Benutzen. Ein Werkzeug ohne Eintrag in der Tabelle (Bogen, Spline, …) ersetzt
-/// das Gedächtnis
-/// nicht. Das Gedächtnis des Modells bleibt in jedem Fall.
+/// Eintrag in der Tabelle, sobald es in der offenen Skizze eine Kurve angelegt hat, gleich ob
+/// es über Taste, Knopf oder Leertaste gewählt wurde. Nur wählen und mit Esc oder einem anderen
+/// Werkzeug verlassen merkt nichts (wie ein abgebrochenes Fenster); Rückgängig/Wiederholen in
+/// der Skizze zählt nicht als Benutzen. Ein Werkzeug ohne Eintrag in der Tabelle (Bogen,
+/// Spline, …) ersetzt das Gedächtnis nicht. Das Gedächtnis des Modells bleibt in jedem Fall.
 fn observe_sketch(ws: &mut Workspace) {
     let tab = ws.active_tab();
     let (Some(se), Some(sk)) = (

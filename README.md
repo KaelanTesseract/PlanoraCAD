@@ -632,9 +632,9 @@ Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 13�
 
 Die Tasten sind ab Werk wie in Fusion: zum Beispiel E extrudiert, F rundet, V blendet einen Körper ein oder aus, Entf löscht, die Leertaste wiederholt den letzten Befehl; in der Skizze wählen L, R und C die Werkzeuge Linie, Rechteck und Kreis; in der Zeichnung setzen D ein Maß und B eine Position. Die bisherigen Kürzel für Dateien und Rückgängig gelten weiter.
 
-- **Ändern:** Menü „Datei → Einstellungen …“, Abschnitt „Tastenkürzel“. Zeile wählen, neue Taste drücken, fertig. Ist die Taste schon vergeben, fragt das Programm, ob getauscht werden soll. „Zurücksetzen“ holt die Voreinstellung zurück.
+- **Ändern:** Menü „Datei → Einstellungen …“, Abschnitt „Tastenkürzel“. In der Zeile „Ändern“ wählen, dann die neue Taste drücken. Ist die Taste schon vergeben, fragt das Programm, ob getauscht werden soll. „Zurücksetzen“ holt die Voreinstellung zurück.
 - **Nachschlagen:** „Ansicht → Tastenkürzel …“ oder die Taste S öffnet eine Übersicht mit Suchfeld. Man kann nach dem Namen oder nach der Taste suchen.
-- **Maus in der 3D-Ansicht:** Die mittlere Taste schwenkt, Umschalt und mittlere Taste drehen, das Rad zoomt. Die linke Taste dreht weiter wie bisher. Auch die Mausbewegungen lassen sich in den Einstellungen ändern.
+- **Maus in der 3D-Ansicht:** Die mittlere Taste schwenkt, Umschalt und mittlere Taste drehen, das Rad zoomt. Die linke Taste dreht weiter (aber nicht mehr, wenn Strg oder Alt gehalten wird). Auch die Mausbewegungen lassen sich in den Einstellungen ändern.
 - Während du in ein Feld tippst oder ein Fenster offen ist, lösen die Tasten für Modell, Skizze und Zeichnung nichts aus.
 
 Welche Fusion-Kürzel noch fehlen, weil es die Funktion noch nicht gibt, steht in `docs/superpowers/offene-punkte.md`, Abschnitt „Tastenkürzel“.

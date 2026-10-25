@@ -631,7 +631,7 @@ fn repeat_last_remembers_sketch_tools() {
     let mut last = LastCommand::default();
     last.remember(Action::Fillet);
     last.remember(Action::SketchLine);
-    assert_eq!(last.take(), Some(Action::Fillet), "Modell bleibt");
+    assert_eq!(last.last(), Some(Action::Fillet), "Modell bleibt");
     assert_eq!(last.sketch_tool(), Some(Action::SketchLine));
 
     let mut w = sketch_open_ws();
@@ -660,7 +660,7 @@ fn repeat_last_remembers_sketch_tools() {
     rig.press(Key::Space, NONE);
     assert_eq!(rig.tool(), Tool::Line);
     // Das gemerkte Extrudieren des Modells bleibt.
-    assert_eq!(rig.ws().last_command.take(), Some(Action::ExtrudeSketch));
+    assert_eq!(rig.ws().last_command.last(), Some(Action::ExtrudeSketch));
 
     // Über den Knopf gewählt und benutzt: ebenso gemerkt.
     rig.click(rig.strip("Rechteck"));
