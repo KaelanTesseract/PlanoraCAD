@@ -302,9 +302,10 @@ fn default_keys_still_trigger_the_same_actions() {
         dispatch_once(&km, Area::Model, vec![key(Key::S, ctrl)]).0,
         [Action::Save]
     );
-    // Ohne Strg, mit Alt dazu oder einer fremden Taste: nichts, und nichts verbraucht.
+    // Ohne Strg, mit Alt dazu oder einer fremden Taste: nichts, und nichts verbraucht. (S allein
+    // öffnet im Modell die Übersicht der Tastenkürzel, daher hier Q.)
     for (k, m) in [
-        (Key::S, Modifiers::NONE),
+        (Key::Q, Modifiers::NONE),
         (Key::S, Modifiers::ALT | Modifiers::COMMAND),
         (Key::Z, Modifiers::ALT | Modifiers::COMMAND),
         (Key::Q, Modifiers::COMMAND),

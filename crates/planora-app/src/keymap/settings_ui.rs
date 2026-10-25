@@ -519,8 +519,8 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
     publish(ui.ctx(), state);
 }
 
-/// Spalte fester Breite.
-fn column(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+/// Spalte fester Breite (auch in der Übersicht, [`super::overview`]).
+pub(super) fn column(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
     ui.allocate_ui_with_layout(
         egui::vec2(width, theme::ROW_H),
         egui::Layout::left_to_right(egui::Align::Center),
@@ -532,8 +532,9 @@ fn column(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
 }
 
 /// Eine Belegung als Chip (vertiefte Fläche, nicht anklickbar). Als Widget mit bekannter Größe,
-/// damit die umbrechende Zeile vor ihm umbricht statt ihn hinauszuschieben.
-fn chip(ui: &mut egui::Ui, text: &str, color: Option<egui::Color32>) {
+/// damit die umbrechende Zeile vor ihm umbricht statt ihn hinauszuschieben. Auch in der
+/// Übersicht ([`super::overview`]).
+pub(super) fn chip(ui: &mut egui::Ui, text: &str, color: Option<egui::Color32>) {
     let dark = ui.visuals().dark_mode;
     let t = egui::RichText::new(text);
     ui.add(

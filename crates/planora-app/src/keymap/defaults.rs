@@ -84,6 +84,9 @@ action_table! {
     DeleteSelection, "modell.loeschen", "Löschen", Model, [key(Key::Delete)];
     /// Startet den zuletzt abgeschlossenen wiederholbaren Befehl noch einmal.
     RepeatLast, "modell.befehl_wiederholen", "Letzten Befehl wiederholen", Model, [key(Key::Space)];
+    /// Öffnet das Fenster „Tastenkürzel“ mit aktivem Suchfeld (Fusion „Shortcuts“); wie
+    /// „Ansicht → Tastenkürzel …“. In der Skizze gilt [`Action::SketchShowShortcuts`].
+    ShowShortcuts, "ansicht.tastenkuerzel", "Tastenkürzel anzeigen", Model, [key(Key::S)];
     // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Versatz O,
     // Stutzen T und Skizzenbemaßung D kommen erst mit ihrer Funktion. Esc, Enter und Entf der
     // Skizze sind fest (`sketch_view`), nicht in der Tabelle.
@@ -98,6 +101,9 @@ action_table! {
         [key(Key::Space)];
     /// Wie der Knopf im Skizzenfeld (Fusion „Normal / Hilfslinie“): nur mit ausgewählten Kurven.
     SketchConstruction, "skizze.konstruktion", "Konstruktion umschalten", Sketch, [key(Key::X)];
+    /// Wie [`Action::ShowShortcuts`], in der offenen Skizze (eine Aktion hat nur einen Bereich).
+    SketchShowShortcuts, "skizze.tastenkuerzel", "Tastenkürzel anzeigen in der Skizze", Sketch,
+        [key(Key::S)];
     // Zeichnung: die vorhandenen Werkzeuge (wie ihr Schalter). Mittelpunktmarke C, Verschieben
     // M, Projizierte Ansicht P und Text T kommen erst mit ihrer Funktion; Entf (Nummernkreis
     // löschen) ist fest (`drawing_view`).

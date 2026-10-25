@@ -8,6 +8,7 @@ use crate::feature_dialog::FeatureDialog;
 use crate::file_chooser::default_dir;
 use crate::icons::{self, Icon};
 use crate::import_dialog::ImportDialog;
+use crate::keymap::overview::{OverviewEvent, OverviewState};
 use crate::keymap::{self, Action, Keymap};
 use crate::project_actions::ProjectsUi;
 use crate::projects_window::{ProjectsEvent, ProjectsWindow};
@@ -41,15 +42,19 @@ pub const PROJECTS_ENTRY: &str = "Projekte …";
 pub const EXPORT_BUSY: &str = "Bitte erst den Export beenden.";
 /// Menüeintrag „Datei → Einstellungen …“.
 pub const SETTINGS_ENTRY: &str = "Einstellungen …";
+/// Menüeintrag „Ansicht → Tastenkürzel …“ (Kürzel [`Action::ShowShortcuts`]).
+pub const VIEW_SHORTCUTS_ENTRY: &str = "Tastenkürzel …";
 
-/// Was das Menü „Datei“ außer seinen eigenen Aktionen verlangt: das Fenster „Projekte“ oder
-/// „Einstellungen“ öffnen (die Fenster gehören der App, nicht dem Arbeitsbereich).
+/// Was die Menüs außer ihren eigenen Aktionen verlangen: das Fenster „Projekte“,
+/// „Einstellungen“ oder „Tastenkürzel“ öffnen (die Fenster gehören der App, nicht dem
+/// Arbeitsbereich).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MenuRequest {
     #[default]
     None,
     Projects,
     Settings,
+    Shortcuts,
 }
 
 pub struct PlanoraApp {
@@ -61,6 +66,8 @@ pub struct PlanoraApp {
     pub(crate) projects: ProjectsWindow,
     /// Fenster „Einstellungen“.
     pub(crate) settings: SettingsWindow,
+    /// Fenster „Tastenkürzel“ (Übersicht, [`keymap::overview`]).
+    pub(crate) overview: OverviewState,
     pub(crate) versions_ui: VersionsUi,
     applied_dark: Option<bool>,
     /// `ViewportCommand::Close` wurde nach freigegebenem Beenden schon geschickt.
@@ -103,6 +110,7 @@ impl PlanoraApp {
             shell: ShellState::default(),
             projects: ProjectsWindow::default(),
             settings: SettingsWindow::default(),
+            overview: OverviewState::default(),
             versions_ui: VersionsUi::default(),
             applied_dark: None,
             close_sent: false,
@@ -134,6 +142,12 @@ impl PlanoraApp {
         (&mut self.ws, &mut self.projects, &mut self.settings)
     }
 
+    /// Zustand des Fensters „Tastenkürzel“ (für Tests).
+    #[doc(hidden)]
+    pub fn overview_mut(&mut self) -> &mut OverviewState {
+        &mut self.overview
+    }
+
     /// Zustand der schwebenden Felder (für Tests).
     #[doc(hidden)]
     pub fn shell_mut(&mut self) -> &mut ShellState {
@@ -150,6 +164,12 @@ impl PlanoraApp {
             MenuRequest::Settings => {
                 open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false)
             }
+            MenuRequest::Shortcuts => open_overview(
+                &mut self.ws,
+                &mut self.projects,
+                &mut self.settings,
+                &mut self.overview,
+            ),
         }
     }
 
@@ -165,7 +185,9 @@ impl PlanoraApp {
     /// Kürzel sonst zweimal ausführen). Der Marker der Verlaufsleiste und die Ansicht sperren
     /// nichts, auch nicht die Leertaste: Sie wird hier vor dem Aufbau der Bedienelemente
     /// verbraucht, der Marker bekommt also keinen Ersatzklick. Das Kürzel für Projekte öffnet das
-    /// Fenster Projekte ([`open_projects`]). Die Befehle von Modell, Skizze und Zeichnung sind wie
+    /// Fenster Projekte ([`open_projects`]), S die Übersicht der Tastenkürzel ([`open_overview`];
+    /// der getippte Text der Taste wird verbraucht, er landete sonst im gerade fokussierten
+    /// Suchfeld). Die Befehle von Modell, Skizze und Zeichnung sind wie
     /// Rückgängig gesperrt, solange ein Fenster offen ist ([`PlanoraApp::windows_open`]; die
     /// Taste bleibt dann liegen). Ausgeführt
     /// wird in der Reihenfolge der Tabelle, Rückgängig und Wiederholen zuletzt; sie sind
@@ -181,6 +203,9 @@ impl PlanoraApp {
         });
         for &a in Action::ALL.iter().filter(|a| pressed.contains(a)) {
             let request = commands::run_key(&mut self.ws, a);
+            if request == MenuRequest::Shortcuts {
+                ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
+            }
             self.apply_menu_request(request);
         }
         self.undo_keys(ctx);
@@ -190,11 +215,13 @@ impl PlanoraApp {
     /// sperrt? Ein Fenster des
     /// Tabs ([`crate::workspace::DocTab::dialog_open`], auch Export und Import), „Über“, ein
     /// Fenster der Aktionen im Fenster Projekte („Neues Projekt“, „Umbenennen“, „Löschen“, …),
-    /// ein Fenster des Reiters Versionen oder das Fenster Einstellungen (es ist wie die
-    /// Dateifenster ein Fenster mit Dateiauswahl). Das Fenster Projekte selbst sperrt nicht (es
+    /// ein Fenster des Reiters Versionen, das Fenster Einstellungen (es ist wie die
+    /// Dateifenster ein Fenster mit Dateiauswahl) oder die Übersicht „Tastenkürzel“ (wie „Über“;
+    /// S öffnet sie also nicht noch einmal). Das Fenster Projekte selbst sperrt nicht (es
     /// ändert kein Dokument).
     fn windows_open(&self) -> bool {
         self.ws.about_open
+            || self.overview.open
             || self.ws.active_tab().dialog_open()
             || crate::project_actions::dialog_open(&self.projects.ui)
             || self.settings.is_open()
@@ -405,6 +432,38 @@ pub fn open_settings(
     }
     close_projects(projects);
     settings.open(return_to_projects);
+}
+
+/// Öffnet die Übersicht „Tastenkürzel“ (Menü Ansicht und Taste S) mit aktivem Suchfeld. Sie
+/// steht für sich wie Projekte und Einstellungen (P10): diese und die Dateifenster des aktiven
+/// Tabs schließen dabei (ein schreibendes Exportfenster bleibt, dann öffnet sie nicht,
+/// [`EXPORT_BUSY`]).
+pub fn open_overview(
+    ws: &mut Workspace,
+    projects: &mut ProjectsWindow,
+    settings: &mut SettingsWindow,
+    overview: &mut OverviewState,
+) {
+    if !close_file_windows(ws) {
+        return;
+    }
+    close_projects(projects);
+    settings.close();
+    overview.open_focused();
+}
+
+/// Die Übersicht „Tastenkürzel“ schließt, sobald Projekte, Einstellungen oder ein Dateifenster
+/// des aktiven Tabs offen ist (das zuletzt geöffnete Fenster gewinnt; die Übersicht öffnet sie
+/// selbst zu, [`open_overview`]).
+pub fn enforce_overview_rules(
+    ws: &Workspace,
+    projects: &ProjectsWindow,
+    settings: &SettingsWindow,
+    overview: &mut OverviewState,
+) {
+    if overview.open && (file_window_open(ws) || projects.is_open() || settings.is_open()) {
+        overview.close();
+    }
 }
 
 /// P10: Ist ein Dateifenster des aktiven Tabs offen (neu geöffnet oder nach einem Tabwechsel),
@@ -630,7 +689,11 @@ pub(crate) fn menu_bar_measured(
             ui.add_enabled_ui(!read_only, |ui| {
                 ui.menu_button("Bearbeiten", |ui| edit_menu(ui, ws));
             });
-            ui.menu_button("Ansicht", |ui| view_menu(ui, ws, shell));
+            ui.menu_button("Ansicht", |ui| {
+                if view_menu(ui, ws, shell) {
+                    request = MenuRequest::Shortcuts;
+                }
+            });
             // Der Zeiger steht hinter dem letzten Knopf und einem Abstand.
             width = ui.cursor().left() - start - ui.spacing().item_spacing.x;
         });
@@ -970,7 +1033,10 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
 }
 
-fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) {
+/// Menü „Ansicht“: Blickrichtungen, Einpassen, Design, „Tastenkürzel …“ (mit seiner Taste) und
+/// Versionen. Liefert, ob „Tastenkürzel …“ gewählt wurde (das Fenster gehört der App).
+fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> bool {
+    let mut shortcuts = false;
     let state = &mut ws.active_tab_mut().state;
     for face in ViewFace::ALL {
         if entry(ui, true, icons::button(Icon::ViewFace, face.label())).clicked() {
@@ -999,7 +1065,23 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) {
         ui.close();
     }
     ui.separator();
+    let km = &ws.keymap;
+    if shortcut_button(
+        ui,
+        km,
+        true,
+        Icon::Keyboard,
+        VIEW_SHORTCUTS_ENTRY,
+        Action::ShowShortcuts,
+    )
+    .clicked()
+    {
+        shortcuts = true;
+        ui.close();
+    }
+    ui.separator();
     shell_toggles(ui, shell);
+    shortcuts
 }
 
 /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
@@ -1116,6 +1198,8 @@ impl eframe::App for PlanoraApp {
         }
 
         self.shortcuts(&ctx);
+        // Esc der Übersicht vor den Ansichten (weder Auswahl noch Skizze sollen es sehen).
+        keymap::overview::take_escape(&ctx, &mut self.overview, self.ws.prompt.is_some());
         // Das Fenster „Parameter“ vor allen übrigen Bereichen: Übernimmt es eine Zeile, weil ein
         // Klick das Feld verlassen hat, wird die Änderung ein eigener Schritt, bevor die Ansicht
         // im selben Bild mit einem Ziehen beginnt (sonst ein gemeinsamer Schritt). Ein Fenster
@@ -1238,6 +1322,11 @@ impl eframe::App for PlanoraApp {
 
         show_file_dialogs(&ctx, &mut self.ws);
         show_windows(&ctx, &mut self.ws, &mut self.projects, &mut self.settings);
+        enforce_overview_rules(&self.ws, &self.projects, &self.settings, &mut self.overview);
+        if keymap::overview::show(&ctx, &self.ws, &mut self.overview) == OverviewEvent::OpenSettings
+        {
+            open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false);
+        }
         self.ws.refresh_prompts();
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);

@@ -178,6 +178,8 @@ pub enum Icon {
     HistoryForward,
     /// Phosphor `warning` (Verlaufsleiste: Schritt mit Fehler).
     Warning,
+    /// Phosphor `keyboard` (Menüeintrag „Tastenkürzel …“).
+    Keyboard,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -265,6 +267,7 @@ pub const ALL: &[Icon] = &[
     Icon::HistoryPause,
     Icon::HistoryForward,
     Icon::Warning,
+    Icon::Keyboard,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -352,6 +355,7 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::HistoryPause, '\u{e39e}', "pause"),
     (Icon::HistoryForward, '\u{e6a6}', "fast-forward"),
     (Icon::Warning, '\u{e4e0}', "warning"),
+    (Icon::Keyboard, '\u{e2d8}', "keyboard"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {

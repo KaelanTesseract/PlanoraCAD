@@ -9,6 +9,7 @@
 pub mod defaults;
 pub mod dispatch;
 pub mod mouse;
+pub mod overview;
 pub mod search;
 pub mod settings_ui;
 pub mod text;
