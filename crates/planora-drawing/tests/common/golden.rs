@@ -4,8 +4,9 @@
 //! MSVC-Laufzeit, Linux: glibc). Deren Ergebnisse weichen gelegentlich in der letzten Binärstelle
 //! voneinander ab; eine Zahl wird dann anders gerundet (`8.0` statt `7.999999999999999`,
 //! `67.707442081` statt `67.70744208`). Die Fixturen sind unter Windows erzeugt. Der Vergleich
-//! hier verlangt deshalb Gleichheit aller Zeichen außerhalb von Zahlen und bei Zahlen höchstens
-//! anderthalb Einheiten der letzten ausgegebenen Stelle bzw. 1e-12 relativ, nie mehr.
+//! hier verlangt deshalb Gleichheit aller Zeichen außerhalb von Zahlen und aller ganzen Zahlen;
+//! Kommazahlen dürfen in der letzten ausgegebenen Stelle anders gerundet sein, aber nie um mehr
+//! als Rundungsrauschen (1e-8 absolut bzw. 1e-12 relativ, siehe [`allowance`]).
 
 /// Teil eines Textes: Zahl (Text, Wert, Nachkommastellen) oder anderes Zeichen.
 #[derive(Debug)]
@@ -49,6 +50,9 @@ fn tokens(s: &str) -> Vec<Tok<'_>> {
                     while k < b.len() && b[k].is_ascii_digit() {
                         k += 1;
                     }
+                    // `1.5e-7`: die letzte Stelle steht 1 + 7 Stellen hinter dem Komma.
+                    let exp: i32 = s[j + 1..k].parse().unwrap();
+                    decimals -= exp;
                     float = true;
                     j = k;
                 }
@@ -73,6 +77,19 @@ fn tokens(s: &str) -> Vec<Tok<'_>> {
     out
 }
 
+/// Erlaubte Abweichung zweier Kommazahlen mit zusammen `decimals` Nachkommastellen (nach dem
+/// Exponenten): eine andere Rundung der letzten ausgegebenen Stelle (1,5 Einheiten, bei
+/// voller Genauigkeit mindestens 4 ULP, weil die kürzeste Darstellung ein ULP als 1–2 Einheiten
+/// der letzten Stelle zeigt), aber nie mehr als Rundungsrauschen: 1e-8 absolut bzw. 1e-12
+/// relativ. So fällt `8.0` gegen `8.1` auf, `8.0` gegen `7.999999999999999` nicht.
+fn allowance(u: f64, v: f64, decimals: i32) -> f64 {
+    let m = u.abs().max(v.abs());
+    let ulp = f64::from_bits(m.to_bits() + 1) - m;
+    let last = (1.5 * 10f64.powi(-decimals)).max(4.0 * ulp);
+    let cap = 1e-8f64.max(1e-12 * m.max(1.0));
+    last.min(cap)
+}
+
 /// Gleich bis auf die Rundung der letzten Stelle von Kommazahlen? `Err` nennt die erste
 /// Abweichung mit Umgebung.
 pub fn same_up_to_last_digit(stored: &str, written: &str) -> Result<(), String> {
@@ -94,9 +111,7 @@ pub fn same_up_to_last_digit(stored: &str, written: &str) -> Result<(), String> 
             (Tok::Other(c), Tok::Other(d)) => c == d,
             (Tok::Num(s, ..), Tok::Num(t, ..)) if s == t => true,
             (Tok::Num(_, u, du, fu), Tok::Num(_, v, dv, fv)) if *fu || *fv => {
-                let last = 1.5 * 10f64.powi(-(*du.max(dv)));
-                let rel = 1e-12 * u.abs().max(v.abs()).max(1.0);
-                (u - v).abs() <= last.max(rel)
+                (u - v).abs() <= allowance(*u, *v, *du.max(dv))
             }
             _ => false,
         };
