@@ -4,7 +4,9 @@
 //! von der Voreinstellung abweicht; andere Einstellungen und die Update-Felder überschreiben
 //! einander beim Lesen-Ändern-Schreiben nicht. Nur mit eigenen Dateien im Temp-Ordner.
 
-use planora_project::config::{Config, DEFAULT_UPDATE_CHANNEL, PendingUpdate, WindowState};
+use planora_project::config::{
+    Config, DEFAULT_UPDATE_CHANNEL, MAX_WINDOW_SIZE, PendingUpdate, WindowState,
+};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -211,8 +213,8 @@ fn update_fields_survive_other_config_updates_and_vice_versa() {
         from: "0.2.0-dev.1".into(),
         to: "0.2.0-dev.2".into(),
         window: Some(WindowState {
-            x: -8.0,
-            y: 12.5,
+            x: Some(-8.0),
+            y: Some(12.5),
             width: 1920.0,
             height: 1050.0,
             maximized: true,
@@ -309,8 +311,8 @@ fn pending_update_roundtrips() {
 fn pending_update_carries_the_window_of_the_old_version() {
     let p = temp_file("fenster");
     let window = WindowState {
-        x: 100.0,
-        y: 50.0,
+        x: Some(100.0),
+        y: Some(50.0),
         width: 1600.0,
         height: 900.0,
         maximized: false,
@@ -360,6 +362,88 @@ fn pending_update_carries_the_window_of_the_old_version() {
         .window
         .unwrap();
     assert!(!w.maximized);
-    assert_eq!((w.x, w.y, w.width, w.height), (1.0, 2.0, 1000.0, 700.0));
+    assert_eq!(
+        (w.x, w.y, w.width, w.height),
+        (Some(1.0), Some(2.0), 1000.0, 700.0)
+    );
+    cleanup(&p);
+}
+
+/// Unplausible Fenster aus der Datei: zu große Maße werden begrenzt, eine Lage weit draußen
+/// (etwa -32000/-32000, die Windows für minimierte Fenster meldet) wird verworfen, damit die neue
+/// Version nicht unsichtbar öffnet; das System setzt das Fenster dann selbst.
+#[test]
+fn implausible_windows_are_limited_and_far_positions_dropped() {
+    let p = temp_file("fenster-unsinn");
+    let read = |window: &str| {
+        std::fs::write(
+            &p,
+            format!(
+                r#"{{"root": null, "update_pending": {{"from": "0.1.0", "to": "0.2.0", "window": {window}}}}}"#
+            ),
+        )
+        .unwrap();
+        Config::read_from(&p)
+            .unwrap()
+            .update_pending
+            .unwrap()
+            .window
+    };
+    // Riesige Maße: auf die Obergrenze.
+    let w = read(r#"{"x": 10, "y": 10, "width": 1e30, "height": 99999}"#).unwrap();
+    assert_eq!((w.width, w.height), (MAX_WINDOW_SIZE, MAX_WINDOW_SIZE));
+    assert_eq!(MAX_WINDOW_SIZE, 16384.0);
+    assert_eq!((w.x, w.y), (Some(10.0), Some(10.0)));
+    // Lage eines minimierten Fensters, riesige Lage, Fenster ganz links oder oben außerhalb:
+    // Lage verworfen, Größe bleibt.
+    for window in [
+        r#"{"x": -32000, "y": -32000, "width": 1600, "height": 900}"#,
+        r#"{"x": 1e30, "y": 5, "width": 1600, "height": 900}"#,
+        r#"{"x": 20000, "y": 5, "width": 1600, "height": 900}"#,
+        r#"{"x": -5000, "y": 5, "width": 1600, "height": 900}"#,
+        r#"{"x": 5, "y": -2000, "width": 1600, "height": 900}"#,
+    ] {
+        let w = read(window).unwrap_or_else(|| panic!("{window}"));
+        assert_eq!((w.x, w.y), (None, None), "{window}");
+        assert_eq!((w.width, w.height), (1600.0, 900.0), "{window}");
+    }
+    // Teilweise sichtbar (Rand des maximierten Fensters, zweiter Bildschirm rechts): bleibt.
+    for (x, y) in [(-8.0, -8.0), (1912.0, 0.0), (-1000.0, 100.0)] {
+        let w = read(&format!(
+            r#"{{"x": {x}, "y": {y}, "width": 1600, "height": 900}}"#
+        ))
+        .unwrap();
+        assert_eq!((w.x, w.y), (Some(x), Some(y)));
+    }
+    // Ohne Lage gelesen und geschrieben: nur die Größe.
+    let w = read(r#"{"width": 1600, "height": 900}"#).unwrap();
+    assert_eq!((w.x, w.y), (None, None));
+    let c = Config {
+        update_pending: Some(PendingUpdate {
+            from: "0.1.0".into(),
+            to: "0.2.0".into(),
+            window: Some(w),
+        }),
+        ..Config::default()
+    };
+    c.save_to(&p).unwrap();
+    let text = std::fs::read_to_string(&p).unwrap();
+    assert!(!text.contains("\"x\""), "{text}");
+    assert_eq!(Config::read_from(&p).unwrap(), c);
+    // Dieselbe Prüfung gilt für ein Fenster im Speicher.
+    let wild = WindowState {
+        x: Some(-32000.0),
+        y: Some(-32000.0),
+        width: f32::INFINITY,
+        height: 900.0,
+        maximized: false,
+    };
+    assert_eq!(wild.sanitized(), None, "Breite unendlich");
+    let wild = WindowState {
+        width: 1e30,
+        ..wild
+    };
+    let s = wild.sanitized().unwrap();
+    assert_eq!((s.x, s.y, s.width), (None, None, MAX_WINDOW_SIZE));
     cleanup(&p);
 }

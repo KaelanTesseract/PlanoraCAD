@@ -16,10 +16,10 @@
 //! Programm; endet die neue Version vorher von selbst ([`NewProcess::exited`]) oder läuft die
 //! Frist ab, beendet es die neue Version ([`NewProcess::stop`]), legt den alten Stand zurück und
 //! läuft weiter; die Version wird weiter angeboten (nicht übersprungen), die Meldung
-//! [`not_started`] erklärt es. Vor dem Austausch merkt es sich Größe, Lage und Zustand des
-//! Fensters ([`window_state`]); die neue Version öffnet ihr Fenster so ([`restore_window`]).
-//! Von der Prüfung bis zum Ende ist die
-//! Bedienung gesperrt. Entsteht trotzdem neue ungespeicherte Arbeit, geht es vor dem Austausch
+//! [`not_started`] erklärt es. Die App merkt sich laufend Größe, Lage und Zustand des sichtbaren
+//! Fensters ([`window_state`]) und schreibt sie mit `update_pending`; die neue Version öffnet ihr
+//! Fenster so ([`restore_window`]). Von der Prüfung bis zum Ende ist die Bedienung gesperrt.
+//! Entsteht trotzdem neue ungespeicherte Arbeit, geht es vor dem Austausch
 //! zurück zur Rückfrage; danach wird die neue Version beendet und der alte Stand zurückgelegt
 //! ([`RESTART_STOPPED`]), nie ohne Rückfrage geschlossen. Die Schritte nach dem Download stehen
 //! in [`crate::app`] (`PlanoraApp::install_tick`).
@@ -458,6 +458,8 @@ impl NewProcess for ChildProcess {
         let _ = self.0.wait();
     }
 
+    /// Ein Fehler beim Nachfragen zählt als „läuft noch“: dann gilt nur die Frist
+    /// ([`MARKER_WAIT`]); sicher, nur langsamer.
     fn exited(&mut self) -> bool {
         matches!(self.0.try_wait(), Ok(Some(_)))
     }
@@ -615,29 +617,38 @@ pub fn fraction(done: u64, total: u64) -> f32 {
 pub const MIN_WINDOW: egui::Vec2 = egui::vec2(800.0, 600.0);
 
 /// Größe, Lage und Zustand des Programmfensters, wie eframe sie meldet: Lage der Außenkante,
-/// Größe der Innenfläche, maximiert oder nicht. Ohne Größe oder Lage keines (etwa in Tests).
+/// Größe der Innenfläche, maximiert oder nicht, geprüft mit [`WindowState::sanitized`]. Keines
+/// ohne Größe oder Lage (etwa in Tests) und keines bei minimiertem Fenster (Windows meldet dann
+/// die Lage -32000/-32000; die App behält die letzte sichtbare).
 pub fn window_state(info: &egui::ViewportInfo) -> Option<WindowState> {
+    if info.minimized == Some(true) {
+        return None;
+    }
     let inner = info.inner_rect?;
     let outer = info.outer_rect?;
-    let ok = [outer.min.x, outer.min.y, inner.width(), inner.height()]
-        .iter()
-        .all(|n| n.is_finite())
-        && inner.width() > 0.0
-        && inner.height() > 0.0;
-    ok.then(|| WindowState {
-        x: outer.min.x,
-        y: outer.min.y,
+    WindowState {
+        x: Some(outer.min.x),
+        y: Some(outer.min.y),
         width: inner.width(),
         height: inner.height(),
         maximized: info.maximized.unwrap_or(false),
-    })
+    }
+    .sanitized()
 }
 
-/// Öffnet das Fenster in Größe, Lage und Zustand `w` (mindestens [`MIN_WINDOW`]); so übernimmt
-/// die neue Version nach einem Update das Fenster der alten.
+/// Öffnet das Fenster in Größe, Lage und Zustand `w`; so übernimmt die neue Version nach einem
+/// Update das Fenster der alten. Geprüft mit [`WindowState::sanitized`]: Größe mindestens
+/// [`MIN_WINDOW`], höchstens `MAX_WINDOW_SIZE`; eine unplausible Lage bleibt weg (dann setzt das
+/// System das Fenster); ohne brauchbare Größe bleibt alles bei der Vorgabe.
 pub fn restore_window(builder: egui::ViewportBuilder, w: &WindowState) -> egui::ViewportBuilder {
-    builder
+    let Some(w) = w.sanitized() else {
+        return builder;
+    };
+    let mut builder = builder
         .with_inner_size(egui::vec2(w.width, w.height).max(MIN_WINDOW))
-        .with_position(egui::pos2(w.x, w.y))
-        .with_maximized(w.maximized)
+        .with_maximized(w.maximized);
+    if let (Some(x), Some(y)) = (w.x, w.y) {
+        builder = builder.with_position(egui::pos2(x, y));
+    }
+    builder
 }

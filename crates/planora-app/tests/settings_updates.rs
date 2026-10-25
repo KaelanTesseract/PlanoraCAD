@@ -543,8 +543,8 @@ fn pending_update_settings_ride_along_on_every_write_path() {
         assert!(!e.ws.set_last_update_check(42), "{path}");
         // Auch das Fenster der alten Version im vorgemerkten Update.
         let window = WindowState {
-            x: 10.0,
-            y: 20.0,
+            x: Some(10.0),
+            y: Some(20.0),
             width: 1800.0,
             height: 1000.0,
             maximized: true,

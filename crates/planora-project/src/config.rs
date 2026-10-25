@@ -109,20 +109,60 @@ pub struct PendingUpdate {
     pub window: Option<WindowState>,
 }
 
+/// Größte Breite und Höhe eines gemerkten Fensters in Punkten.
+pub const MAX_WINDOW_SIZE: f32 = 16384.0;
+
+/// Größter Betrag der gemerkten Lage in Punkten; weiter draußen (etwa -32000/-32000, die Lage,
+/// die Windows für ein minimiertes Fenster meldet) gilt sie als unbrauchbar.
+pub const MAX_WINDOW_POS: f32 = 10000.0;
+
 /// Größe, Lage und Zustand eines Programmfensters in Punkten: `x`, `y` die linke obere Ecke
-/// des Fensters samt Rahmen, `width`, `height` die Innenfläche.
+/// des Fensters samt Rahmen (fehlen sie, setzt das System das Fenster), `width`, `height` die
+/// Innenfläche.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WindowState {
-    pub x: f32,
-    pub y: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
     pub width: f32,
     pub height: f32,
     #[serde(default)]
     pub maximized: bool,
 }
 
-/// Liest ein Fenster aus einem JSON-Wert: endliche Zahlen für Lage und Größe, die Größe über 0;
-/// sonst keines. Fehlt `maximized` oder ist es kein Wahrheitswert, gilt „nicht maximiert“.
+impl WindowState {
+    /// Nur Plausibles: ohne endliche Größe über 0 keines; die Größe höchstens
+    /// [`MAX_WINDOW_SIZE`]. Die Lage bleibt nur, wenn sie endlich ist, ihr Betrag höchstens
+    /// [`MAX_WINDOW_POS`] beträgt und das Fenster wenigstens zum Teil im Bereich 0 bis
+    /// [`MAX_WINDOW_SIZE`] liegt; sonst fehlt sie (dann setzt das System das Fenster), damit
+    /// das Fenster nie unsichtbar öffnet.
+    pub fn sanitized(self) -> Option<WindowState> {
+        let size_ok = |n: f32| n.is_finite() && n > 0.0;
+        if !size_ok(self.width) || !size_ok(self.height) {
+            return None;
+        }
+        let width = self.width.min(MAX_WINDOW_SIZE);
+        let height = self.height.min(MAX_WINDOW_SIZE);
+        let pos_ok = |p: Option<f32>, len: f32| {
+            p.is_some_and(|p| {
+                p.is_finite() && p.abs() <= MAX_WINDOW_POS && p + len > 0.0 && p < MAX_WINDOW_SIZE
+            })
+        };
+        let keep = pos_ok(self.x, width) && pos_ok(self.y, height);
+        Some(WindowState {
+            x: self.x.filter(|_| keep),
+            y: self.y.filter(|_| keep),
+            width,
+            height,
+            maximized: self.maximized,
+        })
+    }
+}
+
+/// Liest ein Fenster aus einem JSON-Wert und prüft es ([`WindowState::sanitized`]): ohne
+/// brauchbare Größe keines. Fehlt `maximized` oder ist es kein Wahrheitswert, gilt „nicht
+/// maximiert“.
 fn lenient_window(value: Option<&serde_json::Value>) -> Option<WindowState> {
     let value = value?;
     let num = |key: &str| {
@@ -130,19 +170,18 @@ fn lenient_window(value: Option<&serde_json::Value>) -> Option<WindowState> {
             .get(key)
             .and_then(serde_json::Value::as_f64)
             .map(|n| n as f32)
-            .filter(|n| n.is_finite())
     };
-    let (width, height) = (num("width")?, num("height")?);
-    (width > 0.0 && height > 0.0).then(|| WindowState {
-        x: num("x").unwrap_or(0.0),
-        y: num("y").unwrap_or(0.0),
-        width,
-        height,
+    WindowState {
+        x: num("x"),
+        y: num("y"),
+        width: num("width")?,
+        height: num("height")?,
         maximized: value
             .get("maximized")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
-    })
+    }
+    .sanitized()
 }
 
 impl Default for Config {

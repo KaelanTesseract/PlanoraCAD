@@ -13,7 +13,7 @@ use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, ViewportCommand, V
 use planora_app::app::{PlanoraApp, RestartPhase};
 use planora_app::prompts::{SAVE_FOR_UPDATE_TITLE, save_for_update_text};
 use planora_app::update_dialog::{
-    CANCEL, CLOSE, FAILED_TITLE, INSTALL_NOW, NOTES_ON_GITHUB, OK, RETRY,
+    CANCEL, CLOSE, FAILED_TITLE, INSTALL_NOW, InstallView, NOTES_ON_GITHUB, OK, RETRY,
 };
 use planora_app::update_install::*;
 use planora_app::workspace::{Prompt, Workspace};
@@ -548,6 +548,8 @@ fn prompt_for_unsaved_work_before_restart_and_cancel_aborts_the_update_and_delet
     assert!(!h.sees(RESTARTING), "{:?}", h.texts());
     assert!(!h.sees(RESTART_BOX), "{:?}", h.texts());
     assert!(h.sees(WAITING), "{:?}", h.texts());
+    // Auch die Meldung selbst zeigt „wartet“, nicht den Neustart.
+    assert_eq!(h.app.notice_view(), InstallView::Waiting);
     assert_eq!(h.app.restart_phase(), RestartPhase::AwaitingPrompt);
     assert!(h.paths.new_exe.exists(), "fertig geladen und geprüft");
     // Erster Tab: Verwerfen; dann kommt der zweite.
@@ -1557,6 +1559,7 @@ fn restart_text_appears_once_while_waiting() {
     h.click(INSTALL_NOW);
     h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
     h.settle();
+    assert_eq!(h.app.notice_view(), InstallView::Restarting);
     let restarting = h.seen.iter().filter(|s| s.text == RESTARTING).count();
     assert_eq!(restarting, 1, "{:?}", h.texts());
     assert!(h.sees(RESTART_BOX), "{:?}", h.texts());
@@ -1631,14 +1634,14 @@ fn window_state_goes_with_the_pending_update() {
         .expect("Fenster gemerkt");
     assert_eq!(
         (window.x, window.y, window.width, window.height),
-        (-8.0, -8.0, SIZE.x, SIZE.y)
+        (Some(-8.0), Some(-8.0), SIZE.x, SIZE.y)
     );
     assert!(window.maximized);
     // Pure Prüfung: kein Fenster ohne Angaben, zu kleine Fenster auf die Mindestgröße.
     assert_eq!(window_state(&egui::ViewportInfo::default()), None);
     let small = planora_project::config::WindowState {
-        x: 5.0,
-        y: 6.0,
+        x: Some(5.0),
+        y: Some(6.0),
         width: 300.0,
         height: 200.0,
         maximized: false,
@@ -1647,4 +1650,100 @@ fn window_state_goes_with_the_pending_update() {
     assert_eq!(b.inner_size, Some(vec2(800.0, 600.0)));
     assert_eq!(b.position, Some(Pos2::new(5.0, 6.0)));
     assert_eq!(b.maximized, Some(false));
+}
+
+/// Ein unplausibles Fenster öffnet nie unsichtbar: zu große Maße begrenzt, eine Lage weit
+/// draußen weggelassen (das System setzt das Fenster dann selbst).
+#[test]
+fn restore_window_limits_size_and_drops_far_positions() {
+    let wild = planora_project::config::WindowState {
+        x: Some(-32000.0),
+        y: Some(-32000.0),
+        width: 1e30,
+        height: 1e30,
+        maximized: false,
+    };
+    let b = restore_window(egui::ViewportBuilder::default(), &wild);
+    let max = planora_project::config::MAX_WINDOW_SIZE;
+    assert_eq!(b.inner_size, Some(vec2(max, max)));
+    assert_eq!(b.position, None);
+    // Unbrauchbare Maße: nichts übernommen, die Vorgabe des Programms bleibt.
+    let broken = planora_project::config::WindowState {
+        width: f32::NAN,
+        ..wild
+    };
+    let b = restore_window(egui::ViewportBuilder::default(), &broken);
+    assert_eq!((b.inner_size, b.position, b.maximized), (None, None, None));
+}
+
+/// Ein minimiertes Fenster (Windows meldet dann die Lage -32000/-32000) wird nicht gemerkt;
+/// mit dem Update geht die letzte Lage, in der das Fenster zu sehen war.
+#[test]
+fn minimized_window_keeps_the_last_visible_state() {
+    let minimized = egui::ViewportInfo {
+        inner_rect: Some(Rect::from_min_size(
+            Pos2::new(-32000.0, -32000.0),
+            vec2(160.0, 28.0),
+        )),
+        outer_rect: Some(Rect::from_min_size(
+            Pos2::new(-32000.0, -32000.0),
+            vec2(160.0, 28.0),
+        )),
+        minimized: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(window_state(&minimized), None);
+    let mut h = Harness::offered(
+        "planora-install-fenster-minimiert",
+        FakeDownloader::good(),
+        FakeRestarter::new(true),
+    );
+    h.viewport = Some(egui::ViewportInfo {
+        inner_rect: Some(Rect::from_min_size(
+            Pos2::new(208.0, 131.0),
+            vec2(1500.0, 850.0),
+        )),
+        outer_rect: Some(Rect::from_min_size(
+            Pos2::new(200.0, 100.0),
+            vec2(1516.0, 889.0),
+        )),
+        minimized: Some(false),
+        maximized: Some(false),
+        ..Default::default()
+    });
+    h.settle();
+    h.viewport = Some(minimized);
+    // Die Meldung bleibt bedienbar; der Klick kommt beim „minimierten“ Fenster an.
+    h.click(INSTALL_NOW);
+    h.until(|a| a.restart_phase() == RestartPhase::Exiting);
+    let window = Config::load_from(&h.cfg)
+        .update_pending
+        .and_then(|p| p.window)
+        .expect("letzte sichtbare Lage gemerkt");
+    assert_eq!(
+        (window.x, window.y, window.width, window.height),
+        (Some(200.0), Some(100.0), 1500.0, 850.0)
+    );
+}
+
+/// War beim Rückfall kein Update mehr vorgemerkt, bietet die App das gewählte wieder an
+/// (Statuszeile und nächste Meldung).
+#[test]
+fn rollback_offers_the_chosen_update_again_even_without_a_pending_notice() {
+    let mut h = Harness::offered(
+        "planora-install-rueckfall-wieder-anbieten",
+        FakeDownloader::good(),
+        FakeRestarter::new(false),
+    );
+    h.app.set_marker_wait(Duration::from_millis(300));
+    h.click(INSTALL_NOW);
+    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
+    *h.app.pending_notice_mut() = None;
+    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
+    assert_eq!(
+        h.app.pending_notice().map(|u| u.latest.version),
+        Some(v(TARGET))
+    );
+    h.click(CLOSE);
+    assert!(h.sees(&planora_app::update_dialog::status_hint(&v(TARGET))));
 }

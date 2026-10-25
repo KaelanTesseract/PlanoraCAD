@@ -121,6 +121,9 @@ pub struct PlanoraApp {
     /// Die gestartete neue Version, solange auf ihre Rückmeldung gewartet wird; meldet sie sich
     /// nicht oder wird der Neustart abgebrochen, wird sie damit beendet.
     new_process: Option<Box<dyn NewProcess>>,
+    /// Größe, Lage und Zustand des Fensters im letzten Bild, in dem es zu sehen war
+    /// ([`update_install::window_state`]); geht mit dem vorgemerkten Update an die neue Version.
+    last_window: Option<WindowState>,
     /// Gestartet mit [`update_install::AFTER_UPDATE_ARG`]: die Rückmeldung an die alte Version
     /// steht noch aus (sie kommt nach dem ersten fertig gezeichneten Bild).
     ok_marker_due: bool,
@@ -216,6 +219,7 @@ impl PlanoraApp {
             after_update: None,
             reverify: None,
             new_process: None,
+            last_window: None,
             ok_marker_due: false,
             first_frame: None,
         }
@@ -378,6 +382,10 @@ impl PlanoraApp {
     /// Update verwerfen; nach dem Start der neuen Version auf ihre Rückmeldung warten. Wartet
     /// nie.
     fn install_tick(&mut self, ctx: &egui::Context) {
+        // Letzte sichtbare Lage des Fensters (ein minimiertes zählt nicht), für die neue Version.
+        if let Some(w) = ctx.input(|i| update_install::window_state(i.viewport())) {
+            self.last_window = Some(w);
+        }
         self.install_step(ctx);
         // Die Rückfrage nennt das Update nur, solange sie für den Neustart gestellt ist.
         self.ws.quit_for_update = self.restart == RestartPhase::AwaitingPrompt;
@@ -436,8 +444,7 @@ impl PlanoraApp {
                     // ab): noch ist nichts ausgetauscht, also zurück zur Rückfrage.
                     Ok(()) if self.unsaved_work() => self.restart = RestartPhase::None,
                     Ok(()) => {
-                        let window = ctx.input(|i| update_install::window_state(i.viewport()));
-                        self.restart_now(window);
+                        self.restart_now(self.last_window);
                     }
                     Err(e) => {
                         self.restart = RestartPhase::None;
@@ -631,6 +638,31 @@ impl PlanoraApp {
         Self::with_workspace(ws, source)
     }
 
+    /// Was die Meldung während eines Updates zeigt ([`install_view`]): während des gesperrten
+    /// Neustarts nichts, sonst den Stand (auch während der Rückfrage: „wartet“); ein Fehler mit
+    /// „Erneut versuchen“, wenn das helfen kann.
+    #[doc(hidden)]
+    pub fn notice_view(&self) -> InstallView<'_> {
+        install_view(
+            self.restart_locked(),
+            self.installer.state(),
+            self.retry_possible(),
+        )
+    }
+
+    /// Kann „Erneut versuchen“ nach einem Fehler helfen? Nur wenn das Update hier geladen und
+    /// eingespielt werden kann ([`update_install::decide`]).
+    fn retry_possible(&self) -> bool {
+        update_install::decide(self.auto_install, self.exe_path.as_deref())
+            == InstallDecision::Download
+    }
+
+    /// Vorgemerktes Update für die Meldung, zum Ändern (für Tests).
+    #[doc(hidden)]
+    pub fn pending_notice_mut(&mut self) -> &mut Option<Update> {
+        &mut self.pending_notice
+    }
+
     /// Vorgemerktes Update für die Meldung (für Tests).
     #[doc(hidden)]
     pub fn pending_notice(&self) -> Option<&Update> {
@@ -820,9 +852,9 @@ impl PlanoraApp {
             &mut self.update_dialog,
         );
         self.auto_open_update_notice();
-        let retry = update_install::decide(self.auto_install, self.exe_path.as_deref())
-            == InstallDecision::Download;
-        let view = install_view(self.restart_locked(), self.installer.state(), retry);
+        // Dieselben Angaben wie `notice_view`, nur ohne `self` ganz zu borgen.
+        let (locked, retry) = (self.restart_locked(), self.retry_possible());
+        let view = install_view(locked, self.installer.state(), retry);
         if let Some(action) = update_dialog::show(ctx, &mut self.ws, &mut self.update_dialog, view)
         {
             self.after_update_action(ctx, action);
