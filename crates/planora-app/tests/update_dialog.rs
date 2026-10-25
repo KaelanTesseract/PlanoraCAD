@@ -1,7 +1,8 @@
 //! Meldung „Neue Version verfügbar“: erscheint von allein, wenn die Prüfung ein Update findet
 //! und nichts anderes offen ist (sonst später), zeigt die Patchnotes aller Versionen dazwischen,
 //! „Später“ hält sie für 24 Stunden der Sitzung zurück, „Überspringen“ für diese Version immer,
-//! Hinweis in der Statuszeile, Fensterregeln, „Jetzt aktualisieren“ wird nur gemeldet.
+//! Hinweis in der Statuszeile, Fensterregeln, „Jetzt aktualisieren“ hält die Meldung für den
+//! Fortschritt offen (der Ablauf selbst in `tests/update_install.rs`).
 //!
 //! Mit echten Bildern der ganzen App bei 1920 × 1080 und einer Nachbildung der Release-Quelle
 //! (nie Netz); Bibliothek und Konfiguration nur im Temp-Ordner.
@@ -620,11 +621,13 @@ fn window_exclusion_with_projects_and_settings() {
 }
 
 #[test]
-fn install_now_reports_the_action() {
+fn install_now_keeps_the_notice_for_the_progress() {
+    // Ohne bekannte Programmdatei (Testaufbau) endet „Jetzt aktualisieren“ sofort mit einem
+    // Hinweis; Download und Austausch prüft `tests/update_install.rs`.
     let mut h = Harness::started("planora-meldung-jetzt", Fake::new(one_newer()));
     assert!(h.notice_open());
     h.click(INSTALL_NOW);
-    assert!(!h.notice_open());
+    assert!(h.notice_open(), "bleibt offen für Fortschritt oder Hinweis");
     let d = h.app.update_dialog_mut();
     assert!(d.installing);
     assert_eq!(
@@ -633,12 +636,23 @@ fn install_now_reports_the_action() {
         "das einzuspielende Update bleibt"
     );
     assert_eq!(d.snooze_until, None);
-    assert!(h.sees(PREPARING), "{:?}", h.texts());
+    let expected = if cfg!(windows) {
+        planora_app::update_install::NO_EXE
+    } else {
+        planora_app::update_install::ONLY_WINDOWS
+    };
+    assert!(h.sees(expected), "{:?}", h.texts());
+    assert!(!h.sees(INSTALL_NOW), "statt der Knöpfe");
     assert!(!h.sees(&status_hint(&v("99.0.0-dev.1"))));
     assert_eq!(h.app.ws_mut().skipped_version(), None);
-    // Kommt nicht von allein wieder.
+    // ✕ bzw. Esc nach dem Hinweis schließt; die Meldung ruht dann wie nach „Später“.
+    h.press(Key::Escape);
+    assert!(!h.notice_open());
+    assert!(!h.app.update_dialog_mut().installing);
+    assert!(h.app.update_dialog_mut().snooze_until.is_some());
     h.settle();
     assert!(!h.notice_open());
+    assert!(h.sees(&status_hint(&v("99.0.0-dev.1"))));
 }
 
 #[test]

@@ -17,7 +17,11 @@ use crate::shell::ShellState;
 use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::step_import_dialog::{self, StepImportDialog};
 use crate::update_check::{self, CheckRequest, CheckResult, NoNetwork, UpdateChecker};
-use crate::update_dialog::{self, UpdateAction, UpdateDialog};
+use crate::update_dialog::{self, InstallView, UpdateAction, UpdateDialog};
+use crate::update_install::{
+    self, AfterUpdate, InstallDecision, InstallState, Installer, MARKER_WAIT, NoDownload,
+    NoRestart, ProcessRestarter, Restarter,
+};
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
 use crate::{
@@ -29,8 +33,12 @@ use planora_kernel::BoolOp;
 use planora_render::gpu::GpuScene;
 use planora_render::{FaceRef, Pick, ViewFace};
 use planora_sketch::plane_of_face;
-use planora_update::Update;
 use planora_update::check::{CheckOutcome, HttpSource, ReleaseSource, due};
+use planora_update::install::{
+    Downloader, HttpDownloader, InstallError, Paths, discard_download, rollback, swap,
+};
+use planora_update::{Update, Version};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -90,10 +98,42 @@ pub struct PlanoraApp {
     pub(crate) pending_notice: Option<Update>,
     /// Meldung „Neue Version verfügbar“ ([`update_dialog`]).
     pub(crate) update_dialog: UpdateDialog,
+    /// Download und Prüfung eines Updates im Hintergrund ([`update_install`]).
+    pub(crate) installer: Installer,
+    /// Download der Release-Dateien: im Programm [`HttpDownloader`], in Tests eine Nachbildung.
+    downloader: Arc<dyn Downloader + Send + Sync>,
+    /// Start der neuen Version: im Programm [`ProcessRestarter`], in Tests eine Nachbildung.
+    restarter: Arc<dyn Restarter + Send + Sync>,
+    /// Die laufende Programmdatei (`None`: unbekannt, dann kein Austausch).
+    exe_path: Option<PathBuf>,
+    /// Gibt es das automatische Aktualisieren hier? Im Programm `cfg!(windows)`.
+    auto_install: bool,
+    /// Schritt des Neustarts nach dem Download.
+    pub(crate) restart: RestartPhase,
+    /// So lange wartet die alte Version auf die Rückmeldung der neuen ([`MARKER_WAIT`]).
+    marker_wait: Duration,
+    /// Hinweis „Aktualisiert auf Version X“ nach einem Update (einmal).
+    after_update: Option<AfterUpdate>,
+}
+
+/// Schritt des Neustarts nach einem fertig geladenen und geprüften Update.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RestartPhase {
+    /// Kein Neustart begonnen.
+    #[default]
+    None,
+    /// Die Rückfrage wegen ungespeicherter Arbeit läuft (wie beim Schließen).
+    AwaitingPrompt,
+    /// Ausgetauscht und die neue Version gestartet; wartet bis `deadline` auf ihre Rückmeldung.
+    WaitingForMarker { deadline: Instant, to: Version },
+    /// Die neue Version läuft; das Programm beendet sich.
+    Exiting,
 }
 
 impl PlanoraApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    /// Das Programm. `after_update`: gestartet mit [`update_install::AFTER_UPDATE_ARG`] (von der
+    /// alten Version nach dem Austausch).
+    pub fn new(cc: &eframe::CreationContext<'_>, after_update: bool) -> Self {
         let render_state = cc
             .wgpu_render_state
             .as_ref()
@@ -111,9 +151,15 @@ impl PlanoraApp {
         // zuerst nach einem Projektordner.
         let library = planora_project::library::Library::open(&root).ok();
         let ws = Workspace::new(library, config);
-        // Nur hier geht das Programm ins Netz; Tests bekommen eine Nachbildung.
-        let source = Arc::new(HttpSource::new(&crate::running_version()));
-        Self::with_workspace(ws, source)
+        // Nur hier geht das Programm ins Netz und startet sich neu; Tests bekommen Nachbildungen.
+        let running = crate::running_version();
+        let source = Arc::new(HttpSource::new(&running));
+        let mut app = Self::with_workspace(ws, source);
+        app.downloader = Arc::new(HttpDownloader::new(&running));
+        app.restarter = Arc::new(ProcessRestarter);
+        app.exe_path = std::env::current_exe().ok();
+        app.run_update_startup(after_update);
+        app
     }
 
     /// Einstellungen des egui-Kontexts, die nicht vom Aussehen abhängen. Kein Tastatur-Zoom
@@ -140,7 +186,238 @@ impl PlanoraApp {
             update_manual_waiting: false,
             pending_notice: None,
             update_dialog: UpdateDialog::default(),
+            installer: Installer::default(),
+            downloader: Arc::new(NoDownload),
+            restarter: Arc::new(NoRestart),
+            exe_path: None,
+            auto_install: cfg!(windows),
+            restart: RestartPhase::None,
+            marker_wait: MARKER_WAIT,
+            after_update: None,
         }
+    }
+
+    /// Wie [`PlanoraApp::for_tests_with_updates`] mit Nachbildungen für Download und Neustart
+    /// und einer Programmdatei `exe` in einem Temp-Ordner (nie die echte).
+    #[doc(hidden)]
+    pub fn for_tests_with_install(
+        ws: Workspace,
+        source: Arc<dyn ReleaseSource + Send + Sync>,
+        downloader: Arc<dyn Downloader + Send + Sync>,
+        restarter: Arc<dyn Restarter + Send + Sync>,
+        exe: PathBuf,
+    ) -> Self {
+        let mut app = Self::with_workspace(ws, source);
+        app.downloader = downloader;
+        app.restarter = restarter;
+        app.exe_path = Some(exe);
+        app
+    }
+
+    /// Gibt es das automatische Aktualisieren (für Tests der Entscheidung ohne `cfg`)?
+    #[doc(hidden)]
+    pub fn set_auto_install_supported(&mut self, on: bool) {
+        self.auto_install = on;
+    }
+
+    /// Wartezeit auf die Rückmeldung der neuen Version (für Tests).
+    #[doc(hidden)]
+    pub fn set_marker_wait(&mut self, wait: Duration) {
+        self.marker_wait = wait;
+    }
+
+    /// Download eines Updates (für Tests).
+    #[doc(hidden)]
+    pub fn installer(&self) -> &Installer {
+        &self.installer
+    }
+
+    /// Schritt des Neustarts (für Tests).
+    #[doc(hidden)]
+    pub fn restart_phase(&self) -> RestartPhase {
+        self.restart
+    }
+
+    /// Hinweis nach einem Update, solange er offen ist (für Tests).
+    #[doc(hidden)]
+    pub fn after_update(&self) -> Option<&AfterUpdate> {
+        self.after_update.as_ref()
+    }
+
+    /// Pfade des Austauschs zur laufenden Programmdatei.
+    fn install_paths(&self) -> Option<Paths> {
+        self.exe_path.as_deref().map(Paths::for_exe)
+    }
+
+    /// Beim Start: Aufräumen nach einem Update und der Hinweis „Aktualisiert auf Version X“
+    /// ([`update_install::startup`]). `after_update`: mit [`update_install::AFTER_UPDATE_ARG`]
+    /// gestartet.
+    #[doc(hidden)]
+    pub fn run_update_startup(&mut self, after_update: bool) {
+        let paths = self.install_paths();
+        self.after_update = update_install::startup(
+            &mut self.ws,
+            after_update,
+            paths.as_ref(),
+            &crate::running_version(),
+        );
+    }
+
+    /// „Jetzt aktualisieren“: je nach [`update_install::decide`] den Download starten oder den
+    /// passenden Hinweis zeigen (nicht Windows: zusätzlich die Release-Seite öffnen).
+    fn begin_install(&mut self, ctx: &egui::Context) {
+        let Some(update) = self.update_dialog.update.clone() else {
+            return;
+        };
+        self.installer.set_repaint(ctx);
+        match update_install::decide(self.auto_install, self.exe_path.as_deref()) {
+            InstallDecision::Download => {
+                let Some(paths) = self.install_paths() else {
+                    return;
+                };
+                self.installer
+                    .start(&update, paths, Arc::clone(&self.downloader));
+            }
+            InstallDecision::OnlyWindows => {
+                self.installer.fail(update_install::ONLY_WINDOWS);
+                open_release_page(ctx, &update);
+            }
+            InstallDecision::ProtectedFolder => {
+                self.installer.fail(InstallError::NotWritable.message());
+            }
+            InstallDecision::NoExe => self.installer.fail(update_install::NO_EXE),
+        }
+    }
+
+    /// Download und Neustart in jedem Bild (in `logic`, vor dem Schließen): Stand abholen; ist
+    /// die Datei fertig und geprüft, die Rückfrage wie beim Schließen stellen
+    /// (`Workspace::request_quit`); danach austauschen ([`PlanoraApp::restart_now`]) oder bei
+    /// „Abbrechen“ das Update verwerfen; nach dem Start der neuen Version auf ihre Rückmeldung
+    /// warten. Wartet nie.
+    fn install_tick(&mut self, ctx: &egui::Context) {
+        self.installer.poll();
+        if self.restart == RestartPhase::None
+            && *self.installer.state() == InstallState::ReadyToRestart
+        {
+            self.restart = RestartPhase::AwaitingPrompt;
+            // Dieselbe Rückfrage wie beim Schließen; ohne ungespeicherte Arbeit setzt sie
+            // `quit` sofort.
+            self.ws.request_quit();
+        }
+        match self.restart {
+            RestartPhase::None | RestartPhase::Exiting => {}
+            RestartPhase::AwaitingPrompt => {
+                if self.ws.quit {
+                    // Das Programm beendet sich erst, wenn die neue Version läuft.
+                    self.ws.quit = false;
+                    self.restart_now();
+                } else if self.ws.prompt.is_none() {
+                    // „Abbrechen“ in der Rückfrage: Update abbrechen, `.new` löschen.
+                    self.restart = RestartPhase::None;
+                    self.installer.cancel();
+                    self.update_dialog.apply(
+                        &mut self.ws,
+                        UpdateAction::CancelInstall,
+                        update_check::now_unix(),
+                    );
+                }
+            }
+            RestartPhase::WaitingForMarker { deadline, to } => {
+                let Some(paths) = self.installer.paths().cloned() else {
+                    self.restart = RestartPhase::None;
+                    return;
+                };
+                if paths.ok_marker.exists() {
+                    let _ = std::fs::remove_file(&paths.ok_marker);
+                    self.restart = RestartPhase::Exiting;
+                    // Ohne weitere Rückfrage: `handle_close_request` schickt `Close`.
+                    self.ws.quit = true;
+                } else if Instant::now() >= deadline {
+                    self.restart_failed(&paths, to);
+                } else {
+                    ctx.request_repaint_after(Duration::from_millis(100));
+                }
+            }
+        }
+    }
+
+    /// Nach der Rückfrage: `update_pending` speichern (sonst nichts austauschen), Patchnotes für
+    /// den Hinweis hinterlegen, austauschen, die neue Version starten und auf sie warten. Jeder
+    /// Fehler legt den alten Stand zurück und zeigt eine Meldung; das Programm läuft weiter.
+    fn restart_now(&mut self) {
+        self.restart = RestartPhase::None;
+        let (Some(paths), Some(to)) = (self.installer.paths().cloned(), self.installer.target())
+        else {
+            self.installer.fail(update_install::NO_EXE);
+            return;
+        };
+        let from = crate::running_version();
+        if !self.ws.set_pending_update(Some((from, to))) {
+            let _ = self.ws.set_pending_update(None);
+            discard_download(&paths);
+            self.installer.fail(update_install::PENDING_NOT_SAVED);
+            return;
+        }
+        if let Some(update) = &self.update_dialog.update
+            && update.latest.version == to
+        {
+            update_install::write_notes(
+                &update_install::notes_file(&self.ws),
+                &to,
+                &update.latest.notes,
+            );
+        }
+        // Eine alte Rückmeldung darf nicht als Erfolg zählen.
+        if paths.ok_marker.exists() && std::fs::remove_file(&paths.ok_marker).is_err() {
+            let _ = self.ws.set_pending_update(None);
+            discard_download(&paths);
+            self.installer.fail(
+                InstallError::Io(format!(
+                    "{} lässt sich nicht löschen",
+                    paths.ok_marker.display()
+                ))
+                .message(),
+            );
+            return;
+        }
+        if let Err(e) = swap(&paths) {
+            let _ = self.ws.set_pending_update(None);
+            discard_download(&paths);
+            self.installer.fail(e.message());
+            return;
+        }
+        if let Err(e) = self.restarter.start_new(&paths.running_exe) {
+            let back = rollback(&paths);
+            let _ = self.ws.set_pending_update(None);
+            let message = match back {
+                Ok(()) => InstallError::Io(format!("neue Version starten: {e}")).message(),
+                Err(b) => update_install::rollback_failed(&b),
+            };
+            self.installer.fail(message);
+            return;
+        }
+        self.restart = RestartPhase::WaitingForMarker {
+            deadline: Instant::now() + self.marker_wait,
+            to,
+        };
+    }
+
+    /// Die neue Version hat sich nicht rechtzeitig gemeldet: alten Stand zurücklegen, die Version
+    /// überspringen, Meldung zeigen. Das Programm beendet sich nicht.
+    fn restart_failed(&mut self, paths: &Paths, to: Version) {
+        self.restart = RestartPhase::None;
+        let back = rollback(paths);
+        let _ = self.ws.set_skipped_version(Some(to));
+        let _ = self.ws.set_pending_update(None);
+        let _ = std::fs::remove_file(update_install::notes_file(&self.ws));
+        self.pending_notice = None;
+        let message = match back {
+            Ok(()) => update_install::not_started(&to),
+            Err(e) => update_install::rollback_failed(&e),
+        };
+        self.installer.fail(message);
+        self.update_dialog.installing = true;
+        self.update_dialog.install_hidden = false;
     }
 
     /// App ohne Fenster und Renderer für die Oberflächentests; ohne Netz (die Prüfung auf
@@ -247,7 +524,7 @@ impl PlanoraApp {
     /// ist: keine Rückfrage, kein Fenster ([`PlanoraApp::windows_open`]), nicht Projekte. Sonst
     /// wartet sie bis zum ersten Bild, in dem das gilt.
     fn auto_open_update_notice(&mut self) {
-        let Some(update) = &self.pending_notice else {
+        let Some(update) = self.notice_update() else {
             return;
         };
         if self.update_dialog.may_auto_open(update_check::now_unix())
@@ -255,36 +532,66 @@ impl PlanoraApp {
             && !self.windows_open()
             && !self.projects.is_open()
         {
-            self.update_dialog.open_with(update.clone());
+            self.update_dialog.open_with(update);
         }
     }
 
-    /// Klick auf den Hinweis „Update verfügbar“ in der Statuszeile: öffnet die Meldung, auch
-    /// nach „Später“ ([`open_update_notice`]).
+    /// Das Update der Meldung: während eines Updates das gewählte, sonst das vorgemerkte.
+    fn notice_update(&self) -> Option<Update> {
+        if self.update_dialog.installing {
+            self.update_dialog.update.clone()
+        } else {
+            self.pending_notice.clone()
+        }
+    }
+
+    /// Klick auf den Hinweis in der Statuszeile („Update verfügbar“ oder der Stand eines
+    /// laufenden Updates): öffnet die Meldung, auch nach „Später“ ([`open_update_notice`]).
     pub(crate) fn open_update_notice(&mut self) {
-        if let Some(update) = &self.pending_notice {
+        if let Some(update) = self.notice_update() {
             open_update_notice(
                 &mut self.ws,
                 &mut self.projects,
                 &mut self.settings,
                 &mut self.overview,
                 &mut self.update_dialog,
-                update,
+                &update,
             );
         }
     }
 
     /// Folgen einer Wahl in der Meldung über die Meldung hinaus: nach „Überspringen“ ist kein
-    /// Update mehr vorgemerkt (kein Hinweis in der Statuszeile).
-    fn after_update_action(&mut self, action: UpdateAction) {
-        if action == UpdateAction::Skip {
-            self.pending_notice = None;
+    /// Update mehr vorgemerkt (kein Hinweis in der Statuszeile); „Jetzt aktualisieren“ startet
+    /// den Download ([`PlanoraApp::begin_install`]), „Abbrechen“ bricht ihn ab, „Schließen“ nach
+    /// einem Fehler setzt ihn zurück, „Download-Seite öffnen“ öffnet die Release-Seite.
+    fn after_update_action(&mut self, ctx: &egui::Context, action: UpdateAction) {
+        match action {
+            UpdateAction::Skip => self.pending_notice = None,
+            UpdateAction::InstallNow => self.begin_install(ctx),
+            UpdateAction::CancelInstall => self.installer.cancel(),
+            UpdateAction::CloseFailed => self.installer.reset(),
+            UpdateAction::OpenDownloadPage => {
+                if let Some(update) = &self.update_dialog.update {
+                    open_release_page(ctx, update);
+                }
+            }
+            UpdateAction::Later | UpdateAction::Hide => {}
         }
+    }
+
+    /// Esc oder ✕ der Meldung: wie [`UpdateDialog::close_action`].
+    fn close_update_notice(&mut self, ctx: &egui::Context) {
+        let failed = matches!(self.installer.state(), InstallState::Failed(_));
+        let action = self.update_dialog.close_action(failed);
+        self.update_dialog
+            .apply(&mut self.ws, action, update_check::now_unix());
+        self.after_update_action(ctx, action);
     }
 
     /// Die Meldung „Neue Version verfügbar“ in jedem Bild nach den übrigen Fenstern und vor den
     /// Rückfragen: erst die Regeln ([`enforce_update_rules`]), dann von allein öffnen, dann
-    /// zeichnen.
+    /// zeichnen. Danach einmal der Hinweis „Aktualisiert auf Version X“ (nicht während einer
+    /// Rückfrage).
     fn show_update_notice(&mut self, ctx: &egui::Context) {
         enforce_update_rules(
             &self.ws,
@@ -294,8 +601,13 @@ impl PlanoraApp {
             &mut self.update_dialog,
         );
         self.auto_open_update_notice();
-        if let Some(action) = update_dialog::show(ctx, &mut self.ws, &mut self.update_dialog) {
-            self.after_update_action(action);
+        let view = install_view(self.restart, self.installer.state());
+        if let Some(action) = update_dialog::show(ctx, &mut self.ws, &mut self.update_dialog, view)
+        {
+            self.after_update_action(ctx, action);
+        }
+        if self.ws.prompt.is_none() {
+            update_dialog::show_after_update(ctx, &mut self.after_update);
         }
     }
 
@@ -401,6 +713,7 @@ impl PlanoraApp {
         self.ws.about_open
             || self.overview.open
             || self.update_dialog.open
+            || self.after_update.is_some()
             || self.ws.active_tab().dialog_open()
             || crate::project_actions::dialog_open(&self.projects.ui)
             || self.settings.is_open()
@@ -642,6 +955,30 @@ pub fn enforce_overview_rules(
     if overview.open && (file_window_open(ws) || projects.is_open() || settings.is_open()) {
         overview.close();
     }
+}
+
+/// Was die Meldung während eines Updates zeigt: während des Neustarts „Neustart …“, sonst den
+/// Stand des Downloads.
+fn install_view(restart: RestartPhase, state: &InstallState) -> InstallView<'_> {
+    if restart != RestartPhase::None {
+        return InstallView::Restarting;
+    }
+    match state {
+        InstallState::Idle => InstallView::Preparing,
+        InstallState::Downloading { done, total } => InstallView::Downloading {
+            done: *done,
+            total: *total,
+        },
+        InstallState::ReadyToRestart => InstallView::Restarting,
+        InstallState::Failed(message) => InstallView::Failed(message),
+    }
+}
+
+/// Öffnet die Release-Seite von `update` im Browser (über egui, das `webbrowser` benutzt).
+fn open_release_page(ctx: &egui::Context, update: &Update) {
+    ctx.open_url(egui::OpenUrl::new_tab(update_install::release_page(
+        &update.latest.tag,
+    )));
 }
 
 /// Öffnet die Meldung „Neue Version verfügbar“ für `update` (Klick auf den Hinweis in der
@@ -1368,6 +1705,9 @@ impl eframe::App for PlanoraApp {
     /// (eframe plant dann gedrosselte Wiederholungen ein). Deshalb stehen hier das Schließen
     /// und die Autosicherung.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Vor dem Schließen: Nach der Rückfrage zum Neustart steht `quit`, das Programm darf
+        // sich aber erst beenden, wenn die neue Version läuft.
+        self.install_tick(ctx);
         handle_close_request(ctx, &mut self.ws, &mut self.close_sent);
         self.ws.autosave_tick(Instant::now());
         ctx.request_repaint_after(AUTOSAVE_REPAINT);
@@ -1396,11 +1736,10 @@ impl eframe::App for PlanoraApp {
         self.shortcuts(&ctx);
         // Esc der Übersicht vor den Ansichten (weder Auswahl noch Skizze sollen es sehen).
         keymap::overview::take_escape(&ctx, &mut self.overview, self.ws.prompt.is_some());
-        // Esc der Meldung wirkt wie „Später“ (nie wie „Überspringen“).
+        // Esc der Meldung wirkt wie „Später“ (nie wie „Überspringen“), während eines Updates wie
+        // ✕ ([`UpdateDialog::close_action`]).
         if update_dialog::take_escape(&ctx, &self.update_dialog, self.ws.prompt.is_some()) {
-            self.update_dialog
-                .apply(&mut self.ws, UpdateAction::Later, update_check::now_unix());
-            self.after_update_action(UpdateAction::Later);
+            self.close_update_notice(&ctx);
         }
         // Das Fenster „Parameter“ vor allen übrigen Bereichen: Übernimmt es eine Zeile, weil ein
         // Klick das Feld verlassen hat, wird die Änderung ein eigener Schritt, bevor die Ansicht

@@ -4,6 +4,10 @@ use planora_app::app::PlanoraApp;
 use planora_render::gpu::MSAA_SAMPLES;
 
 fn main() -> eframe::Result {
+    // Von der alten Version nach dem Austausch gestartet (siehe `update_install`).
+    let after_update = std::env::args()
+        .skip(1)
+        .any(|a| a == planora_app::update_install::AFTER_UPDATE_ARG);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PlanoraCAD")
         .with_inner_size([1400.0, 900.0])
@@ -23,6 +27,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "PlanoraCAD",
         options,
-        Box::new(|cc| Ok(Box::new(PlanoraApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(PlanoraApp::new(cc, after_update)))),
     )
 }

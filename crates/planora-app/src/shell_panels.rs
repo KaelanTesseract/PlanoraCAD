@@ -259,14 +259,16 @@ pub(crate) struct StatusExtra {
 }
 
 /// Zusatz der Statuszeile aus dem Zustand der Meldung ([`crate::update_dialog`]): nach „Jetzt
-/// aktualisieren“ [`crate::update_dialog::PREPARING`], sonst solange ein Update vorgemerkt und
-/// die Meldung zu ist „Update verfügbar: <Version>“.
+/// aktualisieren“ der Stand des Updates ([`crate::update_install::status_text`]; bei
+/// geschlossener Meldung anklickbar, er öffnet sie wieder), sonst solange ein Update vorgemerkt
+/// und die Meldung zu ist „Update verfügbar: <Version>“.
 fn status_extra(app: &PlanoraApp) -> Option<StatusExtra> {
     let notice = &app.update_dialog;
     if notice.installing {
+        let restarting = app.restart != crate::app::RestartPhase::None;
         return Some(StatusExtra {
-            text: crate::update_dialog::PREPARING.into(),
-            clickable: false,
+            text: crate::update_install::status_text(app.installer.state(), restarting),
+            clickable: !notice.open,
         });
     }
     let update = app.pending_notice.as_ref().filter(|_| !notice.open)?;
