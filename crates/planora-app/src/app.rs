@@ -19,8 +19,8 @@ use crate::step_import_dialog::{self, StepImportDialog};
 use crate::update_check::{self, CheckRequest, CheckResult, NoNetwork, UpdateChecker};
 use crate::update_dialog::{self, InstallView, UpdateAction, UpdateDialog};
 use crate::update_install::{
-    self, AfterUpdate, InstallDecision, InstallState, Installer, MARKER_WAIT, NoDownload,
-    NoRestart, ProcessRestarter, Restarter,
+    self, AfterUpdate, InstallDecision, InstallState, Installer, MARKER_WAIT, NewProcess,
+    NoDownload, NoRestart, ProcessRestarter, Restarter,
 };
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
@@ -33,7 +33,7 @@ use planora_kernel::BoolOp;
 use planora_render::gpu::GpuScene;
 use planora_render::{FaceRef, Pick, ViewFace};
 use planora_sketch::plane_of_face;
-use planora_update::check::{CheckOutcome, HttpSource, ReleaseSource, due};
+use planora_update::check::{CheckOutcome, HttpSource, NetError, ReleaseSource, due};
 use planora_update::install::{
     Downloader, HttpDownloader, InstallError, Paths, discard_download, rollback, swap,
 };
@@ -117,6 +117,16 @@ pub struct PlanoraApp {
     after_update: Option<AfterUpdate>,
     /// Ergebnis der zweiten Prüfung von `.new` ([`RestartPhase::Verifying`]).
     reverify: Option<Receiver<Result<(), InstallError>>>,
+    /// Die gestartete neue Version, solange auf ihre Rückmeldung gewartet wird; meldet sie sich
+    /// nicht oder wird der Neustart abgebrochen, wird sie damit beendet.
+    new_process: Option<Box<dyn NewProcess>>,
+    /// Gestartet mit [`update_install::AFTER_UPDATE_ARG`]: die Rückmeldung an die alte Version
+    /// steht noch aus (sie kommt nach dem ersten fertig gezeichneten Bild).
+    ok_marker_due: bool,
+    /// Nummer des Bildes, in dem `ui` zum ersten Mal ganz durchlief
+    /// (`egui::Context::cumulative_frame_nr`); ist die laufende Nummer größer, ist dieses Bild
+    /// auch gezeichnet (eframe zeichnet nach dem Durchlauf, auch nach mehreren Durchgängen).
+    first_frame: Option<u64>,
 }
 
 /// Schritt des Neustarts nach einem fertig geladenen und geprüften Update.
@@ -146,14 +156,8 @@ impl PlanoraApp {
         cc.egui_ctx.set_fonts(fonts::definitions());
         Self::setup_context(&cc.egui_ctx);
         GpuScene::install(render_state);
-        // Nach einem Update meldet sich die neue Version so früh wie möglich bei der alten:
-        // Fenster und Renderer stehen, Konfiguration und Bibliothek (die bei großen oder
-        // Netzwerk-Ordnern dauern können) kommen erst danach.
         let running = crate::running_version();
         let exe_path = std::env::current_exe().ok();
-        if after_update && let Some(exe) = &exe_path {
-            update_install::write_ok_marker(&Paths::for_exe(exe), &running);
-        }
 
         let config = planora_project::config::Config::load();
         let root = config
@@ -170,6 +174,9 @@ impl PlanoraApp {
         app.downloader = Arc::new(HttpDownloader::new(&running));
         app.restarter = Arc::new(ProcessRestarter);
         app.exe_path = exe_path;
+        // Nach einem Update meldet sich die neue Version erst nach ihrem ersten fertigen Bild bei
+        // der alten (in `logic`); bis dahin kann die alte noch zurücklegen.
+        app.ok_marker_due = after_update;
         app.finish_update_startup(after_update);
         app
     }
@@ -207,6 +214,9 @@ impl PlanoraApp {
             marker_wait: MARKER_WAIT,
             after_update: None,
             reverify: None,
+            new_process: None,
+            ok_marker_due: false,
+            first_frame: None,
         }
     }
 
@@ -262,15 +272,48 @@ impl PlanoraApp {
         self.exe_path.as_deref().map(Paths::for_exe)
     }
 
-    /// Beim Start wie im Programm: mit `after_update` ([`update_install::AFTER_UPDATE_ARG`]) die
-    /// Rückmeldung an die alte Version ([`update_install::write_ok_marker`]; im Programm schon
-    /// früher in [`PlanoraApp::new`]), dann [`PlanoraApp::finish_update_startup`].
+    /// Beim Start wie im Programm ([`PlanoraApp::new`]): mit `after_update`
+    /// ([`update_install::AFTER_UPDATE_ARG`]) die Rückmeldung an die alte Version vormerken (sie
+    /// kommt nach dem ersten fertigen Bild, [`PlanoraApp::write_due_ok_marker`]), dann
+    /// [`PlanoraApp::finish_update_startup`].
     #[doc(hidden)]
     pub fn run_update_startup(&mut self, after_update: bool) {
-        if after_update && let Some(paths) = self.install_paths() {
+        self.ok_marker_due = after_update;
+        self.finish_update_startup(after_update);
+    }
+
+    /// Schreibt die vorgemerkte Rückmeldung an die alte Version, sobald das erste Bild fertig
+    /// gezeichnet ist (einmal). `frame_nr`: `egui::Context::cumulative_frame_nr` des laufenden
+    /// Bildes.
+    fn write_due_ok_marker(&mut self, frame_nr: u64) {
+        if !self.ok_marker_due || !self.first_frame.is_some_and(|n| frame_nr > n) {
+            return;
+        }
+        self.ok_marker_due = false;
+        if let Some(paths) = self.install_paths() {
             update_install::write_ok_marker(&paths, &crate::running_version());
         }
-        self.finish_update_startup(after_update);
+    }
+
+    /// Ist die Bedienung wegen des Neustarts gesperrt? Von der zweiten Prüfung von `.new` bis
+    /// zum Ende des Programms ([`RestartPhase::Verifying`], [`RestartPhase::WaitingForMarker`],
+    /// [`RestartPhase::Exiting`]).
+    fn restart_locked(&self) -> bool {
+        matches!(
+            self.restart,
+            RestartPhase::Verifying | RestartPhase::WaitingForMarker { .. } | RestartPhase::Exiting
+        )
+    }
+
+    /// Gibt es Arbeit, die beim Beenden verloren ginge oder eine Antwort braucht? Ein geänderter
+    /// Tab, ein Autosicherungs-Angebot oder eine offene Rückfrage.
+    fn unsaved_work(&self) -> bool {
+        self.ws.prompt.is_some()
+            || self
+                .ws
+                .tabs
+                .iter()
+                .any(|t| t.is_dirty() || t.pending_autosave.is_some())
     }
 
     /// Aufräumen nach einem Update und der Hinweis „Aktualisiert auf Version X“
@@ -381,6 +424,9 @@ impl PlanoraApp {
                 };
                 self.reverify = None;
                 match result {
+                    // Inzwischen ist neue Arbeit entstanden (die Sperre hält das eigentlich
+                    // ab): noch ist nichts ausgetauscht, also zurück zur Rückfrage.
+                    Ok(()) if self.unsaved_work() => self.restart = RestartPhase::None,
                     Ok(()) => self.restart_now(),
                     Err(e) => {
                         self.restart = RestartPhase::None;
@@ -396,8 +442,14 @@ impl PlanoraApp {
                     self.restart = RestartPhase::None;
                     return;
                 };
-                if update_install::ok_marker_for(&paths, &to) {
+                if self.unsaved_work() {
+                    // Nie ohne Rückfrage schließen: die neue Version beenden, zurücklegen,
+                    // mit der Arbeit weiterlaufen.
+                    self.restart_stopped(&paths);
+                } else if update_install::ok_marker_for(&paths, &to) {
                     let _ = std::fs::remove_file(&paths.ok_marker);
+                    // Die neue Version läuft weiter; der Griff wird nur losgelassen.
+                    self.new_process = None;
                     self.restart = RestartPhase::Exiting;
                     // Ohne weitere Rückfrage: `handle_close_request` schickt `Close`.
                     self.ws.quit = true;
@@ -476,15 +528,18 @@ impl PlanoraApp {
             self.installer.fail(e.message());
             return;
         }
-        if let Err(e) = self.restarter.start_new(&paths.running_exe) {
-            let back = rollback(&paths);
-            let _ = self.ws.set_pending_update(None);
-            let message = match back {
-                Ok(()) => InstallError::Io(format!("neue Version starten: {e}")).message(),
-                Err(b) => update_install::rollback_failed(&b),
-            };
-            self.installer.fail(message);
-            return;
+        match self.restarter.start_new(&paths.running_exe) {
+            Ok(process) => self.new_process = Some(process),
+            Err(e) => {
+                let back = rollback(&paths);
+                let _ = self.ws.set_pending_update(None);
+                let message = match back {
+                    Ok(()) => InstallError::Io(format!("neue Version starten: {e}")).message(),
+                    Err(b) => update_install::rollback_failed(&b),
+                };
+                self.installer.fail(message);
+                return;
+            }
         }
         self.restart = RestartPhase::WaitingForMarker {
             deadline: Instant::now() + self.marker_wait,
@@ -496,6 +551,9 @@ impl PlanoraApp {
     /// überspringen, Meldung zeigen. Das Programm beendet sich nicht.
     fn restart_failed(&mut self, paths: &Paths, to: Version) {
         self.restart = RestartPhase::None;
+        // Erst die neue Version beenden: sonst liefe sie, falls sie doch noch startet, aus der
+        // wieder in `.new` umbenannten Datei parallel weiter (und `.new` ließe sich nicht löschen).
+        self.stop_new_process();
         let back = rollback(paths);
         let _ = self.ws.set_skipped_version(Some(to));
         let _ = self.ws.set_pending_update(None);
@@ -508,6 +566,32 @@ impl PlanoraApp {
         self.installer.fail(message);
         self.update_dialog.installing = true;
         self.update_dialog.install_hidden = false;
+    }
+
+    /// Während des Wartens auf die Rückmeldung ist neue ungespeicherte Arbeit entstanden: die
+    /// neue Version beenden, den alten Stand zurücklegen, Meldung zeigen. Die Version wird nicht
+    /// übersprungen; das Update lässt sich später noch einmal starten.
+    fn restart_stopped(&mut self, paths: &Paths) {
+        self.restart = RestartPhase::None;
+        self.stop_new_process();
+        let _ = std::fs::remove_file(&paths.ok_marker);
+        let back = rollback(paths);
+        let _ = self.ws.set_pending_update(None);
+        let _ = std::fs::remove_file(update_install::notes_file(&self.ws));
+        let message = match back {
+            Ok(()) => update_install::RESTART_STOPPED.to_string(),
+            Err(e) => update_install::rollback_failed(&e),
+        };
+        self.installer.fail(message);
+        self.update_dialog.installing = true;
+        self.update_dialog.install_hidden = false;
+    }
+
+    /// Beendet die gestartete neue Version, falls es eine gibt.
+    fn stop_new_process(&mut self) {
+        if let Some(mut process) = self.new_process.take() {
+            process.stop();
+        }
     }
 
     /// App ohne Fenster und Renderer für die Oberflächentests; ohne Netz (die Prüfung auf
@@ -602,6 +686,7 @@ impl PlanoraApp {
                 hint
             }
             CheckOutcome::UpToDate => CheckHint::UpToDate,
+            CheckOutcome::Failed(NetError::Unsupported) => CheckHint::Unsupported,
             CheckOutcome::Failed(_) => CheckHint::Failed,
         };
         if manual {
@@ -1800,10 +1885,17 @@ impl eframe::App for PlanoraApp {
     /// (eframe plant dann gedrosselte Wiederholungen ein). Deshalb stehen hier das Schließen
     /// und die Autosicherung.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.write_due_ok_marker(ctx.cumulative_frame_nr());
         // Vor dem Schließen: Nach der Rückfrage zum Neustart steht `quit`, das Programm darf
         // sich aber erst beenden, wenn die neue Version läuft.
         self.install_tick(ctx);
-        handle_close_request(ctx, &mut self.ws, &mut self.close_sent);
+        if self.restart_locked() && !self.ws.quit && ctx.input(|i| i.viewport().close_requested()) {
+            // Während des Neustarts beendet sich das Programm gleich selbst (oder läuft nach
+            // dem Zurücklegen weiter); eine Rückfrage jetzt könnte unbeantwortet verloren gehen.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        } else {
+            handle_close_request(ctx, &mut self.ws, &mut self.close_sent);
+        }
         self.ws.autosave_tick(Instant::now());
         ctx.request_repaint_after(AUTOSAVE_REPAINT);
     }
@@ -1828,7 +1920,9 @@ impl eframe::App for PlanoraApp {
         // Schon vor der Statuszeile, damit sie im Bild, in dem die Meldung erscheint, nicht
         // „Update verfügbar“ zeigt.
         self.auto_open_update_notice();
-        self.shortcuts(&ctx);
+        if !self.restart_locked() {
+            self.shortcuts(&ctx);
+        }
         // Esc der Übersicht vor den Ansichten (weder Auswahl noch Skizze sollen es sehen).
         keymap::overview::take_escape(&ctx, &mut self.overview, self.ws.prompt.is_some());
         // Esc der Meldung wirkt wie „Später“ (nie wie „Überspringen“), während eines Updates wie
@@ -1972,6 +2066,12 @@ impl eframe::App for PlanoraApp {
         self.show_update_notice(&ctx);
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
+        if self.restart_locked() {
+            // Über allem: sperrt die Bedienung, bis die neue Version läuft oder der alte Stand
+            // zurückliegt.
+            egui::Modal::new(egui::Id::new("planora_update_restart"))
+                .show(&ctx, |ui| ui.label(update_install::RESTARTING));
+        }
 
         // Änderungen am Dokument werden Schritte für Rückgängig (R3, R4): erst wenn keine
         // Maustaste mehr gedrückt ist und kein Eingabefeld die Tastatur hat, damit Ziehen und
@@ -1986,6 +2086,9 @@ impl eframe::App for PlanoraApp {
             // Beenden ist freigegeben (Menü oder letzte Rückfrage): `logic` des nächsten Bildes
             // schickt `Close`.
             ctx.request_repaint();
+        }
+        if self.first_frame.is_none() {
+            self.first_frame = Some(ctx.cumulative_frame_nr());
         }
     }
 }

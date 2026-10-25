@@ -3,7 +3,7 @@
 //! Client ist `ureq` mit der TLS-Schicht von Windows (Schannel über `native-tls`); geprüft wird
 //! gegen den Zertifikatsspeicher von Windows. Keine Anmeldung, keine Nutzerdaten: gesendet wird
 //! nur die Anfrage selbst mit der Kennung `PlanoraCAD/<Version>`. Auf anderen Systemen liefert
-//! [`HttpSource`] immer [`NetError::Other`] („nur Windows“).
+//! [`HttpSource`] immer [`NetError::Unsupported`], ohne ins Netz zu gehen.
 
 use std::time::Duration;
 
@@ -89,7 +89,7 @@ impl ReleaseSource for HttpSource {
 
     #[cfg(not(windows))]
     fn fetch_releases(&self) -> Result<String, NetError> {
-        Err(NetError::Other("nur Windows".into()))
+        Err(NetError::Unsupported)
     }
 }
 

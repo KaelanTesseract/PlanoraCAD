@@ -44,6 +44,10 @@ pub const CHECK_RUNNING: &str = "Suche läuft …";
 pub const UP_TO_DATE: &str = "Du hast die neueste Version.";
 /// Ergebnis der Suche über den Knopf: Abruf oder Antwort gescheitert.
 pub const CHECK_FAILED: &str = "Die Suche hat nicht geklappt (kein Netz?).";
+/// Ergebnis der Suche über den Knopf auf einem System ohne Aktualisierung über das Programm
+/// (alles außer Windows).
+pub const NOT_ON_THIS_SYSTEM: &str =
+    "Auf diesem System gibt es keine Aktualisierung über das Programm.";
 /// Statt eines Zeitpunkts, wenn noch nie geprüft wurde.
 pub const NEVER_CHECKED: &str = "noch nie";
 /// Warnung, wenn eine Update-Einstellung gilt, aber nicht gespeichert werden konnte.
@@ -100,6 +104,8 @@ pub enum CheckHint {
     Found(Version),
     /// [`CHECK_FAILED`] (Warnfarbe).
     Failed,
+    /// [`NOT_ON_THIS_SYSTEM`].
+    Unsupported,
 }
 
 impl CheckHint {
@@ -109,6 +115,7 @@ impl CheckHint {
             CheckHint::UpToDate => UP_TO_DATE.into(),
             CheckHint::Found(v) => update_found_line(v),
             CheckHint::Failed => CHECK_FAILED.into(),
+            CheckHint::Unsupported => NOT_ON_THIS_SYSTEM.into(),
         }
     }
 }

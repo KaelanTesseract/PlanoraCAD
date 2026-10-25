@@ -195,3 +195,12 @@ fn http_source_is_built_without_network() {
     // Passt hinter die Schnittstelle der App.
     let _shared: Arc<dyn ReleaseSource + Send + Sync> = Arc::new(s);
 }
+
+/// Außerhalb von Windows fragt die Quelle nie im Netz, sondern meldet, dass es hier keine
+/// Aktualisierung gibt (nicht „kein Netz“).
+#[cfg(not(windows))]
+#[test]
+fn http_source_outside_windows_reports_unsupported() {
+    let s = HttpSource::new(&v("0.2.0-dev.1"));
+    assert_eq!(s.fetch_releases(), Err(NetError::Unsupported));
+}

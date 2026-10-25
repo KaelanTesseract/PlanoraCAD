@@ -13,14 +13,19 @@
 //! speichern (gelingt das nicht, wird nichts ausgetauscht), austauschen, die neue exe mit
 //! [`AFTER_UPDATE_ARG`] starten und bis zu [`MARKER_WAIT`] auf die Datei
 //! `planoracad.update-ok` mit der Zielversion als Inhalt warten. Kommt sie, beendet sich das
-//! Programm; sonst legt es den alten Stand zurück, überspringt die Version und läuft weiter. Die
-//! Schritte nach dem Download stehen in [`crate::app`] (`PlanoraApp::install_tick`).
+//! Programm; sonst beendet es die neue Version ([`NewProcess::stop`]), legt den alten Stand
+//! zurück, überspringt die Version und läuft weiter. Von der Prüfung bis zum Ende ist die
+//! Bedienung gesperrt. Entsteht trotzdem neue ungespeicherte Arbeit, geht es vor dem Austausch
+//! zurück zur Rückfrage; danach wird die neue Version beendet und der alte Stand zurückgelegt
+//! ([`RESTART_STOPPED`]), nie ohne Rückfrage geschlossen. Die Schritte nach dem Download stehen
+//! in [`crate::app`] (`PlanoraApp::install_tick`).
 //!
-//! **Start.** Die neue Version schreibt die Rückmeldung so früh wie möglich
-//! ([`write_ok_marker`], in `PlanoraApp::new` gleich nach dem Einrichten des Renderers, vor
-//! Konfiguration und Bibliothek). [`startup`] räumt `.old` weg, löscht `update_pending` und
-//! zeigt nach einem gelungenen Update einmal „Aktualisiert auf Version X“ (mit den Patchnotes
-//! aus der Zwischenablage [`NOTES_FILE_NAME`], die die alte Version vor dem Austausch schreibt).
+//! **Start.** Die neue Version schreibt die Rückmeldung, sobald ihr erstes Bild fertig
+//! gezeichnet ist ([`write_ok_marker`], in `PlanoraApp::logic` des zweiten Bildes). [`startup`]
+//! löscht `update_pending`, räumt bei einem normalen Start `.old` weg (nicht beim Start nach dem
+//! Austausch) und zeigt nach einem gelungenen Update einmal „Aktualisiert auf Version X“ (mit den
+//! Patchnotes aus der Zwischenablage [`NOTES_FILE_NAME`], die die alte Version vor dem Austausch
+//! schreibt).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -65,6 +70,10 @@ pub const NO_EXE: &str =
 /// Meldung, solange ein abgebrochener Download noch endet.
 pub const STILL_STOPPING: &str =
     "Der abgebrochene Download endet gerade noch. Bitte gleich noch einmal versuchen.";
+
+/// Meldung, wenn während des Neustarts neue ungespeicherte Arbeit entstanden ist: Die neue
+/// Version wurde beendet, der alte Stand liegt zurück, die Version wird nicht übersprungen.
+pub const RESTART_STOPPED: &str = "Der Neustart wurde abgebrochen, weil es neue ungespeicherte Änderungen gibt. PlanoraCAD läuft in der bisherigen Version weiter. Du kannst das Update später noch einmal starten.";
 
 /// Meldung, wenn die neue Version sich nicht zurückmeldet und der alte Stand zurückliegt.
 pub fn not_started(to: &Version) -> String {
@@ -396,8 +405,17 @@ pub fn reverify(
 /// Startet die neue Version nach dem Austausch. Im Programm [`ProcessRestarter`], in Tests eine
 /// Nachbildung.
 pub trait Restarter {
-    /// Startet `exe` mit [`AFTER_UPDATE_ARG`]; wartet nicht auf sie.
-    fn start_new(&self, exe: &Path) -> Result<(), String>;
+    /// Startet `exe` mit [`AFTER_UPDATE_ARG`]; wartet nicht auf sie. Liefert einen Griff auf die
+    /// gestartete Version, mit dem die alte sie wieder beenden kann.
+    fn start_new(&self, exe: &Path) -> Result<Box<dyn NewProcess>, String>;
+}
+
+/// Die gestartete neue Version, solange die alte auf ihre Rückmeldung wartet.
+pub trait NewProcess {
+    /// Beendet die neue Version und wartet, bis sie weg ist (nur nötig, wenn sie sich nicht
+    /// rechtzeitig meldet oder der Neustart abgebrochen wird; sonst läuft sie weiter). Fehler,
+    /// etwa weil sie schon von selbst geendet hat, werden übergangen.
+    fn stop(&mut self);
 }
 
 /// Startet die neue exe als eigenen Prozess (nur Windows; sonst Fehler).
@@ -405,17 +423,30 @@ pub struct ProcessRestarter;
 
 impl Restarter for ProcessRestarter {
     #[cfg(windows)]
-    fn start_new(&self, exe: &Path) -> Result<(), String> {
+    fn start_new(&self, exe: &Path) -> Result<Box<dyn NewProcess>, String> {
         std::process::Command::new(exe)
             .arg(AFTER_UPDATE_ARG)
             .spawn()
-            .map(|_| ())
+            .map(|child| Box::new(ChildProcess(child)) as Box<dyn NewProcess>)
             .map_err(|e| e.to_string())
     }
 
     #[cfg(not(windows))]
-    fn start_new(&self, _exe: &Path) -> Result<(), String> {
+    fn start_new(&self, _exe: &Path) -> Result<Box<dyn NewProcess>, String> {
         Err(ONLY_WINDOWS.into())
+    }
+}
+
+/// Ein mit [`ProcessRestarter`] gestarteter Prozess. Wird der Griff nur fallen gelassen, läuft
+/// der Prozess weiter (so nach einer gelungenen Rückmeldung).
+#[cfg(windows)]
+struct ChildProcess(std::process::Child);
+
+#[cfg(windows)]
+impl NewProcess for ChildProcess {
+    fn stop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }
 
@@ -438,7 +469,7 @@ impl Downloader for NoDownload {
 pub struct NoRestart;
 
 impl Restarter for NoRestart {
-    fn start_new(&self, _exe: &Path) -> Result<(), String> {
+    fn start_new(&self, _exe: &Path) -> Result<Box<dyn NewProcess>, String> {
         Err("in Tests nicht möglich".into())
     }
 }
@@ -477,8 +508,10 @@ fn take_notes(file: &Path, version: &Version) -> Option<String> {
 }
 
 /// Rückmeldung der neu gestarteten Version an die alte: die Datei `planoracad.update-ok` mit der
-/// laufenden Version als Inhalt. Nur mit [`AFTER_UPDATE_ARG`] und so früh wie möglich aufrufen;
-/// Fehler werden übergangen (dann legt die alte Version nach [`MARKER_WAIT`] zurück).
+/// laufenden Version als Inhalt. Nur mit [`AFTER_UPDATE_ARG`] und erst, wenn das erste Bild
+/// fertig gezeichnet ist (vorher könnte die neue Version noch scheitern, etwa beim Laden der
+/// Konfiguration); Fehler werden übergangen (dann legt die alte Version nach [`MARKER_WAIT`]
+/// zurück).
 pub fn write_ok_marker(paths: &Paths, running: &Version) {
     let _ = std::fs::write(&paths.ok_marker, running.to_string());
 }
@@ -489,12 +522,14 @@ pub fn ok_marker_for(paths: &Paths, to: &Version) -> bool {
     std::fs::read_to_string(&paths.ok_marker).is_ok_and(|c| c.trim() == to.to_string())
 }
 
-/// Beim Programmstart: `.old` eines früheren Updates löschen (Fehler übergehen). Steht in der
-/// Konfiguration ein begonnenes Update (`update_pending`), wird es gelöscht; war sein Ziel nicht
-/// die laufende Version, ist der Austausch gescheitert und wird nicht wiederholt. Mit
-/// [`AFTER_UPDATE_ARG`] oder einem Ziel gleich der laufenden Version den Hinweis „Aktualisiert
-/// auf Version X“ liefern. Die Rückmeldung an die alte Version schreibt [`write_ok_marker`]
-/// (früher, nicht hier).
+/// Beim Programmstart: Steht in der Konfiguration ein begonnenes Update (`update_pending`), wird
+/// es gelöscht; war sein Ziel nicht die laufende Version, ist der Austausch gescheitert und wird
+/// nicht wiederholt. Bei einem normalen Start (ohne [`AFTER_UPDATE_ARG`]) `.old` eines früheren
+/// Updates löschen (Fehler übergehen); beim Start nach dem Austausch bleibt sie, weil die alte
+/// Version sie zum Zurücklegen braucht, bis sie die Rückmeldung hat. Mit [`AFTER_UPDATE_ARG`]
+/// oder einem Ziel gleich der laufenden Version den Hinweis „Aktualisiert auf Version X“
+/// liefern. Die Rückmeldung an die alte Version schreibt [`write_ok_marker`] (später, nach dem
+/// ersten Bild, nicht hier).
 pub fn startup(
     ws: &mut Workspace,
     after_update_arg: bool,
@@ -508,7 +543,7 @@ pub fn startup(
         // dasselbe noch einmal (kein erneuter Austausch).
         let _ = ws.set_pending_update(None);
     }
-    if let Some(paths) = paths {
+    if !after_update_arg && let Some(paths) = paths {
         cleanup_old(paths);
     }
     let notes_file = notes_file(ws);

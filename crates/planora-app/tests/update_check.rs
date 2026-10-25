@@ -9,7 +9,8 @@ use eframe::App as _;
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::settings_window::{
-    CHECK_FAILED, CHECK_NOW, CHECK_RUNNING, CheckHint, UP_TO_DATE, update_found_line,
+    CHECK_FAILED, CHECK_NOW, CHECK_RUNNING, CheckHint, NOT_ON_THIS_SYSTEM, UP_TO_DATE,
+    update_found_line,
 };
 use planora_app::update_check::{CheckRequest, UpdateChecker, now_unix, records_check};
 use planora_app::workspace::Workspace;
@@ -489,6 +490,29 @@ fn manual_check_failure_hint() {
         assert!(h.app.ws_mut().prompt.is_none());
     }
     assert_eq!(CHECK_FAILED, "Die Suche hat nicht geklappt (kein Netz?).");
+}
+
+/// Auf einem System ohne Aktualisierung über das Programm (Linux, macOS) sagt der Knopf das
+/// offen, statt „kein Netz?“ zu vermuten.
+#[test]
+fn manual_check_on_a_system_without_updates_says_so() {
+    let (mut ws, cfg) = workspace("planora-update-knopf-system");
+    assert!(ws.set_last_update_check(now_unix()));
+    let fake = Fake::new(Err(NetError::Unsupported));
+    let mut h = Harness::new(ws, cfg, fake.clone());
+    h.open_settings();
+    h.click(CHECK_NOW);
+    let seen = h.until_idle();
+    assert!(has(&seen, NOT_ON_THIS_SYSTEM), "Hinweis fehlt");
+    assert!(!has(&seen, CHECK_FAILED));
+    assert_eq!(
+        h.app.windows_mut().2.check_hint(),
+        Some(&CheckHint::Unsupported)
+    );
+    assert_eq!(
+        NOT_ON_THIS_SYSTEM,
+        "Auf diesem System gibt es keine Aktualisierung über das Programm."
+    );
 }
 
 #[test]

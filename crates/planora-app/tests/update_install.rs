@@ -170,6 +170,9 @@ struct FakeRestarter {
     /// Inhalt der Rückmeldung, die die „neue Version“ schreibt (`None`: keine).
     answer: Option<String>,
     fails: bool,
+    /// Je beendeter „neuer Version“ der Inhalt der Programmdatei im Augenblick des Beendens
+    /// (so lässt sich prüfen, ob vor oder nach dem Zurücklegen beendet wurde).
+    stopped: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
 impl FakeRestarter {
@@ -183,16 +186,34 @@ impl FakeRestarter {
             started: Mutex::new(Vec::new()),
             answer,
             fails: false,
+            stopped: Arc::default(),
         })
     }
 
     fn started(&self) -> Vec<PathBuf> {
         self.started.lock().unwrap().clone()
     }
+
+    fn stopped(&self) -> Vec<Vec<u8>> {
+        self.stopped.lock().unwrap().clone()
+    }
+}
+
+/// Die „neue Version“ der Nachbildung: merkt sich, wann sie beendet wird.
+struct FakeProcess {
+    exe: PathBuf,
+    stopped: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+impl NewProcess for FakeProcess {
+    fn stop(&mut self) {
+        let now = std::fs::read(&self.exe).unwrap_or_default();
+        self.stopped.lock().unwrap().push(now);
+    }
 }
 
 impl Restarter for FakeRestarter {
-    fn start_new(&self, exe: &Path) -> Result<(), String> {
+    fn start_new(&self, exe: &Path) -> Result<Box<dyn NewProcess>, String> {
         self.started.lock().unwrap().push(exe.to_path_buf());
         if self.fails {
             return Err("geht nicht".into());
@@ -200,7 +221,10 @@ impl Restarter for FakeRestarter {
         if let Some(answer) = &self.answer {
             std::fs::write(exe.parent().unwrap().join(OK_MARKER_NAME), answer).unwrap();
         }
-        Ok(())
+        Ok(Box::new(FakeProcess {
+            exe: exe.to_path_buf(),
+            stopped: Arc::clone(&self.stopped),
+        }))
     }
 }
 
@@ -296,13 +320,31 @@ impl Harness {
     /// Ein Bild wie in eframe: erst `logic`, dann `ui`. Merkt Texte, Fensterbefehle und
     /// geöffnete Adressen.
     fn frame(&mut self, events: Vec<Event>) -> Duration {
+        self.frame_with(events, false)
+    }
+
+    /// Ein Bild mit einer Schließanfrage des Fensters (Titelleiste, Alt+F4).
+    fn frame_close(&mut self) {
+        self.frame_with(vec![], true);
+    }
+
+    fn frame_with(&mut self, events: Vec<Event>, close: bool) -> Duration {
         self.time += 1.0 / 60.0;
-        let raw = egui::RawInput {
+        let mut raw = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
             time: Some(self.time),
             events,
             ..Default::default()
         };
+        if close {
+            raw.viewports.insert(
+                ViewportId::ROOT,
+                egui::ViewportInfo {
+                    events: vec![egui::ViewportEvent::Close],
+                    ..Default::default()
+                },
+            );
+        }
         let mut f = eframe::Frame::_new_kittest();
         let app = &mut self.app;
         let start = Instant::now();
@@ -532,6 +574,8 @@ fn successful_flow_sets_pending_swaps_and_requests_restart() {
     assert_eq!(std::fs::read(&h.paths.old_exe).unwrap(), b"alt");
     assert!(!h.paths.new_exe.exists());
     assert_eq!(restarter.started(), vec![h.paths.running_exe.clone()]);
+    // Die neue Version läuft weiter.
+    assert!(restarter.stopped().is_empty());
     // Die Rückmeldung ist abgeholt; das Programm beendet sich ohne weitere Rückfrage.
     assert!(!h.paths.ok_marker.exists());
     assert!(h.app.ws_mut().quit);
@@ -572,6 +616,7 @@ fn failing_start_of_the_new_version_rolls_back() {
         started: Mutex::new(Vec::new()),
         answer: None,
         fails: true,
+        stopped: Arc::default(),
     });
     let mut h = Harness::offered(
         "planora-install-startfehler",
@@ -605,6 +650,9 @@ fn missing_ok_marker_triggers_rollback_and_skips_version() {
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
     h.settle();
     assert_eq!(h.state(), InstallState::Failed(not_started(&v(TARGET))));
+    // Die zu spät oder gar nicht antwortende neue Version wird beendet, und zwar bevor der
+    // alte Stand zurückkommt (sonst liefe sie aus der umbenannten Datei parallel weiter).
+    assert_eq!(restarter.stopped(), vec![NEW_EXE.to_vec()]);
     // Alter Stand zurück, Version übersprungen, Eintrag gelöscht, Programm läuft weiter.
     assert_eq!(h.read_exe(), b"alt");
     assert!(!h.paths.old_exe.exists());
@@ -654,6 +702,7 @@ fn ok_marker_with_wrong_version_does_not_count() {
     h.click(INSTALL_NOW);
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
     assert_eq!(restarter.started().len(), 1);
+    assert_eq!(restarter.stopped().len(), 1, "falsche Antwort: beendet");
     assert_eq!(h.state(), InstallState::Failed(not_started(&v(TARGET))));
     assert_eq!(h.read_exe(), b"alt");
     assert!(!h.app.ws_mut().quit);
@@ -706,6 +755,7 @@ fn startup_with_matching_pending_shows_notice_once_and_cleans_up() {
 
     // Mit `--nach-update` ohne Eintrag und ohne Ablage: nur die Zeile.
     let (ws, cfg, paths) = workspace("planora-install-start-arg");
+    std::fs::write(&paths.old_exe, "alt").unwrap();
     let mut h = Harness::with(
         ws,
         cfg,
@@ -714,6 +764,18 @@ fn startup_with_matching_pending_shows_notice_once_and_cleans_up() {
         FakeRestarter::new(true),
     );
     h.app.run_update_startup(true);
+    // Die Rückmeldung kommt erst, wenn das erste Bild fertig gezeichnet ist: vorher könnte die
+    // neue Version noch beim Laden scheitern, und die alte muss dann zurücklegen können.
+    assert!(!paths.ok_marker.exists(), "noch kein Bild");
+    h.frame(vec![]);
+    assert!(!paths.ok_marker.exists(), "das erste Bild läuft noch");
+    h.frame(vec![]);
+    // `.old` bleibt bei diesem Start liegen (die alte Version braucht sie zum Zurücklegen); erst
+    // der nächste normale Start räumt sie weg.
+    assert!(
+        paths.old_exe.exists(),
+        ".old bleibt beim Start nach dem Update"
+    );
     // Rückmeldung mit der laufenden Version als Inhalt.
     assert_eq!(
         std::fs::read_to_string(&paths.ok_marker).unwrap(),
@@ -724,6 +786,164 @@ fn startup_with_matching_pending_shows_notice_once_and_cleans_up() {
     assert!(h.sees(&updated_title(&running)));
     assert!(h.sees(NOTES_ON_GITHUB));
     assert_eq!(AFTER_UPDATE_ARG, "--nach-update");
+    // Nur einmal: weitere Bilder schreiben die Rückmeldung nicht neu.
+    std::fs::remove_file(&paths.ok_marker).unwrap();
+    h.settle();
+    assert!(!paths.ok_marker.exists());
+    // Der nächste normale Start räumt `.old` weg.
+    h.app.run_update_startup(false);
+    assert!(!paths.old_exe.exists());
+}
+
+/// Lassen sich die Einstellungen beim Start nach einem Update nicht schreiben, erscheint der
+/// Hinweis trotzdem nur einmal in diesem Programmlauf; das nächste gelungene Schreiben löscht
+/// das vorgemerkte Update auch in der Datei.
+#[test]
+fn startup_notice_once_even_if_the_settings_cannot_be_written() {
+    let (mut ws, cfg, paths) = workspace("planora-install-start-schreibfehler");
+    let running = running_version();
+    assert!(ws.set_pending_update(Some((v("0.0.1"), running))));
+    // Ab jetzt scheitert jedes Schreiben (die Konfiguration läge „in“ einer Datei).
+    let blocker = paths.dir().join("keine-mappe");
+    std::fs::write(&blocker, "x").unwrap();
+    ws.config_path = blocker.join("config.json");
+    let mut h = Harness::with(
+        ws,
+        cfg.clone(),
+        paths,
+        FakeDownloader::good(),
+        FakeRestarter::new(true),
+    );
+    h.app.run_update_startup(false);
+    h.settle();
+    assert!(h.sees(&updated_title(&running)), "{:?}", h.texts());
+    h.click(OK);
+    // Noch auf der Platte, aber nicht mehr in diesem Lauf.
+    assert_eq!(
+        h.pending_on_disk(),
+        Some(("0.0.1".to_string(), running.to_string()))
+    );
+    h.app.run_update_startup(false);
+    h.settle();
+    assert!(h.app.after_update().is_none());
+    assert!(!h.sees(&updated_title(&running)));
+    // Die Datei ist wieder erreichbar: das nächste Schreiben nimmt die Löschung mit.
+    h.app.ws_mut().config_path = cfg;
+    assert!(h.app.ws_mut().set_last_update_check(1));
+    assert_eq!(h.pending_on_disk(), None);
+}
+
+/// Neue ungespeicherte Arbeit, während die alte Version auf die Rückmeldung der neuen wartet
+/// (die Bedienung ist dann gesperrt, aber etwa ein Autosicherungs-Angebot oder ein Weg an der
+/// Sperre vorbei bleibt denkbar): Das Programm schließt sich nicht ohne Rückfrage. Es beendet
+/// die neue Version, legt den alten Stand zurück und läuft mit der Arbeit weiter.
+#[test]
+fn changes_while_waiting_for_the_new_version_never_close_without_asking() {
+    let restarter = FakeRestarter::new(false);
+    let mut h = Harness::offered(
+        "planora-install-aenderung-beim-warten",
+        FakeDownloader::good(),
+        restarter.clone(),
+    );
+    h.app.set_marker_wait(Duration::from_secs(60));
+    h.click(INSTALL_NOW);
+    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
+    dirty(h.app.ws_mut());
+    // Die neue Version meldet sich.
+    std::fs::write(&h.paths.ok_marker, TARGET).unwrap();
+    h.settle();
+    h.settle();
+    assert!(!h.close_sent(), "nie ohne Rückfrage schließen");
+    assert!(!h.app.ws_mut().quit);
+    assert!(h.app.ws_mut().active_tab().is_dirty(), "Arbeit noch da");
+    assert_eq!(h.app.restart_phase(), RestartPhase::None);
+    // Keine zwei Programme: die neue Version ist beendet (vor dem Zurücklegen).
+    assert_eq!(restarter.stopped(), vec![NEW_EXE.to_vec()]);
+    assert_eq!(h.read_exe(), b"alt");
+    assert!(!h.paths.old_exe.exists());
+    assert_eq!(h.app.ws_mut().pending_update(), None);
+    assert_eq!(h.pending_on_disk(), None);
+    // Die Version wird nicht übersprungen; eine Meldung erklärt es.
+    assert_eq!(h.app.ws_mut().skipped_version(), None);
+    assert_eq!(h.state(), InstallState::Failed(RESTART_STOPPED.into()));
+    assert!(h.sees(RESTART_STOPPED), "{:?}", h.texts());
+    // Danach lässt sich das Fenster wie immer schließen: erst mit Rückfrage.
+    h.frame_close();
+    assert!(!h.app.ws_mut().quit);
+    assert!(matches!(
+        h.app.ws_mut().prompt,
+        Some(Prompt::SaveChanges { .. })
+    ));
+}
+
+/// Neue ungespeicherte Arbeit, während `.new` vor dem Austausch noch einmal geprüft wird: noch
+/// ist nichts ausgetauscht, also zurück zur Rückfrage wie beim Schließen.
+#[test]
+fn changes_while_checking_the_new_file_go_back_to_the_prompt() {
+    let restarter = FakeRestarter::new(true);
+    let (mut ws, cfg, paths) = workspace("planora-install-aenderung-beim-pruefen");
+    dirty(&mut ws);
+    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), restarter.clone());
+    h.until(|a| a.pending_notice().is_some());
+    h.settle();
+    h.click(INSTALL_NOW);
+    h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
+    // „Verwerfen“ ohne Klick; gleich danach entsteht neue Arbeit (im Programm verhindert das die
+    // Sperre). Die zweite Prüfung läuft trotzdem an; ist sie fertig, geht es zurück zur
+    // Rückfrage statt zum Austausch.
+    h.app.ws_mut().discard_and_continue();
+    assert!(h.app.ws_mut().quit);
+    dirty(h.app.ws_mut());
+    h.frame(vec![]);
+    assert!(!h.close_sent());
+    h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
+    h.settle();
+    assert_eq!(h.app.restart_phase(), RestartPhase::AwaitingPrompt);
+    assert!(matches!(
+        h.app.ws_mut().prompt,
+        Some(Prompt::SaveChanges { .. })
+    ));
+    assert!(restarter.started().is_empty());
+    assert_eq!(h.read_exe(), b"alt");
+    assert!(h.paths.new_exe.exists(), "nicht verworfen");
+    assert!(!h.close_sent());
+    // Beantwortet: weiter wie immer.
+    h.click("Verwerfen");
+    h.until(|a| a.restart_phase() == RestartPhase::Exiting);
+    assert_eq!(h.read_exe(), NEW_EXE);
+}
+
+/// Solange die neue Version geprüft und gestartet wird, ist die Bedienung gesperrt: ein
+/// Schließen des Fensters wird zurückgehalten (das Programm beendet sich gleich selbst), es
+/// fragt nichts und setzt nichts in Gang.
+#[test]
+fn closing_the_window_while_waiting_is_held_back() {
+    let mut h = Harness::offered(
+        "planora-install-schliessen-beim-warten",
+        FakeDownloader::good(),
+        FakeRestarter::new(false),
+    );
+    h.app.set_marker_wait(Duration::from_secs(60));
+    h.click(INSTALL_NOW);
+    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
+    h.commands.clear();
+    h.frame_close();
+    assert!(
+        h.commands
+            .iter()
+            .any(|c| matches!(c, ViewportCommand::CancelClose)),
+        "{:?}",
+        h.commands
+    );
+    assert!(!h.close_sent());
+    assert!(!h.app.ws_mut().quit);
+    assert!(h.app.ws_mut().prompt.is_none());
+    assert!(h.sees(RESTARTING), "{:?}", h.texts());
+    // Die neue Version meldet sich: jetzt beendet sich das Programm.
+    std::fs::write(&h.paths.ok_marker, TARGET).unwrap();
+    h.until(|a| a.restart_phase() == RestartPhase::Exiting);
+    h.settle();
+    assert!(h.close_sent());
 }
 
 #[test]

@@ -30,6 +30,9 @@ pub enum NetError {
     Http(u16),
     /// Alles andere, etwa eine unlesbare oder zu große Antwort.
     Other(String),
+    /// Auf diesem System gibt es keine Aktualisierung über das Programm (alles außer Windows);
+    /// es wird gar nicht erst gefragt.
+    Unsupported,
 }
 
 impl fmt::Display for NetError {
@@ -40,6 +43,7 @@ impl fmt::Display for NetError {
             NetError::RateLimited => write!(f, "zu viele Anfragen, später erneut versuchen"),
             NetError::Http(code) => write!(f, "Antwort mit Status {code}"),
             NetError::Other(msg) => write!(f, "{msg}"),
+            NetError::Unsupported => write!(f, "auf diesem System nicht vorgesehen"),
         }
     }
 }
