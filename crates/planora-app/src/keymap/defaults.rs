@@ -102,7 +102,7 @@ action_table! {
     /// Wie der Knopf im Skizzenfeld (Fusion „Normal / Hilfslinie“): nur mit ausgewählten Kurven.
     SketchConstruction, "skizze.konstruktion", "Konstruktion umschalten", Sketch, [key(Key::X)];
     /// Wie [`Action::ShowShortcuts`], in der offenen Skizze (eine Aktion hat nur einen Bereich).
-    SketchShowShortcuts, "skizze.tastenkuerzel", "Tastenkürzel anzeigen in der Skizze", Sketch,
+    SketchShowShortcuts, "skizze.tastenkuerzel", "Tastenkürzel in der Skizze anzeigen", Sketch,
         [key(Key::S)];
     // Zeichnung: die vorhandenen Werkzeuge (wie ihr Schalter). Mittelpunktmarke C, Verschieben
     // M, Projizierte Ansicht P und Text T kommen erst mit ihrer Funktion; Entf (Nummernkreis

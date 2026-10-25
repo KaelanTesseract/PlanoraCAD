@@ -227,8 +227,9 @@ pub fn wheel_input(km: &Keymap, ui: &egui::Ui) -> WheelInput {
 }
 
 /// Zoomwert des Mausrads in Punkten (siehe [`WheelInput`]); der Strg+Rad-Faktor ist über egui's
-/// `scroll_zoom_speed` in Punkte zurückgerechnet. 0, wenn keine Radgeste passt.
-pub fn wheel(km: &Keymap, ui: &egui::Ui) -> f32 {
+/// `scroll_zoom_speed` in Punkte zurückgerechnet. 0, wenn keine Radgeste passt. Für die
+/// 3D-Ansicht, die in Punkten rechnet; die Zeichnung nimmt [`wheel_factor`].
+pub(crate) fn wheel(km: &Keymap, ui: &egui::Ui) -> f32 {
     let w = wheel_input(km, ui);
     let speed = ui.ctx().options(|o| o.input_options.scroll_zoom_speed);
     if speed > 0.0 && w.factor != 1.0 {

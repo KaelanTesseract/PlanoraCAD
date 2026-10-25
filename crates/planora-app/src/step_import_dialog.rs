@@ -9,7 +9,7 @@
 //!
 //! Wie beim Netz-Import (P13) gilt ein Ergebnis nur für den Dokumentstand bei der Dateiwahl:
 //! hat sich das Dokument geändert, wird es verworfen ([`STALE`]). Das Fenster zählt zu
-//! `DocTab::dialog_open` (Strg+Z wirkt nicht, solange es offen ist). Schließen oder Verwerfen
+//! `DocTab::dialog_open` (Rückgängig wirkt nicht, solange es offen ist). Schließen oder Verwerfen
 //! des Fensters bricht einen laufenden Auftrag ab (`Job` bricht beim Fallenlassen ab), danach
 //! kommt kein Ergebnis mehr an. Eine offene Skizze beendet schon das Öffnen des Fensters
 //! (`app.rs`), damit Rückgängig des Imports nur den Import zurücknimmt.

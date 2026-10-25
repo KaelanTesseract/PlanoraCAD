@@ -160,8 +160,10 @@ impl Keymap {
     /// Wie [`Keymap::set`], nimmt aber bei einer Doppelbelegung die Belegung der anderen
     /// Aktion weg (ersatzlos; ihre übrigen Belegungen bleiben) und setzt sie bei `a`.
     pub fn swap(&mut self, a: Action, index: usize, b: Binding) {
-        while let Some(o) = self.conflict_for(a, &b) {
-            self.map[o.index()].retain(|x| *x != b);
+        for &o in Action::ALL.iter() {
+            if o != a && Keymap::areas_overlap(a.area(), o.area()) {
+                self.map[o.index()].retain(|x| *x != b);
+            }
         }
         self.put(a, index, b);
     }

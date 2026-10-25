@@ -5,7 +5,8 @@
 //! Gemerkt wird ein wiederholbarer Befehl ([`Action::repeatable`]) erst, wenn er abgeschlossen
 //! ist: Sein Fenster ist zu und dabei ist ein neues Feature seiner Art entstanden ([`observe`]).
 //! Abbrechen, Schließen oder ein anderes Fenster an seiner Stelle ersetzen den zuvor gemerkten
-//! Befehl also nicht, ebenso wenig ein anderer Befehl, der nebenher ein Feature anlegt. Die Leertaste startet den gemerkten Befehl wie sein Menüeintrag.
+//! Befehl also nicht, ebenso wenig ein anderer Befehl, der nebenher ein Feature anlegt. Die
+//! Leertaste startet den gemerkten Befehl wie sein Menüeintrag.
 //!
 //! Skizzenwerkzeuge haben ein eigenes Gedächtnis (die Leertaste in der Skizze wählt das zuletzt
 //! benutzte wieder): gemerkt, sobald das Werkzeug eine Kurve angelegt hat ([`observe`]). Ein

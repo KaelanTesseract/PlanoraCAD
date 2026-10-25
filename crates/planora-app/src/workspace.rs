@@ -406,7 +406,7 @@ impl DocTab {
         }
     }
 
-    /// Ist ein Fenster oder eine Rückfrage dieses Tabs offen (sperrt Strg+Z, R8)?
+    /// Ist ein Fenster oder eine Rückfrage dieses Tabs offen (sperrt Rückgängig, R8)?
     pub fn dialog_open(&self) -> bool {
         let s = &self.state;
         self.dialog.is_some()
