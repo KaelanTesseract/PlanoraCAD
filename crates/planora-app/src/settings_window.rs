@@ -1,6 +1,7 @@
 //! Fenster „Einstellungen“ (Spec §5): Abschnitte untereinander mit Überschrift, damit später
 //! weitere dazukommen. Oben „Darstellung“ mit dem Regler „Durchsichtigkeit der Panels“ (wirkt
-//! sofort, wird gespeichert wie das Projektverzeichnis), darunter „Projekte“ mit dem
+//! sofort, wird gespeichert wie das Projektverzeichnis), darunter „Updates“ (laufende Version,
+//! Update-Kanal, Suchen beim Start, letzte Prüfung; gespeichert sofort), dann „Projekte“ mit dem
 //! Projektverzeichnis und zuletzt „Tastenkürzel“ ([`crate::keymap::settings_ui`]; zuletzt, weil
 //! die lange Tabelle sonst „Projekte“ nach unten schöbe). Gewählt wird über die
 //! Dateiauswahl im Ordner-Modus; der Wechsel wirkt wie [`Workspace::choose_root`] und
@@ -13,8 +14,10 @@ use crate::keymap::settings_ui::{self, CaptureState};
 use crate::places::{self, Places};
 use crate::theme;
 use crate::workspace::{ROOT_LOCKED, Workspace};
+use crate::{local_time, running_version};
 use planora_project::config::{Config, MAX_PANEL_TRANSPARENCY, clamp_panel_transparency};
 use planora_project::library::{DOCUMENT_FILE, DOCUMENT_SUFFIX, PROJECT_FILE};
+use planora_update::{Channel, Version};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +28,22 @@ pub const TRANSPARENCY_LABEL: &str = "Durchsichtigkeit der Panels";
 pub const TRANSPARENCY_NOT_SAVED: &str = "Die Durchsichtigkeit gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
 /// Breite der Schieberspur des Reglers.
 pub const SLIDER_WIDTH: f32 = 200.0;
+pub const SECTION_UPDATES: &str = "Updates";
+pub const CHANNEL_LABEL: &str = "Update-Kanal";
+/// Kanäle in der Auswahl „Update-Kanal“ (heute nur Dev; später kommen Beta und Stabil dazu).
+pub const AVAILABLE_CHANNELS: &[Channel] = &[Channel::Dev];
+pub const CHECK_ON_START_LABEL: &str = "Beim Start nach Updates suchen";
+/// Hinweis zum Datenschutz unter dem Schalter.
+pub const PRIVACY_NOTE: &str =
+    "Beim Suchen fragt das Programm bei GitHub nach; dabei sieht GitHub deine IP-Adresse.";
+pub const CHECK_NOW: &str = "Jetzt nach Updates suchen";
+/// Hinweis neben dem noch abgeschalteten Knopf [`CHECK_NOW`].
+pub const CHECK_NOW_LATER: &str = "Kommt mit der nächsten Aufgabe.";
+/// Statt eines Zeitpunkts, wenn noch nie geprüft wurde.
+pub const NEVER_CHECKED: &str = "noch nie";
+/// Warnung, wenn eine Update-Einstellung gilt, aber nicht gespeichert werden konnte.
+pub const UPDATES_NOT_SAVED: &str =
+    "Die Update-Einstellung gilt nur bis zum Programmende: sie konnte nicht gespeichert werden.";
 pub const SECTION_PROJECTS: &str = "Projekte";
 pub const DIRECTORY_LABEL: &str = "Projektverzeichnis";
 pub const CHANGE_DIRECTORY: &str = "Projektverzeichnis ändern …";
@@ -39,6 +58,25 @@ pub const NOT_SAVED: &str = "Das neue Projektverzeichnis gilt nur bis zum Progra
 
 /// Kennung des Fensters (unabhängig vom Titel).
 const WINDOW_ID: &str = "planora_settings_window";
+
+/// „Laufende Version: 0.2.0-dev.1 (Dev)“ für die laufende Version.
+pub fn running_version_line() -> String {
+    running_version_line_for(&running_version())
+}
+
+/// „Laufende Version: <Version> (<Kanal>)“.
+pub fn running_version_line_for(v: &Version) -> String {
+    format!("Laufende Version: {v} ({})", v.channel().label())
+}
+
+/// „Letzte Prüfung: 25.10.2026, 18:42“ (Ortszeit) oder „Letzte Prüfung: noch nie“.
+pub fn last_check_line(unix_seconds: Option<u64>) -> String {
+    let when = unix_seconds.map_or_else(
+        || NEVER_CHECKED.to_string(),
+        |t| local_time::unix_time_text(i64::try_from(t).unwrap_or(i64::MAX)),
+    );
+    format!("Letzte Prüfung: {when}")
+}
 
 /// Meldung nach einem Wechsel: Warnung (Warnfarbe) oder Fehler (Fehlerfarbe).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,6 +180,8 @@ pub struct SettingsWindow {
     message: Option<RootMessage>,
     /// Hinweis unter dem Regler (nur [`TRANSPARENCY_NOT_SAVED`]).
     appearance_message: Option<RootMessage>,
+    /// Hinweis im Abschnitt „Updates“ (nur [`UPDATES_NOT_SAVED`]).
+    updates_message: Option<RootMessage>,
     /// Der Regler wurde bewegt, der Wert ist aber noch nicht gespeichert (gespeichert wird beim
     /// Loslassen, nicht in jedem Bild des Ziehens).
     transparency_unsaved: bool,
@@ -159,6 +199,7 @@ impl SettingsWindow {
         self.chooser = None;
         self.message = None;
         self.appearance_message = None;
+        self.updates_message = None;
         self.keys = CaptureState::default();
     }
 
@@ -206,6 +247,17 @@ impl SettingsWindow {
     /// Hinweis des Abschnitts „Darstellung“ (Speichern fehlgeschlagen).
     pub fn appearance_message(&self) -> Option<&RootMessage> {
         self.appearance_message.as_ref()
+    }
+
+    /// Hinweis des Abschnitts „Updates“ (Speichern fehlgeschlagen).
+    pub fn updates_message(&self) -> Option<&RootMessage> {
+        self.updates_message.as_ref()
+    }
+
+    /// Hinweis nach dem Speichern einer Update-Einstellung: [`UPDATES_NOT_SAVED`], wenn es
+    /// misslang (der Wert gilt dann für die Sitzung), sonst keiner.
+    fn note_updates_saved(&mut self, written: bool) {
+        self.updates_message = (!written).then(|| RootMessage::Warning(UPDATES_NOT_SAVED.into()));
     }
 
     /// Was der Regler beim Ziehen tut: der Wert gilt sofort, ist aber noch nicht gespeichert. Er
@@ -264,6 +316,10 @@ impl SettingsWindow {
         let path = display_path(&current_directory(ws));
         let message = self.message.clone();
         let appearance_message = self.appearance_message.clone();
+        let updates_message = self.updates_message.clone();
+        let channel = ws.update_channel();
+        let (mut chosen_channel, mut check_on_start) = (channel, ws.update_check_enabled());
+        let last_check = last_check_line(ws.last_update_check());
         let mut transparency = ws.panel_transparency();
         let (mut slid, mut released) = (false, false);
         let choosing = self.chooser.is_some();
@@ -294,6 +350,14 @@ impl SettingsWindow {
                         if let Some(m) = &appearance_message {
                             ui.colored_label(m.color(dark), m.text());
                         }
+                        ui.add_space(theme::SPACE_4);
+                        show_updates(
+                            ui,
+                            &mut chosen_channel,
+                            &mut check_on_start,
+                            &last_check,
+                            updates_message.as_ref(),
+                        );
                         ui.add_space(theme::SPACE_4);
                         theme::section_header(ui, SECTION_PROJECTS, theme::SUB_HEADER_H);
                         ui.add_space(theme::SPACE_2);
@@ -334,6 +398,15 @@ impl SettingsWindow {
         if self.transparency_unsaved && released {
             self.save_transparency(ws);
         }
+        // Update-Einstellungen gelten und werden sofort gespeichert.
+        if !locked && chosen_channel != channel {
+            let written = ws.set_update_channel(chosen_channel);
+            self.note_updates_saved(written);
+        }
+        if !locked && check_on_start != ws.update_check_enabled() {
+            let written = ws.set_update_check(check_on_start);
+            self.note_updates_saved(written);
+        }
         for action in [body_action, footer_action] {
             let target = match action {
                 ChooserAction::Chosen(p) => Some(p),
@@ -359,5 +432,51 @@ impl SettingsWindow {
             return SettingsEvent::Closed { return_to_projects };
         }
         SettingsEvent::None
+    }
+}
+
+/// Abschnitt „Updates“: laufende Version und letzte Prüfung, Auswahl des Kanals (nur [`AVAILABLE_CHANNELS`]; ein
+/// anderer gespeicherter Kanal steht nur als Anzeige da), Schalter mit Hinweis zum Datenschutz,
+/// der noch abgeschaltete Knopf [`CHECK_NOW`] und die letzte Prüfung.
+fn show_updates(
+    ui: &mut egui::Ui,
+    channel: &mut Channel,
+    check_on_start: &mut bool,
+    last_check: &str,
+    message: Option<&RootMessage>,
+) {
+    let dark = ui.visuals().dark_mode;
+    // Knapp gehalten (je Zeile zwei Angaben), damit das Fenster bei 1920 × 1080 nicht bis über
+    // die Menüleiste wächst.
+    theme::section_header(ui, SECTION_UPDATES, theme::SUB_HEADER_H);
+    ui.add_space(theme::SPACE_2);
+    ui.horizontal(|ui| {
+        ui.label(running_version_line());
+        ui.add_space(theme::SPACE_6);
+        ui.label(last_check);
+    });
+    ui.add_space(theme::SPACE_1);
+    ui.horizontal(|ui| {
+        ui.strong(CHANNEL_LABEL);
+        egui::ComboBox::from_id_salt("planora_settings_update_channel")
+            .selected_text(channel.label())
+            .show_ui(ui, |ui| {
+                for c in AVAILABLE_CHANNELS {
+                    ui.selectable_value(channel, *c, c.label());
+                }
+            });
+        ui.add_space(theme::SPACE_6);
+        let r = ui.checkbox(check_on_start, CHECK_ON_START_LABEL);
+        theme::focus_ring(ui, &r);
+    });
+    ui.add(egui::Label::new(egui::RichText::new(PRIVACY_NOTE).weak()).wrap());
+    ui.add_space(theme::SPACE_1);
+    ui.horizontal(|ui| {
+        // Die Suche selbst kommt mit der nächsten Aufgabe; bis dahin bleibt der Knopf aus.
+        ui.add_enabled(false, egui::Button::new(CHECK_NOW));
+        ui.label(egui::RichText::new(CHECK_NOW_LATER).weak());
+    });
+    if let Some(m) = message {
+        ui.colored_label(m.color(dark), m.text());
     }
 }

@@ -4,6 +4,7 @@
 use crate::dialog::{Dialog, DialogSize};
 use crate::logo;
 use crate::theme::{self, SPACE_2, SPACE_4};
+use planora_update::Version;
 
 /// Titel des Dialogs und Beschriftung des Menüeintrags.
 pub const TITLE: &str = "Über PlanoraCAD";
@@ -25,9 +26,14 @@ pub const SOURCES: [&str; 4] = [
     "Logo-Schrift Rajdhani (SIL Open Font License)",
 ];
 
-/// Zeile mit der Version.
+/// Zeile mit der laufenden Version und ihrem Kanal, etwa „Version 0.2.0-dev.1 (Dev)“.
 pub fn version_line() -> String {
-    format!("Version {}", env!("CARGO_PKG_VERSION"))
+    version_line_for(&crate::running_version())
+}
+
+/// Zeile mit der Version `v` und ihrem Kanal.
+pub fn version_line_for(v: &Version) -> String {
+    format!("Version {v} ({})", v.channel().label())
 }
 
 /// Zeile mit der Lizenz.

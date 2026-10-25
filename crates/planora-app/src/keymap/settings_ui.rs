@@ -63,8 +63,8 @@ pub const KEYS_NOT_SAVED: &str = "Die Tastenkürzel gelten nur bis zum Programme
 /// Mindestweg einer Ziehgeste beim Erfassen (Pixel); darunter ist es ein Klick.
 pub const DRAG_MIN: f32 = 4.0;
 /// Größte Höhe der Tabelle; darüber rollt sie im Fenster (bei 1920 × 1080 bleiben die übrigen
-/// Abschnitte und „Schließen“ zu sehen).
-pub const TABLE_MAX_H: f32 = 420.0;
+/// Abschnitte und „Schließen“ zu sehen, und das Einstellungsfenster lässt die Menüleiste frei).
+pub const TABLE_MAX_H: f32 = 320.0;
 
 const AREA_W: f32 = 80.0;
 const RESET_W: f32 = 100.0;

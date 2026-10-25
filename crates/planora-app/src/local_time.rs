@@ -25,6 +25,25 @@ pub fn local_time_text_with(iso_utc: &str, offset_at: impl Fn(i64) -> Option<i32
     }
 }
 
+/// Größter gezeigter Zeitpunkt (31.12.9999, 23:59:59 UTC); spätere werden darauf begrenzt.
+const MAX_SECONDS: i64 = 253_402_300_799;
+
+/// Ortszeit-Text zu Sekunden seit 1970 (etwa die letzte Update-Prüfung), wie
+/// [`local_time_text`].
+pub fn unix_time_text(unix_seconds: i64) -> String {
+    unix_time_text_with(unix_seconds, local_offset_at)
+}
+
+/// Wie [`unix_time_text`], mit eigener Zeitzonenregel `offset_at`. Zeitpunkte vor 1970 oder
+/// nach dem Jahr 9999 werden begrenzt.
+pub fn unix_time_text_with(unix_seconds: i64, offset_at: impl Fn(i64) -> Option<i32>) -> String {
+    let t = unix_seconds.clamp(0, MAX_SECONDS);
+    match offset_at(t) {
+        Some(offset) => text_at(t + i64::from(offset)),
+        None => format!("{} UTC", text_at(t)),
+    }
+}
+
 /// „dd.mm.yyyy, hh:mm“ für den UTC-Text plus festen Abstand in Sekunden (Sekunden werden
 /// abgeschnitten). Unlesbarer Text → `None`.
 pub fn format_offset(iso_utc: &str, offset_seconds: i32) -> Option<String> {
