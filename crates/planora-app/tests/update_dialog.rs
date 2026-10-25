@@ -465,16 +465,21 @@ fn later_closes_and_does_not_return_in_this_session_within_24h() {
     assert_eq!(SNOOZE_SECS, 24 * 3600);
     // Nichts gespeichert: weder übersprungen noch ein Zeitpunkt für „Später“.
     assert_eq!(h.app.ws_mut().skipped_version(), None);
-    // Die Prüfung liefert dasselbe Update noch einmal: die Meldung bleibt zu.
-    h.manual_check();
-    assert_eq!(fake.calls(), 2);
-    assert!(h.app.pending_notice().is_some());
+    // Von allein bleibt sie zu, auch wenn das Update vorgemerkt bleibt.
     h.settle();
+    assert!(h.app.pending_notice().is_some());
     assert!(!h.notice_open(), "nicht vor Ablauf der 24 Stunden");
     // Nach Ablauf erscheint sie wieder.
     h.app.update_dialog_mut().snooze_until = Some(now_unix() - 1);
     h.settle();
     assert!(h.notice_open());
+    // Die Suche von Hand zeigt sie auch vor Ablauf wieder (sie hebt „Später“ auf).
+    h.click(LATER);
+    assert!(!h.notice_open());
+    h.manual_check();
+    assert_eq!(fake.calls(), 2);
+    assert!(h.notice_open(), "nach der Suche von Hand wieder da");
+    assert_eq!(h.app.update_dialog_mut().snooze_until, None);
 
     // Esc wirkt wie „Später“, nie wie „Überspringen“.
     h.press(Key::Escape);
@@ -533,12 +538,29 @@ fn skip_saves_the_version_and_the_same_version_is_not_offered_again_but_the_next
     );
     assert_eq!(h.app.pending_notice(), None);
     assert!(!h.sees(&status_hint(&v("99.0.0-dev.1"))));
-    // Dieselbe Version wird nicht wieder angeboten …
+    // Die Prüfung beim Start bietet dieselbe Version nicht wieder an (ein neuer Programmstart
+    // mit derselben Konfiguration) …
+    let fresh = Fake::new(one_newer());
+    let mut c = Config::read_from(&h.cfg).unwrap();
+    // Fällig: die letzte Prüfung vergessen.
+    c.last_update_check = None;
+    let mut ws = Workspace::new(None, c);
+    ws.config_path = h.cfg.clone();
+    let mut again = Harness::new(ws, h.cfg.clone(), fresh.clone());
+    again.until(|_| fresh.calls() == 1);
+    again.until_idle();
+    assert_eq!(again.app.pending_notice(), None);
+    assert!(!again.notice_open());
+    // … die Suche von Hand schon (sie übergeht das Überspringen) …
     h.manual_check();
     assert_eq!(fake.calls(), 2);
-    assert_eq!(h.app.pending_notice(), None);
-    assert!(!h.notice_open());
-    // … die nächste schon.
+    assert_eq!(
+        h.app.pending_notice().map(|u| u.latest.version),
+        Some(v("99.0.0-dev.1"))
+    );
+    assert!(h.notice_open());
+    h.click(SKIP);
+    // … und die nächste Version auch beim Start.
     fake.set(list(&[
         ("v99.0.0-dev.1", "Alt"),
         ("v99.0.0-dev.2", "Neuer"),

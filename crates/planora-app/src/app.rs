@@ -30,6 +30,7 @@ use crate::{
 };
 use planora_feature::SketchPlane;
 use planora_kernel::BoolOp;
+use planora_project::config::WindowState;
 use planora_render::gpu::GpuScene;
 use planora_render::{FaceRef, Pick, ViewFace};
 use planora_sketch::plane_of_face;
@@ -298,7 +299,7 @@ impl PlanoraApp {
     /// Ist die Bedienung wegen des Neustarts gesperrt? Von der zweiten Prüfung von `.new` bis
     /// zum Ende des Programms ([`RestartPhase::Verifying`], [`RestartPhase::WaitingForMarker`],
     /// [`RestartPhase::Exiting`]).
-    fn restart_locked(&self) -> bool {
+    pub(crate) fn restart_locked(&self) -> bool {
         matches!(
             self.restart,
             RestartPhase::Verifying | RestartPhase::WaitingForMarker { .. } | RestartPhase::Exiting
@@ -377,6 +378,13 @@ impl PlanoraApp {
     /// Update verwerfen; nach dem Start der neuen Version auf ihre Rückmeldung warten. Wartet
     /// nie.
     fn install_tick(&mut self, ctx: &egui::Context) {
+        self.install_step(ctx);
+        // Die Rückfrage nennt das Update nur, solange sie für den Neustart gestellt ist.
+        self.ws.quit_for_update = self.restart == RestartPhase::AwaitingPrompt;
+    }
+
+    /// Ein Schritt von [`PlanoraApp::install_tick`].
+    fn install_step(&mut self, ctx: &egui::Context) {
         self.installer.poll();
         if self.restart == RestartPhase::None
             && *self.installer.state() == InstallState::ReadyToRestart
@@ -427,7 +435,10 @@ impl PlanoraApp {
                     // Inzwischen ist neue Arbeit entstanden (die Sperre hält das eigentlich
                     // ab): noch ist nichts ausgetauscht, also zurück zur Rückfrage.
                     Ok(()) if self.unsaved_work() => self.restart = RestartPhase::None,
-                    Ok(()) => self.restart_now(),
+                    Ok(()) => {
+                        let window = ctx.input(|i| update_install::window_state(i.viewport()));
+                        self.restart_now(window);
+                    }
                     Err(e) => {
                         self.restart = RestartPhase::None;
                         if let Some(paths) = self.installer.paths() {
@@ -453,7 +464,11 @@ impl PlanoraApp {
                     self.restart = RestartPhase::Exiting;
                     // Ohne weitere Rückfrage: `handle_close_request` schickt `Close`.
                     self.ws.quit = true;
-                } else if Instant::now() >= deadline {
+                } else if Instant::now() >= deadline
+                    || self.new_process.as_mut().is_some_and(|p| p.exited())
+                {
+                    // Frist abgelaufen oder die neue Version schon wieder zu Ende: nicht weiter
+                    // warten.
                     self.restart_failed(&paths, to);
                 } else {
                     ctx.request_repaint_after(Duration::from_millis(100));
@@ -479,10 +494,11 @@ impl PlanoraApp {
         self.restart = RestartPhase::Verifying;
     }
 
-    /// Nach der zweiten Prüfung: `update_pending` speichern (sonst nichts austauschen), Patchnotes für
-    /// den Hinweis hinterlegen, austauschen, die neue Version starten und auf sie warten. Jeder
-    /// Fehler legt den alten Stand zurück und zeigt eine Meldung; das Programm läuft weiter.
-    fn restart_now(&mut self) {
+    /// Nach der zweiten Prüfung: `update_pending` samt Fenster (`window`, für die neue Version)
+    /// speichern (sonst nichts austauschen), Patchnotes für den Hinweis hinterlegen, austauschen,
+    /// die neue Version starten und auf sie warten. Jeder Fehler legt den alten Stand zurück und
+    /// zeigt eine Meldung; das Programm läuft weiter.
+    fn restart_now(&mut self, window: Option<WindowState>) {
         self.restart = RestartPhase::None;
         let (Some(paths), Some(to)) = (self.installer.paths().cloned(), self.installer.target())
         else {
@@ -490,7 +506,10 @@ impl PlanoraApp {
             return;
         };
         let from = crate::running_version();
-        if !self.ws.set_pending_update(Some((from, to))) {
+        if !self
+            .ws
+            .set_pending_update_with_window(Some((from, to)), window)
+        {
             let _ = self.ws.set_pending_update(None);
             discard_download(&paths);
             self.installer.fail(update_install::PENDING_NOT_SAVED);
@@ -547,20 +566,22 @@ impl PlanoraApp {
         };
     }
 
-    /// Die neue Version hat sich nicht rechtzeitig gemeldet: alten Stand zurücklegen, die Version
-    /// überspringen, Meldung zeigen. Das Programm beendet sich nicht.
+    /// Die neue Version hat sich nicht rechtzeitig gemeldet oder ist gleich wieder zu Ende: alten
+    /// Stand zurücklegen, Meldung zeigen. Die Version wird nicht übersprungen, sondern weiter
+    /// angeboten (Statuszeile, nächste Prüfung). Das Programm beendet sich nicht.
     fn restart_failed(&mut self, paths: &Paths, to: Version) {
         self.restart = RestartPhase::None;
         // Erst die neue Version beenden: sonst liefe sie, falls sie doch noch startet, aus der
         // wieder in `.new` umbenannten Datei parallel weiter (und `.new` ließe sich nicht löschen).
         self.stop_new_process();
         let back = rollback(paths);
-        let _ = self.ws.set_skipped_version(Some(to));
         let _ = self.ws.set_pending_update(None);
         let _ = std::fs::remove_file(update_install::notes_file(&self.ws));
-        self.pending_notice = None;
+        if self.pending_notice.is_none() {
+            self.pending_notice = self.update_dialog.update.clone();
+        }
         let message = match back {
-            Ok(()) => update_install::not_started(&to),
+            Ok(()) => update_install::not_started(&to, &crate::running_version()),
             Err(e) => update_install::rollback_failed(&e),
         };
         self.installer.fail(message);
@@ -660,10 +681,15 @@ impl PlanoraApp {
             self.update_manual_waiting |= manual;
             return;
         }
+        // Die Suche von Hand übergeht das Überspringen: sie zeigt auch eine übersprungene Version.
         let request = CheckRequest {
             running: crate::running_version(),
             channel: self.ws.update_channel(),
-            skipped: self.ws.skipped_version(),
+            skipped: if manual {
+                None
+            } else {
+                self.ws.skipped_version()
+            },
             manual,
         };
         self.update_checker
@@ -675,14 +701,28 @@ impl PlanoraApp {
     /// gelungenen Schreiben mit), ein Update für die Meldung vormerken. Nur nach dem Knopf ein
     /// Hinweis in den Einstellungen; die Prüfung beim Start meldet nie einen Fehler.
     fn apply_check_result(&mut self, result: CheckResult) {
-        let manual = result.manual || std::mem::take(&mut self.update_manual_waiting);
+        let waiting = std::mem::take(&mut self.update_manual_waiting);
+        let manual = result.manual || waiting;
         if update_check::records_check(&result.outcome) {
             self.ws.set_last_update_check(result.at);
+        }
+        if !result.manual && waiting && self.ws.skipped_version().is_some() {
+            // Der Knopf kam während der Prüfung beim Start, die das Überspringen beachtet hat:
+            // ihr Ergebnis gilt nicht für den Knopf, also noch einmal ohne fragen.
+            if let CheckOutcome::Available(update) = result.outcome {
+                self.pending_notice = Some(*update);
+            }
+            self.start_update_check(true);
+            return;
         }
         let hint = match result.outcome {
             CheckOutcome::Available(update) => {
                 let hint = CheckHint::Found(update.latest.version);
                 self.pending_notice = Some(*update);
+                if manual {
+                    // Von Hand gefunden: die Meldung kommt auch nach „Später“ wieder.
+                    self.update_dialog.snooze_until = None;
+                }
                 hint
             }
             CheckOutcome::UpToDate => CheckHint::UpToDate,
@@ -743,6 +783,10 @@ impl PlanoraApp {
         match action {
             UpdateAction::Skip => self.pending_notice = None,
             UpdateAction::InstallNow => self.begin_install(ctx),
+            UpdateAction::Retry => {
+                self.installer.reset();
+                self.begin_install(ctx);
+            }
             UpdateAction::CancelInstall => self.installer.cancel(),
             UpdateAction::CloseFailed => self.installer.reset(),
             UpdateAction::OpenDownloadPage => {
@@ -776,7 +820,9 @@ impl PlanoraApp {
             &mut self.update_dialog,
         );
         self.auto_open_update_notice();
-        let view = install_view(self.restart, self.installer.state());
+        let retry = update_install::decide(self.auto_install, self.exe_path.as_deref())
+            == InstallDecision::Download;
+        let view = install_view(self.restart_locked(), self.installer.state(), retry);
         if let Some(action) = update_dialog::show(ctx, &mut self.ws, &mut self.update_dialog, view)
         {
             self.after_update_action(ctx, action);
@@ -1137,10 +1183,11 @@ pub fn enforce_overview_rules(
     }
 }
 
-/// Was die Meldung während eines Updates zeigt: während des Neustarts „Neustart …“, sonst den
-/// Stand des Downloads.
-fn install_view(restart: RestartPhase, state: &InstallState) -> InstallView<'_> {
-    if restart != RestartPhase::None {
+/// Was die Meldung während eines Updates zeigt: während des gesperrten Neustarts (`locked`)
+/// nichts (der Kasten über allem sagt es), sonst den Stand des Downloads; ein Fehler mit „Erneut
+/// versuchen“, wenn das helfen kann (`retry`).
+fn install_view(locked: bool, state: &InstallState, retry: bool) -> InstallView<'_> {
+    if locked {
         return InstallView::Restarting;
     }
     match state {
@@ -1150,7 +1197,7 @@ fn install_view(restart: RestartPhase, state: &InstallState) -> InstallView<'_> 
             total: *total,
         },
         InstallState::ReadyToRestart => InstallView::Waiting,
-        InstallState::Failed(message) => InstallView::Failed(message),
+        InstallState::Failed(message) => InstallView::Failed { message, retry },
     }
 }
 
@@ -2055,6 +2102,9 @@ impl eframe::App for PlanoraApp {
         if self.settings.take_check_request() {
             self.start_update_check(true);
         }
+        if self.settings.take_notice_request() {
+            self.open_update_notice();
+        }
         enforce_overview_rules(&self.ws, &self.projects, &self.settings, &mut self.overview);
         if keymap::overview::show(&ctx, &self.ws, &mut self.overview) == OverviewEvent::OpenSettings
         {
@@ -2070,7 +2120,7 @@ impl eframe::App for PlanoraApp {
             // Über allem: sperrt die Bedienung, bis die neue Version läuft oder der alte Stand
             // zurückliegt.
             egui::Modal::new(egui::Id::new("planora_update_restart"))
-                .show(&ctx, |ui| ui.label(update_install::RESTARTING));
+                .show(&ctx, |ui| ui.label(update_install::RESTART_BOX));
         }
 
         // Änderungen am Dokument werden Schritte für Rückgängig (R3, R4): erst wenn keine

@@ -641,9 +641,9 @@ Welche Fusion-Kürzel noch fehlen, weil es die Funktion noch nicht gibt, steht i
 
 ## Updates und Versionen
 
-Das Programm kann sich selbst aktualisieren (nur unter Windows). Beim Start fragt es im Hintergrund bei GitHub nach, ob es eine neuere Version gibt. Dabei wird nichts Persönliches gesendet. Gibt es eine, erscheint ein Fenster mit den Änderungen und drei Knöpfen: „Jetzt aktualisieren“, „Später“ (die Meldung kommt frühestens nach 24 Stunden wieder) und „Diese Version überspringen“. Vor dem Neustart fragt das Programm wie beim Schließen nach ungespeicherter Arbeit. Danach lässt es sich ein paar Sekunden nicht bedienen, bis die neue Version läuft. Das Herunterladen wird mit einer Prüfsumme kontrolliert. Klappt der Austausch nicht, bleibt die alte Version.
+Das Programm kann sich selbst aktualisieren (nur unter Windows). Beim Start fragt es im Hintergrund bei GitHub nach, ob es eine neuere Version gibt. Dabei wird nichts Persönliches gesendet. Gibt es eine, erscheint ein Fenster mit den Änderungen und drei Knöpfen: „Jetzt aktualisieren“, „Später“ (die Meldung kommt frühestens nach 24 Stunden wieder) und „Diese Version überspringen“. Die Meldung steht unten rechts, andere Fenster verdecken sie nicht. Vor dem Neustart fragt das Programm nach ungespeicherter Arbeit („Neustart für das Update“). Danach lässt es sich ein paar Sekunden nicht bedienen, bis die neue Version läuft; sie öffnet in derselben Fenstergröße. Das Herunterladen wird mit einer Prüfsumme kontrolliert. Klappt der Austausch nicht, bleibt die alte Version; die Meldung sagt das deutlich, und das Update lässt sich später noch einmal versuchen.
 
-Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich die Suche beim Start abschalten oder von Hand starten.
+Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich die Suche beim Start abschalten oder von Hand starten. Die Suche von Hand zeigt auch eine übersprungene Version wieder. Eine übersprungene Version steht dort mit dem Knopf „Doch wieder anzeigen“.
 
 **Datenschutz**
 - Das Programm fragt bei `api.github.com` nach der Liste der Veröffentlichungen. Das passiert beim Start, höchstens einmal am Tag, und nur, solange die Suche in den Einstellungen eingeschaltet ist. Zum Herunterladen verbindet es sich außerdem mit GitHub (`github.com` und die Download-Server von GitHub).

@@ -4,7 +4,7 @@
 //! von der Voreinstellung abweicht; andere Einstellungen und die Update-Felder überschreiben
 //! einander beim Lesen-Ändern-Schreiben nicht. Nur mit eigenen Dateien im Temp-Ordner.
 
-use planora_project::config::{Config, DEFAULT_UPDATE_CHANNEL, PendingUpdate};
+use planora_project::config::{Config, DEFAULT_UPDATE_CHANNEL, PendingUpdate, WindowState};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -145,7 +145,8 @@ fn broken_types_read_as_defaults_and_keep_other_fields() {
         c.update_pending,
         Some(PendingUpdate {
             from: "0.2.0-dev.1".into(),
-            to: "0.2.0-dev.2".into()
+            to: "0.2.0-dev.2".into(),
+            window: None,
         })
     );
     cleanup(&p);
@@ -171,6 +172,7 @@ fn only_changed_fields_are_written() {
             c.update_pending = Some(PendingUpdate {
                 from: "0.1.0".into(),
                 to: "0.2.0".into(),
+                window: None,
             })
         }),
     ];
@@ -208,6 +210,13 @@ fn update_fields_survive_other_config_updates_and_vice_versa() {
     let pending = PendingUpdate {
         from: "0.2.0-dev.1".into(),
         to: "0.2.0-dev.2".into(),
+        window: Some(WindowState {
+            x: -8.0,
+            y: 12.5,
+            width: 1920.0,
+            height: 1050.0,
+            maximized: true,
+        }),
     };
     Config {
         update_channel: "beta".into(),
@@ -271,6 +280,7 @@ fn pending_update_roundtrips() {
         update_pending: Some(PendingUpdate {
             from: "0.2.0-dev.1".into(),
             to: "0.2.0-dev.2".into(),
+            window: None,
         }),
         ..Config::default()
     };
@@ -289,5 +299,67 @@ fn pending_update_roundtrips() {
         Config::read_from(&p).unwrap().update_pending,
         c.update_pending
     );
+    cleanup(&p);
+}
+
+/// Fenster der alten Version beim Neustart für ein Update (`update_pending.window`): wird mit dem
+/// Eintrag geschrieben und gelesen; fehlt es oder ist es kaputt, gibt es keines, der Eintrag selbst
+/// bleibt aber lesbar. Ältere Dateien ohne das Feld lesen sich wie bisher.
+#[test]
+fn pending_update_carries_the_window_of_the_old_version() {
+    let p = temp_file("fenster");
+    let window = WindowState {
+        x: 100.0,
+        y: 50.0,
+        width: 1600.0,
+        height: 900.0,
+        maximized: false,
+    };
+    let c = Config {
+        update_pending: Some(PendingUpdate {
+            from: "0.2.0-dev.1".into(),
+            to: "0.2.0-dev.2".into(),
+            window: Some(window),
+        }),
+        ..Config::default()
+    };
+    c.save_to(&p).unwrap();
+    assert_eq!(Config::read_from(&p).unwrap(), c);
+    // Ohne Fenster: das Feld wird nicht geschrieben.
+    let mut without = c.clone();
+    without.update_pending.as_mut().unwrap().window = None;
+    without.save_to(&p).unwrap();
+    assert!(!std::fs::read_to_string(&p).unwrap().contains("window"));
+    // Kaputte Angaben: kein Fenster, der Eintrag bleibt.
+    for broken in [
+        r#""gross""#,
+        r#"{"x": 1, "y": 2, "width": "breit", "height": 900}"#,
+        r#"{"x": 1, "y": 2, "width": 0, "height": 900}"#,
+        r#"{"x": 1, "y": 2, "width": -5, "height": 900}"#,
+        r#"{"x": 1, "y": 2}"#,
+    ] {
+        std::fs::write(
+            &p,
+            format!(r#"{{"root": null, "update_pending": {{"from": "0.1.0", "to": "0.2.0", "window": {broken}}}}}"#),
+        )
+        .unwrap();
+        let pending = Config::read_from(&p).unwrap().update_pending.unwrap();
+        assert_eq!(pending.to, "0.2.0", "{broken}");
+        assert_eq!(pending.window, None, "{broken}");
+    }
+    // „maximized“ fehlt: nicht maximiert.
+    std::fs::write(
+        &p,
+        r#"{"root": null, "update_pending": {"from": "0.1.0", "to": "0.2.0", "window": {"x": 1, "y": 2, "width": 1000, "height": 700}}}"#,
+    )
+    .unwrap();
+    let w = Config::read_from(&p)
+        .unwrap()
+        .update_pending
+        .unwrap()
+        .window
+        .unwrap();
+    assert!(!w.maximized);
+    assert_eq!((w.x, w.y, w.width, w.height), (1.0, 2.0, 1000.0, 700.0));
     cleanup(&p);
 }

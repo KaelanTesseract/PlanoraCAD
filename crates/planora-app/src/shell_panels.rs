@@ -265,7 +265,8 @@ pub(crate) struct StatusExtra {
 fn status_extra(app: &PlanoraApp) -> Option<StatusExtra> {
     let notice = &app.update_dialog;
     if notice.installing {
-        let restarting = app.restart != crate::app::RestartPhase::None;
+        // Erst nach der Rückfrage: solange sie offen ist, startet noch nichts neu.
+        let restarting = app.restart_locked();
         return Some(StatusExtra {
             text: crate::update_install::status_text(app.installer.state(), restarting),
             clickable: !notice.open,

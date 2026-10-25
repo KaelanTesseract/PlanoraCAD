@@ -16,7 +16,7 @@ use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
 use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
 use planora_feature::Snapshot;
-use planora_project::config::{Config, PendingUpdate, clamp_panel_transparency};
+use planora_project::config::{Config, PendingUpdate, WindowState, clamp_panel_transparency};
 use planora_project::docstore::{Autosave, DocStore, DocumentInfo, LockMode, peek, read_version};
 use planora_project::fsutil::validate_name;
 use planora_project::library::{DOCUMENT_SUFFIX, Library, NodePath};
@@ -572,6 +572,9 @@ pub struct Workspace {
     pub last_command: crate::commands::LastCommand,
     pub prompt: Option<Prompt>,
     pub quit: bool,
+    /// Die Rückfrage zum Beenden kommt vom Neustart für ein Update (die App setzt das); sie
+    /// nennt dann das Update.
+    pub quit_for_update: bool,
     /// Der Dialog „Über PlanoraCAD“ ist offen.
     pub about_open: bool,
     /// Zählt Änderungen an der Bibliothek auf der Festplatte, die über den Arbeitsbereich laufen
@@ -620,6 +623,7 @@ impl Workspace {
             last_command: Default::default(),
             prompt: None,
             quit: false,
+            quit_for_update: false,
             about_open: false,
             library_revision: 0,
             content_revision: 0,
@@ -1430,11 +1434,27 @@ impl Workspace {
 
     /// Merkt ein begonnenes Update oder leert es und speichert das.
     pub fn set_pending_update(&mut self, update: Option<(Version, Version)>) -> bool {
+        self.set_pending_update_with_window(update, None)
+    }
+
+    /// Wie [`Workspace::set_pending_update`], dazu das Fenster der laufenden Version, in dessen
+    /// Größe und Lage die neue Version öffnet.
+    pub fn set_pending_update_with_window(
+        &mut self,
+        update: Option<(Version, Version)>,
+        window: Option<WindowState>,
+    ) -> bool {
         self.config.update_pending = update.map(|(from, to)| PendingUpdate {
             from: from.to_string(),
             to: to.to_string(),
+            window,
         });
         self.save_update_field(|u, c| c.update_pending = u.pending)
+    }
+
+    /// Das Fenster des begonnenen Updates, falls gemerkt.
+    pub fn pending_window(&self) -> Option<WindowState> {
+        self.config.update_pending.as_ref()?.window
     }
 
     /// Speichert ein Update-Feld (schon in `config` gesetzt) gleich in

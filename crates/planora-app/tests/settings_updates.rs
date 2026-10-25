@@ -11,7 +11,7 @@ use planora_app::keymap::Keymap;
 use planora_app::settings_window::*;
 use planora_app::workspace::Workspace;
 use planora_app::{about_dialog, local_time, theme};
-use planora_project::config::{Config, PendingUpdate, UPDATE_CHANNEL_IDS};
+use planora_project::config::{Config, PendingUpdate, UPDATE_CHANNEL_IDS, WindowState};
 use planora_update::{Channel, Version};
 use std::fs;
 use std::path::PathBuf;
@@ -501,7 +501,8 @@ fn workspace_accessors_roundtrip() {
         disk.update_pending,
         Some(PendingUpdate {
             from: "0.2.0-dev.1".into(),
-            to: "0.2.0-dev.2".into()
+            to: "0.2.0-dev.2".into(),
+            window: None,
         })
     );
     // Frisch geladen liest der Arbeitsbereich dasselbe.
@@ -526,6 +527,7 @@ fn workspace_accessors_roundtrip() {
     again.config.update_pending = Some(PendingUpdate {
         from: "0.1.0".into(),
         to: "kaputt".into(),
+        window: None,
     });
     assert_eq!(again.skipped_version(), None);
     assert_eq!(again.pending_update(), None);
@@ -539,6 +541,20 @@ fn pending_update_settings_ride_along_on_every_write_path() {
         let blocker = block(&mut e);
         assert!(!e.ws.set_update_check(false), "{path}");
         assert!(!e.ws.set_last_update_check(42), "{path}");
+        // Auch das Fenster der alten Version im vorgemerkten Update.
+        let window = WindowState {
+            x: 10.0,
+            y: 20.0,
+            width: 1800.0,
+            height: 1000.0,
+            maximized: true,
+        };
+        assert!(
+            !e.ws
+                .set_pending_update_with_window(Some((v("0.1.0"), v("0.2.0"))), Some(window)),
+            "{path}"
+        );
+        assert_eq!(e.ws.pending_window(), Some(window), "{path}");
         assert_eq!(fs::read(&blocker).unwrap(), b"x");
         e.ws.config_path = e.cfg.clone();
         let written = match path {
@@ -555,6 +571,11 @@ fn pending_update_settings_ride_along_on_every_write_path() {
         let disk = Config::read_from(&e.cfg).unwrap();
         assert!(!disk.update_check, "{path}");
         assert_eq!(disk.last_update_check, Some(42), "{path}");
+        assert_eq!(
+            disk.update_pending.and_then(|p| p.window),
+            Some(window),
+            "{path}"
+        );
         // Danach nicht mehr vorgemerkt: der Wert auf der Platte gehört wieder der Datei.
         Config::update_at(&e.cfg, |c| c.last_update_check = Some(99)).unwrap();
         assert!(e.ws.set_panel_transparency(30), "{path}");

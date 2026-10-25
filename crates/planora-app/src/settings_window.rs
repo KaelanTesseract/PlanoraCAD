@@ -2,7 +2,8 @@
 //! weitere dazukommen. Oben „Darstellung“ mit dem Regler „Durchsichtigkeit der Panels“ (wirkt
 //! sofort, wird gespeichert wie das Projektverzeichnis), darunter „Updates“ (laufende Version,
 //! Update-Kanal, Suchen beim Start, letzte Prüfung; gespeichert sofort; Knopf „Jetzt nach Updates
-//! suchen“ mit Ergebnis, die Suche selbst macht die App), dann „Projekte“ mit dem
+//! suchen“ mit Ergebnis und bei einem Fund „Meldung anzeigen“, die Suche selbst macht die App;
+//! eine übersprungene Version mit „Doch wieder anzeigen“), dann „Projekte“ mit dem
 //! Projektverzeichnis und zuletzt „Tastenkürzel“ ([`crate::keymap::settings_ui`]; zuletzt, weil
 //! die lange Tabelle sonst „Projekte“ nach unten schöbe). Gewählt wird über die
 //! Dateiauswahl im Ordner-Modus; der Wechsel wirkt wie [`Workspace::choose_root`] und
@@ -48,6 +49,10 @@ pub const CHECK_FAILED: &str = "Die Suche hat nicht geklappt (kein Netz?).";
 /// (alles außer Windows).
 pub const NOT_ON_THIS_SYSTEM: &str =
     "Auf diesem System gibt es keine Aktualisierung über das Programm.";
+/// Knopf neben „Neue Version gefunden“: öffnet die Meldung mit Jetzt, Später, Überspringen.
+pub const SHOW_NOTICE: &str = "Meldung anzeigen";
+/// Knopf neben der übersprungenen Version: hebt das Überspringen auf und sucht gleich nach.
+pub const UNSKIP: &str = "Doch wieder anzeigen";
 /// Statt eines Zeitpunkts, wenn noch nie geprüft wurde.
 pub const NEVER_CHECKED: &str = "noch nie";
 /// Warnung, wenn eine Update-Einstellung gilt, aber nicht gespeichert werden konnte.
@@ -90,6 +95,11 @@ pub fn last_check_line(unix_seconds: Option<u64>) -> String {
 /// „Neue Version gefunden: 0.2.0-dev.2“ (Ergebnis der Suche über den Knopf).
 pub fn update_found_line(v: &Version) -> String {
     format!("Neue Version gefunden: {v}")
+}
+
+/// „Übersprungen: Version 0.2.0-dev.2“ (Einstellungen → Updates).
+pub fn skipped_line(v: &Version) -> String {
+    format!("Übersprungen: Version {v}")
 }
 
 /// Zustand der Suche über den Knopf [`CHECK_NOW`], neben dem Knopf angezeigt. Die App setzt ihn
@@ -232,6 +242,9 @@ pub struct SettingsWindow {
     /// Der Knopf [`CHECK_NOW`] wurde gedrückt; die App holt das ab
     /// ([`SettingsWindow::take_check_request`]).
     check_requested: bool,
+    /// Der Knopf [`SHOW_NOTICE`] wurde gedrückt; die App holt das ab
+    /// ([`SettingsWindow::take_notice_request`]) und öffnet die Meldung.
+    notice_requested: bool,
     /// Der Regler wurde bewegt, der Wert ist aber noch nicht gespeichert (gespeichert wird beim
     /// Loslassen, nicht in jedem Bild des Ziehens).
     transparency_unsaved: bool,
@@ -325,6 +338,11 @@ impl SettingsWindow {
         std::mem::take(&mut self.check_requested)
     }
 
+    /// Wurde der Knopf [`SHOW_NOTICE`] seit dem letzten Abholen gedrückt? Setzt zurück.
+    pub fn take_notice_request(&mut self) -> bool {
+        std::mem::take(&mut self.notice_requested)
+    }
+
     /// Hinweis nach dem Speichern einer Update-Einstellung: [`UPDATES_NOT_SAVED`], wenn es
     /// misslang (der Wert gilt dann für die Sitzung), sonst keiner.
     fn note_updates_saved(&mut self, written: bool) {
@@ -391,6 +409,9 @@ impl SettingsWindow {
         let check_hint = self.check_hint.clone();
         self.check_hint_shown = true;
         let mut check_now = false;
+        let mut show_notice = false;
+        let skipped = ws.skipped_version();
+        let mut unskip = false;
         let channel = ws.update_channel();
         let (mut chosen_channel, mut check_on_start) = (channel, ws.update_check_enabled());
         let last_check = last_check_line(ws.last_update_check());
@@ -430,8 +451,13 @@ impl SettingsWindow {
                             &mut chosen_channel,
                             &mut check_on_start,
                             &last_check,
-                            check_hint.as_ref(),
-                            &mut check_now,
+                            UpdateButtons {
+                                hint: check_hint.as_ref(),
+                                check_now: &mut check_now,
+                                show_notice: &mut show_notice,
+                                skipped,
+                                unskip: &mut unskip,
+                            },
                             updates_message.as_ref(),
                         );
                         ui.add_space(theme::SPACE_4);
@@ -477,6 +503,15 @@ impl SettingsWindow {
         if check_now && !locked {
             self.check_requested = true;
         }
+        if show_notice && !locked {
+            self.notice_requested = true;
+        }
+        if unskip && !locked {
+            // Wieder anbieten: das Überspringen aufheben und gleich nachsehen.
+            let written = ws.set_skipped_version(None);
+            self.note_updates_saved(written);
+            self.check_requested = true;
+        }
         // Update-Einstellungen gelten und werden sofort gespeichert.
         if !locked && chosen_channel != channel {
             let written = ws.set_update_channel(chosen_channel);
@@ -514,19 +549,37 @@ impl SettingsWindow {
     }
 }
 
+/// Knöpfe und Anzeigen zur Suche im Abschnitt „Updates“ (gedrückt: das jeweilige Feld `true`).
+struct UpdateButtons<'a> {
+    /// Zustand der Suche neben [`CHECK_NOW`].
+    hint: Option<&'a CheckHint>,
+    check_now: &'a mut bool,
+    /// [`SHOW_NOTICE`] neben „Neue Version gefunden“.
+    show_notice: &'a mut bool,
+    /// Übersprungene Version (dann [`skipped_line`] mit [`UNSKIP`]).
+    skipped: Option<Version>,
+    unskip: &'a mut bool,
+}
+
 /// Abschnitt „Updates“: laufende Version und letzte Prüfung, Auswahl des Kanals (nur [`AVAILABLE_CHANNELS`]; ein
 /// anderer gespeicherter Kanal steht nur als Anzeige da), Schalter mit Hinweis zum Datenschutz,
-/// der Knopf [`CHECK_NOW`] mit dem Zustand der Suche daneben (aus, solange sie läuft; gedrückt:
-/// `check_now`) und die letzte Prüfung.
+/// der Knopf [`CHECK_NOW`] mit dem Zustand der Suche daneben (aus, solange sie läuft; nach einem
+/// Fund mit [`SHOW_NOTICE`]) und eine übersprungene Version mit [`UNSKIP`].
 fn show_updates(
     ui: &mut egui::Ui,
     channel: &mut Channel,
     check_on_start: &mut bool,
     last_check: &str,
-    hint: Option<&CheckHint>,
-    check_now: &mut bool,
+    buttons: UpdateButtons<'_>,
     message: Option<&RootMessage>,
 ) {
+    let UpdateButtons {
+        hint,
+        check_now,
+        show_notice,
+        skipped,
+        unskip,
+    } = buttons;
     let dark = ui.visuals().dark_mode;
     // Knapp gehalten (je Zeile zwei Angaben), damit das Fenster bei 1920 × 1080 nicht bis über
     // die Menüleiste wächst.
@@ -563,12 +616,27 @@ fn show_updates(
             Some(h @ CheckHint::Failed) => {
                 ui.colored_label(theme::palette(dark).warning, h.text());
             }
+            Some(h @ CheckHint::Found(_)) => {
+                ui.label(h.text());
+                let r = ui.button(SHOW_NOTICE);
+                theme::focus_ring(ui, &r);
+                *show_notice = r.clicked();
+            }
             Some(h) => {
                 ui.label(h.text());
             }
             None => {}
         }
     });
+    if let Some(v) = skipped {
+        ui.add_space(theme::SPACE_1);
+        ui.horizontal(|ui| {
+            ui.label(skipped_line(&v));
+            let r = ui.button(UNSKIP);
+            theme::focus_ring(ui, &r);
+            *unskip = r.clicked();
+        });
+    }
     if let Some(m) = message {
         ui.colored_label(m.color(dark), m.text());
     }

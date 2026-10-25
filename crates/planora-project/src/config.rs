@@ -99,11 +99,50 @@ pub const DEFAULT_UPDATE_CHANNEL: &str = "dev";
 /// in der Reihenfolge von `Channel::ALL`; ein Test im Programm hält beide gleich).
 pub const UPDATE_CHANNEL_IDS: [&str; 3] = ["dev", "beta", "stable"];
 
-/// Begonnenes Update: Versionen als Text, geprüft wird erst im Programm.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Begonnenes Update: Versionen als Text, geprüft wird erst im Programm. Dazu das Fenster der
+/// alten Version, damit die neue in derselben Größe und Lage öffnet (fehlt es, die Vorgabe).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PendingUpdate {
     pub from: String,
     pub to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowState>,
+}
+
+/// Größe, Lage und Zustand eines Programmfensters in Punkten: `x`, `y` die linke obere Ecke
+/// des Fensters samt Rahmen, `width`, `height` die Innenfläche.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WindowState {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub maximized: bool,
+}
+
+/// Liest ein Fenster aus einem JSON-Wert: endliche Zahlen für Lage und Größe, die Größe über 0;
+/// sonst keines. Fehlt `maximized` oder ist es kein Wahrheitswert, gilt „nicht maximiert“.
+fn lenient_window(value: Option<&serde_json::Value>) -> Option<WindowState> {
+    let value = value?;
+    let num = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .map(|n| n as f32)
+            .filter(|n| n.is_finite())
+    };
+    let (width, height) = (num("width")?, num("height")?);
+    (width > 0.0 && height > 0.0).then(|| WindowState {
+        x: num("x").unwrap_or(0.0),
+        y: num("y").unwrap_or(0.0),
+        width,
+        height,
+        maximized: value
+            .get("maximized")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    })
 }
 
 impl Default for Config {
@@ -168,7 +207,8 @@ fn lenient_text<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<S
 }
 
 /// Liest `update_pending` aus jedem JSON-Wert: ein Objekt mit den Texten `from` und `to`,
-/// sonst keines (weitere Felder werden übergangen).
+/// sonst keines (weitere Felder werden übergangen); dazu nachsichtig das Fenster
+/// ([`lenient_window`]).
 fn lenient_pending_update<'de, D: Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<Option<PendingUpdate>, D::Error> {
@@ -178,6 +218,7 @@ fn lenient_pending_update<'de, D: Deserializer<'de>>(
         (Some(from), Some(to)) => Some(PendingUpdate {
             from: from.to_string(),
             to: to.to_string(),
+            window: lenient_window(value.get("window")),
         }),
         _ => None,
     })

@@ -8,21 +8,31 @@
 //! dieser Sitzung frühestens nach [`SNOOZE_SECS`] wieder von allein. Gemerkt wird das nur im
 //! Speicher; beim nächsten Programmstart kommt sie wieder, wenn die Prüfung wieder ein Update
 //! findet. „Diese Version überspringen“ speichert die Version
-//! ([`Workspace::set_skipped_version`]); die Prüfung bietet sie dann nie wieder an, eine neuere
-//! aber schon.
+//! ([`Workspace::set_skipped_version`]); die Prüfung beim Start bietet sie dann nicht wieder an,
+//! eine neuere aber schon. Die Suche von Hand übergeht das Überspringen und hebt „Später“ auf;
+//! in den Einstellungen nimmt „Doch wieder anzeigen“ das Überspringen zurück.
 //!
 //! **Aktualisieren.** Nach „Jetzt aktualisieren“ bleibt die Meldung offen und zeigt statt der
-//! Knöpfe den Stand ([`InstallView`]): Fortschritt mit „Abbrechen“, „Neustart …“ oder einen
-//! Fehler mit „Download-Seite öffnen“ und „Schließen“. ✕ und Esc blenden sie dann nur aus (der
+//! Knöpfe den Stand ([`InstallView`]): Fortschritt mit „Abbrechen“, „Update ist bereit …“
+//! oder einen Fehler. Ein Fehler steht deutlich da: Titel [`FAILED_TITLE`], die Meldung mit
+//! Warnsymbol in Warnfarbe über den Patchnotes (die weiter zu lesen sind), Knöpfe „Erneut
+//! versuchen“ (wo es helfen kann), „Download-Seite öffnen“ und „Schließen“. Während des
+//! Neustarts bleibt die Fußzeile leer; dann sagt es der Kasten über allem. ✕ und Esc blenden
+//! sie während des Updates nur aus (der
 //! Download läuft weiter, die Statuszeile zeigt den Stand); nach einem Fehler schließen sie wie
 //! „Schließen“. Den Ablauf selbst führt [`crate::update_install`] mit der App aus. Nach dem
 //! Neustart zeigt [`show_after_update`] einmal „Aktualisiert auf Version X“.
+//!
+//! **Lage.** Die Meldung steht fest unten rechts über der Verlaufsleiste ([`notice_area`]), so
+//! schmal, dass mittige Fenster wie „Quader erzeugen“ neben ihr Platz haben und sie nicht
+//! verdecken. Der Hinweis nach einem Update steht mittig.
 //!
 //! Wann die Meldung von allein erscheint, welche Fenster sie schließen und welche sie schließt,
 //! regelt die App (`app::show_update_notice`, `app::open_update_notice`,
 //! `app::enforce_update_rules`).
 
 use crate::dialog::{Dialog, DialogSize};
+use crate::icons::{self, Icon};
 use crate::update_install::{self, AfterUpdate};
 use crate::workspace::Workspace;
 use crate::{fonts, running_version, theme};
@@ -32,7 +42,7 @@ use planora_update::{NoteBlock, Span, Update, Version, parse_notes};
 pub const INSTALL_NOW: &str = "Jetzt aktualisieren";
 /// Knopf: schließen, frühestens nach [`SNOOZE_SECS`] wieder von allein zeigen.
 pub const LATER: &str = "Später";
-/// Knopf: diese Version nie wieder anbieten.
+/// Knopf: diese Version beim Start nicht wieder anbieten (die Suche von Hand zeigt sie weiter).
 pub const SKIP: &str = "Diese Version überspringen";
 /// Unter den Patchnotes, wenn sie wegen der Obergrenzen gekürzt sind.
 pub const MORE_ON_GITHUB: &str = "… und weitere Änderungen auf GitHub.";
@@ -60,6 +70,12 @@ pub const CLOSE: &str = "Schließen";
 pub const NOTES_ON_GITHUB: &str = "Was neu ist, steht auf GitHub.";
 /// Knopf des Hinweises nach einem Update.
 pub const OK: &str = "OK";
+/// Titel der Meldung nach einem Fehler.
+pub const FAILED_TITLE: &str = "Update hat nicht geklappt";
+/// Knopf nach einem Fehler: das Update noch einmal versuchen.
+pub const RETRY: &str = "Erneut versuchen";
+/// Größe des Warnsymbols vor einer Fehlermeldung.
+const WARNING_ICON_SIZE: f32 = 20.0;
 
 /// Titel: „Neue Version verfügbar: 0.2.0-dev.2 (Dev)“.
 pub fn title(v: &Version) -> String {
@@ -100,6 +116,8 @@ pub enum UpdateAction {
     CloseFailed,
     /// „Download-Seite öffnen“ nach einem Fehler.
     OpenDownloadPage,
+    /// „Erneut versuchen“ nach einem Fehler.
+    Retry,
 }
 
 /// Was die Meldung nach „Jetzt aktualisieren“ statt der Knöpfe zeigt.
@@ -111,10 +129,11 @@ pub enum InstallView<'a> {
     Downloading { done: u64, total: u64 },
     /// Fertig geladen; der Neustart wartet, bis nichts mehr offen ist.
     Waiting,
-    /// Die neue Version wird gestartet.
+    /// Die neue Version wird gestartet (die Fußzeile bleibt leer, der Kasten über allem sagt es).
     Restarting,
-    /// Fehlermeldung mit „Download-Seite öffnen“ und „Schließen“.
-    Failed(&'a str),
+    /// Fehlermeldung mit „Download-Seite öffnen“ und „Schließen“, bei `retry` auch „Erneut
+    /// versuchen“.
+    Failed { message: &'a str, retry: bool },
 }
 
 /// Zustand der Meldung zwischen den Bildern (gehört der App).
@@ -192,7 +211,7 @@ impl UpdateDialog {
                     let _ = ws.set_skipped_version(Some(update.latest.version));
                 }
             }
-            UpdateAction::InstallNow => {
+            UpdateAction::InstallNow | UpdateAction::Retry => {
                 self.installing = true;
                 self.install_hidden = false;
             }
@@ -220,9 +239,25 @@ pub fn take_escape(ctx: &egui::Context, state: &UpdateDialog, prompt_open: bool)
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
 }
 
-/// Höhe der Patchnotes: was das Fenster hergibt, höchstens [`NOTES_MAX_H`].
-fn notes_height(ctx: &egui::Context) -> f32 {
-    (ctx.content_rect().height() - NOTES_RESERVE_H).clamp(120.0, NOTES_MAX_H)
+/// Höhe der Patchnotes: was ein Bereich der Höhe `height` hergibt, höchstens [`NOTES_MAX_H`].
+fn notes_height(height: f32) -> f32 {
+    (height - NOTES_RESERVE_H).clamp(120.0, NOTES_MAX_H)
+}
+
+/// Bereich der Meldung: rechts im Fenster, unten bis über die Verlaufsleiste, oben bis unter die
+/// Menüleiste (je mit Rand). Die Meldung steht unten rechts darin.
+pub fn notice_area(content: egui::Rect) -> egui::Rect {
+    use crate::shell::{BOTTOM_H, GAP, HISTORY_H, SHELL_INSET, TOP_H};
+    egui::Rect::from_min_max(
+        egui::pos2(
+            content.left() + SHELL_INSET,
+            content.top() + SHELL_INSET + TOP_H + GAP,
+        ),
+        egui::pos2(
+            content.right() - SHELL_INSET,
+            content.bottom() - (SHELL_INSET + BOTTOM_H + GAP + HISTORY_H + GAP),
+        ),
+    )
 }
 
 /// Zeichnet die Meldung, solange `state.open` gilt, und liefert die Wahl (✕ wie
@@ -245,21 +280,36 @@ pub fn show(
     let dark = ctx.global_style().visuals.dark_mode;
     let mut open = true;
     let mut action = None;
-    Dialog::new(title(&update.latest.version), DialogSize::Wide)
+    let failure = match install {
+        InstallView::Failed { message, .. } if state.installing => Some(message),
+        _ => None,
+    };
+    let heading = match failure {
+        Some(_) => FAILED_TITLE.to_string(),
+        None => title(&update.latest.version),
+    };
+    let area = notice_area(ctx.content_rect());
+    Dialog::new(heading, DialogSize::Normal)
         .id(egui::Id::new(WINDOW_ID))
-        .center_on_open()
+        .bottom_right_in(area)
         .open(&mut open)
         .show_with_footer(
             ctx,
             |ui| {
+                if let Some(message) = failure {
+                    failure_box(ui, message, dark);
+                    ui.add_space(theme::SPACE_3);
+                }
                 ui.label(running_line(&running_version()));
                 ui.add_space(theme::SPACE_2);
+                // Mit Fehlermeldung bleibt für die Patchnotes etwas weniger Höhe.
+                let reserve = if failure.is_some() { 80.0 } else { 0.0 };
                 theme::scroll_area(
                     ui,
                     egui::ScrollArea::vertical()
                         .id_salt("update_patchnotes")
                         .auto_shrink([false, true])
-                        .max_height(notes_height(ctx)),
+                        .max_height(notes_height(area.height() - reserve)),
                     |ui| notes(ui, update, dark),
                 );
                 if update.truncated {
@@ -289,7 +339,7 @@ pub fn show(
             },
         );
     if !open && action.is_none() {
-        action = Some(state.close_action(matches!(install, InstallView::Failed(_))));
+        action = Some(state.close_action(matches!(install, InstallView::Failed { .. })));
     }
     if let Some(a) = action {
         state.apply(ws, a, crate::update_check::now_unix());
@@ -305,9 +355,8 @@ fn install_footer(ui: &mut egui::Ui, install: InstallView<'_>, dark: bool) -> Op
         InstallView::Preparing => {
             ui.label(PREPARING);
         }
-        InstallView::Restarting => {
-            ui.label(update_install::RESTARTING);
-        }
+        // Der Kasten über allem sagt es schon ([`update_install::RESTART_BOX`]).
+        InstallView::Restarting => {}
         InstallView::Waiting => {
             ui.label(update_install::WAITING);
         }
@@ -323,17 +372,21 @@ fn install_footer(ui: &mut egui::Ui, install: InstallView<'_>, dark: bool) -> Op
                 }
             });
         }
-        InstallView::Failed(message) => {
-            ui.add(egui::Label::new(message).wrap());
-            ui.add_space(theme::SPACE_2);
+        // Die Meldung selbst steht oben im Inhalt ([`failure_box`]).
+        InstallView::Failed { retry, .. } => {
             ui.horizontal(|ui| {
-                if ui
-                    .add(theme::primary_button(
+                if retry && ui.add(theme::primary_button(RETRY, dark)).clicked() {
+                    action = Some(UpdateAction::Retry);
+                }
+                let page = if retry {
+                    ui.button(update_install::OPEN_DOWNLOAD_PAGE)
+                } else {
+                    ui.add(theme::primary_button(
                         update_install::OPEN_DOWNLOAD_PAGE,
                         dark,
                     ))
-                    .clicked()
-                {
+                };
+                if page.clicked() {
                     action = Some(UpdateAction::OpenDownloadPage);
                 }
                 if ui.button(CLOSE).clicked() {
@@ -343,6 +396,23 @@ fn install_footer(ui: &mut egui::Ui, install: InstallView<'_>, dark: bool) -> Op
         }
     }
     action
+}
+
+/// Fehlermeldung oben in der Meldung: Warnsymbol und Text in Warnfarbe, in einem Kasten mit
+/// Rand in Warnfarbe, damit sie nicht zu übersehen ist.
+fn failure_box(ui: &mut egui::Ui, message: &str, dark: bool) {
+    let warning = theme::palette(dark).warning;
+    egui::Frame::new()
+        .stroke(egui::Stroke::new(1.0, warning))
+        .corner_radius(4.0)
+        .inner_margin(theme::SPACE_2)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_top(|ui| {
+                ui.label(icons::text(Icon::Warning, WARNING_ICON_SIZE, warning));
+                ui.add(egui::Label::new(egui::RichText::new(message).color(warning)).wrap());
+            });
+        });
 }
 
 /// Hinweis „Aktualisiert auf Version X“ nach einem Update, einmal: mit den Patchnotes dieser
@@ -375,7 +445,7 @@ pub fn show_after_update(ctx: &egui::Context, after: &mut Option<AfterUpdate>) {
                 egui::ScrollArea::vertical()
                     .id_salt("update_done_notes")
                     .auto_shrink([false, true])
-                    .max_height(notes_height(ctx)),
+                    .max_height(notes_height(ctx.content_rect().height())),
                 |ui| {
                     for block in &blocks {
                         note_block(ui, block, dark);

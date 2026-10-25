@@ -21,7 +21,7 @@ pub struct CheckRequest {
     pub running: Version,
     /// Update-Kanal des Nutzers.
     pub channel: Channel,
-    /// Übersprungene Version (wird nicht angeboten).
+    /// Übersprungene Version (wird nicht angeboten); bei der Suche von Hand keine.
     pub skipped: Option<Version>,
     /// Vom Knopf „Jetzt nach Updates suchen“ (dann gibt es auch ohne Update einen Hinweis).
     pub manual: bool,

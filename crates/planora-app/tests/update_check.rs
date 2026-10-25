@@ -9,10 +9,11 @@ use eframe::App as _;
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::settings_window::{
-    CHECK_FAILED, CHECK_NOW, CHECK_RUNNING, CheckHint, NOT_ON_THIS_SYSTEM, UP_TO_DATE,
-    update_found_line,
+    CHECK_FAILED, CHECK_NOW, CHECK_RUNNING, CheckHint, NOT_ON_THIS_SYSTEM, SHOW_NOTICE, UNSKIP,
+    UP_TO_DATE, skipped_line, update_found_line,
 };
 use planora_app::update_check::{CheckRequest, UpdateChecker, now_unix, records_check};
+use planora_app::update_dialog::{INSTALL_NOW, LATER, SKIP};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, theme};
 use planora_project::config::Config;
@@ -580,4 +581,96 @@ fn test_app_never_reaches_the_network() {
     h.until_idle();
     assert_eq!(h.app.ws_mut().last_update_check(), None);
     assert!(!h.cfg.exists());
+}
+
+/// Die Suche von Hand übergeht eine übersprungene Version: sie meldet sie wieder (mit der
+/// Meldung samt Jetzt, Später, Überspringen), statt „Du hast die neueste Version.“ zu sagen. Die
+/// Prüfung beim Start beachtet das Überspringen weiter.
+#[test]
+fn manual_check_ignores_the_skipped_version() {
+    let (mut ws, cfg) = workspace("planora-update-knopf-uebersprungen");
+    assert!(ws.set_skipped_version(Some(v("99.0.0-dev.1"))));
+    let fake = Fake::new(Ok(newer_list()));
+    let mut h = Harness::new(ws, cfg, fake.clone());
+    // Beim Start: übersprungen, nichts vorgemerkt.
+    h.until(|_| fake.calls() == 1);
+    h.until_idle();
+    assert_eq!(h.app.pending_notice(), None);
+    // Nach „Später“ in dieser Sitzung: die Suche von Hand zeigt die Meldung trotzdem wieder.
+    h.app.update_dialog_mut().snooze_until = Some(now_unix() + 3600);
+    h.open_settings();
+    h.click(CHECK_NOW);
+    let seen = h.until_idle();
+    assert_eq!(fake.calls(), 2);
+    assert!(!has(&seen, UP_TO_DATE));
+    assert!(has(&seen, &update_found_line(&v("99.0.0-dev.1"))));
+    assert_eq!(
+        h.app.pending_notice().map(|u| u.latest.version),
+        Some(v("99.0.0-dev.1"))
+    );
+    // „Meldung anzeigen“ öffnet sie (die Einstellungen gehen dabei zu).
+    h.click(SHOW_NOTICE);
+    for _ in 0..4 {
+        h.frame(vec![]);
+    }
+    assert!(h.app.update_dialog_mut().open);
+    assert!(!h.app.windows_mut().2.is_open());
+    let seen = h.frame(vec![]);
+    for t in [INSTALL_NOW, LATER, SKIP] {
+        assert!(has(&seen, t), "{t}");
+    }
+    // Das Überspringen selbst bleibt gespeichert (die Prüfung beim Start beachtet es weiter).
+    assert_eq!(h.app.ws_mut().skipped_version(), Some(v("99.0.0-dev.1")));
+}
+
+/// Kommt der Knopf, während die Prüfung beim Start (die das Überspringen beachtet) noch läuft,
+/// fragt die App danach noch einmal ohne das Überspringen.
+#[test]
+fn manual_check_during_start_check_asks_again_without_the_skip() {
+    let (mut ws, cfg) = workspace("planora-update-knopf-start-uebersprungen");
+    assert!(ws.set_skipped_version(Some(v("99.0.0-dev.1"))));
+    let fake = Fake::new(Ok(newer_list()));
+    let (open, gate) = mpsc::channel();
+    *fake.gate.lock().unwrap() = Some(gate);
+    let mut h = Harness::new(ws, cfg, fake.clone());
+    h.frame(vec![]);
+    assert!(h.app.update_check_running());
+    h.open_settings();
+    h.click(CHECK_NOW);
+    open.send(()).unwrap();
+    h.until(|_| fake.calls() == 2);
+    let seen = h.until_idle();
+    assert!(has(&seen, &update_found_line(&v("99.0.0-dev.1"))));
+    assert!(h.app.pending_notice().is_some());
+}
+
+/// In den Einstellungen steht eine übersprungene Version mit dem Knopf „Doch wieder anzeigen“:
+/// er hebt das Überspringen auf (gespeichert) und sucht gleich nach.
+#[test]
+fn settings_show_the_skipped_version_and_undo_it() {
+    let (mut ws, cfg) = workspace("planora-update-uebersprungen-zurueck");
+    assert!(ws.set_last_update_check(now_unix()));
+    let fake = Fake::new(Ok(newer_list()));
+    let mut h = Harness::new(ws, cfg.clone(), fake.clone());
+    h.open_settings();
+    let seen = h.frame(vec![]);
+    assert!(!has(&seen, UNSKIP), "nichts übersprungen");
+    assert!(h.app.ws_mut().set_skipped_version(Some(v("99.0.0-dev.1"))));
+    h.frame(vec![]);
+    let seen = h.frame(vec![]);
+    assert!(has(&seen, &skipped_line(&v("99.0.0-dev.1"))));
+    assert_eq!(
+        skipped_line(&v("0.2.0-dev.2")),
+        "Übersprungen: Version 0.2.0-dev.2"
+    );
+    assert!(has(&seen, UNSKIP));
+    assert_eq!(UNSKIP, "Doch wieder anzeigen");
+    h.click(UNSKIP);
+    let seen = h.until_idle();
+    assert_eq!(h.app.ws_mut().skipped_version(), None);
+    assert_eq!(Config::read_from(&cfg).unwrap().skipped_version, None);
+    assert!(!has(&seen, UNSKIP));
+    assert_eq!(fake.calls(), 1, "gleich gesucht");
+    assert!(has(&seen, &update_found_line(&v("99.0.0-dev.1"))));
+    assert!(h.app.pending_notice().is_some());
 }

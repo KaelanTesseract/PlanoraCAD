@@ -16,7 +16,7 @@ pub fn show(ctx: &egui::Context, ws: &mut Workspace) {
         return;
     };
     match prompt {
-        Prompt::SaveChanges { tab, .. } => save_changes(ctx, ws, tab),
+        Prompt::SaveChanges { tab, then } => save_changes(ctx, ws, tab, then),
         Prompt::SaveComment {
             tab,
             then,
@@ -50,11 +50,32 @@ fn tab_name(ws: &Workspace, tab: u64) -> String {
         .unwrap_or_default()
 }
 
-fn save_changes(ctx: &egui::Context, ws: &mut Workspace, tab: u64) {
+/// Titel der Rückfrage, wenn PlanoraCAD für ein Update neu startet.
+pub const SAVE_FOR_UPDATE_TITLE: &str = "Neustart für das Update";
+
+/// Text der Rückfrage beim Neustart für ein Update.
+pub fn save_for_update_text(name: &str) -> String {
+    format!(
+        "Zum Aktualisieren muss PlanoraCAD neu starten. Ungespeicherte Änderungen in „{name}“ speichern?"
+    )
+}
+
+/// „Änderungen speichern?“; beim Beenden für ein Update ([`Workspace::quit_for_update`]) mit
+/// Titel und Text, die das Update nennen. Die Knöpfe sind dieselben.
+fn save_changes(ctx: &egui::Context, ws: &mut Workspace, tab: u64, then: After) {
     let name = tab_name(ws, tab);
     let mut choice = None;
-    window(ctx, "save_changes", "Änderungen speichern?", |ui| {
-        ui.label(format!("„{name}“ hat ungespeicherte Änderungen."));
+    let for_update = ws.quit_for_update && then == After::Quit;
+    let (title, text) = if for_update {
+        (SAVE_FOR_UPDATE_TITLE, save_for_update_text(&name))
+    } else {
+        (
+            "Änderungen speichern?",
+            format!("„{name}“ hat ungespeicherte Änderungen."),
+        )
+    };
+    window(ctx, "save_changes", title, |ui| {
+        ui.add(egui::Label::new(text).wrap());
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui.button("Speichern").clicked() {

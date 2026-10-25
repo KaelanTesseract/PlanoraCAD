@@ -14,6 +14,15 @@ fn main() -> eframe::Result {
         .with_inner_size([1400.0, 900.0])
         // Darunter überlappen sich die schwebenden Felder.
         .with_min_inner_size([800.0, 600.0]);
+    // Nach einem Update öffnet das Fenster in Größe, Lage und Zustand der alten Version (sie hat
+    // es mit dem begonnenen Update in die Konfiguration geschrieben).
+    if after_update
+        && let Some(window) = planora_project::config::Config::load()
+            .update_pending
+            .and_then(|p| p.window)
+    {
+        viewport = planora_app::update_install::restore_window(viewport, &window);
+    }
     // Ohne lesbares Symbol bleibt das Standardsymbol des Systems.
     if let Some(icon) = planora_app::logo::window_icon() {
         viewport = viewport.with_icon(icon);

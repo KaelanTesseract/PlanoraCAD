@@ -13,8 +13,12 @@
 //! speichern (gelingt das nicht, wird nichts ausgetauscht), austauschen, die neue exe mit
 //! [`AFTER_UPDATE_ARG`] starten und bis zu [`MARKER_WAIT`] auf die Datei
 //! `planoracad.update-ok` mit der Zielversion als Inhalt warten. Kommt sie, beendet sich das
-//! Programm; sonst beendet es die neue Version ([`NewProcess::stop`]), legt den alten Stand
-//! zurück, überspringt die Version und läuft weiter. Von der Prüfung bis zum Ende ist die
+//! Programm; endet die neue Version vorher von selbst ([`NewProcess::exited`]) oder läuft die
+//! Frist ab, beendet es die neue Version ([`NewProcess::stop`]), legt den alten Stand zurück und
+//! läuft weiter; die Version wird weiter angeboten (nicht übersprungen), die Meldung
+//! [`not_started`] erklärt es. Vor dem Austausch merkt es sich Größe, Lage und Zustand des
+//! Fensters ([`window_state`]); die neue Version öffnet ihr Fenster so ([`restore_window`]).
+//! Von der Prüfung bis zum Ende ist die
 //! Bedienung gesperrt. Entsteht trotzdem neue ungespeicherte Arbeit, geht es vor dem Austausch
 //! zurück zur Rückfrage; danach wird die neue Version beendet und der alte Stand zurückgelegt
 //! ([`RESTART_STOPPED`]), nie ohne Rückfrage geschlossen. Die Schritte nach dem Download stehen
@@ -35,6 +39,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::workspace::Workspace;
+use planora_project::config::WindowState;
 use planora_update::install::{
     Downloader, InstallError, MAX_CHECKSUM_BYTES, Paths, checksum_hex, cleanup_old,
     discard_download, download_limit, exe_dir_writable, file_matches_sha256, release_url_ok,
@@ -75,10 +80,11 @@ pub const STILL_STOPPING: &str =
 /// Version wurde beendet, der alte Stand liegt zurück, die Version wird nicht übersprungen.
 pub const RESTART_STOPPED: &str = "Der Neustart wurde abgebrochen, weil es neue ungespeicherte Änderungen gibt. PlanoraCAD läuft in der bisherigen Version weiter. Du kannst das Update später noch einmal starten.";
 
-/// Meldung, wenn die neue Version sich nicht zurückmeldet und der alte Stand zurückliegt.
-pub fn not_started(to: &Version) -> String {
+/// Meldung, wenn die neue Version `to` sich nicht zurückmeldet (oder gleich wieder endet) und der
+/// alte Stand `from` zurückliegt. Die Version wird weiter angeboten.
+pub fn not_started(to: &Version, from: &Version) -> String {
     format!(
-        "Die neue Version {to} ist nicht richtig gestartet. PlanoraCAD läuft in der bisherigen Version weiter; Version {to} wird übersprungen."
+        "Das Update auf Version {to} hat nicht geklappt, du bleibst auf Version {from}. Du kannst es später erneut versuchen."
     )
 }
 
@@ -416,6 +422,9 @@ pub trait NewProcess {
     /// rechtzeitig meldet oder der Neustart abgebrochen wird; sonst läuft sie weiter). Fehler,
     /// etwa weil sie schon von selbst geendet hat, werden übergangen.
     fn stop(&mut self);
+
+    /// Hat die neue Version schon von selbst geendet? Fragt nur nach, wartet nie.
+    fn exited(&mut self) -> bool;
 }
 
 /// Startet die neue exe als eigenen Prozess (nur Windows; sonst Fehler).
@@ -447,6 +456,10 @@ impl NewProcess for ChildProcess {
     fn stop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
+    }
+
+    fn exited(&mut self) -> bool {
+        matches!(self.0.try_wait(), Ok(Some(_)))
     }
 }
 
@@ -568,8 +581,10 @@ pub fn status_text(state: &InstallState, restarting: bool) -> String {
     }
 }
 
-/// Statuszeile und Meldung, solange die neue Version gestartet wird.
+/// Statuszeile, solange die neue Version gestartet wird.
 pub const RESTARTING: &str = "Neustart …";
+/// Kasten über allem, solange die neue Version gestartet wird (die Bedienung ist gesperrt).
+pub const RESTART_BOX: &str = "PlanoraCAD startet für das Update neu. Bitte einen Moment warten.";
 /// Statuszeile nach einem gescheiterten Update.
 pub const FAILED_SHORT: &str = "Update fehlgeschlagen";
 
@@ -594,4 +609,35 @@ pub fn fraction(done: u64, total: u64) -> f32 {
     } else {
         (done.min(total) as f64 / total as f64) as f32
     }
+}
+
+/// Kleinste Innenfläche des Programmfensters (wie `with_min_inner_size` im Programm).
+pub const MIN_WINDOW: egui::Vec2 = egui::vec2(800.0, 600.0);
+
+/// Größe, Lage und Zustand des Programmfensters, wie eframe sie meldet: Lage der Außenkante,
+/// Größe der Innenfläche, maximiert oder nicht. Ohne Größe oder Lage keines (etwa in Tests).
+pub fn window_state(info: &egui::ViewportInfo) -> Option<WindowState> {
+    let inner = info.inner_rect?;
+    let outer = info.outer_rect?;
+    let ok = [outer.min.x, outer.min.y, inner.width(), inner.height()]
+        .iter()
+        .all(|n| n.is_finite())
+        && inner.width() > 0.0
+        && inner.height() > 0.0;
+    ok.then(|| WindowState {
+        x: outer.min.x,
+        y: outer.min.y,
+        width: inner.width(),
+        height: inner.height(),
+        maximized: info.maximized.unwrap_or(false),
+    })
+}
+
+/// Öffnet das Fenster in Größe, Lage und Zustand `w` (mindestens [`MIN_WINDOW`]); so übernimmt
+/// die neue Version nach einem Update das Fenster der alten.
+pub fn restore_window(builder: egui::ViewportBuilder, w: &WindowState) -> egui::ViewportBuilder {
+    builder
+        .with_inner_size(egui::vec2(w.width, w.height).max(MIN_WINDOW))
+        .with_position(egui::pos2(w.x, w.y))
+        .with_maximized(w.maximized)
 }
