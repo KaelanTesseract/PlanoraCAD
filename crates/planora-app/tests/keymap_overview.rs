@@ -442,6 +442,31 @@ fn shows_current_not_default_keys_after_a_change() {
 }
 
 #[test]
+fn view_menu_entry_shows_the_new_key_after_rebinding() {
+    let mut r = rig();
+    let mut km = r.ws().keymap.clone();
+    km.set(Action::ShowShortcuts, 0, chord(Key::J, false));
+    r.ws().keymap = km;
+    r.open_view_menu();
+    assert!(r.sees(VIEW_SHORTCUTS_ENTRY), "{:?}", r.texts());
+    assert!(r.sees("J"), "neue Taste im Menü: {:?}", r.texts());
+    assert!(!r.sees("S"), "alte Taste weg: {:?}", r.texts());
+}
+
+#[test]
+fn overview_does_not_open_over_a_prompt() {
+    let mut r = rig();
+    r.ws().prompt = Some(planora_app::workspace::Prompt::Notice("Hinweis".into()));
+    r.settle();
+    {
+        let (ws, projects, settings) = r.app.windows_mut();
+        let mut overview = OverviewState::default();
+        planora_app::app::open_overview(ws, projects, settings, &mut overview);
+        assert!(!overview.open, "bei offener Rückfrage bleibt sie zu");
+    }
+}
+
+#[test]
 fn overview_follows_window_exclusion_rules() {
     let mut r = rig();
     // Offen, ohne Fokus im Suchfeld: Modelltasten und Rückgängig sind gesperrt wie bei jedem

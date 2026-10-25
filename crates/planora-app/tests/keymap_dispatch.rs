@@ -496,7 +496,7 @@ fn area_follows_sketch_and_drawing() {
 // ---- Sperren -------------------------------------------------------------------------------
 
 #[test]
-fn no_key_fires_while_typing_or_prompt_or_second_pass() {
+fn no_key_fires_while_typing_or_prompt() {
     // Tippen: das Namensfeld im Fenster „Umbenennen“ hat die Tastatur.
     let mut w = ws();
     let id = w
@@ -527,8 +527,13 @@ fn no_key_fires_while_typing_or_prompt_or_second_pass() {
     rig.press(Key::N, Modifiers::COMMAND);
     assert_eq!(rig.tabs(), 1, "bei offener Rückfrage kein neuer Tab");
     assert!(rig.left_over, "die Taste bleibt liegen");
+}
 
-    // Zwei Durchgänge: nur der erste löst aus.
+#[test]
+fn key_runs_once_even_when_the_frame_needs_a_second_pass() {
+    // egui gibt die rohen Ereignisse nur dem ersten Durchgang; der zweite sieht die Taste gar
+    // nicht mehr. Der Test belegt also das Ergebnis (genau ein Tab), nicht die Sperre
+    // `current_pass_index() != 0` in `shortcuts`, die damit nur eine zusätzliche Absicherung ist.
     let mut rig = Rig::new(ws());
     rig.run(vec![key(Key::N, Modifiers::COMMAND)], true);
     assert_eq!(rig.passes, 2);
