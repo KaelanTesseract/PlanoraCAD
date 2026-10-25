@@ -21,11 +21,26 @@ thread_local! {
 /// Neuer Ordner `%TEMP%\<prefix>-<id>` für die Bibliothek eines Tests; er wird nach dem Test
 /// gelöscht, damit Läufe keine Ordner ansammeln. (Der Ordner selbst wird erst von
 /// `Library::open` angelegt.)
+///
+/// `%TEMP%` wird vorher in die lange Schreibweise gebracht (ohne `\\?\`): Auf manchen Rechnern
+/// (etwa den Windows-Runnern von GitHub) steht dort ein 8.3-Kurzname wie `RUNNER~1`. Die Tests
+/// vergleichen den übergebenen Pfad mit dem kanonischen der Bibliothek; ein Kurzname ist eine
+/// andere Schreibweise, die kein Vergleich ohne Dateisystemzugriff erkennen kann.
 #[allow(dead_code)]
 pub fn temp_root(prefix: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("{prefix}-{}", planora_project::fsutil::new_id()));
+    let root = long_temp_dir().join(format!("{prefix}-{}", planora_project::fsutil::new_id()));
     ROOTS.with(|r| r.borrow_mut().0.push(root.clone()));
     root
+}
+
+/// `std::env::temp_dir()` in langer Schreibweise, ohne Präfix `\\?\`.
+#[allow(dead_code)]
+fn long_temp_dir() -> PathBuf {
+    let tmp = std::env::temp_dir();
+    match std::fs::canonicalize(&tmp) {
+        Ok(c) => PathBuf::from(planora_app::file_chooser::display_path(&c)),
+        Err(_) => tmp,
+    }
 }
 
 /// Ein Text im Bild mit seinem Rechteck und dem Ausschnitt, in dem er gezeichnet wird.
