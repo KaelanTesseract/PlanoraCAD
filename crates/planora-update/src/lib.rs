@@ -1,7 +1,11 @@
-//! Update-Funktion, reine Logik ohne Netz und Oberfläche: Versionsnummern und Kanäle,
+//! Update-Funktion ohne Oberfläche: Versionsnummern und Kanäle,
 //! die Release-Liste von GitHub lesen, das passende Update wählen und Patchnotes zerlegen.
+//! Dazu die Prüfung auf neue Versionen ([`check`]) hinter einer austauschbaren Quelle; nur
+//! [`check::HttpSource`] geht ins Netz.
 
 mod channel;
+pub mod check;
+mod net;
 mod notes;
 mod release;
 mod version;

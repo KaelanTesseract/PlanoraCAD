@@ -46,6 +46,10 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 # Ortszeit mit Sommerzeit zum jeweiligen Zeitpunkt (Projekte-Fenster, Aufgabe 0; am 2026-10-23 geprüft:
 # MIT OR Apache-2.0, veröffentlicht 2026-06-04). Nur "clock": unter Windows kommt kein neues Unterpaket dazu.
 chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
+# Update-Prüfung (Aufgabe Update-Funktion 3): kleiner blockierender HTTP-Client mit der
+# Windows-eigenen TLS-Schicht (Schannel über native-tls). Ohne rustls/ring und ohne die
+# webpki-Stammzertifikate (CDLA-Lizenz); geprüft wird gegen den Zertifikatsspeicher von Windows.
+ureq = { version = "3.5", default-features = false, features = ["native-tls-no-default"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
