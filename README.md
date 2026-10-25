@@ -645,6 +645,17 @@ Das Programm kann sich selbst aktualisieren (nur unter Windows). Beim Start frag
 
 Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich die Suche beim Start abschalten oder von Hand starten.
 
+**Datenschutz**
+- Das Programm fragt bei `api.github.com` nach der Liste der Veröffentlichungen. Das passiert beim Start, höchstens einmal am Tag, und nur, solange die Suche in den Einstellungen eingeschaltet ist. Zum Herunterladen verbindet es sich außerdem mit GitHub (`github.com` und die Download-Server von GitHub).
+- Eigene Daten schickt das Programm nicht: keine Projekte, keine Namen, keine Kennung des Rechners. Wie bei jeder Internetverbindung sieht GitHub die Internetadresse des Rechners und den Namen des Programms mit seiner Versionsnummer.
+- Wer die Suche abschaltet, bekommt keine Meldungen mehr und das Programm verbindet sich nie von selbst. Die Versionen stehen weiter auf der Seite der Veröffentlichungen im Repository.
+
+**Was nicht geht**
+- Die Programmdatei ist nicht signiert. Windows kann beim ersten Start eine Warnung zeigen („SmartScreen“). Die Prüfsumme schützt nur vor Fehlern bei der Übertragung, nicht davor, dass jemand die Veröffentlichung selbst austauscht.
+- Updates gibt es nur für Windows (64 Bit). Unter Linux und macOS zeigt das Programm nur den Hinweis auf die Download-Seite.
+- Es gibt kein Zurück auf eine ältere Version. Das Programm bietet nur neuere Versionen an. Wer eine ältere braucht, lädt sie von Hand herunter und ersetzt `planoracad.exe`.
+- Liegt das Programm in einem geschützten Ordner (zum Beispiel unter „Programme“), kann es sich nicht selbst ersetzen. Es zeigt dann einen Knopf zur Download-Seite.
+
 **Kanäle**
 - **Dev:** Entwicklerversionen, zum Beispiel `0.2.0-dev.1`. Sie sind noch nicht für den Alltag gedacht. Zurzeit gibt es nur diesen Kanal.
 - **Beta** (`0.9.0-beta.1`) und **Stabil** (`1.0.0`) kommen später dazu. Wer Dev gewählt hat, bekommt auch Beta- und stabile Versionen, sofern sie neuer sind.

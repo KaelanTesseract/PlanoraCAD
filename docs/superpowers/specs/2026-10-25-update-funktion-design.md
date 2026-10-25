@@ -128,3 +128,21 @@ Jede Etappe mit Sichtprüfung im echten Fenster bei 1920 × 1080; echtes Update 
 7. **Zuordnung:** Das Programm akzeptiert genau die Dateinamen `planoracad-windows-x64.exe` und `planoracad-windows-x64.sha256`; fehlt eine, ist die Version nicht installierbar (Meldung, keine Aktualisierung).
 8. **Quelle fest:** Der Repository-Name steht fest im Programm (`KaelanTesseract/PlanoraCAD`), nicht einstellbar; Downloads werden nur von der Release-URL dieses Repositorys akzeptiert.
 9. **Rückfrage bei ungespeicherter Arbeit:** gleiche Mechanik wie beim Schließen (`close_requested`-Weg: Speichern, Verwerfen, Abbrechen je Tab); der Bauer prüft den Code und ruft sie für den Neustart auf. Ein Abbruch in der Rückfrage bricht das Update ab, ohne die exe angefasst zu haben.
+
+## Tatsächliche Ergebnisse (Stand nach Aufgabe 7, 2026-10-25)
+
+Gebaut ist alles aus den Festlegungen oben. Folgendes ist anders gekommen oder dazugekommen:
+
+1. **Frist für die Rückmeldung der neuen Version: 30 Sekunden statt 10.** Auf einem Rechner mit Virenprüfung und Grafikstart kann die neue Version länger brauchen. Die neue Version schreibt `planoracad.update-ok` gleich nach dem Start des Fensters und der Grafik; in der Datei steht ihre Versionsnummer. Die alte Version nimmt nur eine Datei mit der Zielversion an, so dass eine übrig gebliebene Datei aus einem früheren Versuch nicht zählt.
+2. **Neustart wartet auf einen ruhigen Moment.** Eine offene Rückfrage, ein laufender Export oder ein Angebot zur Wiederherstellung unterbrechen den Neustart nicht mehr; das Fenster zeigt „Update bereit, wartet auf …“ und macht danach von allein weiter.
+3. **Prüfsumme wird noch einmal unmittelbar vor dem Austausch geprüft**, weil zwei laufende Programme dieselbe `.new`-Datei benutzen könnten.
+4. **Änderungsnotizen** gelangen über die kleine Datei `planoracad-update-notes.md` neben der Konfiguration in die neue Version, weil es keinen Zwischenspeicher der letzten Prüfung gibt und die neue Version wegen des 24-Stunden-Takts nicht selbst nachfragt.
+5. **Eigene SHA-256-Berechnung** (FIPS 180-4, mit den Prüfvektoren getestet), weil keine passende Bibliothek ohne neue Lizenz zur Verfügung stand.
+6. **HTTP-Client:** `ureq` 3.5 mit der Windows-eigenen TLS-Schicht (Schannel); `deny.toml` blieb unverändert. Weiterleitungen beim Herunterladen werden von Hand gefolgt (höchstens 5, nur zu `github.com` und `*.githubusercontent.com`). Die Abfrage der Liste hat eine Gesamtzeit von 30 s (je Abschnitt 10 s) statt der 10 s im Entwurf.
+7. **Testschalter `update-test-source`:** Er erlaubt nur für Tests eine lokale Quelle (`http://127.0.0.1`). Er ist standardmäßig aus, und `release.yml` baut ohne ihn.
+8. **Stiller Fehler bei kaputter Veröffentlichung:** Das Programm überspringt sie ohne Meldung (Festlegung 7 sah eine Meldung vor) und nimmt die nächstältere gültige.
+9. **„Später“ und Esc** bedeuten immer „Später“, nie „Überspringen“.
+10. **Veröffentlichungsablauf:** `ci.yml` läuft nur von Hand, nicht bei jedem Push; `release.yml` führt keine vollen Tests aus, `tools/release.ps1` verlangt dafür einen grünen `ci.yml`-Lauf auf genau diesem Commit und setzt nie selbst einen Tag.
+11. **Bei der Arbeit gefundene Fehler, die schon vorher da waren** (Aufgabe 5b): Das Schlüsselwort `use<>` für Linux in einem Test, ein Zeitwettlauf im Test der Maße, Kurznamen im Temp-Ordner von Windows-Läufern, Windows-Pfade in Linux-Tests und winzige Rundungsunterschiede zwischen Windows und Linux bei Vergleichsdateien. Das Programm selbst musste dafür nicht geändert werden.
+
+**Nicht geprüft:** Die echte Netzabfrage gegen `api.github.com`, eine echte Aktualisierung von einer Testversion aus und alle GitHub-Schritte von `release.yml` und `ci.yml` sind noch nie gelaufen (siehe `docs/superpowers/offene-punkte.md`, Abschnitt „Update-Funktion“).

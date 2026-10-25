@@ -1849,7 +1849,7 @@ Hat Fusion für eine neue Funktion ein Kürzel, gilt: **Taste eintragen, sobald 
 
 ## Update-Funktion
 
-Stand: 2026-10-25. Aufgaben 1 bis 6 sind gebaut (Prüfung, Fenster, Einstellungen, Austausch mit Rücknahme, Veröffentlichungsablauf). Das Ausrollen einer ersten Version ist noch nicht passiert.
+Stand: 2026-10-25. Aufgaben 1 bis 7 sind gebaut (Prüfung, Fenster, Einstellungen, Austausch mit Rücknahme, Veröffentlichungsablauf, Aufräumen). Das Ausrollen einer ersten Version ist noch nicht passiert.
 
 ### Vor dem ersten Release (nur auf ausdrückliches Wort von Dennis)
 - **Tag setzen und pushen:** `v0.2.0-dev.1` setzt und pusht nur Dennis (nicht das Skript, nicht ein Hilfsprogramm). Vorher die volle Prüfung `ci.yml` von Hand auf genau diesem Commit starten; `tools/release.ps1` prüft das.
@@ -1865,6 +1865,54 @@ Stand: 2026-10-25. Aufgaben 1 bis 6 sind gebaut (Prüfung, Fenster, Einstellunge
 - `THIRD-PARTY-LICENSES.txt` enthält alle Bibliotheken, die Cargo für die Windows-Version auflöst. Das sind etwas mehr als die tatsächlich gebauten (Funktionen, die nur von Testcode eingeschaltet werden); das ist gewollt, damit nichts fehlt. 17 Pakete bringen keine eigene Lizenzdatei mit; für sie setzt das Skript den Standardtext der angegebenen Lizenz ein (Texte in `tools/license-texts`). Bei neuen Bibliotheken mit anderer Lizenz bricht das Skript ab, bis ein Text ergänzt ist.
 - Das Versionsfeld in `Cargo.toml` und der Abschnitt in `CHANGELOG.md` müssen zum Tag passen; sonst bricht `release.yml` ab (gewollt).
 
-### Aufgeschoben (Aufgabe 7)
-- Zusammenstellung der kleinen, bisher aufgeschobenen Punkte aus den Aufgaben 3 bis 5 steht im Ablaufprotokoll `.superpowers/sdd/2026-10-25-update-funktion/progress.md` (Größenbegrenzung der Antwort ohne Test, Zeitüberschreitung 10 s laut Entwurf, Hinweis bei geschlossenem Einstellungsfenster, Meldung während einer Skizze, Wartefuß ohne „Abbrechen“).
-- Die `cargo deny`-Hinweise zu doppelten Paketen (core-foundation, foreign-types, foreign-types-shared) stehen auf der Beobachtungsliste.
+### Zurückgestellte Kleinigkeiten
+Alles hier wurde bei den Prüfungen der Aufgaben 1 bis 5 gefunden, ist klein und hat die Aufgabe nicht blockiert. Nichts davon ändert, was ein Nutzer im Normalfall erlebt. Bei jedem Punkt steht, warum er liegen bleibt.
+
+**Prüfung der Version und der Veröffentlichungen (Aufgabe 1)**
+- Eine Veröffentlichung wird ganz übergangen, wenn ein fremdes Anhangsfeld (zum Beispiel die Größe) fehlt. Bleibt liegen: GitHub liefert die Felder immer; es fiele höchstens eine Version aus.
+- Die Kennzeichnung „gekürzt“ meldet sich auch, wenn der Platz genau ausgefüllt ist. Bleibt liegen: nur ein überflüssiger Hinweis „und weitere Änderungen“.
+- Die Änderungsnotizen können mitten in einer Zeile abgeschnitten werden und kennen einige seltene Schreibweisen nicht (BOM, Tabulator nach dem Zeichen, einzelnes Zeilenende, `***x***`). Bleibt liegen: nur das Aussehen von Randfällen.
+- Fehlende Tests: Beta-schließt-Dev-ein mit anderer Versionsnummer, genaue Fehlerarten bei kaputtem JSON, „erste doppelte Version gewinnt“, „Vorabversion-Kennzeichen wird ignoriert“, ein Test für `Version::from_cargo` in der App. Bleibt liegen: das Verhalten ist durch andere Tests abgedeckt, es fehlt nur die Einzelabsicherung.
+- Der Entwurf verspricht eine Meldung bei einer kaputten Veröffentlichung, der Code überspringt sie still und nimmt die nächstältere. Bleibt liegen: so gewollt; der Entwurf sollte bei Gelegenheit angepasst werden.
+
+**Einstellungen (Aufgabe 2)**
+- Magische Zahl `menu_bottom = 50.0` im Test `settings_updates.rs` ohne Kommentar. Bleibt liegen: nur im Test.
+- Die Warnung „Einstellungen nicht gespeichert“ bleibt stehen, wenn ein anderer Weg die Datei später doch geschrieben hat. Bleibt liegen: nur ein überholter Hinweis in einem Fehlerfall.
+- Der Block für das vorgemerkte Update steht in `workspace.rs` mehrfach (Hilfsstruktur wäre schöner). Bleibt liegen: reine Aufräumarbeit ohne Wirkung.
+
+**Prüfung im Netz (Aufgabe 3)**
+- Die Größenbegrenzung der Antwort (2 MB) hat keinen eigenen Test. Bleibt liegen: das Lesen müsste dafür in eine testbare Hilfsfunktion; der Wert selbst ist einfach.
+- Gesamtzeit 30 Sekunden (je Abschnitt 10 s), der Entwurf nennt 10 s. Bleibt liegen: die Prüfung läuft im Hintergrund und stört nicht.
+- Die Abfrage der Release-Liste folgt Weiterleitungen ohne eigene Grenze. Das ist eine Sicherheitsfrage mit geringem Risiko, weil nur HTTPS erlaubt ist und die Antwort ohnehin streng geprüft wird. Bleibt liegen: die Download-Seite (Aufgabe 5) ist bereits streng begrenzt; die Liste sollte bei Gelegenheit gleich behandelt werden.
+- Das Ergebnis einer von Hand gestarteten Prüfung geht verloren, wenn die Einstellungen währenddessen geschlossen und wieder geöffnet werden. Bleibt liegen: selten und folgenlos, man startet die Prüfung noch einmal.
+- Eine Antwort 403 mit „Retry-After“ wird als allgemeiner HTTP-Fehler 403 gemeldet. Bleibt liegen: die Suche bleibt in beiden Fällen still.
+- Das Feld `handle` in `UpdateChecker` wird nur gehalten, nie gelesen. Bleibt liegen: harmlos, hält den Hintergrundfaden fest.
+
+**Fenster „Neue Version“ (Aufgabe 4)**
+- „Überspringen“ ignoriert, wenn das Schreiben der Einstellungen scheitert (`update_dialog.rs`). Bleibt liegen: sehr seltener Fehlerfall; die Version käme beim nächsten Start noch einmal.
+- Die Meldung kann mitten in einer Skizze oder beim Ziehen aufgehen. Bleibt liegen: man schließt sie mit Esc, nichts geht verloren.
+- Testlücken (Dateifenster offen, Export läuft, sehr lange Adressen) und etwas Rauschen im Test (`let _ = &mut h;`). Bleibt liegen: nur Tests.
+- Die Notizen werden in jedem Bild neu zerlegt statt einmal beim Öffnen. Bleibt liegen: kostet bei der Obergrenze von 20 000 Zeichen kaum etwas.
+- Das Fenster „Über“ kann neben der Meldung offen bleiben (wie bei der Tastenkürzel-Übersicht). Bleibt liegen: nur ein Schönheitsfehler.
+- „Später“ gilt für 24 Stunden für jede Version, die Statuszeile zeigt eine neuere trotzdem. Eine offene Meldung behält die alten Notizen, wenn eine neue Prüfung eine andere Version liefert. Bleibt liegen: beides sind Randfälle ohne Folgen.
+
+**Herunterladen und Austauschen (Aufgabe 5)**
+- Wird „Abbrechen“ genau dann gedrückt, wenn der Download fertig wird, bleibt die geprüfte `.new`-Datei liegen. Dasselbe gilt, wenn das Fenster mitten im Download geschlossen wird. Sie wird beim nächsten Versuch gelöscht. Bleibt liegen: braucht Platz (etwa 100 MB), aber nur bis zum nächsten Update.
+- Ein Absturz oder Stromausfall genau zwischen den zwei Umbenennungen beim Austausch lässt `planoracad.exe` fehlen; es liegen dann `planoracad.exe.old` und `planoracad.exe.new` da. Ebenso, wenn der alte Prozess beendet wird, während die neue, kaputte Version wartet. Bleibt liegen: das Fenster ist winzig; die Anleitung steht im README („`.old` zurückbenennen“).
+- Mit `--nach-update` und einem veralteten Eintrag wird trotzdem eine Rückmeldung geschrieben. Bleibt liegen: nur wenn die Versionsnummer im Programm nicht zum Tag passt; das prüft `release.yml`.
+- Die Schreibprobe im Programmordner (`exe_dir_writable`) kann bei kurz gesperrter Datei fälschlich „geschützter Ordner“ melden und lässt dann eine Probedatei liegen. Bleibt liegen: sehr selten, Folge ist nur ein Hinweis mit Weg zur Download-Seite.
+- Die Übergabedatei für die Änderungsnotizen wird bei einem Fehler nicht gelöscht, sondern erst beim nächsten normalen Start. Bleibt liegen: sie ist klein und harmlos.
+- Eine liegengebliebene `.new`-Datei aus einer unterbrochenen Sitzung wird erst beim nächsten Update gelöscht (siehe oben). Bleibt liegen: wie oben.
+- `app.rs` ist mit rund 1900 Zeilen sehr lang; der Neustart-Ablauf gehörte in `update_install.rs`. Bleibt liegen: Umbau ohne Nutzen für den Anwender, hohes Risiko ohne ausdrücklichen Auftrag.
+- Während „Update bereit, wartet auf …“ gibt es dort weder „Abbrechen“ noch „Jetzt neu starten“, und Schließen mit ungespeicherten Tabs wird dabei zu „aktualisieren und neu starten“. Auch ein Angebot zur Wiederherstellung, das mitten in einer Rückfrage eintrifft, sollte warten. Bleibt liegen: nur in Randlagen; Rückfragen zu ungespeicherter Arbeit bleiben erhalten.
+- Nur mit der Testquelle (`update-test-source`, nie im Release): Eine Weiterleitung von GitHub auf `http://127.0.0.1` wird akzeptiert. Bleibt liegen: der Schalter ist standardmäßig aus.
+
+**Aus der Prüfung der Aufgabe 5b**
+- Sehr lange Projektpfade können das Einstellungsfenster bei 800 × 600 verbreitern. Bleibt liegen: Vorgabe ist mindestens 1920 × 1080.
+
+**Zum Veröffentlichen (Aufgabe 6)**
+- Erledigt in Aufgabe 7: Aktionen auf festen Commit gesetzt, Trockenlauf ohne Schreibrecht (zwei Aufträge), robustere Versionssuche, `release.ps1` prüft Tag und `Cargo.lock`, Abschnitte im Changelog dürfen nicht leer sein.
+- Es bleibt: Die GitHub-Schritte sind nie gelaufen (siehe oben, Trockenlauf).
+
+**Beobachtungsliste `cargo deny`**
+- Die Hinweise zu doppelten Paketen `core-foundation`, `foreign-types` und `foreign-types-shared` stehen auf der Beobachtungsliste; die neuere Fassung von `core-foundation` kommt über `native-tls` (nur der macOS-Zweig, wird unter Windows nicht gebaut), die ältere über das Fenstersystem (`winit`). Bleibt liegen: nur Hinweise, keine Fehler; Lizenzen und Sicherheitsmeldungen sind in Ordnung. Bei jedem Update erneut ansehen (zusammen mit der zbus-Familie und `ttf-parser`).
