@@ -1846,3 +1846,25 @@ Hat Fusion für eine neue Funktion ein Kürzel, gilt: **Taste eintragen, sobald 
 - **Letztes Skizzenwerkzeug:** Beim Spiegeln oder Muster kann ein falsches Werkzeug gemerkt werden (die Kurve entsteht nicht durch das gewählte Werkzeug).
 - **Doppelbelegung:** Der Hinweis, dass eine Taste schon einer anderen Aktion gehört, kommt nur in den Einstellungen. Beim Laden einer von Hand bearbeiteten Datei gilt bei Doppelbelegung die erste Aktion der Tabelle.
 - Einträge in der Konfiguration, die nur eine neuere Version kennt, gehen beim Ändern in einer älteren Version verloren (Tester wechseln nicht zurück; angenommen).
+
+## Update-Funktion
+
+Stand: 2026-10-25. Aufgaben 1 bis 6 sind gebaut (Prüfung, Fenster, Einstellungen, Austausch mit Rücknahme, Veröffentlichungsablauf). Das Ausrollen einer ersten Version ist noch nicht passiert.
+
+### Vor dem ersten Release (nur auf ausdrückliches Wort von Dennis)
+- **Tag setzen und pushen:** `v0.2.0-dev.1` setzt und pusht nur Dennis (nicht das Skript, nicht ein Hilfsprogramm). Vorher die volle Prüfung `ci.yml` von Hand auf genau diesem Commit starten; `tools/release.ps1` prüft das.
+- **Trockenlauf von `release.yml`** auf GitHub (von Hand starten, ohne Tag) ist noch nie gelaufen. Das Release anzulegen ist nur lokal geprüft: Skripte per Probelauf, YAML mit einem Parser; die GitHub-Schritte selbst (Rust-Cache, `gh release create`) wurden nicht ausgeführt.
+- **Erste echte Aktualisierung** von einer Testversion aus (mit der Testquelle `update-test-source`, danach gegen ein echtes Release) steht aus. Die echte Netzabfrage wurde noch nie ausgeführt (auf diesem Rechner fängt NordVPN die TLS-Verbindung ab; bei Fehlern erst mit curl/OpenSSL klären).
+- Die Markenrecherche für „PlanoraCAD“ (siehe oben) gilt auch für ein öffentliches Release.
+
+### Grenzen
+- Updates nur unter Windows (x64). Linux und macOS sind nicht vorgesehen.
+- Die Programmdatei ist nicht signiert; Windows kann beim ersten Start des heruntergeladenen Programms warnen (SmartScreen).
+- Es gibt nur den Kanal Dev. Beta und Stabil sind in der Versionsprüfung vorbereitet, aber nicht wählbar.
+- Quelle ist ausschließlich die Release-Liste von GitHub; bei Netzfehlern oder Ablauf der GitHub-Abfragegrenze bleibt die Suche still.
+- `THIRD-PARTY-LICENSES.txt` enthält alle Bibliotheken, die Cargo für die Windows-Version auflöst. Das sind etwas mehr als die tatsächlich gebauten (Funktionen, die nur von Testcode eingeschaltet werden); das ist gewollt, damit nichts fehlt. 17 Pakete bringen keine eigene Lizenzdatei mit; für sie setzt das Skript den Standardtext der angegebenen Lizenz ein (Texte in `tools/license-texts`). Bei neuen Bibliotheken mit anderer Lizenz bricht das Skript ab, bis ein Text ergänzt ist.
+- Das Versionsfeld in `Cargo.toml` und der Abschnitt in `CHANGELOG.md` müssen zum Tag passen; sonst bricht `release.yml` ab (gewollt).
+
+### Aufgeschoben (Aufgabe 7)
+- Zusammenstellung der kleinen, bisher aufgeschobenen Punkte aus den Aufgaben 3 bis 5 steht im Ablaufprotokoll `.superpowers/sdd/2026-10-25-update-funktion/progress.md` (Größenbegrenzung der Antwort ohne Test, Zeitüberschreitung 10 s laut Entwurf, Hinweis bei geschlossenem Einstellungsfenster, Meldung während einer Skizze, Wartefuß ohne „Abbrechen“).
+- Die `cargo deny`-Hinweise zu doppelten Paketen (core-foundation, foreign-types, foreign-types-shared) stehen auf der Beobachtungsliste.

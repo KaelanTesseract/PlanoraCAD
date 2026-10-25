@@ -2589,7 +2589,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "planora-app"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "chrono",
  "eframe",
@@ -2615,7 +2615,7 @@ dependencies = [
 
 [[package]]
 name = "planora-drawing"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "planora-exchange",
  "planora-kernel",
@@ -2626,7 +2626,7 @@ dependencies = [
 
 [[package]]
 name = "planora-exchange"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "earcutr",
  "planora-kernel",
@@ -2638,7 +2638,7 @@ dependencies = [
 
 [[package]]
 name = "planora-feature"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "planora-drawing",
  "planora-exchange",
@@ -2653,7 +2653,7 @@ dependencies = [
 
 [[package]]
 name = "planora-kernel"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "planora-math",
  "proptest",
@@ -2662,7 +2662,7 @@ dependencies = [
 
 [[package]]
 name = "planora-math"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "glam",
  "robust",
@@ -2671,7 +2671,7 @@ dependencies = [
 
 [[package]]
 name = "planora-mesh"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "earcutr",
  "planora-kernel",
@@ -2683,7 +2683,7 @@ dependencies = [
 
 [[package]]
 name = "planora-project"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "planora-drawing",
  "planora-exchange",
@@ -2700,7 +2700,7 @@ dependencies = [
 
 [[package]]
 name = "planora-render"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "bytemuck",
  "egui",
@@ -2714,7 +2714,7 @@ dependencies = [
 
 [[package]]
 name = "planora-sketch"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "planora-kernel",
  "planora-math",
@@ -2725,7 +2725,7 @@ dependencies = [
 
 [[package]]
 name = "planora-step"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "planora-drawing",
  "planora-exchange",
@@ -2737,7 +2737,7 @@ dependencies = [
 
 [[package]]
 name = "planora-update"
-version = "0.1.0"
+version = "0.2.0-dev.1"
 dependencies = [
  "serde",
  "serde_json",

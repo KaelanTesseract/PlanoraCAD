@@ -1,0 +1,99 @@
+# Baut und veröffentlicht eine Version.
+#
+# Auslöser:
+#   - Tag "v*" (zum Beispiel v0.2.0-dev.2): echtes Release.
+#   - Von Hand ("Run workflow", Trockenlauf): baut alles und legt die Dateien als Ergebnis des
+#     Laufs ab, legt aber KEIN Release an und braucht keinen Tag.
+#
+# Die vollen Tests laufen hier bewusst NICHT: Die volle Prüfung (ci.yml) wird vor dem Release
+# von Hand gestartet, und tools/release.ps1 verlangt dafür einen grünen Lauf auf genau diesem
+# Commit. Hier geprüft wird nur: Version = Tag, Abschnitt im Changelog, Lizenzen (cargo deny).
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# Ohne ausdrückliche Rechte darf der Ablauf nichts schreiben; nur dieser Ablauf bekommt "contents: write".
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      REF_NAME: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version, Tag und Changelog prüfen
+        shell: pwsh
+        run: |
+          $toml = Get-Content -Raw -Encoding utf8 Cargo.toml
+          $m = [regex]::Match($toml, '(?ms)^\[workspace\.package\]\s*\r?\n(?:(?!^\[).*\r?\n)*?version\s*=\s*"([^"]+)"')
+          if (-not $m.Success) { throw 'workspace.package.version in Cargo.toml nicht gefunden.' }
+          $version = $m.Groups[1].Value
+          if ($version -notmatch '^\d+\.\d+\.\d+(-(dev|beta)\.\d+)?$') {
+            throw "Die Version '$version' in Cargo.toml ist keine erlaubte Version."
+          }
+          if ($env:EVENT_NAME -eq 'push') {
+            if ($env:REF_NAME -ne "v$version") {
+              throw "Der Tag '$($env:REF_NAME)' passt nicht zur Version in Cargo.toml ('v$version')."
+            }
+          }
+          $global:LASTEXITCODE = 0
+          ./tools/changelog-section.ps1 -Version $version -OutFile "$env:RUNNER_TEMP/release-notes.md"
+          if ($LASTEXITCODE -ne 0) { throw "CHANGELOG.md hat keinen Abschnitt '## $version'." }
+          $pre = if ($version -match '-(dev|beta)\.') { 'true' } else { 'false' }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PRERELEASE=$pre" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Rust installieren
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2.7.8
+
+      - name: Lizenzen prüfen
+        run: cargo install cargo-deny --locked && cargo deny check
+
+      # Ohne zusätzliche Funktionen: "update-test-source" (lokale Update-Quelle) darf nie hinein.
+      - name: Programm bauen
+        run: cargo build --release --locked -p planora-app
+
+      - name: Dateien zusammenstellen
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item target/release/planora-app.exe dist/planoracad-windows-x64.exe
+          $hash = (Get-FileHash -Algorithm SHA256 dist/planoracad-windows-x64.exe).Hash.ToLowerInvariant()
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText("$PWD/dist/planoracad-windows-x64.sha256", "$hash  planoracad-windows-x64.exe`n", $utf8)
+          ./tools/third-party-licenses.ps1 -Output "$PWD/dist/THIRD-PARTY-LICENSES.txt"
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Release anlegen
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ghArgs = @('release', 'create', $env:REF_NAME,
+            'dist/planoracad-windows-x64.exe',
+            'dist/planoracad-windows-x64.sha256',
+            'dist/THIRD-PARTY-LICENSES.txt',
+            '--verify-tag',
+            '--title', "PlanoraCAD $($env:VERSION)",
+            '--notes-file', "$($env:RUNNER_TEMP)/release-notes.md")
+          if ($env:PRERELEASE -eq 'true') { $ghArgs += '--prerelease' }
+          & gh @ghArgs
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create ist fehlgeschlagen.' }
+
+      - name: Trockenlauf - Dateien ablegen (kein Release)
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: trockenlauf-${{ github.sha }}
+          path: dist/*
+          retention-days: 3

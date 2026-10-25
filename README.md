@@ -639,6 +639,30 @@ Die Tasten sind ab Werk wie in Fusion: zum Beispiel E extrudiert, F rundet, V bl
 
 Welche Fusion-Kürzel noch fehlen, weil es die Funktion noch nicht gibt, steht in `docs/superpowers/offene-punkte.md`, Abschnitt „Tastenkürzel“.
 
+## Updates und Versionen
+
+Das Programm kann sich selbst aktualisieren (nur unter Windows). Beim Start fragt es im Hintergrund bei GitHub nach, ob es eine neuere Version gibt. Dabei wird nichts Persönliches gesendet. Gibt es eine, erscheint ein Fenster mit den Änderungen und drei Knöpfen: „Jetzt aktualisieren“, „Später“ (die Meldung kommt frühestens nach 24 Stunden wieder) und „Diese Version überspringen“. Vor dem Neustart fragt das Programm wie beim Schließen nach ungespeicherter Arbeit. Das Herunterladen wird mit einer Prüfsumme kontrolliert. Klappt der Austausch nicht, bleibt die alte Version.
+
+Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich die Suche beim Start abschalten oder von Hand starten.
+
+**Kanäle**
+- **Dev:** Entwicklerversionen, zum Beispiel `0.2.0-dev.1`. Sie sind noch nicht für den Alltag gedacht. Zurzeit gibt es nur diesen Kanal.
+- **Beta** (`0.9.0-beta.1`) und **Stabil** (`1.0.0`) kommen später dazu. Wer Dev gewählt hat, bekommt auch Beta- und stabile Versionen, sofern sie neuer sind.
+
+**Wie eine Version entsteht**
+1. Neue Versionsnummer setzen: `powershell -File tools\release.ps1 -NewVersion 0.2.0-dev.2` (ändert `Cargo.toml` und `Cargo.lock`).
+2. In `CHANGELOG.md` oben einen Abschnitt `## 0.2.0-dev.2` mit `### Neu`, `### Verbessert` und `### Behoben` schreiben, in einfacher Sprache. Dieser Text erscheint später im Update-Fenster und als Beschreibung des Releases.
+3. Lokal prüfen und committen: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast`, `cargo deny check`; unter Linux (WSL) zusätzlich die Tests.
+4. Die volle Prüfung auf GitHub einmal von Hand starten (sie läuft nicht bei jedem Push): `gh workflow run ci.yml --ref <Zweig>`, dann `gh run watch`. Sie muss grün enden.
+5. `powershell -File tools\release.ps1` noch einmal starten. Es prüft Version, Changelog und dass es für genau diesen Commit einen grünen Lauf von `ci.yml` gibt. Ist alles in Ordnung, gibt es die zwei Befehle für den Tag aus (`git tag -a v0.2.0-dev.2 …` und `git push origin v0.2.0-dev.2`). Das Skript selbst setzt keinen Tag und pusht nichts.
+6. Der Tag startet `.github/workflows/release.yml`. Er prüft, dass die Version in `Cargo.toml` zum Tag passt und der Changelog-Abschnitt da ist, lässt `cargo deny check` laufen (die vollen Tests nicht, die hat `ci.yml` schon gemacht), baut die Windows-Version und legt das Release an. Es enthält `planoracad-windows-x64.exe`, `planoracad-windows-x64.sha256` und `THIRD-PARTY-LICENSES.txt`. Versionen mit `-dev` oder `-beta` sind als Vorabversion markiert.
+
+**Trockenlauf von `release.yml`:** Auf GitHub unter „Actions → Release → Run workflow“ (oder `gh workflow run release.yml --ref <Zweig>`). Ohne Tag baut der Ablauf alles wie beim echten Release, legt aber kein Release an. Die drei Dateien liegen danach drei Tage lang als Ergebnis des Laufs bereit und lassen sich prüfen.
+
+**Lizenzdatei:** `powershell -File tools\third-party-licenses.ps1` erzeugt `THIRD-PARTY-LICENSES.txt` (alle Bibliotheken der Windows-Version und die Schriften, jeweils mit Lizenztext). Das ist die Datei, die am Release hängt; sie gehört nicht ins Repository.
+
+**Wenn nach einem Update etwas nicht stimmt:** Neben `planoracad.exe` liegt nach einem Austausch die bisherige Datei als `planoracad.exe.old`. Startet die neue Version nicht, `planoracad.exe` löschen oder umbenennen und `planoracad.exe.old` wieder in `planoracad.exe` umbenennen. Die Projekte und Einstellungen liegen außerhalb der Programmdatei und bleiben unberührt.
+
 ## Bauen
 
     cargo run -p planora-app --release

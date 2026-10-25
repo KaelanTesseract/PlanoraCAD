@@ -1,0 +1,31 @@
+# Änderungen
+
+Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht oben.
+
+## 0.2.0-dev.1
+
+Das ist die erste Entwicklerversion mit Update-Funktion. Sie ist noch nicht für den Alltag gedacht.
+
+### Neu
+- Das Programm kann sich selbst aktualisieren. Beim Start schaut es im Hintergrund nach, ob es eine neuere Version gibt, und zeigt dann ein Fenster mit den Änderungen. Du entscheidest, ob du jetzt aktualisierst, später erinnert werden willst oder diese Version überspringst. Vor dem Neustart fragt das Programm wie beim Schließen, ob ungespeicherte Arbeit gespeichert werden soll.
+- Unter „Datei → Einstellungen …“ gibt es einen Abschnitt für Updates. Dort lässt sich die Prüfung ausschalten oder von Hand starten.
+- Es gibt drei Kanäle: Dev, Beta und Stabil. Im Moment gibt es nur Dev-Versionen.
+- Der Download wird vor dem Austausch mit einer Prüfsumme kontrolliert. Geht beim Austausch etwas schief, legt das Programm die alte Version wieder zurück.
+- Zu jeder Veröffentlichung gehört eine Datei mit den Lizenzen aller verwendeten Bibliotheken und Schriften.
+- Verlaufsleiste unten im Fenster: Sie zeigt die Schritte des gewählten Körpers. Mit dem Marker lässt sich zu einem früheren Schritt zurückgehen, ohne etwas zu löschen.
+- Tastenkürzel wie in Fusion, zum Beispiel E zum Extrudieren, F zum Verrunden und V zum Ein- und Ausblenden. Alle Kürzel lassen sich in den Einstellungen ändern. „Ansicht → Tastenkürzel …“ zeigt eine Übersicht mit Suche.
+- Skizzen mit Abhängigkeiten und Maßen, Freiformflächen aus Ellipsen und Splines, Rundungen und Fasen, Boolesche Operationen (Vereinigen, Abziehen, Schneiden).
+- Feature-Baum: Alles, was du baust, steht als Liste von Schritten. Ändert sich ein Maß, rechnet das Programm die folgenden Schritte neu.
+- Parameter und Formeln: Maße bekommen einen Namen und lassen sich ausrechnen.
+- Speichern in Projekten und Ordnern, mit Versionen und Zweigen. Rückgängig und Wiederholen für alle Änderungen.
+- Austausch mit anderen Programmen: Netze und STEP-Dateien lassen sich ein- und ausgeben.
+- Zeichnungen mit Ansichten, Schnittansichten, Maßen, Mittellinien, Stückliste und Positionsnummern. Eine Zeichnung kann als PDF ausgegeben werden.
+
+### Verbessert
+- Neues, ruhigeres Aussehen („Graphit“): helles oder dunkles Aussehen, neue Schrift, einheitliche Symbole. Die Felder schweben frei über der 3D-Ansicht.
+- Das Programm ist für Bildschirme ab 1920 mal 1080 Punkten ausgelegt.
+
+### Bekannte Grenzen
+- Updates gibt es nur unter Windows.
+- Manche Lagen bei Freiformflächen und bei Körpern, die sich nur berühren, kann das Programm noch nicht rechnen. Es nennt dann den Grund, statt ein falsches Ergebnis zu zeigen.
+- Die ausführliche Liste steht in `docs/superpowers/offene-punkte.md`.
