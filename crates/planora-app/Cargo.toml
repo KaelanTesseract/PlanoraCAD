@@ -38,6 +38,8 @@ chrono.workspace = true
 [dev-dependencies]
 # Zeichentabellen der Schriftdateien lesen (Zeichentest in tests/fonts.rs); skrifa zieht egui ohnehin.
 skrifa = "0.44"
+# Release-Listen für die Nachbildung der Update-Quelle (tests/update_check.rs).
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -12,10 +12,11 @@ use crate::keymap::overview::{OverviewEvent, OverviewState};
 use crate::keymap::{self, Action};
 use crate::project_actions::ProjectsUi;
 use crate::projects_window::{ProjectsEvent, ProjectsWindow};
-use crate::settings_window::{SettingsEvent, SettingsWindow};
+use crate::settings_window::{CheckHint, SettingsEvent, SettingsWindow};
 use crate::shell::ShellState;
 use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::step_import_dialog::{self, StepImportDialog};
+use crate::update_check::{self, CheckRequest, CheckResult, NoNetwork, UpdateChecker};
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
 use crate::{
@@ -27,6 +28,9 @@ use planora_kernel::BoolOp;
 use planora_render::gpu::GpuScene;
 use planora_render::{FaceRef, Pick, ViewFace};
 use planora_sketch::plane_of_face;
+use planora_update::Update;
+use planora_update::check::{CheckOutcome, HttpSource, ReleaseSource, due};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Wie oft die App ohne Eingaben neu zeichnet, damit die Autosicherung auch im Leerlauf läuft.
@@ -72,6 +76,17 @@ pub struct PlanoraApp {
     applied_dark: Option<bool>,
     /// `ViewportCommand::Close` wurde nach freigegebenem Beenden schon geschickt.
     close_sent: bool,
+    /// Quelle der Release-Liste: im Programm GitHub ([`HttpSource`]), in Tests eine Nachbildung.
+    update_source: Arc<dyn ReleaseSource + Send + Sync>,
+    /// Prüfung auf neue Versionen im Hintergrund.
+    update_checker: UpdateChecker,
+    /// Die Prüfung beim Start ist erledigt (gestartet oder nicht fällig).
+    update_start_done: bool,
+    /// Der Knopf „Jetzt nach Updates suchen“ kam, während schon eine Prüfung lief: deren
+    /// Ergebnis zählt dann als manuell (mit Hinweis).
+    update_manual_waiting: bool,
+    /// Gefundenes Update, für die Meldung „Neue Version verfügbar“ vorgemerkt.
+    pub(crate) pending_notice: Option<Update>,
 }
 
 impl PlanoraApp {
@@ -93,7 +108,9 @@ impl PlanoraApp {
         // zuerst nach einem Projektordner.
         let library = planora_project::library::Library::open(&root).ok();
         let ws = Workspace::new(library, config);
-        Self::with_workspace(ws)
+        // Nur hier geht das Programm ins Netz; Tests bekommen eine Nachbildung.
+        let source = Arc::new(HttpSource::new(&crate::running_version()));
+        Self::with_workspace(ws, source)
     }
 
     /// Einstellungen des egui-Kontexts, die nicht vom Aussehen abhängen. Kein Tastatur-Zoom
@@ -104,7 +121,7 @@ impl PlanoraApp {
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
     }
 
-    fn with_workspace(ws: Workspace) -> Self {
+    fn with_workspace(ws: Workspace, update_source: Arc<dyn ReleaseSource + Send + Sync>) -> Self {
         Self {
             ws,
             shell: ShellState::default(),
@@ -114,13 +131,105 @@ impl PlanoraApp {
             versions_ui: VersionsUi::default(),
             applied_dark: None,
             close_sent: false,
+            update_source,
+            update_checker: UpdateChecker::default(),
+            update_start_done: false,
+            update_manual_waiting: false,
+            pending_notice: None,
         }
     }
 
-    /// App ohne Fenster und Renderer für die Oberflächentests.
+    /// App ohne Fenster und Renderer für die Oberflächentests; ohne Netz (die Prüfung auf
+    /// Updates meldet immer „kein Netz“ und speichert nichts).
     #[doc(hidden)]
     pub fn for_tests(ws: Workspace) -> Self {
-        Self::with_workspace(ws)
+        Self::with_workspace(ws, Arc::new(NoNetwork))
+    }
+
+    /// Wie [`PlanoraApp::for_tests`] mit einer eigenen Quelle der Release-Liste.
+    #[doc(hidden)]
+    pub fn for_tests_with_updates(
+        ws: Workspace,
+        source: Arc<dyn ReleaseSource + Send + Sync>,
+    ) -> Self {
+        Self::with_workspace(ws, source)
+    }
+
+    /// Vorgemerktes Update für die Meldung (für Tests).
+    #[doc(hidden)]
+    pub fn pending_notice(&self) -> Option<&Update> {
+        self.pending_notice.as_ref()
+    }
+
+    /// Läuft gerade eine Prüfung auf Updates (für Tests)?
+    #[doc(hidden)]
+    pub fn update_check_running(&self) -> bool {
+        self.update_checker.is_running()
+    }
+
+    /// Prüfung auf Updates in jedem Bild: im ersten Bild die Prüfung beim Start, wenn sie fällig
+    /// ist ([`due`]: Schalter an, letzte Prüfung mindestens 24 Stunden her); danach ein fertiges
+    /// Ergebnis abholen ([`PlanoraApp::apply_check_result`]). Wartet nie.
+    fn update_tick(&mut self, ctx: &egui::Context) {
+        if !self.update_start_done {
+            self.update_start_done = true;
+            self.update_checker.set_repaint(ctx);
+            let enabled = self.ws.update_check_enabled();
+            if due(
+                update_check::now_unix(),
+                self.ws.last_update_check(),
+                enabled,
+                false,
+            ) {
+                self.start_update_check(false);
+            }
+        }
+        if let Some(result) = self.update_checker.poll() {
+            self.apply_check_result(result);
+        }
+    }
+
+    /// Startet eine Prüfung mit Kanal und übersprungener Version des Arbeitsbereichs. Läuft schon
+    /// eine (etwa die beim Start), zählt deren Ergebnis bei `manual` als manuell.
+    fn start_update_check(&mut self, manual: bool) {
+        if manual {
+            self.settings.set_check_hint(Some(CheckHint::Running));
+        }
+        if self.update_checker.is_running() {
+            self.update_manual_waiting |= manual;
+            return;
+        }
+        let request = CheckRequest {
+            running: crate::running_version(),
+            channel: self.ws.update_channel(),
+            skipped: self.ws.skipped_version(),
+            manual,
+        };
+        self.update_checker
+            .start(Arc::clone(&self.update_source), request);
+    }
+
+    /// Ergebnis einer Prüfung: Zeitpunkt merken (außer bei „kein Netz“ und Zeitüberschreitung,
+    /// [`update_check::records_check`]; misslingt das Speichern, kommt er beim nächsten
+    /// gelungenen Schreiben mit), ein Update für die Meldung vormerken. Nur nach dem Knopf ein
+    /// Hinweis in den Einstellungen; die Prüfung beim Start meldet nie einen Fehler.
+    fn apply_check_result(&mut self, result: CheckResult) {
+        let manual = result.manual || std::mem::take(&mut self.update_manual_waiting);
+        if update_check::records_check(&result.outcome) {
+            self.ws.set_last_update_check(result.at);
+        }
+        let hint = match result.outcome {
+            CheckOutcome::Available(update) => {
+                let hint = CheckHint::Found(update.latest.version);
+                self.pending_notice = Some(*update);
+                hint
+            }
+            CheckOutcome::UpToDate => CheckHint::UpToDate,
+            CheckOutcome::Failed(_) => CheckHint::Failed,
+        };
+        if manual {
+            self.settings.set_check_hint(Some(hint));
+        }
     }
 
     /// Arbeitsbereich (für Tests).
@@ -1167,6 +1276,7 @@ impl eframe::App for PlanoraApp {
             self.applied_dark = Some(dark);
         }
 
+        self.update_tick(&ctx);
         self.shortcuts(&ctx);
         // Esc der Übersicht vor den Ansichten (weder Auswahl noch Skizze sollen es sehen).
         keymap::overview::take_escape(&ctx, &mut self.overview, self.ws.prompt.is_some());
@@ -1292,6 +1402,9 @@ impl eframe::App for PlanoraApp {
 
         show_file_dialogs(&ctx, &mut self.ws);
         show_windows(&ctx, &mut self.ws, &mut self.projects, &mut self.settings);
+        if self.settings.take_check_request() {
+            self.start_update_check(true);
+        }
         enforce_overview_rules(&self.ws, &self.projects, &self.settings, &mut self.overview);
         if keymap::overview::show(&ctx, &self.ws, &mut self.overview) == OverviewEvent::OpenSettings
         {

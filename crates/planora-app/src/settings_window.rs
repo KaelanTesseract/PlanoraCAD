@@ -1,7 +1,8 @@
 //! Fenster „Einstellungen“ (Spec §5): Abschnitte untereinander mit Überschrift, damit später
 //! weitere dazukommen. Oben „Darstellung“ mit dem Regler „Durchsichtigkeit der Panels“ (wirkt
 //! sofort, wird gespeichert wie das Projektverzeichnis), darunter „Updates“ (laufende Version,
-//! Update-Kanal, Suchen beim Start, letzte Prüfung; gespeichert sofort), dann „Projekte“ mit dem
+//! Update-Kanal, Suchen beim Start, letzte Prüfung; gespeichert sofort; Knopf „Jetzt nach Updates
+//! suchen“ mit Ergebnis, die Suche selbst macht die App), dann „Projekte“ mit dem
 //! Projektverzeichnis und zuletzt „Tastenkürzel“ ([`crate::keymap::settings_ui`]; zuletzt, weil
 //! die lange Tabelle sonst „Projekte“ nach unten schöbe). Gewählt wird über die
 //! Dateiauswahl im Ordner-Modus; der Wechsel wirkt wie [`Workspace::choose_root`] und
@@ -37,8 +38,12 @@ pub const CHECK_ON_START_LABEL: &str = "Beim Start nach Updates suchen";
 pub const PRIVACY_NOTE: &str =
     "Beim Suchen fragt das Programm bei GitHub nach; dabei sieht GitHub deine IP-Adresse.";
 pub const CHECK_NOW: &str = "Jetzt nach Updates suchen";
-/// Hinweis neben dem noch abgeschalteten Knopf [`CHECK_NOW`].
-pub const CHECK_NOW_LATER: &str = "Kommt mit der nächsten Aufgabe.";
+/// Neben dem Knopf [`CHECK_NOW`], solange die Suche läuft (der Knopf ist dann aus).
+pub const CHECK_RUNNING: &str = "Suche läuft …";
+/// Ergebnis der Suche über den Knopf: keine neuere Version.
+pub const UP_TO_DATE: &str = "Du hast die neueste Version.";
+/// Ergebnis der Suche über den Knopf: Abruf oder Antwort gescheitert.
+pub const CHECK_FAILED: &str = "Die Suche hat nicht geklappt (kein Netz?).";
 /// Statt eines Zeitpunkts, wenn noch nie geprüft wurde.
 pub const NEVER_CHECKED: &str = "noch nie";
 /// Warnung, wenn eine Update-Einstellung gilt, aber nicht gespeichert werden konnte.
@@ -76,6 +81,36 @@ pub fn last_check_line(unix_seconds: Option<u64>) -> String {
         |t| local_time::unix_time_text(i64::try_from(t).unwrap_or(i64::MAX)),
     );
     format!("Letzte Prüfung: {when}")
+}
+
+/// „Neue Version gefunden: 0.2.0-dev.2“ (Ergebnis der Suche über den Knopf).
+pub fn update_found_line(v: &Version) -> String {
+    format!("Neue Version gefunden: {v}")
+}
+
+/// Zustand der Suche über den Knopf [`CHECK_NOW`], neben dem Knopf angezeigt. Die App setzt ihn
+/// ([`SettingsWindow::set_check_hint`]); eine Suche beim Start zeigt hier nichts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckHint {
+    /// Die Suche läuft ([`CHECK_RUNNING`]).
+    Running,
+    /// [`UP_TO_DATE`].
+    UpToDate,
+    /// Neue Version gefunden ([`update_found_line`]).
+    Found(Version),
+    /// [`CHECK_FAILED`] (Warnfarbe).
+    Failed,
+}
+
+impl CheckHint {
+    pub fn text(&self) -> String {
+        match self {
+            CheckHint::Running => CHECK_RUNNING.into(),
+            CheckHint::UpToDate => UP_TO_DATE.into(),
+            CheckHint::Found(v) => update_found_line(v),
+            CheckHint::Failed => CHECK_FAILED.into(),
+        }
+    }
 }
 
 /// Meldung nach einem Wechsel: Warnung (Warnfarbe) oder Fehler (Fehlerfarbe).
@@ -182,6 +217,11 @@ pub struct SettingsWindow {
     appearance_message: Option<RootMessage>,
     /// Hinweis im Abschnitt „Updates“ (nur [`UPDATES_NOT_SAVED`]).
     updates_message: Option<RootMessage>,
+    /// Zustand der Suche über den Knopf [`CHECK_NOW`].
+    check_hint: Option<CheckHint>,
+    /// Der Knopf [`CHECK_NOW`] wurde gedrückt; die App holt das ab
+    /// ([`SettingsWindow::take_check_request`]).
+    check_requested: bool,
     /// Der Regler wurde bewegt, der Wert ist aber noch nicht gespeichert (gespeichert wird beim
     /// Loslassen, nicht in jedem Bild des Ziehens).
     transparency_unsaved: bool,
@@ -200,6 +240,10 @@ impl SettingsWindow {
         self.message = None;
         self.appearance_message = None;
         self.updates_message = None;
+        // Eine noch laufende Suche bleibt sichtbar, ein altes Ergebnis nicht.
+        if self.check_hint != Some(CheckHint::Running) {
+            self.check_hint = None;
+        }
         self.keys = CaptureState::default();
     }
 
@@ -252,6 +296,21 @@ impl SettingsWindow {
     /// Hinweis des Abschnitts „Updates“ (Speichern fehlgeschlagen).
     pub fn updates_message(&self) -> Option<&RootMessage> {
         self.updates_message.as_ref()
+    }
+
+    /// Zustand der Suche über den Knopf [`CHECK_NOW`].
+    pub fn check_hint(&self) -> Option<&CheckHint> {
+        self.check_hint.as_ref()
+    }
+
+    /// Setzt den Zustand der Suche (die App, wenn sie startet und wenn das Ergebnis da ist).
+    pub fn set_check_hint(&mut self, hint: Option<CheckHint>) {
+        self.check_hint = hint;
+    }
+
+    /// Wurde der Knopf [`CHECK_NOW`] seit dem letzten Abholen gedrückt? Setzt zurück.
+    pub fn take_check_request(&mut self) -> bool {
+        std::mem::take(&mut self.check_requested)
     }
 
     /// Hinweis nach dem Speichern einer Update-Einstellung: [`UPDATES_NOT_SAVED`], wenn es
@@ -317,6 +376,8 @@ impl SettingsWindow {
         let message = self.message.clone();
         let appearance_message = self.appearance_message.clone();
         let updates_message = self.updates_message.clone();
+        let check_hint = self.check_hint.clone();
+        let mut check_now = false;
         let channel = ws.update_channel();
         let (mut chosen_channel, mut check_on_start) = (channel, ws.update_check_enabled());
         let last_check = last_check_line(ws.last_update_check());
@@ -356,6 +417,8 @@ impl SettingsWindow {
                             &mut chosen_channel,
                             &mut check_on_start,
                             &last_check,
+                            check_hint.as_ref(),
+                            &mut check_now,
                             updates_message.as_ref(),
                         );
                         ui.add_space(theme::SPACE_4);
@@ -398,6 +461,9 @@ impl SettingsWindow {
         if self.transparency_unsaved && released {
             self.save_transparency(ws);
         }
+        if check_now && !locked {
+            self.check_requested = true;
+        }
         // Update-Einstellungen gelten und werden sofort gespeichert.
         if !locked && chosen_channel != channel {
             let written = ws.set_update_channel(chosen_channel);
@@ -437,12 +503,15 @@ impl SettingsWindow {
 
 /// Abschnitt „Updates“: laufende Version und letzte Prüfung, Auswahl des Kanals (nur [`AVAILABLE_CHANNELS`]; ein
 /// anderer gespeicherter Kanal steht nur als Anzeige da), Schalter mit Hinweis zum Datenschutz,
-/// der noch abgeschaltete Knopf [`CHECK_NOW`] und die letzte Prüfung.
+/// der Knopf [`CHECK_NOW`] mit dem Zustand der Suche daneben (aus, solange sie läuft; gedrückt:
+/// `check_now`) und die letzte Prüfung.
 fn show_updates(
     ui: &mut egui::Ui,
     channel: &mut Channel,
     check_on_start: &mut bool,
     last_check: &str,
+    hint: Option<&CheckHint>,
+    check_now: &mut bool,
     message: Option<&RootMessage>,
 ) {
     let dark = ui.visuals().dark_mode;
@@ -471,10 +540,21 @@ fn show_updates(
     });
     ui.add(egui::Label::new(egui::RichText::new(PRIVACY_NOTE).weak()).wrap());
     ui.add_space(theme::SPACE_1);
+    // Das Ergebnis steht neben dem Knopf, damit der Abschnitt nicht höher wird.
     ui.horizontal(|ui| {
-        // Die Suche selbst kommt mit der nächsten Aufgabe; bis dahin bleibt der Knopf aus.
-        ui.add_enabled(false, egui::Button::new(CHECK_NOW));
-        ui.label(egui::RichText::new(CHECK_NOW_LATER).weak());
+        let running = hint == Some(&CheckHint::Running);
+        let r = ui.add_enabled(!running, egui::Button::new(CHECK_NOW));
+        theme::focus_ring(ui, &r);
+        *check_now = r.clicked();
+        match hint {
+            Some(h @ CheckHint::Failed) => {
+                ui.colored_label(theme::palette(dark).warning, h.text());
+            }
+            Some(h) => {
+                ui.label(h.text());
+            }
+            None => {}
+        }
     });
     if let Some(m) = message {
         ui.colored_label(m.color(dark), m.text());

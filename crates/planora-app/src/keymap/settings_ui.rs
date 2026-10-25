@@ -62,9 +62,22 @@ pub const NOTES_HEADING: &str = "Beim Laden übergangen:";
 pub const KEYS_NOT_SAVED: &str = "Die Tastenkürzel gelten nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
 /// Mindestweg einer Ziehgeste beim Erfassen (Pixel); darunter ist es ein Klick.
 pub const DRAG_MIN: f32 = 4.0;
-/// Größte Höhe der Tabelle; darüber rollt sie im Fenster (bei 1920 × 1080 bleiben die übrigen
-/// Abschnitte und „Schließen“ zu sehen, und das Einstellungsfenster lässt die Menüleiste frei).
-pub const TABLE_MAX_H: f32 = 320.0;
+/// Kleinste Höhe der Tabelle (in kleinen Fenstern rollt dann das ganze Einstellungsfenster).
+pub const TABLE_MIN_H: f32 = 120.0;
+/// Größte Höhe der Tabelle; darüber rollt sie im Fenster.
+pub const TABLE_MAX_H: f32 = 800.0;
+/// Was neben der Tabelle Platz braucht: die übrigen Abschnitte des Einstellungsfensters mit Kopf
+/// und Fußzeile (rund 630 Pixel) und je rund 75 Pixel frei darüber und darunter. Das Fenster
+/// steht mittig, lässt so die Menüleiste (rund 50 Pixel) frei, auch mit einer zusätzlichen
+/// Hinweiszeile.
+pub const TABLE_RESERVED_H: f32 = 780.0;
+
+/// Höhe der Tabelle im Fenster der Höhe `content_h`: was neben den übrigen Abschnitten frei ist
+/// ([`TABLE_RESERVED_H`]), zwischen [`TABLE_MIN_H`] und [`TABLE_MAX_H`]. Bei 1920 × 1080 sind
+/// das 300 Pixel; größere Fenster zeigen mehr Zeilen.
+pub fn table_max_height(content_h: f32) -> f32 {
+    (content_h - TABLE_RESERVED_H).clamp(TABLE_MIN_H, TABLE_MAX_H)
+}
 
 const AREA_W: f32 = 80.0;
 const RESET_W: f32 = 100.0;
@@ -440,7 +453,7 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
         egui::ScrollArea::vertical()
             .id_salt("tastenkuerzel_tabelle")
             .auto_shrink([false, true])
-            .max_height(TABLE_MAX_H),
+            .max_height(table_max_height(ui.ctx().content_rect().height())),
         |ui| {
             ui.set_max_width(table_w);
             ui.add_enabled_ui(!hold, |ui| {

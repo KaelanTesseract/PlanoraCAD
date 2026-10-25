@@ -1,6 +1,6 @@
 //! Einstellungen → Updates: laufende Version mit Kanal, Auswahl „Update-Kanal“ (heute nur Dev),
 //! Schalter „Beim Start nach Updates suchen“ mit Hinweis zum Datenschutz, Knopf „Jetzt nach
-//! Updates suchen“ (noch ohne Wirkung) und „Letzte Prüfung“. Gespeichert wird sofort über die
+//! Updates suchen“ (meldet den Wunsch an die App, Ergebnis daneben) und „Letzte Prüfung“. Gespeichert wird sofort über die
 //! Wege des Arbeitsbereichs; misslingt das, gilt der Wert für die Sitzung (mit Hinweis) und
 //! kommt beim nächsten gelungenen Schreiben mit. Konfiguration nur im Temp-Ordner.
 
@@ -181,7 +181,7 @@ fn section_shows_version_channel_switch_and_note() {
             "Beim Suchen fragt das Programm bei GitHub nach; dabei sieht GitHub deine IP-Adresse."
         );
         assert_eq!(CHECK_NOW, "Jetzt nach Updates suchen");
-        assert_eq!(CHECK_NOW_LATER, "Kommt mit der nächsten Aufgabe.");
+        assert_eq!(CHECK_RUNNING, "Suche läuft …");
         let running = planora_app::running_version();
         let version_line = running_version_line();
         assert_eq!(
@@ -203,7 +203,6 @@ fn section_shows_version_channel_switch_and_note() {
             CHECK_ON_START_LABEL,
             PRIVACY_NOTE,
             CHECK_NOW,
-            CHECK_NOW_LATER,
             never.as_str(),
             SECTION_PROJECTS,
             "Schließen",
@@ -234,7 +233,6 @@ fn section_shows_version_channel_switch_and_note() {
         for (left, right) in [
             (version_line.as_str(), never.as_str()),
             (CHANNEL_LABEL, CHECK_ON_START_LABEL),
-            (CHECK_NOW, CHECK_NOW_LATER),
         ] {
             let (l, r) = (find(&seen, left), find(&seen, right));
             assert!(
@@ -277,7 +275,9 @@ fn section_shows_version_channel_switch_and_note() {
             CHECK_ON_START_LABEL,
             PRIVACY_NOTE,
             CHECK_NOW,
-            CHECK_NOW_LATER,
+            CHECK_RUNNING,
+            UP_TO_DATE,
+            CHECK_FAILED,
             UPDATES_NOT_SAVED,
         ] {
             for tech in ["API", "HTTP", "Cargo", "::", "config", "Release"] {
@@ -288,14 +288,54 @@ fn section_shows_version_channel_switch_and_note() {
 }
 
 #[test]
-fn the_check_now_button_does_nothing_yet() {
-    let e = env("planora-updates-knopf");
-    let mut a = App::new(e, true, 1920.0, 1080.0);
-    a.w.open(false);
-    a.click(CHECK_NOW);
-    assert!(a.w.is_open());
-    assert_eq!(a.e.ws.last_update_check(), None);
-    assert!(!a.e.cfg.exists(), "nichts geschrieben");
+fn the_check_now_button_asks_the_app_and_shows_the_hint() {
+    for dark in [false, true] {
+        let e = env("planora-updates-knopf");
+        let mut a = App::new(e, dark, 1920.0, 1080.0);
+        a.w.open(false);
+        assert!(!a.w.take_check_request());
+        a.click(CHECK_NOW);
+        // Das Fenster sucht nicht selbst: es meldet den Wunsch (einmal) an die App.
+        assert!(a.w.is_open());
+        assert!(a.w.take_check_request());
+        assert!(!a.w.take_check_request(), "abgeholt");
+        assert_eq!(a.e.ws.last_update_check(), None);
+        assert!(!a.e.cfg.exists(), "nichts geschrieben");
+        // Läuft die Suche, ist der Knopf aus.
+        a.w.set_check_hint(Some(CheckHint::Running));
+        let seen = a.settle(3);
+        find(&seen, CHECK_RUNNING);
+        a.click(CHECK_NOW);
+        assert!(!a.w.take_check_request(), "Knopf aus");
+        // Ergebnisse neben dem Knopf, der Fehler in Warnfarbe; das Fenster lässt bei
+        // 1920 × 1080 die Menüleiste frei.
+        let warning = theme::palette(dark).warning;
+        for (hint, warns) in [
+            (CheckHint::UpToDate, false),
+            (CheckHint::Found(v("0.2.0-dev.9")), false),
+            (CheckHint::Failed, true),
+        ] {
+            a.w.set_check_hint(Some(hint.clone()));
+            let seen = a.settle(3);
+            let (button, shown) = (find(&seen, CHECK_NOW), find(&seen, &hint.text()));
+            assert!(
+                button.rect.right() < shown.rect.left()
+                    && (button.rect.center().y - shown.rect.center().y).abs() < 4.0,
+                "dunkel {dark}: {hint:?} neben dem Knopf"
+            );
+            assert_eq!(shown.color == warning, warns, "dunkel {dark}: {hint:?}");
+            let window = a.w.last_rect.expect("Fenster gezeichnet");
+            assert!(window.top() > 50.0, "dunkel {dark}: {window:?}");
+        }
+        // Neu öffnen leert ein Ergebnis, nicht aber „Suche läuft …“.
+        a.w.close();
+        a.w.open(false);
+        assert_eq!(a.w.check_hint(), None);
+        a.w.set_check_hint(Some(CheckHint::Running));
+        a.w.close();
+        a.w.open(false);
+        assert_eq!(a.w.check_hint(), Some(&CheckHint::Running));
+    }
 }
 
 #[test]
@@ -582,5 +622,40 @@ fn about_dialog_shows_version_with_channel() {
     assert_eq!(
         running_version_line_for(&v("0.2.0-dev.1")),
         "Laufende Version: 0.2.0-dev.1 (Dev)"
+    );
+}
+
+#[test]
+fn keys_table_height_follows_the_window_and_the_menu_stays_free() {
+    use planora_app::keymap::settings_ui::{
+        TABLE_MAX_H, TABLE_MIN_H, TABLE_RESERVED_H, table_max_height,
+    };
+    assert_eq!(table_max_height(1080.0), 1080.0 - TABLE_RESERVED_H);
+    assert_eq!(table_max_height(1080.0), 300.0);
+    assert_eq!(table_max_height(600.0), TABLE_MIN_H);
+    assert_eq!(table_max_height(4000.0), TABLE_MAX_H);
+    let mut heights = Vec::new();
+    for h in [900.0, 1080.0, 1440.0] {
+        let e = env("planora-updates-tabellenhoehe");
+        let mut a = App::new(e, true, 1920.0, h);
+        a.w.open(false);
+        // Mit Hinweiszeilen im Abschnitt „Updates“ (Ergebnis und Speicherfehler).
+        a.w.set_check_hint(Some(CheckHint::Failed));
+        block(&mut a.e);
+        a.click(CHECK_ON_START_LABEL);
+        let seen = a.settle(6);
+        find(&seen, UPDATES_NOT_SAVED);
+        let window = a.w.last_rect.expect("Fenster gezeichnet");
+        assert!(
+            window.top() > 50.0,
+            "Höhe {h}: {window:?} über der Menüleiste"
+        );
+        assert!(window.bottom() < h - 50.0, "Höhe {h}: {window:?}");
+        heights.push(window.height());
+    }
+    // Größere Fenster: die Tabelle nutzt den Platz (das Fenster wächst mit).
+    assert!(
+        heights.windows(2).all(|w| w[1] > w[0] + 100.0),
+        "{heights:?}"
     );
 }

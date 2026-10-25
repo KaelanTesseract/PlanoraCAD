@@ -2608,6 +2608,7 @@ dependencies = [
  "planora-step",
  "planora-update",
  "png",
+ "serde_json",
  "skrifa",
  "winit",
 ]
