@@ -138,3 +138,20 @@ Jede Etappe mit Sichtprüfung im echten Fenster bei 1920 × 1080.
 5. **Version der Einstellungen:** Kein neues Versionsfeld. Unbekannte Aktionen und ungültige Tasten in der Konfigurationsdatei werden ignoriert und in den Einstellungen als Hinweis genannt (so verhält sich auch „Datei aus neuerer Version“). Die Konfigurationsdatei ändert sich nur durch einen neuen, optionalen Abschnitt für Abweichungen.
 6. **Doppelbelegung mit „Alle“:** Ja: Tauschen wird auch mit einer „Alle“-Aktion angeboten, weil keine Taste verschluckt werden darf (Anti-Ziel).
 7. **Gedächtnis:** Der Verweis auf das Gedächtnis (Entscheidung 5) betrifft nur Claudes Arbeitsweise, nicht das Programm; der Plan enthält dafür keinen Schritt.
+
+## Tatsächlich umgesetzt (Nachtrag nach der Umsetzung, Stand 2026-10-25)
+
+Was beim Bauen anders oder genauer wurde als oben beschrieben:
+
+1. **Umschalttasten genau.** Ein Kürzel feuert nur, wenn Strg, Umschalt und Alt genau stimmen. Strg+Umschalt+N öffnet also kein neues Dokument mehr, und Strg+Alt+Z macht nichts rückgängig (früher löste beides aus). Der Verteiler verbraucht alle passenden Ereignisse eines Bildes auf einmal, eine gehaltene Taste löst je Bild einmal aus.
+2. **Zoomen hat zwei Voreinstellungen:** das Mausrad und Strg+Mausrad. Auf Windows kommt das Zusammenziehen zweier Finger auf dem Touchpad als Strg+Rad an und zoomt so weiter wie bisher. Wer die zweite Belegung nicht will, entfernt sie in den Einstellungen.
+3. **Zwei Zeilen für Leertaste und für S.** Im Modell wiederholt die Leertaste den letzten Befehl („Letzten Befehl wiederholen“), in der Skizze das letzte Skizzenwerkzeug („Letztes Skizzenwerkzeug wiederholen“). S öffnet in beiden Bereichen die Übersicht („Tastenkürzel anzeigen“ und „Tastenkürzel in der Skizze anzeigen“). Eine Aktion gehört zu genau einem Bereich, darum je zwei Zeilen in Einstellungen und Übersicht.
+4. **Wann „Letzten Befehl wiederholen“ sich etwas merkt.** Erst wenn der Befehl abgeschlossen ist: Sein Fenster ist zu, und dabei ist ein neues Feature seiner eigenen Art entstanden. Abbrechen oder ein anderes Fenster an seiner Stelle ersetzt den gemerkten Befehl nicht. Skizzenwerkzeuge merkt sich die Skizze, sobald das Werkzeug eine Kurve angelegt hat; das Gedächtnis des Modells bleibt daneben bestehen.
+5. **Leertaste auf App-Ebene.** Sie wird vor dem Aufbau der Bedienelemente verbraucht und ist nur gesperrt, wenn ein Textfeld aktiv ist, eine Rückfrage oder ein Fenster offen ist. Ein per Tab fokussierter Knopf behält die Leertaste (er wird gedrückt). Die Verlaufsleiste und die Ansicht sperren sie nicht.
+6. **Fenster sperren alle Befehle.** Solange irgendein Fenster offen ist (Dialoge des Tabs, Export und Import, „Über“, Projekte-Aktionen, Versionen, Einstellungen, Übersicht), feuern die Tasten von Modell, Skizze und Zeichnung nicht, wie schon Rückgängig. Dateikürzel („Überall“) gelten weiter.
+7. **Zurücksetzen kann eine Taste von einer anderen Aktion zurückholen.** Setzt man eine Aktion auf ihre Voreinstellung zurück und diese Taste gehört inzwischen einer anderen Aktion, geht sie zurück zur ersten, die andere verliert sie, und ein Hinweis nennt das.
+8. **Mausgesten erfassen nur, was die Ansichten nutzen.** Beim Erfassen werden nur Gesten angenommen, die eine Ansicht auch auswertet (Schwenken, Drehen, Zoomen; Ziehen mit einer Taste oder das Rad, jeweils mit Umschalttasten). Alles andere wird nicht gespeichert.
+9. **Esc schließt die Übersicht.** Immer, auch bei Fokus im Suchfeld.
+10. **Deutsche Tastennamen** in Menüs, Einstellungen und Übersicht (Strg, Umschalt, Alt, Entf, Leertaste, Komma, Minus, Punkt …); das Pluszeichen ist nie ein Name. Die Umschalttasten allein lassen sich nicht belegen.
+11. **Taste X** (Skizze: Konstruktion umschalten) ist belegt, weil es die Funktion als Knopf auf der Auswahl gibt. **M (Verschieben) fehlt**, weil es kein Verschieben-Werkzeug gibt (nur die Positionsfelder).
+12. **Einstellungen:** Der Abschnitt „Tastenkürzel“ steht hinter „Projekte“. Die Übersicht öffnet sich mit S, über Ansicht → Tastenkürzel … und aus den Einstellungen zurück.

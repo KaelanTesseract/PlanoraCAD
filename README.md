@@ -501,7 +501,7 @@ Jede Änderung am Dokument lässt sich zurücknehmen und wieder herstellen: Kör
 - Kamera und Hell oder Dunkel bleiben. Ein gewählter Körper bleibt gewählt, solange es ihn gibt. Eine gewählte Fläche oder Kante wird abgewählt, wenn sich das Modell ändert. Bei Schritten, die nur die Zeichnung betreffen, bleibt auch sie.
 - Offene Fenster (zum Beispiel „Quader erzeugen“ oder „Ändern“) werden geschlossen, wenn du Rückgängig über das Menü oder die Knöpfe benutzt. Was du darin noch nicht übernommen hattest, ist weg.
 - Die Tasten sind gesperrt, solange du in ein Feld tippst (dort gilt das Rückgängig des Feldes), ein Fenster oder eine Rückfrage offen ist, die Maustaste gedrückt ist oder eine Datei exportiert wird. Menü und Knöpfe gehen auch bei offenem Fenster und schließen es. Beim Export sind sie gesperrt.
-- Strg+Alt+Z löst ebenfalls Rückgängig aus, wie bei allen Tastenkürzeln des Programms.
+- Die Umschalttasten zählen genau: Strg+Alt+Z oder Strg+Umschalt+N lösen nichts aus.
 - Die Namen der Aktionen erkennt das Programm am Unterschied zwischen vorher und nachher. Sie stimmen fast immer. Wenn mehrere Dinge in einem Schritt zusammenfallen, gilt eine feste Reihenfolge; ist nichts Passendes dabei, heißt der Schritt „Ändern“. Zwei Eigenheiten: Ändert man einen Maßwert in einer Skizze, heißt der Schritt „Skizze ändern“ (nicht „Maß ändern“). Spiegelt man eine einzelne Kurve, heißt der Schritt nach der Kurve (zum Beispiel „Kreis zeichnen“).
 - Ist das Zurückholen eines Schrittes einmal nicht möglich, bleibt das Dokument unverändert, es kommt die Meldung „Rückgängig ist nicht möglich.“ (bzw. „Wiederholen ist nicht möglich.“), und nur dieser Schritt fällt aus dem Verlauf. Das sollte nicht vorkommen.
 - Wie lange es dauert: Ein Schritt im Modell rechnet das Dokument neu, wie beim Öffnen. Bei einem schweren Beispielmodell (37 Einträge im Baum, Netz-Körper mit 200 000 Dreiecken, Zeichnung mit sechs Ansichten) dauerte das im Release-Build etwa 0,23 bis 0,29 Sekunden. Ein Schritt, der nur die Zeichnung betrifft, rechnet nichts neu.
@@ -627,6 +627,17 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 - Beim Wechsel zwischen Modell, Zeichnung und Skizze blitzen keine Felder des vorherigen Modus mehr auf.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 13“ (Etappen A bis D).
+
+## Tastenkürzel und Maus
+
+Die Tasten sind ab Werk wie in Fusion: zum Beispiel E extrudiert, F rundet, V blendet einen Körper ein oder aus, Entf löscht, die Leertaste wiederholt den letzten Befehl; in der Skizze wählen L, R und C die Werkzeuge Linie, Rechteck und Kreis; in der Zeichnung setzen D ein Maß und B eine Position. Die bisherigen Kürzel für Dateien und Rückgängig gelten weiter.
+
+- **Ändern:** Menü „Datei → Einstellungen …“, Abschnitt „Tastenkürzel“. Zeile wählen, neue Taste drücken, fertig. Ist die Taste schon vergeben, fragt das Programm, ob getauscht werden soll. „Zurücksetzen“ holt die Voreinstellung zurück.
+- **Nachschlagen:** „Ansicht → Tastenkürzel …“ oder die Taste S öffnet eine Übersicht mit Suchfeld. Man kann nach dem Namen oder nach der Taste suchen.
+- **Maus in der 3D-Ansicht:** Die mittlere Taste schwenkt, Umschalt und mittlere Taste drehen, das Rad zoomt. Die linke Taste dreht weiter wie bisher. Auch die Mausbewegungen lassen sich in den Einstellungen ändern.
+- Während du in ein Feld tippst oder ein Fenster offen ist, lösen die Tasten für Modell, Skizze und Zeichnung nichts aus.
+
+Welche Fusion-Kürzel noch fehlen, weil es die Funktion noch nicht gibt, steht in `docs/superpowers/offene-punkte.md`, Abschnitt „Tastenkürzel“.
 
 ## Bauen
 

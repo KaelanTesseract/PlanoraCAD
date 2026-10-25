@@ -181,4 +181,17 @@ Voreinstellung in Task 1 (Windows): New Strg+N; Projects Strg+O; Save Strg+S; Cl
 
 ## Abweichungen
 
-(Wird von Task 8 gefüllt.)
+Was bei der Umsetzung anders kam als geplant:
+
+- **MoveBody nicht angelegt.** Es gibt kein Verschieben-Werkzeug (nur Positionsfelder); M steht in der Liste „noch nicht vorhanden“ (offene-punkte.md).
+- **X ergänzt** (Skizze: Konstruktion umschalten). Die Funktion gibt es als Knopf auf der Auswahl, und der Entwurf listet X.
+- **Zwei Aktionen für Leertaste und für S.** Eine Aktion hat nur einen Bereich; darum `RepeatLast` (Modell) und `SketchRepeatLast` (Skizze) sowie `ShowShortcuts` und `SketchShowShortcuts`, mit unterschiedlichen Namen in Einstellungen und Übersicht.
+- **Strg+Mausrad als zweite Voreinstellung von „Ansicht zoomen“** (Zusammenziehen auf dem Touchpad kommt unter Windows als Strg+Rad an; sonst hätte die Zeichnung es verloren).
+- **`Keymap::reset` nimmt eine Voreinstellung auch von einer anderen Aktion zurück** und meldet das als Liste `(Belegung, bisherige Aktion)`; die Einstellungen zeigen einen Hinweis. `Keymap::swap` geht dazu in einem Durchgang über die Aktionen.
+- **„Letzten Befehl wiederholen“ merkt erst beim Abschluss** (Fenster zu und neues Feature der eigenen Art entstanden; Skizzenwerkzeuge, sobald eine Kurve angelegt wurde), nicht beim Starten.
+- **Abschnitt „Tastenkürzel“** steht in den Einstellungen hinter „Projekte“ (lange Tabelle).
+- **Aufgabe 2:** Der Verteiler vergleicht Umschalttasten genau (Strg+Umschalt+N und Strg+Alt+Z feuern nicht mehr). Der Test „zweiter Durchgang“ belegt nur, dass die Taste einmal wirkt: egui gibt rohe Ereignisse nur dem ersten Durchgang, die Sperre `current_pass_index() != 0` ist zusätzliche Absicherung.
+- **`shortcut_hint` zeigt nur die erste Tastenbelegung** (Redo: „Strg+Y“, nicht beide); Mausgesten zählen dabei nicht.
+- **Sperren:** Modell-, Skizzen- und Zeichnungstasten sind gesperrt, solange irgendein Fenster offen ist (wie Rückgängig); die Leertaste ist auf App-Ebene nur bei Textfeld, Rückfrage oder Fenster gesperrt, ein per Tab fokussierter Knopf behält sie.
+- **Übersicht:** Esc schließt sie immer; sie öffnet nicht über einer Rückfrage; das Menü zeigt nach dem Umbelegen die neue Taste (Test).
+- **Aufgabe 8 (Aufräumen):** `keymap::mouse::wheel` ist jetzt `pub(crate)` (nur die 3D-Ansicht nutzt es), Menühinweise werden je Menü einmal berechnet (`shortcut_button` nimmt den Tastentext), Beschriftung „Tastenkürzel in der Skizze anzeigen“, `Event::Text`-Verbrauch bei S als „sicherheitshalber“ behalten.
