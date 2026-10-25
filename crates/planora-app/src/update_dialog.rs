@@ -109,6 +109,8 @@ pub enum InstallView<'a> {
     Preparing,
     /// Fortschrittsbalken und „Abbrechen“.
     Downloading { done: u64, total: u64 },
+    /// Fertig geladen; der Neustart wartet, bis nichts mehr offen ist.
+    Waiting,
     /// Die neue Version wird gestartet.
     Restarting,
     /// Fehlermeldung mit „Download-Seite öffnen“ und „Schließen“.
@@ -305,6 +307,9 @@ fn install_footer(ui: &mut egui::Ui, install: InstallView<'_>, dark: bool) -> Op
         }
         InstallView::Restarting => {
             ui.label(update_install::RESTARTING);
+        }
+        InstallView::Waiting => {
+            ui.label(update_install::WAITING);
         }
         InstallView::Downloading { done, total } => {
             ui.horizontal(|ui| {

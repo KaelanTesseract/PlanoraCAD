@@ -284,16 +284,24 @@ pub fn verify_sha256(
     checksum_file_contents: &str,
     expected_name: &str,
 ) -> Result<(), InstallError> {
-    let expected = parse_checksum(checksum_file_contents, expected_name)?;
+    let expected = checksum_hex(checksum_file_contents, expected_name)?;
+    file_matches_sha256(file, &expected)
+}
+
+/// Stimmt die Prüfsumme von `file` mit `expected_hex` überein (Groß-/Kleinschreibung egal)?
+/// Sonst [`InstallError::Checksum`]. Für die zweite Prüfung unmittelbar vor dem Austausch.
+pub fn file_matches_sha256(file: &Path, expected_hex: &str) -> Result<(), InstallError> {
     let actual = file_sha256(file)?;
-    if actual.eq_ignore_ascii_case(&expected) {
+    if actual.eq_ignore_ascii_case(expected_hex) {
         Ok(())
     } else {
         Err(InstallError::Checksum)
     }
 }
 
-fn parse_checksum(contents: &str, expected_name: &str) -> Result<String, InstallError> {
+/// Die erwartete Prüfsumme (64 Hexziffern, klein) aus dem Inhalt der Prüfsummen-Datei, nach
+/// denselben Regeln wie [`verify_sha256`].
+pub fn checksum_hex(contents: &str, expected_name: &str) -> Result<String, InstallError> {
     let mut lines = contents.lines().map(str::trim).filter(|l| !l.is_empty());
     let line = lines.next().ok_or(InstallError::Checksum)?;
     if lines.next().is_some() {

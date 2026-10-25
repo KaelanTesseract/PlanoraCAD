@@ -5,7 +5,8 @@ use planora_render::gpu::MSAA_SAMPLES;
 
 fn main() -> eframe::Result {
     // Von der alten Version nach dem Austausch gestartet (siehe `update_install`).
-    let after_update = std::env::args()
+    // `args_os`: ein Argument, das kein gültiges Unicode ist (etwa ein Dateipfad), bricht nicht ab.
+    let after_update = std::env::args_os()
         .skip(1)
         .any(|a| a == planora_app::update_install::AFTER_UPDATE_ARG);
     let mut viewport = egui::ViewportBuilder::default()

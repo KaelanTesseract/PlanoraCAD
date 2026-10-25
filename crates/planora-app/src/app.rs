@@ -40,6 +40,7 @@ use planora_update::install::{
 use planora_update::{Update, Version};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 /// Wie oft die App ohne Eingaben neu zeichnet, damit die Autosicherung auch im Leerlauf läuft.
@@ -114,16 +115,20 @@ pub struct PlanoraApp {
     marker_wait: Duration,
     /// Hinweis „Aktualisiert auf Version X“ nach einem Update (einmal).
     after_update: Option<AfterUpdate>,
+    /// Ergebnis der zweiten Prüfung von `.new` ([`RestartPhase::Verifying`]).
+    reverify: Option<Receiver<Result<(), InstallError>>>,
 }
 
 /// Schritt des Neustarts nach einem fertig geladenen und geprüften Update.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RestartPhase {
-    /// Kein Neustart begonnen.
+    /// Kein Neustart begonnen (oder er wartet, bis nichts mehr offen ist).
     #[default]
     None,
     /// Die Rückfrage wegen ungespeicherter Arbeit läuft (wie beim Schließen).
     AwaitingPrompt,
+    /// `.new` wird unmittelbar vor dem Austausch noch einmal geprüft (im Hintergrund).
+    Verifying,
     /// Ausgetauscht und die neue Version gestartet; wartet bis `deadline` auf ihre Rückmeldung.
     WaitingForMarker { deadline: Instant, to: Version },
     /// Die neue Version läuft; das Programm beendet sich.
@@ -141,6 +146,14 @@ impl PlanoraApp {
         cc.egui_ctx.set_fonts(fonts::definitions());
         Self::setup_context(&cc.egui_ctx);
         GpuScene::install(render_state);
+        // Nach einem Update meldet sich die neue Version so früh wie möglich bei der alten:
+        // Fenster und Renderer stehen, Konfiguration und Bibliothek (die bei großen oder
+        // Netzwerk-Ordnern dauern können) kommen erst danach.
+        let running = crate::running_version();
+        let exe_path = std::env::current_exe().ok();
+        if after_update && let Some(exe) = &exe_path {
+            update_install::write_ok_marker(&Paths::for_exe(exe), &running);
+        }
 
         let config = planora_project::config::Config::load();
         let root = config
@@ -152,13 +165,12 @@ impl PlanoraApp {
         let library = planora_project::library::Library::open(&root).ok();
         let ws = Workspace::new(library, config);
         // Nur hier geht das Programm ins Netz und startet sich neu; Tests bekommen Nachbildungen.
-        let running = crate::running_version();
         let source = Arc::new(HttpSource::new(&running));
         let mut app = Self::with_workspace(ws, source);
         app.downloader = Arc::new(HttpDownloader::new(&running));
         app.restarter = Arc::new(ProcessRestarter);
-        app.exe_path = std::env::current_exe().ok();
-        app.run_update_startup(after_update);
+        app.exe_path = exe_path;
+        app.finish_update_startup(after_update);
         app
     }
 
@@ -194,6 +206,7 @@ impl PlanoraApp {
             restart: RestartPhase::None,
             marker_wait: MARKER_WAIT,
             after_update: None,
+            reverify: None,
         }
     }
 
@@ -249,11 +262,20 @@ impl PlanoraApp {
         self.exe_path.as_deref().map(Paths::for_exe)
     }
 
-    /// Beim Start: Aufräumen nach einem Update und der Hinweis „Aktualisiert auf Version X“
-    /// ([`update_install::startup`]). `after_update`: mit [`update_install::AFTER_UPDATE_ARG`]
-    /// gestartet.
+    /// Beim Start wie im Programm: mit `after_update` ([`update_install::AFTER_UPDATE_ARG`]) die
+    /// Rückmeldung an die alte Version ([`update_install::write_ok_marker`]; im Programm schon
+    /// früher in [`PlanoraApp::new`]), dann [`PlanoraApp::finish_update_startup`].
     #[doc(hidden)]
     pub fn run_update_startup(&mut self, after_update: bool) {
+        if after_update && let Some(paths) = self.install_paths() {
+            update_install::write_ok_marker(&paths, &crate::running_version());
+        }
+        self.finish_update_startup(after_update);
+    }
+
+    /// Aufräumen nach einem Update und der Hinweis „Aktualisiert auf Version X“
+    /// ([`update_install::startup`]).
+    fn finish_update_startup(&mut self, after_update: bool) {
         let paths = self.install_paths();
         self.after_update = update_install::startup(
             &mut self.ws,
@@ -289,15 +311,33 @@ impl PlanoraApp {
         }
     }
 
+    /// Hält gerade etwas den Neustart auf? Eine offene Rückfrage, ein Autosicherungs-Angebot, ein
+    /// schreibender Export (in irgendeinem Tab), ein Fenster ([`PlanoraApp::windows_open`] ohne
+    /// die Meldung des Updates selbst) oder das Fenster Projekte. Dann wartet das fertige Update
+    /// ([`update_install::WAITING`]) und es wird in jedem Bild neu geprüft.
+    fn restart_blocked(&self) -> bool {
+        self.ws.prompt.is_some()
+            || self.ws.tabs.iter().any(|t| {
+                t.pending_autosave.is_some()
+                    || t.export_dialog
+                        .as_ref()
+                        .is_some_and(|d| d.is_writing_file())
+            })
+            || self.other_windows_open()
+            || self.projects.is_open()
+    }
+
     /// Download und Neustart in jedem Bild (in `logic`, vor dem Schließen): Stand abholen; ist
-    /// die Datei fertig und geprüft, die Rückfrage wie beim Schließen stellen
-    /// (`Workspace::request_quit`); danach austauschen ([`PlanoraApp::restart_now`]) oder bei
-    /// „Abbrechen“ das Update verwerfen; nach dem Start der neuen Version auf ihre Rückmeldung
-    /// warten. Wartet nie.
+    /// die Datei fertig und geprüft und hält nichts auf ([`PlanoraApp::restart_blocked`]), die
+    /// Rückfrage wie beim Schließen stellen (`Workspace::request_quit`); danach `.new` noch
+    /// einmal prüfen und austauschen ([`PlanoraApp::restart_now`]) oder bei „Abbrechen“ das
+    /// Update verwerfen; nach dem Start der neuen Version auf ihre Rückmeldung warten. Wartet
+    /// nie.
     fn install_tick(&mut self, ctx: &egui::Context) {
         self.installer.poll();
         if self.restart == RestartPhase::None
             && *self.installer.state() == InstallState::ReadyToRestart
+            && !self.restart_blocked()
         {
             self.restart = RestartPhase::AwaitingPrompt;
             // Dieselbe Rückfrage wie beim Schließen; ohne ungespeicherte Arbeit setzt sie
@@ -310,7 +350,13 @@ impl PlanoraApp {
                 if self.ws.quit {
                     // Das Programm beendet sich erst, wenn die neue Version läuft.
                     self.ws.quit = false;
-                    self.restart_now();
+                    self.start_reverify(ctx);
+                } else if self.ws.prompt.is_none()
+                    && self.ws.tabs.iter().any(|t| t.pending_autosave.is_some())
+                {
+                    // Ein Autosicherungs-Angebot kam dazwischen: das ist kein „Abbrechen“;
+                    // warten, bis es beantwortet ist, dann neu fragen.
+                    self.restart = RestartPhase::None;
                 } else if self.ws.prompt.is_none() {
                     // „Abbrechen“ in der Rückfrage: Update abbrechen, `.new` löschen.
                     self.restart = RestartPhase::None;
@@ -322,12 +368,35 @@ impl PlanoraApp {
                     );
                 }
             }
+            RestartPhase::Verifying => {
+                let result = match self.reverify.as_ref().map(Receiver::try_recv) {
+                    Some(Ok(result)) => result,
+                    Some(Err(TryRecvError::Empty)) => {
+                        ctx.request_repaint_after(Duration::from_millis(50));
+                        return;
+                    }
+                    Some(Err(TryRecvError::Disconnected)) | None => {
+                        Err(InstallError::Io("Prüfung abgebrochen".into()))
+                    }
+                };
+                self.reverify = None;
+                match result {
+                    Ok(()) => self.restart_now(),
+                    Err(e) => {
+                        self.restart = RestartPhase::None;
+                        if let Some(paths) = self.installer.paths() {
+                            discard_download(paths);
+                        }
+                        self.installer.fail(e.message());
+                    }
+                }
+            }
             RestartPhase::WaitingForMarker { deadline, to } => {
                 let Some(paths) = self.installer.paths().cloned() else {
                     self.restart = RestartPhase::None;
                     return;
                 };
-                if paths.ok_marker.exists() {
+                if update_install::ok_marker_for(&paths, &to) {
                     let _ = std::fs::remove_file(&paths.ok_marker);
                     self.restart = RestartPhase::Exiting;
                     // Ohne weitere Rückfrage: `handle_close_request` schickt `Close`.
@@ -341,7 +410,24 @@ impl PlanoraApp {
         }
     }
 
-    /// Nach der Rückfrage: `update_pending` speichern (sonst nichts austauschen), Patchnotes für
+    /// Nach der Rückfrage: `.new` im Hintergrund noch einmal gegen die beim Download geprüfte
+    /// Summe prüfen ([`update_install::reverify`]); weiter in [`RestartPhase::Verifying`].
+    fn start_reverify(&mut self, ctx: &egui::Context) {
+        let (Some(paths), Some(hex)) = (self.installer.paths(), self.installer.verified_sha256())
+        else {
+            self.restart = RestartPhase::None;
+            self.installer.fail(InstallError::Checksum.message());
+            return;
+        };
+        self.reverify = Some(update_install::reverify(
+            paths.new_exe.clone(),
+            hex.to_string(),
+            Some(ctx.clone()),
+        ));
+        self.restart = RestartPhase::Verifying;
+    }
+
+    /// Nach der zweiten Prüfung: `update_pending` speichern (sonst nichts austauschen), Patchnotes für
     /// den Hinweis hinterlegen, austauschen, die neue Version starten und auf sie warten. Jeder
     /// Fehler legt den alten Stand zurück und zeigt eine Meldung; das Programm läuft weiter.
     fn restart_now(&mut self) {
@@ -382,7 +468,11 @@ impl PlanoraApp {
         }
         if let Err(e) = swap(&paths) {
             let _ = self.ws.set_pending_update(None);
-            discard_download(&paths);
+            // Ließ sich die bisherige Datei nicht zurücklegen, ist `.new` die einzige gute
+            // Programmdatei neben `.old`: dann nicht löschen.
+            if paths.running_exe.exists() {
+                discard_download(&paths);
+            }
             self.installer.fail(e.message());
             return;
         }
@@ -710,9 +800,14 @@ impl PlanoraApp {
     /// selbst sperrt Rückgängig nicht (es ändert kein Dokument), wohl aber die Befehle der
     /// Bereiche (siehe [`PlanoraApp::shortcuts`]). Ebenso die Meldung „Neue Version verfügbar“.
     fn windows_open(&self) -> bool {
+        self.update_dialog.open || self.other_windows_open()
+    }
+
+    /// [`PlanoraApp::windows_open`] ohne die Meldung „Neue Version verfügbar“ (die den Neustart
+    /// nach einem Update nicht aufhält).
+    fn other_windows_open(&self) -> bool {
         self.ws.about_open
             || self.overview.open
-            || self.update_dialog.open
             || self.after_update.is_some()
             || self.ws.active_tab().dialog_open()
             || crate::project_actions::dialog_open(&self.projects.ui)
@@ -969,7 +1064,7 @@ fn install_view(restart: RestartPhase, state: &InstallState) -> InstallView<'_> 
             done: *done,
             total: *total,
         },
-        InstallState::ReadyToRestart => InstallView::Restarting,
+        InstallState::ReadyToRestart => InstallView::Waiting,
         InstallState::Failed(message) => InstallView::Failed(message),
     }
 }

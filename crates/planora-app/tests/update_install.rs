@@ -96,6 +96,9 @@ struct FakeDownloader {
     /// Wird vor dem Laden der Programmdatei abgeholt: steuert, wann Stücke kommen.
     gate: Mutex<Option<mpsc::Receiver<()>>>,
     step: usize,
+    /// Fehler beim Laden der Programmdatei, nachdem schon ein Teil geschrieben ist (etwa
+    /// „Speicherplatz voll“).
+    exe_error: Option<InstallError>,
 }
 
 impl FakeDownloader {
@@ -105,6 +108,17 @@ impl FakeDownloader {
             calls: AtomicUsize::new(0),
             gate: Mutex::new(None),
             step: 7,
+            exe_error: None,
+        })
+    }
+
+    fn failing(error: InstallError) -> Arc<FakeDownloader> {
+        Arc::new(FakeDownloader {
+            checksum: format!("{}  {EXE_NAME}\n", hex_digest(NEW_EXE)),
+            calls: AtomicUsize::new(0),
+            gate: Mutex::new(None),
+            step: 7,
+            exe_error: Some(error),
         })
     }
 
@@ -131,6 +145,11 @@ impl Downloader for FakeDownloader {
             (self.checksum.clone().into_bytes(), None)
         } else {
             assert!(url.ends_with(EXE_NAME));
+            if let Some(e) = &self.exe_error {
+                // Ein Teil liegt schon auf der Platte, dann scheitert das Schreiben.
+                std::fs::write(dest, &NEW_EXE[..10]).unwrap();
+                return Err(e.clone());
+            }
             (NEW_EXE.to_vec(), self.gate.lock().unwrap().take())
         };
         let total = data.len() as u64;
@@ -148,15 +167,21 @@ impl Downloader for FakeDownloader {
 /// ab wie eine neue Version, die gut startet.
 struct FakeRestarter {
     started: Mutex<Vec<PathBuf>>,
-    answers: bool,
+    /// Inhalt der Rückmeldung, die die „neue Version“ schreibt (`None`: keine).
+    answer: Option<String>,
     fails: bool,
 }
 
 impl FakeRestarter {
+    /// `answers`: schreibt die Rückmeldung mit der Zielversion.
     fn new(answers: bool) -> Arc<FakeRestarter> {
+        Self::answering(answers.then(|| TARGET.to_string()))
+    }
+
+    fn answering(answer: Option<String>) -> Arc<FakeRestarter> {
         Arc::new(FakeRestarter {
             started: Mutex::new(Vec::new()),
-            answers,
+            answer,
             fails: false,
         })
     }
@@ -172,8 +197,8 @@ impl Restarter for FakeRestarter {
         if self.fails {
             return Err("geht nicht".into());
         }
-        if self.answers {
-            std::fs::write(exe.parent().unwrap().join(OK_MARKER_NAME), TARGET).unwrap();
+        if let Some(answer) = &self.answer {
+            std::fs::write(exe.parent().unwrap().join(OK_MARKER_NAME), answer).unwrap();
         }
         Ok(())
     }
@@ -233,13 +258,16 @@ impl Harness {
         ctx.set_fonts(fonts::definitions());
         theme::apply(&ctx, true);
         PlanoraApp::setup_context(&ctx);
-        let app = PlanoraApp::for_tests_with_install(
+        let mut app = PlanoraApp::for_tests_with_install(
             ws,
             Arc::new(Source),
             downloader,
             restarter,
             paths.running_exe.clone(),
         );
+        // Den Ablauf auf jedem System prüfen (auch im Linux-Teil der CI); nur
+        // `non_windows_shows_hint_and_opens_release_page` schaltet das ab.
+        app.set_auto_install_supported(true);
         Harness {
             ctx,
             app,
@@ -542,7 +570,7 @@ fn pending_that_cannot_be_saved_aborts_before_swapping() {
 fn failing_start_of_the_new_version_rolls_back() {
     let restarter = Arc::new(FakeRestarter {
         started: Mutex::new(Vec::new()),
-        answers: false,
+        answer: None,
         fails: true,
     });
     let mut h = Harness::offered(
@@ -588,6 +616,54 @@ fn missing_ok_marker_triggers_rollback_and_skips_version() {
     assert!(!h.close_sent());
     assert_eq!(h.app.restart_phase(), RestartPhase::None);
     assert!(h.sees(&not_started(&v(TARGET))), "{:?}", h.texts());
+    assert_eq!(MARKER_WAIT, Duration::from_secs(30));
+}
+
+/// Eine Rückmeldung, die schon vor dem Austausch daliegt (etwa von einem früheren Update), zählt
+/// nicht: sie wird vor dem Austausch gelöscht, die neue Version meldet sich nicht → zurück.
+#[test]
+fn stale_ok_marker_does_not_count() {
+    let mut h = Harness::offered(
+        "planora-install-alte-rueckmeldung",
+        FakeDownloader::good(),
+        FakeRestarter::new(false),
+    );
+    h.app.set_marker_wait(Duration::from_millis(300));
+    std::fs::write(&h.paths.ok_marker, TARGET).unwrap();
+    h.click(INSTALL_NOW);
+    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
+    assert!(!h.paths.ok_marker.exists(), "vor dem Austausch gelöscht");
+    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
+    assert_eq!(h.read_exe(), b"alt");
+    assert_eq!(h.app.ws_mut().skipped_version(), Some(v(TARGET)));
+    assert!(!h.app.ws_mut().quit);
+    h.settle();
+    assert!(!h.close_sent());
+}
+
+/// Eine Rückmeldung mit anderer Version (nicht die Zielversion) zählt nicht.
+#[test]
+fn ok_marker_with_wrong_version_does_not_count() {
+    let restarter = FakeRestarter::answering(Some("0.0.1".into()));
+    let mut h = Harness::offered(
+        "planora-install-falsche-rueckmeldung",
+        FakeDownloader::good(),
+        restarter.clone(),
+    );
+    h.app.set_marker_wait(Duration::from_millis(300));
+    h.click(INSTALL_NOW);
+    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
+    assert_eq!(restarter.started().len(), 1);
+    assert_eq!(h.state(), InstallState::Failed(not_started(&v(TARGET))));
+    assert_eq!(h.read_exe(), b"alt");
+    assert!(!h.app.ws_mut().quit);
+    h.settle();
+    assert!(!h.close_sent());
+    // Pure Prüfung: nur der genaue Inhalt zählt (Leerraum am Rand egal).
+    std::fs::write(&h.paths.ok_marker, format!(" {TARGET}\n")).unwrap();
+    assert!(ok_marker_for(&h.paths, &v(TARGET)));
+    std::fs::write(&h.paths.ok_marker, "99.0.0-dev.2").unwrap();
+    assert!(!ok_marker_for(&h.paths, &v(TARGET)));
 }
 
 #[test]
@@ -609,8 +685,9 @@ fn startup_with_matching_pending_shows_notice_once_and_cleans_up() {
         FakeRestarter::new(true),
     );
     h.app.run_update_startup(false);
-    // Rückmeldung für die alte Version, Eintrag gelöscht, `.old` weg, Ablage gelesen.
-    assert!(paths.ok_marker.exists());
+    // Eintrag gelöscht, `.old` weg, Ablage gelesen. Ohne `--nach-update` wartet keine alte
+    // Version: keine Rückmeldung.
+    assert!(!paths.ok_marker.exists());
     assert_eq!(h.app.ws_mut().pending_update(), None);
     assert_eq!(h.pending_on_disk(), None);
     assert!(!paths.old_exe.exists());
@@ -637,7 +714,12 @@ fn startup_with_matching_pending_shows_notice_once_and_cleans_up() {
         FakeRestarter::new(true),
     );
     h.app.run_update_startup(true);
-    assert!(paths.ok_marker.exists());
+    // Rückmeldung mit der laufenden Version als Inhalt.
+    assert_eq!(
+        std::fs::read_to_string(&paths.ok_marker).unwrap(),
+        running.to_string()
+    );
+    assert!(ok_marker_for(&paths, &running));
     h.settle();
     assert!(h.sees(&updated_title(&running)));
     assert!(h.sees(NOTES_ON_GITHUB));
@@ -845,4 +927,261 @@ fn gate_tx_rest(tx: mpsc::Sender<()>) -> mpsc::Sender<()> {
         let _ = tx.send(());
     }
     tx
+}
+
+// ---- Nachbesserung: zweite Prüfung, Warten auf freie Bahn, Speicherplatz, Tabs ------------
+
+#[test]
+fn new_file_changed_before_swap_is_not_swapped() {
+    let restarter = FakeRestarter::new(true);
+    let (mut ws, cfg, paths) = workspace("planora-install-zweite-pruefung");
+    dirty(&mut ws);
+    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), restarter.clone());
+    h.until(|a| a.pending_notice().is_some());
+    h.settle();
+    h.click(INSTALL_NOW);
+    h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
+    // Während die Rückfrage steht, verändert ein anderes Programm `.new`.
+    std::fs::write(&h.paths.new_exe, b"halb geschrieben").unwrap();
+    h.click("Verwerfen");
+    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
+    assert_eq!(
+        h.state(),
+        InstallState::Failed(InstallError::Checksum.message())
+    );
+    assert_eq!(h.read_exe(), b"alt", "nicht ausgetauscht");
+    assert!(!h.paths.new_exe.exists(), ".new gelöscht");
+    assert!(!h.paths.old_exe.exists());
+    assert!(restarter.started().is_empty());
+    assert_eq!(h.app.ws_mut().pending_update(), None);
+    assert!(!h.app.ws_mut().quit);
+    h.settle();
+    assert!(!h.close_sent());
+    assert_eq!(h.app.restart_phase(), RestartPhase::None);
+}
+
+/// Lädt das Update hinter einem Tor, setzt dann `block`, gibt den Download frei und prüft, dass
+/// der Neustart wartet (sichtbar), bis `unblock` gilt; danach geht er von allein weiter.
+fn waits_until_free(
+    prefix: &str,
+    ws: Option<(Workspace, PathBuf, Paths)>,
+    block: impl FnOnce(&mut PlanoraApp),
+    unblock: impl FnOnce(&mut PlanoraApp),
+) -> Harness {
+    let downloader = FakeDownloader::good();
+    let (gate_tx, gate) = mpsc::channel();
+    *downloader.gate.lock().unwrap() = Some(gate);
+    let restarter = FakeRestarter::new(true);
+    let (ws, cfg, paths) = ws.unwrap_or_else(|| workspace(prefix));
+    let mut h = Harness::with(ws, cfg, paths, downloader, restarter.clone());
+    h.until(|a| a.pending_notice().is_some());
+    h.settle();
+    h.click(INSTALL_NOW);
+    block(&mut h.app);
+    drop(gate_tx_rest(gate_tx));
+    h.until(|a| *a.installer().state() == InstallState::ReadyToRestart);
+    for _ in 0..10 {
+        h.frame(vec![]);
+    }
+    assert_eq!(h.app.restart_phase(), RestartPhase::None, "wartet");
+    assert_eq!(*h.app.installer().state(), InstallState::ReadyToRestart);
+    assert!(h.paths.new_exe.exists());
+    assert_eq!(h.read_exe(), b"alt");
+    assert!(restarter.started().is_empty());
+    assert!(!h.app.ws_mut().quit);
+    assert!(
+        h.sees_part("Update ist bereit"),
+        "sichtbar: {:?}",
+        h.texts()
+    );
+    assert!(!h.close_sent());
+    unblock(&mut h.app);
+    h
+}
+
+#[test]
+fn restart_waits_while_a_prompt_is_open() {
+    let mut h = waits_until_free(
+        "planora-install-warten-rueckfrage",
+        None,
+        |a| a.ws_mut().prompt = Some(Prompt::Notice("Hinweis".into())),
+        |a| a.ws_mut().prompt = None,
+    );
+    h.until(|a| a.restart_phase() == RestartPhase::Exiting);
+    assert_eq!(h.read_exe(), NEW_EXE);
+    assert_eq!(WAITING, "Update ist bereit und wartet, bis du fertig bist.");
+}
+
+#[test]
+fn restart_waits_while_a_window_is_open() {
+    let mut h = waits_until_free(
+        "planora-install-warten-fenster",
+        None,
+        |a| a.ws_mut().about_open = true,
+        |a| a.ws_mut().about_open = false,
+    );
+    h.until(|a| a.restart_phase() == RestartPhase::Exiting);
+    assert_eq!(h.read_exe(), NEW_EXE);
+}
+
+fn slow_writer(
+    _: &Path,
+    _: &planora_drawing::sheet::SheetModel,
+    _: planora_drawing::DrawingFormat,
+    p: &planora_exchange::Progress,
+) -> Result<u64, planora_drawing::DrawError> {
+    loop {
+        p.check()?;
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn restart_waits_while_an_export_is_writing() {
+    use planora_app::export_dialog::{ExportDialog, ExportFormat};
+    use planora_drawing::{DrawingFormat, Paper, Placement, Projection, Scale, Sheet, ViewKind};
+    let (mut ws, cfg, paths) = workspace("planora-install-warten-export");
+    // Der Export schreibt in einem Tab, der nicht vorne ist.
+    let tab = ws.active_tab_mut();
+    tab.state.create_box(DVec3::new(30.0, 20.0, 10.0)).unwrap();
+    let sheet = Sheet {
+        paper: Paper::A4,
+        landscape: true,
+    };
+    let d = tab
+        .state
+        .document
+        .add_drawing("Blatt 1", sheet, Projection::First)
+        .unwrap();
+    tab.state
+        .document
+        .add_view(
+            d,
+            ViewKind::Front,
+            Scale { num: 1, den: 1 },
+            Placement::Free { x: 148.5, y: 105.0 },
+            None,
+        )
+        .unwrap();
+    let mut e = ExportDialog::new(&tab.state);
+    e.format = ExportFormat::Drawing(DrawingFormat::Svg);
+    e.drawing = Some(d);
+    e.tick(&tab.state, true);
+    e.set_writer(slow_writer);
+    e.write_to(paths.dir().join("z.svg"), &tab.state);
+    assert!(e.is_writing_file());
+    tab.export_dialog = Some(e);
+    ws.new_tab();
+    let mut h = waits_until_free(
+        "planora-install-warten-export",
+        Some((ws, cfg, paths)),
+        |_| {},
+        |a| a.ws_mut().tabs[0].export_dialog = None,
+    );
+    // Danach die Rückfrage für den geänderten ersten Tab, dann der Neustart.
+    h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
+    h.click("Verwerfen");
+    h.until(|a| a.restart_phase() == RestartPhase::Exiting);
+    assert_eq!(h.read_exe(), NEW_EXE);
+}
+
+fn autosave(ws: &Workspace, tab: usize) -> planora_project::docstore::Autosave {
+    planora_project::docstore::Autosave {
+        based_on: None,
+        time: "2026-10-25 12:00".into(),
+        snapshot: ws.tabs[tab].state.snapshot(),
+    }
+}
+
+#[test]
+fn restart_waits_while_an_autosave_offer_is_pending() {
+    let mut h = waits_until_free(
+        "planora-install-warten-autosicherung",
+        None,
+        |a| {
+            let offer = autosave(a.ws_mut(), 0);
+            a.ws_mut().tabs[0].pending_autosave = Some(offer);
+        },
+        |a| {
+            a.ws_mut().tabs[0].pending_autosave = None;
+            a.ws_mut().prompt = None;
+        },
+    );
+    h.until(|a| a.restart_phase() == RestartPhase::Exiting);
+    assert_eq!(h.read_exe(), NEW_EXE);
+}
+
+/// Kommt während der Rückfrage ein Autosicherungs-Angebot dazwischen, ist das kein „Abbrechen“:
+/// das Update wartet und fragt danach neu.
+#[test]
+fn autosave_offer_during_the_prompt_is_not_a_cancel() {
+    let restarter = FakeRestarter::new(true);
+    let (mut ws, cfg, paths) = workspace("planora-install-autosicherung-dazwischen");
+    dirty(&mut ws);
+    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), restarter.clone());
+    h.until(|a| a.pending_notice().is_some());
+    h.settle();
+    h.click(INSTALL_NOW);
+    h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
+    // Das Angebot ersetzt die Rückfrage.
+    let offer = autosave(h.app.ws_mut(), 0);
+    h.app.ws_mut().tabs[0].pending_autosave = Some(offer);
+    h.app.ws_mut().prompt = None;
+    h.settle();
+    assert_eq!(h.app.restart_phase(), RestartPhase::None, "wartet");
+    assert_eq!(*h.app.installer().state(), InstallState::ReadyToRestart);
+    assert!(h.paths.new_exe.exists(), "nicht verworfen");
+    assert!(matches!(
+        h.app.ws_mut().prompt,
+        Some(Prompt::AutosaveOffer { .. })
+    ));
+    // Beantwortet: die Rückfrage kommt wieder, dann der Neustart.
+    h.app.ws_mut().tabs[0].pending_autosave = None;
+    h.app.ws_mut().prompt = None;
+    h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
+    h.click("Verwerfen");
+    h.until(|a| a.restart_phase() == RestartPhase::Exiting);
+    assert_eq!(h.read_exe(), NEW_EXE);
+    assert_eq!(restarter.started().len(), 1);
+}
+
+#[test]
+fn disk_full_during_download_shows_message_and_leaves_no_file() {
+    let error = InstallError::Io("Auf dem Datenträger ist nicht genügend Speicherplatz".into());
+    let mut h = Harness::offered(
+        "planora-install-platte-voll",
+        FakeDownloader::failing(error.clone()),
+        FakeRestarter::new(true),
+    );
+    h.click(INSTALL_NOW);
+    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
+    assert_eq!(h.state(), InstallState::Failed(error.message()));
+    h.settle();
+    assert!(h.sees(&error.message()), "{:?}", h.texts());
+    assert!(!h.paths.new_exe.exists(), "Teil-Download gelöscht");
+    assert!(!h.paths.checksum_file().exists());
+    assert_eq!(h.read_exe(), b"alt");
+    assert_eq!(h.app.restart_phase(), RestartPhase::None);
+}
+
+#[test]
+fn unsaved_tabs_discarded_then_restart_is_requested() {
+    let restarter = FakeRestarter::new(true);
+    let (mut ws, cfg, paths) = workspace("planora-install-verwerfen-alle");
+    dirty(&mut ws);
+    ws.new_tab();
+    dirty(&mut ws);
+    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), restarter.clone());
+    h.until(|a| a.pending_notice().is_some());
+    h.settle();
+    h.click(INSTALL_NOW);
+    h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
+    h.click("Verwerfen");
+    assert_eq!(h.app.restart_phase(), RestartPhase::AwaitingPrompt);
+    h.click("Verwerfen");
+    h.until(|a| a.restart_phase() == RestartPhase::Exiting);
+    h.settle();
+    assert_eq!(h.read_exe(), NEW_EXE);
+    assert_eq!(restarter.started(), vec![h.paths.running_exe.clone()]);
+    assert!(h.close_sent());
 }

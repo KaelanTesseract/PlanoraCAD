@@ -54,16 +54,16 @@ fn setup(prefix: &str) -> (TempDir, Paths) {
 
 #[test]
 fn paths_sit_next_to_the_exe() {
-    let p = Paths::for_exe(Path::new(r"C:\Programm\planoracad.exe"));
-    assert_eq!(p.running_exe, Path::new(r"C:\Programm\planoracad.exe"));
-    assert_eq!(p.new_exe, Path::new(r"C:\Programm\planoracad.exe.new"));
-    assert_eq!(p.old_exe, Path::new(r"C:\Programm\planoracad.exe.old"));
-    assert_eq!(p.ok_marker, Path::new(r"C:\Programm\planoracad.update-ok"));
+    // Pfade aus Teilen, damit der Test auf jedem System gilt.
+    let dir = Path::new("Programm");
+    let p = Paths::for_exe(&dir.join("planoracad.exe"));
+    assert_eq!(p.running_exe, dir.join("planoracad.exe"));
+    assert_eq!(p.new_exe, dir.join("planoracad.exe.new"));
+    assert_eq!(p.old_exe, dir.join("planoracad.exe.old"));
+    assert_eq!(p.ok_marker, dir.join("planoracad.update-ok"));
+    assert_eq!(p.dir(), dir);
     assert_eq!(OK_MARKER_NAME, "planoracad.update-ok");
-    assert_eq!(
-        p.checksum_file(),
-        Path::new(r"C:\Programm\planoracad.exe.new.sha256")
-    );
+    assert_eq!(p.checksum_file(), dir.join("planoracad.exe.new.sha256"));
 }
 
 #[test]
@@ -120,6 +120,24 @@ fn verify_accepts_matching_checksum_in_both_formats() {
             "{contents:?}"
         );
     }
+}
+
+#[test]
+fn expected_hex_is_kept_and_rechecked() {
+    let dir = TempDir::new("pruef-zweimal");
+    let file = dir.path().join("x.new");
+    std::fs::write(&file, b"abc").unwrap();
+    let hex = "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD";
+    let kept = checksum_hex(&format!("{hex}  {EXE_NAME}"), EXE_NAME).unwrap();
+    assert_eq!(kept, hex.to_ascii_lowercase());
+    assert_eq!(file_matches_sha256(&file, &kept), Ok(()));
+    // Danach verändert: die zweite Prüfung schlägt an.
+    std::fs::write(&file, b"abd").unwrap();
+    assert_eq!(
+        file_matches_sha256(&file, &kept),
+        Err(InstallError::Checksum)
+    );
+    assert_eq!(checksum_hex("Müll", EXE_NAME), Err(InstallError::Checksum));
 }
 
 #[test]

@@ -4,18 +4,23 @@
 //!
 //! **Ablauf.** „Jetzt aktualisieren“ → [`decide`] (nur Windows, Ordner beschreibbar) →
 //! [`Installer::start`]: ein eigener Thread lädt die Prüfsummen-Datei und die Programmdatei nach
-//! `<exe>.new` und prüft die Summe (`Downloading` → `ReadyToRestart`, sonst `Failed`). Dann
-//! fragt die App wie beim Schließen nach ungespeicherter Arbeit (`Workspace::request_quit`);
-//! „Abbrechen“ dort bricht das Update ab und löscht `.new`. Sonst: `update_pending` speichern
-//! (gelingt das nicht, wird nichts ausgetauscht), austauschen, die neue exe mit
+//! `<exe>.new` und prüft die Summe (`Downloading` → `ReadyToRestart`, sonst `Failed`); die
+//! erwartete Summe bleibt gemerkt. Der Neustart beginnt erst, wenn nichts mehr offen ist (keine
+//! Rückfrage, kein Fenster, kein schreibender Export, kein Autosicherungs-Angebot; bis dahin
+//! [`WAITING`]). Dann fragt die App wie beim Schließen nach ungespeicherter Arbeit
+//! (`Workspace::request_quit`); „Abbrechen“ dort bricht das Update ab und löscht `.new`. Sonst:
+//! `.new` im Hintergrund noch einmal gegen die gemerkte Summe prüfen, `update_pending`
+//! speichern (gelingt das nicht, wird nichts ausgetauscht), austauschen, die neue exe mit
 //! [`AFTER_UPDATE_ARG`] starten und bis zu [`MARKER_WAIT`] auf die Datei
-//! `planoracad.update-ok` warten. Kommt sie, beendet sich das Programm; sonst legt es den alten
-//! Stand zurück, überspringt die Version und läuft weiter. Die Schritte nach dem Download stehen
-//! in [`crate::app`] (`PlanoraApp::install_tick`).
+//! `planoracad.update-ok` mit der Zielversion als Inhalt warten. Kommt sie, beendet sich das
+//! Programm; sonst legt es den alten Stand zurück, überspringt die Version und läuft weiter. Die
+//! Schritte nach dem Download stehen in [`crate::app`] (`PlanoraApp::install_tick`).
 //!
-//! **Start.** [`startup`] räumt `.old` weg, löscht `update_pending` und zeigt nach einem
-//! gelungenen Update einmal „Aktualisiert auf Version X“ (mit den Patchnotes aus der
-//! Zwischenablage [`NOTES_FILE_NAME`], die die alte Version vor dem Austausch schreibt).
+//! **Start.** Die neue Version schreibt die Rückmeldung so früh wie möglich
+//! ([`write_ok_marker`], in `PlanoraApp::new` gleich nach dem Einrichten des Renderers, vor
+//! Konfiguration und Bibliothek). [`startup`] räumt `.old` weg, löscht `update_pending` und
+//! zeigt nach einem gelungenen Update einmal „Aktualisiert auf Version X“ (mit den Patchnotes
+//! aus der Zwischenablage [`NOTES_FILE_NAME`], die die alte Version vor dem Austausch schreibt).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,16 +31,20 @@ use std::time::Duration;
 
 use crate::workspace::Workspace;
 use planora_update::install::{
-    Downloader, InstallError, MAX_CHECKSUM_BYTES, Paths, cleanup_old, discard_download,
-    download_limit, exe_dir_writable, release_url_ok, verify_sha256,
+    Downloader, InstallError, MAX_CHECKSUM_BYTES, Paths, checksum_hex, cleanup_old,
+    discard_download, download_limit, exe_dir_writable, file_matches_sha256, release_url_ok,
 };
 use planora_update::{EXE_NAME, REPO, Update, Version};
 
 /// Startargument der neu gestarteten Version nach einem Austausch.
 pub const AFTER_UPDATE_ARG: &str = "--nach-update";
 
-/// So lange wartet die alte Version auf die Rückmeldung der neuen.
-pub const MARKER_WAIT: Duration = Duration::from_secs(10);
+/// So lange wartet die alte Version auf die Rückmeldung der neuen. Großzügig, weil eine frisch
+/// geladene, unsignierte exe beim ersten Start vom Virenschutz geprüft werden kann.
+pub const MARKER_WAIT: Duration = Duration::from_secs(30);
+
+/// Statuszeile und Meldung, solange ein fertiges Update auf das Ende der laufenden Arbeit wartet.
+pub const WAITING: &str = "Update ist bereit und wartet, bis du fertig bist.";
 
 /// Zwischenablage der Patchnotes der neuen Version neben der Konfiguration (erste Zeile die
 /// Version, dann die Notizen); die neue Version liest und löscht sie beim Start.
@@ -131,7 +140,8 @@ pub fn decide(auto_supported: bool, exe: Option<&Path>) -> InstallDecision {
 
 enum Msg {
     Progress(u64, u64),
-    Done(Result<(), InstallError>),
+    /// Fertig; bei Erfolg mit der geprüften Summe.
+    Done(Result<String, InstallError>),
 }
 
 /// Download und Prüfung im Hintergrund; höchstens einer zur Zeit. Die Oberfläche fragt den
@@ -144,6 +154,8 @@ pub struct Installer {
     repaint: Option<egui::Context>,
     paths: Option<Paths>,
     target: Option<Version>,
+    /// Die geprüfte Summe von `.new` (für die zweite Prüfung vor dem Austausch).
+    verified: Option<String>,
 }
 
 impl Default for Installer {
@@ -156,6 +168,7 @@ impl Default for Installer {
             repaint: None,
             paths: None,
             target: None,
+            verified: None,
         }
     }
 }
@@ -178,6 +191,14 @@ impl Installer {
     /// Version des laufenden oder fertigen Downloads.
     pub fn target(&self) -> Option<Version> {
         self.target
+    }
+
+    /// Die beim Download geprüfte SHA-256 von `.new` (nur in `ReadyToRestart`).
+    pub fn verified_sha256(&self) -> Option<&str> {
+        match self.state {
+            InstallState::ReadyToRestart => self.verified.as_deref(),
+            _ => None,
+        }
     }
 
     /// Läuft der Thread eines (auch abgebrochenen) Downloads noch?
@@ -265,11 +286,12 @@ impl Installer {
                         }
                         !cancel.load(Ordering::SeqCst)
                     })?;
-                    verify_sha256(&paths.new_exe, &text, EXE_NAME)?;
+                    let expected = checksum_hex(&text, EXE_NAME)?;
+                    file_matches_sha256(&paths.new_exe, &expected)?;
                     if cancel.load(Ordering::SeqCst) {
                         return Err(InstallError::Cancelled);
                     }
-                    Ok(())
+                    Ok(expected)
                 })();
                 if result.is_err() {
                     discard_download(&paths);
@@ -284,6 +306,7 @@ impl Installer {
                 self.cancel = cancel;
                 self.paths = Some(paths);
                 self.target = Some(release.version);
+                self.verified = None;
                 self.state = InstallState::Downloading {
                     done: 0,
                     total: size,
@@ -304,7 +327,10 @@ impl Installer {
                 Ok(Msg::Done(result)) => {
                     self.rx = None;
                     self.state = match result {
-                        Ok(()) => InstallState::ReadyToRestart,
+                        Ok(hex) => {
+                            self.verified = Some(hex);
+                            InstallState::ReadyToRestart
+                        }
                         Err(InstallError::Cancelled) => InstallState::Idle,
                         Err(e) => InstallState::Failed(e.message()),
                     };
@@ -337,8 +363,34 @@ impl Installer {
             }
             InstallState::Idle | InstallState::Failed(_) => {}
         }
+        self.verified = None;
         self.state = InstallState::Idle;
     }
+}
+
+/// Zweite Prüfung von `.new` gegen die beim Download geprüfte Summe, unmittelbar vor dem
+/// Austausch, in einem eigenen Thread (große Datei, die Oberfläche wartet nicht). Ein anderes
+/// Programm hätte die Datei inzwischen verändern können (etwa eine zweite Instanz, die selbst
+/// ein Update lädt). Ist ein Kontext da, meldet der Thread danach ein neues Bild.
+pub fn reverify(
+    file: PathBuf,
+    expected_hex: String,
+    repaint: Option<egui::Context>,
+) -> Receiver<Result<(), InstallError>> {
+    let (tx, rx) = mpsc::channel();
+    let job_tx = tx.clone();
+    let spawned = std::thread::Builder::new()
+        .name("planora-update-pruefen".into())
+        .spawn(move || {
+            let _ = job_tx.send(file_matches_sha256(&file, &expected_hex));
+            if let Some(ctx) = repaint {
+                ctx.request_repaint();
+            }
+        });
+    if let Err(e) = spawned {
+        let _ = tx.send(Err(InstallError::Io(e.to_string())));
+    }
+    rx
 }
 
 /// Startet die neue Version nach dem Austausch. Im Programm [`ProcessRestarter`], in Tests eine
@@ -424,12 +476,25 @@ fn take_notes(file: &Path, version: &Version) -> Option<String> {
     (Version::parse(first.trim()).ok()? == *version).then(|| notes.to_string())
 }
 
+/// Rückmeldung der neu gestarteten Version an die alte: die Datei `planoracad.update-ok` mit der
+/// laufenden Version als Inhalt. Nur mit [`AFTER_UPDATE_ARG`] und so früh wie möglich aufrufen;
+/// Fehler werden übergangen (dann legt die alte Version nach [`MARKER_WAIT`] zurück).
+pub fn write_ok_marker(paths: &Paths, running: &Version) {
+    let _ = std::fs::write(&paths.ok_marker, running.to_string());
+}
+
+/// Gilt die Rückmeldung für `to`? Nur, wenn die Datei da ist und genau diese Version enthält
+/// (eine liegengebliebene Datei eines früheren Updates zählt nicht).
+pub fn ok_marker_for(paths: &Paths, to: &Version) -> bool {
+    std::fs::read_to_string(&paths.ok_marker).is_ok_and(|c| c.trim() == to.to_string())
+}
+
 /// Beim Programmstart: `.old` eines früheren Updates löschen (Fehler übergehen). Steht in der
 /// Konfiguration ein begonnenes Update (`update_pending`), wird es gelöscht; war sein Ziel nicht
 /// die laufende Version, ist der Austausch gescheitert und wird nicht wiederholt. Mit
-/// [`AFTER_UPDATE_ARG`] oder einem Ziel gleich der laufenden Version: die Datei
-/// `planoracad.update-ok` schreiben (die alte Version wartet darauf) und den Hinweis
-/// „Aktualisiert auf Version X“ liefern.
+/// [`AFTER_UPDATE_ARG`] oder einem Ziel gleich der laufenden Version den Hinweis „Aktualisiert
+/// auf Version X“ liefern. Die Rückmeldung an die alte Version schreibt [`write_ok_marker`]
+/// (früher, nicht hier).
 pub fn startup(
     ws: &mut Workspace,
     after_update_arg: bool,
@@ -451,9 +516,6 @@ pub fn startup(
         let _ = std::fs::remove_file(&notes_file);
         return None;
     }
-    if let Some(paths) = paths {
-        let _ = std::fs::write(&paths.ok_marker, running.to_string());
-    }
     Some(AfterUpdate {
         version: *running,
         notes: take_notes(&notes_file, running),
@@ -465,7 +527,7 @@ pub fn status_text(state: &InstallState, restarting: bool) -> String {
     match state {
         _ if restarting => RESTARTING.into(),
         InstallState::Downloading { done, total } => download_text(*done, *total),
-        InstallState::ReadyToRestart => RESTARTING.into(),
+        InstallState::ReadyToRestart => WAITING.into(),
         InstallState::Failed(_) => FAILED_SHORT.into(),
         InstallState::Idle => crate::update_dialog::PREPARING.into(),
     }
