@@ -35,7 +35,15 @@ fn mesh_document() -> Document {
     .unwrap();
     let t = MeshTransform {
         offset: DVec3::new(20.0, 0.0, 0.0),
-        rotation: DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2),
+        // 90° um z, als feste Zahlen: `from_rotation_z` rechnet mit `sin`/`cos` der
+        // Systembibliothek, die je nach Betriebssystem in der letzten Stelle abweichen; die
+        // Golden-Datei prüft das Format, nicht die Rundung der Systembibliothek.
+        rotation: DQuat::from_xyzw(
+            0.0,
+            0.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+            std::f64::consts::FRAC_1_SQRT_2,
+        ),
         scale: 2.0,
     };
     let a = d.add_mesh_body("Netz 1", tetra(), t).unwrap();
