@@ -641,7 +641,7 @@ Welche Fusion-Kürzel noch fehlen, weil es die Funktion noch nicht gibt, steht i
 
 ## Updates und Versionen
 
-Das Programm kann sich selbst aktualisieren (nur unter Windows). Beim Start fragt es im Hintergrund bei GitHub nach, ob es eine neuere Version gibt. Dabei wird nichts Persönliches gesendet. Gibt es eine, erscheint ein Fenster mit den Änderungen und drei Knöpfen: „Jetzt aktualisieren“, „Später“ (die Meldung kommt frühestens nach 24 Stunden wieder) und „Diese Version überspringen“. Vor dem Neustart fragt das Programm wie beim Schließen nach ungespeicherter Arbeit. Das Herunterladen wird mit einer Prüfsumme kontrolliert. Klappt der Austausch nicht, bleibt die alte Version.
+Das Programm kann sich selbst aktualisieren (nur unter Windows). Beim Start fragt es im Hintergrund bei GitHub nach, ob es eine neuere Version gibt. Dabei wird nichts Persönliches gesendet. Gibt es eine, erscheint ein Fenster mit den Änderungen und drei Knöpfen: „Jetzt aktualisieren“, „Später“ (die Meldung kommt frühestens nach 24 Stunden wieder) und „Diese Version überspringen“. Vor dem Neustart fragt das Programm wie beim Schließen nach ungespeicherter Arbeit. Danach lässt es sich ein paar Sekunden nicht bedienen, bis die neue Version läuft. Das Herunterladen wird mit einer Prüfsumme kontrolliert. Klappt der Austausch nicht, bleibt die alte Version.
 
 Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich die Suche beim Start abschalten oder von Hand starten.
 
@@ -652,8 +652,8 @@ Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich di
 
 **Was nicht geht**
 - Die Programmdatei ist nicht signiert. Windows kann beim ersten Start eine Warnung zeigen („SmartScreen“). Die Prüfsumme schützt nur vor Fehlern bei der Übertragung, nicht davor, dass jemand die Veröffentlichung selbst austauscht.
-- Updates gibt es nur für Windows (64 Bit). Unter Linux und macOS zeigt das Programm nur den Hinweis auf die Download-Seite.
-- Es gibt kein Zurück auf eine ältere Version. Das Programm bietet nur neuere Versionen an. Wer eine ältere braucht, lädt sie von Hand herunter und ersetzt `planoracad.exe`.
+- Updates gibt es nur für Windows (64 Bit). Unter Linux und macOS fragt das Programm nicht bei GitHub nach und zeigt keine Meldung. Der Knopf „Jetzt nach Updates suchen“ antwortet dort: „Auf diesem System gibt es keine Aktualisierung über das Programm.“
+- Es gibt kein Zurück auf eine ältere Version. Das Programm bietet nur neuere Versionen an. Wer eine ältere braucht, lädt sie von Hand herunter und ersetzt damit die Programmdatei (meist `planoracad-windows-x64.exe`).
 - Liegt das Programm in einem geschützten Ordner (zum Beispiel unter „Programme“), kann es sich nicht selbst ersetzen. Es zeigt dann einen Knopf zur Download-Seite.
 
 **Kanäle**
@@ -672,7 +672,7 @@ Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich di
 
 **Lizenzdatei:** `powershell -File tools\third-party-licenses.ps1` erzeugt `THIRD-PARTY-LICENSES.txt` (alle Bibliotheken der Windows-Version und die Schriften, jeweils mit Lizenztext). Das ist die Datei, die am Release hängt; sie gehört nicht ins Repository.
 
-**Wenn nach einem Update etwas nicht stimmt:** Neben `planoracad.exe` liegt nach einem Austausch die bisherige Datei als `planoracad.exe.old`. Startet die neue Version nicht, `planoracad.exe` löschen oder umbenennen und `planoracad.exe.old` wieder in `planoracad.exe` umbenennen. Die Projekte und Einstellungen liegen außerhalb der Programmdatei und bleiben unberührt.
+**Wenn nach einem Update etwas nicht stimmt:** Die Programmdatei behält ihren Namen, meist `planoracad-windows-x64.exe` (so heißt sie im Release). Nach einem Austausch liegt daneben die bisherige Datei als `planoracad-windows-x64.exe.old`. Sie bleibt liegen, bis das Programm das nächste Mal ganz normal gestartet wird, und wird dann gelöscht. Startet die neue Version nicht, `planoracad-windows-x64.exe` löschen oder umbenennen und `planoracad-windows-x64.exe.old` wieder in `planoracad-windows-x64.exe` umbenennen. Die Projekte und Einstellungen liegen außerhalb der Programmdatei und bleiben unberührt.
 
 ## Bauen
 

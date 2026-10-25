@@ -9,6 +9,10 @@ name: CI
 on:
   workflow_dispatch:
 
+# Nur lesen: der Ablauf prüft und baut, er schreibt nichts ins Repository.
+permissions:
+  contents: read
+
 jobs:
   check:
     strategy:

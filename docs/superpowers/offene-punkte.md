@@ -1896,6 +1896,11 @@ Alles hier wurde bei den Prüfungen der Aufgaben 1 bis 5 gefunden, ist klein und
 - Das Fenster „Über“ kann neben der Meldung offen bleiben (wie bei der Tastenkürzel-Übersicht). Bleibt liegen: nur ein Schönheitsfehler.
 - „Später“ gilt für 24 Stunden für jede Version, die Statuszeile zeigt eine neuere trotzdem. Eine offene Meldung behält die alten Notizen, wenn eine neue Prüfung eine andere Version liefert. Bleibt liegen: beides sind Randfälle ohne Folgen.
 
+**Aus der Gesamtprüfung (zurückgestellt)**
+- Die Rust-Version und `cargo-deny` sind in den Abläufen nicht auf einen festen Stand gesetzt, und `release.yml` benutzt beim Bau der Veröffentlichung den Rust-Cache. Bleibt liegen: ein fester Stand wäre sauberer und unabhängiger von Zwischenständen; bisher ist kein Lauf auf GitHub gemacht, ein Fehler fiele dort sofort auf.
+- Die Abfrage der Release-Liste folgt Weiterleitungen ohne die strengen Regeln des Downloads (siehe auch Aufgabe 3). Bleibt liegen: nur HTTPS, die Antwort wird streng geprüft, und heruntergeladen wird nur über die strengen Regeln.
+- Der Austausch sind zwei Umbenennungen nacheinander; fällt genau dazwischen der Strom aus, fehlt die Programmdatei und nur `.old` liegt da. Bleibt liegen: das Fenster ist winzig, und die README erklärt, wie man `.old` von Hand zurückbenennt.
+
 **Herunterladen und Austauschen (Aufgabe 5)**
 - Wird „Abbrechen“ genau dann gedrückt, wenn der Download fertig wird, bleibt die geprüfte `.new`-Datei liegen. Dasselbe gilt, wenn das Fenster mitten im Download geschlossen wird. Sie wird beim nächsten Versuch gelöscht. Bleibt liegen: braucht Platz (etwa 100 MB), aber nur bis zum nächsten Update.
 - Ein Absturz oder Stromausfall genau zwischen den zwei Umbenennungen beim Austausch lässt `planoracad.exe` fehlen; es liegen dann `planoracad.exe.old` und `planoracad.exe.new` da. Ebenso, wenn der alte Prozess beendet wird, während die neue, kaputte Version wartet. Bleibt liegen: das Fenster ist winzig; die Anleitung steht im README („`.old` zurückbenennen“).
