@@ -14,28 +14,40 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-# Ohne ausdrückliche Rechte darf der Ablauf nichts schreiben; nur dieser Ablauf bekommt "contents: write".
+# Ohne ausdrückliche Rechte darf der Ablauf nichts schreiben. Nur der Job "release" (er läuft nur
+# bei einem Tag) bekommt "contents: write"; der Trockenlauf kommt über "build" nie dorthin.
 permissions:
   contents: read
 
+# Die Aktionen sind auf einen festen Stand (Commit) gesetzt, nicht auf ein Tag, das sich verschieben
+# lässt. Beim Aktualisieren den Commit des neuen Tags eintragen (git ls-remote <Repo> refs/tags/<Tag>).
 jobs:
-  release:
+  build:
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      version: ${{ steps.pruefen.outputs.version }}
+      prerelease: ${{ steps.pruefen.outputs.prerelease }}
     env:
       EVENT_NAME: ${{ github.event_name }}
       REF_NAME: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Version, Tag und Changelog prüfen
+        id: pruefen
         shell: pwsh
         run: |
           $toml = Get-Content -Raw -Encoding utf8 Cargo.toml
-          $m = [regex]::Match($toml, '(?ms)^\[workspace\.package\]\s*\r?\n(?:(?!^\[).*\r?\n)*?version\s*=\s*"([^"]+)"')
-          if (-not $m.Success) { throw 'workspace.package.version in Cargo.toml nicht gefunden.' }
-          $version = $m.Groups[1].Value
+          $version = $null
+          $inSection = $false
+          foreach ($line in ($toml -split "`r?`n")) {
+            $t = $line.Trim()
+            if ($t.StartsWith('[')) { $inSection = ($t -eq '[workspace.package]'); continue }
+            if ($inSection -and $t -match '^version\s*=\s*"([^"]+)"') { $version = $Matches[1]; break }
+          }
+          if (-not $version) { throw 'workspace.package.version in Cargo.toml nicht gefunden.' }
           if ($version -notmatch '^\d+\.\d+\.\d+(-(dev|beta)\.\d+)?$') {
             throw "Die Version '$version' in Cargo.toml ist keine erlaubte Version."
           }
@@ -48,12 +60,13 @@ jobs:
           ./tools/changelog-section.ps1 -Version $version -OutFile "$env:RUNNER_TEMP/release-notes.md"
           if ($LASTEXITCODE -ne 0) { throw "CHANGELOG.md hat keinen Abschnitt '## $version'." }
           $pre = if ($version -match '-(dev|beta)\.') { 'true' } else { 'false' }
-          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "PRERELEASE=$pre" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "prerelease=$pre" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Copy-Item "$env:RUNNER_TEMP/release-notes.md" release-notes.md
 
       - name: Rust installieren
         run: rustup toolchain install stable --profile minimal
-      - uses: Swatinem/rust-cache@v2.7.8
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
 
       - name: Lizenzen prüfen
         run: cargo install cargo-deny --locked && cargo deny check
@@ -73,11 +86,38 @@ jobs:
           ./tools/third-party-licenses.ps1 -Output "$PWD/dist/THIRD-PARTY-LICENSES.txt"
           Get-ChildItem dist | Format-Table Name, Length
 
+          Move-Item release-notes.md dist/release-notes.md
+
+      # Die Dateien liegen danach drei Tage als Ergebnis des Laufs bereit. Beim Trockenlauf ist das
+      # das ganze Ergebnis; bei einem Tag holt der Job "release" sie von hier.
+      - name: Dateien ablegen
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dateien-${{ github.sha }}
+          path: dist/*
+          retention-days: 3
+
+  release:
+    # Nur bei einem Tag. Der Trockenlauf legt nie ein Release an.
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      REF_NAME: ${{ github.ref_name }}
+      VERSION: ${{ needs.build.outputs.version }}
+      PRERELEASE: ${{ needs.build.outputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dateien-${{ github.sha }}
+          path: dist
+
       - name: Release anlegen
-        if: github.event_name == 'push'
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           $ghArgs = @('release', 'create', $env:REF_NAME,
             'dist/planoracad-windows-x64.exe',
@@ -85,15 +125,7 @@ jobs:
             'dist/THIRD-PARTY-LICENSES.txt',
             '--verify-tag',
             '--title', "PlanoraCAD $($env:VERSION)",
-            '--notes-file', "$($env:RUNNER_TEMP)/release-notes.md")
+            '--notes-file', 'dist/release-notes.md')
           if ($env:PRERELEASE -eq 'true') { $ghArgs += '--prerelease' }
           & gh @ghArgs
           if ($LASTEXITCODE -ne 0) { throw 'gh release create ist fehlgeschlagen.' }
-
-      - name: Trockenlauf - Dateien ablegen (kein Release)
-        if: github.event_name != 'push'
-        uses: actions/upload-artifact@v4
-        with:
-          name: trockenlauf-${{ github.sha }}
-          path: dist/*
-          retention-days: 3

@@ -23,7 +23,6 @@ Das ist die erste Entwicklerversion mit Update-Funktion. Sie ist noch nicht für
 
 ### Verbessert
 - Neues, ruhigeres Aussehen („Graphit“): helles oder dunkles Aussehen, neue Schrift, einheitliche Symbole. Die Felder schweben frei über der 3D-Ansicht.
-- Das Programm ist für Bildschirme ab 1920 mal 1080 Punkten ausgelegt.
 
 ### Bekannte Grenzen
 - Updates gibt es nur unter Windows.

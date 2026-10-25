@@ -52,11 +52,24 @@ function Get-VersionKey([string]$text) {
     return ('{0:D6}.{1:D6}.{2:D6}.{3}.{4:D6}' -f [int]$m.Groups[1].Value, [int]$m.Groups[2].Value, [int]$m.Groups[3].Value, $kind, $num)
 }
 
+# Liest die Zeilen von Cargo.toml und sucht "version = ..." im Abschnitt [workspace.package].
+# Gibt den Zeilenindex (oder -1) und die Zeilen zurueck.
+function Find-CargoVersionLine([string[]]$lines) {
+    $inSection = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $t = $lines[$i].Trim()
+        if ($t.StartsWith('[')) { $inSection = ($t -eq '[workspace.package]'); continue }
+        if ($inSection -and $t -match '^version\s*=\s*"[^"]+"') { return $i }
+    }
+    return -1
+}
+
 function Get-CargoVersion {
-    $toml = [System.IO.File]::ReadAllText((Join-Path $root 'Cargo.toml'), $utf8)
-    $m = [regex]::Match($toml, '(?ms)^\[workspace\.package\]\s*\r?\n(?:(?!^\[).*\r?\n)*?version\s*=\s*"([^"]+)"')
-    if (-not $m.Success) { Stop-Release 'workspace.package.version in Cargo.toml nicht gefunden.' }
-    return $m.Groups[1].Value
+    $text = [System.IO.File]::ReadAllText((Join-Path $root 'Cargo.toml'), $utf8)
+    $lines = $text -split "`n"
+    $i = Find-CargoVersionLine $lines
+    if ($i -lt 0) { Stop-Release 'workspace.package.version in Cargo.toml nicht gefunden.' }
+    return [regex]::Match($lines[$i], '"([^"]+)"').Groups[1].Value
 }
 
 # ---- 1. Version erhoehen (nur auf Wunsch) ----
@@ -71,12 +84,17 @@ if ($NewVersion -ne '') {
     }
     $path = Join-Path $root 'Cargo.toml'
     $toml = [System.IO.File]::ReadAllText($path, $utf8)
-    $re = New-Object System.Text.RegularExpressions.Regex('(?ms)(^\[workspace\.package\]\s*\r?\n(?:(?!^\[).*\r?\n)*?version\s*=\s*")[^"]+(")')
-    $toml = $re.Replace($toml, ('${1}' + $NewVersion + '${2}'), 1)
+    $lines = $toml -split "`n"
+    $i = Find-CargoVersionLine $lines
+    if ($i -lt 0) { Stop-Release 'workspace.package.version in Cargo.toml nicht gefunden.' }
+    $lines[$i] = ([regex]'"[^"]+"').Replace($lines[$i], ('"' + $NewVersion + '"'), 1)
+    $toml = $lines -join "`n"
     [System.IO.File]::WriteAllText($path, $toml, $utf8)
     # Cargo.lock nachziehen (nur die Versionen der eigenen Crates, ohne Netz)
     & cargo metadata --format-version 1 --offline | Out-Null
     if ($LASTEXITCODE -ne 0) { Stop-Release 'Cargo.lock konnte nicht aktualisiert werden.' }
+    & cargo metadata --format-version 1 --offline --locked | Out-Null
+    if ($LASTEXITCODE -ne 0) { Stop-Release 'Cargo.lock passt nach der Aenderung nicht zu Cargo.toml.' }
     Write-Output "Version von $oldVersion auf $NewVersion gesetzt (Cargo.toml und Cargo.lock)."
     Write-Output ''
     Write-Output 'Als Naechstes:'
@@ -95,6 +113,18 @@ $tag = "v$version"
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'changelog-section.ps1') -Version $version | Out-Null
 if ($LASTEXITCODE -ne 0) { Stop-Release "CHANGELOG.md hat keinen (oder einen leeren) Abschnitt '## $version'." }
 Write-Output 'CHANGELOG.md: Abschnitt vorhanden.'
+
+& git rev-parse -q --verify "refs/tags/$tag" | Out-Null
+if ($LASTEXITCODE -eq 0) { Stop-Release "Den Tag $tag gibt es lokal schon. Eine Version wird nur einmal veroeffentlicht; nimm eine hoehere Versionsnummer." }
+$remoteTag = & git ls-remote --tags origin "refs/tags/$tag"
+if ($LASTEXITCODE -ne 0) { Stop-Release 'GitHub (git ls-remote) ist nicht erreichbar; ob der Tag schon existiert, laesst sich nicht pruefen.' }
+if ($remoteTag) { Stop-Release "Den Tag $tag gibt es auf GitHub schon. Eine Version wird nur einmal veroeffentlicht; nimm eine hoehere Versionsnummer." }
+Write-Output "Tag ${tag}: noch frei."
+
+# Cargo.lock muss zur Version passen (sonst bricht der Bau mit --locked auf GitHub ab).
+& cargo metadata --format-version 1 --offline --locked | Out-Null
+if ($LASTEXITCODE -ne 0) { Stop-Release 'Cargo.lock ist nicht aktuell (cargo metadata --locked schlaegt fehl). Mit "cargo metadata --offline" nachziehen und committen.' }
+Write-Output 'Cargo.lock: aktuell.'
 
 $dirty = & git status --porcelain
 if ($dirty) { Stop-Release 'Es gibt uncommittete Aenderungen. Erst committen, dann veroeffentlichen.' }
@@ -128,7 +158,7 @@ Write-Output "Commit: $head (Zweig $branch)"
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     Stop-Release 'Die GitHub-Kommandozeile "gh" fehlt, die CI-Pruefung ist nicht moeglich.'
 }
-$json = & gh run list --workflow ci.yml --limit 100 --json headSha,conclusion | Out-String
+$json = & gh run list --workflow ci.yml --event workflow_dispatch --limit 100 --json headSha,conclusion | Out-String
 if ($LASTEXITCODE -ne 0) { Stop-Release 'gh run list ist fehlgeschlagen (angemeldet? "gh auth status").' }
 $runs = @()
 if ($json.Trim().Length -gt 0) { $runs = @($json | ConvertFrom-Json) }

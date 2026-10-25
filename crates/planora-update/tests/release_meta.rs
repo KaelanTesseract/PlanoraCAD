@@ -74,13 +74,39 @@ fn changelog_sections_are_newest_first_and_versions_parse() {
 
 #[test]
 fn every_changelog_section_has_content() {
+    // Jeder Abschnitt „## Version“ und jeder Unterabschnitt „### …“ darin braucht mindestens
+    // eine Aufzählung; eine Überschrift ohne Inhalt fällt auf.
     let text = repo_file("CHANGELOG.md");
-    let mut sections = text.split("\n## ").skip(1);
-    for section in sections.by_ref() {
-        let heading = section.lines().next().unwrap_or("");
-        assert!(
-            section.lines().any(|l| l.trim_start().starts_with("- ")),
-            "Abschnitt „{heading}“ ohne Aufzählung"
-        );
+    let mut heading = String::new();
+    let mut bullets = 0usize;
+    let mut sub: Option<String> = None;
+    let mut sub_bullets = 0usize;
+    let mut sections = 0usize;
+    fn finish_sub(sub: &mut Option<String>, n: usize, version: &str) {
+        if let Some(name) = sub.take() {
+            assert!(n > 0, "Unterabschnitt „{name}“ in „{version}“ ist leer");
+        }
     }
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("## ") {
+            finish_sub(&mut sub, sub_bullets, &heading);
+            if sections > 0 {
+                assert!(bullets > 0, "Abschnitt „{heading}“ ohne Aufzählung");
+            }
+            heading = v.trim().to_string();
+            sections += 1;
+            bullets = 0;
+            sub_bullets = 0;
+        } else if let Some(name) = line.strip_prefix("### ") {
+            finish_sub(&mut sub, sub_bullets, &heading);
+            sub = Some(name.trim().to_string());
+            sub_bullets = 0;
+        } else if line.trim_start().starts_with("- ") {
+            bullets += 1;
+            sub_bullets += 1;
+        }
+    }
+    finish_sub(&mut sub, sub_bullets, &heading);
+    assert!(sections > 0, "CHANGELOG.md ohne Abschnitt");
+    assert!(bullets > 0, "Abschnitt „{heading}“ ohne Aufzählung");
 }
