@@ -58,6 +58,7 @@ pub mod thumbnail_cache;
 pub mod thumbnail_worker;
 pub mod undo_labels;
 pub mod update_check;
+pub mod update_dialog;
 pub mod versions_panel;
 pub mod viewport;
 pub mod workspace;

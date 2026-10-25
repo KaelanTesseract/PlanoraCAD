@@ -250,9 +250,42 @@ fn two_row_width(ctx: &egui::Context, text: &str) -> f32 {
     hi.ceil()
 }
 
+/// Zusatz rechts neben dem Text der Statuszeile: der Hinweis auf ein Update (anklickbar: öffnet
+/// die Meldung) oder „Update wird vorbereitet …“.
+#[derive(Clone, Debug)]
+pub(crate) struct StatusExtra {
+    pub text: String,
+    pub clickable: bool,
+}
+
+/// Zusatz der Statuszeile aus dem Zustand der Meldung ([`crate::update_dialog`]): nach „Jetzt
+/// aktualisieren“ [`crate::update_dialog::PREPARING`], sonst solange ein Update vorgemerkt und
+/// die Meldung zu ist „Update verfügbar: <Version>“.
+fn status_extra(app: &PlanoraApp) -> Option<StatusExtra> {
+    let notice = &app.update_dialog;
+    if notice.installing {
+        return Some(StatusExtra {
+            text: crate::update_dialog::PREPARING.into(),
+            clickable: false,
+        });
+    }
+    let update = app.pending_notice.as_ref().filter(|_| !notice.open)?;
+    Some(StatusExtra {
+        text: crate::update_dialog::status_hint(&update.latest.version),
+        clickable: true,
+    })
+}
+
+/// Breite des Zusatzes samt Abstand davor (0 ohne Zusatz).
+fn extra_width(ctx: &egui::Context, extra: Option<&StatusExtra>) -> f32 {
+    extra.map_or(0.0, |e| natural_width(ctx, &e.text) + theme::SPACE_3)
+}
+
 /// Feld mit Text in bis zu zwei Zeilen: mindestens `min_h` hoch, sonst so hoch wie der Text.
 /// `(grow_up, rows)`: höchstens `rows` Zeilen; `grow_up`: die Unterkante von `rect` bleibt fest (Status), sonst die Oberkante (Hinweis).
-/// Wird der Text gekürzt, zeigt er sich beim Überfahren ganz.
+/// Wird der Text gekürzt, zeigt er sich beim Überfahren ganz. Ein Zusatz `extra` steht in einer
+/// Zeile rechts neben dem Text, in der Akzentfarbe, wenn er anklickbar ist; liefert, ob er
+/// angeklickt wurde.
 fn text_field(
     ctx: &egui::Context,
     id: egui::Id,
@@ -260,12 +293,19 @@ fn text_field(
     min_h: f32,
     (grow_up, rows): (bool, usize),
     dark: bool,
-    (text, color, hover): (String, egui::Color32, Option<&'static str>),
-) {
+    (text, color, hover, extra): (
+        String,
+        egui::Color32,
+        Option<&'static str>,
+        Option<StatusExtra>,
+    ),
+) -> bool {
     let frame = bar_frame(dark, min_h);
     let margin = frame.total_margin().sum();
     let inner_w = (rect.width() - margin.x).max(0.0);
-    let galley = wrapped(ctx, &text, color, inner_w, rows);
+    let extra_w = extra_width(ctx, extra.as_ref());
+    let galley = wrapped(ctx, &text, color, (inner_w - extra_w).max(0.0), rows);
+    let mut clicked = false;
     let h = min_h.max(galley.size().y + margin.y);
     let y = if grow_up {
         rect.bottom() - h
@@ -307,8 +347,30 @@ fn text_field(
             } else if let Some(h) = hover {
                 response.on_hover_text(h);
             }
+            if let Some(extra) = extra {
+                ui.add_space(theme::SPACE_3);
+                let p = theme::palette(dark);
+                let (ink, sense) = if extra.clickable {
+                    (p.accent, egui::Sense::click())
+                } else {
+                    (p.text_secondary, egui::Sense::hover())
+                };
+                let response = ui.add(
+                    egui::Label::new(egui::RichText::new(extra.text).color(ink))
+                        .extend()
+                        .selectable(false)
+                        .sense(sense),
+                );
+                if extra.clickable {
+                    theme::focus_ring(ui, &response);
+                    clicked = response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked();
+                }
+            }
         });
     });
+    clicked
 }
 
 /// Innenmaß eines Felds mit Rahmen `frame` und Außenmaß `outer` (Rand und Strich abgezogen).
@@ -396,10 +458,12 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
             .total_margin()
             .sum()
             .x;
-        let status_w = natural_width(ctx, &status.0) + margin;
+        // Der Zusatz (Hinweis auf ein Update) steht einzeilig daneben.
+        let extra = extra_width(ctx, status_extra(app).as_ref());
+        let status_w = natural_width(ctx, &status.0) + extra + margin;
         // Das Befehlsfeld lässt dem Status die Breite, die sein Text in zwei Zeilen braucht
         // (Meldungen und Hinweise bleiben ganz lesbar); reicht der Platz nicht, rollt das Feld.
-        let status_need = two_row_width(ctx, &status.0) + margin;
+        let status_need = two_row_width(ctx, &status.0) + extra + margin;
         let bottom_cap = content.width() - 2.0 * (shell::SHELL_INSET + shell::GAP + status_need);
         // Im Skizzenmodus steht unten das Fußfeld statt des Befehlsfelds (gleiche Regeln).
         let mode = mode_of(&tab.state);
@@ -464,15 +528,18 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
     let hover = (mode_of(&app.ws.active_tab().state) == ShellMode::Sketch
         && app.ws.active_tab().state.message.is_none())
     .then_some(SKETCH_KEYS_HINT);
-    text_field(
+    let extra = status_extra(app);
+    if text_field(
         ctx,
         status_id(),
         rects.status,
         shell::STATUS_H,
         (true, STATUS_ROWS),
         dark,
-        (status.0, status.1, hover),
-    );
+        (status.0, status.1, hover, extra),
+    ) {
+        app.open_update_notice();
+    }
     banner_field(ctx, &rects, app);
     ctx.data_mut(|d| d.insert_temp(layout_key(), rects));
     rects.free
@@ -1059,6 +1126,6 @@ fn banner_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
         shell::BANNER_LINE_H,
         (false, MAX_ROWS),
         dark,
-        (text, color, None),
+        (text, color, None, None),
     );
 }

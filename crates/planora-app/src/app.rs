@@ -17,6 +17,7 @@ use crate::shell::ShellState;
 use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::step_import_dialog::{self, StepImportDialog};
 use crate::update_check::{self, CheckRequest, CheckResult, NoNetwork, UpdateChecker};
+use crate::update_dialog::{self, UpdateAction, UpdateDialog};
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
 use crate::{
@@ -87,6 +88,8 @@ pub struct PlanoraApp {
     update_manual_waiting: bool,
     /// Gefundenes Update, für die Meldung „Neue Version verfügbar“ vorgemerkt.
     pub(crate) pending_notice: Option<Update>,
+    /// Meldung „Neue Version verfügbar“ ([`update_dialog`]).
+    pub(crate) update_dialog: UpdateDialog,
 }
 
 impl PlanoraApp {
@@ -136,6 +139,7 @@ impl PlanoraApp {
             update_start_done: false,
             update_manual_waiting: false,
             pending_notice: None,
+            update_dialog: UpdateDialog::default(),
         }
     }
 
@@ -159,6 +163,12 @@ impl PlanoraApp {
     #[doc(hidden)]
     pub fn pending_notice(&self) -> Option<&Update> {
         self.pending_notice.as_ref()
+    }
+
+    /// Zustand der Meldung „Neue Version verfügbar“ (für Tests).
+    #[doc(hidden)]
+    pub fn update_dialog_mut(&mut self) -> &mut UpdateDialog {
+        &mut self.update_dialog
     }
 
     /// Läuft gerade eine Prüfung auf Updates (für Tests)?
@@ -229,6 +239,63 @@ impl PlanoraApp {
         };
         if manual {
             self.settings.set_check_hint(Some(hint));
+        }
+    }
+
+    /// Zeigt die Meldung von allein, wenn ein Update vorgemerkt ist, sie nicht nach „Später“
+    /// oder „Jetzt aktualisieren“ ruht ([`UpdateDialog::may_auto_open`]) und nichts anderes offen
+    /// ist: keine Rückfrage, kein Fenster ([`PlanoraApp::windows_open`]), nicht Projekte. Sonst
+    /// wartet sie bis zum ersten Bild, in dem das gilt.
+    fn auto_open_update_notice(&mut self) {
+        let Some(update) = &self.pending_notice else {
+            return;
+        };
+        if self.update_dialog.may_auto_open(update_check::now_unix())
+            && self.ws.prompt.is_none()
+            && !self.windows_open()
+            && !self.projects.is_open()
+        {
+            self.update_dialog.open_with(update.clone());
+        }
+    }
+
+    /// Klick auf den Hinweis „Update verfügbar“ in der Statuszeile: öffnet die Meldung, auch
+    /// nach „Später“ ([`open_update_notice`]).
+    pub(crate) fn open_update_notice(&mut self) {
+        if let Some(update) = &self.pending_notice {
+            open_update_notice(
+                &mut self.ws,
+                &mut self.projects,
+                &mut self.settings,
+                &mut self.overview,
+                &mut self.update_dialog,
+                update,
+            );
+        }
+    }
+
+    /// Folgen einer Wahl in der Meldung über die Meldung hinaus: nach „Überspringen“ ist kein
+    /// Update mehr vorgemerkt (kein Hinweis in der Statuszeile).
+    fn after_update_action(&mut self, action: UpdateAction) {
+        if action == UpdateAction::Skip {
+            self.pending_notice = None;
+        }
+    }
+
+    /// Die Meldung „Neue Version verfügbar“ in jedem Bild nach den übrigen Fenstern und vor den
+    /// Rückfragen: erst die Regeln ([`enforce_update_rules`]), dann von allein öffnen, dann
+    /// zeichnen.
+    fn show_update_notice(&mut self, ctx: &egui::Context) {
+        enforce_update_rules(
+            &self.ws,
+            &self.projects,
+            &self.settings,
+            &self.overview,
+            &mut self.update_dialog,
+        );
+        self.auto_open_update_notice();
+        if let Some(action) = update_dialog::show(ctx, &mut self.ws, &mut self.update_dialog) {
+            self.after_update_action(action);
         }
     }
 
@@ -329,10 +396,11 @@ impl PlanoraApp {
     /// (es ist wie die Dateifenster ein Fenster mit Dateiauswahl) oder die Übersicht
     /// „Tastenkürzel“ (wie „Über“; S öffnet sie also nicht noch einmal). Das Fenster Projekte
     /// selbst sperrt Rückgängig nicht (es ändert kein Dokument), wohl aber die Befehle der
-    /// Bereiche (siehe [`PlanoraApp::shortcuts`]).
+    /// Bereiche (siehe [`PlanoraApp::shortcuts`]). Ebenso die Meldung „Neue Version verfügbar“.
     fn windows_open(&self) -> bool {
         self.ws.about_open
             || self.overview.open
+            || self.update_dialog.open
             || self.ws.active_tab().dialog_open()
             || crate::project_actions::dialog_open(&self.projects.ui)
             || self.settings.is_open()
@@ -573,6 +641,51 @@ pub fn enforce_overview_rules(
 ) {
     if overview.open && (file_window_open(ws) || projects.is_open() || settings.is_open()) {
         overview.close();
+    }
+}
+
+/// Öffnet die Meldung „Neue Version verfügbar“ für `update` (Klick auf den Hinweis in der
+/// Statuszeile). Sie steht für sich wie die Übersicht der Tastenkürzel: Projekte, Einstellungen,
+/// die Übersicht und die Dateifenster des aktiven Tabs schließen dabei (ein schreibendes
+/// Exportfenster bleibt, dann öffnet sie nicht, [`EXPORT_BUSY`]). Bei offener Rückfrage öffnet
+/// sie nicht.
+pub fn open_update_notice(
+    ws: &mut Workspace,
+    projects: &mut ProjectsWindow,
+    settings: &mut SettingsWindow,
+    overview: &mut OverviewState,
+    notice: &mut UpdateDialog,
+    update: &Update,
+) {
+    if ws.prompt.is_some() || !close_file_windows(ws) {
+        return;
+    }
+    close_projects(projects);
+    settings.close();
+    overview.close();
+    notice.open_with(update.clone());
+}
+
+/// Die Meldung „Neue Version verfügbar“ tritt zurück, sobald eine Rückfrage, Projekte,
+/// Einstellungen, die Übersicht der Tastenkürzel oder ein Dateifenster des aktiven Tabs offen ist
+/// (das zuletzt geöffnete Fenster gewinnt; die Meldung öffnet nur, wenn nichts davon offen ist,
+/// oder schließt es selbst, [`open_update_notice`]). Das ist kein „Später“: Sie erscheint wieder,
+/// sobald all das zu ist.
+pub fn enforce_update_rules(
+    ws: &Workspace,
+    projects: &ProjectsWindow,
+    settings: &SettingsWindow,
+    overview: &OverviewState,
+    notice: &mut UpdateDialog,
+) {
+    if notice.open
+        && (ws.prompt.is_some()
+            || file_window_open(ws)
+            || projects.is_open()
+            || settings.is_open()
+            || overview.open)
+    {
+        notice.close();
     }
 }
 
@@ -1277,9 +1390,18 @@ impl eframe::App for PlanoraApp {
         }
 
         self.update_tick(&ctx);
+        // Schon vor der Statuszeile, damit sie im Bild, in dem die Meldung erscheint, nicht
+        // „Update verfügbar“ zeigt.
+        self.auto_open_update_notice();
         self.shortcuts(&ctx);
         // Esc der Übersicht vor den Ansichten (weder Auswahl noch Skizze sollen es sehen).
         keymap::overview::take_escape(&ctx, &mut self.overview, self.ws.prompt.is_some());
+        // Esc der Meldung wirkt wie „Später“ (nie wie „Überspringen“).
+        if update_dialog::take_escape(&ctx, &self.update_dialog, self.ws.prompt.is_some()) {
+            self.update_dialog
+                .apply(&mut self.ws, UpdateAction::Later, update_check::now_unix());
+            self.after_update_action(UpdateAction::Later);
+        }
         // Das Fenster „Parameter“ vor allen übrigen Bereichen: Übernimmt es eine Zeile, weil ein
         // Klick das Feld verlassen hat, wird die Änderung ein eigener Schritt, bevor die Ansicht
         // im selben Bild mit einem Ziehen beginnt (sonst ein gemeinsamer Schritt). Ein Fenster
@@ -1411,6 +1533,9 @@ impl eframe::App for PlanoraApp {
             open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false);
         }
         self.ws.refresh_prompts();
+        // Nach `refresh_prompts`: eine gerade entstandene Rückfrage hält die Meldung schon in
+        // diesem Bild zurück.
+        self.show_update_notice(&ctx);
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
 
