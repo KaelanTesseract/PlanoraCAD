@@ -15,7 +15,11 @@
 //! [`crate::viewport::typing`] (die Sperre des Verteilers und der Tasten der Ansichten) und die
 //! Mausgesten ([`super::mouse`]) halten dann still. Die Tastenereignisse werden außerdem
 //! verbraucht, bevor das Fenster gezeichnet wird ([`capture_input`]), damit kein Knopf und kein
-//! Feld sie sieht. Nach einer erfassten Ziehgeste bleibt die Sperre, bis die Maustaste los ist.
+//! Feld sie sieht. Nach einer erfassten Ziehgeste bleibt die Sperre, bis die Maustaste los ist;
+//! nach einer erfassten Taste (auch Esc und Doppelbelegung), bis die Taste los ist, und ihre
+//! Wiederholungen werden verbraucht: sonst löste das Halten die neue Belegung gleich aus. Ein
+//! Klick mit der linken Maustaste außerhalb der Knöpfe der erfassenden Zeile (Suchfeld, andere
+//! Zeile, Projektverzeichnis …) beendet das Erfassen.
 //!
 //! **Doppelbelegung.** Gehört die erfasste Belegung schon einer anderen Aktion, deren Bereich
 //! sich mit dem eigenen stört ([`Keymap::conflict_for`], auch „Überall“), erscheint unter der
@@ -89,6 +93,15 @@ pub fn taken_text(b: &Binding, other: Action) -> String {
     )
 }
 
+/// Hinweis nach „Tauschen“: welche Aktion die Belegung abgeben musste.
+pub fn swapped_text(b: &Binding, other: Action) -> String {
+    format!(
+        "{} gilt nicht mehr für „{}“.",
+        text::binding_text(b),
+        other.label()
+    )
+}
+
 /// Zustand des Abschnitts zwischen den Bildern.
 #[derive(Clone, Debug, Default)]
 pub struct CaptureState {
@@ -106,6 +119,9 @@ pub struct CaptureState {
     drag_start: Option<(MouseButton, egui::Pos2)>,
     /// Eine Ziehgeste ist erfasst, die Taste aber noch gedrückt: bis zum Loslassen gesperrt.
     hold_until_release: bool,
+    /// Die zuletzt erfasste Taste ist noch gedrückt: bis zum Loslassen gesperrt, ihre
+    /// Wiederholungen werden verbraucht.
+    held_key: Option<egui::Key>,
     /// Durchgang, dessen Ereignisse [`capture_input`] schon gelesen hat (nur einmal je Durchgang).
     read_pass: Option<u64>,
 }
@@ -117,6 +133,7 @@ impl CaptureState {
         self.pending_conflict = None;
         self.drag_start = None;
         self.hold_until_release = false;
+        self.held_key = None;
     }
 }
 
@@ -153,6 +170,7 @@ fn mouse_button(b: egui::PointerButton) -> Option<MouseButton> {
 }
 
 enum Caught {
+    /// Esc.
     Cancel,
     Bound(Binding),
 }
@@ -175,6 +193,16 @@ pub fn capture_input(
     if state.hold_until_release && !ctx.input(|i| i.pointer.any_down()) {
         state.hold_until_release = false;
     }
+    if let Some(k) = state.held_key {
+        let down = ctx.input_mut(|i| {
+            i.events
+                .retain(|e| !matches!(e, egui::Event::Key { key, .. } if *key == k));
+            i.keys_down.contains(&k)
+        });
+        if !down {
+            state.held_key = None;
+        }
+    }
     if locked {
         state.capturing = None;
         state.drag_start = None;
@@ -185,10 +213,13 @@ pub fn capture_input(
             Some(Caught::Cancel) => {
                 state.capturing = None;
                 state.drag_start = None;
+                state.held_key = Some(egui::Key::Escape);
             }
             Some(Caught::Bound(b)) => {
-                if matches!(b, Binding::Mouse(Gesture::Drag { .. })) {
-                    state.hold_until_release = true;
+                match b {
+                    Binding::Mouse(Gesture::Drag { .. }) => state.hold_until_release = true,
+                    Binding::Key(c) => state.held_key = Some(c.key),
+                    Binding::Mouse(Gesture::Wheel { .. }) => {}
                 }
                 state.drag_start = None;
                 take(ws, state, a, index, b);
@@ -200,7 +231,10 @@ pub fn capture_input(
 }
 
 fn publish(ctx: &egui::Context, state: &CaptureState) {
-    set_capturing(ctx, state.capturing.is_some() || state.hold_until_release);
+    set_capturing(
+        ctx,
+        state.capturing.is_some() || state.hold_until_release || state.held_key.is_some(),
+    );
 }
 
 /// Sucht in den Ereignissen eine Belegung für `a` und verbraucht alle Tastenereignisse.
@@ -331,6 +365,8 @@ enum Click {
 pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
     let locked = !ui.is_enabled();
     capture_input(ui.ctx(), ws, state, locked);
+    // Erfassen seit dem vorigen Bild (nicht gerade erst mit diesem Klick begonnen).
+    let was_capturing = state.capturing;
     let dark = ui.visuals().dark_mode;
     let warning = theme::palette(dark).warning;
     let muted = theme::palette(dark).text_secondary;
@@ -444,7 +480,24 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
         Some(Click::Swap) => {
             if let Some((a, i, b, _)) = state.pending_conflict.take() {
                 let mut km = ws.keymap.clone();
+                // Alle, die sie verlieren (mit „Überall“ können es mehrere sein).
+                let losers: Vec<Action> = Action::ALL
+                    .iter()
+                    .copied()
+                    .filter(|&o| {
+                        o != a
+                            && Keymap::areas_overlap(a.area(), o.area())
+                            && km.bindings(o).contains(&b)
+                    })
+                    .collect();
                 km.swap(a, i, b);
+                state.info = Some(
+                    losers
+                        .iter()
+                        .map(|o| swapped_text(&b, *o))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
                 commit(ws, state, km);
             }
         }
@@ -453,7 +506,15 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
             state.capturing = None;
             state.drag_start = None;
         }
-        None => {}
+        None => {
+            // Ein Klick woanders (Suchfeld, Projektverzeichnis, außerhalb des Fensters) beendet
+            // das Erfassen: sonst landete die nächste Taste für das Feld in der Belegung.
+            let elsewhere = ui.input(|i| i.pointer.primary_clicked());
+            if elsewhere && was_capturing.is_some() && state.capturing == was_capturing {
+                state.capturing = None;
+                state.drag_start = None;
+            }
+        }
     }
     publish(ui.ctx(), state);
 }

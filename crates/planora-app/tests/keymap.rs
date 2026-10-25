@@ -601,3 +601,20 @@ fn set_keymap_writes_only_keys_in_a_temp_config() {
     assert!(!ws.set_keymap(km.clone()));
     assert_eq!(fs::read(&cfg).unwrap(), b"{kaputt");
 }
+
+#[test]
+fn load_notes_are_capped_at_twenty() {
+    // 25 ungültige Belegungen bei einer Aktion: 20 Hinweise und „… und 5 weitere“.
+    let texts: Vec<String> = (0..25).map(|i| format!("Quatsch{i}")).collect();
+    let o = BTreeMap::from([("datei.speichern".to_string(), texts)]);
+    let (km, notes) = Keymap::from_overrides(&o);
+    assert_eq!(notes.len(), 21, "{notes:?}");
+    assert_eq!(notes[20], "… und 5 weitere");
+    assert!(notes[19].contains("Quatsch"));
+    // Nur Ungültiges: die Voreinstellung gilt.
+    assert!(km.is_default(Action::Save));
+    // Genau 20: kein Zusatz.
+    let texts: Vec<String> = (0..20).map(|i| format!("Quatsch{i}")).collect();
+    let o = BTreeMap::from([("datei.speichern".to_string(), texts)]);
+    assert_eq!(Keymap::from_overrides(&o).1.len(), 20);
+}

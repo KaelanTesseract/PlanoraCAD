@@ -8,7 +8,7 @@
 mod common;
 
 use eframe::App as _;
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::keymap::settings_ui::*;
 use planora_app::keymap::text::binding_text;
@@ -56,6 +56,27 @@ fn key_event(k: Key, modifiers: Modifiers) -> Event {
         key: k,
         physical_key: Some(k),
         pressed: true,
+        repeat: false,
+        modifiers,
+    }
+}
+
+/// Wiederholung der gehaltenen Taste (Autorepeat des Systems).
+fn repeat_event(k: Key, modifiers: Modifiers) -> Event {
+    Event::Key {
+        key: k,
+        physical_key: Some(k),
+        pressed: true,
+        repeat: true,
+        modifiers,
+    }
+}
+
+fn release_event(k: Key, modifiers: Modifiers) -> Event {
+    Event::Key {
+        key: k,
+        physical_key: Some(k),
+        pressed: false,
         repeat: false,
         modifiers,
     }
@@ -168,8 +189,10 @@ impl Rig {
         }
     }
 
+    /// Taste drücken, im nächsten Bild loslassen.
     fn press(&mut self, k: Key, m: Modifiers) {
         self.frame_with(vec![key_event(k, m)], m);
+        self.frame_with(vec![release_event(k, m)], NONE);
         self.settle();
     }
 
@@ -358,6 +381,7 @@ fn capturing_does_not_trigger_the_captured_key() {
     // öffnet es keinen Tab, sondern wird als Doppelbelegung gemeldet.
     r.frame_with(vec![key_event(Key::N, CTRL)], CTRL);
     assert!(!r.left_over, "die Taste ist verbraucht");
+    r.frame_with(vec![release_event(Key::N, CTRL)], NONE);
     r.settle();
     assert_eq!(r.tabs(), tabs);
     assert!(r.sees(&conflict_text(
@@ -383,6 +407,7 @@ fn esc_cancels_capturing() {
     assert!(r.sees(PRESS_KEY));
     r.frame_with(vec![key_event(Key::Escape, NONE)], NONE);
     assert!(!r.left_over);
+    r.frame(vec![release_event(Key::Escape, NONE)]);
     r.settle();
     assert!(!r.sees(PRESS_KEY));
     assert_eq!(r.state().capturing, None);
@@ -662,5 +687,198 @@ fn removing_the_last_binding_keeps_the_action_listed_as_unbound() {
             }
         ),
         None
+    );
+}
+
+// ---- Nacharbeit nach der Prüfung --------------------------------------------------------------
+
+#[test]
+fn holding_the_captured_key_does_not_fire_it_until_released() {
+    let mut r = rig();
+    let tabs = r.tabs();
+    // „Neues Dokument“ bekommt F5; F5 bleibt gehalten: die Wiederholungen öffnen keinen Tab.
+    r.filter(Action::New.label());
+    r.click(CHANGE, 0);
+    r.frame(vec![key_event(Key::F5, NONE)]);
+    assert_eq!(
+        r.km().bindings(Action::New),
+        &[chord(Key::F5, false, false, false)]
+    );
+    assert_eq!(r.state().capturing, None);
+    for _ in 0..10 {
+        r.frame(vec![repeat_event(Key::F5, NONE)]);
+        assert!(viewport_typing(&r), "gesperrt, solange F5 unten ist");
+    }
+    assert_eq!(r.tabs(), tabs, "die Wiederholungen lösen nichts aus");
+    r.frame(vec![release_event(Key::F5, NONE)]);
+    r.settle();
+    assert!(!viewport_typing(&r));
+    assert_eq!(r.tabs(), tabs);
+    // Losgelassen: die neue Belegung wirkt.
+    r.press(Key::F5, NONE);
+    assert_eq!(r.tabs(), tabs + 1);
+    // Auch nach einer Doppelbelegung bleibt die gehaltene Taste gesperrt.
+    r.filter(Action::Save.label());
+    r.click(CHANGE, 0);
+    r.frame_with(vec![key_event(Key::N, CTRL)], CTRL);
+    for _ in 0..5 {
+        r.frame_with(vec![repeat_event(Key::N, CTRL)], CTRL);
+    }
+    assert_eq!(r.tabs(), tabs + 1, "Strg+N gehalten öffnet keinen Tab");
+    r.frame_with(vec![release_event(Key::N, CTRL)], NONE);
+    r.settle();
+    assert!(!viewport_typing(&r));
+}
+
+/// Beginnt das Erfassen bei „Speichern“.
+fn start_capture(r: &mut Rig) {
+    r.filter(Action::Save.label());
+    r.click(CHANGE, 0);
+    assert!(r.state().capturing.is_some());
+    assert!(viewport_typing(r));
+}
+
+/// Nach dem Schließen ist die Sperre weg und Strg+N öffnet wieder einen Tab.
+fn assert_unlocked(r: &mut Rig, route: &str) {
+    r.settle();
+    assert!(!r.app.windows_mut().2.is_open(), "{route}: Fenster zu");
+    assert!(
+        !viewport_typing(r),
+        "{route}: Sperre nach dem Schließen weg"
+    );
+    let tabs = r.tabs();
+    r.press(Key::N, CTRL);
+    assert_eq!(r.tabs(), tabs + 1, "{route}: Strg+N wirkt wieder");
+}
+
+#[test]
+fn closing_the_window_while_capturing_frees_the_shortcuts() {
+    // `SettingsWindow::close()`.
+    let mut r = rig();
+    start_capture(&mut r);
+    r.app.windows_mut().2.close();
+    assert_unlocked(&mut r, "close()");
+
+    // Fußzeile „Schließen“ (der unterste Text „Schließen“; darüber steht die Aktion).
+    let mut r = rig();
+    start_capture(&mut r);
+    r.settle();
+    let at = r
+        .seen
+        .iter()
+        .filter(|s| s.text == planora_app::dialog::CLOSE_LABEL)
+        .max_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+        .unwrap()
+        .rect
+        .center();
+    r.click_at(at);
+    assert_unlocked(&mut r, "Schließen");
+
+    // ✕ der Kopfzeile.
+    let mut r = rig();
+    start_capture(&mut r);
+    let close = planora_app::icons::glyph(planora_app::icons::Icon::Close).to_string();
+    r.settle();
+    let window = r.app.windows_mut().2.last_rect.unwrap();
+    let at = r
+        .seen
+        .iter()
+        .find(|s| s.text == close && window.contains_rect(s.rect))
+        .unwrap()
+        .rect
+        .center();
+    r.click_at(at);
+    assert_unlocked(&mut r, "✕");
+
+    // Projekte öffnen (der Weg von Strg+O und „Projekte“ im Menü).
+    let mut r = rig();
+    start_capture(&mut r);
+    let (ws, projects, settings) = r.app.windows_mut();
+    planora_app::app::open_projects(ws, projects, settings);
+    r.settle();
+    assert!(!r.app.windows_mut().2.is_open());
+    assert!(!viewport_typing(&r), "Sperre nach dem Schließen weg");
+
+    // Ein Dateifenster geht auf: die Fensterregeln schließen die Einstellungen.
+    let mut r = rig();
+    start_capture(&mut r);
+    let dir = std::env::temp_dir();
+    r.ws().active_tab_mut().import_dialog =
+        Some(planora_app::import_dialog::ImportDialog::new(dir));
+    r.settle();
+    assert!(!r.app.windows_mut().2.is_open());
+    assert!(!viewport_typing(&r), "Sperre nach dem Schließen weg");
+    r.ws().active_tab_mut().import_dialog = None;
+    assert_unlocked(&mut r, "Dateifenster");
+}
+
+#[test]
+fn swap_names_the_action_that_lost_the_key() {
+    let mut r = rig();
+    r.filter(Action::Save.label());
+    r.click(CHANGE, 0);
+    r.press(Key::N, CTRL);
+    r.click(SWAP, 0);
+    let n = chord(Key::N, true, false, false);
+    assert_eq!(
+        swapped_text(&n, Action::New),
+        "Strg+N gilt nicht mehr für „Neues Dokument“."
+    );
+    assert!(r.sees(&swapped_text(&n, Action::New)), "{:?}", r.texts());
+}
+
+#[test]
+fn a_click_elsewhere_ends_capturing() {
+    // Klick ins Suchfeld: das Erfassen endet, Tippen geht ins Feld.
+    let mut r = rig();
+    start_capture(&mut r);
+    // Das Suchfeld zeigt den Suchtext „Speichern“; der oberste Treffer ist das Feld.
+    let field = r.find(Action::Save.label(), 0);
+    r.click_at(field);
+    assert_eq!(r.state().capturing, None);
+    assert!(!r.sees(PRESS_KEY));
+    assert_eq!(r.km(), Keymap::defaults());
+
+    // „Projektverzeichnis ändern …“: Erfassen endet, die Auswahl öffnet.
+    let mut r = rig();
+    start_capture(&mut r);
+    r.click(planora_app::settings_window::CHANGE_DIRECTORY, 0);
+    assert_eq!(r.state().capturing, None);
+    assert!(r.app.windows_mut().2.chooser_mut().is_some());
+
+    // „Ändern“ einer anderen Zeile wechselt das Erfassen dorthin.
+    let mut r = rig();
+    r.filter("strg");
+    r.click(CHANGE, 0);
+    assert_eq!(r.state().capturing, Some((Action::New, 0)));
+    // Die erfassende Zeile zeigt kein „Ändern“: das erste ist jetzt das von „Projekte“.
+    r.click(CHANGE, 0);
+    assert_eq!(r.state().capturing, Some((Action::Projects, 0)));
+    // Klick außerhalb des Fensters (in die Ansicht).
+    r.click_at(pos2(60.0, SIZE.y / 2.0));
+    assert_eq!(r.state().capturing, None);
+    assert!(!viewport_typing(&r));
+}
+
+#[test]
+fn changing_to_the_actions_own_default_key_is_no_conflict() {
+    let mut r = rig();
+    let cfg = r.ws().config_path.clone();
+    r.filter(Action::Save.label());
+    r.click(CHANGE, 0);
+    r.press(Key::S, CTRL);
+    assert!(!r.sees(SWAP), "keine Doppelbelegung mit sich selbst");
+    assert_eq!(r.state().pending_conflict, None);
+    assert_eq!(r.km(), Keymap::defaults());
+    assert!(!cfg.exists(), "nichts geschrieben");
+    // Die zweite Belegung von „Wiederholen“ auf die erste (Strg+Y): keine Rückfrage, die
+    // doppelte Zeile entfällt.
+    r.filter(Action::Redo.label());
+    r.click(CHANGE, 1);
+    r.press(Key::Y, CTRL);
+    assert!(!r.sees(SWAP));
+    assert_eq!(
+        r.km().bindings(Action::Redo),
+        &[chord(Key::Y, true, false, false)]
     );
 }
