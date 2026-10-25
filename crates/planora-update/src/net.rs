@@ -66,6 +66,65 @@ impl ReleaseSource for HttpSource {
     }
 }
 
+/// Zeitgrenze je Abschnitt eines Downloads (Namensauflösung, Verbindung, Antwortkopf).
+#[cfg(windows)]
+const DOWNLOAD_STEP_TIMEOUT: Duration = crate::install::STALL_TIMEOUT;
+
+/// Obergrenze für einen ganzen Download samt Weiterleitungen; beendet auch einen hängenden
+/// Lese-Thread, dessen Download schon wegen Stillstand oder Abbruch aufgegeben wurde.
+#[cfg(windows)]
+const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+/// Download einer Datei eines Releases über HTTPS (nur Windows, sonst Fehler „nur Windows“).
+///
+/// Nur Adressen aus dem Release ([`crate::install::release_url_ok`]); Weiterleitungen folgt der
+/// Client nicht selbst, sondern jede wird geprüft ([`crate::install::redirect_target`]: nur
+/// HTTPS auf `github.com` und `*.githubusercontent.com`, höchstens
+/// [`crate::install::MAX_REDIRECTS`]). Gelesen wird über [`crate::install::copy_limited`] mit
+/// Größen- und Stillstandsgrenze. Wird nur im Programm angelegt, nie in Tests benutzt.
+pub struct HttpDownloader {
+    #[cfg(windows)]
+    agent: ureq::Agent,
+}
+
+impl HttpDownloader {
+    /// Client mit der Kennung `PlanoraCAD/<running>`; verbindet noch nicht.
+    pub fn new(running: &Version) -> Self {
+        #[cfg(not(windows))]
+        let _ = running;
+        HttpDownloader {
+            #[cfg(windows)]
+            agent: windows::download_agent(&format!("PlanoraCAD/{running}")),
+        }
+    }
+}
+
+impl crate::install::Downloader for HttpDownloader {
+    fn download(
+        &self,
+        url: &str,
+        dest: &std::path::Path,
+        max_bytes: u64,
+        progress: &mut dyn FnMut(u64, u64) -> bool,
+    ) -> Result<(), crate::install::InstallError> {
+        use crate::install::{InstallError, release_url_ok};
+        if !release_url_ok(url) {
+            return Err(InstallError::Network(
+                "Adresse gehört nicht zum Release".into(),
+            ));
+        }
+        #[cfg(windows)]
+        {
+            windows::download(&self.agent, url, dest, max_bytes, progress)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (dest, max_bytes, progress);
+            Err(InstallError::Network("nur Windows".into()))
+        }
+    }
+}
+
 /// Fehler zu einem Statuscode, `None` bei Erfolg (2xx). GitHub meldet das Rate-Limit mit 429
 /// oder mit 403 und `x-ratelimit-remaining: 0`.
 #[cfg(windows)]
@@ -144,6 +203,82 @@ mod windows {
             .limit(MAX_RESPONSE_BYTES)
             .read_to_string()
             .map_err(net_error)
+    }
+
+    /// Client für Downloads: wie [`agent`], aber ohne eigene Weiterleitungen (jede wird in
+    /// [`download`] geprüft) und mit Zeitgrenzen für große Dateien.
+    pub(super) fn download_agent(user_agent: &str) -> ureq::Agent {
+        let tls = TlsConfig::builder()
+            .provider(TlsProvider::NativeTls)
+            .root_certs(RootCerts::PlatformVerifier)
+            .build();
+        ureq::Agent::config_builder()
+            .tls_config(tls)
+            .https_only(true)
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .user_agent(user_agent)
+            .timeout_global(Some(DOWNLOAD_TOTAL_TIMEOUT))
+            .timeout_resolve(Some(DOWNLOAD_STEP_TIMEOUT))
+            .timeout_connect(Some(DOWNLOAD_STEP_TIMEOUT))
+            .timeout_recv_response(Some(DOWNLOAD_STEP_TIMEOUT))
+            .build()
+            .new_agent()
+    }
+
+    pub(super) fn download(
+        agent: &ureq::Agent,
+        url: &str,
+        dest: &std::path::Path,
+        max_bytes: u64,
+        progress: &mut dyn FnMut(u64, u64) -> bool,
+    ) -> Result<(), crate::install::InstallError> {
+        use crate::install::{
+            InstallError, MAX_REDIRECTS, STALL_TIMEOUT, copy_limited, redirect_target,
+        };
+        let net = |e: ureq::Error| InstallError::Network(net_error(e).to_string());
+        let mut current = url.to_string();
+        for _ in 0..=MAX_REDIRECTS {
+            if !progress(0, 0) {
+                return Err(InstallError::Cancelled);
+            }
+            let response = agent.get(&current).call().map_err(net)?;
+            let status = response.status().as_u16();
+            if (300..400).contains(&status) {
+                let location = response
+                    .headers()
+                    .get("location")
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| InstallError::Network("Weiterleitung ohne Ziel".into()))?;
+                current = redirect_target(&current, location)?;
+                continue;
+            }
+            if let Some(e) = status_error(status, None) {
+                return Err(InstallError::Network(e.to_string()));
+            }
+            let length = response
+                .headers()
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok());
+            if length.is_some_and(|l| l > max_bytes) {
+                return Err(InstallError::TooLarge);
+            }
+            let reader = response
+                .into_body()
+                .into_with_config()
+                .limit(max_bytes.saturating_add(1))
+                .reader();
+            return copy_limited(
+                reader,
+                length.unwrap_or(0),
+                dest,
+                max_bytes,
+                STALL_TIMEOUT,
+                progress,
+            );
+        }
+        Err(InstallError::Network("zu viele Weiterleitungen".into()))
     }
 
     /// Netzfehler zu einem Fehler von `ureq`.
@@ -243,5 +378,25 @@ mod tests {
         ));
         assert!(config.https_only());
         assert!(!config.http_status_as_error());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn download_agent_follows_no_redirect_by_itself() {
+        // Jede Weiterleitung prüft `install::redirect_target`; folgte der Client selbst, ginge
+        // er auch zu fremden Adressen.
+        let d = HttpDownloader::new(&Version::parse("0.2.0-dev.1").unwrap());
+        let config = d.agent.config();
+        assert_eq!(config.max_redirects(), 0);
+        assert!(config.https_only());
+        assert!(!config.http_status_as_error());
+        assert_eq!(
+            config.tls_config().provider(),
+            ureq::tls::TlsProvider::NativeTls
+        );
+        assert!(matches!(
+            config.tls_config().root_certs(),
+            ureq::tls::RootCerts::PlatformVerifier
+        ));
     }
 }
