@@ -931,7 +931,7 @@ fn lock(p: &Path) -> fs::File {
 
 /// Ohne Windows: der Ordner wird schreibgeschützt (Löschen und Anlegen scheitern).
 #[cfg(not(windows))]
-fn lock(p: &Path) -> impl Drop {
+fn lock(p: &Path) -> impl Drop + use<> {
     struct Guard(PathBuf);
     impl Drop for Guard {
         fn drop(&mut self) {
