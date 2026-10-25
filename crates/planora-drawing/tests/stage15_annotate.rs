@@ -4,6 +4,7 @@
 
 mod common;
 
+use common::golden::same_up_to_last_digit;
 use common::mark_check::*;
 use common::model::{box_with_hole, cylinder_solid};
 use planora_drawing::annotate::{
@@ -1620,10 +1621,16 @@ fn old_sheet_construction_is_unchanged() {
     let vi = compute_view(&bodies, ViewKind::Isometric, &p).unwrap();
     let res: BTreeMap<ViewId, &ViewLines> = BTreeMap::from([(f, &vf), (t, &vt), (i, &vi)]);
     let golden = include_str!("fixtures/stage15_sheet_lines.txt").replace('\r', "");
+    // Bitgenau bis auf die letzte Stelle von `sin`/`cos` der Systembibliothek (siehe
+    // `common::golden`; die Fixtur ist unter Windows erzeugt).
     let m = build_sheet(&d, &res);
-    assert_eq!(golden_text(&m), golden);
+    if let Err(e) = same_up_to_last_digit(&golden, &golden_text(&m)) {
+        panic!("{e}");
+    }
     let m2 = build_sheet_with(&d, &res, &ResolvedDims::default());
-    assert_eq!(golden_text(&m2), golden);
+    if let Err(e) = same_up_to_last_digit(&golden, &golden_text(&m2)) {
+        panic!("{e}");
+    }
     // Normansichten zeigen ihre Mittellinien (Vorgabe an), die Isometrie nicht.
     assert!(!m.views[0].marks.is_empty() && !m.views[1].marks.is_empty());
     assert!(m.views[2].marks.is_empty());

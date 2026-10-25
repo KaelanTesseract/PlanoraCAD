@@ -7,6 +7,7 @@
 
 mod common;
 
+use common::golden;
 use common::pdf_read::{self, Item, mm};
 use common::svg_read::{self, ReadSvg};
 use common::{dxf_read, svg_read::ReadPath};
@@ -562,9 +563,24 @@ fn golden_files() {
             std::fs::write(fixture(name), bytes).unwrap();
         }
         let stored = std::fs::read(fixture(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
-        if let Some(i) = first_diff(&stored, bytes) {
+        let Some(i) = first_diff(&stored, bytes) else {
+            continue;
+        };
+        // Abweichung: nur die Rundung der letzten Stelle (Mathematikbibliothek des Systems,
+        // siehe `common::golden`) ist erlaubt; beim PDF verschieben sich dadurch die Versätze,
+        // die dann der strenge Leser prüft.
+        let (mut old, mut new) = (
+            String::from_utf8_lossy(&stored).into_owned(),
+            String::from_utf8_lossy(bytes).into_owned(),
+        );
+        if name.ends_with(".pdf") {
+            pdf_read::read(bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+            old = golden::without_pdf_offsets(&old);
+            new = golden::without_pdf_offsets(&new);
+        }
+        if let Err(e) = golden::same_up_to_last_digit(&old, &new) {
             panic!(
-                "{name}: Bytes weichen ab Stelle {i} ab (Fixtur {} Bytes, Schreiber {} Bytes)",
+                "{name}: Bytes weichen ab Stelle {i} ab (Fixtur {} Bytes, Schreiber {} Bytes): {e}",
                 stored.len(),
                 bytes.len()
             );
