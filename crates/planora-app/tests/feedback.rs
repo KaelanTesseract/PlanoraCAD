@@ -187,7 +187,7 @@ fn long_log_is_dropped_first_then_oldest_steps() {
     assert_eq!(b.dropped, [Part::Protokoll]);
     assert!(b.steps_cut);
     assert!(!b.description_cut);
-    assert!(b.url.len() <= MAX_URL_LEN, "{}", b.url.len());
+    assert!(b.url.len() < 2000, "{}", b.url.len());
     assert!(param(&b.url, FIELD_PROTOKOLL).is_none());
     let schritte = param(&b.url, FIELD_SCHRITTE).unwrap();
     assert!(schritte.contains(&percent_encode("Schritt 49")));
@@ -206,7 +206,7 @@ fn description_is_never_cut_while_it_fits_alone() {
     r.parts.push((Part::Schritte, steps(50)));
     r.parts.push((Part::Protokoll, log_lines(50)));
     let b = issue_url(&r, true);
-    assert!(b.url.len() <= MAX_URL_LEN);
+    assert!(b.url.len() < 2000);
     assert!(!b.description_cut);
     assert!(param(&b.url, FIELD_PASSIERT).unwrap().contains(&desc));
 }
@@ -215,12 +215,20 @@ fn description_is_never_cut_while_it_fits_alone() {
 fn oversized_description_is_cut_at_a_char_boundary_with_hint() {
     let desc = format!("{}👍", "ü".repeat(5000));
     let b = issue_url(&report(Kind::Fehler, &desc), false);
-    assert!(b.url.len() <= MAX_URL_LEN, "{}", b.url.len());
+    assert!(b.url.len() < 2000, "{}", b.url.len());
     assert!(b.description_cut);
+    // gekürzt → Hinweis und Datei-Hinweis kommen von selbst
     assert!(
-        b.url.ends_with(&percent_encode(KUERZUNG_HINWEIS)),
+        b.url.ends_with(&percent_encode(&format!(
+            "{KUERZUNG_HINWEIS}\n\n{ATTACH_HINT}"
+        ))),
         "{}",
         b.url
+    );
+    assert!(b.needs_file);
+    assert_eq!(
+        b.dropped,
+        [Part::Schritte, Part::Grafik, Part::System, Part::Version]
     );
     no_broken_escape(&b.url);
     let full = full_text(&report(Kind::Fehler, &desc));
@@ -241,7 +249,7 @@ fn url_never_exceeds_2000_for_any_mix() {
                         .push((Part::Absturzbericht, "Panik in main.rs:12".to_string()));
                     let b = issue_url(&r, with_file);
                     assert!(
-                        b.url.len() <= MAX_URL_LEN,
+                        b.url.len() < 2000,
                         "{len} × {c:?} {kind:?}: {}",
                         b.url.len()
                     );
@@ -258,7 +266,7 @@ fn huge_automatic_parts_still_fit() {
     r.parts.push((Part::Absturzbericht, "ö".repeat(4000)));
     r.parts.push((Part::Grafik, "g".repeat(3000)));
     let b = issue_url(&r, true);
-    assert!(b.url.len() <= MAX_URL_LEN);
+    assert!(b.url.len() < 2000);
     assert!(param(&b.url, FIELD_PASSIERT).unwrap().contains("Kurz"));
 }
 
@@ -325,6 +333,127 @@ fn sanitize_mail_addresses() {
     assert_eq!(sanitize("<a@b.de>", &none), "<<Mailadresse>>");
     assert_eq!(sanitize("3 @ 4", &none), "3 @ 4");
     assert_eq!(sanitize("x@localhost", &none), "x@localhost");
+    // Versionsangaben sind keine Mailadressen
+    assert_eq!(
+        sanitize("wgpu@0.19.3 geladen", &none),
+        "wgpu@0.19.3 geladen"
+    );
+    assert_eq!(sanitize("a@b.c", &none), "a@b.c");
+}
+
+#[test]
+fn sanitize_name_as_word_in_a_log_line() {
+    // nur die Namensregel kann das treffen (kein Benutzerordner, kein Pfad)
+    let w = Personal {
+        user_names: vec!["Max Müller".to_string()],
+        ..Personal::default()
+    };
+    assert_eq!(
+        sanitize("Fehler bei Max Müller beim Laden", &w),
+        "Fehler bei <Benutzer> beim Laden"
+    );
+    assert_eq!(
+        sanitize("Fehler bei MAX MÜLLER beim Laden", &w),
+        "Fehler bei <Benutzer> beim Laden"
+    );
+}
+
+#[test]
+fn sanitize_home_dir_outside_users() {
+    // Name zu kurz für die Namensregel, Ordner nicht unter Users/home
+    let w = Personal {
+        home_dirs: vec![r"D:\Profile\mm".to_string()],
+        user_names: vec!["mm".to_string()],
+        ..Personal::default()
+    };
+    assert_eq!(
+        sanitize(r"lese d:/profile/MM/planora/x.log", &w),
+        r"lese <Benutzer>/planora/x.log"
+    );
+}
+
+#[test]
+fn sanitize_onedrive_company_name() {
+    let out = sanitize(
+        r"C:\Users\Erika\OneDrive - Geheim GmbH\Teile\x.log",
+        &Personal::default(),
+    );
+    assert_eq!(out, r"C:\Users\<Benutzer>\OneDrive\Teile\x.log");
+    let out = sanitize("/mnt/c/onedrive - Firma AG/x", &Personal::default());
+    assert_eq!(out, "/mnt/c/OneDrive/x");
+}
+
+#[test]
+fn automatic_parts_go_before_the_description_is_cut() {
+    let backtrace = (0..15)
+        .map(|i| format!("  {i}: planora_app::commands::run_action at src\\commands.rs:{i}23"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let desc = "x".repeat(900);
+    let r = Report {
+        kind: Kind::Fehler,
+        area: None,
+        description: desc.clone(),
+        parts: vec![
+            (Part::Version, "0.2.0-dev.1 (Dev)".to_string()),
+            (Part::Absturzbericht, backtrace),
+        ],
+    };
+    let b = issue_url(&r, false);
+    assert!(b.url.len() < 2000, "{}", b.url.len());
+    assert!(!b.description_cut);
+    assert!(b.url.contains(&desc));
+    assert_eq!(b.dropped, [Part::Absturzbericht]);
+    assert!(b.needs_file);
+    assert!(b.url.contains("&version="));
+}
+
+#[test]
+fn url_stays_below_the_limit_near_the_boundary() {
+    assert_eq!(MAX_URL_LEN, 2000);
+    let mut seen_1999 = false;
+    for n in 1700..2000 {
+        let r = Report {
+            kind: Kind::Fehler,
+            area: None,
+            description: "y".repeat(n),
+            parts: vec![],
+        };
+        for with_file in [false, true] {
+            let b = issue_url(&r, with_file);
+            assert!(b.url.len() < 2000, "{n}: {}", b.url.len());
+            seen_1999 |= b.url.len() == 1999;
+        }
+    }
+    assert!(seen_1999, "die Grenze wird ausgenutzt");
+}
+
+#[test]
+fn anything_cut_adds_the_file_hint_by_itself() {
+    let b = issue_url(&report(Kind::Fehler, &"y".repeat(3000)), false);
+    assert!(b.needs_file);
+    assert!(b.description_cut);
+    assert!(b.url.contains(&percent_encode(ATTACH_HINT)));
+    let b = issue_url(&report(Kind::Fehler, "kurz und knapp"), false);
+    assert!(!b.needs_file);
+    assert!(!b.url.contains(&percent_encode(ATTACH_HINT)));
+    let b = issue_url(&report(Kind::Fehler, "kurz und knapp"), true);
+    assert!(b.needs_file);
+}
+
+#[test]
+fn lone_carriage_return_is_a_line_break() {
+    assert_eq!(percent_encode("a\rb\r\nc\n\rd"), "a%0Ab%0Ac%0A%0Ad");
+    let r = Report {
+        kind: Kind::Wunsch,
+        area: None,
+        description: "a\r\nb\rc".to_string(),
+        parts: vec![(Part::Schritte, "s1\r\ns2".to_string())],
+    };
+    let full = full_text(&r);
+    assert!(!full.contains('\r'));
+    assert!(full.contains("a\nb\nc"));
+    assert!(full.contains("s1\ns2"));
 }
 
 #[test]

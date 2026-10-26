@@ -28,7 +28,7 @@ pub const AREAS: [&str; 6] = [
     "Anderes",
 ];
 
-/// Höchstlänge der Adresse nach dem Kodieren.
+/// Die Adresse bleibt nach dem Kodieren kürzer als dieser Wert.
 pub const MAX_URL_LEN: usize = 2000;
 /// Endet eine gekürzte Beschreibung in der Adresse.
 pub const KUERZUNG_HINWEIS: &str = "… (gekürzt, ganz in der angehängten Datei)";
@@ -277,6 +277,22 @@ fn mask_user_dirs(text: &str) -> String {
     hay.into_iter().collect()
 }
 
+/// `OneDrive - <Firma>` als Pfadteil → `OneDrive` (Firmenname weg).
+fn mask_onedrive(text: &str) -> String {
+    let mut hay: Vec<char> = text.chars().collect();
+    let needle: Vec<char> = "onedrive - ".chars().collect();
+    let mut from = 0;
+    while let Some((s, e)) = find_ci(&hay, &needle, from) {
+        from = s + 1;
+        if s > 0 && !is_sep(hay[s - 1]) {
+            continue;
+        }
+        let end = segment_end(&hay, e);
+        hay.splice(s..end, "OneDrive".chars());
+    }
+    hay.into_iter().collect()
+}
+
 /// Anfang des Pfads, in dem Position `at` liegt (gleiche Zeile): Laufwerk `X:\`, `\\` oder
 /// `/` am Wortanfang – der nächstgelegene gewinnt.
 fn path_start(hay: &[char], at: usize) -> Option<usize> {
@@ -330,7 +346,9 @@ fn shorten_pcad_paths(text: &str) -> String {
     hay.into_iter().collect()
 }
 
-/// Wort mit genau einem `@`, Zeichen davor und danach und einem Punkt im Teil danach.
+/// Wort mit genau einem `@`, Zeichen davor und danach und einem Punkt im Teil danach; der
+/// letzte Teil der Domäne hat mindestens zwei Zeichen mit einem Buchstaben (`wgpu@0.19.3`
+/// bleibt).
 fn mask_mail(text: &str) -> String {
     let mail_char = |c: char| c.is_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-' | '@');
     let mut out = String::with_capacity(text.len());
@@ -348,7 +366,10 @@ fn mask_mail(text: &str) -> String {
                     && !domain.contains('@')
                     && domain
                         .split_once('.')
-                        .is_some_and(|(x, y)| !x.is_empty() && !y.is_empty());
+                        .is_some_and(|(x, y)| !x.is_empty() && !y.is_empty())
+                    && domain.rsplit('.').next().is_some_and(|tld| {
+                        tld.chars().count() >= 2 && tld.chars().any(char::is_alphabetic)
+                    });
                 if ok {
                     out.extend(&w[..a]);
                     out.push_str(MAIL_MARK);
@@ -400,6 +421,7 @@ pub fn sanitize(text: &str, who: &Personal) -> String {
         }
     }
     t = mask_user_dirs(&t);
+    t = mask_onedrive(&t);
     mask_mail(&t)
 }
 
@@ -425,13 +447,13 @@ pub fn gpu_line(info: &BuildInfo, who: &Personal) -> String {
     info.gpu_line()
 }
 
-/// Kodiert für die Adresse (UTF-8). Unverändert bleiben nur `A-Z a-z 0-9 - . _ ~`; `\r`
-/// entfällt.
+/// Kodiert für die Adresse (UTF-8). Unverändert bleiben nur `A-Z a-z 0-9 - . _ ~`.
+/// Zeilenenden werden einheitlich `%0A` (`\r\n` und ein einzelnes `\r` wie `\n`).
 pub fn percent_encode(s: &str) -> String {
+    let s = unify_newlines(s);
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
         match b {
-            b'\r' => {}
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
                 out.push(b as char)
             }
@@ -441,13 +463,20 @@ pub fn percent_encode(s: &str) -> String {
     out
 }
 
+/// `\r\n` und einzelnes `\r` werden zu `\n`.
+fn unify_newlines(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 /// Eine Rückmeldung. Die Texte der Bestandteile sind schon bereinigt, es stehen nur die
 /// angehakten darin. Die Beschreibung bleibt, wie die Testerin sie geschrieben hat.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Report {
     pub kind: Kind,
-    /// Bereich aus [`AREAS`]; steht als „Bereich: …“ am Anfang des Textes, nicht als
-    /// Parameter (GitHub füllt Auswahlfelder nicht zuverlässig vor).
+    /// Bereich, genau einer aus [`AREAS`] (sonst schlägt in Testläufen eine Prüfung an), oder
+    /// `None`. Steht als „Bereich: …“ am Anfang von `passiert` (Fehler) bzw. `angaben`
+    /// (Wunsch, Frage), nicht als Parameter: GitHub füllt Auswahlfelder nicht zuverlässig vor.
+    /// Das Auswahlfeld im Formular wählt die Testerin selbst.
     pub area: Option<String>,
     pub description: String,
     pub parts: Vec<(Part, String)>,
@@ -460,6 +489,9 @@ pub struct Built {
     pub dropped: Vec<Part>,
     pub steps_cut: bool,
     pub description_cut: bool,
+    /// Wahr, wenn die Adresse auf `rueckmeldung.txt` verweist ([`ATTACH_HINT`] steht
+    /// darin): `with_file` war gesetzt, oder es wurde etwas weggelassen oder gekürzt.
+    pub needs_file: bool,
 }
 
 fn area_line(report: &Report) -> Option<String> {
@@ -550,31 +582,45 @@ fn render(
     url
 }
 
-/// Adresse des GitHub-Formulars, vorausgefüllt. Ist sie zu lang, fallen erst die
-/// Protokollzeilen weg, dann die ältesten Schritte; zuletzt wird die Beschreibung an einer
-/// Zeichengrenze gekürzt und endet mit [`KUERZUNG_HINWEIS`]. `with_file` hängt
-/// [`ATTACH_HINT`] an das Beschreibungsfeld.
+/// Adresse des GitHub-Formulars, vorausgefüllt, immer kürzer als [`MAX_URL_LEN`].
+///
+/// Ist sie zu lang, fallen zuerst automatisch gesammelte Angaben weg: die Protokollzeilen,
+/// dann die Schritte von den ältesten her, dann Absturzbericht, Grafikkarte, System und
+/// Version. Die Beschreibung bleibt ganz, solange sie allein passt; sonst wird sie an einer
+/// Zeichengrenze gekürzt und endet mit [`KUERZUNG_HINWEIS`].
+///
+/// `with_file` hängt [`ATTACH_HINT`] an das Beschreibungsfeld. Wurde etwas weggelassen oder
+/// gekürzt, geschieht das von selbst; [`Built::needs_file`] sagt dann, dass der Ordner mit
+/// `rueckmeldung.txt` angelegt werden muss.
 pub fn issue_url(report: &Report, with_file: bool) -> Built {
+    debug_assert!(
+        report.area.as_deref().is_none_or(|a| AREAS.contains(&a)),
+        "unbekannter Bereich {:?}",
+        report.area
+    );
     let mut parts: Vec<(Part, String)> = report.parts.clone();
     let mut built = Built {
         url: String::new(),
         dropped: Vec::new(),
         steps_cut: false,
         description_cut: false,
+        needs_file: with_file,
     };
-    let fits = |parts: &[(Part, String)]| {
-        let url = render(report, &report.description, false, parts, with_file);
-        (url.len() <= MAX_URL_LEN).then_some(url)
+    let fits = |parts: &[(Part, String)], attach: bool| {
+        let url = render(report, &report.description, false, parts, attach);
+        (url.len() < MAX_URL_LEN).then_some(url)
     };
-    if let Some(url) = fits(&parts) {
+    if let Some(url) = fits(&parts, with_file) {
         built.url = url;
         return built;
     }
+    // Ab hier fehlt in der Adresse etwas: der Datei-Hinweis gehört immer dazu.
+    built.needs_file = true;
     // 1. Protokollzeilen weg
     if parts.iter().any(|(p, _)| *p == Part::Protokoll) {
         parts.retain(|(p, _)| *p != Part::Protokoll);
         built.dropped.push(Part::Protokoll);
-        if let Some(url) = fits(&parts) {
+        if let Some(url) = fits(&parts, true) {
             built.url = url;
             return built;
         }
@@ -590,57 +636,55 @@ pub fn issue_url(report: &Report, with_file: bool) -> Built {
                 break;
             }
             parts[i].1 = lines[1..].join("\n");
-            if let Some(url) = fits(&parts) {
+            if let Some(url) = fits(&parts, true) {
                 built.url = url;
                 return built;
             }
         }
-        if let Some(url) = fits(&parts) {
-            built.url = url;
-            return built;
-        }
     }
-    // 3. Beschreibung kürzen. Reicht selbst die leere Beschreibung nicht, fallen weitere
-    //    Bestandteile weg (nur bei sehr großen automatischen Angaben).
-    let chars: Vec<char> = report.description.chars().collect();
-    let with_desc = |parts: &[(Part, String)], n: usize| {
-        let desc: String = chars[..n].iter().collect();
-        render(report, &desc, true, parts, with_file)
-    };
-    let mut emergency = [
+    // 3. übrige automatische Angaben, solange die ganze Beschreibung nicht passt
+    for p in [
         Part::Absturzbericht,
         Part::Grafik,
         Part::System,
         Part::Version,
-    ]
-    .into_iter();
-    while with_desc(&parts, 0).len() > MAX_URL_LEN {
-        let Some(p) = emergency.next() else { break };
+    ] {
+        if let Some(url) = fits(&parts, true) {
+            built.url = url;
+            return built;
+        }
         if parts.iter().any(|(q, _)| *q == p) {
             parts.retain(|(q, _)| *q != p);
             built.dropped.push(p);
         }
     }
-    if let Some(url) = fits(&parts) {
+    if let Some(url) = fits(&parts, true) {
         built.url = url;
         return built;
     }
+    // 4. Die Beschreibung passt auch allein nicht: an einer Zeichengrenze kürzen.
+    let chars: Vec<char> = report.description.chars().collect();
+    let with_desc = |n: usize| {
+        let desc: String = chars[..n].iter().collect();
+        render(report, &desc, true, &parts, true)
+    };
     // größtes n mit passender Adresse (Länge wächst mit n)
     let (mut lo, mut hi) = (0usize, chars.len());
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
-        if with_desc(&parts, mid).len() <= MAX_URL_LEN {
+        if with_desc(mid).len() < MAX_URL_LEN {
             lo = mid;
         } else {
             hi = mid - 1;
         }
     }
     built.description_cut = true;
-    built.url = with_desc(&parts, lo);
+    built.url = with_desc(lo);
     built
 }
 
-/// Alles ungekürzt, mit Überschrift je Teil. Inhalt von `rueckmeldung.txt`.
+/// Alles ungekürzt, mit Überschrift je Teil. Inhalt von `rueckmeldung.txt`; Zeilenenden
+/// überall `\n` (auch unter Windows; der Editor dort zeigt das richtig an).
 pub fn full_text(report: &Report) -> String {
     let mut out = format!("Art: {}\n", report.kind.label());
     if let Some(a) = area_line(report) {
@@ -653,7 +697,7 @@ pub fn full_text(report: &Report) -> String {
     for (p, t) in &report.parts {
         out.push_str(&format!("\n== {} ==\n{t}\n", p.label()));
     }
-    out
+    unify_newlines(&out)
 }
 
 /// Neuer Ordner `rueckmeldungen/<Datum_Uhrzeit>` im Datenordner; gibt es ihn schon, mit
