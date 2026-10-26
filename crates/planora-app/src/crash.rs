@@ -139,11 +139,27 @@ type Hook = Box<dyn Fn(&PanicHookInfo) + Send + Sync>;
 pub fn hook_with(dir: PathBuf, diag: &'static Mutex<Diag>, previous: Hook) -> Hook {
     Box::new(move |info| {
         let entered = IN_HOOK.try_with(|f| !f.replace(true)).unwrap_or(false);
-        if entered {
+        if !entered {
+            // Panik im Hook selbst: nichts schreiben.
+        } else if panic_expected() {
+            // Abgefangen: kein Absturz, nur eine Zeile ins Protokoll (ohne zu warten).
+            let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let d = match diag.try_lock() {
+                    Ok(d) => Some(d),
+                    Err(TryLockError::Poisoned(e)) => Some(e.into_inner()),
+                    Err(TryLockError::WouldBlock) => None,
+                };
+                if let Some(mut d) = d {
+                    d.log(diag::Level::Warn, CAUGHT_LINE);
+                }
+            }));
+        } else {
             let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let input = collect(info, diag);
                 let _ = write_report(&dir, &input);
             }));
+        }
+        if entered {
             let _ = IN_HOOK.try_with(|f| f.set(false));
         }
         previous(info);
@@ -260,7 +276,10 @@ fn open_exclusive(path: &Path, create: bool) -> std::io::Result<std::fs::File> {
 }
 
 /// Läuft die Instanz mit dieser Prozessnummer noch? Unter Windows entscheidet die Sperre des
-/// Markers; anderswo (ohne Sperre) zählt unter Linux `/proc/<pid>`.
+/// Markers; außerhalb von Windows wird nur `/proc/<pid>` geprüft (Linux). Unter macOS gibt es
+/// kein `/proc`: Dort gilt jeder fremde Marker als liegengeblieben, auch der einer gleichzeitig
+/// laufenden Instanz. Das nehmen wir hin, weil es dort keine Updates (also keinen Neustart mit
+/// zwei Instanzen) gibt.
 #[cfg(not(windows))]
 fn other_running(pid: u32) -> bool {
     Path::new("/proc").join(pid.to_string()).exists()
@@ -399,4 +418,36 @@ pub fn report_document(text: &str) -> Option<PathBuf> {
     report_field(text, "Dokument")
         .filter(|d| !d.is_empty() && *d != "keines")
         .map(PathBuf::from)
+}
+
+/// Protokollzeile statt eines Berichts bei einer abgefangenen Panik ([`expected_panics`]).
+pub const CAUGHT_LINE: &str = "Fehler beim Erstellen einer Vorschau abgefangen";
+
+thread_local! {
+    /// Wie tief dieser Faden gerade in [`expected_panics`] steckt.
+    static EXPECTED: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Setzt den Merker beim Verlassen zurück, auch wenn `f` panikt.
+struct ExpectedGuard;
+
+impl Drop for ExpectedGuard {
+    fn drop(&mut self) {
+        let _ = EXPECTED.try_with(|c| c.set(c.get().saturating_sub(1)));
+    }
+}
+
+/// Führt `f` aus, dessen Panik der Aufrufer selbst mit `catch_unwind` abfängt (etwa beim
+/// Erstellen einer Vorschau). Der Hook schreibt dafür keinen Bericht, nur [`CAUGHT_LINE`] ins
+/// Protokoll; der vorherige Hook läuft trotzdem. Rust ruft den Hook vor dem Abwickeln, ohne
+/// diesen Merker gälte also jede abgefangene Panik als Absturz.
+pub fn expected_panics<R>(f: impl FnOnce() -> R) -> R {
+    let _ = EXPECTED.try_with(|c| c.set(c.get().saturating_add(1)));
+    let _guard = ExpectedGuard;
+    f()
+}
+
+/// Steckt dieser Faden gerade in [`expected_panics`]?
+fn panic_expected() -> bool {
+    EXPECTED.try_with(|c| c.get() > 0).unwrap_or(false)
 }

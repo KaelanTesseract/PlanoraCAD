@@ -274,3 +274,31 @@ fn diag_keeps_current_document() {
     d.set_document(None);
     assert_eq!(d.current_document(), None);
 }
+
+/// Eine Panik, die der Code selbst abfängt (etwa beim Erstellen einer Vorschau), ist kein
+/// Absturz: kein Bericht, nur eine Protokollzeile; der vorherige Hook läuft trotzdem. Danach
+/// (auch nach der Panik) gilt wieder alles wie sonst.
+#[test]
+fn expected_panic_writes_no_report() {
+    let dir = temp_dir("erwartet");
+    let diag = leaked_diag();
+    let calls = with_hook(&dir, diag, || {
+        panic_in_thread("erwartet", || {
+            let caught = std::panic::catch_unwind(|| {
+                crash::expected_panics(|| -> () { panic!("abgefangene Testpanik") })
+            });
+            assert!(caught.is_err());
+            assert_eq!(crash::expected_panics(|| 7), 7);
+            // Der Merker ist wieder aus: diese Panik ist ein Absturz.
+            panic!("echte Testpanik");
+        });
+    });
+    assert_eq!(calls, 2, "der vorherige Hook läuft bei beiden");
+    let files = reports(&dir);
+    assert_eq!(files.len(), 1, "nur die echte Panik: {files:?}");
+    let text = std::fs::read_to_string(&files[0]).expect("lesbar");
+    assert!(text.contains("echte Testpanik"), "{text}");
+    let lines = diag.lock().unwrap().recent_lines(50).join("\n");
+    assert!(lines.contains(crash::CAUGHT_LINE), "{lines}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

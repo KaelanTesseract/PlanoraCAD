@@ -44,9 +44,22 @@ fn main() -> eframe::Result {
         depth_buffer: 32,
         ..Default::default()
     };
-    eframe::run_native(
+    let marker_file = marker.is_some().then(|| {
+        planora_project::config::Config::config_path()
+            .parent()
+            .map(|d| planora_app::crash::marker_path(d, std::process::id()))
+    });
+    let result = eframe::run_native(
         "PlanoraCAD",
         options,
         Box::new(move |cc| Ok(Box::new(PlanoraApp::new(cc, after_update, marker, finding)))),
-    )
+    );
+    // Start sichtbar gescheitert (etwa ohne Grafik): kein „unerwartet beendet“ beim nächsten
+    // Mal. Marker und App sind hier schon weg, die Datei ist also nicht mehr offen.
+    if result.is_err()
+        && let Some(Some(path)) = marker_file
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    result
 }
