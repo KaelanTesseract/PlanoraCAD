@@ -46,7 +46,8 @@ chrono.workspace = true
 # Rückmeldung). Am 2026-10-26 geprüft: MIT OR Apache-2.0, über png/wgpu ohnehin im Baum.
 crc32fast = "=1.5.2"
 
-# Windows-Version über RtlGetVersion, Rücksprungadressen im Absturzbericht (crash_addr; windows-sys\n# ist über andere Pakete ohnehin im Baum).
+# Windows-Version über RtlGetVersion, Rücksprungadressen im Absturzbericht (crash_addr; windows-sys
+# ist über andere Pakete ohnehin im Baum).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = ["Wdk_System_SystemServices", "Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader", "Win32_System_SystemInformation"] }
 
