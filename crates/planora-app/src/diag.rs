@@ -29,6 +29,16 @@ const MAX_LINE_CHARS: usize = 2000;
 /// Nach einem Schreibfehler so viele Zeilen überspringen, bevor es erneut versucht wird.
 const RETRY_AFTER: u32 = 50;
 
+/// So viele letzte Schritte hält das Programm im Speicher.
+pub const STEPS: usize = 50;
+
+/// Ein Schritt der Nutzerin: Uhrzeit (UTC, `14:03:22`) und Name der Aktion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Step {
+    pub time: String,
+    pub label: String,
+}
+
 /// Wichtigkeit einer Zeile. `Detail` erscheint nur im ausführlichen Protokoll.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -52,6 +62,8 @@ impl Level {
 /// Protokoll mit Speicherring und (wenn möglich) Datei.
 pub struct Diag {
     ring: VecDeque<String>,
+    /// Letzte Schritte: Zeit, Name, Anzahl direkt aufeinanderfolgender Wiederholungen.
+    steps: VecDeque<(String, String, u32)>,
     dir: Option<PathBuf>,
     /// Zeilen, die nicht in die Datei kamen (Schreibfehler); gehen beim nächsten Versuch nach.
     pending: Vec<String>,
@@ -66,6 +78,7 @@ impl Diag {
     pub fn in_memory() -> Diag {
         Diag {
             ring: VecDeque::new(),
+            steps: VecDeque::new(),
             dir: None,
             pending: Vec::new(),
             skip: 0,
@@ -150,6 +163,40 @@ impl Diag {
         self.ring.iter().skip(skip).cloned().collect()
     }
 
+    /// Merkt einen Schritt (nur der Name einer Aktion, nie Projektinhalt). Gleiche Schritte
+    /// direkt hintereinander werden zu einem mit Zähler. Der Name wird wie eine Protokollzeile
+    /// entschärft.
+    pub fn step(&mut self, label: &str) {
+        let label = clean(label);
+        let time = chrono::Utc::now().format("%H:%M:%S").to_string();
+        if let Some(last) = self.steps.back_mut()
+            && last.1 == label
+        {
+            last.0 = time;
+            last.2 += 1;
+            return;
+        }
+        if self.steps.len() >= STEPS {
+            self.steps.pop_front();
+        }
+        self.steps.push_back((time, label, 1));
+    }
+
+    /// Die letzten Schritte, älteste zuerst.
+    pub fn recent_steps(&self) -> Vec<Step> {
+        self.steps
+            .iter()
+            .map(|(time, label, n)| Step {
+                time: time.clone(),
+                label: if *n > 1 {
+                    format!("{label} ×{n}")
+                } else {
+                    label.clone()
+                },
+            })
+            .collect()
+    }
+
     /// Schaltet das ausführliche Protokoll (`Level::Detail`) ein oder aus.
     pub fn set_verbose(&mut self, on: bool) {
         self.verbose = on;
@@ -226,6 +273,7 @@ pub fn init_global(data_dir: &Path) {
     }
     let mut fresh = Diag::with_dir(data_dir);
     fresh.verbose = g.verbose;
+    fresh.steps = std::mem::take(&mut g.steps);
     // Was bisher nur im Speicher stand, kommt in die Datei und bleibt im Ring.
     let old: Vec<String> = std::mem::take(&mut g.ring).into();
     for line in old {
@@ -261,4 +309,26 @@ pub fn recent_lines(n: usize) -> Vec<String> {
 
 pub fn set_verbose(on: bool) {
     lock().set_verbose(on);
+}
+
+/// Merkt einen Schritt im gemeinsamen Protokoll (siehe [`Diag::step`]).
+pub fn step(label: &str) {
+    lock().step(label);
+}
+
+/// Die letzten Schritte des gemeinsamen Protokolls, älteste zuerst.
+pub fn recent_steps() -> Vec<Step> {
+    lock().recent_steps()
+}
+
+/// Eine Zeile je Schritt: `14:03:22 Skizze extrudieren`.
+pub fn steps_text(steps: &[Step]) -> String {
+    steps
+        .iter()
+        .map(|s| format!("{} {}", s.time, s.label))
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        )
 }

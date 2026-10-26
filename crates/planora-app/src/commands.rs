@@ -91,6 +91,7 @@ pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
     if a.area() == Area::Model && a != Action::ShowShortcuts && ws.active_tab().read_only {
         return MenuRequest::None;
     }
+    crate::diag::step(a.label());
     match a {
         Action::ShowShortcuts | Action::SketchShowShortcuts => return MenuRequest::Shortcuts,
         Action::New => {

@@ -231,6 +231,7 @@ impl DocTab {
             return;
         }
         let label = describe_change(self.history.current(), &after);
+        crate::diag::step(label);
         let bytes = snapshot_bytes(&after);
         self.history.record(after, bytes, label);
     }
