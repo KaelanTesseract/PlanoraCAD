@@ -1,5 +1,5 @@
 name: Wunsch oder Frage
-description: Du wünschst dir etwas, oder du hast eine Frage. Bei einer Frage schreib "Frage: " an den Anfang des Titels.
+description: "Du wünschst dir etwas, oder du hast eine Frage. Bei einer Frage schreib \"Frage: \" an den Anfang des Titels."
 title: "Wunsch: "
 labels: ["idee"]
 body:
