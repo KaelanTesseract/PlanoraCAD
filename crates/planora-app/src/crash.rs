@@ -255,6 +255,8 @@ pub struct ReportInput {
     pub location: String,
     pub thread: String,
     pub backtrace: String,
+    /// Rücksprungadressen und Bau-Kennung (nur Windows; [`crate::crash_addr`]).
+    pub addresses: Option<crate::crash_addr::Addresses>,
     pub steps: Vec<Step>,
     pub log: Vec<String>,
     pub document: Option<PathBuf>,
@@ -262,7 +264,8 @@ pub struct ReportInput {
 }
 
 /// Der Berichtstext: beim Dokument nur der Dateiname, der Ablauf gekürzt
-/// ([`trim_backtrace`]). Den Benutzerordner ersetzt erst [`write_report`].
+/// ([`trim_backtrace`]), am Ende die Rücksprungadressen
+/// ([`crate::crash_addr::section_text`]). Den Benutzerordner ersetzt erst [`write_report`].
 pub fn report_text(input: &ReportInput) -> String {
     let mut t = String::new();
     t.push_str("PlanoraCAD – Absturzbericht\n");
@@ -307,7 +310,8 @@ pub fn report_text(input: &ReportInput) -> String {
     }
     t.push_str("\nAblauf (Backtrace):\n");
     t.push_str(&trim_backtrace(&input.backtrace));
-    t.push('\n');
+    t.push_str("\n\n");
+    t.push_str(&crate::crash_addr::section_text(input.addresses.as_ref()));
     t
 }
 
@@ -432,6 +436,7 @@ fn collect(info: &PanicHookInfo, diag: &Mutex<Diag>) -> ReportInput {
         location,
         thread,
         backtrace: Backtrace::force_capture().to_string(),
+        addresses: crate::crash_addr::capture(),
         steps,
         log,
         document,

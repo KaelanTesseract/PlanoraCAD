@@ -29,6 +29,7 @@ fn input() -> ReportInput {
         location: "crates/planora-app/src/app.rs:10:5".into(),
         thread: "main".into(),
         backtrace: "0: planora_app::app::run".into(),
+        addresses: None,
         steps: vec![Step {
             time: "14:03:20".into(),
             label: "Skizze extrudieren".into(),
@@ -104,6 +105,7 @@ fn report_text_has_all_sections() {
         "Letzte Schritte",
         "Protokoll",
         "Ablauf (Backtrace)",
+        "Adressen (für Dennis):\nnicht verfügbar",
     ] {
         assert!(t.contains(s), "Abschnitt {s} fehlt in:\n{t}");
     }
@@ -156,6 +158,18 @@ fn panicking_thread_writes_a_report_and_calls_previous_hook() {
     assert!(text.contains("Testpanik"), "{text}");
     assert!(text.contains("crash.rs"), "{text}");
     assert!(text.contains("absturz-faden"), "{text}");
+    // Rücksprungadressen: unter Windows mit Bau-Kennung und Rahmen in der eigenen exe, sonst
+    // „nicht verfügbar“.
+    let section = text
+        .split_once("Adressen (für Dennis):\n")
+        .map(|(_, s)| s)
+        .expect("Abschnitt Adressen fehlt");
+    if cfg!(windows) {
+        assert!(section.contains("PDB-GUID: "), "{section}");
+        assert!(section.contains(".exe+0x"), "{section}");
+    } else {
+        assert!(section.starts_with("nicht verfügbar"), "{section}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

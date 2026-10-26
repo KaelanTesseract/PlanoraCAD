@@ -53,6 +53,7 @@ fn input(version: &str, document: Option<PathBuf>) -> ReportInput {
         location: "crates/planora-app/src/app.rs:10:5".into(),
         thread: "main".into(),
         backtrace: "0: planora_app::app::Geheimnis".into(),
+        addresses: None,
         steps: vec![],
         log: vec!["2026-10-26T13:03:19Z INFO Start".into()],
         document,
