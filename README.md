@@ -577,7 +577,7 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 
 **Neuer Aufbau des Fensters (Modell-Ansicht):** Die Felder schweben jetzt frei über dem 3D-Bereich, der das ganze Fenster füllt.
 
-- Oben in der Mitte: das kleine Programmzeichen, das Menü und die Tabs. Unter „Datei“ → „Über PlanoraCAD“ stehen Version, Lizenz und die Herkunft der mitgelieferten Schriften und Symbole.
+- Oben in der Mitte: das kleine Programmzeichen, das Menü und die Tabs. Unter „Hilfe“ → „Über PlanoraCAD“ stehen Version, Lizenz und die Herkunft der mitgelieferten Schriften und Symbole.
 - Links: der Baum mit den Arbeitsschritten (deine Projekte stehen im Fenster „Projekte“, Strg+O).
 - Rechts: Eigenschaften und Versionen. Ein Umschalter im Feld wechselt zwischen beiden.
 - Unten: das Befehlsfeld mit Abkürzungen zu den Menüeinträgen, daneben Meldungen.

@@ -14,6 +14,8 @@ Das ist die erste Entwicklerversion mit Update-Funktion. Sie ist noch nicht für
 - Zu jeder Veröffentlichung gehört eine Datei mit den Lizenzen aller verwendeten Bibliotheken und Schriften.
 - Verlaufsleiste unten im Fenster: Sie zeigt die Schritte des gewählten Körpers. Mit dem Marker lässt sich zu einem früheren Schritt zurückgehen, ohne etwas zu löschen.
 - Tastenkürzel wie in Fusion, zum Beispiel E zum Extrudieren, F zum Verrunden und V zum Ein- und Ausblenden. Alle Kürzel lassen sich in den Einstellungen ändern. „Ansicht → Tastenkürzel …“ zeigt eine Übersicht mit Suche.
+- Rückmeldung aus dem Programm: „Hilfe → Rückmeldung …“ (oder Strg+Umschalt+R) öffnet ein Fenster. Du wählst Fehler, Wunsch oder Frage und schreibst kurz, was passiert ist. Darunter steht jede Angabe, die das Programm dazulegt (Version, System, Grafikkarte, letzte Schritte, auf Wunsch Protokollzeilen), mit Häkchen und Vorschau; Benutzername, Projektpfade und Mailadressen sind schon entfernt. „Im Browser öffnen“ öffnet ein ausgefülltes Formular auf GitHub. Abgeschickt wird erst, wenn du dort selbst auf den Knopf klickst.
+- Neues Menü „Hilfe“ mit „Rückmeldung …“, „Häufige Probleme“ und „Über PlanoraCAD“ (stand bisher im Menü „Datei“).
 - Skizzen mit Abhängigkeiten und Maßen, Freiformflächen aus Ellipsen und Splines, Rundungen und Fasen, Boolesche Operationen (Vereinigen, Abziehen, Schneiden).
 - Feature-Baum: Alles, was du baust, steht als Liste von Schritten. Ändert sich ein Maß, rechnet das Programm die folgenden Schritte neu.
 - Parameter und Formeln: Maße bekommen einen Namen und lassen sich ausrechnen.

@@ -1,0 +1,1065 @@
+//! Fenster „Rückmeldung“, Menü „Hilfe“ und Tastenkürzel Strg+Umschalt+R: Einträge im Menü
+//! „Hilfe“ (Rückmeldung mit Kürzel, Häufige Probleme, Über PlanoraCAD; „Über“ nicht mehr im
+//! Menü „Datei“), Häkchen und bereinigte Vorschau, Mindestlänge, „Im Browser öffnen“ mit und
+//! ohne Rückmeldungsordner, „Text kopieren“, Esc und „Abbrechen“, Fensterregeln wie bei der
+//! Übersicht der Tastenkürzel, Größe bei 1920 × 1080 und 800 × 600.
+//!
+//! Mit echten Bildern der ganzen App (`PlanoraApp::for_tests`, `eframe::App::ui`); Bibliothek,
+//! Konfiguration und Rückmeldungsordner nur im Temp-Ordner. Der Dateimanager ist eine
+//! Nachbildung, der Browser wird nie geöffnet (nur die Ausgabe `OutputCommand::OpenUrl`).
+
+mod common;
+
+use eframe::App as _;
+use egui::{Event, Key, Modifiers, OutputCommand, PointerButton, Pos2, Rect, Vec2, vec2};
+use planora_app::app::{
+    FAQ_ENTRY, FEEDBACK_ENTRY, HELP_MENU, MenuRequest, PlanoraApp, SETTINGS_ENTRY,
+    VIEW_SHORTCUTS_ENTRY,
+};
+use planora_app::build_info::{BuildInfo, GpuInfo};
+use planora_app::create_dialog::CreateDialog;
+use planora_app::diag::Step;
+use planora_app::dialog::DialogSize;
+use planora_app::feedback::{
+    self, ATTACH_HINT, FEEDBACK_DIR, FEEDBACK_FILE, Part, Personal, SystemOpen, percent_encode,
+};
+use planora_app::feedback_dialog::*;
+use planora_app::keymap::{Action, Area, Binding, KeyChord, Keymap, SetResult};
+use planora_app::workspace::{Prompt, Workspace};
+use planora_app::{about_dialog, fonts, theme};
+use planora_project::config::Config;
+use planora_project::library::Library;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+const SIZE: Vec2 = vec2(1920.0, 1080.0);
+const SMALL: Vec2 = vec2(800.0, 600.0);
+const NONE: Modifiers = Modifiers::NONE;
+const CTRL_SHIFT: Modifiers = Modifiers {
+    alt: false,
+    ctrl: true,
+    shift: true,
+    mac_cmd: false,
+    command: true,
+};
+const CTRL: Modifiers = Modifiers {
+    alt: false,
+    ctrl: true,
+    shift: false,
+    mac_cmd: false,
+    command: true,
+};
+const REPO_URL: &str = "https://github.com/KaelanTesseract/PlanoraCAD";
+
+// ---- Hilfen ---------------------------------------------------------------------------------
+
+/// Nachbildung des Dateimanagers: merkt sich die geöffneten Ordner.
+struct FakeOpen(Arc<Mutex<Vec<PathBuf>>>);
+
+impl SystemOpen for FakeOpen {
+    fn open_folder(&self, dir: &Path) -> bool {
+        self.0.lock().unwrap().push(dir.to_path_buf());
+        true
+    }
+}
+
+struct Seen {
+    text: String,
+    rect: Rect,
+}
+
+fn walk(shape: &egui::epaint::Shape, out: &mut Vec<Seen>) {
+    match shape {
+        egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+        egui::epaint::Shape::Text(t) => out.push(Seen {
+            text: t.galley.text().to_string(),
+            rect: Rect::from_min_size(t.pos, t.galley.size()),
+        }),
+        _ => {}
+    }
+}
+
+struct Rig {
+    ctx: egui::Context,
+    app: PlanoraApp,
+    size: Vec2,
+    time: f64,
+    seen: Vec<Seen>,
+    /// Alle Ausgaben (Browser, Zwischenablage) seit dem Start.
+    commands: Vec<OutputCommand>,
+    /// Von der Nachbildung geöffnete Ordner.
+    opened: Arc<Mutex<Vec<PathBuf>>>,
+    /// Datenordner (Ordner der Konfigurationsdatei) im Temp-Ordner.
+    data: PathBuf,
+}
+
+impl Rig {
+    fn new(prefix: &str) -> Rig {
+        Rig::with_size(prefix, SIZE)
+    }
+
+    fn with_size(prefix: &str, size: Vec2) -> Rig {
+        let data = common::temp_root(prefix);
+        std::fs::create_dir_all(&data).unwrap();
+        let mut ws = Workspace::new(
+            Some(Library::open(&data.join("Projekte")).unwrap()),
+            Config::default(),
+        );
+        ws.config_path = data.join("config.json");
+        assert_ne!(ws.config_path, Config::config_path(), "nie die echte Datei");
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts::definitions());
+        theme::apply(&ctx, true);
+        PlanoraApp::setup_context(&ctx);
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let mut app = PlanoraApp::for_tests(ws);
+        app.set_system_open(Box::new(FakeOpen(opened.clone())));
+        let mut rig = Rig {
+            ctx,
+            app,
+            size,
+            time: 0.0,
+            seen: Vec::new(),
+            commands: Vec::new(),
+            opened,
+            data,
+        };
+        rig.settle();
+        rig
+    }
+
+    fn frame_with(&mut self, events: Vec<Event>, modifiers: Modifiers) {
+        self.time += 1.0 / 60.0;
+        let mut all = vec![Event::ModifiersChanged(modifiers)];
+        all.extend(events);
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
+            time: Some(self.time),
+            events: all,
+            ..Default::default()
+        };
+        let mut f = eframe::Frame::_new_kittest();
+        let app = &mut self.app;
+        let out = self.ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
+        let mut seen = Vec::new();
+        for c in &out.shapes {
+            walk(&c.shape, &mut seen);
+        }
+        self.commands
+            .extend(out.platform_output.commands.iter().cloned());
+        out.drop_without_applying_deltas();
+        self.seen = seen;
+    }
+
+    fn frame(&mut self, events: Vec<Event>) {
+        self.frame_with(events, NONE);
+    }
+
+    fn settle(&mut self) {
+        for _ in 0..4 {
+            self.frame(vec![]);
+        }
+    }
+
+    fn texts(&self) -> Vec<&str> {
+        self.seen.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    fn sees(&self, text: &str) -> bool {
+        self.seen.iter().any(|s| s.text == text)
+    }
+
+    /// Rechteck des untersten sichtbaren Texts `text`.
+    fn find(&self, text: &str) -> Rect {
+        self.seen
+            .iter()
+            .filter(|s| s.text == text)
+            .max_by(|a, b| a.rect.top().partial_cmp(&b.rect.top()).unwrap())
+            .unwrap_or_else(|| panic!("„{text}“ nicht zu sehen: {:?}", self.texts()))
+            .rect
+    }
+
+    fn click_at(&mut self, p: Pos2) {
+        let button = |pressed| Event::PointerButton {
+            pos: p,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: NONE,
+        };
+        self.frame(vec![Event::PointerMoved(p)]);
+        self.frame(vec![button(true)]);
+        self.frame(vec![button(false)]);
+        self.settle();
+    }
+
+    fn click(&mut self, text: &str) {
+        self.settle();
+        let p = self.find(text).center();
+        self.click_at(p);
+    }
+
+    /// Ein Menü der Leiste öffnen (der oberste Text mit diesem Namen).
+    fn open_menu(&mut self, name: &str) {
+        self.settle();
+        let p = self
+            .seen
+            .iter()
+            .filter(|s| s.text == name)
+            .min_by(|a, b| a.rect.top().partial_cmp(&b.rect.top()).unwrap())
+            .unwrap_or_else(|| panic!("Menü „{name}“ fehlt: {:?}", self.texts()))
+            .rect
+            .center();
+        self.click_at(p);
+    }
+
+    fn press(&mut self, k: Key, m: Modifiers) {
+        let ev = |pressed| Event::Key {
+            key: k,
+            physical_key: Some(k),
+            pressed,
+            repeat: false,
+            modifiers: m,
+        };
+        self.frame_with(vec![ev(true)], m);
+        self.frame_with(vec![ev(false)], NONE);
+        self.settle();
+    }
+
+    fn type_text(&mut self, s: &str) {
+        self.frame(vec![Event::Text(s.into())]);
+        self.settle();
+    }
+
+    fn fb(&mut self) -> &mut FeedbackDialog {
+        self.app.feedback_mut()
+    }
+
+    /// Öffnet das Fenster mit den Angaben aus [`context`].
+    fn open_with_context(&mut self) {
+        let c = context(&self.data);
+        self.fb().open_fresh(c);
+        self.settle();
+    }
+
+    fn urls(&self) -> Vec<String> {
+        self.commands
+            .iter()
+            .filter_map(|c| match c {
+                OutputCommand::OpenUrl(u) => Some(u.url.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn copies(&self) -> Vec<String> {
+        self.commands
+            .iter()
+            .filter_map(|c| match c {
+                OutputCommand::CopyText(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn opened(&self) -> Vec<PathBuf> {
+        self.opened.lock().unwrap().clone()
+    }
+
+    fn bundle_root(&self) -> PathBuf {
+        self.data.join(FEEDBACK_DIR)
+    }
+
+    fn window_rect(&self) -> Rect {
+        self.ctx
+            .memory(|m| m.area_rect(window_id()))
+            .expect("Fenster Rückmeldung gezeigt")
+    }
+}
+
+/// Angaben wie beim Öffnen, mit einem Benutzernamen, der nirgends erscheinen darf.
+fn context(data: &Path) -> FeedbackContext {
+    FeedbackContext {
+        info: BuildInfo {
+            version: planora_app::running_version(),
+            os: "Windows 11 (Build 26100)".into(),
+            gpu: Some(GpuInfo {
+                name: "Testkarte 3000".into(),
+                driver: r"31.0 C:\Users\Max Müller\treiber".into(),
+                backend: "Vulkan".into(),
+            }),
+        },
+        screen: Some((1920, 1080)),
+        steps: vec![
+            Step {
+                time: "14:03:22".into(),
+                label: "Skizze extrudieren".into(),
+            },
+            Step {
+                time: "14:03:30".into(),
+                label: "Speichern".into(),
+            },
+        ],
+        log: vec![
+            "2026-10-26T14:03:20Z INFO Start PlanoraCAD".into(),
+            r"2026-10-26T14:03:21Z INFO Geöffnet C:\Users\Max Müller\Kunden\Halter.pcad".into(),
+            "2026-10-26T14:03:22Z WARN Mail an max.mueller@example.org".into(),
+        ],
+        personal: Personal {
+            user_names: vec!["Max Müller".into()],
+            home_dirs: vec![r"C:\Users\Max Müller".into()],
+            project_paths: vec![],
+        },
+        data_dir: data.to_path_buf(),
+        crash_report: None,
+    }
+}
+
+fn chord(key: Key, ctrl: bool, shift: bool) -> KeyChord {
+    KeyChord {
+        key,
+        ctrl,
+        shift,
+        alt: false,
+    }
+}
+
+const ALL_PARTS: [Part; 8] = [
+    Part::Version,
+    Part::System,
+    Part::Grafik,
+    Part::Schritte,
+    Part::Protokoll,
+    Part::Bild,
+    Part::Projektdatei,
+    Part::Absturzbericht,
+];
+
+/// Klappt die Vorschau aller Bestandteile auf.
+fn open_previews(ctx: &egui::Context) {
+    for p in ALL_PARTS {
+        let mut s = egui::collapsing_header::CollapsingState::load_with_default_open(
+            ctx,
+            preview_id(p),
+            false,
+        );
+        s.set_open(true);
+        s.store(ctx);
+    }
+}
+
+// ---- Menü „Hilfe“ ---------------------------------------------------------------------------
+
+#[test]
+fn help_menu_has_feedback_faq_and_about_and_file_menu_no_longer_has_about() {
+    assert_eq!(HELP_MENU, "Hilfe");
+    assert_eq!(FEEDBACK_ENTRY, "Rückmeldung …");
+    assert_eq!(FAQ_ENTRY, "Häufige Probleme");
+    let mut r = Rig::new("planora-fb-menu");
+    // „Hilfe“ steht in der Leiste rechts neben „Ansicht“.
+    let ansicht = r.find("Ansicht");
+    let hilfe = r.find(HELP_MENU);
+    assert!(
+        (hilfe.center().y - ansicht.center().y).abs() < 2.0 && hilfe.left() > ansicht.right(),
+        "Hilfe nach Ansicht: {ansicht:?} {hilfe:?}"
+    );
+
+    r.open_menu(HELP_MENU);
+    for t in [
+        FEEDBACK_ENTRY,
+        FAQ_ENTRY,
+        about_dialog::TITLE,
+        "Strg+Umschalt+R",
+    ] {
+        assert!(r.sees(t), "„{t}“ fehlt: {:?}", r.texts());
+    }
+    let (fb, faq, about) = (
+        r.find(FEEDBACK_ENTRY),
+        r.find(FAQ_ENTRY),
+        r.find(about_dialog::TITLE),
+    );
+    assert!(
+        fb.top() < faq.top() && faq.top() < about.top(),
+        "Reihenfolge"
+    );
+    let keys = r.find("Strg+Umschalt+R");
+    assert!(
+        (keys.center().y - fb.center().y).abs() < 4.0 && keys.left() > fb.right(),
+        "Kürzel in der Zeile von „{FEEDBACK_ENTRY}“"
+    );
+
+    // Häufige Probleme öffnet die Seite im Browser.
+    r.click(FAQ_ENTRY);
+    assert_eq!(r.urls(), [feedback::faq_url()]);
+    assert!(!r.fb().open);
+
+    // Rückmeldung … öffnet das Fenster.
+    r.open_menu(HELP_MENU);
+    r.click(FEEDBACK_ENTRY);
+    assert!(r.fb().open, "Rückmeldung offen");
+    assert!(r.sees(TITLE), "{:?}", r.texts());
+    r.click(CANCEL);
+    assert!(!r.fb().open);
+
+    // Über PlanoraCAD öffnet den Über-Dialog.
+    r.open_menu(HELP_MENU);
+    r.click(about_dialog::TITLE);
+    assert!(r.app.ws_mut().about_open, "Über offen");
+    r.app.ws_mut().about_open = false;
+    r.settle();
+
+    // Im Menü „Datei“ steht „Über“ nicht mehr.
+    r.open_menu("Datei");
+    assert!(r.sees(SETTINGS_ENTRY), "Datei offen: {:?}", r.texts());
+    assert!(!r.sees(about_dialog::TITLE), "kein Über im Menü Datei");
+    assert_eq!(r.urls().len(), 1, "sonst nichts im Browser");
+}
+
+#[test]
+fn faq_and_guide_urls_point_to_master_like_the_forms() {
+    assert_eq!(
+        feedback::faq_url(),
+        format!("{REPO_URL}/blob/master/docs/haeufige-probleme.md")
+    );
+    assert_eq!(
+        feedback::guide_url(),
+        format!("{REPO_URL}/blob/master/docs/so-meldest-du-etwas.md")
+    );
+    let config = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/ISSUE_TEMPLATE/config.yml"),
+    )
+    .unwrap();
+    assert!(config.contains(&format!("url: {}", feedback::faq_url())));
+    assert!(config.contains(&format!("url: {}", feedback::guide_url())));
+}
+
+// ---- Tastenkürzel ---------------------------------------------------------------------------
+
+#[test]
+fn ctrl_shift_r_opens_the_window_even_with_an_open_tab_dialog() {
+    let mut r = Rig::new("planora-fb-taste");
+    r.app.ws_mut().active_tab_mut().dialog = Some(CreateDialog::Box {
+        x: 10.0,
+        y: 20.0,
+        z: 30.0,
+    });
+    r.settle();
+    assert!(r.sees("Quader erzeugen"), "{:?}", r.texts());
+    r.press(Key::R, CTRL_SHIFT);
+    assert!(r.fb().open, "Strg+Umschalt+R öffnet die Rückmeldung");
+    assert!(r.sees(TITLE), "{:?}", r.texts());
+    assert!(
+        r.app.ws_mut().active_tab().dialog.is_some(),
+        "das Fenster des Tabs bleibt"
+    );
+    // Strg+R allein (ohne Umschalt) öffnet nichts.
+    r.click(CANCEL);
+    assert!(!r.fb().open);
+    r.press(Key::R, CTRL);
+    assert!(!r.fb().open, "Strg+R ist nicht das Kürzel");
+}
+
+#[test]
+fn shortcut_is_listed_and_rebindable() {
+    let a = Action::FeedbackOpen;
+    assert_eq!(Action::from_id("hilfe.rueckmeldung"), Some(a));
+    assert!(Action::ALL.contains(&a));
+    assert_eq!(a.id(), "hilfe.rueckmeldung");
+    assert_eq!(a.label(), "Rückmeldung geben");
+    assert_eq!(a.area(), Area::All);
+    assert_eq!(
+        a.default_bindings(),
+        &[Binding::Key(chord(Key::R, true, true))]
+    );
+    // Nach „Exportieren“ und vor „Rückgängig“ (Reihenfolge der Übersicht).
+    let pos = |x: Action| Action::ALL.iter().position(|&y| y == x).unwrap();
+    assert_eq!(pos(a), pos(Action::Export) + 1);
+    assert_eq!(pos(Action::Undo), pos(a) + 1);
+    assert_eq!(Keymap::defaults().text(a), "Strg+Umschalt+R");
+
+    // Die Übersicht zeigt die Aktion.
+    let mut r = Rig::new("planora-fb-uebersicht");
+    r.open_menu("Ansicht");
+    r.click(VIEW_SHORTCUTS_ENTRY);
+    assert!(r.app.overview_mut().open);
+    r.app.overview_mut().filter = "Rückmeldung".into();
+    r.settle();
+    assert!(r.sees("Rückmeldung geben"), "{:?}", r.texts());
+    assert!(r.sees("Strg+Umschalt+R"), "{:?}", r.texts());
+    r.app.overview_mut().close();
+    r.settle();
+
+    // Geänderte Belegung wirkt, die alte nicht mehr; das Menü nennt die neue.
+    let new = Binding::Key(chord(Key::K, true, true));
+    let mut km = r.app.ws_mut().keymap.clone();
+    assert_eq!(km.set(a, 0, new), SetResult::Ok);
+    assert!(r.app.ws_mut().set_keymap(km));
+    r.settle();
+    r.press(Key::R, CTRL_SHIFT);
+    assert!(!r.fb().open, "alte Belegung wirkt nicht mehr");
+    r.press(Key::K, CTRL_SHIFT);
+    assert!(r.fb().open, "neue Belegung öffnet");
+    r.click(CANCEL);
+    r.open_menu(HELP_MENU);
+    assert!(r.sees("Strg+Umschalt+K"), "{:?}", r.texts());
+    // Gespeichert unter der festen Id.
+    let saved = Config::load_from(&r.data.join("config.json"));
+    assert_eq!(
+        saved.keys.get("hilfe.rueckmeldung").cloned(),
+        Some(vec!["Strg+Umschalt+K".to_string()])
+    );
+}
+
+#[test]
+fn no_default_shortcut_conflicts() {
+    let km = Keymap::defaults();
+    for &a in Action::ALL {
+        for b in km.bindings(a) {
+            assert_eq!(km.conflict_for(a, b), None, "{a:?} {b:?}");
+        }
+    }
+    // Strg+Umschalt+R gehört überall der Rückmeldung; R allein bleibt das Rechteck der Skizze.
+    for area in [Area::All, Area::Model, Area::Sketch, Area::Drawing] {
+        assert_eq!(
+            km.action_for_key(area, &chord(Key::R, true, true)),
+            Some(Action::FeedbackOpen),
+            "{area:?}"
+        );
+    }
+    assert_eq!(
+        km.action_for_key(Area::Sketch, &chord(Key::R, false, false)),
+        Some(Action::SketchRectangle)
+    );
+}
+
+// ---- Inhalt ---------------------------------------------------------------------------------
+
+#[test]
+fn default_checkboxes() {
+    let tmp = common::temp_root("planora-fb-haekchen");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let mut d = FeedbackDialog::default();
+    assert!(!d.open);
+    d.open_fresh(context(&tmp));
+    assert!(d.open);
+    for (p, on) in [
+        (Part::Version, true),
+        (Part::System, true),
+        (Part::Grafik, true),
+        (Part::Schritte, true),
+        (Part::Protokoll, false),
+        (Part::Bild, false),
+        (Part::Projektdatei, false),
+        (Part::Absturzbericht, false),
+    ] {
+        assert_eq!(d.is_checked(p), on, "{p:?}");
+    }
+    assert_eq!(
+        d.shown_parts(),
+        [
+            Part::Version,
+            Part::System,
+            Part::Grafik,
+            Part::Schritte,
+            Part::Protokoll
+        ]
+    );
+    // Die Adresse enthält nur die angehakten Teile.
+    d.description = "Beim Extrudieren passiert nichts.".into();
+    let url = d.built().url;
+    for f in ["version", "system", "grafik", "schritte"] {
+        assert!(url.contains(&format!("&{f}=")), "{f}: {url}");
+    }
+    assert!(!url.contains("&protokoll="), "{url}");
+    // System mit Bildschirmgröße.
+    assert_eq!(
+        d.preview_text(Part::System),
+        Some("Windows 11 (Build 26100)\nBildschirm: 1920 × 1080")
+    );
+    assert_eq!(screen_line(1920, 1080), "Bildschirm: 1920 × 1080");
+
+    // Mit Absturzbericht: eigener Bestandteil, angehakt, bereinigt.
+    let report = tmp.join("absturz.txt");
+    std::fs::write(&report, r"Panik in C:\Users\Max Müller\x.rs").unwrap();
+    let mut c = context(&tmp);
+    c.crash_report = Some(report);
+    d.open_fresh(c);
+    assert!(d.is_checked(Part::Absturzbericht));
+    assert!(d.shown_parts().contains(&Part::Absturzbericht));
+    let text = d.preview_text(Part::Absturzbericht).unwrap();
+    assert!(
+        text.contains("<Benutzer>") && !text.contains("Müller"),
+        "{text}"
+    );
+
+    // Im Fenster stehen die Häkchen mit ihren Namen.
+    let mut r = Rig::new("planora-fb-haekchen-bild");
+    r.open_with_context();
+    for p in [
+        Part::Version,
+        Part::System,
+        Part::Grafik,
+        Part::Schritte,
+        Part::Protokoll,
+    ] {
+        assert!(r.sees(p.label()), "{p:?}: {:?}", r.texts());
+    }
+    for t in [
+        KIND_LABEL,
+        DESCRIPTION_LABEL,
+        PREVIEW_HEADING,
+        PRIVACY_LINE,
+        SHOW_ADDRESS,
+        OPEN_BROWSER,
+        CANCEL,
+    ] {
+        assert!(r.sees(t), "„{t}“ fehlt: {:?}", r.texts());
+    }
+}
+
+#[test]
+fn preview_shows_sanitized_text() {
+    let mut r = Rig::new("planora-fb-vorschau");
+    r.open_with_context();
+    r.fb().set_checked(Part::Protokoll, true);
+    r.fb().description = "Das Speichern hängt seit heute.".into();
+    open_previews(&r.ctx);
+    r.settle();
+    let all = r.texts().join("\n");
+    assert!(all.contains("<Benutzer>"), "Vorschau zu sehen: {all}");
+    assert!(all.contains("<Mailadresse>"), "{all}");
+    assert!(all.contains("Halter.pcad"), "{all}");
+    for secret in ["Max Müller", "Müller", "max.mueller", "Kunden"] {
+        assert!(!all.contains(secret), "„{secret}“ in der Vorschau: {all}");
+    }
+    // Ebenso in der Adresse und in den Teilen der Meldung.
+    let built = r.fb().built();
+    for secret in ["Max Müller", "Müller", "max.mueller", "Kunden"] {
+        assert!(!built.url.contains(&percent_encode(secret)), "{secret}");
+        for (p, t) in r.fb().report().parts {
+            assert!(!t.contains(secret), "{p:?}: {t}");
+        }
+    }
+    // Die Beschreibung bleibt, wie sie geschrieben wurde.
+    assert_eq!(
+        r.fb().report().description,
+        "Das Speichern hängt seit heute."
+    );
+}
+
+#[test]
+fn button_disabled_below_10_chars_with_hint() {
+    assert_eq!(MIN_CHARS, 10);
+    assert_eq!(TOO_SHORT, "Bitte schreib mindestens 10 Zeichen.");
+    let mut r = Rig::new("planora-fb-kurz");
+    r.open_with_context();
+    assert!(r.sees(TOO_SHORT), "Hinweis am Anfang: {:?}", r.texts());
+    // Leerzeichen zählen nicht.
+    r.fb().description = "   kurz      ".into();
+    r.click(OPEN_BROWSER);
+    assert!(r.urls().is_empty(), "gesperrt");
+    assert!(r.fb().sent.is_none());
+    assert!(r.sees(TOO_SHORT));
+    r.fb().description = "123456789".into();
+    r.click(OPEN_BROWSER);
+    assert!(r.urls().is_empty(), "9 Zeichen reichen nicht");
+    r.fb().description = "1234567890".into();
+    r.settle();
+    assert!(!r.sees(TOO_SHORT), "Hinweis weg ab 10 Zeichen");
+    r.click(OPEN_BROWSER);
+    assert_eq!(r.urls().len(), 1, "10 Zeichen reichen");
+}
+
+#[test]
+fn open_browser_emits_the_issue_url_and_shows_copy_hint() {
+    let mut r = Rig::new("planora-fb-browser");
+    r.press(Key::R, CTRL_SHIFT);
+    assert!(r.fb().open);
+    // Das Beschreibungsfeld hat die Tastatur.
+    r.type_text("Beim Extrudieren stürzt es ab & mehr");
+    assert_eq!(r.fb().description, "Beim Extrudieren stürzt es ab & mehr");
+    r.fb().area = Some("3D");
+    r.click(OPEN_BROWSER);
+    let urls = r.urls();
+    assert_eq!(urls.len(), 1, "{urls:?}");
+    let url = &urls[0];
+    assert!(
+        url.starts_with(&format!("{REPO_URL}/issues/new?template=fehler.yml")),
+        "{url}"
+    );
+    assert!(
+        url.contains(&percent_encode("Beim Extrudieren stürzt es ab & mehr")),
+        "{url}"
+    );
+    assert!(url.contains(&percent_encode("Bereich: 3D")), "{url}");
+    assert!(url.len() < 2000);
+    // Kurz: kein Ordner, keine Datei.
+    assert!(r.opened().is_empty());
+    assert!(!r.bundle_root().exists());
+    assert!(!url.contains(&percent_encode(ATTACH_HINT)));
+    // Das Fenster bleibt offen und hilft weiter.
+    assert!(r.fb().open);
+    for t in [BROWSER_HINT, COPY_TEXT, CLOSE] {
+        assert!(r.sees(t), "„{t}“ fehlt: {:?}", r.texts());
+    }
+    assert!(!r.sees(OPEN_BROWSER), "nicht zweimal schicken");
+    assert_eq!(r.fb().sent.as_ref().unwrap().url, *url);
+    r.click(CLOSE);
+    assert!(!r.fb().open);
+    assert_eq!(r.urls().len(), 1);
+}
+
+#[test]
+fn wish_and_question_go_to_the_wish_form() {
+    let mut r = Rig::new("planora-fb-wunsch");
+    r.open_with_context();
+    r.click(feedback::Kind::Frage.label());
+    assert_eq!(r.fb().kind, feedback::Kind::Frage);
+    r.fb().description = "Wie spiegle ich eine Skizze?".into();
+    r.click(OPEN_BROWSER);
+    let url = r.urls().pop().unwrap();
+    assert!(url.contains("template=wunsch.yml"), "{url}");
+    assert!(url.contains(&percent_encode("Frage: ")), "{url}");
+    assert!(url.contains("&angaben="), "{url}");
+}
+
+#[test]
+fn copy_puts_the_url_into_the_clipboard() {
+    let mut r = Rig::new("planora-fb-kopieren");
+    r.open_with_context();
+    r.fb().description = "Die Bemaßung springt weg.".into();
+    // Vor dem Schicken: unter „Adresse anzeigen“.
+    r.click(SHOW_ADDRESS);
+    let url = r.fb().built().url;
+    assert!(r.sees(&url), "Adresse als Text: {:?}", r.texts());
+    r.click(COPY_TEXT);
+    assert_eq!(r.copies(), std::slice::from_ref(&url));
+    assert!(r.sees(COPIED), "{:?}", r.texts());
+    assert!(r.urls().is_empty(), "Kopieren öffnet keinen Browser");
+    // Nach dem Schicken: neben dem Hinweis.
+    r.click(OPEN_BROWSER);
+    assert!(
+        !r.sees(COPIED),
+        "Hinweis „Kopiert.“ gilt nur bis zum Schicken"
+    );
+    r.click(COPY_TEXT);
+    assert_eq!(r.copies(), [url.clone(), url.clone()]);
+    assert_eq!(r.urls(), [url]);
+    assert!(r.sees(COPIED));
+}
+
+#[test]
+fn long_input_writes_bundle_and_opens_folder() {
+    let mut r = Rig::new("planora-fb-lang");
+    r.open_with_context();
+    r.fb().set_checked(Part::Protokoll, true);
+    let long = "Erst skizziert, dann extrudiert, dann gespeichert. ".repeat(80);
+    r.fb().description = long.clone();
+    r.click(OPEN_BROWSER);
+    let opened = r.opened();
+    assert_eq!(opened.len(), 1, "Ordner geöffnet: {opened:?}");
+    let dir = &opened[0];
+    assert!(dir.starts_with(r.bundle_root()), "{dir:?}");
+    let file = dir.join(FEEDBACK_FILE);
+    let text = std::fs::read_to_string(&file).expect("rueckmeldung.txt angelegt");
+    assert!(
+        text.contains(long.trim_end()),
+        "ganze Beschreibung in der Datei"
+    );
+    assert!(text.contains("<Benutzer>") && !text.contains("Müller"));
+    let url = r.urls().pop().expect("Browser");
+    assert!(url.len() < 2000, "{}", url.len());
+    assert!(url.contains(&percent_encode(ATTACH_HINT)), "{url}");
+    assert_eq!(FEEDBACK_FILE, "rueckmeldung.txt");
+    assert!(r.sees(&folder_hint(FEEDBACK_FILE)), "{:?}", r.texts());
+    assert!(!r.sees(NO_FILE));
+    assert_eq!(r.fb().sent.as_ref().unwrap().folder.as_ref(), Some(dir));
+}
+
+#[test]
+fn unwritable_data_dir_still_opens_browser_with_no_file_hint() {
+    let mut r = Rig::new("planora-fb-gesperrt");
+    // Wo der Ordner hin soll, liegt eine Datei: anlegen geht nicht.
+    std::fs::write(r.bundle_root(), "kein Ordner").unwrap();
+    r.open_with_context();
+    r.fb().description = "Sehr lange Beschreibung. ".repeat(120);
+    r.click(OPEN_BROWSER);
+    assert_eq!(r.urls().len(), 1, "der Browser öffnet trotzdem");
+    assert!(r.opened().is_empty(), "kein Ordner");
+    assert!(r.sees(NO_FILE), "{:?}", r.texts());
+    assert!(!r.sees(&folder_hint(FEEDBACK_FILE)));
+    assert!(r.sees(BROWSER_HINT));
+    assert!(r.fb().sent.as_ref().unwrap().file_failed);
+
+    // Kurz mit Absturzbericht: ohne Datei auch kein Hinweis „Datei hier anhängen“.
+    let crash = r.data.join("absturz.txt");
+    std::fs::write(&crash, "Panik").unwrap();
+    let mut c = context(&r.data);
+    c.crash_report = Some(crash);
+    r.fb().open_fresh(c);
+    r.fb().description = "Es ist abgestürzt.".into();
+    r.click(OPEN_BROWSER);
+    let url = r.urls().pop().unwrap();
+    assert!(!url.contains(&percent_encode(ATTACH_HINT)), "{url}");
+    assert!(r.sees(NO_FILE));
+}
+
+#[test]
+fn unchecked_parts_are_not_in_the_url() {
+    let mut r = Rig::new("planora-fb-abgewaehlt");
+    r.open_with_context();
+    r.fb().description = "Der Kreis wird zur Ellipse.".into();
+    // Ein Klick auf das Häkchen nimmt es weg.
+    r.click(Part::Version.label());
+    assert!(!r.fb().is_checked(Part::Version));
+    r.fb().set_checked(Part::System, false);
+    r.click(OPEN_BROWSER);
+    let url = r.urls().pop().unwrap();
+    assert!(!url.contains("&version="), "{url}");
+    assert!(!url.contains("&system="), "{url}");
+    assert!(!url.contains("&protokoll="), "{url}");
+    assert!(url.contains("&grafik="), "{url}");
+    assert!(url.contains("&schritte="), "{url}");
+    assert!(!url.contains("Windows"), "{url}");
+}
+
+#[test]
+fn esc_and_cancel_close_without_side_effects() {
+    let mut r = Rig::new("planora-fb-esc");
+    r.press(Key::R, CTRL_SHIFT);
+    assert!(r.fb().open);
+    r.type_text("Etwas ganz Langes, das nicht weggeht.");
+    // Erstes Esc: das Feld gibt die Tastatur ab; zweites Esc: das Fenster schließt.
+    r.press(Key::Escape, NONE);
+    r.press(Key::Escape, NONE);
+    assert!(!r.fb().open, "Esc schließt");
+    assert!(!r.sees(TITLE));
+
+    r.open_with_context();
+    r.fb().description = "Etwas ganz Langes, das nicht weggeht.".into();
+    r.click(CANCEL);
+    assert!(!r.fb().open, "Abbrechen schließt");
+
+    assert!(r.urls().is_empty(), "kein Browser");
+    assert!(r.copies().is_empty(), "nichts kopiert");
+    assert!(r.opened().is_empty(), "kein Ordner");
+    assert!(!r.bundle_root().exists(), "keine Datei");
+}
+
+#[test]
+fn window_rules_like_the_overview() {
+    let mut r = Rig::new("planora-fb-regeln");
+    // Öffnet sich über „Über“ und schließt es.
+    r.app.ws_mut().about_open = true;
+    r.settle();
+    r.press(Key::R, CTRL_SHIFT);
+    assert!(r.fb().open);
+    assert!(!r.app.ws_mut().about_open, "Über schließt");
+    // „Über“ öffnet sich über der Rückmeldung (das zuletzt geöffnete Fenster gewinnt).
+    r.open_menu(HELP_MENU);
+    r.click(about_dialog::TITLE);
+    assert!(r.app.ws_mut().about_open);
+    assert!(!r.fb().open, "Rückmeldung tritt zurück");
+    r.app.ws_mut().about_open = false;
+    r.settle();
+
+    // Über die Übersicht der Tastenkürzel.
+    r.open_menu("Ansicht");
+    r.click(VIEW_SHORTCUTS_ENTRY);
+    assert!(r.app.overview_mut().open);
+    r.open_menu(HELP_MENU);
+    r.click(FEEDBACK_ENTRY);
+    assert!(r.fb().open);
+    assert!(!r.app.overview_mut().open, "Übersicht schließt");
+    // Die Übersicht danach schließt die Rückmeldung.
+    r.open_menu("Ansicht");
+    r.click(VIEW_SHORTCUTS_ENTRY);
+    assert!(r.app.overview_mut().open);
+    assert!(!r.fb().open);
+    r.app.overview_mut().close();
+    r.settle();
+
+    // Einstellungen schließen sie ebenso.
+    r.open_with_context();
+    r.open_menu("Datei");
+    r.click(SETTINGS_ENTRY);
+    assert!(r.app.windows_mut().2.is_open());
+    assert!(!r.fb().open, "Einstellungen gewinnen");
+    r.app.windows_mut().2.close();
+    r.settle();
+
+    // Ein zweites Öffnen behält den Text.
+    r.open_with_context();
+    r.fb().description = "Bleibt stehen.".into();
+    r.app
+        .apply_menu_request(&r.ctx.clone(), MenuRequest::Feedback);
+    r.settle();
+    assert_eq!(r.fb().description, "Bleibt stehen.");
+
+    // Die Rückmeldung zählt als offenes Fenster: Strg+Z ist gesperrt.
+    r.press(Key::Escape, NONE); // das Feld gibt die Tastatur ab
+    assert!(r.fb().open);
+    r.app
+        .ws_mut()
+        .active_tab_mut()
+        .state
+        .create_sphere(5.0)
+        .unwrap();
+    r.app.ws_mut().observe_history(false);
+    let bodies = r.app.ws_mut().active_tab().state.bodies.len();
+    r.press(Key::Z, CTRL);
+    assert_eq!(
+        r.app.ws_mut().active_tab().state.bodies.len(),
+        bodies,
+        "Strg+Z wirkt nicht bei offener Rückmeldung"
+    );
+    r.click(CANCEL);
+    r.press(Key::Z, CTRL);
+    assert_eq!(
+        r.app.ws_mut().active_tab().state.bodies.len(),
+        bodies - 1,
+        "danach wieder"
+    );
+
+    // Während einer Rückfrage öffnet sie nicht (weder Taste noch Menüwunsch).
+    r.app.ws_mut().prompt = Some(Prompt::Notice("Hinweis".into()));
+    r.settle();
+    r.press(Key::R, CTRL_SHIFT);
+    assert!(!r.fb().open, "nicht während einer Rückfrage");
+    r.app
+        .apply_menu_request(&r.ctx.clone(), MenuRequest::Feedback);
+    r.settle();
+    assert!(!r.fb().open, "auch nicht über den Menüwunsch");
+}
+
+// ---- Größe ----------------------------------------------------------------------------------
+
+#[test]
+fn fits_at_1920x1080_and_does_not_panic_at_800x600() {
+    let mut r = Rig::new("planora-fb-gross");
+    r.open_with_context();
+    let rect = r.window_rect();
+    let screen = Rect::from_min_size(Pos2::ZERO, SIZE);
+    assert!(screen.contains_rect(rect), "{rect:?}");
+    assert!(
+        (rect.width() - DialogSize::Wide.width()).abs() < 0.5,
+        "breit: {rect:?}"
+    );
+    assert!(
+        (rect.center().x - screen.center().x).abs() < 1.0,
+        "mittig: {rect:?}"
+    );
+    for t in [OPEN_BROWSER, CANCEL, PRIVACY_LINE] {
+        assert!(rect.contains_rect(r.find(t)), "{t} im Fenster");
+    }
+
+    // Klein, mit allem aufgeklappt und langem Protokoll: läuft durch, bleibt im Fenster.
+    let mut r = Rig::with_size("planora-fb-klein", SMALL);
+    let mut c = context(&r.data);
+    c.log = (0..100)
+        .map(|i| {
+            format!(
+                "2026-10-26T14:03:{:02}Z INFO Zeile {i} mit etwas Text",
+                i % 60
+            )
+        })
+        .collect();
+    r.fb().open_fresh(c);
+    r.fb().set_checked(Part::Protokoll, true);
+    r.fb().description = "Lang. ".repeat(400);
+    open_previews(&r.ctx);
+    r.settle();
+    let rect = r.window_rect();
+    let screen = Rect::from_min_size(Pos2::ZERO, SMALL);
+    assert!(screen.contains_rect(rect), "{rect:?}");
+    // Der Inhalt rollt (die Fußzeile bleibt): bis „Adresse anzeigen“ zu sehen ist, aufklappen,
+    // weiter rollen.
+    let wheel = |r: &mut Rig| {
+        let at = r.window_rect().center();
+        r.frame(vec![
+            Event::PointerMoved(at),
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -200.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: NONE,
+            },
+        ]);
+        r.settle();
+    };
+    for _ in 0..40 {
+        if r.sees(SHOW_ADDRESS) {
+            break;
+        }
+        wheel(&mut r);
+    }
+    assert!(r.sees(OPEN_BROWSER), "Fußzeile bleibt: {:?}", r.texts());
+    r.click(SHOW_ADDRESS);
+    for _ in 0..5 {
+        wheel(&mut r);
+    }
+    assert!(screen.contains_rect(r.window_rect()));
+    r.click(OPEN_BROWSER);
+    assert_eq!(r.urls().len(), 1);
+    r.click(CLOSE);
+    assert!(!r.fb().open);
+}
+
+// ---- Texte ----------------------------------------------------------------------------------
+
+#[test]
+fn texts_are_plain_language() {
+    assert_eq!(TITLE, "Rückmeldung");
+    assert_eq!(KIND_LABEL, "Worum geht es?");
+    assert_eq!(
+        DESCRIPTION_LABEL,
+        "Beschreib kurz, was du gemacht hast und was passiert ist."
+    );
+    assert_eq!(PREVIEW_HEADING, "Das geht mit");
+    assert_eq!(OPEN_BROWSER, "Im Browser öffnen");
+    assert_eq!(CANCEL, "Abbrechen");
+    assert_eq!(SHOW_ADDRESS, "Adresse anzeigen");
+    assert_eq!(COPY_TEXT, "Text kopieren");
+    assert_eq!(
+        BROWSER_HINT,
+        "Hat sich kein Browser geöffnet? Kopier die Adresse und füg sie im Browser ein."
+    );
+    assert_eq!(COPIED, "Kopiert.");
+    assert_eq!(
+        NO_FILE,
+        "Die Datei ließ sich nicht anlegen. Die Meldung geht trotzdem."
+    );
+    assert_eq!(
+        PRIVACY_LINE,
+        "Es geht nichts weg, bevor du im Browser auf „Absenden“ klickst."
+    );
+    assert!(folder_hint("rueckmeldung.txt").contains("„rueckmeldung.txt“"));
+    let all = [
+        TITLE.to_string(),
+        KIND_LABEL.into(),
+        AREA_LABEL.into(),
+        AREA_NONE.into(),
+        DESCRIPTION_LABEL.into(),
+        TOO_SHORT.into(),
+        PREVIEW_HEADING.into(),
+        OPEN_BROWSER.into(),
+        CANCEL.into(),
+        CLOSE.into(),
+        SHOW_ADDRESS.into(),
+        COPY_TEXT.into(),
+        BROWSER_HINT.into(),
+        COPIED.into(),
+        NO_FILE.into(),
+        PRIVACY_LINE.into(),
+        folder_hint("rueckmeldung.txt"),
+        screen_line(1920, 1080),
+    ];
+    for t in &all {
+        assert!(t.chars().count() <= 90, "kurz genug: {t}");
+        for tech in ["URL", "Issue", "Parameter", "::", "Sie ", "Ihre"] {
+            assert!(!t.contains(tech), "{t} enthält {tech}");
+        }
+    }
+    // Die Häkchen tragen die Namen der Bestandteile.
+    assert_eq!(Part::Grafik.label(), "Grafikkarte");
+    assert_eq!(Part::Schritte.label(), "Letzte Schritte");
+}

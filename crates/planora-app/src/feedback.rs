@@ -42,6 +42,24 @@ pub const FEEDBACK_DIR: &str = "rueckmeldungen";
 /// Name der Datei mit dem vollen Text.
 pub const FEEDBACK_FILE: &str = "rueckmeldung.txt";
 
+/// Seite „Häufige Probleme“ im Repo (Menü „Hilfe“, Formular-Auswahl auf GitHub).
+pub fn faq_url() -> String {
+    doc_url("docs/haeufige-probleme.md")
+}
+
+/// Anleitung „So meldest du etwas“ im Repo.
+pub fn guide_url() -> String {
+    doc_url("docs/so-meldest-du-etwas.md")
+}
+
+/// Adresse einer Datei im Repo auf dem Standardzweig `master`.
+fn doc_url(path: &str) -> String {
+    format!(
+        "https://github.com/{}/blob/master/{path}",
+        planora_update::REPO
+    )
+}
+
 const USER_MARK: &str = "<Benutzer>";
 const MAIL_MARK: &str = "<Mailadresse>";
 

@@ -83,8 +83,8 @@ impl LastCommand {
     }
 }
 
-/// Führt `a` aus wie Menüeintrag oder Knopf. „Projekte“ und „Tastenkürzel anzeigen“ öffnen ein
-/// Fenster der App und kommen als [`MenuRequest`] zurück. Die Befehle des Modells tun in alten
+/// Führt `a` aus wie Menüeintrag oder Knopf. „Projekte“, „Tastenkürzel anzeigen“ und
+/// „Rückmeldung geben“ öffnen ein Fenster der App und kommen als [`MenuRequest`] zurück. Die Befehle des Modells tun in alten
 /// Versionen nichts (dort sind Menü und Befehlsfeld gesperrt); die Übersicht der Tastenkürzel
 /// ändert nichts und öffnet auch dort.
 pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
@@ -98,6 +98,7 @@ pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
             ws.new_tab();
         }
         Action::Projects => return MenuRequest::Projects,
+        Action::FeedbackOpen => return MenuRequest::Feedback,
         Action::Save => app::begin_save(ws, false),
         Action::Close => {
             let i = ws.active;

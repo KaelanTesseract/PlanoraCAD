@@ -5,6 +5,8 @@ use crate::drawing_dialog::drawing_menu;
 use crate::drawing_state::WorkArea;
 use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
+use crate::feedback::{ExplorerOpen, Personal, SystemOpen};
+use crate::feedback_dialog::{self, FeedbackAction, FeedbackContext, FeedbackDialog};
 use crate::file_chooser::default_dir;
 use crate::icons::{self, Icon};
 use crate::import_dialog::ImportDialog;
@@ -39,7 +41,7 @@ use planora_update::install::{
     Downloader, HttpDownloader, InstallError, Paths, discard_download, rollback, swap,
 };
 use planora_update::{Update, Version};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
@@ -59,10 +61,16 @@ pub const EXPORT_BUSY: &str = "Bitte erst den Export beenden.";
 pub const SETTINGS_ENTRY: &str = "Einstellungen …";
 /// Menüeintrag „Ansicht → Tastenkürzel …“ (Kürzel [`Action::ShowShortcuts`]).
 pub const VIEW_SHORTCUTS_ENTRY: &str = "Tastenkürzel …";
+/// Menü „Hilfe“ (nach „Ansicht“).
+pub const HELP_MENU: &str = "Hilfe";
+/// Menüeintrag „Hilfe → Rückmeldung …“ (Kürzel [`Action::FeedbackOpen`]).
+pub const FEEDBACK_ENTRY: &str = "Rückmeldung …";
+/// Menüeintrag „Hilfe → Häufige Probleme“ (öffnet [`crate::feedback::faq_url`] im Browser).
+pub const FAQ_ENTRY: &str = "Häufige Probleme";
 
 /// Was die Menüs außer ihren eigenen Aktionen verlangen: das Fenster „Projekte“,
-/// „Einstellungen“ oder „Tastenkürzel“ öffnen (die Fenster gehören der App, nicht dem
-/// Arbeitsbereich).
+/// „Einstellungen“, „Tastenkürzel“ oder „Rückmeldung“ öffnen (die Fenster gehören der App, nicht
+/// dem Arbeitsbereich).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MenuRequest {
     #[default]
@@ -70,6 +78,16 @@ pub enum MenuRequest {
     Projects,
     Settings,
     Shortcuts,
+    Feedback,
+}
+
+/// Öffnet keinen Ordner (Tests ohne eigene Nachbildung; im Programm [`ExplorerOpen`]).
+struct NoFolderOpen;
+
+impl SystemOpen for NoFolderOpen {
+    fn open_folder(&self, _dir: &Path) -> bool {
+        false
+    }
 }
 
 pub struct PlanoraApp {
@@ -83,6 +101,10 @@ pub struct PlanoraApp {
     pub(crate) settings: SettingsWindow,
     /// Fenster „Tastenkürzel“ (Übersicht, [`keymap::overview`]).
     pub(crate) overview: OverviewState,
+    /// Fenster „Rückmeldung“ ([`feedback_dialog`]).
+    pub(crate) feedback: FeedbackDialog,
+    /// Öffnet den Rückmeldungsordner: im Programm [`ExplorerOpen`], in Tests eine Nachbildung.
+    system_open: Box<dyn SystemOpen>,
     pub(crate) versions_ui: VersionsUi,
     applied_dark: Option<bool>,
     /// `ViewportCommand::Close` wurde nach freigegebenem Beenden schon geschickt.
@@ -184,6 +206,7 @@ impl PlanoraApp {
         let mut app = Self::with_workspace(ws, source);
         app.downloader = Arc::new(HttpDownloader::new(&running));
         app.restarter = Arc::new(ProcessRestarter);
+        app.system_open = Box::new(ExplorerOpen);
         app.exe_path = exe_path;
         // Nach einem Update meldet sich die neue Version erst nach ihrem ersten fertigen Bild bei
         // der alten (in `logic`); bis dahin kann die alte noch zurücklegen.
@@ -207,6 +230,8 @@ impl PlanoraApp {
             projects: ProjectsWindow::default(),
             settings: SettingsWindow::default(),
             overview: OverviewState::default(),
+            feedback: FeedbackDialog::default(),
+            system_open: Box::new(NoFolderOpen),
             versions_ui: VersionsUi::default(),
             applied_dark: None,
             close_sent: false,
@@ -856,6 +881,7 @@ impl PlanoraApp {
             &self.projects,
             &self.settings,
             &self.overview,
+            &self.feedback,
             &mut self.update_dialog,
         );
         self.auto_open_update_notice();
@@ -902,8 +928,21 @@ impl PlanoraApp {
         &mut self.shell
     }
 
-    /// Wunsch aus dem Menü „Datei“ ausführen.
-    pub(crate) fn apply_menu_request(&mut self, request: MenuRequest) {
+    /// Zustand des Fensters „Rückmeldung“ (für Tests).
+    #[doc(hidden)]
+    pub fn feedback_mut(&mut self) -> &mut FeedbackDialog {
+        &mut self.feedback
+    }
+
+    /// Ersetzt den Dateimanager für den Rückmeldungsordner (für Tests: eine Nachbildung).
+    #[doc(hidden)]
+    pub fn set_system_open(&mut self, open: Box<dyn SystemOpen>) {
+        self.system_open = open;
+    }
+
+    /// Wunsch aus einem Menü oder einer Taste ausführen.
+    #[doc(hidden)]
+    pub fn apply_menu_request(&mut self, ctx: &egui::Context, request: MenuRequest) {
         match request {
             MenuRequest::None => {}
             MenuRequest::Projects => {
@@ -918,6 +957,79 @@ impl PlanoraApp {
                 &mut self.settings,
                 &mut self.overview,
             ),
+            MenuRequest::Feedback => {
+                let info = self.feedback_context(ctx);
+                open_feedback(
+                    &mut self.ws,
+                    &mut self.projects,
+                    &mut self.settings,
+                    &mut self.overview,
+                    &mut self.feedback,
+                    info,
+                );
+            }
+        }
+    }
+
+    /// Schnappschuss für das Fenster „Rückmeldung“: Version, System, Grafikkarte,
+    /// Bildschirmgröße (falls bekannt), die letzten Schritte und Protokollzeilen, was vor der
+    /// Anzeige zu entfernen ist (Benutzer, Ordner der offenen Dokumente) und der Datenordner
+    /// (Ordner der Konfigurationsdatei).
+    fn feedback_context(&self, ctx: &egui::Context) -> FeedbackContext {
+        let screen = ctx
+            .input(|i| {
+                let vp = i.viewport();
+                vp.monitor_size
+                    .map(|s| s * vp.native_pixels_per_point.unwrap_or(1.0))
+            })
+            .filter(|s| s.x >= 1.0 && s.y >= 1.0)
+            .map(|s| (s.x.round() as u32, s.y.round() as u32));
+        let mut documents: Vec<PathBuf> = Vec::new();
+        for tab in &self.ws.tabs {
+            let dirs = tab
+                .store
+                .as_ref()
+                .map(|s| s.dir().to_path_buf())
+                .into_iter()
+                .chain(tab.source_dir.clone());
+            for dir in dirs {
+                let shown = PathBuf::from(crate::file_chooser::display_path(&dir));
+                for p in [dir, shown] {
+                    if !documents.contains(&p) {
+                        documents.push(p);
+                    }
+                }
+            }
+        }
+        FeedbackContext {
+            info: crate::build_info::build_info(),
+            screen,
+            steps: crate::diag::recent_steps(),
+            log: crate::diag::recent_lines(feedback_dialog::LOG_LINES),
+            personal: Personal::from_env(documents),
+            data_dir: self
+                .ws
+                .config_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
+            crash_report: None,
+        }
+    }
+
+    /// Führt eine Aktion des Fensters „Rückmeldung“ aus: Browser und Zwischenablage über egui,
+    /// den Ordner über den Dateimanager ([`SystemOpen`]).
+    fn feedback_action(&mut self, ctx: &egui::Context, action: FeedbackAction) {
+        match action {
+            FeedbackAction::OpenBrowser(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            FeedbackAction::OpenFolder(dir) => {
+                if !self.system_open.open_folder(&dir) {
+                    crate::diag::warn("Rückmeldungsordner ließ sich nicht öffnen");
+                }
+            }
+            FeedbackAction::Copy(text) => ctx.copy_text(text),
+            // Kommt mit dem Bild vom Fenster.
+            FeedbackAction::TakeScreenshot | FeedbackAction::Close => {}
         }
     }
 
@@ -952,11 +1064,11 @@ impl PlanoraApp {
         });
         for &a in Action::ALL.iter().filter(|a| pressed.contains(a)) {
             let request = commands::run_key(&mut self.ws, a);
-            if request == MenuRequest::Shortcuts {
-                // Sicherheitshalber: der Text der Taste S soll nicht im neuen Suchfeld landen.
+            if matches!(request, MenuRequest::Shortcuts | MenuRequest::Feedback) {
+                // Sicherheitshalber: der Text der Taste soll nicht im neuen Textfeld landen.
                 ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
             }
-            self.apply_menu_request(request);
+            self.apply_menu_request(ctx, request);
         }
         self.undo_keys(ctx);
     }
@@ -966,7 +1078,8 @@ impl PlanoraApp {
     /// Import), „Über“, ein Fenster der Aktionen im Fenster Projekte („Neues Projekt“,
     /// „Umbenennen“, „Löschen“, …), ein Fenster des Reiters Versionen, das Fenster Einstellungen
     /// (es ist wie die Dateifenster ein Fenster mit Dateiauswahl) oder die Übersicht
-    /// „Tastenkürzel“ (wie „Über“; S öffnet sie also nicht noch einmal). Das Fenster Projekte
+    /// „Tastenkürzel“ (wie „Über“; S öffnet sie also nicht noch einmal) oder das Fenster
+    /// „Rückmeldung“. Das Fenster Projekte
     /// selbst sperrt Rückgängig nicht (es ändert kein Dokument), wohl aber die Befehle der
     /// Bereiche (siehe [`PlanoraApp::shortcuts`]). Ebenso die Meldung „Neue Version verfügbar“.
     fn windows_open(&self) -> bool {
@@ -978,6 +1091,7 @@ impl PlanoraApp {
     fn other_windows_open(&self) -> bool {
         self.ws.about_open
             || self.overview.open
+            || self.feedback.open
             || self.after_update.is_some()
             || self.ws.active_tab().dialog_open()
             || crate::project_actions::dialog_open(&self.projects.ui)
@@ -1222,6 +1336,51 @@ pub fn enforce_overview_rules(
     }
 }
 
+/// Öffnet das Fenster „Rückmeldung“ (Menü Hilfe und Strg+Umschalt+R) mit den Angaben
+/// `ctx_info` (Schnappschuss beim Öffnen, [`FeedbackDialog::open_fresh`]). Es steht für sich wie
+/// die Übersicht „Tastenkürzel“: Projekte, Einstellungen, die Übersicht, „Über“ und die
+/// Dateifenster des aktiven Tabs schließen dabei (ein schreibendes Exportfenster bleibt, dann
+/// öffnet es nicht, [`EXPORT_BUSY`]). Bei offener Rückfrage öffnet es nicht. Ist es schon offen,
+/// bleibt es, wie es ist (der getippte Text geht nicht verloren).
+pub fn open_feedback(
+    ws: &mut Workspace,
+    projects: &mut ProjectsWindow,
+    settings: &mut SettingsWindow,
+    overview: &mut OverviewState,
+    feedback: &mut FeedbackDialog,
+    ctx_info: FeedbackContext,
+) {
+    if ws.prompt.is_some() || feedback.open || !close_file_windows(ws) {
+        return;
+    }
+    close_projects(projects);
+    settings.close();
+    overview.close();
+    ws.about_open = false;
+    feedback.open_fresh(ctx_info);
+}
+
+/// Das Fenster „Rückmeldung“ schließt, sobald Projekte, Einstellungen, die Übersicht
+/// „Tastenkürzel“, „Über“ oder ein Dateifenster des aktiven Tabs offen ist (das zuletzt
+/// geöffnete Fenster gewinnt; die Rückmeldung schließt sie selbst zu, [`open_feedback`]).
+pub fn enforce_feedback_rules(
+    ws: &Workspace,
+    projects: &ProjectsWindow,
+    settings: &SettingsWindow,
+    overview: &OverviewState,
+    feedback: &mut FeedbackDialog,
+) {
+    if feedback.open
+        && (file_window_open(ws)
+            || projects.is_open()
+            || settings.is_open()
+            || overview.open
+            || ws.about_open)
+    {
+        feedback.close();
+    }
+}
+
 /// Was die Meldung während eines Updates zeigt: während des gesperrten Neustarts (`locked`)
 /// nichts (der Kasten über allem sagt es), sonst den Stand des Downloads; ein Fehler mit „Erneut
 /// versuchen“, wenn das helfen kann (`retry`).
@@ -1279,6 +1438,7 @@ pub fn enforce_update_rules(
     projects: &ProjectsWindow,
     settings: &SettingsWindow,
     overview: &OverviewState,
+    feedback: &FeedbackDialog,
     notice: &mut UpdateDialog,
 ) {
     if notice.open
@@ -1286,7 +1446,8 @@ pub fn enforce_update_rules(
             || file_window_open(ws)
             || projects.is_open()
             || settings.is_open()
-            || overview.open)
+            || overview.open
+            || feedback.open)
     {
         notice.close();
     }
@@ -1462,10 +1623,6 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
         request = MenuRequest::Settings;
         ui.close();
     }
-    if entry(ui, true, icons::button(Icon::About, about_dialog::TITLE)).clicked() {
-        ws.about_open = true;
-        ui.close();
-    }
     if entry(ui, true, icons::button(Icon::Quit, "Beenden")).clicked() {
         // Ist Beenden freigegeben, schickt `handle_close_request` im nächsten Bild `Close`.
         ws.request_quit();
@@ -1474,8 +1631,32 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     request
 }
 
+/// Menü „Hilfe“: „Rückmeldung …“ mit der Taste aus der Belegung (kommt als
+/// [`MenuRequest::Feedback`] zurück, der Aufrufer öffnet das Fenster, [`open_feedback`]),
+/// „Häufige Probleme“ (öffnet die Seite im Browser) und „Über PlanoraCAD“.
+#[doc(hidden)]
+pub fn help_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
+    let mut request = MenuRequest::None;
+    let keys = keymap::shortcut_hint(&ws.keymap, Action::FeedbackOpen);
+    if shortcut_button(ui, true, Icon::Feedback, FEEDBACK_ENTRY, keys).clicked() {
+        request = MenuRequest::Feedback;
+        ui.close();
+    }
+    if entry(ui, true, icons::button(Icon::Help, FAQ_ENTRY)).clicked() {
+        ui.ctx()
+            .open_url(egui::OpenUrl::new_tab(crate::feedback::faq_url()));
+        ui.close();
+    }
+    ui.separator();
+    if entry(ui, true, icons::button(Icon::About, about_dialog::TITLE)).clicked() {
+        ws.about_open = true;
+        ui.close();
+    }
+    request
+}
+
 /// Menüleiste im oberen Feld; „Ansicht“ blendet Versionen über den [`ShellState`] ein und aus.
-/// Liefert den Wunsch aus „Datei“ ([`file_menu`]).
+/// Liefert den Wunsch aus „Datei“ ([`file_menu`]), „Ansicht“ und „Hilfe“ ([`help_menu`]).
 #[doc(hidden)]
 pub fn menu_bar(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> MenuRequest {
     menu_bar_measured(ui, ws, shell).0
@@ -1510,6 +1691,12 @@ pub(crate) fn menu_bar_measured(
             ui.menu_button("Ansicht", |ui| {
                 if view_menu(ui, ws, shell) {
                     request = MenuRequest::Shortcuts;
+                }
+            });
+            ui.menu_button(HELP_MENU, |ui| {
+                let r = help_menu(ui, ws);
+                if r != MenuRequest::None {
+                    request = r;
                 }
             });
             // Der Zeiger steht hinter dem letzten Knopf und einem Abstand.
@@ -2011,6 +2198,7 @@ impl eframe::App for PlanoraApp {
         }
         // Esc der Übersicht vor den Ansichten (weder Auswahl noch Skizze sollen es sehen).
         keymap::overview::take_escape(&ctx, &mut self.overview, self.ws.prompt.is_some());
+        feedback_dialog::take_escape(&ctx, &mut self.feedback, self.ws.prompt.is_some());
         // Esc der Meldung wirkt wie „Später“ (nie wie „Überspringen“), während eines Updates wie
         // ✕ ([`UpdateDialog::close_action`]).
         if update_dialog::take_escape(&ctx, &self.update_dialog, self.ws.prompt.is_some()) {
@@ -2148,6 +2336,16 @@ impl eframe::App for PlanoraApp {
         if keymap::overview::show(&ctx, &self.ws, &mut self.overview) == OverviewEvent::OpenSettings
         {
             open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false);
+        }
+        enforce_feedback_rules(
+            &self.ws,
+            &self.projects,
+            &self.settings,
+            &self.overview,
+            &mut self.feedback,
+        );
+        if let Some(action) = feedback_dialog::show(&ctx, &mut self.feedback, dark) {
+            self.feedback_action(&ctx, action);
         }
         self.ws.refresh_prompts();
         // Nach `refresh_prompts`: eine gerade entstandene Rückfrage hält die Meldung schon in

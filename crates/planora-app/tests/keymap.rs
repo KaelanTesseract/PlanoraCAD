@@ -74,12 +74,13 @@ fn overrides(entries: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
 #[test]
 fn defaults_match_the_spec_table_for_existing_actions() {
     let km = Keymap::defaults();
-    let want: [(Action, Vec<Binding>); 10] = [
+    let want: [(Action, Vec<Binding>); 11] = [
         (Action::New, vec![ctrl(Key::N)]),
         (Action::Projects, vec![ctrl(Key::O)]),
         (Action::Save, vec![ctrl(Key::S)]),
         (Action::Close, vec![ctrl(Key::W)]),
         (Action::Export, vec![ctrl_shift(Key::E)]),
+        (Action::FeedbackOpen, vec![ctrl_shift(Key::R)]),
         (Action::Undo, vec![ctrl(Key::Z)]),
         (Action::Redo, vec![ctrl(Key::Y), ctrl_shift(Key::Z)]),
         (
@@ -129,6 +130,7 @@ fn defaults_match_the_spec_table_for_existing_actions() {
     assert_eq!(Area::Drawing.label(), "Zeichnung");
     assert_eq!(km.text(Action::Redo), "Strg+Y / Strg+Umschalt+Z");
     assert_eq!(km.text(Action::Export), "Strg+Umschalt+E");
+    assert_eq!(km.text(Action::FeedbackOpen), "Strg+Umschalt+R");
 }
 
 #[test]

@@ -399,8 +399,8 @@ fn install_footer(ui: &mut egui::Ui, install: InstallView<'_>, dark: bool) -> Op
 }
 
 /// Fehlermeldung oben in der Meldung: Warnsymbol und Text in Warnfarbe, in einem Kasten mit
-/// Rand in Warnfarbe, damit sie nicht zu übersehen ist.
-fn failure_box(ui: &mut egui::Ui, message: &str, dark: bool) {
+/// Rand in Warnfarbe, damit sie nicht zu übersehen ist. Auch im Fenster „Rückmeldung“.
+pub(crate) fn failure_box(ui: &mut egui::Ui, message: &str, dark: bool) {
     let warning = theme::palette(dark).warning;
     egui::Frame::new()
         .stroke(egui::Stroke::new(1.0, warning))

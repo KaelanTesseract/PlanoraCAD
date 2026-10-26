@@ -1,4 +1,4 @@
-//! Dialog „Über PlanoraCAD“ (Datei-Menü): Logo, Name, Version, Lizenz und die Quellen der
+//! Dialog „Über PlanoraCAD“ (Menü „Hilfe“): Logo, Name, Version, Lizenz und die Quellen der
 //! eingebauten Schriften und Symbole, in einfacher Sprache.
 
 use crate::dialog::{Dialog, DialogSize};

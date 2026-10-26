@@ -715,8 +715,9 @@ fn top_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 .inner
             });
             let (request, menu_natural) = menu.inner;
-            // „Projekte …“ und „Einstellungen …“ öffnen Fenster der App.
-            app.apply_menu_request(request);
+            // „Projekte …“, „Einstellungen …“, „Tastenkürzel …“ und „Rückmeldung …“ öffnen
+            // Fenster der App.
+            app.apply_menu_request(ctx, request);
             // Rückgängig und Wiederholen rechts neben dem Menü, in jedem Modus; ihr Platz zählt
             // zur Wunsch- und Mindestbreite des Felds (über `gap`; die Tabs rollen statt dessen).
             // Sie trennen Menü und Tabs selbst (kein Trennstrich).
