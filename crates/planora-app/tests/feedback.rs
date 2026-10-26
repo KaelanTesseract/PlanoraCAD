@@ -36,6 +36,7 @@ fn report(kind: Kind, description: &str) -> Report {
     Report {
         kind,
         area: None,
+        project_file: None,
         description: description.to_string(),
         parts: vec![
             (Part::Version, "0.2.0-dev.1 (Dev)".to_string()),
@@ -393,6 +394,7 @@ fn automatic_parts_go_before_the_description_is_cut() {
     let r = Report {
         kind: Kind::Fehler,
         area: None,
+        project_file: None,
         description: desc.clone(),
         parts: vec![
             (Part::Version, "0.2.0-dev.1 (Dev)".to_string()),
@@ -416,6 +418,7 @@ fn url_stays_below_the_limit_near_the_boundary() {
         let r = Report {
             kind: Kind::Fehler,
             area: None,
+            project_file: None,
             description: "y".repeat(n),
             parts: vec![],
         };
@@ -447,6 +450,7 @@ fn lone_carriage_return_is_a_line_break() {
     let r = Report {
         kind: Kind::Wunsch,
         area: None,
+        project_file: None,
         description: "a\r\nb\rc".to_string(),
         parts: vec![(Part::Schritte, "s1\r\ns2".to_string())],
     };
@@ -844,4 +848,33 @@ fn webform_address_boundary_is_below_2000() {
     let over = build(2000 - base);
     assert!(over.url.len() < 2000);
     assert!(over.needs_file, "2000 Zeichen passen nicht mehr");
+}
+
+#[test]
+fn attach_hint_names_the_project_zip_when_it_goes_along() {
+    assert_eq!(attach_hint_for(&["rueckmeldung.txt"]), ATTACH_HINT);
+    assert_eq!(
+        attach_hint_for(&["rueckmeldung.txt", "bild.png"]),
+        ATTACH_HINT_PICTURE
+    );
+    assert_eq!(
+        attach_hint_for(&["rueckmeldung.txt", "bild.png", "Halter.pcad.zip"]),
+        "Dateien hier anhängen: rueckmeldung.txt, bild.png und Halter.pcad.zip"
+    );
+    for web in [false, true] {
+        let mut r = web_report(Kind::Fehler, "Es hängt");
+        r.project_file = Some("Halter.pcad.zip".to_string());
+        let b = if web {
+            webform_url(&r, true)
+        } else {
+            issue_url(&r, true)
+        };
+        assert!(
+            b.url.contains(&percent_encode(
+                "Dateien hier anhängen: rueckmeldung.txt und Halter.pcad.zip"
+            )),
+            "{web}: {}",
+            b.url
+        );
+    }
 }

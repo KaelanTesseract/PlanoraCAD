@@ -3,7 +3,7 @@
 //!
 //! Das Fenster rechnet nichts selbst: Den Befund liefert [`crate::crash::start_run`], wann es
 //! erscheint, regelt die App (`app::PlanoraApp::crash_notice_tick`). „Bericht ansehen“ zeigt den
-//! neuesten Bericht bereinigt ([`crate::feedback::sanitize`]); was nach außen geht (Ordner
+//! neuesten Bericht bereinigt (und wird dann zu „Bericht ausblenden“) ([`crate::feedback::sanitize`]); was nach außen geht (Ordner
 //! öffnen, Rückmeldung), gibt es als [`CrashAction`] an die App.
 
 use crate::crash::{StartFinding, report_field};
@@ -21,6 +21,8 @@ pub const EXPLAIN: &str = "Dabei ist ein Bericht entstanden. Er liegt nur auf de
      Schickst du ihn uns als Rückmeldung, können wir den Fehler leichter finden.";
 /// Zeigt den bereinigten Bericht.
 pub const VIEW: &str = "Bericht ansehen";
+/// Statt [`VIEW`], solange der Bericht gezeigt wird: blendet ihn wieder aus.
+pub const HIDE: &str = "Bericht ausblenden";
 /// Öffnet das Rückmeldungsfenster mit dem Bericht.
 pub const AS_FEEDBACK: &str = "Als Rückmeldung öffnen";
 /// Öffnet den Ordner der Berichte.
@@ -64,7 +66,7 @@ pub struct CrashNotice {
     pub dir: PathBuf,
     /// Wird gezeigt (vorher wartet sie, bis nichts anderes ansteht).
     pub open: bool,
-    /// „Bericht ansehen“ wurde geklickt.
+    /// Der Bericht wird gezeigt („Bericht ansehen“; „Bericht ausblenden“ schaltet zurück).
     pub viewing: bool,
     /// Bereinigter Text des neuesten Berichts.
     text: String,
@@ -103,11 +105,32 @@ impl CrashNotice {
         self.reports.first().map(PathBuf::as_path)
     }
 
-    /// Löscht die angebotenen Berichte (Fehler kommen nur als Art ins Protokoll).
+    /// Legt die angebotenen Berichte nach `gesendet/` ([`crate::crash::mark_sent`]): Nach
+    /// „Als Rückmeldung öffnen“ gelten sie als erledigt und kommen nicht wieder. Gibt den neuen
+    /// Ort des neuesten zurück (bleibt er liegen, den alten).
+    pub fn mark_sent(&self) -> Option<PathBuf> {
+        let mut newest = None;
+        for (i, p) in self.reports.iter().enumerate() {
+            let to = match crate::crash::mark_sent(p) {
+                Ok(to) => to,
+                Err(e) => {
+                    crate::diag::warn(&format!("Absturzbericht nicht verschoben ({:?})", e.kind()));
+                    p.clone()
+                }
+            };
+            if i == 0 {
+                newest = Some(to);
+            }
+        }
+        newest
+    }
+
+    /// Löscht die angebotenen Berichte samt Begleitdatei (Fehler kommen nur als Art ins
+    /// Protokoll).
     pub fn delete_reports(&self) {
         let mut failed = 0usize;
         for p in &self.reports {
-            if let Err(e) = std::fs::remove_file(p)
+            if let Err(e) = crate::crash::remove_report(p)
                 && e.kind() != std::io::ErrorKind::NotFound
             {
                 failed += 1;
@@ -205,7 +228,8 @@ pub fn show(ctx: &egui::Context, state: &mut CrashNotice, dark: bool) -> Option<
                         CrashAction::AsFeedback,
                     );
                     if crashed {
-                        button(ui, egui::Button::new(VIEW), CrashAction::View);
+                        let label = if viewing { HIDE } else { VIEW };
+                        button(ui, egui::Button::new(label), CrashAction::View);
                         button(ui, egui::Button::new(OPEN_FOLDER), CrashAction::OpenFolder);
                     }
                     button(ui, egui::Button::new(NOT_NOW), CrashAction::NotNow);
@@ -219,7 +243,7 @@ pub fn show(ctx: &egui::Context, state: &mut CrashNotice, dark: bool) -> Option<
         action = Some(CrashAction::NotNow);
     }
     match action {
-        Some(CrashAction::View) => state.viewing = true,
+        Some(CrashAction::View) => state.viewing = !state.viewing,
         Some(CrashAction::NotNow) => state.open = false,
         _ => {}
     }

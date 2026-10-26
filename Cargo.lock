@@ -2592,6 +2592,7 @@ name = "planora-app"
 version = "0.2.0-dev.1"
 dependencies = [
  "chrono",
+ "crc32fast",
  "eframe",
  "egui",
  "embed-resource",

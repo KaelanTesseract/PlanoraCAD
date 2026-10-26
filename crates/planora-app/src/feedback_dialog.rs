@@ -21,6 +21,7 @@ use crate::feedback_shot::{
     SHOT_FAILED, SHOT_FILE, ShotFlow, ShotPhase, ShotStep, preview_line, save_png,
 };
 use crate::theme::{self, SPACE_1, SPACE_2, SPACE_3, SPACE_4};
+use crate::zip_store;
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -83,12 +84,20 @@ pub const PROJECT_TOO_BIG: &str = "Die Projektdatei ist zu groß zum Mitschicken
 /// Größer darf der Projektordner zum Mitschicken nicht sein (alle Dateien zusammen).
 pub const PROJECT_MAX_BYTES: u64 = 200 * 1024 * 1024;
 
-/// Vorschau zur Projektdatei: was mit dem Projektordner `name` geschieht.
+/// Vorschau zur Projektdatei: was mit dem Projekt geschieht; `name` ist der Name der Datei im
+/// Rückmeldungsordner (`<Name>.pcad.zip`, [`project_zip_name`]).
 pub fn project_preview(name: &str) -> String {
     format!(
-        "Legt eine Kopie von „{name}“ in den Rückmeldungsordner. \
-         Sie geht nur mit, wenn du sie selbst ins Formular ziehst."
+        "Legt das Projekt als „{name}“ in den Rückmeldungsordner (ohne ungespeicherte \
+         Änderungen). Es geht nur mit, wenn du die Datei selbst ins Formular ziehst."
     )
+}
+
+/// Name der Projektdatei im Rückmeldungsordner zum Projektordner `project`: `Teil.pcad.zip`.
+pub fn project_zip_name(project: &Path) -> Option<String> {
+    project
+        .file_name()
+        .map(|n| format!("{}.zip", n.to_string_lossy()))
 }
 
 /// Kennung des Fensters.
@@ -170,6 +179,8 @@ pub struct Sent {
     pub file_failed: bool,
     /// `bild.png` liegt mit im Ordner.
     pub picture: bool,
+    /// Name der Projektdatei im Ordner (`<Name>.pcad.zip`), wenn sie geschrieben wurde.
+    pub project: Option<String>,
 }
 
 /// Ein Bestandteil mit bereinigtem Text und Häkchen.
@@ -251,8 +262,7 @@ impl FeedbackDialog {
         let named = context
             .crash_report
             .as_deref()
-            .and_then(read_report)
-            .and_then(|t| crate::crash::report_document(&t))
+            .and_then(crate::crash::report_project)
             .filter(|d| is_project_dir(d));
         let project_too_big = named.as_deref().is_some_and(|d| exceeds(d, project_limit));
         let project_dir = named.filter(|_| !project_too_big);
@@ -351,15 +361,12 @@ impl FeedbackDialog {
         self.project_limit = bytes;
     }
 
-    /// Name des mitkopierten Projektordners (angehakt und vorhanden).
+    /// Name der mitgehenden Projektdatei `<Name>.pcad.zip` (angehakt und vorhanden).
     fn copied_project_name(&self) -> Option<String> {
         if !self.is_checked(Part::Projektdatei) {
             return None;
         }
-        self.project_dir
-            .as_deref()
-            .and_then(Path::file_name)
-            .map(|n| n.to_string_lossy().into_owned())
+        self.project_dir.as_deref().and_then(project_zip_name)
     }
 
     /// Bereinigter Text von `part`, wie in der Vorschau.
@@ -387,6 +394,7 @@ impl FeedbackDialog {
                 .filter(|r| r.on)
                 .map(|r| (r.part, r.text.clone()))
                 .collect(),
+            project_file: self.copied_project_name(),
         }
     }
 
@@ -454,6 +462,7 @@ impl FeedbackDialog {
         let mut built = make(&report, with_file);
         let mut folder = None;
         let mut file_failed = false;
+        let mut project_written = None;
         if built.needs_file {
             let written = match self.context.as_ref() {
                 Some(c) => {
@@ -467,11 +476,18 @@ impl FeedbackDialog {
                 None => Ok(dir),
             });
             if let Ok(dir) = &written
-                && self.is_checked(Part::Projektdatei)
+                && let Some(name) = report.project_file.clone()
                 && let Some(project) = &self.project_dir
-                && let Err(e) = copy_project(project, dir)
             {
-                diag::warn(&format!("Projektdatei nicht kopiert ({:?})", e.kind()));
+                match zip_store::write_project_zip(project, &dir.join(&name)) {
+                    Ok(()) => project_written = Some(name),
+                    Err(e) => {
+                        diag::warn(&format!("Projektdatei nicht geschrieben ({:?})", e.kind()));
+                        // Ohne Datei auch kein Hinweis darauf in der Adresse.
+                        report.project_file = None;
+                        built = make(&report, with_file);
+                    }
+                }
             }
             match written {
                 Ok(dir) => folder = Some(dir),
@@ -481,8 +497,9 @@ impl FeedbackDialog {
                         "Rückmeldungsordner nicht angelegt ({:?})",
                         e.kind()
                     ));
-                    // Ohne Ordner geht auch kein Bild mit.
+                    // Ohne Ordner gehen auch Bild und Projektdatei nicht mit.
                     report.parts.retain(|(p, _)| *p != Part::Bild);
+                    report.project_file = None;
                     built = make(&report, false);
                 }
             }
@@ -510,6 +527,7 @@ impl FeedbackDialog {
             folder,
             file_failed,
             picture,
+            project: project_written,
         });
     }
 }
@@ -539,11 +557,8 @@ fn rows_for(c: &FeedbackContext, project: Option<&Path>) -> Vec<PartRow> {
     rows.push((Part::Bild, SHOT_NOT_YET.to_string()));
     if let Some(text) = c.crash_report.as_deref().and_then(read_report) {
         rows.push((Part::Absturzbericht, clean(&text)));
-        if let Some(name) = project.and_then(Path::file_name) {
-            rows.push((
-                Part::Projektdatei,
-                clean(&project_preview(&name.to_string_lossy())),
-            ));
+        if let Some(name) = project.and_then(project_zip_name) {
+            rows.push((Part::Projektdatei, clean(&project_preview(&name))));
         }
     }
     rows.into_iter()
@@ -606,29 +621,6 @@ fn exceeds(dir: &Path, limit: u64) -> bool {
         false
     }
     add(dir, &mut 0, limit)
-}
-
-/// Kopiert den Projektordner `project` (samt Unterordnern) nach `bundle/<Name>`.
-fn copy_project(project: &Path, bundle: &Path) -> std::io::Result<()> {
-    let name = project
-        .file_name()
-        .ok_or_else(|| std::io::Error::other("kein Name"))?;
-    copy_dir(project, &bundle.join(name))
-}
-
-fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let target = to.join(entry.file_name());
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            copy_dir(&entry.path(), &target)?;
-        } else if kind.is_file() {
-            std::fs::copy(entry.path(), target)?;
-        }
-    }
-    Ok(())
 }
 
 fn read_report(path: &Path) -> Option<String> {
@@ -834,8 +826,8 @@ fn after_send(
         if sent.picture {
             files.push(SHOT_FILE.to_string());
         }
-        if let Some(name) = state.copied_project_name() {
-            files.push(name);
+        if let Some(name) = &sent.project {
+            files.push(name.clone());
         }
         let files: Vec<&str> = files.iter().map(String::as_str).collect();
         ui.add(egui::Label::new(folder_hint(&files)).wrap());

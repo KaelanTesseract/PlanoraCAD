@@ -200,3 +200,86 @@ pub fn assert_cards_inside(rect: egui::Rect, cards: &[egui::Rect], seen: &[Seen]
         }
     }
 }
+
+/// Ein Eintrag einer ZIP-Datei, unabhängig vom Programmcode gelesen.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct ZipEntry {
+    pub name: String,
+    pub flags: u16,
+    pub method: u16,
+    pub data: Vec<u8>,
+}
+
+/// Bitweise CRC-32 (IEEE), bewusst ohne die Bibliothek des Programms.
+#[allow(dead_code)]
+pub fn crc32_plain(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// Liest das Inhaltsverzeichnis (Central Directory) einer ZIP-Datei von Hand und prüft je
+/// Eintrag Kopf, Größen und Prüfsumme gegen den lokalen Kopf.
+#[allow(dead_code)]
+pub fn zip_entries(z: &[u8]) -> Vec<ZipEntry> {
+    let u16_at = |i: usize| u16::from_le_bytes([z[i], z[i + 1]]);
+    let u32_at = |i: usize| u32::from_le_bytes([z[i], z[i + 1], z[i + 2], z[i + 3]]);
+    let eocd = (0..=z.len() - 22)
+        .rev()
+        .find(|&i| u32_at(i) == 0x0605_4b50)
+        .expect("Ende des Inhaltsverzeichnisses");
+    let count = usize::from(u16_at(eocd + 10));
+    assert_eq!(u16_at(eocd + 8), u16_at(eocd + 10));
+    let cd_size = u32_at(eocd + 12) as usize;
+    let mut at = u32_at(eocd + 16) as usize;
+    assert_eq!(at + cd_size, eocd, "Verzeichnis direkt vor dem Ende");
+    let mut out = Vec::new();
+    for _ in 0..count {
+        assert_eq!(u32_at(at), 0x0201_4b50, "Eintrag im Verzeichnis");
+        let flags = u16_at(at + 8);
+        let method = u16_at(at + 10);
+        let crc = u32_at(at + 16);
+        let csize = u32_at(at + 20) as usize;
+        let usize_ = u32_at(at + 24) as usize;
+        let nlen = usize::from(u16_at(at + 28));
+        let elen = usize::from(u16_at(at + 30));
+        let clen = usize::from(u16_at(at + 32));
+        let local = u32_at(at + 42) as usize;
+        let name = String::from_utf8(z[at + 46..at + 46 + nlen].to_vec()).expect("UTF-8-Name");
+        assert_eq!(u32_at(local), 0x0403_4b50, "lokaler Kopf");
+        assert_eq!(u16_at(local + 6), flags);
+        assert_eq!(u32_at(local + 14), crc);
+        assert_eq!(u32_at(local + 18) as usize, csize);
+        let lnlen = usize::from(u16_at(local + 26));
+        let lelen = usize::from(u16_at(local + 28));
+        assert_eq!(&z[local + 30..local + 30 + lnlen], name.as_bytes());
+        let start = local + 30 + lnlen + lelen;
+        let data = z[start..start + csize].to_vec();
+        assert_eq!(csize, usize_, "gespeichert, nicht gepackt");
+        assert_eq!(crc32_plain(&data), crc, "Prüfsumme von {name}");
+        out.push(ZipEntry {
+            name,
+            flags,
+            method,
+            data,
+        });
+        at += 46 + nlen + elen + clen;
+    }
+    out
+}
+
+/// Nur die Namen der Einträge (siehe [`zip_entries`]).
+#[allow(dead_code)]
+pub fn zip_names(z: &[u8]) -> Vec<String> {
+    zip_entries(z).into_iter().map(|e| e.name).collect()
+}

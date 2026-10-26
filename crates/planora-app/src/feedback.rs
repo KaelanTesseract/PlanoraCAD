@@ -510,6 +510,9 @@ pub struct Report {
     pub area: Option<String>,
     pub description: String,
     pub parts: Vec<(Part, String)>,
+    /// Name der Projektdatei im Rückmeldungsordner (`<Name>.pcad.zip`), wenn sie mitgeht; sie
+    /// steht dann im Hinweis zum Anhängen.
+    pub project_file: Option<String>,
 }
 
 /// Fertige Adresse und was dafür weggelassen oder gekürzt wurde.
@@ -525,12 +528,24 @@ pub struct Built {
 }
 
 /// Hinweis auf die Dateien im Ordner: mit `bild.png`, wenn das Bild (Bestandteil `Bild`)
-/// mitgeht.
-fn attach_hint(report: &Report) -> &'static str {
+/// mitgeht, und mit der Projektdatei ([`Report::project_file`]).
+fn attach_hint(report: &Report) -> String {
+    let mut files = vec![FEEDBACK_FILE];
     if report.parts.iter().any(|(p, _)| *p == Part::Bild) {
-        ATTACH_HINT_PICTURE
-    } else {
-        ATTACH_HINT
+        files.push(crate::feedback_shot::SHOT_FILE);
+    }
+    if let Some(p) = &report.project_file {
+        files.push(p);
+    }
+    attach_hint_for(&files)
+}
+
+/// „Datei hier anhängen: a“ bzw. „Dateien hier anhängen: a, b und c“.
+pub fn attach_hint_for(files: &[&str]) -> String {
+    match files {
+        [] => String::new(),
+        [one] => format!("Datei hier anhängen: {one}"),
+        [rest @ .., last] => format!("Dateien hier anhängen: {} und {last}", rest.join(", ")),
     }
 }
 
@@ -612,7 +627,7 @@ fn render_web(
     }
     if with_file {
         description.push_str("\n\n");
-        description.push_str(attach_hint(report));
+        description.push_str(&attach_hint(report));
     }
     push(report.kind.description_field(), &description);
     url
@@ -677,7 +692,7 @@ fn render_github(
     }
     if with_file {
         description.push_str("\n\n");
-        description.push_str(attach_hint(report));
+        description.push_str(&attach_hint(report));
     }
     // Die Beschreibung steht zuletzt.
     fields.push((report.kind.description_field(), description));

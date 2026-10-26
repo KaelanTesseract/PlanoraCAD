@@ -314,7 +314,8 @@ impl PlanoraApp {
                 }
             }
             Some(CrashAction::AsFeedback) => {
-                let report = notice.newest().map(Path::to_path_buf);
+                // Die angebotenen Berichte gelten als erledigt (nach `abstuerze/gesendet`).
+                let report = notice.mark_sent();
                 self.crash_notice = None;
                 let mut info = self.feedback_context(ctx);
                 info.from_crash = report.is_some();

@@ -73,6 +73,7 @@ fn with_hook(dir: &Path, diag: &'static Mutex<Diag>, f: impl FnOnce()) -> usize 
     let old = std::panic::take_hook();
     let hook = crash::hook_with(
         dir.to_path_buf(),
+        crash::UserMask::none(),
         diag,
         Box::new(move |_| {
             c.fetch_add(1, Ordering::SeqCst);
@@ -129,8 +130,8 @@ fn report_file_name_format() {
 #[test]
 fn write_report_adds_suffix_on_collision() {
     let dir = temp_dir("kollision");
-    let a = crash::write_report(&dir, &input()).expect("erster Bericht");
-    let b = crash::write_report(&dir, &input()).expect("zweiter Bericht");
+    let a = crash::write_report(&dir, &input(), &crash::UserMask::none()).expect("erster Bericht");
+    let b = crash::write_report(&dir, &input(), &crash::UserMask::none()).expect("zweiter Bericht");
     assert_eq!(
         a.file_name().and_then(|n| n.to_str()),
         Some("absturz-2026-10-26_14-03-22.txt")
@@ -301,4 +302,169 @@ fn expected_panic_writes_no_report() {
     let lines = diag.lock().unwrap().recent_lines(50).join("\n");
     assert!(lines.contains(crash::CAUGHT_LINE), "{lines}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- Nacharbeit E3: ohne Benutzernamen, Begleitdatei, gekürzter Ablauf ------------------------
+
+fn mask() -> crash::UserMask {
+    crash::UserMask::from_values(Some("Mustermann"), None, Some(r"C:\Users\Mustermann"))
+}
+
+#[test]
+fn report_names_only_the_document_file() {
+    let mut i = input();
+    i.document = Some(PathBuf::from(r"C:\Users\Mustermann\Kunde\Unbenannt 1.pcad"));
+    let t = crash::report_text(&i);
+    assert!(t.contains("Dokument: Unbenannt 1.pcad\n"), "{t}");
+    assert!(!t.contains("Kunde"), "{t}");
+    assert!(!t.contains("Mustermann"), "{t}");
+}
+
+#[test]
+fn user_mask_replaces_profile_in_all_forms() {
+    let m = mask();
+    let ph = crash::USER_PLACEHOLDER;
+    assert_eq!(ph, "<Benutzer>");
+    assert_eq!(
+        m.apply(r"Ort: C:\Users\Mustermann\src\a.rs:1:2"),
+        format!(r"Ort: {ph}\src\a.rs:1:2")
+    );
+    assert_eq!(
+        m.apply(r"lade \\?\C:\Users\Mustermann\AppData\x"),
+        format!(r"lade {ph}\AppData\x")
+    );
+    assert_eq!(
+        m.apply(r"at c:\users\MUSTERMANN\.cargo\registry"),
+        format!(r"at {ph}\.cargo\registry"),
+        "Groß/klein egal"
+    );
+    assert_eq!(
+        m.apply("at /home/Mustermann/.cargo/x.rs"),
+        format!("at {ph}/.cargo/x.rs")
+    );
+    assert_eq!(
+        m.apply(r"D:\Users\Mustermann\x"),
+        format!(r"{ph}\x"),
+        "anderes Laufwerk über den Namen"
+    );
+    assert_eq!(
+        m.apply("C:/Users/Mustermann/x"),
+        format!("{ph}/x"),
+        "Schrägstriche"
+    );
+    // Ein längerer Name, der nur so anfängt, bleibt ganz (kein halber Name im Bericht).
+    assert_eq!(
+        m.apply(r"C:\Users\Mustermanns\x"),
+        r"C:\Users\Mustermanns\x"
+    );
+    assert_eq!(m.apply("ohne Pfad"), "ohne Pfad");
+    assert_eq!(
+        crash::UserMask::none().apply(r"C:\Users\A\x"),
+        r"C:\Users\A\x"
+    );
+    // Umlaute im Namen.
+    let u = crash::UserMask::from_values(Some("Max Müller"), None, None);
+    assert_eq!(u.apply(r"C:\Users\Max Müller\a"), format!(r"{ph}\a"));
+}
+
+#[test]
+fn written_report_has_no_user_name_and_keeps_the_path_aside() {
+    let dir = temp_dir("benutzer");
+    let mut i = input();
+    let doc = PathBuf::from(r"C:\Users\Mustermann\Kunde\Unbenannt 1.pcad");
+    i.document = Some(doc.clone());
+    i.location = r"C:\Users\Mustermann\.cargo\registry\egui\src\lib.rs:3:4".into();
+    i.log = vec![r"2026-10-26T13:03:19Z INFO lade \\?\C:\Users\Mustermann\AppData\x".into()];
+    i.backtrace =
+        "   0: planora_app::app::run\n             at /home/mustermann/src/app.rs:10:5\n".into();
+    let path = crash::write_report(&dir, &i, &mask()).expect("Bericht");
+    let text = std::fs::read_to_string(&path).expect("lesbar");
+    assert!(
+        !text.to_lowercase().contains("mustermann"),
+        "kein Benutzername: {text}"
+    );
+    assert!(text.contains(r"Ort: <Benutzer>\.cargo"), "{text}");
+    assert!(text.contains("Dokument: Unbenannt 1.pcad"), "{text}");
+    // Der volle Pfad liegt in der Begleitdatei (wird nie angehängt).
+    let side = crash::companion_path(&path);
+    assert_eq!(
+        side.file_name().and_then(|n| n.to_str()),
+        Some("absturz-2026-10-26_14-03-22.dokument")
+    );
+    assert_eq!(crash::report_project(&path), Some(doc));
+    // Ohne Dokument keine Begleitdatei.
+    let mut j = input();
+    j.document = None;
+    let p2 = crash::write_report(&dir, &j, &mask()).expect("Bericht");
+    assert!(!crash::companion_path(&p2).exists());
+    assert_eq!(crash::report_project(&p2), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn old_reports_with_a_full_path_still_name_the_project() {
+    let dir = temp_dir("alt");
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("absturz-2026-10-01_10-00-00.txt");
+    std::fs::write(&p, "Version: 1\nDokument: D:\\Projekte\\Halter.pcad\n").unwrap();
+    assert_eq!(
+        crash::report_project(&p),
+        Some(PathBuf::from(r"D:\Projekte\Halter.pcad"))
+    );
+    std::fs::write(&p, "Dokument: Halter.pcad\n").unwrap();
+    assert_eq!(
+        crash::report_project(&p),
+        None,
+        "nur ein Name: nicht auffindbar"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Ein Ablauf wie von `Backtrace::force_capture` im Hook: erst Hook und Rust-Innereien.
+fn long_backtrace() -> String {
+    let mut b = String::new();
+    let mut n = 0;
+    let mut frame = |b: &mut String, f: &str| {
+        b.push_str(&format!(
+            "  {n:>2}: {f}\n             at /rustc/abc/src/x.rs:1:1\n"
+        ));
+        n += 1;
+    };
+    frame(&mut b, "std::backtrace::Backtrace::force_capture");
+    frame(&mut b, "planora_app::crash::collect");
+    frame(&mut b, "planora_app::crash::hook_with::{{closure}}");
+    frame(&mut b, "std::panicking::rust_panic_with_hook");
+    frame(&mut b, "core::panicking::panic_fmt");
+    frame(&mut b, "planora_app::app::PlanoraApp::logic");
+    for i in 0..60 {
+        frame(&mut b, &format!("egui::context::run_{i}"));
+    }
+    b
+}
+
+#[test]
+fn backtrace_starts_at_own_frames_and_is_cut_to_40_lines() {
+    assert_eq!(crash::BACKTRACE_LINES, 40);
+    let t = crash::trim_backtrace(&long_backtrace());
+    let lines: Vec<&str> = t.lines().collect();
+    assert!(
+        lines[0].contains("planora_app::app::PlanoraApp::logic"),
+        "{t}"
+    );
+    assert_eq!(lines.len(), 41, "40 Zeilen und „…“: {t}");
+    assert_eq!(lines[40], "…");
+    assert!(!t.contains("crash::collect") && !t.contains("rust_panic_with_hook"));
+    // Kurz: bleibt ganz, ohne „…“.
+    let short = "   0: planora_app::app::run\n             at src/app.rs:1:1\n";
+    assert_eq!(crash::trim_backtrace(short), short.trim_end());
+    // Nur unbekannte Rahmen: vom Anfang an gekürzt.
+    let unknown: String = (0..50).map(|i| format!("  {i}: <unknown>\n")).collect();
+    let t = crash::trim_backtrace(&unknown);
+    assert_eq!(t.lines().count(), 41);
+    // Der Bericht nimmt den gekürzten Ablauf.
+    let mut i = input();
+    i.backtrace = long_backtrace();
+    let r = crash::report_text(&i);
+    assert!(!r.contains("egui::context::run_59"), "{r}");
+    assert!(r.contains("planora_app::app::PlanoraApp::logic"));
 }

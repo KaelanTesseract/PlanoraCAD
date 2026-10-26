@@ -64,7 +64,12 @@ fn input(version: &str, document: Option<PathBuf>) -> ReportInput {
 
 /// Schreibt einen Bericht nach `<data>/abstuerze`.
 fn report(data: &Path, version: &str, document: Option<PathBuf>) -> PathBuf {
-    crash::write_report(&data.join(CRASH_DIR), &input(version, document)).unwrap()
+    crash::write_report(
+        &data.join(CRASH_DIR),
+        &input(version, document),
+        &crash::UserMask::none(),
+    )
+    .unwrap()
 }
 
 /// Ein liegengebliebener Marker einer fremden, beendeten Instanz.
@@ -466,6 +471,9 @@ fn project(data: &Path) -> PathBuf {
     let doc = data.join("Projekte").join("Halter.pcad");
     std::fs::create_dir_all(&doc).unwrap();
     std::fs::write(doc.join("modell.json"), "{\"teil\":1}").unwrap();
+    std::fs::create_dir_all(doc.join("versionen")).unwrap();
+    std::fs::write(doc.join("versionen").join("1.json"), "v1").unwrap();
+    std::fs::write(doc.join(".autosave.json"), "ungespeichert").unwrap();
     doc
 }
 
@@ -530,12 +538,42 @@ fn send_with_project(prefix: &str, check: bool) -> (Rig, PathBuf) {
 
 #[test]
 fn project_checkbox_copies_the_document_into_the_bundle_only_when_checked() {
-    let (_r, bundle) = send_with_project("planora-rueckfrage-projekt", true);
-    let copied = bundle.join("Halter.pcad").join("modell.json");
-    assert_eq!(
-        std::fs::read_to_string(&copied).unwrap(),
-        "{\"teil\":1}",
-        "Projektordner liegt im Rückmeldungsordner"
+    let (mut r, bundle) = send_with_project("planora-rueckfrage-projekt", true);
+    let zip = bundle.join("Halter.pcad.zip");
+    assert!(zip.is_file(), "Projekt als .zip im Rückmeldungsordner");
+    assert!(!bundle.join("Halter.pcad").exists(), "kein Ordner mehr");
+    let names = common::zip_names(&std::fs::read(&zip).unwrap());
+    assert!(
+        names.contains(&"Halter.pcad/modell.json".to_string()),
+        "{names:?}"
+    );
+    assert!(names.contains(&"Halter.pcad/versionen/1.json".to_string()));
+    assert!(
+        !names.iter().any(|n| n.ends_with(".autosave.json")),
+        "ohne Autosicherung: {names:?}"
+    );
+    // Hinweis im Fenster und in der Adresse nennen die .zip.
+    assert!(
+        r.sees(&feedback_dialog::folder_hint(&[
+            FEEDBACK_FILE,
+            "Halter.pcad.zip"
+        ])),
+        "{:?}",
+        r.texts()
+    );
+    let url = r.app.feedback_mut().sent.clone().unwrap().url;
+    assert!(
+        url.contains(&percent_encode(
+            "Dateien hier anhängen: rueckmeldung.txt und Halter.pcad.zip"
+        )),
+        "{url}"
+    );
+    assert!(
+        r.app
+            .feedback_mut()
+            .preview_text(Part::Projektdatei)
+            .unwrap()
+            .contains("„Halter.pcad.zip“")
     );
     // Der ganze Bericht liegt als Datei im Ordner.
     let text = std::fs::read_to_string(bundle.join(FEEDBACK_FILE)).unwrap();
@@ -544,7 +582,7 @@ fn project_checkbox_copies_the_document_into_the_bundle_only_when_checked() {
     let (_r, bundle) = send_with_project("planora-rueckfrage-ohne-projekt", false);
     assert!(bundle.join(FEEDBACK_FILE).exists());
     assert!(
-        !bundle.join("Halter.pcad").exists(),
+        !bundle.join("Halter.pcad.zip").exists(),
         "ohne Häkchen keine Kopie"
     );
 }
@@ -578,7 +616,7 @@ fn fits_at_1920x1080_and_no_panic_at_800x600() {
         .expect("Rückfrage gezeigt");
     let screen = Rect::from_min_size(Pos2::ZERO, SIZE);
     assert!(screen.contains_rect(rect), "{rect:?}");
-    for t in [VIEW, AS_FEEDBACK, OPEN_FOLDER, NOT_NOW, DELETE] {
+    for t in [HIDE, AS_FEEDBACK, OPEN_FOLDER, NOT_NOW, DELETE] {
         assert!(r.sees(t), "Knopf „{t}“ fehlt");
     }
 
@@ -660,4 +698,95 @@ fn too_big_project_is_not_copied_and_says_so() {
         "Die Projektdatei ist zu groß zum Mitschicken."
     );
     assert_eq!(feedback_dialog::PROJECT_MAX_BYTES, 200 * 1024 * 1024);
+}
+
+// ---- Nacharbeit E3 --------------------------------------------------------------------------
+
+#[test]
+fn view_toggles_to_hide_and_back() {
+    let mut r = Rig::with("planora-rueckfrage-umschalten", SIZE, crashed);
+    assert_eq!(HIDE, "Bericht ausblenden");
+    assert!(r.sees(VIEW) && !r.sees(HIDE));
+    r.click(VIEW);
+    assert!(r.sees(HIDE) && !r.sees(VIEW), "{:?}", r.texts());
+    assert!(r.sees_part("Ablauf (Backtrace)"), "Bericht sichtbar");
+    r.click(HIDE);
+    assert!(r.sees(VIEW) && !r.sees(HIDE));
+    assert!(!r.sees_part("Ablauf (Backtrace)"), "wieder ausgeblendet");
+    assert!(r.notice_shown());
+}
+
+#[test]
+fn as_feedback_moves_the_offered_reports_to_sent_and_they_do_not_come_back() {
+    let mut offered = Vec::new();
+    let mut r = Rig::with("planora-rueckfrage-gesendet", SIZE, |d| {
+        let doc = project(d);
+        let a = report(d, "0.2.0-dev.1", None);
+        let b = report(d, "0.2.0-dev.1", Some(doc));
+        offered.extend([b.clone(), a.clone()]);
+        StartFinding::Crashed(vec![b, a])
+    });
+    assert!(crash::companion_path(&offered[0]).exists());
+    r.click(AS_FEEDBACK);
+    let sent = r.crash_dir().join(crash::SENT_DIR);
+    assert_eq!(crash::SENT_DIR, "gesendet");
+    for p in &offered {
+        assert!(!p.exists(), "nicht mehr im Ordner: {p:?}");
+        assert!(sent.join(p.file_name().unwrap()).is_file(), "in gesendet");
+    }
+    assert!(
+        sent.join(crash::companion_path(&offered[0]).file_name().unwrap())
+            .is_file(),
+        "Begleitdatei zieht mit"
+    );
+    // Das Fenster hat den Bericht (samt Projekt) trotzdem.
+    let fb = r.app.feedback_mut();
+    assert!(fb.is_checked(Part::Absturzbericht));
+    assert!(fb.shown_parts().contains(&Part::Projektdatei));
+    // Nächster Start: nichts mehr anzubieten.
+    let (marker, finding) = start_run(&r.data, OWN);
+    assert_eq!(finding, StartFinding::Clean);
+    marker.unwrap().finish();
+}
+
+#[test]
+fn delete_and_cleanup_remove_the_companion_file_too() {
+    let mut gone = Vec::new();
+    let mut r = Rig::with("planora-rueckfrage-begleit", SIZE, |d| {
+        let doc = project(d);
+        let a = report(d, "0.2.0-dev.1", Some(doc));
+        gone.push(a.clone());
+        StartFinding::Crashed(vec![a])
+    });
+    let side = crash::companion_path(&gone[0]);
+    assert!(side.exists());
+    r.click(DELETE);
+    assert!(!gone[0].exists() && !side.exists());
+    assert!(
+        reports_in(&r.crash_dir()).is_empty(),
+        "{:?}",
+        reports_in(&r.crash_dir())
+    );
+
+    // Aufräumen: alte Berichte samt Begleitdatei weg, auch in „gesendet“; verwaiste
+    // Begleitdateien ebenso.
+    let data = data_dir("planora-aufraeumen-begleit");
+    let doc = project(&data);
+    let old = report(&data, "0.2.0-dev.1", Some(doc.clone()));
+    set_age(&old, Duration::from_secs(24 * 3600 * (KEEP_DAYS + 2)));
+    let dir = data.join(CRASH_DIR);
+    let orphan = dir.join("absturz-2020-01-01_00-00-00.dokument");
+    std::fs::write(&orphan, "x").unwrap();
+    let sent = dir.join(crash::SENT_DIR);
+    let moved = crash::mark_sent(&report(&data, "0.2.0-dev.1", Some(doc))).unwrap();
+    assert_eq!(moved.parent(), Some(sent.as_path()));
+    set_age(&moved, Duration::from_secs(24 * 3600 * (KEEP_DAYS + 2)));
+    let (marker, _) = start_run(&data, OWN);
+    marker.unwrap().finish();
+    assert!(!old.exists() && !crash::companion_path(&old).exists());
+    assert!(!orphan.exists(), "verwaist");
+    assert!(
+        !moved.exists() && !crash::companion_path(&moved).exists(),
+        "gesendet aufgeräumt"
+    );
 }

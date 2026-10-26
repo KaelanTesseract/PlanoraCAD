@@ -2,8 +2,11 @@
 //! `<Datenordner>/abstuerze/absturz-JJJJ-MM-TT_hh-mm-ss.txt` (Ortszeit) und ruft danach immer
 //! den vorherigen Hook.
 //!
-//! Der Bericht bleibt nur auf dem Rechner und wird unbereinigt gespeichert; bereinigt wird
-//! erst bei der Anzeige mit [`crate::feedback::sanitize`].
+//! Der Bericht bleibt nur auf dem Rechner. Schon beim Schreiben steht beim Dokument nur der
+//! Dateiname, und der Benutzerordner ist überall durch [`USER_PLACEHOLDER`] ersetzt
+//! ([`UserMask`]); den vollen Dokumentpfad (für die Projektdatei in der Rückmeldung) hält eine
+//! Begleitdatei `absturz-….dokument` daneben, die nie angehängt wird. Bei der Anzeige
+//! bereinigt [`crate::feedback::sanitize`] zusätzlich.
 //!
 //! Der Hook tut nichts anderes: kein Netz, kein Fenster, kein Warten. Das Protokoll liest er
 //! nur per `try_lock`; ist es gesperrt, steht „nicht verfügbar“ im Bericht. Eine Panik im Hook
@@ -32,6 +35,217 @@ pub const UNKNOWN: &str = "unbekannt";
 
 /// Höchstens so viele Namen mit Zusatz `_2`, `_3`, … werden bei Kollision probiert.
 const MAX_SUFFIX: u32 = 1000;
+/// Steht im Bericht statt des Benutzerordners.
+pub const USER_PLACEHOLDER: &str = "<Benutzer>";
+/// So viele Zeilen des Ablaufs (Backtrace) stehen höchstens im Bericht ([`trim_backtrace`]).
+pub const BACKTRACE_LINES: usize = 40;
+/// Endung der Begleitdatei mit dem vollen Dokumentpfad ([`companion_path`]).
+const COMPANION_EXT: &str = "dokument";
+/// Unterordner der Berichte, die schon als Rückmeldung geöffnet wurden ([`mark_sent`]).
+pub const SENT_DIR: &str = "gesendet";
+
+/// Ersetzt den Benutzerordner (`C:\Users\<Name>`, `\\?\C:\Users\<Name>`, `/home/<name>`, auch
+/// mit `/` und in anderer Groß-/Kleinschreibung) durch [`USER_PLACEHOLDER`]. Die Muster
+/// entstehen einmal beim Setzen des Hooks ([`UserMask::from_env`]); [`UserMask::apply`] ist
+/// reine Zeichenkettenarbeit, die nicht paniken kann.
+#[derive(Clone, Debug, Default)]
+pub struct UserMask {
+    /// Vollständige Ordner (aus `USERPROFILE`), längste zuerst.
+    full: Vec<Vec<u8>>,
+    /// Ordnerenden wie `\Users\<Name>` (ein Laufwerk davor zählt mit), längste zuerst.
+    tails: Vec<Vec<u8>>,
+}
+
+impl UserMask {
+    /// Ersetzt nichts.
+    pub fn none() -> UserMask {
+        UserMask::default()
+    }
+
+    /// Aus `USERNAME`, `USER` und `USERPROFILE` (einmal beim Setzen des Hooks).
+    pub fn from_env() -> UserMask {
+        let get = |k: &str| std::env::var(k).ok();
+        UserMask::from_values(
+            get("USERNAME").as_deref(),
+            get("USER").as_deref(),
+            get("USERPROFILE").as_deref(),
+        )
+    }
+
+    /// Aus den Werten von `USERNAME`, `USER` und `USERPROFILE`; leere Werte zählen nicht.
+    pub fn from_values(
+        username: Option<&str>,
+        user: Option<&str>,
+        profile: Option<&str>,
+    ) -> UserMask {
+        let mut m = UserMask::default();
+        if let Some(p) = profile.map(|p| p.trim().trim_end_matches(['\\', '/']))
+            && p.len() > 3
+        {
+            m.full.push(p.as_bytes().to_vec());
+            m.full.push(p.replace('\\', "/").into_bytes());
+        }
+        for name in [username, user].into_iter().flatten().map(str::trim) {
+            if name.is_empty() || name.contains(['\\', '/']) {
+                continue;
+            }
+            for t in [
+                format!("\\Users\\{name}"),
+                format!("/Users/{name}"),
+                format!("/home/{name}"),
+            ] {
+                m.tails.push(t.into_bytes());
+            }
+        }
+        for v in [&mut m.full, &mut m.tails] {
+            v.sort_by_key(|b| std::cmp::Reverse(b.len()));
+            v.dedup();
+        }
+        m
+    }
+
+    /// `text` mit [`USER_PLACEHOLDER`] statt des Benutzerordners.
+    pub fn apply(&self, text: &str) -> String {
+        if self.full.is_empty() && self.tails.is_empty() {
+            return text.to_string();
+        }
+        let b = text.as_bytes();
+        let mut out: Vec<u8> = Vec::with_capacity(b.len());
+        let mut i = 0usize;
+        while i < b.len() {
+            let hit = self
+                .full
+                .iter()
+                .map(|p| (p, false))
+                .chain(self.tails.iter().map(|p| (p, true)))
+                .find(|(p, _)| matches_at(b, i, p));
+            let Some((p, tail)) = hit else {
+                if let Some(&c) = b.get(i) {
+                    out.push(c);
+                }
+                i += 1;
+                continue;
+            };
+            // Ein Laufwerk davor (`C:`, nur bei Ordnerenden) und `\\?\` gehören mit dazu.
+            let mut start = out.len();
+            if tail
+                && start >= 2
+                && out.get(start - 1) == Some(&b':')
+                && out.get(start - 2).is_some_and(u8::is_ascii_alphabetic)
+            {
+                start -= 2;
+            }
+            for pre in [&b"\\\\?\\"[..], &b"//?/"[..]] {
+                if start >= pre.len() && out.get(start - pre.len()..start) == Some(pre) {
+                    start -= pre.len();
+                }
+            }
+            out.truncate(start);
+            out.extend_from_slice(USER_PLACEHOLDER.as_bytes());
+            i += p.len();
+        }
+        String::from_utf8(out)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+    }
+}
+
+/// Steht `pat` (ASCII-Groß/klein egal) bei `i` in `hay`, und endet dort ein Ordnername?
+fn matches_at(hay: &[u8], i: usize, pat: &[u8]) -> bool {
+    let Some(end) = i.checked_add(pat.len()) else {
+        return false;
+    };
+    let Some(part) = hay.get(i..end) else {
+        return false;
+    };
+    if !part.eq_ignore_ascii_case(pat) {
+        return false;
+    }
+    // Ein längerer Name, der nur so anfängt, zählt nicht.
+    !hay.get(end)
+        .is_some_and(|&c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.') || c >= 0x80)
+}
+
+/// Funktionsname einer Rahmenzeile `  12: name` des Ablaufs.
+fn frame_function(line: &str) -> Option<&str> {
+    let (num, rest) = line.trim_start().split_once(": ")?;
+    (!num.is_empty() && num.bytes().all(|c| c.is_ascii_digit())).then_some(rest.trim())
+}
+
+/// Rahmen des Hooks und der Rust-Innereien, die vor dem eigentlichen Ort stehen.
+fn machinery_frame(f: &str) -> bool {
+    const PREFIXES: [&str; 11] = [
+        "std::",
+        "core::",
+        "alloc::",
+        "<std::",
+        "<core::",
+        "<alloc::",
+        "rust_begin_unwind",
+        "__rust",
+        "planora_app::crash::",
+        "<planora_app::crash::",
+        "<unknown>",
+    ];
+    PREFIXES.iter().any(|p| f.starts_with(p))
+}
+
+/// Kürzt den Ablauf: ab dem ersten eigenen Rahmen (Hook und Rust-Innereien davor fallen weg;
+/// gibt es keinen, vom Anfang), höchstens [`BACKTRACE_LINES`] Zeilen, der Rest als „…“.
+pub fn trim_backtrace(bt: &str) -> String {
+    let lines: Vec<&str> = bt.lines().collect();
+    let start = lines
+        .iter()
+        .position(|l| frame_function(l).is_some_and(|f| !machinery_frame(f)))
+        .unwrap_or(0);
+    let rest = lines.get(start..).unwrap_or(&[]);
+    let mut out = rest
+        .iter()
+        .take(BACKTRACE_LINES)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if rest.len() > BACKTRACE_LINES {
+        out.push_str("\n…");
+    }
+    out
+}
+
+/// Begleitdatei eines Berichts mit dem vollen Pfad des Dokuments:
+/// `absturz-….txt` → `absturz-….dokument`. Sie bleibt auf dem Rechner und wird nie angehängt.
+pub fn companion_path(report: &Path) -> PathBuf {
+    report.with_extension(COMPANION_EXT)
+}
+
+/// Das Projekt (voller Pfad) zum Bericht `report`: aus der Begleitdatei, bei älteren Berichten
+/// ohne Begleitdatei aus einer Zeile „Dokument: …“ mit vollem Pfad.
+pub fn report_project(report: &Path) -> Option<PathBuf> {
+    if let Ok(b) = std::fs::read(companion_path(report)) {
+        let p = String::from_utf8_lossy(&b).trim().to_string();
+        return (!p.is_empty()).then(|| PathBuf::from(p));
+    }
+    let text = String::from_utf8_lossy(&std::fs::read(report).ok()?).into_owned();
+    report_document(&text).filter(|p| p.is_absolute())
+}
+
+/// Legt den Bericht (samt Begleitdatei) nach `gesendet/` neben ihm: Er gilt als erledigt und
+/// wird nicht wieder angeboten. Gibt den neuen Ort zurück.
+pub fn mark_sent(report: &Path) -> std::io::Result<PathBuf> {
+    let dir = report
+        .parent()
+        .ok_or_else(|| std::io::Error::other("kein Ordner"))?
+        .join(SENT_DIR);
+    let name = report
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("kein Name"))?;
+    std::fs::create_dir_all(&dir)?;
+    let to = dir.join(name);
+    std::fs::rename(report, &to)?;
+    let side = companion_path(report);
+    if side.exists() {
+        let _ = std::fs::rename(&side, companion_path(&to));
+    }
+    Ok(to)
+}
 
 /// Alles, was in einen Bericht kommt.
 #[derive(Clone, Debug)]
@@ -47,7 +261,8 @@ pub struct ReportInput {
     pub time: chrono::NaiveDateTime,
 }
 
-/// Der Berichtstext (unbereinigt).
+/// Der Berichtstext: beim Dokument nur der Dateiname, der Ablauf gekürzt
+/// ([`trim_backtrace`]). Den Benutzerordner ersetzt erst [`write_report`].
 pub fn report_text(input: &ReportInput) -> String {
     let mut t = String::new();
     t.push_str("PlanoraCAD – Absturzbericht\n");
@@ -59,10 +274,13 @@ pub fn report_text(input: &ReportInput) -> String {
     t.push_str(&format!("Fehler: {}\n", input.message));
     t.push_str(&format!("Ort: {}\n", input.location));
     t.push_str(&format!("Faden: {}\n", input.thread));
-    let doc = input
-        .document
-        .as_ref()
-        .map_or_else(|| "keines".to_string(), |p| p.display().to_string());
+    let doc = input.document.as_ref().map_or_else(
+        || "keines".to_string(),
+        |p| {
+            p.file_name()
+                .map_or_else(|| UNKNOWN.to_string(), |n| n.to_string_lossy().into_owned())
+        },
+    );
     t.push_str(&format!("Dokument: {doc}\n"));
     t.push_str("\nLetzte Schritte:\n");
     if input.steps.is_empty() {
@@ -81,10 +299,8 @@ pub fn report_text(input: &ReportInput) -> String {
         t.push('\n');
     }
     t.push_str("\nAblauf (Backtrace):\n");
-    t.push_str(&input.backtrace);
-    if !input.backtrace.ends_with('\n') {
-        t.push('\n');
-    }
+    t.push_str(&trim_backtrace(&input.backtrace));
+    t.push('\n');
     t
 }
 
@@ -93,13 +309,14 @@ pub fn report_file_name(t: chrono::NaiveDateTime) -> String {
     format!("absturz-{}.txt", t.format("%Y-%m-%d_%H-%M-%S"))
 }
 
-/// Schreibt den Bericht in `dir` (wird angelegt). Gibt es den Namen schon, kommt `_2`, `_3`, …
-/// dazu; eine vorhandene Datei wird nie überschrieben.
-pub fn write_report(dir: &Path, input: &ReportInput) -> std::io::Result<PathBuf> {
+/// Schreibt den Bericht in `dir` (wird angelegt), mit `mask` ohne Benutzerordner. Gibt es den
+/// Namen schon, kommt `_2`, `_3`, … dazu; eine vorhandene Datei wird nie überschrieben. Nennt
+/// der Bericht ein Dokument, steht dessen voller Pfad in der Begleitdatei ([`companion_path`]).
+pub fn write_report(dir: &Path, input: &ReportInput, mask: &UserMask) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let name = report_file_name(input.time);
     let stem = name.trim_end_matches(".txt");
-    let text = report_text(input);
+    let text = mask.apply(&report_text(input));
     for n in 1..=MAX_SUFFIX {
         let path = if n == 1 {
             dir.join(&name)
@@ -109,6 +326,9 @@ pub fn write_report(dir: &Path, input: &ReportInput) -> std::io::Result<PathBuf>
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut f) => {
                 f.write_all(text.as_bytes())?;
+                if let Some(doc) = &input.document {
+                    let _ = std::fs::write(companion_path(&path), doc.to_string_lossy().as_bytes());
+                }
                 return Ok(path);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -121,10 +341,16 @@ pub fn write_report(dir: &Path, input: &ReportInput) -> std::io::Result<PathBuf>
     ))
 }
 
-/// Setzt den Hook für das gemeinsame Protokoll; der bisherige Hook wird danach gerufen.
+/// Setzt den Hook für das gemeinsame Protokoll; der bisherige Hook wird danach gerufen. Den
+/// Benutzernamen ermittelt das hier einmal ([`UserMask::from_env`]), nicht erst im Hook.
 pub fn install_hook(dir: PathBuf) {
     let previous = std::panic::take_hook();
-    std::panic::set_hook(hook_with(dir, diag::global(), previous));
+    std::panic::set_hook(hook_with(
+        dir,
+        UserMask::from_env(),
+        diag::global(),
+        previous,
+    ));
 }
 
 thread_local! {
@@ -134,9 +360,9 @@ thread_local! {
 
 type Hook = Box<dyn Fn(&PanicHookInfo) + Send + Sync>;
 
-/// Baut den Hook: schreibt den Bericht nach `dir` (Protokoll aus `diag`) und ruft danach immer
-/// `previous`.
-pub fn hook_with(dir: PathBuf, diag: &'static Mutex<Diag>, previous: Hook) -> Hook {
+/// Baut den Hook: schreibt den Bericht nach `dir` (Protokoll aus `diag`, ohne Benutzerordner
+/// nach `mask`) und ruft danach immer `previous`.
+pub fn hook_with(dir: PathBuf, mask: UserMask, diag: &'static Mutex<Diag>, previous: Hook) -> Hook {
     Box::new(move |info| {
         let entered = IN_HOOK.try_with(|f| !f.replace(true)).unwrap_or(false);
         if !entered {
@@ -156,7 +382,7 @@ pub fn hook_with(dir: PathBuf, diag: &'static Mutex<Diag>, previous: Hook) -> Ho
         } else {
             let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let input = collect(info, diag);
-                let _ = write_report(&dir, &input);
+                let _ = write_report(&dir, &input, &mask);
             }));
         }
         if entered {
@@ -358,6 +584,7 @@ fn list_reports(dir: &Path) -> Vec<(PathBuf, SystemTime)> {
 pub fn start_run(data_dir: &Path, pid: u32) -> (Option<RunMarker>, StartFinding) {
     let crash_dir = data_dir.join(CRASH_DIR);
     cleanup_reports(&crash_dir, SystemTime::now());
+    cleanup_reports(&crash_dir.join(SENT_DIR), SystemTime::now());
     let stale = take_stale_markers(data_dir);
     let reports = list_reports(&crash_dir);
     let finding = match stale {
@@ -391,19 +618,42 @@ pub fn start_run(data_dir: &Path, pid: u32) -> (Option<RunMarker>, StartFinding)
 }
 
 /// Löscht Berichte in `dir`, die älter als [`KEEP_DAYS`] Tage sind, und danach alle bis auf die
-/// [`KEEP_MAX`] neuesten. Fehler (fehlender Ordner, gesperrte Datei, fremde Einträge) werden
-/// übergangen.
+/// [`KEEP_MAX`] neuesten, jeweils mit Begleitdatei; verwaiste Begleitdateien ebenso. Fehler
+/// (fehlender Ordner, gesperrte Datei, fremde Einträge) werden übergangen.
 pub fn cleanup_reports(dir: &Path, now: SystemTime) {
     let max_age = std::time::Duration::from_secs(KEEP_DAYS * 24 * 3600);
     let mut kept = 0usize;
     for (path, time) in list_reports(dir) {
         let too_old = now.duration_since(time).is_ok_and(|age| age > max_age);
         if too_old || kept >= KEEP_MAX {
-            let _ = std::fs::remove_file(&path);
+            let _ = remove_report(&path);
         } else {
             kept += 1;
         }
     }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let suffix = format!(".{COMPANION_EXT}");
+    for e in entries.flatten() {
+        let path = e.path();
+        let companion = e
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with(REPORT_PREFIX) && n.ends_with(&suffix));
+        if companion
+            && !path.with_extension("txt").exists()
+            && e.file_type().is_ok_and(|t| t.is_file())
+        {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+/// Löscht einen Bericht samt Begleitdatei; zurück kommt das Ergebnis für den Bericht selbst.
+pub fn remove_report(path: &Path) -> std::io::Result<()> {
+    let _ = std::fs::remove_file(companion_path(path));
+    std::fs::remove_file(path)
 }
 
 /// Wert der Zeile `<key>: …` aus einem Bericht (erste Fundstelle).

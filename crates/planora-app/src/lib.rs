@@ -70,6 +70,7 @@ pub mod update_install;
 pub mod versions_panel;
 pub mod viewport;
 pub mod workspace;
+pub mod zip_store;
 
 /// Laufende Version des Programms (aus `Cargo.toml`).
 pub const RUNNING_VERSION: &str = env!("CARGO_PKG_VERSION");
