@@ -16,6 +16,12 @@ pub const DEFAULT_PANEL_TRANSPARENCY: u8 = 40;
 /// Höchste Durchsichtigkeit der Panels in Prozent (mehr macht die Schrift unlesbar).
 pub const MAX_PANEL_TRANSPARENCY: u8 = 80;
 
+/// Wert von `theme` für das helle Design.
+pub const THEME_LIGHT: &str = "hell";
+
+/// Wert von `theme` für das dunkle Design (ohne Wahl gilt es ebenfalls).
+pub const THEME_DARK: &str = "dunkel";
+
 /// Begrenzt die Durchsichtigkeit auf 0 bis [`MAX_PANEL_TRANSPARENCY`].
 pub fn clamp_panel_transparency(percent: u8) -> u8 {
     percent.min(MAX_PANEL_TRANSPARENCY)
@@ -90,6 +96,15 @@ pub struct Config {
         deserialize_with = "lenient_pending_update"
     )]
     pub update_pending: Option<PendingUpdate>,
+    /// Gewähltes Design (Ansicht → Helles/Dunkles Design): [`THEME_LIGHT`] oder [`THEME_DARK`].
+    /// Keine Wahl, ein falscher Typ oder ein anderer Text → keine (es gilt das dunkle Design);
+    /// ohne Wahl wird nichts geschrieben.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_theme"
+    )]
+    pub theme: Option<String>,
 }
 
 /// Voreinstellung des Update-Kanals (Kennung).
@@ -196,6 +211,7 @@ impl Default for Config {
             last_update_check: None,
             skipped_version: None,
             update_pending: None,
+            theme: None,
         }
     }
 }
@@ -232,6 +248,15 @@ fn lenient_update_channel<'de, D: Deserializer<'de>>(
 /// Liest `update_check` aus jedem JSON-Wert: kein Wahrheitswert → an.
 fn lenient_update_check<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
     Ok(serde_json::Value::deserialize(d)?.as_bool().unwrap_or(true))
+}
+
+/// Liest `theme` aus jedem JSON-Wert: nur "hell" oder "dunkel" in genauer Schreibweise gilt.
+fn lenient_theme<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value
+        .as_str()
+        .filter(|t| *t == THEME_LIGHT || *t == THEME_DARK)
+        .map(String::from))
 }
 
 /// Liest Sekunden aus jedem JSON-Wert: nur ganze Zahlen ab 0, sonst keine.
@@ -342,6 +367,11 @@ fn lenient_favorites<'de, D: Deserializer<'de>>(
 }
 
 impl Config {
+    /// Ob das dunkle Design gilt (ohne Wahl: ja).
+    pub fn dark(&self) -> bool {
+        self.theme.as_deref() != Some(THEME_LIGHT)
+    }
+
     /// `%APPDATA%\PlanoraCAD\config.json`, sonst `$XDG_CONFIG_HOME/planora-cad/config.json`,
     /// sonst `~/.config/planora-cad/config.json`.
     pub fn config_path() -> PathBuf {

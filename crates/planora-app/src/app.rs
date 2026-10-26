@@ -2219,7 +2219,7 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
         (Icon::ThemeDark, "Dunkles Design")
     };
     if entry(ui, true, icons::button(icon, label)).clicked() {
-        ws.set_dark(!dark);
+        ws.set_theme(!dark);
         ui.close();
     }
     ui.separator();

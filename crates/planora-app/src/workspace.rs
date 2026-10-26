@@ -16,7 +16,9 @@ use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
 use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
 use planora_feature::Snapshot;
-use planora_project::config::{Config, PendingUpdate, WindowState, clamp_panel_transparency};
+use planora_project::config::{
+    Config, PendingUpdate, THEME_DARK, THEME_LIGHT, WindowState, clamp_panel_transparency,
+};
 use planora_project::docstore::{Autosave, DocStore, DocumentInfo, LockMode, peek, read_version};
 use planora_project::fsutil::validate_name;
 use planora_project::library::{DOCUMENT_SUFFIX, Library, NodePath};
@@ -570,6 +572,9 @@ pub struct Workspace {
     /// nächsten gelungenen Schreiben der Konfiguration alle mit geschrieben (wie
     /// `keys_pending`).
     pub update_settings_pending: bool,
+    /// Das Design in `config.theme` konnte noch nicht gespeichert werden; es wird beim nächsten
+    /// gelungenen Schreiben der Konfiguration mit geschrieben (wie `keys_pending`).
+    pub theme_pending: bool,
     /// Für „Letzten Befehl wiederholen“ (Leertaste): der zuletzt abgeschlossene Befehl, über
     /// alle Tabs.
     pub last_command: crate::commands::LastCommand,
@@ -623,6 +628,7 @@ impl Workspace {
             key_notes,
             keys_pending: false,
             update_settings_pending: false,
+            theme_pending: false,
             last_command: Default::default(),
             prompt: None,
             quit: false,
@@ -636,6 +642,9 @@ impl Workspace {
             untitled: 0,
         };
         w.new_tab();
+        if !w.config.dark() {
+            w.set_dark(false);
+        }
         w
     }
 
@@ -1307,6 +1316,7 @@ impl Workspace {
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
+        let theme = self.pending_theme();
         let mut full = None;
         let written = Config::update_at(&self.config_path, |c| {
             c.root = root;
@@ -1320,6 +1330,9 @@ impl Workspace {
             if let Some(u) = updates {
                 u.apply(c);
             }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1330,6 +1343,7 @@ impl Workspace {
                 self.panel_transparency_pending = false;
                 self.keys_pending = false;
                 self.update_settings_pending = false;
+                self.theme_pending = false;
                 true
             }
             Err(_) => {
@@ -1340,6 +1354,7 @@ impl Workspace {
                     self.panel_transparency_pending = false;
                     self.keys_pending = false;
                     self.update_settings_pending = false;
+                    self.theme_pending = false;
                 } else {
                     self.favorites_pending = pending;
                 }
@@ -1364,6 +1379,7 @@ impl Workspace {
         // Vorgemerkte Tasten und Update-Felder kommen mit (wie in `try_persist_config`).
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
+        let theme = self.pending_theme();
         let written = Config::update_at(&self.config_path, |c| {
             c.panel_transparency = percent;
             if let Some(k) = keys {
@@ -1372,10 +1388,55 @@ impl Workspace {
             if let Some(u) = updates {
                 u.apply(c);
             }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
         })
         .is_ok();
         self.panel_transparency_pending = !written;
         if written {
+            self.keys_pending = false;
+            self.update_settings_pending = false;
+            self.theme_pending = false;
+        }
+        written
+    }
+
+    /// Das Design, wenn es zum Schreiben vorgemerkt ist.
+    fn pending_theme(&self) -> Option<Option<String>> {
+        self.theme_pending.then(|| self.config.theme.clone())
+    }
+
+    /// Wählt das helle oder dunkle Design (Ansicht-Menü): wirkt sofort in allen Tabs und wird
+    /// gleich in [`Workspace::config_path`] gespeichert (Feld `theme`); `true`, wenn geschrieben
+    /// wurde. Sonst gilt die Wahl für die Sitzung und kommt beim nächsten gelungenen Schreiben
+    /// mit ([`Workspace::theme_pending`]); die Datei bleibt dann unangetastet. Anders als
+    /// [`Workspace::set_dark`] berührt dies die Konfiguration.
+    pub fn set_theme(&mut self, dark: bool) -> bool {
+        self.set_dark(dark);
+        let name = if dark { THEME_DARK } else { THEME_LIGHT };
+        self.config.theme = Some(name.to_string());
+        let transparency = self
+            .panel_transparency_pending
+            .then(|| self.panel_transparency());
+        let keys = self.pending_keys();
+        let updates = self.pending_update_settings();
+        let written = Config::update_at(&self.config_path, |c| {
+            c.theme = Some(name.to_string());
+            if let Some(t) = transparency {
+                c.panel_transparency = t;
+            }
+            if let Some(k) = keys {
+                c.keys = k;
+            }
+            if let Some(u) = updates {
+                u.apply(c);
+            }
+        })
+        .is_ok();
+        self.theme_pending = !written;
+        if written {
+            self.panel_transparency_pending = false;
             self.keys_pending = false;
             self.update_settings_pending = false;
         }
@@ -1482,6 +1543,7 @@ impl Workspace {
             .panel_transparency_pending
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
+        let theme = self.pending_theme();
         let written = Config::update_at(&self.config_path, |c| {
             if all {
                 current.apply(c);
@@ -1494,10 +1556,14 @@ impl Workspace {
             if let Some(k) = keys {
                 c.keys = k;
             }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
         })
         .is_ok();
         self.update_settings_pending = !written;
         if written {
+            self.theme_pending = false;
             self.panel_transparency_pending = false;
             self.keys_pending = false;
         }
@@ -1521,6 +1587,7 @@ impl Workspace {
             .panel_transparency_pending
             .then(|| self.panel_transparency());
         let updates = self.pending_update_settings();
+        let theme = self.pending_theme();
         let written = Config::update_at(&self.config_path, |c| {
             c.keys = keys;
             if let Some(t) = transparency {
@@ -1529,12 +1596,16 @@ impl Workspace {
             if let Some(u) = updates {
                 u.apply(c);
             }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
         })
         .is_ok();
         self.keys_pending = !written;
         if written {
             self.panel_transparency_pending = false;
             self.update_settings_pending = false;
+            self.theme_pending = false;
             self.key_notes.clear();
         }
         written
@@ -1586,6 +1657,7 @@ impl Workspace {
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
+        let theme = self.pending_theme();
         let written = Config::update_at(&self.config_path, |c| {
             full = apply_changes(&all, &mut c.favorites);
             if let Some(t) = transparency {
@@ -1597,6 +1669,9 @@ impl Workspace {
             if let Some(u) = updates {
                 u.apply(c);
             }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1605,6 +1680,7 @@ impl Workspace {
                 self.panel_transparency_pending = false;
                 self.keys_pending = false;
                 self.update_settings_pending = false;
+                self.theme_pending = false;
                 true
             }
             Err(_) => {
