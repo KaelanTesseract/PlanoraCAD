@@ -4,6 +4,10 @@ use planora_app::app::PlanoraApp;
 use planora_render::gpu::MSAA_SAMPLES;
 
 fn main() -> eframe::Result {
+    // Protokoll im Datenordner (neben der Konfiguration), noch vor allem anderen.
+    if let Some(data_dir) = planora_project::config::Config::config_path().parent() {
+        planora_app::diag::init_global(data_dir);
+    }
     // Von der alten Version nach dem Austausch gestartet (siehe `update_install`).
     // `args_os`: ein Argument, das kein gültiges Unicode ist (etwa ein Dateipfad), bricht nicht ab.
     let after_update = std::env::args_os()

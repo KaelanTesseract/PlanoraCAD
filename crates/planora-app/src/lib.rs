@@ -10,6 +10,7 @@ pub mod browser;
 pub mod cards;
 pub mod commands;
 pub mod create_dialog;
+pub mod diag;
 pub mod dialog;
 pub mod dimension_browser;
 pub mod dimension_dialog;

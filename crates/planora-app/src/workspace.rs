@@ -822,10 +822,14 @@ impl Workspace {
                 }
                 tab.based_on = Some(n);
                 tab.mark_clean();
+                crate::diag::info(&format!("Gespeichert: {} (Version {n})", tab.name));
                 Ok(SaveOutcome::Saved(n))
             }
             Err(ProjectError::NeedsBranch) => Ok(SaveOutcome::NeedsBranch),
-            Err(e) => Err(err(e)),
+            Err(e) => {
+                crate::diag::fehler(&format!("Speichern fehlgeschlagen: {}", tab.name));
+                Err(err(e))
+            }
         }
     }
 
@@ -874,6 +878,7 @@ impl Workspace {
         // ein Angebot des bisherigen Dokuments gilt nicht für das neue; seine Datei bleibt dort
         tab.pending_autosave = None;
         tab.keep_autosave = false;
+        crate::diag::info(&format!("Gespeichert: {} (Version 1)", tab.name));
         tab.mark_clean();
         self.library_revision += 1;
         self.content_revision += 1;
@@ -1022,6 +1027,7 @@ impl Workspace {
         tab.based_on = Some(v);
         tab.pending_autosave = autosave;
         tab.keep_autosave = keep_autosave;
+        crate::diag::info(&format!("Geöffnet: {} (Version {v})", display_name(path)));
         let i = self.push_tab(tab);
         // ein schon stehender Prompt (z. B. das Angebot eines anderen Dokuments) bleibt;
         // `refresh_prompts` bietet diese Sicherung danach an
