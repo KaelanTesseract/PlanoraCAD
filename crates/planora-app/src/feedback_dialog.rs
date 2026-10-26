@@ -49,8 +49,7 @@ pub const OPEN_BROWSER: &str = "Im Browser öffnen";
 /// Zweiter Knopf: das Webformular auf dennis-guse.de statt GitHub.
 pub const WEBFORM_BUTTON: &str = "Ohne GitHub-Konto senden";
 /// Hinweis zum zweiten Knopf.
-pub const WEBFORM_HINT: &str =
-    "Öffnet ein Formular auf dennis-guse.de. Dort kannst du auch Dateien anhängen.";
+pub const WEBFORM_HINT: &str = "Öffnet ein Formular auf dennis-guse.de. Dort kannst du Dateien anhängen: ein Bild vom Fenster, die Datei rueckmeldung.txt oder auf Wunsch dein Projekt als .pcad.zip.";
 /// Notweg, steht nach dem Senden.
 pub const MAIL_FALLBACK: &str = "Klappt beides nicht? Schreib an info@dennis-guse.de.";
 /// Schließt ohne etwas zu tun.
@@ -83,6 +82,17 @@ pub const PROJECT_CHECKBOX: &str = "Projektdatei in den Ordner legen";
 pub const PROJECT_TOO_BIG: &str = "Die Projektdatei ist zu groß zum Mitschicken.";
 /// Größer darf der Projektordner zum Mitschicken nicht sein (alle Dateien zusammen).
 pub const PROJECT_MAX_BYTES: u64 = 200 * 1024 * 1024;
+/// Größte Einzeldatei, die das Webformular annimmt. Die Seite nennt „25 MB“; ob sie 10^6 oder
+/// 2^20 Byte meint, ist offen, darum gilt die kleinere Zahl (so bleibt die Datei auf jeden Fall
+/// unter der Grenze).
+pub const UPLOAD_MAX_BYTES: u64 = 25_000_000;
+/// Größte Summe aller Dateien (`rueckmeldung.txt`, `bild.png`, ZIP), die das Formular annimmt
+/// („30 MB“, ebenfalls die kleinere Lesart). Höchstens 10 Dateien: hier gehen höchstens 3 mit.
+pub const TOTAL_MAX_BYTES: u64 = 30_000_000;
+/// Statt des Hinweises auf die ZIP, wenn sie fürs Formular zu groß ist (sie bleibt im Ordner).
+pub const PROJECT_TOO_BIG_FOR_FORM: &str = "Dein Projekt ist zu groß für das Formular (höchstens 25 MB). Schick die Meldung ohne Projekt; Dennis meldet sich, wenn er es braucht. Die Datei liegt trotzdem im Ordner.";
+/// Statt des Häkchens, wenn im Projekt keine Datei liegt.
+pub const PROJECT_EMPTY: &str = "Das Projekt ist leer und wird nicht mitgeschickt.";
 
 /// Vorschau zur Projektdatei: was mit dem Projekt geschieht; `name` ist der Name der Datei im
 /// Rückmeldungsordner (`<Name>.pcad.zip`, [`project_zip_name`]).
@@ -94,10 +104,47 @@ pub fn project_preview(name: &str) -> String {
 }
 
 /// Name der Projektdatei im Rückmeldungsordner zum Projektordner `project`: `Teil.pcad.zip`.
+/// Das Formular nimmt nur Buchstaben A-Z a-z, Ziffern, Punkt, Minus und Unterstrich: ä, ö, ü, ß
+/// werden zu ae, oe, ue, ss (groß: Ae, Oe, Ue, SS), alles andere zu „_“, mehrere „_“ zu einem,
+/// am Rand fallen „_“ und „.“ weg. Bleibt nichts übrig, heißt es `Projekt.pcad.zip`.
 pub fn project_zip_name(project: &Path) -> Option<String> {
-    project
-        .file_name()
-        .map(|n| format!("{}.zip", n.to_string_lossy()))
+    let full = project.file_name()?.to_string_lossy().into_owned();
+    let lower = full.to_lowercase();
+    let stem = if lower.ends_with(".pcad") {
+        &full[..full.len() - ".pcad".len()]
+    } else {
+        &full[..]
+    };
+    let mut out = String::new();
+    for c in stem.chars() {
+        match c {
+            'ä' => out.push_str("ae"),
+            'ö' => out.push_str("oe"),
+            'ü' => out.push_str("ue"),
+            'Ä' => out.push_str("Ae"),
+            'Ö' => out.push_str("Oe"),
+            'Ü' => out.push_str("Ue"),
+            'ß' => out.push_str("ss"),
+            'ẞ' => out.push_str("SS"),
+            c if c.is_ascii_alphanumeric() || c == '.' || c == '-' => out.push(c),
+            _ => {
+                if !out.ends_with('_') {
+                    out.push('_');
+                }
+            }
+        }
+    }
+    let mut clean = String::new();
+    for c in out.trim_matches(|c| c == '_' || c == '.').chars() {
+        if c == '_' && clean.ends_with('_') {
+            continue;
+        }
+        clean.push(c);
+    }
+    if clean.is_empty() {
+        clean.push_str("Projekt");
+    }
+    Some(format!("{clean}.pcad.zip"))
 }
 
 /// Kennung des Fensters.
@@ -181,6 +228,9 @@ pub struct Sent {
     pub picture: bool,
     /// Name der Projektdatei im Ordner (`<Name>.pcad.zip`), wenn sie geschrieben wurde.
     pub project: Option<String>,
+    /// Die ZIP liegt im Ordner, ist aber fürs Formular zu groß ([`PROJECT_TOO_BIG_FOR_FORM`]);
+    /// sie wird nicht zum Hochladen genannt.
+    pub project_too_big_for_form: bool,
 }
 
 /// Ein Bestandteil mit bereinigtem Text und Häkchen.
@@ -225,6 +275,12 @@ pub struct FeedbackDialog {
     project_too_big: bool,
     /// Größte Gesamtgröße des Projektordners zum Mitschicken ([`PROJECT_MAX_BYTES`]).
     project_limit: u64,
+    /// Größte ZIP, die zum Hochladen genannt wird ([`UPLOAD_MAX_BYTES`]).
+    upload_limit: u64,
+    /// Größte Summe der Dateien im Ordner, die zum Hochladen genannt wird ([`TOTAL_MAX_BYTES`]).
+    total_limit: u64,
+    /// Im genannten Projektordner liegt keine Datei ([`PROJECT_EMPTY`]).
+    project_empty: bool,
 }
 
 impl Default for FeedbackDialog {
@@ -247,6 +303,9 @@ impl Default for FeedbackDialog {
             project_dir: None,
             project_too_big: false,
             project_limit: PROJECT_MAX_BYTES,
+            upload_limit: UPLOAD_MAX_BYTES,
+            total_limit: TOTAL_MAX_BYTES,
+            project_empty: false,
         }
     }
 }
@@ -265,7 +324,10 @@ impl FeedbackDialog {
             .and_then(crate::crash::report_project)
             .filter(|d| is_project_dir(d));
         let project_too_big = named.as_deref().is_some_and(|d| exceeds(d, project_limit));
-        let project_dir = named.filter(|_| !project_too_big);
+        let project_empty = named
+            .as_deref()
+            .is_some_and(|d| !project_too_big && !zip_store::has_files(d));
+        let project_dir = named.filter(|_| !project_too_big && !project_empty);
         *self = FeedbackDialog {
             open: true,
             opened_count,
@@ -273,6 +335,9 @@ impl FeedbackDialog {
             project_dir,
             project_too_big,
             project_limit,
+            upload_limit: self.upload_limit,
+            total_limit: self.total_limit,
+            project_empty,
             context: Some(context),
             focus_description: true,
             collapse_reset: true,
@@ -359,6 +424,13 @@ impl FeedbackDialog {
     #[doc(hidden)]
     pub fn set_project_limit(&mut self, bytes: u64) {
         self.project_limit = bytes;
+    }
+
+    /// Grenzen fürs Hochladen: eine Datei, alle zusammen (für Tests kleiner).
+    #[doc(hidden)]
+    pub fn set_upload_limits(&mut self, upload: u64, total: u64) {
+        self.upload_limit = upload;
+        self.total_limit = total;
     }
 
     /// Name der mitgehenden Projektdatei `<Name>.pcad.zip` (angehakt und vorhanden).
@@ -463,6 +535,7 @@ impl FeedbackDialog {
         let mut folder = None;
         let mut file_failed = false;
         let mut project_written = None;
+        let mut too_big_for_form = false;
         if built.needs_file {
             let written = match self.context.as_ref() {
                 Some(c) => {
@@ -480,7 +553,16 @@ impl FeedbackDialog {
                 && let Some(project) = &self.project_dir
             {
                 match zip_store::write_project_zip(project, &dir.join(&name)) {
-                    Ok(()) => project_written = Some(name),
+                    Ok(()) => {
+                        if fits_form(dir, &name, self.upload_limit, self.total_limit) {
+                            project_written = Some(name);
+                        } else {
+                            // Die ZIP bleibt im Ordner, wird aber nicht zum Hochladen genannt.
+                            too_big_for_form = true;
+                            report.project_file = None;
+                            built = make(&report, with_file);
+                        }
+                    }
                     Err(e) => {
                         diag::warn(&format!("Projektdatei nicht geschrieben ({:?})", e.kind()));
                         // Ohne Datei auch kein Hinweis darauf in der Adresse.
@@ -528,6 +610,7 @@ impl FeedbackDialog {
             file_failed,
             picture,
             project: project_written,
+            project_too_big_for_form: too_big_for_form,
         });
     }
 }
@@ -587,6 +670,21 @@ fn url_report(report: &Report) -> Report {
         }
     }
     r
+}
+
+/// Passen die Dateien im Rückmeldungsordner `dir` zum Formular: die ZIP `zip` höchstens `upload`
+/// Byte, alle Dateien (`rueckmeldung.txt`, `bild.png`, ZIP) zusammen höchstens `total`? Was sich
+/// nicht messen lässt, zählt als zu groß.
+fn fits_form(dir: &Path, zip: &str, upload: u64, total: u64) -> bool {
+    let len = |n: &str| std::fs::metadata(dir.join(n)).map(|m| m.len());
+    let Ok(zip_len) = len(zip) else {
+        return false;
+    };
+    let others: u64 = [FEEDBACK_FILE, SHOT_FILE]
+        .iter()
+        .filter_map(|n| len(n).ok())
+        .sum();
+    zip_len <= upload && zip_len + others <= total
 }
 
 /// Ein Ordner, dessen Name auf `.pcad` endet (Groß- und Kleinschreibung egal).
@@ -772,6 +870,9 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
     if state.project_too_big {
         ui.add(egui::Label::new(PROJECT_TOO_BIG).wrap());
     }
+    if state.project_empty {
+        ui.add(egui::Label::new(PROJECT_EMPTY).wrap());
+    }
     let picture_now = state.is_checked(Part::Bild);
     if picture_now != picture_before {
         state.picture_toggled(picture_now);
@@ -831,6 +932,10 @@ fn after_send(
         }
         let files: Vec<&str> = files.iter().map(String::as_str).collect();
         ui.add(egui::Label::new(folder_hint(&files)).wrap());
+        if sent.project_too_big_for_form {
+            ui.add_space(SPACE_1);
+            ui.add(egui::Label::new(PROJECT_TOO_BIG_FOR_FORM).wrap());
+        }
     }
     ui.add_space(SPACE_3);
     ui.add(egui::Label::new(MAIL_FALLBACK).wrap());

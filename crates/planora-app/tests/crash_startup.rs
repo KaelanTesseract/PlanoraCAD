@@ -660,6 +660,147 @@ fn project_preview_has_no_double_spaces() {
 }
 
 #[test]
+fn zip_name_has_only_letters_digits_dot_minus_underscore() {
+    let name = |n: &str| feedback_dialog::project_zip_name(Path::new(n)).unwrap();
+    assert_eq!(name("Halter.pcad"), "Halter.pcad.zip");
+    assert_eq!(name("Halter Ü.pcad"), "Halter_Ue.pcad.zip");
+    assert_eq!(name("Äpfel ößen ẞ.pcad"), "Aepfel_oessen_SS.pcad.zip");
+    assert_eq!(name("Straße  Nr 5 (neu).pcad"), "Strasse_Nr_5_neu.pcad.zip");
+    assert_eq!(name("a-b_c.d.pcad"), "a-b_c.d.pcad.zip");
+    // Nur Sonderzeichen: Ersatzname.
+    assert_eq!(name("§§§ ???.pcad"), "Projekt.pcad.zip");
+    assert_eq!(name(".pcad"), "Projekt.pcad.zip");
+    for n in ["Halter Ü.pcad", "日本語.pcad", "x y.pcad"] {
+        assert!(
+            name(n)
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')),
+            "{n}"
+        );
+    }
+}
+
+#[test]
+fn upload_limits_follow_the_web_form() {
+    assert_eq!(feedback_dialog::UPLOAD_MAX_BYTES, 25_000_000);
+    assert_eq!(feedback_dialog::TOTAL_MAX_BYTES, 30_000_000);
+    assert_eq!(feedback_dialog::PROJECT_MAX_BYTES, 200 * 1024 * 1024);
+    for t in [
+        feedback_dialog::PROJECT_TOO_BIG_FOR_FORM,
+        feedback_dialog::PROJECT_EMPTY,
+    ] {
+        assert!(!t.contains("  "), "{t}");
+    }
+    assert!(feedback_dialog::PROJECT_TOO_BIG_FOR_FORM.contains("25 MB"));
+    assert_eq!(
+        feedback_dialog::PROJECT_EMPTY,
+        "Das Projekt ist leer und wird nicht mitgeschickt."
+    );
+}
+
+/// Schickt mit angehaktem Projekt und diesen Grenzen (Hochladen, zusammen).
+fn send_with_limits(prefix: &str, upload: u64, total: u64) -> (Rig, PathBuf) {
+    let mut r = Rig::with(prefix, SIZE, |d| {
+        let doc = project(d);
+        StartFinding::Crashed(vec![report(d, "0.2.0-dev.1", Some(doc))])
+    });
+    r.app.feedback_mut().set_upload_limits(upload, total);
+    r.click(AS_FEEDBACK);
+    r.type_text("Beim Extrudieren ist es abgestürzt.");
+    r.click(PROJECT_CHECKBOX);
+    r.click(OPEN_BROWSER);
+    let bundle = r.opened.lock().unwrap().first().cloned().expect("Ordner");
+    (r, bundle)
+}
+
+fn assert_project_not_offered_for_upload(r: &mut Rig, bundle: &Path) {
+    // Die Datei bleibt im Ordner, wird aber nicht zum Hochladen genannt.
+    assert!(bundle.join("Halter.pcad.zip").is_file());
+    assert!(bundle.join(FEEDBACK_FILE).is_file());
+    assert!(
+        r.sees(&feedback_dialog::folder_hint(&[FEEDBACK_FILE])),
+        "{:?}",
+        r.texts()
+    );
+    assert!(
+        r.sees(feedback_dialog::PROJECT_TOO_BIG_FOR_FORM),
+        "{:?}",
+        r.texts()
+    );
+    let sent = r.app.feedback_mut().sent.clone().unwrap();
+    assert_eq!(sent.project, None);
+    assert!(sent.project_too_big_for_form);
+    assert!(
+        !sent.url.contains(&percent_encode("Halter.pcad.zip")),
+        "{}",
+        sent.url
+    );
+    assert!(
+        sent.url
+            .contains(&percent_encode("Datei hier anhängen: rueckmeldung.txt")),
+        "{}",
+        sent.url
+    );
+}
+
+#[test]
+fn zip_over_the_upload_limit_stays_in_the_folder_but_is_not_offered() {
+    let (mut r, bundle) = send_with_limits("planora-rueckfrage-zip-gross", 100, u64::MAX);
+    assert_project_not_offered_for_upload(&mut r, &bundle);
+}
+
+#[test]
+fn zip_within_the_limits_is_offered() {
+    let (mut r, bundle) = send_with_limits("planora-rueckfrage-zip-passt", 1_000_000, 2_000_000);
+    assert!(bundle.join("Halter.pcad.zip").is_file());
+    let sent = r.app.feedback_mut().sent.clone().unwrap();
+    assert_eq!(sent.project.as_deref(), Some("Halter.pcad.zip"));
+    assert!(!sent.project_too_big_for_form);
+    assert!(!r.sees(feedback_dialog::PROJECT_TOO_BIG_FOR_FORM));
+}
+
+#[test]
+fn files_over_the_total_limit_do_not_offer_the_project() {
+    let (_r, bundle) = send_with_limits("planora-rueckfrage-zip-mass", u64::MAX, u64::MAX);
+    let zip_len = std::fs::metadata(bundle.join("Halter.pcad.zip"))
+        .unwrap()
+        .len();
+    // Die ZIP allein passt, zusammen mit rueckmeldung.txt nicht.
+    let (mut r, bundle) = send_with_limits("planora-rueckfrage-zip-summe", zip_len, zip_len + 1);
+    assert_project_not_offered_for_upload(&mut r, &bundle);
+}
+
+#[test]
+fn empty_project_is_not_packed_and_says_so() {
+    for (prefix, only_autosave) in [
+        ("planora-rueckfrage-leer-ordner", false),
+        ("planora-rueckfrage-leer-autosave", true),
+    ] {
+        let mut r = Rig::with(prefix, SIZE, |d| {
+            let doc = d.join("Projekte").join("Leer.pcad");
+            std::fs::create_dir_all(&doc).unwrap();
+            if only_autosave {
+                std::fs::write(doc.join(".autosave.json"), "ungespeichert").unwrap();
+            }
+            StartFinding::Crashed(vec![report(d, "0.2.0-dev.1", Some(doc))])
+        });
+        r.click(AS_FEEDBACK);
+        assert!(
+            !r.app
+                .feedback_mut()
+                .shown_parts()
+                .contains(&Part::Projektdatei),
+            "{prefix}"
+        );
+        assert!(r.sees(feedback_dialog::PROJECT_EMPTY), "{:?}", r.texts());
+        r.type_text("Beim Extrudieren ist es abgestürzt.");
+        r.click(OPEN_BROWSER);
+        let bundle = r.opened.lock().unwrap().first().cloned().unwrap();
+        assert!(!bundle.join("Leer.pcad.zip").exists(), "{prefix}");
+    }
+}
+
+#[test]
 fn project_is_only_offered_for_a_pcad_folder() {
     let mut r = Rig::with("planora-rueckfrage-kein-pcad", SIZE, |d| {
         let doc = d.join("Projekte").join("Halter");

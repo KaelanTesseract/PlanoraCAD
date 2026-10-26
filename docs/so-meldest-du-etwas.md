@@ -26,6 +26,10 @@ Du brauchst kein Konto, um etwas zu melden.
 
 Bilder und Dateien hängst du im Formular an. Wenn eine Datei nötig ist (zum Beispiel ein Bild oder ein langer Text), öffnet das Programm zusätzlich einen Ordner. Lad die Dateien aus diesem Ordner im Formular hoch, im Feld für Dateien.
 
+Das Formular nimmt diese Dateien an: Bilder (PNG, JPG), Textdateien (`.txt`, `.log`) und ZIP-Dateien (`.zip`). Eine Datei darf höchstens 25 MB groß sein, alle zusammen höchstens 30 MB, und es sind höchstens 10 Dateien. Ein Bild vom Fenster, die Datei `rueckmeldung.txt` oder auf Wunsch dein Projekt als `.pcad.zip` reichen meistens.
+
+Dein Projekt legt das Programm als ZIP in den Ordner (nur nach einem Absturz und nur, wenn du das Häkchen setzt). Ist es zu groß für das Formular oder leer, nennt das Programm es nicht zum Hochladen. Schick die Meldung dann ohne Projekt. Dennis meldet sich, wenn er es braucht.
+
 Es geht nichts weg, bevor du im Formular auf „Absenden“ klickst.
 
 Klappt das nicht, zum Beispiel weil sich kein Browser öffnet, schreib eine Mail an `info@dennis-guse.de`.

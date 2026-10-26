@@ -209,3 +209,16 @@ fn dos_time(t: Option<std::time::SystemTime>) -> (u16, u16) {
     let date = (((year - 1980) as u16) << 9) | ((local.month() as u16) << 5) | local.day() as u16;
     (time, date)
 }
+
+/// Liegt im Projektordner mindestens eine Datei (ohne `.autosave.json`, auch in Unterordnern)?
+/// Sonst bekäme die ZIP nur leere Ordner-Einträge, und die Seite lehnt ein leeres Projekt ab.
+pub fn has_files(project: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(project) else {
+        return false;
+    };
+    entries.flatten().any(|e| match e.file_type() {
+        Ok(k) if k.is_dir() => has_files(&e.path()),
+        Ok(k) if k.is_file() => e.file_name().to_string_lossy() != AUTOSAVE_FILE,
+        _ => false,
+    })
+}
