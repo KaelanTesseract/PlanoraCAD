@@ -6,7 +6,7 @@ Schau vorher kurz bei den [häufigen Problemen](haeufige-probleme.md). Vielleich
 
 ## Mit GitHub-Konto
 
-**Ab einer späteren Version des Programms, aus dem Programm:** Wähle „Hilfe“ und dann „Rückmeldung …“ (oder drücke Strg+Umschalt+R). Wähle, ob es ein Fehler, ein Wunsch oder eine Frage ist, und schreib zwei Sätze. Das Fenster zeigt dir genau den Text, der später in der Meldung steht. Du entscheidest mit Häkchen, was dazukommt. Danach öffnet sich dein Browser mit einem ausgefüllten Formular. Erst wenn du dort auf den grünen Knopf zum Absenden klickst (englisch „Submit new issue“), geht die Meldung ab.
+**Aus dem Programm:** Wähle „Hilfe“ und dann „Rückmeldung …“ (oder drücke Strg+Umschalt+R). Wähle, ob es ein Fehler, ein Wunsch oder eine Frage ist, und schreib zwei Sätze. Das Fenster zeigt dir genau den Text, der später in der Meldung steht. Du entscheidest mit Häkchen, was dazukommt. Danach öffnet sich dein Browser mit einem ausgefüllten Formular. Erst wenn du dort auf den grünen Knopf zum Absenden klickst (englisch „Submit new issue“), geht die Meldung ab.
 
 **Direkt auf GitHub:** Geh auf die Seite [Neue Meldung](https://github.com/KaelanTesseract/PlanoraCAD/issues/new/choose) und wähle ein Formular:
 
@@ -21,7 +21,7 @@ Dieser Weg kommt mit einer späteren Version des Programms. Hier steht dann, wie
 
 ## Wer sieht meine Meldung?
 
-Jede Meldung ist öffentlich. Jeder im Internet kann sie lesen, auch deinen GitHub-Namen. Schreib deshalb keine Passwörter, keine Mailadressen und nichts Privates hinein. Ab einer späteren Version fügt das Programm Angaben ein (Version, System, Grafikkarte, letzte Schritte). Du siehst sie vorher und kannst sie abwählen.
+Jede Meldung ist öffentlich. Jeder im Internet kann sie lesen, auch deinen GitHub-Namen. Schreib deshalb keine Passwörter, keine Mailadressen und nichts Privates hinein. Wenn das Programm Angaben einfügt (Version, System, Grafikkarte, letzte Schritte), siehst du sie vorher und kannst sie abwählen.
 
 Verantwortlich für diese Seite ist Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst. Kontakt: info@dennis-guse.de.
 
@@ -29,7 +29,7 @@ Verantwortlich für diese Seite ist Dennis Guse, Fischbeker Str. 2a, 23869 Elmen
 
 Zieh die Bilddatei einfach in das große Textfeld im Formular. Sie wird hochgeladen und als Bild eingefügt. Ein Bild von der Stelle, wo es hakt, erklärt oft mehr als viele Worte. Achte darauf, dass auf dem Bild nichts Privates zu sehen ist.
 
-Ab einer späteren Version legt dir „Rückmeldung …“ im Programm das Bild in einen Ordner und öffnet ihn. Zieh die Datei von dort ins Formular.
+Aus dem Programm legt dir „Rückmeldung …“ das Bild in einen Ordner und öffnet ihn. Zieh die Datei von dort ins Formular.
 
 ## Wünsche mit 👍 gewichten
 
