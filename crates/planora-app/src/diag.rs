@@ -4,6 +4,9 @@
 //! Ins Protokoll kommen nur kurze Hinweise (Start, Speichern, Öffnen, Fehler), nie der Inhalt
 //! eines Projekts. Lässt sich die Datei nicht anlegen oder beschreiben, bleibt das Protokoll im
 //! Speicher und das Programm läuft weiter.
+//!
+//! Wichtig: Meldungen an `diag::*` dürfen keine rohen `io::Error` oder Pfade enthalten. Die
+//! Bereinigung vor dem Versenden (Task 6) greift nur auf feste Muster.
 
 use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
@@ -21,6 +24,10 @@ pub const LOG_FILES: usize = 3;
 pub const LOG_DIR: &str = "logs";
 /// Name der aktuellen Protokolldatei.
 pub const LOG_NAME: &str = "planora.log";
+/// Längste Zeile (Zeichen, ohne Zeitangabe).
+const MAX_LINE_CHARS: usize = 2000;
+/// Nach einem Schreibfehler so viele Zeilen überspringen, bevor es erneut versucht wird.
+const RETRY_AFTER: u32 = 50;
 
 /// Wichtigkeit einer Zeile. `Detail` erscheint nur im ausführlichen Protokoll.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,7 +53,10 @@ impl Level {
 pub struct Diag {
     ring: VecDeque<String>,
     dir: Option<PathBuf>,
-    size: u64,
+    /// Zeilen, die nicht in die Datei kamen (Schreibfehler); gehen beim nächsten Versuch nach.
+    pending: Vec<String>,
+    /// So viele Zeilen noch überspringen, bevor erneut geschrieben wird.
+    skip: u32,
     verbose: bool,
     file_error: bool,
 }
@@ -57,7 +67,8 @@ impl Diag {
         Diag {
             ring: VecDeque::new(),
             dir: None,
-            size: 0,
+            pending: Vec::new(),
+            skip: 0,
             verbose: false,
             file_error: false,
         }
@@ -70,7 +81,6 @@ impl Diag {
         let logs = dir.join(LOG_DIR);
         match fs::create_dir_all(&logs) {
             Ok(()) => {
-                d.size = fs::metadata(logs.join(LOG_NAME)).map_or(0, |m| m.len());
                 d.dir = Some(logs);
             }
             Err(_) => d.file_error = true,
@@ -78,44 +88,58 @@ impl Diag {
         d
     }
 
-    /// Schreibt eine Zeile `JJJJ-MM-TT hh:mm:ss STUFE Text` (Ortszeit).
+    /// Schreibt eine Zeile `JJJJ-MM-TTThh:mm:ssZ STUFE Text` (UTC). Steuerzeichen werden zu
+    /// Leerzeichen, sehr lange Texte gekürzt.
     pub fn log(&mut self, level: Level, msg: &str) {
         if level == Level::Detail && !self.verbose {
             return;
         }
-        // Zeilenumbrüche im Text würden eine Zeile in mehrere teilen.
-        let msg = msg.replace(['\r', '\n'], " ");
         let line = format!(
             "{} {} {}",
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ"),
             level.label(),
-            msg
+            clean(msg)
         );
         if self.ring.len() >= RING_LINES {
             self.ring.pop_front();
         }
         self.ring.push_back(line.clone());
-        self.write_file(&line);
+        self.write_file(line);
     }
 
-    fn write_file(&mut self, line: &str) {
+    fn write_file(&mut self, line: String) {
         let Some(dir) = self.dir.clone() else { return };
-        let bytes = line.len() as u64 + 1;
-        if self.size > 0 && self.size + bytes > MAX_LOG_BYTES {
-            rotate(&dir);
-            self.size = 0;
+        self.pending.push(line);
+        if self.pending.len() > RING_LINES {
+            self.pending.remove(0);
+        }
+        if self.skip > 0 {
+            self.skip -= 1;
+            return;
+        }
+        let mut data = self.pending.join("\n");
+        data.push('\n');
+        let path = dir.join(LOG_NAME);
+        // Die Größe immer aus der Datei lesen: eine zweite Programminstanz kann sie verändert haben.
+        let size = fs::metadata(&path).map_or(0, |m| m.len());
+        let mut rotate_failed = false;
+        if size > 0 && size + data.len() as u64 > MAX_LOG_BYTES {
+            rotate_failed = !rotate(&dir);
         }
         let result = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(dir.join(LOG_NAME))
-            .and_then(|mut f| writeln!(f, "{line}"));
+            .open(&path)
+            .and_then(|mut f| f.write_all(data.as_bytes()));
         match result {
-            Ok(()) => self.size += bytes,
+            Ok(()) => {
+                self.pending.clear();
+                self.file_error = rotate_failed;
+            }
             Err(_) => {
-                // Ab hier nur noch im Speicher.
+                // Später erneut versuchen; die Zeilen bleiben vorgemerkt.
                 self.file_error = true;
-                self.dir = None;
+                self.skip = RETRY_AFTER;
             }
         }
     }
@@ -137,8 +161,9 @@ impl Diag {
     }
 }
 
-/// `planora.log` → `.1.log` → `.2.log`; die älteste Datei fällt weg.
-fn rotate(dir: &Path) {
+/// `planora.log` → `.1.log` → `.2.log`; die älteste Datei fällt weg. Wahr, wenn die aktuelle
+/// Datei erfolgreich weggeschoben wurde.
+fn rotate(dir: &Path) -> bool {
     let name = |i: usize| {
         if i == 0 {
             dir.join(LOG_NAME)
@@ -147,9 +172,34 @@ fn rotate(dir: &Path) {
         }
     };
     let _ = fs::remove_file(name(LOG_FILES - 1));
+    let mut moved = true;
     for i in (0..LOG_FILES - 1).rev() {
-        let _ = fs::rename(name(i), name(i + 1));
+        let r = fs::rename(name(i), name(i + 1));
+        if i == 0 {
+            moved = r.is_ok();
+        }
     }
+    moved
+}
+
+/// Steuerzeichen (auch Zeilentrenner) zu Leerzeichen; auf [`MAX_LINE_CHARS`] Zeichen gekürzt.
+fn clean(msg: &str) -> String {
+    let mut out: String = msg
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{85}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .take(MAX_LINE_CHARS + 1)
+        .collect();
+    if out.chars().count() > MAX_LINE_CHARS {
+        out = out.chars().take(MAX_LINE_CHARS - 1).collect();
+        out.push('…');
+    }
+    out
 }
 
 static GLOBAL: OnceLock<Mutex<Diag>> = OnceLock::new();
@@ -168,20 +218,24 @@ fn lock() -> MutexGuard<'static, Diag> {
 
 /// Richtet das gemeinsame Protokoll mit Datei in `data_dir/logs` ein (einmal, beim Start).
 pub fn init_global(data_dir: &Path) {
-    let fresh = Diag::with_dir(data_dir);
-    if GLOBAL.set(Mutex::new(fresh)).is_err() {
-        // schon benutzt: Einstellungen übernehmen, Zeilen behalten
-        let mut g = lock();
-        let old = std::mem::replace(&mut *g, Diag::with_dir(data_dir));
-        let verbose = old.verbose;
-        g.verbose = verbose;
-        for l in old.ring {
-            if g.ring.len() >= RING_LINES {
-                g.ring.pop_front();
-            }
-            g.ring.push_back(l);
-        }
+    let mut g = lock();
+    let logs = data_dir.join(LOG_DIR);
+    if g.dir.as_deref() == Some(logs.as_path()) {
+        // schon eingerichtet: nichts doppeln
+        return;
     }
+    let mut fresh = Diag::with_dir(data_dir);
+    fresh.verbose = g.verbose;
+    // Was bisher nur im Speicher stand, kommt in die Datei und bleibt im Ring.
+    let old: Vec<String> = std::mem::take(&mut g.ring).into();
+    for line in old {
+        if fresh.ring.len() >= RING_LINES {
+            fresh.ring.pop_front();
+        }
+        fresh.ring.push_back(line.clone());
+        fresh.write_file(line);
+    }
+    *g = fresh;
 }
 
 pub fn info(msg: &str) {

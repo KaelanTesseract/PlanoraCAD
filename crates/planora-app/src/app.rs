@@ -153,6 +153,7 @@ impl PlanoraApp {
     /// Das Programm. `after_update`: gestartet mit [`update_install::AFTER_UPDATE_ARG`] (von der
     /// alten Version nach dem Austausch).
     pub fn new(cc: &eframe::CreationContext<'_>, after_update: bool) -> Self {
+        crate::diag::info(&format!("Start PlanoraCAD {}", crate::RUNNING_VERSION));
         let render_state = cc
             .wgpu_render_state
             .as_ref()
@@ -161,7 +162,6 @@ impl PlanoraApp {
         Self::setup_context(&cc.egui_ctx);
         GpuScene::install(render_state);
         let running = crate::running_version();
-        crate::diag::info(&format!("Start PlanoraCAD {}", crate::RUNNING_VERSION));
         let exe_path = std::env::current_exe().ok();
 
         let config = planora_project::config::Config::load();

@@ -22,16 +22,17 @@ fn logs(dir: &std::path::Path) -> PathBuf {
 #[test]
 fn ring_keeps_the_last_500_lines_in_order() {
     let mut d = Diag::with_dir(&temp("ring"));
-    for i in 0..(RING_LINES + 20) {
+    assert_eq!(RING_LINES, 500);
+    for i in 0..520 {
         d.log(Level::Info, &format!("Zeile {i}"));
     }
     let all = d.recent_lines(10_000);
-    assert_eq!(all.len(), RING_LINES);
+    assert_eq!(all.len(), 500);
     assert!(all[0].ends_with("Zeile 20"));
-    assert!(all[RING_LINES - 1].ends_with(&format!("Zeile {}", RING_LINES + 19)));
+    assert!(all[499].ends_with("Zeile 519"));
     let last3 = d.recent_lines(3);
     assert_eq!(last3.len(), 3);
-    assert!(last3[2].ends_with(&format!("Zeile {}", RING_LINES + 19)));
+    assert!(last3[2].ends_with("Zeile 519"));
 }
 
 #[test]
@@ -44,14 +45,11 @@ fn lines_go_to_the_file_with_level_and_time() {
     let text = std::fs::read_to_string(logs(&dir).join(LOG_NAME)).unwrap();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 3);
-    // JJJJ-MM-TT hh:mm:ss STUFE Text
-    let b = lines[0].as_bytes();
-    assert!(lines[0].len() > 20);
-    assert_eq!(
-        (b[4], b[7], b[10], b[13], b[16], b[19]),
-        (b'-', b'-', b' ', b':', b':', b' ')
-    );
-    assert!(lines[0].ends_with(" INFO Hallo"));
+    // JJJJ-MM-TTThh:mm:ssZ STUFE Text (UTC)
+    let stamp = &lines[0][..20];
+    let t = chrono::NaiveDateTime::parse_from_str(stamp, "%Y-%m-%dT%H:%M:%SZ").unwrap();
+    assert!(t.and_utc().timestamp() > 1_700_000_000);
+    assert!(lines[0].ends_with("Z INFO Hallo"));
     assert!(lines[1].ends_with(" WARN Achtung"));
     assert!(lines[2].ends_with(" FEHLER Kaputt"));
     assert!(!d.file_error());
@@ -151,4 +149,101 @@ fn save_and_open_write_one_line_without_content() {
     assert!(all.contains("Geöffnet"), "{all}");
     assert!(all.contains("Mein Dokument"), "{all}");
     assert!(!all.contains("Geheimteil"));
+}
+
+#[test]
+fn control_characters_become_spaces() {
+    let mut d = Diag::in_memory();
+    d.log(Level::Info, "a\r\nb\x1b[31m\tc\u{2028}d\u{2029}e\u{85}f");
+    let lines = d.recent_lines(5);
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].ends_with(" INFO a  b [31m c d e f"),
+        "{:?}",
+        lines[0]
+    );
+    assert!(!lines[0].chars().any(|c| c.is_control()));
+}
+
+#[test]
+fn long_lines_are_cut_at_a_char_boundary() {
+    let mut d = Diag::in_memory();
+    d.log(Level::Info, &"x".repeat(5000));
+    d.log(Level::Info, &"ä".repeat(3000));
+    // Mehrbyte-Zeichen genau an der Grenze: kein Panik, gültiger Text
+    d.log(Level::Info, &format!("{}€€€", "x".repeat(1990)));
+    let lines = d.recent_lines(5);
+    for l in &lines {
+        let text = l.splitn(3, ' ').nth(2).unwrap();
+        assert!(text.chars().count() <= 2000, "{}", text.chars().count());
+    }
+    let first = lines[0].splitn(3, ' ').nth(2).unwrap();
+    assert_eq!(first.chars().count(), 2000);
+    assert!(first.ends_with('…'));
+    assert!(lines[1].ends_with('…'));
+}
+
+#[test]
+fn rotation_survives_a_foreign_growth_of_the_file() {
+    let dir = temp("foreign");
+    let mut d = Diag::with_dir(&dir);
+    d.log(Level::Info, "eins");
+    // eine zweite Programminstanz hat die Datei inzwischen verlängert
+    let path = logs(&dir).join(LOG_NAME);
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        f.write_all("y".repeat(1_100_000).as_bytes()).unwrap();
+        f.write_all(b"\n").unwrap();
+    }
+    d.log(Level::Info, "zwei");
+    let old = std::fs::read_to_string(logs(&dir).join("planora.1.log")).unwrap();
+    let new = std::fs::read_to_string(&path).unwrap();
+    assert!(old.contains("eins"));
+    assert!(new.contains("zwei") && new.len() < 1000);
+    assert!(!old.contains("zwei"));
+}
+
+#[test]
+fn a_write_error_is_not_permanent() {
+    let dir = temp("retry");
+    let mut d = Diag::with_dir(&dir);
+    d.log(Level::Info, "davor");
+    let path = logs(&dir).join(LOG_NAME);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap(); // Schreiben scheitert
+    d.log(Level::Info, "verpasst");
+    assert!(d.file_error());
+    d.log(Level::Info, "im Speicher");
+    std::fs::remove_dir(&path).unwrap();
+    for i in 0..60 {
+        d.log(Level::Info, &format!("danach {i}"));
+    }
+    assert!(!d.file_error());
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("danach 59"));
+    // was in der Zwischenzeit nicht geschrieben werden konnte, kommt nach
+    assert!(text.contains("verpasst") && text.contains("im Speicher"));
+}
+
+#[test]
+fn init_global_twice_keeps_lines_without_doubling() {
+    let dir = temp("init");
+    diag::info("vor dem Einrichten");
+    diag::init_global(&dir);
+    diag::init_global(&dir);
+    diag::info("danach");
+    let text = std::fs::read_to_string(logs(&dir).join(LOG_NAME)).unwrap();
+    assert_eq!(text.matches("vor dem Einrichten").count(), 1);
+    assert_eq!(text.matches(" danach").count(), 1);
+    let ring = diag::recent_lines(500);
+    assert_eq!(
+        ring.iter()
+            .filter(|l| l.ends_with("vor dem Einrichten"))
+            .count(),
+        1
+    );
 }
