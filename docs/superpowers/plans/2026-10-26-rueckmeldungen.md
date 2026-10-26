@@ -187,6 +187,7 @@
 - [ ] **Step 3: Implementieren.** Über-Dialog-Tests, die den Eintrag im Datei-Menü erwarten, auf das Hilfe-Menü umstellen.
 - [ ] **Step 4:** `cargo test -p planora-app` (voll), fmt, clippy.
 - [ ] **Step 5: Commit** `feat(rueckmeldung): Fenster, Menü Hilfe und Tastenkürzel`.
+- [ ] **Step 6: Formulartexte zurückstellen (Nachtrag aus Task-1-Review).** Weil das Fenster in Etappe 1 noch fehlte, sagen die Texte „später“. Jetzt wieder auf den Ist-Zustand ändern: `.github/ISSUE_TEMPLATE/fehler.yml` (markdown-Hinweis, Zeile 9: „Die Felder Version bis Bild füllt das Programm aus …“) und alle Feldbeschreibungen „Wird später vom Programm ausgefüllt; sonst bitte selbst eintragen oder leer lassen.“ (`fehler.yml` bei `version`, `system`, `grafik`, `schritte`, `protokoll`; `wunsch.yml` bei `angaben`) zurück auf „Füllt das Programm aus.“; `docs/so-meldest-du-etwas.md`: die Vorbehalte „Ab einer späteren Version …“ in den Absätzen „Aus dem Programm“, „Wer sieht meine Meldung?“ und „Bilder anhängen“ streichen. Adresse: Bereich nicht als Parameter, sondern als Textanfang „Bereich: …“ (Spec, Abschnitt Formulare), Ids `grafik`/`schritte`.
 
 ### Task 8: Bild vom Fenster
 

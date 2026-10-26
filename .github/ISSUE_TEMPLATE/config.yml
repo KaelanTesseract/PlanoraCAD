@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Häufige Probleme
+    url: https://github.com/KaelanTesseract/PlanoraCAD/blob/master/docs/haeufige-probleme.md
+    about: Warnung von Windows, Grafikprobleme, Update klappt nicht. Vielleicht steht dort schon die Lösung.
+  - name: So meldest du etwas
+    url: https://github.com/KaelanTesseract/PlanoraCAD/blob/master/docs/so-meldest-du-etwas.md
+    about: Eine kurze Anleitung, mit und ohne GitHub-Konto.

@@ -1,0 +1,50 @@
+name: Wunsch oder Frage
+description: "Du wünschst dir etwas, oder du hast eine Frage. Bei einer Frage schreib \"Frage: \" an den Anfang des Titels."
+title: "Wunsch: "
+labels: ["idee"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Zeig mit 👍 unter einem Wunsch, dass du ihn auch willst.
+        Bitte schreib keine Passwörter und keine privaten Angaben in die Meldung. Diese Seite ist öffentlich.
+  - type: textarea
+    id: wunsch
+    attributes:
+      label: Was möchtest du tun können?
+      description: Bei einer Frage schreib sie hier hin.
+    validations:
+      required: true
+  - type: textarea
+    id: heute
+    attributes:
+      label: Wie machst du es heute?
+      description: Zum Beispiel in einem anderen Programm oder von Hand. Wenn du es gar nicht machst, schreib das.
+    validations:
+      required: true
+  - type: dropdown
+    id: wichtig
+    attributes:
+      label: Wie wichtig ist es dir?
+      options:
+        - Wäre schön
+        - Wichtig
+        - Ohne geht es kaum
+  - type: dropdown
+    id: bereich
+    attributes:
+      label: Wo gehört es hin?
+      options:
+        - Skizze
+        - 3D
+        - Export
+        - Zeichnung
+        - Tastenkürzel
+        - Anderes
+    validations:
+      required: true
+  - type: textarea
+    id: angaben
+    attributes:
+      label: Angaben
+      description: Wird später vom Programm ausgefüllt; sonst bitte selbst eintragen oder leer lassen.
