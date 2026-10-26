@@ -7,6 +7,7 @@ pub mod balloon_tool;
 pub mod blend_dialog;
 pub mod boolean_dialog;
 pub mod browser;
+pub mod build_info;
 pub mod cards;
 pub mod commands;
 pub mod create_dialog;

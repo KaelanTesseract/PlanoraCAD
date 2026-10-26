@@ -161,6 +161,12 @@ impl PlanoraApp {
         cc.egui_ctx.set_fonts(fonts::definitions());
         Self::setup_context(&cc.egui_ctx);
         GpuScene::install(render_state);
+        crate::build_info::set_gpu(crate::build_info::gpu_from_adapter(
+            &render_state.adapter.get_info(),
+        ));
+        let bi = crate::build_info::build_info();
+        crate::diag::info(&bi.system_line().replacen(':', "", 1));
+        crate::diag::info(&format!("Grafikkarte {}", bi.gpu_line()));
         let running = crate::running_version();
         let exe_path = std::env::current_exe().ok();
 

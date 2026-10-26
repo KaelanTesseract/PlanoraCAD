@@ -2610,6 +2610,7 @@ dependencies = [
  "png",
  "serde_json",
  "skrifa",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

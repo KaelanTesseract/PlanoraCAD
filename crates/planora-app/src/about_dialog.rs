@@ -36,6 +36,14 @@ pub fn version_line_for(v: &Version) -> String {
     format!("Version {v} ({})", v.channel().label())
 }
 
+/// Zeile mit der Grafikkarte, etwa „Grafikkarte: Name · Treiber X · Vulkan“.
+pub fn gpu_text(info: &crate::build_info::BuildInfo) -> String {
+    match info.gpu {
+        Some(_) => format!("Grafikkarte: {}", info.gpu_line()),
+        None => info.gpu_line(),
+    }
+}
+
 /// Zeile mit der Lizenz.
 pub fn license_line() -> String {
     format!("Lizenz: {LICENSE}")
@@ -58,6 +66,9 @@ pub fn show(ctx: &egui::Context, open: &mut bool) {
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new(NAME).font(theme::heading_font()));
                     ui.label(version_line());
+                    let info = crate::build_info::build_info();
+                    ui.label(info.system_line());
+                    ui.label(gpu_text(&info));
                     ui.label(license_line());
                 });
             });

@@ -40,6 +40,10 @@ png = "0.18"
 # Ortszeit des Rechners für Zeitangaben (nur in local_time.rs benutzt).
 chrono.workspace = true
 
+# Windows-Version über RtlGetVersion (windows-sys ist über andere Pakete ohnehin im Baum).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Wdk_System_SystemServices", "Win32_System_SystemInformation"] }
+
 [dev-dependencies]
 # Zeichentabellen der Schriftdateien lesen (Zeichentest in tests/fonts.rs); skrifa zieht egui ohnehin.
 skrifa = "0.44"

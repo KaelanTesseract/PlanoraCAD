@@ -220,6 +220,21 @@ fn datei_menu_opens_the_about_dialog_and_it_closes() {
 }
 
 #[test]
+fn about_shows_system_and_gpu_lines() {
+    let c = context();
+    let mut app = new_app();
+    let shot = open_about(&c, &mut app, BIG);
+    let shot = if shot.has(about_dialog::NAME) {
+        shot
+    } else {
+        settle(&c, &mut app, BIG)
+    };
+    let info = planora_app::build_info::build_info();
+    assert!(shot.has(&info.system_line()), "Systemzeile");
+    assert!(shot.has(&about_dialog::gpu_text(&info)), "Grafikzeile");
+}
+
+#[test]
 fn about_texts_are_plain_language() {
     assert_eq!(about_dialog::TITLE, "Über PlanoraCAD");
     let mut all = vec![
