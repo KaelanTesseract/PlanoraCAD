@@ -1,7 +1,9 @@
-//! Issue-Formulare unter `.github/ISSUE_TEMPLATE`: feste Feld-Ids, Pflichtfelder, Labels,
+//! Issue-Formulare unter `.github/ISSUE_TEMPLATE`: feste Feld-Ids, Feldtypen, Pflichtfelder, Labels,
 //! Bereichsliste und `config.yml`. Die Dateien werden ohne YAML-Bibliothek zeilenweise gelesen;
 //! die Formulare halten dafür eine feste Einrückung ein (`  - type:`, `    id:`,
-//! `    validations:`, `      required: true`, `        - Option`).
+//! `    validations:`, `      required: true`, `        - Option`). Ob die Dateien gültiges YAML
+//! und ein gültiges GitHub-Formularschema sind, prüft dieser Test nicht; das macht der PyYAML-Lauf
+//! (Plan, Task 1, Schritt 4).
 
 use std::path::PathBuf;
 
@@ -164,4 +166,20 @@ fn ids_are_url_safe() {
             );
         }
     }
+}
+
+#[test]
+fn field_types_are_as_designed() {
+    let kinds = |file: &str, id: &str| {
+        let t = read(&format!(".github/ISSUE_TEMPLATE/{file}"));
+        fields(&t)
+            .into_iter()
+            .find(|f| f.id.as_deref() == Some(id))
+            .unwrap_or_else(|| panic!("{file}: {id}"))
+            .kind
+    };
+    for id in ["ziel", "passiert", "erwartet"] {
+        assert_eq!(kinds("fehler.yml", id), "textarea", "{id}");
+    }
+    assert_eq!(kinds("wunsch.yml", "wichtig"), "dropdown");
 }

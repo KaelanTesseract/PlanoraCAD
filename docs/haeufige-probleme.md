@@ -4,7 +4,7 @@
 
 Die Programmdatei ist nicht signiert. Darum kann Windows beim ersten Start eine blaue Warnung zeigen („SmartScreen“). Klick auf „Weitere Informationen“ und dann auf „Trotzdem ausführen“.
 
-Die Prüfsumme, mit der das Programm Updates kontrolliert, schützt nur vor Fehlern bei der Übertragung. Lade das Programm deshalb nur von der [Seite der Veröffentlichungen](https://github.com/KaelanTesseract/PlanoraCAD/releases).
+Die Prüfsumme, mit der das Programm Updates kontrolliert, schützt nur vor Fehlern bei der Übertragung. Lade das Programm nur von der [Seite der Veröffentlichungen](https://github.com/KaelanTesseract/PlanoraCAD/releases) im Repo.
 
 ## Die 3D-Ansicht zeigt Fehler oder das Programm läuft nicht richtig
 
