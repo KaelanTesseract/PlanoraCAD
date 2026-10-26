@@ -11,6 +11,7 @@ pub mod build_info;
 pub mod cards;
 pub mod commands;
 pub mod crash;
+pub mod crash_dialog;
 pub mod create_dialog;
 pub mod diag;
 pub mod dialog;

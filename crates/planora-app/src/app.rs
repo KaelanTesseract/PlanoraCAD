@@ -1,5 +1,7 @@
 use crate::blend_dialog::BlendDialog;
 use crate::boolean_dialog::BooleanDialog;
+use crate::crash::{RunMarker, StartFinding};
+use crate::crash_dialog::{self, CrashAction, CrashNotice};
 use crate::create_dialog::CreateDialog;
 use crate::drawing_dialog::drawing_menu;
 use crate::drawing_state::WorkArea;
@@ -156,6 +158,12 @@ pub struct PlanoraApp {
     /// (`egui::Context::cumulative_frame_nr`); ist die laufende Nummer größer, ist dieses Bild
     /// auch gezeichnet (eframe zeichnet nach dem Durchlauf, auch nach mehreren Durchgängen).
     first_frame: Option<u64>,
+    /// Rückfrage nach einem Absturz oder unerwarteten Ende beim letzten Lauf
+    /// ([`crash_dialog`]); wartet, bis nichts anderes ansteht ([`PlanoraApp::crash_notice_tick`]).
+    crash_notice: Option<CrashNotice>,
+    /// Laufmarker dieser Instanz ([`crate::crash::start_run`]); [`eframe::App::on_exit`] löscht
+    /// ihn.
+    run_marker: Option<RunMarker>,
 }
 
 /// Schritt des Neustarts nach einem fertig geladenen und geprüften Update.
@@ -190,8 +198,14 @@ impl PlanoraApp {
     }
 
     /// Das Programm. `after_update`: gestartet mit [`update_install::AFTER_UPDATE_ARG`] (von der
-    /// alten Version nach dem Austausch).
-    pub fn new(cc: &eframe::CreationContext<'_>, after_update: bool) -> Self {
+    /// alten Version nach dem Austausch). `marker` und `finding` aus [`crate::crash::start_run`]
+    /// (vor dem Fenster ermittelt).
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        after_update: bool,
+        marker: Option<RunMarker>,
+        finding: StartFinding,
+    ) -> Self {
         crate::diag::info(&format!("Start PlanoraCAD {}", crate::RUNNING_VERSION));
         let render_state = cc
             .wgpu_render_state
@@ -229,7 +243,92 @@ impl PlanoraApp {
         // der alten (in `logic`); bis dahin kann die alte noch zurücklegen.
         app.ok_marker_due = after_update;
         app.finish_update_startup(after_update);
+        app.run_marker = marker;
+        app.set_start_finding(finding);
         app
+    }
+
+    /// Befund des Starts ([`crate::crash::start_run`]): bei einem Absturz oder unerwarteten Ende
+    /// steht die Rückfrage an (Berichte im Ordner `abstuerze` neben der Konfiguration).
+    #[doc(hidden)]
+    pub fn set_start_finding(&mut self, finding: StartFinding) {
+        let dir = self
+            .ws
+            .config_path
+            .parent()
+            .map(|d| d.join(crate::crash::CRASH_DIR))
+            .unwrap_or_default();
+        self.crash_notice = CrashNotice::from_finding(&finding, dir);
+    }
+
+    /// Setzt den Hinweis „Aktualisiert auf Version X“ (für Tests).
+    #[doc(hidden)]
+    pub fn set_after_update(&mut self, after: Option<AfterUpdate>) {
+        self.after_update = after;
+    }
+
+    /// Setzt den Schritt des Neustarts (für Tests).
+    #[doc(hidden)]
+    pub fn set_restart_phase(&mut self, phase: RestartPhase) {
+        self.restart = phase;
+    }
+
+    /// Zeigt die Absturz-Rückfrage, sobald das erste Bild vorbei ist und nichts anderes ansteht:
+    /// keine Rückfrage (die Autosicherungs-Frage kommt zuerst), kein Hinweis nach einem Update,
+    /// kein gesperrter Neustart, keine ausstehende Rückmeldung an die alte Version, kein anderes
+    /// Fenster. Danach zählt sie selbst als Fenster ([`PlanoraApp::other_windows_open`]) und
+    /// führt die Wahl aus.
+    fn crash_notice_tick(&mut self, ctx: &egui::Context, dark: bool) {
+        let Some(waiting) = self.crash_notice.as_ref().map(|n| !n.open) else {
+            return;
+        };
+        if waiting {
+            let free = self.first_frame.is_some()
+                && self.ws.prompt.is_none()
+                && self.after_update.is_none()
+                && !self.restart_locked()
+                && !self.ok_marker_due
+                && !self.windows_open()
+                && !self.projects.is_open();
+            if !free {
+                return;
+            }
+            if let Some(n) = self.crash_notice.as_mut() {
+                n.open = true;
+            }
+        }
+        let Some(notice) = self.crash_notice.as_mut() else {
+            return;
+        };
+        match crash_dialog::show(ctx, notice, dark) {
+            None | Some(CrashAction::View) => {}
+            Some(CrashAction::NotNow) => self.crash_notice = None,
+            Some(CrashAction::Delete) => {
+                notice.delete_reports();
+                self.crash_notice = None;
+            }
+            Some(CrashAction::OpenFolder) => {
+                let dir = notice.dir.clone();
+                if !self.system_open.open_folder(&dir) {
+                    crate::diag::warn("Ordner der Absturzberichte ließ sich nicht öffnen");
+                }
+            }
+            Some(CrashAction::AsFeedback) => {
+                let report = notice.newest().map(Path::to_path_buf);
+                self.crash_notice = None;
+                let mut info = self.feedback_context(ctx);
+                info.from_crash = report.is_some();
+                info.crash_report = report;
+                open_feedback(
+                    &mut self.ws,
+                    &mut self.projects,
+                    &mut self.settings,
+                    &mut self.overview,
+                    &mut self.feedback,
+                    info,
+                );
+            }
+        }
     }
 
     /// Einstellungen des egui-Kontexts, die nicht vom Aussehen abhängen. Kein Tastatur-Zoom
@@ -272,6 +371,8 @@ impl PlanoraApp {
             last_window: None,
             ok_marker_due: false,
             first_frame: None,
+            crash_notice: None,
+            run_marker: None,
         }
     }
 
@@ -1144,6 +1245,7 @@ impl PlanoraApp {
             || self.overview.open
             || self.feedback.open
             || self.after_update.is_some()
+            || self.crash_notice.as_ref().is_some_and(|n| n.open)
             || self.ws.active_tab().dialog_open()
             || crate::project_actions::dialog_open(&self.projects.ui)
             || self.settings.is_open()
@@ -2230,6 +2332,10 @@ impl eframe::App for PlanoraApp {
     /// [`crate::thumbnail_worker::DROP_WAIT`].)
     fn on_exit(&mut self) {
         self.projects.shutdown(EXIT_WAIT);
+        // Sauberes Ende: der Laufmarker geht (ein Absturz lässt ihn liegen).
+        if let Some(marker) = self.run_marker.take() {
+            marker.finish();
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -2407,6 +2513,7 @@ impl eframe::App for PlanoraApp {
         // Nach `refresh_prompts`: eine gerade entstandene Rückfrage hält die Meldung schon in
         // diesem Bild zurück.
         self.show_update_notice(&ctx);
+        self.crash_notice_tick(&ctx, dark);
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
         if self.restart_locked() {

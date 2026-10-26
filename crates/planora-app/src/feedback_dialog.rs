@@ -75,6 +75,15 @@ pub const LOG_LINES: usize = 100;
 /// Vorschau zum Bild, solange noch keins aufgenommen ist.
 pub const SHOT_NOT_YET: &str =
     "Beim Anhaken nimmt das Programm ein Bild vom Fenster auf (ohne dieses Fenster).";
+/// Häkchen des Bestandteils „Projektdatei“ (nur mit Absturzbericht, der ein Dokument nennt).
+pub const PROJECT_CHECKBOX: &str = "Projektdatei in den Ordner legen";
+
+/// Vorschau zur Projektdatei: was mit dem Projektordner `name` geschieht.
+pub fn project_preview(name: &str) -> String {
+    format!(
+        "Legt eine Kopie von „{name}“ in den Rückmeldungsordner. Sie geht nur mit, wenn du sie          selbst ins Formular ziehst."
+    )
+}
 
 /// Kennung des Fensters.
 const WINDOW_ID: &str = "planora_feedback";
@@ -192,6 +201,8 @@ pub struct FeedbackDialog {
     address: Option<(AddressKey, Built)>,
     /// Ablauf „Bild vom Fenster“.
     shot: ShotFlow,
+    /// Das im Absturzbericht genannte Dokument (ein `.pcad`-Ordner), falls es noch da ist.
+    project_dir: Option<PathBuf>,
 }
 
 impl Default for FeedbackDialog {
@@ -211,6 +222,7 @@ impl Default for FeedbackDialog {
             pending: VecDeque::new(),
             address: None,
             shot: ShotFlow::default(),
+            project_dir: None,
         }
     }
 }
@@ -222,10 +234,17 @@ impl FeedbackDialog {
     /// bekommt die Tastatur.
     pub fn open_fresh(&mut self, context: FeedbackContext) {
         let opened_count = self.opened_count.wrapping_add(1);
+        let project_dir = context
+            .crash_report
+            .as_deref()
+            .and_then(read_report)
+            .and_then(|t| crate::crash::report_document(&t))
+            .filter(|d| d.is_dir());
         *self = FeedbackDialog {
             open: true,
             opened_count,
-            rows: rows_for(&context),
+            rows: rows_for(&context, project_dir.as_deref()),
+            project_dir,
             context: Some(context),
             focus_description: true,
             collapse_reset: true,
@@ -308,6 +327,17 @@ impl FeedbackDialog {
         }
     }
 
+    /// Name des mitkopierten Projektordners (angehakt und vorhanden).
+    fn copied_project_name(&self) -> Option<String> {
+        if !self.is_checked(Part::Projektdatei) {
+            return None;
+        }
+        self.project_dir
+            .as_deref()
+            .and_then(Path::file_name)
+            .map(|n| n.to_string_lossy().into_owned())
+    }
+
     /// Bereinigter Text von `part`, wie in der Vorschau.
     pub fn preview_text(&self, part: Part) -> Option<&str> {
         self.rows
@@ -360,7 +390,7 @@ impl FeedbackDialog {
         {
             return built.clone();
         }
-        let built = feedback::issue_url(&self.report(), self.with_file());
+        let built = feedback::issue_url(&url_report(&self.report()), self.with_file());
         // Eine andere Adresse: „Kopiert.“ gilt nicht mehr.
         self.copied = false;
         self.address = Some((key, built.clone()));
@@ -388,11 +418,13 @@ impl FeedbackDialog {
             report.parts.retain(|(p, _)| *p != Part::Bild);
         }
         let with_file = self.with_file();
+        // In der Adresse vom Absturzbericht nur Nachricht und Ort; ganz steht er in der Datei.
         let make = |report: &Report, with_file: bool| {
+            let report = url_report(report);
             if web {
-                feedback::webform_url(report, with_file)
+                feedback::webform_url(&report, with_file)
             } else {
-                feedback::issue_url(report, with_file)
+                feedback::issue_url(&report, with_file)
             }
         };
         let mut built = make(&report, with_file);
@@ -410,6 +442,13 @@ impl FeedbackDialog {
                 Some(img) => save_png(&dir, img).map(|_| dir),
                 None => Ok(dir),
             });
+            if let Ok(dir) = &written
+                && self.is_checked(Part::Projektdatei)
+                && let Some(project) = &self.project_dir
+                && let Err(e) = copy_project(project, dir)
+            {
+                diag::warn(&format!("Projektdatei nicht kopiert ({:?})", e.kind()));
+            }
             match written {
                 Ok(dir) => folder = Some(dir),
                 Err(e) => {
@@ -453,7 +492,7 @@ impl FeedbackDialog {
 
 /// Die Bestandteile aus den Angaben beim Öffnen, bereinigt. Schritte, Protokoll und
 /// Absturzbericht nur, wenn es sie gibt.
-fn rows_for(c: &FeedbackContext) -> Vec<PartRow> {
+fn rows_for(c: &FeedbackContext, project: Option<&Path>) -> Vec<PartRow> {
     let who = &c.personal;
     let clean = |t: &str| feedback::sanitize(t, who);
     let mut system = c.info.os.clone();
@@ -476,6 +515,12 @@ fn rows_for(c: &FeedbackContext) -> Vec<PartRow> {
     rows.push((Part::Bild, SHOT_NOT_YET.to_string()));
     if let Some(text) = c.crash_report.as_deref().and_then(read_report) {
         rows.push((Part::Absturzbericht, clean(&text)));
+        if let Some(name) = project.and_then(Path::file_name) {
+            rows.push((
+                Part::Projektdatei,
+                clean(&project_preview(&name.to_string_lossy())),
+            ));
+        }
     }
     rows.into_iter()
         .map(|(part, text)| PartRow {
@@ -484,6 +529,51 @@ fn rows_for(c: &FeedbackContext) -> Vec<PartRow> {
             text,
         })
         .collect()
+}
+
+/// Die Meldung für die Adresse: vom Absturzbericht nur die Zeilen „Fehler“ und „Ort“ (der ganze
+/// Bericht steht in `rueckmeldung.txt`). Fehlen beide, bleibt der Text, wie er ist.
+fn url_report(report: &Report) -> Report {
+    let mut r = report.clone();
+    for (part, text) in &mut r.parts {
+        if *part != Part::Absturzbericht {
+            continue;
+        }
+        let short: Vec<&str> = text
+            .lines()
+            .filter(|l| l.starts_with("Fehler: ") || l.starts_with("Ort: "))
+            .collect();
+        if !short.is_empty() {
+            *text = short.join(
+                "
+",
+            );
+        }
+    }
+    r
+}
+
+/// Kopiert den Projektordner `project` (samt Unterordnern) nach `bundle/<Name>`.
+fn copy_project(project: &Path, bundle: &Path) -> std::io::Result<()> {
+    let name = project
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("kein Name"))?;
+    copy_dir(project, &bundle.join(name))
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 fn read_report(path: &Path) -> Option<String> {
@@ -622,7 +712,12 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
             false,
         )
         .show_header(ui, |ui| {
-            let r = ui.checkbox(&mut row.on, row.part.label());
+            let label = if row.part == Part::Projektdatei {
+                PROJECT_CHECKBOX
+            } else {
+                row.part.label()
+            };
+            let r = ui.checkbox(&mut row.on, label);
             theme::focus_ring(ui, &r);
         })
         .body(|ui| read_only_text(ui, preview_id(row.part), &row.text, PREVIEW_MAX_H));
@@ -677,10 +772,14 @@ fn after_send(
         crate::update_dialog::failure_box(ui, NO_FILE, dark);
     } else if sent.folder.is_some() {
         ui.add_space(SPACE_3);
-        let mut files = vec![FEEDBACK_FILE];
+        let mut files = vec![FEEDBACK_FILE.to_string()];
         if sent.picture {
-            files.push(SHOT_FILE);
+            files.push(SHOT_FILE.to_string());
         }
+        if let Some(name) = state.copied_project_name() {
+            files.push(name);
+        }
+        let files: Vec<&str> = files.iter().map(String::as_str).collect();
         ui.add(egui::Label::new(folder_hint(&files)).wrap());
     }
     ui.add_space(SPACE_3);

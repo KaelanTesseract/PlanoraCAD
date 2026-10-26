@@ -5,11 +5,15 @@ use planora_render::gpu::MSAA_SAMPLES;
 
 fn main() -> eframe::Result {
     // Protokoll im Datenordner (neben der Konfiguration), noch vor allem anderen.
+    let mut run = (None, planora_app::crash::StartFinding::Clean);
     if let Some(data_dir) = planora_project::config::Config::config_path().parent() {
         planora_app::diag::init_global(data_dir);
         // Absturzbericht nach `abstuerze/`; der bisherige Hook läuft danach weiter.
         planora_app::crash::install_hook(data_dir.join(planora_app::crash::CRASH_DIR));
+        // Laufmarker anlegen und nachsehen, wie der letzte Lauf endete (Rückfrage in der App).
+        run = planora_app::crash::start_run(data_dir, std::process::id());
     }
+    let (marker, finding) = run;
     // Von der alten Version nach dem Austausch gestartet (siehe `update_install`).
     // `args_os`: ein Argument, das kein gültiges Unicode ist (etwa ein Dateipfad), bricht nicht ab.
     let after_update = std::env::args_os()
@@ -43,6 +47,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "PlanoraCAD",
         options,
-        Box::new(move |cc| Ok(Box::new(PlanoraApp::new(cc, after_update)))),
+        Box::new(move |cc| Ok(Box::new(PlanoraApp::new(cc, after_update, marker, finding)))),
     )
 }

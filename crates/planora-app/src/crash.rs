@@ -17,6 +17,7 @@ use std::io::Write;
 use std::panic::{AssertUnwindSafe, PanicHookInfo};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, TryLockError};
+use std::time::SystemTime;
 
 use crate::diag::{self, Diag, Step};
 
@@ -195,4 +196,207 @@ fn read_diag(d: &Diag) -> (Vec<Step>, Vec<String>, Option<PathBuf>) {
         d.recent_lines(LOG_LINES_IN_REPORT),
         d.current_document(),
     )
+}
+
+// ---- Laufmarker, Befund beim Start, Aufräumen -----------------------------------------------
+
+/// Berichte, die älter sind, löscht [`cleanup_reports`].
+pub const KEEP_DAYS: u64 = 30;
+/// Höchstens so viele Berichte bleiben nach [`cleanup_reports`].
+pub const KEEP_MAX: usize = 10;
+
+const MARKER_PREFIX: &str = "laeuft-";
+const MARKER_SUFFIX: &str = ".marker";
+const REPORT_PREFIX: &str = "absturz-";
+const REPORT_SUFFIX: &str = ".txt";
+
+/// Laufmarker der Instanz mit der Prozessnummer `pid`: `laeuft-<pid>.marker` im Datenordner.
+pub fn marker_path(dir: &Path, pid: u32) -> PathBuf {
+    dir.join(format!("{MARKER_PREFIX}{pid}{MARKER_SUFFIX}"))
+}
+
+/// Der Laufmarker dieser Instanz. Er bleibt offen, solange das Programm läuft; unter Windows
+/// ohne Mitbenutzung, so dass ein zweiter Start ihn als „gehört einer laufenden Instanz“
+/// erkennt (etwa die alte Version beim Update-Neustart). Nur [`RunMarker::finish`] löscht ihn;
+/// endet das Programm anders (Absturz, Abbruch), bleibt er liegen.
+#[derive(Debug)]
+pub struct RunMarker {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+}
+
+impl RunMarker {
+    /// Sauberes Ende: Marker schließen und löschen.
+    pub fn finish(mut self) {
+        self.file = None;
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Was der Start über den letzten Lauf herausfindet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StartFinding {
+    /// Nichts Besonderes.
+    Clean,
+    /// Es gibt Absturzberichte (neueste zuerst).
+    Crashed(Vec<PathBuf>),
+    /// Ein Lauf endete ohne sauberes Ende und ohne Bericht.
+    Unexpected,
+}
+
+/// Öffnet einen Marker so, dass ihn kein anderer öffnen kann, solange er offen ist.
+fn open_exclusive(path: &Path, create: bool) -> std::io::Result<std::fs::File> {
+    let mut o = OpenOptions::new();
+    o.read(true).write(true);
+    if create {
+        o.create(true).truncate(true);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        o.share_mode(0);
+    }
+    o.open(path)
+}
+
+/// Läuft die Instanz mit dieser Prozessnummer noch? Unter Windows entscheidet die Sperre des
+/// Markers; anderswo (ohne Sperre) zählt unter Linux `/proc/<pid>`.
+#[cfg(not(windows))]
+fn other_running(pid: u32) -> bool {
+    Path::new("/proc").join(pid.to_string()).exists()
+}
+
+/// Prozessnummer aus einem Markernamen.
+fn marker_pid(name: &str) -> Option<u32> {
+    name.strip_prefix(MARKER_PREFIX)?
+        .strip_suffix(MARKER_SUFFIX)?
+        .parse()
+        .ok()
+}
+
+/// Räumt fremde, liegengebliebene Marker weg und gibt die Änderungszeit des jüngsten zurück
+/// (`Some(None)`: es gab einen, Zeit unbekannt). Gesperrte gehören einer laufenden Instanz und
+/// bleiben.
+fn take_stale_markers(data_dir: &Path) -> Option<Option<SystemTime>> {
+    let mut found: Option<Option<SystemTime>> = None;
+    let Ok(entries) = std::fs::read_dir(data_dir) else {
+        return None;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(marker_pid) else {
+            continue;
+        };
+        let path = entry.path();
+        #[cfg(windows)]
+        let stale = {
+            let _ = pid;
+            open_exclusive(&path, false).is_ok()
+        };
+        #[cfg(not(windows))]
+        let stale = !other_running(pid);
+        if !stale {
+            continue;
+        }
+        let time = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let _ = std::fs::remove_file(&path);
+        found = Some(match (found.flatten(), time) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        });
+    }
+    found
+}
+
+/// Die Berichte in `dir` mit Änderungszeit, neueste zuerst (Fehler übergehen).
+fn list_reports(dir: &Path) -> Vec<(PathBuf, SystemTime)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut v: Vec<(PathBuf, SystemTime)> = entries
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(REPORT_PREFIX) && n.ends_with(REPORT_SUFFIX))
+        })
+        .filter_map(|e| {
+            let m = e.metadata().ok()?;
+            m.is_file().then_some(())?;
+            Some((e.path(), m.modified().ok()?))
+        })
+        .collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+    v
+}
+
+/// Beim Start (vor dem Fenster): räumt die Berichte auf ([`cleanup_reports`]), wertet
+/// liegengebliebene Marker fremder Instanzen aus und legt den eigenen an. Ein gesperrter Marker
+/// gehört einer laufenden Instanz und zählt nicht. Ein liegengebliebener mit einem neueren
+/// Bericht ergibt [`StartFinding::Crashed`], ohne einen [`StartFinding::Unexpected`]; Berichte
+/// ohne Marker (Panik mit sauberem Ende) ergeben [`StartFinding::Crashed`]. Lässt sich der
+/// eigene Marker nicht anlegen, läuft das Programm ohne.
+pub fn start_run(data_dir: &Path, pid: u32) -> (Option<RunMarker>, StartFinding) {
+    let crash_dir = data_dir.join(CRASH_DIR);
+    cleanup_reports(&crash_dir, SystemTime::now());
+    let stale = take_stale_markers(data_dir);
+    let reports = list_reports(&crash_dir);
+    let finding = match stale {
+        Some(since) => {
+            let newer = reports.iter().any(|(_, t)| since.is_none_or(|s| *t >= s));
+            if newer {
+                StartFinding::Crashed(reports.into_iter().map(|(p, _)| p).collect())
+            } else {
+                StartFinding::Unexpected
+            }
+        }
+        None if !reports.is_empty() => {
+            StartFinding::Crashed(reports.into_iter().map(|(p, _)| p).collect())
+        }
+        None => StartFinding::Clean,
+    };
+    let path = marker_path(data_dir, pid);
+    let marker = std::fs::create_dir_all(data_dir)
+        .and_then(|_| open_exclusive(&path, true))
+        .map(|file| RunMarker {
+            path,
+            file: Some(file),
+        });
+    match marker {
+        Ok(m) => (Some(m), finding),
+        Err(e) => {
+            diag::warn(&format!("Laufmarker nicht angelegt ({:?})", e.kind()));
+            (None, finding)
+        }
+    }
+}
+
+/// Löscht Berichte in `dir`, die älter als [`KEEP_DAYS`] Tage sind, und danach alle bis auf die
+/// [`KEEP_MAX`] neuesten. Fehler (fehlender Ordner, gesperrte Datei, fremde Einträge) werden
+/// übergangen.
+pub fn cleanup_reports(dir: &Path, now: SystemTime) {
+    let max_age = std::time::Duration::from_secs(KEEP_DAYS * 24 * 3600);
+    let mut kept = 0usize;
+    for (path, time) in list_reports(dir) {
+        let too_old = now.duration_since(time).is_ok_and(|age| age > max_age);
+        if too_old || kept >= KEEP_MAX {
+            let _ = std::fs::remove_file(&path);
+        } else {
+            kept += 1;
+        }
+    }
+}
+
+/// Wert der Zeile `<key>: …` aus einem Bericht (erste Fundstelle).
+pub fn report_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    text.lines()
+        .find_map(|l| l.strip_prefix(key)?.strip_prefix(": "))
+        .map(str::trim)
+}
+
+/// Das im Bericht genannte Dokument („Dokument: …“), falls eins genannt ist.
+pub fn report_document(text: &str) -> Option<PathBuf> {
+    report_field(text, "Dokument")
+        .filter(|d| !d.is_empty() && *d != "keines")
+        .map(PathBuf::from)
 }
