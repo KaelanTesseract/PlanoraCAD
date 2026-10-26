@@ -578,3 +578,157 @@ fn system_open_can_be_replaced_in_tests() {
     assert_eq!(fake.0.borrow().as_slice(), [PathBuf::from("ordner")]);
     let _real: &dyn SystemOpen = &ExplorerOpen;
 }
+
+// ---- Webformular ----
+
+fn web_report(kind: Kind, desc: &str) -> Report {
+    let mut r = report(kind, desc);
+    r.area = Some("Tastenkürzel".to_string());
+    r
+}
+
+#[test]
+fn webform_constants() {
+    assert_eq!(
+        WEBFORM_URL,
+        "https://dennis-guse.de/planoracad/rueckmeldung.php"
+    );
+    assert_eq!(
+        WEBFORM_URL_EN,
+        "https://dennis-guse.de/en/planoracad/feedback.php"
+    );
+}
+
+#[test]
+fn webform_fields_art_bereich_and_names() {
+    let b = webform_url(&web_report(Kind::Fehler, "Es hängt"), false);
+    assert!(
+        b.url.starts_with(&format!("{WEBFORM_URL}?art=fehler&")),
+        "{}",
+        b.url
+    );
+    assert_eq!(param(&b.url, "bereich"), Some("Tastenk%C3%BCrzel"));
+    assert_eq!(param(&b.url, "passiert"), Some("Es%20h%C3%A4ngt"));
+    for f in ["version", "system", "grafik", "schritte"] {
+        assert!(param(&b.url, f).is_some(), "{f}: {}", b.url);
+    }
+    for f in ["ziel", "erwartet", "template", "title", "wunsch", "angaben"] {
+        assert!(param(&b.url, f).is_none(), "{f}: {}", b.url);
+    }
+    assert!(!b.url.contains("Bereich%3A"));
+    assert!(!b.needs_file);
+    for (kind, art) in [(Kind::Wunsch, "wunsch"), (Kind::Frage, "frage")] {
+        let b = webform_url(&web_report(kind, "Mehr Platz"), false);
+        assert_eq!(param(&b.url, "art"), Some(art));
+        assert_eq!(param(&b.url, "wunsch"), Some("Mehr%20Platz"));
+        assert!(param(&b.url, "passiert").is_none());
+        assert!(param(&b.url, "angaben").is_none());
+    }
+}
+
+#[test]
+fn webform_no_area_means_no_parameter() {
+    let b = webform_url(&report(Kind::Fehler, "Es hängt"), false);
+    assert!(param(&b.url, "bereich").is_none(), "{}", b.url);
+}
+
+#[test]
+fn webform_encoding() {
+    let b = webform_url(
+        &web_report(
+            Kind::Wunsch,
+            "Größe & Form #1 a+b
+Zeile 2",
+        ),
+        false,
+    );
+    assert_eq!(
+        param(&b.url, "wunsch"),
+        Some("Gr%C3%B6%C3%9Fe%20%26%20Form%20%231%20a%2Bb%0AZeile%202")
+    );
+    no_broken_escape(&b.url);
+}
+
+#[test]
+fn webform_with_file_adds_hint() {
+    let b = webform_url(&web_report(Kind::Fehler, "Es hängt"), true);
+    assert!(b.needs_file);
+    assert!(
+        param(&b.url, "passiert")
+            .unwrap()
+            .ends_with(&percent_encode(&format!(
+                "
+
+{ATTACH_HINT}"
+            )))
+    );
+}
+
+#[test]
+fn webform_drops_steps_and_log_before_the_description() {
+    let desc = "x".repeat(1200);
+    let mut r = web_report(Kind::Fehler, &desc);
+    r.parts.retain(|(p, _)| *p != Part::Schritte);
+    r.parts.push((Part::Protokoll, log_lines(200)));
+    r.parts.push((Part::Schritte, steps(200)));
+    let b = webform_url(&r, false);
+    assert!(b.url.len() < 2000, "{}", b.url.len());
+    assert!(b.needs_file);
+    assert!(!b.description_cut);
+    assert!(b.dropped.contains(&Part::Protokoll));
+    assert!(param(&b.url, "passiert").unwrap().starts_with(&desc));
+    assert!(param(&b.url, "protokoll").is_none());
+    // Version, System, Grafik bleiben.
+    for f in ["version", "system", "grafik"] {
+        assert!(param(&b.url, f).is_some(), "{f}");
+    }
+    assert!(
+        param(&b.url, "passiert")
+            .unwrap()
+            .contains("rueckmeldung.txt")
+    );
+}
+
+#[test]
+fn webform_oversized_description_is_cut_with_file() {
+    let desc = format!("{}👍", "ü".repeat(5000));
+    let b = webform_url(&web_report(Kind::Fehler, &desc), false);
+    assert!(b.url.len() < 2000);
+    assert!(b.description_cut);
+    assert!(b.needs_file);
+    assert!(b.url.ends_with(&percent_encode(&format!(
+        "{KUERZUNG_HINWEIS}
+
+{ATTACH_HINT}"
+    ))));
+    for f in ["version", "system", "grafik", "bereich"] {
+        assert!(param(&b.url, f).is_some(), "{f}");
+    }
+    no_broken_escape(&b.url);
+}
+
+#[test]
+fn webform_url_never_exceeds_2000_for_any_mix() {
+    for len in [0usize, 10, 1999, 3000] {
+        for c in [
+            "a", "ä", "&", "
+", "👍",
+        ] {
+            for kind in [Kind::Fehler, Kind::Wunsch, Kind::Frage] {
+                for with_file in [false, true] {
+                    let mut r = web_report(kind, &c.repeat(len));
+                    r.parts.push((Part::Protokoll, log_lines(500)));
+                    r.parts
+                        .push((Part::Absturzbericht, "Panik in main.rs:12".to_string()));
+                    let b = webform_url(&r, with_file);
+                    assert!(b.url.len() < 2000, "{len} × {c:?} {kind:?}");
+                    no_broken_escape(&b.url);
+                }
+            }
+        }
+    }
+    let mut r = web_report(Kind::Fehler, "Kurz");
+    r.parts.push((Part::Grafik, "g".repeat(3000)));
+    let b = webform_url(&r, true);
+    assert!(b.url.len() < 2000);
+}

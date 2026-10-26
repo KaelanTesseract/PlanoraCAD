@@ -1381,3 +1381,63 @@ fn shot_timeout_unchecks_picture_and_shows_hint() {
     assert!(!d.hides_for_shot());
     assert_eq!(d.preview_text(Part::Bild), Some(SHOT_NOT_YET));
 }
+
+#[test]
+fn webform_button_is_locked_below_10_chars() {
+    assert_eq!(WEBFORM_BUTTON, "Ohne GitHub-Konto senden");
+    let mut r = Rig::new("planora-fb-web-kurz");
+    r.open_with_context();
+    assert!(
+        r.sees(WEBFORM_BUTTON) && r.sees(WEBFORM_HINT),
+        "{:?}",
+        r.texts()
+    );
+    r.fb().description = "123456789".into();
+    r.click(WEBFORM_BUTTON);
+    assert!(r.urls().is_empty(), "gesperrt");
+    assert!(r.fb().sent.is_none());
+    r.fb().description = "1234567890".into();
+    r.settle();
+    r.click(WEBFORM_BUTTON);
+    assert_eq!(r.urls().len(), 1);
+}
+
+#[test]
+fn webform_button_opens_the_web_address_and_shows_copy_and_mail_hint() {
+    let mut r = Rig::new("planora-fb-web");
+    r.open_with_context();
+    r.fb().area = Some("3D");
+    r.fb().description = "Beim Extrudieren stürzt es ab & mehr".into();
+    r.click(WEBFORM_BUTTON);
+    let urls = r.urls();
+    assert_eq!(urls.len(), 1, "{urls:?}");
+    assert!(
+        urls[0].starts_with(planora_app::feedback::WEBFORM_URL),
+        "{}",
+        urls[0]
+    );
+    assert!(urls[0].contains("art=fehler") && urls[0].contains("bereich=3D"));
+    assert!(r.opened().is_empty(), "kurz: kein Ordner");
+    assert!(r.sees(COPY_TEXT) && r.sees(BROWSER_HINT));
+    assert!(r.sees(MAIL_FALLBACK), "{:?}", r.texts());
+    assert_eq!(
+        MAIL_FALLBACK,
+        "Klappt beides nicht? Schreib an info@dennis-guse.de."
+    );
+}
+
+#[test]
+fn webform_button_opens_folder_when_needed() {
+    let mut r = Rig::new("planora-fb-web-lang");
+    r.open_with_context();
+    r.fb().description = "Erst skizziert, dann extrudiert, dann gespeichert. ".repeat(80);
+    r.click(WEBFORM_BUTTON);
+    let opened = r.opened();
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert!(opened[0].join(FEEDBACK_FILE).exists());
+    let url = r.urls().pop().expect("Browser");
+    assert!(url.starts_with(planora_app::feedback::WEBFORM_URL));
+    assert!(url.len() < 2000);
+    assert!(url.contains(&percent_encode(ATTACH_HINT)), "{url}");
+    assert!(r.sees(&folder_hint(FEEDBACK_FILE)));
+}

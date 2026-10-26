@@ -43,6 +43,13 @@ pub const TOO_SHORT: &str = "Bitte schreib mindestens 10 Zeichen.";
 pub const PREVIEW_HEADING: &str = "Das geht mit";
 /// Hauptknopf: Ordner (bei Bedarf) und Adresse öffnen.
 pub const OPEN_BROWSER: &str = "Im Browser öffnen";
+/// Zweiter Knopf: das Webformular auf dennis-guse.de statt GitHub.
+pub const WEBFORM_BUTTON: &str = "Ohne GitHub-Konto senden";
+/// Hinweis zum zweiten Knopf (auch als Hover).
+pub const WEBFORM_HINT: &str =
+    "Öffnet ein Formular auf dennis-guse.de. Dort kannst du auch Dateien anhängen.";
+/// Notweg, steht nach dem Senden.
+pub const MAIL_FALLBACK: &str = "Klappt beides nicht? Schreib an info@dennis-guse.de.";
 /// Schließt ohne etwas zu tun.
 pub const CANCEL: &str = "Abbrechen";
 /// Schließt nach „Im Browser öffnen“.
@@ -355,10 +362,17 @@ impl FeedbackDialog {
     /// Rückmeldungsordner mit `rueckmeldung.txt` (und `bild.png`, wenn das Bild angehakt ist);
     /// er wird zuerst geöffnet, dann die Adresse. Lässt sich der Ordner nicht anlegen, geht die
     /// Adresse trotzdem (ohne den Hinweis auf die Datei, soweit nichts gekürzt wurde).
-    fn send(&mut self) {
+    fn send(&mut self, web: bool) {
         let report = self.report();
         let with_file = self.with_file();
-        let mut built = feedback::issue_url(&report, with_file);
+        let make = |with_file: bool| {
+            if web {
+                feedback::webform_url(&report, with_file)
+            } else {
+                feedback::issue_url(&report, with_file)
+            }
+        };
+        let mut built = make(with_file);
         let mut folder = None;
         let mut file_failed = false;
         if built.needs_file {
@@ -379,7 +393,7 @@ impl FeedbackDialog {
                     file_failed = true;
                     diag::warn(&format!("Rückmeldungsordner nicht angelegt: {e}"));
                     if with_file {
-                        built = feedback::issue_url(&report, false);
+                        built = make(false);
                     }
                 }
             }
@@ -463,6 +477,7 @@ pub fn take_escape(ctx: &egui::Context, state: &mut FeedbackDialog, prompt_open:
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FooterClick {
     Send,
+    SendWeb,
     Cancel,
 }
 
@@ -494,7 +509,8 @@ pub fn show(ctx: &egui::Context, state: &mut FeedbackDialog, dark: bool) -> Opti
             |ui| footer(ui, sent, enough.get(), dark, &mut click),
         );
     match click {
-        Some(FooterClick::Send) if !sent && state.long_enough() => state.send(),
+        Some(FooterClick::Send) if !sent && state.long_enough() => state.send(false),
+        Some(FooterClick::SendWeb) if !sent && state.long_enough() => state.send(true),
         Some(FooterClick::Cancel) => open = false,
         _ => {}
     }
@@ -609,6 +625,8 @@ fn after_send(
         ui.add(egui::Label::new(folder_hint(FEEDBACK_FILE)).wrap());
     }
     ui.add_space(SPACE_3);
+    ui.add(egui::Label::new(MAIL_FALLBACK).wrap());
+    ui.add_space(SPACE_3);
     egui::CollapsingHeader::new(SHOW_ADDRESS)
         .id_salt("planora_feedback_adresse_geschickt")
         .default_open(false)
@@ -673,6 +691,9 @@ fn footer(
 ) {
     ui.add_space(SPACE_2);
     ui.label(egui::RichText::new(PRIVACY_LINE).color(theme::palette(dark).text_secondary));
+    if !sent {
+        ui.label(egui::RichText::new(WEBFORM_HINT).color(theme::palette(dark).text_secondary));
+    }
     ui.add_space(SPACE_2);
     ui.horizontal(|ui| {
         if sent {
@@ -689,6 +710,14 @@ fn footer(
         theme::focus_ring(ui, &r);
         if r.clicked() {
             *click = Some(FooterClick::Send);
+        }
+        let r = ui
+            .add_enabled(enough, egui::Button::new(WEBFORM_BUTTON))
+            .on_hover_text(WEBFORM_HINT)
+            .on_disabled_hover_text(TOO_SHORT);
+        theme::focus_ring(ui, &r);
+        if r.clicked() {
+            *click = Some(FooterClick::SendWeb);
         }
         let r = ui.button(CANCEL);
         theme::focus_ring(ui, &r);

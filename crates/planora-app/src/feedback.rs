@@ -28,6 +28,11 @@ pub const AREAS: [&str; 6] = [
     "Anderes",
 ];
 
+/// Webformular auf dennis-guse.de: der Weg ohne GitHub-Konto (deutsch).
+pub const WEBFORM_URL: &str = "https://dennis-guse.de/planoracad/rueckmeldung.php";
+/// Dasselbe Formular auf Englisch (gleiche Felder).
+pub const WEBFORM_URL_EN: &str = "https://dennis-guse.de/en/planoracad/feedback.php";
+
 /// Die Adresse bleibt nach dem Kodieren kürzer als dieser Wert.
 pub const MAX_URL_LEN: usize = 2000;
 /// Endet eine gekürzte Beschreibung in der Adresse.
@@ -526,8 +531,99 @@ fn title(report: &Report) -> String {
     format!("{}{}", report.kind.title_prefix(), cut_chars(first, 60))
 }
 
-/// Baut die Adresse aus der (evtl. gekürzten) Beschreibung und den Bestandteilen.
+/// Wohin die Adresse zeigt: GitHub-Formular oder Webformular auf dennis-guse.de.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Target {
+    Github,
+    Web,
+}
+
 fn render(
+    target: Target,
+    report: &Report,
+    desc: &str,
+    cut: bool,
+    parts: &[(Part, String)],
+    with_file: bool,
+) -> String {
+    match target {
+        Target::Github => render_github(report, desc, cut, parts, with_file),
+        Target::Web => render_web(report, desc, cut, parts, with_file),
+    }
+}
+
+/// Baut die Webformular-Adresse. Feldnamen laut `webformular-vorgabe.md`.
+fn render_web(
+    report: &Report,
+    desc: &str,
+    cut: bool,
+    parts: &[(Part, String)],
+    with_file: bool,
+) -> String {
+    let mut url = format!(
+        "{WEBFORM_URL}?art={}",
+        report.kind.label().to_lowercase().replace('ä', "ae")
+    );
+    let mut push = |name: &str, value: &str| {
+        url.push('&');
+        url.push_str(name);
+        url.push('=');
+        url.push_str(&percent_encode(value));
+    };
+    if let Some(a) = &report.area {
+        push("bereich", a);
+    }
+    for field in [
+        FIELD_VERSION,
+        FIELD_SYSTEM,
+        FIELD_GRAFIK,
+        FIELD_SCHRITTE,
+        FIELD_PROTOKOLL,
+    ] {
+        let texts: Vec<String> = parts
+            .iter()
+            .filter(|(p, _)| p.bug_field() == Some(field))
+            .map(|(p, t)| {
+                if field == FIELD_PROTOKOLL {
+                    format!(
+                        "{}:
+{t}",
+                        p.label()
+                    )
+                } else {
+                    t.clone()
+                }
+            })
+            .collect();
+        if !texts.is_empty() {
+            push(
+                field,
+                &texts.join(
+                    "
+
+",
+                ),
+            );
+        }
+    }
+    let mut description = desc.to_string();
+    if cut {
+        description.push_str(KUERZUNG_HINWEIS);
+    }
+    if with_file {
+        description.push_str(
+            "
+
+",
+        );
+        description.push_str(ATTACH_HINT);
+    }
+    push(report.kind.description_field(), &description);
+    url
+}
+
+/// Baut die Adresse aus der (evtl. gekürzten) Beschreibung und den Bestandteilen.
+fn render_github(
     report: &Report,
     desc: &str,
     cut: bool,
@@ -616,6 +712,18 @@ fn render(
 /// gekürzt, geschieht das von selbst; [`Built::needs_file`] sagt dann, dass der Ordner mit
 /// `rueckmeldung.txt` angelegt werden muss.
 pub fn issue_url(report: &Report, with_file: bool) -> Built {
+    build(Target::Github, report, with_file)
+}
+
+/// Adresse des Webformulars auf dennis-guse.de (Weg ohne GitHub-Konto), vorausgefüllt,
+/// immer kürzer als [`MAX_URL_LEN`]. Art, Bereich, Version, System und Grafikkarte bleiben;
+/// bei Platzmangel fallen zuerst Protokoll und Absturzbericht, dann Schritte weg, zuletzt
+/// wird die Beschreibung gekürzt. Sonst wie [`issue_url`].
+pub fn webform_url(report: &Report, with_file: bool) -> Built {
+    build(Target::Web, report, with_file)
+}
+
+fn build(target: Target, report: &Report, with_file: bool) -> Built {
     debug_assert!(
         report.area.as_deref().is_none_or(|a| AREAS.contains(&a)),
         "unbekannter Bereich {:?}",
@@ -630,7 +738,7 @@ pub fn issue_url(report: &Report, with_file: bool) -> Built {
         needs_file: with_file,
     };
     let fits = |parts: &[(Part, String)], attach: bool| {
-        let url = render(report, &report.description, false, parts, attach);
+        let url = render(target, report, &report.description, false, parts, attach);
         (url.len() < MAX_URL_LEN).then_some(url)
     };
     if let Some(url) = fits(&parts, with_file) {
@@ -666,12 +774,17 @@ pub fn issue_url(report: &Report, with_file: bool) -> Built {
         }
     }
     // 3. übrige automatische Angaben, solange die ganze Beschreibung nicht passt
-    for p in [
-        Part::Absturzbericht,
-        Part::Grafik,
-        Part::System,
-        Part::Version,
-    ] {
+    //    (im Webformular bleiben Version, System und Grafikkarte immer stehen)
+    let extras: &[Part] = match target {
+        Target::Github => &[
+            Part::Absturzbericht,
+            Part::Grafik,
+            Part::System,
+            Part::Version,
+        ],
+        Target::Web => &[Part::Absturzbericht],
+    };
+    for &p in extras {
         if let Some(url) = fits(&parts, true) {
             built.url = url;
             return built;
@@ -685,11 +798,24 @@ pub fn issue_url(report: &Report, with_file: bool) -> Built {
         built.url = url;
         return built;
     }
+    // 3b. Webformular, letzte Rettung: passt selbst die leere Beschreibung nicht, fallen auch
+    //     Grafikkarte, System und Version weg (nur bei unsinnig langen Angaben).
+    if target == Target::Web {
+        for p in [Part::Grafik, Part::System, Part::Version] {
+            if render(target, report, "", true, &parts, true).len() < MAX_URL_LEN {
+                break;
+            }
+            if parts.iter().any(|(q, _)| *q == p) {
+                parts.retain(|(q, _)| *q != p);
+                built.dropped.push(p);
+            }
+        }
+    }
     // 4. Die Beschreibung passt auch allein nicht: an einer Zeichengrenze kürzen.
     let chars: Vec<char> = report.description.chars().collect();
     let with_desc = |n: usize| {
         let desc: String = chars[..n].iter().collect();
-        render(report, &desc, true, &parts, true)
+        render(target, report, &desc, true, &parts, true)
     };
     // größtes n mit passender Adresse (Länge wächst mit n)
     let (mut lo, mut hi) = (0usize, chars.len());
