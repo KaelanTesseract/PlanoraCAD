@@ -9,6 +9,8 @@ use planora_app::build_info::{
 fn windows_names() {
     assert_eq!(windows_name(10, 0, 26100), "Windows 11 (Build 26100)");
     assert_eq!(windows_name(10, 0, 19045), "Windows 10 (Build 19045)");
+    assert_eq!(windows_name(10, 0, 21999), "Windows 10 (Build 21999)");
+    assert_eq!(windows_name(10, 0, 22000), "Windows 11 (Build 22000)");
     assert_eq!(windows_name(6, 3, 9600), "Windows 6.3 (Build 9600)");
 }
 
