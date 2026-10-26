@@ -13,7 +13,7 @@ Die Update-Funktion ist schon gemergt (Merge 5c88844, noch nicht veröffentlicht
 - Ein Knopf in der App (Hilfe → Rückmeldung …, mit änderbarem Tastenkürzel) öffnet ein Fenster. Der Tester wählt Fehler, Wunsch oder Frage, schreibt zwei Sätze und klickt. Im Browser öffnet sich ein vorausgefülltes GitHub-Formular.
 - Nichts verlässt den Rechner ohne sichtbare Zustimmung. Das Fenster zeigt genau den Text, der in den Link kommt.
 - Bei einem Absturz bleibt ein Bericht auf der Platte. Beim nächsten Start fragt die App, ob er gespeichert oder gesendet werden soll.
-- Wer kein GitHub-Konto hat, hat einen zweiten Weg: eine vorbereitete E-Mail.
+- Wer kein GitHub-Konto hat, hat einen zweiten Weg: das Webformular auf dennis-guse.de, vorausgefüllt. Die E-Mail ist nur der Notweg.
 - Wünsche lassen sich mit 👍 gewichten, und es gibt eine öffentliche Übersicht „Geplant / In Arbeit / Fertig“.
 
 ## Keine Ziele
@@ -63,7 +63,7 @@ Jede Etappe endet mit einer Sichtprüfung durch Dennis (bei Etappe 1 im Browser,
 - Modul `feedback` (Fenster `feedback_dialog.rs`, Logik ohne Oberfläche in `feedback.rs`): Art (Fehler/Wunsch/Frage), Beschreibung (Textfeld, Pflicht, mind. 10 Zeichen), Häkchen mit Vorschau je Bestandteil, Knöpfe „Im Browser öffnen“ und „Abbrechen“. Das Fenster zeigt unten die fertige Adresse in Textform (einklappbar) und „Text kopieren“.
 - Angaben, die die App selbst sammelt: Version und Kanal (aus `running_version()`), Windows-Version, Grafikkarte (Name, Treiber, Backend), Bildschirmgröße, die letzten **Schritte** und auf Wunsch die letzten **Protokollzeilen**.
 - „Bild vom Fenster mitschicken“: Das Fenster schließt sich kurz, die App macht über `ViewportCommand::Screenshot` ein Bild, kodiert es mit `png` und legt es in den Rückmeldungsordner. Das Rückmeldungsfenster erscheint danach wieder.
-- Ohne Konto: ein zweiter Knopf „Per E-Mail senden“ (siehe Etappe 4).
+- Ohne Konto: ein zweiter Knopf „Ohne GitHub-Konto senden“ (siehe Etappe 4).
 - Protokoll und Schritte brauchen neue Bausteine:
   - Modul `diag`: kleiner Ringpuffer (500 Zeilen) plus Datei `%APPDATA%\PlanoraCAD\logs\planora.log` (höchstens 1 MB, drei Dateien rotierend). Aufrufe `diag::info/warn/fehler`. Standard: Start, Version, Grafikkarte, Fehlermeldungen, Dateivorgänge ohne Inhalt. Kein Projektinhalt.
   - Schritte: ein Ringpuffer (50 Einträge) in `commands::run_action` und an den Stellen, an denen `undo_labels` schon deutsche Namen liefert.
@@ -77,18 +77,18 @@ Jede Etappe endet mit einer Sichtprüfung durch Dennis (bei Etappe 1 im Browser,
 - Bei „unerwartet beendet“ ohne Bericht: kurzer Hinweis mit Weg in das Rückmeldungsfenster, ohne Bericht.
 - Berichte älter als 30 Tage und mehr als 10 Stück räumt die App beim Start auf.
 
-### Etappe 4: Weg ohne GitHub-Konto (nur Mail)
+### Etappe 4: Weg ohne GitHub-Konto (Webformular, Mail als Notweg)
 
-Geprüft (Stand Okt. 2026): mailto-Link, Formular-Dienste (Tally, Formspree, Web3Forms, Netlify Forms), eigene Brücke (Cloudflare Worker → GitHub-Issue), Mail direkt, GitHub-Konto.
+Vorgezogen: Etappe 4 wird gleich nach Task 8 gebaut, weil ein externer Tester die App bekommt. Dennis hat das Webformular auf seiner Seite gebaut (live). Die Vorgabe steht in `.superpowers/sdd/2026-10-26-rueckmeldungen/webformular-vorgabe.md`.
 
-Die Recherche hatte Tally empfohlen (Gratis-Stufe, Dateianhang bis 10 MB, belgischer Anbieter). **Dennis hat Tally abgelehnt; es wird kein Formular-Dienst genutzt.** Es gibt deshalb keine Formular-Adresse und keine Konstante dafür in der App.
-
-- **Weg ohne Konto: Mail** an `info@dennis-guse.de` per `mailto:` mit Betreff und vorbereitetem Text (unter 2000 Zeichen kodiert). Der Knopf im Fenster heißt „Per E-Mail senden“.
-- Anhänge gehen über `mailto:` nicht. Das Fenster nennt den Ordner mit Bild oder Protokoll (`bild.png`, `rueckmeldung.txt`) und öffnet ihn; der Tester hängt die Dateien in der Mail selbst an.
-- Die Adresse steht zusätzlich als Text mit „Kopieren“-Knopf (wer nur Webmail hat, bekommt oft keinen Entwurf).
+- **Weg ohne Konto: Webformular** `https://dennis-guse.de/planoracad/rueckmeldung.php` (englisch `https://dennis-guse.de/en/planoracad/feedback.php`, gleiche Felder; Konstanten `WEBFORM_URL`, `WEBFORM_URL_EN`). Die App baut nur eine Adresse mit Parametern und öffnet sie im Standardbrowser (GET, kein POST, keine eigene Web- oder Mail-Logik, kein Formular-Dienst).
+- Knopf im Fenster: „Ohne GitHub-Konto senden“ (gleiche Sperre ab 10 Zeichen, gleicher Ablauf wie „Im Browser öffnen“). Hinweis dazu: „Öffnet ein Formular auf dennis-guse.de. Dort kannst du auch Dateien anhängen.“
+- Parameter: `art` (fehler, wunsch, frage), `bereich` (Wert aus der Liste, bei „Keine Angabe“ weggelassen), Fehler: Beschreibung in `passiert` (`ziel` und `erwartet` füllt der Tester auf der Seite, sie sind dort Pflicht); Wunsch und Frage: Beschreibung in `wunsch`; automatisch `version`, `system`, `grafik`, `schritte`, `protokoll` (Protokoll und Absturzbericht nur mit Häkchen).
+- Länge: Adresse immer unter 2000 Zeichen. Es bleiben `art`, `bereich`, `version`, `system`, `grafik`; dann die Beschreibung; zuerst fallen Protokoll und Absturzbericht weg, dann die Schritte. Was nicht passt, steht in `rueckmeldung.txt` im geöffneten Ordner; der Tester lädt es auf der Seite hoch (Feld „dateien“, auch `bild.png`).
+- **Notweg Mail:** Nach dem Senden steht im Fenster „Klappt beides nicht? Schreib an info@dennis-guse.de.“ (Konstante `MAIL_FALLBACK`). Ein `mailto:`-Knopf ist nicht mehr nötig und wird nur gebaut, wenn Dennis es später will.
 - Für Leute mit Konto bleibt der vorausgefüllte GitHub-Link der Hauptweg.
-- Nicht genutzt: Tally (von Dennis abgelehnt), Formspree und andere Formular-Dienste, eigene Brücke (Schlüssel, Spam, Pflege, öffentliche Issues mit persönlichen Angaben), Google Forms.
-- Datenschutzhinweis (README und `docs/so-meldest-du-etwas.md`), nur sachliche Angaben: wer die Meldung bekommt (GitHub-Issue: öffentlich sichtbar; Mail: nur Dennis), wofür (Fehler nachstellen, Wünsche sortieren), Löschung auf Wunsch, Mailadresse freiwillig. Verantwortliche Stelle: **Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst**. Es wird kein Rechtstext erfunden. Das ist keine Rechtsberatung; dieser Hinweis steht nur hier in der Spec, nicht im Anwendertext.
+- Nicht genutzt: Tally (von Dennis abgelehnt), Formspree und andere Formular-Dienste, eigene Brücke, Google Forms.
+- Datenschutzhinweis (README und `docs/so-meldest-du-etwas.md`), nur sachliche Angaben: wer die Meldung bekommt (GitHub-Issue: öffentlich sichtbar; Webformular und Mail: nur Dennis), wofür (Fehler nachstellen, Wünsche sortieren), Löschung auf Wunsch, Mailadresse freiwillig. Verantwortliche Stelle: **Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst**. Es wird kein Rechtstext erfunden. Das ist keine Rechtsberatung; dieser Hinweis steht nur hier in der Spec, nicht im Anwendertext.
 - Die Adresse `info@dennis-guse.de` darf öffentlich in App und README stehen (von Dennis erlaubt).
 
 ### Etappe 5: Wünsche gewichten und Übersicht
@@ -129,7 +129,7 @@ Getrennt bleiben darf:
 
 ## Entschieden am 2026-10-26
 
-1. **Weg ohne Konto:** Tally ist abgelehnt, es gibt keinen Formular-Dienst. Etappe 4 ist nur der Mail-Weg (`mailto:` an `info@dennis-guse.de`, Knopf „Per E-Mail senden“).
+1. **Weg ohne Konto:** Tally ist abgelehnt, es gibt keinen Formular-Dienst. Später am selben Tag hat Dennis ein Webformular auf dennis-guse.de gebaut: Es ist der Weg ohne Konto (Knopf „Ohne GitHub-Konto senden“). Die Mail an `info@dennis-guse.de` bleibt Notweg als Textzeile; Etappe 4 ist vorgezogen (nach Task 8).
 2. **Standardkürzel** Strg+Umschalt+R ist bestätigt.
 3. **Labels und Projekttafel:** Labels darf der Umsetzer/Controller anlegen (Skript `tools/labels.ps1`). Die Projekttafel darf er mit `gh` anlegen; vorher führt Dennis `gh auth refresh -s project` aus.
 4. **Mailadresse** `info@dennis-guse.de` darf öffentlich in App und README stehen.

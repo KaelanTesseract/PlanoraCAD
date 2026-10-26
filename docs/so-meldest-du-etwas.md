@@ -17,7 +17,18 @@ Füll die Felder mit den Sternchen aus. Dazu gehört auch das Auswahlfeld „Ber
 
 ## Ohne GitHub-Konto
 
-Dieser Weg kommt mit einer späteren Version des Programms. Hier steht dann, wie du eine fertige E-Mail an `info@dennis-guse.de` abschickst.
+Du brauchst kein Konto, um etwas zu melden.
+
+1. Öffne im Programm das Menü „Hilfe“ und dort „Rückmeldung …“ (oder drück Strg+Umschalt+R).
+2. Wähl die Art und schreib kurz, was passiert ist.
+3. Klick auf „Ohne GitHub-Konto senden“.
+4. Im Browser öffnet sich ein Formular auf dennis-guse.de. Das Programm hat schon vieles eingetragen. Füll die fehlenden Felder aus und schick es ab.
+
+Bilder und Dateien hängst du im Formular an. Wenn eine Datei nötig ist (zum Beispiel ein Bild oder ein langer Text), öffnet das Programm zusätzlich einen Ordner. Lad die Dateien aus diesem Ordner im Formular hoch, im Feld für Dateien.
+
+Es geht nichts weg, bevor du im Formular auf „Absenden“ klickst.
+
+Klappt das nicht, zum Beispiel weil sich kein Browser öffnet, schreib eine Mail an `info@dennis-guse.de`.
 
 ## Wer sieht meine Meldung?
 
