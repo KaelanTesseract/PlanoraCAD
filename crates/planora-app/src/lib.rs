@@ -10,6 +10,7 @@ pub mod browser;
 pub mod build_info;
 pub mod cards;
 pub mod commands;
+pub mod crash;
 pub mod create_dialog;
 pub mod diag;
 pub mod dialog;

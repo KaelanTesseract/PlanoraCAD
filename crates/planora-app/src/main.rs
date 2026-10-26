@@ -7,6 +7,8 @@ fn main() -> eframe::Result {
     // Protokoll im Datenordner (neben der Konfiguration), noch vor allem anderen.
     if let Some(data_dir) = planora_project::config::Config::config_path().parent() {
         planora_app::diag::init_global(data_dir);
+        // Absturzbericht nach `abstuerze/`; der bisherige Hook läuft danach weiter.
+        planora_app::crash::install_hook(data_dir.join(planora_app::crash::CRASH_DIR));
     }
     // Von der alten Version nach dem Austausch gestartet (siehe `update_install`).
     // `args_os`: ein Argument, das kein gültiges Unicode ist (etwa ein Dateipfad), bricht nicht ab.

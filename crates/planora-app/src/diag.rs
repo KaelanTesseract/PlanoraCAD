@@ -71,6 +71,8 @@ pub struct Diag {
     skip: u32,
     verbose: bool,
     file_error: bool,
+    /// Pfad des aktiven Dokuments, nur für den Absturzbericht (nie ins Protokoll).
+    document: Option<PathBuf>,
 }
 
 impl Diag {
@@ -84,6 +86,7 @@ impl Diag {
             skip: 0,
             verbose: false,
             file_error: false,
+            document: None,
         }
     }
 
@@ -182,6 +185,17 @@ impl Diag {
         self.steps.push_back((time, label, 1));
     }
 
+    /// Merkt den Pfad des aktiven Dokuments für den Absturzbericht. Er kommt nie ins
+    /// Protokoll; bereinigt wird erst bei der Anzeige des Berichts.
+    pub fn set_document(&mut self, path: Option<PathBuf>) {
+        self.document = path;
+    }
+
+    /// Pfad des aktiven Dokuments (siehe [`Diag::set_document`]).
+    pub fn current_document(&self) -> Option<PathBuf> {
+        self.document.clone()
+    }
+
     /// Die letzten Schritte, älteste zuerst.
     pub fn recent_steps(&self) -> Vec<Step> {
         self.steps
@@ -274,6 +288,7 @@ pub fn init_global(data_dir: &Path) {
     let mut fresh = Diag::with_dir(data_dir);
     fresh.verbose = g.verbose;
     fresh.steps = std::mem::take(&mut g.steps);
+    fresh.document = g.document.take();
     // Was bisher nur im Speicher stand, kommt in die Datei und bleibt im Ring.
     let old: Vec<String> = std::mem::take(&mut g.ring).into();
     for line in old {
@@ -314,6 +329,17 @@ pub fn set_verbose(on: bool) {
 /// Merkt einen Schritt im gemeinsamen Protokoll (siehe [`Diag::step`]).
 pub fn step(label: &str) {
     lock().step(label);
+}
+
+/// Merkt den Pfad des aktiven Dokuments im gemeinsamen Protokoll (siehe
+/// [`Diag::set_document`]).
+pub fn set_document(path: Option<PathBuf>) {
+    lock().set_document(path);
+}
+
+/// Pfad des aktiven Dokuments im gemeinsamen Protokoll.
+pub fn current_document() -> Option<PathBuf> {
+    lock().current_document()
 }
 
 /// Die letzten Schritte des gemeinsamen Protokolls, älteste zuerst.

@@ -107,6 +107,9 @@ pub struct PlanoraApp {
     system_open: Box<dyn SystemOpen>,
     pub(crate) versions_ui: VersionsUi,
     applied_dark: Option<bool>,
+    /// Zuletzt an [`crate::diag::set_document`] gemeldeter Dokumentordner (für den Absturzbericht).
+    /// Außen `None`: noch nichts gemeldet.
+    reported_document: Option<Option<std::path::PathBuf>>,
     /// `ViewportCommand::Close` wurde nach freigegebenem Beenden schon geschickt.
     close_sent: bool,
     /// Quelle der Release-Liste: im Programm GitHub ([`HttpSource`]), in Tests eine Nachbildung.
@@ -172,6 +175,20 @@ pub enum RestartPhase {
 }
 
 impl PlanoraApp {
+    /// Meldet den Dokumentordner des aktiven Tabs für den Absturzbericht, nur bei Wechsel.
+    fn report_document(&mut self) {
+        let tab = self.ws.active_tab();
+        let doc = tab
+            .store
+            .as_ref()
+            .map(|s| s.dir().to_path_buf())
+            .or_else(|| tab.source_dir.clone());
+        if self.reported_document.as_ref() != Some(&doc) {
+            crate::diag::set_document(doc.clone());
+            self.reported_document = Some(doc);
+        }
+    }
+
     /// Das Programm. `after_update`: gestartet mit [`update_install::AFTER_UPDATE_ARG`] (von der
     /// alten Version nach dem Austausch).
     pub fn new(cc: &eframe::CreationContext<'_>, after_update: bool) -> Self {
@@ -234,6 +251,7 @@ impl PlanoraApp {
             system_open: Box::new(NoFolderOpen),
             versions_ui: VersionsUi::default(),
             applied_dark: None,
+            reported_document: None,
             close_sent: false,
             update_source,
             update_checker: UpdateChecker::default(),
@@ -1080,6 +1098,15 @@ impl PlanoraApp {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if viewport::typing(ctx) || self.ws.prompt.is_some() || ctx.current_pass_index() != 0 {
             return;
+        }
+        // Nur mit dem Feature `absturz-test` (nie in Release-Builds, nicht in der Übersicht der
+        // Tastenkürzel): Strg+Umschalt+Alt+F12 löst absichtlich eine Panik aus.
+        #[cfg(feature = "absturz-test")]
+        {
+            let mods = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT | egui::Modifiers::ALT;
+            if ctx.input_mut(|i| i.consume_key(mods, egui::Key::F12)) {
+                panic!("Absturz-Test: absichtlich ausgelöst");
+            }
         }
         let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
         let windows = self.windows_open() || self.projects.is_open();
@@ -2212,6 +2239,7 @@ impl eframe::App for PlanoraApp {
             theme::apply(&ctx, dark);
             self.applied_dark = Some(dark);
         }
+        self.report_document();
 
         self.update_tick(&ctx);
         // Schon vor der Statuszeile, damit sie im Bild, in dem die Meldung erscheint, nicht

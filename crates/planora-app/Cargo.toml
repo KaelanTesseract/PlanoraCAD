@@ -18,6 +18,9 @@ path = "src/main.rs"
 # Lokale Update-Quelle für die Echtprobe (siehe planora-update). Standardmäßig AUS; Release-Builds
 # dürfen ihn NIE einschalten.
 update-test-source = ["planora-update/update-test-source"]
+# Strg+Umschalt+Alt+F12 löst absichtlich eine Panik aus (Absturzbericht von Hand prüfen).
+# Standardmäßig AUS; Release-Builds dürfen ihn NIE einschalten.
+absturz-test = []
 
 [dependencies]
 planora-math.workspace = true

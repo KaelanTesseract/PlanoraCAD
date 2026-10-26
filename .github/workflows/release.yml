@@ -71,7 +71,8 @@ jobs:
       - name: Lizenzen prüfen
         run: cargo install cargo-deny --locked && cargo deny check
 
-      # Ohne zusätzliche Funktionen: "update-test-source" (lokale Update-Quelle) darf nie hinein.
+      # Ohne zusätzliche Funktionen: "update-test-source" (lokale Update-Quelle) und "absturz-test"
+      # (Panik per Tastenkürzel) dürfen nie hinein.
       - name: Programm bauen
         run: cargo build --release --locked -p planora-app
 
