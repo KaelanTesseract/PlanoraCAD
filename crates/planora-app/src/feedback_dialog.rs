@@ -239,6 +239,7 @@ impl FeedbackDialog {
         if on {
             if self.shot.image().is_none() {
                 self.shot.start();
+                self.set_picture_text(SHOT_NOT_YET.to_string());
             }
         } else {
             self.shot.reset();
@@ -341,10 +342,6 @@ impl FeedbackDialog {
         built
     }
 
-    /// „Im Browser öffnen“: Ist eine Datei nötig ([`Built::needs_file`]), entsteht der
-    /// Rückmeldungsordner mit `rueckmeldung.txt`; er wird zuerst geöffnet, dann die Adresse.
-    /// Lässt sich der Ordner nicht anlegen, geht die Adresse trotzdem (ohne den Hinweis auf
-    /// die Datei, soweit nichts gekürzt wurde).
     /// Das Bild, wenn es angehakt ist und vorliegt.
     fn picture_to_save(&self) -> Option<Arc<egui::ColorImage>> {
         if self.is_checked(Part::Bild) {
@@ -354,6 +351,10 @@ impl FeedbackDialog {
         }
     }
 
+    /// „Im Browser öffnen“: Ist eine Datei nötig ([`Built::needs_file`]), entsteht der
+    /// Rückmeldungsordner mit `rueckmeldung.txt` (und `bild.png`, wenn das Bild angehakt ist);
+    /// er wird zuerst geöffnet, dann die Adresse. Lässt sich der Ordner nicht anlegen, geht die
+    /// Adresse trotzdem (ohne den Hinweis auf die Datei, soweit nichts gekürzt wurde).
     fn send(&mut self) {
         let report = self.report();
         let with_file = self.with_file();
