@@ -603,9 +603,6 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
     let r = theme::field(
         ui,
         egui::TextEdit::multiline(&mut state.description)
-            // Der Eingabetext in der Hauptfarbe, nicht in der gedämpften Schriftfarbe der
-            // Oberfläche (im hellen Thema zu kontrastarm auf der Fläche des Felds).
-            .text_color(theme::palette(ui.visuals().dark_mode).text_primary)
             .desired_rows(DESCRIPTION_ROWS)
             .desired_width(f32::INFINITY),
     );
