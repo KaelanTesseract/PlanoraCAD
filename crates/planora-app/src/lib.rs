@@ -23,6 +23,7 @@ pub mod drawing_state;
 pub mod drawing_view;
 pub mod export_dialog;
 pub mod feature_dialog;
+pub mod feedback;
 pub mod file_chooser;
 pub mod fonts;
 pub mod formula_field;

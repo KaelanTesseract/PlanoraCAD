@@ -169,6 +169,40 @@ fn ids_are_url_safe() {
 }
 
 #[test]
+fn app_field_ids_exist_in_the_forms() {
+    use planora_app::feedback::*;
+    let fehler = ids(&read(".github/ISSUE_TEMPLATE/fehler.yml"));
+    for id in [
+        FIELD_PASSIERT,
+        FIELD_VERSION,
+        FIELD_SYSTEM,
+        FIELD_GRAFIK,
+        FIELD_SCHRITTE,
+        FIELD_PROTOKOLL,
+    ] {
+        assert!(fehler.iter().any(|f| f == id), "fehler.yml: {id}");
+    }
+    let wunsch = ids(&read(".github/ISSUE_TEMPLATE/wunsch.yml"));
+    for id in [FIELD_WUNSCH, FIELD_ANGABEN] {
+        assert!(wunsch.iter().any(|f| f == id), "wunsch.yml: {id}");
+    }
+    for kind in [Kind::Fehler, Kind::Wunsch, Kind::Frage] {
+        let file = format!(".github/ISSUE_TEMPLATE/{}", kind.template());
+        let t = read(&file);
+        let ids = ids(&t);
+        assert!(ids.iter().any(|f| f == kind.description_field()), "{file}");
+        if kind != Kind::Frage {
+            assert!(
+                t.lines()
+                    .any(|l| l == format!("title: \"{}\"", kind.title_prefix())),
+                "{file}"
+            );
+        }
+    }
+    assert_eq!(planora_app::feedback::AREAS, self::AREAS);
+}
+
+#[test]
 fn field_types_are_as_designed() {
     let kinds = |file: &str, id: &str| {
         let t = read(&format!(".github/ISSUE_TEMPLATE/{file}"));
