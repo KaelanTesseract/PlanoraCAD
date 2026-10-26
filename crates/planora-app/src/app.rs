@@ -1018,6 +1018,30 @@ impl PlanoraApp {
         }
     }
 
+    /// Bild vom Fenster für die Rückmeldung: anfordern, sobald das Fenster ein Bild lang weg
+    /// war, und das eigene Bild-Ereignis abholen (fremde bleiben unbeachtet).
+    fn feedback_shot(&mut self, ctx: &egui::Context) {
+        use crate::feedback_shot::{ShotStep, is_our_shot, shot_user_data};
+        let shots: Vec<_> = ctx.input(|i| {
+            i.raw
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Screenshot {
+                        user_data, image, ..
+                    } if is_our_shot(user_data) => Some(image.clone()),
+                    _ => None,
+                })
+                .collect()
+        });
+        for img in shots {
+            self.feedback.shot_received(img);
+        }
+        if self.feedback.shot_tick(std::time::Instant::now()) == ShotStep::RequestScreenshot {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(shot_user_data()));
+        }
+    }
+
     /// Führt eine Aktion des Fensters „Rückmeldung“ aus: Browser und Zwischenablage über egui,
     /// den Ordner über den Dateimanager ([`SystemOpen`]).
     fn feedback_action(&mut self, ctx: &egui::Context, action: FeedbackAction) {
@@ -1029,8 +1053,7 @@ impl PlanoraApp {
                 }
             }
             FeedbackAction::Copy(text) => ctx.copy_text(text),
-            // Kommt mit dem Bild vom Fenster.
-            FeedbackAction::TakeScreenshot | FeedbackAction::Close => {}
+            FeedbackAction::Close => {}
         }
     }
 
@@ -2345,7 +2368,11 @@ impl eframe::App for PlanoraApp {
             &self.overview,
             &mut self.feedback,
         );
-        if let Some(action) = feedback_dialog::show(&ctx, &mut self.feedback, dark) {
+        self.feedback_shot(&ctx);
+        if self.feedback.hides_for_shot() {
+            // Bild vom Fenster: das Fenster „Rückmeldung“ ist auf dem Bild nicht zu sehen.
+            ctx.request_repaint();
+        } else if let Some(action) = feedback_dialog::show(&ctx, &mut self.feedback, dark) {
             self.feedback_action(&ctx, action);
         }
         self.ws.refresh_prompts();

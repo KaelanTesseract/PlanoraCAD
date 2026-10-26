@@ -25,6 +25,7 @@ pub mod export_dialog;
 pub mod feature_dialog;
 pub mod feedback;
 pub mod feedback_dialog;
+pub mod feedback_shot;
 pub mod file_chooser;
 pub mod fonts;
 pub mod formula_field;

@@ -17,10 +17,13 @@ use crate::build_info::BuildInfo;
 use crate::diag::{self, Step};
 use crate::dialog::{Dialog, DialogSize};
 use crate::feedback::{self, AREAS, Built, FEEDBACK_FILE, Kind, Part, Personal, Report};
+use crate::feedback_shot::{SHOT_FAILED, ShotFlow, ShotPhase, ShotStep, preview_line, save_png};
 use crate::theme::{self, SPACE_1, SPACE_2, SPACE_3, SPACE_4};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
 
 /// Titel des Fensters.
 pub const TITLE: &str = "Rückmeldung";
@@ -59,6 +62,9 @@ pub const NO_FILE: &str = "Die Datei ließ sich nicht anlegen. Die Meldung geht 
 pub const PRIVACY_LINE: &str = "Es geht nichts weg, bevor du im Browser auf „Absenden“ klickst.";
 /// So viele letzte Protokollzeilen kommen in den Bestandteil „Protokollzeilen“.
 pub const LOG_LINES: usize = 100;
+/// Vorschau zum Bild, solange noch keins aufgenommen ist.
+pub const SHOT_NOT_YET: &str =
+    "Beim Anhaken nimmt das Programm ein Bild vom Fenster auf (ohne dieses Fenster).";
 
 /// Kennung des Fensters.
 const WINDOW_ID: &str = "planora_feedback";
@@ -120,8 +126,6 @@ pub enum FeedbackAction {
     OpenFolder(PathBuf),
     /// Diesen Text in die Zwischenablage legen.
     Copy(String),
-    /// Ein Bild vom Fenster machen (kommt mit dem Bild vom Fenster).
-    TakeScreenshot,
     /// Das Fenster wurde geschlossen.
     Close,
 }
@@ -166,6 +170,8 @@ pub struct FeedbackDialog {
     focus_description: bool,
     pending: VecDeque<FeedbackAction>,
     address: Option<(AddressKey, Built)>,
+    /// Ablauf „Bild vom Fenster“.
+    shot: ShotFlow,
 }
 
 impl Default for FeedbackDialog {
@@ -182,6 +188,7 @@ impl Default for FeedbackDialog {
             focus_description: false,
             pending: VecDeque::new(),
             address: None,
+            shot: ShotFlow::default(),
         }
     }
 }
@@ -217,10 +224,61 @@ impl FeedbackDialog {
         self.rows.iter().any(|r| r.part == part && r.on)
     }
 
-    /// Setzt das Häkchen von `part` (nur bei gezeigten Bestandteilen).
+    /// Setzt das Häkchen von `part` (nur bei gezeigten Bestandteilen). Beim Bild startet das
+    /// Anhaken die Aufnahme (falls noch keins da ist), das Abwählen vergisst es.
     pub fn set_checked(&mut self, part: Part, on: bool) {
         if let Some(r) = self.rows.iter_mut().find(|r| r.part == part) {
             r.on = on;
+        }
+        if part == Part::Bild {
+            self.picture_toggled(on);
+        }
+    }
+
+    fn picture_toggled(&mut self, on: bool) {
+        if on {
+            if self.shot.image().is_none() {
+                self.shot.start();
+            }
+        } else {
+            self.shot.reset();
+            self.set_picture_text(SHOT_NOT_YET.to_string());
+        }
+    }
+
+    fn set_picture_text(&mut self, text: String) {
+        if let Some(r) = self.rows.iter_mut().find(|r| r.part == Part::Bild) {
+            r.text = text;
+        }
+    }
+
+    /// Soll das Fenster gerade für die Aufnahme verborgen sein?
+    pub fn hides_for_shot(&self) -> bool {
+        self.open && self.shot.hides_dialog()
+    }
+
+    /// Einmal je Bild vor dem Zeichnen: liefert, ob die App das Bild anfordern soll. Kam nach
+    /// [`SHOT_TIMEOUT`](crate::feedback_shot::SHOT_TIMEOUT) keins, ist das Häkchen wieder aus
+    /// und die Vorschau sagt [`SHOT_FAILED`].
+    pub fn shot_tick(&mut self, now: Instant) -> ShotStep {
+        let step = self.shot.tick(now);
+        if step == ShotStep::ShowDialogAgain && matches!(self.shot.phase, ShotPhase::Failed) {
+            diag::warn("Bild vom Fenster kam nicht");
+            if let Some(r) = self.rows.iter_mut().find(|r| r.part == Part::Bild) {
+                r.on = false;
+            }
+            self.set_picture_text(SHOT_FAILED.to_string());
+        }
+        step
+    }
+
+    /// Ein angefordertes Bild ist da.
+    pub fn shot_received(&mut self, img: Arc<egui::ColorImage>) {
+        if self.shot.received(img) == ShotStep::ShowDialogAgain
+            && let Some(img) = self.shot.image()
+        {
+            let line = preview_line(img);
+            self.set_picture_text(line);
         }
     }
 
@@ -287,6 +345,15 @@ impl FeedbackDialog {
     /// Rückmeldungsordner mit `rueckmeldung.txt`; er wird zuerst geöffnet, dann die Adresse.
     /// Lässt sich der Ordner nicht anlegen, geht die Adresse trotzdem (ohne den Hinweis auf
     /// die Datei, soweit nichts gekürzt wurde).
+    /// Das Bild, wenn es angehakt ist und vorliegt.
+    fn picture_to_save(&self) -> Option<Arc<egui::ColorImage>> {
+        if self.is_checked(Part::Bild) {
+            self.shot.image().cloned()
+        } else {
+            None
+        }
+    }
+
     fn send(&mut self) {
         let report = self.report();
         let with_file = self.with_file();
@@ -301,6 +368,10 @@ impl FeedbackDialog {
                 }
                 None => Err(std::io::Error::other("kein Datenordner")),
             };
+            let written = written.and_then(|dir| match self.picture_to_save() {
+                Some(img) => save_png(&dir, &img).map(|_| dir),
+                None => Ok(dir),
+            });
             match written {
                 Ok(dir) => folder = Some(dir),
                 Err(e) => {
@@ -354,6 +425,7 @@ fn rows_for(c: &FeedbackContext) -> Vec<PartRow> {
         let from = c.log.len().saturating_sub(LOG_LINES);
         rows.push((Part::Protokoll, clean(&c.log[from..].join("\n"))));
     }
+    rows.push((Part::Bild, SHOT_NOT_YET.to_string()));
     if let Some(text) = c.crash_report.as_deref().and_then(read_report) {
         rows.push((Part::Absturzbericht, clean(&text)));
     }
@@ -479,6 +551,7 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
     ui.add_space(SPACE_4);
     theme::section_header(ui, PREVIEW_HEADING, theme::SUB_HEADER_H);
     ui.add_space(SPACE_1);
+    let picture_before = state.is_checked(Part::Bild);
     for row in &mut state.rows {
         egui::collapsing_header::CollapsingState::load_with_default_open(
             ui.ctx(),
@@ -490,6 +563,10 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
             theme::focus_ring(ui, &r);
         })
         .body(|ui| read_only_text(ui, preview_id(row.part), &row.text, PREVIEW_MAX_H));
+    }
+    let picture_now = state.is_checked(Part::Bild);
+    if picture_now != picture_before {
+        state.picture_toggled(picture_now);
     }
 
     ui.add_space(SPACE_3);

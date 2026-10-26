@@ -87,6 +87,8 @@ struct Rig {
     seen: Vec<Seen>,
     /// Alle Ausgaben (Browser, Zwischenablage) seit dem Start.
     commands: Vec<OutputCommand>,
+    /// Alle Befehle an das Hauptfenster (z. B. Bild anfordern) seit dem Start.
+    viewport: Vec<egui::ViewportCommand>,
     /// Von der Nachbildung geöffnete Ordner.
     opened: Arc<Mutex<Vec<PathBuf>>>,
     /// Datenordner (Ordner der Konfigurationsdatei) im Temp-Ordner.
@@ -121,6 +123,7 @@ impl Rig {
             time: 0.0,
             seen: Vec::new(),
             commands: Vec::new(),
+            viewport: Vec::new(),
             opened,
             data,
         };
@@ -147,6 +150,9 @@ impl Rig {
         }
         self.commands
             .extend(out.platform_output.commands.iter().cloned());
+        for v in out.viewport_output.values() {
+            self.viewport.extend(v.commands.iter().cloned());
+        }
         out.drop_without_applying_deltas();
         self.seen = seen;
     }
@@ -599,9 +605,11 @@ fn default_checkboxes() {
             Part::System,
             Part::Grafik,
             Part::Schritte,
-            Part::Protokoll
+            Part::Protokoll,
+            Part::Bild
         ]
     );
+    assert_eq!(d.preview_text(Part::Bild), Some(SHOT_NOT_YET));
     // Die Adresse enthält nur die angehakten Teile.
     d.description = "Beim Extrudieren passiert nichts.".into();
     let url = d.built().url;
@@ -1253,4 +1261,123 @@ fn texts_are_plain_language() {
     // Die Häkchen tragen die Namen der Bestandteile.
     assert_eq!(Part::Grafik.label(), "Grafikkarte");
     assert_eq!(Part::Schritte.label(), "Letzte Schritte");
+}
+
+// ---- Bild vom Fenster ----------------------------------------------------------------------
+
+fn shot_requests(r: &Rig) -> usize {
+    r.viewport
+        .iter()
+        .filter(|c| {
+            matches!(c, egui::ViewportCommand::Screenshot(d)
+                if planora_app::feedback_shot::is_our_shot(d))
+        })
+        .count()
+}
+
+fn screenshot_event(w: usize, h: usize, data: egui::UserData) -> Event {
+    Event::Screenshot {
+        viewport_id: egui::ViewportId::ROOT,
+        user_data: data,
+        image: Arc::new(egui::ColorImage::new(
+            [w, h],
+            vec![egui::Color32::from_rgb(10, 20, 30); w * h],
+        )),
+    }
+}
+
+#[test]
+fn app_sends_viewport_screenshot_command_after_one_hidden_frame() {
+    use planora_app::feedback_shot::{SHOT_FILE, preview_line, shot_user_data};
+    let mut r = Rig::new("planora-fb-bild");
+    r.open_with_context();
+    assert!(r.sees(TITLE));
+    assert_eq!(shot_requests(&r), 0);
+    open_previews(&r.ctx);
+    r.settle();
+    // Häkchen „Bild vom Fenster“ setzen: das Fenster verschwindet ein Bild lang, dann kommt
+    // die Anforderung (das Bild davor zeigt kein Rückmeldungsfenster).
+    let p = r.find(Part::Bild.label()).center();
+    r.frame(vec![Event::PointerMoved(p)]);
+    r.frame(vec![Event::PointerButton {
+        pos: p,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: NONE,
+    }]);
+    r.frame(vec![Event::PointerButton {
+        pos: p,
+        button: PointerButton::Primary,
+        pressed: false,
+        modifiers: NONE,
+    }]);
+    // Spätestens zwei Bilder danach ist das Bild angefordert, und zwar in einem Bild ohne
+    // Rückmeldungsfenster.
+    let mut frames = 0;
+    while shot_requests(&r) == 0 {
+        assert!(frames < 2, "keine Anforderung");
+        r.frame(vec![]);
+        frames += 1;
+    }
+    assert!(
+        !r.sees(TITLE),
+        "Fenster beim Anfordern verborgen: {:?}",
+        r.texts()
+    );
+    assert_eq!(shot_requests(&r), 1);
+    r.frame(vec![]);
+    assert!(!r.sees(TITLE), "verborgen, solange gewartet wird");
+    // Ein fremdes Bild ändert nichts.
+    r.frame(vec![screenshot_event(5, 5, egui::UserData::new("fremd"))]);
+    assert!(!r.sees(TITLE));
+    // Das eigene Bild kommt: Fenster wieder da, Vorschau mit Größe, Häkchen gesetzt.
+    r.frame(vec![screenshot_event(64, 48, shot_user_data())]);
+    r.settle();
+    assert!(r.sees(TITLE), "wieder gezeigt");
+    assert!(r.fb().is_checked(Part::Bild));
+    let line = preview_line(&egui::ColorImage::new(
+        [64, 48],
+        vec![egui::Color32::BLACK; 64 * 48],
+    ));
+    assert_eq!(r.fb().preview_text(Part::Bild), Some(line.as_str()));
+    assert_eq!(shot_requests(&r), 1, "nur einmal angefordert");
+
+    // Schicken: das Bild liegt im Rückmeldungsordner, die Adresse sagt „anhängen“.
+    r.fb().description = "Die Linie springt beim Ziehen weg.".into();
+    r.click(OPEN_BROWSER);
+    let opened = r.opened();
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    let png = opened[0].join(SHOT_FILE);
+    let bytes = std::fs::read(&png).expect("bild.png angelegt");
+    assert_eq!(&bytes[..4], b"\x89PNG");
+    let url = r.urls().pop().unwrap();
+    assert!(url.contains(&percent_encode(ATTACH_HINT)), "{url}");
+    assert!(
+        !url.contains("bild.png"),
+        "das Bild geht nicht über die Adresse"
+    );
+}
+
+#[test]
+fn shot_timeout_unchecks_picture_and_shows_hint() {
+    use planora_app::feedback_shot::{SHOT_FAILED, SHOT_TIMEOUT, ShotStep};
+    let tmp = common::temp_root("planora-fb-bild-zeit");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let mut d = FeedbackDialog::default();
+    d.open_fresh(context(&tmp));
+    d.set_checked(Part::Bild, true);
+    assert!(d.hides_for_shot());
+    let t0 = std::time::Instant::now();
+    assert_eq!(d.shot_tick(t0), ShotStep::RequestScreenshot);
+    assert_eq!(d.shot_tick(t0 + SHOT_TIMEOUT), ShotStep::ShowDialogAgain);
+    assert!(!d.hides_for_shot());
+    assert!(!d.is_checked(Part::Bild), "ohne Bild kein Häkchen");
+    assert_eq!(d.preview_text(Part::Bild), Some(SHOT_FAILED));
+    // Erneut anhaken versucht es noch einmal.
+    d.set_checked(Part::Bild, true);
+    assert!(d.hides_for_shot());
+    // Abwählen bricht ab und vergisst das Bild.
+    d.set_checked(Part::Bild, false);
+    assert!(!d.hides_for_shot());
+    assert_eq!(d.preview_text(Part::Bild), Some(SHOT_NOT_YET));
 }
