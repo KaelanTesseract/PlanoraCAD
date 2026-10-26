@@ -125,7 +125,7 @@ pub fn project_zip_name(project: &Path) -> Option<String> {
             'Ö' => out.push_str("Oe"),
             'Ü' => out.push_str("Ue"),
             'ß' => out.push_str("ss"),
-            'ẞ' => out.push_str("SS"),
+            '\u{1E9E}' => out.push_str("SS"),
             c if c.is_ascii_alphanumeric() || c == '.' || c == '-' => out.push(c),
             _ => {
                 if !out.ends_with('_') {
