@@ -95,7 +95,11 @@ pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
     if a == Action::FeedbackOpen {
         return MenuRequest::Feedback;
     }
-    crate::diag::step(a.label());
+    // „Speichern“ wird erst ein Schritt, wenn wirklich gespeichert wurde (`Workspace`); ein
+    // abgebrochenes „Speichern unter“ soll in den letzten Schritten nicht stehen.
+    if a != Action::Save {
+        crate::diag::step(a.label());
+    }
     match a {
         Action::ShowShortcuts | Action::SketchShowShortcuts => return MenuRequest::Shortcuts,
         Action::New => {

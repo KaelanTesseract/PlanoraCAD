@@ -30,6 +30,8 @@ pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
 
 /// Meldung, wenn noch kein Projektverzeichnis gewählt ist.
 const NO_ROOT: &str = "Es ist noch kein Projektverzeichnis gewählt.";
+/// Schritt (Letzte Schritte) nach einem gelungenen Speichern; erst dann, nicht schon beim Befehl.
+const SAVE_STEP: &str = "Speichern";
 
 /// Ablehnung eines Dokumentnamens auf „.pcad“ (wie bei Ordnern; die Endung hängt das Programm
 /// selbst an).
@@ -823,6 +825,7 @@ impl Workspace {
                 }
                 tab.based_on = Some(n);
                 tab.mark_clean();
+                crate::diag::step(SAVE_STEP);
                 crate::diag::info(&format!("Gespeichert: {} (Version {n})", tab.name));
                 Ok(SaveOutcome::Saved(n))
             }
@@ -879,6 +882,7 @@ impl Workspace {
         // ein Angebot des bisherigen Dokuments gilt nicht für das neue; seine Datei bleibt dort
         tab.pending_autosave = None;
         tab.keep_autosave = false;
+        crate::diag::step(SAVE_STEP);
         crate::diag::info(&format!("Gespeichert: {} (Version 1)", tab.name));
         tab.mark_clean();
         self.library_revision += 1;
