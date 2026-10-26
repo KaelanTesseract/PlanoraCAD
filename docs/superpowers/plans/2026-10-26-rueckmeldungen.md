@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Tester melden Fehler, Wünsche und Fragen aus PlanoraCAD heraus über ein vorausgefülltes GitHub-Formular (oder ohne Konto per Formular/Mail), sehen vorher genau, was mitgeht, und nach einem Absturz liegt ein Bericht bereit, den die App beim nächsten Start anbietet.
+**Goal:** Tester melden Fehler, Wünsche und Fragen aus PlanoraCAD heraus über ein vorausgefülltes GitHub-Formular (oder ohne Konto per E-Mail), sehen vorher genau, was mitgeht, und nach einem Absturz liegt ein Bericht bereit, den die App beim nächsten Start anbietet.
 
 **Architecture:** Etappe 1 legt nur Dateien im Repo an (Issue-Formulare, Anleitungen, Label-Skript). Im Programm kommen reine Logik-Module ohne Oberfläche dazu (`diag` für Protokoll und Schritte, `build_info` für Version/System/Grafik, `feedback` für Bereinigung, Adressbau und Kürzung, `crash` für Panic-Hook, Laufmarker und Aufräumen), darüber dünne Oberflächen (`feedback_dialog`, Absturz-Rückfrage, Menü „Hilfe“). Alles, was nach außen geht, ist eine Adresse, die der Tester im Browser selbst abschickt.
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Branch `feature/rueckmeldungen`; nie pushen, kein Tag, kein `gh release`, kein `gh label create`, kein `gh project` ohne Dennis' ausdrückliches Wort (nur der Controller).
+- Branch `feature/rueckmeldungen`; nie pushen, kein Tag, kein `gh release` (nur der Controller, Push nach Prüfung). Erlaubt von Dennis (2026-10-26): Labels mit `tools/labels.ps1` anlegen; Projekttafel mit `gh project` anlegen, sobald Dennis `gh auth refresh -s project` ausgeführt hat. Kein Formular-Dienst (Tally ist abgelehnt). Die Mailadresse `info@dennis-guse.de` darf öffentlich in App und README stehen; verantwortliche Stelle im Datenschutztext: „Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst“, sonst kein Rechtstext erfunden, nur sachliche Angaben.
 - Datenschutz: Jeder Bestandteil der Meldung steht im Fenster als Text mit Häkchen. Standard an: Version, System, Grafikkarte, letzte Schritte. Standard aus: Protokollzeilen, Bild, Projektdatei. Die App öffnet nur eine Adresse oder einen Ordner; gesendet wird nur durch den Klick des Testers im Browser.
 - Bereinigung vor jeder Anzeige: Benutzername in Pfaden („C:\Users\<Name>\…“) ersetzt, Projektpfade auf den Dateinamen gekürzt, Mailadressen aus Protokollzeilen entfernt.
 - Adresse unter 2000 Zeichen nach dem Kodieren; gekürzt wird in der Reihenfolge Protokollzeilen, letzte Schritte; die Beschreibung bleibt ganz (zur Grenze siehe Review Focus 1).
@@ -47,7 +47,7 @@
 **Interfaces:**
 - Produces (Task 6 prüft dagegen): Formular-Dateinamen `fehler.yml`, `wunsch.yml`; Feld-`id`s
   - `fehler.yml` (Label `bug`, Titelvorgabe `"Fehler: "`): `ziel` („Was wolltest du tun?“, Pflicht), `passiert` („Was ist passiert?“, Pflicht), `erwartet` („Was hast du erwartet?“, Pflicht), `bereich` (Dropdown: Skizze, 3D, Export, Zeichnung, Tastenkürzel, Anderes; Pflicht), `version`, `system`, `grafik`, `schritte`, `protokoll` (alle `textarea`, freiwillig, Beschreibung „Füllt das Programm aus.“), `bild` (`textarea`, freiwillig, „Bild hierher ziehen“).
-  - `wunsch.yml` (Label `idee`, Titelvorgabe `"Wunsch: "`): `wunsch` („Was möchtest du tun können?“, Pflicht), `heute` („Wie machst du es heute?“, Pflicht), `wichtig` (Dropdown „Wie wichtig ist es dir?“: Wäre schön, Wichtig, Ohne geht es kaum; freiwillig), `bereich` (wie oben, Pflicht), `angaben` (`textarea`, freiwillig, „Füllt das Programm aus.“). Ein `markdown`-Block oben: „Zeig mit 👍 unter einem Wunsch, dass du ihn auch willst.“
+  - `wunsch.yml` (Label `idee`, Titelvorgabe `"Wunsch: "`; dient auch für Fragen, die die App mit der Vorsilbe „Frage: “ vorbelegt, das Label `frage` setzt Dennis; es gibt kein eigenes Frage-Formular): `wunsch` („Was möchtest du tun können?“, Pflicht), `heute` („Wie machst du es heute?“, Pflicht), `wichtig` (Dropdown „Wie wichtig ist es dir?“: Wäre schön, Wichtig, Ohne geht es kaum; freiwillig), `bereich` (wie oben, Pflicht), `angaben` (`textarea`, freiwillig, „Füllt das Programm aus.“). Ein `markdown`-Block oben: „Zeig mit 👍 unter einem Wunsch, dass du ihn auch willst.“
   - `config.yml`: `blank_issues_enabled: false`; `contact_links`: „Häufige Probleme“ → `https://github.com/KaelanTesseract/PlanoraCAD/blob/master/docs/haeufige-probleme.md`, „So meldest du etwas“ → `…/docs/so-meldest-du-etwas.md`.
 - `tools/labels.ps1 [-Probelauf]`: legt `bug`, `idee`, `frage`, `Sketch`, `3D`, `Export`, `Tastenkürzel` mit fester Farbe und kurzer deutscher Beschreibung an (`gh label create`), überspringt vorhandene (`gh label list --json name`); mit `-Probelauf` nur die Befehle ausgeben, ohne `gh` aufzurufen.
 
@@ -58,13 +58,13 @@
   - `config_disables_blank_issues_and_links_both_pages` (beide verlinkten Dateien existieren im Repo)
   - `ids_are_url_safe` (nur `a-z`, `-`)
 - [ ] **Step 2:** `cargo test -p planora-app --test issue_templates` → FAIL (Dateien fehlen).
-- [ ] **Step 3: Dateien schreiben.** Anleitung `so-meldest-du-etwas.md` in einfacher Sprache, Du-Form: mit Konto (aus der App: Hilfe → Rückmeldung …; oder direkt auf GitHub), ohne Konto (Platzhalter-Abschnitt „kommt mit Etappe 4“, wird dort ersetzt), was an wen geht (öffentlich sichtbares Issue), wie Bilder angehängt werden (Datei ins Feld ziehen), wie 👍 wirkt. `haeufige-probleme.md`: Windows-Warnung bei unsignierter Datei (SmartScreen: „Weitere Informationen → Trotzdem ausführen“), Grafiktreiber aktualisieren, Antivirus hält die Datei fest, Programm liegt unter „Programme“ und kann sich nicht aktualisieren (aus README/`docs/superpowers/offene-punkte.md` übernehmen, nichts erfinden). README-Verweis eine Zeile.
+- [ ] **Step 3: Dateien schreiben.** Anleitung `so-meldest-du-etwas.md` in einfacher Sprache, Du-Form: mit Konto (aus der App: Hilfe → Rückmeldung …; oder direkt auf GitHub), ohne Konto (Platzhalter-Abschnitt „kommt mit Etappe 4“, wird dort durch den Mail-Weg ersetzt), was an wen geht (öffentlich sichtbares Issue), wie Bilder angehängt werden (Datei ins Feld ziehen), wie 👍 wirkt. `haeufige-probleme.md`: Windows-Warnung bei unsignierter Datei (SmartScreen: „Weitere Informationen → Trotzdem ausführen“), Grafiktreiber aktualisieren, Antivirus hält die Datei fest, Programm liegt unter „Programme“ und kann sich nicht aktualisieren (aus README/`docs/superpowers/offene-punkte.md` übernehmen, nichts erfinden). README-Verweis eine Zeile.
 - [ ] **Step 4:** `cargo test -p planora-app --test issue_templates` → PASS. YAML mit einem echten Parser prüfen: `wsl -d Ubuntu -u root -- su - ci -c "cd ~/PlanoraCAD && python3 -c 'import sys,yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]' .github/ISSUE_TEMPLATE/*.yml"` → keine Ausgabe, Exit 0 (fehlt PyYAML: anhalten, Controller fragen, nichts installieren). `powershell -File tools\labels.ps1 -Probelauf` → sieben `gh label create`-Zeilen, kein Netz.
 - [ ] **Step 5: Commit** `docs(rueckmeldung): Issue-Formulare, Anleitung, häufige Probleme, Label-Skript`.
 
 ### Task 2: Sichtprüfung Etappe 1 (Dennis)
 
-- [ ] Controller fragt Dennis, ob Task 1 vorab auf `master` darf (die Formulare zeigt GitHub nur auf dem Standardzweig) und ob `tools/labels.ps1` ohne `-Probelauf` laufen darf (offene Punkte 5 der Spec).
+- [ ] Dennis hat erlaubt (Spec, „Entschieden am 2026-10-26“): Task 1 darf vorab nach `master` gemergt und vom Controller nach der Prüfung gepusht werden (die Formulare zeigt GitHub nur auf dem Standardzweig), und `tools/labels.ps1` darf ohne `-Probelauf` laufen. Der Controller führt beides aus.
 - [ ] Nach Dennis' Push: Checkliste für Dennis im Browser: „New issue“ zeigt nur „Fehler melden“, „Wunsch“ und die zwei Links; Pflichtfelder sind markiert; Vorausfüllung klappt mit `https://github.com/KaelanTesseract/PlanoraCAD/issues/new?template=fehler.yml&passiert=Test%20%C3%A4%C3%B6%C3%BC%0AZeile%202&version=0.2.0-dev.1` (Umlaute und Zeilenumbruch kommen an); beide Anleitungen lesen sich verständlich.
 
 ## Etappe 2: Rückmeldungs-Fenster in der App
@@ -258,27 +258,26 @@
 
 ## Etappe 4: Weg ohne GitHub-Konto
 
-### Task 13: Mail-Weg, Tally-Konstante, Datenschutztext
+### Task 13: Mail-Weg und Datenschutztext
 
 **Files:**
 - Modify: `crates/planora-app/src/feedback.rs`, `crates/planora-app/src/feedback_dialog.rs`, `README.md` (neuer Abschnitt „Rückmeldungen und Datenschutz“ neben „Updates und Versionen“, gegenseitige Verweise), `docs/so-meldest-du-etwas.md` (Abschnitt „Ohne GitHub-Konto“ und Datenschutzhinweis), `CHANGELOG.md`
 - Test: `crates/planora-app/tests/feedback_mail.rs`
 
 **Interfaces (Produces):**
-- `pub const MAIL_TO: &str = "info@dennis-guse.de";` `pub const TALLY_FORM_URL: &str = "";` (leer, bis Dennis das Formular angelegt hat)
-- `pub fn mail_url(report: &Report, with_file: bool) -> Built` (`mailto:info@dennis-guse.de?subject=…&body=…`, gleiche Kürzungsregeln und Grenze 2000 wie `issue_url`).
-- `pub fn tally_url(base: &str, info: &BuildInfo) -> Option<String>` (`None` bei leerem `base`; sonst `base?version=…&system=…` mit `percent_encode`; versteckte Felder heißen `version` und `system`).
-- Fenster: Knopf `NO_ACCOUNT = "Ohne GitHub-Konto senden"`; mit Tally-Adresse öffnet er Tally, sonst die Mail; darunter immer `MAIL_LINE` als `pub fn mail_line() -> String` („Oder per Mail an info@dennis-guse.de“) mit Knopf „Adresse kopieren“ und dem Hinweis `MAIL_ATTACH_HINT = "Bilder und Dateien hängst du in der Mail selbst an. Sie liegen im geöffneten Ordner."`.
-- Datenschutztext: wer die Meldung bekommt (GitHub-Issue öffentlich; Mail/Tally nur Dennis), wofür, Löschung auf Wunsch, Mailadresse freiwillig, Verantwortliche Stelle als Platzhalter „[Verantwortliche Stelle – von Dennis einzutragen]“; kein Rechtsrat, nichts erfinden.
+- `pub const MAIL_TO: &str = "info@dennis-guse.de";` Tally und jeder andere Formular-Dienst sind abgelehnt: keine Formular-Adresse, keine Konstante dafür, kein `tally_url`.
+- `pub fn mail_url(report: &Report, with_file: bool) -> Built` (`mailto:info@dennis-guse.de?subject=…&body=…`, gleiche Kürzungsregeln und Grenze 2000 wie `issue_url`; `with_file` hängt den Ordner-Hinweis an).
+- Fenster: Knopf `MAIL_BUTTON = "Per E-Mail senden"` öffnet `mail_url` (Ordner mit Bild/Protokoll/`rueckmeldung.txt` wird wie beim GitHub-Weg angelegt und geöffnet); darunter immer `MAIL_LINE` als `pub fn mail_line() -> String` („Oder per Mail an info@dennis-guse.de“) mit Knopf „Adresse kopieren“ und dem Hinweis `MAIL_ATTACH_HINT = "Bilder und Dateien hängst du in der Mail selbst an. Sie liegen im geöffneten Ordner."`.
+- Datenschutztext (README und `docs/so-meldest-du-etwas.md`), nur sachliche Angaben: wer die Meldung bekommt (GitHub-Issue öffentlich sichtbar; Mail nur Dennis), wofür (Fehler nachstellen, Wünsche sortieren), Löschung auf Wunsch, Mailadresse freiwillig. Verantwortliche Stelle: „Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst“ (kein Platzhalter mehr). Kein erfundener Rechtstext; „keine Rechtsberatung“ steht nicht im Anwendertext (nur in der Spec).
 
-- [ ] **Step 1: Tests:** `mail_url_is_mailto_with_subject_and_body_under_2000` (Umlaute, Zeilenumbrüche, lange Beschreibung), `tally_none_when_empty_else_prefilled`, `no_account_button_opens_mail_while_tally_is_empty`, `no_account_button_opens_tally_when_set` (Test-Hilfe setzt eine Adresse über einen `#[doc(hidden)]`-Weg, nicht über die Konstante), `mail_address_can_be_copied`, `readme_and_guide_have_privacy_section_with_placeholder` (Text enthält den Platzhalter und `MAIL_TO`).
+- [ ] **Step 1: Tests:** `mail_url_is_mailto_with_subject_and_body_under_2000` (Umlaute, Zeilenumbrüche, lange Beschreibung), `mail_button_opens_the_mail_url_and_writes_the_folder`, `mail_address_can_be_copied`, `no_form_service_is_referenced` (kein „tally“, keine Formular-Adresse in `src/` und Anleitungen, Groß/Klein egal), `readme_and_guide_have_privacy_section_with_responsible_party` (Text enthält „Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst“ und `MAIL_TO`, nicht „Rechtsberatung“).
 - [ ] **Step 2:** FAIL. **Step 3:** Implementieren. **Step 4:** `cargo test -p planora-app --test feedback_mail --test feedback_dialog`, fmt, clippy.
-- [ ] **Step 5: Commit** `feat(rueckmeldung): Weg ohne GitHub-Konto per Mail, Platz für Tally`.
+- [ ] **Step 5: Commit** `feat(rueckmeldung): Weg ohne GitHub-Konto per E-Mail`.
 
 ### Task 14: Sichtprüfung Etappe 4
 
-- [ ] 1920 × 1080: „Ohne GitHub-Konto senden“ öffnet das Mailprogramm mit Betreff und Text (nicht absenden); „Adresse kopieren“ klappt.
-- [ ] Checkliste für Dennis: Tally-Formular anlegen (Felder Beschreibung, Mail freiwillig, Datei-Upload, versteckt `version`, `system`), Hosting/AV-Vertrag prüfen, Adresse nennen → Controller trägt sie in `TALLY_FORM_URL` ein (eigener kleiner Commit).
+- [ ] 1920 × 1080: „Per E-Mail senden“ öffnet das Mailprogramm mit Betreff und Text (nicht absenden); „Adresse kopieren“ klappt; der Ordner mit Bild/Protokoll öffnet sich.
+- [ ] Dennis liest den Datenschutzabschnitt in README und Anleitung (Name und Anschrift stehen drin, keine Platzhalter).
 
 ## Etappe 5: Wünsche gewichten und Übersicht
 
@@ -290,12 +289,12 @@
 - Test: `crates/planora-app/tests/issue_templates.rs` (`guide_files_exist_and_are_linked_from_readme`)
 
 - [ ] **Step 1:** Test ergänzen (README verlinkt `docs/so-meldest-du-etwas.md`, `docs/haeufige-probleme.md`, `docs/projekttafel-einrichten.md`) → FAIL.
-- [ ] **Step 2:** Anleitung schreiben, Schritt für Schritt in einfacher Sprache: neues Projekt (Tafel) am Repo, Spalten **Geplant**, **In Arbeit**, **Fertig**, Ablauf „Neue Issues automatisch hinzufügen“ (Filter `is:issue`), Sichtbarkeit öffentlich, Link ins README; dazu der alternative `gh`-Weg (`gh auth refresh -s project`, dann `gh project create …`) ausdrücklich nur auf Dennis' Wort.
+- [ ] **Step 2:** Anleitung schreiben, Schritt für Schritt in einfacher Sprache: neues Projekt (Tafel) am Repo, Spalten **Geplant**, **In Arbeit**, **Fertig**, Ablauf „Neue Issues automatisch hinzufügen“ (Filter `is:issue`), Sichtbarkeit öffentlich, Link ins README; dazu der `gh`-Weg (`gh project create …`), den der Controller gehen darf. Als eigener Schritt für Dennis steht davor: `gh auth refresh -s project` (ohne dieses Recht geht `gh project` nicht).
 - [ ] **Step 3:** Test PASS. **Step 4: Commit** `docs(rueckmeldung): Anleitung für die Projekttafel`.
 
 ### Task 16: Sichtprüfung Etappe 5 (Dennis)
 
-- [ ] Dennis legt die Tafel nach der Anleitung an (oder erlaubt `gh`), prüft mit einem Test-Issue, dass es automatisch in „Geplant“ landet, und nennt den Link; Controller ersetzt den Platzhalter im README.
+- [ ] Dennis führt `gh auth refresh -s project` aus; danach legt der Controller die Tafel mit `gh` an (oder Dennis von Hand nach der Anleitung). Dennis prüft mit einem Test-Issue, dass es automatisch in „Geplant“ landet, und nennt den Link; Controller ersetzt den Platzhalter im README.
 
 ## Etappe 6: Kleinkram
 
@@ -322,7 +321,7 @@
 ### Task 19: Release-Vorlage, Changelog, Dokumentation, Aufräumen
 
 **Files:**
-- Modify: `tools/changelog-section.ps1` (Schalter `-Footer`: hängt eine Leerzeile und `So meldest du etwas: https://github.com/KaelanTesseract/PlanoraCAD/blob/master/docs/so-meldest-du-etwas.md` an), `.github/workflows/release.yml` (Aufruf mit `-Footer`), `CHANGELOG.md`, `README.md`, `docs/superpowers/offene-punkte.md` (Abschnitt „Rückmeldungen“: was geht, was nicht: Abstürze ohne Rust-Meldung, Tally offen, Projekttafel offen), Plan-Abschnitt „Abweichungen“; tote Hilfsfunktionen entfernen
+- Modify: `tools/changelog-section.ps1` (Schalter `-Footer`: hängt eine Leerzeile und `So meldest du etwas: https://github.com/KaelanTesseract/PlanoraCAD/blob/master/docs/so-meldest-du-etwas.md` an), `.github/workflows/release.yml` (Aufruf mit `-Footer`), `CHANGELOG.md`, `README.md`, `docs/superpowers/offene-punkte.md` (Abschnitt „Rückmeldungen“: was geht, was nicht: Abstürze ohne Rust-Meldung, Weg ohne Konto nur per Mail, kein Formular-Dienst, Projekttafel-Stand), Plan-Abschnitt „Abweichungen“; tote Hilfsfunktionen entfernen
 - Test: `crates/planora-update/tests/release_meta.rs` (bleibt grün), Probelauf des Skripts
 
 - [ ] **Step 1:** `powershell -File tools\changelog-section.ps1 -Version <oberste Version> -Footer` → Abschnitt endet mit der Zeile „So meldest du etwas: …“; ohne `-Footer` unverändert.

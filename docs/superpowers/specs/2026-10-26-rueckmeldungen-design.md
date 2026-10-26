@@ -1,6 +1,6 @@
 # Rückmeldungen einsammeln – Entwurf
 
-Stand: 2026-10-26. Teilprojekt von PlanoraCAD (Rust, egui). Geschrieben nach Dennis' Auftrag; die mit „Meine Entscheidung“ markierten Stellen sind Annahmen von Claude, die Dennis beim Lesen prüfen soll.
+Stand: 2026-10-26. Teilprojekt von PlanoraCAD (Rust, egui). Geschrieben nach Dennis' Auftrag. Dennis hat die offenen Fragen am 2026-10-26 beantwortet (Abschnitt „Entschieden am 2026-10-26“ am Ende); die Antworten sind eingearbeitet. Was noch „Meine Entscheidung“ heißt, ist eine Annahme von Claude, die Dennis noch nicht bestätigt hat.
 
 ## Warum
 
@@ -13,12 +13,13 @@ Die Update-Funktion ist schon gemergt (Merge 5c88844, noch nicht veröffentlicht
 - Ein Knopf in der App (Hilfe → Rückmeldung …, mit änderbarem Tastenkürzel) öffnet ein Fenster. Der Tester wählt Fehler, Wunsch oder Frage, schreibt zwei Sätze und klickt. Im Browser öffnet sich ein vorausgefülltes GitHub-Formular.
 - Nichts verlässt den Rechner ohne sichtbare Zustimmung. Das Fenster zeigt genau den Text, der in den Link kommt.
 - Bei einem Absturz bleibt ein Bericht auf der Platte. Beim nächsten Start fragt die App, ob er gespeichert oder gesendet werden soll.
-- Wer kein GitHub-Konto hat, hat einen zweiten Weg.
+- Wer kein GitHub-Konto hat, hat einen zweiten Weg: eine vorbereitete E-Mail.
 - Wünsche lassen sich mit 👍 gewichten, und es gibt eine öffentliche Übersicht „Geplant / In Arbeit / Fertig“.
 
 ## Keine Ziele
 
 - Kein eigener Server, keine Zugangsdaten in der App, kein Dienst, der Daten im Hintergrund sammelt.
+- Kein Formular-Dienst (Tally, Formspree und ähnliche): Dennis hat Tally abgelehnt.
 - Kein Vergleich mit Fusion als Testhilfe: kein Label „unterschied-zu-fusion“, keine Abhak-Liste.
 - Keine Nutzungsstatistik, kein Abgleich mit einem Konto, keine automatische Meldung ohne Klick des Testers.
 - Abstürze ohne Rust-Meldung (Zugriffsfehler, Grafiktreiber) werden nicht abgefangen, nur als „letzter Lauf endete unerwartet“ erkannt.
@@ -34,11 +35,11 @@ Die Update-Funktion ist schon gemergt (Merge 5c88844, noch nicht veröffentlicht
 
 1. **Datenschutz zuerst.** Jeder Bestandteil der Meldung steht im Fenster als Text und hat ein Häkchen. Standardmäßig an: Version, System, Grafikkarte, letzte Schritte. Standardmäßig aus: Protokollzeilen, Bild, Projektdatei. Es geht nichts über das Netz, außer der Tester klickt im Browser selbst auf „Absenden“. Die App öffnet nur eine Adresse.
 2. **Bereinigung.** Vor der Anzeige ersetzt die App den Benutzernamen in Pfaden („C:\Users\<Name>\…“), kürzt Projektpfade auf den Dateinamen und entfernt Mailadressen aus Protokollzeilen. Der Tester sieht das Ergebnis.
-3. **Länge der Adresse.** Die Adresse bleibt unter 2000 Zeichen (nach dem Kodieren). Passt der Text nicht, kürzt die App in dieser Reihenfolge: Protokollzeilen, letzte Schritte, Beschreibung bleibt immer ganz. Die vollständigen Angaben liegen als Datei in einem Ordner, den die App öffnet. Im Formular steht „Datei hier anhängen“.
+3. **Länge der Adresse.** Die Adresse bleibt unter 2000 Zeichen (nach dem Kodieren). Passt der Text nicht, kürzt die App in dieser Reihenfolge: Protokollzeilen, letzte Schritte, zuletzt die Beschreibung. Die Beschreibung bleibt so lange ganz, wie sie allein in die Adresse passt. Passt sie allein nicht, kürzt die App sie in der Adresse an einer Zeichengrenze und hängt einen Hinweis an; der volle Text steht in `rueckmeldung.txt` im Ordner, den die App öffnet. Die vollständigen Angaben liegen ebenfalls dort. Im Formular steht „Datei hier anhängen“.
 4. **Bilder und Dateien** gehen nicht über die Adresse. Die App legt das Bild (PNG) und, wenn gewünscht, die Projektdatei in einen Rückmeldungsordner (`%APPDATA%\PlanoraCAD\rueckmeldungen\<Datum-Uhrzeit>\`), öffnet ihn im Explorer und sagt, welche Datei der Tester ins Formular ziehen soll.
 5. **Keine neuen Abhängigkeiten, wenn es geht.** `png` ist schon da (Bild kodieren), wgpu liefert die Grafikkarte (`adapter.get_info()`), Browser öffnet `ctx.open_url`. Für Windows-Version und Zeitstempel entscheidet der Umsetzer (siehe unten). Jede neue Abhängigkeit muss `cargo deny` bestehen und GPL‑3‑kompatibel sein.
-6. **Labels.** GitHub setzt Labels aus der Adresse nur bei Leuten mit Schreibrecht. Deshalb bekommen die Formulare feste Labels (`bug` bzw. `idee`), und die Bereichs-Labels (Sketch, 3D, Export, Tastenkürzel, `frage`) setzt Dennis beim Sortieren, aus einem Auswahlfeld „Bereich“ im Formular.
-7. **Tastenkürzel.** Neue Aktion `FeedbackOpen`, Bereich „Überall“, Standard **Strg+Umschalt+R** (Meine Entscheidung: frei, kein Fusion-Konflikt, „R“ wie Rückmeldung). Änderbar in Einstellungen → Tastenkürzel, in der Übersicht sichtbar, Id fest `hilfe.rueckmeldung`.
+6. **Labels.** GitHub setzt Labels aus der Adresse nur bei Leuten mit Schreibrecht. Deshalb bekommen die Formulare feste Labels (`bug` bzw. `idee`), und die Bereichs-Labels (Sketch, 3D, Export, Tastenkürzel, `frage`) setzt Dennis beim Sortieren, aus einem Auswahlfeld „Bereich“ im Formular. „Frage“ bekommt kein eigenes Formular: Sie nutzt `wunsch.yml` mit der Titel-Vorsilbe „Frage: …“; das Label `frage` setzt Dennis.
+7. **Tastenkürzel.** Neue Aktion `FeedbackOpen`, Bereich „Überall“, Standard **Strg+Umschalt+R** (von Dennis bestätigt; frei, kein Fusion-Konflikt, „R“ wie Rückmeldung). Änderbar in Einstellungen → Tastenkürzel, in der Übersicht sichtbar, Id fest `hilfe.rueckmeldung`.
 8. **Texte** in einfacher Sprache, Anrede „Du“, wenig Technik, kein KI-Ton. Oberfläche im Graphit-Stil (`Dialog`, `theme`), ausgelegt und geprüft ab 1920×1080.
 9. **Prüfen.** Lokal (Windows und WSL). GitHub-CI nur von Hand vor einem Release. Dieser Punkt weicht von Dennis' Auftrag ab („vor dem Merge einmal die GitHub-CI“); es gilt seine neuere Regel vom 2026-10-25 (Meine Entscheidung, bitte bestätigen).
 
@@ -49,11 +50,11 @@ Jede Etappe endet mit einer Sichtprüfung durch Dennis (bei Etappe 1 im Browser,
 ### Etappe 1: GitHub-Vorlagen und Anleitung (keine Programmänderung)
 
 - `.github/ISSUE_TEMPLATE/fehler.yml`, `.github/ISSUE_TEMPLATE/wunsch.yml`, `.github/ISSUE_TEMPLATE/config.yml` (leere Issues aus, Link „Häufige Probleme“ und „So meldest du etwas“).
-- Pflichtfelder Fehler: „Was wolltest du tun?“, „Was ist passiert?“, „Was hast du erwartet?“. Dazu: Auswahl „Bereich“ (Skizze, 3D, Export, Zeichnung, Tastenkürzel, Anderes), Version, System, Grafikkarte, letzte Schritte, Bild (freiwillig). Alle Felder haben feste `id`s, damit die App sie über die Adresse vorausfüllen kann.
+- Pflichtfelder Fehler: „Was wolltest du tun?“, „Was ist passiert?“, „Was hast du erwartet?“. Dazu: Auswahl „Bereich“ (Skizze, 3D, Export, Zeichnung, Tastenkürzel, Anderes), Version, System, Grafikkarte, letzte Schritte, Bild (freiwillig). Alle Felder haben feste `id`s, damit die App sie über die Adresse vorausfüllen kann. Zusätzliche freiwillige Felder (von Dennis bestätigt): `protokoll` im Fehler-Formular, `angaben` im Wunsch-Formular.
 - Wunsch: „Was möchtest du tun können?“, „Wie machst du es heute?“, „Wie wichtig ist es dir?“ (freiwillig), Bereich. Hinweis: 👍 unter dem Wunsch zeigt, wie viele es auch wollen.
-- Labels anlegen: `bug`, `idee`, `frage`, `Sketch`, `3D`, `Export`, `Tastenkürzel` (Skizze/Zeichnung als eigene Labels ist Dennis' Wahl; der Umsetzer legt die genannten sieben an).
+- Labels anlegen: `bug`, `idee`, `frage`, `Sketch`, `3D`, `Export`, `Tastenkürzel` (Skizze/Zeichnung als eigene Labels ist Dennis' Wahl; die genannten sieben legt das Skript `tools/labels.ps1` an). Dennis erlaubt Umsetzer bzw. Controller, das Skript auszuführen.
 - `docs/so-meldest-du-etwas.md` in einfacher Sprache (mit und ohne Konto, was geht an wen, wie Bilder angehängt werden). Verweis aus README.
-- Prüfung: GitHub zeigt die Formulare nur auf dem Standardzweig. Sichtprüfung nach dem Push durch Dennis. Das Anlegen der Labels braucht Schreibrecht auf das Repo (`gh label create`); die Ausführung nur auf Dennis' Wort.
+- Prüfung: GitHub zeigt die Formulare nur auf dem Standardzweig. Dennis erlaubt deshalb, Etappe 1 (Aufgabe 1) vorab nach `master` zu mergen und zu pushen; gepusht wird nur durch den Controller nach der Prüfung. Sichtprüfung danach durch Dennis. Das Anlegen der Labels braucht Schreibrecht auf das Repo (`gh label create` im Skript).
 
 ### Etappe 2: Rückmeldungs-Fenster in der App
 
@@ -61,7 +62,7 @@ Jede Etappe endet mit einer Sichtprüfung durch Dennis (bei Etappe 1 im Browser,
 - Modul `feedback` (Fenster `feedback_dialog.rs`, Logik ohne Oberfläche in `feedback.rs`): Art (Fehler/Wunsch/Frage), Beschreibung (Textfeld, Pflicht, mind. 10 Zeichen), Häkchen mit Vorschau je Bestandteil, Knöpfe „Im Browser öffnen“ und „Abbrechen“. Das Fenster zeigt unten die fertige Adresse in Textform (einklappbar) und „Text kopieren“.
 - Angaben, die die App selbst sammelt: Version und Kanal (aus `running_version()`), Windows-Version, Grafikkarte (Name, Treiber, Backend), Bildschirmgröße, die letzten **Schritte** und auf Wunsch die letzten **Protokollzeilen**.
 - „Bild vom Fenster mitschicken“: Das Fenster schließt sich kurz, die App macht über `ViewportCommand::Screenshot` ein Bild, kodiert es mit `png` und legt es in den Rückmeldungsordner. Das Rückmeldungsfenster erscheint danach wieder.
-- Ohne Konto: ein zweiter Knopf „Ohne GitHub-Konto senden“ (siehe Baustein 4).
+- Ohne Konto: ein zweiter Knopf „Per E-Mail senden“ (siehe Etappe 4).
 - Protokoll und Schritte brauchen neue Bausteine:
   - Modul `diag`: kleiner Ringpuffer (500 Zeilen) plus Datei `%APPDATA%\PlanoraCAD\logs\planora.log` (höchstens 1 MB, drei Dateien rotierend). Aufrufe `diag::info/warn/fehler`. Standard: Start, Version, Grafikkarte, Fehlermeldungen, Dateivorgänge ohne Inhalt. Kein Projektinhalt.
   - Schritte: ein Ringpuffer (50 Einträge) in `commands::run_action` und an den Stellen, an denen `undo_labels` schon deutsche Namen liefert.
@@ -75,21 +76,24 @@ Jede Etappe endet mit einer Sichtprüfung durch Dennis (bei Etappe 1 im Browser,
 - Bei „unerwartet beendet“ ohne Bericht: kurzer Hinweis mit Weg in das Rückmeldungsfenster, ohne Bericht.
 - Berichte älter als 30 Tage und mehr als 10 Stück räumt die App beim Start auf.
 
-### Etappe 4: Weg ohne GitHub-Konto
+### Etappe 4: Weg ohne GitHub-Konto (nur Mail)
 
 Geprüft (Stand Okt. 2026): mailto-Link, Formular-Dienste (Tally, Formspree, Web3Forms, Netlify Forms), eigene Brücke (Cloudflare Worker → GitHub-Issue), Mail direkt, GitHub-Konto.
 
-- **Empfehlung (Hauptweg): Tally-Formular.** Link aus der App, öffnet im Browser, Version und System werden über die Adresse vorausgefüllt (versteckte Felder). Gratis-Stufe mit unbegrenzten Einsendungen, Dateianhang bis 10 MB, Meldung kommt als Mail an Dennis. Kein Server, kein Schlüssel in der App. Tally ist ein belgischer Anbieter und gibt Hosting in Europa an. Zu prüfen vor dem Einsatz (Dennis): Hosting-Zusage und Auftragsverarbeitungsvertrag in den Konto-Einstellungen; ein Vergleichsportal behauptet, EU-Hosting sei kostenpflichtig.
-- **Notweg: Mail** an `info@dennis-guse.de` per `mailto:` mit kurzem Text (unter 2000 Zeichen kodiert). Anhänge gehen so nicht; das Fenster nennt den Ordner mit dem Bild. Die Adresse steht zusätzlich als Text mit „Kopieren“-Knopf (wer nur Webmail hat, bekommt oft keinen Entwurf).
+Die Recherche hatte Tally empfohlen (Gratis-Stufe, Dateianhang bis 10 MB, belgischer Anbieter). **Dennis hat Tally abgelehnt; es wird kein Formular-Dienst genutzt.** Es gibt deshalb keine Formular-Adresse und keine Konstante dafür in der App.
+
+- **Weg ohne Konto: Mail** an `info@dennis-guse.de` per `mailto:` mit Betreff und vorbereitetem Text (unter 2000 Zeichen kodiert). Der Knopf im Fenster heißt „Per E-Mail senden“.
+- Anhänge gehen über `mailto:` nicht. Das Fenster nennt den Ordner mit Bild oder Protokoll (`bild.png`, `rueckmeldung.txt`) und öffnet ihn; der Tester hängt die Dateien in der Mail selbst an.
+- Die Adresse steht zusätzlich als Text mit „Kopieren“-Knopf (wer nur Webmail hat, bekommt oft keinen Entwurf).
 - Für Leute mit Konto bleibt der vorausgefüllte GitHub-Link der Hauptweg.
-- Nicht empfohlen: eigene Brücke (Schlüssel, Spam, Pflege, öffentliche Issues mit persönlichen Angaben), Formspree (50/Monat, keine Anhänge, USA), Google Forms.
-- Datenschutzhinweis (README und `docs/so-meldest-du-etwas.md`): wer die Meldung bekommt, wofür, Löschung auf Wunsch, Mailadresse freiwillig.
-- **Meine Entscheidung:** Das Tally-Formular legt Dennis selbst an (Konto, Felder, Datenschutz). Die App bekommt die Formular-Adresse als Konstante; ohne eingetragene Adresse zeigt sie nur den Mail-Weg. So blockiert das Konto den Rest nicht.
+- Nicht genutzt: Tally (von Dennis abgelehnt), Formspree und andere Formular-Dienste, eigene Brücke (Schlüssel, Spam, Pflege, öffentliche Issues mit persönlichen Angaben), Google Forms.
+- Datenschutzhinweis (README und `docs/so-meldest-du-etwas.md`), nur sachliche Angaben: wer die Meldung bekommt (GitHub-Issue: öffentlich sichtbar; Mail: nur Dennis), wofür (Fehler nachstellen, Wünsche sortieren), Löschung auf Wunsch, Mailadresse freiwillig. Verantwortliche Stelle: **Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst**. Es wird kein Rechtstext erfunden. Das ist keine Rechtsberatung; dieser Hinweis steht nur hier in der Spec, nicht im Anwendertext.
+- Die Adresse `info@dennis-guse.de` darf öffentlich in App und README stehen (von Dennis erlaubt).
 
 ### Etappe 5: Wünsche gewichten und Übersicht
 
 - 👍 unter dem Issue: braucht nichts. Das Formular sagt es im Text.
-- Öffentliche Übersicht als GitHub-Projekttafel (Spalten **Geplant**, **In Arbeit**, **Fertig**), Issues kommen automatisch hinein, wenn das Repo-Projekt „Neue Issues automatisch hinzufügen“ hat. Die Tafel anlegen und öffentlich schalten kann nur Dennis (oder `gh` mit dem Recht `project`; nur auf sein Wort). Der Umsetzer liefert die Schritt-für-Schritt-Anleitung (`docs/projekttafel-einrichten.md`) und den Link im README.
+- Öffentliche Übersicht als GitHub-Projekttafel (Spalten **Geplant**, **In Arbeit**, **Fertig**), Issues kommen automatisch hinein, wenn das Repo-Projekt „Neue Issues automatisch hinzufügen“ hat. Die Tafel darf der Umsetzer bzw. Controller mit `gh` anlegen. Dafür braucht der Token das Recht `project`: Dennis führt vorher `gh auth refresh -s project` aus (Schritt für Dennis, steht so in der Anleitung). Der Umsetzer liefert die Schritt-für-Schritt-Anleitung (`docs/projekttafel-einrichten.md`) und den Link im README.
 
 ### Etappe 6: Kleinkram
 
@@ -107,7 +111,7 @@ Gemeinsam gedacht und geteilt:
 - **Datenschutz-Text.** Das README hat den Abschnitt zur Update-Abfrage; Rückmeldungen bekommen einen eigenen Abschnitt daneben, beide verweisen aufeinander.
 
 Getrennt bleiben darf:
-- Etappe 1 (GitHub-Vorlagen und Anleitung) braucht keine Programmänderung und kann sofort auf `master`.
+- Etappe 1 (GitHub-Vorlagen und Anleitung) braucht keine Programmänderung und darf vorab nach `master` gemergt und gepusht werden (Push nur durch den Controller nach der Prüfung), damit GitHub die Formulare zeigt.
 - Etappen 4, 5 und 6 sind unabhängig und können nach dem ersten Release folgen. Der Testmodus (6) und die Häufige-Probleme-Seite brauchen kein Update.
 - Das Absturz-Modul (3) berührt den Update-Neustart nur an einer Stelle (Zeitpunkt der Rückfrage).
 
@@ -122,19 +126,21 @@ Getrennt bleiben darf:
 - Windows-Version und Zeitstempel: Der Umsetzer wählt zwischen Standardbibliothek/Systembefehl und `windows-sys` (bereits im Baum; genau fest eingetragene Version nötig wegen `wildcards = deny`). Meine Annahme: Registry- oder `RtlGetVersion`-Aufruf über `windows-sys`, Zeitstempel von Hand aus `SystemTime` (UTC).
 - Keine Fahrzeugmarken und kein Autodesk-Material in Texten und Beispielen.
 
-## Offene Punkte für Dennis
+## Entschieden am 2026-10-26
 
-1. Tally als Hauptweg ohne Konto und Mail als Notweg – oder nur Mail? (Empfehlung: beides; du legst das Formular an.)
-2. Standardkürzel Strg+Umschalt+R in Ordnung?
-3. GitHub-CI nur vor dem Release (deine Regel vom 25.10.), nicht vor dem Merge: so festgehalten.
-4. Projekttafel: du legst sie an, oder darf ich es mit `gh` tun (Recht `project`, ein `gh auth refresh -s project` von dir)?
-5. Labels per `gh label create` in deinem Repo anlegen: erlaubt?
+1. **Weg ohne Konto:** Tally ist abgelehnt, es gibt keinen Formular-Dienst. Etappe 4 ist nur der Mail-Weg (`mailto:` an `info@dennis-guse.de`, Knopf „Per E-Mail senden“).
+2. **Standardkürzel** Strg+Umschalt+R ist bestätigt.
+3. **Labels und Projekttafel:** Labels darf der Umsetzer/Controller anlegen (Skript `tools/labels.ps1`). Die Projekttafel darf er mit `gh` anlegen; vorher führt Dennis `gh auth refresh -s project` aus.
+4. **Mailadresse** `info@dennis-guse.de` darf öffentlich in App und README stehen.
+5. **Verantwortliche Stelle** im Datenschutztext: Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst. Kein erfundener Rechtstext, nur sachliche Angaben; „keine Rechtsberatung“ nur in dieser Spec.
+6. **Frage:** kein eigenes Formular; `wunsch.yml` mit Titel-Vorsilbe „Frage: …“. Das Label `frage` setzt Dennis.
+7. **Lange Beschreibung:** In der Adresse gekürzt, mit Hinweis; der volle Text steht in `rueckmeldung.txt` im geöffneten Ordner (Festlegung 3).
+8. **Zusätzliche Formularfelder** `protokoll` (`fehler.yml`) und `angaben` (`wunsch.yml`), jeweils freiwillig, sind bestätigt.
+9. **Etappe 1** (Aufgabe 1) darf vorab nach `master` gemergt und gepusht werden, damit GitHub die Formulare zeigt. Gepusht wird nur durch den Controller nach der Prüfung.
 
-6. Die Mailadresse `info@dennis-guse.de` wird als öffentliche Kontaktadresse in App und README genannt (Notweg in Etappe 4). Einverstanden?
-7. Datenschutztext: Wer ist verantwortlich (Name, Anschrift)? Bis zur Antwort steht ein Platzhalter „[Verantwortliche Stelle – von Dennis einzutragen]“, damit nichts erfunden wird. Das ist keine Rechtsberatung.
+Zur GitHub-CI (nur vor einem Release, nicht vor dem Merge; Festlegung 9) gibt es keine neue Antwort; es gilt weiter Dennis' Regel vom 2026-10-25.
 
-Vom Baumeister-Check geklärt: Das Repo ist öffentlich (seit der Veröffentlichung), Issues und Projekttafel tragen also. Gemeint sind `crates/planora-app/src/undo_labels.rs` und `docs/superpowers/offene-punkte.md` (nicht `docs/offene-punkte.md`). Ohne Antworten auf 1–7 baut Etappe 1 ohne Label-Anlage, Etappe 4 mit Mail-Weg und leerer Tally-Konstante.
-
+Vom Baumeister-Check geklärt: Das Repo ist öffentlich (seit der Veröffentlichung), Issues und Projekttafel tragen also. Gemeint sind `crates/planora-app/src/undo_labels.rs` und `docs/superpowers/offene-punkte.md` (nicht `docs/offene-punkte.md`).
 ## Ausführung (Empfehlung)
 
 Subagenten-gestützt in der Reihenfolge der Etappen, ein Umsetzer pro Etappe mit unabhängiger Prüfung (wie bei der Update-Funktion). Etappe 1 ist klein und ohne Code; dafür genügt ein Umsetzer mit Prüfung am Ende. Etappen 2 und 3 teilen sich `diag` und `build_info()` und sollten nacheinander laufen, nicht parallel. Einsatzreihenfolge: 1 → 2 → 3 → (erstes Dev-Release) → 4 → 5 → 6.
