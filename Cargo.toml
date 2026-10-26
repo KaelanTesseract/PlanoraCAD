@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0-dev.1"
 edition = "2024"
 rust-version = "1.88"
 license = "GPL-3.0-only"
@@ -22,6 +22,7 @@ planora-project = { path = "crates/planora-project" }
 planora-exchange = { path = "crates/planora-exchange" }
 planora-step = { path = "crates/planora-step" }
 planora-drawing = { path = "crates/planora-drawing" }
+planora-update = { path = "crates/planora-update" }
 
 # externe Crates (Lizenzen am 2026-10-09 geprüft: alle MIT und/oder Apache-2.0, earcutr ISC, spade MIT OR Apache-2.0, Roboto-Schrift Apache-2.0)
 glam = "0.34"
@@ -45,6 +46,10 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 # Ortszeit mit Sommerzeit zum jeweiligen Zeitpunkt (Projekte-Fenster, Aufgabe 0; am 2026-10-23 geprüft:
 # MIT OR Apache-2.0, veröffentlicht 2026-06-04). Nur "clock": unter Windows kommt kein neues Unterpaket dazu.
 chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
+# Update-Prüfung (Aufgabe Update-Funktion 3): kleiner blockierender HTTP-Client mit der
+# Windows-eigenen TLS-Schicht (Schannel über native-tls). Ohne rustls/ring und ohne die
+# webpki-Stammzertifikate (CDLA-Lizenz); geprüft wird gegen den Zertifikatsspeicher von Windows.
+ureq = { version = "3.5", default-features = false, features = ["native-tls-no-default"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

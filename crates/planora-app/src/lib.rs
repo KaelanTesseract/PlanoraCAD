@@ -57,9 +57,21 @@ pub mod thumbnail;
 pub mod thumbnail_cache;
 pub mod thumbnail_worker;
 pub mod undo_labels;
+pub mod update_check;
+pub mod update_dialog;
+pub mod update_install;
 pub mod versions_panel;
 pub mod viewport;
 pub mod workspace;
+
+/// Laufende Version des Programms (aus `Cargo.toml`).
+pub const RUNNING_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Laufende Version für Updates und Anzeige. Eine ungeeignete Versionsnummer in `Cargo.toml`
+/// lässt das abbrechen; ein Test deckt das schon beim Bauen auf.
+pub fn running_version() -> planora_update::Version {
+    planora_update::Version::from_cargo(RUNNING_VERSION)
+}
 
 /// Hilfen für die fensterlosen Oberflächentests.
 #[doc(hidden)]

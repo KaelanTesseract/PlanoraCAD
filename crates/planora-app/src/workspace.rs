@@ -16,11 +16,12 @@ use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
 use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
 use planora_feature::Snapshot;
-use planora_project::config::{Config, clamp_panel_transparency};
+use planora_project::config::{Config, PendingUpdate, WindowState, clamp_panel_transparency};
 use planora_project::docstore::{Autosave, DocStore, DocumentInfo, LockMode, peek, read_version};
 use planora_project::fsutil::validate_name;
 use planora_project::library::{DOCUMENT_SUFFIX, Library, NodePath};
 use planora_project::{ProjectError, Result as ProjectResult};
+use planora_update::{Channel, Version};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -561,11 +562,19 @@ pub struct Workspace {
     /// nächsten gelungenen Schreiben der Konfiguration mit geschrieben (wie
     /// `panel_transparency_pending`).
     pub keys_pending: bool,
+    /// Die Update-Felder in `config` (Kanal, Prüfen beim Start, letzte Prüfung, übersprungene
+    /// Version, begonnenes Update) konnten noch nicht gespeichert werden; sie werden beim
+    /// nächsten gelungenen Schreiben der Konfiguration alle mit geschrieben (wie
+    /// `keys_pending`).
+    pub update_settings_pending: bool,
     /// Für „Letzten Befehl wiederholen“ (Leertaste): der zuletzt abgeschlossene Befehl, über
     /// alle Tabs.
     pub last_command: crate::commands::LastCommand,
     pub prompt: Option<Prompt>,
     pub quit: bool,
+    /// Die Rückfrage zum Beenden kommt vom Neustart für ein Update (die App setzt das); sie
+    /// nennt dann das Update.
+    pub quit_for_update: bool,
     /// Der Dialog „Über PlanoraCAD“ ist offen.
     pub about_open: bool,
     /// Zählt Änderungen an der Bibliothek auf der Festplatte, die über den Arbeitsbereich laufen
@@ -610,9 +619,11 @@ impl Workspace {
             keymap,
             key_notes,
             keys_pending: false,
+            update_settings_pending: false,
             last_command: Default::default(),
             prompt: None,
             quit: false,
+            quit_for_update: false,
             about_open: false,
             library_revision: 0,
             content_revision: 0,
@@ -1284,6 +1295,7 @@ impl Workspace {
             .panel_transparency_pending
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
+        let updates = self.pending_update_settings();
         let mut full = None;
         let written = Config::update_at(&self.config_path, |c| {
             c.root = root;
@@ -1294,6 +1306,9 @@ impl Workspace {
             if let Some(k) = keys {
                 c.keys = k;
             }
+            if let Some(u) = updates {
+                u.apply(c);
+            }
         });
         match written {
             Ok(disk) => {
@@ -1303,13 +1318,17 @@ impl Workspace {
                 }
                 self.panel_transparency_pending = false;
                 self.keys_pending = false;
+                self.update_settings_pending = false;
                 true
             }
             Err(_) => {
+                // Ersatz der unlesbaren Datei mit dem ganzen Stand im Speicher (samt allem
+                // Vorgemerkten).
                 let saved = self.config.save_to(&self.config_path).is_ok();
                 if saved {
                     self.panel_transparency_pending = false;
                     self.keys_pending = false;
+                    self.update_settings_pending = false;
                 } else {
                     self.favorites_pending = pending;
                 }
@@ -1331,18 +1350,23 @@ impl Workspace {
     pub fn set_panel_transparency(&mut self, percent: u8) -> bool {
         let percent = clamp_panel_transparency(percent);
         self.config.panel_transparency = percent;
-        // Vorgemerkte Tasten kommen mit (wie in `try_persist_config`).
+        // Vorgemerkte Tasten und Update-Felder kommen mit (wie in `try_persist_config`).
         let keys = self.pending_keys();
+        let updates = self.pending_update_settings();
         let written = Config::update_at(&self.config_path, |c| {
             c.panel_transparency = percent;
             if let Some(k) = keys {
                 c.keys = k;
+            }
+            if let Some(u) = updates {
+                u.apply(c);
             }
         })
         .is_ok();
         self.panel_transparency_pending = !written;
         if written {
             self.keys_pending = false;
+            self.update_settings_pending = false;
         }
         written
     }
@@ -1350,6 +1374,123 @@ impl Workspace {
     /// Die Abweichungen der Tastenbelegung, wenn sie zum Schreiben vorgemerkt sind.
     fn pending_keys(&self) -> Option<std::collections::BTreeMap<String, Vec<String>>> {
         self.keys_pending.then(|| self.config.keys.clone())
+    }
+
+    /// Die Update-Felder, wenn sie zum Schreiben vorgemerkt sind.
+    fn pending_update_settings(&self) -> Option<UpdateSettings> {
+        self.update_settings_pending
+            .then(|| UpdateSettings::of(&self.config))
+    }
+
+    /// Update-Kanal (Einstellungen → Updates); eine unbekannte Kennung gilt als Dev.
+    pub fn update_channel(&self) -> Channel {
+        Channel::from_id(&self.config.update_channel).unwrap_or(Channel::Dev)
+    }
+
+    /// Setzt den Update-Kanal und speichert ihn (wie [`Workspace::set_panel_transparency`]).
+    pub fn set_update_channel(&mut self, channel: Channel) -> bool {
+        self.config.update_channel = channel.id().to_string();
+        self.save_update_field(|u, c| c.update_channel = u.channel)
+    }
+
+    /// Beim Start nach Updates suchen?
+    pub fn update_check_enabled(&self) -> bool {
+        self.config.update_check
+    }
+
+    /// Schaltet das Suchen beim Start und speichert es.
+    pub fn set_update_check(&mut self, on: bool) -> bool {
+        self.config.update_check = on;
+        self.save_update_field(|u, c| c.update_check = u.check)
+    }
+
+    /// Zeitpunkt der letzten Prüfung (Sekunden seit 1970, UTC).
+    pub fn last_update_check(&self) -> Option<u64> {
+        self.config.last_update_check
+    }
+
+    /// Merkt den Zeitpunkt der letzten Prüfung und speichert ihn.
+    pub fn set_last_update_check(&mut self, unix_seconds: u64) -> bool {
+        self.config.last_update_check = Some(unix_seconds);
+        self.save_update_field(|u, c| c.last_update_check = u.last_check)
+    }
+
+    /// Übersprungene Version; ein unlesbarer Text gilt als keine.
+    pub fn skipped_version(&self) -> Option<Version> {
+        Version::parse(self.config.skipped_version.as_deref()?).ok()
+    }
+
+    /// Setzt oder leert die übersprungene Version und speichert sie.
+    pub fn set_skipped_version(&mut self, version: Option<Version>) -> bool {
+        self.config.skipped_version = version.map(|v| v.to_string());
+        self.save_update_field(|u, c| c.skipped_version = u.skipped)
+    }
+
+    /// Begonnenes Update (von, auf); unlesbare Versionen gelten als keines.
+    pub fn pending_update(&self) -> Option<(Version, Version)> {
+        let p = self.config.update_pending.as_ref()?;
+        Some((Version::parse(&p.from).ok()?, Version::parse(&p.to).ok()?))
+    }
+
+    /// Merkt ein begonnenes Update oder leert es und speichert das.
+    pub fn set_pending_update(&mut self, update: Option<(Version, Version)>) -> bool {
+        self.set_pending_update_with_window(update, None)
+    }
+
+    /// Wie [`Workspace::set_pending_update`], dazu das Fenster der laufenden Version, in dessen
+    /// Größe und Lage die neue Version öffnet.
+    pub fn set_pending_update_with_window(
+        &mut self,
+        update: Option<(Version, Version)>,
+        window: Option<WindowState>,
+    ) -> bool {
+        self.config.update_pending = update.map(|(from, to)| PendingUpdate {
+            from: from.to_string(),
+            to: to.to_string(),
+            window,
+        });
+        self.save_update_field(|u, c| c.update_pending = u.pending)
+    }
+
+    /// Das Fenster des begonnenen Updates, falls gemerkt.
+    pub fn pending_window(&self) -> Option<WindowState> {
+        self.config.update_pending.as_ref()?.window
+    }
+
+    /// Speichert ein Update-Feld (schon in `config` gesetzt) gleich in
+    /// [`Workspace::config_path`], über denselben Weg wie
+    /// [`Workspace::set_panel_transparency`]: `copy` überträgt nur dieses Feld in den Stand der
+    /// Datei, alles andere bleibt (Vorgemerktes kommt mit, vorgemerkte Update-Felder alle).
+    /// `true`, wenn geschrieben wurde. Lässt sich die Datei nicht lesen oder schreiben, bleibt
+    /// sie unangetastet; der Wert gilt dann für die Sitzung und wird beim nächsten gelungenen
+    /// Schreiben mit gespeichert ([`Workspace::update_settings_pending`]).
+    fn save_update_field(&mut self, copy: impl FnOnce(UpdateSettings, &mut Config)) -> bool {
+        let current = UpdateSettings::of(&self.config);
+        let all = self.update_settings_pending;
+        let transparency = self
+            .panel_transparency_pending
+            .then(|| self.panel_transparency());
+        let keys = self.pending_keys();
+        let written = Config::update_at(&self.config_path, |c| {
+            if all {
+                current.apply(c);
+            } else {
+                copy(current, c);
+            }
+            if let Some(t) = transparency {
+                c.panel_transparency = t;
+            }
+            if let Some(k) = keys {
+                c.keys = k;
+            }
+        })
+        .is_ok();
+        self.update_settings_pending = !written;
+        if written {
+            self.panel_transparency_pending = false;
+            self.keys_pending = false;
+        }
+        written
     }
 
     /// Übernimmt eine geänderte Tastenbelegung; sie wirkt sofort und wird gleich in
@@ -1368,16 +1509,21 @@ impl Workspace {
         let transparency = self
             .panel_transparency_pending
             .then(|| self.panel_transparency());
+        let updates = self.pending_update_settings();
         let written = Config::update_at(&self.config_path, |c| {
             c.keys = keys;
             if let Some(t) = transparency {
                 c.panel_transparency = t;
+            }
+            if let Some(u) = updates {
+                u.apply(c);
             }
         })
         .is_ok();
         self.keys_pending = !written;
         if written {
             self.panel_transparency_pending = false;
+            self.update_settings_pending = false;
             self.key_notes.clear();
         }
         written
@@ -1422,11 +1568,13 @@ impl Workspace {
         let mut all = std::mem::take(&mut self.favorites_pending);
         all.extend(places.changes);
         let mut full = None;
-        // Vorgemerkte Durchsichtigkeit und Tasten kommen mit (wie in `try_persist_config`).
+        // Vorgemerkte Durchsichtigkeit, Tasten und Update-Felder kommen mit (wie in
+        // `try_persist_config`).
         let transparency = self
             .panel_transparency_pending
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
+        let updates = self.pending_update_settings();
         let written = Config::update_at(&self.config_path, |c| {
             full = apply_changes(&all, &mut c.favorites);
             if let Some(t) = transparency {
@@ -1435,6 +1583,9 @@ impl Workspace {
             if let Some(k) = keys {
                 c.keys = k;
             }
+            if let Some(u) = updates {
+                u.apply(c);
+            }
         });
         match written {
             Ok(disk) => {
@@ -1442,6 +1593,7 @@ impl Workspace {
                 self.favorites_notice = full;
                 self.panel_transparency_pending = false;
                 self.keys_pending = false;
+                self.update_settings_pending = false;
                 true
             }
             Err(_) => {
@@ -1482,6 +1634,36 @@ impl Workspace {
             }
             t.last_autosave = now;
         }
+    }
+}
+
+/// Die Update-Felder der Konfiguration zum Übertragen in den Stand der Datei.
+struct UpdateSettings {
+    channel: String,
+    check: bool,
+    last_check: Option<u64>,
+    skipped: Option<String>,
+    pending: Option<PendingUpdate>,
+}
+
+impl UpdateSettings {
+    fn of(c: &Config) -> UpdateSettings {
+        UpdateSettings {
+            channel: c.update_channel.clone(),
+            check: c.update_check,
+            last_check: c.last_update_check,
+            skipped: c.skipped_version.clone(),
+            pending: c.update_pending.clone(),
+        }
+    }
+
+    /// Schreibt alle Update-Felder in `c`.
+    fn apply(self, c: &mut Config) {
+        c.update_channel = self.channel;
+        c.update_check = self.check;
+        c.last_update_check = self.last_check;
+        c.skipped_version = self.skipped;
+        c.update_pending = self.pending;
     }
 }
 

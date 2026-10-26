@@ -66,6 +66,8 @@ pub struct Dialog<'a> {
     open: Option<&'a mut bool>,
     fixed: bool,
     center_on_open: bool,
+    /// Fest unten rechts in diesem Bereich statt mittig ([`Dialog::bottom_right_in`]).
+    dock: Option<egui::Rect>,
 }
 
 impl<'a> Dialog<'a> {
@@ -79,7 +81,16 @@ impl<'a> Dialog<'a> {
             open: None,
             fixed: false,
             center_on_open: false,
+            dock: None,
         }
+    }
+
+    /// Steht fest unten rechts im Bereich `area` (nicht verschiebbar) und bleibt darin; höher
+    /// als `area` wird er nie (zu hoher Inhalt rollt). So liegt er neben mittigen Dialogen statt
+    /// unter ihnen.
+    pub fn bottom_right_in(mut self, area: egui::Rect) -> Self {
+        self.dock = Some(area);
+        self
     }
 
     /// Steht beim Öffnen immer mittig im Fenster, auch wenn er vorher woanders stand oder das
@@ -141,13 +152,17 @@ impl<'a> Dialog<'a> {
             open,
             fixed,
             center_on_open,
+            dock,
         } = self;
         if matches!(open.as_deref(), Some(false)) {
             return None;
         }
         let dark = ctx.global_style().visuals.dark_mode;
         let content = ctx.content_rect();
-        let (width, height) = limits(content, size);
+        let (width, height) = match dock {
+            Some(area) => (size.width().min(area.width()), area.height()),
+            None => limits(content, size),
+        };
         let frame = theme::panel_frame(dark);
         // Platz über und unter dem Inhalt (Innenrand und Strich).
         let frame_h = frame.total_margin().sum().y;
@@ -180,8 +195,13 @@ impl<'a> Dialog<'a> {
             .max_width(width)
             .min_height(height)
             .max_height(height)
-            .constrain_to(content);
-        window = if fixed {
+            .constrain_to(dock.unwrap_or(content));
+        window = if let Some(area) = dock {
+            window
+                .movable(false)
+                .pivot(Align2::RIGHT_BOTTOM)
+                .current_pos(area.right_bottom())
+        } else if fixed {
             window.anchor(Align2::CENTER_CENTER, [0.0, 0.0])
         } else if center_on_open && reopened {
             // Wieder geöffnet: nicht an der alten Stelle (aus einer anderen Fenstergröße).

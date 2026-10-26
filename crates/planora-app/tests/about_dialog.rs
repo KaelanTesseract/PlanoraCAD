@@ -186,10 +186,7 @@ fn datei_menu_opens_the_about_dialog_and_it_closes() {
         settle(&c, &mut app, BIG)
     };
     assert!(shot.has(about_dialog::NAME), "Name");
-    assert!(
-        shot.has(&format!("Version {}", env!("CARGO_PKG_VERSION"))),
-        "Version"
-    );
+    assert!(shot.has(&about_dialog::version_line()), "Version mit Kanal");
     assert!(shot.has("Lizenz: GPL-3.0-only"), "Lizenz");
     for line in [
         "Schrift Montserrat (SIL Open Font License)",
@@ -238,9 +235,10 @@ fn about_texts_are_plain_language() {
             assert!(!t.contains(tech), "{t} enthält {tech}");
         }
     }
+    let running = planora_app::running_version();
     assert_eq!(
         about_dialog::version_line(),
-        format!("Version {}", env!("CARGO_PKG_VERSION"))
+        format!("Version {} ({})", running, running.channel().label())
     );
 }
 

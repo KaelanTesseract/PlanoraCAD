@@ -24,6 +24,17 @@ fn sep() -> String {
     std::path::MAIN_SEPARATOR.to_string()
 }
 
+/// Ein Beispielpfad in Windows-Schreibweise (`D:\Teile`) als Pfad dieses Systems: unter Windows
+/// unverändert, sonst `/D:/Teile` (das Laufwerk wird ein gewöhnlicher Ordner). Ohne Windows wäre
+/// `\` ein Zeichen im Ordnernamen und `D:\Kunde A\Teile` ein einziger Name.
+fn win(s: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(s)
+    } else {
+        PathBuf::from(format!("/{}", s.replace('\\', "/")))
+    }
+}
+
 // --- Liste der Schnellzugriffe ----------------------------------------------------------------
 
 #[test]
@@ -286,10 +297,10 @@ fn places_mark_changes_only_when_the_list_changes() {
 #[test]
 fn favorite_labels_tell_equal_names_apart() {
     let favs = [
-        PathBuf::from("D:\\Kunde A\\Teile"),
-        PathBuf::from("D:\\Kunde B\\Teile"),
-        PathBuf::from("D:\\Muster"),
-        PathBuf::from("E:\\"),
+        win("D:\\Kunde A\\Teile"),
+        win("D:\\Kunde B\\Teile"),
+        win("D:\\Muster"),
+        win("E:\\"),
     ];
     let s = sep();
     assert_eq!(
@@ -537,12 +548,12 @@ fn the_open_hint_is_only_a_tooltip_of_folders() {
 
 #[test]
 fn only_folder_rows_and_favorite_buttons_have_a_context_menu() {
-    let dir = Path::new("D:\\Ablage");
+    let dir = &win("D:\\Ablage");
     assert_eq!(row_menu(&file_entry("a.stl"), dir, &[]), None);
     let add = row_menu(&dir_entry("Teile"), dir, &[]).unwrap();
     assert_eq!(add, RowMenu::AddFavorite(dir.join("Teile")));
     assert_eq!(add.label(), "Zu Favoriten hinzufügen");
-    let favs = [PathBuf::from("D:\\Ablage\\Teile\\")];
+    let favs = [win("D:\\Ablage\\Teile\\")];
     let remove = row_menu(&dir_entry("Teile"), dir, &favs).unwrap();
     assert_eq!(remove, RowMenu::RemoveFavorite(dir.join("Teile")));
     assert_eq!(remove.label(), "Aus Favoriten entfernen");

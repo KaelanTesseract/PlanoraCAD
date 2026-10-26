@@ -1,6 +1,9 @@
 //! Fenster „Einstellungen“ (Spec §5): Abschnitte untereinander mit Überschrift, damit später
 //! weitere dazukommen. Oben „Darstellung“ mit dem Regler „Durchsichtigkeit der Panels“ (wirkt
-//! sofort, wird gespeichert wie das Projektverzeichnis), darunter „Projekte“ mit dem
+//! sofort, wird gespeichert wie das Projektverzeichnis), darunter „Updates“ (laufende Version,
+//! Update-Kanal, Suchen beim Start, letzte Prüfung; gespeichert sofort; Knopf „Jetzt nach Updates
+//! suchen“ mit Ergebnis und bei einem Fund „Meldung anzeigen“, die Suche selbst macht die App;
+//! eine übersprungene Version mit „Doch wieder anzeigen“), dann „Projekte“ mit dem
 //! Projektverzeichnis und zuletzt „Tastenkürzel“ ([`crate::keymap::settings_ui`]; zuletzt, weil
 //! die lange Tabelle sonst „Projekte“ nach unten schöbe). Gewählt wird über die
 //! Dateiauswahl im Ordner-Modus; der Wechsel wirkt wie [`Workspace::choose_root`] und
@@ -13,8 +16,10 @@ use crate::keymap::settings_ui::{self, CaptureState};
 use crate::places::{self, Places};
 use crate::theme;
 use crate::workspace::{ROOT_LOCKED, Workspace};
+use crate::{local_time, running_version};
 use planora_project::config::{Config, MAX_PANEL_TRANSPARENCY, clamp_panel_transparency};
 use planora_project::library::{DOCUMENT_FILE, DOCUMENT_SUFFIX, PROJECT_FILE};
+use planora_update::{Channel, Version};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +30,34 @@ pub const TRANSPARENCY_LABEL: &str = "Durchsichtigkeit der Panels";
 pub const TRANSPARENCY_NOT_SAVED: &str = "Die Durchsichtigkeit gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
 /// Breite der Schieberspur des Reglers.
 pub const SLIDER_WIDTH: f32 = 200.0;
+pub const SECTION_UPDATES: &str = "Updates";
+pub const CHANNEL_LABEL: &str = "Update-Kanal";
+/// Kanäle in der Auswahl „Update-Kanal“ (heute nur Dev; später kommen Beta und Stabil dazu).
+pub const AVAILABLE_CHANNELS: &[Channel] = &[Channel::Dev];
+pub const CHECK_ON_START_LABEL: &str = "Beim Start nach Updates suchen";
+/// Hinweis zum Datenschutz unter dem Schalter.
+pub const PRIVACY_NOTE: &str =
+    "Beim Suchen fragt das Programm bei GitHub nach; dabei sieht GitHub deine IP-Adresse.";
+pub const CHECK_NOW: &str = "Jetzt nach Updates suchen";
+/// Neben dem Knopf [`CHECK_NOW`], solange die Suche läuft (der Knopf ist dann aus).
+pub const CHECK_RUNNING: &str = "Suche läuft …";
+/// Ergebnis der Suche über den Knopf: keine neuere Version.
+pub const UP_TO_DATE: &str = "Du hast die neueste Version.";
+/// Ergebnis der Suche über den Knopf: Abruf oder Antwort gescheitert.
+pub const CHECK_FAILED: &str = "Die Suche hat nicht geklappt (kein Netz?).";
+/// Ergebnis der Suche über den Knopf auf einem System ohne Aktualisierung über das Programm
+/// (alles außer Windows).
+pub const NOT_ON_THIS_SYSTEM: &str =
+    "Auf diesem System gibt es keine Aktualisierung über das Programm.";
+/// Knopf neben „Neue Version gefunden“: öffnet die Meldung mit Jetzt, Später, Überspringen.
+pub const SHOW_NOTICE: &str = "Meldung anzeigen";
+/// Knopf neben der übersprungenen Version: hebt das Überspringen auf und sucht gleich nach.
+pub const UNSKIP: &str = "Doch wieder anzeigen";
+/// Statt eines Zeitpunkts, wenn noch nie geprüft wurde.
+pub const NEVER_CHECKED: &str = "noch nie";
+/// Warnung, wenn eine Update-Einstellung gilt, aber nicht gespeichert werden konnte.
+pub const UPDATES_NOT_SAVED: &str =
+    "Die Update-Einstellung gilt nur bis zum Programmende: sie konnte nicht gespeichert werden.";
 pub const SECTION_PROJECTS: &str = "Projekte";
 pub const DIRECTORY_LABEL: &str = "Projektverzeichnis";
 pub const CHANGE_DIRECTORY: &str = "Projektverzeichnis ändern …";
@@ -39,6 +72,63 @@ pub const NOT_SAVED: &str = "Das neue Projektverzeichnis gilt nur bis zum Progra
 
 /// Kennung des Fensters (unabhängig vom Titel).
 const WINDOW_ID: &str = "planora_settings_window";
+
+/// „Laufende Version: 0.2.0-dev.1 (Dev)“ für die laufende Version.
+pub fn running_version_line() -> String {
+    running_version_line_for(&running_version())
+}
+
+/// „Laufende Version: <Version> (<Kanal>)“.
+pub fn running_version_line_for(v: &Version) -> String {
+    format!("Laufende Version: {v} ({})", v.channel().label())
+}
+
+/// „Letzte Prüfung: 25.10.2026, 18:42“ (Ortszeit) oder „Letzte Prüfung: noch nie“.
+pub fn last_check_line(unix_seconds: Option<u64>) -> String {
+    let when = unix_seconds.map_or_else(
+        || NEVER_CHECKED.to_string(),
+        |t| local_time::unix_time_text(i64::try_from(t).unwrap_or(i64::MAX)),
+    );
+    format!("Letzte Prüfung: {when}")
+}
+
+/// „Neue Version gefunden: 0.2.0-dev.2“ (Ergebnis der Suche über den Knopf).
+pub fn update_found_line(v: &Version) -> String {
+    format!("Neue Version gefunden: {v}")
+}
+
+/// „Übersprungen: Version 0.2.0-dev.2“ (Einstellungen → Updates).
+pub fn skipped_line(v: &Version) -> String {
+    format!("Übersprungen: Version {v}")
+}
+
+/// Zustand der Suche über den Knopf [`CHECK_NOW`], neben dem Knopf angezeigt. Die App setzt ihn
+/// ([`SettingsWindow::set_check_hint`]); eine Suche beim Start zeigt hier nichts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckHint {
+    /// Die Suche läuft ([`CHECK_RUNNING`]).
+    Running,
+    /// [`UP_TO_DATE`].
+    UpToDate,
+    /// Neue Version gefunden ([`update_found_line`]).
+    Found(Version),
+    /// [`CHECK_FAILED`] (Warnfarbe).
+    Failed,
+    /// [`NOT_ON_THIS_SYSTEM`].
+    Unsupported,
+}
+
+impl CheckHint {
+    pub fn text(&self) -> String {
+        match self {
+            CheckHint::Running => CHECK_RUNNING.into(),
+            CheckHint::UpToDate => UP_TO_DATE.into(),
+            CheckHint::Found(v) => update_found_line(v),
+            CheckHint::Failed => CHECK_FAILED.into(),
+            CheckHint::Unsupported => NOT_ON_THIS_SYSTEM.into(),
+        }
+    }
+}
 
 /// Meldung nach einem Wechsel: Warnung (Warnfarbe) oder Fehler (Fehlerfarbe).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,6 +232,19 @@ pub struct SettingsWindow {
     message: Option<RootMessage>,
     /// Hinweis unter dem Regler (nur [`TRANSPARENCY_NOT_SAVED`]).
     appearance_message: Option<RootMessage>,
+    /// Hinweis im Abschnitt „Updates“ (nur [`UPDATES_NOT_SAVED`]).
+    updates_message: Option<RootMessage>,
+    /// Zustand der Suche über den Knopf [`CHECK_NOW`].
+    check_hint: Option<CheckHint>,
+    /// Das Ergebnis in `check_hint` war schon einmal im offenen Fenster zu sehen (erst dann
+    /// leert es ein erneutes Öffnen).
+    check_hint_shown: bool,
+    /// Der Knopf [`CHECK_NOW`] wurde gedrückt; die App holt das ab
+    /// ([`SettingsWindow::take_check_request`]).
+    check_requested: bool,
+    /// Der Knopf [`SHOW_NOTICE`] wurde gedrückt; die App holt das ab
+    /// ([`SettingsWindow::take_notice_request`]) und öffnet die Meldung.
+    notice_requested: bool,
     /// Der Regler wurde bewegt, der Wert ist aber noch nicht gespeichert (gespeichert wird beim
     /// Loslassen, nicht in jedem Bild des Ziehens).
     transparency_unsaved: bool,
@@ -159,6 +262,12 @@ impl SettingsWindow {
         self.chooser = None;
         self.message = None;
         self.appearance_message = None;
+        self.updates_message = None;
+        // Eine noch laufende Suche bleibt sichtbar, ebenso ein Ergebnis, das noch nie zu sehen war
+        // (das Fenster ging zu, während die Suche lief); ein schon gezeigtes Ergebnis nicht.
+        if self.check_hint_shown && self.check_hint != Some(CheckHint::Running) {
+            self.check_hint = None;
+        }
         self.keys = CaptureState::default();
     }
 
@@ -206,6 +315,38 @@ impl SettingsWindow {
     /// Hinweis des Abschnitts „Darstellung“ (Speichern fehlgeschlagen).
     pub fn appearance_message(&self) -> Option<&RootMessage> {
         self.appearance_message.as_ref()
+    }
+
+    /// Hinweis des Abschnitts „Updates“ (Speichern fehlgeschlagen).
+    pub fn updates_message(&self) -> Option<&RootMessage> {
+        self.updates_message.as_ref()
+    }
+
+    /// Zustand der Suche über den Knopf [`CHECK_NOW`].
+    pub fn check_hint(&self) -> Option<&CheckHint> {
+        self.check_hint.as_ref()
+    }
+
+    /// Setzt den Zustand der Suche (die App, wenn sie startet und wenn das Ergebnis da ist).
+    pub fn set_check_hint(&mut self, hint: Option<CheckHint>) {
+        self.check_hint = hint;
+        self.check_hint_shown = false;
+    }
+
+    /// Wurde der Knopf [`CHECK_NOW`] seit dem letzten Abholen gedrückt? Setzt zurück.
+    pub fn take_check_request(&mut self) -> bool {
+        std::mem::take(&mut self.check_requested)
+    }
+
+    /// Wurde der Knopf [`SHOW_NOTICE`] seit dem letzten Abholen gedrückt? Setzt zurück.
+    pub fn take_notice_request(&mut self) -> bool {
+        std::mem::take(&mut self.notice_requested)
+    }
+
+    /// Hinweis nach dem Speichern einer Update-Einstellung: [`UPDATES_NOT_SAVED`], wenn es
+    /// misslang (der Wert gilt dann für die Sitzung), sonst keiner.
+    fn note_updates_saved(&mut self, written: bool) {
+        self.updates_message = (!written).then(|| RootMessage::Warning(UPDATES_NOT_SAVED.into()));
     }
 
     /// Was der Regler beim Ziehen tut: der Wert gilt sofort, ist aber noch nicht gespeichert. Er
@@ -264,6 +405,16 @@ impl SettingsWindow {
         let path = display_path(&current_directory(ws));
         let message = self.message.clone();
         let appearance_message = self.appearance_message.clone();
+        let updates_message = self.updates_message.clone();
+        let check_hint = self.check_hint.clone();
+        self.check_hint_shown = true;
+        let mut check_now = false;
+        let mut show_notice = false;
+        let skipped = ws.skipped_version();
+        let mut unskip = false;
+        let channel = ws.update_channel();
+        let (mut chosen_channel, mut check_on_start) = (channel, ws.update_check_enabled());
+        let last_check = last_check_line(ws.last_update_check());
         let mut transparency = ws.panel_transparency();
         let (mut slid, mut released) = (false, false);
         let choosing = self.chooser.is_some();
@@ -294,6 +445,21 @@ impl SettingsWindow {
                         if let Some(m) = &appearance_message {
                             ui.colored_label(m.color(dark), m.text());
                         }
+                        ui.add_space(theme::SPACE_4);
+                        show_updates(
+                            ui,
+                            &mut chosen_channel,
+                            &mut check_on_start,
+                            &last_check,
+                            UpdateButtons {
+                                hint: check_hint.as_ref(),
+                                check_now: &mut check_now,
+                                show_notice: &mut show_notice,
+                                skipped,
+                                unskip: &mut unskip,
+                            },
+                            updates_message.as_ref(),
+                        );
                         ui.add_space(theme::SPACE_4);
                         theme::section_header(ui, SECTION_PROJECTS, theme::SUB_HEADER_H);
                         ui.add_space(theme::SPACE_2);
@@ -334,6 +500,27 @@ impl SettingsWindow {
         if self.transparency_unsaved && released {
             self.save_transparency(ws);
         }
+        if check_now && !locked {
+            self.check_requested = true;
+        }
+        if show_notice && !locked {
+            self.notice_requested = true;
+        }
+        if unskip && !locked {
+            // Wieder anbieten: das Überspringen aufheben und gleich nachsehen.
+            let written = ws.set_skipped_version(None);
+            self.note_updates_saved(written);
+            self.check_requested = true;
+        }
+        // Update-Einstellungen gelten und werden sofort gespeichert.
+        if !locked && chosen_channel != channel {
+            let written = ws.set_update_channel(chosen_channel);
+            self.note_updates_saved(written);
+        }
+        if !locked && check_on_start != ws.update_check_enabled() {
+            let written = ws.set_update_check(check_on_start);
+            self.note_updates_saved(written);
+        }
         for action in [body_action, footer_action] {
             let target = match action {
                 ChooserAction::Chosen(p) => Some(p),
@@ -359,5 +546,98 @@ impl SettingsWindow {
             return SettingsEvent::Closed { return_to_projects };
         }
         SettingsEvent::None
+    }
+}
+
+/// Knöpfe und Anzeigen zur Suche im Abschnitt „Updates“ (gedrückt: das jeweilige Feld `true`).
+struct UpdateButtons<'a> {
+    /// Zustand der Suche neben [`CHECK_NOW`].
+    hint: Option<&'a CheckHint>,
+    check_now: &'a mut bool,
+    /// [`SHOW_NOTICE`] neben „Neue Version gefunden“.
+    show_notice: &'a mut bool,
+    /// Übersprungene Version (dann [`skipped_line`] mit [`UNSKIP`]).
+    skipped: Option<Version>,
+    unskip: &'a mut bool,
+}
+
+/// Abschnitt „Updates“: laufende Version und letzte Prüfung, Auswahl des Kanals (nur [`AVAILABLE_CHANNELS`]; ein
+/// anderer gespeicherter Kanal steht nur als Anzeige da), Schalter mit Hinweis zum Datenschutz,
+/// der Knopf [`CHECK_NOW`] mit dem Zustand der Suche daneben (aus, solange sie läuft; nach einem
+/// Fund mit [`SHOW_NOTICE`]) und eine übersprungene Version mit [`UNSKIP`].
+fn show_updates(
+    ui: &mut egui::Ui,
+    channel: &mut Channel,
+    check_on_start: &mut bool,
+    last_check: &str,
+    buttons: UpdateButtons<'_>,
+    message: Option<&RootMessage>,
+) {
+    let UpdateButtons {
+        hint,
+        check_now,
+        show_notice,
+        skipped,
+        unskip,
+    } = buttons;
+    let dark = ui.visuals().dark_mode;
+    // Knapp gehalten (je Zeile zwei Angaben), damit das Fenster bei 1920 × 1080 nicht bis über
+    // die Menüleiste wächst.
+    theme::section_header(ui, SECTION_UPDATES, theme::SUB_HEADER_H);
+    ui.add_space(theme::SPACE_2);
+    ui.horizontal(|ui| {
+        ui.label(running_version_line());
+        ui.add_space(theme::SPACE_6);
+        ui.label(last_check);
+    });
+    ui.add_space(theme::SPACE_1);
+    ui.horizontal(|ui| {
+        ui.strong(CHANNEL_LABEL);
+        egui::ComboBox::from_id_salt("planora_settings_update_channel")
+            .selected_text(channel.label())
+            .show_ui(ui, |ui| {
+                for c in AVAILABLE_CHANNELS {
+                    ui.selectable_value(channel, *c, c.label());
+                }
+            });
+        ui.add_space(theme::SPACE_6);
+        let r = ui.checkbox(check_on_start, CHECK_ON_START_LABEL);
+        theme::focus_ring(ui, &r);
+    });
+    ui.add(egui::Label::new(egui::RichText::new(PRIVACY_NOTE).weak()).wrap());
+    ui.add_space(theme::SPACE_1);
+    // Das Ergebnis steht neben dem Knopf, damit der Abschnitt nicht höher wird.
+    ui.horizontal(|ui| {
+        let running = hint == Some(&CheckHint::Running);
+        let r = ui.add_enabled(!running, egui::Button::new(CHECK_NOW));
+        theme::focus_ring(ui, &r);
+        *check_now = r.clicked();
+        match hint {
+            Some(h @ CheckHint::Failed) => {
+                ui.colored_label(theme::palette(dark).warning, h.text());
+            }
+            Some(h @ CheckHint::Found(_)) => {
+                ui.label(h.text());
+                let r = ui.button(SHOW_NOTICE);
+                theme::focus_ring(ui, &r);
+                *show_notice = r.clicked();
+            }
+            Some(h) => {
+                ui.label(h.text());
+            }
+            None => {}
+        }
+    });
+    if let Some(v) = skipped {
+        ui.add_space(theme::SPACE_1);
+        ui.horizontal(|ui| {
+            ui.label(skipped_line(&v));
+            let r = ui.button(UNSKIP);
+            theme::focus_ring(ui, &r);
+            *unskip = r.clicked();
+        });
+    }
+    if let Some(m) = message {
+        ui.colored_label(m.color(dark), m.text());
     }
 }

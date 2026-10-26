@@ -1,5 +1,5 @@
 //! Kleine Konfiguration (gewählte Wurzel, Favoriten der Dateiauswahl, Durchsichtigkeit der
-//! Panels, Abweichungen der Tastenbelegung), ohne neue Abhängigkeit.
+//! Panels, Abweichungen der Tastenbelegung, Einstellungen der Updates), ohne neue Abhängigkeit.
 
 use crate::error::{ProjectError, Result};
 use crate::fsutil::atomic_write_unique;
@@ -49,6 +49,139 @@ pub struct Config {
         deserialize_with = "lenient_keys"
     )]
     pub keys: BTreeMap<String, Vec<String>>,
+    /// Update-Kanal als Kennung (`"dev"`, `"beta"`, `"stable"`; Einstellungen → Updates).
+    /// Unbekannte, leere oder kaputte Werte gelten als [`DEFAULT_UPDATE_CHANNEL`]; die
+    /// Voreinstellung wird nicht geschrieben.
+    #[serde(
+        default = "default_update_channel",
+        skip_serializing_if = "is_default_update_channel",
+        deserialize_with = "lenient_update_channel"
+    )]
+    pub update_channel: String,
+    /// Beim Start nach Updates suchen (Voreinstellung an; nur „aus“ wird geschrieben). Kein
+    /// Wahrheitswert → Voreinstellung.
+    #[serde(
+        default = "default_true",
+        skip_serializing_if = "is_true",
+        deserialize_with = "lenient_update_check"
+    )]
+    pub update_check: bool,
+    /// Zeitpunkt der letzten Prüfung in Sekunden seit 1970 (UTC). Keine ganze Zahl ab 0 →
+    /// keiner.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_seconds"
+    )]
+    pub last_update_check: Option<u64>,
+    /// Übersprungene Version als Text („Diese Version überspringen“); geprüft wird erst im
+    /// Programm. Kein oder ein leerer Text → keine.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_text"
+    )]
+    pub skipped_version: Option<String>,
+    /// Begonnenes Update (von Version, auf Version), damit nach dem Neustart der Hinweis
+    /// „Aktualisiert auf …“ kommt. Fehlt ein Teil oder ist er kein Text → keines.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_pending_update"
+    )]
+    pub update_pending: Option<PendingUpdate>,
+}
+
+/// Voreinstellung des Update-Kanals (Kennung).
+pub const DEFAULT_UPDATE_CHANNEL: &str = "dev";
+
+/// Kennungen der Update-Kanäle, die die Konfiguration kennt (gleich `planora_update::Channel::id`
+/// in der Reihenfolge von `Channel::ALL`; ein Test im Programm hält beide gleich).
+pub const UPDATE_CHANNEL_IDS: [&str; 3] = ["dev", "beta", "stable"];
+
+/// Begonnenes Update: Versionen als Text, geprüft wird erst im Programm. Dazu das Fenster der
+/// alten Version, damit die neue in derselben Größe und Lage öffnet (fehlt es, die Vorgabe).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PendingUpdate {
+    pub from: String,
+    pub to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowState>,
+}
+
+/// Größte Breite und Höhe eines gemerkten Fensters in Punkten.
+pub const MAX_WINDOW_SIZE: f32 = 16384.0;
+
+/// Größter Betrag der gemerkten Lage in Punkten; weiter draußen (etwa -32000/-32000, die Lage,
+/// die Windows für ein minimiertes Fenster meldet) gilt sie als unbrauchbar.
+pub const MAX_WINDOW_POS: f32 = 10000.0;
+
+/// Größe, Lage und Zustand eines Programmfensters in Punkten: `x`, `y` die linke obere Ecke
+/// des Fensters samt Rahmen (fehlen sie, setzt das System das Fenster), `width`, `height` die
+/// Innenfläche.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WindowState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
+    pub width: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub maximized: bool,
+}
+
+impl WindowState {
+    /// Nur Plausibles: ohne endliche Größe über 0 keines; die Größe höchstens
+    /// [`MAX_WINDOW_SIZE`]. Die Lage bleibt nur, wenn sie endlich ist, ihr Betrag höchstens
+    /// [`MAX_WINDOW_POS`] beträgt und das Fenster wenigstens zum Teil im Bereich 0 bis
+    /// [`MAX_WINDOW_SIZE`] liegt; sonst fehlt sie (dann setzt das System das Fenster), damit
+    /// das Fenster nie unsichtbar öffnet.
+    pub fn sanitized(self) -> Option<WindowState> {
+        let size_ok = |n: f32| n.is_finite() && n > 0.0;
+        if !size_ok(self.width) || !size_ok(self.height) {
+            return None;
+        }
+        let width = self.width.min(MAX_WINDOW_SIZE);
+        let height = self.height.min(MAX_WINDOW_SIZE);
+        let pos_ok = |p: Option<f32>, len: f32| {
+            p.is_some_and(|p| {
+                p.is_finite() && p.abs() <= MAX_WINDOW_POS && p + len > 0.0 && p < MAX_WINDOW_SIZE
+            })
+        };
+        let keep = pos_ok(self.x, width) && pos_ok(self.y, height);
+        Some(WindowState {
+            x: self.x.filter(|_| keep),
+            y: self.y.filter(|_| keep),
+            width,
+            height,
+            maximized: self.maximized,
+        })
+    }
+}
+
+/// Liest ein Fenster aus einem JSON-Wert und prüft es ([`WindowState::sanitized`]): ohne
+/// brauchbare Größe keines. Fehlt `maximized` oder ist es kein Wahrheitswert, gilt „nicht
+/// maximiert“.
+fn lenient_window(value: Option<&serde_json::Value>) -> Option<WindowState> {
+    let value = value?;
+    let num = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .map(|n| n as f32)
+    };
+    WindowState {
+        x: num("x"),
+        y: num("y"),
+        width: num("width")?,
+        height: num("height")?,
+        maximized: value
+            .get("maximized")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    }
+    .sanitized()
 }
 
 impl Default for Config {
@@ -58,8 +191,76 @@ impl Default for Config {
             favorites: Vec::new(),
             panel_transparency: DEFAULT_PANEL_TRANSPARENCY,
             keys: BTreeMap::new(),
+            update_channel: DEFAULT_UPDATE_CHANNEL.to_string(),
+            update_check: true,
+            last_update_check: None,
+            skipped_version: None,
+            update_pending: None,
         }
     }
+}
+
+fn default_update_channel() -> String {
+    DEFAULT_UPDATE_CHANNEL.to_string()
+}
+
+fn is_default_update_channel(id: &str) -> bool {
+    id == DEFAULT_UPDATE_CHANNEL
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+/// Liest `update_channel` aus jedem JSON-Wert: nur eine bekannte Kennung in genauer
+/// Schreibweise gilt, alles andere ergibt [`DEFAULT_UPDATE_CHANNEL`].
+fn lenient_update_channel<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<String, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let id = value
+        .as_str()
+        .filter(|id| UPDATE_CHANNEL_IDS.contains(id))
+        .unwrap_or(DEFAULT_UPDATE_CHANNEL);
+    Ok(id.to_string())
+}
+
+/// Liest `update_check` aus jedem JSON-Wert: kein Wahrheitswert → an.
+fn lenient_update_check<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+    Ok(serde_json::Value::deserialize(d)?.as_bool().unwrap_or(true))
+}
+
+/// Liest Sekunden aus jedem JSON-Wert: nur ganze Zahlen ab 0, sonst keine.
+fn lenient_seconds<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<u64>, D::Error> {
+    Ok(serde_json::Value::deserialize(d)?.as_u64())
+}
+
+/// Liest einen Text aus jedem JSON-Wert: kein oder ein leerer Text → keiner.
+fn lenient_text<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_str().filter(|s| !s.is_empty()).map(String::from))
+}
+
+/// Liest `update_pending` aus jedem JSON-Wert: ein Objekt mit den Texten `from` und `to`,
+/// sonst keines (weitere Felder werden übergangen); dazu nachsichtig das Fenster
+/// ([`lenient_window`]).
+fn lenient_pending_update<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<PendingUpdate>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let text = |key: &str| value.get(key).and_then(serde_json::Value::as_str);
+    Ok(match (text("from"), text("to")) {
+        (Some(from), Some(to)) => Some(PendingUpdate {
+            from: from.to_string(),
+            to: to.to_string(),
+            window: lenient_window(value.get("window")),
+        }),
+        _ => None,
+    })
 }
 
 /// Liest `keys` aus jedem JSON-Wert: Ist es kein Objekt, gilt es als leer. Einträge, die keine
