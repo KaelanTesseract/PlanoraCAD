@@ -48,4 +48,4 @@ Aus dem Programm legt dir „Rückmeldung …“ das Bild in einen Ordner und ö
 
 ## Wünsche mit 👍 gewichten
 
-Schau, ob dein Wunsch schon in der [Liste](https://github.com/KaelanTesseract/PlanoraCAD/issues) steht. Wenn ja, klick unter dem Wunsch auf 👍. Dann weiß Dennis, dass du ihn auch willst. Das hilft ihm beim Sortieren mehr als eine zweite, gleiche Meldung.
+Schau, ob dein Wunsch schon in der [Liste](https://github.com/KaelanTesseract/PlanoraCAD/issues) steht. Wenn ja, klick unter dem Wunsch auf 👍. Dann weiß Dennis, dass du ihn auch willst. Das hilft ihm beim Sortieren mehr als eine zweite, gleiche Meldung. Auf der Projekttafel (siehe README, „Was geplant ist“) sortiert Dennis die Wünsche in die Spalten „Geplant“, „In Arbeit“ und „Fertig“. Dort siehst du, wie weit dein Wunsch ist.

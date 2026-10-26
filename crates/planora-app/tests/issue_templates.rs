@@ -217,3 +217,23 @@ fn field_types_are_as_designed() {
     }
     assert_eq!(kinds("wunsch.yml", "wichtig"), "dropdown");
 }
+
+#[test]
+fn guide_files_exist_and_are_linked_from_readme() {
+    let readme = read("README.md");
+    for file in [
+        "docs/so-meldest-du-etwas.md",
+        "docs/haeufige-probleme.md",
+        "docs/projekttafel-einrichten.md",
+    ] {
+        assert!(repo_root().join(file).is_file(), "{file} fehlt");
+        assert!(
+            readme.contains(&format!("]({file})")),
+            "README verlinkt {file} nicht"
+        );
+    }
+    assert!(
+        readme.contains("Was geplant ist"),
+        "README braucht den Link „Was geplant ist“"
+    );
+}
