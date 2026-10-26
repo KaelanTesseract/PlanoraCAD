@@ -1,0 +1,73 @@
+name: Fehler melden
+description: Etwas funktioniert nicht oder sieht falsch aus.
+title: "Fehler: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke, dass du etwas meldest. Zwei Sätze reichen. Alles, was "Füllt das Programm aus." heißt, kannst du leer lassen, wenn du nicht aus dem Programm kommst.
+        Bitte schreib keine Passwörter und keine privaten Angaben in die Meldung. Diese Seite ist öffentlich.
+  - type: textarea
+    id: ziel
+    attributes:
+      label: Was wolltest du tun?
+      description: Zum Beispiel "Ein Loch in einen Quader bohren".
+    validations:
+      required: true
+  - type: textarea
+    id: passiert
+    attributes:
+      label: Was ist passiert?
+      description: Auch eine Fehlermeldung, die du gesehen hast, hilft.
+    validations:
+      required: true
+  - type: textarea
+    id: erwartet
+    attributes:
+      label: Was hast du erwartet?
+    validations:
+      required: true
+  - type: dropdown
+    id: bereich
+    attributes:
+      label: Wo ist es passiert?
+      options:
+        - Skizze
+        - 3D
+        - Export
+        - Zeichnung
+        - Tastenkürzel
+        - Anderes
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: Version
+      description: Füllt das Programm aus.
+  - type: textarea
+    id: system
+    attributes:
+      label: System
+      description: Füllt das Programm aus.
+  - type: textarea
+    id: grafik
+    attributes:
+      label: Grafikkarte
+      description: Füllt das Programm aus.
+  - type: textarea
+    id: schritte
+    attributes:
+      label: Letzte Schritte
+      description: Füllt das Programm aus.
+  - type: textarea
+    id: protokoll
+    attributes:
+      label: Protokoll
+      description: Füllt das Programm aus.
+  - type: textarea
+    id: bild
+    attributes:
+      label: Bild
+      description: Bild hierher ziehen.
