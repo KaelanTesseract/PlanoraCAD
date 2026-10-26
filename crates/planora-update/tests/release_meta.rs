@@ -110,3 +110,24 @@ fn every_changelog_section_has_content() {
     assert!(sections > 0, "CHANGELOG.md ohne Abschnitt");
     assert!(bullets > 0, "Abschnitt „{heading}“ ohne Aufzählung");
 }
+
+/// Das Release enthält die Symboldatei (für `tools/symbolize.ps1`); die Update-Funktion kennt
+/// sie nicht und lädt sie nie.
+#[test]
+fn release_ships_the_pdb_but_update_never_loads_it() {
+    let yml = repo_file(".github/workflows/release.yml");
+    assert!(
+        yml.contains("target/release/planora_app.pdb")
+            && yml.contains("'dist/planoracad-windows-x64.pdb'"),
+        "release.yml legt die .pdb nicht ab"
+    );
+    let src: PathBuf = [env!("CARGO_MANIFEST_DIR"), "src"].iter().collect();
+    for e in std::fs::read_dir(&src).expect("src lesbar").flatten() {
+        let text = std::fs::read_to_string(e.path()).unwrap_or_default();
+        assert!(
+            !text.to_ascii_lowercase().contains(".pdb"),
+            "{} erwähnt .pdb",
+            e.path().display()
+        );
+    }
+}

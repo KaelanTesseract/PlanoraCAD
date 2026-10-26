@@ -81,6 +81,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
           Copy-Item target/release/planora-app.exe dist/planoracad-windows-x64.exe
+          # Symboldatei (Zeilentabellen) für tools/symbolize.ps1: löst die Adressen eines
+          # Absturzberichts zu Datei und Zeile auf. Die Update-Funktion lädt sie nie.
+          Copy-Item target/release/planora_app.pdb dist/planoracad-windows-x64.pdb
           $hash = (Get-FileHash -Algorithm SHA256 dist/planoracad-windows-x64.exe).Hash.ToLowerInvariant()
           $utf8 = New-Object System.Text.UTF8Encoding($false)
           [System.IO.File]::WriteAllText("$PWD/dist/planoracad-windows-x64.sha256", "$hash  planoracad-windows-x64.exe`n", $utf8)
@@ -124,6 +127,7 @@ jobs:
             'dist/planoracad-windows-x64.exe',
             'dist/planoracad-windows-x64.sha256',
             'dist/THIRD-PARTY-LICENSES.txt',
+            'dist/planoracad-windows-x64.pdb',
             '--verify-tag',
             '--title', "PlanoraCAD $($env:VERSION)",
             '--notes-file', 'dist/release-notes.md')
