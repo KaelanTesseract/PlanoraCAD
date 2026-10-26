@@ -17,7 +17,9 @@ use crate::build_info::BuildInfo;
 use crate::diag::{self, Step};
 use crate::dialog::{Dialog, DialogSize};
 use crate::feedback::{self, AREAS, Built, FEEDBACK_FILE, Kind, Part, Personal, Report};
-use crate::feedback_shot::{SHOT_FAILED, ShotFlow, ShotPhase, ShotStep, preview_line, save_png};
+use crate::feedback_shot::{
+    SHOT_FAILED, SHOT_FILE, ShotFlow, ShotPhase, ShotStep, preview_line, save_png,
+};
 use crate::theme::{self, SPACE_1, SPACE_2, SPACE_3, SPACE_4};
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -45,7 +47,7 @@ pub const PREVIEW_HEADING: &str = "Das geht mit";
 pub const OPEN_BROWSER: &str = "Im Browser öffnen";
 /// Zweiter Knopf: das Webformular auf dennis-guse.de statt GitHub.
 pub const WEBFORM_BUTTON: &str = "Ohne GitHub-Konto senden";
-/// Hinweis zum zweiten Knopf (auch als Hover).
+/// Hinweis zum zweiten Knopf.
 pub const WEBFORM_HINT: &str =
     "Öffnet ein Formular auf dennis-guse.de. Dort kannst du auch Dateien anhängen.";
 /// Notweg, steht nach dem Senden.
@@ -66,7 +68,8 @@ pub const COPIED: &str = "Kopiert.";
 /// Statt [`folder_hint`], wenn der Rückmeldungsordner nicht angelegt werden konnte.
 pub const NO_FILE: &str = "Die Datei ließ sich nicht anlegen. Die Meldung geht trotzdem.";
 /// Steht immer unten im Fenster.
-pub const PRIVACY_LINE: &str = "Es geht nichts weg, bevor du im Browser auf „Absenden“ klickst.";
+pub const PRIVACY_LINE: &str =
+    "Es geht nichts weg, bevor du im Browser selbst auf den Knopf zum Absenden klickst.";
 /// So viele letzte Protokollzeilen kommen in den Bestandteil „Protokollzeilen“.
 pub const LOG_LINES: usize = 100;
 /// Vorschau zum Bild, solange noch keins aufgenommen ist.
@@ -82,9 +85,13 @@ const ADDRESS_MAX_H: f32 = 120.0;
 /// Zeilen des Beschreibungsfelds (es wächst mit dem Text).
 const DESCRIPTION_ROWS: usize = 4;
 
-/// Hinweis nach „Im Browser öffnen“, wenn ein Ordner mit `file` geöffnet wurde.
-pub fn folder_hint(file: &str) -> String {
-    format!("Zieh „{file}“ aus dem geöffneten Ordner ins Formular.")
+/// Hinweis nach „Im Browser öffnen“, wenn ein Ordner mit den Dateien `files` geöffnet wurde.
+pub fn folder_hint(files: &[&str]) -> String {
+    let names: Vec<String> = files.iter().map(|f| format!("„{f}“")).collect();
+    format!(
+        "Zieh {} aus dem geöffneten Ordner ins Formular.",
+        names.join(" und ")
+    )
 }
 
 /// Zeile mit der Bildschirmgröße im Bestandteil „System“.
@@ -146,6 +153,8 @@ pub struct Sent {
     pub folder: Option<PathBuf>,
     /// Ein Ordner war nötig, ließ sich aber nicht anlegen ([`NO_FILE`]).
     pub file_failed: bool,
+    /// `bild.png` liegt mit im Ordner.
+    pub picture: bool,
 }
 
 /// Ein Bestandteil mit bereinigtem Text und Häkchen.
@@ -363,16 +372,21 @@ impl FeedbackDialog {
     /// er wird zuerst geöffnet, dann die Adresse. Lässt sich der Ordner nicht anlegen, geht die
     /// Adresse trotzdem (ohne den Hinweis auf die Datei, soweit nichts gekürzt wurde).
     fn send(&mut self, web: bool) {
-        let report = self.report();
+        let mut report = self.report();
+        // Das Bild gilt nur, wenn es wirklich vorliegt (sonst kein Hinweis auf `bild.png`).
+        let picture = self.picture_to_save();
+        if picture.is_none() {
+            report.parts.retain(|(p, _)| *p != Part::Bild);
+        }
         let with_file = self.with_file();
-        let make = |with_file: bool| {
+        let make = |report: &Report, with_file: bool| {
             if web {
-                feedback::webform_url(&report, with_file)
+                feedback::webform_url(report, with_file)
             } else {
-                feedback::issue_url(&report, with_file)
+                feedback::issue_url(report, with_file)
             }
         };
-        let mut built = make(with_file);
+        let mut built = make(&report, with_file);
         let mut folder = None;
         let mut file_failed = false;
         if built.needs_file {
@@ -383,18 +397,21 @@ impl FeedbackDialog {
                 }
                 None => Err(std::io::Error::other("kein Datenordner")),
             };
-            let written = written.and_then(|dir| match self.picture_to_save() {
-                Some(img) => save_png(&dir, &img).map(|_| dir),
+            let written = written.and_then(|dir| match &picture {
+                Some(img) => save_png(&dir, img).map(|_| dir),
                 None => Ok(dir),
             });
             match written {
                 Ok(dir) => folder = Some(dir),
                 Err(e) => {
                     file_failed = true;
-                    diag::warn(&format!("Rückmeldungsordner nicht angelegt: {e}"));
-                    if with_file {
-                        built = make(false);
-                    }
+                    diag::warn(&format!(
+                        "Rückmeldungsordner nicht angelegt ({:?})",
+                        e.kind()
+                    ));
+                    // Ohne Ordner geht auch kein Bild mit.
+                    report.parts.retain(|(p, _)| *p != Part::Bild);
+                    built = make(&report, false);
                 }
             }
         }
@@ -402,6 +419,7 @@ impl FeedbackDialog {
             "Rückmeldung ({}) im Browser geöffnet",
             report.kind.label()
         ));
+        let picture = folder.is_some() && picture.is_some();
         if let Some(dir) = &folder {
             self.pending
                 .push_back(FeedbackAction::OpenFolder(dir.clone()));
@@ -414,6 +432,7 @@ impl FeedbackDialog {
             url: built.url,
             folder,
             file_failed,
+            picture,
         });
     }
 }
@@ -622,7 +641,11 @@ fn after_send(
         crate::update_dialog::failure_box(ui, NO_FILE, dark);
     } else if sent.folder.is_some() {
         ui.add_space(SPACE_3);
-        ui.add(egui::Label::new(folder_hint(FEEDBACK_FILE)).wrap());
+        let mut files = vec![FEEDBACK_FILE];
+        if sent.picture {
+            files.push(SHOT_FILE);
+        }
+        ui.add(egui::Label::new(folder_hint(&files)).wrap());
     }
     ui.add_space(SPACE_3);
     ui.add(egui::Label::new(MAIL_FALLBACK).wrap());
@@ -713,7 +736,6 @@ fn footer(
         }
         let r = ui
             .add_enabled(enough, egui::Button::new(WEBFORM_BUTTON))
-            .on_hover_text(WEBFORM_HINT)
             .on_disabled_hover_text(TOO_SHORT);
         theme::focus_ring(ui, &r);
         if r.clicked() {

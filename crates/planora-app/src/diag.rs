@@ -327,8 +327,5 @@ pub fn steps_text(steps: &[Step]) -> String {
         .iter()
         .map(|s| format!("{} {}", s.time, s.label))
         .collect::<Vec<_>>()
-        .join(
-            "
-",
-        )
+        .join("\n")
 }

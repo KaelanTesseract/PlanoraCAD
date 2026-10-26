@@ -635,11 +635,7 @@ fn webform_no_area_means_no_parameter() {
 #[test]
 fn webform_encoding() {
     let b = webform_url(
-        &web_report(
-            Kind::Wunsch,
-            "Größe & Form #1 a+b
-Zeile 2",
-        ),
+        &web_report(Kind::Wunsch, "Größe & Form #1 a+b\nZeile 2"),
         false,
     );
     assert_eq!(
@@ -656,11 +652,7 @@ fn webform_with_file_adds_hint() {
     assert!(
         param(&b.url, "passiert")
             .unwrap()
-            .ends_with(&percent_encode(&format!(
-                "
-
-{ATTACH_HINT}"
-            )))
+            .ends_with(&percent_encode(&format!("\n\n{ATTACH_HINT}")))
     );
 }
 
@@ -697,9 +689,7 @@ fn webform_oversized_description_is_cut_with_file() {
     assert!(b.description_cut);
     assert!(b.needs_file);
     assert!(b.url.ends_with(&percent_encode(&format!(
-        "{KUERZUNG_HINWEIS}
-
-{ATTACH_HINT}"
+        "{KUERZUNG_HINWEIS}\n\n{ATTACH_HINT}"
     ))));
     for f in ["version", "system", "grafik", "bereich"] {
         assert!(param(&b.url, f).is_some(), "{f}");
@@ -710,10 +700,7 @@ fn webform_oversized_description_is_cut_with_file() {
 #[test]
 fn webform_url_never_exceeds_2000_for_any_mix() {
     for len in [0usize, 10, 1999, 3000] {
-        for c in [
-            "a", "ä", "&", "
-", "👍",
-        ] {
+        for c in ["a", "ä", "&", "\n", "👍"] {
             for kind in [Kind::Fehler, Kind::Wunsch, Kind::Frage] {
                 for with_file in [false, true] {
                     let mut r = web_report(kind, &c.repeat(len));
@@ -731,4 +718,130 @@ fn webform_url_never_exceeds_2000_for_any_mix() {
     r.parts.push((Part::Grafik, "g".repeat(3000)));
     let b = webform_url(&r, true);
     assert!(b.url.len() < 2000);
+}
+
+fn with_picture(mut r: Report) -> Report {
+    r.parts.push((Part::Bild, "Bild".to_string()));
+    r
+}
+
+#[test]
+fn attach_hint_names_the_picture_only_when_one_goes_along() {
+    assert!(
+        ATTACH_HINT_PICTURE.contains("rueckmeldung.txt")
+            && ATTACH_HINT_PICTURE.contains("bild.png")
+    );
+    for web in [false, true] {
+        let build = |r: &Report, with_file: bool| {
+            if web {
+                webform_url(r, with_file)
+            } else {
+                issue_url(r, with_file)
+            }
+        };
+        let plain = build(&web_report(Kind::Fehler, "Es hängt"), true);
+        assert!(plain.url.contains(&percent_encode(ATTACH_HINT)), "{web}");
+        assert!(!plain.url.contains("bild.png"), "{web}");
+        let pic = build(&with_picture(web_report(Kind::Fehler, "Es hängt")), true);
+        assert!(
+            pic.url.contains(&percent_encode(ATTACH_HINT_PICTURE)),
+            "{web}"
+        );
+        assert!(!pic.url.contains(&percent_encode(ATTACH_HINT)), "{web}");
+        // Auch wenn nur gekürzt wurde und `with_file` nicht gesetzt war.
+        let long = build(
+            &with_picture(web_report(Kind::Fehler, &"x".repeat(5000))),
+            false,
+        );
+        assert!(long.needs_file && long.description_cut, "{web}");
+        assert!(
+            long.url.contains(&percent_encode(ATTACH_HINT_PICTURE)),
+            "{web}"
+        );
+    }
+}
+
+#[test]
+fn webform_system_field_is_a_single_line_but_github_keeps_lines() {
+    let nl = char::from(10);
+    let system = format!("Windows 11 (Build 26100){nl}Bildschirm: 1920 × 1080");
+    let mut r = web_report(Kind::Fehler, "Es hängt");
+    r.parts.retain(|(p, _)| *p != Part::System);
+    r.parts.push((Part::System, system.clone()));
+    let web = webform_url(&r, false);
+    assert_eq!(
+        param(&web.url, "system"),
+        Some(percent_encode("Windows 11 (Build 26100), Bildschirm: 1920 × 1080").as_str())
+    );
+    let gh = issue_url(&r, false);
+    assert_eq!(
+        param(&gh.url, "system"),
+        Some(percent_encode(&system).as_str())
+    );
+}
+
+fn web_report_with(parts: &[(Part, usize)]) -> Report {
+    let mut r = web_report(Kind::Fehler, "Kurz");
+    for (p, n) in parts {
+        r.parts.retain(|(q, _)| q != p);
+        r.parts.push((*p, "g".repeat(*n)));
+    }
+    r
+}
+
+#[test]
+fn webform_last_resort_drops_graphics_then_system_then_version() {
+    // Nur die Grafikkarte ist riesig: nur sie fällt weg, die Beschreibung bleibt ganz.
+    let b = webform_url(&web_report_with(&[(Part::Grafik, 1900)]), false);
+    assert!(b.url.len() < 2000);
+    assert!(b.dropped.contains(&Part::Grafik));
+    assert!(!b.dropped.contains(&Part::System) && !b.dropped.contains(&Part::Version));
+    assert!(!b.description_cut, "die Beschreibung passt ganz");
+    assert!(param(&b.url, "system").is_some() && param(&b.url, "version").is_some());
+    assert!(param(&b.url, "grafik").is_none());
+
+    // Grafikkarte und System riesig: beide fallen, die Version bleibt.
+    let b = webform_url(
+        &web_report_with(&[(Part::Grafik, 1900), (Part::System, 1900)]),
+        false,
+    );
+    assert!(b.url.len() < 2000);
+    assert!(b.dropped.contains(&Part::Grafik) && b.dropped.contains(&Part::System));
+    assert!(!b.dropped.contains(&Part::Version));
+    assert!(param(&b.url, "version").is_some());
+    assert!(!b.description_cut);
+
+    // Alle drei riesig: Reihenfolge Grafikkarte, System, Version.
+    let b = webform_url(
+        &web_report_with(&[
+            (Part::Grafik, 1900),
+            (Part::System, 1900),
+            (Part::Version, 1900),
+        ]),
+        true,
+    );
+    assert!(b.url.len() < 2000);
+    let order: Vec<Part> = b
+        .dropped
+        .iter()
+        .copied()
+        .filter(|p| matches!(p, Part::Grafik | Part::System | Part::Version))
+        .collect();
+    assert_eq!(order, vec![Part::Grafik, Part::System, Part::Version]);
+    assert!(param(&b.url, "passiert").unwrap().starts_with("Kurz"));
+    no_broken_escape(&b.url);
+}
+
+#[test]
+fn webform_address_boundary_is_below_2000() {
+    assert_eq!(MAX_URL_LEN, 2000);
+    let build = |n: usize| webform_url(&web_report(Kind::Fehler, &"a".repeat(n)), false);
+    let base = build(0).url.len();
+    // Jedes Zeichen der Beschreibung kostet genau ein Zeichen der Adresse.
+    let fits = build(1999 - base);
+    assert_eq!(fits.url.len(), 1999);
+    assert!(!fits.needs_file && !fits.description_cut && fits.dropped.is_empty());
+    let over = build(2000 - base);
+    assert!(over.url.len() < 2000);
+    assert!(over.needs_file, "2000 Zeichen passen nicht mehr");
 }

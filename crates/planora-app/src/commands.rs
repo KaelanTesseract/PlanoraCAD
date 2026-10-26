@@ -91,6 +91,10 @@ pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
     if a.area() == Area::Model && a != Action::ShowShortcuts && ws.active_tab().read_only {
         return MenuRequest::None;
     }
+    // Das Öffnen der Rückmeldung ist kein Arbeitsschritt (das Menü legt auch keinen ab).
+    if a == Action::FeedbackOpen {
+        return MenuRequest::Feedback;
+    }
     crate::diag::step(a.label());
     match a {
         Action::ShowShortcuts | Action::SketchShowShortcuts => return MenuRequest::Shortcuts,

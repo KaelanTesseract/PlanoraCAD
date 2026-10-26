@@ -167,3 +167,14 @@ fn steps_text_format() {
     );
     assert_eq!(diag::steps_text(&[]), "");
 }
+
+#[test]
+fn opening_the_feedback_window_is_not_a_step() {
+    let mut w = ws();
+    commands::run_action(&mut w, Action::New);
+    let req = commands::run_action(&mut w, Action::FeedbackOpen);
+    assert_eq!(req, planora_app::app::MenuRequest::Feedback);
+    let last = diag::recent_steps().into_iter().last().unwrap();
+    assert_ne!(last.label, Action::FeedbackOpen.label());
+    assert!(!has(Action::FeedbackOpen.label()));
+}

@@ -340,3 +340,8 @@ Reihenfolge geändert: Etappe 4 wird gleich nach Task 8 gebaut, weil ein externe
 ## Abweichungen
 
 Was vom Plan abgewichen ist und warum.
+
+- Zurückgestellt (Etappe 2): „Adresse anzeigen“ und „Text kopieren“ zeigen vor dem Senden die GitHub-Adresse, auch wenn später das Webformular gewählt wird.
+- Zurückgestellt (Etappe 2): Laufen zwei Instanzen gleichzeitig, kann die Rotation eine alte Protokolldatei früher verlieren (Task 18).
+- Gewollt: Ein anderes Fenster zu öffnen schließt die Rückmeldung und leert den Text.
+- Zurückgestellt (Etappe 2): Das Bild vom Fenster hat keine Vorschau als Bild, nur eine Zeile mit der Größe.

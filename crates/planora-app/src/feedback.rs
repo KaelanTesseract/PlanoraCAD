@@ -39,6 +39,8 @@ pub const MAX_URL_LEN: usize = 2000;
 pub const KUERZUNG_HINWEIS: &str = "… (gekürzt, ganz in der angehängten Datei)";
 /// Steht am Ende des Beschreibungsfelds, wenn es eine Datei zum Anhängen gibt.
 pub const ATTACH_HINT: &str = "Datei hier anhängen: rueckmeldung.txt";
+/// Wie [`ATTACH_HINT`], wenn auch `bild.png` im Ordner liegt (Bestandteil „Bild vom Fenster“).
+pub const ATTACH_HINT_PICTURE: &str = "Dateien hier anhängen: rueckmeldung.txt und bild.png";
 /// Höchstlänge der Treiberangabe der Grafikkarte.
 pub const MAX_DRIVER_CHARS: usize = 120;
 
@@ -522,6 +524,16 @@ pub struct Built {
     pub needs_file: bool,
 }
 
+/// Hinweis auf die Dateien im Ordner: mit `bild.png`, wenn das Bild (Bestandteil `Bild`)
+/// mitgeht.
+fn attach_hint(report: &Report) -> &'static str {
+    if report.parts.iter().any(|(p, _)| *p == Part::Bild) {
+        ATTACH_HINT_PICTURE
+    } else {
+        ATTACH_HINT
+    }
+}
+
 fn area_line(report: &Report) -> Option<String> {
     report.area.as_ref().map(|a| format!("Bereich: {a}"))
 }
@@ -583,27 +595,15 @@ fn render_web(
         let texts: Vec<String> = parts
             .iter()
             .filter(|(p, _)| p.bug_field() == Some(field))
-            .map(|(p, t)| {
-                if field == FIELD_PROTOKOLL {
-                    format!(
-                        "{}:
-{t}",
-                        p.label()
-                    )
-                } else {
-                    t.clone()
-                }
+            .map(|(p, t)| match field {
+                FIELD_PROTOKOLL => format!("{}:\n{t}", p.label()),
+                // Das Feld „system“ des Webformulars ist einzeilig.
+                FIELD_SYSTEM => t.lines().collect::<Vec<_>>().join(", "),
+                _ => t.clone(),
             })
             .collect();
         if !texts.is_empty() {
-            push(
-                field,
-                &texts.join(
-                    "
-
-",
-                ),
-            );
+            push(field, &texts.join("\n\n"));
         }
     }
     let mut description = desc.to_string();
@@ -611,12 +611,8 @@ fn render_web(
         description.push_str(KUERZUNG_HINWEIS);
     }
     if with_file {
-        description.push_str(
-            "
-
-",
-        );
-        description.push_str(ATTACH_HINT);
+        description.push_str("\n\n");
+        description.push_str(attach_hint(report));
     }
     push(report.kind.description_field(), &description);
     url
@@ -681,7 +677,7 @@ fn render_github(
     }
     if with_file {
         description.push_str("\n\n");
-        description.push_str(ATTACH_HINT);
+        description.push_str(attach_hint(report));
     }
     // Die Beschreibung steht zuletzt.
     fields.push((report.kind.description_field(), description));
@@ -810,6 +806,10 @@ fn build(target: Target, report: &Report, with_file: bool) -> Built {
                 built.dropped.push(p);
             }
         }
+    }
+    if let Some(url) = fits(&parts, true) {
+        built.url = url;
+        return built;
     }
     // 4. Die Beschreibung passt auch allein nicht: an einer Zeichengrenze kürzen.
     let chars: Vec<char> = report.description.chars().collect();

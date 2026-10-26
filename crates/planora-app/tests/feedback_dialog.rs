@@ -21,7 +21,8 @@ use planora_app::create_dialog::CreateDialog;
 use planora_app::diag::Step;
 use planora_app::dialog::DialogSize;
 use planora_app::feedback::{
-    self, ATTACH_HINT, FEEDBACK_DIR, FEEDBACK_FILE, Part, Personal, SystemOpen, percent_encode,
+    self, ATTACH_HINT, ATTACH_HINT_PICTURE, FEEDBACK_DIR, FEEDBACK_FILE, Part, Personal,
+    SystemOpen, percent_encode,
 };
 use planora_app::feedback_dialog::*;
 use planora_app::keymap::{Action, Area, Binding, KeyChord, Keymap, SetResult};
@@ -968,7 +969,7 @@ fn long_input_writes_bundle_and_opens_folder() {
     assert!(url.len() < 2000, "{}", url.len());
     assert!(url.contains(&percent_encode(ATTACH_HINT)), "{url}");
     assert_eq!(FEEDBACK_FILE, "rueckmeldung.txt");
-    assert!(r.sees(&folder_hint(FEEDBACK_FILE)), "{:?}", r.texts());
+    assert!(r.sees(&folder_hint(&[FEEDBACK_FILE])), "{:?}", r.texts());
     assert!(!r.sees(NO_FILE));
     assert_eq!(r.fb().sent.as_ref().unwrap().folder.as_ref(), Some(dir));
 }
@@ -984,7 +985,7 @@ fn unwritable_data_dir_still_opens_browser_with_no_file_hint() {
     assert_eq!(r.urls().len(), 1, "der Browser öffnet trotzdem");
     assert!(r.opened().is_empty(), "kein Ordner");
     assert!(r.sees(NO_FILE), "{:?}", r.texts());
-    assert!(!r.sees(&folder_hint(FEEDBACK_FILE)));
+    assert!(!r.sees(&folder_hint(&[FEEDBACK_FILE])));
     assert!(r.sees(BROWSER_HINT));
     assert!(r.fb().sent.as_ref().unwrap().file_failed);
 
@@ -1229,9 +1230,9 @@ fn texts_are_plain_language() {
     );
     assert_eq!(
         PRIVACY_LINE,
-        "Es geht nichts weg, bevor du im Browser auf „Absenden“ klickst."
+        "Es geht nichts weg, bevor du im Browser selbst auf den Knopf zum Absenden klickst."
     );
-    assert!(folder_hint("rueckmeldung.txt").contains("„rueckmeldung.txt“"));
+    assert!(folder_hint(&["rueckmeldung.txt"]).contains("„rueckmeldung.txt“"));
     let all = [
         TITLE.to_string(),
         KIND_LABEL.into(),
@@ -1249,7 +1250,7 @@ fn texts_are_plain_language() {
         COPIED.into(),
         NO_FILE.into(),
         PRIVACY_LINE.into(),
-        folder_hint("rueckmeldung.txt"),
+        folder_hint(&["rueckmeldung.txt"]),
         screen_line(1920, 1080),
     ];
     for t in &all {
@@ -1351,11 +1352,40 @@ fn app_sends_viewport_screenshot_command_after_one_hidden_frame() {
     let bytes = std::fs::read(&png).expect("bild.png angelegt");
     assert_eq!(&bytes[..4], b"\x89PNG");
     let url = r.urls().pop().unwrap();
-    assert!(url.contains(&percent_encode(ATTACH_HINT)), "{url}");
+    assert!(url.contains(&percent_encode(ATTACH_HINT_PICTURE)), "{url}");
     assert!(
-        !url.contains("bild.png"),
-        "das Bild geht nicht über die Adresse"
+        r.sees(&folder_hint(&[FEEDBACK_FILE, SHOT_FILE])),
+        "{:?}",
+        r.texts()
     );
+}
+
+#[test]
+fn picture_is_named_in_the_window_hint_and_the_web_address() {
+    use planora_app::feedback_shot::SHOT_FILE;
+    let mut r = Rig::new("planora-fb-bild-web");
+    r.open_with_context();
+    r.fb().description = "Die Linie springt beim Ziehen weg.".into();
+    r.fb().set_checked(Part::Bild, true);
+    let t0 = std::time::Instant::now();
+    r.fb().shot_tick(t0);
+    r.fb()
+        .shot_received(std::sync::Arc::new(egui::ColorImage::new(
+            [8, 8],
+            vec![egui::Color32::BLACK; 64],
+        )));
+    r.settle();
+    assert!(r.fb().is_checked(Part::Bild));
+    r.click(WEBFORM_BUTTON);
+    let url = r.urls().pop().unwrap();
+    assert!(url.starts_with(planora_app::feedback::WEBFORM_URL), "{url}");
+    assert!(url.contains(&percent_encode(ATTACH_HINT_PICTURE)), "{url}");
+    assert!(
+        r.sees(&folder_hint(&[FEEDBACK_FILE, SHOT_FILE])),
+        "{:?}",
+        r.texts()
+    );
+    assert!(!r.sees(&folder_hint(&[FEEDBACK_FILE])));
 }
 
 #[test]
@@ -1439,5 +1469,5 @@ fn webform_button_opens_folder_when_needed() {
     assert!(url.starts_with(planora_app::feedback::WEBFORM_URL));
     assert!(url.len() < 2000);
     assert!(url.contains(&percent_encode(ATTACH_HINT)), "{url}");
-    assert!(r.sees(&folder_hint(FEEDBACK_FILE)));
+    assert!(r.sees(&folder_hint(&[FEEDBACK_FILE])));
 }
