@@ -103,6 +103,53 @@ fn undo_label_becomes_a_step() {
 }
 
 #[test]
+fn sketch_change_becomes_a_step() {
+    use planora_app::state::StandardPlane;
+    use planora_feature::SketchPlane;
+    let mut w = ws();
+    let st = &mut w.active_tab_mut().state;
+    let sk = st
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    st.open_sketch(sk).unwrap();
+    w.observe_history(false);
+    {
+        let sketch = w.active_tab_mut().state.session_sketch_mut().unwrap().1;
+        let a = sketch.add_point(0.0, 0.0).unwrap();
+        let b = sketch.add_point(7.0, 1.0).unwrap();
+        sketch.add_line(a, b).unwrap();
+    }
+    w.observe_history(false);
+    let label = w.active_tab().state.sketch_undo_label().unwrap();
+    assert!(has(label), "{label} fehlt in {:?}", diag::recent_steps());
+}
+
+#[test]
+fn undo_and_redo_actions_are_recorded_by_their_own_names() {
+    let mut w = ws();
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(10.0))
+        .unwrap();
+    commands::run_action(&mut w, Action::Undo);
+    assert!(has("Rückgängig"));
+    commands::run_action(&mut w, Action::Redo);
+    assert!(has("Wiederholen"));
+}
+
+#[test]
+fn step_time_is_hh_mm_ss() {
+    let mut d = Diag::in_memory();
+    d.step("Zeit");
+    let t = d.recent_steps()[0].time.clone();
+    assert!(
+        chrono::NaiveTime::parse_from_str(&t, "%H:%M:%S").is_ok(),
+        "{t}"
+    );
+    assert_eq!(t.len(), 8);
+}
+
+#[test]
 fn steps_text_format() {
     let steps = vec![
         Step {
