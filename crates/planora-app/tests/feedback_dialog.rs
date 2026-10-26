@@ -311,7 +311,46 @@ fn context(data: &Path) -> FeedbackContext {
         },
         data_dir: data.to_path_buf(),
         crash_report: None,
+        from_crash: false,
     }
+}
+
+/// Die Felder der Adresse, dekodiert: (Name, Inhalt) in ihrer Reihenfolge.
+fn url_fields(url: &str) -> Vec<(String, String)> {
+    let query = url.split_once('?').expect("Adresse mit Feldern").1;
+    query
+        .split('&')
+        .map(|pair| {
+            let (name, value) = pair.split_once('=').expect("Feld mit Wert");
+            (name.to_string(), percent_decode(value))
+        })
+        .collect()
+}
+
+/// Umkehrung von `feedback::percent_encode` (UTF-8).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = std::str::from_utf8(&b[i + 1..i + 3]).unwrap();
+            out.push(u8::from_str_radix(hex, 16).unwrap());
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).expect("gültiges UTF-8")
+}
+
+/// Inhalt des Felds `name` der Adresse (dekodiert).
+fn field<'a>(fields: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    fields
+        .iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, v)| v.as_str())
 }
 
 fn chord(key: Key, ctrl: bool, shift: bool) -> KeyChord {
@@ -577,13 +616,14 @@ fn default_checkboxes() {
     );
     assert_eq!(screen_line(1920, 1080), "Bildschirm: 1920 × 1080");
 
-    // Mit Absturzbericht: eigener Bestandteil, angehakt, bereinigt.
+    // Mit Absturzbericht (aus „Hilfe“ geöffnet): eigener Bestandteil, bereinigt, aber nicht
+    // angehakt (an sind nur Version, System, Grafikkarte und letzte Schritte).
     let report = tmp.join("absturz.txt");
     std::fs::write(&report, r"Panik in C:\Users\Max Müller\x.rs").unwrap();
     let mut c = context(&tmp);
     c.crash_report = Some(report);
     d.open_fresh(c);
-    assert!(d.is_checked(Part::Absturzbericht));
+    assert!(!d.is_checked(Part::Absturzbericht));
     assert!(d.shown_parts().contains(&Part::Absturzbericht));
     let text = d.preview_text(Part::Absturzbericht).unwrap();
     assert!(
@@ -614,6 +654,156 @@ fn default_checkboxes() {
     ] {
         assert!(r.sees(t), "„{t}“ fehlt: {:?}", r.texts());
     }
+}
+
+#[test]
+fn crash_report_is_off_unless_opened_from_the_crash_prompt() {
+    let tmp = common::temp_root("planora-fb-absturz");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let report = tmp.join("absturz.txt");
+    std::fs::write(&report, "Panik in main.rs:3").unwrap();
+    for (from_crash, on) in [(false, false), (true, true)] {
+        let mut c = context(&tmp);
+        c.crash_report = Some(report.clone());
+        c.from_crash = from_crash;
+        let mut d = FeedbackDialog::default();
+        d.open_fresh(c);
+        assert!(
+            d.shown_parts().contains(&Part::Absturzbericht),
+            "{from_crash}"
+        );
+        assert_eq!(d.is_checked(Part::Absturzbericht), on, "{from_crash}");
+        // Die übrigen Häkchen stehen in beiden Fällen gleich.
+        for (p, want) in [
+            (Part::Version, true),
+            (Part::System, true),
+            (Part::Grafik, true),
+            (Part::Schritte, true),
+            (Part::Protokoll, false),
+        ] {
+            assert_eq!(d.is_checked(p), want, "{from_crash}: {p:?}");
+        }
+        d.description = "Es ist abgestürzt.".into();
+        let fields = url_fields(&d.built().url);
+        let protokoll = field(&fields, feedback::FIELD_PROTOKOLL);
+        assert_eq!(
+            protokoll.is_some_and(|t| t.contains("Panik in main.rs:3")),
+            on,
+            "{from_crash}: {protokoll:?}"
+        );
+    }
+    assert!(!Part::Absturzbericht.default_on());
+}
+
+#[test]
+fn preview_is_exactly_what_the_address_carries() {
+    let tmp = common::temp_root("planora-fb-gleich");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let report = tmp.join("absturz.txt");
+    std::fs::write(&report, r"Panik in C:\Users\Max Müller\x.rs & 100 %").unwrap();
+    let mut c = context(&tmp);
+    c.crash_report = Some(report);
+    c.from_crash = true;
+    let mut d = FeedbackDialog::default();
+    d.open_fresh(c);
+    d.set_checked(Part::Protokoll, true);
+    d.description = "Beim Speichern & Laden: ä/ö/ü # 50 % + 👍".into();
+
+    // Fehler: Version, System, Grafikkarte und Schritte je in ihrem Feld, genau der Text der
+    // Vorschau; Protokoll und Absturzbericht gemeinsam im Feld „protokoll“, je mit Überschrift.
+    let built = d.built();
+    assert!(built.dropped.is_empty() && !built.steps_cut && !built.description_cut);
+    let fields = url_fields(&built.url);
+    let checked: Vec<Part> = d
+        .shown_parts()
+        .into_iter()
+        .filter(|&p| d.is_checked(p))
+        .collect();
+    assert_eq!(
+        checked,
+        [
+            Part::Version,
+            Part::System,
+            Part::Grafik,
+            Part::Schritte,
+            Part::Protokoll,
+            Part::Absturzbericht
+        ]
+    );
+    for (p, name) in [
+        (Part::Version, feedback::FIELD_VERSION),
+        (Part::System, feedback::FIELD_SYSTEM),
+        (Part::Grafik, feedback::FIELD_GRAFIK),
+        (Part::Schritte, feedback::FIELD_SCHRITTE),
+    ] {
+        assert_eq!(field(&fields, name), d.preview_text(p), "{p:?}");
+    }
+    let log = format!(
+        "{}:\n{}\n\n{}:\n{}",
+        Part::Protokoll.label(),
+        d.preview_text(Part::Protokoll).unwrap(),
+        Part::Absturzbericht.label(),
+        d.preview_text(Part::Absturzbericht).unwrap()
+    );
+    assert_eq!(
+        field(&fields, feedback::FIELD_PROTOKOLL),
+        Some(log.as_str())
+    );
+    assert_eq!(
+        field(&fields, feedback::FIELD_PASSIERT),
+        Some(format!("{}\n\n{}", d.description, ATTACH_HINT).as_str())
+    );
+
+    // Wunsch: alle angehakten Teile mit Überschrift gesammelt im Feld „angaben“.
+    d.kind = feedback::Kind::Wunsch;
+    let fields = url_fields(&d.built().url);
+    let blocks: Vec<String> = checked
+        .iter()
+        .map(|&p| format!("{}:\n{}", p.label(), d.preview_text(p).unwrap()))
+        .collect();
+    assert_eq!(
+        field(&fields, feedback::FIELD_ANGABEN),
+        Some(blocks.join("\n\n").as_str())
+    );
+    // Nicht angehakt: auch nicht in der Adresse.
+    d.set_checked(Part::Grafik, false);
+    let fields = url_fields(&d.built().url);
+    let angaben = field(&fields, feedback::FIELD_ANGABEN).unwrap();
+    assert!(!angaben.contains(d.preview_text(Part::Grafik).unwrap()));
+}
+
+#[test]
+fn area_none_means_no_area_line() {
+    assert_eq!(AREA_NONE, "Keine Angabe");
+    let mut r = Rig::new("planora-fb-bereich");
+    r.open_with_context();
+    r.fb().description = "Die Skizze springt beim Bemaßen.".into();
+    r.settle();
+    // Am Anfang: keine Angabe.
+    assert_eq!(r.fb().area, None);
+    assert!(r.sees(AREA_NONE), "{:?}", r.texts());
+    let url = r.fb().built().url;
+    assert!(!url.contains(&percent_encode("Bereich:")), "{url}");
+    // Klappliste: „Skizze“ wählen.
+    r.click(AREA_NONE);
+    r.click(feedback::AREAS[0]);
+    assert_eq!(r.fb().area, Some("Skizze"));
+    let fields = url_fields(&r.fb().built().url);
+    assert!(
+        field(&fields, feedback::FIELD_PASSIERT)
+            .is_some_and(|t| t.starts_with("Bereich: Skizze\n")),
+        "{fields:?}"
+    );
+    // Zurück auf „Keine Angabe“: kein Bereich, keine Zeile „Bereich: …“.
+    r.click("Skizze");
+    r.click(AREA_NONE);
+    assert_eq!(r.fb().area, None);
+    let url = r.fb().built().url;
+    assert!(!url.contains(&percent_encode("Bereich:")), "{url}");
+    r.click(OPEN_BROWSER);
+    let sent = r.urls().pop().unwrap();
+    assert!(!sent.contains(&percent_encode("Bereich:")), "{sent}");
+    assert!(!sent.contains("bereich="), "nie als Parameter: {sent}");
 }
 
 #[test]
@@ -795,6 +985,7 @@ fn unwritable_data_dir_still_opens_browser_with_no_file_hint() {
     std::fs::write(&crash, "Panik").unwrap();
     let mut c = context(&r.data);
     c.crash_report = Some(crash);
+    c.from_crash = true;
     r.fb().open_fresh(c);
     r.fb().description = "Es ist abgestürzt.".into();
     r.click(OPEN_BROWSER);

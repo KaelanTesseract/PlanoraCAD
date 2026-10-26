@@ -1014,6 +1014,7 @@ impl PlanoraApp {
                 .map(Path::to_path_buf)
                 .unwrap_or_default(),
             crash_report: None,
+            from_crash: false,
         }
     }
 

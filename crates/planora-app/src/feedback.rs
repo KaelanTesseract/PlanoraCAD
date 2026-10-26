@@ -132,9 +132,14 @@ impl Part {
         }
     }
 
-    /// Ob das Häkchen am Anfang gesetzt ist.
+    /// Ob das Häkchen am Anfang gesetzt ist: nur bei Version, System, Grafikkarte und letzten
+    /// Schritten. Den Absturzbericht hakt das Fenster nur an, wenn es aus der Absturz-Rückfrage
+    /// geöffnet wurde (`feedback_dialog::FeedbackContext::from_crash`).
     pub fn default_on(self) -> bool {
-        !matches!(self, Part::Protokoll | Part::Bild | Part::Projektdatei)
+        matches!(
+            self,
+            Part::Version | Part::System | Part::Grafik | Part::Schritte
+        )
     }
 
     /// Feld im Fehler-Formular; `None` für Bestandteile, die nur als Datei mitgehen.

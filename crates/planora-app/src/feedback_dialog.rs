@@ -103,8 +103,12 @@ pub struct FeedbackContext {
     pub personal: Personal,
     /// Datenordner; der Rückmeldungsordner entsteht darunter.
     pub data_dir: PathBuf,
-    /// Absturzbericht, der mitgehen soll (Etappe 3).
+    /// Absturzbericht, der mitgehen kann (Etappe 3).
     pub crash_report: Option<PathBuf>,
+    /// Geöffnet aus der Absturz-Rückfrage („Als Rückmeldung öffnen“): Dann ist der
+    /// Absturzbericht schon angehakt, weil die Testerin ihn gerade ausdrücklich gewählt hat;
+    /// sonst ist er wie Protokoll, Bild und Projektdatei zuerst aus.
+    pub from_crash: bool,
 }
 
 /// Was die App für das Fenster ausführen soll.
@@ -184,8 +188,9 @@ impl Default for FeedbackDialog {
 
 impl FeedbackDialog {
     /// Öffnet das Fenster leer mit den Angaben `context`; die Bestandteile werden jetzt einmal
-    /// bereinigt, die Häkchen stehen wie [`Part::default_on`]. Das Beschreibungsfeld bekommt
-    /// die Tastatur.
+    /// bereinigt, die Häkchen stehen wie [`Part::default_on`] (der Absturzbericht ist nur aus der
+    /// Absturz-Rückfrage heraus angehakt, [`FeedbackContext::from_crash`]). Das Beschreibungsfeld
+    /// bekommt die Tastatur.
     pub fn open_fresh(&mut self, context: FeedbackContext) {
         *self = FeedbackDialog {
             open: true,
@@ -355,7 +360,7 @@ fn rows_for(c: &FeedbackContext) -> Vec<PartRow> {
     rows.into_iter()
         .map(|(part, text)| PartRow {
             part,
-            on: part.default_on(),
+            on: part.default_on() || (part == Part::Absturzbericht && c.from_crash),
             text,
         })
         .collect()

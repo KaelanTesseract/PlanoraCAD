@@ -84,9 +84,9 @@ impl LastCommand {
 }
 
 /// Führt `a` aus wie Menüeintrag oder Knopf. „Projekte“, „Tastenkürzel anzeigen“ und
-/// „Rückmeldung geben“ öffnen ein Fenster der App und kommen als [`MenuRequest`] zurück. Die Befehle des Modells tun in alten
-/// Versionen nichts (dort sind Menü und Befehlsfeld gesperrt); die Übersicht der Tastenkürzel
-/// ändert nichts und öffnet auch dort.
+/// „Rückmeldung geben“ öffnen ein Fenster der App und kommen als [`MenuRequest`] zurück. Die
+/// Befehle des Modells tun in alten Versionen nichts (dort sind Menü und Befehlsfeld gesperrt);
+/// die Übersicht der Tastenkürzel ändert nichts und öffnet auch dort.
 pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
     if a.area() == Area::Model && a != Action::ShowShortcuts && ws.active_tab().read_only {
         return MenuRequest::None;

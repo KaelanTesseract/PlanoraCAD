@@ -250,6 +250,10 @@ fn near(a: f32, b: f32) -> bool {
     (a - b).abs() < 0.5
 }
 
+/// Unter dieser Fensterbreite passt das obere Feld (Menü bis „Hilfe“, Knöpfe, ein Tab) nicht
+/// zwischen die Spalten; sie beginnen dann unter ihm (gemessen: ab 1120,7 px passt es).
+const COLUMNS_BELOW_TOP_UNDER: f32 = 1121.0;
+
 fn fields_of(shot: &Shot, dark: bool, size: Vec2) -> Fields {
     let all = shot.fields(dark);
     let pick = |what: &str, f: &dyn Fn(&Rect) -> bool| -> Rect {
@@ -258,14 +262,20 @@ fn fields_of(shot: &Shot, dark: bool, size: Vec2) -> Fields {
         *hits[0]
     };
     let w = size.x;
-    let col_top = |y: f32| near(y, SHELL_INSET) || near(y, SHELL_INSET + shell::TOP_H + shell::GAP);
+    // Die Spalten beginnen oben; nur in Fenstern schmaler als [`COLUMNS_BELOW_TOP_UNDER`] (dort
+    // passt das obere Feld nicht zwischen sie) beginnen sie unter dem oberen Feld.
+    let col_top = |y: f32| {
+        if w < COLUMNS_BELOW_TOP_UNDER {
+            near(y, SHELL_INSET + shell::TOP_H + shell::GAP)
+        } else {
+            near(y, SHELL_INSET)
+        }
+    };
     Fields {
         top: pick("oberes Feld", &|r| {
             near(r.top(), SHELL_INSET) && near(r.center().x, w / 2.0)
         }),
-        // Im Skizzenmodus steht links die Werkzeugleiste. Die Spalten beginnen oben, oder unter
-        // dem oberen Feld, wenn es nicht zwischen sie passt (mit dem Menü „Hilfe“ unter etwa
-        // 1132 px Breite).
+        // Im Skizzenmodus steht links die Werkzeugleiste.
         left: pick("linkes Feld", &|r| {
             near(r.left(), SHELL_INSET)
                 && r.width() <= theme::PANEL_WIDTH + 0.5

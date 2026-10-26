@@ -497,10 +497,11 @@ fn personal_from_env_takes_the_last_part_of_the_home_dir() {
 #[test]
 fn parts_defaults_and_labels() {
     use Part::*;
-    for p in [Version, System, Grafik, Schritte, Absturzbericht] {
+    for p in [Version, System, Grafik, Schritte] {
         assert!(p.default_on(), "{p:?}");
     }
-    for p in [Protokoll, Bild, Projektdatei] {
+    // Absturzbericht: nur aus der Absturz-Rückfrage vorausgewählt (tests/feedback_dialog.rs).
+    for p in [Protokoll, Bild, Projektdatei, Absturzbericht] {
         assert!(!p.default_on(), "{p:?}");
     }
     for p in [
