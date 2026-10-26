@@ -32,7 +32,7 @@ const RETRY_AFTER: u32 = 50;
 /// So viele letzte Schritte hält das Programm im Speicher.
 pub const STEPS: usize = 50;
 
-/// Ein Schritt der Nutzerin: Uhrzeit (UTC, `14:03:22`) und Name der Aktion.
+/// Ein Schritt der Nutzerin: Uhrzeit (Ortszeit, `14:03:22`) und Name der Aktion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Step {
     pub time: String,
@@ -168,7 +168,7 @@ impl Diag {
     /// entschärft.
     pub fn step(&mut self, label: &str) {
         let label = clean(label);
-        let time = chrono::Utc::now().format("%H:%M:%S").to_string();
+        let time = chrono::Local::now().format("%H:%M:%S").to_string();
         if let Some(last) = self.steps.back_mut()
             && last.1 == label
         {

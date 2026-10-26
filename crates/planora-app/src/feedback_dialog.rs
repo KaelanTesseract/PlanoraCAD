@@ -184,6 +184,10 @@ pub struct FeedbackDialog {
     rows: Vec<PartRow>,
     context: Option<FeedbackContext>,
     focus_description: bool,
+    /// Beim ersten Bild nach dem Öffnen alle Aufklapper (Vorschauen, Adresse) einklappen.
+    collapse_reset: bool,
+    /// Zählt die Öffnungen: gehört zur Id der Adress-Aufklapper, die so je Öffnung neu (zu) sind.
+    opened_count: u32,
     pending: VecDeque<FeedbackAction>,
     address: Option<(AddressKey, Built)>,
     /// Ablauf „Bild vom Fenster“.
@@ -202,6 +206,8 @@ impl Default for FeedbackDialog {
             rows: Vec::new(),
             context: None,
             focus_description: false,
+            collapse_reset: false,
+            opened_count: 0,
             pending: VecDeque::new(),
             address: None,
             shot: ShotFlow::default(),
@@ -215,11 +221,14 @@ impl FeedbackDialog {
     /// Absturz-Rückfrage heraus angehakt, [`FeedbackContext::from_crash`]). Das Beschreibungsfeld
     /// bekommt die Tastatur.
     pub fn open_fresh(&mut self, context: FeedbackContext) {
+        let opened_count = self.opened_count.wrapping_add(1);
         *self = FeedbackDialog {
             open: true,
+            opened_count,
             rows: rows_for(&context),
             context: Some(context),
             focus_description: true,
+            collapse_reset: true,
             ..FeedbackDialog::default()
         };
     }
@@ -416,8 +425,13 @@ impl FeedbackDialog {
             }
         }
         diag::info(&format!(
-            "Rückmeldung ({}) im Browser geöffnet",
-            report.kind.label()
+            "Rückmeldung ({}) {} geöffnet",
+            report.kind.label(),
+            if web {
+                "über das Webformular"
+            } else {
+                "über GitHub"
+            }
         ));
         let picture = folder.is_some() && picture.is_some();
         if let Some(dir) = &folder {
@@ -573,9 +587,25 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
     ui.add_space(SPACE_3);
     ui.strong(DESCRIPTION_LABEL);
     ui.add_space(SPACE_1);
+    if std::mem::take(&mut state.collapse_reset) {
+        // egui merkt sich den Aufklapp-Zustand je Id über das Schließen hinaus: neu öffnen heißt
+        // wieder eingeklappt (die Adress-Aufklapper bekommen dafür je Öffnung eine neue Id).
+        for row in &state.rows {
+            collapse(ui.ctx(), preview_id(row.part));
+        }
+        for salt in [
+            "planora_feedback_adresse",
+            "planora_feedback_adresse_geschickt",
+        ] {
+            collapse(ui.ctx(), ui.make_persistent_id(egui::IdSalt::new(salt)));
+        }
+    }
     let r = theme::field(
         ui,
         egui::TextEdit::multiline(&mut state.description)
+            // Der Eingabetext in der Hauptfarbe, nicht in der gedämpften Schriftfarbe der
+            // Oberfläche (im hellen Thema zu kontrastarm auf der Fläche des Felds).
+            .text_color(theme::palette(ui.visuals().dark_mode).text_primary)
             .desired_rows(DESCRIPTION_ROWS)
             .desired_width(f32::INFINITY),
     );
@@ -608,7 +638,7 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
     ui.add_space(SPACE_3);
     let url = state.built().url;
     egui::CollapsingHeader::new(SHOW_ADDRESS)
-        .id_salt("planora_feedback_adresse")
+        .id_salt(("planora_feedback_adresse", state.opened_count))
         .default_open(false)
         .show(ui, |ui| {
             read_only_text(
@@ -620,6 +650,15 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
             ui.add_space(SPACE_1);
             copy_row(ui, state, &url, action);
         });
+}
+
+/// Klappt den Aufklapper mit der Id `id` zu und speichert das.
+fn collapse(ctx: &egui::Context, id: egui::Id) {
+    let mut st = egui::collapsing_header::CollapsingState::load_with_default_open(ctx, id, false);
+    st.set_open(false);
+    st.store(ctx);
+    // Ohne Zuklapp-Bewegung: sofort zu.
+    ctx.animate_bool_with_time(id, false, 0.0);
 }
 
 /// Nach „Im Browser öffnen“: Hinweis mit „Text kopieren“, Ordner-Hinweis oder [`NO_FILE`],
@@ -651,7 +690,7 @@ fn after_send(
     ui.add(egui::Label::new(MAIL_FALLBACK).wrap());
     ui.add_space(SPACE_3);
     egui::CollapsingHeader::new(SHOW_ADDRESS)
-        .id_salt("planora_feedback_adresse_geschickt")
+        .id_salt(("planora_feedback_adresse_geschickt", state.opened_count))
         .default_open(false)
         .show(ui, |ui| {
             read_only_text(

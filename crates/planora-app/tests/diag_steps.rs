@@ -150,6 +150,23 @@ fn step_time_is_hh_mm_ss() {
 }
 
 #[test]
+fn step_time_is_local_time() {
+    use chrono::Timelike;
+    let mut d = Diag::in_memory();
+    let before = chrono::Local::now().time().num_seconds_from_midnight() as i64;
+    d.step("Ortszeit");
+    let after = chrono::Local::now().time().num_seconds_from_midnight() as i64;
+    let t = chrono::NaiveTime::parse_from_str(&d.recent_steps()[0].time, "%H:%M:%S").unwrap();
+    let s = t.num_seconds_from_midnight() as i64;
+    // Ortszeit (nicht UTC): zwischen den beiden Lesungen, mit Spielraum und Mitternacht.
+    let dist = |a: i64, b: i64| (a - b).rem_euclid(86_400).min((b - a).rem_euclid(86_400));
+    assert!(
+        dist(s, before) <= 2 || dist(s, after) <= 2,
+        "{t} vs {before}..{after}"
+    );
+}
+
+#[test]
 fn steps_text_format() {
     let steps = vec![
         Step {

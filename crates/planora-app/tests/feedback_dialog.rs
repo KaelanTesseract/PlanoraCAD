@@ -67,6 +67,7 @@ impl SystemOpen for FakeOpen {
 struct Seen {
     text: String,
     rect: Rect,
+    color: egui::Color32,
 }
 
 fn walk(shape: &egui::epaint::Shape, out: &mut Vec<Seen>) {
@@ -75,6 +76,13 @@ fn walk(shape: &egui::epaint::Shape, out: &mut Vec<Seen>) {
         egui::epaint::Shape::Text(t) => out.push(Seen {
             text: t.galley.text().to_string(),
             rect: Rect::from_min_size(t.pos, t.galley.size()),
+            color: t.override_text_color.unwrap_or_else(|| {
+                t.galley
+                    .job
+                    .sections
+                    .first()
+                    .map_or(t.fallback_color, |s| s.format.color)
+            }),
         }),
         _ => {}
     }
@@ -1470,4 +1478,83 @@ fn webform_button_opens_folder_when_needed() {
     assert!(url.len() < 2000);
     assert!(url.contains(&percent_encode(ATTACH_HINT)), "{url}");
     assert!(r.sees(&folder_hint(&[FEEDBACK_FILE])));
+}
+
+// ---- Sichtprüfung Etappe 2 ------------------------------------------------------------------
+
+#[test]
+fn reopening_collapses_address_and_previews() {
+    let mut r = Rig::new("planora-fb-collapse");
+    r.open_with_context();
+    open_previews(&r.ctx);
+    r.settle();
+    r.click(SHOW_ADDRESS);
+    let shows_address = |r: &Rig| {
+        r.seen
+            .iter()
+            .any(|s| s.text.contains("template=fehler.yml"))
+    };
+    assert!(shows_address(&r), "Adresse sollte aufgeklappt sein");
+    r.fb().close();
+    r.settle();
+    r.open_with_context();
+    r.settle();
+    assert!(
+        !shows_address(&r),
+        "Adresse muss eingeklappt sein {:?}",
+        r.texts()
+    );
+    let shown = r.fb().shown_parts();
+    assert!(!shown.is_empty());
+    for p in shown {
+        let s = egui::collapsing_header::CollapsingState::load_with_default_open(
+            &r.ctx,
+            preview_id(p),
+            false,
+        );
+        assert!(!s.is_open(), "{p:?} muss eingeklappt sein");
+    }
+}
+
+#[test]
+fn description_text_uses_the_primary_text_colour() {
+    for dark in [true, false] {
+        let mut r = Rig::new("planora-fb-colour");
+        theme::apply(&r.ctx, dark);
+        r.open_with_context();
+        r.fb().description = "Beim Extrudieren stürzt es ab".into();
+        r.settle();
+        let seen = r
+            .seen
+            .iter()
+            .find(|s| s.text == "Beim Extrudieren stürzt es ab")
+            .expect("Beschreibung zu sehen");
+        assert_eq!(seen.color, theme::palette(dark).text_primary, "dark={dark}");
+    }
+}
+
+#[test]
+fn log_tells_github_from_webform() {
+    let mut r = Rig::new("planora-fb-log");
+    r.open_with_context();
+    r.fb().description = "Beim Extrudieren stürzt es ab".into();
+    r.click(OPEN_BROWSER);
+    let lines = planora_app::diag::recent_lines(500);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.ends_with("Rückmeldung (Fehler) über GitHub geöffnet")),
+        "{lines:?}"
+    );
+    let mut r = Rig::new("planora-fb-log2");
+    r.open_with_context();
+    r.fb().description = "Beim Extrudieren stürzt es ab".into();
+    r.click(WEBFORM_BUTTON);
+    let lines = planora_app::diag::recent_lines(500);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.ends_with("Rückmeldung (Fehler) über das Webformular geöffnet")),
+        "{lines:?}"
+    );
 }
