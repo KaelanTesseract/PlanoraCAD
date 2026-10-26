@@ -274,11 +274,18 @@ pub fn report_text(input: &ReportInput) -> String {
     t.push_str(&format!("Fehler: {}\n", input.message));
     t.push_str(&format!("Ort: {}\n", input.location));
     t.push_str(&format!("Faden: {}\n", input.thread));
+    // Nach dem letzten `\` oder `/`, auf jedem System (auch ein Windows-Pfad unter Linux).
     let doc = input.document.as_ref().map_or_else(
         || "keines".to_string(),
         |p| {
-            p.file_name()
-                .map_or_else(|| UNKNOWN.to_string(), |n| n.to_string_lossy().into_owned())
+            let full = p.to_string_lossy();
+            let name = full
+                .trim_end_matches(['\\', '/'])
+                .rsplit(['\\', '/'])
+                .next();
+            name.filter(|n| !n.is_empty())
+                .unwrap_or(UNKNOWN)
+                .to_string()
         },
     );
     t.push_str(&format!("Dokument: {doc}\n"));

@@ -406,11 +406,14 @@ fn old_reports_with_a_full_path_still_name_the_project() {
     let dir = temp_dir("alt");
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join("absturz-2026-10-01_10-00-00.txt");
-    std::fs::write(&p, "Version: 1\nDokument: D:\\Projekte\\Halter.pcad\n").unwrap();
-    assert_eq!(
-        crash::report_project(&p),
-        Some(PathBuf::from(r"D:\Projekte\Halter.pcad"))
-    );
+    // Ein voller Pfad des jeweiligen Systems.
+    let full = if cfg!(windows) {
+        r"D:\Projekte\Halter.pcad"
+    } else {
+        "/projekte/Halter.pcad"
+    };
+    std::fs::write(&p, format!("Version: 1\nDokument: {full}\n")).unwrap();
+    assert_eq!(crash::report_project(&p), Some(PathBuf::from(full)));
     std::fs::write(&p, "Dokument: Halter.pcad\n").unwrap();
     assert_eq!(
         crash::report_project(&p),
