@@ -770,6 +770,19 @@ impl PlanoraApp {
     fn stop_new_process(&mut self) {
         if let Some(mut process) = self.new_process.take() {
             process.stop();
+            // Die beendete neue Version kam nicht mehr zu `on_exit`: ihren Laufmarker hier
+            // löschen, sonst meldet der nächste Start „unerwartet beendet“.
+            if let (Some(pid), Some(data)) = (process.pid(), self.ws.config_path.parent()) {
+                match std::fs::remove_file(crate::crash::marker_path(data, pid)) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        crate::diag::warn(&format!(
+                            "Laufmarker der neuen Version nicht gelöscht ({:?})",
+                            e.kind()
+                        ))
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 

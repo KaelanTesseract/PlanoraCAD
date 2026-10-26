@@ -78,10 +78,16 @@ pub const SHOT_NOT_YET: &str =
 /// Häkchen des Bestandteils „Projektdatei“ (nur mit Absturzbericht, der ein Dokument nennt).
 pub const PROJECT_CHECKBOX: &str = "Projektdatei in den Ordner legen";
 
+/// Statt des Häkchens, wenn der Projektordner größer als die Grenze ist.
+pub const PROJECT_TOO_BIG: &str = "Die Projektdatei ist zu groß zum Mitschicken.";
+/// Größer darf der Projektordner zum Mitschicken nicht sein (alle Dateien zusammen).
+pub const PROJECT_MAX_BYTES: u64 = 200 * 1024 * 1024;
+
 /// Vorschau zur Projektdatei: was mit dem Projektordner `name` geschieht.
 pub fn project_preview(name: &str) -> String {
     format!(
-        "Legt eine Kopie von „{name}“ in den Rückmeldungsordner. Sie geht nur mit, wenn du sie          selbst ins Formular ziehst."
+        "Legt eine Kopie von „{name}“ in den Rückmeldungsordner. \
+         Sie geht nur mit, wenn du sie selbst ins Formular ziehst."
     )
 }
 
@@ -201,8 +207,13 @@ pub struct FeedbackDialog {
     address: Option<(AddressKey, Built)>,
     /// Ablauf „Bild vom Fenster“.
     shot: ShotFlow,
-    /// Das im Absturzbericht genannte Dokument (ein `.pcad`-Ordner), falls es noch da ist.
+    /// Das im Absturzbericht genannte Dokument (ein `.pcad`-Ordner), falls es noch da ist und
+    /// nicht zu groß.
     project_dir: Option<PathBuf>,
+    /// Der genannte Projektordner ist größer als `project_limit` ([`PROJECT_TOO_BIG`]).
+    project_too_big: bool,
+    /// Größte Gesamtgröße des Projektordners zum Mitschicken ([`PROJECT_MAX_BYTES`]).
+    project_limit: u64,
 }
 
 impl Default for FeedbackDialog {
@@ -223,6 +234,8 @@ impl Default for FeedbackDialog {
             address: None,
             shot: ShotFlow::default(),
             project_dir: None,
+            project_too_big: false,
+            project_limit: PROJECT_MAX_BYTES,
         }
     }
 }
@@ -234,17 +247,22 @@ impl FeedbackDialog {
     /// bekommt die Tastatur.
     pub fn open_fresh(&mut self, context: FeedbackContext) {
         let opened_count = self.opened_count.wrapping_add(1);
-        let project_dir = context
+        let project_limit = self.project_limit;
+        let named = context
             .crash_report
             .as_deref()
             .and_then(read_report)
             .and_then(|t| crate::crash::report_document(&t))
-            .filter(|d| d.is_dir());
+            .filter(|d| is_project_dir(d));
+        let project_too_big = named.as_deref().is_some_and(|d| exceeds(d, project_limit));
+        let project_dir = named.filter(|_| !project_too_big);
         *self = FeedbackDialog {
             open: true,
             opened_count,
             rows: rows_for(&context, project_dir.as_deref()),
             project_dir,
+            project_too_big,
+            project_limit,
             context: Some(context),
             focus_description: true,
             collapse_reset: true,
@@ -325,6 +343,12 @@ impl FeedbackDialog {
             let line = preview_line(img);
             self.set_picture_text(line);
         }
+    }
+
+    /// Grenze für den Projektordner (für Tests kleiner; bleibt über das Öffnen hinweg).
+    #[doc(hidden)]
+    pub fn set_project_limit(&mut self, bytes: u64) {
+        self.project_limit = bytes;
     }
 
     /// Name des mitkopierten Projektordners (angehakt und vorhanden).
@@ -544,13 +568,44 @@ fn url_report(report: &Report) -> Report {
             .filter(|l| l.starts_with("Fehler: ") || l.starts_with("Ort: "))
             .collect();
         if !short.is_empty() {
-            *text = short.join(
-                "
-",
-            );
+            *text = short.join("\n");
         }
     }
     r
+}
+
+/// Ein Ordner, dessen Name auf `.pcad` endet (Groß- und Kleinschreibung egal).
+fn is_project_dir(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("pcad"))
+        && path.is_dir()
+}
+
+/// Ist der Ordner zusammen größer als `limit` Byte? Zählt nur so weit wie nötig; was sich nicht
+/// lesen lässt, zählt nicht.
+fn exceeds(dir: &Path, limit: u64) -> bool {
+    fn add(dir: &Path, total: &mut u64, limit: u64) -> bool {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                if add(&entry.path(), total, limit) {
+                    return true;
+                }
+            } else if kind.is_file() {
+                *total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                if *total > limit {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    add(dir, &mut 0, limit)
 }
 
 /// Kopiert den Projektordner `project` (samt Unterordnern) nach `bundle/<Name>`.
@@ -721,6 +776,9 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
             theme::focus_ring(ui, &r);
         })
         .body(|ui| read_only_text(ui, preview_id(row.part), &row.text, PREVIEW_MAX_H));
+    }
+    if state.project_too_big {
+        ui.add(egui::Label::new(PROJECT_TOO_BIG).wrap());
     }
     let picture_now = state.is_checked(Part::Bild);
     if picture_now != picture_before {

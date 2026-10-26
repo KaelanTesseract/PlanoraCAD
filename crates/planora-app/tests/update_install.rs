@@ -205,6 +205,9 @@ impl FakeRestarter {
     }
 }
 
+/// Prozessnummer der „neuen Version“ der Nachbildung (gibt es nie wirklich).
+const NEW_PID: u32 = 4_000_000_009;
+
 /// Die „neue Version“ der Nachbildung: merkt sich, wann sie beendet wird.
 struct FakeProcess {
     exe: PathBuf,
@@ -221,6 +224,10 @@ impl NewProcess for FakeProcess {
     fn exited(&mut self) -> bool {
         self.exits
     }
+
+    fn pid(&self) -> Option<u32> {
+        Some(NEW_PID)
+    }
 }
 
 impl Restarter for FakeRestarter {
@@ -231,6 +238,11 @@ impl Restarter for FakeRestarter {
         }
         if let Some(answer) = &self.answer {
             std::fs::write(exe.parent().unwrap().join(OK_MARKER_NAME), answer).unwrap();
+        }
+        // Die „neue Version“ legt wie die echte ihren Laufmarker im Datenordner an (neben der
+        // Konfiguration, eine Ebene über dem Programmordner).
+        if let Some(data) = exe.parent().and_then(Path::parent) {
+            std::fs::write(planora_app::crash::marker_path(data, NEW_PID), b"").unwrap();
         }
         Ok(Box::new(FakeProcess {
             exe: exe.to_path_buf(),
@@ -1746,4 +1758,31 @@ fn rollback_offers_the_chosen_update_again_even_without_a_pending_notice() {
     );
     h.click(CLOSE);
     assert!(h.sees(&planora_app::update_dialog::status_hint(&v(TARGET))));
+}
+
+/// Wird die neue Version nach einem abgebrochenen Update beendet, endet sie ohne `on_exit`: Ihr
+/// Laufmarker darf nicht liegen bleiben, sonst meldet der nächste Start „unerwartet beendet“.
+#[test]
+fn aborted_update_leaves_no_marker_of_the_new_version() {
+    let restarter = FakeRestarter::new(false);
+    let mut h = Harness::offered(
+        "planora-install-marker-neu",
+        FakeDownloader::good(),
+        restarter.clone(),
+    );
+    h.app.set_marker_wait(Duration::from_millis(300));
+    h.click(INSTALL_NOW);
+    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
+    let data = h.cfg.parent().unwrap().to_path_buf();
+    let marker = planora_app::crash::marker_path(&data, NEW_PID);
+    assert!(marker.exists(), "die neue Version läuft mit Marker");
+    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
+    assert_eq!(restarter.stopped().len(), 1);
+    assert!(
+        !marker.exists(),
+        "Marker der beendeten neuen Version gelöscht"
+    );
+    let (own, finding) = planora_app::crash::start_run(&data, 4_000_000_010);
+    assert_eq!(finding, planora_app::crash::StartFinding::Clean);
+    own.unwrap().finish();
 }

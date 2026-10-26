@@ -592,3 +592,72 @@ fn fits_at_1920x1080_and_no_panic_at_800x600() {
     r.settle();
     assert!(r.sees(UNEXPECTED_TITLE));
 }
+
+#[test]
+fn notice_waits_for_the_autosave_offer_alone() {
+    let mut r = Rig::bare("planora-rueckfrage-nur-angebot", SIZE);
+    let finding = crashed(&r.data);
+    r.app.set_start_finding(finding);
+    let offer = planora_project::docstore::Autosave {
+        based_on: None,
+        time: "2026-10-25 12:00".into(),
+        snapshot: r.app.ws_mut().tabs[0].state.snapshot(),
+    };
+    r.app.ws_mut().tabs[0].pending_autosave = Some(offer);
+    r.settle();
+    r.settle();
+    assert!(r.app.ws_mut().prompt.is_some(), "Angebot steht");
+    assert!(!r.notice_shown(), "erst das Autosicherungs-Angebot");
+    r.app.ws_mut().tabs[0].pending_autosave = None;
+    r.app.ws_mut().prompt = None;
+    r.settle();
+    assert!(r.notice_shown(), "{:?}", r.texts());
+}
+
+#[test]
+fn project_preview_has_no_double_spaces() {
+    let t = feedback_dialog::project_preview("Halter.pcad");
+    assert!(!t.contains("  "), "{t}");
+    assert!(t.contains("„Halter.pcad“"));
+}
+
+#[test]
+fn project_is_only_offered_for_a_pcad_folder() {
+    let mut r = Rig::with("planora-rueckfrage-kein-pcad", SIZE, |d| {
+        let doc = d.join("Projekte").join("Halter");
+        std::fs::create_dir_all(&doc).unwrap();
+        std::fs::write(doc.join("modell.json"), "{}").unwrap();
+        StartFinding::Crashed(vec![report(d, "0.2.0-dev.1", Some(doc))])
+    });
+    r.click(AS_FEEDBACK);
+    let fb = r.app.feedback_mut();
+    assert!(fb.open);
+    assert!(fb.shown_parts().contains(&Part::Absturzbericht));
+    assert!(
+        !fb.shown_parts().contains(&Part::Projektdatei),
+        "kein .pcad-Ordner: nicht angeboten"
+    );
+}
+
+#[test]
+fn too_big_project_is_not_copied_and_says_so() {
+    let mut r = Rig::with("planora-rueckfrage-zu-gross", SIZE, |d| {
+        let doc = project(d);
+        StartFinding::Crashed(vec![report(d, "0.2.0-dev.1", Some(doc))])
+    });
+    // Kleine Grenze: die Testdatei (10 Byte) ist darüber.
+    r.app.feedback_mut().set_project_limit(5);
+    r.click(AS_FEEDBACK);
+    assert!(
+        !r.app
+            .feedback_mut()
+            .shown_parts()
+            .contains(&Part::Projektdatei)
+    );
+    assert!(r.sees(feedback_dialog::PROJECT_TOO_BIG), "{:?}", r.texts());
+    assert_eq!(
+        feedback_dialog::PROJECT_TOO_BIG,
+        "Die Projektdatei ist zu groß zum Mitschicken."
+    );
+    assert_eq!(feedback_dialog::PROJECT_MAX_BYTES, 200 * 1024 * 1024);
+}

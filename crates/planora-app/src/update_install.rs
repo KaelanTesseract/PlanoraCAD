@@ -425,6 +425,9 @@ pub trait NewProcess {
 
     /// Hat die neue Version schon von selbst geendet? Fragt nur nach, wartet nie.
     fn exited(&mut self) -> bool;
+
+    /// Prozessnummer der neuen Version (für ihren Laufmarker, [`crate::crash::marker_path`]).
+    fn pid(&self) -> Option<u32>;
 }
 
 /// Startet die neue exe als eigenen Prozess (nur Windows; sonst Fehler).
@@ -462,6 +465,10 @@ impl NewProcess for ChildProcess {
     /// ([`MARKER_WAIT`]); sicher, nur langsamer.
     fn exited(&mut self) -> bool {
         matches!(self.0.try_wait(), Ok(Some(_)))
+    }
+
+    fn pid(&self) -> Option<u32> {
+        Some(self.0.id())
     }
 }
 
