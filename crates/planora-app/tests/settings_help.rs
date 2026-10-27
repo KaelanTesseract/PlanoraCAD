@@ -1,5 +1,5 @@
-//! Einstellungen → Hilfe: Schalter „Ausführliches Protokoll“ mit Hinweis, dass nichts gesendet
-//! wird. Gespeichert wird sofort (`verbose_log`), misslingt das, gilt der Wert für die Sitzung
+//! Einstellungen → Updates: Schalter „Ausführliches Protokoll“ (unter „Beim Start nach Updates
+//! suchen“) mit einzeiligem Hinweis, dass nichts gesendet wird. Gespeichert wird sofort (`verbose_log`), misslingt das, gilt der Wert für die Sitzung
 //! (mit Hinweis) und kommt auf jedem Schreibweg mit. Eingeschaltet schreibt das Protokoll je
 //! Befehl eine Zeile mit Name und Dauer, nie Projektinhalt. Konfiguration nur im Temp-Ordner.
 
@@ -90,12 +90,16 @@ struct App {
 
 impl App {
     fn new(e: Env, dark: bool) -> App {
+        App::sized(e, dark, 1920.0, 1080.0)
+    }
+
+    fn sized(e: Env, dark: bool, w: f32, h: f32) -> App {
         let ctx = egui::Context::default();
         ctx.set_fonts(planora_app::fonts::definitions());
         theme::apply(&ctx, dark);
         App {
             ctx,
-            size: vec2(1920.0, 1080.0),
+            size: vec2(w, h),
             time: 0.0,
             w: SettingsWindow::default(),
             e,
@@ -175,7 +179,6 @@ fn detail_logged(mark: &str) -> bool {
 #[test]
 fn switch_saves_and_turns_on_detail_lines() {
     let _g = diag_lock();
-    assert_eq!(SECTION_HELP, "Hilfe");
     assert_eq!(VERBOSE_LABEL, "Ausführliches Protokoll");
     assert_eq!(
         VERBOSE_NOTE,
@@ -187,19 +190,39 @@ fn switch_saves_and_turns_on_detail_lines() {
         let mut a = App::new(e, dark);
         a.w.open(false);
         let seen = a.settle(6);
-        // Der Abschnitt steht unter „Updates“ und vor „Projekte“; alles im Fenster sichtbar.
-        let updates = find(&seen, SECTION_UPDATES).rect.top();
-        let help = find(&seen, SECTION_HELP).rect.top();
-        let projects = find(&seen, SECTION_PROJECTS).rect.top();
-        assert!(
-            updates < help && help < projects,
-            "{updates} {help} {projects}"
-        );
-        assert!(find(&seen, CHECK_NOW).rect.top() < help);
-        for t in [SECTION_HELP, VERBOSE_LABEL, VERBOSE_NOTE] {
+        // Im Abschnitt „Updates“ unter „Beim Start nach Updates suchen“ (samt dessen Hinweis),
+        // vor „Projekte“; kein eigener Abschnitt „Hilfe“. Alles im Fenster sichtbar.
+        assert!(!texts(&seen).contains(&"Hilfe"), "{:?}", texts(&seen));
+        let order = [
+            SECTION_UPDATES,
+            CHECK_ON_START_LABEL,
+            PRIVACY_NOTE,
+            VERBOSE_LABEL,
+            VERBOSE_NOTE,
+            SECTION_PROJECTS,
+        ];
+        for pair in order.windows(2) {
+            let (x, y) = (find(&seen, pair[0]), find(&seen, pair[1]));
+            assert!(
+                x.rect.bottom() <= y.rect.top(),
+                "„{}“ über „{}“",
+                pair[0],
+                pair[1]
+            );
+        }
+        for t in [VERBOSE_LABEL, VERBOSE_NOTE] {
             let s = find(&seen, t);
             assert!(s.clip.contains(s.rect.center()), "{t} sichtbar");
         }
+        // Der Hinweis ist einzeilig, klein und zurückhaltend.
+        let (note, label) = (find(&seen, VERBOSE_NOTE), find(&seen, VERBOSE_LABEL));
+        assert!(
+            note.rect.height() < label.rect.height(),
+            "eine kleine Zeile: {:?} / {:?}",
+            note.rect,
+            label.rect
+        );
+        assert_eq!(note.color, theme::palette(dark).text_tertiary);
         assert!(!a.e.ws.verbose_log(), "Voreinstellung aus");
         assert!(!detail_logged("aus-vorher"));
 
@@ -207,7 +230,7 @@ fn switch_saves_and_turns_on_detail_lines() {
         assert!(a.e.ws.verbose_log(), "an");
         let text = fs::read_to_string(&a.e.cfg).unwrap();
         assert!(text.contains("\"verbose_log\": true"), "{text}");
-        assert_eq!(a.w.help_message(), None);
+        assert_eq!(a.w.updates_message(), None);
         assert!(
             detail_logged("an-danach"),
             "Detailzeilen gleich nach dem Umschalten"
@@ -313,7 +336,7 @@ fn write_failure_keeps_value_for_the_session_with_hint() {
         assert!(detail_logged("sitzung"), "wirkt trotzdem");
         assert_eq!(fs::read(&blocker).unwrap(), b"x");
         assert_eq!(
-            a.w.help_message(),
+            a.w.updates_message(),
             Some(&RootMessage::Warning(VERBOSE_NOT_SAVED.into()))
         );
         assert_eq!(
@@ -321,10 +344,10 @@ fn write_failure_keeps_value_for_the_session_with_hint() {
             "Das ausführliche Protokoll gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden."
         );
         let seen = a.settle(3);
-        assert_eq!(
-            find(&seen, VERBOSE_NOT_SAVED).color,
-            theme::palette(dark).warning
-        );
+        let warn = find(&seen, VERBOSE_NOT_SAVED);
+        assert_eq!(warn.color, theme::palette(dark).warning);
+        // Wie die anderen Hinweise im Abschnitt „Updates“: vor „Projekte“.
+        assert!(warn.rect.bottom() <= find(&seen, SECTION_PROJECTS).rect.top());
         // Nächstes gelungenes Schreiben nimmt den Wert mit.
         a.e.ws.config_path = a.e.cfg.clone();
         assert!(a.e.ws.try_persist_config());
@@ -332,7 +355,7 @@ fn write_failure_keeps_value_for_the_session_with_hint() {
         // Neu öffnen leert den Hinweis.
         a.w.close();
         a.w.open(false);
-        assert_eq!(a.w.help_message(), None);
+        assert_eq!(a.w.updates_message(), None);
     }
     diag::set_verbose(false);
 }
@@ -409,4 +432,51 @@ fn detail_lines_have_no_project_content() {
     }
     assert!(w.set_verbose_log(false));
     assert!(!detail_logged("inhalt-aus"));
+}
+
+#[test]
+fn appearance_and_updates_side_by_side_from_1600_pixels() {
+    let _g = diag_lock();
+    for (w, side) in [
+        (1920.0, true),
+        (1600.0, true),
+        (1599.0, false),
+        (1280.0, false),
+    ] {
+        let e = env("planora-hilfe-spalten");
+        let mut a = App::sized(e, true, w, 1080.0);
+        a.w.open(false);
+        let seen = a.settle(6);
+        let (look, upd) = (
+            find(&seen, SECTION_APPEARANCE),
+            find(&seen, SECTION_UPDATES),
+        );
+        if side {
+            assert!(
+                (look.rect.top() - upd.rect.top()).abs() < 1.0
+                    && look.rect.right() < upd.rect.left(),
+                "{w}: nebeneinander {:?} {:?}",
+                look.rect,
+                upd.rect
+            );
+        } else {
+            assert!(look.rect.bottom() <= upd.rect.top(), "{w}: untereinander");
+        }
+        // „Projekte“ steht unter beiden Spalten (die Reihe ist so hoch wie die höhere Spalte).
+        let projects = find(&seen, SECTION_PROJECTS).rect.top();
+        for t in [TRANSPARENCY_LABEL, VERBOSE_NOTE, CHECK_NOW] {
+            assert!(find(&seen, t).rect.bottom() <= projects, "{w}: {t}");
+        }
+        // Die Menüleiste bleibt frei, auch untereinander.
+        let window = a.w.last_rect.expect("Fenster gezeichnet");
+        assert!(
+            window.top() > 50.0 && window.bottom() < 1030.0,
+            "{w}: {window:?}"
+        );
+        // Bei 1920 Pixeln ist der Hinweis eine Zeile (schmaler bricht er um).
+        if w >= 1920.0 {
+            let (note, label) = (find(&seen, VERBOSE_NOTE), find(&seen, VERBOSE_LABEL));
+            assert!(note.rect.height() < label.rect.height(), "{w}: einzeilig");
+        }
+    }
 }

@@ -67,16 +67,30 @@ pub const TABLE_MIN_H: f32 = 120.0;
 /// Größte Höhe der Tabelle; darüber rollt sie im Fenster.
 pub const TABLE_MAX_H: f32 = 800.0;
 /// Was neben der Tabelle Platz braucht: die übrigen Abschnitte des Einstellungsfensters mit Kopf
-/// und Fußzeile (rund 735 Pixel, davon rund 105 für „Hilfe“) und je rund 75 Pixel frei darüber
-/// und darunter. Das Fenster steht mittig, lässt so die Menüleiste (rund 50 Pixel) frei, auch
-/// mit einer zusätzlichen Hinweiszeile.
-pub const TABLE_RESERVED_H: f32 = 885.0;
+/// und Fußzeile (rund 580 Pixel, „Darstellung“ und „Updates“ nebeneinander) und je rund 100
+/// Pixel frei darüber und darunter. Das Fenster steht mittig, lässt so die Menüleiste (rund 50
+/// Pixel) frei, auch mit zusätzlichen Hinweiszeilen.
+pub const TABLE_RESERVED_H: f32 = 780.0;
+/// Zusätzlich belegt, wenn „Darstellung“ und „Updates“ untereinander stehen (Programmfenster
+/// schmaler als [`crate::settings_window::TWO_COLUMNS_FROM`]).
+pub const ONE_COLUMN_EXTRA_H: f32 = 110.0;
 
 /// Höhe der Tabelle im Fenster der Höhe `content_h`: was neben den übrigen Abschnitten frei ist
 /// ([`TABLE_RESERVED_H`]), zwischen [`TABLE_MIN_H`] und [`TABLE_MAX_H`]. Bei 1920 × 1080 sind
-/// das 195 Pixel; größere Fenster zeigen mehr Zeilen.
+/// das 300 Pixel; größere Fenster zeigen mehr Zeilen.
 pub fn table_max_height(content_h: f32) -> f32 {
     (content_h - TABLE_RESERVED_H).clamp(TABLE_MIN_H, TABLE_MAX_H)
+}
+
+/// Wie [`table_max_height`] für ein Programmfenster `content`: stehen „Darstellung“ und
+/// „Updates“ untereinander, bleibt [`ONE_COLUMN_EXTRA_H`] weniger.
+fn table_height_in(content: egui::Rect) -> f32 {
+    let h = if content.width() >= crate::settings_window::TWO_COLUMNS_FROM {
+        content.height()
+    } else {
+        content.height() - ONE_COLUMN_EXTRA_H
+    };
+    table_max_height(h)
 }
 
 const AREA_W: f32 = 80.0;
@@ -453,7 +467,7 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
         egui::ScrollArea::vertical()
             .id_salt("tastenkuerzel_tabelle")
             .auto_shrink([false, true])
-            .max_height(table_max_height(ui.ctx().content_rect().height())),
+            .max_height(table_height_in(ui.ctx().content_rect())),
         |ui| {
             ui.set_max_width(table_w);
             ui.add_enabled_ui(!hold, |ui| {
