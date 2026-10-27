@@ -659,3 +659,116 @@ pub fn restore_window(builder: egui::ViewportBuilder, w: &WindowState) -> egui::
     }
     builder
 }
+
+// ---------------------------------------------------------------------------------------------
+// Installer starten (Update über `planoracad-setup-x64.exe`)
+// ---------------------------------------------------------------------------------------------
+
+use crate::install_mode::InstallMode;
+
+/// Parameter, an dem der Installer erkennt, dass er die App nach einem Update wieder starten soll
+/// (`{param:NACHUPDATE|0}` in `installer/planoracad.iss`).
+pub const SETUP_RESTART_PARAM: &str = "/NACHUPDATE=1";
+
+/// Parameter für den stillen Lauf des Installers im Modus `mode`.
+pub fn setup_args(mode: InstallMode) -> Vec<&'static str> {
+    let who = match mode {
+        InstallMode::User => "/CURRENTUSER",
+        InstallMode::AllUsers => "/ALLUSERS",
+    };
+    vec![
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "/CLOSEAPPLICATIONS",
+        "/RESTARTAPPLICATIONS",
+        who,
+        SETUP_RESTART_PARAM,
+    ]
+}
+
+/// Verb für `ShellExecuteExW`: `runas` (Admin-Abfrage) nur bei „für alle“.
+pub fn setup_verb(mode: InstallMode) -> &'static str {
+    match mode {
+        InstallMode::User => "open",
+        InstallMode::AllUsers => "runas",
+    }
+}
+
+/// Warum der Installer nicht gestartet ist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LaunchError {
+    /// Die Admin-Abfrage wurde abgelehnt.
+    Cancelled,
+    /// Sonstiger Fehler (Text für die Meldung).
+    Failed(String),
+}
+
+/// Startet den heruntergeladenen Installer.
+pub trait SetupLauncher {
+    fn launch(&self, setup: &Path, mode: InstallMode) -> Result<(), LaunchError>;
+}
+
+/// Startet den Installer über `ShellExecuteExW` (nur Windows). Läuft synchron im UI-Faden: Die
+/// Admin-Abfrage liegt auf dem sicheren Desktop; das kurze „Keine Rückmeldung“ ist hinnehmbar
+/// und spart einen COM-Faden.
+pub struct ShellLauncher;
+
+impl SetupLauncher for ShellLauncher {
+    #[cfg(windows)]
+    fn launch(&self, setup: &Path, mode: InstallMode) -> Result<(), LaunchError> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::{ERROR_CANCELLED, GetLastError};
+        use windows_sys::Win32::UI::Shell::{
+            SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
+            s.encode_wide().chain(std::iter::once(0)).collect()
+        }
+        let verb = wide(setup_verb(mode).as_ref());
+        let file = wide(setup.as_os_str());
+        let params = wide(setup_args(mode).join(" ").as_ref());
+        let dir = wide(setup.parent().unwrap_or(Path::new("")).as_os_str());
+
+        // SAFETY: SHELLEXECUTEINFOW ist eine reine C-Struktur; alles Null ist ein gültiger
+        // Anfangszustand (keine Fenster, keine Griffe).
+        let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+        info.lpVerb = verb.as_ptr();
+        info.lpFile = file.as_ptr();
+        info.lpParameters = params.as_ptr();
+        info.lpDirectory = dir.as_ptr();
+        info.nShow = SW_SHOWNORMAL;
+        // SAFETY: `info` ist vollständig gesetzt; alle Zeichenketten sind nullterminiert und
+        // leben bis nach dem Aufruf.
+        if unsafe { ShellExecuteExW(&mut info) } != 0 {
+            return Ok(());
+        }
+        // SAFETY: Liest nur den Fehlercode des eigenen Fadens.
+        let code = unsafe { GetLastError() };
+        if code == ERROR_CANCELLED {
+            Err(LaunchError::Cancelled)
+        } else {
+            Err(LaunchError::Failed(
+                std::io::Error::from_raw_os_error(code as i32).to_string(),
+            ))
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn launch(&self, _setup: &Path, _mode: InstallMode) -> Result<(), LaunchError> {
+        Err(LaunchError::Failed(ONLY_WINDOWS.into()))
+    }
+}
+
+/// Start, der nie etwas startet, für [`crate::app::PlanoraApp::for_tests`].
+pub struct NoLaunch;
+
+impl SetupLauncher for NoLaunch {
+    fn launch(&self, _setup: &Path, _mode: InstallMode) -> Result<(), LaunchError> {
+        Err(LaunchError::Failed("in Tests nicht möglich".into()))
+    }
+}
