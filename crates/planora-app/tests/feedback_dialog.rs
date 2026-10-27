@@ -1560,3 +1560,35 @@ fn log_tells_github_from_webform() {
         "{lines:?}"
     );
 }
+
+#[test]
+fn description_prompt_follows_the_kind() {
+    assert_eq!(WISH_LABEL, "Was möchtest du tun können?");
+    assert_eq!(QUESTION_LABEL, "Was möchtest du wissen?");
+    let mut r = Rig::new("planora-fb-aufforderung");
+    r.open_with_context();
+    for (kind, text, others) in [
+        (
+            feedback::Kind::Wunsch,
+            WISH_LABEL,
+            [DESCRIPTION_LABEL, QUESTION_LABEL],
+        ),
+        (
+            feedback::Kind::Frage,
+            QUESTION_LABEL,
+            [DESCRIPTION_LABEL, WISH_LABEL],
+        ),
+        (
+            feedback::Kind::Fehler,
+            DESCRIPTION_LABEL,
+            [WISH_LABEL, QUESTION_LABEL],
+        ),
+    ] {
+        r.click(kind.label());
+        assert_eq!(description_label(kind), text);
+        assert!(r.sees(text), "{kind:?}: {:?}", r.texts());
+        for o in others {
+            assert!(!r.sees(o), "{kind:?}: „{o}“ zu sehen");
+        }
+    }
+}

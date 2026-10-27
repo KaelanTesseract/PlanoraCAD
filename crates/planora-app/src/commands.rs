@@ -91,14 +91,29 @@ impl LastCommand {
 /// Im ausführlichen Protokoll ([`crate::diag::detail`]) steht danach eine Zeile mit dem festen
 /// Namen der Aktion und der Dauer (`Befehl Rückgängig: 3 ms`), nie Projektinhalt.
 pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
+    timed(a.label(), || run_action_inner(ws, a))
+}
+
+/// Führt `f` aus und schreibt danach die Detailzeile `Befehl <name>: <n> ms` ins ausführliche
+/// Protokoll. Die gemeinsame Stelle für Tasten, Menü und Werkzeugleiste: jede Aktion ruft sie
+/// genau einmal auf (Aktionen der Tastenbelegung über [`run_action`], die übrigen Einträge
+/// direkt). `name` ist ein fester Aktionsname, nie Projektinhalt.
+pub fn timed<R>(name: &str, f: impl FnOnce() -> R) -> R {
     let start = std::time::Instant::now();
-    let request = run_action_inner(ws, a);
+    let result = f();
     crate::diag::detail(&format!(
-        "Befehl {}: {} ms",
-        a.label(),
-        start.elapsed().as_millis()
+        "Befehl {name}: {}",
+        duration_text(start.elapsed())
     ));
-    request
+    result
+}
+
+/// Dauer für das Protokoll: ganze Millisekunden, unter einer Millisekunde „<1 ms“.
+pub fn duration_text(d: std::time::Duration) -> String {
+    match d.as_millis() {
+        0 => "<1 ms".into(),
+        n => format!("{n} ms"),
+    }
 }
 
 fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {

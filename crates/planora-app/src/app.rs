@@ -1765,7 +1765,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     )
     .clicked()
     {
-        begin_save(ws, true);
+        commands::timed("Speichern unter", || begin_save(ws, true));
         ui.close();
     }
     ui.separator();
@@ -1785,7 +1785,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
     .clicked()
     {
-        open_import(ws);
+        commands::timed("Netz importieren", || open_import(ws));
         ui.close();
     }
     if entry(
@@ -1796,7 +1796,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
     .clicked()
     {
-        open_step_import(ws);
+        commands::timed("STEP importieren", || open_step_import(ws));
         ui.close();
     }
     ui.separator();
@@ -1817,7 +1817,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     }
     if entry(ui, true, icons::button(Icon::Quit, "Beenden")).clicked() {
         // Ist Beenden freigegeben, schickt `handle_close_request` im nächsten Bild `Close`.
-        ws.request_quit();
+        commands::timed("Beenden", || ws.request_quit());
         ui.close();
     }
     request
@@ -1841,7 +1841,7 @@ pub fn help_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     }
     ui.separator();
     if entry(ui, true, icons::button(Icon::About, about_dialog::TITLE)).clicked() {
-        ws.about_open = true;
+        commands::timed("Über PlanoraCAD", || ws.about_open = true);
         ui.close();
     }
     request
@@ -1944,6 +1944,18 @@ impl CreateKind {
         }
     }
 
+    /// Fester Name im ausführlichen Protokoll („Befehl Quader anlegen: 2 ms“).
+    pub fn command_name(self) -> &'static str {
+        match self {
+            CreateKind::Box => "Quader anlegen",
+            CreateKind::Cylinder => "Zylinder anlegen",
+            CreateKind::Sphere => "Kugel anlegen",
+            CreateKind::Cone => "Kegel anlegen",
+            CreateKind::Extrusion => "Skizze extrudieren",
+            CreateKind::Revolution => "Skizze drehen",
+        }
+    }
+
     /// Die Aktion der Tastenbelegung zu diesem Befehl (nur Skizze extrudieren hat eine).
     pub fn action(self) -> Option<Action> {
         (self == CreateKind::Extrusion).then_some(Action::ExtrudeSketch)
@@ -2033,6 +2045,15 @@ pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
 
 /// Öffnet den Dialog „Boolesche Operation“ mit vorgewählter Operation (Menü und Chips).
 pub fn open_boolean(ws: &mut Workspace, op: BoolOp) {
+    let name = match op {
+        BoolOp::Union => "Vereinigen",
+        BoolOp::Difference => "Abziehen",
+        BoolOp::Intersection => "Schneiden",
+    };
+    commands::timed(name, || open_boolean_inner(ws, op));
+}
+
+fn open_boolean_inner(ws: &mut Workspace, op: BoolOp) {
     let tab = ws.active_tab_mut();
     if let Some(why) = tab.state.chosen_lock() {
         tab.state.message = Some(why.into());
@@ -2065,7 +2086,7 @@ pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
 pub fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     for kind in &CreateKind::ALL[..4] {
         if icons::source_entry(ui, kind.icon(), kind.label(), true).clicked() {
-            do_create(ws, *kind);
+            run_create(ws, *kind);
             ui.close();
         }
     }
@@ -2094,14 +2115,14 @@ pub(crate) fn run_create(ws: &mut Workspace, kind: CreateKind) {
         Some(a) => {
             commands::run_action(ws, a);
         }
-        None => do_create(ws, kind),
+        None => commands::timed(kind.command_name(), || do_create(ws, kind)),
     }
 }
 
 /// Verrunden (über [`commands::run_action`]) oder Fase aus Menü oder Befehlsfeld.
 pub(crate) fn run_blend(ws: &mut Workspace, chamfer: bool) {
     if chamfer {
-        open_blend(ws, true);
+        commands::timed("Fase anlegen", || open_blend(ws, true));
     } else {
         commands::run_action(ws, Action::Fillet);
     }
@@ -2165,7 +2186,7 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     .on_disabled_hover_text(crate::state::SKETCH_OPEN_LOCK)
     .clicked()
     {
-        parameter_dialog::open(tab);
+        commands::timed("Parameter", || parameter_dialog::open(tab));
         ui.close();
     }
     ui.separator();
@@ -2211,7 +2232,9 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     .on_disabled_hover_text("Es wird bereits die ganze Zeitleiste berechnet.")
     .clicked()
     {
-        let _ = browser::roll_to_end(&mut tab.state);
+        commands::timed("Zum Ende der Zeitleiste", || {
+            let _ = browser::roll_to_end(&mut tab.state);
+        });
         ui.close();
     }
 }
@@ -2223,17 +2246,17 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
     let state = &mut ws.active_tab_mut().state;
     for face in ViewFace::ALL {
         if entry(ui, true, icons::button(Icon::ViewFace, face.label())).clicked() {
-            state.camera.set_view(face);
+            commands::timed(face.label(), || state.camera.set_view(face));
             ui.close();
         }
     }
     if entry(ui, true, icons::button(Icon::ViewIso, "Isometrisch")).clicked() {
-        state.camera.set_iso_view();
+        commands::timed("Isometrisch", || state.camera.set_iso_view());
         ui.close();
     }
     ui.separator();
     if entry(ui, true, icons::button(Icon::FitAll, "Alles einpassen")).clicked() {
-        state.frame_all();
+        commands::timed("Alles einpassen", || state.frame_all());
         ui.close();
     }
     ui.separator();
@@ -2244,7 +2267,7 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
         (Icon::ThemeDark, "Dunkles Design")
     };
     if entry(ui, true, icons::button(icon, label)).clicked() {
-        ws.set_theme(!dark);
+        commands::timed(label, || ws.set_theme(!dark));
         ui.close();
     }
     ui.separator();
@@ -2267,9 +2290,11 @@ fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         ("Skizze auf YZ-Ebene", StandardPlane::YZ),
     ] {
         if entry(ui, true, icons::button(Icon::SketchOnPlane, label)).clicked() {
-            if let Ok(id) = state.add_sketch(SketchPlane::Standard(plane)) {
-                let _ = state.open_sketch(id);
-            }
+            commands::timed(label, || {
+                if let Ok(id) = state.add_sketch(SketchPlane::Standard(plane)) {
+                    let _ = state.open_sketch(id);
+                }
+            });
             ui.close();
         }
     }

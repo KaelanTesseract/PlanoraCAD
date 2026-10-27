@@ -60,7 +60,7 @@ pub const UPDATES_NOT_SAVED: &str =
     "Die Update-Einstellung gilt nur bis zum Programmende: sie konnte nicht gespeichert werden.";
 /// Schalter im Abschnitt „Updates“ unter [`CHECK_ON_START_LABEL`].
 pub const VERBOSE_LABEL: &str = "Ausführliches Protokoll";
-/// Hinweis unter dem Schalter [`VERBOSE_LABEL`] (eine kleine, schwache Zeile; zum Datenschutz).
+/// Hinweis unter dem Schalter [`VERBOSE_LABEL`] (schwache Zeile wie der Datenschutzhinweis darüber).
 pub const VERBOSE_NOTE: &str = "Schreibt mehr in die Protokolldatei auf deinem Rechner, zum Beispiel jeden Befehl und wie lange er dauert. Gesendet wird davon nichts.";
 /// Warnung, wenn der Schalter gilt, aber nicht gespeichert werden konnte.
 pub const VERBOSE_NOT_SAVED: &str = "Das ausführliche Protokoll gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
@@ -637,7 +637,7 @@ fn show_updates(
     ui.add_space(theme::SPACE_1);
     let r = ui.checkbox(verbose, VERBOSE_LABEL);
     theme::focus_ring(ui, &r);
-    ui.add(egui::Label::new(egui::RichText::new(VERBOSE_NOTE).small().weak()).wrap());
+    ui.add(egui::Label::new(egui::RichText::new(VERBOSE_NOTE).weak()).wrap());
     ui.add_space(theme::SPACE_1);
     // Das Ergebnis steht neben dem Knopf, damit der Abschnitt nicht höher wird.
     ui.horizontal(|ui| {

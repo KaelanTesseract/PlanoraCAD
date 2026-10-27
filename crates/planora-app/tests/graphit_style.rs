@@ -12,6 +12,7 @@ use planora_app::shell::ShellState;
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::{Prompt, Workspace};
 use planora_app::{app, browser, drawing_view, fonts, prompts, properties, sketch_panel};
+use planora_app::{commands, diag, keymap::Action};
 use planora_app::{tabs, theme};
 use planora_drawing::{Paper, Placement, Projection, Scale, Sheet, ViewKind};
 use planora_feature::SketchPlane;
@@ -811,4 +812,49 @@ fn text_and_number_fields_are_26_high() {
     });
     assert_eq!(a.height(), theme::FIELD_H, "Textfeld {a:?}");
     assert_eq!(b.height(), theme::FIELD_H, "Zahlenfeld {b:?}");
+}
+
+fn command_lines(name: &str) -> usize {
+    let tag = format!("DETAIL Befehl {name}: ");
+    diag::recent_lines(2000)
+        .iter()
+        .filter(|l| l.contains(&tag))
+        .count()
+}
+
+#[test]
+fn menu_clicks_and_keys_each_log_one_detail_line() {
+    use std::time::Duration;
+    assert_eq!(commands::duration_text(Duration::from_micros(300)), "<1 ms");
+    assert_eq!(commands::duration_text(Duration::from_millis(7)), "7 ms");
+    diag::set_verbose(true);
+    let c = context(Some(true));
+    let mut ws = workspace();
+    // Menü „Erzeugen → Quader …“: genau eine Zeile.
+    let before = command_lines("Quader anlegen");
+    let (s, _) = shot_with(&c, vec![], |ui| app::create_menu(ui, &mut ws));
+    let at = s.text("Quader …").rect.center();
+    click(&c, at, |ui| {
+        app::create_menu(ui, &mut ws);
+        false
+    });
+    assert!(ws.active_tab().dialog.is_some(), "Dialog offen");
+    assert_eq!(command_lines("Quader anlegen"), before + 1);
+    // Menü „Datei → Schließen“ (Aktion der Tastenbelegung): genau eine Zeile.
+    let name = Action::Close.label();
+    let before = command_lines(name);
+    let (s, _) = shot_with(&c, vec![], |ui| {
+        app::file_menu(ui, &mut ws);
+    });
+    let at = s.text("Schließen").rect.center();
+    click(&c, at, |ui| {
+        app::file_menu(ui, &mut ws);
+        false
+    });
+    assert_eq!(command_lines(name), before + 1);
+    // Taste: ebenfalls genau eine.
+    let before = command_lines(name);
+    commands::run_key(&mut ws, Action::Close);
+    assert_eq!(command_lines(name), before + 1);
+    diag::set_verbose(false);
 }

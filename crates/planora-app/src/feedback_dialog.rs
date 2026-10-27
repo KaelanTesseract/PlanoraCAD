@@ -39,6 +39,19 @@ pub const AREA_LABEL: &str = "Bereich";
 pub const AREA_NONE: &str = "Keine Angabe";
 /// Über dem Beschreibungsfeld.
 pub const DESCRIPTION_LABEL: &str = "Beschreib kurz, was du gemacht hast und was passiert ist.";
+/// Über dem Beschreibungsfeld bei einem Wunsch.
+pub const WISH_LABEL: &str = "Was möchtest du tun können?";
+/// Über dem Beschreibungsfeld bei einer Frage.
+pub const QUESTION_LABEL: &str = "Was möchtest du wissen?";
+
+/// Die Aufforderung über dem Beschreibungsfeld zur Art der Rückmeldung.
+pub fn description_label(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Fehler => DESCRIPTION_LABEL,
+        Kind::Wunsch => WISH_LABEL,
+        Kind::Frage => QUESTION_LABEL,
+    }
+}
 /// So viele Zeichen braucht die Beschreibung mindestens (ohne Leerraum am Rand).
 pub const MIN_CHARS: usize = 10;
 /// Neben dem gesperrten Knopf, solange die Beschreibung zu kurz ist.
@@ -820,7 +833,7 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
             });
     });
     ui.add_space(SPACE_3);
-    ui.strong(DESCRIPTION_LABEL);
+    ui.strong(description_label(state.kind));
     ui.add_space(SPACE_1);
     if std::mem::take(&mut state.collapse_reset) {
         // egui merkt sich den Aufklapp-Zustand je Id über das Schließen hinaus: neu öffnen heißt

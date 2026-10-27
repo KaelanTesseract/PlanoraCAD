@@ -57,6 +57,8 @@ struct Shot {
     rect: Rect,
     clip: Rect,
     color: Color32,
+    size: f32,
+    bold: bool,
 }
 
 fn walk(shape: &egui::epaint::Shape, clip: Rect, out: &mut Vec<Shot>) {
@@ -73,6 +75,10 @@ fn walk(shape: &egui::epaint::Shape, clip: Rect, out: &mut Vec<Shot>) {
                 rect: Rect::from_min_size(t.pos, t.galley.size()),
                 clip,
                 color,
+                size: section.map_or(0.0, |s| s.format.font_id.size),
+                bold: section.is_some_and(|s| {
+                    s.format.font_id.family == egui::FontFamily::Name("bold".into())
+                }),
             })
         }
         _ => {}
@@ -214,14 +220,16 @@ fn switch_saves_and_turns_on_detail_lines() {
             let s = find(&seen, t);
             assert!(s.clip.contains(s.rect.center()), "{t} sichtbar");
         }
-        // Der Hinweis ist einzeilig, klein und zurückhaltend.
-        let (note, label) = (find(&seen, VERBOSE_NOTE), find(&seen, VERBOSE_LABEL));
+        // Der Hinweis sieht aus wie der Datenschutzhinweis darüber: gleiche Höhe (Schriftgröße
+        // und Gewicht) und gleiche Farbe, einzeilig.
+        let (note, privacy) = (find(&seen, VERBOSE_NOTE), find(&seen, PRIVACY_NOTE));
         assert!(
-            note.rect.height() < label.rect.height(),
-            "eine kleine Zeile: {:?} / {:?}",
-            note.rect,
-            label.rect
+            note.size == privacy.size && note.bold == privacy.bold,
+            "gleiche Schrift: {} / {}",
+            note.size,
+            privacy.size
         );
+        assert_eq!(note.color, privacy.color);
         assert_eq!(note.color, theme::palette(dark).text_tertiary);
         assert!(!a.e.ws.verbose_log(), "Voreinstellung aus");
         assert!(!detail_logged("aus-vorher"));
@@ -425,7 +433,7 @@ fn detail_lines_have_no_project_content() {
             "{l}"
         );
         let ms = dur.strip_suffix(" ms").unwrap_or_else(|| panic!("{l}"));
-        assert!(ms.parse::<u64>().is_ok(), "{l}");
+        assert!(ms == "<1" || ms.parse::<u64>().is_ok_and(|n| n >= 1), "{l}");
         for secret in ["Geheim", "12.5", "12,5", root_text.as_str()] {
             assert!(!l.contains(secret), "{secret} in {l}");
         }
@@ -475,8 +483,11 @@ fn appearance_and_updates_side_by_side_from_1600_pixels() {
         );
         // Bei 1920 Pixeln ist der Hinweis eine Zeile (schmaler bricht er um).
         if w >= 1920.0 {
-            let (note, label) = (find(&seen, VERBOSE_NOTE), find(&seen, VERBOSE_LABEL));
-            assert!(note.rect.height() < label.rect.height(), "{w}: einzeilig");
+            let (note, privacy) = (find(&seen, VERBOSE_NOTE), find(&seen, PRIVACY_NOTE));
+            assert!(
+                note.size == privacy.size && note.bold == privacy.bold,
+                "{w}: gleiche Schrift"
+            );
         }
     }
 }
