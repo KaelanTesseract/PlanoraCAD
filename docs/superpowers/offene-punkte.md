@@ -1958,3 +1958,7 @@ Stand nach Etappe 6 (Plan `docs/superpowers/plans/2026-10-26-rueckmeldungen.md`)
 - Im Webformular-Knopf stehen noch wörtliche Zeilenumbrüche in Zeichenketten (`feedback.rs`), es fehlt ein Test für die letzte Rettung ohne Version und System und ein Grenztest nur für das Formular.
 - Die Schwellen für schmale Fenster liegen seit dem Menü „Hilfe“ 39 Pixel höher (von Dennis angenommen).
 - Die Feldfarben im hellen Aussehen sind nicht einzeln geprüft worden, sondern nur über Tests und die Gesamtprüfung von Etappe 3.
+
+## Später: Teilprojekt Zoll
+
+- Maße in Zoll statt Millimeter (für die USA). Beim Entwurf der Sprachen am 2026-10-27 bewusst ausgeklammert; eigenes Teilprojekt (Dennis).
